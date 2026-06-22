@@ -1,3 +1,4 @@
+import { networkInterfaces } from 'node:os';
 import { Logger, ValidationPipe, VersioningType } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
@@ -22,7 +23,7 @@ async function bootstrap(): Promise<void> {
   // We trust the gateway's X-Forwarded-* headers for client IP / proto.
   app.set('trust proxy', 1);
 
-  app.setGlobalPrefix('api');
+  // No `api` prefix — this service *is* the API, so routes live under /v1.
   app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
 
   app.useGlobalPipes(
@@ -39,15 +40,48 @@ async function bootstrap(): Promise<void> {
 
   // OpenAPI docs + raw spec (/docs, /docs/json, /docs/yaml).
   // Handy in dev; lock down or disable in prod as needed.
-  if (config.get('nodeEnv', { infer: true }) !== 'production') {
+  const docsEnabled = config.get('nodeEnv', { infer: true }) !== 'production';
+  if (docsEnabled) {
     setupSwagger(app);
   }
 
   app.enableShutdownHooks();
 
   const port = config.get('port', { infer: true });
-  await app.listen(port);
-  logger.log(`Cosmos Pay payments service listening on port ${port}`);
+  // Bind to 0.0.0.0 so the service is reachable from the LAN and from the
+  // APISIX gateway (e.g. running in Docker), not only from localhost.
+  await app.listen(port, '0.0.0.0');
+
+  logger.log('Cosmos Pay payments service running:');
+  logger.log(`  Local      http://localhost:${port}/v1`);
+  const lanIps = getLanIps();
+  if (lanIps.length > 0) {
+    logger.log(`  Network    http://${lanIps[0]}:${port}/v1`);
+    for (const ip of lanIps.slice(1)) {
+      logger.log(`             http://${ip}:${port}/v1`);
+    }
+  }
+  if (docsEnabled) {
+    logger.log(`  Swagger    http://localhost:${port}/docs`);
+    logger.log(`  OpenAPI    http://localhost:${port}/docs/json (json) · /docs/yaml (yaml)`);
+  } else {
+    logger.log('  Swagger UI is disabled (NODE_ENV=production)');
+  }
+}
+
+/** Non-internal IPv4 addresses of this host, for the LAN "Network" URLs. */
+function getLanIps(): string[] {
+  const ips: string[] = [];
+  for (const addrs of Object.values(networkInterfaces())) {
+    for (const addr of addrs ?? []) {
+      // Node <18 reports family as 'IPv4'; newer versions may report 4.
+      const isIPv4 = addr.family === 'IPv4' || (addr.family as unknown) === 4;
+      if (isIPv4 && !addr.internal) {
+        ips.push(addr.address);
+      }
+    }
+  }
+  return ips;
 }
 
 void bootstrap();

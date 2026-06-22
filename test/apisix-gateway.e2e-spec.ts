@@ -29,7 +29,6 @@ describe('APISIX gateway validation (e2e)', () => {
       .compile();
 
     app = moduleRef.createNestApplication();
-    app.setGlobalPrefix('api');
     app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
     app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
     await app.init();
@@ -40,7 +39,7 @@ describe('APISIX gateway validation (e2e)', () => {
   });
 
   const http = () => app.getHttpServer();
-  const route = '/api/v1/payment-intents';
+  const route = '/v1/payment-intents/pay';
 
   it('rejects requests without the gateway secret (403)', () =>
     request(http()).post(route).send({}).expect(403));
@@ -64,5 +63,5 @@ describe('APISIX gateway validation (e2e)', () => {
       .expect(400));
 
   it('leaves @Public() probes open (200)', () =>
-    request(http()).get('/api/v1/health/liveness').expect(200));
+    request(http()).get('/v1/health/liveness').expect(200));
 });

@@ -19,8 +19,7 @@ async function generate(): Promise<void> {
     logger: false,
   });
 
-  // Match runtime routing so paths in the spec are accurate (/api/v1/...).
-  app.setGlobalPrefix('api');
+  // Match runtime routing so paths in the spec are accurate (/v1/...).
   app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
 
   const document = createOpenApiDocument(app);

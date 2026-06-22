@@ -13,13 +13,27 @@ export interface AppConfig {
     gatewaySecretHeader: string;
     consumerHeader: string;
     credentialHeader: string;
+    environmentHeader: string;
     enforce: boolean;
   };
   stellar: {
+    // Fallback network when the API key environment is not forwarded
+    // (e.g. local dev without the gateway). Otherwise the key type decides.
     network: StellarNetwork;
-    horizonUrl: string;
+    horizon: Record<StellarNetwork, string>;
     baseFee: string;
     timeoutSeconds: number;
+  };
+  observer: {
+    enabled: boolean;
+    intervalMs: number;
+    batchSize: number;
+  };
+  webhooks: {
+    timeoutMs: number;
+    maxAttempts: number;
+    backoffMs: number;
+    signatureHeader: string;
   };
 }
 
@@ -43,18 +57,37 @@ export default (): AppConfig => ({
     credentialHeader: (
       process.env.APISIX_CREDENTIAL_HEADER ?? 'x-credential-identifier'
     ).toLowerCase(),
+    environmentHeader: (
+      process.env.APISIX_ENVIRONMENT_HEADER ?? 'x-consumer-env'
+    ).toLowerCase(),
     enforce: (process.env.ENFORCE_GATEWAY ?? 'true').toLowerCase() !== 'false',
   },
-  stellar: (() => {
-    const network: StellarNetwork =
+  stellar: {
+    network:
       (process.env.STELLAR_NETWORK ?? 'testnet').toLowerCase() === 'public'
         ? 'public'
-        : 'testnet';
-    return {
-      network,
-      horizonUrl: process.env.STELLAR_HORIZON_URL ?? DEFAULT_HORIZON[network],
-      baseFee: process.env.STELLAR_BASE_FEE ?? '100',
-      timeoutSeconds: parseInt(process.env.STELLAR_TX_TIMEOUT ?? '300', 10),
-    };
-  })(),
+        : 'testnet',
+    horizon: {
+      public:
+        process.env.STELLAR_HORIZON_URL_PUBLIC ?? DEFAULT_HORIZON.public,
+      testnet:
+        process.env.STELLAR_HORIZON_URL_TESTNET ?? DEFAULT_HORIZON.testnet,
+    },
+    baseFee: process.env.STELLAR_BASE_FEE ?? '100',
+    timeoutSeconds: parseInt(process.env.STELLAR_TX_TIMEOUT ?? '300', 10),
+  },
+  observer: {
+    // Permanent reconciler that watches Stellar and finalizes paid intents.
+    enabled: (process.env.OBSERVER_ENABLED ?? 'true').toLowerCase() !== 'false',
+    intervalMs: parseInt(process.env.OBSERVER_INTERVAL_MS ?? '15000', 10),
+    batchSize: parseInt(process.env.OBSERVER_BATCH_SIZE ?? '50', 10),
+  },
+  webhooks: {
+    timeoutMs: parseInt(process.env.WEBHOOK_TIMEOUT_MS ?? '5000', 10),
+    maxAttempts: parseInt(process.env.WEBHOOK_MAX_ATTEMPTS ?? '3', 10),
+    backoffMs: parseInt(process.env.WEBHOOK_BACKOFF_MS ?? '2000', 10),
+    signatureHeader: (
+      process.env.WEBHOOK_SIGNATURE_HEADER ?? 'x-cosmos-signature'
+    ).toLowerCase(),
+  },
 });

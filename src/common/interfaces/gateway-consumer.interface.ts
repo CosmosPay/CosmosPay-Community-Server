@@ -7,6 +7,12 @@ export interface GatewayConsumer {
   username: string;
   /** Credential id that authenticated, e.g. `cosmos_<uuid>` (X-Credential-Identifier). */
   credentialId: string | null;
+  /**
+   * API key environment forwarded by the gateway (derived from the key prefix:
+   * `dv_` → 'dev', `prod_` → 'prod'). Determines the Stellar network the intent
+   * targets. Null when not forwarded (local dev without the gateway).
+   */
+  environment: 'dev' | 'prod' | null;
 }
 
 declare module 'express' {

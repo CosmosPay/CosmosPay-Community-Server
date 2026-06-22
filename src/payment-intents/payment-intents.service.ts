@@ -6,22 +6,32 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import {
-  Asset,
-  Horizon,
-  Memo,
-  Networks,
-  Operation,
-  TransactionBuilder,
-} from '@stellar/stellar-sdk';
+import { EventEmitter2 } from '@nestjs/event-emitter';
+import { Asset, Memo, Operation, TransactionBuilder } from '@stellar/stellar-sdk';
+import { randomBytes } from 'node:crypto';
 import QRCode from 'qrcode';
-import { AppConfig } from '../config/configuration';
+import { AppConfig, StellarNetwork } from '../config/configuration';
 import { GatewayConsumer } from '../common/interfaces/gateway-consumer.interface';
 import { PrismaService } from '../prisma/prisma.service';
-import type { PaymentIntent } from '../../generated/prisma/client';
-import { CreatePaymentIntentDto } from './dto/create-payment-intent.dto';
+import { StellarService } from '../stellar/stellar.service';
+import type {
+  PaymentIntent,
+  PaymentIntentStatus,
+  WebhookEventType,
+} from '../../generated/prisma/client';
+import { WEBHOOK_EVENT, WebhookEventPayload } from '../webhooks/webhook-events';
+import { CreateTxPaymentIntentDto } from './dto/create-tx-payment-intent.dto';
+import { CreatePayPaymentIntentDto } from './dto/create-pay-payment-intent.dto';
 import { QueryPaymentIntentsDto } from './dto/query-payment-intents.dto';
 import { UpdatePaymentIntentDto } from './dto/update-payment-intent.dto';
+import { StellarVerifierService } from './stellar-verifier.service';
+
+export interface ValidationOutcome {
+  valid: boolean;
+  status: PaymentIntentStatus;
+  reason?: string;
+  paymentIntent?: PaymentIntentView;
+}
 
 // A stored intent plus its (derived) QR code — what API responses return.
 export type PaymentIntentView = PaymentIntent & { qr: string };
@@ -29,17 +39,51 @@ export type PaymentIntentView = PaymentIntent & { qr: string };
 @Injectable()
 export class PaymentIntentsService {
   private readonly logger = new Logger(PaymentIntentsService.name);
-  private readonly server: Horizon.Server;
-  private readonly networkPassphrase: string;
 
   constructor(
     private readonly config: ConfigService<AppConfig, true>,
     private readonly prisma: PrismaService,
-  ) {
-    const stellar = this.config.get('stellar', { infer: true });
-    this.server = new Horizon.Server(stellar.horizonUrl);
-    this.networkPassphrase =
-      stellar.network === 'public' ? Networks.PUBLIC : Networks.TESTNET;
+    private readonly events: EventEmitter2,
+    private readonly verifier: StellarVerifierService,
+    private readonly stellar: StellarService,
+  ) {}
+
+  /**
+   * The Stellar network is dictated by the caller's API key type, forwarded by
+   * the gateway: `prod` key → public, `dev` key → testnet. Falls back to the
+   * configured default only when the gateway didn't forward an environment
+   * (local dev without APISIX).
+   */
+  private resolveNetwork(consumer: GatewayConsumer): StellarNetwork {
+    if (consumer.environment === 'prod') return 'public';
+    if (consumer.environment === 'dev') return 'testnet';
+    return this.config.get('stellar', { infer: true }).network;
+  }
+
+  /** Emits a domain event the webhook dispatcher fans out to integrators. */
+  private emit(
+    consumerUsername: string,
+    type: WebhookEventType,
+    data: PaymentIntent,
+  ): void {
+    this.events.emit(
+      WEBHOOK_EVENT,
+      new WebhookEventPayload(consumerUsername, type, data),
+    );
+  }
+
+  /** Maps a status change to the matching webhook event type. */
+  private statusEvent(status: PaymentIntentStatus): WebhookEventType {
+    switch (status) {
+      case 'SUCCEEDED':
+        return 'PAYMENT_INTENT_SUCCEEDED';
+      case 'FAILED':
+        return 'PAYMENT_INTENT_FAILED';
+      case 'CANCELLED':
+        return 'PAYMENT_INTENT_CANCELLED';
+      default:
+        return 'PAYMENT_INTENT_UPDATED';
+    }
   }
 
   /**
@@ -62,59 +106,207 @@ export class PaymentIntentsService {
     return { ...intent, qr: await QRCode.toDataURL(intent.uri) };
   }
 
-  // ── CREATE ────────────────────────────────────────────────────────────────
-  async create(
+  /**
+   * Resolves the requested asset. No code (or "XLM"/"native") → native lumens;
+   * any other code requires an issuer. Returns both the stored representation
+   * and the SDK Asset for building transactions.
+   */
+  private resolveAsset(assetCode?: string, assetIssuer?: string): {
+    code: string;
+    issuer: string | null;
+    asset: Asset;
+  } {
+    const code = assetCode?.trim();
+    if (!code || code.toLowerCase() === 'xlm' || code.toLowerCase() === 'native') {
+      return { code: 'native', issuer: null, asset: Asset.native() };
+    }
+    if (!assetIssuer) {
+      throw new BadRequestException(
+        `assetIssuer is required for non-native asset "${code}"`,
+      );
+    }
+    return { code, issuer: assetIssuer, asset: new Asset(code, assetIssuer) };
+  }
+
+  /**
+   * The memo is a mandatory MEMO_ID: it identifies the payment on-chain and
+   * gives the intent idempotency. Validates a provided id (numeric, uint64) or
+   * generates a random one.
+   */
+  private resolveMemo(provided?: string): string {
+    if (provided !== undefined) {
+      if (!/^\d+$/.test(provided) || BigInt(provided) > 18446744073709551615n) {
+        throw new BadRequestException(
+          'memo must be a MEMO_ID: a numeric uint64 string',
+        );
+      }
+      return provided;
+    }
+    // Random uint64 (8 bytes) as a decimal string.
+    return BigInt('0x' + randomBytes(8).toString('hex')).toString();
+  }
+
+  /** Idempotency: return the existing intent for (consumer, memo), if any. */
+  private async findByMemo(
+    consumerId: string,
+    memo: string,
+  ): Promise<PaymentIntent | null> {
+    return this.prisma.paymentIntent.findUnique({
+      where: { consumerId_memo: { consumerId, memo } },
+    });
+  }
+
+  /** True for a Prisma unique-constraint violation. */
+  private isUniqueViolation(err: unknown): boolean {
+    return (err as { code?: string })?.code === 'P2002';
+  }
+
+  /** Appends shared SEP-7 extras (`msg`, `callback`) to a URI's params. */
+  private appendSep7Extras(
+    params: URLSearchParams,
+    extras: { msg?: string; callback?: string },
+  ): void {
+    if (extras.callback) params.set('callback', extras.callback);
+    if (extras.msg) params.set('msg', extras.msg);
+  }
+
+  // ── CREATE: tx ──────────────────────────────────────────────────────────────
+  /**
+   * SEP-7 `tx`: build the unsigned TransactionEnvelope from a known `source` and
+   * return its XDR + `web+stellar:tx?xdr=...` URI + QR for the wallet to sign.
+   * Network is dictated by the caller's API key type.
+   */
+  async createTx(
     consumer: GatewayConsumer,
-    dto: CreatePaymentIntentDto,
+    dto: CreateTxPaymentIntentDto,
   ): Promise<PaymentIntentView> {
     const stellar = this.config.get('stellar', { infer: true });
+    const network = this.resolveNetwork(consumer);
     const localConsumer = await this.resolveConsumer(consumer);
+    const asset = this.resolveAsset(dto.assetCode, dto.assetIssuer);
+    const memo = this.resolveMemo(dto.memo);
 
-    // Load the payer account to obtain its current sequence number.
-    const account = await this.loadAccount(dto.source);
+    // Idempotency: same (consumer, memo) returns the original intent.
+    const existing = await this.findByMemo(localConsumer.id, memo);
+    if (existing) return this.withQr(existing);
 
-    const builder = new TransactionBuilder(account, {
+    const account = await this.loadAccount(network, dto.source);
+    const xdr = new TransactionBuilder(account, {
       fee: stellar.baseFee,
-      networkPassphrase: this.networkPassphrase,
+      networkPassphrase: this.stellar.passphrase(network),
     })
       .addOperation(
         Operation.payment({
           destination: dto.destination,
           amount: dto.amount,
-          asset: Asset.native(), // XLM
+          asset: asset.asset,
         }),
       )
-      .setTimeout(stellar.timeoutSeconds);
+      .addMemo(Memo.id(memo))
+      .setTimeout(stellar.timeoutSeconds)
+      .build()
+      .toXDR();
 
-    if (dto.memo) {
-      builder.addMemo(Memo.id(dto.memo));
-    }
+    // SEP-7 tx URI: xdr (required) + optional msg/callback.
+    const params = new URLSearchParams({ xdr });
+    this.appendSep7Extras(params, { msg: dto.msg, callback: dto.callback });
+    const uri = `web+stellar:tx?${params.toString()}`;
 
-    const tx = builder.build();
-    const xdr = tx.toXDR();
-    const uri = `web+stellar:tx?xdr=${encodeURIComponent(xdr)}`;
-
-    const intent = await this.prisma.paymentIntent.create({
-      data: {
-        consumerId: localConsumer.id,
-        source: dto.source,
-        destination: dto.destination,
-        amount: dto.amount,
-        asset: 'native',
-        memo: dto.memo,
-        network: stellar.network,
-        status: 'PENDING',
-        xdr,
-        uri,
-      },
+    const intent = await this.persist({
+      consumerId: localConsumer.id,
+      kind: 'TX',
+      source: dto.source,
+      destination: dto.destination,
+      amount: dto.amount,
+      asset: asset.code,
+      assetIssuer: asset.issuer,
+      memo,
+      msg: dto.msg,
+      callback: dto.callback,
+      network,
+      status: 'PENDING',
+      xdr,
+      uri,
     });
+    if (!intent) return this.withQr((await this.findByMemo(localConsumer.id, memo))!);
 
     this.logger.log(
-      `Created payment intent ${intent.id}: ${dto.amount} XLM ` +
-        `${dto.source} → ${dto.destination} (consumer=${consumer.username}, network=${stellar.network})`,
+      `Created TX payment intent ${intent.id}: ${dto.amount} ` +
+        `${asset.code === 'native' ? 'XLM' : asset.code} ${dto.source} → ${dto.destination} ` +
+        `(consumer=${consumer.username}, network=${network}, memo=${memo})`,
     );
-
+    this.emit(consumer.username, 'PAYMENT_INTENT_CREATED', intent);
     return this.withQr(intent);
+  }
+
+  // ── CREATE: pay ─────────────────────────────────────────────────────────────
+  /**
+   * SEP-7 `pay`: no source/XDR — return a `web+stellar:pay?destination=...` URI
+   * carrying the destination and any optional payment fields, plus a QR.
+   */
+  async createPay(
+    consumer: GatewayConsumer,
+    dto: CreatePayPaymentIntentDto,
+  ): Promise<PaymentIntentView> {
+    const network = this.resolveNetwork(consumer);
+    const localConsumer = await this.resolveConsumer(consumer);
+    const asset = this.resolveAsset(dto.assetCode, dto.assetIssuer);
+    const memo = this.resolveMemo(dto.memo);
+
+    const existing = await this.findByMemo(localConsumer.id, memo);
+    if (existing) return this.withQr(existing);
+
+    const params = new URLSearchParams({ destination: dto.destination });
+    if (dto.amount) params.set('amount', dto.amount);
+    if (asset.code !== 'native') {
+      params.set('asset_code', asset.code);
+      if (asset.issuer) params.set('asset_issuer', asset.issuer);
+    }
+    params.set('memo', memo);
+    params.set('memo_type', 'MEMO_ID');
+    this.appendSep7Extras(params, { msg: dto.msg, callback: dto.callback });
+    const uri = `web+stellar:pay?${params.toString()}`;
+
+    const intent = await this.persist({
+      consumerId: localConsumer.id,
+      kind: 'PAY',
+      source: null,
+      destination: dto.destination,
+      amount: dto.amount ?? null,
+      asset: asset.code,
+      assetIssuer: asset.issuer,
+      memo,
+      msg: dto.msg,
+      callback: dto.callback,
+      network,
+      status: 'PENDING',
+      xdr: null,
+      uri,
+    });
+    if (!intent) return this.withQr((await this.findByMemo(localConsumer.id, memo))!);
+
+    this.logger.log(
+      `Created PAY payment intent ${intent.id}: ${dto.amount ?? '(open)'} ` +
+        `${asset.code === 'native' ? 'XLM' : asset.code} → ${dto.destination} ` +
+        `(consumer=${consumer.username}, network=${network}, memo=${memo})`,
+    );
+    this.emit(consumer.username, 'PAYMENT_INTENT_CREATED', intent);
+    return this.withQr(intent);
+  }
+
+  /**
+   * Persists a new intent. Returns null on a (consumer, memo) unique-violation
+   * race so the caller can fall back to the existing row (idempotency).
+   */
+  private async persist(
+    data: Parameters<PrismaService['paymentIntent']['create']>[0]['data'],
+  ): Promise<PaymentIntent | null> {
+    try {
+      return await this.prisma.paymentIntent.create({ data });
+    } catch (err) {
+      if (this.isUniqueViolation(err)) return null;
+      throw err;
+    }
   }
 
   // ── READ (list) ─────────────────────────────────────────────────────────────
@@ -177,6 +369,14 @@ export class PaymentIntentsService {
       `Updated payment intent ${id} (consumer=${consumer.username}): ` +
         `${dto.status ?? 'status unchanged'}`,
     );
+
+    // Notify integrators: a status change maps to a specific event, otherwise
+    // it's a generic update (e.g. txHash/reference attached).
+    this.emit(
+      consumer.username,
+      dto.status ? this.statusEvent(dto.status) : 'PAYMENT_INTENT_UPDATED',
+      updated,
+    );
     return this.withQr(updated);
   }
 
@@ -186,9 +386,99 @@ export class PaymentIntentsService {
     id: string,
   ): Promise<{ id: string; deleted: true }> {
     await this.assertOwned(consumer, id);
-    await this.prisma.paymentIntent.delete({ where: { id } });
+    const deleted = await this.prisma.paymentIntent.delete({ where: { id } });
     this.logger.log(`Deleted payment intent ${id} (consumer=${consumer.username})`);
+    this.emit(consumer.username, 'PAYMENT_INTENT_DELETED', deleted);
     return { id, deleted: true };
+  }
+
+  // ── VALIDATE (manual reconciliation) ─────────────────────────────────────────
+  /**
+   * Validates a submitted transaction against the intent (success, destination,
+   * native amount and memo). On a confirmed match the intent is finalized to
+   * SUCCEEDED and a webhook event fires; if the tx failed on-chain it is marked
+   * FAILED. Pure mismatches (wrong amount/memo/hash) leave the status untouched
+   * so a correct tx can still be submitted later.
+   */
+  async validate(
+    consumer: GatewayConsumer,
+    id: string,
+    txHash: string,
+  ): Promise<ValidationOutcome> {
+    const intent = await this.prisma.paymentIntent.findFirst({
+      where: { id, consumer: { apisixUsername: consumer.username } },
+    });
+    if (!intent) {
+      throw new NotFoundException(`Payment intent ${id} not found`);
+    }
+
+    // Already settled — return current state without re-querying the network.
+    if (intent.status === 'SUCCEEDED') {
+      return {
+        valid: true,
+        status: 'SUCCEEDED',
+        paymentIntent: await this.withQr(intent),
+      };
+    }
+
+    const result = await this.verifier.verifyByHash(intent, txHash);
+
+    if (result.valid) {
+      const updated = await this.markSucceeded(
+        intent.id,
+        consumer.username,
+        result.txHash ?? txHash,
+      );
+      return {
+        valid: true,
+        status: 'SUCCEEDED',
+        paymentIntent: await this.withQr(updated),
+      };
+    }
+
+    // Transaction exists but failed on-chain → settle as FAILED.
+    if (result.reason === 'Transaction failed on-chain') {
+      const updated = await this.markFailed(intent.id, consumer.username, txHash);
+      return {
+        valid: false,
+        status: 'FAILED',
+        reason: result.reason,
+        paymentIntent: await this.withQr(updated),
+      };
+    }
+
+    return { valid: false, status: intent.status, reason: result.reason };
+  }
+
+  /** Finalizes an intent as SUCCEEDED and emits the event. Reused by the observer. */
+  async markSucceeded(
+    intentId: string,
+    consumerUsername: string,
+    txHash: string,
+  ): Promise<PaymentIntent> {
+    const updated = await this.prisma.paymentIntent.update({
+      where: { id: intentId },
+      data: { status: 'SUCCEEDED', txHash },
+    });
+    this.logger.log(
+      `Payment intent ${intentId} confirmed on-chain (tx=${txHash})`,
+    );
+    this.emit(consumerUsername, 'PAYMENT_INTENT_SUCCEEDED', updated);
+    return updated;
+  }
+
+  /** Finalizes an intent as FAILED and emits the event. */
+  async markFailed(
+    intentId: string,
+    consumerUsername: string,
+    txHash?: string,
+  ): Promise<PaymentIntent> {
+    const updated = await this.prisma.paymentIntent.update({
+      where: { id: intentId },
+      data: { status: 'FAILED', ...(txHash ? { txHash } : {}) },
+    });
+    this.emit(consumerUsername, 'PAYMENT_INTENT_FAILED', updated);
+    return updated;
   }
 
   /** Throws 404 unless the intent exists and belongs to the consumer. */
@@ -205,16 +495,16 @@ export class PaymentIntentsService {
     }
   }
 
-  private async loadAccount(source: string) {
+  private async loadAccount(network: StellarNetwork, source: string) {
     try {
-      return await this.server.loadAccount(source);
+      return await this.stellar.server(network).loadAccount(source);
     } catch (error: unknown) {
       // A 404 from Horizon means the account doesn't exist / isn't funded.
       const status = (error as { response?: { status?: number } })?.response
         ?.status;
       if (status === 404) {
         throw new BadRequestException(
-          `Source account ${source} not found or not funded on the ${this.config.get('stellar', { infer: true }).network} network`,
+          `Source account ${source} not found or not funded on the ${network} network`,
         );
       }
       this.logger.error('Failed to load source account from Horizon', error);

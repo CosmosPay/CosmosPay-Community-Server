@@ -13,7 +13,7 @@ export function buildSwaggerConfig() {
       'Payments microservice (Stellar payment intents). All endpoints require ' +
         'traffic to arrive through the APISIX gateway: a valid `X-Gateway-Secret` ' +
         'header plus an authenticated consumer (`X-Consumer-Username`). Paths ' +
-        'already include the global prefix and version (`/api/v1/...`).',
+        'already include the version (`/v1/...`).',
     )
     .setVersion('1.0')
     // Document the headers APISIX injects so consumers of the spec understand
@@ -30,7 +30,7 @@ export function buildSwaggerConfig() {
     .addSecurityRequirements('consumer');
 
   // Optionally point the spec at the public gateway host (root URL — paths
-  // already carry /api/v1). Set OPENAPI_SERVER_URL when generating for prod.
+  // already carry /v1). Set OPENAPI_SERVER_URL when generating for prod.
   const serverUrl = process.env.OPENAPI_SERVER_URL;
   if (serverUrl) {
     builder.addServer(serverUrl, 'Gateway base URL');

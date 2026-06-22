@@ -30,6 +30,7 @@
     "@nestjs/common": "^11.1.6",
     "@nestjs/config": "^4.0.2",
     "@nestjs/core": "^11.1.6",
+    "@nestjs/event-emitter": "^3.1.0",
     "@nestjs/platform-express": "^11.1.6",
     "@nestjs/swagger": "^11.2.0",
     "@nestjs/terminus": "^11.0.0",
@@ -81,8 +82,18 @@
     "rootDir": "src",
     "testRegex": ".*\\.spec\\.ts$",
     "transform": {
-      "^.+\\.(t|j)s$": "ts-jest"
+      "^.+\\.(t|j)s$": [
+        "ts-jest",
+        {
+          "tsconfig": {
+            "allowJs": true
+          }
+        }
+      ]
     },
+    "transformIgnorePatterns": [
+      "/node_modules/(?!(@stellar|@noble|uint8array-extras)/)"
+    ],
     "collectCoverageFrom": [
       "**/*.(t|j)s"
     ],

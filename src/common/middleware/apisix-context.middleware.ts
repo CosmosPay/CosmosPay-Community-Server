@@ -18,22 +18,38 @@ export class ApisixContextMiddleware implements NestMiddleware {
   constructor(private readonly config: ConfigService<AppConfig, true>) {}
 
   use(req: Request, _res: Response, next: NextFunction): void {
-    const { consumerHeader, credentialHeader } = this.config.get('apisix', {
-      infer: true,
-    });
+    const { consumerHeader, credentialHeader, environmentHeader } =
+      this.config.get('apisix', { infer: true });
 
     const username = this.firstHeader(req, consumerHeader);
     const credentialId = this.firstHeader(req, credentialHeader);
+    const environment = this.parseEnvironment(
+      this.firstHeader(req, environmentHeader),
+    );
 
     if (username) {
       const consumer: GatewayConsumer = {
         username,
         credentialId: credentialId ?? null,
+        environment,
       };
       req.gatewayConsumer = consumer;
     }
 
     next();
+  }
+
+  /** Normalizes the forwarded API key environment to 'dev' | 'prod' | null. */
+  private parseEnvironment(raw?: string): 'dev' | 'prod' | null {
+    if (!raw) return null;
+    const v = raw.toLowerCase();
+    if (v === 'prod' || v === 'production' || v === 'live' || v === 'public') {
+      return 'prod';
+    }
+    if (v === 'dev' || v === 'development' || v === 'test' || v === 'testnet') {
+      return 'dev';
+    }
+    return null;
   }
 
   /** Header values can arrive as string | string[]; collapse to the first string. */

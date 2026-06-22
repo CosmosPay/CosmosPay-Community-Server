@@ -25,9 +25,77 @@ model Consumer {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  paymentIntents PaymentIntent[]
+  paymentIntents   PaymentIntent[]
+  webhookEndpoints WebhookEndpoint[]
 
   @@map("consumer")
+}
+
+// Events the platform emits to integrators' webhook endpoints.
+enum WebhookEventType {
+  PAYMENT_INTENT_CREATED
+  PAYMENT_INTENT_UPDATED
+  PAYMENT_INTENT_SUCCEEDED
+  PAYMENT_INTENT_FAILED
+  PAYMENT_INTENT_CANCELLED
+  PAYMENT_INTENT_DELETED
+}
+
+enum WebhookDeliveryStatus {
+  PENDING
+  SUCCEEDED
+  FAILED
+}
+
+// An integrator-registered URL that receives signed event notifications.
+// Scoped to the APISIX consumer that created it.
+model WebhookEndpoint {
+  id          String             @id @default(cuid())
+  consumerId  String
+  consumer    Consumer           @relation(fields: [consumerId], references: [id], onDelete: Cascade)
+
+  url         String
+  // HMAC-SHA256 signing secret (prefixed `whsec_`). Integrators verify the
+  // `X-Cosmos-Signature` header with this.
+  secret      String
+  description String?
+  enabled     Boolean            @default(true)
+  // Subscribed event types; an empty list means "all events".
+  eventTypes  WebhookEventType[]
+
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+
+  deliveries  WebhookDelivery[]
+
+  @@index([consumerId])
+  @@map("webhook_endpoint")
+}
+
+// Append-only record of every delivery attempt — the audit trail for what the
+// platform notified, when, and whether the integrator acknowledged it.
+model WebhookDelivery {
+  id             String                @id @default(cuid())
+  endpointId     String
+  endpoint       WebhookEndpoint       @relation(fields: [endpointId], references: [id], onDelete: Cascade)
+
+  eventType      WebhookEventType
+  // Stable event id sent to the receiver for idempotency.
+  eventId        String
+  payload        Json
+  status         WebhookDeliveryStatus @default(PENDING)
+  attempts       Int                   @default(0)
+  responseStatus Int?
+  error          String?
+  lastAttemptAt  DateTime?
+
+  createdAt      DateTime              @default(now())
+  updatedAt      DateTime              @updatedAt
+
+  @@index([endpointId])
+  @@index([status])
+  @@index([eventId])
+  @@map("webhook_delivery")
 }
 
 // Lifecycle of a Stellar payment intent. Kept for traceability — the unsigned
@@ -42,23 +110,40 @@ enum PaymentIntentStatus {
   EXPIRED // tx time bounds elapsed before submission
 }
 
+// How the intent was assembled:
+//  - TX:  source known → a full unsigned transaction (xdr) + SEP-7 `tx` URI.
+//  - PAY: no source → only a SEP-7 `pay` URI (destination[, amount, asset]); no xdr.
+enum PaymentIntentKind {
+  TX
+  PAY
+}
+
 model PaymentIntent {
   id          String              @id @default(cuid())
   consumerId  String
   consumer    Consumer            @relation(fields: [consumerId], references: [id], onDelete: Cascade)
 
-  // Stellar payment details (XLM native asset).
-  source      String // payer account (G...)
+  kind        PaymentIntentKind   @default(TX)
+
+  // Stellar payment details.
+  source      String? // payer account (G...) — null for PAY intents
   destination String // payee account (G...)
-  amount      String // decimal string, e.g. "25.5"
-  asset       String              @default("native")
-  memo        String? // numeric memo id, when provided
+  amount      String? // decimal string, e.g. "25.5" — optional for PAY intents
+  asset       String              @default("native") // asset code, or "native" for XLM
+  assetIssuer String? // issuer account for non-native assets
+  // Mandatory MEMO_ID (uint64 as string). Auto-generated when not supplied.
+  // Identifies the payment on-chain and gives the intent idempotency per consumer.
+  memo        String
   network     String // 'public' | 'testnet'
+
+  // Optional SEP-7 extras (informational; echoed back, not validated on-chain).
+  msg         String? // message shown to the user in their wallet
+  callback    String? // SEP-7 callback (e.g. `url:https://...`)
 
   status      PaymentIntentStatus @default(PENDING)
 
-  // The unsigned transaction artifacts (QR is derived from `uri` on read).
-  xdr         String
+  // Artifacts. `xdr` is null for PAY intents; QR is derived from `uri` on read.
+  xdr         String?
   uri         String
   // Set once a signed transaction is submitted/confirmed.
   txHash      String?             @unique
@@ -67,6 +152,7 @@ model PaymentIntent {
   createdAt   DateTime            @default(now())
   updatedAt   DateTime            @updatedAt
 
+  @@unique([consumerId, memo]) // idempotency: one intent per (consumer, memo)
   @@index([consumerId])
   @@index([status])
   @@map("payment_intent")
