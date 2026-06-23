@@ -15,6 +15,7 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { CurrentConsumer } from '../common/decorators/current-consumer.decorator';
+import { RequirePermissions } from '../common/decorators/require-permissions.decorator';
 import { GatewayConsumer } from '../common/interfaces/gateway-consumer.interface';
 import { CreateWebhookEndpointDto } from './dto/create-webhook-endpoint.dto';
 import { UpdateWebhookEndpointDto } from './dto/update-webhook-endpoint.dto';
@@ -36,6 +37,7 @@ export class WebhooksController {
   constructor(private readonly webhooks: WebhooksService) {}
 
   @Post()
+  @RequirePermissions('webhooks:write')
   @ApiOperation({
     summary: 'Register a webhook endpoint (returns the signing secret — shown once)',
   })
@@ -48,6 +50,7 @@ export class WebhooksController {
   }
 
   @Get()
+  @RequirePermissions('webhooks:read')
   @ApiOperation({ summary: "List the consumer's webhook endpoints" })
   @ApiOkResponse({ type: [WebhookEndpointEntity] })
   findAll(@CurrentConsumer() consumer: GatewayConsumer) {
@@ -55,6 +58,7 @@ export class WebhooksController {
   }
 
   @Get(':id')
+  @RequirePermissions('webhooks:read')
   @ApiOperation({ summary: 'Get a webhook endpoint' })
   @ApiOkResponse({ type: WebhookEndpointEntity })
   findOne(
@@ -65,6 +69,7 @@ export class WebhooksController {
   }
 
   @Patch(':id')
+  @RequirePermissions('webhooks:write')
   @ApiOperation({ summary: 'Update a webhook endpoint (url/description/enabled/eventTypes)' })
   @ApiOkResponse({ type: WebhookEndpointEntity })
   update(
@@ -76,6 +81,7 @@ export class WebhooksController {
   }
 
   @Delete(':id')
+  @RequirePermissions('webhooks:write')
   @ApiOperation({ summary: 'Delete a webhook endpoint' })
   @ApiOkResponse({ type: WebhookDeletedEntity })
   remove(
@@ -86,6 +92,7 @@ export class WebhooksController {
   }
 
   @Post(':id/rotate-secret')
+  @RequirePermissions('webhooks:write')
   @ApiOperation({ summary: 'Rotate the signing secret (returns the new secret)' })
   @ApiCreatedResponse({ type: WebhookEndpointWithSecretEntity })
   rotateSecret(
@@ -96,6 +103,7 @@ export class WebhooksController {
   }
 
   @Post(':id/ping')
+  @RequirePermissions('webhooks:write')
   @ApiOperation({ summary: 'Send a test event to verify the endpoint' })
   @ApiCreatedResponse({ type: WebhookPingEntity })
   ping(@CurrentConsumer() consumer: GatewayConsumer, @Param('id') id: string) {
@@ -103,6 +111,7 @@ export class WebhooksController {
   }
 
   @Get(':id/deliveries')
+  @RequirePermissions('webhooks:read')
   @ApiOperation({ summary: 'List delivery attempts for an endpoint (audit trail)' })
   @ApiOkResponse({ type: WebhookDeliveryListEntity })
   listDeliveries(
@@ -114,6 +123,7 @@ export class WebhooksController {
   }
 
   @Post(':id/deliveries/:deliveryId/redeliver')
+  @RequirePermissions('webhooks:write')
   @ApiOperation({ summary: 'Manually re-send a past delivery' })
   @ApiCreatedResponse({ type: WebhookDeliveryEntity })
   redeliver(

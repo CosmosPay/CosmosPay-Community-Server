@@ -27,8 +27,76 @@ model Consumer {
 
   paymentIntents   PaymentIntent[]
   webhookEndpoints WebhookEndpoint[]
+  products         Product[]
+  customers        Customer[]
 
   @@map("consumer")
+}
+
+// A merchant-managed customer record. Independent of the payers derived from
+// payment intents — these are explicitly created/edited by the merchant.
+model Customer {
+  id          String   @id @default(cuid())
+  consumerId  String
+  consumer    Consumer @relation(fields: [consumerId], references: [id], onDelete: Cascade)
+
+  name        String
+  email       String?
+  // Optional Stellar account to associate the customer with on-chain activity.
+  account     String?
+  reference   String? // merchant reference / external id
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([consumerId])
+  @@map("customer")
+}
+
+// Append-only access log of API requests reaching the service (written by the
+// LoggingInterceptor). Powers the dashboard "API logs" view. Scoped by the
+// forwarded consumer username when present.
+model RequestLog {
+  id          String   @id @default(cuid())
+  // APISIX consumer username (X-Consumer-Username), null for anonymous/public.
+  consumer    String?
+  method      String
+  path        String
+  statusCode  Int
+  durationMs  Int
+  ip          String?
+  userAgent   String?
+
+  createdAt   DateTime @default(now())
+
+  @@index([consumer])
+  @@index([createdAt])
+  @@map("request_log")
+}
+
+// A reusable item/price a merchant can charge for. Independent of payment
+// intents — intents may reference one via `reference`, but products are managed
+// on their own. Scoped to the APISIX consumer that created them.
+model Product {
+  id          String   @id @default(cuid())
+  consumerId  String
+  consumer    Consumer @relation(fields: [consumerId], references: [id], onDelete: Cascade)
+
+  name        String
+  description String?
+  // Price as a decimal string (e.g. "49.00"). Null = customer-set / donation.
+  amount      String?
+  asset       String   @default("native") // asset code, or "native" for XLM
+  // 'recurring' | 'one_time' | 'link' — informational classification.
+  kind        String   @default("one_time")
+  active      Boolean  @default(true)
+  reference   String? // optional merchant SKU / reference
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([consumerId])
+  @@map("product")
 }
 
 // Events the platform emits to integrators' webhook endpoints.

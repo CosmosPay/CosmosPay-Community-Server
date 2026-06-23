@@ -14,6 +14,8 @@ export interface AppConfig {
     consumerHeader: string;
     credentialHeader: string;
     environmentHeader: string;
+    roleHeader: string;
+    permissionsHeader: string;
     enforce: boolean;
   };
   stellar: {
@@ -59,6 +61,12 @@ export default (): AppConfig => ({
     ).toLowerCase(),
     environmentHeader: (
       process.env.APISIX_ENVIRONMENT_HEADER ?? 'x-consumer-env'
+    ).toLowerCase(),
+    roleHeader: (
+      process.env.APISIX_ROLE_HEADER ?? 'x-consumer-role'
+    ).toLowerCase(),
+    permissionsHeader: (
+      process.env.APISIX_PERMISSIONS_HEADER ?? 'x-consumer-permissions'
     ).toLowerCase(),
     enforce: (process.env.ENFORCE_GATEWAY ?? 'true').toLowerCase() !== 'false',
   },

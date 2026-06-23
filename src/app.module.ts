@@ -1,16 +1,21 @@
 import { Module, MiddlewareConsumer, NestModule } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
-import { APP_GUARD } from '@nestjs/core';
+import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { EventEmitterModule } from '@nestjs/event-emitter';
+import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
 import configuration from './config/configuration';
 import { validateEnv } from './config/env.validation';
 import { ApisixGuard } from './common/guards/apisix.guard';
+import { PermissionsGuard } from './common/guards/permissions.guard';
 import { ApisixContextMiddleware } from './common/middleware/apisix-context.middleware';
 import { PrismaModule } from './prisma/prisma.module';
 import { StellarModule } from './stellar/stellar.module';
 import { HealthModule } from './health/health.module';
 import { PaymentIntentsModule } from './payment-intents/payment-intents.module';
 import { WebhooksModule } from './webhooks/webhooks.module';
+import { AnalyticsModule } from './analytics/analytics.module';
+import { ProductsModule } from './products/products.module';
+import { CustomersModule } from './customers/customers.module';
 
 @Module({
   imports: [
@@ -27,13 +32,28 @@ import { WebhooksModule } from './webhooks/webhooks.module';
     HealthModule,
     PaymentIntentsModule,
     WebhooksModule,
+    AnalyticsModule,
+    ProductsModule,
+    CustomersModule,
   ],
   providers: [
+    // Persist a RequestLog row per request (powers the API logs view).
+    {
+      provide: APP_INTERCEPTOR,
+      useClass: LoggingInterceptor,
+    },
     // Enforce the "only APISIX" check on every route by default.
     // Routes opt out with @Public().
     {
       provide: APP_GUARD,
       useClass: ApisixGuard,
+    },
+    // Then authorize against the API key's scopes (declared with
+    // @RequirePermissions). Registered after ApisixGuard so the consumer is
+    // already attached to the request.
+    {
+      provide: APP_GUARD,
+      useClass: PermissionsGuard,
     },
   ],
 })

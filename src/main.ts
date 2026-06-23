@@ -7,7 +7,6 @@ import helmet from 'helmet';
 import { AppModule } from './app.module';
 import { AppConfig } from './config/configuration';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
-import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
 import { setupSwagger } from './swagger';
 
 async function bootstrap(): Promise<void> {
@@ -36,7 +35,6 @@ async function bootstrap(): Promise<void> {
   );
 
   app.useGlobalFilters(new AllExceptionsFilter());
-  app.useGlobalInterceptors(new LoggingInterceptor());
 
   // OpenAPI docs + raw spec (/docs, /docs/json, /docs/yaml).
   // Handy in dev; lock down or disable in prod as needed.

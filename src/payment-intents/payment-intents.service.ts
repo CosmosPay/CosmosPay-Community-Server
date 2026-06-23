@@ -386,6 +386,17 @@ export class PaymentIntentsService {
     id: string,
   ): Promise<{ id: string; deleted: true }> {
     await this.assertOwned(consumer, id);
+    // A paid (SUCCEEDED) intent is an immutable record of a settled payment — it
+    // must not be deletable.
+    const existing = await this.prisma.paymentIntent.findUnique({
+      where: { id },
+      select: { status: true },
+    });
+    if (existing?.status === 'SUCCEEDED') {
+      throw new BadRequestException(
+        'A paid payment intent cannot be deleted.',
+      );
+    }
     const deleted = await this.prisma.paymentIntent.delete({ where: { id } });
     this.logger.log(`Deleted payment intent ${id} (consumer=${consumer.username})`);
     this.emit(consumer.username, 'PAYMENT_INTENT_DELETED', deleted);
@@ -428,6 +439,7 @@ export class PaymentIntentsService {
         intent.id,
         consumer.username,
         result.txHash ?? txHash,
+        result.payer,
       );
       return {
         valid: true,
@@ -455,16 +467,60 @@ export class PaymentIntentsService {
     intentId: string,
     consumerUsername: string,
     txHash: string,
+    payer?: string,
   ): Promise<PaymentIntent> {
+    // For PAY intents the payer is unknown until settlement — record the actual
+    // on-chain source so the payment is attributable (and customer stats line up).
+    const current = await this.prisma.paymentIntent.findUnique({
+      where: { id: intentId },
+      select: { source: true },
+    });
+    const setSource = payer && !current?.source ? { source: payer } : {};
     const updated = await this.prisma.paymentIntent.update({
       where: { id: intentId },
-      data: { status: 'SUCCEEDED', txHash },
+      data: { status: 'SUCCEEDED', txHash, ...setSource },
     });
     this.logger.log(
       `Payment intent ${intentId} confirmed on-chain (tx=${txHash})`,
     );
     this.emit(consumerUsername, 'PAYMENT_INTENT_SUCCEEDED', updated);
+    // Best-effort: a successful payment yields a customer (the payer). Never let
+    // a customer write affect the payment outcome.
+    void this.upsertCustomerFromPayment(updated, payer).catch((err) =>
+      this.logger.warn(
+        `Could not auto-create customer for intent ${intentId}: ${String(err)}`,
+      ),
+    );
     return updated;
+  }
+
+  /**
+   * Auto-create a Customer from a settled payment's payer (the on-chain source,
+   * falling back to the intent's source for TX intents). Idempotent per
+   * (consumer, account) so repeat payers don't duplicate.
+   */
+  private async upsertCustomerFromPayment(
+    intent: PaymentIntent,
+    payer?: string,
+  ): Promise<void> {
+    const account = payer ?? intent.source ?? null;
+    if (!account) return;
+    const existing = await this.prisma.customer.findFirst({
+      where: { consumerId: intent.consumerId, account },
+      select: { id: true },
+    });
+    if (existing) return;
+    await this.prisma.customer.create({
+      data: {
+        consumerId: intent.consumerId,
+        name: `${account.slice(0, 6)}…${account.slice(-4)}`,
+        account,
+        reference: 'auto',
+      },
+    });
+    this.logger.log(
+      `Auto-created customer ${account} for consumer ${intent.consumerId}`,
+    );
   }
 
   /** Finalizes an intent as FAILED and emits the event. */

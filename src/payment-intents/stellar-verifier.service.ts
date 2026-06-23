@@ -8,6 +8,8 @@ export interface VerificationResult {
   valid: boolean;
   txHash?: string;
   reason?: string;
+  /** The payer (source) account of the matched on-chain payment, when valid. */
+  payer?: string;
 }
 
 /**
@@ -65,7 +67,8 @@ export class StellarVerifierService {
       };
     }
 
-    return { valid: true, txHash };
+    const payer = (match as Horizon.ServerApi.PaymentOperationRecord).from;
+    return { valid: true, txHash, payer };
   }
 
   /**
@@ -110,7 +113,8 @@ export class StellarVerifierService {
       if (!this.memoMatches(intent, tx.memo_type, tx.memo).ok) {
         continue;
       }
-      return { valid: true, txHash: op.transaction_hash };
+      const payer = (op as Horizon.ServerApi.PaymentOperationRecord).from;
+      return { valid: true, txHash: op.transaction_hash, payer };
     }
 
     return { valid: false, reason: 'No matching payment found yet' };

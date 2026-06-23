@@ -13,6 +13,17 @@ export interface GatewayConsumer {
    * targets. Null when not forwarded (local dev without the gateway).
    */
   environment: 'dev' | 'prod' | null;
+  /**
+   * Role of the authenticating API key (X-Consumer-Role). `admin` keys bypass
+   * per-action permission checks; `user` keys are restricted to their granted
+   * `permissions`. Null when not forwarded.
+   */
+  role: 'admin' | 'user' | null;
+  /**
+   * Scopes granted to the API key (X-Consumer-Permissions), e.g. `['read','write']`.
+   * Enforced by PermissionsGuard. Empty when none granted / not forwarded.
+   */
+  permissions: string[];
 }
 
 declare module 'express' {

@@ -18,13 +18,22 @@ export class ApisixContextMiddleware implements NestMiddleware {
   constructor(private readonly config: ConfigService<AppConfig, true>) {}
 
   use(req: Request, _res: Response, next: NextFunction): void {
-    const { consumerHeader, credentialHeader, environmentHeader } =
-      this.config.get('apisix', { infer: true });
+    const {
+      consumerHeader,
+      credentialHeader,
+      environmentHeader,
+      roleHeader,
+      permissionsHeader,
+    } = this.config.get('apisix', { infer: true });
 
     const username = this.firstHeader(req, consumerHeader);
     const credentialId = this.firstHeader(req, credentialHeader);
     const environment = this.parseEnvironment(
       this.firstHeader(req, environmentHeader),
+    );
+    const role = this.parseRole(this.firstHeader(req, roleHeader));
+    const permissions = this.parsePermissions(
+      this.firstHeader(req, permissionsHeader),
     );
 
     if (username) {
@@ -32,11 +41,43 @@ export class ApisixContextMiddleware implements NestMiddleware {
         username,
         credentialId: credentialId ?? null,
         environment,
+        role,
+        permissions,
       };
       req.gatewayConsumer = consumer;
     }
 
     next();
+  }
+
+  /** Normalizes the forwarded API key role to 'admin' | 'user' | null. */
+  private parseRole(raw?: string): 'admin' | 'user' | null {
+    if (!raw) return null;
+    return raw.toLowerCase() === 'admin' ? 'admin' : 'user';
+  }
+
+  /**
+   * Parses the forwarded permissions, accepting either a JSON array
+   * (`["read","write"]`) or a comma-separated list (`read,write`).
+   */
+  private parsePermissions(raw?: string): string[] {
+    if (!raw) return [];
+    const trimmed = raw.trim();
+    if (trimmed.startsWith('[')) {
+      try {
+        const parsed: unknown = JSON.parse(trimmed);
+        if (Array.isArray(parsed)) {
+          return parsed.filter((p): p is string => typeof p === 'string');
+        }
+      } catch {
+        return [];
+      }
+      return [];
+    }
+    return trimmed
+      .split(',')
+      .map((p) => p.trim())
+      .filter((p) => p.length > 0);
   }
 
   /** Normalizes the forwarded API key environment to 'dev' | 'prod' | null. */

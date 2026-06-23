@@ -465,6 +465,205 @@ paths:
                 $ref: "#/components/schemas/WebhookDeliveryEntity"
       summary: Manually re-send a past delivery
       tags: *a6
+  /v1/summary:
+    get:
+      operationId: AnalyticsController_summary_v1
+      parameters: []
+      responses:
+        "200":
+          description: Aggregated overview for the consumer.
+      summary: "Overview metrics: totals, settled volume, webhook health, 30-day series"
+      tags: &a7
+        - analytics
+  /v1/balances:
+    get:
+      operationId: AnalyticsController_balances_v1
+      parameters: []
+      responses:
+        "200":
+          description: Balances per asset for the consumer.
+      summary: Settled (and pending) amount per asset
+      tags: *a7
+  /v1/logs:
+    get:
+      operationId: AnalyticsController_apiLogs_v1
+      parameters: []
+      responses:
+        "200":
+          description: API request log for the consumer.
+      summary: Recent API requests reaching the service (with details)
+      tags: *a7
+  /v1/logs/webhooks:
+    get:
+      operationId: AnalyticsController_webhookLogs_v1
+      parameters: []
+      responses:
+        "200":
+          description: Webhook delivery log for the consumer.
+      summary: Recent webhook deliveries across all endpoints (with details)
+      tags: *a7
+  /v1/products:
+    post:
+      operationId: ProductsController_create_v1
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateProductDto"
+      responses:
+        "201":
+          description: ""
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductEntity"
+      summary: Create a product
+      tags: &a8
+        - products
+    get:
+      operationId: ProductsController_findAll_v1
+      parameters: []
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ProductEntity"
+      summary: List the consumer's products
+      tags: *a8
+  /v1/products/{id}:
+    get:
+      operationId: ProductsController_findOne_v1
+      parameters:
+        - name: id
+          required: true
+          in: path
+          schema:
+            type: string
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductEntity"
+      summary: Get a product by id
+      tags: *a8
+    patch:
+      operationId: ProductsController_update_v1
+      parameters:
+        - name: id
+          required: true
+          in: path
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateProductDto"
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductEntity"
+      summary: Update a product
+      tags: *a8
+    delete:
+      operationId: ProductsController_remove_v1
+      parameters:
+        - name: id
+          required: true
+          in: path
+          schema:
+            type: string
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductDeletedEntity"
+      summary: Delete a product
+      tags: *a8
+  /v1/customers:
+    post:
+      operationId: CustomersController_create_v1
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCustomerDto"
+      responses:
+        "201":
+          description: ""
+      summary: Create a customer
+      tags: &a9
+        - customers
+    get:
+      operationId: CustomersController_findAll_v1
+      parameters: []
+      responses:
+        "200":
+          description: ""
+      summary: List the consumer's customers (with payment stats)
+      tags: *a9
+  /v1/customers/{id}:
+    get:
+      operationId: CustomersController_findOne_v1
+      parameters:
+        - name: id
+          required: true
+          in: path
+          schema:
+            type: string
+      responses:
+        "200":
+          description: ""
+      summary: Get a customer by id
+      tags: *a9
+    patch:
+      operationId: CustomersController_update_v1
+      parameters:
+        - name: id
+          required: true
+          in: path
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateCustomerDto"
+      responses:
+        "200":
+          description: ""
+      summary: Update a customer
+      tags: *a9
+    delete:
+      operationId: CustomersController_remove_v1
+      parameters:
+        - name: id
+          required: true
+          in: path
+          schema:
+            type: string
+      responses:
+        "200":
+          description: ""
+      summary: Delete a customer
+      tags: *a9
 info:
   title: Cosmos Pay — Payments API
   description: "Payments microservice (Stellar payment intents). All endpoints
@@ -1003,10 +1202,10 @@ components:
           example: true
         eventTypes:
           type: array
-          example: &a7
+          example: &a10
             - PAYMENT_INTENT_SUCCEEDED
           description: Subscribed events; empty means all.
-          items: &a8
+          items: &a11
             type: string
             enum:
               - PAYMENT_INTENT_CREATED
@@ -1054,9 +1253,9 @@ components:
           example: true
         eventTypes:
           type: array
-          example: *a7
+          example: *a10
           description: Subscribed events; empty means all.
-          items: *a8
+          items: *a11
         createdAt:
           format: date-time
           type: string
@@ -1221,6 +1420,163 @@ components:
         - total
         - take
         - skip
+    CreateProductDto:
+      type: object
+      properties:
+        name:
+          type: string
+          example: Pro plan — monthly
+        description:
+          type: string
+          example: Full access, billed every month.
+        amount:
+          type: string
+          example: "49.00"
+          description: Decimal price (≤ 7 decimals). Omit for a customer-set amount.
+        assetCode:
+          type: string
+          example: USDC
+          description: Asset code the price is in. Omit for native lumens (XLM).
+        kind:
+          type: string
+          enum: &a12
+            - recurring
+            - one_time
+            - link
+          default: one_time
+        active:
+          type: boolean
+          default: true
+        reference:
+          type: string
+          example: sku_pro_monthly
+      required:
+        - name
+    ProductEntity:
+      type: object
+      properties:
+        id:
+          type: string
+          example: clx9z8a1b0000abcd1234efgh
+        name:
+          type: string
+          example: Pro plan — monthly
+        description:
+          type: object
+          nullable: true
+          example: Full access, billed every month.
+        amount:
+          type: object
+          nullable: true
+          example: "49.00"
+        asset:
+          type: string
+          example: native
+          description: Asset code, or "native" for XLM.
+        kind:
+          type: string
+          example: one_time
+          enum:
+            - recurring
+            - one_time
+            - link
+        active:
+          type: boolean
+          example: true
+        reference:
+          type: object
+          nullable: true
+          example: sku_pro_monthly
+        createdAt:
+          format: date-time
+          type: string
+        updatedAt:
+          format: date-time
+          type: string
+      required:
+        - id
+        - name
+        - description
+        - amount
+        - asset
+        - kind
+        - active
+        - reference
+        - createdAt
+        - updatedAt
+    UpdateProductDto:
+      type: object
+      properties:
+        name:
+          type: string
+          example: Pro plan — monthly
+        description:
+          type: string
+          example: Full access, billed every month.
+        amount:
+          type: string
+          example: "49.00"
+          description: Decimal price (≤ 7 decimals). Omit for a customer-set amount.
+        assetCode:
+          type: string
+          example: USDC
+          description: Asset code the price is in. Omit for native lumens (XLM).
+        kind:
+          type: string
+          enum: *a12
+          default: one_time
+        active:
+          type: boolean
+          default: true
+        reference:
+          type: string
+          example: sku_pro_monthly
+    ProductDeletedEntity:
+      type: object
+      properties:
+        id:
+          type: string
+          example: clx9z8a1b0000abcd1234efgh
+        deleted:
+          type: boolean
+          example: true
+      required:
+        - id
+        - deleted
+    CreateCustomerDto:
+      type: object
+      properties:
+        name:
+          type: string
+          example: Acme Inc.
+        email:
+          type: string
+          example: billing@acme.com
+        account:
+          type: string
+          example: GCALNQQBXAPZ2WIRSDDBMSTAKCUH5SG6U76YBFLQLIXJTF7FE5AX7AOO
+          description: Optional Stellar account to associate the customer with.
+        reference:
+          type: string
+          example: cust_001
+      required:
+        - name
+    UpdateCustomerDto:
+      type: object
+      properties:
+        name:
+          type: string
+          example: Acme Inc.
+        email:
+          type: string
+          example: billing@acme.com
+        account:
+          type: string
+          example: GCALNQQBXAPZ2WIRSDDBMSTAKCUH5SG6U76YBFLQLIXJTF7FE5AX7AOO
+          description: Optional Stellar account to associate the customer with.
+        reference:
+          type: string
+          example: cust_001
 security:
   - gateway-secret: []
   - consumer: []

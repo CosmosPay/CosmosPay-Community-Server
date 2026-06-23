@@ -15,6 +15,7 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { CurrentConsumer } from '../common/decorators/current-consumer.decorator';
+import { RequirePermissions } from '../common/decorators/require-permissions.decorator';
 import { GatewayConsumer } from '../common/interfaces/gateway-consumer.interface';
 import { CreateTxPaymentIntentDto } from './dto/create-tx-payment-intent.dto';
 import { CreatePayPaymentIntentDto } from './dto/create-pay-payment-intent.dto';
@@ -38,6 +39,7 @@ export class PaymentIntentsController {
   constructor(private readonly paymentIntents: PaymentIntentsService) {}
 
   @Post('tx')
+  @RequirePermissions('payments:write')
   @ApiOperation({
     summary:
       'Create a SEP-7 `tx` intent (source known → unsigned XDR + tx URI + QR)',
@@ -51,6 +53,7 @@ export class PaymentIntentsController {
   }
 
   @Post('pay')
+  @RequirePermissions('payments:write')
   @ApiOperation({
     summary:
       'Create a SEP-7 `pay` intent (no source → pay URI + QR, no XDR)',
@@ -64,6 +67,7 @@ export class PaymentIntentsController {
   }
 
   @Get()
+  @RequirePermissions('payments:read')
   @ApiOperation({ summary: "List the consumer's payment intents" })
   @ApiOkResponse({ type: PaymentIntentListEntity })
   findAll(
@@ -74,6 +78,7 @@ export class PaymentIntentsController {
   }
 
   @Get(':id')
+  @RequirePermissions('payments:read')
   @ApiOperation({ summary: 'Get a payment intent by id' })
   @ApiOkResponse({ type: PaymentIntentEntity })
   findOne(
@@ -84,6 +89,7 @@ export class PaymentIntentsController {
   }
 
   @Post(':id/validate')
+  @RequirePermissions('payments:write')
   @ApiOperation({
     summary:
       'Validate a submitted tx against the intent (tx success + destination + amount + memo); finalizes status and fires the event',
@@ -98,6 +104,7 @@ export class PaymentIntentsController {
   }
 
   @Patch(':id')
+  @RequirePermissions('payments:write')
   @ApiOperation({ summary: 'Update a payment intent (status / txHash / reference)' })
   @ApiOkResponse({ type: PaymentIntentEntity })
   update(
@@ -109,6 +116,7 @@ export class PaymentIntentsController {
   }
 
   @Delete(':id')
+  @RequirePermissions('payments:write')
   @ApiOperation({ summary: 'Delete a payment intent' })
   @ApiOkResponse({ type: DeletedEntity })
   remove(
