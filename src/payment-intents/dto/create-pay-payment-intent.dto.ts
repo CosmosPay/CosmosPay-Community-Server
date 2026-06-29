@@ -29,7 +29,8 @@ export class CreatePayPaymentIntentDto {
   amount?: string;
 
   @ApiPropertyOptional({
-    description: 'Asset code the destination receives. Omit for native lumens (XLM).',
+    description:
+      'Asset code the destination receives. Omit for native lumens (XLM).',
     example: 'USD',
   })
   @IsOptional()
@@ -59,7 +60,8 @@ export class CreatePayPaymentIntentDto {
   memo?: string;
 
   @ApiPropertyOptional({
-    description: 'SEP-7 `msg`: shown to the user in their wallet (≤ 300 chars).',
+    description:
+      'SEP-7 `msg`: shown to the user in their wallet (≤ 300 chars).',
     example: 'pay me with lumens',
   })
   @IsOptional()

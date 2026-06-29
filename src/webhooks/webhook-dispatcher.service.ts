@@ -6,6 +6,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { AppConfig } from '../config/configuration';
 import { PrismaService } from '../prisma/prisma.service';
 import type {
+  Prisma,
   WebhookDelivery,
   WebhookEndpoint,
   WebhookEventType,
@@ -70,7 +71,7 @@ export class WebhookDispatcherService {
         endpointId: endpoint.id,
         eventType,
         eventId,
-        payload: body as object,
+        payload: body as Prisma.InputJsonValue,
         status: 'PENDING',
       },
     });
@@ -132,7 +133,13 @@ export class WebhookDispatcherService {
         responseStatus = res.status;
 
         if (res.ok) {
-          return this.finalize(delivery.id, 'SUCCEEDED', attempts, res.status, null);
+          return this.finalize(
+            delivery.id,
+            'SUCCEEDED',
+            attempts,
+            res.status,
+            null,
+          );
         }
         lastError = `Non-2xx response: ${res.status}`;
       } catch (err) {
@@ -152,16 +159,24 @@ export class WebhookDispatcherService {
     this.logger.warn(
       `Delivery ${delivery.id} to ${endpoint.url} failed after ${attempts} attempt(s): ${lastError}`,
     );
-    return this.finalize(delivery.id, 'FAILED', attempts, responseStatus, lastError);
+    return this.finalize(
+      delivery.id,
+      'FAILED',
+      attempts,
+      responseStatus,
+      lastError,
+    );
   }
 
   /**
    * One-off signed test POST to an endpoint. Not persisted as a delivery — it
    * just lets an integrator confirm reachability and signature verification.
    */
-  async pingEndpoint(
-    endpoint: WebhookEndpoint,
-  ): Promise<{ ok: boolean; responseStatus: number | null; error: string | null }> {
+  async pingEndpoint(endpoint: WebhookEndpoint): Promise<{
+    ok: boolean;
+    responseStatus: number | null;
+    error: string | null;
+  }> {
     const { timeoutMs, signatureHeader } = this.config.get('webhooks', {
       infer: true,
     });
@@ -182,7 +197,11 @@ export class WebhookDispatcherService {
         headers: {
           'content-type': 'application/json',
           'user-agent': 'CosmosPay-Webhooks/1.0',
-          [signatureHeader]: buildSignatureHeader(endpoint.secret, body, timestamp),
+          [signatureHeader]: buildSignatureHeader(
+            endpoint.secret,
+            body,
+            timestamp,
+          ),
           'x-cosmos-event': 'ping',
         },
         body,

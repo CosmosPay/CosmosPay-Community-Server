@@ -16,6 +16,10 @@ import { WebhooksModule } from './webhooks/webhooks.module';
 import { AnalyticsModule } from './analytics/analytics.module';
 import { ProductsModule } from './products/products.module';
 import { CustomersModule } from './customers/customers.module';
+import { BlindpayModule } from './blindpay/blindpay.module';
+import { KycModule } from './kyc/kyc.module';
+import { OnrampModule } from './onramp/onramp.module';
+import { OfframpModule } from './offramp/offramp.module';
 
 @Module({
   imports: [
@@ -35,6 +39,13 @@ import { CustomersModule } from './customers/customers.module';
     AnalyticsModule,
     ProductsModule,
     CustomersModule,
+    // BlindPay rails: onramp / offramp / KYC. BlindpayModule is global and hosts
+    // the shared client + inbound webhook endpoint; the feature modules below use
+    // it. OnrampModule imports KycModule (receiver resolution).
+    BlindpayModule,
+    KycModule,
+    OnrampModule,
+    OfframpModule,
   ],
   providers: [
     // Persist a RequestLog row per request (powers the API logs view).

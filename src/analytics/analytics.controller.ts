@@ -13,7 +13,10 @@ export class AnalyticsController {
 
   @Get('summary')
   @RequirePermissions('payments:read')
-  @ApiOperation({ summary: 'Overview metrics: totals, settled volume, webhook health, 30-day series' })
+  @ApiOperation({
+    summary:
+      'Overview metrics: totals, settled volume, webhook health, 30-day series',
+  })
   @ApiOkResponse({ description: 'Aggregated overview for the consumer.' })
   summary(@CurrentConsumer() consumer: GatewayConsumer) {
     return this.analytics.summary(consumer);
@@ -29,7 +32,9 @@ export class AnalyticsController {
 
   @Get('logs')
   @RequirePermissions('payments:read')
-  @ApiOperation({ summary: 'Recent API requests reaching the service (with details)' })
+  @ApiOperation({
+    summary: 'Recent API requests reaching the service (with details)',
+  })
   @ApiOkResponse({ description: 'API request log for the consumer.' })
   apiLogs(@CurrentConsumer() consumer: GatewayConsumer) {
     return this.analytics.apiLogs(consumer);
@@ -37,7 +42,9 @@ export class AnalyticsController {
 
   @Get('logs/webhooks')
   @RequirePermissions('webhooks:read')
-  @ApiOperation({ summary: 'Recent webhook deliveries across all endpoints (with details)' })
+  @ApiOperation({
+    summary: 'Recent webhook deliveries across all endpoints (with details)',
+  })
   @ApiOkResponse({ description: 'Webhook delivery log for the consumer.' })
   webhookLogs(@CurrentConsumer() consumer: GatewayConsumer) {
     return this.analytics.webhookLogs(consumer);

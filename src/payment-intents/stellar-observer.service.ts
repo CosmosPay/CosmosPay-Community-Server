@@ -34,7 +34,9 @@ export class StellarObserverService implements OnModuleInit, OnModuleDestroy {
   ) {}
 
   onModuleInit(): void {
-    const { enabled, intervalMs } = this.config.get('observer', { infer: true });
+    const { enabled, intervalMs } = this.config.get('observer', {
+      infer: true,
+    });
     if (!enabled) {
       this.logger.log('On-chain observer disabled (OBSERVER_ENABLED=false)');
       return;

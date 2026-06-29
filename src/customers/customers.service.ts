@@ -50,7 +50,10 @@ export class CustomersService {
       }),
     ]);
 
-    const stats = new Map<string, { payments: number; succeeded: number; total: number }>();
+    const stats = new Map<
+      string,
+      { payments: number; succeeded: number; total: number }
+    >();
     for (const i of intents) {
       const acct = i.source as string;
       const cur = stats.get(acct) ?? { payments: 0, succeeded: 0, total: 0 };
@@ -63,7 +66,11 @@ export class CustomersService {
     }
 
     const data = customers.map((c) => {
-      const s = (c.account && stats.get(c.account)) || { payments: 0, succeeded: 0, total: 0 };
+      const s = (c.account && stats.get(c.account)) || {
+        payments: 0,
+        succeeded: 0,
+        total: 0,
+      };
       return {
         ...c,
         payments: s.payments,

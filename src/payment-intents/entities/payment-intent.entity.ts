@@ -34,7 +34,10 @@ export class PaymentIntentEntity {
   @ApiProperty({ nullable: true, example: '25.5' })
   amount!: string | null;
 
-  @ApiProperty({ example: 'native', description: 'Asset code, or "native" for XLM.' })
+  @ApiProperty({
+    example: 'native',
+    description: 'Asset code, or "native" for XLM.',
+  })
   asset!: string;
 
   @ApiProperty({ nullable: true, example: null })
@@ -49,19 +52,23 @@ export class PaymentIntentEntity {
   @ApiProperty({ nullable: true, example: null, description: 'SEP-7 msg.' })
   msg!: string | null;
 
-  @ApiProperty({ nullable: true, example: null, description: 'SEP-7 callback.' })
+  @ApiProperty({
+    nullable: true,
+    example: null,
+    description: 'SEP-7 callback.',
+  })
   callback!: string | null;
 
   @ApiProperty({
     nullable: true,
     description: 'Unsigned transaction envelope (null for PAY intents).',
-    example:
-      'AAAAAgAAAABx…(base64 XDR)…AAAAAAAAAAA=',
+    example: 'AAAAAgAAAABx…(base64 XDR)…AAAAAAAAAAA=',
   })
   xdr!: string | null;
 
   @ApiProperty({
-    description: 'SEP-7 deep link (`tx` for TX intents, `pay` for PAY intents).',
+    description:
+      'SEP-7 deep link (`tx` for TX intents, `pay` for PAY intents).',
     example: 'web+stellar:tx?xdr=AAAAAgAAAABx…',
   })
   uri!: string;
@@ -99,10 +106,14 @@ export class TxPaymentIntentEntity {
   @ApiProperty({ example: 'testnet' })
   network!: string;
 
-  @ApiProperty({ example: 'GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ' })
+  @ApiProperty({
+    example: 'GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ',
+  })
   source!: string;
 
-  @ApiProperty({ example: 'GCALNQQBXAPZ2WIRSDDBMSTAKCUH5SG6U76YBFLQLIXJTF7FE5AX7AOO' })
+  @ApiProperty({
+    example: 'GCALNQQBXAPZ2WIRSDDBMSTAKCUH5SG6U76YBFLQLIXJTF7FE5AX7AOO',
+  })
   destination!: string;
 
   @ApiProperty({ example: '120.1234567' })
@@ -162,10 +173,16 @@ export class PayPaymentIntentEntity {
   @ApiProperty({ example: 'testnet' })
   network!: string;
 
-  @ApiProperty({ nullable: true, example: null, description: 'Always null for PAY.' })
+  @ApiProperty({
+    nullable: true,
+    example: null,
+    description: 'Always null for PAY.',
+  })
   source!: string | null;
 
-  @ApiProperty({ example: 'GCALNQQBXAPZ2WIRSDDBMSTAKCUH5SG6U76YBFLQLIXJTF7FE5AX7AOO' })
+  @ApiProperty({
+    example: 'GCALNQQBXAPZ2WIRSDDBMSTAKCUH5SG6U76YBFLQLIXJTF7FE5AX7AOO',
+  })
   destination!: string;
 
   @ApiProperty({ nullable: true, example: '120.1234567' })
@@ -186,7 +203,11 @@ export class PayPaymentIntentEntity {
   @ApiProperty({ nullable: true, example: null })
   callback!: string | null;
 
-  @ApiProperty({ nullable: true, example: null, description: 'Always null for PAY.' })
+  @ApiProperty({
+    nullable: true,
+    example: null,
+    description: 'Always null for PAY.',
+  })
   xdr!: string | null;
 
   @ApiProperty({

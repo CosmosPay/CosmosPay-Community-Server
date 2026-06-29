@@ -58,7 +58,9 @@ export class StellarVerifierService {
     }
 
     const payments = await server.payments().forTransaction(txHash).call();
-    const match = payments.records.find((op) => this.paymentMatches(intent, op));
+    const match = payments.records.find((op) =>
+      this.paymentMatches(intent, op),
+    );
     if (!match) {
       return {
         valid: false,
@@ -131,7 +133,7 @@ export class StellarVerifierService {
     if (op.type !== 'payment') {
       return false;
     }
-    const p = op as Horizon.ServerApi.PaymentOperationRecord;
+    const p = op;
 
     if (p.to !== intent.destination) {
       return false;

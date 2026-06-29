@@ -81,7 +81,9 @@ export class AnalyticsService {
 
     const succeeded = intents.filter((i) => i.status === 'SUCCEEDED');
     const total = intents.length;
-    const successRate = total ? Math.round((succeeded.length / total) * 1000) / 10 : 0;
+    const successRate = total
+      ? Math.round((succeeded.length / total) * 1000) / 10
+      : 0;
 
     // Gross settled volume per asset (succeeded intents).
     const volumeMap = new Map<string, { amount: number; count: number }>();
@@ -125,7 +127,9 @@ export class AnalyticsService {
     const endpointIds = endpoints.map((e) => e.id);
     const [deliveries, failedDeliveries] = await Promise.all([
       endpointIds.length
-        ? this.prisma.webhookDelivery.count({ where: { endpointId: { in: endpointIds } } })
+        ? this.prisma.webhookDelivery.count({
+            where: { endpointId: { in: endpointIds } },
+          })
         : Promise.resolve(0),
       endpointIds.length
         ? this.prisma.webhookDelivery.count({
@@ -234,7 +238,8 @@ export class AnalyticsService {
       durationMs: r.durationMs,
       ip: r.ip,
       userAgent: r.userAgent,
-      status: r.statusCode < 400 ? 'ok' : r.statusCode < 500 ? 'pending' : 'fail',
+      status:
+        r.statusCode < 400 ? 'ok' : r.statusCode < 500 ? 'pending' : 'fail',
       at: r.createdAt,
     }));
     return { data, total: data.length };
@@ -265,7 +270,12 @@ export class AnalyticsService {
       attempts: d.attempts,
       responseStatus: d.responseStatus,
       error: d.error,
-      status: d.status === 'SUCCEEDED' ? 'ok' : d.status === 'FAILED' ? 'fail' : 'pending',
+      status:
+        d.status === 'SUCCEEDED'
+          ? 'ok'
+          : d.status === 'FAILED'
+            ? 'fail'
+            : 'pending',
       at: d.lastAttemptAt ?? d.createdAt,
     }));
     return { data, total: data.length };

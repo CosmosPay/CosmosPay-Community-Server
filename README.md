@@ -58,8 +58,13 @@ src/
     validators/                   IsStellarAddress (StrKey-based)
   payment-intents/                Stellar payment intents (controller, service, DTO) — emits events
   webhooks/                       webhook endpoints CRUD + dispatcher (HMAC-signed, retried)
+  blindpay/                       BlindPay core: HTTP client, Svix verify, sync + inbound webhook
+  kyc/                            receivers (KYC/KYB), wallets, bank accounts, doc upload
+  onramp/                         fiat → stablecoin: payin quotes, payins, virtual accounts
+  offramp/                        stablecoin → fiat: payout quotes, payouts (client-signed)
   health/                         liveness/readiness probes (@Public)
-prisma/schema.prisma              Consumer, PaymentIntent, WebhookEndpoint, WebhookDelivery
+prisma/schema.prisma              Consumer, PaymentIntent, WebhookEndpoint, WebhookDelivery,
+                                  BlindpayReceiver, Blockchain/BankAccount/VirtualAccount, Payin, Payout
 test/                             e2e suite proving the gateway gate
 ```
 
@@ -263,6 +268,52 @@ Response:
 Network/Horizon/fee/timeout are configured via `STELLAR_*` env vars
 (see `.env.example`). Defaults to **testnet** for safety — set
 `STELLAR_NETWORK=public` for mainnet (real funds).
+
+## BlindPay — onramp / offramp / KYC (fiat ⇄ stablecoin)
+
+In addition to on-chain payment intents, the service integrates
+[BlindPay](https://www.blindpay.com/docs) to move money between **fiat and
+stablecoins**: cash in (**onramp / payin**), cash out (**offramp / payout**), and
+the mandatory **KYC** (BlindPay *receivers*) behind both. We run a **single
+platform BlindPay instance** (`BLINDPAY_API_KEY` + `BLINDPAY_INSTANCE_ID` in env);
+every receiver/wallet/bank-account/payin/payout is mirrored in our Postgres and
+**scoped to the calling APISIX consumer**, so each integrator only ever sees their
+own records. The service **never holds blockchain keys** — offramp returns the
+artifact to sign (EVM `approve` contract / Stellar XDR) and accepts the signed tx
+back, exactly like payment intents.
+
+State changes are synced from BlindPay's **Svix webhooks** (verified over the raw
+body) and **re-emitted** to the integrator's own webhook endpoints as new event
+types (`RECEIVER_UPDATED`, `PAYIN_*`, `PAYOUT_*`) through the existing dispatcher.
+
+| Method | Path                                                  | Scope          | Description |
+| ------ | ----------------------------------------------------- | -------------- | ----------- |
+| POST   | `/v1/kyc/receivers`                                   | `kyc:write`    | Create a receiver (start KYC/KYB) |
+| GET    | `/v1/kyc/receivers` · `/:id`                          | `kyc:read`     | List / get (get refreshes KYC status) |
+| PATCH  | `/v1/kyc/receivers/:id`                               | `kyc:write`    | Update a receiver |
+| DELETE | `/v1/kyc/receivers/:id`                               | `kyc:write`    | Delete a receiver |
+| POST   | `/v1/kyc/upload`                                      | `kyc:write`    | Upload a KYC document → `file_url` |
+| GET    | `/v1/kyc/rails` · `/v1/kyc/bank-details?rail=`        | `kyc:read`     | Rail catalog / required fields |
+| POST   | `/v1/kyc/receivers/:id/wallets`                       | `kyc:write`    | Register a blockchain wallet |
+| GET    | `/v1/kyc/receivers/:id/wallets/sign-message`          | `kyc:read`     | Message to sign (secure EOA flow) |
+| POST   | `/v1/kyc/receivers/:id/bank-accounts`                 | `kyc:write`    | Add a fiat bank account (any rail) |
+| POST   | `/v1/onramp/quotes`                                   | `onramp:write` | Price a payin (expires ~5 min) |
+| POST   | `/v1/onramp/payins`                                   | `onramp:write` | Create a payin → funding instructions |
+| GET    | `/v1/onramp/payins` · `/:id`                          | `onramp:read`  | List / get (get refreshes status) |
+| POST   | `/v1/onramp/trustline`                                | `onramp:write` | Build an unsigned Stellar trustline XDR |
+| POST   | `/v1/onramp/receivers/:id/virtual-accounts`           | `onramp:write` | Create a virtual account |
+| POST   | `/v1/offramp/quotes`                                  | `offramp:write`| Price a payout (EVM → `approve` contract) |
+| POST   | `/v1/offramp/payouts/authorize`                       | `offramp:write`| Build the unsigned Stellar/Solana payout tx |
+| POST   | `/v1/offramp/payouts`                                 | `offramp:write`| Create a payout from a quote |
+| GET    | `/v1/offramp/payouts` · `/:id`                        | `offramp:read` | List / get (get refreshes status) |
+| POST   | `/v1/offramp/payouts/:id/documents`                   | `offramp:write`| Attach a compliance document |
+| POST   | `/v1/blindpay/webhooks`                               | _public_       | Inbound BlindPay (Svix) webhook |
+
+Amounts are **integers in minor units** (e.g. `$123.45` → `12345`). Configure
+the BlindPay dashboard webhook to `<gateway>/v1/blindpay/webhooks` and set
+`BLINDPAY_WEBHOOK_SECRET` to that endpoint's signing secret. Leave the
+`BLINDPAY_*` vars blank to disable the feature (those routes return `503`). See
+`.env.example`.
 
 ## Getting started
 

@@ -62,6 +62,30 @@ class EnvironmentVariables {
   @IsInt()
   @Min(1)
   STELLAR_TX_TIMEOUT?: number;
+
+  // --- BlindPay (onramp / offramp / KYC rails) ---
+  // All optional: the service boots without them; the BlindPay client fails with
+  // a clear 503 only when a BlindPay-backed route is actually exercised.
+  @IsOptional()
+  @IsString()
+  BLINDPAY_API_KEY?: string;
+
+  @IsOptional()
+  @IsString()
+  BLINDPAY_INSTANCE_ID?: string;
+
+  @IsOptional()
+  @IsString()
+  BLINDPAY_BASE_URL?: string;
+
+  @IsOptional()
+  @IsString()
+  BLINDPAY_WEBHOOK_SECRET?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  BLINDPAY_TIMEOUT_MS?: number;
 }
 
 export function validateEnv(config: Record<string, unknown>) {

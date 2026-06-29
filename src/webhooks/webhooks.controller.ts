@@ -39,7 +39,8 @@ export class WebhooksController {
   @Post()
   @RequirePermissions('webhooks:write')
   @ApiOperation({
-    summary: 'Register a webhook endpoint (returns the signing secret — shown once)',
+    summary:
+      'Register a webhook endpoint (returns the signing secret — shown once)',
   })
   @ApiCreatedResponse({ type: WebhookEndpointWithSecretEntity })
   create(
@@ -70,7 +71,9 @@ export class WebhooksController {
 
   @Patch(':id')
   @RequirePermissions('webhooks:write')
-  @ApiOperation({ summary: 'Update a webhook endpoint (url/description/enabled/eventTypes)' })
+  @ApiOperation({
+    summary: 'Update a webhook endpoint (url/description/enabled/eventTypes)',
+  })
   @ApiOkResponse({ type: WebhookEndpointEntity })
   update(
     @CurrentConsumer() consumer: GatewayConsumer,
@@ -93,7 +96,9 @@ export class WebhooksController {
 
   @Post(':id/rotate-secret')
   @RequirePermissions('webhooks:write')
-  @ApiOperation({ summary: 'Rotate the signing secret (returns the new secret)' })
+  @ApiOperation({
+    summary: 'Rotate the signing secret (returns the new secret)',
+  })
   @ApiCreatedResponse({ type: WebhookEndpointWithSecretEntity })
   rotateSecret(
     @CurrentConsumer() consumer: GatewayConsumer,
@@ -112,7 +117,9 @@ export class WebhooksController {
 
   @Get(':id/deliveries')
   @RequirePermissions('webhooks:read')
-  @ApiOperation({ summary: 'List delivery attempts for an endpoint (audit trail)' })
+  @ApiOperation({
+    summary: 'List delivery attempts for an endpoint (audit trail)',
+  })
   @ApiOkResponse({ type: WebhookDeliveryListEntity })
   listDeliveries(
     @CurrentConsumer() consumer: GatewayConsumer,

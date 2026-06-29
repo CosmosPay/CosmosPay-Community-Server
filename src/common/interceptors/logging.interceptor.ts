@@ -32,7 +32,8 @@ export class LoggingInterceptor implements NestInterceptor {
 
     return next.handle().pipe(
       finalize(() => {
-        const elapsedMs = Number(process.hrtime.bigint() - startedAt) / 1_000_000;
+        const elapsedMs =
+          Number(process.hrtime.bigint() - startedAt) / 1_000_000;
         const status = response.statusCode;
         this.logger.log(
           `${method} ${url} ${status} ${elapsedMs.toFixed(1)}ms consumer=${consumer ?? 'anonymous'}`,

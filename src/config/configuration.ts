@@ -40,6 +40,18 @@ export interface AppConfig {
     backoffMs: number;
     signatureHeader: string;
   };
+  blindpay: {
+    // BlindPay is the fiat<->stablecoin rails provider powering onramp/offramp/KYC.
+    // We operate a single platform instance: one API key + one instance id shared
+    // by every consumer, with each receiver/payin/payout attributed internally to
+    // the APISIX consumer that created it.
+    apiKey: string;
+    instanceId: string;
+    baseUrl: string;
+    // Svix endpoint secret (whsec_...) used to verify inbound BlindPay webhooks.
+    webhookSecret: string;
+    timeoutMs: number;
+  };
 }
 
 const DEFAULT_HORIZON: Record<StellarNetwork, string> = {
@@ -78,8 +90,7 @@ export default (): AppConfig => ({
         ? 'public'
         : 'testnet',
     horizon: {
-      public:
-        process.env.STELLAR_HORIZON_URL_PUBLIC ?? DEFAULT_HORIZON.public,
+      public: process.env.STELLAR_HORIZON_URL_PUBLIC ?? DEFAULT_HORIZON.public,
       testnet:
         process.env.STELLAR_HORIZON_URL_TESTNET ?? DEFAULT_HORIZON.testnet,
     },
@@ -102,5 +113,14 @@ export default (): AppConfig => ({
     signatureHeader: (
       process.env.WEBHOOK_SIGNATURE_HEADER ?? 'x-cosmos-signature'
     ).toLowerCase(),
+  },
+  blindpay: {
+    apiKey: process.env.BLINDPAY_API_KEY ?? '',
+    instanceId: process.env.BLINDPAY_INSTANCE_ID ?? '',
+    baseUrl: (
+      process.env.BLINDPAY_BASE_URL ?? 'https://api.blindpay.com/v1'
+    ).replace(/\/+$/, ''),
+    webhookSecret: process.env.BLINDPAY_WEBHOOK_SECRET ?? '',
+    timeoutMs: parseInt(process.env.BLINDPAY_TIMEOUT_MS ?? '15000', 10),
   },
 });

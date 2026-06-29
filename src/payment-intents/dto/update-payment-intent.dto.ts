@@ -22,7 +22,10 @@ export class UpdatePaymentIntentDto {
   @MaxLength(128)
   txHash?: string;
 
-  @ApiPropertyOptional({ description: 'Merchant reference.', example: 'order_1234' })
+  @ApiPropertyOptional({
+    description: 'Merchant reference.',
+    example: 'order_1234',
+  })
   @IsOptional()
   @IsString()
   @MaxLength(255)

@@ -60,7 +60,9 @@ export class ApisixGuard implements CanActivate {
       this.logger.warn(
         `Rejected request to ${request.method} ${request.url}: missing/invalid gateway secret`,
       );
-      throw new ForbiddenException('Request did not originate from the gateway');
+      throw new ForbiddenException(
+        'Request did not originate from the gateway',
+      );
     }
 
     // 2. Verify APISIX forwarded an authenticated consumer.

@@ -38,7 +38,9 @@ export class CreateCustomerDto {
     description: 'Optional Stellar account to associate the customer with.',
   })
   @IsOptional()
-  @Matches(/^G[A-Z2-7]{55}$/, { message: 'account must be a valid Stellar public key' })
+  @Matches(/^G[A-Z2-7]{55}$/, {
+    message: 'account must be a valid Stellar public key',
+  })
   account?: string;
 
   @ApiPropertyOptional({ example: 'cust_001' })

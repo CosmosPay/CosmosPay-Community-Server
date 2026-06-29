@@ -30,6 +30,11 @@ model Consumer {
   products         Product[]
   customers        Customer[]
 
+  // BlindPay (onramp/offramp/KYC) resources mirrored from the provider.
+  blindpayReceivers BlindpayReceiver[]
+  payins            Payin[]
+  payouts           Payout[]
+
   @@map("consumer")
 }
 
@@ -110,6 +115,15 @@ enum WebhookEventType {
   PAYMENT_INTENT_FAILED
   PAYMENT_INTENT_CANCELLED
   PAYMENT_INTENT_DELETED
+
+  // BlindPay-sourced events re-emitted to integrators after we sync state.
+  RECEIVER_UPDATED
+  PAYIN_CREATED
+  PAYIN_UPDATED
+  PAYIN_COMPLETED
+  PAYOUT_CREATED
+  PAYOUT_UPDATED
+  PAYOUT_COMPLETED
 }
 
 enum WebhookDeliveryStatus {
@@ -231,4 +245,189 @@ model PaymentIntent {
   @@index([consumerId])
   @@index([status])
   @@map("payment_intent")
+}
+
+// ---------------------------------------------------------------------------
+// BlindPay (fiat <-> stablecoin rails): onramp / offramp / KYC.
+//
+// We run a single platform BlindPay instance (one API key + instance id in env)
+// and mirror the provider's resources here, each scoped to the APISIX consumer
+// that created it. Status/type/rail/network/token are stored as free-form
+// strings (like Product.kind) so new provider values never require a migration.
+// `raw` keeps the last full provider payload for audit/debugging.
+// ---------------------------------------------------------------------------
+
+// A KYC/KYB entity at BlindPay (their `receiver`/`customer`, id `re_...`).
+// Every end user transacting through the rails must exist as a receiver.
+model BlindpayReceiver {
+  id          String   @id @default(cuid())
+  consumerId  String
+  consumer    Consumer @relation(fields: [consumerId], references: [id], onDelete: Cascade)
+
+  // BlindPay receiver id (`re_...`).
+  blindpayId  String
+  // 'individual' | 'business'.
+  type        String
+  // 'light' | 'standard' | 'enhanced'.
+  kycType     String?
+  // BlindPay KYC status, e.g. 'verifying' | 'approved' | 'rejected' | ...
+  kycStatus   String?
+  email       String?
+  name        String?
+  country     String?
+  externalId  String?
+  reference   String? // optional merchant reference
+
+  raw         Json?
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  blockchainWallets BlindpayBlockchainWallet[]
+  bankAccounts      BlindpayBankAccount[]
+  virtualAccounts   BlindpayVirtualAccount[]
+  payins            Payin[]
+  payouts           Payout[]
+
+  @@unique([consumerId, blindpayId])
+  @@index([consumerId])
+  @@map("blindpay_receiver")
+}
+
+// A receiver's blockchain wallet at BlindPay (id `bw_...`). Destination for
+// onramp (minted stablecoin) and source for offramp.
+model BlindpayBlockchainWallet {
+  id          String           @id @default(cuid())
+  consumerId  String
+  receiverId  String
+  receiver    BlindpayReceiver @relation(fields: [receiverId], references: [id], onDelete: Cascade)
+
+  blindpayId  String // `bw_...`
+  name        String?
+  network     String
+  address     String?
+  isAccountAbstraction Boolean @default(false)
+
+  raw         Json?
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([consumerId, blindpayId])
+  @@index([consumerId])
+  @@index([receiverId])
+  @@map("blindpay_blockchain_wallet")
+}
+
+// A receiver's fiat bank account at BlindPay (id `ba_...`). Destination for
+// offramp payouts. `rail` is the BlindPay rail/type (ach, wire, pix, spei, ...).
+model BlindpayBankAccount {
+  id          String           @id @default(cuid())
+  consumerId  String
+  receiverId  String
+  receiver    BlindpayReceiver @relation(fields: [receiverId], references: [id], onDelete: Cascade)
+
+  blindpayId  String // `ba_...`
+  rail        String?
+  name        String?
+  country     String?
+
+  raw         Json?
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([consumerId, blindpayId])
+  @@index([consumerId])
+  @@index([receiverId])
+  @@map("blindpay_bank_account")
+}
+
+// A dedicated fiat account (id `va_...`) that auto-converts incoming fiat into
+// stablecoin to the linked blockchain wallet — onramp infrastructure.
+model BlindpayVirtualAccount {
+  id                 String           @id @default(cuid())
+  consumerId         String
+  receiverId         String
+  receiver           BlindpayReceiver @relation(fields: [receiverId], references: [id], onDelete: Cascade)
+
+  blindpayId         String // `va_...`
+  blockchainWalletId String?
+  token              String?
+  status             String?
+
+  raw                Json?
+
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@unique([consumerId, blindpayId])
+  @@index([consumerId])
+  @@index([receiverId])
+  @@map("blindpay_virtual_account")
+}
+
+// Onramp (fiat -> stablecoin). Created from a payin quote; carries the payment
+// instructions the payer follows (memo/CLABE/PIX/CBU/PSE/bank details).
+model Payin {
+  id             String           @id @default(cuid())
+  consumerId     String
+  consumer       Consumer         @relation(fields: [consumerId], references: [id], onDelete: Cascade)
+  receiverId     String?
+  receiver       BlindpayReceiver? @relation(fields: [receiverId], references: [id], onDelete: SetNull)
+
+  blindpayId     String // `pi_...`
+  quoteId        String?
+  status         String?
+  token          String?
+  network        String?
+  paymentMethod  String? // rail used to pay in
+  currency       String?
+  senderAmount   String?
+  receiverAmount String?
+  // Provider-supplied instructions the payer follows to fund the payin.
+  instructions   Json?
+
+  raw            Json?
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([consumerId, blindpayId])
+  @@index([consumerId])
+  @@index([receiverId])
+  @@index([status])
+  @@map("payin")
+}
+
+// Offramp (stablecoin -> fiat). Created from a payout quote; the customer signs
+// the on-chain transfer (we never hold keys), funds settle to a bank account.
+model Payout {
+  id                  String           @id @default(cuid())
+  consumerId          String
+  consumer            Consumer         @relation(fields: [consumerId], references: [id], onDelete: Cascade)
+  receiverId          String?
+  receiver            BlindpayReceiver? @relation(fields: [receiverId], references: [id], onDelete: SetNull)
+
+  blindpayId          String // `pa_...`
+  quoteId             String?
+  status              String?
+  token               String?
+  network             String?
+  rail                String?
+  bankAccountId       String?
+  senderAmount        String?
+  receiverAmount      String?
+  senderWalletAddress String?
+
+  raw                 Json?
+
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@unique([consumerId, blindpayId])
+  @@index([consumerId])
+  @@index([receiverId])
+  @@index([status])
+  @@map("payout")
 }

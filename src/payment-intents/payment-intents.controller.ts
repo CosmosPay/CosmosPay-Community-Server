@@ -55,8 +55,7 @@ export class PaymentIntentsController {
   @Post('pay')
   @RequirePermissions('payments:write')
   @ApiOperation({
-    summary:
-      'Create a SEP-7 `pay` intent (no source → pay URI + QR, no XDR)',
+    summary: 'Create a SEP-7 `pay` intent (no source → pay URI + QR, no XDR)',
   })
   @ApiCreatedResponse({ type: PayPaymentIntentEntity })
   createPay(
@@ -105,7 +104,9 @@ export class PaymentIntentsController {
 
   @Patch(':id')
   @RequirePermissions('payments:write')
-  @ApiOperation({ summary: 'Update a payment intent (status / txHash / reference)' })
+  @ApiOperation({
+    summary: 'Update a payment intent (status / txHash / reference)',
+  })
   @ApiOkResponse({ type: PaymentIntentEntity })
   update(
     @CurrentConsumer() consumer: GatewayConsumer,

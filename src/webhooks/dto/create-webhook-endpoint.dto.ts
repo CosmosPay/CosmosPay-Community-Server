@@ -27,7 +27,8 @@ export class CreateWebhookEndpointDto {
   @ApiPropertyOptional({
     enum: WebhookEventType,
     isArray: true,
-    description: 'Event types to subscribe to. Omit/empty to receive all events.',
+    description:
+      'Event types to subscribe to. Omit/empty to receive all events.',
   })
   @IsOptional()
   @IsArray()
