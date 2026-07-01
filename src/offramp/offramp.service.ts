@@ -11,7 +11,7 @@ import {
   BlindpaySyncService,
   BlindpayObject,
 } from '../blindpay/blindpay-sync.service';
-import { asString } from '../blindpay/blindpay.util';
+import { asString, asNumber } from '../blindpay/blindpay.util';
 import type { Payout } from '../../generated/prisma/client';
 import { CreatePayoutQuoteDto } from './dto/create-payout-quote.dto';
 import { AuthorizePayoutDto } from './dto/authorize-payout.dto';
@@ -40,22 +40,37 @@ export class OfframpService {
       local.id,
       dto.bank_account_id,
     );
-    return this.blindpay.post<BlindpayObject>(
+    const quote = await this.blindpay.post<BlindpayObject>(
       this.blindpay.instancePath('/quotes'),
       { ...dto, bank_account_id: bankAccountBlindpayId },
     );
+    // BlindPay carries the local fiat amount (e.g. ARS) in `receiver_amount`;
+    // `receiver_local_amount` comes back 0. Surface the real amount under the
+    // documented field so callers don't read 0. Keep the raw fields too.
+    const localAmount =
+      asNumber(quote.receiver_local_amount) || asNumber(quote.receiver_amount);
+    return { ...quote, receiver_local_amount: localAmount };
   }
 
   /** Step 1 for Stellar/Solana: returns the unsigned tx for the customer to sign. */
   async authorize(consumer: GatewayConsumer, dto: AuthorizePayoutDto) {
     await this.consumers.resolve(consumer);
-    return this.blindpay.post<BlindpayObject>(
+    const res = await this.blindpay.post<BlindpayObject>(
       this.blindpay.instancePath(`/payouts/${dto.chain}/authorize`),
       {
         quote_id: dto.quote_id,
         sender_wallet_address: dto.sender_wallet_address,
       },
     );
+    // BlindPay returns the unsigned tx under `transaction_hash` (a misnomer — it's
+    // the XDR to sign, not a hash). Expose it under a clear, stable field so the
+    // wallet can find it, while keeping the raw payload for safety.
+    const unsignedTransaction =
+      asString(res.transaction_hash) ||
+      asString(res.unsigned_transaction) ||
+      asString(res.transaction) ||
+      asString(res.xdr);
+    return { ...res, unsigned_transaction: unsignedTransaction };
   }
 
   async createPayout(consumer: GatewayConsumer, dto: CreatePayoutDto) {

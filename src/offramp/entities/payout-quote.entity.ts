@@ -18,8 +18,15 @@ export class PayoutQuoteEntity {
   sender_amount?: number;
 
   @ApiPropertyOptional({
-    example: 53850,
-    description: 'Local fiat amount (minor units).',
+    example: 156129400,
+    description: 'Local fiat amount to receive, minor units (e.g. ARS cents).',
+  })
+  receiver_amount?: number;
+
+  @ApiPropertyOptional({
+    example: 156129400,
+    description:
+      'Local fiat amount (minor units). Normalized from `receiver_amount` when BlindPay returns 0 here.',
   })
   receiver_local_amount?: number;
 

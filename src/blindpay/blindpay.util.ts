@@ -27,3 +27,13 @@ export function asNullableString(value: unknown): string | null {
 export function asString(value: unknown): string {
   return asNullableString(value) ?? '';
 }
+
+/** Coerce a provider scalar to a finite number, or 0 when it isn't numeric. */
+export function asNumber(value: unknown): number {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
+  if (typeof value === 'string' && value.trim() !== '') {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : 0;
+  }
+  return 0;
+}
