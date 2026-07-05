@@ -9,6 +9,7 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { AppConfig, StellarNetwork } from '../config/configuration';
 import { PrismaService } from '../prisma/prisma.service';
 import { StellarService } from '../stellar/stellar.service';
+import { LiquidityPoolsService } from '../liquidity-pools/liquidity-pools.service';
 import { WEBHOOK_EVENT, WebhookEventPayload } from '../webhooks/webhook-events';
 import type { WebhookEventType } from '../../generated/prisma/client';
 
@@ -38,6 +39,7 @@ export class SettlementObserverService
     private readonly prisma: PrismaService,
     private readonly stellar: StellarService,
     private readonly events: EventEmitter2,
+    private readonly liquidity: LiquidityPoolsService,
   ) {}
 
   onModuleInit(): void {
@@ -127,6 +129,8 @@ export class SettlementObserverService
           data: { status: 'SUCCEEDED' },
         });
         this.emit(username, 'LIQUIDITY_SUCCEEDED', updated);
+        // Record the deposit's cost basis for future withdraw commission.
+        await this.liquidity.captureDepositBasis(updated);
         this.logger.log(`Reconciled LP operation ${row.id} → SUCCEEDED`);
       } else if (settlement === 'failed') {
         const updated = await this.prisma.liquidityPoolOperation.update({

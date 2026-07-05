@@ -285,33 +285,16 @@ export class LiquidityPoolsService {
       );
     }
 
-    // Plan commission (mirrors swaps): the same bps is skimmed off each side and
-    // paid to the fee wallet, so the deposited ratio A/B is preserved. The net
-    // amounts are what actually enters the pool.
-    const feeBps = this.resolveSwapFeeBps(consumer);
-    const feeWallet = this.feeWallet();
-    const feeA = computeFee(amountA, feeBps);
-    const feeB = computeFee(amountB, feeBps);
-    if (feeA + feeB > 0n && !feeWallet) {
-      throw new ServiceUnavailableException(
-        'A swap commission is configured (STELLAR_SWAP_FEE_BPS) but STELLAR_SWAP_FEE_WALLET is not set',
-      );
-    }
-    const netA = amountA - feeA;
-    const netB = amountB - feeB;
-    if (netA <= 0n || netB <= 0n) {
-      throw new BadRequestException(
-        'Deposit amounts are too small to cover the plan commission',
-      );
-    }
+    // Deposits carry NO commission — the plan fee is charged only on the *gain*
+    // at withdraw time, never on the principal. The full amounts enter the pool.
 
-    // Price bounds around the pool price (or the net deposit's own ratio when
-    // the pool is empty). The deposit fails on-chain if the price drifts outside.
+    // Price bounds around the pool price (or the deposit's own ratio when the
+    // pool is empty). The deposit fails on-chain if the price drifts outside.
     let bounds: { minPrice: string; maxPrice: string };
     try {
       bounds = funded
         ? priceBounds(reserveA, reserveB, slippageBps)
-        : priceBounds(netA, netB, slippageBps);
+        : priceBounds(amountA, amountB, slippageBps);
     } catch (err) {
       throw new BadRequestException((err as Error).message);
     }
@@ -328,12 +311,11 @@ export class LiquidityPoolsService {
 
     const stellarCfg = this.config.get('stellar', { infer: true });
 
-    // Pre-flight: the account must hold the full amount (deposit + commission) of
-    // each asset, and keep its XLM minimum reserve (incl. the new pool-share
-    // trustline) plus the tx fee. Fail here with a clear 400 rather than let the
-    // network reject the signed tx with op_underfunded.
-    const opCount =
-      (hasPoolTrust ? 0 : 1) + (feeA > 0n ? 1 : 0) + (feeB > 0n ? 1 : 0) + 1;
+    // Pre-flight: the account must hold the full amount of each asset and keep
+    // its XLM minimum reserve (incl. the new pool-share trustline) plus the tx
+    // fee. Fail here with a clear 400 rather than let the network reject the
+    // signed tx with op_underfunded.
+    const opCount = (hasPoolTrust ? 0 : 1) + 1;
     this.assertCanAfford(
       account,
       balances,
@@ -353,36 +335,17 @@ export class LiquidityPoolsService {
     if (!hasPoolTrust) {
       builder.addOperation(Operation.changeTrust({ asset: poolShare }));
     }
-    // Operation 2/3: collect the plan commission in each asset (skipped at 0%).
-    if (feeA > 0n && feeWallet) {
-      builder.addOperation(
-        Operation.payment({
-          destination: feeWallet,
-          asset: a.asset,
-          amount: fromStroops(feeA),
-        }),
-      );
-    }
-    if (feeB > 0n && feeWallet) {
-      builder.addOperation(
-        Operation.payment({
-          destination: feeWallet,
-          asset: b.asset,
-          amount: fromStroops(feeB),
-        }),
-      );
-    }
-    // Operation 4: the deposit itself, capped by the net amounts + price bounds.
+    // Operation 2: the deposit itself, capped by the amounts + price bounds.
     builder.addOperation(
       Operation.liquidityPoolDeposit({
         liquidityPoolId: poolId,
-        maxAmountA: fromStroops(netA),
-        maxAmountB: fromStroops(netB),
+        maxAmountA: fromStroops(amountA),
+        maxAmountB: fromStroops(amountB),
         minPrice: bounds.minPrice,
         maxPrice: bounds.maxPrice,
       }),
     );
-    this.addMemo(builder, memo, feeA + feeB > 0n);
+    if (memo) builder.addMemo(Memo.id(memo));
 
     const tx = builder.setTimeout(stellarCfg.timeoutSeconds).build();
     const op = await this.persist(consumer, {
@@ -395,22 +358,23 @@ export class LiquidityPoolsService {
       assetAIssuer: a.issuer,
       assetB: b.code,
       assetBIssuer: b.issuer,
-      amountA: fromStroops(netA),
-      amountB: fromStroops(netB),
+      amountA: fromStroops(amountA),
+      amountB: fromStroops(amountB),
       shares: null,
       minPrice: bounds.minPrice,
       maxPrice: bounds.maxPrice,
       slippageBps,
-      feeBps,
-      feeAmountA: fromStroops(feeA),
-      feeAmountB: fromStroops(feeB),
-      feeWallet: feeA + feeB > 0n ? feeWallet : null,
+      // Deposits carry no commission; the cost basis is captured at settlement.
+      feeBps: 0,
+      feeAmountA: '0',
+      feeAmountB: '0',
+      feeWallet: null,
       tx,
       timeoutSeconds: stellarCfg.timeoutSeconds,
     });
     this.logger.log(
-      `Created LP deposit ${op.id}: ${fromStroops(netA)} ${this.label(a)} + ` +
-        `${fromStroops(netB)} ${this.label(b)} → pool ${poolId.slice(0, 8)}… ` +
+      `Created LP deposit ${op.id}: ${fromStroops(amountA)} ${this.label(a)} + ` +
+        `${fromStroops(amountB)} ${this.label(b)} → pool ${poolId.slice(0, 8)}… ` +
         `(consumer=${consumer.username}, network=${network})`,
     );
     return op;
@@ -473,13 +437,34 @@ export class LiquidityPoolsService {
       slippageBps,
     );
 
-    // Plan commission (mirrors swaps): taken from the guaranteed minimums after
-    // the withdraw. The account always receives ≥ the minimums, so the fee
-    // payments that follow the withdraw are always covered.
+    // Plan commission — charged ONLY on the gain (redeemed − proportional cost
+    // basis), and only for shares whose cost basis we recorded from deposits
+    // made through Cosmos Pay. Shares with no known basis are taxed nothing.
     const feeBps = this.resolveSwapFeeBps(consumer);
     const feeWallet = this.feeWallet();
-    const feeA = computeFee(minA, feeBps);
-    const feeB = computeFee(minB, feeBps);
+    let feeA = 0n;
+    let feeB = 0n;
+    if (feeBps > 0) {
+      const basis = await this.costBasis(local.id, dto.source, dto.poolId);
+      const covered =
+        shares < basis.remainingShares ? shares : basis.remainingShares;
+      if (covered > 0n && basis.depositedShares > 0n) {
+        // Guaranteed redemption for the covered shares (slippage-protected), so
+        // the fee payment is always covered by what the withdraw returns.
+        const redeemedA = applySlippage(
+          proportionalShare(covered, total, toStroops(resA.amount)),
+          slippageBps,
+        );
+        const redeemedB = applySlippage(
+          proportionalShare(covered, total, toStroops(resB.amount)),
+          slippageBps,
+        );
+        const basisA = (basis.costA * covered) / basis.depositedShares;
+        const basisB = (basis.costB * covered) / basis.depositedShares;
+        feeA = computeFee(redeemedA > basisA ? redeemedA - basisA : 0n, feeBps);
+        feeB = computeFee(redeemedB > basisB ? redeemedB - basisB : 0n, feeBps);
+      }
+    }
     if (feeA + feeB > 0n && !feeWallet) {
       throw new ServiceUnavailableException(
         'A swap commission is configured (STELLAR_SWAP_FEE_BPS) but STELLAR_SWAP_FEE_WALLET is not set',
@@ -658,6 +643,8 @@ export class LiquidityPoolsService {
         data: { status: 'SUCCEEDED', txHash: res.hash },
       });
       this.emit(consumer.username, 'LIQUIDITY_SUCCEEDED', succeeded);
+      // Record the deposit's cost basis for future withdraw commission.
+      await this.captureDepositBasis(succeeded);
       this.logger.log(
         `LP operation ${op.id} submitted and confirmed (tx=${res.hash})`,
       );
@@ -921,6 +908,105 @@ export class LiquidityPoolsService {
             `but the account holds ${fromStroops(bal)}`,
         );
       }
+    }
+  }
+
+  /**
+   * Average-cost basis of the shares `source` still holds in `poolId`, derived
+   * from our own SUCCEEDED deposits (which recorded the shares + amounts at
+   * settlement) and withdrawals. Only deposits with a captured `sharesReceived`
+   * count — positions opened outside Cosmos Pay have no basis and are taxed
+   * nothing. All values are stroop bigints.
+   */
+  private async costBasis(
+    consumerId: string,
+    source: string,
+    poolId: string,
+  ): Promise<{
+    depositedShares: bigint;
+    remainingShares: bigint;
+    costA: bigint;
+    costB: bigint;
+  }> {
+    const ops = await this.prisma.liquidityPoolOperation.findMany({
+      where: { consumerId, source, poolId, status: 'SUCCEEDED' },
+      select: {
+        kind: true,
+        shares: true,
+        sharesReceived: true,
+        settledAmountA: true,
+        settledAmountB: true,
+        amountA: true,
+        amountB: true,
+      },
+    });
+    let depositedShares = 0n;
+    let withdrawnShares = 0n;
+    let costA = 0n;
+    let costB = 0n;
+    for (const o of ops) {
+      if (o.kind === 'DEPOSIT') {
+        if (!o.sharesReceived) continue; // basis not captured → no known cost
+        depositedShares += toStroops(o.sharesReceived);
+        costA += toStroops(o.settledAmountA ?? o.amountA);
+        costB += toStroops(o.settledAmountB ?? o.amountB);
+      } else if (o.shares) {
+        withdrawnShares += toStroops(o.shares);
+      }
+    }
+    const remaining = depositedShares - withdrawnShares;
+    return {
+      depositedShares,
+      remainingShares: remaining > 0n ? remaining : 0n,
+      costA,
+      costB,
+    };
+  }
+
+  /**
+   * Records a settled deposit's cost basis (shares minted + reserves actually
+   * deposited) from its on-chain `liquidity_pool_deposited` effect, so a later
+   * withdraw can be taxed only on the gain. Idempotent: a no-op unless this is a
+   * DEPOSIT whose basis has not been captured yet. Best-effort — a Horizon
+   * hiccup just leaves the basis uncaptured (that deposit is then taxed nothing).
+   */
+  async captureDepositBasis(op: LiquidityPoolOperation): Promise<void> {
+    if (op.kind !== 'DEPOSIT' || op.sharesReceived != null) return;
+    try {
+      const page = await this.stellar
+        .server(op.network as StellarNetwork)
+        .effects()
+        .forTransaction(op.txHash)
+        .call();
+      const eff = page.records.find(
+        (e) => (e as { type?: string }).type === 'liquidity_pool_deposited',
+      ) as
+        | {
+            reserves_deposited?: { asset: string; amount: string }[];
+            shares_received?: string;
+          }
+        | undefined;
+      if (!eff?.shares_received) return;
+      const keyA =
+        op.assetA === 'native' ? 'native' : `${op.assetA}:${op.assetAIssuer}`;
+      const keyB =
+        op.assetB === 'native' ? 'native' : `${op.assetB}:${op.assetBIssuer}`;
+      const reserves = eff.reserves_deposited ?? [];
+      await this.prisma.liquidityPoolOperation.update({
+        where: { id: op.id },
+        data: {
+          sharesReceived: eff.shares_received,
+          settledAmountA:
+            reserves.find((r) => r.asset === keyA)?.amount ?? op.amountA,
+          settledAmountB:
+            reserves.find((r) => r.asset === keyB)?.amount ?? op.amountB,
+        },
+      });
+      this.logger.log(
+        `Captured cost basis for deposit ${op.id}: ${eff.shares_received} shares`,
+      );
+    } catch {
+      this.logger.warn(`Failed to capture cost basis for deposit ${op.id}`);
     }
   }
 

@@ -5,5 +5,6 @@ import { LiquidityPoolsService } from './liquidity-pools.service';
 @Module({
   controllers: [LiquidityPoolsController],
   providers: [LiquidityPoolsService],
+  exports: [LiquidityPoolsService],
 })
 export class LiquidityPoolsModule {}

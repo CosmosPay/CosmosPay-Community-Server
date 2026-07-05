@@ -566,14 +566,21 @@ model LiquidityPoolOperation {
 
   slippageBps Int
 
-  // Platform (plan) commission, mirrored from swaps. Charged in the pool's own
-  // assets: on DEPOSIT it is deducted from each side before the deposit, on
-  // WITHDRAW it is taken from the guaranteed minimums after the withdraw. Same
-  // bps on both sides preserves the deposit ratio. feeWallet is null at 0 bps.
+  // Platform (plan) commission. Charged ONLY on WITHDRAW, and only on the
+  // *gain* (redeemed − proportional cost basis), never on the principal — so
+  // deposits carry no commission (feeBps 0, feeWallet null). feeAmountA/B are
+  // the commission paid to feeWallet out of each just-withdrawn reserve.
   feeBps      Int     @default(0)
   feeAmountA  String  @default("0")
   feeAmountB  String  @default("0")
   feeWallet   String?
+
+  // Cost basis, captured from the on-chain `liquidity_pool_deposited` effect
+  // once a DEPOSIT settles (null until then / for withdrawals). Used to work out
+  // the gain a later withdraw is taxed on (average-cost across our deposits).
+  sharesReceived String?
+  settledAmountA String?
+  settledAmountB String?
 
   status SwapStatus @default(PENDING)
 
