@@ -21,7 +21,8 @@ export class RequestTosDto {
 
   @ApiProperty({
     example: 'https://yourapp.com/kyc/return',
-    description: 'Where BlindPay redirects after acceptance (gets ?tos_id=...).',
+    description:
+      'Where BlindPay redirects after acceptance (gets ?tos_id=...).',
   })
   @IsString()
   redirect_url!: string;

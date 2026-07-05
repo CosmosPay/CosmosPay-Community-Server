@@ -37,7 +37,8 @@ export class ReceiverEntity {
 
   @ApiProperty({
     example: false,
-    description: 'Owner/admin kill-switch: when true the account is blocked from onramp/offramp.',
+    description:
+      'Owner/admin kill-switch: when true the account is blocked from onramp/offramp.',
   })
   disabled!: boolean;
 

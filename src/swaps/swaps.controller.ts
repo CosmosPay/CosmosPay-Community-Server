@@ -43,7 +43,8 @@ export class SwapsController {
   @Post()
   @RequirePermissions('swaps:write')
   @ApiOperation({
-    summary: 'Create a swap → unsigned XDR + SEP-7 tx URI + QR for the wallet to sign',
+    summary:
+      'Create a swap → unsigned XDR + SEP-7 tx URI + QR for the wallet to sign',
   })
   @ApiCreatedResponse({ type: SwapEntity })
   create(

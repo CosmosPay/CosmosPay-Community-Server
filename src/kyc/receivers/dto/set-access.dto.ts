@@ -6,7 +6,10 @@ import { IsBoolean } from 'class-validator';
  * onramp/offramp use of it; `false` re-enables it. Independent of the KYC status.
  */
 export class SetAccessDto {
-  @ApiProperty({ example: true, description: 'true = disable the fiat account, false = enable.' })
+  @ApiProperty({
+    example: true,
+    description: 'true = disable the fiat account, false = enable.',
+  })
   @IsBoolean()
   disabled!: boolean;
 }

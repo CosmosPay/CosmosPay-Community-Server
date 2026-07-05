@@ -80,7 +80,11 @@ export class ReceiversService {
     consumer: GatewayConsumer,
     id: string,
     redirectUrl: string,
-  ): Promise<{ receiver: BlindpayReceiver; url: string; email: string | null }> {
+  ): Promise<{
+    receiver: BlindpayReceiver;
+    url: string;
+    email: string | null;
+  }> {
     const local = await this.consumers.resolve(consumer);
     // Ownership check (404 if the receiver isn't this consumer's) then the shared logic.
     await this.findReceiverOrThrow(local.id, id);
@@ -94,8 +98,14 @@ export class ReceiversService {
   async approveById(
     id: string,
     redirectUrl: string,
-  ): Promise<{ receiver: BlindpayReceiver; url: string; email: string | null }> {
-    const row = await this.prisma.blindpayReceiver.findUnique({ where: { id } });
+  ): Promise<{
+    receiver: BlindpayReceiver;
+    url: string;
+    email: string | null;
+  }> {
+    const row = await this.prisma.blindpayReceiver.findUnique({
+      where: { id },
+    });
     if (!row) throw new NotFoundException('Receiver not found');
     if (row.kycStatus !== 'pending_review') {
       throw new BadRequestException(
@@ -161,7 +171,9 @@ export class ReceiversService {
     dto: RequestTosDto,
     cooldownMs?: number,
   ): Promise<{ url: string; email: string | null; channel: 'code' | 'email' }> {
-    const row = await this.prisma.blindpayReceiver.findUnique({ where: { id } });
+    const row = await this.prisma.blindpayReceiver.findUnique({
+      where: { id },
+    });
     if (!row) throw new NotFoundException('Receiver not found');
     // Terms are only (re)sent after our owner/admin review has approved the receiver.
     if (row.kycStatus !== 'pending_user') {
@@ -216,7 +228,9 @@ export class ReceiversService {
    * variant of {@link enable}. Skips consumer scoping; the AdminGuard authorizes it.
    */
   async enableById(id: string, tosId: string) {
-    const row = await this.prisma.blindpayReceiver.findUnique({ where: { id } });
+    const row = await this.prisma.blindpayReceiver.findUnique({
+      where: { id },
+    });
     if (!row) throw new NotFoundException('Receiver not found');
 
     if (!row.blindpayId.startsWith(LOCAL_PREFIX)) {
@@ -376,9 +390,12 @@ export function resolveTosCooldownMs(
   cooldownHeader?: string | string[],
 ): number | undefined {
   const internal =
-    (Array.isArray(internalHeader) ? internalHeader[0] : internalHeader) === '1';
+    (Array.isArray(internalHeader) ? internalHeader[0] : internalHeader) ===
+    '1';
   if (!internal) return undefined;
-  const raw = Array.isArray(cooldownHeader) ? cooldownHeader[0] : cooldownHeader;
+  const raw = Array.isArray(cooldownHeader)
+    ? cooldownHeader[0]
+    : cooldownHeader;
   if (raw === undefined || raw === '') return undefined;
   const n = Number(raw);
   return Number.isFinite(n) && n >= 0 ? n : undefined;
@@ -399,11 +416,11 @@ function receiverName(dto: CreateReceiverDto): string | null {
 function hasKycData(dto: CreateReceiverDto): boolean {
   return Boolean(
     dto.tax_id ||
-      dto.date_of_birth ||
-      dto.id_doc_front_file ||
-      dto.selfie_file ||
-      dto.legal_name ||
-      dto.formation_date ||
-      (dto.owners && dto.owners.length > 0),
+    dto.date_of_birth ||
+    dto.id_doc_front_file ||
+    dto.selfie_file ||
+    dto.legal_name ||
+    dto.formation_date ||
+    (dto.owners && dto.owners.length > 0),
   );
 }

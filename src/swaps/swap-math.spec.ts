@@ -1,9 +1,4 @@
-import {
-  applySlippage,
-  computeFee,
-  fromStroops,
-  toStroops,
-} from './swap-math';
+import { applySlippage, computeFee, fromStroops, toStroops } from './swap-math';
 
 describe('swap-math', () => {
   describe('toStroops', () => {
@@ -66,7 +61,9 @@ describe('swap-math', () => {
   describe('applySlippage', () => {
     it('reduces the estimate by the slippage tolerance', () => {
       // 0.5% slippage on 24.81 → 24.685950 → trimmed
-      expect(fromStroops(applySlippage(toStroops('24.81'), 50))).toBe('24.68595');
+      expect(fromStroops(applySlippage(toStroops('24.81'), 50))).toBe(
+        '24.68595',
+      );
       // 0 slippage → unchanged
       expect(fromStroops(applySlippage(toStroops('24.81'), 0))).toBe('24.81');
     });

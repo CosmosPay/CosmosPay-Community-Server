@@ -9,7 +9,10 @@ import {
 import { Reflector } from '@nestjs/core';
 import { Request } from 'express';
 import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
-import { PERMISSIONS_KEY } from '../decorators/require-permissions.decorator';
+import {
+  ANY_PERMISSIONS_KEY,
+  PERMISSIONS_KEY,
+} from '../decorators/require-permissions.decorator';
 
 /**
  * Authorizes a request against the API key's granted scopes.
@@ -45,11 +48,17 @@ export class PermissionsGuard implements CanActivate {
       return true;
     }
 
-    const required = this.reflector.getAllAndOverride<string[]>(
-      PERMISSIONS_KEY,
-      [context.getHandler(), context.getClass()],
-    );
-    if (!required || required.length === 0) {
+    const required =
+      this.reflector.getAllAndOverride<string[]>(PERMISSIONS_KEY, [
+        context.getHandler(),
+        context.getClass(),
+      ]) ?? [];
+    const requiredAny =
+      this.reflector.getAllAndOverride<string[]>(ANY_PERMISSIONS_KEY, [
+        context.getHandler(),
+        context.getClass(),
+      ]) ?? [];
+    if (required.length === 0 && requiredAny.length === 0) {
       return true;
     }
 
@@ -78,6 +87,16 @@ export class PermissionsGuard implements CanActivate {
       );
       throw new ForbiddenException(
         `This API key is missing the required scope(s): ${missing.join(', ')}`,
+      );
+    }
+
+    // "Any of" set: the key must hold at least one of these scopes.
+    if (requiredAny.length > 0 && !requiredAny.some((s) => granted.has(s))) {
+      this.logger.warn(
+        `Rejected ${request.method} ${request.url}: needs one of ${requiredAny.join(', ')}`,
+      );
+      throw new ForbiddenException(
+        `This API key needs at least one of the scope(s): ${requiredAny.join(', ')}`,
       );
     }
 

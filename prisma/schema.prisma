@@ -30,6 +30,7 @@ model Consumer {
   products         Product[]
   customers        Customer[]
   swaps            Swap[]
+  liquidityOps     LiquidityPoolOperation[]
 
   // BlindPay (onramp/offramp/KYC) resources mirrored from the provider.
   blindpayReceivers BlindpayReceiver[]
@@ -131,6 +132,12 @@ enum WebhookEventType {
   SWAP_SUBMITTED
   SWAP_SUCCEEDED
   SWAP_FAILED
+
+  // Stellar AMM liquidity pool operations (deposit / withdraw).
+  LIQUIDITY_CREATED
+  LIQUIDITY_SUBMITTED
+  LIQUIDITY_SUCCEEDED
+  LIQUIDITY_FAILED
 }
 
 enum WebhookDeliveryStatus {
@@ -517,4 +524,73 @@ model Swap {
   @@index([status])
   @@index([txHash])
   @@map("swap")
+}
+
+// ---------------------------------------------------------------------------
+// Stellar AMM liquidity pool operations. Like swaps, these are non-custodial:
+// the service prices the deposit/withdraw against the pool's on-chain reserves,
+// builds the unsigned transaction (changeTrust for the pool share if needed +
+// liquidityPoolDeposit/liquidityPoolWithdraw) and relays the signed envelope
+// the customer hands back. Reuses SwapStatus — the lifecycle is identical.
+// ---------------------------------------------------------------------------
+enum LiquidityOperationKind {
+  DEPOSIT
+  WITHDRAW
+}
+
+model LiquidityPoolOperation {
+  id         String                 @id @default(cuid())
+  consumerId String
+  consumer   Consumer               @relation(fields: [consumerId], references: [id], onDelete: Cascade)
+
+  kind       LiquidityOperationKind
+  network    String // 'public' | 'testnet'
+  // Account paying for (and signing) the operation.
+  source     String
+  // Stellar liquidity pool id (64-char hex).
+  poolId     String
+
+  // The pool's constituent assets in canonical (protocol) order: A < B.
+  assetA       String  @default("native")
+  assetAIssuer String?
+  assetB       String  @default("native")
+  assetBIssuer String?
+
+  // DEPOSIT: maxAmountA/maxAmountB caps + minPrice/maxPrice bounds (A/B ratio).
+  // WITHDRAW: shares burned + amountA/amountB as slippage-protected minimums.
+  amountA  String
+  amountB  String
+  shares   String?
+  minPrice String?
+  maxPrice String?
+
+  slippageBps Int
+
+  // Platform (plan) commission, mirrored from swaps. Charged in the pool's own
+  // assets: on DEPOSIT it is deducted from each side before the deposit, on
+  // WITHDRAW it is taken from the guaranteed minimums after the withdraw. Same
+  // bps on both sides preserves the deposit ratio. feeWallet is null at 0 bps.
+  feeBps      Int     @default(0)
+  feeAmountA  String  @default("0")
+  feeAmountB  String  @default("0")
+  feeWallet   String?
+
+  status SwapStatus @default(PENDING)
+
+  // Unsigned transaction envelope + its SEP-7 `tx` deep link. QR derived on read.
+  xdr    String
+  uri    String
+  // Deterministic transaction hash (computed at build, verified on submit).
+  txHash String
+
+  expiresAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([consumerId])
+  @@index([status])
+  @@index([txHash])
+  @@index([poolId])
+  @@map("liquidity_pool_operation")
 }

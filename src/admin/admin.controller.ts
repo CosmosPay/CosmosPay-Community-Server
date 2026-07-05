@@ -1,4 +1,14 @@
-import { Body, Controller, Get, Headers, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Headers,
+  Param,
+  Patch,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiExcludeController } from '@nestjs/swagger';
 import { AdminGuard } from '../common/guards/admin.guard';
 import { ApproveReceiverDto } from '../kyc/receivers/dto/approve-receiver.dto';
@@ -38,7 +48,13 @@ export class AdminController {
     @Query('take') take?: string,
     @Query('skip') skip?: string,
   ) {
-    return this.admin.paymentIntents({ consumer, network, status, take: toNum(take), skip: toNum(skip) });
+    return this.admin.paymentIntents({
+      consumer,
+      network,
+      status,
+      take: toNum(take),
+      skip: toNum(skip),
+    });
   }
 
   @Get('swaps')
@@ -49,32 +65,78 @@ export class AdminController {
     @Query('take') take?: string,
     @Query('skip') skip?: string,
   ) {
-    return this.admin.swaps({ consumer, network, status, take: toNum(take), skip: toNum(skip) });
+    return this.admin.swaps({
+      consumer,
+      network,
+      status,
+      take: toNum(take),
+      skip: toNum(skip),
+    });
   }
 
   @Get('customers')
-  customers(@Query('consumer') consumer?: string, @Query('take') take?: string, @Query('skip') skip?: string) {
-    return this.admin.customers({ consumer, take: toNum(take), skip: toNum(skip) });
+  customers(
+    @Query('consumer') consumer?: string,
+    @Query('take') take?: string,
+    @Query('skip') skip?: string,
+  ) {
+    return this.admin.customers({
+      consumer,
+      take: toNum(take),
+      skip: toNum(skip),
+    });
   }
 
   @Get('products')
-  products(@Query('consumer') consumer?: string, @Query('take') take?: string, @Query('skip') skip?: string) {
-    return this.admin.products({ consumer, take: toNum(take), skip: toNum(skip) });
+  products(
+    @Query('consumer') consumer?: string,
+    @Query('take') take?: string,
+    @Query('skip') skip?: string,
+  ) {
+    return this.admin.products({
+      consumer,
+      take: toNum(take),
+      skip: toNum(skip),
+    });
   }
 
   @Get('receivers')
-  receivers(@Query('consumer') consumer?: string, @Query('take') take?: string, @Query('skip') skip?: string) {
-    return this.admin.receivers({ consumer, take: toNum(take), skip: toNum(skip) });
+  receivers(
+    @Query('consumer') consumer?: string,
+    @Query('take') take?: string,
+    @Query('skip') skip?: string,
+  ) {
+    return this.admin.receivers({
+      consumer,
+      take: toNum(take),
+      skip: toNum(skip),
+    });
   }
 
   @Get('payins')
-  payins(@Query('consumer') consumer?: string, @Query('take') take?: string, @Query('skip') skip?: string) {
-    return this.admin.payins({ consumer, take: toNum(take), skip: toNum(skip) });
+  payins(
+    @Query('consumer') consumer?: string,
+    @Query('take') take?: string,
+    @Query('skip') skip?: string,
+  ) {
+    return this.admin.payins({
+      consumer,
+      take: toNum(take),
+      skip: toNum(skip),
+    });
   }
 
   @Get('payouts')
-  payouts(@Query('consumer') consumer?: string, @Query('take') take?: string, @Query('skip') skip?: string) {
-    return this.admin.payouts({ consumer, take: toNum(take), skip: toNum(skip) });
+  payouts(
+    @Query('consumer') consumer?: string,
+    @Query('take') take?: string,
+    @Query('skip') skip?: string,
+  ) {
+    return this.admin.payouts({
+      consumer,
+      take: toNum(take),
+      skip: toNum(skip),
+    });
   }
 
   // Global fiat kill-switch: enable/disable any receiver across consumers (owner-only,

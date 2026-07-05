@@ -37,8 +37,20 @@ import { applySlippage, computeFee, fromStroops, toStroops } from './swap-math';
 
 const MAX_UINT64 = 18446744073709551615n;
 
+/**
+ * On-chain MEMO_TEXT stamped on a swap that collects the platform commission
+ * when the caller did not supply their own MEMO_ID — so the commission is
+ * identifiable on the ledger. English by design (the canonical label). ≤ 28
+ * bytes (the MEMO_TEXT limit).
+ */
+export const SWAP_COMMISSION_MEMO = 'Cosmos Swap Commission';
+
 /** A stored swap plus its derived QR — the shape API responses return. */
-export type SwapView = Swap & { qr: string };
+export type SwapView = Swap & {
+  qr: string;
+  /** The commission MEMO_TEXT label when a commission was collected, else null. */
+  commissionMemo: string | null;
+};
 
 /**
  * Result of relaying a signed swap (the service-side counterpart of
@@ -105,7 +117,11 @@ export class SwapsService {
     dto: QuoteSwapDto,
   ): Promise<SwapQuoteEntity> {
     const network = this.resolveNetwork(consumer);
-    const priced = await this.priceSwap(network, dto, this.resolveSwapFeeBps(consumer));
+    const priced = await this.priceSwap(
+      network,
+      dto,
+      this.resolveSwapFeeBps(consumer),
+    );
     return this.toQuoteEntity(network, priced);
   }
 
@@ -175,7 +191,13 @@ export class SwapsService {
         path: this.pathToAssets(priced.path),
       }),
     );
-    if (memo) builder.addMemo(Memo.id(memo));
+    // Caller MEMO_ID when supplied; otherwise a default commission MEMO_TEXT so
+    // the platform fee is identifiable on-chain. No memo when neither applies.
+    if (memo) {
+      builder.addMemo(Memo.id(memo));
+    } else if (feeStroops > 0n) {
+      builder.addMemo(Memo.text(SWAP_COMMISSION_MEMO));
+    }
 
     const tx = builder.setTimeout(stellarCfg.timeoutSeconds).build();
     const xdr = tx.toXDR();
@@ -295,17 +317,25 @@ export class SwapsService {
 
     // Mark in-flight before broadcasting; on an unreachable network we leave it
     // here (re-submittable), only advancing to a terminal state on a real result.
-    await this.setStatus(swap.id, consumer.username, 'SUBMITTED', 'SWAP_SUBMITTED');
+    await this.setStatus(
+      swap.id,
+      consumer.username,
+      'SUBMITTED',
+      'SWAP_SUBMITTED',
+    );
 
     try {
-      const res = await this.stellar.server(swap.network as StellarNetwork)
+      const res = await this.stellar
+        .server(swap.network as StellarNetwork)
         .submitTransaction(tx);
       const succeeded = await this.markSucceeded(
         swap.id,
         consumer.username,
         res.hash,
       );
-      this.logger.log(`Swap ${swap.id} submitted and confirmed (tx=${res.hash})`);
+      this.logger.log(
+        `Swap ${swap.id} submitted and confirmed (tx=${res.hash})`,
+      );
       return {
         submitted: true,
         status: 'SUCCEEDED',
@@ -433,6 +463,7 @@ export class SwapsService {
         amount: priced.feeAmount,
         bps: priced.feeBps,
         wallet: this.feeWallet() || null,
+        label: SWAP_COMMISSION_MEMO,
       },
       swap: sideOf(priced.send, priced.swapAmount),
       destination: {
@@ -643,7 +674,16 @@ export class SwapsService {
   }
 
   private async withQr(swap: Swap): Promise<SwapView> {
-    return { ...swap, qr: await QRCode.toDataURL(swap.uri) };
+    return {
+      ...swap,
+      qr: await QRCode.toDataURL(swap.uri),
+      // A collected commission (feeAmount > 0) with no caller memo is labelled
+      // on-chain with the commission memo text.
+      commissionMemo:
+        toStroops(swap.feeAmount) > 0n && !swap.memo
+          ? SWAP_COMMISSION_MEMO
+          : null,
+    };
   }
 
   private emit(username: string, type: WebhookEventType, data: Swap): void {

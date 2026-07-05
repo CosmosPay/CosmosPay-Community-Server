@@ -10,7 +10,8 @@ import { IsString } from 'class-validator';
 export class ApproveReceiverDto {
   @ApiProperty({
     example: 'https://dev.cosmospay.lat/kyc/return/org/dev/clz9xreceiver01',
-    description: 'Where BlindPay redirects the customer after they accept the terms.',
+    description:
+      'Where BlindPay redirects the customer after they accept the terms.',
   })
   @IsString()
   redirect_url!: string;

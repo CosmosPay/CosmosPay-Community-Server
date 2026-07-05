@@ -118,7 +118,8 @@ export class ReceiversController {
   @Patch(':id/access')
   @RequirePermissions('kyc:write')
   @ApiOperation({
-    summary: 'Enable or disable a fiat account (owner/admin kill-switch for onramp/offramp)',
+    summary:
+      'Enable or disable a fiat account (owner/admin kill-switch for onramp/offramp)',
   })
   @ApiOkResponse({ type: ReceiverEntity })
   setAccess(

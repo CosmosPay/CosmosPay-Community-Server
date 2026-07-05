@@ -46,6 +46,14 @@ export class SwapFeeBreakdown {
     description: 'Fee collector account (null when the fee is disabled).',
   })
   wallet!: string | null;
+
+  @ApiProperty({
+    example: 'Cosmos Swap Commission',
+    description:
+      'Human-readable commission label, mirrored as the on-chain MEMO_TEXT ' +
+      'when the caller supplies no memo.',
+  })
+  label!: string;
 }
 
 /** The bought asset with its estimate and slippage-protected minimum. */
@@ -67,7 +75,8 @@ export class SwapDestinationQuote {
 
   @ApiProperty({
     example: '24.68595',
-    description: 'On-chain minimum (destMin) after slippage — swap reverts below it.',
+    description:
+      'On-chain minimum (destMin) after slippage — swap reverts below it.',
   })
   minimum!: string;
 
@@ -86,13 +95,19 @@ export class SwapQuoteEntity {
   @ApiProperty({ type: SwapFeeBreakdown })
   fee!: SwapFeeBreakdown;
 
-  @ApiProperty({ type: SwapAssetAmount, description: 'Net amount routed (input − fee).' })
+  @ApiProperty({
+    type: SwapAssetAmount,
+    description: 'Net amount routed (input − fee).',
+  })
   swap!: SwapAssetAmount;
 
   @ApiProperty({ type: SwapDestinationQuote })
   destination!: SwapDestinationQuote;
 
-  @ApiProperty({ type: [SwapPathHop], description: 'Intermediate hops (may be empty).' })
+  @ApiProperty({
+    type: [SwapPathHop],
+    description: 'Intermediate hops (may be empty).',
+  })
   path!: SwapPathHop[];
 }
 
@@ -107,10 +122,14 @@ export class SwapEntity {
   @ApiProperty({ example: 'testnet' })
   network!: string;
 
-  @ApiProperty({ example: 'GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ' })
+  @ApiProperty({
+    example: 'GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ',
+  })
   source!: string;
 
-  @ApiProperty({ example: 'GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ' })
+  @ApiProperty({
+    example: 'GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ',
+  })
   destination!: string;
 
   @ApiProperty({ example: 'native' })
@@ -128,7 +147,10 @@ export class SwapEntity {
   @ApiProperty({ example: 50 })
   feeBps!: number;
 
-  @ApiProperty({ example: '99.5', description: 'Amount routed through the DEX/AMM.' })
+  @ApiProperty({
+    example: '99.5',
+    description: 'Amount routed through the DEX/AMM.',
+  })
   swapAmount!: string;
 
   @ApiProperty({ example: 'USDC' })
@@ -154,6 +176,15 @@ export class SwapEntity {
 
   @ApiProperty({ nullable: true, example: null })
   memo!: string | null;
+
+  @ApiProperty({
+    nullable: true,
+    example: 'Cosmos Swap Commission',
+    description:
+      'On-chain MEMO_TEXT label stamped when a commission is collected and no ' +
+      'caller memo was supplied (null otherwise).',
+  })
+  commissionMemo!: string | null;
 
   @ApiProperty({
     description: 'Unsigned transaction envelope (base64 XDR) to sign.',

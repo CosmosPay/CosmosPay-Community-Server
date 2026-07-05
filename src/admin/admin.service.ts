@@ -56,7 +56,11 @@ export class AdminService {
    * Admin → Fiat view uses this to re-send the verification email for a pending_user receiver.
    * Returns the ToS url + customer email so the dev platform sends the email (we have no mailer).
    */
-  async requestReceiverTos(id: string, dto: RequestTosDto, cooldownMs?: number) {
+  async requestReceiverTos(
+    id: string,
+    dto: RequestTosDto,
+    cooldownMs?: number,
+  ) {
     return this.receiversSvc.requestTosById(id, dto, cooldownMs);
   }
 
@@ -288,7 +292,9 @@ export class AdminService {
    * without consumer scoping (the owner acts globally). Mirrors the per-org access toggle.
    */
   async setReceiverAccess(id: string, disabled: boolean) {
-    const row = await this.prisma.blindpayReceiver.findUnique({ where: { id } });
+    const row = await this.prisma.blindpayReceiver.findUnique({
+      where: { id },
+    });
     if (!row) throw new NotFoundException('Receiver not found');
     return this.prisma.blindpayReceiver.update({
       where: { id },

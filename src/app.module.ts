@@ -13,6 +13,8 @@ import { StellarModule } from './stellar/stellar.module';
 import { HealthModule } from './health/health.module';
 import { PaymentIntentsModule } from './payment-intents/payment-intents.module';
 import { SwapsModule } from './swaps/swaps.module';
+import { LiquidityPoolsModule } from './liquidity-pools/liquidity-pools.module';
+import { ObserverModule } from './observer/observer.module';
 import { WebhooksModule } from './webhooks/webhooks.module';
 import { AnalyticsModule } from './analytics/analytics.module';
 import { AdminModule } from './admin/admin.module';
@@ -38,6 +40,10 @@ import { OfframpModule } from './offramp/offramp.module';
     HealthModule,
     PaymentIntentsModule,
     SwapsModule,
+    LiquidityPoolsModule,
+    // Background reconciler: flips swaps/LP ops to SUCCEEDED/FAILED/EXPIRED by
+    // checking their txHash on Horizon, even when the customer self-broadcasts.
+    ObserverModule,
     WebhooksModule,
     AnalyticsModule,
     AdminModule,

@@ -20,7 +20,9 @@ export function toStroops(amount: string): bigint {
   const fracPadded = frac.padEnd(DECIMALS, '0');
   const stroops = BigInt(whole) * STROOP + BigInt(fracPadded);
   if (stroops > MAX_STROOPS) {
-    throw new RangeError(`Amount "${amount}" exceeds the maximum Stellar amount`);
+    throw new RangeError(
+      `Amount "${amount}" exceeds the maximum Stellar amount`,
+    );
   }
   return stroops;
 }
@@ -42,7 +44,9 @@ export function fromStroops(stroops: bigint): string {
  */
 export function computeFee(sendStroops: bigint, feeBps: number): bigint {
   if (!Number.isInteger(feeBps) || feeBps < 0 || feeBps > 10_000) {
-    throw new RangeError(`feeBps must be an integer in [0, 10000], got ${feeBps}`);
+    throw new RangeError(
+      `feeBps must be an integer in [0, 10000], got ${feeBps}`,
+    );
   }
   return (sendStroops * BigInt(feeBps)) / 10_000n;
 }
@@ -52,8 +56,15 @@ export function computeFee(sendStroops: bigint, feeBps: number): bigint {
  * rounded down. This becomes the path payment's `destMin`, so the swap reverts
  * on-chain rather than delivering less than the caller agreed to accept.
  */
-export function applySlippage(estimateStroops: bigint, slippageBps: number): bigint {
-  if (!Number.isInteger(slippageBps) || slippageBps < 0 || slippageBps > 10_000) {
+export function applySlippage(
+  estimateStroops: bigint,
+  slippageBps: number,
+): bigint {
+  if (
+    !Number.isInteger(slippageBps) ||
+    slippageBps < 0 ||
+    slippageBps > 10_000
+  ) {
     throw new RangeError(
       `slippageBps must be an integer in [0, 10000], got ${slippageBps}`,
     );
