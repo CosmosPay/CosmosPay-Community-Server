@@ -12,7 +12,9 @@ import {
 import { WebhookEventType } from '../../../generated/prisma/client';
 
 export class UpdateWebhookEndpointDto {
-  @ApiPropertyOptional({ example: 'https://integrator.example.com/webhooks/cosmos' })
+  @ApiPropertyOptional({
+    example: 'https://integrator.example.com/webhooks/cosmos',
+  })
   @IsOptional()
   @IsUrl({ require_tld: false, require_protocol: true })
   url?: string;
@@ -23,7 +25,9 @@ export class UpdateWebhookEndpointDto {
   @MaxLength(255)
   description?: string;
 
-  @ApiPropertyOptional({ description: 'Pause/resume deliveries to this endpoint.' })
+  @ApiPropertyOptional({
+    description: 'Pause/resume deliveries to this endpoint.',
+  })
   @IsOptional()
   @IsBoolean()
   enabled?: boolean;

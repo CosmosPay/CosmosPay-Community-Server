@@ -1,4 +1,8 @@
-import { INestApplication, ValidationPipe, VersioningType } from '@nestjs/common';
+import {
+  INestApplication,
+  ValidationPipe,
+  VersioningType,
+} from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { AppModule } from '../src/app.module';
@@ -20,7 +24,9 @@ describe('Webhooks CRUD (e2e)', () => {
     $disconnect: jest.fn(),
     $transaction: (ops: Promise<unknown>[]) => Promise.all(ops),
     consumer: {
-      upsert: jest.fn().mockResolvedValue({ id: 'c1', apisixUsername: 'cosmos_u1' }),
+      upsert: jest
+        .fn()
+        .mockResolvedValue({ id: 'c1', apisixUsername: 'cosmos_u1' }),
     },
     webhookEndpoint: {
       create: jest.fn(({ data }: any) => {
@@ -65,7 +71,11 @@ describe('Webhooks CRUD (e2e)', () => {
     app = moduleRef.createNestApplication();
     app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
     app.useGlobalPipes(
-      new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }),
+      new ValidationPipe({
+        whitelist: true,
+        forbidNonWhitelisted: true,
+        transform: true,
+      }),
     );
     await app.init();
   });
@@ -77,12 +87,17 @@ describe('Webhooks CRUD (e2e)', () => {
   const http = () => app.getHttpServer();
   const route = '/v1/webhooks';
   const gw = (r: request.Test) =>
-    r.set('x-gateway-secret', 'topsecret').set('x-consumer-username', 'cosmos_u1');
+    r
+      .set('x-gateway-secret', 'topsecret')
+      .set('x-consumer-username', 'cosmos_u1');
 
   let id: string;
 
   it('rejects creation without the gateway secret (403)', () =>
-    request(http()).post(route).send({ url: 'https://x.example.com/h' }).expect(403));
+    request(http())
+      .post(route)
+      .send({ url: 'https://x.example.com/h' })
+      .expect(403));
 
   it('rejects an invalid url (400)', () =>
     gw(request(http()).post(route).send({ url: 'not-a-url' })).expect(400));
@@ -91,7 +106,10 @@ describe('Webhooks CRUD (e2e)', () => {
     const res = await gw(
       request(http())
         .post(route)
-        .send({ url: 'https://integrator.example.com/hook', eventTypes: ['PAYMENT_INTENT_CREATED'] }),
+        .send({
+          url: 'https://integrator.example.com/hook',
+          eventTypes: ['PAYMENT_INTENT_CREATED'],
+        }),
     ).expect(201);
     expect(res.body.id).toBeDefined();
     expect(res.body.secret).toMatch(/^whsec_/);
@@ -114,13 +132,19 @@ describe('Webhooks CRUD (e2e)', () => {
   });
 
   it('rotates the secret (200) returning a new secret', async () => {
-    const res = await gw(request(http()).post(`${route}/${id}/rotate-secret`)).expect(201);
+    const res = await gw(
+      request(http()).post(`${route}/${id}/rotate-secret`),
+    ).expect(201);
     expect(res.body.secret).toMatch(/^whsec_/);
   });
 
   it('pings the endpoint (mocked fetch → ok)', async () => {
-    global.fetch = jest.fn().mockResolvedValue({ ok: true, status: 200 }) as any;
-    const res = await gw(request(http()).post(`${route}/${id}/ping`)).expect(201);
+    global.fetch = jest
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200 }) as any;
+    const res = await gw(request(http()).post(`${route}/${id}/ping`)).expect(
+      201,
+    );
     expect(res.body.ok).toBe(true);
     expect(res.body.responseStatus).toBe(200);
   });

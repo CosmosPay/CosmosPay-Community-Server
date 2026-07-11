@@ -92,7 +92,9 @@ export class WebhooksService {
       where: { id },
       data: {
         ...(dto.url !== undefined ? { url: dto.url } : {}),
-        ...(dto.description !== undefined ? { description: dto.description } : {}),
+        ...(dto.description !== undefined
+          ? { description: dto.description }
+          : {}),
         ...(dto.enabled !== undefined ? { enabled: dto.enabled } : {}),
         ...(dto.eventTypes !== undefined ? { eventTypes: dto.eventTypes } : {}),
       },
@@ -130,7 +132,12 @@ export class WebhooksService {
     consumer: GatewayConsumer,
     id: string,
     query: QueryDeliveriesDto,
-  ): Promise<{ data: WebhookDelivery[]; total: number; take: number; skip: number }> {
+  ): Promise<{
+    data: WebhookDelivery[];
+    total: number;
+    take: number;
+    skip: number;
+  }> {
     await this.getOwned(consumer, id);
     const where = {
       endpointId: id,
@@ -168,7 +175,11 @@ export class WebhooksService {
   async ping(
     consumer: GatewayConsumer,
     id: string,
-  ): Promise<{ ok: boolean; responseStatus: number | null; error: string | null }> {
+  ): Promise<{
+    ok: boolean;
+    responseStatus: number | null;
+    error: string | null;
+  }> {
     const endpoint = await this.getOwned(consumer, id);
     return this.dispatcher.pingEndpoint(endpoint);
   }

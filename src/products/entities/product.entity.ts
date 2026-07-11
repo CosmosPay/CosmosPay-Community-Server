@@ -13,7 +13,10 @@ export class ProductEntity {
   @ApiProperty({ nullable: true, example: '49.00' })
   amount!: string | null;
 
-  @ApiProperty({ example: 'native', description: 'Asset code, or "native" for XLM.' })
+  @ApiProperty({
+    example: 'native',
+    description: 'Asset code, or "native" for XLM.',
+  })
   asset!: string;
 
   @ApiProperty({ example: 'one_time', enum: ['recurring', 'one_time', 'link'] })

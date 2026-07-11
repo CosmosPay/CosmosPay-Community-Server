@@ -29,6 +29,13 @@ model Consumer {
   webhookEndpoints WebhookEndpoint[]
   products         Product[]
   customers        Customer[]
+  swaps            Swap[]
+  liquidityOps     LiquidityPoolOperation[]
+
+  // BlindPay (onramp/offramp/KYC) resources mirrored from the provider.
+  blindpayReceivers BlindpayReceiver[]
+  payins            Payin[]
+  payouts           Payout[]
 
   @@map("consumer")
 }
@@ -110,6 +117,27 @@ enum WebhookEventType {
   PAYMENT_INTENT_FAILED
   PAYMENT_INTENT_CANCELLED
   PAYMENT_INTENT_DELETED
+
+  // BlindPay-sourced events re-emitted to integrators after we sync state.
+  RECEIVER_UPDATED
+  PAYIN_CREATED
+  PAYIN_UPDATED
+  PAYIN_COMPLETED
+  PAYOUT_CREATED
+  PAYOUT_UPDATED
+  PAYOUT_COMPLETED
+
+  // Stellar native swaps (path-payment based asset exchange).
+  SWAP_CREATED
+  SWAP_SUBMITTED
+  SWAP_SUCCEEDED
+  SWAP_FAILED
+
+  // Stellar AMM liquidity pool operations (deposit / withdraw).
+  LIQUIDITY_CREATED
+  LIQUIDITY_SUBMITTED
+  LIQUIDITY_SUCCEEDED
+  LIQUIDITY_FAILED
 }
 
 enum WebhookDeliveryStatus {
@@ -231,4 +259,345 @@ model PaymentIntent {
   @@index([consumerId])
   @@index([status])
   @@map("payment_intent")
+}
+
+// ---------------------------------------------------------------------------
+// BlindPay (fiat <-> stablecoin rails): onramp / offramp / KYC.
+//
+// We run a single platform BlindPay instance (one API key + instance id in env)
+// and mirror the provider's resources here, each scoped to the APISIX consumer
+// that created it. Status/type/rail/network/token are stored as free-form
+// strings (like Product.kind) so new provider values never require a migration.
+// `raw` keeps the last full provider payload for audit/debugging.
+// ---------------------------------------------------------------------------
+
+// A KYC/KYB entity at BlindPay (their `receiver`/`customer`, id `re_...`).
+// Every end user transacting through the rails must exist as a receiver.
+model BlindpayReceiver {
+  id          String   @id @default(cuid())
+  consumerId  String
+  consumer    Consumer @relation(fields: [consumerId], references: [id], onDelete: Cascade)
+
+  // BlindPay receiver id (`re_...`).
+  blindpayId  String
+  // 'individual' | 'business'.
+  type        String
+  // 'light' | 'standard' | 'enhanced'.
+  kycType     String?
+  // BlindPay KYC status. Receivers start as 'inactive' (created locally, not yet at
+  // BlindPay) until the terms-of-service are accepted and the receiver is enabled,
+  // at which point this becomes BlindPay's real status — see ReceiversService.
+  kycStatus   String?
+  email       String?
+  name        String?
+  country     String?
+  externalId  String?
+  reference   String? // optional merchant reference
+
+  // Last time a terms-of-service link was emailed for this receiver — rate limits the
+  // "email me the ToS" action to at most once per day.
+  tosSentAt   DateTime?
+
+  // Owner/admin kill-switch for this fiat account: when true the receiver cannot be
+  // used for onramp/offramp (quotes, payins, payouts, new wallets/bank accounts are
+  // refused) regardless of its BlindPay KYC status. Toggled by a platform owner/admin.
+  disabled    Boolean   @default(false)
+
+  raw         Json?
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  blockchainWallets BlindpayBlockchainWallet[]
+  bankAccounts      BlindpayBankAccount[]
+  virtualAccounts   BlindpayVirtualAccount[]
+  payins            Payin[]
+  payouts           Payout[]
+
+  @@unique([consumerId, blindpayId])
+  @@index([consumerId])
+  @@map("blindpay_receiver")
+}
+
+// A receiver's blockchain wallet at BlindPay (id `bw_...`). Destination for
+// onramp (minted stablecoin) and source for offramp.
+model BlindpayBlockchainWallet {
+  id          String           @id @default(cuid())
+  consumerId  String
+  receiverId  String
+  receiver    BlindpayReceiver @relation(fields: [receiverId], references: [id], onDelete: Cascade)
+
+  blindpayId  String // `bw_...`
+  name        String?
+  network     String
+  address     String?
+  isAccountAbstraction Boolean @default(false)
+
+  raw         Json?
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([consumerId, blindpayId])
+  @@index([consumerId])
+  @@index([receiverId])
+  @@map("blindpay_blockchain_wallet")
+}
+
+// A receiver's fiat bank account at BlindPay (id `ba_...`). Destination for
+// offramp payouts. `rail` is the BlindPay rail/type (ach, wire, pix, spei, ...).
+model BlindpayBankAccount {
+  id          String           @id @default(cuid())
+  consumerId  String
+  receiverId  String
+  receiver    BlindpayReceiver @relation(fields: [receiverId], references: [id], onDelete: Cascade)
+
+  blindpayId  String // `ba_...`
+  rail        String?
+  name        String?
+  country     String?
+
+  raw         Json?
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([consumerId, blindpayId])
+  @@index([consumerId])
+  @@index([receiverId])
+  @@map("blindpay_bank_account")
+}
+
+// A dedicated fiat account (id `va_...`) that auto-converts incoming fiat into
+// stablecoin to the linked blockchain wallet — onramp infrastructure.
+model BlindpayVirtualAccount {
+  id                 String           @id @default(cuid())
+  consumerId         String
+  receiverId         String
+  receiver           BlindpayReceiver @relation(fields: [receiverId], references: [id], onDelete: Cascade)
+
+  blindpayId         String // `va_...`
+  blockchainWalletId String?
+  token              String?
+  status             String?
+
+  raw                Json?
+
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@unique([consumerId, blindpayId])
+  @@index([consumerId])
+  @@index([receiverId])
+  @@map("blindpay_virtual_account")
+}
+
+// Onramp (fiat -> stablecoin). Created from a payin quote; carries the payment
+// instructions the payer follows (memo/CLABE/PIX/CBU/PSE/bank details).
+model Payin {
+  id             String           @id @default(cuid())
+  consumerId     String
+  consumer       Consumer         @relation(fields: [consumerId], references: [id], onDelete: Cascade)
+  receiverId     String?
+  receiver       BlindpayReceiver? @relation(fields: [receiverId], references: [id], onDelete: SetNull)
+
+  blindpayId     String // `pi_...`
+  quoteId        String?
+  status         String?
+  token          String?
+  network        String?
+  paymentMethod  String? // rail used to pay in
+  currency       String?
+  senderAmount   String?
+  receiverAmount String?
+  // Provider-supplied instructions the payer follows to fund the payin.
+  instructions   Json?
+
+  raw            Json?
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([consumerId, blindpayId])
+  @@index([consumerId])
+  @@index([receiverId])
+  @@index([status])
+  @@map("payin")
+}
+
+// Offramp (stablecoin -> fiat). Created from a payout quote; the customer signs
+// the on-chain transfer (we never hold keys), funds settle to a bank account.
+model Payout {
+  id                  String           @id @default(cuid())
+  consumerId          String
+  consumer            Consumer         @relation(fields: [consumerId], references: [id], onDelete: Cascade)
+  receiverId          String?
+  receiver            BlindpayReceiver? @relation(fields: [receiverId], references: [id], onDelete: SetNull)
+
+  blindpayId          String // `pa_...`
+  quoteId             String?
+  status              String?
+  token               String?
+  network             String?
+  rail                String?
+  bankAccountId       String?
+  senderAmount        String?
+  receiverAmount      String?
+  senderWalletAddress String?
+
+  raw                 Json?
+
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@unique([consumerId, blindpayId])
+  @@index([consumerId])
+  @@index([receiverId])
+  @@index([status])
+  @@map("payout")
+}
+
+// ---------------------------------------------------------------------------
+// Stellar native swaps (asset exchange via path payments).
+//
+// Stellar has no "swap" primitive — asset exchange is a `PathPaymentStrictSend`
+// operation that routes through the DEX order books and AMM liquidity pools to
+// the best available path. This service is **non-custodial**: it only quotes,
+// assembles the unsigned transaction (a platform fee payment + the path payment)
+// and submits the signed transaction the customer hands back. Funds never pass
+// through Cosmos Pay. Scoped to the APISIX consumer like every other resource.
+// ---------------------------------------------------------------------------
+enum SwapStatus {
+  PENDING // built, unsigned XDR handed to the customer
+  SUBMITTED // a signed tx was submitted to the network
+  SUCCEEDED // confirmed on the Stellar network
+  FAILED // rejected / errored on the network
+  EXPIRED // tx time bounds elapsed before submission
+}
+
+model Swap {
+  id          String     @id @default(cuid())
+  consumerId  String
+  consumer    Consumer   @relation(fields: [consumerId], references: [id], onDelete: Cascade)
+
+  network     String // 'public' | 'testnet'
+  // Account paying (and signing) the swap.
+  source      String
+  // Account credited the destination asset (defaults to `source` — a self-swap).
+  destination String
+
+  // Source side (asset sold). `sendAmount` is the gross input; the platform fee
+  // is deducted from it and `swapAmount` (= sendAmount - feeAmount) is routed.
+  sendAsset       String  @default("native") // asset code, or "native" for XLM
+  sendAssetIssuer String?
+  sendAmount      String
+  feeAmount       String
+  feeBps          Int
+  swapAmount      String
+
+  // Destination side (asset bought). `destEstimated` is the quote at build time;
+  // `destMin` is the slippage-protected minimum enforced on-chain (destMin).
+  destAsset       String  @default("native")
+  destAssetIssuer String?
+  destEstimated   String
+  destMin         String
+  slippageBps     Int
+  // Intermediate hops chosen by the path search: [{ code, issuer }] (or empty).
+  path            Json
+
+  // Optional MEMO_ID echoed on-chain for the merchant's own reconciliation.
+  memo        String?
+
+  status      SwapStatus @default(PENDING)
+  // Unsigned transaction envelope + its SEP-7 `tx` deep link. QR derived on read.
+  xdr         String
+  uri         String
+  // Deterministic transaction hash (computed at build, verified on submit).
+  txHash      String
+
+  expiresAt   DateTime?
+
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  @@index([consumerId])
+  @@index([status])
+  @@index([txHash])
+  @@map("swap")
+}
+
+// ---------------------------------------------------------------------------
+// Stellar AMM liquidity pool operations. Like swaps, these are non-custodial:
+// the service prices the deposit/withdraw against the pool's on-chain reserves,
+// builds the unsigned transaction (changeTrust for the pool share if needed +
+// liquidityPoolDeposit/liquidityPoolWithdraw) and relays the signed envelope
+// the customer hands back. Reuses SwapStatus — the lifecycle is identical.
+// ---------------------------------------------------------------------------
+enum LiquidityOperationKind {
+  DEPOSIT
+  WITHDRAW
+}
+
+model LiquidityPoolOperation {
+  id         String                 @id @default(cuid())
+  consumerId String
+  consumer   Consumer               @relation(fields: [consumerId], references: [id], onDelete: Cascade)
+
+  kind       LiquidityOperationKind
+  network    String // 'public' | 'testnet'
+  // Account paying for (and signing) the operation.
+  source     String
+  // Stellar liquidity pool id (64-char hex).
+  poolId     String
+
+  // The pool's constituent assets in canonical (protocol) order: A < B.
+  assetA       String  @default("native")
+  assetAIssuer String?
+  assetB       String  @default("native")
+  assetBIssuer String?
+
+  // DEPOSIT: maxAmountA/maxAmountB caps + minPrice/maxPrice bounds (A/B ratio).
+  // WITHDRAW: shares burned + amountA/amountB as slippage-protected minimums.
+  amountA  String
+  amountB  String
+  shares   String?
+  minPrice String?
+  maxPrice String?
+
+  slippageBps Int
+
+  // Platform (plan) commission. Charged ONLY on WITHDRAW, and only on the
+  // *gain* (redeemed − proportional cost basis), never on the principal — so
+  // deposits carry no commission (feeBps 0, feeWallet null). feeAmountA/B are
+  // the commission paid to feeWallet out of each just-withdrawn reserve.
+  feeBps      Int     @default(0)
+  feeAmountA  String  @default("0")
+  feeAmountB  String  @default("0")
+  feeWallet   String?
+
+  // Cost basis, captured from the on-chain `liquidity_pool_deposited` effect
+  // once a DEPOSIT settles (null until then / for withdrawals). Used to work out
+  // the gain a later withdraw is taxed on (average-cost across our deposits).
+  sharesReceived String?
+  settledAmountA String?
+  settledAmountB String?
+
+  status SwapStatus @default(PENDING)
+
+  // Unsigned transaction envelope + its SEP-7 `tx` deep link. QR derived on read.
+  xdr    String
+  uri    String
+  // Deterministic transaction hash (computed at build, verified on submit).
+  txHash String
+
+  expiresAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([consumerId])
+  @@index([status])
+  @@index([txHash])
+  @@index([poolId])
+  @@map("liquidity_pool_operation")
 }

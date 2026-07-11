@@ -1,4 +1,8 @@
-import { INestApplication, ValidationPipe, VersioningType } from '@nestjs/common';
+import {
+  INestApplication,
+  ValidationPipe,
+  VersioningType,
+} from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { AppModule } from '../src/app.module';
@@ -30,7 +34,9 @@ describe('APISIX gateway validation (e2e)', () => {
 
     app = moduleRef.createNestApplication();
     app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
-    app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
+    app.useGlobalPipes(
+      new ValidationPipe({ whitelist: true, transform: true }),
+    );
     await app.init();
   });
 
@@ -45,7 +51,11 @@ describe('APISIX gateway validation (e2e)', () => {
     request(http()).post(route).send({}).expect(403));
 
   it('rejects requests with a wrong gateway secret (403)', () =>
-    request(http()).post(route).set('x-gateway-secret', 'nope').send({}).expect(403));
+    request(http())
+      .post(route)
+      .set('x-gateway-secret', 'nope')
+      .send({})
+      .expect(403));
 
   it('rejects valid secret without an authenticated consumer (401)', () =>
     request(http())

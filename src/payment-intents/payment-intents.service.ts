@@ -7,7 +7,12 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { Asset, Memo, Operation, TransactionBuilder } from '@stellar/stellar-sdk';
+import {
+  Asset,
+  Memo,
+  Operation,
+  TransactionBuilder,
+} from '@stellar/stellar-sdk';
 import { randomBytes } from 'node:crypto';
 import QRCode from 'qrcode';
 import { AppConfig, StellarNetwork } from '../config/configuration';
@@ -111,13 +116,20 @@ export class PaymentIntentsService {
    * any other code requires an issuer. Returns both the stored representation
    * and the SDK Asset for building transactions.
    */
-  private resolveAsset(assetCode?: string, assetIssuer?: string): {
+  private resolveAsset(
+    assetCode?: string,
+    assetIssuer?: string,
+  ): {
     code: string;
     issuer: string | null;
     asset: Asset;
   } {
     const code = assetCode?.trim();
-    if (!code || code.toLowerCase() === 'xlm' || code.toLowerCase() === 'native') {
+    if (
+      !code ||
+      code.toLowerCase() === 'xlm' ||
+      code.toLowerCase() === 'native'
+    ) {
       return { code: 'native', issuer: null, asset: Asset.native() };
     }
     if (!assetIssuer) {
@@ -228,7 +240,8 @@ export class PaymentIntentsService {
       xdr,
       uri,
     });
-    if (!intent) return this.withQr((await this.findByMemo(localConsumer.id, memo))!);
+    if (!intent)
+      return this.withQr((await this.findByMemo(localConsumer.id, memo))!);
 
     this.logger.log(
       `Created TX payment intent ${intent.id}: ${dto.amount} ` +
@@ -283,7 +296,8 @@ export class PaymentIntentsService {
       xdr: null,
       uri,
     });
-    if (!intent) return this.withQr((await this.findByMemo(localConsumer.id, memo))!);
+    if (!intent)
+      return this.withQr((await this.findByMemo(localConsumer.id, memo))!);
 
     this.logger.log(
       `Created PAY payment intent ${intent.id}: ${dto.amount ?? '(open)'} ` +
@@ -302,7 +316,9 @@ export class PaymentIntentsService {
     data: Parameters<PrismaService['paymentIntent']['create']>[0]['data'],
   ): Promise<PaymentIntent | null> {
     // Stamp the lifetime so the observer can expire unpaid intents.
-    const ttlSeconds = this.config.get('paymentIntents', { infer: true }).ttlSeconds;
+    const ttlSeconds = this.config.get('paymentIntents', {
+      infer: true,
+    }).ttlSeconds;
     const withTtl = {
       ...data,
       expiresAt: data.expiresAt ?? new Date(Date.now() + ttlSeconds * 1000),
@@ -319,7 +335,12 @@ export class PaymentIntentsService {
   async findAll(
     consumer: GatewayConsumer,
     query: QueryPaymentIntentsDto,
-  ): Promise<{ data: PaymentIntent[]; total: number; take: number; skip: number }> {
+  ): Promise<{
+    data: PaymentIntent[];
+    total: number;
+    take: number;
+    skip: number;
+  }> {
     const where = {
       consumer: { apisixUsername: consumer.username },
       ...(query.status ? { status: query.status } : {}),
@@ -399,12 +420,12 @@ export class PaymentIntentsService {
       select: { status: true },
     });
     if (existing?.status === 'SUCCEEDED') {
-      throw new BadRequestException(
-        'A paid payment intent cannot be deleted.',
-      );
+      throw new BadRequestException('A paid payment intent cannot be deleted.');
     }
     const deleted = await this.prisma.paymentIntent.delete({ where: { id } });
-    this.logger.log(`Deleted payment intent ${id} (consumer=${consumer.username})`);
+    this.logger.log(
+      `Deleted payment intent ${id} (consumer=${consumer.username})`,
+    );
     this.emit(consumer.username, 'PAYMENT_INTENT_DELETED', deleted);
     return { id, deleted: true };
   }
@@ -456,7 +477,11 @@ export class PaymentIntentsService {
 
     // Transaction exists but failed on-chain → settle as FAILED.
     if (result.reason === 'Transaction failed on-chain') {
-      const updated = await this.markFailed(intent.id, consumer.username, txHash);
+      const updated = await this.markFailed(
+        intent.id,
+        consumer.username,
+        txHash,
+      );
       return {
         valid: false,
         status: 'FAILED',

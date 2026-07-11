@@ -24,6 +24,9 @@ export class ApisixContextMiddleware implements NestMiddleware {
       environmentHeader,
       roleHeader,
       permissionsHeader,
+      organizationHeader,
+      planHeader,
+      swapFeeBpsHeader,
     } = this.config.get('apisix', { infer: true });
 
     const username = this.firstHeader(req, consumerHeader);
@@ -35,6 +38,11 @@ export class ApisixContextMiddleware implements NestMiddleware {
     const permissions = this.parsePermissions(
       this.firstHeader(req, permissionsHeader),
     );
+    const organizationId = this.firstHeader(req, organizationHeader) ?? null;
+    const plan = this.firstHeader(req, planHeader) ?? null;
+    const planSwapFeeBps = this.parseFeeBps(
+      this.firstHeader(req, swapFeeBpsHeader),
+    );
 
     if (username) {
       const consumer: GatewayConsumer = {
@@ -43,11 +51,26 @@ export class ApisixContextMiddleware implements NestMiddleware {
         environment,
         role,
         permissions,
+        organizationId,
+        plan,
+        planSwapFeeBps,
       };
       req.gatewayConsumer = consumer;
     }
 
     next();
+  }
+
+  /**
+   * Parses the plan's swap commission (basis points) the gateway injects per
+   * organization. Returns null when absent/invalid so the service falls back to
+   * its configured default (local dev). Clamped to a sane [0, 10000] range.
+   */
+  private parseFeeBps(raw?: string): number | null {
+    if (raw === undefined) return null;
+    const n = Number(raw);
+    if (!Number.isInteger(n) || n < 0 || n > 10000) return null;
+    return n;
   }
 
   /** Normalizes the forwarded API key role to 'admin' | 'user' | null. */

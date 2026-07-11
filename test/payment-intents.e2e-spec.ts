@@ -1,4 +1,8 @@
-import { INestApplication, ValidationPipe, VersioningType } from '@nestjs/common';
+import {
+  INestApplication,
+  ValidationPipe,
+  VersioningType,
+} from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { Account, Horizon, Keypair } from '@stellar/stellar-sdk';
 import request from 'supertest';
@@ -27,7 +31,9 @@ describe('Payment intents CRUD (e2e)', () => {
     $disconnect: jest.fn(),
     $transaction: (ops: Promise<unknown>[]) => Promise.all(ops),
     consumer: {
-      upsert: jest.fn().mockResolvedValue({ id: 'c1', apisixUsername: 'cosmos_u1' }),
+      upsert: jest
+        .fn()
+        .mockResolvedValue({ id: 'c1', apisixUsername: 'cosmos_u1' }),
     },
     // The webhook dispatcher reacts to emitted events; no endpoints registered here.
     webhookEndpoint: { findMany: jest.fn().mockResolvedValue([]) },
@@ -77,14 +83,23 @@ describe('Payment intents CRUD (e2e)', () => {
     // with the matching id memo.
     jest.spyOn(Horizon.Server.prototype, 'transactions').mockReturnValue({
       transaction: () => ({
-        call: async () => ({ successful: true, memo_type: 'id', memo: '123456789' }),
+        call: async () => ({
+          successful: true,
+          memo_type: 'id',
+          memo: '123456789',
+        }),
       }),
     } as never);
     jest.spyOn(Horizon.Server.prototype, 'payments').mockReturnValue({
       forTransaction: () => ({
         call: async () => ({
           records: [
-            { type: 'payment', asset_type: 'native', to: destination, amount: '25.5000000' },
+            {
+              type: 'payment',
+              asset_type: 'native',
+              to: destination,
+              amount: '25.5000000',
+            },
           ],
         }),
       }),
@@ -98,7 +113,11 @@ describe('Payment intents CRUD (e2e)', () => {
     app = moduleRef.createNestApplication();
     app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
     app.useGlobalPipes(
-      new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }),
+      new ValidationPipe({
+        whitelist: true,
+        forbidNonWhitelisted: true,
+        transform: true,
+      }),
     );
     await app.init();
   });
@@ -112,19 +131,30 @@ describe('Payment intents CRUD (e2e)', () => {
   const txRoute = `${route}/tx`;
   const payRoute = `${route}/pay`;
   const gw = (r: request.Test) =>
-    r.set('x-gateway-secret', 'topsecret').set('x-consumer-username', 'cosmos_u1');
+    r
+      .set('x-gateway-secret', 'topsecret')
+      .set('x-consumer-username', 'cosmos_u1');
 
   let createdId: string;
 
   it('rejects creation without the gateway secret (403)', () =>
-    request(http()).post(txRoute).send({ source, destination, amount: '25.5' }).expect(403));
+    request(http())
+      .post(txRoute)
+      .send({ source, destination, amount: '25.5' })
+      .expect(403));
 
   it('rejects an invalid Stellar address (400)', () =>
-    gw(request(http()).post(txRoute).send({ source: 'bad', destination, amount: '1' })).expect(400));
+    gw(
+      request(http())
+        .post(txRoute)
+        .send({ source: 'bad', destination, amount: '1' }),
+    ).expect(400));
 
   it('creates a TX intent (201) with xdr + tx URI', async () => {
     const res = await gw(
-      request(http()).post(txRoute).send({ source, destination, amount: '25.5', memo: '123456789' }),
+      request(http())
+        .post(txRoute)
+        .send({ source, destination, amount: '25.5', memo: '123456789' }),
     ).expect(201);
 
     expect(res.body.id).toBeDefined();
@@ -140,7 +170,9 @@ describe('Payment intents CRUD (e2e)', () => {
 
   it('auto-generates a numeric MEMO_ID when none is provided', async () => {
     const res = await gw(
-      request(http()).post(txRoute).send({ source, destination, amount: '1.5' }),
+      request(http())
+        .post(txRoute)
+        .send({ source, destination, amount: '1.5' }),
     ).expect(201);
     expect(res.body.memo).toMatch(/^\d+$/);
   });
@@ -148,10 +180,14 @@ describe('Payment intents CRUD (e2e)', () => {
   it('is idempotent per (consumer, memo) — same memo returns the same intent', async () => {
     const memo = '5550001';
     const first = await gw(
-      request(http()).post(txRoute).send({ source, destination, amount: '2', memo }),
+      request(http())
+        .post(txRoute)
+        .send({ source, destination, amount: '2', memo }),
     ).expect(201);
     const second = await gw(
-      request(http()).post(txRoute).send({ source, destination, amount: '999', memo }),
+      request(http())
+        .post(txRoute)
+        .send({ source, destination, amount: '999', memo }),
     ).expect(201);
     expect(second.body.id).toBe(first.body.id);
     expect(second.body.amount).toBe('2'); // original wins
@@ -169,7 +205,9 @@ describe('Payment intents CRUD (e2e)', () => {
 
   it('creates a PAY intent (201) with pay URI, no xdr', async () => {
     const res = await gw(
-      request(http()).post(payRoute).send({ destination, amount: '10', memo: '777' }),
+      request(http())
+        .post(payRoute)
+        .send({ destination, amount: '10', memo: '777' }),
     ).expect(201);
     expect(res.body.kind).toBe('PAY');
     expect(res.body.xdr).toBeNull();
@@ -188,11 +226,15 @@ describe('Payment intents CRUD (e2e)', () => {
 
   it('rejects a non-native asset without an issuer (400)', () =>
     gw(
-      request(http()).post(payRoute).send({ destination, amount: '5', assetCode: 'USDC' }),
+      request(http())
+        .post(payRoute)
+        .send({ destination, amount: '5', assetCode: 'USDC' }),
     ).expect(400));
 
   it('rejects a TX without amount (400)', () =>
-    gw(request(http()).post(txRoute).send({ source, destination })).expect(400));
+    gw(request(http()).post(txRoute).send({ source, destination })).expect(
+      400,
+    ));
 
   it('lists the consumer payment intents (200)', async () => {
     const res = await gw(request(http()).get(route)).expect(200);
@@ -201,7 +243,9 @@ describe('Payment intents CRUD (e2e)', () => {
   });
 
   it('gets one by id (200)', async () => {
-    const res = await gw(request(http()).get(`${route}/${createdId}`)).expect(200);
+    const res = await gw(request(http()).get(`${route}/${createdId}`)).expect(
+      200,
+    );
     expect(res.body.id).toBe(createdId);
     expect(res.body.qr).toContain('data:image/png;base64,');
   });
@@ -217,7 +261,9 @@ describe('Payment intents CRUD (e2e)', () => {
   });
 
   it('404s an update on an unknown id', () =>
-    gw(request(http()).patch(`${route}/nope`).send({ status: 'FAILED' })).expect(404));
+    gw(
+      request(http()).patch(`${route}/nope`).send({ status: 'FAILED' }),
+    ).expect(404));
 
   it('validates a submitted tx and finalizes the intent (SUCCEEDED)', async () => {
     const res = await gw(
@@ -233,7 +279,9 @@ describe('Payment intents CRUD (e2e)', () => {
 
   it('rejects validation with a malformed txHash (400)', () =>
     gw(
-      request(http()).post(`${route}/${createdId}/validate`).send({ txHash: 'short' }),
+      request(http())
+        .post(`${route}/${createdId}/validate`)
+        .send({ txHash: 'short' }),
     ).expect(400));
 
   it('deletes one (200) and then 404s on read', async () => {

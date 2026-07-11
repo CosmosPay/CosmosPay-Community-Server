@@ -47,6 +47,18 @@ class EnvironmentVariables {
   APISIX_CREDENTIAL_HEADER?: string;
 
   @IsOptional()
+  @IsString()
+  APISIX_ORGANIZATION_HEADER?: string;
+
+  @IsOptional()
+  @IsString()
+  APISIX_PLAN_HEADER?: string;
+
+  @IsOptional()
+  @IsString()
+  APISIX_SWAP_FEE_BPS_HEADER?: string;
+
+  @IsOptional()
   @IsIn(['public', 'testnet'])
   STELLAR_NETWORK?: string;
 
@@ -62,6 +74,53 @@ class EnvironmentVariables {
   @IsInt()
   @Min(1)
   STELLAR_TX_TIMEOUT?: number;
+
+  // --- Stellar native swaps (path-payment asset exchange) ---
+  @IsOptional()
+  @IsString()
+  STELLAR_SWAP_FEE_WALLET?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(10000)
+  STELLAR_SWAP_FEE_BPS?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(10000)
+  STELLAR_SWAP_SLIPPAGE_BPS?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(10000)
+  STELLAR_SWAP_MAX_SLIPPAGE_BPS?: number;
+
+  // --- BlindPay (onramp / offramp / KYC rails) ---
+  // All optional: the service boots without them; the BlindPay client fails with
+  // a clear 503 only when a BlindPay-backed route is actually exercised.
+  @IsOptional()
+  @IsString()
+  BLINDPAY_API_KEY?: string;
+
+  @IsOptional()
+  @IsString()
+  BLINDPAY_INSTANCE_ID?: string;
+
+  @IsOptional()
+  @IsString()
+  BLINDPAY_BASE_URL?: string;
+
+  @IsOptional()
+  @IsString()
+  BLINDPAY_WEBHOOK_SECRET?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  BLINDPAY_TIMEOUT_MS?: number;
 }
 
 export function validateEnv(config: Record<string, unknown>) {

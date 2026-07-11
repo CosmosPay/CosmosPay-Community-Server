@@ -63,7 +63,8 @@ export class CreateTxPaymentIntentDto {
   memo?: string;
 
   @ApiPropertyOptional({
-    description: 'SEP-7 `msg`: shown to the user in their wallet (≤ 300 chars).',
+    description:
+      'SEP-7 `msg`: shown to the user in their wallet (≤ 300 chars).',
     example: 'Order #24',
   })
   @IsOptional()

@@ -33,7 +33,9 @@ export class CustomersController {
 
   @Get()
   @RequirePermissions('customers:read')
-  @ApiOperation({ summary: "List the consumer's customers (with payment stats)" })
+  @ApiOperation({
+    summary: "List the consumer's customers (with payment stats)",
+  })
   findAll(@CurrentConsumer() consumer: GatewayConsumer) {
     return this.customers.findAll(consumer);
   }

@@ -24,6 +24,24 @@ export interface GatewayConsumer {
    * Enforced by PermissionsGuard. Empty when none granted / not forwarded.
    */
   permissions: string[];
+  /**
+   * The organization the API key belongs to (X-Consumer-Org). Forwarded by the
+   * gateway; the client cannot set it. Swaps are attributed to it and its plan
+   * dictates the swap commission. Null when not forwarded (local dev).
+   */
+  organizationId: string | null;
+  /**
+   * The organization's plan tier (X-Consumer-Plan), e.g. `free` / `pro`. Forwarded
+   * by the gateway for attribution/logging. Null when not forwarded.
+   */
+  plan: string | null;
+  /**
+   * The swap commission (basis points) for the organization's plan
+   * (X-Plan-Swap-Fee-Bps). Forwarded by the gateway and derived server-side from
+   * the org's plan — it is NEVER a request parameter, so the rate cannot be
+   * bypassed. Null when not forwarded (local dev falls back to STELLAR_SWAP_FEE_BPS).
+   */
+  planSwapFeeBps: number | null;
 }
 
 declare module 'express' {

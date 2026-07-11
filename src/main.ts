@@ -12,6 +12,9 @@ import { setupSwagger } from './swagger';
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     bufferLogs: false,
+    // Capture the raw request body so the BlindPay webhook controller can verify
+    // the Svix signature against the exact bytes BlindPay signed.
+    rawBody: true,
   });
   const logger = new Logger('Bootstrap');
   const config = app.get(ConfigService<AppConfig, true>);
@@ -61,7 +64,9 @@ async function bootstrap(): Promise<void> {
   }
   if (docsEnabled) {
     logger.log(`  Swagger    http://localhost:${port}/docs`);
-    logger.log(`  OpenAPI    http://localhost:${port}/docs/json (json) · /docs/yaml (yaml)`);
+    logger.log(
+      `  OpenAPI    http://localhost:${port}/docs/json (json) · /docs/yaml (yaml)`,
+    );
   } else {
     logger.log('  Swagger UI is disabled (NODE_ENV=production)');
   }

@@ -23,7 +23,11 @@ export class ProductsService {
   /** Normalize the asset: no code (or XLM/native) → native lumens. */
   private resolveAsset(assetCode?: string): string {
     const code = assetCode?.trim();
-    if (!code || code.toLowerCase() === 'xlm' || code.toLowerCase() === 'native') {
+    if (
+      !code ||
+      code.toLowerCase() === 'xlm' ||
+      code.toLowerCase() === 'native'
+    ) {
       return 'native';
     }
     return code;
@@ -72,9 +76,13 @@ export class ProductsService {
       where: { id },
       data: {
         ...(dto.name !== undefined ? { name: dto.name } : {}),
-        ...(dto.description !== undefined ? { description: dto.description } : {}),
+        ...(dto.description !== undefined
+          ? { description: dto.description }
+          : {}),
         ...(dto.amount !== undefined ? { amount: dto.amount } : {}),
-        ...(dto.assetCode !== undefined ? { asset: this.resolveAsset(dto.assetCode) } : {}),
+        ...(dto.assetCode !== undefined
+          ? { asset: this.resolveAsset(dto.assetCode) }
+          : {}),
         ...(dto.kind !== undefined ? { kind: dto.kind } : {}),
         ...(dto.active !== undefined ? { active: dto.active } : {}),
         ...(dto.reference !== undefined ? { reference: dto.reference } : {}),

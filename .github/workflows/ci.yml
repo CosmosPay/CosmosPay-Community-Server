@@ -1,0 +1,43 @@
+name: CI
+
+# Build + test on every push and pull request. `npm run build` runs prisma generate
+# then nest build; the Jest suite runs against the compiled/generated client.
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build & test
+    runs-on: ubuntu-latest
+    env:
+      # prisma.config.ts requires DATABASE_URL to resolve at load time. `prisma generate`
+      # only does client codegen (no DB connection) and the tests mock external services,
+      # so a dummy URL is enough for CI. Set a repo Variable to override.
+      DATABASE_URL: ${{ vars.DATABASE_URL || 'postgresql://user:pass@localhost:5432/db' }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # prisma generate (-> generated/prisma) + nest build.
+      - name: Build
+        run: npm run build
+
+      # Jest unit/integration suite (no DB required — external services are mocked).
+      - name: Test
+        run: npm test

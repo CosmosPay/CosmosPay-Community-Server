@@ -39,13 +39,11 @@ describe('WebhookDispatcherService', () => {
 
   it('signs the payload and delivers to subscribed endpoints (SUCCEEDED)', async () => {
     const { service, prisma } = build();
-    const fetchMock = jest
-      .fn()
-      .mockResolvedValue({ ok: true, status: 200 });
+    const fetchMock = jest.fn().mockResolvedValue({ ok: true, status: 200 });
     global.fetch = fetchMock as any;
 
     await service.handleEvent(
-      new WebhookEventPayload('cosmos_u1', 'PAYMENT_INTENT_CREATED' as any, {
+      new WebhookEventPayload('cosmos_u1', 'PAYMENT_INTENT_CREATED', {
         id: 'pi_1',
       }),
     );
@@ -65,7 +63,10 @@ describe('WebhookDispatcherService', () => {
     expect(prisma.webhookDelivery.create).toHaveBeenCalledTimes(1);
     expect(prisma.webhookDelivery.update).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({ status: 'SUCCEEDED', responseStatus: 200 }),
+        data: expect.objectContaining({
+          status: 'SUCCEEDED',
+          responseStatus: 200,
+        }),
       }),
     );
   });
@@ -76,7 +77,7 @@ describe('WebhookDispatcherService', () => {
     global.fetch = fetchMock as any;
 
     await service.handleEvent(
-      new WebhookEventPayload('cosmos_u1', 'PAYMENT_INTENT_FAILED' as any, {
+      new WebhookEventPayload('cosmos_u1', 'PAYMENT_INTENT_FAILED', {
         id: 'pi_2',
       }),
     );
@@ -98,7 +99,7 @@ describe('WebhookDispatcherService', () => {
     global.fetch = fetchMock as any;
 
     await service.handleEvent(
-      new WebhookEventPayload('cosmos_u1', 'PAYMENT_INTENT_CREATED' as any, {
+      new WebhookEventPayload('cosmos_u1', 'PAYMENT_INTENT_CREATED', {
         id: 'pi_3',
       }),
     );

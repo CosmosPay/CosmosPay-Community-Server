@@ -24,7 +24,8 @@ export class CreateProductDto {
 
   @ApiPropertyOptional({
     example: '49.00',
-    description: 'Decimal price (≤ 7 decimals). Omit for a customer-set amount.',
+    description:
+      'Decimal price (≤ 7 decimals). Omit for a customer-set amount.',
   })
   @IsOptional()
   @Matches(/^\d+(\.\d{1,7})?$/, {
@@ -41,7 +42,10 @@ export class CreateProductDto {
   @MaxLength(12)
   assetCode?: string;
 
-  @ApiPropertyOptional({ enum: ['recurring', 'one_time', 'link'], default: 'one_time' })
+  @ApiPropertyOptional({
+    enum: ['recurring', 'one_time', 'link'],
+    default: 'one_time',
+  })
   @IsOptional()
   @IsIn(['recurring', 'one_time', 'link'])
   kind?: string;

@@ -16,6 +16,13 @@ export interface AppConfig {
     environmentHeader: string;
     roleHeader: string;
     permissionsHeader: string;
+    // Organization the API key belongs to, and the org's plan + plan-derived swap
+    // commission. APISIX injects these per consumer (the dev platform sets them
+    // from the org's plan); the client cannot supply them. This is how the swap
+    // fee is enforced per organization and can never be passed as a request param.
+    organizationHeader: string;
+    planHeader: string;
+    swapFeeBpsHeader: string;
   };
   stellar: {
     // Fallback network when the API key environment is not forwarded
@@ -24,6 +31,17 @@ export interface AppConfig {
     horizon: Record<StellarNetwork, string>;
     baseFee: string;
     timeoutSeconds: number;
+    swap: {
+      // Platform account that collects the swap fee. When unset the fee is
+      // disabled (no fee operation is added regardless of feeBps).
+      feeWallet: string;
+      // Swap fee in basis points (50 = 0.5%) taken from the source asset.
+      feeBps: number;
+      // Default slippage tolerance (bps) applied to the quote to derive destMin.
+      slippageBps: number;
+      // Hard cap on caller-supplied slippage, to bound how much they can lose.
+      maxSlippageBps: number;
+    };
   };
   observer: {
     enabled: boolean;
@@ -39,6 +57,18 @@ export interface AppConfig {
     maxAttempts: number;
     backoffMs: number;
     signatureHeader: string;
+  };
+  blindpay: {
+    // BlindPay is the fiat<->stablecoin rails provider powering onramp/offramp/KYC.
+    // We operate a single platform instance: one API key + one instance id shared
+    // by every consumer, with each receiver/payin/payout attributed internally to
+    // the APISIX consumer that created it.
+    apiKey: string;
+    instanceId: string;
+    baseUrl: string;
+    // Svix endpoint secret (whsec_...) used to verify inbound BlindPay webhooks.
+    webhookSecret: string;
+    timeoutMs: number;
   };
 }
 
@@ -71,6 +101,15 @@ export default (): AppConfig => ({
     permissionsHeader: (
       process.env.APISIX_PERMISSIONS_HEADER ?? 'x-consumer-permissions'
     ).toLowerCase(),
+    organizationHeader: (
+      process.env.APISIX_ORGANIZATION_HEADER ?? 'x-consumer-org'
+    ).toLowerCase(),
+    planHeader: (
+      process.env.APISIX_PLAN_HEADER ?? 'x-consumer-plan'
+    ).toLowerCase(),
+    swapFeeBpsHeader: (
+      process.env.APISIX_SWAP_FEE_BPS_HEADER ?? 'x-plan-swap-fee-bps'
+    ).toLowerCase(),
   },
   stellar: {
     network:
@@ -78,13 +117,21 @@ export default (): AppConfig => ({
         ? 'public'
         : 'testnet',
     horizon: {
-      public:
-        process.env.STELLAR_HORIZON_URL_PUBLIC ?? DEFAULT_HORIZON.public,
+      public: process.env.STELLAR_HORIZON_URL_PUBLIC ?? DEFAULT_HORIZON.public,
       testnet:
         process.env.STELLAR_HORIZON_URL_TESTNET ?? DEFAULT_HORIZON.testnet,
     },
     baseFee: process.env.STELLAR_BASE_FEE ?? '100',
     timeoutSeconds: parseInt(process.env.STELLAR_TX_TIMEOUT ?? '300', 10),
+    swap: {
+      feeWallet: process.env.STELLAR_SWAP_FEE_WALLET ?? '',
+      feeBps: parseInt(process.env.STELLAR_SWAP_FEE_BPS ?? '50', 10),
+      slippageBps: parseInt(process.env.STELLAR_SWAP_SLIPPAGE_BPS ?? '50', 10),
+      maxSlippageBps: parseInt(
+        process.env.STELLAR_SWAP_MAX_SLIPPAGE_BPS ?? '500',
+        10,
+      ),
+    },
   },
   observer: {
     // Permanent reconciler that watches Stellar and finalizes paid intents.
@@ -102,5 +149,14 @@ export default (): AppConfig => ({
     signatureHeader: (
       process.env.WEBHOOK_SIGNATURE_HEADER ?? 'x-cosmos-signature'
     ).toLowerCase(),
+  },
+  blindpay: {
+    apiKey: process.env.BLINDPAY_API_KEY ?? '',
+    instanceId: process.env.BLINDPAY_INSTANCE_ID ?? '',
+    baseUrl: (
+      process.env.BLINDPAY_BASE_URL ?? 'https://api.blindpay.com/v1'
+    ).replace(/\/+$/, ''),
+    webhookSecret: process.env.BLINDPAY_WEBHOOK_SECRET ?? '',
+    timeoutMs: parseInt(process.env.BLINDPAY_TIMEOUT_MS ?? '15000', 10),
   },
 });
