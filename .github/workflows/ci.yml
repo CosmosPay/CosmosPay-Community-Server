@@ -19,6 +19,11 @@ jobs:
   build:
     name: Build & test
     runs-on: ubuntu-latest
+    env:
+      # prisma.config.ts requires DATABASE_URL to resolve at load time. `prisma generate`
+      # only does client codegen (no DB connection) and the tests mock external services,
+      # so a dummy URL is enough for CI. Set a repo Variable to override.
+      DATABASE_URL: ${{ vars.DATABASE_URL || 'postgresql://user:pass@localhost:5432/db' }}
     steps:
       - uses: actions/checkout@v7
 

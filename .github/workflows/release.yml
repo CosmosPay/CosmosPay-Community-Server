@@ -24,6 +24,10 @@ jobs:
   verify:
     name: Build, test & security audit
     runs-on: ubuntu-latest
+    env:
+      # prisma.config.ts requires DATABASE_URL to resolve at load time (codegen only, no
+      # DB connection). Dummy value is enough; set a repo Variable to override.
+      DATABASE_URL: ${{ vars.DATABASE_URL || 'postgresql://user:pass@localhost:5432/db' }}
     steps:
       - uses: actions/checkout@v7
 
