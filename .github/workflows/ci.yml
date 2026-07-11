@@ -1,0 +1,38 @@
+name: CI
+
+# Build + test on every push and pull request. `npm run build` runs prisma generate
+# then nest build; the Jest suite runs against the compiled/generated client.
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build & test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # prisma generate (-> generated/prisma) + nest build.
+      - name: Build
+        run: npm run build
+
+      # Jest unit/integration suite (no DB required — external services are mocked).
+      - name: Test
+        run: npm test
