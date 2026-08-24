@@ -1,3 +1,9 @@
+import { parseAdminCredentials, type AdminCredential } from '../admin/admin-auth';
+import {
+  parseRedirectUrlWhitelist,
+  type RedirectUrlWhitelist,
+} from '../kyc/redirect-url-whitelist';
+
 /**
  * Centralized, typed configuration loaded from environment variables.
  * Consumed via Nest's ConfigService<AppConfig, true>.
@@ -6,6 +12,8 @@ export type StellarNetwork = 'public' | 'testnet';
 
 export interface AppConfig {
   nodeEnv: string;
+  /** When true, mounts /docs (Express middleware — not behind Nest guards). */
+  swaggerEnabled: boolean;
   port: number;
   databaseUrl: string;
   apisix: {
@@ -24,6 +32,20 @@ export interface AppConfig {
     planHeader: string;
     swapFeeBpsHeader: string;
   };
+  admin: {
+    /**
+     * Platform-admin credentials (issue #34). Empty ⇒ fail closed (no admin access).
+     * Presented as `Authorization: Bearer <secret>`.
+     */
+    credentials: AdminCredential[];
+  };
+  kyc: {
+    /**
+     * Per-consumer redirect_url host allow-list (issue #33).
+     * Empty map ⇒ every consumer fails closed until configured.
+     */
+    redirectUrlWhitelist: RedirectUrlWhitelist;
+  };
   stellar: {
     // Fallback network when the API key environment is not forwarded
     // (e.g. local dev without the gateway). Otherwise the key type decides.
@@ -41,6 +63,12 @@ export interface AppConfig {
       slippageBps: number;
       // Hard cap on caller-supplied slippage, to bound how much they can lose.
       maxSlippageBps: number;
+      /**
+       * When true, reject create if the same (consumer, source, network) already
+       * has a non-expired PENDING swap (409). Off by default — concurrent
+       * distinct swaps from one account are legitimate; prefer Idempotency-Key.
+       */
+      singleInflight: boolean;
     };
   };
   observer: {
@@ -63,7 +91,11 @@ export interface AppConfig {
     ttlSeconds: number;
   };
   webhooks: {
+    // Overall AbortController budget ≈ connect + read (defense in depth).
     timeoutMs: number;
+    connectTimeoutMs: number;
+    readTimeoutMs: number;
+    maxResponseBytes: number;
     maxAttempts: number;
     backoffMs: number;
     signatureHeader: string;
@@ -87,8 +119,17 @@ const DEFAULT_HORIZON: Record<StellarNetwork, string> = {
   testnet: 'https://horizon-testnet.stellar.org',
 };
 
+function parseSwaggerEnabled(): boolean {
+  const raw = process.env.SWAGGER_ENABLED;
+  if (raw !== undefined) {
+    return raw.toLowerCase() === 'true';
+  }
+  return (process.env.NODE_ENV ?? 'development') !== 'production';
+}
+
 export default (): AppConfig => ({
   nodeEnv: process.env.NODE_ENV ?? 'development',
+  swaggerEnabled: parseSwaggerEnabled(),
   port: parseInt(process.env.PORT ?? '3000', 10),
   databaseUrl: process.env.DATABASE_URL ?? '',
   apisix: {
@@ -121,6 +162,14 @@ export default (): AppConfig => ({
       process.env.APISIX_SWAP_FEE_BPS_HEADER ?? 'x-plan-swap-fee-bps'
     ).toLowerCase(),
   },
+  admin: {
+    credentials: parseAdminCredentials(process.env.ADMIN_API_CREDENTIALS),
+  },
+  kyc: {
+    redirectUrlWhitelist: parseRedirectUrlWhitelist(
+      process.env.KYC_REDIRECT_URL_WHITELIST,
+    ),
+  },
   stellar: {
     network:
       (process.env.STELLAR_NETWORK ?? 'testnet').toLowerCase() === 'public'
@@ -141,6 +190,9 @@ export default (): AppConfig => ({
         process.env.STELLAR_SWAP_MAX_SLIPPAGE_BPS ?? '500',
         10,
       ),
+      singleInflight:
+        (process.env.STELLAR_SWAP_SINGLE_INFLIGHT ?? 'false').toLowerCase() ===
+        'true',
     },
   },
   observer: {
@@ -168,7 +220,25 @@ export default (): AppConfig => ({
     ttlSeconds: parseInt(process.env.PAYMENT_INTENT_TTL_SECONDS ?? '3600', 10),
   },
   webhooks: {
+    // Legacy single timeout kept for callers that still read timeoutMs;
+    // prefer connectTimeoutMs + readTimeoutMs for outbound delivery.
     timeoutMs: parseInt(process.env.WEBHOOK_TIMEOUT_MS ?? '5000', 10),
+    connectTimeoutMs: parseInt(
+      process.env.WEBHOOK_CONNECT_TIMEOUT_MS ??
+        process.env.WEBHOOK_TIMEOUT_MS ??
+        '3000',
+      10,
+    ),
+    readTimeoutMs: parseInt(
+      process.env.WEBHOOK_READ_TIMEOUT_MS ??
+        process.env.WEBHOOK_TIMEOUT_MS ??
+        '5000',
+      10,
+    ),
+    maxResponseBytes: parseInt(
+      process.env.WEBHOOK_MAX_RESPONSE_BYTES ?? '65536',
+      10,
+    ),
     maxAttempts: parseInt(process.env.WEBHOOK_MAX_ATTEMPTS ?? '3', 10),
     backoffMs: parseInt(process.env.WEBHOOK_BACKOFF_MS ?? '2000', 10),
     signatureHeader: (

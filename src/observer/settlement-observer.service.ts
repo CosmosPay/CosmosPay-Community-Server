@@ -5,13 +5,11 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { EventEmitter2 } from '@nestjs/event-emitter';
 import { AppConfig, StellarNetwork } from '../config/configuration';
 import { PrismaService } from '../prisma/prisma.service';
 import { StellarService } from '../stellar/stellar.service';
 import { LiquidityPoolsService } from '../liquidity-pools/liquidity-pools.service';
-import { WEBHOOK_EVENT, WebhookEventPayload } from '../webhooks/webhook-events';
-import type { WebhookEventType } from '../../generated/prisma/client';
+import { SwapsService } from '../swaps/swaps.service';
 
 /** On-chain settlement of a stored transaction, keyed by its hash. */
 type Settlement = 'succeeded' | 'failed' | 'unsettled';
@@ -25,6 +23,11 @@ type Settlement = 'succeeded' | 'failed' | 'unsettled';
  * stored txHash** and finalize it — SUCCEEDED / FAILED (with the matching webhook
  * event) or EXPIRED once its timebounds lapse. Mirrors the payment-intent
  * observer; polling survives restarts with no cursor bookkeeping.
+ *
+ * Observer never emits webhooks itself. Terminal events are a consequence of
+ * winning `finalizeSucceeded` / `finalizeFailed` on the domain service — the
+ * same functions submit uses — so a parallel observer+submit race produces one
+ * event, not two.
  */
 @Injectable()
 export class SettlementObserverService
@@ -38,8 +41,8 @@ export class SettlementObserverService
     private readonly config: ConfigService<AppConfig, true>,
     private readonly prisma: PrismaService,
     private readonly stellar: StellarService,
-    private readonly events: EventEmitter2,
     private readonly liquidity: LiquidityPoolsService,
+    private readonly swaps: SwapsService,
   ) {}
 
   onModuleInit(): void {
@@ -83,30 +86,75 @@ export class SettlementObserverService
       take: batchSize,
     });
     const now = new Date();
+
+    // One Horizon lookup per txHash. Historical duplicate hashes (pre-migration)
+    // must not mint multiple SWAP_SUCCEEDED / SWAP_FAILED for one on-chain tx.
+    const byHash = new Map<string, typeof rows>();
     for (const row of rows) {
-      const settlement = await this.settlementOf(row.network, row.txHash);
-      const username = row.consumer.apisixUsername;
+      const group = byHash.get(row.txHash) ?? [];
+      group.push(row);
+      byHash.set(row.txHash, group);
+    }
+
+    for (const [, group] of byHash) {
+      const primary = group[0];
+      const settlement = await this.settlementOf(
+        primary.network,
+        primary.txHash,
+      );
+
       if (settlement === 'succeeded') {
-        const updated = await this.prisma.swap.update({
-          where: { id: row.id },
-          data: { status: 'SUCCEEDED' },
-        });
-        this.emit(username, 'SWAP_SUCCEEDED', updated);
-        this.logger.log(`Reconciled swap ${row.id} → SUCCEEDED`);
+        for (let i = 0; i < group.length; i++) {
+          const row = group[i];
+          const username = row.consumer.apisixUsername;
+          if (i === 0) {
+            const { applied } = await this.swaps.finalizeSucceeded(
+              row.id,
+              username,
+            );
+            if (applied) {
+              this.logger.log(`Reconciled swap ${row.id} → SUCCEEDED`);
+            }
+          } else {
+            // Duplicate hash: settle the phantom row without a second webhook.
+            const { applied } = await this.swaps.finalizeSucceededQuiet(row.id);
+            if (applied) {
+              this.logger.log(
+                `Reconciled duplicate-hash swap ${row.id} → SUCCEEDED (no webhook)`,
+              );
+            }
+          }
+        }
       } else if (settlement === 'failed') {
-        const updated = await this.prisma.swap.update({
-          where: { id: row.id },
-          data: { status: 'FAILED' },
-        });
-        this.emit(username, 'SWAP_FAILED', updated);
-        this.logger.warn(`Reconciled swap ${row.id} → FAILED`);
-      } else if (row.expiresAt && row.expiresAt < now) {
-        // Never settled and the tx timebounds have lapsed — it can no longer land.
-        await this.prisma.swap.update({
-          where: { id: row.id },
-          data: { status: 'EXPIRED' },
-        });
-        this.logger.log(`Expired swap ${row.id} (never settled)`);
+        for (let i = 0; i < group.length; i++) {
+          const row = group[i];
+          const username = row.consumer.apisixUsername;
+          if (i === 0) {
+            const { applied } = await this.swaps.finalizeFailed(
+              row.id,
+              username,
+            );
+            if (applied) {
+              this.logger.warn(`Reconciled swap ${row.id} → FAILED`);
+            }
+          } else {
+            const { applied } = await this.swaps.finalizeFailedQuiet(row.id);
+            if (applied) {
+              this.logger.warn(
+                `Reconciled duplicate-hash swap ${row.id} → FAILED (no webhook)`,
+              );
+            }
+          }
+        }
+      } else {
+        for (const row of group) {
+          if (row.expiresAt && row.expiresAt < now) {
+            const { applied } = await this.swaps.finalizeExpired(row.id);
+            if (applied) {
+              this.logger.log(`Expired swap ${row.id} (never settled)`);
+            }
+          }
+        }
       }
     }
   }
@@ -124,27 +172,26 @@ export class SettlementObserverService
       const settlement = await this.settlementOf(row.network, row.txHash);
       const username = row.consumer.apisixUsername;
       if (settlement === 'succeeded') {
-        const updated = await this.prisma.liquidityPoolOperation.update({
-          where: { id: row.id },
-          data: { status: 'SUCCEEDED' },
-        });
-        this.emit(username, 'LIQUIDITY_SUCCEEDED', updated);
-        // Record the deposit's cost basis for future withdraw commission.
-        await this.liquidity.captureDepositBasis(updated);
-        this.logger.log(`Reconciled LP operation ${row.id} → SUCCEEDED`);
+        const { applied } = await this.liquidity.finalizeSucceeded(
+          row.id,
+          username,
+        );
+        if (applied) {
+          this.logger.log(`Reconciled LP operation ${row.id} → SUCCEEDED`);
+        }
       } else if (settlement === 'failed') {
-        const updated = await this.prisma.liquidityPoolOperation.update({
-          where: { id: row.id },
-          data: { status: 'FAILED' },
-        });
-        this.emit(username, 'LIQUIDITY_FAILED', updated);
-        this.logger.warn(`Reconciled LP operation ${row.id} → FAILED`);
+        const { applied } = await this.liquidity.finalizeFailed(
+          row.id,
+          username,
+        );
+        if (applied) {
+          this.logger.warn(`Reconciled LP operation ${row.id} → FAILED`);
+        }
       } else if (row.expiresAt && row.expiresAt < now) {
-        await this.prisma.liquidityPoolOperation.update({
-          where: { id: row.id },
-          data: { status: 'EXPIRED' },
-        });
-        this.logger.log(`Expired LP operation ${row.id} (never settled)`);
+        const { applied } = await this.liquidity.finalizeExpired(row.id);
+        if (applied) {
+          this.logger.log(`Expired LP operation ${row.id} (never settled)`);
+        }
       }
     }
   }
@@ -174,16 +221,5 @@ export class SettlementObserverService
       this.logger.warn(`Horizon lookup failed for tx ${txHash}`);
       return 'unsettled';
     }
-  }
-
-  private emit(
-    username: string,
-    type: WebhookEventType,
-    data: unknown,
-  ): void {
-    this.events.emit(
-      WEBHOOK_EVENT,
-      new WebhookEventPayload(username, type, data),
-    );
   }
 }

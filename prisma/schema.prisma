@@ -162,6 +162,11 @@ model WebhookEndpoint {
   secret      String
   description String?
   enabled     Boolean            @default(true)
+  // Set when the URL fails public-destination checks (at register-time audit or
+  // at delivery when DNS rebinds to a private/metadata target). Deliveries skip
+  // blocked endpoints; clear by PATCHing a safe https URL (or re-enabling after
+  // the URL passes validation again).
+  destinationBlocked Boolean     @default(false)
   // Subscribed event types; an empty list means "all events".
   eventTypes  WebhookEventType[]
 
@@ -198,6 +203,20 @@ model WebhookDelivery {
   @@index([status])
   @@index([eventId])
   @@map("webhook_delivery")
+}
+
+// One row per (operation, terminal event type). Inserting this row is winning
+// the right to notify integrators; the unique index on `dedupKey` makes a race
+// between the settlement observer and submit produce a single event. Check-
+// then-insert is not enough — PostgreSQL enforces uniqueness under concurrency.
+model WebhookEmittedEvent {
+  id        String           @id @default(cuid())
+  // Stable key: "{eventType}:{resourceId}" e.g. "SWAP_SUCCEEDED:clxyz".
+  dedupKey  String           @unique
+  eventType WebhookEventType
+  createdAt DateTime         @default(now())
+
+  @@map("webhook_emitted_event")
 }
 
 // Lifecycle of a Stellar payment intent. Kept for traceability — the unsigned
@@ -258,10 +277,33 @@ model PaymentIntent {
   createdAt   DateTime            @default(now())
   updatedAt   DateTime            @updatedAt
 
+  // Append-only audit trail of status transitions (issue #36).
+  transitions PaymentIntentTransition[]
+
   @@unique([consumerId, memo]) // idempotency: one intent per (consumer, memo)
   @@index([consumerId])
   @@index([status])
   @@map("payment_intent")
+}
+
+// Immutable history of every PaymentIntent status change. Written only by the
+// single transition() entry point so the ledger cannot diverge from the graph.
+model PaymentIntentTransition {
+  id         String              @id @default(cuid())
+  intentId   String
+  intent     PaymentIntent       @relation(fields: [intentId], references: [id], onDelete: Cascade)
+
+  fromStatus PaymentIntentStatus
+  toStatus   PaymentIntentStatus
+  txHash     String?
+  // Who triggered the change: api | validate | observer | system
+  actor      String
+  reason     String?
+
+  createdAt  DateTime            @default(now())
+
+  @@index([intentId, createdAt])
+  @@map("payment_intent_transition")
 }
 
 // ---------------------------------------------------------------------------
@@ -511,7 +553,16 @@ model Swap {
   // Optional MEMO_ID echoed on-chain for the merchant's own reconciliation.
   memo        String?
 
+  // Client-supplied idempotency key (Idempotency-Key header or DTO field).
+  // NULL when omitted — PostgreSQL treats NULLs as distinct, so multiple
+  // swaps without a key remain allowed for the same consumer.
+  idempotencyKey String?
+
   status      SwapStatus @default(PENDING)
+  // Bumped only on FAILED → SUBMITTED (a real resubmit). Terminal webhook
+  // dedup keys include this so a later SWAP_FAILED is not collapsed into the
+  // first attempt, while observer+submit of the same attempt still share a key.
+  settlementEpoch Int     @default(0)
   // Unsigned transaction envelope + its SEP-7 `tx` deep link. QR derived on read.
   xdr         String
   uri         String
@@ -525,7 +576,10 @@ model Swap {
 
   @@index([consumerId])
   @@index([status])
-  @@index([txHash])
+  // Idempotency: one swap per (consumer, key) when a key is supplied.
+  @@unique([consumerId, idempotencyKey])
+  // Prevents two PENDING rows sharing the same on-chain tx (sequence collision).
+  @@unique([network, txHash])
   @@map("swap")
 }
 
@@ -586,6 +640,9 @@ model LiquidityPoolOperation {
   settledAmountB String?
 
   status SwapStatus @default(PENDING)
+  // Same meaning as Swap.settlementEpoch — resubmit discriminator for
+  // LIQUIDITY_FAILED dedup (issue #29).
+  settlementEpoch Int @default(0)
 
   // Unsigned transaction envelope + its SEP-7 `tx` deep link. QR derived on read.
   xdr    String
@@ -603,4 +660,23 @@ model LiquidityPoolOperation {
   @@index([txHash])
   @@index([poolId])
   @@map("liquidity_pool_operation")
+}
+
+// ---------------------------------------------------------------------------
+// Platform-admin audit trail (issue #34). Append-only: no update/delete API.
+// ---------------------------------------------------------------------------
+model AdminAuditLog {
+  id           String   @id @default(cuid())
+  actorId      String
+  actorRole    String
+  action       String
+  resourceType String
+  resourceId   String
+  metadata     Json?
+  createdAt    DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([actorId])
+  @@index([resourceType, resourceId])
+  @@map("admin_audit_log")
 }
