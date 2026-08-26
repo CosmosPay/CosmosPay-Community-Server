@@ -406,7 +406,7 @@ function horizonStatus(err: unknown): number | undefined {
 function horizonMessage(err: unknown): string {
   if (err instanceof Error && err.message) return err.message;
   if (typeof err === 'object' && err !== null && 'message' in err) {
-    const message = (err as { message: unknown }).message;
+    const message = err.message;
     if (typeof message === 'string' && message.length > 0) return message;
   }
   return String(err);

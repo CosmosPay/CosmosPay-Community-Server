@@ -107,9 +107,17 @@ consumer's own records — full traceability of each intent's lifecycle
 ### Payment validation & the on-chain observer
 
 A payment is confirmed against the Stellar network in one place
-(`StellarVerifierService`): the transaction must be **successful**, contain a
-**native (XLM) payment** to the intent's `destination` for the **exact amount**,
-and — when the intent has a memo — the tx **memo must match** (`memo_type: id`).
+(`StellarVerifierService`): the transaction must be **successful**, contain an
+accepted payment-like operation to the intent's `destination` in the intent's
+asset (native XLM or a credit asset), and the tx **memo must match**
+(`memo_type: id`). When the intent fixes an **amount**, that amount must match
+exactly; **open-amount** intents (`amount` omitted / null) skip the amount
+check, so any delivered amount is accepted for every supported op type
+(including path payments and `create_account`). Accepted Horizon operation
+types: `payment`, `path_payment_strict_receive`, `path_payment_strict_send`,
+and `create_account` (native only; destination/amount/payer map from
+`account` / `starting_balance` / `funder`). Soroban / SAC transfers via
+`invoke_host_function` are **not** supported.
 
 Two paths use that single rule:
 
