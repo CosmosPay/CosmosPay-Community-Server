@@ -6,13 +6,16 @@ import {
   Param,
   Patch,
   Post,
+  Query,
 } from '@nestjs/common';
-import { ApiOperation, ApiTags } from '@nestjs/swagger';
+import { ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { CurrentConsumer } from '../common/decorators/current-consumer.decorator';
 import { RequirePermissions } from '../common/decorators/require-permissions.decorator';
 import { GatewayConsumer } from '../common/interfaces/gateway-consumer.interface';
 import { CreateCustomerDto } from './dto/create-customer.dto';
+import { QueryCustomersDto } from './dto/query-customers.dto';
 import { UpdateCustomerDto } from './dto/update-customer.dto';
+import { CustomerListEntity } from './entities/customer.entity';
 import { CustomersService } from './customers.service';
 
 // URI versioning => /v1/customers
@@ -36,8 +39,12 @@ export class CustomersController {
   @ApiOperation({
     summary: "List the consumer's customers (with payment stats)",
   })
-  findAll(@CurrentConsumer() consumer: GatewayConsumer) {
-    return this.customers.findAll(consumer);
+  @ApiOkResponse({ type: CustomerListEntity })
+  findAll(
+    @CurrentConsumer() consumer: GatewayConsumer,
+    @Query() query: QueryCustomersDto,
+  ) {
+    return this.customers.findAll(consumer, query);
   }
 
   @Get(':id')
