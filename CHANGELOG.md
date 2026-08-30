@@ -2,6 +2,11 @@
 
 All notable changes to the Cosmos Pay Community Server are documented here.
 Generated from [Conventional Commits](https://www.conventionalcommits.org) by [git-cliff](https://git-cliff.org).
+## [0.1.5] - 2026-08-30
+
+### Bug Fixes
+- Migrate to @stellar/stellar-sdk 17 (Uint8Array hashes + ESM dep) (#70) (ce1f48e)
+
 ## [0.1.4] - 2026-08-30
 
 ### Bug Fixes
