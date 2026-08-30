@@ -2,6 +2,14 @@
 
 All notable changes to the Cosmos Pay Community Server are documented here.
 Generated from [Conventional Commits](https://www.conventionalcommits.org) by [git-cliff](https://git-cliff.org).
+## [0.1.3] - 2026-08-30
+
+### Bug Fixes
+- Persist real status code via request-log middleware (issue #23) (#67) (bfcb3f3)
+
+### Miscellaneous
+- Bump the minor-and-patch group with 10 updates (#64) (abebf37)
+
 ## [0.1.2] - 2026-08-30
 
 ### Features
