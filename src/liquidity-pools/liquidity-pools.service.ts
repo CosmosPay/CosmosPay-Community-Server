@@ -566,7 +566,7 @@ export class LiquidityPoolsService {
         // the just-received reserves), so we only need the account to keep its XLM
         // minimum reserve plus the tx fee. Clear 400 instead of an on-chain reject.
         const opCount = 1 + (feeA > 0n ? 1 : 0) + (feeB > 0n ? 1 : 0);
-        this.assertCanAfford(
+        assertCanAfford(
           account,
           account.balances,
           [],
