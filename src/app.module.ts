@@ -1,13 +1,13 @@
 import { Module, MiddlewareConsumer, NestModule } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
-import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
+import { APP_GUARD } from '@nestjs/core';
 import { EventEmitterModule } from '@nestjs/event-emitter';
-import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
 import configuration from './config/configuration';
 import { validateEnv } from './config/env.validation';
 import { ApisixGuard } from './common/guards/apisix.guard';
 import { PermissionsGuard } from './common/guards/permissions.guard';
 import { ApisixContextMiddleware } from './common/middleware/apisix-context.middleware';
+import { RequestLogMiddleware } from './common/middleware/request-log.middleware';
 import { PrismaModule } from './prisma/prisma.module';
 import { StellarModule } from './stellar/stellar.module';
 import { HealthModule } from './health/health.module';
@@ -61,11 +61,6 @@ import { CommonModule } from './common/common.module';
     OfframpModule,
   ],
   providers: [
-    // Persist a RequestLog row per request (powers the API logs view).
-    {
-      provide: APP_INTERCEPTOR,
-      useClass: LoggingInterceptor,
-    },
     // Enforce the "only APISIX" check on every route by default.
     // Routes opt out with @Public().
     {
@@ -83,7 +78,12 @@ import { CommonModule } from './common/common.module';
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer): void {
-    // Attach the gateway consumer context to every request before guards run.
-    consumer.apply(ApisixContextMiddleware).forRoutes('*');
+    // Attach the gateway consumer context to every request before guards run,
+    // then log the request. RequestLogMiddleware goes second so `req.gatewayConsumer`
+    // is already set; it runs before the guards, so its `finish` listener also
+    // captures requests the guards later reject (401/403).
+    consumer
+      .apply(ApisixContextMiddleware, RequestLogMiddleware)
+      .forRoutes('*');
   }
 }
