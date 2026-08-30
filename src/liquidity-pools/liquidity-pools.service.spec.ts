@@ -234,9 +234,8 @@ function nativeUsdcPoolId(): string {
     new Asset('USDC', USDC_ISSUER),
     LiquidityPoolFeeV18,
   );
-  return getLiquidityPoolId(
-    'constant_product',
-    share.getLiquidityPoolParameters(),
+  return Buffer.from(
+    getLiquidityPoolId('constant_product', share.getLiquidityPoolParameters()),
   ).toString('hex');
 }
 

@@ -8,6 +8,6 @@
     "^.+\\.(t|j)s$": ["ts-jest", { "tsconfig": { "allowJs": true } }]
   },
   "transformIgnorePatterns": [
-    "node_modules/(?!(@stellar|@noble|uint8array-extras)/)"
+    "node_modules/(?!(@stellar|@noble|@exodus|uint8array-extras)/)"
   ]
 }

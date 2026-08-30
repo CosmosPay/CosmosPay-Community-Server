@@ -270,7 +270,7 @@ export class SwapsService {
 
     const tx = builder.setTimeout(stellarCfg.timeoutSeconds).build();
     const xdr = tx.toXDR();
-    const txHash = tx.hash().toString('hex');
+    const txHash = Buffer.from(tx.hash()).toString('hex');
     const uri = `web+stellar:tx?${new URLSearchParams({ xdr }).toString()}`;
 
     const swap = await this.persistSwap({
@@ -460,7 +460,7 @@ export class SwapsService {
 
     // Integrity: signing does not change the hash, so the signed tx must hash to
     // the same value as the one we built and stored.
-    if (tx.hash().toString('hex') !== swap.txHash) {
+    if (Buffer.from(tx.hash()).toString('hex') !== swap.txHash) {
       throw new BadRequestException(
         'The signed transaction does not match this swap',
       );
