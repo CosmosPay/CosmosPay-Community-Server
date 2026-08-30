@@ -2,9 +2,23 @@
 
 All notable changes to the Cosmos Pay Community Server are documented here.
 Generated from [Conventional Commits](https://www.conventionalcommits.org) by [git-cliff](https://git-cliff.org).
+## [0.1.2] - 2026-08-30
+
+### Features
+- Durable Postgres retry queue so deliveries survive restarts (75bdf1d)
+
+### Bug Fixes
+- Drop leftover merge junk that broke nest build (10b96fc)
+- Expose tick and isRunning for the existing spec (3d39d87)
+- Credit path payments and create_account on-chain (012ec76)
+- Stabilize mismatch reason and document open amounts (4feacac)
+- Main vuelve a compilar (#66) (75d827b)
+
 ## [0.1.1] - 2026-08-26
 
 ### Bug Fixes
+- Reject unsigned XDRs that would fail on-chain (a957f23)
+- Pre-flight fee-wallet existence for native XLM fees (ce29e8d)
 - Consume in-flight withdraws in cost basis (8a117ce)
 - Restore tick() so CI can compile (047e9e2)
 - Serialize withdraw cost basis with a Postgres advisory lock (f4dd289)
