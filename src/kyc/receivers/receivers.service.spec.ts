@@ -1,9 +1,20 @@
-import { ConflictException } from '@nestjs/common';
-import { ReceiversService } from './receivers.service';
+/* eslint-disable
+  @typescript-eslint/no-unsafe-argument,
+  @typescript-eslint/no-unsafe-assignment,
+  @typescript-eslint/no-unsafe-call,
+  @typescript-eslint/no-unsafe-member-access,
+  @typescript-eslint/no-unsafe-return,
+  @typescript-eslint/no-unnecessary-type-assertion,
+  @typescript-eslint/require-await
+*/
 import {
-  ALLOWED_TRANSITIONS,
-  assertTransition,
-} from './receiver-state';
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  NotFoundException,
+} from '@nestjs/common';
+import { ReceiversService, resolveTosCooldownMs } from './receivers.service';
+import { ALLOWED_TRANSITIONS, assertTransition } from './receiver-state';
 
 const CONSUMER = { username: 'cosmos_u1' } as any;
 const LOCAL_ID = 'local_aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
@@ -356,11 +367,22 @@ describe('ReceiversService.enable — transitions', () => {
 
     const result = await service.enableById(row.id, 'tos_abc');
 
-    expect(blindpay.post).toHaveBeenCalledWith(
-      '/instances/in_test/customers',
-      expect.objectContaining({ tos_id: 'tos_abc' }),
-    );
+    expect(blindpay.post).toHaveBeenCalledWith('/instances/in_test/customers', {
+      type: 'individual',
+      kyc_type: 'standard',
+      email: 'jane@acme.com',
+      country: 'US',
+      tax_id: '123-45-6789',
+      tos_id: 'tos_abc',
+    });
+    expect(prisma.blindpayReceiver.update).toHaveBeenCalledWith({
+      where: { id: row.id },
+      data: { blindpayId: REAL_ID },
+    });
     expect(sync.mirrorReceiver).toHaveBeenCalledWith('c1', created);
+    expect(
+      prisma.blindpayReceiver.update.mock.invocationCallOrder[0],
+    ).toBeLessThan(sync.mirrorReceiver.mock.invocationCallOrder[0]);
     expect(result.kycStatus).toBe('verifying');
     expect(result.blindpayId).toBe(REAL_ID);
   });
@@ -390,5 +412,396 @@ describe('ReceiversService.enable — transitions', () => {
       ConflictException,
     );
     expect(blindpay.post).not.toHaveBeenCalled();
+  });
+});
+
+describe('resolveTosCooldownMs', () => {
+  it.each([
+    [undefined, undefined, undefined],
+    ['1', '0', 0],
+    ['1', 'abc', undefined],
+    ['0', '0', undefined],
+    [['1', '0'], ['60000', '0'], 60_000],
+    ['1', '', undefined],
+    ['1', '-1', undefined],
+  ])(
+    'resolves internal=%p cooldown=%p to %p',
+    (internal, cooldown, expected) => {
+      expect(resolveTosCooldownMs(internal, cooldown)).toBe(expected);
+    },
+  );
+});
+
+describe('ReceiversService.create', () => {
+  const bareDto = {
+    type: 'individual',
+    kyc_type: 'standard',
+    email: 'jane@acme.com',
+    country: 'US',
+  };
+
+  it('creates a bare registration as inactive and preserves the full raw dto', async () => {
+    const { service, prisma } = makeService();
+    prisma.blindpayReceiver.create.mockResolvedValue(baseRow());
+
+    await service.create(CONSUMER, bareDto as any);
+
+    expect(prisma.blindpayReceiver.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        consumerId: 'c1',
+        blindpayId: expect.stringMatching(/^local_/),
+        kycStatus: 'inactive',
+        raw: bareDto,
+      }),
+    });
+  });
+
+  it.each([
+    ['tax_id', { tax_id: '123-45-6789' }],
+    ['selfie_file', { selfie_file: 'https://files.example/selfie' }],
+  ])(
+    'creates a payload containing %s as pending_review',
+    async (_name, kyc) => {
+      const { service, prisma } = makeService();
+      prisma.blindpayReceiver.create.mockResolvedValue(baseRow());
+      const dto = { ...bareDto, ...kyc };
+
+      await service.create(CONSUMER, dto as any);
+
+      expect(prisma.blindpayReceiver.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          kycStatus: 'pending_review',
+          raw: dto,
+        }),
+      });
+    },
+  );
+});
+
+describe('ReceiversService request ToS cooldown', () => {
+  function setup(overrides: Record<string, unknown> = {}) {
+    const context = makeService();
+    const row = baseRow({
+      kycStatus: 'pending_user',
+      tosSentAt: null,
+      ...overrides,
+    });
+    context.prisma.blindpayReceiver.findUnique.mockResolvedValue(row);
+    context.prisma.blindpayReceiver.update.mockImplementation(
+      async ({ data }: any) => ({ ...row, ...data }),
+    );
+    context.blindpay.post.mockResolvedValue({
+      url: 'https://tos.example/accept',
+    });
+    return { ...context, row };
+  }
+
+  it('rejects ToS outside pending_user', async () => {
+    const { service, prisma, blindpay } = setup({ kycStatus: 'inactive' });
+
+    await expect(
+      service.requestTosById('rcv_1', {
+        channel: 'email',
+        redirect_url: 'https://app.example.com/cb',
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.blindpayReceiver.update).not.toHaveBeenCalled();
+    expect(blindpay.post).not.toHaveBeenCalled();
+  });
+
+  it('blocks the email channel inside the default 24h window', async () => {
+    const { service, blindpay } = setup({
+      tosSentAt: new Date(Date.now() - 1_000),
+    });
+
+    await expect(
+      service.requestTosById('rcv_1', {
+        channel: 'email',
+        redirect_url: 'https://app.example.com/cb',
+      }),
+    ).rejects.toThrow('already sent');
+    expect(blindpay.post).not.toHaveBeenCalled();
+  });
+
+  it('allows email outside the default window and stores tosSentAt', async () => {
+    const { service, prisma } = setup({
+      tosSentAt: new Date(Date.now() - 24 * 60 * 60 * 1_000 - 1),
+    });
+
+    const result = await service.requestTosById('rcv_1', {
+      channel: 'email',
+      redirect_url: 'https://app.example.com/cb',
+    });
+
+    expect(result).toEqual({
+      url: 'https://tos.example/accept',
+      email: 'jane@acme.com',
+      channel: 'email',
+    });
+    expect(prisma.blindpayReceiver.update).toHaveBeenCalledWith({
+      where: { id: 'rcv_1' },
+      data: { tosSentAt: expect.any(Date) },
+    });
+  });
+
+  it('allows a trusted cooldown of zero even one second after the last email', async () => {
+    const { service, blindpay } = setup({
+      tosSentAt: new Date(Date.now() - 1_000),
+    });
+
+    await expect(
+      service.requestTosById(
+        'rcv_1',
+        {
+          channel: 'email',
+          redirect_url: 'https://app.example.com/cb',
+        },
+        0,
+      ),
+    ).resolves.toEqual(expect.objectContaining({ channel: 'email' }));
+    expect(blindpay.post).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([Number.NaN, -1])(
+    'falls back to 24h for invalid cooldown %p',
+    async (cooldown) => {
+      const { service, blindpay } = setup({
+        tosSentAt: new Date(Date.now() - 1_000),
+      });
+
+      await expect(
+        service.requestTosById(
+          'rcv_1',
+          {
+            channel: 'email',
+            redirect_url: 'https://app.example.com/cb',
+          },
+          cooldown,
+        ),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(blindpay.post).not.toHaveBeenCalled();
+    },
+  );
+
+  it('never rate-limits the code channel and does not write tosSentAt', async () => {
+    const { service, prisma } = setup({
+      tosSentAt: new Date(Date.now() - 1_000),
+    });
+
+    await expect(
+      service.requestTosById('rcv_1', {
+        channel: 'code',
+        redirect_url: 'https://app.example.com/cb',
+      }),
+    ).resolves.toEqual(expect.objectContaining({ channel: 'code' }));
+    expect(prisma.blindpayReceiver.update).not.toHaveBeenCalled();
+  });
+});
+
+describe('ReceiversService ownership and access', () => {
+  it('returns 404 for another consumer and proves consumerId is in the query', async () => {
+    const { service, prisma } = makeService();
+    const foreign = baseRow({ consumerId: 'c2' });
+    prisma.blindpayReceiver.findFirst.mockImplementation(
+      async ({ where }: any) => (where.consumerId === 'c1' ? null : foreign),
+    );
+
+    await expect(
+      service.findReceiverOrThrow('c1', foreign.id),
+    ).rejects.toBeInstanceOf(NotFoundException);
+    expect(prisma.blindpayReceiver.findFirst).toHaveBeenCalledWith({
+      where: { id: foreign.id, consumerId: 'c1' },
+    });
+  });
+
+  it('returns an owned receiver', async () => {
+    const { service, prisma } = makeService();
+    const row = baseRow();
+    prisma.blindpayReceiver.findFirst.mockResolvedValue(row);
+
+    await expect(service.findReceiverOrThrow('c1', row.id)).resolves.toBe(row);
+  });
+
+  it('rejects disabled receivers and accepts enabled receivers', () => {
+    const { service } = makeService();
+
+    expect(() => service.assertEnabled({ disabled: true })).toThrow(
+      ForbiddenException,
+    );
+    expect(() => service.assertEnabled({ disabled: false })).not.toThrow();
+  });
+});
+
+describe('ReceiversService enable idempotency', () => {
+  it('calling enable twice on a real receiver never POSTs /customers twice', async () => {
+    const { service, prisma, blindpay, sync } = makeService();
+    const row = baseRow({
+      blindpayId: REAL_ID,
+      kycStatus: 'pending_user',
+    });
+    prisma.blindpayReceiver.findUnique.mockResolvedValue(row);
+    blindpay.get.mockResolvedValue({ id: REAL_ID, kyc_status: 'verifying' });
+    blindpay.post.mockResolvedValue({
+      id: 're_duplicate',
+      kyc_status: 'verifying',
+    });
+    sync.mirrorReceiver.mockResolvedValue(row);
+
+    await service.enableById(row.id, 'tos_1');
+    await service.enableById(row.id, 'tos_1');
+
+    expect(blindpay.post).not.toHaveBeenCalled();
+    expect(blindpay.get).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('ReceiversService scoped wrappers and CRUD', () => {
+  it('approve scopes ownership before delegating to approveById', async () => {
+    const { service, prisma } = makeService();
+    const row = baseRow({ kycStatus: 'pending_review' });
+    prisma.blindpayReceiver.findFirst.mockResolvedValue(row);
+    const outcome = {
+      receiver: row,
+      url: 'https://tos.example/accept',
+      email: row.email,
+    };
+    const delegated = jest
+      .spyOn(service, 'approveById')
+      .mockResolvedValue(outcome as any);
+
+    await expect(
+      service.approve(CONSUMER, row.id, 'https://app.example.com/cb'),
+    ).resolves.toBe(outcome);
+    expect(delegated).toHaveBeenCalledWith(
+      row.id,
+      'https://app.example.com/cb',
+    );
+  });
+
+  it('requestTos scopes ownership before delegating to requestTosById', async () => {
+    const { service, prisma } = makeService();
+    const row = baseRow({ kycStatus: 'pending_user' });
+    prisma.blindpayReceiver.findFirst.mockResolvedValue(row);
+    const outcome = {
+      url: 'https://tos.example/accept',
+      email: row.email,
+      channel: 'email' as const,
+    };
+    const delegated = jest
+      .spyOn(service, 'requestTosById')
+      .mockResolvedValue(outcome);
+
+    await expect(
+      service.requestTos(
+        CONSUMER,
+        row.id,
+        {
+          channel: 'email',
+          redirect_url: 'https://app.example.com/cb',
+        },
+        0,
+      ),
+    ).resolves.toBe(outcome);
+    expect(delegated).toHaveBeenCalledWith(
+      row.id,
+      expect.objectContaining({ channel: 'email' }),
+      0,
+    );
+  });
+
+  it('enable scopes ownership before delegating to enableById', async () => {
+    const { service, prisma } = makeService();
+    const row = baseRow({ kycStatus: 'pending_user' });
+    prisma.blindpayReceiver.findFirst.mockResolvedValue(row);
+    const delegated = jest
+      .spyOn(service, 'enableById')
+      .mockResolvedValue(row as any);
+
+    await expect(service.enable(CONSUMER, row.id, 'tos_1')).resolves.toBe(row);
+    expect(delegated).toHaveBeenCalledWith(row.id, 'tos_1');
+  });
+
+  it('lists only the local consumer receivers', async () => {
+    const { service, prisma } = makeService();
+    const rows = [baseRow()];
+    prisma.blindpayReceiver.findMany.mockResolvedValue(rows);
+
+    await expect(service.findAll(CONSUMER)).resolves.toEqual({
+      data: rows,
+      total: 1,
+    });
+    expect(prisma.blindpayReceiver.findMany).toHaveBeenCalledWith({
+      where: { consumerId: 'c1' },
+      orderBy: { createdAt: 'desc' },
+    });
+  });
+
+  it('returns local receivers without calling BlindPay', async () => {
+    const { service, prisma, blindpay } = makeService();
+    const row = baseRow();
+    prisma.blindpayReceiver.findFirst.mockResolvedValue(row);
+
+    await expect(service.findOne(CONSUMER, row.id)).resolves.toBe(row);
+    expect(blindpay.get).not.toHaveBeenCalled();
+  });
+
+  it('refreshes remote receivers and falls back locally on provider failure', async () => {
+    const { service, prisma, blindpay, sync } = makeService();
+    const row = baseRow({ blindpayId: REAL_ID, kycStatus: 'verifying' });
+    prisma.blindpayReceiver.findFirst.mockResolvedValue(row);
+    blindpay.get
+      .mockResolvedValueOnce({ id: REAL_ID, kyc_status: 'approved' })
+      .mockRejectedValueOnce(new Error('provider down'));
+    const mirrored = { ...row, kycStatus: 'approved' };
+    sync.mirrorReceiver.mockResolvedValue(mirrored);
+
+    await expect(service.findOne(CONSUMER, row.id)).resolves.toBe(mirrored);
+    await expect(service.findOne(CONSUMER, row.id)).resolves.toBe(row);
+  });
+
+  it('removes a local receiver without a provider DELETE', async () => {
+    const { service, prisma, blindpay } = makeService();
+    const row = baseRow();
+    prisma.blindpayReceiver.findFirst.mockResolvedValue(row);
+    prisma.blindpayReceiver.delete.mockResolvedValue(row);
+
+    await expect(service.remove(CONSUMER, row.id)).resolves.toEqual({
+      id: row.id,
+      deleted: true,
+    });
+    expect(blindpay.delete).not.toHaveBeenCalled();
+  });
+
+  it('deletes a remote receiver at BlindPay before deleting its mirror', async () => {
+    const { service, prisma, blindpay } = makeService();
+    const row = baseRow({ blindpayId: REAL_ID });
+    prisma.blindpayReceiver.findFirst.mockResolvedValue(row);
+    prisma.blindpayReceiver.delete.mockResolvedValue(row);
+
+    await service.remove(CONSUMER, row.id);
+
+    expect(blindpay.delete).toHaveBeenCalledWith(
+      '/instances/in_test/customers/re_000000000000',
+    );
+    expect(blindpay.delete.mock.invocationCallOrder[0]).toBeLessThan(
+      prisma.blindpayReceiver.delete.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('updates the owner/admin access switch after the ownership check', async () => {
+    const { service, prisma } = makeService();
+    const row = baseRow();
+    prisma.blindpayReceiver.findFirst.mockResolvedValue(row);
+    prisma.blindpayReceiver.update.mockResolvedValue({
+      ...row,
+      disabled: true,
+    });
+
+    await service.setAccess(CONSUMER, row.id, true);
+
+    expect(prisma.blindpayReceiver.update).toHaveBeenCalledWith({
+      where: { id: row.id },
+      data: { disabled: true },
+    });
   });
 });
