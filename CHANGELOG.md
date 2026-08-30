@@ -2,6 +2,14 @@
 
 All notable changes to the Cosmos Pay Community Server are documented here.
 Generated from [Conventional Commits](https://www.conventionalcommits.org) by [git-cliff](https://git-cliff.org).
+## [0.1.4] - 2026-08-30
+
+### Bug Fixes
+- Paginate exact per-asset totals (#68) (2128f62)
+
+### Testing
+- Cover tenant scoping and ToS safeguards (#69) (d67139f)
+
 ## [0.1.3] - 2026-08-30
 
 ### Bug Fixes
