@@ -1,27 +1,35 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import { ConsumerResolverService } from '../blindpay/consumer-resolver.service';
+import { formatFixed7, parseAmountOrZero } from '../common/stellar-amount';
 import { GatewayConsumer } from '../common/interfaces/gateway-consumer.interface';
 import { PrismaService } from '../prisma/prisma.service';
-import { fromStroops, toStroops } from '../swaps/swap-math';
 import { CreateCustomerDto } from './dto/create-customer.dto';
+import { QueryCustomersDto } from './dto/query-customers.dto';
 import { UpdateCustomerDto } from './dto/update-customer.dto';
+
+const STATS_BATCH_SIZE = 1_000;
+
+type AssetTotal = {
+  asset: string;
+  assetIssuer: string | null;
+  amount: bigint;
+  succeeded: number;
+};
+
+type CustomerStats = {
+  payments: number;
+  totals: Map<string, AssetTotal>;
+};
 
 @Injectable()
 export class CustomersService {
-  constructor(private readonly prisma: PrismaService) {}
-
-  private resolveConsumer(consumer: GatewayConsumer) {
-    return this.prisma.consumer.upsert({
-      where: { apisixUsername: consumer.username },
-      create: {
-        apisixUsername: consumer.username,
-        credentialId: consumer.credentialId,
-      },
-      update: { credentialId: consumer.credentialId },
-    });
-  }
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly consumerResolver: ConsumerResolverService,
+  ) {}
 
   async create(consumer: GatewayConsumer, dto: CreateCustomerDto) {
-    const local = await this.resolveConsumer(consumer);
+    const local = await this.consumerResolver.resolve(consumer);
     return this.prisma.customer.create({
       data: {
         consumerId: local.id,
@@ -35,62 +43,120 @@ export class CustomersService {
     });
   }
 
-  async findAll(consumer: GatewayConsumer) {
-    const local = await this.resolveConsumer(consumer);
+  async findAll(
+    consumer: GatewayConsumer,
+    query: QueryCustomersDto = new QueryCustomersDto(),
+  ) {
+    const local = await this.consumerResolver.resolve(consumer);
+    const take = query.take ?? 20;
+    const skip = query.skip ?? 0;
+    const where = { consumerId: local.id };
 
-    // Enrich each stored customer with on-chain stats derived from payment
-    // intents whose payer (source) matches the customer's account.
-    const [customers, intents] = await Promise.all([
+    const [customers, total] = await this.prisma.$transaction([
       this.prisma.customer.findMany({
-        where: { consumerId: local.id },
+        where,
         orderBy: { createdAt: 'desc' },
+        take,
+        skip,
       }),
-      this.prisma.paymentIntent.findMany({
-        where: { consumerId: local.id, source: { not: null } },
-        select: { source: true, amount: true, status: true },
-      }),
+      this.prisma.customer.count({ where }),
     ]);
 
-    const stats = new Map<
-      string,
-      { payments: number; succeeded: number; total: bigint }
-    >();
-    for (const i of intents) {
-      const acct = i.source as string;
-      const cur = stats.get(acct) ?? { payments: 0, succeeded: 0, total: 0n };
-      cur.payments += 1;
-      if (i.status === 'SUCCEEDED') {
-        cur.succeeded += 1;
-        if (i.amount) {
-          try {
-            cur.total += toStroops(i.amount);
-          } catch {
-            // skip malformed amounts
-          }
-        }
-      }
-      stats.set(acct, cur);
-    }
+    const accounts = [
+      ...new Set(
+        customers
+          .map((customer) => customer.account)
+          .filter((account): account is string => typeof account === 'string'),
+      ),
+    ];
+    const stats = await this.loadStats(local.id, accounts);
 
     const data = customers.map((c) => {
-      const s = (c.account && stats.get(c.account)) || {
-        payments: 0,
-        succeeded: 0,
-        total: 0n,
-      };
+      const customerStats = c.account ? stats.get(c.account) : undefined;
+      const totals = [...(customerStats?.totals.values() ?? [])]
+        .map(({ amount, ...assetTotal }) => ({
+          ...assetTotal,
+          amount: formatFixed7(amount),
+        }))
+        .sort(
+          (a, b) =>
+            a.asset.localeCompare(b.asset) ||
+            (a.assetIssuer ?? '').localeCompare(b.assetIssuer ?? ''),
+        );
       return {
         ...c,
-        payments: s.payments,
-        succeeded: s.succeeded,
-        total: fromStroops(s.total),
+        payments: customerStats?.payments ?? 0,
+        totals,
       };
     });
 
-    return { data, total: data.length };
+    return { data, total, take, skip };
+  }
+
+  /**
+   * Load only intents belonging to accounts on the current customer page. The
+   * cursor keeps every Prisma read bounded while preserving exact all-time
+   * totals for those accounts.
+   */
+  private async loadStats(
+    consumerId: string,
+    accounts: string[],
+  ): Promise<Map<string, CustomerStats>> {
+    const stats = new Map<string, CustomerStats>();
+    if (accounts.length === 0) return stats;
+
+    let cursor: string | undefined;
+    for (;;) {
+      const intents = await this.prisma.paymentIntent.findMany({
+        where: { consumerId, source: { in: accounts } },
+        select: {
+          id: true,
+          source: true,
+          amount: true,
+          status: true,
+          asset: true,
+          assetIssuer: true,
+        },
+        orderBy: { id: 'asc' },
+        take: STATS_BATCH_SIZE,
+        ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+      });
+
+      for (const intent of intents) {
+        if (!intent.source) continue;
+        const customerStats = stats.get(intent.source) ?? {
+          payments: 0,
+          totals: new Map<string, AssetTotal>(),
+        };
+        customerStats.payments += 1;
+
+        const asset =
+          !intent.asset || intent.asset === 'native' ? 'XLM' : intent.asset;
+        const assetIssuer = asset === 'XLM' ? null : intent.assetIssuer;
+        const assetKey = JSON.stringify([asset, assetIssuer]);
+        const assetTotal = customerStats.totals.get(assetKey) ?? {
+          asset,
+          assetIssuer,
+          amount: 0n,
+          succeeded: 0,
+        };
+        if (intent.status === 'SUCCEEDED') {
+          assetTotal.succeeded += 1;
+          assetTotal.amount += parseAmountOrZero(intent.amount);
+        }
+        customerStats.totals.set(assetKey, assetTotal);
+        stats.set(intent.source, customerStats);
+      }
+
+      if (intents.length < STATS_BATCH_SIZE) break;
+      cursor = intents[intents.length - 1].id;
+    }
+
+    return stats;
   }
 
   async findOne(consumer: GatewayConsumer, id: string) {
-    const local = await this.resolveConsumer(consumer);
+    const local = await this.consumerResolver.resolve(consumer);
     const customer = await this.prisma.customer.findFirst({
       where: { id, consumerId: local.id },
     });

@@ -1535,10 +1535,27 @@ paths:
         - customers
     get:
       operationId: CustomersController_findAll_v1
-      parameters: []
+      parameters:
+        - name: take
+          required: false
+          in: query
+          schema:
+            maximum: 100
+            default: 20
+            type: number
+        - name: skip
+          required: false
+          in: query
+          schema:
+            default: 0
+            type: number
       responses:
         "200":
           description: ""
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CustomerListEntity"
       summary: List the consumer's customers (with payment stats)
       tags:
         - customers
@@ -4515,6 +4532,111 @@ components:
           example: cust_001
       required:
         - name
+    CustomerTotalEntity:
+      type: object
+      properties:
+        asset:
+          type: string
+          example: XLM
+          description: XLM for the native asset, otherwise the Stellar asset code.
+        assetIssuer:
+          type: string
+          nullable: true
+          example: null
+          description: Issuer account for non-native assets.
+        amount:
+          type: string
+          example: "100.0000000"
+          description: Succeeded amount with exactly seven decimal places.
+        succeeded:
+          type: number
+          example: 3
+      required:
+        - asset
+        - assetIssuer
+        - amount
+        - succeeded
+    CustomerEntity:
+      type: object
+      properties:
+        id:
+          type: string
+          example: clx9z8a1b0000abcd1234efgh
+        consumerId:
+          type: string
+          example: consumer_0001
+        name:
+          type: string
+          example: Acme Inc.
+        alias:
+          type: string
+          nullable: true
+          example: Acme — billing
+        email:
+          type: string
+          nullable: true
+          example: billing@acme.com
+        account:
+          type: string
+          nullable: true
+          example: GCALNQQBXAPZ2WIRSDDBMSTAKCUH5SG6U76YBFLQLIXJTF7FE5AX7AOO
+        note:
+          type: string
+          nullable: true
+          example: VIP customer
+        reference:
+          type: string
+          nullable: true
+          example: cust_001
+        payments:
+          type: number
+          example: 4
+          description: All payment intents for the account.
+        totals:
+          type: array
+          items:
+            $ref: "#/components/schemas/CustomerTotalEntity"
+        createdAt:
+          format: date-time
+          type: string
+        updatedAt:
+          format: date-time
+          type: string
+      required:
+        - id
+        - consumerId
+        - name
+        - alias
+        - email
+        - account
+        - note
+        - reference
+        - payments
+        - totals
+        - createdAt
+        - updatedAt
+    CustomerListEntity:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/CustomerEntity"
+        total:
+          type: number
+          example: 1
+          description: Total number of stored customers.
+        take:
+          type: number
+          example: 20
+        skip:
+          type: number
+          example: 0
+      required:
+        - data
+        - total
+        - take
+        - skip
     UpdateCustomerDto:
       type: object
       properties:

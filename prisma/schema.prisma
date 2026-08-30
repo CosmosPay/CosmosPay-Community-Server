@@ -302,6 +302,7 @@ model PaymentIntent {
 
   @@unique([consumerId, memo]) // idempotency: one intent per (consumer, memo)
   @@index([consumerId])
+  @@index([consumerId, source])
   @@index([status])
   @@index([consumerId, network, createdAt])
   @@map("payment_intent")
