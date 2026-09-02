@@ -3,6 +3,7 @@ import { randomBytes } from 'node:crypto';
 import { ApiError, ApiErrorCode } from '../common/errors/api-error';
 import { isRedactedPayload } from './webhook-payload-retention';
 import { PrismaService } from '../prisma/prisma.service';
+import { ConsumerResolverService } from '../common/services/consumer-resolver.service';
 import { GatewayConsumer } from '../common/interfaces/gateway-consumer.interface';
 import type {
   WebhookDelivery,
@@ -31,17 +32,11 @@ export class WebhooksService {
     private readonly prisma: PrismaService,
     private readonly dispatcher: WebhookDispatcherService,
     private readonly destinations: WebhookDestinationGuard,
+    private readonly consumers: ConsumerResolverService,
   ) {}
 
   private resolveConsumer(consumer: GatewayConsumer) {
-    return this.prisma.consumer.upsert({
-      where: { apisixUsername: consumer.username },
-      create: {
-        apisixUsername: consumer.username,
-        credentialId: consumer.credentialId,
-      },
-      update: { credentialId: consumer.credentialId },
-    });
+    return this.consumers.resolve(consumer);
   }
 
   private generateSecret(): string {

@@ -8,8 +8,10 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   Req,
 } from '@nestjs/common';
+import { WidePaginationQueryDto } from '../../common/dto/pagination.query.dto';
 import type { Request } from 'express';
 import {
   ApiCreatedResponse,
@@ -51,8 +53,11 @@ export class ReceiversController {
   @RequirePermissions('kyc:read')
   @ApiOperation({ summary: "List the consumer's receivers" })
   @ApiOkResponse({ type: ReceiverListEntity })
-  findAll(@CurrentConsumer() consumer: GatewayConsumer) {
-    return this.receivers.findAll(consumer);
+  findAll(
+    @CurrentConsumer() consumer: GatewayConsumer,
+    @Query() query: WidePaginationQueryDto,
+  ) {
+    return this.receivers.findAll(consumer, query);
   }
 
   @Get(':id')

@@ -1,3 +1,4 @@
+import { ConsumerResolverService } from '../common/services/consumer-resolver.service';
 import { CustomersService } from './customers.service';
 
 describe('CustomersService.findAll', () => {
@@ -26,7 +27,10 @@ describe('CustomersService.findAll', () => {
         },
       ]),
     };
-    const service = new CustomersService(prisma as any);
+    const service = new CustomersService(
+      prisma as any,
+      new ConsumerResolverService(prisma as never),
+    );
     return { service, prisma, customers };
   }
 

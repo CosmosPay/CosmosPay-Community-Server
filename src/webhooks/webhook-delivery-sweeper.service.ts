@@ -1,15 +1,11 @@
-import {
-  Injectable,
-  Logger,
-  OnModuleDestroy,
-  OnModuleInit,
-} from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { AppConfig } from '../config/configuration';
 import {
   AdvisoryLockKey,
   AdvisoryLockService,
 } from '../common/services/advisory-lock.service';
+import { JobSchedule, ScheduledJob } from '../common/services/scheduled-job';
 import { EXCLUDE_REDACTED } from './webhook-payload-retention';
 import { PrismaService } from '../prisma/prisma.service';
 import { WebhookDispatcherService } from './webhook-dispatcher.service';
@@ -30,56 +26,51 @@ import { WebhookDispatcherService } from './webhook-dispatcher.service';
  * each re-send the same backlog.
  */
 @Injectable()
-export class WebhookDeliverySweeperService
-  implements OnModuleInit, OnModuleDestroy
-{
-  private readonly logger = new Logger(WebhookDeliverySweeperService.name);
-  private timer?: NodeJS.Timeout;
-  private running = false;
+export class WebhookDeliverySweeperService extends ScheduledJob {
+  protected readonly logger = new Logger(WebhookDeliverySweeperService.name);
+  protected readonly lockKey = AdvisoryLockKey.WebhookDeliverySweeper;
 
   constructor(
     private readonly config: ConfigService<AppConfig, true>,
     private readonly prisma: PrismaService,
-    private readonly locks: AdvisoryLockService,
+    locks: AdvisoryLockService,
     private readonly dispatcher: WebhookDispatcherService,
-  ) {}
+  ) {
+    super(locks);
+  }
 
-  onModuleInit(): void {
+  protected schedule(): JobSchedule {
     const { enabled, intervalMs } = this.sweepSettings();
-    if (!enabled) {
-      this.logger.log(
-        'Webhook delivery sweeper disabled (WEBHOOK_SWEEP_ENABLED=false)',
-      );
-      return;
-    }
-    this.logger.log(`Webhook delivery sweeper started (every ${intervalMs}ms)`);
-    // `unref` so the interval never keeps the process alive on its own.
-    this.timer = setInterval(() => void this.tick(), intervalMs);
-    this.timer.unref?.();
+    return {
+      enabled,
+      intervalMs,
+      description: enabled
+        ? 'Webhook delivery sweeper'
+        : 'Webhook delivery sweeper (WEBHOOK_SWEEP_ENABLED=false)',
+    };
   }
 
-  onModuleDestroy(): void {
-    if (this.timer) clearInterval(this.timer);
+  /**
+   * Overrides the default so the lock covers the claim only.
+   *
+   * Claiming is short and must be exclusive; the HTTP sends must not be, or one
+   * unresponsive integrator would stall every replica's sweep for the duration
+   * of its timeout. Stamping `lastAttemptAt` inside the lock is what makes that
+   * safe — see {@link claimStranded}.
+   */
+  protected async cycle(): Promise<void> {
+    const claimed = await this.locks.runExclusive(
+      this.lockKey,
+      () => this.claimStranded(),
+      CLAIM_TIMEOUT_MS,
+    );
+    if (!claimed || claimed.length === 0) return;
+    await this.recover(claimed);
   }
 
-  private async tick(): Promise<void> {
-    if (this.running) return; // never overlap cycles
-    this.running = true;
-    try {
-      // Claiming happens under the lock and is short; the HTTP sends do not
-      // hold it, or one slow receiver would stall every replica's sweep.
-      const claimed = await this.locks.runExclusive(
-        AdvisoryLockKey.WebhookDeliverySweeper,
-        () => this.claimStranded(),
-        CLAIM_TIMEOUT_MS,
-      );
-      if (!claimed || claimed.length === 0) return;
-      await this.recover(claimed);
-    } catch (err) {
-      this.logger.error('Webhook delivery sweep cycle failed', err as Error);
-    } finally {
-      this.running = false;
-    }
+  /** Unused: {@link cycle} is overridden, since the lock covers the claim only. */
+  protected run(): Promise<void> {
+    return Promise.resolve();
   }
 
   /**

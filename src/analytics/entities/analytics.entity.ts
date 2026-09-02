@@ -115,6 +115,12 @@ export class ApiLogListEntity {
     example: 41203,
   })
   total!: number;
+
+  @ApiProperty({ example: 100 })
+  take!: number;
+
+  @ApiProperty({ example: 0 })
+  skip!: number;
 }
 
 export class WebhookLogEntity {
@@ -148,4 +154,10 @@ export class WebhookLogListEntity {
     example: 1204,
   })
   total!: number;
+
+  @ApiProperty({ example: 100 })
+  take!: number;
+
+  @ApiProperty({ example: 0 })
+  skip!: number;
 }

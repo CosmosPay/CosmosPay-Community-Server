@@ -1,3 +1,4 @@
+import { ConsumerResolverService } from '../common/services/consumer-resolver.service';
 import { AnalyticsService } from './analytics.service';
 import type { GatewayConsumer } from '../common/interfaces/gateway-consumer.interface';
 
@@ -46,7 +47,11 @@ describe('AnalyticsService', () => {
       $queryRaw: queryRaw,
     };
     return {
-      service: new AnalyticsService(prisma as never, config as never),
+      service: new AnalyticsService(
+        prisma as never,
+        config as never,
+        new ConsumerResolverService(prisma as never),
+      ),
       prisma,
       findMany,
     };

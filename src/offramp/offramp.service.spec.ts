@@ -155,7 +155,9 @@ describe('OfframpService reads', () => {
     prisma.payout.findMany.mockResolvedValue([payoutRow(), payoutRow()]);
     prisma.payout.count.mockResolvedValue(41);
 
-    await expect(service.findAll(CONSUMER)).resolves.toMatchObject({
+    await expect(
+      service.findAll(CONSUMER, { take: 100, skip: 0 }),
+    ).resolves.toMatchObject({
       total: 41,
     });
   });

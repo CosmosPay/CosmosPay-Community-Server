@@ -3,6 +3,9 @@ import { ConfigService } from '@nestjs/config';
 import { AppConfig } from '../config/configuration';
 import { GatewayConsumer } from '../common/interfaces/gateway-consumer.interface';
 import { formatNumericAmount, toCount } from '../common/money';
+import { ConsumerResolverService } from '../common/services/consumer-resolver.service';
+import { PaginationQueryDto } from '../common/dto/pagination.query.dto';
+import { page } from '../common/pagination';
 import { resolveNetwork } from '../common/stellar-network';
 import { PrismaService } from '../prisma/prisma.service';
 import type { PaymentIntentStatus } from '../../generated/prisma/client';
@@ -23,18 +26,12 @@ export class AnalyticsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly config: ConfigService<AppConfig, true>,
+    private readonly consumers: ConsumerResolverService,
   ) {}
 
   /** Mirror the APISIX consumer locally (and return null if it has no records yet). */
   private async resolveConsumerId(consumer: GatewayConsumer): Promise<string> {
-    const local = await this.prisma.consumer.upsert({
-      where: { apisixUsername: consumer.username },
-      create: {
-        apisixUsername: consumer.username,
-        credentialId: consumer.credentialId,
-      },
-      update: { credentialId: consumer.credentialId },
-    });
+    const local = await this.consumers.resolve(consumer);
     return local.id;
   }
 
@@ -276,7 +273,7 @@ export class AnalyticsService {
   }
 
   // ── API request logs (real inbound requests, with details) ──────────────────
-  async apiLogs(consumer: GatewayConsumer, take = 100) {
+  async apiLogs(consumer: GatewayConsumer, query: PaginationQueryDto) {
     // RequestLog is keyed by the forwarded consumer username (not the local id).
     // `internal: false` excludes the dashboard's own management-console calls,
     // which are now recorded and flagged rather than skipped at write time.
@@ -285,7 +282,8 @@ export class AnalyticsService {
       this.prisma.requestLog.findMany({
         where,
         orderBy: { createdAt: 'desc' },
-        take,
+        take: query.take,
+        skip: query.skip,
       }),
       this.prisma.requestLog.count({ where }),
     ]);
@@ -301,23 +299,24 @@ export class AnalyticsService {
         r.statusCode < 400 ? 'ok' : r.statusCode < 500 ? 'pending' : 'fail',
       at: r.createdAt,
     }));
-    return { data, total };
+    return page(data, total, query);
   }
 
   // ── Webhook delivery logs (across all the consumer's endpoints) ──────────────
-  async webhookLogs(consumer: GatewayConsumer, take = 100) {
+  async webhookLogs(consumer: GatewayConsumer, query: PaginationQueryDto) {
     const consumerId = await this.resolveConsumerId(consumer);
     const endpoints = await this.prisma.webhookEndpoint.findMany({
       where: { consumerId },
       select: { id: true, url: true },
     });
-    if (!endpoints.length) return { data: [], total: 0 };
+    if (!endpoints.length) return page([], 0, query);
 
     const urlById = new Map(endpoints.map((e) => [e.id, e.url]));
     const deliveries = await this.prisma.webhookDelivery.findMany({
       where: { endpointId: { in: endpoints.map((e) => e.id) } },
       orderBy: { createdAt: 'desc' },
-      take,
+      take: query.take,
+      skip: query.skip,
       // The body never leaves PostgreSQL. WebhooksService.listDeliveries omits
       // it for this exact reason, and this route reads the same rows under the
       // same `webhooks:read` scope. Relying on the projection below to drop it
@@ -348,6 +347,6 @@ export class AnalyticsService {
     }));
     // The row count, never `data.length` — which always equals `take` on a full
     // page, so a caller could never tell a full page from the last one.
-    return { data, total };
+    return page(data, total, query);
   }
 }

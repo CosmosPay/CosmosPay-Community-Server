@@ -1,9 +1,4 @@
-import {
-  Injectable,
-  Logger,
-  OnModuleDestroy,
-  OnModuleInit,
-} from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { AppConfig } from '../../config/configuration';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -12,6 +7,7 @@ import {
   REDACTED_PAYLOAD,
 } from '../../webhooks/webhook-payload-retention';
 import { AdvisoryLockKey, AdvisoryLockService } from './advisory-lock.service';
+import { JobSchedule, ScheduledJob } from './scheduled-job';
 
 /**
  * Background retention for the two tables that accumulate personal data as a
@@ -28,69 +24,43 @@ import { AdvisoryLockKey, AdvisoryLockService } from './advisory-lock.service';
  * past any redelivery window, so nothing that could still be retried loses what
  * it needs to re-send.
  *
- * Mirrors SettlementObserverService: fixed interval, no overlapping cycles,
- * `unref` so the timer never keeps the process alive, clearInterval on destroy.
- *
- * Each tick drains in short `batchSize` calls (short locks) and loops until the
+ * Each cycle drains in short `batchSize` calls (short locks) and loops until the
  * backlog is empty or `maxPerCycle` is hit, so a large history can catch up
  * without waiting one batch per hour.
+ *
+ * The timer, the no-overlap latch, `unref`, the advisory lock and the
+ * swallow-at-the-boundary all come from {@link ScheduledJob}.
  */
 @Injectable()
-export class RequestLogRetentionService
-  implements OnModuleInit, OnModuleDestroy
-{
-  private readonly logger = new Logger(RequestLogRetentionService.name);
-  private timer?: NodeJS.Timeout;
-  private running = false;
+export class RequestLogRetentionService extends ScheduledJob {
+  protected readonly logger = new Logger(RequestLogRetentionService.name);
+  protected readonly lockKey = AdvisoryLockKey.RequestLogRetention;
 
   constructor(
     private readonly config: ConfigService<AppConfig, true>,
     private readonly prisma: PrismaService,
-    private readonly lock: AdvisoryLockService,
-  ) {}
+    locks: AdvisoryLockService,
+  ) {
+    super(locks);
+  }
 
-  onModuleInit(): void {
+  protected schedule(): JobSchedule {
     const { retentionDays, pruneIntervalMs, deliveryPayloadDays } =
       this.config.get('requestLogRetention', { infer: true });
-    // The timer serves two prunes now, so it runs while *either* is enabled.
-    if (retentionDays <= 0 && deliveryPayloadDays <= 0) {
-      this.logger.log(
-        'Retention disabled (REQUEST_LOG_RETENTION_DAYS=0, WEBHOOK_PAYLOAD_RETENTION_DAYS=0)',
-      );
-      return;
-    }
-    this.logger.log(
-      `Retention started (request logs ${retentionDays}d, delivery bodies ` +
-        `${deliveryPayloadDays}d, every ${pruneIntervalMs}ms)`,
-    );
-    this.timer = setInterval(() => void this.tick(), pruneIntervalMs);
-    this.timer.unref?.();
+    return {
+      // One timer serves two prunes, so it runs while *either* is enabled.
+      enabled: retentionDays > 0 || deliveryPayloadDays > 0,
+      intervalMs: pruneIntervalMs,
+      description:
+        retentionDays > 0 || deliveryPayloadDays > 0
+          ? `Retention (request logs ${retentionDays}d, delivery bodies ${deliveryPayloadDays}d)`
+          : 'Retention (REQUEST_LOG_RETENTION_DAYS=0, WEBHOOK_PAYLOAD_RETENTION_DAYS=0)',
+    };
   }
 
-  onModuleDestroy(): void {
-    if (this.timer) clearInterval(this.timer);
-  }
-
-  private async tick(): Promise<void> {
-    if (this.running) return; // in-process guard
-    this.running = true;
-    try {
-      // Cluster guard. Every replica runs this timer and they all select the
-      // same oldest rows, so without the lock two of three replicas do nothing
-      // but contend for locks on the first replica's tuples. Transaction-scoped,
-      // so a crashed pod releases it rather than wedging the prune.
-      await this.lock.runExclusive(
-        AdvisoryLockKey.RequestLogRetention,
-        async () => {
-          await this.prune();
-          await this.pruneDeliveryPayloads();
-        },
-      );
-    } catch (err) {
-      this.logger.error('Request log retention cycle failed', err as Error);
-    } finally {
-      this.running = false;
-    }
+  protected async run(): Promise<void> {
+    await this.prune();
+    await this.pruneDeliveryPayloads();
   }
 
   private async prune(): Promise<void> {

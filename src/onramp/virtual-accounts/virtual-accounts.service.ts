@@ -1,8 +1,10 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { GatewayConsumer } from '../../common/interfaces/gateway-consumer.interface';
+import { PaginationQueryDto } from '../../common/dto/pagination.query.dto';
+import { page } from '../../common/pagination';
 import { PrismaService } from '../../prisma/prisma.service';
 import { BlindpayClient } from '../../blindpay/blindpay.client';
-import { ConsumerResolverService } from '../../blindpay/consumer-resolver.service';
+import { ConsumerResolverService } from '../../common/services/consumer-resolver.service';
 import {
   BlindpayObject,
   VIRTUAL_ACCOUNT_PUBLIC_SELECT,
@@ -52,7 +54,11 @@ export class VirtualAccountsService {
     return this.mirror(local.id, receiver.id, created);
   }
 
-  async findAll(consumer: GatewayConsumer, receiverId: string) {
+  async findAll(
+    consumer: GatewayConsumer,
+    receiverId: string,
+    query: PaginationQueryDto,
+  ) {
     const local = await this.consumers.resolve(consumer);
     const receiver = await this.receivers.findReceiverOrThrow(
       local.id,
@@ -66,11 +72,13 @@ export class VirtualAccountsService {
       this.prisma.blindpayVirtualAccount.findMany({
         where,
         orderBy: { createdAt: 'desc' },
+        take: query.take,
+        skip: query.skip,
         select: VIRTUAL_ACCOUNT_PUBLIC_SELECT,
       }),
       this.prisma.blindpayVirtualAccount.count({ where }),
     ]);
-    return { data, total };
+    return page(data, total, query);
   }
 
   private async resolveWalletBlindpayId(

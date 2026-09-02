@@ -31,6 +31,15 @@ export class WalletListEntity {
   @ApiProperty({ type: [WalletEntity] })
   data!: WalletEntity[];
 
-  @ApiProperty({ example: 1 })
+  @ApiProperty({
+    description: 'Matching rows, not the page length.',
+    example: 1,
+  })
   total!: number;
+
+  @ApiProperty({ example: 100 })
+  take!: number;
+
+  @ApiProperty({ example: 0 })
+  skip!: number;
 }

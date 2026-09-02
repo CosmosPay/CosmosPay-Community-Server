@@ -1,3 +1,5 @@
+import { StellarAccountLoader } from '../stellar/account-loader.service';
+import { ConsumerResolverService } from '../common/services/consumer-resolver.service';
 import { HttpStatus } from '@nestjs/common';
 import { Account, Keypair, TransactionBuilder } from '@stellar/stellar-sdk';
 import { ApiError, ApiErrorCode } from '../common/errors/api-error';
@@ -343,7 +345,14 @@ describe('SwapsService.submit vs observer (issue #29 double terminal event)', ()
     events = { emit: jest.fn() } as any;
     const config = makeConfig();
     const webhooks = makeEmitter(prisma, events);
-    service = new SwapsService(config, prisma, webhooks, stellar as any);
+    service = new SwapsService(
+      config,
+      prisma,
+      webhooks,
+      stellar as any,
+      new ConsumerResolverService(prisma as never),
+      new StellarAccountLoader(stellar as never),
+    );
     observer = new SettlementObserverService(
       config,
       prisma,
@@ -457,7 +466,14 @@ describe('SwapsService.create idempotency (issue #17)', () => {
     events = { emit: jest.fn() } as any;
     const config = makeConfig();
     const webhooks = makeEmitter(prisma, events);
-    service = new SwapsService(config, prisma, webhooks, stellar as any);
+    service = new SwapsService(
+      config,
+      prisma,
+      webhooks,
+      stellar as any,
+      new ConsumerResolverService(prisma as never),
+      new StellarAccountLoader(stellar as never),
+    );
     jest.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000);
   });
 
@@ -549,7 +565,14 @@ describe('SwapsService.create idempotency (issue #17)', () => {
   it('returns 409 when STELLAR_SWAP_SINGLE_INFLIGHT blocks a second PENDING source', async () => {
     const config = makeConfig({ singleInflight: true });
     const webhooks = makeEmitter(prisma, events);
-    service = new SwapsService(config, prisma, webhooks, stellar as any);
+    service = new SwapsService(
+      config,
+      prisma,
+      webhooks,
+      stellar as any,
+      new ConsumerResolverService(prisma as never),
+      new StellarAccountLoader(stellar as never),
+    );
 
     await service.create(consumer, createDto, 'a');
     await expect(
@@ -574,7 +597,14 @@ describe('SettlementObserverService duplicate txHash (issue #17)', () => {
     events = { emit: jest.fn() } as any;
     const config = makeConfig();
     const webhooks = makeEmitter(prisma, events);
-    service = new SwapsService(config, prisma, webhooks, stellar as any);
+    service = new SwapsService(
+      config,
+      prisma,
+      webhooks,
+      stellar as any,
+      new ConsumerResolverService(prisma as never),
+      new StellarAccountLoader(stellar as never),
+    );
     observer = new SettlementObserverService(
       config,
       prisma,
@@ -649,6 +679,8 @@ describe('SwapsService platform commission fail-closed (X-Plan-Swap-Fee-Bps)', (
       prisma,
       makeEmitter(prisma, events),
       stellar as any,
+      new ConsumerResolverService(prisma as never),
+      new StellarAccountLoader(stellar as never),
     );
   }
 

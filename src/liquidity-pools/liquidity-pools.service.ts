@@ -17,6 +17,13 @@ import { resolvePlanCommissionBps } from '../common/plan-commission';
 import { isUniqueViolation } from '../common/prisma-errors';
 import { resolveNetwork } from '../common/stellar-network';
 import { PrismaService } from '../prisma/prisma.service';
+import { ConsumerResolverService } from '../common/services/consumer-resolver.service';
+import { StellarAccountLoader } from '../stellar/account-loader.service';
+import type { BalanceEntry } from '../stellar/account-loader.service';
+import { assetLabel, resolveAsset, ResolvedAsset } from '../stellar/asset';
+import { extractResultCodes } from '../stellar/horizon-errors';
+import { applyMemo, resolveMemoId } from '../stellar/memo';
+import { SettlementRepository } from '../stellar/settlement.repository';
 import { StellarService } from '../stellar/stellar.service';
 import type {
   LiquidityPoolOperation,
@@ -35,7 +42,6 @@ import {
 import {
   LP_CAN_SUCCEED_STATUSES,
   LP_IN_FLIGHT_STATUSES,
-  type LpOperationStatus,
 } from './lp-operation-transitions';
 import { DepositLiquidityDto } from './dto/deposit-liquidity.dto';
 import { QueryLiquidityOperationsDto } from './dto/query-liquidity-operations.dto';
@@ -48,8 +54,6 @@ import {
   LiquidityPoolReserve,
   LiquidityPositionListEntity,
 } from './entities/liquidity-pool.entity';
-
-const MAX_UINT64 = 18446744073709551615n;
 
 /**
  * On-chain MEMO_TEXT stamped on operations that collect the platform commission
@@ -77,12 +81,6 @@ export interface LiquiditySubmitOutcome {
 }
 
 /** Resolved asset: its stored code/issuer and the SDK Asset for building txs. */
-interface ResolvedAsset {
-  code: string;
-  issuer: string | null;
-  asset: Asset;
-}
-
 /** Minimal shape we read off a Horizon liquidity pool record. */
 interface PoolRecord {
   id: string;
@@ -94,14 +92,6 @@ interface PoolRecord {
 }
 
 /** Minimal shape of a Horizon account balance entry. */
-interface BalanceEntry {
-  asset_type?: string;
-  asset_code?: string;
-  asset_issuer?: string;
-  liquidity_pool_id?: string;
-  balance?: string;
-}
-
 /**
  * Stellar AMM liquidity pools. Like swaps, this is **non-custodial**: the
  * service prices a deposit/withdraw against the pool's on-chain reserves,
@@ -118,6 +108,8 @@ export class LiquidityPoolsService {
     private readonly prisma: PrismaService,
     private readonly webhooks: WebhookTerminalEmitter,
     private readonly stellar: StellarService,
+    private readonly consumers: ConsumerResolverService,
+    private readonly accounts: StellarAccountLoader,
   ) {}
 
   // ── Pools (Horizon proxy) ───────────────────────────────────────────────────
@@ -133,14 +125,10 @@ export class LiquidityPoolsService {
       .order('desc');
     const filters: Asset[] = [];
     if (query.assetACode !== undefined || query.assetAIssuer !== undefined) {
-      filters.push(
-        this.resolveAsset(query.assetACode, query.assetAIssuer).asset,
-      );
+      filters.push(resolveAsset(query.assetACode, query.assetAIssuer).asset);
     }
     if (query.assetBCode !== undefined || query.assetBIssuer !== undefined) {
-      filters.push(
-        this.resolveAsset(query.assetBCode, query.assetBIssuer).asset,
-      );
+      filters.push(resolveAsset(query.assetBCode, query.assetBIssuer).asset);
     }
     if (filters.length) builder = builder.forAssets(...filters);
     if (query.account) builder = builder.forAccount(query.account);
@@ -187,7 +175,7 @@ export class LiquidityPoolsService {
     query: QueryLiquidityPositionsDto,
   ): Promise<LiquidityPositionListEntity> {
     const network = this.resolveNetwork(consumer);
-    const account = await this.loadAccount(network, query.account);
+    const account = await this.accounts.load(network, query.account);
     const shares = (account.balances as BalanceEntry[]).filter(
       (b) => b.asset_type === 'liquidity_pool_shares' && b.liquidity_pool_id,
     );
@@ -245,7 +233,7 @@ export class LiquidityPoolsService {
     const network = this.resolveNetwork(consumer);
     const local = await this.resolveConsumer(consumer);
     const slippageBps = this.resolveSlippage(dto.slippageBps);
-    const memo = this.resolveMemo(dto.memo);
+    const memo = resolveMemoId(dto.memo);
     const idempotencyKey = this.resolveIdempotencyKey(
       headerIdempotencyKey,
       dto.idempotencyKey,
@@ -262,8 +250,8 @@ export class LiquidityPoolsService {
 
     // Canonical order: the protocol requires assetA < assetB. Reorder the pair
     // (and its amounts) if the caller passed them the other way around.
-    let a = this.resolveAsset(dto.assetACode, dto.assetAIssuer);
-    let b = this.resolveAsset(dto.assetBCode, dto.assetBIssuer);
+    let a = resolveAsset(dto.assetACode, dto.assetAIssuer);
+    let b = resolveAsset(dto.assetBCode, dto.assetBIssuer);
     let rawAmountA: string | undefined = dto.maxAmountA;
     let rawAmountB: string | undefined = dto.maxAmountB;
     const cmp = Asset.compare(a.asset, b.asset);
@@ -332,10 +320,11 @@ export class LiquidityPoolsService {
       );
     }
 
-    const account = await this.loadAccount(network, dto.source);
+    const account = await this.accounts.load(network, dto.source);
     const balances = account.balances as BalanceEntry[];
-    this.assertTrustline(balances, a, dto.source);
-    this.assertTrustline(balances, b, dto.source);
+    const trustContext = 'depositing it into a pool';
+    this.accounts.assertTrustline(balances, a, dto.source, trustContext);
+    this.accounts.assertTrustline(balances, b, dto.source, trustContext);
     const hasPoolTrust = balances.some(
       (bal) =>
         bal.asset_type === 'liquidity_pool_shares' &&
@@ -407,8 +396,8 @@ export class LiquidityPoolsService {
       timeoutSeconds: stellarCfg.timeoutSeconds,
     });
     this.logger.log(
-      `Created LP deposit ${op.id}: ${fromStroops(amountA)} ${this.label(a)} + ` +
-        `${fromStroops(amountB)} ${this.label(b)} → pool ${poolId.slice(0, 8)}… ` +
+      `Created LP deposit ${op.id}: ${fromStroops(amountA)} ${assetLabel(a)} + ` +
+        `${fromStroops(amountB)} ${assetLabel(b)} → pool ${poolId.slice(0, 8)}… ` +
         `(consumer=${consumer.username}, network=${network})`,
     );
     return op;
@@ -433,7 +422,7 @@ export class LiquidityPoolsService {
     const network = this.resolveNetwork(consumer);
     const local = await this.resolveConsumer(consumer);
     const slippageBps = this.resolveSlippage(dto.slippageBps);
-    const memo = this.resolveMemo(dto.memo);
+    const memo = resolveMemoId(dto.memo);
     const idempotencyKey = this.resolveIdempotencyKey(
       headerIdempotencyKey,
       dto.idempotencyKey,
@@ -477,7 +466,7 @@ export class LiquidityPoolsService {
       );
     }
 
-    const account = await this.loadAccount(network, dto.source);
+    const account = await this.accounts.load(network, dto.source);
     const held = (account.balances as BalanceEntry[]).find(
       (bal) =>
         bal.asset_type === 'liquidity_pool_shares' &&
@@ -581,7 +570,11 @@ export class LiquidityPoolsService {
         }),
       );
     }
-    this.addMemo(builder, memo, feeA + feeB > 0n);
+    applyMemo(
+      builder,
+      memo,
+      feeA + feeB > 0n ? LIQUIDITY_COMMISSION_MEMO : null,
+    );
 
     const tx = builder.setTimeout(stellarCfg.timeoutSeconds).build();
     const op = await this.persist(consumer, {
@@ -742,7 +735,7 @@ export class LiquidityPoolsService {
         operation: await this.withQr(succeeded.operation),
       };
     } catch (err) {
-      const resultCodes = this.extractResultCodes(err);
+      const resultCodes = extractResultCodes(err);
       if (resultCodes) {
         const failed = await this.finalizeFailed(op.id, consumer.username);
         if (failed.operation.status === 'SUCCEEDED') {
@@ -939,21 +932,24 @@ export class LiquidityPoolsService {
    * Never writes cost-basis columns (`sharesReceived` / `settledAmountA` /
    * `settledAmountB`), so an error transition cannot clobber a captured basis.
    */
-  private async guardedUpdate(
-    id: string,
-    from: readonly LpOperationStatus[],
-    data: { status: SwapStatus; txHash?: string },
-  ): Promise<{ applied: boolean; operation: LiquidityPoolOperation }> {
-    const result = await this.prisma.liquidityPoolOperation.updateMany({
-      where: { id, status: { in: [...from] } },
-      data,
-    });
-    const operation =
-      await this.prisma.liquidityPoolOperation.findUniqueOrThrow({
-        where: { id },
-      });
-    return { applied: result.count > 0, operation };
+  /**
+   * The compare-and-swap settlement machine, shared with swaps.
+   *
+   * Built lazily rather than injected: it closes over `this.emit` and this
+   * module's status sets, so it is a configured view of this service's own table
+   * rather than a collaborator with its own lifecycle.
+   */
+  private get settlement(): SettlementRepository<LiquidityPoolOperation> {
+    this.settlementRepo ??= new SettlementRepository<LiquidityPoolOperation>(
+      this.prisma.liquidityPoolOperation,
+      LP_CAN_SUCCEED_STATUSES,
+      LP_IN_FLIGHT_STATUSES,
+      { succeeded: 'LIQUIDITY_SUCCEEDED', failed: 'LIQUIDITY_FAILED' },
+      (username, type, operation) => this.emit(username, type, operation),
+    );
+    return this.settlementRepo;
   }
+  private settlementRepo?: SettlementRepository<LiquidityPoolOperation>;
 
   /**
    * PENDING → SUBMITTED keeps the epoch (same settlement attempt).
@@ -962,18 +958,8 @@ export class LiquidityPoolsService {
   private async markSubmitted(
     id: string,
   ): Promise<{ applied: boolean; operation: LiquidityPoolOperation }> {
-    const resent = await this.prisma.liquidityPoolOperation.updateMany({
-      where: { id, status: 'FAILED' },
-      data: { status: 'SUBMITTED', settlementEpoch: { increment: 1 } },
-    });
-    if (resent.count > 0) {
-      const operation =
-        await this.prisma.liquidityPoolOperation.findUniqueOrThrow({
-          where: { id },
-        });
-      return { applied: true, operation };
-    }
-    return this.guardedUpdate(id, ['PENDING'], { status: 'SUBMITTED' });
+    const { applied, row } = await this.settlement.markSubmitted(id);
+    return { applied, operation: row };
   }
 
   /**
@@ -986,12 +972,11 @@ export class LiquidityPoolsService {
     username: string,
     txHash?: string,
   ): Promise<{ applied: boolean; operation: LiquidityPoolOperation }> {
-    const { applied, operation } = await this.guardedUpdate(
+    const { applied, row: operation } = await this.settlement.finalizeSucceeded(
       id,
-      LP_CAN_SUCCEED_STATUSES,
-      { status: 'SUCCEEDED', ...(txHash ? { txHash } : {}) },
+      username,
+      txHash,
     );
-    if (applied) await this.emit(username, 'LIQUIDITY_SUCCEEDED', operation);
     if (operation.status === 'SUCCEEDED') {
       await this.captureDepositBasis(operation);
       const fresh = await this.prisma.liquidityPoolOperation.findUniqueOrThrow({
@@ -1020,10 +1005,11 @@ export class LiquidityPoolsService {
     id: string,
     txHash?: string,
   ): Promise<{ applied: boolean; operation: LiquidityPoolOperation }> {
-    return this.guardedUpdate(id, LP_CAN_SUCCEED_STATUSES, {
-      status: 'SUCCEEDED',
-      ...(txHash ? { txHash } : {}),
-    });
+    const { applied, row } = await this.settlement.finalizeSucceededQuiet(
+      id,
+      txHash,
+    );
+    return { applied, operation: row };
   }
 
   /**
@@ -1034,13 +1020,8 @@ export class LiquidityPoolsService {
     id: string,
     username: string,
   ): Promise<{ applied: boolean; operation: LiquidityPoolOperation }> {
-    const { applied, operation } = await this.guardedUpdate(
-      id,
-      LP_IN_FLIGHT_STATUSES,
-      { status: 'FAILED' },
-    );
-    if (applied) await this.emit(username, 'LIQUIDITY_FAILED', operation);
-    return { applied, operation };
+    const { applied, row } = await this.settlement.finalizeFailed(id, username);
+    return { applied, operation: row };
   }
 
   /**
@@ -1050,7 +1031,8 @@ export class LiquidityPoolsService {
   async finalizeFailedQuiet(
     id: string,
   ): Promise<{ applied: boolean; operation: LiquidityPoolOperation }> {
-    return this.guardedUpdate(id, LP_IN_FLIGHT_STATUSES, { status: 'FAILED' });
+    const { applied, row } = await this.settlement.finalizeFailedQuiet(id);
+    return { applied, operation: row };
   }
 
   /**
@@ -1060,7 +1042,8 @@ export class LiquidityPoolsService {
   async finalizeExpired(
     id: string,
   ): Promise<{ applied: boolean; operation: LiquidityPoolOperation }> {
-    return this.guardedUpdate(id, LP_IN_FLIGHT_STATUSES, { status: 'EXPIRED' });
+    const { applied, row } = await this.settlement.finalizeExpired(id);
+    return { applied, operation: row };
   }
 
   // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -1071,14 +1054,7 @@ export class LiquidityPoolsService {
 
   /** Mirror the APISIX consumer locally so operations can be scoped to it. */
   private resolveConsumer(consumer: GatewayConsumer) {
-    return this.prisma.consumer.upsert({
-      where: { apisixUsername: consumer.username },
-      create: {
-        apisixUsername: consumer.username,
-        credentialId: consumer.credentialId,
-      },
-      update: { credentialId: consumer.credentialId },
-    });
+    return this.consumers.resolve(consumer);
   }
 
   private feeWallet(): string {
@@ -1088,23 +1064,6 @@ export class LiquidityPoolsService {
   /** The SDK Asset for a parsed reserve (native or issued). */
   private assetFromReserve(r: LiquidityPoolReserve): Asset {
     return r.issuer ? new Asset(r.asset, r.issuer) : Asset.native();
-  }
-
-  /**
-   * Applies the transaction memo: the caller's MEMO_ID when supplied, otherwise
-   * a default MEMO_TEXT commission label when a commission was collected — so
-   * the platform fee is identifiable on-chain. No memo when neither applies.
-   */
-  private addMemo(
-    builder: TransactionBuilder,
-    memo: string | null,
-    feeCollected: boolean,
-  ): void {
-    if (memo) {
-      builder.addMemo(Memo.id(memo));
-    } else if (feeCollected) {
-      builder.addMemo(Memo.text(LIQUIDITY_COMMISSION_MEMO));
-    }
   }
 
   /** Caller slippage, defaulted and clamped like swaps (same settings). */
@@ -1120,32 +1079,6 @@ export class LiquidityPoolsService {
     return bps;
   }
 
-  private resolveMemo(provided?: string): string | null {
-    if (provided === undefined) return null;
-    if (!/^\d+$/.test(provided) || BigInt(provided) > MAX_UINT64) {
-      throw ApiError.badRequest(
-        ApiErrorCode.InvalidMemo,
-        'memo must be a MEMO_ID: a numeric uint64',
-      );
-    }
-    return provided;
-  }
-
-  /** No code (or XLM/native) → native lumens; any other code needs an issuer. */
-  private resolveAsset(code?: string, issuer?: string): ResolvedAsset {
-    const c = code?.trim();
-    if (!c || c.toLowerCase() === 'xlm' || c.toLowerCase() === 'native') {
-      return { code: 'native', issuer: null, asset: Asset.native() };
-    }
-    if (!issuer) {
-      throw ApiError.badRequest(
-        ApiErrorCode.ValidationFailed,
-        `An issuer is required for non-native asset "${c}"`,
-      );
-    }
-    return { code: c, issuer, asset: new Asset(c, issuer) };
-  }
-
   private assertPoolId(poolId: string): void {
     if (!/^[0-9a-f]{64}$/.test(poolId)) {
       throw ApiError.badRequest(
@@ -1156,24 +1089,6 @@ export class LiquidityPoolsService {
   }
 
   /** The pool must be trusted per constituent asset before it can be entered. */
-  private assertTrustline(
-    balances: BalanceEntry[],
-    asset: ResolvedAsset,
-    address: string,
-  ): void {
-    if (asset.code === 'native' || !asset.issuer) return;
-    const trusts = balances.some(
-      (b) => b.asset_code === asset.code && b.asset_issuer === asset.issuer,
-    );
-    if (!trusts) {
-      throw ApiError.badRequest(
-        ApiErrorCode.TrustlineMissing,
-        `Account ${address} has no trustline for ${asset.code}:${asset.issuer} — ` +
-          'it must trust the asset before depositing it into a pool',
-      );
-    }
-  }
-
   /**
    * Asserts the source can afford an operation before we build the XDR: each
    * issued asset's trustline balance must cover its required amount, and the
@@ -1404,30 +1319,6 @@ export class LiquidityPoolsService {
     }
   }
 
-  private async loadAccount(network: StellarNetwork, address: string) {
-    try {
-      return await this.stellar.server(network).loadAccount(address);
-    } catch (error: unknown) {
-      const status = (error as { response?: { status?: number } })?.response
-        ?.status;
-      if (status === 404) {
-        throw ApiError.badRequest(
-          ApiErrorCode.ValidationFailed,
-          `Account ${address} not found or not funded on the ${network} network`,
-        );
-      }
-      this.logger.error('Failed to load account from Horizon', error);
-      throw ApiError.unavailable(
-        ApiErrorCode.ProviderUnavailable,
-        'Could not reach the Stellar network',
-      );
-    }
-  }
-
-  private label(a: ResolvedAsset): string {
-    return a.code === 'native' ? 'XLM' : a.code;
-  }
-
   private async findOwned(
     consumer: GatewayConsumer,
     id: string,
@@ -1442,23 +1333,6 @@ export class LiquidityPoolsService {
   }
 
   /** Pulls Horizon's transaction/operation result codes off a failed submit. */
-  private extractResultCodes(err: unknown): string[] | null {
-    const data = (
-      err as {
-        response?: {
-          data?: { extras?: { result_codes?: ResultCodes } };
-          extras?: { result_codes?: ResultCodes };
-        };
-      }
-    )?.response;
-    const rc = data?.data?.extras?.result_codes ?? data?.extras?.result_codes;
-    if (!rc) return null;
-    const codes: string[] = [];
-    if (rc.transaction) codes.push(rc.transaction);
-    if (Array.isArray(rc.operations)) codes.push(...rc.operations);
-    return codes.length ? codes : null;
-  }
-
   private async withQr(
     op: LiquidityPoolOperation,
   ): Promise<LiquidityOperationView> {
@@ -1477,9 +1351,4 @@ export class LiquidityPoolsService {
   ): Promise<boolean> {
     return this.webhooks.emit(username, type, data);
   }
-}
-
-interface ResultCodes {
-  transaction?: string;
-  operations?: string[];
 }

@@ -1,3 +1,4 @@
+import { ConsumerResolverService } from '../common/services/consumer-resolver.service';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { WEBHOOK_EVENT, WebhookEventPayload } from '../webhooks/webhook-events';
 import { WebhookTerminalEmitter } from '../webhooks/webhook-terminal-emitter.service';
@@ -162,6 +163,7 @@ describe('payment intent terminal webhooks are durable', () => {
       new WebhookTerminalEmitter(prisma, events, dispatcher as any),
       {} as any,
       {} as any,
+      new ConsumerResolverService(prisma as never),
     );
   });
 

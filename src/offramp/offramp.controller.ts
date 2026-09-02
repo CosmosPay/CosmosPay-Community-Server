@@ -1,4 +1,5 @@
-import { Body, Controller, Get, Param, Post } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
+import { WidePaginationQueryDto } from '../common/dto/pagination.query.dto';
 import {
   ApiCreatedResponse,
   ApiOkResponse,
@@ -62,8 +63,11 @@ export class OfframpController {
   @RequirePermissions('offramp:read')
   @ApiOperation({ summary: "List the consumer's payouts" })
   @ApiOkResponse({ type: PayoutListEntity })
-  findAll(@CurrentConsumer() consumer: GatewayConsumer) {
-    return this.offramp.findAll(consumer);
+  findAll(
+    @CurrentConsumer() consumer: GatewayConsumer,
+    @Query() query: WidePaginationQueryDto,
+  ) {
+    return this.offramp.findAll(consumer, query);
   }
 
   @Get('payouts/:id')

@@ -86,7 +86,10 @@ describe('WalletsService.findAll', () => {
     const { service, prisma } = makeService();
     prisma.blindpayBlockchainWallet.count.mockResolvedValue(1);
 
-    const result = await service.findAll(CONSUMER, 'rcv_1');
+    const result = await service.findAll(CONSUMER, 'rcv_1', {
+      take: 100,
+      skip: 0,
+    });
 
     expect(WALLET_PUBLIC_SELECT).not.toHaveProperty('raw');
     expect(prisma.blindpayBlockchainWallet.findMany).toHaveBeenCalledWith(
@@ -103,7 +106,10 @@ describe('WalletsService.findAll', () => {
     ]);
     prisma.blindpayBlockchainWallet.count.mockResolvedValue(9);
 
-    const result = await service.findAll(CONSUMER, 'rcv_1');
+    const result = await service.findAll(CONSUMER, 'rcv_1', {
+      take: 100,
+      skip: 0,
+    });
 
     expect(result.data).toHaveLength(2);
     expect(result.total).toBe(9);

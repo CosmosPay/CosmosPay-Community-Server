@@ -1,24 +1,21 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { GatewayConsumer } from '../common/interfaces/gateway-consumer.interface';
 import { PrismaService } from '../prisma/prisma.service';
+import { ConsumerResolverService } from '../common/services/consumer-resolver.service';
 import { CreateProductDto } from './dto/create-product.dto';
 import { QueryProductsDto } from './dto/query-products.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 
 @Injectable()
 export class ProductsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly consumers: ConsumerResolverService,
+  ) {}
 
   /** Mirror the APISIX consumer locally so products can be scoped to it. */
   private resolveConsumer(consumer: GatewayConsumer) {
-    return this.prisma.consumer.upsert({
-      where: { apisixUsername: consumer.username },
-      create: {
-        apisixUsername: consumer.username,
-        credentialId: consumer.credentialId,
-      },
-      update: { credentialId: consumer.credentialId },
-    });
+    return this.consumers.resolve(consumer);
   }
 
   /** Normalize the asset: no code (or XLM/native) → native lumens. */

@@ -58,7 +58,7 @@ describe('RequestLogRetentionService', () => {
 
     expect(setIntervalSpy).not.toHaveBeenCalled();
     expect(loggerLog).toHaveBeenCalledWith(
-      'Retention disabled (REQUEST_LOG_RETENTION_DAYS=0, WEBHOOK_PAYLOAD_RETENTION_DAYS=0)',
+      expect.stringContaining('REQUEST_LOG_RETENTION_DAYS=0'),
     );
     service.onModuleDestroy();
   });

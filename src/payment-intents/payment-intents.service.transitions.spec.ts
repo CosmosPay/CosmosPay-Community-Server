@@ -1,3 +1,4 @@
+import { ConsumerResolverService } from '../common/services/consumer-resolver.service';
 import { HttpStatus } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { ApiError, ApiErrorCode } from '../common/errors/api-error';
@@ -104,6 +105,7 @@ describe('PaymentIntentsService.transition (guards + audit)', () => {
       new WebhookTerminalEmitter(prisma, events),
       {} as any,
       {} as any,
+      new ConsumerResolverService(prisma as never),
     );
   });
 
@@ -281,6 +283,7 @@ describe('PaymentIntentsService API settlement is chain-verified', () => {
       new WebhookTerminalEmitter(prisma, { emit: jest.fn() } as never),
       { verifyByHash: verify } as never,
       {} as never,
+      new ConsumerResolverService(prisma),
     );
     return { service, prisma, verify };
   }

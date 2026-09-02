@@ -4155,7 +4155,29 @@
     "/v1/logs": {
       "get": {
         "operationId": "AnalyticsController_apiLogs_v1",
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "take",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 100,
+              "type": "number"
+            }
+          },
+          {
+            "name": "skip",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 0,
+              "default": 0,
+              "type": "number"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "",
@@ -4257,7 +4279,29 @@
     "/v1/logs/webhooks": {
       "get": {
         "operationId": "AnalyticsController_webhookLogs_v1",
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "take",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 100,
+              "type": "number"
+            }
+          },
+          {
+            "name": "skip",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 0,
+              "default": 0,
+              "type": "number"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "",
@@ -4469,7 +4513,29 @@
       },
       "get": {
         "operationId": "ReceiversController_findAll_v1",
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "take",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 100,
+              "type": "number"
+            }
+          },
+          {
+            "name": "skip",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 0,
+              "default": 0,
+              "type": "number"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "",
@@ -5576,6 +5642,27 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "take",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 100,
+              "type": "number"
+            }
+          },
+          {
+            "name": "skip",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 0,
+              "default": 0,
+              "type": "number"
+            }
           }
         ],
         "responses": {
@@ -5917,6 +6004,27 @@
             "in": "path",
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "name": "take",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 100,
+              "type": "number"
+            }
+          },
+          {
+            "name": "skip",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 0,
+              "default": 0,
+              "type": "number"
             }
           }
         ],
@@ -7923,7 +8031,29 @@
       },
       "get": {
         "operationId": "OnrampController_findAll_v1",
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "take",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 100,
+              "type": "number"
+            }
+          },
+          {
+            "name": "skip",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 0,
+              "default": 0,
+              "type": "number"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "",
@@ -8361,6 +8491,27 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "take",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 100,
+              "type": "number"
+            }
+          },
+          {
+            "name": "skip",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 0,
+              "default": 0,
+              "type": "number"
+            }
           }
         ],
         "responses": {
@@ -8784,7 +8935,29 @@
       },
       "get": {
         "operationId": "OfframpController_findAll_v1",
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "take",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 100,
+              "type": "number"
+            }
+          },
+          {
+            "name": "skip",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 0,
+              "default": 0,
+              "type": "number"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "",
@@ -11610,11 +11783,21 @@
             "type": "number",
             "description": "Total matching rows — not the page length.",
             "example": 41203
+          },
+          "take": {
+            "type": "number",
+            "example": 100
+          },
+          "skip": {
+            "type": "number",
+            "example": 0
           }
         },
         "required": [
           "data",
-          "total"
+          "total",
+          "take",
+          "skip"
         ]
       },
       "WebhookLogEntity": {
@@ -11693,11 +11876,21 @@
             "type": "number",
             "description": "Total matching rows — not the page length.",
             "example": 1204
+          },
+          "take": {
+            "type": "number",
+            "example": 100
+          },
+          "skip": {
+            "type": "number",
+            "example": 0
           }
         },
         "required": [
           "data",
-          "total"
+          "total",
+          "take",
+          "skip"
         ]
       },
       "ReceiverOwnerDto": {
@@ -12060,12 +12253,23 @@
           },
           "total": {
             "type": "number",
+            "description": "Matching rows, not the page length.",
             "example": 1
+          },
+          "take": {
+            "type": "number",
+            "example": 100
+          },
+          "skip": {
+            "type": "number",
+            "example": 0
           }
         },
         "required": [
           "data",
-          "total"
+          "total",
+          "take",
+          "skip"
         ]
       },
       "ApproveReceiverDto": {
@@ -12420,12 +12624,23 @@
           },
           "total": {
             "type": "number",
+            "description": "Matching rows, not the page length.",
             "example": 1
+          },
+          "take": {
+            "type": "number",
+            "example": 100
+          },
+          "skip": {
+            "type": "number",
+            "example": 0
           }
         },
         "required": [
           "data",
-          "total"
+          "total",
+          "take",
+          "skip"
         ]
       },
       "CreateBankAccountDto": {
@@ -12720,12 +12935,23 @@
           },
           "total": {
             "type": "number",
+            "description": "Matching rows, not the page length.",
             "example": 1
+          },
+          "take": {
+            "type": "number",
+            "example": 100
+          },
+          "skip": {
+            "type": "number",
+            "example": 0
           }
         },
         "required": [
           "data",
-          "total"
+          "total",
+          "take",
+          "skip"
         ]
       },
       "InitiateTosDto": {
@@ -13417,12 +13643,23 @@
           },
           "total": {
             "type": "number",
+            "description": "Matching rows, not the page length.",
             "example": 1
+          },
+          "take": {
+            "type": "number",
+            "example": 100
+          },
+          "skip": {
+            "type": "number",
+            "example": 0
           }
         },
         "required": [
           "data",
-          "total"
+          "total",
+          "take",
+          "skip"
         ]
       },
       "CreateTrustlineDto": {
@@ -13719,12 +13956,23 @@
           },
           "total": {
             "type": "number",
+            "description": "Matching rows, not the page length.",
             "example": 1
+          },
+          "take": {
+            "type": "number",
+            "example": 100
+          },
+          "skip": {
+            "type": "number",
+            "example": 0
           }
         },
         "required": [
           "data",
-          "total"
+          "total",
+          "take",
+          "skip"
         ]
       },
       "PayoutDocumentDto": {

@@ -1,4 +1,13 @@
-import { Body, Controller, Delete, Get, Param, Post } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Post,
+  Query,
+} from '@nestjs/common';
+import { WidePaginationQueryDto } from '../../common/dto/pagination.query.dto';
 import {
   ApiCreatedResponse,
   ApiOkResponse,
@@ -40,8 +49,9 @@ export class BankAccountsController {
   findAll(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Param('receiverId') receiverId: string,
+    @Query() query: WidePaginationQueryDto,
   ) {
-    return this.bankAccounts.findAll(consumer, receiverId);
+    return this.bankAccounts.findAll(consumer, receiverId, query);
   }
 
   @Delete(':id')

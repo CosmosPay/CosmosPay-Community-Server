@@ -95,7 +95,10 @@ describe('BankAccountsService.findAll', () => {
     const { service, prisma } = makeService();
     prisma.blindpayBankAccount.count.mockResolvedValue(1);
 
-    const result = await service.findAll(CONSUMER, 'rcv_1');
+    const result = await service.findAll(CONSUMER, 'rcv_1', {
+      take: 100,
+      skip: 0,
+    });
 
     expect(BANK_ACCOUNT_PUBLIC_SELECT).not.toHaveProperty('raw');
     expect(prisma.blindpayBankAccount.findMany).toHaveBeenCalledWith(
@@ -108,7 +111,10 @@ describe('BankAccountsService.findAll', () => {
     const { service, prisma } = makeService();
     prisma.blindpayBankAccount.count.mockResolvedValue(12);
 
-    const result = await service.findAll(CONSUMER, 'rcv_1');
+    const result = await service.findAll(CONSUMER, 'rcv_1', {
+      take: 100,
+      skip: 0,
+    });
 
     expect(result.data).toHaveLength(1);
     expect(result.total).toBe(12);

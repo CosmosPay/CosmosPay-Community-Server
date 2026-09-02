@@ -14,6 +14,7 @@ import { GatewayConsumer } from '../common/interfaces/gateway-consumer.interface
 import { isUniqueViolation } from '../common/prisma-errors';
 import { resolveNetwork } from '../common/stellar-network';
 import { PrismaService } from '../prisma/prisma.service';
+import { ConsumerResolverService } from '../common/services/consumer-resolver.service';
 import { StellarService } from '../stellar/stellar.service';
 import type {
   PaymentIntent,
@@ -65,6 +66,7 @@ export class PaymentIntentsService {
     private readonly webhooks: WebhookTerminalEmitter,
     private readonly verifier: StellarVerifierService,
     private readonly stellar: StellarService,
+    private readonly consumers: ConsumerResolverService,
   ) {}
 
   /**
@@ -124,14 +126,7 @@ export class PaymentIntentsService {
    * the request. Every payment intent is scoped to this record.
    */
   private resolveConsumer(consumer: GatewayConsumer) {
-    return this.prisma.consumer.upsert({
-      where: { apisixUsername: consumer.username },
-      create: {
-        apisixUsername: consumer.username,
-        credentialId: consumer.credentialId,
-      },
-      update: { credentialId: consumer.credentialId },
-    });
+    return this.consumers.resolve(consumer);
   }
 
   /** QR is derived from the stored SEP-7 URI rather than persisted. */

@@ -14,6 +14,12 @@ import { resolvePlanCommissionBps } from '../common/plan-commission';
 import { isUniqueViolation } from '../common/prisma-errors';
 import { resolveNetwork } from '../common/stellar-network';
 import { PrismaService } from '../prisma/prisma.service';
+import { ConsumerResolverService } from '../common/services/consumer-resolver.service';
+import { StellarAccountLoader } from '../stellar/account-loader.service';
+import { assetLabel, resolveAsset, ResolvedAsset } from '../stellar/asset';
+import { extractResultCodes } from '../stellar/horizon-errors';
+import { resolveMemoId } from '../stellar/memo';
+import { SettlementRepository } from '../stellar/settlement.repository';
 import { StellarService } from '../stellar/stellar.service';
 import type {
   Prisma,
@@ -35,8 +41,6 @@ import {
   SwapQuoteEntity,
 } from './entities/swap.entity';
 import { applySlippage, computeFee, fromStroops, toStroops } from './swap-math';
-
-const MAX_UINT64 = 18446744073709551615n;
 
 /**
  * On-chain MEMO_TEXT stamped on a swap that collects the platform commission
@@ -67,12 +71,6 @@ export interface SwapSubmitOutcome {
 }
 
 /** Resolved asset: its stored code/issuer and the SDK Asset for building txs. */
-interface ResolvedAsset {
-  code: string;
-  issuer: string | null;
-  asset: Asset;
-}
-
 /** A priced swap — everything quote and create both need. */
 interface PricedSwap {
   send: ResolvedAsset;
@@ -109,6 +107,8 @@ export class SwapsService {
     private readonly prisma: PrismaService,
     private readonly webhooks: WebhookTerminalEmitter,
     private readonly stellar: StellarService,
+    private readonly consumers: ConsumerResolverService,
+    private readonly accounts: StellarAccountLoader,
   ) {}
 
   // ── Quote ───────────────────────────────────────────────────────────────────
@@ -169,7 +169,7 @@ export class SwapsService {
     );
 
     const destination = dto.destination ?? dto.source;
-    const memo = this.resolveMemo(dto.memo);
+    const memo = resolveMemoId(dto.memo);
     const feeWallet = this.feeWallet();
     const feeStroops = toStroops(priced.feeAmount);
 
@@ -183,7 +183,7 @@ export class SwapsService {
     }
 
     const stellarCfg = this.config.get('stellar', { infer: true });
-    const account = await this.loadAccount(network, dto.source);
+    const account = await this.accounts.load(network, dto.source);
 
     // The destination must already trust a non-native asset, or the path payment
     // would fail on-chain. Catch it now with a clear message.
@@ -269,8 +269,8 @@ export class SwapsService {
     }
 
     this.logger.log(
-      `Created swap ${swap.id}: ${priced.sendAmount} ${this.label(priced.send)} → ` +
-        `~${priced.estimated} ${this.label(priced.dest)} (consumer=${consumer.username}, network=${network})`,
+      `Created swap ${swap.id}: ${priced.sendAmount} ${assetLabel(priced.send)} → ` +
+        `~${priced.estimated} ${assetLabel(priced.dest)} (consumer=${consumer.username}, network=${network})`,
     );
     await this.emit(consumer.username, 'SWAP_CREATED', swap);
     return this.withQr(swap);
@@ -476,7 +476,7 @@ export class SwapsService {
         swap: await this.withQr(succeeded.swap),
       };
     } catch (err) {
-      const resultCodes = this.extractResultCodes(err);
+      const resultCodes = extractResultCodes(err);
       if (resultCodes) {
         const failed = await this.finalizeFailed(swap.id, consumer.username);
         if (failed.swap.status === 'SUCCEEDED') {
@@ -517,8 +517,8 @@ export class SwapsService {
     dto: QuoteSwapDto,
     feeBps: number,
   ): Promise<PricedSwap> {
-    const send = this.resolveAsset(dto.sourceAssetCode, dto.sourceAssetIssuer);
-    const dest = this.resolveAsset(dto.destAssetCode, dto.destAssetIssuer);
+    const send = resolveAsset(dto.sourceAssetCode, dto.sourceAssetIssuer);
+    const dest = resolveAsset(dto.destAssetCode, dto.destAssetIssuer);
     if (send.code === dest.code && send.issuer === dest.issuer) {
       throw ApiError.badRequest(
         ApiErrorCode.ValidationFailed,
@@ -632,18 +632,24 @@ export class SwapsService {
    * Winning this write is what authorizes a terminal webhook — arriving at
    * SUCCEEDED/FAILED by a stale read must not emit.
    */
-  private async guardedUpdate(
-    id: string,
-    from: readonly SwapStatus[],
-    data: { status: SwapStatus; txHash?: string },
-  ): Promise<{ applied: boolean; swap: Swap }> {
-    const result = await this.prisma.swap.updateMany({
-      where: { id, status: { in: [...from] } },
-      data,
-    });
-    const swap = await this.prisma.swap.findUniqueOrThrow({ where: { id } });
-    return { applied: result.count > 0, swap };
+  /**
+   * The compare-and-swap settlement machine, shared with liquidity pools.
+   *
+   * Built lazily rather than injected because it closes over `this.emit` and the
+   * swap-specific status sets — it is a configured view of this service's own
+   * table, not a collaborator with a lifecycle of its own.
+   */
+  private get settlement(): SettlementRepository<Swap> {
+    this.settlementRepo ??= new SettlementRepository<Swap>(
+      this.prisma.swap,
+      SWAP_CAN_SUCCEED_STATUSES,
+      SWAP_IN_FLIGHT_STATUSES,
+      { succeeded: 'SWAP_SUCCEEDED', failed: 'SWAP_FAILED' },
+      (username, type, swap) => this.emit(username, type, swap),
+    );
+    return this.settlementRepo;
   }
+  private settlementRepo?: SettlementRepository<Swap>;
 
   /**
    * PENDING → SUBMITTED does not bump the epoch (same settlement attempt).
@@ -653,15 +659,8 @@ export class SwapsService {
   private async markSubmitted(
     id: string,
   ): Promise<{ applied: boolean; swap: Swap }> {
-    const resent = await this.prisma.swap.updateMany({
-      where: { id, status: 'FAILED' },
-      data: { status: 'SUBMITTED', settlementEpoch: { increment: 1 } },
-    });
-    if (resent.count > 0) {
-      const swap = await this.prisma.swap.findUniqueOrThrow({ where: { id } });
-      return { applied: true, swap };
-    }
-    return this.guardedUpdate(id, ['PENDING'], { status: 'SUBMITTED' });
+    const { applied, row } = await this.settlement.markSubmitted(id);
+    return { applied, swap: row };
   }
 
   /**
@@ -674,13 +673,12 @@ export class SwapsService {
     username: string,
     txHash?: string,
   ): Promise<{ applied: boolean; swap: Swap }> {
-    const { applied, swap } = await this.guardedUpdate(
+    const { applied, row } = await this.settlement.finalizeSucceeded(
       id,
-      SWAP_CAN_SUCCEED_STATUSES,
-      { status: 'SUCCEEDED', ...(txHash ? { txHash } : {}) },
+      username,
+      txHash,
     );
-    if (applied) await this.emit(username, 'SWAP_SUCCEEDED', swap);
-    return { applied, swap };
+    return { applied, swap: row };
   }
 
   /**
@@ -692,10 +690,11 @@ export class SwapsService {
     id: string,
     txHash?: string,
   ): Promise<{ applied: boolean; swap: Swap }> {
-    return this.guardedUpdate(id, SWAP_CAN_SUCCEED_STATUSES, {
-      status: 'SUCCEEDED',
-      ...(txHash ? { txHash } : {}),
-    });
+    const { applied, row } = await this.settlement.finalizeSucceededQuiet(
+      id,
+      txHash,
+    );
+    return { applied, swap: row };
   }
 
   /**
@@ -706,13 +705,8 @@ export class SwapsService {
     id: string,
     username: string,
   ): Promise<{ applied: boolean; swap: Swap }> {
-    const { applied, swap } = await this.guardedUpdate(
-      id,
-      SWAP_IN_FLIGHT_STATUSES,
-      { status: 'FAILED' },
-    );
-    if (applied) await this.emit(username, 'SWAP_FAILED', swap);
-    return { applied, swap };
+    const { applied, row } = await this.settlement.finalizeFailed(id, username);
+    return { applied, swap: row };
   }
 
   /**
@@ -722,9 +716,8 @@ export class SwapsService {
   async finalizeFailedQuiet(
     id: string,
   ): Promise<{ applied: boolean; swap: Swap }> {
-    return this.guardedUpdate(id, SWAP_IN_FLIGHT_STATUSES, {
-      status: 'FAILED',
-    });
+    const { applied, row } = await this.settlement.finalizeFailedQuiet(id);
+    return { applied, swap: row };
   }
 
   /**
@@ -732,9 +725,8 @@ export class SwapsService {
    * settled swap.
    */
   async finalizeExpired(id: string): Promise<{ applied: boolean; swap: Swap }> {
-    return this.guardedUpdate(id, SWAP_IN_FLIGHT_STATUSES, {
-      status: 'EXPIRED',
-    });
+    const { applied, row } = await this.settlement.finalizeExpired(id);
+    return { applied, swap: row };
   }
 
   // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -745,14 +737,7 @@ export class SwapsService {
 
   /** Mirror the APISIX consumer locally so swaps can be scoped to it. */
   private resolveConsumer(consumer: GatewayConsumer) {
-    return this.prisma.consumer.upsert({
-      where: { apisixUsername: consumer.username },
-      create: {
-        apisixUsername: consumer.username,
-        credentialId: consumer.credentialId,
-      },
-      update: { credentialId: consumer.credentialId },
-    });
+    return this.consumers.resolve(consumer);
   }
 
   private feeWallet(): string {
@@ -772,40 +757,10 @@ export class SwapsService {
     return bps;
   }
 
-  private resolveMemo(provided?: string): string | null {
-    if (provided === undefined) return null;
-    if (!/^\d+$/.test(provided) || BigInt(provided) > MAX_UINT64) {
-      throw ApiError.badRequest(
-        ApiErrorCode.InvalidMemo,
-        'memo must be a MEMO_ID: a numeric uint64',
-      );
-    }
-    return provided;
-  }
-
-  /** No code (or XLM/native) → native lumens; any other code needs an issuer. */
-  private resolveAsset(code?: string, issuer?: string): ResolvedAsset {
-    const c = code?.trim();
-    if (!c || c.toLowerCase() === 'xlm' || c.toLowerCase() === 'native') {
-      return { code: 'native', issuer: null, asset: Asset.native() };
-    }
-    if (!issuer) {
-      throw ApiError.badRequest(
-        ApiErrorCode.ValidationFailed,
-        `An issuer is required for non-native asset "${c}"`,
-      );
-    }
-    return { code: c, issuer, asset: new Asset(c, issuer) };
-  }
-
   private pathToAssets(path: SwapPathHop[]): Asset[] {
     return path.map((h) =>
       h.issuer ? new Asset(h.code, h.issuer) : Asset.native(),
     );
-  }
-
-  private label(a: ResolvedAsset): string {
-    return a.code === 'native' ? 'XLM' : a.code;
   }
 
   private async findOwned(
@@ -836,7 +791,7 @@ export class SwapsService {
     const balances =
       destination === source.address
         ? source.account.balances
-        : (await this.loadAccount(network, destination)).balances;
+        : (await this.accounts.load(network, destination)).balances;
     const trusts = (balances as Array<Record<string, unknown>>).some(
       (b) => b.asset_code === dest.code && b.asset_issuer === dest.issuer,
     );
@@ -849,44 +804,7 @@ export class SwapsService {
     }
   }
 
-  private async loadAccount(network: StellarNetwork, address: string) {
-    try {
-      return await this.stellar.server(network).loadAccount(address);
-    } catch (error: unknown) {
-      const status = (error as { response?: { status?: number } })?.response
-        ?.status;
-      if (status === 404) {
-        throw ApiError.badRequest(
-          ApiErrorCode.ValidationFailed,
-          `Account ${address} not found or not funded on the ${network} network`,
-        );
-      }
-      this.logger.error('Failed to load account from Horizon', error);
-      throw ApiError.unavailable(
-        ApiErrorCode.ProviderUnavailable,
-        'Could not reach the Stellar network',
-      );
-    }
-  }
-
   /** Pulls Horizon's transaction/operation result codes off a failed submit. */
-  private extractResultCodes(err: unknown): string[] | null {
-    const data = (
-      err as {
-        response?: {
-          data?: { extras?: { result_codes?: ResultCodes } };
-          extras?: { result_codes?: ResultCodes };
-        };
-      }
-    )?.response;
-    const rc = data?.data?.extras?.result_codes ?? data?.extras?.result_codes;
-    if (!rc) return null;
-    const codes: string[] = [];
-    if (rc.transaction) codes.push(rc.transaction);
-    if (Array.isArray(rc.operations)) codes.push(...rc.operations);
-    return codes.length ? codes : null;
-  }
-
   private async withQr(swap: Swap): Promise<SwapView> {
     return {
       ...swap,
@@ -907,9 +825,4 @@ export class SwapsService {
   ): Promise<boolean> {
     return this.webhooks.emit(username, type, data);
   }
-}
-
-interface ResultCodes {
-  transaction?: string;
-  operations?: string[];
 }

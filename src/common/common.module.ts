@@ -1,5 +1,6 @@
 import { Global, Module } from '@nestjs/common';
 import { AdvisoryLockService } from './services/advisory-lock.service';
+import { ConsumerResolverService } from './services/consumer-resolver.service';
 import { RequestLogRetentionService } from './services/request-log-retention.service';
 
 /**
@@ -13,7 +14,11 @@ import { RequestLogRetentionService } from './services/request-log-retention.ser
  */
 @Global()
 @Module({
-  providers: [RequestLogRetentionService, AdvisoryLockService],
-  exports: [AdvisoryLockService],
+  providers: [
+    RequestLogRetentionService,
+    AdvisoryLockService,
+    ConsumerResolverService,
+  ],
+  exports: [AdvisoryLockService, ConsumerResolverService],
 })
 export class CommonModule {}

@@ -1,3 +1,4 @@
+import { ConsumerResolverService } from '../common/services/consumer-resolver.service';
 import { ProductsService } from './products.service';
 
 describe('ProductsService.findAll', () => {
@@ -12,7 +13,10 @@ describe('ProductsService.findAll', () => {
       },
       $transaction: (ops: Promise<unknown>[]) => Promise.all(ops),
     };
-    const service = new ProductsService(prisma as any);
+    const service = new ProductsService(
+      prisma as any,
+      new ConsumerResolverService(prisma as never),
+    );
     return { service, prisma };
   }
 

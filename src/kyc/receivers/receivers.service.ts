@@ -3,9 +3,11 @@ import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'node:crypto';
 import { ApiError, ApiErrorCode } from '../../common/errors/api-error';
 import { GatewayConsumer } from '../../common/interfaces/gateway-consumer.interface';
+import { PaginationQueryDto } from '../../common/dto/pagination.query.dto';
+import { page } from '../../common/pagination';
 import { PrismaService } from '../../prisma/prisma.service';
 import { BlindpayClient } from '../../blindpay/blindpay.client';
-import { ConsumerResolverService } from '../../blindpay/consumer-resolver.service';
+import { ConsumerResolverService } from '../../common/services/consumer-resolver.service';
 import {
   BlindpaySyncService,
   BlindpayObject,
@@ -506,7 +508,7 @@ export class ReceiversService {
     }
   }
 
-  async findAll(consumer: GatewayConsumer) {
+  async findAll(consumer: GatewayConsumer, query: PaginationQueryDto) {
     const local = await this.consumers.resolve(consumer);
     const where = { consumerId: local.id };
     // `total` is the row count, not the page length — the two only coincide while no
@@ -515,11 +517,13 @@ export class ReceiversService {
       this.prisma.blindpayReceiver.findMany({
         where,
         orderBy: { createdAt: 'desc' },
+        take: query.take,
+        skip: query.skip,
         select: RECEIVER_PUBLIC_SELECT,
       }),
       this.prisma.blindpayReceiver.count({ where }),
     ]);
-    return { data, total };
+    return page(data, total, query);
   }
 
   /**

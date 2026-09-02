@@ -82,7 +82,7 @@ describe('WebhookDeliverySweeperService', () => {
     // use mid-incident (and the test bootstrap uses to keep timers out).
     expect(setIntervalSpy).not.toHaveBeenCalled();
     expect(loggerLog).toHaveBeenCalledWith(
-      'Webhook delivery sweeper disabled (WEBHOOK_SWEEP_ENABLED=false)',
+      expect.stringContaining('WEBHOOK_SWEEP_ENABLED=false'),
     );
     service.onModuleDestroy();
   });

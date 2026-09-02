@@ -1,4 +1,5 @@
-import { Controller, Get } from '@nestjs/common';
+import { Controller, Get, Query } from '@nestjs/common';
+import { WidePaginationQueryDto } from '../common/dto/pagination.query.dto';
 import { ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { CurrentConsumer } from '../common/decorators/current-consumer.decorator';
 import { RequirePermissions } from '../common/decorators/require-permissions.decorator';
@@ -42,8 +43,11 @@ export class AnalyticsController {
     summary: 'Recent API requests reaching the service (with details)',
   })
   @ApiOkResponse({ type: ApiLogListEntity })
-  apiLogs(@CurrentConsumer() consumer: GatewayConsumer) {
-    return this.analytics.apiLogs(consumer);
+  apiLogs(
+    @CurrentConsumer() consumer: GatewayConsumer,
+    @Query() query: WidePaginationQueryDto,
+  ) {
+    return this.analytics.apiLogs(consumer, query);
   }
 
   @Get('logs/webhooks')
@@ -52,7 +56,10 @@ export class AnalyticsController {
     summary: 'Recent webhook deliveries across all endpoints (with details)',
   })
   @ApiOkResponse({ type: WebhookLogListEntity })
-  webhookLogs(@CurrentConsumer() consumer: GatewayConsumer) {
-    return this.analytics.webhookLogs(consumer);
+  webhookLogs(
+    @CurrentConsumer() consumer: GatewayConsumer,
+    @Query() query: WidePaginationQueryDto,
+  ) {
+    return this.analytics.webhookLogs(consumer, query);
   }
 }

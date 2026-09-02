@@ -1,3 +1,4 @@
+import { ConsumerResolverService } from '../common/services/consumer-resolver.service';
 import { HttpStatus } from '@nestjs/common';
 import { ApiError, ApiErrorCode } from '../common/errors/api-error';
 import { WebhooksService } from './webhooks.service';
@@ -33,7 +34,12 @@ describe('WebhooksService destination validation', () => {
     };
     const guard = new WebhookDestinationGuard();
     const dispatcher = {} as any;
-    const service = new WebhooksService(prisma as any, dispatcher, guard);
+    const service = new WebhooksService(
+      prisma as any,
+      dispatcher,
+      guard,
+      new ConsumerResolverService(prisma as never),
+    );
     return { service, prisma, guard };
   }
 
@@ -148,6 +154,7 @@ describe('WebhooksService delivery bodies are never returned', () => {
       prisma as any,
       dispatcher as any,
       new WebhookDestinationGuard(),
+      new ConsumerResolverService(prisma as never),
     );
     return { service, prisma, dispatcher, findMany };
   }

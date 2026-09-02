@@ -1,9 +1,11 @@
 import { Injectable } from '@nestjs/common';
 import type { Prisma } from '../../../generated/prisma/client';
 import { GatewayConsumer } from '../../common/interfaces/gateway-consumer.interface';
+import { PaginationQueryDto } from '../../common/dto/pagination.query.dto';
+import { page } from '../../common/pagination';
 import { PrismaService } from '../../prisma/prisma.service';
 import { BlindpayClient } from '../../blindpay/blindpay.client';
-import { ConsumerResolverService } from '../../blindpay/consumer-resolver.service';
+import { ConsumerResolverService } from '../../common/services/consumer-resolver.service';
 import { BlindpayObject } from '../../blindpay/blindpay-sync.service';
 import {
   asNullableString,
@@ -64,7 +66,11 @@ export class BankAccountsService {
     return this.mirror(local.id, receiver.id, { type: dto.type, ...created });
   }
 
-  async findAll(consumer: GatewayConsumer, receiverId: string) {
+  async findAll(
+    consumer: GatewayConsumer,
+    receiverId: string,
+    query: PaginationQueryDto,
+  ) {
     const local = await this.consumers.resolve(consumer);
     const receiver = await this.receivers.findReceiverOrThrow(
       local.id,
@@ -76,11 +82,13 @@ export class BankAccountsService {
       this.prisma.blindpayBankAccount.findMany({
         where,
         orderBy: { createdAt: 'desc' },
+        take: query.take,
+        skip: query.skip,
         select: BANK_ACCOUNT_PUBLIC_SELECT,
       }),
       this.prisma.blindpayBankAccount.count({ where }),
     ]);
-    return { data, total };
+    return page(data, total, query);
   }
 
   async remove(consumer: GatewayConsumer, receiverId: string, id: string) {

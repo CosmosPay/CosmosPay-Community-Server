@@ -1,9 +1,11 @@
 import { Injectable } from '@nestjs/common';
 import type { Prisma } from '../../../generated/prisma/client';
 import { GatewayConsumer } from '../../common/interfaces/gateway-consumer.interface';
+import { PaginationQueryDto } from '../../common/dto/pagination.query.dto';
+import { page } from '../../common/pagination';
 import { PrismaService } from '../../prisma/prisma.service';
 import { BlindpayClient } from '../../blindpay/blindpay.client';
-import { ConsumerResolverService } from '../../blindpay/consumer-resolver.service';
+import { ConsumerResolverService } from '../../common/services/consumer-resolver.service';
 import { BlindpayObject } from '../../blindpay/blindpay-sync.service';
 import {
   asNullableString,
@@ -63,7 +65,11 @@ export class WalletsService {
     return this.mirror(local.id, receiver.id, { ...dto, ...created });
   }
 
-  async findAll(consumer: GatewayConsumer, receiverId: string) {
+  async findAll(
+    consumer: GatewayConsumer,
+    receiverId: string,
+    query: PaginationQueryDto,
+  ) {
     const local = await this.consumers.resolve(consumer);
     const receiver = await this.receivers.findReceiverOrThrow(
       local.id,
@@ -75,11 +81,13 @@ export class WalletsService {
       this.prisma.blindpayBlockchainWallet.findMany({
         where,
         orderBy: { createdAt: 'desc' },
+        take: query.take,
+        skip: query.skip,
         select: WALLET_PUBLIC_SELECT,
       }),
       this.prisma.blindpayBlockchainWallet.count({ where }),
     ]);
-    return { data, total };
+    return page(data, total, query);
   }
 
   /** Returns the message the customer must sign for the secure (EOA) flow. */

@@ -1,3 +1,5 @@
+import { StellarAccountLoader } from '../stellar/account-loader.service';
+import { ConsumerResolverService } from '../common/services/consumer-resolver.service';
 import { Account, Keypair, TransactionBuilder } from '@stellar/stellar-sdk';
 import { HttpStatus } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
@@ -409,6 +411,8 @@ describe('LiquidityPoolsService — commission engine', () => {
       prisma,
       webhooks,
       stellar as any,
+      new ConsumerResolverService(prisma as never),
+      new StellarAccountLoader(stellar as never),
     );
   });
 
@@ -612,6 +616,8 @@ describe('LiquidityPoolsService.submit vs observer (issue #32 race)', () => {
       prisma,
       webhooks,
       stellar as any,
+      new ConsumerResolverService(prisma as never),
+      new StellarAccountLoader(stellar as never),
     );
     observer = new SettlementObserverService(
       config,
@@ -787,6 +793,8 @@ describe('LiquidityPoolsService idempotency (issue #17, back-ported)', () => {
       prisma,
       webhooks,
       stellar as any,
+      new ConsumerResolverService(prisma as never),
+      new StellarAccountLoader(stellar as never),
     );
     // Frozen clock: two builds of the same request are byte-identical, so the
     // second one collides on the unique (network, txHash) exactly as in prod.
@@ -932,6 +940,8 @@ describe('LiquidityPoolsService.withdraw in-flight guard', () => {
       prisma,
       webhooks,
       stellar as any,
+      new ConsumerResolverService(prisma as never),
+      new StellarAccountLoader(stellar as never),
     );
   });
 
@@ -1030,6 +1040,8 @@ describe('LiquidityPoolsService cost basis is platform-wide', () => {
       prisma,
       webhooks,
       stellar as any,
+      new ConsumerResolverService(prisma as never),
+      new StellarAccountLoader(stellar as never),
     );
   });
 
@@ -1124,6 +1136,8 @@ describe('SettlementObserverService duplicate txHash (liquidity pools)', () => {
       prisma,
       webhooks,
       stellar as any,
+      new ConsumerResolverService(prisma as never),
+      new StellarAccountLoader(stellar as never),
     );
     observer = new SettlementObserverService(
       config,
@@ -1209,6 +1223,8 @@ describe('LiquidityPoolsService platform commission fail-closed', () => {
       prisma,
       new WebhookTerminalEmitter(prisma, events),
       stellar as any,
+      new ConsumerResolverService(prisma as never),
+      new StellarAccountLoader(stellar as never),
     );
     return { service, prisma };
   }

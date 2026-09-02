@@ -2357,7 +2357,22 @@ paths:
   /v1/logs:
     get:
       operationId: AnalyticsController_apiLogs_v1
-      parameters: []
+      parameters:
+        - name: take
+          required: false
+          in: query
+          schema:
+            minimum: 1
+            maximum: 100
+            default: 100
+            type: number
+        - name: skip
+          required: false
+          in: query
+          schema:
+            minimum: 0
+            default: 0
+            type: number
       responses:
         "200":
           description: ""
@@ -2413,7 +2428,22 @@ paths:
   /v1/logs/webhooks:
     get:
       operationId: AnalyticsController_webhookLogs_v1
-      parameters: []
+      parameters:
+        - name: take
+          required: false
+          in: query
+          schema:
+            minimum: 1
+            maximum: 100
+            default: 100
+            type: number
+        - name: skip
+          required: false
+          in: query
+          schema:
+            minimum: 0
+            default: 0
+            type: number
       responses:
         "200":
           description: ""
@@ -2531,7 +2561,22 @@ paths:
         - kyc
     get:
       operationId: ReceiversController_findAll_v1
-      parameters: []
+      parameters:
+        - name: take
+          required: false
+          in: query
+          schema:
+            minimum: 1
+            maximum: 100
+            default: 100
+            type: number
+        - name: skip
+          required: false
+          in: query
+          schema:
+            minimum: 0
+            default: 0
+            type: number
       responses:
         "200":
           description: ""
@@ -3151,6 +3196,21 @@ paths:
           in: path
           schema:
             type: string
+        - name: take
+          required: false
+          in: query
+          schema:
+            minimum: 1
+            maximum: 100
+            default: 100
+            type: number
+        - name: skip
+          required: false
+          in: query
+          schema:
+            minimum: 0
+            default: 0
+            type: number
       responses:
         "200":
           description: ""
@@ -3341,6 +3401,21 @@ paths:
           in: path
           schema:
             type: string
+        - name: take
+          required: false
+          in: query
+          schema:
+            minimum: 1
+            maximum: 100
+            default: 100
+            type: number
+        - name: skip
+          required: false
+          in: query
+          schema:
+            minimum: 0
+            default: 0
+            type: number
       responses:
         "200":
           description: ""
@@ -4456,7 +4531,22 @@ paths:
       tags: *a17
     get:
       operationId: OnrampController_findAll_v1
-      parameters: []
+      parameters:
+        - name: take
+          required: false
+          in: query
+          schema:
+            minimum: 1
+            maximum: 100
+            default: 100
+            type: number
+        - name: skip
+          required: false
+          in: query
+          schema:
+            minimum: 0
+            default: 0
+            type: number
       responses:
         "200":
           description: ""
@@ -4700,6 +4790,21 @@ paths:
           in: path
           schema:
             type: string
+        - name: take
+          required: false
+          in: query
+          schema:
+            minimum: 1
+            maximum: 100
+            default: 100
+            type: number
+        - name: skip
+          required: false
+          in: query
+          schema:
+            minimum: 0
+            default: 0
+            type: number
       responses:
         "200":
           description: ""
@@ -4933,7 +5038,22 @@ paths:
       tags: *a19
     get:
       operationId: OfframpController_findAll_v1
-      parameters: []
+      parameters:
+        - name: take
+          required: false
+          in: query
+          schema:
+            minimum: 1
+            maximum: 100
+            default: 100
+            type: number
+        - name: skip
+          required: false
+          in: query
+          schema:
+            minimum: 0
+            default: 0
+            type: number
       responses:
         "200":
           description: ""
@@ -7085,9 +7205,17 @@ components:
           type: number
           description: Total matching rows — not the page length.
           example: 41203
+        take:
+          type: number
+          example: 100
+        skip:
+          type: number
+          example: 0
       required:
         - data
         - total
+        - take
+        - skip
     WebhookLogEntity:
       type: object
       properties:
@@ -7148,9 +7276,17 @@ components:
           type: number
           description: Total matching rows — not the page length.
           example: 1204
+        take:
+          type: number
+          example: 100
+        skip:
+          type: number
+          example: 0
       required:
         - data
         - total
+        - take
+        - skip
     ReceiverOwnerDto:
       type: object
       properties:
@@ -7422,10 +7558,19 @@ components:
             $ref: "#/components/schemas/ReceiverEntity"
         total:
           type: number
+          description: Matching rows, not the page length.
           example: 1
+        take:
+          type: number
+          example: 100
+        skip:
+          type: number
+          example: 0
       required:
         - data
         - total
+        - take
+        - skip
     ApproveReceiverDto:
       type: object
       properties:
@@ -7687,10 +7832,19 @@ components:
             $ref: "#/components/schemas/WalletEntity"
         total:
           type: number
+          description: Matching rows, not the page length.
           example: 1
+        take:
+          type: number
+          example: 100
+        skip:
+          type: number
+          example: 0
       required:
         - data
         - total
+        - take
+        - skip
     CreateBankAccountDto:
       type: object
       properties:
@@ -7900,10 +8054,19 @@ components:
             $ref: "#/components/schemas/BankAccountEntity"
         total:
           type: number
+          description: Matching rows, not the page length.
           example: 1
+        take:
+          type: number
+          example: 100
+        skip:
+          type: number
+          example: 0
       required:
         - data
         - total
+        - take
+        - skip
     InitiateTosDto:
       type: object
       properties:
@@ -8424,10 +8587,19 @@ components:
             $ref: "#/components/schemas/PayinEntity"
         total:
           type: number
+          description: Matching rows, not the page length.
           example: 1
+        take:
+          type: number
+          example: 100
+        skip:
+          type: number
+          example: 0
       required:
         - data
         - total
+        - take
+        - skip
     CreateTrustlineDto:
       type: object
       properties:
@@ -8637,10 +8809,19 @@ components:
             $ref: "#/components/schemas/PayoutEntity"
         total:
           type: number
+          description: Matching rows, not the page length.
           example: 1
+        take:
+          type: number
+          example: 100
+        skip:
+          type: number
+          example: 0
       required:
         - data
         - total
+        - take
+        - skip
     PayoutDocumentDto:
       type: object
       properties:

@@ -368,7 +368,7 @@ describe('ReceiversService — the KYC dossier never leaves the database', () =>
     prisma.blindpayReceiver.findMany.mockResolvedValue([publicRow()]);
     prisma.blindpayReceiver.count.mockResolvedValue(3);
 
-    const result = await service.findAll(CONSUMER);
+    const result = await service.findAll(CONSUMER, { take: 100, skip: 0 });
 
     expect(prisma.blindpayReceiver.findMany).toHaveBeenCalledWith(
       expect.objectContaining({ select: RECEIVER_PUBLIC_SELECT }),
@@ -384,7 +384,7 @@ describe('ReceiversService — the KYC dossier never leaves the database', () =>
     ]);
     prisma.blindpayReceiver.count.mockResolvedValue(57);
 
-    const result = await service.findAll(CONSUMER);
+    const result = await service.findAll(CONSUMER, { take: 100, skip: 0 });
 
     expect(result.data).toHaveLength(2);
     expect(result.total).toBe(57);

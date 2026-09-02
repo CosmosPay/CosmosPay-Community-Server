@@ -3,6 +3,7 @@ import { Prisma } from '../../generated/prisma/client';
 import { GatewayConsumer } from '../common/interfaces/gateway-consumer.interface';
 import { formatNumericAmount } from '../common/money';
 import { PrismaService } from '../prisma/prisma.service';
+import { ConsumerResolverService } from '../common/services/consumer-resolver.service';
 import { CreateCustomerDto } from './dto/create-customer.dto';
 import { QueryCustomersDto } from './dto/query-customers.dto';
 import { UpdateCustomerDto } from './dto/update-customer.dto';
@@ -23,17 +24,13 @@ const NO_ACTIVITY: CustomerPaymentStats = {
 
 @Injectable()
 export class CustomersService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly consumers: ConsumerResolverService,
+  ) {}
 
   private resolveConsumer(consumer: GatewayConsumer) {
-    return this.prisma.consumer.upsert({
-      where: { apisixUsername: consumer.username },
-      create: {
-        apisixUsername: consumer.username,
-        credentialId: consumer.credentialId,
-      },
-      update: { credentialId: consumer.credentialId },
-    });
+    return this.consumers.resolve(consumer);
   }
 
   async create(consumer: GatewayConsumer, dto: CreateCustomerDto) {

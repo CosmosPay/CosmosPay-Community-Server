@@ -3,7 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'node:crypto';
 import { BlindpayClient, UploadableFile } from '../../blindpay/blindpay.client';
 import { BlindpayObject } from '../../blindpay/blindpay-sync.service';
-import { ConsumerResolverService } from '../../blindpay/consumer-resolver.service';
+import { ConsumerResolverService } from '../../common/services/consumer-resolver.service';
 import { UPLOAD_BUCKETS } from '../../blindpay/blindpay.constants';
 import { ApiError } from '../../common/errors/api-error';
 import { PrismaService } from '../../prisma/prisma.service';
