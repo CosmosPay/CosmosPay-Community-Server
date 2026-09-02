@@ -24,6 +24,7 @@ import { BlindpayModule } from '@/blindpay/blindpay.module';
 import { KycModule } from '@/kyc/kyc.module';
 import { OnrampModule } from '@/onramp/onramp.module';
 import { OfframpModule } from '@/offramp/offramp.module';
+import { PollarModule } from '@/pollar/pollar.module';
 import { CommonModule } from '@/common/common.module';
 
 @Module({
@@ -59,6 +60,9 @@ import { CommonModule } from '@/common/common.module';
     KycModule,
     OnrampModule,
     OfframpModule,
+    // Pollar rails: the hosted-OAuth bridge that turns a social login into a
+    // Stellar wallet, plus the secret-key operator routes for that wallet.
+    PollarModule,
   ],
   providers: [
     // Persist a RequestLog row per request (powers the API logs view).

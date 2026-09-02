@@ -68,6 +68,7 @@ src/
   kyc/                            receivers (KYC/KYB), wallets, bank accounts, doc upload
   onramp/                         fiat → stablecoin: payin quotes, payins, virtual accounts
   offramp/                        stablecoin → fiat: payout quotes, payouts (client-signed)
+  pollar/                         Pollar OAuth bridge (social login → Stellar wallet) + operator routes
   products/                       merchant catalogue
   customers/                      payer records derived from intents
   analytics/                      summary, balances, API logs, webhook logs
@@ -76,7 +77,8 @@ src/
 prisma/schema.prisma              Consumer, PaymentIntent, Swap, LiquidityPoolOperation,
                                   WebhookEndpoint/Delivery/EmittedEvent, BlindpayReceiver,
                                   Blockchain/BankAccount/VirtualAccount, BlindpayQuote,
-                                  BlindpayWebhookEvent, Payin, Payout, RequestLog, AdminAuditLog
+                                  BlindpayWebhookEvent, Payin, Payout, PollarOauthSession,
+                                  RequestLog, AdminAuditLog
 test/                             e2e suite proving the gateway gate
 ```
 
@@ -598,6 +600,125 @@ the BlindPay dashboard webhook to `<gateway>/v1/blindpay/webhooks` and set
 `BLINDPAY_*` vars blank to disable the feature (those routes return `503`). See
 `.env.example`.
 
+## Pollar — social login that hands back a Stellar wallet
+
+[Pollar](https://docs.pollar.xyz/docs) turns a Google/GitHub login into a Stellar
+account: it authenticates the user, creates a wallet, custodies the key in AWS
+KMS, adds the configured trustlines and funds the reserve — the user never sees a
+seed phrase. This service exposes it as an **OAuth bridge**, the same shape a game
+launcher or console uses when the client finishes the code exchange locally.
+
+### Why a bridge and not a passthrough
+
+Pollar's hosted login is designed for a browser SDK. It hands the user to
+`GET /auth/{provider}` with a publishable key, a client-session id and a
+`redirect_uri` — and that redirect URI must be a host **registered with Pollar**.
+A wallet cannot satisfy any of that: a loopback listener on an ephemeral port or
+a `cosmospay://` deep link can never be a registered host, and the assembly needs
+keys and session ids the wallet should not be handling.
+
+So the bridge owns the Pollar-facing half. The wallet gets a two-step contract it
+already understands — **open an authorization, redeem a code** — and absorbs
+nothing but that code.
+
+```
+wallet ──1. POST /v1/pollar/oauth/authorize ────────────▶ bridge ──▶ POST /v2/auth/session
+       ◀── authorization_url + state ──────────────────── bridge     (Pollar mints a client session)
+
+browser ─2. open authorization_url ──▶ Pollar ──▶ Google/GitHub consent
+        ◀─────────────── 3. redirect ─────────── Pollar ──▶ GET /v1/pollar/oauth/callback/{state}
+                                                                     (bridge mints a single-use code)
+
+wallet ──4. absorbs the code ────── from its own redirect URI, or GET /oauth/sessions/{state}
+wallet ──5. POST /v1/pollar/oauth/token ────────────────▶ bridge ──▶ POST /v2/auth/login
+       ◀── access_token + refresh_token + wallet ──────── bridge     (waits for Pollar to be READY)
+
+wallet ──6. talks to Pollar DIRECTLY from here on ──────▶ https://sdk.api.pollar.xyz/v2
+```
+
+Step 6 is the point of the whole thing: the redemption response also carries the
+`publishable_key` and `api_base_url`, so from there the wallet reads balances,
+builds and submits transactions against the virtual wallet itself. **This service
+never proxies that surface and holds no key that could.**
+
+### Two ways to absorb the code
+
+|                  | Redirect flow                                    | Poll flow                                       |
+| ---------------- | ------------------------------------------------ | ----------------------------------------------- |
+| Wallet supplies  | `redirect_uri` (must be allow-listed)            | nothing                                         |
+| Code arrives     | as `?code=…&state=…` on the redirect             | from `GET /v1/pollar/oauth/sessions/{state}`    |
+| The browser sees | your own URI                                     | a plain "you can close this window" page — never the code |
+| Use it when      | the wallet has a deep link or loopback listener  | it has neither (kiosk, headless, embedded view) |
+
+Each poll issues a fresh code and retires the previous one, so redeem the code
+from your most recent poll. That falls out of never storing a live credential:
+the row keeps a SHA-256 of the code, and a hash cannot be un-hashed.
+
+### What the bridge stores
+
+A handshake row, and nothing in it can spend money: the unguessable `state`, the
+Pollar client-session id, a **hash** of the code, and the resulting public Stellar
+address. **No Pollar token is ever persisted** — the `/auth/login` exchange runs
+inside the redemption request and the tokens go straight out in its response.
+Handshakes nobody finished are expired on a timer (`POLLAR_SWEEP_*`), because an
+`AUTHORIZED` row is a redeemable code until it is swept.
+
+Every transition is a compare-and-swap on the row's status, so a replayed
+callback mints no second code, and two wallets racing one code cannot both win.
+
+### Hardening worth knowing about
+
+- **PKCE (RFC 7636, S256)** is optional but recommended: pass `code_challenge` at
+  authorize and `code_verifier` at redemption, and a code that leaks from a
+  browser or a log is useless without the verifier.
+- **`dpop_jwk`** binds the tokens Pollar mints to the wallet's own P-256 key
+  (RFC 9449), so a stolen access token is inert without a signed proof. It also
+  means the bridge can no longer act for the wallet — `/refresh` and `/logout`
+  serve bearer sessions, and a DPoP-bound wallet calls Pollar directly.
+- **`POLLAR_REDIRECT_URI_WHITELIST`** is per consumer and fails closed. A redirect
+  URI is where a single-use code lands, so an unvetted one is an exfiltration
+  channel. It accepts loopback hosts (any port, per RFC 8252), private-use scheme
+  deep links, and https hosts.
+
+### Routes
+
+| Method | Path                                                  | Scope          | Description |
+| ------ | ----------------------------------------------------- | -------------- | ----------- |
+| POST   | `/v1/pollar/oauth/authorize`                          | `pollar:write` | Open a login → `authorization_url` + `state` |
+| GET    | `/v1/pollar/oauth/callback/:state`                    | _public_       | Where Pollar returns the browser (a navigation — no key to carry) |
+| GET    | `/v1/pollar/oauth/callback?state=`                    | _public_       | Same callback, for a redirect chain that keeps the query but not the path |
+| GET    | `/v1/pollar/oauth/sessions/:state`                    | `pollar:read`  | Poll a handshake, and collect its code |
+| POST   | `/v1/pollar/oauth/token`                              | `pollar:write` | Redeem the code → Pollar session + wallet |
+| POST   | `/v1/pollar/oauth/refresh`                            | `pollar:write` | Rotate a token pair (bearer sessions) |
+| POST   | `/v1/pollar/oauth/logout`                             | `pollar:write` | Revoke a session (this device, or all) |
+| POST   | `/v1/pollar/wallets/activate`                         | `pollar:write` | Fund the XLM reserve (Deferred funding mode) |
+| POST   | `/v1/pollar/wallets/:address/trustlines/default`      | `pollar:write` | Enable the app's configured assets |
+| POST   | `/v1/pollar/wallets/:address/trustlines`              | `pollar:write` | Enable specific assets |
+| DELETE | `/v1/pollar/wallets/:address/trustlines/:code/:issuer`| `pollar:write` | Remove a trustline (zero balance only) |
+| POST   | `/v1/pollar/users` · `/v1/pollar/users/with-wallet`   | `pollar:write` | Register a user, optionally with a wallet |
+| POST   | `/v1/pollar/tokens/verify`                            | `pollar:read`  | Validate a token a wallet presented to you |
+
+The last six need Pollar's **secret** key, which is exactly why they live here
+rather than in the wallet. Request and response schemas for all of them are in
+the generated contract — Swagger UI at `/docs`, or `openapi/openapi.{json,yaml}`.
+The table above is for orientation; the contract is the source of truth.
+
+### Setup
+
+1. Create an app at [dashboard.pollar.xyz](https://dashboard.pollar.xyz) and take
+   both keys for your network (`pub_testnet_…` / `sec_testnet_…`).
+2. Register the **gateway host** of `POLLAR_BRIDGE_CALLBACK_URL` under
+   **Build → Domains**, or Pollar refuses the redirect.
+3. Set `POLLAR_BRIDGE_CALLBACK_URL` to `<gateway>/v1/pollar/oauth/callback` — the
+   bridge appends `/{state}` itself.
+4. Add each wallet's redirect URI to `POLLAR_REDIRECT_URI_WHITELIST`, or omit it
+   and use the poll flow.
+
+Keys are per network, and Pollar encodes the network and key type in the prefix,
+so a mismatch is a hard rejection — the env validator catches it at boot instead
+of on a user-facing login. Leave the keys blank to disable the feature (Pollar
+routes then return `503`). See `.env.example`.
+
 ## Upgrading — breaking changes and deploy notes
 
 ### Response shapes that changed
@@ -711,6 +832,18 @@ at least `DATABASE_URL` and `APISIX_GATEWAY_SECRET`.
 | `BLINDPAY_TIMEOUT_MS` | no | `15000` | BlindPay HTTP client timeout (ms) |
 | `ADMIN_API_CREDENTIALS` | no | — | JSON admin bearer secrets (issue #34) |
 | `KYC_REDIRECT_URL_WHITELIST` | no | — | Per-consumer KYC redirect host allow-list |
+| `POLLAR_PUBLISHABLE_KEY_TESTNET` / `_MAINNET` | no | — | Pollar publishable key (`pub_<network>_…`), for the OAuth bridge |
+| `POLLAR_SECRET_KEY_TESTNET` / `_MAINNET` | with the publishable key | — | Pollar secret key (`sec_<network>_…`), for the operator routes |
+| `POLLAR_BRIDGE_CALLBACK_URL` | when a Pollar key is set | — | Public URL Pollar returns the browser to. Must be `<gateway>/v1/pollar/oauth/callback` **and** a host registered under Pollar's Build → Domains |
+| `POLLAR_REDIRECT_URI_WHITELIST` | no | — | Per-consumer allow-list of wallet redirect URIs. Empty ⇒ that consumer can only use the poll flow |
+| `POLLAR_SDK_BASE_URL` | no | `https://sdk.api.pollar.xyz` | Pollar SDK API base URL |
+| `POLLAR_SERVER_BASE_URL` | no | `https://api.pollar.xyz` | Pollar Server API base URL |
+| `POLLAR_TIMEOUT_MS` | no | `15000` | Pollar HTTP client timeout (ms) |
+| `POLLAR_AUTHORIZATION_TTL_MS` | no | `300000` | How long a login handshake stays open |
+| `POLLAR_CODE_TTL_MS` | no | `120000` | How long a minted bridge code stays redeemable |
+| `POLLAR_LOGIN_WAIT_MS` | no | `20000` | How long redemption waits for Pollar to provision the wallet |
+| `POLLAR_SWEEP_ENABLED` | no | `true` | Expire handshakes nobody finished |
+| `POLLAR_SWEEP_INTERVAL_MS` | no | `60000` | Handshake sweeper interval (ms, min 1000) |
 
 Legacy `STELLAR_HORIZON_URL` is rejected at boot — use
 `STELLAR_HORIZON_URL_PUBLIC` / `STELLAR_HORIZON_URL_TESTNET` instead.
@@ -808,3 +941,25 @@ guard relies on that.
 
 > Keep the service on a private network so the only reachable path is through
 > APISIX; the shared secret is the second layer, not the only one.
+
+## Keeping this document honest
+
+**The README is part of the change, not a follow-up.** Nothing in CI catches its
+drift — the build stays green while these pages quietly describe a service that
+no longer exists — so it is updated in the same commit as the code it describes.
+The full convention, including which section each kind of change touches, is in
+[`CLAUDE.md`](./CLAUDE.md); the short version:
+
+| When you… | Update |
+| --------- | ------ |
+| add or remove a module under `src/` | [Project layout](#project-layout) |
+| add, rename or delete a `process.env` read | [Environment variables](#environment-variables) **and** `.env.example` |
+| integrate a provider, or change how one behaves | that provider's own `##` section |
+| change a published response shape, status code, or scope | [Upgrading](#upgrading--breaking-changes-and-deploy-notes) |
+
+Two things deliberately do **not** live here. The **complete route list** is the
+generated OpenAPI contract — a hand-maintained table drifted to 22 of ~80
+endpoints once, which is why `npm run openapi:check` now fails the build instead.
+And **anything the code already states**: this document is for *why* a thing is
+the way it is and how to operate it, because a second copy of *what* it does is
+just a second copy to keep true.

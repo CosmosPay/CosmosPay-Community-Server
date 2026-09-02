@@ -117,6 +117,6 @@ describe('AdvisoryLockService', () => {
     // A reused id silently merges two unrelated tasks into one mutex; a renamed
     // constant with a new number silently disables the exclusion.
     expect(new Set(ids).size).toBe(ids.length);
-    expect(ids).toEqual([881_001, 881_002, 881_003, 881_004]);
+    expect(ids).toEqual([881_001, 881_002, 881_003, 881_004, 881_005]);
   });
 });

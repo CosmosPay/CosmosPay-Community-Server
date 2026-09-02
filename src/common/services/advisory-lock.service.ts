@@ -96,4 +96,5 @@ export enum AdvisoryLockKey {
   PaymentIntentObserver = 881_002,
   RequestLogRetention = 881_003,
   WebhookDeliverySweeper = 881_004,
+  PollarOauthSweeper = 881_005,
 }

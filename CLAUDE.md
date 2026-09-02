@@ -83,3 +83,35 @@ What stays put:
 - Decorator metadata keys — they belong with the decorator that reads them.
 - Anything read from the environment. That is `src/config/configuration.ts`;
   `config.constants.ts` holds only the *defaults* applied when a var is unset.
+
+## The README ships with the change, not after it
+
+`README.md` is the only prose an integrator or a new operator reads. A change
+that lands without it is a change nobody outside this repo can use, and the
+drift is never noticed by CI — the build stays green while the docs quietly
+describe a service that no longer exists. So updating the README is part of the
+change, in the same commit, not a follow-up.
+
+Four places go stale on their own, and each has a specific trigger:
+
+| When you… | Update |
+| --------- | ------ |
+| add or remove a file under `src/` that is a module, not a leaf | the **Project layout** tree |
+| add, rename or delete a `process.env` read | the **Environment variables** table *and* `.env.example` |
+| integrate a provider, or change how an existing one behaves | that provider's own `##` section (see the BlindPay and Pollar ones for the shape) |
+| change a published response shape, a status code, or a scope | **Upgrading — breaking changes and deploy notes** |
+
+Two things that do **not** belong there:
+
+- **The route list.** It lives in the generated OpenAPI contract
+  (`npm run openapi:generate`, gated by `openapi:check`), because a
+  hand-maintained table already drifted to 22 of ~80 endpoints once. A
+  provider section may carry a short table of *its own* routes for orientation;
+  the complete list never goes in the README.
+- **Anything the code already says.** The README explains *why* a thing is the
+  way it is and how to operate it. What it does is the docblock's job, and
+  duplicating that just gives you two copies to keep honest.
+
+The same rule covers `.env.example`: a new variable with no entry there is a
+variable the next person deploying will not know to set. Give it the comment
+explaining what breaks without it, not just its name.

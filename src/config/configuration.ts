@@ -6,7 +6,20 @@ import {
   parseRedirectUrlWhitelist,
   type RedirectUrlWhitelist,
 } from '@/kyc/redirect-url-whitelist';
-import { DEFAULT_HORIZON } from '@/config/config.constants';
+import {
+  DEFAULT_HORIZON,
+  DEFAULT_POLLAR_AUTHORIZATION_TTL_MS,
+  DEFAULT_POLLAR_CODE_TTL_MS,
+  DEFAULT_POLLAR_LOGIN_WAIT_MS,
+  DEFAULT_POLLAR_SDK_BASE_URL,
+  DEFAULT_POLLAR_SERVER_BASE_URL,
+  DEFAULT_POLLAR_SWEEP_INTERVAL_MS,
+  DEFAULT_POLLAR_TIMEOUT_MS,
+} from '@/config/config.constants';
+import {
+  parsePollarRedirectWhitelist,
+  type PollarRedirectWhitelist,
+} from '@/pollar/pollar-redirect-uri';
 
 /**
  * Centralized, typed configuration loaded from environment variables.
@@ -124,6 +137,34 @@ export interface AppConfig {
     // Svix endpoint secret (whsec_...) used to verify inbound BlindPay webhooks.
     webhookSecret: string;
     timeoutMs: number;
+  };
+  pollar: {
+    // Pollar is the hosted onboarding rail: social login in, a Stellar wallet
+    // out. Its keys are network-specific by prefix, so we hold one pair per
+    // network and pick by the API key's environment (like Horizon above).
+    publishableKey: Record<StellarNetwork, string>;
+    secretKey: Record<StellarNetwork, string>;
+    sdkBaseUrl: string;
+    serverBaseUrl: string;
+    /**
+     * Public URL of this service's OAuth callback, as reachable from a browser
+     * — it is what Pollar is handed as `redirect_uri`, so it must be a real
+     * gateway URL and must be registered under the Pollar dashboard's
+     * Build -> Domains. The bridge appends `/{state}` to it.
+     */
+    bridgeCallbackUrl: string;
+    /** Per-consumer allow-list of the wallet redirect URIs codes may go to. */
+    redirectUriWhitelist: PollarRedirectWhitelist;
+    timeoutMs: number;
+    // Handshake lifetime, code lifetime, and how long redemption waits for
+    // Pollar to finish resolving the user's wallet.
+    authorizationTtlMs: number;
+    codeTtlMs: number;
+    loginWaitMs: number;
+    sweep: {
+      enabled: boolean;
+      intervalMs: number;
+    };
   };
 }
 
@@ -279,5 +320,56 @@ export default (): AppConfig => ({
     ).replace(/\/+$/, ''),
     webhookSecret: process.env.BLINDPAY_WEBHOOK_SECRET ?? '',
     timeoutMs: parseInt(process.env.BLINDPAY_TIMEOUT_MS ?? '15000', 10),
+  },
+  pollar: {
+    publishableKey: {
+      public: process.env.POLLAR_PUBLISHABLE_KEY_MAINNET ?? '',
+      testnet: process.env.POLLAR_PUBLISHABLE_KEY_TESTNET ?? '',
+    },
+    secretKey: {
+      public: process.env.POLLAR_SECRET_KEY_MAINNET ?? '',
+      testnet: process.env.POLLAR_SECRET_KEY_TESTNET ?? '',
+    },
+    sdkBaseUrl: (
+      process.env.POLLAR_SDK_BASE_URL ?? DEFAULT_POLLAR_SDK_BASE_URL
+    ).replace(/\/+$/, ''),
+    serverBaseUrl: (
+      process.env.POLLAR_SERVER_BASE_URL ?? DEFAULT_POLLAR_SERVER_BASE_URL
+    ).replace(/\/+$/, ''),
+    bridgeCallbackUrl: (process.env.POLLAR_BRIDGE_CALLBACK_URL ?? '').replace(
+      /\/+$/,
+      '',
+    ),
+    redirectUriWhitelist: parsePollarRedirectWhitelist(
+      process.env.POLLAR_REDIRECT_URI_WHITELIST,
+    ),
+    timeoutMs: parseInt(
+      process.env.POLLAR_TIMEOUT_MS ?? String(DEFAULT_POLLAR_TIMEOUT_MS),
+      10,
+    ),
+    authorizationTtlMs: parseInt(
+      process.env.POLLAR_AUTHORIZATION_TTL_MS ??
+        String(DEFAULT_POLLAR_AUTHORIZATION_TTL_MS),
+      10,
+    ),
+    codeTtlMs: parseInt(
+      process.env.POLLAR_CODE_TTL_MS ?? String(DEFAULT_POLLAR_CODE_TTL_MS),
+      10,
+    ),
+    loginWaitMs: parseInt(
+      process.env.POLLAR_LOGIN_WAIT_MS ?? String(DEFAULT_POLLAR_LOGIN_WAIT_MS),
+      10,
+    ),
+    sweep: {
+      // Default on: a handshake row outlives its usefulness in minutes, and an
+      // AUTHORIZED row left behind is a redeemable code sitting in the table.
+      enabled:
+        (process.env.POLLAR_SWEEP_ENABLED ?? 'true').toLowerCase() !== 'false',
+      intervalMs: parseInt(
+        process.env.POLLAR_SWEEP_INTERVAL_MS ??
+          String(DEFAULT_POLLAR_SWEEP_INTERVAL_MS),
+        10,
+      ),
+    },
   },
 });
