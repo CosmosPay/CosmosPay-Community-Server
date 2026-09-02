@@ -18,7 +18,10 @@ async function generate(): Promise<void> {
   // placeholders keep this offline command independent from real credentials.
   process.env.DATABASE_URL ??=
     'postgresql://openapi:openapi@localhost:5432/openapi';
-  process.env.APISIX_GATEWAY_SECRET ??= 'openapi-generation-only';
+  // Must satisfy the @MinLength(32) on APISIX_GATEWAY_SECRET, or this offline
+  // command fails in CI, where no .env supplies a real one.
+  process.env.APISIX_GATEWAY_SECRET ??=
+    'openapi-generation-only-placeholder-secret';
   // Default swap fee bps is 50; env validation requires a fee wallet when > 0.
   process.env.STELLAR_SWAP_FEE_WALLET ??=
     'GARMB7W3FCR3GKIM3FLWVJASC2PUZ4VHUJZTNJVWWKNTCJNKO6TBCT76';

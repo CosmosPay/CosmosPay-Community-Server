@@ -108,7 +108,7 @@ jobs:
       - name: Assert no invalid indexes
         run: |
           npx prisma db execute --stdin <<'SQL'
-          DO $
+          DO $$
           DECLARE bad text;
           BEGIN
             SELECT string_agg(c.relname, ', ') INTO bad
@@ -117,7 +117,7 @@ jobs:
             IF bad IS NOT NULL THEN
               RAISE EXCEPTION 'Invalid indexes after migrate deploy: %', bad;
             END IF;
-          END $;
+          END $$;
           SQL
 
       # Catches migration/schema drift: prisma generate reads schema.prisma
