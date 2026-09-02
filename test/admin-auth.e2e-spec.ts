@@ -5,9 +5,9 @@ import {
 } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
-import { AppModule } from '../src/app.module';
-import { AdminService } from '../src/admin/admin.service';
-import { PrismaService } from '../src/prisma/prisma.service';
+import { AppModule } from '@/app.module';
+import { AdminService } from '@/admin/admin.service';
+import { PrismaService } from '@/prisma/prisma.service';
 
 /**
  * Issue #34 — platform-admin auth + audit.

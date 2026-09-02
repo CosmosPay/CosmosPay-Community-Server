@@ -6,8 +6,8 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { ApiError, ApiErrorCode } from '../errors/api-error';
-import { AllExceptionsFilter } from './all-exceptions.filter';
+import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
+import { AllExceptionsFilter } from '@/common/filters/all-exceptions.filter';
 
 describe('AllExceptionsFilter', () => {
   function build() {

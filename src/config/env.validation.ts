@@ -21,9 +21,11 @@ const URL_OPTIONS = {
   require_tld: false,
 };
 
-const DEFAULT_SWAP_FEE_BPS = 50;
-const DEFAULT_SWAP_SLIPPAGE_BPS = 50;
-const DEFAULT_SWAP_MAX_SLIPPAGE_BPS = 500;
+import {
+  DEFAULT_SWAP_FEE_BPS,
+  DEFAULT_SWAP_MAX_SLIPPAGE_BPS,
+  DEFAULT_SWAP_SLIPPAGE_BPS,
+} from '@/config/config.constants';
 
 /**
  * Schema used by ConfigModule to fail fast at boot if the environment is

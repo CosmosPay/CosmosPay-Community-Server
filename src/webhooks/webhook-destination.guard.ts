@@ -4,7 +4,7 @@ import {
   DEFAULT_DNS_LOOKUP,
   DnsLookupFn,
   ValidatedWebhookDestination,
-} from './webhook-url.validator';
+} from '@/webhooks/webhook-url.validator';
 
 /**
  * Shared destination checks for webhook URL registration and outbound delivery.

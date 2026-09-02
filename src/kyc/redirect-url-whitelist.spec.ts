@@ -3,7 +3,7 @@ import {
   assertRedirectAllowed,
   hostnameAllowed,
   parseRedirectUrlWhitelist,
-} from './redirect-url-whitelist';
+} from '@/kyc/redirect-url-whitelist';
 
 describe('parseRedirectUrlWhitelist', () => {
   it('returns empty map for missing or invalid input', () => {

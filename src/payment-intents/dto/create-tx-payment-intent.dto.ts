@@ -1,6 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsOptional, IsString, Matches, MaxLength } from 'class-validator';
-import { IsStellarAddress } from '../../common/validators/is-stellar-address.validator';
+import { IsStellarAddress } from '@/common/validators/is-stellar-address.validator';
 
 /**
  * SEP-7 `tx` request: the payer (`source`) is known, so we build the unsigned

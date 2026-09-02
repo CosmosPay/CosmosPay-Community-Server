@@ -1,7 +1,7 @@
 import {
   assertPublicWebhookUrl,
   WebhookUrlValidationError,
-} from './webhook-url.validator';
+} from '@/webhooks/webhook-url.validator';
 
 describe('assertPublicWebhookUrl', () => {
   const publicLookup = jest.fn(async () => ['93.184.216.34']); // example.com

@@ -5,10 +5,10 @@ import {
 } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
-import { AppModule } from '../src/app.module';
-import { PrismaService } from '../src/prisma/prisma.service';
-import { WebhookDestinationGuard } from '../src/webhooks/webhook-destination.guard';
-import { WebhookHttpClient } from '../src/webhooks/webhook-http';
+import { AppModule } from '@/app.module';
+import { PrismaService } from '@/prisma/prisma.service';
+import { WebhookDestinationGuard } from '@/webhooks/webhook-destination.guard';
+import { WebhookHttpClient } from '@/webhooks/webhook-http';
 
 /**
  * Full CRUD for webhook endpoints behind the APISIX gate. Prisma is mocked with

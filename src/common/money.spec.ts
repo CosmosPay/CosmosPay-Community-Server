@@ -1,4 +1,4 @@
-import { formatNumericAmount, toCount } from './money';
+import { formatNumericAmount, toCount } from '@/common/money';
 
 describe('formatNumericAmount', () => {
   it('keeps exactness on a value float64 cannot represent', () => {

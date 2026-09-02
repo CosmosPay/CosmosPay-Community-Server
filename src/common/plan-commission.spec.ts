@@ -1,7 +1,7 @@
 import { HttpStatus } from '@nestjs/common';
-import { ApiError, ApiErrorCode } from './errors/api-error';
-import { resolvePlanCommissionBps } from './plan-commission';
-import type { GatewayConsumer } from './interfaces/gateway-consumer.interface';
+import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
+import { resolvePlanCommissionBps } from '@/common/plan-commission';
+import type { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 
 /**
  * This rule decides what every organization is charged on a swap and on a

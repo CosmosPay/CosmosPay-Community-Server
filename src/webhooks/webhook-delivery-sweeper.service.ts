@@ -1,14 +1,21 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { AppConfig } from '../config/configuration';
+import { AppConfig } from '@/config/configuration';
 import {
   AdvisoryLockKey,
   AdvisoryLockService,
-} from '../common/services/advisory-lock.service';
-import { JobSchedule, ScheduledJob } from '../common/services/scheduled-job';
-import { EXCLUDE_REDACTED } from './webhook-payload-retention';
-import { PrismaService } from '../prisma/prisma.service';
-import { WebhookDispatcherService } from './webhook-dispatcher.service';
+} from '@/common/services/advisory-lock.service';
+import { JobSchedule, ScheduledJob } from '@/common/services/scheduled-job';
+import { EXCLUDE_REDACTED } from '@/webhooks/webhook-payload-retention';
+import { PrismaService } from '@/prisma/prisma.service';
+import { WebhookDispatcherService } from '@/webhooks/webhook-dispatcher.service';
+import {
+  CLAIM_TIMEOUT_MS,
+  DEFAULT_SWEEP_INTERVAL_MS,
+  RETRY_BUDGET_CYCLES,
+  SWEEP_BATCH_SIZE,
+  SWEEP_CONCURRENCY,
+} from '@/webhooks/webhooks.constants';
 
 /**
  * Recovers webhook deliveries that no in-process retry loop is going to finish.
@@ -201,11 +208,3 @@ export class WebhookDeliverySweeperService extends ScheduledJob {
     return Math.max(60_000, backoffMs * maxAttempts * 2);
   }
 }
-
-const DEFAULT_SWEEP_INTERVAL_MS = 60_000;
-const SWEEP_BATCH_SIZE = 25;
-const SWEEP_CONCURRENCY = 5;
-/** Total attempts a delivery may accumulate = maxAttempts × this. */
-const RETRY_BUDGET_CYCLES = 3;
-/** The claim transaction only selects and stamps; it must not run long. */
-const CLAIM_TIMEOUT_MS = 15_000;

@@ -1,11 +1,11 @@
 import { Global, Module } from '@nestjs/common';
-import { WebhooksController } from './webhooks.controller';
-import { WebhooksService } from './webhooks.service';
-import { WebhookDispatcherService } from './webhook-dispatcher.service';
-import { WebhookDestinationGuard } from './webhook-destination.guard';
-import { WebhookTerminalEmitter } from './webhook-terminal-emitter.service';
-import { WebhookDeliverySweeperService } from './webhook-delivery-sweeper.service';
-import { WebhookHttpClient } from './webhook-http';
+import { WebhooksController } from '@/webhooks/webhooks.controller';
+import { WebhooksService } from '@/webhooks/webhooks.service';
+import { WebhookDispatcherService } from '@/webhooks/webhook-dispatcher.service';
+import { WebhookDestinationGuard } from '@/webhooks/webhook-destination.guard';
+import { WebhookTerminalEmitter } from '@/webhooks/webhook-terminal-emitter.service';
+import { WebhookDeliverySweeperService } from '@/webhooks/webhook-delivery-sweeper.service';
+import { WebhookHttpClient } from '@/webhooks/webhook-http';
 
 @Global()
 @Module({

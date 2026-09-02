@@ -1,5 +1,5 @@
 import { NotFoundException } from '@nestjs/common';
-import { AdminService } from './admin.service';
+import { AdminService } from '@/admin/admin.service';
 
 describe('AdminService.setReceiverAccess (atomic audit)', () => {
   it('rolls back the mutation when the audit insert fails', async () => {

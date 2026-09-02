@@ -11,7 +11,7 @@ import {
   Query,
   Req,
 } from '@nestjs/common';
-import { WidePaginationQueryDto } from '../../common/dto/pagination.query.dto';
+import { WidePaginationQueryDto } from '@/common/dto/pagination.query.dto';
 import type { Request } from 'express';
 import {
   ApiCreatedResponse,
@@ -20,17 +20,23 @@ import {
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
-import { CurrentConsumer } from '../../common/decorators/current-consumer.decorator';
-import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
-import { GatewayConsumer } from '../../common/interfaces/gateway-consumer.interface';
-import { ReceiversService, resolveTosCooldownMs } from './receivers.service';
-import { CreateReceiverDto } from './dto/create-receiver.dto';
-import { UpdateReceiverDto } from './dto/update-receiver.dto';
-import { RequestTosDto } from './dto/request-tos.dto';
-import { ApproveReceiverDto } from './dto/approve-receiver.dto';
-import { EnableReceiverDto } from './dto/enable-receiver.dto';
-import { SetAccessDto } from './dto/set-access.dto';
-import { ReceiverEntity, ReceiverListEntity } from './entities/receiver.entity';
+import { CurrentConsumer } from '@/common/decorators/current-consumer.decorator';
+import { RequirePermissions } from '@/common/decorators/require-permissions.decorator';
+import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
+import {
+  ReceiversService,
+  resolveTosCooldownMs,
+} from '@/kyc/receivers/receivers.service';
+import { CreateReceiverDto } from '@/kyc/receivers/dto/create-receiver.dto';
+import { UpdateReceiverDto } from '@/kyc/receivers/dto/update-receiver.dto';
+import { RequestTosDto } from '@/kyc/receivers/dto/request-tos.dto';
+import { ApproveReceiverDto } from '@/kyc/receivers/dto/approve-receiver.dto';
+import { EnableReceiverDto } from '@/kyc/receivers/dto/enable-receiver.dto';
+import { SetAccessDto } from '@/kyc/receivers/dto/set-access.dto';
+import {
+  ReceiverEntity,
+  ReceiverListEntity,
+} from '@/kyc/receivers/entities/receiver.entity';
 
 // /v1/kyc/receivers — the KYC/KYB entities required before any onramp/offramp.
 @ApiTags('kyc')

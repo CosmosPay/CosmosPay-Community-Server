@@ -7,7 +7,7 @@ import {
   type AccountClass,
   type BankAccountType,
   type BlindpayRail,
-} from '../../../blindpay/blindpay.constants';
+} from '@/blindpay/blindpay.constants';
 
 /**
  * Creates a fiat bank account for a receiver — the destination for offramp

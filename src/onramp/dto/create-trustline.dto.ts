@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsStellarAddress } from '../../common/validators/is-stellar-address.validator';
+import { IsStellarAddress } from '@/common/validators/is-stellar-address.validator';
 
 /**
  * Builds an unsigned Stellar trustline transaction so a wallet can hold the

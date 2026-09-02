@@ -1,7 +1,7 @@
 import { Global, Module } from '@nestjs/common';
-import { AdvisoryLockService } from './services/advisory-lock.service';
-import { ConsumerResolverService } from './services/consumer-resolver.service';
-import { RequestLogRetentionService } from './services/request-log-retention.service';
+import { AdvisoryLockService } from '@/common/services/advisory-lock.service';
+import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
+import { RequestLogRetentionService } from '@/common/services/request-log-retention.service';
 
 /**
  * Hosts background jobs that belong to common infra (not a domain module), plus

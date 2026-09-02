@@ -3,23 +3,23 @@ import { ConfigService } from '@nestjs/config';
 import { OnEvent } from '@nestjs/event-emitter';
 import { randomUUID } from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { AppConfig } from '../config/configuration';
-import { PrismaService } from '../prisma/prisma.service';
+import { AppConfig } from '@/config/configuration';
+import { PrismaService } from '@/prisma/prisma.service';
 import type {
   Prisma,
   WebhookDelivery,
   WebhookEndpoint,
   WebhookEventType,
-} from '../../generated/prisma/client';
-import { WEBHOOK_EVENT, WebhookEventPayload } from './webhook-events';
-import { buildSignatureHeader } from './webhook-signature';
-import { WebhookDestinationGuard } from './webhook-destination.guard';
+} from '@generated/prisma/client';
+import { WEBHOOK_EVENT, WebhookEventPayload } from '@/webhooks/webhook-events';
+import { buildSignatureHeader } from '@/webhooks/webhook-signature';
+import { WebhookDestinationGuard } from '@/webhooks/webhook-destination.guard';
 import {
   jitteredBackoffMs,
   WebhookHttpClient,
   WebhookHttpResponse,
-} from './webhook-http';
-import { WebhookUrlValidationError } from './webhook-url.validator';
+} from '@/webhooks/webhook-http';
+import { WebhookUrlValidationError } from '@/webhooks/webhook-url.validator';
 
 /** A durable delivery row paired with the endpoint it is owed to. */
 export interface PendingDelivery {

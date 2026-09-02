@@ -1,14 +1,14 @@
-import { StellarAccountLoader } from '../stellar/account-loader.service';
-import { ConsumerResolverService } from '../common/services/consumer-resolver.service';
+import { StellarAccountLoader } from '@/stellar/account-loader.service';
+import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
 import { HttpStatus } from '@nestjs/common';
 import { Account, Keypair, TransactionBuilder } from '@stellar/stellar-sdk';
-import { ApiError, ApiErrorCode } from '../common/errors/api-error';
+import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { GatewayConsumer } from '../common/interfaces/gateway-consumer.interface';
-import { SettlementObserverService } from '../observer/settlement-observer.service';
-import { WEBHOOK_EVENT } from '../webhooks/webhook-events';
-import { WebhookTerminalEmitter } from '../webhooks/webhook-terminal-emitter.service';
-import { SwapsService } from './swaps.service';
+import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
+import { SettlementObserverService } from '@/observer/settlement-observer.service';
+import { WEBHOOK_EVENT } from '@/webhooks/webhook-events';
+import { WebhookTerminalEmitter } from '@/webhooks/webhook-terminal-emitter.service';
+import { SwapsService } from '@/swaps/swaps.service';
 
 jest.mock('qrcode', () => ({
   __esModule: true,

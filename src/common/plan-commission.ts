@@ -1,7 +1,7 @@
 import { ConfigService } from '@nestjs/config';
-import { AppConfig } from '../config/configuration';
-import { ApiError, ApiErrorCode } from './errors/api-error';
-import { GatewayConsumer } from './interfaces/gateway-consumer.interface';
+import { AppConfig } from '@/config/configuration';
+import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
+import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 
 /**
  * The plan commission (bps) to charge this request.

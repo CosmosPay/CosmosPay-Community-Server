@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsRedirectUrl } from '../../../common/validators/is-redirect-url.validator';
+import { IsRedirectUrl } from '@/common/validators/is-redirect-url.validator';
 
 /**
  * Approves a `pending_review` receiver (our owner/admin review gate). The platform

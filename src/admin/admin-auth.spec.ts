@@ -4,7 +4,7 @@ import {
   roleSatisfies,
   verifyAdminBearer,
   type AdminCredential,
-} from './admin-auth';
+} from '@/admin/admin-auth';
 import { Logger } from '@nestjs/common';
 
 describe('Admin auth spec (issue #34)', () => {

@@ -1,4 +1,4 @@
-import { redactProviderEvent } from './blindpay-event-redaction';
+import { redactProviderEvent } from '@/blindpay/blindpay-event-redaction';
 
 /**
  * The dossier must not leave the platform in a webhook body. Closing the

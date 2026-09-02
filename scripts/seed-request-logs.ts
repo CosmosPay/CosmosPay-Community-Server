@@ -8,7 +8,7 @@
  */
 import 'dotenv/config';
 import { PrismaPg } from '@prisma/adapter-pg';
-import { PrismaClient } from '../generated/prisma/client';
+import { PrismaClient } from '@generated/prisma/client';
 
 async function main(): Promise<void> {
   const count = Math.max(1, parseInt(process.argv[2] ?? '1000', 10) || 1000);

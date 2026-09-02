@@ -1,6 +1,6 @@
 import { ConfigService } from '@nestjs/config';
-import { AppConfig, StellarNetwork } from '../config/configuration';
-import { GatewayConsumer } from './interfaces/gateway-consumer.interface';
+import { AppConfig, StellarNetwork } from '@/config/configuration';
+import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 
 /**
  * The Stellar network a caller is scoped to, derived from the API key's

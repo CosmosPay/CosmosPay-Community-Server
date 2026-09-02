@@ -17,15 +17,15 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import type { Request } from 'express';
-import { CurrentConsumer } from '../common/decorators/current-consumer.decorator';
-import { RequireAnyPermission } from '../common/decorators/require-permissions.decorator';
-import { GatewayConsumer } from '../common/interfaces/gateway-consumer.interface';
-import { DepositLiquidityDto } from './dto/deposit-liquidity.dto';
-import { QueryLiquidityOperationsDto } from './dto/query-liquidity-operations.dto';
-import { QueryLiquidityPoolsDto } from './dto/query-pools.dto';
-import { QueryLiquidityPositionsDto } from './dto/query-positions.dto';
-import { SubmitLiquidityDto } from './dto/submit-liquidity.dto';
-import { WithdrawLiquidityDto } from './dto/withdraw-liquidity.dto';
+import { CurrentConsumer } from '@/common/decorators/current-consumer.decorator';
+import { RequireAnyPermission } from '@/common/decorators/require-permissions.decorator';
+import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
+import { DepositLiquidityDto } from '@/liquidity-pools/dto/deposit-liquidity.dto';
+import { QueryLiquidityOperationsDto } from '@/liquidity-pools/dto/query-liquidity-operations.dto';
+import { QueryLiquidityPoolsDto } from '@/liquidity-pools/dto/query-pools.dto';
+import { QueryLiquidityPositionsDto } from '@/liquidity-pools/dto/query-positions.dto';
+import { SubmitLiquidityDto } from '@/liquidity-pools/dto/submit-liquidity.dto';
+import { WithdrawLiquidityDto } from '@/liquidity-pools/dto/withdraw-liquidity.dto';
 import {
   LiquidityOperationEntity,
   LiquidityOperationListEntity,
@@ -33,8 +33,8 @@ import {
   LiquidityPoolListEntity,
   LiquidityPositionListEntity,
   LiquiditySubmitResultEntity,
-} from './entities/liquidity-pool.entity';
-import { LiquidityPoolsService } from './liquidity-pools.service';
+} from '@/liquidity-pools/entities/liquidity-pool.entity';
+import { LiquidityPoolsService } from '@/liquidity-pools/liquidity-pools.service';
 
 // URI versioning => /v1/liquidity-pools. Static segments are declared before
 // the `:poolId` catch-all so Express matches them first.

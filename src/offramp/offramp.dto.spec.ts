@@ -1,6 +1,6 @@
 import { BadRequestException, ValidationPipe } from '@nestjs/common';
-import { AuthorizePayoutDto } from './dto/authorize-payout.dto';
-import { CreatePayoutDto } from './dto/create-payout.dto';
+import { AuthorizePayoutDto } from '@/offramp/dto/authorize-payout.dto';
+import { CreatePayoutDto } from '@/offramp/dto/create-payout.dto';
 
 /**
  * Same pipe the app runs (whitelist + forbidNonWhitelisted). Guards offramp DTO

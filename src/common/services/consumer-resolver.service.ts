@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
-import { GatewayConsumer } from '../interfaces/gateway-consumer.interface';
-import { PrismaService } from '../../prisma/prisma.service';
-import type { Consumer } from '../../../generated/prisma/client';
+import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
+import { PrismaService } from '@/prisma/prisma.service';
+import type { Consumer } from '@generated/prisma/client';
 
 /**
  * Resolves the local `Consumer` row that mirrors the APISIX consumer on a

@@ -8,7 +8,10 @@ import {
 } from '@nestjs/common';
 import { Request, Response } from 'express';
 
-import { defaultCodeForStatus, type ApiErrorBody } from '../errors/api-error';
+import {
+  defaultCodeForStatus,
+  type ApiErrorBody,
+} from '@/common/errors/api-error';
 
 /**
  * Single, consistent error shape for every failure. HttpExceptions keep their

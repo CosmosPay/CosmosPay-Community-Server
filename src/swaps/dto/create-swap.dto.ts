@@ -1,7 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsOptional, IsString, Matches } from 'class-validator';
-import { IsStellarAddress } from '../../common/validators/is-stellar-address.validator';
-import { QuoteSwapDto } from './quote-swap.dto';
+import { IsStellarAddress } from '@/common/validators/is-stellar-address.validator';
+import { QuoteSwapDto } from '@/swaps/dto/quote-swap.dto';
 
 /**
  * A swap request: a quote plus the on-chain participants. We assemble the

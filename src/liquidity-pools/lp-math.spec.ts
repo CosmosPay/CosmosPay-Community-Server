@@ -1,11 +1,11 @@
-import { toStroops } from '../swaps/swap-math';
+import { toStroops } from '@/swaps/swap-math';
 import {
   aggregateCostBasis,
   computeWithdrawCommission,
   matchDeposit,
   priceBounds,
   proportionalShare,
-} from './lp-math';
+} from '@/liquidity-pools/lp-math';
 
 describe('priceBounds', () => {
   it('brackets the reserves ratio by the slippage tolerance', () => {

@@ -1,7 +1,7 @@
 import { INestApplication } from '@nestjs/common';
 import { DocumentBuilder, OpenAPIObject, SwaggerModule } from '@nestjs/swagger';
 import type { OperationObject } from '@nestjs/swagger/dist/interfaces/open-api-spec.interface';
-import { ApiErrorBodyEntity } from './common/errors/api-error.entity';
+import { ApiErrorBodyEntity } from '@/common/errors/api-error.entity';
 
 /**
  * Single source of truth for the OpenAPI document. Used both by the running

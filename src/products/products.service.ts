@@ -1,10 +1,10 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { GatewayConsumer } from '../common/interfaces/gateway-consumer.interface';
-import { PrismaService } from '../prisma/prisma.service';
-import { ConsumerResolverService } from '../common/services/consumer-resolver.service';
-import { CreateProductDto } from './dto/create-product.dto';
-import { QueryProductsDto } from './dto/query-products.dto';
-import { UpdateProductDto } from './dto/update-product.dto';
+import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
+import { PrismaService } from '@/prisma/prisma.service';
+import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
+import { CreateProductDto } from '@/products/dto/create-product.dto';
+import { QueryProductsDto } from '@/products/dto/query-products.dto';
+import { UpdateProductDto } from '@/products/dto/update-product.dto';
 
 @Injectable()
 export class ProductsService {

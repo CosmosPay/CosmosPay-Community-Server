@@ -1,12 +1,12 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { Prisma } from '../../generated/prisma/client';
-import { GatewayConsumer } from '../common/interfaces/gateway-consumer.interface';
-import { formatNumericAmount } from '../common/money';
-import { PrismaService } from '../prisma/prisma.service';
-import { ConsumerResolverService } from '../common/services/consumer-resolver.service';
-import { CreateCustomerDto } from './dto/create-customer.dto';
-import { QueryCustomersDto } from './dto/query-customers.dto';
-import { UpdateCustomerDto } from './dto/update-customer.dto';
+import { Prisma } from '@generated/prisma/client';
+import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
+import { formatNumericAmount } from '@/common/money';
+import { PrismaService } from '@/prisma/prisma.service';
+import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
+import { CreateCustomerDto } from '@/customers/dto/create-customer.dto';
+import { QueryCustomersDto } from '@/customers/dto/query-customers.dto';
+import { UpdateCustomerDto } from '@/customers/dto/update-customer.dto';
 
 /** On-chain activity attributed to a customer's Stellar account. */
 interface CustomerPaymentStats {

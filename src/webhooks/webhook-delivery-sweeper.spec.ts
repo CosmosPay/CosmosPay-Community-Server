@@ -1,5 +1,5 @@
 import { Logger } from '@nestjs/common';
-import { WebhookDeliverySweeperService } from './webhook-delivery-sweeper.service';
+import { WebhookDeliverySweeperService } from '@/webhooks/webhook-delivery-sweeper.service';
 
 describe('WebhookDeliverySweeperService', () => {
   const webhookCfg = {

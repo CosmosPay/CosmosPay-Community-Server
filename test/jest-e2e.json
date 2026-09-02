@@ -4,6 +4,10 @@
   "testEnvironment": "node",
   "setupFiles": ["<rootDir>/setup-env.ts"],
   "testRegex": ".e2e-spec.ts$",
+  "moduleNameMapper": {
+    "^@/(.*)$": "<rootDir>/../src/$1",
+    "^@generated/(.*)$": "<rootDir>/../generated/$1"
+  },
   "transform": {
     "^.+\\.(t|j)s$": ["ts-jest", { "tsconfig": { "allowJs": true } }]
   },

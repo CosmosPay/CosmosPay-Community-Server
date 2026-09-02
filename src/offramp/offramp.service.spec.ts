@@ -1,5 +1,5 @@
 import { HttpException } from '@nestjs/common';
-import { OfframpService } from './offramp.service';
+import { OfframpService } from '@/offramp/offramp.service';
 
 const CONSUMER = { username: 'cosmos_u1' } as any;
 

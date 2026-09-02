@@ -6,8 +6,8 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { AppConfig } from '../config/configuration';
-import { ApiError, ApiErrorCode } from '../common/errors/api-error';
+import { AppConfig } from '@/config/configuration';
+import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 
 type QueryValue = string | number | boolean | undefined | null;
 

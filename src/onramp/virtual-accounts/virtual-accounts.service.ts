@@ -1,21 +1,17 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { GatewayConsumer } from '../../common/interfaces/gateway-consumer.interface';
-import { PaginationQueryDto } from '../../common/dto/pagination.query.dto';
-import { page } from '../../common/pagination';
-import { PrismaService } from '../../prisma/prisma.service';
-import { BlindpayClient } from '../../blindpay/blindpay.client';
-import { ConsumerResolverService } from '../../common/services/consumer-resolver.service';
+import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
+import { PaginationQueryDto } from '@/common/dto/pagination.query.dto';
+import { page } from '@/common/pagination';
+import { PrismaService } from '@/prisma/prisma.service';
+import { BlindpayClient } from '@/blindpay/blindpay.client';
+import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
 import {
   BlindpayObject,
   VIRTUAL_ACCOUNT_PUBLIC_SELECT,
-} from '../../blindpay/blindpay-sync.service';
-import {
-  asNullableString,
-  asString,
-  toJson,
-} from '../../blindpay/blindpay.util';
-import { ReceiversService } from '../../kyc/receivers/receivers.service';
-import { CreateVirtualAccountDto } from '../dto/create-virtual-account.dto';
+} from '@/blindpay/blindpay-sync.service';
+import { asNullableString, asString, toJson } from '@/blindpay/blindpay.util';
+import { ReceiversService } from '@/kyc/receivers/receivers.service';
+import { CreateVirtualAccountDto } from '@/onramp/dto/create-virtual-account.dto';
 
 /**
  * Virtual accounts: dedicated fiat accounts in a receiver's name that auto-

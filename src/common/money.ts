@@ -13,8 +13,7 @@
  * that error straight back. So the trimming happens in string space.
  */
 
-/** Stellar's precision: 7 decimal places. */
-const STELLAR_DECIMALS = 7;
+import { STELLAR_DECIMALS } from '@/stellar/stellar.constants';
 
 /**
  * Formats a value returned by a `SUM(...::numeric)` as a Stellar amount:

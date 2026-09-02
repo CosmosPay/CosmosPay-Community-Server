@@ -4,21 +4,23 @@
  * precision of 7 decimal places (1 unit = 10,000,000 stroops), and the maximum
  * amount is (2^63 - 1) stroops — both enforced here.
  */
-const DECIMALS = 7;
-const STROOP = 10_000_000n; // 10^7
-const MAX_STROOPS = (1n << 63n) - 1n; // int64 max — Stellar's amount ceiling
-const AMOUNT_RE = /^\d+(\.\d{1,7})?$/;
+import {
+  MAX_STROOPS,
+  STELLAR_AMOUNT_RE,
+  STELLAR_DECIMALS,
+  STROOP_SCALE,
+} from '@/stellar/stellar.constants';
 
 /** Parses a decimal amount string into stroops (bigint). Throws on bad input. */
 export function toStroops(amount: string): bigint {
-  if (!AMOUNT_RE.test(amount)) {
+  if (!STELLAR_AMOUNT_RE.test(amount)) {
     throw new RangeError(
-      `Invalid amount "${amount}": expected a non-negative decimal with up to ${DECIMALS} places`,
+      `Invalid amount "${amount}": expected a non-negative decimal with up to ${STELLAR_DECIMALS} places`,
     );
   }
   const [whole, frac = ''] = amount.split('.');
-  const fracPadded = frac.padEnd(DECIMALS, '0');
-  const stroops = BigInt(whole) * STROOP + BigInt(fracPadded);
+  const fracPadded = frac.padEnd(STELLAR_DECIMALS, '0');
+  const stroops = BigInt(whole) * STROOP_SCALE + BigInt(fracPadded);
   if (stroops > MAX_STROOPS) {
     throw new RangeError(
       `Amount "${amount}" exceeds the maximum Stellar amount`,
@@ -32,8 +34,10 @@ export function fromStroops(stroops: bigint): string {
   if (stroops < 0n) {
     throw new RangeError('Cannot format a negative amount');
   }
-  const whole = stroops / STROOP;
-  const frac = (stroops % STROOP).toString().padStart(DECIMALS, '0');
+  const whole = stroops / STROOP_SCALE;
+  const frac = (stroops % STROOP_SCALE)
+    .toString()
+    .padStart(STELLAR_DECIMALS, '0');
   const trimmed = frac.replace(/0+$/, '');
   return trimmed ? `${whole}.${trimmed}` : whole.toString();
 }

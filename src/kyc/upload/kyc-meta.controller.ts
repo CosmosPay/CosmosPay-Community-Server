@@ -10,27 +10,15 @@ import {
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import type { MulterOptions } from '@nestjs/platform-express/multer/interfaces/multer-options.interface';
-import { ApiError, ApiErrorCode } from '../../common/errors/api-error';
+import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { ApiBody, ApiConsumes, ApiOperation, ApiTags } from '@nestjs/swagger';
-import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
-import { CurrentConsumer } from '../../common/decorators/current-consumer.decorator';
-import { GatewayConsumer } from '../../common/interfaces/gateway-consumer.interface';
-import { UploadableFile } from '../../blindpay/blindpay.client';
-import { KycMetaService } from './kyc-meta.service';
-import { InitiateTosDto } from './dto/initiate-tos.dto';
-
-/** 10 MB — comfortably above a passport scan, far below a heap exhaustion. */
-const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
-
-/** Identity documents are images or PDFs; nothing else has a reason to be here. */
-const ALLOWED_UPLOAD_TYPES = new Set([
-  'image/jpeg',
-  'image/png',
-  'image/webp',
-  'image/heic',
-  'image/heif',
-  'application/pdf',
-]);
+import { RequirePermissions } from '@/common/decorators/require-permissions.decorator';
+import { CurrentConsumer } from '@/common/decorators/current-consumer.decorator';
+import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
+import { UploadableFile } from '@/blindpay/blindpay.client';
+import { KycMetaService } from '@/kyc/upload/kyc-meta.service';
+import { InitiateTosDto } from '@/kyc/upload/dto/initiate-tos.dto';
+import { ALLOWED_UPLOAD_TYPES, MAX_UPLOAD_BYTES } from '@/kyc/kyc.constants';
 
 /**
  * Multer defaults to memory storage with **no** size limit, so an unbounded file

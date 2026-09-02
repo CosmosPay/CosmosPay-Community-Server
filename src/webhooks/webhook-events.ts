@@ -1,4 +1,4 @@
-import { WebhookEventType } from '../../generated/prisma/client';
+import { WebhookEventType } from '@generated/prisma/client';
 
 /**
  * Internal event name used with EventEmitter2. The webhook dispatcher listens

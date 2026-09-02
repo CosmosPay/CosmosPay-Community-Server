@@ -9,7 +9,7 @@ import {
 import { Request, Response } from 'express';
 import { Observable } from 'rxjs';
 import { finalize, tap } from 'rxjs/operators';
-import { PrismaService } from '../../prisma/prisma.service';
+import { PrismaService } from '@/prisma/prisma.service';
 
 /**
  * Structured per-request access log. Logs to the console and persists a

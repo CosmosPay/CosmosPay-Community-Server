@@ -6,7 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { firstValueFrom, of, throwError } from 'rxjs';
-import { LoggingInterceptor } from './logging.interceptor';
+import { LoggingInterceptor } from '@/common/interceptors/logging.interceptor';
 
 /**
  * These lock in two regressions that were silent by construction.

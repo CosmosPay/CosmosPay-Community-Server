@@ -1,15 +1,15 @@
-import { StellarAccountLoader } from '../stellar/account-loader.service';
-import { ConsumerResolverService } from '../common/services/consumer-resolver.service';
+import { StellarAccountLoader } from '@/stellar/account-loader.service';
+import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
 import { Account, Keypair, TransactionBuilder } from '@stellar/stellar-sdk';
 import { HttpStatus } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { ApiError, ApiErrorCode } from '../common/errors/api-error';
-import { GatewayConsumer } from '../common/interfaces/gateway-consumer.interface';
-import { toStroops } from '../swaps/swap-math';
-import { LiquidityPoolsService } from './liquidity-pools.service';
-import { SettlementObserverService } from '../observer/settlement-observer.service';
-import { WebhookTerminalEmitter } from '../webhooks/webhook-terminal-emitter.service';
-import { WEBHOOK_EVENT } from '../webhooks/webhook-events';
+import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
+import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
+import { toStroops } from '@/swaps/swap-math';
+import { LiquidityPoolsService } from '@/liquidity-pools/liquidity-pools.service';
+import { SettlementObserverService } from '@/observer/settlement-observer.service';
+import { WebhookTerminalEmitter } from '@/webhooks/webhook-terminal-emitter.service';
+import { WEBHOOK_EVENT } from '@/webhooks/webhook-events';
 
 jest.mock('qrcode', () => ({
   __esModule: true,

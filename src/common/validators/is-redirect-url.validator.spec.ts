@@ -1,5 +1,5 @@
 import { validate } from 'class-validator';
-import { IsRedirectUrl } from './is-redirect-url.validator';
+import { IsRedirectUrl } from '@/common/validators/is-redirect-url.validator';
 
 class SampleDto {
   @IsRedirectUrl()

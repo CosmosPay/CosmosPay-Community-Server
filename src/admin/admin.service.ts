@@ -1,9 +1,12 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { PrismaService } from '../prisma/prisma.service';
-import { ReceiversService } from '../kyc/receivers/receivers.service';
-import { RequestTosDto } from '../kyc/receivers/dto/request-tos.dto';
-import type { AdminPrincipal } from './admin-auth';
-import { toAuditData, recordAuditInTransaction } from './admin-audit.service';
+import { PrismaService } from '@/prisma/prisma.service';
+import { ReceiversService } from '@/kyc/receivers/receivers.service';
+import { RequestTosDto } from '@/kyc/receivers/dto/request-tos.dto';
+import type { AdminPrincipal } from '@/admin/admin-auth';
+import {
+  toAuditData,
+  recordAuditInTransaction,
+} from '@/admin/admin-audit.service';
 
 /** Clamp a requested page size to a sane range. */
 function take(n?: number): number {

@@ -8,7 +8,7 @@ import {
   Max,
   Min,
 } from 'class-validator';
-import { IsStellarAddress } from '../../common/validators/is-stellar-address.validator';
+import { IsStellarAddress } from '@/common/validators/is-stellar-address.validator';
 
 /** Browse on-chain liquidity pools (proxied from Horizon; nothing persisted). */
 export class QueryLiquidityPoolsDto {

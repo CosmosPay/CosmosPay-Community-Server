@@ -3,7 +3,7 @@ import {
   SUCCESS_REQUIRES_TX_HASH,
   TERMINAL_STATUSES,
   type PaymentIntentStatusName,
-} from './payment-intent-transitions';
+} from '@/payment-intents/payment-intent-transitions';
 
 export class InvalidPaymentIntentTransitionError extends Error {
   readonly code = 'INVALID_PAYMENT_INTENT_TRANSITION' as const;

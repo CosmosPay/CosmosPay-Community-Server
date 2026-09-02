@@ -1,4 +1,4 @@
-import { StellarService } from './stellar.service';
+import { StellarService } from '@/stellar/stellar.service';
 import { Networks } from '@stellar/stellar-sdk';
 
 describe('StellarService', () => {

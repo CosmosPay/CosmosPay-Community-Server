@@ -31,6 +31,23 @@ export default tseslint.config(
       '@typescript-eslint/no-unsafe-argument': 'warn',
       // Allow the _-prefix convention for deliberately discarded bindings, e.g.
       // `const { secret: _secret, ...safe } = endpoint` in webhooks.service.ts.
+      // Imports are written with the `@/*` (src) and `@generated/*` aliases,
+      // never with `./` or `../`. A relative path breaks the moment a file
+      // moves and makes the same module read differently from each directory;
+      // the alias is stable and greppable. `tsc-alias` rewrites both back to
+      // real relative paths at build time, so `dist` stays plain CommonJS.
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: ['./*', '../*'],
+              message:
+                'Use the "@/..." alias (or "@generated/..." for the Prisma client) instead of a relative path.',
+            },
+          ],
+        },
+      ],
       '@typescript-eslint/no-unused-vars': [
         'error',
         {
@@ -57,6 +74,14 @@ export default tseslint.config(
       '@typescript-eslint/no-unsafe-return': 'off',
       '@typescript-eslint/require-await': 'off',
       '@typescript-eslint/unbound-method': 'off',
+    },
+  },
+  {
+    // `test/` holds e2e helpers that live outside `src`, so no alias can
+    // address them — `./gateway-auth` has to stay relative there.
+    files: ['test/**/*.ts'],
+    rules: {
+      'no-restricted-imports': 'off',
     },
   },
 );

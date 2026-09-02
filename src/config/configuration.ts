@@ -1,11 +1,12 @@
 import {
   parseAdminCredentials,
   type AdminCredential,
-} from '../admin/admin-auth';
+} from '@/admin/admin-auth';
 import {
   parseRedirectUrlWhitelist,
   type RedirectUrlWhitelist,
-} from '../kyc/redirect-url-whitelist';
+} from '@/kyc/redirect-url-whitelist';
+import { DEFAULT_HORIZON } from '@/config/config.constants';
 
 /**
  * Centralized, typed configuration loaded from environment variables.
@@ -125,11 +126,6 @@ export interface AppConfig {
     timeoutMs: number;
   };
 }
-
-const DEFAULT_HORIZON: Record<StellarNetwork, string> = {
-  public: 'https://horizon.stellar.org',
-  testnet: 'https://horizon-testnet.stellar.org',
-};
 
 function parseSwaggerEnabled(): boolean {
   const raw = process.env.SWAGGER_ENABLED;

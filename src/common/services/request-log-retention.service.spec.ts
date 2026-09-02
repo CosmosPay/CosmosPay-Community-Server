@@ -1,5 +1,5 @@
 import { Logger } from '@nestjs/common';
-import { RequestLogRetentionService } from './request-log-retention.service';
+import { RequestLogRetentionService } from '@/common/services/request-log-retention.service';
 
 describe('RequestLogRetentionService', () => {
   const retentionCfg = {

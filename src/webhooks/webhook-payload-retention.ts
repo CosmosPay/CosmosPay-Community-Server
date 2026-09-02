@@ -1,4 +1,4 @@
-import type { Prisma } from '../../generated/prisma/client';
+import type { Prisma } from '@generated/prisma/client';
 
 /**
  * What replaces a delivery body once it is past retention.

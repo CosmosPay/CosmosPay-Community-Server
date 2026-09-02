@@ -1,5 +1,5 @@
 import { CanActivate, ExecutionContext, Injectable } from '@nestjs/common';
-import { ApiError, ApiErrorCode } from '../errors/api-error';
+import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { ConfigService } from '@nestjs/config';
 import { Reflector } from '@nestjs/core';
 import { Request } from 'express';
@@ -7,9 +7,9 @@ import {
   roleSatisfies,
   verifyAdminBearer,
   type AdminRole,
-} from '../../admin/admin-auth';
-import { AppConfig } from '../../config/configuration';
-import { ADMIN_ROLE_KEY } from '../decorators/require-admin-role.decorator';
+} from '@/admin/admin-auth';
+import { AppConfig } from '@/config/configuration';
+import { ADMIN_ROLE_KEY } from '@/common/decorators/require-admin-role.decorator';
 
 /**
  * Platform-admin gate (issue #34).

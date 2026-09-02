@@ -10,7 +10,7 @@
     "node": ">=22.12.0"
   },
   "scripts": {
-    "build": "prisma generate && nest build",
+    "build": "prisma generate && nest build && tsc-alias -p tsconfig.build.json",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "dev": "prisma migrate deploy && nest start --watch",
     "start": "nest start",
@@ -27,10 +27,10 @@
     "db:deploy": "prisma migrate deploy",
     "db:push": "prisma db push",
     "db:studio": "prisma studio",
-    "openapi:generate": "ts-node --transpile-only scripts/generate-openapi.ts",
+    "openapi:generate": "ts-node -r tsconfig-paths/register --transpile-only scripts/generate-openapi.ts",
     "openapi:check": "npm run openapi:generate && git diff --exit-code -- openapi/openapi.json openapi/openapi.yaml",
-    "webhooks:audit-destinations": "ts-node --transpile-only scripts/mark-blocked-webhook-endpoints.ts",
-    "seed:request-logs": "ts-node --transpile-only scripts/seed-request-logs.ts"
+    "webhooks:audit-destinations": "ts-node -r tsconfig-paths/register --transpile-only scripts/mark-blocked-webhook-endpoints.ts",
+    "seed:request-logs": "ts-node -r tsconfig-paths/register --transpile-only scripts/seed-request-logs.ts"
   },
   "dependencies": {
     "@nestjs/common": "^11.2.1",
@@ -75,6 +75,7 @@
     "ts-jest": "^29.4.12",
     "ts-loader": "^9.6.2",
     "ts-node": "^10.9.2",
+    "tsc-alias": "^1.9.4",
     "tsconfig-paths": "^4.2.0",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.67.0",
@@ -95,6 +96,10 @@
       "ts"
     ],
     "rootDir": "src",
+    "moduleNameMapper": {
+      "^@/(.*)$": "<rootDir>/$1",
+      "^@generated/(.*)$": "<rootDir>/../generated/$1"
+    },
     "testRegex": ".*\\.spec\\.ts$",
     "transform": {
       "^.+\\.(t|j)s$": [

@@ -2,7 +2,7 @@ import { ApiProperty } from '@nestjs/swagger';
 import {
   WebhookDeliveryStatus,
   WebhookEventType,
-} from '../../../generated/prisma/client';
+} from '@generated/prisma/client';
 
 /** Endpoint without the secret — list/get responses. */
 export class WebhookEndpointEntity {

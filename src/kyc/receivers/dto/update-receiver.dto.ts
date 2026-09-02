@@ -1,5 +1,5 @@
 import { PartialType } from '@nestjs/swagger';
-import { CreateReceiverDto } from './create-receiver.dto';
+import { CreateReceiverDto } from '@/kyc/receivers/dto/create-receiver.dto';
 
 /**
  * Partial update of a receiver. All fields optional; forwarded as-is to

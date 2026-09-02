@@ -4,14 +4,14 @@ import {
   Injectable,
   Logger,
 } from '@nestjs/common';
-import { ApiError, ApiErrorCode } from '../errors/api-error';
+import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { Reflector } from '@nestjs/core';
 import { Request } from 'express';
-import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
+import { IS_PUBLIC_KEY } from '@/common/decorators/public.decorator';
 import {
   ANY_PERMISSIONS_KEY,
   PERMISSIONS_KEY,
-} from '../decorators/require-permissions.decorator';
+} from '@/common/decorators/require-permissions.decorator';
 
 /**
  * Authorizes a request against the API key's granted scopes.

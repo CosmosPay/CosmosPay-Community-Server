@@ -1,8 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import {
-  LiquidityOperationKind,
-  SwapStatus,
-} from '../../../generated/prisma/client';
+import { LiquidityOperationKind, SwapStatus } from '@generated/prisma/client';
 
 /** One side of a pool: an asset and how much of it the pool (or holder) has. */
 export class LiquidityPoolReserve {

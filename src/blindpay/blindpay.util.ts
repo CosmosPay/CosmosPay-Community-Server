@@ -1,4 +1,5 @@
-import type { Prisma } from '../../generated/prisma/client';
+import type { Prisma } from '@generated/prisma/client';
+import { MIRROR_FRESHNESS_MS } from '@/blindpay/blindpay.constants';
 
 /**
  * Casts a provider payload (`unknown`) to Prisma's JSON input type so it can be
@@ -27,18 +28,6 @@ export function asNullableString(value: unknown): string | null {
 export function asString(value: unknown): string {
   return asNullableString(value) ?? '';
 }
-
-/**
- * How long a mirrored BlindPay row may be served from our own database before a
- * single-resource read refreshes it upstream.
- *
- * Webhooks are the primary path for status changes, so the refresh is a safety
- * net for a missed delivery rather than the source of truth. Refreshing on
- * *every* GET pinned our p99 to BlindPay's (15s timeout, no retry) and turned
- * each read into a write; a short window keeps reads local while bounding how
- * stale an un-webhooked row can get.
- */
-export const MIRROR_FRESHNESS_MS = 60_000;
 
 /**
  * True when a mirrored row can answer a read without contacting BlindPay. A row

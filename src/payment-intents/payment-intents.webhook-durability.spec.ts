@@ -1,8 +1,8 @@
-import { ConsumerResolverService } from '../common/services/consumer-resolver.service';
+import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { WEBHOOK_EVENT, WebhookEventPayload } from '../webhooks/webhook-events';
-import { WebhookTerminalEmitter } from '../webhooks/webhook-terminal-emitter.service';
-import { PaymentIntentsService } from './payment-intents.service';
+import { WEBHOOK_EVENT, WebhookEventPayload } from '@/webhooks/webhook-events';
+import { WebhookTerminalEmitter } from '@/webhooks/webhook-terminal-emitter.service';
+import { PaymentIntentsService } from '@/payment-intents/payment-intents.service';
 
 /**
  * A payment intent that settles must not be able to notify nobody.

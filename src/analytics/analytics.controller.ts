@@ -1,16 +1,16 @@
 import { Controller, Get, Query } from '@nestjs/common';
-import { WidePaginationQueryDto } from '../common/dto/pagination.query.dto';
+import { WidePaginationQueryDto } from '@/common/dto/pagination.query.dto';
 import { ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
-import { CurrentConsumer } from '../common/decorators/current-consumer.decorator';
-import { RequirePermissions } from '../common/decorators/require-permissions.decorator';
-import { GatewayConsumer } from '../common/interfaces/gateway-consumer.interface';
+import { CurrentConsumer } from '@/common/decorators/current-consumer.decorator';
+import { RequirePermissions } from '@/common/decorators/require-permissions.decorator';
+import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import {
   AnalyticsBalancesEntity,
   AnalyticsSummaryEntity,
   ApiLogListEntity,
   WebhookLogListEntity,
-} from './entities/analytics.entity';
-import { AnalyticsService } from './analytics.service';
+} from '@/analytics/entities/analytics.entity';
+import { AnalyticsService } from '@/analytics/analytics.service';
 
 // Read-only dashboard aggregates. URI versioning => /v1/...
 @ApiTags('analytics')

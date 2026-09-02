@@ -1,8 +1,8 @@
-import { ConsumerResolverService } from '../common/services/consumer-resolver.service';
+import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
 import { HttpStatus } from '@nestjs/common';
-import { ApiError, ApiErrorCode } from '../common/errors/api-error';
-import { WebhooksService } from './webhooks.service';
-import { WebhookDestinationGuard } from './webhook-destination.guard';
+import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
+import { WebhooksService } from '@/webhooks/webhooks.service';
+import { WebhookDestinationGuard } from '@/webhooks/webhook-destination.guard';
 
 describe('WebhooksService destination validation', () => {
   const consumer = {

@@ -1,8 +1,6 @@
 import { Memo, TransactionBuilder } from '@stellar/stellar-sdk';
-import { ApiError, ApiErrorCode } from '../common/errors/api-error';
-
-/** Largest value a Stellar MEMO_ID can hold. */
-export const MAX_UINT64 = 18446744073709551615n;
+import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
+import { MAX_UINT64 } from '@/stellar/stellar.constants';
 
 /**
  * Validates a caller-supplied MEMO_ID, or `null` when none was given.

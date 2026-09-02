@@ -6,15 +6,15 @@ import {
   Optional,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { AppConfig, StellarNetwork } from '../config/configuration';
+import { AppConfig, StellarNetwork } from '@/config/configuration';
 import {
   AdvisoryLockKey,
   AdvisoryLockService,
-} from '../common/services/advisory-lock.service';
-import { PrismaService } from '../prisma/prisma.service';
-import { StellarService } from '../stellar/stellar.service';
-import { LiquidityPoolsService } from '../liquidity-pools/liquidity-pools.service';
-import { SwapsService } from '../swaps/swaps.service';
+} from '@/common/services/advisory-lock.service';
+import { PrismaService } from '@/prisma/prisma.service';
+import { StellarService } from '@/stellar/stellar.service';
+import { LiquidityPoolsService } from '@/liquidity-pools/liquidity-pools.service';
+import { SwapsService } from '@/swaps/swaps.service';
 
 /** On-chain settlement of a stored transaction, keyed by its hash. */
 /**

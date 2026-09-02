@@ -1,20 +1,20 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { GatewayConsumer } from '../common/interfaces/gateway-consumer.interface';
-import { PaginationQueryDto } from '../common/dto/pagination.query.dto';
-import { page } from '../common/pagination';
-import { ApiError, ApiErrorCode } from '../common/errors/api-error';
-import { PrismaService } from '../prisma/prisma.service';
-import { BlindpayClient } from '../blindpay/blindpay.client';
-import { ConsumerResolverService } from '../common/services/consumer-resolver.service';
+import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
+import { PaginationQueryDto } from '@/common/dto/pagination.query.dto';
+import { page } from '@/common/pagination';
+import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
+import { PrismaService } from '@/prisma/prisma.service';
+import { BlindpayClient } from '@/blindpay/blindpay.client';
+import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
 import {
   BlindpaySyncService,
   BlindpayObject,
   PAYIN_PUBLIC_SELECT,
-} from '../blindpay/blindpay-sync.service';
-import { asString, isMirrorFresh } from '../blindpay/blindpay.util';
-import { CreatePayinQuoteDto } from './dto/create-payin-quote.dto';
-import { CreatePayinDto } from './dto/create-payin.dto';
-import { CreateTrustlineDto } from './dto/create-trustline.dto';
+} from '@/blindpay/blindpay-sync.service';
+import { asString, isMirrorFresh } from '@/blindpay/blindpay.util';
+import { CreatePayinQuoteDto } from '@/onramp/dto/create-payin-quote.dto';
+import { CreatePayinDto } from '@/onramp/dto/create-payin.dto';
+import { CreateTrustlineDto } from '@/onramp/dto/create-trustline.dto';
 
 /**
  * Onramp (fiat -> stablecoin). Quotes are priced through BlindPay and returned

@@ -7,7 +7,7 @@ import {
 import { Request } from 'express';
 import { Observable } from 'rxjs';
 import { tap } from 'rxjs/operators';
-import { AdminAuditService } from './admin-audit.service';
+import { AdminAuditService } from '@/admin/admin-audit.service';
 
 /**
  * Records admin **reads**, not just writes.

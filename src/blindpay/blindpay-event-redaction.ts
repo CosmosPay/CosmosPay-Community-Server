@@ -1,5 +1,5 @@
-import type { WebhookEventType } from '../../generated/prisma/client';
-import type { BlindpayObject } from './blindpay-sync.service';
+import type { WebhookEventType } from '@generated/prisma/client';
+import type { BlindpayObject } from '@/blindpay/blindpay-sync.service';
 
 /**
  * The provider fields a re-emitted BlindPay event may carry to an integrator.

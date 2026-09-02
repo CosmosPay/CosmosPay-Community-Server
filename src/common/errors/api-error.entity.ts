@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { ApiErrorCode } from './api-error';
+import { ApiErrorCode } from '@/common/errors/api-error';
 
 /**
  * The envelope every failure returns, published so integrators can find it.

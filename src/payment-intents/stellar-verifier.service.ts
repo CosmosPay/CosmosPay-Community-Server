@@ -1,9 +1,9 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Horizon } from '@stellar/stellar-sdk';
-import { StellarService } from '../stellar/stellar.service';
-import { toStroops } from '../swaps/swap-math';
-import type { PaymentIntent } from '../../generated/prisma/client';
-import type { StellarNetwork } from '../config/configuration';
+import { StellarService } from '@/stellar/stellar.service';
+import { toStroops } from '@/swaps/swap-math';
+import type { PaymentIntent } from '@generated/prisma/client';
+import type { StellarNetwork } from '@/config/configuration';
 
 export interface VerificationResult {
   valid: boolean;

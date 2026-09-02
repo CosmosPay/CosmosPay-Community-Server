@@ -8,30 +8,30 @@ import {
 } from '@stellar/stellar-sdk';
 import { randomBytes } from 'node:crypto';
 import QRCode from 'qrcode';
-import { AppConfig, StellarNetwork } from '../config/configuration';
-import { ApiError, ApiErrorCode } from '../common/errors/api-error';
-import { GatewayConsumer } from '../common/interfaces/gateway-consumer.interface';
-import { isUniqueViolation } from '../common/prisma-errors';
-import { resolveNetwork } from '../common/stellar-network';
-import { PrismaService } from '../prisma/prisma.service';
-import { ConsumerResolverService } from '../common/services/consumer-resolver.service';
-import { StellarService } from '../stellar/stellar.service';
+import { AppConfig, StellarNetwork } from '@/config/configuration';
+import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
+import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
+import { isUniqueViolation } from '@/common/prisma-errors';
+import { resolveNetwork } from '@/common/stellar-network';
+import { PrismaService } from '@/prisma/prisma.service';
+import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
+import { StellarService } from '@/stellar/stellar.service';
 import type {
   PaymentIntent,
   PaymentIntentStatus,
   PaymentIntentTransition,
   WebhookEventType,
-} from '../../generated/prisma/client';
-import { WebhookTerminalEmitter } from '../webhooks/webhook-terminal-emitter.service';
-import { CreateTxPaymentIntentDto } from './dto/create-tx-payment-intent.dto';
-import { CreatePayPaymentIntentDto } from './dto/create-pay-payment-intent.dto';
-import { QueryPaymentIntentsDto } from './dto/query-payment-intents.dto';
-import { UpdatePaymentIntentDto } from './dto/update-payment-intent.dto';
+} from '@generated/prisma/client';
+import { WebhookTerminalEmitter } from '@/webhooks/webhook-terminal-emitter.service';
+import { CreateTxPaymentIntentDto } from '@/payment-intents/dto/create-tx-payment-intent.dto';
+import { CreatePayPaymentIntentDto } from '@/payment-intents/dto/create-pay-payment-intent.dto';
+import { QueryPaymentIntentsDto } from '@/payment-intents/dto/query-payment-intents.dto';
+import { UpdatePaymentIntentDto } from '@/payment-intents/dto/update-payment-intent.dto';
 import {
   assertTransition,
   InvalidPaymentIntentTransitionError,
-} from './payment-intent-state-machine';
-import { StellarVerifierService } from './stellar-verifier.service';
+} from '@/payment-intents/payment-intent-state-machine';
+import { StellarVerifierService } from '@/payment-intents/stellar-verifier.service';
 
 /** Who triggered a status change — stored on the audit row. */
 export type PaymentIntentTransitionActor =

@@ -1,8 +1,8 @@
 import { Injectable, Logger, NestMiddleware } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { NextFunction, Request, Response } from 'express';
-import { AppConfig } from '../../config/configuration';
-import { GatewayConsumer } from '../interfaces/gateway-consumer.interface';
+import { AppConfig } from '@/config/configuration';
+import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 
 /**
  * Runs before any guard. It reads the consumer identity that APISIX forwards

@@ -8,7 +8,7 @@ import {
   Max,
   Min,
 } from 'class-validator';
-import { IsStellarAddress } from '../../common/validators/is-stellar-address.validator';
+import { IsStellarAddress } from '@/common/validators/is-stellar-address.validator';
 
 /**
  * A liquidity pool withdrawal: burn `shares` pool shares and receive the

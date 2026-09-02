@@ -1,7 +1,4 @@
-import type {
-  SwapStatus,
-  WebhookEventType,
-} from '../../generated/prisma/client';
+import type { SwapStatus, WebhookEventType } from '@generated/prisma/client';
 
 /** The columns the settlement machine needs, whatever the row otherwise holds. */
 export interface SettlementRow {

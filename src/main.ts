@@ -4,10 +4,10 @@ import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import helmet from 'helmet';
-import { AppModule } from './app.module';
-import { AppConfig } from './config/configuration';
-import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
-import { setupSwagger } from './swagger';
+import { AppModule } from '@/app.module';
+import { AppConfig } from '@/config/configuration';
+import { AllExceptionsFilter } from '@/common/filters/all-exceptions.filter';
+import { setupSwagger } from '@/swagger';
 
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {

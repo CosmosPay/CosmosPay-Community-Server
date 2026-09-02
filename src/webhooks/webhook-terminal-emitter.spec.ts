@@ -5,10 +5,10 @@ import {
   WEBHOOK_EVENT,
   WebhookEventPayload,
   terminalEventDedupKey,
-} from './webhook-events';
-import { WebhookTerminalEmitter } from './webhook-terminal-emitter.service';
-import { WebhookDispatcherService } from './webhook-dispatcher.service';
-import { WebhookDestinationGuard } from './webhook-destination.guard';
+} from '@/webhooks/webhook-events';
+import { WebhookTerminalEmitter } from '@/webhooks/webhook-terminal-emitter.service';
+import { WebhookDispatcherService } from '@/webhooks/webhook-dispatcher.service';
+import { WebhookDestinationGuard } from '@/webhooks/webhook-destination.guard';
 
 /**
  * In-memory stand-in for Postgres' unique index on `dedupKey`. Inserts on the

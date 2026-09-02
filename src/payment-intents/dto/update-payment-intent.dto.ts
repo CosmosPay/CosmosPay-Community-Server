@@ -1,6 +1,6 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { IsEnum, IsOptional, IsString, MaxLength } from 'class-validator';
-import { PaymentIntentStatus } from '../../../generated/prisma/client';
+import { PaymentIntentStatus } from '@generated/prisma/client';
 
 /**
  * Advances the lifecycle of a stored payment intent (e.g. once the customer

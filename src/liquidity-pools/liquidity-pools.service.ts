@@ -10,58 +10,51 @@ import {
   getLiquidityPoolId,
 } from '@stellar/stellar-sdk';
 import QRCode from 'qrcode';
-import { AppConfig, StellarNetwork } from '../config/configuration';
-import { ApiError, ApiErrorCode } from '../common/errors/api-error';
-import { GatewayConsumer } from '../common/interfaces/gateway-consumer.interface';
-import { resolvePlanCommissionBps } from '../common/plan-commission';
-import { isUniqueViolation } from '../common/prisma-errors';
-import { resolveNetwork } from '../common/stellar-network';
-import { PrismaService } from '../prisma/prisma.service';
-import { ConsumerResolverService } from '../common/services/consumer-resolver.service';
-import { StellarAccountLoader } from '../stellar/account-loader.service';
-import type { BalanceEntry } from '../stellar/account-loader.service';
-import { assetLabel, resolveAsset, ResolvedAsset } from '../stellar/asset';
-import { extractResultCodes } from '../stellar/horizon-errors';
-import { applyMemo, resolveMemoId } from '../stellar/memo';
-import { SettlementRepository } from '../stellar/settlement.repository';
-import { StellarService } from '../stellar/stellar.service';
+import { AppConfig, StellarNetwork } from '@/config/configuration';
+import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
+import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
+import { resolvePlanCommissionBps } from '@/common/plan-commission';
+import { isUniqueViolation } from '@/common/prisma-errors';
+import { resolveNetwork } from '@/common/stellar-network';
+import { PrismaService } from '@/prisma/prisma.service';
+import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
+import { StellarAccountLoader } from '@/stellar/account-loader.service';
+import type { BalanceEntry } from '@/stellar/account-loader.service';
+import { assetLabel, resolveAsset, ResolvedAsset } from '@/stellar/asset';
+import { extractResultCodes } from '@/stellar/horizon-errors';
+import { applyMemo, resolveMemoId } from '@/stellar/memo';
+import { SettlementRepository } from '@/stellar/settlement.repository';
+import { StellarService } from '@/stellar/stellar.service';
 import type {
   LiquidityPoolOperation,
   SwapStatus,
   WebhookEventType,
-} from '../../generated/prisma/client';
-import { WebhookTerminalEmitter } from '../webhooks/webhook-terminal-emitter.service';
-import { applySlippage, fromStroops, toStroops } from '../swaps/swap-math';
+} from '@generated/prisma/client';
+import { WebhookTerminalEmitter } from '@/webhooks/webhook-terminal-emitter.service';
+import { applySlippage, fromStroops, toStroops } from '@/swaps/swap-math';
 import {
   aggregateCostBasis,
   computeWithdrawCommission,
   matchDeposit,
   priceBounds,
   proportionalShare,
-} from './lp-math';
+} from '@/liquidity-pools/lp-math';
 import {
   LP_CAN_SUCCEED_STATUSES,
   LP_IN_FLIGHT_STATUSES,
-} from './lp-operation-transitions';
-import { DepositLiquidityDto } from './dto/deposit-liquidity.dto';
-import { QueryLiquidityOperationsDto } from './dto/query-liquidity-operations.dto';
-import { QueryLiquidityPoolsDto } from './dto/query-pools.dto';
-import { QueryLiquidityPositionsDto } from './dto/query-positions.dto';
-import { WithdrawLiquidityDto } from './dto/withdraw-liquidity.dto';
+} from '@/liquidity-pools/lp-operation-transitions';
+import { DepositLiquidityDto } from '@/liquidity-pools/dto/deposit-liquidity.dto';
+import { QueryLiquidityOperationsDto } from '@/liquidity-pools/dto/query-liquidity-operations.dto';
+import { QueryLiquidityPoolsDto } from '@/liquidity-pools/dto/query-pools.dto';
+import { QueryLiquidityPositionsDto } from '@/liquidity-pools/dto/query-positions.dto';
+import { WithdrawLiquidityDto } from '@/liquidity-pools/dto/withdraw-liquidity.dto';
 import {
   LiquidityPoolEntity,
   LiquidityPoolListEntity,
   LiquidityPoolReserve,
   LiquidityPositionListEntity,
-} from './entities/liquidity-pool.entity';
-
-/**
- * On-chain MEMO_TEXT stamped on operations that collect the platform commission
- * when the caller did not supply their own MEMO_ID — so the commission is
- * identifiable on the ledger. English by design (it is the canonical label).
- * Kept ≤ 28 bytes (the MEMO_TEXT limit).
- */
-export const LIQUIDITY_COMMISSION_MEMO = 'Cosmos Liquidity Commission';
+} from '@/liquidity-pools/entities/liquidity-pool.entity';
+import { LIQUIDITY_COMMISSION_MEMO } from '@/liquidity-pools/liquidity-pools.constants';
 
 /** A stored operation plus its derived QR — the shape API responses return. */
 export type LiquidityOperationView = LiquidityPoolOperation & {

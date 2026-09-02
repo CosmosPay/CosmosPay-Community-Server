@@ -1,5 +1,6 @@
 import { isIP } from 'node:net';
 import { promises as dns } from 'node:dns';
+import { BLOCKED_HOSTNAMES } from '@/webhooks/webhooks.constants';
 
 /**
  * Outbound webhook destinations must be public HTTPS endpoints.
@@ -39,12 +40,6 @@ export interface ValidatedWebhookDestination {
   address: string;
   family: 4 | 6;
 }
-
-const BLOCKED_HOSTNAMES = new Set([
-  'metadata.google.internal',
-  'metadata.google.com',
-  'metadata',
-]);
 
 export const DEFAULT_DNS_LOOKUP: DnsLookupFn = async (hostname) => {
   const results = await dns.lookup(hostname, { all: true, verbatim: true });

@@ -1,19 +1,15 @@
 import { Injectable } from '@nestjs/common';
-import type { Prisma } from '../../../generated/prisma/client';
-import { GatewayConsumer } from '../../common/interfaces/gateway-consumer.interface';
-import { PaginationQueryDto } from '../../common/dto/pagination.query.dto';
-import { page } from '../../common/pagination';
-import { PrismaService } from '../../prisma/prisma.service';
-import { BlindpayClient } from '../../blindpay/blindpay.client';
-import { ConsumerResolverService } from '../../common/services/consumer-resolver.service';
-import { BlindpayObject } from '../../blindpay/blindpay-sync.service';
-import {
-  asNullableString,
-  asString,
-  toJson,
-} from '../../blindpay/blindpay.util';
-import { ReceiversService } from '../receivers/receivers.service';
-import { CreateBankAccountDto } from './dto/create-bank-account.dto';
+import type { Prisma } from '@generated/prisma/client';
+import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
+import { PaginationQueryDto } from '@/common/dto/pagination.query.dto';
+import { page } from '@/common/pagination';
+import { PrismaService } from '@/prisma/prisma.service';
+import { BlindpayClient } from '@/blindpay/blindpay.client';
+import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
+import { BlindpayObject } from '@/blindpay/blindpay-sync.service';
+import { asNullableString, asString, toJson } from '@/blindpay/blindpay.util';
+import { ReceiversService } from '@/kyc/receivers/receivers.service';
+import { CreateBankAccountDto } from '@/kyc/bank-accounts/dto/create-bank-account.dto';
 
 /**
  * The columns a bank account is allowed to leave this service with — the exact field

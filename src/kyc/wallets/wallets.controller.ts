@@ -7,19 +7,22 @@ import {
   Post,
   Query,
 } from '@nestjs/common';
-import { WidePaginationQueryDto } from '../../common/dto/pagination.query.dto';
+import { WidePaginationQueryDto } from '@/common/dto/pagination.query.dto';
 import {
   ApiCreatedResponse,
   ApiOkResponse,
   ApiOperation,
   ApiTags,
 } from '@nestjs/swagger';
-import { CurrentConsumer } from '../../common/decorators/current-consumer.decorator';
-import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
-import { GatewayConsumer } from '../../common/interfaces/gateway-consumer.interface';
-import { WalletsService } from './wallets.service';
-import { CreateWalletDto } from './dto/create-wallet.dto';
-import { WalletEntity, WalletListEntity } from './entities/wallet.entity';
+import { CurrentConsumer } from '@/common/decorators/current-consumer.decorator';
+import { RequirePermissions } from '@/common/decorators/require-permissions.decorator';
+import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
+import { WalletsService } from '@/kyc/wallets/wallets.service';
+import { CreateWalletDto } from '@/kyc/wallets/dto/create-wallet.dto';
+import {
+  WalletEntity,
+  WalletListEntity,
+} from '@/kyc/wallets/entities/wallet.entity';
 
 // /v1/kyc/receivers/:receiverId/wallets
 @ApiTags('kyc')

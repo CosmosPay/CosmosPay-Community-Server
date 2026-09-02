@@ -3,7 +3,7 @@ import { IsBoolean, IsIn, IsOptional, IsString } from 'class-validator';
 import {
   BLINDPAY_NETWORKS,
   type BlindpayNetwork,
-} from '../../../blindpay/blindpay.constants';
+} from '@/blindpay/blindpay.constants';
 
 /**
  * Registers a blockchain wallet for a receiver.

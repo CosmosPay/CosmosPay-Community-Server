@@ -1,9 +1,9 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { ApiError, ApiErrorCode } from '../common/errors/api-error';
-import { StellarNetwork } from '../config/configuration';
-import { isHorizonNotFound } from './horizon-errors';
-import { ResolvedAsset } from './asset';
-import { StellarService } from './stellar.service';
+import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
+import { StellarNetwork } from '@/config/configuration';
+import { isHorizonNotFound } from '@/stellar/horizon-errors';
+import { ResolvedAsset } from '@/stellar/asset';
+import { StellarService } from '@/stellar/stellar.service';
 
 /** A balance line as Horizon returns it on an account. */
 export interface BalanceEntry {

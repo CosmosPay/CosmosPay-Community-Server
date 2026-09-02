@@ -1,5 +1,5 @@
-import { BlindpaySyncService } from './blindpay-sync.service';
-import { WEBHOOK_EVENT } from '../webhooks/webhook-events';
+import { BlindpaySyncService } from '@/blindpay/blindpay-sync.service';
+import { WEBHOOK_EVENT } from '@/webhooks/webhook-events';
 
 function makeService() {
   const prisma = {

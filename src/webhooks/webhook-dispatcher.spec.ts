@@ -9,12 +9,12 @@ jest.mock('node:https', () => ({
 import { ConfigService } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
 import { request as httpsRequest } from 'node:https';
-import { PrismaService } from '../prisma/prisma.service';
-import { WebhookDispatcherService } from './webhook-dispatcher.service';
-import { WebhookEventPayload } from './webhook-events';
-import { signPayload } from './webhook-signature';
-import { WebhookDestinationGuard } from './webhook-destination.guard';
-import { WebhookHttpClient } from './webhook-http';
+import { PrismaService } from '@/prisma/prisma.service';
+import { WebhookDispatcherService } from '@/webhooks/webhook-dispatcher.service';
+import { WebhookEventPayload } from '@/webhooks/webhook-events';
+import { signPayload } from '@/webhooks/webhook-signature';
+import { WebhookDestinationGuard } from '@/webhooks/webhook-destination.guard';
+import { WebhookHttpClient } from '@/webhooks/webhook-http';
 
 describe('WebhookDispatcherService', () => {
   const endpoint = {

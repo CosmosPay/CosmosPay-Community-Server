@@ -1,7 +1,7 @@
 import {
   computeSvixSignature,
   verifySvixSignature,
-} from './blindpay-signature';
+} from '@/blindpay/blindpay-signature';
 
 describe('verifySvixSignature', () => {
   const secret = `whsec_${Buffer.from('a-32-byte-or-so-secret-key-value').toString('base64')}`;

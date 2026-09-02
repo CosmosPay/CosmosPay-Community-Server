@@ -1,13 +1,16 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { AppConfig } from '../../config/configuration';
-import { PrismaService } from '../../prisma/prisma.service';
+import { AppConfig } from '@/config/configuration';
+import { PrismaService } from '@/prisma/prisma.service';
 import {
   EXCLUDE_REDACTED,
   REDACTED_PAYLOAD,
-} from '../../webhooks/webhook-payload-retention';
-import { AdvisoryLockKey, AdvisoryLockService } from './advisory-lock.service';
-import { JobSchedule, ScheduledJob } from './scheduled-job';
+} from '@/webhooks/webhook-payload-retention';
+import {
+  AdvisoryLockKey,
+  AdvisoryLockService,
+} from '@/common/services/advisory-lock.service';
+import { JobSchedule, ScheduledJob } from '@/common/services/scheduled-job';
 
 /**
  * Background retention for the two tables that accumulate personal data as a

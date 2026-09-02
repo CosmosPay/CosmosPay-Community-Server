@@ -1,5 +1,8 @@
 import { Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
-import { AdvisoryLockKey, AdvisoryLockService } from './advisory-lock.service';
+import {
+  AdvisoryLockKey,
+  AdvisoryLockService,
+} from '@/common/services/advisory-lock.service';
 
 /** What a job needs to decide whether, and how often, to run. */
 export interface JobSchedule {

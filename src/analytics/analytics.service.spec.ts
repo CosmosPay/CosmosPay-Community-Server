@@ -1,6 +1,6 @@
-import { ConsumerResolverService } from '../common/services/consumer-resolver.service';
-import { AnalyticsService } from './analytics.service';
-import type { GatewayConsumer } from '../common/interfaces/gateway-consumer.interface';
+import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
+import { AnalyticsService } from '@/analytics/analytics.service';
+import type { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 
 const consumer = {
   username: 'cosmos_u1',

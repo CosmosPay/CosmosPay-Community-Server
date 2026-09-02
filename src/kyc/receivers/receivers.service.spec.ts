@@ -1,12 +1,15 @@
 import { HttpStatus } from '@nestjs/common';
-import { ApiError, ApiErrorCode } from '../../common/errors/api-error';
+import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import {
   RECEIVER_PUBLIC_SELECT,
   ReceiversService,
   isElevatedConsumer,
   resolveTosCooldownMs,
-} from './receivers.service';
-import { ALLOWED_TRANSITIONS, assertTransition } from './receiver-state';
+} from '@/kyc/receivers/receivers.service';
+import {
+  ALLOWED_TRANSITIONS,
+  assertTransition,
+} from '@/kyc/receivers/receiver-state';
 
 /** An ordinary tenant key: `kyc:write`, no elevation. */
 const CONSUMER = {

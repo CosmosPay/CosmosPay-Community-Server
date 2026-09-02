@@ -6,8 +6,8 @@ import {
 import { Test } from '@nestjs/testing';
 import { Account, Horizon, Keypair } from '@stellar/stellar-sdk';
 import request from 'supertest';
-import { AppModule } from '../src/app.module';
-import { PrismaService } from '../src/prisma/prisma.service';
+import { AppModule } from '@/app.module';
+import { PrismaService } from '@/prisma/prisma.service';
 
 /**
  * Issue #36 — payment-intent state-machine guards at the HTTP boundary.

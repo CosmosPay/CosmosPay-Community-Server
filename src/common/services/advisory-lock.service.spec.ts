@@ -1,5 +1,8 @@
 import { Logger } from '@nestjs/common';
-import { AdvisoryLockKey, AdvisoryLockService } from './advisory-lock.service';
+import {
+  AdvisoryLockKey,
+  AdvisoryLockService,
+} from '@/common/services/advisory-lock.service';
 
 /**
  * The `acquired` flag is the whole point of this class and was untested in both

@@ -1,8 +1,8 @@
 import { ExecutionContext, HttpStatus } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { ApiError, ApiErrorCode } from '../errors/api-error';
-import { AdminGuard } from './admin.guard';
-import { ADMIN_ROLE_KEY } from '../decorators/require-admin-role.decorator';
+import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
+import { AdminGuard } from '@/common/guards/admin.guard';
+import { ADMIN_ROLE_KEY } from '@/common/decorators/require-admin-role.decorator';
 
 /**
  * Red suite for issue #34: AdminGuard must verify a real Bearer credential

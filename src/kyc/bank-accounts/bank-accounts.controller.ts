@@ -7,22 +7,22 @@ import {
   Post,
   Query,
 } from '@nestjs/common';
-import { WidePaginationQueryDto } from '../../common/dto/pagination.query.dto';
+import { WidePaginationQueryDto } from '@/common/dto/pagination.query.dto';
 import {
   ApiCreatedResponse,
   ApiOkResponse,
   ApiOperation,
   ApiTags,
 } from '@nestjs/swagger';
-import { CurrentConsumer } from '../../common/decorators/current-consumer.decorator';
-import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
-import { GatewayConsumer } from '../../common/interfaces/gateway-consumer.interface';
-import { BankAccountsService } from './bank-accounts.service';
-import { CreateBankAccountDto } from './dto/create-bank-account.dto';
+import { CurrentConsumer } from '@/common/decorators/current-consumer.decorator';
+import { RequirePermissions } from '@/common/decorators/require-permissions.decorator';
+import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
+import { BankAccountsService } from '@/kyc/bank-accounts/bank-accounts.service';
+import { CreateBankAccountDto } from '@/kyc/bank-accounts/dto/create-bank-account.dto';
 import {
   BankAccountEntity,
   BankAccountListEntity,
-} from './entities/bank-account.entity';
+} from '@/kyc/bank-accounts/entities/bank-account.entity';
 
 // /v1/kyc/receivers/:receiverId/bank-accounts
 @ApiTags('kyc')

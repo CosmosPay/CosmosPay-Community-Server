@@ -1,16 +1,15 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { AppConfig } from '../config/configuration';
-import { GatewayConsumer } from '../common/interfaces/gateway-consumer.interface';
-import { formatNumericAmount, toCount } from '../common/money';
-import { ConsumerResolverService } from '../common/services/consumer-resolver.service';
-import { PaginationQueryDto } from '../common/dto/pagination.query.dto';
-import { page } from '../common/pagination';
-import { resolveNetwork } from '../common/stellar-network';
-import { PrismaService } from '../prisma/prisma.service';
-import type { PaymentIntentStatus } from '../../generated/prisma/client';
-
-const DAY_MS = 24 * 60 * 60 * 1000;
+import { AppConfig } from '@/config/configuration';
+import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
+import { formatNumericAmount, toCount } from '@/common/money';
+import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
+import { PaginationQueryDto } from '@/common/dto/pagination.query.dto';
+import { page } from '@/common/pagination';
+import { resolveNetwork } from '@/common/stellar-network';
+import { PrismaService } from '@/prisma/prisma.service';
+import type { PaymentIntentStatus } from '@generated/prisma/client';
+import { DAY_MS } from '@/analytics/analytics.constants';
 
 function assetLabel(asset: string): string {
   return !asset || asset === 'native' ? 'XLM' : asset;

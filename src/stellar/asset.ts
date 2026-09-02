@@ -1,5 +1,5 @@
 import { Asset } from '@stellar/stellar-sdk';
-import { ApiError, ApiErrorCode } from '../common/errors/api-error';
+import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 
 /** A caller-supplied asset resolved to an SDK `Asset` plus its stored form. */
 export interface ResolvedAsset {

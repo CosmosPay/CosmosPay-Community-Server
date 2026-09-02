@@ -7,48 +7,46 @@ import {
   TransactionBuilder,
 } from '@stellar/stellar-sdk';
 import QRCode from 'qrcode';
-import { AppConfig, StellarNetwork } from '../config/configuration';
-import { ApiError, ApiErrorCode } from '../common/errors/api-error';
-import { GatewayConsumer } from '../common/interfaces/gateway-consumer.interface';
-import { resolvePlanCommissionBps } from '../common/plan-commission';
-import { isUniqueViolation } from '../common/prisma-errors';
-import { resolveNetwork } from '../common/stellar-network';
-import { PrismaService } from '../prisma/prisma.service';
-import { ConsumerResolverService } from '../common/services/consumer-resolver.service';
-import { StellarAccountLoader } from '../stellar/account-loader.service';
-import { assetLabel, resolveAsset, ResolvedAsset } from '../stellar/asset';
-import { extractResultCodes } from '../stellar/horizon-errors';
-import { resolveMemoId } from '../stellar/memo';
-import { SettlementRepository } from '../stellar/settlement.repository';
-import { StellarService } from '../stellar/stellar.service';
+import { AppConfig, StellarNetwork } from '@/config/configuration';
+import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
+import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
+import { resolvePlanCommissionBps } from '@/common/plan-commission';
+import { isUniqueViolation } from '@/common/prisma-errors';
+import { resolveNetwork } from '@/common/stellar-network';
+import { PrismaService } from '@/prisma/prisma.service';
+import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
+import { StellarAccountLoader } from '@/stellar/account-loader.service';
+import { assetLabel, resolveAsset, ResolvedAsset } from '@/stellar/asset';
+import { extractResultCodes } from '@/stellar/horizon-errors';
+import { resolveMemoId } from '@/stellar/memo';
+import { SettlementRepository } from '@/stellar/settlement.repository';
+import { StellarService } from '@/stellar/stellar.service';
 import type {
   Prisma,
   Swap,
   SwapStatus,
   WebhookEventType,
-} from '../../generated/prisma/client';
-import { WebhookTerminalEmitter } from '../webhooks/webhook-terminal-emitter.service';
-import { CreateSwapDto } from './dto/create-swap.dto';
-import { QuerySwapsDto } from './dto/query-swaps.dto';
-import { QuoteSwapDto } from './dto/quote-swap.dto';
+} from '@generated/prisma/client';
+import { WebhookTerminalEmitter } from '@/webhooks/webhook-terminal-emitter.service';
+import { CreateSwapDto } from '@/swaps/dto/create-swap.dto';
+import { QuerySwapsDto } from '@/swaps/dto/query-swaps.dto';
+import { QuoteSwapDto } from '@/swaps/dto/quote-swap.dto';
 import {
   SWAP_CAN_SUCCEED_STATUSES,
   SWAP_IN_FLIGHT_STATUSES,
-} from './swap-transitions';
+} from '@/swaps/swap-transitions';
 import {
   SwapAssetAmount,
   SwapPathHop,
   SwapQuoteEntity,
-} from './entities/swap.entity';
-import { applySlippage, computeFee, fromStroops, toStroops } from './swap-math';
-
-/**
- * On-chain MEMO_TEXT stamped on a swap that collects the platform commission
- * when the caller did not supply their own MEMO_ID — so the commission is
- * identifiable on the ledger. English by design (the canonical label). ≤ 28
- * bytes (the MEMO_TEXT limit).
- */
-export const SWAP_COMMISSION_MEMO = 'Cosmos Swap Commission';
+} from '@/swaps/entities/swap.entity';
+import {
+  applySlippage,
+  computeFee,
+  fromStroops,
+  toStroops,
+} from '@/swaps/swap-math';
+import { SWAP_COMMISSION_MEMO } from '@/swaps/swaps.constants';
 
 /** A stored swap plus its derived QR — the shape API responses return. */
 export type SwapView = Swap & {

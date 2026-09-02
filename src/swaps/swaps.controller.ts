@@ -17,20 +17,20 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import type { Request } from 'express';
-import { CurrentConsumer } from '../common/decorators/current-consumer.decorator';
-import { RequirePermissions } from '../common/decorators/require-permissions.decorator';
-import { GatewayConsumer } from '../common/interfaces/gateway-consumer.interface';
-import { CreateSwapDto } from './dto/create-swap.dto';
-import { QuerySwapsDto } from './dto/query-swaps.dto';
-import { QuoteSwapDto } from './dto/quote-swap.dto';
-import { SubmitSwapDto } from './dto/submit-swap.dto';
+import { CurrentConsumer } from '@/common/decorators/current-consumer.decorator';
+import { RequirePermissions } from '@/common/decorators/require-permissions.decorator';
+import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
+import { CreateSwapDto } from '@/swaps/dto/create-swap.dto';
+import { QuerySwapsDto } from '@/swaps/dto/query-swaps.dto';
+import { QuoteSwapDto } from '@/swaps/dto/quote-swap.dto';
+import { SubmitSwapDto } from '@/swaps/dto/submit-swap.dto';
 import {
   SwapEntity,
   SwapListEntity,
   SwapQuoteEntity,
   SwapSubmitResultEntity,
-} from './entities/swap.entity';
-import { SwapsService } from './swaps.service';
+} from '@/swaps/entities/swap.entity';
+import { SwapsService } from '@/swaps/swaps.service';
 
 // URI versioning => /v1/swaps
 @ApiTags('swaps')

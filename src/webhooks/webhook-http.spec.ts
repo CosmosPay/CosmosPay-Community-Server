@@ -8,8 +8,8 @@ jest.mock('node:https', () => ({
 }));
 
 import { request as httpsRequest } from 'node:https';
-import { jitteredBackoffMs, postWebhook } from './webhook-http';
-import type { ValidatedWebhookDestination } from './webhook-url.validator';
+import { jitteredBackoffMs, postWebhook } from '@/webhooks/webhook-http';
+import type { ValidatedWebhookDestination } from '@/webhooks/webhook-url.validator';
 
 type RequestCall = { options: any; body: string };
 

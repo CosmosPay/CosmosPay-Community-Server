@@ -4,8 +4,8 @@ import {
   HttpStatus,
   ServiceUnavailableException,
 } from '@nestjs/common';
-import { ApiError, ApiErrorCode } from '../common/errors/api-error';
-import { BlindpayClient } from './blindpay.client';
+import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
+import { BlindpayClient } from '@/blindpay/blindpay.client';
 
 function makeClient(overrides: Record<string, unknown> = {}) {
   const cfg = {

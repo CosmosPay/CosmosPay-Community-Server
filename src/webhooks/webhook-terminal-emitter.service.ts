@@ -1,15 +1,15 @@
 import { Injectable, Optional } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import type { WebhookEventType } from '../../generated/prisma/client';
-import { isUniqueViolation } from '../common/prisma-errors';
-import { PrismaService } from '../prisma/prisma.service';
-import { WebhookDispatcherService } from './webhook-dispatcher.service';
+import type { WebhookEventType } from '@generated/prisma/client';
+import { isUniqueViolation } from '@/common/prisma-errors';
+import { PrismaService } from '@/prisma/prisma.service';
+import { WebhookDispatcherService } from '@/webhooks/webhook-dispatcher.service';
 import {
   WEBHOOK_EVENT,
   WebhookEventPayload,
   isTerminalWebhookEvent,
   terminalEventDedupKey,
-} from './webhook-events';
+} from '@/webhooks/webhook-events';
 
 /**
  * Single emission point for domain webhook events.

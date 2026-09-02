@@ -4,13 +4,13 @@ import {
   SUCCESS_REQUIRES_TX_HASH,
   TERMINAL_STATUSES,
   type PaymentIntentStatusName,
-} from './payment-intent-transitions';
+} from '@/payment-intents/payment-intent-transitions';
 import {
   assertTransition,
   canTransition,
   InvalidPaymentIntentTransitionError,
   isTerminalStatus,
-} from './payment-intent-state-machine';
+} from '@/payment-intents/payment-intent-state-machine';
 
 describe('PaymentIntent state machine (spec / graph)', () => {
   it('declares every Prisma status exactly once in the graph', () => {

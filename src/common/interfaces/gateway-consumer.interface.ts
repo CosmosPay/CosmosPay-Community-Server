@@ -49,6 +49,6 @@ declare module 'express' {
   // and (for platform-admin routes) req.adminPrincipal.
   interface Request {
     gatewayConsumer?: GatewayConsumer;
-    adminPrincipal?: import('../../admin/admin-auth').AdminPrincipal;
+    adminPrincipal?: import('@/admin/admin-auth').AdminPrincipal;
   }
 }

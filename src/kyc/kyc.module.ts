@@ -1,12 +1,12 @@
 import { Module } from '@nestjs/common';
-import { ReceiversController } from './receivers/receivers.controller';
-import { ReceiversService } from './receivers/receivers.service';
-import { WalletsController } from './wallets/wallets.controller';
-import { WalletsService } from './wallets/wallets.service';
-import { BankAccountsController } from './bank-accounts/bank-accounts.controller';
-import { BankAccountsService } from './bank-accounts/bank-accounts.service';
-import { KycMetaController } from './upload/kyc-meta.controller';
-import { KycMetaService } from './upload/kyc-meta.service';
+import { ReceiversController } from '@/kyc/receivers/receivers.controller';
+import { ReceiversService } from '@/kyc/receivers/receivers.service';
+import { WalletsController } from '@/kyc/wallets/wallets.controller';
+import { WalletsService } from '@/kyc/wallets/wallets.service';
+import { BankAccountsController } from '@/kyc/bank-accounts/bank-accounts.controller';
+import { BankAccountsService } from '@/kyc/bank-accounts/bank-accounts.service';
+import { KycMetaController } from '@/kyc/upload/kyc-meta.controller';
+import { KycMetaService } from '@/kyc/upload/kyc-meta.service';
 
 /**
  * KYC/compliance surface: receivers (the KYC/KYB entities) and their blockchain

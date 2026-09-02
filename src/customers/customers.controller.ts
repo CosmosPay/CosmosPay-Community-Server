@@ -18,14 +18,14 @@ import {
   CustomerDeletedEntity,
   CustomerEntity,
   CustomerListEntity,
-} from './entities/customer.entity';
-import { CurrentConsumer } from '../common/decorators/current-consumer.decorator';
-import { RequirePermissions } from '../common/decorators/require-permissions.decorator';
-import { GatewayConsumer } from '../common/interfaces/gateway-consumer.interface';
-import { CreateCustomerDto } from './dto/create-customer.dto';
-import { QueryCustomersDto } from './dto/query-customers.dto';
-import { UpdateCustomerDto } from './dto/update-customer.dto';
-import { CustomersService } from './customers.service';
+} from '@/customers/entities/customer.entity';
+import { CurrentConsumer } from '@/common/decorators/current-consumer.decorator';
+import { RequirePermissions } from '@/common/decorators/require-permissions.decorator';
+import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
+import { CreateCustomerDto } from '@/customers/dto/create-customer.dto';
+import { QueryCustomersDto } from '@/customers/dto/query-customers.dto';
+import { UpdateCustomerDto } from '@/customers/dto/update-customer.dto';
+import { CustomersService } from '@/customers/customers.service';
 
 // URI versioning => /v1/customers
 @ApiTags('customers')

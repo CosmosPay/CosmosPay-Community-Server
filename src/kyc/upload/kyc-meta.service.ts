@@ -1,16 +1,16 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'node:crypto';
-import { BlindpayClient, UploadableFile } from '../../blindpay/blindpay.client';
-import { BlindpayObject } from '../../blindpay/blindpay-sync.service';
-import { ConsumerResolverService } from '../../common/services/consumer-resolver.service';
-import { UPLOAD_BUCKETS } from '../../blindpay/blindpay.constants';
-import { ApiError } from '../../common/errors/api-error';
-import { PrismaService } from '../../prisma/prisma.service';
-import { InitiateTosDto } from './dto/initiate-tos.dto';
-import type { AppConfig } from '../../config/configuration';
-import { GatewayConsumer } from '../../common/interfaces/gateway-consumer.interface';
-import { assertRedirectAllowed } from '../redirect-url-whitelist';
+import { BlindpayClient, UploadableFile } from '@/blindpay/blindpay.client';
+import { BlindpayObject } from '@/blindpay/blindpay-sync.service';
+import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
+import { UPLOAD_BUCKETS } from '@/blindpay/blindpay.constants';
+import { ApiError } from '@/common/errors/api-error';
+import { PrismaService } from '@/prisma/prisma.service';
+import { InitiateTosDto } from '@/kyc/upload/dto/initiate-tos.dto';
+import type { AppConfig } from '@/config/configuration';
+import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
+import { assertRedirectAllowed } from '@/kyc/redirect-url-whitelist';
 
 /**
  * Compliance helpers that aren't tied to a single receiver: document upload and

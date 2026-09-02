@@ -1,8 +1,8 @@
 import {
   AdvisoryLockKey,
   AdvisoryLockService,
-} from '../common/services/advisory-lock.service';
-import { StellarObserverService } from './stellar-observer.service';
+} from '@/common/services/advisory-lock.service';
+import { StellarObserverService } from '@/payment-intents/stellar-observer.service';
 
 /**
  * The observer's tick runs on every replica behind APISIX and fans a batch of

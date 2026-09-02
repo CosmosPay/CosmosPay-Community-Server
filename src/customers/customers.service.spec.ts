@@ -1,5 +1,5 @@
-import { ConsumerResolverService } from '../common/services/consumer-resolver.service';
-import { CustomersService } from './customers.service';
+import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
+import { CustomersService } from '@/customers/customers.service';
 
 describe('CustomersService.findAll', () => {
   const consumer = { username: 'cosmos_u1', credentialId: 'cred_1' } as any;

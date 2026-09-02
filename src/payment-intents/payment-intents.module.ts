@@ -1,8 +1,8 @@
 import { Module } from '@nestjs/common';
-import { PaymentIntentsController } from './payment-intents.controller';
-import { PaymentIntentsService } from './payment-intents.service';
-import { StellarVerifierService } from './stellar-verifier.service';
-import { StellarObserverService } from './stellar-observer.service';
+import { PaymentIntentsController } from '@/payment-intents/payment-intents.controller';
+import { PaymentIntentsService } from '@/payment-intents/payment-intents.service';
+import { StellarVerifierService } from '@/payment-intents/stellar-verifier.service';
+import { StellarObserverService } from '@/payment-intents/stellar-observer.service';
 
 @Module({
   controllers: [PaymentIntentsController],

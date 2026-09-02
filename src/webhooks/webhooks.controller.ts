@@ -14,13 +14,13 @@ import {
   ApiOperation,
   ApiTags,
 } from '@nestjs/swagger';
-import { CurrentConsumer } from '../common/decorators/current-consumer.decorator';
-import { RequirePermissions } from '../common/decorators/require-permissions.decorator';
-import { GatewayConsumer } from '../common/interfaces/gateway-consumer.interface';
-import { CreateWebhookEndpointDto } from './dto/create-webhook-endpoint.dto';
-import { UpdateWebhookEndpointDto } from './dto/update-webhook-endpoint.dto';
-import { QueryDeliveriesDto } from './dto/query-deliveries.dto';
-import { QueryEndpointsDto } from './dto/query-endpoints.dto';
+import { CurrentConsumer } from '@/common/decorators/current-consumer.decorator';
+import { RequirePermissions } from '@/common/decorators/require-permissions.decorator';
+import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
+import { CreateWebhookEndpointDto } from '@/webhooks/dto/create-webhook-endpoint.dto';
+import { UpdateWebhookEndpointDto } from '@/webhooks/dto/update-webhook-endpoint.dto';
+import { QueryDeliveriesDto } from '@/webhooks/dto/query-deliveries.dto';
+import { QueryEndpointsDto } from '@/webhooks/dto/query-endpoints.dto';
 import {
   WebhookDeletedEntity,
   WebhookDeliveryEntity,
@@ -29,8 +29,8 @@ import {
   WebhookEndpointListEntity,
   WebhookEndpointWithSecretEntity,
   WebhookPingEntity,
-} from './entities/webhook.entity';
-import { WebhooksService } from './webhooks.service';
+} from '@/webhooks/entities/webhook.entity';
+import { WebhooksService } from '@/webhooks/webhooks.service';
 
 // URI versioning => /v1/webhooks
 @ApiTags('webhooks')

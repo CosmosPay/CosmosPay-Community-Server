@@ -1,20 +1,20 @@
 import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
-import { WidePaginationQueryDto } from '../common/dto/pagination.query.dto';
+import { WidePaginationQueryDto } from '@/common/dto/pagination.query.dto';
 import {
   ApiCreatedResponse,
   ApiOkResponse,
   ApiOperation,
   ApiTags,
 } from '@nestjs/swagger';
-import { CurrentConsumer } from '../common/decorators/current-consumer.decorator';
-import { RequirePermissions } from '../common/decorators/require-permissions.decorator';
-import { GatewayConsumer } from '../common/interfaces/gateway-consumer.interface';
-import { OnrampService } from './onramp.service';
-import { CreatePayinQuoteDto } from './dto/create-payin-quote.dto';
-import { CreatePayinDto } from './dto/create-payin.dto';
-import { CreateTrustlineDto } from './dto/create-trustline.dto';
-import { PayinQuoteEntity } from './entities/payin-quote.entity';
-import { PayinEntity, PayinListEntity } from './entities/payin.entity';
+import { CurrentConsumer } from '@/common/decorators/current-consumer.decorator';
+import { RequirePermissions } from '@/common/decorators/require-permissions.decorator';
+import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
+import { OnrampService } from '@/onramp/onramp.service';
+import { CreatePayinQuoteDto } from '@/onramp/dto/create-payin-quote.dto';
+import { CreatePayinDto } from '@/onramp/dto/create-payin.dto';
+import { CreateTrustlineDto } from '@/onramp/dto/create-trustline.dto';
+import { PayinQuoteEntity } from '@/onramp/entities/payin-quote.entity';
+import { PayinEntity, PayinListEntity } from '@/onramp/entities/payin.entity';
 
 // /v1/onramp — fiat -> stablecoin.
 @ApiTags('onramp')

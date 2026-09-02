@@ -1,5 +1,5 @@
 import { HttpException } from '@nestjs/common';
-import { OnrampService } from './onramp.service';
+import { OnrampService } from '@/onramp/onramp.service';
 
 const CONSUMER = { username: 'cosmos_u1' } as any;
 

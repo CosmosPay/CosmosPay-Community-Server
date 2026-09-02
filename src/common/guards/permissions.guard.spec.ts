@@ -1,12 +1,12 @@
 import { ExecutionContext, HttpStatus, Logger } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { ApiError, ApiErrorCode } from '../errors/api-error';
-import { PermissionsGuard } from './permissions.guard';
+import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
+import { PermissionsGuard } from '@/common/guards/permissions.guard';
 import {
   ANY_PERMISSIONS_KEY,
   PERMISSIONS_KEY,
-} from '../decorators/require-permissions.decorator';
-import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
+} from '@/common/decorators/require-permissions.decorator';
+import { IS_PUBLIC_KEY } from '@/common/decorators/public.decorator';
 
 /**
  * The scope system had no test of any kind, and every e2e suite forwards the

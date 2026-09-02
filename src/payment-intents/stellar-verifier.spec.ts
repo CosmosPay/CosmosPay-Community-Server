@@ -1,6 +1,6 @@
 import { Horizon } from '@stellar/stellar-sdk';
-import { StellarService } from '../stellar/stellar.service';
-import { StellarVerifierService } from './stellar-verifier.service';
+import { StellarService } from '@/stellar/stellar.service';
+import { StellarVerifierService } from '@/payment-intents/stellar-verifier.service';
 
 describe('StellarVerifierService.verifyByHash', () => {
   const intent: any = {

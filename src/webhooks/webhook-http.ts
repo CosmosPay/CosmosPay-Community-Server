@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { request as httpsRequest } from 'node:https';
 import type { IncomingMessage } from 'node:http';
 import type { LookupFunction } from 'node:net';
-import type { ValidatedWebhookDestination } from './webhook-url.validator';
+import type { ValidatedWebhookDestination } from '@/webhooks/webhook-url.validator';
 
 /**
  * Shared outbound HTTP for webhook delivery.

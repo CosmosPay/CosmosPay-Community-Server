@@ -1,7 +1,7 @@
 import { Global, Module } from '@nestjs/common';
-import { BlindpayClient } from './blindpay.client';
-import { BlindpaySyncService } from './blindpay-sync.service';
-import { BlindpayWebhooksController } from './webhooks/blindpay-webhooks.controller';
+import { BlindpayClient } from '@/blindpay/blindpay.client';
+import { BlindpaySyncService } from '@/blindpay/blindpay-sync.service';
+import { BlindpayWebhooksController } from '@/blindpay/webhooks/blindpay-webhooks.controller';
 
 /**
  * Core of the BlindPay integration. Global so the KYC/onramp/offramp feature

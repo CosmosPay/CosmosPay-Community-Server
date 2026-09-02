@@ -1,22 +1,22 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { GatewayConsumer } from '../common/interfaces/gateway-consumer.interface';
-import { PaginationQueryDto } from '../common/dto/pagination.query.dto';
-import { page } from '../common/pagination';
-import { ApiError, ApiErrorCode } from '../common/errors/api-error';
-import { PrismaService } from '../prisma/prisma.service';
-import { BlindpayClient } from '../blindpay/blindpay.client';
-import { ConsumerResolverService } from '../common/services/consumer-resolver.service';
+import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
+import { PaginationQueryDto } from '@/common/dto/pagination.query.dto';
+import { page } from '@/common/pagination';
+import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
+import { PrismaService } from '@/prisma/prisma.service';
+import { BlindpayClient } from '@/blindpay/blindpay.client';
+import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
 import {
   BlindpaySyncService,
   BlindpayObject,
   PAYOUT_PUBLIC_SELECT,
-} from '../blindpay/blindpay-sync.service';
-import { asString, asNumber, isMirrorFresh } from '../blindpay/blindpay.util';
-import type { Payout } from '../../generated/prisma/client';
-import { CreatePayoutQuoteDto } from './dto/create-payout-quote.dto';
-import { AuthorizePayoutDto } from './dto/authorize-payout.dto';
-import { CreatePayoutDto } from './dto/create-payout.dto';
-import { PayoutDocumentDto } from './dto/payout-document.dto';
+} from '@/blindpay/blindpay-sync.service';
+import { asString, asNumber, isMirrorFresh } from '@/blindpay/blindpay.util';
+import type { Payout } from '@generated/prisma/client';
+import { CreatePayoutQuoteDto } from '@/offramp/dto/create-payout-quote.dto';
+import { AuthorizePayoutDto } from '@/offramp/dto/authorize-payout.dto';
+import { CreatePayoutDto } from '@/offramp/dto/create-payout.dto';
+import { PayoutDocumentDto } from '@/offramp/dto/payout-document.dto';
 
 /**
  * Offramp (stablecoin -> fiat). Quotes are priced through BlindPay (the EVM quote

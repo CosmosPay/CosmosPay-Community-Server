@@ -4,13 +4,13 @@ import {
   Injectable,
   Logger,
 } from '@nestjs/common';
-import { ApiError, ApiErrorCode } from '../errors/api-error';
+import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { ConfigService } from '@nestjs/config';
 import { Reflector } from '@nestjs/core';
 import { timingSafeEqual } from 'node:crypto';
 import { Request } from 'express';
-import { AppConfig } from '../../config/configuration';
-import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
+import { AppConfig } from '@/config/configuration';
+import { IS_PUBLIC_KEY } from '@/common/decorators/public.decorator';
 
 /**
  * The gatekeeper. A request is only accepted when:

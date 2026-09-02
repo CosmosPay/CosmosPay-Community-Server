@@ -1,6 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsOptional, IsString, Matches, MaxLength } from 'class-validator';
-import { IsStellarAddress } from '../../common/validators/is-stellar-address.validator';
+import { IsStellarAddress } from '@/common/validators/is-stellar-address.validator';
 
 /**
  * SEP-7 `pay` request: no payer is known, so we cannot build an XDR. We return a

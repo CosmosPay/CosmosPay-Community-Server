@@ -1,4 +1,7 @@
-import { WALLET_PUBLIC_SELECT, WalletsService } from './wallets.service';
+import {
+  WALLET_PUBLIC_SELECT,
+  WalletsService,
+} from '@/kyc/wallets/wallets.service';
 
 const CONSUMER = { username: 'cosmos_u1', role: 'user' } as any;
 

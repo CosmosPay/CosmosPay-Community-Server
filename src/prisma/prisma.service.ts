@@ -6,17 +6,14 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaPg } from '@prisma/adapter-pg';
-import { PrismaClient } from '../../generated/prisma/client';
-import type { AppConfig } from '../config/configuration';
-
-/** Per-replica connection ceiling. Size the database's `max_connections` as
- *  `POOL_MAX × replicas` plus headroom for migrations and psql. */
-const POOL_MAX = 20;
-/** Fail fast instead of queueing forever when the pool is saturated. */
-const POOL_CONNECTION_TIMEOUT_MS = 5_000;
-const POOL_IDLE_TIMEOUT_MS = 30_000;
-/** Server-side backstop: no single statement holds a connection past this. */
-const STATEMENT_TIMEOUT_MS = 30_000;
+import { PrismaClient } from '@generated/prisma/client';
+import type { AppConfig } from '@/config/configuration';
+import {
+  POOL_CONNECTION_TIMEOUT_MS,
+  POOL_IDLE_TIMEOUT_MS,
+  POOL_MAX,
+  STATEMENT_TIMEOUT_MS,
+} from '@/prisma/prisma.constants';
 
 @Injectable()
 export class PrismaService

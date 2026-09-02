@@ -1,15 +1,19 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { PrismaService } from '../prisma/prisma.service';
-import { isUniqueViolation } from '../common/prisma-errors';
-import { WEBHOOK_EVENT, WebhookEventPayload } from '../webhooks/webhook-events';
-import { redactProviderEvent } from './blindpay-event-redaction';
-import { asNullableString, asString, toJson } from './blindpay.util';
+import { PrismaService } from '@/prisma/prisma.service';
+import { isUniqueViolation } from '@/common/prisma-errors';
+import { WEBHOOK_EVENT, WebhookEventPayload } from '@/webhooks/webhook-events';
+import { redactProviderEvent } from '@/blindpay/blindpay-event-redaction';
+import { asNullableString, asString, toJson } from '@/blindpay/blindpay.util';
+import {
+  SETTLED_KYC_STATUSES,
+  SETTLED_STATUSES,
+} from '@/blindpay/blindpay.constants';
 import type {
   BlindpayReceiver,
   Prisma,
   WebhookEventType,
-} from '../../generated/prisma/client';
+} from '@generated/prisma/client';
 
 /** Loosely-typed BlindPay resource object (snake_case, provider-defined). */
 export type BlindpayObject = Record<string, unknown>;
@@ -91,21 +95,6 @@ const EVENT_MAP: Record<string, WebhookEventType> = {
   'payout.update': 'PAYOUT_UPDATED',
   'payout.complete': 'PAYOUT_COMPLETED',
 };
-
-/**
- * Payin/payout statuses that mean the money stopped moving. A webhook may move a
- * row *into* one of these at any time (`completed` -> `refunded` is a real
- * transition), but never back out — see {@link noRegressionFrom}.
- */
-const SETTLED_STATUSES = [
-  'completed',
-  'failed',
-  'refunded',
-  'cancelled',
-] as const;
-
-/** Terminal BlindPay KYC statuses; mirrors `kyc/receivers/receiver-state.ts`. */
-const SETTLED_KYC_STATUSES = ['approved', 'rejected'] as const;
 
 /**
  * The bridge between BlindPay's resources and our local mirror.

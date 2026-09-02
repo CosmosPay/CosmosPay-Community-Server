@@ -20,7 +20,8 @@
     "esModuleInterop": true,
     "resolveJsonModule": true,
     "paths": {
-      "@/*": ["src/*"]
+      "@/*": ["src/*"],
+      "@generated/*": ["generated/*"]
     }
   },
   "exclude": ["node_modules", "dist"]

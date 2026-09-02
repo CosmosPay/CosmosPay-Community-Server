@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { VersioningType } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { stringify } from 'yaml';
-import { createOpenApiDocument } from '../src/swagger';
+import { createOpenApiDocument } from '@/swagger';
 
 /**
  * Writes the OpenAPI spec to `openapi/openapi.{json,yaml}` without starting the
@@ -33,7 +33,7 @@ async function generate(): Promise<void> {
 
   // Import only after the offline defaults are set: ConfigModule validates the
   // environment as soon as AppModule is evaluated.
-  const { AppModule } = await import('../src/app.module');
+  const { AppModule } = await import('@/app.module');
 
   const app = await NestFactory.create(AppModule, {
     preview: true,

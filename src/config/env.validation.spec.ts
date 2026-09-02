@@ -1,5 +1,5 @@
 import 'reflect-metadata';
-import { validateEnv } from './env.validation';
+import { validateEnv } from '@/config/env.validation';
 
 /** Valid Stellar testnet address (from .env.example). */
 const VALID_FEE_WALLET =

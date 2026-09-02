@@ -1,10 +1,10 @@
 import { Module } from '@nestjs/common';
-import { KycModule } from '../kyc/kyc.module';
-import { AdminAuditService } from './admin-audit.service';
-import { AdminController } from './admin.controller';
-import { AdminReadAuditInterceptor } from './admin-read-audit.interceptor';
-import { AdminService } from './admin.service';
-import { AdminGuard } from '../common/guards/admin.guard';
+import { KycModule } from '@/kyc/kyc.module';
+import { AdminAuditService } from '@/admin/admin-audit.service';
+import { AdminController } from '@/admin/admin.controller';
+import { AdminReadAuditInterceptor } from '@/admin/admin-read-audit.interceptor';
+import { AdminService } from '@/admin/admin.service';
+import { AdminGuard } from '@/common/guards/admin.guard';
 
 /**
  * Imports KycModule so the admin (owner) endpoints can reuse ReceiversService's

@@ -1,21 +1,21 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { randomBytes } from 'node:crypto';
-import { ApiError, ApiErrorCode } from '../common/errors/api-error';
-import { isRedactedPayload } from './webhook-payload-retention';
-import { PrismaService } from '../prisma/prisma.service';
-import { ConsumerResolverService } from '../common/services/consumer-resolver.service';
-import { GatewayConsumer } from '../common/interfaces/gateway-consumer.interface';
+import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
+import { isRedactedPayload } from '@/webhooks/webhook-payload-retention';
+import { PrismaService } from '@/prisma/prisma.service';
+import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
+import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import type {
   WebhookDelivery,
   WebhookEndpoint,
-} from '../../generated/prisma/client';
-import { CreateWebhookEndpointDto } from './dto/create-webhook-endpoint.dto';
-import { UpdateWebhookEndpointDto } from './dto/update-webhook-endpoint.dto';
-import { QueryDeliveriesDto } from './dto/query-deliveries.dto';
-import { QueryEndpointsDto } from './dto/query-endpoints.dto';
-import { WebhookDispatcherService } from './webhook-dispatcher.service';
-import { WebhookDestinationGuard } from './webhook-destination.guard';
-import { WebhookUrlValidationError } from './webhook-url.validator';
+} from '@generated/prisma/client';
+import { CreateWebhookEndpointDto } from '@/webhooks/dto/create-webhook-endpoint.dto';
+import { UpdateWebhookEndpointDto } from '@/webhooks/dto/update-webhook-endpoint.dto';
+import { QueryDeliveriesDto } from '@/webhooks/dto/query-deliveries.dto';
+import { QueryEndpointsDto } from '@/webhooks/dto/query-endpoints.dto';
+import { WebhookDispatcherService } from '@/webhooks/webhook-dispatcher.service';
+import { WebhookDestinationGuard } from '@/webhooks/webhook-destination.guard';
+import { WebhookUrlValidationError } from '@/webhooks/webhook-url.validator';
 
 // Endpoint without the signing secret — what list/get responses return.
 export type SafeWebhookEndpoint = Omit<WebhookEndpoint, 'secret'>;

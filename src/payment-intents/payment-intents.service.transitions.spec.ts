@@ -1,10 +1,10 @@
-import { ConsumerResolverService } from '../common/services/consumer-resolver.service';
+import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
 import { HttpStatus } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { ApiError, ApiErrorCode } from '../common/errors/api-error';
-import { WebhookTerminalEmitter } from '../webhooks/webhook-terminal-emitter.service';
-import { PaymentIntentsService } from './payment-intents.service';
-import { InvalidPaymentIntentTransitionError } from './payment-intent-state-machine';
+import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
+import { WebhookTerminalEmitter } from '@/webhooks/webhook-terminal-emitter.service';
+import { PaymentIntentsService } from '@/payment-intents/payment-intents.service';
+import { InvalidPaymentIntentTransitionError } from '@/payment-intents/payment-intent-state-machine';
 
 describe('PaymentIntentsService.transition (guards + audit)', () => {
   const intentBase = {

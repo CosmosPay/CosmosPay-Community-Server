@@ -1,7 +1,7 @@
 import {
   BANK_ACCOUNT_PUBLIC_SELECT,
   BankAccountsService,
-} from './bank-accounts.service';
+} from '@/kyc/bank-accounts/bank-accounts.service';
 
 const CONSUMER = { username: 'cosmos_u1', role: 'user' } as any;
 

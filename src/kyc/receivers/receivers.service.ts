@@ -1,38 +1,31 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'node:crypto';
-import { ApiError, ApiErrorCode } from '../../common/errors/api-error';
-import { GatewayConsumer } from '../../common/interfaces/gateway-consumer.interface';
-import { PaginationQueryDto } from '../../common/dto/pagination.query.dto';
-import { page } from '../../common/pagination';
-import { PrismaService } from '../../prisma/prisma.service';
-import { BlindpayClient } from '../../blindpay/blindpay.client';
-import { ConsumerResolverService } from '../../common/services/consumer-resolver.service';
+import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
+import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
+import { PaginationQueryDto } from '@/common/dto/pagination.query.dto';
+import { page } from '@/common/pagination';
+import { PrismaService } from '@/prisma/prisma.service';
+import { BlindpayClient } from '@/blindpay/blindpay.client';
+import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
 import {
   BlindpaySyncService,
   BlindpayObject,
-} from '../../blindpay/blindpay-sync.service';
+} from '@/blindpay/blindpay-sync.service';
+import { asNullableString, asString, toJson } from '@/blindpay/blindpay.util';
+import type { BlindpayReceiver, Prisma } from '@generated/prisma/client';
+import type { AdminAuditData } from '@/admin/admin-audit.service';
+import { recordAuditInTransaction } from '@/admin/admin-audit.service';
+import { CreateReceiverDto } from '@/kyc/receivers/dto/create-receiver.dto';
+import { UpdateReceiverDto } from '@/kyc/receivers/dto/update-receiver.dto';
+import { RequestTosDto } from '@/kyc/receivers/dto/request-tos.dto';
+import type { AppConfig } from '@/config/configuration';
+import { assertRedirectAllowed } from '@/kyc/redirect-url-whitelist';
+import { assertTransition } from '@/kyc/receivers/receiver-state';
 import {
-  asNullableString,
-  asString,
-  toJson,
-} from '../../blindpay/blindpay.util';
-import type {
-  BlindpayReceiver,
-  Prisma,
-} from '../../../generated/prisma/client';
-import type { AdminAuditData } from '../../admin/admin-audit.service';
-import { recordAuditInTransaction } from '../../admin/admin-audit.service';
-import { CreateReceiverDto } from './dto/create-receiver.dto';
-import { UpdateReceiverDto } from './dto/update-receiver.dto';
-import { RequestTosDto } from './dto/request-tos.dto';
-import type { AppConfig } from '../../config/configuration';
-import { assertRedirectAllowed } from '../redirect-url-whitelist';
-import { assertTransition } from './receiver-state';
-
-/** Local placeholder id for a receiver that doesn't exist at BlindPay yet. */
-const LOCAL_PREFIX = 'local_';
-const TOS_EMAIL_COOLDOWN_MS = 24 * 60 * 60 * 1000; // once per day
+  LOCAL_RECEIVER_PREFIX,
+  TOS_EMAIL_COOLDOWN_MS,
+} from '@/kyc/kyc.constants';
 
 /**
  * The columns a receiver is allowed to leave this service with — deliberately the
@@ -117,7 +110,7 @@ export class ReceiversService {
       data: {
         consumerId: local.id,
         // Placeholder until the real `re_...` id is assigned on enable().
-        blindpayId: `${LOCAL_PREFIX}${randomUUID()}`,
+        blindpayId: `${LOCAL_RECEIVER_PREFIX}${randomUUID()}`,
         type: dto.type,
         kycType: dto.kyc_type,
         kycStatus: hasKycData(dto) ? 'pending_review' : 'inactive',
@@ -251,7 +244,7 @@ export class ReceiversService {
     redirectUrl: string,
     row: BlindpayReceiver,
   ): Promise<string> {
-    const isLocal = row.blindpayId.startsWith(LOCAL_PREFIX);
+    const isLocal = row.blindpayId.startsWith(LOCAL_RECEIVER_PREFIX);
     const { url } = await this.blindpay.post<{ url: string }>(
       `/e/instances/${this.blindpay.instanceId}/tos`,
       {
@@ -410,7 +403,7 @@ export class ReceiversService {
     });
     if (!row) throw ApiError.notFound('Receiver not found');
 
-    if (!row.blindpayId.startsWith(LOCAL_PREFIX)) {
+    if (!row.blindpayId.startsWith(LOCAL_RECEIVER_PREFIX)) {
       // Already created at BlindPay — nothing to do but return the current state.
       await this.refreshReceiver(row);
       if (audit) {
@@ -497,7 +490,7 @@ export class ReceiversService {
 
   /** Refresh a receiver row from BlindPay (mirror), falling back to the local row. */
   private async refreshReceiver(row: BlindpayReceiver) {
-    if (row.blindpayId.startsWith(LOCAL_PREFIX)) return row;
+    if (row.blindpayId.startsWith(LOCAL_RECEIVER_PREFIX)) return row;
     try {
       const fresh = await this.blindpay.get<BlindpayObject>(
         this.blindpay.instancePath(`/customers/${row.blindpayId}`),
@@ -537,7 +530,7 @@ export class ReceiversService {
     const local = await this.consumers.resolve(consumer);
     const row = await this.findPublicOrThrow(local.id, id);
     // An inactive (local-only) receiver has no BlindPay record to refresh from yet.
-    if (row.blindpayId.startsWith(LOCAL_PREFIX)) {
+    if (row.blindpayId.startsWith(LOCAL_RECEIVER_PREFIX)) {
       return row;
     }
     try {
@@ -568,7 +561,7 @@ export class ReceiversService {
 
     // Local-only receivers (inactive / pending_review / pending_user) do not exist at
     // BlindPay yet — merge into the stored create payload instead of PUTting upstream.
-    if (row.blindpayId.startsWith(LOCAL_PREFIX)) {
+    if (row.blindpayId.startsWith(LOCAL_RECEIVER_PREFIX)) {
       const merged: Record<string, unknown> = {
         ...((row.raw ?? {}) as Record<string, unknown>),
         ...patch,
@@ -625,7 +618,7 @@ export class ReceiversService {
     const local = await this.consumers.resolve(consumer);
     const row = await this.findReceiverOrThrow(local.id, id);
     // Only delete at BlindPay if it was ever created there (inactive receivers are local-only).
-    if (!row.blindpayId.startsWith(LOCAL_PREFIX)) {
+    if (!row.blindpayId.startsWith(LOCAL_RECEIVER_PREFIX)) {
       await this.blindpay.delete(
         this.blindpay.instancePath(`/customers/${row.blindpayId}`),
       );

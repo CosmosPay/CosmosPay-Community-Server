@@ -1,4 +1,4 @@
-import { ApiError, ApiErrorCode } from '../../common/errors/api-error';
+import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 
 /**
  * Pre-BlindPay KYC states owned by this service, plus BlindPay's own statuses

@@ -8,7 +8,7 @@ import {
   canTransitionLp,
   isLpLiquidated,
   type LpOperationStatus,
-} from './lp-operation-transitions';
+} from '@/liquidity-pools/lp-operation-transitions';
 
 describe('LP operation state machine (issue #32)', () => {
   it('declares every SwapStatus exactly once in the graph', () => {

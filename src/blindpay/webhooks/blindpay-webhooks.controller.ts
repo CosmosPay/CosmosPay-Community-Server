@@ -8,10 +8,13 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { ApiExcludeEndpoint } from '@nestjs/swagger';
 import { Request } from 'express';
-import { AppConfig } from '../../config/configuration';
-import { Public } from '../../common/decorators/public.decorator';
-import { verifySvixSignature } from '../blindpay-signature';
-import { BlindpaySyncService, BlindpayObject } from '../blindpay-sync.service';
+import { AppConfig } from '@/config/configuration';
+import { Public } from '@/common/decorators/public.decorator';
+import { verifySvixSignature } from '@/blindpay/blindpay-signature';
+import {
+  BlindpaySyncService,
+  BlindpayObject,
+} from '@/blindpay/blindpay-sync.service';
 
 /**
  * Receives BlindPay (Svix) webhook deliveries.
