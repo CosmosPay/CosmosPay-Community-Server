@@ -293,7 +293,10 @@ export class PaymentIntentTransitionEntity {
   })
   txHash!: string | null;
 
-  @ApiProperty({ example: 'api', description: 'api | validate | observer | system' })
+  @ApiProperty({
+    example: 'api',
+    description: 'api | validate | observer | system',
+  })
   actor!: string;
 
   @ApiProperty({ required: false, nullable: true })

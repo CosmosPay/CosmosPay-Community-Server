@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { KycModule } from '../kyc/kyc.module';
 import { AdminAuditService } from './admin-audit.service';
 import { AdminController } from './admin.controller';
+import { AdminReadAuditInterceptor } from './admin-read-audit.interceptor';
 import { AdminService } from './admin.service';
 import { AdminGuard } from '../common/guards/admin.guard';
 
@@ -13,6 +14,11 @@ import { AdminGuard } from '../common/guards/admin.guard';
 @Module({
   imports: [KycModule],
   controllers: [AdminController],
-  providers: [AdminService, AdminAuditService, AdminGuard],
+  providers: [
+    AdminService,
+    AdminAuditService,
+    AdminGuard,
+    AdminReadAuditInterceptor,
+  ],
 })
 export class AdminModule {}

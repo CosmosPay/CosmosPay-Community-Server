@@ -7,18 +7,35 @@ describe('RequestLogRetentionService', () => {
     pruneIntervalMs: 3600000,
     batchSize: 2,
     maxPerCycle: 6,
+    deliveryPayloadDays: 0,
   };
 
-  function build(cfg = retentionCfg) {
+  function build(cfg: typeof retentionCfg = retentionCfg) {
     const prisma = {
       requestLog: {
         findMany: jest.fn().mockResolvedValue([]),
         deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
       },
+      webhookDelivery: {
+        findMany: jest.fn().mockResolvedValue([]),
+        updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+      },
     };
     const config = { get: () => cfg } as any;
-    const service = new RequestLogRetentionService(config, prisma as any);
-    return { service, prisma };
+    // The real lock runs `work` only when this replica wins pg_try_advisory_xact_lock.
+    // Here it always wins, so these tests exercise the prune itself; the
+    // lost-the-race path is covered separately below.
+    const lock = {
+      runExclusive: jest.fn((_key: number, work: () => Promise<unknown>) =>
+        work(),
+      ),
+    };
+    const service = new RequestLogRetentionService(
+      config,
+      prisma as any,
+      lock as any,
+    );
+    return { service, prisma, lock };
   }
 
   afterEach(() => {
@@ -26,7 +43,7 @@ describe('RequestLogRetentionService', () => {
     jest.useRealTimers();
   });
 
-  it('logs disabled and skips the timer when retentionDays is 0', () => {
+  it('skips the timer only when BOTH retentions are off', () => {
     const loggerLog = jest.spyOn(Logger.prototype, 'log').mockImplementation();
     const setIntervalSpy = jest.spyOn(global, 'setInterval');
 
@@ -35,14 +52,72 @@ describe('RequestLogRetentionService', () => {
       pruneIntervalMs: 3600000,
       batchSize: 1000,
       maxPerCycle: 50000,
+      deliveryPayloadDays: 0,
     });
     service.onModuleInit();
 
     expect(setIntervalSpy).not.toHaveBeenCalled();
     expect(loggerLog).toHaveBeenCalledWith(
-      'Request log retention disabled (REQUEST_LOG_RETENTION_DAYS=0)',
+      'Retention disabled (REQUEST_LOG_RETENTION_DAYS=0, WEBHOOK_PAYLOAD_RETENTION_DAYS=0)',
     );
     service.onModuleDestroy();
+  });
+
+  it('still runs the timer for delivery bodies when request logs are off', () => {
+    jest.spyOn(Logger.prototype, 'log').mockImplementation();
+    const setIntervalSpy = jest.spyOn(global, 'setInterval');
+
+    const { service } = build({
+      ...retentionCfg,
+      retentionDays: 0,
+      deliveryPayloadDays: 30,
+    });
+    service.onModuleInit();
+
+    // The timer serves two prunes; turning one off must not disable the other.
+    expect(setIntervalSpy).toHaveBeenCalled();
+    service.onModuleDestroy();
+  });
+
+  it('clears the body of settled deliveries past the window, once', async () => {
+    const { service, prisma } = build({
+      ...retentionCfg,
+      retentionDays: 0,
+      deliveryPayloadDays: 30,
+      batchSize: 2,
+      maxPerCycle: 2,
+    });
+    prisma.webhookDelivery.findMany.mockResolvedValueOnce([
+      { id: 'wd_1' },
+      { id: 'wd_2' },
+    ]);
+    prisma.webhookDelivery.updateMany.mockResolvedValueOnce({ count: 2 });
+
+    await (service as unknown as { tick: () => Promise<void> }).tick();
+
+    const where = prisma.webhookDelivery.findMany.mock.calls[0][0].where;
+    // A retryable delivery still needs its body to re-send what was signed.
+    expect(where.status).toEqual({ in: ['SUCCEEDED', 'FAILED'] });
+    expect(where.createdAt.lt).toBeInstanceOf(Date);
+    // Already-cleared rows are excluded, so the loop cannot spin on them.
+    expect(where.NOT).toEqual({ payload: { equals: { redacted: true } } });
+    expect(prisma.webhookDelivery.updateMany).toHaveBeenCalledWith({
+      where: { id: { in: ['wd_1', 'wd_2'] } },
+      data: { payload: { redacted: true } },
+    });
+  });
+
+  it('does not touch delivery bodies when the window is 0', async () => {
+    const { service, prisma } = build({
+      ...retentionCfg,
+      retentionDays: 0,
+      deliveryPayloadDays: 0,
+    });
+
+    await (service as unknown as { tick: () => Promise<void> }).tick();
+
+    expect(prisma.webhookDelivery.findMany).not.toHaveBeenCalled();
+    expect(prisma.webhookDelivery.updateMany).not.toHaveBeenCalled();
   });
 
   it('starts an unrefed interval when retention is enabled', () => {
@@ -142,5 +217,40 @@ describe('RequestLogRetentionService', () => {
     service.onModuleDestroy();
 
     expect(clearSpy).toHaveBeenCalledWith(fakeTimer);
+  });
+  it('bounds the prune by rows EXAMINED, not rows deleted', async () => {
+    // The bug this pins: bounding on `deleted` alone turned a bounded prune
+    // into an unbounded scan. `deleted` only advances when this cycle wins the
+    // delete, so a replica racing a sibling (or a concurrent manual cleanup)
+    // sees count 0 on every batch while still finding a full page of
+    // candidates — `deleted < cap` stays true forever.
+    const { service, prisma } = build({
+      ...retentionCfg,
+      batchSize: 2,
+      maxPerCycle: 6,
+      deliveryPayloadDays: 0,
+    });
+    // Always a full page of candidates...
+    prisma.requestLog.findMany.mockResolvedValue([{ id: 'a' }, { id: 'b' }]);
+    // ...and this replica never wins the delete.
+    prisma.requestLog.deleteMany.mockResolvedValue({ count: 0 });
+
+    await (service as unknown as { tick: () => Promise<void> }).tick();
+
+    // maxPerCycle / batchSize = 3 passes, then it stops. Without the
+    // `examined` counter this loop never terminates.
+    expect(prisma.requestLog.findMany).toHaveBeenCalledTimes(3);
+  });
+
+  it('skips the whole cycle when another replica holds the lock', async () => {
+    const { service, prisma, lock } = build();
+    lock.runExclusive.mockResolvedValue(undefined);
+
+    await (service as unknown as { tick: () => Promise<void> }).tick();
+
+    // Losing the race must cost nothing: no scan, no delete. Every replica runs
+    // this timer and they all select the same oldest rows.
+    expect(prisma.requestLog.findMany).not.toHaveBeenCalled();
+    expect(prisma.requestLog.deleteMany).not.toHaveBeenCalled();
   });
 });

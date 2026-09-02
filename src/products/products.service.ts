@@ -2,6 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { GatewayConsumer } from '../common/interfaces/gateway-consumer.interface';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateProductDto } from './dto/create-product.dto';
+import { QueryProductsDto } from './dto/query-products.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 
 @Injectable()
@@ -49,13 +50,23 @@ export class ProductsService {
     });
   }
 
-  async findAll(consumer: GatewayConsumer) {
+  async findAll(consumer: GatewayConsumer, query: QueryProductsDto) {
     const local = await this.resolveConsumer(consumer);
-    const data = await this.prisma.product.findMany({
-      where: { consumerId: local.id },
-      orderBy: { createdAt: 'desc' },
-    });
-    return { data, total: data.length };
+    const where = { consumerId: local.id };
+
+    // `total` is the row count, never `data.length`: the page size is `take` on
+    // every full page, so a client paginating on it can never see the end.
+    const [data, total] = await this.prisma.$transaction([
+      this.prisma.product.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        take: query.take,
+        skip: query.skip,
+      }),
+      this.prisma.product.count({ where }),
+    ]);
+
+    return { data, total, take: query.take, skip: query.skip };
   }
 
   async findOne(consumer: GatewayConsumer, id: string) {

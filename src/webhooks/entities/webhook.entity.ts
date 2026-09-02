@@ -62,17 +62,11 @@ export class WebhookDeliveryEntity {
   @ApiProperty({ example: 'evt_2c3d4e5f-aaaa-bbbb-cccc-1234567890ab' })
   eventId!: string;
 
-  @ApiProperty({
-    type: 'object',
-    additionalProperties: true,
-    example: {
-      id: 'evt_2c3d…',
-      type: 'PAYMENT_INTENT_SUCCEEDED',
-      createdAt: '2026-06-21T12:34:56.000Z',
-      data: { id: 'clx9z8a1b…', status: 'SUCCEEDED' },
-    },
-  })
-  payload!: unknown;
+  // `payload` is intentionally absent. The delivery row stores the signed body
+  // so a retry can re-send it byte for byte, but it is never returned: a
+  // RECEIVER_UPDATED body is the provider's full KYC dossier, and these routes
+  // are gated on `webhooks:read` rather than `kyc:read`. The integrator
+  // already received the body at their own endpoint.
 
   @ApiProperty({ enum: WebhookDeliveryStatus, example: 'SUCCEEDED' })
   status!: WebhookDeliveryStatus;
@@ -94,6 +88,20 @@ export class WebhookDeliveryEntity {
 
   @ApiProperty({ example: '2026-06-21T12:34:57.000Z' })
   updatedAt!: Date;
+}
+
+export class WebhookEndpointListEntity {
+  @ApiProperty({ type: [WebhookEndpointEntity] })
+  data!: WebhookEndpointEntity[];
+
+  @ApiProperty({ example: 1 })
+  total!: number;
+
+  @ApiProperty({ example: 100 })
+  take!: number;
+
+  @ApiProperty({ example: 0 })
+  skip!: number;
 }
 
 export class WebhookDeliveryListEntity {

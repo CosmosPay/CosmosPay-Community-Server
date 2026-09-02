@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import type { Prisma } from '../../../generated/prisma/client';
 import { GatewayConsumer } from '../../common/interfaces/gateway-consumer.interface';
 import { PrismaService } from '../../prisma/prisma.service';
 import { BlindpayClient } from '../../blindpay/blindpay.client';
@@ -11,6 +12,24 @@ import {
 } from '../../blindpay/blindpay.util';
 import { ReceiversService } from '../receivers/receivers.service';
 import { CreateBankAccountDto } from './dto/create-bank-account.dto';
+
+/**
+ * The columns a bank account is allowed to leave this service with — the exact field
+ * list of `BankAccountEntity`.
+ *
+ * As with the receiver dossier, `raw` is deliberately absent: it is the provider object,
+ * which for a bank account mirrors the account credentials themselves (IBAN, CLABE,
+ * routing/account number, CPF/CNPJ, beneficiary address). The mirror keeps it for
+ * provider round-trips; the API returns the identifiers only.
+ */
+export const BANK_ACCOUNT_PUBLIC_SELECT = {
+  id: true,
+  blindpayId: true,
+  rail: true,
+  name: true,
+  country: true,
+  createdAt: true,
+} as const satisfies Prisma.BlindpayBankAccountSelect;
 
 /**
  * Fiat bank accounts belonging to a receiver — the settlement destination for
@@ -51,11 +70,17 @@ export class BankAccountsService {
       local.id,
       receiverId,
     );
-    const data = await this.prisma.blindpayBankAccount.findMany({
-      where: { receiverId: receiver.id },
-      orderBy: { createdAt: 'desc' },
-    });
-    return { data, total: data.length };
+    const where = { receiverId: receiver.id };
+    // `total` is the row count, not the page length (see ReceiversService.findAll).
+    const [data, total] = await Promise.all([
+      this.prisma.blindpayBankAccount.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        select: BANK_ACCOUNT_PUBLIC_SELECT,
+      }),
+      this.prisma.blindpayBankAccount.count({ where }),
+    ]);
+    return { data, total };
   }
 
   async remove(consumer: GatewayConsumer, receiverId: string, id: string) {
@@ -93,6 +118,8 @@ export class BankAccountsService {
       },
       create: { consumerId, blindpayId: asString(obj.id), ...data },
       update: data,
+      // The create response is a read path too — don't echo the stored credentials back.
+      select: BANK_ACCOUNT_PUBLIC_SELECT,
     });
   }
 }

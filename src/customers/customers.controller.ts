@@ -6,12 +6,24 @@ import {
   Param,
   Patch,
   Post,
+  Query,
 } from '@nestjs/common';
-import { ApiOperation, ApiTags } from '@nestjs/swagger';
+import {
+  ApiCreatedResponse,
+  ApiOkResponse,
+  ApiOperation,
+  ApiTags,
+} from '@nestjs/swagger';
+import {
+  CustomerDeletedEntity,
+  CustomerEntity,
+  CustomerListEntity,
+} from './entities/customer.entity';
 import { CurrentConsumer } from '../common/decorators/current-consumer.decorator';
 import { RequirePermissions } from '../common/decorators/require-permissions.decorator';
 import { GatewayConsumer } from '../common/interfaces/gateway-consumer.interface';
 import { CreateCustomerDto } from './dto/create-customer.dto';
+import { QueryCustomersDto } from './dto/query-customers.dto';
 import { UpdateCustomerDto } from './dto/update-customer.dto';
 import { CustomersService } from './customers.service';
 
@@ -24,6 +36,7 @@ export class CustomersController {
   @Post()
   @RequirePermissions('customers:write')
   @ApiOperation({ summary: 'Create a customer' })
+  @ApiCreatedResponse({ type: CustomerEntity })
   create(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Body() dto: CreateCustomerDto,
@@ -36,13 +49,18 @@ export class CustomersController {
   @ApiOperation({
     summary: "List the consumer's customers (with payment stats)",
   })
-  findAll(@CurrentConsumer() consumer: GatewayConsumer) {
-    return this.customers.findAll(consumer);
+  @ApiOkResponse({ type: CustomerListEntity })
+  findAll(
+    @CurrentConsumer() consumer: GatewayConsumer,
+    @Query() query: QueryCustomersDto,
+  ) {
+    return this.customers.findAll(consumer, query);
   }
 
   @Get(':id')
   @RequirePermissions('customers:read')
   @ApiOperation({ summary: 'Get a customer by id' })
+  @ApiOkResponse({ type: CustomerEntity })
   findOne(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Param('id') id: string,
@@ -53,6 +71,7 @@ export class CustomersController {
   @Patch(':id')
   @RequirePermissions('customers:write')
   @ApiOperation({ summary: 'Update a customer' })
+  @ApiOkResponse({ type: CustomerEntity })
   update(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Param('id') id: string,
@@ -64,6 +83,7 @@ export class CustomersController {
   @Delete(':id')
   @RequirePermissions('customers:write')
   @ApiOperation({ summary: 'Delete a customer' })
+  @ApiOkResponse({ type: CustomerDeletedEntity })
   remove(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Param('id') id: string,

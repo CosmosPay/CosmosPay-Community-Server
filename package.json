@@ -17,7 +17,8 @@
     "start:dev": "nest start --watch",
     "start:debug": "nest start --debug --watch",
     "start:prod": "node dist/src/main",
-    "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
+    "lint": "eslint \"{src,apps,libs,scripts,test}/**/*.ts\" --max-warnings=0",
+    "lint:fix": "eslint \"{src,apps,libs,scripts,test}/**/*.ts\" --fix",
     "test": "jest",
     "test:watch": "jest --watch",
     "test:e2e": "jest --config ./test/jest-e2e.json",
@@ -28,7 +29,7 @@
     "db:studio": "prisma studio",
     "openapi:generate": "ts-node --transpile-only scripts/generate-openapi.ts",
     "openapi:check": "npm run openapi:generate && git diff --exit-code -- openapi/openapi.json openapi/openapi.yaml",
-    "webhooks:audit-destinations": "ts-node --transpile-only scripts/mark-blocked-webhook-endpoints.ts"
+    "webhooks:audit-destinations": "ts-node --transpile-only scripts/mark-blocked-webhook-endpoints.ts",
     "seed:request-logs": "ts-node --transpile-only scripts/seed-request-logs.ts"
   },
   "dependencies": {
@@ -83,7 +84,9 @@
     "multer": "^2.2.0",
     "@hono/node-server": "^1.19.15",
     "deepmerge-ts": "^8.0.2",
-    "valibot": "^1.4.2"
+    "valibot": "^1.4.2",
+    "mysql2": "^3.22.0",
+    "browserslist": "^4.28.7"
   },
   "jest": {
     "moduleFileExtensions": [

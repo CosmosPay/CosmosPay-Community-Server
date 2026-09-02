@@ -9,6 +9,7 @@ import {
   IsUrl,
   Max,
   Min,
+  MinLength,
   validateSync,
   type ValidationError,
 } from 'class-validator';
@@ -44,8 +45,15 @@ class EnvironmentVariables {
   @IsNotEmpty()
   DATABASE_URL!: string;
 
+  /**
+   * The shared secret that separates "arrived through APISIX" from "anyone who
+   * can reach the pod". Admin credentials already require 16 chars
+   * (`parseAdminCredentials`); this is a stronger boundary and used to accept a
+   * single character.
+   */
   @IsOptional()
   @IsString()
+  @MinLength(32)
   APISIX_GATEWAY_SECRET?: string;
 
   @IsOptional()
@@ -132,6 +140,26 @@ class EnvironmentVariables {
   @IsOptional()
   @IsBooleanString()
   STELLAR_SWAP_SINGLE_INFLIGHT?: string;
+
+  // --- Webhook delivery sweeper (recovers deliveries stranded by a crash) ---
+  @IsOptional()
+  @IsBooleanString()
+  WEBHOOK_SWEEP_ENABLED?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1000)
+  WEBHOOK_SWEEP_INTERVAL_MS?: number;
+
+  /**
+   * Days to keep the body of a settled webhook delivery. A RECEIVER_UPDATED
+   * body is the provider's full KYC dossier, so it is cleared once the delivery
+   * is terminal and past any redelivery window. 0 keeps bodies forever.
+   */
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  WEBHOOK_PAYLOAD_RETENTION_DAYS?: number;
 
   // --- On-chain observer + payment intent lifetime ---
   @IsOptional()
@@ -221,7 +249,6 @@ class EnvironmentVariables {
   @Min(1)
   BLINDPAY_TIMEOUT_MS?: number;
 
-
   /**
    * Platform-admin credentials JSON (issue #34). Optional at boot — empty means
    * admin routes fail closed. Shape:
@@ -267,7 +294,7 @@ function effectiveMaxSlippageBps(validated: EnvironmentVariables): number {
   return (
     validated.STELLAR_SWAP_MAX_SLIPPAGE_BPS ?? DEFAULT_SWAP_MAX_SLIPPAGE_BPS
   );
-
+}
 
 export function validateEnv(config: Record<string, unknown>) {
   const legacyHorizonUrl = config.STELLAR_HORIZON_URL;

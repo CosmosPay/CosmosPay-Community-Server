@@ -6,9 +6,28 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { AppConfig } from '../config/configuration';
+import {
+  AdvisoryLockKey,
+  AdvisoryLockService,
+} from '../common/services/advisory-lock.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { PaymentIntentsService } from './payment-intents.service';
 import { StellarVerifierService } from './stellar-verifier.service';
+
+/**
+ * How many intents are reconciled against Horizon at once.
+ *
+ * Each reconcile costs one Horizon call at minimum (`payments()`) and usually
+ * two (a nested `transactions()` lookup per candidate payment), and Horizon
+ * rate-limits per source IP. A serial loop wasted the whole tick on latency; an
+ * unbounded `Promise.all` over a full batch would fire `2 × batchSize` requests
+ * in one burst and trade a slow sweep for 429s — the worse of the two failures,
+ * since a throttled batch makes no progress at all. Five in flight drains a
+ * default 50-row batch in ten rounds while keeping the burst small, and leaves
+ * headroom in the Prisma connection pool, one of whose connections is already
+ * pinned by the surrounding advisory-lock transaction.
+ */
+const RECONCILE_CONCURRENCY = 5;
 
 /**
  * Permanent on-chain observer. On a fixed interval it pulls PENDING intents and
@@ -31,6 +50,7 @@ export class StellarObserverService implements OnModuleInit, OnModuleDestroy {
     private readonly prisma: PrismaService,
     private readonly verifier: StellarVerifierService,
     private readonly paymentIntents: PaymentIntentsService,
+    private readonly advisoryLock: AdvisoryLockService,
   ) {}
 
   onModuleInit(): void {
@@ -53,12 +73,42 @@ export class StellarObserverService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  /** One reconciliation cycle. Guarded so cycles never overlap. */
+  /**
+   * One reconciliation cycle, guarded twice over.
+   *
+   * The in-process `running` latch stops a slow sweep from overlapping the next
+   * timer fire on *this* replica. The advisory lock is the cluster-wide
+   * counterpart: the timer runs on every replica behind APISIX and each one
+   * selects the same oldest PENDING rows, so without it N replicas paid N× the
+   * Horizon round-trips for identical work. Both are needed — the lock is
+   * released as soon as a sweep ends, so it says nothing about the next tick on
+   * this process.
+   *
+   * A replica that loses the lock returns immediately and skips its tick.
+   */
   async tick(): Promise<void> {
     if (this.running) {
       return;
     }
     this.running = true;
+    try {
+      await this.advisoryLock.runExclusive(
+        AdvisoryLockKey.PaymentIntentObserver,
+        () => this.sweep(),
+      );
+    } catch (err) {
+      // `tick` is fired as `void this.tick()` from a timer, so anything that
+      // escapes here is an unhandled rejection and, under Node's default
+      // policy, kills the process. A failed reconciliation cycle must only cost
+      // one interval.
+      this.logger.error('Payment intent observer cycle failed', err as Error);
+    } finally {
+      this.running = false;
+    }
+  }
+
+  /** The guarded body of one cycle: expire what is stale, reconcile the rest. */
+  private async sweep(): Promise<void> {
     try {
       const { batchSize } = this.config.get('observer', { infer: true });
 
@@ -89,21 +139,19 @@ export class StellarObserverService implements OnModuleInit, OnModuleDestroy {
         take: batchSize,
       });
 
-      for (const intent of pending) {
-        await this.reconcile(intent).catch((err) => {
+      await mapLimited(pending, RECONCILE_CONCURRENCY, (intent) =>
+        this.reconcile(intent).catch((err) => {
           this.logger.error(
             `Reconcile failed for intent ${intent.id}: ${
               err instanceof Error ? err.message : String(err)
             }`,
           );
-        });
-      }
+        }),
+      );
     } catch (err) {
       this.logger.error(
         `Observer cycle failed: ${err instanceof Error ? err.message : String(err)}`,
       );
-    } finally {
-      this.running = false;
     }
   }
 
@@ -127,4 +175,31 @@ export class StellarObserverService implements OnModuleInit, OnModuleDestroy {
       );
     }
   }
+}
+
+/**
+ * Runs `worker` over `items` with at most `limit` calls in flight, preserving
+ * the input order of dispatch. Hand-written rather than pulled from a package:
+ * N workers draining a shared index is the whole of it, and a dependency for
+ * that is supply-chain surface with no upside.
+ *
+ * `worker` is expected to absorb its own failures — a rejection here aborts the
+ * remaining items, which is why the caller attaches `.catch` per intent.
+ */
+async function mapLimited<T>(
+  items: readonly T[],
+  limit: number,
+  worker: (item: T) => Promise<void>,
+): Promise<void> {
+  let next = 0;
+  const drain = async (): Promise<void> => {
+    // `next++` is atomic here: the read-and-increment happens synchronously
+    // between awaits, so no two workers ever claim the same item.
+    while (next < items.length) {
+      await worker(items[next++]);
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, drain),
+  );
 }

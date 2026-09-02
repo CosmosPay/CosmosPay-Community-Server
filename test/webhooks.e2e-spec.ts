@@ -8,11 +8,13 @@ import request from 'supertest';
 import { AppModule } from '../src/app.module';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { WebhookDestinationGuard } from '../src/webhooks/webhook-destination.guard';
-
+import { WebhookHttpClient } from '../src/webhooks/webhook-http';
 
 /**
  * Full CRUD for webhook endpoints behind the APISIX gate. Prisma is mocked with
- * a tiny in-memory store; global fetch is mocked for the ping test. No DB/network.
+ * a tiny in-memory store; the outbound transport is stubbed for the ping test.
+ * No DB/network. (Delivery pins its own socket via https.request, so stubbing
+ * global fetch no longer intercepts it — the seam is WebhookHttpClient.)
  */
 describe('Webhooks CRUD (e2e)', () => {
   let app: INestApplication;
@@ -36,6 +38,9 @@ describe('Webhooks CRUD (e2e)', () => {
     webhookEndpoint: {
       create: jest.fn(({ data }: any) => {
         const row = {
+          // The gateway consumer that created it — what the ownership filter
+          // matches on.
+          consumerUsername: 'cosmos_u1',
           id: `we_${++seq}`,
           enabled: true,
           destinationBlocked: false,
@@ -47,10 +52,21 @@ describe('Webhooks CRUD (e2e)', () => {
         store.set(row.id, row);
         return Promise.resolve(row);
       }),
-      findMany: jest.fn(() => Promise.resolve([...store.values()])),
-      findFirst: jest.fn(({ where }: any) =>
-        Promise.resolve(store.get(where.id) ?? null),
+      // These honour the consumer filter, as Prisma does. A fake that ignores
+      // `where` cannot distinguish "not found" from "someone else's row", which
+      // is the only thing standing between two tenants.
+      findMany: jest.fn(({ where }: any) =>
+        Promise.resolve([...store.values()].filter((r) => owns(r, where))),
       ),
+      count: jest.fn(({ where }: any) =>
+        Promise.resolve(
+          [...store.values()].filter((r) => owns(r, where)).length,
+        ),
+      ),
+      findFirst: jest.fn(({ where }: any) => {
+        const row = store.get(where.id);
+        return Promise.resolve(row && owns(row, where) ? row : null);
+      }),
       update: jest.fn(({ where, data }: any) => {
         const row = { ...store.get(where.id), ...data, updatedAt: new Date() };
         store.set(where.id, row);
@@ -68,6 +84,23 @@ describe('Webhooks CRUD (e2e)', () => {
     },
   };
 
+  /** Mirrors `where: { consumer: { apisixUsername } }` / `{ consumerId }`. */
+  function owns(row: any, where: any): boolean {
+    if (!where) return true;
+    const username = where.consumer?.apisixUsername;
+    if (username !== undefined && row.consumerUsername !== username) {
+      return false;
+    }
+    if (where.consumerId !== undefined && row.consumerId !== where.consumerId) {
+      return false;
+    }
+    return true;
+  }
+
+  const webhookHttp = {
+    send: jest.fn().mockResolvedValue({ ok: true, status: 200 }),
+  };
+
   beforeAll(async () => {
     const destinations = new WebhookDestinationGuard();
     destinations.replaceDnsLookup(async () => ['93.184.216.34']);
@@ -77,6 +110,8 @@ describe('Webhooks CRUD (e2e)', () => {
       .useValue(prismaMock)
       .overrideProvider(WebhookDestinationGuard)
       .useValue(destinations)
+      .overrideProvider(WebhookHttpClient)
+      .useValue(webhookHttp)
       .compile();
 
     app = moduleRef.createNestApplication();
@@ -99,7 +134,7 @@ describe('Webhooks CRUD (e2e)', () => {
   const route = '/v1/webhooks';
   const gw = (r: request.Test) =>
     r
-      .set('x-gateway-secret', 'topsecret')
+      .set('x-gateway-secret', 'topsecret-topsecret-topsecret-topsecret')
       .set('x-consumer-username', 'cosmos_u1')
       .set('x-consumer-permissions', 'webhooks:read,webhooks:write');
 
@@ -153,10 +188,42 @@ describe('Webhooks CRUD (e2e)', () => {
 
   it('list/get never expose the secret', async () => {
     const list = await gw(request(http()).get(route)).expect(200);
-    expect(list.body[0].secret).toBeUndefined();
+    // The list is the standard { data, total, take, skip } envelope, like every
+    // other list in this API. It used to be a bare array clamped at 100, which
+    // truncated silently with no total to page against.
+    expect(list.body.total).toBeGreaterThan(0);
+    expect(list.body.take).toBe(100);
+    expect(list.body.skip).toBe(0);
+    expect(list.body.data[0].secret).toBeUndefined();
     const one = await gw(request(http()).get(`${route}/${id}`)).expect(200);
     expect(one.body.id).toBe(id);
     expect(one.body.secret).toBeUndefined();
+  });
+
+  it('404s for another tenant, not just for an unknown id', async () => {
+    // The existing "foreign/unknown id" test only sends an id that does not
+    // exist, which proves *unknown*, never *foreign*. This one seeds a real
+    // endpoint owned by cosmos_u1 and asks for it as cosmos_u2 — the case that
+    // would expose another organization's signing secret via rotate-secret.
+    const asOtherTenant = (req: request.Test) =>
+      req
+        .set('x-gateway-secret', 'topsecret-topsecret-topsecret-topsecret')
+        .set('x-consumer-username', 'cosmos_u2')
+        .set('x-consumer-permissions', 'webhooks:read,webhooks:write');
+
+    await asOtherTenant(request(http()).get(`${route}/${id}`)).expect(404);
+    await asOtherTenant(
+      request(http()).patch(`${route}/${id}`).send({ enabled: false }),
+    ).expect(404);
+    await asOtherTenant(
+      request(http()).post(`${route}/${id}/rotate-secret`),
+    ).expect(404);
+    await asOtherTenant(request(http()).delete(`${route}/${id}`)).expect(404);
+
+    // And the list is scoped too — the other tenant sees none of it.
+    const list = await asOtherTenant(request(http()).get(route)).expect(200);
+    expect(list.body.data).toHaveLength(0);
+    expect(list.body.total).toBe(0);
   });
 
   it('updates (pause) an endpoint (200)', async () => {
@@ -173,12 +240,8 @@ describe('Webhooks CRUD (e2e)', () => {
     expect(res.body.secret).toMatch(/^whsec_/);
   });
 
-  it('pings the endpoint (mocked fetch → ok)', async () => {
-    global.fetch = jest.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      body: null,
-    }) as any;
+  it('pings the endpoint (stubbed transport → ok)', async () => {
+    webhookHttp.send.mockResolvedValue({ ok: true, status: 200 });
     const res = await gw(request(http()).post(`${route}/${id}/ping`)).expect(
       201,
     );

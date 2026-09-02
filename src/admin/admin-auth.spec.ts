@@ -76,9 +76,7 @@ describe('Admin auth spec (issue #34)', () => {
             { id: 'short', secret: '1', role: 'write' },
           ]),
         ),
-      ).toEqual([
-        { id: 'ok', secret: 'write-secret-00000', role: 'write' },
-      ]);
+      ).toEqual([{ id: 'ok', secret: 'write-secret-00000', role: 'write' }]);
       expect(warn).toHaveBeenCalledWith(
         expect.stringContaining('1 credential(s) rejected'),
       );
@@ -112,9 +110,7 @@ describe('Admin auth spec (issue #34)', () => {
     });
 
     it('fails closed when no credentials are configured', () => {
-      expect(
-        verifyAdminBearer(`Bearer ${writeCred.secret}`, []),
-      ).toBeNull();
+      expect(verifyAdminBearer(`Bearer ${writeCred.secret}`, [])).toBeNull();
     });
   });
 });

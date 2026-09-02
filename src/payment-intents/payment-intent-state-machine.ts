@@ -13,9 +13,7 @@ export class InvalidPaymentIntentTransitionError extends Error {
     readonly to: PaymentIntentStatusName,
     readonly reason: string,
   ) {
-    super(
-      `Invalid payment intent transition ${from} → ${to}: ${reason}`,
-    );
+    super(`Invalid payment intent transition ${from} → ${to}: ${reason}`);
     this.name = 'InvalidPaymentIntentTransitionError';
   }
 }
@@ -36,9 +34,7 @@ export function canTransition(
   return PAYMENT_INTENT_TRANSITIONS[from].includes(to);
 }
 
-export function isTerminalStatus(
-  status: PaymentIntentStatusName,
-): boolean {
+export function isTerminalStatus(status: PaymentIntentStatusName): boolean {
   return (TERMINAL_STATUSES as readonly PaymentIntentStatusName[]).includes(
     status,
   );

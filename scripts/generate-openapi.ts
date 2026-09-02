@@ -22,6 +22,14 @@ async function generate(): Promise<void> {
   // Default swap fee bps is 50; env validation requires a fee wallet when > 0.
   process.env.STELLAR_SWAP_FEE_WALLET ??=
     'GARMB7W3FCR3GKIM3FLWVJASC2PUZ4VHUJZTNJVWWKNTCJNKO6TBCT76';
+  // A developer's local .env often carries a real BLINDPAY_API_KEY, and env
+  // validation then demands the instance id and webhook secret alongside it. Set
+  // them here unconditionally: these run before ConfigModule loads .env, and
+  // dotenv never overwrites an existing process.env value, so the placeholders
+  // win. Without them this offline command fails locally but passes in CI, where
+  // no .env exists.
+  process.env.BLINDPAY_INSTANCE_ID ??= 'in_openapi_generation_only';
+  process.env.BLINDPAY_WEBHOOK_SECRET ??= 'whsec_openapi_generation_only';
 
   // Import only after the offline defaults are set: ConfigModule validates the
   // environment as soon as AppModule is evaluated.
@@ -30,6 +38,10 @@ async function generate(): Promise<void> {
   const app = await NestFactory.create(AppModule, {
     preview: true,
     logger: false,
+    // Without this Nest swallows any bootstrap failure (env validation, DI) and
+    // calls process.exit(1) through the disabled logger — a silent exit 1 with no
+    // diagnostic. Rethrowing lets the catch below actually print the cause.
+    abortOnError: false,
   });
 
   // Match runtime routing so paths in the spec are accurate (/v1/...).

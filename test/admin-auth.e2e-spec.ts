@@ -27,7 +27,11 @@ describe('Admin auth & audit (e2e) — issue #34', () => {
   const adminServiceMock = {
     summary: jest.fn().mockResolvedValue({ ok: true }),
     setReceiverAccess: jest.fn(
-      async (_id: string, disabled: boolean, actor: { id: string; role: string }) => {
+      async (
+        _id: string,
+        disabled: boolean,
+        actor: { id: string; role: string },
+      ) => {
         auditRows.push({
           id: `audit_${auditRows.length + 1}`,
           createdAt: new Date(),
@@ -42,7 +46,11 @@ describe('Admin auth & audit (e2e) — issue #34', () => {
       },
     ),
     approveReceiver: jest.fn(
-      async (_id: string, redirect_url: string, actor: { id: string; role: string }) => {
+      async (
+        _id: string,
+        redirect_url: string,
+        actor: { id: string; role: string },
+      ) => {
         auditRows.push({
           id: `audit_${auditRows.length + 1}`,
           createdAt: new Date(),
@@ -57,7 +65,11 @@ describe('Admin auth & audit (e2e) — issue #34', () => {
       },
     ),
     enableReceiver: jest.fn(
-      async (_id: string, tos_id: string, actor: { id: string; role: string }) => {
+      async (
+        _id: string,
+        tos_id: string,
+        actor: { id: string; role: string },
+      ) => {
         auditRows.push({
           id: `audit_${auditRows.length + 1}`,
           createdAt: new Date(),
@@ -108,12 +120,18 @@ describe('Admin auth & audit (e2e) — issue #34', () => {
     webhookEndpoint: { findMany: jest.fn().mockResolvedValue([]) },
     adminAuditLog: {
       create: jest.fn(({ data }: any) => {
-        const row = { id: `audit_${auditRows.length + 1}`, createdAt: new Date(), ...data };
+        const row = {
+          id: `audit_${auditRows.length + 1}`,
+          createdAt: new Date(),
+          ...data,
+        };
         auditRows.push(row);
         return Promise.resolve(row);
       }),
       findMany: jest.fn(() =>
-        Promise.resolve([...auditRows].sort((a, b) => b.createdAt - a.createdAt)),
+        Promise.resolve(
+          [...auditRows].sort((a, b) => b.createdAt - a.createdAt),
+        ),
       ),
       count: jest.fn(() => Promise.resolve(auditRows.length)),
     },
@@ -148,7 +166,7 @@ describe('Admin auth & audit (e2e) — issue #34', () => {
 
   const gateway = (r: request.Test) =>
     r
-      .set('x-gateway-secret', 'topsecret')
+      .set('x-gateway-secret', 'topsecret-topsecret-topsecret-topsecret')
       .set('x-consumer-username', 'cosmos_admin');
 
   const asRead = (r: request.Test) =>
@@ -214,13 +232,13 @@ describe('Admin auth & audit (e2e) — issue #34', () => {
 
     it('allows write and appends an audit row', async () => {
       const before = auditRows.length;
-      await asWrite(request(http())[method](path).send(body)).expect(
-        (res) => {
-          if (res.status < 200 || res.status >= 300) {
-            throw new Error(`expected 2xx, got ${res.status}: ${JSON.stringify(res.body)}`);
-          }
-        },
-      );
+      await asWrite(request(http())[method](path).send(body)).expect((res) => {
+        if (res.status < 200 || res.status >= 300) {
+          throw new Error(
+            `expected 2xx, got ${res.status}: ${JSON.stringify(res.body)}`,
+          );
+        }
+      });
       expect(auditRows.length).toBe(before + 1);
       expect(auditRows[auditRows.length - 1]).toMatchObject({
         actorId: 'owner',

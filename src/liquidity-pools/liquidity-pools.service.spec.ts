@@ -1,5 +1,7 @@
 import { Account, Keypair, TransactionBuilder } from '@stellar/stellar-sdk';
+import { HttpStatus } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
+import { ApiError, ApiErrorCode } from '../common/errors/api-error';
 import { GatewayConsumer } from '../common/interfaces/gateway-consumer.interface';
 import { toStroops } from '../swaps/swap-math';
 import { LiquidityPoolsService } from './liquidity-pools.service';
@@ -44,6 +46,7 @@ function matchesWhere(row: any, where: any): boolean {
   if (where.consumerId && where.consumerId !== row.consumerId) return false;
   if (where.source && where.source !== row.source) return false;
   if (where.poolId && where.poolId !== row.poolId) return false;
+  if (where.network && where.network !== row.network) return false;
   if (where.sharesReceived === null && row.sharesReceived != null) return false;
   if (where.status !== undefined) {
     if (typeof where.status === 'string') {
@@ -52,12 +55,35 @@ function matchesWhere(row: any, where: any): boolean {
       return false;
     }
   }
+  if (
+    where.expiresAt !== undefined &&
+    !matchesExpiresAt(row, where.expiresAt)
+  ) {
+    return false;
+  }
+  // The in-flight guard uses `OR: [{ expiresAt: null }, { expiresAt: { gt } }]`.
+  if (where.OR && !where.OR.some((clause: any) => matchesWhere(row, clause))) {
+    return false;
+  }
   if (where.consumer?.apisixUsername) {
     if (row.consumer?.apisixUsername !== where.consumer.apisixUsername) {
       return false;
     }
   }
   return true;
+}
+
+function matchesExpiresAt(row: any, filter: any): boolean {
+  if (filter === null) return row.expiresAt == null;
+  if (filter?.gt) return row.expiresAt != null && row.expiresAt > filter.gt;
+  return true;
+}
+
+/** Terminal/created webhook emissions of one type, in order. */
+function terminalEmits(events: EventEmitter2, type: string) {
+  return (events.emit as unknown as jest.Mock).mock.calls.filter(
+    ([name, payload]) => name === WEBHOOK_EVENT && payload.type === type,
+  );
 }
 
 function createPrisma(seed: any[] = []) {
@@ -70,11 +96,16 @@ function createPrisma(seed: any[] = []) {
   };
   const prisma: any = {
     rows,
+    // findAllOperations batches [findMany, count]; the mocks already return
+    // real promises, so awaiting them together is enough.
+    $transaction: jest.fn(async (ops: Promise<unknown>[]) => Promise.all(ops)),
     consumer: {
+      // Distinct local ids per API key, so a test can withdraw a position that
+      // was deposited under a different organization.
       upsert: jest.fn(async ({ where, create }: any) => ({
-        id: 'c1',
-        apisixUsername: where.apisixUsername,
         ...create,
+        id: where.apisixUsername === consumer.username ? 'c1' : 'c2',
+        apisixUsername: where.apisixUsername,
       })),
     },
     liquidityPoolOperation: {
@@ -91,12 +122,26 @@ function createPrisma(seed: any[] = []) {
         const row = rows.find((r) => matchesWhere(r, where));
         return row ? { ...row } : null;
       }),
+      count: jest.fn(
+        async ({ where }: any) =>
+          rows.filter((r) => matchesWhere(r, where)).length,
+      ),
       findUniqueOrThrow: jest.fn(async ({ where }: any) => {
         const row = rows.find((r) => r.id === where.id);
         if (!row) throw new Error('not found');
         return { ...row };
       }),
       findUnique: jest.fn(async ({ where }: any) => {
+        if (where.consumerId_idempotencyKey) {
+          const { consumerId, idempotencyKey } =
+            where.consumerId_idempotencyKey;
+          const row = rows.find(
+            (r) =>
+              r.consumerId === consumerId &&
+              r.idempotencyKey === idempotencyKey,
+          );
+          return row ? { ...row } : null;
+        }
         const row = rows.find((r) => r.id === where.id);
         return row ? { ...row } : null;
       }),
@@ -119,12 +164,38 @@ function createPrisma(seed: any[] = []) {
         }
         return { count: matched.length };
       }),
+      // Simulates both unique indexes on the table:
+      // @@unique([consumerId, idempotencyKey]) and @@unique([network, txHash]).
       create: jest.fn(async ({ data }: any) => {
+        if (data.idempotencyKey) {
+          const clash = rows.find(
+            (r) =>
+              r.consumerId === data.consumerId &&
+              r.idempotencyKey === data.idempotencyKey,
+          );
+          if (clash) {
+            const err: any = new Error('Unique constraint failed');
+            err.code = 'P2002';
+            err.meta = { target: ['consumerId', 'idempotencyKey'] };
+            throw err;
+          }
+        }
+        const hashClash = rows.find(
+          (r) => r.network === data.network && r.txHash === data.txHash,
+        );
+        if (hashClash) {
+          const err: any = new Error('Unique constraint failed');
+          err.code = 'P2002';
+          err.meta = { target: ['network', 'txHash'] };
+          throw err;
+        }
         const created = {
           id: `op_${rows.length + 1}`,
+          idempotencyKey: null,
           sharesReceived: null,
           settledAmountA: null,
           settledAmountB: null,
+          settlementEpoch: 0,
           consumer: { apisixUsername: consumer.username },
           createdAt: new Date(),
           updatedAt: new Date(),
@@ -198,6 +269,21 @@ function mockHorizonAccount(balances: any[]) {
   return account;
 }
 
+const DEFAULT_BALANCES = [
+  { asset_type: 'native', balance: '10000' },
+  {
+    asset_type: 'credit_alphanum4',
+    asset_code: 'USDC',
+    asset_issuer: USDC_ISSUER,
+    balance: '5000',
+  },
+  {
+    asset_type: 'liquidity_pool_shares',
+    liquidity_pool_id: POOL_ID,
+    balance: '100',
+  },
+];
+
 function makeStellar(
   overrides: {
     submitTransaction?: jest.Mock;
@@ -228,16 +314,12 @@ function makeStellar(
     overrides.txCall ?? jest.fn().mockResolvedValue({ successful: true });
   const loadAccount =
     overrides.loadAccount ??
-    jest.fn().mockResolvedValue(
-      mockHorizonAccount([
-        { asset_type: 'native', balance: '10000' },
-        {
-          asset_type: 'liquidity_pool_shares',
-          liquidity_pool_id: POOL_ID,
-          balance: '100',
-        },
-      ]),
-    );
+    // Fresh Account each call so the sequence stays at Horizon's view (N), not
+    // N+k after a prior TransactionBuilder mutation — needed for the
+    // txHash-collision tests, which depend on two builds being byte-identical.
+    jest
+      .fn()
+      .mockImplementation(async () => mockHorizonAccount(DEFAULT_BALANCES));
   const fetchPool =
     overrides.fetchPool ??
     jest.fn().mockResolvedValue({
@@ -293,6 +375,7 @@ function depositRow(overrides: Record<string, unknown> = {}): any {
     minPrice: '9.9',
     maxPrice: '10.1',
     slippageBps: 50,
+    idempotencyKey: null,
     feeBps: 0,
     feeAmountA: '0',
     feeAmountB: '0',
@@ -320,10 +403,10 @@ describe('LiquidityPoolsService — commission engine', () => {
     stellar = makeStellar();
     events = { emit: jest.fn() } as any;
     const config = { get: () => stellarConfig() } as any;
-    const webhooks = new WebhookTerminalEmitter(prisma as any, events);
+    const webhooks = new WebhookTerminalEmitter(prisma, events);
     service = new LiquidityPoolsService(
       config,
-      prisma as any,
+      prisma,
       webhooks,
       stellar as any,
     );
@@ -339,7 +422,11 @@ describe('LiquidityPoolsService — commission engine', () => {
           settledAmountB: '100',
         }),
       );
-      const basis = await (service as any).costBasis('c1', SOURCE, POOL_ID);
+      const basis = await (service as any).costBasis(
+        SOURCE,
+        POOL_ID,
+        'testnet',
+      );
       expect(basis.depositedShares).toBe(toStroops('100'));
       expect(basis.remainingShares).toBe(toStroops('100'));
       expect(basis.costA).toBe(toStroops('1000'));
@@ -355,7 +442,11 @@ describe('LiquidityPoolsService — commission engine', () => {
           settledAmountB: '100',
         }),
       );
-      const basis = await (service as any).costBasis('c1', SOURCE, POOL_ID);
+      const basis = await (service as any).costBasis(
+        SOURCE,
+        POOL_ID,
+        'testnet',
+      );
       expect(basis.remainingShares).toBe(0n);
       expect(basis.costA).toBe(0n);
     });
@@ -378,7 +469,11 @@ describe('LiquidityPoolsService — commission engine', () => {
           amountB: '39.6',
         }),
       );
-      const basis = await (service as any).costBasis('c1', SOURCE, POOL_ID);
+      const basis = await (service as any).costBasis(
+        SOURCE,
+        POOL_ID,
+        'testnet',
+      );
       expect(basis.depositedShares).toBe(toStroops('100'));
       expect(basis.remainingShares).toBe(toStroops('60'));
     });
@@ -511,16 +606,16 @@ describe('LiquidityPoolsService.submit vs observer (issue #32 race)', () => {
           ? { enabled: false, intervalMs: 15_000, batchSize: 50 }
           : stellarConfig(),
     } as any;
-    const webhooks = new WebhookTerminalEmitter(prisma as any, events);
+    const webhooks = new WebhookTerminalEmitter(prisma, events);
     service = new LiquidityPoolsService(
       config,
-      prisma as any,
+      prisma,
       webhooks,
       stellar as any,
     );
     observer = new SettlementObserverService(
       config,
-      prisma as any,
+      prisma,
       stellar as any,
       service,
       {} as any,
@@ -557,7 +652,7 @@ describe('LiquidityPoolsService.submit vs observer (issue #32 race)', () => {
     expect(row.settledAmountA).toBe('1000');
     expect(row.settledAmountB).toBe('100');
 
-    const basis = await (service as any).costBasis('c1', SOURCE, POOL_ID);
+    const basis = await (service as any).costBasis(SOURCE, POOL_ID, 'testnet');
     expect(basis.remainingShares).toBe(toStroops('100'));
     expect(basis.costA).toBe(toStroops('1000'));
 
@@ -647,5 +742,506 @@ describe('LiquidityPoolsService.submit vs observer (issue #32 race)', () => {
         name === WEBHOOK_EVENT && payload.type === 'LIQUIDITY_SUCCEEDED',
     );
     expect(succeeded).toHaveLength(1);
+  });
+});
+
+// ── Idempotency + cost-basis scope (back-ported from the swaps hardening) ────
+
+const depositDto = {
+  source: SOURCE,
+  assetBCode: 'USDC',
+  assetBIssuer: USDC_ISSUER,
+  maxAmountA: '1000',
+  slippageBps: 0,
+};
+
+const withdrawDto = {
+  source: SOURCE,
+  poolId: POOL_ID,
+  shares: '100',
+  slippageBps: 0,
+};
+
+/** A second organization's API key for the same Stellar account. */
+const otherConsumer: GatewayConsumer = {
+  ...consumer,
+  username: 'cosmos_u2',
+  credentialId: 'cred_2',
+  organizationId: 'org_2',
+};
+
+describe('LiquidityPoolsService idempotency (issue #17, back-ported)', () => {
+  let prisma: ReturnType<typeof createPrisma>;
+  let stellar: ReturnType<typeof makeStellar>;
+  let events: EventEmitter2;
+  let service: LiquidityPoolsService;
+
+  beforeEach(() => {
+    prisma = createPrisma();
+    stellar = makeStellar();
+    events = { emit: jest.fn() } as any;
+    const config = { get: () => stellarConfig() } as any;
+    const webhooks = new WebhookTerminalEmitter(prisma, events);
+    service = new LiquidityPoolsService(
+      config,
+      prisma,
+      webhooks,
+      stellar as any,
+    );
+    // Frozen clock: two builds of the same request are byte-identical, so the
+    // second one collides on the unique (network, txHash) exactly as in prod.
+    jest.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000);
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it('two deposits with the same Idempotency-Key insert one row and emit one LIQUIDITY_CREATED', async () => {
+    const first = await service.deposit(consumer, depositDto, 'dep-key-1');
+    const second = await service.deposit(consumer, depositDto, 'dep-key-1');
+
+    expect(prisma.liquidityPoolOperation.create).toHaveBeenCalledTimes(1);
+    expect(second.id).toBe(first.id);
+    expect(second.txHash).toBe(first.txHash);
+    expect(prisma.rows).toHaveLength(1);
+    expect(terminalEmits(events, 'LIQUIDITY_CREATED')).toHaveLength(1);
+    // The replay is a pure read — no Horizon round-trip, no rebuild.
+    expect(stellar.loadAccount).toHaveBeenCalledTimes(1);
+  });
+
+  it('deduplicates a withdraw on the same key too', async () => {
+    const first = await service.withdraw(consumer, withdrawDto, 'wd-key-1');
+    const second = await service.withdraw(consumer, withdrawDto, 'wd-key-1');
+
+    expect(second.id).toBe(first.id);
+    expect(prisma.rows).toHaveLength(1);
+    expect(terminalEmits(events, 'LIQUIDITY_CREATED')).toHaveLength(1);
+  });
+
+  it('accepts the key in the body when no header is sent', async () => {
+    const dto = { ...depositDto, idempotencyKey: 'body-key' };
+    const first = await service.deposit(consumer, dto);
+    const second = await service.deposit(consumer, dto);
+
+    expect(second.id).toBe(first.id);
+    expect(prisma.rows).toHaveLength(1);
+    expect(prisma.rows[0].idempotencyKey).toBe('body-key');
+  });
+
+  it('lets the Idempotency-Key header win over the body field', async () => {
+    await service.deposit(
+      consumer,
+      { ...depositDto, idempotencyKey: 'body-key' },
+      'header-key',
+    );
+    expect(prisma.rows[0].idempotencyKey).toBe('header-key');
+  });
+
+  it('recovers the winner of a same-key race instead of surfacing P2002', async () => {
+    const winner = depositRow({
+      id: 'op_winner',
+      idempotencyKey: 'race-key',
+      txHash: 'cd'.repeat(32),
+    });
+    let keyLookups = 0;
+    prisma.liquidityPoolOperation.findUnique.mockImplementation(
+      async ({ where }: any) => {
+        if (where.consumerId_idempotencyKey) {
+          keyLookups += 1;
+          // First lookup misses (the race window); once create fails, the
+          // winner's row is visible.
+          return keyLookups === 1 ? null : { ...winner };
+        }
+        return null;
+      },
+    );
+    prisma.liquidityPoolOperation.create.mockRejectedValue({
+      code: 'P2002',
+      meta: { target: ['consumerId', 'idempotencyKey'] },
+    });
+
+    const result = await service.deposit(consumer, depositDto, 'race-key');
+
+    expect(result.id).toBe('op_winner');
+    expect(result.txHash).toBe(winner.txHash);
+    // The insert never happened, so the loser mints no second CREATED event.
+    expect(terminalEmits(events, 'LIQUIDITY_CREATED')).toHaveLength(0);
+  });
+
+  it('recovers via the key even when Postgres reports the (network, txHash) target', async () => {
+    // Same-key concurrent creates rebuild the same XDR, so both unique indexes
+    // can fire; Postgres reports only one of them, arbitrarily. The caller must
+    // still get the existing operation, not a 409.
+    const winner = depositRow({
+      id: 'op_winner',
+      idempotencyKey: 'same-key',
+      txHash: 'ef'.repeat(32),
+    });
+    let keyLookups = 0;
+    prisma.liquidityPoolOperation.findUnique.mockImplementation(
+      async ({ where }: any) => {
+        if (where.consumerId_idempotencyKey) {
+          keyLookups += 1;
+          return keyLookups === 1 ? null : { ...winner };
+        }
+        return null;
+      },
+    );
+    prisma.liquidityPoolOperation.create.mockRejectedValue({
+      code: 'P2002',
+      meta: { target: ['network', 'txHash'] },
+    });
+
+    const result = await service.deposit(consumer, depositDto, 'same-key');
+
+    expect(result.id).toBe('op_winner');
+    expect(result.txHash).toBe(winner.txHash);
+  });
+
+  it('rejects a keyless byte-identical rebuild with 409 idempotency_conflict', async () => {
+    // The old bare `create` accepted this: a double-submitted deposit left two
+    // PENDING rows sharing one on-chain transaction.
+    await service.deposit(consumer, depositDto);
+    expect(prisma.rows).toHaveLength(1);
+
+    const err = await service.deposit(consumer, depositDto).catch((e) => e);
+
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).getStatus()).toBe(HttpStatus.CONFLICT);
+    expect((err as ApiError).code).toBe(ApiErrorCode.IdempotencyConflict);
+    expect(prisma.rows).toHaveLength(1);
+    expect(terminalEmits(events, 'LIQUIDITY_CREATED')).toHaveLength(1);
+  });
+});
+
+describe('LiquidityPoolsService.withdraw in-flight guard', () => {
+  let prisma: ReturnType<typeof createPrisma>;
+  let stellar: ReturnType<typeof makeStellar>;
+  let events: EventEmitter2;
+  let service: LiquidityPoolsService;
+
+  beforeEach(() => {
+    prisma = createPrisma();
+    stellar = makeStellar();
+    events = { emit: jest.fn() } as any;
+    const config = { get: () => stellarConfig() } as any;
+    const webhooks = new WebhookTerminalEmitter(prisma, events);
+    service = new LiquidityPoolsService(
+      config,
+      prisma,
+      webhooks,
+      stellar as any,
+    );
+  });
+
+  function inflightWithdraw(overrides: Record<string, unknown> = {}) {
+    return depositRow({
+      id: 'op_inflight',
+      kind: 'WITHDRAW',
+      status: 'PENDING',
+      shares: '50',
+      ...overrides,
+    });
+  }
+
+  it('rejects a second withdraw while one is in flight for the same position', async () => {
+    // Both would read the same cost basis and each charge commission on the
+    // whole unrealized gain.
+    prisma.rows.push(inflightWithdraw());
+
+    const err = await service.withdraw(consumer, withdrawDto).catch((e) => e);
+
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).getStatus()).toBe(HttpStatus.CONFLICT);
+    expect((err as ApiError).code).toBe(ApiErrorCode.OperationInFlight);
+  });
+
+  it('discloses nothing about the blocking operation', async () => {
+    prisma.rows.push(inflightWithdraw());
+
+    const err = await service.withdraw(consumer, withdrawDto).catch((e) => e);
+
+    expect((err as ApiError).code).toBe(ApiErrorCode.OperationInFlight);
+    // Not its id, not its owner.
+    expect((err as ApiError).message).not.toContain('op_inflight');
+  });
+
+  it("does not let one organization block a stranger's account", async () => {
+    // The guard used to be account-wide, so anyone holding `liquidity:write`
+    // could post a dust withdrawal naming a stranger's public Stellar address
+    // and freeze that account's withdrawals for a full transaction-timeout
+    // window — repeatable indefinitely. `source` is public and nothing requires
+    // the caller to control it, so this needed no access to the victim at all.
+    prisma.rows.push(inflightWithdraw({ consumerId: 'c2' }));
+
+    const op = await service.withdraw(consumer, withdrawDto);
+
+    expect(op.kind).toBe('WITHDRAW');
+  });
+
+  it('still blocks a second key of the same user', async () => {
+    // Scoping to the consumer does not weaken the guard: a Consumer row is keyed
+    // on the APISIX username (cosmos_<userId>), not on the credential, so every
+    // API key one user holds resolves to the same consumer.
+    prisma.rows.push(inflightWithdraw({ consumerId: 'c1' }));
+
+    const err = await service
+      .withdraw({ ...consumer, credentialId: 'a-different-key' }, withdrawDto)
+      .catch((e) => e);
+
+    expect((err as ApiError).code).toBe(ApiErrorCode.OperationInFlight);
+  });
+
+  it('ignores an expired in-flight withdraw', async () => {
+    prisma.rows.push(
+      inflightWithdraw({ expiresAt: new Date(Date.now() - 60_000) }),
+    );
+
+    const op = await service.withdraw(consumer, withdrawDto);
+    expect(op.kind).toBe('WITHDRAW');
+  });
+
+  it('ignores a settled withdraw and an in-flight deposit', async () => {
+    prisma.rows.push(
+      inflightWithdraw({ id: 'op_done', status: 'SUCCEEDED' }),
+      depositRow({ id: 'op_dep', status: 'PENDING' }),
+    );
+
+    const op = await service.withdraw(consumer, withdrawDto);
+    expect(op.kind).toBe('WITHDRAW');
+  });
+});
+
+describe('LiquidityPoolsService cost basis is platform-wide', () => {
+  let prisma: ReturnType<typeof createPrisma>;
+  let stellar: ReturnType<typeof makeStellar>;
+  let events: EventEmitter2;
+  let service: LiquidityPoolsService;
+
+  beforeEach(() => {
+    prisma = createPrisma();
+    stellar = makeStellar();
+    events = { emit: jest.fn() } as any;
+    const config = { get: () => stellarConfig() } as any;
+    const webhooks = new WebhookTerminalEmitter(prisma, events);
+    service = new LiquidityPoolsService(
+      config,
+      prisma,
+      webhooks,
+      stellar as any,
+    );
+  });
+
+  it('charges commission on a withdraw made under a different organization', async () => {
+    // The evasion this closes: deposit under org A, register a second free org,
+    // withdraw the same Stellar account's shares under org B. The basis lookup
+    // was scoped by consumerId, found nothing, and taxed the whole gain at zero.
+    prisma.rows.push(
+      depositRow({
+        consumerId: 'c1',
+        status: 'SUCCEEDED',
+        sharesReceived: '100',
+        settledAmountA: '1000',
+        settledAmountB: '100',
+      }),
+    );
+
+    const op = await service.withdraw(otherConsumer, withdrawDto);
+
+    expect(op.feeAmountA).toBe('5');
+    expect(op.feeAmountB).toBe('0.5');
+    expect(op.feeWallet).toBe(FEE_WALLET);
+  });
+
+  it('does not credit basis earned on another network', async () => {
+    // Testnet is free; without the network in the key, a testnet deposit would
+    // mint cost basis against a public-network withdrawal.
+    prisma.rows.push(
+      depositRow({
+        network: 'public',
+        status: 'SUCCEEDED',
+        sharesReceived: '100',
+        settledAmountA: '1000',
+        settledAmountB: '100',
+      }),
+    );
+
+    const basis = await (service as any).costBasis(SOURCE, POOL_ID, 'testnet');
+    expect(basis.depositedShares).toBe(0n);
+    expect(basis.costA).toBe(0n);
+  });
+
+  it('still scopes the operations listing to the calling consumer', async () => {
+    // The widened lookup changes fee arithmetic only: another tenant's rows
+    // must stay out of every response.
+    prisma.rows.push(
+      depositRow({
+        consumerId: 'c1',
+        status: 'SUCCEEDED',
+        sharesReceived: '100',
+        settledAmountA: '1000',
+        settledAmountB: '100',
+      }),
+    );
+
+    const mine = await service.findAllOperations(consumer, {
+      take: 20,
+      skip: 0,
+    });
+    const theirs = await service.findAllOperations(otherConsumer, {
+      take: 20,
+      skip: 0,
+    });
+
+    expect(mine.data).toHaveLength(1);
+    expect(mine.total).toBe(1);
+    expect(theirs.data).toHaveLength(0);
+    expect(theirs.total).toBe(0);
+  });
+});
+
+describe('SettlementObserverService duplicate txHash (liquidity pools)', () => {
+  let prisma: ReturnType<typeof createPrisma>;
+  let stellar: ReturnType<typeof makeStellar>;
+  let events: EventEmitter2;
+  let service: LiquidityPoolsService;
+  let observer: SettlementObserverService;
+
+  beforeEach(() => {
+    prisma = createPrisma();
+    stellar = makeStellar();
+    events = { emit: jest.fn() } as any;
+    const config = {
+      get: (key?: string) =>
+        key === 'observer'
+          ? { enabled: false, intervalMs: 15_000, batchSize: 50 }
+          : stellarConfig(),
+    } as any;
+    const webhooks = new WebhookTerminalEmitter(prisma, events);
+    service = new LiquidityPoolsService(
+      config,
+      prisma,
+      webhooks,
+      stellar as any,
+    );
+    observer = new SettlementObserverService(
+      config,
+      prisma,
+      stellar as any,
+      service,
+      {} as any,
+    );
+  });
+
+  it('two PENDING operations sharing one txHash emit a single LIQUIDITY_SUCCEEDED', async () => {
+    const a = depositRow({ id: 'lp_a', status: 'PENDING', txHash: TX_HASH });
+    const b = depositRow({ id: 'lp_b', status: 'PENDING', txHash: TX_HASH });
+    prisma.rows.push(a, b);
+    stellar.txCall.mockResolvedValue({ successful: true });
+
+    await (observer as any).reconcileLiquidity(50);
+
+    expect(a.status).toBe('SUCCEEDED');
+    expect(b.status).toBe('SUCCEEDED');
+    expect(terminalEmits(events, 'LIQUIDITY_SUCCEEDED')).toHaveLength(1);
+    // One Horizon lookup for the shared hash, not one per row.
+    expect(stellar.txCall).toHaveBeenCalledTimes(1);
+  });
+
+  it('captures the cost basis once for one on-chain deposit', async () => {
+    // Capturing it on every duplicate would count the same shares twice and
+    // start taxing shares acquired outside Cosmos Pay.
+    const a = depositRow({ id: 'lp_a', status: 'PENDING', txHash: TX_HASH });
+    const b = depositRow({ id: 'lp_b', status: 'PENDING', txHash: TX_HASH });
+    prisma.rows.push(a, b);
+    stellar.txCall.mockResolvedValue({ successful: true });
+
+    await (observer as any).reconcileLiquidity(50);
+
+    expect(a.sharesReceived).toBe('100');
+    expect(b.sharesReceived).toBeNull();
+    const basis = await (service as any).costBasis(SOURCE, POOL_ID, 'testnet');
+    expect(basis.depositedShares).toBe(toStroops('100'));
+  });
+
+  it('emits a single LIQUIDITY_FAILED for a shared failing hash', async () => {
+    const a = depositRow({ id: 'lp_a', status: 'SUBMITTED', txHash: TX_HASH });
+    const b = depositRow({ id: 'lp_b', status: 'SUBMITTED', txHash: TX_HASH });
+    prisma.rows.push(a, b);
+    stellar.txCall.mockResolvedValue({ successful: false });
+
+    await (observer as any).reconcileLiquidity(50);
+
+    expect(a.status).toBe('FAILED');
+    expect(b.status).toBe('FAILED');
+    expect(terminalEmits(events, 'LIQUIDITY_FAILED')).toHaveLength(1);
+    expect(stellar.txCall).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * The commission rule is shared with swaps via `resolvePlanCommissionBps`.
+ * Before that extraction the two modules had separate private copies and they
+ * had drifted: swaps failed closed when the gateway stopped forwarding the plan
+ * rate, while liquidity pools silently repriced every organization at
+ * STELLAR_SWAP_FEE_BPS. These pin the pools side of the shared rule.
+ */
+describe('LiquidityPoolsService platform commission fail-closed', () => {
+  /** The gateway did not forward the plan rate. */
+  const noPlanRate: GatewayConsumer = { ...consumer, planSwapFeeBps: null };
+
+  function make(nodeEnv: string, swapOverrides: Record<string, unknown> = {}) {
+    const prisma = createPrisma();
+    const stellar = makeStellar();
+    const events = { emit: jest.fn() } as any;
+    const base = stellarConfig();
+    const config = {
+      get: (key?: string) =>
+        key === 'nodeEnv'
+          ? nodeEnv
+          : key === 'apisix'
+            ? { swapFeeBpsHeader: 'x-plan-swap-fee-bps' }
+            : { ...base, swap: { ...base.swap, ...swapOverrides } },
+    } as any;
+    const service = new LiquidityPoolsService(
+      config,
+      prisma,
+      new WebhookTerminalEmitter(prisma, events),
+      stellar as any,
+    );
+    return { service, prisma };
+  }
+
+  it('refuses to price a withdraw in production when the header is missing', async () => {
+    const { service } = make('production');
+
+    const err = await service.withdraw(noPlanRate, withdrawDto).catch((e) => e);
+
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).getStatus()).toBe(HttpStatus.SERVICE_UNAVAILABLE);
+    expect((err as ApiError).code).toBe(ApiErrorCode.Misconfigured);
+    // The operator has to be told *which* header the gateway stopped sending.
+    expect((err as ApiError).message).toMatch(/x-plan-swap-fee-bps/i);
+  });
+
+  it('never silently reprices at STELLAR_SWAP_FEE_BPS in production', async () => {
+    // The dangerous outcome is not an error — it is a successful withdraw
+    // billed at the platform default instead of the organization's plan rate.
+    // This is exactly what the pools copy used to do.
+    const { service, prisma } = make('production', { feeBps: 999 });
+
+    await expect(service.withdraw(noPlanRate, withdrawDto)).rejects.toThrow(
+      ApiError,
+    );
+    expect(prisma.rows).toHaveLength(0);
+  });
+
+  it('still falls back to the configured default outside production', async () => {
+    const { service } = make('development', { feeBps: 50 });
+
+    const op = await service.withdraw(noPlanRate, withdrawDto);
+
+    expect(op.kind).toBe('WITHDRAW');
   });
 });

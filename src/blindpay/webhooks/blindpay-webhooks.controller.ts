@@ -41,8 +41,12 @@ export class BlindpayWebhooksController {
     }
 
     const rawBody = req.rawBody?.toString('utf8') ?? '';
+    // The delivery id is both signed content and the de-duplication key: Svix
+    // repeats it on every retry of the same event, so the sync service uses it
+    // to tell a retry from a new state change.
+    const svixId = header(req, 'svix-id');
     const ok = verifySvixSignature(webhookSecret, rawBody, {
-      id: header(req, 'svix-id'),
+      id: svixId,
       timestamp: header(req, 'svix-timestamp'),
       signature: header(req, 'svix-signature'),
     });
@@ -52,7 +56,7 @@ export class BlindpayWebhooksController {
 
     const event = parseEvent(rawBody);
     if (event) {
-      await this.sync.handleWebhook(event.type, event.data);
+      await this.sync.handleWebhook(event.type, event.data, svixId);
     }
     return { received: true };
   }

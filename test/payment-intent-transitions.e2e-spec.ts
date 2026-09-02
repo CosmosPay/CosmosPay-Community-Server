@@ -43,6 +43,16 @@ describe('Payment intent transitions (e2e)', () => {
       create: jest.fn().mockResolvedValue({ id: 'cust_1' }),
     },
     webhookEndpoint: { findMany: jest.fn().mockResolvedValue([]) },
+    // Terminal payment-intent events now go through WebhookTerminalEmitter,
+    // which claims a dedup row and writes the delivery rows in one
+    // transaction before touching the bus. With no endpoints registered the
+    // delivery create is never reached, but the claim always is.
+    webhookEmittedEvent: { create: jest.fn().mockResolvedValue({}) },
+    webhookDelivery: {
+      create: jest.fn().mockResolvedValue({ id: 'whd_1' }),
+      update: jest.fn().mockResolvedValue({}),
+      findMany: jest.fn().mockResolvedValue([]),
+    },
     requestLog: {
       create: jest.fn().mockResolvedValue({ id: 'rl_1' }),
     },
@@ -110,10 +120,7 @@ describe('Payment intent transitions (e2e)', () => {
         Promise.resolve(
           transitions
             .filter((t) => t.intentId === where.intentId)
-            .sort(
-              (a, b) =>
-                a.createdAt.getTime() - b.createdAt.getTime(),
-            ),
+            .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime()),
         ),
       ),
     },
@@ -149,7 +156,7 @@ describe('Payment intent transitions (e2e)', () => {
   const route = '/v1/payment-intents';
   const gw = (r: request.Test) =>
     r
-      .set('x-gateway-secret', 'topsecret')
+      .set('x-gateway-secret', 'topsecret-topsecret-topsecret-topsecret')
       .set('x-consumer-username', 'cosmos_u1')
       .set('x-consumer-permissions', 'payments:read,payments:write');
 
@@ -177,10 +184,14 @@ describe('Payment intent transitions (e2e)', () => {
         .send({ status: 'SUCCEEDED', txHash: 'a'.repeat(64) }),
     ).expect(400);
 
-    expect(res.body.code).toBe('INVALID_PAYMENT_INTENT_TRANSITION');
-    expect(res.body.message).toMatch(/Invalid payment intent transition/);
-    expect(res.body.from).toBe('EXPIRED');
-    expect(res.body.to).toBe('SUCCEEDED');
+    expect(res.body.code).toBe('invalid_state_transition');
+    // The error envelope is exactly { statusCode, code, error, message, path,
+    // timestamp } — ad-hoc domain fields are deliberately not forwarded, so the
+    // two statuses are asserted where they are actually contractual: the message.
+    expect(res.body.message).toMatch(
+      /Invalid payment intent transition EXPIRED → SUCCEEDED/,
+    );
+    expect(res.body.from).toBeUndefined();
   });
 
   it('rejects PENDING → SUCCEEDED without on-chain txHash', async () => {
@@ -191,7 +202,7 @@ describe('Payment intent transitions (e2e)', () => {
         .send({ status: 'SUCCEEDED' }),
     ).expect(400);
 
-    expect(res.body.code).toBe('INVALID_PAYMENT_INTENT_TRANSITION');
+    expect(res.body.code).toBe('invalid_state_transition');
     expect(res.body.message).toMatch(/txHash/);
   });
 

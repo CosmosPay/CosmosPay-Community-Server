@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import type { Prisma } from '../../../generated/prisma/client';
 import { GatewayConsumer } from '../../common/interfaces/gateway-consumer.interface';
 import { PrismaService } from '../../prisma/prisma.service';
 import { BlindpayClient } from '../../blindpay/blindpay.client';
@@ -11,6 +12,22 @@ import {
 } from '../../blindpay/blindpay.util';
 import { ReceiversService } from '../receivers/receivers.service';
 import { CreateWalletDto } from './dto/create-wallet.dto';
+
+/**
+ * The columns a wallet is allowed to leave this service with — the exact field list of
+ * `WalletEntity`. `raw` (the provider object) is deliberately absent so the read paths
+ * cannot emit a field the documented contract does not have; it is kept in the mirror
+ * for provider round-trips only.
+ */
+export const WALLET_PUBLIC_SELECT = {
+  id: true,
+  blindpayId: true,
+  name: true,
+  network: true,
+  address: true,
+  isAccountAbstraction: true,
+  createdAt: true,
+} as const satisfies Prisma.BlindpayBlockchainWalletSelect;
 
 /**
  * Blockchain wallets belonging to a receiver — the on-chain endpoints for
@@ -52,11 +69,17 @@ export class WalletsService {
       local.id,
       receiverId,
     );
-    const data = await this.prisma.blindpayBlockchainWallet.findMany({
-      where: { receiverId: receiver.id },
-      orderBy: { createdAt: 'desc' },
-    });
-    return { data, total: data.length };
+    const where = { receiverId: receiver.id };
+    // `total` is the row count, not the page length (see ReceiversService.findAll).
+    const [data, total] = await Promise.all([
+      this.prisma.blindpayBlockchainWallet.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        select: WALLET_PUBLIC_SELECT,
+      }),
+      this.prisma.blindpayBlockchainWallet.count({ where }),
+    ]);
+    return { data, total };
   }
 
   /** Returns the message the customer must sign for the secure (EOA) flow. */
@@ -111,6 +134,8 @@ export class WalletsService {
       },
       create: { consumerId, blindpayId: asString(obj.id), ...data },
       update: data,
+      // The create response is a read path too — keep the provider blob out of it.
+      select: WALLET_PUBLIC_SELECT,
     });
   }
 }

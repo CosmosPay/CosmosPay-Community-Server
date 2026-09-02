@@ -34,3 +34,12 @@ export class PayoutEntity {
   @ApiProperty({ example: '2026-06-28T12:00:00.000Z' })
   createdAt!: Date;
 }
+
+/** One page of payouts — the envelope every list in this API returns. */
+export class PayoutListEntity {
+  @ApiProperty({ type: [PayoutEntity] })
+  data!: PayoutEntity[];
+
+  @ApiProperty({ example: 1 })
+  total!: number;
+}

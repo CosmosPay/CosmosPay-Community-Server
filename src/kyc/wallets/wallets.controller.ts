@@ -10,7 +10,7 @@ import { RequirePermissions } from '../../common/decorators/require-permissions.
 import { GatewayConsumer } from '../../common/interfaces/gateway-consumer.interface';
 import { WalletsService } from './wallets.service';
 import { CreateWalletDto } from './dto/create-wallet.dto';
-import { WalletEntity } from './entities/wallet.entity';
+import { WalletEntity, WalletListEntity } from './entities/wallet.entity';
 
 // /v1/kyc/receivers/:receiverId/wallets
 @ApiTags('kyc')
@@ -45,7 +45,7 @@ export class WalletsController {
   @Get()
   @RequirePermissions('kyc:read')
   @ApiOperation({ summary: "List a receiver's wallets" })
-  @ApiOkResponse({ type: [WalletEntity] })
+  @ApiOkResponse({ type: WalletListEntity })
   findAll(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Param('receiverId') receiverId: string,

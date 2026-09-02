@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Horizon } from '@stellar/stellar-sdk';
 import { StellarService } from '../stellar/stellar.service';
+import { toStroops } from '../swaps/swap-math';
 import type { PaymentIntent } from '../../generated/prisma/client';
 import type { StellarNetwork } from '../config/configuration';
 
@@ -130,7 +131,7 @@ export class StellarVerifierService {
     intent: PaymentIntent,
     op: Horizon.ServerApi.OperationRecord,
   ): boolean {
-    if (op.type !== 'payment') {
+    if (op.type !== Horizon.HorizonApi.OperationResponseType.payment) {
       return false;
     }
     const p = op;
@@ -150,11 +151,40 @@ export class StellarVerifierService {
     }
 
     // Exact amount only when the intent fixed one.
-    if (intent.amount != null && Number(p.amount) !== Number(intent.amount)) {
+    if (intent.amount != null && !this.amountMatches(intent.amount, p.amount)) {
       return false;
     }
 
     return true;
+  }
+
+  /**
+   * Exact amount equality, in integer stroops.
+   *
+   * The strings cannot be compared directly — Horizon reports "25.5000000"
+   * where the intent stored "25.5" — but `Number()` is not the way around that:
+   * a Stellar amount is an int64 count of stroops, and float64 carries only 53
+   * mantissa bits, so above ~9·10^15 stroops (~9·10^8 units) two different
+   * amounts round to the same double and an underpayment would satisfy the
+   * intent. This is the check that decides whether an on-chain payment settles
+   * a payment intent, so it uses the same exact bigint arithmetic (`toStroops`)
+   * that the swap fee/slippage math runs on.
+   *
+   * An unparseable amount on either side is "not a match", not a throw: this
+   * predicate runs inside the observer's reconcile loop, where one malformed
+   * row must not abort the sweep.
+   */
+  private amountMatches(expected: string, actual: string): boolean {
+    try {
+      return toStroops(actual) === toStroops(expected);
+    } catch (err) {
+      this.logger.warn(
+        `Amount comparison skipped ("${expected}" vs "${actual}"): ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      return false;
+    }
   }
 
   /**

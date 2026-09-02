@@ -10,7 +10,10 @@ import { RequirePermissions } from '../../common/decorators/require-permissions.
 import { GatewayConsumer } from '../../common/interfaces/gateway-consumer.interface';
 import { BankAccountsService } from './bank-accounts.service';
 import { CreateBankAccountDto } from './dto/create-bank-account.dto';
-import { BankAccountEntity } from './entities/bank-account.entity';
+import {
+  BankAccountEntity,
+  BankAccountListEntity,
+} from './entities/bank-account.entity';
 
 // /v1/kyc/receivers/:receiverId/bank-accounts
 @ApiTags('kyc')
@@ -33,7 +36,7 @@ export class BankAccountsController {
   @Get()
   @RequirePermissions('kyc:read')
   @ApiOperation({ summary: "List a receiver's bank accounts" })
-  @ApiOkResponse({ type: [BankAccountEntity] })
+  @ApiOkResponse({ type: BankAccountListEntity })
   findAll(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Param('receiverId') receiverId: string,

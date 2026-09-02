@@ -7,6 +7,8 @@ import {
   terminalEventDedupKey,
 } from './webhook-events';
 import { WebhookTerminalEmitter } from './webhook-terminal-emitter.service';
+import { WebhookDispatcherService } from './webhook-dispatcher.service';
+import { WebhookDestinationGuard } from './webhook-destination.guard';
 
 /**
  * In-memory stand-in for Postgres' unique index on `dedupKey`. Inserts on the
@@ -65,13 +67,70 @@ function uniqueEmittedEventStore() {
   };
 }
 
+const endpoint = {
+  id: 'we_1',
+  url: 'https://integrator.example.com/hook',
+  secret: 'whsec_test',
+  enabled: true,
+  destinationBlocked: false,
+  eventTypes: [] as string[],
+};
+
 function build() {
   const store = uniqueEmittedEventStore();
-  const prisma = { webhookEmittedEvent: store } as any;
+  const webhookDelivery = {
+    create: jest.fn(({ data }: { data: Record<string, unknown> }) =>
+      Promise.resolve({ id: `wd_${++deliverySeq}`, attempts: 0, ...data }),
+    ),
+    findMany: jest.fn().mockResolvedValue([]),
+    update: jest.fn(),
+  };
+  const prisma: any = {
+    webhookEmittedEvent: store,
+    webhookEndpoint: {
+      findMany: jest.fn().mockResolvedValue([endpoint]),
+      update: jest.fn(),
+    },
+    webhookDelivery,
+    /**
+     * Stands in for an interactive transaction: work sees the same store, and
+     * a throw undoes the rows *this* transaction inserted (not a snapshot of
+     * the table — concurrent transactions must not roll each other back). The
+     * atomicity is the property under test: without it a failed delivery-row
+     * write leaves the claim committed and the event unnotifiable forever.
+     */
+    $transaction: async (fn: (tx: unknown) => Promise<unknown>) => {
+      const inserted: string[] = [];
+      const tx = {
+        ...prisma,
+        webhookEmittedEvent: {
+          ...store,
+          create: async (args: { data: { dedupKey: string } }) => {
+            const row = await store.create(args as never);
+            inserted.push(args.data.dedupKey);
+            return row;
+          },
+        },
+      };
+      try {
+        return await fn(tx);
+      } catch (err) {
+        for (const key of inserted) store.rows.delete(key);
+        throw err;
+      }
+    },
+  };
   const events = { emit: jest.fn() } as unknown as EventEmitter2;
-  const emitter = new WebhookTerminalEmitter(prisma, events);
-  return { emitter, prisma, events, store };
+  const dispatcher = new WebhookDispatcherService(
+    prisma,
+    { get: () => ({ maxAttempts: 1, backoffMs: 1 }) } as any,
+    new WebhookDestinationGuard(),
+  );
+  const emitter = new WebhookTerminalEmitter(prisma, events, dispatcher);
+  return { emitter, prisma, events, store, webhookDelivery };
 }
+
+let deliverySeq = 0;
 
 function terminalCalls(events: EventEmitter2, type: string) {
   return (events.emit as unknown as jest.Mock).mock.calls.filter(
@@ -163,8 +222,62 @@ describe('WebhookTerminalEmitter (issue #29)', () => {
     expect(payload.type).toBe('SWAP_SUCCEEDED');
     expect(payload.data).toEqual(data);
     // Integrator-facing envelope is still built by the dispatcher from this
-    // payload; we do not add fields that would change HTTP JSON shape.
-    expect(Object.keys(payload)).toEqual(['consumerUsername', 'type', 'data']);
+    // payload; `deliveryIds` names rows that already exist and never reaches
+    // the HTTP JSON.
+    expect(Object.keys(payload)).toEqual([
+      'consumerUsername',
+      'type',
+      'data',
+      'deliveryIds',
+    ]);
+    expect(payload.deliveryIds).toEqual([expect.stringMatching(/^wd_/)]);
+  });
+
+  it('commits the delivery rows with the claim, before touching the bus', async () => {
+    const { emitter, events, store, webhookDelivery } = build();
+
+    const order: string[] = [];
+    webhookDelivery.create.mockImplementationOnce(
+      ({ data }: { data: Record<string, unknown> }) => {
+        order.push('delivery-row');
+        return Promise.resolve({ id: 'wd_ordered', attempts: 0, ...data });
+      },
+    );
+    (events.emit as unknown as jest.Mock).mockImplementation(() => {
+      order.push('bus');
+      return true;
+    });
+
+    await expect(
+      emitter.emit('cosmos_u1', 'SWAP_SUCCEEDED', { id: 'swap_order' }),
+    ).resolves.toBe(true);
+
+    // The durable work exists before anything in memory is relied on: a crash
+    // after the emit leaves a row the sweeper can finish, not a burned claim.
+    expect(order).toEqual(['delivery-row', 'bus']);
+    expect(store.rows.has('SWAP_SUCCEEDED:swap_order:0')).toBe(true);
+    const [, payload] = (events.emit as unknown as jest.Mock).mock.calls[0];
+    expect(payload.deliveryIds).toEqual(['wd_ordered']);
+  });
+
+  it('rolls the claim back when the delivery rows cannot be written', async () => {
+    const { emitter, events, store, webhookDelivery } = build();
+    webhookDelivery.create.mockRejectedValueOnce(new Error('db down'));
+
+    await expect(
+      emitter.emit('cosmos_u1', 'SWAP_SUCCEEDED', { id: 'swap_rollback' }),
+    ).rejects.toThrow('db down');
+
+    // This is the failure that used to be permanent: the claim was committed
+    // on its own, so no later path could ever notify. Now nothing is claimed
+    // and the retry wins it.
+    expect(store.rows.has('SWAP_SUCCEEDED:swap_rollback:0')).toBe(false);
+    expect(terminalCalls(events, 'SWAP_SUCCEEDED')).toHaveLength(0);
+
+    await expect(
+      emitter.emit('cosmos_u1', 'SWAP_SUCCEEDED', { id: 'swap_rollback' }),
+    ).resolves.toBe(true);
+    expect(terminalCalls(events, 'SWAP_SUCCEEDED')).toHaveLength(1);
   });
 
   it('does not claim a unique row for non-terminal events', async () => {

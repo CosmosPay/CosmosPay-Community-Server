@@ -1,5 +1,6 @@
-import { ConflictException } from '@nestjs/common';
+import { HttpStatus } from '@nestjs/common';
 import { Account, Keypair, TransactionBuilder } from '@stellar/stellar-sdk';
+import { ApiError, ApiErrorCode } from '../common/errors/api-error';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { GatewayConsumer } from '../common/interfaces/gateway-consumer.interface';
 import { SettlementObserverService } from '../observer/settlement-observer.service';
@@ -193,8 +194,23 @@ function createPrisma(seed: any[] = []) {
       }),
     },
     webhookEmittedEvent: uniqueEmittedEvents(),
+    // The emitter claims the dedup row and persists deliveries in one
+    // interactive transaction; the fake just runs the callback against itself.
+    $transaction: jest.fn(async (fn: any) =>
+      typeof fn === 'function' ? fn(prisma) : Promise.all(fn),
+    ),
   };
   return prisma;
+}
+
+/**
+ * These tests exercise the terminal-event *claim*, not delivery fan-out, so the
+ * dispatcher is stubbed to persist nothing — an empty (but non-null) delivery
+ * list still authorizes the bus emit.
+ */
+function makeEmitter(prisma: any, events: EventEmitter2) {
+  const dispatcher = { persistDeliveries: jest.fn().mockResolvedValue([]) };
+  return new WebhookTerminalEmitter(prisma, events, dispatcher as any);
 }
 
 function stellarConfig(swapOverrides: Record<string, unknown> = {}) {
@@ -212,6 +228,27 @@ function stellarConfig(swapOverrides: Record<string, unknown> = {}) {
     },
     horizon: { public: 'https://h', testnet: 'https://h' },
   };
+}
+
+/**
+ * The service reads `nodeEnv` and `apisix` alongside `stellar`, so the mock has
+ * to answer per key rather than returning the Stellar block for everything —
+ * `resolveSwapFeeBps` branches on `nodeEnv === 'production'`.
+ */
+function makeConfig(
+  swapOverrides: Record<string, unknown> = {},
+  nodeEnv = 'test',
+) {
+  return {
+    get: (key?: string) => {
+      if (key === 'observer') {
+        return { enabled: false, intervalMs: 15_000, batchSize: 50 };
+      }
+      if (key === 'nodeEnv') return nodeEnv;
+      if (key === 'apisix') return { swapFeeBpsHeader: 'x-plan-swap-fee-bps' };
+      return stellarConfig(swapOverrides);
+    },
+  } as any;
 }
 
 function makeStellar() {
@@ -304,17 +341,12 @@ describe('SwapsService.submit vs observer (issue #29 double terminal event)', ()
     prisma = createPrisma();
     stellar = makeStellar();
     events = { emit: jest.fn() } as any;
-    const config = {
-      get: (key?: string) =>
-        key === 'observer'
-          ? { enabled: false, intervalMs: 15_000, batchSize: 50 }
-          : stellarConfig(),
-    } as any;
-    const webhooks = new WebhookTerminalEmitter(prisma as any, events);
-    service = new SwapsService(config, prisma as any, webhooks, stellar as any);
+    const config = makeConfig();
+    const webhooks = makeEmitter(prisma, events);
+    service = new SwapsService(config, prisma, webhooks, stellar as any);
     observer = new SettlementObserverService(
       config,
-      prisma as any,
+      prisma,
       stellar as any,
       {} as any,
       service,
@@ -423,14 +455,9 @@ describe('SwapsService.create idempotency (issue #17)', () => {
     prisma = createPrisma();
     stellar = makeStellar();
     events = { emit: jest.fn() } as any;
-    const config = {
-      get: (key?: string) =>
-        key === 'observer'
-          ? { enabled: false, intervalMs: 15_000, batchSize: 50 }
-          : stellarConfig(),
-    } as any;
-    const webhooks = new WebhookTerminalEmitter(prisma as any, events);
-    service = new SwapsService(config, prisma as any, webhooks, stellar as any);
+    const config = makeConfig();
+    const webhooks = makeEmitter(prisma, events);
+    service = new SwapsService(config, prisma, webhooks, stellar as any);
     jest.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000);
   });
 
@@ -505,14 +532,14 @@ describe('SwapsService.create idempotency (issue #17)', () => {
     expect(result.txHash).toBe(existing.txHash);
   });
 
-  it('maps a (network, txHash) unique violation to a clear ConflictException', async () => {
+  it('maps a (network, txHash) unique violation to a 409 idempotency_conflict', async () => {
     await service.create(consumer, createDto);
     expect(prisma.rows).toHaveLength(1);
 
     // Same frozen clock + same quote → identical XDR/hash → unique (network, txHash).
-    await expect(service.create(consumer, createDto)).rejects.toBeInstanceOf(
-      ConflictException,
-    );
+    await expect(service.create(consumer, createDto)).rejects.toMatchObject({
+      code: ApiErrorCode.IdempotencyConflict,
+    });
     await expect(service.create(consumer, createDto)).rejects.toThrow(
       /transaction hash/i,
     );
@@ -520,19 +547,14 @@ describe('SwapsService.create idempotency (issue #17)', () => {
   });
 
   it('returns 409 when STELLAR_SWAP_SINGLE_INFLIGHT blocks a second PENDING source', async () => {
-    const config = {
-      get: (key?: string) =>
-        key === 'observer'
-          ? { enabled: false, intervalMs: 15_000, batchSize: 50 }
-          : stellarConfig({ singleInflight: true }),
-    } as any;
-    const webhooks = new WebhookTerminalEmitter(prisma as any, events);
-    service = new SwapsService(config, prisma as any, webhooks, stellar as any);
+    const config = makeConfig({ singleInflight: true });
+    const webhooks = makeEmitter(prisma, events);
+    service = new SwapsService(config, prisma, webhooks, stellar as any);
 
     await service.create(consumer, createDto, 'a');
     await expect(
       service.create(consumer, createDto, 'b'),
-    ).rejects.toBeInstanceOf(ConflictException);
+    ).rejects.toMatchObject({ code: ApiErrorCode.OperationInFlight });
     await expect(service.create(consumer, createDto, 'b')).rejects.toThrow(
       /in-flight swap already exists/i,
     );
@@ -550,17 +572,12 @@ describe('SettlementObserverService duplicate txHash (issue #17)', () => {
     prisma = createPrisma();
     stellar = makeStellar();
     events = { emit: jest.fn() } as any;
-    const config = {
-      get: (key?: string) =>
-        key === 'observer'
-          ? { enabled: false, intervalMs: 15_000, batchSize: 50 }
-          : stellarConfig(),
-    } as any;
-    const webhooks = new WebhookTerminalEmitter(prisma as any, events);
-    service = new SwapsService(config, prisma as any, webhooks, stellar as any);
+    const config = makeConfig();
+    const webhooks = makeEmitter(prisma, events);
+    service = new SwapsService(config, prisma, webhooks, stellar as any);
     observer = new SettlementObserverService(
       config,
-      prisma as any,
+      prisma,
       stellar as any,
       {} as any,
       service,
@@ -580,5 +597,103 @@ describe('SettlementObserverService duplicate txHash (issue #17)', () => {
     expect(terminalEmits(events, 'SWAP_SUCCEEDED')).toHaveLength(1);
     // One Horizon lookup for the shared hash, not one per row.
     expect(stellar.txCall).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not group the same hash across two networks', async () => {
+    // A hash is unique per network, not globally — that is exactly what the
+    // `@@unique([network, txHash])` constraint says. Grouping on the hash alone
+    // put these two rows in one bucket and settled both from a single lookup
+    // against whichever network sorted first, deciding a public swap's fate
+    // from a testnet ledger.
+    const test = swapRow({
+      id: 'swap_testnet',
+      status: 'PENDING',
+      network: 'testnet',
+      txHash: TX_HASH,
+    });
+    const live = swapRow({
+      id: 'swap_public',
+      status: 'PENDING',
+      network: 'public',
+      txHash: TX_HASH,
+    });
+    prisma.rows.push(test, live);
+    stellar.txCall.mockResolvedValue({ successful: true });
+
+    await (observer as any).reconcileSwaps(50);
+
+    // Each network is looked up on its own server, and each row gets its own
+    // terminal event rather than one being settled as a phantom duplicate.
+    expect(stellar.txCall).toHaveBeenCalledTimes(2);
+    expect(stellar.server).toHaveBeenCalledWith('testnet');
+    expect(stellar.server).toHaveBeenCalledWith('public');
+    expect(terminalEmits(events, 'SWAP_SUCCEEDED')).toHaveLength(2);
+  });
+});
+describe('SwapsService platform commission fail-closed (X-Plan-Swap-Fee-Bps)', () => {
+  const quoteDto = {
+    amount: '10',
+    destAssetCode: 'USDC',
+    destAssetIssuer: DEST_ISSUER,
+  };
+
+  /** The gateway did not forward the plan rate. */
+  const noPlanRate: GatewayConsumer = { ...consumer, planSwapFeeBps: null };
+
+  function make(nodeEnv: string, swapOverrides: Record<string, unknown> = {}) {
+    const prisma = createPrisma();
+    const stellar = makeStellar();
+    const events = { emit: jest.fn() } as any;
+    return new SwapsService(
+      makeConfig(swapOverrides, nodeEnv),
+      prisma,
+      makeEmitter(prisma, events),
+      stellar as any,
+    );
+  }
+
+  it('refuses to price a swap in production when the header is missing', async () => {
+    const service = make('production');
+
+    const err = await service
+      .quote(noPlanRate, quoteDto as any)
+      .then(() => null)
+      .catch((e: unknown) => e as ApiError);
+
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err!.getStatus()).toBe(HttpStatus.SERVICE_UNAVAILABLE);
+    expect(err!.code).toBe(ApiErrorCode.Misconfigured);
+    // The operator has to be told *which* header the gateway stopped sending.
+    expect(err!.message).toMatch(/x-plan-swap-fee-bps/i);
+  });
+
+  it('never silently reprices at STELLAR_SWAP_FEE_BPS in production', async () => {
+    // The dangerous outcome is not an error — it is a successful quote billed
+    // at the platform default instead of the organization's plan rate.
+    const service = make('production', { feeBps: 999 });
+    await expect(service.quote(noPlanRate, quoteDto as any)).rejects.toThrow(
+      ApiError,
+    );
+  });
+
+  it('uses the forwarded plan rate in production (no fallback involved)', async () => {
+    const service = make('production', { feeBps: 999 });
+    const quote = await service.quote(
+      { ...consumer, planSwapFeeBps: 25 },
+      quoteDto,
+    );
+    expect(quote.fee.bps).toBe(25);
+  });
+
+  it('still falls back to the configured default outside production', async () => {
+    const service = make('development', { feeBps: 50 });
+    const quote = await service.quote(noPlanRate, quoteDto);
+    expect(quote.fee.bps).toBe(50);
+  });
+
+  it('falls back to a 0% fee outside production when no fee wallet is set', async () => {
+    const service = make('development', { feeWallet: '', feeBps: 50 });
+    const quote = await service.quote(noPlanRate, quoteDto);
+    expect(quote.fee.bps).toBe(0);
   });
 });

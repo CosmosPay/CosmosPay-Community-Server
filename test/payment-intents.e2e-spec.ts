@@ -45,6 +45,16 @@ describe('Payment intents CRUD (e2e)', () => {
     },
     // The webhook dispatcher reacts to emitted events; no endpoints registered here.
     webhookEndpoint: { findMany: jest.fn().mockResolvedValue([]) },
+    // Terminal payment-intent events now go through WebhookTerminalEmitter,
+    // which claims a dedup row and writes the delivery rows in one
+    // transaction before touching the bus. With no endpoints registered the
+    // delivery create is never reached, but the claim always is.
+    webhookEmittedEvent: { create: jest.fn().mockResolvedValue({}) },
+    webhookDelivery: {
+      create: jest.fn().mockResolvedValue({ id: 'whd_1' }),
+      update: jest.fn().mockResolvedValue({}),
+      findMany: jest.fn().mockResolvedValue([]),
+    },
     requestLog: {
       create: jest.fn().mockResolvedValue({ id: 'rl_1' }),
     },
@@ -176,7 +186,7 @@ describe('Payment intents CRUD (e2e)', () => {
   const payRoute = `${route}/pay`;
   const gw = (r: request.Test) =>
     r
-      .set('x-gateway-secret', 'topsecret')
+      .set('x-gateway-secret', 'topsecret-topsecret-topsecret-topsecret')
       .set('x-consumer-username', 'cosmos_u1')
       .set('x-consumer-permissions', 'payments:read,payments:write');
 
@@ -315,7 +325,8 @@ describe('Payment intents CRUD (e2e)', () => {
       request(http())
         .post(`${route}/${createdId}/validate`)
         .send({ txHash: 'a'.repeat(64) }),
-    ).expect(201);
+      // 200, not 201: validate reconciles an existing intent, it creates nothing.
+    ).expect(200);
     expect(res.body.valid).toBe(true);
     expect(res.body.status).toBe('SUCCEEDED');
     expect(res.body.paymentIntent.status).toBe('SUCCEEDED');

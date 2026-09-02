@@ -3,7 +3,10 @@ import { GatewayConsumer } from '../../common/interfaces/gateway-consumer.interf
 import { PrismaService } from '../../prisma/prisma.service';
 import { BlindpayClient } from '../../blindpay/blindpay.client';
 import { ConsumerResolverService } from '../../blindpay/consumer-resolver.service';
-import { BlindpayObject } from '../../blindpay/blindpay-sync.service';
+import {
+  BlindpayObject,
+  VIRTUAL_ACCOUNT_PUBLIC_SELECT,
+} from '../../blindpay/blindpay-sync.service';
 import {
   asNullableString,
   asString,
@@ -55,11 +58,19 @@ export class VirtualAccountsService {
       local.id,
       receiverId,
     );
-    const data = await this.prisma.blindpayVirtualAccount.findMany({
-      where: { receiverId: receiver.id },
-      orderBy: { createdAt: 'desc' },
-    });
-    return { data, total: data.length };
+    const where = { receiverId: receiver.id };
+    // `total` is the row count, not the page length. Returning `data.length`
+    // made the field useless: it always equalled what the caller just received,
+    // so nobody could tell a full page from the last one.
+    const [data, total] = await Promise.all([
+      this.prisma.blindpayVirtualAccount.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        select: VIRTUAL_ACCOUNT_PUBLIC_SELECT,
+      }),
+      this.prisma.blindpayVirtualAccount.count({ where }),
+    ]);
+    return { data, total };
   }
 
   private async resolveWalletBlindpayId(

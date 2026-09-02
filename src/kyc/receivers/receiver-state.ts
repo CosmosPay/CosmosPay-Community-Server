@@ -1,4 +1,4 @@
-import { ConflictException } from '@nestjs/common';
+import { ApiError, ApiErrorCode } from '../../common/errors/api-error';
 
 /**
  * Pre-BlindPay KYC states owned by this service, plus BlindPay's own statuses
@@ -50,7 +50,11 @@ export function assertTransition(
   const source = from ?? 'unknown';
   const allowed = ALLOWED_TRANSITIONS[source as KycState];
   if (!allowed?.includes(to)) {
-    throw new ConflictException(
+    // Not a bare ConflictException: 409 defaults to `idempotency_conflict`,
+    // which is the exact confusion ApiErrorCode was introduced to end — an
+    // integrator cannot tell a duplicate request from an illegal KYC transition.
+    throw ApiError.conflict(
+      ApiErrorCode.KycStateInvalid,
       `Cannot move receiver from '${source}' to '${to}'`,
     );
   }

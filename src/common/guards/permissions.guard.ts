@@ -1,11 +1,10 @@
 import {
   CanActivate,
   ExecutionContext,
-  ForbiddenException,
   Injectable,
   Logger,
-  UnauthorizedException,
 } from '@nestjs/common';
+import { ApiError, ApiErrorCode } from '../errors/api-error';
 import { Reflector } from '@nestjs/core';
 import { Request } from 'express';
 import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
@@ -71,7 +70,10 @@ export class PermissionsGuard implements CanActivate {
       this.logger.warn(
         `Rejected ${request.method} ${request.url}: no authenticated consumer for a scoped route`,
       );
-      throw new UnauthorizedException('No authenticated consumer');
+      throw ApiError.unauthorized(
+        ApiErrorCode.NoAuthenticatedConsumer,
+        'No authenticated consumer',
+      );
     }
 
     // admin keys have full access.
@@ -85,7 +87,8 @@ export class PermissionsGuard implements CanActivate {
       this.logger.warn(
         `Rejected ${request.method} ${request.url}: missing scope(s) ${missing.join(', ')}`,
       );
-      throw new ForbiddenException(
+      throw ApiError.forbidden(
+        ApiErrorCode.InsufficientScope,
         `This API key is missing the required scope(s): ${missing.join(', ')}`,
       );
     }
@@ -95,7 +98,8 @@ export class PermissionsGuard implements CanActivate {
       this.logger.warn(
         `Rejected ${request.method} ${request.url}: needs one of ${requiredAny.join(', ')}`,
       );
-      throw new ForbiddenException(
+      throw ApiError.forbidden(
+        ApiErrorCode.InsufficientScope,
         `This API key needs at least one of the scope(s): ${requiredAny.join(', ')}`,
       );
     }

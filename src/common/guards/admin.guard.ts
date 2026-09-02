@@ -1,10 +1,5 @@
-import {
-  CanActivate,
-  ExecutionContext,
-  ForbiddenException,
-  Injectable,
-  UnauthorizedException,
-} from '@nestjs/common';
+import { CanActivate, ExecutionContext, Injectable } from '@nestjs/common';
+import { ApiError, ApiErrorCode } from '../errors/api-error';
 import { ConfigService } from '@nestjs/config';
 import { Reflector } from '@nestjs/core';
 import { Request } from 'express';
@@ -36,11 +31,17 @@ export class AdminGuard implements CanActivate {
     const request = context.switchToHttp().getRequest<Request>();
     const { credentials } = this.config.get('admin', { infer: true });
 
-    const rawAuth = request.headers.authorization;
+    // The `declare module 'express'` augmentation widens `headers` to `any` in
+    // files that also write to the augmented Request, so name the type here.
+    const rawAuth = request.headers.authorization as
+      string | string[] | undefined;
     const authorization = Array.isArray(rawAuth) ? rawAuth[0] : rawAuth;
     const principal = verifyAdminBearer(authorization, credentials);
     if (!principal) {
-      throw new UnauthorizedException('Valid admin credentials required');
+      throw ApiError.unauthorized(
+        ApiErrorCode.AdminCredentialsRequired,
+        'Valid admin credentials required',
+      );
     }
 
     request.adminPrincipal = principal;
@@ -52,7 +53,8 @@ export class AdminGuard implements CanActivate {
       ]) ?? 'read';
 
     if (!roleSatisfies(principal.role, required)) {
-      throw new ForbiddenException(
+      throw ApiError.forbidden(
+        ApiErrorCode.AdminRoleRequired,
         `Admin role '${required}' required (have '${principal.role}')`,
       );
     }

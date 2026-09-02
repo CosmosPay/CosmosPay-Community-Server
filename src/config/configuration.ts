@@ -1,4 +1,7 @@
-import { parseAdminCredentials, type AdminCredential } from '../admin/admin-auth';
+import {
+  parseAdminCredentials,
+  type AdminCredential,
+} from '../admin/admin-auth';
 import {
   parseRedirectUrlWhitelist,
   type RedirectUrlWhitelist,
@@ -85,6 +88,15 @@ export interface AppConfig {
     batchSize: number;
     // Hard cap on total rows deleted in one tick (catch-up without unbounded work).
     maxPerCycle: number;
+    // Days to keep the *body* of a settled webhook delivery. 0 disables.
+    deliveryPayloadDays: number;
+  };
+  webhookSweep: {
+    // Recovers deliveries stranded by a crash mid-retry. Off disables the timer
+    // entirely, so an operator can stop redelivery during an incident without a
+    // redeploy — and the test bootstrap can keep it out of a test run.
+    enabled: boolean;
+    intervalMs: number;
   };
   paymentIntents: {
     // Lifetime of a payment intent; unpaid intents past this are marked EXPIRED.
@@ -215,6 +227,24 @@ export default (): AppConfig => ({
       process.env.REQUEST_LOG_PRUNE_MAX_PER_CYCLE ?? '50000',
       10,
     ),
+    // A delivery body is the event as sent, and a RECEIVER_UPDATED body is the
+    // provider's full KYC dossier — tax id, address, document links. The row
+    // itself is the audit trail and is kept; only the body is cleared, and only
+    // once the delivery has reached a terminal state and is well past any
+    // redelivery window. Default 30 days; 0 keeps bodies forever (the old
+    // behaviour) for an operator who needs that and accepts the exposure.
+    deliveryPayloadDays: parseInt(
+      process.env.WEBHOOK_PAYLOAD_RETENTION_DAYS ?? '30',
+      10,
+    ),
+  },
+  webhookSweep: {
+    // Default on: a stranded delivery is a customer-visible settlement that
+    // notified nobody, so recovery is not opt-in. `false` is the incident
+    // switch (and how the test bootstrap keeps the timer out of a test run).
+    enabled:
+      (process.env.WEBHOOK_SWEEP_ENABLED ?? 'true').toLowerCase() !== 'false',
+    intervalMs: parseInt(process.env.WEBHOOK_SWEEP_INTERVAL_MS ?? '60000', 10),
   },
   paymentIntents: {
     ttlSeconds: parseInt(process.env.PAYMENT_INTENT_TTL_SECONDS ?? '3600', 10),

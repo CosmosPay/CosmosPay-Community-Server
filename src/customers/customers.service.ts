@@ -1,8 +1,25 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import { Prisma } from '../../generated/prisma/client';
 import { GatewayConsumer } from '../common/interfaces/gateway-consumer.interface';
+import { formatNumericAmount } from '../common/money';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateCustomerDto } from './dto/create-customer.dto';
+import { QueryCustomersDto } from './dto/query-customers.dto';
 import { UpdateCustomerDto } from './dto/update-customer.dto';
+
+/** On-chain activity attributed to a customer's Stellar account. */
+interface CustomerPaymentStats {
+  payments: number;
+  succeeded: number;
+  /** Settled volume as a decimal string — never a float. */
+  total: string;
+}
+
+const NO_ACTIVITY: CustomerPaymentStats = {
+  payments: 0,
+  succeeded: 0,
+  total: '0',
+};
 
 @Injectable()
 export class CustomersService {
@@ -34,52 +51,93 @@ export class CustomersService {
     });
   }
 
-  async findAll(consumer: GatewayConsumer) {
+  async findAll(consumer: GatewayConsumer, query: QueryCustomersDto) {
     const local = await this.resolveConsumer(consumer);
+    const where = { consumerId: local.id };
 
-    // Enrich each stored customer with on-chain stats derived from payment
-    // intents whose payer (source) matches the customer's account.
-    const [customers, intents] = await Promise.all([
+    // `total` is the row count, never `data.length` — the page size is `take`
+    // on every full page, so a client paginating on it never sees the end.
+    const [customers, total] = await this.prisma.$transaction([
       this.prisma.customer.findMany({
-        where: { consumerId: local.id },
+        where,
         orderBy: { createdAt: 'desc' },
+        take: query.take,
+        skip: query.skip,
       }),
-      this.prisma.paymentIntent.findMany({
-        where: { consumerId: local.id, source: { not: null } },
-        select: { source: true, amount: true, status: true },
-      }),
+      this.prisma.customer.count({ where }),
     ]);
 
-    const stats = new Map<
-      string,
-      { payments: number; succeeded: number; total: number }
-    >();
-    for (const i of intents) {
-      const acct = i.source as string;
-      const cur = stats.get(acct) ?? { payments: 0, succeeded: 0, total: 0 };
-      cur.payments += 1;
-      if (i.status === 'SUCCEEDED') {
-        cur.succeeded += 1;
-        cur.total += Number(i.amount) || 0;
-      }
-      stats.set(acct, cur);
-    }
+    const stats = await this.paymentStats(
+      local.id,
+      customers
+        .map((c) => c.account)
+        .filter((account): account is string => Boolean(account)),
+    );
 
     const data = customers.map((c) => {
-      const s = (c.account && stats.get(c.account)) || {
-        payments: 0,
-        succeeded: 0,
-        total: 0,
-      };
+      const s = (c.account && stats.get(c.account)) || NO_ACTIVITY;
       return {
         ...c,
         payments: s.payments,
         succeeded: s.succeeded,
-        total: Number(s.total.toFixed(7)).toString(),
+        total: s.total,
       };
     });
 
-    return { data, total: data.length };
+    return { data, total, take: query.take, skip: query.skip };
+  }
+
+  /**
+   * Per-account payment stats for the accounts on the current page, aggregated
+   * in PostgreSQL.
+   *
+   * This used to load every customer *and* every payment intent belonging to
+   * the consumer on each request and tally them in JS: two unbounded reads to
+   * produce three numbers per row, growing with the merchant's whole history.
+   *
+   * The counts alone would be a `groupBy`, but the settled volume cannot go
+   * through `_sum`: `PaymentIntent.amount` is a `String` column (decimal
+   * strings, so Stellar's 7-dp values stay exact) and Prisma will not sum text.
+   * So the aggregate is one `$queryRaw` with a `::numeric` cast — which also
+   * makes the money *more* accurate than the previous `Number(...)`
+   * accumulation, which rounded in binary floating point. Values are
+   * parameterized; the account list is bounded by the page size.
+   */
+  private async paymentStats(
+    consumerId: string,
+    accounts: string[],
+  ): Promise<Map<string, CustomerPaymentStats>> {
+    if (accounts.length === 0) {
+      return new Map();
+    }
+
+    const rows = await this.prisma.$queryRaw<
+      { account: string; payments: bigint; succeeded: bigint; total: unknown }[]
+    >`
+      SELECT "source" AS account,
+             COUNT(*) AS payments,
+             COUNT(*) FILTER (WHERE "status" = 'SUCCEEDED') AS succeeded,
+             COALESCE(
+               SUM(NULLIF("amount", '')::numeric)
+                 FILTER (WHERE "status" = 'SUCCEEDED'),
+               0
+             ) AS total
+        FROM "payment_intent"
+       WHERE "consumerId" = ${consumerId}
+         AND "source" IN (${Prisma.join(accounts)})
+       GROUP BY "source"
+    `;
+
+    return new Map(
+      rows.map((r) => [
+        r.account,
+        {
+          payments: Number(r.payments),
+          succeeded: Number(r.succeeded),
+          total: formatNumericAmount(r.total),
+        },
+      ]),
+    );
   }
 
   async findOne(consumer: GatewayConsumer, id: string) {

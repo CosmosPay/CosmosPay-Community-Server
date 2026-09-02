@@ -3,11 +3,14 @@ import {
   Controller,
   Delete,
   Get,
-  Headers,
+  HttpCode,
+  HttpStatus,
   Param,
   Patch,
   Post,
+  Req,
 } from '@nestjs/common';
+import type { Request } from 'express';
 import {
   ApiCreatedResponse,
   ApiOkResponse,
@@ -25,7 +28,7 @@ import { RequestTosDto } from './dto/request-tos.dto';
 import { ApproveReceiverDto } from './dto/approve-receiver.dto';
 import { EnableReceiverDto } from './dto/enable-receiver.dto';
 import { SetAccessDto } from './dto/set-access.dto';
-import { ReceiverEntity } from './entities/receiver.entity';
+import { ReceiverEntity, ReceiverListEntity } from './entities/receiver.entity';
 
 // /v1/kyc/receivers — the KYC/KYB entities required before any onramp/offramp.
 @ApiTags('kyc')
@@ -47,7 +50,7 @@ export class ReceiversController {
   @Get()
   @RequirePermissions('kyc:read')
   @ApiOperation({ summary: "List the consumer's receivers" })
-  @ApiOkResponse({ type: [ReceiverEntity] })
+  @ApiOkResponse({ type: ReceiverListEntity })
   findAll(@CurrentConsumer() consumer: GatewayConsumer) {
     return this.receivers.findAll(consumer);
   }
@@ -67,11 +70,21 @@ export class ReceiversController {
 
   @Post(':id/approve')
   @RequirePermissions('kyc:write')
+  // Approving advances an existing receiver's review state; the receiver was
+  // created by POST /v1/kyc/receivers. Nothing new comes into existence here,
+  // so 200 — which is what @ApiOkResponse below has always promised, while
+  // Nest's POST default silently returned 201.
+  @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary:
-      'Approve a pending-review receiver (owner/admin review gate); sends the customer the terms link and returns it',
+      'Approve a pending-review receiver (admin-only review gate); sends the customer the terms link and returns it',
   })
   @ApiOkResponse({ description: 'Receiver approved; terms link returned' })
+  @ApiResponse({
+    status: 403,
+    description:
+      'The API key is not elevated (admin role). A key may submit KYC data or approve it, not both.',
+  })
   @ApiResponse({
     status: 409,
     description:
@@ -95,21 +108,30 @@ export class ReceiversController {
     @CurrentConsumer() consumer: GatewayConsumer,
     @Param('id') id: string,
     @Body() dto: RequestTosDto,
-    // Trusted dashboard-only resend cooldown (owner immediate, admin 1/min). Ignored for
-    // external API keys — the marker header is stripped from client requests by APISIX.
-    @Headers('x-cosmos-internal') internal?: string,
-    @Headers('x-cosmos-tos-cooldown-ms') cooldown?: string,
+    // The dashboard's role-derived resend cooldown is read off the raw request rather
+    // than declared with @Headers(): declaring it published `x-cosmos-internal` /
+    // `x-cosmos-tos-cooldown-ms` as REQUIRED parameters of this endpoint in the shipped
+    // OpenAPI spec (which /docs serves outside every guard), advertising an internal
+    // mechanism and telling integrators to send two headers that are not theirs to send.
+    // The value is only a request — ReceiversService.requestTos honours it solely for an
+    // elevated consumer.
+    @Req() request: Request,
   ) {
     return this.receivers.requestTos(
       consumer,
       id,
       dto,
-      resolveTosCooldownMs(internal, cooldown),
+      resolveTosCooldownMs(
+        request.headers['x-cosmos-internal'],
+        request.headers['x-cosmos-tos-cooldown-ms'],
+      ),
     );
   }
 
   @Post(':id/enable')
   @RequirePermissions('kyc:write')
+  // Enabling flips a flag on an existing receiver; see the note on approve.
+  @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Enable an inactive receiver with an accepted terms-of-service id',
   })
@@ -131,9 +153,14 @@ export class ReceiversController {
   @RequirePermissions('kyc:write')
   @ApiOperation({
     summary:
-      'Enable or disable a fiat account (owner/admin kill-switch for onramp/offramp)',
+      'Enable or disable a fiat account (admin-only kill-switch for onramp/offramp)',
   })
   @ApiOkResponse({ type: ReceiverEntity })
+  @ApiResponse({
+    status: 403,
+    description:
+      'The API key is not elevated (admin role); a tenant key cannot lift a kill-switch an operator applied.',
+  })
   setAccess(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Param('id') id: string,

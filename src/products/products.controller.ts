@@ -6,6 +6,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
 } from '@nestjs/common';
 import {
   ApiCreatedResponse,
@@ -17,8 +18,13 @@ import { CurrentConsumer } from '../common/decorators/current-consumer.decorator
 import { RequirePermissions } from '../common/decorators/require-permissions.decorator';
 import { GatewayConsumer } from '../common/interfaces/gateway-consumer.interface';
 import { CreateProductDto } from './dto/create-product.dto';
+import { QueryProductsDto } from './dto/query-products.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
-import { ProductDeletedEntity, ProductEntity } from './entities/product.entity';
+import {
+  ProductDeletedEntity,
+  ProductEntity,
+  ProductListEntity,
+} from './entities/product.entity';
 import { ProductsService } from './products.service';
 
 // URI versioning => /v1/products
@@ -41,9 +47,12 @@ export class ProductsController {
   @Get()
   @RequirePermissions('products:read')
   @ApiOperation({ summary: "List the consumer's products" })
-  @ApiOkResponse({ type: [ProductEntity] })
-  findAll(@CurrentConsumer() consumer: GatewayConsumer) {
-    return this.products.findAll(consumer);
+  @ApiOkResponse({ type: ProductListEntity })
+  findAll(
+    @CurrentConsumer() consumer: GatewayConsumer,
+    @Query() query: QueryProductsDto,
+  ) {
+    return this.products.findAll(consumer, query);
   }
 
   @Get(':id')

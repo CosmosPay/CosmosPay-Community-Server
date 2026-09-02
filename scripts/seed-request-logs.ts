@@ -50,7 +50,6 @@ async function main(): Promise<void> {
     inserted += result.count;
   }
 
-  // eslint-disable-next-line no-console
   console.log(
     `Seeded ${inserted} request_log row(s) for consumer=${consumer} (span ~7d)`,
   );
@@ -58,7 +57,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-  // eslint-disable-next-line no-console
   console.error(err);
   process.exit(1);
 });

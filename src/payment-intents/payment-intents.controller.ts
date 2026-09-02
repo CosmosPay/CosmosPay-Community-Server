@@ -3,6 +3,8 @@ import {
   Controller,
   Delete,
   Get,
+  HttpCode,
+  HttpStatus,
   Param,
   Patch,
   Post,
@@ -103,6 +105,9 @@ export class PaymentIntentsController {
 
   @Post(':id/validate')
   @RequirePermissions('payments:write')
+  // Validation reconciles an existing intent against the chain — it creates no
+  // resource, so 200. Nest's POST default of 201 contradicted @ApiOkResponse.
+  @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary:
       'Validate a submitted tx against the intent (tx success + destination + amount + memo); finalizes status and fires the event',

@@ -13,7 +13,7 @@ import { CreatePayinQuoteDto } from './dto/create-payin-quote.dto';
 import { CreatePayinDto } from './dto/create-payin.dto';
 import { CreateTrustlineDto } from './dto/create-trustline.dto';
 import { PayinQuoteEntity } from './entities/payin-quote.entity';
-import { PayinEntity } from './entities/payin.entity';
+import { PayinEntity, PayinListEntity } from './entities/payin.entity';
 
 // /v1/onramp — fiat -> stablecoin.
 @ApiTags('onramp')
@@ -48,14 +48,17 @@ export class OnrampController {
   @Get('payins')
   @RequirePermissions('onramp:read')
   @ApiOperation({ summary: "List the consumer's payins" })
-  @ApiOkResponse({ type: [PayinEntity] })
+  @ApiOkResponse({ type: PayinListEntity })
   findAll(@CurrentConsumer() consumer: GatewayConsumer) {
     return this.onramp.findAll(consumer);
   }
 
   @Get('payins/:id')
   @RequirePermissions('onramp:read')
-  @ApiOperation({ summary: 'Get a payin (refreshes status from BlindPay)' })
+  @ApiOperation({
+    summary:
+      'Get a payin (serves the local mirror; refreshes from BlindPay when stale)',
+  })
   @ApiOkResponse({ type: PayinEntity })
   findOne(
     @CurrentConsumer() consumer: GatewayConsumer,

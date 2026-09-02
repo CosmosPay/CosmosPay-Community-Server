@@ -3,6 +3,12 @@ import { ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { CurrentConsumer } from '../common/decorators/current-consumer.decorator';
 import { RequirePermissions } from '../common/decorators/require-permissions.decorator';
 import { GatewayConsumer } from '../common/interfaces/gateway-consumer.interface';
+import {
+  AnalyticsBalancesEntity,
+  AnalyticsSummaryEntity,
+  ApiLogListEntity,
+  WebhookLogListEntity,
+} from './entities/analytics.entity';
 import { AnalyticsService } from './analytics.service';
 
 // Read-only dashboard aggregates. URI versioning => /v1/...
@@ -17,7 +23,7 @@ export class AnalyticsController {
     summary:
       'Overview metrics: totals, settled volume, webhook health, 30-day series',
   })
-  @ApiOkResponse({ description: 'Aggregated overview for the consumer.' })
+  @ApiOkResponse({ type: AnalyticsSummaryEntity })
   summary(@CurrentConsumer() consumer: GatewayConsumer) {
     return this.analytics.summary(consumer);
   }
@@ -25,7 +31,7 @@ export class AnalyticsController {
   @Get('balances')
   @RequirePermissions('payments:read')
   @ApiOperation({ summary: 'Settled (and pending) amount per asset' })
-  @ApiOkResponse({ description: 'Balances per asset for the consumer.' })
+  @ApiOkResponse({ type: AnalyticsBalancesEntity })
   balances(@CurrentConsumer() consumer: GatewayConsumer) {
     return this.analytics.balances(consumer);
   }
@@ -35,7 +41,7 @@ export class AnalyticsController {
   @ApiOperation({
     summary: 'Recent API requests reaching the service (with details)',
   })
-  @ApiOkResponse({ description: 'API request log for the consumer.' })
+  @ApiOkResponse({ type: ApiLogListEntity })
   apiLogs(@CurrentConsumer() consumer: GatewayConsumer) {
     return this.analytics.apiLogs(consumer);
   }
@@ -45,7 +51,7 @@ export class AnalyticsController {
   @ApiOperation({
     summary: 'Recent webhook deliveries across all endpoints (with details)',
   })
-  @ApiOkResponse({ description: 'Webhook delivery log for the consumer.' })
+  @ApiOkResponse({ type: WebhookLogListEntity })
   webhookLogs(@CurrentConsumer() consumer: GatewayConsumer) {
     return this.analytics.webhookLogs(consumer);
   }

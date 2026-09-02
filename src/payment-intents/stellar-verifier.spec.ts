@@ -79,4 +79,63 @@ describe('StellarVerifierService.verifyByHash', () => {
     expect(res.valid).toBe(false);
     expect(res.reason).toBe('Transaction failed on-chain');
   });
+
+  describe('exact amount comparison (integer stroops, not float64)', () => {
+    const withAmount = (amount: string) => ({ ...intent, amount });
+
+    it('accepts the same amount written with different trailing zeros', async () => {
+      mockHorizon({ successful: true, memo_type: 'id', memo: '123456789' }, [
+        nativeTo('GDEST', '25.5000000'),
+      ]);
+      const res = await make().verifyByHash(withAmount('25.5'), 'e'.repeat(64));
+      expect(res.valid).toBe(true);
+    });
+
+    it('rejects a one-stroop underpayment at a magnitude float64 cannot resolve', async () => {
+      // 92,233,720,368.5477580 vs ...5477581 differ by a single stroop, but
+      // both parse to the same double — the old Number() comparison called
+      // this a match and settled the intent for one stroop less.
+      const expected = '92233720368.5477581';
+      const short = '92233720368.5477580';
+      expect(Number(short)).toBe(Number(expected));
+
+      mockHorizon({ successful: true, memo_type: 'id', memo: '123456789' }, [
+        nativeTo('GDEST', short),
+      ]);
+      const res = await make().verifyByHash(
+        withAmount(expected),
+        'f'.repeat(64),
+      );
+      expect(res.valid).toBe(false);
+      expect(res.reason).toMatch(/No native payment/);
+    });
+
+    it('accepts an exact match at that same magnitude', async () => {
+      const exact = '92233720368.5477581';
+      mockHorizon({ successful: true, memo_type: 'id', memo: '123456789' }, [
+        nativeTo('GDEST', exact),
+      ]);
+      const res = await make().verifyByHash(withAmount(exact), 'a'.repeat(64));
+      expect(res.valid).toBe(true);
+    });
+
+    it('treats an unparseable amount as a non-match instead of throwing', async () => {
+      mockHorizon({ successful: true, memo_type: 'id', memo: '123456789' }, [
+        nativeTo('GDEST', 'not-a-number'),
+      ]);
+      const res = await make().verifyByHash(withAmount('25.5'), 'b'.repeat(64));
+      expect(res.valid).toBe(false);
+    });
+
+    it('skips the amount check entirely for an open (PAY) intent', async () => {
+      mockHorizon({ successful: true, memo_type: 'id', memo: '123456789' }, [
+        nativeTo('GDEST', '3.1415926'),
+      ]);
+      const res = await make().verifyByHash(
+        { ...intent, amount: null },
+        'c'.repeat(64),
+      );
+      expect(res.valid).toBe(true);
+    });
+  });
 });

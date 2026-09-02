@@ -20,11 +20,13 @@ import { GatewayConsumer } from '../common/interfaces/gateway-consumer.interface
 import { CreateWebhookEndpointDto } from './dto/create-webhook-endpoint.dto';
 import { UpdateWebhookEndpointDto } from './dto/update-webhook-endpoint.dto';
 import { QueryDeliveriesDto } from './dto/query-deliveries.dto';
+import { QueryEndpointsDto } from './dto/query-endpoints.dto';
 import {
   WebhookDeletedEntity,
   WebhookDeliveryEntity,
   WebhookDeliveryListEntity,
   WebhookEndpointEntity,
+  WebhookEndpointListEntity,
   WebhookEndpointWithSecretEntity,
   WebhookPingEntity,
 } from './entities/webhook.entity';
@@ -53,9 +55,12 @@ export class WebhooksController {
   @Get()
   @RequirePermissions('webhooks:read')
   @ApiOperation({ summary: "List the consumer's webhook endpoints" })
-  @ApiOkResponse({ type: [WebhookEndpointEntity] })
-  findAll(@CurrentConsumer() consumer: GatewayConsumer) {
-    return this.webhooks.findAll(consumer);
+  @ApiOkResponse({ type: WebhookEndpointListEntity })
+  findAll(
+    @CurrentConsumer() consumer: GatewayConsumer,
+    @Query() query: QueryEndpointsDto,
+  ) {
+    return this.webhooks.findAll(consumer, query);
   }
 
   @Get(':id')

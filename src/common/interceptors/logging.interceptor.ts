@@ -1,13 +1,14 @@
 import {
   CallHandler,
   ExecutionContext,
+  HttpException,
   Injectable,
   Logger,
   NestInterceptor,
 } from '@nestjs/common';
 import { Request, Response } from 'express';
 import { Observable } from 'rxjs';
-import { finalize } from 'rxjs/operators';
+import { finalize, tap } from 'rxjs/operators';
 import { PrismaService } from '../../prisma/prisma.service';
 
 /**
@@ -30,11 +31,23 @@ export class LoggingInterceptor implements NestInterceptor {
     const startedAt = process.hrtime.bigint();
     const consumer = request.gatewayConsumer?.username ?? null;
 
+    // On the error path finalize() runs BEFORE AllExceptionsFilter writes the
+    // response, so response.statusCode is still the untouched default (200 for
+    // GET, 201 for POST). Capture the real status off the exception instead —
+    // otherwise every failed request is logged, and persisted to RequestLog, as
+    // a success, and the dashboard's API-log view can never show an error.
+    let errorStatus: number | null = null;
+
     return next.handle().pipe(
+      tap({
+        error: (err: unknown) => {
+          errorStatus = err instanceof HttpException ? err.getStatus() : 500;
+        },
+      }),
       finalize(() => {
         const elapsedMs =
           Number(process.hrtime.bigint() - startedAt) / 1_000_000;
-        const status = response.statusCode;
+        const status = errorStatus ?? response.statusCode;
         this.logger.log(
           `${method} ${url} ${status} ${elapsedMs.toFixed(1)}ms consumer=${consumer ?? 'anonymous'}`,
         );
@@ -53,11 +66,14 @@ export class LoggingInterceptor implements NestInterceptor {
   ): void {
     const path = url.split('?')[0];
     if (path.startsWith('/v1/health') || path.startsWith('/docs')) return;
-    // Skip the dashboard's own management-console traffic — the API log should only
-    // show real API-key usage, not internal calls.
-    if (request.headers['x-cosmos-internal']) return;
+    // The dashboard's own management-console traffic is FLAGGED, not dropped.
+    // This used to `return` here, which meant anyone who could set
+    // `X-Cosmos-Internal` kept their requests out of the audit log entirely —
+    // a request header must never be able to make traffic invisible. The
+    // API-log view filters on the column instead (analytics.apiLogs).
+    const internal = request.headers['x-cosmos-internal'] !== undefined;
 
-    const ua = request.headers['user-agent'];
+    const ua = request.headers['user-agent'] as string | string[] | undefined;
     this.prisma.requestLog
       .create({
         data: {
@@ -68,6 +84,7 @@ export class LoggingInterceptor implements NestInterceptor {
           durationMs,
           ip: request.ip ?? null,
           userAgent: Array.isArray(ua) ? ua[0] : (ua ?? null),
+          internal,
         },
       })
       .catch(() => {

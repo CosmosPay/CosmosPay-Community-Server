@@ -175,6 +175,15 @@ export class LiquidityOperationEntity {
   slippageBps!: number;
 
   @ApiProperty({
+    nullable: true,
+    required: false,
+    example: 'lp-deposit-2026-08-23-001',
+    description:
+      'Client idempotency key when supplied via Idempotency-Key / body (null otherwise).',
+  })
+  idempotencyKey?: string | null;
+
+  @ApiProperty({
     example: 50,
     description:
       'Plan commission in basis points (50 = 0.5%), applied to both assets.',
@@ -198,7 +207,8 @@ export class LiquidityOperationEntity {
   @ApiProperty({
     nullable: true,
     example: 'GBFEE...WALLET',
-    description: 'Commission collector account (null when the fee is disabled).',
+    description:
+      'Commission collector account (null when the fee is disabled).',
   })
   feeWallet!: string | null;
 

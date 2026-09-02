@@ -67,20 +67,14 @@ describe('PaymentIntent state machine (spec / graph)', () => {
         valid.push({
           from,
           to,
-          evidence:
-            to === 'SUCCEEDED'
-              ? { txHash: 'a'.repeat(64) }
-              : undefined,
+          evidence: to === 'SUCCEEDED' ? { txHash: 'a'.repeat(64) } : undefined,
         });
       }
     }
 
-    it.each(valid)(
-      'allows $from → $to',
-      ({ from, to, evidence }) => {
-        expect(() => assertTransition(from, to, evidence)).not.toThrow();
-      },
-    );
+    it.each(valid)('allows $from → $to', ({ from, to, evidence }) => {
+      expect(() => assertTransition(from, to, evidence)).not.toThrow();
+    });
   });
 
   describe('assertTransition — invalid edges', () => {
@@ -123,18 +117,15 @@ describe('PaymentIntent state machine (spec / graph)', () => {
   });
 
   describe('assertTransition — terminal immutability', () => {
-    it.each(TERMINAL_STATUSES)(
-      'cannot leave terminal status %s',
-      (from) => {
-        for (const to of PAYMENT_INTENT_STATUSES) {
-          expect(() =>
-            assertTransition(from, to, {
-              txHash: 'b'.repeat(64),
-            }),
-          ).toThrow(InvalidPaymentIntentTransitionError);
-        }
-      },
-    );
+    it.each(TERMINAL_STATUSES)('cannot leave terminal status %s', (from) => {
+      for (const to of PAYMENT_INTENT_STATUSES) {
+        expect(() =>
+          assertTransition(from, to, {
+            txHash: 'b'.repeat(64),
+          }),
+        ).toThrow(InvalidPaymentIntentTransitionError);
+      }
+    });
   });
 
   describe('assertTransition — on-chain evidence for SUCCEEDED', () => {

@@ -36,6 +36,7 @@ model Consumer {
   blindpayReceivers BlindpayReceiver[]
   payins            Payin[]
   payouts           Payout[]
+  blindpayQuotes    BlindpayQuote[]
 
   @@map("consumer")
 }
@@ -76,6 +77,11 @@ model RequestLog {
   durationMs  Int
   ip          String?
   userAgent   String?
+  // True for the dashboard's own management-console traffic (X-Cosmos-Internal).
+  // The row is ALWAYS written and merely flagged: a request header must never be
+  // able to keep a request out of the audit log, or setting it is a free way to
+  // make your traffic invisible. The API-log view filters on this column instead.
+  internal    Boolean  @default(false)
 
   createdAt   DateTime @default(now())
 
@@ -84,6 +90,8 @@ model RequestLog {
   @@index([consumer, createdAt])
   // Used by the retention prune (delete where createdAt < cutoff).
   @@index([createdAt])
+  // The API-log view lists external traffic newest-first.
+  @@index([internal, createdAt])
   @@map("request_log")
 }
 
@@ -202,6 +210,8 @@ model WebhookDelivery {
   @@index([endpointId])
   @@index([status])
   @@index([eventId])
+  // Delivery-log view: filter by endpoint, order createdAt desc.
+  @@index([endpointId, createdAt])
   @@map("webhook_delivery")
 }
 
@@ -283,6 +293,10 @@ model PaymentIntent {
   @@unique([consumerId, memo]) // idempotency: one intent per (consumer, memo)
   @@index([consumerId])
   @@index([status])
+  // Listing endpoint: filter by consumer, order createdAt desc.
+  @@index([consumerId, createdAt])
+  // Observer sweep and expiry pass: pending rows oldest-first.
+  @@index([status, createdAt])
   @@map("payment_intent")
 }
 
@@ -361,6 +375,8 @@ model BlindpayReceiver {
 
   @@unique([consumerId, blindpayId])
   @@index([consumerId])
+  // Inbound BlindPay webhooks look a receiver up by provider id alone.
+  @@index([blindpayId])
   @@map("blindpay_receiver")
 }
 
@@ -467,6 +483,8 @@ model Payin {
   @@index([consumerId])
   @@index([receiverId])
   @@index([status])
+  // Inbound BlindPay webhooks look a payin up by provider id alone.
+  @@index([blindpayId])
   @@map("payin")
 }
 
@@ -499,7 +517,59 @@ model Payout {
   @@index([consumerId])
   @@index([receiverId])
   @@index([status])
+  // Inbound BlindPay webhooks look a payout up by provider id alone; without
+  // this the composite above cannot serve the query (blindpayId is its second
+  // column), so every webhook was a sequential scan.
+  @@index([blindpayId])
   @@map("payout")
+}
+
+/// Ownership record for a BlindPay quote.
+///
+/// BlindPay quote ids are opaque strings minted upstream on a platform instance
+/// shared by every tenant, so a quote id alone proves nothing about who owns it.
+/// Executing a payin/payout used to forward the caller's `quote_id` straight
+/// through, which let one tenant execute another tenant's quote and have the
+/// result mirrored into their own records. Every quote this service creates is
+/// recorded here at creation, and execution resolves it by (consumer, quote id)
+/// before the upstream call.
+model BlindpayQuote {
+  id         String            @id @default(cuid())
+  consumerId String
+  consumer   Consumer          @relation(fields: [consumerId], references: [id], onDelete: Cascade)
+
+  /// The upstream BlindPay quote id (`pq_…` for payins, `qu_…` for payouts).
+  blindpayId String
+  kind       BlindpayQuoteKind
+
+  createdAt  DateTime          @default(now())
+
+  @@unique([consumerId, blindpayId])
+  @@index([consumerId])
+  @@map("blindpay_quote")
+}
+
+enum BlindpayQuoteKind {
+  PAYIN
+  PAYOUT
+}
+
+/// Inbound BlindPay (Svix) webhook de-duplication.
+///
+/// Svix retries a delivery until it is acknowledged, re-sending the same
+/// `svix-id`. Without a claim row each retry re-applied the update and re-emitted
+/// an outbound notification, so an integrator saw "payout completed" more than
+/// once for one event. The unique index is the claim: the first delivery to
+/// insert the row wins and processes; a retry hits the constraint and is dropped.
+model BlindpayWebhookEvent {
+  id        String   @id @default(cuid())
+  /// The `svix-id` header — stable across retries of the same event.
+  svixId    String   @unique
+  eventType String
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+  @@map("blindpay_webhook_event")
 }
 
 // ---------------------------------------------------------------------------
@@ -576,6 +646,10 @@ model Swap {
 
   @@index([consumerId])
   @@index([status])
+  // Listing endpoint: filter by consumer, order createdAt desc.
+  @@index([consumerId, createdAt])
+  // Observer sweep: pending rows oldest-first.
+  @@index([status, createdAt])
   // Idempotency: one swap per (consumer, key) when a key is supplied.
   @@unique([consumerId, idempotencyKey])
   // Prevents two PENDING rows sharing the same on-chain tx (sequence collision).
@@ -623,6 +697,11 @@ model LiquidityPoolOperation {
 
   slippageBps Int
 
+  // Client-supplied idempotency key (Idempotency-Key header or DTO field).
+  // NULL when omitted — PostgreSQL treats NULLs as distinct, so multiple
+  // operations without a key remain allowed for the same consumer.
+  idempotencyKey String?
+
   // Platform (plan) commission. Charged ONLY on WITHDRAW, and only on the
   // *gain* (redeemed − proportional cost basis), never on the principal — so
   // deposits carry no commission (feeBps 0, feeWallet null). feeAmountA/B are
@@ -657,8 +736,18 @@ model LiquidityPoolOperation {
 
   @@index([consumerId])
   @@index([status])
-  @@index([txHash])
   @@index([poolId])
+  // Listing endpoint: filter by consumer, order createdAt desc.
+  @@index([consumerId, createdAt])
+  // Observer sweep: pending rows oldest-first.
+  @@index([status, createdAt])
+  // Idempotency: one operation per (consumer, key) when a key is supplied.
+  // NULLs stay distinct, so keyless operations remain unrestricted.
+  @@unique([consumerId, idempotencyKey])
+  // Prevents two rows sharing one on-chain tx (identical XDR / sequence
+  // collision), which produced duplicate LIQUIDITY_* webhooks for a single
+  // deposit. Swap has carried this since issue #17; LP never received it.
+  @@unique([network, txHash])
   @@map("liquidity_pool_operation")
 }
 

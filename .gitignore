@@ -57,3 +57,5 @@ pids
 # Prisma
 prisma/*.db
 /generated
+
+.claude/council-cache

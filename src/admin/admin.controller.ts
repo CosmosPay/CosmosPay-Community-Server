@@ -8,10 +8,12 @@ import {
   Post,
   Query,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
 import { ApiExcludeController } from '@nestjs/swagger';
 import type { AdminPrincipal } from './admin-auth';
 import { AdminAuditService } from './admin-audit.service';
+import { AdminReadAuditInterceptor } from './admin-read-audit.interceptor';
 import { AdminService } from './admin.service';
 import { CurrentAdmin } from '../common/decorators/current-admin.decorator';
 import { RequireAdminRole } from '../common/decorators/require-admin-role.decorator';
@@ -29,6 +31,7 @@ import { resolveTosCooldownMs } from '../kyc/receivers/receivers.service';
  * public API surface, so excluded from the OpenAPI spec.
  */
 @ApiExcludeController()
+@UseInterceptors(AdminReadAuditInterceptor)
 @UseGuards(AdminGuard)
 @Controller({ path: 'admin', version: '1' })
 export class AdminController {

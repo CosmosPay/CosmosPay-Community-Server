@@ -1,10 +1,4 @@
-import {
-  BadRequestException,
-  Injectable,
-  Logger,
-  NotFoundException,
-  ServiceUnavailableException,
-} from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
   Asset,
@@ -17,7 +11,11 @@ import {
 } from '@stellar/stellar-sdk';
 import QRCode from 'qrcode';
 import { AppConfig, StellarNetwork } from '../config/configuration';
+import { ApiError, ApiErrorCode } from '../common/errors/api-error';
 import { GatewayConsumer } from '../common/interfaces/gateway-consumer.interface';
+import { resolvePlanCommissionBps } from '../common/plan-commission';
+import { isUniqueViolation } from '../common/prisma-errors';
+import { resolveNetwork } from '../common/stellar-network';
 import { PrismaService } from '../prisma/prisma.service';
 import { StellarService } from '../stellar/stellar.service';
 import type {
@@ -153,7 +151,8 @@ export class LiquidityPoolsService {
       records = (await builder.call()).records;
     } catch (err) {
       this.logger.error('liquidityPools list failed', err);
-      throw new ServiceUnavailableException(
+      throw ApiError.unavailable(
+        ApiErrorCode.ProviderUnavailable,
         'Could not reach the Stellar network to list liquidity pools',
       );
     }
@@ -174,7 +173,7 @@ export class LiquidityPoolsService {
     const network = this.resolveNetwork(consumer);
     const pool = await this.fetchPool(network, poolId);
     if (!pool) {
-      throw new NotFoundException(
+      throw ApiError.notFound(
         `Liquidity pool ${poolId} not found on the ${network} network`,
       );
     }
@@ -230,15 +229,36 @@ export class LiquidityPoolsService {
    * canonically ordered (assetA < assetB), amounts follow their assets, and the
    * price bounds come from the pool's current reserves (or, for a new/empty
    * pool, from the deposit's own ratio) bracketed by the slippage tolerance.
+   *
+   * Idempotency: pass `Idempotency-Key` (header) or `idempotencyKey` (body). The
+   * same key for a consumer returns the existing operation instead of building
+   * another transaction (and never mints a second `LIQUIDITY_CREATED`). Without
+   * a key, the unique `(network, txHash)` constraint still rejects a
+   * byte-identical rebuild with 409 — a double-submitted deposit used to leave
+   * two PENDING rows sharing one on-chain transaction.
    */
   async deposit(
     consumer: GatewayConsumer,
     dto: DepositLiquidityDto,
+    headerIdempotencyKey?: string,
   ): Promise<LiquidityOperationView> {
     const network = this.resolveNetwork(consumer);
     const local = await this.resolveConsumer(consumer);
     const slippageBps = this.resolveSlippage(dto.slippageBps);
     const memo = this.resolveMemo(dto.memo);
+    const idempotencyKey = this.resolveIdempotencyKey(
+      headerIdempotencyKey,
+      dto.idempotencyKey,
+    );
+
+    // Fast path: same key → same operation (no Horizon round-trip, no rebuild).
+    if (idempotencyKey) {
+      const existing = await this.findByIdempotencyKey(
+        local.id,
+        idempotencyKey,
+      );
+      if (existing) return this.withQr(existing);
+    }
 
     // Canonical order: the protocol requires assetA < assetB. Reorder the pair
     // (and its amounts) if the caller passed them the other way around.
@@ -248,7 +268,10 @@ export class LiquidityPoolsService {
     let rawAmountB: string | undefined = dto.maxAmountB;
     const cmp = Asset.compare(a.asset, b.asset);
     if (cmp === 0) {
-      throw new BadRequestException('A pool needs two different assets');
+      throw ApiError.badRequest(
+        ApiErrorCode.ValidationFailed,
+        'A pool needs two different assets',
+      );
     }
     if (cmp > 0) {
       [a, b] = [b, a];
@@ -280,12 +303,14 @@ export class LiquidityPoolsService {
         amountB = matchDeposit(amountA, reserveA, reserveB);
       }
     } else if (rawAmountA === undefined || rawAmountB === undefined) {
-      throw new BadRequestException(
+      throw ApiError.badRequest(
+        ApiErrorCode.ValidationFailed,
         'This pool has no reserves yet — provide both amounts; the deposit sets the initial price',
       );
     }
     if (amountA <= 0n || amountB <= 0n) {
-      throw new BadRequestException(
+      throw ApiError.badRequest(
+        ApiErrorCode.InvalidAmount,
         'Deposit amounts must be greater than zero',
       );
     }
@@ -301,7 +326,10 @@ export class LiquidityPoolsService {
         ? priceBounds(reserveA, reserveB, slippageBps)
         : priceBounds(amountA, amountB, slippageBps);
     } catch (err) {
-      throw new BadRequestException((err as Error).message);
+      throw ApiError.badRequest(
+        ApiErrorCode.InvalidAmount,
+        (err as Error).message,
+      );
     }
 
     const account = await this.loadAccount(network, dto.source);
@@ -369,6 +397,7 @@ export class LiquidityPoolsService {
       minPrice: bounds.minPrice,
       maxPrice: bounds.maxPrice,
       slippageBps,
+      idempotencyKey,
       // Deposits carry no commission; the cost basis is captured at settlement.
       feeBps: 0,
       feeAmountA: '0',
@@ -390,29 +419,62 @@ export class LiquidityPoolsService {
    * Builds the unsigned withdrawal transaction: burn `shares` pool shares for
    * the proportional amounts of both reserves, with slippage-protected on-chain
    * minimums derived from the current reserves.
+   *
+   * Idempotency works as on {@link deposit}. In addition, a withdrawal is
+   * serialized per `(source, poolId, network)` — see
+   * {@link assertNoInflightWithdraw} — because the commission depends on a cost
+   * basis that only moves when an operation settles.
    */
   async withdraw(
     consumer: GatewayConsumer,
     dto: WithdrawLiquidityDto,
+    headerIdempotencyKey?: string,
   ): Promise<LiquidityOperationView> {
     const network = this.resolveNetwork(consumer);
     const local = await this.resolveConsumer(consumer);
     const slippageBps = this.resolveSlippage(dto.slippageBps);
     const memo = this.resolveMemo(dto.memo);
+    const idempotencyKey = this.resolveIdempotencyKey(
+      headerIdempotencyKey,
+      dto.idempotencyKey,
+    );
+
+    // Fast path: same key → same operation (no Horizon round-trip, no rebuild).
+    if (idempotencyKey) {
+      const existing = await this.findByIdempotencyKey(
+        local.id,
+        idempotencyKey,
+      );
+      if (existing) return this.withQr(existing);
+    }
+
+    await this.assertNoInflightWithdraw(
+      local.id,
+      dto.source,
+      dto.poolId,
+      network,
+    );
 
     const pool = await this.fetchPool(network, dto.poolId);
     if (!pool) {
-      throw new BadRequestException(
+      throw ApiError.badRequest(
+        ApiErrorCode.NotFound,
         `Liquidity pool ${dto.poolId} not found on the ${network} network`,
       );
     }
     const total = toStroops(pool.total_shares);
     const shares = toStroops(dto.shares);
     if (shares <= 0n) {
-      throw new BadRequestException('shares must be greater than zero');
+      throw ApiError.badRequest(
+        ApiErrorCode.InvalidAmount,
+        'shares must be greater than zero',
+      );
     }
     if (total <= 0n) {
-      throw new BadRequestException('This pool has no outstanding shares');
+      throw ApiError.badRequest(
+        ApiErrorCode.ValidationFailed,
+        'This pool has no outstanding shares',
+      );
     }
 
     const account = await this.loadAccount(network, dto.source);
@@ -422,12 +484,14 @@ export class LiquidityPoolsService {
         bal.liquidity_pool_id === dto.poolId,
     );
     if (!held) {
-      throw new BadRequestException(
+      throw ApiError.badRequest(
+        ApiErrorCode.InsufficientBalance,
         `Account ${dto.source} holds no shares of pool ${dto.poolId}`,
       );
     }
     if (toStroops(held.balance ?? '0') < shares) {
-      throw new BadRequestException(
+      throw ApiError.badRequest(
+        ApiErrorCode.InsufficientBalance,
         `Account ${dto.source} holds only ${held.balance} shares of this pool`,
       );
     }
@@ -445,12 +509,12 @@ export class LiquidityPoolsService {
     // Plan commission — charged ONLY on the gain (redeemed − proportional cost
     // basis), and only for shares whose cost basis we recorded from deposits
     // made through Cosmos Pay. Shares with no known basis are taxed nothing.
-    const feeBps = this.resolveSwapFeeBps(consumer);
+    const feeBps = resolvePlanCommissionBps(this.config, consumer);
     const feeWallet = this.feeWallet();
     let feeA = 0n;
     let feeB = 0n;
     if (feeBps > 0) {
-      const basis = await this.costBasis(local.id, dto.source, dto.poolId);
+      const basis = await this.costBasis(dto.source, dto.poolId, network);
       const fees = computeWithdrawCommission({
         shares,
         totalShares: total,
@@ -467,7 +531,8 @@ export class LiquidityPoolsService {
       feeB = fees.feeB;
     }
     if (feeA + feeB > 0n && !feeWallet) {
-      throw new ServiceUnavailableException(
+      throw ApiError.unavailable(
+        ApiErrorCode.Misconfigured,
         'A swap commission is configured (STELLAR_SWAP_FEE_BPS) but STELLAR_SWAP_FEE_WALLET is not set',
       );
     }
@@ -480,7 +545,7 @@ export class LiquidityPoolsService {
     const opCount = 1 + (feeA > 0n ? 1 : 0) + (feeB > 0n ? 1 : 0);
     this.assertCanAfford(
       account,
-      account.balances as BalanceEntry[],
+      account.balances,
       [],
       false,
       BigInt(stellarCfg.baseFee) * BigInt(opCount),
@@ -535,6 +600,7 @@ export class LiquidityPoolsService {
       minPrice: null,
       maxPrice: null,
       slippageBps,
+      idempotencyKey,
       feeBps,
       feeAmountA: fromStroops(feeA),
       feeAmountB: fromStroops(feeB),
@@ -608,7 +674,8 @@ export class LiquidityPoolsService {
       };
     }
     if (!['PENDING', 'SUBMITTED', 'FAILED'].includes(op.status)) {
-      throw new BadRequestException(
+      throw ApiError.badRequest(
+        ApiErrorCode.InvalidStateTransition,
         `Cannot submit a ${op.status} liquidity pool operation`,
       );
     }
@@ -620,12 +687,14 @@ export class LiquidityPoolsService {
         this.stellar.passphrase(op.network as StellarNetwork),
       );
     } catch {
-      throw new BadRequestException(
+      throw ApiError.badRequest(
+        ApiErrorCode.ValidationFailed,
         'signedXdr is not a valid transaction envelope',
       );
     }
     if (tx.hash().toString('hex') !== op.txHash) {
-      throw new BadRequestException(
+      throw ApiError.badRequest(
+        ApiErrorCode.ValidationFailed,
         'The signed transaction does not match this operation',
       );
     }
@@ -641,7 +710,8 @@ export class LiquidityPoolsService {
       };
     }
     if (submitted.operation.status !== 'SUBMITTED') {
-      throw new BadRequestException(
+      throw ApiError.badRequest(
+        ApiErrorCode.InvalidStateTransition,
         `Cannot submit a ${submitted.operation.status} liquidity pool operation`,
       );
     }
@@ -700,13 +770,24 @@ export class LiquidityPoolsService {
         };
       }
       this.logger.error(`LP operation ${op.id} submission error`, err);
-      throw new ServiceUnavailableException(
+      throw ApiError.unavailable(
+        ApiErrorCode.ProviderUnavailable,
         'Could not submit the transaction to the Stellar network',
       );
     }
   }
 
   // ── Persistence ─────────────────────────────────────────────────────────────
+  /**
+   * Persists a new operation and emits `LIQUIDITY_CREATED`.
+   *
+   * Both unique indexes on the table can fire here. With an idempotency key the
+   * caller always recovers the existing row rather than seeing a 409: a same-key
+   * race rebuilds the same XDR, so it can trip `(network, txHash)` instead of
+   * the key index — Postgres reports only one of the two violations, and which
+   * one is arbitrary. Recovery returns the winner's row and, because the insert
+   * never happened, emits no second `LIQUIDITY_CREATED`.
+   */
   private async persist(
     consumer: GatewayConsumer,
     input: {
@@ -725,6 +806,7 @@ export class LiquidityPoolsService {
       minPrice: string | null;
       maxPrice: string | null;
       slippageBps: number;
+      idempotencyKey: string | null;
       feeBps: number;
       feeAmountA: string;
       feeAmountB: string;
@@ -735,19 +817,120 @@ export class LiquidityPoolsService {
   ): Promise<LiquidityOperationView> {
     const { tx, timeoutSeconds, ...data } = input;
     const xdr = tx.toXDR();
-    const op = await this.prisma.liquidityPoolOperation.create({
-      data: {
-        ...data,
-        status: 'PENDING',
-        xdr,
-        uri: `web+stellar:tx?${new URLSearchParams({ xdr }).toString()}`,
-        txHash: tx.hash().toString('hex'),
-        // The tx is only valid for its timeout window; after that it can't settle.
-        expiresAt: new Date(Date.now() + timeoutSeconds * 1000),
-      },
-    });
+    let op: LiquidityPoolOperation;
+    try {
+      op = await this.prisma.liquidityPoolOperation.create({
+        data: {
+          ...data,
+          status: 'PENDING',
+          xdr,
+          uri: `web+stellar:tx?${new URLSearchParams({ xdr }).toString()}`,
+          txHash: tx.hash().toString('hex'),
+          // The tx is only valid for its timeout window; after that it can't settle.
+          expiresAt: new Date(Date.now() + timeoutSeconds * 1000),
+        },
+      });
+    } catch (err) {
+      if (!isUniqueViolation(err)) throw err;
+      const raced = data.idempotencyKey
+        ? await this.findByIdempotencyKey(data.consumerId, data.idempotencyKey)
+        : null;
+      if (raced) return this.withQr(raced);
+      throw ApiError.conflict(
+        ApiErrorCode.IdempotencyConflict,
+        'A liquidity pool operation with this transaction hash already exists ' +
+          'for this network. Two creates rebuilt the same Stellar sequence/XDR ' +
+          '— use an Idempotency-Key on retries, or wait for the prior operation ' +
+          'to settle/expire.',
+      );
+    }
     await this.emit(consumer.username, 'LIQUIDITY_CREATED', op);
     return this.withQr(op);
+  }
+
+  /** Header wins over body; blank strings are treated as absent. */
+  private resolveIdempotencyKey(header?: string, body?: string): string | null {
+    const raw = (header ?? body)?.trim();
+    return raw ? raw : null;
+  }
+
+  private async findByIdempotencyKey(
+    consumerId: string,
+    idempotencyKey: string,
+  ): Promise<LiquidityPoolOperation | null> {
+    return this.prisma.liquidityPoolOperation.findUnique({
+      where: { consumerId_idempotencyKey: { consumerId, idempotencyKey } },
+    });
+  }
+
+  /**
+   * At most one non-expired in-flight WITHDRAW per `(source, poolId, network)`.
+   *
+   * Two concurrent withdrawals both read the cost basis before either settles,
+   * so each one sees the full unrealized gain and each one charges commission on
+   * it — the customer is taxed twice for a single gain (or, symmetrically,
+   * under-taxed once the basis is later consumed). Serializing the *creation* of
+   * withdrawals for a position is the smallest fix: the basis can then only be
+   * read while nothing else is racing to consume it.
+   *
+   * Scoped to `(consumerId, source, poolId, network)`.
+   *
+   * It used to be account-wide, reasoning that "the position belongs to the
+   * Stellar account, so a second API key must not be a way around the guard".
+   * The anti-circumvention half of that is already satisfied by `consumerId`: a
+   * `Consumer` row is keyed on the APISIX *username* (`cosmos_<userId>`), not on
+   * the credential, so every API key the same user holds resolves to one
+   * consumer and cannot dodge the guard.
+   *
+   * What account-wide scoping additionally did was let any caller block anyone
+   * else. `source` is a public Stellar address and nothing requires the caller
+   * to control it, so a key with `liquidity:write` could post a 0.0000001-share
+   * withdrawal naming a stranger's account and take the guard for a full
+   * transaction-timeout window — repeatable indefinitely, a denial of service on
+   * someone else's withdrawals. The swaps twin, `assertNoInflightSwap`, was
+   * consumer-scoped all along; this was the outlier.
+   *
+   * Note this scopes differently from {@link costBasis}, deliberately. The basis
+   * must stay account-wide or a second organization becomes a way to avoid the
+   * commission. This guard must be consumer-scoped or a second organization
+   * becomes a way to block withdrawals. The residual — two organizations
+   * withdrawing from one account concurrently both read the pre-withdrawal
+   * basis and each under-tax — is the same read-then-write race that already
+   * exists within a single consumer, and availability of a withdrawal path is
+   * worth more than closing it here.
+   *
+   * Deposits are exempt: they compute no commission and read no basis, and
+   * repeated deposits into one pool are a normal thing to do. A double-submitted
+   * *identical* deposit is caught by the unique `(network, txHash)` index
+   * instead.
+   */
+  private async assertNoInflightWithdraw(
+    consumerId: string,
+    source: string,
+    poolId: string,
+    network: string,
+  ): Promise<void> {
+    const existing = await this.prisma.liquidityPoolOperation.findFirst({
+      where: {
+        consumerId,
+        kind: 'WITHDRAW',
+        source,
+        poolId,
+        network,
+        status: { in: [...LP_IN_FLIGHT_STATUSES] },
+        OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
+      },
+      // Existence is all we need — the response deliberately names no row.
+      select: { id: true },
+    });
+    if (existing) {
+      throw ApiError.conflict(
+        ApiErrorCode.OperationInFlight,
+        'A withdrawal from this pool is already in flight for this account. ' +
+          'Wait for it to settle or expire before starting another — the ' +
+          'commission on a withdrawal depends on the position it leaves behind.',
+      );
+    }
   }
 
   // ── Status transitions ──────────────────────────────────────────────────────
@@ -820,6 +1003,30 @@ export class LiquidityPoolsService {
   }
 
   /**
+   * Same status transition as {@link finalizeSucceeded} but emits no webhook
+   * **and captures no cost basis**. Used by the observer for historical
+   * duplicate-hash rows (pre-`@@unique([network, txHash])`) so one on-chain
+   * transaction yields a single `LIQUIDITY_SUCCEEDED`.
+   *
+   * Skipping the basis capture is the point, not an omission: the duplicates
+   * describe *one* deposit, and its `liquidity_pool_deposited` effect reports
+   * `shares_received` once. Capturing it on every row would count the same
+   * shares two or more times in {@link costBasis}, inflating `remainingShares`
+   * so that shares acquired outside Cosmos Pay start being taxed. The row the
+   * observer settles first keeps the basis; the phantoms stay basis-less and are
+   * skipped by `aggregateCostBasis`.
+   */
+  async finalizeSucceededQuiet(
+    id: string,
+    txHash?: string,
+  ): Promise<{ applied: boolean; operation: LiquidityPoolOperation }> {
+    return this.guardedUpdate(id, LP_CAN_SUCCEED_STATUSES, {
+      status: 'SUCCEEDED',
+      ...(txHash ? { txHash } : {}),
+    });
+  }
+
+  /**
    * Marks FAILED only while the row is still in-flight. A liquidated
    * (`SUCCEEDED`) operation is left untouched — including its cost basis.
    */
@@ -837,6 +1044,16 @@ export class LiquidityPoolsService {
   }
 
   /**
+   * Same status transition as {@link finalizeFailed} without a webhook — for
+   * duplicate-hash phantom rows in the observer.
+   */
+  async finalizeFailedQuiet(
+    id: string,
+  ): Promise<{ applied: boolean; operation: LiquidityPoolOperation }> {
+    return this.guardedUpdate(id, LP_IN_FLIGHT_STATUSES, { status: 'FAILED' });
+  }
+
+  /**
    * Marks EXPIRED only while the row is still in-flight. Never degrades a
    * liquidated operation.
    */
@@ -849,9 +1066,7 @@ export class LiquidityPoolsService {
   // ── Helpers ─────────────────────────────────────────────────────────────────
   /** Network follows the API key type (prod → public, dev → testnet). */
   private resolveNetwork(consumer: GatewayConsumer): StellarNetwork {
-    if (consumer.environment === 'prod') return 'public';
-    if (consumer.environment === 'dev') return 'testnet';
-    return this.config.get('stellar', { infer: true }).network;
+    return resolveNetwork(this.config, consumer);
   }
 
   /** Mirror the APISIX consumer locally so operations can be scoped to it. */
@@ -868,21 +1083,6 @@ export class LiquidityPoolsService {
 
   private feeWallet(): string {
     return this.config.get('stellar', { infer: true }).swap.feeWallet;
-  }
-
-  /**
-   * The plan commission (bps) for this request — the same rate that governs
-   * swaps. The gateway injects the organization's plan rate (`planSwapFeeBps`)
-   * per consumer; it is NEVER a request parameter, so the caller cannot bypass
-   * or undercut it. Only when the gateway didn't forward it (local dev without
-   * APISIX) do we fall back to the configured default, gated on a fee wallet.
-   */
-  private resolveSwapFeeBps(consumer: GatewayConsumer): number {
-    if (consumer.planSwapFeeBps !== null) {
-      return consumer.planSwapFeeBps;
-    }
-    const swap = this.config.get('stellar', { infer: true }).swap;
-    return swap.feeWallet ? swap.feeBps : 0;
   }
 
   /** The SDK Asset for a parsed reserve (native or issued). */
@@ -912,7 +1112,8 @@ export class LiquidityPoolsService {
     const swap = this.config.get('stellar', { infer: true }).swap;
     const bps = requested ?? swap.slippageBps;
     if (bps > swap.maxSlippageBps) {
-      throw new BadRequestException(
+      throw ApiError.badRequest(
+        ApiErrorCode.SlippageExceeded,
         `slippageBps ${bps} exceeds the maximum allowed (${swap.maxSlippageBps})`,
       );
     }
@@ -922,7 +1123,10 @@ export class LiquidityPoolsService {
   private resolveMemo(provided?: string): string | null {
     if (provided === undefined) return null;
     if (!/^\d+$/.test(provided) || BigInt(provided) > MAX_UINT64) {
-      throw new BadRequestException('memo must be a MEMO_ID: a numeric uint64');
+      throw ApiError.badRequest(
+        ApiErrorCode.InvalidMemo,
+        'memo must be a MEMO_ID: a numeric uint64',
+      );
     }
     return provided;
   }
@@ -934,7 +1138,8 @@ export class LiquidityPoolsService {
       return { code: 'native', issuer: null, asset: Asset.native() };
     }
     if (!issuer) {
-      throw new BadRequestException(
+      throw ApiError.badRequest(
+        ApiErrorCode.ValidationFailed,
         `An issuer is required for non-native asset "${c}"`,
       );
     }
@@ -943,7 +1148,8 @@ export class LiquidityPoolsService {
 
   private assertPoolId(poolId: string): void {
     if (!/^[0-9a-f]{64}$/.test(poolId)) {
-      throw new BadRequestException(
+      throw ApiError.badRequest(
+        ApiErrorCode.ValidationFailed,
         'poolId must be a 64-character lowercase hex liquidity pool id',
       );
     }
@@ -960,7 +1166,8 @@ export class LiquidityPoolsService {
       (b) => b.asset_code === asset.code && b.asset_issuer === asset.issuer,
     );
     if (!trusts) {
-      throw new BadRequestException(
+      throw ApiError.badRequest(
+        ApiErrorCode.TrustlineMissing,
         `Account ${address} has no trustline for ${asset.code}:${asset.issuer} — ` +
           'it must trust the asset before depositing it into a pool',
       );
@@ -993,7 +1200,8 @@ export class LiquidityPoolsService {
       BigInt(account.subentry_count ?? 0) + (addingTrustline ? 1n : 0n);
     const reserve = (2n + subentries) * 5_000_000n; // 0.5 XLM base reserve/entry
     if (nativeBal - reserve - txFeeStroops < nativeReq) {
-      throw new BadRequestException(
+      throw ApiError.badRequest(
+        ApiErrorCode.InsufficientBalance,
         `Insufficient XLM balance: need ${fromStroops(nativeReq)} plus ` +
           `~${fromStroops(reserve + txFeeStroops)} XLM reserve + network fee, ` +
           `but the account holds ${fromStroops(nativeBal)} XLM`,
@@ -1009,7 +1217,8 @@ export class LiquidityPoolsService {
         )?.balance ?? '0',
       );
       if (bal < s.required) {
-        throw new BadRequestException(
+        throw ApiError.badRequest(
+          ApiErrorCode.InsufficientBalance,
           `Insufficient ${s.asset.code} balance: need ${fromStroops(s.required)}, ` +
             `but the account holds ${fromStroops(bal)}`,
         );
@@ -1018,16 +1227,48 @@ export class LiquidityPoolsService {
   }
 
   /**
-   * Average-cost basis of the shares `source` still holds in `poolId`, derived
-   * from our own SUCCEEDED deposits (which recorded the shares + amounts at
-   * settlement) and withdrawals. Only deposits with a captured `sharesReceived`
-   * count — positions opened outside Cosmos Pay have no basis and are taxed
-   * nothing. All values are stroop bigints.
+   * Average-cost basis of the shares `source` still holds in `poolId` on
+   * `network`, derived from our own SUCCEEDED deposits (which recorded the
+   * shares + amounts at settlement) and withdrawals. Only deposits with a
+   * captured `sharesReceived` count — positions opened outside Cosmos Pay have
+   * no basis and are taxed nothing. All values are stroop bigints.
+   *
+   * Keyed on `(source, poolId, network)` **platform-wide**, deliberately not on
+   * the consumer. Nothing binds a Stellar account to an API key, so scoping the
+   * basis by consumer made the commission opt-out: deposit under organization A,
+   * register a second (free) organization, withdraw the same account's shares
+   * under organization B — the lookup found no deposits, `depositedShares` was
+   * 0, and `computeWithdrawCommission` charged nothing on the entire gain. Cost
+   * basis is a property of the Stellar account, because the on-chain position
+   * is the account's, not the API key's.
+   *
+   * `network` is part of the key for the same reason: testnet is free, so
+   * without it a testnet deposit would mint cost basis for a public-network
+   * withdrawal.
+   *
+   * This is fee arithmetic only. The rows are read for their share/amount
+   * columns and never surface in a response — listing and lookup stay scoped to
+   * the calling consumer (see {@link findAllOperations} and {@link findOwned}),
+   * so one tenant's operations are still invisible to another.
+   *
+   * Deliberately NOT scoped to the consumer, and it must stay that way: scoping
+   * it is a fee-evasion hole. Deposit under org A, register a second free org,
+   * withdraw the same account's shares under org B — the basis lookup finds
+   * nothing and the whole gain is taxed at zero. That evasion is pinned by
+   * "charges commission on a withdraw made under a different organization".
+   *
+   * The residual, accepted: because `feeAmountA`/`feeAmountB` are returned and
+   * every other term is public, a caller who names a stranger's `source` can
+   * solve for that account's per-share basis — i.e. learn which of its deposits
+   * went through this platform. The underlying deposits are on-chain and
+   * independently derivable, so the marginal disclosure is small, and closing it
+   * by scoping would cost the fee rule above. Revisit only together with the
+   * fee policy.
    */
   private async costBasis(
-    consumerId: string,
     source: string,
     poolId: string,
+    network: string,
   ): Promise<{
     depositedShares: bigint;
     remainingShares: bigint;
@@ -1035,7 +1276,7 @@ export class LiquidityPoolsService {
     costB: bigint;
   }> {
     const ops = await this.prisma.liquidityPoolOperation.findMany({
-      where: { consumerId, source, poolId, status: 'SUCCEEDED' },
+      where: { source, poolId, network, status: 'SUCCEEDED' },
       select: {
         kind: true,
         shares: true,
@@ -1156,7 +1397,8 @@ export class LiquidityPoolsService {
         ?.status;
       if (status === 404) return null;
       this.logger.error('Failed to load liquidity pool from Horizon', error);
-      throw new ServiceUnavailableException(
+      throw ApiError.unavailable(
+        ApiErrorCode.ProviderUnavailable,
         'Could not reach the Stellar network',
       );
     }
@@ -1169,12 +1411,14 @@ export class LiquidityPoolsService {
       const status = (error as { response?: { status?: number } })?.response
         ?.status;
       if (status === 404) {
-        throw new BadRequestException(
+        throw ApiError.badRequest(
+          ApiErrorCode.ValidationFailed,
           `Account ${address} not found or not funded on the ${network} network`,
         );
       }
       this.logger.error('Failed to load account from Horizon', error);
-      throw new ServiceUnavailableException(
+      throw ApiError.unavailable(
+        ApiErrorCode.ProviderUnavailable,
         'Could not reach the Stellar network',
       );
     }
@@ -1192,7 +1436,7 @@ export class LiquidityPoolsService {
       where: { id, consumer: { apisixUsername: consumer.username } },
     });
     if (!op) {
-      throw new NotFoundException(`Liquidity pool operation ${id} not found`);
+      throw ApiError.notFound(`Liquidity pool operation ${id} not found`);
     }
     return op;
   }

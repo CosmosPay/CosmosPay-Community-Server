@@ -1,13 +1,13 @@
 import {
-  BadGatewayException,
-  GatewayTimeoutException,
   HttpException,
+  HttpStatus,
   Injectable,
   Logger,
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { AppConfig } from '../config/configuration';
+import { ApiError, ApiErrorCode } from '../common/errors/api-error';
 
 type QueryValue = string | number | boolean | undefined | null;
 
@@ -166,34 +166,44 @@ export class BlindpayClient {
     const payload: unknown = text ? safeJsonParse(text) : null;
 
     if (!res.ok) {
+      // Prefer the upstream's own message; fall back to a masked slice of the
+      // body so a gateway/HTML error page is still debuggable. Neither form
+      // reaches the caller — see {@link upstreamError}.
       this.logger.warn(
-        `BlindPay ${method} ${path} -> ${res.status}: ${truncate(text)}`,
+        `BlindPay ${method} ${path} -> ${res.status}: ${
+          redactProviderDetail(payload) ?? truncate(maskDigits(text), 200)
+        }`,
       );
-      throw this.upstreamError(res.status, payload, text);
+      throw this.upstreamError(res.status, payload);
     }
 
     return payload as T;
   }
 
-  /** Maps a non-2xx BlindPay response to an HttpException. */
-  private upstreamError(
-    status: number,
-    payload: unknown,
-    rawText: string,
-  ): HttpException {
-    const message =
-      extractMessage(payload) ?? rawText ?? 'BlindPay request failed';
-
-    // Pass client errors through with their original status so the caller learns
-    // the real reason (validation, not-found, conflict, auth). Collapse upstream
-    // server errors into a 502 — they are not the caller's fault.
+  /**
+   * Maps a non-2xx BlindPay response to an {@link ApiError}.
+   *
+   * A provider error body echoes back what we sent it — a rejected `tax_id`, a
+   * bank account number — so it is never relayed (or logged) verbatim: the
+   * caller gets the upstream's own short reason with long digit runs masked, and
+   * nothing else. Client errors keep the upstream status, so the caller still
+   * learns the class of failure (validation, not-found, conflict, auth), while
+   * upstream server errors collapse into a 502 and say nothing further — they
+   * are not the caller's fault and the body holds nothing actionable.
+   */
+  private upstreamError(status: number, payload: unknown): ApiError {
     if (status >= 400 && status < 500) {
-      return new HttpException(
-        { statusCode: status, message, provider: 'blindpay' },
+      return new ApiError(
         status,
+        ApiErrorCode.ProviderError,
+        redactProviderDetail(payload) ??
+          'The payment provider rejected the request.',
       );
     }
-    return new BadGatewayException(`BlindPay upstream error: ${message}`);
+    return ApiError.badGateway(
+      ApiErrorCode.ProviderError,
+      'The payment provider returned an error. Retry shortly.',
+    );
   }
 
   private toException(
@@ -206,11 +216,23 @@ export class BlindpayClient {
     }
     if (err instanceof Error && err.name === 'AbortError') {
       this.logger.error(`BlindPay ${method} ${path} timed out`);
-      return new GatewayTimeoutException('BlindPay request timed out');
+      // 504 is the honest status for an upstream timeout and stays. What it
+      // lacked was a code: 504 had no CODE_BY_STATUS entry, so it fell through
+      // to `internal_error` and read as a bug in this service.
+      return new ApiError(
+        HttpStatus.GATEWAY_TIMEOUT,
+        ApiErrorCode.ProviderUnavailable,
+        'BlindPay request timed out',
+      );
     }
     const detail = err instanceof Error ? err.message : 'unknown error';
+    // The transport failure (DNS, TLS, refused socket) is ours to debug, not the
+    // caller's to read — it names internal hosts and nothing they can act on.
     this.logger.error(`BlindPay ${method} ${path} failed: ${detail}`);
-    return new BadGatewayException(`Could not reach BlindPay: ${detail}`);
+    return ApiError.badGateway(
+      ApiErrorCode.ProviderUnavailable,
+      'Could not reach the payment provider.',
+    );
   }
 
   private buildUrl(path: string, query?: Record<string, QueryValue>): string {
@@ -258,4 +280,25 @@ function extractMessage(payload: unknown): string | null {
 
 function truncate(text: string, max = 500): string {
   return text.length > max ? `${text.slice(0, max)}…` : text;
+}
+
+/**
+ * Masks runs of digits: tax ids, account and routing numbers, amounts. Short
+ * runs are left alone so an error code or a country dial-in stays readable.
+ */
+function maskDigits(text: string): string {
+  return text.replace(/\d{4,}/g, '[redacted]');
+}
+
+/**
+ * The only form of a provider error body we are willing to keep: the upstream's
+ * own `message`, masked. The rest of the payload repeats the values we sent —
+ * tax ids, account and routing numbers — and used to reach both stdout (500
+ * chars of it) and the caller's response verbatim. Masking keeps prose like
+ * "invalid tax_id" actionable while dropping the value itself.
+ */
+function redactProviderDetail(payload: unknown, max = 200): string | null {
+  const message = extractMessage(payload);
+  if (!message) return null;
+  return truncate(maskDigits(message), max);
 }

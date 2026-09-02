@@ -11,7 +11,7 @@ function validEnv(
   return {
     DATABASE_URL:
       'postgresql://postgres:postgres@localhost:5432/cosmos_payments',
-    APISIX_GATEWAY_SECRET: 'test-gateway-secret',
+    APISIX_GATEWAY_SECRET: 'test-gateway-secret-at-least-32-chars-long',
     NODE_ENV: 'test',
     STELLAR_SWAP_FEE_WALLET: VALID_FEE_WALLET,
     ...overrides,
@@ -26,7 +26,19 @@ describe('validateEnv', () => {
   it('accepts a minimal valid environment', () => {
     const result = validateEnv(validEnv());
     expect(typeof result.DATABASE_URL).toBe('string');
-    expect(result.APISIX_GATEWAY_SECRET).toBe('test-gateway-secret');
+    expect(result.APISIX_GATEWAY_SECRET).toBe(
+      'test-gateway-secret-at-least-32-chars-long',
+    );
+  });
+
+  it('rejects a gateway secret short enough to guess', () => {
+    // This value is the whole boundary between "arrived through APISIX" and
+    // "anyone who can reach the pod", and it used to boot at one character
+    // while admin credentials already demanded 16.
+    expectEnvError(
+      validEnv({ APISIX_GATEWAY_SECRET: 'short' }),
+      'APISIX_GATEWAY_SECRET',
+    );
   });
 
   it('requires APISIX_GATEWAY_SECRET', () => {

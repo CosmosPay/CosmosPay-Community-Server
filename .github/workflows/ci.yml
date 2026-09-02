@@ -38,6 +38,12 @@ jobs:
       - name: Build
         run: npm run build
 
+      # Runs after Build because the type-aware rules need generated/prisma.
+      # `lint` is non-mutating (use `lint:fix` locally); this is the gate that
+      # was missing when two syntax errors reached the default branch.
+      - name: Lint
+        run: npm run lint
+
       # Regenerate the committed contract and fail if controllers/DTOs drifted.
       - name: Verify OpenAPI is up to date
         run: npm run openapi:check
@@ -45,3 +51,77 @@ jobs:
       # Jest unit/integration suite (no DB required — external services are mocked).
       - name: Test
         run: npm test
+
+      # The e2e suites live outside jest's `rootDir: src`, so `npm test` never
+      # sees them. Without this step all 5 suites (52 tests) were dead code.
+      - name: E2E test
+        run: npm run test:e2e
+
+      # Was release-only, which meant a vulnerable runtime dependency passed CI,
+      # merged to the default branch, and only failed afterwards — past the point
+      # where rejecting it was cheap.
+      - name: Audit runtime dependencies
+        run: npm audit --omit=dev --audit-level=low
+
+  # Nothing else in CI touches a database, so the .sql files are in no program
+  # that is compiled or executed: a migration that fails to apply, or that has
+  # drifted from schema.prisma, ships green through build + lint + 527 unit
+  # tests + 52 e2e tests and throws P2022 on the first production query. This is
+  # the same class of failure as the broken file that once reached main, one
+  # layer down.
+  migrations:
+    name: Migrations apply & match the schema
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: cosmos_ci
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/cosmos_ci?schema=public
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # Applies every migration in order against a real Postgres. This is also
+      # what rehearses the audit_hardening migration's CREATE INDEX CONCURRENTLY
+      # statements, which no other migration in this repo uses.
+      - name: Apply migrations
+        run: npx prisma migrate deploy
+
+      # A CONCURRENTLY build that fails leaves an INVALID index behind rather
+      # than failing loudly, so assert there are none.
+      - name: Assert no invalid indexes
+        run: |
+          npx prisma db execute --stdin <<'SQL'
+          DO $
+          DECLARE bad text;
+          BEGIN
+            SELECT string_agg(c.relname, ', ') INTO bad
+            FROM pg_class c JOIN pg_index i ON i.indexrelid = c.oid
+            WHERE NOT i.indisvalid;
+            IF bad IS NOT NULL THEN
+              RAISE EXCEPTION 'Invalid indexes after migrate deploy: %', bad;
+            END IF;
+          END $;
+          SQL
+
+      # Catches migration/schema drift: prisma generate reads schema.prisma
+      # only, so a column in the schema but missing from the migrations passes
+      # every other check in this workflow.
+      - name: Assert migrations match schema.prisma
+        run: npx prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --exit-code

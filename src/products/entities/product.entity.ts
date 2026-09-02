@@ -35,6 +35,23 @@ export class ProductEntity {
   updatedAt!: Date;
 }
 
+export class ProductListEntity {
+  @ApiProperty({ type: [ProductEntity] })
+  data!: ProductEntity[];
+
+  @ApiProperty({
+    example: 137,
+    description: 'Total products matching the query, not the page size.',
+  })
+  total!: number;
+
+  @ApiProperty({ example: 100 })
+  take!: number;
+
+  @ApiProperty({ example: 0 })
+  skip!: number;
+}
+
 export class ProductDeletedEntity {
   @ApiProperty({ example: 'clx9z8a1b0000abcd1234efgh' })
   id!: string;

@@ -294,6 +294,10 @@ export class AdminService {
         skip: skip(opts.skip),
         orderBy: { createdAt: 'desc' },
         include: consumerSelect,
+        // The provider blob holds the full KYC dossier / bank credentials. Admin
+        // operators need to see that a record EXISTS and its state, not to have
+        // every tax id and IBAN on the platform streamed into a list response.
+        omit: { raw: true },
       }),
       this.prisma.blindpayReceiver.count({ where }),
     ]);
@@ -309,6 +313,18 @@ export class AdminService {
         skip: skip(opts.skip),
         orderBy: { createdAt: 'desc' },
         include: consumerSelect,
+        // The provider blob holds the full KYC dossier / bank credentials. Admin
+        // operators need to see that a record EXISTS and its state, not to have
+        // every tax id and IBAN on the platform streamed into a list response.
+        //
+        // `instructions` is omitted for exactly the same reason and was missed:
+        // `pickInstructions` deliberately keeps `pse_tax_id`, `pse_full_name`,
+        // `pse_document_type`, `clabe`, `cbu` and `blindpay_bank_details`, so
+        // omitting only `raw` left the tax ids and IBANs one column over. The
+        // owning tenant still gets them from GET /v1/onramp/payins/:id — they
+        // are that payer's funding instructions — but a platform-wide admin list
+        // has no need of them.
+        omit: { raw: true, instructions: true },
       }),
       this.prisma.payin.count({ where }),
     ]);
@@ -326,12 +342,22 @@ export class AdminService {
     actor: AdminPrincipal,
   ) {
     return this.prisma.$transaction(async (tx) => {
-      const row = await tx.blindpayReceiver.findUnique({ where: { id } });
+      const row = await tx.blindpayReceiver.findUnique({
+        where: { id },
+        select: { id: true },
+      });
       if (!row) throw new NotFoundException('Receiver not found');
       const result = await tx.blindpayReceiver.update({
         where: { id },
         data: { disabled },
         include: consumerSelect,
+        // Same reason the list queries omit it: `raw` is the provider's full
+        // KYC dossier — tax id, address, bank credentials. Toggling a
+        // receiver's access is an authorization change and has no business
+        // returning the dossier as its 200 body, where it lands in the
+        // operator's browser, any proxy log, and the admin audit trail's
+        // response capture.
+        omit: { raw: true },
       });
       await recordAuditInTransaction(
         tx,
@@ -352,6 +378,10 @@ export class AdminService {
         skip: skip(opts.skip),
         orderBy: { createdAt: 'desc' },
         include: consumerSelect,
+        // The provider blob holds the full KYC dossier / bank credentials. Admin
+        // operators need to see that a record EXISTS and its state, not to have
+        // every tax id and IBAN on the platform streamed into a list response.
+        omit: { raw: true },
       }),
       this.prisma.payout.count({ where }),
     ]);

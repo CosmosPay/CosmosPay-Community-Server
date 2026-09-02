@@ -14,7 +14,7 @@ import { AuthorizePayoutDto } from './dto/authorize-payout.dto';
 import { CreatePayoutDto } from './dto/create-payout.dto';
 import { PayoutDocumentDto } from './dto/payout-document.dto';
 import { PayoutQuoteEntity } from './entities/payout-quote.entity';
-import { PayoutEntity } from './entities/payout.entity';
+import { PayoutEntity, PayoutListEntity } from './entities/payout.entity';
 
 // /v1/offramp — stablecoin -> fiat.
 @ApiTags('offramp')
@@ -61,14 +61,17 @@ export class OfframpController {
   @Get('payouts')
   @RequirePermissions('offramp:read')
   @ApiOperation({ summary: "List the consumer's payouts" })
-  @ApiOkResponse({ type: [PayoutEntity] })
+  @ApiOkResponse({ type: PayoutListEntity })
   findAll(@CurrentConsumer() consumer: GatewayConsumer) {
     return this.offramp.findAll(consumer);
   }
 
   @Get('payouts/:id')
   @RequirePermissions('offramp:read')
-  @ApiOperation({ summary: 'Get a payout (refreshes status from BlindPay)' })
+  @ApiOperation({
+    summary:
+      'Get a payout (serves the local mirror; refreshes from BlindPay when stale)',
+  })
   @ApiOkResponse({ type: PayoutEntity })
   findOne(
     @CurrentConsumer() consumer: GatewayConsumer,

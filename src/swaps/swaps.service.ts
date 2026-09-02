@@ -1,11 +1,4 @@
-import {
-  BadRequestException,
-  ConflictException,
-  Injectable,
-  Logger,
-  NotFoundException,
-  ServiceUnavailableException,
-} from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
   Asset,
@@ -15,10 +8,11 @@ import {
 } from '@stellar/stellar-sdk';
 import QRCode from 'qrcode';
 import { AppConfig, StellarNetwork } from '../config/configuration';
+import { ApiError, ApiErrorCode } from '../common/errors/api-error';
 import { GatewayConsumer } from '../common/interfaces/gateway-consumer.interface';
-import {
-  isUniqueViolation,
-} from '../common/prisma-errors';
+import { resolvePlanCommissionBps } from '../common/plan-commission';
+import { isUniqueViolation } from '../common/prisma-errors';
+import { resolveNetwork } from '../common/stellar-network';
 import { PrismaService } from '../prisma/prisma.service';
 import { StellarService } from '../stellar/stellar.service';
 import type {
@@ -127,7 +121,7 @@ export class SwapsService {
     const priced = await this.priceSwap(
       network,
       dto,
-      this.resolveSwapFeeBps(consumer),
+      resolvePlanCommissionBps(this.config, consumer),
     );
     return this.toQuoteEntity(network, priced);
   }
@@ -171,7 +165,7 @@ export class SwapsService {
     const priced = await this.priceSwap(
       network,
       dto,
-      this.resolveSwapFeeBps(consumer),
+      resolvePlanCommissionBps(this.config, consumer),
     );
 
     const destination = dto.destination ?? dto.source;
@@ -182,7 +176,8 @@ export class SwapsService {
     // A configured fee with nowhere to send it is a misconfiguration, not a
     // silent no-op — fail loudly so the operator notices.
     if (feeStroops > 0n && !feeWallet) {
-      throw new ServiceUnavailableException(
+      throw ApiError.unavailable(
+        ApiErrorCode.Misconfigured,
         'A swap fee is configured (STELLAR_SWAP_FEE_BPS) but STELLAR_SWAP_FEE_WALLET is not set',
       );
     }
@@ -266,7 +261,8 @@ export class SwapsService {
     if (!swap) {
       const raced = await this.findByIdempotencyKey(local.id, idempotencyKey!);
       if (raced) return this.withQr(raced);
-      throw new ConflictException(
+      throw ApiError.conflict(
+        ApiErrorCode.IdempotencyConflict,
         'A swap with this transaction hash already exists for this network. ' +
           'Retry with an Idempotency-Key, or wait for the prior swap to settle/expire.',
       );
@@ -283,7 +279,7 @@ export class SwapsService {
   /**
    * Persists a new swap. Returns null on an idempotency-key unique violation so
    * the caller can fall back to the existing row. A `(network, txHash)` collision
-   * without a recoverable idempotency key throws {@link ConflictException}.
+   * without a recoverable idempotency key throws a 409 `idempotency_conflict`.
    */
   private async persistSwap(
     data: Prisma.SwapUncheckedCreateInput,
@@ -296,7 +292,8 @@ export class SwapsService {
       // race can trip the (network, txHash) index instead of the key index
       // (Postgres reports only one of the two violations arbitrarily).
       if (data.idempotencyKey) return null;
-      throw new ConflictException(
+      throw ApiError.conflict(
+        ApiErrorCode.IdempotencyConflict,
         'A swap with this transaction hash already exists for this network. ' +
           'Two creates rebuilt the same Stellar sequence/XDR — use an ' +
           'Idempotency-Key on retries, or wait for the prior swap to settle/expire.',
@@ -305,10 +302,7 @@ export class SwapsService {
   }
 
   /** Header wins over body; blank strings are treated as absent. */
-  private resolveIdempotencyKey(
-    header?: string,
-    body?: string,
-  ): string | null {
+  private resolveIdempotencyKey(header?: string, body?: string): string | null {
     const raw = (header ?? body)?.trim();
     return raw ? raw : null;
   }
@@ -349,7 +343,8 @@ export class SwapsService {
       orderBy: { createdAt: 'asc' },
     });
     if (existing) {
-      throw new ConflictException(
+      throw ApiError.conflict(
+        ApiErrorCode.OperationInFlight,
         `An in-flight swap already exists for this source account (id=${existing.id}). ` +
           'Wait for it to settle/expire, or disable STELLAR_SWAP_SINGLE_INFLIGHT.',
       );
@@ -365,7 +360,11 @@ export class SwapsService {
       consumer: { apisixUsername: consumer.username },
       ...(query.status ? { status: query.status } : {}),
     };
-    const [data, total] = await this.prisma.$transaction([
+    // `Promise.all`, not `$transaction`: a snapshot-consistent page and count
+    // buys nothing here (the client sees a moving list either way), while the
+    // transaction costs four serial round trips — BEGIN, page, count, COMMIT —
+    // instead of two issued in parallel.
+    const [data, total] = await Promise.all([
       this.prisma.swap.findMany({
         where,
         take: query.take,
@@ -408,7 +407,10 @@ export class SwapsService {
       };
     }
     if (!['PENDING', 'SUBMITTED', 'FAILED'].includes(swap.status)) {
-      throw new BadRequestException(`Cannot submit a ${swap.status} swap`);
+      throw ApiError.badRequest(
+        ApiErrorCode.InvalidStateTransition,
+        `Cannot submit a ${swap.status} swap`,
+      );
     }
 
     let tx: ReturnType<typeof TransactionBuilder.fromXDR>;
@@ -418,7 +420,8 @@ export class SwapsService {
         this.stellar.passphrase(swap.network as StellarNetwork),
       );
     } catch {
-      throw new BadRequestException(
+      throw ApiError.badRequest(
+        ApiErrorCode.ValidationFailed,
         'signedXdr is not a valid transaction envelope',
       );
     }
@@ -426,7 +429,8 @@ export class SwapsService {
     // Integrity: signing does not change the hash, so the signed tx must hash to
     // the same value as the one we built and stored.
     if (tx.hash().toString('hex') !== swap.txHash) {
-      throw new BadRequestException(
+      throw ApiError.badRequest(
+        ApiErrorCode.ValidationFailed,
         'The signed transaction does not match this swap',
       );
     }
@@ -444,7 +448,8 @@ export class SwapsService {
       };
     }
     if (submitted.swap.status !== 'SUBMITTED') {
-      throw new BadRequestException(
+      throw ApiError.badRequest(
+        ApiErrorCode.InvalidStateTransition,
         `Cannot submit a ${submitted.swap.status} swap`,
       );
     }
@@ -499,7 +504,8 @@ export class SwapsService {
       }
       // Couldn't reach Horizon — leave it SUBMITTED so it can be retried.
       this.logger.error(`Swap ${swap.id} submission error`, err);
-      throw new ServiceUnavailableException(
+      throw ApiError.unavailable(
+        ApiErrorCode.ProviderUnavailable,
         'Could not submit the transaction to the Stellar network',
       );
     }
@@ -514,7 +520,8 @@ export class SwapsService {
     const send = this.resolveAsset(dto.sourceAssetCode, dto.sourceAssetIssuer);
     const dest = this.resolveAsset(dto.destAssetCode, dto.destAssetIssuer);
     if (send.code === dest.code && send.issuer === dest.issuer) {
-      throw new BadRequestException(
+      throw ApiError.badRequest(
+        ApiErrorCode.ValidationFailed,
         'Source and destination assets must differ for a swap',
       );
     }
@@ -524,7 +531,8 @@ export class SwapsService {
     const feeStroops = computeFee(sendStroops, feeBps);
     const swapStroops = sendStroops - feeStroops;
     if (swapStroops <= 0n) {
-      throw new BadRequestException(
+      throw ApiError.badRequest(
+        ApiErrorCode.InvalidAmount,
         'amount is too small to cover the swap fee',
       );
     }
@@ -567,12 +575,14 @@ export class SwapsService {
       records = page.records;
     } catch (err) {
       this.logger.error('strictSendPaths failed', err);
-      throw new ServiceUnavailableException(
+      throw ApiError.unavailable(
+        ApiErrorCode.ProviderUnavailable,
         'Could not reach the Stellar network for a quote',
       );
     }
     if (!records.length) {
-      throw new BadRequestException(
+      throw ApiError.badRequest(
+        ApiErrorCode.NoPathFound,
         'No swap path found for this asset pair and amount',
       );
     }
@@ -730,9 +740,7 @@ export class SwapsService {
   // ── Helpers ─────────────────────────────────────────────────────────────────
   /** Network follows the API key type (prod → public, dev → testnet). */
   private resolveNetwork(consumer: GatewayConsumer): StellarNetwork {
-    if (consumer.environment === 'prod') return 'public';
-    if (consumer.environment === 'dev') return 'testnet';
-    return this.config.get('stellar', { infer: true }).network;
+    return resolveNetwork(this.config, consumer);
   }
 
   /** Mirror the APISIX consumer locally so swaps can be scoped to it. */
@@ -751,27 +759,13 @@ export class SwapsService {
     return this.config.get('stellar', { infer: true }).swap.feeWallet;
   }
 
-  /**
-   * The swap commission (bps) for this request. The gateway injects the
-   * organization's plan rate (`planSwapFeeBps`) per consumer — it is NEVER a
-   * request parameter, so the rate cannot be bypassed or undercut by the caller.
-   * Only when the gateway didn't forward it (local dev without APISIX) do we fall
-   * back to the configured default, and only then gate it on having a fee wallet.
-   */
-  private resolveSwapFeeBps(consumer: GatewayConsumer): number {
-    if (consumer.planSwapFeeBps !== null) {
-      return consumer.planSwapFeeBps;
-    }
-    const swap = this.config.get('stellar', { infer: true }).swap;
-    return swap.feeWallet ? swap.feeBps : 0;
-  }
-
   /** Caller slippage, defaulted and clamped to the configured maximum. */
   private resolveSlippage(requested?: number): number {
     const swap = this.config.get('stellar', { infer: true }).swap;
     const bps = requested ?? swap.slippageBps;
     if (bps > swap.maxSlippageBps) {
-      throw new BadRequestException(
+      throw ApiError.badRequest(
+        ApiErrorCode.SlippageExceeded,
         `slippageBps ${bps} exceeds the maximum allowed (${swap.maxSlippageBps})`,
       );
     }
@@ -781,7 +775,10 @@ export class SwapsService {
   private resolveMemo(provided?: string): string | null {
     if (provided === undefined) return null;
     if (!/^\d+$/.test(provided) || BigInt(provided) > MAX_UINT64) {
-      throw new BadRequestException('memo must be a MEMO_ID: a numeric uint64');
+      throw ApiError.badRequest(
+        ApiErrorCode.InvalidMemo,
+        'memo must be a MEMO_ID: a numeric uint64',
+      );
     }
     return provided;
   }
@@ -793,7 +790,8 @@ export class SwapsService {
       return { code: 'native', issuer: null, asset: Asset.native() };
     }
     if (!issuer) {
-      throw new BadRequestException(
+      throw ApiError.badRequest(
+        ApiErrorCode.ValidationFailed,
         `An issuer is required for non-native asset "${c}"`,
       );
     }
@@ -818,7 +816,7 @@ export class SwapsService {
       where: { id, consumer: { apisixUsername: consumer.username } },
     });
     if (!swap) {
-      throw new NotFoundException(`Swap ${id} not found`);
+      throw ApiError.notFound(`Swap ${id} not found`);
     }
     return swap;
   }
@@ -843,7 +841,8 @@ export class SwapsService {
       (b) => b.asset_code === dest.code && b.asset_issuer === dest.issuer,
     );
     if (!trusts) {
-      throw new BadRequestException(
+      throw ApiError.badRequest(
+        ApiErrorCode.TrustlineMissing,
         `Destination ${destination} has no trustline for ${dest.code}:${dest.issuer} — ` +
           'it must trust the asset before it can receive the swap',
       );
@@ -857,12 +856,14 @@ export class SwapsService {
       const status = (error as { response?: { status?: number } })?.response
         ?.status;
       if (status === 404) {
-        throw new BadRequestException(
+        throw ApiError.badRequest(
+          ApiErrorCode.ValidationFailed,
           `Account ${address} not found or not funded on the ${network} network`,
         );
       }
       this.logger.error('Failed to load account from Horizon', error);
-      throw new ServiceUnavailableException(
+      throw ApiError.unavailable(
+        ApiErrorCode.ProviderUnavailable,
         'Could not reach the Stellar network',
       );
     }

@@ -2,7 +2,12 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 /**
  * Cosmos Pay view of a BlindPay receiver. `id` is our local id; `blindpayId` is
- * BlindPay's `re_...`. `raw` carries the full provider object.
+ * BlindPay's `re_...`.
+ *
+ * This is the whole contract, and it is enforced rather than documented: the service
+ * reads receivers through `RECEIVER_PUBLIC_SELECT`, whose field list is exactly the
+ * properties below. The stored `raw` KYC dossier (tax ids, dates of birth, document and
+ * selfie urls, beneficial owners) has no property here and never reaches a response.
  */
 export class ReceiverEntity {
   @ApiProperty({ example: 'clz9xreceiver01' })
@@ -47,4 +52,13 @@ export class ReceiverEntity {
 
   @ApiProperty({ example: '2026-06-28T12:00:00.000Z' })
   updatedAt!: Date;
+}
+
+/** One page of receivers — the envelope every list in this API returns. */
+export class ReceiverListEntity {
+  @ApiProperty({ type: [ReceiverEntity] })
+  data!: ReceiverEntity[];
+
+  @ApiProperty({ example: 1 })
+  total!: number;
 }

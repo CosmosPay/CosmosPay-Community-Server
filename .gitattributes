@@ -1,0 +1,14 @@
+# Normalize every text file to LF in the repository, while leaving the working
+# tree native (CRLF on Windows). The index was already LF-only, so this changes
+# nothing today — it just stops a future Windows contributor from committing
+# CRLF and making every line of a file show up as modified.
+#
+# Prettier is set to `endOfLine: "auto"` to match, so `npm run lint` does not
+# flag a native CRLF checkout. Without both halves the linter reported ~14,800
+# phantom `Delete ␍` errors on Windows, which buried the real findings.
+* text=auto
+
+# Generated artifacts: keep diffs collapsed in review.
+package-lock.json  linguist-generated=true
+openapi/openapi.json  linguist-generated=true
+openapi/openapi.yaml  linguist-generated=true
