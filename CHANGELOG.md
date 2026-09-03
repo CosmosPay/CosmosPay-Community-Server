@@ -2,9 +2,99 @@
 
 All notable changes to the Cosmos Pay Community Server are documented here.
 Generated from [Conventional Commits](https://www.conventionalcommits.org) by [git-cliff](https://git-cliff.org).
+## [0.1.5] - 2026-08-30
+
+### Bug Fixes
+- Migrate to @stellar/stellar-sdk 17 (Uint8Array hashes + ESM dep) (#70) (ce1f48e)
+
+## [0.1.4] - 2026-08-30
+
+### Bug Fixes
+- Paginate exact per-asset totals (#68) (2128f62)
+
+### Testing
+- Cover tenant scoping and ToS safeguards (#69) (d67139f)
+
+## [0.1.3] - 2026-08-30
+
+### Bug Fixes
+- Persist real status code via request-log middleware (issue #23) (#67) (bfcb3f3)
+
+### Miscellaneous
+- Bump the minor-and-patch group with 10 updates (#64) (abebf37)
+
+## [0.1.2] - 2026-08-30
+
+### Features
+- Durable Postgres retry queue so deliveries survive restarts (75bdf1d)
+
+### Bug Fixes
+- Drop leftover merge junk that broke nest build (10b96fc)
+- Expose tick and isRunning for the existing spec (3d39d87)
+- Credit path payments and create_account on-chain (012ec76)
+- Stabilize mismatch reason and document open amounts (4feacac)
+- Main vuelve a compilar (#66) (75d827b)
+
+## [0.1.1] - 2026-08-26
+
+### Bug Fixes
+- Reject unsigned XDRs that would fail on-chain (a957f23)
+- Pre-flight fee-wallet existence for native XLM fees (ce29e8d)
+- Consume in-flight withdraws in cost basis (8a117ce)
+- Restore tick() so CI can compile (047e9e2)
+- Serialize withdraw cost basis with a Postgres advisory lock (f4dd289)
+- Emit and QR after withdraw transaction commits (e4a2439)
+
+## [0.1.0] - 2026-08-25
+
+### Bug Fixes
+- Keep original secret on rapid re-rotation (c3dd3fc)
+
+## [0.0.11] - 2026-08-25
+
+### Features
+- Overlap signing secrets during rotation (73022f5)
+
+### Bug Fixes
+- SQL aggregation and stroops precision (#21) (eb9c291)
+- Rebase onto upstream main and repair broken observer merge (6d74ff1)
+- Stabilize health YAML anchors for CI openapi:check (503ebea)
+- Repair broken merge of watchdog and expiry safety (e6616dc)
+- Stop emitting unstable YAML anchors (61f7885)
+- Bound findMatchingPayment by time and persist Horizon cursor (387b129)
+- Restore settlement-observer after broken #56 merge (902ff0c)
+- Key Horizon cursor by intentId (8b58bd8)
+
+### Refactor
+- Avoid Number() in asInt helper (1ffdf24)
+
+### Documentation
+- Add EXPLAIN query for index verification (b4a1dec)
+
+### Testing
+- Cover QueryAnalyticsDto validation (from=hola → 400) (b2d2ab9)
+
+## [0.0.10] - 2026-08-25
+
+### Bug Fixes
+- Probe only the configured Horizon network (cce7d92)
+- Paginate list, fix OpenAPI shape, soft-delete by default (04ab33d)
+- Stabilize health YAML anchors for CI openapi:check (a11d529)
+- Stop expiring settlements on Horizon blips (576f428)
+- Anchor rescue lookback on expiresAt (8b12bfa)
+
+### Miscellaneous
+- Regenerate OpenAPI for SWAP_EXPIRED / LIQUIDITY_EXPIRED (947a74e)
+
+## [0.0.9] - 2026-08-24
+
+### Bug Fixes
+- La coma que falta en package.json deja main inconstruible (#53) (7d65e48)
+
 ## [0.0.8] - 2026-08-24
 
 ### Bug Fixes
+- Add Horizon timeout, retries, and observer watchdog (92b8413)
 - Add idempotency and unique txHash to prevent double SWAP_SUCCEEDED (4188907)
 - Recover same-key races and mark Idempotency-Key optional in OpenAPI (4778f27)
 - Unblock local receiver updates and KYC state transitions (91cb4f4)

@@ -848,6 +848,36 @@ character, while admin credentials already demanded 16 — and this secret is a
 stronger boundary than those. Generate one with `openssl rand -hex 32` and
 rotate it in APISIX at the same time.
 
+### Features from `v0.1.0`–`v0.1.5` that this release supersedes
+
+`main` and this branch solved several of the same problems independently while
+they were apart. Where both had an answer, this branch's design is the one that
+ships, so a deployment coming from `v0.1.5` loses the following. None of it is
+an accident — each is a deliberate resolution — but every item is visible to an
+integrator, so plan the upgrade around them.
+
+| Was on `v0.1.5` | Now |
+| --------------- | --- |
+| `POST /v1/webhooks/:id/rotate-secret` accepted `graceSeconds` and kept the old secret verifying for `WEBHOOK_SECRET_GRACE_SECONDS` | The secret is swapped outright; the previous one stops verifying immediately. Update the receiver's stored secret in the same window as the rotate call. |
+| A leased retry worker delivered webhooks (`maxAttempts` / `nextAttemptAt` / `leaseUntil`, status `RETRYING`) | The delivery sweeper does, with `WEBHOOK_MAX_ATTEMPTS` back to `3` per in-process loop (a real ceiling of 9 across sweeps). `WEBHOOK_MAX_BACKOFF_MS`, `WEBHOOK_WORKER_*`, `WEBHOOK_LEASE_MS`, `WEBHOOK_FANOUT_CONCURRENCY` and `WEBHOOK_PAUSE_AFTER_FAILURES` are gone, and no delivery is ever written as `RETRYING`. |
+| `SWAP_EXPIRED` and `LIQUIDITY_EXPIRED` were emitted | Neither is emitted. Expiry is still recorded on the row; poll it, or subscribe to the `*_FAILED` events. |
+| `GET /v1/products` filtered on `kind`, `active` and `reference`, and `DELETE` took `hard=true` | Neither exists. Deletes are soft (`active=false`). |
+| `GET /v1/products` and `GET /v1/customers` defaulted to `take=20` | Both default to `take=100` (still the maximum), so an unparameterised call returns more rows than it did. |
+| `analytics.apiLogs` / `analytics.webhookLogs` returned `{ data, total }` and honoured `take` only | Both are paginated like every other list: `take` + `skip` in, `{ data, total, take, skip, hasMore }` out. The overview's date-range filters are gone. |
+| `/v1/health` reported a Stellar readiness indicator alongside the database | It reports the database only. |
+| `STELLAR_HTTP_TIMEOUT_MS`, `STELLAR_MAX_ATTEMPTS`, `STELLAR_RETRY_BASE_MS` bounded Horizon calls | Horizon bounding lives in `stellar/stellar.constants.ts` and is not configurable by environment. Those three variables are no longer read or validated. |
+
+**Nothing is dropped from the database.** The columns, indexes and enum values
+those features added (`webhook_delivery.maxAttempts` / `nextAttemptAt` /
+`leaseUntil`, `webhook_endpoint.previousSecret*`, `swap` and
+`liquidity_pool_operation` `lastCheckedAt` / `notFoundStreak`, the
+`horizon_account_cursor` table, `RETRYING`, `SWAP_EXPIRED`, `LIQUIDITY_EXPIRED`)
+are all still declared in `schema.prisma` and still present after
+`migrate deploy`. They are simply never written. Dropping live columns — and an
+enum value, which PostgreSQL cannot remove without recreating the type — would
+be a destructive migration bought for nothing, and keeping them declared is what
+lets `prisma migrate diff` stay clean.
+
 ## Environment variables
 
 Every variable read from `process.env` in `src/` is validated at boot by

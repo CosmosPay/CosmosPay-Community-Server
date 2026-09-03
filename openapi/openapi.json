@@ -4007,7 +4007,8 @@
               "enum": [
                 "PENDING",
                 "SUCCEEDED",
-                "FAILED"
+                "FAILED",
+                "RETRYING"
               ]
             }
           },
@@ -13586,7 +13587,9 @@
                 "LIQUIDITY_CREATED",
                 "LIQUIDITY_SUBMITTED",
                 "LIQUIDITY_SUCCEEDED",
-                "LIQUIDITY_FAILED"
+                "LIQUIDITY_FAILED",
+                "SWAP_EXPIRED",
+                "LIQUIDITY_EXPIRED"
               ]
             }
           }
@@ -13649,7 +13652,9 @@
                 "LIQUIDITY_CREATED",
                 "LIQUIDITY_SUBMITTED",
                 "LIQUIDITY_SUCCEEDED",
-                "LIQUIDITY_FAILED"
+                "LIQUIDITY_FAILED",
+                "SWAP_EXPIRED",
+                "LIQUIDITY_EXPIRED"
               ]
             }
           },
@@ -13735,7 +13740,9 @@
                 "LIQUIDITY_CREATED",
                 "LIQUIDITY_SUBMITTED",
                 "LIQUIDITY_SUCCEEDED",
-                "LIQUIDITY_FAILED"
+                "LIQUIDITY_FAILED",
+                "SWAP_EXPIRED",
+                "LIQUIDITY_EXPIRED"
               ]
             }
           },
@@ -13829,7 +13836,9 @@
                 "LIQUIDITY_CREATED",
                 "LIQUIDITY_SUBMITTED",
                 "LIQUIDITY_SUCCEEDED",
-                "LIQUIDITY_FAILED"
+                "LIQUIDITY_FAILED",
+                "SWAP_EXPIRED",
+                "LIQUIDITY_EXPIRED"
               ]
             }
           }
@@ -13910,7 +13919,9 @@
               "LIQUIDITY_CREATED",
               "LIQUIDITY_SUBMITTED",
               "LIQUIDITY_SUCCEEDED",
-              "LIQUIDITY_FAILED"
+              "LIQUIDITY_FAILED",
+              "SWAP_EXPIRED",
+              "LIQUIDITY_EXPIRED"
             ],
             "example": "PAYMENT_INTENT_SUCCEEDED"
           },
@@ -13923,7 +13934,8 @@
             "enum": [
               "PENDING",
               "SUCCEEDED",
-              "FAILED"
+              "FAILED",
+              "RETRYING"
             ],
             "example": "SUCCEEDED"
           },

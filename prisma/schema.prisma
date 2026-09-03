@@ -152,34 +152,64 @@ enum WebhookEventType {
   LIQUIDITY_SUBMITTED
   LIQUIDITY_SUCCEEDED
   LIQUIDITY_FAILED
+
+  // Appended by `20260824190000_settlement_observer_expiry_safety`. Kept in the
+  // declared order PostgreSQL actually stores them in (ADD VALUE appends).
+  SWAP_EXPIRED
+  LIQUIDITY_EXPIRED
 }
 
 enum WebhookDeliveryStatus {
   PENDING
   SUCCEEDED
   FAILED
+
+  // Appended by `20260826180000_webhook_delivery_retry_queue`. The sweeper does
+  // not use it, but an enum value cannot be dropped in place.
+  RETRYING
 }
 
 // An integrator-registered URL that receives signed event notifications.
 // Scoped to the APISIX consumer that created it.
+/// Created by `20260825180000_horizon_account_cursor` on main, for the paged
+/// Horizon account scan that this branch's verifier does not use. The table is
+/// in every deployed database, so it is declared here; it is simply never read.
+model HorizonAccountCursor {
+  id          String        @id @default(cuid())
+  intentId    String        @unique
+  intent      PaymentIntent @relation(fields: [intentId], references: [id], onDelete: Cascade)
+  network     String // 'public' | 'testnet'
+  account     String // G... destination scanned
+  pagingToken String
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  @@map("horizon_account_cursor")
+}
+
 model WebhookEndpoint {
   id         String   @id @default(cuid())
   consumerId String
   consumer   Consumer @relation(fields: [consumerId], references: [id], onDelete: Cascade)
 
-  url                String
+  url                     String
   // HMAC-SHA256 signing secret (prefixed `whsec_`). Integrators verify the
   // `X-Cosmos-Signature` header with this.
-  secret             String
-  description        String?
-  enabled            Boolean            @default(true)
+  secret                  String
+  description             String?
+  enabled                 Boolean            @default(true)
   // Set when the URL fails public-destination checks (at register-time audit or
   // at delivery when DNS rebinds to a private/metadata target). Deliveries skip
   // blocked endpoints; clear by PATCHing a safe https URL (or re-enabling after
   // the URL passes validation again).
-  destinationBlocked Boolean            @default(false)
+  destinationBlocked      Boolean            @default(false)
+  // Created by `20260825200000_webhook_previous_secret` for main's grace-window
+  // rotation. This branch's `rotateSecret` swaps the secret outright, so they
+  // are never written; declared to match the deployed database.
+  previousSecret          String?
+  previousSecretExpiresAt DateTime?
   // Subscribed event types; an empty list means "all events".
-  eventTypes         WebhookEventType[]
+  eventTypes              WebhookEventType[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -206,12 +236,23 @@ model WebhookDelivery {
   responseStatus Int?
   error          String?
   lastAttemptAt  DateTime?
+  // ── Columns created by migrations that shipped on main and are already in
+  // every deployed database. Nothing on this branch queries them; they stay
+  // declared because schema.prisma has to describe the database it points at.
+  // `20260826180000_webhook_delivery_retry_queue` added these for the leased
+  // retry worker that this branch replaces with the delivery sweeper.
+  maxAttempts    Int                   @default(8)
+  nextAttemptAt  DateTime?
+  leaseUntil     DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([endpointId])
-  @@index([status])
+  // The plain [status] index was replaced by this composite in
+  // `20260826180000_webhook_delivery_retry_queue`. The sweeper filters on
+  // `status` alone, which the composite still serves as its leading column.
+  @@index([status, nextAttemptAt])
   @@index([eventId])
   // Delivery-log view: filter by endpoint, order createdAt desc.
   @@index([endpointId, createdAt])
@@ -293,6 +334,9 @@ model PaymentIntent {
   // Append-only audit trail of status transitions (issue #36).
   transitions PaymentIntentTransition[]
 
+  // Back-relation for the cursor table below. Virtual — no column.
+  horizonCursor HorizonAccountCursor?
+
   @@unique([consumerId, memo]) // idempotency: one intent per (consumer, memo)
   @@index([consumerId])
   @@index([status])
@@ -300,6 +344,10 @@ model PaymentIntent {
   @@index([consumerId, createdAt])
   // Observer sweep and expiry pass: pending rows oldest-first.
   @@index([status, createdAt])
+  // Built by `20260830120000_payment_intent_consumer_source_index` and
+  // `20260825210000_analytics_indexes` on main. Declared to match the database.
+  @@index([consumerId, source])
+  @@index([consumerId, network, createdAt])
   @@map("payment_intent")
 }
 
@@ -644,6 +692,15 @@ model Swap {
 
   expiresAt DateTime?
 
+  // ── Columns created by migrations that shipped on main and are already in
+  // every deployed database. The services that read them were superseded by
+  // this branch's design, so nothing queries them today; they stay declared
+  // because schema.prisma has to describe the database it points at, and
+  // dropping live columns (and an enum value, which PostgreSQL cannot remove
+  // without recreating the type) buys nothing.
+  lastCheckedAt  DateTime?
+  notFoundStreak Int       @default(0)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -733,6 +790,12 @@ model LiquidityPoolOperation {
   txHash String
 
   expiresAt DateTime?
+
+  // ── Columns created by migrations that shipped on main and are already in
+  // every deployed database. Nothing on this branch queries them; they stay
+  // declared because schema.prisma has to describe the database it points at.
+  lastCheckedAt  DateTime?
+  notFoundStreak Int       @default(0)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

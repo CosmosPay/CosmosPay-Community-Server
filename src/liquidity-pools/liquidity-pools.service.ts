@@ -264,9 +264,11 @@ export class LiquidityPoolsService {
       b.asset,
       LiquidityPoolFeeV18,
     );
-    const poolId = getLiquidityPoolId(
-      'constant_product',
-      poolShare.getLiquidityPoolParameters(),
+    const poolId = Buffer.from(
+      getLiquidityPoolId(
+        'constant_product',
+        poolShare.getLiquidityPoolParameters(),
+      ),
     ).toString('hex');
 
     const pool = await this.fetchPool(network, poolId);
@@ -678,7 +680,7 @@ export class LiquidityPoolsService {
         'signedXdr is not a valid transaction envelope',
       );
     }
-    if (tx.hash().toString('hex') !== op.txHash) {
+    if (Buffer.from(tx.hash()).toString('hex') !== op.txHash) {
       throw ApiError.badRequest(
         ApiErrorCode.ValidationFailed,
         'The signed transaction does not match this operation',
@@ -811,7 +813,7 @@ export class LiquidityPoolsService {
           status: 'PENDING',
           xdr,
           uri: `web+stellar:tx?${new URLSearchParams({ xdr }).toString()}`,
-          txHash: tx.hash().toString('hex'),
+          txHash: Buffer.from(tx.hash()).toString('hex'),
           // The tx is only valid for its timeout window; after that it can't settle.
           expiresAt: new Date(Date.now() + timeoutSeconds * 1000),
         },
