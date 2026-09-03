@@ -47,3 +47,12 @@ export const DEFAULT_POLLAR_LOGIN_WAIT_MS = 20_000;
 
 /** Sweeper cadence for expiring stale handshakes. */
 export const DEFAULT_POLLAR_SWEEP_INTERVAL_MS = 60_000;
+
+// --- Rate limiting ---
+
+/**
+ * How often rolled-over rate-limit windows are deleted. Ten minutes: the table
+ * only ever holds live and just-expired windows, so there is no backlog to race
+ * and no reason to wake up more often than that.
+ */
+export const DEFAULT_RATE_LIMIT_PRUNE_INTERVAL_MS = 10 * 60 * 1000;

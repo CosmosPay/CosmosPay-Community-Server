@@ -97,4 +97,5 @@ export enum AdvisoryLockKey {
   RequestLogRetention = 881_003,
   WebhookDeliverySweeper = 881_004,
   PollarOauthSweeper = 881_005,
+  RateLimitPrune = 881_006,
 }

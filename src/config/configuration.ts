@@ -15,6 +15,7 @@ import {
   DEFAULT_POLLAR_SERVER_BASE_URL,
   DEFAULT_POLLAR_SWEEP_INTERVAL_MS,
   DEFAULT_POLLAR_TIMEOUT_MS,
+  DEFAULT_RATE_LIMIT_PRUNE_INTERVAL_MS,
 } from '@/config/config.constants';
 import {
   parsePollarRedirectWhitelist,
@@ -137,6 +138,17 @@ export interface AppConfig {
     // Svix endpoint secret (whsec_...) used to verify inbound BlindPay webhooks.
     webhookSecret: string;
     timeoutMs: number;
+  };
+  rateLimit: {
+    /**
+     * Master switch for `@RateLimit`. On by default — the routes it guards spend
+     * XLM, so leaving them uncapped is not a default anyone should get by
+     * omission. `false` is the incident switch, and it also keeps the prune
+     * timer out of a test run.
+     */
+    enabled: boolean;
+    /** How often rolled-over counter windows are deleted. */
+    pruneIntervalMs: number;
   };
   pollar: {
     // Pollar is the hosted onboarding rail: social login in, a Stellar wallet
@@ -320,6 +332,15 @@ export default (): AppConfig => ({
     ).replace(/\/+$/, ''),
     webhookSecret: process.env.BLINDPAY_WEBHOOK_SECRET ?? '',
     timeoutMs: parseInt(process.env.BLINDPAY_TIMEOUT_MS ?? '15000', 10),
+  },
+  rateLimit: {
+    enabled:
+      (process.env.RATE_LIMIT_ENABLED ?? 'true').toLowerCase() !== 'false',
+    pruneIntervalMs: parseInt(
+      process.env.RATE_LIMIT_PRUNE_INTERVAL_MS ??
+        String(DEFAULT_RATE_LIMIT_PRUNE_INTERVAL_MS),
+      10,
+    ),
   },
   pollar: {
     publishableKey: {

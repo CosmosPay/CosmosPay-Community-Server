@@ -59,6 +59,16 @@
               }
             }
           },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Unexpected server error. The detail is logged server-side and never returned.",
             "content": {
@@ -217,6 +227,16 @@
           },
           "409": {
             "description": "Conflicts with existing state — an idempotency clash, an operation already in flight, or an invalid state transition.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -410,6 +430,16 @@
               }
             }
           },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Unexpected server error. The detail is logged server-side and never returned.",
             "content": {
@@ -514,6 +544,16 @@
           },
           "409": {
             "description": "Conflicts with existing state — an idempotency clash, an operation already in flight, or an invalid state transition.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -660,6 +700,16 @@
               }
             }
           },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Unexpected server error. The detail is logged server-side and never returned.",
             "content": {
@@ -774,6 +824,16 @@
               }
             }
           },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Unexpected server error. The detail is logged server-side and never returned.",
             "content": {
@@ -877,6 +937,16 @@
           },
           "409": {
             "description": "Conflicts with existing state — an idempotency clash, an operation already in flight, or an invalid state transition.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1004,6 +1074,16 @@
               }
             }
           },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Unexpected server error. The detail is logged server-side and never returned.",
             "content": {
@@ -1105,6 +1185,16 @@
           },
           "409": {
             "description": "Conflicts with existing state — an idempotency clash, an operation already in flight, or an invalid state transition.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1234,6 +1324,16 @@
               }
             }
           },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Unexpected server error. The detail is logged server-side and never returned.",
             "content": {
@@ -1338,6 +1438,16 @@
           },
           "409": {
             "description": "Conflicts with existing state — an idempotency clash, an operation already in flight, or an invalid state transition.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1461,6 +1571,16 @@
           },
           "409": {
             "description": "Conflicts with existing state — an idempotency clash, an operation already in flight, or an invalid state transition.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1604,6 +1724,16 @@
               }
             }
           },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Unexpected server error. The detail is logged server-side and never returned.",
             "content": {
@@ -1707,6 +1837,16 @@
           },
           "409": {
             "description": "Conflicts with existing state — an idempotency clash, an operation already in flight, or an invalid state transition.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1828,6 +1968,16 @@
           },
           "409": {
             "description": "Conflicts with existing state — an idempotency clash, an operation already in flight, or an invalid state transition.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1959,6 +2109,16 @@
               }
             }
           },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Unexpected server error. The detail is logged server-side and never returned.",
             "content": {
@@ -2082,6 +2242,16 @@
               }
             }
           },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Unexpected server error. The detail is logged server-side and never returned.",
             "content": {
@@ -2187,6 +2357,16 @@
           },
           "409": {
             "description": "Conflicts with existing state — an idempotency clash, an operation already in flight, or an invalid state transition.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2344,6 +2524,16 @@
               }
             }
           },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Unexpected server error. The detail is logged server-side and never returned.",
             "content": {
@@ -2447,6 +2637,16 @@
           },
           "409": {
             "description": "Conflicts with existing state — an idempotency clash, an operation already in flight, or an invalid state transition.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2568,6 +2768,16 @@
           },
           "409": {
             "description": "Conflicts with existing state — an idempotency clash, an operation already in flight, or an invalid state transition.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2745,6 +2955,16 @@
               }
             }
           },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Unexpected server error. The detail is logged server-side and never returned.",
             "content": {
@@ -2848,6 +3068,16 @@
           },
           "409": {
             "description": "Conflicts with existing state — an idempotency clash, an operation already in flight, or an invalid state transition.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2960,6 +3190,16 @@
           },
           "409": {
             "description": "Conflicts with existing state — an idempotency clash, an operation already in flight, or an invalid state transition.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3088,6 +3328,16 @@
               }
             }
           },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Unexpected server error. The detail is logged server-side and never returned.",
             "content": {
@@ -3191,6 +3441,16 @@
           },
           "409": {
             "description": "Conflicts with existing state — an idempotency clash, an operation already in flight, or an invalid state transition.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3318,6 +3578,16 @@
               }
             }
           },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Unexpected server error. The detail is logged server-side and never returned.",
             "content": {
@@ -3419,6 +3689,16 @@
           },
           "409": {
             "description": "Conflicts with existing state — an idempotency clash, an operation already in flight, or an invalid state transition.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3538,6 +3818,16 @@
               }
             }
           },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Unexpected server error. The detail is logged server-side and never returned.",
             "content": {
@@ -3641,6 +3931,16 @@
           },
           "409": {
             "description": "Conflicts with existing state — an idempotency clash, an operation already in flight, or an invalid state transition.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3792,6 +4092,16 @@
               }
             }
           },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Unexpected server error. The detail is logged server-side and never returned.",
             "content": {
@@ -3911,6 +4221,16 @@
               }
             }
           },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Unexpected server error. The detail is logged server-side and never returned.",
             "content": {
@@ -4013,6 +4333,16 @@
               }
             }
           },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Unexpected server error. The detail is logged server-side and never returned.",
             "content": {
@@ -4107,6 +4437,16 @@
           },
           "409": {
             "description": "Conflicts with existing state — an idempotency clash, an operation already in flight, or an invalid state transition.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4239,6 +4579,16 @@
               }
             }
           },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Unexpected server error. The detail is logged server-side and never returned.",
             "content": {
@@ -4363,6 +4713,16 @@
               }
             }
           },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Unexpected server error. The detail is logged server-side and never returned.",
             "content": {
@@ -4467,6 +4827,16 @@
           },
           "409": {
             "description": "Conflicts with existing state — an idempotency clash, an operation already in flight, or an invalid state transition.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4597,6 +4967,16 @@
               }
             }
           },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Unexpected server error. The detail is logged server-side and never returned.",
             "content": {
@@ -4700,6 +5080,16 @@
           },
           "409": {
             "description": "Conflicts with existing state — an idempotency clash, an operation already in flight, or an invalid state transition.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4827,6 +5217,16 @@
               }
             }
           },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Unexpected server error. The detail is logged server-side and never returned.",
             "content": {
@@ -4921,6 +5321,16 @@
           },
           "409": {
             "description": "Conflicts with existing state — an idempotency clash, an operation already in flight, or an invalid state transition.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5029,6 +5439,16 @@
           "409": {
             "description": "Invalid KYC status transition (e.g. receiver is not in 'pending_review')"
           },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Unexpected server error. The detail is logged server-side and never returned.",
             "content": {
@@ -5135,6 +5555,16 @@
           },
           "409": {
             "description": "Conflicts with existing state — an idempotency clash, an operation already in flight, or an invalid state transition.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5257,6 +5687,16 @@
           "409": {
             "description": "Invalid KYC status transition (e.g. receiver is not in 'pending_user')"
           },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Unexpected server error. The detail is logged server-side and never returned.",
             "content": {
@@ -5371,6 +5811,16 @@
               }
             }
           },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Unexpected server error. The detail is logged server-side and never returned.",
             "content": {
@@ -5467,6 +5917,16 @@
           },
           "409": {
             "description": "Conflicts with existing state — an idempotency clash, an operation already in flight, or an invalid state transition.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5588,6 +6048,16 @@
           },
           "409": {
             "description": "Conflicts with existing state — an idempotency clash, an operation already in flight, or an invalid state transition.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5726,6 +6196,16 @@
               }
             }
           },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Unexpected server error. The detail is logged server-side and never returned.",
             "content": {
@@ -5830,6 +6310,16 @@
           },
           "409": {
             "description": "Conflicts with existing state — an idempotency clash, an operation already in flight, or an invalid state transition.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5951,6 +6441,16 @@
           },
           "409": {
             "description": "Conflicts with existing state — an idempotency clash, an operation already in flight, or an invalid state transition.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6089,6 +6589,16 @@
               }
             }
           },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Unexpected server error. The detail is logged server-side and never returned.",
             "content": {
@@ -6193,6 +6703,16 @@
           },
           "409": {
             "description": "Conflicts with existing state — an idempotency clash, an operation already in flight, or an invalid state transition.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6323,6 +6843,16 @@
               }
             }
           },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Unexpected server error. The detail is logged server-side and never returned.",
             "content": {
@@ -6428,6 +6958,16 @@
               }
             }
           },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Unexpected server error. The detail is logged server-side and never returned.",
             "content": {
@@ -6515,6 +7055,16 @@
           },
           "409": {
             "description": "Conflicts with existing state — an idempotency clash, an operation already in flight, or an invalid state transition.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6627,6 +7177,16 @@
               }
             }
           },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Unexpected server error. The detail is logged server-side and never returned.",
             "content": {
@@ -6731,6 +7291,16 @@
           },
           "409": {
             "description": "Conflicts with existing state — an idempotency clash, an operation already in flight, or an invalid state transition.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6859,6 +7429,16 @@
               }
             }
           },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Unexpected server error. The detail is logged server-side and never returned.",
             "content": {
@@ -6962,6 +7542,16 @@
           },
           "409": {
             "description": "Conflicts with existing state — an idempotency clash, an operation already in flight, or an invalid state transition.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -7089,6 +7679,16 @@
               }
             }
           },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Unexpected server error. The detail is logged server-side and never returned.",
             "content": {
@@ -7190,6 +7790,16 @@
           },
           "409": {
             "description": "Conflicts with existing state — an idempotency clash, an operation already in flight, or an invalid state transition.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -7302,6 +7912,16 @@
           },
           "409": {
             "description": "Conflicts with existing state — an idempotency clash, an operation already in flight, or an invalid state transition.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -7430,6 +8050,16 @@
               }
             }
           },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Unexpected server error. The detail is logged server-side and never returned.",
             "content": {
@@ -7533,6 +8163,16 @@
           },
           "409": {
             "description": "Conflicts with existing state — an idempotency clash, an operation already in flight, or an invalid state transition.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -7660,6 +8300,16 @@
               }
             }
           },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Unexpected server error. The detail is logged server-side and never returned.",
             "content": {
@@ -7761,6 +8411,16 @@
           },
           "409": {
             "description": "Conflicts with existing state — an idempotency clash, an operation already in flight, or an invalid state transition.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -7881,6 +8541,16 @@
               }
             }
           },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Unexpected server error. The detail is logged server-side and never returned.",
             "content": {
@@ -7985,6 +8655,16 @@
           },
           "409": {
             "description": "Conflicts with existing state — an idempotency clash, an operation already in flight, or an invalid state transition.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -8115,6 +8795,16 @@
               }
             }
           },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Unexpected server error. The detail is logged server-side and never returned.",
             "content": {
@@ -8226,6 +8916,16 @@
               }
             }
           },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Unexpected server error. The detail is logged server-side and never returned.",
             "content": {
@@ -8323,6 +9023,16 @@
           },
           "409": {
             "description": "Conflicts with existing state — an idempotency clash, an operation already in flight, or an invalid state transition.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -8437,6 +9147,16 @@
           },
           "409": {
             "description": "Conflicts with existing state — an idempotency clash, an operation already in flight, or an invalid state transition.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -8568,6 +9288,16 @@
               }
             }
           },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Unexpected server error. The detail is logged server-side and never returned.",
             "content": {
@@ -8672,6 +9402,16 @@
           },
           "409": {
             "description": "Conflicts with existing state — an idempotency clash, an operation already in flight, or an invalid state transition.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -8785,6 +9525,16 @@
               }
             }
           },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Unexpected server error. The detail is logged server-side and never returned.",
             "content": {
@@ -8889,6 +9639,16 @@
           },
           "409": {
             "description": "Conflicts with existing state — an idempotency clash, an operation already in flight, or an invalid state transition.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -9019,6 +9779,16 @@
               }
             }
           },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Unexpected server error. The detail is logged server-side and never returned.",
             "content": {
@@ -9122,6 +9892,16 @@
           },
           "409": {
             "description": "Conflicts with existing state — an idempotency clash, an operation already in flight, or an invalid state transition.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -9244,6 +10024,16 @@
               }
             }
           },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Unexpected server error. The detail is logged server-side and never returned.",
             "content": {
@@ -9349,6 +10139,16 @@
           },
           "409": {
             "description": "Conflicts with existing state — an idempotency clash, an operation already in flight, or an invalid state transition.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -9473,6 +10273,16 @@
               }
             }
           },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Unexpected server error. The detail is logged server-side and never returned.",
             "content": {
@@ -9589,6 +10399,16 @@
               }
             }
           },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Unexpected server error. The detail is logged server-side and never returned.",
             "content": {
@@ -9693,6 +10513,16 @@
           },
           "409": {
             "description": "Conflicts with existing state — an idempotency clash, an operation already in flight, or an invalid state transition.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -9814,6 +10644,16 @@
               }
             }
           },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Unexpected server error. The detail is logged server-side and never returned.",
             "content": {
@@ -9927,6 +10767,16 @@
               }
             }
           },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Unexpected server error. The detail is logged server-side and never returned.",
             "content": {
@@ -10031,6 +10881,16 @@
           },
           "409": {
             "description": "Conflicts with existing state — an idempotency clash, an operation already in flight, or an invalid state transition.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -10152,6 +11012,16 @@
               }
             }
           },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Unexpected server error. The detail is logged server-side and never returned.",
             "content": {
@@ -10255,6 +11125,16 @@
           },
           "409": {
             "description": "Conflicts with existing state — an idempotency clash, an operation already in flight, or an invalid state transition.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -10376,6 +11256,16 @@
           },
           "409": {
             "description": "Conflicts with existing state — an idempotency clash, an operation already in flight, or an invalid state transition.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -10512,6 +11402,16 @@
               }
             }
           },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Unexpected server error. The detail is logged server-side and never returned.",
             "content": {
@@ -10617,6 +11517,16 @@
           },
           "409": {
             "description": "Conflicts with existing state — an idempotency clash, an operation already in flight, or an invalid state transition.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -10738,6 +11648,16 @@
               }
             }
           },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Unexpected server error. The detail is logged server-side and never returned.",
             "content": {
@@ -10843,6 +11763,16 @@
           },
           "409": {
             "description": "Conflicts with existing state — an idempotency clash, an operation already in flight, or an invalid state transition.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -16228,6 +17158,7 @@
               "kyc_review_required",
               "account_disabled",
               "payload_expired",
+              "rate_limited",
               "misconfigured",
               "internal_error"
             ],

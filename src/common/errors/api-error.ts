@@ -71,6 +71,15 @@ export enum ApiErrorCode {
   /** The delivery body was cleared by retention and can no longer be re-sent. */
   PayloadExpired = 'payload_expired',
 
+  // --- throttling -----------------------------------------------------------
+  /**
+   * This service refused the request to protect something it cannot undo — an
+   * account created on-chain, XLM spent out of a funding wallet. Distinct from
+   * `provider_unavailable`, which used to be the fallback for 429 and sent
+   * integrators off to investigate an upstream that was perfectly healthy.
+   */
+  RateLimited = 'rate_limited',
+
   // --- service --------------------------------------------------------------
   Misconfigured = 'misconfigured',
   Internal = 'internal_error',
@@ -165,7 +174,7 @@ const CODE_BY_STATUS: Readonly<Record<number, ApiErrorCode>> = {
   // own valid request hit a bug in this service.
   [HttpStatus.GATEWAY_TIMEOUT]: ApiErrorCode.ProviderUnavailable,
   [HttpStatus.UNPROCESSABLE_ENTITY]: ApiErrorCode.ValidationFailed,
-  [HttpStatus.TOO_MANY_REQUESTS]: ApiErrorCode.ProviderUnavailable,
+  [HttpStatus.TOO_MANY_REQUESTS]: ApiErrorCode.RateLimited,
 };
 
 export function defaultCodeForStatus(status: number): string {

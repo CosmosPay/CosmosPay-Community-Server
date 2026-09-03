@@ -1,6 +1,8 @@
 import { Global, Module } from '@nestjs/common';
 import { AdvisoryLockService } from '@/common/services/advisory-lock.service';
 import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
+import { RateLimitPruneService } from '@/common/services/rate-limit-prune.service';
+import { RateLimitService } from '@/common/services/rate-limit.service';
 import { RequestLogRetentionService } from '@/common/services/request-log-retention.service';
 
 /**
@@ -18,7 +20,12 @@ import { RequestLogRetentionService } from '@/common/services/request-log-retent
     RequestLogRetentionService,
     AdvisoryLockService,
     ConsumerResolverService,
+    // The shared rate-limit counter, plus the job that clears rolled-over
+    // windows. The guard that reads the counter is registered globally in
+    // AppModule, which is why the service is exported.
+    RateLimitService,
+    RateLimitPruneService,
   ],
-  exports: [AdvisoryLockService, ConsumerResolverService],
+  exports: [AdvisoryLockService, ConsumerResolverService, RateLimitService],
 })
 export class CommonModule {}

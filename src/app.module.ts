@@ -7,6 +7,7 @@ import configuration from '@/config/configuration';
 import { validateEnv } from '@/config/env.validation';
 import { ApisixGuard } from '@/common/guards/apisix.guard';
 import { PermissionsGuard } from '@/common/guards/permissions.guard';
+import { RateLimitGuard } from '@/common/guards/rate-limit.guard';
 import { ApisixContextMiddleware } from '@/common/middleware/apisix-context.middleware';
 import { PrismaModule } from '@/prisma/prisma.module';
 import { StellarModule } from '@/stellar/stellar.module';
@@ -82,6 +83,13 @@ import { CommonModule } from '@/common/common.module';
     {
       provide: APP_GUARD,
       useClass: PermissionsGuard,
+    },
+    // Last, so a request that was never going to be served does not spend a
+    // legitimate address's budget on its way to a 403. Opt-in per route with
+    // @RateLimit; every other route passes straight through.
+    {
+      provide: APP_GUARD,
+      useClass: RateLimitGuard,
     },
   ],
 })

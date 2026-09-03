@@ -11,6 +11,7 @@ import {
 import type { Response } from 'express';
 import { CurrentConsumer } from '@/common/decorators/current-consumer.decorator';
 import { Public } from '@/common/decorators/public.decorator';
+import { RateLimit } from '@/common/decorators/rate-limit.decorator';
 import { RequirePermissions } from '@/common/decorators/require-permissions.decorator';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import { AuthorizeOauthDto } from '@/pollar/oauth/dto/authorize-oauth.dto';
@@ -29,6 +30,11 @@ import {
   PollarOauthService,
 } from '@/pollar/oauth/pollar-oauth.service';
 import { renderCallbackPage } from '@/pollar/oauth/pollar-callback-page';
+import {
+  POLLAR_AUTHORIZE_RATE_LIMIT,
+  POLLAR_CALLBACK_RATE_LIMIT,
+  POLLAR_TOKEN_RATE_LIMIT,
+} from '@/pollar/pollar.constants';
 
 /**
  * The Pollar OAuth bridge — `/v1/pollar/oauth`.
@@ -52,6 +58,9 @@ export class PollarOauthController {
 
   @Post('authorize')
   @RequirePermissions('pollar:write')
+  // The cap on wallet generation: a handshake yields at most one wallet, so
+  // bounding handshakes per address bounds what an address can spend.
+  @RateLimit(POLLAR_AUTHORIZE_RATE_LIMIT)
   @ApiOperation({
     summary: 'Open a Pollar login and get the URL to send the user to',
     description:
@@ -82,6 +91,8 @@ export class PollarOauthController {
    */
   @Get('callback/:state')
   @Public()
+  // The only route here an anonymous client can reach.
+  @RateLimit(POLLAR_CALLBACK_RATE_LIMIT)
   @ApiOperation({
     summary: 'Where Pollar returns the browser after consent',
     description:
@@ -120,6 +131,7 @@ export class PollarOauthController {
    */
   @Get('callback')
   @Public()
+  @RateLimit(POLLAR_CALLBACK_RATE_LIMIT)
   @ApiOperation({
     summary: 'Callback fallback, with the state in the query',
     description:
@@ -160,6 +172,9 @@ export class PollarOauthController {
 
   @Post('token')
   @RequirePermissions('pollar:write')
+  // Loose on purpose — the 409 path below tells the caller to retry this exact
+  // request, and redeeming creates nothing the handshake did not already allow.
+  @RateLimit(POLLAR_TOKEN_RATE_LIMIT)
   @ApiOperation({
     summary: 'Redeem a bridge code for a Pollar session',
     description:

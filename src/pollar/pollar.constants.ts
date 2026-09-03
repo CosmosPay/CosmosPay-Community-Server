@@ -85,3 +85,80 @@ export const POLLAR_TERMINAL_SESSION_CODES = new Set([
  * and a bounded `updateMany` keeps each tick's lock short either way.
  */
 export const POLLAR_SWEEP_BATCH_SIZE = 500;
+
+// --- Rate limits -----------------------------------------------------------
+//
+// What is actually being defended: creating a Pollar wallet is not free. Pollar
+// creates the Stellar account, funds its base reserve (1 XLM) and adds a
+// trustline per configured asset (0.5 XLM each) — all out of the operator's
+// funding wallet. A loop calling the login flow is therefore a way to spend
+// somebody else's money, and it does not need a valid user at the end of it to
+// do damage.
+//
+// The control point is `authorize`, not `token`. A handshake can yield at most
+// one wallet, so capping how many handshakes an address may open caps how many
+// wallets it can cause — while `token` has to stay loose enough for the retry
+// the 409 path explicitly asks for. Budgets are per address (per /64 on IPv6)
+// per consumer; remember the fixed window means the true ceiling is twice these
+// numbers across a boundary.
+
+/** One window for all of it: long enough to bound a burst, short enough that a
+ *  user who genuinely fumbled a login is not locked out for the afternoon. */
+const WINDOW_MS = 10 * 60 * 1000;
+
+/**
+ * Opening a login. **This is the cap on wallet generation** — every wallet this
+ * service can cause to exist starts with one of these. Twenty is far above a
+ * human retrying a failed consent screen and far below a rate that could drain
+ * a funded account.
+ */
+export const POLLAR_AUTHORIZE_RATE_LIMIT = {
+  name: 'pollar:authorize',
+  limit: 20,
+  windowMs: WINDOW_MS,
+};
+
+/**
+ * Redeeming a code. Deliberately looser than `authorize`: a first login legitimately
+ * returns 409 while Pollar provisions the wallet and the caller is told to retry
+ * the same code, so a tight budget here would throttle our own documented retry.
+ * It creates nothing new anyway — the handshake it redeems was already counted.
+ */
+export const POLLAR_TOKEN_RATE_LIMIT = {
+  name: 'pollar:token',
+  limit: 60,
+  windowMs: WINDOW_MS,
+};
+
+/**
+ * The public callback. The only route here reachable without an API key, so it
+ * is the one an anonymous flood can reach. Generous, because a user refreshing
+ * the tab is normal and each hit is a single indexed read plus at most one
+ * compare-and-swap.
+ */
+export const POLLAR_CALLBACK_RATE_LIMIT = {
+  name: 'pollar:callback',
+  limit: 60,
+  windowMs: WINDOW_MS,
+};
+
+/**
+ * Provisioning a wallet directly, with no user in the loop at all. The tightest
+ * of the set: there is no consent screen pacing it, so the limit is the only
+ * thing standing between a script and the funding wallet.
+ */
+export const POLLAR_PROVISION_RATE_LIMIT = {
+  name: 'pollar:provision',
+  limit: 10,
+  windowMs: WINDOW_MS,
+};
+
+/**
+ * Funding an existing wallet's reserve. Spends XLM per call like the routes
+ * above, but cannot create anything new, so it sits between the two.
+ */
+export const POLLAR_ACTIVATE_RATE_LIMIT = {
+  name: 'pollar:activate',
+  limit: 20,
+  windowMs: WINDOW_MS,
+};

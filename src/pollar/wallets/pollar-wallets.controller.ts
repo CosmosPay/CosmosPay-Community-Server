@@ -6,6 +6,7 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { CurrentConsumer } from '@/common/decorators/current-consumer.decorator';
+import { RateLimit } from '@/common/decorators/rate-limit.decorator';
 import { RequirePermissions } from '@/common/decorators/require-permissions.decorator';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import { ActivateWalletDto } from '@/pollar/wallets/dto/activate-wallet.dto';
@@ -19,6 +20,10 @@ import {
 import { PollarTokenClaimsEntity } from '@/pollar/wallets/entities/pollar-token-claims.entity';
 import { PollarUserEntity } from '@/pollar/wallets/entities/pollar-user.entity';
 import { PollarWalletsService } from '@/pollar/wallets/pollar-wallets.service';
+import {
+  POLLAR_ACTIVATE_RATE_LIMIT,
+  POLLAR_PROVISION_RATE_LIMIT,
+} from '@/pollar/pollar.constants';
 
 /**
  * Operator routes for Pollar wallets — `/v1/pollar`.
@@ -35,6 +40,8 @@ export class PollarWalletsController {
 
   @Post('wallets/activate')
   @RequirePermissions('pollar:write')
+  // Spends XLM out of the funding wallet on every call that does real work.
+  @RateLimit(POLLAR_ACTIVATE_RATE_LIMIT)
   @ApiOperation({
     summary: "Fund a Pollar wallet's XLM reserve",
     description:
@@ -113,6 +120,8 @@ export class PollarWalletsController {
 
   @Post('users/with-wallet')
   @RequirePermissions('pollar:write')
+  // Creates a wallet with no consent screen pacing it — the tightest budget.
+  @RateLimit(POLLAR_PROVISION_RATE_LIMIT)
   @ApiOperation({
     summary: 'Register a user and provision their Stellar wallet',
     description:

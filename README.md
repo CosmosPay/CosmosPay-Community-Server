@@ -703,6 +703,71 @@ rather than in the wallet. Request and response schemas for all of them are in
 the generated contract — Swagger UI at `/docs`, or `openapi/openapi.{json,yaml}`.
 The table above is for orientation; the contract is the source of truth.
 
+### Rate limiting: what stops wallet generation being spammed
+
+Creating a Pollar wallet is not free. Pollar creates the Stellar account, funds
+its base reserve (1 XLM) and adds a trustline per configured asset (0.5 XLM
+each) — **out of your funding wallet**. A loop against the login flow is
+therefore a way for a stranger to spend your money, and it does not need a real
+user at the far end to do it.
+
+So the caps live here, in this service, rather than only at the gateway: this is
+the process that knows a request is about to create an account, and it is the
+one that can refuse before the XLM leaves.
+
+**The control point is `authorize`, not `token`.** A handshake yields at most one
+wallet, so bounding how many handshakes one address may open bounds how many
+wallets it can cause. `token` stays deliberately looser, because the 409 path
+tells the caller to retry that exact request while Pollar provisions the account
+— a tight budget there would throttle our own documented retry, and redeeming
+creates nothing the handshake had not already allowed.
+
+| Route | Budget (per 10 min) | Why that number |
+| ----- | ------------------- | --------------- |
+| `POST /v1/pollar/oauth/authorize` | 20 | The cap on wallet generation. Far above a human retrying a failed consent screen, far below a rate that drains an account |
+| `POST /v1/pollar/oauth/token` | 60 | Loose on purpose — see above |
+| `GET /v1/pollar/oauth/callback` | 60 | The only route reachable without an API key, so the only one an anonymous flood can reach. A user refreshing the tab is normal |
+| `POST /v1/pollar/users/with-wallet` | 10 | Creates a wallet with no consent screen pacing it — the tightest budget in the set |
+| `POST /v1/pollar/wallets/activate` | 20 | Spends XLM per call, but cannot create anything new |
+
+Exceeding one returns **`429` with `code: "rate_limited"`**, a `Retry-After`, and
+the `RateLimit-Limit` / `-Remaining` / `-Reset` triple. Everything else in the
+service is unlimited here; general traffic shaping is APISIX's job, since it sees
+the request before this process does.
+
+**The counter is in Postgres, not in memory.** The service runs behind a load
+balancer, so a per-process limiter would hand each replica the full budget: the
+effective limit becomes `limit × replicas` and changes silently whenever the
+deployment scales. That is fine for a cosmetic throttle and not fine for
+something guarding a real balance. It is a fixed window — one atomic
+`INSERT … ON CONFLICT … RETURNING` per request — which does mean a client can
+spend a full budget on each side of a boundary, so treat the numbers above as
+"at most twice this per window". They are set knowing that.
+
+**How the address is decided, and why it cannot be spoofed.** `main.ts` sets
+`trust proxy` to `1`, which makes Express read the *rightmost* entry of
+`X-Forwarded-For` — the one APISIX appended, i.e. the peer as the gateway saw
+it. A client may prepend entries to that header, but everything it writes lands
+to the left of APISIX's and is ignored.
+
+> **Do not raise `trust proxy`.** At `2` Express starts honouring the first
+> client-supplied hop, and every limit here becomes bypassable by adding one
+> header. `src/common/client-ip.spec.ts` pins both behaviours so the change
+> cannot pass review unnoticed.
+
+An IPv6 caller is bucketed per **/64**, not per address: a client is routinely
+handed a whole /64 and can rotate through it for free, so per-address limiting
+there is not limiting. The cost is that two users behind one /64 share a bucket,
+exactly as two users behind one IPv4 NAT already do. Buckets are also keyed by
+consumer, so one integrator's traffic cannot eat another's.
+
+If the counter cannot be written the limiter **fails closed** (`503`). A limiter
+that quietly stops limiting during a database incident is worth less than none,
+because nothing tells you it happened — and every route behind it needs the same
+database anyway, so refusing costs no availability that was not already lost.
+
+Set `RATE_LIMIT_ENABLED=false` as the incident switch.
+
 ### Setup
 
 1. Create an app at [dashboard.pollar.xyz](https://dashboard.pollar.xyz) and take
@@ -720,6 +785,15 @@ of on a user-facing login. Leave the keys blank to disable the feature (Pollar
 routes then return `503`). See `.env.example`.
 
 ## Upgrading — breaking changes and deploy notes
+
+### `429` now reports `rate_limited`
+
+A bare `429` used to fall back to `code: "provider_unavailable"`, which said an
+upstream was in trouble when in fact this service had refused the request
+itself — sending integrators to investigate something that was perfectly
+healthy. It now reports `code: "rate_limited"`, and `ApiErrorCode.RateLimited`
+is part of the published enum. Branch on that if you retry on throttling.
+
 
 ### Response shapes that changed
 
@@ -832,6 +906,8 @@ at least `DATABASE_URL` and `APISIX_GATEWAY_SECRET`.
 | `BLINDPAY_TIMEOUT_MS` | no | `15000` | BlindPay HTTP client timeout (ms) |
 | `ADMIN_API_CREDENTIALS` | no | — | JSON admin bearer secrets (issue #34) |
 | `KYC_REDIRECT_URL_WHITELIST` | no | — | Per-consumer KYC redirect host allow-list |
+| `RATE_LIMIT_ENABLED` | no | `true` | Per-address caps on the routes that spend XLM. Incident switch |
+| `RATE_LIMIT_PRUNE_INTERVAL_MS` | no | `600000` | Counter-window prune interval (ms, min 1000) |
 | `POLLAR_PUBLISHABLE_KEY_TESTNET` / `_MAINNET` | no | — | Pollar publishable key (`pub_<network>_…`), for the OAuth bridge |
 | `POLLAR_SECRET_KEY_TESTNET` / `_MAINNET` | with the publishable key | — | Pollar secret key (`sec_<network>_…`), for the operator routes |
 | `POLLAR_BRIDGE_CALLBACK_URL` | when a Pollar key is set | — | Public URL Pollar returns the browser to. Must be `<gateway>/v1/pollar/oauth/callback` **and** a host registered under Pollar's Build → Domains |

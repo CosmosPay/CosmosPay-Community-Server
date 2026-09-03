@@ -98,8 +98,15 @@ export class PollarClient {
     return `${this.cfg.sdkBaseUrl}/${POLLAR_SDK_API_VERSION}`;
   }
 
-  /** A call to the SDK API, authenticated with the publishable key. */
-  sdk<T>(
+  /**
+   * A call to the SDK API, authenticated with the publishable key.
+   *
+   * `async` so that resolving the key — which throws when the network has none
+   * configured — surfaces as a rejected promise like every other failure here.
+   * Without it the method would sometimes throw synchronously and sometimes
+   * reject, and a caller's `.catch()` would only cover one of the two.
+   */
+  async sdk<T>(
     method: string,
     network: StellarNetwork,
     path: string,
@@ -113,8 +120,8 @@ export class PollarClient {
     );
   }
 
-  /** A call to the Server API, authenticated with the secret key. */
-  server<T>(
+  /** A call to the Server API, authenticated with the secret key. See {@link sdk}. */
+  async server<T>(
     method: string,
     network: StellarNetwork,
     path: string,

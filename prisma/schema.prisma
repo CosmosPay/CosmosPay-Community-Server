@@ -858,3 +858,33 @@ model PollarOauthSession {
   @@index([status, expiresAt])
   @@map("pollar_oauth_session")
 }
+
+// ---------------------------------------------------------------------------
+// Rate limiting.
+//
+// One row per (policy + subject, window). The counter lives in Postgres rather
+// than in each replica's memory on purpose: the service runs behind APISIX,
+// which load-balances, so an in-process limiter would grant every replica the
+// full budget and quietly multiply the limit by the replica count. That is
+// tolerable for a cosmetic throttle and not tolerable for the thing this
+// actually guards — wallet creation, which spends XLM out of the funding
+// account on every call.
+//
+// Fixed window, not sliding: two full bursts can straddle a boundary, so the
+// real worst case is 2x the limit per window. That is a deliberate trade for a
+// single atomic upsert per request, and it still bounds the spend.
+// ---------------------------------------------------------------------------
+model RateLimitCounter {
+  // `<policy>:<consumer>:<ip subject>` — see RateLimitService.
+  key         String
+  // Start of the fixed window this count belongs to.
+  windowStart DateTime
+  count       Int      @default(0)
+  // When the row stops being needed. Read only by the prune job.
+  expiresAt   DateTime
+
+  @@id([key, windowStart])
+  // The prune deletes by deadline, oldest first.
+  @@index([expiresAt])
+  @@map("rate_limit_counter")
+}

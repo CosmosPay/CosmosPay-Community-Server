@@ -344,6 +344,21 @@ class EnvironmentVariables {
   @IsInt()
   @Min(1000)
   POLLAR_SWEEP_INTERVAL_MS?: number;
+
+  // --- Rate limiting ---
+  /**
+   * Master switch for the per-address caps declared with `@RateLimit`. Default
+   * on: the routes it guards create and fund Stellar accounts, so uncapped is
+   * not a state to arrive at by forgetting a variable.
+   */
+  @IsOptional()
+  @IsBooleanString()
+  RATE_LIMIT_ENABLED?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1000)
+  RATE_LIMIT_PRUNE_INTERVAL_MS?: number;
 }
 
 function formatValidationErrors(errors: ValidationError[]): string {

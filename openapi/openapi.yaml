@@ -35,6 +35,13 @@ paths:
           content:
             application/json:
               schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
+          content:
+            application/json:
+              schema: *a1
         "500":
           description: Unexpected server error. The detail is logged server-side and never
             returned.
@@ -130,6 +137,13 @@ paths:
         "409":
           description: Conflicts with existing state — an idempotency clash, an operation
             already in flight, or an invalid state transition.
+          content:
+            application/json:
+              schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
           content:
             application/json:
               schema: *a1
@@ -242,6 +256,13 @@ paths:
           content:
             application/json:
               schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
+          content:
+            application/json:
+              schema: *a1
         "500":
           description: Unexpected server error. The detail is logged server-side and never
             returned.
@@ -302,6 +323,13 @@ paths:
         "409":
           description: Conflicts with existing state — an idempotency clash, an operation
             already in flight, or an invalid state transition.
+          content:
+            application/json:
+              schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
           content:
             application/json:
               schema: *a1
@@ -386,6 +414,13 @@ paths:
           content:
             application/json:
               schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
+          content:
+            application/json:
+              schema: *a1
         "500":
           description: Unexpected server error. The detail is logged server-side and never
             returned.
@@ -449,6 +484,13 @@ paths:
           content:
             application/json:
               schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
+          content:
+            application/json:
+              schema: *a1
         "500":
           description: Unexpected server error. The detail is logged server-side and never
             returned.
@@ -507,6 +549,13 @@ paths:
         "409":
           description: Conflicts with existing state — an idempotency clash, an operation
             already in flight, or an invalid state transition.
+          content:
+            application/json:
+              schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
           content:
             application/json:
               schema: *a1
@@ -576,6 +625,13 @@ paths:
           content:
             application/json:
               schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
+          content:
+            application/json:
+              schema: *a1
         "500":
           description: Unexpected server error. The detail is logged server-side and never
             returned.
@@ -633,6 +689,13 @@ paths:
         "409":
           description: Conflicts with existing state — an idempotency clash, an operation
             already in flight, or an invalid state transition.
+          content:
+            application/json:
+              schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
           content:
             application/json:
               schema: *a1
@@ -703,6 +766,13 @@ paths:
           content:
             application/json:
               schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
+          content:
+            application/json:
+              schema: *a1
         "500":
           description: Unexpected server error. The detail is logged server-side and never
             returned.
@@ -763,6 +833,13 @@ paths:
         "409":
           description: Conflicts with existing state — an idempotency clash, an operation
             already in flight, or an invalid state transition.
+          content:
+            application/json:
+              schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
           content:
             application/json:
               schema: *a1
@@ -836,6 +913,13 @@ paths:
         "409":
           description: Conflicts with existing state — an idempotency clash, an operation
             already in flight, or an invalid state transition.
+          content:
+            application/json:
+              schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
           content:
             application/json:
               schema: *a1
@@ -918,6 +1002,13 @@ paths:
           content:
             application/json:
               schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
+          content:
+            application/json:
+              schema: *a1
         "500":
           description: Unexpected server error. The detail is logged server-side and never
             returned.
@@ -976,6 +1067,13 @@ paths:
         "409":
           description: Conflicts with existing state — an idempotency clash, an operation
             already in flight, or an invalid state transition.
+          content:
+            application/json:
+              schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
           content:
             application/json:
               schema: *a1
@@ -1043,6 +1141,13 @@ paths:
         "409":
           description: Conflicts with existing state — an idempotency clash, an operation
             already in flight, or an invalid state transition.
+          content:
+            application/json:
+              schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
           content:
             application/json:
               schema: *a1
@@ -1115,6 +1220,13 @@ paths:
         "409":
           description: Conflicts with existing state — an idempotency clash, an operation
             already in flight, or an invalid state transition.
+          content:
+            application/json:
+              schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
           content:
             application/json:
               schema: *a1
@@ -1191,6 +1303,13 @@ paths:
           content:
             application/json:
               schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
+          content:
+            application/json:
+              schema: *a1
         "500":
           description: Unexpected server error. The detail is logged server-side and never
             returned.
@@ -1251,6 +1370,13 @@ paths:
         "409":
           description: Conflicts with existing state — an idempotency clash, an operation
             already in flight, or an invalid state transition.
+          content:
+            application/json:
+              schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
           content:
             application/json:
               schema: *a1
@@ -1342,6 +1468,13 @@ paths:
           content:
             application/json:
               schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
+          content:
+            application/json:
+              schema: *a1
         "500":
           description: Unexpected server error. The detail is logged server-side and never
             returned.
@@ -1400,6 +1533,13 @@ paths:
         "409":
           description: Conflicts with existing state — an idempotency clash, an operation
             already in flight, or an invalid state transition.
+          content:
+            application/json:
+              schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
           content:
             application/json:
               schema: *a1
@@ -1467,6 +1607,13 @@ paths:
         "409":
           description: Conflicts with existing state — an idempotency clash, an operation
             already in flight, or an invalid state transition.
+          content:
+            application/json:
+              schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
           content:
             application/json:
               schema: *a1
@@ -1573,6 +1720,13 @@ paths:
           content:
             application/json:
               schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
+          content:
+            application/json:
+              schema: *a1
         "500":
           description: Unexpected server error. The detail is logged server-side and never
             returned.
@@ -1631,6 +1785,13 @@ paths:
         "409":
           description: Conflicts with existing state — an idempotency clash, an operation
             already in flight, or an invalid state transition.
+          content:
+            application/json:
+              schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
           content:
             application/json:
               schema: *a1
@@ -1693,6 +1854,13 @@ paths:
         "409":
           description: Conflicts with existing state — an idempotency clash, an operation
             already in flight, or an invalid state transition.
+          content:
+            application/json:
+              schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
           content:
             application/json:
               schema: *a1
@@ -1765,6 +1933,13 @@ paths:
           content:
             application/json:
               schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
+          content:
+            application/json:
+              schema: *a1
         "500":
           description: Unexpected server error. The detail is logged server-side and never
             returned.
@@ -1823,6 +1998,13 @@ paths:
         "409":
           description: Conflicts with existing state — an idempotency clash, an operation
             already in flight, or an invalid state transition.
+          content:
+            application/json:
+              schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
           content:
             application/json:
               schema: *a1
@@ -1892,6 +2074,13 @@ paths:
           content:
             application/json:
               schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
+          content:
+            application/json:
+              schema: *a1
         "500":
           description: Unexpected server error. The detail is logged server-side and never
             returned.
@@ -1949,6 +2138,13 @@ paths:
         "409":
           description: Conflicts with existing state — an idempotency clash, an operation
             already in flight, or an invalid state transition.
+          content:
+            application/json:
+              schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
           content:
             application/json:
               schema: *a1
@@ -2013,6 +2209,13 @@ paths:
           content:
             application/json:
               schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
+          content:
+            application/json:
+              schema: *a1
         "500":
           description: Unexpected server error. The detail is logged server-side and never
             returned.
@@ -2071,6 +2274,13 @@ paths:
         "409":
           description: Conflicts with existing state — an idempotency clash, an operation
             already in flight, or an invalid state transition.
+          content:
+            application/json:
+              schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
           content:
             application/json:
               schema: *a1
@@ -2157,6 +2367,13 @@ paths:
           content:
             application/json:
               schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
+          content:
+            application/json:
+              schema: *a1
         "500":
           description: Unexpected server error. The detail is logged server-side and never
             returned.
@@ -2223,6 +2440,13 @@ paths:
           content:
             application/json:
               schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
+          content:
+            application/json:
+              schema: *a1
         "500":
           description: Unexpected server error. The detail is logged server-side and never
             returned.
@@ -2276,6 +2500,13 @@ paths:
         "409":
           description: Conflicts with existing state — an idempotency clash, an operation
             already in flight, or an invalid state transition.
+          content:
+            application/json:
+              schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
           content:
             application/json:
               schema: *a1
@@ -2333,6 +2564,13 @@ paths:
         "409":
           description: Conflicts with existing state — an idempotency clash, an operation
             already in flight, or an invalid state transition.
+          content:
+            application/json:
+              schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
           content:
             application/json:
               schema: *a1
@@ -2407,6 +2645,13 @@ paths:
           content:
             application/json:
               schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
+          content:
+            application/json:
+              schema: *a1
         "500":
           description: Unexpected server error. The detail is logged server-side and never
             returned.
@@ -2478,6 +2723,13 @@ paths:
           content:
             application/json:
               schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
+          content:
+            application/json:
+              schema: *a1
         "500":
           description: Unexpected server error. The detail is logged server-side and never
             returned.
@@ -2537,6 +2789,13 @@ paths:
         "409":
           description: Conflicts with existing state — an idempotency clash, an operation
             already in flight, or an invalid state transition.
+          content:
+            application/json:
+              schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
           content:
             application/json:
               schema: *a1
@@ -2611,6 +2870,13 @@ paths:
           content:
             application/json:
               schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
+          content:
+            application/json:
+              schema: *a1
         "500":
           description: Unexpected server error. The detail is logged server-side and never
             returned.
@@ -2669,6 +2935,13 @@ paths:
         "409":
           description: Conflicts with existing state — an idempotency clash, an operation
             already in flight, or an invalid state transition.
+          content:
+            application/json:
+              schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
           content:
             application/json:
               schema: *a1
@@ -2738,6 +3011,13 @@ paths:
           content:
             application/json:
               schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
+          content:
+            application/json:
+              schema: *a1
         "500":
           description: Unexpected server error. The detail is logged server-side and never
             returned.
@@ -2791,6 +3071,13 @@ paths:
         "409":
           description: Conflicts with existing state — an idempotency clash, an operation
             already in flight, or an invalid state transition.
+          content:
+            application/json:
+              schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
           content:
             application/json:
               schema: *a1
@@ -2851,6 +3138,13 @@ paths:
         "409":
           description: Invalid KYC status transition (e.g. receiver is not in
             'pending_review')
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
+          content:
+            application/json:
+              schema: *a1
         "500":
           description: Unexpected server error. The detail is logged server-side and never
             returned.
@@ -2912,6 +3206,13 @@ paths:
         "409":
           description: Conflicts with existing state — an idempotency clash, an operation
             already in flight, or an invalid state transition.
+          content:
+            application/json:
+              schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
           content:
             application/json:
               schema: *a1
@@ -2980,6 +3281,13 @@ paths:
         "409":
           description: Invalid KYC status transition (e.g. receiver is not in
             'pending_user')
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
+          content:
+            application/json:
+              schema: *a1
         "500":
           description: Unexpected server error. The detail is logged server-side and never
             returned.
@@ -3044,6 +3352,13 @@ paths:
           content:
             application/json:
               schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
+          content:
+            application/json:
+              schema: *a1
         "500":
           description: Unexpected server error. The detail is logged server-side and never
             returned.
@@ -3099,6 +3414,13 @@ paths:
         "409":
           description: Conflicts with existing state — an idempotency clash, an operation
             already in flight, or an invalid state transition.
+          content:
+            application/json:
+              schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
           content:
             application/json:
               schema: *a1
@@ -3167,6 +3489,13 @@ paths:
         "409":
           description: Conflicts with existing state — an idempotency clash, an operation
             already in flight, or an invalid state transition.
+          content:
+            application/json:
+              schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
           content:
             application/json:
               schema: *a1
@@ -3245,6 +3574,13 @@ paths:
           content:
             application/json:
               schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
+          content:
+            application/json:
+              schema: *a1
         "500":
           description: Unexpected server error. The detail is logged server-side and never
             returned.
@@ -3304,6 +3640,13 @@ paths:
         "409":
           description: Conflicts with existing state — an idempotency clash, an operation
             already in flight, or an invalid state transition.
+          content:
+            application/json:
+              schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
           content:
             application/json:
               schema: *a1
@@ -3371,6 +3714,13 @@ paths:
         "409":
           description: Conflicts with existing state — an idempotency clash, an operation
             already in flight, or an invalid state transition.
+          content:
+            application/json:
+              schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
           content:
             application/json:
               schema: *a1
@@ -3450,6 +3800,13 @@ paths:
           content:
             application/json:
               schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
+          content:
+            application/json:
+              schema: *a1
         "500":
           description: Unexpected server error. The detail is logged server-side and never
             returned.
@@ -3509,6 +3866,13 @@ paths:
         "409":
           description: Conflicts with existing state — an idempotency clash, an operation
             already in flight, or an invalid state transition.
+          content:
+            application/json:
+              schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
           content:
             application/json:
               schema: *a1
@@ -3582,6 +3946,13 @@ paths:
           content:
             application/json:
               schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
+          content:
+            application/json:
+              schema: *a1
         "500":
           description: Unexpected server error. The detail is logged server-side and never
             returned.
@@ -3641,6 +4012,13 @@ paths:
           content:
             application/json:
               schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
+          content:
+            application/json:
+              schema: *a1
         "500":
           description: Unexpected server error. The detail is logged server-side and never
             returned.
@@ -3690,6 +4068,13 @@ paths:
         "409":
           description: Conflicts with existing state — an idempotency clash, an operation
             already in flight, or an invalid state transition.
+          content:
+            application/json:
+              schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
           content:
             application/json:
               schema: *a1
@@ -3747,6 +4132,13 @@ paths:
         "409":
           description: Conflicts with existing state — an idempotency clash, an operation
             already in flight, or an invalid state transition.
+          content:
+            application/json:
+              schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
           content:
             application/json:
               schema: *a1
@@ -3809,6 +4201,13 @@ paths:
         "409":
           description: Conflicts with existing state — an idempotency clash, an operation
             already in flight, or an invalid state transition.
+          content:
+            application/json:
+              schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
           content:
             application/json:
               schema: *a1
@@ -3881,6 +4280,13 @@ paths:
           content:
             application/json:
               schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
+          content:
+            application/json:
+              schema: *a1
         "500":
           description: Unexpected server error. The detail is logged server-side and never
             returned.
@@ -3939,6 +4345,13 @@ paths:
         "409":
           description: Conflicts with existing state — an idempotency clash, an operation
             already in flight, or an invalid state transition.
+          content:
+            application/json:
+              schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
           content:
             application/json:
               schema: *a1
@@ -4008,6 +4421,13 @@ paths:
           content:
             application/json:
               schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
+          content:
+            application/json:
+              schema: *a1
         "500":
           description: Unexpected server error. The detail is logged server-side and never
             returned.
@@ -4065,6 +4485,13 @@ paths:
         "409":
           description: Conflicts with existing state — an idempotency clash, an operation
             already in flight, or an invalid state transition.
+          content:
+            application/json:
+              schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
           content:
             application/json:
               schema: *a1
@@ -4127,6 +4554,13 @@ paths:
         "409":
           description: Conflicts with existing state — an idempotency clash, an operation
             already in flight, or an invalid state transition.
+          content:
+            application/json:
+              schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
           content:
             application/json:
               schema: *a1
@@ -4199,6 +4633,13 @@ paths:
           content:
             application/json:
               schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
+          content:
+            application/json:
+              schema: *a1
         "500":
           description: Unexpected server error. The detail is logged server-side and never
             returned.
@@ -4257,6 +4698,13 @@ paths:
         "409":
           description: Conflicts with existing state — an idempotency clash, an operation
             already in flight, or an invalid state transition.
+          content:
+            application/json:
+              schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
           content:
             application/json:
               schema: *a1
@@ -4326,6 +4774,13 @@ paths:
           content:
             application/json:
               schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
+          content:
+            application/json:
+              schema: *a1
         "500":
           description: Unexpected server error. The detail is logged server-side and never
             returned.
@@ -4383,6 +4838,13 @@ paths:
         "409":
           description: Conflicts with existing state — an idempotency clash, an operation
             already in flight, or an invalid state transition.
+          content:
+            application/json:
+              schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
           content:
             application/json:
               schema: *a1
@@ -4448,6 +4910,13 @@ paths:
           content:
             application/json:
               schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
+          content:
+            application/json:
+              schema: *a1
         "500":
           description: Unexpected server error. The detail is logged server-side and never
             returned.
@@ -4508,6 +4977,13 @@ paths:
         "409":
           description: Conflicts with existing state — an idempotency clash, an operation
             already in flight, or an invalid state transition.
+          content:
+            application/json:
+              schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
           content:
             application/json:
               schema: *a1
@@ -4581,6 +5057,13 @@ paths:
           content:
             application/json:
               schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
+          content:
+            application/json:
+              schema: *a1
         "500":
           description: Unexpected server error. The detail is logged server-side and never
             returned.
@@ -4642,6 +5125,13 @@ paths:
           content:
             application/json:
               schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
+          content:
+            application/json:
+              schema: *a1
         "500":
           description: Unexpected server error. The detail is logged server-side and never
             returned.
@@ -4697,6 +5187,13 @@ paths:
         "409":
           description: Conflicts with existing state — an idempotency clash, an operation
             already in flight, or an invalid state transition.
+          content:
+            application/json:
+              schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
           content:
             application/json:
               schema: *a1
@@ -4760,6 +5257,13 @@ paths:
         "409":
           description: Conflicts with existing state — an idempotency clash, an operation
             already in flight, or an invalid state transition.
+          content:
+            application/json:
+              schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
           content:
             application/json:
               schema: *a1
@@ -4835,6 +5339,13 @@ paths:
           content:
             application/json:
               schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
+          content:
+            application/json:
+              schema: *a1
         "500":
           description: Unexpected server error. The detail is logged server-side and never
             returned.
@@ -4897,6 +5408,13 @@ paths:
           content:
             application/json:
               schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
+          content:
+            application/json:
+              schema: *a1
         "500":
           description: Unexpected server error. The detail is logged server-side and never
             returned.
@@ -4953,6 +5471,13 @@ paths:
         "409":
           description: Conflicts with existing state — an idempotency clash, an operation
             already in flight, or an invalid state transition.
+          content:
+            application/json:
+              schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
           content:
             application/json:
               schema: *a1
@@ -5015,6 +5540,13 @@ paths:
         "409":
           description: Conflicts with existing state — an idempotency clash, an operation
             already in flight, or an invalid state transition.
+          content:
+            application/json:
+              schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
           content:
             application/json:
               schema: *a1
@@ -5088,6 +5620,13 @@ paths:
           content:
             application/json:
               schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
+          content:
+            application/json:
+              schema: *a1
         "500":
           description: Unexpected server error. The detail is logged server-side and never
             returned.
@@ -5146,6 +5685,13 @@ paths:
         "409":
           description: Conflicts with existing state — an idempotency clash, an operation
             already in flight, or an invalid state transition.
+          content:
+            application/json:
+              schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
           content:
             application/json:
               schema: *a1
@@ -5213,6 +5759,13 @@ paths:
           content:
             application/json:
               schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
+          content:
+            application/json:
+              schema: *a1
         "500":
           description: Unexpected server error. The detail is logged server-side and never
             returned.
@@ -5275,6 +5828,13 @@ paths:
         "409":
           description: Conflicts with existing state — an idempotency clash, an operation
             already in flight, or an invalid state transition.
+          content:
+            application/json:
+              schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
           content:
             application/json:
               schema: *a1
@@ -5351,6 +5911,13 @@ paths:
           content:
             application/json:
               schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
+          content:
+            application/json:
+              schema: *a1
         "500":
           description: Unexpected server error. The detail is logged server-side and never
             returned.
@@ -5417,6 +5984,13 @@ paths:
           content:
             application/json:
               schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
+          content:
+            application/json:
+              schema: *a1
         "500":
           description: Unexpected server error. The detail is logged server-side and never
             returned.
@@ -5479,6 +6053,13 @@ paths:
         "409":
           description: Conflicts with existing state — an idempotency clash, an operation
             already in flight, or an invalid state transition.
+          content:
+            application/json:
+              schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
           content:
             application/json:
               schema: *a1
@@ -5548,6 +6129,13 @@ paths:
           content:
             application/json:
               schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
+          content:
+            application/json:
+              schema: *a1
         "500":
           description: Unexpected server error. The detail is logged server-side and never
             returned.
@@ -5613,6 +6201,13 @@ paths:
           content:
             application/json:
               schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
+          content:
+            application/json:
+              schema: *a1
         "500":
           description: Unexpected server error. The detail is logged server-side and never
             returned.
@@ -5672,6 +6267,13 @@ paths:
         "409":
           description: Conflicts with existing state — an idempotency clash, an operation
             already in flight, or an invalid state transition.
+          content:
+            application/json:
+              schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
           content:
             application/json:
               schema: *a1
@@ -5740,6 +6342,13 @@ paths:
           content:
             application/json:
               schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
+          content:
+            application/json:
+              schema: *a1
         "500":
           description: Unexpected server error. The detail is logged server-side and never
             returned.
@@ -5799,6 +6408,13 @@ paths:
         "409":
           description: Conflicts with existing state — an idempotency clash, an operation
             already in flight, or an invalid state transition.
+          content:
+            application/json:
+              schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
           content:
             application/json:
               schema: *a1
@@ -5866,6 +6482,13 @@ paths:
         "409":
           description: Conflicts with existing state — an idempotency clash, an operation
             already in flight, or an invalid state transition.
+          content:
+            application/json:
+              schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
           content:
             application/json:
               schema: *a1
@@ -5944,6 +6567,13 @@ paths:
           content:
             application/json:
               schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
+          content:
+            application/json:
+              schema: *a1
         "500":
           description: Unexpected server error. The detail is logged server-side and never
             returned.
@@ -6006,6 +6636,13 @@ paths:
         "409":
           description: Conflicts with existing state — an idempotency clash, an operation
             already in flight, or an invalid state transition.
+          content:
+            application/json:
+              schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
           content:
             application/json:
               schema: *a1
@@ -6074,6 +6711,13 @@ paths:
           content:
             application/json:
               schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
+          content:
+            application/json:
+              schema: *a1
         "500":
           description: Unexpected server error. The detail is logged server-side and never
             returned.
@@ -6136,6 +6780,13 @@ paths:
         "409":
           description: Conflicts with existing state — an idempotency clash, an operation
             already in flight, or an invalid state transition.
+          content:
+            application/json:
+              schema: *a1
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
           content:
             application/json:
               schema: *a1
@@ -10265,6 +10916,7 @@ components:
             - kyc_review_required
             - account_disabled
             - payload_expired
+            - rate_limited
             - misconfigured
             - internal_error
           example: idempotency_conflict
