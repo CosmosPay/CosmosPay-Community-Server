@@ -10,14 +10,15 @@
     "node": ">=22.12.0"
   },
   "scripts": {
-    "build": "prisma generate && nest build",
+    "build": "prisma generate && nest build && tsc-alias -p tsconfig.build.json",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "dev": "prisma migrate deploy && nest start --watch",
     "start": "nest start",
     "start:dev": "nest start --watch",
     "start:debug": "nest start --debug --watch",
     "start:prod": "node dist/src/main",
-    "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
+    "lint": "eslint \"{src,apps,libs,scripts,test}/**/*.ts\" --max-warnings=0",
+    "lint:fix": "eslint \"{src,apps,libs,scripts,test}/**/*.ts\" --fix",
     "test": "jest",
     "test:watch": "jest --watch",
     "test:e2e": "jest --config ./test/jest-e2e.json",
@@ -26,10 +27,10 @@
     "db:deploy": "prisma migrate deploy",
     "db:push": "prisma db push",
     "db:studio": "prisma studio",
-    "openapi:generate": "ts-node --transpile-only scripts/generate-openapi.ts",
+    "openapi:generate": "ts-node -r tsconfig-paths/register --transpile-only scripts/generate-openapi.ts",
     "openapi:check": "npm run openapi:generate && git diff --exit-code -- openapi/openapi.json openapi/openapi.yaml",
-    "webhooks:audit-destinations": "ts-node --transpile-only scripts/mark-blocked-webhook-endpoints.ts",
-    "seed:request-logs": "ts-node --transpile-only scripts/seed-request-logs.ts"
+    "webhooks:audit-destinations": "ts-node -r tsconfig-paths/register --transpile-only scripts/mark-blocked-webhook-endpoints.ts",
+    "seed:request-logs": "ts-node -r tsconfig-paths/register --transpile-only scripts/seed-request-logs.ts"
   },
   "dependencies": {
     "@nestjs/common": "^11.2.3",
@@ -74,6 +75,7 @@
     "ts-jest": "^29.4.12",
     "ts-loader": "^9.6.2",
     "ts-node": "^10.9.2",
+    "tsc-alias": "^1.9.4",
     "tsconfig-paths": "^4.2.0",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.68.0",
@@ -83,7 +85,9 @@
     "multer": "^2.2.0",
     "@hono/node-server": "^1.19.15",
     "deepmerge-ts": "^8.0.2",
-    "valibot": "^1.4.2"
+    "valibot": "^1.4.2",
+    "mysql2": "^3.22.0",
+    "browserslist": "^4.28.7"
   },
   "jest": {
     "moduleFileExtensions": [
@@ -92,6 +96,10 @@
       "ts"
     ],
     "rootDir": "src",
+    "moduleNameMapper": {
+      "^@/(.*)$": "<rootDir>/$1",
+      "^@generated/(.*)$": "<rootDir>/../generated/$1"
+    },
     "testRegex": ".*\\.spec\\.ts$",
     "transform": {
       "^.+\\.(t|j)s$": [

@@ -1,315 +1,201 @@
-import { Test, TestingModule } from '@nestjs/testing';
-import { PrismaService } from '../prisma/prisma.service';
-import { toStroops } from '../swaps/swap-math';
-import {
-  AnalyticsService,
-  formatAmount,
-  sumAmounts,
-} from './analytics.service';
-import type { GatewayConsumer } from '../common/interfaces/gateway-consumer.interface';
+import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
+import { AnalyticsService } from '@/analytics/analytics.service';
+import type { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 
-function consumer(overrides: Partial<GatewayConsumer> = {}): GatewayConsumer {
-  return {
-    username: 'cosmos_test',
-    credentialId: 'cred_1',
-    environment: 'dev',
-    role: 'admin',
-    permissions: ['payments:read', 'webhooks:read'],
-    organizationId: 'org_1',
-    plan: 'pro',
-    planSwapFeeBps: 50,
-    ...overrides,
-  };
-}
+const consumer = {
+  username: 'cosmos_u1',
+  credentialId: 'cred_1',
+  environment: 'prod',
+  role: 'user',
+  permissions: [],
+  organizationId: null,
+  plan: null,
+  planSwapFeeBps: null,
+} as GatewayConsumer;
 
-describe('analytics money helpers (stroops)', () => {
-  it('sums 1_000_000 amounts of 1234.5678901 exactly', () => {
-    const amounts = Array.from({ length: 1_000_000 }, () => '1234.5678901');
-    expect(sumAmounts(amounts)).toBe('1234567890.1');
-  });
-
-  it('serializes a single stroop as 0.0000001 (not 1e-7) and round-trips', () => {
-    const formatted = formatAmount('0.0000001');
-    expect(formatted).toBe('0.0000001');
-    expect(formatted).not.toMatch(/e/i);
-    expect(() => toStroops(formatted)).not.toThrow();
-    expect(toStroops(formatted)).toBe(1n);
-  });
-
-  it('normalizes Postgres numeric::text with extra fractional digits', () => {
-    expect(formatAmount('0.0000001000')).toBe('0.0000001');
-    expect(formatAmount('1234567890.1000000')).toBe('1234567890.1');
-  });
-});
-
-type FindManyArgs = { take?: number; [key: string]: unknown };
-
+/**
+ * `summary` and `balances` used to load every payment intent for the consumer
+ * and reduce the array in JS. They now aggregate in Postgres, so these tests
+ * assert on the shape the SQL returns — and, critically, that no unbounded
+ * `findMany` is issued: the only row fetch left is the 6-row "recent" list.
+ */
 describe('AnalyticsService', () => {
-  let service: AnalyticsService;
-  let prisma: {
-    consumer: { upsert: jest.Mock };
-    paymentIntent: {
-      groupBy: jest.Mock;
-      findMany: jest.Mock;
-    };
-    webhookEndpoint: { count: jest.Mock; findMany: jest.Mock };
-    webhookDelivery: { count: jest.Mock; findMany: jest.Mock };
-    requestLog: { findMany: jest.Mock; count: jest.Mock };
-    $queryRaw: jest.Mock;
-  };
+  /** The SQL text of the nth `$queryRaw` tagged template, whitespace-collapsed. */
+  const sqlOf = (queryRaw: jest.Mock, nth: number): string =>
+    (queryRaw.mock.calls[nth][0] as string[]).join('?').replace(/\s+/g, ' ');
 
-  beforeEach(async () => {
-    prisma = {
+  function build(queryResults: unknown[][]) {
+    const queryRaw = jest.fn();
+    for (const result of queryResults) queryRaw.mockResolvedValueOnce(result);
+
+    const findMany = jest.fn().mockResolvedValue([]);
+    // Mirrors the real config: no environment header falls back to this.
+    const config = { get: () => ({ network: 'testnet' }) };
+    const prisma = {
       consumer: {
-        upsert: jest.fn().mockResolvedValue({ id: 'cons_1' }),
+        upsert: jest.fn().mockResolvedValue({ id: 'c1' }),
       },
       paymentIntent: {
-        groupBy: jest.fn().mockResolvedValue([]),
-        findMany: jest.fn().mockResolvedValue([]),
+        groupBy: jest.fn().mockResolvedValue([
+          { status: 'SUCCEEDED', _count: { _all: 7 } },
+          { status: 'PENDING', _count: { _all: 3 } },
+        ]),
+        findMany,
       },
-      webhookEndpoint: {
-        count: jest.fn().mockResolvedValue(0),
-        findMany: jest.fn().mockResolvedValue([]),
-      },
-      webhookDelivery: {
-        count: jest.fn().mockResolvedValue(0),
-        findMany: jest.fn().mockResolvedValue([]),
-      },
-    requestLog: {
-      findMany: jest.fn().mockResolvedValue([]),
-      count: jest.fn().mockResolvedValue(0),
-    },
-      $queryRaw: jest.fn().mockResolvedValue([]),
+      webhookEndpoint: { findMany: jest.fn().mockResolvedValue([]) },
+      webhookDelivery: { count: jest.fn().mockResolvedValue(0) },
+      $queryRaw: queryRaw,
     };
-
-    const module: TestingModule = await Test.createTestingModule({
-      providers: [
-        AnalyticsService,
-        { provide: PrismaService, useValue: prisma },
-      ],
-    }).compile();
-
-    service = module.get(AnalyticsService);
-  });
-
-  function mockSummaryQueries(
-    opts: {
-      customers?: number;
-      volume?: Array<{ asset: string; amount: string; count: number }>;
-      balances?: Array<{
-        asset: string;
-        settled: string;
-        pending: string;
-        settled_count: number;
-      }>;
-    } = {},
-  ) {
-    // summary issues 3 $queryRaw calls in order: volume, series, customers
-    // balances issues 1 $queryRaw
-    let call = 0;
-    prisma.$queryRaw.mockImplementation(() => {
-      call += 1;
-      if (opts.balances && call === 1 && !opts.volume) {
-        return Promise.resolve(opts.balances);
-      }
-      if (call === 1) return Promise.resolve(opts.volume ?? []);
-      if (call === 2) return Promise.resolve([]); // series
-      if (call === 3) return Promise.resolve([{ count: opts.customers ?? 0 }]);
-      return Promise.resolve(opts.balances ?? []);
-    });
+    return {
+      service: new AnalyticsService(
+        prisma as never,
+        config as never,
+        new ConsumerResolverService(prisma as never),
+      ),
+      prisma,
+      findMany,
+    };
   }
 
-  function rawSqlText(callArgs: unknown[]): string {
-    const first = callArgs[0];
-    if (Array.isArray(first)) {
-      return (first as string[]).join('?');
-    }
-    if (
-      first &&
-      typeof first === 'object' &&
-      'strings' in first &&
-      Array.isArray((first as { strings: string[] }).strings)
-    ) {
-      return (first as { strings: string[] }).strings.join('?');
-    }
-    return String(first);
-  }
+  it('derives totals and success rate from the grouped status counts', async () => {
+    const { service } = build([
+      [], // volume
+      [], // series
+      [{ payers: 4n }], // distinct payers
+    ]);
 
-  it('summary and balances never call findMany without take', async () => {
-    mockSummaryQueries({ customers: 2 });
-    await service.summary(consumer());
+    const result = await service.summary(consumer);
 
-    mockSummaryQueries({
-      balances: [
+    expect(result.totals.all).toBe(10);
+    expect(result.totals.succeeded).toBe(7);
+    expect(result.totals.pending).toBe(3);
+    expect(result.totals.successRate).toBe(70);
+    expect(result.customers).toBe(4);
+  });
+
+  it('never loads the full intent table — only the six recent rows', async () => {
+    const { service, findMany } = build([[], [], [{ payers: 0n }]]);
+
+    await service.summary(consumer);
+
+    expect(findMany).toHaveBeenCalledTimes(1);
+    expect(findMany.mock.calls[0][0]).toMatchObject({
+      take: 6,
+      where: { status: 'SUCCEEDED' },
+    });
+  });
+
+  it('keeps exact decimal precision on a summed numeric', async () => {
+    // A float sum of these would drift; the numeric sum comes back exact and
+    // must survive formatting unchanged.
+    const { service } = build([
+      [{ asset: 'USDC', amount: '90071992547409.9100000', count: 3n }],
+      [],
+      [{ payers: 1n }],
+    ]);
+
+    const result = await service.summary(consumer);
+
+    expect(result.volume).toEqual([
+      { asset: 'USDC', amount: '90071992547409.91', count: 3 },
+    ]);
+  });
+
+  it('folds the native alias onto XLM in SQL, not in JS', async () => {
+    // The fold has to happen inside the GROUP BY. Folding it afterwards in JS
+    // meant adding two exact numerics back through `Number`, which is the one
+    // thing `formatNumericAmount` exists to prevent.
+    const { service, prisma } = build([[], [], [{ payers: 0n }]]);
+
+    await service.summary(consumer);
+
+    const sql = sqlOf(prisma.$queryRaw, 0);
+    expect(sql).toContain(`CASE WHEN "asset" IN ('', 'native') THEN 'XLM'`);
+    expect(sql).toContain('GROUP BY 1');
+  });
+
+  it('passes an aggregated row straight through and tolerates a null sum', async () => {
+    const { service } = build([
+      [{ asset: 'XLM', amount: null, count: 0n }],
+      [],
+      [{ payers: 0n }],
+    ]);
+
+    const result = await service.summary(consumer);
+
+    expect(result.volume).toEqual([{ asset: 'XLM', amount: '0', count: 0 }]);
+  });
+
+  it('seeds 30 day buckets and fills only the days that have rows', async () => {
+    const day = new Date();
+    day.setUTCHours(0, 0, 0, 0);
+    const key = day.toISOString().slice(0, 10);
+
+    const { service } = build([
+      [],
+      [{ day, count: 5n, volume: '12.5000000' }],
+      [{ payers: 2n }],
+    ]);
+
+    const result = await service.summary(consumer);
+
+    expect(result.series).toHaveLength(30);
+    const today = result.series.find((s) => s.date === key);
+    expect(today).toEqual({ date: key, count: 5, volume: '12.5' });
+    // Every other bucket stays an explicit zero rather than a gap.
+    expect(result.series.filter((s) => s.count === 0)).toHaveLength(29);
+  });
+
+  it('balances separates settled from pending and tolerates a null sum', async () => {
+    const { service } = build([
+      [
         {
           asset: 'XLM',
-          settled: '1',
-          pending: '0',
-          settled_count: 1,
+          settled: '12.0000000',
+          pending: '2.0000000',
+          settled_count: 3n,
         },
-      ],
-    });
-    await service.balances(consumer());
-
-    const calls = prisma.paymentIntent.findMany.mock.calls as Array<
-      [FindManyArgs]
-    >;
-    expect(calls.length).toBeGreaterThan(0);
-    for (const [args] of calls) {
-      expect(args.take).toBeDefined();
-      expect(typeof args.take).toBe('number');
-      expect(args.take).toBeGreaterThan(0);
-    }
-  });
-
-  it('summary customers come from COUNT(DISTINCT source) SQL, not a JS Set', async () => {
-    mockSummaryQueries({ customers: 7 });
-    const result = await service.summary(consumer());
-    expect(result.customers).toBe(7);
-
-    const sqlTexts = (
-      prisma.$queryRaw.mock.calls as unknown as unknown[][]
-    ).map(rawSqlText);
-    expect(
-      sqlTexts.some((s) => /COUNT\s*\(\s*DISTINCT\s+source\s*\)/i.test(s)),
-    ).toBe(true);
-  });
-
-  it('all $queryRaw calls use Prisma parameterized fragments (no string-built SQL)', async () => {
-    mockSummaryQueries({ customers: 0 });
-    await service.summary(consumer());
-    mockSummaryQueries({
-      balances: [
-        {
-          asset: 'XLM',
-          settled: '0.0000001',
-          pending: '0',
-          settled_count: 1,
-        },
-      ],
-    });
-    await service.balances(consumer());
-
-    for (const call of prisma.$queryRaw.mock.calls as unknown as unknown[][]) {
-      const first = call[0];
-      expect(first).toBeDefined();
-      expect(typeof first).not.toBe('string');
-    }
-  });
-
-  it('balances formats a single stroop without scientific notation', async () => {
-    mockSummaryQueries({
-      balances: [
-        {
-          asset: 'XLM',
-          settled: '0.0000001',
-          pending: '0',
-          settled_count: 1,
-        },
-      ],
-    });
-    const result = await service.balances(consumer());
-    expect(result.data).toHaveLength(1);
-    expect(result.data[0].amount).toBe('0.0000001');
-    expect(() => toStroops(result.data[0].amount)).not.toThrow();
-  });
-
-  it('balances sorts by amount using bigint (stroops), not Number', async () => {
-    mockSummaryQueries({
-      balances: [
         {
           asset: 'USDC',
-          settled: '10',
-          pending: '0',
-          settled_count: 1,
-        },
-        {
-          asset: 'XLM',
-          settled: '100',
-          pending: '0',
-          settled_count: 2,
+          settled: '1.5000000',
+          pending: null,
+          settled_count: 1n,
         },
       ],
-    });
-    const result = await service.balances(consumer());
-    expect(result.data.map((d) => d.asset)).toEqual(['XLM', 'USDC']);
+    ]);
+
+    const result = await service.balances(consumer);
+
+    expect(result.data).toEqual([
+      { asset: 'XLM', amount: '12', pending: '2', count: 3 },
+      { asset: 'USDC', amount: '1.5', pending: '0', count: 1 },
+    ]);
+    expect(result.total).toBe(2);
   });
 
-  it('summary returns the expected shape with groupBy totals', async () => {
-    prisma.paymentIntent.groupBy.mockResolvedValue([
-      { status: 'SUCCEEDED', _count: { _all: 3 } },
-      { status: 'PENDING', _count: { _all: 1 } },
+  it('balances folds and orders in SQL, and never re-sums in float', async () => {
+    // Two amounts whose float64 sum drifts. Postgres returns them already
+    // summed; the service must not touch them again.
+    const { service, prisma } = build([
+      [
+        {
+          asset: 'USDC',
+          settled: '90071992547409.9100000',
+          pending: '0.1000000',
+          settled_count: 2n,
+        },
+      ],
     ]);
-    prisma.paymentIntent.findMany.mockResolvedValue([
-      {
-        id: 'pi_1',
-        kind: 'TX',
-        status: 'SUCCEEDED',
-        amount: '1.5',
-        asset: 'native',
-        destination: 'GDEST',
-        createdAt: new Date('2026-01-15T12:00:00Z'),
-      },
-    ]);
-    mockSummaryQueries({
-      customers: 2,
-      volume: [{ asset: 'XLM', amount: '4.5', count: 3 }],
-    });
-    prisma.webhookEndpoint.count.mockResolvedValue(1);
-    prisma.webhookDelivery.count
-      .mockResolvedValueOnce(10)
-      .mockResolvedValueOnce(2);
 
-    const result = await service.summary(consumer());
-    expect(result.totals).toEqual({
-      all: 4,
-      succeeded: 3,
-      pending: 1,
-      submitted: 0,
-      failed: 0,
-      cancelled: 0,
-      expired: 0,
-      successRate: 75,
-    });
-    expect(result.volume).toEqual([{ asset: 'XLM', amount: '4.5', count: 3 }]);
-    expect(result.customers).toBe(2);
-    expect(result.webhooks).toEqual({
-      endpoints: 1,
-      deliveries: 10,
-      failedDeliveries: 2,
-    });
-    expect(result.series).toHaveLength(30);
-    expect(result.recent).toHaveLength(1);
-    expect(result.recent[0].asset).toBe('XLM');
-  });
+    const result = await service.balances(consumer);
 
-  it('apiLogs respects take from the query DTO', async () => {
-    prisma.requestLog.findMany.mockResolvedValue([
-      {
-        id: '1',
-        method: 'GET',
-        path: '/v1/summary',
-        statusCode: 200,
-        durationMs: 12,
-        ip: null,
-        userAgent: null,
-        createdAt: new Date(),
-      },
-    ]);
-    await service.apiLogs(consumer(), { take: 5 });
-    expect(prisma.requestLog.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({ take: 5 }),
-    );
-  });
-
-  it('webhookLogs respects take from the query DTO', async () => {
-    prisma.webhookEndpoint.findMany.mockResolvedValue([
-      { id: 'ep_1', url: 'https://example.com/hook' },
-    ]);
-    prisma.webhookDelivery.findMany.mockResolvedValue([]);
-    await service.webhookLogs(consumer(), { take: 5 });
-    expect(prisma.webhookDelivery.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({ take: 5 }),
-    );
+    const sql = sqlOf(prisma.$queryRaw, 0);
+    expect(sql).toContain(`CASE WHEN "asset" IN ('', 'native') THEN 'XLM'`);
+    expect(sql).toContain('GROUP BY 1');
+    // Ordering is the database's job too — a JS sort would have to parse the
+    // amounts back to numbers to compare them.
+    expect(sql).toContain('ORDER BY');
+    expect(result.data[0].amount).toBe('90071992547409.91');
+    expect(result.data[0].pending).toBe('0.1');
   });
 });

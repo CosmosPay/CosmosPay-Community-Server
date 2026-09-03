@@ -1,11 +1,4 @@
-import {
-  BadRequestException,
-  ConflictException,
-  Injectable,
-  Logger,
-  NotFoundException,
-  ServiceUnavailableException,
-} from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
   Asset,
@@ -14,49 +7,46 @@ import {
   TransactionBuilder,
 } from '@stellar/stellar-sdk';
 import QRCode from 'qrcode';
-import { AppConfig, StellarNetwork } from '../config/configuration';
-import { GatewayConsumer } from '../common/interfaces/gateway-consumer.interface';
-import { isUniqueViolation } from '../common/prisma-errors';
-import { PrismaService } from '../prisma/prisma.service';
-import {
-  assertCanAfford,
-  assertTrustline,
-  hasTrustline,
-  isNativeAsset,
-  type HorizonBalance,
-} from '../stellar/stellar-preflight';
-import { StellarService } from '../stellar/stellar.service';
+import { AppConfig, StellarNetwork } from '@/config/configuration';
+import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
+import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
+import { resolvePlanCommissionBps } from '@/common/plan-commission';
+import { isUniqueViolation } from '@/common/prisma-errors';
+import { resolveNetwork } from '@/common/stellar-network';
+import { PrismaService } from '@/prisma/prisma.service';
+import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
+import { StellarAccountLoader } from '@/stellar/account-loader.service';
+import { assetLabel, resolveAsset, ResolvedAsset } from '@/stellar/asset';
+import { extractResultCodes } from '@/stellar/horizon-errors';
+import { resolveMemoId } from '@/stellar/memo';
+import { SettlementRepository } from '@/stellar/settlement.repository';
+import { StellarService } from '@/stellar/stellar.service';
 import type {
   Prisma,
   Swap,
   SwapStatus,
   WebhookEventType,
-} from '../../generated/prisma/client';
-import { WebhookTerminalEmitter } from '../webhooks/webhook-terminal-emitter.service';
-import { CreateSwapDto } from './dto/create-swap.dto';
-import { QuerySwapsDto } from './dto/query-swaps.dto';
-import { QuoteSwapDto } from './dto/quote-swap.dto';
+} from '@generated/prisma/client';
+import { WebhookTerminalEmitter } from '@/webhooks/webhook-terminal-emitter.service';
+import { CreateSwapDto } from '@/swaps/dto/create-swap.dto';
+import { QuerySwapsDto } from '@/swaps/dto/query-swaps.dto';
+import { QuoteSwapDto } from '@/swaps/dto/quote-swap.dto';
 import {
-  SWAP_CAN_FAIL_STATUSES,
   SWAP_CAN_SUCCEED_STATUSES,
   SWAP_IN_FLIGHT_STATUSES,
-} from './swap-transitions';
+} from '@/swaps/swap-transitions';
 import {
   SwapAssetAmount,
   SwapPathHop,
   SwapQuoteEntity,
-} from './entities/swap.entity';
-import { applySlippage, computeFee, fromStroops, toStroops } from './swap-math';
-
-const MAX_UINT64 = 18446744073709551615n;
-
-/**
- * On-chain MEMO_TEXT stamped on a swap that collects the platform commission
- * when the caller did not supply their own MEMO_ID — so the commission is
- * identifiable on the ledger. English by design (the canonical label). ≤ 28
- * bytes (the MEMO_TEXT limit).
- */
-export const SWAP_COMMISSION_MEMO = 'Cosmos Swap Commission';
+} from '@/swaps/entities/swap.entity';
+import {
+  applySlippage,
+  computeFee,
+  fromStroops,
+  toStroops,
+} from '@/swaps/swap-math';
+import { SWAP_COMMISSION_MEMO } from '@/swaps/swaps.constants';
 
 /** A stored swap plus its derived QR — the shape API responses return. */
 export type SwapView = Swap & {
@@ -79,12 +69,6 @@ export interface SwapSubmitOutcome {
 }
 
 /** Resolved asset: its stored code/issuer and the SDK Asset for building txs. */
-interface ResolvedAsset {
-  code: string;
-  issuer: string | null;
-  asset: Asset;
-}
-
 /** A priced swap — everything quote and create both need. */
 interface PricedSwap {
   send: ResolvedAsset;
@@ -115,22 +99,14 @@ interface PathRecord {
 @Injectable()
 export class SwapsService {
   private readonly logger = new Logger(SwapsService.name);
-  /**
-   * Horizon account of the platform fee wallet, keyed by `(network, CODE:ISSUER)`.
-   * A few seconds is enough to collapse a burst of create()s into one lookup
-   * without serving a stale trustline for long.
-   */
-  private readonly feeWalletAccounts = new Map<
-    string,
-    { expiresAt: number; account: { balances: HorizonBalance[] } }
-  >();
-  private static readonly FEE_WALLET_CACHE_TTL_MS = 15_000;
 
   constructor(
     private readonly config: ConfigService<AppConfig, true>,
     private readonly prisma: PrismaService,
     private readonly webhooks: WebhookTerminalEmitter,
     private readonly stellar: StellarService,
+    private readonly consumers: ConsumerResolverService,
+    private readonly accounts: StellarAccountLoader,
   ) {}
 
   // ── Quote ───────────────────────────────────────────────────────────────────
@@ -143,7 +119,7 @@ export class SwapsService {
     const priced = await this.priceSwap(
       network,
       dto,
-      this.resolveSwapFeeBps(consumer),
+      resolvePlanCommissionBps(this.config, consumer),
     );
     return this.toQuoteEntity(network, priced);
   }
@@ -187,24 +163,25 @@ export class SwapsService {
     const priced = await this.priceSwap(
       network,
       dto,
-      this.resolveSwapFeeBps(consumer),
+      resolvePlanCommissionBps(this.config, consumer),
     );
 
     const destination = dto.destination ?? dto.source;
-    const memo = this.resolveMemo(dto.memo);
+    const memo = resolveMemoId(dto.memo);
     const feeWallet = this.feeWallet();
     const feeStroops = toStroops(priced.feeAmount);
 
     // A configured fee with nowhere to send it is a misconfiguration, not a
     // silent no-op — fail loudly so the operator notices.
     if (feeStroops > 0n && !feeWallet) {
-      throw new ServiceUnavailableException(
+      throw ApiError.unavailable(
+        ApiErrorCode.Misconfigured,
         'A swap fee is configured (STELLAR_SWAP_FEE_BPS) but STELLAR_SWAP_FEE_WALLET is not set',
       );
     }
 
     const stellarCfg = this.config.get('stellar', { infer: true });
-    const account = await this.loadAccount(network, dto.source);
+    const account = await this.accounts.load(network, dto.source);
 
     // The destination must already trust a non-native asset, or the path payment
     // would fail on-chain. Catch it now with a clear message.
@@ -212,28 +189,6 @@ export class SwapsService {
       account,
       address: dto.source,
     });
-
-    // Source must already trust the sold asset, hold the gross sendAmount
-    // (commission included), and keep the XLM minimum reserve + network fee.
-    // Catch op_src_no_trust / op_underfunded / tx_insufficient_balance here.
-    const balances = account.balances as HorizonBalance[];
-    assertTrustline(
-      balances,
-      priced.send,
-      dto.source,
-      'it must trust the asset before selling it',
-    );
-    const opCount = feeStroops > 0n && feeWallet ? 2 : 1;
-    assertCanAfford(
-      account,
-      balances,
-      [{ asset: priced.send, required: toStroops(priced.sendAmount) }],
-      false,
-      BigInt(stellarCfg.baseFee) * BigInt(opCount),
-    );
-    if (feeStroops > 0n && feeWallet) {
-      await this.assertFeeWalletCanReceive(network, feeWallet, priced.send);
-    }
 
     const builder = new TransactionBuilder(account, {
       fee: stellarCfg.baseFee,
@@ -304,15 +259,16 @@ export class SwapsService {
     if (!swap) {
       const raced = await this.findByIdempotencyKey(local.id, idempotencyKey!);
       if (raced) return this.withQr(raced);
-      throw new ConflictException(
+      throw ApiError.conflict(
+        ApiErrorCode.IdempotencyConflict,
         'A swap with this transaction hash already exists for this network. ' +
           'Retry with an Idempotency-Key, or wait for the prior swap to settle/expire.',
       );
     }
 
     this.logger.log(
-      `Created swap ${swap.id}: ${priced.sendAmount} ${this.label(priced.send)} → ` +
-        `~${priced.estimated} ${this.label(priced.dest)} (consumer=${consumer.username}, network=${network})`,
+      `Created swap ${swap.id}: ${priced.sendAmount} ${assetLabel(priced.send)} → ` +
+        `~${priced.estimated} ${assetLabel(priced.dest)} (consumer=${consumer.username}, network=${network})`,
     );
     await this.emit(consumer.username, 'SWAP_CREATED', swap);
     return this.withQr(swap);
@@ -321,7 +277,7 @@ export class SwapsService {
   /**
    * Persists a new swap. Returns null on an idempotency-key unique violation so
    * the caller can fall back to the existing row. A `(network, txHash)` collision
-   * without a recoverable idempotency key throws {@link ConflictException}.
+   * without a recoverable idempotency key throws a 409 `idempotency_conflict`.
    */
   private async persistSwap(
     data: Prisma.SwapUncheckedCreateInput,
@@ -334,7 +290,8 @@ export class SwapsService {
       // race can trip the (network, txHash) index instead of the key index
       // (Postgres reports only one of the two violations arbitrarily).
       if (data.idempotencyKey) return null;
-      throw new ConflictException(
+      throw ApiError.conflict(
+        ApiErrorCode.IdempotencyConflict,
         'A swap with this transaction hash already exists for this network. ' +
           'Two creates rebuilt the same Stellar sequence/XDR — use an ' +
           'Idempotency-Key on retries, or wait for the prior swap to settle/expire.',
@@ -384,7 +341,8 @@ export class SwapsService {
       orderBy: { createdAt: 'asc' },
     });
     if (existing) {
-      throw new ConflictException(
+      throw ApiError.conflict(
+        ApiErrorCode.OperationInFlight,
         `An in-flight swap already exists for this source account (id=${existing.id}). ` +
           'Wait for it to settle/expire, or disable STELLAR_SWAP_SINGLE_INFLIGHT.',
       );
@@ -400,7 +358,11 @@ export class SwapsService {
       consumer: { apisixUsername: consumer.username },
       ...(query.status ? { status: query.status } : {}),
     };
-    const [data, total] = await this.prisma.$transaction([
+    // `Promise.all`, not `$transaction`: a snapshot-consistent page and count
+    // buys nothing here (the client sees a moving list either way), while the
+    // transaction costs four serial round trips — BEGIN, page, count, COMMIT —
+    // instead of two issued in parallel.
+    const [data, total] = await Promise.all([
       this.prisma.swap.findMany({
         where,
         take: query.take,
@@ -443,7 +405,10 @@ export class SwapsService {
       };
     }
     if (!['PENDING', 'SUBMITTED', 'FAILED'].includes(swap.status)) {
-      throw new BadRequestException(`Cannot submit a ${swap.status} swap`);
+      throw ApiError.badRequest(
+        ApiErrorCode.InvalidStateTransition,
+        `Cannot submit a ${swap.status} swap`,
+      );
     }
 
     let tx: ReturnType<typeof TransactionBuilder.fromXDR>;
@@ -453,7 +418,8 @@ export class SwapsService {
         this.stellar.passphrase(swap.network as StellarNetwork),
       );
     } catch {
-      throw new BadRequestException(
+      throw ApiError.badRequest(
+        ApiErrorCode.ValidationFailed,
         'signedXdr is not a valid transaction envelope',
       );
     }
@@ -461,7 +427,8 @@ export class SwapsService {
     // Integrity: signing does not change the hash, so the signed tx must hash to
     // the same value as the one we built and stored.
     if (Buffer.from(tx.hash()).toString('hex') !== swap.txHash) {
-      throw new BadRequestException(
+      throw ApiError.badRequest(
+        ApiErrorCode.ValidationFailed,
         'The signed transaction does not match this swap',
       );
     }
@@ -479,7 +446,8 @@ export class SwapsService {
       };
     }
     if (submitted.swap.status !== 'SUBMITTED') {
-      throw new BadRequestException(
+      throw ApiError.badRequest(
+        ApiErrorCode.InvalidStateTransition,
         `Cannot submit a ${submitted.swap.status} swap`,
       );
     }
@@ -506,7 +474,7 @@ export class SwapsService {
         swap: await this.withQr(succeeded.swap),
       };
     } catch (err) {
-      const resultCodes = this.extractResultCodes(err);
+      const resultCodes = extractResultCodes(err);
       if (resultCodes) {
         const failed = await this.finalizeFailed(swap.id, consumer.username);
         if (failed.swap.status === 'SUCCEEDED') {
@@ -534,7 +502,8 @@ export class SwapsService {
       }
       // Couldn't reach Horizon — leave it SUBMITTED so it can be retried.
       this.logger.error(`Swap ${swap.id} submission error`, err);
-      throw new ServiceUnavailableException(
+      throw ApiError.unavailable(
+        ApiErrorCode.ProviderUnavailable,
         'Could not submit the transaction to the Stellar network',
       );
     }
@@ -546,10 +515,11 @@ export class SwapsService {
     dto: QuoteSwapDto,
     feeBps: number,
   ): Promise<PricedSwap> {
-    const send = this.resolveAsset(dto.sourceAssetCode, dto.sourceAssetIssuer);
-    const dest = this.resolveAsset(dto.destAssetCode, dto.destAssetIssuer);
+    const send = resolveAsset(dto.sourceAssetCode, dto.sourceAssetIssuer);
+    const dest = resolveAsset(dto.destAssetCode, dto.destAssetIssuer);
     if (send.code === dest.code && send.issuer === dest.issuer) {
-      throw new BadRequestException(
+      throw ApiError.badRequest(
+        ApiErrorCode.ValidationFailed,
         'Source and destination assets must differ for a swap',
       );
     }
@@ -559,7 +529,8 @@ export class SwapsService {
     const feeStroops = computeFee(sendStroops, feeBps);
     const swapStroops = sendStroops - feeStroops;
     if (swapStroops <= 0n) {
-      throw new BadRequestException(
+      throw ApiError.badRequest(
+        ApiErrorCode.InvalidAmount,
         'amount is too small to cover the swap fee',
       );
     }
@@ -602,12 +573,14 @@ export class SwapsService {
       records = page.records;
     } catch (err) {
       this.logger.error('strictSendPaths failed', err);
-      throw new ServiceUnavailableException(
+      throw ApiError.unavailable(
+        ApiErrorCode.ProviderUnavailable,
         'Could not reach the Stellar network for a quote',
       );
     }
     if (!records.length) {
-      throw new BadRequestException(
+      throw ApiError.badRequest(
+        ApiErrorCode.NoPathFound,
         'No swap path found for this asset pair and amount',
       );
     }
@@ -657,18 +630,24 @@ export class SwapsService {
    * Winning this write is what authorizes a terminal webhook — arriving at
    * SUCCEEDED/FAILED by a stale read must not emit.
    */
-  private async guardedUpdate(
-    id: string,
-    from: readonly SwapStatus[],
-    data: { status: SwapStatus; txHash?: string },
-  ): Promise<{ applied: boolean; swap: Swap }> {
-    const result = await this.prisma.swap.updateMany({
-      where: { id, status: { in: [...from] } },
-      data,
-    });
-    const swap = await this.prisma.swap.findUniqueOrThrow({ where: { id } });
-    return { applied: result.count > 0, swap };
+  /**
+   * The compare-and-swap settlement machine, shared with liquidity pools.
+   *
+   * Built lazily rather than injected because it closes over `this.emit` and the
+   * swap-specific status sets — it is a configured view of this service's own
+   * table, not a collaborator with a lifecycle of its own.
+   */
+  private get settlement(): SettlementRepository<Swap> {
+    this.settlementRepo ??= new SettlementRepository<Swap>(
+      this.prisma.swap,
+      SWAP_CAN_SUCCEED_STATUSES,
+      SWAP_IN_FLIGHT_STATUSES,
+      { succeeded: 'SWAP_SUCCEEDED', failed: 'SWAP_FAILED' },
+      (username, type, swap) => this.emit(username, type, swap),
+    );
+    return this.settlementRepo;
   }
+  private settlementRepo?: SettlementRepository<Swap>;
 
   /**
    * PENDING → SUBMITTED does not bump the epoch (same settlement attempt).
@@ -678,15 +657,8 @@ export class SwapsService {
   private async markSubmitted(
     id: string,
   ): Promise<{ applied: boolean; swap: Swap }> {
-    const resent = await this.prisma.swap.updateMany({
-      where: { id, status: 'FAILED' },
-      data: { status: 'SUBMITTED', settlementEpoch: { increment: 1 } },
-    });
-    if (resent.count > 0) {
-      const swap = await this.prisma.swap.findUniqueOrThrow({ where: { id } });
-      return { applied: true, swap };
-    }
-    return this.guardedUpdate(id, ['PENDING'], { status: 'SUBMITTED' });
+    const { applied, row } = await this.settlement.markSubmitted(id);
+    return { applied, swap: row };
   }
 
   /**
@@ -699,13 +671,12 @@ export class SwapsService {
     username: string,
     txHash?: string,
   ): Promise<{ applied: boolean; swap: Swap }> {
-    const { applied, swap } = await this.guardedUpdate(
+    const { applied, row } = await this.settlement.finalizeSucceeded(
       id,
-      SWAP_CAN_SUCCEED_STATUSES,
-      { status: 'SUCCEEDED', ...(txHash ? { txHash } : {}) },
+      username,
+      txHash,
     );
-    if (applied) await this.emit(username, 'SWAP_SUCCEEDED', swap);
-    return { applied, swap };
+    return { applied, swap: row };
   }
 
   /**
@@ -717,10 +688,11 @@ export class SwapsService {
     id: string,
     txHash?: string,
   ): Promise<{ applied: boolean; swap: Swap }> {
-    return this.guardedUpdate(id, SWAP_CAN_SUCCEED_STATUSES, {
-      status: 'SUCCEEDED',
-      ...(txHash ? { txHash } : {}),
-    });
+    const { applied, row } = await this.settlement.finalizeSucceededQuiet(
+      id,
+      txHash,
+    );
+    return { applied, swap: row };
   }
 
   /**
@@ -731,13 +703,8 @@ export class SwapsService {
     id: string,
     username: string,
   ): Promise<{ applied: boolean; swap: Swap }> {
-    const { applied, swap } = await this.guardedUpdate(
-      id,
-      SWAP_CAN_FAIL_STATUSES,
-      { status: 'FAILED' },
-    );
-    if (applied) await this.emit(username, 'SWAP_FAILED', swap);
-    return { applied, swap };
+    const { applied, row } = await this.settlement.finalizeFailed(id, username);
+    return { applied, swap: row };
   }
 
   /**
@@ -747,65 +714,32 @@ export class SwapsService {
   async finalizeFailedQuiet(
     id: string,
   ): Promise<{ applied: boolean; swap: Swap }> {
-    return this.guardedUpdate(id, SWAP_IN_FLIGHT_STATUSES, {
-      status: 'FAILED',
-    });
+    const { applied, row } = await this.settlement.finalizeFailedQuiet(id);
+    return { applied, swap: row };
   }
 
   /**
    * Marks EXPIRED only while the row is still in-flight. Never degrades a
-   * settled swap. Emits `SWAP_EXPIRED` when this writer wins the transition.
+   * settled swap.
    */
-  async finalizeExpired(
-    id: string,
-    username: string,
-  ): Promise<{ applied: boolean; swap: Swap }> {
-    const { applied, swap } = await this.guardedUpdate(
-      id,
-      SWAP_IN_FLIGHT_STATUSES,
-      { status: 'EXPIRED' },
-    );
-    if (applied) await this.emit(username, 'SWAP_EXPIRED', swap);
-    return { applied, swap };
+  async finalizeExpired(id: string): Promise<{ applied: boolean; swap: Swap }> {
+    const { applied, row } = await this.settlement.finalizeExpired(id);
+    return { applied, swap: row };
   }
 
   // ── Helpers ─────────────────────────────────────────────────────────────────
   /** Network follows the API key type (prod → public, dev → testnet). */
   private resolveNetwork(consumer: GatewayConsumer): StellarNetwork {
-    if (consumer.environment === 'prod') return 'public';
-    if (consumer.environment === 'dev') return 'testnet';
-    return this.config.get('stellar', { infer: true }).network;
+    return resolveNetwork(this.config, consumer);
   }
 
   /** Mirror the APISIX consumer locally so swaps can be scoped to it. */
   private resolveConsumer(consumer: GatewayConsumer) {
-    return this.prisma.consumer.upsert({
-      where: { apisixUsername: consumer.username },
-      create: {
-        apisixUsername: consumer.username,
-        credentialId: consumer.credentialId,
-      },
-      update: { credentialId: consumer.credentialId },
-    });
+    return this.consumers.resolve(consumer);
   }
 
   private feeWallet(): string {
     return this.config.get('stellar', { infer: true }).swap.feeWallet;
-  }
-
-  /**
-   * The swap commission (bps) for this request. The gateway injects the
-   * organization's plan rate (`planSwapFeeBps`) per consumer — it is NEVER a
-   * request parameter, so the rate cannot be bypassed or undercut by the caller.
-   * Only when the gateway didn't forward it (local dev without APISIX) do we fall
-   * back to the configured default, and only then gate it on having a fee wallet.
-   */
-  private resolveSwapFeeBps(consumer: GatewayConsumer): number {
-    if (consumer.planSwapFeeBps !== null) {
-      return consumer.planSwapFeeBps;
-    }
-    const swap = this.config.get('stellar', { infer: true }).swap;
-    return swap.feeWallet ? swap.feeBps : 0;
   }
 
   /** Caller slippage, defaulted and clamped to the configured maximum. */
@@ -813,43 +747,18 @@ export class SwapsService {
     const swap = this.config.get('stellar', { infer: true }).swap;
     const bps = requested ?? swap.slippageBps;
     if (bps > swap.maxSlippageBps) {
-      throw new BadRequestException(
+      throw ApiError.badRequest(
+        ApiErrorCode.SlippageExceeded,
         `slippageBps ${bps} exceeds the maximum allowed (${swap.maxSlippageBps})`,
       );
     }
     return bps;
   }
 
-  private resolveMemo(provided?: string): string | null {
-    if (provided === undefined) return null;
-    if (!/^\d+$/.test(provided) || BigInt(provided) > MAX_UINT64) {
-      throw new BadRequestException('memo must be a MEMO_ID: a numeric uint64');
-    }
-    return provided;
-  }
-
-  /** No code (or XLM/native) → native lumens; any other code needs an issuer. */
-  private resolveAsset(code?: string, issuer?: string): ResolvedAsset {
-    const c = code?.trim();
-    if (!c || c.toLowerCase() === 'xlm' || c.toLowerCase() === 'native') {
-      return { code: 'native', issuer: null, asset: Asset.native() };
-    }
-    if (!issuer) {
-      throw new BadRequestException(
-        `An issuer is required for non-native asset "${c}"`,
-      );
-    }
-    return { code: c, issuer, asset: new Asset(c, issuer) };
-  }
-
   private pathToAssets(path: SwapPathHop[]): Asset[] {
     return path.map((h) =>
       h.issuer ? new Asset(h.code, h.issuer) : Asset.native(),
     );
-  }
-
-  private label(a: ResolvedAsset): string {
-    return a.code === 'native' ? 'XLM' : a.code;
   }
 
   private async findOwned(
@@ -860,7 +769,7 @@ export class SwapsService {
       where: { id, consumer: { apisixUsername: consumer.username } },
     });
     if (!swap) {
-      throw new NotFoundException(`Swap ${id} not found`);
+      throw ApiError.notFound(`Swap ${id} not found`);
     }
     return swap;
   }
@@ -876,103 +785,24 @@ export class SwapsService {
     dest: ResolvedAsset,
     source: { account: { balances: unknown[] }; address: string },
   ): Promise<void> {
-    if (isNativeAsset(dest)) return;
+    if (dest.code === 'native' || !dest.issuer) return;
     const balances =
       destination === source.address
         ? source.account.balances
-        : (await this.loadAccount(network, destination)).balances;
-    if (!hasTrustline(balances as HorizonBalance[], dest)) {
-      throw new BadRequestException(
+        : (await this.accounts.load(network, destination)).balances;
+    const trusts = (balances as Array<Record<string, unknown>>).some(
+      (b) => b.asset_code === dest.code && b.asset_issuer === dest.issuer,
+    );
+    if (!trusts) {
+      throw ApiError.badRequest(
+        ApiErrorCode.TrustlineMissing,
         `Destination ${destination} has no trustline for ${dest.code}:${dest.issuer} — ` +
           'it must trust the asset before it can receive the swap',
       );
     }
   }
 
-  /**
-   * The platform fee payment fails on-chain with `op_no_trust` (issued asset,
-   * no trustline) or `op_no_destination` (wallet unfunded — including native
-   * XLM, which needs no trustline) and takes the path payment down with it.
-   * That is an operator misconfiguration — 503, not 400 — same spirit as a
-   * missing STELLAR_SWAP_FEE_WALLET. Cached a few seconds per (network, asset)
-   * so a burst of creates does not hammer Horizon.
-   */
-  private async assertFeeWalletCanReceive(
-    network: StellarNetwork,
-    feeWallet: string,
-    send: ResolvedAsset,
-  ): Promise<void> {
-    const cacheKey = `${network}:${send.code}:${send.issuer ?? 'native'}`;
-    const now = Date.now();
-    const cached = this.feeWalletAccounts.get(cacheKey);
-    let account: { balances: HorizonBalance[] };
-    if (cached && cached.expiresAt > now) {
-      account = cached.account;
-    } else {
-      try {
-        account = await this.stellar.server(network).loadAccount(feeWallet);
-      } catch (error: unknown) {
-        const status = (error as { response?: { status?: number } })?.response
-          ?.status;
-        if (status === 404) {
-          throw new ServiceUnavailableException(
-            `Fee wallet ${feeWallet} does not exist as an account on the ${network} network`,
-          );
-        }
-        this.logger.error('Failed to load fee wallet from Horizon', error);
-        throw new ServiceUnavailableException(
-          'Could not reach the Stellar network',
-        );
-      }
-      this.feeWalletAccounts.set(cacheKey, {
-        expiresAt: now + SwapsService.FEE_WALLET_CACHE_TTL_MS,
-        account,
-      });
-    }
-
-    if (!hasTrustline(account.balances, send)) {
-      throw new ServiceUnavailableException(
-        `Fee wallet ${feeWallet} has no trustline for ${send.code}:${send.issuer}`,
-      );
-    }
-  }
-
-  private async loadAccount(network: StellarNetwork, address: string) {
-    try {
-      return await this.stellar.server(network).loadAccount(address);
-    } catch (error: unknown) {
-      const status = (error as { response?: { status?: number } })?.response
-        ?.status;
-      if (status === 404) {
-        throw new BadRequestException(
-          `Account ${address} not found or not funded on the ${network} network`,
-        );
-      }
-      this.logger.error('Failed to load account from Horizon', error);
-      throw new ServiceUnavailableException(
-        'Could not reach the Stellar network',
-      );
-    }
-  }
-
   /** Pulls Horizon's transaction/operation result codes off a failed submit. */
-  private extractResultCodes(err: unknown): string[] | null {
-    const data = (
-      err as {
-        response?: {
-          data?: { extras?: { result_codes?: ResultCodes } };
-          extras?: { result_codes?: ResultCodes };
-        };
-      }
-    )?.response;
-    const rc = data?.data?.extras?.result_codes ?? data?.extras?.result_codes;
-    if (!rc) return null;
-    const codes: string[] = [];
-    if (rc.transaction) codes.push(rc.transaction);
-    if (Array.isArray(rc.operations)) codes.push(...rc.operations);
-    return codes.length ? codes : null;
-  }
-
   private async withQr(swap: Swap): Promise<SwapView> {
     return {
       ...swap,
@@ -993,9 +823,4 @@ export class SwapsService {
   ): Promise<boolean> {
     return this.webhooks.emit(username, type, data);
   }
-}
-
-interface ResultCodes {
-  transaction?: string;
-  operations?: string[];
 }

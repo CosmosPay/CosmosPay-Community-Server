@@ -1,11 +1,11 @@
 import { ConfigService } from '@nestjs/config';
 import {
-  BadGatewayException,
-  GatewayTimeoutException,
   HttpException,
+  HttpStatus,
   ServiceUnavailableException,
 } from '@nestjs/common';
-import { BlindpayClient } from './blindpay.client';
+import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
+import { BlindpayClient } from '@/blindpay/blindpay.client';
 
 function makeClient(overrides: Record<string, unknown> = {}) {
   const cfg = {
@@ -87,20 +87,56 @@ describe('BlindpayClient', () => {
     const client = makeClient();
     await expect(client.get('/x')).rejects.toMatchObject({
       status: 422,
+      code: 'provider_error',
     });
     await expect(client.get('/x')).rejects.toBeInstanceOf(HttpException);
   });
 
-  it('collapses upstream 5xx into a 502', async () => {
+  it('masks the values inside a provider validation message', async () => {
+    mockFetch(() => ({
+      ok: false,
+      status: 400,
+      text: () =>
+        Promise.resolve(
+          JSON.stringify({ message: 'invalid tax_id: 20123456786' }),
+        ),
+    }));
+
+    const err = await makeClient()
+      .get('/x')
+      .catch((e: HttpException) => e);
+    const body = (err as HttpException).getResponse() as { message: string };
+    expect(body.message).toBe('invalid tax_id: [redacted]');
+  });
+
+  it('never relays a raw provider body', async () => {
+    mockFetch(() => ({
+      ok: false,
+      status: 400,
+      text: () =>
+        Promise.resolve(JSON.stringify({ account_number: '1234567890' })),
+    }));
+
+    const err = await makeClient()
+      .get('/x')
+      .catch((e: HttpException) => e);
+    const body = (err as HttpException).getResponse() as { message: string };
+    expect(body.message).toBe('The payment provider rejected the request.');
+  });
+
+  it('collapses upstream 5xx into a 502 that echoes nothing', async () => {
     mockFetch(() => ({
       ok: false,
       status: 503,
-      text: () => Promise.resolve('upstream down'),
+      text: () => Promise.resolve('upstream down: db 10.0.0.4 unreachable'),
     }));
 
-    await expect(makeClient().get('/x')).rejects.toBeInstanceOf(
-      BadGatewayException,
-    );
+    const err = await makeClient()
+      .get('/x')
+      .catch((e: HttpException) => e);
+    expect((err as HttpException).getStatus()).toBe(502);
+    const body = (err as HttpException).getResponse() as { message: string };
+    expect(body.message).not.toContain('10.0.0.4');
   });
 
   it('maps an aborted request to a 504', async () => {
@@ -110,9 +146,17 @@ describe('BlindpayClient', () => {
       return Promise.reject(err);
     });
 
-    await expect(makeClient().get('/x')).rejects.toBeInstanceOf(
-      GatewayTimeoutException,
-    );
+    const err = await makeClient()
+      .get('/x')
+      .then(() => null)
+      .catch((e: unknown) => e as ApiError);
+
+    // 504 is the honest status, and it now carries a code — 504 had no
+    // CODE_BY_STATUS entry, so an upstream timeout reported `internal_error`
+    // and read to an integrator as a bug in this service.
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err!.getStatus()).toBe(HttpStatus.GATEWAY_TIMEOUT);
+    expect(err!.code).toBe(ApiErrorCode.ProviderUnavailable);
   });
 
   it('throws 503 when not configured', async () => {

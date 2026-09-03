@@ -1,16 +1,28 @@
-import { Body, Controller, Delete, Get, Param, Post } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Post,
+  Query,
+} from '@nestjs/common';
+import { WidePaginationQueryDto } from '@/common/dto/pagination.query.dto';
 import {
   ApiCreatedResponse,
   ApiOkResponse,
   ApiOperation,
   ApiTags,
 } from '@nestjs/swagger';
-import { CurrentConsumer } from '../../common/decorators/current-consumer.decorator';
-import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
-import { GatewayConsumer } from '../../common/interfaces/gateway-consumer.interface';
-import { BankAccountsService } from './bank-accounts.service';
-import { CreateBankAccountDto } from './dto/create-bank-account.dto';
-import { BankAccountEntity } from './entities/bank-account.entity';
+import { CurrentConsumer } from '@/common/decorators/current-consumer.decorator';
+import { RequirePermissions } from '@/common/decorators/require-permissions.decorator';
+import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
+import { BankAccountsService } from '@/kyc/bank-accounts/bank-accounts.service';
+import { CreateBankAccountDto } from '@/kyc/bank-accounts/dto/create-bank-account.dto';
+import {
+  BankAccountEntity,
+  BankAccountListEntity,
+} from '@/kyc/bank-accounts/entities/bank-account.entity';
 
 // /v1/kyc/receivers/:receiverId/bank-accounts
 @ApiTags('kyc')
@@ -33,12 +45,13 @@ export class BankAccountsController {
   @Get()
   @RequirePermissions('kyc:read')
   @ApiOperation({ summary: "List a receiver's bank accounts" })
-  @ApiOkResponse({ type: [BankAccountEntity] })
+  @ApiOkResponse({ type: BankAccountListEntity })
   findAll(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Param('receiverId') receiverId: string,
+    @Query() query: WidePaginationQueryDto,
   ) {
-    return this.bankAccounts.findAll(consumer, receiverId);
+    return this.bankAccounts.findAll(consumer, receiverId, query);
   }
 
   @Delete(':id')

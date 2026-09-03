@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { SwapStatus } from '../../../generated/prisma/client';
+import { SwapStatus } from '@generated/prisma/client';
 
 /** One asset hop on the chosen path (empty array = direct order-book swap). */
 export class SwapPathHop {

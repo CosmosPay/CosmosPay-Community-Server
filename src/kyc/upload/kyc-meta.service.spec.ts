@@ -1,9 +1,11 @@
 import { BadRequestException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { BlindpayClient, UploadableFile } from '../../blindpay/blindpay.client';
-import { GatewayConsumer } from '../../common/interfaces/gateway-consumer.interface';
-import { AppConfig } from '../../config/configuration';
-import { KycMetaService } from './kyc-meta.service';
+import { BlindpayClient, UploadableFile } from '@/blindpay/blindpay.client';
+import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
+import { AppConfig } from '@/config/configuration';
+import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
+import { PrismaService } from '@/prisma/prisma.service';
+import { KycMetaService } from '@/kyc/upload/kyc-meta.service';
 
 const consumer: GatewayConsumer = {
   username: 'cosmos_u1',
@@ -34,9 +36,20 @@ function makeService() {
       redirectUrlWhitelist: { cosmos_u1: ['app.example.com'] },
     }),
   };
+  // `initiateTos` refuses a receiver the caller does not own, so a case that
+  // names one has to mirror it: the resolver returns the local consumer row and
+  // the receiver lookup finds it under that consumer.
+  const prisma = {
+    blindpayReceiver: {
+      findFirst: jest.fn().mockResolvedValue({ id: 'br_1' }),
+    },
+  };
+  const consumers = { resolve: jest.fn().mockResolvedValue({ id: 'c_1' }) };
   const service = new KycMetaService(
     blindpay as unknown as BlindpayClient,
     config as unknown as ConfigService<AppConfig, true>,
+    prisma as unknown as PrismaService,
+    consumers as unknown as ConsumerResolverService,
   );
   return { service, blindpay };
 }
@@ -113,8 +126,6 @@ describe('KycMetaService', () => {
     });
 
     expect(blindpay.post).toHaveBeenCalledWith('/e/instances/in_test/tos', {
-      // Jest asymmetric matchers are intentionally typed as any.
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
       idempotency_key: expect.any(String),
       receiver_id: null,
       redirect_url: 'https://app.example.com/kyc/return',

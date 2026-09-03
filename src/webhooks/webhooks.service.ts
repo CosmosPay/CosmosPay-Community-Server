@@ -1,45 +1,28 @@
-import {
-  BadRequestException,
-  Injectable,
-  Logger,
-  NotFoundException,
-} from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
+import { Injectable, Logger } from '@nestjs/common';
 import { randomBytes } from 'node:crypto';
-import { PrismaService } from '../prisma/prisma.service';
-import { AppConfig } from '../config/configuration';
-import { GatewayConsumer } from '../common/interfaces/gateway-consumer.interface';
+import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
+import { isRedactedPayload } from '@/webhooks/webhook-payload-retention';
+import { PrismaService } from '@/prisma/prisma.service';
+import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
+import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import type {
   WebhookDelivery,
   WebhookEndpoint,
-} from '../../generated/prisma/client';
-import { CreateWebhookEndpointDto } from './dto/create-webhook-endpoint.dto';
-import { UpdateWebhookEndpointDto } from './dto/update-webhook-endpoint.dto';
-import { QueryDeliveriesDto } from './dto/query-deliveries.dto';
-import { RotateWebhookSecretDto } from './dto/rotate-webhook-secret.dto';
-import { WebhookDispatcherService } from './webhook-dispatcher.service';
-import { WebhookDestinationGuard } from './webhook-destination.guard';
-import { WebhookUrlValidationError } from './webhook-url.validator';
+} from '@generated/prisma/client';
+import { CreateWebhookEndpointDto } from '@/webhooks/dto/create-webhook-endpoint.dto';
+import { UpdateWebhookEndpointDto } from '@/webhooks/dto/update-webhook-endpoint.dto';
+import { QueryDeliveriesDto } from '@/webhooks/dto/query-deliveries.dto';
+import { QueryEndpointsDto } from '@/webhooks/dto/query-endpoints.dto';
+import { WebhookDispatcherService } from '@/webhooks/webhook-dispatcher.service';
+import { WebhookDestinationGuard } from '@/webhooks/webhook-destination.guard';
+import { WebhookUrlValidationError } from '@/webhooks/webhook-url.validator';
 
-// Endpoint without signing secrets — what list/get responses return.
-export type SafeWebhookEndpoint = Omit<
-  WebhookEndpoint,
-  'secret' | 'previousSecret'
->;
+// Endpoint without the signing secret — what list/get responses return.
+export type SafeWebhookEndpoint = Omit<WebhookEndpoint, 'secret'>;
 
-/** Create / rotate responses: current secret only, never the previous one. */
-export type WebhookEndpointWithSecret = Omit<WebhookEndpoint, 'previousSecret'>;
-
-function omitFields<T extends object, K extends keyof T>(
-  obj: T,
-  ...keys: K[]
-): Omit<T, K> {
-  const clone = { ...obj };
-  for (const key of keys) {
-    delete clone[key];
-  }
-  return clone;
-}
+// Delivery without the sent body — see listDeliveries for why the body is not
+// readable back through an endpoint gated on `webhooks:read`.
+export type SafeWebhookDelivery = Omit<WebhookDelivery, 'payload'>;
 
 @Injectable()
 export class WebhooksService {
@@ -49,18 +32,11 @@ export class WebhooksService {
     private readonly prisma: PrismaService,
     private readonly dispatcher: WebhookDispatcherService,
     private readonly destinations: WebhookDestinationGuard,
-    private readonly config: ConfigService<AppConfig, true>,
+    private readonly consumers: ConsumerResolverService,
   ) {}
 
   private resolveConsumer(consumer: GatewayConsumer) {
-    return this.prisma.consumer.upsert({
-      where: { apisixUsername: consumer.username },
-      create: {
-        apisixUsername: consumer.username,
-        credentialId: consumer.credentialId,
-      },
-      update: { credentialId: consumer.credentialId },
-    });
+    return this.consumers.resolve(consumer);
   }
 
   private generateSecret(): string {
@@ -68,11 +44,8 @@ export class WebhooksService {
   }
 
   private strip(endpoint: WebhookEndpoint): SafeWebhookEndpoint {
-    return omitFields(endpoint, 'secret', 'previousSecret');
-  }
-
-  private stripPrevious(endpoint: WebhookEndpoint): WebhookEndpointWithSecret {
-    return omitFields(endpoint, 'previousSecret');
+    const { secret: _secret, ...safe } = endpoint;
+    return safe;
   }
 
   // ── CRUD: endpoints ─────────────────────────────────────────────────────────
@@ -80,7 +53,7 @@ export class WebhooksService {
   async create(
     consumer: GatewayConsumer,
     dto: CreateWebhookEndpointDto,
-  ): Promise<WebhookEndpointWithSecret> {
+  ): Promise<WebhookEndpoint> {
     await this.assertUrlAllowed(dto.url);
     const localConsumer = await this.resolveConsumer(consumer);
 
@@ -98,15 +71,47 @@ export class WebhooksService {
     this.logger.log(
       `Registered webhook endpoint ${endpoint.id} (${endpoint.url}) for ${consumer.username}`,
     );
-    return this.stripPrevious(endpoint);
+    return endpoint;
   }
 
-  async findAll(consumer: GatewayConsumer): Promise<SafeWebhookEndpoint[]> {
-    const endpoints = await this.prisma.webhookEndpoint.findMany({
-      where: { consumer: { apisixUsername: consumer.username } },
-      orderBy: { createdAt: 'desc' },
-    });
-    return endpoints.map((e) => this.strip(e));
+  /**
+   * One page of the consumer's endpoints.
+   *
+   * Returns the same `{ data, total, take, skip }` envelope as every other list
+   * in this API (payment intents, swaps, customers, deliveries). It used to
+   * return a bare array clamped at 100: a consumer with 120 endpoints got 100
+   * of them with nothing in the response saying so, and no `total` to page
+   * against — silent truncation of a list an integrator uses to decide which
+   * endpoints to delete.
+   */
+  async findAll(
+    consumer: GatewayConsumer,
+    query: QueryEndpointsDto,
+  ): Promise<{
+    data: SafeWebhookEndpoint[];
+    total: number;
+    take: number;
+    skip: number;
+  }> {
+    const where = { consumer: { apisixUsername: consumer.username } };
+    // Promise.all rather than $transaction, matching findAll elsewhere: a
+    // snapshot-consistent page and count buys nothing for a moving list and
+    // costs two extra round trips.
+    const [endpoints, total] = await Promise.all([
+      this.prisma.webhookEndpoint.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        take: query.take,
+        skip: query.skip,
+      }),
+      this.prisma.webhookEndpoint.count({ where }),
+    ]);
+    return {
+      data: endpoints.map((e) => this.strip(e)),
+      total,
+      take: query.take,
+      skip: query.skip,
+    };
   }
 
   async findOne(
@@ -156,67 +161,39 @@ export class WebhooksService {
     return { id, deleted: true };
   }
 
-  /**
-   * Rotates the signing secret. Returns the endpoint WITH the new secret
-   * (never the previous one). The old secret keeps signing deliveries until
-   * `previousSecretExpiresAt`, unless `graceSeconds=0` revokes it immediately.
-   *
-   * A second rotate while the grace window is still open keeps the original
-   * previous secret and its expiry. Overwriting it would drop the secret
-   * production handlers may still be verifying.
-   */
+  /** Rotates the signing secret. Returns the endpoint WITH the new secret. */
   async rotateSecret(
     consumer: GatewayConsumer,
     id: string,
-    dto: RotateWebhookSecretDto = {},
-  ): Promise<WebhookEndpointWithSecret> {
-    const current = await this.getOwned(consumer, id);
-    const maxGrace = this.config.get('webhooks', {
-      infer: true,
-    }).secretGraceSeconds;
-    const graceSeconds = dto.graceSeconds ?? maxGrace;
-    if (graceSeconds > maxGrace) {
-      throw new BadRequestException(
-        `graceSeconds cannot exceed the configured maximum (${maxGrace})`,
-      );
-    }
-
-    const newSecret = this.generateSecret();
-    const revokeImmediately = graceSeconds === 0;
-    const keepOriginalPrevious =
-      !revokeImmediately &&
-      current.previousSecret != null &&
-      current.previousSecretExpiresAt != null &&
-      current.previousSecretExpiresAt.getTime() > Date.now();
+  ): Promise<WebhookEndpoint> {
+    await this.getOwned(consumer, id);
     const updated = await this.prisma.webhookEndpoint.update({
       where: { id },
-      data: {
-        secret: newSecret,
-        previousSecret: revokeImmediately
-          ? null
-          : keepOriginalPrevious
-            ? current.previousSecret
-            : current.secret,
-        previousSecretExpiresAt: revokeImmediately
-          ? null
-          : keepOriginalPrevious
-            ? current.previousSecretExpiresAt
-            : new Date(Date.now() + graceSeconds * 1000),
-      },
+      data: { secret: this.generateSecret() },
     });
-    this.logger.log(
-      `Rotated secret for webhook endpoint ${id} (graceSeconds=${graceSeconds})`,
-    );
-    return this.stripPrevious(updated);
+    this.logger.log(`Rotated secret for webhook endpoint ${id}`);
+    return updated;
   }
 
   // ── Deliveries (traceability) ────────────────────────────────────────────────
+  /**
+   * The delivery log for one endpoint: what was sent, when, and how it went.
+   *
+   * `payload` is deliberately omitted. For a `RECEIVER_UPDATED` event it is the
+   * BlindPay object verbatim — the complete KYC dossier, tax id, address and
+   * bank details — and this route is gated on `webhooks:read`, not `kyc:read`.
+   * Any key with the weaker scope could therefore read the full dossier of every
+   * receiver the consumer had ever registered, indefinitely, by paging a
+   * delivery log. The row still holds the body because a retry has to re-send
+   * exactly what was signed; it just is not readable back through the API. The
+   * integrator already received the body at their endpoint.
+   */
   async listDeliveries(
     consumer: GatewayConsumer,
     id: string,
     query: QueryDeliveriesDto,
   ): Promise<{
-    data: WebhookDelivery[];
+    data: SafeWebhookDelivery[];
     total: number;
     take: number;
     skip: number;
@@ -232,6 +209,7 @@ export class WebhooksService {
         take: query.take,
         skip: query.skip,
         orderBy: { createdAt: 'desc' },
+        omit: { payload: true },
       }),
       this.prisma.webhookDelivery.count({ where }),
     ]);
@@ -243,15 +221,32 @@ export class WebhooksService {
     consumer: GatewayConsumer,
     endpointId: string,
     deliveryId: string,
-  ): Promise<WebhookDelivery> {
+  ): Promise<SafeWebhookDelivery> {
     await this.getOwned(consumer, endpointId);
+    // The body is loaded here — the dispatcher has to re-send exactly what was
+    // signed — but it is stripped from the response for the same reason
+    // listDeliveries omits it: this route is gated on `webhooks:read`, and a
+    // RECEIVER_UPDATED body is a full KYC dossier.
     const delivery = await this.prisma.webhookDelivery.findFirst({
       where: { id: deliveryId, endpointId },
     });
     if (!delivery) {
-      throw new NotFoundException(`Delivery ${deliveryId} not found`);
+      throw ApiError.notFound(`Delivery ${deliveryId} not found`);
     }
-    return this.dispatcher.redeliver(delivery);
+    // Past its retention window the body was replaced with a marker. Re-sending
+    // it would deliver `{"redacted":true}` under a real event type with a valid
+    // signature — worse than refusing, because a correct receiver would accept
+    // it as the event. Say so rather than reporting a successful redelivery.
+    if (isRedactedPayload(delivery.payload)) {
+      throw ApiError.conflict(
+        ApiErrorCode.PayloadExpired,
+        `Delivery ${deliveryId} is past its retention window: the event body was ` +
+          'cleared and can no longer be re-sent.',
+      );
+    }
+    const { payload: _sentBody, ...safe } =
+      await this.dispatcher.redeliver(delivery);
+    return safe;
   }
 
   /** Sends a test event so integrators can verify their endpoint + signature. */
@@ -276,7 +271,7 @@ export class WebhooksService {
       where: { id, consumer: { apisixUsername: consumer.username } },
     });
     if (!endpoint) {
-      throw new NotFoundException(`Webhook endpoint ${id} not found`);
+      throw ApiError.notFound(`Webhook endpoint ${id} not found`);
     }
     return endpoint;
   }
@@ -286,7 +281,7 @@ export class WebhooksService {
       await this.destinations.assertSafe(url);
     } catch (err) {
       if (err instanceof WebhookUrlValidationError) {
-        throw new BadRequestException(err.message);
+        throw ApiError.badRequest(ApiErrorCode.ValidationFailed, err.message);
       }
       throw err;
     }

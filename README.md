@@ -1,6 +1,6 @@
 # Cosmos Pay — Payments Microservice
 
-Payments microservice built with **NestJS 11** + **Prisma 6 (PostgreSQL)**.
+Payments microservice built with **NestJS 11** + **Prisma 7 (PostgreSQL)**.
 
 It is a *separate* application from the Cosmos developer platform (`paydev`). The
 dev platform only **issues** APISIX access tokens (consumers + `key-auth`
@@ -56,16 +56,29 @@ src/
     interceptors/                 structured access logging
     interfaces/                   GatewayConsumer + Express Request augmentation
     validators/                   IsStellarAddress (StrKey-based)
+    errors/api-error.ts           ApiError + machine-readable ApiErrorCode
+    services/advisory-lock...     cluster-wide lock for the background timers
+  stellar/                        per-network Horizon servers (bounded timeout)
   payment-intents/                Stellar payment intents (controller, service, DTO) — emits events
   swaps/                          Stellar native swaps (path payments): quote, build XDR, submit
+  liquidity-pools/                AMM deposit/withdraw, cost basis + commission on gain
+  observer/                       background reconciler: swaps + LP ops against Horizon
   webhooks/                       webhook endpoints CRUD + dispatcher (HMAC-signed, retried)
   blindpay/                       BlindPay core: HTTP client, Svix verify, sync + inbound webhook
   kyc/                            receivers (KYC/KYB), wallets, bank accounts, doc upload
   onramp/                         fiat → stablecoin: payin quotes, payins, virtual accounts
   offramp/                        stablecoin → fiat: payout quotes, payouts (client-signed)
+  pollar/                         Pollar OAuth bridge (social login → Stellar wallet) + operator routes
+  products/                       merchant catalogue
+  customers/                      payer records derived from intents
+  analytics/                      summary, balances, API logs, webhook logs
+  admin/                          cross-tenant platform admin (Bearer + role), audited
   health/                         liveness/readiness probes (@Public)
-prisma/schema.prisma              Consumer, PaymentIntent, Swap, WebhookEndpoint, WebhookDelivery,
-                                  BlindpayReceiver, Blockchain/BankAccount/VirtualAccount, Payin, Payout
+prisma/schema.prisma              Consumer, PaymentIntent, Swap, LiquidityPoolOperation,
+                                  WebhookEndpoint/Delivery/EmittedEvent, BlindpayReceiver,
+                                  Blockchain/BankAccount/VirtualAccount, BlindpayQuote,
+                                  BlindpayWebhookEvent, Payin, Payout, PollarOauthSession,
+                                  RequestLog, AdminAuditLog
 test/                             e2e suite proving the gateway gate
 ```
 
@@ -73,51 +86,110 @@ test/                             e2e suite proving the gateway gate
 
 All routes are versioned under `/v1` (URI versioning).
 
-| Method | Path                          | Description                                  |
-| ------ | ----------------------------- | -------------------------------------------- |
-| POST   | `/v1/payment-intents/tx`  | Create a SEP-7 `tx` intent (source → XDR + URI + QR) |
-| POST   | `/v1/payment-intents/pay` | Create a SEP-7 `pay` intent (no source → URI + QR) |
-| GET    | `/v1/payment-intents`     | List the consumer's intents (`?status&take&skip`) |
-| GET    | `/v1/payment-intents/:id` | Get one intent by id                         |
-| POST   | `/v1/payment-intents/:id/validate` | Validate a submitted tx, finalize status, fire event |
-| PATCH  | `/v1/payment-intents/:id` | Update status / txHash / reference           |
-| DELETE | `/v1/payment-intents/:id` | Delete an intent                             |
-| POST   | `/v1/swaps/quote`         | Quote a swap (Horizon path search + fee/slippage) |
-| POST   | `/v1/swaps`               | Create a swap → unsigned XDR + tx URI + QR   |
-| GET    | `/v1/swaps`               | List the consumer's swaps (`?status&take&skip`) |
-| GET    | `/v1/swaps/:id`           | Get one swap by id                           |
-| POST   | `/v1/swaps/:id/submit`    | Relay the signed swap tx, finalize status    |
-| POST   | `/v1/webhooks`            | Register a webhook endpoint (returns secret) |
-| GET    | `/v1/webhooks`            | List the consumer's endpoints                |
-| GET    | `/v1/webhooks/:id`        | Get an endpoint                              |
-| PATCH  | `/v1/webhooks/:id`        | Update (url/description/enabled/eventTypes)  |
-| DELETE | `/v1/webhooks/:id`        | Delete an endpoint                          |
-| POST   | `/v1/webhooks/:id/rotate-secret` | Rotate the signing secret           |
-| POST   | `/v1/webhooks/:id/ping`   | Send a test event                           |
-| GET    | `/v1/webhooks/:id/deliveries` | Delivery audit trail                    |
-| POST   | `/v1/webhooks/:id/deliveries/:deliveryId/redeliver` | Re-send a delivery    |
-| GET    | `/v1/health/liveness`     | Liveness (public)                            |
-| GET    | `/v1/health/readiness`    | Readiness incl. DB (public)                  |
+**The route list lives in the generated OpenAPI contract, not here.** A
+hand-maintained table drifted to 22 of ~80 endpoints and omitted five shipped
+modules; the spec is regenerated from the controllers and DTOs on every CI run
+(`npm run openapi:check` fails the build if it drifts), so it cannot go stale:
+
+- `openapi/openapi.json` / `openapi/openapi.yaml` — committed, reviewable in a diff
+- `/docs` — Swagger UI, when `SWAGGER_ENABLED=true`
+- `/docs/json`, `/docs/yaml` — the same spec served live
+
+| Area              | Base path                | What it does                                             |
+| ----------------- | ------------------------ | -------------------------------------------------------- |
+| Payment intents   | `/v1/payment-intents`    | SEP-7 `tx` / `pay` intents, validation, on-chain observer |
+| Swaps             | `/v1/swaps`              | Path-payment quote, build unsigned XDR, submit signed     |
+| Liquidity pools   | `/v1/liquidity-pools`    | AMM deposit / withdraw, positions, commission on gain     |
+| Webhooks          | `/v1/webhooks`           | Endpoint CRUD, secret rotation, deliveries, redelivery    |
+| KYC               | `/v1/kyc`                | Receivers (KYC/KYB), wallets, bank accounts, doc upload   |
+| Onramp            | `/v1/onramp`             | Payin quotes, payins, virtual accounts                    |
+| Offramp           | `/v1/offramp`            | Payout quotes, authorize, payouts (client-signed)         |
+| Products          | `/v1/products`           | Merchant catalogue                                        |
+| Customers         | `/v1/customers`          | Payer records derived from intents                        |
+| Analytics         | `/v1/summary`, `/v1/balances`, `/v1/logs` | Dashboard aggregates and logs            |
+| Admin             | `/v1/admin`              | Cross-tenant reads/writes — Bearer + role, audited        |
+| Health            | `/v1/health`             | Liveness / readiness (`@Public`)                          |
+
+### Error responses
+
+Every failure returns the same envelope, and `code` is the stable,
+machine-readable part — branch on it rather than on `message`, which is prose and
+may be reworded:
+
+```jsonc
+{
+  "statusCode": 409,
+  "code": "idempotency_conflict",
+  "error": "Conflict",
+  "message": "A swap already exists for this Idempotency-Key",
+  "path": "/v1/swaps",
+  "timestamp": "2026-09-01T12:00:00.000Z"
+}
+```
+
+The envelope and the full `code` enum are published in the OpenAPI spec as
+`ApiErrorBodyEntity`, attached to every operation — so a generated client gets
+the error type too, and you do not have to read this repo to discover the codes.
+The source of truth is `ApiErrorCode` in `src/common/errors/api-error.ts`.
+**Codes are never renamed once published**; new ones may be added, so treat an
+unrecognised code as its HTTP status.
+
+A few that are easy to confuse:
+
+| Code | Status | Means |
+| ---- | ------ | ----- |
+| `insufficient_scope` | 403 | The API key lacks the scope. Re-provision the key |
+| `account_disabled` | 403 | An operator disabled this fiat account. Not a key problem |
+| `gateway_required` | 403 | The request did not arrive through APISIX |
+| `idempotency_conflict` | 409 | This `Idempotency-Key` already produced a resource |
+| `kyc_state_invalid` | 409 | An illegal KYC state transition — not a duplicate request |
+| `operation_in_flight` | 409 | A conflicting operation is still settling |
+| `payload_expired` | 409 | The delivery body is past retention and cannot be re-sent |
+| `provider_unavailable` | 503/504 | BlindPay or Horizon is unreachable. Retry |
+| `misconfigured` | 503 | A server-side configuration error. Retrying will not help |
 
 Every intent is **persisted** (`payment_intent` table) and scoped to the
 authenticated APISIX consumer, so reads/updates/deletes only ever touch that
 consumer's own records — full traceability of each intent's lifecycle
 (`PENDING → SUBMITTED → SUCCEEDED/FAILED/CANCELLED/EXPIRED`).
 
+### Running more than one replica
+
+APISIX load-balances across instances, so every `setInterval` in this service
+runs once per replica. Correctness was never the problem — each status change
+goes through a guarded `updateMany` compare-and-swap, so only one writer wins —
+but three replicas meant three times the Horizon round-trips for identical work
+against an API that rate-limits, and replicas racing to delete the same
+`request_log` tuples.
+
+Each background timer now takes a PostgreSQL **transaction-level advisory lock**
+(`AdvisoryLockService`, `src/common/services/advisory-lock.service.ts`) and skips
+its tick when another replica holds it:
+
+| Timer                          | Lock key                 |
+| ------------------------------ | ------------------------ |
+| `SettlementObserverService`    | `SettlementObserver`     |
+| `StellarObserverService`       | `PaymentIntentObserver`  |
+| `RequestLogRetentionService`   | `RequestLogRetention`    |
+| Webhook delivery sweeper       | `WebhookDeliverySweeper` |
+
+`pg_try_advisory_xact_lock` is used rather than the session-level variant for
+three reasons: it never blocks (a replica that loses simply skips, which is what
+a poller wants), it is released when the transaction ends — including on a crash
+or a dropped connection, so a killed pod cannot wedge the lock — and it therefore
+stays correct behind PgBouncer in transaction-pooling mode, where session-level
+locks are unsafe because connections are not sticky.
+
+Lock ids live in the `AdvisoryLockKey` enum and are the identity of the task:
+renaming a member with a new number silently disables the exclusion, so retired
+numbers are never reused.
+
 ### Payment validation & the on-chain observer
 
 A payment is confirmed against the Stellar network in one place
-(`StellarVerifierService`): the transaction must be **successful**, contain an
-accepted payment-like operation to the intent's `destination` in the intent's
-asset (native XLM or a credit asset), and the tx **memo must match**
-(`memo_type: id`). When the intent fixes an **amount**, that amount must match
-exactly; **open-amount** intents (`amount` omitted / null) skip the amount
-check, so any delivered amount is accepted for every supported op type
-(including path payments and `create_account`). Accepted Horizon operation
-types: `payment`, `path_payment_strict_receive`, `path_payment_strict_send`,
-and `create_account` (native only; destination/amount/payer map from
-`account` / `starting_balance` / `funder`). Soroban / SAC transfers via
-`invoke_host_function` are **not** supported.
+(`StellarVerifierService`): the transaction must be **successful**, contain a
+**native (XLM) payment** to the intent's `destination` for the **exact amount**,
+and — when the intent has a memo — the tx **memo must match** (`memo_type: id`).
 
 Two paths use that single rule:
 
@@ -128,19 +200,21 @@ Two paths use that single rule:
 - **Automatic (permanent observer):** `StellarObserverService` polls Horizon
   every `OBSERVER_INTERVAL_MS` for `PENDING` intents — by reported `txHash`, or by
   scanning payments to the destination — and finalizes matches the same way, so
-  statuses change and events fire **without anyone calling the API**. The
-  settlement observer for swaps and liquidity operations uses the same interval;
-  `OBSERVER_EXPIRY_GRACE_MS` (default **60000**) is extra wait after tx
-  timebounds before a still-unseen hash can be marked `EXPIRED`, and only after
-  repeated Horizon 404s (a 429/5xx never expires a row). Disable for local
-  dev with `OBSERVER_ENABLED=false`.
+  statuses change and events fire **without anyone calling the API**. Disable for
+  local dev with `OBSERVER_ENABLED=false`.
 
 ### API request logs retention
 
-Every inbound request (except `/v1/health`, `/docs`, and traffic marked
-`x-cosmos-internal`) is appended to `request_log` by `LoggingInterceptor`, and
-powers the dashboard **API logs** view (`GET /v1/logs`). Rows include path,
-status, duration, and — when present — the payer's `ip` / `userAgent`.
+Every inbound request except `/v1/health` and `/docs` is appended to
+`request_log` by `LoggingInterceptor`, and powers the dashboard **API logs**
+view (`GET /v1/logs`). Rows include path, status, duration, and — when present —
+the payer's `ip` / `userAgent`.
+
+Dashboard traffic (`X-Cosmos-Internal`) is **recorded and flagged**
+(`request_log.internal`), not skipped, and the API-log view filters on that
+column. An earlier version returned early on the header, which meant anyone able
+to set it kept their requests out of the audit log entirely — a request header
+must never be able to make traffic invisible.
 
 Those rows are **not kept forever**. `RequestLogRetentionService` deletes rows
 older than `REQUEST_LOG_RETENTION_DAYS` (default **30**) on a timer
@@ -157,17 +231,26 @@ dashboard query fast as volume grows.
 Each integrator (APISIX consumer) registers one or more webhook endpoints. When a
 payment intent changes, the platform fires a domain event; the **dispatcher**
 fans it out to every enabled endpoint of that consumer subscribed to the event
-type (empty subscription = all), records a `webhook_delivery` row, and returns.
-A durable retry worker (`WebhookRetryWorkerService`) claims due rows from
-Postgres and POSTs with exponential backoff + jitter (`WEBHOOK_*` env), so a
-process restart cannot leave a notification stuck `PENDING`.
+type (empty subscription = all), records each attempt for traceability, and
+retries with linear backoff (`WEBHOOK_*` env).
 
 Event types: `PAYMENT_INTENT_CREATED`, `PAYMENT_INTENT_UPDATED`,
 `PAYMENT_INTENT_SUCCEEDED`, `PAYMENT_INTENT_FAILED`, `PAYMENT_INTENT_CANCELLED`,
 `PAYMENT_INTENT_DELETED`, `SWAP_CREATED`, `SWAP_SUBMITTED`, `SWAP_SUCCEEDED`,
-`SWAP_FAILED`, `SWAP_EXPIRED`, `LIQUIDITY_CREATED`, `LIQUIDITY_SUBMITTED`,
-`LIQUIDITY_SUCCEEDED`, `LIQUIDITY_FAILED`, `LIQUIDITY_EXPIRED` (plus the BlindPay
-`RECEIVER_UPDATED` / `PAYIN_*` / `PAYOUT_*`).
+`SWAP_FAILED`, `LIQUIDITY_CREATED`, `LIQUIDITY_SUBMITTED`, `LIQUIDITY_SUCCEEDED`,
+`LIQUIDITY_FAILED`, plus the BlindPay-sourced `RECEIVER_UPDATED`, `PAYIN_CREATED`,
+`PAYIN_UPDATED`, `PAYIN_COMPLETED`, `PAYOUT_CREATED`, `PAYOUT_UPDATED` and
+`PAYOUT_COMPLETED`. The authoritative list is the `WebhookEventType` enum in
+`prisma/schema.prisma`.
+
+**What a BlindPay-sourced body contains.** `RECEIVER_UPDATED` / `PAYIN_*` /
+`PAYOUT_*` carry identity and state only — ids, status, amounts, rails — never
+personal data. The provider object is *not* forwarded verbatim: a receiver
+payload is a full KYC dossier (tax id, date of birth, address, document links)
+and subscribing to an event needs only `webhooks:write`, which would make the
+webhook a way to have that dossier delivered to any host. Fetch the details from
+the API with a key that holds `kyc:read` / `onramp:read` / `offramp:read`. See
+`src/blindpay/blindpay-event-redaction.ts` for the exact field allowlist.
 
 Delivery is decoupled via NestJS `EventEmitter2` (`webhook.event`), so emitting a
 notification never blocks the API request that triggered it.
@@ -186,16 +269,36 @@ size.
 | `WEBHOOK_READ_TIMEOUT_MS` | `5000` | Read budget (part of AbortSignal timeout) |
 | `WEBHOOK_MAX_RESPONSE_BYTES` | `65536` | Cap on drained response body |
 | `WEBHOOK_TIMEOUT_MS` | `5000` | Legacy fallback if the split timeouts are unset |
-| `WEBHOOK_MAX_ATTEMPTS` | `8` | Retry budget snapshotted onto each delivery |
-| `WEBHOOK_BACKOFF_MS` | `2000` | Base of exponential backoff between worker retries |
-| `WEBHOOK_MAX_BACKOFF_MS` | `3600000` | Ceiling for a single retry delay (1 hour) |
-| `WEBHOOK_SIGNATURE_HEADER` | `x-cosmos-signature` | HMAC header sent to integrators |
-| `WEBHOOK_SECRET_GRACE_SECONDS` | `86400` | Max overlap after `rotate-secret` (seconds). `graceSeconds=0` revokes immediately. |
+| `WEBHOOK_MAX_ATTEMPTS` / `WEBHOOK_BACKOFF_MS` | `3` / `2000` | In-process retry loop, per delivery attempt |
+| `WEBHOOK_SWEEP_ENABLED` | `true` | Recovers deliveries stranded by a crash. The incident switch — set `false` to stop redelivery to an integrator that is melting down |
+| `WEBHOOK_SWEEP_INTERVAL_MS` | `60000` | How often a replica tries to sweep (only one wins per tick) |
+| `WEBHOOK_PAYLOAD_RETENTION_DAYS` | `30` | After this, the stored body of a settled delivery is replaced with a redaction marker. `0` keeps bodies forever |
+
+**The real attempt ceiling is 9, not 3.** `WEBHOOK_MAX_ATTEMPTS` bounds one
+in-process retry loop. The sweeper then picks up deliveries that are still
+within `WEBHOOK_MAX_ATTEMPTS × 3` total attempts, so a delivery can be attempted
+up to nine times spread over hours. That is deliberate — a pod killed mid-backoff
+used to strand a PENDING delivery forever, which meant a settled payment that
+notified nobody.
+
+**Redelivery is best-effort within the retention window.** After
+`WEBHOOK_PAYLOAD_RETENTION_DAYS` the stored body is cleared (a
+`RECEIVER_UPDATED` body is a KYC dossier, and the delivery log is retained). The
+sweeper skips those rows and `POST /v1/webhooks/:id/deliveries/:id/redeliver`
+returns `409 payload_expired` rather than sending a redacted body under a real
+event type with a valid signature.
+
+**Receiver contract.** Any `2xx` acknowledges. Answer within
+`WEBHOOK_READ_TIMEOUT_MS` (5s default). There is no ordering guarantee, so treat
+the events as a set and reconcile against the API. Deduplicate on the event `id`
+— note that a redelivery reuses the original `id`, so a receiver that dedupes
+strictly will ignore it; that is the intended trade (at-least-once delivery,
+exactly-once effect).
 
 **Migrating existing endpoints:** after deploy, run
 
 ```bash
-npx ts-node --transpile-only scripts/mark-blocked-webhook-endpoints.ts
+npm run webhooks:audit-destinations
 ```
 
 Unsafe rows get `destinationBlocked=true` and `enabled=false`. Integrators fix
@@ -215,101 +318,26 @@ again and clears the flag), or re-enable after DNS is public.
 
 **Headers**:
 
-- `X-Cosmos-Signature: t=<unixSeconds>,v1=<hexHmacSha256>[,v1=<hexHmacSha256>]`
-  — HMAC-SHA256 of `${t}.${rawBody}`. During a secret-rotation grace window the
-  header carries one `v1=` token per active secret (current, then previous); a
-  handler that still has the old secret keeps verifying OK. After the window
-  (or with `graceSeconds=0`) only the current secret is signed.
+- `X-Cosmos-Signature: t=<unixSeconds>,v1=<hexHmacSha256>` — HMAC-SHA256 of
+  `${t}.${rawBody}` using the endpoint's `whsec_...` secret.
 - `X-Cosmos-Event`, `X-Cosmos-Event-Id`, `X-Cosmos-Delivery`.
 
 **Verifying the signature (integrator side):**
 
-Compare lengths **before** `timingSafeEqual` — a truncated or malformed header
-must return `false`, not throw `RangeError`. Reject timestamps older than five
-minutes to blunt replay. Iterate every `v1=` token so a delivery signed with
-both secrets during rotation still verifies with whichever secret you hold.
-
 ```ts
 import { createHmac, timingSafeEqual } from 'node:crypto';
 
-const MAX_AGE_SECONDS = 300;
-
 function verify(rawBody: string, header: string, secret: string): boolean {
-  if (!header || !rawBody || !secret) return false;
-
-  let timestamp: number | undefined;
-  const signatures: string[] = [];
-  for (const token of header.split(',')) {
-    const eq = token.indexOf('=');
-    if (eq === -1) continue;
-    const key = token.slice(0, eq);
-    const value = token.slice(eq + 1);
-    if (key === 't') timestamp = Number(value);
-    else if (key === 'v1' && value) signatures.push(value);
-  }
-
-  if (
-    timestamp == null ||
-    !Number.isFinite(timestamp) ||
-    signatures.length === 0
-  ) {
-    return false;
-  }
-
-  const now = Math.floor(Date.now() / 1000);
-  if (now - timestamp > MAX_AGE_SECONDS) return false;
-
-  const expected = Buffer.from(
-    createHmac('sha256', secret).update(`${timestamp}.${rawBody}`).digest('hex'),
-  );
-
-  for (const value of signatures) {
-    const candidate = Buffer.from(value);
-    if (
-      candidate.length === expected.length &&
-      timingSafeEqual(candidate, expected)
-    ) {
-      return true;
-    }
-  }
-  return false;
+  const [t, v1] = header.split(',').map((p) => p.split('=')[1]);
+  const expected = createHmac('sha256', secret).update(`${t}.${rawBody}`).digest('hex');
+  return timingSafeEqual(Buffer.from(expected), Buffer.from(v1));
 }
 ```
 
 The signing secret is returned **once** on `POST /webhooks` (and on
-`rotate-secret`); list/get responses never include `secret` or `previousSecret`.
-They do include `previousSecretExpiresAt` so you can see how much overlap
-remains. Every attempt is stored (`webhook_delivery`) with status, attempts,
-response code and error — query it via `GET /webhooks/:id/deliveries` and
-re-send with the `redeliver` route.
-
-**Rotating the signing secret:**
-
-`POST /v1/webhooks/:id/rotate-secret` does **not** cut over in a single step.
-The current secret moves to an overlap window (default
-`WEBHOOK_SECRET_GRACE_SECONDS` = 24 hours; override per call with
-`{ "graceSeconds": N }` in the body, capped at that maximum):
-
-1. Call `POST /v1/webhooks/:id/rotate-secret`. The response includes the **new**
-   `secret` (`whsec_...`) and `previousSecretExpiresAt`. Store the new secret.
-2. Keep verifying with the **old** secret until you deploy the new one.
-   Deliveries during the window are signed with both: `t=…,v1=<new>,v1=<old>`.
-   Either secret verifies.
-3. Deploy the new secret to your handler. The snippet above already iterates
-   every `v1=` token, so you can switch at any point in the window.
-4. After `previousSecretExpiresAt`, deliveries carry a single `v1=` and the old
-   secret no longer verifies. The previous secret is then removed from the
-   database.
-
-Rotating again **before** `previousSecretExpiresAt` does not replace the
-original previous secret. The new current secret is issued, but deliveries keep
-the original `v1=` overlap until that first expiry. Pass `{ "graceSeconds": 0 }`
-if you need to drop every prior secret immediately.
-
-If the old secret is a **confirmed leak**, pass `{ "graceSeconds": 0 }`. The
-next delivery is signed only with the new secret; the old one is revoked
-immediately (no overlap). Use this when a teammate leaves, an audit requires
-it, or the secret appeared in a repo/log — not as the default rotation path.
+`rotate-secret`); list/get responses never include it. Every attempt is stored
+(`webhook_delivery`) with status, attempts, response code and error — query it
+via `GET /webhooks/:id/deliveries` and re-send with the `redeliver` route.
 
 ### OpenAPI / Swagger
 
@@ -524,7 +552,7 @@ same `(consumer, source, network)` also returns **409** naming the existing id
 The signed transaction's hash is verified against the one the service built before
 it is broadcast, so a caller can never have the service relay an arbitrary
 transaction. A swap fires `SWAP_CREATED` / `SWAP_SUBMITTED` / `SWAP_SUCCEEDED` /
-`SWAP_FAILED` / `SWAP_EXPIRED` webhook events through the same dispatcher.
+`SWAP_FAILED` webhook events through the same dispatcher.
 
 ## BlindPay — onramp / offramp / KYC (fiat ⇄ stablecoin)
 
@@ -572,6 +600,284 @@ the BlindPay dashboard webhook to `<gateway>/v1/blindpay/webhooks` and set
 `BLINDPAY_*` vars blank to disable the feature (those routes return `503`). See
 `.env.example`.
 
+## Pollar — social login that hands back a Stellar wallet
+
+[Pollar](https://docs.pollar.xyz/docs) turns a Google/GitHub login into a Stellar
+account: it authenticates the user, creates a wallet, custodies the key in AWS
+KMS, adds the configured trustlines and funds the reserve — the user never sees a
+seed phrase. This service exposes it as an **OAuth bridge**, the same shape a game
+launcher or console uses when the client finishes the code exchange locally.
+
+### Why a bridge and not a passthrough
+
+Pollar's hosted login is designed for a browser SDK. It hands the user to
+`GET /auth/{provider}` with a publishable key, a client-session id and a
+`redirect_uri` — and that redirect URI must be a host **registered with Pollar**.
+A wallet cannot satisfy any of that: a loopback listener on an ephemeral port or
+a `cosmospay://` deep link can never be a registered host, and the assembly needs
+keys and session ids the wallet should not be handling.
+
+So the bridge owns the Pollar-facing half. The wallet gets a two-step contract it
+already understands — **open an authorization, redeem a code** — and absorbs
+nothing but that code.
+
+```
+wallet ──1. POST /v1/pollar/oauth/authorize ────────────▶ bridge ──▶ POST /v2/auth/session
+       ◀── authorization_url + state ──────────────────── bridge     (Pollar mints a client session)
+
+browser ─2. open authorization_url ──▶ Pollar ──▶ Google/GitHub consent
+        ◀─────────────── 3. redirect ─────────── Pollar ──▶ GET /v1/pollar/oauth/callback/{state}
+                                                                     (bridge mints a single-use code)
+
+wallet ──4. absorbs the code ────── from its own redirect URI, or GET /oauth/sessions/{state}
+wallet ──5. POST /v1/pollar/oauth/token ────────────────▶ bridge ──▶ POST /v2/auth/login
+       ◀── access_token + refresh_token + wallet ──────── bridge     (waits for Pollar to be READY)
+
+wallet ──6. talks to Pollar DIRECTLY from here on ──────▶ https://sdk.api.pollar.xyz/v2
+```
+
+Step 6 is the point of the whole thing: the redemption response also carries the
+`publishable_key` and `api_base_url`, so from there the wallet reads balances,
+builds and submits transactions against the virtual wallet itself. **This service
+never proxies that surface and holds no key that could.**
+
+### Two ways to absorb the code
+
+|                  | Redirect flow                                    | Poll flow                                       |
+| ---------------- | ------------------------------------------------ | ----------------------------------------------- |
+| Wallet supplies  | `redirect_uri` (must be allow-listed)            | nothing                                         |
+| Code arrives     | as `?code=…&state=…` on the redirect             | from `GET /v1/pollar/oauth/sessions/{state}`    |
+| The browser sees | your own URI                                     | a plain "you can close this window" page — never the code |
+| Use it when      | the wallet has a deep link or loopback listener  | it has neither (kiosk, headless, embedded view) |
+
+Each poll issues a fresh code and retires the previous one, so redeem the code
+from your most recent poll. That falls out of never storing a live credential:
+the row keeps a SHA-256 of the code, and a hash cannot be un-hashed.
+
+### What the bridge stores
+
+A handshake row, and nothing in it can spend money: the unguessable `state`, the
+Pollar client-session id, a **hash** of the code, and the resulting public Stellar
+address. **No Pollar token is ever persisted** — the `/auth/login` exchange runs
+inside the redemption request and the tokens go straight out in its response.
+Handshakes nobody finished are expired on a timer (`POLLAR_SWEEP_*`), because an
+`AUTHORIZED` row is a redeemable code until it is swept.
+
+Every transition is a compare-and-swap on the row's status, so a replayed
+callback mints no second code, and two wallets racing one code cannot both win.
+
+### Hardening worth knowing about
+
+- **PKCE (RFC 7636, S256)** is optional but recommended: pass `code_challenge` at
+  authorize and `code_verifier` at redemption, and a code that leaks from a
+  browser or a log is useless without the verifier.
+- **`dpop_jwk`** binds the tokens Pollar mints to the wallet's own P-256 key
+  (RFC 9449), so a stolen access token is inert without a signed proof. It also
+  means the bridge can no longer act for the wallet — `/refresh` and `/logout`
+  serve bearer sessions, and a DPoP-bound wallet calls Pollar directly.
+- **`POLLAR_REDIRECT_URI_WHITELIST`** is per consumer and fails closed. A redirect
+  URI is where a single-use code lands, so an unvetted one is an exfiltration
+  channel. It accepts loopback hosts (any port, per RFC 8252), private-use scheme
+  deep links, and https hosts.
+
+### Routes
+
+| Method | Path                                                  | Scope          | Description |
+| ------ | ----------------------------------------------------- | -------------- | ----------- |
+| POST   | `/v1/pollar/oauth/authorize`                          | `pollar:write` | Open a login → `authorization_url` + `state` |
+| GET    | `/v1/pollar/oauth/callback/:state`                    | _public_       | Where Pollar returns the browser (a navigation — no key to carry) |
+| GET    | `/v1/pollar/oauth/callback?state=`                    | _public_       | Same callback, for a redirect chain that keeps the query but not the path |
+| GET    | `/v1/pollar/oauth/sessions/:state`                    | `pollar:read`  | Poll a handshake, and collect its code |
+| POST   | `/v1/pollar/oauth/token`                              | `pollar:write` | Redeem the code → Pollar session + wallet |
+| POST   | `/v1/pollar/oauth/refresh`                            | `pollar:write` | Rotate a token pair (bearer sessions) |
+| POST   | `/v1/pollar/oauth/logout`                             | `pollar:write` | Revoke a session (this device, or all) |
+| POST   | `/v1/pollar/wallets/activate`                         | `pollar:write` | Fund the XLM reserve (Deferred funding mode) |
+| POST   | `/v1/pollar/wallets/:address/trustlines/default`      | `pollar:write` | Enable the app's configured assets |
+| POST   | `/v1/pollar/wallets/:address/trustlines`              | `pollar:write` | Enable specific assets |
+| DELETE | `/v1/pollar/wallets/:address/trustlines/:code/:issuer`| `pollar:write` | Remove a trustline (zero balance only) |
+| POST   | `/v1/pollar/users` · `/v1/pollar/users/with-wallet`   | `pollar:write` | Register a user, optionally with a wallet |
+| POST   | `/v1/pollar/tokens/verify`                            | `pollar:read`  | Validate a token a wallet presented to you |
+
+The last six need Pollar's **secret** key, which is exactly why they live here
+rather than in the wallet. Request and response schemas for all of them are in
+the generated contract — Swagger UI at `/docs`, or `openapi/openapi.{json,yaml}`.
+The table above is for orientation; the contract is the source of truth.
+
+### Rate limiting: what stops wallet generation being spammed
+
+Creating a Pollar wallet is not free. Pollar creates the Stellar account, funds
+its base reserve (1 XLM) and adds a trustline per configured asset (0.5 XLM
+each) — **out of your funding wallet**. A loop against the login flow is
+therefore a way for a stranger to spend your money, and it does not need a real
+user at the far end to do it.
+
+So the caps live here, in this service, rather than only at the gateway: this is
+the process that knows a request is about to create an account, and it is the
+one that can refuse before the XLM leaves.
+
+**The control point is `authorize`, not `token`.** A handshake yields at most one
+wallet, so bounding how many handshakes one address may open bounds how many
+wallets it can cause. `token` stays deliberately looser, because the 409 path
+tells the caller to retry that exact request while Pollar provisions the account
+— a tight budget there would throttle our own documented retry, and redeeming
+creates nothing the handshake had not already allowed.
+
+| Route | Budget (per 10 min) | Why that number |
+| ----- | ------------------- | --------------- |
+| `POST /v1/pollar/oauth/authorize` | 20 | The cap on wallet generation. Far above a human retrying a failed consent screen, far below a rate that drains an account |
+| `POST /v1/pollar/oauth/token` | 60 | Loose on purpose — see above |
+| `GET /v1/pollar/oauth/callback` | 60 | The only route reachable without an API key, so the only one an anonymous flood can reach. A user refreshing the tab is normal |
+| `POST /v1/pollar/users/with-wallet` | 10 | Creates a wallet with no consent screen pacing it — the tightest budget in the set |
+| `POST /v1/pollar/wallets/activate` | 20 | Spends XLM per call, but cannot create anything new |
+
+Exceeding one returns **`429` with `code: "rate_limited"`**, a `Retry-After`, and
+the `RateLimit-Limit` / `-Remaining` / `-Reset` triple. Everything else in the
+service is unlimited here; general traffic shaping is APISIX's job, since it sees
+the request before this process does.
+
+**The counter is in Postgres, not in memory.** The service runs behind a load
+balancer, so a per-process limiter would hand each replica the full budget: the
+effective limit becomes `limit × replicas` and changes silently whenever the
+deployment scales. That is fine for a cosmetic throttle and not fine for
+something guarding a real balance. It is a fixed window — one atomic
+`INSERT … ON CONFLICT … RETURNING` per request — which does mean a client can
+spend a full budget on each side of a boundary, so treat the numbers above as
+"at most twice this per window". They are set knowing that.
+
+**How the address is decided, and why it cannot be spoofed.** `main.ts` sets
+`trust proxy` to `1`, which makes Express read the *rightmost* entry of
+`X-Forwarded-For` — the one APISIX appended, i.e. the peer as the gateway saw
+it. A client may prepend entries to that header, but everything it writes lands
+to the left of APISIX's and is ignored.
+
+> **Do not raise `trust proxy`.** At `2` Express starts honouring the first
+> client-supplied hop, and every limit here becomes bypassable by adding one
+> header. `src/common/client-ip.spec.ts` pins both behaviours so the change
+> cannot pass review unnoticed.
+
+An IPv6 caller is bucketed per **/64**, not per address: a client is routinely
+handed a whole /64 and can rotate through it for free, so per-address limiting
+there is not limiting. The cost is that two users behind one /64 share a bucket,
+exactly as two users behind one IPv4 NAT already do. Buckets are also keyed by
+consumer, so one integrator's traffic cannot eat another's.
+
+If the counter cannot be written the limiter **fails closed** (`503`). A limiter
+that quietly stops limiting during a database incident is worth less than none,
+because nothing tells you it happened — and every route behind it needs the same
+database anyway, so refusing costs no availability that was not already lost.
+
+Set `RATE_LIMIT_ENABLED=false` as the incident switch.
+
+### Setup
+
+1. Create an app at [dashboard.pollar.xyz](https://dashboard.pollar.xyz) and take
+   both keys for your network (`pub_testnet_…` / `sec_testnet_…`).
+2. Register the **gateway host** of `POLLAR_BRIDGE_CALLBACK_URL` under
+   **Build → Domains**, or Pollar refuses the redirect.
+3. Set `POLLAR_BRIDGE_CALLBACK_URL` to `<gateway>/v1/pollar/oauth/callback` — the
+   bridge appends `/{state}` itself.
+4. Add each wallet's redirect URI to `POLLAR_REDIRECT_URI_WHITELIST`, or omit it
+   and use the poll flow.
+
+Keys are per network, and Pollar encodes the network and key type in the prefix,
+so a mismatch is a hard rejection — the env validator catches it at boot instead
+of on a user-facing login. Leave the keys blank to disable the feature (Pollar
+routes then return `503`). See `.env.example`.
+
+## Upgrading — breaking changes and deploy notes
+
+### `429` now reports `rate_limited`
+
+A bare `429` used to fall back to `code: "provider_unavailable"`, which said an
+upstream was in trouble when in fact this service had refused the request
+itself — sending integrators to investigate something that was perfectly
+healthy. It now reports `code: "rate_limited"`, and `ApiErrorCode.RateLimited`
+is part of the published enum. Branch on that if you retry on throttling.
+
+
+### Response shapes that changed
+
+Three published shapes changed in the audit-hardening release. All three are
+under `/v1`; there is no `/v2`, so integrators must be told before you deploy.
+
+| Endpoint | Was | Now | Why |
+| -------- | --- | --- | --- |
+| `GET /v1/webhooks` | bare array, silently clamped at 100 | `{ data, total, take, skip }` | A consumer with 120 endpoints got 100 with nothing saying so, and no `total` to page against |
+| `GET /v1/products` | bare array, whole table | `{ data, total, take, skip }` | Unbounded read |
+| `GET /v1/webhooks/:id/deliveries` and the redelivery response | included `payload` | `payload` removed | A `RECEIVER_UPDATED` body is a full KYC dossier and these routes are gated on `webhooks:read`, not `kyc:read` |
+
+A caller doing `for (const x of res)` or reading `delivery.payload` breaks on
+deploy. Migration is mechanical: read `res.data`, and fetch KYC details from the
+KYC endpoints with a key that holds `kyc:read`.
+
+`RECEIVER_UPDATED` / `PAYIN_*` / `PAYOUT_*` **webhook bodies** also narrowed to
+identity and state — see the Webhooks section.
+
+### The audit-hardening migration
+
+It ships as two files that must be applied in order:
+
+- `20260901120000_audit_hardening` — the correctness work: a new column, a
+  de-duplicating `DELETE` on `liquidity_pool_operation`, two `UNIQUE` indexes,
+  two new tables. The DELETE and the unique index it feeds run inside an
+  explicit transaction under a `SHARE ROW EXCLUSIVE` lock, so a rolling deploy
+  cannot slip a duplicate between them. Writers to that one table block for the
+  few milliseconds it spans.
+- `20260901120100_audit_hardening_indexes` — nine additive indexes, built
+  `CONCURRENTLY` so the deploy does **not** block writes on `payment_intent`,
+  `swap`, `webhook_delivery` or `request_log`. No maintenance window needed.
+
+The split is not stylistic: PostgreSQL refuses `CREATE INDEX CONCURRENTLY`
+inside a transaction block, and the first file needs one. Both are verified in
+CI against a real PostgreSQL, which also asserts no index was left `INVALID` and
+that the migrations still match `schema.prisma`.
+
+If the second file fails partway, a `CONCURRENTLY` build leaves an **invalid**
+index rather than failing cleanly, and `IF NOT EXISTS` considers it present. Drop
+it, then re-run:
+
+```sql
+SELECT c.relname FROM pg_class c JOIN pg_index i ON i.indexrelid = c.oid
+WHERE NOT i.indisvalid;
+```
+
+### `APISIX_GATEWAY_SECRET` now requires 32 characters
+
+The service refuses to boot below that. It previously accepted a single
+character, while admin credentials already demanded 16 — and this secret is a
+stronger boundary than those. Generate one with `openssl rand -hex 32` and
+rotate it in APISIX at the same time.
+
+### Features from `v0.1.0`–`v0.1.5` that this release supersedes
+
+`main` and this branch solved several of the same problems independently while
+they were apart. Where both had an answer, this branch's design is the one that
+ships, so a deployment coming from `v0.1.5` loses the following. None of it is
+an accident — each is a deliberate resolution — but every item is visible to an
+integrator, so plan the upgrade around them.
+
+| Was on `v0.1.5` | Now |
+| --------------- | --- |
+| `POST /v1/webhooks/:id/rotate-secret` accepted `graceSeconds` and kept the old secret verifying for `WEBHOOK_SECRET_GRACE_SECONDS` | The secret is swapped outright; the previous one stops verifying immediately. Update the receiver's stored secret in the same window as the rotate call. |
+| A leased retry worker delivered webhooks (`maxAttempts` / `nextAttemptAt` / `leaseUntil`, status `RETRYING`) | The delivery sweeper does, with `WEBHOOK_MAX_ATTEMPTS` back to `3` per in-process loop (a real ceiling of 9 across sweeps). `WEBHOOK_MAX_BACKOFF_MS`, `WEBHOOK_WORKER_*`, `WEBHOOK_LEASE_MS`, `WEBHOOK_FANOUT_CONCURRENCY` and `WEBHOOK_PAUSE_AFTER_FAILURES` are gone, and no delivery is ever written as `RETRYING`. |
+| `SWAP_EXPIRED` and `LIQUIDITY_EXPIRED` were emitted | Neither is emitted. Expiry is still recorded on the row; poll it, or subscribe to the `*_FAILED` events. |
+| `GET /v1/products` filtered on `kind`, `active` and `reference`, and `DELETE` took `hard=true` | Neither exists. Deletes are soft (`active=false`). |
+| `GET /v1/products` and `GET /v1/customers` defaulted to `take=20` | Both default to `take=100` (still the maximum), so an unparameterised call returns more rows than it did. |
+| `analytics.apiLogs` / `analytics.webhookLogs` returned `{ data, total }` and honoured `take` only | Both are paginated like every other list: `take` + `skip` in, `{ data, total, take, skip, hasMore }` out. The overview's date-range filters are gone. |
+| `/v1/health` reported a Stellar readiness indicator alongside the database | It reports the database only. |
+| `STELLAR_HTTP_TIMEOUT_MS`, `STELLAR_MAX_ATTEMPTS`, `STELLAR_RETRY_BASE_MS` bounded Horizon calls | Horizon bounding lives in `stellar/stellar.constants.ts` and is not configurable by environment. Those three variables are no longer read or validated. |
+
+**Nothing is dropped from the database.** The columns, indexes and enum values
+those features added (`webhook_delivery.maxAttempts` / `nextAttemptAt` /
+`leaseUntil`, `webhook_endpoint.previousSecret*`, `swap` and
+`liquidity_pool_operation` `lastCheckedAt` / `notFoundStreak`, the
+`horizon_account_cursor` table, `RETRYING`, `SWAP_EXPIRED`, `LIQUIDITY_EXPIRED`)
+are all still declared in `schema.prisma` and still present after
+`migrate deploy`. They are simply never written. Dropping live columns — and an
+enum value, which PostgreSQL cannot remove without recreating the type — would
+be a destructive migration bought for nothing, and keeping them declared is what
+lets `prisma migrate diff` stay clean.
+
 ## Environment variables
 
 Every variable read from `process.env` in `src/` is validated at boot by
@@ -583,7 +889,7 @@ at least `DATABASE_URL` and `APISIX_GATEWAY_SECRET`.
 | `NODE_ENV` | no | `development` | Must be `development`, `test`, or `production` |
 | `PORT` | no | `3000` | HTTP listen port |
 | `DATABASE_URL` | **yes** | — | PostgreSQL connection for Prisma |
-| `APISIX_GATEWAY_SECRET` | **yes** | — | Shared secret APISIX injects as `X-Gateway-Secret` |
+| `APISIX_GATEWAY_SECRET` | **yes** | — | Shared secret proving the request came through APISIX. **Minimum 32 characters** — this is the whole boundary between "arrived through the gateway" and "anyone who can reach the pod" |
 | `APISIX_GATEWAY_SECRET_HEADER` | no | `x-gateway-secret` | Header name for the gateway secret |
 | `APISIX_CONSUMER_HEADER` | no | `x-consumer-username` | Authenticated consumer username |
 | `APISIX_CREDENTIAL_HEADER` | no | `x-credential-identifier` | Credential id from key-auth |
@@ -611,11 +917,16 @@ at least `DATABASE_URL` and `APISIX_GATEWAY_SECRET`.
 | `WEBHOOK_CONNECT_TIMEOUT_MS` | no | `3000` | Outbound webhook connect budget (ms) |
 | `WEBHOOK_READ_TIMEOUT_MS` | no | `5000` | Outbound webhook read budget (ms) |
 | `WEBHOOK_MAX_RESPONSE_BYTES` | no | `65536` | Max drained webhook response body |
-| `WEBHOOK_MAX_ATTEMPTS` | no | `8` | Delivery retry budget (snapshotted at enqueue) |
-| `WEBHOOK_BACKOFF_MS` | no | `2000` | Base of exponential backoff between retries (ms) |
-| `WEBHOOK_MAX_BACKOFF_MS` | no | `3600000` | Max retry delay (ms) |
+| `WEBHOOK_MAX_ATTEMPTS` | no | `3` | Delivery retry count |
+| `WEBHOOK_BACKOFF_MS` | no | `2000` | Linear backoff between retries (ms) |
 | `WEBHOOK_SIGNATURE_HEADER` | no | `x-cosmos-signature` | HMAC header sent to integrators |
-| `WEBHOOK_SECRET_GRACE_SECONDS` | no | `86400` | Max overlap after webhook `rotate-secret` (seconds) |
+| `WEBHOOK_SWEEP_ENABLED` | no | `true` | Recover deliveries stranded by a crash. Incident switch |
+| `WEBHOOK_SWEEP_INTERVAL_MS` | no | `60000` | Sweeper interval (ms, min 1000) |
+| `WEBHOOK_PAYLOAD_RETENTION_DAYS` | no | `30` | Days to keep a settled delivery body before redacting it. `0` keeps it forever |
+| `REQUEST_LOG_RETENTION_DAYS` | no | `30` | Days to keep `request_log` rows (payer IP / user-agent). `0` disables the prune |
+| `REQUEST_LOG_PRUNE_INTERVAL_MS` | no | `3600000` | Retention timer interval (ms) |
+| `REQUEST_LOG_PRUNE_BATCH_SIZE` | no | `1000` | Rows per delete batch (keeps each lock short) |
+| `REQUEST_LOG_PRUNE_MAX_PER_CYCLE` | no | `50000` | Hard cap on rows examined per tick |
 | `SWAGGER_ENABLED` | no | off in `production` | Publish `/docs` (Express middleware, no guards) |
 | `OPENAPI_SERVER_URL` | no | — | Gateway host stamped into exported OpenAPI |
 | `BLINDPAY_API_KEY` | no | — | BlindPay platform API key |
@@ -625,6 +936,20 @@ at least `DATABASE_URL` and `APISIX_GATEWAY_SECRET`.
 | `BLINDPAY_TIMEOUT_MS` | no | `15000` | BlindPay HTTP client timeout (ms) |
 | `ADMIN_API_CREDENTIALS` | no | — | JSON admin bearer secrets (issue #34) |
 | `KYC_REDIRECT_URL_WHITELIST` | no | — | Per-consumer KYC redirect host allow-list |
+| `RATE_LIMIT_ENABLED` | no | `true` | Per-address caps on the routes that spend XLM. Incident switch |
+| `RATE_LIMIT_PRUNE_INTERVAL_MS` | no | `600000` | Counter-window prune interval (ms, min 1000) |
+| `POLLAR_PUBLISHABLE_KEY_TESTNET` / `_MAINNET` | no | — | Pollar publishable key (`pub_<network>_…`), for the OAuth bridge |
+| `POLLAR_SECRET_KEY_TESTNET` / `_MAINNET` | with the publishable key | — | Pollar secret key (`sec_<network>_…`), for the operator routes |
+| `POLLAR_BRIDGE_CALLBACK_URL` | when a Pollar key is set | — | Public URL Pollar returns the browser to. Must be `<gateway>/v1/pollar/oauth/callback` **and** a host registered under Pollar's Build → Domains |
+| `POLLAR_REDIRECT_URI_WHITELIST` | no | — | Per-consumer allow-list of wallet redirect URIs. Empty ⇒ that consumer can only use the poll flow |
+| `POLLAR_SDK_BASE_URL` | no | `https://sdk.api.pollar.xyz` | Pollar SDK API base URL |
+| `POLLAR_SERVER_BASE_URL` | no | `https://api.pollar.xyz` | Pollar Server API base URL |
+| `POLLAR_TIMEOUT_MS` | no | `15000` | Pollar HTTP client timeout (ms) |
+| `POLLAR_AUTHORIZATION_TTL_MS` | no | `300000` | How long a login handshake stays open |
+| `POLLAR_CODE_TTL_MS` | no | `120000` | How long a minted bridge code stays redeemable |
+| `POLLAR_LOGIN_WAIT_MS` | no | `20000` | How long redemption waits for Pollar to provision the wallet |
+| `POLLAR_SWEEP_ENABLED` | no | `true` | Expire handshakes nobody finished |
+| `POLLAR_SWEEP_INTERVAL_MS` | no | `60000` | Handshake sweeper interval (ms, min 1000) |
 
 Legacy `STELLAR_HORIZON_URL` is rejected at boot — use
 `STELLAR_HORIZON_URL_PUBLIC` / `STELLAR_HORIZON_URL_TESTNET` instead.
@@ -667,13 +992,80 @@ here — and remove any client-supplied copy:
       // must equal APISIX_GATEWAY_SECRET in this service's environment
       "X-Gateway-Secret": "<the-shared-secret>"
     },
-    "remove": ["Authorization", "apikey", "X-API-KEY"]
+    "remove": [
+      // credentials
+      "Authorization", "apikey", "X-API-KEY",
+
+      // ── Authorization inputs. THIS SERVICE TRUSTS THESE COMPLETELY. ──
+      // They are not key-auth outputs, so APISIX does not overwrite them for
+      // you: whatever the client sends arrives here verbatim unless it is
+      // removed below, and only then re-set by the route from the consumer's
+      // own metadata. Omitting any one of them is a privilege-escalation bug,
+      // not a cosmetic gap:
+      //
+      //   X-Consumer-Role: admin      → bypasses every scope check
+      //                                 (PermissionsGuard treats admin as
+      //                                 full access)
+      //   X-Consumer-Permissions      → grants arbitrary scopes
+      //   X-Consumer-Env: prod        → moves the caller onto Stellar MAINNET
+      //   X-Plan-Swap-Fee-Bps: 0      → zero platform commission on every swap
+      //                                 and liquidity-pool withdrawal
+      //   X-Consumer-Org              → attribution / plan resolution
+      //   X-Consumer-Plan             → plan tier, read into GatewayConsumer
+      //   X-Cosmos-Internal           → marks traffic as dashboard-internal
+      //   X-Cosmos-Tos-Cooldown-Ms    → relaxes the KYC email resend limit
+      "X-Consumer-Role",
+      "X-Consumer-Permissions",
+      "X-Consumer-Env",
+      "X-Plan-Swap-Fee-Bps",
+      "X-Consumer-Org",
+      "X-Consumer-Plan",
+      "X-Cosmos-Internal",
+      "X-Cosmos-Tos-Cooldown-Ms"
+    ]
   }
 }
 ```
 
-`key-auth` already forwards `X-Consumer-Username` / `X-Credential-Identifier`
-to the upstream after a successful auth, which the guard relies on.
+`key-auth` forwards `X-Consumer-Username` / `X-Credential-Identifier` to the
+upstream after a successful auth, overwriting any client-supplied copy, and the
+guard relies on that.
+
+> **The remove list is load-bearing, and it is the one part of this security
+> model that cannot be verified from inside this repository.** Every header in
+> the block above is an authorization input that the service accepts at face
+> value; `X-Gateway-Secret` proves only that the request came through *a*
+> gateway, not that the values are honest. Treat that list as production
+> configuration with the same review bar as code: audit it whenever a route is
+> added or copied, and keep the service on a private network so the only
+> reachable path is through APISIX. The shared secret is the second layer, not
+> the only one.
+>
+> The service now fails closed on the one input where silence used to be
+> profitable: a missing `X-Plan-Swap-Fee-Bps` in a production configuration is a
+> 503 rather than a silent fallback to the environment default.
 
 > Keep the service on a private network so the only reachable path is through
 > APISIX; the shared secret is the second layer, not the only one.
+
+## Keeping this document honest
+
+**The README is part of the change, not a follow-up.** Nothing in CI catches its
+drift — the build stays green while these pages quietly describe a service that
+no longer exists — so it is updated in the same commit as the code it describes.
+The full convention, including which section each kind of change touches, is in
+[`CLAUDE.md`](./CLAUDE.md); the short version:
+
+| When you… | Update |
+| --------- | ------ |
+| add or remove a module under `src/` | [Project layout](#project-layout) |
+| add, rename or delete a `process.env` read | [Environment variables](#environment-variables) **and** `.env.example` |
+| integrate a provider, or change how one behaves | that provider's own `##` section |
+| change a published response shape, status code, or scope | [Upgrading](#upgrading--breaking-changes-and-deploy-notes) |
+
+Two things deliberately do **not** live here. The **complete route list** is the
+generated OpenAPI contract — a hand-maintained table drifted to 22 of ~80
+endpoints once, which is why `npm run openapi:check` now fails the build instead.
+And **anything the code already states**: this document is for *why* a thing is
+the way it is and how to operate it, because a second copy of *what* it does is
+just a second copy to keep true.

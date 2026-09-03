@@ -5,8 +5,8 @@ import {
 } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
-import { AppModule } from '../src/app.module';
-import { PrismaService } from '../src/prisma/prisma.service';
+import { AppModule } from '@/app.module';
+import { PrismaService } from '@/prisma/prisma.service';
 
 /**
  * Verifies the "only APISIX" gate independent of any specific domain logic:
@@ -63,14 +63,14 @@ describe('APISIX gateway validation (e2e)', () => {
   it('rejects valid secret without an authenticated consumer (401)', () =>
     request(http())
       .post(route)
-      .set('x-gateway-secret', 'topsecret')
+      .set('x-gateway-secret', 'topsecret-topsecret-topsecret-topsecret')
       .send({})
       .expect(401));
 
   it('lets valid secret + consumer through the guard (reaches validation → 400)', () =>
     request(http())
       .post(route)
-      .set('x-gateway-secret', 'topsecret')
+      .set('x-gateway-secret', 'topsecret-topsecret-topsecret-topsecret')
       .set('x-consumer-username', 'cosmos_u1')
       .set('x-consumer-permissions', 'payments:write')
       .send({})

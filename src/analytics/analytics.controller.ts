@@ -1,13 +1,16 @@
 import { Controller, Get, Query } from '@nestjs/common';
+import { WidePaginationQueryDto } from '@/common/dto/pagination.query.dto';
 import { ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
-import { CurrentConsumer } from '../common/decorators/current-consumer.decorator';
-import { RequirePermissions } from '../common/decorators/require-permissions.decorator';
-import { GatewayConsumer } from '../common/interfaces/gateway-consumer.interface';
-import { AnalyticsService } from './analytics.service';
+import { CurrentConsumer } from '@/common/decorators/current-consumer.decorator';
+import { RequirePermissions } from '@/common/decorators/require-permissions.decorator';
+import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import {
-  QueryAnalyticsDto,
-  QueryAnalyticsLogsDto,
-} from './dto/query-analytics.dto';
+  AnalyticsBalancesEntity,
+  AnalyticsSummaryEntity,
+  ApiLogListEntity,
+  WebhookLogListEntity,
+} from '@/analytics/entities/analytics.entity';
+import { AnalyticsService } from '@/analytics/analytics.service';
 
 // Read-only dashboard aggregates. URI versioning => /v1/...
 @ApiTags('analytics')
@@ -21,23 +24,17 @@ export class AnalyticsController {
     summary:
       'Overview metrics: totals, settled volume, webhook health, 30-day series',
   })
-  @ApiOkResponse({ description: 'Aggregated overview for the consumer.' })
-  summary(
-    @CurrentConsumer() consumer: GatewayConsumer,
-    @Query() query: QueryAnalyticsDto,
-  ) {
-    return this.analytics.summary(consumer, query);
+  @ApiOkResponse({ type: AnalyticsSummaryEntity })
+  summary(@CurrentConsumer() consumer: GatewayConsumer) {
+    return this.analytics.summary(consumer);
   }
 
   @Get('balances')
   @RequirePermissions('payments:read')
   @ApiOperation({ summary: 'Settled (and pending) amount per asset' })
-  @ApiOkResponse({ description: 'Balances per asset for the consumer.' })
-  balances(
-    @CurrentConsumer() consumer: GatewayConsumer,
-    @Query() query: QueryAnalyticsDto,
-  ) {
-    return this.analytics.balances(consumer, query);
+  @ApiOkResponse({ type: AnalyticsBalancesEntity })
+  balances(@CurrentConsumer() consumer: GatewayConsumer) {
+    return this.analytics.balances(consumer);
   }
 
   @Get('logs')
@@ -45,10 +42,10 @@ export class AnalyticsController {
   @ApiOperation({
     summary: 'Recent API requests reaching the service (with details)',
   })
-  @ApiOkResponse({ description: 'API request log for the consumer.' })
+  @ApiOkResponse({ type: ApiLogListEntity })
   apiLogs(
     @CurrentConsumer() consumer: GatewayConsumer,
-    @Query() query: QueryAnalyticsLogsDto,
+    @Query() query: WidePaginationQueryDto,
   ) {
     return this.analytics.apiLogs(consumer, query);
   }
@@ -58,10 +55,10 @@ export class AnalyticsController {
   @ApiOperation({
     summary: 'Recent webhook deliveries across all endpoints (with details)',
   })
-  @ApiOkResponse({ description: 'Webhook delivery log for the consumer.' })
+  @ApiOkResponse({ type: WebhookLogListEntity })
   webhookLogs(
     @CurrentConsumer() consumer: GatewayConsumer,
-    @Query() query: QueryAnalyticsLogsDto,
+    @Query() query: WidePaginationQueryDto,
   ) {
     return this.analytics.webhookLogs(consumer, query);
   }

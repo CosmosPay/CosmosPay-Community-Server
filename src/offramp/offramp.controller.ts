@@ -1,20 +1,24 @@
-import { Body, Controller, Get, Param, Post } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
+import { WidePaginationQueryDto } from '@/common/dto/pagination.query.dto';
 import {
   ApiCreatedResponse,
   ApiOkResponse,
   ApiOperation,
   ApiTags,
 } from '@nestjs/swagger';
-import { CurrentConsumer } from '../common/decorators/current-consumer.decorator';
-import { RequirePermissions } from '../common/decorators/require-permissions.decorator';
-import { GatewayConsumer } from '../common/interfaces/gateway-consumer.interface';
-import { OfframpService } from './offramp.service';
-import { CreatePayoutQuoteDto } from './dto/create-payout-quote.dto';
-import { AuthorizePayoutDto } from './dto/authorize-payout.dto';
-import { CreatePayoutDto } from './dto/create-payout.dto';
-import { PayoutDocumentDto } from './dto/payout-document.dto';
-import { PayoutQuoteEntity } from './entities/payout-quote.entity';
-import { PayoutEntity } from './entities/payout.entity';
+import { CurrentConsumer } from '@/common/decorators/current-consumer.decorator';
+import { RequirePermissions } from '@/common/decorators/require-permissions.decorator';
+import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
+import { OfframpService } from '@/offramp/offramp.service';
+import { CreatePayoutQuoteDto } from '@/offramp/dto/create-payout-quote.dto';
+import { AuthorizePayoutDto } from '@/offramp/dto/authorize-payout.dto';
+import { CreatePayoutDto } from '@/offramp/dto/create-payout.dto';
+import { PayoutDocumentDto } from '@/offramp/dto/payout-document.dto';
+import { PayoutQuoteEntity } from '@/offramp/entities/payout-quote.entity';
+import {
+  PayoutEntity,
+  PayoutListEntity,
+} from '@/offramp/entities/payout.entity';
 
 // /v1/offramp — stablecoin -> fiat.
 @ApiTags('offramp')
@@ -61,14 +65,20 @@ export class OfframpController {
   @Get('payouts')
   @RequirePermissions('offramp:read')
   @ApiOperation({ summary: "List the consumer's payouts" })
-  @ApiOkResponse({ type: [PayoutEntity] })
-  findAll(@CurrentConsumer() consumer: GatewayConsumer) {
-    return this.offramp.findAll(consumer);
+  @ApiOkResponse({ type: PayoutListEntity })
+  findAll(
+    @CurrentConsumer() consumer: GatewayConsumer,
+    @Query() query: WidePaginationQueryDto,
+  ) {
+    return this.offramp.findAll(consumer, query);
   }
 
   @Get('payouts/:id')
   @RequirePermissions('offramp:read')
-  @ApiOperation({ summary: 'Get a payout (refreshes status from BlindPay)' })
+  @ApiOperation({
+    summary:
+      'Get a payout (serves the local mirror; refreshes from BlindPay when stale)',
+  })
   @ApiOkResponse({ type: PayoutEntity })
   findOne(
     @CurrentConsumer() consumer: GatewayConsumer,

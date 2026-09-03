@@ -8,13 +8,10 @@ import {
 } from '@nestjs/common';
 import { Request, Response } from 'express';
 
-interface ErrorBody {
-  statusCode: number;
-  error: string;
-  message: string | string[];
-  path: string;
-  timestamp: string;
-}
+import {
+  defaultCodeForStatus,
+  type ApiErrorBody,
+} from '@/common/errors/api-error';
 
 /**
  * Single, consistent error shape for every failure. HttpExceptions keep their
@@ -33,6 +30,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
     let status = HttpStatus.INTERNAL_SERVER_ERROR;
     let message: string | string[] = 'Internal server error';
     let error = 'Internal Server Error';
+    let code: string | undefined;
 
     if (exception instanceof HttpException) {
       status = exception.getStatus();
@@ -43,14 +41,19 @@ export class AllExceptionsFilter implements ExceptionFilter {
         const body = res as Record<string, unknown>;
         message = (body.message as string | string[]) ?? exception.message;
         error = (body.error as string) ?? error;
+        // Present when the throw site used ApiError; absent for a plain Nest
+        // exception, which falls back to the status-derived code below so the
+        // field is never missing from the envelope.
+        if (typeof body.code === 'string') code = body.code;
       }
     } else if (exception instanceof Error) {
       // Unexpected error: log full detail server-side, return generic to caller.
       this.logger.error(exception.message, exception.stack);
     }
 
-    const body: ErrorBody = {
+    const body: ApiErrorBody = {
       statusCode: status,
+      code: code ?? defaultCodeForStatus(status),
       error,
       message,
       path: request.url,

@@ -1,6 +1,8 @@
-import { BadRequestException } from '@nestjs/common';
-import { WebhooksService } from './webhooks.service';
-import { WebhookDestinationGuard } from './webhook-destination.guard';
+import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
+import { HttpStatus } from '@nestjs/common';
+import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
+import { WebhooksService } from '@/webhooks/webhooks.service';
+import { WebhookDestinationGuard } from '@/webhooks/webhook-destination.guard';
 
 describe('WebhooksService destination validation', () => {
   const consumer = {
@@ -32,24 +34,26 @@ describe('WebhooksService destination validation', () => {
     };
     const guard = new WebhookDestinationGuard();
     const dispatcher = {} as any;
-    const config = { get: () => ({ secretGraceSeconds: 86400 }) } as any;
     const service = new WebhooksService(
       prisma as any,
       dispatcher,
       guard,
-      config,
+      new ConsumerResolverService(prisma as never),
     );
     return { service, prisma, guard };
   }
 
-  it('rejects registering a loopback endpoint with BadRequestException', async () => {
+  it('rejects registering a loopback endpoint with a coded 400', async () => {
     const { service, prisma } = build();
 
-    await expect(
-      service.create(consumer, {
-        url: 'https://127.0.0.1/hooks',
-      } as any),
-    ).rejects.toBeInstanceOf(BadRequestException);
+    const err = await service
+      .create(consumer, { url: 'https://127.0.0.1/hooks' } as any)
+      .then(() => null)
+      .catch((e: unknown) => e as ApiError);
+
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err!.getStatus()).toBe(HttpStatus.BAD_REQUEST);
+    expect(err!.code).toBe(ApiErrorCode.ValidationFailed);
 
     expect(prisma.webhookEndpoint.create).not.toHaveBeenCalled();
   });
@@ -91,193 +95,104 @@ describe('WebhooksService destination validation', () => {
   });
 });
 
-describe('WebhooksService secret rotation', () => {
-  const consumer = {
-    username: 'cosmos_u1',
-    credentialId: 'cred_1',
-  } as any;
+/**
+ * A `RECEIVER_UPDATED` delivery body is the BlindPay object verbatim — the
+ * complete KYC dossier. These routes are gated on `webhooks:read`, a weaker
+ * scope than `kyc:read`, so the body must never be readable back through them.
+ */
+describe('WebhooksService delivery bodies are never returned', () => {
+  const consumer = { username: 'cosmos_u1', credentialId: 'cred_1' } as any;
 
-  const current = {
-    id: 'we_1',
-    url: 'https://integrator.example.com/hooks',
-    secret: 'whsec_aaa',
-    previousSecret: null as string | null,
-    previousSecretExpiresAt: null as Date | null,
-    enabled: true,
-    destinationBlocked: false,
-    eventTypes: [],
-    description: null,
-    createdAt: new Date(),
-    updatedAt: new Date(),
-    consumerId: 'c1',
+  const DOSSIER = {
+    id: 'evt_1',
+    type: 'RECEIVER_UPDATED',
+    data: {
+      id: 'rc_1',
+      tax_id: '20-12345678-9',
+      address_line_1: 'Av. Siempre Viva 742',
+      id_doc_front_file: 'https://files.blindpay.test/front.png',
+    },
   };
 
-  function build(secretGraceSeconds = 86400) {
+  function build() {
+    const delivery = {
+      id: 'wd_1',
+      endpointId: 'we_1',
+      eventType: 'RECEIVER_UPDATED',
+      eventId: 'evt_1',
+      payload: DOSSIER,
+      status: 'SUCCEEDED',
+      attempts: 1,
+      responseStatus: 200,
+      error: null,
+      lastAttemptAt: new Date(),
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    const findMany = jest.fn(({ omit }: any) =>
+      Promise.resolve([
+        omit?.payload
+          ? (({ payload: _drop, ...rest }) => rest)(delivery)
+          : delivery,
+      ]),
+    );
     const prisma = {
+      $transaction: (ops: Promise<unknown>[]) => Promise.all(ops),
       webhookEndpoint: {
-        findFirst: jest.fn().mockResolvedValue({ ...current }),
-        update: jest.fn(({ data }: any) =>
-          Promise.resolve({ ...current, ...data, updatedAt: new Date() }),
-        ),
-        findMany: jest.fn().mockResolvedValue([{ ...current }]),
+        findFirst: jest
+          .fn()
+          .mockResolvedValue({ id: 'we_1', url: 'https://x' }),
+      },
+      webhookDelivery: {
+        findMany,
+        count: jest.fn().mockResolvedValue(1),
+        findFirst: jest.fn().mockResolvedValue(delivery),
       },
     };
-    const guard = new WebhookDestinationGuard();
-    const dispatcher = {} as any;
-    const config = { get: () => ({ secretGraceSeconds }) } as any;
+    const dispatcher = { redeliver: jest.fn().mockResolvedValue(delivery) };
     const service = new WebhooksService(
       prisma as any,
-      dispatcher,
-      guard,
-      config,
+      dispatcher as any,
+      new WebhookDestinationGuard(),
+      new ConsumerResolverService(prisma as never),
     );
-    return { service, prisma };
+    return { service, prisma, dispatcher, findMany };
   }
 
-  it('moves the current secret to previousSecret and sets previousSecretExpiresAt', async () => {
-    const { service, prisma } = build();
-    const before = Date.now();
-    const rotated = await service.rotateSecret(consumer, 'we_1', {});
+  it('omits the sent body from the delivery log', async () => {
+    const { service, findMany } = build();
 
-    expect(rotated.secret).toMatch(/^whsec_/);
-    expect(rotated.secret).not.toBe(current.secret);
-    expect((rotated as any).previousSecret).toBeUndefined();
-    expect(rotated.previousSecretExpiresAt).toBeInstanceOf(Date);
-    expect(rotated.previousSecretExpiresAt!.getTime()).toBeGreaterThanOrEqual(
-      before + 86400 * 1000 - 50,
+    const page = await service.listDeliveries(consumer, 'we_1', {
+      take: 20,
+      skip: 0,
+    });
+
+    // Not fetched at all, so it cannot leak through a later serialization.
+    expect(findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ omit: { payload: true } }),
     );
-
-    expect(prisma.webhookEndpoint.update).toHaveBeenCalledWith({
-      where: { id: 'we_1' },
-      data: {
-        secret: rotated.secret,
-        previousSecret: current.secret,
-        previousSecretExpiresAt: rotated.previousSecretExpiresAt,
-      },
+    expect(page.data[0]).not.toHaveProperty('payload');
+    // Everything an integrator actually needs from the log is still there.
+    expect(page.data[0]).toMatchObject({
+      id: 'wd_1',
+      eventType: 'RECEIVER_UPDATED',
+      status: 'SUCCEEDED',
+      responseStatus: 200,
     });
+    expect(JSON.stringify(page)).not.toContain('20-12345678-9');
   });
 
-  it('graceSeconds=0 revokes immediately (no previousSecret stored)', async () => {
-    const { service, prisma } = build();
-    const rotated = await service.rotateSecret(consumer, 'we_1', {
-      graceSeconds: 0,
-    });
+  it('omits the sent body from a redelivery response', async () => {
+    const { service, dispatcher } = build();
 
-    expect(rotated.secret).not.toBe(current.secret);
-    expect(rotated.previousSecretExpiresAt).toBeNull();
-    expect(prisma.webhookEndpoint.update).toHaveBeenCalledWith({
-      where: { id: 'we_1' },
-      data: {
-        secret: rotated.secret,
-        previousSecret: null,
-        previousSecretExpiresAt: null,
-      },
-    });
-  });
+    const result = await service.redeliver(consumer, 'we_1', 'wd_1');
 
-  it('graceSeconds=0 during an open grace window still drops the original secret', async () => {
-    const { service, prisma } = build();
-    prisma.webhookEndpoint.findFirst.mockResolvedValueOnce({
-      ...current,
-      secret: 'whsec_bbb',
-      previousSecret: 'whsec_aaa',
-      previousSecretExpiresAt: new Date(Date.now() + 86400 * 1000),
-    });
-
-    await service.rotateSecret(consumer, 'we_1', { graceSeconds: 0 });
-
-    expect(prisma.webhookEndpoint.update).toHaveBeenCalledWith({
-      where: { id: 'we_1' },
-      data: {
-        secret: expect.stringMatching(/^whsec_/),
-        previousSecret: null,
-        previousSecretExpiresAt: null,
-      },
-    });
-  });
-
-  it('second rotation within grace keeps the original previousSecret', async () => {
-    const originalExpiry = new Date(Date.now() + 86400 * 1000);
-    const { service, prisma } = build();
-    prisma.webhookEndpoint.findFirst.mockResolvedValueOnce({
-      ...current,
-      secret: 'whsec_bbb',
-      previousSecret: 'whsec_aaa',
-      previousSecretExpiresAt: originalExpiry,
-    });
-
-    const rotated = await service.rotateSecret(consumer, 'we_1', {});
-
-    expect(rotated.secret).not.toBe('whsec_bbb');
-    expect(prisma.webhookEndpoint.update).toHaveBeenCalledWith({
-      where: { id: 'we_1' },
-      data: {
-        secret: rotated.secret,
-        previousSecret: 'whsec_aaa',
-        previousSecretExpiresAt: originalExpiry,
-      },
-    });
-  });
-
-  it('rotation after the grace window expires promotes the current secret', async () => {
-    const { service, prisma } = build();
-    prisma.webhookEndpoint.findFirst.mockResolvedValueOnce({
-      ...current,
-      secret: 'whsec_bbb',
-      previousSecret: 'whsec_aaa',
-      previousSecretExpiresAt: new Date(Date.now() - 1000),
-    });
-
-    const before = Date.now();
-    const rotated = await service.rotateSecret(consumer, 'we_1', {});
-
-    expect(prisma.webhookEndpoint.update).toHaveBeenCalledWith({
-      where: { id: 'we_1' },
-      data: {
-        secret: rotated.secret,
-        previousSecret: 'whsec_bbb',
-        previousSecretExpiresAt: rotated.previousSecretExpiresAt,
-      },
-    });
-    expect(rotated.previousSecretExpiresAt!.getTime()).toBeGreaterThanOrEqual(
-      before + 86400 * 1000 - 50,
+    // The dispatcher still gets the body — a retry has to re-send exactly what
+    // was signed — it just does not reach the caller.
+    expect(dispatcher.redeliver).toHaveBeenCalledWith(
+      expect.objectContaining({ payload: DOSSIER }),
     );
-  });
-
-  it('rejects graceSeconds above the configured maximum with 400', async () => {
-    const { service, prisma } = build(3600);
-    await expect(
-      service.rotateSecret(consumer, 'we_1', { graceSeconds: 3601 }),
-    ).rejects.toBeInstanceOf(BadRequestException);
-    await expect(
-      service.rotateSecret(consumer, 'we_1', { graceSeconds: 3601 }),
-    ).rejects.toThrow(/cannot exceed the configured maximum \(3600\)/);
-    expect(prisma.webhookEndpoint.update).not.toHaveBeenCalled();
-  });
-
-  it('strip omits secret and previousSecret on list/get', async () => {
-    const { service, prisma } = build();
-    prisma.webhookEndpoint.findMany.mockResolvedValueOnce([
-      {
-        ...current,
-        previousSecret: 'whsec_old',
-        previousSecretExpiresAt: new Date(Date.now() + 1000),
-      },
-    ]);
-    prisma.webhookEndpoint.findFirst.mockResolvedValueOnce({
-      ...current,
-      previousSecret: 'whsec_old',
-      previousSecretExpiresAt: new Date(Date.now() + 1000),
-    });
-
-    const listed = await service.findAll(consumer);
-    expect((listed[0] as any).secret).toBeUndefined();
-    expect((listed[0] as any).previousSecret).toBeUndefined();
-    expect(listed[0].previousSecretExpiresAt).toBeInstanceOf(Date);
-
-    const one = await service.findOne(consumer, 'we_1');
-    expect((one as any).secret).toBeUndefined();
-    expect((one as any).previousSecret).toBeUndefined();
-    expect(one.previousSecretExpiresAt).toBeInstanceOf(Date);
+    expect(result).not.toHaveProperty('payload');
+    expect(JSON.stringify(result)).not.toContain('Av. Siempre Viva');
   });
 });

@@ -1,22 +1,22 @@
-import {
-  ForbiddenException,
-  Injectable,
-  NotFoundException,
-} from '@nestjs/common';
-import { GatewayConsumer } from '../common/interfaces/gateway-consumer.interface';
-import { PrismaService } from '../prisma/prisma.service';
-import { BlindpayClient } from '../blindpay/blindpay.client';
-import { ConsumerResolverService } from '../blindpay/consumer-resolver.service';
+import { Injectable, NotFoundException } from '@nestjs/common';
+import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
+import { PaginationQueryDto } from '@/common/dto/pagination.query.dto';
+import { page } from '@/common/pagination';
+import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
+import { PrismaService } from '@/prisma/prisma.service';
+import { BlindpayClient } from '@/blindpay/blindpay.client';
+import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
 import {
   BlindpaySyncService,
   BlindpayObject,
-} from '../blindpay/blindpay-sync.service';
-import { asString, asNumber } from '../blindpay/blindpay.util';
-import type { Payout } from '../../generated/prisma/client';
-import { CreatePayoutQuoteDto } from './dto/create-payout-quote.dto';
-import { AuthorizePayoutDto } from './dto/authorize-payout.dto';
-import { CreatePayoutDto } from './dto/create-payout.dto';
-import { PayoutDocumentDto } from './dto/payout-document.dto';
+  PAYOUT_PUBLIC_SELECT,
+} from '@/blindpay/blindpay-sync.service';
+import { asString, asNumber, isMirrorFresh } from '@/blindpay/blindpay.util';
+import type { Payout } from '@generated/prisma/client';
+import { CreatePayoutQuoteDto } from '@/offramp/dto/create-payout-quote.dto';
+import { AuthorizePayoutDto } from '@/offramp/dto/authorize-payout.dto';
+import { CreatePayoutDto } from '@/offramp/dto/create-payout.dto';
+import { PayoutDocumentDto } from '@/offramp/dto/payout-document.dto';
 
 /**
  * Offramp (stablecoin -> fiat). Quotes are priced through BlindPay (the EVM quote
@@ -44,6 +44,7 @@ export class OfframpService {
       this.blindpay.instancePath('/quotes'),
       { ...dto, bank_account_id: bankAccountBlindpayId },
     );
+    await this.recordQuoteOwnership(local.id, quote);
     // BlindPay carries the local fiat amount (e.g. ARS) in `receiver_amount`;
     // `receiver_local_amount` comes back 0. Surface the real amount under the
     // documented field so callers don't read 0. Keep the raw fields too.
@@ -54,7 +55,8 @@ export class OfframpService {
 
   /** Step 1 for Stellar/Solana: returns the unsigned tx for the customer to sign. */
   async authorize(consumer: GatewayConsumer, dto: AuthorizePayoutDto) {
-    await this.consumers.resolve(consumer);
+    const local = await this.consumers.resolve(consumer);
+    await this.assertQuoteOwned(local.id, dto.quote_id);
     const res = await this.blindpay.post<BlindpayObject>(
       this.blindpay.instancePath(`/payouts/${dto.chain}/authorize`),
       {
@@ -75,6 +77,7 @@ export class OfframpService {
 
   async createPayout(consumer: GatewayConsumer, dto: CreatePayoutDto) {
     const local = await this.consumers.resolve(consumer);
+    await this.assertQuoteOwned(local.id, dto.quote_id);
     const body: Record<string, unknown> = {
       quote_id: dto.quote_id,
       sender_wallet_address: dto.sender_wallet_address,
@@ -93,19 +96,36 @@ export class OfframpService {
     return this.sync.mirrorPayout(local.id, receiverId, created);
   }
 
-  async findAll(consumer: GatewayConsumer) {
+  async findAll(consumer: GatewayConsumer, query: PaginationQueryDto) {
     const local = await this.consumers.resolve(consumer);
-    const data = await this.prisma.payout.findMany({
-      where: { consumerId: local.id },
-      orderBy: { createdAt: 'desc' },
-    });
-    return { data, total: data.length };
+    const where = { consumerId: local.id };
+    // `total` is the row count, not the page length. Returning `data.length`
+    // made the field useless: it always equalled what the caller just received,
+    // so nobody could tell a full page from the last one.
+    const [data, total] = await Promise.all([
+      this.prisma.payout.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        take: query.take,
+        skip: query.skip,
+        select: PAYOUT_PUBLIC_SELECT,
+      }),
+      this.prisma.payout.count({ where }),
+    ]);
+    return page(data, total, query);
   }
 
-  /** Reads a payout, refreshing it from BlindPay so the status is current. */
+  /**
+   * Reads a payout from the local mirror, refreshing from BlindPay only once the
+   * mirrored row has gone stale (see {@link isMirrorFresh}). Webhooks carry
+   * status changes, so the refresh only has to cover a missed delivery.
+   */
   async findOne(consumer: GatewayConsumer, id: string) {
     const local = await this.consumers.resolve(consumer);
     const row = await this.findPayoutOrThrow(local.id, id);
+    if (isMirrorFresh(row)) {
+      return row;
+    }
     try {
       const fresh = await this.blindpay.get<BlindpayObject>(
         this.blindpay.instancePath(`/payouts/${row.blindpayId}`),
@@ -129,6 +149,57 @@ export class OfframpService {
     );
   }
 
+  /**
+   * Records who minted a quote, so {@link assertQuoteOwned} can authorize its
+   * execution later.
+   *
+   * A missing id is a provider contract violation, not something to shrug off:
+   * without the ownership row the quote can never be authorized or executed, and
+   * returning it anyway would hand the caller a quote they are guaranteed to be
+   * refused on.
+   */
+  private async recordQuoteOwnership(
+    consumerId: string,
+    quote: BlindpayObject,
+  ): Promise<void> {
+    const blindpayId = asString(quote.id);
+    if (!blindpayId) {
+      throw ApiError.badGateway(
+        ApiErrorCode.ProviderError,
+        'BlindPay returned a payout quote without an id.',
+      );
+    }
+    await this.prisma.blindpayQuote.create({
+      data: { consumerId, blindpayId, kind: 'PAYOUT' },
+    });
+  }
+
+  /**
+   * Proves the caller minted this quote before we authorize or execute it
+   * upstream.
+   *
+   * Every tenant shares one BlindPay platform instance, so holding a quote id
+   * proves nothing about who owns it: forwarding `quote_id` straight through let
+   * one tenant execute another's quote and have the resulting payout — bank
+   * details included — mirrored into their own records. 404 rather than 403 is
+   * deliberate; a 403 would confirm the id is live for somebody else.
+   */
+  private async assertQuoteOwned(
+    consumerId: string,
+    blindpayQuoteId: string,
+  ): Promise<void> {
+    const quote = await this.prisma.blindpayQuote.findUnique({
+      where: {
+        consumerId_blindpayId: { consumerId, blindpayId: blindpayQuoteId },
+      },
+    });
+    // A payin quote id is equally not a payout quote id, so the kind is part of
+    // the check rather than a separate 400 further upstream.
+    if (!quote || quote.kind !== 'PAYOUT') {
+      throw ApiError.notFound('Quote not found', ApiErrorCode.QuoteNotFound);
+    }
+  }
+
   private async findPayoutOrThrow(
     consumerId: string,
     id: string,
@@ -137,7 +208,7 @@ export class OfframpService {
       where: { id, consumerId },
     });
     if (!row) {
-      throw new NotFoundException('Payout not found');
+      throw ApiError.notFound('Payout not found');
     }
     return row;
   }
@@ -158,7 +229,8 @@ export class OfframpService {
       select: { disabled: true },
     });
     if (receiver?.disabled) {
-      throw new ForbiddenException(
+      throw ApiError.forbidden(
+        ApiErrorCode.AccountDisabled,
         'This fiat account is disabled. Re-enable it to use offramp.',
       );
     }

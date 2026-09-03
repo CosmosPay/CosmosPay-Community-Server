@@ -1,18 +1,16 @@
 import {
   CanActivate,
   ExecutionContext,
-  ForbiddenException,
   Injectable,
   Logger,
-  ServiceUnavailableException,
-  UnauthorizedException,
 } from '@nestjs/common';
+import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { ConfigService } from '@nestjs/config';
 import { Reflector } from '@nestjs/core';
 import { timingSafeEqual } from 'node:crypto';
 import { Request } from 'express';
-import { AppConfig } from '../../config/configuration';
-import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
+import { AppConfig } from '@/config/configuration';
+import { IS_PUBLIC_KEY } from '@/common/decorators/public.decorator';
 
 /**
  * The gatekeeper. A request is only accepted when:
@@ -60,7 +58,8 @@ export class ApisixGuard implements CanActivate {
       this.logger.warn(
         `Rejected request to ${request.method} ${request.url}: missing/invalid gateway secret`,
       );
-      throw new ForbiddenException(
+      throw ApiError.forbidden(
+        ApiErrorCode.GatewayRequired,
         'Request did not originate from the gateway',
       );
     }
@@ -70,7 +69,10 @@ export class ApisixGuard implements CanActivate {
       this.logger.warn(
         `Rejected request to ${request.method} ${request.url}: no authenticated consumer`,
       );
-      throw new UnauthorizedException('No authenticated consumer');
+      throw ApiError.unauthorized(
+        ApiErrorCode.NoAuthenticatedConsumer,
+        'No authenticated consumer',
+      );
     }
 
     return true;
@@ -80,7 +82,10 @@ export class ApisixGuard implements CanActivate {
     if (this.secretBuffer.length === 0) {
       // Should be impossible: env validation requires APISIX_GATEWAY_SECRET at
       // boot. Fail closed rather than accidentally trusting everything.
-      throw new ServiceUnavailableException('Gateway secret not configured');
+      throw ApiError.unavailable(
+        ApiErrorCode.Misconfigured,
+        'Gateway secret not configured',
+      );
     }
 
     const raw = request.headers[headerName];

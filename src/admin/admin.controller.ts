@@ -8,20 +8,21 @@ import {
   Post,
   Query,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
 import { ApiExcludeController } from '@nestjs/swagger';
-import type { AdminPrincipal } from './admin-auth';
-import { AdminAuditService } from './admin-audit.service';
-import { AdminService } from './admin.service';
-import { CurrentAdmin } from '../common/decorators/current-admin.decorator';
-import { RequireAdminRole } from '../common/decorators/require-admin-role.decorator';
-import { AdminGuard } from '../common/guards/admin.guard';
-import { ApproveReceiverDto } from '../kyc/receivers/dto/approve-receiver.dto';
-import { EnableReceiverDto } from '../kyc/receivers/dto/enable-receiver.dto';
-import { RequestTosDto } from '../kyc/receivers/dto/request-tos.dto';
-import { SetAccessDto } from '../kyc/receivers/dto/set-access.dto';
-import { resolveTosCooldownMs } from '../kyc/receivers/receivers.service';
-import { StellarService } from '../stellar/stellar.service';
+import type { AdminPrincipal } from '@/admin/admin-auth';
+import { AdminAuditService } from '@/admin/admin-audit.service';
+import { AdminReadAuditInterceptor } from '@/admin/admin-read-audit.interceptor';
+import { AdminService } from '@/admin/admin.service';
+import { CurrentAdmin } from '@/common/decorators/current-admin.decorator';
+import { RequireAdminRole } from '@/common/decorators/require-admin-role.decorator';
+import { AdminGuard } from '@/common/guards/admin.guard';
+import { ApproveReceiverDto } from '@/kyc/receivers/dto/approve-receiver.dto';
+import { EnableReceiverDto } from '@/kyc/receivers/dto/enable-receiver.dto';
+import { RequestTosDto } from '@/kyc/receivers/dto/request-tos.dto';
+import { SetAccessDto } from '@/kyc/receivers/dto/set-access.dto';
+import { resolveTosCooldownMs } from '@/kyc/receivers/receivers.service';
 
 /**
  * Platform-admin (owner) endpoints: a global, cross-consumer view of everything in the
@@ -30,27 +31,18 @@ import { StellarService } from '../stellar/stellar.service';
  * public API surface, so excluded from the OpenAPI spec.
  */
 @ApiExcludeController()
+@UseInterceptors(AdminReadAuditInterceptor)
 @UseGuards(AdminGuard)
 @Controller({ path: 'admin', version: '1' })
 export class AdminController {
   constructor(
     private readonly admin: AdminService,
     private readonly audit: AdminAuditService,
-    private readonly stellar: StellarService,
   ) {}
 
   @Get('summary')
   summary(@Query('network') network?: string) {
     return this.admin.summary(network);
-  }
-
-  /**
-   * In-memory reconciler + Horizon error counters (issue #10). Process-local:
-   * resets on deploy. Complements the structured observer cycle log.
-   */
-  @Get('observer-metrics')
-  observerMetrics() {
-    return this.stellar.metrics();
   }
 
   @Get('consumers')

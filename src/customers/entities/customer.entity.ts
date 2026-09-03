@@ -1,85 +1,85 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
-export class CustomerTotalEntity {
-  @ApiProperty({
-    example: 'XLM',
-    description: 'XLM for the native asset, otherwise the Stellar asset code.',
-  })
-  asset!: string;
-
-  @ApiProperty({
-    type: String,
-    nullable: true,
-    example: null,
-    description: 'Issuer account for non-native assets.',
-  })
-  assetIssuer!: string | null;
-
-  @ApiProperty({
-    example: '100.0000000',
-    description: 'Succeeded amount with exactly seven decimal places.',
-  })
-  amount!: string;
-
-  @ApiProperty({ example: 3 })
-  succeeded!: number;
-}
-
+/**
+ * A merchant-managed customer record.
+ *
+ * These routes shipped with no `@ApiOkResponse` at all, so the published spec
+ * recorded five endpoints with an empty description and no schema — an
+ * integrator could not discover the response shape, or that `findAll` is
+ * paginated, without reading the source.
+ */
 export class CustomerEntity {
-  @ApiProperty({ example: 'clx9z8a1b0000abcd1234efgh' })
+  @ApiProperty({ example: 'clz9xcust00001' })
   id!: string;
 
-  @ApiProperty({ example: 'consumer_0001' })
-  consumerId!: string;
-
-  @ApiProperty({ example: 'Acme Inc.' })
+  @ApiProperty({ example: 'Ada Lovelace' })
   name!: string;
 
-  @ApiProperty({ type: String, nullable: true, example: 'Acme — billing' })
+  @ApiPropertyOptional({ nullable: true, example: 'Acme — billing' })
   alias!: string | null;
 
-  @ApiProperty({ type: String, nullable: true, example: 'billing@acme.com' })
+  @ApiPropertyOptional({ nullable: true, example: 'ada@example.com' })
   email!: string | null;
 
-  @ApiProperty({
-    type: String,
+  @ApiPropertyOptional({
     nullable: true,
-    example: 'GCALNQQBXAPZ2WIRSDDBMSTAKCUH5SG6U76YBFLQLIXJTF7FE5AX7AOO',
+    description: 'Stellar account associated with this customer, if any.',
+    example: 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
   })
   account!: string | null;
 
-  @ApiProperty({ type: String, nullable: true, example: 'VIP customer' })
+  @ApiPropertyOptional({ nullable: true, example: 'Prefers wire settlement' })
   note!: string | null;
 
-  @ApiProperty({ type: String, nullable: true, example: 'cust_001' })
+  @ApiPropertyOptional({ nullable: true, example: 'ext_4821' })
   reference!: string | null;
 
-  @ApiProperty({
-    example: 4,
-    description: 'All payment intents for the account.',
-  })
-  payments!: number;
-
-  @ApiProperty({ type: [CustomerTotalEntity] })
-  totals!: CustomerTotalEntity[];
-
-  @ApiProperty({ format: 'date-time' })
+  @ApiProperty({ example: '2026-06-21T12:34:56.000Z' })
   createdAt!: Date;
 
-  @ApiProperty({ format: 'date-time' })
+  @ApiProperty({ example: '2026-06-21T12:34:57.000Z' })
   updatedAt!: Date;
 }
 
-export class CustomerListEntity {
-  @ApiProperty({ type: [CustomerEntity] })
-  data!: CustomerEntity[];
+/** A customer plus the payment counters `findAll` aggregates in PostgreSQL. */
+export class CustomerWithStatsEntity extends CustomerEntity {
+  @ApiProperty({
+    description: 'Payment intents attributed to this customer.',
+    example: 12,
+  })
+  payments!: number;
 
-  @ApiProperty({ example: 1, description: 'Total number of stored customers.' })
+  @ApiProperty({ description: 'How many of those succeeded.', example: 11 })
+  succeeded!: number;
+
+  @ApiProperty({
+    description: 'Gross settled volume, an exact decimal string.',
+    example: '1042.5',
+  })
+  total!: string;
+}
+
+export class CustomerListEntity {
+  @ApiProperty({ type: [CustomerWithStatsEntity] })
+  data!: CustomerWithStatsEntity[];
+
+  @ApiProperty({
+    description: 'Total matching rows — not the page length.',
+    example: 137,
+  })
   total!: number;
 
-  @ApiProperty({ example: 20 })
+  @ApiProperty({ example: 100 })
   take!: number;
 
   @ApiProperty({ example: 0 })
   skip!: number;
+}
+
+export class CustomerDeletedEntity {
+  @ApiProperty({ example: 'clz9xcust00001' })
+  id!: string;
+
+  @ApiProperty({ example: true })
+  deleted!: boolean;
 }

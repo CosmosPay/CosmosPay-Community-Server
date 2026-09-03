@@ -1,4 +1,4 @@
-import type { SwapStatus } from '../../generated/prisma/client';
+import type { SwapStatus } from '@generated/prisma/client';
 
 /**
  * Swap state machine (issue #29).
@@ -7,14 +7,13 @@ import type { SwapStatus } from '../../generated/prisma/client';
  * events must fire only for the writer that won the status transition — a late
  * FAILED must not overwrite SUCCEEDED, and the two paths must not each mint
  * their own `evt_` id for the same (swap, event type).
+ *
+ * Only the guard sets that `swaps.service.ts` actually passes to `updateMany`
+ * live here. A constant that nothing reads drifts silently from the behaviour it
+ * claims to describe — which is exactly what happened to a former
+ * `SWAP_CAN_SUBMIT_STATUSES` — so a set earns its place here only once it is the
+ * single source of the check.
  */
-export const SWAP_STATUSES = [
-  'PENDING',
-  'SUBMITTED',
-  'SUCCEEDED',
-  'FAILED',
-  'EXPIRED',
-] as const satisfies readonly SwapStatus[];
 
 /**
  * Statuses that may still be finalized as FAILED or EXPIRED. SUCCEEDED is
@@ -46,10 +45,4 @@ export const SWAP_CAN_FAIL_STATUSES = [
   'PENDING',
   'SUBMITTED',
   'EXPIRED',
-] as const satisfies readonly SwapStatus[];
-
-/** Statuses from which submit may mark the row SUBMITTED. */
-export const SWAP_CAN_SUBMIT_STATUSES = [
-  'PENDING',
-  'FAILED',
 ] as const satisfies readonly SwapStatus[];

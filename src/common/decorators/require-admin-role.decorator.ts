@@ -1,5 +1,5 @@
 import { SetMetadata } from '@nestjs/common';
-import type { AdminRole } from '../../admin/admin-auth';
+import type { AdminRole } from '@/admin/admin-auth';
 
 export const ADMIN_ROLE_KEY = 'admin_role';
 

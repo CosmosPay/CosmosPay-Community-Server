@@ -1,8 +1,8 @@
 import { BadRequestException, ValidationPipe } from '@nestjs/common';
-import { CreatePayinDto } from './dto/create-payin.dto';
-import { CreatePayinQuoteDto } from './dto/create-payin-quote.dto';
-import { CreateTrustlineDto } from './dto/create-trustline.dto';
-import { CreateVirtualAccountDto } from './dto/create-virtual-account.dto';
+import { CreatePayinDto } from '@/onramp/dto/create-payin.dto';
+import { CreatePayinQuoteDto } from '@/onramp/dto/create-payin-quote.dto';
+import { CreateTrustlineDto } from '@/onramp/dto/create-trustline.dto';
+import { CreateVirtualAccountDto } from '@/onramp/dto/create-virtual-account.dto';
 
 /**
  * Same pipe the app runs (whitelist + forbidNonWhitelisted). Guards onramp DTO

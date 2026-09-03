@@ -4,10 +4,10 @@ import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import helmet from 'helmet';
-import { AppModule } from './app.module';
-import { AppConfig } from './config/configuration';
-import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
-import { setupSwagger } from './swagger';
+import { AppModule } from '@/app.module';
+import { AppConfig } from '@/config/configuration';
+import { AllExceptionsFilter } from '@/common/filters/all-exceptions.filter';
+import { setupSwagger } from '@/swagger';
 
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
@@ -18,6 +18,20 @@ async function bootstrap(): Promise<void> {
   });
   const logger = new Logger('Bootstrap');
   const config = app.get(ConfigService<AppConfig, true>);
+
+  // Last-resort backstop. Several paths hand a promise to nobody — the
+  // `@OnEvent` webhook listener fired by a synchronous `emit`, and the
+  // `void this.tick()` timers — so a rejection that escapes their own handling
+  // would otherwise hit Node's default `--unhandled-rejections=throw` and kill
+  // a process that is mid-payment. Log it and keep serving; the background jobs
+  // retry on their next tick. This is a safety net, not a licence to omit local
+  // handling: every one of those sites has its own try/catch.
+  process.on('unhandledRejection', (reason) => {
+    logger.error(
+      'Unhandled promise rejection — the process was kept alive',
+      reason instanceof Error ? reason.stack : String(reason),
+    );
+  });
 
   // Security headers. The service sits behind APISIX, but defense in depth.
   app.use(helmet());

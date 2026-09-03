@@ -1,13 +1,5 @@
-import {
-  BadRequestException,
-  ConflictException,
-  Injectable,
-  Logger,
-  NotFoundException,
-  ServiceUnavailableException,
-} from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { EventEmitter2 } from '@nestjs/event-emitter';
 import {
   Asset,
   Memo,
@@ -16,28 +8,30 @@ import {
 } from '@stellar/stellar-sdk';
 import { randomBytes } from 'node:crypto';
 import QRCode from 'qrcode';
-import { AppConfig, StellarNetwork } from '../config/configuration';
-import { GatewayConsumer } from '../common/interfaces/gateway-consumer.interface';
-import { isUniqueViolation } from '../common/prisma-errors';
-import { PrismaService } from '../prisma/prisma.service';
-import { horizonHttpStatus, StellarService } from '../stellar/stellar.service';
+import { AppConfig, StellarNetwork } from '@/config/configuration';
+import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
+import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
+import { isUniqueViolation } from '@/common/prisma-errors';
+import { resolveNetwork } from '@/common/stellar-network';
+import { PrismaService } from '@/prisma/prisma.service';
+import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
+import { StellarService } from '@/stellar/stellar.service';
 import type {
   PaymentIntent,
   PaymentIntentStatus,
   PaymentIntentTransition,
   WebhookEventType,
-} from '../../generated/prisma/client';
-import { WEBHOOK_EVENT, WebhookEventPayload } from '../webhooks/webhook-events';
-import { CreateTxPaymentIntentDto } from './dto/create-tx-payment-intent.dto';
-import { CreatePayPaymentIntentDto } from './dto/create-pay-payment-intent.dto';
-import { QueryPaymentIntentsDto } from './dto/query-payment-intents.dto';
-import { UpdatePaymentIntentDto } from './dto/update-payment-intent.dto';
+} from '@generated/prisma/client';
+import { WebhookTerminalEmitter } from '@/webhooks/webhook-terminal-emitter.service';
+import { CreateTxPaymentIntentDto } from '@/payment-intents/dto/create-tx-payment-intent.dto';
+import { CreatePayPaymentIntentDto } from '@/payment-intents/dto/create-pay-payment-intent.dto';
+import { QueryPaymentIntentsDto } from '@/payment-intents/dto/query-payment-intents.dto';
+import { UpdatePaymentIntentDto } from '@/payment-intents/dto/update-payment-intent.dto';
 import {
   assertTransition,
   InvalidPaymentIntentTransitionError,
-} from './payment-intent-state-machine';
-import type { PaymentIntentStatusName } from './payment-intent-transitions';
-import { StellarVerifierService } from './stellar-verifier.service';
+} from '@/payment-intents/payment-intent-state-machine';
+import { StellarVerifierService } from '@/payment-intents/stellar-verifier.service';
 
 /** Who triggered a status change — stored on the audit row. */
 export type PaymentIntentTransitionActor =
@@ -69,9 +63,10 @@ export class PaymentIntentsService {
   constructor(
     private readonly config: ConfigService<AppConfig, true>,
     private readonly prisma: PrismaService,
-    private readonly events: EventEmitter2,
+    private readonly webhooks: WebhookTerminalEmitter,
     private readonly verifier: StellarVerifierService,
     private readonly stellar: StellarService,
+    private readonly consumers: ConsumerResolverService,
   ) {}
 
   /**
@@ -81,21 +76,35 @@ export class PaymentIntentsService {
    * (local dev without APISIX).
    */
   private resolveNetwork(consumer: GatewayConsumer): StellarNetwork {
-    if (consumer.environment === 'prod') return 'public';
-    if (consumer.environment === 'dev') return 'testnet';
-    return this.config.get('stellar', { infer: true }).network;
+    return resolveNetwork(this.config, consumer);
   }
 
-  /** Emits a domain event the webhook dispatcher fans out to integrators. */
+  /**
+   * Emits a domain event the webhook dispatcher fans out to integrators.
+   *
+   * Everything goes through {@link WebhookTerminalEmitter} rather than straight
+   * onto the in-memory bus. For PAYMENT_INTENT_SUCCEEDED / _FAILED that is what
+   * makes the notification durable: the emitter writes the `webhook_delivery`
+   * rows inside its own transaction *before* the bus sees the event, so a pod
+   * killed mid-notification leaves work the delivery sweeper can finish. Without
+   * it, a crash between the settled status and the bus listener lost the
+   * settlement notification permanently, with nothing to retry from.
+   *
+   * Non-terminal events (CREATED / UPDATED / CANCELLED / DELETED) short-circuit
+   * inside `emit` straight to the bus, so routing them here costs nothing and
+   * keeps one emission path for the module.
+   *
+   * @returns `false` when a prior claim already notified — impossible for an
+   * intent today (see the transition graph: SUCCEEDED and FAILED are absorbing,
+   * and the status change is a compare-and-swap only one writer wins), so
+   * callers do not branch on it.
+   */
   private emit(
     consumerUsername: string,
     type: WebhookEventType,
     data: PaymentIntent,
-  ): void {
-    this.events.emit(
-      WEBHOOK_EVENT,
-      new WebhookEventPayload(consumerUsername, type, data),
-    );
+  ): Promise<boolean> {
+    return this.webhooks.emit(consumerUsername, type, data);
   }
 
   /** Maps a status change to the matching webhook event type. */
@@ -117,14 +126,7 @@ export class PaymentIntentsService {
    * the request. Every payment intent is scoped to this record.
    */
   private resolveConsumer(consumer: GatewayConsumer) {
-    return this.prisma.consumer.upsert({
-      where: { apisixUsername: consumer.username },
-      create: {
-        apisixUsername: consumer.username,
-        credentialId: consumer.credentialId,
-      },
-      update: { credentialId: consumer.credentialId },
-    });
+    return this.consumers.resolve(consumer);
   }
 
   /** QR is derived from the stored SEP-7 URI rather than persisted. */
@@ -154,7 +156,8 @@ export class PaymentIntentsService {
       return { code: 'native', issuer: null, asset: Asset.native() };
     }
     if (!assetIssuer) {
-      throw new BadRequestException(
+      throw ApiError.badRequest(
+        ApiErrorCode.ValidationFailed,
         `assetIssuer is required for non-native asset "${code}"`,
       );
     }
@@ -169,7 +172,8 @@ export class PaymentIntentsService {
   private resolveMemo(provided?: string): string {
     if (provided !== undefined) {
       if (!/^\d+$/.test(provided) || BigInt(provided) > 18446744073709551615n) {
-        throw new BadRequestException(
+        throw ApiError.badRequest(
+          ApiErrorCode.InvalidMemo,
           'memo must be a MEMO_ID: a numeric uint64 string',
         );
       }
@@ -264,7 +268,7 @@ export class PaymentIntentsService {
         `${asset.code === 'native' ? 'XLM' : asset.code} ${dto.source} → ${dto.destination} ` +
         `(consumer=${consumer.username}, network=${network}, memo=${memo})`,
     );
-    this.emit(consumer.username, 'PAYMENT_INTENT_CREATED', intent);
+    await this.emit(consumer.username, 'PAYMENT_INTENT_CREATED', intent);
     return this.withQr(intent);
   }
 
@@ -320,7 +324,7 @@ export class PaymentIntentsService {
         `${asset.code === 'native' ? 'XLM' : asset.code} → ${dto.destination} ` +
         `(consumer=${consumer.username}, network=${network}, memo=${memo})`,
     );
-    this.emit(consumer.username, 'PAYMENT_INTENT_CREATED', intent);
+    await this.emit(consumer.username, 'PAYMENT_INTENT_CREATED', intent);
     return this.withQr(intent);
   }
 
@@ -362,7 +366,11 @@ export class PaymentIntentsService {
       ...(query.status ? { status: query.status } : {}),
     };
 
-    const [data, total] = await this.prisma.$transaction([
+    // `Promise.all`, not `$transaction`: a snapshot-consistent page and count
+    // buys nothing here (the client sees a moving list either way), while the
+    // transaction costs four serial round trips — BEGIN, page, count, COMMIT —
+    // instead of two issued in parallel.
+    const [data, total] = await Promise.all([
       this.prisma.paymentIntent.findMany({
         where,
         take: query.take,
@@ -385,7 +393,7 @@ export class PaymentIntentsService {
     });
 
     if (!intent) {
-      throw new NotFoundException(`Payment intent ${id} not found`);
+      throw ApiError.notFound(`Payment intent ${id} not found`);
     }
     return this.withQr(intent);
   }
@@ -399,7 +407,24 @@ export class PaymentIntentsService {
     // Authorize ownership before mutating.
     await this.assertOwned(consumer, id);
 
-    // Status changes must go through the single guarded transition entry point.
+    // Settling from the API requires the chain to agree.
+    //
+    // The state machine's only evidence rule for SUCCEEDED is "txHash is a
+    // non-empty string", which is a formatting check, not a proof. A
+    // `payments:write` key could PATCH `{status:'SUCCEEDED', txHash:'x'}` and
+    // mint a settled payment: the terminal webhook fires, the row is counted in
+    // the merchant's balances and in the platform-wide admin volume figure, and
+    // SUCCEEDED has no outgoing transitions so it never self-corrects.
+    //
+    // Route it through the same verifier `POST /:id/validate` uses — Horizon
+    // lookup by hash, exact-stroop amount match, memo match, `tx.successful`.
+    // The internal callers (observer, validate, expiry) still reach
+    // `transition` directly; they already hold a verified hash.
+    if (dto.status === 'SUCCEEDED') {
+      return this.settleFromApi(consumer, id, dto);
+    }
+
+    // Every other status change goes through the single guarded entry point.
     if (dto.status) {
       const updated = await this.transition(id, dto.status, {
         consumerUsername: consumer.username,
@@ -430,8 +455,65 @@ export class PaymentIntentsService {
       `Updated payment intent ${id} (consumer=${consumer.username}): status unchanged`,
     );
 
-    this.emit(consumer.username, 'PAYMENT_INTENT_UPDATED', updated);
+    await this.emit(consumer.username, 'PAYMENT_INTENT_UPDATED', updated);
     return this.withQr(updated);
+  }
+
+  /**
+   * The API-driven SUCCEEDED path: verify against the chain, then settle.
+   *
+   * Delegates to {@link validate}, so a PATCH and a `POST /:id/validate` cannot
+   * disagree about what counts as settled. A hash the chain does not corroborate
+   * is a 400 rather than a silent settlement.
+   */
+  private async settleFromApi(
+    consumer: GatewayConsumer,
+    id: string,
+    dto: UpdatePaymentIntentDto,
+  ): Promise<PaymentIntentView> {
+    const current = await this.prisma.paymentIntent.findUnique({
+      where: { id },
+    });
+    if (!current) {
+      throw ApiError.notFound(`Payment intent ${id} not found`);
+    }
+
+    // The declared graph and the evidence rule are checked here, before any
+    // Horizon call: forcing a terminal intent to SUCCEEDED is an invalid
+    // transition whatever the chain says, and it must not cost a network round
+    // trip or report itself as a rejected transaction. `transition` applies the
+    // same assertion again downstream — this is the early, honest error.
+    try {
+      assertTransition(current.status, 'SUCCEEDED', { txHash: dto.txHash });
+    } catch (err) {
+      if (err instanceof InvalidPaymentIntentTransitionError) {
+        throw ApiError.badRequest(
+          ApiErrorCode.InvalidStateTransition,
+          err.message,
+        );
+      }
+      throw err;
+    }
+
+    const outcome = await this.validate(consumer, id, dto.txHash!.trim());
+    if (!outcome.valid) {
+      throw ApiError.badRequest(
+        ApiErrorCode.TransactionRejected,
+        `The transaction does not settle this payment intent: ${
+          outcome.reason ?? 'verification failed'
+        }`,
+      );
+    }
+
+    // `reference` may be patched alongside the settlement.
+    if (dto.reference !== undefined) {
+      const patched = await this.prisma.paymentIntent.update({
+        where: { id },
+        data: { reference: dto.reference },
+      });
+      return this.withQr(patched);
+    }
+    return outcome.paymentIntent!;
   }
 
   /**
@@ -448,25 +530,24 @@ export class PaymentIntentsService {
       where: { id: intentId },
     });
     if (!current) {
-      throw new NotFoundException(`Payment intent ${intentId} not found`);
+      throw ApiError.notFound(`Payment intent ${intentId} not found`);
     }
 
-    const from = current.status as PaymentIntentStatusName;
-    const toStatus = to as PaymentIntentStatusName;
+    const from = current.status;
+    const toStatus = to;
     const txHash = opts.txHash ?? current.txHash ?? undefined;
 
     try {
       assertTransition(from, toStatus, { txHash });
     } catch (err) {
       if (err instanceof InvalidPaymentIntentTransitionError) {
-        throw new BadRequestException({
-          statusCode: 400,
-          error: 'Bad Request',
-          code: err.code,
-          message: err.message,
-          from: err.from,
-          to: err.to,
-        });
+        // `from`/`to` were never reachable by an integrator — the exception
+        // filter only forwards statusCode/code/error/message — so they move
+        // into the message, which already names both ends of the transition.
+        throw ApiError.badRequest(
+          ApiErrorCode.InvalidStateTransition,
+          err.message,
+        );
       }
       throw err;
     }
@@ -486,7 +567,8 @@ export class PaymentIntentsService {
         },
       });
       if (guarded.count === 0) {
-        throw new ConflictException(
+        throw ApiError.conflict(
+          ApiErrorCode.OperationInFlight,
           `Payment intent ${intentId} status changed concurrently; expected ${from}`,
         );
       }
@@ -510,7 +592,7 @@ export class PaymentIntentsService {
         (txHash ? ` (tx=${txHash})` : '') +
         ` actor=${opts.actor}`,
     );
-    this.emit(opts.consumerUsername, this.statusEvent(to), updated);
+    await this.emit(opts.consumerUsername, this.statusEvent(to), updated);
 
     if (to === 'SUCCEEDED') {
       void this.upsertCustomerFromPayment(updated, opts.payer).catch((err) =>
@@ -548,13 +630,16 @@ export class PaymentIntentsService {
       select: { status: true },
     });
     if (existing?.status === 'SUCCEEDED') {
-      throw new BadRequestException('A paid payment intent cannot be deleted.');
+      throw ApiError.badRequest(
+        ApiErrorCode.InvalidStateTransition,
+        'A paid payment intent cannot be deleted.',
+      );
     }
     const deleted = await this.prisma.paymentIntent.delete({ where: { id } });
     this.logger.log(
       `Deleted payment intent ${id} (consumer=${consumer.username})`,
     );
-    this.emit(consumer.username, 'PAYMENT_INTENT_DELETED', deleted);
+    await this.emit(consumer.username, 'PAYMENT_INTENT_DELETED', deleted);
     return { id, deleted: true };
   }
 
@@ -575,7 +660,7 @@ export class PaymentIntentsService {
       where: { id, consumer: { apisixUsername: consumer.username } },
     });
     if (!intent) {
-      throw new NotFoundException(`Payment intent ${id} not found`);
+      throw ApiError.notFound(`Payment intent ${id} not found`);
     }
 
     // Already settled — return current state without re-querying the network.
@@ -705,28 +790,26 @@ export class PaymentIntentsService {
       select: { id: true },
     });
     if (!owned) {
-      throw new NotFoundException(`Payment intent ${id} not found`);
+      throw ApiError.notFound(`Payment intent ${id} not found`);
     }
   }
 
   private async loadAccount(network: StellarNetwork, source: string) {
     try {
-      return await this.stellar.call(network, (server) =>
-        server.loadAccount(source),
-      );
+      return await this.stellar.server(network).loadAccount(source);
     } catch (error: unknown) {
       // A 404 from Horizon means the account doesn't exist / isn't funded.
-      const status = horizonHttpStatus(error);
+      const status = (error as { response?: { status?: number } })?.response
+        ?.status;
       if (status === 404) {
-        throw new BadRequestException(
+        throw ApiError.badRequest(
+          ApiErrorCode.ValidationFailed,
           `Source account ${source} not found or not funded on the ${network} network`,
         );
       }
-      if (error instanceof ServiceUnavailableException) {
-        throw error;
-      }
       this.logger.error('Failed to load source account from Horizon', error);
-      throw new ServiceUnavailableException(
+      throw ApiError.unavailable(
+        ApiErrorCode.ProviderUnavailable,
         'Could not reach the Stellar network',
       );
     }

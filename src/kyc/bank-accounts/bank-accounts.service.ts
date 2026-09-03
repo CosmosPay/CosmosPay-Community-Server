@@ -1,16 +1,33 @@
 import { Injectable } from '@nestjs/common';
-import { GatewayConsumer } from '../../common/interfaces/gateway-consumer.interface';
-import { PrismaService } from '../../prisma/prisma.service';
-import { BlindpayClient } from '../../blindpay/blindpay.client';
-import { ConsumerResolverService } from '../../blindpay/consumer-resolver.service';
-import { BlindpayObject } from '../../blindpay/blindpay-sync.service';
-import {
-  asNullableString,
-  asString,
-  toJson,
-} from '../../blindpay/blindpay.util';
-import { ReceiversService } from '../receivers/receivers.service';
-import { CreateBankAccountDto } from './dto/create-bank-account.dto';
+import type { Prisma } from '@generated/prisma/client';
+import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
+import { PaginationQueryDto } from '@/common/dto/pagination.query.dto';
+import { page } from '@/common/pagination';
+import { PrismaService } from '@/prisma/prisma.service';
+import { BlindpayClient } from '@/blindpay/blindpay.client';
+import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
+import { BlindpayObject } from '@/blindpay/blindpay-sync.service';
+import { asNullableString, asString, toJson } from '@/blindpay/blindpay.util';
+import { ReceiversService } from '@/kyc/receivers/receivers.service';
+import { CreateBankAccountDto } from '@/kyc/bank-accounts/dto/create-bank-account.dto';
+
+/**
+ * The columns a bank account is allowed to leave this service with — the exact field
+ * list of `BankAccountEntity`.
+ *
+ * As with the receiver dossier, `raw` is deliberately absent: it is the provider object,
+ * which for a bank account mirrors the account credentials themselves (IBAN, CLABE,
+ * routing/account number, CPF/CNPJ, beneficiary address). The mirror keeps it for
+ * provider round-trips; the API returns the identifiers only.
+ */
+export const BANK_ACCOUNT_PUBLIC_SELECT = {
+  id: true,
+  blindpayId: true,
+  rail: true,
+  name: true,
+  country: true,
+  createdAt: true,
+} as const satisfies Prisma.BlindpayBankAccountSelect;
 
 /**
  * Fiat bank accounts belonging to a receiver — the settlement destination for
@@ -45,17 +62,29 @@ export class BankAccountsService {
     return this.mirror(local.id, receiver.id, { type: dto.type, ...created });
   }
 
-  async findAll(consumer: GatewayConsumer, receiverId: string) {
+  async findAll(
+    consumer: GatewayConsumer,
+    receiverId: string,
+    query: PaginationQueryDto,
+  ) {
     const local = await this.consumers.resolve(consumer);
     const receiver = await this.receivers.findReceiverOrThrow(
       local.id,
       receiverId,
     );
-    const data = await this.prisma.blindpayBankAccount.findMany({
-      where: { receiverId: receiver.id },
-      orderBy: { createdAt: 'desc' },
-    });
-    return { data, total: data.length };
+    const where = { receiverId: receiver.id };
+    // `total` is the row count, not the page length (see ReceiversService.findAll).
+    const [data, total] = await Promise.all([
+      this.prisma.blindpayBankAccount.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        take: query.take,
+        skip: query.skip,
+        select: BANK_ACCOUNT_PUBLIC_SELECT,
+      }),
+      this.prisma.blindpayBankAccount.count({ where }),
+    ]);
+    return page(data, total, query);
   }
 
   async remove(consumer: GatewayConsumer, receiverId: string, id: string) {
@@ -93,6 +122,8 @@ export class BankAccountsService {
       },
       create: { consumerId, blindpayId: asString(obj.id), ...data },
       update: data,
+      // The create response is a read path too — don't echo the stored credentials back.
+      select: BANK_ACCOUNT_PUBLIC_SELECT,
     });
   }
 }

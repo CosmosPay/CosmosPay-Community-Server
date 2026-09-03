@@ -14,7 +14,7 @@ import {
   type BlindpayNetwork,
   type BlindpayToken,
   type CurrencyType,
-} from '../../blindpay/blindpay.constants';
+} from '@/blindpay/blindpay.constants';
 
 /**
  * Prices an offramp (stablecoin -> fiat). The quote expires in ~5 minutes and,

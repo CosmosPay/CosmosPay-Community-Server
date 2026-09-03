@@ -8,7 +8,7 @@ import {
   Max,
   Min,
 } from 'class-validator';
-import { IsStellarAddress } from '../../common/validators/is-stellar-address.validator';
+import { IsStellarAddress } from '@/common/validators/is-stellar-address.validator';
 
 /**
  * A swap quote request: how much of which asset you want to sell (`amount` of the

@@ -42,11 +42,17 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Lint
+        run: npm run lint
+
       - name: Verify OpenAPI is up to date
         run: npm run openapi:check
 
       - name: Test
         run: npm test
+
+      - name: E2E test
+        run: npm run test:e2e
 
       # Zero-tolerance on shipped deps: audit only runtime deps, fail on any advisory.
       - name: Security audit

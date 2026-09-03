@@ -1,4 +1,46 @@
-export { fromStroops, toStroops } from '../common/stellar-amount';
+/**
+ * Decimal arithmetic for Stellar amounts, done in integer "stroops" so fee and
+ * slippage math never touches floating point. Stellar amounts have a fixed
+ * precision of 7 decimal places (1 unit = 10,000,000 stroops), and the maximum
+ * amount is (2^63 - 1) stroops — both enforced here.
+ */
+import {
+  MAX_STROOPS,
+  STELLAR_AMOUNT_RE,
+  STELLAR_DECIMALS,
+  STROOP_SCALE,
+} from '@/stellar/stellar.constants';
+
+/** Parses a decimal amount string into stroops (bigint). Throws on bad input. */
+export function toStroops(amount: string): bigint {
+  if (!STELLAR_AMOUNT_RE.test(amount)) {
+    throw new RangeError(
+      `Invalid amount "${amount}": expected a non-negative decimal with up to ${STELLAR_DECIMALS} places`,
+    );
+  }
+  const [whole, frac = ''] = amount.split('.');
+  const fracPadded = frac.padEnd(STELLAR_DECIMALS, '0');
+  const stroops = BigInt(whole) * STROOP_SCALE + BigInt(fracPadded);
+  if (stroops > MAX_STROOPS) {
+    throw new RangeError(
+      `Amount "${amount}" exceeds the maximum Stellar amount`,
+    );
+  }
+  return stroops;
+}
+
+/** Formats stroops (bigint) back into a Stellar amount string (trims trailing zeros). */
+export function fromStroops(stroops: bigint): string {
+  if (stroops < 0n) {
+    throw new RangeError('Cannot format a negative amount');
+  }
+  const whole = stroops / STROOP_SCALE;
+  const frac = (stroops % STROOP_SCALE)
+    .toString()
+    .padStart(STELLAR_DECIMALS, '0');
+  const trimmed = frac.replace(/0+$/, '');
+  return trimmed ? `${whole}.${trimmed}` : whole.toString();
+}
 
 /**
  * Fee taken from a source amount, in basis points (50 bps = 0.5%). Rounded down

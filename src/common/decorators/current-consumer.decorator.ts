@@ -4,7 +4,7 @@ import {
   InternalServerErrorException,
 } from '@nestjs/common';
 import { Request } from 'express';
-import { GatewayConsumer } from '../interfaces/gateway-consumer.interface';
+import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 
 /**
  * Injects the gateway-authenticated consumer into a handler argument.

@@ -1,16 +1,30 @@
-import {
-  ExecutionContext,
-  ForbiddenException,
-  UnauthorizedException,
-} from '@nestjs/common';
+import { ExecutionContext, HttpStatus } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { AdminGuard } from './admin.guard';
-import { ADMIN_ROLE_KEY } from '../decorators/require-admin-role.decorator';
+import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
+import { AdminGuard } from '@/common/guards/admin.guard';
+import { ADMIN_ROLE_KEY } from '@/common/decorators/require-admin-role.decorator';
 
 /**
  * Red suite for issue #34: AdminGuard must verify a real Bearer credential
  * and enforce read vs write. The legacy `X-Cosmos-Admin: 1` marker must NOT grant access.
  */
+/** Asserts the guard denied with a specific status *and* error code. */
+function expectDenied(
+  run: () => unknown,
+  status: HttpStatus,
+  code: ApiErrorCode,
+): void {
+  let thrown: unknown;
+  try {
+    run();
+  } catch (err) {
+    thrown = err;
+  }
+  expect(thrown).toBeInstanceOf(ApiError);
+  expect((thrown as ApiError).getStatus()).toBe(status);
+  expect((thrown as ApiError).code).toBe(code);
+}
+
 describe('AdminGuard (issue #34)', () => {
   const readSecret = 'read-secret-000000';
   const writeSecret = 'write-secret-00000';
@@ -24,7 +38,10 @@ describe('AdminGuard (issue #34)', () => {
     }),
   } as any;
 
-  function ctx(headers: Record<string, string>, requiredRole?: 'read' | 'write') {
+  function ctx(
+    headers: Record<string, string>,
+    requiredRole?: 'read' | 'write',
+  ) {
     const request: any = { headers, adminPrincipal: undefined };
     const reflector = {
       getAllAndOverride: (key: string) =>
@@ -41,19 +58,31 @@ describe('AdminGuard (issue #34)', () => {
 
   it('rejects the legacy plaintext X-Cosmos-Admin: 1 marker with 401', () => {
     const { guard, context } = ctx({ 'x-cosmos-admin': '1' });
-    expect(() => guard.canActivate(context)).toThrow(UnauthorizedException);
+    expectDenied(
+      () => guard.canActivate(context),
+      HttpStatus.UNAUTHORIZED,
+      ApiErrorCode.AdminCredentialsRequired,
+    );
   });
 
   it('returns 401 when Authorization Bearer is missing', () => {
     const { guard, context } = ctx({});
-    expect(() => guard.canActivate(context)).toThrow(UnauthorizedException);
+    expectDenied(
+      () => guard.canActivate(context),
+      HttpStatus.UNAUTHORIZED,
+      ApiErrorCode.AdminCredentialsRequired,
+    );
   });
 
   it('returns 401 when the Bearer secret is wrong', () => {
     const { guard, context } = ctx({
       authorization: 'Bearer totally-wrong-secret!!',
     });
-    expect(() => guard.canActivate(context)).toThrow(UnauthorizedException);
+    expectDenied(
+      () => guard.canActivate(context),
+      HttpStatus.UNAUTHORIZED,
+      ApiErrorCode.AdminCredentialsRequired,
+    );
   });
 
   it('allows a read credential on a read endpoint and attaches the principal', () => {
@@ -70,7 +99,11 @@ describe('AdminGuard (issue #34)', () => {
       { authorization: `Bearer ${readSecret}` },
       'write',
     );
-    expect(() => guard.canActivate(context)).toThrow(ForbiddenException);
+    expectDenied(
+      () => guard.canActivate(context),
+      HttpStatus.FORBIDDEN,
+      ApiErrorCode.AdminRoleRequired,
+    );
   });
 
   it('allows a write credential on a write endpoint', () => {

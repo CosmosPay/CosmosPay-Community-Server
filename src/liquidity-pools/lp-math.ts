@@ -1,16 +1,15 @@
-import {
-  applySlippage,
-  computeFee,
-  fromStroops,
-  toStroops,
-} from '../swaps/swap-math';
-
 /**
  * Integer math for AMM liquidity pool operations, in stroops (bigint) like
  * swap-math. Prices are the deposit ratio A/B expressed as a 7-decimal string —
  * the shape `Operation.liquidityPoolDeposit` accepts for minPrice/maxPrice.
  */
-const PRICE_SCALE = 10_000_000n; // 7 decimal places, same as stroops
+import {
+  applySlippage,
+  computeFee,
+  fromStroops,
+  toStroops,
+} from '@/swaps/swap-math';
+import { STROOP_SCALE } from '@/stellar/stellar.constants';
 
 /**
  * The pool price (reserveA / reserveB) bracketed by a slippage tolerance:
@@ -34,7 +33,7 @@ export function priceBounds(
   if (reserveAStroops <= 0n || reserveBStroops <= 0n) {
     throw new RangeError('Price requires positive amounts on both sides');
   }
-  const price = (reserveAStroops * PRICE_SCALE) / reserveBStroops;
+  const price = (reserveAStroops * STROOP_SCALE) / reserveBStroops;
   const min = (price * BigInt(10_000 - slippageBps)) / 10_000n;
   const maxNum = price * BigInt(10_000 + slippageBps);
   const max = (maxNum + 9_999n) / 10_000n; // ceil

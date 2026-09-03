@@ -1,10 +1,4 @@
-import {
-  BadRequestException,
-  Injectable,
-  Logger,
-  NotFoundException,
-  ServiceUnavailableException,
-} from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
   Asset,
@@ -16,60 +10,51 @@ import {
   getLiquidityPoolId,
 } from '@stellar/stellar-sdk';
 import QRCode from 'qrcode';
-import { AppConfig, StellarNetwork } from '../config/configuration';
-import { GatewayConsumer } from '../common/interfaces/gateway-consumer.interface';
-import { PrismaService } from '../prisma/prisma.service';
-import {
-  assertCanAfford,
-  assertTrustline,
-  type HorizonBalance,
-} from '../stellar/stellar-preflight';
-import { StellarService } from '../stellar/stellar.service';
+import { AppConfig, StellarNetwork } from '@/config/configuration';
+import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
+import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
+import { resolvePlanCommissionBps } from '@/common/plan-commission';
+import { isUniqueViolation } from '@/common/prisma-errors';
+import { resolveNetwork } from '@/common/stellar-network';
+import { PrismaService } from '@/prisma/prisma.service';
+import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
+import { StellarAccountLoader } from '@/stellar/account-loader.service';
+import type { BalanceEntry } from '@/stellar/account-loader.service';
+import { assetLabel, resolveAsset, ResolvedAsset } from '@/stellar/asset';
+import { extractResultCodes } from '@/stellar/horizon-errors';
+import { applyMemo, resolveMemoId } from '@/stellar/memo';
+import { SettlementRepository } from '@/stellar/settlement.repository';
+import { StellarService } from '@/stellar/stellar.service';
 import type {
   LiquidityPoolOperation,
-  Prisma,
   SwapStatus,
   WebhookEventType,
-} from '../../generated/prisma/client';
-import { WebhookTerminalEmitter } from '../webhooks/webhook-terminal-emitter.service';
-import { applySlippage, fromStroops, toStroops } from '../swaps/swap-math';
+} from '@generated/prisma/client';
+import { WebhookTerminalEmitter } from '@/webhooks/webhook-terminal-emitter.service';
+import { applySlippage, fromStroops, toStroops } from '@/swaps/swap-math';
 import {
   aggregateCostBasis,
   computeWithdrawCommission,
   matchDeposit,
   priceBounds,
   proportionalShare,
-} from './lp-math';
+} from '@/liquidity-pools/lp-math';
 import {
-  LP_CAN_FAIL_STATUSES,
   LP_CAN_SUCCEED_STATUSES,
   LP_IN_FLIGHT_STATUSES,
-  type LpOperationStatus,
-} from './lp-operation-transitions';
-import { DepositLiquidityDto } from './dto/deposit-liquidity.dto';
-import { QueryLiquidityOperationsDto } from './dto/query-liquidity-operations.dto';
-import { QueryLiquidityPoolsDto } from './dto/query-pools.dto';
-import { QueryLiquidityPositionsDto } from './dto/query-positions.dto';
-import { WithdrawLiquidityDto } from './dto/withdraw-liquidity.dto';
+} from '@/liquidity-pools/lp-operation-transitions';
+import { DepositLiquidityDto } from '@/liquidity-pools/dto/deposit-liquidity.dto';
+import { QueryLiquidityOperationsDto } from '@/liquidity-pools/dto/query-liquidity-operations.dto';
+import { QueryLiquidityPoolsDto } from '@/liquidity-pools/dto/query-pools.dto';
+import { QueryLiquidityPositionsDto } from '@/liquidity-pools/dto/query-positions.dto';
+import { WithdrawLiquidityDto } from '@/liquidity-pools/dto/withdraw-liquidity.dto';
 import {
   LiquidityPoolEntity,
   LiquidityPoolListEntity,
   LiquidityPoolReserve,
   LiquidityPositionListEntity,
-} from './entities/liquidity-pool.entity';
-
-const MAX_UINT64 = 18446744073709551615n;
-
-/** Horizon pool lookups per `positions()` call, so a 40-trustline account does not stampede. */
-const POSITION_FETCH_CONCURRENCY = 5;
-
-/**
- * On-chain MEMO_TEXT stamped on operations that collect the platform commission
- * when the caller did not supply their own MEMO_ID — so the commission is
- * identifiable on the ledger. English by design (it is the canonical label).
- * Kept ≤ 28 bytes (the MEMO_TEXT limit).
- */
-export const LIQUIDITY_COMMISSION_MEMO = 'Cosmos Liquidity Commission';
+} from '@/liquidity-pools/entities/liquidity-pool.entity';
+import { LIQUIDITY_COMMISSION_MEMO } from '@/liquidity-pools/liquidity-pools.constants';
 
 /** A stored operation plus its derived QR — the shape API responses return. */
 export type LiquidityOperationView = LiquidityPoolOperation & {
@@ -89,12 +74,6 @@ export interface LiquiditySubmitOutcome {
 }
 
 /** Resolved asset: its stored code/issuer and the SDK Asset for building txs. */
-interface ResolvedAsset {
-  code: string;
-  issuer: string | null;
-  asset: Asset;
-}
-
 /** Minimal shape we read off a Horizon liquidity pool record. */
 interface PoolRecord {
   id: string;
@@ -106,8 +85,6 @@ interface PoolRecord {
 }
 
 /** Minimal shape of a Horizon account balance entry. */
-type BalanceEntry = HorizonBalance;
-
 /**
  * Stellar AMM liquidity pools. Like swaps, this is **non-custodial**: the
  * service prices a deposit/withdraw against the pool's on-chain reserves,
@@ -118,14 +95,14 @@ type BalanceEntry = HorizonBalance;
 @Injectable()
 export class LiquidityPoolsService {
   private readonly logger = new Logger(LiquidityPoolsService.name);
-  /** Serializes cost-basis reads + persist per (consumer, source, pool). */
-  private readonly withdrawLocks = new Map<string, Promise<unknown>>();
 
   constructor(
     private readonly config: ConfigService<AppConfig, true>,
     private readonly prisma: PrismaService,
     private readonly webhooks: WebhookTerminalEmitter,
     private readonly stellar: StellarService,
+    private readonly consumers: ConsumerResolverService,
+    private readonly accounts: StellarAccountLoader,
   ) {}
 
   // ── Pools (Horizon proxy) ───────────────────────────────────────────────────
@@ -141,14 +118,10 @@ export class LiquidityPoolsService {
       .order('desc');
     const filters: Asset[] = [];
     if (query.assetACode !== undefined || query.assetAIssuer !== undefined) {
-      filters.push(
-        this.resolveAsset(query.assetACode, query.assetAIssuer).asset,
-      );
+      filters.push(resolveAsset(query.assetACode, query.assetAIssuer).asset);
     }
     if (query.assetBCode !== undefined || query.assetBIssuer !== undefined) {
-      filters.push(
-        this.resolveAsset(query.assetBCode, query.assetBIssuer).asset,
-      );
+      filters.push(resolveAsset(query.assetBCode, query.assetBIssuer).asset);
     }
     if (filters.length) builder = builder.forAssets(...filters);
     if (query.account) builder = builder.forAccount(query.account);
@@ -159,7 +132,8 @@ export class LiquidityPoolsService {
       records = (await builder.call()).records;
     } catch (err) {
       this.logger.error('liquidityPools list failed', err);
-      throw new ServiceUnavailableException(
+      throw ApiError.unavailable(
+        ApiErrorCode.ProviderUnavailable,
         'Could not reach the Stellar network to list liquidity pools',
       );
     }
@@ -180,7 +154,7 @@ export class LiquidityPoolsService {
     const network = this.resolveNetwork(consumer);
     const pool = await this.fetchPool(network, poolId);
     if (!pool) {
-      throw new NotFoundException(
+      throw ApiError.notFound(
         `Liquidity pool ${poolId} not found on the ${network} network`,
       );
     }
@@ -194,58 +168,39 @@ export class LiquidityPoolsService {
     query: QueryLiquidityPositionsDto,
   ): Promise<LiquidityPositionListEntity> {
     const network = this.resolveNetwork(consumer);
-    const account = await this.loadAccount(network, query.account);
+    const account = await this.accounts.load(network, query.account);
     const shares = (account.balances as BalanceEntry[]).filter(
       (b) => b.asset_type === 'liquidity_pool_shares' && b.liquidity_pool_id,
     );
-    const data: LiquidityPositionListEntity['data'] = [];
-    let horizonFailures = 0;
-    for (let i = 0; i < shares.length; i += POSITION_FETCH_CONCURRENCY) {
-      const batch = shares.slice(i, i + POSITION_FETCH_CONCURRENCY);
-      const settled = await Promise.allSettled(
-        batch.map(async (entry) => {
-          const pool = await this.fetchPool(network, entry.liquidity_pool_id!);
-          if (!pool) return null;
-          const held = toStroops(entry.balance ?? '0');
-          const total = toStroops(pool.total_shares);
-          const reserves = pool.reserves.map((r) => this.parseReserve(r));
-          return {
-            poolId: pool.id,
-            shares: fromStroops(held),
-            totalShares: pool.total_shares,
-            shareOfPoolBps: total > 0n ? Number((held * 10_000n) / total) : 0,
-            reserves,
-            redeemable: reserves.map((r) => ({
-              ...r,
-              amount:
-                total > 0n
-                  ? fromStroops(
-                      proportionalShare(held, total, toStroops(r.amount)),
-                    )
-                  : '0',
-            })),
-          };
-        }),
-      );
-      for (const result of settled) {
-        if (result.status === 'fulfilled' && result.value !== null) {
-          data.push(result.value);
-        } else if (result.status === 'rejected') {
-          horizonFailures += 1;
-        }
-      }
-    }
-    // One bad pool is omitted; a total Horizon outage must not look like
-    // "this account has no positions".
-    if (shares.length > 0 && horizonFailures === shares.length) {
-      throw new ServiceUnavailableException(
-        'Could not reach the Stellar network',
-      );
-    }
+    const data = await Promise.all(
+      shares.map(async (entry) => {
+        const pool = await this.fetchPool(network, entry.liquidity_pool_id!);
+        if (!pool) return null;
+        const held = toStroops(entry.balance ?? '0');
+        const total = toStroops(pool.total_shares);
+        const reserves = pool.reserves.map((r) => this.parseReserve(r));
+        return {
+          poolId: pool.id,
+          shares: fromStroops(held),
+          totalShares: pool.total_shares,
+          shareOfPoolBps: total > 0n ? Number((held * 10_000n) / total) : 0,
+          reserves,
+          redeemable: reserves.map((r) => ({
+            ...r,
+            amount:
+              total > 0n
+                ? fromStroops(
+                    proportionalShare(held, total, toStroops(r.amount)),
+                  )
+                : '0',
+          })),
+        };
+      }),
+    );
     return {
       account: query.account,
       network,
-      data,
+      data: data.filter((p) => p !== null),
     };
   }
 
@@ -255,25 +210,49 @@ export class LiquidityPoolsService {
    * canonically ordered (assetA < assetB), amounts follow their assets, and the
    * price bounds come from the pool's current reserves (or, for a new/empty
    * pool, from the deposit's own ratio) bracketed by the slippage tolerance.
+   *
+   * Idempotency: pass `Idempotency-Key` (header) or `idempotencyKey` (body). The
+   * same key for a consumer returns the existing operation instead of building
+   * another transaction (and never mints a second `LIQUIDITY_CREATED`). Without
+   * a key, the unique `(network, txHash)` constraint still rejects a
+   * byte-identical rebuild with 409 — a double-submitted deposit used to leave
+   * two PENDING rows sharing one on-chain transaction.
    */
   async deposit(
     consumer: GatewayConsumer,
     dto: DepositLiquidityDto,
+    headerIdempotencyKey?: string,
   ): Promise<LiquidityOperationView> {
     const network = this.resolveNetwork(consumer);
     const local = await this.resolveConsumer(consumer);
     const slippageBps = this.resolveSlippage(dto.slippageBps);
-    const memo = this.resolveMemo(dto.memo);
+    const memo = resolveMemoId(dto.memo);
+    const idempotencyKey = this.resolveIdempotencyKey(
+      headerIdempotencyKey,
+      dto.idempotencyKey,
+    );
+
+    // Fast path: same key → same operation (no Horizon round-trip, no rebuild).
+    if (idempotencyKey) {
+      const existing = await this.findByIdempotencyKey(
+        local.id,
+        idempotencyKey,
+      );
+      if (existing) return this.withQr(existing);
+    }
 
     // Canonical order: the protocol requires assetA < assetB. Reorder the pair
     // (and its amounts) if the caller passed them the other way around.
-    let a = this.resolveAsset(dto.assetACode, dto.assetAIssuer);
-    let b = this.resolveAsset(dto.assetBCode, dto.assetBIssuer);
+    let a = resolveAsset(dto.assetACode, dto.assetAIssuer);
+    let b = resolveAsset(dto.assetBCode, dto.assetBIssuer);
     let rawAmountA: string | undefined = dto.maxAmountA;
     let rawAmountB: string | undefined = dto.maxAmountB;
     const cmp = Asset.compare(a.asset, b.asset);
     if (cmp === 0) {
-      throw new BadRequestException('A pool needs two different assets');
+      throw ApiError.badRequest(
+        ApiErrorCode.ValidationFailed,
+        'A pool needs two different assets',
+      );
     }
     if (cmp > 0) {
       [a, b] = [b, a];
@@ -307,12 +286,14 @@ export class LiquidityPoolsService {
         amountB = matchDeposit(amountA, reserveA, reserveB);
       }
     } else if (rawAmountA === undefined || rawAmountB === undefined) {
-      throw new BadRequestException(
+      throw ApiError.badRequest(
+        ApiErrorCode.ValidationFailed,
         'This pool has no reserves yet — provide both amounts; the deposit sets the initial price',
       );
     }
     if (amountA <= 0n || amountB <= 0n) {
-      throw new BadRequestException(
+      throw ApiError.badRequest(
+        ApiErrorCode.InvalidAmount,
         'Deposit amounts must be greater than zero',
       );
     }
@@ -328,23 +309,17 @@ export class LiquidityPoolsService {
         ? priceBounds(reserveA, reserveB, slippageBps)
         : priceBounds(amountA, amountB, slippageBps);
     } catch (err) {
-      throw new BadRequestException((err as Error).message);
+      throw ApiError.badRequest(
+        ApiErrorCode.InvalidAmount,
+        (err as Error).message,
+      );
     }
 
-    const account = await this.loadAccount(network, dto.source);
+    const account = await this.accounts.load(network, dto.source);
     const balances = account.balances as BalanceEntry[];
-    assertTrustline(
-      balances,
-      a,
-      dto.source,
-      'it must trust the asset before depositing it into a pool',
-    );
-    assertTrustline(
-      balances,
-      b,
-      dto.source,
-      'it must trust the asset before depositing it into a pool',
-    );
+    const trustContext = 'depositing it into a pool';
+    this.accounts.assertTrustline(balances, a, dto.source, trustContext);
+    this.accounts.assertTrustline(balances, b, dto.source, trustContext);
     const hasPoolTrust = balances.some(
       (bal) =>
         bal.asset_type === 'liquidity_pool_shares' &&
@@ -358,7 +333,7 @@ export class LiquidityPoolsService {
     // fee. Fail here with a clear 400 rather than let the network reject the
     // signed tx with op_underfunded.
     const opCount = (hasPoolTrust ? 0 : 1) + 1;
-    assertCanAfford(
+    this.assertCanAfford(
       account,
       balances,
       [
@@ -390,7 +365,7 @@ export class LiquidityPoolsService {
     if (memo) builder.addMemo(Memo.id(memo));
 
     const tx = builder.setTimeout(stellarCfg.timeoutSeconds).build();
-    const op = await this.persist({
+    const op = await this.persist(consumer, {
       consumerId: local.id,
       kind: 'DEPOSIT' as const,
       network,
@@ -406,6 +381,7 @@ export class LiquidityPoolsService {
       minPrice: bounds.minPrice,
       maxPrice: bounds.maxPrice,
       slippageBps,
+      idempotencyKey,
       // Deposits carry no commission; the cost basis is captured at settlement.
       feeBps: 0,
       feeAmountA: '0',
@@ -415,11 +391,11 @@ export class LiquidityPoolsService {
       timeoutSeconds: stellarCfg.timeoutSeconds,
     });
     this.logger.log(
-      `Created LP deposit ${op.id}: ${fromStroops(amountA)} ${this.label(a)} + ` +
-        `${fromStroops(amountB)} ${this.label(b)} → pool ${poolId.slice(0, 8)}… ` +
+      `Created LP deposit ${op.id}: ${fromStroops(amountA)} ${assetLabel(a)} + ` +
+        `${fromStroops(amountB)} ${assetLabel(b)} → pool ${poolId.slice(0, 8)}… ` +
         `(consumer=${consumer.username}, network=${network})`,
     );
-    return this.createdView(consumer.username, op);
+    return op;
   }
 
   // ── Withdraw ────────────────────────────────────────────────────────────────
@@ -427,44 +403,79 @@ export class LiquidityPoolsService {
    * Builds the unsigned withdrawal transaction: burn `shares` pool shares for
    * the proportional amounts of both reserves, with slippage-protected on-chain
    * minimums derived from the current reserves.
+   *
+   * Idempotency works as on {@link deposit}. In addition, a withdrawal is
+   * serialized per `(source, poolId, network)` — see
+   * {@link assertNoInflightWithdraw} — because the commission depends on a cost
+   * basis that only moves when an operation settles.
    */
   async withdraw(
     consumer: GatewayConsumer,
     dto: WithdrawLiquidityDto,
+    headerIdempotencyKey?: string,
   ): Promise<LiquidityOperationView> {
     const network = this.resolveNetwork(consumer);
     const local = await this.resolveConsumer(consumer);
     const slippageBps = this.resolveSlippage(dto.slippageBps);
-    const memo = this.resolveMemo(dto.memo);
+    const memo = resolveMemoId(dto.memo);
+    const idempotencyKey = this.resolveIdempotencyKey(
+      headerIdempotencyKey,
+      dto.idempotencyKey,
+    );
+
+    // Fast path: same key → same operation (no Horizon round-trip, no rebuild).
+    if (idempotencyKey) {
+      const existing = await this.findByIdempotencyKey(
+        local.id,
+        idempotencyKey,
+      );
+      if (existing) return this.withQr(existing);
+    }
+
+    await this.assertNoInflightWithdraw(
+      local.id,
+      dto.source,
+      dto.poolId,
+      network,
+    );
 
     const pool = await this.fetchPool(network, dto.poolId);
     if (!pool) {
-      throw new BadRequestException(
+      throw ApiError.badRequest(
+        ApiErrorCode.NotFound,
         `Liquidity pool ${dto.poolId} not found on the ${network} network`,
       );
     }
     const total = toStroops(pool.total_shares);
     const shares = toStroops(dto.shares);
     if (shares <= 0n) {
-      throw new BadRequestException('shares must be greater than zero');
+      throw ApiError.badRequest(
+        ApiErrorCode.InvalidAmount,
+        'shares must be greater than zero',
+      );
     }
     if (total <= 0n) {
-      throw new BadRequestException('This pool has no outstanding shares');
+      throw ApiError.badRequest(
+        ApiErrorCode.ValidationFailed,
+        'This pool has no outstanding shares',
+      );
     }
 
-    const account = await this.loadAccount(network, dto.source);
+    const account = await this.accounts.load(network, dto.source);
     const held = (account.balances as BalanceEntry[]).find(
       (bal) =>
         bal.asset_type === 'liquidity_pool_shares' &&
         bal.liquidity_pool_id === dto.poolId,
     );
     if (!held) {
-      throw new BadRequestException(
+      throw ApiError.badRequest(
+        ApiErrorCode.InsufficientBalance,
         `Account ${dto.source} holds no shares of pool ${dto.poolId}`,
       );
     }
     if (toStroops(held.balance ?? '0') < shares) {
-      throw new BadRequestException(
+      throw ApiError.badRequest(
+        ApiErrorCode.InsufficientBalance,
         `Account ${dto.source} holds only ${held.balance} shares of this pool`,
       );
     }
@@ -482,12 +493,12 @@ export class LiquidityPoolsService {
     // Plan commission — charged ONLY on the gain (redeemed − proportional cost
     // basis), and only for shares whose cost basis we recorded from deposits
     // made through Cosmos Pay. Shares with no known basis are taxed nothing.
-    const feeBps = this.resolveSwapFeeBps(consumer);
+    const feeBps = resolvePlanCommissionBps(this.config, consumer);
     const feeWallet = this.feeWallet();
     let feeA = 0n;
     let feeB = 0n;
     if (feeBps > 0) {
-      const basis = await this.costBasis(local.id, dto.source, dto.poolId);
+      const basis = await this.costBasis(dto.source, dto.poolId, network);
       const fees = computeWithdrawCommission({
         shares,
         totalShares: total,
@@ -504,7 +515,8 @@ export class LiquidityPoolsService {
       feeB = fees.feeB;
     }
     if (feeA + feeB > 0n && !feeWallet) {
-      throw new ServiceUnavailableException(
+      throw ApiError.unavailable(
+        ApiErrorCode.Misconfigured,
         'A swap commission is configured (STELLAR_SWAP_FEE_BPS) but STELLAR_SWAP_FEE_WALLET is not set',
       );
     }
@@ -515,136 +527,80 @@ export class LiquidityPoolsService {
     // the just-received reserves), so we only need the account to keep its XLM
     // minimum reserve plus the tx fee. Clear 400 instead of an on-chain reject.
     const opCount = 1 + (feeA > 0n ? 1 : 0) + (feeB > 0n ? 1 : 0);
-    assertCanAfford(
+    this.assertCanAfford(
       account,
       account.balances,
       [],
       false,
       BigInt(stellarCfg.baseFee) * BigInt(opCount),
     );
-    // Serialize costBasis → persist so two concurrent withdraws cannot both
-    // observe the same remainingShares before either row is PENDING. The lock
-    // is both in-process (Map) and cross-replica (pg_advisory_xact_lock).
-    const created = await this.withWithdrawLock(
-      local.id,
-      dto.source,
-      dto.poolId,
-      async (db) => {
-        const feeBps = this.resolveSwapFeeBps(consumer);
-        const feeWallet = this.feeWallet();
-        let feeA = 0n;
-        let feeB = 0n;
-        if (feeBps > 0) {
-          const basis = await this.costBasis(
-            local.id,
-            dto.source,
-            dto.poolId,
-            db,
-          );
-          const fees = computeWithdrawCommission({
-            shares,
-            totalShares: total,
-            remainingShares: basis.remainingShares,
-            depositedShares: basis.depositedShares,
-            costA: basis.costA,
-            costB: basis.costB,
-            reserveA: toStroops(resA.amount),
-            reserveB: toStroops(resB.amount),
-            slippageBps,
-            feeBps,
-          });
-          feeA = fees.feeA;
-          feeB = fees.feeB;
-        }
-        if (feeA + feeB > 0n && !feeWallet) {
-          throw new ServiceUnavailableException(
-            'A swap commission is configured (STELLAR_SWAP_FEE_BPS) but STELLAR_SWAP_FEE_WALLET is not set',
-          );
-        }
 
-        const stellarCfg = this.config.get('stellar', { infer: true });
-
-        // Pre-flight: the withdraw itself funds the fee payments (they come out of
-        // the just-received reserves), so we only need the account to keep its XLM
-        // minimum reserve plus the tx fee. Clear 400 instead of an on-chain reject.
-        const opCount = 1 + (feeA > 0n ? 1 : 0) + (feeB > 0n ? 1 : 0);
-        assertCanAfford(
-          account,
-          account.balances,
-          [],
-          false,
-          BigInt(stellarCfg.baseFee) * BigInt(opCount),
-        );
-
-        const builder = new TransactionBuilder(account, {
-          fee: stellarCfg.baseFee,
-          networkPassphrase: this.stellar.passphrase(network),
-        }).addOperation(
-          Operation.liquidityPoolWithdraw({
-            liquidityPoolId: dto.poolId,
-            amount: fromStroops(shares),
-            minAmountA: fromStroops(minA),
-            minAmountB: fromStroops(minB),
-          }),
-        );
-        // Collect the plan commission out of the just-received reserves.
-        if (feeA > 0n && feeWallet) {
-          builder.addOperation(
-            Operation.payment({
-              destination: feeWallet,
-              asset: this.assetFromReserve(resA),
-              amount: fromStroops(feeA),
-            }),
-          );
-        }
-        if (feeB > 0n && feeWallet) {
-          builder.addOperation(
-            Operation.payment({
-              destination: feeWallet,
-              asset: this.assetFromReserve(resB),
-              amount: fromStroops(feeB),
-            }),
-          );
-        }
-        this.addMemo(builder, memo, feeA + feeB > 0n);
-
-        const tx = builder.setTimeout(stellarCfg.timeoutSeconds).build();
-        const op = await this.persist(
-          {
-            consumerId: local.id,
-            kind: 'WITHDRAW' as const,
-            network,
-            source: dto.source,
-            poolId: dto.poolId,
-            assetA: resA.asset,
-            assetAIssuer: resA.issuer,
-            assetB: resB.asset,
-            assetBIssuer: resB.issuer,
-            amountA: fromStroops(minA),
-            amountB: fromStroops(minB),
-            shares: fromStroops(shares),
-            minPrice: null,
-            maxPrice: null,
-            slippageBps,
-            feeBps,
-            feeAmountA: fromStroops(feeA),
-            feeAmountB: fromStroops(feeB),
-            feeWallet: feeA + feeB > 0n ? feeWallet : null,
-            tx,
-            timeoutSeconds: stellarCfg.timeoutSeconds,
-          },
-          db,
-        );
-        this.logger.log(
-          `Created LP withdraw ${op.id}: ${fromStroops(shares)} shares of pool ` +
-            `${dto.poolId.slice(0, 8)}… (consumer=${consumer.username}, network=${network})`,
-        );
-        return op;
-      },
+    const builder = new TransactionBuilder(account, {
+      fee: stellarCfg.baseFee,
+      networkPassphrase: this.stellar.passphrase(network),
+    }).addOperation(
+      Operation.liquidityPoolWithdraw({
+        liquidityPoolId: dto.poolId,
+        amount: fromStroops(shares),
+        minAmountA: fromStroops(minA),
+        minAmountB: fromStroops(minB),
+      }),
     );
-    // Webhook + QR after commit: listeners must see the row, and a rollback
-    // must not have already dispatched LIQUIDITY_CREATED. QR is CPU-only.
-    return this.createdView(consumer.username, created);
+    // Collect the plan commission out of the just-received reserves.
+    if (feeA > 0n && feeWallet) {
+      builder.addOperation(
+        Operation.payment({
+          destination: feeWallet,
+          asset: this.assetFromReserve(resA),
+          amount: fromStroops(feeA),
+        }),
+      );
+    }
+    if (feeB > 0n && feeWallet) {
+      builder.addOperation(
+        Operation.payment({
+          destination: feeWallet,
+          asset: this.assetFromReserve(resB),
+          amount: fromStroops(feeB),
+        }),
+      );
+    }
+    applyMemo(
+      builder,
+      memo,
+      feeA + feeB > 0n ? LIQUIDITY_COMMISSION_MEMO : null,
+    );
+
+    const tx = builder.setTimeout(stellarCfg.timeoutSeconds).build();
+    const op = await this.persist(consumer, {
+      consumerId: local.id,
+      kind: 'WITHDRAW' as const,
+      network,
+      source: dto.source,
+      poolId: dto.poolId,
+      assetA: resA.asset,
+      assetAIssuer: resA.issuer,
+      assetB: resB.asset,
+      assetBIssuer: resB.issuer,
+      amountA: fromStroops(minA),
+      amountB: fromStroops(minB),
+      shares: fromStroops(shares),
+      minPrice: null,
+      maxPrice: null,
+      slippageBps,
+      idempotencyKey,
+      feeBps,
+      feeAmountA: fromStroops(feeA),
+      feeAmountB: fromStroops(feeB),
+      feeWallet: feeA + feeB > 0n ? feeWallet : null,
+      tx,
+      timeoutSeconds: stellarCfg.timeoutSeconds,
+    });
+    this.logger.log(
+      `Created LP withdraw ${op.id}: ${fromStroops(shares)} shares of pool ` +
+        `${dto.poolId.slice(0, 8)}… (consumer=${consumer.username}, network=${network})`,
+    );
+    return op;
   }
 
   // ── Read (operations) ───────────────────────────────────────────────────────
@@ -706,7 +662,8 @@ export class LiquidityPoolsService {
       };
     }
     if (!['PENDING', 'SUBMITTED', 'FAILED'].includes(op.status)) {
-      throw new BadRequestException(
+      throw ApiError.badRequest(
+        ApiErrorCode.InvalidStateTransition,
         `Cannot submit a ${op.status} liquidity pool operation`,
       );
     }
@@ -718,12 +675,14 @@ export class LiquidityPoolsService {
         this.stellar.passphrase(op.network as StellarNetwork),
       );
     } catch {
-      throw new BadRequestException(
+      throw ApiError.badRequest(
+        ApiErrorCode.ValidationFailed,
         'signedXdr is not a valid transaction envelope',
       );
     }
     if (Buffer.from(tx.hash()).toString('hex') !== op.txHash) {
-      throw new BadRequestException(
+      throw ApiError.badRequest(
+        ApiErrorCode.ValidationFailed,
         'The signed transaction does not match this operation',
       );
     }
@@ -739,7 +698,8 @@ export class LiquidityPoolsService {
       };
     }
     if (submitted.operation.status !== 'SUBMITTED') {
-      throw new BadRequestException(
+      throw ApiError.badRequest(
+        ApiErrorCode.InvalidStateTransition,
         `Cannot submit a ${submitted.operation.status} liquidity pool operation`,
       );
     }
@@ -770,7 +730,7 @@ export class LiquidityPoolsService {
         operation: await this.withQr(succeeded.operation),
       };
     } catch (err) {
-      const resultCodes = this.extractResultCodes(err);
+      const resultCodes = extractResultCodes(err);
       if (resultCodes) {
         const failed = await this.finalizeFailed(op.id, consumer.username);
         if (failed.operation.status === 'SUCCEEDED') {
@@ -798,15 +758,26 @@ export class LiquidityPoolsService {
         };
       }
       this.logger.error(`LP operation ${op.id} submission error`, err);
-      throw new ServiceUnavailableException(
+      throw ApiError.unavailable(
+        ApiErrorCode.ProviderUnavailable,
         'Could not submit the transaction to the Stellar network',
       );
     }
   }
 
   // ── Persistence ─────────────────────────────────────────────────────────────
-  /** Inserts the PENDING row. Callers emit + QR *after* the write is durable. */
+  /**
+   * Persists a new operation and emits `LIQUIDITY_CREATED`.
+   *
+   * Both unique indexes on the table can fire here. With an idempotency key the
+   * caller always recovers the existing row rather than seeing a 409: a same-key
+   * race rebuilds the same XDR, so it can trip `(network, txHash)` instead of
+   * the key index — Postgres reports only one of the two violations, and which
+   * one is arbitrary. Recovery returns the winner's row and, because the insert
+   * never happened, emits no second `LIQUIDITY_CREATED`.
+   */
   private async persist(
+    consumer: GatewayConsumer,
     input: {
       consumerId: string;
       kind: 'DEPOSIT' | 'WITHDRAW';
@@ -823,6 +794,7 @@ export class LiquidityPoolsService {
       minPrice: string | null;
       maxPrice: string | null;
       slippageBps: number;
+      idempotencyKey: string | null;
       feeBps: number;
       feeAmountA: string;
       feeAmountB: string;
@@ -830,29 +802,123 @@ export class LiquidityPoolsService {
       tx: ReturnType<TransactionBuilder['build']>;
       timeoutSeconds: number;
     },
-    db: LiquidityDb = this.prisma,
-  ): Promise<LiquidityPoolOperation> {
+  ): Promise<LiquidityOperationView> {
     const { tx, timeoutSeconds, ...data } = input;
     const xdr = tx.toXDR();
-    return db.liquidityPoolOperation.create({
-      data: {
-        ...data,
-        status: 'PENDING',
-        xdr,
-        uri: `web+stellar:tx?${new URLSearchParams({ xdr }).toString()}`,
-        txHash: Buffer.from(tx.hash()).toString('hex'),
-        // The tx is only valid for its timeout window; after that it can't settle.
-        expiresAt: new Date(Date.now() + timeoutSeconds * 1000),
-      },
+    let op: LiquidityPoolOperation;
+    try {
+      op = await this.prisma.liquidityPoolOperation.create({
+        data: {
+          ...data,
+          status: 'PENDING',
+          xdr,
+          uri: `web+stellar:tx?${new URLSearchParams({ xdr }).toString()}`,
+          txHash: Buffer.from(tx.hash()).toString('hex'),
+          // The tx is only valid for its timeout window; after that it can't settle.
+          expiresAt: new Date(Date.now() + timeoutSeconds * 1000),
+        },
+      });
+    } catch (err) {
+      if (!isUniqueViolation(err)) throw err;
+      const raced = data.idempotencyKey
+        ? await this.findByIdempotencyKey(data.consumerId, data.idempotencyKey)
+        : null;
+      if (raced) return this.withQr(raced);
+      throw ApiError.conflict(
+        ApiErrorCode.IdempotencyConflict,
+        'A liquidity pool operation with this transaction hash already exists ' +
+          'for this network. Two creates rebuilt the same Stellar sequence/XDR ' +
+          '— use an Idempotency-Key on retries, or wait for the prior operation ' +
+          'to settle/expire.',
+      );
+    }
+    await this.emit(consumer.username, 'LIQUIDITY_CREATED', op);
+    return this.withQr(op);
+  }
+
+  /** Header wins over body; blank strings are treated as absent. */
+  private resolveIdempotencyKey(header?: string, body?: string): string | null {
+    const raw = (header ?? body)?.trim();
+    return raw ? raw : null;
+  }
+
+  private async findByIdempotencyKey(
+    consumerId: string,
+    idempotencyKey: string,
+  ): Promise<LiquidityPoolOperation | null> {
+    return this.prisma.liquidityPoolOperation.findUnique({
+      where: { consumerId_idempotencyKey: { consumerId, idempotencyKey } },
     });
   }
 
-  private async createdView(
-    username: string,
-    op: LiquidityPoolOperation,
-  ): Promise<LiquidityOperationView> {
-    await this.emit(username, 'LIQUIDITY_CREATED', op);
-    return this.withQr(op);
+  /**
+   * At most one non-expired in-flight WITHDRAW per `(source, poolId, network)`.
+   *
+   * Two concurrent withdrawals both read the cost basis before either settles,
+   * so each one sees the full unrealized gain and each one charges commission on
+   * it — the customer is taxed twice for a single gain (or, symmetrically,
+   * under-taxed once the basis is later consumed). Serializing the *creation* of
+   * withdrawals for a position is the smallest fix: the basis can then only be
+   * read while nothing else is racing to consume it.
+   *
+   * Scoped to `(consumerId, source, poolId, network)`.
+   *
+   * It used to be account-wide, reasoning that "the position belongs to the
+   * Stellar account, so a second API key must not be a way around the guard".
+   * The anti-circumvention half of that is already satisfied by `consumerId`: a
+   * `Consumer` row is keyed on the APISIX *username* (`cosmos_<userId>`), not on
+   * the credential, so every API key the same user holds resolves to one
+   * consumer and cannot dodge the guard.
+   *
+   * What account-wide scoping additionally did was let any caller block anyone
+   * else. `source` is a public Stellar address and nothing requires the caller
+   * to control it, so a key with `liquidity:write` could post a 0.0000001-share
+   * withdrawal naming a stranger's account and take the guard for a full
+   * transaction-timeout window — repeatable indefinitely, a denial of service on
+   * someone else's withdrawals. The swaps twin, `assertNoInflightSwap`, was
+   * consumer-scoped all along; this was the outlier.
+   *
+   * Note this scopes differently from {@link costBasis}, deliberately. The basis
+   * must stay account-wide or a second organization becomes a way to avoid the
+   * commission. This guard must be consumer-scoped or a second organization
+   * becomes a way to block withdrawals. The residual — two organizations
+   * withdrawing from one account concurrently both read the pre-withdrawal
+   * basis and each under-tax — is the same read-then-write race that already
+   * exists within a single consumer, and availability of a withdrawal path is
+   * worth more than closing it here.
+   *
+   * Deposits are exempt: they compute no commission and read no basis, and
+   * repeated deposits into one pool are a normal thing to do. A double-submitted
+   * *identical* deposit is caught by the unique `(network, txHash)` index
+   * instead.
+   */
+  private async assertNoInflightWithdraw(
+    consumerId: string,
+    source: string,
+    poolId: string,
+    network: string,
+  ): Promise<void> {
+    const existing = await this.prisma.liquidityPoolOperation.findFirst({
+      where: {
+        consumerId,
+        kind: 'WITHDRAW',
+        source,
+        poolId,
+        network,
+        status: { in: [...LP_IN_FLIGHT_STATUSES] },
+        OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
+      },
+      // Existence is all we need — the response deliberately names no row.
+      select: { id: true },
+    });
+    if (existing) {
+      throw ApiError.conflict(
+        ApiErrorCode.OperationInFlight,
+        'A withdrawal from this pool is already in flight for this account. ' +
+          'Wait for it to settle or expire before starting another — the ' +
+          'commission on a withdrawal depends on the position it leaves behind.',
+      );
+    }
   }
 
   // ── Status transitions ──────────────────────────────────────────────────────
@@ -861,21 +927,24 @@ export class LiquidityPoolsService {
    * Never writes cost-basis columns (`sharesReceived` / `settledAmountA` /
    * `settledAmountB`), so an error transition cannot clobber a captured basis.
    */
-  private async guardedUpdate(
-    id: string,
-    from: readonly LpOperationStatus[],
-    data: { status: SwapStatus; txHash?: string },
-  ): Promise<{ applied: boolean; operation: LiquidityPoolOperation }> {
-    const result = await this.prisma.liquidityPoolOperation.updateMany({
-      where: { id, status: { in: [...from] } },
-      data,
-    });
-    const operation =
-      await this.prisma.liquidityPoolOperation.findUniqueOrThrow({
-        where: { id },
-      });
-    return { applied: result.count > 0, operation };
+  /**
+   * The compare-and-swap settlement machine, shared with swaps.
+   *
+   * Built lazily rather than injected: it closes over `this.emit` and this
+   * module's status sets, so it is a configured view of this service's own table
+   * rather than a collaborator with its own lifecycle.
+   */
+  private get settlement(): SettlementRepository<LiquidityPoolOperation> {
+    this.settlementRepo ??= new SettlementRepository<LiquidityPoolOperation>(
+      this.prisma.liquidityPoolOperation,
+      LP_CAN_SUCCEED_STATUSES,
+      LP_IN_FLIGHT_STATUSES,
+      { succeeded: 'LIQUIDITY_SUCCEEDED', failed: 'LIQUIDITY_FAILED' },
+      (username, type, operation) => this.emit(username, type, operation),
+    );
+    return this.settlementRepo;
   }
+  private settlementRepo?: SettlementRepository<LiquidityPoolOperation>;
 
   /**
    * PENDING → SUBMITTED keeps the epoch (same settlement attempt).
@@ -884,18 +953,8 @@ export class LiquidityPoolsService {
   private async markSubmitted(
     id: string,
   ): Promise<{ applied: boolean; operation: LiquidityPoolOperation }> {
-    const resent = await this.prisma.liquidityPoolOperation.updateMany({
-      where: { id, status: 'FAILED' },
-      data: { status: 'SUBMITTED', settlementEpoch: { increment: 1 } },
-    });
-    if (resent.count > 0) {
-      const operation =
-        await this.prisma.liquidityPoolOperation.findUniqueOrThrow({
-          where: { id },
-        });
-      return { applied: true, operation };
-    }
-    return this.guardedUpdate(id, ['PENDING'], { status: 'SUBMITTED' });
+    const { applied, row } = await this.settlement.markSubmitted(id);
+    return { applied, operation: row };
   }
 
   /**
@@ -908,12 +967,11 @@ export class LiquidityPoolsService {
     username: string,
     txHash?: string,
   ): Promise<{ applied: boolean; operation: LiquidityPoolOperation }> {
-    const { applied, operation } = await this.guardedUpdate(
+    const { applied, row: operation } = await this.settlement.finalizeSucceeded(
       id,
-      LP_CAN_SUCCEED_STATUSES,
-      { status: 'SUCCEEDED', ...(txHash ? { txHash } : {}) },
+      username,
+      txHash,
     );
-    if (applied) await this.emit(username, 'LIQUIDITY_SUCCEEDED', operation);
     if (operation.status === 'SUCCEEDED') {
       await this.captureDepositBasis(operation);
       const fresh = await this.prisma.liquidityPoolOperation.findUniqueOrThrow({
@@ -925,6 +983,31 @@ export class LiquidityPoolsService {
   }
 
   /**
+   * Same status transition as {@link finalizeSucceeded} but emits no webhook
+   * **and captures no cost basis**. Used by the observer for historical
+   * duplicate-hash rows (pre-`@@unique([network, txHash])`) so one on-chain
+   * transaction yields a single `LIQUIDITY_SUCCEEDED`.
+   *
+   * Skipping the basis capture is the point, not an omission: the duplicates
+   * describe *one* deposit, and its `liquidity_pool_deposited` effect reports
+   * `shares_received` once. Capturing it on every row would count the same
+   * shares two or more times in {@link costBasis}, inflating `remainingShares`
+   * so that shares acquired outside Cosmos Pay start being taxed. The row the
+   * observer settles first keeps the basis; the phantoms stay basis-less and are
+   * skipped by `aggregateCostBasis`.
+   */
+  async finalizeSucceededQuiet(
+    id: string,
+    txHash?: string,
+  ): Promise<{ applied: boolean; operation: LiquidityPoolOperation }> {
+    const { applied, row } = await this.settlement.finalizeSucceededQuiet(
+      id,
+      txHash,
+    );
+    return { applied, operation: row };
+  }
+
+  /**
    * Marks FAILED only while the row is still in-flight. A liquidated
    * (`SUCCEEDED`) operation is left untouched — including its cost basis.
    */
@@ -932,69 +1015,45 @@ export class LiquidityPoolsService {
     id: string,
     username: string,
   ): Promise<{ applied: boolean; operation: LiquidityPoolOperation }> {
-    const { applied, operation } = await this.guardedUpdate(
-      id,
-      LP_CAN_FAIL_STATUSES,
-      { status: 'FAILED' },
-    );
-    if (applied) await this.emit(username, 'LIQUIDITY_FAILED', operation);
-    return { applied, operation };
+    const { applied, row } = await this.settlement.finalizeFailed(id, username);
+    return { applied, operation: row };
+  }
+
+  /**
+   * Same status transition as {@link finalizeFailed} without a webhook — for
+   * duplicate-hash phantom rows in the observer.
+   */
+  async finalizeFailedQuiet(
+    id: string,
+  ): Promise<{ applied: boolean; operation: LiquidityPoolOperation }> {
+    const { applied, row } = await this.settlement.finalizeFailedQuiet(id);
+    return { applied, operation: row };
   }
 
   /**
    * Marks EXPIRED only while the row is still in-flight. Never degrades a
-   * liquidated operation. Emits `LIQUIDITY_EXPIRED` when this writer wins.
+   * liquidated operation.
    */
   async finalizeExpired(
     id: string,
-    username: string,
   ): Promise<{ applied: boolean; operation: LiquidityPoolOperation }> {
-    const { applied, operation } = await this.guardedUpdate(
-      id,
-      LP_IN_FLIGHT_STATUSES,
-      { status: 'EXPIRED' },
-    );
-    if (applied) await this.emit(username, 'LIQUIDITY_EXPIRED', operation);
-    return { applied, operation };
+    const { applied, row } = await this.settlement.finalizeExpired(id);
+    return { applied, operation: row };
   }
 
   // ── Helpers ─────────────────────────────────────────────────────────────────
   /** Network follows the API key type (prod → public, dev → testnet). */
   private resolveNetwork(consumer: GatewayConsumer): StellarNetwork {
-    if (consumer.environment === 'prod') return 'public';
-    if (consumer.environment === 'dev') return 'testnet';
-    return this.config.get('stellar', { infer: true }).network;
+    return resolveNetwork(this.config, consumer);
   }
 
   /** Mirror the APISIX consumer locally so operations can be scoped to it. */
   private resolveConsumer(consumer: GatewayConsumer) {
-    return this.prisma.consumer.upsert({
-      where: { apisixUsername: consumer.username },
-      create: {
-        apisixUsername: consumer.username,
-        credentialId: consumer.credentialId,
-      },
-      update: { credentialId: consumer.credentialId },
-    });
+    return this.consumers.resolve(consumer);
   }
 
   private feeWallet(): string {
     return this.config.get('stellar', { infer: true }).swap.feeWallet;
-  }
-
-  /**
-   * The plan commission (bps) for this request — the same rate that governs
-   * swaps. The gateway injects the organization's plan rate (`planSwapFeeBps`)
-   * per consumer; it is NEVER a request parameter, so the caller cannot bypass
-   * or undercut it. Only when the gateway didn't forward it (local dev without
-   * APISIX) do we fall back to the configured default, gated on a fee wallet.
-   */
-  private resolveSwapFeeBps(consumer: GatewayConsumer): number {
-    if (consumer.planSwapFeeBps !== null) {
-      return consumer.planSwapFeeBps;
-    }
-    const swap = this.config.get('stellar', { infer: true }).swap;
-    return swap.feeWallet ? swap.feeBps : 0;
   }
 
   /** The SDK Asset for a parsed reserve (native or issued). */
@@ -1002,139 +1061,132 @@ export class LiquidityPoolsService {
     return r.issuer ? new Asset(r.asset, r.issuer) : Asset.native();
   }
 
-  /**
-   * Applies the transaction memo: the caller's MEMO_ID when supplied, otherwise
-   * a default MEMO_TEXT commission label when a commission was collected — so
-   * the platform fee is identifiable on-chain. No memo when neither applies.
-   */
-  private addMemo(
-    builder: TransactionBuilder,
-    memo: string | null,
-    feeCollected: boolean,
-  ): void {
-    if (memo) {
-      builder.addMemo(Memo.id(memo));
-    } else if (feeCollected) {
-      builder.addMemo(Memo.text(LIQUIDITY_COMMISSION_MEMO));
-    }
-  }
-
   /** Caller slippage, defaulted and clamped like swaps (same settings). */
   private resolveSlippage(requested?: number): number {
     const swap = this.config.get('stellar', { infer: true }).swap;
     const bps = requested ?? swap.slippageBps;
     if (bps > swap.maxSlippageBps) {
-      throw new BadRequestException(
+      throw ApiError.badRequest(
+        ApiErrorCode.SlippageExceeded,
         `slippageBps ${bps} exceeds the maximum allowed (${swap.maxSlippageBps})`,
       );
     }
     return bps;
   }
 
-  private resolveMemo(provided?: string): string | null {
-    if (provided === undefined) return null;
-    if (!/^\d+$/.test(provided) || BigInt(provided) > MAX_UINT64) {
-      throw new BadRequestException('memo must be a MEMO_ID: a numeric uint64');
-    }
-    return provided;
-  }
-
-  /** No code (or XLM/native) → native lumens; any other code needs an issuer. */
-  private resolveAsset(code?: string, issuer?: string): ResolvedAsset {
-    const c = code?.trim();
-    if (!c || c.toLowerCase() === 'xlm' || c.toLowerCase() === 'native') {
-      return { code: 'native', issuer: null, asset: Asset.native() };
-    }
-    if (!issuer) {
-      throw new BadRequestException(
-        `An issuer is required for non-native asset "${c}"`,
-      );
-    }
-    return { code: c, issuer, asset: new Asset(c, issuer) };
-  }
-
   private assertPoolId(poolId: string): void {
     if (!/^[0-9a-f]{64}$/.test(poolId)) {
-      throw new BadRequestException(
+      throw ApiError.badRequest(
+        ApiErrorCode.ValidationFailed,
         'poolId must be a 64-character lowercase hex liquidity pool id',
       );
     }
   }
 
+  /** The pool must be trusted per constituent asset before it can be entered. */
   /**
-   * Runs `fn` exclusively for this (consumer, source, pool) so a second
-   * withdraw cannot read remainingShares until the first has persisted PENDING.
-   * The in-memory Map serializes within this process; `pg_advisory_xact_lock`
-   * (no extra table) serializes across replicas that share the same Postgres.
+   * Asserts the source can afford an operation before we build the XDR: each
+   * issued asset's trustline balance must cover its required amount, and the
+   * native (XLM) balance must cover any native requirement plus the minimum
+   * reserve (including a pending pool-share trustline) and the transaction fee.
+   * Turns an otherwise on-chain op_underfunded into a clear 400.
    */
-  private async withWithdrawLock<T>(
-    consumerId: string,
-    source: string,
-    poolId: string,
-    fn: (db: Prisma.TransactionClient) => Promise<T>,
-  ): Promise<T> {
-    const key = `${consumerId}:${source}:${poolId}`;
-    const prev = this.withdrawLocks.get(key) ?? Promise.resolve();
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const held = prev.then(
-      () => gate,
-      () => gate,
+  private assertCanAfford(
+    account: { subentry_count?: number },
+    balances: BalanceEntry[],
+    sides: { asset: ResolvedAsset; required: bigint }[],
+    addingTrustline: boolean,
+    txFeeStroops: bigint,
+  ): void {
+    // Native side: its own requirement + reserve (0.5 XLM per subentry, +1 for a
+    // pending trustline) + the tx fee must all fit within the XLM balance.
+    const nativeReq =
+      sides.find((s) => s.asset.code === 'native' || !s.asset.issuer)
+        ?.required ?? 0n;
+    const nativeBal = toStroops(
+      balances.find((b) => b.asset_type === 'native')?.balance ?? '0',
     );
-    this.withdrawLocks.set(key, held);
-    try {
-      await prev.catch(() => undefined);
-      return await this.prisma.$transaction(
-        async (tx) => {
-          await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${key}))`;
-          return fn(tx);
-        },
-        { timeout: 10_000 },
+    const subentries =
+      BigInt(account.subentry_count ?? 0) + (addingTrustline ? 1n : 0n);
+    const reserve = (2n + subentries) * 5_000_000n; // 0.5 XLM base reserve/entry
+    if (nativeBal - reserve - txFeeStroops < nativeReq) {
+      throw ApiError.badRequest(
+        ApiErrorCode.InsufficientBalance,
+        `Insufficient XLM balance: need ${fromStroops(nativeReq)} plus ` +
+          `~${fromStroops(reserve + txFeeStroops)} XLM reserve + network fee, ` +
+          `but the account holds ${fromStroops(nativeBal)} XLM`,
       );
-    } finally {
-      release();
-      if (this.withdrawLocks.get(key) === held) {
-        this.withdrawLocks.delete(key);
+    }
+    // Issued assets: the trustline balance must cover deposit + commission.
+    for (const s of sides) {
+      if (s.asset.code === 'native' || !s.asset.issuer) continue;
+      const bal = toStroops(
+        balances.find(
+          (b) =>
+            b.asset_code === s.asset.code && b.asset_issuer === s.asset.issuer,
+        )?.balance ?? '0',
+      );
+      if (bal < s.required) {
+        throw ApiError.badRequest(
+          ApiErrorCode.InsufficientBalance,
+          `Insufficient ${s.asset.code} balance: need ${fromStroops(s.required)}, ` +
+            `but the account holds ${fromStroops(bal)}`,
+        );
       }
     }
   }
 
   /**
-   * Average-cost basis of the shares `source` still holds in `poolId`, derived
-   * from our own SUCCEEDED deposits (which recorded the shares + amounts at
-   * settlement) and withdrawals. Deposits count only once they have settled;
-   * withdrawals also consume remaining shares while they are still in-flight
-   * (`PENDING` / `SUBMITTED`) so two unsigned withdraws cannot both tax the
-   * same covered shares. Only deposits with a captured `sharesReceived` count
-   * — positions opened outside Cosmos Pay have no basis and are taxed nothing.
-   * All values are stroop bigints.
+   * Average-cost basis of the shares `source` still holds in `poolId` on
+   * `network`, derived from our own SUCCEEDED deposits (which recorded the
+   * shares + amounts at settlement) and withdrawals. Only deposits with a
+   * captured `sharesReceived` count — positions opened outside Cosmos Pay have
+   * no basis and are taxed nothing. All values are stroop bigints.
+   *
+   * Keyed on `(source, poolId, network)` **platform-wide**, deliberately not on
+   * the consumer. Nothing binds a Stellar account to an API key, so scoping the
+   * basis by consumer made the commission opt-out: deposit under organization A,
+   * register a second (free) organization, withdraw the same account's shares
+   * under organization B — the lookup found no deposits, `depositedShares` was
+   * 0, and `computeWithdrawCommission` charged nothing on the entire gain. Cost
+   * basis is a property of the Stellar account, because the on-chain position
+   * is the account's, not the API key's.
+   *
+   * `network` is part of the key for the same reason: testnet is free, so
+   * without it a testnet deposit would mint cost basis for a public-network
+   * withdrawal.
+   *
+   * This is fee arithmetic only. The rows are read for their share/amount
+   * columns and never surface in a response — listing and lookup stay scoped to
+   * the calling consumer (see {@link findAllOperations} and {@link findOwned}),
+   * so one tenant's operations are still invisible to another.
+   *
+   * Deliberately NOT scoped to the consumer, and it must stay that way: scoping
+   * it is a fee-evasion hole. Deposit under org A, register a second free org,
+   * withdraw the same account's shares under org B — the basis lookup finds
+   * nothing and the whole gain is taxed at zero. That evasion is pinned by
+   * "charges commission on a withdraw made under a different organization".
+   *
+   * The residual, accepted: because `feeAmountA`/`feeAmountB` are returned and
+   * every other term is public, a caller who names a stranger's `source` can
+   * solve for that account's per-share basis — i.e. learn which of its deposits
+   * went through this platform. The underlying deposits are on-chain and
+   * independently derivable, so the marginal disclosure is small, and closing it
+   * by scoping would cost the fee rule above. Revisit only together with the
+   * fee policy.
    */
   private async costBasis(
-    consumerId: string,
     source: string,
     poolId: string,
-    db: LiquidityDb = this.prisma,
+    network: string,
   ): Promise<{
     depositedShares: bigint;
     remainingShares: bigint;
     costA: bigint;
     costB: bigint;
   }> {
-    const ops = await db.liquidityPoolOperation.findMany({
-      where: {
-        consumerId,
-        source,
-        poolId,
-        OR: [
-          { kind: 'DEPOSIT', status: 'SUCCEEDED' },
-          {
-            kind: 'WITHDRAW',
-            status: { in: ['SUCCEEDED', ...LP_IN_FLIGHT_STATUSES] },
-          },
-        ],
-      },
+    const ops = await this.prisma.liquidityPoolOperation.findMany({
+      where: { source, poolId, network, status: 'SUCCEEDED' },
       select: {
         kind: true,
         shares: true,
@@ -1255,32 +1307,11 @@ export class LiquidityPoolsService {
         ?.status;
       if (status === 404) return null;
       this.logger.error('Failed to load liquidity pool from Horizon', error);
-      throw new ServiceUnavailableException(
+      throw ApiError.unavailable(
+        ApiErrorCode.ProviderUnavailable,
         'Could not reach the Stellar network',
       );
     }
-  }
-
-  private async loadAccount(network: StellarNetwork, address: string) {
-    try {
-      return await this.stellar.server(network).loadAccount(address);
-    } catch (error: unknown) {
-      const status = (error as { response?: { status?: number } })?.response
-        ?.status;
-      if (status === 404) {
-        throw new BadRequestException(
-          `Account ${address} not found or not funded on the ${network} network`,
-        );
-      }
-      this.logger.error('Failed to load account from Horizon', error);
-      throw new ServiceUnavailableException(
-        'Could not reach the Stellar network',
-      );
-    }
-  }
-
-  private label(a: ResolvedAsset): string {
-    return a.code === 'native' ? 'XLM' : a.code;
   }
 
   private async findOwned(
@@ -1291,29 +1322,12 @@ export class LiquidityPoolsService {
       where: { id, consumer: { apisixUsername: consumer.username } },
     });
     if (!op) {
-      throw new NotFoundException(`Liquidity pool operation ${id} not found`);
+      throw ApiError.notFound(`Liquidity pool operation ${id} not found`);
     }
     return op;
   }
 
   /** Pulls Horizon's transaction/operation result codes off a failed submit. */
-  private extractResultCodes(err: unknown): string[] | null {
-    const data = (
-      err as {
-        response?: {
-          data?: { extras?: { result_codes?: ResultCodes } };
-          extras?: { result_codes?: ResultCodes };
-        };
-      }
-    )?.response;
-    const rc = data?.data?.extras?.result_codes ?? data?.extras?.result_codes;
-    if (!rc) return null;
-    const codes: string[] = [];
-    if (rc.transaction) codes.push(rc.transaction);
-    if (Array.isArray(rc.operations)) codes.push(...rc.operations);
-    return codes.length ? codes : null;
-  }
-
   private async withQr(
     op: LiquidityPoolOperation,
   ): Promise<LiquidityOperationView> {
@@ -1333,11 +1347,3 @@ export class LiquidityPoolsService {
     return this.webhooks.emit(username, type, data);
   }
 }
-
-interface ResultCodes {
-  transaction?: string;
-  operations?: string[];
-}
-
-/** Prisma client or an interactive transaction — cost basis + persist share one connection. */
-type LiquidityDb = PrismaService | Prisma.TransactionClient;

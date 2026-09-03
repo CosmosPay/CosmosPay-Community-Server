@@ -1,7 +1,7 @@
-import { Injectable, Logger } from '@nestjs/common';
-import type { Prisma } from '../../generated/prisma/client';
-import type { AdminPrincipal } from './admin-auth';
-import { PrismaService } from '../prisma/prisma.service';
+import { Injectable } from '@nestjs/common';
+import type { Prisma } from '@generated/prisma/client';
+import type { AdminPrincipal } from '@/admin/admin-auth';
+import { PrismaService } from '@/prisma/prisma.service';
 
 export interface RecordAdminAuditInput {
   actor: AdminPrincipal;

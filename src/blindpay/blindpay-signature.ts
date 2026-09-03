@@ -9,8 +9,10 @@ export interface SvixHeaders {
   signature: string;
 }
 
-const DEFAULT_TOLERANCE_SECONDS = 5 * 60;
-const WHSEC_PREFIX = 'whsec_';
+import {
+  SVIX_SECRET_PREFIX,
+  SVIX_TOLERANCE_SECONDS,
+} from '@/blindpay/blindpay.constants';
 
 /**
  * Verifies a BlindPay (Svix) webhook signature.
@@ -28,7 +30,7 @@ export function verifySvixSignature(
   secret: string,
   rawBody: string,
   headers: SvixHeaders,
-  toleranceSeconds: number = DEFAULT_TOLERANCE_SECONDS,
+  toleranceSeconds: number = SVIX_TOLERANCE_SECONDS,
 ): boolean {
   if (
     !secret ||
@@ -78,8 +80,8 @@ export function computeSvixSignature(
   timestamp: string,
   body: string,
 ): string {
-  const key = secret.startsWith(WHSEC_PREFIX)
-    ? Buffer.from(secret.slice(WHSEC_PREFIX.length), 'base64')
+  const key = secret.startsWith(SVIX_SECRET_PREFIX)
+    ? Buffer.from(secret.slice(SVIX_SECRET_PREFIX.length), 'base64')
     : Buffer.from(secret, 'base64');
 
   return createHmac('sha256', key)

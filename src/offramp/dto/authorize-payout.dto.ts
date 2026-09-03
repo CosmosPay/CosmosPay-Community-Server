@@ -1,6 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { IsIn, IsString } from 'class-validator';
-import { IsWalletAddressForChain } from '../../common/validators/is-wallet-address-for-chain.validator';
+import { IsWalletAddressForChain } from '@/common/validators/is-wallet-address-for-chain.validator';
 
 const AUTHORIZE_CHAINS = ['stellar', 'solana'] as const;
 

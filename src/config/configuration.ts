@@ -1,11 +1,26 @@
 import {
   parseAdminCredentials,
   type AdminCredential,
-} from '../admin/admin-auth';
+} from '@/admin/admin-auth';
 import {
   parseRedirectUrlWhitelist,
   type RedirectUrlWhitelist,
-} from '../kyc/redirect-url-whitelist';
+} from '@/kyc/redirect-url-whitelist';
+import {
+  DEFAULT_HORIZON,
+  DEFAULT_POLLAR_AUTHORIZATION_TTL_MS,
+  DEFAULT_POLLAR_CODE_TTL_MS,
+  DEFAULT_POLLAR_LOGIN_WAIT_MS,
+  DEFAULT_POLLAR_SDK_BASE_URL,
+  DEFAULT_POLLAR_SERVER_BASE_URL,
+  DEFAULT_POLLAR_SWEEP_INTERVAL_MS,
+  DEFAULT_POLLAR_TIMEOUT_MS,
+  DEFAULT_RATE_LIMIT_PRUNE_INTERVAL_MS,
+} from '@/config/config.constants';
+import {
+  parsePollarRedirectWhitelist,
+  type PollarRedirectWhitelist,
+} from '@/pollar/pollar-redirect-uri';
 
 /**
  * Centralized, typed configuration loaded from environment variables.
@@ -56,15 +71,6 @@ export interface AppConfig {
     horizon: Record<StellarNetwork, string>;
     baseFee: string;
     timeoutSeconds: number;
-    /**
-     * Per-request budget for Horizon. stellar-sdk v16 CallBuilder.call() has
-     * no AbortSignal, so StellarService.call() races the request against this.
-     */
-    httpTimeoutMs: number;
-    /** Max attempts (initial + retries) for 429 / 5xx / network errors. */
-    maxAttempts: number;
-    /** Base of the exponential backoff between Horizon retries (plus jitter). */
-    retryBaseMs: number;
     swap: {
       // Platform account that collects the swap fee. When unset the fee is
       // disabled (no fee operation is added regardless of feeBps).
@@ -87,8 +93,6 @@ export interface AppConfig {
     enabled: boolean;
     intervalMs: number;
     batchSize: number;
-    // Extra wait after tx timebounds before a still-unseen hash can expire.
-    expiryGraceMs: number;
   };
   requestLogRetention: {
     // Days to keep RequestLog rows. 0 disables the prune job entirely.
@@ -99,6 +103,15 @@ export interface AppConfig {
     batchSize: number;
     // Hard cap on total rows deleted in one tick (catch-up without unbounded work).
     maxPerCycle: number;
+    // Days to keep the *body* of a settled webhook delivery. 0 disables.
+    deliveryPayloadDays: number;
+  };
+  webhookSweep: {
+    // Recovers deliveries stranded by a crash mid-retry. Off disables the timer
+    // entirely, so an operator can stop redelivery during an incident without a
+    // redeploy — and the test bootstrap can keep it out of a test run.
+    enabled: boolean;
+    intervalMs: number;
   };
   paymentIntents: {
     // Lifetime of a payment intent; unpaid intents past this are marked EXPIRED.
@@ -112,23 +125,7 @@ export interface AppConfig {
     maxResponseBytes: number;
     maxAttempts: number;
     backoffMs: number;
-    /** Ceiling for exponential retry delay (ms). */
-    maxBackoffMs: number;
     signatureHeader: string;
-    // Max overlap (seconds) after rotate-secret during which deliveries are
-    // signed with both the new and previous secrets. Callers may request a
-    // shorter window; 0 revokes the previous secret immediately.
-    secretGraceSeconds: number;
-    /** Retry-worker poll interval (ms). */
-    workerIntervalMs: number;
-    /** Max due deliveries claimed per worker tick. */
-    workerBatchSize: number;
-    /** Exclusive claim duration so a dead replica's row is reclaimed (ms). */
-    leaseMs: number;
-    /** Max in-flight enqueue / delivery POSTs per fan-out or worker tick. */
-    fanoutConcurrency: number;
-    /** Consecutive exhausted deliveries after which the endpoint is paused. */
-    pauseAfterFailures: number;
   };
   blindpay: {
     // BlindPay is the fiat<->stablecoin rails provider powering onramp/offramp/KYC.
@@ -142,12 +139,46 @@ export interface AppConfig {
     webhookSecret: string;
     timeoutMs: number;
   };
+  rateLimit: {
+    /**
+     * Master switch for `@RateLimit`. On by default — the routes it guards spend
+     * XLM, so leaving them uncapped is not a default anyone should get by
+     * omission. `false` is the incident switch, and it also keeps the prune
+     * timer out of a test run.
+     */
+    enabled: boolean;
+    /** How often rolled-over counter windows are deleted. */
+    pruneIntervalMs: number;
+  };
+  pollar: {
+    // Pollar is the hosted onboarding rail: social login in, a Stellar wallet
+    // out. Its keys are network-specific by prefix, so we hold one pair per
+    // network and pick by the API key's environment (like Horizon above).
+    publishableKey: Record<StellarNetwork, string>;
+    secretKey: Record<StellarNetwork, string>;
+    sdkBaseUrl: string;
+    serverBaseUrl: string;
+    /**
+     * Public URL of this service's OAuth callback, as reachable from a browser
+     * — it is what Pollar is handed as `redirect_uri`, so it must be a real
+     * gateway URL and must be registered under the Pollar dashboard's
+     * Build -> Domains. The bridge appends `/{state}` to it.
+     */
+    bridgeCallbackUrl: string;
+    /** Per-consumer allow-list of the wallet redirect URIs codes may go to. */
+    redirectUriWhitelist: PollarRedirectWhitelist;
+    timeoutMs: number;
+    // Handshake lifetime, code lifetime, and how long redemption waits for
+    // Pollar to finish resolving the user's wallet.
+    authorizationTtlMs: number;
+    codeTtlMs: number;
+    loginWaitMs: number;
+    sweep: {
+      enabled: boolean;
+      intervalMs: number;
+    };
+  };
 }
-
-const DEFAULT_HORIZON: Record<StellarNetwork, string> = {
-  public: 'https://horizon.stellar.org',
-  testnet: 'https://horizon-testnet.stellar.org',
-};
 
 function parseSwaggerEnabled(): boolean {
   const raw = process.env.SWAGGER_ENABLED;
@@ -212,9 +243,6 @@ export default (): AppConfig => ({
     },
     baseFee: process.env.STELLAR_BASE_FEE ?? '100',
     timeoutSeconds: parseInt(process.env.STELLAR_TX_TIMEOUT ?? '300', 10),
-    httpTimeoutMs: parseInt(process.env.STELLAR_HTTP_TIMEOUT_MS ?? '10000', 10),
-    maxAttempts: parseInt(process.env.STELLAR_MAX_ATTEMPTS ?? '3', 10),
-    retryBaseMs: parseInt(process.env.STELLAR_RETRY_BASE_MS ?? '250', 10),
     swap: {
       feeWallet: process.env.STELLAR_SWAP_FEE_WALLET ?? '',
       feeBps: parseInt(process.env.STELLAR_SWAP_FEE_BPS ?? '50', 10),
@@ -233,10 +261,6 @@ export default (): AppConfig => ({
     enabled: (process.env.OBSERVER_ENABLED ?? 'true').toLowerCase() !== 'false',
     intervalMs: parseInt(process.env.OBSERVER_INTERVAL_MS ?? '15000', 10),
     batchSize: parseInt(process.env.OBSERVER_BATCH_SIZE ?? '50', 10),
-    expiryGraceMs: parseInt(
-      process.env.OBSERVER_EXPIRY_GRACE_MS ?? '60000',
-      10,
-    ),
   },
   requestLogRetention: {
     // Append-only API access log (ip / userAgent). Pruned so PII is not kept forever.
@@ -252,6 +276,24 @@ export default (): AppConfig => ({
       process.env.REQUEST_LOG_PRUNE_MAX_PER_CYCLE ?? '50000',
       10,
     ),
+    // A delivery body is the event as sent, and a RECEIVER_UPDATED body is the
+    // provider's full KYC dossier — tax id, address, document links. The row
+    // itself is the audit trail and is kept; only the body is cleared, and only
+    // once the delivery has reached a terminal state and is well past any
+    // redelivery window. Default 30 days; 0 keeps bodies forever (the old
+    // behaviour) for an operator who needs that and accepts the exposure.
+    deliveryPayloadDays: parseInt(
+      process.env.WEBHOOK_PAYLOAD_RETENTION_DAYS ?? '30',
+      10,
+    ),
+  },
+  webhookSweep: {
+    // Default on: a stranded delivery is a customer-visible settlement that
+    // notified nobody, so recovery is not opt-in. `false` is the incident
+    // switch (and how the test bootstrap keeps the timer out of a test run).
+    enabled:
+      (process.env.WEBHOOK_SWEEP_ENABLED ?? 'true').toLowerCase() !== 'false',
+    intervalMs: parseInt(process.env.WEBHOOK_SWEEP_INTERVAL_MS ?? '60000', 10),
   },
   paymentIntents: {
     ttlSeconds: parseInt(process.env.PAYMENT_INTENT_TTL_SECONDS ?? '3600', 10),
@@ -276,33 +318,11 @@ export default (): AppConfig => ({
       process.env.WEBHOOK_MAX_RESPONSE_BYTES ?? '65536',
       10,
     ),
-    maxAttempts: parseInt(process.env.WEBHOOK_MAX_ATTEMPTS ?? '8', 10),
+    maxAttempts: parseInt(process.env.WEBHOOK_MAX_ATTEMPTS ?? '3', 10),
     backoffMs: parseInt(process.env.WEBHOOK_BACKOFF_MS ?? '2000', 10),
-    maxBackoffMs: parseInt(process.env.WEBHOOK_MAX_BACKOFF_MS ?? '3600000', 10),
     signatureHeader: (
       process.env.WEBHOOK_SIGNATURE_HEADER ?? 'x-cosmos-signature'
     ).toLowerCase(),
-    secretGraceSeconds: parseInt(
-      process.env.WEBHOOK_SECRET_GRACE_SECONDS ?? '86400',
-      10,
-    ),
-    workerIntervalMs: parseInt(
-      process.env.WEBHOOK_WORKER_INTERVAL_MS ?? '1000',
-      10,
-    ),
-    workerBatchSize: parseInt(
-      process.env.WEBHOOK_WORKER_BATCH_SIZE ?? '50',
-      10,
-    ),
-    leaseMs: parseInt(process.env.WEBHOOK_LEASE_MS ?? '30000', 10),
-    fanoutConcurrency: parseInt(
-      process.env.WEBHOOK_FANOUT_CONCURRENCY ?? '5',
-      10,
-    ),
-    pauseAfterFailures: parseInt(
-      process.env.WEBHOOK_PAUSE_AFTER_FAILURES ?? '5',
-      10,
-    ),
   },
   blindpay: {
     apiKey: process.env.BLINDPAY_API_KEY ?? '',
@@ -312,5 +332,65 @@ export default (): AppConfig => ({
     ).replace(/\/+$/, ''),
     webhookSecret: process.env.BLINDPAY_WEBHOOK_SECRET ?? '',
     timeoutMs: parseInt(process.env.BLINDPAY_TIMEOUT_MS ?? '15000', 10),
+  },
+  rateLimit: {
+    enabled:
+      (process.env.RATE_LIMIT_ENABLED ?? 'true').toLowerCase() !== 'false',
+    pruneIntervalMs: parseInt(
+      process.env.RATE_LIMIT_PRUNE_INTERVAL_MS ??
+        String(DEFAULT_RATE_LIMIT_PRUNE_INTERVAL_MS),
+      10,
+    ),
+  },
+  pollar: {
+    publishableKey: {
+      public: process.env.POLLAR_PUBLISHABLE_KEY_MAINNET ?? '',
+      testnet: process.env.POLLAR_PUBLISHABLE_KEY_TESTNET ?? '',
+    },
+    secretKey: {
+      public: process.env.POLLAR_SECRET_KEY_MAINNET ?? '',
+      testnet: process.env.POLLAR_SECRET_KEY_TESTNET ?? '',
+    },
+    sdkBaseUrl: (
+      process.env.POLLAR_SDK_BASE_URL ?? DEFAULT_POLLAR_SDK_BASE_URL
+    ).replace(/\/+$/, ''),
+    serverBaseUrl: (
+      process.env.POLLAR_SERVER_BASE_URL ?? DEFAULT_POLLAR_SERVER_BASE_URL
+    ).replace(/\/+$/, ''),
+    bridgeCallbackUrl: (process.env.POLLAR_BRIDGE_CALLBACK_URL ?? '').replace(
+      /\/+$/,
+      '',
+    ),
+    redirectUriWhitelist: parsePollarRedirectWhitelist(
+      process.env.POLLAR_REDIRECT_URI_WHITELIST,
+    ),
+    timeoutMs: parseInt(
+      process.env.POLLAR_TIMEOUT_MS ?? String(DEFAULT_POLLAR_TIMEOUT_MS),
+      10,
+    ),
+    authorizationTtlMs: parseInt(
+      process.env.POLLAR_AUTHORIZATION_TTL_MS ??
+        String(DEFAULT_POLLAR_AUTHORIZATION_TTL_MS),
+      10,
+    ),
+    codeTtlMs: parseInt(
+      process.env.POLLAR_CODE_TTL_MS ?? String(DEFAULT_POLLAR_CODE_TTL_MS),
+      10,
+    ),
+    loginWaitMs: parseInt(
+      process.env.POLLAR_LOGIN_WAIT_MS ?? String(DEFAULT_POLLAR_LOGIN_WAIT_MS),
+      10,
+    ),
+    sweep: {
+      // Default on: a handshake row outlives its usefulness in minutes, and an
+      // AUTHORIZED row left behind is a redeemable code sitting in the table.
+      enabled:
+        (process.env.POLLAR_SWEEP_ENABLED ?? 'true').toLowerCase() !== 'false',
+      intervalMs: parseInt(
+        process.env.POLLAR_SWEEP_INTERVAL_MS ??
+          String(DEFAULT_POLLAR_SWEEP_INTERVAL_MS),
+        10,
+      ),
+    },
   },
 });

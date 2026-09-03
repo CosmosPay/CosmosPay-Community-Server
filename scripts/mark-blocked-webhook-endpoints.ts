@@ -12,10 +12,10 @@
  *    enabled=true after fixing DNS) — validation runs again and clears the flag.
  */
 import 'dotenv/config';
-import { PrismaClient } from '../generated/prisma/client';
+import { PrismaClient } from '@generated/prisma/client';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { Pool } from 'pg';
-import { assertPublicWebhookUrl } from '../src/webhooks/webhook-url.validator';
+import { assertPublicWebhookUrl } from '@/webhooks/webhook-url.validator';
 
 async function main() {
   const connectionString = process.env.DATABASE_URL;

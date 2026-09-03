@@ -1,6 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsOptional, IsString, IsUUID } from 'class-validator';
-import { IsRedirectUrl } from '../../../common/validators/is-redirect-url.validator';
+import { IsRedirectUrl } from '@/common/validators/is-redirect-url.validator';
 
 /**
  * Starts BlindPay's terms-of-service acceptance flow. Returns a hosted URL the

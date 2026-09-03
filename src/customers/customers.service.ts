@@ -1,35 +1,40 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { ConsumerResolverService } from '../blindpay/consumer-resolver.service';
-import { formatFixed7, parseAmountOrZero } from '../common/stellar-amount';
-import { GatewayConsumer } from '../common/interfaces/gateway-consumer.interface';
-import { PrismaService } from '../prisma/prisma.service';
-import { CreateCustomerDto } from './dto/create-customer.dto';
-import { QueryCustomersDto } from './dto/query-customers.dto';
-import { UpdateCustomerDto } from './dto/update-customer.dto';
+import { Prisma } from '@generated/prisma/client';
+import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
+import { formatNumericAmount } from '@/common/money';
+import { PrismaService } from '@/prisma/prisma.service';
+import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
+import { CreateCustomerDto } from '@/customers/dto/create-customer.dto';
+import { QueryCustomersDto } from '@/customers/dto/query-customers.dto';
+import { UpdateCustomerDto } from '@/customers/dto/update-customer.dto';
 
-const STATS_BATCH_SIZE = 1_000;
-
-type AssetTotal = {
-  asset: string;
-  assetIssuer: string | null;
-  amount: bigint;
-  succeeded: number;
-};
-
-type CustomerStats = {
+/** On-chain activity attributed to a customer's Stellar account. */
+interface CustomerPaymentStats {
   payments: number;
-  totals: Map<string, AssetTotal>;
+  succeeded: number;
+  /** Settled volume as a decimal string — never a float. */
+  total: string;
+}
+
+const NO_ACTIVITY: CustomerPaymentStats = {
+  payments: 0,
+  succeeded: 0,
+  total: '0',
 };
 
 @Injectable()
 export class CustomersService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly consumerResolver: ConsumerResolverService,
+    private readonly consumers: ConsumerResolverService,
   ) {}
 
+  private resolveConsumer(consumer: GatewayConsumer) {
+    return this.consumers.resolve(consumer);
+  }
+
   async create(consumer: GatewayConsumer, dto: CreateCustomerDto) {
-    const local = await this.consumerResolver.resolve(consumer);
+    const local = await this.resolveConsumer(consumer);
     return this.prisma.customer.create({
       data: {
         consumerId: local.id,
@@ -43,120 +48,97 @@ export class CustomersService {
     });
   }
 
-  async findAll(
-    consumer: GatewayConsumer,
-    query: QueryCustomersDto = new QueryCustomersDto(),
-  ) {
-    const local = await this.consumerResolver.resolve(consumer);
-    const take = query.take ?? 20;
-    const skip = query.skip ?? 0;
+  async findAll(consumer: GatewayConsumer, query: QueryCustomersDto) {
+    const local = await this.resolveConsumer(consumer);
     const where = { consumerId: local.id };
 
+    // `total` is the row count, never `data.length` — the page size is `take`
+    // on every full page, so a client paginating on it never sees the end.
     const [customers, total] = await this.prisma.$transaction([
       this.prisma.customer.findMany({
         where,
         orderBy: { createdAt: 'desc' },
-        take,
-        skip,
+        take: query.take,
+        skip: query.skip,
       }),
       this.prisma.customer.count({ where }),
     ]);
 
-    const accounts = [
-      ...new Set(
-        customers
-          .map((customer) => customer.account)
-          .filter((account): account is string => typeof account === 'string'),
-      ),
-    ];
-    const stats = await this.loadStats(local.id, accounts);
+    const stats = await this.paymentStats(
+      local.id,
+      customers
+        .map((c) => c.account)
+        .filter((account): account is string => Boolean(account)),
+    );
 
     const data = customers.map((c) => {
-      const customerStats = c.account ? stats.get(c.account) : undefined;
-      const totals = [...(customerStats?.totals.values() ?? [])]
-        .map(({ amount, ...assetTotal }) => ({
-          ...assetTotal,
-          amount: formatFixed7(amount),
-        }))
-        .sort(
-          (a, b) =>
-            a.asset.localeCompare(b.asset) ||
-            (a.assetIssuer ?? '').localeCompare(b.assetIssuer ?? ''),
-        );
+      const s = (c.account && stats.get(c.account)) || NO_ACTIVITY;
       return {
         ...c,
-        payments: customerStats?.payments ?? 0,
-        totals,
+        payments: s.payments,
+        succeeded: s.succeeded,
+        total: s.total,
       };
     });
 
-    return { data, total, take, skip };
+    return { data, total, take: query.take, skip: query.skip };
   }
 
   /**
-   * Load only intents belonging to accounts on the current customer page. The
-   * cursor keeps every Prisma read bounded while preserving exact all-time
-   * totals for those accounts.
+   * Per-account payment stats for the accounts on the current page, aggregated
+   * in PostgreSQL.
+   *
+   * This used to load every customer *and* every payment intent belonging to
+   * the consumer on each request and tally them in JS: two unbounded reads to
+   * produce three numbers per row, growing with the merchant's whole history.
+   *
+   * The counts alone would be a `groupBy`, but the settled volume cannot go
+   * through `_sum`: `PaymentIntent.amount` is a `String` column (decimal
+   * strings, so Stellar's 7-dp values stay exact) and Prisma will not sum text.
+   * So the aggregate is one `$queryRaw` with a `::numeric` cast — which also
+   * makes the money *more* accurate than the previous `Number(...)`
+   * accumulation, which rounded in binary floating point. Values are
+   * parameterized; the account list is bounded by the page size.
    */
-  private async loadStats(
+  private async paymentStats(
     consumerId: string,
     accounts: string[],
-  ): Promise<Map<string, CustomerStats>> {
-    const stats = new Map<string, CustomerStats>();
-    if (accounts.length === 0) return stats;
-
-    let cursor: string | undefined;
-    for (;;) {
-      const intents = await this.prisma.paymentIntent.findMany({
-        where: { consumerId, source: { in: accounts } },
-        select: {
-          id: true,
-          source: true,
-          amount: true,
-          status: true,
-          asset: true,
-          assetIssuer: true,
-        },
-        orderBy: { id: 'asc' },
-        take: STATS_BATCH_SIZE,
-        ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
-      });
-
-      for (const intent of intents) {
-        if (!intent.source) continue;
-        const customerStats = stats.get(intent.source) ?? {
-          payments: 0,
-          totals: new Map<string, AssetTotal>(),
-        };
-        customerStats.payments += 1;
-
-        const asset =
-          !intent.asset || intent.asset === 'native' ? 'XLM' : intent.asset;
-        const assetIssuer = asset === 'XLM' ? null : intent.assetIssuer;
-        const assetKey = JSON.stringify([asset, assetIssuer]);
-        const assetTotal = customerStats.totals.get(assetKey) ?? {
-          asset,
-          assetIssuer,
-          amount: 0n,
-          succeeded: 0,
-        };
-        if (intent.status === 'SUCCEEDED') {
-          assetTotal.succeeded += 1;
-          assetTotal.amount += parseAmountOrZero(intent.amount);
-        }
-        customerStats.totals.set(assetKey, assetTotal);
-        stats.set(intent.source, customerStats);
-      }
-
-      if (intents.length < STATS_BATCH_SIZE) break;
-      cursor = intents[intents.length - 1].id;
+  ): Promise<Map<string, CustomerPaymentStats>> {
+    if (accounts.length === 0) {
+      return new Map();
     }
 
-    return stats;
+    const rows = await this.prisma.$queryRaw<
+      { account: string; payments: bigint; succeeded: bigint; total: unknown }[]
+    >`
+      SELECT "source" AS account,
+             COUNT(*) AS payments,
+             COUNT(*) FILTER (WHERE "status" = 'SUCCEEDED') AS succeeded,
+             COALESCE(
+               SUM(NULLIF("amount", '')::numeric)
+                 FILTER (WHERE "status" = 'SUCCEEDED'),
+               0
+             ) AS total
+        FROM "payment_intent"
+       WHERE "consumerId" = ${consumerId}
+         AND "source" IN (${Prisma.join(accounts)})
+       GROUP BY "source"
+    `;
+
+    return new Map(
+      rows.map((r) => [
+        r.account,
+        {
+          payments: Number(r.payments),
+          succeeded: Number(r.succeeded),
+          total: formatNumericAmount(r.total),
+        },
+      ]),
+    );
   }
 
   async findOne(consumer: GatewayConsumer, id: string) {
-    const local = await this.consumerResolver.resolve(consumer);
+    const local = await this.resolveConsumer(consumer);
     const customer = await this.prisma.customer.findFirst({
       where: { id, consumerId: local.id },
     });

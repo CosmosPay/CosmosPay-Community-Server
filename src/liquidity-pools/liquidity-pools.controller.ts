@@ -1,19 +1,31 @@
-import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Param,
+  Post,
+  Query,
+  Req,
+} from '@nestjs/common';
 import {
   ApiCreatedResponse,
+  ApiHeader,
   ApiOkResponse,
   ApiOperation,
   ApiTags,
 } from '@nestjs/swagger';
-import { CurrentConsumer } from '../common/decorators/current-consumer.decorator';
-import { RequireAnyPermission } from '../common/decorators/require-permissions.decorator';
-import { GatewayConsumer } from '../common/interfaces/gateway-consumer.interface';
-import { DepositLiquidityDto } from './dto/deposit-liquidity.dto';
-import { QueryLiquidityOperationsDto } from './dto/query-liquidity-operations.dto';
-import { QueryLiquidityPoolsDto } from './dto/query-pools.dto';
-import { QueryLiquidityPositionsDto } from './dto/query-positions.dto';
-import { SubmitLiquidityDto } from './dto/submit-liquidity.dto';
-import { WithdrawLiquidityDto } from './dto/withdraw-liquidity.dto';
+import type { Request } from 'express';
+import { CurrentConsumer } from '@/common/decorators/current-consumer.decorator';
+import { RequireAnyPermission } from '@/common/decorators/require-permissions.decorator';
+import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
+import { DepositLiquidityDto } from '@/liquidity-pools/dto/deposit-liquidity.dto';
+import { QueryLiquidityOperationsDto } from '@/liquidity-pools/dto/query-liquidity-operations.dto';
+import { QueryLiquidityPoolsDto } from '@/liquidity-pools/dto/query-pools.dto';
+import { QueryLiquidityPositionsDto } from '@/liquidity-pools/dto/query-positions.dto';
+import { SubmitLiquidityDto } from '@/liquidity-pools/dto/submit-liquidity.dto';
+import { WithdrawLiquidityDto } from '@/liquidity-pools/dto/withdraw-liquidity.dto';
 import {
   LiquidityOperationEntity,
   LiquidityOperationListEntity,
@@ -21,8 +33,8 @@ import {
   LiquidityPoolListEntity,
   LiquidityPositionListEntity,
   LiquiditySubmitResultEntity,
-} from './entities/liquidity-pool.entity';
-import { LiquidityPoolsService } from './liquidity-pools.service';
+} from '@/liquidity-pools/entities/liquidity-pool.entity';
+import { LiquidityPoolsService } from '@/liquidity-pools/liquidity-pools.service';
 
 // URI versioning => /v1/liquidity-pools. Static segments are declared before
 // the `:poolId` catch-all so Express matches them first.
@@ -37,12 +49,27 @@ export class LiquidityPoolsController {
     summary:
       'Build a pool deposit → unsigned XDR + SEP-7 tx URI + QR for the wallet to sign',
   })
+  @ApiHeader({
+    name: 'Idempotency-Key',
+    required: false,
+    description:
+      'Optional idempotency key. Retries with the same key return the existing ' +
+      'operation (same id and txHash). Takes precedence over body.idempotencyKey.',
+    example: 'lp-deposit-2026-08-23-001',
+  })
   @ApiCreatedResponse({ type: LiquidityOperationEntity })
   deposit(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Body() dto: DepositLiquidityDto,
+    // Read via @Req (not @Headers) so Swagger does not auto-emit a second
+    // required `idempotency-key` parameter alongside @ApiHeader.
+    @Req() req: Request,
   ) {
-    return this.liquidity.deposit(consumer, dto);
+    return this.liquidity.deposit(
+      consumer,
+      dto,
+      headerValue(req, 'idempotency-key'),
+    );
   }
 
   @Post('withdraw')
@@ -51,12 +78,25 @@ export class LiquidityPoolsController {
     summary:
       'Build a pool withdrawal (burn shares) → unsigned XDR + SEP-7 tx URI + QR',
   })
+  @ApiHeader({
+    name: 'Idempotency-Key',
+    required: false,
+    description:
+      'Optional idempotency key. Retries with the same key return the existing ' +
+      'operation (same id and txHash). Takes precedence over body.idempotencyKey.',
+    example: 'lp-withdraw-2026-08-23-001',
+  })
   @ApiCreatedResponse({ type: LiquidityOperationEntity })
   withdraw(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Body() dto: WithdrawLiquidityDto,
+    @Req() req: Request,
   ) {
-    return this.liquidity.withdraw(consumer, dto);
+    return this.liquidity.withdraw(
+      consumer,
+      dto,
+      headerValue(req, 'idempotency-key'),
+    );
   }
 
   @Get('positions')
@@ -96,6 +136,10 @@ export class LiquidityPoolsController {
 
   @Post('operations/:id/submit')
   @RequireAnyPermission('liquidity:write', 'swaps:write')
+  // Submit advances an existing operation's status; the operation was created
+  // by POST /v1/liquidity-pools/deposits (or /withdrawals). Nothing new comes
+  // into existence here, so 200 — matching swaps' identical submit route.
+  @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary:
       'Relay the signed transaction to the network (hash-checked); finalizes status',
@@ -130,4 +174,10 @@ export class LiquidityPoolsController {
   ) {
     return this.liquidity.getPool(consumer, poolId);
   }
+}
+
+function headerValue(req: Request, name: string): string | undefined {
+  const raw = req.headers[name];
+  if (Array.isArray(raw)) return raw[0];
+  return raw;
 }

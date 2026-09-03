@@ -1,7 +1,7 @@
 import { Module } from '@nestjs/common';
-import { LiquidityPoolsModule } from '../liquidity-pools/liquidity-pools.module';
-import { SwapsModule } from '../swaps/swaps.module';
-import { SettlementObserverService } from './settlement-observer.service';
+import { LiquidityPoolsModule } from '@/liquidity-pools/liquidity-pools.module';
+import { SwapsModule } from '@/swaps/swaps.module';
+import { SettlementObserverService } from '@/observer/settlement-observer.service';
 
 /**
  * Hosts the background settlement observer that reconciles swaps and liquidity

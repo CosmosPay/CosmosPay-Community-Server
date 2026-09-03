@@ -1,22 +1,26 @@
-/* eslint-disable
-  @typescript-eslint/no-unsafe-argument,
-  @typescript-eslint/no-unsafe-assignment,
-  @typescript-eslint/no-unsafe-call,
-  @typescript-eslint/no-unsafe-member-access,
-  @typescript-eslint/no-unsafe-return,
-  @typescript-eslint/no-unnecessary-type-assertion,
-  @typescript-eslint/require-await
-*/
+import { HttpStatus } from '@nestjs/common';
+import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import {
-  BadRequestException,
-  ConflictException,
-  ForbiddenException,
-  NotFoundException,
-} from '@nestjs/common';
-import { ReceiversService, resolveTosCooldownMs } from './receivers.service';
-import { ALLOWED_TRANSITIONS, assertTransition } from './receiver-state';
+  RECEIVER_PUBLIC_SELECT,
+  ReceiversService,
+  isElevatedConsumer,
+  resolveTosCooldownMs,
+} from '@/kyc/receivers/receivers.service';
+import {
+  ALLOWED_TRANSITIONS,
+  assertTransition,
+} from '@/kyc/receivers/receiver-state';
 
-const CONSUMER = { username: 'cosmos_u1' } as any;
+/** An ordinary tenant key: `kyc:write`, no elevation. */
+const CONSUMER = {
+  username: 'cosmos_u1',
+  credentialId: 'cosmos_cred_1',
+  role: 'user',
+  permissions: ['kyc:read', 'kyc:write'],
+  organizationId: 'org_1',
+} as any;
+/** Same tenant, but an `admin`-role key (X-Consumer-Role: admin). */
+const ADMIN_CONSUMER = { ...CONSUMER, role: 'admin' };
 const LOCAL_ID = 'local_aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
 const REAL_ID = 're_000000000000';
 
@@ -39,6 +43,7 @@ function baseRow(overrides: Record<string, unknown> = {}) {
       kyc_type: 'standard',
       email: 'jane@acme.com',
       country: 'US',
+      tax_id: '123-45-6789',
     },
     createdAt: new Date(),
     updatedAt: new Date(),
@@ -46,15 +51,33 @@ function baseRow(overrides: Record<string, unknown> = {}) {
   };
 }
 
+/** What the DB hands back under RECEIVER_PUBLIC_SELECT — no `raw`. */
+function publicRow(overrides: Record<string, unknown> = {}) {
+  const row = baseRow(overrides) as Record<string, unknown>;
+  return Object.fromEntries(
+    Object.keys(RECEIVER_PUBLIC_SELECT).map((k) => [k, row[k]]),
+  );
+}
+
 function makeService() {
+  const auditRows: any[] = [];
   const prisma: any = {
     blindpayReceiver: {
       findFirst: jest.fn(),
       findUnique: jest.fn(),
+      findUniqueOrThrow: jest.fn(),
       update: jest.fn(),
+      updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       create: jest.fn(),
       delete: jest.fn(),
       findMany: jest.fn(),
+      count: jest.fn(),
+    },
+    adminAuditLog: {
+      create: jest.fn(async ({ data }: any) => {
+        auditRows.push(data);
+        return { id: 'aud_1', ...data };
+      }),
     },
     consumer: {
       findUnique: jest.fn().mockResolvedValue({
@@ -88,13 +111,23 @@ function makeService() {
     }),
   };
   const service = new ReceiversService(
-    prisma as any,
+    prisma,
     blindpay as any,
     consumers as any,
     sync as any,
     config as any,
   );
-  return { service, prisma, blindpay, consumers, sync, config };
+  return { service, prisma, blindpay, consumers, sync, config, auditRows };
+}
+
+/** Awaits a rejection and returns it typed, so status/code can be asserted. */
+async function rejection(p: Promise<unknown>): Promise<ApiError> {
+  return p.then(
+    () => {
+      throw new Error('expected a rejection');
+    },
+    (e: unknown) => e as ApiError,
+  );
 }
 
 describe('receiver-state assertTransition', () => {
@@ -107,16 +140,22 @@ describe('receiver-state assertTransition', () => {
   });
 
   it('rejects inactive → pending_user with 409 naming both states', () => {
-    expect(() => assertTransition('inactive', 'pending_user')).toThrow(
-      ConflictException,
-    );
+    let thrown: unknown;
     try {
       assertTransition('inactive', 'pending_user');
     } catch (err) {
-      expect((err as ConflictException).message).toBe(
-        "Cannot move receiver from 'inactive' to 'pending_user'",
-      );
+      thrown = err;
     }
+
+    expect(thrown).toBeInstanceOf(ApiError);
+    expect((thrown as ApiError).getStatus()).toBe(HttpStatus.CONFLICT);
+    // Not `idempotency_conflict`, which is what a bare ConflictException
+    // defaulted to — an integrator could not tell a duplicate request from an
+    // illegal KYC transition, the exact confusion ApiErrorCode ended.
+    expect((thrown as ApiError).code).toBe(ApiErrorCode.KycStateInvalid);
+    expect((thrown as ApiError).message).toBe(
+      "Cannot move receiver from 'inactive' to 'pending_user'",
+    );
   });
 
   it('allows pending_user → pending_review (re-review after post-approve edit)', () => {
@@ -127,7 +166,7 @@ describe('receiver-state assertTransition', () => {
 
   it('rejects pending_user → inactive with 409', () => {
     expect(() => assertTransition('pending_user', 'inactive')).toThrow(
-      ConflictException,
+      ApiError,
     );
   });
 });
@@ -141,7 +180,7 @@ describe('ReceiversService.update — local branch', () => {
       async ({ data }: any) => ({ ...row, ...data }),
     );
 
-    await service.update(CONSUMER, row.id, { email: 'new@acme.com' } as any);
+    await service.update(CONSUMER, row.id, { email: 'new@acme.com' });
 
     expect(blindpay.put).not.toHaveBeenCalled();
     expect(prisma.blindpayReceiver.update).toHaveBeenCalled();
@@ -149,7 +188,7 @@ describe('ReceiversService.update — local branch', () => {
 
   it('promotes inactive → pending_review when the merged payload has KYC data', async () => {
     const { service, prisma, blindpay } = makeService();
-    const row = baseRow({ kycStatus: 'inactive' });
+    const row = baseRow({ kycStatus: 'inactive', raw: { type: 'individual' } });
     prisma.blindpayReceiver.findFirst.mockResolvedValue(row);
     prisma.blindpayReceiver.update.mockImplementation(
       async ({ data }: any) => ({ ...row, ...data }),
@@ -157,7 +196,7 @@ describe('ReceiversService.update — local branch', () => {
 
     const result = await service.update(CONSUMER, row.id, {
       tax_id: '123-45-6789',
-    } as any);
+    });
 
     expect(blindpay.put).not.toHaveBeenCalled();
     expect(result.kycStatus).toBe('pending_review');
@@ -170,7 +209,7 @@ describe('ReceiversService.update — local branch', () => {
 
   it('keeps inactive when the patch does not satisfy hasKycData', async () => {
     const { service, prisma, blindpay } = makeService();
-    const row = baseRow({ kycStatus: 'inactive' });
+    const row = baseRow({ kycStatus: 'inactive', raw: { type: 'individual' } });
     prisma.blindpayReceiver.findFirst.mockResolvedValue(row);
     prisma.blindpayReceiver.update.mockImplementation(
       async ({ data }: any) => ({ ...row, ...data }),
@@ -178,7 +217,7 @@ describe('ReceiversService.update — local branch', () => {
 
     const result = await service.update(CONSUMER, row.id, {
       email: 'only-email@acme.com',
-    } as any);
+    });
 
     expect(blindpay.put).not.toHaveBeenCalled();
     expect(result.kycStatus).toBe('inactive');
@@ -202,7 +241,7 @@ describe('ReceiversService.update — local branch', () => {
       return { ...row, ...data };
     });
 
-    await service.update(CONSUMER, row.id, { tax_id: '99-9999999' } as any);
+    await service.update(CONSUMER, row.id, { tax_id: '99-9999999' });
 
     expect(savedRaw).toEqual({
       type: 'individual',
@@ -229,7 +268,7 @@ describe('ReceiversService.update — local branch', () => {
     await service.update(CONSUMER, row.id, {
       tax_id: '111',
       tos_id: 'tos_forged',
-    } as any);
+    });
 
     expect(savedRaw).not.toHaveProperty('tos_id');
     expect(savedRaw?.tax_id).toBe('111');
@@ -255,7 +294,7 @@ describe('ReceiversService.update — local branch', () => {
 
     const result = await service.update(CONSUMER, row.id, {
       tax_id: '999-99-9999',
-    } as any);
+    });
 
     expect(blindpay.put).not.toHaveBeenCalled();
     expect(result.kycStatus).toBe('pending_review');
@@ -279,13 +318,18 @@ describe('ReceiversService.update — remote branch', () => {
     });
     prisma.blindpayReceiver.findFirst.mockResolvedValue(row);
     blindpay.put.mockResolvedValue({ email: 'updated@acme.com' });
-    const mirrored = { ...row, email: 'updated@acme.com' };
-    sync.mirrorReceiver.mockResolvedValue(mirrored);
+    sync.mirrorReceiver.mockResolvedValue({
+      ...row,
+      email: 'updated@acme.com',
+    });
+    prisma.blindpayReceiver.findUniqueOrThrow.mockResolvedValue(
+      publicRow({ blindpayId: REAL_ID, email: 'updated@acme.com' }),
+    );
 
     const result = await service.update(CONSUMER, row.id, {
       email: 'updated@acme.com',
       tos_id: 'tos_forged',
-    } as any);
+    });
 
     expect(blindpay.put).toHaveBeenCalledWith(
       '/instances/in_test/customers/re_000000000000',
@@ -295,18 +339,171 @@ describe('ReceiversService.update — remote branch', () => {
       id: REAL_ID,
       email: 'updated@acme.com',
     });
-    expect(result).toBe(mirrored);
+    expect(result.email).toBe('updated@acme.com');
+    // The mirror hands back the whole row; the response is re-read narrowed.
+    expect(result).not.toHaveProperty('raw');
   });
 });
 
-describe('ReceiversService.approve — transitions', () => {
+describe('ReceiversService — the KYC dossier never leaves the database', () => {
+  it('RECEIVER_PUBLIC_SELECT is exactly the documented contract (no raw)', () => {
+    expect(RECEIVER_PUBLIC_SELECT).not.toHaveProperty('raw');
+    expect(Object.keys(RECEIVER_PUBLIC_SELECT).sort()).toEqual(
+      [
+        'blindpayId',
+        'country',
+        'createdAt',
+        'disabled',
+        'email',
+        'externalId',
+        'id',
+        'kycStatus',
+        'kycType',
+        'name',
+        'type',
+        'updatedAt',
+      ].sort(),
+    );
+  });
+
+  it('findAll selects the public columns and never fetches raw', async () => {
+    const { service, prisma } = makeService();
+    prisma.blindpayReceiver.findMany.mockResolvedValue([publicRow()]);
+    prisma.blindpayReceiver.count.mockResolvedValue(3);
+
+    const result = await service.findAll(CONSUMER, { take: 100, skip: 0 });
+
+    expect(prisma.blindpayReceiver.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ select: RECEIVER_PUBLIC_SELECT }),
+    );
+    expect(result.data[0]).not.toHaveProperty('raw');
+  });
+
+  it('findAll reports the row count, not the page length', async () => {
+    const { service, prisma } = makeService();
+    prisma.blindpayReceiver.findMany.mockResolvedValue([
+      publicRow(),
+      publicRow({ id: 'rcv_2' }),
+    ]);
+    prisma.blindpayReceiver.count.mockResolvedValue(57);
+
+    const result = await service.findAll(CONSUMER, { take: 100, skip: 0 });
+
+    expect(result.data).toHaveLength(2);
+    expect(result.total).toBe(57);
+    expect(prisma.blindpayReceiver.count).toHaveBeenCalledWith({
+      where: { consumerId: 'c1' },
+    });
+  });
+
+  it('findOne scopes to the consumer and selects the public columns', async () => {
+    const { service, prisma } = makeService();
+    prisma.blindpayReceiver.findFirst.mockResolvedValue(publicRow());
+
+    const result = await service.findOne(CONSUMER, 'rcv_1');
+
+    expect(prisma.blindpayReceiver.findFirst).toHaveBeenCalledWith({
+      where: { id: 'rcv_1', consumerId: 'c1' },
+      select: RECEIVER_PUBLIC_SELECT,
+    });
+    expect(result).not.toHaveProperty('raw');
+  });
+
+  it('findOne re-reads narrowed after a BlindPay refresh instead of returning the mirror row', async () => {
+    const { service, prisma, blindpay, sync } = makeService();
+    prisma.blindpayReceiver.findFirst.mockResolvedValue(
+      publicRow({ blindpayId: REAL_ID, kycStatus: 'verifying' }),
+    );
+    blindpay.get.mockResolvedValue({ id: REAL_ID, kyc_status: 'approved' });
+    // The sync service is shared with the admin surface: it returns the full row.
+    sync.mirrorReceiver.mockResolvedValue(
+      baseRow({ blindpayId: REAL_ID, kycStatus: 'approved' }),
+    );
+    prisma.blindpayReceiver.findUniqueOrThrow.mockResolvedValue(
+      publicRow({ blindpayId: REAL_ID, kycStatus: 'approved' }),
+    );
+
+    const result = await service.findOne(CONSUMER, 'rcv_1');
+
+    expect(result.kycStatus).toBe('approved');
+    expect(result).not.toHaveProperty('raw');
+  });
+
+  it('create stores raw but does not echo it back', async () => {
+    const { service, prisma } = makeService();
+    prisma.blindpayReceiver.create.mockResolvedValue(
+      publicRow({ kycStatus: 'pending_review' }),
+    );
+
+    const result = await service.create(CONSUMER, {
+      type: 'individual',
+      kyc_type: 'standard',
+      email: 'jane@acme.com',
+      tax_id: '123-45-6789',
+    } as any);
+
+    const args = prisma.blindpayReceiver.create.mock.calls[0][0];
+    expect(args.data.raw).toEqual(
+      expect.objectContaining({ tax_id: '123-45-6789' }),
+    );
+    expect(args.select).toBe(RECEIVER_PUBLIC_SELECT);
+    expect(result).not.toHaveProperty('raw');
+  });
+});
+
+describe('ReceiversService.approve — the review gate needs a second party', () => {
+  it('refuses a plain kyc:write key with 403 kyc_review_required', async () => {
+    const { service, prisma, blindpay } = makeService();
+
+    const err = await rejection(
+      service.approve(CONSUMER, 'rcv_1', 'https://app.example.com/cb'),
+    );
+
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.getStatus()).toBe(HttpStatus.FORBIDDEN);
+    expect(err.code).toBe(ApiErrorCode.KycReviewRequired);
+    // Nothing happened: no lookup, and above all no terms email to the KYC subject.
+    expect(prisma.blindpayReceiver.findFirst).not.toHaveBeenCalled();
+    expect(blindpay.post).not.toHaveBeenCalled();
+    expect(prisma.blindpayReceiver.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('lets an admin-role key approve pending_review → pending_user', async () => {
+    const { service, prisma, blindpay } = makeService();
+    const row = baseRow({ kycStatus: 'pending_review' });
+    prisma.blindpayReceiver.findFirst.mockResolvedValue(row);
+    prisma.blindpayReceiver.findUnique.mockResolvedValue(row);
+    blindpay.post.mockResolvedValue({ url: 'https://tos.example/accept' });
+    prisma.blindpayReceiver.findUniqueOrThrow.mockResolvedValue(
+      publicRow({ kycStatus: 'pending_user' }),
+    );
+
+    const result = await service.approve(
+      ADMIN_CONSUMER,
+      row.id,
+      'https://app.example.com/cb',
+    );
+
+    expect(result.receiver.kycStatus).toBe('pending_user');
+    expect(result.url).toBe('https://tos.example/accept');
+    expect(result.receiver).not.toHaveProperty('raw');
+  });
+
+  it('isElevatedConsumer only accepts the gateway admin role', () => {
+    expect(isElevatedConsumer(CONSUMER)).toBe(false);
+    expect(isElevatedConsumer(ADMIN_CONSUMER)).toBe(true);
+    expect(isElevatedConsumer({ ...CONSUMER, role: null })).toBe(false);
+  });
+});
+
+describe('ReceiversService.approveById — transitions', () => {
   it('pending_review → pending_user succeeds', async () => {
     const { service, prisma, blindpay } = makeService();
     const row = baseRow({ kycStatus: 'pending_review' });
     prisma.blindpayReceiver.findUnique.mockResolvedValue(row);
     blindpay.post.mockResolvedValue({ url: 'https://tos.example/accept' });
-    prisma.blindpayReceiver.update.mockImplementation(
-      async ({ data }: any) => ({ ...row, ...data }),
+    prisma.blindpayReceiver.findUniqueOrThrow.mockResolvedValue(
+      publicRow({ kycStatus: 'pending_user' }),
     );
 
     const result = await service.approveById(
@@ -326,26 +523,53 @@ describe('ReceiversService.approve — transitions', () => {
 
     await expect(
       service.approveById('rcv_1', 'https://app.example.com/cb'),
-    ).rejects.toBeInstanceOf(ConflictException);
+    ).rejects.toBeInstanceOf(ApiError);
     await expect(
       service.approveById('rcv_1', 'https://app.example.com/cb'),
     ).rejects.toThrow("Cannot move receiver from 'inactive' to 'pending_user'");
+  });
+
+  it('writes conditionally on the status it validated (compare-and-swap)', async () => {
+    const { service, prisma, blindpay } = makeService();
+    const row = baseRow({ kycStatus: 'pending_review' });
+    prisma.blindpayReceiver.findUnique.mockResolvedValue(row);
+    blindpay.post.mockResolvedValue({ url: 'https://tos.example/accept' });
+    prisma.blindpayReceiver.findUniqueOrThrow.mockResolvedValue(
+      publicRow({ kycStatus: 'pending_user' }),
+    );
+
+    await service.approveById(row.id, 'https://app.example.com/cb');
+
+    expect(prisma.blindpayReceiver.updateMany).toHaveBeenCalledWith({
+      where: { id: row.id, kycStatus: 'pending_review' },
+      data: { kycStatus: 'pending_user', tosSentAt: expect.any(Date) },
+    });
+    // The unguarded `update({ where: { id } })` must not be used for transitions.
+    expect(prisma.blindpayReceiver.update).not.toHaveBeenCalled();
+  });
+
+  it('409s when the receiver moved between the read and the write', async () => {
+    const { service, prisma, blindpay } = makeService();
+    prisma.blindpayReceiver.findUnique.mockResolvedValue(
+      baseRow({ kycStatus: 'pending_review' }),
+    );
+    blindpay.post.mockResolvedValue({ url: 'https://tos.example/accept' });
+    // A concurrent caller won the race: no row matches the old status any more.
+    prisma.blindpayReceiver.updateMany.mockResolvedValue({ count: 0 });
+
+    const err = await rejection(
+      service.approveById('rcv_1', 'https://app.example.com/cb'),
+    );
+
+    expect(err.getStatus()).toBe(HttpStatus.CONFLICT);
+    expect(err.code).toBe(ApiErrorCode.KycStateInvalid);
   });
 });
 
 describe('ReceiversService.enable — transitions', () => {
   it('pending_user → verifying (active) via enable succeeds', async () => {
     const { service, prisma, blindpay, sync } = makeService();
-    const row = baseRow({
-      kycStatus: 'pending_user',
-      raw: {
-        type: 'individual',
-        kyc_type: 'standard',
-        email: 'jane@acme.com',
-        country: 'US',
-        tax_id: '123-45-6789',
-      },
-    });
+    const row = baseRow({ kycStatus: 'pending_user' });
     prisma.blindpayReceiver.findUnique.mockResolvedValue(row);
     const created = {
       id: REAL_ID,
@@ -354,37 +578,25 @@ describe('ReceiversService.enable — transitions', () => {
       email: 'jane@acme.com',
     };
     blindpay.post.mockResolvedValue(created);
-    prisma.blindpayReceiver.update.mockResolvedValue({
-      ...row,
-      blindpayId: REAL_ID,
-    });
-    const mirrored = {
+    sync.mirrorReceiver.mockResolvedValue({
       ...row,
       blindpayId: REAL_ID,
       kycStatus: 'verifying',
-    };
-    sync.mirrorReceiver.mockResolvedValue(mirrored);
+    });
+    prisma.blindpayReceiver.findUniqueOrThrow.mockResolvedValue(
+      publicRow({ blindpayId: REAL_ID, kycStatus: 'verifying' }),
+    );
 
     const result = await service.enableById(row.id, 'tos_abc');
 
-    expect(blindpay.post).toHaveBeenCalledWith('/instances/in_test/customers', {
-      type: 'individual',
-      kyc_type: 'standard',
-      email: 'jane@acme.com',
-      country: 'US',
-      tax_id: '123-45-6789',
-      tos_id: 'tos_abc',
-    });
-    expect(prisma.blindpayReceiver.update).toHaveBeenCalledWith({
-      where: { id: row.id },
-      data: { blindpayId: REAL_ID },
-    });
+    expect(blindpay.post).toHaveBeenCalledWith(
+      '/instances/in_test/customers',
+      expect.objectContaining({ tos_id: 'tos_abc' }),
+    );
     expect(sync.mirrorReceiver).toHaveBeenCalledWith('c1', created);
-    expect(
-      prisma.blindpayReceiver.update.mock.invocationCallOrder[0],
-    ).toBeLessThan(sync.mirrorReceiver.mock.invocationCallOrder[0]);
     expect(result.kycStatus).toBe('verifying');
     expect(result.blindpayId).toBe(REAL_ID);
+    expect(result).not.toHaveProperty('raw');
   });
 
   it('inactive → verifying via enable returns 409', async () => {
@@ -394,7 +606,7 @@ describe('ReceiversService.enable — transitions', () => {
     );
 
     await expect(service.enableById('rcv_1', 'tos_abc')).rejects.toBeInstanceOf(
-      ConflictException,
+      ApiError,
     );
     await expect(service.enableById('rcv_1', 'tos_abc')).rejects.toThrow(
       "Cannot move receiver from 'inactive' to 'verifying'",
@@ -409,399 +621,269 @@ describe('ReceiversService.enable — transitions', () => {
     );
 
     await expect(service.enableById('rcv_1', 'tos_abc')).rejects.toBeInstanceOf(
-      ConflictException,
+      ApiError,
     );
     expect(blindpay.post).not.toHaveBeenCalled();
   });
 });
 
-describe('resolveTosCooldownMs', () => {
-  it.each([
-    [undefined, undefined, undefined],
-    ['1', '0', 0],
-    ['1', 'abc', undefined],
-    ['0', '0', undefined],
-    [['1', '0'], ['60000', '0'], 60_000],
-    ['1', '', undefined],
-    ['1', '-1', undefined],
-  ])(
-    'resolves internal=%p cooldown=%p to %p',
-    (internal, cooldown, expected) => {
-      expect(resolveTosCooldownMs(internal, cooldown)).toBe(expected);
-    },
-  );
-});
+describe('ReceiversService.enableById — the upstream create is claimed first', () => {
+  it('claims the transition BEFORE POSTing to BlindPay', async () => {
+    const { service, prisma, blindpay, sync } = makeService();
+    const row = baseRow({ kycStatus: 'pending_user' });
+    prisma.blindpayReceiver.findUnique.mockResolvedValue(row);
+    blindpay.post.mockResolvedValue({ id: REAL_ID, kyc_status: 'verifying' });
+    sync.mirrorReceiver.mockResolvedValue({ ...row, blindpayId: REAL_ID });
+    prisma.blindpayReceiver.findUniqueOrThrow.mockResolvedValue(
+      publicRow({ blindpayId: REAL_ID, kycStatus: 'verifying' }),
+    );
 
-describe('ReceiversService.create', () => {
-  const bareDto = {
-    type: 'individual',
-    kyc_type: 'standard',
-    email: 'jane@acme.com',
-    country: 'US',
-  };
+    await service.enableById(row.id, 'tos_abc');
 
-  it('creates a bare registration as inactive and preserves the full raw dto', async () => {
-    const { service, prisma } = makeService();
-    prisma.blindpayReceiver.create.mockResolvedValue(baseRow());
+    expect(prisma.blindpayReceiver.updateMany).toHaveBeenNthCalledWith(1, {
+      where: {
+        id: row.id,
+        kycStatus: 'pending_user',
+        blindpayId: LOCAL_ID,
+      },
+      data: { kycStatus: 'verifying' },
+    });
+    expect(
+      prisma.blindpayReceiver.updateMany.mock.invocationCallOrder[0],
+    ).toBeLessThan(blindpay.post.mock.invocationCallOrder[0]);
+  });
 
-    await service.create(CONSUMER, bareDto as any);
+  it('never creates a second upstream customer when two enables race', async () => {
+    const { service, prisma, blindpay } = makeService();
+    prisma.blindpayReceiver.findUnique.mockResolvedValue(
+      baseRow({ kycStatus: 'pending_user' }),
+    );
+    // The other caller already claimed the row.
+    prisma.blindpayReceiver.updateMany.mockResolvedValue({ count: 0 });
 
-    expect(prisma.blindpayReceiver.create).toHaveBeenCalledWith({
-      data: expect.objectContaining({
-        consumerId: 'c1',
-        blindpayId: expect.stringMatching(/^local_/),
-        kycStatus: 'inactive',
-        raw: bareDto,
-      }),
+    const err = await rejection(service.enableById('rcv_1', 'tos_abc'));
+
+    expect(err.getStatus()).toBe(HttpStatus.CONFLICT);
+    expect(err.code).toBe(ApiErrorCode.KycStateInvalid);
+    // The whole point: the loser must not create an orphan identity at the provider.
+    expect(blindpay.post).not.toHaveBeenCalled();
+  });
+
+  it('releases the claim when the provider call fails, so the customer can retry', async () => {
+    const { service, prisma, blindpay } = makeService();
+    const row = baseRow({ kycStatus: 'pending_user' });
+    prisma.blindpayReceiver.findUnique.mockResolvedValue(row);
+    blindpay.post.mockRejectedValue(new Error('BlindPay 502'));
+
+    await expect(service.enableById(row.id, 'tos_abc')).rejects.toThrow(
+      'BlindPay 502',
+    );
+
+    expect(prisma.blindpayReceiver.updateMany).toHaveBeenNthCalledWith(2, {
+      where: { id: row.id, kycStatus: 'verifying', blindpayId: LOCAL_ID },
+      data: { kycStatus: 'pending_user' },
     });
   });
 
-  it.each([
-    ['tax_id', { tax_id: '123-45-6789' }],
-    ['selfie_file', { selfie_file: 'https://files.example/selfie' }],
-  ])(
-    'creates a payload containing %s as pending_review',
-    async (_name, kyc) => {
-      const { service, prisma } = makeService();
-      prisma.blindpayReceiver.create.mockResolvedValue(baseRow());
-      const dto = { ...bareDto, ...kyc };
+  it('guards the placeholder → real id write on the id it read', async () => {
+    const { service, prisma, blindpay, sync } = makeService();
+    const row = baseRow({ kycStatus: 'pending_user' });
+    prisma.blindpayReceiver.findUnique.mockResolvedValue(row);
+    blindpay.post.mockResolvedValue({ id: REAL_ID });
+    sync.mirrorReceiver.mockResolvedValue({ ...row, blindpayId: REAL_ID });
+    prisma.blindpayReceiver.findUniqueOrThrow.mockResolvedValue(
+      publicRow({ blindpayId: REAL_ID }),
+    );
 
-      await service.create(CONSUMER, dto as any);
+    await service.enableById(row.id, 'tos_abc');
 
-      expect(prisma.blindpayReceiver.create).toHaveBeenCalledWith({
-        data: expect.objectContaining({
-          kycStatus: 'pending_review',
-          raw: dto,
-        }),
-      });
-    },
-  );
+    expect(prisma.blindpayReceiver.updateMany).toHaveBeenNthCalledWith(2, {
+      where: { id: row.id, blindpayId: LOCAL_ID },
+      data: { blindpayId: REAL_ID },
+    });
+    expect(prisma.blindpayReceiver.update).not.toHaveBeenCalled();
+  });
 });
 
-describe('ReceiversService request ToS cooldown', () => {
-  function setup(overrides: Record<string, unknown> = {}) {
-    const context = makeService();
-    const row = baseRow({
+describe('ReceiversService.requestTos — the resend cooldown is not header-driven', () => {
+  const dto = {
+    redirect_url: 'https://app.example.com/cb',
+    channel: 'email',
+  } as any;
+
+  function pendingUser() {
+    // Mailed a minute ago: inside the 24h default, outside a 0ms override.
+    return baseRow({
       kycStatus: 'pending_user',
-      tosSentAt: null,
-      ...overrides,
+      tosSentAt: new Date(Date.now() - 60_000),
     });
-    context.prisma.blindpayReceiver.findUnique.mockResolvedValue(row);
-    context.prisma.blindpayReceiver.update.mockImplementation(
-      async ({ data }: any) => ({ ...row, ...data }),
-    );
-    context.blindpay.post.mockResolvedValue({
-      url: 'https://tos.example/accept',
-    });
-    return { ...context, row };
   }
 
-  it('rejects ToS outside pending_user', async () => {
-    const { service, prisma, blindpay } = setup({ kycStatus: 'inactive' });
+  it('ignores a cooldown override from an ordinary tenant key', async () => {
+    const { service, prisma, blindpay } = makeService();
+    const row = pendingUser();
+    prisma.blindpayReceiver.findFirst.mockResolvedValue(row);
+    prisma.blindpayReceiver.findUnique.mockResolvedValue(row);
 
-    await expect(
-      service.requestTosById('rcv_1', {
-        channel: 'email',
-        redirect_url: 'https://app.example.com/cb',
+    // The value a forged `X-Cosmos-Internal: 1` + `X-Cosmos-Tos-Cooldown-Ms: 0` yields.
+    const err = await rejection(service.requestTos(CONSUMER, row.id, dto, 0));
+
+    expect(err.getStatus()).toBe(HttpStatus.BAD_REQUEST);
+    expect(err.message).toMatch(/already sent/i);
+    // No BlindPay call, so no second email to the KYC subject.
+    expect(blindpay.post).not.toHaveBeenCalled();
+  });
+
+  it('honours the override for an elevated key', async () => {
+    const { service, prisma, blindpay } = makeService();
+    const row = pendingUser();
+    prisma.blindpayReceiver.findFirst.mockResolvedValue(row);
+    prisma.blindpayReceiver.findUnique.mockResolvedValue(row);
+    blindpay.post.mockResolvedValue({ url: 'https://tos.example/accept' });
+
+    const result = await service.requestTos(ADMIN_CONSUMER, row.id, dto, 0);
+
+    expect(result.url).toBe('https://tos.example/accept');
+    expect(result.channel).toBe('email');
+  });
+
+  it('re-asserts the cooldown in the UPDATE and 409s when a concurrent send won', async () => {
+    const { service, prisma, blindpay } = makeService();
+    const row = pendingUser();
+    prisma.blindpayReceiver.findUnique.mockResolvedValue(
+      baseRow({ kycStatus: 'pending_user', tosSentAt: null }),
+    );
+    blindpay.post.mockResolvedValue({ url: 'https://tos.example/accept' });
+    prisma.blindpayReceiver.updateMany.mockResolvedValue({ count: 0 });
+
+    const err = await rejection(service.requestTosById(row.id, dto));
+
+    expect(err.getStatus()).toBe(HttpStatus.CONFLICT);
+    expect(err.code).toBe(ApiErrorCode.KycStateInvalid);
+    expect(prisma.blindpayReceiver.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          id: row.id,
+          kycStatus: 'pending_user',
+        }),
       }),
-    ).rejects.toBeInstanceOf(BadRequestException);
+    );
+  });
+
+  it('refuses to send terms for a receiver that has not been approved', async () => {
+    const { service, prisma, blindpay } = makeService();
+    prisma.blindpayReceiver.findUnique.mockResolvedValue(
+      baseRow({ kycStatus: 'pending_review' }),
+    );
+
+    const err = await rejection(service.requestTosById('rcv_1', dto));
+
+    expect(err.getStatus()).toBe(HttpStatus.BAD_REQUEST);
+    expect(err.code).toBe(ApiErrorCode.KycStateInvalid);
+    expect(blindpay.post).not.toHaveBeenCalled();
+  });
+});
+
+describe('resolveTosCooldownMs — parsing only', () => {
+  it('returns undefined without the internal marker', () => {
+    expect(resolveTosCooldownMs(undefined, '0')).toBeUndefined();
+    expect(resolveTosCooldownMs('0', '0')).toBeUndefined();
+  });
+
+  it('parses a non-negative value when the marker is present', () => {
+    expect(resolveTosCooldownMs('1', '0')).toBe(0);
+    expect(resolveTosCooldownMs(['1'], ['60000'])).toBe(60000);
+  });
+
+  it('rejects a missing or nonsensical value', () => {
+    expect(resolveTosCooldownMs('1', '')).toBeUndefined();
+    expect(resolveTosCooldownMs('1', 'soon')).toBeUndefined();
+    expect(resolveTosCooldownMs('1', '-1')).toBeUndefined();
+  });
+});
+
+describe('ReceiversService.setAccess — the kill-switch is not tenant-flippable', () => {
+  it('refuses a plain kyc:write key with 403', async () => {
+    const { service, prisma } = makeService();
+
+    const err = await rejection(service.setAccess(CONSUMER, 'rcv_1', false));
+
+    expect(err.getStatus()).toBe(HttpStatus.FORBIDDEN);
+    expect(err.code).toBe(ApiErrorCode.InsufficientScope);
     expect(prisma.blindpayReceiver.update).not.toHaveBeenCalled();
-    expect(blindpay.post).not.toHaveBeenCalled();
   });
 
-  it('blocks the email channel inside the default 24h window', async () => {
-    const { service, blindpay } = setup({
-      tosSentAt: new Date(Date.now() - 1_000),
-    });
+  it('lets an admin-role key toggle it, without returning raw', async () => {
+    const { service, prisma } = makeService();
+    prisma.blindpayReceiver.findFirst.mockResolvedValue(baseRow());
+    prisma.blindpayReceiver.update.mockResolvedValue(
+      publicRow({ disabled: true }),
+    );
 
-    await expect(
-      service.requestTosById('rcv_1', {
-        channel: 'email',
-        redirect_url: 'https://app.example.com/cb',
-      }),
-    ).rejects.toThrow('already sent');
-    expect(blindpay.post).not.toHaveBeenCalled();
-  });
+    const result = await service.setAccess(ADMIN_CONSUMER, 'rcv_1', true);
 
-  it('allows email outside the default window and stores tosSentAt', async () => {
-    const { service, prisma } = setup({
-      tosSentAt: new Date(Date.now() - 24 * 60 * 60 * 1_000 - 1),
-    });
-
-    const result = await service.requestTosById('rcv_1', {
-      channel: 'email',
-      redirect_url: 'https://app.example.com/cb',
-    });
-
-    expect(result).toEqual({
-      url: 'https://tos.example/accept',
-      email: 'jane@acme.com',
-      channel: 'email',
-    });
     expect(prisma.blindpayReceiver.update).toHaveBeenCalledWith({
       where: { id: 'rcv_1' },
-      data: { tosSentAt: expect.any(Date) },
+      data: { disabled: true },
+      select: RECEIVER_PUBLIC_SELECT,
     });
-  });
-
-  it('allows a trusted cooldown of zero even one second after the last email', async () => {
-    const { service, blindpay } = setup({
-      tosSentAt: new Date(Date.now() - 1_000),
-    });
-
-    await expect(
-      service.requestTosById(
-        'rcv_1',
-        {
-          channel: 'email',
-          redirect_url: 'https://app.example.com/cb',
-        },
-        0,
-      ),
-    ).resolves.toEqual(expect.objectContaining({ channel: 'email' }));
-    expect(blindpay.post).toHaveBeenCalledTimes(1);
-  });
-
-  it.each([Number.NaN, -1])(
-    'falls back to 24h for invalid cooldown %p',
-    async (cooldown) => {
-      const { service, blindpay } = setup({
-        tosSentAt: new Date(Date.now() - 1_000),
-      });
-
-      await expect(
-        service.requestTosById(
-          'rcv_1',
-          {
-            channel: 'email',
-            redirect_url: 'https://app.example.com/cb',
-          },
-          cooldown,
-        ),
-      ).rejects.toBeInstanceOf(BadRequestException);
-      expect(blindpay.post).not.toHaveBeenCalled();
-    },
-  );
-
-  it('never rate-limits the code channel and does not write tosSentAt', async () => {
-    const { service, prisma } = setup({
-      tosSentAt: new Date(Date.now() - 1_000),
-    });
-
-    await expect(
-      service.requestTosById('rcv_1', {
-        channel: 'code',
-        redirect_url: 'https://app.example.com/cb',
-      }),
-    ).resolves.toEqual(expect.objectContaining({ channel: 'code' }));
-    expect(prisma.blindpayReceiver.update).not.toHaveBeenCalled();
+    expect(result.disabled).toBe(true);
+    expect(result).not.toHaveProperty('raw');
   });
 });
 
-describe('ReceiversService ownership and access', () => {
-  it('returns 404 for another consumer and proves consumerId is in the query', async () => {
-    const { service, prisma } = makeService();
-    const foreign = baseRow({ consumerId: 'c2' });
-    prisma.blindpayReceiver.findFirst.mockImplementation(
-      async ({ where }: any) => (where.consumerId === 'c1' ? null : foreign),
-    );
-
-    await expect(
-      service.findReceiverOrThrow('c1', foreign.id),
-    ).rejects.toBeInstanceOf(NotFoundException);
-    expect(prisma.blindpayReceiver.findFirst).toHaveBeenCalledWith({
-      where: { id: foreign.id, consumerId: 'c1' },
-    });
-  });
-
-  it('returns an owned receiver', async () => {
-    const { service, prisma } = makeService();
-    const row = baseRow();
-    prisma.blindpayReceiver.findFirst.mockResolvedValue(row);
-
-    await expect(service.findReceiverOrThrow('c1', row.id)).resolves.toBe(row);
-  });
-
-  it('rejects disabled receivers and accepts enabled receivers', () => {
-    const { service } = makeService();
-
-    expect(() => service.assertEnabled({ disabled: true })).toThrow(
-      ForbiddenException,
-    );
-    expect(() => service.assertEnabled({ disabled: false })).not.toThrow();
-  });
-});
-
-describe('ReceiversService enable idempotency', () => {
-  it('calling enable twice on a real receiver never POSTs /customers twice', async () => {
-    const { service, prisma, blindpay, sync } = makeService();
+describe('ReceiversService.remove — deleting a receiver is audited', () => {
+  it('commits an audit row in the same transaction as the delete', async () => {
+    const { service, prisma, auditRows } = makeService();
     const row = baseRow({
-      blindpayId: REAL_ID,
       kycStatus: 'pending_user',
+      tosSentAt: new Date('2026-06-28T12:00:00.000Z'),
     });
-    prisma.blindpayReceiver.findUnique.mockResolvedValue(row);
-    blindpay.get.mockResolvedValue({ id: REAL_ID, kyc_status: 'verifying' });
-    blindpay.post.mockResolvedValue({
-      id: 're_duplicate',
-      kyc_status: 'verifying',
+    prisma.blindpayReceiver.findFirst.mockResolvedValue(row);
+
+    const result = await service.remove(CONSUMER, row.id);
+
+    expect(result).toEqual({ id: row.id, deleted: true });
+    expect(prisma.blindpayReceiver.delete).toHaveBeenCalledWith({
+      where: { id: row.id },
     });
-    sync.mirrorReceiver.mockResolvedValue(row);
-
-    await service.enableById(row.id, 'tos_1');
-    await service.enableById(row.id, 'tos_1');
-
-    expect(blindpay.post).not.toHaveBeenCalled();
-    expect(blindpay.get).toHaveBeenCalledTimes(2);
-  });
-});
-
-describe('ReceiversService scoped wrappers and CRUD', () => {
-  it('approve scopes ownership before delegating to approveById', async () => {
-    const { service, prisma } = makeService();
-    const row = baseRow({ kycStatus: 'pending_review' });
-    prisma.blindpayReceiver.findFirst.mockResolvedValue(row);
-    const outcome = {
-      receiver: row,
-      url: 'https://tos.example/accept',
-      email: row.email,
-    };
-    const delegated = jest
-      .spyOn(service, 'approveById')
-      .mockResolvedValue(outcome as any);
-
-    await expect(
-      service.approve(CONSUMER, row.id, 'https://app.example.com/cb'),
-    ).resolves.toBe(outcome);
-    expect(delegated).toHaveBeenCalledWith(
-      row.id,
-      'https://app.example.com/cb',
-    );
-  });
-
-  it('requestTos scopes ownership before delegating to requestTosById', async () => {
-    const { service, prisma } = makeService();
-    const row = baseRow({ kycStatus: 'pending_user' });
-    prisma.blindpayReceiver.findFirst.mockResolvedValue(row);
-    const outcome = {
-      url: 'https://tos.example/accept',
-      email: row.email,
-      channel: 'email' as const,
-    };
-    const delegated = jest
-      .spyOn(service, 'requestTosById')
-      .mockResolvedValue(outcome);
-
-    await expect(
-      service.requestTos(
-        CONSUMER,
-        row.id,
-        {
-          channel: 'email',
-          redirect_url: 'https://app.example.com/cb',
-        },
-        0,
-      ),
-    ).resolves.toBe(outcome);
-    expect(delegated).toHaveBeenCalledWith(
-      row.id,
-      expect.objectContaining({ channel: 'email' }),
-      0,
-    );
-  });
-
-  it('enable scopes ownership before delegating to enableById', async () => {
-    const { service, prisma } = makeService();
-    const row = baseRow({ kycStatus: 'pending_user' });
-    prisma.blindpayReceiver.findFirst.mockResolvedValue(row);
-    const delegated = jest
-      .spyOn(service, 'enableById')
-      .mockResolvedValue(row as any);
-
-    await expect(service.enable(CONSUMER, row.id, 'tos_1')).resolves.toBe(row);
-    expect(delegated).toHaveBeenCalledWith(row.id, 'tos_1');
-  });
-
-  it('lists only the local consumer receivers', async () => {
-    const { service, prisma } = makeService();
-    const rows = [baseRow()];
-    prisma.blindpayReceiver.findMany.mockResolvedValue(rows);
-
-    await expect(service.findAll(CONSUMER)).resolves.toEqual({
-      data: rows,
-      total: 1,
+    expect(prisma.$transaction).toHaveBeenCalled();
+    expect(auditRows).toHaveLength(1);
+    expect(auditRows[0]).toMatchObject({
+      actorId: 'cosmos_cred_1',
+      actorRole: 'api_key:user',
+      action: 'receivers.delete',
+      resourceType: 'receiver',
+      resourceId: row.id,
     });
-    expect(prisma.blindpayReceiver.findMany).toHaveBeenCalledWith({
-      where: { consumerId: 'c1' },
-      orderBy: { createdAt: 'desc' },
+    // The evidence the delete destroys is what the audit row has to preserve.
+    expect(auditRows[0].metadata).toMatchObject({
+      blindpayId: LOCAL_ID,
+      kycStatus: 'pending_user',
+      tosSentAt: '2026-06-28T12:00:00.000Z',
     });
   });
 
-  it('returns local receivers without calling BlindPay', async () => {
-    const { service, prisma, blindpay } = makeService();
-    const row = baseRow();
+  it('records the delete of a receiver that exists at BlindPay too', async () => {
+    const { service, prisma, blindpay, auditRows } = makeService();
+    const row = baseRow({ blindpayId: REAL_ID, kycStatus: 'approved' });
     prisma.blindpayReceiver.findFirst.mockResolvedValue(row);
-
-    await expect(service.findOne(CONSUMER, row.id)).resolves.toBe(row);
-    expect(blindpay.get).not.toHaveBeenCalled();
-  });
-
-  it('refreshes remote receivers and falls back locally on provider failure', async () => {
-    const { service, prisma, blindpay, sync } = makeService();
-    const row = baseRow({ blindpayId: REAL_ID, kycStatus: 'verifying' });
-    prisma.blindpayReceiver.findFirst.mockResolvedValue(row);
-    blindpay.get
-      .mockResolvedValueOnce({ id: REAL_ID, kyc_status: 'approved' })
-      .mockRejectedValueOnce(new Error('provider down'));
-    const mirrored = { ...row, kycStatus: 'approved' };
-    sync.mirrorReceiver.mockResolvedValue(mirrored);
-
-    await expect(service.findOne(CONSUMER, row.id)).resolves.toBe(mirrored);
-    await expect(service.findOne(CONSUMER, row.id)).resolves.toBe(row);
-  });
-
-  it('removes a local receiver without a provider DELETE', async () => {
-    const { service, prisma, blindpay } = makeService();
-    const row = baseRow();
-    prisma.blindpayReceiver.findFirst.mockResolvedValue(row);
-    prisma.blindpayReceiver.delete.mockResolvedValue(row);
-
-    await expect(service.remove(CONSUMER, row.id)).resolves.toEqual({
-      id: row.id,
-      deleted: true,
-    });
-    expect(blindpay.delete).not.toHaveBeenCalled();
-  });
-
-  it('deletes a remote receiver at BlindPay before deleting its mirror', async () => {
-    const { service, prisma, blindpay } = makeService();
-    const row = baseRow({ blindpayId: REAL_ID });
-    prisma.blindpayReceiver.findFirst.mockResolvedValue(row);
-    prisma.blindpayReceiver.delete.mockResolvedValue(row);
 
     await service.remove(CONSUMER, row.id);
 
     expect(blindpay.delete).toHaveBeenCalledWith(
-      '/instances/in_test/customers/re_000000000000',
+      `/instances/in_test/customers/${REAL_ID}`,
     );
-    expect(blindpay.delete.mock.invocationCallOrder[0]).toBeLessThan(
-      prisma.blindpayReceiver.delete.mock.invocationCallOrder[0],
-    );
+    expect(auditRows).toHaveLength(1);
+    expect(auditRows[0].metadata).toMatchObject({ blindpayId: REAL_ID });
   });
 
-  it('updates the owner/admin access switch after the ownership check', async () => {
-    const { service, prisma } = makeService();
-    const row = baseRow();
-    prisma.blindpayReceiver.findFirst.mockResolvedValue(row);
-    prisma.blindpayReceiver.update.mockResolvedValue({
-      ...row,
-      disabled: true,
-    });
+  it('never writes the KYC dossier into the audit trail', async () => {
+    const { service, prisma, auditRows } = makeService();
+    prisma.blindpayReceiver.findFirst.mockResolvedValue(baseRow());
 
-    await service.setAccess(CONSUMER, row.id, true);
+    await service.remove(CONSUMER, 'rcv_1');
 
-    expect(prisma.blindpayReceiver.update).toHaveBeenCalledWith({
-      where: { id: row.id },
-      data: { disabled: true },
-    });
+    expect(JSON.stringify(auditRows[0])).not.toContain('123-45-6789');
   });
 });

@@ -3,7 +3,8 @@ import {
   assertPublicWebhookUrl,
   DEFAULT_DNS_LOOKUP,
   DnsLookupFn,
-} from './webhook-url.validator';
+  ValidatedWebhookDestination,
+} from '@/webhooks/webhook-url.validator';
 
 /**
  * Shared destination checks for webhook URL registration and outbound delivery.
@@ -19,7 +20,11 @@ export class WebhookDestinationGuard {
     this.lookup = lookup;
   }
 
-  async assertSafe(url: string): Promise<void> {
-    await assertPublicWebhookUrl(url, this.lookup);
+  /**
+   * Returns the validated destination. Delivery must connect to its `address`:
+   * re-resolving the hostname reopens the rebinding window this check closes.
+   */
+  async assertSafe(url: string): Promise<ValidatedWebhookDestination> {
+    return assertPublicWebhookUrl(url, this.lookup);
   }
 }

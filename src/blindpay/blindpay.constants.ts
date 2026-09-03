@@ -104,3 +104,36 @@ export const ID_PREFIX = {
   payout: 'pa_',
   quote: 'qe_',
 } as const;
+
+/**
+ * How long a mirrored BlindPay row may be served from our own database before a
+ * single-resource read refreshes it upstream.
+ *
+ * Webhooks are the primary path for status changes, so the refresh is a safety
+ * net for a missed delivery rather than the source of truth. Refreshing on
+ * *every* GET pinned our p99 to BlindPay's (15s timeout, no retry) and turned
+ * each read into a write; a short window keeps reads local while bounding how
+ * stale an un-webhooked row can get.
+ */
+export const MIRROR_FRESHNESS_MS = 60_000;
+
+/** How far a Svix webhook timestamp may drift before the delivery is rejected. */
+export const SVIX_TOLERANCE_SECONDS = 5 * 60;
+
+/** Prefix on the Svix endpoint secret; the rest is the base64 HMAC key. */
+export const SVIX_SECRET_PREFIX = 'whsec_';
+
+/**
+ * Payin/payout statuses that mean the money stopped moving. A webhook may move a
+ * row *into* one of these at any time (`completed` -> `refunded` is a real
+ * transition), but never back out.
+ */
+export const SETTLED_STATUSES = [
+  'completed',
+  'failed',
+  'refunded',
+  'cancelled',
+] as const;
+
+/** Terminal BlindPay KYC statuses; mirrors `kyc/receivers/receiver-state.ts`. */
+export const SETTLED_KYC_STATUSES = ['approved', 'rejected'] as const;

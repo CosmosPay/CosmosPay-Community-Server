@@ -1,6 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsIn, IsOptional } from 'class-validator';
-import { IsRedirectUrl } from '../../../common/validators/is-redirect-url.validator';
+import { IsRedirectUrl } from '@/common/validators/is-redirect-url.validator';
 
 /**
  * Requests a terms-of-service acceptance link for a receiver. A receiver is created

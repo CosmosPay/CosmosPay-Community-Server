@@ -1,19 +1,20 @@
-import { Body, Controller, Get, Param, Post } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
+import { WidePaginationQueryDto } from '@/common/dto/pagination.query.dto';
 import {
   ApiCreatedResponse,
   ApiOkResponse,
   ApiOperation,
   ApiTags,
 } from '@nestjs/swagger';
-import { CurrentConsumer } from '../common/decorators/current-consumer.decorator';
-import { RequirePermissions } from '../common/decorators/require-permissions.decorator';
-import { GatewayConsumer } from '../common/interfaces/gateway-consumer.interface';
-import { OnrampService } from './onramp.service';
-import { CreatePayinQuoteDto } from './dto/create-payin-quote.dto';
-import { CreatePayinDto } from './dto/create-payin.dto';
-import { CreateTrustlineDto } from './dto/create-trustline.dto';
-import { PayinQuoteEntity } from './entities/payin-quote.entity';
-import { PayinEntity } from './entities/payin.entity';
+import { CurrentConsumer } from '@/common/decorators/current-consumer.decorator';
+import { RequirePermissions } from '@/common/decorators/require-permissions.decorator';
+import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
+import { OnrampService } from '@/onramp/onramp.service';
+import { CreatePayinQuoteDto } from '@/onramp/dto/create-payin-quote.dto';
+import { CreatePayinDto } from '@/onramp/dto/create-payin.dto';
+import { CreateTrustlineDto } from '@/onramp/dto/create-trustline.dto';
+import { PayinQuoteEntity } from '@/onramp/entities/payin-quote.entity';
+import { PayinEntity, PayinListEntity } from '@/onramp/entities/payin.entity';
 
 // /v1/onramp — fiat -> stablecoin.
 @ApiTags('onramp')
@@ -48,14 +49,20 @@ export class OnrampController {
   @Get('payins')
   @RequirePermissions('onramp:read')
   @ApiOperation({ summary: "List the consumer's payins" })
-  @ApiOkResponse({ type: [PayinEntity] })
-  findAll(@CurrentConsumer() consumer: GatewayConsumer) {
-    return this.onramp.findAll(consumer);
+  @ApiOkResponse({ type: PayinListEntity })
+  findAll(
+    @CurrentConsumer() consumer: GatewayConsumer,
+    @Query() query: WidePaginationQueryDto,
+  ) {
+    return this.onramp.findAll(consumer, query);
   }
 
   @Get('payins/:id')
   @RequirePermissions('onramp:read')
-  @ApiOperation({ summary: 'Get a payin (refreshes status from BlindPay)' })
+  @ApiOperation({
+    summary:
+      'Get a payin (serves the local mirror; refreshes from BlindPay when stale)',
+  })
   @ApiOkResponse({ type: PayinEntity })
   findOne(
     @CurrentConsumer() consumer: GatewayConsumer,

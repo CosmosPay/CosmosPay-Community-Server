@@ -1,9 +1,10 @@
 import { Global, Module } from '@nestjs/common';
-import { StellarService } from './stellar.service';
+import { StellarAccountLoader } from '@/stellar/account-loader.service';
+import { StellarService } from '@/stellar/stellar.service';
 
 @Global()
 @Module({
-  providers: [StellarService],
-  exports: [StellarService],
+  providers: [StellarService, StellarAccountLoader],
+  exports: [StellarService, StellarAccountLoader],
 })
 export class StellarModule {}

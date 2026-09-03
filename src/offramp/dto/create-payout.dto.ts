@@ -3,9 +3,9 @@ import { IsIn, IsString } from 'class-validator';
 import {
   CHAIN_VARIANTS,
   type ChainVariant,
-} from '../../blindpay/blindpay.constants';
-import { IsRequiredForChain } from '../../common/validators/is-required-for-chain.validator';
-import { IsWalletAddressForChain } from '../../common/validators/is-wallet-address-for-chain.validator';
+} from '@/blindpay/blindpay.constants';
+import { IsRequiredForChain } from '@/common/validators/is-required-for-chain.validator';
+import { IsWalletAddressForChain } from '@/common/validators/is-wallet-address-for-chain.validator';
 
 /**
  * Executes an offramp from a quote. For EVM the customer must have already sent

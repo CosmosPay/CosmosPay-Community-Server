@@ -14,8 +14,7 @@ export const PAYMENT_INTENT_STATUSES = [
   'EXPIRED',
 ] as const;
 
-export type PaymentIntentStatusName =
-  (typeof PAYMENT_INTENT_STATUSES)[number];
+export type PaymentIntentStatusName = (typeof PAYMENT_INTENT_STATUSES)[number];
 
 /** Terminal statuses cannot be abandoned. */
 export const TERMINAL_STATUSES = [

@@ -1,10 +1,12 @@
 import { isIP } from 'node:net';
 import { promises as dns } from 'node:dns';
+import { BLOCKED_HOSTNAMES } from '@/webhooks/webhooks.constants';
 
 /**
  * Outbound webhook destinations must be public HTTPS endpoints.
  * Resolves DNS and rejects loopback, private, link-local, and cloud-metadata targets
- * (SSRF hardening). Used at register time and again immediately before delivery.
+ * (SSRF hardening). Used at register time and again immediately before delivery,
+ * which then connects to the address this returned rather than resolving again.
  */
 
 export class WebhookUrlValidationError extends Error {
@@ -17,11 +19,27 @@ export class WebhookUrlValidationError extends Error {
 /** Resolves a hostname to one or more IP addresses (IPv4 and/or IPv6). */
 export type DnsLookupFn = (hostname: string) => Promise<string[]>;
 
-const BLOCKED_HOSTNAMES = new Set([
-  'metadata.google.internal',
-  'metadata.google.com',
-  'metadata',
-]);
+/**
+ * A destination that passed validation, carrying everything the caller needs to
+ * open the connection **to the address that was actually checked**.
+ *
+ * Returning the address is what makes the check mean anything. Validating a
+ * hostname and then handing that hostname to `fetch` (or to `https.request`
+ * without a pinned `lookup`) resolves DNS a second time, so the address that was
+ * validated is never the address that is connected to: a record with a
+ * one-second TTL alternating between a public IP and `169.254.169.254` passes
+ * here and is then fetched at the cloud metadata service. Callers must connect
+ * to {@link address} and keep {@link hostname} for the `Host` header, the SNI
+ * extension and certificate verification — see `postWebhook`.
+ */
+export interface ValidatedWebhookDestination {
+  /** Hostname as registered — for `Host`, SNI and certificate verification. */
+  hostname: string;
+  port: number;
+  /** The literal IP the socket must connect to. */
+  address: string;
+  family: 4 | 6;
+}
 
 export const DEFAULT_DNS_LOOKUP: DnsLookupFn = async (hostname) => {
   const results = await dns.lookup(hostname, { all: true, verbatim: true });
@@ -29,18 +47,21 @@ export const DEFAULT_DNS_LOOKUP: DnsLookupFn = async (hostname) => {
 };
 
 /**
- * Validates that `rawUrl` is an https URL whose resolved address(es) are public.
+ * Validates that `rawUrl` is an https URL whose resolved address(es) are public,
+ * and returns the destination to pin the connection to.
  * Throws {@link WebhookUrlValidationError} when the destination is not allowed.
  */
 export async function assertPublicWebhookUrl(
   rawUrl: string,
   lookup: DnsLookupFn = DEFAULT_DNS_LOOKUP,
-): Promise<void> {
+): Promise<ValidatedWebhookDestination> {
   let parsed: URL;
   try {
     parsed = new URL(rawUrl);
   } catch {
-    throw new WebhookUrlValidationError('Webhook URL is not a valid absolute URL');
+    throw new WebhookUrlValidationError(
+      'Webhook URL is not a valid absolute URL',
+    );
   }
 
   if (parsed.protocol !== 'https:') {
@@ -66,10 +87,12 @@ export async function assertPublicWebhookUrl(
     );
   }
 
+  const port = parsed.port ? Number(parsed.port) : 443;
+
   const ipVersion = isIP(hostname);
   if (ipVersion) {
     assertAddressAllowed(hostname, ipVersion);
-    return;
+    return { hostname, port, address: hostname, family: ipVersion as 4 | 6 };
   }
 
   let addresses: string[];
@@ -96,6 +119,11 @@ export async function assertPublicWebhookUrl(
     }
     assertAddressAllowed(address, version);
   }
+
+  // Every answer was just checked, so pinning any of them connects to an
+  // address we validated; take the first, the order the resolver preferred.
+  const [address] = addresses;
+  return { hostname, port, address, family: isIP(address) as 4 | 6 };
 }
 
 function assertAddressAllowed(address: string, version: number): void {
@@ -108,10 +136,13 @@ function assertAddressAllowed(address: string, version: number): void {
 
 function assertIpv4Allowed(address: string): void {
   const parts = address.split('.').map((p) => Number(p));
-  if (parts.length !== 4 || parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) {
+  if (
+    parts.length !== 4 ||
+    parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255)
+  ) {
     throw new WebhookUrlValidationError(`Invalid IPv4 address: ${address}`);
   }
-  const [a, b] = parts;
+  const [a, b, c] = parts;
 
   // Loopback 127.0.0.0/8
   if (a === 127) {
@@ -143,6 +174,14 @@ function assertIpv4Allowed(address: string): void {
       'Webhook URL must not resolve to a private address',
     );
   }
+  // IETF protocol assignments 192.0.0.0/24 — not globally routable, and the
+  // block holds special-purpose addresses (DS-Lite 192.0.0.1, NAT64 discovery)
+  // that resolve on-network rather than on the internet.
+  if (a === 192 && b === 0 && c === 0) {
+    throw new WebhookUrlValidationError(
+      'Webhook URL must not resolve to a reserved address',
+    );
+  }
   // Link-local 169.254.0.0/16 (includes cloud metadata 169.254.169.254)
   if (a === 169 && b === 254) {
     throw new WebhookUrlValidationError(
@@ -153,6 +192,13 @@ function assertIpv4Allowed(address: string): void {
   if (a === 100 && b >= 64 && b <= 127) {
     throw new WebhookUrlValidationError(
       'Webhook URL must not resolve to a shared/CGNAT address',
+    );
+  }
+  // Benchmarking 198.18.0.0/15 — RFC 2544 test range, routed to lab gear
+  // inside a network rather than to the internet.
+  if (a === 198 && (b === 18 || b === 19)) {
+    throw new WebhookUrlValidationError(
+      'Webhook URL must not resolve to a benchmarking address',
     );
   }
   // Multicast / reserved 224.0.0.0/4 and above
@@ -200,11 +246,58 @@ function assertIpv6Allowed(address: string): void {
     );
   }
 
-  // IPv4-mapped IPv6 (:ffff:a.b.c.d) — re-check the embedded v4.
+  // 6to4 2002::/16. The 32 bits after the prefix *are* an IPv4 address the
+  // relay connects to on our behalf, so `2002:a9fe:a9fe::` is 169.254.169.254
+  // smuggled past every v4 check above. The transition mechanism is deprecated
+  // (RFC 7526) and no real integrator is reachable only this way.
+  if (normalized.startsWith('2002:')) {
+    throw new WebhookUrlValidationError(
+      'Webhook URL must not resolve to a 6to4 address',
+    );
+  }
+  // NAT64 64:ff9b::/32 (the well-known /96 plus the local-use 64:ff9b:1::/48).
+  // Same shape of problem: the low 32 bits are handed to a translator that
+  // opens the connection as IPv4, which may land anywhere private.
+  if (normalized.startsWith('0064:ff9b:')) {
+    throw new WebhookUrlValidationError(
+      'Webhook URL must not resolve to a NAT64 address',
+    );
+  }
+
+  // Teredo 2001:0000::/32. Embeds a server and a client IPv4 address and
+  // tunnels to IPv4 — the same class as 6to4 above, and equally not how any
+  // real integrator is reachable.
+  if (normalized.startsWith('2001:0000:')) {
+    throw new WebhookUrlValidationError(
+      'Webhook URL must not resolve to a Teredo address',
+    );
+  }
+
+  // IPv4-mapped IPv6 (::ffff:a.b.c.d) — re-check the embedded v4.
   if (normalized.startsWith('0000:0000:0000:0000:0000:ffff:')) {
     const mapped = ipv4FromMappedIpv6(normalized);
     if (mapped) {
       assertIpv4Allowed(mapped);
+    }
+  }
+
+  // IPv4-compatible IPv6 (::a.b.c.d) — the deprecated sibling of the mapped
+  // form, and the one the checks above all miss. `::169.254.169.254` expands to
+  // 0000:…:a9fe:a9fe: not ::1, not ::, not ULA, not link-local, not multicast,
+  // no 2002:/0064:ff9b: prefix, and the mapped re-check keys on ::ffff: — so it
+  // walked straight through to the cloud metadata service.
+  if (
+    normalized.startsWith('0000:0000:0000:0000:0000:0000:') &&
+    !normalized.endsWith(':0000:0000') // plain :: and ::1 are handled above
+  ) {
+    const embedded = ipv4FromMappedIpv6(
+      normalized.replace(
+        '0000:0000:0000:0000:0000:0000:',
+        '0000:0000:0000:0000:0000:ffff:',
+      ),
+    );
+    if (embedded) {
+      assertIpv4Allowed(embedded);
     }
   }
 }
@@ -226,9 +319,9 @@ function expandIpv6(address: string): string {
   const headParts = head ? head.split(':') : [];
   const tailParts = tail ? tail.split(':') : [];
   const missing = 8 - (headParts.length + tailParts.length);
-  const parts = [
+  const parts: string[] = [
     ...headParts,
-    ...Array(Math.max(missing, 0)).fill('0'),
+    ...Array<string>(Math.max(missing, 0)).fill('0'),
     ...tailParts,
   ];
   return parts.map((p) => p.padStart(4, '0')).join(':');

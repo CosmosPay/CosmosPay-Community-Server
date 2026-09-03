@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { VersioningType } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { stringify } from 'yaml';
-import { createOpenApiDocument } from '../src/swagger';
+import { createOpenApiDocument } from '@/swagger';
 
 /**
  * Writes the OpenAPI spec to `openapi/openapi.{json,yaml}` without starting the
@@ -18,18 +18,33 @@ async function generate(): Promise<void> {
   // placeholders keep this offline command independent from real credentials.
   process.env.DATABASE_URL ??=
     'postgresql://openapi:openapi@localhost:5432/openapi';
-  process.env.APISIX_GATEWAY_SECRET ??= 'openapi-generation-only';
+  // Must satisfy the @MinLength(32) on APISIX_GATEWAY_SECRET, or this offline
+  // command fails in CI, where no .env supplies a real one.
+  process.env.APISIX_GATEWAY_SECRET ??=
+    'openapi-generation-only-placeholder-secret';
   // Default swap fee bps is 50; env validation requires a fee wallet when > 0.
   process.env.STELLAR_SWAP_FEE_WALLET ??=
     'GARMB7W3FCR3GKIM3FLWVJASC2PUZ4VHUJZTNJVWWKNTCJNKO6TBCT76';
+  // A developer's local .env often carries a real BLINDPAY_API_KEY, and env
+  // validation then demands the instance id and webhook secret alongside it. Set
+  // them here unconditionally: these run before ConfigModule loads .env, and
+  // dotenv never overwrites an existing process.env value, so the placeholders
+  // win. Without them this offline command fails locally but passes in CI, where
+  // no .env exists.
+  process.env.BLINDPAY_INSTANCE_ID ??= 'in_openapi_generation_only';
+  process.env.BLINDPAY_WEBHOOK_SECRET ??= 'whsec_openapi_generation_only';
 
   // Import only after the offline defaults are set: ConfigModule validates the
   // environment as soon as AppModule is evaluated.
-  const { AppModule } = await import('../src/app.module');
+  const { AppModule } = await import('@/app.module');
 
   const app = await NestFactory.create(AppModule, {
     preview: true,
     logger: false,
+    // Without this Nest swallows any bootstrap failure (env validation, DI) and
+    // calls process.exit(1) through the disabled logger — a silent exit 1 with no
+    // diagnostic. Rethrowing lets the catch below actually print the cause.
+    abortOnError: false,
   });
 
   // Match runtime routing so paths in the spec are accurate (/v1/...).

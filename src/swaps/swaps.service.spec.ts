@@ -1,15 +1,14 @@
-import {
-  BadRequestException,
-  ConflictException,
-  ServiceUnavailableException,
-} from '@nestjs/common';
+import { StellarAccountLoader } from '@/stellar/account-loader.service';
+import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
+import { HttpStatus } from '@nestjs/common';
 import { Account, Keypair, TransactionBuilder } from '@stellar/stellar-sdk';
+import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { GatewayConsumer } from '../common/interfaces/gateway-consumer.interface';
-import { SettlementObserverService } from '../observer/settlement-observer.service';
-import { WEBHOOK_EVENT } from '../webhooks/webhook-events';
-import { WebhookTerminalEmitter } from '../webhooks/webhook-terminal-emitter.service';
-import { SwapsService } from './swaps.service';
+import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
+import { SettlementObserverService } from '@/observer/settlement-observer.service';
+import { WEBHOOK_EVENT } from '@/webhooks/webhook-events';
+import { WebhookTerminalEmitter } from '@/webhooks/webhook-terminal-emitter.service';
+import { SwapsService } from '@/swaps/swaps.service';
 
 jest.mock('qrcode', () => ({
   __esModule: true,
@@ -197,8 +196,23 @@ function createPrisma(seed: any[] = []) {
       }),
     },
     webhookEmittedEvent: uniqueEmittedEvents(),
+    // The emitter claims the dedup row and persists deliveries in one
+    // interactive transaction; the fake just runs the callback against itself.
+    $transaction: jest.fn(async (fn: any) =>
+      typeof fn === 'function' ? fn(prisma) : Promise.all(fn),
+    ),
   };
   return prisma;
+}
+
+/**
+ * These tests exercise the terminal-event *claim*, not delivery fan-out, so the
+ * dispatcher is stubbed to persist nothing — an empty (but non-null) delivery
+ * list still authorizes the bus emit.
+ */
+function makeEmitter(prisma: any, events: EventEmitter2) {
+  const dispatcher = { persistDeliveries: jest.fn().mockResolvedValue([]) };
+  return new WebhookTerminalEmitter(prisma, events, dispatcher as any);
 }
 
 function stellarConfig(swapOverrides: Record<string, unknown> = {}) {
@@ -216,6 +230,27 @@ function stellarConfig(swapOverrides: Record<string, unknown> = {}) {
     },
     horizon: { public: 'https://h', testnet: 'https://h' },
   };
+}
+
+/**
+ * The service reads `nodeEnv` and `apisix` alongside `stellar`, so the mock has
+ * to answer per key rather than returning the Stellar block for everything —
+ * `resolveSwapFeeBps` branches on `nodeEnv === 'production'`.
+ */
+function makeConfig(
+  swapOverrides: Record<string, unknown> = {},
+  nodeEnv = 'test',
+) {
+  return {
+    get: (key?: string) => {
+      if (key === 'observer') {
+        return { enabled: false, intervalMs: 15_000, batchSize: 50 };
+      }
+      if (key === 'nodeEnv') return nodeEnv;
+      if (key === 'apisix') return { swapFeeBpsHeader: 'x-plan-swap-fee-bps' };
+      return stellarConfig(swapOverrides);
+    },
+  } as any;
 }
 
 function makeStellar() {
@@ -242,18 +277,14 @@ function makeStellar() {
     account.balances = balances;
     return account;
   });
-  const server = {
-    submitTransaction,
-    transactions: () => ({ transaction: () => ({ call: txCall }) }),
-    loadAccount,
-    strictSendPaths,
-  };
   return {
     passphrase: jest.fn().mockReturnValue('Test SDF Network ; September 2015'),
-    server: jest.fn().mockReturnValue(server),
-    call: jest.fn((_network: string, fn: (s: typeof server) => unknown) =>
-      fn(server),
-    ),
+    server: jest.fn().mockReturnValue({
+      submitTransaction,
+      transactions: () => ({ transaction: () => ({ call: txCall }) }),
+      loadAccount,
+      strictSendPaths,
+    }),
     submitTransaction,
     txCall,
     strictSendPaths,
@@ -312,17 +343,19 @@ describe('SwapsService.submit vs observer (issue #29 double terminal event)', ()
     prisma = createPrisma();
     stellar = makeStellar();
     events = { emit: jest.fn() } as any;
-    const config = {
-      get: (key?: string) =>
-        key === 'observer'
-          ? { enabled: false, intervalMs: 15_000, batchSize: 50 }
-          : stellarConfig(),
-    } as any;
-    const webhooks = new WebhookTerminalEmitter(prisma as any, events);
-    service = new SwapsService(config, prisma as any, webhooks, stellar as any);
+    const config = makeConfig();
+    const webhooks = makeEmitter(prisma, events);
+    service = new SwapsService(
+      config,
+      prisma,
+      webhooks,
+      stellar as any,
+      new ConsumerResolverService(prisma as never),
+      new StellarAccountLoader(stellar as never),
+    );
     observer = new SettlementObserverService(
       config,
-      prisma as any,
+      prisma,
       stellar as any,
       {} as any,
       service,
@@ -431,14 +464,16 @@ describe('SwapsService.create idempotency (issue #17)', () => {
     prisma = createPrisma();
     stellar = makeStellar();
     events = { emit: jest.fn() } as any;
-    const config = {
-      get: (key?: string) =>
-        key === 'observer'
-          ? { enabled: false, intervalMs: 15_000, batchSize: 50 }
-          : stellarConfig(),
-    } as any;
-    const webhooks = new WebhookTerminalEmitter(prisma as any, events);
-    service = new SwapsService(config, prisma as any, webhooks, stellar as any);
+    const config = makeConfig();
+    const webhooks = makeEmitter(prisma, events);
+    service = new SwapsService(
+      config,
+      prisma,
+      webhooks,
+      stellar as any,
+      new ConsumerResolverService(prisma as never),
+      new StellarAccountLoader(stellar as never),
+    );
     jest.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000);
   });
 
@@ -513,14 +548,14 @@ describe('SwapsService.create idempotency (issue #17)', () => {
     expect(result.txHash).toBe(existing.txHash);
   });
 
-  it('maps a (network, txHash) unique violation to a clear ConflictException', async () => {
+  it('maps a (network, txHash) unique violation to a 409 idempotency_conflict', async () => {
     await service.create(consumer, createDto);
     expect(prisma.rows).toHaveLength(1);
 
     // Same frozen clock + same quote → identical XDR/hash → unique (network, txHash).
-    await expect(service.create(consumer, createDto)).rejects.toBeInstanceOf(
-      ConflictException,
-    );
+    await expect(service.create(consumer, createDto)).rejects.toMatchObject({
+      code: ApiErrorCode.IdempotencyConflict,
+    });
     await expect(service.create(consumer, createDto)).rejects.toThrow(
       /transaction hash/i,
     );
@@ -528,19 +563,21 @@ describe('SwapsService.create idempotency (issue #17)', () => {
   });
 
   it('returns 409 when STELLAR_SWAP_SINGLE_INFLIGHT blocks a second PENDING source', async () => {
-    const config = {
-      get: (key?: string) =>
-        key === 'observer'
-          ? { enabled: false, intervalMs: 15_000, batchSize: 50 }
-          : stellarConfig({ singleInflight: true }),
-    } as any;
-    const webhooks = new WebhookTerminalEmitter(prisma as any, events);
-    service = new SwapsService(config, prisma as any, webhooks, stellar as any);
+    const config = makeConfig({ singleInflight: true });
+    const webhooks = makeEmitter(prisma, events);
+    service = new SwapsService(
+      config,
+      prisma,
+      webhooks,
+      stellar as any,
+      new ConsumerResolverService(prisma as never),
+      new StellarAccountLoader(stellar as never),
+    );
 
     await service.create(consumer, createDto, 'a');
     await expect(
       service.create(consumer, createDto, 'b'),
-    ).rejects.toBeInstanceOf(ConflictException);
+    ).rejects.toMatchObject({ code: ApiErrorCode.OperationInFlight });
     await expect(service.create(consumer, createDto, 'b')).rejects.toThrow(
       /in-flight swap already exists/i,
     );
@@ -558,17 +595,19 @@ describe('SettlementObserverService duplicate txHash (issue #17)', () => {
     prisma = createPrisma();
     stellar = makeStellar();
     events = { emit: jest.fn() } as any;
-    const config = {
-      get: (key?: string) =>
-        key === 'observer'
-          ? { enabled: false, intervalMs: 15_000, batchSize: 50 }
-          : stellarConfig(),
-    } as any;
-    const webhooks = new WebhookTerminalEmitter(prisma as any, events);
-    service = new SwapsService(config, prisma as any, webhooks, stellar as any);
+    const config = makeConfig();
+    const webhooks = makeEmitter(prisma, events);
+    service = new SwapsService(
+      config,
+      prisma,
+      webhooks,
+      stellar as any,
+      new ConsumerResolverService(prisma as never),
+      new StellarAccountLoader(stellar as never),
+    );
     observer = new SettlementObserverService(
       config,
-      prisma as any,
+      prisma,
       stellar as any,
       {} as any,
       service,
@@ -589,228 +628,104 @@ describe('SettlementObserverService duplicate txHash (issue #17)', () => {
     // One Horizon lookup for the shared hash, not one per row.
     expect(stellar.txCall).toHaveBeenCalledTimes(1);
   });
+
+  it('does not group the same hash across two networks', async () => {
+    // A hash is unique per network, not globally — that is exactly what the
+    // `@@unique([network, txHash])` constraint says. Grouping on the hash alone
+    // put these two rows in one bucket and settled both from a single lookup
+    // against whichever network sorted first, deciding a public swap's fate
+    // from a testnet ledger.
+    const test = swapRow({
+      id: 'swap_testnet',
+      status: 'PENDING',
+      network: 'testnet',
+      txHash: TX_HASH,
+    });
+    const live = swapRow({
+      id: 'swap_public',
+      status: 'PENDING',
+      network: 'public',
+      txHash: TX_HASH,
+    });
+    prisma.rows.push(test, live);
+    stellar.txCall.mockResolvedValue({ successful: true });
+
+    await (observer as any).reconcileSwaps(50);
+
+    // Each network is looked up on its own server, and each row gets its own
+    // terminal event rather than one being settled as a phantom duplicate.
+    expect(stellar.txCall).toHaveBeenCalledTimes(2);
+    expect(stellar.server).toHaveBeenCalledWith('testnet');
+    expect(stellar.server).toHaveBeenCalledWith('public');
+    expect(terminalEmits(events, 'SWAP_SUCCEEDED')).toHaveLength(2);
+  });
 });
+describe('SwapsService platform commission fail-closed (X-Plan-Swap-Fee-Bps)', () => {
+  const quoteDto = {
+    amount: '10',
+    destAssetCode: 'USDC',
+    destAssetIssuer: DEST_ISSUER,
+  };
 
-const nativeBal = (balance: string) => ({
-  asset_type: 'native' as const,
-  balance,
-});
-const usdcBal = (balance: string) => ({
-  asset_type: 'credit_alphanum4' as const,
-  asset_code: 'USDC',
-  asset_issuer: DEST_ISSUER,
-  balance,
-});
+  /** The gateway did not forward the plan rate. */
+  const noPlanRate: GatewayConsumer = { ...consumer, planSwapFeeBps: null };
 
-const issuedDto = {
-  source: SOURCE,
-  amount: '100',
-  sourceAssetCode: 'USDC',
-  sourceAssetIssuer: DEST_ISSUER,
-  destAssetCode: 'XLM',
-};
-
-function horizonAccount(
-  address: string,
-  balances: Array<Record<string, unknown>>,
-  opts: { subentryCount?: number; sequence?: string } = {},
-) {
-  const account: any = new Account(address, opts.sequence ?? '1');
-  account.balances = balances;
-  account.subentry_count = opts.subentryCount ?? 0;
-  return account;
-}
-
-function horizon404(address: string) {
-  const err: any = new Error(`Account ${address} not found`);
-  err.response = { status: 404 };
-  return err;
-}
-
-describe('SwapsService.create pre-flight (issue #18)', () => {
-  let prisma: ReturnType<typeof createPrisma>;
-  let stellar: ReturnType<typeof makeStellar>;
-  let events: EventEmitter2;
-  let service: SwapsService;
-  let sourceSeq: number;
-
-  const fundedSource = () =>
-    horizonAccount(SOURCE, [nativeBal('100'), usdcBal('1000')], {
-      subentryCount: 1,
-      sequence: String(sourceSeq++),
-    });
-  const fundedFeeWallet = () =>
-    horizonAccount(FEE_WALLET, [nativeBal('100'), usdcBal('0')], {
-      subentryCount: 1,
-    });
-
-  beforeEach(() => {
-    prisma = createPrisma();
-    stellar = makeStellar();
-    events = { emit: jest.fn() } as any;
-    sourceSeq = 1;
-    stellar.loadAccount.mockImplementation(async (address: string) => {
-      if (address === FEE_WALLET) return fundedFeeWallet();
-      return fundedSource();
-    });
-    const config = {
-      get: (key?: string) =>
-        key === 'observer'
-          ? { enabled: false, intervalMs: 15_000, batchSize: 50 }
-          : stellarConfig(),
-    } as any;
-    const webhooks = new WebhookTerminalEmitter(prisma as any, events);
-    service = new SwapsService(config, prisma as any, webhooks, stellar as any);
-  });
-
-  afterEach(() => {
-    jest.restoreAllMocks();
-  });
-
-  it('returns 400 when the source has no trustline for the sold issued asset', async () => {
-    stellar.loadAccount.mockImplementation(async (address: string) => {
-      if (address === FEE_WALLET) return fundedFeeWallet();
-      return horizonAccount(SOURCE, [nativeBal('100')], { subentryCount: 0 });
-    });
-
-    const err = await service.create(consumer, issuedDto).catch((e) => e);
-
-    expect(err).toBeInstanceOf(BadRequestException);
-    expect(err.getStatus()).toBe(400);
-    expect(err.message).toContain(
-      `Account ${SOURCE} has no trustline for USDC:${DEST_ISSUER}`,
+  function make(nodeEnv: string, swapOverrides: Record<string, unknown> = {}) {
+    const prisma = createPrisma();
+    const stellar = makeStellar();
+    const events = { emit: jest.fn() } as any;
+    return new SwapsService(
+      makeConfig(swapOverrides, nodeEnv),
+      prisma,
+      makeEmitter(prisma, events),
+      stellar as any,
+      new ConsumerResolverService(prisma as never),
+      new StellarAccountLoader(stellar as never),
     );
-    expect(prisma.swap.create).not.toHaveBeenCalled();
-  });
+  }
 
-  it('returns 400 when the source holds only swapAmount, not the gross sendAmount', async () => {
-    // 50 bps of 100 USDC → fee 0.5, routed swapAmount 99.5. Holding exactly
-    // 99.5 used to build an XDR that later failed with op_underfunded.
-    stellar.loadAccount.mockImplementation(async (address: string) => {
-      if (address === FEE_WALLET) return fundedFeeWallet();
-      return horizonAccount(SOURCE, [nativeBal('100'), usdcBal('99.5')], {
-        subentryCount: 1,
-      });
-    });
-
-    const err = await service.create(consumer, issuedDto).catch((e) => e);
-
-    expect(err).toBeInstanceOf(BadRequestException);
-    expect(err.getStatus()).toBe(400);
-    expect(err.message).toMatch(
-      /Insufficient USDC balance: need 100, but the account holds 99\.5/,
-    );
-    expect(prisma.swap.create).not.toHaveBeenCalled();
-  });
-
-  it('returns 400 when source XLM cannot cover reserve + baseFee * 2 (commission on)', async () => {
-    // subentry_count 1 → reserve (2+1)*0.5 = 1.5 XLM; 2 ops × 100 stroops fee.
-    stellar.loadAccount.mockImplementation(async (address: string) => {
-      if (address === FEE_WALLET) return fundedFeeWallet();
-      return horizonAccount(SOURCE, [nativeBal('1'), usdcBal('1000')], {
-        subentryCount: 1,
-      });
-    });
-
-    const err = await service.create(consumer, issuedDto).catch((e) => e);
-
-    expect(err).toBeInstanceOf(BadRequestException);
-    expect(err.getStatus()).toBe(400);
-    expect(err.message).toMatch(/Insufficient XLM balance/);
-    expect(err.message).toMatch(/1\.50002 XLM reserve \+ network fee/);
-    expect(err.message).toMatch(/holds 1 XLM/);
-    expect(prisma.swap.create).not.toHaveBeenCalled();
-  });
-
-  it('returns 503 when the fee wallet has no trustline for the source asset', async () => {
-    stellar.loadAccount.mockImplementation(async (address: string) => {
-      if (address === FEE_WALLET) {
-        return horizonAccount(FEE_WALLET, [nativeBal('100')], {
-          subentryCount: 0,
-        });
-      }
-      return fundedSource();
-    });
-
-    const err = await service.create(consumer, issuedDto).catch((e) => e);
-
-    expect(err).toBeInstanceOf(ServiceUnavailableException);
-    expect(err.getStatus()).toBe(503);
-    expect(err.message).toBe(
-      `Fee wallet ${FEE_WALLET} has no trustline for USDC:${DEST_ISSUER}`,
-    );
-    expect(prisma.swap.create).not.toHaveBeenCalled();
-  });
-
-  it('returns 503 when the fee wallet does not exist as an account', async () => {
-    stellar.loadAccount.mockImplementation(async (address: string) => {
-      if (address === FEE_WALLET) throw horizon404(FEE_WALLET);
-      return fundedSource();
-    });
-
-    const err = await service.create(consumer, issuedDto).catch((e) => e);
-
-    expect(err).toBeInstanceOf(ServiceUnavailableException);
-    expect(err.getStatus()).toBe(503);
-    expect(err.message).toBe(
-      `Fee wallet ${FEE_WALLET} does not exist as an account on the testnet network`,
-    );
-    expect(err.message).not.toMatch(/trustline/);
-    expect(prisma.swap.create).not.toHaveBeenCalled();
-  });
-
-  it('returns 503 when the fee wallet does not exist and the fee is native XLM', async () => {
-    stellar.loadAccount.mockImplementation(async (address: string) => {
-      if (address === FEE_WALLET) throw horizon404(FEE_WALLET);
-      return horizonAccount(SOURCE, [nativeBal('10000'), usdcBal('0')], {
-        subentryCount: 1,
-        sequence: String(sourceSeq++),
-      });
-    });
+  it('refuses to price a swap in production when the header is missing', async () => {
+    const service = make('production');
 
     const err = await service
-      .create(consumer, {
-        source: SOURCE,
-        amount: '10',
-        destAssetCode: 'USDC',
-        destAssetIssuer: DEST_ISSUER,
-      })
-      .catch((e) => e);
+      .quote(noPlanRate, quoteDto as any)
+      .then(() => null)
+      .catch((e: unknown) => e as ApiError);
 
-    expect(err).toBeInstanceOf(ServiceUnavailableException);
-    expect(err.getStatus()).toBe(503);
-    expect(err.message).toBe(
-      `Fee wallet ${FEE_WALLET} does not exist as an account on the testnet network`,
-    );
-    expect(prisma.swap.create).not.toHaveBeenCalled();
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err!.getStatus()).toBe(HttpStatus.SERVICE_UNAVAILABLE);
+    expect(err!.code).toBe(ApiErrorCode.Misconfigured);
+    // The operator has to be told *which* header the gateway stopped sending.
+    expect(err!.message).toMatch(/x-plan-swap-fee-bps/i);
   });
 
-  it('loads the fee wallet at most once per (network, asset) across two create()s', async () => {
-    await service.create(consumer, issuedDto, 'key-a');
-    await service.create(consumer, issuedDto, 'key-b');
-
-    const feeWalletLoads = stellar.loadAccount.mock.calls.filter(
-      ([address]) => address === FEE_WALLET,
+  it('never silently reprices at STELLAR_SWAP_FEE_BPS in production', async () => {
+    // The dangerous outcome is not an error — it is a successful quote billed
+    // at the platform default instead of the organization's plan rate.
+    const service = make('production', { feeBps: 999 });
+    await expect(service.quote(noPlanRate, quoteDto as any)).rejects.toThrow(
+      ApiError,
     );
-    expect(feeWalletLoads).toHaveLength(1);
-    expect(prisma.swap.create).toHaveBeenCalledTimes(2);
   });
 
-  it('still builds, persists, and returns XDR + SEP-7 URI + QR for a valid swap', async () => {
-    const result = await service.create(consumer, issuedDto, 'happy');
+  it('uses the forwarded plan rate in production (no fallback involved)', async () => {
+    const service = make('production', { feeBps: 999 });
+    const quote = await service.quote(
+      { ...consumer, planSwapFeeBps: 25 },
+      quoteDto,
+    );
+    expect(quote.fee.bps).toBe(25);
+  });
 
-    expect(prisma.swap.create).toHaveBeenCalledTimes(1);
-    expect(result.status).toBe('PENDING');
-    expect(result.sendAmount).toBe('100');
-    expect(result.feeAmount).toBe('0.5');
-    expect(result.swapAmount).toBe('99.5');
-    expect(result.sendAsset).toBe('USDC');
-    expect(result.sendAssetIssuer).toBe(DEST_ISSUER);
-    expect(result.destAsset).toBe('native');
-    expect(result.xdr).toMatch(/^[A-Za-z0-9+/=]+$/);
-    expect(result.uri).toMatch(/^web\+stellar:tx\?xdr=/);
-    expect(result.qr).toBe('data:image/png;base64,qq');
-    expect(result.txHash).toHaveLength(64);
-    expect(terminalEmits(events, 'SWAP_CREATED')).toHaveLength(1);
+  it('still falls back to the configured default outside production', async () => {
+    const service = make('development', { feeBps: 50 });
+    const quote = await service.quote(noPlanRate, quoteDto);
+    expect(quote.fee.bps).toBe(50);
+  });
+
+  it('falls back to a 0% fee outside production when no fee wallet is set', async () => {
+    const service = make('development', { feeWallet: '', feeBps: 50 });
+    const quote = await service.quote(noPlanRate, quoteDto);
+    expect(quote.fee.bps).toBe(0);
   });
 });

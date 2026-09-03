@@ -1,6 +1,6 @@
 import { createParamDecorator, ExecutionContext } from '@nestjs/common';
 import { Request } from 'express';
-import type { AdminPrincipal } from '../../admin/admin-auth';
+import type { AdminPrincipal } from '@/admin/admin-auth';
 
 /** The authenticated admin principal attached by {@link AdminGuard}. */
 export const CurrentAdmin = createParamDecorator(

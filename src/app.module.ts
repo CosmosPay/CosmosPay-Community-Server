@@ -1,30 +1,32 @@
 import { Module, MiddlewareConsumer, NestModule } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
-import { APP_GUARD } from '@nestjs/core';
+import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { EventEmitterModule } from '@nestjs/event-emitter';
-import configuration from './config/configuration';
-import { validateEnv } from './config/env.validation';
-import { ApisixGuard } from './common/guards/apisix.guard';
-import { PermissionsGuard } from './common/guards/permissions.guard';
-import { ApisixContextMiddleware } from './common/middleware/apisix-context.middleware';
-import { RequestLogMiddleware } from './common/middleware/request-log.middleware';
-import { PrismaModule } from './prisma/prisma.module';
-import { StellarModule } from './stellar/stellar.module';
-import { HealthModule } from './health/health.module';
-import { PaymentIntentsModule } from './payment-intents/payment-intents.module';
-import { SwapsModule } from './swaps/swaps.module';
-import { LiquidityPoolsModule } from './liquidity-pools/liquidity-pools.module';
-import { ObserverModule } from './observer/observer.module';
-import { WebhooksModule } from './webhooks/webhooks.module';
-import { AnalyticsModule } from './analytics/analytics.module';
-import { AdminModule } from './admin/admin.module';
-import { ProductsModule } from './products/products.module';
-import { CustomersModule } from './customers/customers.module';
-import { BlindpayModule } from './blindpay/blindpay.module';
-import { KycModule } from './kyc/kyc.module';
-import { OnrampModule } from './onramp/onramp.module';
-import { OfframpModule } from './offramp/offramp.module';
-import { CommonModule } from './common/common.module';
+import { LoggingInterceptor } from '@/common/interceptors/logging.interceptor';
+import configuration from '@/config/configuration';
+import { validateEnv } from '@/config/env.validation';
+import { ApisixGuard } from '@/common/guards/apisix.guard';
+import { PermissionsGuard } from '@/common/guards/permissions.guard';
+import { RateLimitGuard } from '@/common/guards/rate-limit.guard';
+import { ApisixContextMiddleware } from '@/common/middleware/apisix-context.middleware';
+import { PrismaModule } from '@/prisma/prisma.module';
+import { StellarModule } from '@/stellar/stellar.module';
+import { HealthModule } from '@/health/health.module';
+import { PaymentIntentsModule } from '@/payment-intents/payment-intents.module';
+import { SwapsModule } from '@/swaps/swaps.module';
+import { LiquidityPoolsModule } from '@/liquidity-pools/liquidity-pools.module';
+import { ObserverModule } from '@/observer/observer.module';
+import { WebhooksModule } from '@/webhooks/webhooks.module';
+import { AnalyticsModule } from '@/analytics/analytics.module';
+import { AdminModule } from '@/admin/admin.module';
+import { ProductsModule } from '@/products/products.module';
+import { CustomersModule } from '@/customers/customers.module';
+import { BlindpayModule } from '@/blindpay/blindpay.module';
+import { KycModule } from '@/kyc/kyc.module';
+import { OnrampModule } from '@/onramp/onramp.module';
+import { OfframpModule } from '@/offramp/offramp.module';
+import { PollarModule } from '@/pollar/pollar.module';
+import { CommonModule } from '@/common/common.module';
 
 @Module({
   imports: [
@@ -59,8 +61,16 @@ import { CommonModule } from './common/common.module';
     KycModule,
     OnrampModule,
     OfframpModule,
+    // Pollar rails: the hosted-OAuth bridge that turns a social login into a
+    // Stellar wallet, plus the secret-key operator routes for that wallet.
+    PollarModule,
   ],
   providers: [
+    // Persist a RequestLog row per request (powers the API logs view).
+    {
+      provide: APP_INTERCEPTOR,
+      useClass: LoggingInterceptor,
+    },
     // Enforce the "only APISIX" check on every route by default.
     // Routes opt out with @Public().
     {
@@ -74,16 +84,18 @@ import { CommonModule } from './common/common.module';
       provide: APP_GUARD,
       useClass: PermissionsGuard,
     },
+    // Last, so a request that was never going to be served does not spend a
+    // legitimate address's budget on its way to a 403. Opt-in per route with
+    // @RateLimit; every other route passes straight through.
+    {
+      provide: APP_GUARD,
+      useClass: RateLimitGuard,
+    },
   ],
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer): void {
-    // Attach the gateway consumer context to every request before guards run,
-    // then log the request. RequestLogMiddleware goes second so `req.gatewayConsumer`
-    // is already set; it runs before the guards, so its `finish` listener also
-    // captures requests the guards later reject (401/403).
-    consumer
-      .apply(ApisixContextMiddleware, RequestLogMiddleware)
-      .forRoutes('*');
+    // Attach the gateway consumer context to every request before guards run.
+    consumer.apply(ApisixContextMiddleware).forRoutes('*');
   }
 }

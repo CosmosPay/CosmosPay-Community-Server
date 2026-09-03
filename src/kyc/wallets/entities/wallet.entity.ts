@@ -25,3 +25,21 @@ export class WalletEntity {
   @ApiProperty({ example: '2026-06-28T12:00:00.000Z' })
   createdAt!: Date;
 }
+
+/** One page of wallets — the envelope every list in this API returns. */
+export class WalletListEntity {
+  @ApiProperty({ type: [WalletEntity] })
+  data!: WalletEntity[];
+
+  @ApiProperty({
+    description: 'Matching rows, not the page length.',
+    example: 1,
+  })
+  total!: number;
+
+  @ApiProperty({ example: 100 })
+  take!: number;
+
+  @ApiProperty({ example: 0 })
+  skip!: number;
+}

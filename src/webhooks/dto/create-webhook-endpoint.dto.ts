@@ -8,7 +8,7 @@ import {
   IsUrl,
   MaxLength,
 } from 'class-validator';
-import { WebhookEventType } from '../../../generated/prisma/client';
+import { WebhookEventType } from '@generated/prisma/client';
 
 export class CreateWebhookEndpointDto {
   @ApiProperty({

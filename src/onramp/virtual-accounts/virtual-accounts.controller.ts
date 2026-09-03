@@ -1,10 +1,11 @@
-import { Body, Controller, Get, Param, Post } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
+import { WidePaginationQueryDto } from '@/common/dto/pagination.query.dto';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
-import { CurrentConsumer } from '../../common/decorators/current-consumer.decorator';
-import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
-import { GatewayConsumer } from '../../common/interfaces/gateway-consumer.interface';
-import { VirtualAccountsService } from './virtual-accounts.service';
-import { CreateVirtualAccountDto } from '../dto/create-virtual-account.dto';
+import { CurrentConsumer } from '@/common/decorators/current-consumer.decorator';
+import { RequirePermissions } from '@/common/decorators/require-permissions.decorator';
+import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
+import { VirtualAccountsService } from '@/onramp/virtual-accounts/virtual-accounts.service';
+import { CreateVirtualAccountDto } from '@/onramp/dto/create-virtual-account.dto';
 
 // /v1/onramp/receivers/:receiverId/virtual-accounts
 @ApiTags('onramp')
@@ -32,7 +33,8 @@ export class VirtualAccountsController {
   findAll(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Param('receiverId') receiverId: string,
+    @Query() query: WidePaginationQueryDto,
   ) {
-    return this.virtualAccounts.findAll(consumer, receiverId);
+    return this.virtualAccounts.findAll(consumer, receiverId, query);
   }
 }

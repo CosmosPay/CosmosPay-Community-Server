@@ -9,28 +9,28 @@ import {
   Query,
 } from '@nestjs/common';
 import {
-  ApiBody,
   ApiCreatedResponse,
   ApiOkResponse,
   ApiOperation,
   ApiTags,
 } from '@nestjs/swagger';
-import { CurrentConsumer } from '../common/decorators/current-consumer.decorator';
-import { RequirePermissions } from '../common/decorators/require-permissions.decorator';
-import { GatewayConsumer } from '../common/interfaces/gateway-consumer.interface';
-import { CreateWebhookEndpointDto } from './dto/create-webhook-endpoint.dto';
-import { UpdateWebhookEndpointDto } from './dto/update-webhook-endpoint.dto';
-import { QueryDeliveriesDto } from './dto/query-deliveries.dto';
-import { RotateWebhookSecretDto } from './dto/rotate-webhook-secret.dto';
+import { CurrentConsumer } from '@/common/decorators/current-consumer.decorator';
+import { RequirePermissions } from '@/common/decorators/require-permissions.decorator';
+import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
+import { CreateWebhookEndpointDto } from '@/webhooks/dto/create-webhook-endpoint.dto';
+import { UpdateWebhookEndpointDto } from '@/webhooks/dto/update-webhook-endpoint.dto';
+import { QueryDeliveriesDto } from '@/webhooks/dto/query-deliveries.dto';
+import { QueryEndpointsDto } from '@/webhooks/dto/query-endpoints.dto';
 import {
   WebhookDeletedEntity,
   WebhookDeliveryEntity,
   WebhookDeliveryListEntity,
   WebhookEndpointEntity,
+  WebhookEndpointListEntity,
   WebhookEndpointWithSecretEntity,
   WebhookPingEntity,
-} from './entities/webhook.entity';
-import { WebhooksService } from './webhooks.service';
+} from '@/webhooks/entities/webhook.entity';
+import { WebhooksService } from '@/webhooks/webhooks.service';
 
 // URI versioning => /v1/webhooks
 @ApiTags('webhooks')
@@ -55,9 +55,12 @@ export class WebhooksController {
   @Get()
   @RequirePermissions('webhooks:read')
   @ApiOperation({ summary: "List the consumer's webhook endpoints" })
-  @ApiOkResponse({ type: [WebhookEndpointEntity] })
-  findAll(@CurrentConsumer() consumer: GatewayConsumer) {
-    return this.webhooks.findAll(consumer);
+  @ApiOkResponse({ type: WebhookEndpointListEntity })
+  findAll(
+    @CurrentConsumer() consumer: GatewayConsumer,
+    @Query() query: QueryEndpointsDto,
+  ) {
+    return this.webhooks.findAll(consumer, query);
   }
 
   @Get(':id')
@@ -99,17 +102,14 @@ export class WebhooksController {
   @Post(':id/rotate-secret')
   @RequirePermissions('webhooks:write')
   @ApiOperation({
-    summary:
-      'Rotate the signing secret (returns the new secret). The previous secret keeps signing deliveries until previousSecretExpiresAt, unless graceSeconds=0.',
+    summary: 'Rotate the signing secret (returns the new secret)',
   })
-  @ApiBody({ type: RotateWebhookSecretDto, required: false })
   @ApiCreatedResponse({ type: WebhookEndpointWithSecretEntity })
   rotateSecret(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Param('id') id: string,
-    @Body() dto?: RotateWebhookSecretDto,
   ) {
-    return this.webhooks.rotateSecret(consumer, id, dto ?? {});
+    return this.webhooks.rotateSecret(consumer, id);
   }
 
   @Post(':id/ping')

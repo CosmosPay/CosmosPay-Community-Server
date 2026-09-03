@@ -15,7 +15,7 @@ import {
   RECEIVER_TYPES,
   type KycType,
   type ReceiverType,
-} from '../../../blindpay/blindpay.constants';
+} from '@/blindpay/blindpay.constants';
 
 /**
  * Beneficial owner / controlling person for a business (KYB) receiver.

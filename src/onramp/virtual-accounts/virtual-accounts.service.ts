@@ -1,16 +1,17 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { GatewayConsumer } from '../../common/interfaces/gateway-consumer.interface';
-import { PrismaService } from '../../prisma/prisma.service';
-import { BlindpayClient } from '../../blindpay/blindpay.client';
-import { ConsumerResolverService } from '../../blindpay/consumer-resolver.service';
-import { BlindpayObject } from '../../blindpay/blindpay-sync.service';
+import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
+import { PaginationQueryDto } from '@/common/dto/pagination.query.dto';
+import { page } from '@/common/pagination';
+import { PrismaService } from '@/prisma/prisma.service';
+import { BlindpayClient } from '@/blindpay/blindpay.client';
+import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
 import {
-  asNullableString,
-  asString,
-  toJson,
-} from '../../blindpay/blindpay.util';
-import { ReceiversService } from '../../kyc/receivers/receivers.service';
-import { CreateVirtualAccountDto } from '../dto/create-virtual-account.dto';
+  BlindpayObject,
+  VIRTUAL_ACCOUNT_PUBLIC_SELECT,
+} from '@/blindpay/blindpay-sync.service';
+import { asNullableString, asString, toJson } from '@/blindpay/blindpay.util';
+import { ReceiversService } from '@/kyc/receivers/receivers.service';
+import { CreateVirtualAccountDto } from '@/onramp/dto/create-virtual-account.dto';
 
 /**
  * Virtual accounts: dedicated fiat accounts in a receiver's name that auto-
@@ -49,17 +50,31 @@ export class VirtualAccountsService {
     return this.mirror(local.id, receiver.id, created);
   }
 
-  async findAll(consumer: GatewayConsumer, receiverId: string) {
+  async findAll(
+    consumer: GatewayConsumer,
+    receiverId: string,
+    query: PaginationQueryDto,
+  ) {
     const local = await this.consumers.resolve(consumer);
     const receiver = await this.receivers.findReceiverOrThrow(
       local.id,
       receiverId,
     );
-    const data = await this.prisma.blindpayVirtualAccount.findMany({
-      where: { receiverId: receiver.id },
-      orderBy: { createdAt: 'desc' },
-    });
-    return { data, total: data.length };
+    const where = { receiverId: receiver.id };
+    // `total` is the row count, not the page length. Returning `data.length`
+    // made the field useless: it always equalled what the caller just received,
+    // so nobody could tell a full page from the last one.
+    const [data, total] = await Promise.all([
+      this.prisma.blindpayVirtualAccount.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        take: query.take,
+        skip: query.skip,
+        select: VIRTUAL_ACCOUNT_PUBLIC_SELECT,
+      }),
+      this.prisma.blindpayVirtualAccount.count({ where }),
+    ]);
+    return page(data, total, query);
   }
 
   private async resolveWalletBlindpayId(

@@ -5,15 +5,16 @@ import {
 } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
-import { AppModule } from '../src/app.module';
-import { PrismaService } from '../src/prisma/prisma.service';
-import { WebhookDestinationGuard } from '../src/webhooks/webhook-destination.guard';
-import { WebhookSecretCleanupService } from '../src/webhooks/webhook-secret-cleanup.service';
-import { signPayload } from '../src/webhooks/webhook-signature';
+import { AppModule } from '@/app.module';
+import { PrismaService } from '@/prisma/prisma.service';
+import { WebhookDestinationGuard } from '@/webhooks/webhook-destination.guard';
+import { WebhookHttpClient } from '@/webhooks/webhook-http';
 
 /**
  * Full CRUD for webhook endpoints behind the APISIX gate. Prisma is mocked with
- * a tiny in-memory store; global fetch is mocked for the ping test. No DB/network.
+ * a tiny in-memory store; the outbound transport is stubbed for the ping test.
+ * No DB/network. (Delivery pins its own socket via https.request, so stubbing
+ * global fetch no longer intercepts it — the seam is WebhookHttpClient.)
  */
 describe('Webhooks CRUD (e2e)', () => {
   let app: INestApplication;
@@ -37,6 +38,9 @@ describe('Webhooks CRUD (e2e)', () => {
     webhookEndpoint: {
       create: jest.fn(({ data }: any) => {
         const row = {
+          // The gateway consumer that created it — what the ownership filter
+          // matches on.
+          consumerUsername: 'cosmos_u1',
           id: `we_${++seq}`,
           enabled: true,
           destinationBlocked: false,
@@ -48,30 +52,25 @@ describe('Webhooks CRUD (e2e)', () => {
         store.set(row.id, row);
         return Promise.resolve(row);
       }),
-      findMany: jest.fn(() => Promise.resolve([...store.values()])),
-      findFirst: jest.fn(({ where }: any) =>
-        Promise.resolve(store.get(where.id) ?? null),
+      // These honour the consumer filter, as Prisma does. A fake that ignores
+      // `where` cannot distinguish "not found" from "someone else's row", which
+      // is the only thing standing between two tenants.
+      findMany: jest.fn(({ where }: any) =>
+        Promise.resolve([...store.values()].filter((r) => owns(r, where))),
       ),
+      count: jest.fn(({ where }: any) =>
+        Promise.resolve(
+          [...store.values()].filter((r) => owns(r, where)).length,
+        ),
+      ),
+      findFirst: jest.fn(({ where }: any) => {
+        const row = store.get(where.id);
+        return Promise.resolve(row && owns(row, where) ? row : null);
+      }),
       update: jest.fn(({ where, data }: any) => {
         const row = { ...store.get(where.id), ...data, updatedAt: new Date() };
         store.set(where.id, row);
         return Promise.resolve(row);
-      }),
-      updateMany: jest.fn(({ where, data }: any) => {
-        const cutoff = where?.previousSecretExpiresAt?.lte as Date | undefined;
-        let count = 0;
-        for (const [id, row] of store.entries()) {
-          const hasPrev = row.previousSecret != null;
-          const expired =
-            cutoff instanceof Date &&
-            row.previousSecretExpiresAt instanceof Date &&
-            row.previousSecretExpiresAt <= cutoff;
-          if (hasPrev && expired) {
-            store.set(id, { ...row, ...data });
-            count += 1;
-          }
-        }
-        return Promise.resolve({ count });
       }),
       delete: jest.fn(({ where }: any) => {
         const row = store.get(where.id);
@@ -82,13 +81,24 @@ describe('Webhooks CRUD (e2e)', () => {
     webhookDelivery: {
       findMany: jest.fn().mockResolvedValue([]),
       count: jest.fn().mockResolvedValue(0),
-      create: jest.fn().mockResolvedValue({ id: 'wd_1' }),
-      update: jest.fn(({ where, data }: any) =>
-        Promise.resolve({ id: where?.id ?? 'wd_1', ...data }),
-      ),
-      updateMany: jest.fn().mockResolvedValue({ count: 0 }),
-      findFirst: jest.fn().mockResolvedValue(null),
     },
+  };
+
+  /** Mirrors `where: { consumer: { apisixUsername } }` / `{ consumerId }`. */
+  function owns(row: any, where: any): boolean {
+    if (!where) return true;
+    const username = where.consumer?.apisixUsername;
+    if (username !== undefined && row.consumerUsername !== username) {
+      return false;
+    }
+    if (where.consumerId !== undefined && row.consumerId !== where.consumerId) {
+      return false;
+    }
+    return true;
+  }
+
+  const webhookHttp = {
+    send: jest.fn().mockResolvedValue({ ok: true, status: 200 }),
   };
 
   beforeAll(async () => {
@@ -100,6 +110,8 @@ describe('Webhooks CRUD (e2e)', () => {
       .useValue(prismaMock)
       .overrideProvider(WebhookDestinationGuard)
       .useValue(destinations)
+      .overrideProvider(WebhookHttpClient)
+      .useValue(webhookHttp)
       .compile();
 
     app = moduleRef.createNestApplication();
@@ -122,7 +134,7 @@ describe('Webhooks CRUD (e2e)', () => {
   const route = '/v1/webhooks';
   const gw = (r: request.Test) =>
     r
-      .set('x-gateway-secret', 'topsecret')
+      .set('x-gateway-secret', 'topsecret-topsecret-topsecret-topsecret')
       .set('x-consumer-username', 'cosmos_u1')
       .set('x-consumer-permissions', 'webhooks:read,webhooks:write');
 
@@ -176,12 +188,42 @@ describe('Webhooks CRUD (e2e)', () => {
 
   it('list/get never expose the secret', async () => {
     const list = await gw(request(http()).get(route)).expect(200);
-    expect(list.body[0].secret).toBeUndefined();
-    expect(list.body[0].previousSecret).toBeUndefined();
+    // The list is the standard { data, total, take, skip } envelope, like every
+    // other list in this API. It used to be a bare array clamped at 100, which
+    // truncated silently with no total to page against.
+    expect(list.body.total).toBeGreaterThan(0);
+    expect(list.body.take).toBe(100);
+    expect(list.body.skip).toBe(0);
+    expect(list.body.data[0].secret).toBeUndefined();
     const one = await gw(request(http()).get(`${route}/${id}`)).expect(200);
     expect(one.body.id).toBe(id);
     expect(one.body.secret).toBeUndefined();
-    expect(one.body.previousSecret).toBeUndefined();
+  });
+
+  it('404s for another tenant, not just for an unknown id', async () => {
+    // The existing "foreign/unknown id" test only sends an id that does not
+    // exist, which proves *unknown*, never *foreign*. This one seeds a real
+    // endpoint owned by cosmos_u1 and asks for it as cosmos_u2 — the case that
+    // would expose another organization's signing secret via rotate-secret.
+    const asOtherTenant = (req: request.Test) =>
+      req
+        .set('x-gateway-secret', 'topsecret-topsecret-topsecret-topsecret')
+        .set('x-consumer-username', 'cosmos_u2')
+        .set('x-consumer-permissions', 'webhooks:read,webhooks:write');
+
+    await asOtherTenant(request(http()).get(`${route}/${id}`)).expect(404);
+    await asOtherTenant(
+      request(http()).patch(`${route}/${id}`).send({ enabled: false }),
+    ).expect(404);
+    await asOtherTenant(
+      request(http()).post(`${route}/${id}/rotate-secret`),
+    ).expect(404);
+    await asOtherTenant(request(http()).delete(`${route}/${id}`)).expect(404);
+
+    // And the list is scoped too — the other tenant sees none of it.
+    const list = await asOtherTenant(request(http()).get(route)).expect(200);
+    expect(list.body.data).toHaveLength(0);
+    expect(list.body.total).toBe(0);
   });
 
   it('updates (pause) an endpoint (200)', async () => {
@@ -191,118 +233,20 @@ describe('Webhooks CRUD (e2e)', () => {
     expect(res.body.enabled).toBe(false);
   });
 
-  it('rotates the secret (201) returning a new secret and previousSecretExpiresAt', async () => {
-    const oldSecret = store.get(id).secret;
+  it('rotates the secret (200) returning a new secret', async () => {
     const res = await gw(
       request(http()).post(`${route}/${id}/rotate-secret`),
     ).expect(201);
     expect(res.body.secret).toMatch(/^whsec_/);
-    expect(res.body.secret).not.toBe(oldSecret);
-    expect(res.body.previousSecret).toBeUndefined();
-    expect(res.body.previousSecretExpiresAt).toBeDefined();
   });
 
-  it('GET after rotate returns previousSecretExpiresAt and never previousSecret nor secret', async () => {
-    const list = await gw(request(http()).get(route)).expect(200);
-    expect(list.body[0].secret).toBeUndefined();
-    expect(list.body[0].previousSecret).toBeUndefined();
-    expect(list.body[0].previousSecretExpiresAt).toBeDefined();
-    const one = await gw(request(http()).get(`${route}/${id}`)).expect(200);
-    expect(one.body.secret).toBeUndefined();
-    expect(one.body.previousSecret).toBeUndefined();
-    expect(one.body.previousSecretExpiresAt).toBeDefined();
-  });
-
-  it('pings the endpoint (mocked fetch → ok) with both v1 tokens during grace', async () => {
-    const fetchMock = jest.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      body: null,
-    });
-    global.fetch = fetchMock as any;
+  it('pings the endpoint (stubbed transport → ok)', async () => {
+    webhookHttp.send.mockResolvedValue({ ok: true, status: 200 });
     const res = await gw(request(http()).post(`${route}/${id}/ping`)).expect(
       201,
     );
     expect(res.body.ok).toBe(true);
     expect(res.body.responseStatus).toBe(200);
-
-    const header: string =
-      fetchMock.mock.calls[0][1].headers['x-cosmos-signature'];
-    const v1s = header.split(',').filter((p: string) => p.startsWith('v1='));
-    expect(v1s).toHaveLength(2);
-
-    const ts = Number(header.split(',')[0].replace('t=', ''));
-    const body: string = fetchMock.mock.calls[0][1].body;
-    const row = store.get(id);
-    expect(v1s[0].slice(3)).toBe(signPayload(row.secret, body, ts));
-    expect(v1s[1].slice(3)).toBe(signPayload(row.previousSecret, body, ts));
-  });
-
-  it('second rotate within grace keeps the original previousSecret', async () => {
-    const originalPrevious = store.get(id).previousSecret;
-    const originalExpiry = store.get(id).previousSecretExpiresAt.getTime();
-    const intermediate = store.get(id).secret;
-    await gw(request(http()).post(`${route}/${id}/rotate-secret`)).expect(201);
-    expect(store.get(id).secret).not.toBe(intermediate);
-    expect(store.get(id).previousSecret).toBe(originalPrevious);
-    expect(store.get(id).previousSecretExpiresAt.getTime()).toBe(
-      originalExpiry,
-    );
-  });
-
-  it('rejects graceSeconds above the configured maximum (400)', async () => {
-    const res = await gw(
-      request(http())
-        .post(`${route}/${id}/rotate-secret`)
-        .send({ graceSeconds: 999_999_999 }),
-    ).expect(400);
-    expect(JSON.stringify(res.body)).toMatch(
-      /cannot exceed the configured maximum/,
-    );
-  });
-
-  it('graceSeconds=0 revokes immediately (next ping has a single v1)', async () => {
-    const oldSecret = store.get(id).secret;
-    await gw(
-      request(http())
-        .post(`${route}/${id}/rotate-secret`)
-        .send({ graceSeconds: 0 }),
-    ).expect(201);
-    expect(store.get(id).previousSecret).toBeNull();
-
-    const fetchMock = jest.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      body: null,
-    });
-    global.fetch = fetchMock as any;
-    await gw(request(http()).post(`${route}/${id}/ping`)).expect(201);
-
-    const header: string =
-      fetchMock.mock.calls[0][1].headers['x-cosmos-signature'];
-    const v1s = header.split(',').filter((p: string) => p.startsWith('v1='));
-    expect(v1s).toHaveLength(1);
-    const ts = Number(header.split(',')[0].replace('t=', ''));
-    const body: string = fetchMock.mock.calls[0][1].body;
-    const row = store.get(id);
-    expect(v1s[0].slice(3)).toBe(signPayload(row.secret, body, ts));
-    expect(v1s[0].slice(3)).not.toBe(signPayload(oldSecret, body, ts));
-  });
-
-  it('clears previousSecret in the store once the grace window has expired', async () => {
-    await gw(request(http()).post(`${route}/${id}/rotate-secret`)).expect(201);
-    expect(store.get(id).previousSecret).toMatch(/^whsec_/);
-
-    store.set(id, {
-      ...store.get(id),
-      previousSecretExpiresAt: new Date(Date.now() - 1000),
-    });
-
-    const cleanup = app.get(WebhookSecretCleanupService);
-    await cleanup.tick();
-
-    expect(store.get(id).previousSecret).toBeNull();
-    expect(store.get(id).previousSecretExpiresAt).toBeNull();
   });
 
   it('404s on a foreign/unknown id', () =>

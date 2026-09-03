@@ -3,6 +3,8 @@ import {
   Controller,
   Delete,
   Get,
+  HttpCode,
+  HttpStatus,
   Param,
   Patch,
   Post,
@@ -14,14 +16,14 @@ import {
   ApiOperation,
   ApiTags,
 } from '@nestjs/swagger';
-import { CurrentConsumer } from '../common/decorators/current-consumer.decorator';
-import { RequirePermissions } from '../common/decorators/require-permissions.decorator';
-import { GatewayConsumer } from '../common/interfaces/gateway-consumer.interface';
-import { CreateTxPaymentIntentDto } from './dto/create-tx-payment-intent.dto';
-import { CreatePayPaymentIntentDto } from './dto/create-pay-payment-intent.dto';
-import { QueryPaymentIntentsDto } from './dto/query-payment-intents.dto';
-import { UpdatePaymentIntentDto } from './dto/update-payment-intent.dto';
-import { ValidatePaymentIntentDto } from './dto/validate-payment-intent.dto';
+import { CurrentConsumer } from '@/common/decorators/current-consumer.decorator';
+import { RequirePermissions } from '@/common/decorators/require-permissions.decorator';
+import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
+import { CreateTxPaymentIntentDto } from '@/payment-intents/dto/create-tx-payment-intent.dto';
+import { CreatePayPaymentIntentDto } from '@/payment-intents/dto/create-pay-payment-intent.dto';
+import { QueryPaymentIntentsDto } from '@/payment-intents/dto/query-payment-intents.dto';
+import { UpdatePaymentIntentDto } from '@/payment-intents/dto/update-payment-intent.dto';
+import { ValidatePaymentIntentDto } from '@/payment-intents/dto/validate-payment-intent.dto';
 import {
   DeletedEntity,
   PaymentIntentEntity,
@@ -30,8 +32,8 @@ import {
   PayPaymentIntentEntity,
   TxPaymentIntentEntity,
   ValidationOutcomeEntity,
-} from './entities/payment-intent.entity';
-import { PaymentIntentsService } from './payment-intents.service';
+} from '@/payment-intents/entities/payment-intent.entity';
+import { PaymentIntentsService } from '@/payment-intents/payment-intents.service';
 
 // URI versioning => /v1/payment-intents
 @ApiTags('payment-intents')
@@ -103,6 +105,9 @@ export class PaymentIntentsController {
 
   @Post(':id/validate')
   @RequirePermissions('payments:write')
+  // Validation reconciles an existing intent against the chain — it creates no
+  // resource, so 200. Nest's POST default of 201 contradicted @ApiOkResponse.
+  @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary:
       'Validate a submitted tx against the intent (tx success + destination + amount + memo); finalizes status and fires the event',

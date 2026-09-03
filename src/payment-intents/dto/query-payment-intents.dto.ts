@@ -1,7 +1,7 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import { IsEnum, IsInt, IsOptional, Max, Min } from 'class-validator';
-import { PaymentIntentStatus } from '../../../generated/prisma/client';
+import { PaymentIntentStatus } from '@generated/prisma/client';
 
 export class QueryPaymentIntentsDto {
   @ApiPropertyOptional({ enum: PaymentIntentStatus })

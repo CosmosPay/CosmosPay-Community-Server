@@ -3,7 +3,7 @@ import { IsIn, IsOptional, IsString } from 'class-validator';
 import {
   BLINDPAY_TOKENS,
   type BlindpayToken,
-} from '../../blindpay/blindpay.constants';
+} from '@/blindpay/blindpay.constants';
 
 const BANKING_PARTNERS = ['jpmorgan', 'citi', 'hsbc', 'cfsb'] as const;
 

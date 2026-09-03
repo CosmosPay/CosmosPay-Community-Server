@@ -1,7 +1,7 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import { IsEnum, IsInt, IsOptional, Max, Min } from 'class-validator';
-import { SwapStatus } from '../../../generated/prisma/client';
+import { SwapStatus } from '@generated/prisma/client';
 
 export class QuerySwapsDto {
   @ApiPropertyOptional({ enum: SwapStatus })

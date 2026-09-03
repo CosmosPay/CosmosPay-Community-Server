@@ -2,7 +2,7 @@ import { ApiProperty } from '@nestjs/swagger';
 import {
   PaymentIntentKind,
   PaymentIntentStatus,
-} from '../../../generated/prisma/client';
+} from '@generated/prisma/client';
 
 /**
  * Response shape for a payment intent. Annotated with examples so the generated
@@ -293,7 +293,10 @@ export class PaymentIntentTransitionEntity {
   })
   txHash!: string | null;
 
-  @ApiProperty({ example: 'api', description: 'api | validate | observer | system' })
+  @ApiProperty({
+    example: 'api',
+    description: 'api | validate | observer | system',
+  })
   actor!: string;
 
   @ApiProperty({ required: false, nullable: true })

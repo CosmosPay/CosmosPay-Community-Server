@@ -1,5 +1,5 @@
 import { validate } from 'class-validator';
-import { IsRedirectUrl } from './is-redirect-url.validator';
+import { IsRedirectUrl } from '@/common/validators/is-redirect-url.validator';
 
 class SampleDto {
   @IsRedirectUrl()
@@ -15,9 +15,9 @@ async function errorsFor(url: unknown): Promise<string[]> {
 
 describe('IsRedirectUrl', () => {
   it('allows an absolute https URL without credentials', async () => {
-    await expect(
-      errorsFor('https://app.acme.com/kyc/return'),
-    ).resolves.toEqual([]);
+    await expect(errorsFor('https://app.acme.com/kyc/return')).resolves.toEqual(
+      [],
+    );
   });
 
   it('rejects a non-https scheme', async () => {

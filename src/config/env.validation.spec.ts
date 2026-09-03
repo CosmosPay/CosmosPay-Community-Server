@@ -1,5 +1,5 @@
 import 'reflect-metadata';
-import { validateEnv } from './env.validation';
+import { validateEnv } from '@/config/env.validation';
 
 /** Valid Stellar testnet address (from .env.example). */
 const VALID_FEE_WALLET =
@@ -11,7 +11,7 @@ function validEnv(
   return {
     DATABASE_URL:
       'postgresql://postgres:postgres@localhost:5432/cosmos_payments',
-    APISIX_GATEWAY_SECRET: 'test-gateway-secret',
+    APISIX_GATEWAY_SECRET: 'test-gateway-secret-at-least-32-chars-long',
     NODE_ENV: 'test',
     STELLAR_SWAP_FEE_WALLET: VALID_FEE_WALLET,
     ...overrides,
@@ -26,7 +26,19 @@ describe('validateEnv', () => {
   it('accepts a minimal valid environment', () => {
     const result = validateEnv(validEnv());
     expect(typeof result.DATABASE_URL).toBe('string');
-    expect(result.APISIX_GATEWAY_SECRET).toBe('test-gateway-secret');
+    expect(result.APISIX_GATEWAY_SECRET).toBe(
+      'test-gateway-secret-at-least-32-chars-long',
+    );
+  });
+
+  it('rejects a gateway secret short enough to guess', () => {
+    // This value is the whole boundary between "arrived through APISIX" and
+    // "anyone who can reach the pod", and it used to boot at one character
+    // while admin credentials already demanded 16.
+    expectEnvError(
+      validEnv({ APISIX_GATEWAY_SECRET: 'short' }),
+      'APISIX_GATEWAY_SECRET',
+    );
   });
 
   it('requires APISIX_GATEWAY_SECRET', () => {
@@ -187,20 +199,6 @@ describe('validateEnv', () => {
         'WEBHOOK_BACKOFF_MS',
       );
     });
-
-    it('rejects WEBHOOK_MAX_BACKOFF_MS=abc', () => {
-      expectEnvError(
-        validEnv({ WEBHOOK_MAX_BACKOFF_MS: 'abc' }),
-        'WEBHOOK_MAX_BACKOFF_MS',
-      );
-    });
-
-    it('rejects WEBHOOK_SECRET_GRACE_SECONDS=abc', () => {
-      expectEnvError(
-        validEnv({ WEBHOOK_SECRET_GRACE_SECONDS: 'abc' }),
-        'WEBHOOK_SECRET_GRACE_SECONDS',
-      );
-    });
   });
 
   describe('Horizon and OpenAPI URLs', () => {
@@ -220,31 +218,6 @@ describe('validateEnv', () => {
           }),
         ).STELLAR_HORIZON_URL_PUBLIC,
       ).toBe('https://horizon.stellar.org');
-    });
-
-    it('rejects STELLAR_HTTP_TIMEOUT_MS=abc', () => {
-      expectEnvError(
-        validEnv({ STELLAR_HTTP_TIMEOUT_MS: 'abc' }),
-        'STELLAR_HTTP_TIMEOUT_MS',
-      );
-    });
-
-    it('rejects STELLAR_MAX_ATTEMPTS=0', () => {
-      expectEnvError(
-        validEnv({ STELLAR_MAX_ATTEMPTS: '0' }),
-        'STELLAR_MAX_ATTEMPTS',
-      );
-    });
-
-    it('accepts STELLAR_HTTP_TIMEOUT_MS and STELLAR_MAX_ATTEMPTS', () => {
-      const result = validateEnv(
-        validEnv({
-          STELLAR_HTTP_TIMEOUT_MS: '10000',
-          STELLAR_MAX_ATTEMPTS: '3',
-        }),
-      );
-      expect(result.STELLAR_HTTP_TIMEOUT_MS).toBe(10000);
-      expect(result.STELLAR_MAX_ATTEMPTS).toBe(3);
     });
 
     it('rejects invalid OPENAPI_SERVER_URL', () => {

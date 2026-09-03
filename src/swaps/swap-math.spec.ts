@@ -1,4 +1,9 @@
-import { applySlippage, computeFee, fromStroops, toStroops } from './swap-math';
+import {
+  applySlippage,
+  computeFee,
+  fromStroops,
+  toStroops,
+} from '@/swaps/swap-math';
 
 describe('swap-math', () => {
   describe('toStroops', () => {

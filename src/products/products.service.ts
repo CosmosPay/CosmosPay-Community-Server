@@ -1,24 +1,21 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { GatewayConsumer } from '../common/interfaces/gateway-consumer.interface';
-import { PrismaService } from '../prisma/prisma.service';
-import { CreateProductDto } from './dto/create-product.dto';
-import { QueryProductsDto } from './dto/query-products.dto';
-import { UpdateProductDto } from './dto/update-product.dto';
+import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
+import { PrismaService } from '@/prisma/prisma.service';
+import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
+import { CreateProductDto } from '@/products/dto/create-product.dto';
+import { QueryProductsDto } from '@/products/dto/query-products.dto';
+import { UpdateProductDto } from '@/products/dto/update-product.dto';
 
 @Injectable()
 export class ProductsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly consumers: ConsumerResolverService,
+  ) {}
 
   /** Mirror the APISIX consumer locally so products can be scoped to it. */
   private resolveConsumer(consumer: GatewayConsumer) {
-    return this.prisma.consumer.upsert({
-      where: { apisixUsername: consumer.username },
-      create: {
-        apisixUsername: consumer.username,
-        credentialId: consumer.credentialId,
-      },
-      update: { credentialId: consumer.credentialId },
-    });
+    return this.consumers.resolve(consumer);
   }
 
   /** Normalize the asset: no code (or XLM/native) → native lumens. */
@@ -52,21 +49,20 @@ export class ProductsService {
 
   async findAll(consumer: GatewayConsumer, query: QueryProductsDto) {
     const local = await this.resolveConsumer(consumer);
-    const where = {
-      consumerId: local.id,
-      ...(query.active !== undefined ? { active: query.active } : {}),
-      ...(query.kind ? { kind: query.kind } : {}),
-      ...(query.reference !== undefined ? { reference: query.reference } : {}),
-    };
+    const where = { consumerId: local.id };
+
+    // `total` is the row count, never `data.length`: the page size is `take` on
+    // every full page, so a client paginating on it can never see the end.
     const [data, total] = await this.prisma.$transaction([
       this.prisma.product.findMany({
         where,
+        orderBy: { createdAt: 'desc' },
         take: query.take,
         skip: query.skip,
-        orderBy: { createdAt: 'desc' },
       }),
       this.prisma.product.count({ where }),
     ]);
+
     return { data, total, take: query.take, skip: query.skip };
   }
 
@@ -102,20 +98,9 @@ export class ProductsService {
     });
   }
 
-  /**
-   * Soft-delete by default (`active: false`). Pass `hard: true` to remove the
-   * row permanently.
-   */
-  async remove(consumer: GatewayConsumer, id: string, hard = false) {
+  async remove(consumer: GatewayConsumer, id: string) {
     await this.findOne(consumer, id);
-    if (hard) {
-      await this.prisma.product.delete({ where: { id } });
-    } else {
-      await this.prisma.product.update({
-        where: { id },
-        data: { active: false },
-      });
-    }
+    await this.prisma.product.delete({ where: { id } });
     return { id, deleted: true };
   }
 }

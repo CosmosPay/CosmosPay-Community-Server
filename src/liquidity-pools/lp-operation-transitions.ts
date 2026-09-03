@@ -1,4 +1,4 @@
-import type { SwapStatus } from '../../generated/prisma/client';
+import type { SwapStatus } from '@generated/prisma/client';
 
 /**
  * Liquidity pool operation state machine (issue #32).

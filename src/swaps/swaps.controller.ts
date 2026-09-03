@@ -2,6 +2,8 @@ import {
   Body,
   Controller,
   Get,
+  HttpCode,
+  HttpStatus,
   Param,
   Post,
   Query,
@@ -15,20 +17,20 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import type { Request } from 'express';
-import { CurrentConsumer } from '../common/decorators/current-consumer.decorator';
-import { RequirePermissions } from '../common/decorators/require-permissions.decorator';
-import { GatewayConsumer } from '../common/interfaces/gateway-consumer.interface';
-import { CreateSwapDto } from './dto/create-swap.dto';
-import { QuerySwapsDto } from './dto/query-swaps.dto';
-import { QuoteSwapDto } from './dto/quote-swap.dto';
-import { SubmitSwapDto } from './dto/submit-swap.dto';
+import { CurrentConsumer } from '@/common/decorators/current-consumer.decorator';
+import { RequirePermissions } from '@/common/decorators/require-permissions.decorator';
+import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
+import { CreateSwapDto } from '@/swaps/dto/create-swap.dto';
+import { QuerySwapsDto } from '@/swaps/dto/query-swaps.dto';
+import { QuoteSwapDto } from '@/swaps/dto/quote-swap.dto';
+import { SubmitSwapDto } from '@/swaps/dto/submit-swap.dto';
 import {
   SwapEntity,
   SwapListEntity,
   SwapQuoteEntity,
   SwapSubmitResultEntity,
-} from './entities/swap.entity';
-import { SwapsService } from './swaps.service';
+} from '@/swaps/entities/swap.entity';
+import { SwapsService } from '@/swaps/swaps.service';
 
 // URI versioning => /v1/swaps
 @ApiTags('swaps')
@@ -38,6 +40,10 @@ export class SwapsController {
 
   @Post('quote')
   @RequirePermissions('swaps:read')
+  // POST because the quote parameters are a body, not because anything is
+  // created — the route persists nothing, so 200 is the honest status. Nest
+  // defaults POST to 201, which is what the committed spec used to record.
+  @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary:
       'Quote a swap (Horizon strict-send path search + fee/slippage); persists nothing',
@@ -103,6 +109,9 @@ export class SwapsController {
 
   @Post(':id/submit')
   @RequirePermissions('swaps:write')
+  // Submit advances an existing swap's status; the swap resource was created by
+  // POST /v1/swaps. Nothing new comes into existence here, so 200, not 201.
+  @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary:
       'Relay the signed swap transaction to the network (hash-checked); finalizes status',

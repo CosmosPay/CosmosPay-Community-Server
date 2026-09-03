@@ -5,12 +5,15 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { armObserverWatchdog } from '../common/observer-watchdog';
-import { AppConfig } from '../config/configuration';
-import { PrismaService } from '../prisma/prisma.service';
-import { StellarService } from '../stellar/stellar.service';
-import { PaymentIntentsService } from './payment-intents.service';
-import { StellarVerifierService } from './stellar-verifier.service';
+import { AppConfig } from '@/config/configuration';
+import {
+  AdvisoryLockKey,
+  AdvisoryLockService,
+} from '@/common/services/advisory-lock.service';
+import { PrismaService } from '@/prisma/prisma.service';
+import { PaymentIntentsService } from '@/payment-intents/payment-intents.service';
+import { StellarVerifierService } from '@/payment-intents/stellar-verifier.service';
+import { RECONCILE_CONCURRENCY } from '@/payment-intents/payment-intents.constants';
 
 /**
  * Permanent on-chain observer. On a fixed interval it pulls PENDING intents and
@@ -27,14 +30,13 @@ export class StellarObserverService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(StellarObserverService.name);
   private timer?: NodeJS.Timeout;
   private running = false;
-  private cycleGeneration = 0;
 
   constructor(
     private readonly config: ConfigService<AppConfig, true>,
     private readonly prisma: PrismaService,
     private readonly verifier: StellarVerifierService,
     private readonly paymentIntents: PaymentIntentsService,
-    private readonly stellar: StellarService,
+    private readonly advisoryLock: AdvisoryLockService,
   ) {}
 
   onModuleInit(): void {
@@ -57,42 +59,45 @@ export class StellarObserverService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  /** True while a reconciliation cycle is in flight. Exposed for tests. */
-  isRunning(): boolean {
-    return this.running;
-  }
-
   /**
-   * One reconciliation cycle. `running` normally prevents overlap; the
-   * watchdog may still release it after 2× interval while a hung cycle is
-   * in flight. Concurrent ticks of the same intent stay safe because
-   * `markSucceeded` / `markExpired` are idempotent via the applied guard.
+   * One reconciliation cycle, guarded twice over.
+   *
+   * The in-process `running` latch stops a slow sweep from overlapping the next
+   * timer fire on *this* replica. The advisory lock is the cluster-wide
+   * counterpart: the timer runs on every replica behind APISIX and each one
+   * selects the same oldest PENDING rows, so without it N replicas paid N× the
+   * Horizon round-trips for identical work. Both are needed — the lock is
+   * released as soon as a sweep ends, so it says nothing about the next tick on
+   * this process.
+   *
+   * A replica that loses the lock returns immediately and skips its tick.
    */
   async tick(): Promise<void> {
     if (this.running) {
       return;
     }
     this.running = true;
-    const generation = ++this.cycleGeneration;
-    const { batchSize, intervalMs } = this.config.get('observer', {
-      infer: true,
-    });
-    const cancelWatchdog = armObserverWatchdog({
-      logger: this.logger,
-      name: 'Payment-intent observer',
-      observer: 'payment-intents',
-      stellar: this.stellar,
-      intervalMs,
-      generation,
-      currentGeneration: () => this.cycleGeneration,
-      setRunning: (value) => {
-        this.running = value;
-      },
-    });
-    const started = Date.now();
-    let reconciled = 0;
-
     try {
+      await this.advisoryLock.runExclusive(
+        AdvisoryLockKey.PaymentIntentObserver,
+        () => this.sweep(),
+      );
+    } catch (err) {
+      // `tick` is fired as `void this.tick()` from a timer, so anything that
+      // escapes here is an unhandled rejection and, under Node's default
+      // policy, kills the process. A failed reconciliation cycle must only cost
+      // one interval.
+      this.logger.error('Payment intent observer cycle failed', err as Error);
+    } finally {
+      this.running = false;
+    }
+  }
+
+  /** The guarded body of one cycle: expire what is stale, reconcile the rest. */
+  private async sweep(): Promise<void> {
+    try {
+      const { batchSize } = this.config.get('observer', { infer: true });
+
       // 1. Expire unpaid intents past their lifetime.
       const expired = await this.prisma.paymentIntent.findMany({
         where: {
@@ -120,39 +125,19 @@ export class StellarObserverService implements OnModuleInit, OnModuleDestroy {
         take: batchSize,
       });
 
-      for (const intent of pending) {
-        try {
-          if (await this.reconcile(intent)) {
-            reconciled += 1;
-          }
-        } catch (err) {
+      await mapLimited(pending, RECONCILE_CONCURRENCY, (intent) =>
+        this.reconcile(intent).catch((err) => {
           this.logger.error(
             `Reconcile failed for intent ${intent.id}: ${
               err instanceof Error ? err.message : String(err)
             }`,
           );
-        }
-      }
+        }),
+      );
     } catch (err) {
       this.logger.error(
         `Observer cycle failed: ${err instanceof Error ? err.message : String(err)}`,
       );
-    } finally {
-      cancelWatchdog();
-      const durationMs = Date.now() - started;
-      this.stellar.recordObserverCycle('payment-intents', {
-        durationMs,
-        reconciled,
-      });
-      const { horizonErrors, observers } = this.stellar.metrics();
-      this.logger.log(
-        `Observer cycle complete cycles=${observers['payment-intents'].cycles} ` +
-          `reconciled=${reconciled} durationMs=${durationMs} ` +
-          `horizonErrors=${JSON.stringify(horizonErrors)}`,
-      );
-      if (this.cycleGeneration === generation) {
-        this.running = false;
-      }
     }
   }
 
@@ -160,7 +145,7 @@ export class StellarObserverService implements OnModuleInit, OnModuleDestroy {
     intent: Awaited<
       ReturnType<PrismaService['paymentIntent']['findMany']>
     >[number] & { consumer: { apisixUsername: string } },
-  ): Promise<boolean> {
+  ): Promise<void> {
     // Prefer the precise path when a hash was reported; otherwise scan.
     const result = intent.txHash
       ? await this.verifier.verifyByHash(intent, intent.txHash)
@@ -174,11 +159,33 @@ export class StellarObserverService implements OnModuleInit, OnModuleDestroy {
         result.payer,
         'observer',
       );
-      return true;
     }
-    if (result.reason) {
-      this.logger.debug(`Intent ${intent.id} not matched: ${result.reason}`);
-    }
-    return false;
   }
+}
+
+/**
+ * Runs `worker` over `items` with at most `limit` calls in flight, preserving
+ * the input order of dispatch. Hand-written rather than pulled from a package:
+ * N workers draining a shared index is the whole of it, and a dependency for
+ * that is supply-chain surface with no upside.
+ *
+ * `worker` is expected to absorb its own failures — a rejection here aborts the
+ * remaining items, which is why the caller attaches `.catch` per intent.
+ */
+async function mapLimited<T>(
+  items: readonly T[],
+  limit: number,
+  worker: (item: T) => Promise<void>,
+): Promise<void> {
+  let next = 0;
+  const drain = async (): Promise<void> => {
+    // `next++` is atomic here: the read-and-increment happens synchronously
+    // between awaits, so no two workers ever claim the same item.
+    while (next < items.length) {
+      await worker(items[next++]);
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, drain),
+  );
 }

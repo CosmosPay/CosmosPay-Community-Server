@@ -1,10 +1,7 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import { IsEnum, IsInt, IsOptional, Max, Min } from 'class-validator';
-import {
-  LiquidityOperationKind,
-  SwapStatus,
-} from '../../../generated/prisma/client';
+import { LiquidityOperationKind, SwapStatus } from '@generated/prisma/client';
 
 export class QueryLiquidityOperationsDto {
   @ApiPropertyOptional({ enum: LiquidityOperationKind })

@@ -36,6 +36,10 @@ model Consumer {
   blindpayReceivers BlindpayReceiver[]
   payins            Payin[]
   payouts           Payout[]
+  blindpayQuotes    BlindpayQuote[]
+
+  // Pollar OAuth bridge handshakes started by this consumer.
+  pollarOauthSessions PollarOauthSession[]
 
   @@map("consumer")
 }
@@ -43,21 +47,21 @@ model Consumer {
 // A merchant-managed customer record. Independent of the payers derived from
 // payment intents — these are explicitly created/edited by the merchant.
 model Customer {
-  id          String   @id @default(cuid())
-  consumerId  String
-  consumer    Consumer @relation(fields: [consumerId], references: [id], onDelete: Cascade)
+  id         String   @id @default(cuid())
+  consumerId String
+  consumer   Consumer @relation(fields: [consumerId], references: [id], onDelete: Cascade)
 
-  name        String
+  name      String
   // A friendly display alias the merchant can assign (e.g. "Acme — billing").
-  alias       String?
-  email       String?
+  alias     String?
+  email     String?
   // Optional Stellar account to associate the customer with on-chain activity.
-  account     String?
-  note        String? // free-form merchant note
-  reference   String? // merchant reference / external id
+  account   String?
+  note      String? // free-form merchant note
+  reference String? // merchant reference / external id
 
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([consumerId])
   @@map("customer")
@@ -67,23 +71,30 @@ model Customer {
 // LoggingInterceptor). Powers the dashboard "API logs" view. Scoped by the
 // forwarded consumer username when present.
 model RequestLog {
-  id          String   @id @default(cuid())
+  id         String  @id @default(cuid())
   // APISIX consumer username (X-Consumer-Username), null for anonymous/public.
-  consumer    String?
-  method      String
-  path        String
-  statusCode  Int
-  durationMs  Int
-  ip          String?
-  userAgent   String?
+  consumer   String?
+  method     String
+  path       String
+  statusCode Int
+  durationMs Int
+  ip         String?
+  userAgent  String?
+  // True for the dashboard's own management-console traffic (X-Cosmos-Internal).
+  // The row is ALWAYS written and merely flagged: a request header must never be
+  // able to keep a request out of the audit log, or setting it is a free way to
+  // make your traffic invisible. The API-log view filters on this column instead.
+  internal   Boolean @default(false)
 
-  createdAt   DateTime @default(now())
+  createdAt DateTime @default(now())
 
   // Composite covers the dashboard query (filter consumer + order createdAt desc).
   // The former single-column consumer index is a redundant prefix of this one.
   @@index([consumer, createdAt])
   // Used by the retention prune (delete where createdAt < cutoff).
   @@index([createdAt])
+  // The API-log view lists external traffic newest-first.
+  @@index([internal, createdAt])
   @@map("request_log")
 }
 
@@ -91,22 +102,22 @@ model RequestLog {
 // intents — intents may reference one via `reference`, but products are managed
 // on their own. Scoped to the APISIX consumer that created them.
 model Product {
-  id          String   @id @default(cuid())
-  consumerId  String
-  consumer    Consumer @relation(fields: [consumerId], references: [id], onDelete: Cascade)
+  id         String   @id @default(cuid())
+  consumerId String
+  consumer   Consumer @relation(fields: [consumerId], references: [id], onDelete: Cascade)
 
   name        String
   description String?
   // Price as a decimal string (e.g. "49.00"). Null = customer-set / donation.
   amount      String?
-  asset       String   @default("native") // asset code, or "native" for XLM
+  asset       String  @default("native") // asset code, or "native" for XLM
   // 'recurring' | 'one_time' | 'link' — informational classification.
-  kind        String   @default("one_time")
-  active      Boolean  @default(true)
+  kind        String  @default("one_time")
+  active      Boolean @default(true)
   reference   String? // optional merchant SKU / reference
 
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([consumerId])
   @@map("product")
@@ -135,55 +146,75 @@ enum WebhookEventType {
   SWAP_SUBMITTED
   SWAP_SUCCEEDED
   SWAP_FAILED
-  SWAP_EXPIRED
 
   // Stellar AMM liquidity pool operations (deposit / withdraw).
   LIQUIDITY_CREATED
   LIQUIDITY_SUBMITTED
   LIQUIDITY_SUCCEEDED
   LIQUIDITY_FAILED
+
+  // Appended by `20260824190000_settlement_observer_expiry_safety`. Kept in the
+  // declared order PostgreSQL actually stores them in (ADD VALUE appends).
+  SWAP_EXPIRED
   LIQUIDITY_EXPIRED
 }
 
 enum WebhookDeliveryStatus {
   PENDING
-  RETRYING
   SUCCEEDED
   FAILED
+
+  // Appended by `20260826180000_webhook_delivery_retry_queue`. The sweeper does
+  // not use it, but an enum value cannot be dropped in place.
+  RETRYING
 }
 
 // An integrator-registered URL that receives signed event notifications.
 // Scoped to the APISIX consumer that created it.
-model WebhookEndpoint {
-  id          String             @id @default(cuid())
-  consumerId  String
-  consumer    Consumer           @relation(fields: [consumerId], references: [id], onDelete: Cascade)
+/// Created by `20260825180000_horizon_account_cursor` on main, for the paged
+/// Horizon account scan that this branch's verifier does not use. The table is
+/// in every deployed database, so it is declared here; it is simply never read.
+model HorizonAccountCursor {
+  id          String        @id @default(cuid())
+  intentId    String        @unique
+  intent      PaymentIntent @relation(fields: [intentId], references: [id], onDelete: Cascade)
+  network     String // 'public' | 'testnet'
+  account     String // G... destination scanned
+  pagingToken String
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
 
-  url         String
+  @@map("horizon_account_cursor")
+}
+
+model WebhookEndpoint {
+  id         String   @id @default(cuid())
+  consumerId String
+  consumer   Consumer @relation(fields: [consumerId], references: [id], onDelete: Cascade)
+
+  url                     String
   // HMAC-SHA256 signing secret (prefixed `whsec_`). Integrators verify the
   // `X-Cosmos-Signature` header with this.
-  secret      String
-  // Previous signing secret, kept during the overlap window after a rotation so
-  // deliveries remain verifiable with either secret. Null when no rotation is
-  // in flight or the grace period has been cleaned up.
-  previousSecret String?
-  // Instant after which `previousSecret` must no longer be used for signing
-  // (and is nulled by the cleanup job). Null when there is no overlap.
-  previousSecretExpiresAt DateTime?
-  description String?
-  enabled     Boolean            @default(true)
+  secret                  String
+  description             String?
+  enabled                 Boolean            @default(true)
   // Set when the URL fails public-destination checks (at register-time audit or
   // at delivery when DNS rebinds to a private/metadata target). Deliveries skip
   // blocked endpoints; clear by PATCHing a safe https URL (or re-enabling after
   // the URL passes validation again).
-  destinationBlocked Boolean     @default(false)
+  destinationBlocked      Boolean            @default(false)
+  // Created by `20260825200000_webhook_previous_secret` for main's grace-window
+  // rotation. This branch's `rotateSecret` swaps the secret outright, so they
+  // are never written; declared to match the deployed database.
+  previousSecret          String?
+  previousSecretExpiresAt DateTime?
   // Subscribed event types; an empty list means "all events".
-  eventTypes  WebhookEventType[]
+  eventTypes              WebhookEventType[]
 
-  createdAt   DateTime           @default(now())
-  updatedAt   DateTime           @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  deliveries  WebhookDelivery[]
+  deliveries WebhookDelivery[]
 
   @@index([consumerId])
   @@map("webhook_endpoint")
@@ -192,9 +223,9 @@ model WebhookEndpoint {
 // Append-only record of every delivery attempt — the audit trail for what the
 // platform notified, when, and whether the integrator acknowledged it.
 model WebhookDelivery {
-  id             String                @id @default(cuid())
-  endpointId     String
-  endpoint       WebhookEndpoint       @relation(fields: [endpointId], references: [id], onDelete: Cascade)
+  id         String          @id @default(cuid())
+  endpointId String
+  endpoint   WebhookEndpoint @relation(fields: [endpointId], references: [id], onDelete: Cascade)
 
   eventType      WebhookEventType
   // Stable event id sent to the receiver for idempotency.
@@ -202,24 +233,29 @@ model WebhookDelivery {
   payload        Json
   status         WebhookDeliveryStatus @default(PENDING)
   attempts       Int                   @default(0)
-  // Snapshot of the retry budget at enqueue time so a later env change does
-  // not shrink or expand an in-flight delivery.
-  maxAttempts    Int                   @default(8)
   responseStatus Int?
   error          String?
   lastAttemptAt  DateTime?
-  // When the retry worker may pick this row up. Null once terminal.
+  // ── Columns created by migrations that shipped on main and are already in
+  // every deployed database. Nothing on this branch queries them; they stay
+  // declared because schema.prisma has to describe the database it points at.
+  // `20260826180000_webhook_delivery_retry_queue` added these for the leased
+  // retry worker that this branch replaces with the delivery sweeper.
+  maxAttempts    Int                   @default(8)
   nextAttemptAt  DateTime?
-  // Exclusive claim: a replica owns the row until this instant. Null / expired
-  // means the row is free. Survives process death — another replica resumes.
   leaseUntil     DateTime?
 
-  createdAt      DateTime              @default(now())
-  updatedAt      DateTime              @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([endpointId])
-  @@index([eventId])
+  // The plain [status] index was replaced by this composite in
+  // `20260826180000_webhook_delivery_retry_queue`. The sweeper filters on
+  // `status` alone, which the composite still serves as its leading column.
   @@index([status, nextAttemptAt])
+  @@index([eventId])
+  // Delivery-log view: filter by endpoint, order createdAt desc.
+  @@index([endpointId, createdAt])
   @@map("webhook_delivery")
 }
 
@@ -258,17 +294,17 @@ enum PaymentIntentKind {
 }
 
 model PaymentIntent {
-  id          String              @id @default(cuid())
-  consumerId  String
-  consumer    Consumer            @relation(fields: [consumerId], references: [id], onDelete: Cascade)
+  id         String   @id @default(cuid())
+  consumerId String
+  consumer   Consumer @relation(fields: [consumerId], references: [id], onDelete: Cascade)
 
-  kind        PaymentIntentKind   @default(TX)
+  kind PaymentIntentKind @default(TX)
 
   // Stellar payment details.
   source      String? // payer account (G...) — null for PAY intents
   destination String // payee account (G...)
   amount      String? // decimal string, e.g. "25.5" — optional for PAY intents
-  asset       String              @default("native") // asset code, or "native" for XLM
+  asset       String  @default("native") // asset code, or "native" for XLM
   assetIssuer String? // issuer account for non-native assets
   // Mandatory MEMO_ID (uint64 as string). Auto-generated when not supplied.
   // Identifies the payment on-chain and gives the intent idempotency per consumer.
@@ -276,34 +312,41 @@ model PaymentIntent {
   network     String // 'public' | 'testnet'
 
   // Optional SEP-7 extras (informational; echoed back, not validated on-chain).
-  msg         String? // message shown to the user in their wallet
-  callback    String? // SEP-7 callback (e.g. `url:https://...`)
+  msg      String? // message shown to the user in their wallet
+  callback String? // SEP-7 callback (e.g. `url:https://...`)
 
-  status      PaymentIntentStatus @default(PENDING)
+  status PaymentIntentStatus @default(PENDING)
 
   // Artifacts. `xdr` is null for PAY intents; QR is derived from `uri` on read.
-  xdr         String?
-  uri         String
+  xdr       String?
+  uri       String
   // Set once a signed transaction is submitted/confirmed.
-  txHash      String?             @unique
-  reference   String? // optional merchant reference
+  txHash    String? @unique
+  reference String? // optional merchant reference
 
   // Lifetime: an unpaid intent past this instant is auto-finalized to EXPIRED by
   // the observer. Set at creation from the configured TTL.
-  expiresAt   DateTime?
+  expiresAt DateTime?
 
-  createdAt   DateTime            @default(now())
-  updatedAt   DateTime            @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   // Append-only audit trail of status transitions (issue #36).
   transitions PaymentIntentTransition[]
-  // Optional Horizon resume cursor for observer matching (issue #27).
+
+  // Back-relation for the cursor table below. Virtual — no column.
   horizonCursor HorizonAccountCursor?
 
   @@unique([consumerId, memo]) // idempotency: one intent per (consumer, memo)
   @@index([consumerId])
-  @@index([consumerId, source])
   @@index([status])
+  // Listing endpoint: filter by consumer, order createdAt desc.
+  @@index([consumerId, createdAt])
+  // Observer sweep and expiry pass: pending rows oldest-first.
+  @@index([status, createdAt])
+  // Built by `20260830120000_payment_intent_consumer_source_index` and
+  // `20260825210000_analytics_indexes` on main. Declared to match the database.
+  @@index([consumerId, source])
   @@index([consumerId, network, createdAt])
   @@map("payment_intent")
 }
@@ -311,9 +354,9 @@ model PaymentIntent {
 // Immutable history of every PaymentIntent status change. Written only by the
 // single transition() entry point so the ledger cannot diverge from the graph.
 model PaymentIntentTransition {
-  id         String              @id @default(cuid())
-  intentId   String
-  intent     PaymentIntent       @relation(fields: [intentId], references: [id], onDelete: Cascade)
+  id       String        @id @default(cuid())
+  intentId String
+  intent   PaymentIntent @relation(fields: [intentId], references: [id], onDelete: Cascade)
 
   fromStatus PaymentIntentStatus
   toStatus   PaymentIntentStatus
@@ -322,26 +365,10 @@ model PaymentIntentTransition {
   actor      String
   reason     String?
 
-  createdAt  DateTime            @default(now())
+  createdAt DateTime @default(now())
 
   @@index([intentId, createdAt])
   @@map("payment_intent_transition")
-}
-
-// Horizon paging cursor keyed by payment intent. Destination accounts are
-// shared across intents (disambiguated by memo), so a per-account cursor would
-// let one intent's scan consume another intent's matching payment (issue #27).
-model HorizonAccountCursor {
-  id          String        @id @default(cuid())
-  intentId    String        @unique
-  intent      PaymentIntent @relation(fields: [intentId], references: [id], onDelete: Cascade)
-  network     String // 'public' | 'testnet'
-  account     String // G... destination scanned
-  pagingToken String
-  createdAt   DateTime      @default(now())
-  updatedAt   DateTime      @updatedAt
-
-  @@map("horizon_account_cursor")
 }
 
 // ---------------------------------------------------------------------------
@@ -357,39 +384,39 @@ model HorizonAccountCursor {
 // A KYC/KYB entity at BlindPay (their `receiver`/`customer`, id `re_...`).
 // Every end user transacting through the rails must exist as a receiver.
 model BlindpayReceiver {
-  id          String   @id @default(cuid())
-  consumerId  String
-  consumer    Consumer @relation(fields: [consumerId], references: [id], onDelete: Cascade)
+  id         String   @id @default(cuid())
+  consumerId String
+  consumer   Consumer @relation(fields: [consumerId], references: [id], onDelete: Cascade)
 
   // BlindPay receiver id (`re_...`).
-  blindpayId  String
+  blindpayId String
   // 'individual' | 'business'.
-  type        String
+  type       String
   // 'light' | 'standard' | 'enhanced'.
-  kycType     String?
+  kycType    String?
   // BlindPay KYC status. Receivers start as 'inactive' (created locally, not yet at
   // BlindPay) until the terms-of-service are accepted and the receiver is enabled,
   // at which point this becomes BlindPay's real status — see ReceiversService.
-  kycStatus   String?
-  email       String?
-  name        String?
-  country     String?
-  externalId  String?
-  reference   String? // optional merchant reference
+  kycStatus  String?
+  email      String?
+  name       String?
+  country    String?
+  externalId String?
+  reference  String? // optional merchant reference
 
   // Last time a terms-of-service link was emailed for this receiver — rate limits the
   // "email me the ToS" action to at most once per day.
-  tosSentAt   DateTime?
+  tosSentAt DateTime?
 
   // Owner/admin kill-switch for this fiat account: when true the receiver cannot be
   // used for onramp/offramp (quotes, payins, payouts, new wallets/bank accounts are
   // refused) regardless of its BlindPay KYC status. Toggled by a platform owner/admin.
-  disabled    Boolean   @default(false)
+  disabled Boolean @default(false)
 
-  raw         Json?
+  raw Json?
 
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   blockchainWallets BlindpayBlockchainWallet[]
   bankAccounts      BlindpayBankAccount[]
@@ -399,27 +426,29 @@ model BlindpayReceiver {
 
   @@unique([consumerId, blindpayId])
   @@index([consumerId])
+  // Inbound BlindPay webhooks look a receiver up by provider id alone.
+  @@index([blindpayId])
   @@map("blindpay_receiver")
 }
 
 // A receiver's blockchain wallet at BlindPay (id `bw_...`). Destination for
 // onramp (minted stablecoin) and source for offramp.
 model BlindpayBlockchainWallet {
-  id          String           @id @default(cuid())
-  consumerId  String
-  receiverId  String
-  receiver    BlindpayReceiver @relation(fields: [receiverId], references: [id], onDelete: Cascade)
+  id         String           @id @default(cuid())
+  consumerId String
+  receiverId String
+  receiver   BlindpayReceiver @relation(fields: [receiverId], references: [id], onDelete: Cascade)
 
-  blindpayId  String // `bw_...`
-  name        String?
-  network     String
-  address     String?
+  blindpayId           String // `bw_...`
+  name                 String?
+  network              String
+  address              String?
   isAccountAbstraction Boolean @default(false)
 
-  raw         Json?
+  raw Json?
 
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@unique([consumerId, blindpayId])
   @@index([consumerId])
@@ -430,20 +459,20 @@ model BlindpayBlockchainWallet {
 // A receiver's fiat bank account at BlindPay (id `ba_...`). Destination for
 // offramp payouts. `rail` is the BlindPay rail/type (ach, wire, pix, spei, ...).
 model BlindpayBankAccount {
-  id          String           @id @default(cuid())
-  consumerId  String
-  receiverId  String
-  receiver    BlindpayReceiver @relation(fields: [receiverId], references: [id], onDelete: Cascade)
+  id         String           @id @default(cuid())
+  consumerId String
+  receiverId String
+  receiver   BlindpayReceiver @relation(fields: [receiverId], references: [id], onDelete: Cascade)
 
-  blindpayId  String // `ba_...`
-  rail        String?
-  name        String?
-  country     String?
+  blindpayId String // `ba_...`
+  rail       String?
+  name       String?
+  country    String?
 
-  raw         Json?
+  raw Json?
 
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@unique([consumerId, blindpayId])
   @@index([consumerId])
@@ -454,20 +483,20 @@ model BlindpayBankAccount {
 // A dedicated fiat account (id `va_...`) that auto-converts incoming fiat into
 // stablecoin to the linked blockchain wallet — onramp infrastructure.
 model BlindpayVirtualAccount {
-  id                 String           @id @default(cuid())
-  consumerId         String
-  receiverId         String
-  receiver           BlindpayReceiver @relation(fields: [receiverId], references: [id], onDelete: Cascade)
+  id         String           @id @default(cuid())
+  consumerId String
+  receiverId String
+  receiver   BlindpayReceiver @relation(fields: [receiverId], references: [id], onDelete: Cascade)
 
   blindpayId         String // `va_...`
   blockchainWalletId String?
   token              String?
   status             String?
 
-  raw                Json?
+  raw Json?
 
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@unique([consumerId, blindpayId])
   @@index([consumerId])
@@ -478,11 +507,11 @@ model BlindpayVirtualAccount {
 // Onramp (fiat -> stablecoin). Created from a payin quote; carries the payment
 // instructions the payer follows (memo/CLABE/PIX/CBU/PSE/bank details).
 model Payin {
-  id             String           @id @default(cuid())
-  consumerId     String
-  consumer       Consumer         @relation(fields: [consumerId], references: [id], onDelete: Cascade)
-  receiverId     String?
-  receiver       BlindpayReceiver? @relation(fields: [receiverId], references: [id], onDelete: SetNull)
+  id         String            @id @default(cuid())
+  consumerId String
+  consumer   Consumer          @relation(fields: [consumerId], references: [id], onDelete: Cascade)
+  receiverId String?
+  receiver   BlindpayReceiver? @relation(fields: [receiverId], references: [id], onDelete: SetNull)
 
   blindpayId     String // `pi_...`
   quoteId        String?
@@ -496,26 +525,28 @@ model Payin {
   // Provider-supplied instructions the payer follows to fund the payin.
   instructions   Json?
 
-  raw            Json?
+  raw Json?
 
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@unique([consumerId, blindpayId])
   @@index([consumerId])
   @@index([receiverId])
   @@index([status])
+  // Inbound BlindPay webhooks look a payin up by provider id alone.
+  @@index([blindpayId])
   @@map("payin")
 }
 
 // Offramp (stablecoin -> fiat). Created from a payout quote; the customer signs
 // the on-chain transfer (we never hold keys), funds settle to a bank account.
 model Payout {
-  id                  String           @id @default(cuid())
-  consumerId          String
-  consumer            Consumer         @relation(fields: [consumerId], references: [id], onDelete: Cascade)
-  receiverId          String?
-  receiver            BlindpayReceiver? @relation(fields: [receiverId], references: [id], onDelete: SetNull)
+  id         String            @id @default(cuid())
+  consumerId String
+  consumer   Consumer          @relation(fields: [consumerId], references: [id], onDelete: Cascade)
+  receiverId String?
+  receiver   BlindpayReceiver? @relation(fields: [receiverId], references: [id], onDelete: SetNull)
 
   blindpayId          String // `pa_...`
   quoteId             String?
@@ -528,16 +559,68 @@ model Payout {
   receiverAmount      String?
   senderWalletAddress String?
 
-  raw                 Json?
+  raw Json?
 
-  createdAt           DateTime @default(now())
-  updatedAt           DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@unique([consumerId, blindpayId])
   @@index([consumerId])
   @@index([receiverId])
   @@index([status])
+  // Inbound BlindPay webhooks look a payout up by provider id alone; without
+  // this the composite above cannot serve the query (blindpayId is its second
+  // column), so every webhook was a sequential scan.
+  @@index([blindpayId])
   @@map("payout")
+}
+
+/// Ownership record for a BlindPay quote.
+///
+/// BlindPay quote ids are opaque strings minted upstream on a platform instance
+/// shared by every tenant, so a quote id alone proves nothing about who owns it.
+/// Executing a payin/payout used to forward the caller's `quote_id` straight
+/// through, which let one tenant execute another tenant's quote and have the
+/// result mirrored into their own records. Every quote this service creates is
+/// recorded here at creation, and execution resolves it by (consumer, quote id)
+/// before the upstream call.
+model BlindpayQuote {
+  id         String   @id @default(cuid())
+  consumerId String
+  consumer   Consumer @relation(fields: [consumerId], references: [id], onDelete: Cascade)
+
+  /// The upstream BlindPay quote id (`pq_…` for payins, `qu_…` for payouts).
+  blindpayId String
+  kind       BlindpayQuoteKind
+
+  createdAt DateTime @default(now())
+
+  @@unique([consumerId, blindpayId])
+  @@index([consumerId])
+  @@map("blindpay_quote")
+}
+
+enum BlindpayQuoteKind {
+  PAYIN
+  PAYOUT
+}
+
+/// Inbound BlindPay (Svix) webhook de-duplication.
+///
+/// Svix retries a delivery until it is acknowledged, re-sending the same
+/// `svix-id`. Without a claim row each retry re-applied the update and re-emitted
+/// an outbound notification, so an integrator saw "payout completed" more than
+/// once for one event. The unique index is the claim: the first delivery to
+/// insert the row wins and processes; a retry hits the constraint and is dropped.
+model BlindpayWebhookEvent {
+  id        String   @id @default(cuid())
+  /// The `svix-id` header — stable across retries of the same event.
+  svixId    String   @unique
+  eventType String
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+  @@map("blindpay_webhook_event")
 }
 
 // ---------------------------------------------------------------------------
@@ -559,9 +642,9 @@ enum SwapStatus {
 }
 
 model Swap {
-  id          String     @id @default(cuid())
-  consumerId  String
-  consumer    Consumer   @relation(fields: [consumerId], references: [id], onDelete: Cascade)
+  id         String   @id @default(cuid())
+  consumerId String
+  consumer   Consumer @relation(fields: [consumerId], references: [id], onDelete: Cascade)
 
   network     String // 'public' | 'testnet'
   // Account paying (and signing) the swap.
@@ -589,40 +672,48 @@ model Swap {
   path            Json
 
   // Optional MEMO_ID echoed on-chain for the merchant's own reconciliation.
-  memo        String?
+  memo String?
 
   // Client-supplied idempotency key (Idempotency-Key header or DTO field).
   // NULL when omitted — PostgreSQL treats NULLs as distinct, so multiple
   // swaps without a key remain allowed for the same consumer.
   idempotencyKey String?
 
-  status      SwapStatus @default(PENDING)
+  status          SwapStatus @default(PENDING)
   // Bumped only on FAILED → SUBMITTED (a real resubmit). Terminal webhook
   // dedup keys include this so a later SWAP_FAILED is not collapsed into the
   // first attempt, while observer+submit of the same attempt still share a key.
-  settlementEpoch Int     @default(0)
+  settlementEpoch Int        @default(0)
   // Unsigned transaction envelope + its SEP-7 `tx` deep link. QR derived on read.
-  xdr         String
-  uri         String
+  xdr             String
+  uri             String
   // Deterministic transaction hash (computed at build, verified on submit).
-  txHash      String
+  txHash          String
 
-  expiresAt   DateTime?
+  expiresAt DateTime?
 
-  // Settlement observer bookkeeping: last Horizon lookup and consecutive 404s
-  // after expiry+grace (used to expire only on confirmed absence, not blips).
-  lastCheckedAt   DateTime?
-  notFoundStreak  Int       @default(0)
+  // ── Columns created by migrations that shipped on main and are already in
+  // every deployed database. The services that read them were superseded by
+  // this branch's design, so nothing queries them today; they stay declared
+  // because schema.prisma has to describe the database it points at, and
+  // dropping live columns (and an enum value, which PostgreSQL cannot remove
+  // without recreating the type) buys nothing.
+  lastCheckedAt  DateTime?
+  notFoundStreak Int       @default(0)
 
-  createdAt   DateTime   @default(now())
-  updatedAt   DateTime   @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  @@index([consumerId])
-  @@index([status])
   // Idempotency: one swap per (consumer, key) when a key is supplied.
   @@unique([consumerId, idempotencyKey])
   // Prevents two PENDING rows sharing the same on-chain tx (sequence collision).
   @@unique([network, txHash])
+  @@index([consumerId])
+  @@index([status])
+  // Listing endpoint: filter by consumer, order createdAt desc.
+  @@index([consumerId, createdAt])
+  // Observer sweep: pending rows oldest-first.
+  @@index([status, createdAt])
   @@map("swap")
 }
 
@@ -639,16 +730,16 @@ enum LiquidityOperationKind {
 }
 
 model LiquidityPoolOperation {
-  id         String                 @id @default(cuid())
+  id         String   @id @default(cuid())
   consumerId String
-  consumer   Consumer               @relation(fields: [consumerId], references: [id], onDelete: Cascade)
+  consumer   Consumer @relation(fields: [consumerId], references: [id], onDelete: Cascade)
 
-  kind       LiquidityOperationKind
-  network    String // 'public' | 'testnet'
+  kind    LiquidityOperationKind
+  network String // 'public' | 'testnet'
   // Account paying for (and signing) the operation.
-  source     String
+  source  String
   // Stellar liquidity pool id (64-char hex).
-  poolId     String
+  poolId  String
 
   // The pool's constituent assets in canonical (protocol) order: A < B.
   assetA       String  @default("native")
@@ -666,14 +757,19 @@ model LiquidityPoolOperation {
 
   slippageBps Int
 
+  // Client-supplied idempotency key (Idempotency-Key header or DTO field).
+  // NULL when omitted — PostgreSQL treats NULLs as distinct, so multiple
+  // operations without a key remain allowed for the same consumer.
+  idempotencyKey String?
+
   // Platform (plan) commission. Charged ONLY on WITHDRAW, and only on the
   // *gain* (redeemed − proportional cost basis), never on the principal — so
   // deposits carry no commission (feeBps 0, feeWallet null). feeAmountA/B are
   // the commission paid to feeWallet out of each just-withdrawn reserve.
-  feeBps      Int     @default(0)
-  feeAmountA  String  @default("0")
-  feeAmountB  String  @default("0")
-  feeWallet   String?
+  feeBps     Int     @default(0)
+  feeAmountA String  @default("0")
+  feeAmountB String  @default("0")
+  feeWallet  String?
 
   // Cost basis, captured from the on-chain `liquidity_pool_deposited` effect
   // once a DEPOSIT settles (null until then / for withdrawals). Used to work out
@@ -682,10 +778,10 @@ model LiquidityPoolOperation {
   settledAmountA String?
   settledAmountB String?
 
-  status SwapStatus @default(PENDING)
+  status          SwapStatus @default(PENDING)
   // Same meaning as Swap.settlementEpoch — resubmit discriminator for
   // LIQUIDITY_FAILED dedup (issue #29).
-  settlementEpoch Int @default(0)
+  settlementEpoch Int        @default(0)
 
   // Unsigned transaction envelope + its SEP-7 `tx` deep link. QR derived on read.
   xdr    String
@@ -695,17 +791,29 @@ model LiquidityPoolOperation {
 
   expiresAt DateTime?
 
-  // Settlement observer bookkeeping — same meaning as Swap.lastCheckedAt.
+  // ── Columns created by migrations that shipped on main and are already in
+  // every deployed database. Nothing on this branch queries them; they stay
+  // declared because schema.prisma has to describe the database it points at.
   lastCheckedAt  DateTime?
   notFoundStreak Int       @default(0)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  // Idempotency: one operation per (consumer, key) when a key is supplied.
+  // NULLs stay distinct, so keyless operations remain unrestricted.
+  @@unique([consumerId, idempotencyKey])
+  // Prevents two rows sharing one on-chain tx (identical XDR / sequence
+  // collision), which produced duplicate LIQUIDITY_* webhooks for a single
+  // deposit. Swap has carried this since issue #17; LP never received it.
+  @@unique([network, txHash])
   @@index([consumerId])
   @@index([status])
-  @@index([txHash])
   @@index([poolId])
+  // Listing endpoint: filter by consumer, order createdAt desc.
+  @@index([consumerId, createdAt])
+  // Observer sweep: pending rows oldest-first.
+  @@index([status, createdAt])
   @@map("liquidity_pool_operation")
 }
 
@@ -726,4 +834,120 @@ model AdminAuditLog {
   @@index([actorId])
   @@index([resourceType, resourceId])
   @@map("admin_audit_log")
+}
+
+// ---------------------------------------------------------------------------
+// Pollar OAuth bridge.
+//
+// Pollar mints its own end-user session from a hosted OAuth flow, but that flow
+// only ever returns the browser to a `redirect_uri` Pollar has been told about.
+// A wallet that completes the code exchange locally cannot register a loopback
+// or a custom scheme there, and must not hold the Pollar keys. So the bridge
+// owns the Pollar half of the handshake: it mints the Pollar client session,
+// assembles the authorization URL, receives the browser back on its own
+// callback, and hands the wallet a single-use code of its own to redeem.
+//
+// A row is a bridge handshake in flight. It never holds a Pollar token: the
+// `/auth/login` exchange runs during the redemption call and its result goes
+// straight to the wallet.
+// ---------------------------------------------------------------------------
+enum PollarOauthStatus {
+  // Authorization URL handed out; waiting for the browser to come back.
+  PENDING
+  // The callback fired and a single-use bridge code was minted.
+  AUTHORIZED
+  // A redemption is in flight (guards against a concurrent double redeem).
+  EXCHANGING
+  // The code was redeemed for a Pollar session. Terminal.
+  CONSUMED
+  // The handshake failed and cannot be retried. Terminal.
+  FAILED
+  // The handshake ran out of time before the code was redeemed. Terminal.
+  EXPIRED
+}
+
+model PollarOauthSession {
+  id         String   @id @default(cuid())
+  consumerId String
+  consumer   Consumer @relation(fields: [consumerId], references: [id], onDelete: Cascade)
+
+  // Opaque bridge handle. Travels in the browser URL (callback path) and back
+  // to the wallet, so it is a random 32-byte value and never a guessable id.
+  state    String            @unique
+  provider String // 'google' | 'github'
+  status   PollarOauthStatus @default(PENDING)
+  // Which Pollar key pair this handshake was started with, so the redemption
+  // talks to the same network the authorization URL was built for.
+  network  String
+
+  // Pollar's own client session id, from POST /auth/session. The wallet never
+  // sees it — it is what the bridge redeems at POST /auth/login.
+  clientSessionId String
+
+  // Where the wallet wants the bridge code delivered. Null means poll mode: the
+  // wallet has no addressable redirect and reads the code back from the bridge.
+  redirectUri   String?
+  // PKCE (RFC 7636) challenge, S256 only. Optional, enforced when present.
+  codeChallenge String?
+
+  // The wallet's DPoP public JWK, forwarded to Pollar so the minted tokens are
+  // bound to the WALLET's key rather than to the bridge. When set, the bridge
+  // can no longer refresh or revoke on the wallet's behalf — only the holder of
+  // the private key can — which is exactly the point.
+  dpopJwk     Json?
+  deviceLabel String?
+
+  // SHA-256 of the single-use bridge code. The code itself is never stored, so
+  // a database read cannot redeem a handshake.
+  codeHash      String?   @unique
+  codeExpiresAt DateTime?
+
+  // Public identity of the resulting Pollar wallet, kept for support and for
+  // the poll response. No token and no profile PII is ever persisted.
+  walletAddress String?
+  walletType    String?
+  pollarUserId  String?
+
+  // Pollar's error code when the handshake ended in FAILED/EXPIRED.
+  errorCode String?
+
+  // Deadline for the whole handshake, independent of the code's shorter TTL.
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([consumerId, createdAt])
+  // The sweeper expires stale handshakes oldest-first.
+  @@index([status, expiresAt])
+  @@map("pollar_oauth_session")
+}
+
+// ---------------------------------------------------------------------------
+// Rate limiting.
+//
+// One row per (policy + subject, window). The counter lives in Postgres rather
+// than in each replica's memory on purpose: the service runs behind APISIX,
+// which load-balances, so an in-process limiter would grant every replica the
+// full budget and quietly multiply the limit by the replica count. That is
+// tolerable for a cosmetic throttle and not tolerable for the thing this
+// actually guards — wallet creation, which spends XLM out of the funding
+// account on every call.
+//
+// Fixed window, not sliding: two full bursts can straddle a boundary, so the
+// real worst case is 2x the limit per window. That is a deliberate trade for a
+// single atomic upsert per request, and it still bounds the spend.
+// ---------------------------------------------------------------------------
+model RateLimitCounter {
+  // `<policy>:<consumer>:<ip subject>` — see RateLimitService.
+  key         String
+  // Start of the fixed window this count belongs to.
+  windowStart DateTime
+  count       Int      @default(0)
+  // When the row stops being needed. Read only by the prune job.
+  expiresAt   DateTime
+
+  @@id([key, windowStart])
+  // The prune deletes by deadline, oldest first.
+  @@index([expiresAt])
+  @@map("rate_limit_counter")
 }
