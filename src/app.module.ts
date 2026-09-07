@@ -18,6 +18,7 @@ import { LiquidityPoolsModule } from '@/liquidity-pools/liquidity-pools.module';
 import { ObserverModule } from '@/observer/observer.module';
 import { WebhooksModule } from '@/webhooks/webhooks.module';
 import { AnalyticsModule } from '@/analytics/analytics.module';
+import { ActivityModule } from '@/activity/activity.module';
 import { AdminModule } from '@/admin/admin.module';
 import { ProductsModule } from '@/products/products.module';
 import { CustomersModule } from '@/customers/customers.module';
@@ -51,6 +52,9 @@ import { CommonModule } from '@/common/common.module';
     CommonModule,
     WebhooksModule,
     AnalyticsModule,
+    // Client-reported telemetry (wallet + dashboard): the half of what users do
+    // that never becomes a request to this service.
+    ActivityModule,
     AdminModule,
     ProductsModule,
     CustomersModule,

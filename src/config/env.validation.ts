@@ -185,6 +185,17 @@ class EnvironmentVariables {
   @Min(0)
   REQUEST_LOG_RETENTION_DAYS?: number;
 
+  /**
+   * Days to keep client-reported activity events (`activity_event`). Pruned on
+   * the same timer and in the same bounded batches as the request log, because
+   * a row holds an IP, a user agent and whatever the client put in `props`.
+   * 0 keeps them forever.
+   */
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  ACTIVITY_RETENTION_DAYS?: number;
+
   @IsOptional()
   @IsInt()
   @Min(1)

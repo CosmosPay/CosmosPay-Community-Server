@@ -8,6 +8,7 @@ describe('RequestLogRetentionService', () => {
     batchSize: 2,
     maxPerCycle: 6,
     deliveryPayloadDays: 0,
+    activityEventDays: 0,
   };
 
   function build(cfg: typeof retentionCfg = retentionCfg) {
@@ -19,6 +20,10 @@ describe('RequestLogRetentionService', () => {
       webhookDelivery: {
         findMany: jest.fn().mockResolvedValue([]),
         updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+      },
+      activityEvent: {
+        findMany: jest.fn().mockResolvedValue([]),
+        deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
       },
     };
     const config = { get: () => cfg } as any;
@@ -43,7 +48,7 @@ describe('RequestLogRetentionService', () => {
     jest.useRealTimers();
   });
 
-  it('skips the timer only when BOTH retentions are off', () => {
+  it('skips the timer only when EVERY retention is off', () => {
     const loggerLog = jest.spyOn(Logger.prototype, 'log').mockImplementation();
     const setIntervalSpy = jest.spyOn(global, 'setInterval');
 
@@ -53,6 +58,7 @@ describe('RequestLogRetentionService', () => {
       batchSize: 1000,
       maxPerCycle: 50000,
       deliveryPayloadDays: 0,
+      activityEventDays: 0,
     });
     service.onModuleInit();
 
@@ -205,6 +211,56 @@ describe('RequestLogRetentionService', () => {
 
     resolveFind([]);
     await first;
+  });
+
+  it('deletes activity events past the window, in bounded batches', async () => {
+    const loggerLog = jest.spyOn(Logger.prototype, 'log').mockImplementation();
+    const { service, prisma } = build({
+      ...retentionCfg,
+      retentionDays: 0,
+      activityEventDays: 30,
+      batchSize: 2,
+      maxPerCycle: 2,
+    });
+    prisma.activityEvent.findMany.mockResolvedValueOnce([
+      { id: 'ae_1' },
+      { id: 'ae_2' },
+    ]);
+    prisma.activityEvent.deleteMany.mockResolvedValueOnce({ count: 2 });
+
+    await (service as any).tick();
+
+    expect(
+      prisma.activityEvent.findMany.mock.calls[0][0].where.createdAt.lt,
+    ).toBeInstanceOf(Date);
+    expect(prisma.activityEvent.deleteMany).toHaveBeenCalledWith({
+      where: { id: { in: ['ae_1', 'ae_2'] } },
+    });
+    expect(loggerLog).toHaveBeenCalledWith(
+      expect.stringMatching(/Activity prune deleted 2 row/),
+    );
+  });
+
+  it('does not touch activity events when the window is 0', async () => {
+    const { service, prisma } = build();
+    await (service as any).tick();
+    expect(prisma.activityEvent.findMany).not.toHaveBeenCalled();
+  });
+
+  it('still runs the timer for activity when the other two are off', () => {
+    jest.spyOn(Logger.prototype, 'log').mockImplementation();
+    const setIntervalSpy = jest.spyOn(global, 'setInterval');
+
+    const { service } = build({
+      ...retentionCfg,
+      retentionDays: 0,
+      deliveryPayloadDays: 0,
+      activityEventDays: 30,
+    });
+    service.onModuleInit();
+
+    expect(setIntervalSpy).toHaveBeenCalled();
+    service.onModuleDestroy();
   });
 
   it('clearInterval on destroy so the process can exit', () => {

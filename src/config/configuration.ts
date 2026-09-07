@@ -105,6 +105,8 @@ export interface AppConfig {
     maxPerCycle: number;
     // Days to keep the *body* of a settled webhook delivery. 0 disables.
     deliveryPayloadDays: number;
+    // Days to keep client-reported activity events. 0 disables that prune.
+    activityEventDays: number;
   };
   webhookSweep: {
     // Recovers deliveries stranded by a crash mid-retry. Off disables the timer
@@ -291,6 +293,14 @@ export default (): AppConfig => ({
     // behaviour) for an operator who needs that and accepts the exposure.
     deliveryPayloadDays: parseInt(
       process.env.WEBHOOK_PAYLOAD_RETENTION_DAYS ?? '30',
+      10,
+    ),
+    // Client telemetry (`activity_event`). A row carries an IP, a user agent
+    // and whatever the client put in `props`, so it is personal data on the
+    // same footing as the access log and gets the same default window. 0 keeps
+    // events forever, which is a deliberate choice an operator has to make.
+    activityEventDays: parseInt(
+      process.env.ACTIVITY_RETENTION_DAYS ?? '30',
       10,
     ),
   },

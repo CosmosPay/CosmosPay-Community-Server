@@ -27,6 +27,14 @@ import { JobSchedule, ScheduledJob } from '@/common/services/scheduled-job';
  * past any redelivery window, so nothing that could still be retried loses what
  * it needs to re-send.
  *
+ * `activity_event` is the same argument as `request_log`, one layer out: it is
+ * what the WALLET and the DASHBOARD reported about themselves, IP and user agent
+ * included, and it is the fastest-growing table in the service because a client
+ * reports things that never become a request at all. Those rows are deleted
+ * outright too. It shares this job rather than starting a fourth timer — the
+ * three prunes are one policy ("do not keep personal data forever") on three
+ * tables.
+ *
  * Each cycle drains in short `batchSize` calls (short locks) and loops until the
  * backlog is empty or `maxPerCycle` is hit, so a large history can catch up
  * without waiting one batch per hour.
@@ -48,21 +56,27 @@ export class RequestLogRetentionService extends ScheduledJob {
   }
 
   protected schedule(): JobSchedule {
-    const { retentionDays, pruneIntervalMs, deliveryPayloadDays } =
-      this.config.get('requestLogRetention', { infer: true });
+    const {
+      retentionDays,
+      pruneIntervalMs,
+      deliveryPayloadDays,
+      activityEventDays,
+    } = this.config.get('requestLogRetention', { infer: true });
+    const anyEnabled =
+      retentionDays > 0 || deliveryPayloadDays > 0 || activityEventDays > 0;
     return {
-      // One timer serves two prunes, so it runs while *either* is enabled.
-      enabled: retentionDays > 0 || deliveryPayloadDays > 0,
+      // One timer serves three prunes, so it runs while *any* of them is enabled.
+      enabled: anyEnabled,
       intervalMs: pruneIntervalMs,
-      description:
-        retentionDays > 0 || deliveryPayloadDays > 0
-          ? `Retention (request logs ${retentionDays}d, delivery bodies ${deliveryPayloadDays}d)`
-          : 'Retention (REQUEST_LOG_RETENTION_DAYS=0, WEBHOOK_PAYLOAD_RETENTION_DAYS=0)',
+      description: anyEnabled
+        ? `Retention (request logs ${retentionDays}d, delivery bodies ${deliveryPayloadDays}d, activity ${activityEventDays}d)`
+        : 'Retention (REQUEST_LOG_RETENTION_DAYS=0, WEBHOOK_PAYLOAD_RETENTION_DAYS=0, ACTIVITY_RETENTION_DAYS=0)',
     };
   }
 
   protected async run(): Promise<void> {
     await this.prune();
+    await this.pruneActivityEvents();
     await this.pruneDeliveryPayloads();
   }
 
@@ -108,6 +122,59 @@ export class RequestLogRetentionService extends ScheduledJob {
     if (deleted > 0) {
       this.logger.log(
         `Request log prune deleted ${deleted} row(s) older than ${cutoff.toISOString()}`,
+      );
+    }
+  }
+
+  /**
+   * Deletes client activity past its window, in the same bounded batches.
+   *
+   * Kept separate from {@link prune} rather than generalized over a table name:
+   * the two read different config keys and Prisma's delegates are not
+   * interchangeable values, so "one parameterized prune" would be a switch on a
+   * string that returns `any`. Two short loops that say what they delete are
+   * worth more than one that does not.
+   */
+  private async pruneActivityEvents(): Promise<void> {
+    const { activityEventDays, batchSize, maxPerCycle } = this.config.get(
+      'requestLogRetention',
+      { infer: true },
+    );
+    if (activityEventDays <= 0) return;
+
+    const cutoff = new Date(
+      Date.now() - activityEventDays * 24 * 60 * 60 * 1000,
+    );
+    const take = Math.max(1, batchSize);
+    const cap = Math.max(take, maxPerCycle);
+    let deleted = 0;
+    // Bounded by rows EXAMINED, for the reason spelled out in `prune`: a
+    // replica racing a sibling sees count 0 on a batch it still found rows for,
+    // and bounding on `deleted` would turn that into an unbounded scan.
+    let examined = 0;
+
+    while (deleted < cap && examined < cap) {
+      const takeNow = Math.min(take, cap - examined);
+      const stale = await this.prisma.activityEvent.findMany({
+        where: { createdAt: { lt: cutoff } },
+        select: { id: true },
+        orderBy: { createdAt: 'asc' },
+        take: takeNow,
+      });
+      if (stale.length === 0) break;
+      examined += stale.length;
+
+      const result = await this.prisma.activityEvent.deleteMany({
+        where: { id: { in: stale.map((r) => r.id) } },
+      });
+      deleted += result.count;
+
+      if (stale.length < takeNow) break;
+    }
+
+    if (deleted > 0) {
+      this.logger.log(
+        `Activity prune deleted ${deleted} row(s) older than ${cutoff.toISOString()}`,
       );
     }
   }

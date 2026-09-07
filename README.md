@@ -72,13 +72,15 @@ src/
   products/                       merchant catalogue
   customers/                      payer records derived from intents
   analytics/                      summary, balances, API logs, webhook logs
+  activity/                       client telemetry ingest + feed (wallet, dashboard)
   admin/                          cross-tenant platform admin (Bearer + role), audited
   health/                         liveness/readiness probes (@Public)
 prisma/schema.prisma              Consumer, PaymentIntent, Swap, LiquidityPoolOperation,
                                   WebhookEndpoint/Delivery/EmittedEvent, BlindpayReceiver,
                                   Blockchain/BankAccount/VirtualAccount, BlindpayQuote,
                                   BlindpayWebhookEvent, Payin, Payout, PollarOauthSession,
-                                  PollarUserWallet, RequestLog, AdminAuditLog
+                                  PollarUserWallet, RequestLog, ActivityEvent,
+                                  AdminAuditLog
 test/                             e2e suite proving the gateway gate
 ```
 
@@ -107,6 +109,7 @@ modules; the spec is regenerated from the controllers and DTOs on every CI run
 | Products          | `/v1/products`           | Merchant catalogue                                        |
 | Customers         | `/v1/customers`          | Payer records derived from intents                        |
 | Analytics         | `/v1/summary`, `/v1/balances`, `/v1/logs` | Dashboard aggregates and logs            |
+| Activity          | `/v1/activity`           | Client-reported events: ingest, feed, rollup               |
 | Admin             | `/v1/admin`              | Cross-tenant reads/writes — Bearer + role, audited        |
 | Health            | `/v1/health`             | Liveness / readiness (`@Public`)                          |
 
@@ -225,6 +228,49 @@ hit, so a large history can catch up without holding one long table lock. Set
 `REQUEST_LOG_RETENTION_DAYS=0` to disable the prune entirely (the service logs
 that at boot). The composite index on `(consumer, createdAt)` keeps the
 dashboard query fast as volume grows.
+
+### Client activity (what the wallet and the dashboard report)
+
+`request_log` records what reached this service. It cannot record what a client
+*did*: a wallet that crashed on its send screen, a signature the user cancelled,
+a dashboard page that threw before any request left the browser. None of those
+produce an HTTP call here, and they are exactly the events worth having when
+something is wrong — so the clients report their own, to `POST
+/v1/activity/events`.
+
+- **A batch, not a call per event.** Clients queue and flush, so an offline
+  wallet keeps its events and sends them on the next launch. Up to
+  `ACTIVITY_MAX_BATCH` (100) per request, written in one statement.
+- **Retrying a flush is safe.** An event may carry the client's own `eventId`;
+  `(consumerId, eventId)` is unique and the insert skips duplicates, so a batch
+  that was written but whose acknowledgement never arrived can be re-sent
+  without doubling every row. The response reports `accepted` and `duplicates`.
+- **Attribution is the gateway's, never the body's.** Rows are written under the
+  consumer APISIX authenticated. A client cannot file events against another
+  account, and there is no field that would let it try.
+- **Ingest does not fail on the shape of a payload.** An over-long `message` is
+  truncated and an over-sized `props` is replaced with `{"_dropped":
+  "props_too_large"}`; a 400 would cost the whole batch, and the batch matters
+  most when the client is in a state nobody anticipated.
+- **A wrong device clock cannot reorder the feed.** `occurredAt` is clamped to
+  receipt time when it is more than five minutes ahead or more than seven days
+  behind, so a phone an hour fast cannot pin its events to the top of a
+  newest-first list. Both times are kept: `at` (the client's) and `receivedAt`.
+
+Reading it back:
+
+| Route                   | Scope             | Returns                                                              |
+| ----------------------- | ----------------- | -------------------------------------------------------------------- |
+| `GET /v1/activity/events` | `activity:read` | The feed, newest first. Filters: `source`, `level`, `category`, `type` (prefix), `network`, `since`/`until` |
+| `GET /v1/activity/summary` | `activity:read` | Counts per level/source/category, top event types, top errors, sessions, devices, a daily series |
+
+`level` on the feed is a **floor**, not an exact match: `level=warn` returns
+warnings *and* errors. A filter that returned only the rows somebody labelled
+`error` would hide the warnings that led to them.
+
+`activity_event` holds an IP, a user agent and whatever the client attached, so
+it is pruned by the same job and in the same bounded batches as `request_log` —
+`ACTIVITY_RETENTION_DAYS`, default **30**, `0` to keep events forever.
 
 ### Webhooks (notifying integrators)
 
@@ -868,6 +914,23 @@ routes then return `503`). See `.env.example`.
 
 ## Upgrading — breaking changes and deploy notes
 
+### Client activity: a new module, a new table and two new scopes
+
+`POST /v1/activity/events` accepts telemetry from the wallet and the developer
+dashboard; `GET /v1/activity/events` and `GET /v1/activity/summary` read it back.
+Nothing existing changed shape, but three things need doing at deploy time:
+
+- **Migration `20260906140000_activity_event`** creates `activity_event`
+  (append-only, `consumerId`-scoped, unique on `(consumerId, eventId)`).
+- **The scopes `activity:write` and `activity:read` are new.** A key without them
+  gets `insufficient_scope`, which is the correct answer — but it means an
+  existing key does not gain the ability to report telemetry by upgrading. The
+  developer platform grants both to wallet-provisioned keys and re-applies the
+  set on rotation; keys minted by hand need them added.
+- **`ACTIVITY_RETENTION_DAYS`** (default 30) joins the retention job. It is
+  personal data on the same footing as the access log; set it to `0` only
+  deliberately.
+
 ### The Pollar poll route now discovers a finished login itself
 
 `GET /v1/pollar/oauth/sessions/{state}` used to report whatever the bridge
@@ -1045,6 +1108,7 @@ at least `DATABASE_URL` and `APISIX_GATEWAY_SECRET`.
 | `WEBHOOK_SWEEP_INTERVAL_MS` | no | `60000` | Sweeper interval (ms, min 1000) |
 | `WEBHOOK_PAYLOAD_RETENTION_DAYS` | no | `30` | Days to keep a settled delivery body before redacting it. `0` keeps it forever |
 | `REQUEST_LOG_RETENTION_DAYS` | no | `30` | Days to keep `request_log` rows (payer IP / user-agent). `0` disables the prune |
+| `ACTIVITY_RETENTION_DAYS` | no | `30` | Days to keep `activity_event` rows (client IP / user-agent / `props`). Pruned by the same job. `0` keeps events forever |
 | `REQUEST_LOG_PRUNE_INTERVAL_MS` | no | `3600000` | Retention timer interval (ms) |
 | `REQUEST_LOG_PRUNE_BATCH_SIZE` | no | `1000` | Rows per delete batch (keeps each lock short) |
 | `REQUEST_LOG_PRUNE_MAX_PER_CYCLE` | no | `50000` | Hard cap on rows examined per tick |

@@ -43,6 +43,9 @@ model Consumer {
   // Per-network Pollar wallet provisioning state for this consumer's users.
   pollarUserWallets   PollarUserWallet[]
 
+  // Client-side telemetry (wallet + dashboard) reported under this consumer.
+  activityEvents ActivityEvent[]
+
   @@map("consumer")
 }
 
@@ -1022,4 +1025,91 @@ model RateLimitCounter {
   // The prune deletes by deadline, oldest first.
   @@index([expiresAt])
   @@map("rate_limit_counter")
+}
+
+// ---------------------------------------------------------------------------
+// Client activity / telemetry.
+//
+// `request_log` records what reached THIS service. It cannot record what a
+// client did: a wallet that crashed on its send screen, a signature the user
+// cancelled, a dashboard page that threw before any request left the browser —
+// none of that produces an HTTP call here, and those are exactly the events
+// worth having when something is wrong. So the wallet and the developer
+// dashboard report their own, and this is where they land.
+//
+// Append-only and pruned on the same schedule as `request_log`
+// (ACTIVITY_RETENTION_DAYS): a row carries an IP, a user agent and whatever the
+// client put in `props`, so keeping it forever is keeping personal data forever.
+//
+// Attribution is the consumer the gateway authenticated, never anything in the
+// body — a client cannot file its events under someone else's account. Wallets
+// with no Cosmos Pay account yet have no credential to authenticate with; the
+// developer platform forwards those under one dedicated consumer of its own, so
+// they are anonymous rather than misattributed.
+// ---------------------------------------------------------------------------
+model ActivityEvent {
+  id         String   @id @default(cuid())
+  consumerId String
+  consumer   Consumer @relation(fields: [consumerId], references: [id], onDelete: Cascade)
+
+  // The client's own id for this event, when it sent one. It exists so a flush
+  // that was written but whose acknowledgement never arrived can be retried
+  // without doubling every row — the retry is the correct client behaviour, and
+  // without this the only way to avoid duplicates would be to drop events on a
+  // flaky network. Null for callers that do not generate one; Postgres does not
+  // collide NULLs, so those simply never de-duplicate.
+  eventId    String?
+
+  // Which client reported it: `wallet`, `dashboard`, `server` or `sdk`.
+  source   String
+  // `debug` | `info` | `warn` | `error` — the severity ladder the views filter on.
+  level    String
+  // Coarse grouping: `error`, `metric`, `transaction`, `auth`, `navigation`,
+  // `api`, `lifecycle`, `ui`. Free-form on purpose; a new client area must not
+  // need a migration to report itself.
+  category String
+  // The event name, e.g. `payment.sent`, `swap.failed`, `screen.view`.
+  type     String
+  // Human-readable detail. For an error this is the message, already redacted
+  // client-side — never a stack trace with a key in it.
+  message  String?
+
+  // Anonymous correlation. `sessionId` groups one run of the app, `distinctId`
+  // one install; neither is an account id and neither is derived from a key.
+  sessionId  String?
+  distinctId String?
+
+  appVersion String?
+  // `web` | `ext` | `app` | `desktop` | `dashboard` | `node`.
+  platform   String?
+  // Stellar network the event happened on, when it had one.
+  network    String?
+  // For a timing metric: how long the measured thing took.
+  durationMs Int?
+
+  // Structured detail, size-capped at ingest. Never credentials, never a seed.
+  props Json?
+
+  ip        String?
+  userAgent String?
+
+  // When the CLIENT says it happened (clamped at ingest so a wrong device clock
+  // cannot file an event in the future or the distant past), versus when this
+  // service received it. Both, because a queued batch from an offline wallet can
+  // arrive hours late and the ordering that matters is the client's.
+  occurredAt DateTime
+  createdAt  DateTime @default(now())
+
+  // De-duplicates a retried flush. Scoped to the consumer: two clients must not
+  // be able to collide (or probe) each other's event ids.
+  @@unique([consumerId, eventId])
+  // The list view: one consumer's events, newest first.
+  @@index([consumerId, occurredAt])
+  // The error/severity filter over the same list.
+  @@index([consumerId, level, occurredAt])
+  // The per-client filter (wallet vs dashboard) over the same list.
+  @@index([consumerId, source, occurredAt])
+  // Used by the retention prune (delete where createdAt < cutoff).
+  @@index([createdAt])
+  @@map("activity_event")
 }
