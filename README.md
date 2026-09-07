@@ -68,7 +68,7 @@ src/
   kyc/                            receivers (KYC/KYB), wallets, bank accounts, doc upload
   onramp/                         fiat → stablecoin: payin quotes, payins, virtual accounts
   offramp/                        stablecoin → fiat: payout quotes, payouts (client-signed)
-  pollar/                         Pollar OAuth bridge (social login → Stellar wallet) + operator routes
+  pollar/                         Pollar OAuth bridge (social login → a wallet on both networks) + operator routes
   products/                       merchant catalogue
   customers/                      payer records derived from intents
   analytics/                      summary, balances, API logs, webhook logs
@@ -78,7 +78,7 @@ prisma/schema.prisma              Consumer, PaymentIntent, Swap, LiquidityPoolOp
                                   WebhookEndpoint/Delivery/EmittedEvent, BlindpayReceiver,
                                   Blockchain/BankAccount/VirtualAccount, BlindpayQuote,
                                   BlindpayWebhookEvent, Payin, Payout, PollarOauthSession,
-                                  RequestLog, AdminAuditLog
+                                  PollarUserWallet, RequestLog, AdminAuditLog
 test/                             e2e suite proving the gateway gate
 ```
 
@@ -654,6 +654,81 @@ Each poll issues a fresh code and retires the previous one, so redeem the code
 from your most recent poll. That falls out of never storing a live credential:
 the row keeps a SHA-256 of the code, and a hash cannot be un-hashed.
 
+**Prefer the poll flow.** Pollar does not return the browser to the callback: its
+hosted flow ends on its own page — `www.pollar.xyz/auth/status` — whether the
+consent was refused or granted, and a granted one simply leaves the client
+session `READY` on Pollar's side. The `redirect_uri` the authorization URL
+carries is never navigated to, so a handshake that waits to be called back waits
+until it expires.
+
+So the poll route asks Pollar instead of waiting to be told: while a handshake is
+`pending` it checks the client session's own status, and promotes the handshake
+the moment Pollar reports `READY` — the same condition the redemption already
+waits for. The wallet's contract does not change; what changed is that `pending`
+now ends on its own.
+
+Two operational notes fall out of that:
+
+- **The callback route still exists and is still registered with Pollar.** It
+  works if a redirect does arrive, and it is what a redirect-flow handshake
+  depends on — that flow has nowhere to put a code otherwise. It just cannot be
+  the only way a login is noticed.
+- **The provider is asked at most once every two seconds per handshake**
+  (`POLLAR_SESSION_PROBE_INTERVAL_MS`), a compare-and-swap on
+  `providerCheckedAt` that every replica shares. A wallet polling every second
+  therefore costs Pollar 30 requests a minute, not 60, against a key whose whole
+  budget is 200.
+
+A handshake whose client session Pollar has disowned (`INVALID_CLIENT_SESSION_ID`,
+`EXPIRED_CLIENT_ID`, or a `404`/`410`) is closed as `failed` with that code on the
+spot, rather than polled until the TTL runs out.
+
+### One login, a wallet on both networks
+
+Pollar runs mainnet and testnet as two separate applications with two separate
+key pairs, so a hosted login can only ever produce a wallet on the network its
+API key resolved to (`prod` → `public`, `dev` → `testnet` — see `resolveNetwork`).
+A user who then moves between environments has no wallet on the other side: the
+address they funded on testnet is not the address that receives on mainnet, and
+the second wallet ends up being created at whatever moment they first need it,
+which is the moment least able to absorb a provider failure.
+
+So a redemption also registers the user on the **other** network, through the
+Server API's `POST /users/with-wallet`, and `POST /v1/pollar/oauth/token`
+reports both:
+
+```jsonc
+"network_wallets": [
+  { "network": "testnet", "status": "ready",   "address": "GA5Z…" },
+  { "network": "public",  "status": "pending", "address": null    }
+]
+```
+
+**A `pending` entry is not an error.** The login succeeded; the second wallet is
+the part that did not land yet, and the whole point of the design is that it
+cannot take the login down with it. The attempt on the request path gets five
+seconds and one try, and whatever it does not finish is retried in the background
+by the provisioning sweeper — same switch and cadence as the handshake sweeper
+(`POLLAR_SWEEP_*`), with an exponential backoff and a total budget of ten
+attempts before the row goes `failed`.
+
+The common reason for `pending` is prosaic: **the other network's keys are not
+configured.** Until they are, every login leaves a pending counterpart; the
+moment they land, one sweep provisions the whole backlog without anyone logging
+in again. That is why the keys for both networks are worth setting even when you
+only serve one today.
+
+Two consequences worth knowing:
+
+- **The join key is the OAuth email**, because that is what a later hosted login
+  on the other network resolves the same person by. A provider that vouches for
+  no email gets no counterpart wallet at all — better than an orphan wallet that
+  cost XLM and that no login ever reaches.
+- **It spends XLM on both networks.** A mainnet login now also funds a testnet
+  reserve and vice versa. The per-network state lives in `pollar_user_wallet`,
+  one row per (consumer, email, network), which is also the idempotency: a repeat
+  login upserts through it instead of provisioning again.
+
 ### What the bridge stores
 
 A handshake row, and nothing in it can spend money: the unguessable `state`, the
@@ -771,9 +846,16 @@ Set `RATE_LIMIT_ENABLED=false` as the incident switch.
 ### Setup
 
 1. Create an app at [dashboard.pollar.xyz](https://dashboard.pollar.xyz) and take
-   both keys for your network (`pub_testnet_…` / `sec_testnet_…`).
+   both keys for your network (`pub_testnet_…` / `sec_testnet_…`). Do it for
+   **both** networks: a login provisions a wallet on each, and a network with no
+   keys leaves every user's second wallet `pending` until they are set. The two
+   dashboards are separate — register the callback host in each.
 2. Register the **gateway host** of `POLLAR_BRIDGE_CALLBACK_URL` under
-   **Build → Domains**, or Pollar refuses the redirect.
+   **Build → Domains**. This is not only about the redirect: the SDK API checks
+   that list on *every* call, against the `Origin` header, and the bridge sends
+   this host's origin as that header (`POLLAR_SDK_ORIGIN` overrides it). An
+   unregistered host is `403 ORIGIN_NOT_ALLOWED` on `POST /auth/session` — the
+   first call of every login, before the user ever sees a consent screen.
 3. Set `POLLAR_BRIDGE_CALLBACK_URL` to `<gateway>/v1/pollar/oauth/callback` — the
    bridge appends `/{state}` itself.
 4. Add each wallet's redirect URI to `POLLAR_REDIRECT_URI_WHITELIST`, or omit it
@@ -785,6 +867,45 @@ of on a user-facing login. Leave the keys blank to disable the feature (Pollar
 routes then return `503`). See `.env.example`.
 
 ## Upgrading — breaking changes and deploy notes
+
+### The Pollar poll route now discovers a finished login itself
+
+`GET /v1/pollar/oauth/sessions/{state}` used to report whatever the bridge
+callback had recorded. Pollar never calls that callback — its hosted flow ends on
+`www.pollar.xyz/auth/status` and leaves the client session `READY` — so a
+poll-flow handshake stayed `pending` until it expired, under a wallet that was
+doing everything right. The poll now asks Pollar directly and promotes the
+handshake on `READY`.
+
+No API shape changed and no client change is needed: a login that used to hang on
+`pending` now reaches `authorized` within a poll of the user finishing. Two
+things to be aware of when deploying:
+
+- **Migration `20260906120000_pollar_oauth_provider_probe`** adds a nullable
+  `providerCheckedAt` to `pollar_oauth_session`. It is the shared floor on how
+  often the question reaches Pollar; nothing backfills.
+- **Poll traffic now reaches Pollar.** Budget for one provider request per
+  in-flight login every two seconds, on the publishable key for that network.
+
+### Pollar logins now provision a wallet on both networks
+
+`POST /v1/pollar/oauth/token` gained a `network_wallets` array — one entry per
+Stellar network, each `ready`, `pending` or `failed`. Additive, so nothing
+breaks, but two operational notes:
+
+- **Run the migration.** `20260905120000_pollar_user_wallet` adds
+  `pollar_user_wallet` and the `PollarWalletStatus` enum. Without it every
+  redemption logs a failed provisioning and the counterpart wallet stays
+  unrecorded — the login itself keeps working.
+- **Set the keys for both networks.** `POLLAR_*_MAINNET` and `POLLAR_*_TESTNET`
+  are each optional on their own, and a network with no keys now shows up as a
+  `pending` wallet on every login rather than as nothing at all. Configure the
+  second pair and the sweeper drains the backlog on its next tick; leave it
+  unset deliberately and the rows sit `pending` until the ten-attempt budget
+  retires them. Either way no login fails.
+
+Budget for the XLM: a login now funds a reserve on *both* networks, so mainnet
+spend per new user is unchanged but testnet spend appears where there was none.
 
 ### `429` now reports `rate_limited`
 
@@ -942,13 +1063,14 @@ at least `DATABASE_URL` and `APISIX_GATEWAY_SECRET`.
 | `POLLAR_SECRET_KEY_TESTNET` / `_MAINNET` | with the publishable key | — | Pollar secret key (`sec_<network>_…`), for the operator routes |
 | `POLLAR_BRIDGE_CALLBACK_URL` | when a Pollar key is set | — | Public URL Pollar returns the browser to. Must be `<gateway>/v1/pollar/oauth/callback` **and** a host registered under Pollar's Build → Domains |
 | `POLLAR_REDIRECT_URI_WHITELIST` | no | — | Per-consumer allow-list of wallet redirect URIs. Empty ⇒ that consumer can only use the poll flow |
+| `POLLAR_SDK_ORIGIN` | no | origin of `POLLAR_BRIDGE_CALLBACK_URL` | `Origin` sent to Pollar's SDK API, which checks it against Build → Domains. Set only when the callback host and the registered host differ |
 | `POLLAR_SDK_BASE_URL` | no | `https://sdk.api.pollar.xyz` | Pollar SDK API base URL |
 | `POLLAR_SERVER_BASE_URL` | no | `https://api.pollar.xyz` | Pollar Server API base URL |
 | `POLLAR_TIMEOUT_MS` | no | `15000` | Pollar HTTP client timeout (ms) |
 | `POLLAR_AUTHORIZATION_TTL_MS` | no | `300000` | How long a login handshake stays open |
 | `POLLAR_CODE_TTL_MS` | no | `120000` | How long a minted bridge code stays redeemable |
 | `POLLAR_LOGIN_WAIT_MS` | no | `20000` | How long redemption waits for Pollar to provision the wallet |
-| `POLLAR_SWEEP_ENABLED` | no | `true` | Expire handshakes nobody finished |
+| `POLLAR_SWEEP_ENABLED` | no | `true` | Expire handshakes nobody finished, and retry the cross-network wallets a login left `pending` |
 | `POLLAR_SWEEP_INTERVAL_MS` | no | `60000` | Handshake sweeper interval (ms, min 1000) |
 
 Legacy `STELLAR_HORIZON_URL` is rejected at boot — use

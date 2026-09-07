@@ -160,7 +160,9 @@ export class PollarOauthController {
       'For a wallet with no addressable redirect URI. Returns the handshake ' +
       'status, and — once the user has come back — the single-use code. Each ' +
       'call issues a fresh code and retires the previous one, so redeem the code ' +
-      'from your most recent poll.',
+      'from your most recent poll. This is also what notices the login finished: ' +
+      'Pollar ends its hosted flow on its own page rather than returning the ' +
+      'browser to the callback, so the poll asks Pollar directly.',
   })
   @ApiOkResponse({ type: PollarSessionStatusEntity })
   status(

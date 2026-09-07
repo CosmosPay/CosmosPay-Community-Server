@@ -11,6 +11,8 @@ import { PrismaService } from '@/prisma/prisma.service';
 import { PollarApiError, PollarClient } from '@/pollar/pollar.client';
 import {
   POLLAR_SESSION_POLL_INTERVAL_MS,
+  POLLAR_SESSION_PROBE_INTERVAL_MS,
+  POLLAR_SESSION_PROBE_TIMEOUT_MS,
   POLLAR_SESSION_READY,
   POLLAR_TERMINAL_SESSION_CODES,
 } from '@/pollar/pollar.constants';
@@ -39,9 +41,11 @@ import { LogoutSessionDto } from '@/pollar/oauth/dto/logout-session.dto';
 import { RefreshSessionDto } from '@/pollar/oauth/dto/refresh-session.dto';
 import {
   PollarLogoutEntity,
+  PollarNetworkWalletEntity,
   PollarSessionEntity,
   PollarTokenPairEntity,
 } from '@/pollar/oauth/entities/pollar-session.entity';
+import { PollarWalletProvisioningService } from '@/pollar/wallets/pollar-wallet-provisioning.service';
 import { PollarAuthorizationEntity } from '@/pollar/oauth/entities/pollar-authorization.entity';
 import { PollarSessionStatusEntity } from '@/pollar/oauth/entities/pollar-session-status.entity';
 
@@ -94,6 +98,7 @@ export class PollarOauthService {
     private readonly pollar: PollarClient,
     private readonly consumers: ConsumerResolverService,
     private readonly config: ConfigService<AppConfig, true>,
+    private readonly provisioning: PollarWalletProvisioningService,
   ) {
     this.cfg = config.get('pollar', { infer: true });
   }
@@ -125,11 +130,21 @@ export class PollarOauthService {
     const state = mintState();
     const callbackUrl = this.pollar.callbackUrl(state);
 
-    const session = await this.pollar.sdk<PollarClientSession>(
-      'POST',
-      network,
-      '/auth/session',
-    );
+    // Mapped rather than left to escape: a raw PollarApiError is not an
+    // HttpException, so the global filter renders it as a bare 500
+    // `internal_error` with Pollar's own code — the one thing that says what
+    // actually went wrong — thrown away. Every other Pollar call in this
+    // service already goes through `toApiError`; this one was the exception.
+    let session: PollarClientSession;
+    try {
+      session = await this.pollar.sdk<PollarClientSession>(
+        'POST',
+        network,
+        '/auth/session',
+      );
+    } catch (err) {
+      throw this.toApiError(err, 'open a login');
+    }
 
     const expiresAt = new Date(Date.now() + this.cfg.authorizationTtlMs);
     await this.prisma.pollarOauthSession.create({
@@ -271,6 +286,11 @@ export class PollarOauthService {
    * not cost the user a second trip through a consent screen. A *terminal*
    * Pollar answer (the session is invalid or expired) is recorded as such,
    * because no amount of retrying will fix it.
+   *
+   * Once the session is live, the user is also registered on the *other* network
+   * so they hold a wallet on both. That step is strictly best-effort and runs
+   * after the handshake is already `CONSUMED`: see
+   * {@link PollarWalletProvisioningService} for why it can never fail a login.
    */
   async exchange(
     consumer: GatewayConsumer,
@@ -310,10 +330,20 @@ export class PollarOauthService {
         },
       });
 
+      // Both networks, best-effort. This runs after the handshake is CONSUMED
+      // on purpose: the login has already succeeded by here, and provisioning
+      // the other network must never be able to undo it.
+      const networkWallets = await this.provisionQuietly(
+        local.id,
+        session,
+        login,
+      );
+
       return this.toSessionEntity(
         login,
         session.network as StellarNetwork,
         Boolean(session.dpopJwk),
+        networkWallets,
       );
     } catch (err) {
       await this.releaseOrFail(session.id, err);
@@ -403,7 +433,7 @@ export class PollarOauthService {
    */
   private async waitForReady(session: PollarOauthSession): Promise<void> {
     const deadline = Date.now() + this.cfg.loginWaitMs;
-    const path = `/auth/session/status/${encodeURIComponent(session.clientSessionId)}/poll`;
+    const path = this.sessionStatusPath(session);
 
     for (;;) {
       const status = await this.pollar.sdk<PollarSessionStatus>(
@@ -432,11 +462,7 @@ export class PollarOauthService {
    * says the underlying session is gone for good.
    */
   private async releaseOrFail(id: string, err: unknown): Promise<void> {
-    const terminal =
-      err instanceof PollarApiError &&
-      (POLLAR_TERMINAL_SESSION_CODES.has(err.code) ||
-        err.status === 404 ||
-        err.status === 410);
+    const terminal = isDeadClientSession(err);
 
     try {
       await this.prisma.pollarOauthSession.updateMany({
@@ -497,21 +523,144 @@ export class PollarOauthService {
       };
     }
 
+    // Where a finished login is actually discovered: Pollar never navigates the
+    // browser to the bridge callback, so nothing else would ever move this
+    // handshake off PENDING.
+    const current = await this.probeProvider(session);
+
     // The code is a bearer credential, so it only ever leaves here for a
     // handshake that has nowhere else to deliver it. A redirect-mode handshake
     // already handed its code to the wallet's redirect URI; issuing another
     // here would silently retire that one.
     const redeemable =
-      session.status === PollarOauthStatus.AUTHORIZED &&
-      session.redirectUri === null &&
-      session.expiresAt.getTime() > Date.now();
+      current.status === PollarOauthStatus.AUTHORIZED &&
+      current.redirectUri === null &&
+      current.expiresAt.getTime() > Date.now();
 
     return {
-      status: session.status.toLowerCase(),
+      status: current.status.toLowerCase(),
       state,
-      ...(redeemable ? await this.reissueCode(session) : {}),
-      error_code: session.errorCode,
+      ...(redeemable ? await this.reissueCode(current) : {}),
+      error_code: current.errorCode,
     };
+  }
+
+  /**
+   * Asks Pollar whether the user has come back, and authorizes the handshake if
+   * they have.
+   *
+   * **The callback is not a promise Pollar keeps.** Its hosted flow ends on
+   * Pollar's own page either way: a refused consent redirects to
+   * `www.pollar.xyz/auth/status?error=...`, and a successful one simply leaves
+   * the client session `READY` — the `redirect_uri` the authorization URL
+   * carries is never navigated to. Measured, not inferred: logins whose Pollar
+   * session reported `READY` while this bridge still held the handshake
+   * `PENDING` and had not been called back once, so each of them expired under a
+   * wallet that was polling correctly.
+   *
+   * So the poll asks the provider instead of waiting to be told, and `READY` is
+   * a safe thing to promote on because it is the very condition the redemption
+   * already waits for — see {@link waitForReady}.
+   *
+   * Three things it deliberately does not do:
+   *
+   *   - **Serve redirect mode.** That handshake's code is delivered by the
+   *     callback, and minting one here would retire it before the browser
+   *     arrived.
+   *   - **Throw.** A provider outage has to leave the login pending, not fail a
+   *     poll the wallet repeats every few seconds.
+   *   - **Ask on every poll.** {@link claimProbe} is a compare-and-swap, so
+   *     concurrent polls — and replicas — make one request between them.
+   */
+  private async probeProvider(
+    session: PollarOauthSession,
+  ): Promise<PollarOauthSession> {
+    if (
+      session.status !== PollarOauthStatus.PENDING ||
+      session.redirectUri !== null ||
+      !(await this.claimProbe(session))
+    ) {
+      return session;
+    }
+
+    let status: PollarSessionStatus;
+    try {
+      status = await this.pollar.sdk<PollarSessionStatus>(
+        'GET',
+        session.network as StellarNetwork,
+        this.sessionStatusPath(session),
+        { timeoutMs: POLLAR_SESSION_PROBE_TIMEOUT_MS },
+      );
+    } catch (err) {
+      // A session Pollar no longer knows can never become ready, and a wallet
+      // polling one waits out the whole TTL for nothing.
+      if (isDeadClientSession(err)) {
+        return this.failHandshake(session, err);
+      }
+      this.logger.warn(
+        `Could not ask Pollar about handshake ${session.state}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      return session;
+    }
+
+    if (status.status !== POLLAR_SESSION_READY) return session;
+
+    const claimed = await this.prisma.pollarOauthSession.updateMany({
+      where: { id: session.id, status: PollarOauthStatus.PENDING },
+      data: { status: PollarOauthStatus.AUTHORIZED },
+    });
+    if (claimed.count > 0) {
+      return { ...session, status: PollarOauthStatus.AUTHORIZED };
+    }
+    // Lost the race to a callback or another poll — the same outcome by another
+    // route, so read back what they wrote rather than report a stale PENDING.
+    const fresh = await this.prisma.pollarOauthSession.findUnique({
+      where: { id: session.id },
+    });
+    return fresh ?? session;
+  }
+
+  /**
+   * Takes the right to ask Pollar about this handshake, at most once per
+   * {@link POLLAR_SESSION_PROBE_INTERVAL_MS}.
+   *
+   * The stamp is written *before* the request and guarded by the value it
+   * replaces, so two polls arriving together — on one replica or on several —
+   * cannot both spend a provider request on the same question. Losing that swap
+   * is not an error: the winner's answer reaches the caller on its next poll,
+   * seconds away.
+   */
+  private async claimProbe(session: PollarOauthSession): Promise<boolean> {
+    const now = Date.now();
+    const last = session.providerCheckedAt;
+    if (last && now - last.getTime() < POLLAR_SESSION_PROBE_INTERVAL_MS) {
+      return false;
+    }
+    const claimed = await this.prisma.pollarOauthSession.updateMany({
+      where: { id: session.id, providerCheckedAt: last },
+      data: { providerCheckedAt: new Date(now) },
+    });
+    return claimed.count > 0;
+  }
+
+  /** Records a handshake Pollar has disowned, so the wallet stops polling it. */
+  private async failHandshake(
+    session: PollarOauthSession,
+    err: unknown,
+  ): Promise<PollarOauthSession> {
+    const errorCode = err instanceof PollarApiError ? err.code : 'LOGIN_FAILED';
+    await this.prisma.pollarOauthSession.updateMany({
+      where: { id: session.id, status: PollarOauthStatus.PENDING },
+      data: { status: PollarOauthStatus.FAILED, errorCode },
+    });
+    return { ...session, status: PollarOauthStatus.FAILED, errorCode };
+  }
+
+  /** The client-session status route, shared by the poll and the redemption. */
+  private sessionStatusPath(session: PollarOauthSession): string {
+    return `/auth/session/status/${encodeURIComponent(session.clientSessionId)}/poll`;
   }
 
   /**
@@ -631,10 +780,52 @@ export class PollarOauthService {
     });
   }
 
+  /**
+   * Gets the user a wallet on both networks, with a second belt around it.
+   *
+   * {@link PollarWalletProvisioningService} is written never to reject — a
+   * wallet it could not create comes back `pending`. This catch is for the day
+   * that contract breaks anyway: by the time it runs, the tokens are minted and
+   * the code is spent, so an exception escaping here costs the user a login they
+   * cannot retry and a second trip through a consent screen. One try/catch is a
+   * cheap price for never doing that.
+   */
+  private async provisionQuietly(
+    consumerId: string,
+    session: PollarOauthSession,
+    login: PollarLoginContent,
+  ): Promise<PollarNetworkWalletEntity[]> {
+    const network = session.network as StellarNetwork;
+    try {
+      return await this.provisioning.provisionBothNetworks({
+        consumerId,
+        // Trimmed to null rather than passed through: an empty string is not a
+        // handle Pollar can resolve anyone by.
+        externalId: login.data?.mail?.trim() || null,
+        primaryNetwork: network,
+        wallet: login.wallet,
+        pollarUserId: login.userId,
+        profile: {
+          first_name: login.data?.first_name,
+          last_name: login.data?.last_name,
+          avatar: login.data?.avatar,
+        },
+      });
+    } catch (err) {
+      this.logger.error(
+        'Cross-network Pollar provisioning failed outright; reporting the login wallet only',
+        err as Error,
+      );
+      const address = walletAddress(login.wallet);
+      return [{ network, status: address ? 'ready' : 'pending', address }];
+    }
+  }
+
   private toSessionEntity(
     login: PollarLoginContent,
     network: StellarNetwork,
     dpopBound: boolean,
+    networkWallets: PollarNetworkWalletEntity[],
   ): PollarSessionEntity {
     return {
       access_token: login.token.accessToken,
@@ -652,6 +843,7 @@ export class PollarOauthService {
         last_name: login.data?.last_name,
         avatar: login.data?.avatar,
       },
+      network_wallets: networkWallets,
       publishable_key: this.pollar.publishableKey(network),
       api_base_url: this.pollar.sdkBase(),
     };
@@ -691,4 +883,21 @@ export class PollarOauthService {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Whether a Pollar failure means the client session behind a handshake is gone
+ * for good rather than merely unreachable.
+ *
+ * Shared by the poll and the redemption because both have the same decision to
+ * make from it: retrying costs a request and can never succeed, so the handshake
+ * becomes terminal instead of waiting out its budget.
+ */
+function isDeadClientSession(err: unknown): boolean {
+  return (
+    err instanceof PollarApiError &&
+    (POLLAR_TERMINAL_SESSION_CODES.has(err.code) ||
+      err.status === 404 ||
+      err.status === 410)
+  );
 }

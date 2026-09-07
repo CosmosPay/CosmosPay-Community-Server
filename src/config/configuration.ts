@@ -165,6 +165,13 @@ export interface AppConfig {
      * Build -> Domains. The bridge appends `/{state}` to it.
      */
     bridgeCallbackUrl: string;
+    /**
+     * The `Origin` sent on every SDK-API call. Pollar's SDK API is built for a
+     * browser and checks this against the app's Build -> Domains list, refusing
+     * a request without one (`ORIGIN_NOT_ALLOWED`) — including a server-side
+     * one, which has no origin of its own to send.
+     */
+    sdkOrigin: string;
     /** Per-consumer allow-list of the wallet redirect URIs codes may go to. */
     redirectUriWhitelist: PollarRedirectWhitelist;
     timeoutMs: number;
@@ -361,6 +368,7 @@ export default (): AppConfig => ({
       /\/+$/,
       '',
     ),
+    sdkOrigin: pollarSdkOrigin(),
     redirectUriWhitelist: parsePollarRedirectWhitelist(
       process.env.POLLAR_REDIRECT_URI_WHITELIST,
     ),
@@ -394,3 +402,32 @@ export default (): AppConfig => ({
     },
   },
 });
+
+/**
+ * The `Origin` header the bridge presents to Pollar's SDK API.
+ *
+ * That API is built for a browser SDK and enforces the app's Build -> Domains
+ * list on every call, so a request with no `Origin` — which is every request a
+ * server makes — comes back `403 ORIGIN_NOT_ALLOWED`, on the very first call of
+ * the login flow.
+ *
+ * The default is the origin of `POLLAR_BRIDGE_CALLBACK_URL`, because that host
+ * already has to be registered under Build -> Domains for the redirect to work
+ * at all: one registration, not two, and no new variable to forget.
+ * `POLLAR_SDK_ORIGIN` overrides it for the deployment where the callback is
+ * served from a different host than the one Pollar has on its list.
+ */
+function pollarSdkOrigin(): string {
+  const explicit = process.env.POLLAR_SDK_ORIGIN?.trim();
+  if (explicit) return explicit.replace(/\/+$/, '');
+
+  const callback = process.env.POLLAR_BRIDGE_CALLBACK_URL?.trim();
+  if (!callback) return '';
+  try {
+    return new URL(callback).origin;
+  } catch {
+    // A malformed callback URL is already reported by env validation; there is
+    // nothing useful to send, and an empty header is the same as none.
+    return '';
+  }
+}

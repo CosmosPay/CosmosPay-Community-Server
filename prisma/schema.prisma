@@ -40,6 +40,8 @@ model Consumer {
 
   // Pollar OAuth bridge handshakes started by this consumer.
   pollarOauthSessions PollarOauthSession[]
+  // Per-network Pollar wallet provisioning state for this consumer's users.
+  pollarUserWallets   PollarUserWallet[]
 
   @@map("consumer")
 }
@@ -911,6 +913,13 @@ model PollarOauthSession {
   // Pollar's error code when the handshake ended in FAILED/EXPIRED.
   errorCode String?
 
+  // When the poll route last asked Pollar whether this login had finished.
+  // Pollar does not call the bridge back (see the service's `probeProvider`), so
+  // the poll is what discovers a finished login — and the wallet polls every few
+  // seconds. This column is the floor on how often that question reaches the
+  // provider, and it is on the row rather than in memory so replicas share it.
+  providerCheckedAt DateTime?
+
   // Deadline for the whole handshake, independent of the code's shorter TTL.
   expiresAt DateTime
   createdAt DateTime @default(now())
@@ -920,6 +929,69 @@ model PollarOauthSession {
   // The sweeper expires stale handshakes oldest-first.
   @@index([status, expiresAt])
   @@map("pollar_oauth_session")
+}
+
+// The provisioning state of one user's Pollar wallet on ONE network.
+//
+// A login only ever produces a wallet on the network its API key resolved to —
+// Pollar runs mainnet and testnet as two separate applications with two separate
+// key pairs, so a single hosted handshake cannot touch both. Wallets that exist
+// on only one network are a problem the moment a user moves between the two: the
+// address they funded on testnet is not the address that receives on mainnet,
+// and the second wallet is created lazily, at the worst possible moment.
+//
+// So a redemption provisions the counterpart network too, and this table is
+// where that attempt is remembered. It is deliberately NOT on the handshake row:
+// a handshake is expired by the sweeper within minutes, and a wallet that failed
+// to provision has to outlive it to be retried at all.
+//
+// The row is not a mirror of Pollar's wallet — Pollar owns that — it is the
+// record of whether WE have managed to ask for it yet.
+enum PollarWalletStatus {
+  // Asked for, not confirmed. Retried by the provisioning sweeper.
+  PENDING
+  // Pollar has the user and their wallet on this network. Terminal.
+  READY
+  // Out of retry budget. Terminal until an operator intervenes.
+  FAILED
+}
+
+model PollarUserWallet {
+  id         String   @id @default(cuid())
+  consumerId String
+  consumer   Consumer @relation(fields: [consumerId], references: [id], onDelete: Cascade)
+
+  // Pollar's handle on this user, and the join key across the two networks:
+  // the email the OAuth provider vouched for. It is what a later hosted login
+  // on the other network resolves the same person by, so anything else here
+  // would provision a wallet nobody ever logs into.
+  externalId String
+  // 'public' | 'testnet' — Stellar's names, as everywhere else in this schema.
+  network    String
+
+  status PollarWalletStatus @default(PENDING)
+
+  // Public identity of the wallet, once there is one. Null while PENDING.
+  address      String?
+  walletType   String?
+  pollarUserId String?
+
+  // Retry bookkeeping. `attempts` is the whole budget across all sweeps, not
+  // per cycle, so a wallet Pollar keeps refusing stops being asked for.
+  attempts      Int       @default(0)
+  errorCode     String?
+  nextAttemptAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // One row per user per network. This is also the idempotency of the whole
+  // feature: every login upserts through it, so repeat logins cannot fan out
+  // into duplicate provisioning attempts.
+  @@unique([consumerId, externalId, network])
+  // The sweeper claims due PENDING rows oldest-first.
+  @@index([status, nextAttemptAt])
+  @@map("pollar_user_wallet")
 }
 
 // ---------------------------------------------------------------------------

@@ -320,6 +320,16 @@ class EnvironmentVariables {
   POLLAR_SERVER_BASE_URL?: string;
 
   /**
+   * The `Origin` presented to Pollar's SDK API, which checks it against the
+   * app's Build -> Domains list. Defaults to the origin of
+   * POLLAR_BRIDGE_CALLBACK_URL, which already has to be registered there — set
+   * this only when the two differ.
+   */
+  @IsOptional()
+  @IsUrl(URL_OPTIONS)
+  POLLAR_SDK_ORIGIN?: string;
+
+  /**
    * Public URL of this service's Pollar OAuth callback, as a browser reaches it
    * through the gateway. Handed to Pollar as `redirect_uri`, so it must also be
    * registered in the Pollar dashboard under Build -> Domains.

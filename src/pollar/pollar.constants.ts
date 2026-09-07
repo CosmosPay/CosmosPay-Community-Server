@@ -53,6 +53,27 @@ export const POLLAR_SESSION_READY = 'READY';
 export const POLLAR_SESSION_POLL_INTERVAL_MS = 500;
 
 /**
+ * How stale a handshake's last provider check may be before the poll route asks
+ * Pollar again.
+ *
+ * The poll is the only thing that ever learns a login finished — Pollar leaves
+ * the client session `READY` and never calls the bridge back — and a wallet
+ * repeats it every few seconds while the consent screen is open. Without a floor
+ * each waiting wallet would spend one Pollar request per poll, against a key
+ * whose whole budget is 200 a minute. Two seconds keeps discovery within a
+ * single poll of the truth and caps a waiting wallet at 30 requests a minute.
+ */
+export const POLLAR_SESSION_PROBE_INTERVAL_MS = 2_000;
+
+/**
+ * Budget for that check, far below the client's default. The wallet asking is
+ * coming back in a few seconds anyway, so a provider that has not answered by
+ * here has nothing left to say that *this* poll can use — and holding the poll
+ * open for the full client timeout would stall the wallet's own loop.
+ */
+export const POLLAR_SESSION_PROBE_TIMEOUT_MS = 3_000;
+
+/**
  * Entropy of the bridge's own handles. 32 bytes for both: `state` is the public
  * name of a handshake and must not be guessable by anyone who can reach the
  * callback, and `code` is a bearer credential for a Pollar session.
@@ -162,3 +183,76 @@ export const POLLAR_ACTIVATE_RATE_LIMIT = {
   limit: 20,
   windowMs: WINDOW_MS,
 };
+
+// --- Cross-network wallet provisioning -------------------------------------
+//
+// A hosted login produces a wallet on exactly one network: Pollar runs mainnet
+// and testnet as two separate applications with two separate key pairs, and the
+// client session belongs to one of them. So after a redemption the bridge asks
+// the *other* network's Server API to register the same user with a wallet.
+//
+// That second call is best-effort by design. It spends the operator's XLM, it
+// talks to an API that may be down, and it may have no key configured at all —
+// none of which is a reason to fail a login that already succeeded. A failure
+// leaves the row PENDING and the sweeper picks it up.
+
+/**
+ * Budget for the counterpart call made *inside* a redemption. Much shorter than
+ * `POLLAR_TIMEOUT_MS`: the user is waiting on a login that has already worked,
+ * and the whole point is that this attempt is optional. When it does not fit in
+ * five seconds the row stays PENDING and the sweeper finishes the job off the
+ * request path.
+ */
+export const POLLAR_WALLET_PROVISION_TIMEOUT_MS = 5_000;
+
+/**
+ * Total attempts across every sweep, not per cycle. Pollar refusing the same
+ * registration ten times is a configuration problem — a missing key, a rejected
+ * email — that another attempt will not fix, and the row goes FAILED so the
+ * sweeper stops spending a request on it every minute.
+ */
+export const POLLAR_WALLET_PROVISION_MAX_ATTEMPTS = 10;
+
+/**
+ * Base of the exponential backoff between attempts, doubled per attempt and
+ * capped by {@link POLLAR_WALLET_PROVISION_MAX_BACKOFF_MS}. The first retry is a
+ * minute out because the common failure is "the operator has not configured the
+ * other network's keys yet", which is fixed on a human timescale, not a
+ * millisecond one.
+ */
+export const POLLAR_WALLET_PROVISION_BACKOFF_MS = 60_000;
+
+/** Ceiling on that backoff, so a long-failing row is still retried hourly. */
+export const POLLAR_WALLET_PROVISION_MAX_BACKOFF_MS = 60 * 60 * 1000;
+
+/**
+ * Rows claimed per sweep. Small like the handshake sweeper's, and for the same
+ * reason: this table only holds provisioning that has not landed yet, so a
+ * backlog means an incident rather than load.
+ */
+export const POLLAR_WALLET_PROVISION_BATCH_SIZE = 50;
+
+/**
+ * Registrations in flight at once during a sweep. Each one funds a reserve on
+ * Pollar's side, so the batch is drained in small groups rather than fired at
+ * the provider all at once.
+ */
+export const POLLAR_WALLET_PROVISION_CONCURRENCY = 4;
+
+/**
+ * How long the claim transaction may hold the advisory lock. The sweep's
+ * network I/O happens outside it — see the sweeper's `cycle` override — so this
+ * only has to cover a bounded `findMany` plus one `updateMany`.
+ */
+export const POLLAR_WALLET_PROVISION_CLAIM_TIMEOUT_MS = 10_000;
+
+/**
+ * Pollar result codes that mean "this user already exists on this network".
+ * They are a success for our purposes — the wallet we were asking for is there —
+ * so they resolve the row instead of burning an attempt on it.
+ */
+export const POLLAR_USER_EXISTS_CODES = new Set([
+  'USER_ALREADY_EXISTS',
+  'EXTERNAL_ID_ALREADY_EXISTS',
+  'SERVER_USER_ALREADY_REGISTERED',
+]);
