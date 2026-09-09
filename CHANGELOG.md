@@ -2,6 +2,25 @@
 
 All notable changes to the Cosmos Pay Community Server are documented here.
 Generated from [Conventional Commits](https://www.conventionalcommits.org) by [git-cliff](https://git-cliff.org).
+## [1.0.0] - 2026-09-09
+
+### Features
+- Update Pollar bridge callback URL with gateway entry prefix and API key requirements (f8bb53f)
+- Implement wallet provisioning for both Stellar networks (49c2d6b)
+- Implement activity event ingestion and querying (666451a)
+- Implement asset registry and public API for Stellar assets (960c7e3)
+- Upgrade to NestJS 12 and TypeScript 6, raising Node to 24.9 (5f9f971)
+
+### Bug Fixes
+- Raise the multer override to ^2.3.0 to clear four advisories (7608388)
+
+### Refactor
+- Drop `baseUrl` and make the path aliases relative (bd1932b)
+
+### Dependencies
+- Bump globals to 17.12.0 and jest to 30.5.1 (edd32cc)
+- Bump @types/node, eslint and typescript-eslint (72fbcda)
+
 ## [0.1.5] - 2026-08-30
 
 ### Bug Fixes
