@@ -73,10 +73,21 @@ export class ApisixContextMiddleware implements NestMiddleware {
     return n;
   }
 
-  /** Normalizes the forwarded API key role to 'admin' | 'user' | null. */
-  private parseRole(raw?: string): 'admin' | 'user' | null {
+  /**
+   * Normalizes the forwarded API key role.
+   *
+   * Anything unrecognised collapses to `user`, which is the restrictive default
+   * for scope checks — but note that it is NOT restrictive for the shared public
+   * key, since `user` is what an ordinary tenant gets. That is precisely why
+   * PublicKeyGuard also matches on the configured consumer username: a garbled
+   * role header must not silently promote the public key to a private one.
+   */
+  private parseRole(raw?: string): 'admin' | 'user' | 'public' | null {
     if (!raw) return null;
-    return raw.toLowerCase() === 'admin' ? 'admin' : 'user';
+    const v = raw.toLowerCase();
+    if (v === 'admin') return 'admin';
+    if (v === 'public') return 'public';
+    return 'user';
   }
 
   /**

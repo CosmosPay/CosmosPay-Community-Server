@@ -49,6 +49,17 @@ export interface AppConfig {
     organizationHeader: string;
     planHeader: string;
     swapFeeBpsHeader: string;
+    /**
+     * Username of the SHARED public consumer — the one credential embedded in
+     * every copy of the open-source wallet. Empty when the deployment publishes
+     * no public key.
+     *
+     * PublicKeyGuard matches on this as well as on the forwarded role, so that a
+     * gateway which stops sending `X-Consumer-Role` cannot silently promote every
+     * anonymous caller to an ordinary tenant with read access to what the whole
+     * anonymous population wrote.
+     */
+    publicConsumer: string;
   };
   admin: {
     /**
@@ -231,6 +242,7 @@ export default (): AppConfig => ({
     swapFeeBpsHeader: (
       process.env.APISIX_SWAP_FEE_BPS_HEADER ?? 'x-plan-swap-fee-bps'
     ).toLowerCase(),
+    publicConsumer: (process.env.APISIX_PUBLIC_CONSUMER ?? '').trim(),
   },
   admin: {
     credentials: parseAdminCredentials(process.env.ADMIN_API_CREDENTIALS),

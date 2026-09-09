@@ -18,6 +18,7 @@ import {
 } from '@nestjs/swagger';
 import type { Request } from 'express';
 import { CurrentConsumer } from '@/common/decorators/current-consumer.decorator';
+import { AllowPublicKey } from '@/common/decorators/allow-public-key.decorator';
 import { RequirePermissions } from '@/common/decorators/require-permissions.decorator';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import { CreateSwapDto } from '@/swaps/dto/create-swap.dto';
@@ -39,6 +40,8 @@ export class SwapsController {
   constructor(private readonly swaps: SwapsService) {}
 
   @Post('quote')
+  // Prices a path from Horizon. Pure function of the request.
+  @AllowPublicKey()
   @RequirePermissions('swaps:read')
   // POST because the quote parameters are a body, not because anything is
   // created — the route persists nothing, so 200 is the honest status. Nest
@@ -57,6 +60,8 @@ export class SwapsController {
   }
 
   @Post()
+  // Builds an unsigned envelope from the request; the wallet signs it.
+  @AllowPublicKey()
   @RequirePermissions('swaps:write')
   @ApiOperation({
     summary:
@@ -108,6 +113,10 @@ export class SwapsController {
   }
 
   @Post(':id/submit')
+  // Broadcasts an envelope the caller signed. Reaching another
+  // anonymous user's swap needs its UUID *and* a signature from that swap's
+  // source account, which only its owner can produce.
+  @AllowPublicKey()
   @RequirePermissions('swaps:write')
   // Submit advances an existing swap's status; the swap resource was created by
   // POST /v1/swaps. Nothing new comes into existence here, so 200, not 201.

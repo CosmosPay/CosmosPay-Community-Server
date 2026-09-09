@@ -15,6 +15,7 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { CurrentConsumer } from '@/common/decorators/current-consumer.decorator';
+import { AllowPublicKey } from '@/common/decorators/allow-public-key.decorator';
 import { RateLimit } from '@/common/decorators/rate-limit.decorator';
 import { RequirePermissions } from '@/common/decorators/require-permissions.decorator';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
@@ -48,6 +49,12 @@ export class ActivityController {
   constructor(private readonly activity: ActivityService) {}
 
   @Post('events')
+  // Telemetry ingest. A wallet with no account still has crashes
+  // worth knowing about, and refusing them here would silently blind us to
+  // exactly the population that hits first-run failures. Events arriving on
+  // this key are anonymous by construction — one shared consumer — so nothing
+  // account-identifying may travel with them.
+  @AllowPublicKey()
   @HttpCode(202)
   @RequirePermissions('activity:write')
   @RateLimit(ACTIVITY_INGEST_RATE_LIMIT)

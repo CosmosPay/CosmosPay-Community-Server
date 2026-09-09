@@ -17,6 +17,7 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { CurrentConsumer } from '@/common/decorators/current-consumer.decorator';
+import { AllowPublicKey } from '@/common/decorators/allow-public-key.decorator';
 import { RequirePermissions } from '@/common/decorators/require-permissions.decorator';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import { CreateTxPaymentIntentDto } from '@/payment-intents/dto/create-tx-payment-intent.dto';
@@ -42,6 +43,8 @@ export class PaymentIntentsController {
   constructor(private readonly paymentIntents: PaymentIntentsService) {}
 
   @Post('tx')
+  // Builds a SEP-7 intent from the request.
+  @AllowPublicKey()
   @RequirePermissions('payments:write')
   @ApiOperation({
     summary:
@@ -56,6 +59,8 @@ export class PaymentIntentsController {
   }
 
   @Post('pay')
+  // Builds a SEP-7 pay link from the request.
+  @AllowPublicKey()
   @RequirePermissions('payments:write')
   @ApiOperation({
     summary: 'Create a SEP-7 `pay` intent (no source → pay URI + QR, no XDR)',

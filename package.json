@@ -30,7 +30,8 @@
     "openapi:generate": "ts-node -r tsconfig-paths/register --transpile-only scripts/generate-openapi.ts",
     "openapi:check": "npm run openapi:generate && git diff --exit-code -- openapi/openapi.json openapi/openapi.yaml",
     "webhooks:audit-destinations": "ts-node -r tsconfig-paths/register --transpile-only scripts/mark-blocked-webhook-endpoints.ts",
-    "seed:request-logs": "ts-node -r tsconfig-paths/register --transpile-only scripts/seed-request-logs.ts"
+    "seed:request-logs": "ts-node -r tsconfig-paths/register --transpile-only scripts/seed-request-logs.ts",
+    "assets:verify": "ts-node -r tsconfig-paths/register --transpile-only scripts/verify-assets.ts"
   },
   "dependencies": {
     "@nestjs/common": "^11.2.3",
