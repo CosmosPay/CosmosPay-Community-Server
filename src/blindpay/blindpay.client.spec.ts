@@ -21,11 +21,25 @@ function makeClient(overrides: Record<string, unknown> = {}) {
 }
 
 function mockFetch(impl: (url: string, init: any) => Partial<Response>) {
-  return jest
-    .spyOn(global, 'fetch')
-    .mockImplementation((url: string, init: any) =>
-      Promise.resolve(impl(url, init) as Response),
-    );
+  return (
+    jest
+      .spyOn(global, 'fetch')
+      // `fetch` accepts `string | URL | Request`; the mock has to match that, not
+      // the narrower shape these tests happen to pass. `impl` wants a string, so
+      // normalise instead of asserting the parameter away.
+      .mockImplementation((input: string | URL | Request, init?: RequestInit) =>
+        Promise.resolve(
+          impl(
+            typeof input === 'string'
+              ? input
+              : input instanceof URL
+                ? input.href
+                : input.url,
+            init,
+          ) as Response,
+        ),
+      )
+  );
 }
 
 afterEach(() => jest.restoreAllMocks());

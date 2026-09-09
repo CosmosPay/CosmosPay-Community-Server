@@ -1,6 +1,6 @@
 import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
 import { HttpStatus } from '@nestjs/common';
-import { EventEmitter2 } from '@nestjs/event-emitter';
+import { EventEmitter2 } from 'eventemitter2';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { WebhookTerminalEmitter } from '@/webhooks/webhook-terminal-emitter.service';
 import { PaymentIntentsService } from '@/payment-intents/payment-intents.service';

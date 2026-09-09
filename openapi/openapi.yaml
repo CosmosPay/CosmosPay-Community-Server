@@ -83,12 +83,16 @@ paths:
                 properties:
                   status:
                     type: string
+                    enum:
+                      - ok
+                      - degraded
                     example: ok
                   info:
                     type: object
                     example:
                       database:
                         status: up
+                        responseTime: 12
                     additionalProperties:
                       type: object
                       required:
@@ -96,6 +100,13 @@ paths:
                       properties:
                         status:
                           type: string
+                          enum:
+                            - up
+                            - degraded
+                            - down
+                        responseTime:
+                          type: number
+                          description: Time the health indicator took to respond, in ms
                       additionalProperties: true
                     nullable: true
                   error:
@@ -108,6 +119,13 @@ paths:
                       properties:
                         status:
                           type: string
+                          enum:
+                            - up
+                            - degraded
+                            - down
+                        responseTime:
+                          type: number
+                          description: Time the health indicator took to respond, in ms
                       additionalProperties: true
                     nullable: true
                   details:
@@ -115,6 +133,7 @@ paths:
                     example:
                       database:
                         status: up
+                        responseTime: 12
                     additionalProperties:
                       type: object
                       required:
@@ -122,6 +141,13 @@ paths:
                       properties:
                         status:
                           type: string
+                          enum:
+                            - up
+                            - degraded
+                            - down
+                        responseTime:
+                          type: number
+                          description: Time the health indicator took to respond, in ms
                       additionalProperties: true
         "400":
           description: Validation failed, or the request is not valid in the current state.
@@ -185,12 +211,16 @@ paths:
                 properties:
                   status:
                     type: string
+                    enum:
+                      - error
+                      - shutting_down
                     example: error
                   info:
                     type: object
                     example:
                       database:
                         status: up
+                        responseTime: 12
                     additionalProperties:
                       type: object
                       required:
@@ -198,6 +228,13 @@ paths:
                       properties:
                         status:
                           type: string
+                          enum:
+                            - up
+                            - degraded
+                            - down
+                        responseTime:
+                          type: number
+                          description: Time the health indicator took to respond, in ms
                       additionalProperties: true
                     nullable: true
                   error:
@@ -206,6 +243,7 @@ paths:
                       redis:
                         status: down
                         message: Could not connect
+                        responseTime: 3005
                     additionalProperties:
                       type: object
                       required:
@@ -213,6 +251,13 @@ paths:
                       properties:
                         status:
                           type: string
+                          enum:
+                            - up
+                            - degraded
+                            - down
+                        responseTime:
+                          type: number
+                          description: Time the health indicator took to respond, in ms
                       additionalProperties: true
                     nullable: true
                   details:
@@ -220,9 +265,11 @@ paths:
                     example:
                       database:
                         status: up
+                        responseTime: 12
                       redis:
                         status: down
                         message: Could not connect
+                        responseTime: 3005
                     additionalProperties:
                       type: object
                       required:
@@ -230,6 +277,13 @@ paths:
                       properties:
                         status:
                           type: string
+                          enum:
+                            - up
+                            - degraded
+                            - down
+                        responseTime:
+                          type: number
+                          description: Time the health indicator took to respond, in ms
                       additionalProperties: true
       summary: Readiness probe (checks the database)
       tags:

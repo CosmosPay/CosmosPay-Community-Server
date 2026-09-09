@@ -1,6 +1,13 @@
 import { INestApplication } from '@nestjs/common';
-import { DocumentBuilder, OpenAPIObject, SwaggerModule } from '@nestjs/swagger';
-import type { OperationObject } from '@nestjs/swagger/dist/interfaces/open-api-spec.interface';
+// `OperationObject` comes from the package root, not `@nestjs/swagger/dist/...`.
+// Swagger 12 publishes an `exports` map that exposes only "." and "./plugin", so
+// the deep path stopped resolving; the type is re-exported from the root anyway.
+import {
+  DocumentBuilder,
+  OpenAPIObject,
+  SwaggerModule,
+  type OperationObject,
+} from '@nestjs/swagger';
 import { ApiErrorBodyEntity } from '@/common/errors/api-error.entity';
 
 /**

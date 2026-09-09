@@ -49,6 +49,12 @@ against that: `tsc --noEmit` is clean, `tsc-alias` still rewrites every alias ou
 of `dist/` (grep it for `@/` — there are none), and both `ts-node` scripts
 (`openapi:generate`, `assets:verify`) still resolve. Do not reintroduce it.
 
+`types` IS set, to `["node", "jest"]`, and that is a different thing: TypeScript 6
+stopped auto-including every `@types` package, so the two AMBIENT ones — the ones
+that declare globals rather than exporting anything — have to be named. Packages
+reached through an import (`express`, `pg`, `qrcode`, `supertest`) resolve on their
+own and must not be added.
+
 Do not add `typeRoots` either. It looks like the natural companion to dropping
 `baseUrl` and it is the opposite: TypeScript already discovers every
 `node_modules/@types` package on its own, and naming one root NARROWS that to the

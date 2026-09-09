@@ -3,7 +3,7 @@ import { ConsumerResolverService } from '@/common/services/consumer-resolver.ser
 import { HttpStatus } from '@nestjs/common';
 import { Account, Keypair, TransactionBuilder } from '@stellar/stellar-sdk';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
-import { EventEmitter2 } from '@nestjs/event-emitter';
+import { EventEmitter2 } from 'eventemitter2';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import { SettlementObserverService } from '@/observer/settlement-observer.service';
 import { WEBHOOK_EVENT } from '@/webhooks/webhook-events';

@@ -1,4 +1,9 @@
 import { Injectable, Logger } from '@nestjs/common';
+// Imported for the return annotation on `load`. TypeScript 6 refuses to infer a
+// type it cannot name portably, and the inferred one here points into
+// `@stellar/stellar-sdk/lib/esm/horizon` — a path that is an implementation
+// detail of the SDK's build layout, not something a declaration should embed.
+import type { Horizon } from '@stellar/stellar-sdk';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { StellarNetwork } from '@/config/configuration';
 import { isHorizonNotFound } from '@/stellar/horizon-errors';
@@ -37,7 +42,10 @@ export class StellarAccountLoader {
    * and is a 400 naming the address; anything else is ours and is a 503 that
    * says nothing about our infrastructure.
    */
-  async load(network: StellarNetwork, address: string) {
+  async load(
+    network: StellarNetwork,
+    address: string,
+  ): Promise<Horizon.AccountResponse> {
     try {
       return await this.stellar.server(network).loadAccount(address);
     } catch (error: unknown) {

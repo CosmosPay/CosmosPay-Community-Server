@@ -27,7 +27,7 @@ function makeGuard(
     .spyOn(reflector, 'getAllAndOverride')
     // `??` would defeat the "no policy" case, since that passes an explicit
     // undefined — ask whether the key was supplied at all.
-    .mockImplementation((key: string) =>
+    .mockImplementation((key: unknown) =>
       key === RATE_LIMIT_KEY
         ? 'policy' in opts
           ? opts.policy

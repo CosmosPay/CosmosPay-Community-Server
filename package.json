@@ -7,7 +7,7 @@
   "license": "UNLICENSED",
   "type": "commonjs",
   "engines": {
-    "node": ">=22.12.0"
+    "node": ">=24.9.0"
   },
   "scripts": {
     "build": "prisma generate && nest build && tsc-alias -p tsconfig.build.json",
@@ -19,9 +19,9 @@
     "start:prod": "node dist/src/main",
     "lint": "eslint \"{src,apps,libs,scripts,test}/**/*.ts\" --max-warnings=0",
     "lint:fix": "eslint \"{src,apps,libs,scripts,test}/**/*.ts\" --fix",
-    "test": "jest",
-    "test:watch": "jest --watch",
-    "test:e2e": "jest --config ./test/jest-e2e.json",
+    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
+    "test:watch": "node --experimental-vm-modules node_modules/jest/bin/jest.js --watch",
+    "test:e2e": "node --experimental-vm-modules node_modules/jest/bin/jest.js --config ./test/jest-e2e.json",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:deploy": "prisma migrate deploy",
@@ -34,19 +34,20 @@
     "assets:verify": "ts-node -r tsconfig-paths/register --transpile-only scripts/verify-assets.ts"
   },
   "dependencies": {
-    "@nestjs/common": "^11.2.3",
-    "@nestjs/config": "^4.0.4",
-    "@nestjs/core": "^11.2.3",
-    "@nestjs/event-emitter": "^3.1.0",
-    "@nestjs/platform-express": "^11.2.3",
-    "@nestjs/swagger": "^11.4.7",
-    "@nestjs/terminus": "^11.1.1",
+    "@nestjs/common": "^12.0.1",
+    "@nestjs/config": "^12.0.0",
+    "@nestjs/core": "^12.0.1",
+    "@nestjs/event-emitter": "^12.0.0",
+    "@nestjs/platform-express": "^12.0.1",
+    "@nestjs/swagger": "^12.0.1",
+    "@nestjs/terminus": "^12.0.0",
     "@prisma/adapter-pg": "^7.10.0",
     "@prisma/client": "^7.10.0",
     "@stellar/stellar-sdk": "^17.0.1",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.15.1",
     "dotenv": "^17.4.2",
+    "eventemitter2": "^6.4.9",
     "helmet": "^8.3.0",
     "pg": "^8.23.0",
     "qrcode": "^1.5.4",
@@ -55,9 +56,9 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@nestjs/cli": "^11.0.24",
-    "@nestjs/schematics": "^11.1.0",
-    "@nestjs/testing": "^11.2.3",
+    "@nestjs/cli": "^12.0.0",
+    "@nestjs/schematics": "^12.0.0",
+    "@nestjs/testing": "^12.0.1",
     "@types/express": "^5.0.6",
     "@types/jest": "^30.0.0",
     "@types/node": "^26.5.0",
@@ -78,7 +79,7 @@
     "ts-node": "^10.9.2",
     "tsc-alias": "^1.9.4",
     "tsconfig-paths": "^4.2.0",
-    "typescript": "^5.9.3",
+    "typescript": "^6.0.3",
     "typescript-eslint": "^8.70.0",
     "yaml": "^2.9.0"
   },
@@ -112,9 +113,6 @@
         }
       ]
     },
-    "transformIgnorePatterns": [
-      "/node_modules/(?!(@stellar|@noble|@exodus|uint8array-extras)/)"
-    ],
     "collectCoverageFrom": [
       "**/*.(t|j)s"
     ],

@@ -980,6 +980,64 @@ routes then return `503`). See `.env.example`.
 
 ## Upgrading — breaking changes and deploy notes
 
+### NestJS 12, TypeScript 6 and a Node floor of 24.9
+
+The whole NestJS line moved to 12 and TypeScript to 6. **This raises the minimum
+Node version to 24.9** (`engines`, and both workflows now pin `node-version: 24`);
+anything older cannot run the test suite at all. Deploy targets have to move with
+it.
+
+The reason is the test runner, not the framework. NestJS 12 publishes as pure ESM
+(`"type": "module"`), and Jest running under CommonJS cannot `require()` it — every
+one of the 62 suites failed to load. Jest supports `require(esm)` natively, but only
+on Node >= 24.9 **and** with `--experimental-vm-modules`, because the capability it
+checks for (`vm.SourceTextModule.prototype.hasAsyncGraph`) does not exist without
+that flag. So the test scripts now invoke Jest through Node directly:
+
+```
+"test": "node --experimental-vm-modules node_modules/jest/bin/jest.js"
+```
+
+Not a `NODE_OPTIONS=` prefix: that is not portable to Windows shells, and CI, the
+release job and a developer's machine must run the same command.
+
+Two consequences worth knowing:
+
+- **`transformIgnorePatterns` is gone from both Jest configs.** It listed the ESM
+  packages (`@stellar`, `@noble`, `@exodus`, `uint8array-extras`) to be transpiled
+  to CommonJS by ts-jest — a workaround for not being able to load ESM. Now that
+  Jest loads ESM natively the workaround actively breaks: a package compiled to
+  CJS gets evaluated as ESM and dies on `exports is not defined`. If a dependency
+  ever needs transforming again, that is the file to look at.
+- **`tsconfig.json` gained `types` and `rootDir`.** TypeScript 6 no longer
+  auto-includes every `@types` package, so the two ambient ones (`node`, `jest`)
+  are named explicitly — without that, every spec lost `describe`/`it` while still
+  running green under ts-jest. And TS 6 refuses to infer `rootDir` when a
+  compilation covers one directory (TS5011), which is what the ts-node scripts do;
+  `"./"` is what the full build already inferred, so the emitted layout is
+  unchanged.
+
+Code changes the majors forced, all small:
+
+- `EventEmitter2` is imported from `eventemitter2`, not `@nestjs/event-emitter`.
+  It is the same class object at runtime — the DI token is unchanged — but the
+  Nest re-export is typed for the package's CJS shape and resolves to `any` under
+  this repo's `node10` module resolution, which silently turned every `.emit()`
+  into an unchecked call. `eventemitter2` is now a direct dependency for that
+  reason.
+- `OperationObject` comes from `@nestjs/swagger` rather than
+  `@nestjs/swagger/dist/interfaces/open-api-spec.interface`. Swagger 12 publishes
+  an `exports` map exposing only `.` and `./plugin`, so deep paths no longer
+  resolve.
+- `AccountLoaderService.load` carries an explicit `Promise<Horizon.AccountResponse>`
+  return type; TS 6 will not infer a type it cannot name portably.
+- Two test mocks (`fetch`, `Reflector.getAllAndOverride`) now match the real
+  signatures instead of narrower hand-written ones.
+
+The published OpenAPI grew: `@nestjs/terminus@12` emits richer health schemas
+(status enums and a `responseTime` property). Purely additive — no business route
+or schema changed.
+
 ### A shared public API key, and the guard that confines it
 
 New in this release: `PublicKeyGuard` (global, after `PermissionsGuard`) and the
