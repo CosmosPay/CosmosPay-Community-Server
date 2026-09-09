@@ -2,6 +2,25 @@
 
 All notable changes to the Cosmos Pay Community Server are documented here.
 Generated from [Conventional Commits](https://www.conventionalcommits.org) by [git-cliff](https://git-cliff.org).
+## [1.0.0] - 2026-09-09
+
+### Features
+- Update Pollar bridge callback URL with gateway entry prefix and API key requirements (f8bb53f)
+- Implement wallet provisioning for both Stellar networks (49c2d6b)
+- Implement activity event ingestion and querying (666451a)
+- Implement asset registry and public API for Stellar assets (960c7e3)
+- Upgrade to NestJS 12 and TypeScript 6, raising Node to 24.9 (5f9f971)
+
+### Bug Fixes
+- Raise the multer override to ^2.3.0 to clear four advisories (7608388)
+
+### Refactor
+- Drop `baseUrl` and make the path aliases relative (bd1932b)
+
+### Dependencies
+- Bump globals to 17.12.0 and jest to 30.5.1 (edd32cc)
+- Bump @types/node, eslint and typescript-eslint (72fbcda)
+
 ## [0.1.5] - 2026-08-30
 
 ### Bug Fixes
@@ -88,13 +107,23 @@ Generated from [Conventional Commits](https://www.conventionalcommits.org) by [g
 
 ## [0.0.9] - 2026-08-24
 
+### Features
+- Enhance webhook endpoint management and delivery logging (4513ac8)
+- Introduce asset resolution and memo handling utilities (a1e02f6)
+- Add Pollar integration for wallet management and user registration (f2481ea)
+- Add rate limiting for Pollar OAuth routes and configuration (f2f9112)
+
 ### Bug Fixes
+- Update APISIX_GATEWAY_SECRET placeholder to meet length requirement for CI (5ccc61d)
+- Add Horizon timeout, retries, and observer watchdog (92b8413)
 - La coma que falta en package.json deja main inconstruible (#53) (7d65e48)
+
+### Refactor
+- Update import paths to use absolute imports for better readability and maintainability (5f8e604)
 
 ## [0.0.8] - 2026-08-24
 
 ### Bug Fixes
-- Add Horizon timeout, retries, and observer watchdog (92b8413)
 - Add idempotency and unique txHash to prevent double SWAP_SUCCEEDED (4188907)
 - Recover same-key races and mark Idempotency-Key optional in OpenAPI (4778f27)
 - Unblock local receiver updates and KYC state transitions (91cb4f4)
