@@ -44,6 +44,39 @@ export class PollarWalletEntity {
   network?: string;
 }
 
+/**
+ * Where this user's wallet stands on ONE Stellar network.
+ *
+ * A login only ever creates a wallet on the network its API key resolved to —
+ * Pollar runs mainnet and testnet as two separate applications — so the bridge
+ * registers the user on the other one as well, best-effort, and reports both
+ * here. A `pending` entry is not an error: the login worked, and the missing
+ * wallet is retried in the background until it lands or runs out of budget.
+ */
+export class PollarNetworkWalletEntity {
+  @ApiProperty({ enum: ['public', 'testnet'], example: 'testnet' })
+  network!: string;
+
+  @ApiProperty({
+    enum: ['ready', 'pending', 'failed'],
+    description:
+      '`ready` — the wallet exists and its address is below. `pending` — not ' +
+      'provisioned yet, being retried; poll the redemption result of the next ' +
+      'login, or read it back once your user needs that network. `failed` — out ' +
+      'of retry budget, which in practice means that network has no Pollar key ' +
+      'configured or Pollar keeps refusing the registration.',
+    example: 'ready',
+  })
+  status!: 'ready' | 'pending' | 'failed';
+
+  @ApiPropertyOptional({
+    description:
+      'Stellar public key, once there is a wallet. Null while pending.',
+    example: 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN',
+  })
+  address!: string | null;
+}
+
 /** The end-user profile Pollar assembled from the OAuth provider. */
 export class PollarProfileEntity {
   @ApiPropertyOptional({ example: 'ada@example.com' })
@@ -119,6 +152,16 @@ export class PollarSessionEntity {
 
   @ApiProperty({ type: PollarProfileEntity })
   profile!: PollarProfileEntity;
+
+  @ApiProperty({
+    description:
+      "This user's wallet on each Stellar network. The session above acts on " +
+      'one of them; the other is provisioned in the background so it is already ' +
+      'there when the user switches. Never fewer than one entry, never more than ' +
+      'one per network, and a `pending` entry never means the login failed.',
+    type: [PollarNetworkWalletEntity],
+  })
+  network_wallets!: PollarNetworkWalletEntity[];
 
   @ApiProperty({
     description:

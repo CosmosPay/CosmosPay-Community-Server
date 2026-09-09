@@ -5,9 +5,11 @@ import { PollarOauthService } from '@/pollar/oauth/pollar-oauth.service';
 import { PollarOauthSweeperService } from '@/pollar/oauth/pollar-oauth-sweeper.service';
 import { PollarWalletsController } from '@/pollar/wallets/pollar-wallets.controller';
 import { PollarWalletsService } from '@/pollar/wallets/pollar-wallets.service';
+import { PollarWalletProvisioningService } from '@/pollar/wallets/pollar-wallet-provisioning.service';
+import { PollarWalletProvisionSweeperService } from '@/pollar/wallets/pollar-wallet-provision-sweeper.service';
 
 /**
- * Pollar: hosted social login in, a Stellar wallet out.
+ * Pollar: hosted social login in, a Stellar wallet out — on both networks.
  *
  * Two surfaces, split by which Pollar key they need. The **OAuth bridge** owns
  * the login handshake so a wallet never touches a Pollar key, a client session
@@ -25,8 +27,13 @@ import { PollarWalletsService } from '@/pollar/wallets/pollar-wallets.service';
     PollarClient,
     PollarOauthService,
     PollarWalletsService,
+    // Gets each user a wallet on BOTH networks, without letting the second one
+    // fail the login that produced the first.
+    PollarWalletProvisioningService,
     // Retires handshakes nobody finished (one replica per tick, via the lock).
     PollarOauthSweeperService,
+    // Finishes the wallets a login left pending — same cadence, same lock shape.
+    PollarWalletProvisionSweeperService,
   ],
   exports: [PollarClient],
 })

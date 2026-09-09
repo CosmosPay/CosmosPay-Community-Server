@@ -18,6 +18,7 @@ import {
 } from '@nestjs/swagger';
 import type { Request } from 'express';
 import { CurrentConsumer } from '@/common/decorators/current-consumer.decorator';
+import { AllowPublicKey } from '@/common/decorators/allow-public-key.decorator';
 import { RequireAnyPermission } from '@/common/decorators/require-permissions.decorator';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import { DepositLiquidityDto } from '@/liquidity-pools/dto/deposit-liquidity.dto';
@@ -44,6 +45,8 @@ export class LiquidityPoolsController {
   constructor(private readonly liquidity: LiquidityPoolsService) {}
 
   @Post('deposit')
+  // Builds an unsigned envelope.
+  @AllowPublicKey()
   @RequireAnyPermission('liquidity:write', 'swaps:write')
   @ApiOperation({
     summary:
@@ -73,6 +76,8 @@ export class LiquidityPoolsController {
   }
 
   @Post('withdraw')
+  // Builds an unsigned envelope.
+  @AllowPublicKey()
   @RequireAnyPermission('liquidity:write', 'swaps:write')
   @ApiOperation({
     summary:
@@ -100,6 +105,9 @@ export class LiquidityPoolsController {
   }
 
   @Get('positions')
+  // On-chain pool shares for the account in the query, read
+  // straight from Horizon — public ledger data, not this consumer's rows.
+  @AllowPublicKey()
   @RequireAnyPermission('liquidity:read', 'swaps:read')
   @ApiOperation({
     summary: "An account's pool share positions with redeemable amounts",
@@ -135,6 +143,8 @@ export class LiquidityPoolsController {
   }
 
   @Post('operations/:id/submit')
+  // Broadcasts a caller-signed envelope.
+  @AllowPublicKey()
   @RequireAnyPermission('liquidity:write', 'swaps:write')
   // Submit advances an existing operation's status; the operation was created
   // by POST /v1/liquidity-pools/deposits (or /withdrawals). Nothing new comes
@@ -154,6 +164,8 @@ export class LiquidityPoolsController {
   }
 
   @Get()
+  // Public on-chain pool data from Horizon.
+  @AllowPublicKey()
   @RequireAnyPermission('liquidity:read', 'swaps:read')
   @ApiOperation({ summary: 'Browse on-chain liquidity pools (Horizon proxy)' })
   @ApiOkResponse({ type: LiquidityPoolListEntity })
@@ -165,6 +177,8 @@ export class LiquidityPoolsController {
   }
 
   @Get(':poolId')
+  // Public on-chain pool data from Horizon.
+  @AllowPublicKey()
   @RequireAnyPermission('liquidity:read', 'swaps:read')
   @ApiOperation({ summary: 'Get a liquidity pool by id (Horizon proxy)' })
   @ApiOkResponse({ type: LiquidityPoolEntity })

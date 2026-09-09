@@ -1,0 +1,11 @@
+-- When the poll route last asked Pollar whether a login had finished.
+--
+-- Pollar's hosted flow does not return the browser to the bridge callback: a
+-- finished consent leaves the client session READY on Pollar's side and lands
+-- the user on Pollar's own status page. The poll route therefore asks the
+-- provider directly instead of waiting to be called back, and a wallet polls it
+-- every few seconds — so the question needs a floor that every replica shares.
+--
+-- Nullable with no default: a handshake that has never been asked about is
+-- exactly the one that must be asked immediately.
+ALTER TABLE "pollar_oauth_session" ADD COLUMN "providerCheckedAt" TIMESTAMP(3);

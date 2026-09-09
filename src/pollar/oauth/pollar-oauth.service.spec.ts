@@ -11,6 +11,7 @@ const POLLAR_CONFIG = {
   sdkBaseUrl: 'https://sdk.api.pollar.xyz',
   serverBaseUrl: 'https://api.pollar.xyz',
   bridgeCallbackUrl: 'https://gw.test/v1/pollar/oauth/callback',
+  sdkOrigin: 'https://gw.test',
   redirectUriWhitelist: { cosmos_acme: ['cosmospay://auth'] },
   timeoutMs: 1000,
   authorizationTtlMs: 300_000,
@@ -71,6 +72,7 @@ function makeTable() {
         codeHash: null,
         codeExpiresAt: null,
         errorCode: null,
+        providerCheckedAt: null,
         ...data,
       };
       rows.push(row);
@@ -110,8 +112,28 @@ function makeService(overrides: Partial<typeof POLLAR_CONFIG> = {}) {
         : { network: 'testnet' },
     ),
   };
-  const service = new PollarOauthService(prisma, pollar, consumers, config);
-  return { service, table, pollar };
+  // The bridge only ever asks the provisioning service for the per-network
+  // summary, and is contractually not allowed to be affected by what it says —
+  // so the fake reports the worst honest case: the primary wallet, and a
+  // counterpart still pending.
+  const provisioning: any = {
+    provisionBothNetworks: jest.fn().mockResolvedValue([
+      {
+        network: 'testnet',
+        status: 'ready',
+        address: LOGIN_CONTENT.wallet.address,
+      },
+      { network: 'public', status: 'pending', address: null },
+    ]),
+  };
+  const service = new PollarOauthService(
+    prisma,
+    pollar,
+    consumers,
+    config,
+    provisioning,
+  );
+  return { service, table, pollar, provisioning };
 }
 
 /** Runs a handshake up to the point where a code exists. */
@@ -127,6 +149,17 @@ async function authorized(
   } as any);
   const callback = await ctx.service.handleCallback(auth.state);
   return { ...ctx, auth, callback };
+}
+
+/** A handshake the user has opened and not yet come back from. */
+async function opened(opts: { redirectUri?: string } = {}) {
+  const ctx = makeService();
+  ctx.pollar.sdk.mockResolvedValueOnce({ clientSessionId: 'cs_1' });
+  const auth = await ctx.service.authorize(CONSUMER, {
+    provider: 'google',
+    ...(opts.redirectUri ? { redirect_uri: opts.redirectUri } : {}),
+  } as any);
+  return { ...ctx, auth };
 }
 
 /** The `code` the bridge put on a redirect URI. */
@@ -218,6 +251,27 @@ describe('handleCallback', () => {
   });
 });
 
+describe('authorize failures', () => {
+  it('relays the Pollar code instead of a bare 500', async () => {
+    const ctx = makeService();
+    ctx.pollar.sdk.mockRejectedValueOnce(
+      new PollarApiError(403, 'ORIGIN_NOT_ALLOWED', 'origin not allowed'),
+    );
+
+    // A raw PollarApiError is not an HttpException, so without the mapping the
+    // global filter renders it as `internal_error` and throws away the one
+    // thing that says what went wrong.
+    await expect(
+      ctx.service.authorize(CONSUMER, { provider: 'google' } as any),
+    ).rejects.toMatchObject({
+      status: 403,
+      response: expect.objectContaining({
+        message: expect.stringContaining('ORIGIN_NOT_ALLOWED'),
+      }),
+    });
+  });
+});
+
 describe('exchange', () => {
   it('redeems a code for a Pollar session and never stores the tokens', async () => {
     const ctx = await authorized({ redirectUri: 'cosmospay://auth/cb' });
@@ -242,6 +296,63 @@ describe('exchange', () => {
     expect(JSON.stringify(row)).not.toContain('at_1');
     expect(JSON.stringify(row)).not.toContain('rt_1');
     expect(JSON.stringify(row)).not.toContain('ada@example.com');
+  });
+
+  it('reports the wallet on each network, pending included', async () => {
+    const ctx = await authorized({ redirectUri: 'cosmospay://auth/cb' });
+    ctx.pollar.sdk
+      .mockResolvedValueOnce({ status: 'READY' })
+      .mockResolvedValueOnce(LOGIN_CONTENT);
+
+    const session = await ctx.service.exchange(CONSUMER, {
+      code: codeFromRedirect(ctx.callback.redirectTo!),
+    });
+
+    expect(session.network_wallets).toEqual([
+      {
+        network: 'testnet',
+        status: 'ready',
+        address: LOGIN_CONTENT.wallet.address,
+      },
+      { network: 'public', status: 'pending', address: null },
+    ]);
+    // The email is the join key, and the login is what supplies it.
+    expect(ctx.provisioning.provisionBothNetworks).toHaveBeenCalledWith(
+      expect.objectContaining({
+        consumerId: 'c1',
+        externalId: 'ada@example.com',
+        primaryNetwork: 'testnet',
+      }),
+    );
+  });
+
+  it('does not let a failed cross-network provisioning undo the login', async () => {
+    const ctx = await authorized({ redirectUri: 'cosmospay://auth/cb' });
+    ctx.pollar.sdk
+      .mockResolvedValueOnce({ status: 'READY' })
+      .mockResolvedValueOnce(LOGIN_CONTENT);
+    // The provisioning service is documented not to reject. This is the day
+    // that contract breaks anyway: by here the tokens are minted and the code
+    // is spent, so an exception would cost a login that cannot be retried.
+    ctx.provisioning.provisionBothNetworks.mockRejectedValueOnce(
+      new Error('db down'),
+    );
+
+    const session = await ctx.service.exchange(CONSUMER, {
+      code: codeFromRedirect(ctx.callback.redirectTo!),
+    });
+
+    expect(session.access_token).toBe('at_1');
+    // Falls back to what the login itself returned, rather than nothing.
+    expect(session.network_wallets).toEqual([
+      {
+        network: 'testnet',
+        status: 'ready',
+        address: LOGIN_CONTENT.wallet.address,
+      },
+    ]);
+    expect(ctx.table.rows[0].status).toBe('CONSUMED');
+    expect(ctx.table.rows[0].codeHash).toBeNull();
   });
 
   it('reports DPoP when the handshake bound the tokens to the wallet key', async () => {
@@ -418,15 +529,80 @@ describe('status (poll flow)', () => {
   });
 
   it('reports status only while the user is still at the provider', async () => {
-    const ctx = makeService();
-    ctx.pollar.sdk.mockResolvedValueOnce({ clientSessionId: 'cs_1' });
-    const auth = await ctx.service.authorize(CONSUMER, {
-      provider: 'google',
-    } as any);
+    const ctx = await opened();
+    ctx.pollar.sdk.mockResolvedValueOnce({ status: 'AWAITING_GOOGLE' });
 
-    const polled = await ctx.service.status(CONSUMER, auth.state);
+    const polled = await ctx.service.status(CONSUMER, ctx.auth.state);
     expect(polled).toMatchObject({ status: 'pending' });
     expect(polled.code).toBeUndefined();
+  });
+
+  it('authorizes a login Pollar finished but never came back to report', async () => {
+    const ctx = await opened();
+    // The whole failure this covers: Pollar ends its hosted flow on its own
+    // page, so the callback below never runs and the poll is the only thing
+    // that can notice. Without the probe this handshake expires PENDING under
+    // a wallet that did everything right.
+    ctx.pollar.sdk.mockResolvedValueOnce({ status: 'READY' });
+
+    const polled = await ctx.service.status(CONSUMER, ctx.auth.state);
+
+    expect(polled.status).toBe('authorized');
+    expect(polled.code).toBeTruthy();
+    expect(ctx.table.rows[0].codeHash).toBe(hashCode(polled.code!));
+    const [, , path] = ctx.pollar.sdk.mock.calls[1];
+    expect(path).toBe('/auth/session/status/cs_1/poll');
+  });
+
+  it('asks Pollar once per interval, however fast the wallet polls', async () => {
+    const ctx = await opened();
+    ctx.pollar.sdk.mockResolvedValue({ status: 'AWAITING_GOOGLE' });
+
+    await ctx.service.status(CONSUMER, ctx.auth.state);
+    await ctx.service.status(CONSUMER, ctx.auth.state);
+
+    // A wallet polls every few seconds and Pollar's key budget is per minute,
+    // so the second poll rides on the first answer rather than buying another.
+    expect(ctx.pollar.sdk).toHaveBeenCalledTimes(2);
+    expect(ctx.table.rows[0].providerCheckedAt).toBeInstanceOf(Date);
+  });
+
+  it('leaves the login pending when Pollar cannot be reached', async () => {
+    const ctx = await opened();
+    ctx.pollar.sdk.mockRejectedValueOnce(new Error('socket hang up'));
+
+    // The wallet is asking again in seconds; a provider blip must not turn its
+    // poll into an error, and must not close a login that may still be fine.
+    await expect(
+      ctx.service.status(CONSUMER, ctx.auth.state),
+    ).resolves.toMatchObject({ status: 'pending' });
+  });
+
+  it('closes a handshake whose client session Pollar has disowned', async () => {
+    const ctx = await opened();
+    ctx.pollar.sdk.mockRejectedValueOnce(
+      new PollarApiError(404, 'INVALID_CLIENT_SESSION_ID', 'gone'),
+    );
+
+    // Nothing can revive it, so the wallet is told now instead of polling a
+    // dead handshake until the TTL runs out.
+    await expect(
+      ctx.service.status(CONSUMER, ctx.auth.state),
+    ).resolves.toMatchObject({
+      status: 'failed',
+      error_code: 'INVALID_CLIENT_SESSION_ID',
+    });
+  });
+
+  it('never probes for a redirect-mode handshake', async () => {
+    const ctx = await opened({ redirectUri: 'cosmospay://auth/cb' });
+
+    const polled = await ctx.service.status(CONSUMER, ctx.auth.state);
+
+    // Its code is the callback's to mint: authorizing it here would leave the
+    // browser arriving at a handshake that has nowhere to put a second code.
+    expect(polled.status).toBe('pending');
+    expect(ctx.pollar.sdk).toHaveBeenCalledTimes(1);
   });
 
   it("hides another consumer's handshake behind a 404", async () => {

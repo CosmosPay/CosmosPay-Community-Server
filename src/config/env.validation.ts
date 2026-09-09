@@ -95,6 +95,15 @@ class EnvironmentVariables {
   @IsString()
   APISIX_SWAP_FEE_BPS_HEADER?: string;
 
+  /**
+   * APISIX username of the shared public consumer (the wallet's embedded key),
+   * e.g. `cosmos_public`. Optional: a deployment that publishes no public key
+   * leaves it unset and PublicKeyGuard then relies on the forwarded role alone.
+   */
+  @IsOptional()
+  @IsString()
+  APISIX_PUBLIC_CONSUMER?: string;
+
   @IsOptional()
   @IsIn(['public', 'testnet'])
   STELLAR_NETWORK?: string;
@@ -184,6 +193,17 @@ class EnvironmentVariables {
   @IsInt()
   @Min(0)
   REQUEST_LOG_RETENTION_DAYS?: number;
+
+  /**
+   * Days to keep client-reported activity events (`activity_event`). Pruned on
+   * the same timer and in the same bounded batches as the request log, because
+   * a row holds an IP, a user agent and whatever the client put in `props`.
+   * 0 keeps them forever.
+   */
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  ACTIVITY_RETENTION_DAYS?: number;
 
   @IsOptional()
   @IsInt()
@@ -318,6 +338,16 @@ class EnvironmentVariables {
   @IsOptional()
   @IsUrl(URL_OPTIONS)
   POLLAR_SERVER_BASE_URL?: string;
+
+  /**
+   * The `Origin` presented to Pollar's SDK API, which checks it against the
+   * app's Build -> Domains list. Defaults to the origin of
+   * POLLAR_BRIDGE_CALLBACK_URL, which already has to be registered there — set
+   * this only when the two differ.
+   */
+  @IsOptional()
+  @IsUrl(URL_OPTIONS)
+  POLLAR_SDK_ORIGIN?: string;
 
   /**
    * Public URL of this service's Pollar OAuth callback, as a browser reaches it

@@ -2,7 +2,7 @@ import { StellarAccountLoader } from '@/stellar/account-loader.service';
 import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
 import { Account, Keypair, TransactionBuilder } from '@stellar/stellar-sdk';
 import { HttpStatus } from '@nestjs/common';
-import { EventEmitter2 } from '@nestjs/event-emitter';
+import { EventEmitter2 } from 'eventemitter2';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import { toStroops } from '@/swaps/swap-math';

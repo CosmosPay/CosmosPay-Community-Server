@@ -50,8 +50,9 @@ src/
   prisma/                         PrismaModule + PrismaService (global)
   common/
     guards/apisix.guard.ts        THE gateway gate
+    guards/public-key.guard.ts    confines the SHARED public key to @AllowPublicKey routes
     middleware/apisix-context...  extracts consumer identity from gateway headers
-    decorators/                   @Public(), @CurrentConsumer()
+    decorators/                   @Public(), @CurrentConsumer(), @AllowPublicKey()
     filters/                      consistent error responses
     interceptors/                 structured access logging
     interfaces/                   GatewayConsumer + Express Request augmentation
@@ -68,17 +69,19 @@ src/
   kyc/                            receivers (KYC/KYB), wallets, bank accounts, doc upload
   onramp/                         fiat → stablecoin: payin quotes, payins, virtual accounts
   offramp/                        stablecoin → fiat: payout quotes, payouts (client-signed)
-  pollar/                         Pollar OAuth bridge (social login → Stellar wallet) + operator routes
+  pollar/                         Pollar OAuth bridge (social login → a wallet on both networks) + operator routes
   products/                       merchant catalogue
   customers/                      payer records derived from intents
   analytics/                      summary, balances, API logs, webhook logs
+  activity/                       client telemetry ingest + feed (wallet, dashboard)
   admin/                          cross-tenant platform admin (Bearer + role), audited
   health/                         liveness/readiness probes (@Public)
 prisma/schema.prisma              Consumer, PaymentIntent, Swap, LiquidityPoolOperation,
                                   WebhookEndpoint/Delivery/EmittedEvent, BlindpayReceiver,
                                   Blockchain/BankAccount/VirtualAccount, BlindpayQuote,
                                   BlindpayWebhookEvent, Payin, Payout, PollarOauthSession,
-                                  RequestLog, AdminAuditLog
+                                  PollarUserWallet, RequestLog, ActivityEvent,
+                                  AdminAuditLog
 test/                             e2e suite proving the gateway gate
 ```
 
@@ -107,6 +110,7 @@ modules; the spec is regenerated from the controllers and DTOs on every CI run
 | Products          | `/v1/products`           | Merchant catalogue                                        |
 | Customers         | `/v1/customers`          | Payer records derived from intents                        |
 | Analytics         | `/v1/summary`, `/v1/balances`, `/v1/logs` | Dashboard aggregates and logs            |
+| Activity          | `/v1/activity`           | Client-reported events: ingest, feed, rollup               |
 | Admin             | `/v1/admin`              | Cross-tenant reads/writes — Bearer + role, audited        |
 | Health            | `/v1/health`             | Liveness / readiness (`@Public`)                          |
 
@@ -225,6 +229,49 @@ hit, so a large history can catch up without holding one long table lock. Set
 `REQUEST_LOG_RETENTION_DAYS=0` to disable the prune entirely (the service logs
 that at boot). The composite index on `(consumer, createdAt)` keeps the
 dashboard query fast as volume grows.
+
+### Client activity (what the wallet and the dashboard report)
+
+`request_log` records what reached this service. It cannot record what a client
+*did*: a wallet that crashed on its send screen, a signature the user cancelled,
+a dashboard page that threw before any request left the browser. None of those
+produce an HTTP call here, and they are exactly the events worth having when
+something is wrong — so the clients report their own, to `POST
+/v1/activity/events`.
+
+- **A batch, not a call per event.** Clients queue and flush, so an offline
+  wallet keeps its events and sends them on the next launch. Up to
+  `ACTIVITY_MAX_BATCH` (100) per request, written in one statement.
+- **Retrying a flush is safe.** An event may carry the client's own `eventId`;
+  `(consumerId, eventId)` is unique and the insert skips duplicates, so a batch
+  that was written but whose acknowledgement never arrived can be re-sent
+  without doubling every row. The response reports `accepted` and `duplicates`.
+- **Attribution is the gateway's, never the body's.** Rows are written under the
+  consumer APISIX authenticated. A client cannot file events against another
+  account, and there is no field that would let it try.
+- **Ingest does not fail on the shape of a payload.** An over-long `message` is
+  truncated and an over-sized `props` is replaced with `{"_dropped":
+  "props_too_large"}`; a 400 would cost the whole batch, and the batch matters
+  most when the client is in a state nobody anticipated.
+- **A wrong device clock cannot reorder the feed.** `occurredAt` is clamped to
+  receipt time when it is more than five minutes ahead or more than seven days
+  behind, so a phone an hour fast cannot pin its events to the top of a
+  newest-first list. Both times are kept: `at` (the client's) and `receivedAt`.
+
+Reading it back:
+
+| Route                   | Scope             | Returns                                                              |
+| ----------------------- | ----------------- | -------------------------------------------------------------------- |
+| `GET /v1/activity/events` | `activity:read` | The feed, newest first. Filters: `source`, `level`, `category`, `type` (prefix), `network`, `since`/`until` |
+| `GET /v1/activity/summary` | `activity:read` | Counts per level/source/category, top event types, top errors, sessions, devices, a daily series |
+
+`level` on the feed is a **floor**, not an exact match: `level=warn` returns
+warnings *and* errors. A filter that returned only the rows somebody labelled
+`error` would hide the warnings that led to them.
+
+`activity_event` holds an IP, a user agent and whatever the client attached, so
+it is pruned by the same job and in the same bounded batches as `request_log` —
+`ACTIVITY_RETENTION_DAYS`, default **30**, `0` to keep events forever.
 
 ### Webhooks (notifying integrators)
 
@@ -458,6 +505,71 @@ Network/Horizon/fee/timeout are configured via `STELLAR_*` env vars
 (see `.env.example`). Defaults to **testnet** for safety — set
 `STELLAR_NETWORK=public` for mainnet (real funds).
 
+## The shared public API key
+
+The wallet is open source and ships one API key that everybody holds, so a person
+can swap, add liquidity or create a pay link without registering. They pay the
+`community` plan's commission — 150 bps, the highest rate on the board — and
+registering is what buys a lower one. The gateway injects the rate per consumer
+exactly as it does for a private key (see `resolvePlanCommissionBps`), so nothing
+about pricing is special-cased here.
+
+What *is* special is tenancy. Every anonymous caller on the network arrives as the
+same APISIX consumer, and the read endpoints filter rows by precisely that
+consumer:
+
+```ts
+// swaps.service.ts
+where: { id, consumer: { apisixUsername: consumer.username } }
+```
+
+So `GET /v1/swaps` under the public key would hand each anonymous user the whole
+anonymous population's swap history. Scopes cannot fix this — a scope is a
+property of the key and they all hold the same key — and the overlap is not
+hypothetical: `POST /v1/swaps/quote` requires `swaps:read`, which is the same
+scope that lists the history.
+
+**`PublicKeyGuard` is therefore an allowlist, not a denylist.** A public consumer
+is refused on every route that does not carry `@AllowPublicKey()`, so a route
+added next year is unreachable by the public key until someone says otherwise in
+the same diff. Forgetting the decorator produces a support ticket; forgetting a
+denylist entry produces a data leak.
+
+Reachable with the public key today:
+
+| Route | Why it is safe |
+| --- | --- |
+| `POST /v1/swaps/quote` | Prices a path from Horizon; a pure function of the request |
+| `POST /v1/swaps` | Builds an unsigned envelope the caller signs |
+| `POST /v1/swaps/:id/submit` | Broadcasts a caller-signed envelope — needs the swap's UUID *and* a signature from its source account |
+| `POST /v1/liquidity-pools/deposit` \| `withdraw` | Build unsigned envelopes |
+| `POST /v1/liquidity-pools/operations/:id/submit` | Broadcasts a caller-signed envelope |
+| `GET /v1/liquidity-pools` \| `/:poolId` \| `/positions` | Public on-chain data read from Horizon |
+| `POST /v1/payment-intents/tx` \| `pay` | Build a SEP-7 intent from the request |
+| `POST /v1/activity/events` | Telemetry ingest — see below |
+| `GET /v1/assets` | The public asset catalog |
+
+Refused, and deliberately: `GET /v1/swaps`, `GET /v1/swaps/:id`,
+`GET /v1/liquidity-pools/operations{,/:id}`, `GET /v1/activity/events`,
+`GET /v1/activity/summary`, every payment-intent read, and everything under
+`/v1/kyc`, `/v1/onramp`, `/v1/offramp` and `/v1/webhooks`. A wallet with no
+account builds its history from Horizon instead, which is the authoritative
+source for on-chain activity anyway.
+
+**Telemetry is on the list on purpose.** A wallet with no CosmosPay account still
+crashes, and refusing its error reports would blind us to exactly the population
+that meets first-run failures — the ingest route would answer `403` and the
+reports would be dropped. Events arriving on this key are anonymous by
+construction (one shared consumer), so nothing account-identifying may travel with
+them; the wallet strips address, destination, amount and txHash before sending.
+
+The guard identifies the public consumer by **either** the forwarded role
+(`X-Consumer-Role: public`) **or** the configured `APISIX_PUBLIC_CONSUMER`
+username. Two signals, because each alone fails open in a way that costs user
+data: a gateway that stops forwarding roles would promote every anonymous caller
+to an ordinary tenant, and a deployment that never set the env var would rely on a
+header it does not control. Set both.
+
 ## Stellar native swaps (path payments)
 
 Stellar has no dedicated "swap" operation. Asset exchange is done with a
@@ -654,6 +766,81 @@ Each poll issues a fresh code and retires the previous one, so redeem the code
 from your most recent poll. That falls out of never storing a live credential:
 the row keeps a SHA-256 of the code, and a hash cannot be un-hashed.
 
+**Prefer the poll flow.** Pollar does not return the browser to the callback: its
+hosted flow ends on its own page — `www.pollar.xyz/auth/status` — whether the
+consent was refused or granted, and a granted one simply leaves the client
+session `READY` on Pollar's side. The `redirect_uri` the authorization URL
+carries is never navigated to, so a handshake that waits to be called back waits
+until it expires.
+
+So the poll route asks Pollar instead of waiting to be told: while a handshake is
+`pending` it checks the client session's own status, and promotes the handshake
+the moment Pollar reports `READY` — the same condition the redemption already
+waits for. The wallet's contract does not change; what changed is that `pending`
+now ends on its own.
+
+Two operational notes fall out of that:
+
+- **The callback route still exists and is still registered with Pollar.** It
+  works if a redirect does arrive, and it is what a redirect-flow handshake
+  depends on — that flow has nowhere to put a code otherwise. It just cannot be
+  the only way a login is noticed.
+- **The provider is asked at most once every two seconds per handshake**
+  (`POLLAR_SESSION_PROBE_INTERVAL_MS`), a compare-and-swap on
+  `providerCheckedAt` that every replica shares. A wallet polling every second
+  therefore costs Pollar 30 requests a minute, not 60, against a key whose whole
+  budget is 200.
+
+A handshake whose client session Pollar has disowned (`INVALID_CLIENT_SESSION_ID`,
+`EXPIRED_CLIENT_ID`, or a `404`/`410`) is closed as `failed` with that code on the
+spot, rather than polled until the TTL runs out.
+
+### One login, a wallet on both networks
+
+Pollar runs mainnet and testnet as two separate applications with two separate
+key pairs, so a hosted login can only ever produce a wallet on the network its
+API key resolved to (`prod` → `public`, `dev` → `testnet` — see `resolveNetwork`).
+A user who then moves between environments has no wallet on the other side: the
+address they funded on testnet is not the address that receives on mainnet, and
+the second wallet ends up being created at whatever moment they first need it,
+which is the moment least able to absorb a provider failure.
+
+So a redemption also registers the user on the **other** network, through the
+Server API's `POST /users/with-wallet`, and `POST /v1/pollar/oauth/token`
+reports both:
+
+```jsonc
+"network_wallets": [
+  { "network": "testnet", "status": "ready",   "address": "GA5Z…" },
+  { "network": "public",  "status": "pending", "address": null    }
+]
+```
+
+**A `pending` entry is not an error.** The login succeeded; the second wallet is
+the part that did not land yet, and the whole point of the design is that it
+cannot take the login down with it. The attempt on the request path gets five
+seconds and one try, and whatever it does not finish is retried in the background
+by the provisioning sweeper — same switch and cadence as the handshake sweeper
+(`POLLAR_SWEEP_*`), with an exponential backoff and a total budget of ten
+attempts before the row goes `failed`.
+
+The common reason for `pending` is prosaic: **the other network's keys are not
+configured.** Until they are, every login leaves a pending counterpart; the
+moment they land, one sweep provisions the whole backlog without anyone logging
+in again. That is why the keys for both networks are worth setting even when you
+only serve one today.
+
+Two consequences worth knowing:
+
+- **The join key is the OAuth email**, because that is what a later hosted login
+  on the other network resolves the same person by. A provider that vouches for
+  no email gets no counterpart wallet at all — better than an orphan wallet that
+  cost XLM and that no login ever reaches.
+- **It spends XLM on both networks.** A mainnet login now also funds a testnet
+  reserve and vice versa. The per-network state lives in `pollar_user_wallet`,
+  one row per (consumer, email, network), which is also the idempotency: a repeat
+  login upserts through it instead of provisioning again.
+
 ### What the bridge stores
 
 A handshake row, and nothing in it can spend money: the unguessable `state`, the
@@ -771,9 +958,16 @@ Set `RATE_LIMIT_ENABLED=false` as the incident switch.
 ### Setup
 
 1. Create an app at [dashboard.pollar.xyz](https://dashboard.pollar.xyz) and take
-   both keys for your network (`pub_testnet_…` / `sec_testnet_…`).
+   both keys for your network (`pub_testnet_…` / `sec_testnet_…`). Do it for
+   **both** networks: a login provisions a wallet on each, and a network with no
+   keys leaves every user's second wallet `pending` until they are set. The two
+   dashboards are separate — register the callback host in each.
 2. Register the **gateway host** of `POLLAR_BRIDGE_CALLBACK_URL` under
-   **Build → Domains**, or Pollar refuses the redirect.
+   **Build → Domains**. This is not only about the redirect: the SDK API checks
+   that list on *every* call, against the `Origin` header, and the bridge sends
+   this host's origin as that header (`POLLAR_SDK_ORIGIN` overrides it). An
+   unregistered host is `403 ORIGIN_NOT_ALLOWED` on `POST /auth/session` — the
+   first call of every login, before the user ever sees a consent screen.
 3. Set `POLLAR_BRIDGE_CALLBACK_URL` to `<gateway>/v1/pollar/oauth/callback` — the
    bridge appends `/{state}` itself.
 4. Add each wallet's redirect URI to `POLLAR_REDIRECT_URI_WHITELIST`, or omit it
@@ -785,6 +979,151 @@ of on a user-facing login. Leave the keys blank to disable the feature (Pollar
 routes then return `503`). See `.env.example`.
 
 ## Upgrading — breaking changes and deploy notes
+
+### NestJS 12, TypeScript 6 and a Node floor of 24.9
+
+The whole NestJS line moved to 12 and TypeScript to 6. **This raises the minimum
+Node version to 24.9** (`engines`, and both workflows now pin `node-version: 24`);
+anything older cannot run the test suite at all. Deploy targets have to move with
+it.
+
+The reason is the test runner, not the framework. NestJS 12 publishes as pure ESM
+(`"type": "module"`), and Jest running under CommonJS cannot `require()` it — every
+one of the 62 suites failed to load. Jest supports `require(esm)` natively, but only
+on Node >= 24.9 **and** with `--experimental-vm-modules`, because the capability it
+checks for (`vm.SourceTextModule.prototype.hasAsyncGraph`) does not exist without
+that flag. So the test scripts now invoke Jest through Node directly:
+
+```
+"test": "node --experimental-vm-modules node_modules/jest/bin/jest.js"
+```
+
+Not a `NODE_OPTIONS=` prefix: that is not portable to Windows shells, and CI, the
+release job and a developer's machine must run the same command.
+
+Two consequences worth knowing:
+
+- **`transformIgnorePatterns` is gone from both Jest configs.** It listed the ESM
+  packages (`@stellar`, `@noble`, `@exodus`, `uint8array-extras`) to be transpiled
+  to CommonJS by ts-jest — a workaround for not being able to load ESM. Now that
+  Jest loads ESM natively the workaround actively breaks: a package compiled to
+  CJS gets evaluated as ESM and dies on `exports is not defined`. If a dependency
+  ever needs transforming again, that is the file to look at.
+- **`tsconfig.json` gained `types` and `rootDir`.** TypeScript 6 no longer
+  auto-includes every `@types` package, so the two ambient ones (`node`, `jest`)
+  are named explicitly — without that, every spec lost `describe`/`it` while still
+  running green under ts-jest. And TS 6 refuses to infer `rootDir` when a
+  compilation covers one directory (TS5011), which is what the ts-node scripts do;
+  `"./"` is what the full build already inferred, so the emitted layout is
+  unchanged.
+
+Code changes the majors forced, all small:
+
+- `EventEmitter2` is imported from `eventemitter2`, not `@nestjs/event-emitter`.
+  It is the same class object at runtime — the DI token is unchanged — but the
+  Nest re-export is typed for the package's CJS shape and resolves to `any` under
+  this repo's `node10` module resolution, which silently turned every `.emit()`
+  into an unchecked call. `eventemitter2` is now a direct dependency for that
+  reason.
+- `OperationObject` comes from `@nestjs/swagger` rather than
+  `@nestjs/swagger/dist/interfaces/open-api-spec.interface`. Swagger 12 publishes
+  an `exports` map exposing only `.` and `./plugin`, so deep paths no longer
+  resolve.
+- `AccountLoaderService.load` carries an explicit `Promise<Horizon.AccountResponse>`
+  return type; TS 6 will not infer a type it cannot name portably.
+- Two test mocks (`fetch`, `Reflector.getAllAndOverride`) now match the real
+  signatures instead of narrower hand-written ones.
+
+The published OpenAPI grew: `@nestjs/terminus@12` emits richer health schemas
+(status enums and a `responseTime` property). Purely additive — no business route
+or schema changed.
+
+### A shared public API key, and the guard that confines it
+
+New in this release: `PublicKeyGuard` (global, after `PermissionsGuard`) and the
+`@AllowPublicKey()` decorator. Nothing changes for existing keys — the guard has
+no opinion about a consumer that is not the shared public one — but two things
+need doing at deploy time:
+
+- **Set `APISIX_PUBLIC_CONSUMER`** to the username the dev platform provisions for
+  the public key, on every deployment that publishes one. Without it the guard
+  falls back to the forwarded `X-Consumer-Role` alone.
+- **The public key must be minted with `role: public`** and only the scopes the
+  allowlisted routes need. Granting it `kyc:*` or `webhooks:*` would not open
+  those routes — the guard refuses them regardless — but it would be a credential
+  wider than its job, held by everyone.
+
+See "The shared public API key" above for what it may reach and why.
+
+### The asset registry: `GET /v1/assets`
+
+A curated table of the (code, issuer) pairs this platform vouches for, per
+network, with the issuing organization named. It requires no scope — the catalog
+holds no tenant data, and gating it would only mean every key minted before the
+scope existed reads an empty token picker — but it does require an authenticated
+consumer, the shared public key included.
+
+`npm run assets:verify` re-checks every row against live Horizon: that the pair
+exists on the network it is filed under, that `contract` matches Horizon's
+`contract_id`, and that the issuer flags match the chain. Run it when editing the
+registry. It is not a unit test because it needs the public internet, and a test
+that fails when Horizon is slow is a test people learn to skip.
+
+### Client activity: a new module, a new table and two new scopes
+
+`POST /v1/activity/events` accepts telemetry from the wallet and the developer
+dashboard; `GET /v1/activity/events` and `GET /v1/activity/summary` read it back.
+Nothing existing changed shape, but three things need doing at deploy time:
+
+- **Migration `20260906140000_activity_event`** creates `activity_event`
+  (append-only, `consumerId`-scoped, unique on `(consumerId, eventId)`).
+- **The scopes `activity:write` and `activity:read` are new.** A key without them
+  gets `insufficient_scope`, which is the correct answer — but it means an
+  existing key does not gain the ability to report telemetry by upgrading. The
+  developer platform grants both to wallet-provisioned keys and re-applies the
+  set on rotation; keys minted by hand need them added.
+- **`ACTIVITY_RETENTION_DAYS`** (default 30) joins the retention job. It is
+  personal data on the same footing as the access log; set it to `0` only
+  deliberately.
+
+### The Pollar poll route now discovers a finished login itself
+
+`GET /v1/pollar/oauth/sessions/{state}` used to report whatever the bridge
+callback had recorded. Pollar never calls that callback — its hosted flow ends on
+`www.pollar.xyz/auth/status` and leaves the client session `READY` — so a
+poll-flow handshake stayed `pending` until it expired, under a wallet that was
+doing everything right. The poll now asks Pollar directly and promotes the
+handshake on `READY`.
+
+No API shape changed and no client change is needed: a login that used to hang on
+`pending` now reaches `authorized` within a poll of the user finishing. Two
+things to be aware of when deploying:
+
+- **Migration `20260906120000_pollar_oauth_provider_probe`** adds a nullable
+  `providerCheckedAt` to `pollar_oauth_session`. It is the shared floor on how
+  often the question reaches Pollar; nothing backfills.
+- **Poll traffic now reaches Pollar.** Budget for one provider request per
+  in-flight login every two seconds, on the publishable key for that network.
+
+### Pollar logins now provision a wallet on both networks
+
+`POST /v1/pollar/oauth/token` gained a `network_wallets` array — one entry per
+Stellar network, each `ready`, `pending` or `failed`. Additive, so nothing
+breaks, but two operational notes:
+
+- **Run the migration.** `20260905120000_pollar_user_wallet` adds
+  `pollar_user_wallet` and the `PollarWalletStatus` enum. Without it every
+  redemption logs a failed provisioning and the counterpart wallet stays
+  unrecorded — the login itself keeps working.
+- **Set the keys for both networks.** `POLLAR_*_MAINNET` and `POLLAR_*_TESTNET`
+  are each optional on their own, and a network with no keys now shows up as a
+  `pending` wallet on every login rather than as nothing at all. Configure the
+  second pair and the sweeper drains the backlog on its next tick; leave it
+  unset deliberately and the rows sit `pending` until the ten-attempt budget
+  retires them. Either way no login fails.
+
+Budget for the XLM: a login now funds a reserve on *both* networks, so mainnet
+spend per new user is unchanged but testnet spend appears where there was none.
 
 ### `429` now reports `rate_limited`
 
@@ -899,6 +1238,7 @@ at least `DATABASE_URL` and `APISIX_GATEWAY_SECRET`.
 | `APISIX_ORGANIZATION_HEADER` | no | `x-consumer-org` | Organization id |
 | `APISIX_PLAN_HEADER` | no | `x-consumer-plan` | Organization plan |
 | `APISIX_SWAP_FEE_BPS_HEADER` | no | `x-plan-swap-fee-bps` | Plan swap fee (bps) |
+| `APISIX_PUBLIC_CONSUMER` | no | — | Username of the shared public consumer (see below). Set it wherever a public key is published |
 | `STELLAR_NETWORK` | no | `testnet` | Fallback Stellar network (`public` / `testnet`) |
 | `STELLAR_HORIZON_URL_PUBLIC` | no | `https://horizon.stellar.org` | Mainnet Horizon base URL |
 | `STELLAR_HORIZON_URL_TESTNET` | no | `https://horizon-testnet.stellar.org` | Testnet Horizon base URL |
@@ -924,6 +1264,7 @@ at least `DATABASE_URL` and `APISIX_GATEWAY_SECRET`.
 | `WEBHOOK_SWEEP_INTERVAL_MS` | no | `60000` | Sweeper interval (ms, min 1000) |
 | `WEBHOOK_PAYLOAD_RETENTION_DAYS` | no | `30` | Days to keep a settled delivery body before redacting it. `0` keeps it forever |
 | `REQUEST_LOG_RETENTION_DAYS` | no | `30` | Days to keep `request_log` rows (payer IP / user-agent). `0` disables the prune |
+| `ACTIVITY_RETENTION_DAYS` | no | `30` | Days to keep `activity_event` rows (client IP / user-agent / `props`). Pruned by the same job. `0` keeps events forever |
 | `REQUEST_LOG_PRUNE_INTERVAL_MS` | no | `3600000` | Retention timer interval (ms) |
 | `REQUEST_LOG_PRUNE_BATCH_SIZE` | no | `1000` | Rows per delete batch (keeps each lock short) |
 | `REQUEST_LOG_PRUNE_MAX_PER_CYCLE` | no | `50000` | Hard cap on rows examined per tick |
@@ -942,13 +1283,14 @@ at least `DATABASE_URL` and `APISIX_GATEWAY_SECRET`.
 | `POLLAR_SECRET_KEY_TESTNET` / `_MAINNET` | with the publishable key | — | Pollar secret key (`sec_<network>_…`), for the operator routes |
 | `POLLAR_BRIDGE_CALLBACK_URL` | when a Pollar key is set | — | Public URL Pollar returns the browser to. Must be `<gateway>/v1/pollar/oauth/callback` **and** a host registered under Pollar's Build → Domains |
 | `POLLAR_REDIRECT_URI_WHITELIST` | no | — | Per-consumer allow-list of wallet redirect URIs. Empty ⇒ that consumer can only use the poll flow |
+| `POLLAR_SDK_ORIGIN` | no | origin of `POLLAR_BRIDGE_CALLBACK_URL` | `Origin` sent to Pollar's SDK API, which checks it against Build → Domains. Set only when the callback host and the registered host differ |
 | `POLLAR_SDK_BASE_URL` | no | `https://sdk.api.pollar.xyz` | Pollar SDK API base URL |
 | `POLLAR_SERVER_BASE_URL` | no | `https://api.pollar.xyz` | Pollar Server API base URL |
 | `POLLAR_TIMEOUT_MS` | no | `15000` | Pollar HTTP client timeout (ms) |
 | `POLLAR_AUTHORIZATION_TTL_MS` | no | `300000` | How long a login handshake stays open |
 | `POLLAR_CODE_TTL_MS` | no | `120000` | How long a minted bridge code stays redeemable |
 | `POLLAR_LOGIN_WAIT_MS` | no | `20000` | How long redemption waits for Pollar to provision the wallet |
-| `POLLAR_SWEEP_ENABLED` | no | `true` | Expire handshakes nobody finished |
+| `POLLAR_SWEEP_ENABLED` | no | `true` | Expire handshakes nobody finished, and retry the cross-network wallets a login left `pending` |
 | `POLLAR_SWEEP_INTERVAL_MS` | no | `60000` | Handshake sweeper interval (ms, min 1000) |
 
 Legacy `STELLAR_HORIZON_URL` is rejected at boot — use

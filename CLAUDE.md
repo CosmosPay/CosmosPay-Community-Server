@@ -42,6 +42,27 @@ it, so `tsc-alias` rewrites the aliases back to real relative paths after
 `nest build`. Never drop it from the build script or `npm start:prod` breaks.
 The `ts-node` scripts pass `-r tsconfig-paths/register` for the same reason.
 
+**There is no `baseUrl`.** TypeScript 6 deprecates it and 7 removes it, so the
+`paths` entries are written as explicit `"./src/*"` / `"./generated/*"` and
+resolve relative to `tsconfig.json` itself. All four consumers above were checked
+against that: `tsc --noEmit` is clean, `tsc-alias` still rewrites every alias out
+of `dist/` (grep it for `@/` — there are none), and both `ts-node` scripts
+(`openapi:generate`, `assets:verify`) still resolve. Do not reintroduce it.
+
+`types` IS set, to `["node", "jest"]`, and that is a different thing: TypeScript 6
+stopped auto-including every `@types` package, so the two AMBIENT ones — the ones
+that declare globals rather than exporting anything — have to be named. Packages
+reached through an import (`express`, `pg`, `qrcode`, `supertest`) resolve on their
+own and must not be added.
+
+Do not add `typeRoots` either. It looks like the natural companion to dropping
+`baseUrl` and it is the opposite: TypeScript already discovers every
+`node_modules/@types` package on its own, and naming one root NARROWS that to the
+list you wrote. Adding `["./node_modules/@types"]` here silently dropped the
+ambient jest globals, so all 62 spec files failed `tsc --noEmit` while still
+running green under ts-jest — a split where the compiler and the runner disagree
+about the same file.
+
 ## Constants live in a `*.constants.ts` file, not inline in a service
 
 Each module keeps its tunable values — timeouts, batch sizes, limits,

@@ -1,5 +1,5 @@
 import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
-import { EventEmitter2 } from '@nestjs/event-emitter';
+import { EventEmitter2 } from 'eventemitter2';
 import { WEBHOOK_EVENT, WebhookEventPayload } from '@/webhooks/webhook-events';
 import { WebhookTerminalEmitter } from '@/webhooks/webhook-terminal-emitter.service';
 import { PaymentIntentsService } from '@/payment-intents/payment-intents.service';

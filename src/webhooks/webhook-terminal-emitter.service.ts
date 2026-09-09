@@ -1,5 +1,11 @@
 import { Injectable, Optional } from '@nestjs/common';
-import { EventEmitter2 } from '@nestjs/event-emitter';
+// `EventEmitter2` comes from `eventemitter2`, not from `@nestjs/event-emitter`.
+// It is the same class object at runtime — the Nest package re-exports it
+// verbatim, so the DI token is unchanged — but its re-export is typed for the
+// CJS shape of the package and resolves to `any` under this repo's `node10`
+// module resolution. Importing the class from its own package restores the real
+// signatures; without it every `.emit()` here is an unchecked `any` call.
+import { EventEmitter2 } from 'eventemitter2';
 import type { WebhookEventType } from '@generated/prisma/client';
 import { isUniqueViolation } from '@/common/prisma-errors';
 import { PrismaService } from '@/prisma/prisma.service';

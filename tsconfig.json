@@ -9,7 +9,12 @@
     "target": "ES2023",
     "sourceMap": true,
     "outDir": "./dist",
-    "baseUrl": "./",
+    // Explicit under TypeScript 6, which refuses to infer it (TS5011) once a
+    // compilation covers a single directory — which is exactly what the ts-node
+    // scripts do: compiling `scripts/generate-openapi.ts` alone made TS infer
+    // `./scripts` as the root and demand this be stated. `"./"` is what the full
+    // build already inferred, so the emitted layout (dist/src/**) is unchanged.
+    "rootDir": "./",
     "incremental": true,
     "skipLibCheck": true,
     "strictNullChecks": true,
@@ -19,9 +24,20 @@
     "noFallthroughCasesInSwitch": true,
     "esModuleInterop": true,
     "resolveJsonModule": true,
+    // TypeScript 6 no longer auto-includes every `node_modules/@types` package,
+    // so the two that are AMBIENT — they declare globals rather than exporting
+    // anything — have to be named. Packages that are imported (`express`, `pg`,
+    // `qrcode`, `supertest`) resolve through their import and do not belong here.
+    "types": ["node", "jest"],
+    // No `baseUrl`: TypeScript 6 deprecates it and 7 drops it. Without one,
+    // `paths` resolve relative to THIS file, so the entries are written as
+    // explicit "./" paths. Four other places consume this mapping — jest's
+    // moduleNameMapper, test/jest-e2e.json, tsc-alias in the build script, and
+    // `tsconfig-paths/register` in the ts-node scripts — and none of them reads
+    // baseUrl once the paths are relative. See the alias section of CLAUDE.md.
     "paths": {
-      "@/*": ["src/*"],
-      "@generated/*": ["generated/*"]
+      "@/*": ["./src/*"],
+      "@generated/*": ["./generated/*"]
     }
   },
   "exclude": ["node_modules", "dist"]

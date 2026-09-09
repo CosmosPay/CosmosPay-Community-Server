@@ -17,8 +17,14 @@ export interface GatewayConsumer {
    * Role of the authenticating API key (X-Consumer-Role). `admin` keys bypass
    * per-action permission checks; `user` keys are restricted to their granted
    * `permissions`. Null when not forwarded.
+   *
+   * `public` is the shared key embedded in the open-source wallet. It is a role
+   * rather than a scope because it says something no scope can: that this
+   * credential is held by everyone, so the rows written under it belong to no
+   * single tenant and must never be read back as though they did. PublicKeyGuard
+   * confines it to handlers marked `@AllowPublicKey()`.
    */
-  role: 'admin' | 'user' | null;
+  role: 'admin' | 'user' | 'public' | null;
   /**
    * Scopes granted to the API key (X-Consumer-Permissions), e.g. `['read','write']`.
    * Enforced by PermissionsGuard. Empty when none granted / not forwarded.

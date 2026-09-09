@@ -9,6 +9,7 @@ function makeClient(overrides: Record<string, unknown> = {}) {
     sdkBaseUrl: 'https://sdk.api.pollar.xyz',
     serverBaseUrl: 'https://api.pollar.xyz',
     bridgeCallbackUrl: 'https://gw.test/v1/pollar/oauth/callback',
+    sdkOrigin: 'https://gw.test',
     redirectUriWhitelist: {},
     timeoutMs: 5000,
     authorizationTtlMs: 300_000,
@@ -48,6 +49,37 @@ describe('key separation', () => {
     const [url, init] = spy.mock.calls[0] as any;
     expect(url).toBe('https://sdk.api.pollar.xyz/v2/auth/session');
     expect(init.headers['x-pollar-api-key']).toBe('pub_testnet_x');
+  });
+
+  it('presents the registered origin to the SDK API', async () => {
+    const spy = mockFetch(() => ok({ success: true, content: { a: 1 } }));
+
+    await makeClient().sdk('POST', 'testnet', '/auth/session');
+
+    // Pollar's SDK API enforces the app's Build -> Domains list on every call,
+    // and a server has no origin of its own to send: without this header the
+    // very first call of every login is a 403 ORIGIN_NOT_ALLOWED.
+    expect((spy.mock.calls[0] as any)[1].headers.origin).toBe(
+      'https://gw.test',
+    );
+  });
+
+  it('sends no origin to the Server API, which has no such list', async () => {
+    const spy = mockFetch(() => ok({ success: true, content: { a: 1 } }));
+
+    await makeClient().server('POST', 'testnet', '/wallets/activate');
+
+    expect((spy.mock.calls[0] as any)[1].headers.origin).toBeUndefined();
+  });
+
+  it('omits the header entirely when no origin is configured', async () => {
+    const spy = mockFetch(() => ok({ success: true, content: { a: 1 } }));
+
+    await makeClient({ sdkOrigin: '' }).sdk('POST', 'testnet', '/auth/session');
+
+    // An empty `Origin` is not the same as none — some servers reject it — so
+    // the key is absent rather than blank.
+    expect('origin' in (spy.mock.calls[0] as any)[1].headers).toBe(false);
   });
 
   it('sends the secret key to the Server API', async () => {

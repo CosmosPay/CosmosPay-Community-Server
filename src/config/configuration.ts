@@ -49,6 +49,17 @@ export interface AppConfig {
     organizationHeader: string;
     planHeader: string;
     swapFeeBpsHeader: string;
+    /**
+     * Username of the SHARED public consumer — the one credential embedded in
+     * every copy of the open-source wallet. Empty when the deployment publishes
+     * no public key.
+     *
+     * PublicKeyGuard matches on this as well as on the forwarded role, so that a
+     * gateway which stops sending `X-Consumer-Role` cannot silently promote every
+     * anonymous caller to an ordinary tenant with read access to what the whole
+     * anonymous population wrote.
+     */
+    publicConsumer: string;
   };
   admin: {
     /**
@@ -105,6 +116,8 @@ export interface AppConfig {
     maxPerCycle: number;
     // Days to keep the *body* of a settled webhook delivery. 0 disables.
     deliveryPayloadDays: number;
+    // Days to keep client-reported activity events. 0 disables that prune.
+    activityEventDays: number;
   };
   webhookSweep: {
     // Recovers deliveries stranded by a crash mid-retry. Off disables the timer
@@ -165,6 +178,13 @@ export interface AppConfig {
      * Build -> Domains. The bridge appends `/{state}` to it.
      */
     bridgeCallbackUrl: string;
+    /**
+     * The `Origin` sent on every SDK-API call. Pollar's SDK API is built for a
+     * browser and checks this against the app's Build -> Domains list, refusing
+     * a request without one (`ORIGIN_NOT_ALLOWED`) — including a server-side
+     * one, which has no origin of its own to send.
+     */
+    sdkOrigin: string;
     /** Per-consumer allow-list of the wallet redirect URIs codes may go to. */
     redirectUriWhitelist: PollarRedirectWhitelist;
     timeoutMs: number;
@@ -222,6 +242,7 @@ export default (): AppConfig => ({
     swapFeeBpsHeader: (
       process.env.APISIX_SWAP_FEE_BPS_HEADER ?? 'x-plan-swap-fee-bps'
     ).toLowerCase(),
+    publicConsumer: (process.env.APISIX_PUBLIC_CONSUMER ?? '').trim(),
   },
   admin: {
     credentials: parseAdminCredentials(process.env.ADMIN_API_CREDENTIALS),
@@ -284,6 +305,14 @@ export default (): AppConfig => ({
     // behaviour) for an operator who needs that and accepts the exposure.
     deliveryPayloadDays: parseInt(
       process.env.WEBHOOK_PAYLOAD_RETENTION_DAYS ?? '30',
+      10,
+    ),
+    // Client telemetry (`activity_event`). A row carries an IP, a user agent
+    // and whatever the client put in `props`, so it is personal data on the
+    // same footing as the access log and gets the same default window. 0 keeps
+    // events forever, which is a deliberate choice an operator has to make.
+    activityEventDays: parseInt(
+      process.env.ACTIVITY_RETENTION_DAYS ?? '30',
       10,
     ),
   },
@@ -361,6 +390,7 @@ export default (): AppConfig => ({
       /\/+$/,
       '',
     ),
+    sdkOrigin: pollarSdkOrigin(),
     redirectUriWhitelist: parsePollarRedirectWhitelist(
       process.env.POLLAR_REDIRECT_URI_WHITELIST,
     ),
@@ -394,3 +424,32 @@ export default (): AppConfig => ({
     },
   },
 });
+
+/**
+ * The `Origin` header the bridge presents to Pollar's SDK API.
+ *
+ * That API is built for a browser SDK and enforces the app's Build -> Domains
+ * list on every call, so a request with no `Origin` — which is every request a
+ * server makes — comes back `403 ORIGIN_NOT_ALLOWED`, on the very first call of
+ * the login flow.
+ *
+ * The default is the origin of `POLLAR_BRIDGE_CALLBACK_URL`, because that host
+ * already has to be registered under Build -> Domains for the redirect to work
+ * at all: one registration, not two, and no new variable to forget.
+ * `POLLAR_SDK_ORIGIN` overrides it for the deployment where the callback is
+ * served from a different host than the one Pollar has on its list.
+ */
+function pollarSdkOrigin(): string {
+  const explicit = process.env.POLLAR_SDK_ORIGIN?.trim();
+  if (explicit) return explicit.replace(/\/+$/, '');
+
+  const callback = process.env.POLLAR_BRIDGE_CALLBACK_URL?.trim();
+  if (!callback) return '';
+  try {
+    return new URL(callback).origin;
+  } catch {
+    // A malformed callback URL is already reported by env validation; there is
+    // nothing useful to send, and an empty header is the same as none.
+    return '';
+  }
+}

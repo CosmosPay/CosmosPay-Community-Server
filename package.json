@@ -7,7 +7,7 @@
   "license": "UNLICENSED",
   "type": "commonjs",
   "engines": {
-    "node": ">=22.12.0"
+    "node": ">=24.9.0"
   },
   "scripts": {
     "build": "prisma generate && nest build && tsc-alias -p tsconfig.build.json",
@@ -19,9 +19,9 @@
     "start:prod": "node dist/src/main",
     "lint": "eslint \"{src,apps,libs,scripts,test}/**/*.ts\" --max-warnings=0",
     "lint:fix": "eslint \"{src,apps,libs,scripts,test}/**/*.ts\" --fix",
-    "test": "jest",
-    "test:watch": "jest --watch",
-    "test:e2e": "jest --config ./test/jest-e2e.json",
+    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
+    "test:watch": "node --experimental-vm-modules node_modules/jest/bin/jest.js --watch",
+    "test:e2e": "node --experimental-vm-modules node_modules/jest/bin/jest.js --config ./test/jest-e2e.json",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:deploy": "prisma migrate deploy",
@@ -30,22 +30,24 @@
     "openapi:generate": "ts-node -r tsconfig-paths/register --transpile-only scripts/generate-openapi.ts",
     "openapi:check": "npm run openapi:generate && git diff --exit-code -- openapi/openapi.json openapi/openapi.yaml",
     "webhooks:audit-destinations": "ts-node -r tsconfig-paths/register --transpile-only scripts/mark-blocked-webhook-endpoints.ts",
-    "seed:request-logs": "ts-node -r tsconfig-paths/register --transpile-only scripts/seed-request-logs.ts"
+    "seed:request-logs": "ts-node -r tsconfig-paths/register --transpile-only scripts/seed-request-logs.ts",
+    "assets:verify": "ts-node -r tsconfig-paths/register --transpile-only scripts/verify-assets.ts"
   },
   "dependencies": {
-    "@nestjs/common": "^11.2.3",
-    "@nestjs/config": "^4.0.4",
-    "@nestjs/core": "^11.2.3",
-    "@nestjs/event-emitter": "^3.1.0",
-    "@nestjs/platform-express": "^11.2.3",
-    "@nestjs/swagger": "^11.4.7",
-    "@nestjs/terminus": "^11.1.1",
+    "@nestjs/common": "^12.0.1",
+    "@nestjs/config": "^12.0.0",
+    "@nestjs/core": "^12.0.1",
+    "@nestjs/event-emitter": "^12.0.0",
+    "@nestjs/platform-express": "^12.0.1",
+    "@nestjs/swagger": "^12.0.1",
+    "@nestjs/terminus": "^12.0.0",
     "@prisma/adapter-pg": "^7.10.0",
     "@prisma/client": "^7.10.0",
     "@stellar/stellar-sdk": "^17.0.1",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.15.1",
     "dotenv": "^17.4.2",
+    "eventemitter2": "^6.4.9",
     "helmet": "^8.3.0",
     "pg": "^8.23.0",
     "qrcode": "^1.5.4",
@@ -54,20 +56,20 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@nestjs/cli": "^11.0.24",
-    "@nestjs/schematics": "^11.1.0",
-    "@nestjs/testing": "^11.2.3",
+    "@nestjs/cli": "^12.0.0",
+    "@nestjs/schematics": "^12.0.0",
+    "@nestjs/testing": "^12.0.1",
     "@types/express": "^5.0.6",
     "@types/jest": "^30.0.0",
-    "@types/node": "^26.3.0",
+    "@types/node": "^26.5.0",
     "@types/pg": "^8.23.1",
     "@types/qrcode": "^1.5.6",
     "@types/supertest": "^7.2.1",
-    "eslint": "^10.9.1",
+    "eslint": "^10.10.0",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-prettier": "^5.5.6",
-    "globals": "^17.11.0",
-    "jest": "^30.4.2",
+    "globals": "^17.12.0",
+    "jest": "^30.5.1",
     "prettier": "^3.9.6",
     "prisma": "^7.10.0",
     "source-map-support": "^0.5.21",
@@ -77,12 +79,12 @@
     "ts-node": "^10.9.2",
     "tsc-alias": "^1.9.4",
     "tsconfig-paths": "^4.2.0",
-    "typescript": "^5.9.3",
-    "typescript-eslint": "^8.68.0",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.70.0",
     "yaml": "^2.9.0"
   },
   "overrides": {
-    "multer": "^2.2.0",
+    "multer": "^2.3.0",
     "@hono/node-server": "^1.19.15",
     "deepmerge-ts": "^8.0.2",
     "valibot": "^1.4.2",
@@ -111,9 +113,6 @@
         }
       ]
     },
-    "transformIgnorePatterns": [
-      "/node_modules/(?!(@stellar|@noble|@exodus|uint8array-extras)/)"
-    ],
     "collectCoverageFrom": [
       "**/*.(t|j)s"
     ],

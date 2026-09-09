@@ -7,6 +7,7 @@ import configuration from '@/config/configuration';
 import { validateEnv } from '@/config/env.validation';
 import { ApisixGuard } from '@/common/guards/apisix.guard';
 import { PermissionsGuard } from '@/common/guards/permissions.guard';
+import { PublicKeyGuard } from '@/common/guards/public-key.guard';
 import { RateLimitGuard } from '@/common/guards/rate-limit.guard';
 import { ApisixContextMiddleware } from '@/common/middleware/apisix-context.middleware';
 import { PrismaModule } from '@/prisma/prisma.module';
@@ -14,10 +15,12 @@ import { StellarModule } from '@/stellar/stellar.module';
 import { HealthModule } from '@/health/health.module';
 import { PaymentIntentsModule } from '@/payment-intents/payment-intents.module';
 import { SwapsModule } from '@/swaps/swaps.module';
+import { AssetsModule } from '@/assets/assets.module';
 import { LiquidityPoolsModule } from '@/liquidity-pools/liquidity-pools.module';
 import { ObserverModule } from '@/observer/observer.module';
 import { WebhooksModule } from '@/webhooks/webhooks.module';
 import { AnalyticsModule } from '@/analytics/analytics.module';
+import { ActivityModule } from '@/activity/activity.module';
 import { AdminModule } from '@/admin/admin.module';
 import { ProductsModule } from '@/products/products.module';
 import { CustomersModule } from '@/customers/customers.module';
@@ -44,6 +47,8 @@ import { CommonModule } from '@/common/common.module';
     PaymentIntentsModule,
     SwapsModule,
     LiquidityPoolsModule,
+    // The asset registry: which (code, issuer) pairs we vouch for, per network.
+    AssetsModule,
     // Background reconciler: flips swaps/LP ops to SUCCEEDED/FAILED/EXPIRED by
     // checking their txHash on Horizon, even when the customer self-broadcasts.
     ObserverModule,
@@ -51,6 +56,9 @@ import { CommonModule } from '@/common/common.module';
     CommonModule,
     WebhooksModule,
     AnalyticsModule,
+    // Client-reported telemetry (wallet + dashboard): the half of what users do
+    // that never becomes a request to this service.
+    ActivityModule,
     AdminModule,
     ProductsModule,
     CustomersModule,
@@ -83,6 +91,16 @@ import { CommonModule } from '@/common/common.module';
     {
       provide: APP_GUARD,
       useClass: PermissionsGuard,
+    },
+    // Then confine the SHARED public key to the handlers that admit it
+    // (@AllowPublicKey). It runs after the scope check because it only ever
+    // narrows: holding the right scope is still necessary, and for one key held
+    // by every anonymous caller it is no longer sufficient — a scope cannot tell
+    // two holders of the same credential apart, and the read endpoints filter by
+    // exactly that credential.
+    {
+      provide: APP_GUARD,
+      useClass: PublicKeyGuard,
     },
     // Last, so a request that was never going to be served does not spend a
     // legitimate address's budget on its way to a 403. Opt-in per route with

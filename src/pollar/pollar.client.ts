@@ -117,6 +117,9 @@ export class PollarClient {
       `${this.sdkBase()}${path}`,
       this.publishableKey(network),
       opts,
+      // Only the SDK API checks it — see `sdkOrigin` in configuration.ts. The
+      // Server API is server-to-server and has no such list.
+      this.cfg.sdkOrigin,
     );
   }
 
@@ -147,6 +150,7 @@ export class PollarClient {
     url: string,
     apiKey: string,
     opts: PollarRequestOptions,
+    origin?: string,
   ): Promise<T> {
     const target = withQuery(url, opts.query);
     const hasBody = opts.body !== undefined;
@@ -164,6 +168,12 @@ export class PollarClient {
           [POLLAR_API_KEY_HEADER]: apiKey,
           accept: 'application/json',
           'user-agent': 'CosmosPay/1.0',
+          // Pollar's SDK API is built for a browser and enforces the app's
+          // Build -> Domains list on every call. A server sends no `Origin` of
+          // its own, and without one Pollar answers `403 ORIGIN_NOT_ALLOWED` —
+          // on `POST /auth/session`, i.e. the first call of every login. So the
+          // bridge presents the registered origin explicitly.
+          ...(origin ? { origin } : {}),
           // Pollar mints DPoP-bound tokens only when a JWK is supplied at login.
           // Without one the token is a plain bearer, which is what a token the
           // bridge passes through has to be.
