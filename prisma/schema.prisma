@@ -46,6 +46,9 @@ model Consumer {
   // Client-side telemetry (wallet + dashboard) reported under this consumer.
   activityEvents ActivityEvent[]
 
+  // Claimable payment handles owned by this consumer's users.
+  aliases Alias[]
+
   @@map("consumer")
 }
 
@@ -1058,7 +1061,7 @@ model ActivityEvent {
   // without this the only way to avoid duplicates would be to drop events on a
   // flaky network. Null for callers that do not generate one; Postgres does not
   // collide NULLs, so those simply never de-duplicate.
-  eventId    String?
+  eventId String?
 
   // Which client reported it: `wallet`, `dashboard`, `server` or `sdk`.
   source   String
@@ -1112,4 +1115,166 @@ model ActivityEvent {
   // Used by the retention prune (delete where createdAt < cutoff).
   @@index([createdAt])
   @@map("activity_event")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Claimable aliases
+//
+// A human handle that resolves to Stellar addresses, so a payer types
+// `emanuel250` instead of `GA5ZSE…`. Three properties decide the whole shape:
+//
+//   * A handle is claimed by PROVING CONTROL of a key, not by asking. The claim
+//     carries a signature over a server-issued challenge, so an alias can never
+//     be pointed at an address whose owner did not participate. Without that,
+//     the feature is a directory anyone can poison — and the harm is not a bad
+//     row, it is a payment sent to an attacker's account under a name the payer
+//     trusted.
+//   * A handle resolves to MANY addresses, not one. A person has a mainnet
+//     account and a testnet one, and often more than one wallet on each; a
+//     single-value alias forces them to re-claim to switch, and a re-claimable
+//     handle is a handle that can be taken.
+//   * Recovery goes through EMAIL, because keys are lost and a lost key must not
+//     mean a permanently unreachable name. That is also why recovery is the most
+//     dangerous path here and the one with the tightest bounds.
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum AliasStatus {
+  ACTIVE
+  // Held by an operator (impersonation report, dispute). Resolution refuses it
+  // rather than returning addresses, because a suspended alias whose addresses
+  // still resolve is a suspension that does nothing about the money.
+  SUSPENDED
+}
+
+/// Why a signature was requested. One challenge is good for ONE of these, and
+/// the purpose is inside the signed bytes: without it a challenge collected for
+/// "add an address" could be replayed to complete a recovery.
+enum AliasChallengePurpose {
+  CLAIM
+  ADD_ADDRESS
+  RECOVER
+}
+
+model Alias {
+  id         String   @id @default(cuid())
+  consumerId String
+  consumer   Consumer @relation(fields: [consumerId], references: [id], onDelete: Cascade)
+
+  /// The normalized handle: lowercase, the form uniqueness is decided on. See
+  /// `alias-name.ts` — normalization is what stops `Emanuel250` and `emanuel250`
+  /// being two claimable names that look identical in a payment confirmation.
+  name String @unique
+
+  /// As the claimant typed it, for display only. Never matched on.
+  displayName String
+
+  /// Recovery address. Normalized (lowercased, trimmed) so the same mailbox
+  /// cannot be registered twice in two shapes.
+  email           String
+  emailVerifiedAt DateTime?
+
+  status AliasStatus @default(ACTIVE)
+
+  addresses  AliasAddress[]
+  challenges AliasChallenge[]
+  recoveries AliasRecovery[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([consumerId])
+  @@index([email])
+  @@map("alias")
+}
+
+/// One Stellar account an alias resolves to, per network.
+model AliasAddress {
+  id      String @id @default(cuid())
+  aliasId String
+  alias   Alias  @relation(fields: [aliasId], references: [id], onDelete: Cascade)
+
+  /// Stellar public key (G…).
+  address String
+  /// Network id as the wallet names it: `public` | `testnet` | a custom id.
+  network String
+  /// Optional human label ("phone", "cold wallet").
+  label   String?
+
+  /// The one a payer gets when they resolve the alias on this network without
+  /// asking for a specific address. Exactly one per (alias, network) — enforced
+  /// in the service, since a partial unique index cannot be expressed here.
+  isPrimary Boolean @default(false)
+
+  /// The address proved control of itself at this moment. Never null: an address
+  /// that did not sign never gets a row, which is what makes the whole table
+  /// evidence rather than a claim.
+  verifiedAt DateTime @default(now())
+
+  createdAt DateTime @default(now())
+
+  @@unique([aliasId, network, address])
+  // A payer resolves by name; a wallet asks "which aliases point at me?".
+  @@index([address])
+  @@index([aliasId, network])
+  @@map("alias_address")
+}
+
+/// A one-time nonce the claimant must sign. Consumed on use.
+model AliasChallenge {
+  id      String  @id @default(cuid())
+  aliasId String?
+  alias   Alias?  @relation(fields: [aliasId], references: [id], onDelete: Cascade)
+
+  purpose AliasChallengePurpose
+
+  /// The handle this challenge is good for, normalized. Bound so a challenge
+  /// issued for a cheap unclaimed name cannot be spent on a contested one.
+  name String
+
+  /// The address expected to sign. Bound for the same reason.
+  address String
+  network String
+
+  /// Random, and the value that goes into the signed bytes.
+  nonce String @unique
+
+  expiresAt  DateTime
+  /// Set when spent. A row is never deleted on use — a spent challenge that is
+  /// simply gone is indistinguishable from one that never existed, and the two
+  /// need different answers.
+  consumedAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([name, purpose])
+  @@index([expiresAt])
+  @@map("alias_challenge")
+}
+
+/// An email recovery in flight. The token is stored HASHED: this table is the
+/// one place a database read would otherwise be enough to steal every alias.
+model AliasRecovery {
+  id      String @id @default(cuid())
+  aliasId String
+  alias   Alias  @relation(fields: [aliasId], references: [id], onDelete: Cascade)
+
+  /// SHA-256 of the token that was emailed. The plaintext is returned to the
+  /// caller ONCE, at creation, and never stored.
+  tokenHash String @unique
+
+  /// Which mailbox it went to, captured at issue time. If the alias's email is
+  /// changed later, a token already in flight must not become a token to the new
+  /// address.
+  email String
+
+  expiresAt  DateTime
+  consumedAt DateTime?
+  /// Wrong-token attempts against this recovery. The ladder is in the service.
+  attempts   Int       @default(0)
+
+  createdAt DateTime @default(now())
+
+  @@index([aliasId])
+  @@index([expiresAt])
+  @@map("alias_recovery")
 }

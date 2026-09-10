@@ -5982,6 +5982,917 @@ paths:
       summary: Delete a customer
       tags:
         - customers
+  /v1/aliases/resolve/{name}:
+    get:
+      operationId: AliasesController_resolve_v1
+      parameters:
+        - name: name
+          required: true
+          in: path
+          schema:
+            type: string
+        - name: network
+          required: false
+          in: query
+          description: Limit to one network (public | testnet | a custom id).
+          schema:
+            type: string
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AliasResolutionEntity"
+        "400":
+          description: Validation failed, or the request is not valid in the current state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "401":
+          description: No authenticated consumer, or admin credentials are required.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "403":
+          description: The API key lacks the required scope, or the request did not arrive
+            through the gateway.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "404":
+          description: The resource does not exist, or does not belong to this consumer.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "409":
+          description: Conflicts with existing state — an idempotency clash, an operation
+            already in flight, or an invalid state transition.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "500":
+          description: Unexpected server error. The detail is logged server-side and never
+            returned.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "502":
+          description: An upstream provider returned an error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "503":
+          description: An upstream provider is unavailable, or the service is misconfigured.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+      summary: Resolve an alias to its addresses
+      tags:
+        - aliases
+  /v1/aliases/availability/{name}:
+    get:
+      operationId: AliasesController_availability_v1
+      parameters:
+        - name: name
+          required: true
+          in: path
+          schema:
+            type: string
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AliasAvailabilityEntity"
+        "400":
+          description: Validation failed, or the request is not valid in the current state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "401":
+          description: No authenticated consumer, or admin credentials are required.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "403":
+          description: The API key lacks the required scope, or the request did not arrive
+            through the gateway.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "404":
+          description: The resource does not exist, or does not belong to this consumer.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "409":
+          description: Conflicts with existing state — an idempotency clash, an operation
+            already in flight, or an invalid state transition.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "500":
+          description: Unexpected server error. The detail is logged server-side and never
+            returned.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "502":
+          description: An upstream provider returned an error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "503":
+          description: An upstream provider is unavailable, or the service is misconfigured.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+      summary: Is this handle claimable, and if not why not
+      tags:
+        - aliases
+  /v1/aliases/by-address/{address}:
+    get:
+      operationId: AliasesController_byAddress_v1
+      parameters:
+        - name: address
+          required: true
+          in: path
+          schema:
+            type: string
+        - name: network
+          required: false
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: ""
+        "400":
+          description: Validation failed, or the request is not valid in the current state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "401":
+          description: No authenticated consumer, or admin credentials are required.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "403":
+          description: The API key lacks the required scope, or the request did not arrive
+            through the gateway.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "404":
+          description: The resource does not exist, or does not belong to this consumer.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "409":
+          description: Conflicts with existing state — an idempotency clash, an operation
+            already in flight, or an invalid state transition.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "500":
+          description: Unexpected server error. The detail is logged server-side and never
+            returned.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "502":
+          description: An upstream provider returned an error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "503":
+          description: An upstream provider is unavailable, or the service is misconfigured.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+      summary: Which aliases point at this address
+      tags:
+        - aliases
+  /v1/aliases/challenges:
+    post:
+      description: Returns the EXACT message to digest and sign. Single-use and
+        short-lived; the purpose is inside the signed bytes, so a signature
+        collected to add an address cannot be replayed to complete a recovery.
+      operationId: AliasesController_challenge_v1
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAliasChallengeDto"
+      responses:
+        "201":
+          description: ""
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AliasChallengeEntity"
+        "400":
+          description: Validation failed, or the request is not valid in the current state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "401":
+          description: No authenticated consumer, or admin credentials are required.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "403":
+          description: The API key lacks the required scope, or the request did not arrive
+            through the gateway.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "404":
+          description: The resource does not exist, or does not belong to this consumer.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "409":
+          description: Conflicts with existing state — an idempotency clash, an operation
+            already in flight, or an invalid state transition.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "500":
+          description: Unexpected server error. The detail is logged server-side and never
+            returned.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "502":
+          description: An upstream provider returned an error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "503":
+          description: An upstream provider is unavailable, or the service is misconfigured.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+      summary: Get a nonce to sign
+      tags:
+        - aliases
+  /v1/aliases:
+    post:
+      operationId: AliasesController_claim_v1
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ClaimAliasDto"
+      responses:
+        "201":
+          description: ""
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OwnedAliasEntity"
+        "400":
+          description: Validation failed, or the request is not valid in the current state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "401":
+          description: No authenticated consumer, or admin credentials are required.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "403":
+          description: The API key lacks the required scope, or the request did not arrive
+            through the gateway.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "404":
+          description: The resource does not exist, or does not belong to this consumer.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "409":
+          description: Conflicts with existing state — an idempotency clash, an operation
+            already in flight, or an invalid state transition.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "500":
+          description: Unexpected server error. The detail is logged server-side and never
+            returned.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "502":
+          description: An upstream provider returned an error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "503":
+          description: An upstream provider is unavailable, or the service is misconfigured.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+      summary: Claim an alias with a signature
+      tags:
+        - aliases
+    get:
+      operationId: AliasesController_list_v1
+      parameters:
+        - name: take
+          required: false
+          in: query
+          schema:
+            default: 50
+            type: number
+        - name: skip
+          required: false
+          in: query
+          schema:
+            default: 0
+            type: number
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AliasListEntity"
+        "400":
+          description: Validation failed, or the request is not valid in the current state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "401":
+          description: No authenticated consumer, or admin credentials are required.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "403":
+          description: The API key lacks the required scope, or the request did not arrive
+            through the gateway.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "404":
+          description: The resource does not exist, or does not belong to this consumer.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "409":
+          description: Conflicts with existing state — an idempotency clash, an operation
+            already in flight, or an invalid state transition.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "500":
+          description: Unexpected server error. The detail is logged server-side and never
+            returned.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "502":
+          description: An upstream provider returned an error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "503":
+          description: An upstream provider is unavailable, or the service is misconfigured.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+      summary: List the caller's aliases
+      tags:
+        - aliases
+  /v1/aliases/{name}/addresses:
+    post:
+      description: "Needs two proofs: the caller owns the alias, and the NEW address
+        signs for itself. One alias may hold many addresses across many
+        networks."
+      operationId: AliasesController_addAddress_v1
+      parameters:
+        - name: name
+          required: true
+          in: path
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AddAliasAddressDto"
+      responses:
+        "201":
+          description: ""
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AliasAddressEntity"
+        "400":
+          description: Validation failed, or the request is not valid in the current state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "401":
+          description: No authenticated consumer, or admin credentials are required.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "403":
+          description: The API key lacks the required scope, or the request did not arrive
+            through the gateway.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "404":
+          description: The resource does not exist, or does not belong to this consumer.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "409":
+          description: Conflicts with existing state — an idempotency clash, an operation
+            already in flight, or an invalid state transition.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "500":
+          description: Unexpected server error. The detail is logged server-side and never
+            returned.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "502":
+          description: An upstream provider returned an error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "503":
+          description: An upstream provider is unavailable, or the service is misconfigured.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+      summary: Point the alias at another address
+      tags:
+        - aliases
+  /v1/aliases/{name}/addresses/{addressId}:
+    delete:
+      operationId: AliasesController_removeAddress_v1
+      parameters:
+        - name: name
+          required: true
+          in: path
+          schema:
+            type: string
+        - name: addressId
+          required: true
+          in: path
+          schema:
+            type: string
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AliasDeletedEntity"
+        "400":
+          description: Validation failed, or the request is not valid in the current state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "401":
+          description: No authenticated consumer, or admin credentials are required.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "403":
+          description: The API key lacks the required scope, or the request did not arrive
+            through the gateway.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "404":
+          description: The resource does not exist, or does not belong to this consumer.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "409":
+          description: Conflicts with existing state — an idempotency clash, an operation
+            already in flight, or an invalid state transition.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "500":
+          description: Unexpected server error. The detail is logged server-side and never
+            returned.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "502":
+          description: An upstream provider returned an error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "503":
+          description: An upstream provider is unavailable, or the service is misconfigured.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+      summary: Remove one address from the alias
+      tags:
+        - aliases
+  /v1/aliases/{name}:
+    delete:
+      operationId: AliasesController_release_v1
+      parameters:
+        - name: name
+          required: true
+          in: path
+          schema:
+            type: string
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AliasDeletedEntity"
+        "400":
+          description: Validation failed, or the request is not valid in the current state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "401":
+          description: No authenticated consumer, or admin credentials are required.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "403":
+          description: The API key lacks the required scope, or the request did not arrive
+            through the gateway.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "404":
+          description: The resource does not exist, or does not belong to this consumer.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "409":
+          description: Conflicts with existing state — an idempotency clash, an operation
+            already in flight, or an invalid state transition.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "500":
+          description: Unexpected server error. The detail is logged server-side and never
+            returned.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "502":
+          description: An upstream provider returned an error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "503":
+          description: An upstream provider is unavailable, or the service is misconfigured.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+      summary: Release the alias back to the namespace
+      tags:
+        - aliases
+  /v1/aliases/{name}/recovery:
+    post:
+      description: "The response is IDENTICAL whether or not the alias and mailbox
+        matched. A handle is public and the mailbox behind it is not, so a
+        differing answer would confirm who owns it to anyone who asked. This
+        service sends no mail: it returns the token for the caller to deliver,
+        exactly as the KYC terms-of-service flow does."
+      operationId: AliasesController_startRecovery_v1
+      parameters:
+        - name: name
+          required: true
+          in: path
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StartAliasRecoveryDto"
+      responses:
+        "201":
+          description: ""
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AliasRecoveryStartedEntity"
+        "400":
+          description: Validation failed, or the request is not valid in the current state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "401":
+          description: No authenticated consumer, or admin credentials are required.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "403":
+          description: The API key lacks the required scope, or the request did not arrive
+            through the gateway.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "404":
+          description: The resource does not exist, or does not belong to this consumer.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "409":
+          description: Conflicts with existing state — an idempotency clash, an operation
+            already in flight, or an invalid state transition.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "500":
+          description: Unexpected server error. The detail is logged server-side and never
+            returned.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "502":
+          description: An upstream provider returned an error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "503":
+          description: An upstream provider is unavailable, or the service is misconfigured.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+      summary: Start email recovery
+      tags:
+        - aliases
+  /v1/aliases/{name}/recovery/complete:
+    post:
+      description: Needs the emailed token AND a signature from the new key. Every
+        previous address is dropped — recovery exists because the old keys are
+        gone, and leaving them resolvable would keep whoever holds them
+        receiving payments.
+      operationId: AliasesController_completeRecovery_v1
+      parameters:
+        - name: name
+          required: true
+          in: path
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CompleteAliasRecoveryDto"
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OwnedAliasEntity"
+        "400":
+          description: Validation failed, or the request is not valid in the current state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "401":
+          description: No authenticated consumer, or admin credentials are required.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "403":
+          description: The API key lacks the required scope, or the request did not arrive
+            through the gateway.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "404":
+          description: The resource does not exist, or does not belong to this consumer.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "409":
+          description: Conflicts with existing state — an idempotency clash, an operation
+            already in flight, or an invalid state transition.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "500":
+          description: Unexpected server error. The detail is logged server-side and never
+            returned.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "502":
+          description: An upstream provider returned an error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "503":
+          description: An upstream provider is unavailable, or the service is misconfigured.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+      summary: "Finish recovery: take ownership with a new address"
+      tags:
+        - aliases
   /v1/onramp/quotes:
     post:
       operationId: OnrampController_createQuote_v1
@@ -11783,6 +12694,295 @@ components:
       required:
         - id
         - deleted
+    AliasAddressEntity:
+      type: object
+      properties:
+        id:
+          type: string
+        address:
+          type: string
+        network:
+          type: string
+          example: public
+        label:
+          type: object
+          nullable: true
+        isPrimary:
+          type: boolean
+          description: The default for this network.
+        verifiedAt:
+          format: date-time
+          type: string
+          description: When this address proved control of itself.
+      required:
+        - id
+        - address
+        - network
+        - isPrimary
+        - verifiedAt
+    AliasResolutionEntity:
+      type: object
+      properties:
+        name:
+          type: string
+        displayName:
+          type: string
+        addresses:
+          description: Every verified address on the requested network, primary first.
+          type: array
+          items:
+            $ref: "#/components/schemas/AliasAddressEntity"
+        primaryAddress:
+          type: object
+          nullable: true
+          description: The address to pay when the payer did not choose one.
+      required:
+        - name
+        - displayName
+        - addresses
+    AliasAvailabilityEntity:
+      type: object
+      properties:
+        name:
+          type: string
+        available:
+          type: boolean
+        reason:
+          type: object
+          nullable: true
+          description: "Why not, when unavailable: taken, reserved, bad_characters, …"
+      required:
+        - name
+        - available
+    CreateAliasChallengeDto:
+      type: object
+      properties:
+        name:
+          type: string
+          example: emanuel250
+          description: The handle being claimed.
+        address:
+          type: string
+          example: GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN
+        network:
+          type: string
+          example: public
+          description: "Network id: public | testnet | a custom id."
+        purpose:
+          type: string
+          enum:
+            - CLAIM
+            - ADD_ADDRESS
+            - RECOVER
+          default: CLAIM
+      required:
+        - name
+        - address
+        - network
+    AliasChallengeEntity:
+      type: object
+      properties:
+        nonce:
+          type: string
+          description: Send this back with the signature.
+        message:
+          type: string
+          description: The EXACT string to digest and sign. Returned rather than described
+            so a client never rebuilds it from prose — a client that assembles
+            the fields itself is one field-order change away from producing
+            signatures nothing accepts.
+        domain:
+          type: string
+          description: Domain tag the digest is framed with.
+        purpose:
+          type: string
+          enum:
+            - CLAIM
+            - ADD_ADDRESS
+            - RECOVER
+        expiresAt:
+          format: date-time
+          type: string
+      required:
+        - nonce
+        - message
+        - domain
+        - purpose
+        - expiresAt
+    ClaimAliasDto:
+      type: object
+      properties:
+        name:
+          type: string
+          example: emanuel250
+        email:
+          type: string
+          description: "Recovery mailbox. Required at claim time, not later: an alias
+            whose owner loses their key before adding one is unrecoverable, and
+            that is the state this field exists to prevent."
+          example: someone@example.com
+        nonce:
+          type: string
+          description: The nonce from POST /v1/aliases/challenges.
+        signature:
+          type: string
+          description: base64 ed25519 over the challenge digest.
+        label:
+          type: string
+          description: Human label for this first address.
+          example: phone
+      required:
+        - name
+        - email
+        - nonce
+        - signature
+    OwnedAliasEntity:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+          description: Normalized handle — the form uniqueness is decided on.
+        displayName:
+          type: string
+          description: As the claimant typed it. Display only.
+        status:
+          type: string
+          enum:
+            - ACTIVE
+            - SUSPENDED
+        addresses:
+          type: array
+          items:
+            $ref: "#/components/schemas/AliasAddressEntity"
+        createdAt:
+          format: date-time
+          type: string
+        email:
+          type: string
+          example: someone@example.com
+        emailVerifiedAt:
+          type: object
+          nullable: true
+      required:
+        - id
+        - name
+        - displayName
+        - status
+        - addresses
+        - createdAt
+        - email
+    AliasListEntity:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/OwnedAliasEntity"
+        total:
+          type: number
+        take:
+          type: number
+        skip:
+          type: number
+      required:
+        - data
+        - total
+        - take
+        - skip
+    AddAliasAddressDto:
+      type: object
+      properties:
+        address:
+          type: string
+        network:
+          type: string
+          example: testnet
+        nonce:
+          type: string
+          description: The nonce from an ADD_ADDRESS challenge.
+        signature:
+          type: string
+          description: base64 ed25519 over the challenge digest.
+        label:
+          type: string
+          example: cold wallet
+        primary:
+          type: boolean
+          description: Make this the address a payer gets when they do not ask for a
+            specific one on this network. Exactly one address per network is
+            primary.
+          default: false
+      required:
+        - address
+        - network
+        - nonce
+        - signature
+    AliasDeletedEntity:
+      type: object
+      properties:
+        id:
+          type: string
+        deleted:
+          type: boolean
+      required:
+        - id
+        - deleted
+    StartAliasRecoveryDto:
+      type: object
+      properties:
+        email:
+          type: string
+          description: "The mailbox on record. Checked but never echoed: the response is
+            identical whether or not it matched, so this endpoint cannot be used
+            to ask which address owns a handle."
+          example: someone@example.com
+      required:
+        - email
+    AliasRecoveryStartedEntity:
+      type: object
+      properties:
+        accepted:
+          type: boolean
+          description: Always true — see the note on enumeration in the service.
+        token:
+          type: object
+          nullable: true
+          description: The token to email. Null when there was nothing to recover.
+        email:
+          type: object
+          nullable: true
+          description: The mailbox to deliver to.
+        expiresAt:
+          type: object
+          nullable: true
+      required:
+        - accepted
+    CompleteAliasRecoveryDto:
+      type: object
+      properties:
+        token:
+          type: string
+          description: The token delivered by email.
+        address:
+          type: string
+          description: The address that will own the alias from now on.
+        network:
+          type: string
+          example: public
+        nonce:
+          type: string
+          description: The nonce from a RECOVER challenge.
+        signature:
+          type: string
+          description: base64 ed25519 over the challenge digest.
+      required:
+        - token
+        - address
+        - network
+        - nonce
+        - signature
     PayerRulesDto:
       type: object
       properties:
@@ -12774,6 +13974,12 @@ components:
             - account_disabled
             - payload_expired
             - rate_limited
+            - alias_taken
+            - alias_name_invalid
+            - alias_challenge_invalid
+            - alias_signature_invalid
+            - alias_recovery_invalid
+            - alias_address_conflict
             - misconfigured
             - internal_error
           example: idempotency_conflict
