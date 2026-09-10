@@ -2,6 +2,15 @@
 
 All notable changes to the Cosmos Pay Community Server are documented here.
 Generated from [Conventional Commits](https://www.conventionalcommits.org) by [git-cliff](https://git-cliff.org).
+## [1.1.0] - 2026-09-10
+
+### Features
+- Implement aliases service with challenge and recovery mechanisms (f80ba5b)
+
+### Bug Fixes
+- Update js-yaml to version 4.3.2 for improved stability (1c0631b)
+- Resolve smol-toml to 1.8.0 to clear a DoS advisory (feb6334)
+
 ## [1.0.0] - 2026-09-09
 
 ### Features
