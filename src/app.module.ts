@@ -24,6 +24,7 @@ import { ActivityModule } from '@/activity/activity.module';
 import { AdminModule } from '@/admin/admin.module';
 import { ProductsModule } from '@/products/products.module';
 import { CustomersModule } from '@/customers/customers.module';
+import { AliasesModule } from '@/aliases/aliases.module';
 import { BlindpayModule } from '@/blindpay/blindpay.module';
 import { KycModule } from '@/kyc/kyc.module';
 import { OnrampModule } from '@/onramp/onramp.module';
@@ -62,6 +63,7 @@ import { CommonModule } from '@/common/common.module';
     AdminModule,
     ProductsModule,
     CustomersModule,
+    AliasesModule,
     // BlindPay rails: onramp / offramp / KYC. BlindpayModule is global and hosts
     // the shared client + inbound webhook endpoint; the feature modules below use
     // it. OnrampModule imports KycModule (receiver resolution).

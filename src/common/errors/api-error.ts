@@ -80,6 +80,20 @@ export enum ApiErrorCode {
    */
   RateLimited = 'rate_limited',
 
+  // --- aliases ---------------------------------------------------------------
+  /** The handle is already claimed. First claim wins; there is no queue. */
+  AliasTaken = 'alias_taken',
+  /** Reserved, malformed, or too short/long — see `alias-name.ts` for the rule. */
+  AliasNameInvalid = 'alias_name_invalid',
+  /** No challenge, expired, already spent, or issued for a different name/address. */
+  AliasChallengeInvalid = 'alias_challenge_invalid',
+  /** The signature did not verify against the address that is claiming. */
+  AliasSignatureInvalid = 'alias_signature_invalid',
+  /** The recovery token is unknown, expired or spent. */
+  AliasRecoveryInvalid = 'alias_recovery_invalid',
+  /** This address is already on the alias, or the alias is at its address cap. */
+  AliasAddressConflict = 'alias_address_conflict',
+
   // --- service --------------------------------------------------------------
   Misconfigured = 'misconfigured',
   Internal = 'internal_error',
