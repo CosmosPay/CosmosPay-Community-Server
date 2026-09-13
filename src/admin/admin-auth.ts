@@ -1,124 +1,97 @@
-import { timingSafeEqual } from 'node:crypto';
-import { Logger } from '@nestjs/common';
+import {
+  ADMIN_ACTOR_ROLES,
+  ADMIN_INTERNAL_FALSY,
+  DEFAULT_ADMIN_ACTOR_ID,
+  DEFAULT_ADMIN_ACTOR_ROLE,
+} from '@/admin/admin.constants';
 
 /**
- * Executable spec for platform-admin auth (issue #34).
+ * Executable spec for platform-admin auth.
  *
- * Replaces the legacy plaintext `X-Cosmos-Admin: 1` marker with a real
- * shared-secret credential and an explicit read/write role. Deny-by-default:
- * no configured credentials ⇒ no admin access.
+ * There is no admin credential in this service any more. `ADMIN_API_CREDENTIALS`
+ * was a second secret that had to be deployed, matched and rotated alongside the
+ * gateway secret, and every deployment that skipped it got the same broken
+ * split: an owner could change another account's plan and role in the console —
+ * which never asked for it — yet every cross-tenant READ answered 401 "Valid
+ * admin credentials required" while their platform rights were perfectly fine.
+ * Nothing in that error pointed at a missing deployment secret.
+ *
+ * So the question this module answers changed. It is no longer "does the caller
+ * hold the admin secret?" but "did this call come from the platform console?" —
+ * the console being the one place that already knows who is an owner/admin, and
+ * already gates the plan/role screens on it. Two facts establish that, and both
+ * are checked before a handler runs:
+ *
+ *   1. `ApisixGuard` (global) verified `X-Gateway-Secret`. Only the gateway and
+ *      the console backend hold it.
+ *   2. The internal marker below is present. APISIX strips it from every request
+ *      it proxies, so an API-key caller cannot carry it — only a direct call from
+ *      a backend holding the gateway secret can.
+ *
+ * The trade is deliberate and worth naming: fact 2 rests on gateway routing
+ * config that lives in the dev-platform repo rather than on a secret this
+ * service holds. What it buys is a single source of truth for "who is a platform
+ * admin" instead of two that silently disagree. The audit trail is what makes it
+ * answerable after the fact — every read and every mutation records the console
+ * account that made it (see `AdminAuditService`).
  */
-export const ADMIN_ROLES = ['read', 'write'] as const;
-export type AdminRole = (typeof ADMIN_ROLES)[number];
-
-export interface AdminCredential {
-  /** Stable actor id recorded on audit rows. */
-  id: string;
-  /** Shared secret presented as `Authorization: Bearer <secret>`. */
-  secret: string;
-  role: AdminRole;
-}
-
 export interface AdminPrincipal {
+  /** Stable actor id recorded on audit rows — the console account's consumer username. */
   id: string;
-  role: AdminRole;
+  /** The console account's platform role, for the audit row only. Grants nothing. */
+  role: string;
 }
 
-const log = new Logger('AdminAuth');
-
-/** Role lattice: write implies read. */
-export function roleSatisfies(have: AdminRole, need: AdminRole): boolean {
-  if (need === 'read') return have === 'read' || have === 'write';
-  return have === 'write';
-}
-
-/**
- * Parse `ADMIN_API_CREDENTIALS` JSON.
- * Expected shape: [{"id":"viewer","secret":"…","role":"read"}, …]
- * Invalid / empty input ⇒ [] (fail closed). Warns (without leaking secrets)
- * when the env var is present but yields zero/partial credentials.
- */
-export function parseAdminCredentials(
-  raw: string | undefined,
-): AdminCredential[] {
-  if (!raw || !raw.trim()) return [];
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    log.warn(
-      'ADMIN_API_CREDENTIALS is not valid JSON; admin access disabled (fail closed)',
-    );
-    return [];
-  }
-  if (!Array.isArray(parsed)) {
-    log.warn(
-      'ADMIN_API_CREDENTIALS must be a JSON array; admin access disabled (fail closed)',
-    );
-    return [];
-  }
-  const out: AdminCredential[] = [];
-  for (const item of parsed) {
-    if (!item || typeof item !== 'object') continue;
-    const rec = item as Record<string, unknown>;
-    const id = typeof rec.id === 'string' ? rec.id.trim() : '';
-    const secret = typeof rec.secret === 'string' ? rec.secret : '';
-    const role = rec.role;
-    if (!id || !secret) continue;
-    if (role !== 'read' && role !== 'write') continue;
-    // Reject trivially short secrets so "1" can never be a valid credential.
-    if (secret.length < 16) continue;
-    out.push({ id, secret, role });
-  }
-  if (out.length < parsed.length) {
-    log.warn(
-      `ADMIN_API_CREDENTIALS: ${parsed.length - out.length} credential(s) rejected (bad role, missing fields, or secret < 16 chars)`,
-    );
-  }
-  if (parsed.length > 0 && out.length === 0) {
-    log.warn(
-      'ADMIN_API_CREDENTIALS yielded no usable credentials; admin access disabled (fail closed)',
-    );
-  }
-  return out;
+/** The request facts the admin gate reads. Pure — no Nest, no request object. */
+export interface AdminCallContext {
+  /** Raw `X-Cosmos-Internal` header value. */
+  internal?: string | string[];
+  /** Raw `X-Cosmos-Admin-Role` header value. */
+  actorRole?: string | string[];
+  /** `X-Consumer-Username` as normalized by ApisixContextMiddleware. */
+  consumer?: string;
 }
 
 /**
- * Constant-time credential lookup. Returns the matching principal or null.
- * Pure — no Nest / no request object.
+ * Resolve the admin principal for a call, or null when it is not an internal
+ * platform-console call. Callers MUST have verified the gateway secret first —
+ * this function assumes it and does not re-check it.
  */
-export function verifyAdminBearer(
-  authorizationHeader: string | undefined,
-  credentials: readonly AdminCredential[],
+export function resolveAdminPrincipal(
+  ctx: AdminCallContext,
 ): AdminPrincipal | null {
-  const token = extractBearer(authorizationHeader);
-  if (!token || credentials.length === 0) return null;
-
-  let matched: AdminPrincipal | null = null;
-  for (const cred of credentials) {
-    if (timingSafeEqualString(token, cred.secret)) {
-      matched ??= { id: cred.id, role: cred.role };
-    }
-  }
-  return matched;
+  if (!isInternalCall(ctx.internal)) return null;
+  return {
+    id: firstHeader(ctx.consumer) ?? DEFAULT_ADMIN_ACTOR_ID,
+    role: normalizeActorRole(ctx.actorRole),
+  };
 }
 
-export function extractBearer(
-  authorizationHeader: string | undefined,
-): string | null {
-  if (!authorizationHeader) return null;
-  const m = /^Bearer\s+(.+)$/i.exec(authorizationHeader.trim());
-  return m?.[1]?.trim() ? m[1].trim() : null;
+/**
+ * Whether the internal marker is set. Any value counts except the explicit
+ * negatives, so `1` (what the console sends) and `true` both work while a
+ * forwarded `0` does not quietly grant everything.
+ */
+export function isInternalCall(raw?: string | string[]): boolean {
+  const value = firstHeader(raw)?.toLowerCase();
+  if (!value) return false;
+  return !ADMIN_INTERNAL_FALSY.includes(
+    value as (typeof ADMIN_INTERNAL_FALSY)[number],
+  );
 }
 
-function timingSafeEqualString(a: string, b: string): boolean {
-  const ab = Buffer.from(a);
-  const bb = Buffer.from(b);
-  if (ab.length !== bb.length) {
-    const padded = Buffer.alloc(ab.length);
-    bb.copy(padded);
-    timingSafeEqual(ab, padded);
-    return false;
-  }
-  return timingSafeEqual(ab, bb);
+/** Console role → audit label. Unknown/absent collapses to the default label. */
+function normalizeActorRole(raw?: string | string[]): string {
+  const value = firstHeader(raw)?.toLowerCase();
+  return value &&
+    ADMIN_ACTOR_ROLES.includes(value as (typeof ADMIN_ACTOR_ROLES)[number])
+    ? value
+    : DEFAULT_ADMIN_ACTOR_ROLE;
+}
+
+/** Header values arrive as `string | string[]`; collapse to a trimmed string. */
+function firstHeader(raw?: string | string[]): string | undefined {
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
 }

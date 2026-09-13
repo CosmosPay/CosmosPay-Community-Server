@@ -16,7 +16,6 @@ import { AdminAuditService } from '@/admin/admin-audit.service';
 import { AdminReadAuditInterceptor } from '@/admin/admin-read-audit.interceptor';
 import { AdminService } from '@/admin/admin.service';
 import { CurrentAdmin } from '@/common/decorators/current-admin.decorator';
-import { RequireAdminRole } from '@/common/decorators/require-admin-role.decorator';
 import { AdminGuard } from '@/common/guards/admin.guard';
 import { ApproveReceiverDto } from '@/kyc/receivers/dto/approve-receiver.dto';
 import { EnableReceiverDto } from '@/kyc/receivers/dto/enable-receiver.dto';
@@ -26,9 +25,10 @@ import { resolveTosCooldownMs } from '@/kyc/receivers/receivers.service';
 
 /**
  * Platform-admin (owner) endpoints: a global, cross-consumer view of everything in the
- * service. Gated by {@link AdminGuard} — real Bearer credentials from
- * `ADMIN_API_CREDENTIALS` with explicit read/write roles (issue #34). Not part of the
- * public API surface, so excluded from the OpenAPI spec.
+ * service. Gated by {@link AdminGuard} — a call from the platform console, which has
+ * already established that the signed-in account is an owner/admin. Every route here is
+ * audited, reads included. Not part of the public API surface, so excluded from the
+ * OpenAPI spec.
  */
 @ApiExcludeController()
 @UseInterceptors(AdminReadAuditInterceptor)
@@ -159,7 +159,6 @@ export class AdminController {
   }
 
   @Patch('receivers/:id/access')
-  @RequireAdminRole('write')
   setReceiverAccess(
     @CurrentAdmin() actor: AdminPrincipal,
     @Param('id') id: string,
@@ -169,7 +168,6 @@ export class AdminController {
   }
 
   @Post('receivers/:id/approve')
-  @RequireAdminRole('write')
   approveReceiver(
     @CurrentAdmin() actor: AdminPrincipal,
     @Param('id') id: string,
@@ -179,7 +177,6 @@ export class AdminController {
   }
 
   @Post('receivers/:id/enable')
-  @RequireAdminRole('write')
   enableReceiver(
     @CurrentAdmin() actor: AdminPrincipal,
     @Param('id') id: string,
@@ -189,7 +186,6 @@ export class AdminController {
   }
 
   @Post('receivers/:id/tos')
-  @RequireAdminRole('write')
   requestReceiverTos(
     @CurrentAdmin() actor: AdminPrincipal,
     @Param('id') id: string,

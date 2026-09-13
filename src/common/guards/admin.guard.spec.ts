@@ -1,12 +1,12 @@
 import { ExecutionContext, HttpStatus } from '@nestjs/common';
-import { Reflector } from '@nestjs/core';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { AdminGuard } from '@/common/guards/admin.guard';
-import { ADMIN_ROLE_KEY } from '@/common/decorators/require-admin-role.decorator';
 
 /**
- * Red suite for issue #34: AdminGuard must verify a real Bearer credential
- * and enforce read vs write. The legacy `X-Cosmos-Admin: 1` marker must NOT grant access.
+ * AdminGuard admits the platform console and nothing else. There is no admin
+ * secret to present any more: `ApisixGuard` has already verified the gateway
+ * secret, and the internal marker — which APISIX strips from everything it
+ * proxies — is what separates a console call from an API-key call.
  */
 /** Asserts the guard denied with a specific status *and* error code. */
 function expectDenied(
@@ -25,29 +25,19 @@ function expectDenied(
   expect((thrown as ApiError).code).toBe(code);
 }
 
-describe('AdminGuard (issue #34)', () => {
-  const readSecret = 'read-secret-000000';
-  const writeSecret = 'write-secret-00000';
-
-  const config = {
-    get: () => ({
-      credentials: [
-        { id: 'viewer', secret: readSecret, role: 'read' },
-        { id: 'owner', secret: writeSecret, role: 'write' },
-      ],
-    }),
-  } as any;
-
+describe('AdminGuard', () => {
   function ctx(
     headers: Record<string, string>,
-    requiredRole?: 'read' | 'write',
+    consumerUsername = 'cosmos_u1',
   ) {
-    const request: any = { headers, adminPrincipal: undefined };
-    const reflector = {
-      getAllAndOverride: (key: string) =>
-        key === ADMIN_ROLE_KEY ? requiredRole : undefined,
-    } as unknown as Reflector;
-    const guard = new AdminGuard(config, reflector);
+    const request: any = {
+      headers,
+      gatewayConsumer: consumerUsername
+        ? { username: consumerUsername, permissions: [] }
+        : undefined,
+      adminPrincipal: undefined,
+    };
+    const guard = new AdminGuard();
     const context = {
       switchToHttp: () => ({ getRequest: () => request }),
       getHandler: () => ({}),
@@ -56,62 +46,72 @@ describe('AdminGuard (issue #34)', () => {
     return { guard, request, context };
   }
 
-  it('rejects the legacy plaintext X-Cosmos-Admin: 1 marker with 401', () => {
-    const { guard, context } = ctx({ 'x-cosmos-admin': '1' });
-    expectDenied(
-      () => guard.canActivate(context),
-      HttpStatus.UNAUTHORIZED,
-      ApiErrorCode.AdminCredentialsRequired,
-    );
-  });
-
-  it('returns 401 when Authorization Bearer is missing', () => {
+  it('returns 403 for an API-key call (no internal marker)', () => {
     const { guard, context } = ctx({});
     expectDenied(
       () => guard.canActivate(context),
-      HttpStatus.UNAUTHORIZED,
-      ApiErrorCode.AdminCredentialsRequired,
+      HttpStatus.FORBIDDEN,
+      ApiErrorCode.AdminConsoleOnly,
     );
   });
 
-  it('returns 401 when the Bearer secret is wrong', () => {
-    const { guard, context } = ctx({
-      authorization: 'Bearer totally-wrong-secret!!',
-    });
-    expectDenied(
-      () => guard.canActivate(context),
-      HttpStatus.UNAUTHORIZED,
-      ApiErrorCode.AdminCredentialsRequired,
-    );
-  });
-
-  it('allows a read credential on a read endpoint and attaches the principal', () => {
-    const { guard, context, request } = ctx(
-      { authorization: `Bearer ${readSecret}` },
-      'read',
-    );
-    expect(guard.canActivate(context)).toBe(true);
-    expect(request.adminPrincipal).toEqual({ id: 'viewer', role: 'read' });
-  });
-
-  it('returns 403 when a read credential hits a write endpoint', () => {
-    const { guard, context } = ctx(
-      { authorization: `Bearer ${readSecret}` },
-      'write',
-    );
+  it('returns 403 for the legacy plaintext X-Cosmos-Admin: 1 marker', () => {
+    const { guard, context } = ctx({ 'x-cosmos-admin': '1' });
     expectDenied(
       () => guard.canActivate(context),
       HttpStatus.FORBIDDEN,
-      ApiErrorCode.AdminRoleRequired,
+      ApiErrorCode.AdminConsoleOnly,
     );
   });
 
-  it('allows a write credential on a write endpoint', () => {
+  it('returns 403 when a Bearer token is presented instead of a console call', () => {
+    // The old credential is gone; presenting one must not be a way in.
+    const { guard, context } = ctx({
+      authorization: 'Bearer write-secret-00000',
+    });
+    expectDenied(
+      () => guard.canActivate(context),
+      HttpStatus.FORBIDDEN,
+      ApiErrorCode.AdminConsoleOnly,
+    );
+  });
+
+  it('returns 403 when the marker is explicitly negative', () => {
+    const { guard, context } = ctx({ 'x-cosmos-internal': '0' });
+    expectDenied(
+      () => guard.canActivate(context),
+      HttpStatus.FORBIDDEN,
+      ApiErrorCode.AdminConsoleOnly,
+    );
+  });
+
+  it('admits a console call and attaches the principal for the audit trail', () => {
+    const { guard, context, request } = ctx({
+      'x-cosmos-internal': '1',
+      'x-cosmos-admin-role': 'owner',
+    });
+    expect(guard.canActivate(context)).toBe(true);
+    expect(request.adminPrincipal).toEqual({ id: 'cosmos_u1', role: 'owner' });
+  });
+
+  it('admits a console call that asserts no role, labelling the audit row', () => {
     const { guard, context, request } = ctx(
-      { authorization: `Bearer ${writeSecret}` },
-      'write',
+      { 'x-cosmos-internal': '1' },
+      'cosmos_u9',
     );
     expect(guard.canActivate(context)).toBe(true);
-    expect(request.adminPrincipal).toEqual({ id: 'owner', role: 'write' });
+    expect(request.adminPrincipal).toEqual({
+      id: 'cosmos_u9',
+      role: 'internal',
+    });
+  });
+
+  it('does not gate on the asserted role — the console already decided', () => {
+    const { guard, context, request } = ctx({
+      'x-cosmos-internal': '1',
+      'x-cosmos-admin-role': 'support',
+    });
+    expect(guard.canActivate(context)).toBe(true);
+    expect(request.adminPrincipal?.role).toBe('support');
   });
 });

@@ -16,10 +16,14 @@ import { AdminAuditService } from '@/admin/admin-audit.service';
  * `$transaction` as the change — the right pattern, and it stays. The gap was
  * the other direction: every cross-tenant read (`GET /v1/admin/receivers`
  * returns every tenant's KYC records, `GET /v1/admin/payins` their funding
- * details) was completely untraced. A leaked `role: "read"` credential could
+ * details) was completely untraced. Anyone who reached this surface could
  * therefore enumerate the whole platform and leave nothing behind, which fails
  * both non-repudiation and the "who accessed my data" question a subject-access
  * request asks.
+ *
+ * It matters more since the admin credential was removed: the console, not a
+ * shared secret, decides who gets here, and these rows are what say which
+ * console account actually did.
  *
  * This is an interceptor rather than a per-method call so that a route added
  * later is audited by default. It deliberately records only that a read

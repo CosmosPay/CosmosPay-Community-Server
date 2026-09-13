@@ -13952,8 +13952,7 @@ components:
             - insufficient_scope
             - no_authenticated_consumer
             - gateway_required
-            - admin_credentials_required
-            - admin_role_required
+            - admin_console_only
             - not_found
             - validation_failed
             - idempotency_conflict

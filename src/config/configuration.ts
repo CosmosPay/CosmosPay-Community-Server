@@ -1,8 +1,4 @@
 import {
-  parseAdminCredentials,
-  type AdminCredential,
-} from '@/admin/admin-auth';
-import {
   parseRedirectUrlWhitelist,
   type RedirectUrlWhitelist,
 } from '@/kyc/redirect-url-whitelist';
@@ -60,13 +56,6 @@ export interface AppConfig {
      * anonymous population wrote.
      */
     publicConsumer: string;
-  };
-  admin: {
-    /**
-     * Platform-admin credentials (issue #34). Empty ⇒ fail closed (no admin access).
-     * Presented as `Authorization: Bearer <secret>`.
-     */
-    credentials: AdminCredential[];
   };
   kyc: {
     /**
@@ -243,9 +232,6 @@ export default (): AppConfig => ({
       process.env.APISIX_SWAP_FEE_BPS_HEADER ?? 'x-plan-swap-fee-bps'
     ).toLowerCase(),
     publicConsumer: (process.env.APISIX_PUBLIC_CONSUMER ?? '').trim(),
-  },
-  admin: {
-    credentials: parseAdminCredentials(process.env.ADMIN_API_CREDENTIALS),
   },
   kyc: {
     redirectUrlWhitelist: parseRedirectUrlWhitelist(

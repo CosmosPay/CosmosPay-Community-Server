@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import { plainToInstance } from 'class-transformer';
 import {
   IsBooleanString,
@@ -50,9 +51,9 @@ class EnvironmentVariables {
 
   /**
    * The shared secret that separates "arrived through APISIX" from "anyone who
-   * can reach the pod". Admin credentials already require 16 chars
-   * (`parseAdminCredentials`); this is a stronger boundary and used to accept a
-   * single character.
+   * can reach the pod" — and, since the admin credential was removed, the only
+   * secret in front of the cross-tenant `/v1/admin` surface as well. It used to
+   * accept a single character; 32 is the floor for a boundary carrying that.
    */
   @IsOptional()
   @IsString()
@@ -294,15 +295,6 @@ class EnvironmentVariables {
   BLINDPAY_TIMEOUT_MS?: number;
 
   /**
-   * Platform-admin credentials JSON (issue #34). Optional at boot — empty means
-   * admin routes fail closed. Shape:
-   * [{"id":"viewer","secret":"…","role":"read"},{"id":"owner","secret":"…","role":"write"}]
-   */
-  @IsOptional()
-  @IsString()
-  ADMIN_API_CREDENTIALS?: string;
-
-  /**
    * Per-consumer KYC redirect_url host allow-list (issue #33). Optional at boot —
    * missing/empty means every consumer fails closed until configured. Shape:
    * {"cosmos_acme":["acme.com","app.acme.com"]}
@@ -441,6 +433,18 @@ function effectiveMaxSlippageBps(validated: EnvironmentVariables): number {
 }
 
 export function validateEnv(config: Record<string, unknown>) {
+  // Warn, don't throw: a leftover value breaks nothing, but an operator who still
+  // sees it in their .env will believe the admin surface is gated by it. It is not
+  // read at all -- `/v1/admin` now admits the platform console, which decides who is
+  // a platform admin against the signed-in account's role.
+  if (isNonEmpty(config.ADMIN_API_CREDENTIALS as string | undefined)) {
+    new Logger('EnvValidation').warn(
+      'ADMIN_API_CREDENTIALS is set but no longer read: /v1/admin is gated on the ' +
+        'call coming from the platform console (gateway secret + X-Cosmos-Internal), ' +
+        'not on an admin secret. Delete the variable.',
+    );
+  }
+
   const legacyHorizonUrl = config.STELLAR_HORIZON_URL;
   if (typeof legacyHorizonUrl === 'string' && legacyHorizonUrl.trim() !== '') {
     throw new Error(

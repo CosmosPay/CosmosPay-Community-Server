@@ -35,8 +35,8 @@ describe('AdminService.setReceiverAccess (atomic audit)', () => {
 
     await expect(
       service.setReceiverAccess('rcv_1', true, {
-        id: 'owner',
-        role: 'write',
+        id: 'cosmos_u1',
+        role: 'owner',
       }),
     ).rejects.toThrow('audit write failed');
 
@@ -69,14 +69,14 @@ describe('AdminService.setReceiverAccess (atomic audit)', () => {
     const service = new AdminService(prisma as any, {} as any);
 
     const result = await service.setReceiverAccess('rcv_1', true, {
-      id: 'owner',
-      role: 'write',
+      id: 'cosmos_u1',
+      role: 'owner',
     });
 
     expect(result.disabled).toBe(true);
     expect(created).toEqual([
       expect.objectContaining({
-        actorId: 'owner',
+        actorId: 'cosmos_u1',
         action: 'receivers.setAccess',
         resourceId: 'rcv_1',
       }),
@@ -98,8 +98,8 @@ describe('AdminService.setReceiverAccess (atomic audit)', () => {
 
     await expect(
       service.setReceiverAccess('missing', true, {
-        id: 'owner',
-        role: 'write',
+        id: 'cosmos_u1',
+        role: 'owner',
       }),
     ).rejects.toBeInstanceOf(NotFoundException);
     expect(tx.adminAuditLog.create).not.toHaveBeenCalled();

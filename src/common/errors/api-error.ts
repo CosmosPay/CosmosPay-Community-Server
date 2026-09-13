@@ -31,8 +31,12 @@ export enum ApiErrorCode {
   InsufficientScope = 'insufficient_scope',
   NoAuthenticatedConsumer = 'no_authenticated_consumer',
   GatewayRequired = 'gateway_required',
-  AdminCredentialsRequired = 'admin_credentials_required',
-  AdminRoleRequired = 'admin_role_required',
+  /**
+   * `/v1/admin` reached by something other than the platform console. It
+   * replaces `admin_credentials_required` / `admin_role_required`, which named
+   * a per-service admin secret that no longer exists.
+   */
+  AdminConsoleOnly = 'admin_console_only',
 
   // --- resources -----------------------------------------------------------
   NotFound = 'not_found',
