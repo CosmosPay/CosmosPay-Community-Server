@@ -2,6 +2,12 @@
 
 All notable changes to the Cosmos Pay Community Server are documented here.
 Generated from [Conventional Commits](https://www.conventionalcommits.org) by [git-cliff](https://git-cliff.org).
+## [1.1.1] - 2026-09-13
+
+### Refactor
+- Remove admin credentials and switch to console-based authorization (ad028aa)
+- Remove deprecated admin API credentials section from .env.example (2ac9abd)
+
 ## [1.1.0] - 2026-09-10
 
 ### Features
