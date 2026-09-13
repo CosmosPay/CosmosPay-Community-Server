@@ -66,8 +66,9 @@ export type PublicReceiver = Prisma.BlindpayReceiverGetPayload<{
  * There is exactly one notion of privilege in this service and this is it: the role
  * APISIX forwards from the consumer's own metadata (`X-Consumer-Role`), which
  * `PermissionsGuard` already treats as full access. The platform-admin surface
- * (`/v1/admin`, `AdminGuard` + Bearer credentials) is the other, stronger identity and
- * has its own audited variants of these operations — see {@link ReceiversService.approveById}.
+ * (`/v1/admin`, `AdminGuard` + a platform-console call) is the other, stronger identity
+ * and has its own audited variants of these operations — see
+ * {@link ReceiversService.approveById}.
  *
  * A plain `kyc:write` key is NOT elevated: it belongs to the tenant whose KYC data is
  * under review, so it can neither sign off on that review nor lift an operator's
@@ -296,8 +297,8 @@ export class ReceiversService {
    *
    * `cooldownMs` shortens that limit (owners resend immediately, admins every minute) and
    * is a PRIVILEGED argument: it is honoured exactly as given, so every caller must have
-   * established privilege first — `AdminController` behind `AdminGuard` (an authenticated
-   * admin principal), or {@link requestTos}, which drops the value unless the gateway
+   * established privilege first — `AdminController` behind `AdminGuard` (a platform-console
+   * call, audited), or {@link requestTos}, which drops the value unless the gateway
    * consumer is elevated. Nothing here re-derives it from a header.
    * When `audit` is provided, any local write and the audit row commit together.
    */
@@ -738,9 +739,16 @@ export class ReceiversService {
  * because APISIX strips them, but that is gateway configuration this repository cannot
  * verify — and a header that shortens a rate limit protecting a KYC subject's inbox must
  * not be the thing granting the privilege. Callers establish privilege first and only
- * then parse: `AdminController` runs behind `AdminGuard` (an authenticated admin
- * principal), and {@link ReceiversService.requestTos} discards the parsed value unless
- * {@link isElevatedConsumer} holds for the gateway consumer.
+ * then parse: {@link ReceiversService.requestTos} discards the parsed value unless
+ * {@link isElevatedConsumer} holds for the gateway consumer, and `AdminController` runs
+ * behind `AdminGuard`.
+ *
+ * On that admin path the two are now the same fact — `AdminGuard` reads the same internal
+ * marker (plus the gateway secret `ApisixGuard` verified) — so the separation this
+ * function relies on holds for tenant keys, not for the console. That is why the console
+ * is the narrower of the two doors: a tenant key reaches `requestTos`, only a caller
+ * holding the gateway secret reaches `AdminController` at all, and everything it does
+ * there lands in the admin audit trail under the console account that did it.
  */
 export function resolveTosCooldownMs(
   internalHeader?: string | string[],

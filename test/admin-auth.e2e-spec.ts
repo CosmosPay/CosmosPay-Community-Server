@@ -10,17 +10,24 @@ import { AdminService } from '@/admin/admin.service';
 import { PrismaService } from '@/prisma/prisma.service';
 
 /**
- * Issue #34 — platform-admin auth + audit.
+ * Platform-admin auth + audit.
  *
- * For every mutating admin endpoint:
- *   - no admin credential → 401
- *   - read-only credential → 403
- *   - write credential → 2xx + audit row
+ * The gate is "did this call come from the platform console?" — the gateway
+ * secret (ApisixGuard) plus the internal marker APISIX strips from everything it
+ * proxies. There is no admin secret to deploy: an owner who can change another
+ * account's plan and role in the console can also read and act here, which is
+ * exactly what a second credential kept breaking.
  *
- * Also proves the legacy plaintext `X-Cosmos-Admin: 1` marker no longer grants access,
- * and that audit logs are consultable with no DELETE route.
+ * For every admin endpoint:
+ *   - a gateway call without the console marker → 403
+ *   - a console call → 2xx, and every mutation leaves an audit row naming the
+ *     console account that made it
+ *
+ * Also proves the legacy plaintext `X-Cosmos-Admin: 1` marker grants nothing,
+ * that a stale `Authorization: Bearer <old admin secret>` is not a way in, and
+ * that audit logs are consultable with no DELETE route.
  */
-describe('Admin auth & audit (e2e) — issue #34', () => {
+describe('Admin auth & audit (e2e)', () => {
   let app: INestApplication;
   const auditRows: any[] = [];
 
@@ -164,15 +171,17 @@ describe('Admin auth & audit (e2e) — issue #34', () => {
   const http = () => app.getHttpServer();
   const base = '/v1/admin';
 
+  /** A gateway-authenticated caller — an ordinary API key, not the console. */
   const gateway = (r: request.Test) =>
     r
       .set('x-gateway-secret', 'topsecret-topsecret-topsecret-topsecret')
-      .set('x-consumer-username', 'cosmos_admin');
+      .set('x-consumer-username', 'cosmos_u1');
 
-  const asRead = (r: request.Test) =>
-    gateway(r).set('Authorization', 'Bearer read-secret-000000');
-  const asWrite = (r: request.Test) =>
-    gateway(r).set('Authorization', 'Bearer write-secret-00000');
+  /** The platform console, acting for a signed-in owner. */
+  const asConsole = (r: request.Test) =>
+    gateway(r)
+      .set('x-cosmos-internal', '1')
+      .set('x-cosmos-admin-role', 'owner');
 
   const mutators: Array<{
     name: string;
@@ -211,38 +220,46 @@ describe('Admin auth & audit (e2e) — issue #34', () => {
     },
   ];
 
-  it('rejects legacy plaintext X-Cosmos-Admin: 1 with 401', async () => {
+  it('rejects legacy plaintext X-Cosmos-Admin: 1 with 403', async () => {
     await gateway(request(http()).get(`${base}/summary`))
       .set('x-cosmos-admin', '1')
-      .expect(401);
+      .expect(403);
   });
 
-  it('allows a read credential on a read endpoint', async () => {
-    await asRead(request(http()).get(`${base}/summary`)).expect(200);
+  it('rejects a stale admin Bearer secret with 403', async () => {
+    await gateway(request(http()).get(`${base}/summary`))
+      .set('Authorization', 'Bearer write-secret-00000')
+      .expect(403);
+  });
+
+  it('rejects an ordinary gateway caller on a read endpoint', async () => {
+    await gateway(request(http()).get(`${base}/summary`)).expect(403);
+  });
+
+  it('allows the console on a read endpoint', async () => {
+    await asConsole(request(http()).get(`${base}/summary`)).expect(200);
   });
 
   describe.each(mutators)('$name', ({ method, path, body, action }) => {
-    it('returns 401 without admin credentials', async () => {
-      await gateway(request(http())[method](path).send(body)).expect(401);
+    it('returns 403 for a caller that is not the console', async () => {
+      await gateway(request(http())[method](path).send(body)).expect(403);
     });
 
-    it('returns 403 with a read-only credential', async () => {
-      await asRead(request(http())[method](path).send(body)).expect(403);
-    });
-
-    it('allows write and appends an audit row', async () => {
+    it('allows the console and appends an audit row naming the account', async () => {
       const before = auditRows.length;
-      await asWrite(request(http())[method](path).send(body)).expect((res) => {
-        if (res.status < 200 || res.status >= 300) {
-          throw new Error(
-            `expected 2xx, got ${res.status}: ${JSON.stringify(res.body)}`,
-          );
-        }
-      });
+      await asConsole(request(http())[method](path).send(body)).expect(
+        (res) => {
+          if (res.status < 200 || res.status >= 300) {
+            throw new Error(
+              `expected 2xx, got ${res.status}: ${JSON.stringify(res.body)}`,
+            );
+          }
+        },
+      );
       expect(auditRows.length).toBe(before + 1);
       expect(auditRows[auditRows.length - 1]).toMatchObject({
-        actorId: 'owner',
-        actorRole: 'write',
+        actorId: 'cosmos_u1',
+        actorRole: 'owner',
         action,
         resourceType: 'receiver',
         resourceId: 'rcv_1',
@@ -250,18 +267,18 @@ describe('Admin auth & audit (e2e) — issue #34', () => {
     });
   });
 
-  it('exposes consultable audit logs to read credentials', async () => {
-    const res = await asRead(request(http()).get(`${base}/audit-logs`)).expect(
-      200,
-    );
+  it('exposes consultable audit logs to the console', async () => {
+    const res = await asConsole(
+      request(http()).get(`${base}/audit-logs`),
+    ).expect(200);
     expect(res.body.total).toBeGreaterThanOrEqual(4);
     expect(Array.isArray(res.body.data)).toBe(true);
   });
 
   it('does not expose a DELETE route for audit logs', async () => {
-    await asWrite(request(http()).delete(`${base}/audit-logs`)).expect(404);
-    await asWrite(request(http()).delete(`${base}/audit-logs/audit_1`)).expect(
-      404,
-    );
+    await asConsole(request(http()).delete(`${base}/audit-logs`)).expect(404);
+    await asConsole(
+      request(http()).delete(`${base}/audit-logs/audit_1`),
+    ).expect(404);
   });
 });

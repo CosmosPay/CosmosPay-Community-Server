@@ -31,7 +31,7 @@ const consumerSelect = {
 /**
  * Platform-admin (owner) reads: the SAME data as the per-consumer services, but across
  * EVERY consumer/organization — no consumer scoping. Reached only via the AdminGuard
- * (Bearer credentials + roles, issue #34). Every list carries the owning consumer for attribution.
+ * (a platform-console call). Every list carries the owning consumer for attribution.
  */
 @Injectable()
 export class AdminService {

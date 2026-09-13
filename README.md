@@ -29,6 +29,16 @@ hits directly). Enforcement is always on — there is no opt-out flag. For local
 development, run behind APISIX or send `X-Gateway-Secret` + the `X-Consumer-*`
 headers yourself.
 
+One surface reads more out of those same two conditions. `/v1/admin` is
+cross-tenant, and `AdminGuard` admits a request there only when it also carries
+`X-Cosmos-Internal` — a header APISIX **removes** from everything it proxies, so
+only a direct call from a backend holding the gateway secret can present it. That
+backend is the developer platform, which has already decided whether the
+signed-in account is an owner/admin. There is no separate admin credential to
+deploy (see the upgrade note on `ADMIN_API_CREDENTIALS`), which makes the gateway
+secret and network isolation the whole boundary in front of cross-tenant data —
+and makes the strip list in the gateway route security-relevant, not hygiene.
+
 The pipeline:
 
 ```
@@ -74,7 +84,7 @@ src/
   customers/                      payer records derived from intents
   analytics/                      summary, balances, API logs, webhook logs
   activity/                       client telemetry ingest + feed (wallet, dashboard)
-  admin/                          cross-tenant platform admin (Bearer + role), audited
+  admin/                          cross-tenant platform admin (console-only), audited
   health/                         liveness/readiness probes (@Public)
 prisma/schema.prisma              Consumer, PaymentIntent, Swap, LiquidityPoolOperation,
                                   WebhookEndpoint/Delivery/EmittedEvent, BlindpayReceiver,
@@ -111,7 +121,7 @@ modules; the spec is regenerated from the controllers and DTOs on every CI run
 | Customers         | `/v1/customers`          | Payer records derived from intents                        |
 | Analytics         | `/v1/summary`, `/v1/balances`, `/v1/logs` | Dashboard aggregates and logs            |
 | Activity          | `/v1/activity`           | Client-reported events: ingest, feed, rollup               |
-| Admin             | `/v1/admin`              | Cross-tenant reads/writes — Bearer + role, audited        |
+| Admin             | `/v1/admin`              | Cross-tenant reads/writes — platform console only, audited |
 | Health            | `/v1/health`             | Liveness / readiness (`@Public`)                          |
 
 ### Error responses
@@ -1180,12 +1190,60 @@ SELECT c.relname FROM pg_class c JOIN pg_index i ON i.indexrelid = c.oid
 WHERE NOT i.indisvalid;
 ```
 
+### `ADMIN_API_CREDENTIALS` is gone — `/v1/admin` is the platform console's
+
+**Delete the variable.** It is no longer read, and the matching
+`COSMOS_ADMIN_API_SECRET` / `COSMOS_ADMIN_API_SECRET_READ` in the developer
+platform go with it.
+
+It was a second credential that decided, in this service, who is a platform
+admin — and the developer platform had already decided that against the
+signed-in account's role. Two answers to one question, and every deployment that
+set up the gateway but skipped this secret got the split in its most confusing
+form: an owner could change another account's plan and role in the console,
+which never asks for this secret, yet every cross-tenant read answered `401
+admin_credentials_required`. Nothing in that error points at a missing
+deployment secret rather than at the account's own rights.
+
+So the question the guard asks changed from "does the caller hold the admin
+secret?" to "did this call come from the platform console?", which is settled by
+two facts already on the request:
+
+1. `X-Gateway-Secret` matches `APISIX_GATEWAY_SECRET` — checked by `ApisixGuard`
+   as on every other route. Only the gateway and the console backend hold it.
+2. `X-Cosmos-Internal` is present. APISIX strips it from every request it
+   proxies (`proxy-rewrite.headers.remove`), so an API-key caller cannot carry
+   it; only a direct call from a backend holding the gateway secret can.
+
+Name the trade plainly: fact 2 rests on gateway routing configuration that lives
+in the developer-platform repo, not on a secret this service holds. Two things
+pay for it. The console is now the single place that answers "who is a platform
+admin", so the two answers cannot disagree; and attribution got sharper rather
+than weaker — an audit row used to name a shared credential (`owner`, `viewer`),
+and now names the console account that acted (`cosmos_<userId>`) plus the
+platform role it asserted, on every mutation **and** every read.
+
+What this changes for a caller:
+
+| Was | Now |
+| --- | --- |
+| `401` `admin_credentials_required` without a Bearer secret | `403` `admin_console_only` for anything that is not a console call |
+| `403` `admin_role_required` for a `read` credential on a mutation | gone — the console already decided the account may act |
+| `actorId` / `actorRole` on an audit row named the credential | they name the console account and its platform role |
+
+If you reach `/v1/admin` directly (an ops script, say), send `X-Gateway-Secret`,
+`X-Consumer-Username` and `X-Cosmos-Internal: 1`; add
+`X-Cosmos-Admin-Role: owner` so the audit row is labelled. Keep the service off
+the public internet — with the admin secret gone, network isolation and the
+gateway secret are what stand in front of cross-tenant data.
+
 ### `APISIX_GATEWAY_SECRET` now requires 32 characters
 
 The service refuses to boot below that. It previously accepted a single
-character, while admin credentials already demanded 16 — and this secret is a
-stronger boundary than those. Generate one with `openssl rand -hex 32` and
-rotate it in APISIX at the same time.
+character, and it is now the *only* secret standing between the outside world and
+the platform-admin surface (see below), so it carries more weight than it used
+to. Generate one with `openssl rand -hex 32` and rotate it in APISIX at the same
+time.
 
 ### Features from `v0.1.0`–`v0.1.5` that this release supersedes
 
@@ -1275,7 +1333,6 @@ at least `DATABASE_URL` and `APISIX_GATEWAY_SECRET`.
 | `BLINDPAY_BASE_URL` | no | `https://api.blindpay.com/v1` | BlindPay API base URL |
 | `BLINDPAY_WEBHOOK_SECRET` | when API key set | — | Svix secret for inbound BlindPay webhooks |
 | `BLINDPAY_TIMEOUT_MS` | no | `15000` | BlindPay HTTP client timeout (ms) |
-| `ADMIN_API_CREDENTIALS` | no | — | JSON admin bearer secrets (issue #34) |
 | `KYC_REDIRECT_URL_WHITELIST` | no | — | Per-consumer KYC redirect host allow-list |
 | `RATE_LIMIT_ENABLED` | no | `true` | Per-address caps on the routes that spend XLM. Incident switch |
 | `RATE_LIMIT_PRUNE_INTERVAL_MS` | no | `600000` | Counter-window prune interval (ms, min 1000) |
@@ -1354,7 +1411,12 @@ here — and remove any client-supplied copy:
       //                                 and liquidity-pool withdrawal
       //   X-Consumer-Org              → attribution / plan resolution
       //   X-Consumer-Plan             → plan tier, read into GatewayConsumer
-      //   X-Cosmos-Internal           → marks traffic as dashboard-internal
+      //   X-Cosmos-Internal           → marks the call as coming from the platform
+      //                                 console, which is what ADMITS IT TO
+      //                                 /v1/admin — every tenant's data, read and
+      //                                 write. Leave this one out and any key
+      //                                 holder gets there by setting a header.
+      //   X-Cosmos-Admin-Role         → labels the admin audit trail
       //   X-Cosmos-Tos-Cooldown-Ms    → relaxes the KYC email resend limit
       "X-Consumer-Role",
       "X-Consumer-Permissions",
@@ -1363,6 +1425,7 @@ here — and remove any client-supplied copy:
       "X-Consumer-Org",
       "X-Consumer-Plan",
       "X-Cosmos-Internal",
+      "X-Cosmos-Admin-Role",
       "X-Cosmos-Tos-Cooldown-Ms"
     ]
   }
@@ -1386,6 +1449,14 @@ guard relies on that.
 > The service now fails closed on the one input where silence used to be
 > profitable: a missing `X-Plan-Swap-Fee-Bps` in a production configuration is a
 > 503 rather than a silent fallback to the environment default.
+>
+> `X-Cosmos-Internal` carries more weight than it used to: with
+> `ADMIN_API_CREDENTIALS` removed, it is what tells this service a request came
+> from the platform console rather than from an API key, and therefore what opens
+> `/v1/admin`. It is still only reachable by a caller that already presented the
+> gateway secret, so the exposure is bounded by that and by network isolation —
+> but a route that forgets to strip it turns every API key into a platform
+> admin.
 
 > Keep the service on a private network so the only reachable path is through
 > APISIX; the shared secret is the second layer, not the only one.

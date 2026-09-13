@@ -9,7 +9,7 @@ import { AdminGuard } from '@/common/guards/admin.guard';
 /**
  * Imports KycModule so the admin (owner) endpoints can reuse ReceiversService's
  * approve/enable logic across ANY consumer (the global fiat review tools).
- * AdminGuard is provided so Nest can inject ConfigService + Reflector into it.
+ * AdminGuard is provided so Nest can instantiate it for @UseGuards.
  */
 @Module({
   imports: [KycModule],

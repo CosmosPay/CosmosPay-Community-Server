@@ -12,7 +12,9 @@ Two layers (clean separation of concerns):
 ```
 KYC_REDIRECT_URL_WHITELIST={"cosmos_acme":["acme.com","app.acme.com"]}
 ```
-Parsed like `ADMIN_API_CREDENTIALS` into `AppConfig.kyc.redirectUrlWhitelist`.
+Parsed at boot into `AppConfig.kyc.redirectUrlWhitelist` (fail-closed on invalid
+JSON). `ADMIN_API_CREDENTIALS` was the model for this and has since been removed —
+`/v1/admin` is gated on the call coming from the platform console instead.
 
 ## Domain matching
 - Normalize host to lowercase
