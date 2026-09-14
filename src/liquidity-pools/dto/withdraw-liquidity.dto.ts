@@ -70,8 +70,10 @@ export class WithdrawLiquidityDto {
   @ApiPropertyOptional({
     description:
       'Optional idempotency key. Prefer the `Idempotency-Key` request header; ' +
-      'when both are set, the header wins. Retries with the same key return ' +
-      'the existing operation instead of building another transaction.',
+      'when both are set, the header wins. A retry with the same key and the ' +
+      'same request returns the existing operation instead of building another ' +
+      'transaction; the same key with a different request is 409 ' +
+      '`idempotency_conflict`.',
     example: 'lp-withdraw-2026-08-23-001',
   })
   @IsOptional()

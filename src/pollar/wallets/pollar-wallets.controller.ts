@@ -23,6 +23,7 @@ import { PollarWalletsService } from '@/pollar/wallets/pollar-wallets.service';
 import {
   POLLAR_ACTIVATE_RATE_LIMIT,
   POLLAR_PROVISION_RATE_LIMIT,
+  POLLAR_TRUSTLINE_RATE_LIMIT,
 } from '@/pollar/pollar.constants';
 
 /**
@@ -32,6 +33,10 @@ import {
  * live here and not in the wallet: a wallet can drive its own session against
  * Pollar directly, but it cannot fund a reserve, add a trustline, or ask whether
  * a token is genuine.
+ *
+ * Every route that names a wallet answers 404 unless the calling consumer got
+ * that wallet through this service — every tenant shares the same secret keys,
+ * so Pollar itself cannot tell them apart. See `assertWalletOwned`.
  */
 @ApiTags('pollar')
 @Controller({ path: 'pollar', version: '1' })
@@ -59,6 +64,9 @@ export class PollarWalletsController {
 
   @Post('wallets/:address/trustlines/default')
   @RequirePermissions('pollar:write')
+  // Locks reserve out of the funding wallet per asset. Shares its bucket with
+  // the explicit route below, so alternating the two buys a loop nothing.
+  @RateLimit(POLLAR_TRUSTLINE_RATE_LIMIT)
   @ApiOperation({
     summary: "Enable the app's configured assets on a wallet",
   })
@@ -72,6 +80,8 @@ export class PollarWalletsController {
 
   @Post('wallets/:address/trustlines')
   @RequirePermissions('pollar:write')
+  // Up to 25 reserve-consuming assets per call — same bucket as /default.
+  @RateLimit(POLLAR_TRUSTLINE_RATE_LIMIT)
   @ApiOperation({ summary: 'Enable specific assets on a wallet' })
   @ApiCreatedResponse({ type: PollarTrustlineEntity })
   createTrustlines(

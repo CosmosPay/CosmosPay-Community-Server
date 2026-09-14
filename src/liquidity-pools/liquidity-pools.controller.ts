@@ -56,8 +56,10 @@ export class LiquidityPoolsController {
     name: 'Idempotency-Key',
     required: false,
     description:
-      'Optional idempotency key. Retries with the same key return the existing ' +
-      'operation (same id and txHash). Takes precedence over body.idempotencyKey.',
+      'Optional idempotency key. A retry with the same key and the same request ' +
+      'returns the existing operation (same id and txHash); the same key with a ' +
+      'different request is 409 idempotency_conflict. Takes precedence over ' +
+      'body.idempotencyKey.',
     example: 'lp-deposit-2026-08-23-001',
   })
   @ApiCreatedResponse({ type: LiquidityOperationEntity })
@@ -87,8 +89,10 @@ export class LiquidityPoolsController {
     name: 'Idempotency-Key',
     required: false,
     description:
-      'Optional idempotency key. Retries with the same key return the existing ' +
-      'operation (same id and txHash). Takes precedence over body.idempotencyKey.',
+      'Optional idempotency key. A retry with the same key and the same request ' +
+      'returns the existing operation (same id and txHash); the same key with a ' +
+      'different request is 409 idempotency_conflict. Takes precedence over ' +
+      'body.idempotencyKey.',
     example: 'lp-withdraw-2026-08-23-001',
   })
   @ApiCreatedResponse({ type: LiquidityOperationEntity })

@@ -1,4 +1,9 @@
-import { CanActivate, ExecutionContext, Injectable } from '@nestjs/common';
+import {
+  CanActivate,
+  ExecutionContext,
+  Injectable,
+  Logger,
+} from '@nestjs/common';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { Request } from 'express';
 import { resolveAdminPrincipal } from '@/admin/admin-auth';
@@ -25,6 +30,8 @@ import {
  */
 @Injectable()
 export class AdminGuard implements CanActivate {
+  private readonly logger = new Logger(AdminGuard.name);
+
   canActivate(context: ExecutionContext): boolean {
     const request = context.switchToHttp().getRequest<Request>();
 
@@ -42,6 +49,13 @@ export class AdminGuard implements CanActivate {
     });
 
     if (!principal) {
+      // Guards run before interceptors, so this refusal never reaches the access
+      // log or the admin audit trail. Without this line a probe of the
+      // cross-tenant surface — a route that forgot to strip the marker, a leaked
+      // gateway secret being tried — leaves no trace at all.
+      this.logger.warn(
+        `Rejected ${request.method} ${request.url}: not a platform-console call (consumer=${request.gatewayConsumer?.username ?? 'none'})`,
+      );
       throw ApiError.forbidden(
         ApiErrorCode.AdminConsoleOnly,
         'This endpoint is reserved for the platform console',

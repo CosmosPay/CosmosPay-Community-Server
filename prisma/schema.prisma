@@ -967,10 +967,13 @@ model PollarUserWallet {
   consumerId String
   consumer   Consumer @relation(fields: [consumerId], references: [id], onDelete: Cascade)
 
-  // Pollar's handle on this user, and the join key across the two networks:
-  // the email the OAuth provider vouched for. It is what a later hosted login
-  // on the other network resolves the same person by, so anything else here
-  // would provision a wallet nobody ever logs into.
+  // Pollar's handle on this user, and the join key across the two networks.
+  // For a row a login wrote, it is the email the OAuth provider vouched for —
+  // what a later hosted login on the other network resolves the same person by,
+  // so anything else there would provision a wallet nobody ever logs into. A
+  // row written by `POST /v1/pollar/users/with-wallet` holds the operator's own
+  // id instead: it is READY on arrival, never swept, and exists so the wallet
+  // routes can tell that this consumer owns the address.
   externalId String
   // 'public' | 'testnet' — Stellar's names, as everywhere else in this schema.
   network    String

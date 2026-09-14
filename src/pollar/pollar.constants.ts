@@ -184,6 +184,23 @@ export const POLLAR_ACTIVATE_RATE_LIMIT = {
   windowMs: WINDOW_MS,
 };
 
+/**
+ * Adding trustlines, on both `POST /wallets/:address/trustlines` and its
+ * `/default` spelling. Every asset trusted locks 0.5 XLM of reserve out of the
+ * funding wallet and one explicit call may name 25 of them, so this was the
+ * cheapest way on the surface to spend the operator's XLM — and it had no limit.
+ *
+ * One bucket for both routes, because they are the same spend reached two ways:
+ * separate budgets would just double what a loop gets by alternating. Twenty is
+ * the `authorize` cap, so the documented sequence — a login, then that wallet's
+ * default trustlines — is never refused before the login itself would be.
+ */
+export const POLLAR_TRUSTLINE_RATE_LIMIT = {
+  name: 'pollar:trustlines',
+  limit: 20,
+  windowMs: WINDOW_MS,
+};
+
 // --- Cross-network wallet provisioning -------------------------------------
 //
 // A hosted login produces a wallet on exactly one network: Pollar runs mainnet

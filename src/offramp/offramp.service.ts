@@ -10,13 +10,30 @@ import {
   BlindpaySyncService,
   BlindpayObject,
   PAYOUT_PUBLIC_SELECT,
+  PublicPayout,
 } from '@/blindpay/blindpay-sync.service';
 import { asString, asNumber, isMirrorFresh } from '@/blindpay/blindpay.util';
-import type { Payout } from '@generated/prisma/client';
+import type { Prisma } from '@generated/prisma/client';
 import { CreatePayoutQuoteDto } from '@/offramp/dto/create-payout-quote.dto';
 import { AuthorizePayoutDto } from '@/offramp/dto/authorize-payout.dto';
 import { CreatePayoutDto } from '@/offramp/dto/create-payout.dto';
 import { PayoutDocumentDto } from '@/offramp/dto/payout-document.dto';
+
+/**
+ * What a single-payout read takes out of the mirror: the public projection, plus
+ * the two columns `findOne` needs to decide on a refresh and perform it. Neither
+ * of those is part of `PayoutEntity`, so {@link toPublicPayout} drops them again
+ * before anything is returned.
+ */
+const PAYOUT_READ_SELECT = {
+  ...PAYOUT_PUBLIC_SELECT,
+  receiverId: true,
+  updatedAt: true,
+} as const satisfies Prisma.PayoutSelect;
+
+type MirroredPayout = Prisma.PayoutGetPayload<{
+  select: typeof PAYOUT_READ_SELECT;
+}>;
 
 /**
  * Offramp (stablecoin -> fiat). Quotes are priced through BlindPay (the EVM quote
@@ -120,11 +137,11 @@ export class OfframpService {
    * mirrored row has gone stale (see {@link isMirrorFresh}). Webhooks carry
    * status changes, so the refresh only has to cover a missed delivery.
    */
-  async findOne(consumer: GatewayConsumer, id: string) {
+  async findOne(consumer: GatewayConsumer, id: string): Promise<PublicPayout> {
     const local = await this.consumers.resolve(consumer);
     const row = await this.findPayoutOrThrow(local.id, id);
     if (isMirrorFresh(row)) {
-      return row;
+      return toPublicPayout(row);
     }
     try {
       const fresh = await this.blindpay.get<BlindpayObject>(
@@ -132,7 +149,7 @@ export class OfframpService {
       );
       return await this.sync.mirrorPayout(local.id, row.receiverId, fresh);
     } catch {
-      return row;
+      return toPublicPayout(row);
     }
   }
 
@@ -200,12 +217,22 @@ export class OfframpService {
     }
   }
 
+  /**
+   * Reads a payout the caller owns, narrowed to {@link PAYOUT_READ_SELECT}.
+   *
+   * This used to read the whole row, and `findOne` returned it as-is: `raw` —
+   * the BlindPay payload, beneficiary bank details included — beside internal
+   * ids (`consumerId`, `quoteId`, `bankAccountId`) that `PAYOUT_PUBLIC_SELECT`
+   * exists to keep in PostgreSQL. `addDocument` only needs `blindpayId`, which
+   * the projection carries, so neither caller has a reason to read the blob.
+   */
   private async findPayoutOrThrow(
     consumerId: string,
     id: string,
-  ): Promise<Payout> {
+  ): Promise<MirroredPayout> {
     const row = await this.prisma.payout.findFirst({
       where: { id, consumerId },
+      select: PAYOUT_READ_SELECT,
     });
     if (!row) {
       throw ApiError.notFound('Payout not found');
@@ -247,4 +274,13 @@ export class OfframpService {
     });
     return receiver?.id ?? null;
   }
+}
+
+/** Drops the two columns {@link PAYOUT_READ_SELECT} adds for `findOne`'s own use. */
+function toPublicPayout({
+  receiverId: _receiverId,
+  updatedAt: _updatedAt,
+  ...payout
+}: MirroredPayout): PublicPayout {
+  return payout;
 }

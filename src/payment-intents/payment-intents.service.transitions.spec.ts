@@ -59,6 +59,11 @@ describe('PaymentIntentsService.transition (guards + audit)', () => {
           if (where.id !== row.id) throw new Error('not found');
           return { ...row };
         }),
+        update: jest.fn(async ({ where, data }: any) => {
+          if (where.id !== row.id) throw new Error('not found');
+          row = { ...row, ...data, updatedAt: new Date() };
+          return { ...row };
+        }),
       },
       paymentIntentTransition: {
         create: jest.fn(async ({ data }: any) => {
@@ -210,6 +215,88 @@ describe('PaymentIntentsService.transition (guards + audit)', () => {
     );
     expect(err.code).toBe('INVALID_PAYMENT_INTENT_TRANSITION');
   });
+
+  /**
+   * `PATCH /:id` with a `txHash` and no `status` skipped the state machine
+   * entirely, so a SUCCEEDED intent's hash — the transaction its settlement was
+   * verified against — could be replaced with any string after the fact.
+   */
+  describe('a txHash PATCHed without a status change', () => {
+    const consumer = {
+      username: 'cosmos_u1',
+      credentialId: 'cred_1',
+      environment: 'dev',
+      role: 'user',
+      permissions: ['payments:write'],
+      organizationId: null,
+      plan: null,
+      planSwapFeeBps: null,
+    } as never;
+    const settledHash = 'a'.repeat(64);
+
+    it.each(['SUCCEEDED', 'FAILED', 'CANCELLED', 'EXPIRED'])(
+      'is refused on a %s intent, leaving the recorded hash alone',
+      async (status) => {
+        row.status = status;
+        row.txHash = settledHash;
+
+        const err = await service
+          .update(consumer, row.id, { txHash: 'b'.repeat(64) })
+          .then(() => null)
+          .catch((e: unknown) => e as ApiError);
+
+        expect(err).toBeInstanceOf(ApiError);
+        expect(err!.getStatus()).toBe(HttpStatus.BAD_REQUEST);
+        expect(err!.code).toBe(ApiErrorCode.InvalidStateTransition);
+        expect(row.txHash).toBe(settledHash);
+        expect(prisma.paymentIntent.updateMany).not.toHaveBeenCalled();
+        expect(prisma.paymentIntent.update).not.toHaveBeenCalled();
+      },
+    );
+
+    it('still accepts re-sending the hash a terminal intent already carries', async () => {
+      row.status = 'SUCCEEDED';
+      row.txHash = settledHash;
+
+      const res = await service.update(consumer, row.id, {
+        txHash: settledHash,
+        reference: 'order_1',
+      });
+
+      expect(res.txHash).toBe(settledHash);
+      expect(res.reference).toBe('order_1');
+    });
+
+    it.each(['PENDING', 'SUBMITTED'])(
+      'is written on a %s intent, guarded on that status',
+      async (status) => {
+        row.status = status;
+
+        const res = await service.update(consumer, row.id, {
+          txHash: 'c'.repeat(64),
+        });
+
+        expect(prisma.paymentIntent.updateMany).toHaveBeenCalledWith({
+          where: { id: 'pi_1', status },
+          data: { txHash: 'c'.repeat(64) },
+        });
+        expect(res.txHash).toBe('c'.repeat(64));
+        expect(res.status).toBe(status);
+      },
+    );
+
+    it('is refused when the intent settles between the read and the write', async () => {
+      prisma.paymentIntent.updateMany.mockResolvedValueOnce({ count: 0 });
+
+      const err = await service
+        .update(consumer, row.id, { txHash: 'c'.repeat(64) })
+        .then(() => null)
+        .catch((e: unknown) => e as ApiError);
+
+      expect(err!.getStatus()).toBe(HttpStatus.CONFLICT);
+      expect(err!.code).toBe(ApiErrorCode.OperationInFlight);
+    });
+  });
 });
 
 /**
@@ -344,5 +431,64 @@ describe('PaymentIntentsService API settlement is chain-verified', () => {
     expect((err as ApiError).getStatus()).toBe(HttpStatus.BAD_REQUEST);
     // No point asking Horizon about nothing.
     expect(verify).not.toHaveBeenCalled();
+  });
+
+  /**
+   * FAILED is terminal. `validate` used to reach it whenever the verifier's
+   * reason read "Transaction failed on-chain" — which it said for the hash of
+   * any failed transaction, related to the intent or not.
+   */
+  describe('validate settles FAILED only on the verifier matching the payment', () => {
+    const statusWrites = (prisma: never) =>
+      (
+        prisma as { paymentIntent: { updateMany: jest.Mock } }
+      ).paymentIntent.updateMany.mock.calls.map(
+        (c: any[]) => c[0]?.data?.status,
+      );
+
+    it("marks FAILED when the failed transaction is this intent's payment", async () => {
+      const verify = jest.fn().mockResolvedValue({
+        valid: false,
+        failedOnChain: true,
+        reason: 'Transaction failed on-chain',
+      });
+      const { service, prisma } = build(verify);
+
+      const outcome = await service.validate(consumer, 'pi_1', 'f'.repeat(64));
+
+      expect(outcome.valid).toBe(false);
+      expect(outcome.status).toBe('FAILED');
+      expect(statusWrites(prisma)).toEqual(['FAILED']);
+    });
+
+    it('leaves the intent untouched for an unrelated failed transaction', async () => {
+      const verify = jest.fn().mockResolvedValue({
+        valid: false,
+        reason: 'Memo mismatch (expected id memo "123")',
+      });
+      const { service, prisma } = build(verify);
+
+      const outcome = await service.validate(consumer, 'pi_1', 'f'.repeat(64));
+
+      expect(outcome).toEqual({
+        valid: false,
+        status: 'PENDING',
+        reason: 'Memo mismatch (expected id memo "123")',
+      });
+      expect(statusWrites(prisma)).toEqual([]);
+    });
+
+    it('does not key off the reason text', async () => {
+      const verify = jest.fn().mockResolvedValue({
+        valid: false,
+        reason: 'Transaction failed on-chain',
+      });
+      const { service, prisma } = build(verify);
+
+      const outcome = await service.validate(consumer, 'pi_1', 'f'.repeat(64));
+
+      expect(outcome.status).toBe('PENDING');
+      expect(statusWrites(prisma)).toEqual([]);
+    });
   });
 });

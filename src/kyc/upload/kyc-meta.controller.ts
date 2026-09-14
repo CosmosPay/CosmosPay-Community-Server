@@ -18,7 +18,14 @@ import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface'
 import { UploadableFile } from '@/blindpay/blindpay.client';
 import { KycMetaService } from '@/kyc/upload/kyc-meta.service';
 import { InitiateTosDto } from '@/kyc/upload/dto/initiate-tos.dto';
-import { ALLOWED_UPLOAD_TYPES, MAX_UPLOAD_BYTES } from '@/kyc/kyc.constants';
+import {
+  ALLOWED_UPLOAD_TYPES,
+  MAX_UPLOAD_BYTES,
+  MAX_UPLOAD_FIELD_BYTES,
+  MAX_UPLOAD_FIELDS,
+  MAX_UPLOAD_FILES,
+  MAX_UPLOAD_PARTS,
+} from '@/kyc/kyc.constants';
 
 /**
  * Multer defaults to memory storage with **no** size limit, so an unbounded file
@@ -27,9 +34,24 @@ import { ALLOWED_UPLOAD_TYPES, MAX_UPLOAD_BYTES } from '@/kyc/kyc.constants';
  * attacker-chosen size, on a `kyc:write` key. The content type was never
  * inspected either, so arbitrary bytes were relayed to the provider's storage
  * under a document filename.
+ *
+ * Capping the file alone left the same hole one text field at a time: multer's
+ * field count and part count are unlimited by default and each field value is
+ * held in memory up to 1 MB. Every multipart count is bounded now — the
+ * `MAX_UPLOAD_*` constants say why each number.
+ *
+ * The filter below can only see the *declared* type; the bytes have not arrived
+ * when it runs. They are checked against that declaration in
+ * `KycMetaService.uploadDocument`.
  */
 const KYC_UPLOAD_OPTIONS: MulterOptions = {
-  limits: { fileSize: MAX_UPLOAD_BYTES, files: 1 },
+  limits: {
+    fileSize: MAX_UPLOAD_BYTES,
+    files: MAX_UPLOAD_FILES,
+    fields: MAX_UPLOAD_FIELDS,
+    fieldSize: MAX_UPLOAD_FIELD_BYTES,
+    parts: MAX_UPLOAD_PARTS,
+  },
   fileFilter: (_req, file, cb) => {
     if (!ALLOWED_UPLOAD_TYPES.has(file.mimetype)) {
       cb(

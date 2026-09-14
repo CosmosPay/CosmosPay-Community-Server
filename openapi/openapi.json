@@ -1568,7 +1568,7 @@
           {
             "name": "Idempotency-Key",
             "in": "header",
-            "description": "Optional idempotency key. Retries with the same key return the existing swap (same id and txHash). Takes precedence over body.idempotencyKey.",
+            "description": "Optional idempotency key. A retry with the same key and the same request returns the existing swap (same id and txHash); the same key with a different request is 409 idempotency_conflict. Takes precedence over body.idempotencyKey.",
             "required": false,
             "schema": {
               "type": "string",
@@ -2098,7 +2098,7 @@
           {
             "name": "Idempotency-Key",
             "in": "header",
-            "description": "Optional idempotency key. Retries with the same key return the existing operation (same id and txHash). Takes precedence over body.idempotencyKey.",
+            "description": "Optional idempotency key. A retry with the same key and the same request returns the existing operation (same id and txHash); the same key with a different request is 409 idempotency_conflict. Takes precedence over body.idempotencyKey.",
             "required": false,
             "schema": {
               "type": "string",
@@ -2231,7 +2231,7 @@
           {
             "name": "Idempotency-Key",
             "in": "header",
-            "description": "Optional idempotency key. Retries with the same key return the existing operation (same id and txHash). Takes precedence over body.idempotencyKey.",
+            "description": "Optional idempotency key. A retry with the same key and the same request returns the existing operation (same id and txHash); the same key with a different request is 409 idempotency_conflict. Takes precedence over body.idempotencyKey.",
             "required": false,
             "schema": {
               "type": "string",
@@ -10272,138 +10272,6 @@
         ]
       }
     },
-    "/v1/aliases/{name}/recovery": {
-      "post": {
-        "description": "The response is IDENTICAL whether or not the alias and mailbox matched. A handle is public and the mailbox behind it is not, so a differing answer would confirm who owns it to anyone who asked. This service sends no mail: it returns the token for the caller to deliver, exactly as the KYC terms-of-service flow does.",
-        "operationId": "AliasesController_startRecovery_v1",
-        "parameters": [
-          {
-            "name": "name",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/StartAliasRecoveryDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AliasRecoveryStartedEntity"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Validation failed, or the request is not valid in the current state.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "The API key lacks the required scope, or the request did not arrive through the gateway.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "The resource does not exist, or does not belong to this consumer.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Conflicts with existing state — an idempotency clash, an operation already in flight, or an invalid state transition.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Unexpected server error. The detail is logged server-side and never returned.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
-                }
-              }
-            }
-          },
-          "502": {
-            "description": "An upstream provider returned an error.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "An upstream provider is unavailable, or the service is misconfigured.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
-                }
-              }
-            }
-          }
-        },
-        "summary": "Start email recovery",
-        "tags": [
-          "aliases"
-        ]
-      }
-    },
     "/v1/aliases/{name}/recovery/complete": {
       "post": {
         "description": "Needs the emailed token AND a signature from the new key. Every previous address is dropped — recovery exists because the old keys are gone, and leaving them resolvable would keep whoever holds them receiving payments.",
@@ -14824,7 +14692,7 @@
           },
           "idempotencyKey": {
             "type": "string",
-            "description": "Optional idempotency key. Prefer the `Idempotency-Key` request header; when both are set, the header wins. Retries with the same key return the existing swap instead of building another transaction.",
+            "description": "Optional idempotency key. Prefer the `Idempotency-Key` request header; when both are set, the header wins. A retry with the same key and the same request returns the existing swap instead of building another transaction; the same key with a different request is 409 `idempotency_conflict`.",
             "example": "swap-retry-2026-08-23-001"
           }
         },
@@ -15135,7 +15003,7 @@
           },
           "idempotencyKey": {
             "type": "string",
-            "description": "Optional idempotency key. Prefer the `Idempotency-Key` request header; when both are set, the header wins. Retries with the same key return the existing operation instead of building another transaction.",
+            "description": "Optional idempotency key. Prefer the `Idempotency-Key` request header; when both are set, the header wins. A retry with the same key and the same request returns the existing operation instead of building another transaction; the same key with a different request is 409 `idempotency_conflict`.",
             "example": "lp-deposit-2026-08-23-001"
           }
         },
@@ -15360,7 +15228,7 @@
           },
           "idempotencyKey": {
             "type": "string",
-            "description": "Optional idempotency key. Prefer the `Idempotency-Key` request header; when both are set, the header wins. Retries with the same key return the existing operation instead of building another transaction.",
+            "description": "Optional idempotency key. Prefer the `Idempotency-Key` request header; when both are set, the header wins. A retry with the same key and the same request returns the existing operation instead of building another transaction; the same key with a different request is 409 `idempotency_conflict`.",
             "example": "lp-withdraw-2026-08-23-001"
           }
         },
@@ -18802,45 +18670,6 @@
         "required": [
           "id",
           "deleted"
-        ]
-      },
-      "StartAliasRecoveryDto": {
-        "type": "object",
-        "properties": {
-          "email": {
-            "type": "string",
-            "description": "The mailbox on record. Checked but never echoed: the response is identical whether or not it matched, so this endpoint cannot be used to ask which address owns a handle.",
-            "example": "someone@example.com"
-          }
-        },
-        "required": [
-          "email"
-        ]
-      },
-      "AliasRecoveryStartedEntity": {
-        "type": "object",
-        "properties": {
-          "accepted": {
-            "type": "boolean",
-            "description": "Always true — see the note on enumeration in the service."
-          },
-          "token": {
-            "type": "object",
-            "nullable": true,
-            "description": "The token to email. Null when there was nothing to recover."
-          },
-          "email": {
-            "type": "object",
-            "nullable": true,
-            "description": "The mailbox to deliver to."
-          },
-          "expiresAt": {
-            "type": "object",
-            "nullable": true
-          }
-        },
-        "required": [
-          "accepted"
         ]
       },
       "CompleteAliasRecoveryDto": {

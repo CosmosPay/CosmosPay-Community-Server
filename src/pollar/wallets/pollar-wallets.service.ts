@@ -1,18 +1,23 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { PollarWalletStatus } from '@generated/prisma/client';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
+import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
 import { resolveNetwork } from '@/common/stellar-network';
-import { AppConfig } from '@/config/configuration';
+import { AppConfig, StellarNetwork } from '@/config/configuration';
+import { PrismaService } from '@/prisma/prisma.service';
 import { PollarApiError, PollarClient } from '@/pollar/pollar.client';
 import type {
   PollarActivationContent,
   PollarTokenVerifyContent,
+  PollarWallet,
 } from '@/pollar/pollar.types';
 import {
   asId,
   asPollarWallet,
   toPollarWalletEntity,
+  walletAddress,
 } from '@/pollar/pollar.util';
 import { ActivateWalletDto } from '@/pollar/wallets/dto/activate-wallet.dto';
 import { CreateTrustlinesDto } from '@/pollar/wallets/dto/create-trustlines.dto';
@@ -34,9 +39,13 @@ import { PollarUserEntity } from '@/pollar/wallets/entities/pollar-user.entity';
  * reserve, add the trustlines an asset needs, register a user before their first
  * login, and vouch for a token a wallet presents.
  *
- * Everything here is a thin pass-through by design. Pollar owns this state; a
- * local mirror of it would be a second source of truth for facts we do not
- * control, drifting the moment a wallet is funded from the Pollar dashboard.
+ * Pollar's state is not mirrored here. Pollar owns it; a local copy would be a
+ * second source of truth for facts we do not control, drifting the moment a
+ * wallet is funded from the Pollar dashboard. What this service does rely on is
+ * the one fact Pollar cannot know: **which tenant a wallet came to**. Every
+ * tenant shares the same secret keys, so Pollar acts on any address it custodies
+ * for whoever asks, and the routes that name a wallet are only safe behind
+ * {@link assertWalletOwned}.
  */
 @Injectable()
 export class PollarWalletsService {
@@ -45,6 +54,8 @@ export class PollarWalletsService {
   constructor(
     private readonly pollar: PollarClient,
     private readonly config: ConfigService<AppConfig, true>,
+    private readonly prisma: PrismaService,
+    private readonly consumers: ConsumerResolverService,
   ) {}
 
   /**
@@ -60,6 +71,7 @@ export class PollarWalletsService {
     dto: ActivateWalletDto,
   ): Promise<PollarActivationEntity> {
     const network = resolveNetwork(this.config, consumer);
+    await this.assertWalletOwned(consumer, network, dto.public_key);
     try {
       const result = await this.pollar.server<PollarActivationContent>(
         'POST',
@@ -90,8 +102,9 @@ export class PollarWalletsService {
   ): Promise<PollarTrustlineEntity> {
     return this.trustlineCall(
       consumer,
+      address,
       'POST',
-      `/wallets/${encodeURIComponent(address)}/trustlines/default`,
+      '/trustlines/default',
       'SERVER_TRUSTLINES_ENABLED',
     );
   }
@@ -104,8 +117,9 @@ export class PollarWalletsService {
   ): Promise<PollarTrustlineEntity> {
     return this.trustlineCall(
       consumer,
+      address,
       'POST',
-      `/wallets/${encodeURIComponent(address)}/trustlines`,
+      '/trustlines',
       'SERVER_TRUSTLINES_ENABLED',
       { assets: dto.assets },
     );
@@ -126,8 +140,9 @@ export class PollarWalletsService {
     const asset = `${encodeURIComponent(code)}:${encodeURIComponent(issuer)}`;
     return this.trustlineCall(
       consumer,
+      address,
       'DELETE',
-      `/wallets/${encodeURIComponent(address)}/trustlines/${asset}`,
+      `/trustlines/${asset}`,
       // Removal has its own code; reporting the "enabled" one here said the
       // opposite of what happened.
       'SERVER_TRUSTLINE_DISABLED',
@@ -166,10 +181,20 @@ export class PollarWalletsService {
       // their content, so it is read defensively and projected — see
       // `PollarUserEntity` for why the payload is not relayed as-is.
       const wallet = asPollarWallet(content.wallet);
+      const userId = asId(content.id) ?? asId(content.userId);
+      if (wallet) {
+        await this.rememberProvisioned(
+          consumer,
+          network,
+          dto.external_id,
+          wallet,
+          userId,
+        );
+      }
       return {
         external_id: dto.external_id,
         code,
-        user_id: asId(content.id) ?? asId(content.userId),
+        user_id: userId,
         ...(wallet ? { wallet: toPollarWalletEntity(wallet) } : {}),
       };
     } catch (err) {
@@ -213,23 +238,137 @@ export class PollarWalletsService {
     }
   }
 
+  /**
+   * One trustline call against `address`. The ownership check lives here rather
+   * than in each route, so a trustline route added later cannot forget it.
+   */
   private async trustlineCall(
     consumer: GatewayConsumer,
+    address: string,
     method: string,
-    path: string,
+    route: string,
     successCode: string,
     body?: unknown,
   ): Promise<PollarTrustlineEntity> {
     const network = resolveNetwork(this.config, consumer);
+    await this.assertWalletOwned(consumer, network, address);
     try {
       // The trustline routes carry their result in the envelope's `code` and
       // nothing of interest in `content`. `PollarClient` unwraps to `content`,
       // so the route's own documented success code is passed in rather than
       // read back — a 2xx here means exactly that code happened.
-      await this.pollar.server<unknown>(method, network, path, { body });
+      await this.pollar.server<unknown>(
+        method,
+        network,
+        `/wallets/${encodeURIComponent(address)}${route}`,
+        { body },
+      );
       return { code: successCode };
     } catch (err) {
       throw this.toApiError(err, 'change trustlines');
+    }
+  }
+
+  /**
+   * 404s unless this consumer is on record as having got `address`, on this
+   * network, through this service.
+   *
+   * Every tenant shares the same Pollar secret keys, so Pollar acts on any
+   * address it custodies no matter who asks. Forwarding `:address` straight
+   * through let one tenant strip the trustlines off another tenant's user —
+   * breaking their incoming USDC — or loop reserve-consuming trustlines onto
+   * wallets it had never seen, paid for out of the operator's funding wallet.
+   * It is the Pollar counterpart of `assertQuoteOwned` on the BlindPay side.
+   *
+   * Two records count, and between them they cover every way this service hands
+   * a caller an address:
+   *
+   *   - **a login it redeemed** — the handshake row keeps the address the
+   *     redemption returned. Both the wallet's own flow and the dev platform's
+   *     brokered one call these routes as the consumer that redeemed the code.
+   *   - **a wallet it provisioned** — the counterpart network of a login, or
+   *     `POST /v1/pollar/users/with-wallet` (see {@link rememberProvisioned}).
+   *
+   * The network is part of the match: Pollar's mainnet and testnet are separate
+   * applications, and an address from one is not a wallet on the other.
+   *
+   * 404 rather than 403, and one message for every miss: a 403 would confirm the
+   * address is live for somebody else.
+   */
+  private async assertWalletOwned(
+    consumer: GatewayConsumer,
+    network: StellarNetwork,
+    address: string,
+  ): Promise<void> {
+    const local = await this.consumers.resolve(consumer);
+    // A login is by far the common origin, so it is asked first and the
+    // provisioning table only on a miss.
+    const login = await this.prisma.pollarOauthSession.findFirst({
+      where: { consumerId: local.id, network, walletAddress: address },
+      select: { id: true },
+    });
+    if (login) return;
+
+    const provisioned = await this.prisma.pollarUserWallet.findFirst({
+      where: { consumerId: local.id, network, address },
+      select: { id: true },
+    });
+    if (!provisioned) {
+      throw ApiError.notFound('Wallet not found');
+    }
+  }
+
+  /**
+   * Records a wallet this consumer just had Pollar create, so the routes above
+   * recognise it as theirs. Without it, `POST /v1/pollar/users/with-wallet`
+   * would hand out an address its own trustline routes then refuse.
+   *
+   * `pollar_user_wallet` rather than a table of its own, because it already is
+   * the per-consumer, per-network record of wallets this service provisioned,
+   * and a `READY` row is inert to the provisioning sweeper, which only claims
+   * `PENDING` ones. `externalId` is the operator's handle here rather than an
+   * OAuth email. When the two happen to coincide, a later login on the other
+   * network finds this wallet already provisioned instead of asking Pollar to
+   * register the same user again — which is the right answer.
+   *
+   * Best-effort: by now the user and wallet exist at Pollar, and failing the
+   * response would only send the caller into a retry Pollar refuses as a
+   * duplicate. A lost write costs a 404 on this wallet's routes — the safe
+   * direction to fail in — and is logged.
+   */
+  private async rememberProvisioned(
+    consumer: GatewayConsumer,
+    network: StellarNetwork,
+    externalId: string,
+    wallet: PollarWallet,
+    pollarUserId: string | null,
+  ): Promise<void> {
+    const provisioned = {
+      status: PollarWalletStatus.READY,
+      address: walletAddress(wallet),
+      walletType: wallet.type,
+      pollarUserId,
+      errorCode: null,
+      nextAttemptAt: null,
+    };
+    try {
+      const local = await this.consumers.resolve(consumer);
+      await this.prisma.pollarUserWallet.upsert({
+        where: {
+          consumerId_externalId_network: {
+            consumerId: local.id,
+            externalId,
+            network,
+          },
+        },
+        create: { consumerId: local.id, externalId, network, ...provisioned },
+        update: provisioned,
+      });
+    } catch (err) {
+      this.logger.error(
+        `Could not record the Pollar ${network} wallet just provisioned; its wallet routes will 404`,
+        err as Error,
+      );
     }
   }
 

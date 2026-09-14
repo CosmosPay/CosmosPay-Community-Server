@@ -134,13 +134,15 @@ describe('Payment intents CRUD (e2e)', () => {
       .mockResolvedValue(new Account(source, '123456789') as never);
 
     // Mock the verification path: a successful tx paying `destination` 25.5 XLM
-    // with the matching id memo.
+    // with the matching id memo, closed after the intent it is checked against
+    // (the verifier refuses a transaction that predates the intent).
     jest.spyOn(Horizon.Server.prototype, 'transactions').mockReturnValue({
       transaction: () => ({
         call: async () => ({
           successful: true,
           memo_type: 'id',
           memo: '123456789',
+          created_at: new Date().toISOString(),
         }),
       }),
     } as never);
@@ -232,20 +234,46 @@ describe('Payment intents CRUD (e2e)', () => {
     expect(res.body.memo).toMatch(/^\d+$/);
   });
 
-  it('is idempotent per (consumer, memo) — same memo returns the same intent', async () => {
+  it('is idempotent per (consumer, memo) — an identical retry returns the same intent', async () => {
     const memo = '5550001';
-    const first = await gw(
-      request(http())
-        .post(txRoute)
-        .send({ source, destination, amount: '2', memo }),
-    ).expect(201);
-    const second = await gw(
-      request(http())
-        .post(txRoute)
-        .send({ source, destination, amount: '999', memo }),
-    ).expect(201);
+    const body = { source, destination, amount: '2', memo };
+    const first = await gw(request(http()).post(txRoute).send(body)).expect(
+      201,
+    );
+    const second = await gw(request(http()).post(txRoute).send(body)).expect(
+      201,
+    );
     expect(second.body.id).toBe(first.body.id);
-    expect(second.body.amount).toBe('2'); // original wins
+
+    // A different payment under the same memo is not a retry.
+    const changed = await gw(
+      request(http())
+        .post(txRoute)
+        .send({ ...body, amount: '999' }),
+    ).expect(409);
+    expect(changed.body.code).toBe('idempotency_conflict');
+  });
+
+  it('refuses a memo already taken by another payment (409) without revealing it', async () => {
+    // Under the shared public key every anonymous caller is one consumer: the
+    // first request stands in for an attacker claiming the memo with their own
+    // destination, the second for the next user who picks it.
+    const memo = '5550002';
+    const attacker = Keypair.random().publicKey();
+    await gw(
+      request(http())
+        .post(payRoute)
+        .send({ destination: attacker, amount: '2', memo }),
+    ).expect(201);
+
+    const res = await gw(
+      request(http()).post(payRoute).send({ destination, amount: '2', memo }),
+    ).expect(409);
+
+    expect(res.body.code).toBe('idempotency_conflict');
+    expect(res.body.id).toBeUndefined();
+    expect(res.body.uri).toBeUndefined();
+    expect(JSON.stringify(res.body)).not.toContain(attacker);
   });
 
   it('network follows the API key type (prod env → public)', async () => {
@@ -331,6 +359,20 @@ describe('Payment intents CRUD (e2e)', () => {
     expect(res.body.status).toBe('SUCCEEDED');
     expect(res.body.paymentIntent.status).toBe('SUCCEEDED');
     expect(res.body.paymentIntent.txHash).toBe('a'.repeat(64));
+  });
+
+  it('refuses to rewrite the txHash of a SUCCEEDED intent (400)', async () => {
+    const res = await gw(
+      request(http())
+        .patch(`${route}/${createdId}`)
+        .send({ txHash: 'b'.repeat(64) }),
+    ).expect(400);
+    expect(res.body.code).toBe('invalid_state_transition');
+
+    const read = await gw(request(http()).get(`${route}/${createdId}`)).expect(
+      200,
+    );
+    expect(read.body.txHash).toBe('a'.repeat(64));
   });
 
   it('rejects validation with a malformed txHash (400)', () =>

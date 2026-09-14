@@ -2,10 +2,12 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
   Asset,
+  FeeBumpTransaction,
   LiquidityPoolAsset,
   LiquidityPoolFeeV18,
   Memo,
   Operation,
+  Transaction,
   TransactionBuilder,
   getLiquidityPoolId,
 } from '@stellar/stellar-sdk';
@@ -40,6 +42,10 @@ import {
   proportionalShare,
 } from '@/liquidity-pools/lp-math';
 import {
+  LiquidityRequestTerms,
+  liquidityOperationMatchesRequest,
+} from '@/liquidity-pools/lp-idempotency';
+import {
   LP_CAN_SUCCEED_STATUSES,
   LP_IN_FLIGHT_STATUSES,
 } from '@/liquidity-pools/lp-operation-transitions';
@@ -54,7 +60,11 @@ import {
   LiquidityPoolReserve,
   LiquidityPositionListEntity,
 } from '@/liquidity-pools/entities/liquidity-pool.entity';
-import { LIQUIDITY_COMMISSION_MEMO } from '@/liquidity-pools/liquidity-pools.constants';
+import {
+  LIQUIDITY_COMMISSION_MEMO,
+  POSITIONS_MAX_POOL_PAGES,
+  POSITIONS_POOL_PAGE_SIZE,
+} from '@/liquidity-pools/liquidity-pools.constants';
 
 /** A stored operation plus its derived QR — the shape API responses return. */
 export type LiquidityOperationView = LiquidityPoolOperation & {
@@ -172,36 +182,74 @@ export class LiquidityPoolsService {
     const shares = (account.balances as BalanceEntry[]).filter(
       (b) => b.asset_type === 'liquidity_pool_shares' && b.liquidity_pool_id,
     );
-    const data = await Promise.all(
-      shares.map(async (entry) => {
-        const pool = await this.fetchPool(network, entry.liquidity_pool_id!);
-        if (!pool) return null;
-        const held = toStroops(entry.balance ?? '0');
-        const total = toStroops(pool.total_shares);
-        const reserves = pool.reserves.map((r) => this.parseReserve(r));
-        return {
-          poolId: pool.id,
-          shares: fromStroops(held),
-          totalShares: pool.total_shares,
-          shareOfPoolBps: total > 0n ? Number((held * 10_000n) / total) : 0,
-          reserves,
-          redeemable: reserves.map((r) => ({
-            ...r,
-            amount:
-              total > 0n
-                ? fromStroops(
-                    proportionalShare(held, total, toStroops(r.amount)),
-                  )
-                : '0',
-          })),
-        };
-      }),
-    );
+    const pools = shares.length
+      ? await this.poolsForAccount(network, query.account)
+      : new Map<string, PoolRecord>();
+    // Walk the balances, not the listing, so positions keep the order they
+    // always had. A share balance whose pool is not listed is dropped, as a
+    // per-pool 404 used to drop it.
+    const data = shares.map((entry) => {
+      const pool = pools.get(entry.liquidity_pool_id!);
+      if (!pool) return null;
+      const held = toStroops(entry.balance ?? '0');
+      const total = toStroops(pool.total_shares);
+      const reserves = pool.reserves.map((r) => this.parseReserve(r));
+      return {
+        poolId: pool.id,
+        shares: fromStroops(held),
+        totalShares: pool.total_shares,
+        shareOfPoolBps: total > 0n ? Number((held * 10_000n) / total) : 0,
+        reserves,
+        redeemable: reserves.map((r) => ({
+          ...r,
+          amount:
+            total > 0n
+              ? fromStroops(proportionalShare(held, total, toStroops(r.amount)))
+              : '0',
+        })),
+      };
+    });
     return {
       account: query.account,
       network,
       data: data.filter((p) => p !== null),
     };
+  }
+
+  /**
+   * Every pool `account` holds shares in, keyed by pool id — listed a page at a
+   * time instead of looked up one request per pool. See
+   * {@link POSITIONS_MAX_POOL_PAGES} for what the per-pool fan-out cost.
+   */
+  private async poolsForAccount(
+    network: StellarNetwork,
+    account: string,
+  ): Promise<Map<string, PoolRecord>> {
+    const pools = new Map<string, PoolRecord>();
+    let cursor: string | undefined;
+    for (let page = 0; page < POSITIONS_MAX_POOL_PAGES; page++) {
+      let builder = this.stellar
+        .server(network)
+        .liquidityPools()
+        .forAccount(account)
+        .limit(POSITIONS_POOL_PAGE_SIZE);
+      if (cursor) builder = builder.cursor(cursor);
+
+      let records: PoolRecord[];
+      try {
+        records = (await builder.call()).records;
+      } catch (err) {
+        this.logger.error('liquidityPools for account failed', err);
+        throw ApiError.unavailable(
+          ApiErrorCode.ProviderUnavailable,
+          'Could not reach the Stellar network',
+        );
+      }
+      for (const record of records) pools.set(record.id, record);
+      if (records.length < POSITIONS_POOL_PAGE_SIZE) break;
+      cursor = records[records.length - 1].paging_token;
+    }
+    return pools;
   }
 
   // ── Deposit ─────────────────────────────────────────────────────────────────
@@ -232,17 +280,10 @@ export class LiquidityPoolsService {
       dto.idempotencyKey,
     );
 
-    // Fast path: same key → same operation (no Horizon round-trip, no rebuild).
-    if (idempotencyKey) {
-      const existing = await this.findByIdempotencyKey(
-        local.id,
-        idempotencyKey,
-      );
-      if (existing) return this.withQr(existing);
-    }
-
     // Canonical order: the protocol requires assetA < assetB. Reorder the pair
-    // (and its amounts) if the caller passed them the other way around.
+    // (and its amounts) if the caller passed them the other way around. This
+    // precedes the idempotency replay, which compares against a stored row that
+    // is already in canonical order.
     let a = resolveAsset(dto.assetACode, dto.assetAIssuer);
     let b = resolveAsset(dto.assetBCode, dto.assetBIssuer);
     let rawAmountA: string | undefined = dto.maxAmountA;
@@ -270,6 +311,31 @@ export class LiquidityPoolsService {
         poolShare.getLiquidityPoolParameters(),
       ),
     ).toString('hex');
+
+    const request: LiquidityRequestTerms = {
+      kind: 'DEPOSIT',
+      network,
+      source: dto.source,
+      poolId,
+      assetA: a.code,
+      assetAIssuer: a.issuer,
+      assetB: b.code,
+      assetBIssuer: b.issuer,
+      amountA: rawAmountA ?? null,
+      amountB: rawAmountB ?? null,
+      slippageBps,
+      memo,
+    };
+
+    // Fast path: same key and same request → same operation (no Horizon
+    // round-trip, no rebuild).
+    if (idempotencyKey) {
+      const existing = await this.findByIdempotencyKey(
+        local.id,
+        idempotencyKey,
+      );
+      if (existing) return this.replay(existing, request, consumer);
+    }
 
     const pool = await this.fetchPool(network, poolId);
     const reserveA = pool ? toStroops(this.reserveOf(pool, a)) : 0n;
@@ -389,6 +455,7 @@ export class LiquidityPoolsService {
       feeWallet: null,
       tx,
       timeoutSeconds: stellarCfg.timeoutSeconds,
+      request,
     });
     this.logger.log(
       `Created LP deposit ${op.id}: ${fromStroops(amountA)} ${assetLabel(a)} + ` +
@@ -423,21 +490,25 @@ export class LiquidityPoolsService {
       dto.idempotencyKey,
     );
 
-    // Fast path: same key → same operation (no Horizon round-trip, no rebuild).
+    const request: LiquidityRequestTerms = {
+      kind: 'WITHDRAW',
+      network,
+      source: dto.source,
+      poolId: dto.poolId,
+      shares: dto.shares,
+      slippageBps,
+      memo,
+    };
+
+    // Fast path: same key and same request → same operation (no Horizon
+    // round-trip, no rebuild).
     if (idempotencyKey) {
       const existing = await this.findByIdempotencyKey(
         local.id,
         idempotencyKey,
       );
-      if (existing) return this.withQr(existing);
+      if (existing) return this.replay(existing, request, consumer);
     }
-
-    await this.assertNoInflightWithdraw(
-      local.id,
-      dto.source,
-      dto.poolId,
-      network,
-    );
 
     const pool = await this.fetchPool(network, dto.poolId);
     if (!pool) {
@@ -462,6 +533,15 @@ export class LiquidityPoolsService {
     }
 
     const account = await this.accounts.load(network, dto.source);
+    // Read the sequence before anything builds from `account`:
+    // `TransactionBuilder.build()` advances it in place.
+    await this.assertNoInflightWithdraw(
+      local.id,
+      dto.source,
+      dto.poolId,
+      network,
+      account.sequenceNumber(),
+    );
     const held = (account.balances as BalanceEntry[]).find(
       (bal) =>
         bal.asset_type === 'liquidity_pool_shares' &&
@@ -595,6 +675,7 @@ export class LiquidityPoolsService {
       feeWallet: feeA + feeB > 0n ? feeWallet : null,
       tx,
       timeoutSeconds: stellarCfg.timeoutSeconds,
+      request,
     });
     this.logger.log(
       `Created LP withdraw ${op.id}: ${fromStroops(shares)} shares of pool ` +
@@ -770,11 +851,12 @@ export class LiquidityPoolsService {
    * Persists a new operation and emits `LIQUIDITY_CREATED`.
    *
    * Both unique indexes on the table can fire here. With an idempotency key the
-   * caller always recovers the existing row rather than seeing a 409: a same-key
+   * caller recovers the existing row rather than seeing a raw P2002: a same-key
    * race rebuilds the same XDR, so it can trip `(network, txHash)` instead of
    * the key index — Postgres reports only one of the two violations, and which
-   * one is arbitrary. Recovery returns the winner's row and, because the insert
-   * never happened, emits no second `LIQUIDITY_CREATED`.
+   * one is arbitrary. Recovery returns the winner's row — provided the winner
+   * was the same request, see {@link replay} — and, because the insert never
+   * happened, emits no second `LIQUIDITY_CREATED`.
    */
   private async persist(
     consumer: GatewayConsumer,
@@ -801,9 +883,11 @@ export class LiquidityPoolsService {
       feeWallet: string | null;
       tx: ReturnType<TransactionBuilder['build']>;
       timeoutSeconds: number;
+      /** What the caller asked for — a same-key race winner is vetted against it. */
+      request: LiquidityRequestTerms;
     },
   ): Promise<LiquidityOperationView> {
-    const { tx, timeoutSeconds, ...data } = input;
+    const { tx, timeoutSeconds, request, ...data } = input;
     const xdr = tx.toXDR();
     let op: LiquidityPoolOperation;
     try {
@@ -823,7 +907,7 @@ export class LiquidityPoolsService {
       const raced = data.idempotencyKey
         ? await this.findByIdempotencyKey(data.consumerId, data.idempotencyKey)
         : null;
-      if (raced) return this.withQr(raced);
+      if (raced) return this.replay(raced, request, consumer);
       throw ApiError.conflict(
         ApiErrorCode.IdempotencyConflict,
         'A liquidity pool operation with this transaction hash already exists ' +
@@ -840,6 +924,67 @@ export class LiquidityPoolsService {
   private resolveIdempotencyKey(header?: string, body?: string): string | null {
     const raw = (header ?? body)?.trim();
     return raw ? raw : null;
+  }
+
+  /**
+   * Answers a request that reused an `Idempotency-Key`: the stored operation
+   * when it is the same request, a 409 when it is not.
+   *
+   * A key is scoped to the consumer, and every anonymous wallet on the shared
+   * public API key is the same consumer, so the stored row may be someone else's
+   * envelope — a withdrawal or a deposit naming the caller's account, built for
+   * the caller to sign. The conflict describes nothing about the stored
+   * operation for the same reason.
+   */
+  private async replay(
+    existing: LiquidityPoolOperation,
+    request: LiquidityRequestTerms,
+    consumer: GatewayConsumer,
+  ): Promise<LiquidityOperationView> {
+    const stored = { ...existing, memo: this.storedMemoId(existing) };
+    if (!liquidityOperationMatchesRequest(stored, request)) {
+      this.logger.warn(
+        `Idempotency-Key reused for a different liquidity pool request ` +
+          `(operation=${existing.id}, consumer=${consumer.username})`,
+      );
+      throw ApiError.conflict(
+        ApiErrorCode.IdempotencyConflict,
+        'This Idempotency-Key was already used for a different liquidity pool ' +
+          'request. Use a new key for a new request.',
+      );
+    }
+    return this.withQr(existing);
+  }
+
+  /**
+   * The unsigned envelope stored on `op`, or null when it cannot be read. That
+   * never happens for a row this service built, so callers take null to mean
+   * "this row cannot be vouched for" and fail closed.
+   */
+  private storedEnvelope(
+    op: Pick<LiquidityPoolOperation, 'xdr' | 'network'>,
+  ): Transaction | null {
+    try {
+      const tx = TransactionBuilder.fromXDR(
+        op.xdr,
+        this.stellar.passphrase(op.network as StellarNetwork),
+      );
+      return tx instanceof FeeBumpTransaction ? null : tx;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * The MEMO_ID on `op`'s stored envelope (null when it carries none, or only
+   * the commission MEMO_TEXT), or undefined when the envelope cannot be read.
+   * The memo is not a column — the envelope is the only record of it.
+   */
+  private storedMemoId(op: LiquidityPoolOperation): string | null | undefined {
+    const envelope = this.storedEnvelope(op);
+    if (!envelope) return undefined;
+    const { type, value } = envelope.memo;
+    return type === 'id' && typeof value === 'string' ? value : null;
   }
 
   private async findByIdempotencyKey(
@@ -891,14 +1036,43 @@ export class LiquidityPoolsService {
    * repeated deposits into one pool are a normal thing to do. A double-submitted
    * *identical* deposit is caught by the unique `(network, txHash)` index
    * instead.
+   *
+   * **Only a row that may already be on-chain holds the guard.** Consumer
+   * scoping did not end the denial of service above on the shared public API
+   * key, where every anonymous wallet is one consumer: a dust withdrawal naming
+   * a stranger's account still handed every wallet user a 409 for that
+   * position, one timeout window after another. So the guard now asks the
+   * question the race actually turns on. A double read of the basis needs the
+   * first withdrawal to have burned its shares on-chain before the second is
+   * built, and a transaction can only be on-chain once the account has used its
+   * sequence number. A row whose number is still ahead of the account cannot
+   * have settled — and the withdrawal being built now takes that same number,
+   * so at most one of the two can ever settle. The unsigned dust row is exactly
+   * that case, and it no longer blocks.
+   *
+   * The residual, accepted: a row built before the account's latest transaction
+   * does block until it expires, because from here "used by this row" and "used
+   * by something else" look alike. Telling them apart takes a Horizon lookup per
+   * row, and how many rows there are is the attacker's to choose.
+   *
+   * Only the oldest non-expired row is read. Envelopes are built from the
+   * account's then-current sequence, which never goes backwards, so if the
+   * oldest row's number is still unused, so is every later row's. A later row
+   * with a lower number was built from a stale Horizon view: its number was
+   * already spent when it was built, so it can never settle either. An envelope
+   * that cannot be read blocks — nothing about that row can be vouched for.
+   *
+   * `accountSequence` must be read before a `TransactionBuilder` builds from the
+   * account, since building advances it in place.
    */
   private async assertNoInflightWithdraw(
     consumerId: string,
     source: string,
     poolId: string,
-    network: string,
+    network: StellarNetwork,
+    accountSequence: string,
   ): Promise<void> {
-    const existing = await this.prisma.liquidityPoolOperation.findFirst({
+    const oldest = await this.prisma.liquidityPoolOperation.findFirst({
       where: {
         consumerId,
         kind: 'WITHDRAW',
@@ -908,17 +1082,22 @@ export class LiquidityPoolsService {
         status: { in: [...LP_IN_FLIGHT_STATUSES] },
         OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
       },
-      // Existence is all we need — the response deliberately names no row.
-      select: { id: true },
+      orderBy: { createdAt: 'asc' },
+      // The envelope is all we need — the response deliberately names no row.
+      select: { xdr: true, network: true },
     });
-    if (existing) {
-      throw ApiError.conflict(
-        ApiErrorCode.OperationInFlight,
-        'A withdrawal from this pool is already in flight for this account. ' +
-          'Wait for it to settle or expire before starting another — the ' +
-          'commission on a withdrawal depends on the position it leaves behind.',
-      );
+    if (!oldest) return;
+
+    const envelope = this.storedEnvelope(oldest);
+    if (envelope && BigInt(envelope.sequence) > BigInt(accountSequence)) {
+      return;
     }
+    throw ApiError.conflict(
+      ApiErrorCode.OperationInFlight,
+      'A withdrawal from this pool is already in flight for this account. ' +
+        'Wait for it to settle or expire before starting another — the ' +
+        'commission on a withdrawal depends on the position it leaves behind.',
+    );
   }
 
   // ── Status transitions ──────────────────────────────────────────────────────

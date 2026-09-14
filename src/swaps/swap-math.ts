@@ -43,6 +43,19 @@ export function fromStroops(stroops: bigint): string {
 }
 
 /**
+ * Whether two amount strings are the same number of stroops — `"10"` and
+ * `"10.0000000"` are one amount. False when either is not a valid Stellar
+ * amount, so a comparison never throws where the caller only wanted a verdict.
+ */
+export function sameAmount(a: string, b: string): boolean {
+  try {
+    return toStroops(a) === toStroops(b);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Fee taken from a source amount, in basis points (50 bps = 0.5%). Rounded down
  * so the platform never charges more than the stated rate.
  */

@@ -94,7 +94,15 @@ describe('WebhookDispatcherService', () => {
     if (!destinations) {
       guard.replaceDnsLookup(async () => ['93.184.216.34']);
     }
-    const service = new WebhookDispatcherService(prisma as any, config, guard);
+    // The real client, passed explicitly now that the service has no default.
+    // `node:https` is mocked at the top of this file, so it opens no socket, and
+    // these cases assert on exactly what it asks of the transport.
+    const service = new WebhookDispatcherService(
+      prisma as any,
+      config,
+      guard,
+      new WebhookHttpClient(),
+    );
     return { service, prisma, guard };
   }
 

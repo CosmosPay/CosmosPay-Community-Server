@@ -4,6 +4,7 @@ import { StellarService } from '@/stellar/stellar.service';
 import { toStroops } from '@/swaps/swap-math';
 import type { PaymentIntent } from '@generated/prisma/client';
 import type { StellarNetwork } from '@/config/configuration';
+import { TX_CREATED_AT_SKEW_MS } from '@/payment-intents/payment-intents.constants';
 
 export interface VerificationResult {
   valid: boolean;
@@ -11,15 +12,22 @@ export interface VerificationResult {
   reason?: string;
   /** The payer (source) account of the matched on-chain payment, when valid. */
   payer?: string;
+  /**
+   * The transaction is this intent's payment — memo, age and a payment
+   * operation all match — but it failed on-chain. Only this may settle an
+   * intent as FAILED; every other invalid result is a mismatch.
+   */
+  failedOnChain?: boolean;
 }
 
 /**
  * Confirms that an on-chain Stellar transaction actually fulfills a payment
- * intent: it must be successful, contain a payment to the intent's destination
- * in the intent's asset for the exact amount, and the transaction memo must
- * match. Each intent carries its own `network` (derived from the API key type),
- * so all Horizon calls target that network. Used both by the manual `validate`
- * endpoint and the permanent observer, so the rule lives in one place.
+ * intent: it must be successful, closed no earlier than the intent was created,
+ * contain a payment to the intent's destination in the intent's asset for the
+ * exact amount, and the transaction memo must match. Each intent carries its own
+ * `network` (derived from the API key type), so all Horizon calls target that
+ * network. Used both by the manual `validate` endpoint and the permanent
+ * observer, so the rule lives in one place.
  */
 @Injectable()
 export class StellarVerifierService {
@@ -31,7 +39,21 @@ export class StellarVerifierService {
     return this.stellar.server(intent.network as StellarNetwork);
   }
 
-  /** Verifies a specific transaction hash against the intent. */
+  /**
+   * Verifies a specific transaction hash against the intent.
+   *
+   * Success is checked last, once the transaction has been shown to be this
+   * intent's payment. It used to be checked first, and FAILED is terminal: the
+   * hash of any failed transaction on the network — nothing to do with this
+   * intent — permanently failed it through `POST /:id/validate`. Now a failed
+   * transaction reports `failedOnChain` only when its memo, its age and one of
+   * its payment operations all match, which is the payer's own attempt bouncing
+   * (underfunded, missing trustline). Anything else is a mismatch.
+   *
+   * Horizon returns a transaction's operations by hash whether or not it
+   * succeeded; if it ever stopped doing so, a failed payment would read as a
+   * mismatch and leave the intent PENDING, which is the safe direction.
+   */
   async verifyByHash(
     intent: PaymentIntent,
     txHash: string,
@@ -49,13 +71,16 @@ export class StellarVerifierService {
       throw err;
     }
 
-    if (!tx.successful) {
-      return { valid: false, reason: 'Transaction failed on-chain' };
-    }
-
     const memoCheck = this.memoMatches(intent, tx.memo_type, tx.memo);
     if (!memoCheck.ok) {
       return { valid: false, reason: memoCheck.reason };
+    }
+
+    if (this.predatesIntent(intent, tx.created_at)) {
+      return {
+        valid: false,
+        reason: 'Transaction predates this payment intent',
+      };
     }
 
     const payments = await server.payments().forTransaction(txHash).call();
@@ -67,6 +92,14 @@ export class StellarVerifierService {
         valid: false,
         reason:
           'No native payment in this transaction matches the destination/amount',
+      };
+    }
+
+    if (!tx.successful) {
+      return {
+        valid: false,
+        failedOnChain: true,
+        reason: 'Transaction failed on-chain',
       };
     }
 
@@ -102,6 +135,12 @@ export class StellarVerifierService {
     }
 
     for (const op of page.records) {
+      // The page is newest first, so everything past the first record older
+      // than the intent is older still — and each candidate would cost a
+      // transaction lookup to rule out.
+      if (this.predatesIntent(intent, op.created_at)) {
+        break;
+      }
       if (!this.paymentMatches(intent, op)) {
         continue;
       }
@@ -121,6 +160,22 @@ export class StellarVerifierService {
     }
 
     return { valid: false, reason: 'No matching payment found yet' };
+  }
+
+  /**
+   * Whether a transaction closed too early to be this intent's payment.
+   *
+   * A payment is built after its intent exists, so a ledger that closed before
+   * then is some older payment that happens to carry the same memo, destination
+   * and amount. The allowance is clock skew only ({@link TX_CREATED_AT_SKEW_MS}).
+   * A close time that does not parse fails closed: nothing shows it is recent.
+   */
+  private predatesIntent(intent: PaymentIntent, closedAt: string): boolean {
+    const closed = Date.parse(closedAt);
+    if (Number.isNaN(closed)) {
+      return true;
+    }
+    return closed < intent.createdAt.getTime() - TX_CREATED_AT_SKEW_MS;
   }
 
   /**

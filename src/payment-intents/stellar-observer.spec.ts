@@ -3,6 +3,7 @@ import {
   AdvisoryLockService,
 } from '@/common/services/advisory-lock.service';
 import { StellarObserverService } from '@/payment-intents/stellar-observer.service';
+import { OBSERVER_MAX_INTENTS_PER_CONSUMER } from '@/payment-intents/payment-intents.constants';
 
 /**
  * The observer's tick runs on every replica behind APISIX and fans a batch of
@@ -26,10 +27,12 @@ describe('StellarObserverService.tick', () => {
     }));
   }
 
-  function makePrisma(pending: unknown[]) {
+  function makePrisma(pending: Array<{ id: string }>) {
     return {
+      // The ranked selection: ids only, in the order the query dealt them.
+      $queryRaw: jest.fn().mockResolvedValue(pending.map(({ id }) => ({ id }))),
       paymentIntent: {
-        // Call 1 is the expiry sweep, call 2 the pending page.
+        // Call 1 is the expiry sweep, call 2 re-reads the ranked pending rows.
         findMany: jest
           .fn()
           .mockResolvedValueOnce([])
@@ -85,6 +88,7 @@ describe('StellarObserverService.tick', () => {
     await observer.tick();
 
     expect(prisma.paymentIntent.findMany).not.toHaveBeenCalled();
+    expect(prisma.$queryRaw).not.toHaveBeenCalled();
     expect(verifier.findMatchingPayment).not.toHaveBeenCalled();
   });
 
@@ -191,5 +195,97 @@ describe('StellarObserverService.tick', () => {
       'GP',
       'observer',
     );
+  });
+
+  /**
+   * The pending page used to be the oldest `batchSize` rows across every
+   * tenant. `POST /pay` is open to the shared public key, where every anonymous
+   * caller is one consumer, so a flood of open-amount intents (each up to ~51
+   * Horizon calls to scan) owned every tick and starved real tenants. The
+   * ranking itself runs in Postgres; these pin the query that expresses it.
+   */
+  describe('choosing what a tick reconciles', () => {
+    /** The SQL text of the ranked selection, whitespace-collapsed. */
+    const sqlOf = (prisma: any): string =>
+      (prisma.$queryRaw.mock.calls[0][0] as string[])
+        .join('?')
+        .replace(/\s+/g, ' ');
+
+    async function tickWith(prisma: any, verifier: unknown = {}) {
+      const observer = new StellarObserverService(
+        config,
+        prisma,
+        verifier as any,
+        {} as any,
+        grantingLock(),
+      );
+      await observer.tick();
+    }
+
+    it("deals every consumer's oldest row before anyone's second, capped per consumer", async () => {
+      const prisma = makePrisma([]);
+      await tickWith(prisma);
+
+      const sql = sqlOf(prisma);
+      expect(sql).toContain('PARTITION BY "consumerId"');
+      expect(sql).toContain('ORDER BY "rank", "createdAt", "id"');
+      expect(sql).toContain('WHERE "rank" <= ?');
+      expect(sql).toContain('LIMIT ?');
+
+      // Tagged template: [0] is the SQL parts, then now, the cap and the batch.
+      const [, , cap, limit] = prisma.$queryRaw.mock.calls[0];
+      expect(cap).toBe(OBSERVER_MAX_INTENTS_PER_CONSUMER);
+      expect(cap).toBeLessThan(BATCH_SIZE);
+      expect(limit).toBe(BATCH_SIZE);
+    });
+
+    it('never selects an intent already past its lifetime', async () => {
+      const prisma = makePrisma([]);
+      await tickWith(prisma);
+
+      const sql = sqlOf(prisma);
+      expect(sql).toContain(`"status" = 'PENDING'`);
+      expect(sql).toContain('("expiresAt" IS NULL OR "expiresAt" > ?)');
+      const [, now] = prisma.$queryRaw.mock.calls[0];
+      expect(now).toBeInstanceOf(Date);
+    });
+
+    it('re-reads exactly the ranked ids, and only while they are still PENDING', async () => {
+      const pending = pendingIntents(3);
+      const prisma = makePrisma(pending);
+      await tickWith(prisma, {
+        findMatchingPayment: jest.fn().mockResolvedValue({ valid: false }),
+      });
+
+      expect(prisma.paymentIntent.findMany).toHaveBeenLastCalledWith({
+        where: { id: { in: ['pi_1', 'pi_2', 'pi_3'] }, status: 'PENDING' },
+        include: { consumer: true },
+      });
+    });
+
+    it('reads nothing more when no intent is eligible', async () => {
+      const prisma = makePrisma([]);
+      await tickWith(prisma);
+
+      // The expiry pass only.
+      expect(prisma.paymentIntent.findMany).toHaveBeenCalledTimes(1);
+    });
+
+    it('spends no Horizon call on an intent that lapsed while the batch drained', async () => {
+      const [lapsed, live] = pendingIntents(2);
+      const pending = [
+        { ...lapsed, expiresAt: new Date(Date.now() - 1_000) },
+        { ...live, expiresAt: new Date(Date.now() + 60_000) },
+      ];
+      const verifier = {
+        findMatchingPayment: jest.fn().mockResolvedValue({ valid: false }),
+      };
+      await tickWith(makePrisma(pending), verifier);
+
+      expect(verifier.findMatchingPayment).toHaveBeenCalledTimes(1);
+      expect(verifier.findMatchingPayment).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'pi_2' }),
+      );
+    });
   });
 });

@@ -46,6 +46,7 @@ import {
   fromStroops,
   toStroops,
 } from '@/swaps/swap-math';
+import { SwapRequestTerms, swapMatchesRequest } from '@/swaps/swap-idempotency';
 import { SWAP_COMMISSION_MEMO } from '@/swaps/swaps.constants';
 
 /** A stored swap plus its derived QR — the shape API responses return. */
@@ -131,10 +132,12 @@ export class SwapsService {
    * via {@link submit}.
    *
    * Idempotency: pass `Idempotency-Key` (header) or `idempotencyKey` (body). The
-   * same key for a consumer returns the existing swap instead of building another
-   * transaction (and never mints a second `SWAP_CREATED`). Without a key, the
-   * unique `(network, txHash)` constraint still rejects a byte-identical rebuild
-   * with 409. Optional `STELLAR_SWAP_SINGLE_INFLIGHT=true` rejects a second
+   * same key for a consumer, sent with the same request, returns the existing
+   * swap instead of building another transaction (and never mints a second
+   * `SWAP_CREATED`); the same key with a different request is a 409
+   * `idempotency_conflict` — see {@link replay}. Without a key, the unique
+   * `(network, txHash)` constraint still rejects a byte-identical rebuild with
+   * 409. Optional `STELLAR_SWAP_SINGLE_INFLIGHT=true` rejects a second
    * non-expired PENDING swap for the same `(consumer, source, network)` with 409.
    */
   async create(
@@ -148,14 +151,16 @@ export class SwapsService {
       headerIdempotencyKey,
       dto.idempotencyKey,
     );
+    const memo = resolveMemoId(dto.memo);
+    const terms = this.requestTerms(network, dto, memo);
 
-    // Fast path: same key → same swap (no Horizon round-trip).
+    // Fast path: same key and same request → same swap (no Horizon round-trip).
     if (idempotencyKey) {
       const existing = await this.findByIdempotencyKey(
         local.id,
         idempotencyKey,
       );
-      if (existing) return this.withQr(existing);
+      if (existing) return this.replay(existing, terms, consumer);
     }
 
     await this.assertNoInflightSwap(local.id, dto.source, network);
@@ -166,8 +171,7 @@ export class SwapsService {
       resolvePlanCommissionBps(this.config, consumer),
     );
 
-    const destination = dto.destination ?? dto.source;
-    const memo = resolveMemoId(dto.memo);
+    const destination = terms.destination;
     const feeWallet = this.feeWallet();
     const feeStroops = toStroops(priced.feeAmount);
 
@@ -255,10 +259,11 @@ export class SwapsService {
       expiresAt: new Date(Date.now() + stellarCfg.timeoutSeconds * 1000),
     });
 
-    // Race: another request with the same key won the insert — return theirs.
+    // Race: another request with the same key won the insert — return theirs,
+    // provided it was the same request.
     if (!swap) {
       const raced = await this.findByIdempotencyKey(local.id, idempotencyKey!);
-      if (raced) return this.withQr(raced);
+      if (raced) return this.replay(raced, terms, consumer);
       throw ApiError.conflict(
         ApiErrorCode.IdempotencyConflict,
         'A swap with this transaction hash already exists for this network. ' +
@@ -303,6 +308,63 @@ export class SwapsService {
   private resolveIdempotencyKey(header?: string, body?: string): string | null {
     const raw = (header ?? body)?.trim();
     return raw ? raw : null;
+  }
+
+  /**
+   * The request as a stored row would record it, so a replay can be compared
+   * field by field. Applies the same defaults `create` does — destination falls
+   * back to the source, slippage to the configured default — because a retry
+   * that leaves them out is asking for the same swap.
+   */
+  private requestTerms(
+    network: StellarNetwork,
+    dto: CreateSwapDto,
+    memo: string | null,
+  ): SwapRequestTerms {
+    const send = resolveAsset(dto.sourceAssetCode, dto.sourceAssetIssuer);
+    const dest = resolveAsset(dto.destAssetCode, dto.destAssetIssuer);
+    return {
+      network,
+      source: dto.source,
+      destination: dto.destination ?? dto.source,
+      sendAsset: send.code,
+      sendAssetIssuer: send.issuer,
+      sendAmount: dto.amount,
+      destAsset: dest.code,
+      destAssetIssuer: dest.issuer,
+      slippageBps: this.resolveSlippage(dto.slippageBps),
+      memo,
+    };
+  }
+
+  /**
+   * Answers a request that reused an `Idempotency-Key`: the stored swap when it
+   * is the same request, a 409 when it is not.
+   *
+   * A key is scoped to the consumer, and every anonymous wallet on the shared
+   * public API key is the same consumer — so "same consumer" never meant "same
+   * caller". Returning the stored row unconditionally handed one caller's
+   * envelope to anyone who later sent the key, including a transfer to the
+   * first caller that the second would then sign. The conflict describes nothing
+   * about the stored swap, because whoever is asking may not be who created it.
+   */
+  private async replay(
+    existing: Swap,
+    request: SwapRequestTerms,
+    consumer: GatewayConsumer,
+  ): Promise<SwapView> {
+    if (!swapMatchesRequest(existing, request)) {
+      this.logger.warn(
+        `Idempotency-Key reused for a different swap request ` +
+          `(swap=${existing.id}, consumer=${consumer.username})`,
+      );
+      throw ApiError.conflict(
+        ApiErrorCode.IdempotencyConflict,
+        'This Idempotency-Key was already used for a different swap request. ' +
+          'Use a new key for a new request.',
+      );
+    }
+    return this.withQr(existing);
   }
 
   private async findByIdempotencyKey(

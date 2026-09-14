@@ -15,6 +15,8 @@ import { PrismaService } from '@/prisma/prisma.service';
 import { StellarService } from '@/stellar/stellar.service';
 import { LiquidityPoolsService } from '@/liquidity-pools/liquidity-pools.service';
 import { SwapsService } from '@/swaps/swaps.service';
+import { SETTLEMENT_MAX_ROWS_PER_CONSUMER } from '@/observer/observer.constants';
+import type { Prisma } from '@generated/prisma/client';
 
 /** On-chain settlement of a stored transaction, keyed by its hash. */
 /**
@@ -133,12 +135,7 @@ export class SettlementObserverService
 
   // ── Swaps ────────────────────────────────────────────────────────────────
   private async reconcileSwaps(batchSize: number): Promise<void> {
-    const rows = await this.prisma.swap.findMany({
-      where: { status: { in: ['PENDING', 'SUBMITTED'] } },
-      include: { consumer: true },
-      orderBy: { createdAt: 'asc' },
-      take: batchSize,
-    });
+    const rows = await this.selectInFlightSwaps(batchSize);
     const now = new Date();
 
     // One Horizon lookup per txHash. Historical duplicate hashes (pre-migration)
@@ -223,12 +220,7 @@ export class SettlementObserverService
 
   // ── Liquidity pool operations ──────────────────────────────────────────────
   private async reconcileLiquidity(batchSize: number): Promise<void> {
-    const rows = await this.prisma.liquidityPoolOperation.findMany({
-      where: { status: { in: ['PENDING', 'SUBMITTED'] } },
-      include: { consumer: true },
-      orderBy: { createdAt: 'asc' },
-      take: batchSize,
-    });
+    const rows = await this.selectInFlightLiquidity(batchSize);
     const now = new Date();
 
     // One Horizon lookup per txHash, exactly as the swaps branch above.
@@ -313,6 +305,91 @@ export class SettlementObserverService
         }
       }
     }
+  }
+
+  // ── Fair selection ─────────────────────────────────────────────────────────
+  /**
+   * This tick's in-flight swaps: dealt round-robin across consumers, at most
+   * {@link SETTLEMENT_MAX_ROWS_PER_CONSUMER} from any one of them.
+   *
+   * It used to be the oldest `batchSize` rows across every tenant, which let
+   * whoever had the most rows in flight own every tick (see the constant for how
+   * cheaply the shared public key arranges that). Ranking each consumer's rows
+   * oldest-first and ordering by that rank hands out every consumer's oldest row
+   * before anyone's second, so a quiet tenant is served on the next tick however
+   * large the backlog in front of it.
+   *
+   * Lapsed rows are deliberately NOT filtered out, unlike the payment-intent
+   * observer's equivalent query. Here a row may only be expired on a Horizon 404
+   * (see {@link Settlement}), so a row past its timebounds still needs its one
+   * lookup — it may well have settled before they closed.
+   *
+   * Prisma has no per-group limit, hence the window function. The rows are then
+   * re-read through the client, still in flight, so no Horizon lookup is spent
+   * on a row `submit` finalized between the two reads — it can no longer
+   * settle — and the sweep keeps its typed row and consumer. Oldest first, as
+   * before: the duplicate-hash grouping treats a group's first row as the one
+   * that announces.
+   */
+  private async selectInFlightSwaps(
+    batchSize: number,
+  ): Promise<Prisma.SwapGetPayload<{ include: { consumer: true } }>[]> {
+    const ranked = await this.prisma.$queryRaw<{ id: string }[]>`
+      SELECT "id"
+      FROM (
+        SELECT "id",
+               "createdAt",
+               ROW_NUMBER() OVER (
+                 PARTITION BY "consumerId" ORDER BY "createdAt", "id"
+               ) AS "rank"
+        FROM "swap"
+        WHERE "status" IN ('PENDING', 'SUBMITTED')
+      ) AS "inflight"
+      WHERE "rank" <= ${SETTLEMENT_MAX_ROWS_PER_CONSUMER}
+      ORDER BY "rank", "createdAt", "id"
+      LIMIT ${batchSize}
+    `;
+    if (ranked.length === 0) return [];
+    return this.prisma.swap.findMany({
+      where: {
+        id: { in: ranked.map((row) => row.id) },
+        status: { in: ['PENDING', 'SUBMITTED'] },
+      },
+      include: { consumer: true },
+      orderBy: { createdAt: 'asc' },
+    });
+  }
+
+  /** {@link selectInFlightSwaps}, for liquidity pool operations. */
+  private async selectInFlightLiquidity(
+    batchSize: number,
+  ): Promise<
+    Prisma.LiquidityPoolOperationGetPayload<{ include: { consumer: true } }>[]
+  > {
+    const ranked = await this.prisma.$queryRaw<{ id: string }[]>`
+      SELECT "id"
+      FROM (
+        SELECT "id",
+               "createdAt",
+               ROW_NUMBER() OVER (
+                 PARTITION BY "consumerId" ORDER BY "createdAt", "id"
+               ) AS "rank"
+        FROM "liquidity_pool_operation"
+        WHERE "status" IN ('PENDING', 'SUBMITTED')
+      ) AS "inflight"
+      WHERE "rank" <= ${SETTLEMENT_MAX_ROWS_PER_CONSUMER}
+      ORDER BY "rank", "createdAt", "id"
+      LIMIT ${batchSize}
+    `;
+    if (ranked.length === 0) return [];
+    return this.prisma.liquidityPoolOperation.findMany({
+      where: {
+        id: { in: ranked.map((row) => row.id) },
+        status: { in: ['PENDING', 'SUBMITTED'] },
+      },
+      include: { consumer: true },
+      orderBy: { createdAt: 'asc' },
+    });
   }
 
   /**

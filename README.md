@@ -1,6 +1,8 @@
 # Cosmos Pay — Payments Microservice
 
-Payments microservice built with **NestJS 11** + **Prisma 7 (PostgreSQL)**.
+**English** · [Español](./README.es.md) · [Português](./README.pt.md) · [Deutsch](./README.de.md) · [Français](./README.fr.md) · [हिन्दी](./README.hi.md) · [简体中文](./README.zh.md)
+
+Payments microservice built with **NestJS 12** + **Prisma 7 (PostgreSQL)**.
 
 It is a *separate* application from the Cosmos developer platform (`paydev`). The
 dev platform only **issues** APISIX access tokens (consumers + `key-auth`
@@ -61,6 +63,7 @@ src/
   common/
     guards/apisix.guard.ts        THE gateway gate
     guards/public-key.guard.ts    confines the SHARED public key to @AllowPublicKey routes
+    guards/console-only.guard.ts  confines a route to the platform console (alias recovery start)
     middleware/apisix-context...  extracts consumer identity from gateway headers
     decorators/                   @Public(), @CurrentConsumer(), @AllowPublicKey()
     filters/                      consistent error responses
@@ -82,6 +85,8 @@ src/
   pollar/                         Pollar OAuth bridge (social login → a wallet on both networks) + operator routes
   products/                       merchant catalogue
   customers/                      payer records derived from intents
+  aliases/                        claimable payment handles: signed claims, resolution, email recovery
+  assets/                         curated asset registry: the (code, issuer) pairs vouched for, per network
   analytics/                      summary, balances, API logs, webhook logs
   activity/                       client telemetry ingest + feed (wallet, dashboard)
   admin/                          cross-tenant platform admin (console-only), audited
@@ -91,18 +96,21 @@ prisma/schema.prisma              Consumer, PaymentIntent, Swap, LiquidityPoolOp
                                   Blockchain/BankAccount/VirtualAccount, BlindpayQuote,
                                   BlindpayWebhookEvent, Payin, Payout, PollarOauthSession,
                                   PollarUserWallet, RequestLog, ActivityEvent,
-                                  AdminAuditLog
-test/                             e2e suite proving the gateway gate
+                                  AdminAuditLog, Alias, AliasAddress,
+                                  AliasChallenge, AliasRecovery
+test/                             e2e suites: gateway gate, admin + alias console gates,
+                                  payment intents, KYC, webhooks, Pollar
+scripts/                          OpenAPI generator, README check, operator scripts
 ```
 
 ## API
 
 All routes are versioned under `/v1` (URI versioning).
 
-**The route list lives in the generated OpenAPI contract, not here.** A
-hand-maintained table drifted to 22 of ~80 endpoints and omitted five shipped
-modules; the spec is regenerated from the controllers and DTOs on every CI run
-(`npm run openapi:check` fails the build if it drifts), so it cannot go stale:
+Every route is listed in the [route index](#route-index) below, with its scope.
+**Request and response schemas live in the generated OpenAPI contract**, which is
+regenerated from the controllers and DTOs on every CI run
+(`npm run openapi:check` fails the build if it drifts):
 
 - `openapi/openapi.json` / `openapi/openapi.yaml` — committed, reviewable in a diff
 - `/docs` — Swagger UI, when `SWAGGER_ENABLED=true`
@@ -119,10 +127,149 @@ modules; the spec is regenerated from the controllers and DTOs on every CI run
 | Offramp           | `/v1/offramp`            | Payout quotes, authorize, payouts (client-signed)         |
 | Products          | `/v1/products`           | Merchant catalogue                                        |
 | Customers         | `/v1/customers`          | Payer records derived from intents                        |
+| Aliases           | `/v1/aliases`            | Claimable payment handles: claim, resolve, recover        |
+| Assets            | `/v1/assets`             | Curated asset registry per network                        |
+| Pollar            | `/v1/pollar`             | OAuth bridge (social login → wallet) + operator routes    |
 | Analytics         | `/v1/summary`, `/v1/balances`, `/v1/logs` | Dashboard aggregates and logs            |
 | Activity          | `/v1/activity`           | Client-reported events: ingest, feed, rollup               |
 | Admin             | `/v1/admin`              | Cross-tenant reads/writes — platform console only, audited |
 | Health            | `/v1/health`             | Liveness / readiness (`@Public`)                          |
+
+### Route index
+
+Every route this service serves. **Scope** is what the API key must hold — *one
+of* means any of the listed scopes is enough, and `—` means any authenticated key.
+**Public key** marks the routes the shared public key may call (see
+[The shared public API key](#the-shared-public-api-key)). A route marked
+*platform console* takes no API key at all; only the console backend reaches it.
+Paths use the OpenAPI `{param}` form, and `npm run readme:check` fails CI when a
+route in the contract is missing from this table.
+
+| Method | Path | Scope | Public key |
+| ------ | ---- | ----- | ---------- |
+| GET | `/v1/activity/events` | `activity:read` |  |
+| POST | `/v1/activity/events` | `activity:write` | ✓ |
+| GET | `/v1/activity/summary` | `activity:read` |  |
+| GET | `/v1/admin/audit-logs` | platform console |  |
+| GET | `/v1/admin/consumers` | platform console |  |
+| GET | `/v1/admin/customers` | platform console |  |
+| GET | `/v1/admin/payins` | platform console |  |
+| GET | `/v1/admin/payment-intents` | platform console |  |
+| GET | `/v1/admin/payouts` | platform console |  |
+| GET | `/v1/admin/products` | platform console |  |
+| GET | `/v1/admin/receivers` | platform console |  |
+| PATCH | `/v1/admin/receivers/{id}/access` | platform console |  |
+| POST | `/v1/admin/receivers/{id}/approve` | platform console |  |
+| POST | `/v1/admin/receivers/{id}/enable` | platform console |  |
+| POST | `/v1/admin/receivers/{id}/tos` | platform console |  |
+| GET | `/v1/admin/summary` | platform console |  |
+| GET | `/v1/admin/swaps` | platform console |  |
+| GET | `/v1/aliases` | `payments:read` |  |
+| POST | `/v1/aliases` | `payments:write` |  |
+| GET | `/v1/aliases/availability/{name}` | `payments:read` | ✓ |
+| GET | `/v1/aliases/by-address/{address}` | `payments:read` | ✓ |
+| POST | `/v1/aliases/challenges` | `payments:write` |  |
+| GET | `/v1/aliases/resolve/{name}` | `payments:read` | ✓ |
+| DELETE | `/v1/aliases/{name}` | `payments:write` |  |
+| POST | `/v1/aliases/{name}/addresses` | `payments:write` |  |
+| DELETE | `/v1/aliases/{name}/addresses/{addressId}` | `payments:write` |  |
+| POST | `/v1/aliases/{name}/recovery` | platform console |  |
+| POST | `/v1/aliases/{name}/recovery/complete` | `payments:write` |  |
+| GET | `/v1/assets` | — | ✓ |
+| GET | `/v1/balances` | `payments:read` |  |
+| POST | `/v1/blindpay/webhooks` | none — `@Public()`, Svix signature |  |
+| GET | `/v1/customers` | `customers:read` |  |
+| POST | `/v1/customers` | `customers:write` |  |
+| GET | `/v1/customers/{id}` | `customers:read` |  |
+| PATCH | `/v1/customers/{id}` | `customers:write` |  |
+| DELETE | `/v1/customers/{id}` | `customers:write` |  |
+| GET | `/v1/health/liveness` | none — `@Public()` |  |
+| GET | `/v1/health/readiness` | none — `@Public()` |  |
+| GET | `/v1/kyc/bank-details` | `kyc:read` |  |
+| GET | `/v1/kyc/rails` | `kyc:read` |  |
+| GET | `/v1/kyc/receivers` | `kyc:read` |  |
+| POST | `/v1/kyc/receivers` | `kyc:write` |  |
+| GET | `/v1/kyc/receivers/{id}` | `kyc:read` |  |
+| PATCH | `/v1/kyc/receivers/{id}` | `kyc:write` |  |
+| DELETE | `/v1/kyc/receivers/{id}` | `kyc:write` |  |
+| PATCH | `/v1/kyc/receivers/{id}/access` | `kyc:write` |  |
+| POST | `/v1/kyc/receivers/{id}/approve` | `kyc:write` |  |
+| POST | `/v1/kyc/receivers/{id}/enable` | `kyc:write` |  |
+| POST | `/v1/kyc/receivers/{id}/tos` | `kyc:write` |  |
+| GET | `/v1/kyc/receivers/{receiverId}/bank-accounts` | `kyc:read` |  |
+| POST | `/v1/kyc/receivers/{receiverId}/bank-accounts` | `kyc:write` |  |
+| DELETE | `/v1/kyc/receivers/{receiverId}/bank-accounts/{id}` | `kyc:write` |  |
+| GET | `/v1/kyc/receivers/{receiverId}/wallets` | `kyc:read` |  |
+| POST | `/v1/kyc/receivers/{receiverId}/wallets` | `kyc:write` |  |
+| GET | `/v1/kyc/receivers/{receiverId}/wallets/sign-message` | `kyc:read` |  |
+| DELETE | `/v1/kyc/receivers/{receiverId}/wallets/{id}` | `kyc:write` |  |
+| POST | `/v1/kyc/terms-of-service` | `kyc:write` |  |
+| POST | `/v1/kyc/upload` | `kyc:write` |  |
+| GET | `/v1/liquidity-pools` | one of `liquidity:read`, `swaps:read` | ✓ |
+| POST | `/v1/liquidity-pools/deposit` | one of `liquidity:write`, `swaps:write` | ✓ |
+| GET | `/v1/liquidity-pools/operations` | one of `liquidity:read`, `swaps:read` |  |
+| GET | `/v1/liquidity-pools/operations/{id}` | one of `liquidity:read`, `swaps:read` |  |
+| POST | `/v1/liquidity-pools/operations/{id}/submit` | one of `liquidity:write`, `swaps:write` | ✓ |
+| GET | `/v1/liquidity-pools/positions` | one of `liquidity:read`, `swaps:read` | ✓ |
+| POST | `/v1/liquidity-pools/withdraw` | one of `liquidity:write`, `swaps:write` | ✓ |
+| GET | `/v1/liquidity-pools/{poolId}` | one of `liquidity:read`, `swaps:read` | ✓ |
+| GET | `/v1/logs` | `payments:read` |  |
+| GET | `/v1/logs/webhooks` | `webhooks:read` |  |
+| GET | `/v1/offramp/payouts` | `offramp:read` |  |
+| POST | `/v1/offramp/payouts` | `offramp:write` |  |
+| POST | `/v1/offramp/payouts/authorize` | `offramp:write` |  |
+| GET | `/v1/offramp/payouts/{id}` | `offramp:read` |  |
+| POST | `/v1/offramp/payouts/{id}/documents` | `offramp:write` |  |
+| POST | `/v1/offramp/quotes` | `offramp:write` |  |
+| GET | `/v1/onramp/payins` | `onramp:read` |  |
+| POST | `/v1/onramp/payins` | `onramp:write` |  |
+| GET | `/v1/onramp/payins/{id}` | `onramp:read` |  |
+| POST | `/v1/onramp/quotes` | `onramp:write` |  |
+| GET | `/v1/onramp/receivers/{receiverId}/virtual-accounts` | `onramp:read` |  |
+| POST | `/v1/onramp/receivers/{receiverId}/virtual-accounts` | `onramp:write` |  |
+| POST | `/v1/onramp/trustline` | `onramp:write` |  |
+| GET | `/v1/payment-intents` | `payments:read` |  |
+| POST | `/v1/payment-intents/pay` | `payments:write` | ✓ |
+| POST | `/v1/payment-intents/tx` | `payments:write` | ✓ |
+| GET | `/v1/payment-intents/{id}` | `payments:read` |  |
+| PATCH | `/v1/payment-intents/{id}` | `payments:write` |  |
+| DELETE | `/v1/payment-intents/{id}` | `payments:write` |  |
+| GET | `/v1/payment-intents/{id}/transitions` | `payments:read` |  |
+| POST | `/v1/payment-intents/{id}/validate` | `payments:write` |  |
+| POST | `/v1/pollar/oauth/authorize` | `pollar:write` |  |
+| GET | `/v1/pollar/oauth/callback` | none — `@Public()` |  |
+| GET | `/v1/pollar/oauth/callback/{state}` | none — `@Public()` |  |
+| POST | `/v1/pollar/oauth/logout` | `pollar:write` |  |
+| POST | `/v1/pollar/oauth/refresh` | `pollar:write` |  |
+| GET | `/v1/pollar/oauth/sessions/{state}` | `pollar:read` |  |
+| POST | `/v1/pollar/oauth/token` | `pollar:write` |  |
+| POST | `/v1/pollar/tokens/verify` | `pollar:read` |  |
+| POST | `/v1/pollar/users` | `pollar:write` |  |
+| POST | `/v1/pollar/users/with-wallet` | `pollar:write` |  |
+| POST | `/v1/pollar/wallets/activate` | `pollar:write` |  |
+| POST | `/v1/pollar/wallets/{address}/trustlines` | `pollar:write` |  |
+| POST | `/v1/pollar/wallets/{address}/trustlines/default` | `pollar:write` |  |
+| DELETE | `/v1/pollar/wallets/{address}/trustlines/{code}/{issuer}` | `pollar:write` |  |
+| GET | `/v1/products` | `products:read` |  |
+| POST | `/v1/products` | `products:write` |  |
+| GET | `/v1/products/{id}` | `products:read` |  |
+| PATCH | `/v1/products/{id}` | `products:write` |  |
+| DELETE | `/v1/products/{id}` | `products:write` |  |
+| GET | `/v1/summary` | `payments:read` |  |
+| GET | `/v1/swaps` | `swaps:read` |  |
+| POST | `/v1/swaps` | `swaps:write` | ✓ |
+| POST | `/v1/swaps/quote` | `swaps:read` | ✓ |
+| GET | `/v1/swaps/{id}` | `swaps:read` |  |
+| POST | `/v1/swaps/{id}/submit` | `swaps:write` | ✓ |
+| GET | `/v1/webhooks` | `webhooks:read` |  |
+| POST | `/v1/webhooks` | `webhooks:write` |  |
+| GET | `/v1/webhooks/{id}` | `webhooks:read` |  |
+| PATCH | `/v1/webhooks/{id}` | `webhooks:write` |  |
+| DELETE | `/v1/webhooks/{id}` | `webhooks:write` |  |
+| GET | `/v1/webhooks/{id}/deliveries` | `webhooks:read` |  |
+| POST | `/v1/webhooks/{id}/deliveries/{deliveryId}/redeliver` | `webhooks:write` |  |
+| POST | `/v1/webhooks/{id}/ping` | `webhooks:write` |  |
+| POST | `/v1/webhooks/{id}/rotate-secret` | `webhooks:write` |  |
 
 ### Error responses
 
@@ -155,7 +302,8 @@ A few that are easy to confuse:
 | `insufficient_scope` | 403 | The API key lacks the scope. Re-provision the key |
 | `account_disabled` | 403 | An operator disabled this fiat account. Not a key problem |
 | `gateway_required` | 403 | The request did not arrive through APISIX |
-| `idempotency_conflict` | 409 | This `Idempotency-Key` already produced a resource |
+| `admin_console_only` | 403 | The route belongs to the platform console (`/v1/admin`, starting an alias recovery). No API key can call it |
+| `idempotency_conflict` | 409 | This `Idempotency-Key` (or payment-intent memo) already produced a resource for a *different* request. Repeat the original request, or use a new key |
 | `kyc_state_invalid` | 409 | An illegal KYC state transition — not a duplicate request |
 | `operation_in_flight` | 409 | A conflicting operation is still settling |
 | `payload_expired` | 409 | The delivery body is past retention and cannot be re-sent |
@@ -186,6 +334,10 @@ its tick when another replica holds it:
 | `StellarObserverService`       | `PaymentIntentObserver`  |
 | `RequestLogRetentionService`   | `RequestLogRetention`    |
 | Webhook delivery sweeper       | `WebhookDeliverySweeper` |
+| `PollarOauthSweeperService`    | `PollarOauthSweeper`     |
+| `RateLimitPruneService`        | `RateLimitPrune`         |
+| `PollarWalletProvisionSweeperService` | `PollarWalletProvisionSweeper` |
+| `AliasChallengeSweeperService` | `AliasChallengeSweeper`  |
 
 `pg_try_advisory_xact_lock` is used rather than the session-level variant for
 three reasons: it never blocks (a replica that loses simply skips, which is what
@@ -203,19 +355,28 @@ numbers are never reused.
 A payment is confirmed against the Stellar network in one place
 (`StellarVerifierService`): the transaction must be **successful**, contain a
 **native (XLM) payment** to the intent's `destination` for the **exact amount**,
-and — when the intent has a memo — the tx **memo must match** (`memo_type: id`).
+— when the intent has a memo — carry a **matching memo** (`memo_type: id`), and
+have closed **no earlier than a minute before the intent was created**
+(`TX_CREATED_AT_SKEW_MS`). The age floor is what stops an old on-chain payment
+with the same terms from settling a new intent.
 
 Two paths use that single rule:
 
 - **Manual:** `POST /v1/payment-intents/:id/validate` with `{ "txHash": "<64-hex>" }`.
   On a match the intent is set to `SUCCEEDED` (and `txHash` saved) and a
-  `PAYMENT_INTENT_SUCCEEDED` webhook fires; a tx that failed on-chain → `FAILED`;
-  a mismatch leaves the status unchanged so a correct tx can still be submitted.
+  `PAYMENT_INTENT_SUCCEEDED` webhook fires. A tx that failed on-chain marks the
+  intent `FAILED` **only when it was this intent's own payment** — same memo,
+  destination and asset. Any other transaction, failed or not, is a mismatch that
+  leaves the status unchanged, so a correct tx can still be submitted; otherwise
+  the hash of any failed transaction on the network would fail an intent for good.
 - **Automatic (permanent observer):** `StellarObserverService` polls Horizon
   every `OBSERVER_INTERVAL_MS` for `PENDING` intents — by reported `txHash`, or by
   scanning payments to the destination — and finalizes matches the same way, so
-  statuses change and events fire **without anyone calling the API**. Disable for
-  local dev with `OBSERVER_ENABLED=false`.
+  statuses change and events fire **without anyone calling the API**. One tick
+  takes at most `OBSERVER_MAX_INTENTS_PER_CONSUMER` (10) intents per consumer and
+  never scans an expired one, so a flood from one consumer — the shared public key
+  included — cannot starve everyone else's settlement. Disable for local dev with
+  `OBSERVER_ENABLED=false`.
 
 ### API request logs retention
 
@@ -456,8 +617,13 @@ calls (build, validation, observer) target it.
 
 **The memo is a mandatory `MEMO_ID`** — it identifies the payment on-chain and
 gives the intent **idempotency**: `(consumer, memo)` is unique, so re-creating
-with the same memo returns the original intent. If you don't pass `memo`, a
-random uint64 is generated.
+with the same memo **and the same terms** returns the original intent. The same
+memo with any different term — kind, network, destination, amount, asset, `msg`,
+`callback`, or `source` for `tx` — is `409 idempotency_conflict`, and the error
+says nothing about the stored intent. That comparison exists because of the
+shared public key: every anonymous wallet is one consumer, so without it a memo
+someone else used first handed you *their* intent, with a QR that paid them. If
+you don't pass `memo`, a random uint64 is generated.
 
 **`POST /v1/payment-intents/tx`** — the payer (`source`) is known, so we build
 the unsigned `TransactionEnvelope` and a `web+stellar:tx?xdr=...` URI.
@@ -558,10 +724,12 @@ Reachable with the public key today:
 | `POST /v1/payment-intents/tx` \| `pay` | Build a SEP-7 intent from the request |
 | `POST /v1/activity/events` | Telemetry ingest — see below |
 | `GET /v1/assets` | The public asset catalog |
+| `GET /v1/aliases/resolve/:name` \| `availability/:name` \| `by-address/:address` | A payer resolving a handle is the anonymous caller this key exists for; the answer is a pure function of the request and never includes the owner's mailbox |
 
 Refused, and deliberately: `GET /v1/swaps`, `GET /v1/swaps/:id`,
 `GET /v1/liquidity-pools/operations{,/:id}`, `GET /v1/activity/events`,
-`GET /v1/activity/summary`, every payment-intent read, and everything under
+`GET /v1/activity/summary`, every payment-intent read, every alias owner route
+(claim, list, add or remove an address, release, recovery), and everything under
 `/v1/kyc`, `/v1/onramp`, `/v1/offramp` and `/v1/webhooks`. A wallet with no
 account builds its history from Horizon instead, which is the authoritative
 source for on-chain activity anyway.
@@ -648,9 +816,16 @@ same fields plus `source` (the paying/signing account); `destination` defaults t
 `source` (a self-swap) and an optional `memo` (MEMO_ID) is echoed on-chain.
 
 Optional **idempotency** (issue #17): send an `Idempotency-Key` header (preferred)
-or `idempotencyKey` in the body. Retries with the same key for the same consumer
-return the **existing** swap (`id` + `txHash`) instead of building another Stellar
-transaction. Without a key, the unique `(network, txHash)` constraint still rejects
+or `idempotencyKey` in the body. A retry with the same key **and the same request**
+— network, source, destination, both assets, amount, slippage and memo — returns
+the **existing** swap (`id` + `txHash`) instead of building another Stellar
+transaction. The same key with any different request is `409 idempotency_conflict`,
+and the error names nothing about the stored swap. Liquidity deposits and
+withdrawals follow the same rule, with the operation's kind compared as well. The
+comparison exists because of the shared public key: every anonymous wallet is one
+consumer, so a key someone else used first handed you *their* unsigned envelope —
+one that could move your funds to them. Without a key, the unique
+`(network, txHash)` constraint still rejects
 a byte-identical rebuild with **409** (sequence / XDR collision). When
 `STELLAR_SWAP_SINGLE_INFLIGHT=true`, a second non-expired `PENDING` swap for the
 same `(consumer, source, network)` also returns **409** naming the existing id
@@ -675,6 +850,109 @@ The signed transaction's hash is verified against the one the service built befo
 it is broadcast, so a caller can never have the service relay an arbitrary
 transaction. A swap fires `SWAP_CREATED` / `SWAP_SUBMITTED` / `SWAP_SUCCEEDED` /
 `SWAP_FAILED` webhook events through the same dispatcher.
+
+## Aliases — claimable payment handles
+
+An alias lets a payer type `emanuel250` instead of `GA5ZSE…`. It is also what a
+payer reads immediately before authorising a transfer, so every rule below exists
+because getting it wrong does not produce a bad row — it produces a payment to
+the wrong account under a name the payer trusted.
+
+### Claimed by proving control of a key, not by asking
+
+```
+wallet ──1. POST /v1/aliases/challenges {name, address, network} ──▶ nonce + the EXACT message to sign
+wallet ──2. signs SHA-256(domain ‖ 0x00 ‖ uint32be(length) ‖ message) with that address's key
+wallet ──3. POST /v1/aliases {name, email, nonce, signature} ────────▶ alias bound to the calling consumer
+```
+
+- **The service returns the message; the client never rebuilds it.** A client that
+  assembles it from documentation is one field-order change away from signatures
+  that are refused with nothing on either side saying why.
+- **The signature covers a domain-tagged digest, never a transaction.** Nothing
+  this flow asks a wallet to sign can be submitted to the network, and the domain
+  (`Cosmos Pay alias claim v1`) belongs to this feature alone, so a dapp that talks
+  a user into signing an arbitrary message cannot come away with a valid claim.
+- **The purpose is inside the signed bytes** (`CLAIM`, `ADD_ADDRESS`, `RECOVER`),
+  so a signature collected to add an address cannot be replayed to finish a
+  recovery.
+- **The address comes from the challenge, not from the claim body.** The claim
+  has no address field, so nobody can sign for one address and register another.
+- **Challenges are single-use and live five minutes.** The signature is verified
+  *before* the challenge is spent, so a junk signature cannot burn a rival's
+  in-flight nonce, and spending it is a compare-and-swap, so two requests cannot
+  both spend one.
+- **A race is settled by the unique index on `alias.name`**, not by a pre-check;
+  the loser gets `409 alias_taken`.
+
+### What a handle may be
+
+Lowercase `a-z`, `0-9` and `_` (never at either end), 3–32 characters, folded to
+lowercase before uniqueness is decided. No Unicode: a homoglyph set is unbounded,
+and no normalization makes a Cyrillic `а` safe to render next to an amount. Also
+refused: reserved words that would impersonate the product or an operator
+(`admin`, `support`, `cosmospay`, `stellar`, …) and anything that reads like a
+Stellar account (`g` or `m` followed by 20 or more base32 characters). The rule is
+`src/aliases/alias-name.ts`.
+
+### Many addresses, one name
+
+An alias points at up to 20 addresses across networks — a phone, a desktop, a cold
+wallet, testnet — with exactly one primary per network, enforced by a partial
+unique index. Adding an address takes **two** proofs: the caller owns the alias,
+and the new address signs its own `ADD_ADDRESS` challenge. The last remaining
+address cannot be removed (release the alias instead), and one consumer may hold
+at most 25 aliases.
+
+A `SUSPENDED` alias — an operator hold — resolves to nothing. A suspension that
+still hands out an account does nothing about the money.
+
+### Recovery goes through email, and through the platform console
+
+Keys get lost, and a lost key must not leave a name unreachable forever, so a claim
+records a recovery mailbox. That makes recovery the most dangerous path in the
+module:
+
+1. The **platform console** calls `POST /v1/aliases/:name/recovery {email}`. The
+   response is identical whether or not the handle and mailbox matched; on a match
+   it carries a single-use token (30 minutes, stored only as a SHA-256), which the
+   console emails. This service sends no mail.
+2. The user gets a `RECOVER` challenge for the new key and calls
+   `POST /v1/aliases/:name/recovery/complete {token, address, network, nonce, signature}`
+   with their own API key. Both proofs are required: the token proves the mailbox,
+   the signature proves the key.
+3. Ownership moves to the calling consumer and **every previous address is
+   dropped**. Recovery exists because the old keys are gone, and leaving them
+   resolvable would keep whoever holds them receiving the payments.
+
+**Why step 1 belongs to the console.** The token *is* the proof of mailbox control,
+so it may only reach the party that delivers the mail. The route used to accept any
+key holding `payments:write` and returned the token to whoever asked — so anyone
+who knew a handle and its owner's email could take the alias, and every payment
+sent to it. `ConsoleOnlyGuard` now refuses every API-key caller with
+`403 admin_console_only` before the alias is even looked up, and the route is kept
+out of the published contract. Five wrong tokens burn a recovery (the owner simply
+starts another; an attacker cannot lock a name by failing at it), and a suspended
+alias cannot be recovered.
+
+Expired challenges and recoveries are deleted a day after they expire by
+`AliasChallengeSweeperService` (hourly, one replica per tick).
+
+### Routes
+
+| Method | Path | Scope | Description |
+| ------ | ---- | ----- | ----------- |
+| GET | `/v1/aliases/resolve/:name` | `payments:read` · public key | The addresses an alias resolves to (`?network=` filters) |
+| GET | `/v1/aliases/availability/:name` | `payments:read` · public key | Whether a handle is claimable, and if not why |
+| GET | `/v1/aliases/by-address/:address` | `payments:read` · public key | The aliases pointing at an address |
+| POST | `/v1/aliases/challenges` | `payments:write` | A nonce and the exact message to sign |
+| POST | `/v1/aliases` | `payments:write` | Claim an alias with a signature |
+| GET | `/v1/aliases` | `payments:read` | The caller's aliases |
+| POST | `/v1/aliases/:name/addresses` | `payments:write` | Add an address, signed by that address |
+| DELETE | `/v1/aliases/:name/addresses/:addressId` | `payments:write` | Remove an address |
+| DELETE | `/v1/aliases/:name` | `payments:write` | Release the alias |
+| POST | `/v1/aliases/:name/recovery` | _platform console only_ | Start a recovery → a token for the console to email |
+| POST | `/v1/aliases/:name/recovery/complete` | `payments:write` | Finish a recovery with the token and the new key's signature |
 
 ## BlindPay — onramp / offramp / KYC (fiat ⇄ stablecoin)
 
@@ -721,6 +999,30 @@ the BlindPay dashboard webhook to `<gateway>/v1/blindpay/webhooks` and set
 `BLINDPAY_WEBHOOK_SECRET` to that endpoint's signing secret. Leave the
 `BLINDPAY_*` vars blank to disable the feature (those routes return `503`). See
 `.env.example`.
+
+### KYC redirect URLs are allow-listed per consumer
+
+The terms-of-service flow sends the user to BlindPay and back to a `redirect_url`
+the integrator supplies. Accepted as a free string, that is an open redirect
+wearing the platform's name: a link that starts on a trusted KYC page and lands
+wherever an attacker chose. So every `redirect_url` passes two layers:
+
+| Layer | Rule | Where |
+| ----- | ---- | ----- |
+| Shape | an absolute `https` URL with no embedded credentials (`user:pass@`) | `@IsRedirectUrl()` on every DTO that carries one |
+| Host | on **the calling consumer's** allow-list — the exact host, or a subdomain at a label boundary (`app.acme.com` matches `acme.com`; `evilacme.com` does not) | `KYC_REDIRECT_URL_WHITELIST`, enforced in the service layer |
+
+```
+KYC_REDIRECT_URL_WHITELIST={"cosmos_acme":["acme.com","app.acme.com"]}
+```
+
+It **fails closed**: a consumer with no entry cannot use a redirect at all, and a
+host with a trailing dot or in IDN form is refused rather than normalized. The
+list is per consumer because a domain one integrator vouches for says nothing
+about another. Every entry point that takes a `redirect_url` checks it —
+initiating, requesting and approving terms of service, the admin approval
+included, which applies the list of the receiver's own consumer. A refused scheme
+or host is a `400`.
 
 ## Pollar — social login that hands back a Stellar wallet
 
@@ -876,6 +1178,14 @@ callback mints no second code, and two wallets racing one code cannot both win.
   URI is where a single-use code lands, so an unvetted one is an exfiltration
   channel. It accepts loopback hosts (any port, per RFC 8252), private-use scheme
   deep links, and https hosts.
+- **Keep API keys that hold `pollar:*` on a server.** The poll flow hands the code
+  to whoever holds the handshake's `state` *and* a key with `pollar:read`. An
+  attacker who extracts such a key from an app shipped to users can open a login,
+  send its `authorization_url` to a victim, poll for the code once the victim
+  consents on the real Google/GitHub page, and redeem it with a PKCE verifier of
+  their own — PKCE and `dpop_jwk` do not help, because the attacker supplies both.
+  That is the device-code phishing shape, and the defence is that the key never
+  leaves a backend you control.
 
 ### Routes
 
@@ -989,6 +1299,43 @@ of on a user-facing login. Leave the keys blank to disable the feature (Pollar
 routes then return `503`). See `.env.example`.
 
 ## Upgrading — breaking changes and deploy notes
+
+### Security review fixes
+
+A review of the whole service found the issues below. Each is fixed and pinned by a
+test that fails without the fix. Most change nothing for a well-behaved caller, but
+every row is visible to someone — read the "Who notices" column before deploying.
+
+| Change | Who notices | Why |
+| ------ | ----------- | --- |
+| `POST /v1/aliases/:name/recovery` is **platform-console only**: an API key gets `403 admin_console_only`, and the route left the published contract | Anyone who started recoveries with an API key | The response carries the recovery token, which is the proof of the owner's mailbox. Behind a scope alone, anyone who knew a handle and its owner's email received the token and could take the alias and every payment sent to it |
+| Completing a recovery on a `SUSPENDED` alias is a `404` | Nobody legitimate | A token minted before a suspension was a way out of the operator hold |
+| `@Public()` routes (Pollar callback, BlindPay webhook, health) ignore `X-Consumer-Username` | Dashboards: those requests now log as anonymous | Those routes run without key-auth, so the header was the client's own: a new name per request was a fresh rate-limit budget, and naming a victim filed forged rows into their API-log view |
+| Refusals by `AdminGuard` and `ConsoleOnlyGuard` are logged at `warn` | Operators | Guards run before the access log, so a probe of `/v1/admin` left no trace anywhere |
+| `POST /v1/pollar/wallets/activate` and the three `/v1/pollar/wallets/:address/trustlines…` routes return `404` for a wallet the calling consumer did not obtain through this service on that network | Integrators acting on wallets they only saw through `tokens/verify`, on non-primary wallets of a login, or on a counterpart wallet another tenant already registered | Every tenant shares one set of Pollar secret keys, so without the check one tenant could remove another tenant's users' trustlines or spend the operator's XLM on their reserves. A foreign and an unknown wallet get the same `404`, so the answer is not an ownership oracle |
+| Both `POST …/trustlines` routes share a `429` budget of 20 calls per 10 minutes | Scripts that add trustlines in bulk | Each trustline locks 0.5 XLM of reserve out of the operator's funding wallet, and these were the only XLM-spending routes without a cap |
+| `GET /v1/offramp/payouts/:id` no longer returns `raw`, `consumerId`, `receiverId`, `quoteId`, `bankAccountId` or `updatedAt`; the virtual-account create response no longer returns `raw`, `receiverId`, `consumerId` or `updatedAt` | Callers reading those fields | `raw` is BlindPay's stored object, with bank and beneficiary data, and it reached any key holding `offramp:read` — the read path ignored the public projection every other payout read uses |
+| `POST /v1/kyc/upload` returns `400` for more than 4 text fields, a field over 1 KiB, a second file, or file bytes that do not match the declared type | Nobody sending a well-formed upload | Multer's defaults left fields unbounded and 1 MB each in memory, and the type check trusted the client's `Content-Type` |
+| `POST /v1/payment-intents/tx` and `/pay`: the same memo with any different term is `409 idempotency_conflict`. An identical retry still returns the stored intent (`2` and `2.0` are the same amount) | Callers reusing one memo for different payments | Under the shared public key every anonymous wallet is one consumer, so a memo someone else created first returned *their* intent — with a QR that paid them |
+| `POST /v1/payment-intents/:id/validate` marks `FAILED` only for a failed tx that is this intent's own payment; any other failed tx is `valid: false` with the status unchanged. A tx that closed more than 60 s before the intent was created is refused ("Transaction predates this payment intent") — on validate, on `PATCH {status: SUCCEEDED}`, and in the observer | Nobody legitimate | The hash of any failed transaction on the network failed an intent permanently, and an old payment with the same terms could settle a new intent |
+| `PATCH /v1/payment-intents/:id` changing `txHash` on a terminal intent is `400 invalid_state_transition`; a status change racing the write is `409 operation_in_flight` | Nobody legitimate | It rewrote the settlement evidence of a `SUCCEEDED` intent |
+| The payment-intent observer reconciles at most 10 intents per consumer per tick and never scans expired rows | Operators watching observer throughput | A flood of open-amount intents from one consumer starved every other tenant's settlement and spent the shared Horizon budget |
+| `POST /v1/swaps`, `/v1/liquidity-pools/deposit` and `/withdraw`: a reused `Idempotency-Key` with a different request — a different memo or slippage, the other network, or a deposit key reused for a withdrawal — is `409 idempotency_conflict`. A replay carrying an invalid asset, slippage or memo now gets the normal `400` | Clients reusing one key for different operations | Under the shared public key, an attacker could pre-create a swap or withdrawal from a victim's account to their own under a guessable key, and the victim's retry returned that envelope for them to sign |
+| `POST /v1/liquidity-pools/withdraw` no longer answers `409 operation_in_flight` for an in-flight withdrawal whose sequence number the account has not used yet (an unsigned or abandoned envelope) | Wallet users who were blocked | A dust withdrawal built for someone else's account and re-sent every 300 s locked every public-key user out of withdrawing that position. The two envelopes share a sequence number, so at most one can ever settle |
+| The settlement observer takes at most 10 rows per consumer per table per tick, and `GET /v1/liquidity-pools/positions` reads Horizon through one paged listing instead of one request per pool | Operators | One consumer's flood starved everyone else's settlement, and an account holding many pool shares fanned out unbounded Horizon calls |
+
+Deploy notes that come with it:
+
+- **Migration `20260910120000_aliases`** creates `alias`, `alias_address`,
+  `alias_challenge` and `alias_recovery`. Run `migrate deploy` before the new
+  build serves traffic.
+- **A new advisory lock id, `881_008` (`AliasChallengeSweeper`).** Nothing to
+  configure; listed so the number is never reused.
+- **Set `NODE_ENV=production` in production.** `.env.example` ships
+  `development`, and two protections key on it: a request missing
+  `X-Plan-Swap-Fee-Bps` is a `503` only in production (anywhere else swaps
+  silently fall back to `STELLAR_SWAP_FEE_BPS`), and `/docs` — outside every guard
+  — is off by default only in production.
 
 ### NestJS 12, TypeScript 6 and a Node floor of 24.9
 
@@ -1241,7 +1588,7 @@ gateway secret are what stand in front of cross-tenant data.
 
 The service refuses to boot below that. It previously accepted a single
 character, and it is now the *only* secret standing between the outside world and
-the platform-admin surface (see below), so it carries more weight than it used
+the platform-admin surface (see above), so it carries more weight than it used
 to. Generate one with `openssl rand -hex 32` and rotate it in APISIX at the same
 time.
 
@@ -1283,7 +1630,7 @@ at least `DATABASE_URL` and `APISIX_GATEWAY_SECRET`.
 
 | Variable | Required | Default | Effect |
 | -------- | -------- | ------- | ------ |
-| `NODE_ENV` | no | `development` | Must be `development`, `test`, or `production` |
+| `NODE_ENV` | no | `development` | Must be `development`, `test`, or `production`. **Set `production` in production** — the fail-closed plan-fee check and docs-off-by-default both key on it |
 | `PORT` | no | `3000` | HTTP listen port |
 | `DATABASE_URL` | **yes** | — | PostgreSQL connection for Prisma |
 | `APISIX_GATEWAY_SECRET` | **yes** | — | Shared secret proving the request came through APISIX. **Minimum 32 characters** — this is the whole boundary between "arrived through the gateway" and "anyone who can reach the pod" |
@@ -1296,7 +1643,7 @@ at least `DATABASE_URL` and `APISIX_GATEWAY_SECRET`.
 | `APISIX_ORGANIZATION_HEADER` | no | `x-consumer-org` | Organization id |
 | `APISIX_PLAN_HEADER` | no | `x-consumer-plan` | Organization plan |
 | `APISIX_SWAP_FEE_BPS_HEADER` | no | `x-plan-swap-fee-bps` | Plan swap fee (bps) |
-| `APISIX_PUBLIC_CONSUMER` | no | — | Username of the shared public consumer (see below). Set it wherever a public key is published |
+| `APISIX_PUBLIC_CONSUMER` | no | — | Username of the shared public consumer (see above). Set it wherever a public key is published |
 | `STELLAR_NETWORK` | no | `testnet` | Fallback Stellar network (`public` / `testnet`) |
 | `STELLAR_HORIZON_URL_PUBLIC` | no | `https://horizon.stellar.org` | Mainnet Horizon base URL |
 | `STELLAR_HORIZON_URL_TESTNET` | no | `https://horizon-testnet.stellar.org` | Testnet Horizon base URL |
@@ -1369,10 +1716,14 @@ Generate a secret:
 openssl rand -hex 32
 ```
 
-Run the tests (no DB needed — Prisma is mocked):
+Run the same checks CI runs (no database needed — Prisma is mocked):
 
 ```bash
-npm run test:e2e
+npm run lint
+npm test                 # unit suites (src/**/*.spec.ts)
+npm run test:e2e         # e2e suites (test/*.e2e-spec.ts)
+npm run openapi:check    # the committed contract matches the controllers
+npm run readme:check     # the seven READMEs match in structure and list every route
 ```
 
 ## APISIX route configuration
@@ -1475,10 +1826,19 @@ The full convention, including which section each kind of change touches, is in
 | add, rename or delete a `process.env` read | [Environment variables](#environment-variables) **and** `.env.example` |
 | integrate a provider, or change how one behaves | that provider's own `##` section |
 | change a published response shape, status code, or scope | [Upgrading](#upgrading--breaking-changes-and-deploy-notes) |
+| add, rename, remove or re-scope a route | [Route index](#route-index), and the module's own section |
+| learn something an operator or integrator must not miss | the section it belongs to |
 
-Two things deliberately do **not** live here. The **complete route list** is the
-generated OpenAPI contract — a hand-maintained table drifted to 22 of ~80
-endpoints once, which is why `npm run openapi:check` now fails the build instead.
-And **anything the code already states**: this document is for *why* a thing is
-the way it is and how to operate it, because a second copy of *what* it does is
-just a second copy to keep true.
+**This document exists in seven languages** — English, Español, Português,
+Deutsch, Français, हिन्दी and 简体中文 — and a change to one is a change to all
+seven, in the same commit. English is the source and the others are translations
+of it: the same headings, tables and code blocks, with identifiers (routes, env
+vars, headers, error codes) left exactly as they are. `npm run readme:check` fails
+CI when a language file is missing, when its headings stop matching the English,
+or when a route in the OpenAPI contract is missing from its route index.
+
+Two things deliberately do **not** live here: **request and response schemas**,
+which belong to the generated OpenAPI contract (`npm run openapi:check` keeps it
+honest), and **anything the code already states** — this document is for *why* a
+thing is the way it is and how to operate it, because a second copy of *what* it
+does is just a second copy to keep true.

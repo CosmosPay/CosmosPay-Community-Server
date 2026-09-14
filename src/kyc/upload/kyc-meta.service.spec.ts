@@ -18,8 +18,13 @@ const consumer: GatewayConsumer = {
   planSwapFeeBps: null,
 };
 
+/** The eight bytes every PNG starts with. */
+const PNG_SIGNATURE = Buffer.from([
+  0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+]);
+
 const file: UploadableFile = {
-  buffer: Buffer.from('document'),
+  buffer: Buffer.concat([PNG_SIGNATURE, Buffer.from('document')]),
   originalname: 'passport.png',
   mimetype: 'image/png',
 };
@@ -96,6 +101,73 @@ describe('KycMetaService', () => {
       await service.uploadDocument(file, 'limit_increase');
 
       expect(blindpay.uploadFile).toHaveBeenCalledWith(file, 'limit_increase');
+    });
+
+    it.each([
+      ['image/jpeg', Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00])],
+      ['image/png', PNG_SIGNATURE],
+      ['image/webp', Buffer.from('RIFF\x24\x00\x00\x00WEBPVP8 ', 'latin1')],
+      ['image/heic', Buffer.from('\x00\x00\x00\x18ftypheic', 'latin1')],
+      // `mif1` is written for both HEIF types, so it has to pass for either.
+      ['image/heif', Buffer.from('\x00\x00\x00\x18ftypmif1', 'latin1')],
+      ['image/heic', Buffer.from('\x00\x00\x00\x18ftypmif1', 'latin1')],
+      ['application/pdf', Buffer.from('%PDF-1.7\n')],
+    ])('accepts a %s whose bytes say so', async (mimetype, buffer) => {
+      const { service, blindpay } = makeService();
+      blindpay.uploadFile.mockResolvedValue({ file_url: 'https://files/x' });
+
+      await expect(
+        service.uploadDocument(
+          { buffer, originalname: 'doc', mimetype },
+          undefined,
+        ),
+      ).resolves.toEqual({ file_url: 'https://files/x' });
+    });
+
+    it('refuses bytes that are not the type they were declared as', () => {
+      const { service, blindpay } = makeService();
+      // An HTML page wearing a passport's filename and content type: the
+      // declaration is the client's word, and this is where it gets checked.
+      const disguised: UploadableFile = {
+        buffer: Buffer.from('<html><script>alert(1)</script></html>'),
+        originalname: 'passport.png',
+        mimetype: 'image/png',
+      };
+
+      expect(() => service.uploadDocument(disguised, undefined)).toThrow(
+        'File content is not a valid "image/png"',
+      );
+      expect(blindpay.uploadFile).not.toHaveBeenCalled();
+    });
+
+    it('refuses a genuine file declared as a different allowed type', () => {
+      const { service } = makeService();
+
+      expect(() =>
+        service.uploadDocument(
+          { ...file, mimetype: 'application/pdf' },
+          undefined,
+        ),
+      ).toThrow('File content is not a valid "application/pdf"');
+    });
+
+    it('refuses a file shorter than its signature', () => {
+      const { service } = makeService();
+
+      expect(() =>
+        service.uploadDocument(
+          { ...file, buffer: PNG_SIGNATURE.subarray(0, 3) },
+          undefined,
+        ),
+      ).toThrow('File content is not a valid');
+    });
+
+    it('refuses a type with no signature, including one Object.prototype answers to', () => {
+      const { service } = makeService();
+
+      expect(() =>
+        service.uploadDocument({ ...file, mimetype: 'constructor' }, undefined),
+      ).toThrow('File content is not a valid');
     });
   });
 

@@ -48,6 +48,9 @@ jobs:
       - name: Verify OpenAPI is up to date
         run: npm run openapi:check
 
+      - name: Verify READMEs (7 languages, route index)
+        run: npm run readme:check
+
       - name: Test
         run: npm test
 

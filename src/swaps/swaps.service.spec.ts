@@ -51,7 +51,9 @@ function applyUpdateData(row: any, data: any): void {
 
 function matchesWhere(row: any, where: any): boolean {
   if (!where) return true;
-  if (where.id && where.id !== row.id) return false;
+  if (typeof where.id === 'string' && where.id !== row.id) return false;
+  // The observer re-reads the rows its ranking query dealt with `id: { in }`.
+  if (where.id?.in && !where.id.in.includes(row.id)) return false;
   if (where.consumerId && where.consumerId !== row.consumerId) return false;
   if (where.source && where.source !== row.source) return false;
   if (where.network && where.network !== row.network) return false;
@@ -195,6 +197,14 @@ function createPrisma(seed: any[] = []) {
         return { count: matched.length };
       }),
     },
+    // Stands in for the observer's ranking query, which is SQL a fake cannot
+    // run. These tests are about what happens to the rows it deals, so it
+    // deals every in-flight one.
+    $queryRaw: jest.fn(async () =>
+      rows
+        .filter((r) => ['PENDING', 'SUBMITTED'].includes(r.status))
+        .map((r) => ({ id: r.id })),
+    ),
     webhookEmittedEvent: uniqueEmittedEvents(),
     // The emitter claims the dedup row and persists deliveries in one
     // interactive transaction; the fake just runs the callback against itself.
@@ -560,6 +570,74 @@ describe('SwapsService.create idempotency (issue #17)', () => {
       /transaction hash/i,
     );
     expect(prisma.rows).toHaveLength(1);
+  });
+
+  it('refuses a replayed key whose request differs, and describes nothing it stored', async () => {
+    // Under the shared public key every anonymous wallet is one consumer, so
+    // these are two strangers: one pre-builds a swap from the victim's account
+    // to their own, the other is the victim's wallet sending the same key.
+    const attacker = Keypair.random().publicKey();
+    const planted = await service.create(
+      consumer,
+      { ...createDto, destination: attacker },
+      'guessable-key',
+    );
+
+    const err = await service
+      .create(consumer, createDto, 'guessable-key')
+      .catch((e) => e);
+
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).getStatus()).toBe(HttpStatus.CONFLICT);
+    expect((err as ApiError).code).toBe(ApiErrorCode.IdempotencyConflict);
+    for (const stored of [planted.id, planted.txHash, attacker, SOURCE]) {
+      expect((err as ApiError).message).not.toContain(stored);
+    }
+    expect(prisma.swap.create).toHaveBeenCalledTimes(1);
+    expect(terminalEmits(events, 'SWAP_CREATED')).toHaveLength(1);
+  });
+
+  it('replays when the retry spells out what the first request left to defaults', async () => {
+    const first = await service.create(consumer, createDto, 'defaults-key');
+    const second = await service.create(
+      consumer,
+      {
+        ...createDto,
+        sourceAssetCode: 'XLM',
+        amount: '10.0000000',
+        destination: SOURCE,
+        slippageBps: 50,
+      },
+      'defaults-key',
+    );
+
+    expect(second.id).toBe(first.id);
+    expect(prisma.swap.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses the winner of a same-key race when it was a different request', async () => {
+    const winner = swapRow({
+      id: 'swap_winner',
+      idempotencyKey: 'race-key',
+      txHash: 'cd'.repeat(32),
+      destination: Keypair.random().publicKey(),
+    });
+    let idempotencyLookups = 0;
+    prisma.swap.findUnique.mockImplementation(async ({ where }: any) => {
+      if (where.consumerId_idempotencyKey) {
+        idempotencyLookups += 1;
+        return idempotencyLookups === 1 ? null : { ...winner };
+      }
+      return null;
+    });
+    prisma.swap.create.mockRejectedValue({
+      code: 'P2002',
+      meta: { target: ['consumerId', 'idempotencyKey'] },
+    });
+
+    await expect(
+      service.create(consumer, createDto, 'race-key'),
+    ).rejects.toMatchObject({ code: ApiErrorCode.IdempotencyConflict });
   });
 
   it('returns 409 when STELLAR_SWAP_SINGLE_INFLIGHT blocks a second PENDING source', async () => {

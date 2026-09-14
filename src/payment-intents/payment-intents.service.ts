@@ -30,7 +30,12 @@ import { UpdatePaymentIntentDto } from '@/payment-intents/dto/update-payment-int
 import {
   assertTransition,
   InvalidPaymentIntentTransitionError,
+  isTerminalStatus,
 } from '@/payment-intents/payment-intent-state-machine';
+import {
+  isSameIntentRequest,
+  type PaymentIntentTerms,
+} from '@/payment-intents/payment-intent-replay';
 import { StellarVerifierService } from '@/payment-intents/stellar-verifier.service';
 
 /** Who triggered a status change — stored on the audit row. */
@@ -193,6 +198,39 @@ export class PaymentIntentsService {
     });
   }
 
+  /**
+   * Resolves a create that landed on an existing `(consumer, memo)`: the stored
+   * intent when the request describes the same payment, a 409 when it does not.
+   * {@link isSameIntentRequest} explains why a matching memo is not enough.
+   *
+   * `stored` is null only on the race path, when the row that beat this
+   * request's insert was deleted again before it could be read back.
+   */
+  private replayOf(
+    stored: PaymentIntent | null,
+    terms: PaymentIntentTerms,
+  ): Promise<PaymentIntentView> {
+    if (!stored) {
+      throw ApiError.conflict(
+        ApiErrorCode.OperationInFlight,
+        'A concurrent request for this memo changed it while this one was ' +
+          'being created. Retry the request.',
+      );
+    }
+    if (!isSameIntentRequest(stored, terms)) {
+      // Names nothing about the stored intent. Under the shared public key it
+      // may be another caller's, and saying which term differed would let a
+      // caller recover that intent one field at a time.
+      throw ApiError.conflict(
+        ApiErrorCode.IdempotencyConflict,
+        'A payment intent with this memo already exists for different payment ' +
+          'details. Retry with the original request unchanged, or use a new ' +
+          'memo (omit it to have one generated).',
+      );
+    }
+    return this.withQr(stored);
+  }
+
   /** Appends shared SEP-7 extras (`msg`, `callback`) to a URI's params. */
   private appendSep7Extras(
     params: URLSearchParams,
@@ -217,10 +255,22 @@ export class PaymentIntentsService {
     const localConsumer = await this.resolveConsumer(consumer);
     const asset = this.resolveAsset(dto.assetCode, dto.assetIssuer);
     const memo = this.resolveMemo(dto.memo);
+    const terms: PaymentIntentTerms = {
+      kind: 'TX',
+      network,
+      source: dto.source,
+      destination: dto.destination,
+      amount: dto.amount,
+      asset: asset.code,
+      assetIssuer: asset.issuer,
+      msg: dto.msg ?? null,
+      callback: dto.callback ?? null,
+    };
 
-    // Idempotency: same (consumer, memo) returns the original intent.
+    // Idempotency: a retry on the same (consumer, memo) returns the original
+    // intent before any Horizon round trip — but only for the same payment.
     const existing = await this.findByMemo(localConsumer.id, memo);
-    if (existing) return this.withQr(existing);
+    if (existing) return this.replayOf(existing, terms);
 
     const account = await this.loadAccount(network, dto.source);
     const xdr = new TransactionBuilder(account, {
@@ -245,23 +295,19 @@ export class PaymentIntentsService {
     const uri = `web+stellar:tx?${params.toString()}`;
 
     const intent = await this.persist({
+      ...terms,
       consumerId: localConsumer.id,
-      kind: 'TX',
-      source: dto.source,
-      destination: dto.destination,
-      amount: dto.amount,
-      asset: asset.code,
-      assetIssuer: asset.issuer,
       memo,
-      msg: dto.msg,
-      callback: dto.callback,
-      network,
       status: 'PENDING',
       xdr,
       uri,
     });
-    if (!intent)
-      return this.withQr((await this.findByMemo(localConsumer.id, memo))!);
+    if (!intent) {
+      return this.replayOf(
+        await this.findByMemo(localConsumer.id, memo),
+        terms,
+      );
+    }
 
     this.logger.log(
       `Created TX payment intent ${intent.id}: ${dto.amount} ` +
@@ -285,9 +331,20 @@ export class PaymentIntentsService {
     const localConsumer = await this.resolveConsumer(consumer);
     const asset = this.resolveAsset(dto.assetCode, dto.assetIssuer);
     const memo = this.resolveMemo(dto.memo);
+    const terms: PaymentIntentTerms = {
+      kind: 'PAY',
+      network,
+      source: null,
+      destination: dto.destination,
+      amount: dto.amount ?? null,
+      asset: asset.code,
+      assetIssuer: asset.issuer,
+      msg: dto.msg ?? null,
+      callback: dto.callback ?? null,
+    };
 
     const existing = await this.findByMemo(localConsumer.id, memo);
-    if (existing) return this.withQr(existing);
+    if (existing) return this.replayOf(existing, terms);
 
     const params = new URLSearchParams({ destination: dto.destination });
     if (dto.amount) params.set('amount', dto.amount);
@@ -301,23 +358,19 @@ export class PaymentIntentsService {
     const uri = `web+stellar:pay?${params.toString()}`;
 
     const intent = await this.persist({
+      ...terms,
       consumerId: localConsumer.id,
-      kind: 'PAY',
-      source: null,
-      destination: dto.destination,
-      amount: dto.amount ?? null,
-      asset: asset.code,
-      assetIssuer: asset.issuer,
       memo,
-      msg: dto.msg,
-      callback: dto.callback,
-      network,
       status: 'PENDING',
       xdr: null,
       uri,
     });
-    if (!intent)
-      return this.withQr((await this.findByMemo(localConsumer.id, memo))!);
+    if (!intent) {
+      return this.replayOf(
+        await this.findByMemo(localConsumer.id, memo),
+        terms,
+      );
+    }
 
     this.logger.log(
       `Created PAY payment intent ${intent.id}: ${dto.amount ?? '(open)'} ` +
@@ -330,7 +383,8 @@ export class PaymentIntentsService {
 
   /**
    * Persists a new intent. Returns null on a (consumer, memo) unique-violation
-   * race so the caller can fall back to the existing row (idempotency).
+   * race so the caller can put the winning row through the same replay check
+   * as any other retry — losing the race is not a way around it.
    */
   private async persist(
     data: Parameters<PrismaService['paymentIntent']['create']>[0]['data'],
@@ -443,13 +497,17 @@ export class PaymentIntentsService {
       return this.withQr(updated);
     }
 
-    const updated = await this.prisma.paymentIntent.update({
-      where: { id },
-      data: {
-        ...(dto.txHash !== undefined ? { txHash: dto.txHash } : {}),
-        ...(dto.reference !== undefined ? { reference: dto.reference } : {}),
-      },
-    });
+    const updated =
+      dto.txHash !== undefined
+        ? await this.patchTxHash(id, dto.txHash, dto.reference)
+        : await this.prisma.paymentIntent.update({
+            where: { id },
+            data: {
+              ...(dto.reference !== undefined
+                ? { reference: dto.reference }
+                : {}),
+            },
+          });
 
     this.logger.log(
       `Updated payment intent ${id} (consumer=${consumer.username}): status unchanged`,
@@ -457,6 +515,59 @@ export class PaymentIntentsService {
 
     await this.emit(consumer.username, 'PAYMENT_INTENT_UPDATED', updated);
     return this.withQr(updated);
+  }
+
+  /**
+   * Records a reported `txHash` (and any `reference` sent with it) without a
+   * status change. Only a PENDING or SUBMITTED intent accepts a new hash.
+   *
+   * This branch had no status check, so a terminal intent's hash could be
+   * rewritten: a SUCCEEDED row's `txHash` — the transaction its settlement was
+   * verified against — swapped for any string, with no transition, no audit row,
+   * and a PAYMENT_INTENT_UPDATED webhook broadcasting the new value. The write
+   * is a compare-and-swap on the status just read, as in {@link transition}, so
+   * an intent that settles in between is refused rather than overwritten.
+   * Re-sending the hash the intent already carries changes nothing and stays
+   * allowed, so a retried PATCH does not start failing once the intent settles.
+   */
+  private async patchTxHash(
+    id: string,
+    txHash: string,
+    reference: string | undefined,
+  ): Promise<PaymentIntent> {
+    const data = {
+      txHash,
+      ...(reference !== undefined ? { reference } : {}),
+    };
+    const current = await this.prisma.paymentIntent.findUnique({
+      where: { id },
+      select: { status: true, txHash: true },
+    });
+    if (!current) {
+      throw ApiError.notFound(`Payment intent ${id} not found`);
+    }
+    if (current.txHash === txHash) {
+      return this.prisma.paymentIntent.update({ where: { id }, data });
+    }
+    if (isTerminalStatus(current.status)) {
+      throw ApiError.badRequest(
+        ApiErrorCode.InvalidStateTransition,
+        `txHash cannot be changed on a ${current.status} payment intent: ` +
+          'the status is terminal',
+      );
+    }
+
+    const guarded = await this.prisma.paymentIntent.updateMany({
+      where: { id, status: current.status },
+      data,
+    });
+    if (guarded.count === 0) {
+      throw ApiError.conflict(
+        ApiErrorCode.OperationInFlight,
+        `Payment intent ${id} status changed concurrently; expected ${current.status}`,
+      );
+    }
+    return this.prisma.paymentIntent.findUniqueOrThrow({ where: { id } });
   }
 
   /**
@@ -645,11 +756,12 @@ export class PaymentIntentsService {
 
   // ── VALIDATE (manual reconciliation) ─────────────────────────────────────────
   /**
-   * Validates a submitted transaction against the intent (success, destination,
-   * native amount and memo). On a confirmed match the intent is finalized to
-   * SUCCEEDED and a webhook event fires; if the tx failed on-chain it is marked
-   * FAILED. Pure mismatches (wrong amount/memo/hash) leave the status untouched
-   * so a correct tx can still be submitted later.
+   * Validates a submitted transaction against the intent (memo, age,
+   * destination, asset, amount and success). On a confirmed match the intent is
+   * finalized to SUCCEEDED and a webhook event fires; if it is this intent's
+   * payment but failed on-chain it is marked FAILED. Every other mismatch (wrong
+   * amount/memo/hash, an older or unrelated transaction) leaves the status
+   * untouched so a correct tx can still be submitted later.
    */
   async validate(
     consumer: GatewayConsumer,
@@ -688,8 +800,11 @@ export class PaymentIntentsService {
       };
     }
 
-    // Transaction exists but failed on-chain → settle as FAILED.
-    if (result.reason === 'Transaction failed on-chain') {
+    // This intent's own payment failed on-chain → settle as FAILED. The verifier
+    // only says so once memo, age and a payment operation all match: FAILED is
+    // terminal, and the hash of any unrelated failed transaction used to reach
+    // it. Everything else is a mismatch and changes nothing.
+    if (result.failedOnChain) {
       const updated = await this.markFailed(
         intent.id,
         consumer.username,

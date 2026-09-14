@@ -13,7 +13,10 @@ import {
 import { PrismaService } from '@/prisma/prisma.service';
 import { PaymentIntentsService } from '@/payment-intents/payment-intents.service';
 import { StellarVerifierService } from '@/payment-intents/stellar-verifier.service';
-import { RECONCILE_CONCURRENCY } from '@/payment-intents/payment-intents.constants';
+import {
+  OBSERVER_MAX_INTENTS_PER_CONSUMER,
+  RECONCILE_CONCURRENCY,
+} from '@/payment-intents/payment-intents.constants';
 
 /**
  * Permanent on-chain observer. On a fixed interval it pulls PENDING intents and
@@ -97,12 +100,13 @@ export class StellarObserverService implements OnModuleInit, OnModuleDestroy {
   private async sweep(): Promise<void> {
     try {
       const { batchSize } = this.config.get('observer', { infer: true });
+      const now = new Date();
 
       // 1. Expire unpaid intents past their lifetime.
       const expired = await this.prisma.paymentIntent.findMany({
         where: {
           status: { in: ['PENDING', 'SUBMITTED'] },
-          expiresAt: { not: null, lt: new Date() },
+          expiresAt: { not: null, lt: now },
         },
         include: { consumer: true },
         take: batchSize,
@@ -118,12 +122,7 @@ export class StellarObserverService implements OnModuleInit, OnModuleDestroy {
       }
 
       // 2. Reconcile still-pending intents against the chain.
-      const pending = await this.prisma.paymentIntent.findMany({
-        where: { status: 'PENDING' },
-        include: { consumer: true },
-        orderBy: { createdAt: 'asc' },
-        take: batchSize,
-      });
+      const pending = await this.selectPending(batchSize, now);
 
       await mapLimited(pending, RECONCILE_CONCURRENCY, (intent) =>
         this.reconcile(intent).catch((err) => {
@@ -141,11 +140,65 @@ export class StellarObserverService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /**
+   * This tick's PENDING intents: unexpired, dealt round-robin across consumers,
+   * at most {@link OBSERVER_MAX_INTENTS_PER_CONSUMER} from any one of them.
+   *
+   * It used to be the oldest `batchSize` rows across every tenant, which let
+   * whoever queued the most intents own every tick (see the constant for how
+   * cheaply the shared public key arranges that). Ranking each consumer's rows
+   * oldest-first and ordering by that rank hands out every consumer's oldest row
+   * before anyone's second, so a quiet tenant is served in the next tick however
+   * large the backlog in front of it; the cap bounds what one consumer can cost
+   * a tick even when nobody else is waiting.
+   *
+   * Rows already past `expiresAt` are excluded rather than scanned. The expiry
+   * pass above finalizes them without touching Horizon; they only reached this
+   * query when more had lapsed than one pass expires, and each one then burned
+   * a full reconcile to reach a verdict nobody could act on.
+   *
+   * Prisma has no per-group limit, hence the window function. The rows are then
+   * re-read through the client, still PENDING, so `reconcile` keeps its typed
+   * intent and consumer and skips anything settled between the two reads.
+   */
+  private async selectPending(batchSize: number, now: Date) {
+    const ranked = await this.prisma.$queryRaw<{ id: string }[]>`
+      SELECT "id"
+      FROM (
+        SELECT "id",
+               "createdAt",
+               ROW_NUMBER() OVER (
+                 PARTITION BY "consumerId" ORDER BY "createdAt", "id"
+               ) AS "rank"
+        FROM "payment_intent"
+        WHERE "status" = 'PENDING'
+          AND ("expiresAt" IS NULL OR "expiresAt" > ${now})
+      ) AS "eligible"
+      WHERE "rank" <= ${OBSERVER_MAX_INTENTS_PER_CONSUMER}
+      ORDER BY "rank", "createdAt", "id"
+      LIMIT ${batchSize}
+    `;
+    if (ranked.length === 0) {
+      return [];
+    }
+    return this.prisma.paymentIntent.findMany({
+      where: { id: { in: ranked.map((row) => row.id) }, status: 'PENDING' },
+      include: { consumer: true },
+    });
+  }
+
   private async reconcile(
     intent: Awaited<
       ReturnType<PrismaService['paymentIntent']['findMany']>
     >[number] & { consumer: { apisixUsername: string } },
   ): Promise<void> {
+    // The batch was read before the first Horizon call and draining it takes
+    // real time. An intent that lapsed meanwhile is left to the next expiry
+    // pass instead of being paid for with a scan.
+    if (intent.expiresAt && intent.expiresAt.getTime() <= Date.now()) {
+      return;
+    }
+
     // Prefer the precise path when a hash was reported; otherwise scan.
     const result = intent.txHash
       ? await this.verifier.verifyByHash(intent, intent.txHash)

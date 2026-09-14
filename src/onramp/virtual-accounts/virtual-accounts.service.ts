@@ -98,12 +98,17 @@ export class VirtualAccountsService {
       status: asNullableString(obj.kyc_status) ?? asNullableString(obj.status),
       raw: toJson(obj),
     };
+    // Narrowed for the same reason as `mirrorPayin`: this upsert's return value
+    // IS the create response. Without the `select` it carried `raw` — the
+    // provider payload whole — straight out, while `findAll` next to it already
+    // kept the blob in PostgreSQL.
     return this.prisma.blindpayVirtualAccount.upsert({
       where: {
         consumerId_blindpayId: { consumerId, blindpayId: asString(obj.id) },
       },
       create: { consumerId, blindpayId: asString(obj.id), ...data },
       update: data,
+      select: VIRTUAL_ACCOUNT_PUBLIC_SELECT,
     });
   }
 }

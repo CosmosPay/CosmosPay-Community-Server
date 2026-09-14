@@ -1,11 +1,26 @@
 import { StellarAccountLoader } from '@/stellar/account-loader.service';
 import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
-import { Account, Keypair, TransactionBuilder } from '@stellar/stellar-sdk';
+import {
+  Account,
+  Asset,
+  Keypair,
+  LiquidityPoolAsset,
+  LiquidityPoolFeeV18,
+  Memo,
+  Networks,
+  Operation,
+  TransactionBuilder,
+  getLiquidityPoolId,
+} from '@stellar/stellar-sdk';
 import { HttpStatus } from '@nestjs/common';
 import { EventEmitter2 } from 'eventemitter2';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import { toStroops } from '@/swaps/swap-math';
+import {
+  POSITIONS_MAX_POOL_PAGES,
+  POSITIONS_POOL_PAGE_SIZE,
+} from '@/liquidity-pools/liquidity-pools.constants';
 import { LiquidityPoolsService } from '@/liquidity-pools/liquidity-pools.service';
 import { SettlementObserverService } from '@/observer/settlement-observer.service';
 import { WebhookTerminalEmitter } from '@/webhooks/webhook-terminal-emitter.service';
@@ -23,6 +38,41 @@ const POOL_ID = 'dd'.repeat(32);
 const SOURCE = Keypair.random().publicKey();
 const USDC_ISSUER = Keypair.random().publicKey();
 const FEE_WALLET = Keypair.random().publicKey();
+
+/** The (native, USDC) pool id, derived exactly as `deposit` derives it. */
+const PAIR_POOL_ID = Buffer.from(
+  getLiquidityPoolId(
+    'constant_product',
+    new LiquidityPoolAsset(
+      Asset.native(),
+      new Asset('USDC', USDC_ISSUER),
+      LiquidityPoolFeeV18,
+    ).getLiquidityPoolParameters(),
+  ),
+).toString('hex');
+
+/**
+ * A real unsigned envelope from SOURCE carrying sequence number `sequence` (and
+ * an optional MEMO_ID), for rows whose envelope the service reads back: the
+ * idempotency replay reads its memo, the withdraw guard its sequence.
+ */
+function envelope(sequence: string, memo?: string): string {
+  const builder = new TransactionBuilder(
+    new Account(SOURCE, (BigInt(sequence) - 1n).toString()),
+    { fee: '100', networkPassphrase: Networks.TESTNET },
+  )
+    .addOperation(
+      Operation.liquidityPoolWithdraw({
+        liquidityPoolId: POOL_ID,
+        amount: '1',
+        minAmountA: '0',
+        minAmountB: '0',
+      }),
+    )
+    .setTimeout(300);
+  if (memo) builder.addMemo(Memo.id(memo));
+  return builder.build().toXDR();
+}
 
 const consumer: GatewayConsumer = {
   username: 'cosmos_u1',
@@ -43,7 +93,9 @@ function horizonReject(codes: { transaction?: string; operations?: string[] }) {
 
 function matchesWhere(row: any, where: any): boolean {
   if (!where) return true;
-  if (where.id && where.id !== row.id) return false;
+  if (typeof where.id === 'string' && where.id !== row.id) return false;
+  // The observer re-reads the rows its ranking query dealt with `id: { in }`.
+  if (where.id?.in && !where.id.in.includes(row.id)) return false;
   if (where.kind && where.kind !== row.kind) return false;
   if (where.consumerId && where.consumerId !== row.consumerId) return false;
   if (where.source && where.source !== row.source) return false;
@@ -207,6 +259,14 @@ function createPrisma(seed: any[] = []) {
         return { ...created };
       }),
     },
+    // Stands in for the observer's ranking query, which is SQL a fake cannot
+    // run. These tests are about what happens to the rows it deals, so it
+    // deals every in-flight one.
+    $queryRaw: jest.fn(async () =>
+      rows
+        .filter((r) => ['PENDING', 'SUBMITTED'].includes(r.status))
+        .map((r) => ({ id: r.id })),
+    ),
     webhookEmittedEvent: uniqueEmittedEvents(),
   };
   return prisma;
@@ -678,7 +738,9 @@ describe('LiquidityPoolsService.submit vs observer (issue #32 race)', () => {
     });
     prisma.rows.push(row);
 
-    // Stale read: observer loaded this row while it was still SUBMITTED.
+    // Stale read: observer ranked and loaded this row while it was still
+    // SUBMITTED.
+    prisma.$queryRaw.mockResolvedValueOnce([{ id: row.id }]);
     prisma.liquidityPoolOperation.findMany.mockResolvedValueOnce([
       {
         ...row,
@@ -847,10 +909,14 @@ describe('LiquidityPoolsService idempotency (issue #17, back-ported)', () => {
   });
 
   it('recovers the winner of a same-key race instead of surfacing P2002', async () => {
+    // The winner was the same request: same pair, same slippage, no memo.
     const winner = depositRow({
       id: 'op_winner',
       idempotencyKey: 'race-key',
       txHash: 'cd'.repeat(32),
+      poolId: PAIR_POOL_ID,
+      slippageBps: 0,
+      xdr: envelope('2'),
     });
     let keyLookups = 0;
     prisma.liquidityPoolOperation.findUnique.mockImplementation(
@@ -885,6 +951,9 @@ describe('LiquidityPoolsService idempotency (issue #17, back-ported)', () => {
       id: 'op_winner',
       idempotencyKey: 'same-key',
       txHash: 'ef'.repeat(32),
+      poolId: PAIR_POOL_ID,
+      slippageBps: 0,
+      xdr: envelope('2'),
     });
     let keyLookups = 0;
     prisma.liquidityPoolOperation.findUnique.mockImplementation(
@@ -921,6 +990,108 @@ describe('LiquidityPoolsService idempotency (issue #17, back-ported)', () => {
     expect(prisma.rows).toHaveLength(1);
     expect(terminalEmits(events, 'LIQUIDITY_CREATED')).toHaveLength(1);
   });
+
+  it('refuses a withdraw replay whose request differs, and describes nothing it stored', async () => {
+    // Under the shared public key every wallet is one consumer, so a withdrawal
+    // someone else built from this account under a guessable key must not be
+    // handed back as though it were the caller's own.
+    const planted = await service.withdraw(
+      consumer,
+      { ...withdrawDto, shares: '0.0000001' },
+      'guessable-key',
+    );
+
+    const err = await service
+      .withdraw(consumer, withdrawDto, 'guessable-key')
+      .catch((e) => e);
+
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).getStatus()).toBe(HttpStatus.CONFLICT);
+    expect((err as ApiError).code).toBe(ApiErrorCode.IdempotencyConflict);
+    for (const stored of [planted.id, planted.txHash, SOURCE, POOL_ID]) {
+      expect((err as ApiError).message).not.toContain(stored);
+    }
+    expect(prisma.rows).toHaveLength(1);
+  });
+
+  it('refuses to answer a withdraw with a deposit stored under the same key', async () => {
+    // The key index does not tell the two kinds apart; this used to replay.
+    await service.deposit(consumer, depositDto, 'shared-key');
+
+    await expect(
+      service.withdraw(consumer, withdrawDto, 'shared-key'),
+    ).rejects.toMatchObject({ code: ApiErrorCode.IdempotencyConflict });
+  });
+
+  it('refuses a deposit replay for a different amount', async () => {
+    await service.deposit(consumer, depositDto, 'amount-key');
+
+    await expect(
+      service.deposit(
+        consumer,
+        { ...depositDto, maxAmountA: '999' },
+        'amount-key',
+      ),
+    ).rejects.toMatchObject({ code: ApiErrorCode.IdempotencyConflict });
+  });
+
+  it('compares the memo, which lives only in the stored envelope', async () => {
+    const first = await service.withdraw(
+      consumer,
+      { ...withdrawDto, memo: '1' },
+      'memo-key',
+    );
+
+    await expect(
+      service.withdraw(consumer, { ...withdrawDto, memo: '2' }, 'memo-key'),
+    ).rejects.toMatchObject({ code: ApiErrorCode.IdempotencyConflict });
+    const again = await service.withdraw(
+      consumer,
+      { ...withdrawDto, memo: '1' },
+      'memo-key',
+    );
+    expect(again.id).toBe(first.id);
+  });
+
+  it('replays a one-sided deposit after the reserves have moved', async () => {
+    // The side the caller left out was derived from the pool price. A retry of
+    // the same request must not become a 409 because that price changed.
+    const first = await service.deposit(consumer, depositDto, 'one-sided');
+    stellar.fetchPool.mockResolvedValue({
+      id: POOL_ID,
+      paging_token: '1',
+      fee_bp: 30,
+      total_trustlines: '2',
+      total_shares: '100',
+      reserves: [
+        { asset: 'native', amount: '3000' },
+        { asset: `USDC:${USDC_ISSUER}`, amount: '200' },
+      ],
+    });
+
+    const second = await service.deposit(consumer, depositDto, 'one-sided');
+
+    expect(second.id).toBe(first.id);
+  });
+
+  it('treats the pair given in the other order as the same deposit', async () => {
+    const first = await service.deposit(consumer, depositDto, 'pair-key');
+
+    const second = await service.deposit(
+      consumer,
+      {
+        source: SOURCE,
+        assetACode: 'USDC',
+        assetAIssuer: USDC_ISSUER,
+        maxAmountA: '100',
+        maxAmountB: '1000',
+        slippageBps: 0,
+      },
+      'pair-key',
+    );
+
+    expect(second.id).toBe(first.id);
+  });
 });
 
 describe('LiquidityPoolsService.withdraw in-flight guard', () => {
@@ -945,15 +1116,68 @@ describe('LiquidityPoolsService.withdraw in-flight guard', () => {
     );
   });
 
+  /**
+   * An in-flight withdrawal the account may already have put on-chain: its
+   * envelope carries sequence 1, and the mocked Horizon account is at 1.
+   */
   function inflightWithdraw(overrides: Record<string, unknown> = {}) {
     return depositRow({
       id: 'op_inflight',
       kind: 'WITHDRAW',
       status: 'PENDING',
       shares: '50',
+      xdr: envelope('1'),
       ...overrides,
     });
   }
+
+  /** Every anonymous wallet arrives as this one consumer (local id `c2`). */
+  const publicKey: GatewayConsumer = {
+    ...consumer,
+    username: 'cosmos_public',
+    role: 'public',
+  };
+
+  it('does not let a withdrawal nobody can have signed yet block the account', async () => {
+    // On the shared public key the guard was a denial of service: anyone could
+    // post a dust withdrawal naming a stranger's account and hand every wallet
+    // user a 409 for that position, one timeout window after another. That row
+    // sits at the account's next sequence number, so it cannot be on-chain.
+    prisma.rows.push(
+      inflightWithdraw({
+        consumerId: 'c2',
+        shares: '0.0000001',
+        xdr: envelope('2'),
+      }),
+    );
+
+    const op = await service.withdraw(publicKey, withdrawDto);
+
+    // Nothing is re-opened: the new withdrawal takes that same sequence number,
+    // so at most one of the two can ever settle against the cost basis.
+    const built = TransactionBuilder.fromXDR(op.xdr, Networks.TESTNET) as {
+      sequence?: string;
+    };
+    expect(built.sequence).toBe('2');
+  });
+
+  it("still blocks once the account has used the in-flight withdrawal's sequence number", async () => {
+    // It may be on-chain with its shares burned while its row is still in
+    // flight — the double read of the cost basis the guard exists to prevent.
+    prisma.rows.push(inflightWithdraw({ consumerId: 'c2' }));
+
+    const err = await service.withdraw(publicKey, withdrawDto).catch((e) => e);
+
+    expect((err as ApiError).code).toBe(ApiErrorCode.OperationInFlight);
+  });
+
+  it('fails closed on an in-flight envelope it cannot read', async () => {
+    prisma.rows.push(inflightWithdraw({ xdr: 'AAAA' }));
+
+    const err = await service.withdraw(consumer, withdrawDto).catch((e) => e);
+
+    expect((err as ApiError).code).toBe(ApiErrorCode.OperationInFlight);
+  });
 
   it('rejects a second withdraw while one is in flight for the same position', async () => {
     // Both would read the same cost basis and each charge commission on the
@@ -1259,5 +1483,154 @@ describe('LiquidityPoolsService platform commission fail-closed', () => {
     const op = await service.withdraw(noPlanRate, withdrawDto);
 
     expect(op.kind).toBe('WITHDRAW');
+  });
+});
+
+describe('LiquidityPoolsService.positions', () => {
+  const OTHER_POOL = 'ee'.repeat(32);
+
+  function poolRecord(id: string, pagingToken = id) {
+    return {
+      id,
+      paging_token: pagingToken,
+      fee_bp: 30,
+      total_trustlines: '2',
+      total_shares: '100',
+      reserves: [
+        { asset: 'native', amount: '2000' },
+        { asset: `USDC:${USDC_ISSUER}`, amount: '200' },
+      ],
+    };
+  }
+
+  function shareBalance(poolId: string, balance: string) {
+    return {
+      asset_type: 'liquidity_pool_shares',
+      liquidity_pool_id: poolId,
+      balance,
+    };
+  }
+
+  /**
+   * Horizon with a paged `liquidity_pools?account=` listing (one page per
+   * entry of `pages`, then empty) and a per-pool lookup that must stay unused.
+   */
+  function make(balances: any[], pages: any[][]) {
+    const call = jest.fn();
+    for (const page of pages) call.mockResolvedValueOnce({ records: page });
+    call.mockResolvedValue({ records: [] });
+    const listing: any = {
+      limit: jest.fn(() => listing),
+      cursor: jest.fn(() => listing),
+      call,
+    };
+    const forAccount = jest.fn(() => listing);
+    const liquidityPoolId = jest.fn();
+    const stellar = {
+      passphrase: jest.fn().mockReturnValue(Networks.TESTNET),
+      server: jest.fn().mockReturnValue({
+        loadAccount: jest.fn(async () => mockHorizonAccount(balances)),
+        liquidityPools: () => ({ forAccount, liquidityPoolId }),
+      }),
+    };
+    const prisma = createPrisma();
+    const service = new LiquidityPoolsService(
+      { get: () => stellarConfig() } as any,
+      prisma,
+      new WebhookTerminalEmitter(prisma, { emit: jest.fn() } as any),
+      stellar as any,
+      new ConsumerResolverService(prisma as never),
+      new StellarAccountLoader(stellar as never),
+    );
+    return { service, listing, forAccount, liquidityPoolId };
+  }
+
+  it('reads every position from one listing instead of a lookup per pool', async () => {
+    // A Horizon request per pool, all at once, was a fan-out anyone holding the
+    // shared public key could size by seeding an account with trustlines.
+    const { service, listing, forAccount, liquidityPoolId } = make(
+      [...DEFAULT_BALANCES, shareBalance(OTHER_POOL, '10')],
+      [[poolRecord(OTHER_POOL), poolRecord(POOL_ID)]],
+    );
+
+    const result = await service.positions(consumer, { account: SOURCE });
+
+    expect(forAccount).toHaveBeenCalledWith(SOURCE);
+    expect(listing.limit).toHaveBeenCalledWith(POSITIONS_POOL_PAGE_SIZE);
+    expect(listing.call).toHaveBeenCalledTimes(1);
+    expect(liquidityPoolId).not.toHaveBeenCalled();
+    // Same shape and order as before: the account's balances, joined to pools.
+    expect(result.data.map((p) => p.poolId)).toEqual([POOL_ID, OTHER_POOL]);
+    expect(result.data[0]).toEqual({
+      poolId: POOL_ID,
+      shares: '100',
+      totalShares: '100',
+      shareOfPoolBps: 10_000,
+      reserves: [
+        { asset: 'native', issuer: null, amount: '2000' },
+        { asset: 'USDC', issuer: USDC_ISSUER, amount: '200' },
+      ],
+      redeemable: [
+        { asset: 'native', issuer: null, amount: '2000' },
+        { asset: 'USDC', issuer: USDC_ISSUER, amount: '200' },
+      ],
+    });
+    expect(result.data[1].shareOfPoolBps).toBe(1_000);
+  });
+
+  it('drops a share balance whose pool the listing does not return', async () => {
+    // What a per-pool 404 used to do.
+    const { service } = make(
+      [...DEFAULT_BALANCES, shareBalance(OTHER_POOL, '10')],
+      [[poolRecord(POOL_ID)]],
+    );
+
+    const result = await service.positions(consumer, { account: SOURCE });
+
+    expect(result.data.map((p) => p.poolId)).toEqual([POOL_ID]);
+  });
+
+  it('asks Horizon for no pools when the account holds no shares', async () => {
+    const { service, forAccount } = make(
+      [{ asset_type: 'native', balance: '10' }],
+      [],
+    );
+
+    const result = await service.positions(consumer, { account: SOURCE });
+
+    expect(result.data).toEqual([]);
+    expect(forAccount).not.toHaveBeenCalled();
+  });
+
+  it('follows the cursor across full pages and stops at the page cap', async () => {
+    const fullPage = (n: number) =>
+      Array.from({ length: POSITIONS_POOL_PAGE_SIZE }, (_, i) =>
+        poolRecord(`p${n}-${i}`, `token-${n}-${i}`),
+      );
+    const { service, listing } = make(
+      DEFAULT_BALANCES,
+      Array.from({ length: POSITIONS_MAX_POOL_PAGES + 2 }, (_, n) =>
+        fullPage(n),
+      ),
+    );
+
+    await service.positions(consumer, { account: SOURCE });
+
+    expect(listing.call).toHaveBeenCalledTimes(POSITIONS_MAX_POOL_PAGES);
+    expect(listing.cursor).toHaveBeenCalledWith(
+      `token-0-${POSITIONS_POOL_PAGE_SIZE - 1}`,
+    );
+  });
+
+  it('answers 503 when the listing cannot be read', async () => {
+    const { service, listing } = make(DEFAULT_BALANCES, []);
+    listing.call.mockRejectedValueOnce(new Error('socket hang up'));
+
+    const err = await service
+      .positions(consumer, { account: SOURCE })
+      .catch((e) => e);
+
+    expect((err as ApiError).getStatus()).toBe(HttpStatus.SERVICE_UNAVAILABLE);
+    expect((err as ApiError).code).toBe(ApiErrorCode.ProviderUnavailable);
   });
 });

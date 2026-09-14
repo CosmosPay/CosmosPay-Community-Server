@@ -5,7 +5,8 @@ import { BlindpayClient, UploadableFile } from '@/blindpay/blindpay.client';
 import { BlindpayObject } from '@/blindpay/blindpay-sync.service';
 import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
 import { UPLOAD_BUCKETS } from '@/blindpay/blindpay.constants';
-import { ApiError } from '@/common/errors/api-error';
+import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
+import { UPLOAD_SIGNATURES } from '@/kyc/kyc.constants';
 import { PrismaService } from '@/prisma/prisma.service';
 import { InitiateTosDto } from '@/kyc/upload/dto/initiate-tos.dto';
 import type { AppConfig } from '@/config/configuration';
@@ -29,6 +30,10 @@ export class KycMetaService {
   /**
    * Uploads a KYC document and returns its `file_url`, which the caller then
    * passes into the receiver's `*_file` fields.
+   *
+   * The bytes must be what the declared type says. The multipart filter already
+   * refused undeclared types, but a declaration is only the client's word, and
+   * this is the first point at which the content is in hand to check it.
    */
   uploadDocument(
     file: UploadableFile | undefined,
@@ -43,6 +48,12 @@ export class KycMetaService {
     if (!(UPLOAD_BUCKETS as readonly string[]).includes(target)) {
       throw new BadRequestException(
         `bucket must be one of: ${UPLOAD_BUCKETS.join(', ')}`,
+      );
+    }
+    if (!hasSignatureOf(file.buffer, file.mimetype)) {
+      throw ApiError.badRequest(
+        ApiErrorCode.ValidationFailed,
+        `File content is not a valid "${file.mimetype}".`,
       );
     }
     return this.blindpay.uploadFile(file, target);
@@ -111,4 +122,18 @@ export class KycMetaService {
       query: { rail },
     });
   }
+}
+
+/**
+ * True when `buffer` starts the way a file of `mimetype` must. A type with no
+ * entry in {@link UPLOAD_SIGNATURES} never matches — own keys only, so a
+ * "type" named after an `Object.prototype` member is not mistaken for one.
+ */
+function hasSignatureOf(buffer: Buffer, mimetype: string): boolean {
+  if (!Object.hasOwn(UPLOAD_SIGNATURES, mimetype)) return false;
+  return UPLOAD_SIGNATURES[mimetype].some((signature) =>
+    signature.every(({ offset, bytes }) =>
+      bytes.every((byte, i) => buffer[offset + i] === byte),
+    ),
+  );
 }
