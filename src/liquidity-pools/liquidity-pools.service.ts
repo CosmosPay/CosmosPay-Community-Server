@@ -36,9 +36,11 @@ import {
 import { StellarService } from '@/stellar/stellar.service';
 import type {
   LiquidityPoolOperation,
+  Prisma,
   SwapStatus,
   WebhookEventType,
 } from '@generated/prisma/client';
+import { project } from '@/common/projection';
 import { WebhookTerminalEmitter } from '@/webhooks/webhook-terminal-emitter.service';
 import { applySlippage, fromStroops, toStroops } from '@/swaps/swap-math';
 import {
@@ -67,8 +69,52 @@ import {
 import { LpCostBasisService } from '@/liquidity-pools/lp-cost-basis.service';
 import { LIQUIDITY_COMMISSION_MEMO } from '@/liquidity-pools/liquidity-pools.constants';
 
-/** A stored operation plus its derived QR — the shape API responses return. */
-export type LiquidityOperationView = LiquidityPoolOperation & {
+/**
+ * The columns an operation may leave this service with: every field
+ * `LiquidityOperationEntity` documents. An allowlist, because the spread it
+ * replaces answered with the whole row — `consumerId`, the cost-basis inputs
+ * (`sharesReceived`, `settledAmountA`/`B`) and the settlement bookkeeping — on
+ * routes the shared public key reaches. The list reads through it as a
+ * `select`; the single-row paths cut the full row with {@link project}.
+ */
+export const LIQUIDITY_OPERATION_PUBLIC_SELECT = {
+  id: true,
+  kind: true,
+  status: true,
+  network: true,
+  source: true,
+  poolId: true,
+  assetA: true,
+  assetAIssuer: true,
+  assetB: true,
+  assetBIssuer: true,
+  amountA: true,
+  amountB: true,
+  shares: true,
+  minPrice: true,
+  maxPrice: true,
+  slippageBps: true,
+  memo: true,
+  idempotencyKey: true,
+  feeBps: true,
+  feeAmountA: true,
+  feeAmountB: true,
+  feeWallet: true,
+  xdr: true,
+  uri: true,
+  txHash: true,
+  expiresAt: true,
+  createdAt: true,
+  updatedAt: true,
+} as const satisfies Prisma.LiquidityPoolOperationSelect;
+
+/** An operation as the list returns it. */
+export type PublicLiquidityOperation = Prisma.LiquidityPoolOperationGetPayload<{
+  select: typeof LIQUIDITY_OPERATION_PUBLIC_SELECT;
+}>;
+
+/** A public operation plus its derived QR — what single-operation responses return. */
+export type LiquidityOperationView = PublicLiquidityOperation & {
   qr: string;
   /** The commission MEMO_TEXT label when a commission was collected, else null. */
   commissionMemo: string | null;
@@ -558,7 +604,7 @@ export class LiquidityPoolsService {
     consumer: GatewayConsumer,
     query: QueryLiquidityOperationsDto,
   ): Promise<{
-    data: LiquidityPoolOperation[];
+    data: PublicLiquidityOperation[];
     total: number;
     take: number;
     skip: number;
@@ -574,6 +620,7 @@ export class LiquidityPoolsService {
         take: query.take,
         skip: query.skip,
         orderBy: { createdAt: 'desc' },
+        select: LIQUIDITY_OPERATION_PUBLIC_SELECT,
       }),
       this.prisma.liquidityPoolOperation.count({ where }),
     ]);
@@ -1051,7 +1098,7 @@ export class LiquidityPoolsService {
     op: LiquidityPoolOperation,
   ): Promise<LiquidityOperationView> {
     return {
-      ...op,
+      ...project(op, LIQUIDITY_OPERATION_PUBLIC_SELECT),
       qr: await sep7Qr(op.uri),
       // A collected commission (feeWallet set) is labelled with the memo text.
       commissionMemo: op.feeWallet ? LIQUIDITY_COMMISSION_MEMO : null,

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import {
   INestApplication,
   ValidationPipe,
@@ -23,6 +24,10 @@ describe('Pollar OAuth bridge (e2e)', () => {
   const handshakes = new Map<string, any>();
   const counters = new Map<string, number>();
   let seq = 0;
+
+  /** The PKCE pair the redirect flow cannot be opened without. */
+  const VERIFIER = 'dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk';
+  const CHALLENGE = createHash('sha256').update(VERIFIER).digest('base64url');
 
   /** Matches Prisma's `where` closely enough for the CAS to mean something. */
   const matches = (row: any, where: any): boolean =>
@@ -206,7 +211,11 @@ describe('Pollar OAuth bridge (e2e)', () => {
       const res = await withGatewayAuth(
         request(app.getHttpServer()).post('/v1/pollar/oauth/authorize'),
       )
-        .send({ provider: 'google', redirect_uri: 'cosmospay://auth/cb' })
+        .send({
+          provider: 'google',
+          redirect_uri: 'cosmospay://auth/cb',
+          code_challenge: CHALLENGE,
+        })
         .expect(201);
 
       const url = new URL(res.body.authorization_url);
@@ -231,12 +240,32 @@ describe('Pollar OAuth bridge (e2e)', () => {
       expect(fetchMock).not.toHaveBeenCalled();
     });
 
+    it('refuses the redirect flow without a PKCE challenge', async () => {
+      // The callback hands the code to anyone presenting `state`, and `state`
+      // is inside authorization_url — without PKCE that code redeems as is.
+      const fetchMock = jest.spyOn(global, 'fetch');
+      fetchMock.mockClear();
+      const res = await withGatewayAuth(
+        request(app.getHttpServer()).post('/v1/pollar/oauth/authorize'),
+      )
+        .send({ provider: 'google', redirect_uri: 'cosmospay://auth/cb' })
+        .expect(400);
+
+      expect(res.body.code).toBe('validation_failed');
+      expect(res.body.message).toMatch(/code_challenge is required/);
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
     it('carries the code to the wallet and redeems it for a session', async () => {
       pollarReplies({ clientSessionId: 'cs_1' });
       const authorize = await withGatewayAuth(
         request(app.getHttpServer()).post('/v1/pollar/oauth/authorize'),
       )
-        .send({ provider: 'google', redirect_uri: 'cosmospay://auth/cb' })
+        .send({
+          provider: 'google',
+          redirect_uri: 'cosmospay://auth/cb',
+          code_challenge: CHALLENGE,
+        })
         .expect(201);
 
       const callback = await request(app.getHttpServer())
@@ -252,7 +281,7 @@ describe('Pollar OAuth bridge (e2e)', () => {
       const token = await withGatewayAuth(
         request(app.getHttpServer()).post('/v1/pollar/oauth/token'),
       )
-        .send({ code })
+        .send({ code, code_verifier: VERIFIER })
         .expect(201);
 
       expect(token.body).toMatchObject({
@@ -270,7 +299,7 @@ describe('Pollar OAuth bridge (e2e)', () => {
       await withGatewayAuth(
         request(app.getHttpServer()).post('/v1/pollar/oauth/token'),
       )
-        .send({ code })
+        .send({ code, code_verifier: VERIFIER })
         .expect(400);
     });
 

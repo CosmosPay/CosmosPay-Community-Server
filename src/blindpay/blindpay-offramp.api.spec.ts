@@ -8,18 +8,21 @@ function makeApi() {
     instancePath: jest.fn((p: string) => `/instances/in_test${p}`),
     get: jest.fn().mockResolvedValue({ ok: true }),
     post: jest.fn().mockResolvedValue({ ok: true }),
+    instance: jest.fn(),
   };
+  client.instance.mockReturnValue(client);
   const api = new BlindpayOfframpApi(client as unknown as BlindpayClient);
   return { api, client };
 }
 
 describe('BlindpayOfframpApi', () => {
-  it('prices a payout quote', async () => {
+  it('prices a payout quote on the named instance', async () => {
     const { api, client } = makeApi();
     const body = { bank_account_id: 'ba_1', request_amount: 1000 };
 
-    await api.createPayoutQuote(body);
+    await api.createPayoutQuote('dev', body);
 
+    expect(client.instance).toHaveBeenCalledWith('dev');
     expect(client.post).toHaveBeenCalledWith('/instances/in_test/quotes', body);
   });
 
@@ -27,7 +30,7 @@ describe('BlindpayOfframpApi', () => {
     const { api, client } = makeApi();
     const body = { quote_id: 'qe_1', sender_wallet_address: 'GABC' };
 
-    await api.authorizePayout('stellar', body);
+    await api.authorizePayout('prod', 'stellar', body);
 
     expect(client.post).toHaveBeenCalledWith(
       '/instances/in_test/payouts/stellar/authorize',
@@ -43,7 +46,7 @@ describe('BlindpayOfframpApi', () => {
       signed_transaction: 'AAAA',
     };
 
-    await api.createPayout('solana', body);
+    await api.createPayout('prod', 'solana', body);
 
     expect(client.post).toHaveBeenCalledWith(
       '/instances/in_test/payouts/solana',
@@ -56,14 +59,14 @@ describe('BlindpayOfframpApi', () => {
     const provider = { id: 'pa_1', status: 'completed' };
     client.get.mockResolvedValue(provider);
 
-    await expect(api.getPayout('pa_1')).resolves.toBe(provider);
+    await expect(api.getPayout('prod', 'pa_1')).resolves.toBe(provider);
     expect(client.get).toHaveBeenCalledWith('/instances/in_test/payouts/pa_1');
   });
 
   it('attaches a compliance document to a payout', async () => {
     const { api, client } = makeApi();
 
-    await api.addPayoutDocument('pa_1', { type: 'invoice' });
+    await api.addPayoutDocument('prod', 'pa_1', { type: 'invoice' });
 
     expect(client.post).toHaveBeenCalledWith(
       '/instances/in_test/payouts/pa_1/documents',

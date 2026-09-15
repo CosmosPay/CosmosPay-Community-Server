@@ -126,6 +126,21 @@ export class PollarOauthService {
         )
       : null;
 
+    // A redirect-mode code crosses a browser: history, extensions, and a custom
+    // scheme another app may also have registered. The public callback also
+    // hands it to anyone who presents `state`, which rides inside
+    // `authorization_url`. PKCE is what makes a code seen by anyone else useless,
+    // so redirect mode is not opened without it. The poll flow keeps it optional:
+    // its code only ever leaves over the consumer-authenticated API.
+    if (redirectUri && !dto.code_challenge) {
+      throw ApiError.badRequest(
+        ApiErrorCode.ValidationFailed,
+        'code_challenge is required with redirect_uri: a code delivered through ' +
+          'a browser must be bound to the wallet that asked for it (PKCE, S256). ' +
+          'Omit redirect_uri to use the poll flow instead.',
+      );
+    }
+
     // Fail on a missing callback URL before spending a Pollar session on it.
     const state = mintState();
     const callbackUrl = this.pollar.callbackUrl(state);
@@ -382,8 +397,16 @@ export class PollarOauthService {
     }
     this.assertPkce(session, dto.code_verifier);
 
+    // The hash is part of the compare-and-swap, not just the lookup. A poll
+    // reissues the code between the `findUnique` above and this write, and a
+    // claim on `{id, status}` alone would still let the code it just retired
+    // through — so a superseded code is spent only if it is still the current one.
     const claimed = await this.prisma.pollarOauthSession.updateMany({
-      where: { id: session.id, status: PollarOauthStatus.AUTHORIZED },
+      where: {
+        id: session.id,
+        status: PollarOauthStatus.AUTHORIZED,
+        codeHash: hashCode(dto.code),
+      },
       data: { status: PollarOauthStatus.EXCHANGING },
     });
     if (claimed.count === 0) {

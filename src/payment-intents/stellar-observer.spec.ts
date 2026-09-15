@@ -1,4 +1,5 @@
 import { Logger } from '@nestjs/common';
+import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import {
   AdvisoryLockKey,
   AdvisoryLockService,
@@ -31,15 +32,15 @@ describe('StellarObserverService.tick', () => {
     }));
   }
 
-  function makePrisma(pending: Array<{ id: string }>) {
+  function makePrisma(pending: Array<{ id: string }>, lapsed: unknown[] = []) {
     return {
       // The ranked selection: ids only, in the order the query dealt them.
       $queryRaw: jest.fn().mockResolvedValue(pending.map(({ id }) => ({ id }))),
       paymentIntent: {
-        // Call 1 is the expiry sweep, call 2 re-reads the ranked pending rows.
+        // Call 1 is the expiry pass, call 2 re-reads the ranked pending rows.
         findMany: jest
           .fn()
-          .mockResolvedValueOnce([])
+          .mockResolvedValueOnce(lapsed)
           .mockResolvedValue(pending),
       },
     } as any;
@@ -355,6 +356,208 @@ describe('StellarObserverService.tick', () => {
       expect(verifier.findMatchingPayment).toHaveBeenCalledWith(
         expect.objectContaining({ id: 'pi_2' }),
       );
+    });
+  });
+
+  /**
+   * The expiry pass expired every lapsed row without asking the chain, so an
+   * intent paid late in its lifetime — after its last reconcile — ended EXPIRED
+   * and its PAYMENT_INTENT_SUCCEEDED never went out.
+   */
+  describe('finalizing an intent past its lifetime', () => {
+    const lapsedIntent = (overrides: Record<string, unknown> = {}) => ({
+      id: 'pi_lapsed',
+      status: 'PENDING',
+      txHash: null as string | null,
+      destination: 'GDEST',
+      expiresAt: new Date(Date.now() - 1_000),
+      consumer: { apisixUsername: 'cosmos_u1' },
+      ...overrides,
+    });
+
+    const paymentIntentsMock = () => ({
+      markSucceeded: jest.fn().mockResolvedValue({}),
+      markExpired: jest.fn().mockResolvedValue({}),
+    });
+
+    async function tickOver(
+      lapsed: unknown[],
+      verifier: object,
+      paymentIntents: object,
+    ) {
+      const observer = new StellarObserverService(
+        config,
+        makePrisma([], lapsed),
+        verifier as any,
+        paymentIntents as any,
+        grantingLock(),
+      );
+      await observer.tick();
+    }
+
+    it('settles an intent whose payment is on-chain instead of expiring it', async () => {
+      const paymentIntents = paymentIntentsMock();
+      const verifier = {
+        findMatchingPayment: jest.fn().mockResolvedValue({
+          valid: true,
+          txHash: 'b'.repeat(64),
+          payer: 'GP',
+        }),
+      };
+
+      await tickOver([lapsedIntent()], verifier, paymentIntents);
+
+      expect(paymentIntents.markSucceeded).toHaveBeenCalledWith(
+        'pi_lapsed',
+        'cosmos_u1',
+        'b'.repeat(64),
+        'GP',
+        'observer',
+      );
+      expect(paymentIntents.markExpired).not.toHaveBeenCalled();
+    });
+
+    it('expires an intent once the chain has answered with no payment', async () => {
+      const paymentIntents = paymentIntentsMock();
+      const verifier = {
+        findMatchingPayment: jest.fn().mockResolvedValue({
+          valid: false,
+          reason: 'No matching payment found yet',
+        }),
+      };
+
+      await tickOver([lapsedIntent()], verifier, paymentIntents);
+
+      expect(paymentIntents.markExpired).toHaveBeenCalledWith(
+        'pi_lapsed',
+        'cosmos_u1',
+      );
+      expect(paymentIntents.markSucceeded).not.toHaveBeenCalled();
+    });
+
+    it('leaves the intent for the next pass when Horizon cannot be asked', async () => {
+      const error = jest.spyOn(Logger.prototype, 'error').mockImplementation();
+      const paymentIntents = paymentIntentsMock();
+      const verifier = {
+        findMatchingPayment: jest
+          .fn()
+          .mockRejectedValue(new Error('Horizon 503')),
+      };
+
+      await tickOver([lapsedIntent()], verifier, paymentIntents);
+
+      expect(paymentIntents.markExpired).not.toHaveBeenCalled();
+      expect(paymentIntents.markSucceeded).not.toHaveBeenCalled();
+      expect(error).toHaveBeenCalledWith(expect.stringContaining('pi_lapsed'));
+    });
+
+    it('does not expire an intent whose settlement could not be written', async () => {
+      jest.spyOn(Logger.prototype, 'error').mockImplementation();
+      const paymentIntents = paymentIntentsMock();
+      paymentIntents.markSucceeded.mockRejectedValue(
+        new Error('This transaction hash is already recorded'),
+      );
+      const verifier = {
+        findMatchingPayment: jest.fn().mockResolvedValue({
+          valid: true,
+          txHash: 'b'.repeat(64),
+        }),
+      };
+
+      await tickOver([lapsedIntent()], verifier, paymentIntents);
+
+      expect(paymentIntents.markExpired).not.toHaveBeenCalled();
+    });
+
+    /**
+     * A hash already on another of the consumer's intents is a conflict no
+     * later tick can clear. Left PENDING, the intent held an expiry slot on
+     * every tick, and a batch of them — a dust payment and a self-parked hash
+     * each — stalled expiry for every tenant.
+     */
+    it("expires a paid intent whose hash is already on another of the consumer's intents", async () => {
+      const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation();
+      const paymentIntents = paymentIntentsMock();
+      paymentIntents.markSucceeded.mockRejectedValue(
+        ApiError.conflict(
+          ApiErrorCode.IdempotencyConflict,
+          'This transaction hash is already recorded on another of your ' +
+            'payment intents. A Stellar transaction settles at most one of them.',
+        ),
+      );
+      const verifier = {
+        findMatchingPayment: jest.fn().mockResolvedValue({
+          valid: true,
+          txHash: 'b'.repeat(64),
+        }),
+      };
+
+      await tickOver([lapsedIntent()], verifier, paymentIntents);
+
+      expect(paymentIntents.markExpired).toHaveBeenCalledWith(
+        'pi_lapsed',
+        'cosmos_u1',
+      );
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('pi_lapsed'));
+    });
+
+    it('still leaves the intent for the next pass on any other 409', async () => {
+      jest.spyOn(Logger.prototype, 'error').mockImplementation();
+      const paymentIntents = paymentIntentsMock();
+      paymentIntents.markSucceeded.mockRejectedValue(
+        ApiError.conflict(
+          ApiErrorCode.OperationInFlight,
+          'Payment intent pi_lapsed status changed concurrently',
+        ),
+      );
+      const verifier = {
+        findMatchingPayment: jest.fn().mockResolvedValue({
+          valid: true,
+          txHash: 'b'.repeat(64),
+        }),
+      };
+
+      await tickOver([lapsedIntent()], verifier, paymentIntents);
+
+      expect(paymentIntents.markExpired).not.toHaveBeenCalled();
+    });
+
+    it('checks the hash the intent reported, lowercased, instead of scanning', async () => {
+      const paymentIntents = paymentIntentsMock();
+      const verifier = {
+        verifyByHash: jest.fn().mockResolvedValue({ valid: false }),
+        findMatchingPayment: jest.fn(),
+      };
+
+      await tickOver(
+        [lapsedIntent({ txHash: 'C'.repeat(64) })],
+        verifier,
+        paymentIntents,
+      );
+
+      expect(verifier.verifyByHash).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'pi_lapsed' }),
+        'c'.repeat(64),
+      );
+      expect(verifier.findMatchingPayment).not.toHaveBeenCalled();
+      expect(paymentIntents.markExpired).toHaveBeenCalled();
+    });
+
+    it('scans for the payment when the stored txHash is not a transaction hash', async () => {
+      const paymentIntents = paymentIntentsMock();
+      const verifier = {
+        verifyByHash: jest.fn(),
+        findMatchingPayment: jest.fn().mockResolvedValue({ valid: false }),
+      };
+
+      await tickOver(
+        [lapsedIntent({ txHash: 'abc123' })],
+        verifier,
+        paymentIntents,
+      );
+
+      expect(verifier.verifyByHash).not.toHaveBeenCalled();
+      expect(verifier.findMatchingPayment).toHaveBeenCalledTimes(1);
     });
   });
 });

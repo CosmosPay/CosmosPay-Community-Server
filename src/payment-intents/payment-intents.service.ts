@@ -3,7 +3,10 @@ import { ConfigService } from '@nestjs/config';
 import { AppConfig, StellarNetwork } from '@/config/configuration';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
-import { isUniqueViolation } from '@/common/prisma-errors';
+import {
+  isUniqueViolation,
+  uniqueViolationTarget,
+} from '@/common/prisma-errors';
 import { resolveNetwork } from '@/common/stellar-network';
 import { PrismaService } from '@/prisma/prisma.service';
 import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
@@ -14,8 +17,10 @@ import type {
   PaymentIntent,
   PaymentIntentStatus,
   PaymentIntentTransition,
+  Prisma,
   WebhookEventType,
 } from '@generated/prisma/client';
+import { project } from '@/common/projection';
 import { WebhookTerminalEmitter } from '@/webhooks/webhook-terminal-emitter.service';
 import { CreateTxPaymentIntentDto } from '@/payment-intents/dto/create-tx-payment-intent.dto';
 import { CreatePayPaymentIntentDto } from '@/payment-intents/dto/create-pay-payment-intent.dto';
@@ -23,6 +28,7 @@ import { QueryPaymentIntentsDto } from '@/payment-intents/dto/query-payment-inte
 import { UpdatePaymentIntentDto } from '@/payment-intents/dto/update-payment-intent.dto';
 import {
   assertTransition,
+  canTransition,
   InvalidPaymentIntentTransitionError,
   isTerminalStatus,
 } from '@/payment-intents/payment-intent-state-machine';
@@ -44,6 +50,12 @@ export interface TransitionOptions {
   txHash?: string;
   /** On-chain payer for PAY intents settled by observer/validate. */
   payer?: string;
+  /**
+   * `StellarVerifierService` confirmed that `txHash` pays this intent. Only
+   * {@link PaymentIntentsService.markSucceeded} sets it, and settling an
+   * EXPIRED intent requires it (`VERIFIED_SETTLEMENT_ONLY_FROM`).
+   */
+  verifiedOnChain?: boolean;
 }
 
 export interface ValidationOutcome {
@@ -53,8 +65,44 @@ export interface ValidationOutcome {
   paymentIntent?: PaymentIntentView;
 }
 
-// A stored intent plus its (derived) QR code — what API responses return.
-export type PaymentIntentView = PaymentIntent & { qr: string };
+/**
+ * The columns an intent may leave this service with: every field
+ * `PaymentIntentEntity` documents, plus `expiresAt`. An allowlist, because the
+ * spread it replaces answered with the whole row — `consumerId` and the
+ * observer's `horizonCursor` — including on the create routes the shared public
+ * key reaches, where an identical replay returns the stored intent. The list
+ * reads through it as a `select`; single-intent paths cut the row with
+ * {@link project}.
+ */
+export const PAYMENT_INTENT_PUBLIC_SELECT = {
+  id: true,
+  kind: true,
+  status: true,
+  network: true,
+  source: true,
+  destination: true,
+  amount: true,
+  asset: true,
+  assetIssuer: true,
+  memo: true,
+  msg: true,
+  callback: true,
+  xdr: true,
+  uri: true,
+  txHash: true,
+  reference: true,
+  expiresAt: true,
+  createdAt: true,
+  updatedAt: true,
+} as const satisfies Prisma.PaymentIntentSelect;
+
+/** An intent as the list returns it. */
+export type PublicPaymentIntent = Prisma.PaymentIntentGetPayload<{
+  select: typeof PAYMENT_INTENT_PUBLIC_SELECT;
+}>;
+
+/** A public intent plus its derived QR code — what single-intent responses return. */
+export type PaymentIntentView = PublicPaymentIntent & { qr: string };
 
 /**
  * A payment intent's lifecycle: the idempotent create, reads, the guarded
@@ -142,7 +190,10 @@ export class PaymentIntentsService {
 
   /** QR is derived from the stored SEP-7 URI rather than persisted. */
   private async withQr(intent: PaymentIntent): Promise<PaymentIntentView> {
-    return { ...intent, qr: await this.links.qr(intent.uri) };
+    return {
+      ...project(intent, PAYMENT_INTENT_PUBLIC_SELECT),
+      qr: await this.links.qr(intent.uri),
+    };
   }
 
   /** Idempotency: return the existing intent for (consumer, memo), if any. */
@@ -345,7 +396,7 @@ export class PaymentIntentsService {
     consumer: GatewayConsumer,
     query: QueryPaymentIntentsDto,
   ): Promise<{
-    data: PaymentIntent[];
+    data: PublicPaymentIntent[];
     total: number;
     take: number;
     skip: number;
@@ -365,6 +416,7 @@ export class PaymentIntentsService {
         take: query.take,
         skip: query.skip,
         orderBy: { createdAt: 'desc' },
+        select: PAYMENT_INTENT_PUBLIC_SELECT,
       }),
       this.prisma.paymentIntent.count({ where }),
     ]);
@@ -492,10 +544,17 @@ export class PaymentIntentsService {
       );
     }
 
-    const guarded = await this.prisma.paymentIntent.updateMany({
-      where: { id, status: current.status },
-      data,
-    });
+    // A hash already recorded on another of the consumer's intents trips the
+    // (consumerId, txHash) index; that is a 409, not a 500.
+    let guarded: { count: number };
+    try {
+      guarded = await this.prisma.paymentIntent.updateMany({
+        where: { id, status: current.status },
+        data,
+      });
+    } catch (err) {
+      throw txHashConflict(err) ?? err;
+    }
     if (guarded.count === 0) {
       throw ApiError.conflict(
         ApiErrorCode.OperationInFlight,
@@ -525,12 +584,21 @@ export class PaymentIntentsService {
     }
 
     // The declared graph and the evidence rule are checked here, before any
-    // Horizon call: forcing a terminal intent to SUCCEEDED is an invalid
-    // transition whatever the chain says, and it must not cost a network round
-    // trip or report itself as a rejected transaction. `transition` applies the
-    // same assertion again downstream — this is the early, honest error.
+    // Horizon call: forcing a CANCELLED or FAILED intent to SUCCEEDED is an
+    // invalid transition whatever the chain says, and it must not cost a network
+    // round trip or report itself as a rejected transaction. `transition`
+    // applies the same assertion again downstream — this is the early, honest
+    // error.
+    //
+    // It is asked as if the chain will agree (`verifiedOnChain: true`), because
+    // the question here is whether any settlement could apply: an EXPIRED
+    // intent can settle, on exactly the verification `validate` performs below.
+    // The real answer is the one `markSucceeded` hands `transition`.
     try {
-      assertTransition(current.status, 'SUCCEEDED', { txHash: dto.txHash });
+      assertTransition(current.status, 'SUCCEEDED', {
+        txHash: dto.txHash,
+        verifiedOnChain: true,
+      });
     } catch (err) {
       if (err instanceof InvalidPaymentIntentTransitionError) {
         throw ApiError.badRequest(
@@ -584,7 +652,10 @@ export class PaymentIntentsService {
     const txHash = opts.txHash ?? current.txHash ?? undefined;
 
     try {
-      assertTransition(from, toStatus, { txHash });
+      assertTransition(from, toStatus, {
+        txHash,
+        verifiedOnChain: opts.verifiedOnChain,
+      });
     } catch (err) {
       if (err instanceof InvalidPaymentIntentTransitionError) {
         // `from`/`to` were never reachable by an integrator — the exception
@@ -603,35 +674,42 @@ export class PaymentIntentsService {
     const setSource =
       opts.payer && !current.source ? { source: opts.payer } : {};
 
-    const updated = await this.prisma.$transaction(async (tx) => {
-      const guarded = await tx.paymentIntent.updateMany({
-        where: { id: intentId, status: current.status },
-        data: {
-          status: to,
-          ...(txHash !== undefined ? { txHash } : {}),
-          ...setSource,
-        },
-      });
-      if (guarded.count === 0) {
-        throw ApiError.conflict(
-          ApiErrorCode.OperationInFlight,
-          `Payment intent ${intentId} status changed concurrently; expected ${from}`,
-        );
-      }
+    let updated: PaymentIntent;
+    try {
+      updated = await this.prisma.$transaction(async (tx) => {
+        const guarded = await tx.paymentIntent.updateMany({
+          where: { id: intentId, status: current.status },
+          data: {
+            status: to,
+            ...(txHash !== undefined ? { txHash } : {}),
+            ...setSource,
+          },
+        });
+        if (guarded.count === 0) {
+          throw ApiError.conflict(
+            ApiErrorCode.OperationInFlight,
+            `Payment intent ${intentId} status changed concurrently; expected ${from}`,
+          );
+        }
 
-      await tx.paymentIntentTransition.create({
-        data: {
-          intentId,
-          fromStatus: current.status,
-          toStatus: to,
-          txHash: txHash ?? null,
-          actor: opts.actor,
-          reason: opts.reason ?? null,
-        },
-      });
+        await tx.paymentIntentTransition.create({
+          data: {
+            intentId,
+            fromStatus: current.status,
+            toStatus: to,
+            txHash: txHash ?? null,
+            actor: opts.actor,
+            reason: opts.reason ?? null,
+          },
+        });
 
-      return tx.paymentIntent.findUniqueOrThrow({ where: { id: intentId } });
-    });
+        return tx.paymentIntent.findUniqueOrThrow({ where: { id: intentId } });
+      });
+    } catch (err) {
+      // Settling on a hash another of the consumer's intents already carries:
+      // a 409 for validate, a logged failure the observer retries — not a 500.
+      throw txHashConflict(err) ?? err;
+    }
 
     this.logger.log(
       `Payment intent ${intentId} transition ${from} → ${to}` +
@@ -755,7 +833,12 @@ export class PaymentIntentsService {
     // only says so once memo, age and a payment operation all match: FAILED is
     // terminal, and the hash of any unrelated failed transaction used to reach
     // it. Everything else is a mismatch and changes nothing.
-    if (result.failedOnChain) {
+    //
+    // Only from a status that may still fail. An EXPIRED intent is worth
+    // validating now — a verified payment settles it — and a failed attempt
+    // against it is answered as the mismatch it is, not as a 400 for an
+    // EXPIRED → FAILED transition the caller never asked for.
+    if (result.failedOnChain && canTransition(intent.status, 'FAILED')) {
       const updated = await this.markFailed(
         intent.id,
         consumer.username,
@@ -772,7 +855,14 @@ export class PaymentIntentsService {
     return { valid: false, status: intent.status, reason: result.reason };
   }
 
-  /** Finalizes an intent as SUCCEEDED and emits the event. Reused by the observer. */
+  /**
+   * Finalizes an intent as SUCCEEDED and emits the event. Reused by the observer.
+   *
+   * `txHash` must be a hash {@link StellarVerifierService} has confirmed pays
+   * this intent: this is the settlement that counts as verified on-chain, and
+   * the only one that may settle an EXPIRED intent. Both callers — `validate`
+   * and the observer — hold that verifier result when they call it.
+   */
   async markSucceeded(
     intentId: string,
     consumerUsername: string,
@@ -786,6 +876,7 @@ export class PaymentIntentsService {
       reason: 'on-chain payment confirmed',
       txHash,
       payer,
+      verifiedOnChain: true,
     });
   }
 
@@ -830,4 +921,36 @@ export class PaymentIntentsService {
       throw ApiError.notFound(`Payment intent ${id} not found`);
     }
   }
+}
+
+/**
+ * The 409 for a `txHash` already recorded on another of the consumer's
+ * intents, or `null` when `err` is not that violation.
+ *
+ * `txHash` is unique per consumer: one transaction settles at most one of a
+ * consumer's intents. It was unique across every tenant, and PATCH records a
+ * reported hash unverified, so any tenant could write another tenant's hash onto
+ * an intent of its own. That tenant's settlement then hit the index and escaped
+ * as a raw Prisma error — a 500 from validate, a reconcile that failed on every
+ * observer tick, and an intent that expired although it was paid. The index is
+ * scoped now; a collision that remains is between the consumer's own intents.
+ *
+ * The writes this guards touch no other unique column, so a violation that
+ * names no column is the txHash. Through `@prisma/adapter-pg` every violation
+ * names none: it reports the index under `meta.driverAdapterError` and leaves
+ * `meta.target`, the only thing `uniqueViolationTarget` reads, unset. A target
+ * that does name another column is left alone.
+ *
+ * The message names no intent. The consumer may be the shared public key's,
+ * whose intents belong to every anonymous caller.
+ */
+function txHashConflict(err: unknown): ApiError | null {
+  if (!isUniqueViolation(err)) return null;
+  const target = uniqueViolationTarget(err);
+  if (target.length > 0 && !target.includes('txHash')) return null;
+  return ApiError.conflict(
+    ApiErrorCode.IdempotencyConflict,
+    'This transaction hash is already recorded on another of your payment ' +
+      'intents. A Stellar transaction settles at most one of them.',
+  );
 }

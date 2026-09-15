@@ -8,6 +8,7 @@ import { BlindpayKycApi } from '@/blindpay/blindpay-kyc.api';
 import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
 import { BlindpayObject } from '@/blindpay/blindpay-sync.service';
 import { asNullableString, asString, toJson } from '@/blindpay/blindpay.util';
+import type { BlindpayEnvironment } from '@/config/configuration';
 import { ReceiversService } from '@/kyc/receivers/receivers.service';
 import { CreateBankAccountDto } from '@/kyc/bank-accounts/dto/create-bank-account.dto';
 
@@ -31,7 +32,8 @@ export const BANK_ACCOUNT_PUBLIC_SELECT = {
 
 /**
  * Fiat bank accounts belonging to a receiver — the settlement destination for
- * offramp payouts. Mirrored locally and scoped to the consumer via the receiver.
+ * offramp payouts. Mirrored locally and scoped to the consumer via the receiver,
+ * which also pins them to the caller's BlindPay instance.
  */
 @Injectable()
 export class BankAccountsService {
@@ -48,16 +50,22 @@ export class BankAccountsService {
     dto: CreateBankAccountDto,
   ) {
     const local = await this.consumers.resolve(consumer);
+    const environment = this.blindpay.environmentFor(consumer);
     const receiver = await this.receivers.findReceiverOrThrow(
       local.id,
+      environment,
       receiverId,
     );
     this.receivers.assertEnabled(receiver);
     const created = await this.blindpay.createBankAccount(
+      environment,
       receiver.blindpayId,
       dto,
     );
-    return this.mirror(local.id, receiver.id, { type: dto.type, ...created });
+    return this.mirror(local.id, environment, receiver.id, {
+      type: dto.type,
+      ...created,
+    });
   }
 
   async findAll(
@@ -68,6 +76,7 @@ export class BankAccountsService {
     const local = await this.consumers.resolve(consumer);
     const receiver = await this.receivers.findReceiverOrThrow(
       local.id,
+      this.blindpay.environmentFor(consumer),
       receiverId,
     );
     const where = { receiverId: receiver.id };
@@ -87,8 +96,10 @@ export class BankAccountsService {
 
   async remove(consumer: GatewayConsumer, receiverId: string, id: string) {
     const local = await this.consumers.resolve(consumer);
+    const environment = this.blindpay.environmentFor(consumer);
     const receiver = await this.receivers.findReceiverOrThrow(
       local.id,
+      environment,
       receiverId,
     );
     const row = await this.prisma.blindpayBankAccount.findFirst({
@@ -97,12 +108,21 @@ export class BankAccountsService {
     if (!row) {
       return { id, deleted: true };
     }
-    await this.blindpay.deleteBankAccount(receiver.blindpayId, row.blindpayId);
+    await this.blindpay.deleteBankAccount(
+      environment,
+      receiver.blindpayId,
+      row.blindpayId,
+    );
     await this.prisma.blindpayBankAccount.delete({ where: { id: row.id } });
     return { id, deleted: true };
   }
 
-  private mirror(consumerId: string, receiverId: string, obj: BlindpayObject) {
+  private mirror(
+    consumerId: string,
+    environment: BlindpayEnvironment,
+    receiverId: string,
+    obj: BlindpayObject,
+  ) {
     const data = {
       receiverId,
       rail: asNullableString(obj.type),
@@ -114,7 +134,12 @@ export class BankAccountsService {
       where: {
         consumerId_blindpayId: { consumerId, blindpayId: asString(obj.id) },
       },
-      create: { consumerId, blindpayId: asString(obj.id), ...data },
+      create: {
+        consumerId,
+        environment,
+        blindpayId: asString(obj.id),
+        ...data,
+      },
       update: data,
       // The create response is a read path too — don't echo the stored credentials back.
       select: BANK_ACCOUNT_PUBLIC_SELECT,

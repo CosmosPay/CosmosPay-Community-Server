@@ -354,7 +354,11 @@ rolling deploy के दौरान पुराने और नए replicas 
   `PAYMENT_INTENT_SUCCEEDED` webhook भेजा जाता है। on-chain विफल हुआ tx intent को
   `FAILED` **केवल तभी** करता है **जब वह इसी intent का अपना पेमेंट हो** — वही memo,
   destination और asset। कोई भी दूसरा ट्रांज़ैक्शन, विफल हो या नहीं, एक mismatch है जो
-  status को नहीं बदलता, ताकि सही tx अब भी submit किया जा सके।
+  status को नहीं बदलता, ताकि सही tx अब भी submit किया जा सके। `PATCH
+  /v1/payment-intents/:id` के साथ रिपोर्ट किया गया `txHash` अकेले किसी intent को settle नहीं
+  करता: यह 64-अक्षर का hex hash होना चाहिए, lowercase में सहेजा जाता है, और यह सिर्फ़ कॉल
+  करने वाले consumer के intents में unique होता है (उनमें से किसी दूसरे से टकराने पर `409
+  idempotency_conflict`)।
 - **स्वचालित (स्थायी observer):** `StellarObserverService` हर
   `OBSERVER_INTERVAL_MS` पर `PENDING` intents के लिए Horizon को poll करता है — रिपोर्ट किए गए `txHash` से, या
   destination पर आए पेमेंट scan करके — और मेल खाने वालों को उसी तरह finalize करता है, इसलिए
@@ -362,6 +366,17 @@ rolling deploy के दौरान पुराने और नए replicas 
   प्रति consumer अधिकतम `OBSERVER_MAX_INTENTS_PER_CONSUMER` (10) intents लेता है और
   expired intent को कभी scan नहीं करता, इसलिए कोई एक consumer बाकी सबके settlement में
   देरी नहीं कर सकता। local dev के लिए `OBSERVER_ENABLED=false` से बंद करें।
+
+**Expiry पहले चेन जाँचता है।** अपनी lifetime पार कर चुके intent को `EXPIRED` चिह्नित करने
+से पहले एक बार और verify किया जाता है: अगर उसका पेमेंट on-chain मिल जाता है तो वह इसके बजाय
+`SUCCEEDED` पर settle होता है, और अगर Horizon तक नहीं पहुँचा जा सकता तो उसे अगले tick के लिए
+छोड़ दिया जाता है। जब उस पेमेंट का hash उसी consumer के किसी दूसरे intent पर पहले से मौजूद
+हो, तो intent को हमेशा के लिए दोबारा कोशिश करने के बजाय expire कर दिया जाता है। expiry के
+बाद verify हुआ पेमेंट — चाहे observer से हो या `validate` से — फिर भी `EXPIRED` intent को
+`SUCCEEDED` पर ले जाता है और `PAYMENT_INTENT_SUCCEEDED` भेजता है, इसलिए `EXPIRED` को final न
+मानें। scan destination के पेमेंट्स को intent बनने तक वापस पढ़ता है, अधिकतम 1,000 (200 के 5
+pages); अगर किसी destination को किसी intent की lifetime में इससे ज़्यादा पेमेंट मिलते हैं, तो
+hash के साथ `validate` कॉल करें।
 
 ### API request logs का retention
 
@@ -524,6 +539,18 @@ signing secret `POST /webhooks` पर (और
 status, attempts, response code और error के साथ (`webhook_delivery` में) सहेजा जाता है — इसे
 `GET /webhooks/:id/deliveries` से query करें और `redeliver` रूट से दोबारा भेजें।
 
+List, get और update ठीक वही दस्तावेज़ीकृत endpoint fields लौटाते हैं, और create और
+`rotate-secret` इनमें `secret` जोड़ते हैं। row पर बाकी कुछ भी सर्विस से बाहर नहीं जाता — न
+`consumerId`, और न वे `previousSecret` / `previousSecretExpiresAt` columns जिन्हें पहले के
+किसी grace-window rotation ने लिखा था।
+
+**`ping` और `redeliver` rate limited हैं**, प्रति consumer और client address:
+`POST /v1/webhooks/:id/ping` 20 और
+`POST /v1/webhooks/:id/deliveries/:deliveryId/redeliver` प्रति 10 मिनट 30
+(`429 rate_limited`)। दोनों इस सर्विस से आपके चुने गए URL पर signed requests भेजने के लिए
+कहते हैं, और `redeliver` पूरा retry loop उसी request के अंदर चलाता है। बड़े backlog के लिए,
+एक-एक करके redeliver करने के बजाय sweeper को retry करने दें।
+
 ### OpenAPI / Swagger
 
 **सुरक्षा नोट:** `GET /docs`, `/docs/json`, और `/docs/yaml` Nest controllers के रूप में
@@ -570,7 +597,9 @@ public (mainnet), `dev` key → testnet। `STELLAR_NETWORK` केवल gatewa
 local dev के लिए fallback है। हर intent अपना नेटवर्क सहेजता है और सभी Horizon
 कॉल (build, वैलिडेशन, observer) उसी को target करती हैं। हर intent सहेजा जाता है
 (`payment_intent` टेबल) और कॉल करने वाले consumer तक सीमित रहता है:
-`PENDING → SUBMITTED → SUCCEEDED/FAILED/CANCELLED/EXPIRED`।
+`PENDING → SUBMITTED → SUCCEEDED/FAILED/CANCELLED/EXPIRED`। किसी final status से
+बाहर निकलने का एकमात्र रास्ता `EXPIRED → SUCCEEDED` है, और वह भी केवल on-chain
+सत्यापित payment पर।
 
 **memo एक अनिवार्य `MEMO_ID` है** — यह on-chain पेमेंट की पहचान करता है और
 intent बनाने को **idempotent** बनाता है: `(consumer, memo)` unique है, इसलिए उसी memo
@@ -662,9 +691,9 @@ where: { id, consumer: { apisixUsername: consumer.username } }
 | --- | --- |
 | `POST /v1/swaps/quote` | Horizon से path की कीमत निकालता है; यह request का शुद्ध function है |
 | `POST /v1/swaps` | एक unsigned envelope बनाता है जिसे caller sign करता है |
-| `POST /v1/swaps/:id/submit` | caller द्वारा signed envelope broadcast करता है — इसके लिए swap का UUID *और* उसके source account का signature चाहिए |
+| `POST /v1/swaps/:id/submit` | caller द्वारा signed envelope broadcast करता है — swap के बारे में कुछ भी, यहाँ तक कि उसकी status भी, तब तक नहीं बताया जाता जब तक body उसी swap का envelope न हो जिस पर signature हो; rate limited |
 | `POST /v1/liquidity-pools/deposit` \| `withdraw` | unsigned envelopes बनाते हैं |
-| `POST /v1/liquidity-pools/operations/:id/submit` | caller द्वारा signed envelope broadcast करता है |
+| `POST /v1/liquidity-pools/operations/:id/submit` | caller द्वारा signed envelope broadcast करता है, swap submit जैसी ही जाँच के तहत; rate limited |
 | `GET /v1/liquidity-pools` \| `/:poolId` \| `/positions` | Horizon से पढ़ा गया सार्वजनिक on-chain डेटा |
 | `POST /v1/payment-intents/tx` \| `pay` | request से एक SEP-7 intent बनाते हैं |
 | `POST /v1/activity/events` | Telemetry ingest — नीचे देखें |
@@ -784,6 +813,20 @@ broadcast करने से पहले सर्विस जाँचती
 मेल खाता है, इसलिए वह कभी कोई मनमाना ट्रांज़ैक्शन relay नहीं करती। swap उसी dispatcher से `SWAP_CREATED` / `SWAP_SUBMITTED` / `SWAP_SUCCEEDED` /
 `SWAP_FAILED` webhook events भेजता है।
 
+**Submit इस बारे में सख्त है कि वह क्या relay करता है।** swap के बारे में कुछ भी — यहाँ तक कि
+उसकी status भी — तब तक नहीं बताया जाता जब तक `signedXdr` parse न हो जाए, swap के `txHash`
+से hash न मिल जाए और उस पर कम से कम एक signature न हो, इसलिए create response से मिला
+unsigned `xdr` `400 validation_failed` है। जिस swap के envelope की time bounds
+(`STELLAR_TX_TIMEOUT`, डिफ़ॉल्ट 300 s) निकल चुकी हों वह `400 invalid_state_transition` है
+और broadcast नहीं होता; अगर वह समय रहते network तक पहुँच गया था, तो observer उसे अब भी
+settle कर देता है। network रिजेक्शन के बाद वही envelope ज़्यादा से ज़्यादा **3** बार दोबारा
+submit किया जा सकता है, फिर नया swap बनाएँ — `503 provider_unavailable` के बाद की retry
+इसमें नहीं गिनती। यह रूट प्रति consumer और client address **प्रति मिनट 20 कॉल** की अनुमति
+देता है (`429 rate_limited`); साझा public key के तहत हर anonymous वॉलेट एक consumer है,
+इसलिए एक ही NAT के पीछे के वॉलेट यह budget साझा करते हैं।
+`POST /v1/liquidity-pools/operations/:id/submit` भी यही नियम मानता है, अपने ही अलग bucket
+के साथ।
+
 ## Aliases — क्लेम किए जा सकने वाले पेमेंट हैंडल
 
 alias की मदद से payer `GA5ZSE…` की जगह `emanuel250` टाइप कर सकता है। पैसा भेजने से
@@ -853,8 +896,15 @@ claim एक recovery ईमेल रिकॉर्ड करता है त
 चरण 1 केवल कंसोल के लिए है क्योंकि token mailbox पर नियंत्रण साबित करता है, इसलिए वह
 केवल ईमेल भेजने वाले तक ही पहुँचना चाहिए। `ConsoleOnlyGuard` alias देखे जाने से पहले ही
 हर API-key caller को `403 admin_console_only` के साथ मना कर देता है, और यह रूट प्रकाशित
-contract में नहीं है। पाँच गलत tokens एक recovery रद्द कर देते हैं (मालिक नई शुरू कर सकता
-है), और suspended alias को recover नहीं किया जा सकता।
+contract में नहीं है। suspended alias को recover नहीं किया जा सकता।
+
+एक recovery token **पाँच** बार प्रस्तुत किया जा सकता है। जिस प्रस्तुति में challenge या
+signature विफल हो, वह भी एक प्रयास गिनी जाती है, और छठी बार मना कर दिया जाता है; मालिक
+दूसरी recovery शुरू कर सकता है। जो token उस alias की किसी चालू recovery से मेल न खाए, उसे
+वही `400 alias_recovery_invalid` मिलता है और कुछ नहीं बदलता, ताकि कोई भी junk भेजकर मालिक
+की recovery न जला सके। `POST /v1/aliases/:name/recovery/complete` प्रति 10 मिनट 10 कॉल
+और `POST /v1/aliases/challenges` 30 कॉल की अनुमति देता है, प्रति consumer और client
+address (`429 rate_limited`)।
 
 Expired challenges और recoveries को expire होने के एक दिन बाद
 `AliasChallengeSweeperService` delete करता है (हर घंटे, प्रति tick एक replica)।
@@ -880,8 +930,9 @@ Expired challenges और recoveries को expire होने के एक �
 on-chain payment intents के अलावा, सर्विस
 [BlindPay](https://www.blindpay.com/docs) को integrate करती है ताकि पैसा **fiat और
 stablecoins** के बीच ले जाया जा सके: पैसा अंदर लाना (**onramp / payin**), पैसा बाहर निकालना (**offramp / payout**), और
-दोनों के पीछे अनिवार्य **KYC** (BlindPay *receivers*)। हम एक **एकल
-प्लेटफ़ॉर्म BlindPay instance** चलाते हैं (env में `BLINDPAY_API_KEY` + `BLINDPAY_INSTANCE_ID`);
+दोनों के पीछे अनिवार्य **KYC** (BlindPay *receivers*)। हम **हर API-key environment के लिए
+एक प्लेटफ़ॉर्म BlindPay instance** चलाते हैं — `prod` keys के लिए production
+(`BLINDPAY_API_KEY` + `BLINDPAY_INSTANCE_ID`), `dev` keys के लिए development (`_DEV` variables);
 हर receiver/wallet/bank-account/payin/payout हमारे Postgres में mirror किया जाता है और
 **कॉल करने वाले APISIX consumer तक सीमित** रहता है, इसलिए हर integrator केवल अपने
 रिकॉर्ड ही देखता है। सर्विस **कभी भी blockchain keys नहीं रखती** — offramp sign करने के लिए
@@ -896,7 +947,7 @@ types (`RECEIVER_UPDATED`, `PAYIN_*`, `PAYOUT_*`) के रूप में **�
 | ------ | ----------------------------------------------------- | -------------- | ----------- |
 | POST   | `/v1/kyc/receivers`                                   | `kyc:write`    | receiver बनाना (KYC/KYB शुरू करना) |
 | GET    | `/v1/kyc/receivers` · `/:id`                          | `kyc:read`     | सूची / एक लेना (get KYC status refresh करता है) |
-| PATCH  | `/v1/kyc/receivers/:id`                               | `kyc:write`    | receiver अपडेट करना |
+| PATCH  | `/v1/kyc/receivers/:id`                               | `kyc:write`    | receiver अपडेट करना (BlindPay पर होने के बाद identity fields के लिए elevated key चाहिए) |
 | DELETE | `/v1/kyc/receivers/:id`                               | `kyc:write`    | receiver delete करना |
 | POST   | `/v1/kyc/upload`                                      | `kyc:write`    | KYC दस्तावेज़ अपलोड करना → `file_url` |
 | GET    | `/v1/kyc/rails` · `/v1/kyc/bank-details?rail=`        | `kyc:read`     | Rail catalog / ज़रूरी fields |
@@ -917,10 +968,28 @@ types (`RECEIVER_UPDATED`, `PAYIN_*`, `PAYOUT_*`) के रूप में **�
 
 राशियाँ **minor units में integers** होती हैं (जैसे `$123.45` → `12345`)। BlindPay डैशबोर्ड का webhook
 `<gateway>/v1/blindpay/webhooks` पर कॉन्फ़िगर करें और
-`BLINDPAY_WEBHOOK_SECRET` को उस endpoint के signing secret पर सेट करें। feature बंद करने के लिए
+`BLINDPAY_WEBHOOK_SECRET` को उस endpoint के signing secret पर सेट करें — पूरा `whsec_…`
+value। जब इसकी key 24 bytes से कम में decode होती है तो boot विफल हो जाता है, और verifier
+भी ऐसी key को वैसे भी अस्वीकार करता है: अमान्य base64 एक खाली key में decode होता है, और
+उससे कोई भी sign कर सकता है। feature बंद करने के लिए
 `BLINDPAY_*` vars खाली छोड़ दें: तब वे रूट `503` `misconfigured` लौटाते हैं, और जब तक
 `BLINDPAY_WEBHOOK_SECRET` सेट नहीं है, आने वाला webhook भी यही लौटाता है।
 `.env.example` देखें।
+
+**एक `dev` key कभी production instance तक नहीं पहुँचती।** key का environment BlindPay
+instance उसी तरह चुनता है जैसे Stellar network चुनता है, और हर mirror की गई row दर्ज करती है कि
+वह किस instance से आई, इसलिए किसी tenant की `dev` और `prod` keys — एक ही consumer — अलग-अलग
+receivers, wallets, bank accounts, quotes, payins और payouts देखती हैं। development instance
+कॉन्फ़िगर न होने पर BlindPay routes `dev` keys को `503` `misconfigured` लौटाते हैं। दोनों
+instances के dashboard webhooks एक ही `<gateway>/v1/blindpay/webhooks` पर लगाएँ और development
+वाले के लिए `BLINDPAY_WEBHOOK_SECRET_DEV` सेट करें: delivery जिस secret से verify होती है,
+वही बताता है कि उसे किस instance ने भेजा।
+
+**पहचान BlindPay तक पहुँचने से पहले review होती है, edits में भी।** जब तक receiver enable
+नहीं होता, KYC data को छूने वाला `PATCH` उसे वापस `pending_review` में भेज देता है। BlindPay पर
+मौजूद होने के बाद tenant key केवल `external_id` और `image_url` बदल सकती है; कोई भी दूसरा field
+`403` `kyc_review_required` है, जब तक key elevated (`X-Consumer-Role: admin`) न हो, क्योंकि वह
+`PUT` provider पर पहचान को सीधे फिर से लिख देता है।
 
 ### KYC redirect URL प्रति consumer allow-list किए जाते हैं
 
@@ -981,7 +1050,7 @@ wallet ──6. talks to Pollar DIRECTLY from here on ──────▶ http
 
 |                  | Redirect flow                                    | Poll flow                                       |
 | ---------------- | ------------------------------------------------ | ----------------------------------------------- |
-| वॉलेट क्या देता है | `redirect_uri` (allow-list में होना चाहिए)     | कुछ नहीं                                        |
+| वॉलेट क्या देता है | `redirect_uri` (allow-list में होना चाहिए) और एक PKCE `code_challenge` | कुछ नहीं (PKCE वैकल्पिक) |
 | code कैसे आता है | redirect पर `?code=…&state=…` के रूप में        | `GET /v1/pollar/oauth/sessions/{state}` से      |
 | browser क्या देखता है | आपका अपना URI                               | एक साधारण "आप यह विंडो बंद कर सकते हैं" पेज — code कभी नहीं |
 | कब उपयोग करें    | जब वॉलेट के पास deep link या loopback listener हो | जब इनमें से कुछ भी न हो (kiosk, headless, embedded view) |
@@ -1049,9 +1118,12 @@ callback दूसरा code नहीं बनाता, और एक code �
 
 ### Hardening
 
-- **PKCE (RFC 7636, S256)** वैकल्पिक है लेकिन अनुशंसित है: authorize पर `code_challenge` और
-  redemption पर `code_verifier` भेजें, और तब browser या log से लीक हुआ code
-  verifier के बिना बेकार है।
+- **PKCE (RFC 7636, S256)** **redirect flow में अनिवार्य** है और poll flow में वैकल्पिक:
+  authorize पर `code_challenge` और redemption पर `code_verifier` भेजें, और तब browser
+  या log से लीक हुआ code verifier के बिना बेकार है। redirect flow का code एक browser से
+  होकर गुज़रता है, और public callback उसे `state` दिखाने वाले किसी को भी दे देता है — जो
+  `authorization_url` के अंदर होता है — इसलिए `redirect_uri` के साथ और `code_challenge`
+  के बिना `authorize` `400 validation_failed` है।
 - **`dpop_jwk`** Pollar के बनाए tokens को वॉलेट की अपनी P-256 key से बाँध देता है
   (RFC 9449), इसलिए चुराया गया access token signed proof के बिना निष्क्रिय है। इसका यह भी
   अर्थ है कि bridge अब वॉलेट की ओर से काम नहीं कर सकता — `/refresh` और `/logout`
@@ -1108,8 +1180,10 @@ redeem करने से कुछ नया नहीं बनता।
 | `POST /v1/pollar/wallets/activate` | 20 | हर कॉल पर XLM खर्च करता है |
 
 किसी सीमा को पार करने पर **`429` के साथ `code: "rate_limited"`**, एक `Retry-After`, और
-`RateLimit-Limit` / `-Remaining` / `-Reset` headers लौटते हैं। बाकी रूट यहाँ सीमित नहीं
-हैं; सामान्य rate limiting APISIX का काम है।
+`RateLimit-Limit` / `-Remaining` / `-Reset` headers लौटते हैं। यही limiter Pollar के बाहर
+भी कुछ रूट्स की रक्षा करता है — swap और liquidity-pool submit, webhook `ping` और
+`redeliver`, alias challenges और recovery, activity ingest — और हर सेक्शन अपना budget
+बताता है। सामान्य rate limiting APISIX का काम है।
 
 **काउंटर memory में नहीं, Postgres में है**, इसलिए सीमा सभी replicas पर एक साथ लागू रहती
 है। यह एक fixed window है (प्रति request एक atomic `INSERT … ON CONFLICT … RETURNING`),
@@ -1179,6 +1253,23 @@ Pollar नेटवर्क और key का प्रकार key के pre
 | 10 MiB से बड़ी फ़ाइल वाला `POST /v1/kyc/upload` अब `code: "payload_too_large"` के साथ `413` है; पहले यह `internal_error` था | `code` पर branch करने वाले integrators | यह client की ओर की सीमा है, server error नहीं |
 | `POST /v1/liquidity-pools/deposit`, `/withdraw`, `GET /v1/liquidity-pools/operations`, `/operations/:id`, `POST /v1/liquidity-pools/operations/:id/submit` और `LIQUIDITY_*` webhooks में अब `memo` आता है (caller का MEMO_ID, या `null`)। Migration `20260915120000_liquidity_pool_operation_memo` से पहले बने operations `null` लौटाते हैं, भले ही उनके envelope में memo हो | कोई नहीं, जब तक कोई client अनजान fields को reject न करे | memo केवल XDR के अंदर सहेजा जाता था |
 | `GET /v1/swaps` और `GET /v1/liquidity-pools/operations` का प्रकाशित contract अब list items पर `qr` या `commissionMemo` नहीं दिखाता। Responses नहीं बदले — ये दो fields वहाँ कभी भेजे ही नहीं गए; इनके लिए अकेला item पढ़ें | OpenAPI spec से generate किए गए clients | contract list items को single-item shape के साथ बताता था |
+| सर्विस boot होने से मना कर देती है जब `APISIX_GATEWAY_SECRET` कोई placeholder हो — वह value जो पहले `.env.example` में आता था, या `replace-with`, `change-me`, `your-secret` या `placeholder` वाला कोई भी value — और `.env.example` अब इसे खाली छोड़ता है | वे deployments जो अब भी `.env.example` से copy किया गया value इस्तेमाल कर रहे हैं | वह value सार्वजनिक है और 32-अक्षर की न्यूनतम सीमा पार करने लायक लंबा है, इसलिए जो भी सर्विस तक पहुँच सकता था वह किसी भी consumer का नाम लेकर `/v1/admin` तक पहुँच सकता था |
+| सर्विस boot होने से मना कर देती है जब `BLINDPAY_WEBHOOK_SECRET` सेट हो लेकिन उसकी key (`whsec_` के बाद का base64) malformed हो या 24 bytes से कम में decode हो, और जब तक configured key इस्तेमाल के लायक नहीं है तब तक `POST /v1/blindpay/webhooks` हर delivery को reject करता है | कटे-फटे या ग़लत टाइप किए secret वाले deployments, जिनके BlindPay webhooks पहले से ही विफल हो रहे थे | Node अमान्य base64 को बिना किसी error के एक छोटी या खाली HMAC key में decode कर देता है, और खाली key से sign की गई delivery को कोई भी forge कर सकता है |
+| `GET /v1/health/readiness` अब विफल check का जवाब standard error envelope से देता है (`error: "Service Unavailable"`); पहले यह health report, database error message सहित, `error` में रखता था | जो probes status code की बजाय body से report पढ़ते हैं | यह रूट `@Public()` है, और Prisma का message database host और user का नाम बताता है |
+| `POST /v1/onramp/receivers/:id/virtual-accounts` अब `403 account_disabled` है जब receiver, या वह receiver जिसके पास `blockchain_wallet_id` है, disabled हो | कोई वैध caller नहीं | यह वह एक fiat operation थी जिसे kill switch cover नहीं करता था: एक disabled account अब भी नया deposit rail खोल सकता था |
+| `POST /v1/pollar/oauth/token` अब ऐसा code redeem नहीं करता जिसे `GET /v1/pollar/oauth/sessions/:state` के किसी नए poll ने बदल दिया हो, भले ही वह poll redemption के बीच में ही क्यों न आए | कोई वैध caller नहीं | claim handshake से मेल खाता था पर code से नहीं, इसलिए retired code अब भी उस window में खर्च किया जा सकता था |
+| `POST /v1/swaps/:id/submit` और `POST /v1/liquidity-pools/operations/:id/submit` सबसे पहले envelope जाँचते हैं: ऐसा body जो parse न हो, row का envelope न हो, या जिस पर कोई signature न हो, row की status चाहे जो हो, `400 validation_failed` है। कोई मनमाना `signedXdr` अब `SUCCEEDED` row नहीं लौटाता, और एक `EXPIRED` row मेल न खाने वाले body को `invalid_state_transition` की बजाय `validation_failed` से जवाब देता है | जिन clients ने unsigned `xdr` submit किया और `tx_bad_auth` रिजेक्शन पर भरोसा किया | signatures किसी ट्रांज़ैक्शन का hash नहीं बदलतीं, इसलिए unsigned envelope को loop में relay और reject किया जा सकता था, और साझा public key के तहत सिर्फ row id से settled row पढ़ी जा सकती थी |
+| दोनों submit रूट time bounds पार कर चुके envelope को मना करते हैं (`400 invalid_state_transition`, broadcast नहीं होता; अगर वह network तक पहुँच चुका था तो observer उसे अब भी settle कर देता है) और उस `FAILED` row को भी जो पहले ही 3 बार दोबारा submit हो चुकी हो (`400 invalid_state_transition`: नई बनाएँ)। `503 provider_unavailable` के बाद की retry नहीं गिनती | जो clients submit को loop में retry करते हैं: `invalid_state_transition` पर रुक जाएँ | हर rejected resubmit एक Horizon submission और एक नया terminal webhook event था, बिना किसी सीमा के |
+| दोनों submit रूट प्रति consumer और client address प्रति मिनट 20 कॉल की अनुमति देते हैं, अलग-अलग buckets में (`429 rate_limited`) | एक ही NAT के पीछे public key साझा करने वाले वॉलेट | ये रूट साझा public key लेते हैं, और हर कॉल Horizon पर broadcast कर सकती है |
+| `GET /v1/webhooks`, `GET /v1/webhooks/:id` और `PATCH /v1/webhooks/:id` अब केवल दस्तावेज़ीकृत endpoint fields लौटाते हैं; `POST /v1/webhooks` और `POST /v1/webhooks/:id/rotate-secret` इनके साथ `secret` भी लौटाते हैं। `consumerId`, `previousSecret` और `previousSecretExpiresAt` इन सभी पाँचों से हटा दिए गए | उन fields को पढ़ने वाले callers | `previousSecret` एक signing secret है जिसे integrator अब भी स्वीकार कर सकता है, और सिर्फ़ `webhooks:read` वाली key भी उसे पढ़ सकती थी |
+| जो recovery token alias की किसी चालू recovery से मेल न खाए, वह अब उसके खिलाफ़ नहीं गिना जाता। एक चालू token हर प्रस्तुति पर एक प्रयास इस्तेमाल करता है, यहाँ तक कि वह भी जिसका challenge या signature बाद में विफल हो जाए; पाँच के बाद यह `400 alias_recovery_invalid` है | कोई वैध caller नहीं | alias के नाम सार्वजनिक हैं, इसलिए किसी भी key से भेजे गए पाँच junk tokens कंसोल द्वारा शुरू की गई हर recovery जला देते थे |
+| `POST /v1/aliases/:name/recovery/complete` (प्रति 10 मिनट 10), `POST /v1/aliases/challenges` (30), `POST /v1/webhooks/:id/ping` (20) और `POST /v1/webhooks/:id/deliveries/:deliveryId/redeliver` (30) budget से ऊपर जाने पर `429 rate_limited` हैं, प्रति consumer और client address | इन रूट्स को loop में चलाने वाली scripts | हर कॉल एक row सहेजती है, एक recovery token आज़माती है, या caller के चुने गए URL पर requests भेजती है |
+| `PATCH /v1/payment-intents/:id` को अब `txHash` का 64-अक्षर का hex Stellar transaction hash होना ज़रूरी है (कुछ भी और `400` है) और इसे lowercase में सहेजता है; `POST /v1/payment-intents/:id/validate` अपना hash खुद lowercase करता है। hash अब सभी tenants में नहीं बल्कि एक consumer के intents में unique है, और जो hash आपके किसी दूसरे intent पर पहले से हो वह `409 idempotency_conflict` है (पहले यह `500` था) | placeholder या कटे हुए hashes भेजने वाले callers | कोई भी tenant किसी दूसरे tenant का transaction hash अपने ही किसी intent पर रख सकता था; फिर उस दूसरे tenant का settlement global index से टकराता, `500` का जवाब देता, और paid intent बिना `PAYMENT_INTENT_SUCCEEDED` के expire हो जाता |
+| `EXPIRED` intent `SUCCEEDED` पर चला जाता है जब उसका पेमेंट on-chain verify हो जाए: observer से, जो अब expire करने से पहले चेन जाँचता है, या `POST /v1/payment-intents/:id/validate` और `PATCH {status: SUCCEEDED}` से, जो अब `400 invalid_state_transition` की बजाय `200` का जवाब देते हैं। `EXPIRED` भेजे गए update के बाद `PAYMENT_INTENT_SUCCEEDED` आ सकता है | `EXPIRED` को final मानने वाले webhook consumers | expiry कभी चेन नहीं देखती थी, और verifier destination के केवल 50 सबसे नए पेमेंट्स पढ़ता था, इसलिए देर से आया या दबा हुआ पेमेंट किसी paid intent को हमेशा के लिए `EXPIRED` छोड़ देता था |
+| `redirect_uri` के साथ `POST /v1/pollar/oauth/authorize` को `code_challenge` (PKCE, S256) चाहिए, और उस handshake को redeem करने के लिए `code_verifier` चाहिए; इसके बिना Pollar session खुलने से पहले ही call `400 validation_failed` है। poll flow नहीं बदला | PKCE न भेजने वाले redirect-flow वॉलेट | public callback code को `state` दिखाने वाले किसी को भी दे देता है, जो `authorization_url` के अंदर है, और PKCE के बिना वह code जैसा का तैसा redeem हो जाता था |
+| swaps, liquidity-pool operations, payment intents और customers के responses अब केवल अपने documented fields लौटाते हैं, साथ में swaps और payment intents पर `expiresAt`, जो अब documented है। `consumerId` और settlement की bookkeeping (`settlementEpoch`, `lastCheckedAt`, `notFoundStreak`, `sharesReceived`, `settledAmountA`/`B`, `horizonCursor`) अब नहीं भेजे जाते | वे callers जो ये fields पढ़ते थे | ये internal हैं, और इनमें से कई routes साझा public key से पहुँचे जा सकते हैं |
+| BlindPay पर पहले से मौजूद receiver पर `PATCH /v1/kyc/receivers/:id` `external_id` और `image_url` को छोड़कर किसी भी field के लिए `403 kyc_review_required` है, जब तक key elevated (`X-Consumer-Role: admin`) न हो | tenant key से किसी live receiver की पहचान सुधारने वाले integrators: इसे reviewer से होकर भेजें | `PUT` कभी review न हुआ identity data सीधे एक regulated provider को भेज देता था, जबकि enable होने से पहले वही edit फिर से review में जाता है |
+| BlindPay routes caller की key के environment वाला instance इस्तेमाल करते हैं: `prod` keys बिना suffix वाले `BLINDPAY_*` का, `dev` keys `BLINDPAY_*_DEV` का, और development instance कॉन्फ़िगर न होने पर `dev` key को `503 misconfigured` मिलता है। receivers, wallets, bank accounts, virtual accounts, quotes, payins और payouts केवल उसी instance पर पढ़े और execute किए जाते हैं | `dev` keys के साथ BlindPay इस्तेमाल करने वाले सभी | एक `dev` key production instance चलाती थी: वह असली KYC identities list और delete कर सकती थी और असली payouts बना सकती थी |
 
 इसके साथ आने वाले deploy नोट:
 
@@ -1211,6 +1302,30 @@ Pollar नेटवर्क और key का प्रकार key के pre
   से खोजें, `DROP INDEX CONCURRENTLY` से हटाएँ,
   `prisma migrate resolve --rolled-back 20260915120100_lookup_indexes` चलाएँ, और फिर
   से deploy करें।
+- **अब boot पर दो variables जाँचे जाते हैं।** कोई placeholder `APISIX_GATEWAY_SECRET`,
+  या ऐसा `BLINDPAY_WEBHOOK_SECRET` जिसकी key कम से कम 24 bytes में decode न हो, सर्विस
+  को शुरू होने से रोक देता है और error उस variable का नाम बताती है। placeholder gateway
+  secret को APISIX route पर और यहाँ, दोनों जगह एक ही बदलाव में बदलें
+  (`openssl rand -hex 32`); mismatch होने पर हर request gateway से न आने के कारण विफल
+  हो जाती है।
+- **Migration `20260915150000_payment_intent_tx_hash_per_consumer`**
+  `payment_intent."txHash"` पर मौजूद unique index को `("consumerId", "txHash")` वाले
+  index से बदलता है। यह `CONCURRENTLY` नहीं है: index बनने के दौरान `payment_intent`
+  write-locked रहता है। कोई backfill नहीं है।
+- **सहेजे गए `webhook_endpoint.previousSecret` values अब नहीं लौटाए जाते, पर कुछ भी
+  उन्हें साफ़ नहीं करता।** अगर किसी पुराने release पर हुई rotation ने एक पीछे छोड़ दिया है
+  और आप उसे database से हटाना चाहते हैं, तो दोनों columns खुद null करें।
+- **Migration `20260915160000_blindpay_environment`** सात BlindPay mirror tables में
+  `environment` (डिफ़ॉल्ट `'prod'`) जोड़ता है — केवल catalog बदलाव, कोई table rewrite
+  नहीं — इसलिए मौजूदा rows production के रूप में चिह्नित होती हैं। **अगर आपके बिना suffix
+  वाले `BLINDPAY_*` variables किसी BlindPay development instance की ओर इशारा करते थे**, तो
+  उन्हें `_DEV` variables में ले जाएँ और rows को फिर से label करें
+  (`blindpay_receiver`, `blindpay_blockchain_wallet`, `blindpay_bank_account`,
+  `blindpay_virtual_account`, `payin`, `payout` और `blindpay_quote` पर
+  `UPDATE … SET environment = 'dev'`), वरना `prod` keys उन्हें पढ़ती रहेंगी।
+- **BlindPay development instance कॉन्फ़िगर करें** (`BLINDPAY_API_KEY_DEV`,
+  `BLINDPAY_INSTANCE_ID_DEV`, `BLINDPAY_WEBHOOK_SECRET_DEV`) अगर `dev` keys BlindPay
+  इस्तेमाल करती हैं, और उसका dashboard webhook उसी `/v1/blindpay/webhooks` URL पर लगाएँ।
 
 ### NestJS 12, TypeScript 6 और न्यूनतम Node 24.9
 
@@ -1435,7 +1550,7 @@ type दोबारा बनाए बिना enum value drop नहीं �
 | `NODE_ENV` | नहीं | `development` | `development`, `test`, या `production` होना चाहिए। **production में `production` सेट करें** — fail-closed plan-fee जाँच और डिफ़ॉल्ट रूप से बंद docs, दोनों इसी पर निर्भर हैं |
 | `PORT` | नहीं | `3000` | HTTP listen port |
 | `DATABASE_URL` | **हाँ** | — | Prisma के लिए PostgreSQL connection |
-| `APISIX_GATEWAY_SECRET` | **हाँ** | — | साझा secret जो साबित करता है कि request APISIX से होकर आई। **न्यूनतम 32 अक्षर** |
+| `APISIX_GATEWAY_SECRET` | **हाँ** | — | साझा secret जो साबित करता है कि request APISIX से होकर आई। **न्यूनतम 32 अक्षर**; कोई placeholder boot पर अस्वीकार कर दिया जाता है |
 | `APISIX_GATEWAY_SECRET_HEADER` | नहीं | `x-gateway-secret` | gateway secret वाले header का नाम |
 | `APISIX_CONSUMER_HEADER` | नहीं | `x-consumer-username` | authenticated consumer का username |
 | `APISIX_CREDENTIAL_HEADER` | नहीं | `x-credential-identifier` | key-auth से मिला credential id |
@@ -1477,10 +1592,13 @@ type दोबारा बनाए बिना enum value drop नहीं �
 | `REQUEST_LOG_PRUNE_MAX_PER_CYCLE` | नहीं | `50000` | प्रति tick जाँची जाने वाली rows की सख्त सीमा |
 | `SWAGGER_ENABLED` | नहीं | `production` में बंद | `/docs` प्रकाशित करना (Express middleware, कोई guards नहीं) |
 | `OPENAPI_SERVER_URL` | नहीं | — | export किए गए OpenAPI में डाला जाने वाला gateway host |
-| `BLINDPAY_API_KEY` | नहीं | — | BlindPay प्लेटफ़ॉर्म API key |
+| `BLINDPAY_API_KEY` | नहीं | — | BlindPay production instance की API key, `prod` keys के लिए |
 | `BLINDPAY_INSTANCE_ID` | जब API key सेट हो | — | BlindPay instance id (`in_...`) |
 | `BLINDPAY_BASE_URL` | नहीं | `https://api.blindpay.com/v1` | BlindPay API का base URL |
-| `BLINDPAY_WEBHOOK_SECRET` | जब API key सेट हो | — | आने वाले BlindPay webhooks के लिए Svix secret |
+| `BLINDPAY_WEBHOOK_SECRET` | जब API key सेट हो | — | आने वाले BlindPay webhooks के लिए Svix secret: पूरा `whsec_…` value, जिसकी key कम से कम 24 bytes में decode होनी चाहिए (boot पर जाँचा जाता है) |
+| `BLINDPAY_API_KEY_DEV` | नहीं | — | BlindPay development instance की API key, `dev` keys के लिए। सेट न होने पर BlindPay routes `dev` keys को `503 misconfigured` लौटाते हैं |
+| `BLINDPAY_INSTANCE_ID_DEV` | जब dev API key सेट हो | — | development instance id (`in_...`) |
+| `BLINDPAY_WEBHOOK_SECRET_DEV` | जब dev API key सेट हो | — | development instance के webhook endpoint का Svix secret; `BLINDPAY_WEBHOOK_SECRET` जैसे ही नियम |
 | `BLINDPAY_TIMEOUT_MS` | नहीं | `15000` | BlindPay HTTP client timeout (ms) |
 | `KYC_REDIRECT_URL_WHITELIST` | नहीं | — | प्रति consumer KYC redirect hosts की allow-list |
 | `RATE_LIMIT_ENABLED` | नहीं | `true` | XLM खर्च करने वाले रूट्स पर प्रति पता सीमाएँ। incident switch |

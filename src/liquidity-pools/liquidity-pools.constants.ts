@@ -28,3 +28,26 @@ export const POSITIONS_POOL_PAGE_SIZE = 200;
  * that never runs dry cannot turn one call into an unbounded loop.
  */
 export const POSITIONS_MAX_POOL_PAGES = 5;
+
+/**
+ * Budget for `POST /v1/liquidity-pools/operations/:id/submit`, per consumer +
+ * client address.
+ *
+ * The same defence and the same numbers as `SWAP_SUBMIT_RATE_LIMIT`, for the same
+ * reasons: each call can broadcast to Horizon and each rejection writes a
+ * `LIQUIDITY_FAILED` event, the route takes the shared public key so the address
+ * is what separates anonymous wallets, twenty leaves room for a 503 retry loop
+ * and `SETTLEMENT_MAX_RESUBMITS` honest resubmits from several wallets behind one
+ * NAT, and the one-minute window keeps a refused retry inside the envelope's
+ * `STELLAR_TX_TIMEOUT` lifetime (300 s by default).
+ *
+ * A bucket of its own rather than the swaps one: a wallet that swaps into an
+ * asset and then deposits it is running two honest flows, and one must not
+ * spend the other's retries. Alternating the two routes does get a loop twice
+ * the budget — still bounded, and every row still capped per row.
+ */
+export const LIQUIDITY_SUBMIT_RATE_LIMIT = {
+  name: 'liquidity:submit',
+  limit: 20,
+  windowMs: 60 * 1000,
+};

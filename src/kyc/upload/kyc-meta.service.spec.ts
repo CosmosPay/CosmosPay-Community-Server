@@ -32,12 +32,19 @@ const file: UploadableFile = {
 };
 
 function makeService() {
+  // Client and instance in one; the environment follows the key, as the real
+  // client's does, so a dev caller is seen reaching the dev instance.
   const blindpay = {
     uploadFile: jest.fn(),
     post: jest.fn(),
     get: jest.fn(),
     instanceId: 'in_test',
+    environmentFor: jest.fn((c: GatewayConsumer) =>
+      c.environment === 'prod' ? 'prod' : 'dev',
+    ),
+    instance: jest.fn(),
   };
+  blindpay.instance.mockReturnValue(blindpay);
   const config = {
     get: jest.fn().mockReturnValue({
       redirectUrlWhitelist: { cosmos_u1: ['app.example.com'] },
@@ -60,7 +67,7 @@ function makeService() {
     prisma as unknown as PrismaService,
     consumers as unknown as ConsumerResolverService,
   );
-  return { service, blindpay };
+  return { service, blindpay, prisma };
 }
 
 describe('KycMetaService', () => {
@@ -70,7 +77,7 @@ describe('KycMetaService', () => {
 
       let err: ApiError | undefined;
       try {
-        void service.uploadDocument(undefined, undefined);
+        void service.uploadDocument(consumer, undefined, undefined);
       } catch (e) {
         err = e as ApiError;
       }
@@ -84,21 +91,25 @@ describe('KycMetaService', () => {
     it('rejects an unknown bucket and lists every accepted bucket', () => {
       const { service } = makeService();
 
-      expect(() => service.uploadDocument(file, 'no_existe')).toThrow(
+      expect(() => service.uploadDocument(consumer, file, 'no_existe')).toThrow(
         'bucket must be one of: avatar, onboarding, limit_increase',
       );
     });
 
-    it('defaults to the onboarding bucket', async () => {
+    it("defaults to the onboarding bucket, on the caller's instance", async () => {
       const { service, blindpay } = makeService();
       blindpay.uploadFile.mockResolvedValue({
         file_url: 'https://files.example/passport.png',
       });
 
-      await expect(service.uploadDocument(file, undefined)).resolves.toEqual({
+      await expect(
+        service.uploadDocument(consumer, file, undefined),
+      ).resolves.toEqual({
         file_url: 'https://files.example/passport.png',
       });
       expect(blindpay.uploadFile).toHaveBeenCalledWith(file, 'onboarding');
+      // A dev key's document never lands in the production instance's storage.
+      expect(blindpay.instance).toHaveBeenCalledWith('dev');
     });
 
     it('passes the limit_increase bucket through', async () => {
@@ -107,7 +118,7 @@ describe('KycMetaService', () => {
         file_url: 'https://files.example/limit.png',
       });
 
-      await service.uploadDocument(file, 'limit_increase');
+      await service.uploadDocument(consumer, file, 'limit_increase');
 
       expect(blindpay.uploadFile).toHaveBeenCalledWith(file, 'limit_increase');
     });
@@ -127,6 +138,7 @@ describe('KycMetaService', () => {
 
       await expect(
         service.uploadDocument(
+          consumer,
           { buffer, originalname: 'doc', mimetype },
           undefined,
         ),
@@ -143,9 +155,9 @@ describe('KycMetaService', () => {
         mimetype: 'image/png',
       };
 
-      expect(() => service.uploadDocument(disguised, undefined)).toThrow(
-        'File content is not a valid "image/png"',
-      );
+      expect(() =>
+        service.uploadDocument(consumer, disguised, undefined),
+      ).toThrow('File content is not a valid "image/png"');
       expect(blindpay.uploadFile).not.toHaveBeenCalled();
     });
 
@@ -154,6 +166,7 @@ describe('KycMetaService', () => {
 
       expect(() =>
         service.uploadDocument(
+          consumer,
           { ...file, mimetype: 'application/pdf' },
           undefined,
         ),
@@ -165,6 +178,7 @@ describe('KycMetaService', () => {
 
       expect(() =>
         service.uploadDocument(
+          consumer,
           { ...file, buffer: PNG_SIGNATURE.subarray(0, 3) },
           undefined,
         ),
@@ -175,7 +189,11 @@ describe('KycMetaService', () => {
       const { service } = makeService();
 
       expect(() =>
-        service.uploadDocument({ ...file, mimetype: 'constructor' }, undefined),
+        service.uploadDocument(
+          consumer,
+          { ...file, mimetype: 'constructor' },
+          undefined,
+        ),
       ).toThrow('File content is not a valid');
     });
   });
@@ -198,6 +216,23 @@ describe('KycMetaService', () => {
     });
   });
 
+  it("only accepts a receiver mirrored on the caller's own instance", async () => {
+    const { service, prisma, blindpay } = makeService();
+    blindpay.post.mockResolvedValue({ url: 'https://tos.example/accept' });
+
+    await service.initiateTos(consumer, {
+      receiver_id: 're_1',
+      redirect_url: 'https://app.example.com/kyc/return',
+    });
+
+    // A dev key naming a production receiver gets the same 404 as a stranger.
+    expect(prisma.blindpayReceiver.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { blindpayId: 're_1', consumerId: 'c_1', environment: 'dev' },
+      }),
+    );
+  });
+
   it('generates a ToS idempotency key and uses a null receiver by default', async () => {
     const { service, blindpay } = makeService();
     blindpay.post.mockResolvedValue({ url: 'https://tos.example/accept' });
@@ -217,7 +252,9 @@ describe('KycMetaService', () => {
     const { service, blindpay } = makeService();
     blindpay.get.mockResolvedValue({ rails: ['ach'] });
 
-    await expect(service.listRails()).resolves.toEqual({ rails: ['ach'] });
+    await expect(service.listRails(consumer)).resolves.toEqual({
+      rails: ['ach'],
+    });
     expect(blindpay.get).toHaveBeenCalledWith('/available/rails');
   });
 
@@ -225,7 +262,7 @@ describe('KycMetaService', () => {
     const { service, blindpay } = makeService();
     blindpay.get.mockResolvedValue({ fields: ['routing_number'] });
 
-    await expect(service.bankDetails('ach')).resolves.toEqual({
+    await expect(service.bankDetails(consumer, 'ach')).resolves.toEqual({
       fields: ['routing_number'],
     });
     expect(blindpay.get).toHaveBeenCalledWith('/available/bank-details', {

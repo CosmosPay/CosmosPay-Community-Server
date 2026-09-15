@@ -3,17 +3,28 @@ import { HttpException, HttpStatus } from '@nestjs/common';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { BlindpayClient } from '@/blindpay/blindpay.client';
 
-function makeClient(overrides: Record<string, unknown> = {}) {
+/** A client whose production instance takes `overrides`; dev is its own pair. */
+function makeBlindpay(overrides: Record<string, unknown> = {}) {
   const cfg = {
-    apiKey: 'sk_test',
-    instanceId: 'in_123',
     baseUrl: 'https://api.blindpay.com/v1',
-    webhookSecret: '',
     timeoutMs: 5000,
-    ...overrides,
+    instances: {
+      prod: {
+        apiKey: 'sk_live',
+        instanceId: 'in_123',
+        webhookSecret: '',
+        ...overrides,
+      },
+      dev: { apiKey: 'sk_dev', instanceId: 'in_dev', webhookSecret: '' },
+    },
   };
   const config = { get: () => cfg } as unknown as ConfigService<any, true>;
   return new BlindpayClient(config);
+}
+
+/** The production instance — what every single-instance test below talks to. */
+function makeClient(overrides: Record<string, unknown> = {}) {
+  return makeBlindpay(overrides).instance('prod');
 }
 
 function mockFetch(impl: (url: string, init: any) => Partial<Response>) {
@@ -38,9 +49,39 @@ function mockFetch(impl: (url: string, init: any) => Partial<Response>) {
   );
 }
 
+function okJson(body: unknown = {}) {
+  return () => ({
+    ok: true,
+    status: 200,
+    text: () => Promise.resolve(JSON.stringify(body)),
+  });
+}
+
 afterEach(() => jest.restoreAllMocks());
 
 describe('BlindpayClient', () => {
+  it('keeps each environment on its own instance id and key', async () => {
+    const spy = mockFetch(okJson());
+    const blindpay = makeBlindpay();
+
+    const prod = blindpay.instance('prod');
+    const dev = blindpay.instance('dev');
+    await prod.get(prod.instancePath('/customers'));
+    await dev.get(dev.instancePath('/customers'));
+
+    // A dev key used to reach the production instance: same id, same secret.
+    const [prodUrl, prodInit] = spy.mock.calls[0];
+    const [devUrl, devInit] = spy.mock.calls[1];
+    expect(prodUrl).toBe(
+      'https://api.blindpay.com/v1/instances/in_123/customers',
+    );
+    expect((prodInit as any).headers.authorization).toBe('Bearer sk_live');
+    expect(devUrl).toBe(
+      'https://api.blindpay.com/v1/instances/in_dev/customers',
+    );
+    expect((devInit as any).headers.authorization).toBe('Bearer sk_dev');
+  });
+
   it('builds instance-scoped paths', () => {
     expect(makeClient().instancePath('/customers')).toBe(
       '/instances/in_123/customers',
@@ -48,11 +89,7 @@ describe('BlindpayClient', () => {
   });
 
   it('sends the bearer token and parses JSON', async () => {
-    const spy = mockFetch(() => ({
-      ok: true,
-      status: 200,
-      text: () => Promise.resolve(JSON.stringify({ id: 're_1' })),
-    }));
+    const spy = mockFetch(okJson({ id: 're_1' }));
 
     const client = makeClient();
     const out = await client.get<{ id: string }>(
@@ -64,7 +101,7 @@ describe('BlindpayClient', () => {
     expect(url).toBe(
       'https://api.blindpay.com/v1/instances/in_123/customers/re_1',
     );
-    expect((init as any).headers.authorization).toBe('Bearer sk_test');
+    expect((init as any).headers.authorization).toBe('Bearer sk_live');
   });
 
   it('serializes the body and appends query params', async () => {
@@ -180,5 +217,30 @@ describe('BlindpayClient', () => {
     expect(err).toBeInstanceOf(ApiError);
     expect(err!.getStatus()).toBe(HttpStatus.SERVICE_UNAVAILABLE);
     expect(err!.code).toBe(ApiErrorCode.Misconfigured);
+  });
+
+  it('names the missing variables of the environment that is not set up', async () => {
+    const spy = mockFetch(okJson());
+    const blindpay = new BlindpayClient({
+      get: () => ({
+        baseUrl: 'https://api.blindpay.com/v1',
+        timeoutMs: 5000,
+        instances: {
+          prod: { apiKey: 'sk_live', instanceId: 'in_123', webhookSecret: '' },
+          dev: { apiKey: '', instanceId: '', webhookSecret: '' },
+        },
+      }),
+    } as unknown as ConfigService<any, true>);
+
+    const err = await blindpay
+      .instance('dev')
+      .get('/x')
+      .then(() => null)
+      .catch((e: unknown) => e as ApiError);
+
+    // A dev key with no dev instance is refused — never quietly served by prod.
+    expect(err!.code).toBe(ApiErrorCode.Misconfigured);
+    expect(err!.message).toContain('BLINDPAY_API_KEY_DEV');
+    expect(spy).not.toHaveBeenCalled();
   });
 });

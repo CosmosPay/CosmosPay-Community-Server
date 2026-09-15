@@ -10,9 +10,31 @@ export interface SvixHeaders {
 }
 
 import {
+  SVIX_MIN_SECRET_BYTES,
   SVIX_SECRET_PREFIX,
   SVIX_TOLERANCE_SECONDS,
 } from '@/blindpay/blindpay.constants';
+
+/** Standard base64 — the alphabet Svix encodes the key in after its prefix. */
+const BASE64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
+
+/**
+ * The HMAC key inside a Svix endpoint secret, or null when the value is not a
+ * well-formed base64 key of at least {@link SVIX_MIN_SECRET_BYTES}.
+ *
+ * `Buffer.from(value, 'base64')` never fails: it skips every character outside
+ * the alphabet, so a mistyped secret decodes to a short or empty key and each
+ * signature computed from it is one anybody can compute. Env validation refuses
+ * such a value at boot, and verification refuses to run with one regardless.
+ */
+export function decodeSvixSecret(secret: string): Buffer | null {
+  const encoded = secret.startsWith(SVIX_SECRET_PREFIX)
+    ? secret.slice(SVIX_SECRET_PREFIX.length)
+    : secret;
+  if (!BASE64_RE.test(encoded)) return null;
+  const key = Buffer.from(encoded, 'base64');
+  return key.length >= SVIX_MIN_SECRET_BYTES ? key : null;
+}
 
 /**
  * Verifies a BlindPay (Svix) webhook signature.
@@ -39,6 +61,12 @@ export function verifySvixSignature(
     !headers.timestamp ||
     !headers.signature
   ) {
+    return false;
+  }
+
+  // Fail closed on a key nobody should trust, even if it slipped past boot
+  // validation: a signature made with it proves nothing.
+  if (!decodeSvixSecret(secret)) {
     return false;
   }
 

@@ -300,8 +300,10 @@ APISIX 会在多个实例之间进行负载均衡，因此每个后台定时器�
 
 有两条路径使用这同一条规则：
 
-- **手动：** `POST /v1/payment-intents/:id/validate`，请求体为 `{ "txHash": "<64-hex>" }`。匹配时，意图被置为 `SUCCEEDED`（并保存 `txHash`），同时触发 `PAYMENT_INTENT_SUCCEEDED` webhook。链上失败的交易**只有在它确实是该意图自己的支付时**——memo、目标地址和资产均相同——才会把意图标记为 `FAILED`。其他任何交易，无论失败与否，都属于不匹配，状态保持不变，以便仍可提交正确的交易。
+- **手动：** `POST /v1/payment-intents/:id/validate`，请求体为 `{ "txHash": "<64-hex>" }`。匹配时，意图被置为 `SUCCEEDED`（并保存 `txHash`），同时触发 `PAYMENT_INTENT_SUCCEEDED` webhook。链上失败的交易**只有在它确实是该意图自己的支付时**——memo、目标地址和资产均相同——才会把意图标记为 `FAILED`。其他任何交易，无论失败与否，都属于不匹配，状态保持不变，以便仍可提交正确的交易。通过 `PATCH /v1/payment-intents/:id` 上报的 `txHash` 永远不会单凭自己结算一个意图：它必须是一个 64 字符的十六进制哈希，会以小写形式存储，并且只在发起调用的消费者自己的意图范围内保持唯一（与该消费者另一个意图冲突时返回 `409 idempotency_conflict`）。
 - **自动（常驻观察器）：** `StellarObserverService` 每隔 `OBSERVER_INTERVAL_MS` 轮询一次 Horizon，查找 `PENDING` 状态的意图——按上报的 `txHash`，或扫描发往目标地址的支付——并以同样的方式终结匹配的意图，因此状态会变化、事件会触发，**无需任何人调用 API**。每个周期对每个消费者最多处理 `OBSERVER_MAX_INTENTS_PER_CONSUMER`（10）个意图，且从不扫描已过期的意图，因此单个消费者无法拖慢其他所有人的结算。本地开发时可用 `OBSERVER_ENABLED=false` 关闭。
+
+**过期检查会先查链。** 一个已超过生命周期的意图在被标记为 `EXPIRED` 之前会再验证一次：如果它的支付已经上链，就改为结算为 `SUCCEEDED`；如果无法连接 Horizon，就留给下一个周期处理。当该笔支付的哈希已经存在于同一个消费者的另一个意图上时，该意图会被置为过期，而不是无休止地重试。在过期*之后*才被验证的支付——无论是被观察器还是被 `validate`——仍会把一个 `EXPIRED` 的意图变为 `SUCCEEDED` 并触发 `PAYMENT_INTENT_SUCCEEDED`，因此请不要把 `EXPIRED` 当作最终状态。该扫描会回溯读取目标地址自意图创建以来的所有支付，最多 1,000 条（5 页，每页 200 条）；如果某个目标地址在一个意图的生命周期内收到的支付超过这个数量，请改用 `validate` 并携带哈希。
 
 ### API 请求日志的保留期
 
@@ -399,6 +401,10 @@ function verify(rawBody: string, header: string, secret: string): boolean {
 
 签名密钥只在 `POST /webhooks`（以及 `rotate-secret`）时返回**一次**；列表/详情响应中永远不会包含它。每次尝试都会被存储（`webhook_delivery`），包含状态、尝试次数、响应码和错误——可通过 `GET /webhooks/:id/deliveries` 查询，并用 `redeliver` 路由重新发送。
 
+列表、详情和更新只返回已发布的端点字段，创建和 `rotate-secret` 会额外带上 `secret`。除此之外的任何内容都不会离开本服务——包括 `consumerId`，以及此前一次宽限期轮换写入的 `previousSecret` / `previousSecretExpiresAt` 两列。
+
+**`ping` 和 `redeliver` 都有速率限制**，按消费者和客户端地址计算：`POST /v1/webhooks/:id/ping` 每 10 分钟 20 次，`POST /v1/webhooks/:id/deliveries/:deliveryId/redeliver` 每 10 分钟 30 次（`429 rate_limited`）。两者都会让本服务向你选择的 URL 发送已签名的请求，而 `redeliver` 会在这一次请求内运行完整的重试循环。面对大量积压时，请让清扫器去重试，而不是逐条手动重新投递。
+
 ### OpenAPI / Swagger
 
 **安全提示：** `GET /docs`、`/docs/json` 和 `/docs/yaml` 以 **Express 中间件**的形式挂载，而不是 Nest controller，因此它们**不会**经过 `ApisixGuard` 或 `PermissionsGuard`——任何能访问服务端口的人都可以获取规范。在生产环境中，文档**默认关闭**（`NODE_ENV=production` 且未设置 `SWAGGER_ENABLED`）。只在受信任的网络中设置 `SWAGGER_ENABLED=true`。
@@ -428,7 +434,7 @@ OPENAPI_SERVER_URL=https://gateway.example.com npm run openapi:generate
 
 根据 [SEP-7](https://stellar.org/protocol/sep-7)，`tx` 和 `pay` 操作接受**不同的参数**并产生**不同的响应**，因此各自拥有独立的端点、DTO 和响应 schema。本服务不持有任何密钥——它只为客户端的钱包组装请求（返回 `uri` + `qr`，`tx` 还会返回 `xdr`）。省略 `assetCode`（或其值为 `XLM`/`native`）时，资产默认为**原生 XLM**；其他任何资产都需要 `assetIssuer`。
 
-**网络由网关转发的 API key 类型决定**：`prod` key → public（主网），`dev` key → testnet。`STELLAR_NETWORK` 只是没有网关的本地开发环境中的回退值。每个意图都会存储自己的网络，所有 Horizon 调用（构建、验证、观察器）都以该网络为目标。意图保存在 `payment_intent` 表中，并限定在发起调用的消费者范围内：`PENDING → SUBMITTED → SUCCEEDED/FAILED/CANCELLED/EXPIRED`。
+**网络由网关转发的 API key 类型决定**：`prod` key → public（主网），`dev` key → testnet。`STELLAR_NETWORK` 只是没有网关的本地开发环境中的回退值。每个意图都会存储自己的网络，所有 Horizon 调用（构建、验证、观察器）都以该网络为目标。意图保存在 `payment_intent` 表中，并限定在发起调用的消费者范围内：`PENDING → SUBMITTED → SUCCEEDED/FAILED/CANCELLED/EXPIRED`。唯一能走出终态的路径是 `EXPIRED → SUCCEEDED`，当支付在链上得到验证时。
 
 **memo 是必需的 `MEMO_ID`**——它在链上标识这笔支付，并让创建操作具备**幂等性**：`(consumer, memo)` 是唯一的，因此使用相同的 memo **且相同的条款**再次创建会返回原来的意图。相同的 memo 搭配任何不同的条款——类型（kind）、网络、目标地址、金额、资产、`msg`、`callback`，或 `tx` 的 `source`——都会返回 `409 idempotency_conflict`，且该错误不会透露已存储意图的任何信息。这一点在共享公共 key 下尤为重要，因为所有匿名钱包都是同一个消费者。如果不传 `memo`，会随机生成一个 uint64。
 
@@ -500,9 +506,9 @@ where: { id, consumer: { apisixUsername: consumer.username } }
 | --- | --- |
 | `POST /v1/swaps/quote` | 通过 Horizon 为路径定价；结果完全由请求决定 |
 | `POST /v1/swaps` | 构建一个由调用方签名的未签名信封 |
-| `POST /v1/swaps/:id/submit` | 广播调用方签名的信封——需要该 swap 的 UUID *以及*其源账户的签名 |
+| `POST /v1/swaps/:id/submit` | 广播调用方签名的信封——在请求体确实是该 swap 的信封、并携带签名之前，关于这笔 swap 的任何信息，包括它的状态，都不会被回答；带有速率限制 |
 | `POST /v1/liquidity-pools/deposit` \| `withdraw` | 构建未签名信封 |
-| `POST /v1/liquidity-pools/operations/:id/submit` | 广播调用方签名的信封 |
+| `POST /v1/liquidity-pools/operations/:id/submit` | 广播调用方签名的信封，遵循与 swap submit 相同的检查；带有速率限制 |
 | `GET /v1/liquidity-pools` \| `/:poolId` \| `/positions` | 从 Horizon 读取的公开链上数据 |
 | `POST /v1/payment-intents/tx` \| `pay` | 根据请求构建 SEP-7 意图 |
 | `POST /v1/activity/events` | 遥测数据接收——见下文 |
@@ -578,6 +584,8 @@ quote → build XDR → customer signs in wallet → POST /submit → Stellar ex
 
 在广播之前，服务会检查已签名交易的哈希是否与它构建的交易一致，因此它永远不会转发任意交易。swap 会通过同一个分发器触发 `SWAP_CREATED` / `SWAP_SUBMITTED` / `SWAP_SUCCEEDED` / `SWAP_FAILED` webhook 事件。
 
+**提交对它转发的内容非常严格。** 在 `signedXdr` 能被解析、其哈希与该 swap 的 `txHash` 一致、且携带至少一个签名之前，关于这笔 swap 的任何信息——包括它的状态——都不会被回答，因此创建响应中未签名的 `xdr` 会得到 `400 validation_failed`。一笔已超出其时间边界（`STELLAR_TX_TIMEOUT`，默认 300 秒）的 swap 信封会返回 `400 invalid_state_transition` 且不会被广播；如果它已经在时限内到达网络，观察器仍会将其结算。在遭到网络拒绝之后，同一个信封最多可以重新提交 **3** 次，之后请构建一笔新的 swap——在 `503 provider_unavailable` 之后的重试不计入次数。该路由允许每个消费者和客户端地址每分钟调用 **20** 次（`429 rate_limited`）；在共享公共 key 下，每个匿名钱包都是同一个消费者，因此位于同一 NAT 之后的钱包会共用这份预算。`POST /v1/liquidity-pools/operations/:id/submit` 遵循相同的规则，并拥有自己独立的额度。
+
 ## 别名 — 可认领的支付标识
 
 别名让付款方可以输入 `emanuel250`，而不是 `GA5ZSE…`。付款方在转账前一刻信任的正是这个名称，因此下面的规则很严格：一旦出错，就是一笔打到错误账户的付款。
@@ -615,7 +623,9 @@ wallet ──3. POST /v1/aliases {name, email, nonce, signature} ─────
 2. 用户为新密钥获取一个 `RECOVER` challenge，并使用自己的 API key 调用 `POST /v1/aliases/:name/recovery/complete {token, address, network, nonce, signature}`。两项证明缺一不可：token 证明邮箱，签名证明密钥。
 3. 所有权转移到发起调用的消费者，并且**之前的所有地址都会被移除**，因此持有旧密钥的人不会再收到付款。
 
-第 1 步仅限控制台，因为 token 证明的是对邮箱的控制权，所以它只能到达负责发送邮件的一方。`ConsoleOnlyGuard` 会在查找别名之前，就以 `403 admin_console_only` 拒绝所有 API key 调用方，并且该路由不在发布的契约中。五次错误的 token 会作废一次恢复（所有者可以重新发起），且被冻结的别名无法被恢复。
+第 1 步仅限控制台，因为 token 证明的是对邮箱的控制权，所以它只能到达负责发送邮件的一方。`ConsoleOnlyGuard` 会在查找别名之前，就以 `403 admin_console_only` 拒绝所有 API key 调用方，并且该路由不在发布的契约中。被冻结的别名无法被恢复。
+
+一个恢复 token 最多可以被提交**五**次。即使某次提交的 challenge 或签名验证失败，也会算作一次用量，第六次会被拒绝；此时所有者可以重新发起一次恢复。一个与该别名任何一次有效恢复都不匹配的 token 会得到同样的 `400 alias_recovery_invalid`，且不会改变任何状态，因此没有人能靠发送垃圾 token 来耗尽所有者发起的恢复次数。`POST /v1/aliases/:name/recovery/complete` 每 10 分钟允许 10 次调用，`POST /v1/aliases/challenges` 每 10 分钟允许 30 次调用，均按消费者和客户端地址计算（`429 rate_limited`）。
 
 过期的 challenge 和恢复记录会在过期一天后由 `AliasChallengeSweeperService` 删除（每小时一次，每个周期只有一个副本执行）。
 
@@ -637,7 +647,7 @@ wallet ──3. POST /v1/aliases {name, email, nonce, signature} ─────
 
 ## BlindPay — onramp / offramp / KYC（法币 ⇄ 稳定币）
 
-除了链上支付意图之外，本服务还集成了 [BlindPay](https://www.blindpay.com/docs)，用于在**法币与稳定币**之间转移资金：入金（**onramp / payin**）、出金（**offramp / payout**），以及两者背后必需的 **KYC**（BlindPay *receiver*）。我们运行**单个平台级 BlindPay 实例**（环境变量中的 `BLINDPAY_API_KEY` + `BLINDPAY_INSTANCE_ID`）；每个 receiver/钱包/银行账户/payin/payout 都会镜像到我们的 Postgres 中，并**限定在发起调用的 APISIX 消费者范围内**，因此每个集成方只能看到自己的记录。本服务**从不持有区块链密钥**——offramp 返回需要签名的内容（EVM `approve` 合约 / Stellar XDR），并接收签名后的交易，与支付意图完全一样。
+除了链上支付意图之外，本服务还集成了 [BlindPay](https://www.blindpay.com/docs)，用于在**法币与稳定币**之间转移资金：入金（**onramp / payin**）、出金（**offramp / payout**），以及两者背后必需的 **KYC**（BlindPay *receiver*）。我们**为每个 API key 环境运行一个平台级 BlindPay 实例**——`prod` key 使用生产实例（`BLINDPAY_API_KEY` + `BLINDPAY_INSTANCE_ID`），`dev` key 使用开发实例（`_DEV` 变量）；每个 receiver/钱包/银行账户/payin/payout 都会镜像到我们的 Postgres 中，并**限定在发起调用的 APISIX 消费者范围内**，因此每个集成方只能看到自己的记录。本服务**从不持有区块链密钥**——offramp 返回需要签名的内容（EVM `approve` 合约 / Stellar XDR），并接收签名后的交易，与支付意图完全一样。
 
 状态变更通过 BlindPay 的 **Svix webhook** 同步（基于原始请求体验证），并通过现有的分发器以新的事件类型（`RECEIVER_UPDATED`、`PAYIN_*`、`PAYOUT_*`）**重新发送**到集成方自己的 webhook 端点。
 
@@ -645,7 +655,7 @@ wallet ──3. POST /v1/aliases {name, email, nonce, signature} ─────
 | ------ | ----------------------------------------------------- | -------------- | ----------- |
 | POST   | `/v1/kyc/receivers`                                   | `kyc:write`    | 创建 receiver（开始 KYC/KYB） |
 | GET    | `/v1/kyc/receivers` · `/:id`                          | `kyc:read`     | 列表 / 详情（获取详情时会刷新 KYC 状态） |
-| PATCH  | `/v1/kyc/receivers/:id`                               | `kyc:write`    | 更新 receiver |
+| PATCH  | `/v1/kyc/receivers/:id`                               | `kyc:write`    | 更新 receiver（进入 BlindPay 后，身份字段需要提升权限的 key） |
 | DELETE | `/v1/kyc/receivers/:id`                               | `kyc:write`    | 删除 receiver |
 | POST   | `/v1/kyc/upload`                                      | `kyc:write`    | 上传 KYC 文档 → `file_url` |
 | GET    | `/v1/kyc/rails` · `/v1/kyc/bank-details?rail=`        | `kyc:read`     | 支付通道目录 / 必填字段 |
@@ -664,7 +674,11 @@ wallet ──3. POST /v1/aliases {name, email, nonce, signature} ─────
 | POST   | `/v1/offramp/payouts/:id/documents`                   | `offramp:write`| 附加合规文件 |
 | POST   | `/v1/blindpay/webhooks`                               | _公开_         | 入站 BlindPay（Svix）webhook |
 
-金额是**以最小货币单位表示的整数**（例如 `$123.45` → `12345`）。请在 BlindPay 仪表盘中将 webhook 配置为 `<gateway>/v1/blindpay/webhooks`，并将 `BLINDPAY_WEBHOOK_SECRET` 设置为该端点的签名密钥。将 `BLINDPAY_*` 变量留空即可禁用该功能：相关路由随后返回 `503` `misconfigured`；在 `BLINDPAY_WEBHOOK_SECRET` 未设置期间，入站 webhook 也同样如此。见 `.env.example`。
+金额是**以最小货币单位表示的整数**（例如 `$123.45` → `12345`）。请在 BlindPay 仪表盘中将 webhook 配置为 `<gateway>/v1/blindpay/webhooks`，并将 `BLINDPAY_WEBHOOK_SECRET` 设置为该端点的签名密钥——完整的 `whsec_…` 值。当它的 key 解码后不足 24 字节时服务会拒绝启动，且无论如何验证器都会拒绝这样的 key：无效的 base64 会解码成一个空 key，任何人都能用它来伪造签名。将 `BLINDPAY_*` 变量留空即可禁用该功能：相关路由随后返回 `503` `misconfigured`；在 `BLINDPAY_WEBHOOK_SECRET` 未设置期间，入站 webhook 也同样如此。见 `.env.example`。
+
+**`dev` key 永远不会访问生产实例。** key 的环境决定使用哪个 BlindPay 实例，就像它决定 Stellar 网络一样；每一条镜像行都会记录它来自哪个实例，因此同一租户的 `dev` 和 `prod` key——同一个消费者——看到的是相互独立的 receiver、钱包、银行账户、报价、payin 和 payout。未配置开发实例时，BlindPay 路由会对 `dev` key 返回 `503` `misconfigured`。请把两个实例的仪表盘 webhook 都指向同一个 `<gateway>/v1/blindpay/webhooks`，并为开发实例设置 `BLINDPAY_WEBHOOK_SECRET_DEV`：一次投递用哪个密钥验证通过，就说明它来自哪个实例。
+
+**身份信息在到达 BlindPay 之前会经过审核，修改也不例外。** receiver 启用之前，任何触及 KYC 数据的 `PATCH` 都会让它回到 `pending_review`。一旦它已存在于 BlindPay，租户 key 只能修改 `external_id` 和 `image_url`；其他任何字段都会返回 `403` `kyc_review_required`，除非该 key 是提升权限的 key（`X-Consumer-Role: admin`），因为这个 `PUT` 会直接在服务商那里改写身份信息。
 
 ### KYC 重定向 URL 按消费者设置白名单
 
@@ -710,7 +724,7 @@ wallet ──6. talks to Pollar DIRECTLY from here on ──────▶ http
 
 |                  | 重定向流程 | 轮询流程 |
 | ---------------- | ------------------------------------------------ | ----------------------------------------------- |
-| 钱包提供 | `redirect_uri`（必须在白名单中） | 无 |
+| 钱包提供 | `redirect_uri`（必须在白名单中）和 PKCE `code_challenge` | 无（PKCE 可选） |
 | code 的到达方式 | 作为重定向上的 `?code=…&state=…` | 来自 `GET /v1/pollar/oauth/sessions/{state}` |
 | 浏览器看到的 | 你自己的 URI | 一个简单的“可以关闭此窗口”页面——永远看不到 code |
 | 适用场景 | 钱包有深度链接或回环监听器 | 两者都没有（自助终端、无界面环境、嵌入式视图） |
@@ -750,7 +764,7 @@ Pollar 将主网和测试网作为独立的应用运行，使用独立的密钥�
 
 ### 加固措施
 
-- **PKCE（RFC 7636，S256）** 是可选的，但推荐使用：在授权时传入 `code_challenge`，在兑换时传入 `code_verifier`，这样从浏览器或日志中泄露的 code 在没有 verifier 的情况下毫无用处。
+- **PKCE（RFC 7636，S256）** 在**重定向流程中是必需的**，在轮询流程中是可选的：在授权时传入 `code_challenge`，在兑换时传入 `code_verifier`，这样从浏览器或日志中泄露的 code 在没有 verifier 的情况下毫无用处。重定向流程的 code 会经过浏览器，而公开的回调会把它交给任何出示 `state` 的人——`state` 就在 `authorization_url` 里——因此带 `redirect_uri` 但没有 `code_challenge` 的 `authorize` 会返回 `400 validation_failed`。
 - **`dpop_jwk`** 把 Pollar 签发的 token 绑定到钱包自己的 P-256 密钥（RFC 9449），因此被盗的 access token 在没有签名证明的情况下无法使用。这也意味着桥接无法再代表钱包行事——`/refresh` 和 `/logout` 服务于 bearer 会话，而绑定了 DPoP 的钱包会直接调用 Pollar。
 - **`POLLAR_REDIRECT_URI_WHITELIST`** 按消费者划分，且默认拒绝，因为 code 会被送到重定向 URI。它接受回环主机（任意端口，依据 RFC 8252）、私有 scheme 深度链接和 https 主机。
 - **把持有 `pollar:*` 的 API key 保存在服务器上。** 轮询流程会把 code 交给同时持有握手 `state` *和*具有 `pollar:read` 的 key 的任何人。从已发布的应用中提取出这类 key 的人，可以发起一次登录，把它的 `authorization_url` 发给受害者，在受害者同意授权后轮询获取 code，再用自己的 PKCE verifier 兑换——这种情况下 PKCE 和 `dpop_jwk` 都帮不上忙。
@@ -789,7 +803,7 @@ Pollar 将主网和测试网作为独立的应用运行，使用独立的密钥�
 | `POST /v1/pollar/users/with-wallet` | 10 | 创建钱包时没有授权页面 |
 | `POST /v1/pollar/wallets/activate` | 20 | 每次调用都花费 XLM |
 
-超出预算会返回 **`429` 以及 `code: "rate_limited"`**、`Retry-After`，以及 `RateLimit-Limit` / `-Remaining` / `-Reset` 响应头。其他路由在这里不受限；通用的速率限制应由 APISIX 负责。
+超出预算会返回 **`429` 以及 `code: "rate_limited"`**、`Retry-After`，以及 `RateLimit-Limit` / `-Remaining` / `-Reset` 响应头。同一个限流器还守护着 Pollar 之外的几个路由——swap 和流动性池提交、webhook 的 `ping` 与 `redeliver`、别名 challenge 和恢复、活动数据接收——各自的预算在对应小节中说明。通用的速率限制应由 APISIX 负责。
 
 **计数器在 Postgres 中，而不是在内存中**，因此限额在多个副本之间依然有效。它是固定窗口（每个请求执行一条原子的 `INSERT … ON CONFLICT … RETURNING`），因此客户端可以在窗口边界两侧各用满一次预算。
 
@@ -837,6 +851,23 @@ Pollar 在 key 的前缀中编码了网络和 key 类型，环境变量校验器
 | `POST /v1/kyc/upload` 上传超过 10 MiB 的文件时返回 `413`，`code: "payload_too_large"`；此前为 `internal_error` | 依据 `code` 分支处理的集成方 | 这是客户端侧的限制，而不是服务器错误 |
 | `POST /v1/liquidity-pools/deposit`、`/withdraw`、`GET /v1/liquidity-pools/operations`、`/operations/:id`、`POST /v1/liquidity-pools/operations/:id/submit` 以及 `LIQUIDITY_*` webhook 现在都带有 `memo`（调用方的 MEMO_ID，或 `null`）。在迁移 `20260915120000_liquidity_pool_operation_memo` 之前创建的操作返回 `null`，即使其信封中带有 memo | 无人受影响，除非客户端会拒绝未知字段 | memo 以前只存储在 XDR 中 |
 | `GET /v1/swaps` 和 `GET /v1/liquidity-pools/operations` 的已发布契约不再在列表项上声明 `qr` 或 `commissionMemo`。响应本身没有变化——这两个字段从未在列表中返回；需要时请读取单个条目 | 根据 OpenAPI 规范生成的客户端 | 契约把列表项声明为单条读取的结构 |
+| 当 `APISIX_GATEWAY_SECRET` 是一个占位符时——`.env.example` 过去附带的那个值，或任何包含 `replace-with`、`change-me`、`your-secret` 或 `placeholder` 的值——服务拒绝启动，且 `.env.example` 现在把它留空 | 仍在使用从 `.env.example` 复制来的值的部署 | 那个值是公开的，且长度足以通过 32 字符的下限，因此任何能访问到本服务的人都可以冒充任意消费者并访问 `/v1/admin` |
+| 当 `BLINDPAY_WEBHOOK_SECRET` 已设置但其 key（`whsec_` 之后的 base64 部分）格式错误或解码后不足 24 字节时，服务拒绝启动；在配置的 key 不可用期间，`POST /v1/blindpay/webhooks` 会拒绝所有投递 | 密钥被截断或拼写错误的部署，其 BlindPay webhook 此前就已经在失败 | Node 会把无效的 base64 静默解码成一个很短甚至为空的 HMAC key，而用空 key 签名的投递任何人都能伪造 |
+| `GET /v1/health/readiness` 在检查失败时返回标准的错误响应结构（`error: "Service Unavailable"`）；此前它会把健康报告——包括数据库错误信息——放在 `error` 中 | 从响应体而不是状态码读取报告的探针 | 该路由是 `@Public()`，而 Prisma 的错误信息会带出数据库主机名和用户名 |
+| 当 receiver、或拥有 `blockchain_wallet_id` 的 receiver 被停用时，`POST /v1/onramp/receivers/:id/virtual-accounts` 返回 `403 account_disabled` | 没有正当用户会注意到 | 这是熔断开关此前唯一没有覆盖到的法币操作：被停用的账户仍能开出一条新的入金通道 |
+| `POST /v1/pollar/oauth/token` 不再兑换一个已被 `GET /v1/pollar/oauth/sessions/:state` 的更新一次轮询替换掉的 code，即使那次轮询恰好落在兑换过程中途 | 没有正当用户会注意到 | 此前的校验只匹配握手，不匹配 code，因此一个已作废的 code 仍能在这个窗口期内被使用 |
+| `POST /v1/swaps/:id/submit` 和 `POST /v1/liquidity-pools/operations/:id/submit` 会最先检查信封：无法解析、不是该行自己的信封，或不携带任何签名的请求体，无论该行处于什么状态都返回 `400 validation_failed`。任意的 `signedXdr` 不会再返回一行 `SUCCEEDED`，而 `EXPIRED` 行面对不匹配的请求体会返回 `validation_failed`，而不是 `invalid_state_transition` | 提交未签名的 `xdr` 并依赖 `tx_bad_auth` 拒绝的客户端 | 签名不会改变交易的哈希，因此未签名的信封可能被循环转发并遭拒绝，而在共享公共 key 下，仅凭一个行 id 就能读到一笔已结算的记录 |
+| 两个提交路由都会拒绝一个已超出时间边界的信封（`400 invalid_state_transition`，不会广播；如果它已经上链，观察器仍会将其结算），以及一行已经重新提交过 3 次的 `FAILED` 记录（`400 invalid_state_transition`：请构建一笔新的）。在 `503 provider_unavailable` 之后的重试不计入次数 | 在循环中重试提交的客户端：遇到 `invalid_state_transition` 就应停止 | 每一次被拒绝的重新提交都是一次 Horizon 提交和一个新的终态 webhook 事件，且此前没有任何上限 |
+| 两个提交路由都允许每个消费者和客户端地址每分钟调用 20 次，各自使用独立的额度（`429 rate_limited`） | 位于同一 NAT 之后、共用公共 key 的钱包 | 这两个路由都接受共享公共 key，且每次调用都可能向 Horizon 广播 |
+| `GET /v1/webhooks`、`GET /v1/webhooks/:id` 和 `PATCH /v1/webhooks/:id` 只返回已发布的端点字段；`POST /v1/webhooks` 和 `POST /v1/webhooks/:id/rotate-secret` 在此基础上额外返回 `secret`。`consumerId`、`previousSecret` 和 `previousSecretExpiresAt` 从这五个路由的响应中全部移除 | 读取这些字段的调用方 | `previousSecret` 是一个集成方可能仍在接受的签名密钥，而只持有 `webhooks:read` 的 key 就能读到它 |
+| 一个与该别名任何一次有效恢复都不匹配的 token，不再计入该次恢复的尝试次数。一个有效的 token 在每次提交时都会消耗一次用量，包括之后 challenge 或签名验证失败的那次；第五次之后返回 `400 alias_recovery_invalid` | 没有正当用户会注意到 | 别名名称是公开的，因此任何一个 key 发送的五个垃圾 token 就能耗尽控制台发起的每一次恢复 |
+| `POST /v1/aliases/:name/recovery/complete`（每 10 分钟 10 次）、`POST /v1/aliases/challenges`（30 次）、`POST /v1/webhooks/:id/ping`（20 次）和 `POST /v1/webhooks/:id/deliveries/:deliveryId/redeliver`（30 次）在超出预算时返回 `429 rate_limited`，按消费者和客户端地址计算 | 在循环中调用这些路由的脚本 | 每次调用都会存储一行记录、尝试一个恢复 token，或向调用方选择的 URL 发送请求 |
+| `PATCH /v1/payment-intents/:id` 要求 `txHash` 必须是 64 字符的十六进制 Stellar 交易哈希（其他任何值都返回 `400`），并以小写形式存储；`POST /v1/payment-intents/:id/validate` 会将自己收到的哈希转为小写。哈希唯一性现在只在一个消费者自己的意图范围内校验，而不是跨所有租户；与你自己另一个意图上的哈希冲突会返回 `409 idempotency_conflict`（此前是 `500`） | 发送占位符或被截断哈希的调用方 | 此前任何租户都能把别的租户的交易哈希占用到自己的意图上；那个租户的结算随后命中全局索引、得到 `500`，而那笔已支付的意图则在没有触发 `PAYMENT_INTENT_SUCCEEDED` 的情况下过期 |
+| 当一笔 `EXPIRED` 意图的支付在链上得到验证时，它会转为 `SUCCEEDED`：既可能是观察器验证的——它现在会在使意图过期之前先查链，也可能是 `POST /v1/payment-intents/:id/validate` 或 `PATCH {status: SUCCEEDED}` 验证的，这两者现在返回 `200`，而不是 `400 invalid_state_transition`。`PAYMENT_INTENT_SUCCEEDED` 可能紧跟在 `EXPIRED` 这次更新触发的事件之后到来 | 把 `EXPIRED` 当作最终状态的 webhook 消费方 | 过期检查此前从不查链，而验证器只读取发往目标地址的最新 50 笔支付，因此一笔延迟到达或排在靠后位置的支付会让一个已支付的意图永久停留在 `EXPIRED` |
+| 带 `redirect_uri` 的 `POST /v1/pollar/oauth/authorize` 需要 `code_challenge`（PKCE，S256），兑换该握手需要 `code_verifier`；缺少时，在打开 Pollar 会话之前调用就会返回 `400 validation_failed`。轮询流程不变 | 不发送 PKCE 的重定向流程钱包 | 公开回调会把 code 交给任何出示 `state` 的人，而 `state` 就在 `authorization_url` 里；没有 PKCE 时，这个 code 可以被原样兑换 |
+| swap、流动性池操作、支付意图和客户的响应现在只返回其文档化字段，另外 swap 和支付意图上的 `expiresAt` 现已写入文档。`consumerId` 以及结算记账字段（`settlementEpoch`、`lastCheckedAt`、`notFoundStreak`、`sharesReceived`、`settledAmountA`/`B`、`horizonCursor`）不再发送 | 读取这些字段的调用方 | 它们是内部字段，而且其中好几个路由可以用共享公共 key 访问 |
+| 对已存在于 BlindPay 的 receiver 调用 `PATCH /v1/kyc/receivers/:id` 时，除 `external_id` 和 `image_url` 外的任何字段都会返回 `403 kyc_review_required`，除非该 key 是提升权限的 key（`X-Consumer-Role: admin`） | 用租户 key 修正已上线 receiver 身份信息的集成方：请交由审核者处理 | 该 `PUT` 会把从未审核过的身份数据直接发给受监管的服务商，而启用之前的同样修改会重新进入审核 |
+| BlindPay 路由使用调用方 key 所属环境的实例：`prod` key 使用无后缀的 `BLINDPAY_*` 实例，`dev` key 使用 `BLINDPAY_*_DEV` 实例；未配置开发实例时，`dev` key 会得到 `503 misconfigured`。receiver、钱包、银行账户、虚拟账户、报价、payin 和 payout 只在该实例上读取和执行 | 使用 `dev` key 调用 BlindPay 的任何人 | 此前 `dev` key 操作的是生产实例：它可以列出和删除真实的 KYC 身份，并创建真实的 payout |
 
 随之而来的部署说明：
 
@@ -846,6 +877,11 @@ Pollar 在 key 的前缀中编码了网络和 key 类型，环境变量校验器
 - **结算观察器的日志行已更改**为 `Settlement observer started (every Nms)`、`Settlement observer (OBSERVER_ENABLED=false) disabled`，以及 `error` 级别的 `SettlementObserverService cycle failed`。请更新匹配旧文案的告警。`OBSERVER_ENABLED`、`OBSERVER_INTERVAL_MS` 和咨询锁均未改变。
 - **迁移 `20260915120000_liquidity_pool_operation_memo`** 添加可空列 `liquidity_pool_operation.memo`：不会重写表，只会短暂持有排他锁。没有回填——旧行的 memo 位于 base64 XDR 中，SQL 无法解码，服务会对这些行回退到信封。
 - **迁移 `20260915120100_lookup_indexes`** 以 `CONCURRENTLY` 方式为 Pollar 钱包归属检查构建两个索引（`pollar_oauth_session(consumerId, network, walletAddress)` 和 `pollar_user_wallet(consumerId, network, address)`）。它不会阻塞写入，但构建失败会留下一个 `INVALID` 索引，而 `IF NOT EXISTS` 会把它视为已存在：用 `SELECT c.relname FROM pg_class c JOIN pg_index i ON i.indexrelid = c.oid WHERE NOT i.indisvalid;` 找到它，用 `DROP INDEX CONCURRENTLY` 删除，运行 `prisma migrate resolve --rolled-back 20260915120100_lookup_indexes`，然后重新部署。
+- **现在有两个变量会在启动时被检查。** 一个占位符形式的 `APISIX_GATEWAY_SECRET`，或一个 key 解码后不足 24 字节的 `BLINDPAY_WEBHOOK_SECRET`，都会让服务无法启动，并给出一条指名该变量的错误信息。请在同一次变更中，同时替换 APISIX 路由上和这里的占位符网关密钥（`openssl rand -hex 32`）；两边不一致会让每个请求都被判定为并非来自网关。
+- **迁移 `20260915150000_payment_intent_tx_hash_per_consumer`** 把 `payment_intent."txHash"` 上的唯一索引替换为一个建在 `("consumerId", "txHash")` 上的索引。它不是 `CONCURRENTLY` 的：索引构建期间 `payment_intent` 会被加写锁。没有回填。
+- **已存储的 `webhook_endpoint.previousSecret` 值不再被返回，但没有任何东西会清除它们。** 如果某次更早版本上的轮换留下了这样一个值，而你想把它从数据库中彻底清除，请自行把这两列置空。
+- **迁移 `20260915160000_blindpay_environment`** 为七张 BlindPay 镜像表添加 `environment` 列（默认 `'prod'`）——只改动目录，不重写表——因此现有行都会被标记为生产。**如果你之前无后缀的 `BLINDPAY_*` 变量指向的是 BlindPay 开发实例**，请把它们移到 `_DEV` 变量，并重新标记这些行（在 `blindpay_receiver`、`blindpay_blockchain_wallet`、`blindpay_bank_account`、`blindpay_virtual_account`、`payin`、`payout` 和 `blindpay_quote` 上执行 `UPDATE … SET environment = 'dev'`），否则 `prod` key 会继续读到它们。
+- **如果 `dev` key 要使用 BlindPay，请配置 BlindPay 开发实例**（`BLINDPAY_API_KEY_DEV`、`BLINDPAY_INSTANCE_ID_DEV`、`BLINDPAY_WEBHOOK_SECRET_DEV`），并把它的仪表盘 webhook 指向同一个 `/v1/blindpay/webhooks` URL。
 
 ### NestJS 12、TypeScript 6 与 Node 最低版本 24.9
 
@@ -994,7 +1030,7 @@ WHERE NOT i.indisvalid;
 | `NODE_ENV` | 否 | `development` | 必须为 `development`、`test` 或 `production`。**在生产环境中设置为 `production`**——默认拒绝的套餐手续费检查和默认关闭文档都依赖于它 |
 | `PORT` | 否 | `3000` | HTTP 监听端口 |
 | `DATABASE_URL` | **是** | — | Prisma 使用的 PostgreSQL 连接 |
-| `APISIX_GATEWAY_SECRET` | **是** | — | 证明请求经由 APISIX 到达的共享密钥。**至少 32 个字符** |
+| `APISIX_GATEWAY_SECRET` | **是** | — | 证明请求经由 APISIX 到达的共享密钥。**至少 32 个字符**；占位符值会在启动时被拒绝 |
 | `APISIX_GATEWAY_SECRET_HEADER` | 否 | `x-gateway-secret` | 网关密钥的请求头名称 |
 | `APISIX_CONSUMER_HEADER` | 否 | `x-consumer-username` | 已认证的消费者用户名 |
 | `APISIX_CREDENTIAL_HEADER` | 否 | `x-credential-identifier` | 来自 key-auth 的凭证 id |
@@ -1036,10 +1072,13 @@ WHERE NOT i.indisvalid;
 | `REQUEST_LOG_PRUNE_MAX_PER_CYCLE` | 否 | `50000` | 每个周期检查行数的硬上限 |
 | `SWAGGER_ENABLED` | 否 | 在 `production` 中关闭 | 发布 `/docs`（Express 中间件，无 guard） |
 | `OPENAPI_SERVER_URL` | 否 | — | 写入导出的 OpenAPI 的网关主机 |
-| `BLINDPAY_API_KEY` | 否 | — | BlindPay 平台 API key |
+| `BLINDPAY_API_KEY` | 否 | — | BlindPay 生产实例的 API key，供 `prod` key 使用 |
 | `BLINDPAY_INSTANCE_ID` | 设置了 API key 时 | — | BlindPay 实例 id（`in_...`） |
 | `BLINDPAY_BASE_URL` | 否 | `https://api.blindpay.com/v1` | BlindPay API 基础 URL |
-| `BLINDPAY_WEBHOOK_SECRET` | 设置了 API key 时 | — | 入站 BlindPay webhook 的 Svix 密钥 |
+| `BLINDPAY_WEBHOOK_SECRET` | 设置了 API key 时 | — | 入站 BlindPay webhook 的 Svix 密钥：完整的 `whsec_…` 值，其 key 必须解码为至少 24 字节（启动时会检查） |
+| `BLINDPAY_API_KEY_DEV` | 否 | — | BlindPay 开发实例的 API key，供 `dev` key 使用。未设置时，BlindPay 路由对 `dev` key 返回 `503 misconfigured` |
+| `BLINDPAY_INSTANCE_ID_DEV` | 设置了开发 API key 时 | — | 开发实例 id（`in_...`） |
+| `BLINDPAY_WEBHOOK_SECRET_DEV` | 设置了开发 API key 时 | — | 开发实例 webhook 端点的 Svix 密钥；规则与 `BLINDPAY_WEBHOOK_SECRET` 相同 |
 | `BLINDPAY_TIMEOUT_MS` | 否 | `15000` | BlindPay HTTP 客户端超时（ms） |
 | `KYC_REDIRECT_URL_WHITELIST` | 否 | — | 按消费者划分的 KYC 重定向主机白名单 |
 | `RATE_LIMIT_ENABLED` | 否 | `true` | 对花费 XLM 的路由按地址设置上限。事故开关 |

@@ -13,6 +13,7 @@ import {
   RelayRow,
   SignedTransactionRelay,
 } from '@/stellar/signed-transaction-relay.service';
+import { SETTLEMENT_MAX_RESUBMITS } from '@/stellar/stellar.constants';
 
 /**
  * The relay is pinned here against a fake settlement machine, one step at a
@@ -24,29 +25,47 @@ import {
 const SIGNER = Keypair.random();
 const USERNAME = 'cosmos_u1';
 
-/** A real signed envelope, and the hash it has under `networkPassphrase`. */
-function signedEnvelope(
-  sequence = '1',
-  networkPassphrase: string = Networks.TESTNET,
-) {
-  const tx = new TransactionBuilder(new Account(SIGNER.publicKey(), sequence), {
-    fee: '100',
-    networkPassphrase,
-  })
-    .addOperation(
-      Operation.payment({
-        destination: SIGNER.publicKey(),
-        asset: Asset.native(),
-        amount: '1',
-      }),
-    )
-    .setTimeout(300)
-    .build();
-  tx.sign(SIGNER);
-  return { xdr: tx.toXDR(), hash: Buffer.from(tx.hash()).toString('hex') };
+interface EnvelopeOptions {
+  /** The source account's sequence; a different one is a different transaction. */
+  sequence?: string;
+  networkPassphrase?: string;
+  /** Close the time bounds at this unix second instead of five minutes out. */
+  maxTime?: number;
 }
 
-const SIGNED = signedEnvelope();
+/**
+ * A real envelope, both as the create response hands it out (`unsigned`) and as
+ * the wallet sends it back (`xdr`), with the hash they share under
+ * `networkPassphrase` — signing does not change it.
+ */
+function envelope({
+  sequence = '1',
+  networkPassphrase = Networks.TESTNET,
+  maxTime,
+}: EnvelopeOptions = {}) {
+  const builder = new TransactionBuilder(
+    new Account(SIGNER.publicKey(), sequence),
+    { fee: '100', networkPassphrase },
+  ).addOperation(
+    Operation.payment({
+      destination: SIGNER.publicKey(),
+      asset: Asset.native(),
+      amount: '1',
+    }),
+  );
+  if (maxTime === undefined) builder.setTimeout(300);
+  else builder.setTimebounds(0, maxTime);
+  const tx = builder.build();
+  const unsigned = tx.toXDR();
+  tx.sign(SIGNER);
+  return {
+    unsigned,
+    xdr: tx.toXDR(),
+    hash: Buffer.from(tx.hash()).toString('hex'),
+  };
+}
+
+const SIGNED = envelope();
 
 function row(overrides: Partial<RelayRow> = {}): RelayRow {
   return {
@@ -55,6 +74,7 @@ function row(overrides: Partial<RelayRow> = {}): RelayRow {
     settlementEpoch: 0,
     network: 'testnet',
     txHash: SIGNED.hash,
+    expiresAt: new Date(Date.now() + 300_000),
     ...overrides,
   };
 }
@@ -91,12 +111,31 @@ function makeSettlement(start: RelayRow) {
   };
   return {
     status: () => current.status,
-    force: (status: RelayRow['status']) => {
-      current = { ...current, status };
+    epoch: () => current.settlementEpoch,
+    /** The row as a fresh read would return it. */
+    read: () => ({ ...current }),
+    force: (
+      status: RelayRow['status'],
+      settlementEpoch = current.settlementEpoch,
+    ) => {
+      current = { ...current, status, settlementEpoch };
     },
-    markSubmitted: jest.fn(async (_id: string) =>
-      move(['PENDING', 'FAILED'], 'SUBMITTED'),
-    ),
+    // FAILED → SUBMITTED bumps the epoch, and only below the cap; otherwise
+    // PENDING → SUBMITTED. As the repository's markSubmitted does.
+    markSubmitted: jest.fn(async (_id: string) => {
+      if (
+        current.status === 'FAILED' &&
+        current.settlementEpoch < SETTLEMENT_MAX_RESUBMITS
+      ) {
+        current = {
+          ...current,
+          status: 'SUBMITTED',
+          settlementEpoch: current.settlementEpoch + 1,
+        };
+        return { applied: true, row: { ...current } };
+      }
+      return move(['PENDING'], 'SUBMITTED');
+    }),
     finalizeSucceeded: jest.fn(
       async (_id: string, _username: string, _txHash?: string) =>
         move(['PENDING', 'SUBMITTED', 'FAILED', 'EXPIRED'], 'SUCCEEDED'),
@@ -112,12 +151,12 @@ type View = { id: string; status: string; note?: string };
 function makeProfile(
   settlement: ReturnType<typeof makeSettlement>,
   overrides: Partial<RelayProfile<RelayRow, View>> = {},
-): RelayProfile<RelayRow, View> & { emit: jest.Mock } {
+): RelayProfile<RelayRow, View> & { emit: jest.Mock; present: jest.Mock } {
   return {
     settlement,
     submittedEvent: 'SWAP_SUBMITTED',
     emit: jest.fn().mockResolvedValue(true),
-    present: async (r: RelayRow) => ({ id: r.id, status: r.status }),
+    present: jest.fn(async (r: RelayRow) => ({ id: r.id, status: r.status })),
     labels: { resource: 'swap', match: 'swap', log: 'Swap' },
     logger: {
       log: jest.fn(),
@@ -125,7 +164,7 @@ function makeProfile(
       error: jest.fn(),
     } as unknown as Logger,
     ...overrides,
-  } as RelayProfile<RelayRow, View> & { emit: jest.Mock };
+  } as RelayProfile<RelayRow, View> & { emit: jest.Mock; present: jest.Mock };
 }
 
 async function refusal(promise: Promise<unknown>): Promise<ApiError> {
@@ -137,6 +176,15 @@ async function refusal(promise: Promise<unknown>): Promise<ApiError> {
   return err as ApiError;
 }
 
+const NO_SIGNATURES =
+  'signedXdr carries no signatures; sign the transaction before submitting it';
+const EXPIRED =
+  "This swap's transaction expired and can no longer be submitted. If it " +
+  'reached the network before then, it will still settle.';
+const RESUBMITS_EXHAUSTED =
+  `Cannot submit a FAILED swap again: it was already resubmitted ` +
+  `${SETTLEMENT_MAX_RESUBMITS} times after a rejection. Build a new swap.`;
+
 describe('SignedTransactionRelay', () => {
   let stellar: ReturnType<typeof makeStellar>;
   let relay: SignedTransactionRelay;
@@ -146,25 +194,103 @@ describe('SignedTransactionRelay', () => {
     relay = new SignedTransactionRelay(stellar as never);
   });
 
-  it('answers an already-settled row without touching the network', async () => {
-    const settled = row({ status: 'SUCCEEDED' });
-    const settlement = makeSettlement(settled);
+  describe('the envelope is checked before anything about the row is answered', () => {
+    // Under the shared public key every anonymous wallet is one consumer, so
+    // ownership filtering does not separate them: a row id is all a stranger
+    // needs to reach this method. The envelope is what they do not have.
 
-    const outcome = await relay.submit(
-      settled,
-      USERNAME,
-      'not even an envelope',
-      makeProfile(settlement),
-    );
+    it('answers a retry of the settled envelope without touching the network', async () => {
+      const settled = row({ status: 'SUCCEEDED' });
+      const settlement = makeSettlement(settled);
 
-    expect(outcome).toEqual({
-      submitted: true,
-      status: 'SUCCEEDED',
-      txHash: SIGNED.hash,
-      view: { id: 'row_1', status: 'SUCCEEDED' },
+      const outcome = await relay.submit(
+        settled,
+        USERNAME,
+        SIGNED.xdr,
+        makeProfile(settlement),
+      );
+
+      expect(outcome).toEqual({
+        submitted: true,
+        status: 'SUCCEEDED',
+        txHash: SIGNED.hash,
+        view: { id: 'row_1', status: 'SUCCEEDED' },
+      });
+      expect(settlement.markSubmitted).not.toHaveBeenCalled();
+      expect(stellar.submitTransaction).not.toHaveBeenCalled();
     });
-    expect(settlement.markSubmitted).not.toHaveBeenCalled();
-    expect(stellar.submitTransaction).not.toHaveBeenCalled();
+
+    it('does not present a settled row for something that is not an envelope', async () => {
+      const settled = row({ status: 'SUCCEEDED' });
+      const profile = makeProfile(makeSettlement(settled));
+
+      const err = await refusal(
+        relay.submit(settled, USERNAME, 'not even an envelope', profile),
+      );
+
+      expect(err.code).toBe(ApiErrorCode.ValidationFailed);
+      expect(err.message).toBe('signedXdr is not a valid transaction envelope');
+      expect(profile.present).not.toHaveBeenCalled();
+    });
+
+    it("does not present a settled row for another row's envelope", async () => {
+      const settled = row({ status: 'SUCCEEDED' });
+      const profile = makeProfile(makeSettlement(settled));
+
+      const err = await refusal(
+        relay.submit(
+          settled,
+          USERNAME,
+          envelope({ sequence: '41' }).xdr,
+          profile,
+        ),
+      );
+
+      expect(err.code).toBe(ApiErrorCode.ValidationFailed);
+      expect(err.message).toBe(
+        'The signed transaction does not match this swap',
+      );
+      expect(profile.present).not.toHaveBeenCalled();
+    });
+
+    it("does not reveal a row's status to an envelope that is not its own", async () => {
+      // "Cannot submit a EXPIRED swap" used to come back for any junk body.
+      const expired = row({ status: 'EXPIRED' });
+
+      const err = await refusal(
+        relay.submit(
+          expired,
+          USERNAME,
+          'AAAA',
+          makeProfile(makeSettlement(expired)),
+        ),
+      );
+
+      expect(err.code).toBe(ApiErrorCode.ValidationFailed);
+      expect(err.message).not.toMatch(/EXPIRED/);
+    });
+
+    it.each(['PENDING', 'SUBMITTED', 'FAILED', 'SUCCEEDED'] as const)(
+      'refuses the unsigned envelope from the create response against a %s row',
+      async (status) => {
+        // Its hash matches — signatures do not change it — so without this an
+        // unsigned envelope was enough to broadcast, fail, and resubmit forever.
+        const target = row({ status });
+        const settlement = makeSettlement(target);
+        const profile = makeProfile(settlement);
+
+        const err = await refusal(
+          relay.submit(target, USERNAME, SIGNED.unsigned, profile),
+        );
+
+        expect(err.getStatus()).toBe(HttpStatus.BAD_REQUEST);
+        expect(err.code).toBe(ApiErrorCode.ValidationFailed);
+        expect(err.message).toBe(NO_SIGNATURES);
+        expect(settlement.markSubmitted).not.toHaveBeenCalled();
+        expect(stellar.submitTransaction).not.toHaveBeenCalled();
+        expect(profile.present).not.toHaveBeenCalled();
+      },
+    );
   });
 
   it('refuses a row that can no longer settle', async () => {
@@ -198,7 +324,7 @@ describe('SignedTransactionRelay', () => {
     // Otherwise a caller could have us broadcast an arbitrary transaction.
     const pending = row();
     const settlement = makeSettlement(pending);
-    const other = signedEnvelope('41');
+    const other = envelope({ sequence: '41' });
 
     const err = await refusal(
       relay.submit(
@@ -236,6 +362,136 @@ describe('SignedTransactionRelay', () => {
 
     expect(stellar.passphrase).toHaveBeenCalledWith('public');
     expect(err.message).toBe('The signed transaction does not match this swap');
+  });
+
+  describe('an envelope past its lifetime is never broadcast', () => {
+    // The network would only answer `tx_too_late`, and a FAILED row answered
+    // that way would bump its epoch for nothing. The row is left as it is: the
+    // observer settles an in-flight one from the ledger — SUCCEEDED if it landed
+    // before its bounds closed, EXPIRED on a 404 — and a FAILED one stays FAILED.
+
+    it.each(['PENDING', 'SUBMITTED', 'FAILED'] as const)(
+      'refuses a %s row whose envelope time bounds have closed',
+      async (status) => {
+        const lapsed = envelope({
+          maxTime: Math.floor(Date.now() / 1000) - 60,
+        });
+        // `expiresAt` still in the future: the envelope's own bound decides.
+        const target = row({ status, txHash: lapsed.hash });
+        const settlement = makeSettlement(target);
+
+        const err = await refusal(
+          relay.submit(target, USERNAME, lapsed.xdr, makeProfile(settlement)),
+        );
+
+        expect(err.getStatus()).toBe(HttpStatus.BAD_REQUEST);
+        expect(err.code).toBe(ApiErrorCode.InvalidStateTransition);
+        expect(err.message).toBe(EXPIRED);
+        expect(settlement.markSubmitted).not.toHaveBeenCalled();
+        expect(stellar.submitTransaction).not.toHaveBeenCalled();
+        expect(settlement.status()).toBe(status);
+        expect(settlement.epoch()).toBe(0);
+      },
+    );
+
+    it('refuses a row whose expiresAt has passed', async () => {
+      const lapsed = row({ expiresAt: new Date(Date.now() - 1_000) });
+      const settlement = makeSettlement(lapsed);
+
+      const err = await refusal(
+        relay.submit(lapsed, USERNAME, SIGNED.xdr, makeProfile(settlement)),
+      );
+
+      expect(err.code).toBe(ApiErrorCode.InvalidStateTransition);
+      expect(err.message).toBe(EXPIRED);
+      expect(stellar.submitTransaction).not.toHaveBeenCalled();
+    });
+
+    it('still answers a retry of the settled envelope after it lapsed', async () => {
+      // Settlement is final; its lifetime no longer matters to the answer.
+      const settled = row({
+        status: 'SUCCEEDED',
+        expiresAt: new Date(Date.now() - 1_000),
+      });
+
+      const outcome = await relay.submit(
+        settled,
+        USERNAME,
+        SIGNED.xdr,
+        makeProfile(makeSettlement(settled)),
+      );
+
+      expect(outcome.status).toBe('SUCCEEDED');
+    });
+  });
+
+  describe('resubmitting a rejected envelope is capped per row', () => {
+    it('refuses a FAILED row that has used every resubmit', async () => {
+      const exhausted = row({
+        status: 'FAILED',
+        settlementEpoch: SETTLEMENT_MAX_RESUBMITS,
+      });
+      const settlement = makeSettlement(exhausted);
+
+      const err = await refusal(
+        relay.submit(exhausted, USERNAME, SIGNED.xdr, makeProfile(settlement)),
+      );
+
+      expect(err.getStatus()).toBe(HttpStatus.BAD_REQUEST);
+      expect(err.code).toBe(ApiErrorCode.InvalidStateTransition);
+      expect(err.message).toBe(RESUBMITS_EXHAUSTED);
+      expect(settlement.markSubmitted).not.toHaveBeenCalled();
+      expect(stellar.submitTransaction).not.toHaveBeenCalled();
+    });
+
+    it('refuses when a concurrent resubmit used the last one first', async () => {
+      // Read below the cap; by the compare-and-swap another request had already
+      // resubmitted, been rejected, and left the row FAILED at the cap.
+      const stale = row({
+        status: 'FAILED',
+        settlementEpoch: SETTLEMENT_MAX_RESUBMITS - 1,
+      });
+      const settlement = makeSettlement(stale);
+      settlement.force('FAILED', SETTLEMENT_MAX_RESUBMITS);
+
+      const err = await refusal(
+        relay.submit(stale, USERNAME, SIGNED.xdr, makeProfile(settlement)),
+      );
+
+      expect(err.code).toBe(ApiErrorCode.InvalidStateTransition);
+      expect(err.message).toBe(RESUBMITS_EXHAUSTED);
+      expect(stellar.submitTransaction).not.toHaveBeenCalled();
+    });
+
+    it('holds a caller looping on a rejected envelope to the cap', async () => {
+      // The exploit: POST the same envelope again every time it is rejected.
+      const settlement = makeSettlement(row());
+      const profile = makeProfile(settlement);
+      stellar.submitTransaction.mockRejectedValue(
+        horizonReject({ transaction: 'tx_bad_auth' }),
+      );
+
+      // The first attempt and every resubmit the cap allows reach the network…
+      for (let attempt = 0; attempt <= SETTLEMENT_MAX_RESUBMITS; attempt++) {
+        const outcome = await relay.submit(
+          settlement.read(),
+          USERNAME,
+          SIGNED.xdr,
+          profile,
+        );
+        expect(outcome.status).toBe('FAILED');
+      }
+      // …and the next one does not.
+      const err = await refusal(
+        relay.submit(settlement.read(), USERNAME, SIGNED.xdr, profile),
+      );
+
+      expect(err.message).toBe(RESUBMITS_EXHAUSTED);
+      expect(stellar.submitTransaction).toHaveBeenCalledTimes(
+        SETTLEMENT_MAX_RESUBMITS + 1,
+      );
+      expect(settlement.epoch()).toBe(SETTLEMENT_MAX_RESUBMITS);
+    });
   });
 
   it('marks the row SUBMITTED, announces it once, and settles on a confirmed broadcast', async () => {
@@ -422,10 +678,13 @@ describe('SignedTransactionRelay', () => {
   it('answers 503 and leaves the row re-submittable when Horizon is unreachable', async () => {
     const pending = row();
     const settlement = makeSettlement(pending);
-    stellar.submitTransaction.mockRejectedValue(new Error('socket hang up'));
+    const profile = makeProfile(settlement);
+    stellar.submitTransaction.mockRejectedValueOnce(
+      new Error('socket hang up'),
+    );
 
     const err = await refusal(
-      relay.submit(pending, USERNAME, SIGNED.xdr, makeProfile(settlement)),
+      relay.submit(pending, USERNAME, SIGNED.xdr, profile),
     );
 
     expect(err.getStatus()).toBe(HttpStatus.SERVICE_UNAVAILABLE);
@@ -433,5 +692,15 @@ describe('SignedTransactionRelay', () => {
     expect(settlement.finalizeFailed).not.toHaveBeenCalled();
     expect(settlement.finalizeSucceeded).not.toHaveBeenCalled();
     expect(settlement.status()).toBe('SUBMITTED');
+
+    // The retry the 503 asks for goes through, and does not spend a resubmit.
+    const retried = await relay.submit(
+      settlement.read(),
+      USERNAME,
+      SIGNED.xdr,
+      profile,
+    );
+    expect(retried.status).toBe('SUCCEEDED');
+    expect(settlement.epoch()).toBe(0);
   });
 });

@@ -1,7 +1,14 @@
 import { HttpException, HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { AppConfig } from '@/config/configuration';
+import type {
+  AppConfig,
+  BlindpayEnvironment,
+  BlindpayInstanceConfig,
+} from '@/config/configuration';
+import type { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
+import { resolveBlindpayEnvironment } from '@/blindpay/blindpay-environment';
+import { BLINDPAY_INSTANCE_ENV_VARS } from '@/blindpay/blindpay.constants';
 
 type QueryValue = string | number | boolean | undefined | null;
 
@@ -18,37 +25,75 @@ export interface UploadableFile {
 }
 
 /**
- * Thin authenticated HTTP client for the BlindPay REST API.
+ * Entry point to BlindPay: one authenticated transport per platform instance.
  *
- * We run a single platform instance: the API key and instance id come from env,
- * and most resources live under `/instances/{instanceId}/...` (use
- * {@link instancePath}). Non-2xx responses are surfaced as Nest HttpExceptions —
- * client errors (4xx) pass the upstream status through so callers see a faithful
- * reason, while upstream 5xx/timeouts become 502/504. The client never holds
- * blockchain keys: signing always happens on the customer's side.
+ * There are two instances, one per API-key environment, and every call names the
+ * one it goes to through {@link instance}. A single shared instance let a `dev`
+ * key list, delete and pay out against production KYC identities, and pointing
+ * it at a sandbox made every `prod` key transact on sandbox without noticing. The
+ * environment is resolved once per request with {@link environmentFor} and then
+ * carried explicitly, the way the Stellar network picks a Horizon server.
  */
 @Injectable()
 export class BlindpayClient {
-  private readonly logger = new Logger(BlindpayClient.name);
-  private readonly cfg: AppConfig['blindpay'];
+  private readonly instances: Record<BlindpayEnvironment, BlindpayInstance>;
 
-  constructor(config: ConfigService<AppConfig, true>) {
-    this.cfg = config.get('blindpay', { infer: true });
+  constructor(private readonly config: ConfigService<AppConfig, true>) {
+    const { baseUrl, timeoutMs, instances } = config.get('blindpay', {
+      infer: true,
+    });
+    this.instances = {
+      prod: new BlindpayInstance('prod', baseUrl, timeoutMs, instances.prod),
+      dev: new BlindpayInstance('dev', baseUrl, timeoutMs, instances.dev),
+    };
+  }
+
+  /** The instance that serves `consumer` — see `resolveBlindpayEnvironment`. */
+  environmentFor(consumer: GatewayConsumer): BlindpayEnvironment {
+    return resolveBlindpayEnvironment(this.config, consumer);
+  }
+
+  /** The transport for one environment's instance. */
+  instance(env: BlindpayEnvironment): BlindpayInstance {
+    return this.instances[env];
+  }
+}
+
+/**
+ * Thin authenticated HTTP client for one BlindPay platform instance.
+ *
+ * The API key and instance id come from env, and most resources live under
+ * `/instances/{instanceId}/...` (use {@link instancePath}). Non-2xx responses are
+ * surfaced as Nest HttpExceptions — client errors (4xx) pass the upstream status
+ * through so callers see a faithful reason, while upstream 5xx/timeouts become
+ * 502/504. It never holds blockchain keys: signing always happens on the
+ * customer's side.
+ */
+export class BlindpayInstance {
+  private readonly logger: Logger;
+
+  constructor(
+    readonly environment: BlindpayEnvironment,
+    private readonly baseUrl: string,
+    private readonly timeoutMs: number,
+    private readonly credentials: BlindpayInstanceConfig,
+  ) {
+    this.logger = new Logger(`${BlindpayClient.name}:${environment}`);
   }
 
   /** The configured platform instance id (`in_...`). */
   get instanceId(): string {
-    return this.cfg.instanceId;
+    return this.credentials.instanceId;
   }
 
-  /** Whether the integration has the credentials it needs to make calls. */
+  /** Whether this instance has the credentials it needs to make calls. */
   get isConfigured(): boolean {
-    return Boolean(this.cfg.apiKey && this.cfg.instanceId);
+    return Boolean(this.credentials.apiKey && this.credentials.instanceId);
   }
 
   /** Builds an instance-scoped path: `/instances/{instanceId}{path}`. */
   instancePath(path: string): string {
-    return `/instances/${this.cfg.instanceId}${path}`;
+    return `/instances/${this.credentials.instanceId}${path}`;
   }
 
   get<T>(path: string, opts: BlindpayRequestOptions = {}): Promise<T> {
@@ -85,14 +130,14 @@ export class BlindpayClient {
     const url = this.buildUrl(path, opts.query);
     const hasBody = opts.body !== undefined;
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.cfg.timeoutMs);
+    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
 
     try {
       const res = await fetch(url, {
         method,
         signal: controller.signal,
         headers: {
-          authorization: `Bearer ${this.cfg.apiKey}`,
+          authorization: `Bearer ${this.credentials.apiKey}`,
           accept: 'application/json',
           'user-agent': 'CosmosPay/1.0',
           ...(hasBody ? { 'content-type': 'application/json' } : {}),
@@ -128,16 +173,18 @@ export class BlindpayClient {
       file.originalname,
     );
 
-    const url = this.buildUrl('/upload', { instance_id: this.cfg.instanceId });
+    const url = this.buildUrl('/upload', {
+      instance_id: this.credentials.instanceId,
+    });
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.cfg.timeoutMs);
+    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
 
     try {
       const res = await fetch(url, {
         method: 'POST',
         signal: controller.signal,
         headers: {
-          authorization: `Bearer ${this.cfg.apiKey}`,
+          authorization: `Bearer ${this.credentials.apiKey}`,
           accept: 'application/json',
           'user-agent': 'CosmosPay/1.0',
         },
@@ -230,7 +277,7 @@ export class BlindpayClient {
   }
 
   private buildUrl(path: string, query?: Record<string, QueryValue>): string {
-    const url = new URL(`${this.cfg.baseUrl}${path}`);
+    const url = new URL(`${this.baseUrl}${path}`);
     if (query) {
       for (const [key, value] of Object.entries(query)) {
         if (value !== undefined && value !== null) {
@@ -244,11 +291,12 @@ export class BlindpayClient {
   private ensureConfigured(): void {
     if (!this.isConfigured) {
       // `misconfigured`, not the `provider_unavailable` a bare 503 defaults to:
-      // BlindPay is not down, this deployment never set it up, and a caller that
-      // retries on `provider_unavailable` would retry for as long as that lasts.
+      // BlindPay is not down, this deployment never set up the instance this
+      // caller's environment uses, and a caller that retries on
+      // `provider_unavailable` would retry for as long as that lasts.
       throw ApiError.unavailable(
         ApiErrorCode.Misconfigured,
-        'BlindPay is not configured: set BLINDPAY_API_KEY and BLINDPAY_INSTANCE_ID.',
+        `BlindPay (${this.environment}) is not configured: set ${BLINDPAY_INSTANCE_ENV_VARS[this.environment]}.`,
       );
     }
   }

@@ -337,10 +337,10 @@ describe('Payment intents CRUD (e2e)', () => {
     const res = await gw(
       request(http())
         .patch(`${route}/${createdId}`)
-        .send({ status: 'SUBMITTED', txHash: 'abc123' }),
+        .send({ status: 'SUBMITTED', txHash: 'c'.repeat(64) }),
     ).expect(200);
     expect(res.body.status).toBe('SUBMITTED');
-    expect(res.body.txHash).toBe('abc123');
+    expect(res.body.txHash).toBe('c'.repeat(64));
   });
 
   it('404s an update on an unknown id', () =>

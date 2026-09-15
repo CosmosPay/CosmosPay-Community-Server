@@ -1,7 +1,12 @@
+import { Logger } from '@nestjs/common';
 import { Horizon } from '@stellar/stellar-sdk';
 import { StellarService } from '@/stellar/stellar.service';
 import { StellarVerifierService } from '@/payment-intents/stellar-verifier.service';
-import { TX_CREATED_AT_SKEW_MS } from '@/payment-intents/payment-intents.constants';
+import {
+  PAYMENT_SCAN_MAX_PAGES,
+  PAYMENT_SCAN_PAGE_SIZE,
+  TX_CREATED_AT_SKEW_MS,
+} from '@/payment-intents/payment-intents.constants';
 
 const CREATED_AT = new Date('2026-09-01T12:00:00.000Z');
 /** A ledger close time `offsetMs` after (or, negative, before) the intent. */
@@ -284,64 +289,189 @@ describe('StellarVerifierService.findMatchingPayment', () => {
     createdAt: CREATED_AT,
   };
 
-  const paymentAt = (hash: string, offsetMs: number) => ({
+  /**
+   * A payment to the destination as a `join=transactions` page carries it: the
+   * owning transaction resolves from the record, without a request.
+   */
+  const paymentAt = (
+    hash: string,
+    offsetMs: number,
+    tx: { successful: boolean; memo?: string } = {
+      successful: true,
+      memo: '999',
+    },
+  ) => ({
     ...nativeTo('GDEST', '1'),
     from: 'GPAYER',
     transaction_hash: hash,
     created_at: closedAt(offsetMs),
+    transaction: jest.fn(async () => ({ memo_type: 'id', ...tx })),
   });
 
-  function mockScan(
-    records: any[],
-    txs: Record<string, { successful: boolean; memo?: string }>,
-  ) {
-    const transaction = jest.fn((hash: string) => ({
-      call: async () => ({ memo_type: 'id', ...txs[hash] }),
-    }));
-    jest
-      .spyOn(Horizon.Server.prototype, 'transactions')
-      .mockReturnValue({ transaction } as any);
-    const page: any = {
-      forAccount: () => page,
-      order: () => page,
-      limit: () => page,
-      call: async () => ({ records }),
+  /** A full page of dust: newer than the intent, to the destination, someone else's memo. */
+  const dustPage = (page: number) =>
+    Array.from({ length: PAYMENT_SCAN_PAGE_SIZE }, (_, i) =>
+      paymentAt(`h_dust_${page}_${i}`, 10 * 60_000),
+    );
+
+  /** `pages[0]` is what `call()` returns; each page's `next()` returns the one after it. */
+  function mockScan(pages: any[][]) {
+    const next = jest.fn();
+    const pageAt = (i: number): any => ({
+      records: pages[i] ?? [],
+      next: async () => {
+        next();
+        return pageAt(i + 1);
+      },
+    });
+    const builder: any = {
+      forAccount: jest.fn(() => builder),
+      join: jest.fn(() => builder),
+      order: jest.fn(() => builder),
+      limit: jest.fn(() => builder),
+      call: jest.fn(async () => pageAt(0)),
     };
-    jest.spyOn(Horizon.Server.prototype, 'payments').mockReturnValue(page);
-    return { transaction };
+    jest.spyOn(Horizon.Server.prototype, 'payments').mockReturnValue(builder);
+    const transactions = jest.spyOn(Horizon.Server.prototype, 'transactions');
+    return { builder, next, transactions };
   }
 
   afterEach(() => jest.restoreAllMocks());
 
   it('settles on a recent payment that carries the memo', async () => {
-    mockScan([paymentAt('h_new', 5_000)], {
-      h_new: { successful: true, memo: '123456789' },
-    });
+    mockScan([
+      [paymentAt('h_new', 5_000, { successful: true, memo: '123456789' })],
+    ]);
     const res = await make().findMatchingPayment(intent);
     expect(res).toEqual({ valid: true, txHash: 'h_new', payer: 'GPAYER' });
   });
 
-  it('stops at the first payment older than the intent, without looking up its transaction', async () => {
+  it('does not settle on a matching payment whose transaction failed', async () => {
+    mockScan([
+      [paymentAt('h_new', 5_000, { successful: false, memo: '123456789' })],
+    ]);
+    const res = await make().findMatchingPayment(intent);
+    expect(res.valid).toBe(false);
+  });
+
+  it('reads memo and success from transactions joined into the page, not one lookup per candidate', async () => {
+    const { builder, transactions } = mockScan([
+      [
+        paymentAt('h_a', 9_000),
+        paymentAt('h_b', 7_000),
+        paymentAt('h_new', 5_000, { successful: true, memo: '123456789' }),
+      ],
+    ]);
+
+    await make().findMatchingPayment(intent);
+
+    expect(builder.join).toHaveBeenCalledWith('transactions');
+    expect(builder.order).toHaveBeenCalledWith('desc');
+    expect(builder.limit).toHaveBeenCalledWith(PAYMENT_SCAN_PAGE_SIZE);
+    expect(transactions).not.toHaveBeenCalled();
+  });
+
+  it('stops at the first payment older than the intent, without checking it or paging further', async () => {
     // The page is newest first. The old payment carries the right memo — it is
     // exactly the replay the age floor refuses — and nothing after it can be
-    // newer, so neither it nor anything below it costs a Horizon call.
-    const { transaction } = mockScan(
-      [
-        paymentAt('h_new', 5_000),
-        paymentAt('h_old', -TX_CREATED_AT_SKEW_MS - 1_000),
-        paymentAt('h_older', -60 * 60_000),
-      ],
-      {
-        h_new: { successful: true, memo: '999' },
-        h_old: { successful: true, memo: '123456789' },
-        h_older: { successful: true, memo: '123456789' },
-      },
+    // newer. The page is full, so only the age floor can be what stops it.
+    const recent = paymentAt('h_new', 5_000);
+    const old = paymentAt('h_old', -TX_CREATED_AT_SKEW_MS - 1_000, {
+      successful: true,
+      memo: '123456789',
+    });
+    const older = paymentAt('h_older', -60 * 60_000, {
+      successful: true,
+      memo: '123456789',
+    });
+    const filler = Array.from({ length: PAYMENT_SCAN_PAGE_SIZE - 3 }, (_, i) =>
+      paymentAt(`h_fill_${i}`, -2 * 60 * 60_000),
     );
+    const { next } = mockScan([[recent, old, older, ...filler], dustPage(1)]);
 
     const res = await make().findMatchingPayment(intent);
 
     expect(res.valid).toBe(false);
-    expect(transaction).toHaveBeenCalledTimes(1);
-    expect(transaction).toHaveBeenCalledWith('h_new');
+    expect(recent.transaction).toHaveBeenCalledTimes(1);
+    expect(old.transaction).not.toHaveBeenCalled();
+    expect(older.transaction).not.toHaveBeenCalled();
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  /**
+   * One page of the 50 newest payments was all the scan read, so payments sent
+   * after the real one — dust from anyone — pushed it out of sight and the
+   * intent expired although it was paid.
+   */
+  it('finds a payment pushed off the first page by newer ones', async () => {
+    const { next } = mockScan([
+      dustPage(0),
+      [paymentAt('h_real', 5_000, { successful: true, memo: '123456789' })],
+    ]);
+
+    const res = await make().findMatchingPayment(intent);
+
+    expect(res).toEqual({ valid: true, txHash: 'h_real', payer: 'GPAYER' });
+    expect(next).toHaveBeenCalledTimes(1);
+  });
+
+  it('asks for no further page after a short one', async () => {
+    const { next } = mockScan([[paymentAt('h_new', 5_000)]]);
+
+    const res = await make().findMatchingPayment(intent);
+
+    expect(res).toEqual({
+      valid: false,
+      reason: 'No matching payment found yet',
+    });
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it(`gives up after ${PAYMENT_SCAN_MAX_PAGES} full pages, as a miss rather than an error`, async () => {
+    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation();
+    const pages = Array.from({ length: PAYMENT_SCAN_MAX_PAGES }, (_, i) =>
+      dustPage(i),
+    );
+    // Beyond the bound: never reached.
+    pages.push([
+      paymentAt('h_beyond', 5_000, { successful: true, memo: '123456789' }),
+    ]);
+    const { next } = mockScan(pages);
+
+    const res = await make().findMatchingPayment(intent);
+
+    expect(res.valid).toBe(false);
+    expect(res.reason).toMatch(
+      new RegExp(`${PAYMENT_SCAN_MAX_PAGES * PAYMENT_SCAN_PAGE_SIZE} newest`),
+    );
+    expect(next).toHaveBeenCalledTimes(PAYMENT_SCAN_MAX_PAGES - 1);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('pi_open'));
+  });
+
+  it('reports a destination Horizon does not know', async () => {
+    const { builder } = mockScan([]);
+    builder.call.mockRejectedValueOnce(
+      Object.assign(new Error('Not Found'), { response: { status: 404 } }),
+    );
+
+    const res = await make().findMatchingPayment(intent);
+
+    expect(res).toEqual({
+      valid: false,
+      reason: 'Destination account not found',
+    });
+  });
+
+  it('rethrows any other Horizon failure, so the observer cannot read it as "no payment"', async () => {
+    const { builder } = mockScan([]);
+    builder.call.mockRejectedValueOnce(
+      Object.assign(new Error('Service Unavailable'), {
+        response: { status: 503 },
+      }),
+    );
+
+    await expect(make().findMatchingPayment(intent)).rejects.toThrow(
+      'Service Unavailable',
+    );
   });
 });

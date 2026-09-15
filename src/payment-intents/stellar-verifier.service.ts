@@ -4,7 +4,11 @@ import { StellarService } from '@/stellar/stellar.service';
 import { toStroops } from '@/swaps/swap-math';
 import type { PaymentIntent } from '@generated/prisma/client';
 import type { StellarNetwork } from '@/config/configuration';
-import { TX_CREATED_AT_SKEW_MS } from '@/payment-intents/payment-intents.constants';
+import {
+  PAYMENT_SCAN_MAX_PAGES,
+  PAYMENT_SCAN_PAGE_SIZE,
+  TX_CREATED_AT_SKEW_MS,
+} from '@/payment-intents/payment-intents.constants';
 
 export interface VerificationResult {
   valid: boolean;
@@ -108,13 +112,24 @@ export class StellarVerifierService {
   }
 
   /**
-   * Scans recent payments to the intent's destination and returns the hash of
-   * the first transaction that fully matches (used by the observer when no hash
-   * was reported by the integrator).
+   * Scans payments to the intent's destination, newest first, and returns the
+   * hash of the first transaction that fully matches (used by the observer when
+   * no hash was reported by the integrator).
+   *
+   * It read a single page of the 50 newest payments, so enough payments landing
+   * after the real one — dust, which anyone can send — hid it, and the intent
+   * expired although it was paid. It now pages back until the payments predate
+   * the intent, at most {@link PAYMENT_SCAN_MAX_PAGES} pages; the constant says
+   * why running out of pages is a miss rather than an error.
+   *
+   * The owning transactions are joined into each page (`join=transactions`), so
+   * a page costs one Horizon call however many of its payments are candidates.
+   * Confirming memo and success used to cost a lookup per candidate — for an
+   * open-amount intent, one per payment to the destination — which paging would
+   * otherwise have multiplied by the number of pages.
    */
   async findMatchingPayment(
     intent: PaymentIntent,
-    limit = 50,
   ): Promise<VerificationResult> {
     const server = this.server(intent);
     let page: Horizon.ServerApi.CollectionPage<Horizon.ServerApi.OperationRecord>;
@@ -122,8 +137,9 @@ export class StellarVerifierService {
       page = await server
         .payments()
         .forAccount(intent.destination)
+        .join('transactions')
         .order('desc')
-        .limit(limit)
+        .limit(PAYMENT_SCAN_PAGE_SIZE)
         .call();
     } catch (err) {
       const status = (err as { response?: { status?: number } })?.response
@@ -134,32 +150,49 @@ export class StellarVerifierService {
       throw err;
     }
 
-    for (const op of page.records) {
-      // The page is newest first, so everything past the first record older
-      // than the intent is older still — and each candidate would cost a
-      // transaction lookup to rule out.
-      if (this.predatesIntent(intent, op.created_at)) {
-        break;
+    for (let pages = 1; ; pages += 1) {
+      for (const op of page.records) {
+        // Pages run newest first, so everything past the first record older
+        // than the intent is older still — including every later page.
+        if (this.predatesIntent(intent, op.created_at)) {
+          return { valid: false, reason: 'No matching payment found yet' };
+        }
+        if (!this.paymentMatches(intent, op)) {
+          continue;
+        }
+        // Confirm success + memo on the owning transaction. The join already
+        // put it in the page, so this resolves without a request.
+        const tx = await op.transaction();
+        if (!tx.successful) {
+          continue;
+        }
+        if (!this.memoMatches(intent, tx.memo_type, tx.memo).ok) {
+          continue;
+        }
+        const payer = (op as Horizon.ServerApi.PaymentOperationRecord).from;
+        return { valid: true, txHash: op.transaction_hash, payer };
       }
-      if (!this.paymentMatches(intent, op)) {
-        continue;
-      }
-      // Confirm success + memo on the owning transaction.
-      const tx = await server
-        .transactions()
-        .transaction(op.transaction_hash)
-        .call();
-      if (!tx.successful) {
-        continue;
-      }
-      if (!this.memoMatches(intent, tx.memo_type, tx.memo).ok) {
-        continue;
-      }
-      const payer = (op as Horizon.ServerApi.PaymentOperationRecord).from;
-      return { valid: true, txHash: op.transaction_hash, payer };
-    }
 
-    return { valid: false, reason: 'No matching payment found yet' };
+      // A short page is the last one: the account has no older payments.
+      if (page.records.length < PAYMENT_SCAN_PAGE_SIZE) {
+        return { valid: false, reason: 'No matching payment found yet' };
+      }
+      if (pages >= PAYMENT_SCAN_MAX_PAGES) {
+        this.logger.warn(
+          `Payment scan for intent ${intent.id} stopped after ${pages} pages ` +
+            `without reaching its creation time: ${intent.destination} has ` +
+            'received more payments since than the scan reads. POST ' +
+            '/:id/validate with the transaction hash settles it without a scan.',
+        );
+        return {
+          valid: false,
+          reason:
+            `No matching payment among the ${pages * PAYMENT_SCAN_PAGE_SIZE} ` +
+            'newest payments to the destination',
+        };
+      }
+      page = await page.next();
+    }
   }
 
   /**

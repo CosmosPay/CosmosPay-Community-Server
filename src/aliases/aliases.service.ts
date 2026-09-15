@@ -649,28 +649,44 @@ export class AliasesService {
       where: { tokenHash: hashToken(dto.token) },
     });
 
-    const bad =
-      !recovery ||
-      recovery.aliasId !== alias.id ||
-      recovery.consumedAt !== null ||
-      recovery.expiresAt.getTime() <= Date.now() ||
-      recovery.attempts >= ALIAS_RECOVERY_MAX_ATTEMPTS;
+    // A token that does not name a live recovery of THIS alias is refused without
+    // writing anything. It used to count against the alias's live recovery
+    // instead, and since handles are public, five junk tokens from any key
+    // burned the recovery the owner had just started. Unknown, another alias's,
+    // spent, expired or exhausted: every case gets the same answer, so the
+    // refusal does not say which one it was.
+    const live =
+      recovery !== null &&
+      recovery.aliasId === alias.id &&
+      recovery.consumedAt === null &&
+      recovery.expiresAt.getTime() > Date.now() &&
+      recovery.attempts < ALIAS_RECOVERY_MAX_ATTEMPTS;
+    if (!live) {
+      throw recoveryTokenRefused();
+    }
 
-    if (bad) {
-      // Count the attempt against the alias's live recovery when there is one, so
-      // the ladder cannot be sidestepped by sending garbage tokens.
-      await this.prisma.aliasRecovery.updateMany({
-        where: { aliasId: alias.id, consumedAt: null },
-        data: { attempts: { increment: 1 } },
-      });
-      throw ApiError.badRequest(
-        ApiErrorCode.AliasRecoveryInvalid,
-        'The recovery token is unknown, expired or already used.',
-      );
+    // The token is real, so this presentation counts, and it counts BEFORE the
+    // challenge and signature are checked. The old increment ran only on a bad
+    // token, and a failing `spendChallenge` threw past it, so the ladder never
+    // bounded the proof step it exists for. Checking and counting in one
+    // statement also keeps it exact under concurrency: of two requests that
+    // both read `attempts = 4`, only one updates the row and gets the fifth try.
+    const counted = await this.prisma.aliasRecovery.updateMany({
+      where: {
+        id: recovery.id,
+        consumedAt: null,
+        expiresAt: { gt: new Date() },
+        attempts: { lt: ALIAS_RECOVERY_MAX_ATTEMPTS },
+      },
+      data: { attempts: { increment: 1 } },
+    });
+    if (counted.count !== 1) {
+      throw recoveryTokenRefused();
     }
 
     // The signature is checked before the token is spent, for the same reason a
-    // claim's is: otherwise a junk signature burns a real recovery.
+    // claim's is: otherwise a junk signature burns a real recovery. A failure
+    // here has already used one of the attempts counted above.
     await this.spendChallenge({
       nonce: dto.nonce,
       purpose: AliasChallengePurpose.RECOVER,
@@ -748,6 +764,18 @@ export class AliasesService {
 /** SHA-256 hex. What the recovery table stores instead of the token. */
 function hashToken(token: string): string {
   return createHash('sha256').update(token, 'utf8').digest('hex');
+}
+
+/**
+ * The one refusal for a recovery token that cannot be used. Both refusal paths in
+ * `completeRecovery` build it here so they cannot drift apart: any difference in
+ * the answer would tell a caller which check failed.
+ */
+function recoveryTokenRefused(): ApiError {
+  return ApiError.badRequest(
+    ApiErrorCode.AliasRecoveryInvalid,
+    'The recovery token is unknown, expired or already used.',
+  );
 }
 
 /**

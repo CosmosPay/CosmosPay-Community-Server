@@ -20,9 +20,11 @@ async function generate(): Promise<void> {
   process.env.DATABASE_URL ??=
     'postgresql://openapi:openapi@localhost:5432/openapi';
   // Must satisfy the @MinLength(32) on APISIX_GATEWAY_SECRET, or this offline
-  // command fails in CI, where no .env supplies a real one.
+  // command fails in CI, where no .env supplies a real one. It must also avoid
+  // the words env validation refuses as a placeholder ("placeholder",
+  // "change-me", …), which is what this value used to contain.
   process.env.APISIX_GATEWAY_SECRET ??=
-    'openapi-generation-only-placeholder-secret';
+    'openapi-generation-only-offline-gateway-value';
   // Default swap fee bps is 50; env validation requires a fee wallet when > 0.
   process.env.STELLAR_SWAP_FEE_WALLET ??=
     'GARMB7W3FCR3GKIM3FLWVJASC2PUZ4VHUJZTNJVWWKNTCJNKO6TBCT76';
@@ -33,7 +35,11 @@ async function generate(): Promise<void> {
   // win. Without them this offline command fails locally but passes in CI, where
   // no .env exists.
   process.env.BLINDPAY_INSTANCE_ID ??= 'in_openapi_generation_only';
-  process.env.BLINDPAY_WEBHOOK_SECRET ??= 'whsec_openapi_generation_only';
+  // Svix-shaped: env validation refuses a secret whose base64 key does not decode
+  // to at least 24 bytes, and `openapi_generation_only` is not base64 at all.
+  process.env.BLINDPAY_WEBHOOK_SECRET ??= `whsec_${Buffer.from(
+    'openapi-generation-only!',
+  ).toString('base64')}`;
 
   // Import only after the offline defaults are set: ConfigModule validates the
   // environment as soon as AppModule is evaluated.

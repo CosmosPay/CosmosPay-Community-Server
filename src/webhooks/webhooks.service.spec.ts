@@ -1,7 +1,11 @@
 import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
 import { HttpStatus } from '@nestjs/common';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
-import { WebhooksService } from '@/webhooks/webhooks.service';
+import {
+  WEBHOOK_ENDPOINT_PUBLIC_SELECT,
+  WEBHOOK_ENDPOINT_WITH_SECRET_SELECT,
+  WebhooksService,
+} from '@/webhooks/webhooks.service';
 import { WebhookDestinationGuard } from '@/webhooks/webhook-destination.guard';
 
 describe('WebhooksService destination validation', () => {
@@ -92,6 +96,156 @@ describe('WebhooksService destination validation', () => {
 
     expect(created.url).toBe('https://integrator.example.com/hooks');
     expect(prisma.webhookEndpoint.create).toHaveBeenCalled();
+  });
+});
+
+/**
+ * Endpoint responses are an allowlist. The denylist it replaced removed `secret`
+ * and returned the rest of the row — including `previousSecret`, a signing secret
+ * an integrator may still accept — to any key holding `webhooks:read`.
+ */
+describe('WebhooksService endpoint responses carry only documented fields', () => {
+  const consumer = { username: 'cosmos_u1', credentialId: 'cred_1' } as any;
+
+  /** The fields of `WebhookEndpointEntity`, and nothing else. */
+  const PUBLIC_KEYS = [
+    'createdAt',
+    'description',
+    'destinationBlocked',
+    'enabled',
+    'eventTypes',
+    'id',
+    'updatedAt',
+    'url',
+  ];
+  /** `WebhookEndpointWithSecretEntity`: the same, plus the current secret. */
+  const WITH_SECRET_KEYS = [...PUBLIC_KEYS, 'secret'].sort();
+
+  const CURRENT = 'whsec_current';
+  const PREVIOUS = 'whsec_previous_still_accepted';
+
+  /**
+   * Every column the table has, filled in the way main's grace-window rotation
+   * leaves a row. A read that forgets its `select` hands all of them back, and the
+   * assertions below catch it.
+   */
+  function endpointRow() {
+    return {
+      id: 'we_1',
+      consumerId: 'c1',
+      url: 'https://integrator.example.com/hooks',
+      secret: CURRENT,
+      description: null,
+      enabled: true,
+      destinationBlocked: false,
+      previousSecret: PREVIOUS,
+      previousSecretExpiresAt: new Date(Date.now() + 86_400_000),
+      eventTypes: [],
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+  }
+
+  /** What Prisma answers for a `select`: those columns only, or the whole row. */
+  function project(
+    row: Record<string, unknown>,
+    select?: Record<string, boolean>,
+  ): Record<string, unknown> {
+    if (!select) return row;
+    return Object.fromEntries(
+      Object.keys(select)
+        .filter((key) => select[key])
+        .map((key) => [key, row[key]]),
+    );
+  }
+
+  function build() {
+    const row = endpointRow();
+    const answer = ({ select }: any) => Promise.resolve(project(row, select));
+    const prisma = {
+      consumer: { upsert: jest.fn().mockResolvedValue({ id: 'c1' }) },
+      webhookEndpoint: {
+        findMany: jest.fn(({ select }: any) =>
+          Promise.resolve([project(row, select)]),
+        ),
+        count: jest.fn().mockResolvedValue(1),
+        findFirst: jest.fn(answer),
+        create: jest.fn(answer),
+        update: jest.fn(answer),
+      },
+    };
+    const guard = new WebhookDestinationGuard();
+    guard.replaceDnsLookup(async () => ['93.184.216.34']);
+    const service = new WebhooksService(
+      prisma as any,
+      {} as any,
+      guard,
+      new ConsumerResolverService(prisma as never),
+    );
+    return { service, prisma };
+  }
+
+  function expectPublicOnly(body: object) {
+    expect(Object.keys(body).sort()).toEqual(PUBLIC_KEYS);
+    expect(body).not.toHaveProperty('previousSecret');
+    expect(body).not.toHaveProperty('previousSecretExpiresAt');
+    expect(JSON.stringify(body)).not.toContain('whsec_');
+  }
+
+  it('pins the projection to the documented entity', () => {
+    expect(Object.keys(WEBHOOK_ENDPOINT_PUBLIC_SELECT).sort()).toEqual(
+      PUBLIC_KEYS,
+    );
+    expect(Object.keys(WEBHOOK_ENDPOINT_WITH_SECRET_SELECT).sort()).toEqual(
+      WITH_SECRET_KEYS,
+    );
+  });
+
+  it('lists endpoints without any secret, current or previous', async () => {
+    const { service, prisma } = build();
+
+    const page = await service.findAll(consumer, { take: 100, skip: 0 });
+
+    // Not fetched at all, so it cannot leak through a later serialization.
+    expect(prisma.webhookEndpoint.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ select: WEBHOOK_ENDPOINT_PUBLIC_SELECT }),
+    );
+    expect(page.data).toHaveLength(1);
+    expectPublicOnly(page.data[0]);
+  });
+
+  it('gets an endpoint without any secret, current or previous', async () => {
+    const { service } = build();
+
+    expectPublicOnly(await service.findOne(consumer, 'we_1'));
+  });
+
+  it('answers an update without any secret, current or previous', async () => {
+    const { service, prisma } = build();
+
+    const updated = await service.update(consumer, 'we_1', {
+      description: 'Production payment events',
+    });
+
+    expect(prisma.webhookEndpoint.update).toHaveBeenCalledWith(
+      expect.objectContaining({ select: WEBHOOK_ENDPOINT_PUBLIC_SELECT }),
+    );
+    expectPublicOnly(updated);
+  });
+
+  it('create and rotate-secret return the current secret, never the previous one', async () => {
+    const { service } = build();
+
+    const created = await service.create(consumer, {
+      url: 'https://integrator.example.com/hooks',
+    });
+    const rotated = await service.rotateSecret(consumer, 'we_1');
+
+    for (const body of [created, rotated]) {
+      expect(Object.keys(body).sort()).toEqual(WITH_SECRET_KEYS);
+      expect(body.secret).toBe(CURRENT);
+      expect(JSON.stringify(body)).not.toContain(PREVIOUS);
+    }
   });
 });
 

@@ -20,6 +20,7 @@ import {
 import type { Request } from 'express';
 import { CurrentConsumer } from '@/common/decorators/current-consumer.decorator';
 import { AllowPublicKey } from '@/common/decorators/allow-public-key.decorator';
+import { RateLimit } from '@/common/decorators/rate-limit.decorator';
 import { RequirePermissions } from '@/common/decorators/require-permissions.decorator';
 import { API_ERROR_BODY_CONTENT } from '@/common/errors/api-error.entity';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
@@ -34,6 +35,7 @@ import {
   SwapQuoteEntity,
   SwapSubmitResultEntity,
 } from '@/swaps/entities/swap.entity';
+import { SWAP_SUBMIT_RATE_LIMIT } from '@/swaps/swaps.constants';
 import { SwapsService } from '@/swaps/swaps.service';
 
 // URI versioning => /v1/swaps
@@ -128,11 +130,19 @@ export class SwapsController {
   }
 
   @Post(':id/submit')
-  // Broadcasts an envelope the caller signed. Reaching another
-  // anonymous user's swap needs its UUID *and* a signature from that swap's
-  // source account, which only its owner can produce.
+  // Broadcasts an envelope the caller signed. Nothing about the swap — not even
+  // its status — is answered until `signedXdr` parses, hashes to the swap's
+  // stored txHash and carries a signature, so reaching another anonymous user's
+  // swap takes its UUID *and* its envelope, which only the caller that created
+  // it was handed. Whether that signature is valid is the network's call, not
+  // this route's: a bad one comes back as a FAILED `tx_bad_auth`, and the
+  // resubmit cap and expiry check bound how often that can happen per swap.
   @AllowPublicKey()
   @RequirePermissions('swaps:write')
+  // A rejected broadcast costs a Horizon submission and a SWAP_FAILED webhook
+  // that no error response refunds, and under the shared public key the client
+  // address is the only thing telling anonymous callers apart.
+  @RateLimit(SWAP_SUBMIT_RATE_LIMIT)
   // Submit advances an existing swap's status; the swap resource was created by
   // POST /v1/swaps. Nothing new comes into existence here, so 200, not 201.
   @HttpCode(HttpStatus.OK)
@@ -141,6 +151,25 @@ export class SwapsController {
       'Relay the signed swap transaction to the network (hash-checked); finalizes status',
   })
   @ApiOkResponse({ type: SwapSubmitResultEntity })
+  @ApiResponse({
+    status: 400,
+    content: API_ERROR_BODY_CONTENT,
+    description:
+      '`validation_failed` — `signedXdr` is not a transaction envelope, is not ' +
+      'the envelope built for this swap, or carries no signatures. ' +
+      '`invalid_state_transition` — the swap can no longer be submitted: it is ' +
+      "EXPIRED, its transaction's time bounds have passed, or it was already " +
+      'resubmitted the maximum number of times after a rejection. Build a new ' +
+      'swap.',
+  })
+  @ApiResponse({
+    status: 429,
+    content: API_ERROR_BODY_CONTENT,
+    description:
+      'Rate limited (`rate_limited`), per consumer and client address. Honour ' +
+      '`Retry-After`: the window is shorter than the envelope lifetime, so a ' +
+      'retry after it still lands in time.',
+  })
   submit(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Param('id') id: string,

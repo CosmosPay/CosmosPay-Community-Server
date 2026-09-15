@@ -1,18 +1,27 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { AppConfig } from '@/config/configuration';
+import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import {
   AdvisoryLockKey,
   AdvisoryLockService,
 } from '@/common/services/advisory-lock.service';
 import { JobSchedule, ScheduledJob } from '@/common/services/scheduled-job';
 import { PrismaService } from '@/prisma/prisma.service';
+import type { PaymentIntent } from '@generated/prisma/client';
 import { PaymentIntentsService } from '@/payment-intents/payment-intents.service';
-import { StellarVerifierService } from '@/payment-intents/stellar-verifier.service';
+import {
+  StellarVerifierService,
+  type VerificationResult,
+} from '@/payment-intents/stellar-verifier.service';
 import {
   OBSERVER_MAX_INTENTS_PER_CONSUMER,
   RECONCILE_CONCURRENCY,
+  TX_HASH_RE,
 } from '@/payment-intents/payment-intents.constants';
+
+/** An intent as the observer reads it: with the consumer its webhooks go to. */
+type ObservedIntent = PaymentIntent & { consumer: { apisixUsername: string } };
 
 /**
  * Permanent on-chain observer. On a fixed interval it pulls PENDING intents and
@@ -20,6 +29,8 @@ import {
  * txHash when present, otherwise by scanning payments to the destination. On a
  * confirmed match it finalizes the intent (status + txHash) and the webhook
  * event fires automatically, so integrators are notified without polling us.
+ * An intent past its lifetime is asked the same question once more before it
+ * is expired.
  *
  * Polling (vs Horizon SSE streaming) is intentional: it survives restarts with
  * no cursor/reconnect bookkeeping and naturally picks up newly-created intents.
@@ -62,13 +73,13 @@ export class StellarObserverService extends ScheduledJob {
     };
   }
 
-  /** One cycle: expire what is stale, reconcile the rest. */
+  /** One cycle: finalize what is stale, reconcile the rest. */
   protected async run(): Promise<void> {
     const { batchSize } = this.config.get('observer', { infer: true });
     const now = new Date();
 
-    // 1. Expire unpaid intents past their lifetime.
-    const expired = await this.prisma.paymentIntent.findMany({
+    // 1. Finalize intents past their lifetime: SUCCEEDED if paid, else EXPIRED.
+    const lapsed = await this.prisma.paymentIntent.findMany({
       where: {
         status: { in: ['PENDING', 'SUBMITTED'] },
         expiresAt: { not: null, lt: now },
@@ -76,15 +87,16 @@ export class StellarObserverService extends ScheduledJob {
       include: { consumer: true },
       take: batchSize,
     });
-    for (const intent of expired) {
-      await this.paymentIntents
-        .markExpired(intent.id, intent.consumer.apisixUsername)
-        .catch((err) =>
-          this.logger.error(
-            `Expire failed for intent ${intent.id}: ${err instanceof Error ? err.message : String(err)}`,
-          ),
+    await mapLimited(lapsed, RECONCILE_CONCURRENCY, (intent) =>
+      this.settleOrExpire(intent).catch((err) => {
+        this.logger.error(
+          `Expiry check failed for intent ${intent.id}; left ${intent.status} ` +
+            `for the next pass: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
         );
-    }
+      }),
+    );
 
     // 2. Reconcile still-pending intents against the chain.
     const pending = await this.selectPending(batchSize, now);
@@ -113,9 +125,9 @@ export class StellarObserverService extends ScheduledJob {
    * a tick even when nobody else is waiting.
    *
    * Rows already past `expiresAt` are excluded rather than scanned. The expiry
-   * pass above finalizes them without touching Horizon; they only reached this
-   * query when more had lapsed than one pass expires, and each one then burned
-   * a full reconcile to reach a verdict nobody could act on.
+   * pass above gives each of them its last verification; they only reached this
+   * query when more had lapsed than one pass finalizes, and each one then paid
+   * for a reconcile here on top of the check that decides it there.
    *
    * Prisma has no per-group limit, hence the window function. The rows are then
    * re-read through the client, still PENDING, so `reconcile` keeps its typed
@@ -147,11 +159,7 @@ export class StellarObserverService extends ScheduledJob {
     });
   }
 
-  private async reconcile(
-    intent: Awaited<
-      ReturnType<PrismaService['paymentIntent']['findMany']>
-    >[number] & { consumer: { apisixUsername: string } },
-  ): Promise<void> {
+  private async reconcile(intent: ObservedIntent): Promise<void> {
     // The batch was read before the first Horizon call and draining it takes
     // real time. An intent that lapsed meanwhile is left to the next expiry
     // pass instead of being paid for with a scan.
@@ -159,10 +167,7 @@ export class StellarObserverService extends ScheduledJob {
       return;
     }
 
-    // Prefer the precise path when a hash was reported; otherwise scan.
-    const result = intent.txHash
-      ? await this.verifier.verifyByHash(intent, intent.txHash)
-      : await this.verifier.findMatchingPayment(intent);
+    const result = await this.verify(intent);
 
     if (result.valid && result.txHash) {
       await this.paymentIntents.markSucceeded(
@@ -173,6 +178,84 @@ export class StellarObserverService extends ScheduledJob {
         'observer',
       );
     }
+  }
+
+  /**
+   * Finalizes one intent past its lifetime: SUCCEEDED when its payment is
+   * on-chain, EXPIRED only once the verifier has answered and found none.
+   *
+   * Every such row used to be expired without a look at the chain. A payment
+   * that landed after the intent's last reconcile — late in its lifetime, or
+   * while a backlog kept it out of the ticks — left it EXPIRED although it was
+   * paid, and no PAYMENT_INTENT_SUCCEEDED went out.
+   *
+   * A verification that throws (Horizon down, throttling, timing out) or a
+   * settlement that fails rejects before `markExpired` is reached, so the intent
+   * stays as it is for the next pass. "Could not ask" is not "nobody paid" — the
+   * confusion that once expired settled swaps during a Horizon outage (see
+   * `SettlementObserverService`).
+   *
+   * One settlement failure is final instead: the hash is already recorded on
+   * another of the same consumer's intents (409 `idempotency_conflict`). No
+   * later tick clears that — the (consumerId, txHash) index still holds it — so
+   * the intent stayed PENDING and took a slot in every expiry batch after, and
+   * about `OBSERVER_BATCH_SIZE` of them, each costing a dust payment and a hash
+   * the consumer parked on another of its own intents, stalled expiry for every
+   * tenant. That intent is expired with a warning. If the other intent's hash is
+   * corrected while it is still PENDING or SUBMITTED, `POST /:id/validate`
+   * settles this one out of EXPIRED.
+   */
+  private async settleOrExpire(intent: ObservedIntent): Promise<void> {
+    const result = await this.verify(intent);
+
+    if (result.valid && result.txHash) {
+      try {
+        await this.paymentIntents.markSucceeded(
+          intent.id,
+          intent.consumer.apisixUsername,
+          result.txHash,
+          result.payer,
+          'observer',
+        );
+        return;
+      } catch (err) {
+        // Only the txHash conflict: `markSucceeded` raises no other
+        // `idempotency_conflict`, and every other failure is retried.
+        if (
+          !(err instanceof ApiError) ||
+          err.code !== ApiErrorCode.IdempotencyConflict
+        ) {
+          throw err;
+        }
+        this.logger.warn(
+          `Expiring intent ${intent.id} although ${result.txHash} pays it: ` +
+            'that hash is already recorded on another of consumer ' +
+            `${intent.consumer.apisixUsername}'s intents, so settling it ` +
+            'cannot succeed on any later tick',
+        );
+      }
+    }
+
+    await this.paymentIntents.markExpired(
+      intent.id,
+      intent.consumer.apisixUsername,
+    );
+  }
+
+  /**
+   * What the chain says about one intent: by its reported hash when it has one
+   * (the precise path), otherwise by scanning payments to its destination.
+   *
+   * A stored hash that is not a transaction hash is scanned for instead of
+   * looked up. `PATCH /:id` accepted any string until {@link TX_HASH_RE}, so
+   * older rows can carry one, and a lookup of it cannot find anything — while
+   * where Horizon refuses it outright (a 400, not a 404) the verifier rethrows,
+   * and an intent that throws on every tick would never expire.
+   */
+  private verify(intent: PaymentIntent): Promise<VerificationResult> {
+    return intent.txHash && TX_HASH_RE.test(intent.txHash)
+      ? this.verifier.verifyByHash(intent, intent.txHash.toLowerCase())
+      : this.verifier.findMatchingPayment(intent);
   }
 }
 

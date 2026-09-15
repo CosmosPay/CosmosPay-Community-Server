@@ -8,10 +8,15 @@ import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import type { AppConfig } from '@/config/configuration';
 
 const SECRET = `whsec_${Buffer.from('blindpay-webhook-spec-key').toString('base64')}`;
+const DEV_SECRET = `whsec_${Buffer.from('blindpay-webhook-dev-spec-key').toString('base64')}`;
 const BODY = JSON.stringify({ type: 'receiver.updated', data: { id: 're_1' } });
 
-function makeController(webhookSecret: string) {
-  const config = { get: jest.fn().mockReturnValue({ webhookSecret }) };
+function makeController(secrets: { prod?: string; dev?: string }) {
+  const instances = {
+    prod: { apiKey: '', instanceId: '', webhookSecret: secrets.prod ?? '' },
+    dev: { apiKey: '', instanceId: '', webhookSecret: secrets.dev ?? '' },
+  };
+  const config = { get: jest.fn().mockReturnValue({ instances }) };
   const sync = { handleWebhook: jest.fn().mockResolvedValue(undefined) };
   const controller = new BlindpayWebhooksController(
     config as unknown as ConfigService<AppConfig, true>,
@@ -20,13 +25,17 @@ function makeController(webhookSecret: string) {
   return { controller, sync };
 }
 
-/** Svix headers that verify against {@link SECRET} for `body`. */
-function signed(id: string, body = BODY): Record<string, string> {
+/** Svix headers that verify against `secret` for `body`. */
+function signed(
+  id: string,
+  secret = SECRET,
+  body = BODY,
+): Record<string, string> {
   const timestamp = String(Math.floor(Date.now() / 1000));
   return {
     'svix-id': id,
     'svix-timestamp': timestamp,
-    'svix-signature': `v1,${computeSvixSignature(SECRET, id, timestamp, body)}`,
+    'svix-signature': `v1,${computeSvixSignature(secret, id, timestamp, body)}`,
   };
 }
 
@@ -50,8 +59,8 @@ async function refusal(pending: Promise<unknown>): Promise<ApiError> {
 }
 
 describe('BlindpayWebhooksController', () => {
-  it('answers 503 misconfigured when no webhook secret is set', async () => {
-    const { controller, sync } = makeController('');
+  it('answers 503 misconfigured when no instance has a webhook secret', async () => {
+    const { controller, sync } = makeController({});
 
     const err = await refusal(controller.handle(delivery(signed('msg_1'))));
 
@@ -64,7 +73,7 @@ describe('BlindpayWebhooksController', () => {
   });
 
   it('refuses a delivery whose signature does not verify (400)', async () => {
-    const { controller, sync } = makeController(SECRET);
+    const { controller, sync } = makeController({ prod: SECRET });
     const forged = { ...signed('msg_1'), 'svix-signature': 'v1,Zm9yZ2Vk' };
 
     const err = await refusal(controller.handle(delivery(forged)));
@@ -76,16 +85,45 @@ describe('BlindpayWebhooksController', () => {
   });
 
   it('hands a verified delivery to the sync service under its svix id', async () => {
-    const { controller, sync } = makeController(SECRET);
+    const { controller, sync } = makeController({ prod: SECRET });
 
     await expect(controller.handle(delivery(signed('msg_1')))).resolves.toEqual(
       { received: true },
     );
 
     expect(sync.handleWebhook).toHaveBeenCalledWith(
+      'prod',
       'receiver.updated',
       { id: 're_1' },
       'msg_1',
     );
+  });
+
+  it('attributes a delivery to the instance whose secret verified it', async () => {
+    const { controller, sync } = makeController({
+      prod: SECRET,
+      dev: DEV_SECRET,
+    });
+
+    await controller.handle(delivery(signed('msg_dev', DEV_SECRET)));
+
+    // The payload says nothing about its instance; only the secret does.
+    expect(sync.handleWebhook).toHaveBeenCalledWith(
+      'dev',
+      'receiver.updated',
+      { id: 're_1' },
+      'msg_dev',
+    );
+  });
+
+  it('refuses a development delivery when only production is configured', async () => {
+    const { controller, sync } = makeController({ prod: SECRET });
+
+    const err = await refusal(
+      controller.handle(delivery(signed('msg_dev', DEV_SECRET))),
+    );
+
+    expect(err.getStatus()).toBe(HttpStatus.BAD_REQUEST);
+    expect(sync.handleWebhook).not.toHaveBeenCalled();
   });
 });

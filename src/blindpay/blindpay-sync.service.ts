@@ -20,6 +20,7 @@ import type {
   Prisma,
   WebhookEventType,
 } from '@generated/prisma/client';
+import type { BlindpayEnvironment } from '@/config/configuration';
 
 /** Loosely-typed BlindPay resource object (snake_case, provider-defined). */
 export type BlindpayObject = Record<string, unknown>;
@@ -104,6 +105,7 @@ const EVENT_MAP: Record<string, WebhookEventType> = {
 
 /** Applies one webhook to its local mirror; resolves to the owner's username, or null. */
 type MirrorApplier = (
+  environment: BlindpayEnvironment,
   blindpayId: string,
   obj: BlindpayObject,
 ) => Promise<string | null>;
@@ -128,9 +130,9 @@ export class BlindpaySyncService {
    * {@link handleWebhook}.
    */
   private readonly appliers: Readonly<Record<string, MirrorApplier>> = {
-    payin: (id, obj) => this.applyPayin(id, obj),
-    payout: (id, obj) => this.applyPayout(id, obj),
-    receiver: (id, obj) => this.applyReceiver(id, obj),
+    payin: (env, id, obj) => this.applyPayin(env, id, obj),
+    payout: (env, id, obj) => this.applyPayout(env, id, obj),
+    receiver: (env, id, obj) => this.applyReceiver(env, id, obj),
   };
 
   constructor(
@@ -139,9 +141,15 @@ export class BlindpaySyncService {
   ) {}
 
   // --- create-time mirroring (called by feature services) ------------------
+  //
+  // Each mirror row records the instance it came from. The provider ids of two
+  // instances never collide, but a tenant's dev and prod keys resolve to the
+  // same consumer, so the environment is what keeps a dev key's reads and writes
+  // off rows that describe real identities and real money.
 
   mirrorReceiver(
     consumerId: string,
+    environment: BlindpayEnvironment,
     obj: BlindpayObject,
   ): Promise<BlindpayReceiver> {
     const data = {
@@ -158,13 +166,19 @@ export class BlindpaySyncService {
       where: {
         consumerId_blindpayId: { consumerId, blindpayId: asString(obj.id) },
       },
-      create: { consumerId, blindpayId: asString(obj.id), ...data },
+      create: {
+        consumerId,
+        environment,
+        blindpayId: asString(obj.id),
+        ...data,
+      },
       update: data,
     });
   }
 
   mirrorPayin(
     consumerId: string,
+    environment: BlindpayEnvironment,
     receiverId: string | null,
     obj: BlindpayObject,
   ): Promise<PublicPayin> {
@@ -188,7 +202,12 @@ export class BlindpaySyncService {
       where: {
         consumerId_blindpayId: { consumerId, blindpayId: asString(obj.id) },
       },
-      create: { consumerId, blindpayId: asString(obj.id), ...data },
+      create: {
+        consumerId,
+        environment,
+        blindpayId: asString(obj.id),
+        ...data,
+      },
       update: data,
       select: PAYIN_PUBLIC_SELECT,
     });
@@ -196,6 +215,7 @@ export class BlindpaySyncService {
 
   mirrorPayout(
     consumerId: string,
+    environment: BlindpayEnvironment,
     receiverId: string | null,
     obj: BlindpayObject,
   ): Promise<PublicPayout> {
@@ -218,7 +238,12 @@ export class BlindpaySyncService {
       where: {
         consumerId_blindpayId: { consumerId, blindpayId: asString(obj.id) },
       },
-      create: { consumerId, blindpayId: asString(obj.id), ...data },
+      create: {
+        consumerId,
+        environment,
+        blindpayId: asString(obj.id),
+        ...data,
+      },
       update: data,
       select: PAYOUT_PUBLIC_SELECT,
     });
@@ -235,8 +260,13 @@ export class BlindpaySyncService {
    * `svixId` is the delivery identity, not the event's: Svix re-sends it
    * unchanged on every retry, which is what makes {@link claimDelivery} able to
    * tell a retry from a genuinely new state change.
+   *
+   * `environment` is the instance whose secret verified the delivery. Only that
+   * instance's rows are looked up, so a delivery signed for one instance can
+   * never move a row that belongs to the other.
    */
   async handleWebhook(
+    environment: BlindpayEnvironment,
     type: string,
     data: BlindpayObject,
     svixId: string,
@@ -262,7 +292,7 @@ export class BlindpaySyncService {
     const apply = Object.hasOwn(this.appliers, resource)
       ? this.appliers[resource]
       : undefined;
-    const owner = apply ? await apply(blindpayId, data) : null;
+    const owner = apply ? await apply(environment, blindpayId, data) : null;
 
     if (!owner) {
       this.logger.warn(
@@ -321,11 +351,12 @@ export class BlindpaySyncService {
 
   /** Updates a payin's status; returns the owning consumer username or null. */
   private async applyPayin(
+    environment: BlindpayEnvironment,
     blindpayId: string,
     obj: BlindpayObject,
   ): Promise<string | null> {
     const row = await this.prisma.payin.findFirst({
-      where: { blindpayId },
+      where: { blindpayId, environment },
       include: { consumer: true },
     });
     if (!row) return null;
@@ -338,11 +369,12 @@ export class BlindpaySyncService {
   }
 
   private async applyPayout(
+    environment: BlindpayEnvironment,
     blindpayId: string,
     obj: BlindpayObject,
   ): Promise<string | null> {
     const row = await this.prisma.payout.findFirst({
-      where: { blindpayId },
+      where: { blindpayId, environment },
       include: { consumer: true },
     });
     if (!row) return null;
@@ -355,11 +387,12 @@ export class BlindpaySyncService {
   }
 
   private async applyReceiver(
+    environment: BlindpayEnvironment,
     blindpayId: string,
     obj: BlindpayObject,
   ): Promise<string | null> {
     const row = await this.prisma.blindpayReceiver.findFirst({
-      where: { blindpayId },
+      where: { blindpayId, environment },
       include: { consumer: true },
     });
     if (!row) return null;

@@ -68,7 +68,10 @@ function makeService() {
     get: jest.fn(),
     delete: jest.fn(),
     instancePath: jest.fn((p: string) => `/instances/in_test${p}`),
+    environmentFor: jest.fn(() => 'prod'),
+    instance: jest.fn(),
   };
+  blindpay.instance.mockReturnValue(blindpay);
   const consumers = { resolve: jest.fn().mockResolvedValue({ id: 'c1' }) };
   const receivers = {
     findReceiverOrThrow: jest

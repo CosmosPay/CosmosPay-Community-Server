@@ -136,16 +136,26 @@ function makeService(overrides: Partial<typeof POLLAR_CONFIG> = {}) {
   return { service, table, pollar, provisioning };
 }
 
-/** Runs a handshake up to the point where a code exists. */
+/** The PKCE pair every redirect-mode handshake below is opened with. */
+const VERIFIER = 'dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk';
+const CHALLENGE = createHash('sha256').update(VERIFIER).digest('base64url');
+
+/**
+ * Runs a handshake up to the point where a code exists. Redirect mode requires
+ * PKCE, so a redirect handshake gets {@link CHALLENGE} unless the test brings
+ * its own.
+ */
 async function authorized(
   opts: { redirectUri?: string; codeChallenge?: string } = {},
 ) {
   const ctx = makeService();
   ctx.pollar.sdk.mockResolvedValueOnce({ clientSessionId: 'cs_1' });
+  const codeChallenge =
+    opts.codeChallenge ?? (opts.redirectUri ? CHALLENGE : undefined);
   const auth = await ctx.service.authorize(CONSUMER, {
     provider: 'google',
     ...(opts.redirectUri ? { redirect_uri: opts.redirectUri } : {}),
-    ...(opts.codeChallenge ? { code_challenge: opts.codeChallenge } : {}),
+    ...(codeChallenge ? { code_challenge: codeChallenge } : {}),
   } as any);
   const callback = await ctx.service.handleCallback(auth.state);
   return { ...ctx, auth, callback };
@@ -157,7 +167,9 @@ async function opened(opts: { redirectUri?: string } = {}) {
   ctx.pollar.sdk.mockResolvedValueOnce({ clientSessionId: 'cs_1' });
   const auth = await ctx.service.authorize(CONSUMER, {
     provider: 'google',
-    ...(opts.redirectUri ? { redirect_uri: opts.redirectUri } : {}),
+    ...(opts.redirectUri
+      ? { redirect_uri: opts.redirectUri, code_challenge: CHALLENGE }
+      : {}),
   } as any);
   return { ...ctx, auth };
 }
@@ -193,6 +205,20 @@ describe('authorize', () => {
     ).rejects.toThrow(/not allowed/);
     // Rejected before a Pollar session was spent on it.
     expect(pollar.sdk).not.toHaveBeenCalled();
+  });
+
+  it('refuses redirect mode without a PKCE challenge', async () => {
+    // The callback is public and hands the code to whoever presents `state`,
+    // which is inside authorization_url; without PKCE that code redeems as is.
+    const { service, pollar, table } = makeService();
+    await expect(
+      service.authorize(CONSUMER, {
+        provider: 'google',
+        redirect_uri: 'cosmospay://auth/cb',
+      } as any),
+    ).rejects.toThrow(/code_challenge is required with redirect_uri/);
+    expect(pollar.sdk).not.toHaveBeenCalled();
+    expect(table.rows).toHaveLength(0);
   });
 
   it('stores no token and no secret — only a state and a session id', async () => {
@@ -280,7 +306,10 @@ describe('exchange', () => {
       .mockResolvedValueOnce({ status: 'READY', user: { ready: true } })
       .mockResolvedValueOnce(LOGIN_CONTENT);
 
-    const session = await ctx.service.exchange(CONSUMER, { code });
+    const session = await ctx.service.exchange(CONSUMER, {
+      code,
+      code_verifier: VERIFIER,
+    });
 
     expect(session.access_token).toBe('at_1');
     expect(session.refresh_token).toBe('rt_1');
@@ -306,6 +335,7 @@ describe('exchange', () => {
 
     const session = await ctx.service.exchange(CONSUMER, {
       code: codeFromRedirect(ctx.callback.redirectTo!),
+      code_verifier: VERIFIER,
     });
 
     expect(session.network_wallets).toEqual([
@@ -340,6 +370,7 @@ describe('exchange', () => {
 
     const session = await ctx.service.exchange(CONSUMER, {
       code: codeFromRedirect(ctx.callback.redirectTo!),
+      code_verifier: VERIFIER,
     });
 
     expect(session.access_token).toBe('at_1');
@@ -361,6 +392,7 @@ describe('exchange', () => {
     const auth = await ctx.service.authorize(CONSUMER, {
       provider: 'google',
       redirect_uri: 'cosmospay://auth/cb',
+      code_challenge: CHALLENGE,
       dpop_jwk: {
         kty: 'EC',
         crv: 'P-256',
@@ -375,6 +407,7 @@ describe('exchange', () => {
 
     const session = await ctx.service.exchange(CONSUMER, {
       code: codeFromRedirect(callback.redirectTo!),
+      code_verifier: VERIFIER,
     });
 
     expect(session.token_type).toBe('DPoP');
@@ -398,9 +431,9 @@ describe('exchange', () => {
       .mockResolvedValueOnce({ status: 'READY' })
       .mockResolvedValueOnce(LOGIN_CONTENT);
 
-    await ctx.service.exchange(CONSUMER, { code });
+    await ctx.service.exchange(CONSUMER, { code, code_verifier: VERIFIER });
     await expect(
-      ctx.service.exchange(CONSUMER, { code } as any),
+      ctx.service.exchange(CONSUMER, { code, code_verifier: VERIFIER } as any),
     ).rejects.toThrow(/Unknown or already redeemed/);
   });
 
@@ -448,11 +481,12 @@ describe('exchange', () => {
   });
 
   it('rejects a verifier for a handshake that never had a challenge', async () => {
-    const ctx = await authorized({ redirectUri: 'cosmospay://auth/cb' });
-    const code = codeFromRedirect(ctx.callback.redirectTo!);
+    // Only the poll flow can be opened without a challenge now.
+    const ctx = await authorized();
+    const polled = await ctx.service.status(CONSUMER, ctx.auth.state);
     await expect(
       ctx.service.exchange(CONSUMER, {
-        code,
+        code: polled.code,
         code_verifier: 'x'.repeat(43),
       } as any),
     ).rejects.toThrow(/not accepted/);
@@ -464,7 +498,7 @@ describe('exchange', () => {
     ctx.pollar.sdk.mockResolvedValue({ status: 'PENDING' });
 
     await expect(
-      ctx.service.exchange(CONSUMER, { code } as any),
+      ctx.service.exchange(CONSUMER, { code, code_verifier: VERIFIER } as any),
     ).rejects.toThrow(/has not finished this login yet/);
     // Back to AUTHORIZED with its hash intact: a slow Pollar must not cost the
     // user another trip through the consent screen.
@@ -480,7 +514,7 @@ describe('exchange', () => {
     );
 
     await expect(
-      ctx.service.exchange(CONSUMER, { code } as any),
+      ctx.service.exchange(CONSUMER, { code, code_verifier: VERIFIER } as any),
     ).rejects.toThrow(/Pollar rejected/);
     expect(ctx.table.rows[0].status).toBe('FAILED');
     expect(ctx.table.rows[0].codeHash).toBeNull();
@@ -514,6 +548,29 @@ describe('status (poll flow)', () => {
     await expect(
       ctx.service.exchange(CONSUMER, { code: first.code } as any),
     ).rejects.toThrow(/Unknown or already redeemed/);
+  });
+
+  it('does not spend a code a poll retired between the lookup and the claim', async () => {
+    const ctx = await authorized();
+    const first = await ctx.service.status(CONSUMER, ctx.auth.state);
+
+    // The redemption reads the row by the old code's hash; a concurrent poll
+    // then reissues before the claim is written.
+    const lookup = ctx.table.findUnique.getMockImplementation()!;
+    ctx.table.findUnique.mockImplementationOnce(async (args: any) => {
+      const row = await lookup(args);
+      const asRead = { ...row };
+      row.codeHash = hashCode('the-code-the-next-poll-issued');
+      return asRead;
+    });
+    const callsBefore = ctx.pollar.sdk.mock.calls.length;
+
+    await expect(
+      ctx.service.exchange(CONSUMER, { code: first.code } as any),
+    ).rejects.toThrow();
+    // Never reached Pollar, and the handshake is still waiting for its current code.
+    expect(ctx.pollar.sdk.mock.calls.length).toBe(callsBefore);
+    expect(ctx.table.rows[0].status).toBe('AUTHORIZED');
   });
 
   it('never hands a code to a redirect-mode handshake', async () => {

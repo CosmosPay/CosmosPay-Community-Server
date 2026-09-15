@@ -3,7 +3,10 @@ import { HttpStatus } from '@nestjs/common';
 import { EventEmitter2 } from 'eventemitter2';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { WebhookTerminalEmitter } from '@/webhooks/webhook-terminal-emitter.service';
-import { PaymentIntentsService } from '@/payment-intents/payment-intents.service';
+import {
+  PAYMENT_INTENT_PUBLIC_SELECT,
+  PaymentIntentsService,
+} from '@/payment-intents/payment-intents.service';
 import { InvalidPaymentIntentTransitionError } from '@/payment-intents/payment-intent-state-machine';
 import { Sep7LinkBuilder } from '@/payment-intents/sep7-link-builder.service';
 
@@ -150,7 +153,7 @@ describe('PaymentIntentsService.transition (guards + audit)', () => {
   });
 
   it('rejects an undeclared transition with an explicit, machine-readable error', async () => {
-    row.status = 'EXPIRED';
+    row.status = 'CANCELLED';
 
     const err = await service
       .transition(row.id, 'SUCCEEDED', {
@@ -167,7 +170,7 @@ describe('PaymentIntentsService.transition (guards + audit)', () => {
     expect(err!.code).toBe(ApiErrorCode.InvalidStateTransition);
     expect(err!.message).toMatch(/Invalid payment intent transition/);
     // Both ends of the rejected transition stay in the message.
-    expect(err!.message).toMatch(/EXPIRED/);
+    expect(err!.message).toMatch(/CANCELLED/);
     expect(err!.message).toMatch(/SUCCEEDED/);
     expect(prisma.paymentIntent.updateMany).not.toHaveBeenCalled();
     expect(auditCreates).toHaveLength(0);
@@ -222,6 +225,166 @@ describe('PaymentIntentsService.transition (guards + audit)', () => {
       'status EXPIRED is terminal and cannot be abandoned',
     );
     expect(err.code).toBe('INVALID_PAYMENT_INTENT_TRANSITION');
+  });
+
+  /**
+   * An EXPIRED intent can settle now, but only on the verifier's word: the edge
+   * out of EXPIRED must not become a way to reopen a closed intent from a PATCH.
+   */
+  describe('settling an EXPIRED intent', () => {
+    beforeEach(() => {
+      row.status = 'EXPIRED';
+    });
+
+    it('refuses a transition that carries only a txHash', async () => {
+      const err = await service
+        .transition(row.id, 'SUCCEEDED', {
+          consumerUsername: 'cosmos_u1',
+          actor: 'api',
+          txHash: 'a'.repeat(64),
+        })
+        .then(() => null)
+        .catch((e: unknown) => e as ApiError);
+
+      expect(err).toBeInstanceOf(ApiError);
+      expect(err!.getStatus()).toBe(HttpStatus.BAD_REQUEST);
+      expect(err!.code).toBe(ApiErrorCode.InvalidStateTransition);
+      expect(err!.message).toMatch(/verified on-chain/);
+      expect(prisma.paymentIntent.updateMany).not.toHaveBeenCalled();
+      expect(auditCreates).toHaveLength(0);
+    });
+
+    it('settles through markSucceeded, guarded on EXPIRED and audited', async () => {
+      const updated = await service.markSucceeded(
+        row.id,
+        'cosmos_u1',
+        'a'.repeat(64),
+        'GPAYER',
+        'observer',
+      );
+
+      expect(updated.status).toBe('SUCCEEDED');
+      expect(prisma.paymentIntent.updateMany).toHaveBeenCalledWith({
+        where: { id: 'pi_1', status: 'EXPIRED' },
+        data: expect.objectContaining({
+          status: 'SUCCEEDED',
+          txHash: 'a'.repeat(64),
+        }),
+      });
+      expect(auditCreates).toEqual([
+        expect.objectContaining({
+          fromStatus: 'EXPIRED',
+          toStatus: 'SUCCEEDED',
+          actor: 'observer',
+        }),
+      ]);
+      // The terminal event an EXPIRED intent never used to get.
+      expect(events.emit).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ type: 'PAYMENT_INTENT_SUCCEEDED' }),
+      );
+    });
+  });
+
+  /**
+   * `txHash` is unique per consumer, and a violation used to escape as a raw
+   * Prisma error: a 500 from validate, a reconcile failing on every tick.
+   */
+  describe('a txHash already recorded on another intent', () => {
+    const consumer = {
+      username: 'cosmos_u1',
+      credentialId: 'cred_1',
+      environment: 'dev',
+      role: 'user',
+      permissions: ['payments:write'],
+      organizationId: null,
+      plan: null,
+      planSwapFeeBps: null,
+    } as never;
+
+    /**
+     * What `@prisma/adapter-pg` actually throws, captured against PostgreSQL:
+     * the violated index under `driverAdapterError`, and no `meta.target`.
+     */
+    const adapterViolation = () =>
+      Object.assign(new Error('Unique constraint failed'), {
+        code: 'P2002',
+        meta: {
+          modelName: 'PaymentIntent',
+          driverAdapterError: {
+            name: 'DriverAdapterError',
+            cause: {
+              originalCode: '23505',
+              kind: 'UniqueConstraintViolation',
+              constraint: { index: 'payment_intent_consumerId_txHash_key' },
+              table: 'payment_intent',
+            },
+          },
+        },
+      });
+
+    const errorOf = (pending: Promise<unknown>) =>
+      pending.then(() => null).catch((e: unknown) => e as ApiError);
+
+    it('is a 409 idempotency_conflict when a settlement writes it', async () => {
+      prisma.paymentIntent.updateMany.mockRejectedValueOnce(adapterViolation());
+
+      const err = await errorOf(
+        service.markSucceeded(row.id, 'cosmos_u1', 'a'.repeat(64)),
+      );
+
+      expect(err).toBeInstanceOf(ApiError);
+      expect(err!.getStatus()).toBe(HttpStatus.CONFLICT);
+      expect(err!.code).toBe(ApiErrorCode.IdempotencyConflict);
+      expect(auditCreates).toHaveLength(0);
+      expect(events.emit).not.toHaveBeenCalled();
+    });
+
+    it('is a 409 idempotency_conflict when a PATCH reports it', async () => {
+      prisma.paymentIntent.updateMany.mockRejectedValueOnce(adapterViolation());
+
+      const err = await errorOf(
+        service.update(consumer, row.id, { txHash: 'c'.repeat(64) }),
+      );
+
+      expect(err).toBeInstanceOf(ApiError);
+      expect(err!.getStatus()).toBe(HttpStatus.CONFLICT);
+      expect(err!.code).toBe(ApiErrorCode.IdempotencyConflict);
+      // Names no intent: the other one is not this caller's to be told about.
+      expect(err!.message).not.toMatch(/pi_/);
+    });
+
+    it('is a 409 too when Prisma does name the txHash column', async () => {
+      prisma.paymentIntent.updateMany.mockRejectedValueOnce(
+        Object.assign(new Error('Unique constraint failed'), {
+          code: 'P2002',
+          meta: { target: ['consumerId', 'txHash'] },
+        }),
+      );
+
+      const err = await errorOf(
+        service.transition(row.id, 'SUBMITTED', {
+          consumerUsername: 'cosmos_u1',
+          actor: 'api',
+          txHash: 'c'.repeat(64),
+        }),
+      );
+
+      expect(err!.getStatus()).toBe(HttpStatus.CONFLICT);
+      expect(err!.code).toBe(ApiErrorCode.IdempotencyConflict);
+    });
+
+    it('leaves a violation Prisma attributes to another column alone', async () => {
+      const other = Object.assign(new Error('Unique constraint failed'), {
+        code: 'P2002',
+        meta: { target: ['consumerId', 'memo'] },
+      });
+      prisma.paymentIntent.updateMany.mockRejectedValueOnce(other);
+
+      await expect(
+        service.markSucceeded(row.id, 'cosmos_u1', 'a'.repeat(64)),
+      ).rejects.toBe(other);
+    });
   });
 
   /**
@@ -385,12 +548,12 @@ describe('PaymentIntentsService API settlement is chain-verified', () => {
     planSwapFeeBps: null,
   } as never;
 
-  function build(verify: jest.Mock) {
+  function build(verify: jest.Mock, status = 'PENDING') {
     const row = {
       id: 'pi_1',
       consumerId: 'c1',
       kind: 'PAY',
-      status: 'PENDING',
+      status,
       source: null,
       destination: 'GDEST',
       amount: '25.5',
@@ -441,6 +604,18 @@ describe('PaymentIntentsService API settlement is chain-verified', () => {
     );
     return { service, prisma, verify };
   }
+
+  it('answers an intent without its internal columns', async () => {
+    const { service } = build(jest.fn());
+
+    const view = await service.findOne(consumer, 'pi_1');
+
+    // The stored row carries consumerId; the spread used to send it out.
+    expect(Object.keys(view).sort()).toEqual(
+      [...Object.keys(PAYMENT_INTENT_PUBLIC_SELECT), 'qr'].sort(),
+    );
+    expect(view).not.toHaveProperty('consumerId');
+  });
 
   it('refuses to settle on a hash the chain does not corroborate', async () => {
     const verify = jest.fn().mockResolvedValue({
@@ -556,6 +731,118 @@ describe('PaymentIntentsService API settlement is chain-verified', () => {
 
       expect(outcome.status).toBe('PENDING');
       expect(statusWrites(prisma)).toEqual([]);
+    });
+  });
+
+  /**
+   * An intent the observer expired before it saw the payment used to stay
+   * EXPIRED for good. It can settle now — through the same verifier as every
+   * other API settlement, and never on the request alone.
+   */
+  describe('an EXPIRED intent', () => {
+    const writes = (prisma: never) =>
+      (
+        prisma as { paymentIntent: { updateMany: jest.Mock } }
+      ).paymentIntent.updateMany.mock.calls.map((c: any[]) => c[0]);
+
+    it('settles through validate when the chain confirms the payment', async () => {
+      const verify = jest.fn().mockResolvedValue({
+        valid: true,
+        txHash: 'a'.repeat(64),
+        payer: 'GPAYER',
+      });
+      const { service, prisma } = build(verify, 'EXPIRED');
+
+      const outcome = await service.validate(consumer, 'pi_1', 'a'.repeat(64));
+
+      expect(outcome.valid).toBe(true);
+      expect(outcome.status).toBe('SUCCEEDED');
+      expect(writes(prisma)).toEqual([
+        {
+          where: { id: 'pi_1', status: 'EXPIRED' },
+          data: expect.objectContaining({
+            status: 'SUCCEEDED',
+            txHash: 'a'.repeat(64),
+          }),
+        },
+      ]);
+    });
+
+    it('stays EXPIRED on a hash the chain does not tie to it', async () => {
+      const verify = jest.fn().mockResolvedValue({
+        valid: false,
+        reason: 'Memo mismatch (expected id memo "123")',
+      });
+      const { service, prisma } = build(verify, 'EXPIRED');
+
+      const outcome = await service.validate(consumer, 'pi_1', 'f'.repeat(64));
+
+      expect(outcome).toEqual({
+        valid: false,
+        status: 'EXPIRED',
+        reason: 'Memo mismatch (expected id memo "123")',
+      });
+      expect(writes(prisma)).toEqual([]);
+    });
+
+    it('answers a failed transaction as a mismatch, not a 400 for a FAILED nobody asked for', async () => {
+      const verify = jest.fn().mockResolvedValue({
+        valid: false,
+        failedOnChain: true,
+        reason: 'Transaction failed on-chain',
+      });
+      const { service, prisma } = build(verify, 'EXPIRED');
+
+      const outcome = await service.validate(consumer, 'pi_1', 'f'.repeat(64));
+
+      expect(outcome).toEqual({
+        valid: false,
+        status: 'EXPIRED',
+        reason: 'Transaction failed on-chain',
+      });
+      expect(writes(prisma)).toEqual([]);
+    });
+
+    it('is not settled by PATCH until the verifier agrees', async () => {
+      const verify = jest.fn().mockResolvedValue({
+        valid: false,
+        reason: 'Transaction not found on-chain',
+      });
+      const { service, prisma } = build(verify, 'EXPIRED');
+
+      const err = await service
+        .update(consumer, 'pi_1', {
+          status: 'SUCCEEDED',
+          txHash: 'a'.repeat(64),
+        } as never)
+        .catch((e: unknown) => e as ApiError);
+
+      expect(verify).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'pi_1' }),
+        'a'.repeat(64),
+      );
+      expect(err).toBeInstanceOf(ApiError);
+      expect((err as ApiError).getStatus()).toBe(HttpStatus.BAD_REQUEST);
+      expect((err as ApiError).code).toBe(ApiErrorCode.TransactionRejected);
+      expect(writes(prisma)).toEqual([]);
+    });
+
+    it('is settled by PATCH once the verifier agrees', async () => {
+      const verify = jest.fn().mockResolvedValue({
+        valid: true,
+        txHash: 'a'.repeat(64),
+        payer: 'GPAYER',
+      });
+      const { service, prisma } = build(verify, 'EXPIRED');
+
+      await service.update(consumer, 'pi_1', {
+        status: 'SUCCEEDED',
+        txHash: 'a'.repeat(64),
+      } as never);
+
+      expect(writes(prisma)).toEqual([
+        expect.objectContaining({ where: { id: 'pi_1', status: 'EXPIRED' } }),
+      ]);
     });
   });
 });

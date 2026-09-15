@@ -28,6 +28,7 @@ function baseRow(overrides: Record<string, unknown> = {}) {
   return {
     id: 'rcv_1',
     consumerId: 'c1',
+    environment: 'prod',
     blindpayId: LOCAL_ID,
     type: 'individual',
     kycType: 'standard',
@@ -91,6 +92,7 @@ function makeService() {
       return Promise.all(fn);
     }),
   };
+  // Client and instance in one: every caller here is a production key.
   const blindpay = {
     put: jest.fn(),
     post: jest.fn(),
@@ -98,7 +100,10 @@ function makeService() {
     delete: jest.fn(),
     instanceId: 'in_test',
     instancePath: jest.fn((p: string) => `/instances/in_test${p}`),
+    environmentFor: jest.fn(() => 'prod'),
+    instance: jest.fn(),
   };
+  blindpay.instance.mockReturnValue(blindpay);
   const consumers = {
     resolve: jest.fn().mockResolvedValue({ id: 'c1' }),
   };
@@ -328,7 +333,8 @@ describe('ReceiversService.update — remote branch', () => {
       publicRow({ blindpayId: REAL_ID, email: 'updated@acme.com' }),
     );
 
-    const result = await service.update(CONSUMER, row.id, {
+    // Elevated: an upstream receiver's identity fields are the reviewer's to change.
+    const result = await service.update(ADMIN_CONSUMER, row.id, {
       email: 'updated@acme.com',
       tos_id: 'tos_forged',
     });
@@ -337,13 +343,53 @@ describe('ReceiversService.update — remote branch', () => {
       '/instances/in_test/customers/re_000000000000',
       { email: 'updated@acme.com' },
     );
-    expect(sync.mirrorReceiver).toHaveBeenCalledWith('c1', {
+    expect(sync.mirrorReceiver).toHaveBeenCalledWith('c1', 'prod', {
       id: REAL_ID,
       email: 'updated@acme.com',
     });
     expect(result.email).toBe('updated@acme.com');
     // The mirror hands back the whole row; the response is re-read narrowed.
     expect(result).not.toHaveProperty('raw');
+  });
+
+  it('refuses a tenant key rewriting identity at BlindPay, before any PUT', async () => {
+    // Approved, enabled, then swapped for someone else's identity: the provider
+    // would receive data our review never saw.
+    const { service, prisma, blindpay } = makeService();
+    const row = baseRow({ blindpayId: REAL_ID, kycStatus: 'approved' });
+    prisma.blindpayReceiver.findFirst.mockResolvedValue(row);
+
+    const err = await rejection(
+      service.update(CONSUMER, row.id, {
+        tax_id: '999-99-9999',
+        first_name: 'Someone',
+        external_id: 'crm_42',
+      }),
+    );
+
+    expect(err.getStatus()).toBe(HttpStatus.FORBIDDEN);
+    expect(err.code).toBe(ApiErrorCode.KycReviewRequired);
+    expect(err.message).toContain('tax_id, first_name');
+    expect(err.message).not.toContain('external_id');
+    expect(blindpay.put).not.toHaveBeenCalled();
+  });
+
+  it('lets a tenant key change the fields that describe no one', async () => {
+    const { service, prisma, blindpay, sync } = makeService();
+    const row = baseRow({ blindpayId: REAL_ID, kycStatus: 'approved' });
+    prisma.blindpayReceiver.findFirst.mockResolvedValue(row);
+    blindpay.put.mockResolvedValue({ external_id: 'crm_42' });
+    sync.mirrorReceiver.mockResolvedValue(row);
+    prisma.blindpayReceiver.findUniqueOrThrow.mockResolvedValue(
+      publicRow({ blindpayId: REAL_ID, externalId: 'crm_42' }),
+    );
+
+    await service.update(CONSUMER, row.id, { external_id: 'crm_42' });
+
+    expect(blindpay.put).toHaveBeenCalledWith(
+      '/instances/in_test/customers/re_000000000000',
+      { external_id: 'crm_42' },
+    );
   });
 });
 
@@ -394,7 +440,7 @@ describe('ReceiversService — the KYC dossier never leaves the database', () =>
     expect(result.data).toHaveLength(2);
     expect(result.total).toBe(57);
     expect(prisma.blindpayReceiver.count).toHaveBeenCalledWith({
-      where: { consumerId: 'c1' },
+      where: { consumerId: 'c1', environment: 'prod' },
     });
   });
 
@@ -404,8 +450,10 @@ describe('ReceiversService — the KYC dossier never leaves the database', () =>
 
     const result = await service.findOne(CONSUMER, 'rcv_1');
 
+    // Scoped by the caller's BlindPay instance too: a dev key's lookup of a
+    // production receiver misses like a stranger's.
     expect(prisma.blindpayReceiver.findFirst).toHaveBeenCalledWith({
-      where: { id: 'rcv_1', consumerId: 'c1' },
+      where: { id: 'rcv_1', consumerId: 'c1', environment: 'prod' },
       select: RECEIVER_PUBLIC_SELECT,
     });
     expect(result).not.toHaveProperty('raw');
@@ -595,7 +643,8 @@ describe('ReceiversService.enable — transitions', () => {
       '/instances/in_test/customers',
       expect.objectContaining({ tos_id: 'tos_abc' }),
     );
-    expect(sync.mirrorReceiver).toHaveBeenCalledWith('c1', created);
+    // Created and mirrored on the instance the receiver row belongs to.
+    expect(sync.mirrorReceiver).toHaveBeenCalledWith('c1', 'prod', created);
     expect(result.kycStatus).toBe('verifying');
     expect(result.blindpayId).toBe(REAL_ID);
     expect(result).not.toHaveProperty('raw');

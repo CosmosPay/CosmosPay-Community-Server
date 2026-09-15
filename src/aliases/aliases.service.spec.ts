@@ -355,7 +355,7 @@ describe('AliasesService — recovery', () => {
     expect(stored.tokenHash).toMatch(/^[0-9a-f]{64}$/);
   });
 
-  it('refuses a token that is unknown, expired, spent or over its attempt ladder', async () => {
+  it('refuses a token that is unknown, spent, expired, exhausted or another alias’s, and writes nothing', async () => {
     const cases = [
       null,
       {
@@ -407,11 +407,196 @@ describe('AliasesService — recovery', () => {
           }),
         ),
       ).toBe(ApiErrorCode.AliasRecoveryInvalid);
-      // A wrong token counts against the ladder, so the endpoint is not an oracle.
-      expect(prisma.aliasRecovery.updateMany).toHaveBeenCalledWith(
-        expect.objectContaining({ data: { attempts: { increment: 1 } } }),
-      );
+      // Nothing is written for a token that names no live recovery of this
+      // alias. Counting it against the alias's live recovery let anyone burn it,
+      // because the handle is public.
+      expect(prisma.aliasRecovery.updateMany).not.toHaveBeenCalled();
+      // Nor does it reach the proof step.
+      expect(prisma.aliasChallenge.updateMany).not.toHaveBeenCalled();
     }
+  });
+
+  describe('the attempt ladder', () => {
+    const liveAlias = {
+      id: 'al_1',
+      name: 'emanuel250',
+      email: 'real@example.com',
+      status: AliasStatus.ACTIVE,
+    };
+
+    /** A RECOVER completion body for `token`, signed over `nonce-1`. */
+    function recoverWith(token: string, signer: Keypair = kp) {
+      const body = { ...good(), purpose: AliasChallengePurpose.RECOVER };
+      return {
+        token,
+        address: kp.publicKey(),
+        network: 'public',
+        nonce: 'nonce-1',
+        signature: Buffer.from(
+          signer.sign(aliasDigest(aliasChallengeMessage(body))),
+        ).toString('base64'),
+      };
+    }
+
+    /**
+     * `aliasRecovery` as an in-memory table that honours the `where` shapes the
+     * service writes, so an attempt counted by one call is what the next call
+     * reads. The default mock answers `{ count: 1 }` to everything and remembers
+     * nothing, which is exactly how the old bug went unseen.
+     */
+    function recoveryTable() {
+      const rows: Record<string, any>[] = [];
+      const matches = (row: Record<string, any>, where: Record<string, any>) =>
+        Object.entries(where).every(([key, cond]) => {
+          if (cond && typeof cond === 'object' && !(cond instanceof Date)) {
+            if ('lt' in cond) return row[key] < cond.lt;
+            if ('gt' in cond) return row[key] > cond.gt;
+          }
+          return row[key] === cond;
+        });
+      return {
+        rows,
+        findUnique: jest.fn(({ where }: any) =>
+          Promise.resolve(
+            rows.find((r) => r.tokenHash === where.tokenHash) ?? null,
+          ),
+        ),
+        create: jest.fn(({ data }: any) => {
+          const row = {
+            id: `rec_${rows.length + 1}`,
+            consumedAt: null,
+            attempts: 0,
+            ...data,
+          };
+          rows.push(row);
+          return Promise.resolve(row);
+        }),
+        updateMany: jest.fn(({ where, data }: any) => {
+          const hits = rows.filter((r) => matches(r, where));
+          for (const row of hits) {
+            if (data.attempts?.increment) {
+              row.attempts += data.attempts.increment;
+            }
+            if (data.consumedAt) row.consumedAt = data.consumedAt;
+          }
+          return Promise.resolve({ count: hits.length });
+        }),
+      };
+    }
+
+    /** A live recovery for `emanuel250`, started the way the console starts it. */
+    async function started() {
+      const table = recoveryTable();
+      const { service, prisma } = build({ aliasRecovery: table });
+      prisma.alias.findUnique.mockResolvedValue(liveAlias);
+      prisma.aliasChallenge.findUnique.mockResolvedValue(
+        challengeRow({
+          purpose: AliasChallengePurpose.RECOVER,
+          aliasId: 'al_1',
+        }),
+      );
+      prisma.alias.update.mockResolvedValue({
+        ...liveAlias,
+        displayName: 'emanuel250',
+        emailVerifiedAt: null,
+        createdAt: new Date(),
+        addresses: [],
+      });
+      const { token } = await service.startRecovery('emanuel250', {
+        email: 'real@example.com',
+      });
+      return { service, prisma, table, token: token! };
+    }
+
+    it('junk tokens from any caller leave the owner’s live recovery usable', async () => {
+      // Handles are public. When every bad token counted against the alias's
+      // live recovery, ALIAS_RECOVERY_MAX_ATTEMPTS junk requests from any key
+      // burned the recovery the console had just started for the owner.
+      const { service, prisma, table, token } = await started();
+
+      for (let i = 0; i <= ALIAS_RECOVERY_MAX_ATTEMPTS; i++) {
+        expect(
+          await codeOf(
+            service.completeRecovery(
+              consumer,
+              'emanuel250',
+              recoverWith(`junk-${i}`),
+            ),
+          ),
+        ).toBe(ApiErrorCode.AliasRecoveryInvalid);
+      }
+      expect(table.rows[0].attempts).toBe(0);
+
+      // The owner's genuine token still works.
+      expect(
+        await codeOf(
+          service.completeRecovery(consumer, 'emanuel250', recoverWith(token)),
+        ),
+      ).toBeUndefined();
+      expect(table.rows[0].consumedAt).not.toBeNull();
+      expect(prisma.alias.update.mock.calls[0][0].data).toEqual({
+        consumerId: 'c1',
+      });
+    });
+
+    it('counts a live token whose proof fails, then refuses it once the ladder is spent', async () => {
+      // This is what the ladder is for. A failing challenge or signature used to
+      // throw before anything was counted, so a live token could be tried
+      // against the proof step without limit.
+      const { service, prisma, table, token } = await started();
+      const impostor = Keypair.random();
+
+      for (let i = 0; i < ALIAS_RECOVERY_MAX_ATTEMPTS; i++) {
+        expect(
+          await codeOf(
+            service.completeRecovery(
+              consumer,
+              'emanuel250',
+              recoverWith(token, impostor),
+            ),
+          ),
+        ).toBe(ApiErrorCode.AliasSignatureInvalid);
+      }
+      expect(table.rows[0].attempts).toBe(ALIAS_RECOVERY_MAX_ATTEMPTS);
+
+      // Now even a correct proof is refused, with the answer a junk token gets.
+      expect(
+        await codeOf(
+          service.completeRecovery(consumer, 'emanuel250', recoverWith(token)),
+        ),
+      ).toBe(ApiErrorCode.AliasRecoveryInvalid);
+      expect(prisma.aliasAddress.deleteMany).not.toHaveBeenCalled();
+      expect(prisma.alias.update).not.toHaveBeenCalled();
+    });
+
+    it('holds the ladder exactly when attempts arrive concurrently', async () => {
+      // Every request reads `attempts = 0` before any of them writes. A
+      // read-check-then-increment would let all of them through to the proof
+      // step. Checking and counting in one statement admits exactly the ladder.
+      const { service, table, token } = await started();
+      const impostor = Keypair.random();
+      const extra = 3;
+
+      const codes = await Promise.all(
+        Array.from({ length: ALIAS_RECOVERY_MAX_ATTEMPTS + extra }, () =>
+          codeOf(
+            service.completeRecovery(
+              consumer,
+              'emanuel250',
+              recoverWith(token, impostor),
+            ),
+          ),
+        ),
+      );
+
+      expect(table.rows[0].attempts).toBe(ALIAS_RECOVERY_MAX_ATTEMPTS);
+      expect(
+        codes.filter((c) => c === ApiErrorCode.AliasSignatureInvalid),
+      ).toHaveLength(ALIAS_RECOVERY_MAX_ATTEMPTS);
+      expect(
+        codes.filter((c) => c === ApiErrorCode.AliasRecoveryInvalid),
+      ).toHaveLength(extra);
+    });
   });
 
   it('refuses to recover a suspended alias, even with a live token', async () => {

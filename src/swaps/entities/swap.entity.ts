@@ -213,6 +213,14 @@ export class SwapEntity {
   @ApiProperty({ example: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA…' })
   qr!: string;
 
+  @ApiProperty({
+    nullable: true,
+    description:
+      "When the envelope's time bounds close; submit refuses it afterwards.",
+    example: '2026-06-29T12:39:56.000Z',
+  })
+  expiresAt!: Date | null;
+
   @ApiProperty({ example: '2026-06-29T12:34:56.000Z' })
   createdAt!: Date;
 

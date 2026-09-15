@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { TransactionBuilder } from '@stellar/stellar-sdk';
+import { FeeBumpTransaction, TransactionBuilder } from '@stellar/stellar-sdk';
 import type { SwapStatus, WebhookEventType } from '@generated/prisma/client';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { StellarNetwork } from '@/config/configuration';
@@ -9,13 +9,15 @@ import type {
   SettlementRepository,
   SettlementRow,
 } from '@/stellar/settlement.repository';
+import { SETTLEMENT_MAX_RESUBMITS } from '@/stellar/stellar.constants';
 import { StellarService } from '@/stellar/stellar.service';
 
 /**
  * Statuses a signed envelope may be relayed from. SUBMITTED is included so a
  * caller whose first attempt hit an unreachable Horizon can retry, and FAILED so
- * a rejected envelope can be re-sent (the settlement epoch is bumped for it).
- * SUCCEEDED is answered without touching the network; EXPIRED can never settle.
+ * a rejected envelope can be re-sent (the settlement epoch is bumped for it, up
+ * to {@link SETTLEMENT_MAX_RESUBMITS} times). SUCCEEDED is answered without
+ * touching the network; EXPIRED can never settle.
  */
 const RELAYABLE_STATUSES: readonly SwapStatus[] = [
   'PENDING',
@@ -27,6 +29,8 @@ const RELAYABLE_STATUSES: readonly SwapStatus[] = [
 export interface RelayRow extends SettlementRow {
   network: string;
   txHash: string;
+  /** When the stored envelope stops being valid; null on rows without one. */
+  expiresAt: Date | null;
 }
 
 /** The words that differ per resource in the relay's errors and logs. */
@@ -79,6 +83,8 @@ export type RelayOutcome<TView> =
       view: TView;
     };
 
+type Envelope = ReturnType<typeof TransactionBuilder.fromXDR>;
+
 /**
  * Relays a customer-signed envelope for a row this service built.
  *
@@ -88,18 +94,33 @@ export type RelayOutcome<TView> =
  * overwrite a settlement the observer already recorded, and whether an outage
  * strands the row. The steps, and why each one is where it is:
  *
- *   1. **The hash re-check** uses the passphrase of the row's *stored* network,
- *      never the caller's key: signing does not change a transaction's hash, so
- *      the signed envelope must hash to the `txHash` we stored — anything else
- *      is an arbitrary transaction and is refused.
- *   2. **SUBMITTED is written before broadcasting**, through the settlement
+ *   1. **The envelope is checked before anything about the row is answered** —
+ *      not the SUCCEEDED short-circuit, not even the status in an error. Until
+ *      then the caller has shown nothing but a row id, and under the shared
+ *      public key every anonymous wallet is the same consumer, so ownership
+ *      filtering does not keep one out of another's rows. The envelope must
+ *      parse, must hash to the `txHash` we stored under the passphrase of the
+ *      row's *stored* network (never the caller's key: signing does not change a
+ *      transaction's hash, so anything else is an arbitrary transaction), and
+ *      must carry a signature — the unsigned envelope the create response hands
+ *      out hashes the same, and relaying it can only be rejected.
+ *   2. **A row that can no longer succeed is not broadcast.** A FAILED row that
+ *      has spent its {@link SETTLEMENT_MAX_RESUBMITS} resubmits, and any row
+ *      whose envelope has lapsed, is refused without touching the network or
+ *      the epoch: each rejected resubmit is a Horizon submission and a new
+ *      terminal webhook. A lapsed in-flight row is left as it is for the
+ *      observer, which settles it from the ledger — SUCCEEDED if it landed in
+ *      time, EXPIRED on a 404.
+ *   3. **SUBMITTED is written before broadcasting**, through the settlement
  *      compare-and-swap, so an unreachable network leaves the row re-submittable
- *      and only the winner of that write announces the submission.
- *   3. **A rejection finalizes FAILED only while the row is still in flight.**
+ *      and only the winner of that write announces the submission. The same
+ *      write carries the resubmit cap, so concurrent resubmits cannot all pass
+ *      step 2 and bump past it.
+ *   4. **A rejection finalizes FAILED only while the row is still in flight.**
  *      The observer may have settled the same hash during the round-trip (a
  *      `tx_already_included` rejection is exactly that), and on-chain success
  *      wins.
- *   4. **An unreachable Horizon is a 503** and changes nothing further.
+ *   5. **An unreachable Horizon is a 503** and changes nothing further.
  */
 @Injectable()
 export class SignedTransactionRelay {
@@ -113,7 +134,9 @@ export class SignedTransactionRelay {
   ): Promise<RelayOutcome<TView>> {
     const { settlement, labels, logger } = profile;
 
-    // Already settled — return current state without touching the network.
+    const tx = this.verifiedEnvelope(row, signedXdr, labels);
+
+    // Already settled — a retry of the same envelope; answer without the network.
     if (row.status === 'SUCCEEDED') {
       return {
         submitted: true,
@@ -128,26 +151,17 @@ export class SignedTransactionRelay {
         `Cannot submit a ${row.status} ${labels.resource}`,
       );
     }
-
-    let tx: ReturnType<typeof TransactionBuilder.fromXDR>;
-    try {
-      tx = TransactionBuilder.fromXDR(
-        signedXdr,
-        this.stellar.passphrase(row.network as StellarNetwork),
+    if (resubmitsExhausted(row)) {
+      logger.warn(
+        `${labels.log} ${row.id} resubmit refused: all ${SETTLEMENT_MAX_RESUBMITS} spent`,
       );
-    } catch {
-      throw ApiError.badRequest(
-        ApiErrorCode.ValidationFailed,
-        'signedXdr is not a valid transaction envelope',
-      );
+      throw resubmitsExhaustedError(labels);
     }
-
-    // Integrity: signing does not change the hash, so the signed tx must hash to
-    // the same value as the one we built and stored.
-    if (Buffer.from(tx.hash()).toString('hex') !== row.txHash) {
+    if (hasLapsed(tx, row)) {
       throw ApiError.badRequest(
-        ApiErrorCode.ValidationFailed,
-        `The signed transaction does not match this ${labels.match}`,
+        ApiErrorCode.InvalidStateTransition,
+        `This ${labels.match}'s transaction expired and can no longer be ` +
+          'submitted. If it reached the network before then, it will still settle.',
       );
     }
 
@@ -162,6 +176,13 @@ export class SignedTransactionRelay {
         txHash: submitted.row.txHash,
         view: await profile.present(submitted.row),
       };
+    }
+    // A concurrent resubmit spent the last one between our read and this write.
+    if (resubmitsExhausted(submitted.row)) {
+      logger.warn(
+        `${labels.log} ${row.id} resubmit refused: all ${SETTLEMENT_MAX_RESUBMITS} spent`,
+      );
+      throw resubmitsExhaustedError(labels);
     }
     if (submitted.row.status !== 'SUBMITTED') {
       throw ApiError.badRequest(
@@ -230,4 +251,76 @@ export class SignedTransactionRelay {
       );
     }
   }
+
+  /** Step 1: the caller's envelope, once it is shown to be this row's, signed. */
+  private verifiedEnvelope(
+    row: RelayRow,
+    signedXdr: string,
+    labels: RelayLabels,
+  ): Envelope {
+    let tx: Envelope;
+    try {
+      tx = TransactionBuilder.fromXDR(
+        signedXdr,
+        this.stellar.passphrase(row.network as StellarNetwork),
+      );
+    } catch {
+      throw ApiError.badRequest(
+        ApiErrorCode.ValidationFailed,
+        'signedXdr is not a valid transaction envelope',
+      );
+    }
+
+    // Integrity: signing does not change the hash, so the signed tx must hash to
+    // the same value as the one we built and stored.
+    if (Buffer.from(tx.hash()).toString('hex') !== row.txHash) {
+      throw ApiError.badRequest(
+        ApiErrorCode.ValidationFailed,
+        `The signed transaction does not match this ${labels.match}`,
+      );
+    }
+
+    // Whether a signature is *valid* is the network's call — it knows the
+    // account's signers and thresholds, and a bad one comes back `tx_bad_auth` —
+    // but an envelope with none is the unsigned one we handed out.
+    if (tx.signatures.length === 0) {
+      throw ApiError.badRequest(
+        ApiErrorCode.ValidationFailed,
+        'signedXdr carries no signatures; sign the transaction before submitting it',
+      );
+    }
+    return tx;
+  }
+}
+
+/** A FAILED row that has spent every resubmit it is allowed. */
+function resubmitsExhausted(row: SettlementRow): boolean {
+  return (
+    row.status === 'FAILED' && row.settlementEpoch >= SETTLEMENT_MAX_RESUBMITS
+  );
+}
+
+function resubmitsExhaustedError(labels: RelayLabels): ApiError {
+  return ApiError.badRequest(
+    ApiErrorCode.InvalidStateTransition,
+    `Cannot submit a FAILED ${labels.resource} again: it was already ` +
+      `resubmitted ${SETTLEMENT_MAX_RESUBMITS} times after a rejection. ` +
+      `Build a new ${labels.resource}.`,
+  );
+}
+
+/**
+ * Whether the network can no longer accept the envelope.
+ *
+ * The envelope's `maxTime` is the bound the network enforces, and it is the one
+ * we built — the hash check saw to that. `expiresAt` is the row's record of the
+ * same deadline, written a moment after the build, and still decides for an
+ * envelope with no upper bound (`maxTime` 0). Strictly past either, as the
+ * observer's expiry reads it.
+ */
+function hasLapsed(tx: Envelope, row: RelayRow, now = Date.now()): boolean {
+  const maxTime =
+    tx instanceof FeeBumpTransaction ? 0 : Number(tx.timeBounds?.maxTime ?? 0);
+  if (maxTime > 0 && now > maxTime * 1000) return true;
+  return row.expiresAt != null && now > row.expiresAt.getTime();
 }

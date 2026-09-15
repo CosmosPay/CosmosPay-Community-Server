@@ -15,6 +15,7 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { CurrentConsumer } from '@/common/decorators/current-consumer.decorator';
+import { RateLimit } from '@/common/decorators/rate-limit.decorator';
 import { RequirePermissions } from '@/common/decorators/require-permissions.decorator';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import { CreateWebhookEndpointDto } from '@/webhooks/dto/create-webhook-endpoint.dto';
@@ -30,6 +31,10 @@ import {
   WebhookEndpointWithSecretEntity,
   WebhookPingEntity,
 } from '@/webhooks/entities/webhook.entity';
+import {
+  WEBHOOK_PING_RATE_LIMIT,
+  WEBHOOK_REDELIVER_RATE_LIMIT,
+} from '@/webhooks/webhooks.constants';
 import { WebhooksService } from '@/webhooks/webhooks.service';
 
 // URI versioning => /v1/webhooks
@@ -114,6 +119,8 @@ export class WebhooksController {
 
   @Post(':id/ping')
   @RequirePermissions('webhooks:write')
+  // One signed outbound request per call, to a URL the caller chose.
+  @RateLimit(WEBHOOK_PING_RATE_LIMIT)
   @ApiOperation({ summary: 'Send a test event to verify the endpoint' })
   @ApiCreatedResponse({ type: WebhookPingEntity })
   ping(@CurrentConsumer() consumer: GatewayConsumer, @Param('id') id: string) {
@@ -136,6 +143,9 @@ export class WebhooksController {
 
   @Post(':id/deliveries/:deliveryId/redeliver')
   @RequirePermissions('webhooks:write')
+  // Runs the retry loop inline: several outbound requests per call, with the
+  // handler held through every timeout and backoff between them.
+  @RateLimit(WEBHOOK_REDELIVER_RATE_LIMIT)
   @ApiOperation({ summary: 'Manually re-send a past delivery' })
   @ApiCreatedResponse({ type: WebhookDeliveryEntity })
   redeliver(

@@ -18,9 +18,14 @@ import {
 } from '@nestjs/swagger';
 import { AllowPublicKey } from '@/common/decorators/allow-public-key.decorator';
 import { CurrentConsumer } from '@/common/decorators/current-consumer.decorator';
+import { RateLimit } from '@/common/decorators/rate-limit.decorator';
 import { RequirePermissions } from '@/common/decorators/require-permissions.decorator';
 import { ConsoleOnlyGuard } from '@/common/guards/console-only.guard';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
+import {
+  ALIAS_CHALLENGE_RATE_LIMIT,
+  ALIAS_RECOVERY_COMPLETE_RATE_LIMIT,
+} from '@/aliases/aliases.constants';
 import { AliasesService } from '@/aliases/aliases.service';
 import {
   AddAliasAddressDto,
@@ -105,6 +110,8 @@ export class AliasesController {
 
   @Post('challenges')
   @RequirePermissions('payments:write')
+  // Every call stores a challenge row, which outlives its TTL by a day.
+  @RateLimit(ALIAS_CHALLENGE_RATE_LIMIT)
   @ApiOperation({
     summary: 'Get a nonce to sign',
     description:
@@ -211,6 +218,9 @@ export class AliasesController {
 
   @Post(':name/recovery/complete')
   @RequirePermissions('payments:write')
+  // Handles are public, so any key can aim this at any alias. Junk tokens write
+  // nothing, which leaves this limit as the bound on how fast one address tries.
+  @RateLimit(ALIAS_RECOVERY_COMPLETE_RATE_LIMIT)
   @ApiOperation({
     summary: 'Finish recovery: take ownership with a new address',
     description:

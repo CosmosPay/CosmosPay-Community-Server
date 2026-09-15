@@ -58,6 +58,21 @@ describe('verifySvixSignature', () => {
     ).toBe(false);
   });
 
+  it('refuses to verify with a secret that decodes to no real key', () => {
+    // Outside the base64 alphabet, so Node decodes it to an EMPTY HMAC key —
+    // and a signature under an empty key is one anybody can produce.
+    const garbage = `whsec_${'!'.repeat(40)}`;
+    const ts = String(now());
+    const forged = computeSvixSignature(garbage, id, ts, body);
+    expect(
+      verifySvixSignature(garbage, body, {
+        id,
+        timestamp: ts,
+        signature: `v1,${forged}`,
+      }),
+    ).toBe(false);
+  });
+
   it('rejects when signed with a different secret', () => {
     const otherHeaders = {
       id,

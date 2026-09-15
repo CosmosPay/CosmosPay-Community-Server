@@ -16,6 +16,7 @@ describe('KYC surface (e2e)', () => {
   const receiver = {
     id: 'receiver_1',
     consumerId: 'consumer_1',
+    environment: 'prod',
     blindpayId: 'local_receiver_1',
     type: 'individual',
     kycType: 'standard',
@@ -78,6 +79,8 @@ describe('KYC surface (e2e)', () => {
     },
   };
 
+  // Stands in for both the client and its per-environment instance: `instance`
+  // hands back the same transport, and every caller here is a production key.
   const blindpayMock = {
     instanceId: 'instance_1',
     isConfigured: true,
@@ -87,6 +90,8 @@ describe('KYC surface (e2e)', () => {
     put: jest.fn(),
     delete: jest.fn(),
     uploadFile: jest.fn(),
+    environmentFor: jest.fn(() => 'prod'),
+    instance: jest.fn((): unknown => blindpayMock),
   };
 
   beforeAll(async () => {
@@ -162,8 +167,11 @@ describe('KYC surface (e2e)', () => {
         expect(body).toMatchObject({ total: 1 });
       });
 
+    // Scoped to the caller's BlindPay instance as well: a production key here.
     expect(prismaMock.blindpayReceiver.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { consumerId: 'consumer_1' } }),
+      expect.objectContaining({
+        where: { consumerId: 'consumer_1', environment: 'prod' },
+      }),
     );
   });
 
@@ -177,7 +185,11 @@ describe('KYC surface (e2e)', () => {
 
     expect(prismaMock.blindpayReceiver.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { id: 'foreign_receiver', consumerId: 'consumer_1' },
+        where: {
+          id: 'foreign_receiver',
+          consumerId: 'consumer_1',
+          environment: 'prod',
+        },
       }),
     );
   });

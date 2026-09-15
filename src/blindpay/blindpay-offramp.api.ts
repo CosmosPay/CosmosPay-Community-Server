@@ -1,4 +1,6 @@
 import { Injectable } from '@nestjs/common';
+import type { BlindpayEnvironment } from '@/config/configuration';
+import type { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import { BlindpayClient } from '@/blindpay/blindpay.client';
 import type { BlindpayObject } from '@/blindpay/blindpay-sync.service';
 import type { ChainVariant } from '@/blindpay/blindpay.constants';
@@ -17,49 +19,72 @@ export interface BlindpayPayoutRequest extends BlindpayPayoutAuthorization {
 /**
  * BlindPay's offramp surface — payout quotes, the non-EVM authorize step, payouts
  * and their compliance documents — as named calls, so the offramp module never
- * builds a provider URL. See `BlindpayKycApi` for why the paths live here.
+ * builds a provider URL. See `BlindpayKycApi` for why the paths live here, and why
+ * every call names its instance.
  */
 @Injectable()
 export class BlindpayOfframpApi {
   constructor(private readonly client: BlindpayClient) {}
 
-  createPayoutQuote(body: object): Promise<BlindpayObject> {
-    return this.client.post<BlindpayObject>(
-      this.client.instancePath('/quotes'),
+  /** The BlindPay instance that serves `consumer`. */
+  environmentFor(consumer: GatewayConsumer): BlindpayEnvironment {
+    return this.client.environmentFor(consumer);
+  }
+
+  createPayoutQuote(
+    env: BlindpayEnvironment,
+    body: object,
+  ): Promise<BlindpayObject> {
+    const instance = this.client.instance(env);
+    return instance.post<BlindpayObject>(
+      instance.instancePath('/quotes'),
       body,
     );
   }
 
   /** Returns the unsigned transaction the customer signs (Stellar/Solana). */
   authorizePayout(
+    env: BlindpayEnvironment,
     chain: ChainVariant,
     body: BlindpayPayoutAuthorization,
   ): Promise<BlindpayObject> {
-    return this.client.post<BlindpayObject>(
-      this.client.instancePath(`/payouts/${chain}/authorize`),
+    const instance = this.client.instance(env);
+    return instance.post<BlindpayObject>(
+      instance.instancePath(`/payouts/${chain}/authorize`),
       body,
     );
   }
 
   createPayout(
+    env: BlindpayEnvironment,
     chain: ChainVariant,
     body: BlindpayPayoutRequest,
   ): Promise<BlindpayObject> {
-    return this.client.post<BlindpayObject>(
-      this.client.instancePath(`/payouts/${chain}`),
+    const instance = this.client.instance(env);
+    return instance.post<BlindpayObject>(
+      instance.instancePath(`/payouts/${chain}`),
       body,
     );
   }
 
-  getPayout(payoutId: string): Promise<BlindpayObject> {
-    return this.client.get<BlindpayObject>(
-      this.client.instancePath(`/payouts/${payoutId}`),
+  getPayout(
+    env: BlindpayEnvironment,
+    payoutId: string,
+  ): Promise<BlindpayObject> {
+    const instance = this.client.instance(env);
+    return instance.get<BlindpayObject>(
+      instance.instancePath(`/payouts/${payoutId}`),
     );
   }
 
-  addPayoutDocument(payoutId: string, body: object): Promise<BlindpayObject> {
-    return this.client.post<BlindpayObject>(
-      this.client.instancePath(`/payouts/${payoutId}/documents`),
+  addPayoutDocument(
+    env: BlindpayEnvironment,
+    payoutId: string,
+    body: object,
+  ): Promise<BlindpayObject> {
+    const instance = this.client.instance(env);
+    return instance.post<BlindpayObject>(
+      instance.instancePath(`/payouts/${payoutId}/documents`),
       body,
     );
   }

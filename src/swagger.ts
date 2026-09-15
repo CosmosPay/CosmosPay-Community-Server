@@ -72,7 +72,7 @@ const ERROR_RESPONSES: Record<string, string> = {
   '409':
     'Conflicts with existing state — an idempotency clash, an operation already in flight, or an invalid state transition.',
   '429':
-    'Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.',
+    'Rate limited (`rate_limited`). Only routes that declare a budget can return this — the ones whose cost an error cannot refund, such as creating or funding a Stellar account or broadcasting a transaction. Honour `Retry-After`.',
   '502': 'An upstream provider returned an error.',
   '503':
     'An upstream provider is unavailable, or the service is misconfigured.',

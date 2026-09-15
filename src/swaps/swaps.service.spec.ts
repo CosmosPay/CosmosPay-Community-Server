@@ -7,9 +7,10 @@ import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { EventEmitter2 } from 'eventemitter2';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import { SettlementObserverService } from '@/observer/settlement-observer.service';
+import { SETTLEMENT_MAX_RESUBMITS } from '@/stellar/stellar.constants';
 import { WEBHOOK_EVENT } from '@/webhooks/webhook-events';
 import { WebhookTerminalEmitter } from '@/webhooks/webhook-terminal-emitter.service';
-import { SwapsService } from '@/swaps/swaps.service';
+import { SWAP_PUBLIC_SELECT, SwapsService } from '@/swaps/swaps.service';
 
 jest.mock('qrcode', () => ({
   __esModule: true,
@@ -64,6 +65,13 @@ function matchesWhere(row: any, where: any): boolean {
     } else if (where.status.in && !where.status.in.includes(row.status)) {
       return false;
     }
+  }
+  // The resubmit cap rides in markSubmitted's compare-and-swap.
+  if (
+    where.settlementEpoch?.lt !== undefined &&
+    !((row.settlementEpoch ?? 0) < where.settlementEpoch.lt)
+  ) {
+    return false;
   }
   if (where.consumer?.apisixUsername) {
     if (row.consumer?.apisixUsername !== where.consumer.apisixUsername) {
@@ -343,6 +351,60 @@ function terminalEmits(events: EventEmitter2, type: string) {
   );
 }
 
+describe('SwapsService responses carry only the public projection', () => {
+  function build() {
+    const prisma = createPrisma();
+    const stellar = makeStellar();
+    const service = new SwapsService(
+      makeConfig(),
+      prisma,
+      makeEmitter(prisma, { emit: jest.fn() } as any),
+      stellar as any,
+      new ConsumerResolverService(prisma as never),
+      new StellarAccountLoader(stellar as never),
+      new SignedTransactionRelay(stellar as never),
+    );
+    return { service, prisma };
+  }
+
+  it('answers a single swap without its internal columns', async () => {
+    const { service, prisma } = build();
+    prisma.swap.findFirst.mockResolvedValueOnce(
+      swapRow({
+        settlementEpoch: 2,
+        lastCheckedAt: new Date(),
+        notFoundStreak: 1,
+      }),
+    );
+
+    const view = await service.findOne(consumer, 'swap_1');
+
+    expect(Object.keys(view).sort()).toEqual(
+      [...Object.keys(SWAP_PUBLIC_SELECT), 'qr', 'commissionMemo'].sort(),
+    );
+    for (const internal of [
+      'consumerId',
+      'consumer',
+      'settlementEpoch',
+      'lastCheckedAt',
+      'notFoundStreak',
+    ]) {
+      expect(view).not.toHaveProperty(internal);
+    }
+  });
+
+  it('lists through the public select', async () => {
+    const { service, prisma } = build();
+    prisma.swap.count = jest.fn().mockResolvedValue(0);
+
+    await service.findAll(consumer, { take: 20, skip: 0 });
+
+    expect(prisma.swap.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ select: SWAP_PUBLIC_SELECT }),
+    );
+  });
+});
+
 describe('SwapsService.submit vs observer (issue #29 double terminal event)', () => {
   let prisma: ReturnType<typeof createPrisma>;
   let stellar: ReturnType<typeof makeStellar>;
@@ -375,9 +437,12 @@ describe('SwapsService.submit vs observer (issue #29 double terminal event)', ()
       {} as any,
       {} as any,
     );
-    jest
-      .spyOn(TransactionBuilder, 'fromXDR')
-      .mockReturnValue({ hash: () => Buffer.from(TX_HASH, 'hex') } as any);
+    // The envelope the stored swap was built from, signed: its hash matches and
+    // it carries a signature, which is all the relay checks before the status.
+    jest.spyOn(TransactionBuilder, 'fromXDR').mockReturnValue({
+      hash: () => Buffer.from(TX_HASH, 'hex'),
+      signatures: [{}],
+    } as any);
   });
 
   afterEach(() => {
@@ -459,6 +524,75 @@ describe('SwapsService.submit vs observer (issue #29 double terminal event)', ()
     expect(row.status).toBe('FAILED');
     expect(row.settlementEpoch).toBe(1);
     expect(terminalEmits(events, 'SWAP_FAILED')).toHaveLength(2);
+  });
+
+  it('stops re-sending a rejected swap once the resubmit cap is reached', async () => {
+    // Every rejected resubmit used to cost a Horizon submission and mint a new
+    // SWAP_FAILED event (the epoch is in its dedup key), with no end.
+    const row = swapRow({ status: 'PENDING' });
+    prisma.rows.push(row);
+    stellar.submitTransaction.mockRejectedValue(
+      horizonReject({ transaction: 'tx_bad_auth' }),
+    );
+
+    for (let attempt = 0; attempt <= SETTLEMENT_MAX_RESUBMITS; attempt++) {
+      const outcome = await service.submit(consumer, row.id, 'signed-xdr');
+      expect(outcome.status).toBe('FAILED');
+    }
+    await expect(
+      service.submit(consumer, row.id, 'signed-xdr'),
+    ).rejects.toMatchObject({ code: ApiErrorCode.InvalidStateTransition });
+
+    expect(stellar.submitTransaction).toHaveBeenCalledTimes(
+      SETTLEMENT_MAX_RESUBMITS + 1,
+    );
+    expect(row.settlementEpoch).toBe(SETTLEMENT_MAX_RESUBMITS);
+    expect(terminalEmits(events, 'SWAP_FAILED')).toHaveLength(
+      SETTLEMENT_MAX_RESUBMITS + 1,
+    );
+  });
+
+  it('does not let a resubmit that read the row below the cap bump it past', async () => {
+    // Concurrent resubmits all read `epoch < cap` before any of them writes, so
+    // only the compare-and-swap can stop the ones that lose the race.
+    const row = swapRow({
+      status: 'FAILED',
+      settlementEpoch: SETTLEMENT_MAX_RESUBMITS,
+    });
+    prisma.rows.push(row);
+    prisma.swap.findFirst.mockResolvedValueOnce({
+      ...row,
+      settlementEpoch: SETTLEMENT_MAX_RESUBMITS - 1,
+    });
+
+    await expect(
+      service.submit(consumer, row.id, 'signed-xdr'),
+    ).rejects.toMatchObject({ code: ApiErrorCode.InvalidStateTransition });
+
+    expect(row.status).toBe('FAILED');
+    expect(row.settlementEpoch).toBe(SETTLEMENT_MAX_RESUBMITS);
+    expect(stellar.submitTransaction).not.toHaveBeenCalled();
+  });
+
+  it('leaves a lapsed swap to the observer instead of broadcasting it', async () => {
+    const row = swapRow({
+      status: 'PENDING',
+      expiresAt: new Date(Date.now() - 1_000),
+    });
+    prisma.rows.push(row);
+
+    await expect(
+      service.submit(consumer, row.id, 'signed-xdr'),
+    ).rejects.toMatchObject({ code: ApiErrorCode.InvalidStateTransition });
+    expect(stellar.submitTransaction).not.toHaveBeenCalled();
+    expect(row.status).toBe('PENDING');
+    expect(row.settlementEpoch).toBe(0);
+
+    // Untouched, it is still the observer's to settle from the ledger: a 404
+    // after its bounds closed expires it.
+    stellar.txCall.mockRejectedValue({ response: { status: 404 } });
+    await (observer as any).reconcile('swaps', 50);
+    expect(row.status).toBe('EXPIRED');
   });
 });
 

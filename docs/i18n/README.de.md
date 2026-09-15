@@ -360,7 +360,11 @@ Zwei Pfade nutzen diese eine Regel:
   sie die eigene Zahlung dieses Intents war** — gleiches Memo, gleiche Zieladresse und
   gleiches Asset. Jede andere Transaktion, ob fehlgeschlagen oder nicht, ist eine
   Nichtübereinstimmung, die den Status unverändert lässt, sodass die korrekte
-  Transaktion weiterhin eingereicht werden kann.
+  Transaktion weiterhin eingereicht werden kann. Ein per
+  `PATCH /v1/payment-intents/:id` gemeldeter `txHash` begleicht einen Intent nie
+  von sich aus: Er muss ein 64-stelliger Hex-Hash sein, wird kleingeschrieben
+  gespeichert und ist nur unter den Intents des aufrufenden Consumers eindeutig
+  (`409 idempotency_conflict` bei einer Kollision mit einem anderen davon).
 - **Automatisch (permanenter Observer):** `StellarObserverService` fragt Horizon alle
   `OBSERVER_INTERVAL_MS` nach `PENDING`-Intents ab — über den gemeldeten `txHash` oder
   durch Durchsuchen der Zahlungen an die Zieladresse — und finalisiert Treffer auf
@@ -369,6 +373,19 @@ Zwei Pfade nutzen diese eine Regel:
   `OBSERVER_MAX_INTENTS_PER_CONSUMER` (10) Intents pro Consumer und durchsucht nie einen
   abgelaufenen, sodass ein einzelner Consumer die Abwicklung aller anderen nicht
   verzögern kann. Für die lokale Entwicklung mit `OBSERVER_ENABLED=false` deaktivieren.
+
+**Der Ablauf prüft zuerst die Chain.** Ein Intent, dessen Lebensdauer abgelaufen
+ist, wird noch einmal geprüft, bevor er auf `EXPIRED` gesetzt wird: Steht seine
+Zahlung on-chain, wird er stattdessen auf `SUCCEEDED` abgewickelt, und ist
+Horizon nicht erreichbar, bleibt er für den nächsten Tick liegen. Sitzt der Hash
+dieser Zahlung bereits auf einem anderen Intent desselben Consumers, läuft der
+Intent ab, statt endlos erneut versucht zu werden. Eine Zahlung, die nach dem
+Ablauf bestätigt wird — durch den Observer oder durch `validate` —, bewegt einen
+`EXPIRED`-Intent weiterhin nach `SUCCEEDED` und löst `PAYMENT_INTENT_SUCCEEDED`
+aus; behandeln Sie `EXPIRED` also nicht als endgültig. Der Scan liest die
+Zahlungen an die Zieladresse bis zur Erstellung des Intents zurück, höchstens
+1.000 (5 Seiten zu 200); erhält eine Zieladresse während der Lebensdauer eines
+Intents mehr als das, rufen Sie `validate` mit dem Hash auf.
 
 ### Aufbewahrung der API-Request-Logs
 
@@ -538,6 +555,20 @@ Anzahl der Versuche, Response-Code und Fehler gespeichert (`webhook_delivery`) �
 abfragbar über `GET /webhooks/:id/deliveries` und erneut sendbar über die
 `redeliver`-Route.
 
+List, Get und Update liefern genau die dokumentierten Endpunktfelder, und Create
+und `rotate-secret` ergänzen `secret`. Sonst verlässt nichts von der Zeile den
+Dienst — weder `consumerId` noch die Spalten `previousSecret` /
+`previousSecretExpiresAt`, die eine frühere Rotation mit Übergangsfenster
+geschrieben hat.
+
+**`ping` und `redeliver` sind rate-limitiert**, pro Consumer und Client-Adresse:
+`POST /v1/webhooks/:id/ping` 20 und
+`POST /v1/webhooks/:id/deliveries/:deliveryId/redeliver` 30 pro 10 Minuten
+(`429 rate_limited`). Beide lassen diesen Dienst signierte Anfragen an eine von
+Ihnen gewählte URL senden, und `redeliver` durchläuft die gesamte
+Wiederholungsschleife innerhalb der Anfrage. Bei einem großen Rückstand lassen
+Sie den Sweeper erneut versuchen, statt einzeln erneut zuzustellen.
+
 ### OpenAPI / Swagger
 
 **Sicherheitshinweis:** `GET /docs`, `/docs/json` und `/docs/yaml` werden als
@@ -588,7 +619,9 @@ ein `prod`-Key → public (Mainnet), ein `dev`-Key → Testnet. `STELLAR_NETWORK
 ein Fallback für die lokale Entwicklung ohne Gateway. Jeder Intent speichert sein
 eigenes Netzwerk, und alle Horizon-Aufrufe (Build, Validierung, Observer) zielen darauf.
 Jeder Intent wird gespeichert (Tabelle `payment_intent`) und dem aufrufenden Consumer
-zugeordnet: `PENDING → SUBMITTED → SUCCEEDED/FAILED/CANCELLED/EXPIRED`.
+zugeordnet: `PENDING → SUBMITTED → SUCCEEDED/FAILED/CANCELLED/EXPIRED`. Der einzige
+Ausweg aus einem Endzustand ist `EXPIRED → SUCCEEDED`, bei einer on-chain
+bestätigten Zahlung.
 
 **Das Memo ist ein verpflichtendes `MEMO_ID`** — es identifiziert die Zahlung on-chain
 und macht das Anlegen **idempotent**: `(consumer, memo)` ist eindeutig, sodass ein
@@ -682,9 +715,9 @@ Heute mit dem öffentlichen Key erreichbar:
 | --- | --- |
 | `POST /v1/swaps/quote` | Bepreist einen Pfad über Horizon; eine reine Funktion der Anfrage |
 | `POST /v1/swaps` | Baut einen unsignierten Envelope, den der Aufrufer signiert |
-| `POST /v1/swaps/:id/submit` | Sendet einen vom Aufrufer signierten Envelope — erfordert die UUID des Swaps *und* eine Signatur seines Quellkontos |
+| `POST /v1/swaps/:id/submit` | Sendet einen vom Aufrufer signierten Envelope — nichts zum Swap, nicht einmal sein Status, wird beantwortet, bevor der Body der Envelope dieses Swaps mit einer Signatur ist; rate-limitiert |
 | `POST /v1/liquidity-pools/deposit` \| `withdraw` | Bauen unsignierte Envelopes |
-| `POST /v1/liquidity-pools/operations/:id/submit` | Sendet einen vom Aufrufer signierten Envelope |
+| `POST /v1/liquidity-pools/operations/:id/submit` | Sendet einen vom Aufrufer signierten Envelope, unter denselben Prüfungen wie beim Swap-Submit; rate-limitiert |
 | `GET /v1/liquidity-pools` \| `/:poolId` \| `/positions` | Öffentliche On-Chain-Daten, gelesen von Horizon |
 | `POST /v1/payment-intents/tx` \| `pay` | Bauen einen SEP-7-Intent aus der Anfrage |
 | `POST /v1/activity/events` | Telemetrie-Aufnahme — siehe unten |
@@ -812,6 +845,22 @@ ihm gebauten übereinstimmt, sodass er nie eine beliebige Transaktion weiterleit
 Swap löst die Webhook-Events `SWAP_CREATED` / `SWAP_SUBMITTED` / `SWAP_SUCCEEDED` /
 `SWAP_FAILED` über denselben Dispatcher aus.
 
+**Submit ist streng bei dem, was es weiterleitet.** Nichts zum Swap — nicht
+einmal sein Status — wird beantwortet, bevor `signedXdr` sich parsen lässt, auf
+den `txHash` des Swaps hasht und mindestens eine Signatur trägt, sodass das
+unsignierte `xdr` aus der Create-Antwort `400 validation_failed` ergibt. Ein
+Swap, dessen Envelope seine Zeitgrenzen überschritten hat (`STELLAR_TX_TIMEOUT`,
+standardmäßig 300 s), ergibt `400 invalid_state_transition` und wird nicht
+gesendet; erreichte er das Netzwerk rechtzeitig, wickelt ihn der Observer
+trotzdem ab. Nach einer Ablehnung durch das Netzwerk darf derselbe Envelope
+höchstens **3**-mal erneut eingereicht werden, danach bauen Sie einen neuen
+Swap — ein Wiederholungsversuch nach `503 provider_unavailable` zählt nicht
+mit. Die Route erlaubt **20 Aufrufe pro Minute** pro Consumer und
+Client-Adresse (`429 rate_limited`); unter dem gemeinsamen öffentlichen Key ist
+jede anonyme Wallet derselbe Consumer, sodass sich Wallets hinter demselben NAT
+dieses Budget teilen. `POST /v1/liquidity-pools/operations/:id/submit` folgt
+denselben Regeln, mit einem eigenen Kontingent.
+
 ## Aliase — beanspruchbare Zahlungs-Handles
 
 Ein Alias ermöglicht es einem Zahler, `emanuel250` statt `GA5ZSE…` einzugeben. Zahler
@@ -888,8 +937,17 @@ Schritt 1 ist der Konsole vorbehalten, weil das Token die Kontrolle über das Po
 belegt und daher nur bei demjenigen ankommen darf, der die E-Mail versendet.
 `ConsoleOnlyGuard` weist jeden API-Key-Aufrufer mit `403 admin_console_only` ab, bevor
 der Alias nachgeschlagen wird, und die Route ist nicht im veröffentlichten Vertrag.
-Fünf falsche Tokens brechen eine Wiederherstellung ab (der Inhaber kann eine neue
-starten), und ein gesperrter Alias kann nicht wiederhergestellt werden.
+Ein gesperrter Alias kann nicht wiederhergestellt werden.
+
+Ein Wiederherstellungs-Token kann **fünf**-mal vorgelegt werden. Eine Vorlage,
+deren Challenge oder Signatur fehlschlägt, verbraucht trotzdem einen Versuch,
+und die sechste wird abgewiesen; der Inhaber kann eine neue Wiederherstellung
+starten. Ein Token, das zu keiner laufenden Wiederherstellung dieses Alias
+passt, erhält denselben `400 alias_recovery_invalid` und ändert nichts, sodass
+niemand die Wiederherstellung eines Inhabers durch das Senden von Datenmüll
+verbrauchen kann. `POST /v1/aliases/:name/recovery/complete` erlaubt 10 Aufrufe
+und `POST /v1/aliases/challenges` 30 Aufrufe pro 10 Minuten, pro Consumer und
+Client-Adresse (`429 rate_limited`).
 
 Abgelaufene Challenges und Wiederherstellungen werden einen Tag nach ihrem Ablauf von
 `AliasChallengeSweeperService` gelöscht (stündlich, ein Replikat pro Tick).
@@ -915,9 +973,10 @@ Abgelaufene Challenges und Wiederherstellungen werden einen Tag nach ihrem Ablau
 Zusätzlich zu On-Chain-Payment-Intents integriert der Dienst
 [BlindPay](https://www.blindpay.com/docs), um Geld zwischen **Fiat und Stablecoins** zu
 bewegen: Einzahlung (**Onramp / Payin**), Auszahlung (**Offramp / Payout**) und das für
-beides verpflichtende **KYC** (BlindPay-*Receiver*). Wir betreiben eine **einzige
-BlindPay-Plattforminstanz** (`BLINDPAY_API_KEY` + `BLINDPAY_INSTANCE_ID` in der
-Umgebung); jeder Receiver, jede Wallet, jedes Bankkonto, jeder Payin und jeder Payout
+beides verpflichtende **KYC** (BlindPay-*Receiver*). Wir betreiben **eine
+BlindPay-Plattforminstanz pro API-Key-Umgebung** — Produktion für `prod`-Keys
+(`BLINDPAY_API_KEY` + `BLINDPAY_INSTANCE_ID`), Entwicklung für `dev`-Keys (die
+`_DEV`-Variablen); jeder Receiver, jede Wallet, jedes Bankkonto, jeder Payin und jeder Payout
 wird in unserer Postgres-Datenbank gespiegelt und ist **dem aufrufenden
 APISIX-Consumer zugeordnet**, sodass jeder Integrator nur seine eigenen Datensätze
 sieht. Der Dienst **hält nie Blockchain-Schlüssel** — der Offramp liefert das zu
@@ -933,7 +992,7 @@ Integrators **weitergegeben**.
 | ------- | ----------------------------------------------------- | -------------- | ------------ |
 | POST   | `/v1/kyc/receivers`                                   | `kyc:write`    | Einen Receiver anlegen (KYC/KYB starten) |
 | GET    | `/v1/kyc/receivers` · `/:id`                          | `kyc:read`     | Auflisten / abrufen (Abrufen aktualisiert den KYC-Status) |
-| PATCH  | `/v1/kyc/receivers/:id`                               | `kyc:write`    | Einen Receiver aktualisieren |
+| PATCH  | `/v1/kyc/receivers/:id`                               | `kyc:write`    | Einen Receiver aktualisieren (sobald er bei BlindPay existiert, brauchen Identitätsfelder einen erhöhten Key) |
 | DELETE | `/v1/kyc/receivers/:id`                               | `kyc:write`    | Einen Receiver löschen |
 | POST   | `/v1/kyc/upload`                                      | `kyc:write`    | Ein KYC-Dokument hochladen → `file_url` |
 | GET    | `/v1/kyc/rails` · `/v1/kyc/bank-details?rail=`        | `kyc:read`     | Rail-Katalog / Pflichtfelder |
@@ -955,10 +1014,31 @@ Integrators **weitergegeben**.
 Beträge sind **Ganzzahlen in kleinsten Währungseinheiten** (z. B. `$123.45` →
 `12345`). Konfigurieren Sie den Webhook im BlindPay-Dashboard auf
 `<gateway>/v1/blindpay/webhooks` und setzen Sie `BLINDPAY_WEBHOOK_SECRET` auf das
-Signatur-Secret dieses Endpunkts. Lassen Sie die `BLINDPAY_*`-Variablen leer, um die
+Signatur-Secret dieses Endpunkts — den vollständigen `whsec_…`-Wert. Der Start
+schlägt fehl, wenn dessen Schlüssel zu weniger als 24 Byte dekodiert, und der
+Verifier weist einen solchen Schlüssel ohnehin ab: Ungültiges Base64 dekodiert zu
+einem leeren Schlüssel, mit dem jeder signieren kann. Lassen Sie die
+`BLINDPAY_*`-Variablen leer, um die
 Funktion zu deaktivieren: Diese Routen liefern dann `503` `misconfigured`, ebenso der
 eingehende Webhook, solange `BLINDPAY_WEBHOOK_SECRET` nicht gesetzt ist. Siehe
 `.env.example`.
+
+**Ein `dev`-Key erreicht nie die Produktionsinstanz.** Die Umgebung des Keys wählt die
+BlindPay-Instanz so, wie sie das Stellar-Netzwerk wählt, und jede gespiegelte Zeile
+hält fest, von welcher Instanz sie stammt; die `dev`- und `prod`-Keys eines Tenants —
+ein einziger Consumer — sehen also getrennte Receiver, Wallets, Bankkonten, Quotes,
+Payins und Payouts. Ohne konfigurierte Entwicklungsinstanz antworten die
+BlindPay-Routen `dev`-Keys mit `503` `misconfigured`. Richten Sie die
+Dashboard-Webhooks beider Instanzen auf dasselbe `<gateway>/v1/blindpay/webhooks` und
+setzen Sie `BLINDPAY_WEBHOOK_SECRET_DEV` für die Entwicklungsinstanz: Das Secret, gegen
+das eine Zustellung verifiziert wird, bestimmt, welche Instanz sie gesendet hat.
+
+**Identität wird geprüft, bevor sie BlindPay erreicht — auch bei Änderungen.** Bis ein
+Receiver aktiviert ist, schickt ein `PATCH`, das KYC-Daten berührt, ihn zurück nach
+`pending_review`. Sobald er bei BlindPay existiert, darf ein Tenant-Key nur
+`external_id` und `image_url` ändern; jedes andere Feld ist `403`
+`kyc_review_required`, es sei denn, der Key ist erhöht (`X-Consumer-Role: admin`), weil
+dieses `PUT` die Identität direkt beim Anbieter überschreibt.
 
 ### KYC-Redirect-URLs werden pro Consumer per Allowlist freigegeben
 
@@ -1023,7 +1103,7 @@ Transaktionen baut und übermittelt. **Dieser Dienst leitet diese Aufrufe nicht 
 
 |                   | Redirect-Flow                                    | Poll-Flow                                       |
 | ----------------- | ------------------------------------------------ | ----------------------------------------------- |
-| Die Wallet liefert | `redirect_uri` (muss auf der Allowlist stehen)  | nichts                                          |
+| Die Wallet liefert | `redirect_uri` (muss auf der Allowlist stehen) und eine PKCE-`code_challenge` | nichts (PKCE optional) |
 | Der Code kommt an | als `?code=…&state=…` im Redirect                | über `GET /v1/pollar/oauth/sessions/{state}`    |
 | Der Browser sieht | Ihre eigene URI                                  | eine schlichte Seite „Sie können dieses Fenster schließen“ — nie den Code |
 | Verwenden, wenn   | die Wallet einen Deep Link oder Loopback-Listener hat | sie weder das eine noch das andere hat (Kiosk, headless, eingebettete Ansicht) |
@@ -1099,9 +1179,13 @@ konkurrieren, nicht beide gewinnen können.
 
 ### Härtung
 
-- **PKCE (RFC 7636, S256)** ist optional, aber empfohlen: Übergeben Sie
-  `code_challenge` beim Authorize und `code_verifier` bei der Einlösung, dann ist ein
-  Code, der aus einem Browser oder einem Log entweicht, ohne den Verifier nutzlos.
+- **PKCE (RFC 7636, S256)** ist **im Redirect-Flow Pflicht** und im Poll-Flow optional:
+  Übergeben Sie `code_challenge` beim Authorize und `code_verifier` bei der Einlösung,
+  dann ist ein Code, der aus einem Browser oder einem Log entweicht, ohne den Verifier
+  nutzlos. Ein Code aus dem Redirect-Flow durchquert einen Browser, und der öffentliche
+  Callback gibt ihn jedem, der den `state` vorlegt — der in `authorization_url`
+  steckt —, daher ist `authorize` mit `redirect_uri` und ohne `code_challenge`
+  `400 validation_failed`.
 - **`dpop_jwk`** bindet die von Pollar ausgestellten Tokens an den eigenen
   P-256-Schlüssel der Wallet (RFC 9449), sodass ein gestohlenes Access-Token ohne
   signierten Nachweis wirkungslos ist. Es bedeutet auch, dass die Bridge nicht mehr für
@@ -1160,8 +1244,11 @@ und das Einlösen nichts Neues erzeugt.
 | `POST /v1/pollar/wallets/activate` | 20 | Gibt bei jedem Aufruf XLM aus |
 
 Eine Überschreitung liefert **`429` mit `code: "rate_limited"`**, einen `Retry-After`
-und die Header `RateLimit-Limit` / `-Remaining` / `-Reset`. Andere Routen werden hier
-nicht begrenzt; allgemeines Rate Limiting gehört in APISIX.
+und die Header `RateLimit-Limit` / `-Remaining` / `-Reset`. Derselbe Limiter schützt
+auch einige Routen außerhalb von Pollar — Swap- und Liquiditätspool-Submit, die
+Webhook-Routen `ping` und `redeliver`, Alias-Challenges und -Wiederherstellung,
+die Aktivitäts-Aufnahme —, und jeder Abschnitt nennt sein eigenes Budget.
+Allgemeines Rate Limiting gehört in APISIX.
 
 **Der Zähler liegt in Postgres, nicht im Speicher**, sodass das Limit über alle
 Replikate hinweg gilt. Es ist ein festes Zeitfenster (ein atomares
@@ -1235,6 +1322,23 @@ prüfen Sie vor dem Deployment die Spalte „Wer es bemerkt“.
 | `POST /v1/kyc/upload` mit einer Datei über 10 MiB ergibt `413` mit `code: "payload_too_large"`; bisher war es `internal_error` | Integratoren, die nach `code` verzweigen | Es ist ein Limit auf Seiten des Clients, kein Serverfehler |
 | `POST /v1/liquidity-pools/deposit`, `/withdraw`, `GET /v1/liquidity-pools/operations`, `/operations/:id`, `POST /v1/liquidity-pools/operations/:id/submit` und die `LIQUIDITY_*`-Webhooks enthalten jetzt `memo` (die MEMO_ID des Aufrufers oder `null`). Operationen, die vor der Migration `20260915120000_liquidity_pool_operation_memo` erstellt wurden, liefern `null`, auch wenn ihr Envelope eine trägt | Niemand, außer ein Client lehnt unbekannte Felder ab | Das Memo war nur im XDR gespeichert |
 | Der veröffentlichte Vertrag für `GET /v1/swaps` und `GET /v1/liquidity-pools/operations` führt `qr` und `commissionMemo` bei Listeneinträgen nicht mehr auf. Die Antworten bleiben unverändert — diese beiden Felder wurden dort nie gesendet; man erhält sie über den Einzelabruf | Aus der OpenAPI-Spezifikation generierte Clients | Der Vertrag beschrieb Listeneinträge in der Form des Einzelabrufs |
+| Der Dienst verweigert den Start, wenn `APISIX_GATEWAY_SECRET` ein Platzhalter ist — der Wert, den `.env.example` früher auslieferte, oder alles, was `replace-with`, `change-me`, `your-secret` oder `placeholder` enthält —, und `.env.example` lässt sie jetzt leer | Deployments, die noch den aus `.env.example` kopierten Wert verwenden | Dieser Wert ist öffentlich und lang genug, um die 32-Zeichen-Untergrenze zu erfüllen, sodass jeder, der den Dienst erreichen konnte, jeden beliebigen Consumer benennen und `/v1/admin` erreichen konnte |
+| Der Dienst verweigert den Start, wenn `BLINDPAY_WEBHOOK_SECRET` gesetzt ist, sein Schlüssel (das Base64 nach `whsec_`) aber fehlgeformt ist oder zu weniger als 24 Byte dekodiert, und `POST /v1/blindpay/webhooks` weist jede Zustellung ab, solange der konfigurierte Schlüssel unbrauchbar ist | Deployments mit einem abgeschnittenen oder falsch getippten Secret, deren BlindPay-Webhooks bereits fehlschlugen | Node dekodiert ungültiges Base64 ohne Fehler zu einem kurzen oder leeren HMAC-Schlüssel, und eine mit einem leeren Schlüssel signierte Zustellung kann von jedem gefälscht werden |
+| `GET /v1/health/readiness` beantwortet eine fehlgeschlagene Prüfung mit dem Standard-Fehlerumschlag (`error: "Service Unavailable"`); früher legte sie den Health-Report, einschließlich der Datenbank-Fehlermeldung, in `error` ab | Probes, die den Report aus dem Body statt aus dem Statuscode lesen | Die Route ist `@Public()`, und die Meldung von Prisma nennt Datenbank-Host und -Benutzer |
+| `POST /v1/onramp/receivers/:id/virtual-accounts` ergibt `403 account_disabled`, wenn der Receiver oder der Receiver, dem `blockchain_wallet_id` gehört, deaktiviert ist | Niemand mit legitimen Absichten | Es war die eine Fiat-Operation, die der Kill-Switch nicht abdeckte: Ein deaktiviertes Konto konnte weiterhin eine neue Einzahlungs-Rail eröffnen |
+| `POST /v1/pollar/oauth/token` löst keinen Code mehr ein, den eine neuere Abfrage von `GET /v1/pollar/oauth/sessions/:state` ersetzt hat, selbst wenn diese Abfrage mitten in der Einlösung eintrifft | Niemand mit legitimen Absichten | Der Anspruch passte zum Handshake, aber nicht zum Code, sodass ein zurückgezogener Code in diesem Zeitfenster noch verwendet werden konnte |
+| `POST /v1/swaps/:id/submit` und `POST /v1/liquidity-pools/operations/:id/submit` prüfen den Envelope vor allem anderen: Ein Body, der sich nicht parsen lässt, nicht der Envelope der Zeile ist oder keine Signaturen trägt, ergibt `400 validation_failed`, unabhängig vom Status der Zeile. Ein beliebiges `signedXdr` liefert keine `SUCCEEDED`-Zeile mehr, und eine `EXPIRED`-Zeile beantwortet einen nicht passenden Body mit `validation_failed` statt mit `invalid_state_transition` | Clients, die das unsignierte `xdr` eingereicht und sich auf die Ablehnung mit `tx_bad_auth` verlassen haben | Signaturen ändern den Hash einer Transaktion nicht, sodass der unsignierte Envelope in einer Schleife weitergeleitet und abgelehnt werden konnte, und unter dem gemeinsamen öffentlichen Key genügte allein die ID einer Zeile, um eine abgewickelte Zeile zu lesen |
+| Beide Submit-Routen weisen einen Envelope ab, dessen Zeitgrenzen überschritten sind (`400 invalid_state_transition`, wird nicht gesendet; landete er dennoch, wickelt ihn der Observer trotzdem ab), sowie eine `FAILED`-Zeile, die bereits 3-mal erneut eingereicht wurde (`400 invalid_state_transition`: bauen Sie eine neue). Ein Wiederholungsversuch nach `503 provider_unavailable` zählt nicht mit | Clients, die Submit in einer Schleife wiederholen: Halten Sie bei `invalid_state_transition` an | Jeder abgelehnte Wiederholungsversuch war eine Horizon-Einreichung und ein neues terminales Webhook-Event, ohne Obergrenze |
+| Beide Submit-Routen erlauben 20 Aufrufe pro Minute pro Consumer und Client-Adresse, in getrennten Kontingenten (`429 rate_limited`) | Wallets hinter demselben NAT, die sich den öffentlichen Key teilen | Die Routen nehmen den gemeinsamen öffentlichen Key an, und jeder Aufruf kann an Horizon senden |
+| `GET /v1/webhooks`, `GET /v1/webhooks/:id` und `PATCH /v1/webhooks/:id` liefern nur die dokumentierten Endpunktfelder; `POST /v1/webhooks` und `POST /v1/webhooks/:id/rotate-secret` liefern diese plus `secret`. `consumerId`, `previousSecret` und `previousSecretExpiresAt` sind bei allen fünf entfallen | Aufrufer, die diese Felder lesen | `previousSecret` ist ein Signatur-Secret, das ein Integrator noch akzeptieren kann, und ein Key mit nur `webhooks:read` konnte es lesen |
+| Ein Wiederherstellungs-Token, das zu keiner laufenden Wiederherstellung des Alias passt, zählt nicht mehr gegen sie. Ein laufendes Token verbraucht bei jeder Vorlage einen Versuch, auch wenn dessen Challenge oder Signatur anschließend fehlschlägt; nach fünf ist es `400 alias_recovery_invalid` | Niemand mit legitimen Absichten | Alias-Namen sind öffentlich, sodass fünf Datenmüll-Tokens von einem beliebigen Key jede von der Konsole gestartete Wiederherstellung verbrauchten |
+| `POST /v1/aliases/:name/recovery/complete` (10 pro 10 min), `POST /v1/aliases/challenges` (30), `POST /v1/webhooks/:id/ping` (20) und `POST /v1/webhooks/:id/deliveries/:deliveryId/redeliver` (30) ergeben bei Budgetüberschreitung `429 rate_limited`, pro Consumer und Client-Adresse | Skripte, die diese Routen in einer Schleife aufrufen | Jeder Aufruf speichert eine Zeile, probiert ein Wiederherstellungs-Token oder sendet Anfragen an eine vom Aufrufer gewählte URL |
+| `PATCH /v1/payment-intents/:id` verlangt, dass `txHash` ein 64-stelliger Hex-Stellar-Transaktions-Hash ist (alles andere ergibt `400`), und speichert ihn kleingeschrieben; `POST /v1/payment-intents/:id/validate` schreibt seinen eigenen ebenfalls klein. Ein Hash ist nur unter den Intents eines Consumers eindeutig statt mandantenübergreifend, und ein Hash, der bereits auf einem anderen Ihrer Intents liegt, ergibt `409 idempotency_conflict` (früher `500`) | Aufrufer, die Platzhalter- oder abgeschnittene Hashes senden | Jeder Mandant konnte den Transaktions-Hash eines anderen Mandanten auf einem eigenen Intent ablegen; die Abwicklung des anderen Mandanten traf dann auf den globalen Index, antwortete mit `500`, und der bezahlte Intent lief ab, ohne dass `PAYMENT_INTENT_SUCCEEDED` ausgelöst wurde |
+| Ein `EXPIRED`-Intent wechselt nach `SUCCEEDED`, wenn seine Zahlung on-chain bestätigt wird: durch den Observer, der jetzt vor dem Ablaufen die Chain prüft, oder durch `POST /v1/payment-intents/:id/validate` und `PATCH {status: SUCCEEDED}`, die jetzt mit `200` statt mit `400 invalid_state_transition` antworten. `PAYMENT_INTENT_SUCCEEDED` kann auf das von `EXPIRED` ausgelöste Update folgen | Webhook-Consumer, die `EXPIRED` als endgültig behandeln | Der Ablauf prüfte nie die Chain, und der Verifier las nur die 50 neuesten Zahlungen an die Zieladresse, sodass eine späte oder vergrabene Zahlung einen bezahlten Intent dauerhaft `EXPIRED` ließ |
+| `POST /v1/pollar/oauth/authorize` mit `redirect_uri` verlangt `code_challenge` (PKCE, S256), und das Einlösen dieses Handshakes verlangt `code_verifier`; ohne ihn ist der Aufruf `400 validation_failed`, bevor eine Pollar-Session eröffnet wird. Der Poll-Flow bleibt unverändert | Wallets im Redirect-Flow, die kein PKCE senden | Der öffentliche Callback gibt den Code jedem, der den `state` vorlegt, der in `authorization_url` steckt, und ohne PKCE ließ sich dieser Code unverändert einlösen |
+| Antworten zu Swaps, Liquidity-Pool-Operationen, Payment Intents und Customers enthalten nur noch ihre dokumentierten Felder, plus das jetzt dokumentierte `expiresAt` bei Swaps und Payment Intents. `consumerId` und die Settlement-Buchführung (`settlementEpoch`, `lastCheckedAt`, `notFoundStreak`, `sharesReceived`, `settledAmountA`/`B`, `horizonCursor`) werden nicht mehr gesendet | Wer diese Felder liest | Sie sind intern, und mehrere dieser Routen sind mit dem gemeinsamen öffentlichen Key erreichbar |
+| `PATCH /v1/kyc/receivers/:id` auf einen Receiver, der bereits bei BlindPay existiert, ist `403 kyc_review_required` für jedes Feld außer `external_id` und `image_url`, es sei denn, der Key ist erhöht (`X-Consumer-Role: admin`) | Integratoren, die die Identität eines aktiven Receivers mit einem Tenant-Key korrigieren: über den Prüfer leiten | Das `PUT` schickte nie geprüfte Identitätsdaten direkt an einen regulierten Anbieter, während dieselbe Änderung vor dem Aktivieren erneut in die Prüfung geht |
+| BlindPay-Routen nutzen die Instanz der Key-Umgebung: `prod`-Keys die der unsuffigierten `BLINDPAY_*`-Variablen, `dev`-Keys die von `BLINDPAY_*_DEV`, und ein `dev`-Key ohne konfigurierte Entwicklungsinstanz erhält `503 misconfigured`. Receiver, Wallets, Bankkonten, virtuelle Konten, Quotes, Payins und Payouts werden nur auf dieser Instanz gelesen und ausgeführt | Alle, die BlindPay mit `dev`-Keys nutzen | Ein `dev`-Key bediente die Produktionsinstanz: Er konnte echte KYC-Identitäten auflisten und löschen und echte Payouts anlegen |
 
 Dazugehörige Deploy-Hinweise:
 
@@ -1269,6 +1373,34 @@ Dazugehörige Deploy-Hinweise:
   entfernen Sie ihn mit `DROP INDEX CONCURRENTLY`, führen Sie
   `prisma migrate resolve --rolled-back 20260915120100_lookup_indexes` aus und
   deployen Sie erneut.
+- **Zwei Variablen werden jetzt beim Start geprüft.** Ein platzhalterhaftes
+  `APISIX_GATEWAY_SECRET` oder ein `BLINDPAY_WEBHOOK_SECRET`, dessen Schlüssel
+  nicht zu mindestens 24 Byte dekodiert, hindert den Dienst am Start, mit einer
+  Fehlermeldung, die die Variable nennt. Ersetzen Sie ein platzhalterhaftes
+  Gateway-Secret auf der APISIX-Route und hier in derselben Änderung
+  (`openssl rand -hex 32`); eine Abweichung lässt jede Anfrage fehlschlagen, als
+  käme sie nicht vom Gateway.
+- **Migration `20260915150000_payment_intent_tx_hash_per_consumer`** ersetzt den
+  eindeutigen Index auf `payment_intent."txHash"` durch einen auf
+  `("consumerId", "txHash")`. Sie läuft nicht `CONCURRENTLY`: `payment_intent`
+  ist während des Indexaufbaus schreibgesperrt. Es gibt kein Backfill.
+- **Gespeicherte `webhook_endpoint.previousSecret`-Werte werden nicht mehr
+  zurückgegeben, aber nichts löscht sie.** Hat eine Rotation in einem früheren
+  Release einen solchen Wert hinterlassen und Sie möchten ihn aus der Datenbank
+  entfernen, setzen Sie die beiden Spalten selbst auf null.
+- **Migration `20260915160000_blindpay_environment`** fügt den sieben
+  BlindPay-Spiegeltabellen `environment` (Standard `'prod'`) hinzu — eine reine
+  Katalogänderung ohne Neuschreiben der Tabellen —, sodass bestehende Zeilen als
+  Produktion markiert sind. **Zeigten Ihre unsuffigierten `BLINDPAY_*`-Variablen auf
+  eine BlindPay-Entwicklungsinstanz**, verschieben Sie sie in die `_DEV`-Variablen
+  und markieren Sie die Zeilen um (`UPDATE … SET environment = 'dev'` auf
+  `blindpay_receiver`, `blindpay_blockchain_wallet`, `blindpay_bank_account`,
+  `blindpay_virtual_account`, `payin`, `payout` und `blindpay_quote`), sonst lesen
+  `prod`-Keys sie weiterhin.
+- **Konfigurieren Sie die BlindPay-Entwicklungsinstanz** (`BLINDPAY_API_KEY_DEV`,
+  `BLINDPAY_INSTANCE_ID_DEV`, `BLINDPAY_WEBHOOK_SECRET_DEV`), wenn `dev`-Keys
+  BlindPay nutzen, und richten Sie ihren Dashboard-Webhook auf dieselbe URL
+  `/v1/blindpay/webhooks`.
 
 ### NestJS 12, TypeScript 6 und Node 24.9 als Mindestversion
 
@@ -1506,7 +1638,7 @@ passen Sie mindestens `DATABASE_URL` und `APISIX_GATEWAY_SECRET` an.
 | `NODE_ENV` | nein | `development` | Muss `development`, `test` oder `production` sein. **Setzen Sie in Produktion `production`** — die Fail-closed-Prüfung der Plan-Gebühr und die standardmäßig deaktivierten Docs hängen beide davon ab |
 | `PORT` | nein | `3000` | HTTP-Port, auf dem der Dienst lauscht |
 | `DATABASE_URL` | **ja** | — | PostgreSQL-Verbindung für Prisma |
-| `APISIX_GATEWAY_SECRET` | **ja** | — | Gemeinsames Secret, das belegt, dass die Anfrage über APISIX kam. **Mindestens 32 Zeichen** |
+| `APISIX_GATEWAY_SECRET` | **ja** | — | Gemeinsames Secret, das belegt, dass die Anfrage über APISIX kam. **Mindestens 32 Zeichen**; ein Platzhalter wird beim Start abgewiesen |
 | `APISIX_GATEWAY_SECRET_HEADER` | nein | `x-gateway-secret` | Header-Name für das Gateway-Secret |
 | `APISIX_CONSUMER_HEADER` | nein | `x-consumer-username` | Benutzername des authentifizierten Consumers |
 | `APISIX_CREDENTIAL_HEADER` | nein | `x-credential-identifier` | Credential-ID aus key-auth |
@@ -1548,10 +1680,13 @@ passen Sie mindestens `DATABASE_URL` und `APISIX_GATEWAY_SECRET` an.
 | `REQUEST_LOG_PRUNE_MAX_PER_CYCLE` | nein | `50000` | Harte Obergrenze für pro Tick untersuchte Zeilen |
 | `SWAGGER_ENABLED` | nein | aus in `production` | `/docs` veröffentlichen (Express-Middleware, keine Guards) |
 | `OPENAPI_SERVER_URL` | nein | — | In die exportierte OpenAPI-Spezifikation eingetragener Gateway-Host |
-| `BLINDPAY_API_KEY` | nein | — | API-Key der BlindPay-Plattform |
+| `BLINDPAY_API_KEY` | nein | — | API-Key der BlindPay-Produktionsinstanz, genutzt von `prod`-Keys |
 | `BLINDPAY_INSTANCE_ID` | wenn API-Key gesetzt | — | BlindPay-Instanz-ID (`in_...`) |
 | `BLINDPAY_BASE_URL` | nein | `https://api.blindpay.com/v1` | Basis-URL der BlindPay API |
-| `BLINDPAY_WEBHOOK_SECRET` | wenn API-Key gesetzt | — | Svix-Secret für eingehende BlindPay-Webhooks |
+| `BLINDPAY_WEBHOOK_SECRET` | wenn API-Key gesetzt | — | Svix-Secret für eingehende BlindPay-Webhooks: der vollständige `whsec_…`-Wert, dessen Schlüssel zu mindestens 24 Byte dekodieren muss (wird beim Start geprüft) |
+| `BLINDPAY_API_KEY_DEV` | nein | — | API-Key der BlindPay-Entwicklungsinstanz, genutzt von `dev`-Keys. Nicht gesetzt: BlindPay-Routen antworten `dev`-Keys mit `503 misconfigured` |
+| `BLINDPAY_INSTANCE_ID_DEV` | wenn Dev-API-Key gesetzt | — | ID der Entwicklungsinstanz (`in_...`) |
+| `BLINDPAY_WEBHOOK_SECRET_DEV` | wenn Dev-API-Key gesetzt | — | Svix-Secret des Webhook-Endpunkts der Entwicklungsinstanz; gleiche Regeln wie `BLINDPAY_WEBHOOK_SECRET` |
 | `BLINDPAY_TIMEOUT_MS` | nein | `15000` | Timeout des BlindPay-HTTP-Clients (ms) |
 | `KYC_REDIRECT_URL_WHITELIST` | nein | — | Allowlist der KYC-Redirect-Hosts pro Consumer |
 | `RATE_LIMIT_ENABLED` | nein | `true` | Obergrenzen pro Adresse auf den Routen, die XLM ausgeben. Notfallschalter |

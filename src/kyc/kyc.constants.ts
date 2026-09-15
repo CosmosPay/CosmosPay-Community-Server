@@ -6,6 +6,22 @@ export const LOCAL_RECEIVER_PREFIX = 'local_';
 /** How long before the same receiver may be sent another ToS email. */
 export const TOS_EMAIL_COOLDOWN_MS = 24 * 60 * 60 * 1000; // once per day
 
+/**
+ * Receiver fields a tenant key may still change once the receiver exists at
+ * BlindPay: its own reference and a display image — nothing that describes the
+ * person or business under KYC.
+ *
+ * Before that point an edit re-enters `pending_review`. After it, a PUT rewrites
+ * the identity at the provider with no review at all, so every other field —
+ * names, tax id, date of birth, address, documents, owners, contact details —
+ * needs an elevated caller. An allowlist, so a field added to
+ * `CreateReceiverDto` later is reviewer-only until someone lists it here.
+ */
+export const RECEIVER_TENANT_EDITABLE_FIELDS: readonly string[] = [
+  'external_id',
+  'image_url',
+];
+
 // --- Document upload -------------------------------------------------------
 //
 // Multer buffers every part of an upload in memory, and its defaults bound

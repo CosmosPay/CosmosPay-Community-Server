@@ -12,6 +12,7 @@ import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface'
 import { resolvePlanCommissionBps } from '@/common/plan-commission';
 import { isUniqueViolation } from '@/common/prisma-errors';
 import { resolveNetwork } from '@/common/stellar-network';
+import { project } from '@/common/projection';
 import { PrismaService } from '@/prisma/prisma.service';
 import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
 import { StellarAccountLoader } from '@/stellar/account-loader.service';
@@ -56,8 +57,50 @@ import {
 import { SwapRequestTerms, swapMatchesRequest } from '@/swaps/swap-idempotency';
 import { SWAP_COMMISSION_MEMO } from '@/swaps/swaps.constants';
 
-/** A stored swap plus its derived QR — the shape API responses return. */
-export type SwapView = Swap & {
+/**
+ * The columns a swap may leave this service with: every field `SwapEntity`
+ * documents, plus `expiresAt`. An allowlist, because the spread it replaces
+ * answered with the whole row — `consumerId` and the settlement bookkeeping
+ * (`settlementEpoch`, `lastCheckedAt`, `notFoundStreak`) — on routes the shared
+ * public key reaches, and would have answered with any column added later. The
+ * list reads through it as a `select`; the single-row paths, which need the full
+ * row for the relay and the observer, cut it with {@link project}.
+ */
+export const SWAP_PUBLIC_SELECT = {
+  id: true,
+  status: true,
+  network: true,
+  source: true,
+  destination: true,
+  sendAsset: true,
+  sendAssetIssuer: true,
+  sendAmount: true,
+  feeAmount: true,
+  feeBps: true,
+  swapAmount: true,
+  destAsset: true,
+  destAssetIssuer: true,
+  destEstimated: true,
+  destMin: true,
+  slippageBps: true,
+  path: true,
+  memo: true,
+  idempotencyKey: true,
+  xdr: true,
+  uri: true,
+  txHash: true,
+  expiresAt: true,
+  createdAt: true,
+  updatedAt: true,
+} as const satisfies Prisma.SwapSelect;
+
+/** A swap as the list returns it. */
+export type PublicSwap = Prisma.SwapGetPayload<{
+  select: typeof SWAP_PUBLIC_SELECT;
+}>;
+
+/** A public swap plus its derived QR — the shape single-swap responses return. */
+export type SwapView = PublicSwap & {
   qr: string;
   /** The commission MEMO_TEXT label when a commission was collected, else null. */
   commissionMemo: string | null;
@@ -420,7 +463,12 @@ export class SwapsService {
   async findAll(
     consumer: GatewayConsumer,
     query: QuerySwapsDto,
-  ): Promise<{ data: Swap[]; total: number; take: number; skip: number }> {
+  ): Promise<{
+    data: PublicSwap[];
+    total: number;
+    take: number;
+    skip: number;
+  }> {
     const where = {
       consumer: { apisixUsername: consumer.username },
       ...(query.status ? { status: query.status } : {}),
@@ -432,6 +480,7 @@ export class SwapsService {
         take: query.take,
         skip: query.skip,
         orderBy: { createdAt: 'desc' },
+        select: SWAP_PUBLIC_SELECT,
       }),
       this.prisma.swap.count({ where }),
     ]);
@@ -753,7 +802,7 @@ export class SwapsService {
   /** A stored swap with its SEP-7 QR and commission label attached. */
   private async withQr(swap: Swap): Promise<SwapView> {
     return {
-      ...swap,
+      ...project(swap, SWAP_PUBLIC_SELECT),
       qr: await sep7Qr(swap.uri),
       // A collected commission (feeAmount > 0) with no caller memo is labelled
       // on-chain with the commission memo text.

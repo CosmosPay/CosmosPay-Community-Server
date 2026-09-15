@@ -1,4 +1,6 @@
 import { Injectable } from '@nestjs/common';
+import type { BlindpayEnvironment } from '@/config/configuration';
+import type { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import { BlindpayClient, UploadableFile } from '@/blindpay/blindpay.client';
 import type { BlindpayObject } from '@/blindpay/blindpay-sync.service';
 
@@ -21,6 +23,10 @@ export interface BlindpayTosRequest {
  * BlindPay's URL layout to assert anything. The feature services now say what they
  * want (`requestTos`, `deleteBankAccount`) and this class says where it is.
  *
+ * Every call names the instance it goes to (`env`), which a feature service
+ * resolves once per request with {@link environmentFor} — see `BlindpayClient`
+ * for why there are two.
+ *
  * Split from the onramp and offramp surfaces so each feature module injects only the
  * calls it makes, not a facade over the whole provider.
  */
@@ -28,88 +34,127 @@ export interface BlindpayTosRequest {
 export class BlindpayKycApi {
   constructor(private readonly client: BlindpayClient) {}
 
+  /** The BlindPay instance that serves `consumer`. */
+  environmentFor(consumer: GatewayConsumer): BlindpayEnvironment {
+    return this.client.environmentFor(consumer);
+  }
+
   /**
    * Starts BlindPay's hosted terms-of-service flow and returns the acceptance URL.
    * This route lives at `/e/instances/{id}/tos`, outside the normal instance path, so
-   * it cannot go through {@link BlindpayClient.instancePath}.
+   * it cannot go through `BlindpayInstance.instancePath`.
    */
-  requestTos(body: BlindpayTosRequest): Promise<{ url: string }> {
-    return this.client.post<{ url: string }>(
-      `/e/instances/${this.client.instanceId}/tos`,
+  requestTos(
+    env: BlindpayEnvironment,
+    body: BlindpayTosRequest,
+  ): Promise<{ url: string }> {
+    const instance = this.client.instance(env);
+    return instance.post<{ url: string }>(
+      `/e/instances/${instance.instanceId}/tos`,
       body,
     );
   }
 
   /** Creates the receiver at BlindPay — the irreversible step of `enable`. */
-  createReceiver(payload: object): Promise<BlindpayObject> {
-    return this.client.post<BlindpayObject>(
-      this.client.instancePath('/customers'),
+  createReceiver(
+    env: BlindpayEnvironment,
+    payload: object,
+  ): Promise<BlindpayObject> {
+    const instance = this.client.instance(env);
+    return instance.post<BlindpayObject>(
+      instance.instancePath('/customers'),
       payload,
     );
   }
 
-  getReceiver(receiverId: string): Promise<BlindpayObject> {
-    return this.client.get<BlindpayObject>(
-      this.client.instancePath(`/customers/${receiverId}`),
+  getReceiver(
+    env: BlindpayEnvironment,
+    receiverId: string,
+  ): Promise<BlindpayObject> {
+    const instance = this.client.instance(env);
+    return instance.get<BlindpayObject>(
+      instance.instancePath(`/customers/${receiverId}`),
     );
   }
 
-  updateReceiver(receiverId: string, patch: object): Promise<BlindpayObject> {
-    return this.client.put<BlindpayObject>(
-      this.client.instancePath(`/customers/${receiverId}`),
+  updateReceiver(
+    env: BlindpayEnvironment,
+    receiverId: string,
+    patch: object,
+  ): Promise<BlindpayObject> {
+    const instance = this.client.instance(env);
+    return instance.put<BlindpayObject>(
+      instance.instancePath(`/customers/${receiverId}`),
       patch,
     );
   }
 
-  deleteReceiver(receiverId: string): Promise<unknown> {
-    return this.client.delete(
-      this.client.instancePath(`/customers/${receiverId}`),
-    );
+  deleteReceiver(
+    env: BlindpayEnvironment,
+    receiverId: string,
+  ): Promise<unknown> {
+    const instance = this.client.instance(env);
+    return instance.delete(instance.instancePath(`/customers/${receiverId}`));
   }
 
   createBlockchainWallet(
+    env: BlindpayEnvironment,
     receiverId: string,
     body: object,
   ): Promise<BlindpayObject> {
-    return this.client.post<BlindpayObject>(
-      this.client.instancePath(`/customers/${receiverId}/blockchain-wallets`),
+    const instance = this.client.instance(env);
+    return instance.post<BlindpayObject>(
+      instance.instancePath(`/customers/${receiverId}/blockchain-wallets`),
       body,
     );
   }
 
   /** The message a customer signs to prove an EOA wallet is theirs. */
-  getWalletSignMessage(receiverId: string): Promise<BlindpayObject> {
-    return this.client.get<BlindpayObject>(
-      this.client.instancePath(
+  getWalletSignMessage(
+    env: BlindpayEnvironment,
+    receiverId: string,
+  ): Promise<BlindpayObject> {
+    const instance = this.client.instance(env);
+    return instance.get<BlindpayObject>(
+      instance.instancePath(
         `/customers/${receiverId}/blockchain-wallets/sign-message`,
       ),
     );
   }
 
   deleteBlockchainWallet(
+    env: BlindpayEnvironment,
     receiverId: string,
     walletId: string,
   ): Promise<unknown> {
-    return this.client.delete(
-      this.client.instancePath(
+    const instance = this.client.instance(env);
+    return instance.delete(
+      instance.instancePath(
         `/customers/${receiverId}/blockchain-wallets/${walletId}`,
       ),
     );
   }
 
-  createBankAccount(receiverId: string, body: object): Promise<BlindpayObject> {
-    return this.client.post<BlindpayObject>(
-      this.client.instancePath(`/customers/${receiverId}/bank-accounts`),
+  createBankAccount(
+    env: BlindpayEnvironment,
+    receiverId: string,
+    body: object,
+  ): Promise<BlindpayObject> {
+    const instance = this.client.instance(env);
+    return instance.post<BlindpayObject>(
+      instance.instancePath(`/customers/${receiverId}/bank-accounts`),
       body,
     );
   }
 
   deleteBankAccount(
+    env: BlindpayEnvironment,
     receiverId: string,
     bankAccountId: string,
   ): Promise<unknown> {
-    return this.client.delete(
-      this.client.instancePath(
+    const instance = this.client.instance(env);
+    return instance.delete(
+      instance.instancePath(
         `/customers/${receiverId}/bank-accounts/${bankAccountId}`,
       ),
     );
@@ -117,21 +162,25 @@ export class BlindpayKycApi {
 
   /** Uploads a KYC document into one of BlindPay's storage buckets. */
   uploadFile(
+    env: BlindpayEnvironment,
     file: UploadableFile,
     bucket: string,
   ): Promise<{ file_url: string }> {
-    return this.client.uploadFile(file, bucket);
+    return this.client.instance(env).uploadFile(file, bucket);
   }
 
   /** The bank rails available to the platform instance (not instance-scoped). */
-  listRails(): Promise<BlindpayObject> {
-    return this.client.get<BlindpayObject>('/available/rails');
+  listRails(env: BlindpayEnvironment): Promise<BlindpayObject> {
+    return this.client.instance(env).get<BlindpayObject>('/available/rails');
   }
 
   /** The field schema a rail requires (not instance-scoped). */
-  getBankDetails(rail: string): Promise<BlindpayObject> {
-    return this.client.get<BlindpayObject>('/available/bank-details', {
-      query: { rail },
-    });
+  getBankDetails(
+    env: BlindpayEnvironment,
+    rail: string,
+  ): Promise<BlindpayObject> {
+    return this.client
+      .instance(env)
+      .get<BlindpayObject>('/available/bank-details', { query: { rail } });
   }
 }

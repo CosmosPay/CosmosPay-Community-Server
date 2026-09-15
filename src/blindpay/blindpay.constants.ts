@@ -1,3 +1,5 @@
+import type { BlindpayEnvironment } from '@/config/configuration';
+
 /**
  * Enumerations mirrored from the BlindPay API. Kept as `as const` tuples so they
  * double as runtime allow-lists for class-validator (`@IsIn`) and as TypeScript
@@ -122,6 +124,36 @@ export const SVIX_TOLERANCE_SECONDS = 5 * 60;
 
 /** Prefix on the Svix endpoint secret; the rest is the base64 HMAC key. */
 export const SVIX_SECRET_PREFIX = 'whsec_';
+
+/**
+ * The shortest HMAC key a Svix endpoint secret may decode to. Svix mints 24
+ * random bytes (`whsec_` + 32 base64 characters), so anything shorter is a
+ * truncated or mistyped value — and at the extreme an EMPTY key, which is what
+ * `Buffer.from(…, 'base64')` silently makes of a string outside the alphabet.
+ * A webhook signed with an empty key is one anybody can sign.
+ */
+export const SVIX_MIN_SECRET_BYTES = 24;
+
+/**
+ * Every BlindPay platform instance this service talks to, production first — the
+ * order the inbound webhook tries their secrets in.
+ */
+export const BLINDPAY_ENVIRONMENTS: readonly BlindpayEnvironment[] = [
+  'prod',
+  'dev',
+];
+
+/**
+ * The variables that set each instance up, named in the 503 a caller gets when
+ * its environment's instance is not configured, so the operator reading it knows
+ * which pair is missing rather than only that "BlindPay" is.
+ */
+export const BLINDPAY_INSTANCE_ENV_VARS: Readonly<
+  Record<BlindpayEnvironment, string>
+> = {
+  prod: 'BLINDPAY_API_KEY and BLINDPAY_INSTANCE_ID',
+  dev: 'BLINDPAY_API_KEY_DEV and BLINDPAY_INSTANCE_ID_DEV',
+};
 
 /**
  * Payin/payout statuses that mean the money stopped moving. A webhook may move a

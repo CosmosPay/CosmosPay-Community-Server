@@ -124,10 +124,11 @@ export class KycMetaController {
     },
   })
   upload(
+    @CurrentConsumer() consumer: GatewayConsumer,
     @UploadedFile() file: UploadableFile | undefined,
     @Body('bucket') bucket?: string,
   ) {
-    return this.meta.uploadDocument(file, bucket);
+    return this.meta.uploadDocument(consumer, file, bucket);
   }
 
   @Post('terms-of-service')
@@ -145,20 +146,23 @@ export class KycMetaController {
   @Get('rails')
   @RequirePermissions('kyc:read')
   @ApiOperation({ summary: 'List available bank rails' })
-  rails() {
-    return this.meta.listRails();
+  rails(@CurrentConsumer() consumer: GatewayConsumer) {
+    return this.meta.listRails(consumer);
   }
 
   @Get('bank-details')
   @RequirePermissions('kyc:read')
   @ApiOperation({ summary: 'Get the field schema required by a rail' })
-  bankDetails(@Query('rail') rail?: string) {
+  bankDetails(
+    @CurrentConsumer() consumer: GatewayConsumer,
+    @Query('rail') rail?: string,
+  ) {
     if (!rail) {
       throw ApiError.badRequest(
         ApiErrorCode.ValidationFailed,
         'Query param "rail" is required',
       );
     }
-    return this.meta.bankDetails(rail);
+    return this.meta.bankDetails(consumer, rail);
   }
 }

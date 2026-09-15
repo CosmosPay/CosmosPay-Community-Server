@@ -76,7 +76,10 @@ function makeService() {
     get: jest.fn(),
     instanceId: 'in_test',
     instancePath: jest.fn((p: string) => `/instances/in_test${p}`),
+    environmentFor: jest.fn(() => 'prod'),
+    instance: jest.fn(),
   };
+  blindpay.instance.mockReturnValue(blindpay);
   const consumers = { resolve: jest.fn().mockResolvedValue({ id: 'c1' }) };
   // The real mirror narrows its upsert to the public projection; so does this.
   const sync = {
@@ -110,7 +113,12 @@ describe('OnrampService quote ownership', () => {
     await service.createQuote(CONSUMER, { blockchain_wallet_id: 'w1' } as any);
 
     expect(prisma.blindpayQuote.create).toHaveBeenCalledWith({
-      data: { consumerId: 'c1', blindpayId: 'pq_000000000001', kind: 'PAYIN' },
+      data: {
+        consumerId: 'c1',
+        environment: 'prod',
+        blindpayId: 'pq_000000000001',
+        kind: 'PAYIN',
+      },
     });
   });
 
@@ -151,6 +159,7 @@ describe('OnrampService quote ownership', () => {
     const { service, prisma, blindpay } = makeService();
     prisma.blindpayQuote.findUnique.mockResolvedValue({
       consumerId: 'c1',
+      environment: 'prod',
       blindpayId: 'qe_000000000001',
       kind: 'PAYOUT',
     });
@@ -161,10 +170,27 @@ describe('OnrampService quote ownership', () => {
     expect(blindpay.post).not.toHaveBeenCalled();
   });
 
+  it('refuses a quote minted on the other BlindPay instance', async () => {
+    const { service, prisma, blindpay } = makeService();
+    // The caller is a production key; this quote was priced on the dev instance.
+    prisma.blindpayQuote.findUnique.mockResolvedValue({
+      consumerId: 'c1',
+      environment: 'dev',
+      blindpayId: 'pq_000000000001',
+      kind: 'PAYIN',
+    });
+
+    await expect(
+      service.createPayin(CONSUMER, { payin_quote_id: 'pq_000000000001' }),
+    ).rejects.toMatchObject({ status: 404, code: 'quote_not_found' });
+    expect(blindpay.post).not.toHaveBeenCalled();
+  });
+
   it('executes a quote the caller owns', async () => {
     const { service, prisma, blindpay, sync } = makeService();
     prisma.blindpayQuote.findUnique.mockResolvedValue({
       consumerId: 'c1',
+      environment: 'prod',
       blindpayId: 'pq_000000000001',
       kind: 'PAYIN',
     });
@@ -220,7 +246,7 @@ describe('OnrampService reads', () => {
       '/instances/in_test/payins/pi_000000000001',
     );
     // The refresh still needs the receiver the row was attributed to.
-    expect(sync.mirrorPayin).toHaveBeenCalledWith('c1', 'rcv_1', {
+    expect(sync.mirrorPayin).toHaveBeenCalledWith('c1', 'prod', 'rcv_1', {
       id: 'pi_000000000001',
     });
   });

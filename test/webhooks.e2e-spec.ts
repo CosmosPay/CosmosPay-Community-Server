@@ -9,6 +9,10 @@ import { AppModule } from '@/app.module';
 import { PrismaService } from '@/prisma/prisma.service';
 import { WebhookDestinationGuard } from '@/webhooks/webhook-destination.guard';
 import { WebhookHttpClient } from '@/webhooks/webhook-http';
+import {
+  WEBHOOK_PING_RATE_LIMIT,
+  WEBHOOK_REDELIVER_RATE_LIMIT,
+} from '@/webhooks/webhooks.constants';
 
 /**
  * Full CRUD for webhook endpoints behind the APISIX gate. Prisma is mocked with
@@ -19,7 +23,18 @@ import { WebhookHttpClient } from '@/webhooks/webhook-http';
 describe('Webhooks CRUD (e2e)', () => {
   let app: INestApplication;
   const store = new Map<string, any>();
+  const counters = new Map<string, number>();
   let seq = 0;
+
+  /** What Prisma answers for a `select`: those columns only, or the whole row. */
+  function project(row: any, select?: Record<string, boolean>) {
+    if (!row || !select) return row;
+    return Object.fromEntries(
+      Object.keys(select)
+        .filter((key) => select[key])
+        .map((key) => [key, row[key]]),
+    );
+  }
 
   const prismaMock = {
     onModuleInit: jest.fn(),
@@ -27,6 +42,13 @@ describe('Webhooks CRUD (e2e)', () => {
     $connect: jest.fn(),
     $disconnect: jest.fn(),
     $transaction: (ops: Promise<unknown>[]) => Promise.all(ops),
+    // The rate limiter's atomic upsert, as an in-memory counter.
+    $queryRaw: jest.fn((_parts: unknown, key: string, windowStart: Date) => {
+      const bucket = `${key}|${windowStart.getTime()}`;
+      const next = (counters.get(bucket) ?? 0) + 1;
+      counters.set(bucket, next);
+      return Promise.resolve([{ count: next }]);
+    }),
     consumer: {
       upsert: jest
         .fn()
@@ -36,7 +58,10 @@ describe('Webhooks CRUD (e2e)', () => {
       create: jest.fn().mockResolvedValue({ id: 'rl_1' }),
     },
     webhookEndpoint: {
-      create: jest.fn(({ data }: any) => {
+      // Rows carry every column the real table has, so a response that is not
+      // projected hands them straight back and the key-set assertions see it.
+      // `select` is honoured, as Prisma honours it.
+      create: jest.fn(({ data, select }: any) => {
         const row = {
           // The gateway consumer that created it — what the ownership filter
           // matches on.
@@ -44,33 +69,42 @@ describe('Webhooks CRUD (e2e)', () => {
           id: `we_${++seq}`,
           enabled: true,
           destinationBlocked: false,
-          description: null,
+          previousSecret: null,
+          previousSecretExpiresAt: null,
           createdAt: new Date(),
           updatedAt: new Date(),
           ...data,
+          // An unset optional column is NULL in Postgres, not absent.
+          description: data.description ?? null,
         };
         store.set(row.id, row);
-        return Promise.resolve(row);
+        return Promise.resolve(project(row, select));
       }),
       // These honour the consumer filter, as Prisma does. A fake that ignores
       // `where` cannot distinguish "not found" from "someone else's row", which
       // is the only thing standing between two tenants.
-      findMany: jest.fn(({ where }: any) =>
-        Promise.resolve([...store.values()].filter((r) => owns(r, where))),
+      findMany: jest.fn(({ where, select }: any) =>
+        Promise.resolve(
+          [...store.values()]
+            .filter((r) => owns(r, where))
+            .map((r) => project(r, select)),
+        ),
       ),
       count: jest.fn(({ where }: any) =>
         Promise.resolve(
           [...store.values()].filter((r) => owns(r, where)).length,
         ),
       ),
-      findFirst: jest.fn(({ where }: any) => {
+      findFirst: jest.fn(({ where, select }: any) => {
         const row = store.get(where.id);
-        return Promise.resolve(row && owns(row, where) ? row : null);
+        return Promise.resolve(
+          row && owns(row, where) ? project(row, select) : null,
+        );
       }),
-      update: jest.fn(({ where, data }: any) => {
+      update: jest.fn(({ where, data, select }: any) => {
         const row = { ...store.get(where.id), ...data, updatedAt: new Date() };
         store.set(where.id, row);
-        return Promise.resolve(row);
+        return Promise.resolve(project(row, select));
       }),
       delete: jest.fn(({ where }: any) => {
         const row = store.get(where.id);
@@ -81,6 +115,7 @@ describe('Webhooks CRUD (e2e)', () => {
     webhookDelivery: {
       findMany: jest.fn().mockResolvedValue([]),
       count: jest.fn().mockResolvedValue(0),
+      findFirst: jest.fn().mockResolvedValue(null),
     },
   };
 
@@ -138,6 +173,21 @@ describe('Webhooks CRUD (e2e)', () => {
       .set('x-consumer-username', 'cosmos_u1')
       .set('x-consumer-permissions', 'webhooks:read,webhooks:write');
 
+  /** The documented `WebhookEndpointEntity` fields — the whole response. */
+  const PUBLIC_KEYS = [
+    'createdAt',
+    'description',
+    'destinationBlocked',
+    'enabled',
+    'eventTypes',
+    'id',
+    'updatedAt',
+    'url',
+  ];
+  /** `WebhookEndpointWithSecretEntity`: create and rotate-secret only. */
+  const WITH_SECRET_KEYS = [...PUBLIC_KEYS, 'secret'].sort();
+  const PREVIOUS_SECRET = 'whsec_previous_still_accepted';
+
   let id: string;
 
   it('rejects creation without the gateway secret (403)', () =>
@@ -181,12 +231,24 @@ describe('Webhooks CRUD (e2e)', () => {
           eventTypes: ['PAYMENT_INTENT_CREATED'],
         }),
     ).expect(201);
+    // Taken first, so a failed assertion below does not cascade into every
+    // later test that reuses this endpoint.
+    id = res.body.id;
     expect(res.body.id).toBeDefined();
     expect(res.body.secret).toMatch(/^whsec_/);
-    id = res.body.id;
+    // The documented entity and nothing more — no internal `consumerId`.
+    expect(Object.keys(res.body).sort()).toEqual(WITH_SECRET_KEYS);
   });
 
-  it('list/get never expose the secret', async () => {
+  it('list/get never expose a signing secret, current or previous', async () => {
+    // The row as main's grace-window rotation leaves it: the previous secret is
+    // still stored, and an integrator mid-rotation still accepts it. Anything
+    // holding `webhooks:read` could forge events with it if it came back here.
+    Object.assign(store.get(id), {
+      previousSecret: PREVIOUS_SECRET,
+      previousSecretExpiresAt: new Date(Date.now() + 86_400_000),
+    });
+
     const list = await gw(request(http()).get(route)).expect(200);
     // The list is the standard { data, total, take, skip } envelope, like every
     // other list in this API. It used to be a bare array clamped at 100, which
@@ -195,9 +257,18 @@ describe('Webhooks CRUD (e2e)', () => {
     expect(list.body.take).toBe(100);
     expect(list.body.skip).toBe(0);
     expect(list.body.data[0].secret).toBeUndefined();
+    expect(list.body.data[0]).not.toHaveProperty('previousSecret');
+    expect(list.body.data[0]).not.toHaveProperty('previousSecretExpiresAt');
+    expect(Object.keys(list.body.data[0]).sort()).toEqual(PUBLIC_KEYS);
+    expect(JSON.stringify(list.body)).not.toContain('whsec_');
+
     const one = await gw(request(http()).get(`${route}/${id}`)).expect(200);
     expect(one.body.id).toBe(id);
     expect(one.body.secret).toBeUndefined();
+    expect(one.body).not.toHaveProperty('previousSecret');
+    expect(one.body).not.toHaveProperty('previousSecretExpiresAt');
+    expect(Object.keys(one.body).sort()).toEqual(PUBLIC_KEYS);
+    expect(JSON.stringify(one.body)).not.toContain('whsec_');
   });
 
   it('404s for another tenant, not just for an unknown id', async () => {
@@ -231,6 +302,9 @@ describe('Webhooks CRUD (e2e)', () => {
       request(http()).patch(`${route}/${id}`).send({ enabled: false }),
     ).expect(200);
     expect(res.body.enabled).toBe(false);
+    // The stored row still holds the previous secret; the response does not.
+    expect(Object.keys(res.body).sort()).toEqual(PUBLIC_KEYS);
+    expect(JSON.stringify(res.body)).not.toContain('whsec_');
   });
 
   it('rotates the secret (200) returning a new secret', async () => {
@@ -238,6 +312,10 @@ describe('Webhooks CRUD (e2e)', () => {
       request(http()).post(`${route}/${id}/rotate-secret`),
     ).expect(201);
     expect(res.body.secret).toMatch(/^whsec_/);
+    // The new secret once — never the previous one still stored on the row.
+    expect(Object.keys(res.body).sort()).toEqual(WITH_SECRET_KEYS);
+    expect(res.body).not.toHaveProperty('previousSecret');
+    expect(JSON.stringify(res.body)).not.toContain(PREVIOUS_SECRET);
   });
 
   it('pings the endpoint (stubbed transport → ok)', async () => {
@@ -247,6 +325,59 @@ describe('Webhooks CRUD (e2e)', () => {
     );
     expect(res.body.ok).toBe(true);
     expect(res.body.responseStatus).toBe(200);
+  });
+
+  describe('rate limits on the routes that send outbound requests', () => {
+    beforeEach(() => {
+      counters.clear();
+    });
+
+    it('caps ping, and refuses before anything is sent', async () => {
+      const { limit } = WEBHOOK_PING_RATE_LIMIT;
+      webhookHttp.send.mockClear();
+
+      for (let i = 0; i < limit; i++) {
+        const res = await gw(
+          request(http()).post(`${route}/${id}/ping`),
+        ).expect(201);
+        expect(Number(res.headers['ratelimit-limit'])).toBe(limit);
+        expect(Number(res.headers['ratelimit-remaining'])).toBe(limit - 1 - i);
+      }
+      expect(webhookHttp.send).toHaveBeenCalledTimes(limit);
+
+      const refused = await gw(
+        request(http()).post(`${route}/${id}/ping`),
+      ).expect(429);
+      expect(refused.body.code).toBe('rate_limited');
+      expect(refused.headers['retry-after']).toBeDefined();
+      // Refused in the guard: the extra call sent nothing to the integrator.
+      expect(webhookHttp.send).toHaveBeenCalledTimes(limit);
+    });
+
+    it('caps redelivery, and refuses before the delivery is loaded', async () => {
+      const { limit } = WEBHOOK_REDELIVER_RATE_LIMIT;
+      const redeliver = () =>
+        gw(request(http()).post(`${route}/${id}/deliveries/wd_nope/redeliver`));
+      prismaMock.webhookDelivery.findFirst.mockClear();
+
+      for (let i = 0; i < limit; i++) {
+        // An unknown delivery still spends budget: the guard counts requests,
+        // not outcomes, so probing ids is bounded too.
+        const res = await redeliver().expect(404);
+        expect(Number(res.headers['ratelimit-limit'])).toBe(limit);
+        expect(Number(res.headers['ratelimit-remaining'])).toBe(limit - 1 - i);
+      }
+
+      const refused = await redeliver().expect(429);
+      expect(refused.body.code).toBe('rate_limited');
+      expect(refused.headers['retry-after']).toBeDefined();
+      expect(prismaMock.webhookDelivery.findFirst).toHaveBeenCalledTimes(limit);
+    });
+
+    it('leaves the read routes unlimited', async () => {
+      const res = await gw(request(http()).get(`${route}/${id}`)).expect(200);
+      expect(res.headers['ratelimit-limit']).toBeUndefined();
+    });
   });
 
   it('404s on a foreign/unknown id', () =>

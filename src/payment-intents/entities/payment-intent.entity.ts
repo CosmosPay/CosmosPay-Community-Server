@@ -85,6 +85,14 @@ export class PaymentIntentEntity {
   @ApiProperty({ nullable: true, example: null })
   reference!: string | null;
 
+  @ApiProperty({
+    nullable: true,
+    description:
+      'When an unpaid intent expires. A payment verified later still settles it.',
+    example: '2026-06-21T13:34:56.000Z',
+  })
+  expiresAt!: Date | null;
+
   @ApiProperty({ example: '2026-06-21T12:34:56.000Z' })
   createdAt!: Date;
 
@@ -151,6 +159,13 @@ export class TxPaymentIntentEntity {
 
   @ApiProperty({ nullable: true, example: null })
   reference!: string | null;
+
+  @ApiProperty({
+    nullable: true,
+    description: 'When the intent expires if unpaid.',
+    example: '2026-06-21T13:34:56.000Z',
+  })
+  expiresAt!: Date | null;
 
   @ApiProperty({ example: '2026-06-21T12:34:56.000Z' })
   createdAt!: Date;
@@ -224,6 +239,13 @@ export class PayPaymentIntentEntity {
 
   @ApiProperty({ nullable: true, example: null })
   reference!: string | null;
+
+  @ApiProperty({
+    nullable: true,
+    description: 'When the intent expires if unpaid.',
+    example: '2026-06-21T13:34:56.000Z',
+  })
+  expiresAt!: Date | null;
 
   @ApiProperty({ example: '2026-06-21T12:34:56.000Z' })
   createdAt!: Date;

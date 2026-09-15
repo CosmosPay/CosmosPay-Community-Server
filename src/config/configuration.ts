@@ -24,6 +24,17 @@ import {
  */
 export type StellarNetwork = 'public' | 'testnet';
 
+/** The API-key environment a BlindPay instance serves (`dev` keys, `prod` keys). */
+export type BlindpayEnvironment = 'dev' | 'prod';
+
+/** Credentials of one BlindPay platform instance. */
+export interface BlindpayInstanceConfig {
+  apiKey: string;
+  instanceId: string;
+  // Svix endpoint secret (whsec_...) used to verify this instance's webhooks.
+  webhookSecret: string;
+}
+
 export interface AppConfig {
   nodeEnv: string;
   /** When true, mounts /docs (Express middleware — not behind Nest guards). */
@@ -138,15 +149,14 @@ export interface AppConfig {
   };
   blindpay: {
     // BlindPay is the fiat<->stablecoin rails provider powering onramp/offramp/KYC.
-    // We operate a single platform instance: one API key + one instance id shared
-    // by every consumer, with each receiver/payin/payout attributed internally to
-    // the APISIX consumer that created it.
-    apiKey: string;
-    instanceId: string;
+    // One platform instance per API-key environment, each shared by every consumer
+    // of that environment, with each receiver/payin/payout attributed internally
+    // to the APISIX consumer that created it. A `dev` key reaching the production
+    // instance could delete real KYC identities and move real money, so the
+    // environment picks the instance the way it picks the Stellar network.
     baseUrl: string;
-    // Svix endpoint secret (whsec_...) used to verify inbound BlindPay webhooks.
-    webhookSecret: string;
     timeoutMs: number;
+    instances: Record<BlindpayEnvironment, BlindpayInstanceConfig>;
   };
   rateLimit: {
     /**
@@ -350,13 +360,24 @@ export default (): AppConfig => ({
     ).toLowerCase(),
   },
   blindpay: {
-    apiKey: process.env.BLINDPAY_API_KEY ?? '',
-    instanceId: process.env.BLINDPAY_INSTANCE_ID ?? '',
     baseUrl: (
       process.env.BLINDPAY_BASE_URL ?? 'https://api.blindpay.com/v1'
     ).replace(/\/+$/, ''),
-    webhookSecret: process.env.BLINDPAY_WEBHOOK_SECRET ?? '',
     timeoutMs: parseInt(process.env.BLINDPAY_TIMEOUT_MS ?? '15000', 10),
+    instances: {
+      // The unsuffixed variables stay the production instance, so a deployment
+      // that configured BlindPay before the split keeps serving prod keys as is.
+      prod: {
+        apiKey: process.env.BLINDPAY_API_KEY ?? '',
+        instanceId: process.env.BLINDPAY_INSTANCE_ID ?? '',
+        webhookSecret: process.env.BLINDPAY_WEBHOOK_SECRET ?? '',
+      },
+      dev: {
+        apiKey: process.env.BLINDPAY_API_KEY_DEV ?? '',
+        instanceId: process.env.BLINDPAY_INSTANCE_ID_DEV ?? '',
+        webhookSecret: process.env.BLINDPAY_WEBHOOK_SECRET_DEV ?? '',
+      },
+    },
   },
   rateLimit: {
     enabled:
