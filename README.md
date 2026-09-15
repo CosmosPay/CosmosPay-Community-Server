@@ -102,7 +102,8 @@ prisma/schema.prisma              Consumer, PaymentIntent, Swap, LiquidityPoolOp
                                   AdminAuditLog, Alias, AliasAddress,
                                   AliasChallenge, AliasRecovery
 test/                             e2e suites: gateway gate, admin + alias console gates,
-                                  payment intents, KYC, webhooks, Pollar
+                                  payment intents, swaps, liquidity pools, KYC, webhooks,
+                                  Pollar
 scripts/                          OpenAPI generator, README check, operator scripts
 docs/i18n/                        this README in es, pt, de, fr, hi, zh
 ```
@@ -1001,8 +1002,9 @@ types (`RECEIVER_UPDATED`, `PAYIN_*`, `PAYOUT_*`) through the existing dispatche
 Amounts are **integers in minor units** (e.g. `$123.45` → `12345`). Configure
 the BlindPay dashboard webhook to `<gateway>/v1/blindpay/webhooks` and set
 `BLINDPAY_WEBHOOK_SECRET` to that endpoint's signing secret. Leave the
-`BLINDPAY_*` vars blank to disable the feature (those routes return `503`). See
-`.env.example`.
+`BLINDPAY_*` vars blank to disable the feature: those routes then return `503`
+`misconfigured`, and so does the inbound webhook while `BLINDPAY_WEBHOOK_SECRET`
+is unset. See `.env.example`.
 
 ### KYC redirect URLs are allow-listed per consumer
 
@@ -1518,6 +1520,22 @@ itself — sending integrators to investigate something that was perfectly
 healthy. It now reports `code: "rate_limited"`, and `ApiErrorCode.RateLimited`
 is part of the published enum. Branch on that if you retry on throttling.
 
+### An unconfigured BlindPay now reports `misconfigured`
+
+Two refusals blamed the wrong party when BlindPay is not set up:
+
+| Request | Was | Now |
+| ------- | --- | --- |
+| A route that calls BlindPay — under `/v1/kyc`, `/v1/onramp` or `/v1/offramp` — while `BLINDPAY_API_KEY` or `BLINDPAY_INSTANCE_ID` is unset | `503` `provider_unavailable` | `503` `misconfigured` |
+| `POST /v1/blindpay/webhooks` while `BLINDPAY_WEBHOOK_SECRET` is unset | `400` `validation_failed` | `503` `misconfigured` |
+
+`provider_unavailable` says the provider is down and a retry may succeed, so an
+integrator following it kept retrying a provider that was fine, for as long as the
+deployment stayed unconfigured. The webhook's `400` told whoever reads the Svix
+log that BlindPay had sent a malformed delivery. Both faults are this deployment's
+configuration, which only an operator can fix. Svix retries any non-2xx, so
+webhook delivery itself is unchanged. Pollar already answered `misconfigured` in
+the same situation.
 
 ### Response shapes that changed
 

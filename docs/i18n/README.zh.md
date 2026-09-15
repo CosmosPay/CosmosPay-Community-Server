@@ -78,7 +78,8 @@ prisma/schema.prisma              Consumer, PaymentIntent, Swap, LiquidityPoolOp
                                   AdminAuditLog, Alias, AliasAddress,
                                   AliasChallenge, AliasRecovery
 test/                             e2e suites: gateway gate, admin + alias console gates,
-                                  payment intents, KYC, webhooks, Pollar
+                                  payment intents, swaps, liquidity pools, KYC, webhooks,
+                                  Pollar
 scripts/                          OpenAPI generator, README check, operator scripts
 docs/i18n/                        this README in es, pt, de, fr, hi, zh
 ```
@@ -675,7 +676,7 @@ wallet ──3. POST /v1/aliases {name, email, nonce, signature} ─────
 | POST   | `/v1/offramp/payouts/:id/documents`                   | `offramp:write`| 附加合规文件 |
 | POST   | `/v1/blindpay/webhooks`                               | _公开_         | 入站 BlindPay（Svix）webhook |
 
-金额是**以最小货币单位表示的整数**（例如 `$123.45` → `12345`）。请在 BlindPay 仪表盘中将 webhook 配置为 `<gateway>/v1/blindpay/webhooks`，并将 `BLINDPAY_WEBHOOK_SECRET` 设置为该端点的签名密钥。将 `BLINDPAY_*` 变量留空即可禁用该功能（相关路由返回 `503`）。见 `.env.example`。
+金额是**以最小货币单位表示的整数**（例如 `$123.45` → `12345`）。请在 BlindPay 仪表盘中将 webhook 配置为 `<gateway>/v1/blindpay/webhooks`，并将 `BLINDPAY_WEBHOOK_SECRET` 设置为该端点的签名密钥。将 `BLINDPAY_*` 变量留空即可禁用该功能：相关路由随后返回 `503` `misconfigured`；在 `BLINDPAY_WEBHOOK_SECRET` 未设置期间，入站 webhook 也同样如此。见 `.env.example`。
 
 ### KYC 重定向 URL 按消费者设置白名单
 
@@ -943,6 +944,16 @@ API 结构没有变化，客户端也无需改动：过去卡在 `pending` 的�
 
 过去，裸 `429` 会回退为 `code: "provider_unavailable"`，这表示某个上游出了问题，而实际上是本服务自己拒绝了请求——让集成方去排查一个完全健康的东西。现在它报告 `code: "rate_limited"`，并且 `ApiErrorCode.RateLimited` 是已发布枚举的一部分。如果你在被限流时重试，请基于它做分支判断。
 
+### 未配置的 BlindPay 现在报告 `misconfigured`
+
+在 BlindPay 未配置时，有两处拒绝把责任归错了对象：
+
+| 请求 | 过去 | 现在 |
+| ---- | ---- | ---- |
+| 在 `BLINDPAY_API_KEY` 或 `BLINDPAY_INSTANCE_ID` 未设置时，调用 BlindPay 的路由（位于 `/v1/kyc`、`/v1/onramp` 或 `/v1/offramp` 下） | `503` `provider_unavailable` | `503` `misconfigured` |
+| 在 `BLINDPAY_WEBHOOK_SECRET` 未设置时的 `POST /v1/blindpay/webhooks` | `400` `validation_failed` | `503` `misconfigured` |
+
+`provider_unavailable` 表示提供方宕机、重试可能成功，因此遵循它的集成方会在部署一直未配置期间，不断重试一个其实完全正常的提供方。webhook 的 `400` 则让阅读 Svix 日志的人以为 BlindPay 发来了格式错误的投递。这两处故障都在于本部署的配置，只有运维人员能修复。Svix 会对任何非 2xx 响应重试，因此 webhook 投递本身不受影响。Pollar 在同样的情况下早已返回 `misconfigured`。
 
 ### 发生变化的响应结构
 

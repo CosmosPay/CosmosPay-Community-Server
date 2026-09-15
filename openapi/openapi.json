@@ -20,7 +20,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -229,7 +229,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -459,7 +459,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -489,14 +489,14 @@
             }
           },
           "409": {
-            "description": "`idempotency_conflict`: an intent with this `memo` already exists for different payment details. Retry with the original request unchanged, or use a new memo (omit `memo` to have one generated). `operation_in_flight`: a concurrent create for the same memo changed it while this one was being created; retry the request.",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ApiErrorBodyEntity"
                 }
               }
-            }
+            },
+            "description": "`idempotency_conflict`: an intent with this `memo` already exists for different payment details. Retry with the original request unchanged, or use a new memo (omit `memo` to have one generated). `operation_in_flight`: a concurrent create for the same memo changed it while this one was being created; retry the request."
           },
           "429": {
             "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
@@ -581,7 +581,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -611,14 +611,14 @@
             }
           },
           "409": {
-            "description": "`idempotency_conflict`: an intent with this `memo` already exists for different payment details. Retry with the original request unchanged, or use a new memo (omit `memo` to have one generated). `operation_in_flight`: a concurrent create for the same memo changed it while this one was being created; retry the request.",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ApiErrorBodyEntity"
                 }
               }
-            }
+            },
+            "description": "`idempotency_conflict`: an intent with this `memo` already exists for different payment details. Retry with the original request unchanged, or use a new memo (omit `memo` to have one generated). `operation_in_flight`: a concurrent create for the same memo changed it while this one was being created; retry the request."
           },
           "429": {
             "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
@@ -729,7 +729,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -853,7 +853,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -974,7 +974,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -1103,7 +1103,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -1222,7 +1222,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -1353,7 +1353,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -1475,7 +1475,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -1605,7 +1605,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -1726,7 +1726,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -1855,7 +1855,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -1974,7 +1974,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -2096,7 +2096,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -2229,7 +2229,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -2259,14 +2259,14 @@
             }
           },
           "409": {
-            "description": "`idempotency_conflict` — this Idempotency-Key was already used for a different request, or an identical swap was already built without a key (retry with an Idempotency-Key, or wait for the prior swap to settle or expire). `operation_in_flight` — STELLAR_SWAP_SINGLE_INFLIGHT is on and this source account already has a PENDING swap.",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ApiErrorBodyEntity"
                 }
               }
-            }
+            },
+            "description": "`idempotency_conflict` — this Idempotency-Key was already used for a different request, or an identical swap was already built without a key (retry with an Idempotency-Key, or wait for the prior swap to settle or expire). `operation_in_flight` — STELLAR_SWAP_SINGLE_INFLIGHT is on and this source account already has a PENDING swap."
           },
           "429": {
             "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
@@ -2374,7 +2374,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -2495,7 +2495,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -2626,7 +2626,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -2759,7 +2759,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -2789,14 +2789,14 @@
             }
           },
           "409": {
-            "description": "`idempotency_conflict` — this Idempotency-Key was already used for a different request, or an identical deposit was already built without a key (retry with an Idempotency-Key, or wait for the prior operation to settle or expire).",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ApiErrorBodyEntity"
                 }
               }
-            }
+            },
+            "description": "`idempotency_conflict` — this Idempotency-Key was already used for a different request, or an identical deposit was already built without a key (retry with an Idempotency-Key, or wait for the prior operation to settle or expire)."
           },
           "429": {
             "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
@@ -2892,7 +2892,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -2922,14 +2922,14 @@
             }
           },
           "409": {
-            "description": "`idempotency_conflict` — this Idempotency-Key was already used for a different request, or an identical withdrawal was already built without a key. `operation_in_flight` — a withdrawal from this pool is already in flight for this account; wait for it to settle or expire.",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ApiErrorBodyEntity"
                 }
               }
-            }
+            },
+            "description": "`idempotency_conflict` — this Idempotency-Key was already used for a different request, or an identical withdrawal was already built without a key. `operation_in_flight` — a withdrawal from this pool is already in flight for this account; wait for it to settle or expire."
           },
           "429": {
             "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
@@ -3015,7 +3015,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -3174,7 +3174,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -3295,7 +3295,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -3426,7 +3426,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -3605,7 +3605,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -3726,7 +3726,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -3863,7 +3863,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -3985,7 +3985,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -4115,7 +4115,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -4236,7 +4236,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -4365,7 +4365,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -4484,7 +4484,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -4605,7 +4605,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -4726,7 +4726,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -4880,7 +4880,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -5009,7 +5009,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -5121,7 +5121,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -5233,7 +5233,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -5367,7 +5367,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -5501,7 +5501,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -5624,7 +5624,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -5834,7 +5834,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -5972,7 +5972,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -6094,7 +6094,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -6226,7 +6226,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -6347,7 +6347,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -6476,7 +6476,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -6588,7 +6588,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -6712,7 +6712,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -6822,7 +6822,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -6953,7 +6953,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -7077,7 +7077,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -7184,7 +7184,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -7315,7 +7315,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -7455,7 +7455,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -7577,7 +7577,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -7708,7 +7708,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -7848,7 +7848,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -7970,7 +7970,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -8089,17 +8089,17 @@
         },
         "responses": {
           "400": {
-            "description": "The multipart form was refused (`validation_failed`), before the provider saw anything: more than 4 text fields; a text field longer than 1024 bytes; more than 1 file; a declared content type other than image/jpeg, image/png, image/webp, image/heic, image/heif, application/pdf; file bytes that do not match the declared content type; a missing `file` part; or an unknown `bucket`.",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ApiErrorBodyEntity"
                 }
               }
-            }
+            },
+            "description": "The multipart form was refused (`validation_failed`), before the provider saw anything: more than 4 text fields; a text field longer than 1024 bytes; more than 1 file; a declared content type other than image/jpeg, image/png, image/webp, image/heic, image/heif, application/pdf; file bytes that do not match the declared content type; a missing `file` part; or an unknown `bucket`."
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -8139,14 +8139,14 @@
             }
           },
           "413": {
-            "description": "The file is larger than 10485760 bytes (`payload_too_large`). Multer stops reading at the limit, so nothing reaches the provider.",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ApiErrorBodyEntity"
                 }
               }
-            }
+            },
+            "description": "The file is larger than 10485760 bytes (`payload_too_large`). Multer stops reading at the limit, so nothing reaches the provider."
           },
           "429": {
             "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — today the Pollar routes that create or fund a Stellar account. Honour `Retry-After`.",
@@ -8224,7 +8224,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -8329,7 +8329,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -8443,7 +8443,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -8565,7 +8565,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -8695,7 +8695,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -8816,7 +8816,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -8945,7 +8945,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -9064,7 +9064,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -9194,7 +9194,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -9315,7 +9315,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -9437,7 +9437,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -9560,7 +9560,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -9682,7 +9682,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -9811,7 +9811,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -9943,7 +9943,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -10072,7 +10072,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -10193,7 +10193,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -10325,7 +10325,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -10447,7 +10447,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -10569,7 +10569,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -10701,7 +10701,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -10822,7 +10822,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -10937,7 +10937,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -11061,7 +11061,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -11194,7 +11194,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -11316,7 +11316,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -11431,7 +11431,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -11553,7 +11553,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -11685,7 +11685,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -11806,7 +11806,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -11930,7 +11930,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -12053,7 +12053,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -12179,7 +12179,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -12305,7 +12305,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -12427,7 +12427,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -12550,7 +12550,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -12673,7 +12673,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -12795,7 +12795,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -12918,7 +12918,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -13039,7 +13039,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -13170,7 +13170,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -13308,7 +13308,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -13431,7 +13431,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -13554,7 +13554,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -13677,7 +13677,7 @@
             }
           },
           "401": {
-            "description": "No authenticated consumer, or admin credentials are required.",
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -13957,91 +13957,6 @@
           "reference",
           "createdAt",
           "updatedAt"
-        ]
-      },
-      "ApiErrorBodyEntity": {
-        "type": "object",
-        "properties": {
-          "statusCode": {
-            "type": "number",
-            "example": 409
-          },
-          "code": {
-            "type": "string",
-            "description": "Stable machine-readable code. Branch on this, never on the message — messages are human-facing and may be reworded; codes are never renamed once published.",
-            "enum": [
-              "insufficient_scope",
-              "no_authenticated_consumer",
-              "gateway_required",
-              "admin_console_only",
-              "not_found",
-              "validation_failed",
-              "payload_too_large",
-              "idempotency_conflict",
-              "operation_in_flight",
-              "invalid_state_transition",
-              "slippage_exceeded",
-              "insufficient_balance",
-              "no_path_found",
-              "trustline_missing",
-              "invalid_amount",
-              "invalid_memo",
-              "transaction_rejected",
-              "provider_error",
-              "provider_unavailable",
-              "quote_not_found",
-              "kyc_state_invalid",
-              "kyc_review_required",
-              "account_disabled",
-              "payload_expired",
-              "rate_limited",
-              "alias_taken",
-              "alias_name_invalid",
-              "alias_challenge_invalid",
-              "alias_signature_invalid",
-              "alias_recovery_invalid",
-              "alias_address_conflict",
-              "misconfigured",
-              "internal_error"
-            ],
-            "example": "idempotency_conflict"
-          },
-          "error": {
-            "type": "string",
-            "description": "The HTTP reason phrase for `statusCode`.",
-            "example": "Conflict"
-          },
-          "message": {
-            "description": "Human-readable detail. An array when class-validator rejected the body.",
-            "oneOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                }
-              }
-            ],
-            "example": "A swap already exists for this Idempotency-Key"
-          },
-          "path": {
-            "type": "string",
-            "example": "/v1/swaps"
-          },
-          "timestamp": {
-            "type": "string",
-            "example": "2026-06-21T12:34:56.000Z"
-          }
-        },
-        "required": [
-          "statusCode",
-          "code",
-          "error",
-          "message",
-          "path",
-          "timestamp"
         ]
       },
       "CreatePayPaymentIntentDto": {
@@ -20343,6 +20258,91 @@
           "user_id",
           "application_id",
           "expires_at"
+        ]
+      },
+      "ApiErrorBodyEntity": {
+        "type": "object",
+        "properties": {
+          "statusCode": {
+            "type": "number",
+            "example": 409
+          },
+          "code": {
+            "type": "string",
+            "description": "Stable machine-readable code. Branch on this, never on the message — messages are human-facing and may be reworded; codes are never renamed once published.",
+            "enum": [
+              "insufficient_scope",
+              "no_authenticated_consumer",
+              "gateway_required",
+              "admin_console_only",
+              "not_found",
+              "validation_failed",
+              "payload_too_large",
+              "idempotency_conflict",
+              "operation_in_flight",
+              "invalid_state_transition",
+              "slippage_exceeded",
+              "insufficient_balance",
+              "no_path_found",
+              "trustline_missing",
+              "invalid_amount",
+              "invalid_memo",
+              "transaction_rejected",
+              "provider_error",
+              "provider_unavailable",
+              "quote_not_found",
+              "kyc_state_invalid",
+              "kyc_review_required",
+              "account_disabled",
+              "payload_expired",
+              "rate_limited",
+              "alias_taken",
+              "alias_name_invalid",
+              "alias_challenge_invalid",
+              "alias_signature_invalid",
+              "alias_recovery_invalid",
+              "alias_address_conflict",
+              "misconfigured",
+              "internal_error"
+            ],
+            "example": "idempotency_conflict"
+          },
+          "error": {
+            "type": "string",
+            "description": "The HTTP reason phrase for `statusCode`.",
+            "example": "Conflict"
+          },
+          "message": {
+            "description": "Human-readable detail. An array when class-validator rejected the body.",
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            ],
+            "example": "A swap already exists for this Idempotency-Key"
+          },
+          "path": {
+            "type": "string",
+            "example": "/v1/swaps"
+          },
+          "timestamp": {
+            "type": "string",
+            "example": "2026-06-21T12:34:56.000Z"
+          }
+        },
+        "required": [
+          "statusCode",
+          "code",
+          "error",
+          "message",
+          "path",
+          "timestamp"
         ]
       }
     }

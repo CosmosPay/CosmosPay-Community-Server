@@ -104,7 +104,8 @@ prisma/schema.prisma              Consumer, PaymentIntent, Swap, LiquidityPoolOp
                                   AdminAuditLog, Alias, AliasAddress,
                                   AliasChallenge, AliasRecovery
 test/                             e2e suites: gateway gate, admin + alias console gates,
-                                  payment intents, KYC, webhooks, Pollar
+                                  payment intents, swaps, liquidity pools, KYC, webhooks,
+                                  Pollar
 scripts/                          OpenAPI generator, README check, operator scripts
 docs/i18n/                        this README in es, pt, de, fr, hi, zh
 ```
@@ -1019,8 +1020,9 @@ próprio integrador como novos tipos de evento (`RECEIVER_UPDATED`, `PAYIN_*`,
 Os valores são **inteiros em unidades menores** (por exemplo, `$123.45` → `12345`).
 Configure o webhook no dashboard do BlindPay para `<gateway>/v1/blindpay/webhooks` e
 defina `BLINDPAY_WEBHOOK_SECRET` com o segredo de assinatura desse endpoint. Deixe as
-variáveis `BLINDPAY_*` em branco para desativar a funcionalidade (essas rotas retornam
-`503`). Veja `.env.example`.
+variáveis `BLINDPAY_*` em branco para desativar a funcionalidade: essas rotas passam a
+retornar `503` `misconfigured`, assim como o webhook de entrada enquanto
+`BLINDPAY_WEBHOOK_SECRET` não estiver definido. Veja `.env.example`.
 
 ### As URLs de redirecionamento do KYC ficam em allow-list por consumer
 
@@ -1553,6 +1555,23 @@ perfeitamente saudável. Agora ele informa `code: "rate_limited"`, e
 `ApiErrorCode.RateLimited` faz parte do enum publicado. Use-o como critério se você
 faz retry em caso de throttling.
 
+### Um BlindPay não configurado agora informa `misconfigured`
+
+Duas recusas culpavam a parte errada quando o BlindPay não está configurado:
+
+| Requisição | Antes | Agora |
+| ---------- | ----- | ----- |
+| Uma rota que chama o BlindPay — sob `/v1/kyc`, `/v1/onramp` ou `/v1/offramp` — enquanto `BLINDPAY_API_KEY` ou `BLINDPAY_INSTANCE_ID` não estão definidos | `503` `provider_unavailable` | `503` `misconfigured` |
+| `POST /v1/blindpay/webhooks` enquanto `BLINDPAY_WEBHOOK_SECRET` não está definido | `400` `validation_failed` | `503` `misconfigured` |
+
+`provider_unavailable` diz que o provedor está fora do ar e que um retry pode dar
+certo, então um integrador que o seguia continuava tentando de novo contra um
+provedor que estava bem, por todo o tempo em que o deploy continuasse sem
+configuração. O `400` do webhook dizia a quem lê o log do Svix que o BlindPay tinha
+enviado uma entrega malformada. As duas falhas são da configuração deste deploy, e
+só um operador pode corrigi-las. O Svix faz retry em qualquer resposta que não seja
+2xx, então a entrega de webhooks em si não muda. O Pollar já respondia
+`misconfigured` na mesma situação.
 
 ### Formatos de resposta que mudaram
 

@@ -102,7 +102,8 @@ prisma/schema.prisma              Consumer, PaymentIntent, Swap, LiquidityPoolOp
                                   AdminAuditLog, Alias, AliasAddress,
                                   AliasChallenge, AliasRecovery
 test/                             e2e suites: gateway gate, admin + alias console gates,
-                                  payment intents, KYC, webhooks, Pollar
+                                  payment intents, swaps, liquidity pools, KYC, webhooks,
+                                  Pollar
 scripts/                          OpenAPI generator, README check, operator scripts
 docs/i18n/                        this README in es, pt, de, fr, hi, zh
 ```
@@ -1000,7 +1001,8 @@ types (`RECEIVER_UPDATED`, `PAYIN_*`, `PAYOUT_*`) के रूप में **�
 राशियाँ **minor units में integers** होती हैं (जैसे `$123.45` → `12345`)। BlindPay डैशबोर्ड का webhook
 `<gateway>/v1/blindpay/webhooks` पर कॉन्फ़िगर करें और
 `BLINDPAY_WEBHOOK_SECRET` को उस endpoint के signing secret पर सेट करें। feature बंद करने के लिए
-`BLINDPAY_*` vars खाली छोड़ दें (तब वे रूट `503` लौटाते हैं)।
+`BLINDPAY_*` vars खाली छोड़ दें: तब वे रूट `503` `misconfigured` लौटाते हैं, और जब तक
+`BLINDPAY_WEBHOOK_SECRET` सेट नहीं है, आने वाला webhook भी यही लौटाता है।
 `.env.example` देखें।
 
 ### KYC redirect URL प्रति consumer allow-list किए जाते हैं
@@ -1516,6 +1518,22 @@ upstream मुश्किल में है जबकि असल में
 ठीक थी। अब यह `code: "rate_limited"` रिपोर्ट करता है, और `ApiErrorCode.RateLimited`
 प्रकाशित enum का हिस्सा है। अगर आप throttling पर retry करते हैं तो इसी पर branch करें।
 
+### बिना कॉन्फ़िगर किया BlindPay अब `misconfigured` रिपोर्ट करता है
+
+BlindPay सेट अप न होने पर दो refusals गलत पक्ष को दोष देते थे:
+
+| Request | पहले | अब |
+| ------- | ---- | -- |
+| BlindPay को call करने वाला कोई रूट — `/v1/kyc`, `/v1/onramp` या `/v1/offramp` के अंतर्गत — जब `BLINDPAY_API_KEY` या `BLINDPAY_INSTANCE_ID` सेट नहीं है | `503` `provider_unavailable` | `503` `misconfigured` |
+| `POST /v1/blindpay/webhooks` जब `BLINDPAY_WEBHOOK_SECRET` सेट नहीं है | `400` `validation_failed` | `503` `misconfigured` |
+
+`provider_unavailable` कहता है कि provider down है और retry सफल हो सकता है, इसलिए
+उसे मानने वाला integrator एक ठीक-ठाक provider पर तब तक retry करता रहता था जब तक
+deployment बिना कॉन्फ़िगरेशन के रहा। webhook का `400` Svix log पढ़ने वाले को बताता था
+कि BlindPay ने एक malformed delivery भेजी है। दोनों गलतियाँ इस deployment के
+कॉन्फ़िगरेशन की हैं, जिन्हें सिर्फ़ एक operator ठीक कर सकता है। Svix किसी भी non-2xx
+पर retry करता है, इसलिए webhook delivery खुद नहीं बदलती। Pollar इसी स्थिति में पहले
+से `misconfigured` लौटाता था।
 
 ### बदले हुए response shapes
 
