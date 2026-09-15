@@ -2,6 +2,7 @@ import {
   applySlippage,
   computeFee,
   fromStroops,
+  sameAmount,
   toStroops,
 } from '@/swaps/swap-math';
 
@@ -42,6 +43,20 @@ describe('swap-math', () => {
       for (const a of ['0', '0.0000001', '99.5', '120.1234567', '1000000']) {
         expect(fromStroops(toStroops(a))).toBe(a);
       }
+    });
+  });
+
+  describe('sameAmount', () => {
+    it('compares by value, not by spelling', () => {
+      expect(sameAmount('10', '10.0000000')).toBe(true);
+      expect(sameAmount('0.5', '0.50')).toBe(true);
+      expect(sameAmount('10', '10.0000001')).toBe(false);
+    });
+
+    it('is false rather than throwing when either side is not an amount', () => {
+      expect(sameAmount('abc', '1')).toBe(false);
+      expect(sameAmount('1', '1.12345678')).toBe(false);
+      expect(sameAmount('1000000000000', '1000000000000')).toBe(false);
     });
   });
 

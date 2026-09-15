@@ -1,22 +1,42 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import { PaginationQueryDto } from '@/common/dto/pagination.query.dto';
 import { page } from '@/common/pagination';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { PrismaService } from '@/prisma/prisma.service';
-import { BlindpayClient } from '@/blindpay/blindpay.client';
+import {
+  BlindpayOfframpApi,
+  type BlindpayPayoutRequest,
+} from '@/blindpay/blindpay-offramp.api';
 import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
 import {
   BlindpaySyncService,
   BlindpayObject,
   PAYOUT_PUBLIC_SELECT,
+  PublicPayout,
 } from '@/blindpay/blindpay-sync.service';
 import { asString, asNumber, isMirrorFresh } from '@/blindpay/blindpay.util';
-import type { Payout } from '@generated/prisma/client';
+import type { Prisma } from '@generated/prisma/client';
 import { CreatePayoutQuoteDto } from '@/offramp/dto/create-payout-quote.dto';
 import { AuthorizePayoutDto } from '@/offramp/dto/authorize-payout.dto';
 import { CreatePayoutDto } from '@/offramp/dto/create-payout.dto';
 import { PayoutDocumentDto } from '@/offramp/dto/payout-document.dto';
+
+/**
+ * What a single-payout read takes out of the mirror: the public projection, plus
+ * the two columns `findOne` needs to decide on a refresh and perform it. Neither
+ * of those is part of `PayoutEntity`, so {@link toPublicPayout} drops them again
+ * before anything is returned.
+ */
+const PAYOUT_READ_SELECT = {
+  ...PAYOUT_PUBLIC_SELECT,
+  receiverId: true,
+  updatedAt: true,
+} as const satisfies Prisma.PayoutSelect;
+
+type MirroredPayout = Prisma.PayoutGetPayload<{
+  select: typeof PAYOUT_READ_SELECT;
+}>;
 
 /**
  * Offramp (stablecoin -> fiat). Quotes are priced through BlindPay (the EVM quote
@@ -29,7 +49,7 @@ import { PayoutDocumentDto } from '@/offramp/dto/payout-document.dto';
 export class OfframpService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly blindpay: BlindpayClient,
+    private readonly blindpay: BlindpayOfframpApi,
     private readonly consumers: ConsumerResolverService,
     private readonly sync: BlindpaySyncService,
   ) {}
@@ -40,10 +60,10 @@ export class OfframpService {
       local.id,
       dto.bank_account_id,
     );
-    const quote = await this.blindpay.post<BlindpayObject>(
-      this.blindpay.instancePath('/quotes'),
-      { ...dto, bank_account_id: bankAccountBlindpayId },
-    );
+    const quote = await this.blindpay.createPayoutQuote({
+      ...dto,
+      bank_account_id: bankAccountBlindpayId,
+    });
     await this.recordQuoteOwnership(local.id, quote);
     // BlindPay carries the local fiat amount (e.g. ARS) in `receiver_amount`;
     // `receiver_local_amount` comes back 0. Surface the real amount under the
@@ -57,13 +77,10 @@ export class OfframpService {
   async authorize(consumer: GatewayConsumer, dto: AuthorizePayoutDto) {
     const local = await this.consumers.resolve(consumer);
     await this.assertQuoteOwned(local.id, dto.quote_id);
-    const res = await this.blindpay.post<BlindpayObject>(
-      this.blindpay.instancePath(`/payouts/${dto.chain}/authorize`),
-      {
-        quote_id: dto.quote_id,
-        sender_wallet_address: dto.sender_wallet_address,
-      },
-    );
+    const res = await this.blindpay.authorizePayout(dto.chain, {
+      quote_id: dto.quote_id,
+      sender_wallet_address: dto.sender_wallet_address,
+    });
     // BlindPay returns the unsigned tx under `transaction_hash` (a misnomer — it's
     // the XDR to sign, not a hash). Expose it under a clear, stable field so the
     // wallet can find it, while keeping the raw payload for safety.
@@ -78,17 +95,14 @@ export class OfframpService {
   async createPayout(consumer: GatewayConsumer, dto: CreatePayoutDto) {
     const local = await this.consumers.resolve(consumer);
     await this.assertQuoteOwned(local.id, dto.quote_id);
-    const body: Record<string, unknown> = {
+    const body: BlindpayPayoutRequest = {
       quote_id: dto.quote_id,
       sender_wallet_address: dto.sender_wallet_address,
     };
     if (dto.signed_transaction !== undefined) {
       body.signed_transaction = dto.signed_transaction;
     }
-    const created = await this.blindpay.post<BlindpayObject>(
-      this.blindpay.instancePath(`/payouts/${dto.chain}`),
-      body,
-    );
+    const created = await this.blindpay.createPayout(dto.chain, body);
     const receiverId = await this.resolveReceiverLocalId(
       local.id,
       created.receiver_id,
@@ -120,19 +134,17 @@ export class OfframpService {
    * mirrored row has gone stale (see {@link isMirrorFresh}). Webhooks carry
    * status changes, so the refresh only has to cover a missed delivery.
    */
-  async findOne(consumer: GatewayConsumer, id: string) {
+  async findOne(consumer: GatewayConsumer, id: string): Promise<PublicPayout> {
     const local = await this.consumers.resolve(consumer);
     const row = await this.findPayoutOrThrow(local.id, id);
     if (isMirrorFresh(row)) {
-      return row;
+      return toPublicPayout(row);
     }
     try {
-      const fresh = await this.blindpay.get<BlindpayObject>(
-        this.blindpay.instancePath(`/payouts/${row.blindpayId}`),
-      );
+      const fresh = await this.blindpay.getPayout(row.blindpayId);
       return await this.sync.mirrorPayout(local.id, row.receiverId, fresh);
     } catch {
-      return row;
+      return toPublicPayout(row);
     }
   }
 
@@ -143,10 +155,7 @@ export class OfframpService {
   ) {
     const local = await this.consumers.resolve(consumer);
     const row = await this.findPayoutOrThrow(local.id, id);
-    return this.blindpay.post<BlindpayObject>(
-      this.blindpay.instancePath(`/payouts/${row.blindpayId}/documents`),
-      dto,
-    );
+    return this.blindpay.addPayoutDocument(row.blindpayId, dto);
   }
 
   /**
@@ -200,12 +209,22 @@ export class OfframpService {
     }
   }
 
+  /**
+   * Reads a payout the caller owns, narrowed to {@link PAYOUT_READ_SELECT}.
+   *
+   * This used to read the whole row, and `findOne` returned it as-is: `raw` —
+   * the BlindPay payload, beneficiary bank details included — beside internal
+   * ids (`consumerId`, `quoteId`, `bankAccountId`) that `PAYOUT_PUBLIC_SELECT`
+   * exists to keep in PostgreSQL. `addDocument` only needs `blindpayId`, which
+   * the projection carries, so neither caller has a reason to read the blob.
+   */
   private async findPayoutOrThrow(
     consumerId: string,
     id: string,
-  ): Promise<Payout> {
+  ): Promise<MirroredPayout> {
     const row = await this.prisma.payout.findFirst({
       where: { id, consumerId },
+      select: PAYOUT_READ_SELECT,
     });
     if (!row) {
       throw ApiError.notFound('Payout not found');
@@ -221,7 +240,7 @@ export class OfframpService {
       where: { id: localId, consumerId },
     });
     if (!account) {
-      throw new NotFoundException('Bank account not found');
+      throw ApiError.notFound('Bank account not found');
     }
     // Block offramp for a disabled fiat account (the bank account's owning receiver).
     const receiver = await this.prisma.blindpayReceiver.findUnique({
@@ -247,4 +266,13 @@ export class OfframpService {
     });
     return receiver?.id ?? null;
   }
+}
+
+/** Drops the two columns {@link PAYOUT_READ_SELECT} adds for `findOne`'s own use. */
+function toPublicPayout({
+  receiverId: _receiverId,
+  updatedAt: _updatedAt,
+  ...payout
+}: MirroredPayout): PublicPayout {
+  return payout;
 }

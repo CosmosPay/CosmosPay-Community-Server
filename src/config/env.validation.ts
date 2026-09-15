@@ -27,7 +27,7 @@ import {
   DEFAULT_SWAP_MAX_SLIPPAGE_BPS,
   DEFAULT_SWAP_SLIPPAGE_BPS,
 } from '@/config/config.constants';
-import { POLLAR_KEY_PREFIX } from '@/pollar/pollar.constants';
+import { POLLAR_KEY_PREFIX } from '@/config/pollar-key-prefix';
 
 /**
  * Schema used by ConfigModule to fail fast at boot if the environment is

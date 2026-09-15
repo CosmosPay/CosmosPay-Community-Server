@@ -1,4 +1,4 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, getSchemaPath } from '@nestjs/swagger';
 import { ApiErrorCode } from '@/common/errors/api-error';
 
 /**
@@ -47,3 +47,16 @@ export class ApiErrorBodyEntity {
   @ApiProperty({ example: '2026-06-21T12:34:56.000Z' })
   timestamp!: string;
 }
+
+/**
+ * The envelope as an `@ApiResponse` `content`, by `$ref`.
+ *
+ * Use this instead of `type: ApiErrorBodyEntity` when a route documents one of
+ * its errors itself. `swagger.ts` registers the entity once through
+ * `extraModels`; naming it as a `type` registers it again while that controller
+ * is scanned, which moves it within `components.schemas` and churns the
+ * published contract for no change in it.
+ */
+export const API_ERROR_BODY_CONTENT = {
+  'application/json': { schema: { $ref: getSchemaPath(ApiErrorBodyEntity) } },
+};

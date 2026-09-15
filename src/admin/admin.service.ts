@@ -1,12 +1,10 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
+import { ApiError } from '@/common/errors/api-error';
 import { PrismaService } from '@/prisma/prisma.service';
 import { ReceiversService } from '@/kyc/receivers/receivers.service';
 import { RequestTosDto } from '@/kyc/receivers/dto/request-tos.dto';
 import type { AdminPrincipal } from '@/admin/admin-auth';
-import {
-  toAuditData,
-  recordAuditInTransaction,
-} from '@/admin/admin-audit.service';
+import { toAuditEntry } from '@/audit/audit-writer';
 
 /** Clamp a requested page size to a sane range. */
 function take(n?: number): number {
@@ -55,7 +53,7 @@ export class AdminService {
     return this.receiversSvc.approveById(
       id,
       redirectUrl,
-      toAuditData(actor, 'receivers.approve', 'receiver', id, {
+      toAuditEntry(actor, 'receivers.approve', 'receiver', id, {
         redirect_url: redirectUrl,
       }),
     );
@@ -66,7 +64,7 @@ export class AdminService {
     return this.receiversSvc.enableById(
       id,
       tosId,
-      toAuditData(actor, 'receivers.enable', 'receiver', id, {
+      toAuditEntry(actor, 'receivers.enable', 'receiver', id, {
         tos_id: tosId,
       }),
     );
@@ -88,7 +86,7 @@ export class AdminService {
       id,
       dto,
       cooldownMs,
-      toAuditData(actor, 'receivers.requestTos', 'receiver', id, {
+      toAuditEntry(actor, 'receivers.requestTos', 'receiver', id, {
         channel: dto.channel ?? 'code',
         redirect_url: dto.redirect_url,
       }),
@@ -194,7 +192,7 @@ export class AdminService {
   /** Every consumer (organization key) with per-resource counts. */
   async consumers(t?: number, s?: number) {
     const where = {};
-    const [rows, total] = await this.prisma.$transaction([
+    const [rows, total] = await Promise.all([
       this.prisma.consumer.findMany({
         where,
         take: take(t),
@@ -226,7 +224,7 @@ export class AdminService {
       ...(opts.network ? { network: opts.network } : {}),
       ...(opts.status ? { status: opts.status as never } : {}),
     };
-    const [data, total] = await this.prisma.$transaction([
+    const [data, total] = await Promise.all([
       this.prisma.paymentIntent.findMany({
         where,
         take: take(opts.take),
@@ -245,7 +243,7 @@ export class AdminService {
       ...(opts.network ? { network: opts.network } : {}),
       ...(opts.status ? { status: opts.status as never } : {}),
     };
-    const [data, total] = await this.prisma.$transaction([
+    const [data, total] = await Promise.all([
       this.prisma.swap.findMany({
         where,
         take: take(opts.take),
@@ -260,7 +258,7 @@ export class AdminService {
 
   async customers(opts: ListOpts = {}) {
     const where = consumerWhere(opts.consumer);
-    const [data, total] = await this.prisma.$transaction([
+    const [data, total] = await Promise.all([
       this.prisma.customer.findMany({
         where,
         take: take(opts.take),
@@ -275,7 +273,7 @@ export class AdminService {
 
   async products(opts: ListOpts = {}) {
     const where = consumerWhere(opts.consumer);
-    const [data, total] = await this.prisma.$transaction([
+    const [data, total] = await Promise.all([
       this.prisma.product.findMany({
         where,
         take: take(opts.take),
@@ -290,7 +288,7 @@ export class AdminService {
 
   async receivers(opts: ListOpts = {}) {
     const where = consumerWhere(opts.consumer);
-    const [data, total] = await this.prisma.$transaction([
+    const [data, total] = await Promise.all([
       this.prisma.blindpayReceiver.findMany({
         where,
         take: take(opts.take),
@@ -309,7 +307,7 @@ export class AdminService {
 
   async payins(opts: ListOpts = {}) {
     const where = consumerWhere(opts.consumer);
-    const [data, total] = await this.prisma.$transaction([
+    const [data, total] = await Promise.all([
       this.prisma.payin.findMany({
         where,
         take: take(opts.take),
@@ -337,44 +335,49 @@ export class AdminService {
   /**
    * Platform-admin fiat kill-switch across ANY consumer: enable/disable a receiver by id
    * without consumer scoping (the owner acts globally). Mirrors the per-org access toggle.
-   * Mutation + audit row commit in one transaction (issue #34 / Gitar review).
+   *
+   * The flag write and its audit row commit in one transaction inside
+   * `ReceiversService.setAccessById` (issue #34 / Gitar review). This method used to run
+   * that transaction itself, straight against the receiver table — the one admin receiver
+   * action that bypassed the kyc module owning the row — so the kill-switch had two
+   * implementations. Now, like approve/enable/requestTos, it only supplies the actor.
+   *
+   * The response is re-read afterwards in the admin shape (owning consumer attached),
+   * which is what this route has always returned; `setAccessById` answers with the tenant
+   * projection, which leaves out the attribution the console shows.
    */
   async setReceiverAccess(
     id: string,
     disabled: boolean,
     actor: AdminPrincipal,
   ) {
-    return this.prisma.$transaction(async (tx) => {
-      const row = await tx.blindpayReceiver.findUnique({
-        where: { id },
-        select: { id: true },
-      });
-      if (!row) throw new NotFoundException('Receiver not found');
-      const result = await tx.blindpayReceiver.update({
-        where: { id },
-        data: { disabled },
-        include: consumerSelect,
-        // Same reason the list queries omit it: `raw` is the provider's full
-        // KYC dossier — tax id, address, bank credentials. Toggling a
-        // receiver's access is an authorization change and has no business
-        // returning the dossier as its 200 body, where it lands in the
-        // operator's browser, any proxy log, and the admin audit trail's
-        // response capture.
-        omit: { raw: true },
-      });
-      await recordAuditInTransaction(
-        tx,
-        toAuditData(actor, 'receivers.setAccess', 'receiver', id, {
-          disabled,
-        }),
-      );
-      return result;
+    await this.receiversSvc.setAccessById(
+      id,
+      disabled,
+      toAuditEntry(actor, 'receivers.setAccess', 'receiver', id, {
+        disabled,
+      }),
+    );
+    const receiver = await this.prisma.blindpayReceiver.findUnique({
+      where: { id },
+      include: consumerSelect,
+      // Same reason the list queries omit it: `raw` is the provider's full
+      // KYC dossier — tax id, address, bank credentials. Toggling a
+      // receiver's access is an authorization change and has no business
+      // returning the dossier as its 200 body, where it lands in the
+      // operator's browser, any proxy log, and the admin audit trail's
+      // response capture.
+      omit: { raw: true },
     });
+    // setAccessById already 404s a missing receiver; this only fires if it was deleted
+    // between the committed toggle and this read.
+    if (!receiver) throw ApiError.notFound('Receiver not found');
+    return receiver;
   }
 
   async payouts(opts: ListOpts = {}) {
     const where = consumerWhere(opts.consumer);
-    const [data, total] = await this.prisma.$transaction([
+    const [data, total] = await Promise.all([
       this.prisma.payout.findMany({
         where,
         take: take(opts.take),

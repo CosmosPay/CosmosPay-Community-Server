@@ -99,4 +99,5 @@ export enum AdvisoryLockKey {
   PollarOauthSweeper = 881_005,
   RateLimitPrune = 881_006,
   PollarWalletProvisionSweeper = 881_007,
+  AliasChallengeSweeper = 881_008,
 }

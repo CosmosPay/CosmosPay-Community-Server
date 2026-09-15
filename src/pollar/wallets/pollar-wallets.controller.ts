@@ -3,11 +3,14 @@ import {
   ApiCreatedResponse,
   ApiOkResponse,
   ApiOperation,
+  ApiResponse,
   ApiTags,
+  type ApiResponseOptions,
 } from '@nestjs/swagger';
 import { CurrentConsumer } from '@/common/decorators/current-consumer.decorator';
 import { RateLimit } from '@/common/decorators/rate-limit.decorator';
 import { RequirePermissions } from '@/common/decorators/require-permissions.decorator';
+import { API_ERROR_BODY_CONTENT } from '@/common/errors/api-error.entity';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import { ActivateWalletDto } from '@/pollar/wallets/dto/activate-wallet.dto';
 import { CreateTrustlinesDto } from '@/pollar/wallets/dto/create-trustlines.dto';
@@ -23,7 +26,33 @@ import { PollarWalletsService } from '@/pollar/wallets/pollar-wallets.service';
 import {
   POLLAR_ACTIVATE_RATE_LIMIT,
   POLLAR_PROVISION_RATE_LIMIT,
+  POLLAR_TRUSTLINE_RATE_LIMIT,
 } from '@/pollar/pollar.constants';
+
+/**
+ * The 404 of every route that names a wallet. An unknown address and another
+ * tenant's address are one response on purpose (see `assertWalletOwned`), so
+ * they get one description as well: documenting two would publish the very
+ * distinction the route refuses to make.
+ */
+const WALLET_NOT_FOUND_RESPONSE: ApiResponseOptions = {
+  status: 404,
+  description:
+    'Wallet not found (`not_found`): the address is unknown, or this consumer ' +
+    'did not obtain it through this service. Both cases answer identically, so ' +
+    'the response never reveals whether the wallet belongs to someone else.',
+  content: API_ERROR_BODY_CONTENT,
+};
+
+/** The 429 of the two POST trustline routes, which share one budget. */
+const TRUSTLINE_RATE_LIMITED_RESPONSE: ApiResponseOptions = {
+  status: 429,
+  description:
+    'Rate limited (`rate_limited`). Both POST trustline routes draw on the same ' +
+    'budget per consumer and client address, so alternating between them does ' +
+    'not reset it. Honour `Retry-After`.',
+  content: API_ERROR_BODY_CONTENT,
+};
 
 /**
  * Operator routes for Pollar wallets — `/v1/pollar`.
@@ -32,6 +61,10 @@ import {
  * live here and not in the wallet: a wallet can drive its own session against
  * Pollar directly, but it cannot fund a reserve, add a trustline, or ask whether
  * a token is genuine.
+ *
+ * Every route that names a wallet answers 404 unless the calling consumer got
+ * that wallet through this service — every tenant shares the same secret keys,
+ * so Pollar itself cannot tell them apart. See `assertWalletOwned`.
  */
 @ApiTags('pollar')
 @Controller({ path: 'pollar', version: '1' })
@@ -50,6 +83,7 @@ export class PollarWalletsController {
       'back with `activated: false`, not an error.',
   })
   @ApiCreatedResponse({ type: PollarActivationEntity })
+  @ApiResponse(WALLET_NOT_FOUND_RESPONSE)
   activate(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Body() dto: ActivateWalletDto,
@@ -59,10 +93,15 @@ export class PollarWalletsController {
 
   @Post('wallets/:address/trustlines/default')
   @RequirePermissions('pollar:write')
+  // Locks reserve out of the funding wallet per asset. Shares its bucket with
+  // the explicit route below, so alternating the two buys a loop nothing.
+  @RateLimit(POLLAR_TRUSTLINE_RATE_LIMIT)
   @ApiOperation({
     summary: "Enable the app's configured assets on a wallet",
   })
   @ApiCreatedResponse({ type: PollarTrustlineEntity })
+  @ApiResponse(WALLET_NOT_FOUND_RESPONSE)
+  @ApiResponse(TRUSTLINE_RATE_LIMITED_RESPONSE)
   defaultTrustlines(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Param('address') address: string,
@@ -72,8 +111,12 @@ export class PollarWalletsController {
 
   @Post('wallets/:address/trustlines')
   @RequirePermissions('pollar:write')
+  // Up to 25 reserve-consuming assets per call — same bucket as /default.
+  @RateLimit(POLLAR_TRUSTLINE_RATE_LIMIT)
   @ApiOperation({ summary: 'Enable specific assets on a wallet' })
   @ApiCreatedResponse({ type: PollarTrustlineEntity })
+  @ApiResponse(WALLET_NOT_FOUND_RESPONSE)
+  @ApiResponse(TRUSTLINE_RATE_LIMITED_RESPONSE)
   createTrustlines(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Param('address') address: string,
@@ -92,6 +135,7 @@ export class PollarWalletsController {
       'service does on the way out so neither has to be escaped by the caller.',
   })
   @ApiOkResponse({ type: PollarTrustlineEntity })
+  @ApiResponse(WALLET_NOT_FOUND_RESPONSE)
   removeTrustline(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Param('address') address: string,

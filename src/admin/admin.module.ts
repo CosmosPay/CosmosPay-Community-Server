@@ -8,7 +8,9 @@ import { AdminGuard } from '@/common/guards/admin.guard';
 
 /**
  * Imports KycModule so the admin (owner) endpoints can reuse ReceiversService's
- * approve/enable logic across ANY consumer (the global fiat review tools).
+ * approve/enable/requestTos/setAccess logic across ANY consumer (the global fiat review
+ * tools). The dependency runs one way: kyc never imports admin — the audit rows both
+ * write go through `@/audit/audit-writer`, which imports neither.
  * AdminGuard is provided so Nest can instantiate it for @UseGuards.
  */
 @Module({

@@ -29,6 +29,7 @@
     "db:studio": "prisma studio",
     "openapi:generate": "ts-node -r tsconfig-paths/register --transpile-only scripts/generate-openapi.ts",
     "openapi:check": "npm run openapi:generate && git diff --exit-code -- openapi/openapi.json openapi/openapi.yaml",
+    "readme:check": "ts-node -r tsconfig-paths/register --transpile-only scripts/check-readme-routes.ts",
     "webhooks:audit-destinations": "ts-node -r tsconfig-paths/register --transpile-only scripts/mark-blocked-webhook-endpoints.ts",
     "seed:request-logs": "ts-node -r tsconfig-paths/register --transpile-only scripts/seed-request-logs.ts",
     "assets:verify": "ts-node -r tsconfig-paths/register --transpile-only scripts/verify-assets.ts"

@@ -2,6 +2,9 @@ import 'reflect-metadata';
 
 // Runs before any module (and thus before ConfigModule's env validation) loads.
 process.env.APISIX_GATEWAY_SECRET = 'topsecret-topsecret-topsecret-topsecret';
+// The shared public key's consumer, so the suites can identify it by name as
+// well as by the forwarded role — PublicKeyGuard must match on either alone.
+process.env.APISIX_PUBLIC_CONSUMER = 'cosmos_public';
 process.env.DATABASE_URL = 'postgresql://x:x@localhost:5432/x';
 process.env.NODE_ENV = 'test';
 process.env.STELLAR_SWAP_FEE_WALLET =

@@ -1,3 +1,4 @@
+import { BlindpayKycApi } from '@/blindpay/blindpay-kyc.api';
 import {
   WALLET_PUBLIC_SELECT,
   WalletsService,
@@ -77,7 +78,7 @@ function makeService() {
   };
   const service = new WalletsService(
     prisma,
-    blindpay as any,
+    new BlindpayKycApi(blindpay as any),
     consumers as any,
     receivers as any,
   );

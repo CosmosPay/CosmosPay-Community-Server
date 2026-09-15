@@ -6,7 +6,6 @@ import {
   Operation,
   TransactionBuilder,
 } from '@stellar/stellar-sdk';
-import QRCode from 'qrcode';
 import { AppConfig, StellarNetwork } from '@/config/configuration';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
@@ -17,9 +16,17 @@ import { PrismaService } from '@/prisma/prisma.service';
 import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
 import { StellarAccountLoader } from '@/stellar/account-loader.service';
 import { assetLabel, resolveAsset, ResolvedAsset } from '@/stellar/asset';
-import { extractResultCodes } from '@/stellar/horizon-errors';
 import { resolveMemoId } from '@/stellar/memo';
+import { sep7Qr, sep7TxUri } from '@/stellar/sep7';
 import { SettlementRepository } from '@/stellar/settlement.repository';
+import {
+  RelayProfile,
+  SignedTransactionRelay,
+} from '@/stellar/signed-transaction-relay.service';
+import {
+  resolveIdempotencyKey,
+  resolveSlippage,
+} from '@/stellar/stellar-operation-policy';
 import { StellarService } from '@/stellar/stellar.service';
 import type {
   Prisma,
@@ -46,6 +53,7 @@ import {
   fromStroops,
   toStroops,
 } from '@/swaps/swap-math';
+import { SwapRequestTerms, swapMatchesRequest } from '@/swaps/swap-idempotency';
 import { SWAP_COMMISSION_MEMO } from '@/swaps/swaps.constants';
 
 /** A stored swap plus its derived QR — the shape API responses return. */
@@ -107,6 +115,7 @@ export class SwapsService {
     private readonly stellar: StellarService,
     private readonly consumers: ConsumerResolverService,
     private readonly accounts: StellarAccountLoader,
+    private readonly relay: SignedTransactionRelay,
   ) {}
 
   // ── Quote ───────────────────────────────────────────────────────────────────
@@ -131,10 +140,12 @@ export class SwapsService {
    * via {@link submit}.
    *
    * Idempotency: pass `Idempotency-Key` (header) or `idempotencyKey` (body). The
-   * same key for a consumer returns the existing swap instead of building another
-   * transaction (and never mints a second `SWAP_CREATED`). Without a key, the
-   * unique `(network, txHash)` constraint still rejects a byte-identical rebuild
-   * with 409. Optional `STELLAR_SWAP_SINGLE_INFLIGHT=true` rejects a second
+   * same key for a consumer, sent with the same request, returns the existing
+   * swap instead of building another transaction (and never mints a second
+   * `SWAP_CREATED`); the same key with a different request is a 409
+   * `idempotency_conflict` — see {@link replay}. Without a key, the unique
+   * `(network, txHash)` constraint still rejects a byte-identical rebuild with
+   * 409. Optional `STELLAR_SWAP_SINGLE_INFLIGHT=true` rejects a second
    * non-expired PENDING swap for the same `(consumer, source, network)` with 409.
    */
   async create(
@@ -144,18 +155,20 @@ export class SwapsService {
   ): Promise<SwapView> {
     const network = this.resolveNetwork(consumer);
     const local = await this.resolveConsumer(consumer);
-    const idempotencyKey = this.resolveIdempotencyKey(
+    const idempotencyKey = resolveIdempotencyKey(
       headerIdempotencyKey,
       dto.idempotencyKey,
     );
+    const memo = resolveMemoId(dto.memo);
+    const terms = this.requestTerms(network, dto, memo);
 
-    // Fast path: same key → same swap (no Horizon round-trip).
+    // Fast path: same key and same request → same swap (no Horizon round-trip).
     if (idempotencyKey) {
       const existing = await this.findByIdempotencyKey(
         local.id,
         idempotencyKey,
       );
-      if (existing) return this.withQr(existing);
+      if (existing) return this.replay(existing, terms, consumer);
     }
 
     await this.assertNoInflightSwap(local.id, dto.source, network);
@@ -166,8 +179,7 @@ export class SwapsService {
       resolvePlanCommissionBps(this.config, consumer),
     );
 
-    const destination = dto.destination ?? dto.source;
-    const memo = resolveMemoId(dto.memo);
+    const destination = terms.destination;
     const feeWallet = this.feeWallet();
     const feeStroops = toStroops(priced.feeAmount);
 
@@ -226,7 +238,7 @@ export class SwapsService {
     const tx = builder.setTimeout(stellarCfg.timeoutSeconds).build();
     const xdr = tx.toXDR();
     const txHash = Buffer.from(tx.hash()).toString('hex');
-    const uri = `web+stellar:tx?${new URLSearchParams({ xdr }).toString()}`;
+    const uri = sep7TxUri(xdr);
 
     const swap = await this.persistSwap({
       consumerId: local.id,
@@ -255,10 +267,11 @@ export class SwapsService {
       expiresAt: new Date(Date.now() + stellarCfg.timeoutSeconds * 1000),
     });
 
-    // Race: another request with the same key won the insert — return theirs.
+    // Race: another request with the same key won the insert — return theirs,
+    // provided it was the same request.
     if (!swap) {
       const raced = await this.findByIdempotencyKey(local.id, idempotencyKey!);
-      if (raced) return this.withQr(raced);
+      if (raced) return this.replay(raced, terms, consumer);
       throw ApiError.conflict(
         ApiErrorCode.IdempotencyConflict,
         'A swap with this transaction hash already exists for this network. ' +
@@ -299,10 +312,64 @@ export class SwapsService {
     }
   }
 
-  /** Header wins over body; blank strings are treated as absent. */
-  private resolveIdempotencyKey(header?: string, body?: string): string | null {
-    const raw = (header ?? body)?.trim();
-    return raw ? raw : null;
+  /**
+   * The request as a stored row would record it, so a replay can be compared
+   * field by field. Applies the same defaults `create` does — destination falls
+   * back to the source, slippage to the configured default — because a retry
+   * that leaves them out is asking for the same swap.
+   */
+  private requestTerms(
+    network: StellarNetwork,
+    dto: CreateSwapDto,
+    memo: string | null,
+  ): SwapRequestTerms {
+    const send = resolveAsset(dto.sourceAssetCode, dto.sourceAssetIssuer);
+    const dest = resolveAsset(dto.destAssetCode, dto.destAssetIssuer);
+    return {
+      network,
+      source: dto.source,
+      destination: dto.destination ?? dto.source,
+      sendAsset: send.code,
+      sendAssetIssuer: send.issuer,
+      sendAmount: dto.amount,
+      destAsset: dest.code,
+      destAssetIssuer: dest.issuer,
+      slippageBps: resolveSlippage(
+        dto.slippageBps,
+        this.config.get('stellar', { infer: true }).swap,
+      ),
+      memo,
+    };
+  }
+
+  /**
+   * Answers a request that reused an `Idempotency-Key`: the stored swap when it
+   * is the same request, a 409 when it is not.
+   *
+   * A key is scoped to the consumer, and every anonymous wallet on the shared
+   * public API key is the same consumer — so "same consumer" never meant "same
+   * caller". Returning the stored row unconditionally handed one caller's
+   * envelope to anyone who later sent the key, including a transfer to the
+   * first caller that the second would then sign. The conflict describes nothing
+   * about the stored swap, because whoever is asking may not be who created it.
+   */
+  private async replay(
+    existing: Swap,
+    request: SwapRequestTerms,
+    consumer: GatewayConsumer,
+  ): Promise<SwapView> {
+    if (!swapMatchesRequest(existing, request)) {
+      this.logger.warn(
+        `Idempotency-Key reused for a different swap request ` +
+          `(swap=${existing.id}, consumer=${consumer.username})`,
+      );
+      throw ApiError.conflict(
+        ApiErrorCode.IdempotencyConflict,
+        'This Idempotency-Key was already used for a different swap request. ' +
+          'Use a new key for a new request.',
+      );
+    }
+    return this.withQr(existing);
   }
 
   private async findByIdempotencyKey(
@@ -358,10 +425,7 @@ export class SwapsService {
       consumer: { apisixUsername: consumer.username },
       ...(query.status ? { status: query.status } : {}),
     };
-    // `Promise.all`, not `$transaction`: a snapshot-consistent page and count
-    // buys nothing here (the client sees a moving list either way), while the
-    // transaction costs four serial round trips — BEGIN, page, count, COMMIT —
-    // instead of two issued in parallel.
+    // `Promise.all`, not `$transaction` — see `@/common/pagination` for why.
     const [data, total] = await Promise.all([
       this.prisma.swap.findMany({
         where,
@@ -387,6 +451,9 @@ export class SwapsService {
    * have us broadcast an arbitrary transaction. A network rejection finalizes the
    * swap as FAILED (with the result codes); an unreachable network is a 503 and
    * leaves the swap re-submittable.
+   *
+   * The mechanics are {@link SignedTransactionRelay}'s, shared with liquidity
+   * pools; this supplies the swap table, its events and its response shape.
    */
   async submit(
     consumer: GatewayConsumer,
@@ -394,119 +461,25 @@ export class SwapsService {
     signedXdr: string,
   ): Promise<SwapSubmitOutcome> {
     const swap = await this.findOwned(consumer, id);
+    const { view, ...outcome } = await this.relay.submit(
+      swap,
+      consumer.username,
+      signedXdr,
+      this.submission,
+    );
+    return { ...outcome, swap: view };
+  }
 
-    // Already settled — return current state without touching the network.
-    if (swap.status === 'SUCCEEDED') {
-      return {
-        submitted: true,
-        status: 'SUCCEEDED',
-        txHash: swap.txHash,
-        swap: await this.withQr(swap),
-      };
-    }
-    if (!['PENDING', 'SUBMITTED', 'FAILED'].includes(swap.status)) {
-      throw ApiError.badRequest(
-        ApiErrorCode.InvalidStateTransition,
-        `Cannot submit a ${swap.status} swap`,
-      );
-    }
-
-    let tx: ReturnType<typeof TransactionBuilder.fromXDR>;
-    try {
-      tx = TransactionBuilder.fromXDR(
-        signedXdr,
-        this.stellar.passphrase(swap.network as StellarNetwork),
-      );
-    } catch {
-      throw ApiError.badRequest(
-        ApiErrorCode.ValidationFailed,
-        'signedXdr is not a valid transaction envelope',
-      );
-    }
-
-    // Integrity: signing does not change the hash, so the signed tx must hash to
-    // the same value as the one we built and stored.
-    if (Buffer.from(tx.hash()).toString('hex') !== swap.txHash) {
-      throw ApiError.badRequest(
-        ApiErrorCode.ValidationFailed,
-        'The signed transaction does not match this swap',
-      );
-    }
-
-    // Mark in-flight before broadcasting; on an unreachable network we leave it
-    // here (re-submittable), only advancing to a terminal state on a real result.
-    // Observer may have liquidated the row between our read and this write.
-    const submitted = await this.markSubmitted(swap.id);
-    if (submitted.swap.status === 'SUCCEEDED') {
-      return {
-        submitted: true,
-        status: 'SUCCEEDED',
-        txHash: submitted.swap.txHash,
-        swap: await this.withQr(submitted.swap),
-      };
-    }
-    if (submitted.swap.status !== 'SUBMITTED') {
-      throw ApiError.badRequest(
-        ApiErrorCode.InvalidStateTransition,
-        `Cannot submit a ${submitted.swap.status} swap`,
-      );
-    }
-    if (submitted.applied) {
-      await this.emit(consumer.username, 'SWAP_SUBMITTED', submitted.swap);
-    }
-
-    try {
-      const res = await this.stellar
-        .server(swap.network as StellarNetwork)
-        .submitTransaction(tx);
-      const succeeded = await this.finalizeSucceeded(
-        swap.id,
-        consumer.username,
-        res.hash,
-      );
-      this.logger.log(
-        `Swap ${swap.id} submitted and confirmed (tx=${res.hash})`,
-      );
-      return {
-        submitted: true,
-        status: 'SUCCEEDED',
-        txHash: succeeded.swap.txHash,
-        swap: await this.withQr(succeeded.swap),
-      };
-    } catch (err) {
-      const resultCodes = extractResultCodes(err);
-      if (resultCodes) {
-        const failed = await this.finalizeFailed(swap.id, consumer.username);
-        if (failed.swap.status === 'SUCCEEDED') {
-          // Observer already settled this tx on-chain. Do not report failure.
-          this.logger.log(
-            `Swap ${swap.id} Horizon rejection ignored; already SUCCEEDED`,
-          );
-          return {
-            submitted: true,
-            status: 'SUCCEEDED',
-            txHash: failed.swap.txHash,
-            swap: await this.withQr(failed.swap),
-          };
-        }
-        this.logger.warn(
-          `Swap ${swap.id} rejected on submit: ${resultCodes.join(', ')}`,
-        );
-        return {
-          submitted: false,
-          status: 'FAILED',
-          reason: 'Transaction rejected by the network',
-          resultCodes,
-          swap: await this.withQr(failed.swap),
-        };
-      }
-      // Couldn't reach Horizon — leave it SUBMITTED so it can be retried.
-      this.logger.error(`Swap ${swap.id} submission error`, err);
-      throw ApiError.unavailable(
-        ApiErrorCode.ProviderUnavailable,
-        'Could not submit the transaction to the Stellar network',
-      );
-    }
+  /** What relaying differs in for this table; see {@link submit}. */
+  private get submission(): RelayProfile<Swap, SwapView> {
+    return {
+      settlement: this.settlement,
+      submittedEvent: 'SWAP_SUBMITTED',
+      emit: (username, type, swap) => this.emit(username, type, swap),
+      present: (swap) => this.withQr(swap),
+      labels: { resource: 'swap', match: 'swap', log: 'Swap' },
+      logger: this.logger,
+    };
   }
 
   // ── Pricing ──────────────────────────────────────────────────────────────
@@ -524,7 +497,10 @@ export class SwapsService {
       );
     }
 
-    const slippageBps = this.resolveSlippage(dto.slippageBps);
+    const slippageBps = resolveSlippage(
+      dto.slippageBps,
+      this.config.get('stellar', { infer: true }).swap,
+    );
     const sendStroops = toStroops(dto.amount);
     const feeStroops = computeFee(sendStroops, feeBps);
     const swapStroops = sendStroops - feeStroops;
@@ -626,12 +602,9 @@ export class SwapsService {
 
   // ── Status transitions ──────────────────────────────────────────────────────
   /**
-   * Optimistic status guard: the UPDATE only matches rows still in `from`.
-   * Winning this write is what authorizes a terminal webhook — arriving at
-   * SUCCEEDED/FAILED by a stale read must not emit.
-   */
-  /**
    * The compare-and-swap settlement machine, shared with liquidity pools.
+   * Winning its write is what authorizes a terminal webhook — arriving at
+   * SUCCEEDED/FAILED by a stale read must not emit.
    *
    * Built lazily rather than injected because it closes over `this.emit` and the
    * swap-specific status sets — it is a configured view of this service's own
@@ -648,18 +621,6 @@ export class SwapsService {
     return this.settlementRepo;
   }
   private settlementRepo?: SettlementRepository<Swap>;
-
-  /**
-   * PENDING → SUBMITTED does not bump the epoch (same settlement attempt).
-   * FAILED → SUBMITTED does: that is a new attempt, so a later SWAP_FAILED
-   * must not share the previous attempt's dedup key.
-   */
-  private async markSubmitted(
-    id: string,
-  ): Promise<{ applied: boolean; swap: Swap }> {
-    const { applied, row } = await this.settlement.markSubmitted(id);
-    return { applied, swap: row };
-  }
 
   /**
    * Promotes an in-flight (or falsely-FAILED) swap to SUCCEEDED. Idempotent if
@@ -742,19 +703,6 @@ export class SwapsService {
     return this.config.get('stellar', { infer: true }).swap.feeWallet;
   }
 
-  /** Caller slippage, defaulted and clamped to the configured maximum. */
-  private resolveSlippage(requested?: number): number {
-    const swap = this.config.get('stellar', { infer: true }).swap;
-    const bps = requested ?? swap.slippageBps;
-    if (bps > swap.maxSlippageBps) {
-      throw ApiError.badRequest(
-        ApiErrorCode.SlippageExceeded,
-        `slippageBps ${bps} exceeds the maximum allowed (${swap.maxSlippageBps})`,
-      );
-    }
-    return bps;
-  }
-
   private pathToAssets(path: SwapPathHop[]): Asset[] {
     return path.map((h) =>
       h.issuer ? new Asset(h.code, h.issuer) : Asset.native(),
@@ -802,11 +750,11 @@ export class SwapsService {
     }
   }
 
-  /** Pulls Horizon's transaction/operation result codes off a failed submit. */
+  /** A stored swap with its SEP-7 QR and commission label attached. */
   private async withQr(swap: Swap): Promise<SwapView> {
     return {
       ...swap,
-      qr: await QRCode.toDataURL(swap.uri),
+      qr: await sep7Qr(swap.uri),
       // A collected commission (feeAmount > 0) with no caller memo is labelled
       // on-chain with the commission memo text.
       commissionMemo:

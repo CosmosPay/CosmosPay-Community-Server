@@ -1,0 +1,39 @@
+-- Lookup indexes for the Pollar wallet ownership check, built CONCURRENTLY so
+-- the deploy does not block writes.
+--
+-- These are a file of their own for a mechanical reason, not a stylistic one:
+-- PostgreSQL refuses CREATE INDEX CONCURRENTLY inside a transaction block
+-- (SQLSTATE 25001), so they cannot share a migration with DDL that is meant to
+-- run atomically, which is why they are not in
+-- `20260915120000_liquidity_pool_operation_memo`. Add nothing else to this file.
+--
+-- Every statement is IF NOT EXISTS, so a failed build is recovered by dropping
+-- the invalid index and re-running rather than by editing production DDL. A
+-- CONCURRENTLY build that fails leaves the index behind marked INVALID — and
+-- IF NOT EXISTS considers an invalid index present, so it must be dropped:
+--   SELECT c.relname FROM pg_class c JOIN pg_index i ON i.indexrelid = c.oid
+--   WHERE NOT i.indisvalid;
+--   DROP INDEX CONCURRENTLY IF EXISTS "<relname>";
+-- then `prisma migrate resolve --rolled-back 20260915120100_lookup_indexes`
+-- and deploy again. CI applies every migration against a real PostgreSQL and
+-- asserts that set is empty.
+--
+-- Why each index exists: `PollarWalletsService.assertWalletOwned` gates every
+-- Pollar wallet route with a lookup by (consumerId, network, address) in two
+-- tables, and neither had an index that reaches past consumerId.
+--
+-- Considered and not built: (status, consumerId, createdAt) on payment_intent,
+-- swap and liquidity_pool_operation for the observers' per-consumer
+-- ROW_NUMBER() ranking. On swap and liquidity_pool_operation the filter is
+-- `status IN ('PENDING', 'SUBMITTED')`: a btree scan returns every PENDING row
+-- before any SUBMITTED one, which is not consumer order, so the window sort
+-- stays. On payment_intent (`status = 'PENDING'`) the index could feed the
+-- window presorted, but PostgreSQL 17 preferred the existing status index and
+-- a sort at every selectivity measured, and the forced ordered scan was slower.
+-- An index the planner does not use would still be written on every status
+-- transition.
+
+-- A login: the handshake row keeps the address its redemption returned, and handshakes are expired, never deleted.
+CREATE INDEX CONCURRENTLY IF NOT EXISTS "pollar_oauth_session_consumerId_network_walletAddress_idx" ON "pollar_oauth_session"("consumerId", "network", "walletAddress");
+-- A provisioned wallet, asked on a login miss: the (consumerId, externalId, network) unique index cannot reach address.
+CREATE INDEX CONCURRENTLY IF NOT EXISTS "pollar_user_wallet_consumerId_network_address_idx"         ON "pollar_user_wallet"("consumerId", "network", "address");

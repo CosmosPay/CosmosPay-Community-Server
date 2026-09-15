@@ -1,0 +1,20 @@
+-- The caller's MEMO_ID on a liquidity pool operation, as a column.
+--
+-- Until now the memo existed only inside the stored unsigned envelope, so every
+-- Idempotency-Key replay decoded the XDR to recover it before it could compare
+-- the retry with the request that built the row. A column is a value the replay
+-- reads directly, and one a response can show.
+--
+-- Null when the caller supplied no memo. The commission MEMO_TEXT a withdrawal
+-- may carry instead is not stored here: it is a fixed label, already reported
+-- as `commissionMemo`.
+--
+-- Nullable with no default and no backfill. Rows built before this migration
+-- keep their memo only in the envelope, and the service reads a null column as
+-- "ask the envelope", which is authoritative both for a row that has no memo
+-- and for a row that predates the column. A SQL backfill is not possible
+-- anyway: the memo sits inside base64 XDR, which PostgreSQL cannot decode.
+--
+-- Adding a nullable column with no default is a catalog-only change: no table
+-- rewrite, only a brief ACCESS EXCLUSIVE lock.
+ALTER TABLE "liquidity_pool_operation" ADD COLUMN "memo" TEXT;

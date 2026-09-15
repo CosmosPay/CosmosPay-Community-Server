@@ -1,9 +1,10 @@
 import {
   createParamDecorator,
   ExecutionContext,
-  InternalServerErrorException,
+  HttpStatus,
 } from '@nestjs/common';
 import { Request } from 'express';
+import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 
 /**
@@ -20,7 +21,9 @@ export const CurrentConsumer = createParamDecorator(
     const request = ctx.switchToHttp().getRequest<Request>();
 
     if (!request.gatewayConsumer) {
-      throw new InternalServerErrorException(
+      throw new ApiError(
+        HttpStatus.INTERNAL_SERVER_ERROR,
+        ApiErrorCode.Internal,
         'No gateway consumer on request — was ApisixGuard applied?',
       );
     }

@@ -765,6 +765,13 @@ model LiquidityPoolOperation {
 
   slippageBps Int
 
+  // The caller's MEMO_ID (uint64 as string), null when none was supplied. The
+  // commission MEMO_TEXT a withdrawal may carry instead is not stored here.
+  // Rows built before `20260915120000_liquidity_pool_operation_memo` are null
+  // even when their envelope carries a MEMO_ID, so a null is "ask the envelope"
+  // to the idempotency replay, never "no memo".
+  memo String?
+
   // Client-supplied idempotency key (Idempotency-Key header or DTO field).
   // NULL when omitted — PostgreSQL treats NULLs as distinct, so multiple
   // operations without a key remain allowed for the same consumer.
@@ -934,6 +941,13 @@ model PollarOauthSession {
   @@index([consumerId, createdAt])
   // The sweeper expires stale handshakes oldest-first.
   @@index([status, expiresAt])
+  // Wallet ownership check, `PollarWalletsService.assertWalletOwned`
+  // (src/pollar/wallets/pollar-wallets.service.ts): findFirst by consumerId,
+  // network and walletAddress on every wallet route. The sweeper marks rows
+  // EXPIRED but never deletes them, so without this the check walks every
+  // handshake the consumer ever started, and the shared public key is one
+  // consumer for every anonymous wallet.
+  @@index([consumerId, network, walletAddress])
   @@map("pollar_oauth_session")
 }
 
@@ -967,10 +981,13 @@ model PollarUserWallet {
   consumerId String
   consumer   Consumer @relation(fields: [consumerId], references: [id], onDelete: Cascade)
 
-  // Pollar's handle on this user, and the join key across the two networks:
-  // the email the OAuth provider vouched for. It is what a later hosted login
-  // on the other network resolves the same person by, so anything else here
-  // would provision a wallet nobody ever logs into.
+  // Pollar's handle on this user, and the join key across the two networks.
+  // For a row a login wrote, it is the email the OAuth provider vouched for —
+  // what a later hosted login on the other network resolves the same person by,
+  // so anything else there would provision a wallet nobody ever logs into. A
+  // row written by `POST /v1/pollar/users/with-wallet` holds the operator's own
+  // id instead: it is READY on arrival, never swept, and exists so the wallet
+  // routes can tell that this consumer owns the address.
   externalId String
   // 'public' | 'testnet' — Stellar's names, as everywhere else in this schema.
   network    String
@@ -997,6 +1014,13 @@ model PollarUserWallet {
   @@unique([consumerId, externalId, network])
   // The sweeper claims due PENDING rows oldest-first.
   @@index([status, nextAttemptAt])
+  // Wallet ownership check, `PollarWalletsService.assertWalletOwned`
+  // (src/pollar/wallets/pollar-wallets.service.ts): findFirst by consumerId,
+  // network and address when no login matched. The unique index above can only
+  // narrow that to the consumer, since `externalId` sits between consumerId and
+  // network and `address` is not in it, so the check read every wallet the
+  // consumer's users hold.
+  @@index([consumerId, network, address])
   @@map("pollar_user_wallet")
 }
 

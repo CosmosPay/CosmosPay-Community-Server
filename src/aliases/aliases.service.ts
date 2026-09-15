@@ -512,7 +512,7 @@ export class AliasesService {
   async listOwned(consumer: GatewayConsumer, query: QueryAliasesDto) {
     const local = await this.consumers.resolve(consumer);
     const where = { consumerId: local.id };
-    const [rows, total] = await this.prisma.$transaction([
+    const [rows, total] = await Promise.all([
       this.prisma.alias.findMany({
         where,
         include: {
@@ -571,6 +571,11 @@ export class AliasesService {
    * This service does NOT send email, matching the KYC terms-of-service flow: it
    * returns the token and the mailbox, and the platform delivers it. The plaintext
    * exists only in this response; what is stored is its SHA-256.
+   *
+   * **Which is why only the platform console may call it** (`ConsoleOnlyGuard` on
+   * the route). The token is the proof of mailbox control. Handed to an API-key
+   * caller it proves nothing — anyone who knew a handle and its owner's email
+   * would get the token back and complete the recovery with a key of their own.
    */
   async startRecovery(name: string, dto: StartAliasRecoveryDto) {
     const normalized = normalizeAliasName(name);
@@ -633,7 +638,12 @@ export class AliasesService {
     const alias = await this.prisma.alias.findUnique({
       where: { name: normalized },
     });
-    if (!alias) throw ApiError.notFound(`No alias named "${normalized}".`);
+    // A suspended alias is under an operator hold. A token minted before the
+    // suspension must not be a way to move it out of that hold, so recovery
+    // refuses it exactly as resolution does.
+    if (!alias || alias.status !== AliasStatus.ACTIVE) {
+      throw ApiError.notFound(`No alias named "${normalized}".`);
+    }
 
     const recovery = await this.prisma.aliasRecovery.findUnique({
       where: { tokenHash: hashToken(dto.token) },

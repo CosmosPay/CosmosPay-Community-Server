@@ -14,7 +14,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -156,7 +157,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -312,7 +314,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -331,12 +334,15 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "409":
-          description: Conflicts with existing state — an idempotency clash, an operation
-            already in flight, or an invalid state transition.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
+          description: "`idempotency_conflict`: an intent with this `memo` already exists
+            for different payment details. Retry with the original request
+            unchanged, or use a new memo (omit `memo` to have one generated).
+            `operation_in_flight`: a concurrent create for the same memo changed
+            it while this one was being created; retry the request."
         "429":
           description: Rate limited (`rate_limited`). Only routes that declare a budget
             can return this — today the Pollar routes that create or fund a
@@ -391,7 +397,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -410,12 +417,15 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "409":
-          description: Conflicts with existing state — an idempotency clash, an operation
-            already in flight, or an invalid state transition.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
+          description: "`idempotency_conflict`: an intent with this `memo` already exists
+            for different payment details. Retry with the original request
+            unchanged, or use a new memo (omit `memo` to have one generated).
+            `operation_in_flight`: a concurrent create for the same memo changed
+            it while this one was being created; retry the request."
         "429":
           description: Rate limited (`rate_limited`). Only routes that declare a budget
             can return this — today the Pollar routes that create or fund a
@@ -489,7 +499,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -569,7 +580,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -647,7 +659,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -730,7 +743,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -807,7 +821,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -891,7 +906,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -947,6 +963,413 @@ paths:
         amount + memo); finalizes status and fires the event
       tags:
         - payment-intents
+  /v1/customers:
+    post:
+      operationId: CustomersController_create_v1
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCustomerDto"
+      responses:
+        "201":
+          description: ""
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CustomerEntity"
+        "400":
+          description: Validation failed, or the request is not valid in the current state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "401":
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "403":
+          description: The API key lacks the required scope, or the request did not arrive
+            through the gateway.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "404":
+          description: The resource does not exist, or does not belong to this consumer.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "409":
+          description: Conflicts with existing state — an idempotency clash, an operation
+            already in flight, or an invalid state transition.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "500":
+          description: Unexpected server error. The detail is logged server-side and never
+            returned.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "502":
+          description: An upstream provider returned an error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "503":
+          description: An upstream provider is unavailable, or the service is misconfigured.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+      summary: Create a customer
+      tags:
+        - customers
+    get:
+      operationId: CustomersController_findAll_v1
+      parameters:
+        - name: take
+          required: false
+          in: query
+          schema:
+            maximum: 100
+            default: 100
+            type: number
+        - name: skip
+          required: false
+          in: query
+          schema:
+            default: 0
+            type: number
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CustomerListEntity"
+        "400":
+          description: Validation failed, or the request is not valid in the current state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "401":
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "403":
+          description: The API key lacks the required scope, or the request did not arrive
+            through the gateway.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "404":
+          description: The resource does not exist, or does not belong to this consumer.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "409":
+          description: Conflicts with existing state — an idempotency clash, an operation
+            already in flight, or an invalid state transition.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "500":
+          description: Unexpected server error. The detail is logged server-side and never
+            returned.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "502":
+          description: An upstream provider returned an error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "503":
+          description: An upstream provider is unavailable, or the service is misconfigured.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+      summary: List the consumer's customers (with payment stats)
+      tags:
+        - customers
+  /v1/customers/{id}:
+    get:
+      operationId: CustomersController_findOne_v1
+      parameters:
+        - name: id
+          required: true
+          in: path
+          schema:
+            type: string
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CustomerEntity"
+        "400":
+          description: Validation failed, or the request is not valid in the current state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "401":
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "403":
+          description: The API key lacks the required scope, or the request did not arrive
+            through the gateway.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "404":
+          description: The resource does not exist, or does not belong to this consumer.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "409":
+          description: Conflicts with existing state — an idempotency clash, an operation
+            already in flight, or an invalid state transition.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "500":
+          description: Unexpected server error. The detail is logged server-side and never
+            returned.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "502":
+          description: An upstream provider returned an error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "503":
+          description: An upstream provider is unavailable, or the service is misconfigured.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+      summary: Get a customer by id
+      tags:
+        - customers
+    patch:
+      operationId: CustomersController_update_v1
+      parameters:
+        - name: id
+          required: true
+          in: path
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateCustomerDto"
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CustomerEntity"
+        "400":
+          description: Validation failed, or the request is not valid in the current state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "401":
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "403":
+          description: The API key lacks the required scope, or the request did not arrive
+            through the gateway.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "404":
+          description: The resource does not exist, or does not belong to this consumer.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "409":
+          description: Conflicts with existing state — an idempotency clash, an operation
+            already in flight, or an invalid state transition.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "500":
+          description: Unexpected server error. The detail is logged server-side and never
+            returned.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "502":
+          description: An upstream provider returned an error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "503":
+          description: An upstream provider is unavailable, or the service is misconfigured.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+      summary: Update a customer
+      tags:
+        - customers
+    delete:
+      operationId: CustomersController_remove_v1
+      parameters:
+        - name: id
+          required: true
+          in: path
+          schema:
+            type: string
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CustomerDeletedEntity"
+        "400":
+          description: Validation failed, or the request is not valid in the current state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "401":
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "403":
+          description: The API key lacks the required scope, or the request did not arrive
+            through the gateway.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "404":
+          description: The resource does not exist, or does not belong to this consumer.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "409":
+          description: Conflicts with existing state — an idempotency clash, an operation
+            already in flight, or an invalid state transition.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "429":
+          description: Rate limited (`rate_limited`). Only routes that declare a budget
+            can return this — today the Pollar routes that create or fund a
+            Stellar account. Honour `Retry-After`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "500":
+          description: Unexpected server error. The detail is logged server-side and never
+            returned.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "502":
+          description: An upstream provider returned an error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "503":
+          description: An upstream provider is unavailable, or the service is misconfigured.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+      summary: Delete a customer
+      tags:
+        - customers
   /v1/swaps/quote:
     post:
       operationId: SwapsController_quote_v1
@@ -971,7 +1394,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -1033,9 +1457,10 @@ paths:
       parameters:
         - name: Idempotency-Key
           in: header
-          description: Optional idempotency key. Retries with the same key return the
-            existing swap (same id and txHash). Takes precedence over
-            body.idempotencyKey.
+          description: Optional idempotency key. A retry with the same key and the same
+            request returns the existing swap (same id and txHash); the same key
+            with a different request is 409 idempotency_conflict. Takes
+            precedence over body.idempotencyKey.
           required: false
           schema:
             type: string
@@ -1060,7 +1485,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -1079,12 +1505,16 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "409":
-          description: Conflicts with existing state — an idempotency clash, an operation
-            already in flight, or an invalid state transition.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
+          description: "`idempotency_conflict` — this Idempotency-Key was already used for
+            a different request, or an identical swap was already built without
+            a key (retry with an Idempotency-Key, or wait for the prior swap to
+            settle or expire). `operation_in_flight` —
+            STELLAR_SWAP_SINGLE_INFLIGHT is on and this source account already
+            has a PENDING swap."
         "429":
           description: Rate limited (`rate_limited`). Only routes that declare a budget
             can return this — today the Pollar routes that create or fund a
@@ -1156,7 +1586,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -1234,7 +1665,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -1318,7 +1750,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -1380,9 +1813,10 @@ paths:
       parameters:
         - name: Idempotency-Key
           in: header
-          description: Optional idempotency key. Retries with the same key return the
-            existing operation (same id and txHash). Takes precedence over
-            body.idempotencyKey.
+          description: Optional idempotency key. A retry with the same key and the same
+            request returns the existing operation (same id and txHash); the
+            same key with a different request is 409 idempotency_conflict. Takes
+            precedence over body.idempotencyKey.
           required: false
           schema:
             type: string
@@ -1407,7 +1841,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -1426,12 +1861,14 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "409":
-          description: Conflicts with existing state — an idempotency clash, an operation
-            already in flight, or an invalid state transition.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
+          description: "`idempotency_conflict` — this Idempotency-Key was already used for
+            a different request, or an identical deposit was already built
+            without a key (retry with an Idempotency-Key, or wait for the prior
+            operation to settle or expire)."
         "429":
           description: Rate limited (`rate_limited`). Only routes that declare a budget
             can return this — today the Pollar routes that create or fund a
@@ -1469,9 +1906,10 @@ paths:
       parameters:
         - name: Idempotency-Key
           in: header
-          description: Optional idempotency key. Retries with the same key return the
-            existing operation (same id and txHash). Takes precedence over
-            body.idempotencyKey.
+          description: Optional idempotency key. A retry with the same key and the same
+            request returns the existing operation (same id and txHash); the
+            same key with a different request is 409 idempotency_conflict. Takes
+            precedence over body.idempotencyKey.
           required: false
           schema:
             type: string
@@ -1496,7 +1934,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -1515,12 +1954,15 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "409":
-          description: Conflicts with existing state — an idempotency clash, an operation
-            already in flight, or an invalid state transition.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
+          description: "`idempotency_conflict` — this Idempotency-Key was already used for
+            a different request, or an identical withdrawal was already built
+            without a key. `operation_in_flight` — a withdrawal from this pool
+            is already in flight for this account; wait for it to settle or
+            expire."
         "429":
           description: Rate limited (`rate_limited`). Only routes that declare a budget
             can return this — today the Pollar routes that create or fund a
@@ -1576,7 +2018,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -1681,7 +2124,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -1759,7 +2203,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -1843,7 +2288,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -1963,7 +2409,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -2041,7 +2488,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -2135,7 +2583,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -2214,7 +2663,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -2299,7 +2749,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -2377,7 +2828,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -2460,7 +2912,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -2537,7 +2990,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -2615,7 +3069,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -2693,7 +3148,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -2794,7 +3250,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -2877,7 +3334,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -2950,7 +3408,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -3023,7 +3482,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -3111,7 +3571,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -3199,7 +3660,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -3284,7 +3746,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -3428,7 +3891,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -3519,7 +3983,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -3598,7 +4063,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -3685,7 +4151,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -3763,7 +4230,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -3846,7 +4314,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -3919,7 +4388,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -3999,7 +4469,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -4072,7 +4543,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -4157,7 +4629,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -4237,7 +4710,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -4308,7 +4782,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -4392,7 +4867,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -4484,7 +4960,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -4563,7 +5040,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -4647,7 +5125,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -4739,7 +5218,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -4818,7 +5298,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -4896,16 +5377,20 @@ paths:
               required:
                 - file
       responses:
-        "201":
-          description: ""
         "400":
-          description: Validation failed, or the request is not valid in the current state.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
+          description: "The multipart form was refused (`validation_failed`), before the
+            provider saw anything: more than 4 text fields; a text field longer
+            than 1024 bytes; more than 1 file; a declared content type other
+            than image/jpeg, image/png, image/webp, image/heic, image/heif,
+            application/pdf; file bytes that do not match the declared content
+            type; a missing `file` part; or an unknown `bucket`."
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -4930,6 +5415,13 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
+        "413":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+          description: The file is larger than 10485760 bytes (`payload_too_large`).
+            Multer stops reading at the limit, so nothing reaches the provider.
         "429":
           description: Rate limited (`rate_limited`). Only routes that declare a budget
             can return this — today the Pollar routes that create or fund a
@@ -4980,7 +5472,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -5049,7 +5542,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -5123,7 +5617,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -5202,7 +5697,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -5287,7 +5783,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -5365,7 +5862,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -5448,7 +5946,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -5525,7 +6024,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -5580,408 +6080,6 @@ paths:
       summary: Delete a product
       tags:
         - products
-  /v1/customers:
-    post:
-      operationId: CustomersController_create_v1
-      parameters: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/CreateCustomerDto"
-      responses:
-        "201":
-          description: ""
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/CustomerEntity"
-        "400":
-          description: Validation failed, or the request is not valid in the current state.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorBodyEntity"
-        "401":
-          description: No authenticated consumer, or admin credentials are required.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorBodyEntity"
-        "403":
-          description: The API key lacks the required scope, or the request did not arrive
-            through the gateway.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorBodyEntity"
-        "404":
-          description: The resource does not exist, or does not belong to this consumer.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorBodyEntity"
-        "409":
-          description: Conflicts with existing state — an idempotency clash, an operation
-            already in flight, or an invalid state transition.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorBodyEntity"
-        "429":
-          description: Rate limited (`rate_limited`). Only routes that declare a budget
-            can return this — today the Pollar routes that create or fund a
-            Stellar account. Honour `Retry-After`.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorBodyEntity"
-        "500":
-          description: Unexpected server error. The detail is logged server-side and never
-            returned.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorBodyEntity"
-        "502":
-          description: An upstream provider returned an error.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorBodyEntity"
-        "503":
-          description: An upstream provider is unavailable, or the service is misconfigured.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorBodyEntity"
-      summary: Create a customer
-      tags:
-        - customers
-    get:
-      operationId: CustomersController_findAll_v1
-      parameters:
-        - name: take
-          required: false
-          in: query
-          schema:
-            maximum: 100
-            default: 100
-            type: number
-        - name: skip
-          required: false
-          in: query
-          schema:
-            default: 0
-            type: number
-      responses:
-        "200":
-          description: ""
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/CustomerListEntity"
-        "400":
-          description: Validation failed, or the request is not valid in the current state.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorBodyEntity"
-        "401":
-          description: No authenticated consumer, or admin credentials are required.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorBodyEntity"
-        "403":
-          description: The API key lacks the required scope, or the request did not arrive
-            through the gateway.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorBodyEntity"
-        "404":
-          description: The resource does not exist, or does not belong to this consumer.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorBodyEntity"
-        "409":
-          description: Conflicts with existing state — an idempotency clash, an operation
-            already in flight, or an invalid state transition.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorBodyEntity"
-        "429":
-          description: Rate limited (`rate_limited`). Only routes that declare a budget
-            can return this — today the Pollar routes that create or fund a
-            Stellar account. Honour `Retry-After`.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorBodyEntity"
-        "500":
-          description: Unexpected server error. The detail is logged server-side and never
-            returned.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorBodyEntity"
-        "502":
-          description: An upstream provider returned an error.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorBodyEntity"
-        "503":
-          description: An upstream provider is unavailable, or the service is misconfigured.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorBodyEntity"
-      summary: List the consumer's customers (with payment stats)
-      tags:
-        - customers
-  /v1/customers/{id}:
-    get:
-      operationId: CustomersController_findOne_v1
-      parameters:
-        - name: id
-          required: true
-          in: path
-          schema:
-            type: string
-      responses:
-        "200":
-          description: ""
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/CustomerEntity"
-        "400":
-          description: Validation failed, or the request is not valid in the current state.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorBodyEntity"
-        "401":
-          description: No authenticated consumer, or admin credentials are required.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorBodyEntity"
-        "403":
-          description: The API key lacks the required scope, or the request did not arrive
-            through the gateway.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorBodyEntity"
-        "404":
-          description: The resource does not exist, or does not belong to this consumer.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorBodyEntity"
-        "409":
-          description: Conflicts with existing state — an idempotency clash, an operation
-            already in flight, or an invalid state transition.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorBodyEntity"
-        "429":
-          description: Rate limited (`rate_limited`). Only routes that declare a budget
-            can return this — today the Pollar routes that create or fund a
-            Stellar account. Honour `Retry-After`.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorBodyEntity"
-        "500":
-          description: Unexpected server error. The detail is logged server-side and never
-            returned.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorBodyEntity"
-        "502":
-          description: An upstream provider returned an error.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorBodyEntity"
-        "503":
-          description: An upstream provider is unavailable, or the service is misconfigured.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorBodyEntity"
-      summary: Get a customer by id
-      tags:
-        - customers
-    patch:
-      operationId: CustomersController_update_v1
-      parameters:
-        - name: id
-          required: true
-          in: path
-          schema:
-            type: string
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/UpdateCustomerDto"
-      responses:
-        "200":
-          description: ""
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/CustomerEntity"
-        "400":
-          description: Validation failed, or the request is not valid in the current state.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorBodyEntity"
-        "401":
-          description: No authenticated consumer, or admin credentials are required.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorBodyEntity"
-        "403":
-          description: The API key lacks the required scope, or the request did not arrive
-            through the gateway.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorBodyEntity"
-        "404":
-          description: The resource does not exist, or does not belong to this consumer.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorBodyEntity"
-        "409":
-          description: Conflicts with existing state — an idempotency clash, an operation
-            already in flight, or an invalid state transition.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorBodyEntity"
-        "429":
-          description: Rate limited (`rate_limited`). Only routes that declare a budget
-            can return this — today the Pollar routes that create or fund a
-            Stellar account. Honour `Retry-After`.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorBodyEntity"
-        "500":
-          description: Unexpected server error. The detail is logged server-side and never
-            returned.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorBodyEntity"
-        "502":
-          description: An upstream provider returned an error.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorBodyEntity"
-        "503":
-          description: An upstream provider is unavailable, or the service is misconfigured.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorBodyEntity"
-      summary: Update a customer
-      tags:
-        - customers
-    delete:
-      operationId: CustomersController_remove_v1
-      parameters:
-        - name: id
-          required: true
-          in: path
-          schema:
-            type: string
-      responses:
-        "200":
-          description: ""
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/CustomerDeletedEntity"
-        "400":
-          description: Validation failed, or the request is not valid in the current state.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorBodyEntity"
-        "401":
-          description: No authenticated consumer, or admin credentials are required.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorBodyEntity"
-        "403":
-          description: The API key lacks the required scope, or the request did not arrive
-            through the gateway.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorBodyEntity"
-        "404":
-          description: The resource does not exist, or does not belong to this consumer.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorBodyEntity"
-        "409":
-          description: Conflicts with existing state — an idempotency clash, an operation
-            already in flight, or an invalid state transition.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorBodyEntity"
-        "429":
-          description: Rate limited (`rate_limited`). Only routes that declare a budget
-            can return this — today the Pollar routes that create or fund a
-            Stellar account. Honour `Retry-After`.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorBodyEntity"
-        "500":
-          description: Unexpected server error. The detail is logged server-side and never
-            returned.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorBodyEntity"
-        "502":
-          description: An upstream provider returned an error.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorBodyEntity"
-        "503":
-          description: An upstream provider is unavailable, or the service is misconfigured.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorBodyEntity"
-      summary: Delete a customer
-      tags:
-        - customers
   /v1/aliases/resolve/{name}:
     get:
       operationId: AliasesController_resolve_v1
@@ -6011,7 +6109,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -6089,7 +6188,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -6168,7 +6268,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -6250,7 +6351,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -6329,7 +6431,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -6413,7 +6516,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -6500,7 +6604,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -6583,7 +6688,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -6661,7 +6767,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -6716,95 +6823,6 @@ paths:
       summary: Release the alias back to the namespace
       tags:
         - aliases
-  /v1/aliases/{name}/recovery:
-    post:
-      description: "The response is IDENTICAL whether or not the alias and mailbox
-        matched. A handle is public and the mailbox behind it is not, so a
-        differing answer would confirm who owns it to anyone who asked. This
-        service sends no mail: it returns the token for the caller to deliver,
-        exactly as the KYC terms-of-service flow does."
-      operationId: AliasesController_startRecovery_v1
-      parameters:
-        - name: name
-          required: true
-          in: path
-          schema:
-            type: string
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/StartAliasRecoveryDto"
-      responses:
-        "201":
-          description: ""
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/AliasRecoveryStartedEntity"
-        "400":
-          description: Validation failed, or the request is not valid in the current state.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorBodyEntity"
-        "401":
-          description: No authenticated consumer, or admin credentials are required.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorBodyEntity"
-        "403":
-          description: The API key lacks the required scope, or the request did not arrive
-            through the gateway.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorBodyEntity"
-        "404":
-          description: The resource does not exist, or does not belong to this consumer.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorBodyEntity"
-        "409":
-          description: Conflicts with existing state — an idempotency clash, an operation
-            already in flight, or an invalid state transition.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorBodyEntity"
-        "429":
-          description: Rate limited (`rate_limited`). Only routes that declare a budget
-            can return this — today the Pollar routes that create or fund a
-            Stellar account. Honour `Retry-After`.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorBodyEntity"
-        "500":
-          description: Unexpected server error. The detail is logged server-side and never
-            returned.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorBodyEntity"
-        "502":
-          description: An upstream provider returned an error.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorBodyEntity"
-        "503":
-          description: An upstream provider is unavailable, or the service is misconfigured.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorBodyEntity"
-      summary: Start email recovery
-      tags:
-        - aliases
   /v1/aliases/{name}/recovery/complete:
     post:
       description: Needs the emailed token AND a signature from the new key. Every
@@ -6838,7 +6856,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -6917,7 +6936,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -6996,7 +7016,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -7083,7 +7104,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -7161,7 +7183,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -7236,7 +7259,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -7316,7 +7340,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -7404,7 +7429,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -7483,7 +7509,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -7558,7 +7585,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -7637,7 +7665,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -7724,7 +7753,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -7802,7 +7832,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -7883,7 +7914,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -7965,7 +7997,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -8054,7 +8087,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -8137,7 +8171,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -8222,7 +8257,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -8305,7 +8341,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -8387,7 +8424,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -8466,7 +8504,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -8548,7 +8587,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -8561,7 +8601,10 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "404":
-          description: The resource does not exist, or does not belong to this consumer.
+          description: "Wallet not found (`not_found`): the address is unknown, or this
+            consumer did not obtain it through this service. Both cases answer
+            identically, so the response never reveals whether the wallet
+            belongs to someone else."
           content:
             application/json:
               schema:
@@ -8626,7 +8669,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -8639,7 +8683,10 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "404":
-          description: The resource does not exist, or does not belong to this consumer.
+          description: "Wallet not found (`not_found`): the address is unknown, or this
+            consumer did not obtain it through this service. Both cases answer
+            identically, so the response never reveals whether the wallet
+            belongs to someone else."
           content:
             application/json:
               schema:
@@ -8652,9 +8699,9 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "429":
-          description: Rate limited (`rate_limited`). Only routes that declare a budget
-            can return this — today the Pollar routes that create or fund a
-            Stellar account. Honour `Retry-After`.
+          description: Rate limited (`rate_limited`). Both POST trustline routes draw on
+            the same budget per consumer and client address, so alternating
+            between them does not reset it. Honour `Retry-After`.
           content:
             application/json:
               schema:
@@ -8710,7 +8757,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -8723,7 +8771,10 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "404":
-          description: The resource does not exist, or does not belong to this consumer.
+          description: "Wallet not found (`not_found`): the address is unknown, or this
+            consumer did not obtain it through this service. Both cases answer
+            identically, so the response never reveals whether the wallet
+            belongs to someone else."
           content:
             application/json:
               schema:
@@ -8736,9 +8787,9 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "429":
-          description: Rate limited (`rate_limited`). Only routes that declare a budget
-            can return this — today the Pollar routes that create or fund a
-            Stellar account. Honour `Retry-After`.
+          description: Rate limited (`rate_limited`). Both POST trustline routes draw on
+            the same budget per consumer and client address, so alternating
+            between them does not reset it. Honour `Retry-After`.
           content:
             application/json:
               schema:
@@ -8802,7 +8853,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -8815,7 +8867,10 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "404":
-          description: The resource does not exist, or does not belong to this consumer.
+          description: "Wallet not found (`not_found`): the address is unknown, or this
+            consumer did not obtain it through this service. Both cases answer
+            identically, so the response never reveals whether the wallet
+            belongs to someone else."
           content:
             application/json:
               schema:
@@ -8884,7 +8939,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -8966,7 +9022,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -9048,7 +9105,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
         "401":
-          description: No authenticated consumer, or admin credentials are required.
+          description: "No authenticated consumer: the gateway forwarded no API key
+            identity (`no_authenticated_consumer`)."
           content:
             application/json:
               schema:
@@ -9649,6 +9707,187 @@ components:
       required:
         - id
         - deleted
+    CreateCustomerDto:
+      type: object
+      properties:
+        name:
+          type: string
+          example: Acme Inc.
+        alias:
+          type: string
+          example: Acme — billing
+        note:
+          type: string
+          example: VIP customer, net-30 terms.
+        email:
+          type: string
+          example: billing@acme.com
+        account:
+          type: string
+          example: GCALNQQBXAPZ2WIRSDDBMSTAKCUH5SG6U76YBFLQLIXJTF7FE5AX7AOO
+          description: Optional Stellar account to associate the customer with.
+        reference:
+          type: string
+          example: cust_001
+      required:
+        - name
+    CustomerEntity:
+      type: object
+      properties:
+        id:
+          type: string
+          example: clz9xcust00001
+        name:
+          type: string
+          example: Ada Lovelace
+        alias:
+          type: object
+          nullable: true
+          example: Acme — billing
+        email:
+          type: object
+          nullable: true
+          example: ada@example.com
+        account:
+          type: object
+          nullable: true
+          description: Stellar account associated with this customer, if any.
+          example: GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+        note:
+          type: object
+          nullable: true
+          example: Prefers wire settlement
+        reference:
+          type: object
+          nullable: true
+          example: ext_4821
+        createdAt:
+          format: date-time
+          type: string
+          example: 2026-06-21T12:34:56.000Z
+        updatedAt:
+          format: date-time
+          type: string
+          example: 2026-06-21T12:34:57.000Z
+      required:
+        - id
+        - name
+        - createdAt
+        - updatedAt
+    CustomerWithStatsEntity:
+      type: object
+      properties:
+        id:
+          type: string
+          example: clz9xcust00001
+        name:
+          type: string
+          example: Ada Lovelace
+        alias:
+          type: object
+          nullable: true
+          example: Acme — billing
+        email:
+          type: object
+          nullable: true
+          example: ada@example.com
+        account:
+          type: object
+          nullable: true
+          description: Stellar account associated with this customer, if any.
+          example: GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+        note:
+          type: object
+          nullable: true
+          example: Prefers wire settlement
+        reference:
+          type: object
+          nullable: true
+          example: ext_4821
+        createdAt:
+          format: date-time
+          type: string
+          example: 2026-06-21T12:34:56.000Z
+        updatedAt:
+          format: date-time
+          type: string
+          example: 2026-06-21T12:34:57.000Z
+        payments:
+          type: number
+          description: Payment intents attributed to this customer.
+          example: 12
+        succeeded:
+          type: number
+          description: How many of those succeeded.
+          example: 11
+        total:
+          type: string
+          description: Gross settled volume, an exact decimal string.
+          example: "1042.5"
+      required:
+        - id
+        - name
+        - createdAt
+        - updatedAt
+        - payments
+        - succeeded
+        - total
+    CustomerListEntity:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/CustomerWithStatsEntity"
+        total:
+          type: number
+          description: Total matching rows — not the page length.
+          example: 137
+        take:
+          type: number
+          example: 100
+        skip:
+          type: number
+          example: 0
+      required:
+        - data
+        - total
+        - take
+        - skip
+    UpdateCustomerDto:
+      type: object
+      properties:
+        name:
+          type: string
+          example: Acme Inc.
+        alias:
+          type: string
+          example: Acme — billing
+        note:
+          type: string
+          example: VIP customer, net-30 terms.
+        email:
+          type: string
+          example: billing@acme.com
+        account:
+          type: string
+          example: GCALNQQBXAPZ2WIRSDDBMSTAKCUH5SG6U76YBFLQLIXJTF7FE5AX7AOO
+          description: Optional Stellar account to associate the customer with.
+        reference:
+          type: string
+          example: cust_001
+    CustomerDeletedEntity:
+      type: object
+      properties:
+        id:
+          type: string
+          example: clz9xcust00001
+        deleted:
+          type: boolean
+          example: true
+      required:
+        - id
+        - deleted
     QuoteSwapDto:
       type: object
       properties:
@@ -9854,9 +10093,10 @@ components:
         idempotencyKey:
           type: string
           description: Optional idempotency key. Prefer the `Idempotency-Key` request
-            header; when both are set, the header wins. Retries with the same
-            key return the existing swap instead of building another
-            transaction.
+            header; when both are set, the header wins. A retry with the same
+            key and the same request returns the existing swap instead of
+            building another transaction; the same key with a different request
+            is 409 `idempotency_conflict`.
           example: swap-retry-2026-08-23-001
       required:
         - amount
@@ -9991,13 +10231,131 @@ components:
         - qr
         - createdAt
         - updatedAt
+    SwapListItemEntity:
+      type: object
+      properties:
+        id:
+          type: string
+          example: clx9z8a1b0000abcd1234efgh
+        status:
+          type: string
+          enum:
+            - PENDING
+            - SUBMITTED
+            - SUCCEEDED
+            - FAILED
+            - EXPIRED
+          example: PENDING
+        network:
+          type: string
+          example: testnet
+        source:
+          type: string
+          example: GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ
+        destination:
+          type: string
+          example: GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ
+        sendAsset:
+          type: string
+          example: native
+        sendAssetIssuer:
+          type: object
+          nullable: true
+          example: null
+        sendAmount:
+          type: string
+          example: "100"
+          description: Gross source amount.
+        feeAmount:
+          type: string
+          example: "0.5"
+        feeBps:
+          type: number
+          example: 50
+        swapAmount:
+          type: string
+          example: "99.5"
+          description: Amount routed through the DEX/AMM.
+        destAsset:
+          type: string
+          example: USDC
+        destAssetIssuer:
+          type: object
+          nullable: true
+          example: GA5ZSEJYB37JRC5AVCIA5MOP4RHTR6F3DSZL5A3W4G4M4N4A5U4QY3T6
+        destEstimated:
+          type: string
+          example: "24.81"
+        destMin:
+          type: string
+          example: "24.68595"
+        slippageBps:
+          type: number
+          example: 50
+        path:
+          type: array
+          items:
+            $ref: "#/components/schemas/SwapPathHop"
+        memo:
+          type: object
+          nullable: true
+          example: null
+        idempotencyKey:
+          type: object
+          nullable: true
+          example: swap-retry-2026-08-23-001
+          description: Client idempotency key when supplied via Idempotency-Key / body
+            (null otherwise).
+        xdr:
+          type: string
+          description: Unsigned transaction envelope (base64 XDR) to sign.
+          example: AAAAAgAAAABx…(base64 XDR)…AAAAAAAAAAA=
+        uri:
+          type: string
+          example: web+stellar:tx?xdr=AAAAAgAAAABx…
+        txHash:
+          type: string
+          description: Deterministic transaction hash (verified on submit).
+          example: 3389e9f0...64hex
+        createdAt:
+          format: date-time
+          type: string
+          example: 2026-06-29T12:34:56.000Z
+        updatedAt:
+          format: date-time
+          type: string
+          example: 2026-06-29T12:34:56.000Z
+      required:
+        - id
+        - status
+        - network
+        - source
+        - destination
+        - sendAsset
+        - sendAssetIssuer
+        - sendAmount
+        - feeAmount
+        - feeBps
+        - swapAmount
+        - destAsset
+        - destAssetIssuer
+        - destEstimated
+        - destMin
+        - slippageBps
+        - path
+        - memo
+        - xdr
+        - uri
+        - txHash
+        - createdAt
+        - updatedAt
     SwapListEntity:
       type: object
       properties:
         data:
           type: array
           items:
-            $ref: "#/components/schemas/SwapEntity"
+            $ref: "#/components/schemas/SwapListItemEntity"
         total:
           type: number
           example: 1
@@ -10106,9 +10464,10 @@ components:
         idempotencyKey:
           type: string
           description: Optional idempotency key. Prefer the `Idempotency-Key` request
-            header; when both are set, the header wins. Retries with the same
-            key return the existing operation instead of building another
-            transaction.
+            header; when both are set, the header wins. A retry with the same
+            key and the same request returns the existing operation instead of
+            building another transaction; the same key with a different request
+            is 409 `idempotency_conflict`.
           example: lp-deposit-2026-08-23-001
       required:
         - source
@@ -10185,6 +10544,15 @@ components:
         slippageBps:
           type: number
           example: 50
+        memo:
+          type: string
+          nullable: true
+          example: "4242"
+          description: The caller's MEMO_ID (uint64 as a string), null when none was
+            supplied. A commission MEMO_TEXT is reported in `commissionMemo`,
+            never here. Operations created before this field existed report null
+            even when their envelope carries a MEMO_ID; the `xdr` is
+            authoritative for those.
         idempotencyKey:
           type: object
           nullable: true
@@ -10298,9 +10666,10 @@ components:
         idempotencyKey:
           type: string
           description: Optional idempotency key. Prefer the `Idempotency-Key` request
-            header; when both are set, the header wins. Retries with the same
-            key return the existing operation instead of building another
-            transaction.
+            header; when both are set, the header wins. A retry with the same
+            key and the same request returns the existing operation instead of
+            building another transaction; the same key with a different request
+            is 409 `idempotency_conflict`.
           example: lp-withdraw-2026-08-23-001
       required:
         - source
@@ -10374,13 +10743,168 @@ components:
         - account
         - network
         - data
+    LiquidityOperationListItemEntity:
+      type: object
+      properties:
+        id:
+          type: string
+          example: clx9z8a1b0000abcd1234efgh
+        kind:
+          type: string
+          enum:
+            - DEPOSIT
+            - WITHDRAW
+          example: DEPOSIT
+        status:
+          type: string
+          enum:
+            - PENDING
+            - SUBMITTED
+            - SUCCEEDED
+            - FAILED
+            - EXPIRED
+          example: PENDING
+        network:
+          type: string
+          example: testnet
+        source:
+          type: string
+          example: GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ
+        poolId:
+          type: string
+          example: dd7b1ab831c273310ddbec6f97870aa83c2fbd78ce22aded37ecbf4f3380fac7
+        assetA:
+          type: string
+          example: native
+        assetAIssuer:
+          type: object
+          nullable: true
+          example: null
+        assetB:
+          type: string
+          example: USDC
+        assetBIssuer:
+          type: object
+          nullable: true
+          example: GA5ZSEJYB37JRC5AVCIA5MOP4RHTR6F3DSZL5A3W4G4M4N4A5U4QY3T6
+        amountA:
+          type: string
+          example: "1000"
+          description: "DEPOSIT: maxAmountA cap. WITHDRAW: slippage-protected minimum of
+            asset A."
+        amountB:
+          type: string
+          example: "100"
+          description: "DEPOSIT: maxAmountB cap. WITHDRAW: slippage-protected minimum of
+            asset B."
+        shares:
+          type: object
+          nullable: true
+          example: null
+          description: Pool shares burned (WITHDRAW only).
+        minPrice:
+          type: object
+          nullable: true
+          example: "9.95"
+          description: DEPOSIT only.
+        maxPrice:
+          type: object
+          nullable: true
+          example: "10.05"
+          description: DEPOSIT only.
+        slippageBps:
+          type: number
+          example: 50
+        memo:
+          type: string
+          nullable: true
+          example: "4242"
+          description: The caller's MEMO_ID (uint64 as a string), null when none was
+            supplied. A commission MEMO_TEXT is reported in `commissionMemo`,
+            never here. Operations created before this field existed report null
+            even when their envelope carries a MEMO_ID; the `xdr` is
+            authoritative for those.
+        idempotencyKey:
+          type: object
+          nullable: true
+          example: lp-deposit-2026-08-23-001
+          description: Client idempotency key when supplied via Idempotency-Key / body
+            (null otherwise).
+        feeBps:
+          type: number
+          example: 50
+          description: Plan commission in basis points (50 = 0.5%), applied to both assets.
+        feeAmountA:
+          type: string
+          example: "5"
+          description: Commission taken from asset A (deducted from the deposit / the
+            withdrawn minimum). "0" when no commission applies.
+        feeAmountB:
+          type: string
+          example: "0.5"
+          description: Commission taken from asset B. "0" when none.
+        feeWallet:
+          type: object
+          nullable: true
+          example: GBFEE...WALLET
+          description: Commission collector account (null when the fee is disabled).
+        xdr:
+          type: string
+          description: Unsigned transaction envelope (base64 XDR) to sign.
+          example: AAAAAgAAAABx…(base64 XDR)…AAAAAAAAAAA=
+        uri:
+          type: string
+          example: web+stellar:tx?xdr=AAAAAgAAAABx…
+        txHash:
+          type: string
+          description: Deterministic transaction hash (verified on submit).
+          example: 3389e9f0...64hex
+        expiresAt:
+          type: object
+          nullable: true
+          example: 2026-07-04T12:39:56.000Z
+        createdAt:
+          format: date-time
+          type: string
+          example: 2026-07-04T12:34:56.000Z
+        updatedAt:
+          format: date-time
+          type: string
+          example: 2026-07-04T12:34:56.000Z
+      required:
+        - id
+        - kind
+        - status
+        - network
+        - source
+        - poolId
+        - assetA
+        - assetAIssuer
+        - assetB
+        - assetBIssuer
+        - amountA
+        - amountB
+        - shares
+        - minPrice
+        - maxPrice
+        - slippageBps
+        - feeBps
+        - feeAmountA
+        - feeAmountB
+        - feeWallet
+        - xdr
+        - uri
+        - txHash
+        - expiresAt
+        - createdAt
+        - updatedAt
     LiquidityOperationListEntity:
       type: object
       properties:
         data:
           type: array
           items:
-            $ref: "#/components/schemas/LiquidityOperationEntity"
+            $ref: "#/components/schemas/LiquidityOperationListItemEntity"
         total:
           type: number
           example: 1
@@ -12513,187 +13037,6 @@ components:
       required:
         - id
         - deleted
-    CreateCustomerDto:
-      type: object
-      properties:
-        name:
-          type: string
-          example: Acme Inc.
-        alias:
-          type: string
-          example: Acme — billing
-        note:
-          type: string
-          example: VIP customer, net-30 terms.
-        email:
-          type: string
-          example: billing@acme.com
-        account:
-          type: string
-          example: GCALNQQBXAPZ2WIRSDDBMSTAKCUH5SG6U76YBFLQLIXJTF7FE5AX7AOO
-          description: Optional Stellar account to associate the customer with.
-        reference:
-          type: string
-          example: cust_001
-      required:
-        - name
-    CustomerEntity:
-      type: object
-      properties:
-        id:
-          type: string
-          example: clz9xcust00001
-        name:
-          type: string
-          example: Ada Lovelace
-        alias:
-          type: object
-          nullable: true
-          example: Acme — billing
-        email:
-          type: object
-          nullable: true
-          example: ada@example.com
-        account:
-          type: object
-          nullable: true
-          description: Stellar account associated with this customer, if any.
-          example: GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-        note:
-          type: object
-          nullable: true
-          example: Prefers wire settlement
-        reference:
-          type: object
-          nullable: true
-          example: ext_4821
-        createdAt:
-          format: date-time
-          type: string
-          example: 2026-06-21T12:34:56.000Z
-        updatedAt:
-          format: date-time
-          type: string
-          example: 2026-06-21T12:34:57.000Z
-      required:
-        - id
-        - name
-        - createdAt
-        - updatedAt
-    CustomerWithStatsEntity:
-      type: object
-      properties:
-        id:
-          type: string
-          example: clz9xcust00001
-        name:
-          type: string
-          example: Ada Lovelace
-        alias:
-          type: object
-          nullable: true
-          example: Acme — billing
-        email:
-          type: object
-          nullable: true
-          example: ada@example.com
-        account:
-          type: object
-          nullable: true
-          description: Stellar account associated with this customer, if any.
-          example: GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-        note:
-          type: object
-          nullable: true
-          example: Prefers wire settlement
-        reference:
-          type: object
-          nullable: true
-          example: ext_4821
-        createdAt:
-          format: date-time
-          type: string
-          example: 2026-06-21T12:34:56.000Z
-        updatedAt:
-          format: date-time
-          type: string
-          example: 2026-06-21T12:34:57.000Z
-        payments:
-          type: number
-          description: Payment intents attributed to this customer.
-          example: 12
-        succeeded:
-          type: number
-          description: How many of those succeeded.
-          example: 11
-        total:
-          type: string
-          description: Gross settled volume, an exact decimal string.
-          example: "1042.5"
-      required:
-        - id
-        - name
-        - createdAt
-        - updatedAt
-        - payments
-        - succeeded
-        - total
-    CustomerListEntity:
-      type: object
-      properties:
-        data:
-          type: array
-          items:
-            $ref: "#/components/schemas/CustomerWithStatsEntity"
-        total:
-          type: number
-          description: Total matching rows — not the page length.
-          example: 137
-        take:
-          type: number
-          example: 100
-        skip:
-          type: number
-          example: 0
-      required:
-        - data
-        - total
-        - take
-        - skip
-    UpdateCustomerDto:
-      type: object
-      properties:
-        name:
-          type: string
-          example: Acme Inc.
-        alias:
-          type: string
-          example: Acme — billing
-        note:
-          type: string
-          example: VIP customer, net-30 terms.
-        email:
-          type: string
-          example: billing@acme.com
-        account:
-          type: string
-          example: GCALNQQBXAPZ2WIRSDDBMSTAKCUH5SG6U76YBFLQLIXJTF7FE5AX7AOO
-          description: Optional Stellar account to associate the customer with.
-        reference:
-          type: string
-          example: cust_001
-    CustomerDeletedEntity:
-      type: object
-      properties:
-        id:
-          type: string
-          example: clz9xcust00001
-        deleted:
-          type: boolean
-          example: true
-      required:
-        - id
-        - deleted
     AliasAddressEntity:
       type: object
       properties:
@@ -12929,36 +13272,6 @@ components:
       required:
         - id
         - deleted
-    StartAliasRecoveryDto:
-      type: object
-      properties:
-        email:
-          type: string
-          description: "The mailbox on record. Checked but never echoed: the response is
-            identical whether or not it matched, so this endpoint cannot be used
-            to ask which address owns a handle."
-          example: someone@example.com
-      required:
-        - email
-    AliasRecoveryStartedEntity:
-      type: object
-      properties:
-        accepted:
-          type: boolean
-          description: Always true — see the note on enumeration in the service.
-        token:
-          type: object
-          nullable: true
-          description: The token to email. Null when there was nothing to recover.
-        email:
-          type: object
-          nullable: true
-          description: The mailbox to deliver to.
-        expiresAt:
-          type: object
-          nullable: true
-      required:
-        - accepted
     CompleteAliasRecoveryDto:
       type: object
       properties:
@@ -13955,6 +14268,7 @@ components:
             - admin_console_only
             - not_found
             - validation_failed
+            - payload_too_large
             - idempotency_conflict
             - operation_in_flight
             - invalid_state_transition

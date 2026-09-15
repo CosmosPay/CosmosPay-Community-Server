@@ -4,7 +4,7 @@ import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface'
 import { PaginationQueryDto } from '@/common/dto/pagination.query.dto';
 import { page } from '@/common/pagination';
 import { PrismaService } from '@/prisma/prisma.service';
-import { BlindpayClient } from '@/blindpay/blindpay.client';
+import { BlindpayKycApi } from '@/blindpay/blindpay-kyc.api';
 import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
 import { BlindpayObject } from '@/blindpay/blindpay-sync.service';
 import { asNullableString, asString, toJson } from '@/blindpay/blindpay.util';
@@ -37,7 +37,7 @@ export const BANK_ACCOUNT_PUBLIC_SELECT = {
 export class BankAccountsService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly blindpay: BlindpayClient,
+    private readonly blindpay: BlindpayKycApi,
     private readonly consumers: ConsumerResolverService,
     private readonly receivers: ReceiversService,
   ) {}
@@ -53,10 +53,8 @@ export class BankAccountsService {
       receiverId,
     );
     this.receivers.assertEnabled(receiver);
-    const created = await this.blindpay.post<BlindpayObject>(
-      this.blindpay.instancePath(
-        `/customers/${receiver.blindpayId}/bank-accounts`,
-      ),
+    const created = await this.blindpay.createBankAccount(
+      receiver.blindpayId,
       dto,
     );
     return this.mirror(local.id, receiver.id, { type: dto.type, ...created });
@@ -99,11 +97,7 @@ export class BankAccountsService {
     if (!row) {
       return { id, deleted: true };
     }
-    await this.blindpay.delete(
-      this.blindpay.instancePath(
-        `/customers/${receiver.blindpayId}/bank-accounts/${row.blindpayId}`,
-      ),
-    );
+    await this.blindpay.deleteBankAccount(receiver.blindpayId, row.blindpayId);
     await this.prisma.blindpayBankAccount.delete({ where: { id: row.id } });
     return { id, deleted: true };
   }

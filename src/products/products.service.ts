@@ -1,4 +1,5 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
+import { ApiError } from '@/common/errors/api-error';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import { PrismaService } from '@/prisma/prisma.service';
 import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
@@ -53,7 +54,7 @@ export class ProductsService {
 
     // `total` is the row count, never `data.length`: the page size is `take` on
     // every full page, so a client paginating on it can never see the end.
-    const [data, total] = await this.prisma.$transaction([
+    const [data, total] = await Promise.all([
       this.prisma.product.findMany({
         where,
         orderBy: { createdAt: 'desc' },
@@ -72,7 +73,7 @@ export class ProductsService {
       where: { id, consumerId: local.id },
     });
     if (!product) {
-      throw new NotFoundException('Product not found');
+      throw ApiError.notFound('Product not found');
     }
     return product;
   }

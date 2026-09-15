@@ -6,9 +6,11 @@ import {
   Param,
   Post,
   Query,
+  UseGuards,
 } from '@nestjs/common';
 import {
   ApiCreatedResponse,
+  ApiExcludeEndpoint,
   ApiOkResponse,
   ApiOperation,
   ApiQuery,
@@ -17,6 +19,7 @@ import {
 import { AllowPublicKey } from '@/common/decorators/allow-public-key.decorator';
 import { CurrentConsumer } from '@/common/decorators/current-consumer.decorator';
 import { RequirePermissions } from '@/common/decorators/require-permissions.decorator';
+import { ConsoleOnlyGuard } from '@/common/guards/console-only.guard';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import { AliasesService } from '@/aliases/aliases.service';
 import {
@@ -51,6 +54,10 @@ import {
  *    an alias is bound to the consumer that holds it, and the shared key
  *    authenticates every anonymous wallet as ONE consumer, so claiming with it
  *    would make a single "owner" of every alias on the platform.
+ *
+ * One route belongs to neither: STARTING a recovery is the platform console's,
+ * because its response is the token that proves the owner's mailbox and the
+ * console is what emails it.
  */
 @ApiTags('aliases')
 @Controller({ path: 'aliases', version: '1' })
@@ -178,15 +185,21 @@ export class AliasesController {
   /* -------------------------------- recovery ------------------------------- */
 
   @Post(':name/recovery')
-  @RequirePermissions('payments:write')
+  // Console only, and out of the published contract. This service sends no mail,
+  // so the response carries the token for the console to deliver — and the token
+  // IS the proof of mailbox control. Behind a scope it proved nothing: any key
+  // holder who knew a handle and its owner's email got the token back and could
+  // complete the recovery with a key of their own, taking every payment sent to
+  // that name. No scope is declared because a console call is not an API-key call
+  // (the same as `/v1/admin`); the guard refuses before the alias is looked up.
+  @UseGuards(ConsoleOnlyGuard)
+  @ApiExcludeEndpoint()
   @ApiOperation({
-    summary: 'Start email recovery',
+    summary: 'Start email recovery (platform console only)',
     description:
       'The response is IDENTICAL whether or not the alias and mailbox matched. A ' +
       'handle is public and the mailbox behind it is not, so a differing answer ' +
-      'would confirm who owns it to anyone who asked. This service sends no mail: ' +
-      'it returns the token for the caller to deliver, exactly as the KYC ' +
-      'terms-of-service flow does.',
+      'would confirm who owns it to anyone who asked.',
   })
   @ApiCreatedResponse({ type: AliasRecoveryStartedEntity })
   startRecovery(

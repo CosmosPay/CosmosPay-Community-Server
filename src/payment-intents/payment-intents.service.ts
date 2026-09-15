@@ -1,13 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import {
-  Asset,
-  Memo,
-  Operation,
-  TransactionBuilder,
-} from '@stellar/stellar-sdk';
-import { randomBytes } from 'node:crypto';
-import QRCode from 'qrcode';
 import { AppConfig, StellarNetwork } from '@/config/configuration';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
@@ -15,7 +7,9 @@ import { isUniqueViolation } from '@/common/prisma-errors';
 import { resolveNetwork } from '@/common/stellar-network';
 import { PrismaService } from '@/prisma/prisma.service';
 import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
-import { StellarService } from '@/stellar/stellar.service';
+import { CustomersService } from '@/customers/customers.service';
+import { assetLabel, resolveAsset } from '@/stellar/asset';
+import { resolveOrMintMemoId } from '@/stellar/memo';
 import type {
   PaymentIntent,
   PaymentIntentStatus,
@@ -30,7 +24,13 @@ import { UpdatePaymentIntentDto } from '@/payment-intents/dto/update-payment-int
 import {
   assertTransition,
   InvalidPaymentIntentTransitionError,
+  isTerminalStatus,
 } from '@/payment-intents/payment-intent-state-machine';
+import {
+  isSameIntentRequest,
+  type PaymentIntentTerms,
+} from '@/payment-intents/payment-intent-replay';
+import { Sep7LinkBuilder } from '@/payment-intents/sep7-link-builder.service';
 import { StellarVerifierService } from '@/payment-intents/stellar-verifier.service';
 
 /** Who triggered a status change — stored on the audit row. */
@@ -56,6 +56,16 @@ export interface ValidationOutcome {
 // A stored intent plus its (derived) QR code — what API responses return.
 export type PaymentIntentView = PaymentIntent & { qr: string };
 
+/**
+ * A payment intent's lifecycle: the idempotent create, reads, the guarded
+ * status transitions with their audit trail and webhooks, and chain-verified
+ * settlement.
+ *
+ * What an intent looks like on the wire — URI, envelope, QR — is
+ * {@link Sep7LinkBuilder}'s, and the customer a settled payment adds is
+ * {@link CustomersService}'s. Both used to be written here, the second straight
+ * into the customers module's table.
+ */
 @Injectable()
 export class PaymentIntentsService {
   private readonly logger = new Logger(PaymentIntentsService.name);
@@ -65,8 +75,9 @@ export class PaymentIntentsService {
     private readonly prisma: PrismaService,
     private readonly webhooks: WebhookTerminalEmitter,
     private readonly verifier: StellarVerifierService,
-    private readonly stellar: StellarService,
+    private readonly links: Sep7LinkBuilder,
     private readonly consumers: ConsumerResolverService,
+    private readonly customers: CustomersService,
   ) {}
 
   /**
@@ -131,56 +142,7 @@ export class PaymentIntentsService {
 
   /** QR is derived from the stored SEP-7 URI rather than persisted. */
   private async withQr(intent: PaymentIntent): Promise<PaymentIntentView> {
-    return { ...intent, qr: await QRCode.toDataURL(intent.uri) };
-  }
-
-  /**
-   * Resolves the requested asset. No code (or "XLM"/"native") → native lumens;
-   * any other code requires an issuer. Returns both the stored representation
-   * and the SDK Asset for building transactions.
-   */
-  private resolveAsset(
-    assetCode?: string,
-    assetIssuer?: string,
-  ): {
-    code: string;
-    issuer: string | null;
-    asset: Asset;
-  } {
-    const code = assetCode?.trim();
-    if (
-      !code ||
-      code.toLowerCase() === 'xlm' ||
-      code.toLowerCase() === 'native'
-    ) {
-      return { code: 'native', issuer: null, asset: Asset.native() };
-    }
-    if (!assetIssuer) {
-      throw ApiError.badRequest(
-        ApiErrorCode.ValidationFailed,
-        `assetIssuer is required for non-native asset "${code}"`,
-      );
-    }
-    return { code, issuer: assetIssuer, asset: new Asset(code, assetIssuer) };
-  }
-
-  /**
-   * The memo is a mandatory MEMO_ID: it identifies the payment on-chain and
-   * gives the intent idempotency. Validates a provided id (numeric, uint64) or
-   * generates a random one.
-   */
-  private resolveMemo(provided?: string): string {
-    if (provided !== undefined) {
-      if (!/^\d+$/.test(provided) || BigInt(provided) > 18446744073709551615n) {
-        throw ApiError.badRequest(
-          ApiErrorCode.InvalidMemo,
-          'memo must be a MEMO_ID: a numeric uint64 string',
-        );
-      }
-      return provided;
-    }
-    // Random uint64 (8 bytes) as a decimal string.
-    return BigInt('0x' + randomBytes(8).toString('hex')).toString();
+    return { ...intent, qr: await this.links.qr(intent.uri) };
   }
 
   /** Idempotency: return the existing intent for (consumer, memo), if any. */
@@ -193,13 +155,37 @@ export class PaymentIntentsService {
     });
   }
 
-  /** Appends shared SEP-7 extras (`msg`, `callback`) to a URI's params. */
-  private appendSep7Extras(
-    params: URLSearchParams,
-    extras: { msg?: string; callback?: string },
-  ): void {
-    if (extras.callback) params.set('callback', extras.callback);
-    if (extras.msg) params.set('msg', extras.msg);
+  /**
+   * Resolves a create that landed on an existing `(consumer, memo)`: the stored
+   * intent when the request describes the same payment, a 409 when it does not.
+   * {@link isSameIntentRequest} explains why a matching memo is not enough.
+   *
+   * `stored` is null only on the race path, when the row that beat this
+   * request's insert was deleted again before it could be read back.
+   */
+  private replayOf(
+    stored: PaymentIntent | null,
+    terms: PaymentIntentTerms,
+  ): Promise<PaymentIntentView> {
+    if (!stored) {
+      throw ApiError.conflict(
+        ApiErrorCode.OperationInFlight,
+        'A concurrent request for this memo changed it while this one was ' +
+          'being created. Retry the request.',
+      );
+    }
+    if (!isSameIntentRequest(stored, terms)) {
+      // Names nothing about the stored intent. Under the shared public key it
+      // may be another caller's, and saying which term differed would let a
+      // caller recover that intent one field at a time.
+      throw ApiError.conflict(
+        ApiErrorCode.IdempotencyConflict,
+        'A payment intent with this memo already exists for different payment ' +
+          'details. Retry with the original request unchanged, or use a new ' +
+          'memo (omit it to have one generated).',
+      );
+    }
+    return this.withQr(stored);
   }
 
   // ── CREATE: tx ──────────────────────────────────────────────────────────────
@@ -212,60 +198,57 @@ export class PaymentIntentsService {
     consumer: GatewayConsumer,
     dto: CreateTxPaymentIntentDto,
   ): Promise<PaymentIntentView> {
-    const stellar = this.config.get('stellar', { infer: true });
     const network = this.resolveNetwork(consumer);
     const localConsumer = await this.resolveConsumer(consumer);
-    const asset = this.resolveAsset(dto.assetCode, dto.assetIssuer);
-    const memo = this.resolveMemo(dto.memo);
-
-    // Idempotency: same (consumer, memo) returns the original intent.
-    const existing = await this.findByMemo(localConsumer.id, memo);
-    if (existing) return this.withQr(existing);
-
-    const account = await this.loadAccount(network, dto.source);
-    const xdr = new TransactionBuilder(account, {
-      fee: stellar.baseFee,
-      networkPassphrase: this.stellar.passphrase(network),
-    })
-      .addOperation(
-        Operation.payment({
-          destination: dto.destination,
-          amount: dto.amount,
-          asset: asset.asset,
-        }),
-      )
-      .addMemo(Memo.id(memo))
-      .setTimeout(stellar.timeoutSeconds)
-      .build()
-      .toXDR();
-
-    // SEP-7 tx URI: xdr (required) + optional msg/callback.
-    const params = new URLSearchParams({ xdr });
-    this.appendSep7Extras(params, { msg: dto.msg, callback: dto.callback });
-    const uri = `web+stellar:tx?${params.toString()}`;
-
-    const intent = await this.persist({
-      consumerId: localConsumer.id,
+    const asset = resolveAsset(dto.assetCode, dto.assetIssuer);
+    // Mandatory, unlike a swap's: the MEMO_ID is what ties the on-chain payment
+    // back to this intent, and half of the create's idempotency key.
+    const memo = resolveOrMintMemoId(dto.memo);
+    const terms: PaymentIntentTerms = {
       kind: 'TX',
+      network,
       source: dto.source,
       destination: dto.destination,
       amount: dto.amount,
       asset: asset.code,
       assetIssuer: asset.issuer,
+      msg: dto.msg ?? null,
+      callback: dto.callback ?? null,
+    };
+
+    // Idempotency: a retry on the same (consumer, memo) returns the original
+    // intent before any Horizon round trip — but only for the same payment.
+    const existing = await this.findByMemo(localConsumer.id, memo);
+    if (existing) return this.replayOf(existing, terms);
+
+    const { xdr, uri } = await this.links.tx(network, {
+      source: dto.source,
+      destination: dto.destination,
+      amount: dto.amount,
+      asset,
       memo,
       msg: dto.msg,
       callback: dto.callback,
-      network,
+    });
+
+    const intent = await this.persist({
+      ...terms,
+      consumerId: localConsumer.id,
+      memo,
       status: 'PENDING',
       xdr,
       uri,
     });
-    if (!intent)
-      return this.withQr((await this.findByMemo(localConsumer.id, memo))!);
+    if (!intent) {
+      return this.replayOf(
+        await this.findByMemo(localConsumer.id, memo),
+        terms,
+      );
+    }
 
     this.logger.log(
       `Created TX payment intent ${intent.id}: ${dto.amount} ` +
-        `${asset.code === 'native' ? 'XLM' : asset.code} ${dto.source} → ${dto.destination} ` +
+        `${assetLabel(asset)} ${dto.source} → ${dto.destination} ` +
         `(consumer=${consumer.username}, network=${network}, memo=${memo})`,
     );
     await this.emit(consumer.username, 'PAYMENT_INTENT_CREATED', intent);
@@ -283,45 +266,50 @@ export class PaymentIntentsService {
   ): Promise<PaymentIntentView> {
     const network = this.resolveNetwork(consumer);
     const localConsumer = await this.resolveConsumer(consumer);
-    const asset = this.resolveAsset(dto.assetCode, dto.assetIssuer);
-    const memo = this.resolveMemo(dto.memo);
-
-    const existing = await this.findByMemo(localConsumer.id, memo);
-    if (existing) return this.withQr(existing);
-
-    const params = new URLSearchParams({ destination: dto.destination });
-    if (dto.amount) params.set('amount', dto.amount);
-    if (asset.code !== 'native') {
-      params.set('asset_code', asset.code);
-      if (asset.issuer) params.set('asset_issuer', asset.issuer);
-    }
-    params.set('memo', memo);
-    params.set('memo_type', 'MEMO_ID');
-    this.appendSep7Extras(params, { msg: dto.msg, callback: dto.callback });
-    const uri = `web+stellar:pay?${params.toString()}`;
-
-    const intent = await this.persist({
-      consumerId: localConsumer.id,
+    const asset = resolveAsset(dto.assetCode, dto.assetIssuer);
+    const memo = resolveOrMintMemoId(dto.memo);
+    const terms: PaymentIntentTerms = {
       kind: 'PAY',
+      network,
       source: null,
       destination: dto.destination,
       amount: dto.amount ?? null,
       asset: asset.code,
       assetIssuer: asset.issuer,
+      msg: dto.msg ?? null,
+      callback: dto.callback ?? null,
+    };
+
+    const existing = await this.findByMemo(localConsumer.id, memo);
+    if (existing) return this.replayOf(existing, terms);
+
+    const uri = this.links.pay({
+      destination: dto.destination,
+      amount: dto.amount,
+      asset,
       memo,
       msg: dto.msg,
       callback: dto.callback,
-      network,
+    });
+
+    const intent = await this.persist({
+      ...terms,
+      consumerId: localConsumer.id,
+      memo,
       status: 'PENDING',
       xdr: null,
       uri,
     });
-    if (!intent)
-      return this.withQr((await this.findByMemo(localConsumer.id, memo))!);
+    if (!intent) {
+      return this.replayOf(
+        await this.findByMemo(localConsumer.id, memo),
+        terms,
+      );
+    }
 
     this.logger.log(
       `Created PAY payment intent ${intent.id}: ${dto.amount ?? '(open)'} ` +
-        `${asset.code === 'native' ? 'XLM' : asset.code} → ${dto.destination} ` +
+        `${assetLabel(asset)} → ${dto.destination} ` +
         `(consumer=${consumer.username}, network=${network}, memo=${memo})`,
     );
     await this.emit(consumer.username, 'PAYMENT_INTENT_CREATED', intent);
@@ -330,7 +318,8 @@ export class PaymentIntentsService {
 
   /**
    * Persists a new intent. Returns null on a (consumer, memo) unique-violation
-   * race so the caller can fall back to the existing row (idempotency).
+   * race so the caller can put the winning row through the same replay check
+   * as any other retry — losing the race is not a way around it.
    */
   private async persist(
     data: Parameters<PrismaService['paymentIntent']['create']>[0]['data'],
@@ -443,13 +432,17 @@ export class PaymentIntentsService {
       return this.withQr(updated);
     }
 
-    const updated = await this.prisma.paymentIntent.update({
-      where: { id },
-      data: {
-        ...(dto.txHash !== undefined ? { txHash: dto.txHash } : {}),
-        ...(dto.reference !== undefined ? { reference: dto.reference } : {}),
-      },
-    });
+    const updated =
+      dto.txHash !== undefined
+        ? await this.patchTxHash(id, dto.txHash, dto.reference)
+        : await this.prisma.paymentIntent.update({
+            where: { id },
+            data: {
+              ...(dto.reference !== undefined
+                ? { reference: dto.reference }
+                : {}),
+            },
+          });
 
     this.logger.log(
       `Updated payment intent ${id} (consumer=${consumer.username}): status unchanged`,
@@ -457,6 +450,59 @@ export class PaymentIntentsService {
 
     await this.emit(consumer.username, 'PAYMENT_INTENT_UPDATED', updated);
     return this.withQr(updated);
+  }
+
+  /**
+   * Records a reported `txHash` (and any `reference` sent with it) without a
+   * status change. Only a PENDING or SUBMITTED intent accepts a new hash.
+   *
+   * This branch had no status check, so a terminal intent's hash could be
+   * rewritten: a SUCCEEDED row's `txHash` — the transaction its settlement was
+   * verified against — swapped for any string, with no transition, no audit row,
+   * and a PAYMENT_INTENT_UPDATED webhook broadcasting the new value. The write
+   * is a compare-and-swap on the status just read, as in {@link transition}, so
+   * an intent that settles in between is refused rather than overwritten.
+   * Re-sending the hash the intent already carries changes nothing and stays
+   * allowed, so a retried PATCH does not start failing once the intent settles.
+   */
+  private async patchTxHash(
+    id: string,
+    txHash: string,
+    reference: string | undefined,
+  ): Promise<PaymentIntent> {
+    const data = {
+      txHash,
+      ...(reference !== undefined ? { reference } : {}),
+    };
+    const current = await this.prisma.paymentIntent.findUnique({
+      where: { id },
+      select: { status: true, txHash: true },
+    });
+    if (!current) {
+      throw ApiError.notFound(`Payment intent ${id} not found`);
+    }
+    if (current.txHash === txHash) {
+      return this.prisma.paymentIntent.update({ where: { id }, data });
+    }
+    if (isTerminalStatus(current.status)) {
+      throw ApiError.badRequest(
+        ApiErrorCode.InvalidStateTransition,
+        `txHash cannot be changed on a ${current.status} payment intent: ` +
+          'the status is terminal',
+      );
+    }
+
+    const guarded = await this.prisma.paymentIntent.updateMany({
+      where: { id, status: current.status },
+      data,
+    });
+    if (guarded.count === 0) {
+      throw ApiError.conflict(
+        ApiErrorCode.OperationInFlight,
+        `Payment intent ${id} status changed concurrently; expected ${current.status}`,
+      );
+    }
+    return this.prisma.paymentIntent.findUniqueOrThrow({ where: { id } });
   }
 
   /**
@@ -595,14 +641,30 @@ export class PaymentIntentsService {
     await this.emit(opts.consumerUsername, this.statusEvent(to), updated);
 
     if (to === 'SUCCEEDED') {
-      void this.upsertCustomerFromPayment(updated, opts.payer).catch((err) =>
-        this.logger.warn(
-          `Could not auto-create customer for intent ${intentId}: ${String(err)}`,
-        ),
-      );
+      this.recordPayer(updated, opts.payer);
     }
 
     return updated;
+  }
+
+  /**
+   * Adds a settled payment's payer to the merchant's customers: the on-chain
+   * source, falling back to the intent's own for TX intents.
+   *
+   * Fire-and-forget, after the settlement has committed and notified. A
+   * customer list that missed an entry must not turn a settled payment into an
+   * error for whoever settled it — the observer, or a caller of validate.
+   */
+  private recordPayer(intent: PaymentIntent, payer?: string): void {
+    const account = payer ?? intent.source;
+    if (!account) return;
+    void this.customers
+      .ensureForPayer(intent.consumerId, account)
+      .catch((err) =>
+        this.logger.warn(
+          `Could not auto-create customer for intent ${intent.id}: ${String(err)}`,
+        ),
+      );
   }
 
   /** Consultable audit trail for a single intent (scoped to the consumer). */
@@ -645,11 +707,12 @@ export class PaymentIntentsService {
 
   // ── VALIDATE (manual reconciliation) ─────────────────────────────────────────
   /**
-   * Validates a submitted transaction against the intent (success, destination,
-   * native amount and memo). On a confirmed match the intent is finalized to
-   * SUCCEEDED and a webhook event fires; if the tx failed on-chain it is marked
-   * FAILED. Pure mismatches (wrong amount/memo/hash) leave the status untouched
-   * so a correct tx can still be submitted later.
+   * Validates a submitted transaction against the intent (memo, age,
+   * destination, asset, amount and success). On a confirmed match the intent is
+   * finalized to SUCCEEDED and a webhook event fires; if it is this intent's
+   * payment but failed on-chain it is marked FAILED. Every other mismatch (wrong
+   * amount/memo/hash, an older or unrelated transaction) leaves the status
+   * untouched so a correct tx can still be submitted later.
    */
   async validate(
     consumer: GatewayConsumer,
@@ -688,8 +751,11 @@ export class PaymentIntentsService {
       };
     }
 
-    // Transaction exists but failed on-chain → settle as FAILED.
-    if (result.reason === 'Transaction failed on-chain') {
+    // This intent's own payment failed on-chain → settle as FAILED. The verifier
+    // only says so once memo, age and a payment operation all match: FAILED is
+    // terminal, and the hash of any unrelated failed transaction used to reach
+    // it. Everything else is a mismatch and changes nothing.
+    if (result.failedOnChain) {
       const updated = await this.markFailed(
         intent.id,
         consumer.username,
@@ -721,35 +787,6 @@ export class PaymentIntentsService {
       txHash,
       payer,
     });
-  }
-
-  /**
-   * Auto-create a Customer from a settled payment's payer (the on-chain source,
-   * falling back to the intent's source for TX intents). Idempotent per
-   * (consumer, account) so repeat payers don't duplicate.
-   */
-  private async upsertCustomerFromPayment(
-    intent: PaymentIntent,
-    payer?: string,
-  ): Promise<void> {
-    const account = payer ?? intent.source ?? null;
-    if (!account) return;
-    const existing = await this.prisma.customer.findFirst({
-      where: { consumerId: intent.consumerId, account },
-      select: { id: true },
-    });
-    if (existing) return;
-    await this.prisma.customer.create({
-      data: {
-        consumerId: intent.consumerId,
-        name: `${account.slice(0, 6)}…${account.slice(-4)}`,
-        account,
-        reference: 'auto',
-      },
-    });
-    this.logger.log(
-      `Auto-created customer ${account} for consumer ${intent.consumerId}`,
-    );
   }
 
   /** Finalizes an intent as FAILED and emits the event. */
@@ -791,27 +828,6 @@ export class PaymentIntentsService {
     });
     if (!owned) {
       throw ApiError.notFound(`Payment intent ${id} not found`);
-    }
-  }
-
-  private async loadAccount(network: StellarNetwork, source: string) {
-    try {
-      return await this.stellar.server(network).loadAccount(source);
-    } catch (error: unknown) {
-      // A 404 from Horizon means the account doesn't exist / isn't funded.
-      const status = (error as { response?: { status?: number } })?.response
-        ?.status;
-      if (status === 404) {
-        throw ApiError.badRequest(
-          ApiErrorCode.ValidationFailed,
-          `Source account ${source} not found or not funded on the ${network} network`,
-        );
-      }
-      this.logger.error('Failed to load source account from Horizon', error);
-      throw ApiError.unavailable(
-        ApiErrorCode.ProviderUnavailable,
-        'Could not reach the Stellar network',
-      );
     }
   }
 }

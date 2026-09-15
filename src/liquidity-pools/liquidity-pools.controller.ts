@@ -14,13 +14,16 @@ import {
   ApiHeader,
   ApiOkResponse,
   ApiOperation,
+  ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
 import type { Request } from 'express';
 import { CurrentConsumer } from '@/common/decorators/current-consumer.decorator';
 import { AllowPublicKey } from '@/common/decorators/allow-public-key.decorator';
 import { RequireAnyPermission } from '@/common/decorators/require-permissions.decorator';
+import { API_ERROR_BODY_CONTENT } from '@/common/errors/api-error.entity';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
+import { headerValue } from '@/common/request-header';
 import { DepositLiquidityDto } from '@/liquidity-pools/dto/deposit-liquidity.dto';
 import { QueryLiquidityOperationsDto } from '@/liquidity-pools/dto/query-liquidity-operations.dto';
 import { QueryLiquidityPoolsDto } from '@/liquidity-pools/dto/query-pools.dto';
@@ -35,6 +38,7 @@ import {
   LiquidityPositionListEntity,
   LiquiditySubmitResultEntity,
 } from '@/liquidity-pools/entities/liquidity-pool.entity';
+import { LiquidityPoolReaderService } from '@/liquidity-pools/liquidity-pool-reader.service';
 import { LiquidityPoolsService } from '@/liquidity-pools/liquidity-pools.service';
 
 // URI versioning => /v1/liquidity-pools. Static segments are declared before
@@ -42,7 +46,11 @@ import { LiquidityPoolsService } from '@/liquidity-pools/liquidity-pools.service
 @ApiTags('liquidity-pools')
 @Controller({ path: 'liquidity-pools', version: '1' })
 export class LiquidityPoolsController {
-  constructor(private readonly liquidity: LiquidityPoolsService) {}
+  constructor(
+    private readonly liquidity: LiquidityPoolsService,
+    // Horizon reads (pools, positions) touch no operation row.
+    private readonly pools: LiquidityPoolReaderService,
+  ) {}
 
   @Post('deposit')
   // Builds an unsigned envelope.
@@ -56,11 +64,22 @@ export class LiquidityPoolsController {
     name: 'Idempotency-Key',
     required: false,
     description:
-      'Optional idempotency key. Retries with the same key return the existing ' +
-      'operation (same id and txHash). Takes precedence over body.idempotencyKey.',
+      'Optional idempotency key. A retry with the same key and the same request ' +
+      'returns the existing operation (same id and txHash); the same key with a ' +
+      'different request is 409 idempotency_conflict. Takes precedence over ' +
+      'body.idempotencyKey.',
     example: 'lp-deposit-2026-08-23-001',
   })
   @ApiCreatedResponse({ type: LiquidityOperationEntity })
+  @ApiResponse({
+    status: 409,
+    content: API_ERROR_BODY_CONTENT,
+    description:
+      '`idempotency_conflict` — this Idempotency-Key was already used for a ' +
+      'different request, or an identical deposit was already built without a ' +
+      'key (retry with an Idempotency-Key, or wait for the prior operation to ' +
+      'settle or expire).',
+  })
   deposit(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Body() dto: DepositLiquidityDto,
@@ -87,11 +106,22 @@ export class LiquidityPoolsController {
     name: 'Idempotency-Key',
     required: false,
     description:
-      'Optional idempotency key. Retries with the same key return the existing ' +
-      'operation (same id and txHash). Takes precedence over body.idempotencyKey.',
+      'Optional idempotency key. A retry with the same key and the same request ' +
+      'returns the existing operation (same id and txHash); the same key with a ' +
+      'different request is 409 idempotency_conflict. Takes precedence over ' +
+      'body.idempotencyKey.',
     example: 'lp-withdraw-2026-08-23-001',
   })
   @ApiCreatedResponse({ type: LiquidityOperationEntity })
+  @ApiResponse({
+    status: 409,
+    content: API_ERROR_BODY_CONTENT,
+    description:
+      '`idempotency_conflict` — this Idempotency-Key was already used for a ' +
+      'different request, or an identical withdrawal was already built without ' +
+      'a key. `operation_in_flight` — a withdrawal from this pool is already in ' +
+      'flight for this account; wait for it to settle or expire.',
+  })
   withdraw(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Body() dto: WithdrawLiquidityDto,
@@ -117,7 +147,7 @@ export class LiquidityPoolsController {
     @CurrentConsumer() consumer: GatewayConsumer,
     @Query() query: QueryLiquidityPositionsDto,
   ) {
-    return this.liquidity.positions(consumer, query);
+    return this.pools.positions(consumer, query);
   }
 
   @Get('operations')
@@ -173,7 +203,7 @@ export class LiquidityPoolsController {
     @CurrentConsumer() consumer: GatewayConsumer,
     @Query() query: QueryLiquidityPoolsDto,
   ) {
-    return this.liquidity.listPools(consumer, query);
+    return this.pools.listPools(consumer, query);
   }
 
   @Get(':poolId')
@@ -186,12 +216,6 @@ export class LiquidityPoolsController {
     @CurrentConsumer() consumer: GatewayConsumer,
     @Param('poolId') poolId: string,
   ) {
-    return this.liquidity.getPool(consumer, poolId);
+    return this.pools.getPool(consumer, poolId);
   }
-}
-
-function headerValue(req: Request, name: string): string | undefined {
-  const raw = req.headers[name];
-  if (Array.isArray(raw)) return raw[0];
-  return raw;
 }

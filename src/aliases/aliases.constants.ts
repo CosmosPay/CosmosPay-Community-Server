@@ -51,3 +51,30 @@ export const ALIAS_MAX_PER_CONSUMER = 25;
 
 /** Page size for alias listings, matching the other list endpoints. */
 export const ALIAS_PAGE_SIZE = 50;
+
+/**
+ * How often expired challenges and recoveries are deleted.
+ *
+ * Hourly. Nothing waits on the sweep — an expired row is already refused when it
+ * is presented — so the interval only bounds how much dead weight builds up
+ * between runs, and an indexed `expiresAt` delete is cheap at that volume.
+ */
+export const ALIAS_SWEEP_INTERVAL_MS = 60 * 60 * 1000;
+
+/**
+ * How long past `expiresAt` a challenge or recovery row is kept.
+ *
+ * A day, so "my claim failed an hour ago" can still be answered from the table —
+ * was a challenge issued, was it spent, did it expire. After that the row answers
+ * nothing, and a recovery row still holds the owner's mailbox.
+ */
+export const ALIAS_SWEEP_GRACE_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Rows per delete statement, and the most one sweep examines per table. The same
+ * numbers as the request-log prune, for the same reason: short locks per
+ * statement, and a backlog catches up over a few cycles instead of in one long
+ * one.
+ */
+export const ALIAS_SWEEP_BATCH_SIZE = 1000;
+export const ALIAS_SWEEP_MAX_PER_CYCLE = 50_000;

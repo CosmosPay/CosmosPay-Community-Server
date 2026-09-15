@@ -1,9 +1,10 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
+import { ApiError } from '@/common/errors/api-error';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import { PaginationQueryDto } from '@/common/dto/pagination.query.dto';
 import { page } from '@/common/pagination';
 import { PrismaService } from '@/prisma/prisma.service';
-import { BlindpayClient } from '@/blindpay/blindpay.client';
+import { BlindpayOnrampApi } from '@/blindpay/blindpay-onramp.api';
 import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
 import {
   BlindpayObject,
@@ -22,7 +23,7 @@ import { CreateVirtualAccountDto } from '@/onramp/dto/create-virtual-account.dto
 export class VirtualAccountsService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly blindpay: BlindpayClient,
+    private readonly blindpay: BlindpayOnrampApi,
     private readonly consumers: ConsumerResolverService,
     private readonly receivers: ReceiversService,
   ) {}
@@ -41,10 +42,8 @@ export class VirtualAccountsService {
       local.id,
       dto.blockchain_wallet_id,
     );
-    const created = await this.blindpay.post<BlindpayObject>(
-      this.blindpay.instancePath(
-        `/customers/${receiver.blindpayId}/virtual-accounts`,
-      ),
+    const created = await this.blindpay.createVirtualAccount(
+      receiver.blindpayId,
       { ...dto, blockchain_wallet_id: walletBlindpayId },
     );
     return this.mirror(local.id, receiver.id, created);
@@ -85,7 +84,7 @@ export class VirtualAccountsService {
       where: { id: localWalletId, consumerId },
     });
     if (!wallet) {
-      throw new NotFoundException('Blockchain wallet not found');
+      throw ApiError.notFound('Blockchain wallet not found');
     }
     return wallet.blindpayId;
   }
@@ -98,12 +97,17 @@ export class VirtualAccountsService {
       status: asNullableString(obj.kyc_status) ?? asNullableString(obj.status),
       raw: toJson(obj),
     };
+    // Narrowed for the same reason as `mirrorPayin`: this upsert's return value
+    // IS the create response. Without the `select` it carried `raw` — the
+    // provider payload whole — straight out, while `findAll` next to it already
+    // kept the blob in PostgreSQL.
     return this.prisma.blindpayVirtualAccount.upsert({
       where: {
         consumerId_blindpayId: { consumerId, blindpayId: asString(obj.id) },
       },
       create: { consumerId, blindpayId: asString(obj.id), ...data },
       update: data,
+      select: VIRTUAL_ACCOUNT_PUBLIC_SELECT,
     });
   }
 }

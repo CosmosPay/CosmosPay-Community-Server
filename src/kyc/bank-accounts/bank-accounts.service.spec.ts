@@ -1,3 +1,4 @@
+import { BlindpayKycApi } from '@/blindpay/blindpay-kyc.api';
 import {
   BANK_ACCOUNT_PUBLIC_SELECT,
   BankAccountsService,
@@ -83,7 +84,7 @@ function makeService() {
   };
   const service = new BankAccountsService(
     prisma,
-    blindpay as any,
+    new BlindpayKycApi(blindpay as any),
     consumers as any,
     receivers as any,
   );

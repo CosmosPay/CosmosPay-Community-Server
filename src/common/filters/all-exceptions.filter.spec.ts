@@ -5,6 +5,7 @@ import {
   HttpStatus,
   Logger,
   NotFoundException,
+  PayloadTooLargeException,
 } from '@nestjs/common';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { AllExceptionsFilter } from '@/common/filters/all-exceptions.filter';
@@ -114,6 +115,20 @@ describe('AllExceptionsFilter', () => {
     const bad = build();
     bad.filter.catch(new BadRequestException('bad'), bad.host);
     expect(body(bad.json).code).toBe('validation_failed');
+  });
+
+  it('reports an upload over the size cap as payload_too_large, not internal_error', () => {
+    // What multer's LIMIT_FILE_SIZE becomes once Nest's FileInterceptor maps it.
+    const { filter, host, status, json } = build();
+
+    filter.catch(new PayloadTooLargeException('File too large'), host);
+
+    expect(status).toHaveBeenCalledWith(HttpStatus.PAYLOAD_TOO_LARGE);
+    expect(body(json)).toMatchObject({
+      statusCode: 413,
+      code: ApiErrorCode.PayloadTooLarge,
+      error: 'Payload Too Large',
+    });
   });
 
   it('sanitizes an unexpected error to a generic 500 and logs it server-side', () => {

@@ -1,5 +1,6 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@generated/prisma/client';
+import { ApiError } from '@/common/errors/api-error';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import { formatNumericAmount } from '@/common/money';
 import { PrismaService } from '@/prisma/prisma.service';
@@ -24,6 +25,8 @@ const NO_ACTIVITY: CustomerPaymentStats = {
 
 @Injectable()
 export class CustomersService {
+  private readonly logger = new Logger(CustomersService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly consumers: ConsumerResolverService,
@@ -48,13 +51,46 @@ export class CustomersService {
     });
   }
 
+  /**
+   * Adds the payer of a settled payment to the consumer's customers, once per
+   * account.
+   *
+   * Payment intents call this on settlement; they used to write the row
+   * themselves, into a table this module owns. Nothing is known about an
+   * on-chain payer but the address, so the name is that address shortened and
+   * `reference: 'auto'` marks the row as one the merchant never entered. A payer
+   * already on the list — however the entry got there — is left as it is.
+   *
+   * Takes the local consumer id rather than a gateway consumer: the caller holds
+   * a settled intent, which may be settling from the observer with no request
+   * in sight.
+   */
+  async ensureForPayer(consumerId: string, account: string): Promise<void> {
+    const existing = await this.prisma.customer.findFirst({
+      where: { consumerId, account },
+      select: { id: true },
+    });
+    if (existing) return;
+    await this.prisma.customer.create({
+      data: {
+        consumerId,
+        name: `${account.slice(0, 6)}…${account.slice(-4)}`,
+        account,
+        reference: 'auto',
+      },
+    });
+    this.logger.log(
+      `Auto-created customer ${account} for consumer ${consumerId}`,
+    );
+  }
+
   async findAll(consumer: GatewayConsumer, query: QueryCustomersDto) {
     const local = await this.resolveConsumer(consumer);
     const where = { consumerId: local.id };
 
     // `total` is the row count, never `data.length` — the page size is `take`
     // on every full page, so a client paginating on it never sees the end.
-    const [customers, total] = await this.prisma.$transaction([
+    const [customers, total] = await Promise.all([
       this.prisma.customer.findMany({
         where,
         orderBy: { createdAt: 'desc' },
@@ -142,7 +178,7 @@ export class CustomersService {
     const customer = await this.prisma.customer.findFirst({
       where: { id, consumerId: local.id },
     });
-    if (!customer) throw new NotFoundException('Customer not found');
+    if (!customer) throw ApiError.notFound('Customer not found');
     return customer;
   }
 

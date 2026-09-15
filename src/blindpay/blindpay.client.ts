@@ -1,10 +1,4 @@
-import {
-  HttpException,
-  HttpStatus,
-  Injectable,
-  Logger,
-  ServiceUnavailableException,
-} from '@nestjs/common';
+import { HttpException, HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { AppConfig } from '@/config/configuration';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
@@ -249,7 +243,11 @@ export class BlindpayClient {
 
   private ensureConfigured(): void {
     if (!this.isConfigured) {
-      throw new ServiceUnavailableException(
+      // `misconfigured`, not the `provider_unavailable` a bare 503 defaults to:
+      // BlindPay is not down, this deployment never set it up, and a caller that
+      // retries on `provider_unavailable` would retry for as long as that lasts.
+      throw ApiError.unavailable(
+        ApiErrorCode.Misconfigured,
         'BlindPay is not configured: set BLINDPAY_API_KEY and BLINDPAY_INSTANCE_ID.',
       );
     }

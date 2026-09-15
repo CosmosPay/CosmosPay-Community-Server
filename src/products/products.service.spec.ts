@@ -11,7 +11,6 @@ describe('ProductsService.findAll', () => {
         findMany: jest.fn().mockResolvedValue([{ id: 'prod_1' }]),
         count: jest.fn().mockResolvedValue(42),
       },
-      $transaction: (ops: Promise<unknown>[]) => Promise.all(ops),
     };
     const service = new ProductsService(
       prisma as any,

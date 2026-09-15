@@ -1,9 +1,5 @@
 import { ConfigService } from '@nestjs/config';
-import {
-  HttpException,
-  HttpStatus,
-  ServiceUnavailableException,
-} from '@nestjs/common';
+import { HttpException, HttpStatus } from '@nestjs/common';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { BlindpayClient } from '@/blindpay/blindpay.client';
 
@@ -173,9 +169,16 @@ describe('BlindpayClient', () => {
     expect(err!.code).toBe(ApiErrorCode.ProviderUnavailable);
   });
 
-  it('throws 503 when not configured', async () => {
-    await expect(makeClient({ apiKey: '' }).get('/x')).rejects.toBeInstanceOf(
-      ServiceUnavailableException,
-    );
+  it('answers 503 misconfigured when not configured', async () => {
+    const err = await makeClient({ apiKey: '' })
+      .get('/x')
+      .then(() => null)
+      .catch((e: unknown) => e as ApiError);
+
+    // A bare 503 defaulted to `provider_unavailable`, which tells a caller to
+    // retry an upstream that is fine. It is this deployment that needs fixing.
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err!.getStatus()).toBe(HttpStatus.SERVICE_UNAVAILABLE);
+    expect(err!.code).toBe(ApiErrorCode.Misconfigured);
   });
 });

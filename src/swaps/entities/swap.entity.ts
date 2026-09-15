@@ -1,4 +1,4 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, OmitType } from '@nestjs/swagger';
 import { SwapStatus } from '@generated/prisma/client';
 
 /** One asset hop on the chosen path (empty array = direct order-book swap). */
@@ -220,9 +220,20 @@ export class SwapEntity {
   updatedAt!: Date;
 }
 
+/**
+ * A swap as `GET /v1/swaps` lists it: the stored row. The QR and the commission
+ * label are derived by the single read, not rendered for every row of a page —
+ * fetch the swap for them. Declaring list items as {@link SwapEntity} made
+ * generated clients type two fields the list never sent.
+ */
+export class SwapListItemEntity extends OmitType(SwapEntity, [
+  'qr',
+  'commissionMemo',
+] as const) {}
+
 export class SwapListEntity {
-  @ApiProperty({ type: [SwapEntity] })
-  data!: SwapEntity[];
+  @ApiProperty({ type: [SwapListItemEntity] })
+  data!: SwapListItemEntity[];
 
   @ApiProperty({ example: 1 })
   total!: number;

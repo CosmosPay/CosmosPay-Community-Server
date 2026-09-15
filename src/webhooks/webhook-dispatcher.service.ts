@@ -45,10 +45,12 @@ export class WebhookDispatcherService {
     private readonly prisma: PrismaService,
     private readonly config: ConfigService<AppConfig, true>,
     private readonly destinations: WebhookDestinationGuard,
-    // Injected in the application, so a test can replace outbound HTTP through
-    // DI instead of monkey-patching whatever global the transport happens to
-    // use. Defaulted so hand-built unit tests need not pass it.
-    private readonly http: WebhookHttpClient = new WebhookHttpClient(),
+    // Injected, so a test can replace outbound HTTP through DI instead of
+    // monkey-patching whatever global the transport happens to use. Deliberately
+    // not defaulted: a default turned a missing provider into a service that
+    // silently opened real sockets instead of failing at boot, so whoever builds
+    // one by hand now has to say which transport they mean.
+    private readonly http: WebhookHttpClient,
   ) {}
 
   /**

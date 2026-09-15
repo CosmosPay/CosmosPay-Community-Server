@@ -48,12 +48,18 @@ jobs:
       - name: Verify OpenAPI is up to date
         run: npm run openapi:check
 
+      # After the OpenAPI check, which guarantees the contract it reads is fresh.
+      # Fails when a README language is missing, its headings stop matching the
+      # English, or a route in the contract is missing from its route index.
+      - name: Verify READMEs (7 languages, route index)
+        run: npm run readme:check
+
       # Jest unit/integration suite (no DB required — external services are mocked).
       - name: Test
         run: npm test
 
       # The e2e suites live outside jest's `rootDir: src`, so `npm test` never
-      # sees them. Without this step all 5 suites (52 tests) were dead code.
+      # sees them. Without this step every e2e suite was dead code.
       - name: E2E test
         run: npm run test:e2e
 
@@ -65,8 +71,8 @@ jobs:
 
   # Nothing else in CI touches a database, so the .sql files are in no program
   # that is compiled or executed: a migration that fails to apply, or that has
-  # drifted from schema.prisma, ships green through build + lint + 527 unit
-  # tests + 52 e2e tests and throws P2022 on the first production query. This is
+  # drifted from schema.prisma, ships green through build, lint and every unit
+  # and e2e test, and throws P2022 on the first production query. This is
   # the same class of failure as the broken file that once reached main, one
   # layer down.
   migrations:

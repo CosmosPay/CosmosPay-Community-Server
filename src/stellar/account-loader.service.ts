@@ -8,7 +8,16 @@ import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { StellarNetwork } from '@/config/configuration';
 import { isHorizonNotFound } from '@/stellar/horizon-errors';
 import { ResolvedAsset } from '@/stellar/asset';
+import { BASE_RESERVE_STROOPS } from '@/stellar/stellar.constants';
 import { StellarService } from '@/stellar/stellar.service';
+import { fromStroops, toStroops } from '@/swaps/swap-math';
+
+/** One asset an operation spends from the source, and how much of it. */
+export interface AffordabilitySide {
+  asset: ResolvedAsset;
+  /** In stroops. */
+  required: bigint;
+}
 
 /** A balance line as Horizon returns it on an account. */
 export interface BalanceEntry {
@@ -87,5 +96,63 @@ export class StellarAccountLoader {
       `Account ${address} has no trustline for ${asset.code}:${asset.issuer} — ` +
         `it must trust the asset before ${context}`,
     );
+  }
+
+  /**
+   * Asserts the source can afford an operation before we build the XDR: each
+   * issued asset's trustline balance must cover its required amount, and the
+   * native (XLM) balance must cover any native requirement plus the minimum
+   * reserve (including a pending pool-share trustline) and the transaction fee.
+   * Turns an otherwise on-chain op_underfunded into a clear 400.
+   *
+   * It sits beside {@link assertTrustline} because it is the same kind of
+   * question — "can this account do that?" answered from a loaded account — and
+   * the reserve arithmetic is protocol, not liquidity-pool policy. It lived
+   * privately in the pools service with the base reserve as a bare literal.
+   */
+  assertCanAfford(
+    account: { subentry_count?: number },
+    balances: BalanceEntry[],
+    sides: AffordabilitySide[],
+    addingTrustline: boolean,
+    txFeeStroops: bigint,
+  ): void {
+    // Native side: its own requirement + reserve (one base reserve per
+    // subentry, +1 for a pending trustline) + the tx fee must all fit within
+    // the XLM balance.
+    const nativeReq =
+      sides.find((s) => s.asset.code === 'native' || !s.asset.issuer)
+        ?.required ?? 0n;
+    const nativeBal = toStroops(
+      balances.find((b) => b.asset_type === 'native')?.balance ?? '0',
+    );
+    const subentries =
+      BigInt(account.subentry_count ?? 0) + (addingTrustline ? 1n : 0n);
+    const reserve = (2n + subentries) * BASE_RESERVE_STROOPS;
+    if (nativeBal - reserve - txFeeStroops < nativeReq) {
+      throw ApiError.badRequest(
+        ApiErrorCode.InsufficientBalance,
+        `Insufficient XLM balance: need ${fromStroops(nativeReq)} plus ` +
+          `~${fromStroops(reserve + txFeeStroops)} XLM reserve + network fee, ` +
+          `but the account holds ${fromStroops(nativeBal)} XLM`,
+      );
+    }
+    // Issued assets: the trustline balance must cover deposit + commission.
+    for (const s of sides) {
+      if (s.asset.code === 'native' || !s.asset.issuer) continue;
+      const bal = toStroops(
+        balances.find(
+          (b) =>
+            b.asset_code === s.asset.code && b.asset_issuer === s.asset.issuer,
+        )?.balance ?? '0',
+      );
+      if (bal < s.required) {
+        throw ApiError.badRequest(
+          ApiErrorCode.InsufficientBalance,
+          `Insufficient ${s.asset.code} balance: need ${fromStroops(s.required)}, ` +
+            `but the account holds ${fromStroops(bal)}`,
+        );
+      }
+    }
   }
 }

@@ -102,6 +102,12 @@ const EVENT_MAP: Record<string, WebhookEventType> = {
   'payout.complete': 'PAYOUT_COMPLETED',
 };
 
+/** Applies one webhook to its local mirror; resolves to the owner's username, or null. */
+type MirrorApplier = (
+  blindpayId: string,
+  obj: BlindpayObject,
+) => Promise<string | null>;
+
 /**
  * The bridge between BlindPay's resources and our local mirror.
  *
@@ -114,6 +120,18 @@ const EVENT_MAP: Record<string, WebhookEventType> = {
 @Injectable()
 export class BlindpaySyncService {
   private readonly logger = new Logger(BlindpaySyncService.name);
+
+  /**
+   * Which mirror an event updates, keyed by the resource half of its name
+   * (`payout.complete` -> `payout`). The companion to {@link EVENT_MAP}: a new
+   * event family is one entry in each table, not another branch in
+   * {@link handleWebhook}.
+   */
+  private readonly appliers: Readonly<Record<string, MirrorApplier>> = {
+    payin: (id, obj) => this.applyPayin(id, obj),
+    payout: (id, obj) => this.applyPayout(id, obj),
+    receiver: (id, obj) => this.applyReceiver(id, obj),
+  };
 
   constructor(
     private readonly prisma: PrismaService,
@@ -238,14 +256,13 @@ export class BlindpaySyncService {
     }
 
     const resource = type.split('.')[0];
-    const owner =
-      resource === 'payin'
-        ? await this.applyPayin(blindpayId, data)
-        : resource === 'payout'
-          ? await this.applyPayout(blindpayId, data)
-          : resource === 'receiver'
-            ? await this.applyReceiver(blindpayId, data)
-            : null;
+    // Own keys only: a plain object also answers to `toString` and friends, and
+    // a resource by that name has to fall through to "no local record" as it
+    // always did, not call into Object.prototype.
+    const apply = Object.hasOwn(this.appliers, resource)
+      ? this.appliers[resource]
+      : undefined;
+    const owner = apply ? await apply(blindpayId, data) : null;
 
     if (!owner) {
       this.logger.warn(

@@ -6,7 +6,7 @@ import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface'
 import { PaginationQueryDto } from '@/common/dto/pagination.query.dto';
 import { page } from '@/common/pagination';
 import { PrismaService } from '@/prisma/prisma.service';
-import { BlindpayClient } from '@/blindpay/blindpay.client';
+import { BlindpayKycApi } from '@/blindpay/blindpay-kyc.api';
 import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
 import {
   BlindpaySyncService,
@@ -14,8 +14,10 @@ import {
 } from '@/blindpay/blindpay-sync.service';
 import { asNullableString, asString, toJson } from '@/blindpay/blindpay.util';
 import type { BlindpayReceiver, Prisma } from '@generated/prisma/client';
-import type { AdminAuditData } from '@/admin/admin-audit.service';
-import { recordAuditInTransaction } from '@/admin/admin-audit.service';
+import {
+  recordAuditInTransaction,
+  type AuditEntry,
+} from '@/audit/audit-writer';
 import { CreateReceiverDto } from '@/kyc/receivers/dto/create-receiver.dto';
 import { UpdateReceiverDto } from '@/kyc/receivers/dto/update-receiver.dto';
 import { RequestTosDto } from '@/kyc/receivers/dto/request-tos.dto';
@@ -88,7 +90,7 @@ export function isElevatedConsumer(consumer: GatewayConsumer): boolean {
 export class ReceiversService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly blindpay: BlindpayClient,
+    private readonly blindpay: BlindpayKycApi,
     private readonly consumers: ConsumerResolverService,
     private readonly sync: BlindpaySyncService,
     private readonly config: ConfigService<AppConfig, true>,
@@ -177,7 +179,7 @@ export class ReceiversService {
   async approveById(
     id: string,
     redirectUrl: string,
-    audit?: AdminAuditData,
+    audit?: AuditEntry,
   ): Promise<{
     receiver: PublicReceiver;
     url: string;
@@ -217,8 +219,6 @@ export class ReceiversService {
     });
   }
 
-  /** Requests BlindPay's hosted ToS acceptance url for a receiver. */
-
   private redirectWhitelist() {
     return this.config.get('kyc', { infer: true }).redirectUrlWhitelist;
   }
@@ -241,20 +241,18 @@ export class ReceiversService {
     );
   }
 
+  /** Requests BlindPay's hosted ToS acceptance url for a receiver. */
   private async tosUrl(
     redirectUrl: string,
     row: BlindpayReceiver,
   ): Promise<string> {
     const isLocal = row.blindpayId.startsWith(LOCAL_RECEIVER_PREFIX);
-    const { url } = await this.blindpay.post<{ url: string }>(
-      `/e/instances/${this.blindpay.instanceId}/tos`,
-      {
-        idempotency_key: randomUUID(),
-        // Only reference an existing BlindPay receiver; a brand-new (local) one has none.
-        receiver_id: isLocal ? null : row.blindpayId,
-        redirect_url: redirectUrl,
-      },
-    );
+    const { url } = await this.blindpay.requestTos({
+      idempotency_key: randomUUID(),
+      // Only reference an existing BlindPay receiver; a brand-new (local) one has none.
+      receiver_id: isLocal ? null : row.blindpayId,
+      redirect_url: redirectUrl,
+    });
     return url;
   }
 
@@ -306,7 +304,7 @@ export class ReceiversService {
     id: string,
     dto: RequestTosDto,
     cooldownMs?: number,
-    audit?: AdminAuditData,
+    audit?: AuditEntry,
   ): Promise<{ url: string; email: string | null; channel: 'code' | 'email' }> {
     const row = await this.prisma.blindpayReceiver.findUnique({
       where: { id },
@@ -397,7 +395,7 @@ export class ReceiversService {
   async enableById(
     id: string,
     tosId: string,
-    audit?: AdminAuditData,
+    audit?: AuditEntry,
   ): Promise<PublicReceiver> {
     const row = await this.prisma.blindpayReceiver.findUnique({
       where: { id },
@@ -420,8 +418,8 @@ export class ReceiversService {
 
     // Claim the transition BEFORE the provider call, not after it. This is the one
     // transition with an irreversible side-effect in the middle: a plain
-    // check-then-POST-then-update lets two concurrent enables both pass the check, both
-    // `POST /customers`, and the second write overwrite `blindpayId` — leaving a real,
+    // check-then-create-then-update lets two concurrent enables both pass the check, both
+    // create the receiver upstream, and the second write overwrite `blindpayId` — leaving a real,
     // orphaned KYC identity at the provider that this service no longer references.
     // Matching on the status and the placeholder id means exactly one caller proceeds.
     const claimed = await this.prisma.blindpayReceiver.updateMany({
@@ -442,10 +440,10 @@ export class ReceiversService {
     const payload = (row.raw ?? {}) as Record<string, unknown>;
     let created: BlindpayObject;
     try {
-      created = await this.blindpay.post<BlindpayObject>(
-        this.blindpay.instancePath('/customers'),
-        { ...payload, tos_id: tosId },
-      );
+      created = await this.blindpay.createReceiver({
+        ...payload,
+        tos_id: tosId,
+      });
     } catch (err) {
       // The upstream create failed, so no identity exists there: release the claim so the
       // customer can retry. Guarded on the placeholder id + our own claimed status so a
@@ -493,9 +491,7 @@ export class ReceiversService {
   private async refreshReceiver(row: BlindpayReceiver) {
     if (row.blindpayId.startsWith(LOCAL_RECEIVER_PREFIX)) return row;
     try {
-      const fresh = await this.blindpay.get<BlindpayObject>(
-        this.blindpay.instancePath(`/customers/${row.blindpayId}`),
-      );
+      const fresh = await this.blindpay.getReceiver(row.blindpayId);
       return await this.sync.mirrorReceiver(row.consumerId, fresh);
     } catch {
       return row;
@@ -535,9 +531,7 @@ export class ReceiversService {
       return row;
     }
     try {
-      const fresh = await this.blindpay.get<BlindpayObject>(
-        this.blindpay.instancePath(`/customers/${row.blindpayId}`),
-      );
+      const fresh = await this.blindpay.getReceiver(row.blindpayId);
       await this.sync.mirrorReceiver(local.id, fresh);
       return await this.publicById(row.id);
     } catch {
@@ -593,10 +587,7 @@ export class ReceiversService {
       });
     }
 
-    const updated = await this.blindpay.put<BlindpayObject>(
-      this.blindpay.instancePath(`/customers/${row.blindpayId}`),
-      patch,
-    );
+    const updated = await this.blindpay.updateReceiver(row.blindpayId, patch);
     // BlindPay PUT may return little; ensure we keep the id.
     await this.sync.mirrorReceiver(local.id, {
       id: row.blindpayId,
@@ -615,16 +606,14 @@ export class ReceiversService {
    * row commits in the same transaction as the delete so the two cannot diverge, and it
    * carries only identifiers/status — never the KYC dossier itself.
    */
-  async remove(consumer: GatewayConsumer, id: string, audit?: AdminAuditData) {
+  async remove(consumer: GatewayConsumer, id: string, audit?: AuditEntry) {
     const local = await this.consumers.resolve(consumer);
     const row = await this.findReceiverOrThrow(local.id, id);
     // Only delete at BlindPay if it was ever created there (inactive receivers are local-only).
     if (!row.blindpayId.startsWith(LOCAL_RECEIVER_PREFIX)) {
-      await this.blindpay.delete(
-        this.blindpay.instancePath(`/customers/${row.blindpayId}`),
-      );
+      await this.blindpay.deleteReceiver(row.blindpayId);
     }
-    const entry: AdminAuditData = audit ?? {
+    const entry: AuditEntry = audit ?? {
       // No AdminPrincipal on the tenant path, so the actor is the API key APISIX
       // authenticated — the credential id when forwarded, else the consumer username.
       actorId: consumer.credentialId ?? consumer.username,
@@ -655,7 +644,7 @@ export class ReceiversService {
    * Elevation is required here, not upstream. A kill-switch a tenant can flip back is
    * advisory: the very key an operator disabled the account away from could re-enable it
    * on the next request. Tenant keys get a 403; the audited platform variant is
-   * `PATCH /v1/admin/receivers/:id/access`.
+   * `PATCH /v1/admin/receivers/:id/access` → {@link setAccessById}.
    */
   async setAccess(
     consumer: GatewayConsumer,
@@ -669,11 +658,43 @@ export class ReceiversService {
       );
     }
     const local = await this.consumers.resolve(consumer);
+    // Ownership check (404 if the receiver isn't this consumer's) then the shared write.
     const row = await this.findReceiverOrThrow(local.id, id);
-    return this.prisma.blindpayReceiver.update({
-      where: { id: row.id },
-      data: { disabled },
-      select: RECEIVER_PUBLIC_SELECT,
+    return this.setAccessById(row.id, disabled);
+  }
+
+  /**
+   * Flip the kill-switch BY LOCAL ID across any consumer — the platform-admin (owner)
+   * variant of {@link setAccess}. Skips consumer scoping AND the elevation check, so both
+   * callers must authorize first: `AdminController` via the AdminGuard, {@link setAccess}
+   * via {@link isElevatedConsumer} plus its ownership check.
+   *
+   * This is the only writer of `disabled`. The admin service used to run its own copy of
+   * this update straight against the table — the one admin receiver action that did not
+   * go through a `*ById` method here — so the kill-switch had two implementations that
+   * could drift. When `audit` is provided, the flag write and the audit row commit in the
+   * same transaction; a missing receiver throws before either is written.
+   */
+  async setAccessById(
+    id: string,
+    disabled: boolean,
+    audit?: AuditEntry,
+  ): Promise<PublicReceiver> {
+    return this.prisma.$transaction(async (tx) => {
+      const row = await tx.blindpayReceiver.findUnique({
+        where: { id },
+        select: { id: true },
+      });
+      if (!row) throw ApiError.notFound('Receiver not found');
+      const receiver = await tx.blindpayReceiver.update({
+        where: { id: row.id },
+        data: { disabled },
+        select: RECEIVER_PUBLIC_SELECT,
+      });
+      if (audit) {
+        await recordAuditInTransaction(tx, audit);
+      }
+      return receiver;
     });
   }
 
@@ -727,43 +748,6 @@ export class ReceiversService {
     }
     return row;
   }
-}
-
-/**
- * PARSE the dev platform's ToS email-resend cooldown headers — `X-Cosmos-Internal: 1`
- * marks the call as dashboard-internal and `X-Cosmos-Tos-Cooldown-Ms` carries the
- * role-derived value (owner → 0, admin → 60000). Returns undefined for a missing or
- * invalid pair, which means "use the 24h default".
- *
- * This function authorizes NOTHING. It used to document the headers as unforgeable
- * because APISIX strips them, but that is gateway configuration this repository cannot
- * verify — and a header that shortens a rate limit protecting a KYC subject's inbox must
- * not be the thing granting the privilege. Callers establish privilege first and only
- * then parse: {@link ReceiversService.requestTos} discards the parsed value unless
- * {@link isElevatedConsumer} holds for the gateway consumer, and `AdminController` runs
- * behind `AdminGuard`.
- *
- * On that admin path the two are now the same fact — `AdminGuard` reads the same internal
- * marker (plus the gateway secret `ApisixGuard` verified) — so the separation this
- * function relies on holds for tenant keys, not for the console. That is why the console
- * is the narrower of the two doors: a tenant key reaches `requestTos`, only a caller
- * holding the gateway secret reaches `AdminController` at all, and everything it does
- * there lands in the admin audit trail under the console account that did it.
- */
-export function resolveTosCooldownMs(
-  internalHeader?: string | string[],
-  cooldownHeader?: string | string[],
-): number | undefined {
-  const internal =
-    (Array.isArray(internalHeader) ? internalHeader[0] : internalHeader) ===
-    '1';
-  if (!internal) return undefined;
-  const raw = Array.isArray(cooldownHeader)
-    ? cooldownHeader[0]
-    : cooldownHeader;
-  if (raw === undefined || raw === '') return undefined;
-  const n = Number(raw);
-  return Number.isFinite(n) && n >= 0 ? n : undefined;
 }
 
 /** Display name for a receiver from its create payload (business legal name or person). */

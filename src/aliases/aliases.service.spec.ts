@@ -414,6 +414,42 @@ describe('AliasesService — recovery', () => {
     }
   });
 
+  it('refuses to recover a suspended alias, even with a live token', async () => {
+    // A suspension is an operator hold; a token minted before it is not a way out.
+    const { service, prisma } = build();
+    prisma.alias.findUnique.mockResolvedValue({
+      id: 'al_1',
+      name: 'emanuel250',
+      email: 'real@example.com',
+      status: AliasStatus.SUSPENDED,
+    });
+    prisma.aliasRecovery.findUnique.mockResolvedValue({
+      id: 'rec_1',
+      aliasId: 'al_1',
+      consumedAt: null,
+      expiresAt: new Date(Date.now() + 60_000),
+      attempts: 0,
+    });
+
+    expect(
+      await codeOf(
+        service.completeRecovery(consumer, 'emanuel250', {
+          token: 'tok',
+          address: kp.publicKey(),
+          network: 'public',
+          nonce: 'nonce-1',
+          signature: signFor({
+            ...good(),
+            purpose: AliasChallengePurpose.RECOVER,
+          }),
+        }),
+      ),
+    ).toBe(ApiErrorCode.NotFound);
+    expect(prisma.aliasChallenge.updateMany).not.toHaveBeenCalled();
+    expect(prisma.aliasAddress.deleteMany).not.toHaveBeenCalled();
+    expect(prisma.alias.update).not.toHaveBeenCalled();
+  });
+
   it('drops every previous address when ownership moves', async () => {
     // Recovery exists because the old keys are gone. Leaving them resolvable would
     // keep whoever holds them receiving money sent to this name.

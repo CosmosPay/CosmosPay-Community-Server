@@ -1,8 +1,10 @@
+import { Logger } from '@nestjs/common';
 import {
   AdvisoryLockKey,
   AdvisoryLockService,
 } from '@/common/services/advisory-lock.service';
 import { StellarObserverService } from '@/payment-intents/stellar-observer.service';
+import { OBSERVER_MAX_INTENTS_PER_CONSUMER } from '@/payment-intents/payment-intents.constants';
 
 /**
  * The observer's tick runs on every replica behind APISIX and fans a batch of
@@ -11,6 +13,9 @@ import { StellarObserverService } from '@/payment-intents/stellar-observer.servi
  */
 describe('StellarObserverService.tick', () => {
   const BATCH_SIZE = 50;
+
+  // Logger and timer spies must not leak from one test into the next.
+  afterEach(() => jest.restoreAllMocks());
 
   const config = {
     get: () => ({ enabled: false, intervalMs: 15_000, batchSize: BATCH_SIZE }),
@@ -26,10 +31,12 @@ describe('StellarObserverService.tick', () => {
     }));
   }
 
-  function makePrisma(pending: unknown[]) {
+  function makePrisma(pending: Array<{ id: string }>) {
     return {
+      // The ranked selection: ids only, in the order the query dealt them.
+      $queryRaw: jest.fn().mockResolvedValue(pending.map(({ id }) => ({ id }))),
       paymentIntent: {
-        // Call 1 is the expiry sweep, call 2 the pending page.
+        // Call 1 is the expiry sweep, call 2 re-reads the ranked pending rows.
         findMany: jest
           .fn()
           .mockResolvedValueOnce([])
@@ -85,6 +92,7 @@ describe('StellarObserverService.tick', () => {
     await observer.tick();
 
     expect(prisma.paymentIntent.findMany).not.toHaveBeenCalled();
+    expect(prisma.$queryRaw).not.toHaveBeenCalled();
     expect(verifier.findMatchingPayment).not.toHaveBeenCalled();
   });
 
@@ -191,5 +199,162 @@ describe('StellarObserverService.tick', () => {
       'GP',
       'observer',
     );
+  });
+
+  it('survives a failed cycle and still runs the next one', async () => {
+    // A cycle that throws must cost one interval, not the job: the latch has
+    // to be released and the rejection must not escape a `void this.tick()`.
+    jest.spyOn(Logger.prototype, 'error').mockImplementation();
+    const lock = grantingLock();
+    const prisma = makePrisma([]);
+    prisma.paymentIntent.findMany = jest
+      .fn()
+      .mockRejectedValueOnce(new Error('database unavailable'))
+      .mockResolvedValue([]);
+    const observer = new StellarObserverService(
+      config,
+      prisma,
+      {} as any,
+      {} as any,
+      lock,
+    );
+
+    await expect(observer.tick()).resolves.toBeUndefined();
+    await observer.tick();
+
+    expect(lock.runExclusive).toHaveBeenCalledTimes(2);
+    expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
+  });
+
+  describe('schedule', () => {
+    const observerWith = (enabled: boolean) =>
+      new StellarObserverService(
+        { get: () => ({ enabled, intervalMs: 7_000, batchSize: 50 }) } as any,
+        {} as any,
+        {} as any,
+        {} as any,
+        grantingLock(),
+      );
+
+    it('starts an unrefed timer at the configured interval and clears it on destroy', () => {
+      jest.spyOn(Logger.prototype, 'log').mockImplementation();
+      const fakeTimer = { unref: jest.fn() } as unknown as NodeJS.Timeout;
+      const setIntervalSpy = jest
+        .spyOn(global, 'setInterval')
+        .mockReturnValue(fakeTimer);
+      const clearSpy = jest.spyOn(global, 'clearInterval').mockImplementation();
+      const observer = observerWith(true);
+
+      observer.onModuleInit();
+      expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 7_000);
+      expect((fakeTimer as any).unref).toHaveBeenCalled();
+
+      observer.onModuleDestroy();
+      expect(clearSpy).toHaveBeenCalledWith(fakeTimer);
+    });
+
+    it('starts no timer when OBSERVER_ENABLED=false', () => {
+      const log = jest.spyOn(Logger.prototype, 'log').mockImplementation();
+      const setIntervalSpy = jest.spyOn(global, 'setInterval');
+
+      observerWith(false).onModuleInit();
+
+      expect(setIntervalSpy).not.toHaveBeenCalled();
+      expect(log).toHaveBeenCalledWith(
+        expect.stringContaining('OBSERVER_ENABLED=false'),
+      );
+    });
+  });
+
+  /**
+   * The pending page used to be the oldest `batchSize` rows across every
+   * tenant. `POST /pay` is open to the shared public key, where every anonymous
+   * caller is one consumer, so a flood of open-amount intents (each up to ~51
+   * Horizon calls to scan) owned every tick and starved real tenants. The
+   * ranking itself runs in Postgres; these pin the query that expresses it.
+   */
+  describe('choosing what a tick reconciles', () => {
+    /** The SQL text of the ranked selection, whitespace-collapsed. */
+    const sqlOf = (prisma: any): string =>
+      (prisma.$queryRaw.mock.calls[0][0] as string[])
+        .join('?')
+        .replace(/\s+/g, ' ');
+
+    async function tickWith(prisma: any, verifier: unknown = {}) {
+      const observer = new StellarObserverService(
+        config,
+        prisma,
+        verifier as any,
+        {} as any,
+        grantingLock(),
+      );
+      await observer.tick();
+    }
+
+    it("deals every consumer's oldest row before anyone's second, capped per consumer", async () => {
+      const prisma = makePrisma([]);
+      await tickWith(prisma);
+
+      const sql = sqlOf(prisma);
+      expect(sql).toContain('PARTITION BY "consumerId"');
+      expect(sql).toContain('ORDER BY "rank", "createdAt", "id"');
+      expect(sql).toContain('WHERE "rank" <= ?');
+      expect(sql).toContain('LIMIT ?');
+
+      // Tagged template: [0] is the SQL parts, then now, the cap and the batch.
+      const [, , cap, limit] = prisma.$queryRaw.mock.calls[0];
+      expect(cap).toBe(OBSERVER_MAX_INTENTS_PER_CONSUMER);
+      expect(cap).toBeLessThan(BATCH_SIZE);
+      expect(limit).toBe(BATCH_SIZE);
+    });
+
+    it('never selects an intent already past its lifetime', async () => {
+      const prisma = makePrisma([]);
+      await tickWith(prisma);
+
+      const sql = sqlOf(prisma);
+      expect(sql).toContain(`"status" = 'PENDING'`);
+      expect(sql).toContain('("expiresAt" IS NULL OR "expiresAt" > ?)');
+      const [, now] = prisma.$queryRaw.mock.calls[0];
+      expect(now).toBeInstanceOf(Date);
+    });
+
+    it('re-reads exactly the ranked ids, and only while they are still PENDING', async () => {
+      const pending = pendingIntents(3);
+      const prisma = makePrisma(pending);
+      await tickWith(prisma, {
+        findMatchingPayment: jest.fn().mockResolvedValue({ valid: false }),
+      });
+
+      expect(prisma.paymentIntent.findMany).toHaveBeenLastCalledWith({
+        where: { id: { in: ['pi_1', 'pi_2', 'pi_3'] }, status: 'PENDING' },
+        include: { consumer: true },
+      });
+    });
+
+    it('reads nothing more when no intent is eligible', async () => {
+      const prisma = makePrisma([]);
+      await tickWith(prisma);
+
+      // The expiry pass only.
+      expect(prisma.paymentIntent.findMany).toHaveBeenCalledTimes(1);
+    });
+
+    it('spends no Horizon call on an intent that lapsed while the batch drained', async () => {
+      const [lapsed, live] = pendingIntents(2);
+      const pending = [
+        { ...lapsed, expiresAt: new Date(Date.now() - 1_000) },
+        { ...live, expiresAt: new Date(Date.now() + 60_000) },
+      ];
+      const verifier = {
+        findMatchingPayment: jest.fn().mockResolvedValue({ valid: false }),
+      };
+      await tickWith(makePrisma(pending), verifier);
+
+      expect(verifier.findMatchingPayment).toHaveBeenCalledTimes(1);
+      expect(verifier.findMatchingPayment).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'pi_2' }),
+      );
+    });
   });
 });

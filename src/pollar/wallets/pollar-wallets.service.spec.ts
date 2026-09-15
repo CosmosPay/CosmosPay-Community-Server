@@ -3,11 +3,66 @@ import { PollarWalletsService } from '@/pollar/wallets/pollar-wallets.service';
 
 const CONSUMER = { username: 'cosmos_acme', role: 'user' } as any;
 const ADDRESS = 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN';
+const OTHER_ADDRESS =
+  'GBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFSHONUCEOASW7QC7OX2H';
 
-function makeService() {
+/** Rows the ownership check can find, in the two tables it reads. */
+interface Records {
+  sessions?: Array<{
+    consumerId: string;
+    network: string;
+    walletAddress: string | null;
+  }>;
+  wallets?: Array<Record<string, unknown>>;
+}
+
+/** Equality on every key of `where` — all the ownership check asks of Prisma. */
+const firstMatch = (rows: any[], where: Record<string, unknown>) =>
+  rows.find((row) =>
+    Object.entries(where).every(([key, value]) => row[key] === value),
+  ) ?? null;
+
+/**
+ * By default the caller — local consumer `c1`, on testnet, which is config's
+ * network since CONSUMER carries no environment — redeemed a login that
+ * returned ADDRESS: the ordinary way a wallet reaches these routes.
+ */
+function makeService(
+  records: Records = {
+    sessions: [
+      { consumerId: 'c1', network: 'testnet', walletAddress: ADDRESS },
+    ],
+  },
+  localConsumerId = 'c1',
+) {
+  const sessions = records.sessions ?? [];
+  const wallets = records.wallets ?? [];
   const pollar: any = { server: jest.fn() };
   const config: any = { get: jest.fn(() => ({ network: 'testnet' })) };
-  return { service: new PollarWalletsService(pollar, config), pollar };
+  const prisma: any = {
+    pollarOauthSession: {
+      findFirst: jest.fn(({ where }: any) =>
+        Promise.resolve(firstMatch(sessions, where)),
+      ),
+    },
+    pollarUserWallet: {
+      findFirst: jest.fn(({ where }: any) =>
+        Promise.resolve(firstMatch(wallets, where)),
+      ),
+      upsert: jest.fn(({ create }: any) => {
+        wallets.push(create);
+        return Promise.resolve(create);
+      }),
+    },
+  };
+  const consumers: any = {
+    resolve: jest.fn().mockResolvedValue({ id: localConsumerId }),
+  };
+  return {
+    service: new PollarWalletsService(pollar, config, prisma, consumers),
+    pollar,
+    prisma,
+  };
 }
 
 describe('activate', () => {
@@ -73,6 +128,132 @@ describe('trustlines', () => {
   });
 });
 
+describe('wallet ownership', () => {
+  /** Every route that names a wallet, over a given address. */
+  const ROUTES: Array<
+    [string, (service: PollarWalletsService, address: string) => Promise<any>]
+  > = [
+    ['activate', (s, a) => s.activate(CONSUMER, { public_key: a })],
+    ['defaultTrustlines', (s, a) => s.defaultTrustlines(CONSUMER, a)],
+    [
+      'createTrustlines',
+      (s, a) =>
+        s.createTrustlines(CONSUMER, a, {
+          assets: [{ code: 'USDC', issuer: OTHER_ADDRESS }],
+        }),
+    ],
+    [
+      'removeTrustline',
+      (s, a) => s.removeTrustline(CONSUMER, a, 'USDC', OTHER_ADDRESS),
+    ],
+  ];
+
+  it.each(ROUTES)(
+    '%s refuses another tenant’s wallet without asking Pollar',
+    async (_route, call) => {
+      // Tenant A (`c1`) logged in and holds ADDRESS; tenant B (`c2`) names it.
+      const { service, pollar } = makeService(undefined, 'c2');
+
+      await expect(call(service, ADDRESS)).rejects.toMatchObject({
+        status: 404,
+        code: 'not_found',
+      });
+      // Pollar would have obeyed — every tenant holds the same keys — so the
+      // refusal has to happen before it is asked.
+      expect(pollar.server).not.toHaveBeenCalled();
+    },
+  );
+
+  it('answers another tenant’s wallet exactly as it answers an unknown one', async () => {
+    const { service } = makeService(undefined, 'c2');
+
+    const foreign = await service
+      .defaultTrustlines(CONSUMER, ADDRESS)
+      .catch((err: unknown) => err);
+    const unknown = await service
+      .defaultTrustlines(CONSUMER, OTHER_ADDRESS)
+      .catch((err: unknown) => err);
+
+    // Any difference — a 403, a different message — tells tenant B that the
+    // address is live for somebody.
+    expect(foreign).toMatchObject({ status: 404 });
+    expect(unknown).toMatchObject({ status: 404 });
+    expect((foreign as Error).message).toBe((unknown as Error).message);
+  });
+
+  it('does not carry a login over to the other network', async () => {
+    // Pollar's mainnet and testnet are separate applications; an address a
+    // mainnet login returned is not a testnet wallet of this tenant's.
+    const { service, pollar } = makeService({
+      sessions: [
+        { consumerId: 'c1', network: 'public', walletAddress: ADDRESS },
+      ],
+    });
+
+    await expect(
+      service.defaultTrustlines(CONSUMER, ADDRESS),
+    ).rejects.toMatchObject({ status: 404 });
+    expect(pollar.server).not.toHaveBeenCalled();
+  });
+
+  it('accepts a wallet provisioned for this consumer on a counterpart network', async () => {
+    const { service, pollar } = makeService({
+      wallets: [
+        { consumerId: 'c1', network: 'testnet', address: OTHER_ADDRESS },
+      ],
+    });
+    pollar.server.mockResolvedValue({});
+
+    await expect(
+      service.defaultTrustlines(CONSUMER, OTHER_ADDRESS),
+    ).resolves.toEqual({ code: 'SERVER_TRUSTLINES_ENABLED' });
+  });
+
+  it('recognises a wallet from users/with-wallet on the very next call', async () => {
+    const { service, pollar, prisma } = makeService({});
+    pollar.server
+      .mockResolvedValueOnce({
+        userId: 'usr_pollar_1',
+        wallet: { type: 'internal', publicKey: OTHER_ADDRESS },
+      })
+      .mockResolvedValueOnce({});
+
+    await service.registerUser(CONSUMER, { external_id: 'usr_7Kd2' }, true);
+
+    expect(prisma.pollarUserWallet.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({
+          consumerId: 'c1',
+          externalId: 'usr_7Kd2',
+          network: 'testnet',
+          status: 'READY',
+          address: OTHER_ADDRESS,
+        }),
+      }),
+    );
+    // Without that record the route that just handed the address out would
+    // refuse its own wallet one call later.
+    await expect(
+      service.defaultTrustlines(CONSUMER, OTHER_ADDRESS),
+    ).resolves.toEqual({ code: 'SERVER_TRUSTLINES_ENABLED' });
+  });
+
+  it('still returns the new user when the wallet cannot be recorded', async () => {
+    const { service, pollar, prisma } = makeService({});
+    pollar.server.mockResolvedValue({
+      id: 'usr_1',
+      wallet: { type: 'internal', address: OTHER_ADDRESS },
+    });
+    prisma.pollarUserWallet.upsert.mockRejectedValue(new Error('db down'));
+
+    // The user and wallet already exist at Pollar; failing here would only send
+    // the caller into a retry that Pollar refuses as a duplicate.
+    await expect(
+      service.registerUser(CONSUMER, { external_id: 'usr_7Kd2' }, true),
+    ).resolves.toMatchObject({ wallet: { address: OTHER_ADDRESS } });
+  });
+});
+
 describe('registerUser', () => {
   it('projects the response instead of relaying an undocumented payload', async () => {
     const { service, pollar } = makeService();
@@ -125,7 +306,7 @@ describe('registerUser', () => {
   });
 
   it('omits a wallet whose shape drifted rather than half-building one', async () => {
-    const { service, pollar } = makeService();
+    const { service, pollar, prisma } = makeService();
     pollar.server.mockResolvedValue({
       id: 'usr_1',
       wallet: { type: 'internal' },
@@ -138,6 +319,8 @@ describe('registerUser', () => {
     );
 
     expect(user.wallet).toBeUndefined();
+    // Nothing to own without an address, so nothing is recorded either.
+    expect(prisma.pollarUserWallet.upsert).not.toHaveBeenCalled();
   });
 });
 

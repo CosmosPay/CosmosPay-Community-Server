@@ -26,6 +26,10 @@ import { IS_PUBLIC_KEY } from '@/common/decorators/public.decorator';
  * Routes annotated with @Public() skip this check. Enforcement is always on:
  * every non-public route must arrive through the gateway (valid X-Gateway-Secret
  * + an authenticated consumer). There is no opt-out flag.
+ *
+ * A @Public() route also loses any consumer the middleware attached. Those routes
+ * are served without key-auth, so nothing upstream overwrote X-Consumer-Username
+ * — the value is whatever the client typed.
  */
 @Injectable()
 export class ApisixGuard implements CanActivate {
@@ -46,12 +50,19 @@ export class ApisixGuard implements CanActivate {
       context.getHandler(),
       context.getClass(),
     ]);
+    const request = context.switchToHttp().getRequest<Request>();
+
     if (isPublic) {
+      // Left in place, a client-chosen consumer name reaches everything that runs
+      // after this guard: the rate limiter buckets by it, so a new name per request
+      // is a fresh budget every time, and the access log files the call under
+      // whichever tenant the caller names — where it shows up in that tenant's
+      // API-log view. No @Public() handler reads the consumer.
+      delete request.gatewayConsumer;
       return true;
     }
 
     const apisix = this.config.get('apisix', { infer: true });
-    const request = context.switchToHttp().getRequest<Request>();
 
     // 1. Verify the gateway shared secret (constant-time).
     if (!this.hasValidSecret(request, apisix.gatewaySecretHeader)) {

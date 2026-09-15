@@ -125,6 +125,10 @@ function build() {
     prisma,
     { get: () => ({ maxAttempts: 1, backoffMs: 1 }) } as any,
     new WebhookDestinationGuard(),
+    // A stub transport, passed explicitly. Nothing here should send — `emit`
+    // is a mock, so the dispatch handler never runs — and if a change ever made
+    // it, the attempt fails against this instead of reaching the network.
+    { send: jest.fn().mockRejectedValue(new Error('no network in this spec')) },
   );
   const emitter = new WebhookTerminalEmitter(prisma, events, dispatcher);
   return { emitter, prisma, events, store, webhookDelivery };

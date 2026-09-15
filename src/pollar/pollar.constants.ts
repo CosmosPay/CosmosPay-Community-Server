@@ -36,12 +36,6 @@ export const POLLAR_NETWORK_BY_STELLAR = {
   testnet: 'testnet',
 } as const;
 
-/** Expected prefixes per key type and network, checked at boot. */
-export const POLLAR_KEY_PREFIX = {
-  publishable: { public: 'pub_mainnet_', testnet: 'pub_testnet_' },
-  secret: { public: 'sec_mainnet_', testnet: 'sec_testnet_' },
-} as const;
-
 /**
  * The client-session status that means "Pollar finished the provider handshake
  * and the session can be redeemed for tokens". Anything else is still in
@@ -180,6 +174,23 @@ export const POLLAR_PROVISION_RATE_LIMIT = {
  */
 export const POLLAR_ACTIVATE_RATE_LIMIT = {
   name: 'pollar:activate',
+  limit: 20,
+  windowMs: WINDOW_MS,
+};
+
+/**
+ * Adding trustlines, on both `POST /wallets/:address/trustlines` and its
+ * `/default` spelling. Every asset trusted locks 0.5 XLM of reserve out of the
+ * funding wallet and one explicit call may name 25 of them, so this was the
+ * cheapest way on the surface to spend the operator's XLM — and it had no limit.
+ *
+ * One bucket for both routes, because they are the same spend reached two ways:
+ * separate budgets would just double what a loop gets by alternating. Twenty is
+ * the `authorize` cap, so the documented sequence — a login, then that wallet's
+ * default trustlines — is never refused before the login itself would be.
+ */
+export const POLLAR_TRUSTLINE_RATE_LIMIT = {
+  name: 'pollar:trustlines',
   limit: 20,
   windowMs: WINDOW_MS,
 };

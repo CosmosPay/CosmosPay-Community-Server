@@ -14,13 +14,16 @@ import {
   ApiHeader,
   ApiOkResponse,
   ApiOperation,
+  ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
 import type { Request } from 'express';
 import { CurrentConsumer } from '@/common/decorators/current-consumer.decorator';
 import { AllowPublicKey } from '@/common/decorators/allow-public-key.decorator';
 import { RequirePermissions } from '@/common/decorators/require-permissions.decorator';
+import { API_ERROR_BODY_CONTENT } from '@/common/errors/api-error.entity';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
+import { headerValue } from '@/common/request-header';
 import { CreateSwapDto } from '@/swaps/dto/create-swap.dto';
 import { QuerySwapsDto } from '@/swaps/dto/query-swaps.dto';
 import { QuoteSwapDto } from '@/swaps/dto/quote-swap.dto';
@@ -71,11 +74,23 @@ export class SwapsController {
     name: 'Idempotency-Key',
     required: false,
     description:
-      'Optional idempotency key. Retries with the same key return the existing ' +
-      'swap (same id and txHash). Takes precedence over body.idempotencyKey.',
+      'Optional idempotency key. A retry with the same key and the same request ' +
+      'returns the existing swap (same id and txHash); the same key with a ' +
+      'different request is 409 idempotency_conflict. Takes precedence over ' +
+      'body.idempotencyKey.',
     example: 'swap-retry-2026-08-23-001',
   })
   @ApiCreatedResponse({ type: SwapEntity })
+  @ApiResponse({
+    status: 409,
+    content: API_ERROR_BODY_CONTENT,
+    description:
+      '`idempotency_conflict` — this Idempotency-Key was already used for a ' +
+      'different request, or an identical swap was already built without a key ' +
+      '(retry with an Idempotency-Key, or wait for the prior swap to settle or ' +
+      'expire). `operation_in_flight` — STELLAR_SWAP_SINGLE_INFLIGHT is on and ' +
+      'this source account already has a PENDING swap.',
+  })
   create(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Body() dto: CreateSwapDto,
@@ -133,10 +148,4 @@ export class SwapsController {
   ) {
     return this.swaps.submit(consumer, id, dto.signedXdr);
   }
-}
-
-function headerValue(req: Request, name: string): string | undefined {
-  const raw = req.headers[name];
-  if (Array.isArray(raw)) return raw[0];
-  return raw;
 }
