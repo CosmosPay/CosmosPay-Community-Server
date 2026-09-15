@@ -12,8 +12,9 @@ import { KycMetaService } from '@/kyc/upload/kyc-meta.service';
  * KYC/compliance surface: receivers (the KYC/KYB entities) and their blockchain
  * wallets and bank accounts, plus document upload and rail discovery. Exports
  * ReceiversService so the onramp module can resolve a receiver when creating
- * virtual accounts. Relies on the global BlindpayModule for the HTTP client,
- * consumer resolver, and sync service.
+ * virtual accounts, and so the admin module can drive its audited `*ById` variants.
+ * Relies on the global BlindpayModule for `BlindpayKycApi` (every BlindPay path this
+ * module reaches) and the sync service.
  */
 @Module({
   controllers: [

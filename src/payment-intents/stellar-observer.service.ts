@@ -1,15 +1,11 @@
-import {
-  Injectable,
-  Logger,
-  OnModuleDestroy,
-  OnModuleInit,
-} from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { AppConfig } from '@/config/configuration';
 import {
   AdvisoryLockKey,
   AdvisoryLockService,
 } from '@/common/services/advisory-lock.service';
+import { JobSchedule, ScheduledJob } from '@/common/services/scheduled-job';
 import { PrismaService } from '@/prisma/prisma.service';
 import { PaymentIntentsService } from '@/payment-intents/payment-intents.service';
 import { StellarVerifierService } from '@/payment-intents/stellar-verifier.service';
@@ -27,117 +23,81 @@ import {
  *
  * Polling (vs Horizon SSE streaming) is intentional: it survives restarts with
  * no cursor/reconnect bookkeeping and naturally picks up newly-created intents.
+ *
+ * The timer runs on every replica behind APISIX and each one selects the same
+ * PENDING rows, so without the advisory lock N replicas paid N× the Horizon
+ * round trips for identical work; a replica that loses it skips its tick. The
+ * lock spans the whole cycle, Horizon calls included — the base's default, not
+ * the webhook sweeper's claim-only override — because nothing here claims a
+ * row: releasing the lock before reconciling would let the next replica select
+ * and pay for the same batch. The timer, the no-overlap latch, `unref` and
+ * swallowing a failed cycle come from {@link ScheduledJob}.
  */
 @Injectable()
-export class StellarObserverService implements OnModuleInit, OnModuleDestroy {
-  private readonly logger = new Logger(StellarObserverService.name);
-  private timer?: NodeJS.Timeout;
-  private running = false;
+export class StellarObserverService extends ScheduledJob {
+  protected readonly logger = new Logger(StellarObserverService.name);
+  protected readonly lockKey = AdvisoryLockKey.PaymentIntentObserver;
 
   constructor(
     private readonly config: ConfigService<AppConfig, true>,
     private readonly prisma: PrismaService,
     private readonly verifier: StellarVerifierService,
     private readonly paymentIntents: PaymentIntentsService,
-    private readonly advisoryLock: AdvisoryLockService,
-  ) {}
+    locks: AdvisoryLockService,
+  ) {
+    super(locks);
+  }
 
-  onModuleInit(): void {
+  /** `OBSERVER_ENABLED` and `OBSERVER_INTERVAL_MS`, via `configuration.ts`. */
+  protected schedule(): JobSchedule {
     const { enabled, intervalMs } = this.config.get('observer', {
       infer: true,
     });
-    if (!enabled) {
-      this.logger.log('On-chain observer disabled (OBSERVER_ENABLED=false)');
-      return;
-    }
-    this.logger.log(`On-chain observer started (every ${intervalMs}ms)`);
-    // `unref` so the interval never keeps the process alive on its own.
-    this.timer = setInterval(() => void this.tick(), intervalMs);
-    this.timer.unref?.();
+    return {
+      enabled,
+      intervalMs,
+      description: enabled
+        ? 'On-chain observer'
+        : 'On-chain observer (OBSERVER_ENABLED=false)',
+    };
   }
 
-  onModuleDestroy(): void {
-    if (this.timer) {
-      clearInterval(this.timer);
-    }
-  }
+  /** One cycle: expire what is stale, reconcile the rest. */
+  protected async run(): Promise<void> {
+    const { batchSize } = this.config.get('observer', { infer: true });
+    const now = new Date();
 
-  /**
-   * One reconciliation cycle, guarded twice over.
-   *
-   * The in-process `running` latch stops a slow sweep from overlapping the next
-   * timer fire on *this* replica. The advisory lock is the cluster-wide
-   * counterpart: the timer runs on every replica behind APISIX and each one
-   * selects the same oldest PENDING rows, so without it N replicas paid N× the
-   * Horizon round-trips for identical work. Both are needed — the lock is
-   * released as soon as a sweep ends, so it says nothing about the next tick on
-   * this process.
-   *
-   * A replica that loses the lock returns immediately and skips its tick.
-   */
-  async tick(): Promise<void> {
-    if (this.running) {
-      return;
-    }
-    this.running = true;
-    try {
-      await this.advisoryLock.runExclusive(
-        AdvisoryLockKey.PaymentIntentObserver,
-        () => this.sweep(),
-      );
-    } catch (err) {
-      // `tick` is fired as `void this.tick()` from a timer, so anything that
-      // escapes here is an unhandled rejection and, under Node's default
-      // policy, kills the process. A failed reconciliation cycle must only cost
-      // one interval.
-      this.logger.error('Payment intent observer cycle failed', err as Error);
-    } finally {
-      this.running = false;
-    }
-  }
-
-  /** The guarded body of one cycle: expire what is stale, reconcile the rest. */
-  private async sweep(): Promise<void> {
-    try {
-      const { batchSize } = this.config.get('observer', { infer: true });
-      const now = new Date();
-
-      // 1. Expire unpaid intents past their lifetime.
-      const expired = await this.prisma.paymentIntent.findMany({
-        where: {
-          status: { in: ['PENDING', 'SUBMITTED'] },
-          expiresAt: { not: null, lt: now },
-        },
-        include: { consumer: true },
-        take: batchSize,
-      });
-      for (const intent of expired) {
-        await this.paymentIntents
-          .markExpired(intent.id, intent.consumer.apisixUsername)
-          .catch((err) =>
-            this.logger.error(
-              `Expire failed for intent ${intent.id}: ${err instanceof Error ? err.message : String(err)}`,
-            ),
-          );
-      }
-
-      // 2. Reconcile still-pending intents against the chain.
-      const pending = await this.selectPending(batchSize, now);
-
-      await mapLimited(pending, RECONCILE_CONCURRENCY, (intent) =>
-        this.reconcile(intent).catch((err) => {
+    // 1. Expire unpaid intents past their lifetime.
+    const expired = await this.prisma.paymentIntent.findMany({
+      where: {
+        status: { in: ['PENDING', 'SUBMITTED'] },
+        expiresAt: { not: null, lt: now },
+      },
+      include: { consumer: true },
+      take: batchSize,
+    });
+    for (const intent of expired) {
+      await this.paymentIntents
+        .markExpired(intent.id, intent.consumer.apisixUsername)
+        .catch((err) =>
           this.logger.error(
-            `Reconcile failed for intent ${intent.id}: ${
-              err instanceof Error ? err.message : String(err)
-            }`,
-          );
-        }),
-      );
-    } catch (err) {
-      this.logger.error(
-        `Observer cycle failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
+            `Expire failed for intent ${intent.id}: ${err instanceof Error ? err.message : String(err)}`,
+          ),
+        );
     }
+
+    // 2. Reconcile still-pending intents against the chain.
+    const pending = await this.selectPending(batchSize, now);
+
+    await mapLimited(pending, RECONCILE_CONCURRENCY, (intent) =>
+      this.reconcile(intent).catch((err) => {
+        this.logger.error(
+          `Reconcile failed for intent ${intent.id}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }),
+    );
   }
 
   /**

@@ -1,4 +1,5 @@
 import { StellarAccountLoader } from '@/stellar/account-loader.service';
+import { SignedTransactionRelay } from '@/stellar/signed-transaction-relay.service';
 import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
 import { HttpStatus } from '@nestjs/common';
 import { Account, Keypair, TransactionBuilder } from '@stellar/stellar-sdk';
@@ -362,6 +363,7 @@ describe('SwapsService.submit vs observer (issue #29 double terminal event)', ()
       stellar as any,
       new ConsumerResolverService(prisma as never),
       new StellarAccountLoader(stellar as never),
+      new SignedTransactionRelay(stellar as never),
     );
     observer = new SettlementObserverService(
       config,
@@ -369,6 +371,9 @@ describe('SwapsService.submit vs observer (issue #29 double terminal event)', ()
       stellar as any,
       {} as any,
       service,
+      // No cost basis and no lock: these tests drive `reconcile` directly.
+      {} as any,
+      {} as any,
     );
     jest
       .spyOn(TransactionBuilder, 'fromXDR')
@@ -387,7 +392,7 @@ describe('SwapsService.submit vs observer (issue #29 double terminal event)', ()
 
     await Promise.all([
       service.submit(consumer, row.id, 'signed-xdr'),
-      (observer as any).reconcileSwaps(50),
+      (observer as any).reconcile('swaps', 50),
     ]);
 
     expect(row.status).toBe('SUCCEEDED');
@@ -400,7 +405,7 @@ describe('SwapsService.submit vs observer (issue #29 double terminal event)', ()
 
     stellar.submitTransaction.mockImplementation(async () => {
       stellar.txCall.mockResolvedValue({ successful: true });
-      await (observer as any).reconcileSwaps(50);
+      await (observer as any).reconcile('swaps', 50);
       throw horizonReject({ transaction: 'tx_already_included' });
     });
 
@@ -483,6 +488,7 @@ describe('SwapsService.create idempotency (issue #17)', () => {
       stellar as any,
       new ConsumerResolverService(prisma as never),
       new StellarAccountLoader(stellar as never),
+      new SignedTransactionRelay(stellar as never),
     );
     jest.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000);
   });
@@ -650,6 +656,7 @@ describe('SwapsService.create idempotency (issue #17)', () => {
       stellar as any,
       new ConsumerResolverService(prisma as never),
       new StellarAccountLoader(stellar as never),
+      new SignedTransactionRelay(stellar as never),
     );
 
     await service.create(consumer, createDto, 'a');
@@ -682,6 +689,7 @@ describe('SettlementObserverService duplicate txHash (issue #17)', () => {
       stellar as any,
       new ConsumerResolverService(prisma as never),
       new StellarAccountLoader(stellar as never),
+      new SignedTransactionRelay(stellar as never),
     );
     observer = new SettlementObserverService(
       config,
@@ -689,6 +697,9 @@ describe('SettlementObserverService duplicate txHash (issue #17)', () => {
       stellar as any,
       {} as any,
       service,
+      // No cost basis and no lock: these tests drive `reconcile` directly.
+      {} as any,
+      {} as any,
     );
   });
 
@@ -698,7 +709,7 @@ describe('SettlementObserverService duplicate txHash (issue #17)', () => {
     prisma.rows.push(a, b);
     stellar.txCall.mockResolvedValue({ successful: true });
 
-    await (observer as any).reconcileSwaps(50);
+    await (observer as any).reconcile('swaps', 50);
 
     expect(a.status).toBe('SUCCEEDED');
     expect(b.status).toBe('SUCCEEDED');
@@ -728,7 +739,7 @@ describe('SettlementObserverService duplicate txHash (issue #17)', () => {
     prisma.rows.push(test, live);
     stellar.txCall.mockResolvedValue({ successful: true });
 
-    await (observer as any).reconcileSwaps(50);
+    await (observer as any).reconcile('swaps', 50);
 
     // Each network is looked up on its own server, and each row gets its own
     // terminal event rather than one being settled as a phantom duplicate.
@@ -759,6 +770,7 @@ describe('SwapsService platform commission fail-closed (X-Plan-Swap-Fee-Bps)', (
       stellar as any,
       new ConsumerResolverService(prisma as never),
       new StellarAccountLoader(stellar as never),
+      new SignedTransactionRelay(stellar as never),
     );
   }
 

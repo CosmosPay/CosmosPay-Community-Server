@@ -14,12 +14,14 @@ import {
   ApiHeader,
   ApiOkResponse,
   ApiOperation,
+  ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
 import type { Request } from 'express';
 import { CurrentConsumer } from '@/common/decorators/current-consumer.decorator';
 import { AllowPublicKey } from '@/common/decorators/allow-public-key.decorator';
 import { RequirePermissions } from '@/common/decorators/require-permissions.decorator';
+import { ApiErrorBodyEntity } from '@/common/errors/api-error.entity';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import { CreateSwapDto } from '@/swaps/dto/create-swap.dto';
 import { QuerySwapsDto } from '@/swaps/dto/query-swaps.dto';
@@ -78,6 +80,16 @@ export class SwapsController {
     example: 'swap-retry-2026-08-23-001',
   })
   @ApiCreatedResponse({ type: SwapEntity })
+  @ApiResponse({
+    status: 409,
+    type: ApiErrorBodyEntity,
+    description:
+      '`idempotency_conflict` — this Idempotency-Key was already used for a ' +
+      'different request, or an identical swap was already built without a key ' +
+      '(retry with an Idempotency-Key, or wait for the prior swap to settle or ' +
+      'expire). `operation_in_flight` — STELLAR_SWAP_SINGLE_INFLIGHT is on and ' +
+      'this source account already has a PENDING swap.',
+  })
   create(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Body() dto: CreateSwapDto,

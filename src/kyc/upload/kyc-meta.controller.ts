@@ -11,7 +11,14 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import type { MulterOptions } from '@nestjs/platform-express/multer/interfaces/multer-options.interface';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
-import { ApiBody, ApiConsumes, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { ApiErrorBodyEntity } from '@/common/errors/api-error.entity';
+import {
+  ApiBody,
+  ApiConsumes,
+  ApiOperation,
+  ApiResponse,
+  ApiTags,
+} from '@nestjs/swagger';
 import { RequirePermissions } from '@/common/decorators/require-permissions.decorator';
 import { CurrentConsumer } from '@/common/decorators/current-consumer.decorator';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
@@ -80,6 +87,30 @@ export class KycMetaController {
   @UseInterceptors(FileInterceptor('file', KYC_UPLOAD_OPTIONS))
   @ApiConsumes('multipart/form-data')
   @ApiOperation({ summary: 'Upload a KYC document; returns its file_url' })
+  // Declared here rather than left to the generic 400 `swagger.ts` attaches: that text
+  // ("not valid in the current state") says nothing an integrator can act on, and each
+  // of these refusals is a limit they can stay inside. The limits are interpolated from
+  // the constants the interceptor enforces, so the contract cannot quote a stale number.
+  // `type` keeps the error envelope's schema, which a route-level declaration would
+  // otherwise replace with a bare description.
+  @ApiResponse({
+    status: 400,
+    type: ApiErrorBodyEntity,
+    description:
+      'The multipart form was refused (`validation_failed`), before the provider saw anything: ' +
+      `more than ${MAX_UPLOAD_FIELDS} text fields; a text field longer than ${MAX_UPLOAD_FIELD_BYTES} bytes; ` +
+      `more than ${MAX_UPLOAD_FILES} file; a declared content type other than ${[
+        ...ALLOWED_UPLOAD_TYPES,
+      ].join(', ')}; ` +
+      'file bytes that do not match the declared content type; a missing `file` part; or an unknown `bucket`.',
+  })
+  @ApiResponse({
+    status: 413,
+    type: ApiErrorBodyEntity,
+    description:
+      `The file is larger than ${MAX_UPLOAD_BYTES} bytes (\`payload_too_large\`). Multer stops ` +
+      'reading at the limit, so nothing reaches the provider.',
+  })
   @ApiBody({
     schema: {
       type: 'object',

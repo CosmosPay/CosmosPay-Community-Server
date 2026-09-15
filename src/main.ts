@@ -56,7 +56,10 @@ async function bootstrap(): Promise<void> {
   // OpenAPI docs + raw spec (/docs, /docs/json, /docs/yaml).
   // Mounted as Express middleware — not behind ApisixGuard / PermissionsGuard.
   if (config.get('swaggerEnabled', { infer: true })) {
-    setupSwagger(app);
+    setupSwagger(app, {
+      nodeEnv: config.get('nodeEnv', { infer: true }),
+      openapi: config.get('openapi', { infer: true }),
+    });
   }
 
   app.enableShutdownHooks();

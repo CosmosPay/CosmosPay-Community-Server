@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import {
   AdvisoryLockKey,
   AdvisoryLockService,
@@ -12,6 +13,9 @@ import { OBSERVER_MAX_INTENTS_PER_CONSUMER } from '@/payment-intents/payment-int
  */
 describe('StellarObserverService.tick', () => {
   const BATCH_SIZE = 50;
+
+  // Logger and timer spies must not leak from one test into the next.
+  afterEach(() => jest.restoreAllMocks());
 
   const config = {
     get: () => ({ enabled: false, intervalMs: 15_000, batchSize: BATCH_SIZE }),
@@ -195,6 +199,71 @@ describe('StellarObserverService.tick', () => {
       'GP',
       'observer',
     );
+  });
+
+  it('survives a failed cycle and still runs the next one', async () => {
+    // A cycle that throws must cost one interval, not the job: the latch has
+    // to be released and the rejection must not escape a `void this.tick()`.
+    jest.spyOn(Logger.prototype, 'error').mockImplementation();
+    const lock = grantingLock();
+    const prisma = makePrisma([]);
+    prisma.paymentIntent.findMany = jest
+      .fn()
+      .mockRejectedValueOnce(new Error('database unavailable'))
+      .mockResolvedValue([]);
+    const observer = new StellarObserverService(
+      config,
+      prisma,
+      {} as any,
+      {} as any,
+      lock,
+    );
+
+    await expect(observer.tick()).resolves.toBeUndefined();
+    await observer.tick();
+
+    expect(lock.runExclusive).toHaveBeenCalledTimes(2);
+    expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
+  });
+
+  describe('schedule', () => {
+    const observerWith = (enabled: boolean) =>
+      new StellarObserverService(
+        { get: () => ({ enabled, intervalMs: 7_000, batchSize: 50 }) } as any,
+        {} as any,
+        {} as any,
+        {} as any,
+        grantingLock(),
+      );
+
+    it('starts an unrefed timer at the configured interval and clears it on destroy', () => {
+      jest.spyOn(Logger.prototype, 'log').mockImplementation();
+      const fakeTimer = { unref: jest.fn() } as unknown as NodeJS.Timeout;
+      const setIntervalSpy = jest
+        .spyOn(global, 'setInterval')
+        .mockReturnValue(fakeTimer);
+      const clearSpy = jest.spyOn(global, 'clearInterval').mockImplementation();
+      const observer = observerWith(true);
+
+      observer.onModuleInit();
+      expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 7_000);
+      expect((fakeTimer as any).unref).toHaveBeenCalled();
+
+      observer.onModuleDestroy();
+      expect(clearSpy).toHaveBeenCalledWith(fakeTimer);
+    });
+
+    it('starts no timer when OBSERVER_ENABLED=false', () => {
+      const log = jest.spyOn(Logger.prototype, 'log').mockImplementation();
+      const setIntervalSpy = jest.spyOn(global, 'setInterval');
+
+      observerWith(false).onModuleInit();
+
+      expect(setIntervalSpy).not.toHaveBeenCalled();
+      expect(log).toHaveBeenCalledWith(
+        expect.stringContaining('OBSERVER_ENABLED=false'),
+      );
+    });
   });
 
   /**

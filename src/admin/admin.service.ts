@@ -3,10 +3,7 @@ import { PrismaService } from '@/prisma/prisma.service';
 import { ReceiversService } from '@/kyc/receivers/receivers.service';
 import { RequestTosDto } from '@/kyc/receivers/dto/request-tos.dto';
 import type { AdminPrincipal } from '@/admin/admin-auth';
-import {
-  toAuditData,
-  recordAuditInTransaction,
-} from '@/admin/admin-audit.service';
+import { toAuditEntry } from '@/audit/audit-writer';
 
 /** Clamp a requested page size to a sane range. */
 function take(n?: number): number {
@@ -55,7 +52,7 @@ export class AdminService {
     return this.receiversSvc.approveById(
       id,
       redirectUrl,
-      toAuditData(actor, 'receivers.approve', 'receiver', id, {
+      toAuditEntry(actor, 'receivers.approve', 'receiver', id, {
         redirect_url: redirectUrl,
       }),
     );
@@ -66,7 +63,7 @@ export class AdminService {
     return this.receiversSvc.enableById(
       id,
       tosId,
-      toAuditData(actor, 'receivers.enable', 'receiver', id, {
+      toAuditEntry(actor, 'receivers.enable', 'receiver', id, {
         tos_id: tosId,
       }),
     );
@@ -88,7 +85,7 @@ export class AdminService {
       id,
       dto,
       cooldownMs,
-      toAuditData(actor, 'receivers.requestTos', 'receiver', id, {
+      toAuditEntry(actor, 'receivers.requestTos', 'receiver', id, {
         channel: dto.channel ?? 'code',
         redirect_url: dto.redirect_url,
       }),
@@ -337,39 +334,44 @@ export class AdminService {
   /**
    * Platform-admin fiat kill-switch across ANY consumer: enable/disable a receiver by id
    * without consumer scoping (the owner acts globally). Mirrors the per-org access toggle.
-   * Mutation + audit row commit in one transaction (issue #34 / Gitar review).
+   *
+   * The flag write and its audit row commit in one transaction inside
+   * `ReceiversService.setAccessById` (issue #34 / Gitar review). This method used to run
+   * that transaction itself, straight against the receiver table — the one admin receiver
+   * action that bypassed the kyc module owning the row — so the kill-switch had two
+   * implementations. Now, like approve/enable/requestTos, it only supplies the actor.
+   *
+   * The response is re-read afterwards in the admin shape (owning consumer attached),
+   * which is what this route has always returned; `setAccessById` answers with the tenant
+   * projection, which leaves out the attribution the console shows.
    */
   async setReceiverAccess(
     id: string,
     disabled: boolean,
     actor: AdminPrincipal,
   ) {
-    return this.prisma.$transaction(async (tx) => {
-      const row = await tx.blindpayReceiver.findUnique({
-        where: { id },
-        select: { id: true },
-      });
-      if (!row) throw new NotFoundException('Receiver not found');
-      const result = await tx.blindpayReceiver.update({
-        where: { id },
-        data: { disabled },
-        include: consumerSelect,
-        // Same reason the list queries omit it: `raw` is the provider's full
-        // KYC dossier — tax id, address, bank credentials. Toggling a
-        // receiver's access is an authorization change and has no business
-        // returning the dossier as its 200 body, where it lands in the
-        // operator's browser, any proxy log, and the admin audit trail's
-        // response capture.
-        omit: { raw: true },
-      });
-      await recordAuditInTransaction(
-        tx,
-        toAuditData(actor, 'receivers.setAccess', 'receiver', id, {
-          disabled,
-        }),
-      );
-      return result;
+    await this.receiversSvc.setAccessById(
+      id,
+      disabled,
+      toAuditEntry(actor, 'receivers.setAccess', 'receiver', id, {
+        disabled,
+      }),
+    );
+    const receiver = await this.prisma.blindpayReceiver.findUnique({
+      where: { id },
+      include: consumerSelect,
+      // Same reason the list queries omit it: `raw` is the provider's full
+      // KYC dossier — tax id, address, bank credentials. Toggling a
+      // receiver's access is an authorization change and has no business
+      // returning the dossier as its 200 body, where it lands in the
+      // operator's browser, any proxy log, and the admin audit trail's
+      // response capture.
+      omit: { raw: true },
     });
+    // setAccessById already 404s a missing receiver; this only fires if it was deleted
+    // between the committed toggle and this read.
+    if (!receiver) throw new NotFoundException('Receiver not found');
+    return receiver;
   }
 
   async payouts(opts: ListOpts = {}) {

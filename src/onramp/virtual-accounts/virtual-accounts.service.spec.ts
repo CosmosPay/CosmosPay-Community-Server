@@ -1,3 +1,4 @@
+import { BlindpayOnrampApi } from '@/blindpay/blindpay-onramp.api';
 import { VIRTUAL_ACCOUNT_PUBLIC_SELECT } from '@/blindpay/blindpay-sync.service';
 import { VirtualAccountsService } from '@/onramp/virtual-accounts/virtual-accounts.service';
 
@@ -68,7 +69,7 @@ function makeService() {
   };
   const service = new VirtualAccountsService(
     prisma,
-    blindpay as any,
+    new BlindpayOnrampApi(blindpay as any),
     consumers as any,
     receivers as any,
   );

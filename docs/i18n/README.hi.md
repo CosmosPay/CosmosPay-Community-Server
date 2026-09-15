@@ -1,6 +1,6 @@
 # Cosmos Pay — पेमेंट्स माइक्रोसर्विस
 
-[English](./README.md) · [Español](./README.es.md) · [Português](./README.pt.md) · [Deutsch](./README.de.md) · [Français](./README.fr.md) · **हिन्दी** · [简体中文](./README.zh.md)
+[English](../../README.md) · [Español](./README.es.md) · [Português](./README.pt.md) · [Deutsch](./README.de.md) · [Français](./README.fr.md) · **हिन्दी** · [简体中文](./README.zh.md)
 
 **NestJS 12** + **Prisma 7 (PostgreSQL)** से बनी पेमेंट्स माइक्रोसर्विस।
 
@@ -59,6 +59,7 @@ src/
   config/
     configuration.ts              typed config
     env.validation.ts             fail-fast env validation (secret required when enforcing)
+    *-whitelist.ts                KYC and Pollar redirect allow-lists
   prisma/                         PrismaModule + PrismaService (global)
   common/
     guards/apisix.guard.ts        THE gateway gate
@@ -72,11 +73,12 @@ src/
     validators/                   IsStellarAddress (StrKey-based)
     errors/api-error.ts           ApiError + machine-readable ApiErrorCode
     services/advisory-lock...     cluster-wide lock for the background timers
-  stellar/                        per-network Horizon servers (bounded timeout)
+  stellar/                        per-network Horizon servers (bounded timeout), account loader,
+                                  SEP-7 links, signed-envelope relay, settlement repository
   payment-intents/                Stellar payment intents (controller, service, DTO) — emits events
   swaps/                          Stellar native swaps (path payments): quote, build XDR, submit
-  liquidity-pools/                AMM deposit/withdraw, cost basis + commission on gain
-  observer/                       background reconciler: swaps + LP ops against Horizon
+  liquidity-pools/                AMM deposit/withdraw, pool + position reads, cost basis + commission on gain
+  observer/                       background reconciler: swaps + LP ops against Horizon, one adapter per table
   webhooks/                       webhook endpoints CRUD + dispatcher (HMAC-signed, retried)
   blindpay/                       BlindPay core: HTTP client, Svix verify, sync + inbound webhook
   kyc/                            receivers (KYC/KYB), wallets, bank accounts, doc upload
@@ -90,6 +92,7 @@ src/
   analytics/                      summary, balances, API logs, webhook logs
   activity/                       client telemetry ingest + feed (wallet, dashboard)
   admin/                          cross-tenant platform admin (console-only), audited
+  audit/                          audit-trail writer, called inside other modules' transactions
   health/                         liveness/readiness probes (@Public)
 prisma/schema.prisma              Consumer, PaymentIntent, Swap, LiquidityPoolOperation,
                                   WebhookEndpoint/Delivery/EmittedEvent, BlindpayReceiver,
@@ -101,6 +104,7 @@ prisma/schema.prisma              Consumer, PaymentIntent, Swap, LiquidityPoolOp
 test/                             e2e suites: gateway gate, admin + alias console gates,
                                   payment intents, KYC, webhooks, Pollar
 scripts/                          OpenAPI generator, README check, operator scripts
+docs/i18n/                        this README in es, pt, de, fr, hi, zh
 ```
 
 ## API
@@ -1321,6 +1325,10 @@ test से pin की गई है जो सुधार के बिना 
 | `POST /v1/swaps`, `/v1/liquidity-pools/deposit` और `/withdraw`: अलग request के साथ दोबारा इस्तेमाल की गई `Idempotency-Key` — अलग memo या slippage, दूसरा नेटवर्क, या withdrawal के लिए दोबारा इस्तेमाल की गई deposit key — `409 idempotency_conflict` है। अवैध asset, slippage या memo वाला replay अब सामान्य `400` पाता है | एक ही key को अलग-अलग operations के लिए दोबारा इस्तेमाल करने वाले clients | साझा public key के तहत, attacker अनुमान लगाई जा सकने वाली key से किसी पीड़ित के account से अपने account तक swap या withdrawal पहले से बना सकता था, और पीड़ित के retry पर वही envelope उसे sign करने के लिए लौट आता था |
 | `POST /v1/liquidity-pools/withdraw` अब ऐसे in-flight withdrawal के लिए `409 operation_in_flight` जवाब नहीं देता जिसका sequence number account ने अभी तक इस्तेमाल नहीं किया (unsigned या छोड़ा गया envelope) | जो वॉलेट users रोक दिए गए थे | किसी और के account के लिए बना और हर 300 s पर दोबारा भेजा गया dust withdrawal हर public-key user को उस position से withdraw करने से रोक देता था। दोनों envelopes एक ही sequence number साझा करते हैं, इसलिए अधिकतम एक ही कभी settle हो सकता है |
 | settlement observer प्रति tick प्रति टेबल प्रति consumer अधिकतम 10 rows लेता है, और `GET /v1/liquidity-pools/positions` हर pool के लिए एक request की बजाय एक paged listing से Horizon पढ़ता है | Operators | एक consumer की बाढ़ बाकी सबके settlement को भूखा रखती थी, और कई pool shares रखने वाला account असीमित Horizon कॉल फैला देता था |
+| `GET /v1/onramp/payins/:id` अब `receiverId` या `updatedAt` नहीं लौटाता — वही shape जो `GET /v1/onramp/payins` लौटाता है | एक payin की read से ये दो fields पढ़ने वाले callers | ताज़ा mirror row वाला payin जैसा stored था वैसा ही लौटा दिया जाता था, इसलिए एक ही payin अपने mirror की उम्र के हिसाब से दो shapes में आता था, जिनमें से एक में internal id होता था |
+| 10 MiB से बड़ी फ़ाइल वाला `POST /v1/kyc/upload` अब `code: "payload_too_large"` के साथ `413` है; पहले यह `internal_error` था | `code` पर branch करने वाले integrators | जिस limit के भीतर caller रह सकता है, वह इस service का bug जैसी दिखती थी |
+| `POST /v1/liquidity-pools/deposit`, `/withdraw`, `GET /v1/liquidity-pools/operations`, `/operations/:id`, `POST /v1/liquidity-pools/operations/:id/submit` और `LIQUIDITY_*` webhooks में अब `memo` आता है (caller का MEMO_ID, या `null`)। Migration `20260915120000_liquidity_pool_operation_memo` से पहले बने operations `null` लौटाते हैं, भले ही उनके envelope में memo हो | कोई नहीं, जब तक कोई client अनजान fields को reject न करे | memo केवल XDR के अंदर दर्ज था, इसलिए हर `Idempotency-Key` replay तुलना के लिए envelope decode करता था |
+| `GET /v1/swaps` और `GET /v1/liquidity-pools/operations` का प्रकाशित contract अब list items पर `qr` या `commissionMemo` नहीं दिखाता। Responses नहीं बदले — ये दो fields वहाँ कभी भेजे ही नहीं गए; इनके लिए अकेला item पढ़ें | OpenAPI spec से generate किए गए clients | contract list items को single-item shape में बताता था, इसलिए generated client ऐसे दो fields type करता था जो list में कभी आते ही नहीं थे |
 
 इसके साथ आने वाले deploy नोट:
 
@@ -1334,6 +1342,26 @@ test से pin की गई है जो सुधार के बिना 
   `X-Plan-Swap-Fee-Bps` के बिना आई request केवल production में `503` है (बाकी हर जगह swaps
   चुपचाप `STELLAR_SWAP_FEE_BPS` पर लौट जाते हैं), और `/docs` — जो हर guard से बाहर है
   — केवल production में डिफ़ॉल्ट रूप से बंद है।
+- **settlement observer अब `ScheduledJob` पर चलता है।** `OBSERVER_ENABLED`,
+  `OBSERVER_INTERVAL_MS` और उसका advisory lock नहीं बदले, लेकिन log lines अब साझा
+  वाली हैं: `Settlement observer started (every Nms)`,
+  `Settlement observer (OBSERVER_ENABLED=false) disabled`, और `error` level पर
+  `SettlementObserverService cycle failed`। पुराने शब्दों पर match करने वाले alert को
+  अपडेट करना होगा।
+- **Migration `20260915120000_liquidity_pool_operation_memo`** nullable column
+  `liquidity_pool_operation.memo` जोड़ता है: table rewrite नहीं होता, केवल थोड़ी देर
+  का exclusive lock। कोई backfill नहीं है — पुरानी rows का memo base64 XDR में है,
+  जिसे SQL decode नहीं कर सकता, और उनके लिए service envelope पर लौट जाती है।
+- **Migration `20260915120100_lookup_indexes`** Pollar wallet ownership check के लिए
+  दो indexes `CONCURRENTLY` बनाता है
+  (`pollar_oauth_session(consumerId, network, walletAddress)` और
+  `pollar_user_wallet(consumerId, network, address)`)। यह writes को block नहीं करता,
+  लेकिन असफल build एक `INVALID` index छोड़ देता है जिसे `IF NOT EXISTS` मौजूद मानता
+  है: उसे
+  `SELECT c.relname FROM pg_class c JOIN pg_index i ON i.indexrelid = c.oid WHERE NOT i.indisvalid;`
+  से खोजें, `DROP INDEX CONCURRENTLY` से हटाएँ,
+  `prisma migrate resolve --rolled-back 20260915120100_lookup_indexes` चलाएँ, और फिर
+  से deploy करें।
 
 ### NestJS 12, TypeScript 6 और न्यूनतम Node 24.9
 
@@ -1815,7 +1843,7 @@ guard इसी पर निर्भर है।
 भटकाव को नहीं पकड़ता — build green रहता है जबकि ये पन्ने चुपचाप ऐसी सर्विस का वर्णन करते रहते हैं
 जो अब मौजूद ही नहीं है — इसलिए इसे उसी commit में अपडेट किया जाता है जिसमें वह कोड है जिसका यह वर्णन करता है।
 पूरी परंपरा, जिसमें यह भी शामिल है कि किस तरह का बदलाव किस सेक्शन को छूता है,
-[`CLAUDE.md`](./CLAUDE.md) में है; संक्षेप में:
+[`CLAUDE.md`](../../CLAUDE.md) में है; संक्षेप में:
 
 | जब आप… | अपडेट करें |
 | --------- | ------ |
@@ -1828,7 +1856,7 @@ guard इसी पर निर्भर है।
 
 **यह दस्तावेज़ सात भाषाओं में मौजूद है** — English, Español, Português,
 Deutsch, Français, हिन्दी और 简体中文 — और किसी एक में बदलाव सातों में बदलाव है,
-उसी commit में। English स्रोत है और बाकी उसके अनुवाद हैं:
+उसी commit में। English स्रोत है और बाकी — [`docs/i18n/`](./) में — उसके अनुवाद हैं:
 वही headings, टेबलें और code blocks, जिनमें identifiers (routes, env
 vars, headers, error codes) ठीक वैसे ही छोड़े गए हैं जैसे वे हैं। `npm run readme:check`
 CI को तब fail करता है जब कोई भाषा फ़ाइल गायब हो, जब उसकी headings English से मेल खाना बंद कर दें,

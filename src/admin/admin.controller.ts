@@ -21,7 +21,7 @@ import { ApproveReceiverDto } from '@/kyc/receivers/dto/approve-receiver.dto';
 import { EnableReceiverDto } from '@/kyc/receivers/dto/enable-receiver.dto';
 import { RequestTosDto } from '@/kyc/receivers/dto/request-tos.dto';
 import { SetAccessDto } from '@/kyc/receivers/dto/set-access.dto';
-import { resolveTosCooldownMs } from '@/kyc/receivers/receivers.service';
+import { resolveTosCooldownMs } from '@/kyc/receivers/tos-cooldown-header';
 
 /**
  * Platform-admin (owner) endpoints: a global, cross-consumer view of everything in the

@@ -21,3 +21,20 @@
  * `submit` settles a row immediately without the observer.
  */
 export const SETTLEMENT_MAX_ROWS_PER_CONSUMER = 10;
+
+/**
+ * How many observer intervals the sweep's advisory-lock transaction may stay
+ * open, and the floor under that.
+ *
+ * The lock is transaction-scoped (`pg_try_advisory_xact_lock`), so the sweep
+ * runs inside a database transaction for as long as its Horizon lookups take.
+ * The bound is what keeps a hung Horizon call from holding that transaction —
+ * and a pooled connection — open indefinitely. It has to be generous rather
+ * than tight: a full batch is one lookup per `(network, txHash)` per table plus
+ * a basis backfill, each allowed `HORIZON_TIMEOUT_MS`, and a sweep cut off by
+ * its own timeout simply repeats that work on the next tick. Four intervals
+ * leaves a slow cycle room to finish; one minute is the floor so a short
+ * `OBSERVER_INTERVAL_MS` in development does not starve the sweep of time.
+ */
+export const SETTLEMENT_LOCK_TIMEOUT_INTERVALS = 4;
+export const SETTLEMENT_LOCK_MIN_TIMEOUT_MS = 60_000;

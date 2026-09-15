@@ -117,3 +117,54 @@ describe('CustomersService.findAll', () => {
     expect(result.data[0]).toMatchObject({ total: '0.3' });
   });
 });
+
+/**
+ * A settled payment's payer lands on the merchant's customer list. The row is
+ * this module's, so payment intents ask for it here rather than writing it.
+ */
+describe('CustomersService.ensureForPayer', () => {
+  const account = 'GBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFSHONUCEOASW7QC7OX2H';
+
+  function build(existing: { id: string } | null) {
+    const prisma = {
+      customer: {
+        findFirst: jest.fn().mockResolvedValue(existing),
+        create: jest.fn().mockResolvedValue({ id: 'cus_new' }),
+      },
+    };
+    const service = new CustomersService(
+      prisma as any,
+      new ConsumerResolverService(prisma as never),
+    );
+    return { service, prisma };
+  }
+
+  it("adds a first-time payer to that consumer's customers, marked as automatic", async () => {
+    const { service, prisma } = build(null);
+
+    await service.ensureForPayer('c1', account);
+
+    // Scoped to the consumer: another tenant's customer with the same account
+    // is not this merchant's.
+    expect(prisma.customer.findFirst).toHaveBeenCalledWith({
+      where: { consumerId: 'c1', account },
+      select: { id: true },
+    });
+    expect(prisma.customer.create).toHaveBeenCalledWith({
+      data: {
+        consumerId: 'c1',
+        name: 'GBRPYH…OX2H',
+        account,
+        reference: 'auto',
+      },
+    });
+  });
+
+  it('leaves a payer already on the list alone, so repeat payments add no duplicate', async () => {
+    const { service, prisma } = build({ id: 'cus_1' });
+
+    await service.ensureForPayer('c1', account);
+
+    expect(prisma.customer.create).not.toHaveBeenCalled();
+  });
+});

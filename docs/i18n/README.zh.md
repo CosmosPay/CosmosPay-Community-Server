@@ -1,6 +1,6 @@
 # Cosmos Pay — 支付微服务
 
-[English](./README.md) · [Español](./README.es.md) · [Português](./README.pt.md) · [Deutsch](./README.de.md) · [Français](./README.fr.md) · [हिन्दी](./README.hi.md) · **简体中文**
+[English](../../README.md) · [Español](./README.es.md) · [Português](./README.pt.md) · [Deutsch](./README.de.md) · [Français](./README.fr.md) · [हिन्दी](./README.hi.md) · **简体中文**
 
 基于 **NestJS 12** + **Prisma 7 (PostgreSQL)** 构建的支付微服务。
 
@@ -35,6 +35,7 @@ src/
   config/
     configuration.ts              typed config
     env.validation.ts             fail-fast env validation (secret required when enforcing)
+    *-whitelist.ts                KYC and Pollar redirect allow-lists
   prisma/                         PrismaModule + PrismaService (global)
   common/
     guards/apisix.guard.ts        THE gateway gate
@@ -48,11 +49,12 @@ src/
     validators/                   IsStellarAddress (StrKey-based)
     errors/api-error.ts           ApiError + machine-readable ApiErrorCode
     services/advisory-lock...     cluster-wide lock for the background timers
-  stellar/                        per-network Horizon servers (bounded timeout)
+  stellar/                        per-network Horizon servers (bounded timeout), account loader,
+                                  SEP-7 links, signed-envelope relay, settlement repository
   payment-intents/                Stellar payment intents (controller, service, DTO) — emits events
   swaps/                          Stellar native swaps (path payments): quote, build XDR, submit
-  liquidity-pools/                AMM deposit/withdraw, cost basis + commission on gain
-  observer/                       background reconciler: swaps + LP ops against Horizon
+  liquidity-pools/                AMM deposit/withdraw, pool + position reads, cost basis + commission on gain
+  observer/                       background reconciler: swaps + LP ops against Horizon, one adapter per table
   webhooks/                       webhook endpoints CRUD + dispatcher (HMAC-signed, retried)
   blindpay/                       BlindPay core: HTTP client, Svix verify, sync + inbound webhook
   kyc/                            receivers (KYC/KYB), wallets, bank accounts, doc upload
@@ -66,6 +68,7 @@ src/
   analytics/                      summary, balances, API logs, webhook logs
   activity/                       client telemetry ingest + feed (wallet, dashboard)
   admin/                          cross-tenant platform admin (console-only), audited
+  audit/                          audit-trail writer, called inside other modules' transactions
   health/                         liveness/readiness probes (@Public)
 prisma/schema.prisma              Consumer, PaymentIntent, Swap, LiquidityPoolOperation,
                                   WebhookEndpoint/Delivery/EmittedEvent, BlindpayReceiver,
@@ -77,6 +80,7 @@ prisma/schema.prisma              Consumer, PaymentIntent, Swap, LiquidityPoolOp
 test/                             e2e suites: gateway gate, admin + alias console gates,
                                   payment intents, KYC, webhooks, Pollar
 scripts/                          OpenAPI generator, README check, operator scripts
+docs/i18n/                        this README in es, pt, de, fr, hi, zh
 ```
 
 ## API
@@ -854,12 +858,19 @@ key 按网络划分，且 Pollar 在前缀中编码了网络和 key 类型，因
 | `POST /v1/swaps`、`/v1/liquidity-pools/deposit` 和 `/withdraw`：复用的 `Idempotency-Key` 搭配不同的请求——不同的 memo 或滑点、另一个网络，或把存入用的 key 复用于取出——会返回 `409 idempotency_conflict`。携带无效资产、滑点或 memo 的重放现在会得到正常的 `400` | 为不同操作复用同一个 key 的客户端 | 在共享公共 key 下，攻击者可以用一个可猜测的 key，预先创建一笔从受害者账户转到自己账户的 swap 或取出操作，而受害者重试时拿到的正是这个信封，并由受害者亲自签名 |
 | `POST /v1/liquidity-pools/withdraw` 对于账户尚未使用其序列号的进行中取出操作（未签名或已放弃的信封），不再返回 `409 operation_in_flight` | 曾被阻塞的钱包用户 | 一笔为他人账户构建、每 300 s 重新发送一次的粉尘取出操作，会让所有公共 key 用户都无法取出该持仓。两个信封共享同一个序列号，因此最多只有一个能够结算 |
 | 结算观察器每个周期对每个消费者、每张表最多处理 10 行，且 `GET /v1/liquidity-pools/positions` 通过一次分页列表读取 Horizon，而不是每个池发起一次请求 | 运维人员 | 某一个消费者的洪泛会让其他所有人的结算陷入饥饿，而持有大量池份额的账户会扇出无上限的 Horizon 调用 |
+| `GET /v1/onramp/payins/:id` 不再返回 `receiverId` 或 `updatedAt`——与 `GET /v1/onramp/payins` 返回的结构一致 | 从单个 payin 读取中使用这两个字段的调用方 | 镜像行较新的 payin 会按存储原样返回，因此同一个 payin 会因镜像新旧而呈现两种结构，其中一种还带有内部 id |
+| `POST /v1/kyc/upload` 上传超过 10 MiB 的文件时返回 `413`，`code: "payload_too_large"`；此前为 `internal_error` | 依据 `code` 分支处理的集成方 | 调用方本可以遵守的限制，看起来却像本服务的 bug |
+| `POST /v1/liquidity-pools/deposit`、`/withdraw`、`GET /v1/liquidity-pools/operations`、`/operations/:id`、`POST /v1/liquidity-pools/operations/:id/submit` 以及 `LIQUIDITY_*` webhook 现在都带有 `memo`（调用方的 MEMO_ID，或 `null`）。在迁移 `20260915120000_liquidity_pool_operation_memo` 之前创建的操作返回 `null`，即使其信封中带有 memo | 无人受影响，除非客户端会拒绝未知字段 | memo 以前只记录在 XDR 中，因此每次 `Idempotency-Key` 重放都要解码信封来比较它 |
+| `GET /v1/swaps` 和 `GET /v1/liquidity-pools/operations` 的已发布契约不再在列表项上声明 `qr` 或 `commissionMemo`。响应本身没有变化——这两个字段从未在列表中返回；需要时请读取单个条目 | 根据 OpenAPI 规范生成的客户端 | 契约把列表项声明为单条读取的结构，因此生成的客户端会为列表中从未出现的两个字段生成类型 |
 
 随之而来的部署说明：
 
 - **迁移 `20260910120000_aliases`** 会创建 `alias`、`alias_address`、`alias_challenge` 和 `alias_recovery`。请在新构建承接流量之前运行 `migrate deploy`。
 - **新的咨询锁 id：`881_008`（`AliasChallengeSweeper`）。** 无需配置；列在这里是为了确保该编号永不被复用。
 - **在生产环境中设置 `NODE_ENV=production`。** `.env.example` 中提供的是 `development`，而有两项保护依赖于它：缺少 `X-Plan-Swap-Fee-Bps` 的请求只有在生产环境中才会返回 `503`（在其他任何环境中，swap 会悄悄回退到 `STELLAR_SWAP_FEE_BPS`），而 `/docs`——不受任何 guard 保护——也只有在生产环境中才默认关闭。
+- **结算观察器现在基于 `ScheduledJob` 运行。** `OBSERVER_ENABLED`、`OBSERVER_INTERVAL_MS` 及其咨询锁均未改变，但日志行改为共享的格式：`Settlement observer started (every Nms)`、`Settlement observer (OBSERVER_ENABLED=false) disabled`，以及 `error` 级别的 `SettlementObserverService cycle failed`。匹配旧文案的告警需要更新。
+- **迁移 `20260915120000_liquidity_pool_operation_memo`** 添加可空列 `liquidity_pool_operation.memo`：不会重写表，只会短暂持有排他锁。没有回填——旧行的 memo 位于 base64 XDR 中，SQL 无法解码，服务会对这些行回退到信封。
+- **迁移 `20260915120100_lookup_indexes`** 以 `CONCURRENTLY` 方式为 Pollar 钱包归属检查构建两个索引（`pollar_oauth_session(consumerId, network, walletAddress)` 和 `pollar_user_wallet(consumerId, network, address)`）。它不会阻塞写入，但构建失败会留下一个 `INVALID` 索引，而 `IF NOT EXISTS` 会把它视为已存在：用 `SELECT c.relname FROM pg_class c JOIN pg_index i ON i.indexrelid = c.oid WHERE NOT i.indisvalid;` 找到它，用 `DROP INDEX CONCURRENTLY` 删除，运行 `prisma migrate resolve --rolled-back 20260915120100_lookup_indexes`，然后重新部署。
 
 ### NestJS 12、TypeScript 6 与 Node 最低版本 24.9
 
@@ -1173,7 +1184,7 @@ npm run readme:check     # the seven READMEs match in structure and list every r
 
 ## 让本文档保持准确
 
-**README 是变更的一部分，而不是后续工作。** CI 中没有任何东西能发现它的偏差——构建保持绿色，而这些页面却悄悄地描述着一个已经不存在的服务——因此它与所描述的代码在同一个提交中更新。完整的约定，包括每类变更涉及哪个章节，见 [`CLAUDE.md`](./CLAUDE.md)；简要版本如下：
+**README 是变更的一部分，而不是后续工作。** CI 中没有任何东西能发现它的偏差——构建保持绿色，而这些页面却悄悄地描述着一个已经不存在的服务——因此它与所描述的代码在同一个提交中更新。完整的约定，包括每类变更涉及哪个章节，见 [`CLAUDE.md`](../../CLAUDE.md)；简要版本如下：
 
 | 当你…… | 需要更新 |
 | --------- | ------ |
@@ -1184,7 +1195,7 @@ npm run readme:check     # the seven READMEs match in structure and list every r
 | 添加、重命名、删除路由或更改其 scope | [路由索引](#路由索引)，以及该模块自己的章节 |
 | 了解到运维人员或集成方绝不能错过的信息 | 它所属的章节 |
 
-**本文档有七种语言版本**——English、Español、Português、Deutsch、Français、हिन्दी 和 简体中文——对其中一个的修改就是对全部七个的修改，并且在同一个提交中完成。英文是源文本，其他版本都是它的翻译：相同的标题、表格和代码块，标识符（路由、环境变量、请求头、错误码）保持原样。当某个语言文件缺失、其标题与英文不再一致，或 OpenAPI 契约中的某个路由在其路由索引中缺失时，`npm run readme:check` 会让 CI 失败。
+**本文档有七种语言版本**——English、Español、Português、Deutsch、Français、हिन्दी 和 简体中文——对其中一个的修改就是对全部七个的修改，并且在同一个提交中完成。英文是源文本，其他版本（位于 [`docs/i18n/`](./)）都是它的翻译：相同的标题、表格和代码块，标识符（路由、环境变量、请求头、错误码）保持原样。当某个语言文件缺失、其标题与英文不再一致，或 OpenAPI 契约中的某个路由在其路由索引中缺失时，`npm run readme:check` 会让 CI 失败。
 
 有两类内容刻意**不**放在这里：**请求和响应 schema**，它们属于生成的 OpenAPI 契约（由 `npm run openapi:check` 保证其准确）；以及**代码已经表达的任何内容**——本文档讲的是一件事*为什么*是现在这个样子以及如何运维它，因为关于它*做什么*的第二份副本，只是又一份需要保持正确的副本。
 

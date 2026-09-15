@@ -5,6 +5,7 @@ import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { WebhookTerminalEmitter } from '@/webhooks/webhook-terminal-emitter.service';
 import { PaymentIntentsService } from '@/payment-intents/payment-intents.service';
 import { InvalidPaymentIntentTransitionError } from '@/payment-intents/payment-intent-state-machine';
+import { Sep7LinkBuilder } from '@/payment-intents/sep7-link-builder.service';
 
 describe('PaymentIntentsService.transition (guards + audit)', () => {
   const intentBase = {
@@ -35,10 +36,12 @@ describe('PaymentIntentsService.transition (guards + audit)', () => {
   let events: EventEmitter2;
   let service: PaymentIntentsService;
   let auditCreates: any[];
+  let customers: { ensureForPayer: jest.Mock };
 
   beforeEach(() => {
     row = { ...intentBase };
     auditCreates = [];
+    customers = { ensureForPayer: jest.fn().mockResolvedValue(undefined) };
 
     prisma = {
       paymentIntent: {
@@ -81,6 +84,8 @@ describe('PaymentIntentsService.transition (guards + audit)', () => {
         }
         return Promise.all(fn);
       }),
+      // Kept only so a regression is visible: the payer's customer row is
+      // CustomersService's to write, and these must never be called from here.
       customer: {
         findFirst: jest.fn().mockResolvedValue(null),
         create: jest.fn(),
@@ -109,8 +114,11 @@ describe('PaymentIntentsService.transition (guards + audit)', () => {
       prisma,
       new WebhookTerminalEmitter(prisma, events),
       {} as any,
-      {} as any,
+      // Responses render their QR through the builder; nothing here builds an
+      // envelope, so it needs neither Horizon nor an account loader.
+      new Sep7LinkBuilder(config, {} as never, {} as never),
       new ConsumerResolverService(prisma as never),
+      customers as any,
     );
   });
 
@@ -214,6 +222,64 @@ describe('PaymentIntentsService.transition (guards + audit)', () => {
       'status EXPIRED is terminal and cannot be abandoned',
     );
     expect(err.code).toBe('INVALID_PAYMENT_INTENT_TRANSITION');
+  });
+
+  /**
+   * A settled payment's payer joins the merchant's customers. That row belongs
+   * to the customers module, so settlement asks CustomersService for it — and
+   * it happens after the settlement, which a failure there must not undo.
+   */
+  describe('recording the payer on settlement', () => {
+    const settle = (payer?: string) =>
+      service.transition(row.id, 'SUCCEEDED', {
+        consumerUsername: 'cosmos_u1',
+        actor: 'validate',
+        txHash: 'd'.repeat(64),
+        payer,
+      });
+
+    it('hands the on-chain payer to CustomersService and never writes the customer table', async () => {
+      await settle('GPAYER');
+
+      expect(customers.ensureForPayer).toHaveBeenCalledWith('c1', 'GPAYER');
+      expect(prisma.customer.findFirst).not.toHaveBeenCalled();
+      expect(prisma.customer.create).not.toHaveBeenCalled();
+    });
+
+    it("falls back to the intent's own source when no payer was observed", async () => {
+      await settle();
+
+      expect(customers.ensureForPayer).toHaveBeenCalledWith('c1', 'GSRC');
+    });
+
+    it('records nobody when neither a payer nor a source is known', async () => {
+      (row as { source: string | null }).source = null;
+
+      await settle();
+
+      expect(customers.ensureForPayer).not.toHaveBeenCalled();
+    });
+
+    it('still settles when the customer cannot be recorded', async () => {
+      customers.ensureForPayer.mockRejectedValueOnce(
+        new Error('customer table unavailable'),
+      );
+
+      const updated = await settle('GPAYER');
+
+      expect(updated.status).toBe('SUCCEEDED');
+      expect(auditCreates).toHaveLength(1);
+    });
+
+    it('records nobody on a transition that does not settle', async () => {
+      await service.transition(row.id, 'SUBMITTED', {
+        consumerUsername: 'cosmos_u1',
+        actor: 'api',
+        payer: 'GPAYER',
+      });
+
+      expect(customers.ensureForPayer).not.toHaveBeenCalled();
+    });
   });
 
   /**
@@ -369,8 +435,9 @@ describe('PaymentIntentsService API settlement is chain-verified', () => {
       prisma,
       new WebhookTerminalEmitter(prisma, { emit: jest.fn() } as never),
       { verifyByHash: verify } as never,
-      {} as never,
+      new Sep7LinkBuilder(config, {} as never, {} as never),
       new ConsumerResolverService(prisma),
+      { ensureForPayer: jest.fn().mockResolvedValue(undefined) } as never,
     );
     return { service, prisma, verify };
   }

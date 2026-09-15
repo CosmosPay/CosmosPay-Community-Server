@@ -1,3 +1,4 @@
+import { AdvisoryLockKey } from '@/common/services/advisory-lock.service';
 import { SETTLEMENT_MAX_ROWS_PER_CONSUMER } from '@/observer/observer.constants';
 import { SettlementObserverService } from '@/observer/settlement-observer.service';
 
@@ -6,6 +7,10 @@ import { SettlementObserverService } from '@/observer/settlement-observer.servic
  * pin its shape and what the sweep does with the rows it deals. The settlement
  * branches — duplicate hashes, submit races — are covered next to the domain
  * services in the swaps and liquidity-pools specs.
+ *
+ * The fairness tests drive `reconcile` directly, so the cost basis service and
+ * the advisory lock are stubs there; the last block covers the scheduled tick
+ * that wraps the sweep.
  */
 
 type Outcome = 'succeeded' | 'failed' | number;
@@ -107,9 +112,11 @@ describe('SettlementObserverService — one tick is fair across consumers', () =
       stellar as any,
       makeDomain() as any,
       makeDomain() as any,
+      {} as any,
+      {} as any,
     );
 
-    await (observer as any).reconcileSwaps(50);
+    await (observer as any).reconcile('swaps', 50);
 
     const [sql, ...values] = prisma.$queryRaw.mock.calls[0];
     const text = (sql as string[]).join('?');
@@ -134,9 +141,11 @@ describe('SettlementObserverService — one tick is fair across consumers', () =
       stellar as any,
       makeDomain() as any,
       makeDomain() as any,
+      {} as any,
+      {} as any,
     );
 
-    await (observer as any).reconcileLiquidity(50);
+    await (observer as any).reconcile('liquidity', 50);
 
     const [sql, ...values] = prisma.$queryRaw.mock.calls[0];
     const text = (sql as string[]).join('?');
@@ -168,9 +177,11 @@ describe('SettlementObserverService — one tick is fair across consumers', () =
       stellar as any,
       makeDomain() as any,
       swaps as any,
+      {} as any,
+      {} as any,
     );
 
-    await (observer as any).reconcileSwaps(50);
+    await (observer as any).reconcile('swaps', 50);
 
     expect(lookups).toHaveLength(SETTLEMENT_MAX_ROWS_PER_CONSUMER + 1);
     expect(lookups).toContain('tx_quiet');
@@ -192,9 +203,11 @@ describe('SettlementObserverService — one tick is fair across consumers', () =
       stellar as any,
       makeDomain() as any,
       swaps as any,
+      {} as any,
+      {} as any,
     );
 
-    await (observer as any).reconcileSwaps(50);
+    await (observer as any).reconcile('swaps', 50);
 
     expect(lookups).toHaveLength(0);
     expect(swaps.finalizeSucceeded).not.toHaveBeenCalled();
@@ -216,13 +229,177 @@ describe('SettlementObserverService — one tick is fair across consumers', () =
       stellar as any,
       liquidity as any,
       makeDomain() as any,
+      {} as any,
+      {} as any,
     );
 
-    await (observer as any).reconcileLiquidity(50);
+    await (observer as any).reconcile('liquidity', 50);
 
     const text = (prisma.$queryRaw.mock.calls[0][0] as string[]).join('?');
     expect(text).not.toMatch(/expiresAt/);
     expect(liquidity.finalizeExpired).toHaveBeenCalledTimes(1);
     expect(liquidity.finalizeExpired).toHaveBeenCalledWith('absent');
+  });
+});
+
+describe('SettlementObserverService — runs as a ScheduledJob', () => {
+  function observerConfig(overrides: Record<string, unknown> = {}) {
+    return {
+      get: () => ({
+        enabled: true,
+        intervalMs: 15_000,
+        batchSize: 50,
+        ...overrides,
+      }),
+    } as any;
+  }
+
+  /** Nothing in flight and no deposit missing its basis. */
+  function quietPrisma() {
+    return {
+      $queryRaw: jest.fn().mockResolvedValue([]),
+      swap: { findMany: jest.fn() },
+      liquidityPoolOperation: {
+        findMany: jest.fn().mockResolvedValue([]),
+        findUnique: jest.fn(),
+      },
+    };
+  }
+
+  function make(
+    config: any,
+    prisma: ReturnType<typeof quietPrisma> = quietPrisma(),
+    basis: any = { captureDepositBasis: jest.fn() },
+  ) {
+    const locks = {
+      runExclusive: jest.fn(
+        async (_key: unknown, work: () => Promise<unknown>, _ms?: number) =>
+          work(),
+      ),
+    };
+    const { stellar } = makeStellar();
+    const observer = new SettlementObserverService(
+      config,
+      prisma as any,
+      stellar as any,
+      makeDomain() as any,
+      makeDomain() as any,
+      basis,
+      locks as any,
+    );
+    return { observer, locks, prisma };
+  }
+
+  it('sweeps under the SettlementObserver lock, bounded by four intervals', async () => {
+    const { observer, locks } = make(observerConfig({ intervalMs: 30_000 }));
+
+    await observer.tick();
+
+    expect(locks.runExclusive).toHaveBeenCalledWith(
+      AdvisoryLockKey.SettlementObserver,
+      expect.any(Function),
+      120_000,
+    );
+  });
+
+  it('never bounds the lock below one minute', async () => {
+    const { observer, locks } = make(observerConfig({ intervalMs: 5_000 }));
+
+    await observer.tick();
+
+    expect(locks.runExclusive.mock.calls[0][2]).toBe(60_000);
+  });
+
+  it('reconciles swaps, then liquidity pool operations, then backfills cost basis', async () => {
+    const { observer, prisma } = make(observerConfig());
+
+    await observer.tick();
+
+    const tables = prisma.$queryRaw.mock.calls.map(
+      ([sql]) => /FROM "(\w+)"/.exec((sql as string[]).join('?'))?.[1],
+    );
+    expect(tables).toEqual(['swap', 'liquidity_pool_operation']);
+    expect(prisma.liquidityPoolOperation.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { kind: 'DEPOSIT', status: 'SUCCEEDED', sharesReceived: null },
+        take: 50,
+      }),
+    );
+    expect(
+      prisma.liquidityPoolOperation.findMany.mock.invocationCallOrder[0],
+    ).toBeGreaterThan(prisma.$queryRaw.mock.invocationCallOrder[1]);
+  });
+
+  it('sweeps nothing on a replica that lost the lock', async () => {
+    const { observer, locks, prisma } = make(observerConfig());
+    locks.runExclusive.mockResolvedValue(undefined);
+
+    await observer.tick();
+
+    expect(prisma.$queryRaw).not.toHaveBeenCalled();
+    expect(prisma.liquidityPoolOperation.findMany).not.toHaveBeenCalled();
+  });
+
+  it('backfills a missing deposit basis through the cost basis service', async () => {
+    const op = {
+      id: 'dep_1',
+      kind: 'DEPOSIT',
+      status: 'SUCCEEDED',
+      sharesReceived: null,
+    };
+    const prisma = quietPrisma();
+    prisma.liquidityPoolOperation.findMany.mockResolvedValue([op]);
+    prisma.liquidityPoolOperation.findUnique.mockResolvedValue({
+      sharesReceived: '100',
+    });
+    const basis = {
+      captureDepositBasis: jest.fn().mockResolvedValue(undefined),
+    };
+    const { observer } = make(observerConfig(), prisma, basis);
+
+    await observer.tick();
+
+    expect(basis.captureDepositBasis).toHaveBeenCalledWith(op);
+  });
+
+  it('survives a sweep that throws, so the timer keeps firing', async () => {
+    const { observer, locks } = make(observerConfig());
+    locks.runExclusive.mockRejectedValue(new Error('connection reset'));
+
+    await expect(observer.tick()).resolves.toBeUndefined();
+  });
+
+  it('starts no timer when OBSERVER_ENABLED=false', () => {
+    const setIntervalSpy = jest.spyOn(global, 'setInterval');
+    try {
+      make(observerConfig({ enabled: false })).observer.onModuleInit();
+
+      expect(setIntervalSpy).not.toHaveBeenCalled();
+    } finally {
+      setIntervalSpy.mockRestore();
+    }
+  });
+
+  it('polls every OBSERVER_INTERVAL_MS on an unref-ed timer when enabled', () => {
+    const timer = { unref: jest.fn() };
+    const setIntervalSpy = jest
+      .spyOn(global, 'setInterval')
+      .mockReturnValue(timer as any);
+    const clearIntervalSpy = jest
+      .spyOn(global, 'clearInterval')
+      .mockImplementation(() => undefined);
+    try {
+      const { observer } = make(observerConfig({ intervalMs: 7_000 }));
+
+      observer.onModuleInit();
+      expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 7_000);
+      expect(timer.unref).toHaveBeenCalled();
+
+      observer.onModuleDestroy();
+      expect(clearIntervalSpy).toHaveBeenCalledWith(timer);
+    } finally {
+      setIntervalSpy.mockRestore();
+      clearIntervalSpy.mockRestore();
+    }
   });
 });

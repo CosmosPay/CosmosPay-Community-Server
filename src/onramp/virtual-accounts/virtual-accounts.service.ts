@@ -3,7 +3,7 @@ import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface'
 import { PaginationQueryDto } from '@/common/dto/pagination.query.dto';
 import { page } from '@/common/pagination';
 import { PrismaService } from '@/prisma/prisma.service';
-import { BlindpayClient } from '@/blindpay/blindpay.client';
+import { BlindpayOnrampApi } from '@/blindpay/blindpay-onramp.api';
 import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
 import {
   BlindpayObject,
@@ -22,7 +22,7 @@ import { CreateVirtualAccountDto } from '@/onramp/dto/create-virtual-account.dto
 export class VirtualAccountsService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly blindpay: BlindpayClient,
+    private readonly blindpay: BlindpayOnrampApi,
     private readonly consumers: ConsumerResolverService,
     private readonly receivers: ReceiversService,
   ) {}
@@ -41,10 +41,8 @@ export class VirtualAccountsService {
       local.id,
       dto.blockchain_wallet_id,
     );
-    const created = await this.blindpay.post<BlindpayObject>(
-      this.blindpay.instancePath(
-        `/customers/${receiver.blindpayId}/virtual-accounts`,
-      ),
+    const created = await this.blindpay.createVirtualAccount(
+      receiver.blindpayId,
       { ...dto, blockchain_wallet_id: walletBlindpayId },
     );
     return this.mirror(local.id, receiver.id, created);

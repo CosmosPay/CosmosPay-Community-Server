@@ -157,17 +157,24 @@ explaining what breaks without it, not just its name.
 
 ## Seven READMEs, one document
 
-The README is published in seven languages, and they are one document, not seven:
+The README is published in seven languages, and they are one document, not seven.
+English stays at the root, because that is the file GitHub renders; the six
+translations live together in `docs/i18n/`:
 
 | File | Language |
 | ---- | -------- |
 | `README.md` | English — the source the others are translated from |
-| `README.es.md` | Español |
-| `README.pt.md` | Português |
-| `README.de.md` | Deutsch |
-| `README.fr.md` | Français |
-| `README.hi.md` | हिन्दी (Hindi) |
-| `README.zh.md` | 简体中文 (Simplified Chinese) |
+| `docs/i18n/README.es.md` | Español |
+| `docs/i18n/README.pt.md` | Português |
+| `docs/i18n/README.de.md` | Deutsch |
+| `docs/i18n/README.fr.md` | Français |
+| `docs/i18n/README.hi.md` | हिन्दी (Hindi) |
+| `docs/i18n/README.zh.md` | 简体中文 (Simplified Chinese) |
+
+Links inside a translation are relative to `docs/i18n/`: the English file is
+`../../README.md`, `CLAUDE.md` is `../../CLAUDE.md`, and a sibling translation is
+`./README.pt.md`. A new translation goes in the same folder, in the check's file
+list, and in every selector line.
 
 - **A change to one is a change to all seven, in the same commit.** New or
   changed routes, a behaviour change, an environment variable, an upgrade note, a
@@ -230,8 +237,11 @@ table. These are the rules that did not hold on their own:
   - `process.env` is read only in `src/config/configuration.ts`.
 - **Look before writing a helper.** Grep `src/stellar/` and `src/common/` for a
   Stellar, pricing or tenancy helper first: `resolveAsset`,
-  `StellarAccountLoader`, `resolveNetwork`, `resolvePlanCommissionBps` and
-  `ConsumerResolverService` exist because private copies drifted apart.
+  `StellarAccountLoader` (including `assertCanAfford`), `resolveNetwork`,
+  `resolvePlanCommissionBps`, `ConsumerResolverService`, `resolveMemoId`,
+  `resolveSlippage` / `resolveIdempotencyKey`, the SEP-7 builders in
+  `stellar/sep7.ts` and `SignedTransactionRelay` exist because private copies
+  drifted apart.
 
 ## Security invariants a change must keep
 

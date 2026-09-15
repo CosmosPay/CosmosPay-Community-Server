@@ -1,10 +1,10 @@
 import { HttpStatus } from '@nestjs/common';
+import { BlindpayKycApi } from '@/blindpay/blindpay-kyc.api';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import {
   RECEIVER_PUBLIC_SELECT,
   ReceiversService,
   isElevatedConsumer,
-  resolveTosCooldownMs,
 } from '@/kyc/receivers/receivers.service';
 import {
   ALLOWED_TRANSITIONS,
@@ -112,7 +112,9 @@ function makeService() {
   };
   const service = new ReceiversService(
     prisma,
-    blindpay as any,
+    // The real provider surface over a mocked transport, so every path asserted
+    // below is the exact request BlindPay receives.
+    new BlindpayKycApi(blindpay as any),
     consumers as any,
     sync as any,
     config as any,
@@ -784,24 +786,6 @@ describe('ReceiversService.requestTos — the resend cooldown is not header-driv
   });
 });
 
-describe('resolveTosCooldownMs — parsing only', () => {
-  it('returns undefined without the internal marker', () => {
-    expect(resolveTosCooldownMs(undefined, '0')).toBeUndefined();
-    expect(resolveTosCooldownMs('0', '0')).toBeUndefined();
-  });
-
-  it('parses a non-negative value when the marker is present', () => {
-    expect(resolveTosCooldownMs('1', '0')).toBe(0);
-    expect(resolveTosCooldownMs(['1'], ['60000'])).toBe(60000);
-  });
-
-  it('rejects a missing or nonsensical value', () => {
-    expect(resolveTosCooldownMs('1', '')).toBeUndefined();
-    expect(resolveTosCooldownMs('1', 'soon')).toBeUndefined();
-    expect(resolveTosCooldownMs('1', '-1')).toBeUndefined();
-  });
-});
-
 describe('ReceiversService.setAccess — the kill-switch is not tenant-flippable', () => {
   it('refuses a plain kyc:write key with 403', async () => {
     const { service, prisma } = makeService();
@@ -816,6 +800,8 @@ describe('ReceiversService.setAccess — the kill-switch is not tenant-flippable
   it('lets an admin-role key toggle it, without returning raw', async () => {
     const { service, prisma } = makeService();
     prisma.blindpayReceiver.findFirst.mockResolvedValue(baseRow());
+    // The tenant path now delegates to setAccessById, which re-checks existence by id.
+    prisma.blindpayReceiver.findUnique.mockResolvedValue({ id: 'rcv_1' });
     prisma.blindpayReceiver.update.mockResolvedValue(
       publicRow({ disabled: true }),
     );
@@ -829,6 +815,106 @@ describe('ReceiversService.setAccess — the kill-switch is not tenant-flippable
     });
     expect(result.disabled).toBe(true);
     expect(result).not.toHaveProperty('raw');
+  });
+
+  it("404s on another consumer's receiver before anything is written", async () => {
+    const { service, prisma, auditRows } = makeService();
+    prisma.blindpayReceiver.findFirst.mockResolvedValue(null);
+
+    const err = await rejection(
+      service.setAccess(ADMIN_CONSUMER, 'foreign', true),
+    );
+
+    expect(err.getStatus()).toBe(HttpStatus.NOT_FOUND);
+    expect(prisma.blindpayReceiver.update).not.toHaveBeenCalled();
+    expect(auditRows).toHaveLength(0);
+  });
+
+  it('writes no audit row on the tenant path', async () => {
+    const { service, prisma, auditRows } = makeService();
+    prisma.blindpayReceiver.findFirst.mockResolvedValue(baseRow());
+    prisma.blindpayReceiver.findUnique.mockResolvedValue({ id: 'rcv_1' });
+    prisma.blindpayReceiver.update.mockResolvedValue(publicRow());
+
+    await service.setAccess(ADMIN_CONSUMER, 'rcv_1', false);
+
+    expect(auditRows).toHaveLength(0);
+  });
+});
+
+describe('ReceiversService.setAccessById — the one writer of the kill-switch', () => {
+  const AUDIT = {
+    actorId: 'cosmos_u1',
+    actorRole: 'owner',
+    action: 'receivers.setAccess',
+    resourceType: 'receiver',
+    resourceId: 'rcv_1',
+    metadata: { disabled: true },
+  };
+
+  it('commits the flag and the audit row in one transaction', async () => {
+    const { service, prisma, auditRows } = makeService();
+    prisma.blindpayReceiver.findUnique.mockResolvedValue({ id: 'rcv_1' });
+    prisma.blindpayReceiver.update.mockResolvedValue(
+      publicRow({ disabled: true }),
+    );
+
+    const result = await service.setAccessById('rcv_1', true, AUDIT);
+
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(prisma.blindpayReceiver.findUnique).toHaveBeenCalledWith({
+      where: { id: 'rcv_1' },
+      select: { id: true },
+    });
+    expect(prisma.blindpayReceiver.update).toHaveBeenCalledWith({
+      where: { id: 'rcv_1' },
+      data: { disabled: true },
+      select: RECEIVER_PUBLIC_SELECT,
+    });
+    expect(auditRows).toEqual([AUDIT]);
+    expect(result).not.toHaveProperty('raw');
+  });
+
+  it('rolls the flag back when the audit insert fails', async () => {
+    const { service, prisma } = makeService();
+    let disabled = false;
+    prisma.blindpayReceiver.findUnique.mockResolvedValue({ id: 'rcv_1' });
+    prisma.blindpayReceiver.update.mockImplementation(async ({ data }: any) => {
+      disabled = data.disabled;
+      return publicRow({ disabled });
+    });
+    prisma.adminAuditLog.create.mockRejectedValue(
+      new Error('audit write failed'),
+    );
+    prisma.$transaction.mockImplementation(async (fn: any) => {
+      try {
+        return await fn(prisma);
+      } catch (err) {
+        // Simulate rollback of the in-memory mutation.
+        disabled = false;
+        throw err;
+      }
+    });
+
+    await expect(service.setAccessById('rcv_1', true, AUDIT)).rejects.toThrow(
+      'audit write failed',
+    );
+
+    expect(prisma.blindpayReceiver.update).toHaveBeenCalled();
+    expect(disabled).toBe(false);
+  });
+
+  it('404s without writing the flag or an audit row when the receiver is missing', async () => {
+    const { service, prisma, auditRows } = makeService();
+    prisma.blindpayReceiver.findUnique.mockResolvedValue(null);
+
+    const err = await rejection(service.setAccessById('missing', true, AUDIT));
+
+    expect(err.getStatus()).toBe(HttpStatus.NOT_FOUND);
+    expect(err.code).toBe(ApiErrorCode.NotFound);
+    expect(err.message).toBe('Receiver not found');
+    expect(prisma.blindpayReceiver.update).not.toHaveBeenCalled();
+    expect(auditRows).toHaveLength(0);
   });
 });
 

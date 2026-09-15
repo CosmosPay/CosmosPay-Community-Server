@@ -4,6 +4,7 @@ import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
 import { WebhookTerminalEmitter } from '@/webhooks/webhook-terminal-emitter.service';
 import { PaymentIntentsService } from '@/payment-intents/payment-intents.service';
+import { Sep7LinkBuilder } from '@/payment-intents/sep7-link-builder.service';
 
 /**
  * `(consumer, memo)` is the idempotency key for a create, and under the shared
@@ -83,11 +84,11 @@ describe('PaymentIntentsService create replay', () => {
       },
       webhookEmittedEvent: { create: jest.fn(async () => ({})) },
     } as any;
-    const loadAccount = jest.fn(async (id: string) => new Account(id, '1'));
-    const stellar = {
-      server: () => ({ loadAccount }),
-      passphrase: () => Networks.TESTNET,
-    };
+    // The envelope builder's only Horizon call is loading the source account.
+    const loadAccount = jest.fn(
+      async (_network: string, id: string) => new Account(id, '1'),
+    );
+    const stellar = { passphrase: () => Networks.TESTNET };
     const config = {
       get: () => ({
         network: 'testnet',
@@ -96,13 +97,15 @@ describe('PaymentIntentsService create replay', () => {
         ttlSeconds: 3600,
       }),
     } as never;
+    const accounts = { load: loadAccount } as never;
     const service = new PaymentIntentsService(
       config,
       prisma,
       new WebhookTerminalEmitter(prisma, { emit: jest.fn() } as never),
       {} as never,
-      stellar as never,
+      new Sep7LinkBuilder(config, stellar as never, accounts),
       new ConsumerResolverService(prisma),
+      { ensureForPayer: jest.fn() } as never,
     );
     return { service, prisma, loadAccount };
   }

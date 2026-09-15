@@ -9,13 +9,20 @@ import {
   type OperationObject,
 } from '@nestjs/swagger';
 import { ApiErrorBodyEntity } from '@/common/errors/api-error.entity';
+import type { AppConfig } from '@/config/configuration';
 
 /**
  * Single source of truth for the OpenAPI document. Used both by the running
  * server (Swagger UI at /docs) and by the `openapi:generate` script that writes
  * the spec to disk so other services can consume it.
+ *
+ * Settings arrive as typed configuration instead of being read here, because
+ * the environment is read only in `configuration.ts`. The two callers get them
+ * differently: `main.ts` from `ConfigService`, and the generator by calling the
+ * factory itself — it boots in preview mode, which never instantiates
+ * `ConfigService`.
  */
-export function buildSwaggerConfig() {
+export function buildSwaggerConfig(openapi: AppConfig['openapi']) {
   const builder = new DocumentBuilder()
     .setTitle('Cosmos Pay — Payments API')
     .setDescription(
@@ -40,9 +47,8 @@ export function buildSwaggerConfig() {
 
   // Optionally point the spec at the public gateway host (root URL — paths
   // already carry /v1). Set OPENAPI_SERVER_URL when generating for prod.
-  const serverUrl = process.env.OPENAPI_SERVER_URL;
-  if (serverUrl) {
-    builder.addServer(serverUrl, 'Gateway base URL');
+  if (openapi.serverUrl) {
+    builder.addServer(openapi.serverUrl, 'Gateway base URL');
   }
 
   return builder.build();
@@ -80,10 +86,15 @@ const ERROR_RESPONSES: Record<string, string> = {
  * branch on. Attaching centrally also keeps it honest: a new route cannot
  * forget to document its errors.
  */
-export function createOpenApiDocument(app: INestApplication): OpenAPIObject {
-  const document = SwaggerModule.createDocument(app, buildSwaggerConfig(), {
-    extraModels: [ApiErrorBodyEntity],
-  });
+export function createOpenApiDocument(
+  app: INestApplication,
+  openapi: AppConfig['openapi'],
+): OpenAPIObject {
+  const document = SwaggerModule.createDocument(
+    app,
+    buildSwaggerConfig(openapi),
+    { extraModels: [ApiErrorBodyEntity] },
+  );
 
   const schemaRef = { $ref: '#/components/schemas/ApiErrorBodyEntity' };
   for (const pathItem of Object.values(document.paths)) {
@@ -112,8 +123,11 @@ export function createOpenApiDocument(app: INestApplication): OpenAPIObject {
  *   - GET /docs/yaml  (OpenAPI YAML)
  * so another server can fetch the live spec directly.
  */
-export function setupSwagger(app: INestApplication): OpenAPIObject {
-  const document = createOpenApiDocument(app);
+export function setupSwagger(
+  app: INestApplication,
+  settings: Pick<AppConfig, 'nodeEnv' | 'openapi'>,
+): OpenAPIObject {
+  const document = createOpenApiDocument(app, settings.openapi);
   SwaggerModule.setup('docs', app, document, {
     jsonDocumentUrl: 'docs/json',
     yamlDocumentUrl: 'docs/yaml',
@@ -122,7 +136,7 @@ export function setupSwagger(app: INestApplication): OpenAPIObject {
       // X-Consumer-Username, and /docs is mounted outside every guard — so
       // persisting would write the real gateway secret into browser
       // localStorage on an unauthenticated page.
-      persistAuthorization: process.env.NODE_ENV !== 'production',
+      persistAuthorization: settings.nodeEnv !== 'production',
     },
   });
   return document;

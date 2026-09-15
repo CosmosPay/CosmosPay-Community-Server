@@ -46,10 +46,13 @@ export type LiquidityRequestTerms = DepositRequestTerms | WithdrawRequestTerms;
 /**
  * A stored operation as the comparison reads it.
  *
- * `memo` is not a column on `LiquidityPoolOperation`; the service reads it back
- * out of the stored envelope. `undefined` means the envelope could not be read,
- * which never happens for a row this service built — and when it does, nothing
- * about the row can be vouched for, so it matches nothing.
+ * `memo` is the row's `memo` column when that is set. A null column is
+ * ambiguous: the caller supplied no memo, or the row was built before the column
+ * existed and its memo lives only in the envelope. So the service answers a
+ * null from the stored envelope, which is authoritative for both. `undefined`
+ * means the column was null and the envelope could not be read. That never
+ * happens for a row this service built, and when it does nothing about the row
+ * can be vouched for, so it matches nothing.
  */
 export type StoredLiquidityTerms = Pick<
   LiquidityPoolOperation,

@@ -1,6 +1,6 @@
 # Cosmos Pay — Microservice de paiements
 
-[English](./README.md) · [Español](./README.es.md) · [Português](./README.pt.md) · [Deutsch](./README.de.md) · **Français** · [हिन्दी](./README.hi.md) · [简体中文](./README.zh.md)
+[English](../../README.md) · [Español](./README.es.md) · [Português](./README.pt.md) · [Deutsch](./README.de.md) · **Français** · [हिन्दी](./README.hi.md) · [简体中文](./README.zh.md)
 
 Microservice de paiements construit avec **NestJS 12** + **Prisma 7 (PostgreSQL)**.
 
@@ -60,6 +60,7 @@ src/
   config/
     configuration.ts              typed config
     env.validation.ts             fail-fast env validation (secret required when enforcing)
+    *-whitelist.ts                KYC and Pollar redirect allow-lists
   prisma/                         PrismaModule + PrismaService (global)
   common/
     guards/apisix.guard.ts        THE gateway gate
@@ -73,11 +74,12 @@ src/
     validators/                   IsStellarAddress (StrKey-based)
     errors/api-error.ts           ApiError + machine-readable ApiErrorCode
     services/advisory-lock...     cluster-wide lock for the background timers
-  stellar/                        per-network Horizon servers (bounded timeout)
+  stellar/                        per-network Horizon servers (bounded timeout), account loader,
+                                  SEP-7 links, signed-envelope relay, settlement repository
   payment-intents/                Stellar payment intents (controller, service, DTO) — emits events
   swaps/                          Stellar native swaps (path payments): quote, build XDR, submit
-  liquidity-pools/                AMM deposit/withdraw, cost basis + commission on gain
-  observer/                       background reconciler: swaps + LP ops against Horizon
+  liquidity-pools/                AMM deposit/withdraw, pool + position reads, cost basis + commission on gain
+  observer/                       background reconciler: swaps + LP ops against Horizon, one adapter per table
   webhooks/                       webhook endpoints CRUD + dispatcher (HMAC-signed, retried)
   blindpay/                       BlindPay core: HTTP client, Svix verify, sync + inbound webhook
   kyc/                            receivers (KYC/KYB), wallets, bank accounts, doc upload
@@ -91,6 +93,7 @@ src/
   analytics/                      summary, balances, API logs, webhook logs
   activity/                       client telemetry ingest + feed (wallet, dashboard)
   admin/                          cross-tenant platform admin (console-only), audited
+  audit/                          audit-trail writer, called inside other modules' transactions
   health/                         liveness/readiness probes (@Public)
 prisma/schema.prisma              Consumer, PaymentIntent, Swap, LiquidityPoolOperation,
                                   WebhookEndpoint/Delivery/EmittedEvent, BlindpayReceiver,
@@ -102,6 +105,7 @@ prisma/schema.prisma              Consumer, PaymentIntent, Swap, LiquidityPoolOp
 test/                             e2e suites: gateway gate, admin + alias console gates,
                                   payment intents, KYC, webhooks, Pollar
 scripts/                          OpenAPI generator, README check, operator scripts
+docs/i18n/                        this README in es, pt, de, fr, hi, zh
 ```
 
 ## API
@@ -1357,6 +1361,10 @@ la colonne « Qui le remarque » avant de déployer.
 | `POST /v1/swaps`, `/v1/liquidity-pools/deposit` et `/withdraw` : une `Idempotency-Key` réutilisée avec une requête différente — un autre mémo ou un autre slippage, l'autre réseau, ou une clé de dépôt réutilisée pour un retrait — donne `409 idempotency_conflict`. Un rejeu portant un actif, un slippage ou un mémo invalide reçoit désormais le `400` habituel | Les clients qui réutilisent une même clé pour des opérations différentes | Sous la clé publique partagée, un attaquant pouvait pré-créer, sous une clé devinable, un swap ou un retrait depuis le compte d'une victime vers son propre compte, et la nouvelle tentative de la victime lui renvoyait cette enveloppe à signer |
 | `POST /v1/liquidity-pools/withdraw` ne répond plus `409 operation_in_flight` pour un retrait en cours dont le compte n'a pas encore utilisé le numéro de séquence (une enveloppe non signée ou abandonnée) | Les utilisateurs de wallet qui étaient bloqués | Un retrait de montant infime construit pour le compte de quelqu'un d'autre et renvoyé toutes les 300 s empêchait tous les utilisateurs de la clé publique de retirer cette position. Les deux enveloppes partagent un numéro de séquence, donc une seule au plus peut jamais être réglée |
 | L'observateur de règlement prend au plus 10 lignes par consumer, par table et par cycle, et `GET /v1/liquidity-pools/positions` lit Horizon via une seule liste paginée au lieu d'une requête par pool | Opérateurs | Un afflux provenant d'un seul consumer bloquait le règlement de tous les autres, et un compte détenant des parts de nombreux pools déclenchait un nombre non borné d'appels Horizon |
+| `GET /v1/onramp/payins/:id` ne renvoie plus `receiverId` ni `updatedAt` — la même forme que celle renvoyée par `GET /v1/onramp/payins` | Les appelants qui lisent ces deux champs dans la lecture d'un seul payin | Un payin dont la ligne miroir était récente était renvoyé tel que stocké, si bien que le même payin arrivait sous deux formes selon l'âge de son miroir, l'une portant un identifiant interne |
+| `POST /v1/kyc/upload` avec un fichier de plus de 10 Mio renvoie `413` avec `code: "payload_too_large"` ; c'était `internal_error` | Les intégrateurs qui s'appuient sur `code` | Une limite que l'appelant peut respecter passait pour un bug de ce service |
+| `POST /v1/liquidity-pools/deposit`, `/withdraw`, `GET /v1/liquidity-pools/operations`, `/operations/:id`, `POST /v1/liquidity-pools/operations/:id/submit` et les webhooks `LIQUIDITY_*` portent désormais `memo` (le MEMO_ID de l'appelant, ou `null`). Les opérations créées avant la migration `20260915120000_liquidity_pool_operation_memo` renvoient `null` même si leur enveloppe en porte un | Personne, sauf un client qui rejette les champs inconnus | Le memo n'était enregistré que dans le XDR, si bien que chaque rejeu par `Idempotency-Key` décodait l'enveloppe pour le comparer |
+| Le contrat publié de `GET /v1/swaps` et `GET /v1/liquidity-pools/operations` ne déclare plus `qr` ni `commissionMemo` sur les éléments de liste. Les réponses ne changent pas — ces deux champs n'y ont jamais été envoyés ; on les obtient en lisant l'élément seul | Les clients générés à partir de la spécification OpenAPI | Le contrat décrivait les éléments de liste avec la forme de la lecture unitaire, si bien qu'un client généré typait deux champs que la liste ne portait jamais |
 
 Notes de déploiement associées :
 
@@ -1370,6 +1378,28 @@ Notes de déploiement associées :
   `X-Plan-Swap-Fee-Bps` donne un `503` uniquement en production (partout ailleurs, les swaps
   se rabattent silencieusement sur `STELLAR_SWAP_FEE_BPS`), et `/docs` — hors de tout guard
   — n'est désactivé par défaut qu'en production.
+- **L'observateur de règlement s'exécute désormais sur `ScheduledJob`.**
+  `OBSERVER_ENABLED`, `OBSERVER_INTERVAL_MS` et son verrou consultatif ne changent
+  pas, mais ses lignes de log sont désormais les lignes communes :
+  `Settlement observer started (every Nms)`,
+  `Settlement observer (OBSERVER_ENABLED=false) disabled` et
+  `SettlementObserverService cycle failed` au niveau `error`. Une alerte qui cherche
+  l'ancien libellé doit être mise à jour.
+- **La migration `20260915120000_liquidity_pool_operation_memo`** ajoute la colonne
+  nullable `liquidity_pool_operation.memo` : pas de réécriture de la table, seulement
+  un bref verrou exclusif. Pas de backfill — le memo des lignes plus anciennes se
+  trouve dans du XDR base64, que SQL ne sait pas décoder, et le service se rabat sur
+  l'enveloppe pour elles.
+- **La migration `20260915120100_lookup_indexes`** construit deux index
+  `CONCURRENTLY` pour la vérification de propriété des wallets Pollar
+  (`pollar_oauth_session(consumerId, network, walletAddress)` et
+  `pollar_user_wallet(consumerId, network, address)`). Elle ne bloque pas les
+  écritures, mais une construction échouée laisse un index `INVALID` que
+  `IF NOT EXISTS` considère comme présent : trouvez-le avec
+  `SELECT c.relname FROM pg_class c JOIN pg_index i ON i.indexrelid = c.oid WHERE NOT i.indisvalid;`,
+  supprimez-le avec `DROP INDEX CONCURRENTLY`, lancez
+  `prisma migrate resolve --rolled-back 20260915120100_lookup_indexes` et
+  redéployez.
 
 ### NestJS 12, TypeScript 6 et Node 24.9 au minimum
 
@@ -1855,7 +1885,7 @@ sur ce comportement.
 détecte sa dérive — le build reste vert pendant que ces pages décrivent discrètement un service
 qui n'existe plus — il est donc mis à jour dans le même commit que le code qu'il décrit. La
 convention complète, y compris la section que touche chaque type de changement, se trouve dans
-[`CLAUDE.md`](./CLAUDE.md) ; en version courte :
+[`CLAUDE.md`](../../CLAUDE.md) ; en version courte :
 
 | Quand vous… | Mettez à jour |
 | ----------- | ------------- |
@@ -1868,7 +1898,7 @@ convention complète, y compris la section que touche chaque type de changement,
 
 **Ce document existe en sept langues** — English, Español, Português, Deutsch, Français,
 हिन्दी et 简体中文 — et un changement dans l'une est un changement dans les sept, dans le même
-commit. L'anglais est la source et les autres en sont des traductions : les mêmes titres,
+commit. L'anglais est la source et les autres — dans [`docs/i18n/`](./) — en sont des traductions : les mêmes titres,
 tableaux et blocs de code, avec les identifiants (routes, variables d'environnement, en-têtes,
 codes d'erreur) laissés exactement tels quels. `npm run readme:check` fait échouer la CI
 lorsqu'un fichier de langue manque, lorsque ses titres ne correspondent plus à ceux de

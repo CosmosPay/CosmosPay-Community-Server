@@ -36,12 +36,6 @@ export const POLLAR_NETWORK_BY_STELLAR = {
   testnet: 'testnet',
 } as const;
 
-/** Expected prefixes per key type and network, checked at boot. */
-export const POLLAR_KEY_PREFIX = {
-  publishable: { public: 'pub_mainnet_', testnet: 'pub_testnet_' },
-  secret: { public: 'sec_mainnet_', testnet: 'sec_testnet_' },
-} as const;
-
 /**
  * The client-session status that means "Pollar finished the provider handshake
  * and the session can be redeemed for tokens". Anything else is still in

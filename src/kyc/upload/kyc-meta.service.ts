@@ -1,7 +1,8 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'node:crypto';
-import { BlindpayClient, UploadableFile } from '@/blindpay/blindpay.client';
+import type { UploadableFile } from '@/blindpay/blindpay.client';
+import { BlindpayKycApi } from '@/blindpay/blindpay-kyc.api';
 import { BlindpayObject } from '@/blindpay/blindpay-sync.service';
 import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
 import { UPLOAD_BUCKETS } from '@/blindpay/blindpay.constants';
@@ -15,13 +16,13 @@ import { assertRedirectAllowed } from '@/kyc/redirect-url-whitelist';
 
 /**
  * Compliance helpers that aren't tied to a single receiver: document upload and
- * rail discovery. These proxy BlindPay directly (upload + the `/available/*`
- * catalog) and persist nothing.
+ * rail discovery. These proxy BlindPay directly (upload + the rail catalog) and
+ * persist nothing.
  */
 @Injectable()
 export class KycMetaService {
   constructor(
-    private readonly blindpay: BlindpayClient,
+    private readonly blindpay: BlindpayKycApi,
     private readonly config: ConfigService<AppConfig, true>,
     private readonly prisma: PrismaService,
     private readonly consumers: ConsumerResolverService,
@@ -62,8 +63,7 @@ export class KycMetaService {
   /**
    * Starts the terms-of-service acceptance flow and returns the hosted URL the
    * end user must visit. BlindPay redirects to `redirect_url` with a `tos_id`
-   * query param afterwards — required to create a receiver. This route lives at
-   * `/e/instances/{id}/tos`, outside the normal instance path.
+   * query param afterwards — required to create a receiver.
    */
   async initiateTos(
     consumer: GatewayConsumer,
@@ -84,14 +84,11 @@ export class KycMetaService {
     if (dto.receiver_id) {
       await this.assertReceiverOwned(consumer, dto.receiver_id);
     }
-    return this.blindpay.post<{ url: string }>(
-      `/e/instances/${this.blindpay.instanceId}/tos`,
-      {
-        idempotency_key: dto.idempotency_key ?? randomUUID(),
-        receiver_id: dto.receiver_id ?? null,
-        redirect_url: dto.redirect_url,
-      },
-    );
+    return this.blindpay.requestTos({
+      idempotency_key: dto.idempotency_key ?? randomUUID(),
+      receiver_id: dto.receiver_id ?? null,
+      redirect_url: dto.redirect_url,
+    });
   }
 
   /** 404s unless the provider receiver id is mirrored against this consumer. */
@@ -113,14 +110,12 @@ export class KycMetaService {
 
   /** Lists the bank rails available for the platform instance. */
   listRails(): Promise<BlindpayObject> {
-    return this.blindpay.get<BlindpayObject>('/available/rails');
+    return this.blindpay.listRails();
   }
 
   /** Returns the field schema a given rail requires. */
   bankDetails(rail: string): Promise<BlindpayObject> {
-    return this.blindpay.get<BlindpayObject>('/available/bank-details', {
-      query: { rail },
-    });
+    return this.blindpay.getBankDetails(rail);
   }
 }
 

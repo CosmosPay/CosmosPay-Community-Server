@@ -41,6 +41,13 @@ export enum ApiErrorCode {
   // --- resources -----------------------------------------------------------
   NotFound = 'not_found',
   ValidationFailed = 'validation_failed',
+  /**
+   * The body exceeded a size the service enforces — today the KYC document
+   * upload's file cap. Multer refuses it as a plain 413, which used to fall
+   * through to `internal_error` and read as a bug in this service rather than a
+   * limit the caller can stay inside.
+   */
+  PayloadTooLarge = 'payload_too_large',
 
   // --- idempotency / concurrency -------------------------------------------
   IdempotencyConflict = 'idempotency_conflict',
@@ -193,6 +200,9 @@ const CODE_BY_STATUS: Readonly<Record<number, ApiErrorCode>> = {
   [HttpStatus.GATEWAY_TIMEOUT]: ApiErrorCode.ProviderUnavailable,
   [HttpStatus.UNPROCESSABLE_ENTITY]: ApiErrorCode.ValidationFailed,
   [HttpStatus.TOO_MANY_REQUESTS]: ApiErrorCode.RateLimited,
+  // Raised by multer (via Nest's `PayloadTooLargeException`), never by a throw
+  // site of ours, so the status is the only place a code can come from.
+  [HttpStatus.PAYLOAD_TOO_LARGE]: ApiErrorCode.PayloadTooLarge,
 };
 
 export function defaultCodeForStatus(status: number): string {

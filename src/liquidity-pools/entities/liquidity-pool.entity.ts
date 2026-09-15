@@ -1,4 +1,4 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional, OmitType } from '@nestjs/swagger';
 import { LiquidityOperationKind, SwapStatus } from '@generated/prisma/client';
 
 /** One side of a pool: an asset and how much of it the pool (or holder) has. */
@@ -171,6 +171,18 @@ export class LiquidityOperationEntity {
   @ApiProperty({ example: 50 })
   slippageBps!: number;
 
+  @ApiPropertyOptional({
+    type: String,
+    nullable: true,
+    example: '4242',
+    description:
+      "The caller's MEMO_ID (uint64 as a string), null when none was supplied. " +
+      'A commission MEMO_TEXT is reported in `commissionMemo`, never here. ' +
+      'Operations created before this field existed report null even when ' +
+      'their envelope carries a MEMO_ID; the `xdr` is authoritative for those.',
+  })
+  memo?: string | null;
+
   @ApiProperty({
     nullable: true,
     required: false,
@@ -246,9 +258,21 @@ export class LiquidityOperationEntity {
   updatedAt!: Date;
 }
 
+/**
+ * An operation as `GET /v1/liquidity-pools/operations` lists it: the stored row.
+ * The QR and the commission label are derived by the single read, not rendered
+ * for every row of a page — fetch the operation for them. Declaring list items
+ * as {@link LiquidityOperationEntity} made generated clients type two fields the
+ * list never sent.
+ */
+export class LiquidityOperationListItemEntity extends OmitType(
+  LiquidityOperationEntity,
+  ['qr', 'commissionMemo'] as const,
+) {}
+
 export class LiquidityOperationListEntity {
-  @ApiProperty({ type: [LiquidityOperationEntity] })
-  data!: LiquidityOperationEntity[];
+  @ApiProperty({ type: [LiquidityOperationListItemEntity] })
+  data!: LiquidityOperationListItemEntity[];
 
   @ApiProperty({ example: 1 })
   total!: number;

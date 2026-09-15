@@ -4,7 +4,7 @@ import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface'
 import { PaginationQueryDto } from '@/common/dto/pagination.query.dto';
 import { page } from '@/common/pagination';
 import { PrismaService } from '@/prisma/prisma.service';
-import { BlindpayClient } from '@/blindpay/blindpay.client';
+import { BlindpayKycApi } from '@/blindpay/blindpay-kyc.api';
 import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
 import { BlindpayObject } from '@/blindpay/blindpay-sync.service';
 import { asNullableString, asString, toJson } from '@/blindpay/blindpay.util';
@@ -36,7 +36,7 @@ export const WALLET_PUBLIC_SELECT = {
 export class WalletsService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly blindpay: BlindpayClient,
+    private readonly blindpay: BlindpayKycApi,
     private readonly consumers: ConsumerResolverService,
     private readonly receivers: ReceiversService,
   ) {}
@@ -52,10 +52,8 @@ export class WalletsService {
       receiverId,
     );
     this.receivers.assertEnabled(receiver);
-    const created = await this.blindpay.post<BlindpayObject>(
-      this.blindpay.instancePath(
-        `/customers/${receiver.blindpayId}/blockchain-wallets`,
-      ),
+    const created = await this.blindpay.createBlockchainWallet(
+      receiver.blindpayId,
       dto,
     );
     return this.mirror(local.id, receiver.id, { ...dto, ...created });
@@ -93,11 +91,7 @@ export class WalletsService {
       local.id,
       receiverId,
     );
-    return this.blindpay.get<BlindpayObject>(
-      this.blindpay.instancePath(
-        `/customers/${receiver.blindpayId}/blockchain-wallets/sign-message`,
-      ),
-    );
+    return this.blindpay.getWalletSignMessage(receiver.blindpayId);
   }
 
   async remove(consumer: GatewayConsumer, receiverId: string, id: string) {
@@ -112,10 +106,9 @@ export class WalletsService {
     if (!row) {
       return { id, deleted: true };
     }
-    await this.blindpay.delete(
-      this.blindpay.instancePath(
-        `/customers/${receiver.blindpayId}/blockchain-wallets/${row.blindpayId}`,
-      ),
+    await this.blindpay.deleteBlockchainWallet(
+      receiver.blindpayId,
+      row.blindpayId,
     );
     await this.prisma.blindpayBlockchainWallet.delete({
       where: { id: row.id },

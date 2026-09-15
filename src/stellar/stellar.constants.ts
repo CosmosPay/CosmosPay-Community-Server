@@ -23,6 +23,21 @@ export const STELLAR_AMOUNT_RE = /^\d+(\.\d{1,7})?$/;
 export const MAX_UINT64 = 18446744073709551615n;
 
 /**
+ * The network's base reserve, in stroops: 0.5 XLM.
+ *
+ * An account must keep `(2 + subentries) × base reserve` of XLM that it cannot
+ * spend, and every trustline — a pool-share trustline included — is a subentry.
+ * The pre-flight affordability check prices that floor so a customer gets a
+ * clear 400 naming the shortfall instead of signing an envelope the network then
+ * rejects with `op_underfunded` / `op_low_reserve`.
+ *
+ * It is a protocol parameter, voted by validators rather than fixed by the
+ * protocol, so it is kept in one place: if the network ever changes it, this is
+ * the line to change.
+ */
+export const BASE_RESERVE_STROOPS = 5_000_000n;
+
+/**
  * The SDK ships with `timeout: 0` — no timeout at all — on every Horizon read.
  * A stalled socket therefore hangs the caller forever, which matters most in the
  * background reconcilers: they guard each tick with a `running` latch that is

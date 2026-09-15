@@ -1,8 +1,4 @@
 import {
-  parseRedirectUrlWhitelist,
-  type RedirectUrlWhitelist,
-} from '@/kyc/redirect-url-whitelist';
-import {
   DEFAULT_HORIZON,
   DEFAULT_POLLAR_AUTHORIZATION_TTL_MS,
   DEFAULT_POLLAR_CODE_TTL_MS,
@@ -14,9 +10,13 @@ import {
   DEFAULT_RATE_LIMIT_PRUNE_INTERVAL_MS,
 } from '@/config/config.constants';
 import {
+  parseRedirectUrlWhitelist,
+  type RedirectUrlWhitelist,
+} from '@/config/kyc-redirect-url-whitelist';
+import {
   parsePollarRedirectWhitelist,
   type PollarRedirectWhitelist,
-} from '@/pollar/pollar-redirect-uri';
+} from '@/config/pollar-redirect-uri-whitelist';
 
 /**
  * Centralized, typed configuration loaded from environment variables.
@@ -28,6 +28,13 @@ export interface AppConfig {
   nodeEnv: string;
   /** When true, mounts /docs (Express middleware — not behind Nest guards). */
   swaggerEnabled: boolean;
+  openapi: {
+    /**
+     * Gateway base URL stamped into the spec's `servers` — the root URL, since
+     * paths already carry `/v1`. Empty adds no server entry.
+     */
+    serverUrl: string;
+  };
   port: number;
   databaseUrl: string;
   apisix: {
@@ -200,6 +207,9 @@ function parseSwaggerEnabled(): boolean {
 export default (): AppConfig => ({
   nodeEnv: process.env.NODE_ENV ?? 'development',
   swaggerEnabled: parseSwaggerEnabled(),
+  openapi: {
+    serverUrl: process.env.OPENAPI_SERVER_URL ?? '',
+  },
   port: parseInt(process.env.PORT ?? '3000', 10),
   databaseUrl: process.env.DATABASE_URL ?? '',
   apisix: {

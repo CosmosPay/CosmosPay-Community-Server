@@ -24,14 +24,15 @@ import { join } from 'node:path';
 
 const ROOT = join(__dirname, '..');
 
+/** English at the root, where GitHub renders it; the translations beside each other. */
 const README_FILES = [
   'README.md',
-  'README.es.md',
-  'README.pt.md',
-  'README.de.md',
-  'README.fr.md',
-  'README.hi.md',
-  'README.zh.md',
+  'docs/i18n/README.es.md',
+  'docs/i18n/README.pt.md',
+  'docs/i18n/README.de.md',
+  'docs/i18n/README.fr.md',
+  'docs/i18n/README.hi.md',
+  'docs/i18n/README.zh.md',
 ];
 
 const HTTP_METHODS = new Set(['get', 'post', 'put', 'patch', 'delete']);

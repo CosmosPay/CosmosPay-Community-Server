@@ -1,6 +1,7 @@
 import { BadRequestException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { BlindpayClient, UploadableFile } from '@/blindpay/blindpay.client';
+import { BlindpayKycApi } from '@/blindpay/blindpay-kyc.api';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import { AppConfig } from '@/config/configuration';
 import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
@@ -51,7 +52,9 @@ function makeService() {
   };
   const consumers = { resolve: jest.fn().mockResolvedValue({ id: 'c_1' }) };
   const service = new KycMetaService(
-    blindpay as unknown as BlindpayClient,
+    // The real provider surface over a mocked transport, so the paths asserted
+    // below are the exact requests BlindPay receives.
+    new BlindpayKycApi(blindpay as unknown as BlindpayClient),
     config as unknown as ConfigService<AppConfig, true>,
     prisma as unknown as PrismaService,
     consumers as unknown as ConsumerResolverService,

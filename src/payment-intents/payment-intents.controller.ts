@@ -11,6 +11,7 @@ import {
   Query,
 } from '@nestjs/common';
 import {
+  ApiConflictResponse,
   ApiCreatedResponse,
   ApiOkResponse,
   ApiOperation,
@@ -19,6 +20,7 @@ import {
 import { CurrentConsumer } from '@/common/decorators/current-consumer.decorator';
 import { AllowPublicKey } from '@/common/decorators/allow-public-key.decorator';
 import { RequirePermissions } from '@/common/decorators/require-permissions.decorator';
+import { ApiErrorBodyEntity } from '@/common/errors/api-error.entity';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import { CreateTxPaymentIntentDto } from '@/payment-intents/dto/create-tx-payment-intent.dto';
 import { CreatePayPaymentIntentDto } from '@/payment-intents/dto/create-pay-payment-intent.dto';
@@ -36,6 +38,21 @@ import {
 } from '@/payment-intents/entities/payment-intent.entity';
 import { PaymentIntentsService } from '@/payment-intents/payment-intents.service';
 
+/**
+ * The 409 both creates return. Documented per route because the generic 409
+ * `swagger.ts` attaches cannot say that the memo is the idempotency key — and
+ * under the shared public key a memo can already be taken by someone else.
+ */
+const MEMO_CONFLICT_RESPONSE = {
+  type: ApiErrorBodyEntity,
+  description:
+    '`idempotency_conflict`: an intent with this `memo` already exists for ' +
+    'different payment details. Retry with the original request unchanged, or ' +
+    'use a new memo (omit `memo` to have one generated). ' +
+    '`operation_in_flight`: a concurrent create for the same memo changed it ' +
+    'while this one was being created; retry the request.',
+};
+
 // URI versioning => /v1/payment-intents
 @ApiTags('payment-intents')
 @Controller({ path: 'payment-intents', version: '1' })
@@ -51,6 +68,7 @@ export class PaymentIntentsController {
       'Create a SEP-7 `tx` intent (source known → unsigned XDR + tx URI + QR)',
   })
   @ApiCreatedResponse({ type: TxPaymentIntentEntity })
+  @ApiConflictResponse(MEMO_CONFLICT_RESPONSE)
   createTx(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Body() dto: CreateTxPaymentIntentDto,
@@ -66,6 +84,7 @@ export class PaymentIntentsController {
     summary: 'Create a SEP-7 `pay` intent (no source → pay URI + QR, no XDR)',
   })
   @ApiCreatedResponse({ type: PayPaymentIntentEntity })
+  @ApiConflictResponse(MEMO_CONFLICT_RESPONSE)
   createPay(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Body() dto: CreatePayPaymentIntentDto,

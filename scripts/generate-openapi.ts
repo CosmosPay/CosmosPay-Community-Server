@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { VersioningType } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { stringify } from 'yaml';
+import configuration from '@/config/configuration';
 import { createOpenApiDocument } from '@/swagger';
 
 /**
@@ -50,7 +51,12 @@ async function generate(): Promise<void> {
   // Match runtime routing so paths in the spec are accurate (/v1/...).
   app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
 
-  const document = createOpenApiDocument(app);
+  // The typed factory, not `app.get(ConfigService)`: preview mode never
+  // instantiates providers, so ConfigService does not exist here. Called only
+  // now, after AppModule was imported, because ConfigModule.forRoot loads .env
+  // into process.env at that point — an OPENAPI_SERVER_URL kept in .env is seen
+  // exactly as it was when swagger.ts read the variable itself.
+  const document = createOpenApiDocument(app, configuration().openapi);
 
   const outDir = join(process.cwd(), 'openapi');
   mkdirSync(outDir, { recursive: true });

@@ -81,10 +81,6 @@ describe('payment intent terminal webhooks are durable', () => {
       webhookEndpoint: {
         findMany: jest.fn(async () => [{ id: 'ep_1', eventTypes: [] }]),
       },
-      customer: {
-        findFirst: jest.fn().mockResolvedValue(null),
-        create: jest.fn(),
-      },
     };
 
     /**
@@ -164,6 +160,7 @@ describe('payment intent terminal webhooks are durable', () => {
       {} as any,
       {} as any,
       new ConsumerResolverService(prisma as never),
+      { ensureForPayer: jest.fn().mockResolvedValue(undefined) } as any,
     );
   });
 

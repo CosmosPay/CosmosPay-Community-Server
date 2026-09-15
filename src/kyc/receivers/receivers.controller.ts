@@ -23,10 +23,8 @@ import {
 import { CurrentConsumer } from '@/common/decorators/current-consumer.decorator';
 import { RequirePermissions } from '@/common/decorators/require-permissions.decorator';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
-import {
-  ReceiversService,
-  resolveTosCooldownMs,
-} from '@/kyc/receivers/receivers.service';
+import { ReceiversService } from '@/kyc/receivers/receivers.service';
+import { resolveTosCooldownMs } from '@/kyc/receivers/tos-cooldown-header';
 import { CreateReceiverDto } from '@/kyc/receivers/dto/create-receiver.dto';
 import { UpdateReceiverDto } from '@/kyc/receivers/dto/update-receiver.dto';
 import { RequestTosDto } from '@/kyc/receivers/dto/request-tos.dto';

@@ -161,7 +161,9 @@ describe('liquidityOperationMatchesRequest', () => {
     });
   });
 
-  it('matches nothing when the stored envelope could not be read', () => {
+  // `undefined` is what the service hands over for a row whose memo column is
+  // null and whose envelope it could not read.
+  it('matches nothing when the stored memo could not be established', () => {
     expect(
       liquidityOperationMatchesRequest(
         storedWithdraw({ memo: undefined }),

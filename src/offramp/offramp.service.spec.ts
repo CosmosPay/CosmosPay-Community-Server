@@ -1,4 +1,5 @@
 import { HttpException } from '@nestjs/common';
+import { BlindpayOfframpApi } from '@/blindpay/blindpay-offramp.api';
 import { PAYOUT_PUBLIC_SELECT } from '@/blindpay/blindpay-sync.service';
 import { OfframpService } from '@/offramp/offramp.service';
 
@@ -88,7 +89,9 @@ function makeService() {
   };
   const service = new OfframpService(
     prisma,
-    blindpay as any,
+    // The real provider surface over a mocked transport, so the paths asserted
+    // below are the exact requests BlindPay receives.
+    new BlindpayOfframpApi(blindpay as any),
     consumers as any,
     sync as any,
   );

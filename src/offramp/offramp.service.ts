@@ -4,7 +4,10 @@ import { PaginationQueryDto } from '@/common/dto/pagination.query.dto';
 import { page } from '@/common/pagination';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { PrismaService } from '@/prisma/prisma.service';
-import { BlindpayClient } from '@/blindpay/blindpay.client';
+import {
+  BlindpayOfframpApi,
+  type BlindpayPayoutRequest,
+} from '@/blindpay/blindpay-offramp.api';
 import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
 import {
   BlindpaySyncService,
@@ -46,7 +49,7 @@ type MirroredPayout = Prisma.PayoutGetPayload<{
 export class OfframpService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly blindpay: BlindpayClient,
+    private readonly blindpay: BlindpayOfframpApi,
     private readonly consumers: ConsumerResolverService,
     private readonly sync: BlindpaySyncService,
   ) {}
@@ -57,10 +60,10 @@ export class OfframpService {
       local.id,
       dto.bank_account_id,
     );
-    const quote = await this.blindpay.post<BlindpayObject>(
-      this.blindpay.instancePath('/quotes'),
-      { ...dto, bank_account_id: bankAccountBlindpayId },
-    );
+    const quote = await this.blindpay.createPayoutQuote({
+      ...dto,
+      bank_account_id: bankAccountBlindpayId,
+    });
     await this.recordQuoteOwnership(local.id, quote);
     // BlindPay carries the local fiat amount (e.g. ARS) in `receiver_amount`;
     // `receiver_local_amount` comes back 0. Surface the real amount under the
@@ -74,13 +77,10 @@ export class OfframpService {
   async authorize(consumer: GatewayConsumer, dto: AuthorizePayoutDto) {
     const local = await this.consumers.resolve(consumer);
     await this.assertQuoteOwned(local.id, dto.quote_id);
-    const res = await this.blindpay.post<BlindpayObject>(
-      this.blindpay.instancePath(`/payouts/${dto.chain}/authorize`),
-      {
-        quote_id: dto.quote_id,
-        sender_wallet_address: dto.sender_wallet_address,
-      },
-    );
+    const res = await this.blindpay.authorizePayout(dto.chain, {
+      quote_id: dto.quote_id,
+      sender_wallet_address: dto.sender_wallet_address,
+    });
     // BlindPay returns the unsigned tx under `transaction_hash` (a misnomer — it's
     // the XDR to sign, not a hash). Expose it under a clear, stable field so the
     // wallet can find it, while keeping the raw payload for safety.
@@ -95,17 +95,14 @@ export class OfframpService {
   async createPayout(consumer: GatewayConsumer, dto: CreatePayoutDto) {
     const local = await this.consumers.resolve(consumer);
     await this.assertQuoteOwned(local.id, dto.quote_id);
-    const body: Record<string, unknown> = {
+    const body: BlindpayPayoutRequest = {
       quote_id: dto.quote_id,
       sender_wallet_address: dto.sender_wallet_address,
     };
     if (dto.signed_transaction !== undefined) {
       body.signed_transaction = dto.signed_transaction;
     }
-    const created = await this.blindpay.post<BlindpayObject>(
-      this.blindpay.instancePath(`/payouts/${dto.chain}`),
-      body,
-    );
+    const created = await this.blindpay.createPayout(dto.chain, body);
     const receiverId = await this.resolveReceiverLocalId(
       local.id,
       created.receiver_id,
@@ -144,9 +141,7 @@ export class OfframpService {
       return toPublicPayout(row);
     }
     try {
-      const fresh = await this.blindpay.get<BlindpayObject>(
-        this.blindpay.instancePath(`/payouts/${row.blindpayId}`),
-      );
+      const fresh = await this.blindpay.getPayout(row.blindpayId);
       return await this.sync.mirrorPayout(local.id, row.receiverId, fresh);
     } catch {
       return toPublicPayout(row);
@@ -160,10 +155,7 @@ export class OfframpService {
   ) {
     const local = await this.consumers.resolve(consumer);
     const row = await this.findPayoutOrThrow(local.id, id);
-    return this.blindpay.post<BlindpayObject>(
-      this.blindpay.instancePath(`/payouts/${row.blindpayId}/documents`),
-      dto,
-    );
+    return this.blindpay.addPayoutDocument(row.blindpayId, dto);
   }
 
   /**
