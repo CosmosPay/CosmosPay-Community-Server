@@ -1,4 +1,5 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
+import { ApiError } from '@/common/errors/api-error';
 import { PrismaService } from '@/prisma/prisma.service';
 import { ReceiversService } from '@/kyc/receivers/receivers.service';
 import { RequestTosDto } from '@/kyc/receivers/dto/request-tos.dto';
@@ -191,7 +192,7 @@ export class AdminService {
   /** Every consumer (organization key) with per-resource counts. */
   async consumers(t?: number, s?: number) {
     const where = {};
-    const [rows, total] = await this.prisma.$transaction([
+    const [rows, total] = await Promise.all([
       this.prisma.consumer.findMany({
         where,
         take: take(t),
@@ -223,7 +224,7 @@ export class AdminService {
       ...(opts.network ? { network: opts.network } : {}),
       ...(opts.status ? { status: opts.status as never } : {}),
     };
-    const [data, total] = await this.prisma.$transaction([
+    const [data, total] = await Promise.all([
       this.prisma.paymentIntent.findMany({
         where,
         take: take(opts.take),
@@ -242,7 +243,7 @@ export class AdminService {
       ...(opts.network ? { network: opts.network } : {}),
       ...(opts.status ? { status: opts.status as never } : {}),
     };
-    const [data, total] = await this.prisma.$transaction([
+    const [data, total] = await Promise.all([
       this.prisma.swap.findMany({
         where,
         take: take(opts.take),
@@ -257,7 +258,7 @@ export class AdminService {
 
   async customers(opts: ListOpts = {}) {
     const where = consumerWhere(opts.consumer);
-    const [data, total] = await this.prisma.$transaction([
+    const [data, total] = await Promise.all([
       this.prisma.customer.findMany({
         where,
         take: take(opts.take),
@@ -272,7 +273,7 @@ export class AdminService {
 
   async products(opts: ListOpts = {}) {
     const where = consumerWhere(opts.consumer);
-    const [data, total] = await this.prisma.$transaction([
+    const [data, total] = await Promise.all([
       this.prisma.product.findMany({
         where,
         take: take(opts.take),
@@ -287,7 +288,7 @@ export class AdminService {
 
   async receivers(opts: ListOpts = {}) {
     const where = consumerWhere(opts.consumer);
-    const [data, total] = await this.prisma.$transaction([
+    const [data, total] = await Promise.all([
       this.prisma.blindpayReceiver.findMany({
         where,
         take: take(opts.take),
@@ -306,7 +307,7 @@ export class AdminService {
 
   async payins(opts: ListOpts = {}) {
     const where = consumerWhere(opts.consumer);
-    const [data, total] = await this.prisma.$transaction([
+    const [data, total] = await Promise.all([
       this.prisma.payin.findMany({
         where,
         take: take(opts.take),
@@ -370,13 +371,13 @@ export class AdminService {
     });
     // setAccessById already 404s a missing receiver; this only fires if it was deleted
     // between the committed toggle and this read.
-    if (!receiver) throw new NotFoundException('Receiver not found');
+    if (!receiver) throw ApiError.notFound('Receiver not found');
     return receiver;
   }
 
   async payouts(opts: ListOpts = {}) {
     const where = consumerWhere(opts.consumer);
-    const [data, total] = await this.prisma.$transaction([
+    const [data, total] = await Promise.all([
       this.prisma.payout.findMany({
         where,
         take: take(opts.take),

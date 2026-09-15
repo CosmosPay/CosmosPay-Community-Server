@@ -1,5 +1,4 @@
 import {
-  BadRequestException,
   Body,
   Controller,
   Get,
@@ -11,7 +10,7 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import type { MulterOptions } from '@nestjs/platform-express/multer/interfaces/multer-options.interface';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
-import { ApiErrorBodyEntity } from '@/common/errors/api-error.entity';
+import { API_ERROR_BODY_CONTENT } from '@/common/errors/api-error.entity';
 import {
   ApiBody,
   ApiConsumes,
@@ -91,11 +90,11 @@ export class KycMetaController {
   // ("not valid in the current state") says nothing an integrator can act on, and each
   // of these refusals is a limit they can stay inside. The limits are interpolated from
   // the constants the interceptor enforces, so the contract cannot quote a stale number.
-  // `type` keeps the error envelope's schema, which a route-level declaration would
+  // `content` keeps the error envelope's schema, which a route-level declaration would
   // otherwise replace with a bare description.
   @ApiResponse({
     status: 400,
-    type: ApiErrorBodyEntity,
+    content: API_ERROR_BODY_CONTENT,
     description:
       'The multipart form was refused (`validation_failed`), before the provider saw anything: ' +
       `more than ${MAX_UPLOAD_FIELDS} text fields; a text field longer than ${MAX_UPLOAD_FIELD_BYTES} bytes; ` +
@@ -106,7 +105,7 @@ export class KycMetaController {
   })
   @ApiResponse({
     status: 413,
-    type: ApiErrorBodyEntity,
+    content: API_ERROR_BODY_CONTENT,
     description:
       `The file is larger than ${MAX_UPLOAD_BYTES} bytes (\`payload_too_large\`). Multer stops ` +
       'reading at the limit, so nothing reaches the provider.',
@@ -155,7 +154,10 @@ export class KycMetaController {
   @ApiOperation({ summary: 'Get the field schema required by a rail' })
   bankDetails(@Query('rail') rail?: string) {
     if (!rail) {
-      throw new BadRequestException('Query param "rail" is required');
+      throw ApiError.badRequest(
+        ApiErrorCode.ValidationFailed,
+        'Query param "rail" is required',
+      );
     }
     return this.meta.bankDetails(rail);
   }

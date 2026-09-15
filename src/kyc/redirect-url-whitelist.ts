@@ -1,4 +1,4 @@
-import { BadRequestException } from '@nestjs/common';
+import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import type { RedirectUrlWhitelist } from '@/config/kyc-redirect-url-whitelist';
 
 /** Label-safe hostname match: exact or subdomain of an allowed domain. */
@@ -18,7 +18,7 @@ export function hostnameAllowed(
 
 /**
  * Ensures `redirectUrl` targets a hostname on the consumer's allow-list.
- * Throws {@link BadRequestException} (HTTP 400) on failure.
+ * Throws a `400 validation_failed` {@link ApiError} on failure.
  *
  * The list is `KYC_REDIRECT_URL_WHITELIST`, parsed at boot in
  * `@/config/kyc-redirect-url-whitelist`; this is only the rule that applies it.
@@ -30,7 +30,8 @@ export function assertRedirectAllowed(
 ): void {
   const allowed = whitelist[consumerUsername] ?? [];
   if (allowed.length === 0) {
-    throw new BadRequestException(
+    throw ApiError.badRequest(
+      ApiErrorCode.ValidationFailed,
       'no redirect_url domains are configured for this consumer',
     );
   }
@@ -39,13 +40,15 @@ export function assertRedirectAllowed(
   try {
     hostname = new URL(redirectUrl).hostname;
   } catch {
-    throw new BadRequestException(
+    throw ApiError.badRequest(
+      ApiErrorCode.ValidationFailed,
       'redirect_url must be a valid https URL without embedded credentials',
     );
   }
 
   if (!hostnameAllowed(hostname, allowed)) {
-    throw new BadRequestException(
+    throw ApiError.badRequest(
+      ApiErrorCode.ValidationFailed,
       `redirect_url hostname '${hostname}' is not allowed for this consumer`,
     );
   }

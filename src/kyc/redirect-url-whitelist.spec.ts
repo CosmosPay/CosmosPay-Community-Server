@@ -1,8 +1,19 @@
-import { BadRequestException } from '@nestjs/common';
+import { HttpStatus } from '@nestjs/common';
+import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import {
   assertRedirectAllowed,
   hostnameAllowed,
 } from '@/kyc/redirect-url-whitelist';
+
+/** What `fn` throws, so its status and code can be asserted, not just its class. */
+function thrown(fn: () => void): ApiError {
+  try {
+    fn();
+  } catch (err) {
+    return err as ApiError;
+  }
+  throw new Error('expected the call to throw');
+}
 
 describe('hostnameAllowed', () => {
   it('allows exact and label-safe subdomain matches', () => {
@@ -32,29 +43,39 @@ describe('assertRedirectAllowed', () => {
   });
 
   it('rejects a redirect_url on a non-permitted domain', () => {
-    expect(() =>
+    const err = thrown(() =>
       assertRedirectAllowed(
         'cosmos_acme',
         'https://evil.com/kyc/return',
         whitelist,
       ),
-    ).toThrow(BadRequestException);
-    expect(() =>
-      assertRedirectAllowed(
-        'cosmos_acme',
-        'https://evil.com/kyc/return',
-        whitelist,
-      ),
-    ).toThrow(/not allowed for this consumer/i);
+    );
+
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.getStatus()).toBe(HttpStatus.BAD_REQUEST);
+    expect(err.code).toBe(ApiErrorCode.ValidationFailed);
+    expect(err.message).toMatch(/not allowed for this consumer/i);
+  });
+
+  it('rejects a redirect_url that is not a URL', () => {
+    const err = thrown(() =>
+      assertRedirectAllowed('cosmos_acme', 'not a url', whitelist),
+    );
+
+    expect(err.code).toBe(ApiErrorCode.ValidationFailed);
+    expect(err.message).toMatch(/must be a valid https URL/i);
   });
 
   it('rejects when the consumer has no configured domains', () => {
-    expect(() =>
+    const err = thrown(() =>
       assertRedirectAllowed(
         'cosmos_unknown',
         'https://app.acme.com/kyc/return',
         whitelist,
       ),
-    ).toThrow(/no redirect_url domains are configured/i);
+    );
+
+    expect(err.code).toBe(ApiErrorCode.ValidationFailed);
+    expect(err.message).toMatch(/no redirect_url domains are configured/i);
   });
 });

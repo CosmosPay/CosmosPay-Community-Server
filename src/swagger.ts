@@ -8,7 +8,10 @@ import {
   SwaggerModule,
   type OperationObject,
 } from '@nestjs/swagger';
-import { ApiErrorBodyEntity } from '@/common/errors/api-error.entity';
+import {
+  API_ERROR_BODY_CONTENT,
+  ApiErrorBodyEntity,
+} from '@/common/errors/api-error.entity';
 import type { AppConfig } from '@/config/configuration';
 
 /**
@@ -61,7 +64,8 @@ export function buildSwaggerConfig(openapi: AppConfig['openapi']) {
  */
 const ERROR_RESPONSES: Record<string, string> = {
   '400': 'Validation failed, or the request is not valid in the current state.',
-  '401': 'No authenticated consumer, or admin credentials are required.',
+  '401':
+    'No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).',
   '403':
     'The API key lacks the required scope, or the request did not arrive through the gateway.',
   '404': 'The resource does not exist, or does not belong to this consumer.',
@@ -96,7 +100,6 @@ export function createOpenApiDocument(
     { extraModels: [ApiErrorBodyEntity] },
   );
 
-  const schemaRef = { $ref: '#/components/schemas/ApiErrorBodyEntity' };
   for (const pathItem of Object.values(document.paths)) {
     for (const operation of Object.values(
       pathItem as Record<string, OperationObject | undefined>,
@@ -106,10 +109,7 @@ export function createOpenApiDocument(
       for (const [status, description] of Object.entries(ERROR_RESPONSES)) {
         // Never overwrite a route that documents its own error more precisely.
         if (responses[status]) continue;
-        responses[status] = {
-          description,
-          content: { 'application/json': { schema: schemaRef } },
-        };
+        responses[status] = { description, content: API_ERROR_BODY_CONTENT };
       }
     }
   }

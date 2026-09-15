@@ -568,7 +568,7 @@ export class LiquidityPoolsService {
       ...(query.kind ? { kind: query.kind } : {}),
       ...(query.status ? { status: query.status } : {}),
     };
-    const [data, total] = await this.prisma.$transaction([
+    const [data, total] = await Promise.all([
       this.prisma.liquidityPoolOperation.findMany({
         where,
         take: query.take,

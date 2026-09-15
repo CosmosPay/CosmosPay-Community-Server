@@ -1,5 +1,6 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@generated/prisma/client';
+import { ApiError } from '@/common/errors/api-error';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import { formatNumericAmount } from '@/common/money';
 import { PrismaService } from '@/prisma/prisma.service';
@@ -89,7 +90,7 @@ export class CustomersService {
 
     // `total` is the row count, never `data.length` — the page size is `take`
     // on every full page, so a client paginating on it never sees the end.
-    const [customers, total] = await this.prisma.$transaction([
+    const [customers, total] = await Promise.all([
       this.prisma.customer.findMany({
         where,
         orderBy: { createdAt: 'desc' },
@@ -177,7 +178,7 @@ export class CustomersService {
     const customer = await this.prisma.customer.findFirst({
       where: { id, consumerId: local.id },
     });
-    if (!customer) throw new NotFoundException('Customer not found');
+    if (!customer) throw ApiError.notFound('Customer not found');
     return customer;
   }
 

@@ -1,5 +1,6 @@
-import { BadRequestException } from '@nestjs/common';
+import { HttpStatus } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { BlindpayClient, UploadableFile } from '@/blindpay/blindpay.client';
 import { BlindpayKycApi } from '@/blindpay/blindpay-kyc.api';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
@@ -64,15 +65,20 @@ function makeService() {
 
 describe('KycMetaService', () => {
   describe('uploadDocument', () => {
-    it('rejects a missing file', () => {
+    it('rejects a missing file as 400 validation_failed', () => {
       const { service } = makeService();
 
-      expect(() => service.uploadDocument(undefined, undefined)).toThrow(
-        BadRequestException,
-      );
-      expect(() => service.uploadDocument(undefined, undefined)).toThrow(
-        'multipart field "file"',
-      );
+      let err: ApiError | undefined;
+      try {
+        void service.uploadDocument(undefined, undefined);
+      } catch (e) {
+        err = e as ApiError;
+      }
+
+      expect(err).toBeInstanceOf(ApiError);
+      expect(err!.getStatus()).toBe(HttpStatus.BAD_REQUEST);
+      expect(err!.code).toBe(ApiErrorCode.ValidationFailed);
+      expect(err!.message).toContain('multipart field "file"');
     });
 
     it('rejects an unknown bucket and lists every accepted bucket', () => {

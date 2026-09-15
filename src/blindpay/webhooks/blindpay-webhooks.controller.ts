@@ -1,15 +1,11 @@
-import {
-  BadRequestException,
-  Controller,
-  Post,
-  RawBodyRequest,
-  Req,
-} from '@nestjs/common';
+import { Controller, Post, RawBodyRequest, Req } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ApiExcludeEndpoint } from '@nestjs/swagger';
 import { Request } from 'express';
 import { AppConfig } from '@/config/configuration';
 import { Public } from '@/common/decorators/public.decorator';
+import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
+import { headerValue } from '@/common/request-header';
 import { verifySvixSignature } from '@/blindpay/blindpay-signature';
 import {
   BlindpaySyncService,
@@ -40,21 +36,32 @@ export class BlindpayWebhooksController {
   ): Promise<{ received: boolean }> {
     const { webhookSecret } = this.config.get('blindpay', { infer: true });
     if (!webhookSecret) {
-      throw new BadRequestException('BlindPay webhooks are not configured');
+      // 503 `misconfigured`, not 400: nothing is wrong with the delivery. A 400
+      // told whoever read the Svix log that BlindPay had sent something
+      // malformed, when the fault is this deployment's configuration. Svix
+      // retries any non-2xx, so a delivery refused here still arrives once the
+      // secret is set, within Svix's retry window.
+      throw ApiError.unavailable(
+        ApiErrorCode.Misconfigured,
+        'BlindPay webhooks are not configured',
+      );
     }
 
     const rawBody = req.rawBody?.toString('utf8') ?? '';
     // The delivery id is both signed content and the de-duplication key: Svix
     // repeats it on every retry of the same event, so the sync service uses it
     // to tell a retry from a new state change.
-    const svixId = header(req, 'svix-id');
+    const svixId = headerValue(req, 'svix-id') ?? '';
     const ok = verifySvixSignature(webhookSecret, rawBody, {
       id: svixId,
-      timestamp: header(req, 'svix-timestamp'),
-      signature: header(req, 'svix-signature'),
+      timestamp: headerValue(req, 'svix-timestamp') ?? '',
+      signature: headerValue(req, 'svix-signature') ?? '',
     });
     if (!ok) {
-      throw new BadRequestException('Invalid BlindPay webhook signature');
+      throw ApiError.badRequest(
+        ApiErrorCode.ValidationFailed,
+        'Invalid BlindPay webhook signature',
+      );
     }
 
     const event = parseEvent(rawBody);
@@ -63,11 +70,6 @@ export class BlindpayWebhooksController {
     }
     return { received: true };
   }
-}
-
-function header(req: Request, name: string): string {
-  const raw = req.headers[name];
-  return Array.isArray(raw) ? (raw[0] ?? '') : (raw ?? '');
 }
 
 /** Pulls `{ type, data }` out of a verified Svix payload. */

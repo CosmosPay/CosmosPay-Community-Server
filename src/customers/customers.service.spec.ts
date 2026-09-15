@@ -17,7 +17,6 @@ describe('CustomersService.findAll', () => {
         count: jest.fn().mockResolvedValue(137),
       },
       paymentIntent: { findMany: jest.fn() },
-      $transaction: (ops: Promise<unknown>[]) => Promise.all(ops),
       $queryRaw: jest.fn().mockResolvedValue([
         {
           account: 'GA...ADA',

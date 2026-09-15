@@ -425,10 +425,7 @@ export class SwapsService {
       consumer: { apisixUsername: consumer.username },
       ...(query.status ? { status: query.status } : {}),
     };
-    // `Promise.all`, not `$transaction`: a snapshot-consistent page and count
-    // buys nothing here (the client sees a moving list either way), while the
-    // transaction costs four serial round trips — BEGIN, page, count, COMMIT —
-    // instead of two issued in parallel.
+    // `Promise.all`, not `$transaction` — see `@/common/pagination` for why.
     const [data, total] = await Promise.all([
       this.prisma.swap.findMany({
         where,

@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'node:crypto';
 import type { UploadableFile } from '@/blindpay/blindpay.client';
@@ -41,13 +41,15 @@ export class KycMetaService {
     bucket: string | undefined,
   ): Promise<{ file_url: string }> {
     if (!file) {
-      throw new BadRequestException(
+      throw ApiError.badRequest(
+        ApiErrorCode.ValidationFailed,
         'A file is required (multipart field "file")',
       );
     }
     const target = bucket ?? 'onboarding';
     if (!(UPLOAD_BUCKETS as readonly string[]).includes(target)) {
-      throw new BadRequestException(
+      throw ApiError.badRequest(
+        ApiErrorCode.ValidationFailed,
         `bucket must be one of: ${UPLOAD_BUCKETS.join(', ')}`,
       );
     }

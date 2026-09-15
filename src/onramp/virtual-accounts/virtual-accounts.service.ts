@@ -1,4 +1,5 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
+import { ApiError } from '@/common/errors/api-error';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import { PaginationQueryDto } from '@/common/dto/pagination.query.dto';
 import { page } from '@/common/pagination';
@@ -83,7 +84,7 @@ export class VirtualAccountsService {
       where: { id: localWalletId, consumerId },
     });
     if (!wallet) {
-      throw new NotFoundException('Blockchain wallet not found');
+      throw ApiError.notFound('Blockchain wallet not found');
     }
     return wallet.blindpayId;
   }

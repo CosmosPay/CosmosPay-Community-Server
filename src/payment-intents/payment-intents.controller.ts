@@ -20,7 +20,7 @@ import {
 import { CurrentConsumer } from '@/common/decorators/current-consumer.decorator';
 import { AllowPublicKey } from '@/common/decorators/allow-public-key.decorator';
 import { RequirePermissions } from '@/common/decorators/require-permissions.decorator';
-import { ApiErrorBodyEntity } from '@/common/errors/api-error.entity';
+import { API_ERROR_BODY_CONTENT } from '@/common/errors/api-error.entity';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import { CreateTxPaymentIntentDto } from '@/payment-intents/dto/create-tx-payment-intent.dto';
 import { CreatePayPaymentIntentDto } from '@/payment-intents/dto/create-pay-payment-intent.dto';
@@ -44,7 +44,7 @@ import { PaymentIntentsService } from '@/payment-intents/payment-intents.service
  * under the shared public key a memo can already be taken by someone else.
  */
 const MEMO_CONFLICT_RESPONSE = {
-  type: ApiErrorBodyEntity,
+  content: API_ERROR_BODY_CONTENT,
   description:
     '`idempotency_conflict`: an intent with this `memo` already exists for ' +
     'different payment details. Retry with the original request unchanged, or ' +

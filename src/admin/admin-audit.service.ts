@@ -39,7 +39,7 @@ export class AdminAuditService {
   async list(opts: { take?: number; skip?: number } = {}) {
     const take = !opts.take || opts.take < 1 ? 50 : Math.min(opts.take, 200);
     const skip = !opts.skip || opts.skip < 0 ? 0 : opts.skip;
-    const [data, total] = await this.prisma.$transaction([
+    const [data, total] = await Promise.all([
       this.prisma.adminAuditLog.findMany({
         orderBy: { createdAt: 'desc' },
         take,

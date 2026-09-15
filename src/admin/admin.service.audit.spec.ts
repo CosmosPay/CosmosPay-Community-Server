@@ -1,4 +1,4 @@
-import { HttpStatus, NotFoundException } from '@nestjs/common';
+import { HttpStatus } from '@nestjs/common';
 import { AdminService } from '@/admin/admin.service';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import {
@@ -201,8 +201,13 @@ describe('AdminService.setReceiverAccess (atomic audit)', () => {
     };
     const service = makeService(prisma);
 
-    await expect(
-      service.setReceiverAccess('rcv_1', true, ACTOR),
-    ).rejects.toBeInstanceOf(NotFoundException);
+    const err = await service
+      .setReceiverAccess('rcv_1', true, ACTOR)
+      .then(() => null)
+      .catch((e: unknown) => e as ApiError);
+
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err!.getStatus()).toBe(HttpStatus.NOT_FOUND);
+    expect(err!.code).toBe(ApiErrorCode.NotFound);
   });
 });

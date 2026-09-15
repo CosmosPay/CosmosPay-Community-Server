@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import { PaginationQueryDto } from '@/common/dto/pagination.query.dto';
 import { page } from '@/common/pagination';
@@ -240,7 +240,7 @@ export class OfframpService {
       where: { id: localId, consumerId },
     });
     if (!account) {
-      throw new NotFoundException('Bank account not found');
+      throw ApiError.notFound('Bank account not found');
     }
     // Block offramp for a disabled fiat account (the bank account's owning receiver).
     const receiver = await this.prisma.blindpayReceiver.findUnique({

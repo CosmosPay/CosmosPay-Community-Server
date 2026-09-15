@@ -512,7 +512,7 @@ export class AliasesService {
   async listOwned(consumer: GatewayConsumer, query: QueryAliasesDto) {
     const local = await this.consumers.resolve(consumer);
     const where = { consumerId: local.id };
-    const [rows, total] = await this.prisma.$transaction([
+    const [rows, total] = await Promise.all([
       this.prisma.alias.findMany({
         where,
         include: {

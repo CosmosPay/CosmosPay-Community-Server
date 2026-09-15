@@ -94,9 +94,7 @@ export class WebhooksService {
     skip: number;
   }> {
     const where = { consumer: { apisixUsername: consumer.username } };
-    // Promise.all rather than $transaction, matching findAll elsewhere: a
-    // snapshot-consistent page and count buys nothing for a moving list and
-    // costs two extra round trips.
+    // `Promise.all`, not `$transaction` — see `@/common/pagination` for why.
     const [endpoints, total] = await Promise.all([
       this.prisma.webhookEndpoint.findMany({
         where,
@@ -203,7 +201,7 @@ export class WebhooksService {
       endpointId: id,
       ...(query.status ? { status: query.status } : {}),
     };
-    const [data, total] = await this.prisma.$transaction([
+    const [data, total] = await Promise.all([
       this.prisma.webhookDelivery.findMany({
         where,
         take: query.take,

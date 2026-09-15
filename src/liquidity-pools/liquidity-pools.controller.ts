@@ -21,8 +21,9 @@ import type { Request } from 'express';
 import { CurrentConsumer } from '@/common/decorators/current-consumer.decorator';
 import { AllowPublicKey } from '@/common/decorators/allow-public-key.decorator';
 import { RequireAnyPermission } from '@/common/decorators/require-permissions.decorator';
-import { ApiErrorBodyEntity } from '@/common/errors/api-error.entity';
+import { API_ERROR_BODY_CONTENT } from '@/common/errors/api-error.entity';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
+import { headerValue } from '@/common/request-header';
 import { DepositLiquidityDto } from '@/liquidity-pools/dto/deposit-liquidity.dto';
 import { QueryLiquidityOperationsDto } from '@/liquidity-pools/dto/query-liquidity-operations.dto';
 import { QueryLiquidityPoolsDto } from '@/liquidity-pools/dto/query-pools.dto';
@@ -72,7 +73,7 @@ export class LiquidityPoolsController {
   @ApiCreatedResponse({ type: LiquidityOperationEntity })
   @ApiResponse({
     status: 409,
-    type: ApiErrorBodyEntity,
+    content: API_ERROR_BODY_CONTENT,
     description:
       '`idempotency_conflict` — this Idempotency-Key was already used for a ' +
       'different request, or an identical deposit was already built without a ' +
@@ -114,7 +115,7 @@ export class LiquidityPoolsController {
   @ApiCreatedResponse({ type: LiquidityOperationEntity })
   @ApiResponse({
     status: 409,
-    type: ApiErrorBodyEntity,
+    content: API_ERROR_BODY_CONTENT,
     description:
       '`idempotency_conflict` — this Idempotency-Key was already used for a ' +
       'different request, or an identical withdrawal was already built without ' +
@@ -217,10 +218,4 @@ export class LiquidityPoolsController {
   ) {
     return this.pools.getPool(consumer, poolId);
   }
-}
-
-function headerValue(req: Request, name: string): string | undefined {
-  const raw = req.headers[name];
-  if (Array.isArray(raw)) return raw[0];
-  return raw;
 }
