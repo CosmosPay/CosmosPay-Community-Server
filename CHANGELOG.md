@@ -2,6 +2,17 @@
 
 All notable changes to the Cosmos Pay Community Server are documented here.
 Generated from [Conventional Commits](https://www.conventionalcommits.org) by [git-cliff](https://git-cliff.org).
+## [1.2.0] - 2026-09-15
+
+### Features
+- Enhance wallet ownership verification and provisioning logic (8a8e7d5)
+- Implement SignedTransactionRelay service for relaying signed transactions (d28299c)
+- Add unit tests for Blindpay webhooks controller (9792312)
+
+### Refactor
+- Eliminar archivos de evidencia obsoletos relacionados con la lista blanca de URL de redirección KYC (dab0dd0)
+- Replace $transaction with Promise.all for improved performance and consistency (878ad1e)
+
 ## [1.1.1] - 2026-09-13
 
 ### Refactor
