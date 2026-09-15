@@ -32,16 +32,13 @@ orquestrador chama diretamente). A verificação está sempre ativa — não exi
 para desligá-la. Em desenvolvimento local, rode atrás do APISIX ou envie você mesmo
 `X-Gateway-Secret` + os headers `X-Consumer-*`.
 
-Uma superfície tira mais proveito dessas mesmas duas condições. `/v1/admin` é
-cross-tenant, e o `AdminGuard` só admite ali uma requisição que também traga
-`X-Cosmos-Internal` — um header que o APISIX **remove** de tudo o que passa pelo seu
-proxy, de modo que só uma chamada direta de um backend que detém o segredo do
-gateway pode apresentá-lo. Esse backend é a plataforma de desenvolvedores, que já
-decidiu se a conta autenticada é owner/admin. Não há uma credencial de admin
-separada para implantar (veja a nota de atualização sobre `ADMIN_API_CREDENTIALS`),
-o que faz do segredo do gateway e do isolamento de rede a fronteira inteira diante
-dos dados cross-tenant — e torna a lista de remoção de headers na rota do gateway
-uma questão de segurança, não de higiene.
+`/v1/admin` é cross-tenant, então o `AdminGuard` também exige `X-Cosmos-Internal`.
+O APISIX **remove** esse header de tudo o que passa pelo seu proxy, então só um
+backend que chama o serviço diretamente com o segredo do gateway pode enviá-lo — a
+plataforma de desenvolvedores, que decide se a conta autenticada é owner ou admin.
+Não há uma credencial de admin separada: o segredo do gateway, o isolamento de rede
+e a lista de remoção de headers na rota do gateway são o que protege os dados
+cross-tenant.
 
 O pipeline:
 
@@ -150,8 +147,7 @@ chave autenticada. **Chave pública** marca as rotas que a API key pública
 compartilhada pode chamar (veja
 [A API key pública compartilhada](#a-api-key-pública-compartilhada)). Uma rota
 marcada como *console da plataforma* não aceita API key nenhuma; só o backend do
-console chega até ela. Os caminhos usam a forma `{param}` do OpenAPI, e
-`npm run readme:check` quebra a CI quando uma rota do contrato falta nesta tabela.
+console chega até ela. Os caminhos usam a forma `{param}` do OpenAPI.
 
 | Método | Caminho | Escopo | Chave pública |
 | ------ | ------- | ------ | ------------- |
@@ -297,11 +293,10 @@ reescrito:
 ```
 
 O envelope e o enum completo de `code` são publicados na spec OpenAPI como
-`ApiErrorBodyEntity`, anexado a toda operação — assim um client gerado também recebe
-o tipo de erro, e você não precisa ler este repositório para descobrir os códigos.
-A fonte da verdade é `ApiErrorCode` em `src/common/errors/api-error.ts`.
-**Códigos nunca são renomeados depois de publicados**; novos podem ser adicionados,
-então trate um código desconhecido pelo seu status HTTP.
+`ApiErrorBodyEntity` em toda operação, então os clients gerados também recebem o
+tipo de erro (fonte: `ApiErrorCode` em `src/common/errors/api-error.ts`). **Códigos
+nunca são renomeados depois de publicados**; novos podem ser adicionados, então
+trate um código desconhecido pelo seu status HTTP.
 
 Alguns que são fáceis de confundir:
 
@@ -318,23 +313,14 @@ Alguns que são fáceis de confundir:
 | `provider_unavailable` | 503/504 | BlindPay ou Horizon está inacessível. Tente novamente |
 | `misconfigured` | 503 | Um erro de configuração do lado do servidor. Tentar novamente não vai ajudar |
 
-Todo intent é **persistido** (tabela `payment_intent`) e vinculado ao consumer do
-APISIX autenticado, então leituras/atualizações/exclusões só tocam os registros do
-próprio consumer — rastreabilidade completa do ciclo de vida de cada intent
-(`PENDING → SUBMITTED → SUCCEEDED/FAILED/CANCELLED/EXPIRED`).
-
 ### Executando mais de uma réplica
 
-O APISIX faz o balanceamento de carga entre instâncias, então cada `setInterval`
-deste serviço roda uma vez por réplica. A corretude nunca foi o problema — cada
-mudança de status passa por um compare-and-swap protegido com `updateMany`, então
-só um escritor vence —, mas três réplicas significavam o triplo de idas e voltas ao
-Horizon para um trabalho idêntico, contra uma API que aplica rate limit, e réplicas
-disputando para apagar as mesmas tuplas de `request_log`.
-
-Cada timer em segundo plano agora obtém um **advisory lock em nível de transação**
-do PostgreSQL (`AdvisoryLockService`, `src/common/services/advisory-lock.service.ts`)
-e pula o seu ciclo quando outra réplica o detém:
+O APISIX faz o balanceamento de carga entre instâncias, então todo timer em segundo
+plano roda em todas as réplicas. As mudanças de status já são seguras — cada uma é um
+compare-and-swap protegido com `updateMany` —, mas ciclos duplicados multiplicariam
+as chamadas ao Horizon, uma API que aplica rate limit. Por isso, cada timer obtém um
+**advisory lock em nível de transação** do PostgreSQL (`AdvisoryLockService`) e pula
+o seu ciclo quando outra réplica o detém:
 
 | Timer                          | Chave do lock            |
 | ------------------------------ | ------------------------ |
@@ -347,16 +333,13 @@ e pula o seu ciclo quando outra réplica o detém:
 | `PollarWalletProvisionSweeperService` | `PollarWalletProvisionSweeper` |
 | `AliasChallengeSweeperService` | `AliasChallengeSweeper`  |
 
-`pg_try_advisory_xact_lock` é usado em vez da variante em nível de sessão por três
-motivos: ele nunca bloqueia (uma réplica que perde simplesmente pula, que é o que um
-poller quer), é liberado quando a transação termina — inclusive em um crash ou em
-uma conexão perdida, então um pod derrubado não consegue travar o lock — e, por
-isso, continua correto atrás do PgBouncer em modo transaction pooling, no qual locks
-em nível de sessão são inseguros porque as conexões não são fixas.
+`pg_try_advisory_xact_lock` nunca bloqueia e é liberado quando a transação termina,
+mesmo em um crash ou em uma conexão perdida. Ao contrário de um lock em nível de
+sessão, ele também funciona atrás do PgBouncer em modo transaction pooling.
 
-Os ids de lock ficam no enum `AdvisoryLockKey` e são a identidade da tarefa:
-renomear um membro com um número novo desativa a exclusão silenciosamente, por isso
-números aposentados nunca são reutilizados.
+Os ids de lock ficam no enum `AdvisoryLockKey`. Não renumere um id existente —
+durante um rolling deploy, réplicas antigas e novas obteriam locks diferentes — e não
+reutilize um id aposentado.
 
 ### Validação de pagamentos e o observer on-chain
 
@@ -375,18 +358,16 @@ Dois caminhos usam essa regra única:
   um webhook `PAYMENT_INTENT_SUCCEEDED` é disparado. Uma tx que falhou on-chain marca
   o intent como `FAILED` **somente quando era o próprio pagamento deste intent** —
   mesmo memo, destino e ativo. Qualquer outra transação, com falha ou não, é uma
-  divergência que deixa o status inalterado, para que uma tx correta ainda possa ser
-  enviada; do contrário, o hash de qualquer transação com falha na rede faria um
-  intent falhar de vez.
+  divergência que deixa o status inalterado, para que a tx correta ainda possa ser
+  enviada.
 - **Automático (observer permanente):** `StellarObserverService` consulta o Horizon
   a cada `OBSERVER_INTERVAL_MS` em busca de intents `PENDING` — pelo `txHash`
   informado, ou varrendo os pagamentos para o destino — e finaliza as
   correspondências da mesma forma, de modo que os status mudam e os eventos disparam
   **sem que ninguém chame a API**. Um ciclo processa no máximo
   `OBSERVER_MAX_INTENTS_PER_CONSUMER` (10) intents por consumer e nunca varre um
-  intent expirado, então uma enxurrada vinda de um único consumer — incluindo a chave
-  pública compartilhada — não consegue travar a liquidação de todos os outros.
-  Desative em desenvolvimento local com `OBSERVER_ENABLED=false`.
+  intent expirado, então um único consumer não consegue atrasar a liquidação de todos
+  os outros. Desative em desenvolvimento local com `OBSERVER_ENABLED=false`.
 
 ### Retenção dos logs de requisições da API
 
@@ -397,11 +378,9 @@ o `ip` / `userAgent` do pagador.
 
 O tráfego do dashboard (`X-Cosmos-Internal`) é **registrado e marcado**
 (`request_log.internal`), não ignorado, e a visão de logs da API filtra por essa
-coluna. Uma versão anterior retornava cedo ao ver o header, o que significava que
-qualquer um capaz de defini-lo mantinha suas requisições totalmente fora do log de
-auditoria — um header de requisição nunca pode ser capaz de tornar tráfego invisível.
+coluna, então nenhum header de requisição consegue deixar tráfego fora do log.
 
-Essas linhas **não são mantidas para sempre**. `RequestLogRetentionService` apaga as
+As linhas **não são mantidas para sempre**. `RequestLogRetentionService` apaga as
 linhas mais antigas que `REQUEST_LOG_RETENTION_DAYS` (padrão **30**) em um timer
 (`REQUEST_LOG_PRUNE_INTERVAL_MS`, padrão **1h**). Cada ciclo apaga em lotes curtos de
 `REQUEST_LOG_PRUNE_BATCH_SIZE` (padrão **1000**) e continua em loop até o backlog
@@ -413,32 +392,24 @@ a consulta do dashboard rápida à medida que o volume cresce.
 
 ### Atividade do cliente (o que a carteira e o dashboard reportam)
 
-`request_log` registra o que chegou a este serviço. Ele não consegue registrar o que
-um cliente *fez*: uma carteira que travou na tela de envio, uma assinatura que o
-usuário cancelou, uma página do dashboard que lançou um erro antes de qualquer
-requisição sair do navegador. Nada disso produz uma chamada HTTP aqui, e são
-exatamente os eventos que vale a pena ter quando algo dá errado — então os clientes
-reportam os seus próprios, para `POST
-/v1/activity/events`.
+`request_log` registra apenas as requisições que chegaram a este serviço. Ele não
+enxerga uma carteira que travou na tela de envio, uma assinatura que o usuário
+cancelou ou uma página do dashboard que falhou antes de enviar qualquer coisa, então
+os próprios clientes reportam esses eventos para `POST /v1/activity/events`.
 
-- **Um lote, não uma chamada por evento.** Os clientes enfileiram e descarregam, então
-  uma carteira offline guarda os seus eventos e os envia na próxima inicialização. Até
-  `ACTIVITY_MAX_BATCH` (100) por requisição, gravados em uma única instrução.
-- **Repetir um envio é seguro.** Um evento pode trazer o `eventId` do próprio
-  cliente; `(consumerId, eventId)` é único e o insert ignora duplicatas, então um
-  lote que foi gravado, mas cuja confirmação nunca chegou, pode ser reenviado sem
-  duplicar cada linha. A resposta informa `accepted` e `duplicates`.
-- **A atribuição é do gateway, nunca do corpo.** As linhas são gravadas sob o
-  consumer que o APISIX autenticou. Um cliente não pode registrar eventos em nome de
-  outra conta, e não existe campo que lhe permita tentar.
-- **A ingestão não falha por causa do formato de um payload.** Um `message` longo
-  demais é truncado e um `props` grande demais é substituído por `{"_dropped":
-  "props_too_large"}`; um 400 custaria o lote inteiro, e o lote importa mais
-  justamente quando o cliente está em um estado que ninguém previu.
-- **Um relógio de dispositivo errado não reordena o feed.** `occurredAt` é ajustado
-  ao horário de recebimento quando está mais de cinco minutos adiantado ou mais de
-  sete dias atrasado, então um celular uma hora adiantado não consegue fixar os seus
-  eventos no topo de uma lista ordenada da mais nova para a mais antiga. Os dois
+- **Em lotes.** Os clientes enfileiram os eventos e os descarregam, então uma
+  carteira offline os envia na próxima inicialização. Até `ACTIVITY_MAX_BATCH` (100)
+  por requisição.
+- **Seguro para repetir.** Um evento pode trazer o `eventId` do próprio cliente;
+  `(consumerId, eventId)` é único e as duplicatas são ignoradas. A resposta informa
+  `accepted` e `duplicates`.
+- **Atribuição pelo gateway.** As linhas são gravadas sob o consumer que o APISIX
+  autenticou; não existe campo no corpo para isso.
+- **Tolerante a payloads ruins.** Um `message` longo demais é truncado e um `props`
+  grande demais é substituído por `{"_dropped": "props_too_large"}`, em vez de
+  rejeitar o lote inteiro.
+- **Timestamps ajustados.** `occurredAt` é substituído pelo horário de recebimento
+  quando está mais de cinco minutos adiantado ou mais de sete dias atrasado. Os dois
   horários são mantidos: `at` (o do cliente) e `receivedAt`.
 
 Para ler de volta:
@@ -448,9 +419,8 @@ Para ler de volta:
 | `GET /v1/activity/events` | `activity:read` | O feed, do mais novo para o mais antigo. Filtros: `source`, `level`, `category`, `type` (prefixo), `network`, `since`/`until` |
 | `GET /v1/activity/summary` | `activity:read` | Contagens por level/source/category, principais tipos de evento, principais erros, sessões, dispositivos, uma série diária |
 
-`level` no feed é um **piso**, não uma correspondência exata: `level=warn` retorna
-avisos *e* erros. Um filtro que retornasse só as linhas que alguém rotulou como
-`error` esconderia os avisos que levaram a elas.
+`level` no feed é um **mínimo**, não uma correspondência exata: `level=warn` retorna
+avisos *e* erros.
 
 `activity_event` guarda um IP, um user agent e o que mais o cliente tiver anexado,
 então é limpo pelo mesmo job e nos mesmos lotes limitados que `request_log` —
@@ -473,14 +443,12 @@ Tipos de evento: `PAYMENT_INTENT_CREATED`, `PAYMENT_INTENT_UPDATED`,
 `PAYOUT_UPDATED` e `PAYOUT_COMPLETED`. A lista oficial é o enum `WebhookEventType`
 em `prisma/schema.prisma`.
 
-**O que contém um corpo originado no BlindPay.** `RECEIVER_UPDATED` / `PAYIN_*` /
-`PAYOUT_*` trazem apenas identidade e estado — ids, status, valores, rails — nunca
-dados pessoais. O objeto do provedor *não* é encaminhado literalmente: o payload de
-um receiver é um dossiê de KYC completo (tax id, data de nascimento, endereço, links
-de documentos), e se inscrever em um evento exige apenas `webhooks:write`, o que
-faria do webhook uma forma de mandar entregar esse dossiê a qualquer host. Busque os
+**Corpos originados no BlindPay.** `RECEIVER_UPDATED` / `PAYIN_*` / `PAYOUT_*`
+trazem apenas identidade e estado — ids, status, valores, rails — nunca dados
+pessoais. O objeto do provedor não é encaminhado, porque o payload de um receiver é
+um dossiê de KYC completo e se inscrever exige apenas `webhooks:write`. Busque os
 detalhes na API com uma chave que tenha `kyc:read` / `onramp:read` / `offramp:read`.
-Veja `src/blindpay/blindpay-event-redaction.ts` para a allowlist exata de campos.
+A allowlist de campos está em `src/blindpay/blindpay-event-redaction.ts`.
 
 A entrega é desacoplada via `EventEmitter2` do NestJS (`webhook.event`), então
 emitir uma notificação nunca bloqueia a requisição da API que a disparou.
@@ -504,26 +472,20 @@ conexão/leitura vindos do env e um tamanho máximo de corpo de resposta.
 | `WEBHOOK_SWEEP_INTERVAL_MS` | `60000` | Com que frequência uma réplica tenta fazer a varredura (só uma vence por ciclo) |
 | `WEBHOOK_PAYLOAD_RETENTION_DAYS` | `30` | Depois disso, o corpo armazenado de uma entrega concluída é substituído por um marcador de redação. `0` mantém os corpos para sempre |
 
-**O teto real de tentativas é 9, não 3.** `WEBHOOK_MAX_ATTEMPTS` limita um loop de
-retry em processo. Depois, o sweeper pega as entregas que ainda estão dentro de
-`WEBHOOK_MAX_ATTEMPTS × 3` tentativas no total, então uma entrega pode ser tentada
-até nove vezes, distribuídas ao longo de horas. Isso é deliberado — um pod derrubado
-no meio do backoff costumava deixar uma entrega PENDING abandonada para sempre, o
-que significava um pagamento liquidado que não notificava ninguém.
+**Uma entrega pode ser tentada até 9 vezes, não 3.** `WEBHOOK_MAX_ATTEMPTS` limita
+um loop de retry em processo. Depois, o sweeper pega as entregas que ainda estão
+abaixo de `WEBHOOK_MAX_ATTEMPTS × 3` tentativas no total, distribuídas ao longo de
+horas, então uma entrega interrompida por um restart de pod não se perde.
 
-**A reentrega é best-effort dentro da janela de retenção.** Depois de
-`WEBHOOK_PAYLOAD_RETENTION_DAYS`, o corpo armazenado é apagado (um corpo
-`RECEIVER_UPDATED` é um dossiê de KYC, e o log de entregas é mantido). O sweeper
-ignora essas linhas e `POST /v1/webhooks/:id/deliveries/:id/redeliver` retorna
-`409 payload_expired` em vez de enviar um corpo redigido sob um tipo de evento real
-com uma assinatura válida.
+**A reentrega só funciona dentro da janela de retenção.** Depois de
+`WEBHOOK_PAYLOAD_RETENTION_DAYS`, o corpo armazenado é apagado (o log de entregas é
+mantido). O sweeper ignora essas linhas, e
+`POST /v1/webhooks/:id/deliveries/:id/redeliver` retorna `409 payload_expired`.
 
-**Contrato do receptor.** Qualquer `2xx` confirma o recebimento. Responda dentro de
-`WEBHOOK_READ_TIMEOUT_MS` (5s por padrão). Não há garantia de ordem, então trate os
-eventos como um conjunto e reconcilie com a API. Deduplique pelo `id` do evento —
-observe que uma reentrega reutiliza o `id` original, então um receptor que deduplica
-estritamente vai ignorá-la; essa é a troca pretendida (entrega at-least-once, efeito
-exactly-once).
+**Recebendo webhooks.** Qualquer `2xx` confirma o recebimento. Responda dentro de
+`WEBHOOK_READ_TIMEOUT_MS` (5s por padrão). A ordem não é garantida, então reconcilie
+com a API. Deduplique pelo `id` do evento; uma reentrega reutiliza o `id` original
+(entrega at-least-once).
 
 **Migrando endpoints existentes:** depois do deploy, execute
 
@@ -572,50 +534,37 @@ O segredo de assinatura é retornado **uma única vez** em `POST /webhooks` (e e
 
 ### OpenAPI / Swagger
 
-**Nota de segurança:** `GET /docs`, `/docs/json` e `/docs/yaml` são montados por
-`SwaggerModule.setup` como **middleware do Express**, não como controllers do Nest.
-Eles **não** passam pelo `ApisixGuard` nem pelo `PermissionsGuard` — qualquer um que
-alcance a porta do serviço pode baixar a spec completa da API, a menos que a
-documentação esteja desativada. Em produção, a documentação fica **desligada por
-padrão** (`NODE_ENV=production` e sem `SWAGGER_ENABLED`). Defina
-`SWAGGER_ENABLED=true` apenas quando quiser deliberadamente publicar a spec em uma
-rede confiável.
+**Nota de segurança:** `GET /docs`, `/docs/json` e `/docs/yaml` são montados como
+**middleware do Express**, não como controllers do Nest, então **não** passam pelo
+`ApisixGuard` nem pelo `PermissionsGuard` — qualquer um que alcance a porta do serviço
+pode baixar a spec. Em produção, a documentação fica **desligada por padrão**
+(`NODE_ENV=production` e sem `SWAGGER_ENABLED`). Defina `SWAGGER_ENABLED=true` apenas
+em uma rede confiável.
 
-Documentação ao vivo (quando habilitada):
-
-- `GET /docs` — Swagger UI
-- `GET /docs/json` — spec OpenAPI 3.0 (JSON)
-- `GET /docs/yaml` — spec OpenAPI 3.0 (YAML)
-
-Exporte a spec para arquivos (para que outro servidor possa hospedá-la ou consumi-la)
-— não é necessária conexão com o banco de dados nem o segredo real do gateway; ela
-roda no modo preview do Nest com placeholders locais quando essas variáveis de
-ambiente estão ausentes:
+Exporte a spec para arquivos — não é preciso banco de dados nem o segredo real do
+gateway:
 
 ```bash
 npm run openapi:generate
 # writes openapi/openapi.json and openapi/openapi.yaml
 ```
 
-A CI e o gate de release regeneram os dois arquivos versionados e rejeitam
-divergências. Rode a mesma verificação antes de fazer commit de uma mudança em um
-controller ou DTO:
+A CI regenera os dois arquivos versionados e rejeita divergências. Rode a mesma
+verificação antes de fazer commit de uma mudança em um controller ou DTO:
 
 ```bash
 npm run openapi:check
 ```
 
-Os caminhos na spec já incluem a versão (`/v1/...`). Para gravar um host concreto do
-gateway em `servers` da spec, defina `OPENAPI_SERVER_URL` antes de gerar:
+Os caminhos na spec já incluem a versão (`/v1/...`). Para colocar um host do gateway
+em `servers` da spec, defina `OPENAPI_SERVER_URL` antes de gerar:
 
 ```bash
 OPENAPI_SERVER_URL=https://gateway.example.com npm run openapi:generate
 ```
 
-A configuração do Swagger (`src/swagger.ts`) é compartilhada pelo servidor em
-execução e pelo gerador, então os dois ficam sincronizados. Os dois headers do
-APISIX (`X-Gateway-Secret`, `X-Consumer-Username`) são documentados como security
-schemes na spec.
+Os dois headers do APISIX (`X-Gateway-Secret`, `X-Consumer-Username`) são
+documentados como security schemes na spec.
 
 ### Criando intents — duas operações SEP-7, dois endpoints
 
@@ -630,16 +579,16 @@ omitido (ou é `XLM`/`native`); qualquer outro ativo exige `assetIssuer`.
 `prod` → public (mainnet), uma chave `dev` → testnet. `STELLAR_NETWORK` é apenas um
 fallback para desenvolvimento local sem o gateway. Cada intent armazena a sua própria
 rede, e todas as chamadas ao Horizon (montagem, validação, observer) apontam para ela.
+Todo intent é armazenado (tabela `payment_intent`) e vinculado ao consumer que chama:
+`PENDING → SUBMITTED → SUCCEEDED/FAILED/CANCELLED/EXPIRED`.
 
-**O memo é um `MEMO_ID` obrigatório** — ele identifica o pagamento on-chain e dá
-**idempotência** ao intent: `(consumer, memo)` é único, então recriar com o mesmo
-memo **e os mesmos termos** retorna o intent original. O mesmo memo com qualquer
-termo diferente — tipo, rede, destino, valor, ativo, `msg`, `callback`, ou `source`
-no caso de `tx` — resulta em `409 idempotency_conflict`, e o erro não diz nada sobre
-o intent armazenado. Essa comparação existe por causa da chave pública compartilhada:
-toda carteira anônima é um único consumer, então, sem ela, um memo que outra pessoa
-usou primeiro entregava a você o intent *dela*, com um QR que pagava a ela. Se você
-não passar `memo`, um uint64 aleatório é gerado.
+**O memo é um `MEMO_ID` obrigatório** — ele identifica o pagamento on-chain e torna a
+criação **idempotente**: `(consumer, memo)` é único, então recriar com o mesmo memo
+**e os mesmos termos** retorna o intent original. O mesmo memo com qualquer termo
+diferente — tipo, rede, destino, valor, ativo, `msg`, `callback`, ou `source` no caso
+de `tx` — resulta em `409 idempotency_conflict`, e o erro não diz nada sobre o intent
+armazenado. Isso importa sob a chave pública compartilhada, em que toda carteira
+anônima é o mesmo consumer. Se você não passar `memo`, um uint64 aleatório é gerado.
 
 **`POST /v1/payment-intents/tx`** — o pagador (`source`) é conhecido, então montamos
 o `TransactionEnvelope` não assinado e uma URI `web+stellar:tx?xdr=...`.
@@ -669,11 +618,7 @@ o `TransactionEnvelope` não assinado e uma URI `web+stellar:tx?xdr=...`.
 // response → { id, kind: "PAY", memo, xdr: null, uri: "web+stellar:pay?destination=…&memo=…&memo_type=MEMO_ID", qr, network, … }
 ```
 
-Cada endpoint documenta uma resposta tipada com payloads de exemplo na spec OpenAPI
-(`TxPaymentIntentEntity`, `PayPaymentIntentEntity`, `ValidationOutcomeEntity`), então
-o Swagger mostra um exemplo concreto de resposta, e não um corpo vazio.
-
-Resposta:
+Exemplo de resposta de `tx`:
 
 ```jsonc
 {
@@ -698,34 +643,27 @@ Rede/Horizon/taxa/timeout são configurados pelas variáveis de ambiente `STELLA
 
 ## A API key pública compartilhada
 
-A carteira é open source e distribui uma API key que todo mundo tem, para que uma
-pessoa possa fazer swap, adicionar liquidez ou criar um link de pagamento sem se
-cadastrar. Ela paga a comissão do plano `community` — 150 bps, a taxa mais alta da
-tabela —, e é o cadastro que dá acesso a uma menor. O gateway injeta a taxa por
-consumer exatamente como faz para uma chave privada (veja
-`resolvePlanCommissionBps`), então nada na precificação é tratado como caso especial
-aqui.
+A carteira open source distribui uma API key que todo mundo compartilha, para que
+qualquer pessoa possa fazer swap, adicionar liquidez ou criar um link de pagamento
+sem se cadastrar. Essas chamadas pagam a comissão do plano `community` (150 bps, a
+taxa mais alta); o cadastro dá acesso a uma menor. O gateway injeta a taxa
+exatamente como faz para uma chave privada (veja `resolvePlanCommissionBps`).
 
-O que *é* especial é o isolamento entre tenants. Todo chamador anônimo da rede chega
-como o mesmo consumer do APISIX, e os endpoints de leitura filtram as linhas
-exatamente por esse consumer:
+A diferença está no isolamento entre tenants. Todo chamador anônimo chega como o
+mesmo consumer do APISIX, e os endpoints de leitura filtram as linhas por consumer:
 
 ```ts
 // swaps.service.ts
 where: { id, consumer: { apisixUsername: consumer.username } }
 ```
 
-Então `GET /v1/swaps` sob a chave pública entregaria a cada usuário anônimo o
-histórico de swaps de toda a população anônima. Escopos não resolvem isso — um escopo
-é uma propriedade da chave, e todos têm a mesma chave — e a sobreposição não é
-hipotética: `POST /v1/swaps/quote` exige `swaps:read`, que é o mesmo escopo que lista
-o histórico.
+Então `GET /v1/swaps` sob a chave pública retornaria o histórico de swaps de todos
+os usuários anônimos. Escopos não impedem isso, porque todos têm a mesma chave — e
+`POST /v1/swaps/quote` exige `swaps:read`, o mesmo escopo que lista o histórico.
 
-**Por isso o `PublicKeyGuard` é uma allowlist, não uma denylist.** Um consumer
-público é recusado em toda rota que não traga `@AllowPublicKey()`, então uma rota
-adicionada no ano que vem fica inacessível para a chave pública até que alguém diga o
-contrário no mesmo diff. Esquecer o decorator gera um ticket de suporte; esquecer uma
-entrada da denylist gera um vazamento de dados.
+**O `PublicKeyGuard` é uma allowlist.** O consumer público é recusado em toda rota
+que não traga `@AllowPublicKey()`, então rotas novas ficam fechadas para ele por
+padrão.
 
 Acessível com a chave pública hoje:
 
@@ -742,28 +680,22 @@ Acessível com a chave pública hoje:
 | `GET /v1/assets` | O catálogo público de ativos |
 | `GET /v1/aliases/resolve/:name` \| `availability/:name` \| `by-address/:address` | Um pagador resolvendo um handle é justamente o chamador anônimo para o qual esta chave existe; a resposta é uma função pura da requisição e nunca inclui a caixa de e-mail do dono |
 
-Recusadas, e de propósito: `GET /v1/swaps`, `GET /v1/swaps/:id`,
+Recusadas: `GET /v1/swaps`, `GET /v1/swaps/:id`,
 `GET /v1/liquidity-pools/operations{,/:id}`, `GET /v1/activity/events`,
 `GET /v1/activity/summary`, toda leitura de payment intent, toda rota do dono de um
 alias (reivindicar, listar, adicionar ou remover um endereço, liberar, recuperar) e
 tudo sob `/v1/kyc`, `/v1/onramp`, `/v1/offramp` e `/v1/webhooks`. Uma carteira sem
-conta monta o seu histórico a partir do Horizon, que de qualquer forma é a fonte
-oficial da atividade on-chain.
+conta lê o seu histórico no Horizon.
 
-**A telemetria está na lista de propósito.** Uma carteira sem conta na CosmosPay
-também trava, e recusar os seus relatórios de erro nos deixaria cegos justamente
-para a população que encontra as falhas da primeira execução — a rota de ingestão
-responderia `403` e os relatórios seriam descartados. Os eventos que chegam por esta
-chave são anônimos por construção (um único consumer compartilhado), então nada que
-identifique uma conta pode viajar com eles; a carteira remove endereço, destino,
-valor e txHash antes de enviar.
+**A telemetria é permitida** para que os relatórios de crash de carteiras sem conta
+continuem chegando. Os eventos desta chave são anônimos (um único consumer
+compartilhado), então a carteira remove endereço, destino, valor e txHash antes de
+enviar.
 
 O guard identifica o consumer público **ou** pelo papel encaminhado
-(`X-Consumer-Role: public`) **ou** pelo username configurado em
-`APISIX_PUBLIC_CONSUMER`. São dois sinais porque cada um, sozinho, falha aberto de
-um jeito que custa dados de usuários: um gateway que deixasse de encaminhar papéis
-promoveria todo chamador anônimo a tenant comum, e um deploy que nunca definiu a
-variável de ambiente dependeria de um header que não controla. Defina os dois.
+(`X-Consumer-Role: public`) **ou** pelo username em `APISIX_PUBLIC_CONSUMER`. Defina
+os dois: se o gateway deixar de encaminhar papéis, o username continua
+correspondendo, e sem o username o guard depende apenas de um header.
 
 ## Swaps nativos da Stellar (path payments)
 
@@ -833,18 +765,15 @@ destino; a etapa de montagem verifica isso e, caso contrário, retorna um erro c
 campos mais `source` (a conta que paga/assina); `destination` assume `source` por
 padrão (um self-swap), e um `memo` opcional (MEMO_ID) é repetido on-chain.
 
-**Idempotência** opcional (issue #17): envie um header `Idempotency-Key` (preferível)
-ou `idempotencyKey` no corpo. Uma retentativa com a mesma chave **e a mesma
-requisição** — rede, origem, destino, os dois ativos, valor, slippage e memo —
-retorna o swap **existente** (`id` + `txHash`) em vez de montar outra transação
-Stellar. A mesma chave com qualquer requisição diferente resulta em
-`409 idempotency_conflict`, e o erro não revela nada sobre o swap armazenado.
-Depósitos e saques de liquidez seguem a mesma regra, comparando também o tipo da
-operação. A comparação existe por causa da chave pública compartilhada: toda carteira
-anônima é um único consumer, então uma chave que outra pessoa usou primeiro entregava
-a você o envelope não assinado *dela* — um envelope capaz de mover os seus fundos
-para ela. Sem chave, a constraint única `(network, txHash)` ainda rejeita uma
-remontagem idêntica byte a byte com **409** (colisão de sequence / XDR). Quando
+**Idempotência** opcional: envie um header `Idempotency-Key` (preferível) ou
+`idempotencyKey` no corpo. Uma retentativa com a mesma chave **e a mesma requisição**
+— rede, origem, destino, os dois ativos, valor, slippage e memo — retorna o swap
+**existente** (`id` + `txHash`) em vez de montar outra transação. A mesma chave com
+uma requisição diferente resulta em `409 idempotency_conflict`, e o erro não diz nada
+sobre o swap armazenado. Depósitos e saques de liquidez seguem a mesma regra,
+comparando também o tipo da operação. Sem chave, a constraint única
+`(network, txHash)` ainda rejeita uma remontagem idêntica byte a byte com **409**
+(colisão de sequence / XDR). Quando
 `STELLAR_SWAP_SINGLE_INFLIGHT=true`, um segundo swap `PENDING` não expirado para o
 mesmo `(consumer, source, network)` também retorna **409**, citando o id existente
 (padrão **desligado** — swaps distintos e concorrentes a partir de uma mesma conta
@@ -865,17 +794,16 @@ continuam permitidos).
 // on a network rejection → { "submitted": false, "status": "FAILED", "reason": "…", "resultCodes": ["op_under_dest_min"], "swap": { … } }
 ```
 
-O hash da transação assinada é comparado com o da transação que o serviço montou
-antes de ser transmitida, então quem chama nunca consegue fazer o serviço retransmitir
-uma transação arbitrária. Um swap dispara os eventos de webhook `SWAP_CREATED` /
-`SWAP_SUBMITTED` / `SWAP_SUCCEEDED` / `SWAP_FAILED` pelo mesmo dispatcher.
+Antes de transmitir, o serviço verifica se o hash da transação assinada corresponde
+ao da transação que ele montou, então nunca retransmite uma transação arbitrária. Um
+swap dispara os eventos de webhook `SWAP_CREATED` / `SWAP_SUBMITTED` /
+`SWAP_SUCCEEDED` / `SWAP_FAILED` pelo mesmo dispatcher.
 
 ## Aliases — handles de pagamento reivindicáveis
 
-Um alias permite que um pagador digite `emanuel250` em vez de `GA5ZSE…`. É também o
-que um pagador lê imediatamente antes de autorizar uma transferência, então cada
-regra abaixo existe porque errar não produz uma linha ruim no banco — produz um
-pagamento para a conta errada, sob um nome em que o pagador confiou.
+Um alias permite que um pagador digite `emanuel250` em vez de `GA5ZSE…`. O pagador
+confia nesse nome logo antes de enviar dinheiro, então as regras abaixo são rígidas:
+um erro significa um pagamento para a conta errada.
 
 ### Reivindicado provando o controle de uma chave, não pedindo
 
@@ -885,14 +813,12 @@ wallet ──2. signs SHA-256(domain ‖ 0x00 ‖ uint32be(length) ‖ message) 
 wallet ──3. POST /v1/aliases {name, email, nonce, signature} ────────▶ alias bound to the calling consumer
 ```
 
-- **O serviço retorna a mensagem; o cliente nunca a reconstrói.** Um cliente que a
-  monta a partir da documentação está a uma mudança na ordem dos campos de ter
-  assinaturas recusadas sem que nada, de nenhum dos lados, diga por quê.
+- **Assine exatamente a mensagem que o serviço retorna.** Não a reconstrua no
+  cliente.
 - **A assinatura cobre um digest com tag de domínio, nunca uma transação.** Nada do
-  que este fluxo pede para uma carteira assinar pode ser enviado à rede, e o domínio
-  (`Cosmos Pay alias claim v1`) pertence só a esta funcionalidade, então um dapp que
-  convence um usuário a assinar uma mensagem arbitrária não sai dali com uma
-  reivindicação válida.
+  que é assinado neste fluxo pode ser enviado à rede, e o domínio
+  (`Cosmos Pay alias claim v1`) é exclusivo desta funcionalidade, então uma
+  assinatura obtida por outro dapp não pode ser usada como reivindicação.
 - **O propósito está dentro dos bytes assinados** (`CLAIM`, `ADD_ADDRESS`,
   `RECOVER`), então uma assinatura coletada para adicionar um endereço não pode ser
   reutilizada para concluir uma recuperação.
@@ -901,8 +827,7 @@ wallet ──3. POST /v1/aliases {name, email, nonce, signature} ─────
   outro.
 - **Os challenges são de uso único e duram cinco minutos.** A assinatura é verificada
   *antes* de o challenge ser consumido, então uma assinatura inválida não consegue
-  queimar o nonce em andamento de um concorrente; e consumi-lo é um compare-and-swap,
-  então duas requisições não conseguem consumir o mesmo challenge.
+  consumir o nonce de outra pessoa, e consumi-lo é um compare-and-swap.
 - **Uma corrida é decidida pelo índice único em `alias.name`**, e não por uma
   verificação prévia; o perdedor recebe `409 alias_taken`.
 
@@ -911,10 +836,10 @@ wallet ──3. POST /v1/aliases {name, email, nonce, signature} ─────
 `a-z` minúsculo, `0-9` e `_` (nunca em nenhuma das pontas), de 3 a 32 caracteres,
 convertido para minúsculas antes de a unicidade ser decidida. Sem Unicode: o conjunto
 de homóglifos é ilimitado, e nenhuma normalização torna um `а` cirílico seguro de
-exibir ao lado de um valor. Também são recusadas: palavras reservadas que se
-passariam pelo produto ou por um operador (`admin`, `support`, `cosmospay`,
-`stellar`, …) e qualquer coisa que pareça uma conta Stellar (`g` ou `m` seguido de 20
-ou mais caracteres base32). A regra está em `src/aliases/alias-name.ts`.
+exibir ao lado de um valor. Também são recusadas: palavras reservadas (`admin`,
+`support`, `cosmospay`, `stellar`, …) e qualquer coisa que pareça uma conta Stellar
+(`g` ou `m` seguido de 20 ou mais caracteres base32). A regra está em
+`src/aliases/alias-name.ts`.
 
 ### Muitos endereços, um nome
 
@@ -925,14 +850,12 @@ alias, e o novo endereço assina o seu próprio challenge `ADD_ADDRESS`. O últi
 endereço restante não pode ser removido (libere o alias em vez disso), e um consumer
 pode ter no máximo 25 aliases.
 
-Um alias `SUSPENDED` — um bloqueio imposto por um operador — não resolve para nada.
-Uma suspensão que continua entregando uma conta não faz nada a respeito do dinheiro.
+Um alias `SUSPENDED` (um bloqueio imposto por um operador) não resolve para nada.
 
 ### A recuperação passa pelo e-mail e pelo console da plataforma
 
-Chaves se perdem, e uma chave perdida não pode deixar um nome inalcançável para
-sempre, então uma reivindicação registra uma caixa de e-mail de recuperação. Isso faz
-da recuperação o caminho mais perigoso do módulo:
+Uma reivindicação registra um e-mail de recuperação, para que perder uma chave não
+signifique perder o nome. A recuperação funciona assim:
 
 1. O **console da plataforma** chama `POST /v1/aliases/:name/recovery {email}`. A
    resposta é idêntica quer o handle e a caixa de e-mail coincidam, quer não; quando
@@ -943,19 +866,13 @@ da recuperação o caminho mais perigoso do módulo:
    com a sua própria API key. As duas provas são exigidas: o token prova a caixa de
    e-mail, a assinatura prova a chave.
 3. A titularidade passa para o consumer que chama e **todos os endereços anteriores
-   são descartados**. A recuperação existe porque as chaves antigas se foram, e
-   deixá-las resolvíveis faria com que quem as detém continuasse recebendo os
-   pagamentos.
+   são removidos**, então quem detém as chaves antigas deixa de receber pagamentos.
 
-**Por que o passo 1 pertence ao console.** O token *é* a prova de controle da caixa
-de e-mail, então ele só pode chegar à parte que entrega o e-mail. A rota costumava
-aceitar qualquer chave com `payments:write` e devolvia o token a quem pedisse — então
-qualquer um que conhecesse um handle e o e-mail do seu dono podia tomar o alias, e
-com ele todo pagamento enviado a ele. O `ConsoleOnlyGuard` agora recusa todo
-chamador com API key com `403 admin_console_only` antes mesmo de o alias ser
-consultado, e a rota fica fora do contrato publicado. Cinco tokens errados queimam
-uma recuperação (o dono simplesmente inicia outra; um atacante não consegue bloquear
-um nome errando de propósito), e um alias suspenso não pode ser recuperado.
+O passo 1 é exclusivo do console porque o token prova o controle da caixa de e-mail,
+então ele só pode chegar a quem envia o e-mail. O `ConsoleOnlyGuard` recusa todo
+chamador com API key com `403 admin_console_only` antes de o alias ser consultado, e
+a rota não está no contrato publicado. Cinco tokens errados cancelam uma recuperação
+(o dono pode iniciar outra), e um alias suspenso não pode ser recuperado.
 
 Challenges e recuperações expirados são apagados um dia depois de expirarem pelo
 `AliasChallengeSweeperService` (de hora em hora, uma réplica por ciclo).
@@ -1027,10 +944,8 @@ retornar `503` `misconfigured`, assim como o webhook de entrada enquanto
 ### As URLs de redirecionamento do KYC ficam em allow-list por consumer
 
 O fluxo de termos de serviço envia o usuário ao BlindPay e de volta para uma
-`redirect_url` fornecida pelo integrador. Aceita como string livre, isso é um open
-redirect vestindo o nome da plataforma: um link que começa em uma página de KYC
-confiável e termina onde um atacante quiser. Por isso, toda `redirect_url` passa por
-duas camadas:
+`redirect_url` fornecida pelo integrador. Para evitar um open redirect, toda
+`redirect_url` passa por duas verificações:
 
 | Camada | Regra | Onde |
 | ------ | ----- | ---- |
@@ -1042,33 +957,26 @@ KYC_REDIRECT_URL_WHITELIST={"cosmos_acme":["acme.com","app.acme.com"]}
 ```
 
 Ela é **fail-closed**: um consumer sem entrada não pode usar redirecionamento algum, e
-um host com ponto final ou em forma IDN é recusado em vez de normalizado. A lista é
-por consumer porque um domínio que um integrador avaliza não diz nada sobre outro.
-Todo ponto de entrada que recebe uma `redirect_url` a verifica — iniciar, solicitar e
-aprovar os termos de serviço, incluindo a aprovação pelo admin, que aplica a lista do
-próprio consumer do receiver. Um esquema ou host recusado resulta em `400`.
+um host com ponto final ou em forma IDN é recusado em vez de normalizado. Toda rota
+que recebe uma `redirect_url` a verifica, incluindo a aprovação pelo admin, que usa a
+lista do próprio consumer do receiver. Um esquema ou host recusado resulta em `400`.
 
 ## Pollar — login social que devolve uma carteira Stellar
 
 A [Pollar](https://docs.pollar.xyz/docs) transforma um login Google/GitHub em uma
 conta Stellar: autentica o usuário, cria uma carteira, custodia a chave no AWS KMS,
 adiciona as trustlines configuradas e financia a reserva — o usuário nunca vê uma
-seed phrase. Este serviço a expõe como uma **bridge OAuth**, o mesmo formato que um
-launcher de jogos ou um console usa quando o cliente conclui a troca do código
-localmente.
+seed phrase. Este serviço a expõe como uma **bridge OAuth**.
 
 ### Por que uma bridge e não um passthrough
 
 O login hospedado da Pollar foi projetado para um SDK de navegador. Ele leva o
 usuário a `GET /auth/{provider}` com uma publishable key, um id de client session e
 uma `redirect_uri` — e essa redirect URI precisa ser um host **registrado na
-Pollar**. Uma carteira não consegue satisfazer nada disso: um listener de loopback em
-uma porta efêmera ou um deep link `cosmospay://` nunca pode ser um host registrado, e
-a montagem exige chaves e ids de sessão com os quais a carteira não deveria lidar.
-
-Então a bridge fica com a metade voltada para a Pollar. A carteira recebe um contrato
-de dois passos que já entende — **abrir uma autorização, resgatar um código** — e
-não absorve nada além desse código.
+Pollar**. Uma carteira não consegue cumprir esses requisitos: um listener de loopback
+ou um deep link `cosmospay://` nunca é um host registrado, e a carteira não deveria
+lidar com essas chaves e ids de sessão. Então a bridge cuida do lado da Pollar, e a
+carteira faz só dois passos: **abrir uma autorização, resgatar um código**.
 
 ```
 wallet ──1. POST /v1/pollar/oauth/authorize ────────────▶ bridge ──▶ POST /v2/auth/session
@@ -1085,11 +993,9 @@ wallet ──5. POST /v1/pollar/oauth/token ────────────
 wallet ──6. talks to Pollar DIRECTLY from here on ──────▶ https://sdk.api.pollar.xyz/v2
 ```
 
-O passo 6 é o objetivo de tudo isso: a resposta do resgate também traz a
-`publishable_key` e a `api_base_url`, então dali em diante a carteira lê saldos,
-monta e envia transações diretamente contra a própria carteira virtual. **Este
-serviço nunca faz proxy dessa superfície e não guarda nenhuma chave que permitiria
-fazê-lo.**
+A partir do passo 6, a carteira fala diretamente com a Pollar: a resposta do resgate
+inclui a `publishable_key` e a `api_base_url`, que a carteira usa para ler saldos e
+montar e enviar transações. **Este serviço não faz proxy dessas chamadas.**
 
 ### Duas formas de absorver o código
 
@@ -1100,53 +1006,34 @@ fazê-lo.**
 | O navegador vê   | a sua própria URI                                | uma página simples de "você pode fechar esta janela" — nunca o código |
 | Use quando       | a carteira tem um deep link ou um listener de loopback | não tem nenhum dos dois (quiosque, headless, view embutida) |
 
-Cada polling emite um código novo e aposenta o anterior, então resgate o código do
-seu polling mais recente. Isso decorre de nunca armazenar uma credencial ativa: a
-linha guarda um SHA-256 do código, e um hash não pode ser revertido.
+Cada polling emite um código novo e invalida o anterior, então resgate o código do
+seu polling mais recente. Só um SHA-256 do código é armazenado.
 
-**Prefira o fluxo de polling.** A Pollar não devolve o navegador para o callback: o
-seu fluxo hospedado termina na sua própria página — `www.pollar.xyz/auth/status` —
-quer o consentimento tenha sido recusado, quer concedido, e um consentimento
-concedido simplesmente deixa a client session `READY` do lado da Pollar. A
-`redirect_uri` que a URL de autorização carrega nunca é visitada, então um handshake
-que espera ser chamado de volta espera até expirar.
+**Prefira o fluxo de polling.** O fluxo hospedado da Pollar não devolve o navegador
+para o callback: ele termina na sua própria página (`www.pollar.xyz/auth/status`) e
+marca a client session como `READY` do lado da Pollar. Por isso, enquanto um
+handshake está `pending`, a rota de polling consulta a client session na Pollar e
+promove o handshake assim que a Pollar informa `READY`.
 
-Por isso, a rota de polling pergunta à Pollar em vez de esperar ser avisada: enquanto
-um handshake está `pending`, ela verifica o status da própria client session e
-promove o handshake no momento em que a Pollar informa `READY` — a mesma condição
-pela qual o resgate já espera. O contrato da carteira não muda; o que mudou é que
-`pending` agora termina sozinho.
+- **Mantenha a rota de callback registrada na Pollar.** O fluxo de redirect depende
+  dela.
+- **A Pollar é consultada no máximo uma vez a cada dois segundos por handshake**
+  (`POLLAR_SESSION_PROBE_INTERVAL_MS`), limite compartilhado entre as réplicas por
+  meio de `providerCheckedAt`. Uma carteira fazendo polling a cada segundo custa 30
+  requisições por minuto à Pollar, contra um orçamento de 200 da chave.
 
-Duas notas operacionais decorrem disso:
-
-- **A rota de callback ainda existe e continua registrada na Pollar.** Ela funciona
-  se um redirect chegar, e é dela que depende um handshake do fluxo de redirect —
-  esse fluxo não tem outro lugar onde colocar um código. Ela só não pode ser a única
-  forma de perceber um login.
-- **O provedor é consultado no máximo uma vez a cada dois segundos por handshake**
-  (`POLLAR_SESSION_PROBE_INTERVAL_MS`), por meio de um compare-and-swap em
-  `providerCheckedAt` compartilhado por todas as réplicas. Uma carteira fazendo
-  polling a cada segundo custa, portanto, 30 requisições por minuto à Pollar, e não
-  60, contra uma chave cujo orçamento total é 200.
-
-Um handshake cuja client session a Pollar deixou de reconhecer
-(`INVALID_CLIENT_SESSION_ID`, `EXPIRED_CLIENT_ID`, ou um `404`/`410`) é encerrado na
-hora como `failed` com esse código, em vez de continuar sendo consultado até o TTL
-acabar.
+Um handshake cuja client session a Pollar rejeita (`INVALID_CLIENT_SESSION_ID`,
+`EXPIRED_CLIENT_ID`, ou um `404`/`410`) é encerrado imediatamente como `failed` com
+esse código.
 
 ### Um login, uma carteira em ambas as redes
 
-A Pollar roda mainnet e testnet como duas aplicações separadas, com dois pares de
-chaves separados, então um login hospedado só consegue produzir uma carteira na rede
-para a qual a sua API key resolveu (`prod` → `public`, `dev` → `testnet` — veja
-`resolveNetwork`). Um usuário que depois transita entre ambientes não tem carteira do
-outro lado: o endereço que ele financiou na testnet não é o endereço que recebe na
-mainnet, e a segunda carteira acaba sendo criada no momento em que ele precisa dela
-pela primeira vez, que é o momento menos capaz de absorver uma falha do provedor.
-
-Por isso, um resgate também registra o usuário na **outra** rede, pelo
-`POST /users/with-wallet` da Server API, e `POST /v1/pollar/oauth/token` informa as
-duas:
+A Pollar roda mainnet e testnet como aplicações separadas, com pares de chaves
+separados, então um login hospedado só cria uma carteira na rede para a qual a sua
+API key resolve (`prod` → `public`, `dev` → `testnet` — veja `resolveNetwork`). Para
+dar ao usuário uma carteira nas duas, um resgate também o registra na **outra** rede,
+pelo `POST /users/with-wallet` da Server API, e `POST /v1/pollar/oauth/token` informa
+as duas:
 
 ```jsonc
 "network_wallets": [
@@ -1155,35 +1042,28 @@ duas:
 ]
 ```
 
-**Uma entrada `pending` não é um erro.** O login teve sucesso; a segunda carteira é a
-parte que ainda não ficou pronta, e o objetivo do design é justamente que ela não
-possa derrubar o login junto. A tentativa feita no caminho da requisição tem cinco
-segundos e uma única chance, e o que ela não terminar é retentado em segundo plano
-pelo sweeper de provisionamento — mesma chave e mesma cadência do sweeper de
-handshakes (`POLLAR_SWEEP_*`), com backoff exponencial e um orçamento total de dez
+**Uma entrada `pending` não é um erro.** O login teve sucesso; só a segunda carteira
+ainda não está pronta, e ela nunca faz o login falhar. A requisição faz uma única
+tentativa de cinco segundos; o que não terminar é retentado em segundo plano pelo
+sweeper de provisionamento (`POLLAR_SWEEP_*`), com backoff exponencial e até dez
 tentativas antes de a linha passar a `failed`.
 
-O motivo mais comum de `pending` é prosaico: **as chaves da outra rede não estão
-configuradas.** Enquanto não estiverem, todo login deixa uma contraparte pendente; no
-momento em que forem definidas, uma única varredura provisiona todo o backlog sem que
-ninguém precise fazer login de novo. É por isso que vale definir as chaves das duas
-redes mesmo quando você só atende uma hoje.
+A causa mais comum de `pending` é que **as chaves da outra rede não estão
+configuradas**. Assim que forem definidas, a próxima varredura provisiona o backlog
+sem que os usuários precisem fazer login de novo, então defina as chaves das duas
+redes mesmo que você só atenda uma.
 
-Duas consequências que vale conhecer:
-
-- **A chave de junção é o e-mail do OAuth**, porque é por ele que um login hospedado
-  posterior na outra rede identifica a mesma pessoa. Um provedor que não garante
-  nenhum e-mail não recebe carteira de contraparte alguma — melhor do que uma
-  carteira órfã que custou XLM e que nenhum login jamais alcança.
-- **Isso gasta XLM nas duas redes.** Um login na mainnet agora também financia uma
-  reserva na testnet, e vice-versa. O estado por rede fica em `pollar_user_wallet`,
-  uma linha por (consumer, email, network), que também é a idempotência: um login
-  repetido faz upsert por ela em vez de provisionar de novo.
+- **Os usuários são associados pelo e-mail do OAuth**, a mesma chave que um login
+  hospedado na outra rede usa. Um provedor que não retorna e-mail não recebe segunda
+  carteira.
+- **Isso gasta XLM nas duas redes.** Um login na mainnet também financia uma reserva
+  na testnet, e vice-versa. O estado fica em `pollar_user_wallet`, uma linha por
+  (consumer, email, network), então um login repetido não provisiona de novo.
 
 ### O que a bridge armazena
 
-Uma linha de handshake, e nada nela pode gastar dinheiro: o `state` impossível de
-adivinhar, o id da client session da Pollar, um **hash** do código e o endereço
+Uma linha de handshake, sem nada que possa gastar dinheiro: o `state` impossível
+de adivinhar, o id da client session da Pollar, um **hash** do código e o endereço
 Stellar público resultante. **Nenhum token da Pollar é persistido** — a troca
 `/auth/login` roda dentro da requisição de resgate e os tokens saem direto na
 resposta dela. Handshakes que ninguém concluiu são expirados por um timer
@@ -1194,7 +1074,7 @@ Toda transição é um compare-and-swap no status da linha, então um callback r
 não emite um segundo código, e duas carteiras disputando um mesmo código não podem
 vencer as duas.
 
-### Endurecimento que vale conhecer
+### Endurecimento
 
 - **PKCE (RFC 7636, S256)** é opcional, mas recomendado: passe `code_challenge` no
   authorize e `code_verifier` no resgate, e um código que vaze de um navegador ou de
@@ -1204,18 +1084,15 @@ vencer as duas.
   assinada. Isso também significa que a bridge não pode mais agir em nome da carteira
   — `/refresh` e `/logout` atendem sessões bearer, e uma carteira vinculada por DPoP
   chama a Pollar diretamente.
-- **`POLLAR_REDIRECT_URI_WHITELIST`** é por consumer e fail-closed. Uma redirect URI
-  é onde um código de uso único chega, então uma URI não verificada é um canal de
-  exfiltração. Aceita hosts de loopback (qualquer porta, conforme a RFC 8252), deep
-  links com esquema de uso privado e hosts https.
+- **`POLLAR_REDIRECT_URI_WHITELIST`** é por consumer e fail-closed, já que a
+  redirect URI recebe o código. Aceita hosts de loopback (qualquer porta, conforme a
+  RFC 8252), deep links com esquema de uso privado e hosts https.
 - **Mantenha em um servidor as API keys que têm `pollar:*`.** O fluxo de polling
   entrega o código a quem tiver o `state` do handshake *e* uma chave com
-  `pollar:read`. Um atacante que extraia uma chave dessas de um app distribuído a
-  usuários pode abrir um login, enviar a sua `authorization_url` a uma vítima, fazer
-  polling do código assim que a vítima consentir na página real do Google/GitHub e
-  resgatá-lo com um verifier PKCE próprio — PKCE e `dpop_jwk` não ajudam, porque o
-  atacante fornece os dois. Esse é o formato do phishing de device code, e a defesa é
-  que a chave nunca saia de um backend que você controla.
+  `pollar:read`. Quem extrair uma chave dessas de um app distribuído pode abrir um
+  login, enviar a sua `authorization_url` a uma vítima, fazer polling do código assim
+  que a vítima consentir e resgatá-lo com um verifier PKCE próprio — PKCE e
+  `dpop_jwk` não ajudam nesse caso.
 
 ### Rotas
 
@@ -1235,77 +1112,54 @@ vencer as duas.
 | POST   | `/v1/pollar/users` · `/v1/pollar/users/with-wallet`   | `pollar:write` | Registrar um usuário, opcionalmente com uma carteira |
 | POST   | `/v1/pollar/tokens/verify`                            | `pollar:read`  | Validar um token que uma carteira apresentou a você |
 
-As últimas seis precisam da chave **secreta** da Pollar, e é exatamente por isso que
-ficam aqui e não na carteira. Os schemas de requisição e resposta de todas elas estão
-no contrato gerado — Swagger UI em `/docs`, ou `openapi/openapi.{json,yaml}`. A
-tabela acima serve para orientação; o contrato é a fonte da verdade.
+As últimas seis usam a chave **secreta** da Pollar, e é por isso que rodam aqui e
+não na carteira.
 
-### Rate limiting: o que impede o abuso da geração de carteiras
+### Rate limiting
 
-Criar uma carteira Pollar não é de graça. A Pollar cria a conta Stellar, financia a
+Criar uma carteira Pollar custa dinheiro: a Pollar cria a conta Stellar, financia a
 sua reserva base (1 XLM) e adiciona uma trustline por ativo configurado (0.5 XLM
-cada) — **a partir da sua carteira de financiamento**. Um loop contra o fluxo de
-login é, portanto, uma forma de um estranho gastar o seu dinheiro, e ele não precisa
-de um usuário real do outro lado para isso.
+cada) **a partir da sua carteira de financiamento**. Um script em loop sobre o fluxo
+de login poderia gastar isso sem nenhum usuário real, então este serviço aplica os
+limites por conta própria, antes que qualquer XLM seja gasto.
 
-Por isso os limites ficam aqui, neste serviço, e não só no gateway: este é o processo
-que sabe que uma requisição está prestes a criar uma conta, e é ele que pode recusar
-antes de o XLM sair.
+**O limite fica no `authorize`, não no `token`.** Um handshake gera no máximo uma
+carteira, então limitar os handshakes por endereço limita as carteiras. `token` é
+mais frouxo porque os clientes são orientados a repeti-lo enquanto a Pollar
+provisiona a conta, e resgatar não cria nada novo.
 
-**O ponto de controle é o `authorize`, não o `token`.** Um handshake gera no máximo
-uma carteira, então limitar quantos handshakes um endereço pode abrir limita quantas
-carteiras ele pode provocar. `token` fica deliberadamente mais frouxo, porque o
-caminho do 409 diz a quem chama para repetir exatamente essa requisição enquanto a
-Pollar provisiona a conta — um orçamento apertado ali estrangularia o nosso próprio
-retry documentado, e resgatar não cria nada que o handshake já não tivesse permitido.
+| Rota | Orçamento (por 10 min) | Por quê |
+| ---- | ---------------------- | ------- |
+| `POST /v1/pollar/oauth/authorize` | 20 | Limita a criação de carteiras |
+| `POST /v1/pollar/oauth/token` | 60 | Os clientes o repetem enquanto a conta é provisionada |
+| `GET /v1/pollar/oauth/callback` | 60 | A única acessível sem API key |
+| `POST /v1/pollar/users/with-wallet` | 10 | Cria uma carteira sem tela de consentimento |
+| `POST /v1/pollar/wallets/activate` | 20 | Gasta XLM a cada chamada |
 
-| Rota | Orçamento (por 10 min) | Por que esse número |
-| ---- | ---------------------- | ------------------- |
-| `POST /v1/pollar/oauth/authorize` | 20 | O limite da geração de carteiras. Muito acima de um humano repetindo uma tela de consentimento que falhou, muito abaixo de uma taxa que esvazia uma conta |
-| `POST /v1/pollar/oauth/token` | 60 | Frouxo de propósito — veja acima |
-| `GET /v1/pollar/oauth/callback` | 60 | A única rota acessível sem API key, portanto a única que uma enxurrada anônima alcança. Um usuário recarregando a aba é normal |
-| `POST /v1/pollar/users/with-wallet` | 10 | Cria uma carteira sem uma tela de consentimento para ditar o ritmo — o orçamento mais apertado do conjunto |
-| `POST /v1/pollar/wallets/activate` | 20 | Gasta XLM a cada chamada, mas não consegue criar nada novo |
+Exceder um deles retorna **`429` com `code: "rate_limited"`**, um `Retry-After` e os
+headers `RateLimit-Limit` / `-Remaining` / `-Reset`. As outras rotas não têm limite
+aqui; o rate limiting geral é papel do APISIX.
 
-Exceder um deles retorna **`429` com `code: "rate_limited"`**, um `Retry-After` e o
-trio `RateLimit-Limit` / `-Remaining` / `-Reset`. Todo o resto do serviço não tem
-limite aqui; a modelagem geral de tráfego é trabalho do APISIX, já que ele vê a
-requisição antes deste processo.
+**O contador fica no Postgres, não em memória**, então o limite vale para todas as
+réplicas juntas. É uma janela fixa (um `INSERT … ON CONFLICT … RETURNING` atômico por
+requisição), então um cliente pode usar um orçamento inteiro de cada lado de uma
+virada de janela.
 
-**O contador fica no Postgres, não em memória.** O serviço roda atrás de um load
-balancer, então um limitador por processo daria a cada réplica o orçamento inteiro: o
-limite efetivo vira `limit × replicas` e muda silenciosamente sempre que o deploy
-escala. Isso serve para um throttle cosmético e não serve para algo que protege um
-saldo real. É uma janela fixa — um `INSERT … ON CONFLICT … RETURNING` atômico por
-requisição —, o que significa que um cliente pode gastar um orçamento inteiro de cada
-lado de uma virada de janela, então trate os números acima como "no máximo o dobro
-disso por janela". Eles foram definidos sabendo disso.
+**Endereço do cliente.** `main.ts` define `trust proxy` como `1`, então o Express lê a
+entrada *mais à direita* de `X-Forwarded-For` — a que o APISIX acrescentou. As
+entradas que um cliente adiciona ficam à esquerda dela e são ignoradas.
 
-**Como o endereço é decidido, e por que não pode ser falsificado.** `main.ts` define
-`trust proxy` como `1`, o que faz o Express ler a entrada *mais à direita* de
-`X-Forwarded-For` — a que o APISIX acrescentou, ou seja, o peer tal como o gateway o
-viu. Um cliente pode prefixar entradas nesse header, mas tudo o que ele escreve fica à
-esquerda da entrada do APISIX e é ignorado.
+> **Não aumente `trust proxy`.** Em `2`, o Express confia em um hop fornecido pelo
+> cliente, e qualquer cliente consegue contornar esses limites com um header.
 
-> **Não aumente `trust proxy`.** Em `2`, o Express passa a honrar o primeiro hop
-> fornecido pelo cliente, e todo limite aqui se torna contornável com a adição de um
-> header. `src/common/client-ip.spec.ts` fixa os dois comportamentos para que a
-> mudança não passe despercebida na revisão.
+Chamadores IPv6 são agrupados por **/64**, já que um cliente normalmente controla um
+/64 inteiro; usuários que compartilham um /64 compartilham um limite, como
+aconteceria atrás de um NAT IPv4. Os limites também são por consumer, então o tráfego
+de um integrador não afeta o de outro.
 
-Um chamador IPv6 é agrupado por **/64**, e não por endereço: um cliente rotineiramente
-recebe um /64 inteiro e pode alternar entre os seus endereços de graça, então limitar
-por endereço ali não é limitar. O custo é que dois usuários atrás de um mesmo /64
-compartilham um bucket, exatamente como dois usuários atrás de um mesmo NAT IPv4 já
-compartilham. Os buckets também são separados por consumer, então o tráfego de um
-integrador não consegue consumir o de outro.
-
-Se o contador não puder ser gravado, o limitador é **fail-closed** (`503`). Um
-limitador que para de limitar em silêncio durante um incidente no banco vale menos que
-nenhum, porque nada avisa que isso aconteceu — e toda rota atrás dele precisa do mesmo
-banco de qualquer forma, então recusar não custa nenhuma disponibilidade que já não
-estivesse perdida.
-
-Defina `RATE_LIMIT_ENABLED=false` como chave de incidente.
+Se o contador não puder ser gravado, o limitador é **fail-closed** (`503`); essas
+rotas precisam do banco de qualquer forma. Defina `RATE_LIMIT_ENABLED=false` para
+desligar os limites durante um incidente.
 
 ### Configuração
 
@@ -1315,51 +1169,47 @@ Defina `RATE_LIMIT_ENABLED=false` como chave de incidente.
    segunda carteira de todo usuário `pending` até que elas sejam definidas. Os dois
    dashboards são separados — registre o host de callback em cada um.
 2. Registre o **host do gateway** de `POLLAR_BRIDGE_CALLBACK_URL` em
-   **Build → Domains**. Não se trata só do redirect: a SDK API verifica essa lista em
-   *toda* chamada, contra o header `Origin`, e a bridge envia a origem desse host
-   nesse header (`POLLAR_SDK_ORIGIN` a sobrescreve). Um host não registrado resulta em
-   `403 ORIGIN_NOT_ALLOWED` em `POST /auth/session` — a primeira chamada de todo
-   login, antes de o usuário ver qualquer tela de consentimento.
+   **Build → Domains**. A SDK API verifica essa lista em *toda* chamada, contra o
+   header `Origin`, que a bridge define com esse host (`POLLAR_SDK_ORIGIN` o
+   sobrescreve). Um host não registrado recebe `403 ORIGIN_NOT_ALLOWED` em
+   `POST /auth/session`, a primeira chamada de todo login.
 3. Defina `POLLAR_BRIDGE_CALLBACK_URL` como `<gateway>/v1/pollar/oauth/callback` — a
    bridge acrescenta `/{state}` por conta própria.
 4. Adicione a redirect URI de cada carteira a `POLLAR_REDIRECT_URI_WHITELIST`, ou
    omita-a e use o fluxo de polling.
 
-As chaves são por rede, e a Pollar codifica a rede e o tipo de chave no prefixo,
-então uma incompatibilidade é uma rejeição definitiva — o validador de env a detecta
-no boot, e não em um login diante do usuário. Deixe as chaves em branco para desativar
-a funcionalidade (as rotas da Pollar passam a retornar `503`). Veja `.env.example`.
+A Pollar codifica a rede e o tipo de chave no prefixo da chave, e o validador de env
+rejeita uma incompatibilidade no boot. Deixe as chaves em branco para desativar a
+funcionalidade (as rotas da Pollar passam a retornar `503`). Veja `.env.example`.
 
 ## Atualização — mudanças incompatíveis e notas de deploy
 
 ### Correções da revisão de segurança
 
-Uma revisão de todo o serviço encontrou os problemas abaixo. Cada um está corrigido e
-fixado por um teste que falha sem a correção. A maioria não muda nada para quem chama
-de forma correta, mas cada linha é visível para alguém — leia a coluna "Quem percebe"
-antes do deploy.
+A maioria destas mudanças não altera nada para quem chama de forma correta; confira
+a coluna "Quem percebe" antes do deploy.
 
 | Mudança | Quem percebe | Por quê |
 | ------- | ------------ | ------- |
-| `POST /v1/aliases/:name/recovery` é **exclusiva do console da plataforma**: uma API key recebe `403 admin_console_only`, e a rota saiu do contrato publicado | Quem iniciava recuperações com uma API key | A resposta traz o token de recuperação, que é a prova da caixa de e-mail do dono. Protegida apenas por um escopo, qualquer um que conhecesse um handle e o e-mail do seu dono recebia o token e podia tomar o alias e todo pagamento enviado a ele |
-| Concluir uma recuperação em um alias `SUSPENDED` resulta em `404` | Ninguém legítimo | Um token emitido antes de uma suspensão era uma forma de escapar do bloqueio do operador |
-| Rotas `@Public()` (callback da Pollar, webhook do BlindPay, health) ignoram `X-Consumer-Username` | Dashboards: essas requisições agora aparecem no log como anônimas | Essas rotas rodam sem key-auth, então o header era do próprio cliente: um nome novo por requisição era um orçamento de rate limit novo, e usar o nome de uma vítima registrava linhas forjadas na visão de logs da API dela |
-| Recusas do `AdminGuard` e do `ConsoleOnlyGuard` são registradas em nível `warn` | Operadores | Os guards rodam antes do log de acesso, então uma sondagem de `/v1/admin` não deixava rastro em lugar nenhum |
-| `POST /v1/pollar/wallets/activate` e as três rotas `/v1/pollar/wallets/:address/trustlines…` retornam `404` para uma carteira que o consumer que chama não obteve por meio deste serviço naquela rede | Integradores que agem sobre carteiras que só viram via `tokens/verify`, sobre carteiras não primárias de um login ou sobre uma carteira de contraparte que outro tenant já registrou | Todos os tenants compartilham um único conjunto de chaves secretas da Pollar, então, sem a verificação, um tenant podia remover as trustlines dos usuários de outro tenant ou gastar o XLM do operador nas reservas deles. Uma carteira alheia e uma desconhecida recebem o mesmo `404`, então a resposta não é um oráculo de titularidade |
-| As duas rotas `POST …/trustlines` compartilham um orçamento de `429` de 20 chamadas a cada 10 minutos | Scripts que adicionam trustlines em massa | Cada trustline trava 0.5 XLM de reserva na carteira de financiamento do operador, e estas eram as únicas rotas que gastam XLM sem limite |
-| `GET /v1/offramp/payouts/:id` não retorna mais `raw`, `consumerId`, `receiverId`, `quoteId`, `bankAccountId` nem `updatedAt`; a resposta de criação de conta virtual não retorna mais `raw`, `receiverId`, `consumerId` nem `updatedAt` | Quem lê esses campos | `raw` é o objeto armazenado do BlindPay, com dados bancários e do beneficiário, e chegava a qualquer chave com `offramp:read` — esse caminho de leitura ignorava a projeção pública que todas as outras leituras de payout usam |
-| `POST /v1/kyc/upload` retorna `400` para mais de 4 campos de texto, um campo acima de 1 KiB, um segundo arquivo ou bytes de arquivo que não correspondem ao tipo declarado | Ninguém que envie um upload bem formado | Os padrões do Multer deixavam os campos sem limite e com 1 MB cada em memória, e a verificação de tipo confiava no `Content-Type` do cliente |
-| `POST /v1/payment-intents/tx` e `/pay`: o mesmo memo com qualquer termo diferente resulta em `409 idempotency_conflict`. Uma repetição idêntica continua retornando o intent armazenado (`2` e `2.0` são o mesmo valor) | Quem reutiliza um memo para pagamentos diferentes | Sob a chave pública compartilhada, toda carteira anônima é um único consumer, então um memo que outra pessoa criou primeiro retornava o intent *dela* — com um QR que pagava a ela |
-| `POST /v1/payment-intents/:id/validate` marca `FAILED` somente para uma tx com falha que seja o próprio pagamento deste intent; qualquer outra tx com falha resulta em `valid: false` com o status inalterado. Uma tx fechada mais de 60 s antes de o intent ser criado é recusada ("Transaction predates this payment intent") — no validate, no `PATCH {status: SUCCEEDED}` e no observer | Ninguém legítimo | O hash de qualquer transação com falha na rede fazia um intent falhar permanentemente, e um pagamento antigo com os mesmos termos podia liquidar um intent novo |
-| `PATCH /v1/payment-intents/:id` alterando o `txHash` de um intent em estado terminal resulta em `400 invalid_state_transition`; uma mudança de status concorrente com a escrita resulta em `409 operation_in_flight` | Ninguém legítimo | Isso reescrevia a evidência de liquidação de um intent `SUCCEEDED` |
-| O observer de payment intents reconcilia no máximo 10 intents por consumer por ciclo e nunca varre linhas expiradas | Operadores que acompanham a vazão do observer | Uma enxurrada de intents de valor aberto vinda de um único consumer travava a liquidação de todos os outros tenants e gastava o orçamento compartilhado do Horizon |
-| `POST /v1/swaps`, `/v1/liquidity-pools/deposit` e `/withdraw`: um `Idempotency-Key` reutilizado com uma requisição diferente — outro memo ou slippage, a outra rede, ou uma chave de depósito reutilizada para um saque — resulta em `409 idempotency_conflict`. Uma repetição com ativo, slippage ou memo inválido agora recebe o `400` normal | Clientes que reutilizam uma chave para operações diferentes | Sob a chave pública compartilhada, um atacante podia criar de antemão, sob uma chave adivinhável, um swap ou saque da conta de uma vítima para a própria conta, e a retentativa da vítima retornava esse envelope para ela assinar |
-| `POST /v1/liquidity-pools/withdraw` não responde mais `409 operation_in_flight` para um saque em andamento cujo número de sequência a conta ainda não usou (um envelope não assinado ou abandonado) | Usuários de carteira que ficavam bloqueados | Um saque de valor ínfimo montado para a conta de outra pessoa e reenviado a cada 300 s impedia todos os usuários da chave pública de sacar aquela posição. Os dois envelopes compartilham um número de sequência, então no máximo um deles pode ser liquidado |
-| O observer de liquidação processa no máximo 10 linhas por consumer, por tabela, por ciclo, e `GET /v1/liquidity-pools/positions` lê o Horizon por meio de uma única listagem paginada em vez de uma requisição por pool | Operadores | A enxurrada de um único consumer travava a liquidação de todos os outros, e uma conta com participações em muitos pools disparava chamadas sem limite ao Horizon |
-| `GET /v1/onramp/payins/:id` não retorna mais `receiverId` nem `updatedAt` — o mesmo formato que `GET /v1/onramp/payins` retorna | Quem lê esses dois campos na leitura de um único payin | Um payin com linha espelho recente era devolvido como estava armazenado, então o mesmo payin chegava em dois formatos conforme a idade do espelho, um deles com um id interno |
-| `POST /v1/kyc/upload` com um arquivo acima de 10 MiB é `413` com `code: "payload_too_large"`; antes era `internal_error` | Integradores que decidem pelo `code` | Um limite que quem chama pode respeitar parecia um bug deste serviço |
-| `POST /v1/liquidity-pools/deposit`, `/withdraw`, `GET /v1/liquidity-pools/operations`, `/operations/:id`, `POST /v1/liquidity-pools/operations/:id/submit` e os webhooks `LIQUIDITY_*` agora trazem `memo` (o MEMO_ID de quem chama, ou `null`). Operações criadas antes da migration `20260915120000_liquidity_pool_operation_memo` retornam `null` mesmo quando o envelope carrega um | Ninguém, a menos que um cliente rejeite campos desconhecidos | O memo só ficava registrado dentro do XDR, então cada replay com `Idempotency-Key` decodificava o envelope para compará-lo |
-| O contrato publicado de `GET /v1/swaps` e `GET /v1/liquidity-pools/operations` não declara mais `qr` nem `commissionMemo` nos itens da lista. As respostas não mudam — esses dois campos nunca foram enviados ali; obtenha-os lendo o item individual | Clientes gerados a partir do spec OpenAPI | O contrato declarava os itens da lista com o formato da leitura individual, então um cliente gerado tipava dois campos que a lista nunca trazia |
+| `POST /v1/aliases/:name/recovery` é **exclusiva do console da plataforma**: uma API key recebe `403 admin_console_only`, e a rota saiu do contrato publicado | Quem iniciava recuperações com uma API key | A resposta traz o token de recuperação, que prova o controle da caixa de e-mail do dono |
+| Concluir uma recuperação em um alias `SUSPENDED` resulta em `404` | Ninguém legítimo | Um token emitido antes de uma suspensão podia contornar o bloqueio do operador |
+| Rotas `@Public()` (callback da Pollar, webhook do BlindPay, health) ignoram `X-Consumer-Username` | Dashboards: essas requisições agora aparecem no log como anônimas | Essas rotas não têm key-auth, então o header vinha do cliente |
+| Recusas do `AdminGuard` e do `ConsoleOnlyGuard` são registradas em nível `warn` | Operadores | Os guards rodam antes do log de acesso, então as requisições recusadas não deixavam rastro |
+| `POST /v1/pollar/wallets/activate` e as três rotas `/v1/pollar/wallets/:address/trustlines…` retornam `404` para uma carteira que o consumer que chama não obteve por meio deste serviço naquela rede | Integradores que agem sobre carteiras que só viram via `tokens/verify`, sobre carteiras não primárias de um login ou sobre uma carteira de contraparte que outro tenant já registrou | Todos os tenants compartilham um único conjunto de chaves secretas da Pollar. Carteiras alheias e desconhecidas recebem o mesmo `404`, então a resposta não revela a titularidade |
+| As duas rotas `POST …/trustlines` compartilham um orçamento de `429` de 20 chamadas a cada 10 minutos | Scripts que adicionam trustlines em massa | Cada trustline trava 0.5 XLM da carteira de financiamento do operador |
+| `GET /v1/offramp/payouts/:id` não retorna mais `raw`, `consumerId`, `receiverId`, `quoteId`, `bankAccountId` nem `updatedAt`; a resposta de criação de conta virtual não retorna mais `raw`, `receiverId`, `consumerId` nem `updatedAt` | Quem lê esses campos | `raw` é o objeto armazenado do BlindPay, com dados bancários e do beneficiário |
+| `POST /v1/kyc/upload` retorna `400` para mais de 4 campos de texto, um campo acima de 1 KiB, um segundo arquivo ou bytes de arquivo que não correspondem ao tipo declarado | Ninguém que envie um upload bem formado | Os campos não tinham limite e a verificação de tipo confiava no `Content-Type` do cliente |
+| `POST /v1/payment-intents/tx` e `/pay`: o mesmo memo com qualquer termo diferente resulta em `409 idempotency_conflict`. Uma repetição idêntica continua retornando o intent armazenado (`2` e `2.0` são o mesmo valor) | Quem reutiliza um memo para pagamentos diferentes | Sob a chave pública compartilhada, um memo que outra pessoa criou primeiro retornava o intent dela |
+| `POST /v1/payment-intents/:id/validate` marca `FAILED` somente para uma tx com falha que seja o próprio pagamento deste intent; qualquer outra tx com falha resulta em `valid: false` com o status inalterado. Uma tx fechada mais de 60 s antes de o intent ser criado é recusada ("Transaction predates this payment intent") — no validate, no `PATCH {status: SUCCEEDED}` e no observer | Ninguém legítimo | Qualquer transação com falha podia fazer um intent falhar, e um pagamento antigo com os mesmos termos podia liquidar um intent novo |
+| `PATCH /v1/payment-intents/:id` alterando o `txHash` de um intent em estado terminal resulta em `400 invalid_state_transition`; uma mudança de status concorrente com a escrita resulta em `409 operation_in_flight` | Ninguém legítimo | Isso podia reescrever a evidência de liquidação de um intent `SUCCEEDED` |
+| O observer de payment intents reconcilia no máximo 10 intents por consumer por ciclo e nunca varre linhas expiradas | Operadores que acompanham a vazão do observer | Um único consumer podia atrasar a liquidação de todos os outros tenants |
+| `POST /v1/swaps`, `/v1/liquidity-pools/deposit` e `/withdraw`: um `Idempotency-Key` reutilizado com uma requisição diferente — outro memo ou slippage, a outra rede, ou uma chave de depósito reutilizada para um saque — resulta em `409 idempotency_conflict`. Uma repetição com ativo, slippage ou memo inválido agora recebe o `400` normal | Clientes que reutilizam uma chave para operações diferentes | Sob a chave pública compartilhada, alguém podia criar de antemão um envelope sob uma chave adivinhável e fazê-lo ser retornado na retentativa de outro usuário |
+| `POST /v1/liquidity-pools/withdraw` não responde mais `409 operation_in_flight` para um saque em andamento cujo número de sequência a conta ainda não usou (um envelope não assinado ou abandonado) | Usuários de carteira que ficavam bloqueados | Um envelope montado para a conta de outra pessoa podia bloquear indefinidamente os saques daquela posição |
+| O observer de liquidação processa no máximo 10 linhas por consumer, por tabela, por ciclo, e `GET /v1/liquidity-pools/positions` lê o Horizon por meio de uma única listagem paginada em vez de uma requisição por pool | Operadores | Um único consumer podia atrasar a liquidação de todos os outros, e muitas participações em pools significavam chamadas sem limite ao Horizon |
+| `GET /v1/onramp/payins/:id` não retorna mais `receiverId` nem `updatedAt` — o mesmo formato que `GET /v1/onramp/payins` retorna | Quem lê esses dois campos na leitura de um único payin | O mesmo payin podia chegar em dois formatos |
+| `POST /v1/kyc/upload` com um arquivo acima de 10 MiB é `413` com `code: "payload_too_large"`; antes era `internal_error` | Integradores que decidem pelo `code` | É um limite do lado do cliente, não um erro do servidor |
+| `POST /v1/liquidity-pools/deposit`, `/withdraw`, `GET /v1/liquidity-pools/operations`, `/operations/:id`, `POST /v1/liquidity-pools/operations/:id/submit` e os webhooks `LIQUIDITY_*` agora trazem `memo` (o MEMO_ID de quem chama, ou `null`). Operações criadas antes da migration `20260915120000_liquidity_pool_operation_memo` retornam `null` mesmo quando o envelope carrega um | Ninguém, a menos que um cliente rejeite campos desconhecidos | O memo só ficava armazenado dentro do XDR |
+| O contrato publicado de `GET /v1/swaps` e `GET /v1/liquidity-pools/operations` não declara mais `qr` nem `commissionMemo` nos itens da lista. As respostas não mudam — esses dois campos nunca foram enviados ali; obtenha-os lendo o item individual | Clientes gerados a partir do spec OpenAPI | O contrato declarava os itens da lista com o formato do item individual |
 
 Notas de deploy que vêm junto:
 
@@ -1367,18 +1217,18 @@ Notas de deploy que vêm junto:
   `alias_challenge` e `alias_recovery`. Rode `migrate deploy` antes de o novo build
   receber tráfego.
 - **Um novo id de advisory lock, `881_008` (`AliasChallengeSweeper`).** Nada a
-  configurar; listado para que o número nunca seja reutilizado.
+  configurar.
 - **Defina `NODE_ENV=production` em produção.** O `.env.example` vem com
   `development`, e duas proteções dependem disso: uma requisição sem
   `X-Plan-Swap-Fee-Bps` é um `503` apenas em produção (em qualquer outro ambiente os
   swaps recorrem silenciosamente a `STELLAR_SWAP_FEE_BPS`), e `/docs` — fora de todo
   guard — fica desligado por padrão apenas em produção.
-- **O observer de liquidação agora roda sobre `ScheduledJob`.** `OBSERVER_ENABLED`,
-  `OBSERVER_INTERVAL_MS` e o advisory lock não mudam, mas as linhas de log passam a
-  ser as compartilhadas: `Settlement observer started (every Nms)`,
+- **As linhas de log do observer de liquidação mudaram** para
+  `Settlement observer started (every Nms)`,
   `Settlement observer (OBSERVER_ENABLED=false) disabled` e
-  `SettlementObserverService cycle failed` no nível `error`. Um alerta que procure o
-  texto antigo precisa ser atualizado.
+  `SettlementObserverService cycle failed` no nível `error`. Atualize os alertas que
+  procuram o texto antigo. `OBSERVER_ENABLED`, `OBSERVER_INTERVAL_MS` e o advisory
+  lock não mudam.
 - **A migration `20260915120000_liquidity_pool_operation_memo`** adiciona a coluna
   anulável `liquidity_pool_operation.memo`: não reescreve a tabela, apenas um lock
   exclusivo breve. Não há backfill — o memo das linhas antigas está em XDR base64,
@@ -1396,131 +1246,71 @@ Notas de deploy que vêm junto:
 
 ### NestJS 12, TypeScript 6 e Node 24.9 como versão mínima
 
-Toda a linha do NestJS passou para a 12 e o TypeScript para a 6. **Isso eleva a
-versão mínima do Node para 24.9** (`engines`, e os dois workflows agora fixam
-`node-version: 24`); qualquer versão anterior não consegue sequer rodar a suíte de
-testes. Os ambientes de deploy precisam acompanhar.
+O serviço agora roda sobre NestJS 12 e TypeScript 6 e **exige Node 24.9 ou
+superior** (`engines`; a CI fixa `node-version: 24`). Atualize os ambientes de
+deploy de acordo.
 
-O motivo é o test runner, não o framework. O NestJS 12 é publicado como ESM puro
-(`"type": "module"`), e o Jest rodando sob CommonJS não consegue fazer `require()`
-dele — todas as 62 suítes falhavam ao carregar. O Jest suporta `require(esm)`
-nativamente, mas só no Node >= 24.9 **e** com `--experimental-vm-modules`, porque a
-capacidade que ele verifica (`vm.SourceTextModule.prototype.hasAsyncGraph`) não
-existe sem essa flag. Por isso, os scripts de teste agora invocam o Jest diretamente
-pelo Node:
+O NestJS 12 é publicado como ESM, e o Jest só consegue carregá-lo no Node >= 24.9
+com `--experimental-vm-modules`, por isso os scripts de teste rodam o Jest
+diretamente pelo Node:
 
 ```
 "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js"
 ```
 
-E não com um prefixo `NODE_OPTIONS=`: isso não é portável para shells do Windows, e a
-CI, o job de release e a máquina de um desenvolvedor precisam rodar o mesmo comando.
-
-Duas consequências que vale conhecer:
-
-- **`transformIgnorePatterns` saiu das duas configurações do Jest.** Ele listava os
-  pacotes ESM (`@stellar`, `@noble`, `@exodus`, `uint8array-extras`) a serem
-  transpilados para CommonJS pelo ts-jest — um contorno para a impossibilidade de
-  carregar ESM. Agora que o Jest carrega ESM nativamente, o contorno atrapalha
-  ativamente: um pacote compilado para CJS é avaliado como ESM e morre com
-  `exports is not defined`. Se alguma dependência voltar a precisar de
-  transformação, esse é o arquivo a olhar.
-- **O `tsconfig.json` ganhou `types` e `rootDir`.** O TypeScript 6 não inclui mais
-  automaticamente todo pacote `@types`, então os dois pacotes de tipos globais
-  (`node`, `jest`) são nomeados explicitamente — sem isso, toda spec perdia
-  `describe`/`it` e, mesmo assim, passava verde no ts-jest. E o TS 6 se recusa a
-  inferir `rootDir` quando uma compilação cobre um único diretório (TS5011), que é o
-  que os scripts ts-node fazem; `"./"` é o que o build completo já inferia, então o
-  layout emitido não muda.
-
-Mudanças de código que as versões major forçaram, todas pequenas:
-
-- `EventEmitter2` é importado de `eventemitter2`, não de `@nestjs/event-emitter`. É o
-  mesmo objeto de classe em runtime — o token de DI não muda —, mas o re-export do
-  Nest é tipado para o formato CJS do pacote e resolve para `any` sob a resolução de
-  módulos `node10` deste repositório, o que silenciosamente transformava cada
-  `.emit()` em uma chamada sem verificação de tipos. É por isso que `eventemitter2`
-  agora é uma dependência direta.
-- `OperationObject` vem de `@nestjs/swagger` em vez de
-  `@nestjs/swagger/dist/interfaces/open-api-spec.interface`. O Swagger 12 publica um
-  mapa `exports` que expõe apenas `.` e `./plugin`, então caminhos profundos deixaram
-  de resolver.
-- `AccountLoaderService.load` tem um tipo de retorno explícito
-  `Promise<Horizon.AccountResponse>`; o TS 6 não infere um tipo que não consegue
-  nomear de forma portável.
-- Dois mocks de teste (`fetch`, `Reflector.getAllAndOverride`) agora correspondem às
-  assinaturas reais, em vez de versões mais estreitas escritas à mão.
-
-O OpenAPI publicado cresceu: `@nestjs/terminus@12` emite schemas de health mais ricos
-(enums de status e uma propriedade `responseTime`). Puramente aditivo — nenhuma rota
-ou schema de negócio mudou.
+O contrato OpenAPI publicado ganhou schemas de health mais ricos vindos do
+`@nestjs/terminus@12` (enums de status e `responseTime`). Nenhuma rota ou schema de
+negócio mudou.
 
 ### Uma API key pública compartilhada, e o guard que a restringe
 
-Novo nesta versão: `PublicKeyGuard` (global, depois do `PermissionsGuard`) e o
-decorator `@AllowPublicKey()`. Nada muda para as chaves existentes — o guard não tem
-opinião sobre um consumer que não seja o público compartilhado —, mas duas coisas
-precisam ser feitas no deploy:
+`PublicKeyGuard` (global, depois do `PermissionsGuard`) e o decorator
+`@AllowPublicKey()` são novos. As chaves existentes não são afetadas. No deploy:
 
 - **Defina `APISIX_PUBLIC_CONSUMER`** com o username que a plataforma de
   desenvolvedores provisiona para a chave pública, em todo deploy que publique uma.
-  Sem ela, o guard recorre apenas ao `X-Consumer-Role` encaminhado.
-- **A chave pública precisa ser emitida com `role: public`** e apenas com os escopos
-  de que as rotas da allowlist precisam. Conceder `kyc:*` ou `webhooks:*` a ela não
-  abriria essas rotas — o guard as recusa de qualquer forma —, mas seria uma
-  credencial mais ampla do que a sua função, nas mãos de todo mundo.
+  Sem ela, o guard depende apenas do `X-Consumer-Role` encaminhado.
+- **Crie a chave pública com `role: public`** e apenas com os escopos de que as rotas
+  da allowlist precisam. Escopos extras como `kyc:*` não abririam essas rotas, mas
+  uma chave que todo mundo tem não deveria carregá-los.
 
-Veja "A API key pública compartilhada" acima para saber o que ela pode alcançar e
-por quê.
+Veja "A API key pública compartilhada" acima.
 
 ### O registro de ativos: `GET /v1/assets`
 
-Uma tabela curada dos pares (code, issuer) que esta plataforma avaliza, por rede, com
-o nome da organização emissora. Não exige escopo — o catálogo não guarda dados de
-tenants, e protegê-lo só faria com que toda chave emitida antes de o escopo existir
-visse um seletor de tokens vazio —, mas exige um consumer autenticado, incluindo a
-chave pública compartilhada.
+Uma lista curada dos pares (code, issuer) que esta plataforma suporta, por rede, com
+a organização emissora. Não exige escopo, já que não guarda dados de tenants, mas
+exige um consumer autenticado (a chave pública compartilhada serve).
 
-`npm run assets:verify` confere de novo cada linha contra o Horizon ao vivo: que o
-par existe na rede em que está cadastrado, que `contract` corresponde ao
-`contract_id` do Horizon e que as flags do emissor batem com a chain. Rode-o ao
-editar o registro. Não é um teste unitário porque precisa da internet pública, e um
-teste que falha quando o Horizon está lento é um teste que as pessoas aprendem a
-pular.
+`npm run assets:verify` confere cada linha contra o Horizon ao vivo: que o par existe
+na sua rede, que `contract` corresponde ao `contract_id` do Horizon e que as flags do
+emissor batem com a chain. Rode-o ao editar o registro; ele precisa de acesso à
+internet, por isso não faz parte dos testes unitários.
 
 ### Atividade do cliente: um novo módulo, uma nova tabela e dois novos escopos
 
 `POST /v1/activity/events` aceita telemetria da carteira e do dashboard de
 desenvolvedores; `GET /v1/activity/events` e `GET /v1/activity/summary` a leem de
-volta. Nada do que existia mudou de formato, mas três coisas precisam ser feitas no
-deploy:
+volta. Nenhuma resposta existente mudou. No deploy:
 
 - **A migration `20260906140000_activity_event`** cria `activity_event`
   (append-only, restrita por `consumerId`, única em `(consumerId, eventId)`).
-- **Os escopos `activity:write` e `activity:read` são novos.** Uma chave sem eles
-  recebe `insufficient_scope`, que é a resposta correta — mas isso significa que uma
-  chave existente não ganha a capacidade de reportar telemetria só com a atualização.
-  A plataforma de desenvolvedores concede ambos às chaves provisionadas pela carteira
-  e reaplica o conjunto na rotação; chaves emitidas manualmente precisam recebê-los.
-- **`ACTIVITY_RETENTION_DAYS`** (padrão 30) entra no job de retenção. São dados
-  pessoais no mesmo patamar do log de acesso; defina `0` apenas deliberadamente.
+- **Os escopos `activity:write` e `activity:read` são novos.** As chaves existentes
+  não os ganham automaticamente e recebem `insufficient_scope`. A plataforma de
+  desenvolvedores concede ambos às chaves provisionadas pela carteira e os reaplica na
+  rotação; adicione-os às chaves criadas manualmente.
+- **`ACTIVITY_RETENTION_DAYS`** (padrão 30) entra no job de retenção. Essas linhas
+  guardam dados pessoais, como o log de acesso.
 
 ### A rota de polling da Pollar agora descobre sozinha um login concluído
 
-`GET /v1/pollar/oauth/sessions/{state}` costumava informar o que o callback da bridge
-tivesse registrado. A Pollar nunca chama esse callback — o seu fluxo hospedado termina
-em `www.pollar.xyz/auth/status` e deixa a client session `READY` —, então um
-handshake do fluxo de polling ficava `pending` até expirar, com uma carteira que
-estava fazendo tudo certo. O polling agora pergunta diretamente à Pollar e promove o
-handshake em `READY`.
-
-Nenhum formato de API mudou e nenhuma mudança no cliente é necessária: um login que
-costumava travar em `pending` agora chega a `authorized` no primeiro polling depois de
-o usuário concluir. Duas coisas a considerar no deploy:
+`GET /v1/pollar/oauth/sessions/{state}` costumava esperar o callback da bridge, que
+a Pollar nunca chama, então os logins do fluxo de polling ficavam `pending` até
+expirar. O polling agora consulta a Pollar e promove o handshake em `READY`. Nenhuma
+mudança de formato da API ou do cliente é necessária. No deploy:
 
 - **A migration `20260906120000_pollar_oauth_provider_probe`** adiciona uma coluna
-  anulável `providerCheckedAt` a `pollar_oauth_session`. Ela é o limite compartilhado
-  de com que frequência a pergunta chega à Pollar; nada é preenchido retroativamente.
+  anulável `providerCheckedAt` a `pollar_oauth_session`. Sem backfill.
 - **O tráfego de polling agora chega à Pollar.** Reserve orçamento para uma
   requisição ao provedor por login em andamento a cada dois segundos, na publishable
   key daquela rede.
@@ -1528,65 +1318,55 @@ o usuário concluir. Duas coisas a considerar no deploy:
 ### Logins da Pollar agora provisionam uma carteira nas duas redes
 
 `POST /v1/pollar/oauth/token` ganhou um array `network_wallets` — uma entrada por
-rede Stellar, cada uma `ready`, `pending` ou `failed`. É aditivo, então nada quebra,
-mas há duas notas operacionais:
+rede Stellar, cada uma `ready`, `pending` ou `failed`. A mudança é aditiva. No
+deploy:
 
 - **Rode a migration.** `20260905120000_pollar_user_wallet` adiciona
   `pollar_user_wallet` e o enum `PollarWalletStatus`. Sem ela, todo resgate registra
   um provisionamento com falha e a carteira de contraparte fica sem registro — o
   login em si continua funcionando.
 - **Defina as chaves das duas redes.** `POLLAR_*_MAINNET` e `POLLAR_*_TESTNET` são
-  opcionais individualmente, e uma rede sem chaves agora aparece como uma carteira
-  `pending` em todo login, em vez de simplesmente não aparecer. Configure o segundo
-  par e o sweeper esvazia o backlog no próximo ciclo; deixe-o sem definir de
-  propósito e as linhas ficam `pending` até que o orçamento de dez tentativas as
-  aposente. Em nenhum dos casos um login falha.
+  opcionais individualmente, e uma rede sem chaves aparece como uma carteira
+  `pending` em todo login. Assim que o segundo par for definido, o sweeper provisiona
+  o backlog no próximo ciclo; caso contrário, as linhas ficam `pending` até esgotarem
+  as tentativas. Em nenhum dos casos um login falha.
 
-Reserve orçamento para o XLM: um login agora financia uma reserva nas *duas* redes,
-então o gasto em mainnet por novo usuário não muda, mas surge um gasto em testnet
-onde antes não havia nenhum.
+Um login agora financia uma reserva nas *duas* redes: o gasto em mainnet por novo
+usuário não muda, mas agora também há gasto em testnet.
 
 ### `429` agora informa `rate_limited`
 
-Um `429` puro costumava cair em `code: "provider_unavailable"`, o que dizia que um
-serviço upstream estava com problemas quando, na verdade, este serviço tinha recusado
-a requisição por conta própria — mandando integradores investigar algo que estava
-perfeitamente saudável. Agora ele informa `code: "rate_limited"`, e
-`ApiErrorCode.RateLimited` faz parte do enum publicado. Use-o como critério se você
-faz retry em caso de throttling.
+Um `429` costumava informar `code: "provider_unavailable"`. Agora ele informa
+`code: "rate_limited"` (`ApiErrorCode.RateLimited`, parte do enum publicado). Use-o
+como critério se você faz retry em caso de throttling.
 
 ### Um BlindPay não configurado agora informa `misconfigured`
 
-Duas recusas culpavam a parte errada quando o BlindPay não está configurado:
+Quando o BlindPay não está configurado, duas respostas mudaram:
 
 | Requisição | Antes | Agora |
 | ---------- | ----- | ----- |
 | Uma rota que chama o BlindPay — sob `/v1/kyc`, `/v1/onramp` ou `/v1/offramp` — enquanto `BLINDPAY_API_KEY` ou `BLINDPAY_INSTANCE_ID` não estão definidos | `503` `provider_unavailable` | `503` `misconfigured` |
 | `POST /v1/blindpay/webhooks` enquanto `BLINDPAY_WEBHOOK_SECRET` não está definido | `400` `validation_failed` | `503` `misconfigured` |
 
-`provider_unavailable` diz que o provedor está fora do ar e que um retry pode dar
-certo, então um integrador que o seguia continuava tentando de novo contra um
-provedor que estava bem, por todo o tempo em que o deploy continuasse sem
-configuração. O `400` do webhook dizia a quem lê o log do Svix que o BlindPay tinha
-enviado uma entrega malformada. As duas falhas são da configuração deste deploy, e
-só um operador pode corrigi-las. O Svix faz retry em qualquer resposta que não seja
-2xx, então a entrega de webhooks em si não muda. O Pollar já respondia
-`misconfigured` na mesma situação.
+As duas são erros de configuração do deploy que um retry não resolve. O Svix faz
+retry em qualquer resposta que não seja 2xx, então a entrega de webhooks não muda. O
+Pollar já retornava `misconfigured` na mesma situação.
 
 ### Formatos de resposta que mudaram
 
-Três formatos publicados mudaram na versão de audit-hardening. Os três estão sob
-`/v1`; não existe `/v2`, então os integradores precisam ser avisados antes do deploy.
+Três formatos de resposta publicados mudaram sob `/v1` (não existe `/v2`), então
+avise os integradores antes do deploy.
 
 | Endpoint | Antes | Agora | Por quê |
 | -------- | ----- | ----- | ------- |
-| `GET /v1/webhooks` | array puro, cortado silenciosamente em 100 | `{ data, total, take, skip }` | Um consumer com 120 endpoints recebia 100 sem nenhum aviso, e sem `total` para paginar |
+| `GET /v1/webhooks` | array puro, cortado silenciosamente em 100 | `{ data, total, take, skip }` | Os resultados eram cortados em 100, sem `total` para paginar |
 | `GET /v1/products` | array puro, a tabela inteira | `{ data, total, take, skip }` | Leitura sem limite |
 | `GET /v1/webhooks/:id/deliveries` e a resposta de reentrega | incluíam `payload` | `payload` removido | Um corpo `RECEIVER_UPDATED` é um dossiê de KYC completo, e essas rotas são protegidas por `webhooks:read`, não por `kyc:read` |
 
-Quem faz `for (const x of res)` ou lê `delivery.payload` quebra no deploy. A
-migração é mecânica: leia `res.data` e busque os detalhes de KYC nos endpoints de KYC
-com uma chave que tenha `kyc:read`.
+Quem itera sobre a resposta ou lê `delivery.payload` vai quebrar: leia `res.data` em
+vez disso, e busque os detalhes de KYC nos endpoints de KYC com uma chave que tenha
+`kyc:read`.
 
 Os **corpos de webhook** `RECEIVER_UPDATED` / `PAYIN_*` / `PAYOUT_*` também foram
 reduzidos a identidade e estado — veja a seção Webhooks.
@@ -1597,22 +1377,18 @@ Ela é distribuída como dois arquivos que precisam ser aplicados em ordem:
 
 - `20260901120000_audit_hardening` — o trabalho de corretude: uma nova coluna, um
   `DELETE` de deduplicação em `liquidity_pool_operation`, dois índices `UNIQUE`, duas
-  tabelas novas. O DELETE e o índice único que ele alimenta rodam dentro de uma
-  transação explícita sob um lock `SHARE ROW EXCLUSIVE`, para que um rolling deploy
-  não consiga inserir uma duplicata entre os dois. As escritas nessa única tabela
-  ficam bloqueadas pelos poucos milissegundos que isso dura.
+  tabelas novas. O DELETE e o índice único rodam em uma única transação sob um lock
+  `SHARE ROW EXCLUSIVE`, então as escritas nessa tabela ficam bloqueadas por alguns
+  milissegundos.
 - `20260901120100_audit_hardening_indexes` — nove índices aditivos, criados
   `CONCURRENTLY` para que o deploy **não** bloqueie escritas em `payment_intent`,
   `swap`, `webhook_delivery` ou `request_log`. Não é necessária janela de manutenção.
 
-A divisão não é estilística: o PostgreSQL recusa `CREATE INDEX CONCURRENTLY` dentro
-de um bloco de transação, e o primeiro arquivo precisa de um. Os dois são verificados
-na CI contra um PostgreSQL real, que também garante que nenhum índice ficou `INVALID`
-e que as migrations ainda correspondem ao `schema.prisma`.
+São arquivos separados porque o PostgreSQL não permite `CREATE INDEX CONCURRENTLY`
+dentro de uma transação, e o primeiro arquivo precisa de uma.
 
-Se o segundo arquivo falhar no meio, um build `CONCURRENTLY` deixa um índice
-**inválido** em vez de falhar de forma limpa, e `IF NOT EXISTS` o considera presente.
-Remova-o e rode de novo:
+Se o segundo arquivo falhar no meio, ele pode deixar um índice **inválido** que
+`IF NOT EXISTS` considera presente. Encontre-o, remova-o e rode de novo:
 
 ```sql
 SELECT c.relname FROM pg_class c JOIN pg_index i ON i.indexrelid = c.oid
@@ -1625,18 +1401,11 @@ WHERE NOT i.indisvalid;
 `COSMOS_ADMIN_API_SECRET` / `COSMOS_ADMIN_API_SECRET_READ` na plataforma de
 desenvolvedores vão junto.
 
-Era uma segunda credencial que decidia, neste serviço, quem é admin da plataforma — e
-a plataforma de desenvolvedores já tinha decidido isso com base no papel da conta
-autenticada. Duas respostas para uma mesma pergunta, e todo deploy que configurou o
-gateway mas pulou este segredo recebia a divergência na sua forma mais confusa: um
-owner podia mudar o plano e o papel de outra conta no console, que nunca pede este
-segredo, e ainda assim toda leitura cross-tenant respondia `401
-admin_credentials_required`. Nada nesse erro aponta para um segredo de deploy ausente
-em vez de para as permissões da própria conta.
-
-Então a pergunta que o guard faz mudou de "quem chama tem o segredo de admin?" para
-"esta chamada veio do console da plataforma?", o que é resolvido por dois fatos que já
-estão na requisição:
+Era uma segunda verificação de admin por cima da verificação de papel da própria
+plataforma de desenvolvedores, e os deploys que a pulavam recebiam
+`401 admin_credentials_required` nas leituras cross-tenant feitas pelo console. Agora
+`/v1/admin` só aceita uma requisição quando ela vem do console da plataforma, o que é
+estabelecido por duas coisas presentes na requisição:
 
 1. `X-Gateway-Secret` corresponde a `APISIX_GATEWAY_SECRET` — verificado pelo
    `ApisixGuard`, como em todas as outras rotas. Só o gateway e o backend do console o
@@ -1646,14 +1415,11 @@ estão na requisição:
    não consegue enviá-lo; só uma chamada direta de um backend que detém o segredo do
    gateway consegue.
 
-Vale dizer claramente qual é a troca: o fato 2 depende de uma configuração de
-roteamento do gateway que fica no repositório da plataforma de desenvolvedores, e não
-de um segredo que este serviço guarda. Duas coisas compensam isso. O console agora é o
-único lugar que responde "quem é admin da plataforma", então as duas respostas não
-podem divergir; e a atribuição ficou mais precisa, e não mais fraca — uma linha de
-auditoria costumava nomear uma credencial compartilhada (`owner`, `viewer`), e agora
-nomeia a conta do console que agiu (`cosmos_<userId>`) mais o papel na plataforma que
-ela declarou, em toda mutação **e** em toda leitura.
+O ponto 2 depende da configuração de rotas do gateway no repositório da plataforma
+de desenvolvedores, e não de um segredo guardado por este serviço. Em troca, o console
+é o único lugar que decide quem é admin da plataforma, e as linhas de auditoria
+nomeiam a conta do console que agiu (`cosmos_<userId>`) e o seu papel na plataforma,
+em toda mutação **e** em toda leitura.
 
 O que isso muda para quem chama:
 
@@ -1663,26 +1429,22 @@ O que isso muda para quem chama:
 | `403` `admin_role_required` para uma credencial `read` em uma mutação | não existe mais — o console já decidiu que a conta pode agir |
 | `actorId` / `actorRole` em uma linha de auditoria nomeavam a credencial | eles nomeiam a conta do console e o seu papel na plataforma |
 
-Se você acessa `/v1/admin` diretamente (um script de operações, por exemplo), envie
+Para chamar `/v1/admin` diretamente (de um script de operações, por exemplo), envie
 `X-Gateway-Secret`, `X-Consumer-Username` e `X-Cosmos-Internal: 1`; adicione
-`X-Cosmos-Admin-Role: owner` para que a linha de auditoria seja rotulada. Mantenha o
-serviço fora da internet pública — sem o segredo de admin, o isolamento de rede e o
-segredo do gateway são o que fica diante dos dados cross-tenant.
+`X-Cosmos-Admin-Role: owner` para rotular a linha de auditoria. Mantenha o serviço
+fora da internet pública.
 
 ### `APISIX_GATEWAY_SECRET` agora exige 32 caracteres
 
-O serviço se recusa a iniciar abaixo disso. Antes ele aceitava um único caractere, e
-agora ele é o *único* segredo entre o mundo externo e a superfície de admin da
-plataforma (veja acima), então carrega mais peso do que antes. Gere um com
-`openssl rand -hex 32` e rotacione-o no APISIX ao mesmo tempo.
+O serviço se recusa a iniciar com um segredo mais curto. Agora ele também protege
+`/v1/admin` (veja acima). Gere um com `openssl rand -hex 32` e atualize o APISIX ao
+mesmo tempo.
 
 ### Funcionalidades de `v0.1.0`–`v0.1.5` que esta versão substitui
 
-`main` e este branch resolveram vários dos mesmos problemas de forma independente
-enquanto estavam separados. Onde os dois tinham uma resposta, o design deste branch é
-o que vai para produção, então um deploy vindo da `v0.1.5` perde o que está abaixo.
-Nada disso é acidental — cada item é uma resolução deliberada —, mas todos são
-visíveis para um integrador, então planeje a atualização levando-os em conta.
+Um deploy que atualiza a partir da `v0.1.5` perde o comportamento abaixo. Todos os
+itens são visíveis para os integradores, então planeje a atualização levando-os em
+conta.
 
 | Existia na `v0.1.5` | Agora |
 | ------------------- | ----- |
@@ -1699,11 +1461,10 @@ visíveis para um integrador, então planeje a atualização levando-os em conta
 essas funcionalidades adicionaram (`webhook_delivery.maxAttempts` / `nextAttemptAt` /
 `leaseUntil`, `webhook_endpoint.previousSecret*`, `lastCheckedAt` / `notFoundStreak`
 de `swap` e `liquidity_pool_operation`, a tabela `horizon_account_cursor`,
-`RETRYING`, `SWAP_EXPIRED`, `LIQUIDITY_EXPIRED`) continuam todos declarados em
-`schema.prisma` e presentes depois de `migrate deploy`. Eles simplesmente nunca são
-gravados. Remover colunas em uso — e um valor de enum, que o PostgreSQL não consegue
-remover sem recriar o tipo — seria uma migration destrutiva comprada por nada, e
-mantê-los declarados é o que permite que `prisma migrate diff` continue limpo.
+`RETRYING`, `SWAP_EXPIRED`, `LIQUIDITY_EXPIRED`) continuam declarados em
+`schema.prisma` e presentes depois de `migrate deploy`; apenas não são mais gravados.
+Removê-los exigiria uma migration destrutiva (o PostgreSQL não consegue remover um
+valor de enum sem recriar o tipo).
 
 ## Variáveis de ambiente
 
@@ -1716,7 +1477,7 @@ Toda variável lida de `process.env` em `src/` é validada no boot por
 | `NODE_ENV` | não | `development` | Deve ser `development`, `test` ou `production`. **Defina `production` em produção** — a verificação fail-closed da taxa do plano e a documentação desligada por padrão dependem disso |
 | `PORT` | não | `3000` | Porta HTTP de escuta |
 | `DATABASE_URL` | **sim** | — | Conexão PostgreSQL para o Prisma |
-| `APISIX_GATEWAY_SECRET` | **sim** | — | Segredo compartilhado que prova que a requisição veio pelo APISIX. **Mínimo de 32 caracteres** — esta é a fronteira inteira entre "chegou pelo gateway" e "qualquer um que alcance o pod" |
+| `APISIX_GATEWAY_SECRET` | **sim** | — | Segredo compartilhado que prova que a requisição veio pelo APISIX. **Mínimo de 32 caracteres** |
 | `APISIX_GATEWAY_SECRET_HEADER` | não | `x-gateway-secret` | Nome do header do segredo do gateway |
 | `APISIX_CONSUMER_HEADER` | não | `x-consumer-username` | Username do consumer autenticado |
 | `APISIX_CREDENTIAL_HEADER` | não | `x-credential-identifier` | Id da credencial vindo do key-auth |
@@ -1830,27 +1591,20 @@ header chegue aqui — e remova qualquer cópia enviada pelo cliente:
       // credentials
       "Authorization", "apikey", "X-API-KEY",
 
-      // ── Authorization inputs. THIS SERVICE TRUSTS THESE COMPLETELY. ──
-      // They are not key-auth outputs, so APISIX does not overwrite them for
-      // you: whatever the client sends arrives here verbatim unless it is
-      // removed below, and only then re-set by the route from the consumer's
-      // own metadata. Omitting any one of them is a privilege-escalation bug,
-      // not a cosmetic gap:
+      // ── Authorization inputs: this service trusts them as-is. ──
+      // key-auth does not overwrite them, so whatever the client sends arrives
+      // here unless it is removed below (the route then sets them from the
+      // consumer's metadata). Leaving any of them out is a privilege escalation:
       //
       //   X-Consumer-Role: admin      → bypasses every scope check
-      //                                 (PermissionsGuard treats admin as
-      //                                 full access)
       //   X-Consumer-Permissions      → grants arbitrary scopes
       //   X-Consumer-Env: prod        → moves the caller onto Stellar MAINNET
-      //   X-Plan-Swap-Fee-Bps: 0      → zero platform commission on every swap
-      //                                 and liquidity-pool withdrawal
+      //   X-Plan-Swap-Fee-Bps: 0      → zero platform commission on swaps
+      //                                 and liquidity-pool withdrawals
       //   X-Consumer-Org              → attribution / plan resolution
-      //   X-Consumer-Plan             → plan tier, read into GatewayConsumer
-      //   X-Cosmos-Internal           → marks the call as coming from the platform
-      //                                 console, which is what ADMITS IT TO
-      //                                 /v1/admin — every tenant's data, read and
-      //                                 write. Leave this one out and any key
-      //                                 holder gets there by setting a header.
+      //   X-Consumer-Plan             → plan tier
+      //   X-Cosmos-Internal           → admits the call to /v1/admin (every
+      //                                 tenant's data, read and write)
       //   X-Cosmos-Admin-Role         → labels the admin audit trail
       //   X-Cosmos-Tos-Cooldown-Ms    → relaxes the KYC email resend limit
       "X-Consumer-Role",
@@ -1871,57 +1625,13 @@ O `key-auth` encaminha `X-Consumer-Username` / `X-Credential-Identifier` ao upst
 depois de uma autenticação bem-sucedida, sobrescrevendo qualquer cópia enviada pelo
 cliente, e o guard depende disso.
 
-> **A lista de remoção é estrutural, e é a única parte deste modelo de segurança que
-> não pode ser verificada de dentro deste repositório.** Todo header no bloco acima é
-> uma entrada de autorização que o serviço aceita pelo valor declarado;
-> `X-Gateway-Secret` prova apenas que a requisição passou por *um* gateway, não que os
-> valores são honestos. Trate essa lista como configuração de produção, com o mesmo
-> rigor de revisão do código: audite-a sempre que uma rota for adicionada ou copiada,
-> e mantenha o serviço em uma rede privada para que o único caminho acessível seja
-> pelo APISIX. O segredo compartilhado é a segunda camada, não a única.
+> **A lista de remoção é um controle de segurança, e não pode ser verificada a partir
+> deste repositório.** Este serviço aceita cada header dela pelo valor declarado;
+> `X-Gateway-Secret` só prova que a requisição passou por um gateway, não que esses
+> valores são honestos. Revise a lista sempre que uma rota for adicionada ou copiada —
+> uma rota que não remova `X-Cosmos-Internal` dá a toda API key acesso a `/v1/admin`.
+> Mantenha o serviço em uma rede privada para que o APISIX seja o único caminho de
+> entrada; o segredo compartilhado é uma segunda camada, não a única.
 >
-> O serviço agora é fail-closed na única entrada em que o silêncio costumava ser
-> lucrativo: a ausência de `X-Plan-Swap-Fee-Bps` em uma configuração de produção
-> resulta em 503, em vez de um fallback silencioso para o padrão do ambiente.
->
-> `X-Cosmos-Internal` carrega mais peso do que antes: com `ADMIN_API_CREDENTIALS`
-> removida, é ele que diz a este serviço que uma requisição veio do console da
-> plataforma, e não de uma API key, e portanto é ele que abre `/v1/admin`. Ele continua
-> acessível apenas a quem já apresentou o segredo do gateway, então a exposição é
-> limitada por isso e pelo isolamento de rede — mas uma rota que esqueça de removê-lo
-> transforma toda API key em admin da plataforma.
-
-> Mantenha o serviço em uma rede privada para que o único caminho acessível seja pelo
-> APISIX; o segredo compartilhado é a segunda camada, não a única.
-
-## Mantendo este documento fiel
-
-**O README faz parte da mudança, não é um trabalho posterior.** Nada na CI detecta a
-sua defasagem — o build continua verde enquanto estas páginas descrevem, em silêncio,
-um serviço que não existe mais —, então ele é atualizado no mesmo commit que o código
-que descreve. A convenção completa, incluindo qual seção cada tipo de mudança afeta,
-está em [`CLAUDE.md`](../../CLAUDE.md); a versão curta:
-
-| Quando você… | Atualize |
-| ------------ | -------- |
-| adiciona ou remove um módulo em `src/` | [Estrutura do projeto](#estrutura-do-projeto) |
-| adiciona, renomeia ou apaga uma leitura de `process.env` | [Variáveis de ambiente](#variáveis-de-ambiente) **e** `.env.example` |
-| integra um provedor, ou muda como um deles se comporta | a seção `##` do próprio provedor |
-| muda o formato de uma resposta publicada, um status code ou um escopo | [Atualização](#atualização--mudanças-incompatíveis-e-notas-de-deploy) |
-| adiciona, renomeia, remove ou muda o escopo de uma rota | [Índice de rotas](#índice-de-rotas), e a seção do próprio módulo |
-| aprende algo que um operador ou integrador não pode deixar passar | a seção a que isso pertence |
-
-**Este documento existe em sete idiomas** — English, Español, Português, Deutsch,
-Français, हिन्दी e 简体中文 — e uma mudança em um deles é uma mudança em todos os sete,
-no mesmo commit. O inglês é a fonte, e os outros — em [`docs/i18n/`](./) — são traduções dele: os mesmos
-títulos, tabelas e blocos de código, com os identificadores (rotas, variáveis de
-ambiente, headers, códigos de erro) mantidos exatamente como estão.
-`npm run readme:check` quebra a CI quando falta o arquivo de algum idioma, quando os
-seus títulos deixam de corresponder aos do inglês ou quando uma rota do contrato
-OpenAPI falta no seu índice de rotas.
-
-Duas coisas deliberadamente **não** ficam aqui: **schemas de requisição e resposta**,
-que pertencem ao contrato OpenAPI gerado (`npm run openapi:check` o mantém fiel), e
-**qualquer coisa que o código já diga** — este documento serve para explicar *por que*
-algo é como é e como operá-lo, porque uma segunda cópia do *que* ele faz é só mais uma
-cópia para manter verdadeira.
+> Em produção, a ausência de `X-Plan-Swap-Fee-Bps` retorna `503` em vez de recorrer ao
+> padrão do ambiente.
