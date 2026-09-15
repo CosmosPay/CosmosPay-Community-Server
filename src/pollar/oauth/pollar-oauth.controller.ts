@@ -7,12 +7,14 @@ import {
   ApiQuery,
   ApiResponse,
   ApiTags,
+  type ApiResponseOptions,
 } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { CurrentConsumer } from '@/common/decorators/current-consumer.decorator';
 import { Public } from '@/common/decorators/public.decorator';
 import { RateLimit } from '@/common/decorators/rate-limit.decorator';
 import { RequirePermissions } from '@/common/decorators/require-permissions.decorator';
+import { API_ERROR_BODY_CONTENT } from '@/common/errors/api-error.entity';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import { AuthorizeOauthDto } from '@/pollar/oauth/dto/authorize-oauth.dto';
 import { ExchangeCodeDto } from '@/pollar/oauth/dto/exchange-code.dto';
@@ -33,8 +35,33 @@ import { renderCallbackPage } from '@/pollar/oauth/pollar-callback-page';
 import {
   POLLAR_AUTHORIZE_RATE_LIMIT,
   POLLAR_CALLBACK_RATE_LIMIT,
+  POLLAR_CONSUMER_QUOTA_RATE_LIMIT,
+  POLLAR_POLL_RATE_LIMIT,
+  POLLAR_SESSION_RATE_LIMIT,
   POLLAR_TOKEN_RATE_LIMIT,
+  POLLAR_WALLET_DAILY_RATE_LIMIT,
 } from '@/pollar/pollar.constants';
+
+/** The 403 of opening a login with a key that has no account email. */
+const POLLAR_IDENTITY_REQUIRED_RESPONSE: ApiResponseOptions = {
+  status: 403,
+  description:
+    '`pollar_identity_required`: the gateway forwarded no account email for this ' +
+    'key, so no login can be tied to it. Every tenant shares one Pollar ' +
+    'application, so a session only goes back to the account that owns the key.',
+  content: API_ERROR_BODY_CONTENT,
+};
+
+/** The 403 of a redemption the key's account did not complete. */
+const POLLAR_IDENTITY_MISMATCH_RESPONSE: ApiResponseOptions = {
+  status: 403,
+  description:
+    '`pollar_identity_required` when the key has no account email, or ' +
+    '`pollar_identity_mismatch` when the email the login reports is not the ' +
+    "key's account email. On a mismatch the session is revoked at Pollar, the " +
+    'handshake becomes `failed`, and no token is returned.',
+  content: API_ERROR_BODY_CONTENT,
+};
 
 /**
  * The Pollar OAuth bridge — `/v1/pollar/oauth`.
@@ -59,16 +86,24 @@ export class PollarOauthController {
   @Post('authorize')
   @RequirePermissions('pollar:write')
   // The cap on wallet generation: a handshake yields at most one wallet, so
-  // bounding handshakes per address bounds what an address can spend.
-  @RateLimit(POLLAR_AUTHORIZE_RATE_LIMIT)
+  // bounding handshakes per address — and per consumer per day, which rotating
+  // addresses cannot get past — bounds what a key can spend.
+  @RateLimit(
+    POLLAR_AUTHORIZE_RATE_LIMIT,
+    POLLAR_WALLET_DAILY_RATE_LIMIT,
+    POLLAR_CONSUMER_QUOTA_RATE_LIMIT,
+  )
   @ApiOperation({
     summary: 'Open a Pollar login and get the URL to send the user to',
     description:
       'Mints a Pollar client session and returns a ready-to-open authorization ' +
       'URL. Open it in a browser; the bridge receives the user back and produces ' +
-      'a single-use code for this handshake.',
+      'a single-use code for this handshake. Only the account that owns the key ' +
+      'can complete it: the login is redeemed only when the email it reports is ' +
+      "the key's account email.",
   })
   @ApiCreatedResponse({ type: PollarAuthorizationEntity })
+  @ApiResponse(POLLAR_IDENTITY_REQUIRED_RESPONSE)
   authorize(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Body() dto: AuthorizeOauthDto,
@@ -154,6 +189,9 @@ export class PollarOauthController {
 
   @Get('sessions/:state')
   @RequirePermissions('pollar:read')
+  // Sized for a wallet polling every couple of seconds. Not in the per-consumer
+  // quota: its provider requests are already paced per handshake.
+  @RateLimit(POLLAR_POLL_RATE_LIMIT)
   @ApiOperation({
     summary: 'Poll a login, and collect its code',
     description:
@@ -176,16 +214,18 @@ export class PollarOauthController {
   @RequirePermissions('pollar:write')
   // Loose on purpose — the 409 path below tells the caller to retry this exact
   // request, and redeeming creates nothing the handshake did not already allow.
-  @RateLimit(POLLAR_TOKEN_RATE_LIMIT)
+  @RateLimit(POLLAR_TOKEN_RATE_LIMIT, POLLAR_CONSUMER_QUOTA_RATE_LIMIT)
   @ApiOperation({
     summary: 'Redeem a bridge code for a Pollar session',
     description:
       "Trades the single-use code for Pollar's end-user tokens and the wallet " +
       'it resolved. May take a moment on a first login: Pollar creates the ' +
       'Stellar account, funds its reserve and adds the trustlines first. A 409 ' +
-      'means it is still working — retry the same code.',
+      'means it is still working — retry the same code. The session is only ' +
+      "returned when the login's email is the key's account email.",
   })
   @ApiCreatedResponse({ type: PollarSessionEntity })
+  @ApiResponse(POLLAR_IDENTITY_MISMATCH_RESPONSE)
   exchange(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Body() dto: ExchangeCodeDto,
@@ -195,6 +235,7 @@ export class PollarOauthController {
 
   @Post('refresh')
   @RequirePermissions('pollar:write')
+  @RateLimit(POLLAR_SESSION_RATE_LIMIT, POLLAR_CONSUMER_QUOTA_RATE_LIMIT)
   @ApiOperation({
     summary: 'Rotate a Pollar token pair',
     description:
@@ -212,6 +253,8 @@ export class PollarOauthController {
 
   @Post('logout')
   @RequirePermissions('pollar:write')
+  // Same bucket as refresh: alternating the two buys a loop nothing.
+  @RateLimit(POLLAR_SESSION_RATE_LIMIT, POLLAR_CONSUMER_QUOTA_RATE_LIMIT)
   @ApiOperation({ summary: 'Revoke a Pollar session (this device, or all)' })
   @ApiCreatedResponse({ type: PollarLogoutEntity })
   logout(

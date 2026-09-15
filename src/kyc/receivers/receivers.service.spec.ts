@@ -1,10 +1,10 @@
 import { HttpStatus } from '@nestjs/common';
 import { BlindpayKycApi } from '@/blindpay/blindpay-kyc.api';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
+import { isElevatedConsumer } from '@/common/elevated-consumer';
 import {
   RECEIVER_PUBLIC_SELECT,
   ReceiversService,
-  isElevatedConsumer,
 } from '@/kyc/receivers/receivers.service';
 import {
   ALLOWED_TRANSITIONS,

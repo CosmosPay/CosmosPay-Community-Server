@@ -109,6 +109,10 @@ class EnvironmentVariables {
   @IsString()
   APISIX_SWAP_FEE_BPS_HEADER?: string;
 
+  @IsOptional()
+  @IsString()
+  APISIX_EMAIL_HEADER?: string;
+
   /**
    * APISIX username of the shared public consumer (the wallet's embedded key),
    * e.g. `cosmos_public`. Optional: a deployment that publishes no public key

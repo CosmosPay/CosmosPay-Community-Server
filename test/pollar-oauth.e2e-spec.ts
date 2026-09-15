@@ -331,6 +331,75 @@ describe('Pollar OAuth bridge (e2e)', () => {
     });
   });
 
+  describe('who a session goes back to', () => {
+    it('refuses to open a login for a key with no account email', async () => {
+      const fetchMock = jest.spyOn(global, 'fetch');
+      fetchMock.mockClear();
+      const res = await request(app.getHttpServer())
+        .post('/v1/pollar/oauth/authorize')
+        .set('x-gateway-secret', 'topsecret-topsecret-topsecret-topsecret')
+        .set('x-consumer-username', 'cosmos_u1')
+        .set('x-consumer-role', 'admin')
+        .send({ provider: 'google' })
+        .expect(403);
+
+      expect(res.body.code).toBe('pollar_identity_required');
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('revokes and withholds a session another account completed', async () => {
+      pollarReplies({ clientSessionId: 'cs_1' });
+      const authorize = await withGatewayAuth(
+        request(app.getHttpServer()).post('/v1/pollar/oauth/authorize'),
+      )
+        .send({
+          provider: 'google',
+          redirect_uri: 'cosmospay://auth/cb',
+          code_challenge: CHALLENGE,
+        })
+        .expect(201);
+      const callback = await request(app.getHttpServer())
+        .get(`/v1/pollar/oauth/callback/${authorize.body.state}`)
+        .expect(302);
+      const code = new URL(callback.headers.location).searchParams.get('code')!;
+
+      // Someone else opened the link and consented: Pollar reports their email.
+      const fetchMock = pollarReplies(
+        { status: 'READY' },
+        { ...LOGIN, data: { mail: 'victim@example.com' } },
+        { revoked: 1 },
+      );
+      const refused = await withGatewayAuth(
+        request(app.getHttpServer()).post('/v1/pollar/oauth/token'),
+      )
+        .send({ code, code_verifier: VERIFIER })
+        .expect(403);
+
+      expect(refused.body.code).toBe('pollar_identity_mismatch');
+      expect(JSON.stringify(refused.body)).not.toContain('at_1');
+      const lastCall = fetchMock.mock.calls[fetchMock.mock.calls.length - 1];
+      expect(lastCall[0]).toEqual(expect.stringMatching(/\/auth\/logout$/));
+    });
+
+    it('keeps the shared Pollar user directory to elevated keys', async () => {
+      const fetchMock = jest.spyOn(global, 'fetch');
+      fetchMock.mockClear();
+      const res = await withGatewayAuth(
+        request(app.getHttpServer()).post('/v1/pollar/users/with-wallet'),
+      )
+        .set('x-consumer-role', 'user')
+        .set('x-consumer-permissions', 'pollar:write')
+        .send({
+          external_id: 'victim@example.com',
+          email: 'victim@example.com',
+        })
+        .expect(403);
+
+      expect(res.body.code).toBe('elevated_key_required');
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+  });
+
   describe('the rate limit on wallet generation', () => {
     it('caps authorize and reports the budget on the way', async () => {
       // 20 per 10 minutes — the cap on how many wallets one address can cause,
@@ -361,11 +430,12 @@ describe('Pollar OAuth bridge (e2e)', () => {
       expect(fetchMock).not.toHaveBeenCalled();
     });
 
-    it('leaves an unlimited route alone', async () => {
+    it('budgets the poll for a wallet that repeats it every couple of seconds', async () => {
       const res = await withGatewayAuth(
         request(app.getHttpServer()).get('/v1/pollar/oauth/sessions/nope'),
       ).expect(404);
-      expect(res.headers['ratelimit-limit']).toBeUndefined();
+      // Limited, but loosely: someone can take minutes on a consent screen.
+      expect(Number(res.headers['ratelimit-limit'])).toBe(400);
     });
   });
 });

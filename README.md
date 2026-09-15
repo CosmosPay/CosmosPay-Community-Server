@@ -303,6 +303,9 @@ A few that are easy to confuse:
 | `account_disabled` | 403 | An operator disabled this fiat account. Not a key problem |
 | `gateway_required` | 403 | The request did not arrive through APISIX |
 | `admin_console_only` | 403 | The route belongs to the platform console (`/v1/admin`, starting an alias recovery). No API key can call it |
+| `elevated_key_required` | 403 | The route writes to something every tenant shares (the Pollar user directory). Only an elevated (admin) key may call it; more scopes will not help |
+| `pollar_identity_required` | 403 | The gateway forwarded no account email for this key, so a Pollar login cannot be tied to it |
+| `pollar_identity_mismatch` | 403 | The Pollar login was completed by a different account than the key's. The session was revoked, not returned |
 | `idempotency_conflict` | 409 | This `Idempotency-Key` (or payment-intent memo) already produced a resource for a *different* request. Repeat the original request, or use a new key |
 | `kyc_state_invalid` | 409 | An illegal KYC state transition — not a duplicate request |
 | `operation_in_flight` | 409 | A conflicting operation is still settling |
@@ -1087,14 +1090,16 @@ that code.
 Pollar runs mainnet and testnet as separate applications with separate key pairs,
 so a hosted login only creates a wallet on the network its API key resolves to
 (`prod` → `public`, `dev` → `testnet` — see `resolveNetwork`). To give the user a
-wallet on both, a redemption also registers them on the **other** network through
+wallet on both, a **mainnet** redemption also registers them on **testnet** through
 the Server API's `POST /users/with-wallet`, and `POST /v1/pollar/oauth/token`
-reports both:
+reports both. A testnet redemption does not provision mainnet: testnet is where
+`dev` keys land, and a key anyone can mint must not spend real XLM on a mainnet
+reserve per login. That user's mainnet wallet comes from their first mainnet login.
 
 ```jsonc
 "network_wallets": [
-  { "network": "testnet", "status": "ready",   "address": "GA5Z…" },
-  { "network": "public",  "status": "pending", "address": null    }
+  { "network": "public",  "status": "ready",   "address": "GA5Z…" },
+  { "network": "testnet", "status": "pending", "address": null    }
 ]
 ```
 
@@ -1110,8 +1115,8 @@ logging in again, so set keys for both networks even if you only serve one.
 
 - **Users are matched by their OAuth email**, the same key a hosted login on the
   other network uses. A provider that returns no email gets no second wallet.
-- **It spends XLM on both networks.** A mainnet login also funds a testnet
-  reserve and vice versa. State lives in `pollar_user_wallet`, one row per
+- **A mainnet login spends XLM on both networks** — its own reserve and a testnet
+  one. A testnet login spends testnet XLM only. State lives in `pollar_user_wallet`, one row per
   (consumer, email, network), so a repeat login does not provision again.
 
 ### What the bridge stores
@@ -1141,11 +1146,23 @@ callback mints no second code, and two wallets racing one code cannot both win.
 - **`POLLAR_REDIRECT_URI_WHITELIST`** is per consumer and fails closed, since the
   redirect URI receives the code. It accepts loopback hosts (any port, per
   RFC 8252), private-use scheme deep links, and https hosts.
-- **Keep API keys that hold `pollar:*` on a server.** The poll flow hands the code
-  to whoever holds the handshake's `state` *and* a key with `pollar:read`. Someone
-  who extracts such a key from a shipped app can open a login, send its
-  `authorization_url` to a victim, poll for the code once the victim consents, and
-  redeem it with their own PKCE verifier — PKCE and `dpop_jwk` do not help there.
+- **A session only goes back to the account that consented.** Every tenant shares
+  one Pollar application, and a login link works in anyone's browser: a key could
+  send its `authorization_url` to someone, wait for them to consent, and redeem
+  their wallet — PKCE and `dpop_jwk` do not help, since that key opened the
+  handshake. So `POST /v1/pollar/oauth/token` compares the email Pollar reports for
+  the login with the account email the gateway forwards for the key
+  (`X-Consumer-Email`, see `APISIX_EMAIL_HEADER`). A mismatch revokes the session at
+  Pollar, marks the handshake `failed` and returns `403 pollar_identity_mismatch`;
+  a key with no forwarded email is refused at `authorize` with
+  `403 pollar_identity_required`. The one exception is the dev platform's brokered
+  onboarding (`X-Cosmos-Internal`): it logs in people who have no key yet, and
+  proves the email itself before it hands anything on.
+- **`POST /v1/pollar/users` and `/users/with-wallet` need an elevated key**
+  (`X-Consumer-Role: admin`, otherwise `403 elevated_key_required`). A user
+  registered there is the same user a later social login resolves by email, so a
+  tenant key could otherwise claim a stranger's email and be recorded as the owner
+  of the wallet it gets.
 
 ### Routes
 
@@ -1162,7 +1179,7 @@ callback mints no second code, and two wallets racing one code cannot both win.
 | POST   | `/v1/pollar/wallets/:address/trustlines/default`      | `pollar:write` | Enable the app's configured assets |
 | POST   | `/v1/pollar/wallets/:address/trustlines`              | `pollar:write` | Enable specific assets |
 | DELETE | `/v1/pollar/wallets/:address/trustlines/:code/:issuer`| `pollar:write` | Remove a trustline (zero balance only) |
-| POST   | `/v1/pollar/users` · `/v1/pollar/users/with-wallet`   | `pollar:write` | Register a user, optionally with a wallet |
+| POST   | `/v1/pollar/users` · `/v1/pollar/users/with-wallet`   | `pollar:write` | Register a user, optionally with a wallet (elevated keys only) |
 | POST   | `/v1/pollar/tokens/verify`                            | `pollar:read`  | Validate a token a wallet presented to you |
 
 The last six use Pollar's **secret** key, which is why they run here and not in
@@ -1186,8 +1203,21 @@ redeeming creates nothing new.
 | `POST /v1/pollar/oauth/authorize` | 20 | Caps wallet creation |
 | `POST /v1/pollar/oauth/token` | 60 | Clients retry it while the account is provisioned |
 | `GET /v1/pollar/oauth/callback` | 60 | The only one reachable without an API key |
-| `POST /v1/pollar/users/with-wallet` | 10 | Creates a wallet without a consent screen |
+| `GET /v1/pollar/oauth/sessions/{state}` | 400 | A wallet polls every couple of seconds; each poll can reach Pollar |
+| `POST /v1/pollar/oauth/refresh` · `/logout` | 60, shared | One Pollar request each |
+| `POST /v1/pollar/users` · `/users/with-wallet` | 10, shared | Writes to the user directory every tenant shares; `with-wallet` also creates a wallet without a consent screen |
 | `POST /v1/pollar/wallets/activate` | 20 | Spends XLM on each call |
+| `POST /v1/pollar/wallets/:address/trustlines` · `/default` | 20, shared | Each asset locks reserve out of the funding wallet |
+| `DELETE /v1/pollar/wallets/:address/trustlines/:code/:issuer` | 20 | One Pollar request each |
+| `POST /v1/pollar/tokens/verify` | 120 | One Pollar request each |
+
+**Two ceilings are per consumer instead of per address**, so rotating addresses
+does not multiply them: the Pollar requests one consumer can cause (100 a minute,
+on every route above but the poll and the callback — Pollar budgets the key at 200
+a minute and every tenant shares it), and the wallets it can cause (`authorize` and
+`users/with-wallet`, 50 a day). Console calls (`X-Cosmos-Internal`) are exempt from
+both: the dev platform brokers every keyless wallet through one consumer and
+budgets that traffic itself.
 
 Exceeding one returns **`429` with `code: "rate_limited"`**, a `Retry-After`, and
 the `RateLimit-Limit` / `-Remaining` / `-Reset` headers. The same limiter guards a
@@ -1219,8 +1249,8 @@ during an incident.
 
 1. Create an app at [dashboard.pollar.xyz](https://dashboard.pollar.xyz) and take
    both keys for your network (`pub_testnet_…` / `sec_testnet_…`). Do it for
-   **both** networks: a login provisions a wallet on each, and a network with no
-   keys leaves every user's second wallet `pending` until they are set. The two
+   **both** networks: a mainnet login also provisions a testnet wallet, and missing
+   testnet keys leave that second wallet `pending` until they are set. The two
    dashboards are separate — register the callback host in each.
 2. Register the **gateway host** of `POLLAR_BRIDGE_CALLBACK_URL` under
    **Build → Domains**. The SDK API checks that list on *every* call against the
@@ -1281,6 +1311,10 @@ column before deploying.
 | Swap, liquidity-pool operation, payment-intent and customer responses return only their documented fields, plus `expiresAt` on swaps and payment intents, now documented. `consumerId` and the settlement bookkeeping (`settlementEpoch`, `lastCheckedAt`, `notFoundStreak`, `sharesReceived`, `settledAmountA`/`B`, `horizonCursor`) are no longer sent | Callers reading those fields | They are internal, and several of these routes are reachable with the shared public key |
 | `PATCH /v1/kyc/receivers/:id` on a receiver that already exists at BlindPay is `403 kyc_review_required` for any field but `external_id` and `image_url`, unless the key is elevated (`X-Consumer-Role: admin`) | Integrators correcting a live receiver's identity with a tenant key: send it through the reviewer | The `PUT` sent never-reviewed identity data straight to a regulated provider, while the same edit before enabling re-enters review |
 | BlindPay routes use the instance of the caller's key environment: `prod` keys the unsuffixed `BLINDPAY_*` instance, `dev` keys the `BLINDPAY_*_DEV` one, and a `dev` key with no development instance configured gets `503 misconfigured`. Receivers, wallets, bank accounts, virtual accounts, quotes, payins and payouts are only read and executed on that instance | Anyone using BlindPay with `dev` keys | A `dev` key operated the production instance: it could list and delete real KYC identities and create live payouts |
+| `POST /v1/pollar/oauth/token` only returns a session when the email Pollar reports for the login is the account email the gateway forwards for the key (`X-Consumer-Email`). A mismatch revokes the session, fails the handshake and is `403 pollar_identity_mismatch`; a key with no forwarded email is `403 pollar_identity_required` at `authorize` | Tenants that log their own end users in through the shared Pollar application, and anyone signing in with another email than their account's | Every tenant shares one Pollar application and a login link works in any browser: a key could send its `authorization_url` to someone, wait for the consent, and redeem that person's custodial wallet |
+| `POST /v1/pollar/users` and `/v1/pollar/users/with-wallet` require an elevated key; a tenant key gets `403 elevated_key_required` | Integrators pre-registering users with a tenant key | A registered user is the one a later social login resolves by email, so a tenant key could claim a stranger's email and be recorded as the owner of their wallet |
+| A testnet login no longer provisions its user a mainnet wallet: `network_wallets` on a testnet redemption lists the testnet wallet only. A mainnet login still provisions testnet | Anyone reading a mainnet entry from a testnet login | A `dev` key anyone can mint spent the operator's real XLM on a mainnet reserve per login |
+| The poll, refresh, logout, token-verify, user-registration and trustline-removal Pollar routes are rate limited, and a per-consumer quota (100 Pollar requests a minute) and wallet ceiling (50 a day) apply on top of the per-address budgets; excess is `429 rate_limited` | Clients hammering those routes | They had no limit, and each call spends the Pollar request budget every tenant shares — one tenant could fail every other tenant's logins |
 
 Deploy notes that come with it:
 
@@ -1338,6 +1372,20 @@ Deploy notes that come with it:
 - **Configure the development BlindPay instance** (`BLINDPAY_API_KEY_DEV`,
   `BLINDPAY_INSTANCE_ID_DEV`, `BLINDPAY_WEBHOOK_SECRET_DEV`) if `dev` keys use
   BlindPay, and point its dashboard webhook at the same `/v1/blindpay/webhooks` URL.
+- **Deploy the dev platform's forwarder change first.** `authorize` refuses every
+  key the gateway forwards no `X-Consumer-Email` for. The forwarder bakes the email
+  per account whenever that account's keys are synced, so re-sync existing
+  consumers (listing a user's keys in the dashboard does it for that user). Until
+  then the wallet falls back to the dev platform's brokered login, which does not
+  need the header; other clients get `403 pollar_identity_required`.
+- **Social login for third-party end users through the shared Pollar application
+  stops.** A tenant whose app logs in its own users gets
+  `403 pollar_identity_mismatch` for every user whose email is not the key's
+  account email.
+- **Migration `20260915180000_pollar_testnet_counterpart_mainnet`** closes the
+  mainnet wallets that testnet logins had left `pending` (`FAILED`,
+  `COUNTERPART_FROM_TESTNET_DISABLED`), so the sweeper stops funding them. Data
+  only, no schema change.
 
 ### NestJS 12, TypeScript 6 and a Node floor of 24.9
 
@@ -1424,8 +1472,9 @@ deploy time:
   its next tick; otherwise rows stay `pending` until they run out of attempts.
   Logins never fail either way.
 
-A login now funds a reserve on *both* networks: mainnet spend per new user is
-unchanged, but there is now testnet spend too.
+A mainnet login funds a reserve on *both* networks. A testnet login funds testnet
+only — it used to fund mainnet as well, which the security review fixes above
+removed.
 
 ### `429` now reports `rate_limited`
 
@@ -1576,6 +1625,7 @@ at least `DATABASE_URL` and `APISIX_GATEWAY_SECRET`.
 | `APISIX_ORGANIZATION_HEADER` | no | `x-consumer-org` | Organization id |
 | `APISIX_PLAN_HEADER` | no | `x-consumer-plan` | Organization plan |
 | `APISIX_SWAP_FEE_BPS_HEADER` | no | `x-plan-swap-fee-bps` | Plan swap fee (bps) |
+| `APISIX_EMAIL_HEADER` | no | `x-consumer-email` | Verified email of the key's account. The Pollar bridge only returns a login's session to that account, and refuses a key without one |
 | `APISIX_PUBLIC_CONSUMER` | no | — | Username of the shared public consumer (see above). Set it wherever a public key is published |
 | `STELLAR_NETWORK` | no | `testnet` | Fallback Stellar network (`public` / `testnet`) |
 | `STELLAR_HORIZON_URL_PUBLIC` | no | `https://horizon.stellar.org` | Mainnet Horizon base URL |

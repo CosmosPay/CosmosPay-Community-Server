@@ -268,6 +268,9 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | `account_disabled` | 403 | 运营人员停用了该法币账户。与 key 无关 |
 | `gateway_required` | 403 | 请求并非经由 APISIX 到达 |
 | `admin_console_only` | 403 | 该路由属于平台控制台（`/v1/admin`、发起别名恢复）。任何 API key 都无法调用 |
+| `elevated_key_required` | 403 | 该路由会写入所有租户共享的资源（Pollar 用户目录）。只有提升权限的（admin）key 才能调用；增加 scope 也无济于事 |
+| `pollar_identity_required` | 403 | 网关没有为该 key 转发账户邮箱，因此无法把 Pollar 登录绑定到它 |
+| `pollar_identity_mismatch` | 403 | 该 Pollar 登录由 key 所属账户之外的另一个账户完成。会话已被吊销，不会返回 |
 | `idempotency_conflict` | 409 | 该 `Idempotency-Key`（或支付意图的 memo）已经为一个*不同的*请求创建过资源。请重复原始请求，或改用新的 key |
 | `kyc_state_invalid` | 409 | 非法的 KYC 状态转换——并非重复请求 |
 | `operation_in_flight` | 409 | 一个与之冲突的操作仍在结算中 |
@@ -740,12 +743,12 @@ wallet ──6. talks to Pollar DIRECTLY from here on ──────▶ http
 
 ### 一次登录，两个网络各一个钱包
 
-Pollar 将主网和测试网作为独立的应用运行，使用独立的密钥对，因此一次托管登录只会在其 API key 所解析到的网络上创建钱包（`prod` → `public`，`dev` → `testnet`——见 `resolveNetwork`）。为了让用户在两个网络上都有钱包，兑换还会通过 Server API 的 `POST /users/with-wallet` 在**另一个**网络上注册该用户，`POST /v1/pollar/oauth/token` 会同时报告两者：
+Pollar 将主网和测试网作为独立的应用运行，使用独立的密钥对，因此一次托管登录只会在其 API key 所解析到的网络上创建钱包（`prod` → `public`，`dev` → `testnet`——见 `resolveNetwork`）。为了让用户在两个网络上都有钱包，**主网**兑换还会通过 Server API 的 `POST /users/with-wallet` 在 **testnet** 上注册该用户，`POST /v1/pollar/oauth/token` 会同时报告两者。testnet 兑换不会开通主网：`dev` key 落在 testnet 上，而任何人都能创建的 key 不应在每次登录时为主网储备金花费真实 XLM。该用户的主网钱包来自其首次主网登录。
 
 ```jsonc
 "network_wallets": [
-  { "network": "testnet", "status": "ready",   "address": "GA5Z…" },
-  { "network": "public",  "status": "pending", "address": null    }
+  { "network": "public",  "status": "ready",   "address": "GA5Z…" },
+  { "network": "testnet", "status": "pending", "address": null    }
 ]
 ```
 
@@ -754,7 +757,7 @@ Pollar 将主网和测试网作为独立的应用运行，使用独立的密钥�
 出现 `pending` 的通常原因是**另一个网络的密钥没有配置**。配置好之后，下一次清扫就会开通全部积压，用户无需重新登录，因此即使目前只服务一个网络，也请为两个网络都设置密钥。
 
 - **用户通过 OAuth 邮箱进行匹配**，这也是另一个网络上的托管登录所使用的键。不返回邮箱的服务商不会获得第二个钱包。
-- **它会在两个网络上花费 XLM。** 一次主网登录也会为一个 testnet 储备金注资，反之亦然。状态保存在 `pollar_user_wallet` 中，每个（consumer、email、network）一行，因此重复登录不会再次开通。
+- **主网登录会在两个网络上花费 XLM**——自身的储备金和一份 testnet 储备金。testnet 登录只花费 testnet XLM。状态保存在 `pollar_user_wallet` 中，每个（consumer、email、network）一行，因此重复登录不会再次开通。
 
 ### 桥接存储了什么
 
@@ -767,7 +770,8 @@ Pollar 将主网和测试网作为独立的应用运行，使用独立的密钥�
 - **PKCE（RFC 7636，S256）** 在**重定向流程中是必需的**，在轮询流程中是可选的：在授权时传入 `code_challenge`，在兑换时传入 `code_verifier`，这样从浏览器或日志中泄露的 code 在没有 verifier 的情况下毫无用处。重定向流程的 code 会经过浏览器，而公开的回调会把它交给任何出示 `state` 的人——`state` 就在 `authorization_url` 里——因此带 `redirect_uri` 但没有 `code_challenge` 的 `authorize` 会返回 `400 validation_failed`。
 - **`dpop_jwk`** 把 Pollar 签发的 token 绑定到钱包自己的 P-256 密钥（RFC 9449），因此被盗的 access token 在没有签名证明的情况下无法使用。这也意味着桥接无法再代表钱包行事——`/refresh` 和 `/logout` 服务于 bearer 会话，而绑定了 DPoP 的钱包会直接调用 Pollar。
 - **`POLLAR_REDIRECT_URI_WHITELIST`** 按消费者划分，且默认拒绝，因为 code 会被送到重定向 URI。它接受回环主机（任意端口，依据 RFC 8252）、私有 scheme 深度链接和 https 主机。
-- **把持有 `pollar:*` 的 API key 保存在服务器上。** 轮询流程会把 code 交给同时持有握手 `state` *和*具有 `pollar:read` 的 key 的任何人。从已发布的应用中提取出这类 key 的人，可以发起一次登录，把它的 `authorization_url` 发给受害者，在受害者同意授权后轮询获取 code，再用自己的 PKCE verifier 兑换——这种情况下 PKCE 和 `dpop_jwk` 都帮不上忙。
+- **会话只会返回给给出同意的账户。** 所有租户共享同一个 Pollar 应用，而登录链接在任何人的浏览器里都能用：一个 key 可以把自己的 `authorization_url` 发给别人，等对方同意后兑换对方的钱包——PKCE 和 `dpop_jwk` 帮不上忙，因为握手正是这个 key 发起的。因此 `POST /v1/pollar/oauth/token` 会把 Pollar 为该登录报告的邮箱与网关为该 key 转发的账户邮箱（`X-Consumer-Email`，见 `APISIX_EMAIL_HEADER`）进行比较。不一致时会在 Pollar 吊销会话、把握手标记为 `failed` 并返回 `403 pollar_identity_mismatch`；没有转发邮箱的 key 会在 `authorize` 时被 `403 pollar_identity_required` 拒绝。唯一的例外是开发者平台的代理式注册流程（`X-Cosmos-Internal`）：它为还没有 key 的人登录，并在交出任何东西之前自行验证邮箱。
+- **`POST /v1/pollar/users` 和 `/users/with-wallet` 需要提升权限的 key**（`X-Consumer-Role: admin`，否则返回 `403 elevated_key_required`）。在那里注册的用户，就是之后社交登录按邮箱解析到的同一个用户；否则租户 key 可以抢注陌生人的邮箱，并被记录为其所获钱包的所有者。
 
 ### 路由
 
@@ -784,7 +788,7 @@ Pollar 将主网和测试网作为独立的应用运行，使用独立的密钥�
 | POST   | `/v1/pollar/wallets/:address/trustlines/default`      | `pollar:write` | 启用应用配置的资产 |
 | POST   | `/v1/pollar/wallets/:address/trustlines`              | `pollar:write` | 启用指定资产 |
 | DELETE | `/v1/pollar/wallets/:address/trustlines/:code/:issuer`| `pollar:write` | 移除 trustline（仅限零余额） |
-| POST   | `/v1/pollar/users` · `/v1/pollar/users/with-wallet`   | `pollar:write` | 注册用户，可选同时创建钱包 |
+| POST   | `/v1/pollar/users` · `/v1/pollar/users/with-wallet`   | `pollar:write` | 注册用户，可选同时创建钱包（仅限提升权限的 key） |
 | POST   | `/v1/pollar/tokens/verify`                            | `pollar:read`  | 验证钱包向你出示的 token |
 
 最后六个路由使用 Pollar 的 **secret** key，这就是它们在这里运行、而不是在钱包中运行的原因。
@@ -800,8 +804,15 @@ Pollar 将主网和测试网作为独立的应用运行，使用独立的密钥�
 | `POST /v1/pollar/oauth/authorize` | 20 | 限制钱包创建数量 |
 | `POST /v1/pollar/oauth/token` | 60 | 客户端会在账户开通期间重试它 |
 | `GET /v1/pollar/oauth/callback` | 60 | 唯一无需 API key 即可访问的路由 |
-| `POST /v1/pollar/users/with-wallet` | 10 | 创建钱包时没有授权页面 |
+| `GET /v1/pollar/oauth/sessions/{state}` | 400 | 钱包每隔几秒轮询一次；每次轮询都可能请求 Pollar |
+| `POST /v1/pollar/oauth/refresh` · `/logout` | 60，共享 | 每次一个 Pollar 请求 |
+| `POST /v1/pollar/users` · `/users/with-wallet` | 10，共享 | 写入所有租户共享的用户目录；`with-wallet` 还会在没有授权页面的情况下创建钱包 |
 | `POST /v1/pollar/wallets/activate` | 20 | 每次调用都花费 XLM |
+| `POST /v1/pollar/wallets/:address/trustlines` · `/default` | 20，共享 | 每个资产都会锁定注资钱包的储备金 |
+| `DELETE /v1/pollar/wallets/:address/trustlines/:code/:issuer` | 20 | 每次一个 Pollar 请求 |
+| `POST /v1/pollar/tokens/verify` | 120 | 每次一个 Pollar 请求 |
+
+**有两个上限按消费者而不是按地址计算**，所以轮换地址也无法成倍放大它们：一个消费者能引发的 Pollar 请求（每分钟 100 个，覆盖上面除轮询和回调之外的所有路由——Pollar 为该 key 的预算是每分钟 200 个，且所有租户共享），以及它能引发的钱包数量（`authorize` 和 `users/with-wallet`，每天 50 个）。控制台调用（`X-Cosmos-Internal`）不受这两个上限约束：开发者平台通过同一个消费者代理所有没有 key 的钱包，并自行为这部分流量设定预算。
 
 超出预算会返回 **`429` 以及 `code: "rate_limited"`**、`Retry-After`，以及 `RateLimit-Limit` / `-Remaining` / `-Reset` 响应头。同一个限流器还守护着 Pollar 之外的几个路由——swap 和流动性池提交、webhook 的 `ping` 与 `redeliver`、别名 challenge 和恢复、活动数据接收——各自的预算在对应小节中说明。通用的速率限制应由 APISIX 负责。
 
@@ -817,7 +828,7 @@ IPv6 调用方按 **/64** 分组，因为客户端通常控制着整个 /64；�
 
 ### 配置
 
-1. 在 [dashboard.pollar.xyz](https://dashboard.pollar.xyz) 创建一个应用，并获取你所在网络的两个 key（`pub_testnet_…` / `sec_testnet_…`）。请为**两个**网络都这样做：一次登录会在每个网络上各开通一个钱包，而没有 key 的网络会让每个用户的第二个钱包一直处于 `pending`，直到 key 被设置。两个仪表盘是相互独立的——请在每个仪表盘中都注册回调主机。
+1. 在 [dashboard.pollar.xyz](https://dashboard.pollar.xyz) 创建一个应用，并获取你所在网络的两个 key（`pub_testnet_…` / `sec_testnet_…`）。请为**两个**网络都这样做：一次主网登录还会开通一个 testnet 钱包，而缺少 testnet key 会让这第二个钱包一直处于 `pending`，直到 key 被设置。两个仪表盘是相互独立的——请在每个仪表盘中都注册回调主机。
 2. 在 **Build → Domains** 下注册 `POLLAR_BRIDGE_CALLBACK_URL` 的**网关主机**。SDK API 会在*每次*调用时根据 `Origin` 请求头检查该列表，而桥接会把这个请求头设为该主机（`POLLAR_SDK_ORIGIN` 可覆盖）。未注册的主机在 `POST /auth/session` 上会得到 `403 ORIGIN_NOT_ALLOWED`，这是每次登录的第一个调用。
 3. 将 `POLLAR_BRIDGE_CALLBACK_URL` 设置为 `<gateway>/v1/pollar/oauth/callback`——桥接会自行追加 `/{state}`。
 4. 将每个钱包的重定向 URI 添加到 `POLLAR_REDIRECT_URI_WHITELIST`，或者省略它并使用轮询流程。
@@ -868,6 +879,10 @@ Pollar 在 key 的前缀中编码了网络和 key 类型，环境变量校验器
 | swap、流动性池操作、支付意图和客户的响应现在只返回其文档化字段，另外 swap 和支付意图上的 `expiresAt` 现已写入文档。`consumerId` 以及结算记账字段（`settlementEpoch`、`lastCheckedAt`、`notFoundStreak`、`sharesReceived`、`settledAmountA`/`B`、`horizonCursor`）不再发送 | 读取这些字段的调用方 | 它们是内部字段，而且其中好几个路由可以用共享公共 key 访问 |
 | 对已存在于 BlindPay 的 receiver 调用 `PATCH /v1/kyc/receivers/:id` 时，除 `external_id` 和 `image_url` 外的任何字段都会返回 `403 kyc_review_required`，除非该 key 是提升权限的 key（`X-Consumer-Role: admin`） | 用租户 key 修正已上线 receiver 身份信息的集成方：请交由审核者处理 | 该 `PUT` 会把从未审核过的身份数据直接发给受监管的服务商，而启用之前的同样修改会重新进入审核 |
 | BlindPay 路由使用调用方 key 所属环境的实例：`prod` key 使用无后缀的 `BLINDPAY_*` 实例，`dev` key 使用 `BLINDPAY_*_DEV` 实例；未配置开发实例时，`dev` key 会得到 `503 misconfigured`。receiver、钱包、银行账户、虚拟账户、报价、payin 和 payout 只在该实例上读取和执行 | 使用 `dev` key 调用 BlindPay 的任何人 | 此前 `dev` key 操作的是生产实例：它可以列出和删除真实的 KYC 身份，并创建真实的 payout |
+| 只有当 Pollar 为该登录报告的邮箱就是网关为该 key 转发的账户邮箱（`X-Consumer-Email`）时，`POST /v1/pollar/oauth/token` 才会返回会话。不一致时会吊销会话、使握手失败并返回 `403 pollar_identity_mismatch`；没有转发邮箱的 key 在 `authorize` 时会得到 `403 pollar_identity_required` | 通过共享的 Pollar 应用为自己的终端用户登录的租户，以及用与账户不同的邮箱登录的任何人 | 所有租户共享同一个 Pollar 应用，而登录链接在任何浏览器里都能用：一个 key 可以把自己的 `authorization_url` 发给某人，等待其同意，然后兑换那个人的托管钱包 |
+| `POST /v1/pollar/users` 和 `/v1/pollar/users/with-wallet` 需要提升权限的 key；租户 key 会得到 `403 elevated_key_required` | 用租户 key 预注册用户的集成方 | 注册的用户就是之后社交登录按邮箱解析到的用户，因此租户 key 可以抢注陌生人的邮箱，并被记录为其钱包的所有者 |
+| testnet 登录不再为其用户开通主网钱包：testnet 兑换的 `network_wallets` 只列出 testnet 钱包。主网登录仍会开通 testnet | 读取 testnet 登录的主网条目的任何人 | 任何人都能创建的 `dev` key 每次登录都会花费运营方的真实 XLM 为主网储备金注资 |
+| 轮询、refresh、logout、token 校验、用户注册和删除 trustline 的 Pollar 路由都有了限流，并且在按地址的预算之上还叠加了按消费者的配额（每分钟 100 个 Pollar 请求）和钱包上限（每天 50 个）；超出返回 `429 rate_limited` | 频繁调用这些路由的客户端 | 它们之前没有限制，而每次调用都会消耗所有租户共享的 Pollar 请求预算——一个租户就能让所有其他租户的登录失败 |
 
 随之而来的部署说明：
 
@@ -882,6 +897,9 @@ Pollar 在 key 的前缀中编码了网络和 key 类型，环境变量校验器
 - **已存储的 `webhook_endpoint.previousSecret` 值不再被返回，但没有任何东西会清除它们。** 如果某次更早版本上的轮换留下了这样一个值，而你想把它从数据库中彻底清除，请自行把这两列置空。
 - **迁移 `20260915160000_blindpay_environment`** 为七张 BlindPay 镜像表添加 `environment` 列（默认 `'prod'`）——只改动目录，不重写表——因此现有行都会被标记为生产。**如果你之前无后缀的 `BLINDPAY_*` 变量指向的是 BlindPay 开发实例**，请把它们移到 `_DEV` 变量，并重新标记这些行（在 `blindpay_receiver`、`blindpay_blockchain_wallet`、`blindpay_bank_account`、`blindpay_virtual_account`、`payin`、`payout` 和 `blindpay_quote` 上执行 `UPDATE … SET environment = 'dev'`），否则 `prod` key 会继续读到它们。
 - **如果 `dev` key 要使用 BlindPay，请配置 BlindPay 开发实例**（`BLINDPAY_API_KEY_DEV`、`BLINDPAY_INSTANCE_ID_DEV`、`BLINDPAY_WEBHOOK_SECRET_DEV`），并把它的仪表盘 webhook 指向同一个 `/v1/blindpay/webhooks` URL。
+- **先部署开发者平台的 forwarder 变更。** 网关没有为其转发 `X-Consumer-Email` 的 key，`authorize` 一律拒绝。forwarder 会在账户的 key 每次同步时按账户写入邮箱，因此请重新同步现有消费者（在仪表盘中列出某个用户的 key 就会为该用户完成同步）。在此之前，钱包会回退到开发者平台的代理式登录，它不需要该请求头；其他客户端会得到 `403 pollar_identity_required`。
+- **通过共享 Pollar 应用为第三方终端用户提供的社交登录将停止工作。** 其应用为自有用户登录的租户，会对每个邮箱不是该 key 账户邮箱的用户得到 `403 pollar_identity_mismatch`。
+- **迁移 `20260915180000_pollar_testnet_counterpart_mainnet`** 会关闭 testnet 登录遗留为 `pending` 的主网钱包（`FAILED`、`COUNTERPART_FROM_TESTNET_DISABLED`），让清扫器停止为它们注资。仅修改数据，不改变 schema。
 
 ### NestJS 12、TypeScript 6 与 Node 最低版本 24.9
 
@@ -932,7 +950,7 @@ NestJS 12 以 ESM 形式发布，而 Jest 只有在 Node >= 24.9 且使用 `--ex
 - **运行迁移。** `20260905120000_pollar_user_wallet` 添加了 `pollar_user_wallet` 和 `PollarWalletStatus` 枚举。没有它，每次兑换都会记录一次开通失败，对应钱包也不会被记录——登录本身仍然正常工作。
 - **为两个网络都设置 key。** `POLLAR_*_MAINNET` 和 `POLLAR_*_TESTNET` 各自都是可选的，而没有 key 的网络会在每次登录时显示为一个 `pending` 钱包。设置第二组 key 后，清扫器会在下一个周期开通积压的钱包；否则这些行会保持 `pending`，直到尝试次数用完。无论哪种情况，登录都不会失败。
 
-一次登录现在会在*两个*网络上都为储备金注资：每个新用户的主网花费不变，但现在也会产生 testnet 花费。
+主网登录会在*两个*网络上都为储备金注资。testnet 登录只为 testnet 注资——它过去也会为主网注资，上面的安全审查修复已将其移除。
 
 ### `429` 现在报告 `rate_limited`
 
@@ -1040,6 +1058,7 @@ WHERE NOT i.indisvalid;
 | `APISIX_ORGANIZATION_HEADER` | 否 | `x-consumer-org` | 组织 id |
 | `APISIX_PLAN_HEADER` | 否 | `x-consumer-plan` | 组织套餐 |
 | `APISIX_SWAP_FEE_BPS_HEADER` | 否 | `x-plan-swap-fee-bps` | 套餐 swap 手续费（bps） |
+| `APISIX_EMAIL_HEADER` | 否 | `x-consumer-email` | key 所属账户的已验证邮箱。Pollar bridge 只会把登录的会话返回给该账户，并拒绝没有邮箱的 key |
 | `APISIX_PUBLIC_CONSUMER` | 否 | — | 共享公共消费者的用户名（见上文）。凡是发布了公共 key 的地方都要设置 |
 | `STELLAR_NETWORK` | 否 | `testnet` | 回退使用的 Stellar 网络（`public` / `testnet`） |
 | `STELLAR_HORIZON_URL_PUBLIC` | 否 | `https://horizon.stellar.org` | 主网 Horizon 基础 URL |

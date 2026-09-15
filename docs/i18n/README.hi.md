@@ -303,6 +303,9 @@ envelope और पूरा `code` enum OpenAPI spec में हर operation
 | `account_disabled` | 403 | किसी operator ने यह fiat खाता बंद कर दिया है। यह key की समस्या नहीं है |
 | `gateway_required` | 403 | request APISIX से होकर नहीं आई |
 | `admin_console_only` | 403 | यह रूट प्लेटफ़ॉर्म कंसोल का है (`/v1/admin`, alias recovery शुरू करना)। कोई भी API key इसे कॉल नहीं कर सकती |
+| `elevated_key_required` | 403 | यह रूट उस चीज़ में लिखता है जिसे सभी tenants साझा करते हैं (Pollar user directory)। केवल elevated (admin) key इसे कॉल कर सकती है; ज़्यादा scopes से मदद नहीं मिलेगी |
+| `pollar_identity_required` | 403 | gateway ने इस key के account का कोई email forward नहीं किया, इसलिए Pollar लॉगिन को इससे जोड़ा नहीं जा सकता |
+| `pollar_identity_mismatch` | 403 | Pollar लॉगिन key के account के बजाय किसी दूसरे account ने पूरा किया। session revoke कर दिया गया, लौटाया नहीं गया |
 | `idempotency_conflict` | 409 | यह `Idempotency-Key` (या payment-intent memo) किसी *दूसरी* request के लिए पहले ही एक resource बना चुकी है। मूल request दोहराएँ, या नई key का उपयोग करें |
 | `kyc_state_invalid` | 409 | KYC state का अवैध transition — यह duplicate request नहीं है |
 | `operation_in_flight` | 409 | एक टकराने वाला operation अभी भी settle हो रहा है |
@@ -1079,13 +1082,16 @@ Pollar से client session जाँचता है और Pollar के `REA
 Pollar mainnet और testnet को अलग key pairs वाले अलग applications के रूप में चलाता है,
 इसलिए hosted लॉगिन केवल उसी नेटवर्क पर वॉलेट बनाता है जिस पर उसकी API key resolve होती है
 (`prod` → `public`, `dev` → `testnet` — देखें `resolveNetwork`)। user को दोनों पर वॉलेट देने
-के लिए, redemption उसे Server API के `POST /users/with-wallet` के ज़रिए **दूसरे** नेटवर्क पर
-भी रजिस्टर करता है, और `POST /v1/pollar/oauth/token` दोनों को रिपोर्ट करता है:
+के लिए, **mainnet** redemption उसे Server API के `POST /users/with-wallet` के ज़रिए **testnet**
+पर भी रजिस्टर करता है, और `POST /v1/pollar/oauth/token` दोनों को रिपोर्ट करता है। testnet
+redemption mainnet provision नहीं करता: testnet पर `dev` keys आती हैं, और जिस key को कोई भी
+बना सकता है उसे हर लॉगिन पर mainnet reserve के लिए असली XLM खर्च नहीं करना चाहिए। उस user का
+mainnet वॉलेट उसके पहले mainnet लॉगिन से आता है।
 
 ```jsonc
 "network_wallets": [
-  { "network": "testnet", "status": "ready",   "address": "GA5Z…" },
-  { "network": "public",  "status": "pending", "address": null    }
+  { "network": "public",  "status": "ready",   "address": "GA5Z…" },
+  { "network": "testnet", "status": "pending", "address": null    }
 ]
 ```
 
@@ -1100,8 +1106,8 @@ exponential backoff के साथ और row के `failed` होने स
 
 - **Users का मिलान उनके OAuth ईमेल से होता है**, वही key जिसे दूसरे नेटवर्क पर hosted लॉगिन
   इस्तेमाल करता है। जो provider कोई ईमेल नहीं लौटाता, उसे दूसरा वॉलेट नहीं मिलता।
-- **यह दोनों नेटवर्क पर XLM खर्च करता है।** mainnet लॉगिन testnet reserve भी fund करता है
-  और इसके उलट भी। state `pollar_user_wallet` में रहती है, प्रति (consumer, email, network)
+- **mainnet लॉगिन दोनों नेटवर्क पर XLM खर्च करता है** — अपना reserve और एक testnet reserve।
+  testnet लॉगिन केवल testnet XLM खर्च करता है। state `pollar_user_wallet` में रहती है, प्रति (consumer, email, network)
   एक row, इसलिए दोहराया गया लॉगिन दोबारा provision नहीं करता।
 
 ### bridge क्या स्टोर करता है
@@ -1131,11 +1137,22 @@ callback दूसरा code नहीं बनाता, और एक code �
 - **`POLLAR_REDIRECT_URI_WHITELIST`** प्रति consumer है और fail closed होता है, क्योंकि
   code redirect URI पर ही पहुँचता है। यह loopback hosts (कोई भी port, RFC 8252 के
   अनुसार), private-use scheme वाले deep links, और https hosts स्वीकार करता है।
-- **`pollar:*` वाली API keys को सर्वर पर ही रखें।** poll flow code उसे सौंप देता है
-  जिसके पास handshake का `state` *और* `pollar:read` वाली key हो। जो कोई ship किए गए
-  app से ऐसी key निकाल ले, वह लॉगिन खोल सकता है, उसका `authorization_url` किसी पीड़ित को
-  भेज सकता है, पीड़ित के consent देते ही code के लिए poll कर सकता है, और अपने PKCE verifier
-  से उसे redeem कर सकता है — वहाँ PKCE और `dpop_jwk` मदद नहीं करते।
+- **session केवल उसी account को वापस जाता है जिसने consent दिया।** सभी tenants एक ही Pollar
+  application साझा करते हैं, और लॉगिन link किसी के भी browser में काम करता है: कोई key अपना
+  `authorization_url` किसी और को भेज सकती थी, उसके consent का इंतज़ार कर सकती थी और उसका
+  वॉलेट redeem कर सकती थी — PKCE और `dpop_jwk` मदद नहीं करते, क्योंकि handshake उसी key ने
+  खोला था। इसलिए `POST /v1/pollar/oauth/token` लॉगिन के लिए Pollar द्वारा रिपोर्ट किए गए email
+  की तुलना उस account email से करता है जिसे gateway key के लिए forward करता है
+  (`X-Consumer-Email`, देखें `APISIX_EMAIL_HEADER`)। mismatch होने पर Pollar पर session
+  revoke होता है, handshake `failed` होता है और `403 pollar_identity_mismatch` लौटता है; जिस
+  key का कोई email forward नहीं हुआ उसे `authorize` पर `403 pollar_identity_required` से मना
+  किया जाता है। एकमात्र अपवाद dev platform का brokered onboarding (`X-Cosmos-Internal`) है:
+  वह उन लोगों को लॉगिन कराता है जिनके पास अभी key नहीं है, और कुछ भी सौंपने से पहले email
+  खुद साबित करता है।
+- **`POST /v1/pollar/users` और `/users/with-wallet` के लिए elevated key चाहिए**
+  (`X-Consumer-Role: admin`, वरना `403 elevated_key_required`)। वहाँ रजिस्टर हुआ user वही
+  होता है जिसे बाद का social लॉगिन email से resolve करता है, इसलिए वरना कोई tenant key किसी
+  अजनबी का email claim करके उसे मिलने वाले वॉलेट की मालिक के रूप में दर्ज हो सकती थी।
 
 ### रूट्स
 
@@ -1152,7 +1169,7 @@ callback दूसरा code नहीं बनाता, और एक code �
 | POST   | `/v1/pollar/wallets/:address/trustlines/default`      | `pollar:write` | app के कॉन्फ़िगर किए गए assets enable करना |
 | POST   | `/v1/pollar/wallets/:address/trustlines`              | `pollar:write` | विशिष्ट assets enable करना |
 | DELETE | `/v1/pollar/wallets/:address/trustlines/:code/:issuer`| `pollar:write` | trustline हटाना (केवल शून्य balance पर) |
-| POST   | `/v1/pollar/users` · `/v1/pollar/users/with-wallet`   | `pollar:write` | user रजिस्टर करना, वैकल्पिक रूप से वॉलेट के साथ |
+| POST   | `/v1/pollar/users` · `/v1/pollar/users/with-wallet`   | `pollar:write` | user रजिस्टर करना, वैकल्पिक रूप से वॉलेट के साथ (केवल elevated keys) |
 | POST   | `/v1/pollar/tokens/verify`                            | `pollar:read`  | किसी वॉलेट द्वारा आपको दिखाए गए token को validate करना |
 
 आखिरी छह Pollar की **secret** key इस्तेमाल करते हैं, इसीलिए वे वॉलेट में नहीं, यहाँ
@@ -1176,8 +1193,20 @@ redeem करने से कुछ नया नहीं बनता।
 | `POST /v1/pollar/oauth/authorize` | 20 | वॉलेट बनाने की सीमा |
 | `POST /v1/pollar/oauth/token` | 60 | account provision होने तक clients इसे retry करते हैं |
 | `GET /v1/pollar/oauth/callback` | 60 | बिना API key के पहुँचा जा सकने वाला अकेला रूट |
-| `POST /v1/pollar/users/with-wallet` | 10 | बिना consent स्क्रीन के वॉलेट बनाता है |
+| `GET /v1/pollar/oauth/sessions/{state}` | 400 | वॉलेट हर कुछ सेकंड में poll करता है; हर poll Pollar तक पहुँच सकता है |
+| `POST /v1/pollar/oauth/refresh` · `/logout` | 60, साझा | हर एक Pollar request |
+| `POST /v1/pollar/users` · `/users/with-wallet` | 10, साझा | उस user directory में लिखते हैं जिसे सभी tenants साझा करते हैं; `with-wallet` बिना consent स्क्रीन के वॉलेट भी बनाता है |
 | `POST /v1/pollar/wallets/activate` | 20 | हर कॉल पर XLM खर्च करता है |
+| `POST /v1/pollar/wallets/:address/trustlines` · `/default` | 20, साझा | हर asset funding वॉलेट का reserve lock करता है |
+| `DELETE /v1/pollar/wallets/:address/trustlines/:code/:issuer` | 20 | हर एक Pollar request |
+| `POST /v1/pollar/tokens/verify` | 120 | हर एक Pollar request |
+
+**दो सीमाएँ address के बजाय प्रति consumer हैं**, इसलिए addresses बदलने से वे कई गुना नहीं
+होतीं: एक consumer जितनी Pollar requests करा सकता है (प्रति मिनट 100, poll और callback को
+छोड़कर ऊपर के सभी रूट्स पर — Pollar key का budget प्रति मिनट 200 है और सभी tenants उसे साझा
+करते हैं), और वह जितने वॉलेट बनवा सकता है (`authorize` और `users/with-wallet`, प्रति दिन 50)।
+कंसोल कॉल (`X-Cosmos-Internal`) दोनों से मुक्त हैं: dev platform हर बिना-key वॉलेट को एक ही
+consumer से broker करता है और उस traffic का budget खुद तय करता है।
 
 किसी सीमा को पार करने पर **`429` के साथ `code: "rate_limited"`**, एक `Retry-After`, और
 `RateLimit-Limit` / `-Remaining` / `-Reset` headers लौटते हैं। यही limiter Pollar के बाहर
@@ -1208,8 +1237,8 @@ database चाहिए। incident के दौरान सीमाएँ �
 
 1. [dashboard.pollar.xyz](https://dashboard.pollar.xyz) पर एक app बनाएँ और
    अपने नेटवर्क की दोनों keys लें (`pub_testnet_…` / `sec_testnet_…`)। यह
-   **दोनों** नेटवर्क के लिए करें: एक लॉगिन हर नेटवर्क पर एक वॉलेट provision करता है, और जिस नेटवर्क की
-   keys नहीं हैं वह हर user का दूसरा वॉलेट उनके सेट होने तक `pending` छोड़ देता है। दोनों
+   **दोनों** नेटवर्क के लिए करें: mainnet लॉगिन एक testnet वॉलेट भी provision करता है, और
+   testnet keys न होने पर वह दूसरा वॉलेट उनके सेट होने तक `pending` रहता है। दोनों
    डैशबोर्ड अलग हैं — हर एक में callback host रजिस्टर करें।
 2. `POLLAR_BRIDGE_CALLBACK_URL` के **gateway host** को
    **Build → Domains** के अंतर्गत रजिस्टर करें। SDK API *हर* कॉल पर `Origin` header के
@@ -1270,6 +1299,10 @@ Pollar नेटवर्क और key का प्रकार key के pre
 | swaps, liquidity-pool operations, payment intents और customers के responses अब केवल अपने documented fields लौटाते हैं, साथ में swaps और payment intents पर `expiresAt`, जो अब documented है। `consumerId` और settlement की bookkeeping (`settlementEpoch`, `lastCheckedAt`, `notFoundStreak`, `sharesReceived`, `settledAmountA`/`B`, `horizonCursor`) अब नहीं भेजे जाते | वे callers जो ये fields पढ़ते थे | ये internal हैं, और इनमें से कई routes साझा public key से पहुँचे जा सकते हैं |
 | BlindPay पर पहले से मौजूद receiver पर `PATCH /v1/kyc/receivers/:id` `external_id` और `image_url` को छोड़कर किसी भी field के लिए `403 kyc_review_required` है, जब तक key elevated (`X-Consumer-Role: admin`) न हो | tenant key से किसी live receiver की पहचान सुधारने वाले integrators: इसे reviewer से होकर भेजें | `PUT` कभी review न हुआ identity data सीधे एक regulated provider को भेज देता था, जबकि enable होने से पहले वही edit फिर से review में जाता है |
 | BlindPay routes caller की key के environment वाला instance इस्तेमाल करते हैं: `prod` keys बिना suffix वाले `BLINDPAY_*` का, `dev` keys `BLINDPAY_*_DEV` का, और development instance कॉन्फ़िगर न होने पर `dev` key को `503 misconfigured` मिलता है। receivers, wallets, bank accounts, virtual accounts, quotes, payins और payouts केवल उसी instance पर पढ़े और execute किए जाते हैं | `dev` keys के साथ BlindPay इस्तेमाल करने वाले सभी | एक `dev` key production instance चलाती थी: वह असली KYC identities list और delete कर सकती थी और असली payouts बना सकती थी |
+| `POST /v1/pollar/oauth/token` session तभी लौटाता है जब लॉगिन के लिए Pollar द्वारा रिपोर्ट किया गया email वही account email हो जिसे gateway key के लिए forward करता है (`X-Consumer-Email`)। mismatch session revoke करता है, handshake विफल करता है और `403 pollar_identity_mismatch` है; जिस key का email forward नहीं हुआ उसे `authorize` पर `403 pollar_identity_required` मिलता है | वे tenants जो साझा Pollar application से अपने end users को लॉगिन कराते हैं, और जो भी अपने account से अलग email से लॉगिन करता है | सभी tenants एक Pollar application साझा करते हैं और लॉगिन link किसी भी browser में काम करता है: कोई key अपना `authorization_url` किसी को भेजकर, consent का इंतज़ार करके, उस व्यक्ति का custodial वॉलेट redeem कर सकती थी |
+| `POST /v1/pollar/users` और `/v1/pollar/users/with-wallet` के लिए elevated key चाहिए; tenant key को `403 elevated_key_required` मिलता है | tenant key से users को पहले से रजिस्टर करने वाले integrators | रजिस्टर हुआ user वही है जिसे बाद का social लॉगिन email से resolve करता है, इसलिए tenant key किसी अजनबी का email claim करके उसके वॉलेट की मालिक के रूप में दर्ज हो सकती थी |
+| testnet लॉगिन अब अपने user के लिए mainnet वॉलेट provision नहीं करता: testnet redemption के `network_wallets` में केवल testnet वॉलेट होता है। mainnet लॉगिन अब भी testnet provision करता है | testnet लॉगिन से mainnet entry पढ़ने वाले | जिस `dev` key को कोई भी बना सकता है, वह हर लॉगिन पर mainnet reserve के लिए operator का असली XLM खर्च करती थी |
+| poll, refresh, logout, token-verify, user-registration और trustline-removal वाले Pollar रूट्स पर सीमा है, और प्रति-address budgets के ऊपर प्रति-consumer quota (प्रति मिनट 100 Pollar requests) और वॉलेट सीमा (प्रति दिन 50) लागू होती है; अधिकता `429 rate_limited` है | इन रूट्स पर लगातार कॉल करने वाले clients | इन पर कोई सीमा नहीं थी, और हर कॉल वह Pollar request budget खर्च करती है जिसे सभी tenants साझा करते हैं — एक tenant बाकी सभी tenants के लॉगिन विफल कर सकता था |
 
 इसके साथ आने वाले deploy नोट:
 
@@ -1326,6 +1359,19 @@ Pollar नेटवर्क और key का प्रकार key के pre
 - **BlindPay development instance कॉन्फ़िगर करें** (`BLINDPAY_API_KEY_DEV`,
   `BLINDPAY_INSTANCE_ID_DEV`, `BLINDPAY_WEBHOOK_SECRET_DEV`) अगर `dev` keys BlindPay
   इस्तेमाल करती हैं, और उसका dashboard webhook उसी `/v1/blindpay/webhooks` URL पर लगाएँ।
+- **पहले dev platform का forwarder बदलाव deploy करें।** `authorize` हर उस key को मना करता है
+  जिसके लिए gateway `X-Consumer-Email` forward नहीं करता। forwarder हर account का email तब दर्ज
+  करता है जब उस account की keys sync होती हैं, इसलिए मौजूदा consumers को फिर से sync करें
+  (dashboard में किसी user की keys list करने से उस user के लिए यह हो जाता है)। तब तक वॉलेट dev
+  platform के brokered लॉगिन पर चला जाता है, जिसे header की ज़रूरत नहीं; बाकी clients को
+  `403 pollar_identity_required` मिलता है।
+- **साझा Pollar application से third-party end users का social लॉगिन बंद हो जाता है।** जिस
+  tenant का app अपने users को लॉगिन कराता है, उसे हर उस user के लिए
+  `403 pollar_identity_mismatch` मिलता है जिसका email key के account का email नहीं है।
+- **Migration `20260915180000_pollar_testnet_counterpart_mainnet`** उन mainnet वॉलेट्स को बंद
+  करता है जिन्हें testnet लॉगिन ने `pending` छोड़ा था (`FAILED`,
+  `COUNTERPART_FROM_TESTNET_DISABLED`), ताकि sweeper उन्हें fund करना बंद कर दे। केवल data,
+  कोई schema बदलाव नहीं।
 
 ### NestJS 12, TypeScript 6 और न्यूनतम Node 24.9
 
@@ -1412,8 +1458,8 @@ deploy के समय:
   provision कर देता है; वरना rows तब तक `pending` रहती हैं जब तक उनके प्रयास खत्म न हो
   जाएँ। दोनों ही स्थितियों में लॉगिन कभी विफल नहीं होते।
 
-एक लॉगिन अब *दोनों* नेटवर्क पर reserve fund करता है: प्रति नए user mainnet खर्च नहीं
-बदला, लेकिन अब testnet पर भी खर्च होता है।
+mainnet लॉगिन *दोनों* नेटवर्क पर reserve fund करता है। testnet लॉगिन केवल testnet fund करता
+है — पहले वह mainnet भी fund करता था, जिसे ऊपर की security review fixes ने हटा दिया।
 
 ### `429` अब `rate_limited` रिपोर्ट करता है
 
@@ -1560,6 +1606,7 @@ type दोबारा बनाए बिना enum value drop नहीं �
 | `APISIX_ORGANIZATION_HEADER` | नहीं | `x-consumer-org` | संगठन id |
 | `APISIX_PLAN_HEADER` | नहीं | `x-consumer-plan` | संगठन का plan |
 | `APISIX_SWAP_FEE_BPS_HEADER` | नहीं | `x-plan-swap-fee-bps` | plan की swap fee (bps) |
+| `APISIX_EMAIL_HEADER` | नहीं | `x-consumer-email` | key के account का verified email। Pollar bridge लॉगिन का session केवल उसी account को लौटाता है, और बिना email वाली key को मना करता है |
 | `APISIX_PUBLIC_CONSUMER` | नहीं | — | साझा public consumer का username (ऊपर देखें)। जहाँ भी public key प्रकाशित हो, इसे सेट करें |
 | `STELLAR_NETWORK` | नहीं | `testnet` | fallback Stellar नेटवर्क (`public` / `testnet`) |
 | `STELLAR_HORIZON_URL_PUBLIC` | नहीं | `https://horizon.stellar.org` | Mainnet Horizon का base URL |

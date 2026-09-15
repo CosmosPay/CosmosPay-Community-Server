@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PollarWalletStatus } from '@generated/prisma/client';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
+import { isElevatedConsumer } from '@/common/elevated-consumer';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
 import { resolveNetwork } from '@/common/stellar-network';
@@ -152,12 +153,29 @@ export class PollarWalletsService {
   /**
    * Registers a user with Pollar. With `withWallet`, provisions their Stellar
    * wallet in the same call instead of waiting for their first login to do it.
+   *
+   * **Elevated keys only.** Every tenant shares one Pollar application, so a user
+   * registered here is the same user a later social login resolves by email. A
+   * tenant key could register a stranger's email, be recorded as the owner of the
+   * wallet Pollar created for it, and strip that person's trustlines once they
+   * start using it — or spend the operator's XLM on wallets for addresses it
+   * made up.
    */
   async registerUser(
     consumer: GatewayConsumer,
     dto: RegisterUserDto,
     withWallet: boolean,
   ): Promise<PollarUserEntity> {
+    if (!isElevatedConsumer(consumer)) {
+      this.logger.warn(
+        `Refused Pollar user registration for ${consumer.username}: not an elevated key`,
+      );
+      throw ApiError.forbidden(
+        ApiErrorCode.ElevatedKeyRequired,
+        'Registering Pollar users requires an elevated (admin) key: the Pollar ' +
+          'user directory is shared by every tenant.',
+      );
+    }
     const network = resolveNetwork(this.config, consumer);
     const code = withWallet
       ? 'SERVER_USER_WALLET_CREATED'

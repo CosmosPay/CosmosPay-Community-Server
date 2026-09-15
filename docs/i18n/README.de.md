@@ -306,6 +306,9 @@ Einige, die leicht verwechselt werden:
 | `account_disabled` | 403 | Ein Operator hat dieses Fiat-Konto deaktiviert. Kein Problem des Keys |
 | `gateway_required` | 403 | Die Anfrage kam nicht über APISIX |
 | `admin_console_only` | 403 | Die Route gehört zur Plattform-Konsole (`/v1/admin`, Start einer Alias-Wiederherstellung). Kein API-Key kann sie aufrufen |
+| `elevated_key_required` | 403 | Die Route schreibt in etwas, das alle Tenants teilen (das Pollar-Benutzerverzeichnis). Nur ein erhöhter (Admin-)Key darf sie aufrufen; mehr Scopes helfen nicht |
+| `pollar_identity_required` | 403 | Das Gateway hat für diesen Key keine Konto-E-Mail weitergeleitet, daher kann ein Pollar-Login nicht an ihn gebunden werden |
+| `pollar_identity_mismatch` | 403 | Der Pollar-Login wurde von einem anderen Konto als dem des Keys abgeschlossen. Die Sitzung wurde widerrufen, nicht zurückgegeben |
 | `idempotency_conflict` | 409 | Dieser `Idempotency-Key` (oder dieses Payment-Intent-Memo) hat bereits eine Ressource für eine *andere* Anfrage erzeugt. Wiederholen Sie die ursprüngliche Anfrage oder verwenden Sie einen neuen Key |
 | `kyc_state_invalid` | 409 | Ein unzulässiger KYC-Zustandsübergang — keine doppelte Anfrage |
 | `operation_in_flight` | 409 | Eine kollidierende Operation wird noch abgewickelt |
@@ -1134,13 +1137,16 @@ Pollar betreibt Mainnet und Testnet als getrennte Anwendungen mit getrennten
 Schlüsselpaaren, sodass ein gehosteter Login nur in dem Netzwerk eine Wallet erstellt,
 auf das sein API-Key aufgelöst wird (`prod` → `public`, `dev` → `testnet` — siehe
 `resolveNetwork`). Damit der Benutzer in beiden eine Wallet hat, registriert ihn eine
-Einlösung auch im **anderen** Netzwerk, über `POST /users/with-wallet` der Server API,
-und `POST /v1/pollar/oauth/token` meldet beide:
+**Mainnet**-Einlösung auch im **Testnet**, über `POST /users/with-wallet` der Server API,
+und `POST /v1/pollar/oauth/token` meldet beide. Eine Testnet-Einlösung stellt kein Mainnet
+bereit: Im Testnet landen `dev`-Keys, und ein Key, den jeder erzeugen kann, darf nicht pro
+Login echte XLM für eine Mainnet-Reserve ausgeben. Die Mainnet-Wallet dieses Benutzers
+entsteht bei seinem ersten Mainnet-Login.
 
 ```jsonc
 "network_wallets": [
-  { "network": "testnet", "status": "ready",   "address": "GA5Z…" },
-  { "network": "public",  "status": "pending", "address": null    }
+  { "network": "public",  "status": "ready",   "address": "GA5Z…" },
+  { "network": "testnet", "status": "pending", "address": null    }
 ]
 ```
 
@@ -1158,8 +1164,8 @@ für beide Netzwerke, auch wenn Sie nur eines bedienen.
 - **Benutzer werden über ihre OAuth-E-Mail-Adresse zugeordnet**, denselben Schlüssel,
   den ein gehosteter Login im anderen Netzwerk verwendet. Ein Provider, der keine
   E-Mail-Adresse liefert, erhält keine zweite Wallet.
-- **Es wird XLM in beiden Netzwerken ausgegeben.** Ein Mainnet-Login finanziert auch
-  eine Testnet-Reserve und umgekehrt. Der Zustand liegt in `pollar_user_wallet`, eine
+- **Ein Mainnet-Login gibt XLM in beiden Netzwerken aus** — die eigene Reserve und eine
+  im Testnet. Ein Testnet-Login gibt nur Testnet-XLM aus. Der Zustand liegt in `pollar_user_wallet`, eine
   Zeile pro (Consumer, E-Mail, Netzwerk), sodass ein wiederholter Login nicht erneut
   bereitstellt.
 
@@ -1194,12 +1200,23 @@ konkurrieren, nicht beide gewinnen können.
 - **`POLLAR_REDIRECT_URI_WHITELIST`** gilt pro Consumer und arbeitet fail-closed, da
   die Redirect-URI den Code empfängt. Sie akzeptiert Loopback-Hosts (beliebiger Port,
   gemäß RFC 8252), Deep Links mit Private-Use-Schema und https-Hosts.
-- **Bewahren Sie API-Keys mit `pollar:*` auf einem Server auf.** Der Poll-Flow übergibt
-  den Code an jeden, der den `state` des Handshakes *und* einen Key mit `pollar:read`
-  besitzt. Wer einen solchen Key aus einer ausgelieferten App extrahiert, kann einen
-  Login öffnen, dessen `authorization_url` an ein Opfer senden, den Code abfragen,
-  sobald das Opfer zustimmt, und ihn mit einem eigenen PKCE-Verifier einlösen — PKCE
-  und `dpop_jwk` helfen dabei nicht.
+- **Eine Sitzung geht nur an das Konto zurück, das zugestimmt hat.** Alle Tenants teilen
+  eine Pollar-Anwendung, und ein Login-Link funktioniert in jedem Browser: Ein Key könnte
+  seine `authorization_url` an jemanden senden, auf dessen Zustimmung warten und dessen
+  Wallet einlösen — PKCE und `dpop_jwk` helfen nicht, da genau dieser Key den Handshake
+  geöffnet hat. Deshalb vergleicht `POST /v1/pollar/oauth/token` die E-Mail, die Pollar
+  für den Login meldet, mit der Konto-E-Mail, die das Gateway für den Key weiterleitet
+  (`X-Consumer-Email`, siehe `APISIX_EMAIL_HEADER`). Bei einer Abweichung wird die Sitzung
+  bei Pollar widerrufen, der Handshake auf `failed` gesetzt und
+  `403 pollar_identity_mismatch` zurückgegeben; ein Key ohne weitergeleitete E-Mail wird
+  bei `authorize` mit `403 pollar_identity_required` abgewiesen. Die einzige Ausnahme ist
+  das vermittelte Onboarding der Dev-Plattform (`X-Cosmos-Internal`): Es meldet Personen
+  an, die noch keinen Key haben, und prüft die E-Mail selbst, bevor es etwas weitergibt.
+- **`POST /v1/pollar/users` und `/users/with-wallet` brauchen einen erhöhten Key**
+  (`X-Consumer-Role: admin`, sonst `403 elevated_key_required`). Ein dort registrierter
+  Benutzer ist derselbe, den ein späterer Social Login per E-Mail auflöst; ein Tenant-Key
+  könnte sonst die E-Mail eines Fremden beanspruchen und als Eigentümer der Wallet erfasst
+  werden, die dieser erhält.
 
 ### Routen
 
@@ -1216,7 +1233,7 @@ konkurrieren, nicht beide gewinnen können.
 | POST   | `/v1/pollar/wallets/:address/trustlines/default`      | `pollar:write` | Die konfigurierten Assets der App aktivieren |
 | POST   | `/v1/pollar/wallets/:address/trustlines`              | `pollar:write` | Bestimmte Assets aktivieren |
 | DELETE | `/v1/pollar/wallets/:address/trustlines/:code/:issuer`| `pollar:write` | Eine Trustline entfernen (nur bei Guthaben null) |
-| POST   | `/v1/pollar/users` · `/v1/pollar/users/with-wallet`   | `pollar:write` | Einen Benutzer registrieren, optional mit Wallet |
+| POST   | `/v1/pollar/users` · `/v1/pollar/users/with-wallet`   | `pollar:write` | Einen Benutzer registrieren, optional mit Wallet (nur erhöhte Keys) |
 | POST   | `/v1/pollar/tokens/verify`                            | `pollar:read`  | Ein Token prüfen, das Ihnen eine Wallet vorgelegt hat |
 
 Die letzten sechs verwenden den **Secret Key** von Pollar und laufen deshalb hier statt
@@ -1240,8 +1257,21 @@ und das Einlösen nichts Neues erzeugt.
 | `POST /v1/pollar/oauth/authorize` | 20 | Begrenzt die Wallet-Erstellung |
 | `POST /v1/pollar/oauth/token` | 60 | Clients wiederholen es, während das Konto bereitgestellt wird |
 | `GET /v1/pollar/oauth/callback` | 60 | Die einzige Route, die ohne API-Key erreichbar ist |
-| `POST /v1/pollar/users/with-wallet` | 10 | Erstellt eine Wallet ohne Zustimmungsbildschirm |
+| `GET /v1/pollar/oauth/sessions/{state}` | 400 | Eine Wallet fragt alle paar Sekunden ab; jede Abfrage kann Pollar erreichen |
+| `POST /v1/pollar/oauth/refresh` · `/logout` | 60, gemeinsam | Je eine Pollar-Anfrage |
+| `POST /v1/pollar/users` · `/users/with-wallet` | 10, gemeinsam | Schreiben in das Benutzerverzeichnis, das alle Tenants teilen; `with-wallet` erstellt zudem eine Wallet ohne Zustimmungsbildschirm |
 | `POST /v1/pollar/wallets/activate` | 20 | Gibt bei jedem Aufruf XLM aus |
+| `POST /v1/pollar/wallets/:address/trustlines` · `/default` | 20, gemeinsam | Jedes Asset bindet Reserve der Finanzierungs-Wallet |
+| `DELETE /v1/pollar/wallets/:address/trustlines/:code/:issuer` | 20 | Je eine Pollar-Anfrage |
+| `POST /v1/pollar/tokens/verify` | 120 | Je eine Pollar-Anfrage |
+
+**Zwei Obergrenzen gelten pro Consumer statt pro Adresse**, sodass wechselnde Adressen
+sie nicht vervielfachen: die Pollar-Anfragen, die ein Consumer auslösen kann (100 pro
+Minute, auf allen Routen oben außer der Abfrage und dem Callback — Pollar budgetiert den
+Key mit 200 pro Minute, und alle Tenants teilen ihn), und die Wallets, die er auslösen kann
+(`authorize` und `users/with-wallet`, 50 pro Tag). Konsolenaufrufe (`X-Cosmos-Internal`)
+sind von beiden ausgenommen: Die Dev-Plattform vermittelt jede Wallet ohne Key über einen
+einzigen Consumer und budgetiert diesen Verkehr selbst.
 
 Eine Überschreitung liefert **`429` mit `code: "rate_limited"`**, einen `Retry-After`
 und die Header `RateLimit-Limit` / `-Remaining` / `-Reset`. Derselbe Limiter schützt
@@ -1275,9 +1305,9 @@ Wenn der Zähler nicht geschrieben werden kann, arbeitet der Limiter **fail-clos
 
 1. Legen Sie unter [dashboard.pollar.xyz](https://dashboard.pollar.xyz) eine App an und
    übernehmen Sie beide Schlüssel für Ihr Netzwerk (`pub_testnet_…` / `sec_testnet_…`).
-   Tun Sie das für **beide** Netzwerke: Ein Login stellt in jedem eine Wallet bereit,
-   und ein Netzwerk ohne Schlüssel lässt die zweite Wallet jedes Benutzers auf
-   `pending`, bis sie gesetzt sind. Die beiden Dashboards sind getrennt — registrieren
+   Tun Sie das für **beide** Netzwerke: Ein Mainnet-Login stellt auch eine Testnet-Wallet
+   bereit, und ohne Testnet-Schlüssel bleibt diese zweite Wallet auf `pending`, bis sie
+   gesetzt sind. Die beiden Dashboards sind getrennt — registrieren
    Sie den Callback-Host in jedem.
 2. Registrieren Sie den **Gateway-Host** von `POLLAR_BRIDGE_CALLBACK_URL` unter
    **Build → Domains**. Die SDK API prüft diese Liste bei *jedem* Aufruf anhand des
@@ -1339,6 +1369,10 @@ prüfen Sie vor dem Deployment die Spalte „Wer es bemerkt“.
 | Antworten zu Swaps, Liquidity-Pool-Operationen, Payment Intents und Customers enthalten nur noch ihre dokumentierten Felder, plus das jetzt dokumentierte `expiresAt` bei Swaps und Payment Intents. `consumerId` und die Settlement-Buchführung (`settlementEpoch`, `lastCheckedAt`, `notFoundStreak`, `sharesReceived`, `settledAmountA`/`B`, `horizonCursor`) werden nicht mehr gesendet | Wer diese Felder liest | Sie sind intern, und mehrere dieser Routen sind mit dem gemeinsamen öffentlichen Key erreichbar |
 | `PATCH /v1/kyc/receivers/:id` auf einen Receiver, der bereits bei BlindPay existiert, ist `403 kyc_review_required` für jedes Feld außer `external_id` und `image_url`, es sei denn, der Key ist erhöht (`X-Consumer-Role: admin`) | Integratoren, die die Identität eines aktiven Receivers mit einem Tenant-Key korrigieren: über den Prüfer leiten | Das `PUT` schickte nie geprüfte Identitätsdaten direkt an einen regulierten Anbieter, während dieselbe Änderung vor dem Aktivieren erneut in die Prüfung geht |
 | BlindPay-Routen nutzen die Instanz der Key-Umgebung: `prod`-Keys die der unsuffigierten `BLINDPAY_*`-Variablen, `dev`-Keys die von `BLINDPAY_*_DEV`, und ein `dev`-Key ohne konfigurierte Entwicklungsinstanz erhält `503 misconfigured`. Receiver, Wallets, Bankkonten, virtuelle Konten, Quotes, Payins und Payouts werden nur auf dieser Instanz gelesen und ausgeführt | Alle, die BlindPay mit `dev`-Keys nutzen | Ein `dev`-Key bediente die Produktionsinstanz: Er konnte echte KYC-Identitäten auflisten und löschen und echte Payouts anlegen |
+| `POST /v1/pollar/oauth/token` gibt eine Sitzung nur zurück, wenn die E-Mail, die Pollar für den Login meldet, die Konto-E-Mail ist, die das Gateway für den Key weiterleitet (`X-Consumer-Email`). Eine Abweichung widerruft die Sitzung, lässt den Handshake scheitern und ist `403 pollar_identity_mismatch`; ein Key ohne weitergeleitete E-Mail erhält bei `authorize` `403 pollar_identity_required` | Tenants, die ihre eigenen Endbenutzer über die gemeinsame Pollar-Anwendung anmelden, und alle, die sich mit einer anderen E-Mail als der ihres Kontos anmelden | Alle Tenants teilen eine Pollar-Anwendung, und ein Login-Link funktioniert in jedem Browser: Ein Key konnte seine `authorization_url` an jemanden senden, die Zustimmung abwarten und die verwahrte Wallet dieser Person einlösen |
+| `POST /v1/pollar/users` und `/v1/pollar/users/with-wallet` verlangen einen erhöhten Key; ein Tenant-Key erhält `403 elevated_key_required` | Integratoren, die Benutzer mit einem Tenant-Key vorregistrieren | Ein registrierter Benutzer ist der, den ein späterer Social Login per E-Mail auflöst; ein Tenant-Key konnte also die E-Mail eines Fremden beanspruchen und als Eigentümer von dessen Wallet erfasst werden |
+| Ein Testnet-Login stellt seinem Benutzer keine Mainnet-Wallet mehr bereit: `network_wallets` einer Testnet-Einlösung listet nur die Testnet-Wallet. Ein Mainnet-Login stellt weiterhin Testnet bereit | Wer einen Mainnet-Eintrag aus einem Testnet-Login liest | Ein `dev`-Key, den jeder erzeugen kann, gab pro Login echte XLM des Betreibers für eine Mainnet-Reserve aus |
+| Die Pollar-Routen für Abfrage, Refresh, Logout, Token-Prüfung, Benutzerregistrierung und Trustline-Entfernung sind begrenzt, und zusätzlich zu den Budgets pro Adresse gelten eine Quote pro Consumer (100 Pollar-Anfragen pro Minute) und eine Wallet-Obergrenze (50 pro Tag); Überschreitungen sind `429 rate_limited` | Clients, die diese Routen massenhaft aufrufen | Sie hatten kein Limit, und jeder Aufruf verbraucht das Pollar-Anfragebudget, das alle Tenants teilen — ein Tenant konnte die Logins aller anderen scheitern lassen |
 
 Dazugehörige Deploy-Hinweise:
 
@@ -1401,6 +1435,21 @@ Dazugehörige Deploy-Hinweise:
   `BLINDPAY_INSTANCE_ID_DEV`, `BLINDPAY_WEBHOOK_SECRET_DEV`), wenn `dev`-Keys
   BlindPay nutzen, und richten Sie ihren Dashboard-Webhook auf dieselbe URL
   `/v1/blindpay/webhooks`.
+- **Deployen Sie zuerst die Forwarder-Änderung der Dev-Plattform.** `authorize` weist jeden
+  Key ab, für den das Gateway kein `X-Consumer-Email` weiterleitet. Der Forwarder hinterlegt
+  die E-Mail pro Konto, sobald dessen Keys synchronisiert werden; synchronisieren Sie also
+  bestehende Consumer neu (das Auflisten der Keys eines Benutzers im Dashboard erledigt das
+  für diesen Benutzer). Bis dahin weicht die Wallet auf den vermittelten Login der
+  Dev-Plattform aus, der den Header nicht braucht; andere Clients erhalten
+  `403 pollar_identity_required`.
+- **Social Login für Endbenutzer Dritter über die gemeinsame Pollar-Anwendung endet.** Ein
+  Tenant, dessen App seine eigenen Benutzer anmeldet, erhält
+  `403 pollar_identity_mismatch` für jeden Benutzer, dessen E-Mail nicht die Konto-E-Mail
+  des Keys ist.
+- **Migration `20260915180000_pollar_testnet_counterpart_mainnet`** schließt die
+  Mainnet-Wallets, die Testnet-Logins auf `pending` hinterlassen hatten (`FAILED`,
+  `COUNTERPART_FROM_TESTNET_DISABLED`), damit der Sweeper sie nicht mehr finanziert. Nur
+  Daten, keine Schemaänderung.
 
 ### NestJS 12, TypeScript 6 und Node 24.9 als Mindestversion
 
@@ -1491,8 +1540,9 @@ additiv. Beim Deployment:
   Sweeper den Rückstand beim nächsten Tick bereit; andernfalls bleiben die Zeilen
   `pending`, bis ihre Versuche aufgebraucht sind. Logins schlagen in keinem Fall fehl.
 
-Ein Login finanziert jetzt eine Reserve in *beiden* Netzwerken: Die Mainnet-Ausgaben pro
-neuem Benutzer bleiben unverändert, aber jetzt fallen auch Testnet-Ausgaben an.
+Ein Mainnet-Login finanziert eine Reserve in *beiden* Netzwerken. Ein Testnet-Login
+finanziert nur das Testnet — früher finanzierte er auch das Mainnet, was die Korrekturen
+aus dem Security Review oben entfernt haben.
 
 ### `429` meldet jetzt `rate_limited`
 
@@ -1648,6 +1698,7 @@ passen Sie mindestens `DATABASE_URL` und `APISIX_GATEWAY_SECRET` an.
 | `APISIX_ORGANIZATION_HEADER` | nein | `x-consumer-org` | Organisations-ID |
 | `APISIX_PLAN_HEADER` | nein | `x-consumer-plan` | Plan der Organisation |
 | `APISIX_SWAP_FEE_BPS_HEADER` | nein | `x-plan-swap-fee-bps` | Swap-Gebühr des Plans (bps) |
+| `APISIX_EMAIL_HEADER` | nein | `x-consumer-email` | Verifizierte E-Mail des Kontos des Keys. Die Pollar-Bridge gibt die Sitzung eines Logins nur an dieses Konto zurück und weist einen Key ohne sie ab |
 | `APISIX_PUBLIC_CONSUMER` | nein | — | Benutzername des gemeinsamen öffentlichen Consumers (siehe oben). Setzen Sie ihn überall, wo ein öffentlicher Key veröffentlicht wird |
 | `STELLAR_NETWORK` | nein | `testnet` | Fallback-Stellar-Netzwerk (`public` / `testnet`) |
 | `STELLAR_HORIZON_URL_PUBLIC` | nein | `https://horizon.stellar.org` | Horizon-Basis-URL für Mainnet |

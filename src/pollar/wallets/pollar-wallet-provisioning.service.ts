@@ -1,11 +1,11 @@
 import { Injectable, Logger } from '@nestjs/common';
 import type { PollarUserWallet } from '@generated/prisma/client';
 import { PollarWalletStatus } from '@generated/prisma/client';
-import { counterpartNetwork } from '@/common/stellar-network';
 import { StellarNetwork } from '@/config/configuration';
 import { PrismaService } from '@/prisma/prisma.service';
 import { PollarApiError, PollarClient } from '@/pollar/pollar.client';
 import {
+  POLLAR_COUNTERPART_NETWORK,
   POLLAR_USER_EXISTS_CODES,
   POLLAR_WALLET_PROVISION_BACKOFF_MS,
   POLLAR_WALLET_PROVISION_MAX_ATTEMPTS,
@@ -47,9 +47,10 @@ export interface PollarProvisionInput {
  * and the missing wallet gets created lazily, at whatever moment they first need
  * it — which is the moment least able to absorb a provider failure.
  *
- * So a redemption provisions the counterpart network too, through the Server
- * API's `POST /users/with-wallet`, and the attempt is recorded per network in
- * `pollar_user_wallet`.
+ * So a mainnet redemption provisions testnet too, through the Server API's
+ * `POST /users/with-wallet`, and the attempt is recorded per network in
+ * `pollar_user_wallet`. A testnet redemption provisions nothing on mainnet — see
+ * {@link POLLAR_COUNTERPART_NETWORK} for why.
  *
  * **Nothing here throws into the login.** The counterpart wallet costs the
  * operator XLM, is created against an API that may be down, and may have no key
@@ -73,8 +74,8 @@ export class PollarWalletProvisioningService {
   ) {}
 
   /**
-   * Records the wallet the login already produced and attempts the other
-   * network. Returns one entry per network for the redemption response.
+   * Records the wallet the login already produced and, when its network has a
+   * counterpart, attempts that one. Returns one entry per network provisioned.
    *
    * Never rejects: every failure below resolves to a `pending` entry.
    */
@@ -82,19 +83,22 @@ export class PollarWalletProvisioningService {
     input: PollarProvisionInput,
   ): Promise<PollarNetworkWalletEntity[]> {
     const primary = this.fromLogin(input);
-    const other = counterpartNetwork(input.primaryNetwork);
+    const other = POLLAR_COUNTERPART_NETWORK[input.primaryNetwork];
 
     // No email means no handle that addresses this person on the other network.
     // Provisioning anyway would create a wallet keyed to something no future
     // login resolves to — an orphan that costs XLM and is never reachable.
     if (!input.externalId) {
       this.logger.warn(
-        `Pollar login on ${input.primaryNetwork} carried no email; skipping ${other} provisioning`,
+        `Pollar login on ${input.primaryNetwork} carried no email; skipping counterpart provisioning`,
       );
       return [primary];
     }
 
     await this.rememberPrimary(input);
+    // A testnet login stops here: it must not spend mainnet XLM.
+    if (!other) return [primary];
+
     const counterpart = await this.ensure(
       input.consumerId,
       input.externalId,

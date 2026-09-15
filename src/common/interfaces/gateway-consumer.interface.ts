@@ -48,6 +48,21 @@ export interface GatewayConsumer {
    * bypassed. Null when not forwarded (local dev falls back to STELLAR_SWAP_FEE_BPS).
    */
   planSwapFeeBps: number | null;
+  /**
+   * The verified email of the account that owns the API key (X-Consumer-Email),
+   * lowercased. Forwarded by the gateway; the client cannot set it. The Pollar
+   * bridge only returns a login's session to the key whose account completed it,
+   * because every tenant shares one Pollar application. Absent when not
+   * forwarded, which that check treats as a refusal.
+   */
+  email?: string | null;
+  /**
+   * True for a server-to-server call from the platform console
+   * (`X-Cosmos-Internal`), a marker APISIX strips from every client request. It
+   * is only meaningful behind ApisixGuard's gateway-secret check, which runs
+   * before every handler that reads it.
+   */
+  internal?: boolean;
 }
 
 declare module 'express' {

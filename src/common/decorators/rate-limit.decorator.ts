@@ -14,23 +14,44 @@ export interface RateLimitPolicy {
   limit: number;
   /** Window length in milliseconds. */
   windowMs: number;
+  /**
+   * Who the budget belongs to.
+   *
+   *   - `address` (the default) counts per consumer per client address, which
+   *     tells one ordinary caller from another.
+   *   - `consumer` counts per consumer alone: a ceiling no amount of address
+   *     rotation gets past, for spend one tenant must not be able to multiply.
+   *
+   * A platform-console call (`X-Cosmos-Internal`) is exempt from `consumer`
+   * budgets, because the dev platform brokers every keyless wallet through one
+   * consumer and enforces its own global budgets in front of it. Never put a
+   * `consumer` budget on a `@Public()` route: every anonymous caller is the
+   * same `anonymous` subject there.
+   */
+  per?: 'address' | 'consumer';
 }
 
 /**
- * Caps how often one client address may reach a handler.
+ * Caps how often one client address — or one consumer — may reach a handler.
  *
  * Enforced by `RateLimitGuard` against a shared Postgres counter, keyed by
- * policy name + consumer + client address (an IPv6 caller is bucketed per /64 —
- * see `rateLimitSubject`). A route with no `@RateLimit` is not limited here at
- * all; the gateway's own throttling is the only thing in front of it.
+ * policy name + consumer, plus the client address unless the policy is `per:
+ * 'consumer'` (an IPv6 caller is bucketed per /64 — see `rateLimitSubject`). A
+ * route with no `@RateLimit` is not limited here at all; the gateway's own
+ * throttling is the only thing in front of it.
  *
- *   @RateLimit(POLLAR_AUTHORIZE_RATE_LIMIT)
+ *   @RateLimit(POLLAR_AUTHORIZE_RATE_LIMIT, POLLAR_WALLET_DAILY_RATE_LIMIT)
  *   authorize(...) { ... }
+ *
+ * Several policies may be stacked on one route, typically a per-address budget
+ * and a per-consumer ceiling. Every one is counted, and the first one spent
+ * refuses the request.
  *
  * Reach for it where a request costs something that cannot be undone by
  * returning an error — money spent, an account created on a chain, an email
- * sent — rather than as a general traffic shaper. That job belongs to APISIX,
- * which sees the request before it reaches this process at all.
+ * sent, a provider quota other tenants share — rather than as a general traffic
+ * shaper. That job belongs to APISIX, which sees the request before it reaches
+ * this process at all.
  */
-export const RateLimit = (policy: RateLimitPolicy) =>
-  SetMetadata(RATE_LIMIT_KEY, policy);
+export const RateLimit = (...policies: RateLimitPolicy[]) =>
+  SetMetadata(RATE_LIMIT_KEY, policies);

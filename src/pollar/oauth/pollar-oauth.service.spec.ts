@@ -3,7 +3,19 @@ import { PollarApiError } from '@/pollar/pollar.client';
 import { PollarOauthService } from '@/pollar/oauth/pollar-oauth.service';
 import { hashCode } from '@/pollar/oauth/pollar-oauth-code';
 
-const CONSUMER = { username: 'cosmos_acme', role: 'user' } as any;
+/** A tenant key whose account email is the one the Pollar fixtures log in with. */
+const CONSUMER = {
+  username: 'cosmos_acme',
+  role: 'user',
+  email: 'ada@example.com',
+} as any;
+
+/** The console's brokered onboarding: no account email of its own. */
+const BROKER = {
+  username: 'cosmos_broker',
+  role: 'admin',
+  internal: true,
+} as any;
 
 const POLLAR_CONFIG = {
   publishableKey: { public: 'pub_mainnet_x', testnet: 'pub_testnet_x' },
@@ -221,6 +233,26 @@ describe('authorize', () => {
     expect(table.rows).toHaveLength(0);
   });
 
+  it('refuses a key with no account email before spending a Pollar session', async () => {
+    // No login this key opened could ever be redeemed, so none is opened.
+    const { service, pollar, table } = makeService();
+    await expect(
+      service.authorize({ ...CONSUMER, email: null }, {
+        provider: 'google',
+      } as any),
+    ).rejects.toMatchObject({ status: 403, code: 'pollar_identity_required' });
+    expect(pollar.sdk).not.toHaveBeenCalled();
+    expect(table.rows).toHaveLength(0);
+  });
+
+  it('opens a login for the console broker, which has no account email', async () => {
+    const { service, pollar } = makeService();
+    pollar.sdk.mockResolvedValueOnce({ clientSessionId: 'cs_1' });
+    await expect(
+      service.authorize(BROKER, { provider: 'google' } as any),
+    ).resolves.toMatchObject({ provider: 'google' });
+  });
+
   it('stores no token and no secret — only a state and a session id', async () => {
     const { table } = await authorized({ redirectUri: 'cosmospay://auth/cb' });
     const row = table.rows[0];
@@ -325,6 +357,130 @@ describe('exchange', () => {
     expect(JSON.stringify(row)).not.toContain('at_1');
     expect(JSON.stringify(row)).not.toContain('rt_1');
     expect(JSON.stringify(row)).not.toContain('ada@example.com');
+  });
+
+  describe('who the session goes back to', () => {
+    /** A login Pollar reports as completed by `mail`. */
+    const loginBy = (mail: string | undefined) => ({
+      ...LOGIN_CONTENT,
+      data: { ...LOGIN_CONTENT.data, mail },
+    });
+
+    it('refuses a login another account completed, and revokes it', async () => {
+      // A key that sends its login link to someone else must not redeem their
+      // wallet: every tenant shares one Pollar application.
+      const ctx = await authorized({ redirectUri: 'cosmospay://auth/cb' });
+      const code = codeFromRedirect(ctx.callback.redirectTo!);
+      ctx.pollar.sdk
+        .mockResolvedValueOnce({ status: 'READY' })
+        .mockResolvedValueOnce(loginBy('victim@example.com'))
+        .mockResolvedValueOnce({ revoked: 1 });
+
+      const refused = await ctx.service
+        .exchange(CONSUMER, { code, code_verifier: VERIFIER })
+        .catch((err: unknown) => err);
+
+      expect(refused).toMatchObject({
+        status: 403,
+        code: 'pollar_identity_mismatch',
+      });
+      expect(JSON.stringify(refused)).not.toContain('at_1');
+      // What was minted is revoked with its own access token...
+      expect(ctx.pollar.sdk).toHaveBeenLastCalledWith(
+        'POST',
+        'testnet',
+        '/auth/logout',
+        { accessToken: 'at_1', body: { everywhere: false } },
+      );
+      // ...the handshake is closed for good, and nothing is recorded as theirs.
+      expect(ctx.table.rows[0]).toMatchObject({
+        status: 'FAILED',
+        codeHash: null,
+        errorCode: 'BRIDGE_IDENTITY_MISMATCH',
+      });
+      expect(ctx.table.rows[0].walletAddress).toBeUndefined();
+      expect(ctx.provisioning.provisionBothNetworks).not.toHaveBeenCalled();
+    });
+
+    it('still refuses when the revocation itself fails', async () => {
+      const ctx = await authorized({ redirectUri: 'cosmospay://auth/cb' });
+      const code = codeFromRedirect(ctx.callback.redirectTo!);
+      ctx.pollar.sdk
+        .mockResolvedValueOnce({ status: 'READY' })
+        .mockResolvedValueOnce(loginBy('victim@example.com'))
+        .mockRejectedValueOnce(new PollarApiError(502, 'UPSTREAM', 'down'));
+
+      await expect(
+        ctx.service.exchange(CONSUMER, { code, code_verifier: VERIFIER }),
+      ).rejects.toMatchObject({
+        status: 403,
+        code: 'pollar_identity_mismatch',
+      });
+      expect(ctx.table.rows[0].status).toBe('FAILED');
+    });
+
+    it('refuses a login that reports no email at all', async () => {
+      // Nothing to compare is not a match.
+      const ctx = await authorized({ redirectUri: 'cosmospay://auth/cb' });
+      const code = codeFromRedirect(ctx.callback.redirectTo!);
+      ctx.pollar.sdk
+        .mockResolvedValueOnce({ status: 'READY' })
+        .mockResolvedValueOnce(loginBy(undefined))
+        .mockResolvedValueOnce({ revoked: 1 });
+
+      await expect(
+        ctx.service.exchange(CONSUMER, { code, code_verifier: VERIFIER }),
+      ).rejects.toMatchObject({ code: 'pollar_identity_mismatch' });
+    });
+
+    it('matches the account email whatever its casing', async () => {
+      const ctx = await authorized({ redirectUri: 'cosmospay://auth/cb' });
+      const code = codeFromRedirect(ctx.callback.redirectTo!);
+      ctx.pollar.sdk
+        .mockResolvedValueOnce({ status: 'READY' })
+        .mockResolvedValueOnce(loginBy(' Ada@Example.COM '));
+
+      await expect(
+        ctx.service.exchange(CONSUMER, { code, code_verifier: VERIFIER }),
+      ).resolves.toMatchObject({ access_token: 'at_1' });
+    });
+
+    it('refuses to redeem for a key with no account email, leaving the code unspent', async () => {
+      const ctx = await authorized({ redirectUri: 'cosmospay://auth/cb' });
+      const code = codeFromRedirect(ctx.callback.redirectTo!);
+
+      await expect(
+        ctx.service.exchange(
+          { ...CONSUMER, email: undefined },
+          { code, code_verifier: VERIFIER },
+        ),
+      ).rejects.toMatchObject({
+        status: 403,
+        code: 'pollar_identity_required',
+      });
+      expect(ctx.table.rows[0].status).toBe('AUTHORIZED');
+      // Only the authorize call ever reached Pollar.
+      expect(ctx.pollar.sdk).toHaveBeenCalledTimes(1);
+    });
+
+    it('lets the console broker redeem whoever logged in', async () => {
+      // The brokered onboarding logs in people with no key yet and proves the
+      // email itself before it hands the session on.
+      const ctx = makeService();
+      ctx.pollar.sdk.mockResolvedValueOnce({ clientSessionId: 'cs_1' });
+      const auth = await ctx.service.authorize(BROKER, {
+        provider: 'google',
+      } as any);
+      await ctx.service.handleCallback(auth.state);
+      const polled = await ctx.service.status(BROKER, auth.state);
+      ctx.pollar.sdk
+        .mockResolvedValueOnce({ status: 'READY' })
+        .mockResolvedValueOnce(loginBy('someone@example.com'));
+
+      await expect(
+        ctx.service.exchange(BROKER, { code: polled.code! }),
+      ).resolves.toMatchObject({ access_token: 'at_1' });
+    });
   });
 
   it('reports the wallet on each network, pending included', async () => {

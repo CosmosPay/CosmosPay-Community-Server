@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'node:crypto';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
+import { isElevatedConsumer } from '@/common/elevated-consumer';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import { PaginationQueryDto } from '@/common/dto/pagination.query.dto';
 import { page } from '@/common/pagination';
@@ -64,24 +65,6 @@ export const RECEIVER_PUBLIC_SELECT = {
 export type PublicReceiver = Prisma.BlindpayReceiverGetPayload<{
   select: typeof RECEIVER_PUBLIC_SELECT;
 }>;
-
-/**
- * Whether the caller may act on a receiver as the platform rather than as its tenant.
- *
- * There is exactly one notion of privilege in this service and this is it: the role
- * APISIX forwards from the consumer's own metadata (`X-Consumer-Role`), which
- * `PermissionsGuard` already treats as full access. The platform-admin surface
- * (`/v1/admin`, `AdminGuard` + a platform-console call) is the other, stronger identity
- * and has its own audited variants of these operations — see
- * {@link ReceiversService.approveById}.
- *
- * A plain `kyc:write` key is NOT elevated: it belongs to the tenant whose KYC data is
- * under review, so it can neither sign off on that review nor lift an operator's
- * kill-switch.
- */
-export function isElevatedConsumer(consumer: GatewayConsumer): boolean {
-  return consumer.role === 'admin';
-}
 
 /**
  * Manages BlindPay receivers (the KYC/KYB entities) on behalf of a consumer.

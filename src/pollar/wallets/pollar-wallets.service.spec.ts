@@ -2,6 +2,8 @@ import { PollarApiError } from '@/pollar/pollar.client';
 import { PollarWalletsService } from '@/pollar/wallets/pollar-wallets.service';
 
 const CONSUMER = { username: 'cosmos_acme', role: 'user' } as any;
+/** The same consumer through an elevated key — the only kind that may register users. */
+const ADMIN = { username: 'cosmos_acme', role: 'admin' } as any;
 const ADDRESS = 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN';
 const OTHER_ADDRESS =
   'GBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFSHONUCEOASW7QC7OX2H';
@@ -218,7 +220,7 @@ describe('wallet ownership', () => {
       })
       .mockResolvedValueOnce({});
 
-    await service.registerUser(CONSUMER, { external_id: 'usr_7Kd2' }, true);
+    await service.registerUser(ADMIN, { external_id: 'usr_7Kd2' }, true);
 
     expect(prisma.pollarUserWallet.upsert).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -249,12 +251,31 @@ describe('wallet ownership', () => {
     // The user and wallet already exist at Pollar; failing here would only send
     // the caller into a retry that Pollar refuses as a duplicate.
     await expect(
-      service.registerUser(CONSUMER, { external_id: 'usr_7Kd2' }, true),
+      service.registerUser(ADMIN, { external_id: 'usr_7Kd2' }, true),
     ).resolves.toMatchObject({ wallet: { address: OTHER_ADDRESS } });
   });
 });
 
 describe('registerUser', () => {
+  it.each([false, true])(
+    'refuses a tenant key without asking Pollar (withWallet: %s)',
+    async (withWallet) => {
+      // The user directory is shared by every tenant: a tenant key could register
+      // a stranger's email and be recorded as the owner of the wallet it gets.
+      const { service, pollar, prisma } = makeService();
+
+      await expect(
+        service.registerUser(
+          CONSUMER,
+          { external_id: 'ada@example.com', email: 'ada@example.com' },
+          withWallet,
+        ),
+      ).rejects.toMatchObject({ status: 403, code: 'elevated_key_required' });
+      expect(pollar.server).not.toHaveBeenCalled();
+      expect(prisma.pollarUserWallet.upsert).not.toHaveBeenCalled();
+    },
+  );
+
   it('projects the response instead of relaying an undocumented payload', async () => {
     const { service, pollar } = makeService();
     pollar.server.mockResolvedValue({
@@ -266,7 +287,7 @@ describe('registerUser', () => {
     });
 
     const user = await service.registerUser(
-      CONSUMER,
+      ADMIN,
       { external_id: 'usr_7Kd2', email: 'ada@example.com' },
       false,
     );
@@ -287,7 +308,7 @@ describe('registerUser', () => {
     });
 
     const user = await service.registerUser(
-      CONSUMER,
+      ADMIN,
       { external_id: 'usr_7Kd2' },
       true,
     );
@@ -313,7 +334,7 @@ describe('registerUser', () => {
     });
 
     const user = await service.registerUser(
-      CONSUMER,
+      ADMIN,
       { external_id: 'usr_7Kd2' },
       true,
     );

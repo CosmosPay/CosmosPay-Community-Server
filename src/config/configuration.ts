@@ -64,6 +64,11 @@ export interface AppConfig {
     planHeader: string;
     swapFeeBpsHeader: string;
     /**
+     * Verified email of the account that owns the key. The Pollar bridge binds a
+     * login to it: a session only goes back to the key whose account consented.
+     */
+    emailHeader: string;
+    /**
      * Username of the SHARED public consumer — the one credential embedded in
      * every copy of the open-source wallet. Empty when the deployment publishes
      * no public key.
@@ -250,6 +255,9 @@ export default (): AppConfig => ({
     ).toLowerCase(),
     swapFeeBpsHeader: (
       process.env.APISIX_SWAP_FEE_BPS_HEADER ?? 'x-plan-swap-fee-bps'
+    ).toLowerCase(),
+    emailHeader: (
+      process.env.APISIX_EMAIL_HEADER ?? 'x-consumer-email'
     ).toLowerCase(),
     publicConsumer: (process.env.APISIX_PUBLIC_CONSUMER ?? '').trim(),
   },
