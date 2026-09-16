@@ -2,6 +2,40 @@
 
 All notable changes to the Cosmos Pay Community Server are documented here.
 Generated from [Conventional Commits](https://www.conventionalcommits.org) by [git-cliff](https://git-cliff.org).
+## [1.3.0] - 2026-09-16
+
+### Features
+- Add end-to-end tests for payment intents txHash handling (8013ca0)
+- Update API documentation for receiver updates with elevated key requirements (04147e5)
+- Enhance OAuth session handling and user registration (2b19c55)
+- Implement stored envelope handling for Stellar transactions (876a46b)
+
+## [1.2.0] - 2026-09-15
+
+### Features
+- Enhance wallet ownership verification and provisioning logic (8a8e7d5)
+- Implement SignedTransactionRelay service for relaying signed transactions (d28299c)
+- Add unit tests for Blindpay webhooks controller (9792312)
+
+### Refactor
+- Eliminar archivos de evidencia obsoletos relacionados con la lista blanca de URL de redirección KYC (dab0dd0)
+- Replace $transaction with Promise.all for improved performance and consistency (878ad1e)
+
+## [1.1.1] - 2026-09-13
+
+### Refactor
+- Remove admin credentials and switch to console-based authorization (ad028aa)
+- Remove deprecated admin API credentials section from .env.example (2ac9abd)
+
+## [1.1.0] - 2026-09-10
+
+### Features
+- Implement aliases service with challenge and recovery mechanisms (f80ba5b)
+
+### Bug Fixes
+- Update js-yaml to version 4.3.2 for improved stability (1c0631b)
+- Resolve smol-toml to 1.8.0 to clear a DoS advisory (feb6334)
+
 ## [1.0.0] - 2026-09-09
 
 ### Features
