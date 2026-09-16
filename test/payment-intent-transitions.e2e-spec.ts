@@ -20,9 +20,18 @@ describe('Payment intent transitions (e2e)', () => {
   const source = Keypair.random().publicKey();
   const destination = Keypair.random().publicKey();
 
+  /**
+   * The memo on the transaction a test submits. A test sets it to its intent's
+   * own memo to stand for that intent's payment, or to anything else for a
+   * payment that belongs to someone else.
+   */
+  let chainMemo = '';
+
   const store = new Map<string, any>();
   const transitions: any[] = [];
   let seq = 0;
+
+  const rateLimitCounters = new Map<string, number>();
 
   const prismaMock: any = {
     onModuleInit: jest.fn(),
@@ -56,6 +65,16 @@ describe('Payment intent transitions (e2e)', () => {
     requestLog: {
       create: jest.fn().mockResolvedValue({ id: 'rl_1' }),
     },
+    /**
+     * The rate limiter's counter. Keyed by bucket alone, not by window: a
+     * one-minute window would now and then roll over in the middle of a test,
+     * and the window arithmetic is rate-limit.service.spec's to pin.
+     */
+    $queryRaw: jest.fn((_sql: unknown, key: string) => {
+      const next = (rateLimitCounters.get(key) ?? 0) + 1;
+      rateLimitCounters.set(key, next);
+      return Promise.resolve([{ count: next }]);
+    }),
 
     paymentIntent: {
       create: jest.fn(({ data }: any) => {
@@ -131,6 +150,34 @@ describe('Payment intent transitions (e2e)', () => {
       .spyOn(Horizon.Server.prototype, 'loadAccount')
       .mockResolvedValue(new Account(source, '123456789') as never);
 
+    // What settlement asks Horizon about any hash: a successful transaction,
+    // closed just now, paying `destination` 25.5 XLM under `chainMemo`.
+    jest.spyOn(Horizon.Server.prototype, 'transactions').mockReturnValue({
+      transaction: () => ({
+        call: async () => ({
+          successful: true,
+          memo_type: 'id',
+          memo: chainMemo,
+          created_at: new Date().toISOString(),
+        }),
+      }),
+    } as never);
+    jest.spyOn(Horizon.Server.prototype, 'payments').mockReturnValue({
+      forTransaction: () => ({
+        call: async () => ({
+          records: [
+            {
+              type: 'payment',
+              asset_type: 'native',
+              from: source,
+              to: destination,
+              amount: '25.5000000',
+            },
+          ],
+        }),
+      }),
+    } as never);
+
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
       .overrideProvider(PrismaService)
       .useValue(prismaMock)
@@ -169,19 +216,19 @@ describe('Payment intent transitions (e2e)', () => {
     return res.body as { id: string; status: string };
   }
 
-  it('rejects forcing EXPIRED → SUCCEEDED with an explicit 400', async () => {
-    const intent = await createPending('900001');
-    // Move to a terminal state first.
-    await gw(
-      request(http())
-        .patch(`${route}/${intent.id}`)
-        .send({ status: 'EXPIRED' }),
+  const expire = (id: string) =>
+    gw(
+      request(http()).patch(`${route}/${id}`).send({ status: 'EXPIRED' }),
     ).expect(200);
+
+  it('refuses to reopen an EXPIRED intent to another status with an explicit 400', async () => {
+    const intent = await createPending('900001');
+    await expire(intent.id);
 
     const res = await gw(
       request(http())
         .patch(`${route}/${intent.id}`)
-        .send({ status: 'SUCCEEDED', txHash: 'a'.repeat(64) }),
+        .send({ status: 'CANCELLED' }),
     ).expect(400);
 
     expect(res.body.code).toBe('invalid_state_transition');
@@ -189,9 +236,79 @@ describe('Payment intent transitions (e2e)', () => {
     // timestamp } — ad-hoc domain fields are deliberately not forwarded, so the
     // two statuses are asserted where they are actually contractual: the message.
     expect(res.body.message).toMatch(
-      /Invalid payment intent transition EXPIRED → SUCCEEDED/,
+      /Invalid payment intent transition EXPIRED → CANCELLED/,
     );
     expect(res.body.from).toBeUndefined();
+  });
+
+  /**
+   * EXPIRED used to be absorbing, so an intent the observer expired before it
+   * saw the payment could never settle. It can now — through the same verifier
+   * as any other settlement, never on the caller's word.
+   */
+  describe('settling an EXPIRED intent', () => {
+    it('refuses a transaction the chain does not tie to the intent (400)', async () => {
+      const intent = await createPending('900004');
+      await expire(intent.id);
+      chainMemo = '1'; // a payment carrying someone else's memo
+
+      const res = await gw(
+        request(http())
+          .patch(`${route}/${intent.id}`)
+          .send({ status: 'SUCCEEDED', txHash: 'a'.repeat(64) }),
+      ).expect(400);
+
+      expect(res.body.code).toBe('transaction_rejected');
+      expect(res.body.message).toMatch(/Memo mismatch/);
+      const read = await gw(
+        request(http()).get(`${route}/${intent.id}`),
+      ).expect(200);
+      expect(read.body.status).toBe('EXPIRED');
+    });
+
+    it('settles through PATCH once the chain confirms its payment (200)', async () => {
+      const intent = await createPending('900005');
+      await expire(intent.id);
+      chainMemo = '900005';
+
+      const res = await gw(
+        request(http())
+          .patch(`${route}/${intent.id}`)
+          .send({ status: 'SUCCEEDED', txHash: 'b'.repeat(64) }),
+      ).expect(200);
+
+      expect(res.body.status).toBe('SUCCEEDED');
+      expect(res.body.txHash).toBe('b'.repeat(64));
+      const history = await gw(
+        request(http()).get(`${route}/${intent.id}/transitions`),
+      ).expect(200);
+      expect(history.body).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            fromStatus: 'EXPIRED',
+            toStatus: 'SUCCEEDED',
+            actor: 'validate',
+            txHash: 'b'.repeat(64),
+          }),
+        ]),
+      );
+    });
+
+    it('settles through validate once the chain confirms its payment (200)', async () => {
+      const intent = await createPending('900006');
+      await expire(intent.id);
+      chainMemo = '900006';
+
+      const res = await gw(
+        request(http())
+          .post(`${route}/${intent.id}/validate`)
+          .send({ txHash: 'c'.repeat(64) }),
+      ).expect(200);
+
+      expect(res.body.valid).toBe(true);
+      expect(res.body.status).toBe('SUCCEEDED');
+      expect(res.body.paymentIntent.status).toBe('SUCCEEDED');
+    });
   });
 
   it('rejects PENDING → SUCCEEDED without on-chain txHash', async () => {
@@ -211,7 +328,7 @@ describe('Payment intent transitions (e2e)', () => {
     await gw(
       request(http())
         .patch(`${route}/${intent.id}`)
-        .send({ status: 'SUBMITTED', txHash: 'abc123' }),
+        .send({ status: 'SUBMITTED', txHash: 'd'.repeat(64) }),
     ).expect(200);
 
     const history = await gw(
@@ -226,7 +343,7 @@ describe('Payment intent transitions (e2e)', () => {
           fromStatus: 'PENDING',
           toStatus: 'SUBMITTED',
           actor: 'api',
-          txHash: 'abc123',
+          txHash: 'd'.repeat(64),
         }),
       ]),
     );

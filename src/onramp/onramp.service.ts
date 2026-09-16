@@ -14,6 +14,7 @@ import {
   PublicPayin,
 } from '@/blindpay/blindpay-sync.service';
 import { asString, isMirrorFresh } from '@/blindpay/blindpay.util';
+import type { BlindpayEnvironment } from '@/config/configuration';
 import { CreatePayinQuoteDto } from '@/onramp/dto/create-payin-quote.dto';
 import { CreatePayinDto } from '@/onramp/dto/create-payin.dto';
 import { CreateTrustlineDto } from '@/onramp/dto/create-trustline.dto';
@@ -44,7 +45,8 @@ type MirroredPayin = Prisma.PayinGetPayload<{
  * Onramp (fiat -> stablecoin). Quotes are priced through BlindPay and returned
  * as-is (ephemeral, ~5 min). Payins are created from a quote, mirrored locally
  * with their funding instructions, and attributed to the consumer. The customer
- * funds the payin off-platform; BlindPay confirms via webhook.
+ * funds the payin off-platform; BlindPay confirms via webhook. Every read and
+ * write stays on the BlindPay instance the caller's key environment selects.
  */
 @Injectable()
 export class OnrampService {
@@ -57,36 +59,43 @@ export class OnrampService {
 
   async createQuote(consumer: GatewayConsumer, dto: CreatePayinQuoteDto) {
     const local = await this.consumers.resolve(consumer);
+    const environment = this.blindpay.environmentFor(consumer);
     const walletBlindpayId = await this.resolveWalletBlindpayId(
       local.id,
+      environment,
       dto.blockchain_wallet_id,
     );
-    const quote = await this.blindpay.createPayinQuote({
+    const quote = await this.blindpay.createPayinQuote(environment, {
       ...dto,
       blockchain_wallet_id: walletBlindpayId,
     });
-    await this.recordQuoteOwnership(local.id, quote);
+    await this.recordQuoteOwnership(local.id, environment, quote);
     return quote;
   }
 
   async createPayin(consumer: GatewayConsumer, dto: CreatePayinDto) {
     const local = await this.consumers.resolve(consumer);
-    await this.assertQuoteOwned(local.id, dto.payin_quote_id);
+    const environment = this.blindpay.environmentFor(consumer);
+    await this.assertQuoteOwned(local.id, environment, dto.payin_quote_id);
     // One execution call for every destination network — the chain is determined
     // by the quote's wallet, not chosen here.
-    const created = await this.blindpay.createPayin({
+    const created = await this.blindpay.createPayin(environment, {
       payin_quote_id: dto.payin_quote_id,
     });
     const receiverId = await this.resolveReceiverLocalId(
       local.id,
+      environment,
       created.receiver_id,
     );
-    return this.sync.mirrorPayin(local.id, receiverId, created);
+    return this.sync.mirrorPayin(local.id, environment, receiverId, created);
   }
 
   async findAll(consumer: GatewayConsumer, query: PaginationQueryDto) {
     const local = await this.consumers.resolve(consumer);
-    const where = { consumerId: local.id };
+    const where = {
+      consumerId: local.id,
+      environment: this.blindpay.environmentFor(consumer),
+    };
     // `total` is the row count, not the page length. Returning `data.length`
     // made the field useless: it always equalled what the caller just received,
     // so nobody could tell a full page from the last one.
@@ -110,8 +119,9 @@ export class OnrampService {
    */
   async findOne(consumer: GatewayConsumer, id: string): Promise<PublicPayin> {
     const local = await this.consumers.resolve(consumer);
+    const environment = this.blindpay.environmentFor(consumer);
     const row = await this.prisma.payin.findFirst({
-      where: { id, consumerId: local.id },
+      where: { id, consumerId: local.id, environment },
       select: PAYIN_READ_SELECT,
     });
     if (!row) {
@@ -121,8 +131,13 @@ export class OnrampService {
       return toPublicPayin(row);
     }
     try {
-      const fresh = await this.blindpay.getPayin(row.blindpayId);
-      return await this.sync.mirrorPayin(local.id, row.receiverId, fresh);
+      const fresh = await this.blindpay.getPayin(environment, row.blindpayId);
+      return await this.sync.mirrorPayin(
+        local.id,
+        environment,
+        row.receiverId,
+        fresh,
+      );
     } catch {
       return toPublicPayin(row);
     }
@@ -131,12 +146,15 @@ export class OnrampService {
   /** Builds an unsigned Stellar trustline tx (XDR) for the customer to sign. */
   async createTrustline(consumer: GatewayConsumer, dto: CreateTrustlineDto) {
     await this.consumers.resolve(consumer);
-    return this.blindpay.createAssetTrustline({ address: dto.address });
+    return this.blindpay.createAssetTrustline(
+      this.blindpay.environmentFor(consumer),
+      { address: dto.address },
+    );
   }
 
   /**
-   * Records who minted a quote, so {@link assertQuoteOwned} can authorize its
-   * execution later.
+   * Records who minted a quote, and on which instance, so {@link assertQuoteOwned}
+   * can authorize its execution later.
    *
    * A missing id is a provider contract violation, not something to shrug off:
    * without the ownership row the quote can never be executed, and returning it
@@ -144,6 +162,7 @@ export class OnrampService {
    */
   private async recordQuoteOwnership(
     consumerId: string,
+    environment: BlindpayEnvironment,
     quote: BlindpayObject,
   ): Promise<void> {
     const blindpayId = asString(quote.id);
@@ -154,22 +173,24 @@ export class OnrampService {
       );
     }
     await this.prisma.blindpayQuote.create({
-      data: { consumerId, blindpayId, kind: 'PAYIN' },
+      data: { consumerId, environment, blindpayId, kind: 'PAYIN' },
     });
   }
 
   /**
-   * Proves the caller minted this quote before we execute it upstream.
+   * Proves the caller minted this quote, on its own instance, before we execute
+   * it upstream.
    *
-   * Every tenant shares one BlindPay platform instance, so holding a quote id
-   * proves nothing about who owns it: forwarding `payin_quote_id` straight
-   * through let one tenant execute another's quote and have the resulting payin
-   * — funding instructions and bank details included — mirrored into their own
-   * records. 404 rather than 403 is deliberate; a 403 would confirm the id is
-   * live for somebody else.
+   * Every tenant of an environment shares one BlindPay platform instance, so
+   * holding a quote id proves nothing about who owns it: forwarding
+   * `payin_quote_id` straight through let one tenant execute another's quote and
+   * have the resulting payin — funding instructions and bank details included —
+   * mirrored into their own records. 404 rather than 403 is deliberate; a 403
+   * would confirm the id is live for somebody else.
    */
   private async assertQuoteOwned(
     consumerId: string,
+    environment: BlindpayEnvironment,
     blindpayQuoteId: string,
   ): Promise<void> {
     const quote = await this.prisma.blindpayQuote.findUnique({
@@ -177,19 +198,21 @@ export class OnrampService {
         consumerId_blindpayId: { consumerId, blindpayId: blindpayQuoteId },
       },
     });
-    // A payout quote id is equally not a payin quote id, so the kind is part of
-    // the check rather than a separate 400 further upstream.
-    if (!quote || quote.kind !== 'PAYIN') {
+    // A payout quote id is equally not a payin quote id, and a quote minted on
+    // the other instance does not exist on this one, so both are part of the
+    // check rather than a separate error further upstream.
+    if (!quote || quote.kind !== 'PAYIN' || quote.environment !== environment) {
       throw ApiError.notFound('Quote not found', ApiErrorCode.QuoteNotFound);
     }
   }
 
   private async resolveWalletBlindpayId(
     consumerId: string,
+    environment: BlindpayEnvironment,
     localWalletId: string,
   ): Promise<string> {
     const wallet = await this.prisma.blindpayBlockchainWallet.findFirst({
-      where: { id: localWalletId, consumerId },
+      where: { id: localWalletId, consumerId, environment },
     });
     if (!wallet) {
       throw ApiError.notFound('Blockchain wallet not found');
@@ -210,11 +233,16 @@ export class OnrampService {
 
   private async resolveReceiverLocalId(
     consumerId: string,
+    environment: BlindpayEnvironment,
     receiverBlindpayId: unknown,
   ): Promise<string | null> {
     if (!receiverBlindpayId) return null;
     const receiver = await this.prisma.blindpayReceiver.findFirst({
-      where: { consumerId, blindpayId: asString(receiverBlindpayId) },
+      where: {
+        consumerId,
+        environment,
+        blindpayId: asString(receiverBlindpayId),
+      },
     });
     return receiver?.id ?? null;
   }

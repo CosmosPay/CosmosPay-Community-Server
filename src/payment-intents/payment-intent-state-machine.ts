@@ -2,6 +2,7 @@ import {
   PAYMENT_INTENT_TRANSITIONS,
   SUCCESS_REQUIRES_TX_HASH,
   TERMINAL_STATUSES,
+  VERIFIED_SETTLEMENT_ONLY_FROM,
   type PaymentIntentStatusName,
 } from '@/payment-intents/payment-intent-transitions';
 
@@ -21,6 +22,12 @@ export class InvalidPaymentIntentTransitionError extends Error {
 export interface TransitionEvidence {
   /** On-chain Stellar transaction hash. Required when targeting SUCCEEDED. */
   txHash?: string | null;
+  /**
+   * `StellarVerifierService` confirmed that `txHash` pays this intent — memo,
+   * destination, asset, amount, age and success. Required to settle out of a
+   * {@link VERIFIED_SETTLEMENT_ONLY_FROM} status.
+   */
+  verifiedOnChain?: boolean;
 }
 
 /**
@@ -67,8 +74,28 @@ export function assertTransition(
       'SUCCEEDED requires a non-empty on-chain txHash',
     );
   }
+
+  if (
+    to === 'SUCCEEDED' &&
+    settlesOnlyOnVerifiedPayment(from) &&
+    evidence.verifiedOnChain !== true
+  ) {
+    throw new InvalidPaymentIntentTransitionError(
+      from,
+      to,
+      `a ${from} intent settles only on a payment verified on-chain`,
+    );
+  }
 }
 
 function hasTxHash(txHash: string | null | undefined): boolean {
   return typeof txHash === 'string' && txHash.trim().length > 0;
+}
+
+function settlesOnlyOnVerifiedPayment(
+  status: PaymentIntentStatusName,
+): boolean {
+  return (
+    VERIFIED_SETTLEMENT_ONLY_FROM as readonly PaymentIntentStatusName[]
+  ).includes(status);
 }

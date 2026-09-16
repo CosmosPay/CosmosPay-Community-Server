@@ -49,13 +49,16 @@ export class AdminService {
     id: string,
     redirectUrl: string,
     actor: AdminPrincipal,
+    expectedVersion?: number,
   ) {
     return this.receiversSvc.approveById(
       id,
       redirectUrl,
       toAuditEntry(actor, 'receivers.approve', 'receiver', id, {
         redirect_url: redirectUrl,
+        expected_version: expectedVersion ?? null,
       }),
+      expectedVersion,
     );
   }
 

@@ -8,6 +8,7 @@ import { Account, Horizon, Keypair } from '@stellar/stellar-sdk';
 import request from 'supertest';
 import { AppModule } from '@/app.module';
 import { PrismaService } from '@/prisma/prisma.service';
+import { PAYMENT_INTENT_BUILD_RATE_LIMIT } from '@/payment-intents/payment-intents.constants';
 
 /**
  * Full CRUD for Stellar payment intents behind the APISIX gate. Horizon and
@@ -24,6 +25,8 @@ describe('Payment intents CRUD (e2e)', () => {
   const store = new Map<string, any>();
   const transitions: any[] = [];
   let seq = 0;
+
+  const rateLimitCounters = new Map<string, number>();
 
   const prismaMock: any = {
     onModuleInit: jest.fn(),
@@ -58,6 +61,16 @@ describe('Payment intents CRUD (e2e)', () => {
     requestLog: {
       create: jest.fn().mockResolvedValue({ id: 'rl_1' }),
     },
+    /**
+     * The rate limiter's counter. Keyed by bucket alone, not by window: a
+     * one-minute window would now and then roll over in the middle of a test,
+     * and the window arithmetic is rate-limit.service.spec's to pin.
+     */
+    $queryRaw: jest.fn((_sql: unknown, key: string) => {
+      const next = (rateLimitCounters.get(key) ?? 0) + 1;
+      rateLimitCounters.set(key, next);
+      return Promise.resolve([{ count: next }]);
+    }),
 
     paymentIntent: {
       create: jest.fn(({ data }: any) => {
@@ -337,10 +350,10 @@ describe('Payment intents CRUD (e2e)', () => {
     const res = await gw(
       request(http())
         .patch(`${route}/${createdId}`)
-        .send({ status: 'SUBMITTED', txHash: 'abc123' }),
+        .send({ status: 'SUBMITTED', txHash: 'c'.repeat(64) }),
     ).expect(200);
     expect(res.body.status).toBe('SUBMITTED');
-    expect(res.body.txHash).toBe('abc123');
+    expect(res.body.txHash).toBe('c'.repeat(64));
   });
 
   it('404s an update on an unknown id', () =>
@@ -394,5 +407,40 @@ describe('Payment intents CRUD (e2e)', () => {
 
   it('rejects deleting a SUCCEEDED (paid) intent (400)', async () => {
     await gw(request(http()).delete(`${route}/${createdId}`)).expect(400);
+  });
+
+  describe('the rate limit on the builders', () => {
+    const { limit } = PAYMENT_INTENT_BUILD_RATE_LIMIT;
+
+    // The tests above already spent some of the bucket; this one counts.
+    beforeAll(() => rateLimitCounters.clear());
+
+    const buildTx = (memo: string) =>
+      gw(
+        request(http())
+          .post(txRoute)
+          .send({ source, destination, amount: '1', memo }),
+      );
+
+    it('refuses a caller past its budget (429), counting both builders in it', async () => {
+      // Both routes take the shared public API key, so every anonymous wallet
+      // is one consumer and the client address is all that separates them. One
+      // bucket for the two, or a loop would alternate them and take both.
+      for (let i = 0; i < limit; i++) {
+        await buildTx(String(920000 + i)).expect(201);
+      }
+
+      const refused = await gw(
+        request(http())
+          .post(payRoute)
+          .send({ destination, amount: '1', memo: '929999' }),
+      ).expect(429);
+
+      expect(refused.body.code).toBe('rate_limited');
+      expect(refused.headers['retry-after']).toBeDefined();
+      expect(refused.headers['ratelimit-limit']).toBe(String(limit));
+      expect(refused.headers['ratelimit-remaining']).toBe('0');
+      // Thirty sequential builds, each with its QR: past the 5 s default.
+    }, 30_000);
   });
 });

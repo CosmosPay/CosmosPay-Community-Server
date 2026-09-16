@@ -6,6 +6,7 @@ import {
   Logger,
   NotFoundException,
   PayloadTooLargeException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { AllExceptionsFilter } from '@/common/filters/all-exceptions.filter';
@@ -146,6 +147,32 @@ describe('AllExceptionsFilter', () => {
     // The internal detail is logged, never returned.
     expect(JSON.stringify(body(json))).not.toContain('ECONNREFUSED');
     expect(error).toHaveBeenCalled();
+  });
+
+  it('never returns a failed readiness report, which carries the database error', () => {
+    // The shape @nestjs/terminus throws when the Prisma ping fails.
+    const { filter, host, status, json } = build();
+
+    filter.catch(
+      new ServiceUnavailableException({
+        status: 'error',
+        info: {},
+        error: {
+          database: {
+            status: 'down',
+            message:
+              "Can't reach database server at `db.internal:5432` as `cosmos_app`",
+          },
+        },
+        details: {},
+      }),
+      host,
+    );
+
+    expect(status).toHaveBeenCalledWith(HttpStatus.SERVICE_UNAVAILABLE);
+    expect(body(json).error).toBe('Service Unavailable');
+    expect(JSON.stringify(body(json))).not.toContain('db.internal');
+    expect(JSON.stringify(body(json))).not.toContain('cosmos_app');
   });
 
   it('preserves class-validator message arrays', () => {

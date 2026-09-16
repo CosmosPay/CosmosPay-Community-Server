@@ -25,8 +25,12 @@ import { PollarUserEntity } from '@/pollar/wallets/entities/pollar-user.entity';
 import { PollarWalletsService } from '@/pollar/wallets/pollar-wallets.service';
 import {
   POLLAR_ACTIVATE_RATE_LIMIT,
+  POLLAR_CONSUMER_QUOTA_RATE_LIMIT,
   POLLAR_PROVISION_RATE_LIMIT,
   POLLAR_TRUSTLINE_RATE_LIMIT,
+  POLLAR_TRUSTLINE_REMOVE_RATE_LIMIT,
+  POLLAR_VERIFY_RATE_LIMIT,
+  POLLAR_WALLET_DAILY_RATE_LIMIT,
 } from '@/pollar/pollar.constants';
 
 /**
@@ -54,6 +58,16 @@ const TRUSTLINE_RATE_LIMITED_RESPONSE: ApiResponseOptions = {
   content: API_ERROR_BODY_CONTENT,
 };
 
+/** The 403 of the two user-registration routes for a key that is not elevated. */
+const ELEVATED_KEY_REQUIRED_RESPONSE: ApiResponseOptions = {
+  status: 403,
+  description:
+    '`elevated_key_required`: only an elevated (admin) key may register Pollar ' +
+    'users. The Pollar user directory is shared by every tenant, and a user ' +
+    'registered here is the same one a later social login resolves by email.',
+  content: API_ERROR_BODY_CONTENT,
+};
+
 /**
  * Operator routes for Pollar wallets — `/v1/pollar`.
  *
@@ -74,7 +88,7 @@ export class PollarWalletsController {
   @Post('wallets/activate')
   @RequirePermissions('pollar:write')
   // Spends XLM out of the funding wallet on every call that does real work.
-  @RateLimit(POLLAR_ACTIVATE_RATE_LIMIT)
+  @RateLimit(POLLAR_ACTIVATE_RATE_LIMIT, POLLAR_CONSUMER_QUOTA_RATE_LIMIT)
   @ApiOperation({
     summary: "Fund a Pollar wallet's XLM reserve",
     description:
@@ -95,7 +109,7 @@ export class PollarWalletsController {
   @RequirePermissions('pollar:write')
   // Locks reserve out of the funding wallet per asset. Shares its bucket with
   // the explicit route below, so alternating the two buys a loop nothing.
-  @RateLimit(POLLAR_TRUSTLINE_RATE_LIMIT)
+  @RateLimit(POLLAR_TRUSTLINE_RATE_LIMIT, POLLAR_CONSUMER_QUOTA_RATE_LIMIT)
   @ApiOperation({
     summary: "Enable the app's configured assets on a wallet",
   })
@@ -112,7 +126,7 @@ export class PollarWalletsController {
   @Post('wallets/:address/trustlines')
   @RequirePermissions('pollar:write')
   // Up to 25 reserve-consuming assets per call — same bucket as /default.
-  @RateLimit(POLLAR_TRUSTLINE_RATE_LIMIT)
+  @RateLimit(POLLAR_TRUSTLINE_RATE_LIMIT, POLLAR_CONSUMER_QUOTA_RATE_LIMIT)
   @ApiOperation({ summary: 'Enable specific assets on a wallet' })
   @ApiCreatedResponse({ type: PollarTrustlineEntity })
   @ApiResponse(WALLET_NOT_FOUND_RESPONSE)
@@ -127,6 +141,10 @@ export class PollarWalletsController {
 
   @Delete('wallets/:address/trustlines/:code/:issuer')
   @RequirePermissions('pollar:write')
+  @RateLimit(
+    POLLAR_TRUSTLINE_REMOVE_RATE_LIMIT,
+    POLLAR_CONSUMER_QUOTA_RATE_LIMIT,
+  )
   @ApiOperation({
     summary: 'Remove a trustline',
     description:
@@ -147,14 +165,18 @@ export class PollarWalletsController {
 
   @Post('users')
   @RequirePermissions('pollar:write')
+  // Shares the with-wallet bucket: both write to the directory every tenant shares.
+  @RateLimit(POLLAR_PROVISION_RATE_LIMIT, POLLAR_CONSUMER_QUOTA_RATE_LIMIT)
   @ApiOperation({
     summary: 'Register a user with Pollar ahead of their first login',
     description:
-      'The account then exists before the user ever sees a consent screen. ' +
-      'Pollar does not publish the content shape of this route, so the response ' +
-      'is a narrow projection of it rather than the provider payload.',
+      'Elevated (admin) keys only. The account then exists before the user ever ' +
+      'sees a consent screen. Pollar does not publish the content shape of this ' +
+      'route, so the response is a narrow projection of it rather than the ' +
+      'provider payload.',
   })
   @ApiCreatedResponse({ type: PollarUserEntity })
+  @ApiResponse(ELEVATED_KEY_REQUIRED_RESPONSE)
   registerUser(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Body() dto: RegisterUserDto,
@@ -164,15 +186,22 @@ export class PollarWalletsController {
 
   @Post('users/with-wallet')
   @RequirePermissions('pollar:write')
-  // Creates a wallet with no consent screen pacing it — the tightest budget.
-  @RateLimit(POLLAR_PROVISION_RATE_LIMIT)
+  // Creates a wallet with no consent screen pacing it — the tightest budget, and
+  // one of the two places the per-consumer daily wallet ceiling counts.
+  @RateLimit(
+    POLLAR_PROVISION_RATE_LIMIT,
+    POLLAR_WALLET_DAILY_RATE_LIMIT,
+    POLLAR_CONSUMER_QUOTA_RATE_LIMIT,
+  )
   @ApiOperation({
     summary: 'Register a user and provision their Stellar wallet',
     description:
-      'Same body as POST /v1/pollar/users, but the Stellar wallet is created in ' +
-      'the same call instead of waiting for the first login to do it.',
+      'Elevated (admin) keys only. Same body as POST /v1/pollar/users, but the ' +
+      'Stellar wallet is created in the same call instead of waiting for the ' +
+      'first login to do it.',
   })
   @ApiCreatedResponse({ type: PollarUserEntity })
+  @ApiResponse(ELEVATED_KEY_REQUIRED_RESPONSE)
   registerUserWithWallet(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Body() dto: RegisterUserDto,
@@ -182,6 +211,7 @@ export class PollarWalletsController {
 
   @Post('tokens/verify')
   @RequirePermissions('pollar:read')
+  @RateLimit(POLLAR_VERIFY_RATE_LIMIT, POLLAR_CONSUMER_QUOTA_RATE_LIMIT)
   @ApiOperation({
     summary: 'Validate a Pollar end-user access token',
     description:

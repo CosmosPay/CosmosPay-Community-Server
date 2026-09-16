@@ -79,7 +79,10 @@ function makeService() {
     get: jest.fn(),
     instanceId: 'in_test',
     instancePath: jest.fn((p: string) => `/instances/in_test${p}`),
+    environmentFor: jest.fn(() => 'prod'),
+    instance: jest.fn(),
   };
+  blindpay.instance.mockReturnValue(blindpay);
   const consumers = { resolve: jest.fn().mockResolvedValue({ id: 'c1' }) };
   // The real mirror narrows its upsert to the public projection; so does this.
   const sync = {
@@ -107,6 +110,7 @@ function storePayout(prisma: any, row: Record<string, unknown>) {
 
 const OWNED_QUOTE = {
   consumerId: 'c1',
+  environment: 'prod',
   blindpayId: 'qe_000000000001',
   kind: 'PAYOUT',
 };
@@ -122,7 +126,12 @@ describe('OfframpService quote ownership', () => {
     await service.createQuote(CONSUMER, { bank_account_id: 'ba1' } as any);
 
     expect(prisma.blindpayQuote.create).toHaveBeenCalledWith({
-      data: { consumerId: 'c1', blindpayId: 'qe_000000000001', kind: 'PAYOUT' },
+      data: {
+        consumerId: 'c1',
+        environment: 'prod',
+        blindpayId: 'qe_000000000001',
+        kind: 'PAYOUT',
+      },
     });
   });
 
@@ -179,6 +188,25 @@ describe('OfframpService quote ownership', () => {
         sender_wallet_address: '0xabc',
       } as any),
     ).rejects.toMatchObject({ status: 404, code: 'quote_not_found' });
+  });
+
+  it('refuses a quote minted on the other BlindPay instance', async () => {
+    const { service, prisma, blindpay } = makeService();
+    // A production key executing a quote priced on the dev instance, or the
+    // reverse: the id exists, but not on the instance this caller reaches.
+    prisma.blindpayQuote.findUnique.mockResolvedValue({
+      ...OWNED_QUOTE,
+      environment: 'dev',
+    });
+
+    await expect(
+      service.createPayout(CONSUMER, {
+        quote_id: 'qe_000000000001',
+        chain: 'evm',
+        sender_wallet_address: '0xabc',
+      } as any),
+    ).rejects.toMatchObject({ status: 404, code: 'quote_not_found' });
+    expect(blindpay.post).not.toHaveBeenCalled();
   });
 
   it('executes a quote the caller owns', async () => {

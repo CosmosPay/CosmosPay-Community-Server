@@ -17,6 +17,7 @@ import {
 } from '@/blindpay/blindpay-sync.service';
 import { asString, asNumber, isMirrorFresh } from '@/blindpay/blindpay.util';
 import type { Prisma } from '@generated/prisma/client';
+import type { BlindpayEnvironment } from '@/config/configuration';
 import { CreatePayoutQuoteDto } from '@/offramp/dto/create-payout-quote.dto';
 import { AuthorizePayoutDto } from '@/offramp/dto/authorize-payout.dto';
 import { CreatePayoutDto } from '@/offramp/dto/create-payout.dto';
@@ -43,7 +44,9 @@ type MirroredPayout = Prisma.PayoutGetPayload<{
  * carries the `approve` contract the customer signs). The customer signs the
  * on-chain transfer — the service never holds keys: for Stellar/Solana it returns
  * the unsigned tx via {@link authorize} and accepts the signed one back on create.
- * Payouts are mirrored locally and BlindPay confirms settlement via webhook.
+ * Payouts are mirrored locally and BlindPay confirms settlement via webhook. Every
+ * read and write stays on the BlindPay instance the caller's key environment
+ * selects: a dev key moves no real money.
  */
 @Injectable()
 export class OfframpService {
@@ -56,15 +59,17 @@ export class OfframpService {
 
   async createQuote(consumer: GatewayConsumer, dto: CreatePayoutQuoteDto) {
     const local = await this.consumers.resolve(consumer);
+    const environment = this.blindpay.environmentFor(consumer);
     const bankAccountBlindpayId = await this.resolveBankAccountBlindpayId(
       local.id,
+      environment,
       dto.bank_account_id,
     );
-    const quote = await this.blindpay.createPayoutQuote({
+    const quote = await this.blindpay.createPayoutQuote(environment, {
       ...dto,
       bank_account_id: bankAccountBlindpayId,
     });
-    await this.recordQuoteOwnership(local.id, quote);
+    await this.recordQuoteOwnership(local.id, environment, quote);
     // BlindPay carries the local fiat amount (e.g. ARS) in `receiver_amount`;
     // `receiver_local_amount` comes back 0. Surface the real amount under the
     // documented field so callers don't read 0. Keep the raw fields too.
@@ -76,8 +81,9 @@ export class OfframpService {
   /** Step 1 for Stellar/Solana: returns the unsigned tx for the customer to sign. */
   async authorize(consumer: GatewayConsumer, dto: AuthorizePayoutDto) {
     const local = await this.consumers.resolve(consumer);
-    await this.assertQuoteOwned(local.id, dto.quote_id);
-    const res = await this.blindpay.authorizePayout(dto.chain, {
+    const environment = this.blindpay.environmentFor(consumer);
+    await this.assertQuoteOwned(local.id, environment, dto.quote_id);
+    const res = await this.blindpay.authorizePayout(environment, dto.chain, {
       quote_id: dto.quote_id,
       sender_wallet_address: dto.sender_wallet_address,
     });
@@ -94,7 +100,8 @@ export class OfframpService {
 
   async createPayout(consumer: GatewayConsumer, dto: CreatePayoutDto) {
     const local = await this.consumers.resolve(consumer);
-    await this.assertQuoteOwned(local.id, dto.quote_id);
+    const environment = this.blindpay.environmentFor(consumer);
+    await this.assertQuoteOwned(local.id, environment, dto.quote_id);
     const body: BlindpayPayoutRequest = {
       quote_id: dto.quote_id,
       sender_wallet_address: dto.sender_wallet_address,
@@ -102,17 +109,25 @@ export class OfframpService {
     if (dto.signed_transaction !== undefined) {
       body.signed_transaction = dto.signed_transaction;
     }
-    const created = await this.blindpay.createPayout(dto.chain, body);
+    const created = await this.blindpay.createPayout(
+      environment,
+      dto.chain,
+      body,
+    );
     const receiverId = await this.resolveReceiverLocalId(
       local.id,
+      environment,
       created.receiver_id,
     );
-    return this.sync.mirrorPayout(local.id, receiverId, created);
+    return this.sync.mirrorPayout(local.id, environment, receiverId, created);
   }
 
   async findAll(consumer: GatewayConsumer, query: PaginationQueryDto) {
     const local = await this.consumers.resolve(consumer);
-    const where = { consumerId: local.id };
+    const where = {
+      consumerId: local.id,
+      environment: this.blindpay.environmentFor(consumer),
+    };
     // `total` is the row count, not the page length. Returning `data.length`
     // made the field useless: it always equalled what the caller just received,
     // so nobody could tell a full page from the last one.
@@ -136,13 +151,19 @@ export class OfframpService {
    */
   async findOne(consumer: GatewayConsumer, id: string): Promise<PublicPayout> {
     const local = await this.consumers.resolve(consumer);
-    const row = await this.findPayoutOrThrow(local.id, id);
+    const environment = this.blindpay.environmentFor(consumer);
+    const row = await this.findPayoutOrThrow(local.id, environment, id);
     if (isMirrorFresh(row)) {
       return toPublicPayout(row);
     }
     try {
-      const fresh = await this.blindpay.getPayout(row.blindpayId);
-      return await this.sync.mirrorPayout(local.id, row.receiverId, fresh);
+      const fresh = await this.blindpay.getPayout(environment, row.blindpayId);
+      return await this.sync.mirrorPayout(
+        local.id,
+        environment,
+        row.receiverId,
+        fresh,
+      );
     } catch {
       return toPublicPayout(row);
     }
@@ -154,13 +175,14 @@ export class OfframpService {
     dto: PayoutDocumentDto,
   ) {
     const local = await this.consumers.resolve(consumer);
-    const row = await this.findPayoutOrThrow(local.id, id);
-    return this.blindpay.addPayoutDocument(row.blindpayId, dto);
+    const environment = this.blindpay.environmentFor(consumer);
+    const row = await this.findPayoutOrThrow(local.id, environment, id);
+    return this.blindpay.addPayoutDocument(environment, row.blindpayId, dto);
   }
 
   /**
-   * Records who minted a quote, so {@link assertQuoteOwned} can authorize its
-   * execution later.
+   * Records who minted a quote, and on which instance, so {@link assertQuoteOwned}
+   * can authorize its execution later.
    *
    * A missing id is a provider contract violation, not something to shrug off:
    * without the ownership row the quote can never be authorized or executed, and
@@ -169,6 +191,7 @@ export class OfframpService {
    */
   private async recordQuoteOwnership(
     consumerId: string,
+    environment: BlindpayEnvironment,
     quote: BlindpayObject,
   ): Promise<void> {
     const blindpayId = asString(quote.id);
@@ -179,22 +202,24 @@ export class OfframpService {
       );
     }
     await this.prisma.blindpayQuote.create({
-      data: { consumerId, blindpayId, kind: 'PAYOUT' },
+      data: { consumerId, environment, blindpayId, kind: 'PAYOUT' },
     });
   }
 
   /**
-   * Proves the caller minted this quote before we authorize or execute it
-   * upstream.
+   * Proves the caller minted this quote, on its own instance, before we authorize
+   * or execute it upstream.
    *
-   * Every tenant shares one BlindPay platform instance, so holding a quote id
-   * proves nothing about who owns it: forwarding `quote_id` straight through let
-   * one tenant execute another's quote and have the resulting payout — bank
-   * details included — mirrored into their own records. 404 rather than 403 is
-   * deliberate; a 403 would confirm the id is live for somebody else.
+   * Every tenant of an environment shares one BlindPay platform instance, so
+   * holding a quote id proves nothing about who owns it: forwarding `quote_id`
+   * straight through let one tenant execute another's quote and have the
+   * resulting payout — bank details included — mirrored into their own records.
+   * 404 rather than 403 is deliberate; a 403 would confirm the id is live for
+   * somebody else.
    */
   private async assertQuoteOwned(
     consumerId: string,
+    environment: BlindpayEnvironment,
     blindpayQuoteId: string,
   ): Promise<void> {
     const quote = await this.prisma.blindpayQuote.findUnique({
@@ -202,15 +227,21 @@ export class OfframpService {
         consumerId_blindpayId: { consumerId, blindpayId: blindpayQuoteId },
       },
     });
-    // A payin quote id is equally not a payout quote id, so the kind is part of
-    // the check rather than a separate 400 further upstream.
-    if (!quote || quote.kind !== 'PAYOUT') {
+    // A payin quote id is equally not a payout quote id, and a quote minted on
+    // the other instance does not exist on this one, so both are part of the
+    // check rather than a separate error further upstream.
+    if (
+      !quote ||
+      quote.kind !== 'PAYOUT' ||
+      quote.environment !== environment
+    ) {
       throw ApiError.notFound('Quote not found', ApiErrorCode.QuoteNotFound);
     }
   }
 
   /**
-   * Reads a payout the caller owns, narrowed to {@link PAYOUT_READ_SELECT}.
+   * Reads a payout the caller owns on its instance, narrowed to
+   * {@link PAYOUT_READ_SELECT}.
    *
    * This used to read the whole row, and `findOne` returned it as-is: `raw` —
    * the BlindPay payload, beneficiary bank details included — beside internal
@@ -220,10 +251,11 @@ export class OfframpService {
    */
   private async findPayoutOrThrow(
     consumerId: string,
+    environment: BlindpayEnvironment,
     id: string,
   ): Promise<MirroredPayout> {
     const row = await this.prisma.payout.findFirst({
-      where: { id, consumerId },
+      where: { id, consumerId, environment },
       select: PAYOUT_READ_SELECT,
     });
     if (!row) {
@@ -234,10 +266,11 @@ export class OfframpService {
 
   private async resolveBankAccountBlindpayId(
     consumerId: string,
+    environment: BlindpayEnvironment,
     localId: string,
   ): Promise<string> {
     const account = await this.prisma.blindpayBankAccount.findFirst({
-      where: { id: localId, consumerId },
+      where: { id: localId, consumerId, environment },
     });
     if (!account) {
       throw ApiError.notFound('Bank account not found');
@@ -258,11 +291,16 @@ export class OfframpService {
 
   private async resolveReceiverLocalId(
     consumerId: string,
+    environment: BlindpayEnvironment,
     receiverBlindpayId: unknown,
   ): Promise<string | null> {
     if (!receiverBlindpayId) return null;
     const receiver = await this.prisma.blindpayReceiver.findFirst({
-      where: { consumerId, blindpayId: asString(receiverBlindpayId) },
+      where: {
+        consumerId,
+        environment,
+        blindpayId: asString(receiverBlindpayId),
+      },
     });
     return receiver?.id ?? null;
   }

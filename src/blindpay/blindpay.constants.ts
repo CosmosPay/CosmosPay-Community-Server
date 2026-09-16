@@ -1,3 +1,5 @@
+import type { BlindpayEnvironment } from '@/config/configuration';
+
 /**
  * Enumerations mirrored from the BlindPay API. Kept as `as const` tuples so they
  * double as runtime allow-lists for class-validator (`@IsIn`) and as TypeScript
@@ -124,6 +126,36 @@ export const SVIX_TOLERANCE_SECONDS = 5 * 60;
 export const SVIX_SECRET_PREFIX = 'whsec_';
 
 /**
+ * The shortest HMAC key a Svix endpoint secret may decode to. Svix mints 24
+ * random bytes (`whsec_` + 32 base64 characters), so anything shorter is a
+ * truncated or mistyped value — and at the extreme an EMPTY key, which is what
+ * `Buffer.from(…, 'base64')` silently makes of a string outside the alphabet.
+ * A webhook signed with an empty key is one anybody can sign.
+ */
+export const SVIX_MIN_SECRET_BYTES = 24;
+
+/**
+ * Every BlindPay platform instance this service talks to, production first — the
+ * order the inbound webhook tries their secrets in.
+ */
+export const BLINDPAY_ENVIRONMENTS: readonly BlindpayEnvironment[] = [
+  'prod',
+  'dev',
+];
+
+/**
+ * The variables that set each instance up, named in the 503 a caller gets when
+ * its environment's instance is not configured, so the operator reading it knows
+ * which pair is missing rather than only that "BlindPay" is.
+ */
+export const BLINDPAY_INSTANCE_ENV_VARS: Readonly<
+  Record<BlindpayEnvironment, string>
+> = {
+  prod: 'BLINDPAY_API_KEY and BLINDPAY_INSTANCE_ID',
+  dev: 'BLINDPAY_API_KEY_DEV and BLINDPAY_INSTANCE_ID_DEV',
+};
+
+/**
  * Payin/payout statuses that mean the money stopped moving. A webhook may move a
  * row *into* one of these at any time (`completed` -> `refunded` is a real
  * transition), but never back out.
@@ -137,3 +169,28 @@ export const SETTLED_STATUSES = [
 
 /** Terminal BlindPay KYC statuses; mirrors `kyc/receivers/receiver-state.ts`. */
 export const SETTLED_KYC_STATUSES = ['approved', 'rejected'] as const;
+
+/**
+ * Every BlindPay-backed request one consumer may cause in a minute, across KYC,
+ * onramp and offramp.
+ *
+ * One BlindPay instance serves every tenant on a key (two, counting the dev
+ * instance), so the provider's quota is a shared resource the way Pollar's is:
+ * a tenant looping quotes does not merely slow itself down, it fails other
+ * tenants' payins. The per-address budgets on each route tell one ordinary
+ * caller from another and do nothing about that, because a tenant chooses how
+ * many addresses it calls from — this ceiling is what it cannot multiply.
+ *
+ * Sixty a minute is far above an integrator's honest use: a quote, a payin and a
+ * document upload are each one call, and a human-driven KYC flow is a handful
+ * per person. A batch importer legitimately above it should hold its own key.
+ *
+ * Stacked *alongside* each route's per-address budget, never instead of it: the
+ * two answer different questions, and the guard counts both.
+ */
+export const BLINDPAY_CONSUMER_QUOTA_RATE_LIMIT = {
+  name: 'blindpay:quota',
+  limit: 60,
+  windowMs: 60 * 1000,
+  per: 'consumer' as const,
+};

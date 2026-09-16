@@ -36,6 +36,7 @@ describe('BlindpaySyncService.handleWebhook', () => {
     prisma.payin.updateMany.mockResolvedValue({ count: 1 });
 
     await service.handleWebhook(
+      'prod',
       'payin.complete',
       { id: 'pi_1', status: 'completed' },
       'msg_1',
@@ -57,6 +58,37 @@ describe('BlindpaySyncService.handleWebhook', () => {
     );
   });
 
+  it("looks a resource up only among its own instance's rows", async () => {
+    const { service, prisma } = makeService();
+    prisma.payout.findFirst.mockResolvedValue(null);
+    prisma.blindpayReceiver.findFirst.mockResolvedValue(null);
+
+    await service.handleWebhook(
+      'dev',
+      'payout.complete',
+      { id: 'pa_1', status: 'completed' },
+      'msg_env_1',
+    );
+    await service.handleWebhook(
+      'prod',
+      'receiver.update',
+      { id: 're_1', kyc_status: 'approved' },
+      'msg_env_2',
+    );
+
+    // A delivery verified by one instance's secret cannot move the other's rows.
+    expect(prisma.payout.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { blindpayId: 'pa_1', environment: 'dev' },
+      }),
+    );
+    expect(prisma.blindpayReceiver.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { blindpayId: 're_1', environment: 'prod' },
+      }),
+    );
+  });
+
   it('maps a payout.update to PAYOUT_UPDATED', async () => {
     const { service, prisma, events } = makeService();
     prisma.payout.findFirst.mockResolvedValue({
@@ -68,6 +100,7 @@ describe('BlindpaySyncService.handleWebhook', () => {
     prisma.payout.updateMany.mockResolvedValue({ count: 1 });
 
     await service.handleWebhook(
+      'prod',
       'payout.update',
       { id: 'pa_1', status: 'on_hold' },
       'msg_2',
@@ -81,7 +114,12 @@ describe('BlindpaySyncService.handleWebhook', () => {
 
   it('ignores unmapped event types', async () => {
     const { service, prisma, events } = makeService();
-    await service.handleWebhook('transfer.new', { id: 'tr_1' }, 'msg_3');
+    await service.handleWebhook(
+      'prod',
+      'transfer.new',
+      { id: 'tr_1' },
+      'msg_3',
+    );
     expect(prisma.payin.findFirst).not.toHaveBeenCalled();
     expect(events.emit).not.toHaveBeenCalled();
   });
@@ -89,7 +127,12 @@ describe('BlindpaySyncService.handleWebhook', () => {
   it('does not emit when no local record matches', async () => {
     const { service, prisma, events } = makeService();
     prisma.payin.findFirst.mockResolvedValue(null);
-    await service.handleWebhook('payin.update', { id: 'pi_unknown' }, 'msg_4');
+    await service.handleWebhook(
+      'prod',
+      'payin.update',
+      { id: 'pi_unknown' },
+      'msg_4',
+    );
     expect(events.emit).not.toHaveBeenCalled();
   });
 
@@ -104,6 +147,7 @@ describe('BlindpaySyncService.handleWebhook', () => {
     prisma.payin.updateMany.mockResolvedValue({ count: 0 });
 
     await service.handleWebhook(
+      'prod',
       'payin.update',
       { id: 'pi_1', status: 'processing' },
       'msg_5',
@@ -131,6 +175,7 @@ describe('BlindpaySyncService.handleWebhook', () => {
     prisma.blindpayReceiver.updateMany.mockResolvedValue({ count: 1 });
 
     await service.handleWebhook(
+      'prod',
       'receiver.update',
       { id: 're_1', kyc_status: 'rejected' },
       'msg_6',
@@ -140,6 +185,7 @@ describe('BlindpaySyncService.handleWebhook', () => {
     );
 
     await service.handleWebhook(
+      'prod',
       'receiver.update',
       { id: 're_1', kyc_status: 'verifying' },
       'msg_7',
@@ -147,6 +193,32 @@ describe('BlindpaySyncService.handleWebhook', () => {
     expect(prisma.blindpayReceiver.updateMany).toHaveBeenLastCalledWith(
       expect.objectContaining({
         where: { id: 'r1', kycStatus: { notIn: ['approved', 'rejected'] } },
+      }),
+    );
+  });
+});
+
+describe('BlindpaySyncService create-time mirroring', () => {
+  it('records the instance a mirrored resource came from', async () => {
+    const { service, prisma } = makeService();
+
+    await service.mirrorReceiver('c1', 'dev', { id: 're_1' });
+    await service.mirrorPayin('c1', 'dev', null, { id: 'pi_1' });
+    await service.mirrorPayout('c1', 'prod', null, { id: 'pa_1' });
+
+    expect(prisma.blindpayReceiver.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({ environment: 'dev' }),
+      }),
+    );
+    expect(prisma.payin.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({ environment: 'dev' }),
+      }),
+    );
+    expect(prisma.payout.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({ environment: 'prod' }),
       }),
     );
   });
@@ -164,6 +236,7 @@ describe('BlindpaySyncService delivery de-duplication', () => {
     prisma.payin.updateMany.mockResolvedValue({ count: 1 });
 
     await service.handleWebhook(
+      'prod',
       'payin.complete',
       { id: 'pi_1', status: 'completed' },
       'msg_claim',
@@ -179,6 +252,7 @@ describe('BlindpaySyncService delivery de-duplication', () => {
     prisma.blindpayWebhookEvent.create.mockRejectedValue(uniqueViolation());
 
     await service.handleWebhook(
+      'prod',
       'payout.complete',
       { id: 'pa_1', status: 'completed' },
       'msg_retry',
@@ -196,7 +270,7 @@ describe('BlindpaySyncService delivery de-duplication', () => {
     );
 
     await expect(
-      service.handleWebhook('payin.new', { id: 'pi_2' }, 'msg_db_down'),
+      service.handleWebhook('prod', 'payin.new', { id: 'pi_2' }, 'msg_db_down'),
     ).rejects.toThrow('connection reset');
   });
 
@@ -210,7 +284,7 @@ describe('BlindpaySyncService delivery de-duplication', () => {
     });
     prisma.payin.updateMany.mockResolvedValue({ count: 1 });
 
-    await service.handleWebhook('payin.update', { id: 'pi_1' }, '');
+    await service.handleWebhook('prod', 'payin.update', { id: 'pi_1' }, '');
 
     expect(prisma.blindpayWebhookEvent.create).not.toHaveBeenCalled();
     expect(events.emit).toHaveBeenCalled();

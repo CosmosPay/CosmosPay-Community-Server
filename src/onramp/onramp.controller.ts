@@ -8,6 +8,13 @@ import {
 } from '@nestjs/swagger';
 import { CurrentConsumer } from '@/common/decorators/current-consumer.decorator';
 import { RequirePermissions } from '@/common/decorators/require-permissions.decorator';
+import { RateLimit } from '@/common/decorators/rate-limit.decorator';
+import { BLINDPAY_CONSUMER_QUOTA_RATE_LIMIT } from '@/blindpay/blindpay.constants';
+import {
+  ONRAMP_PAYIN_RATE_LIMIT,
+  ONRAMP_QUOTE_RATE_LIMIT,
+  ONRAMP_TRUSTLINE_RATE_LIMIT,
+} from '@/onramp/onramp.constants';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import { OnrampService } from '@/onramp/onramp.service';
 import { CreatePayinQuoteDto } from '@/onramp/dto/create-payin-quote.dto';
@@ -24,6 +31,8 @@ export class OnrampController {
 
   @Post('quotes')
   @RequirePermissions('onramp:write')
+  // A provider call on the instance every tenant shares, plus a stored row.
+  @RateLimit(ONRAMP_QUOTE_RATE_LIMIT, BLINDPAY_CONSUMER_QUOTA_RATE_LIMIT)
   @ApiOperation({ summary: 'Create a payin quote (expires in ~5 min)' })
   @ApiCreatedResponse({ type: PayinQuoteEntity })
   createQuote(
@@ -35,6 +44,9 @@ export class OnrampController {
 
   @Post('payins')
   @RequirePermissions('onramp:write')
+  // Money: the payin and its bank instructions exist at the provider whatever
+  // this service answers next.
+  @RateLimit(ONRAMP_PAYIN_RATE_LIMIT, BLINDPAY_CONSUMER_QUOTA_RATE_LIMIT)
   @ApiOperation({
     summary: 'Create a payin from a quote; returns funding instructions',
   })
@@ -73,6 +85,9 @@ export class OnrampController {
 
   @Post('trustline')
   @RequirePermissions('onramp:write')
+  // Reads the account from Horizon, against the per-IP budget every route here
+  // shares.
+  @RateLimit(ONRAMP_TRUSTLINE_RATE_LIMIT)
   @ApiOperation({
     summary:
       'Build an unsigned Stellar trustline tx (XDR) for the customer to sign',

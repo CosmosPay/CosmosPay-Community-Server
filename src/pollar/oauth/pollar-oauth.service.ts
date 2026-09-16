@@ -78,7 +78,7 @@ export interface PollarCallbackOutcome {
  * absorbs a code and nothing else; what comes back is a live Pollar session it
  * can drive the virtual wallet with directly.
  *
- * Two properties are load-bearing:
+ * Three properties are load-bearing:
  *
  *   - **No Pollar token is ever persisted.** The `/auth/login` exchange runs
  *     inside the redemption request, so the tokens exist in this process for the
@@ -87,6 +87,10 @@ export interface PollarCallbackOutcome {
  *   - **The code is single-use, and the burn is a compare-and-swap.** Two
  *     wallets racing the same code cannot both win, because the transition out
  *     of `AUTHORIZED` is the same `updateMany` that finds the row.
+ *   - **A session only goes back to the account that consented.** Every tenant
+ *     shares one Pollar application and a login link works in anyone's browser,
+ *     so without this a key could send its link to someone else and redeem their
+ *     wallet. See {@link assertLoginBelongsToConsumer}.
  */
 @Injectable()
 export class PollarOauthService {
@@ -115,6 +119,9 @@ export class PollarOauthService {
     consumer: GatewayConsumer,
     dto: AuthorizeOauthDto,
   ): Promise<PollarAuthorizationEntity> {
+    // Before a Pollar session is spent: a login this key could never redeem is
+    // not worth opening.
+    this.assertIdentityForwarded(consumer);
     const network = resolveNetwork(this.config, consumer);
     const local = await this.consumers.resolve(consumer);
 
@@ -125,6 +132,21 @@ export class PollarOauthService {
           this.cfg.redirectUriWhitelist,
         )
       : null;
+
+    // A redirect-mode code crosses a browser: history, extensions, and a custom
+    // scheme another app may also have registered. The public callback also
+    // hands it to anyone who presents `state`, which rides inside
+    // `authorization_url`. PKCE is what makes a code seen by anyone else useless,
+    // so redirect mode is not opened without it. The poll flow keeps it optional:
+    // its code only ever leaves over the consumer-authenticated API.
+    if (redirectUri && !dto.code_challenge) {
+      throw ApiError.badRequest(
+        ApiErrorCode.ValidationFailed,
+        'code_challenge is required with redirect_uri: a code delivered through ' +
+          'a browser must be bound to the wallet that asked for it (PKCE, S256). ' +
+          'Omit redirect_uri to use the poll flow instead.',
+      );
+    }
 
     // Fail on a missing callback URL before spending a Pollar session on it.
     const state = mintState();
@@ -296,6 +318,8 @@ export class PollarOauthService {
     consumer: GatewayConsumer,
     dto: ExchangeCodeDto,
   ): Promise<PollarSessionEntity> {
+    // Before the code is claimed, so a refusal here leaves it redeemable.
+    this.assertIdentityForwarded(consumer);
     const local = await this.consumers.resolve(consumer);
     const session = await this.claimCode(local.id, dto);
 
@@ -315,6 +339,8 @@ export class PollarOauthService {
           },
         },
       );
+
+      await this.assertLoginBelongsToConsumer(consumer, session, login);
 
       await this.prisma.pollarOauthSession.update({
         where: { id: session.id },
@@ -382,8 +408,16 @@ export class PollarOauthService {
     }
     this.assertPkce(session, dto.code_verifier);
 
+    // The hash is part of the compare-and-swap, not just the lookup. A poll
+    // reissues the code between the `findUnique` above and this write, and a
+    // claim on `{id, status}` alone would still let the code it just retired
+    // through — so a superseded code is spent only if it is still the current one.
     const claimed = await this.prisma.pollarOauthSession.updateMany({
-      where: { id: session.id, status: PollarOauthStatus.AUTHORIZED },
+      where: {
+        id: session.id,
+        status: PollarOauthStatus.AUTHORIZED,
+        codeHash: hashCode(dto.code),
+      },
       data: { status: PollarOauthStatus.EXCHANGING },
     });
     if (claimed.count === 0) {
@@ -419,6 +453,94 @@ export class PollarOauthService {
       throw ApiError.badRequest(
         ApiErrorCode.ValidationFailed,
         'code_verifier does not match the code_challenge',
+      );
+    }
+  }
+
+  /**
+   * Refuses a key the gateway forwarded no account email for.
+   *
+   * The console's brokered onboarding (`X-Cosmos-Internal`) is the one caller
+   * without an email of its own: it logs in people who have no key yet, and it
+   * proves the email itself before it hands anything on.
+   */
+  private assertIdentityForwarded(consumer: GatewayConsumer): void {
+    if (consumer.internal || consumer.email) return;
+    this.logger.warn(
+      `Refused a Pollar login for ${consumer.username}: no account email was forwarded`,
+    );
+    throw ApiError.forbidden(
+      ApiErrorCode.PollarIdentityRequired,
+      'This key has no account email, so a Pollar login cannot be tied to it. ' +
+        'Social login is only available to the account that owns the key.',
+    );
+  }
+
+  /**
+   * Refuses a login completed by anyone other than the account that holds the key.
+   *
+   * **Why this is the check, and why it sits here.** Pollar's hosted flow works in
+   * any browser and never comes back to the bridge, so nothing before this point
+   * can tell the person who opened a login from the person who finished it. A key
+   * could send its `authorization_url` to someone else, wait for them to consent —
+   * on the genuine screen of the one Pollar application every tenant shares — and
+   * redeem a session for *their* wallet. The login's own email is the first fact
+   * that says who consented, and it only exists once `/auth/login` has minted the
+   * tokens.
+   *
+   * So a mismatch closes the handshake for good, revokes what was just minted, and
+   * returns nothing. The comparison is exact after lowercasing: the account email
+   * is verified, and so is the one the provider reports.
+   */
+  private async assertLoginBelongsToConsumer(
+    consumer: GatewayConsumer,
+    session: PollarOauthSession,
+    login: PollarLoginContent,
+  ): Promise<void> {
+    if (consumer.internal) return;
+    const loginEmail = login.data?.mail?.trim().toLowerCase();
+    if (loginEmail && loginEmail === consumer.email) return;
+
+    this.logger.warn(
+      `Refused Pollar handshake ${session.id} for ${consumer.username}: the login belongs to a different account`,
+    );
+    await this.prisma.pollarOauthSession.updateMany({
+      where: { id: session.id, status: PollarOauthStatus.EXCHANGING },
+      data: {
+        status: PollarOauthStatus.FAILED,
+        codeHash: null,
+        codeExpiresAt: null,
+        errorCode: 'BRIDGE_IDENTITY_MISMATCH',
+      },
+    });
+    await this.revokeQuietly(session, login);
+    throw ApiError.forbidden(
+      ApiErrorCode.PollarIdentityMismatch,
+      'This Pollar login was completed by a different account than the one that ' +
+        'owns this key, so no session is returned. Sign in with the email of the ' +
+        "key's account.",
+    );
+  }
+
+  /**
+   * Revokes tokens nobody will ever receive. Best-effort: they never leave this
+   * process either way, and the refusal is what the caller needs to see.
+   */
+  private async revokeQuietly(
+    session: PollarOauthSession,
+    login: PollarLoginContent,
+  ): Promise<void> {
+    try {
+      await this.pollar.sdk<PollarLogoutContent>(
+        'POST',
+        session.network as StellarNetwork,
+        '/auth/logout',
+        { accessToken: login.token.accessToken, body: { everywhere: false } },
+      );
+    } catch (err) {
+      this.logger.error(
+        `Could not revoke the refused Pollar session of handshake ${session.id}`,
+        err as Error,
       );
     }
   }

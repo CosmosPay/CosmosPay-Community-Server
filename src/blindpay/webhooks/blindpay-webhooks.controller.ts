@@ -7,19 +7,21 @@ import { Public } from '@/common/decorators/public.decorator';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { headerValue } from '@/common/request-header';
 import { verifySvixSignature } from '@/blindpay/blindpay-signature';
+import { BLINDPAY_ENVIRONMENTS } from '@/blindpay/blindpay.constants';
 import {
   BlindpaySyncService,
   BlindpayObject,
 } from '@/blindpay/blindpay-sync.service';
 
 /**
- * Receives BlindPay (Svix) webhook deliveries.
+ * Receives BlindPay (Svix) webhook deliveries from both platform instances.
  *
  * This route is `@Public()` because BlindPay calls it directly — it does not
  * carry an APISIX consumer or the gateway secret. Authenticity is established by
- * verifying the Svix signature over the raw request body instead. Configure the
- * BlindPay dashboard to point its webhook at `<gateway>/v1/blindpay/webhooks`
- * and set BLINDPAY_WEBHOOK_SECRET to that endpoint's signing secret.
+ * verifying the Svix signature over the raw request body instead. Point each
+ * instance's BlindPay dashboard webhook at `<gateway>/v1/blindpay/webhooks` and
+ * set BLINDPAY_WEBHOOK_SECRET (production) and BLINDPAY_WEBHOOK_SECRET_DEV
+ * (development) to that endpoint's signing secret.
  */
 @Controller({ path: 'blindpay', version: '1' })
 export class BlindpayWebhooksController {
@@ -34,8 +36,11 @@ export class BlindpayWebhooksController {
   async handle(
     @Req() req: RawBodyRequest<Request>,
   ): Promise<{ received: boolean }> {
-    const { webhookSecret } = this.config.get('blindpay', { infer: true });
-    if (!webhookSecret) {
+    const { instances } = this.config.get('blindpay', { infer: true });
+    const configured = BLINDPAY_ENVIRONMENTS.filter(
+      (env) => instances[env].webhookSecret,
+    );
+    if (configured.length === 0) {
       // 503 `misconfigured`, not 400: nothing is wrong with the delivery. A 400
       // told whoever read the Svix log that BlindPay had sent something
       // malformed, when the fault is this deployment's configuration. Svix
@@ -52,12 +57,18 @@ export class BlindpayWebhooksController {
     // repeats it on every retry of the same event, so the sync service uses it
     // to tell a retry from a new state change.
     const svixId = headerValue(req, 'svix-id') ?? '';
-    const ok = verifySvixSignature(webhookSecret, rawBody, {
+    const headers = {
       id: svixId,
       timestamp: headerValue(req, 'svix-timestamp') ?? '',
       signature: headerValue(req, 'svix-signature') ?? '',
-    });
-    if (!ok) {
+    };
+    // Each instance signs with its own endpoint secret, so the secret a delivery
+    // verifies against is what says which instance sent it — and so which mirror
+    // rows it may touch. Nothing in the payload is trusted for that.
+    const environment = configured.find((env) =>
+      verifySvixSignature(instances[env].webhookSecret, rawBody, headers),
+    );
+    if (!environment) {
       throw ApiError.badRequest(
         ApiErrorCode.ValidationFailed,
         'Invalid BlindPay webhook signature',
@@ -66,7 +77,12 @@ export class BlindpayWebhooksController {
 
     const event = parseEvent(rawBody);
     if (event) {
-      await this.sync.handleWebhook(event.type, event.data, svixId);
+      await this.sync.handleWebhook(
+        environment,
+        event.type,
+        event.data,
+        svixId,
+      );
     }
     return { received: true };
   }

@@ -1,13 +1,11 @@
-import {
-  INestApplication,
-  ValidationPipe,
-  VersioningType,
-} from '@nestjs/common';
+import { ValidationPipe, VersioningType } from '@nestjs/common';
+import type { NestExpressApplication } from '@nestjs/platform-express';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { AppModule } from '@/app.module';
 import { AllExceptionsFilter } from '@/common/filters/all-exceptions.filter';
 import { PrismaService } from '@/prisma/prisma.service';
+import { SWAP_SUBMIT_RATE_LIMIT } from '@/swaps/swaps.constants';
 
 /**
  * The guards in front of /v1/swaps, with Horizon and the database mocked away.
@@ -19,12 +17,23 @@ import { PrismaService } from '@/prisma/prisma.service';
  * one anonymous wallet out of every other anonymous wallet's swaps. Only
  * `@AllowPublicKey()` does, and a route that loses it, or a read that gains it,
  * fails here.
+ *
+ * The submit route is also rate limited, because a rejected broadcast costs a
+ * Horizon submission and a webhook an error cannot refund — and under the
+ * shared public key, the client address is the only thing that can do it.
  */
 describe('Swaps guards (e2e)', () => {
-  let app: INestApplication;
+  let app: NestExpressApplication;
 
   const SECRET = 'topsecret-topsecret-topsecret-topsecret';
   const SWAP_ID = '6f1c7e0a-3b5d-4c2e-9a8f-1d2e3f4a5b6c';
+
+  /**
+   * The rate limiter's counter. Keyed by bucket alone, not by window: a
+   * one-minute window would now and then roll over in the middle of a test, and
+   * the window arithmetic is rate-limit.service.spec's to pin, not this suite's.
+   */
+  const counters = new Map<string, number>();
 
   const prismaMock = {
     onModuleInit: jest.fn(),
@@ -32,6 +41,11 @@ describe('Swaps guards (e2e)', () => {
     $connect: jest.fn(),
     $disconnect: jest.fn(),
     requestLog: { create: jest.fn().mockResolvedValue({ id: 'rl_1' }) },
+    $queryRaw: jest.fn((_sql: unknown, key: string) => {
+      const next = (counters.get(key) ?? 0) + 1;
+      counters.set(key, next);
+      return Promise.resolve([{ count: next }]);
+    }),
     swap: {
       findMany: jest.fn().mockResolvedValue([]),
       count: jest.fn().mockResolvedValue(0),
@@ -45,7 +59,9 @@ describe('Swaps guards (e2e)', () => {
       .useValue(prismaMock)
       .compile();
 
-    app = moduleRef.createNestApplication();
+    app = moduleRef.createNestApplication<NestExpressApplication>();
+    // As main.ts does: the address a limit keys on is the one APISIX appends.
+    app.set('trust proxy', 1);
     app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
     // As main.ts does. Without it a ValidationPipe 400 carries no `code`, and
     // the envelope integrators branch on would go untested.
@@ -67,6 +83,7 @@ describe('Swaps guards (e2e)', () => {
   beforeEach(() => {
     prismaMock.swap.findMany.mockClear();
     prismaMock.swap.findFirst.mockClear();
+    counters.clear();
   });
 
   type Route = readonly [method: 'get' | 'post', path: string];
@@ -205,4 +222,65 @@ describe('Swaps guards (e2e)', () => {
       }
     },
   );
+
+  describe(`the rate limit on ${label(SUBMIT)}`, () => {
+    const { limit } = SWAP_SUBMIT_RATE_LIMIT;
+    const ADDRESS = '203.0.113.7';
+
+    /**
+     * An anonymous wallet on the shared public key, from `address` as APISIX
+     * forwards it. The body is well-formed, so an allowed call reaches the
+     * service and comes back 404 (no such swap under this consumer).
+     */
+    const anonymousSubmit = (address: string) =>
+      request(app.getHttpServer())
+        .post(SUBMIT[1])
+        .set('x-gateway-secret', SECRET)
+        .set(PUBLIC_KEY_IDENTITIES[0][1])
+        .set('x-consumer-permissions', 'swaps:write')
+        .set('x-forwarded-for', address)
+        .send({ signedXdr: 'AAAA' });
+
+    const spend = async (address: string, calls: number) => {
+      for (let i = 0; i < calls; i++) {
+        await anonymousSubmit(address).expect(404);
+      }
+    };
+
+    it('reports the budget of its own policy', async () => {
+      const res = await anonymousSubmit(ADDRESS).expect(404);
+
+      expect(res.headers['ratelimit-limit']).toBe(String(limit));
+      expect(res.headers['ratelimit-remaining']).toBe(String(limit - 1));
+    });
+
+    it('refuses an address past its budget before the swap is read (429)', async () => {
+      await spend(ADDRESS, limit);
+      prismaMock.swap.findFirst.mockClear();
+
+      const refused = await anonymousSubmit(ADDRESS).expect(429);
+
+      expect(refused.body.code).toBe('rate_limited');
+      expect(refused.headers['retry-after']).toBeDefined();
+      expect(prismaMock.swap.findFirst).not.toHaveBeenCalled();
+    });
+
+    it('keeps anonymous wallets on different addresses apart', async () => {
+      // One shared consumer, so the address is the only thing separating them.
+      await spend(ADDRESS, limit);
+      await anonymousSubmit(ADDRESS).expect(429);
+
+      await anonymousSubmit('198.51.100.4').expect(404);
+    });
+
+    it('does not spend the budget of the routes that build swaps', async () => {
+      await spend(ADDRESS, limit);
+      await anonymousSubmit(ADDRESS).expect(429);
+
+      const res = await publicKey(CREATE, PUBLIC_KEY_IDENTITIES[0][1])
+        .set('x-forwarded-for', ADDRESS)
+        .expect(400);
+      expect(res.body.code).toBe('validation_failed');
+    });
+  });
 });

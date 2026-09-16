@@ -37,6 +37,8 @@ import {
   ValidationOutcomeEntity,
 } from '@/payment-intents/entities/payment-intent.entity';
 import { PaymentIntentsService } from '@/payment-intents/payment-intents.service';
+import { RateLimit } from '@/common/decorators/rate-limit.decorator';
+import { PAYMENT_INTENT_BUILD_RATE_LIMIT } from '@/payment-intents/payment-intents.constants';
 
 /**
  * The 409 both creates return. Documented per route because the generic 409
@@ -63,6 +65,9 @@ export class PaymentIntentsController {
   // Builds a SEP-7 intent from the request.
   @AllowPublicKey()
   @RequirePermissions('payments:write')
+  // Reads the payer's account from Horizon and writes a row, on the shared
+  // public key where the address is all that separates anonymous wallets.
+  @RateLimit(PAYMENT_INTENT_BUILD_RATE_LIMIT)
   @ApiOperation({
     summary:
       'Create a SEP-7 `tx` intent (source known → unsigned XDR + tx URI + QR)',
@@ -80,6 +85,8 @@ export class PaymentIntentsController {
   // Builds a SEP-7 pay link from the request.
   @AllowPublicKey()
   @RequirePermissions('payments:write')
+  // Same budget as `tx`: one bucket for the one step they spell two ways.
+  @RateLimit(PAYMENT_INTENT_BUILD_RATE_LIMIT)
   @ApiOperation({
     summary: 'Create a SEP-7 `pay` intent (no source → pay URI + QR, no XDR)',
   })

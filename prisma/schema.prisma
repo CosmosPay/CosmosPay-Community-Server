@@ -328,8 +328,9 @@ model PaymentIntent {
   // Artifacts. `xdr` is null for PAY intents; QR is derived from `uri` on read.
   xdr       String?
   uri       String
-  // Set once a signed transaction is submitted/confirmed.
-  txHash    String? @unique
+  // Set once a signed transaction is submitted/confirmed. Lowercase hex, and
+  // unique per consumer (the @@unique below), not across the table.
+  txHash    String?
   reference String? // optional merchant reference
 
   // Lifetime: an unpaid intent past this instant is auto-finalized to EXPIRED by
@@ -346,6 +347,11 @@ model PaymentIntent {
   horizonCursor HorizonAccountCursor?
 
   @@unique([consumerId, memo]) // idempotency: one intent per (consumer, memo)
+  // One transaction settles at most one of a consumer's intents. Scoped to the
+  // consumer because PATCH records a reported hash unverified: unique across
+  // the table, any tenant could park another tenant's hash on an intent of its
+  // own and make that tenant's settlement fail on the index.
+  @@unique([consumerId, txHash])
   @@index([consumerId])
   @@index([status])
   // Listing endpoint: filter by consumer, order createdAt desc.
@@ -396,21 +402,25 @@ model BlindpayReceiver {
   consumerId String
   consumer   Consumer @relation(fields: [consumerId], references: [id], onDelete: Cascade)
 
+  // The BlindPay instance this row lives on: 'prod' or 'dev', from the API key
+  // that created it. A tenant's dev and prod keys resolve to one consumer, so
+  // every read filters on this too — see BlindpaySyncService.
+  environment String  @default("prod")
   // BlindPay receiver id (`re_...`).
-  blindpayId String
+  blindpayId  String
   // 'individual' | 'business'.
-  type       String
+  type        String
   // 'light' | 'standard' | 'enhanced'.
-  kycType    String?
+  kycType     String?
   // BlindPay KYC status. Receivers start as 'inactive' (created locally, not yet at
   // BlindPay) until the terms-of-service are accepted and the receiver is enabled,
   // at which point this becomes BlindPay's real status — see ReceiversService.
-  kycStatus  String?
-  email      String?
-  name       String?
-  country    String?
-  externalId String?
-  reference  String? // optional merchant reference
+  kycStatus   String?
+  email       String?
+  name        String?
+  country     String?
+  externalId  String?
+  reference   String? // optional merchant reference
 
   // Last time a terms-of-service link was emailed for this receiver — rate limits the
   // "email me the ToS" action to at most once per day.
@@ -422,6 +432,21 @@ model BlindpayReceiver {
   disabled Boolean @default(false)
 
   raw Json?
+
+  // Which dossier an elevated reviewer signed off on.
+  //
+  // `dossierVersion` counts edits to `raw` made through this service while the
+  // receiver is still local — the submitted KYC data. `reviewedVersion` is the
+  // value it had when `approve` accepted it. They are equal exactly while the
+  // approved data is the data that was read, and `enable` refuses to send
+  // anything else to BlindPay: review, edit, enable would otherwise put a
+  // never-reviewed identity in front of a regulated provider.
+  //
+  // The sync service also rewrites `raw`, from BlindPay's own view of a receiver
+  // that already exists there. That is not a dossier edit and does not count:
+  // by then the identity was created and review is over.
+  dossierVersion  Int  @default(1)
+  reviewedVersion Int?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -447,6 +472,7 @@ model BlindpayBlockchainWallet {
   receiverId String
   receiver   BlindpayReceiver @relation(fields: [receiverId], references: [id], onDelete: Cascade)
 
+  environment          String  @default("prod") // BlindPay instance, see BlindpayReceiver
   blindpayId           String // `bw_...`
   name                 String?
   network              String
@@ -472,10 +498,11 @@ model BlindpayBankAccount {
   receiverId String
   receiver   BlindpayReceiver @relation(fields: [receiverId], references: [id], onDelete: Cascade)
 
-  blindpayId String // `ba_...`
-  rail       String?
-  name       String?
-  country    String?
+  environment String  @default("prod") // BlindPay instance, see BlindpayReceiver
+  blindpayId  String // `ba_...`
+  rail        String?
+  name        String?
+  country     String?
 
   raw Json?
 
@@ -496,6 +523,7 @@ model BlindpayVirtualAccount {
   receiverId String
   receiver   BlindpayReceiver @relation(fields: [receiverId], references: [id], onDelete: Cascade)
 
+  environment        String  @default("prod") // BlindPay instance, see BlindpayReceiver
   blindpayId         String // `va_...`
   blockchainWalletId String?
   token              String?
@@ -521,6 +549,7 @@ model Payin {
   receiverId String?
   receiver   BlindpayReceiver? @relation(fields: [receiverId], references: [id], onDelete: SetNull)
 
+  environment    String  @default("prod") // BlindPay instance, see BlindpayReceiver
   blindpayId     String // `pi_...`
   quoteId        String?
   status         String?
@@ -556,6 +585,7 @@ model Payout {
   receiverId String?
   receiver   BlindpayReceiver? @relation(fields: [receiverId], references: [id], onDelete: SetNull)
 
+  environment         String  @default("prod") // BlindPay instance, see BlindpayReceiver
   blindpayId          String // `pa_...`
   quoteId             String?
   status              String?
@@ -597,9 +627,11 @@ model BlindpayQuote {
   consumerId String
   consumer   Consumer @relation(fields: [consumerId], references: [id], onDelete: Cascade)
 
+  /// The BlindPay instance the quote was minted on — see BlindpayReceiver.
+  environment String            @default("prod")
   /// The upstream BlindPay quote id (`pq_…` for payins, `qu_…` for payouts).
-  blindpayId String
-  kind       BlindpayQuoteKind
+  blindpayId  String
+  kind        BlindpayQuoteKind
 
   createdAt DateTime @default(now())
 
@@ -1293,7 +1325,9 @@ model AliasRecovery {
 
   expiresAt  DateTime
   consumedAt DateTime?
-  /// Wrong-token attempts against this recovery. The ladder is in the service.
+  /// Presentations of this recovery's own token, checked and counted in one
+  /// statement; a token that names no live recovery counts nothing. The ladder
+  /// is in the service.
   attempts   Int       @default(0)
 
   createdAt DateTime @default(now())

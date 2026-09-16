@@ -1,4 +1,5 @@
 import type { SwapStatus, WebhookEventType } from '@generated/prisma/client';
+import { SETTLEMENT_MAX_RESUBMITS } from '@/stellar/stellar.constants';
 
 /** The columns the settlement machine needs, whatever the row otherwise holds. */
 export interface SettlementRow {
@@ -13,7 +14,11 @@ export interface SettlementRow {
  */
 export interface SettlementDelegate<TRow> {
   updateMany(args: {
-    where: { id: string; status?: { in: SwapStatus[] } | SwapStatus };
+    where: {
+      id: string;
+      status?: { in: SwapStatus[] } | SwapStatus;
+      settlementEpoch?: { lt: number };
+    };
     data: Record<string, unknown>;
   }): Promise<{ count: number }>;
   findUniqueOrThrow(args: { where: { id: string } }): Promise<TRow>;
@@ -95,10 +100,20 @@ export class SettlementRepository<TRow extends SettlementRow> {
    * The resubmission path bumps `settlementEpoch`, which is what lets the
    * terminal-event dedup key tell a second attempt apart from the first. Without
    * it a retry after a failure could never announce its own outcome.
+   *
+   * It bumps only below {@link SETTLEMENT_MAX_RESUBMITS}, in the same statement.
+   * The relay refuses an exhausted row before calling this, but concurrent
+   * resubmits each read the row before any of them writes, so a bound checked
+   * only there lets every one of them through. At the cap the row comes back
+   * still FAILED, with `applied: false`.
    */
   async markSubmitted(id: string): Promise<SettlementOutcome<TRow>> {
     const resent = await this.delegate.updateMany({
-      where: { id, status: 'FAILED' },
+      where: {
+        id,
+        status: 'FAILED',
+        settlementEpoch: { lt: SETTLEMENT_MAX_RESUBMITS },
+      },
       data: { status: 'SUBMITTED', settlementEpoch: { increment: 1 } },
     });
     if (resent.count > 0) {

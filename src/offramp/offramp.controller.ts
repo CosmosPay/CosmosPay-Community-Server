@@ -8,6 +8,13 @@ import {
 } from '@nestjs/swagger';
 import { CurrentConsumer } from '@/common/decorators/current-consumer.decorator';
 import { RequirePermissions } from '@/common/decorators/require-permissions.decorator';
+import { RateLimit } from '@/common/decorators/rate-limit.decorator';
+import { BLINDPAY_CONSUMER_QUOTA_RATE_LIMIT } from '@/blindpay/blindpay.constants';
+import {
+  OFFRAMP_DOCUMENT_RATE_LIMIT,
+  OFFRAMP_PAYOUT_RATE_LIMIT,
+  OFFRAMP_QUOTE_RATE_LIMIT,
+} from '@/offramp/offramp.constants';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import { OfframpService } from '@/offramp/offramp.service';
 import { CreatePayoutQuoteDto } from '@/offramp/dto/create-payout-quote.dto';
@@ -28,6 +35,8 @@ export class OfframpController {
 
   @Post('quotes')
   @RequirePermissions('offramp:write')
+  // A provider call on the instance every tenant shares, plus a stored row.
+  @RateLimit(OFFRAMP_QUOTE_RATE_LIMIT, BLINDPAY_CONSUMER_QUOTA_RATE_LIMIT)
   @ApiOperation({
     summary: 'Create a payout quote (EVM quote carries the approve contract)',
   })
@@ -41,6 +50,8 @@ export class OfframpController {
 
   @Post('payouts/authorize')
   @RequirePermissions('offramp:write')
+  // One budget with the payout it prepares — see OFFRAMP_PAYOUT_RATE_LIMIT.
+  @RateLimit(OFFRAMP_PAYOUT_RATE_LIMIT, BLINDPAY_CONSUMER_QUOTA_RATE_LIMIT)
   @ApiOperation({
     summary: 'Build the unsigned Stellar/Solana payout tx to sign',
   })
@@ -53,6 +64,8 @@ export class OfframpController {
 
   @Post('payouts')
   @RequirePermissions('offramp:write')
+  // Money leaving: an error afterwards does not bring it back.
+  @RateLimit(OFFRAMP_PAYOUT_RATE_LIMIT, BLINDPAY_CONSUMER_QUOTA_RATE_LIMIT)
   @ApiOperation({ summary: 'Create a payout from a quote' })
   @ApiCreatedResponse({ type: PayoutEntity })
   createPayout(
@@ -89,6 +102,8 @@ export class OfframpController {
 
   @Post('payouts/:id/documents')
   @RequirePermissions('offramp:write')
+  // The provider keeps what it is handed.
+  @RateLimit(OFFRAMP_DOCUMENT_RATE_LIMIT, BLINDPAY_CONSUMER_QUOTA_RATE_LIMIT)
   @ApiOperation({ summary: 'Attach a compliance document to a payout' })
   addDocument(
     @CurrentConsumer() consumer: GatewayConsumer,

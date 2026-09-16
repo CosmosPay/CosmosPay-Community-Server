@@ -1,3 +1,5 @@
+import type { StellarNetwork } from '@/config/configuration';
+
 /**
  * Protocol facts and policy knobs for the Pollar integration.
  *
@@ -79,13 +81,6 @@ export const POLLAR_CODE_BYTES = 32;
 export const POLLAR_PKCE_METHOD = 'S256';
 
 /**
- * Hosts that count as a loopback redirect target. A native wallet listens on an
- * ephemeral port here to catch the code, so the allow-list matches the host and
- * lets the port float (RFC 8252 §7.3).
- */
-export const LOOPBACK_HOSTS = new Set(['127.0.0.1', '[::1]', 'localhost']);
-
-/**
  * Pollar client-session status codes that can never become ready. The bridge
  * turns these into a terminal handshake rather than waiting out the budget.
  */
@@ -158,9 +153,11 @@ export const POLLAR_CALLBACK_RATE_LIMIT = {
 };
 
 /**
- * Provisioning a wallet directly, with no user in the loop at all. The tightest
- * of the set: there is no consent screen pacing it, so the limit is the only
- * thing standing between a script and the funding wallet.
+ * Registering users directly — `POST /users` and `POST /users/with-wallet`, one
+ * bucket for both — with no user in the loop at all. The tightest of the set:
+ * there is no consent screen pacing it, so beyond the elevated key both routes
+ * require, the limit is the only thing standing between a script and the
+ * funding wallet.
  */
 export const POLLAR_PROVISION_RATE_LIMIT = {
   name: 'pollar:provision',
@@ -195,17 +192,115 @@ export const POLLAR_TRUSTLINE_RATE_LIMIT = {
   windowMs: WINDOW_MS,
 };
 
+/**
+ * Removing a trustline. It frees reserve rather than locking it, so it stays out
+ * of the adding routes' bucket, but it is still one Pollar request per call.
+ */
+export const POLLAR_TRUSTLINE_REMOVE_RATE_LIMIT = {
+  name: 'pollar:trustlines:remove',
+  limit: 20,
+  windowMs: WINDOW_MS,
+};
+
+/**
+ * Polling a login. A wallet repeats it every couple of seconds while someone reads
+ * a consent screen, so the budget is sized for that — 300 polls in ten minutes at
+ * a two-second cadence — with room to spare. What it bounds is everything past
+ * that: each poll can cost a Pollar request, at most one per handshake per
+ * `POLLAR_SESSION_PROBE_INTERVAL_MS`.
+ */
+export const POLLAR_POLL_RATE_LIMIT = {
+  name: 'pollar:poll',
+  limit: 400,
+  windowMs: WINDOW_MS,
+};
+
+/**
+ * Refreshing and revoking a session: one Pollar request each and nothing spent on
+ * chain. One bucket for both, because a wallet does either a handful of times an
+ * hour and a loop alternating them should not get twice the budget.
+ */
+export const POLLAR_SESSION_RATE_LIMIT = {
+  name: 'pollar:session',
+  limit: 60,
+  windowMs: WINDOW_MS,
+};
+
+/**
+ * Verifying an end-user token. A backend may check each request its users make,
+ * so this is the loosest of the routes that call Pollar per request.
+ */
+export const POLLAR_VERIFY_RATE_LIMIT = {
+  name: 'pollar:verify',
+  limit: 120,
+  windowMs: WINDOW_MS,
+};
+
+// --- Per-consumer ceilings ---------------------------------------------------
+//
+// Every budget above is per address, which tells one ordinary caller from
+// another and does nothing against a tenant with many addresses. These two are
+// per consumer, so rotating addresses does not multiply them. A console call is
+// exempt from both (see `RateLimitPolicy.per`): the dev platform brokers every
+// keyless wallet through a single consumer and budgets that traffic itself.
+
+/**
+ * Every Pollar request one consumer may cause in a minute, on the routes that
+ * make one per call. Pollar budgets a key at 200 a minute and every tenant shares
+ * the key, so one tenant could otherwise take the whole budget and fail every
+ * other tenant's logins. Half of it is far above one tenant's honest use and
+ * leaves the other half standing. The poll is not counted: its provider requests
+ * are already paced per handshake.
+ */
+export const POLLAR_CONSUMER_QUOTA_RATE_LIMIT = {
+  name: 'pollar:quota',
+  limit: 100,
+  windowMs: 60 * 1000,
+  per: 'consumer' as const,
+};
+
+/**
+ * Wallets one consumer may cause in a day, counted where they start: every
+ * `authorize` — a consent on the login link can create and fund a wallet at
+ * Pollar even when the bridge then refuses the session to a different account —
+ * and every `users/with-wallet`. Fifty is far beyond what one account's own
+ * logins need.
+ */
+export const POLLAR_WALLET_DAILY_RATE_LIMIT = {
+  name: 'pollar:wallets:daily',
+  limit: 50,
+  windowMs: 24 * 60 * 60 * 1000,
+  per: 'consumer' as const,
+};
+
 // --- Cross-network wallet provisioning -------------------------------------
 //
 // A hosted login produces a wallet on exactly one network: Pollar runs mainnet
 // and testnet as two separate applications with two separate key pairs, and the
-// client session belongs to one of them. So after a redemption the bridge asks
-// the *other* network's Server API to register the same user with a wallet.
+// client session belongs to one of them. So after a mainnet redemption the bridge
+// asks testnet's Server API to register the same user with a wallet — and not the
+// other way round, see POLLAR_COUNTERPART_NETWORK.
 //
 // That second call is best-effort by design. It spends the operator's XLM, it
 // talks to an API that may be down, and it may have no key configured at all —
 // none of which is a reason to fail a login that already succeeded. A failure
 // leaves the row PENDING and the sweeper picks it up.
+
+/**
+ * The network a login also provisions its user a wallet on, or null for none.
+ *
+ * A mainnet login provisions testnet, whose reserve is test XLM. A testnet login
+ * provisions nothing: testnet is where `dev` keys land, and a key anyone can mint
+ * for free must not spend the operator's real XLM on a mainnet reserve per login.
+ * That user gets their mainnet wallet from their first mainnet login instead.
+ */
+export const POLLAR_COUNTERPART_NETWORK: Record<
+  StellarNetwork,
+  StellarNetwork | null
+> = {
+  public: 'testnet',
+  testnet: null,
+};
 
 /**
  * Budget for the counterpart call made *inside* a redemption. Much shorter than

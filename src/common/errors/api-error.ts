@@ -37,6 +37,13 @@ export enum ApiErrorCode {
    * a per-service admin secret that no longer exists.
    */
   AdminConsoleOnly = 'admin_console_only',
+  /**
+   * The route writes to something every tenant shares — today the Pollar
+   * application's user directory — so only an elevated (admin) key may call it.
+   * Distinct from `insufficient_scope`: granting the key more scopes would not
+   * help.
+   */
+  ElevatedKeyRequired = 'elevated_key_required',
 
   // --- resources -----------------------------------------------------------
   NotFound = 'not_found',
@@ -104,6 +111,20 @@ export enum ApiErrorCode {
   AliasRecoveryInvalid = 'alias_recovery_invalid',
   /** This address is already on the alias, or the alias is at its address cap. */
   AliasAddressConflict = 'alias_address_conflict',
+
+  // --- Pollar ----------------------------------------------------------------
+  /**
+   * The gateway forwarded no account email for this key, so a Pollar login
+   * cannot be tied to the account that opened it. Every tenant shares one Pollar
+   * application: a session handed to a key that cannot say whose it is would be
+   * a session for whoever consented on its link.
+   */
+  PollarIdentityRequired = 'pollar_identity_required',
+  /**
+   * The person who completed the Pollar login is not the account that holds the
+   * key. The session was revoked at Pollar and never returned.
+   */
+  PollarIdentityMismatch = 'pollar_identity_mismatch',
 
   // --- service --------------------------------------------------------------
   Misconfigured = 'misconfigured',

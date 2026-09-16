@@ -1,5 +1,7 @@
 import { BlindpayOnrampApi } from '@/blindpay/blindpay-onramp.api';
 import { VIRTUAL_ACCOUNT_PUBLIC_SELECT } from '@/blindpay/blindpay-sync.service';
+import { ApiErrorCode } from '@/common/errors/api-error';
+import { ReceiversService } from '@/kyc/receivers/receivers.service';
 import { VirtualAccountsService } from '@/onramp/virtual-accounts/virtual-accounts.service';
 
 const CONSUMER = { username: 'cosmos_u1' } as any;
@@ -30,13 +32,21 @@ function project(
   );
 }
 
-function makeService() {
+function makeService(
+  opts: { receiverDisabled?: boolean; walletOwnerDisabled?: boolean } = {},
+) {
   const prisma: any = {
     blindpayBlockchainWallet: {
       findFirst: jest.fn().mockResolvedValue({
         id: 'bw_local',
         blindpayId: 'bw_000000000001',
+        receiverId: 'rcv_wallet_owner',
       }),
+    },
+    blindpayReceiver: {
+      findUnique: jest
+        .fn()
+        .mockResolvedValue({ disabled: Boolean(opts.walletOwnerDisabled) }),
     },
     blindpayVirtualAccount: {
       // Stored whole, as PostgreSQL would hold it, and read back through
@@ -59,13 +69,19 @@ function makeService() {
   const blindpay = {
     post: jest.fn().mockResolvedValue(PROVIDER_VIRTUAL_ACCOUNT),
     instancePath: jest.fn((p: string) => `/instances/in_test${p}`),
+    environmentFor: jest.fn(() => 'prod'),
+    instance: jest.fn(),
   };
+  blindpay.instance.mockReturnValue(blindpay);
   const consumers = { resolve: jest.fn().mockResolvedValue({ id: 'c1' }) };
   const receivers = {
     findReceiverOrThrow: jest.fn().mockResolvedValue({
       id: 'rcv_local',
       blindpayId: 're_000000000001',
+      disabled: Boolean(opts.receiverDisabled),
     }),
+    // The real rule, so the spec tests the kill switch rather than a stub of it.
+    assertEnabled: ReceiversService.prototype.assertEnabled,
   };
   const service = new VirtualAccountsService(
     prisma,
@@ -73,8 +89,32 @@ function makeService() {
     consumers as any,
     receivers as any,
   );
-  return { service, prisma };
+  return { service, prisma, blindpay };
 }
+
+describe('VirtualAccountsService kill switch', () => {
+  it('refuses a disabled receiver before anything reaches BlindPay', async () => {
+    const { service, blindpay } = makeService({ receiverDisabled: true });
+
+    await expect(
+      service.create(CONSUMER, 'rcv_local', {
+        blockchain_wallet_id: 'bw_local',
+      } as any),
+    ).rejects.toMatchObject({ code: ApiErrorCode.AccountDisabled });
+    expect(blindpay.post).not.toHaveBeenCalled();
+  });
+
+  it('refuses a destination wallet whose own receiver is disabled', async () => {
+    const { service, blindpay } = makeService({ walletOwnerDisabled: true });
+
+    await expect(
+      service.create(CONSUMER, 'rcv_local', {
+        blockchain_wallet_id: 'bw_local',
+      } as any),
+    ).rejects.toMatchObject({ code: ApiErrorCode.AccountDisabled });
+    expect(blindpay.post).not.toHaveBeenCalled();
+  });
+});
 
 describe('VirtualAccountsService.create', () => {
   it('returns the public projection, not the provider payload it mirrored', async () => {

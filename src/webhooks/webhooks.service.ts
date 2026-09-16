@@ -6,6 +6,7 @@ import { PrismaService } from '@/prisma/prisma.service';
 import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import type {
+  Prisma,
   WebhookDelivery,
   WebhookEndpoint,
 } from '@generated/prisma/client';
@@ -17,8 +18,49 @@ import { WebhookDispatcherService } from '@/webhooks/webhook-dispatcher.service'
 import { WebhookDestinationGuard } from '@/webhooks/webhook-destination.guard';
 import { WebhookUrlValidationError } from '@/webhooks/webhook-url.validator';
 
-// Endpoint without the signing secret — what list/get responses return.
-export type SafeWebhookEndpoint = Omit<WebhookEndpoint, 'secret'>;
+/**
+ * The columns an endpoint may leave this service with: the exact field list of
+ * `WebhookEndpointEntity`. List, get and update all read through it.
+ *
+ * This is an allowlist because the denylist it replaced removed `secret` and
+ * returned every other column, including any column added later. Migration
+ * `20260825200000_webhook_previous_secret` added `previousSecret` and
+ * `previousSecretExpiresAt` for grace-window rotation, and both went straight
+ * out through `GET /v1/webhooks`. A key holding only `webhooks:read` could read
+ * the old signing secret and sign events that any integrator still accepting
+ * it would trust. `consumerId`, an internal id, leaked the same way. A column
+ * added to the table now stays in the table until someone lists it here.
+ */
+export const WEBHOOK_ENDPOINT_PUBLIC_SELECT = {
+  id: true,
+  url: true,
+  description: true,
+  enabled: true,
+  destinationBlocked: true,
+  eventTypes: true,
+  createdAt: true,
+  updatedAt: true,
+} as const satisfies Prisma.WebhookEndpointSelect;
+
+/**
+ * The public projection plus the current `secret`: the exact field list of
+ * `WebhookEndpointWithSecretEntity`, returned by create and rotate-secret. Those
+ * two routes hand back the new secret once and never return the previous one.
+ */
+export const WEBHOOK_ENDPOINT_WITH_SECRET_SELECT = {
+  ...WEBHOOK_ENDPOINT_PUBLIC_SELECT,
+  secret: true,
+} as const satisfies Prisma.WebhookEndpointSelect;
+
+/** An endpoint as list/get/update return it. */
+export type PublicWebhookEndpoint = Prisma.WebhookEndpointGetPayload<{
+  select: typeof WEBHOOK_ENDPOINT_PUBLIC_SELECT;
+}>;
+
+/** An endpoint as create/rotate-secret return it. */
+export type WebhookEndpointWithSecret = Prisma.WebhookEndpointGetPayload<{
+  select: typeof WEBHOOK_ENDPOINT_WITH_SECRET_SELECT;
+}>;
 
 // Delivery without the sent body — see listDeliveries for why the body is not
 // readable back through an endpoint gated on `webhooks:read`.
@@ -43,17 +85,12 @@ export class WebhooksService {
     return `whsec_${randomBytes(24).toString('hex')}`;
   }
 
-  private strip(endpoint: WebhookEndpoint): SafeWebhookEndpoint {
-    const { secret: _secret, ...safe } = endpoint;
-    return safe;
-  }
-
   // ── CRUD: endpoints ─────────────────────────────────────────────────────────
-  /** Returns the full endpoint INCLUDING the secret — shown only once, here. */
+  /** Returns the endpoint WITH its signing secret — shown only once, here. */
   async create(
     consumer: GatewayConsumer,
     dto: CreateWebhookEndpointDto,
-  ): Promise<WebhookEndpoint> {
+  ): Promise<WebhookEndpointWithSecret> {
     await this.assertUrlAllowed(dto.url);
     const localConsumer = await this.resolveConsumer(consumer);
 
@@ -66,6 +103,7 @@ export class WebhooksService {
         eventTypes: dto.eventTypes ?? [],
         destinationBlocked: false,
       },
+      select: WEBHOOK_ENDPOINT_WITH_SECRET_SELECT,
     });
 
     this.logger.log(
@@ -88,42 +126,45 @@ export class WebhooksService {
     consumer: GatewayConsumer,
     query: QueryEndpointsDto,
   ): Promise<{
-    data: SafeWebhookEndpoint[];
+    data: PublicWebhookEndpoint[];
     total: number;
     take: number;
     skip: number;
   }> {
     const where = { consumer: { apisixUsername: consumer.username } };
     // `Promise.all`, not `$transaction` — see `@/common/pagination` for why.
-    const [endpoints, total] = await Promise.all([
+    const [data, total] = await Promise.all([
       this.prisma.webhookEndpoint.findMany({
         where,
         orderBy: { createdAt: 'desc' },
         take: query.take,
         skip: query.skip,
+        select: WEBHOOK_ENDPOINT_PUBLIC_SELECT,
       }),
       this.prisma.webhookEndpoint.count({ where }),
     ]);
-    return {
-      data: endpoints.map((e) => this.strip(e)),
-      total,
-      take: query.take,
-      skip: query.skip,
-    };
+    return { data, total, take: query.take, skip: query.skip };
   }
 
   async findOne(
     consumer: GatewayConsumer,
     id: string,
-  ): Promise<SafeWebhookEndpoint> {
-    return this.strip(await this.getOwned(consumer, id));
+  ): Promise<PublicWebhookEndpoint> {
+    const endpoint = await this.prisma.webhookEndpoint.findFirst({
+      where: this.ownedBy(consumer, id),
+      select: WEBHOOK_ENDPOINT_PUBLIC_SELECT,
+    });
+    if (!endpoint) {
+      throw this.endpointNotFound(id);
+    }
+    return endpoint;
   }
 
   async update(
     consumer: GatewayConsumer,
     id: string,
     dto: UpdateWebhookEndpointDto,
-  ): Promise<SafeWebhookEndpoint> {
+  ): Promise<PublicWebhookEndpoint> {
     const current = await this.getOwned(consumer, id);
     if (dto.url !== undefined) {
       await this.assertUrlAllowed(dto.url);
@@ -144,9 +185,10 @@ export class WebhooksService {
         ...(dto.eventTypes !== undefined ? { eventTypes: dto.eventTypes } : {}),
         ...(clearBlock ? { destinationBlocked: false } : {}),
       },
+      select: WEBHOOK_ENDPOINT_PUBLIC_SELECT,
     });
     this.logger.log(`Updated webhook endpoint ${id} for ${consumer.username}`);
-    return this.strip(updated);
+    return updated;
   }
 
   async remove(
@@ -163,11 +205,12 @@ export class WebhooksService {
   async rotateSecret(
     consumer: GatewayConsumer,
     id: string,
-  ): Promise<WebhookEndpoint> {
+  ): Promise<WebhookEndpointWithSecret> {
     await this.getOwned(consumer, id);
     const updated = await this.prisma.webhookEndpoint.update({
       where: { id },
       data: { secret: this.generateSecret() },
+      select: WEBHOOK_ENDPOINT_WITH_SECRET_SELECT,
     });
     this.logger.log(`Rotated secret for webhook endpoint ${id}`);
     return updated;
@@ -260,25 +303,59 @@ export class WebhooksService {
     return this.dispatcher.pingEndpoint(endpoint);
   }
 
-  /** Loads an endpoint or throws 404 unless it belongs to the consumer. */
+  /**
+   * Loads the FULL endpoint row, or throws 404 unless it belongs to the consumer.
+   *
+   * Internal only: the row carries the signing secrets, so it feeds the
+   * dispatcher and the ownership checks and is never returned. A response goes
+   * through {@link WEBHOOK_ENDPOINT_PUBLIC_SELECT} instead.
+   */
   private async getOwned(
     consumer: GatewayConsumer,
     id: string,
   ): Promise<WebhookEndpoint> {
     const endpoint = await this.prisma.webhookEndpoint.findFirst({
-      where: { id, consumer: { apisixUsername: consumer.username } },
+      where: this.ownedBy(consumer, id),
     });
     if (!endpoint) {
-      throw ApiError.notFound(`Webhook endpoint ${id} not found`);
+      throw this.endpointNotFound(id);
     }
     return endpoint;
   }
 
+  /** The tenant filter every endpoint lookup shares. */
+  private ownedBy(
+    consumer: GatewayConsumer,
+    id: string,
+  ): Prisma.WebhookEndpointWhereInput {
+    return { id, consumer: { apisixUsername: consumer.username } };
+  }
+
+  /**
+   * Unknown and someone else's endpoint are one answer: "exists but not yours"
+   * would be an ownership oracle.
+   */
+  private endpointNotFound(id: string): ApiError {
+    return ApiError.notFound(`Webhook endpoint ${id} not found`);
+  }
+
+  /**
+   * Refuses a destination this service must not be made to connect to.
+   *
+   * The 400 repeats `message` and never `detail`: a host-dependent refusal says
+   * only that the host is not allowed, because the reason is a fact about this
+   * network and the caller is asking. The reason goes to the log, where the
+   * operator — who may already know it — is the only reader. See
+   * `webhook-url.validator.ts`.
+   */
   private async assertUrlAllowed(url: string): Promise<void> {
     try {
       await this.destinations.assertSafe(url);
     } catch (err) {
       if (err instanceof WebhookUrlValidationError) {
+        this.logger.warn(
+          `Refused webhook destination: ${err.detail ?? err.message}`,
+        );
         throw ApiError.badRequest(ApiErrorCode.ValidationFailed, err.message);
       }
       throw err;

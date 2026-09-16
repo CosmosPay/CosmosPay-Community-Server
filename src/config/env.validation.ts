@@ -15,6 +15,7 @@ import {
   type ValidationError,
 } from 'class-validator';
 import { StrKey } from '@stellar/stellar-sdk';
+import { isLoopbackHttpUrl } from '@/common/loopback';
 
 const URL_OPTIONS = {
   require_protocol: true,
@@ -28,6 +29,19 @@ import {
   DEFAULT_SWAP_SLIPPAGE_BPS,
 } from '@/config/config.constants';
 import { POLLAR_KEY_PREFIX } from '@/config/pollar-key-prefix';
+import { decodeSvixSecret } from '@/blindpay/blindpay-signature';
+import { SVIX_MIN_SECRET_BYTES } from '@/blindpay/blindpay.constants';
+
+/**
+ * Gateway secrets that are documentation, not secrets. `.env.example` used to
+ * ship `replace-with-a-long-random-secret-min-32-chars`, which clears the
+ * 32-character floor — so a deployment that copied the example and never
+ * replaced it booted behind a value printed in a public repository, and anyone
+ * who could reach the pod could name any consumer and reach `/v1/admin`. No
+ * generated secret (hex or base64) can contain these words with separators.
+ */
+const PLACEHOLDER_SECRET_RE =
+  /replace[-_ ]?(with|me)|change[-_ ]?me|your[-_ ]?secret|placeholder/i;
 
 /**
  * Schema used by ConfigModule to fail fast at boot if the environment is
@@ -95,6 +109,10 @@ class EnvironmentVariables {
   @IsOptional()
   @IsString()
   APISIX_SWAP_FEE_BPS_HEADER?: string;
+
+  @IsOptional()
+  @IsString()
+  APISIX_EMAIL_HEADER?: string;
 
   /**
    * APISIX username of the shared public consumer (the wallet's embedded key),
@@ -289,6 +307,21 @@ class EnvironmentVariables {
   @IsString()
   BLINDPAY_WEBHOOK_SECRET?: string;
 
+  // The development instance, served to `dev` API keys. Same rules as the
+  // production trio above; unset means dev keys get 503 `misconfigured` from
+  // every BlindPay route instead of reaching production.
+  @IsOptional()
+  @IsString()
+  BLINDPAY_API_KEY_DEV?: string;
+
+  @IsOptional()
+  @IsString()
+  BLINDPAY_INSTANCE_ID_DEV?: string;
+
+  @IsOptional()
+  @IsString()
+  BLINDPAY_WEBHOOK_SECRET_DEV?: string;
+
   @IsOptional()
   @IsInt()
   @Min(1)
@@ -414,7 +447,7 @@ function formatValidationErrors(errors: ValidationError[]): string {
     .join('\n');
 }
 
-function isNonEmpty(value: string | undefined): boolean {
+function isNonEmpty(value: string | undefined): value is string {
   return value != null && value.trim() !== '';
 }
 
@@ -476,6 +509,14 @@ export function validateEnv(config: Record<string, unknown>) {
     );
   }
 
+  if (PLACEHOLDER_SECRET_RE.test(validated.APISIX_GATEWAY_SECRET)) {
+    throw new Error(
+      'APISIX_GATEWAY_SECRET is still a placeholder: it is the only thing between ' +
+        '"arrived through APISIX" and anyone who can reach this service. Generate ' +
+        'one (openssl rand -hex 32) and set the same value on the gateway route.',
+    );
+  }
+
   const feeBps = effectiveSwapFeeBps(validated);
   if (feeBps > 0) {
     const wallet = validated.STELLAR_SWAP_FEE_WALLET?.trim() ?? '';
@@ -504,24 +545,71 @@ export function validateEnv(config: Record<string, unknown>) {
     );
   }
 
-  if (isNonEmpty(validated.BLINDPAY_API_KEY)) {
-    if (!isNonEmpty(validated.BLINDPAY_INSTANCE_ID)) {
-      throw new Error(
-        'BLINDPAY_INSTANCE_ID is required when BLINDPAY_API_KEY is set: every ' +
-          'BlindPay API call is scoped to a platform instance id (in_...).',
-      );
-    }
-    if (!isNonEmpty(validated.BLINDPAY_WEBHOOK_SECRET)) {
-      throw new Error(
-        'BLINDPAY_WEBHOOK_SECRET is required when BLINDPAY_API_KEY is set: inbound ' +
-          'BlindPay webhooks are verified with the Svix signing secret (whsec_...).',
-      );
-    }
-  }
+  assertBlindpayInstancesConsistent(validated);
 
   assertPollarKeysConsistent(validated);
 
   return validated;
+}
+
+/**
+ * Each BlindPay instance is configured by its own trio of variables — unsuffixed
+ * for production, `_DEV` for development — and a trio must be whole: an instance
+ * id is required alongside its key, and so is the webhook secret, because without
+ * it that instance's deliveries cannot be verified at all.
+ */
+function assertBlindpayInstancesConsistent(
+  validated: EnvironmentVariables,
+): void {
+  const instances = [
+    {
+      apiKey: validated.BLINDPAY_API_KEY,
+      apiKeyVar: 'BLINDPAY_API_KEY',
+      instanceId: validated.BLINDPAY_INSTANCE_ID,
+      instanceIdVar: 'BLINDPAY_INSTANCE_ID',
+      webhookSecret: validated.BLINDPAY_WEBHOOK_SECRET,
+      webhookSecretVar: 'BLINDPAY_WEBHOOK_SECRET',
+    },
+    {
+      apiKey: validated.BLINDPAY_API_KEY_DEV,
+      apiKeyVar: 'BLINDPAY_API_KEY_DEV',
+      instanceId: validated.BLINDPAY_INSTANCE_ID_DEV,
+      instanceIdVar: 'BLINDPAY_INSTANCE_ID_DEV',
+      webhookSecret: validated.BLINDPAY_WEBHOOK_SECRET_DEV,
+      webhookSecretVar: 'BLINDPAY_WEBHOOK_SECRET_DEV',
+    },
+  ];
+
+  for (const instance of instances) {
+    if (isNonEmpty(instance.apiKey)) {
+      if (!isNonEmpty(instance.instanceId)) {
+        throw new Error(
+          `${instance.instanceIdVar} is required when ${instance.apiKeyVar} is set: ` +
+            'every BlindPay API call is scoped to a platform instance id (in_...).',
+        );
+      }
+      if (!isNonEmpty(instance.webhookSecret)) {
+        throw new Error(
+          `${instance.webhookSecretVar} is required when ${instance.apiKeyVar} is set: ` +
+            'inbound BlindPay webhooks are verified with the Svix signing secret (whsec_...).',
+        );
+      }
+    }
+
+    // Checked whenever it is set, not only alongside the API key: the inbound
+    // webhook route reads it on its own.
+    if (
+      isNonEmpty(instance.webhookSecret) &&
+      !decodeSvixSecret(instance.webhookSecret)
+    ) {
+      throw new Error(
+        `${instance.webhookSecretVar} is not a usable Svix signing secret: it must be the ` +
+          'whsec_... value BlindPay shows for the endpoint, whose base64 key decodes ' +
+          `to at least ${SVIX_MIN_SECRET_BYTES} bytes. A truncated or mistyped secret ` +
+          'decodes to a short or empty key, and a webhook signed with that proves nothing.',
+      );
+    }
+  }
 }
 
 /**
@@ -588,6 +676,48 @@ function assertPollarKeysConsistent(validated: EnvironmentVariables): void {
         'that host in the Pollar dashboard under Build -> Domains.',
     );
   }
+
+  assertSecureCallbackUrl(
+    'POLLAR_BRIDGE_CALLBACK_URL',
+    validated.POLLAR_BRIDGE_CALLBACK_URL,
+  );
+}
+
+/**
+ * A URL a single-use authorization code is delivered to must be https, unless
+ * it is a loopback address.
+ *
+ * `@IsUrl` admits http, which is right for most of the URLs here — a Horizon
+ * mirror, a base URL — and wrong for this one: the code arrives in the query
+ * string, so plain http hands every proxy and every network on the path a
+ * credential that exchanges for the user's Pollar session. The same rule the
+ * wallet's own redirect URIs are held to, in `@/pollar/pollar-redirect-uri`.
+ *
+ * Loopback stays allowed so a developer can run the bridge against
+ * `http://127.0.0.1:3000/v1/pollar/oauth/callback`: nothing off that machine
+ * sees the code.
+ *
+ * Boot-time, not per-request, because there is only one right answer per
+ * deployment and a misconfigured one should never serve traffic.
+ */
+function assertSecureCallbackUrl(name: string, value?: string): void {
+  if (!isNonEmpty(value)) return;
+
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    // `@IsUrl` already refused anything unparseable; nothing to add.
+    return;
+  }
+  if (url.protocol === 'https:' || isLoopbackHttpUrl(url)) return;
+
+  throw new Error(
+    `${name} must use https (or http on a loopback host for local ` +
+      'development). Pollar returns the browser to it with the authorization ' +
+      'code in the query string, and plain http exposes that code to every ' +
+      'network it crosses.',
+  );
 }
 
 function assertKeyPrefix(

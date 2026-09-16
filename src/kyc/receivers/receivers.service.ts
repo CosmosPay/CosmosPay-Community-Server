@@ -1,7 +1,8 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'node:crypto';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
+import { isElevatedConsumer } from '@/common/elevated-consumer';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import { PaginationQueryDto } from '@/common/dto/pagination.query.dto';
 import { page } from '@/common/pagination';
@@ -13,6 +14,8 @@ import {
   BlindpayObject,
 } from '@/blindpay/blindpay-sync.service';
 import { asNullableString, asString, toJson } from '@/blindpay/blindpay.util';
+import { storedBlindpayEnvironment } from '@/blindpay/blindpay-environment';
+import type { BlindpayEnvironment } from '@/config/configuration';
 import type { BlindpayReceiver, Prisma } from '@generated/prisma/client';
 import {
   recordAuditInTransaction,
@@ -26,6 +29,7 @@ import { assertRedirectAllowed } from '@/kyc/redirect-url-whitelist';
 import { assertTransition } from '@/kyc/receivers/receiver-state';
 import {
   LOCAL_RECEIVER_PREFIX,
+  RECEIVER_TENANT_EDITABLE_FIELDS,
   TOS_EMAIL_COOLDOWN_MS,
 } from '@/kyc/kyc.constants';
 
@@ -53,6 +57,8 @@ export const RECEIVER_PUBLIC_SELECT = {
   country: true,
   externalId: true,
   disabled: true,
+  dossierVersion: true,
+  reviewedVersion: true,
   createdAt: true,
   updatedAt: true,
 } as const satisfies Prisma.BlindpayReceiverSelect;
@@ -63,24 +69,6 @@ export type PublicReceiver = Prisma.BlindpayReceiverGetPayload<{
 }>;
 
 /**
- * Whether the caller may act on a receiver as the platform rather than as its tenant.
- *
- * There is exactly one notion of privilege in this service and this is it: the role
- * APISIX forwards from the consumer's own metadata (`X-Consumer-Role`), which
- * `PermissionsGuard` already treats as full access. The platform-admin surface
- * (`/v1/admin`, `AdminGuard` + a platform-console call) is the other, stronger identity
- * and has its own audited variants of these operations — see
- * {@link ReceiversService.approveById}.
- *
- * A plain `kyc:write` key is NOT elevated: it belongs to the tenant whose KYC data is
- * under review, so it can neither sign off on that review nor lift an operator's
- * kill-switch.
- */
-export function isElevatedConsumer(consumer: GatewayConsumer): boolean {
-  return consumer.role === 'admin';
-}
-
-/**
  * Manages BlindPay receivers (the KYC/KYB entities) on behalf of a consumer.
  * Creates/updates go to BlindPay and are mirrored locally; reads come from the
  * mirror, with single-receiver reads refreshed from BlindPay so the KYC status
@@ -88,6 +76,8 @@ export function isElevatedConsumer(consumer: GatewayConsumer): boolean {
  */
 @Injectable()
 export class ReceiversService {
+  private readonly logger = new Logger(ReceiversService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly blindpay: BlindpayKycApi,
@@ -112,6 +102,8 @@ export class ReceiversService {
     return this.prisma.blindpayReceiver.create({
       data: {
         consumerId: local.id,
+        // Fixed at creation: enable() later creates the receiver on this instance.
+        environment: this.blindpay.environmentFor(consumer),
         // Placeholder until the real `re_...` id is assigned on enable().
         blindpayId: `${LOCAL_RECEIVER_PREFIX}${randomUUID()}`,
         type: dto.type,
@@ -147,6 +139,7 @@ export class ReceiversService {
     consumer: GatewayConsumer,
     id: string,
     redirectUrl: string,
+    expectedVersion?: number,
   ): Promise<{
     receiver: PublicReceiver;
     url: string;
@@ -160,13 +153,17 @@ export class ReceiversService {
     }
     const local = await this.consumers.resolve(consumer);
     // Ownership check (404 if the receiver isn't this consumer's) then the shared logic.
-    await this.findReceiverOrThrow(local.id, id);
+    await this.findReceiverOrThrow(
+      local.id,
+      this.blindpay.environmentFor(consumer),
+      id,
+    );
     assertRedirectAllowed(
       consumer.username,
       redirectUrl,
       this.redirectWhitelist(),
     );
-    return this.approveById(id, redirectUrl);
+    return this.approveById(id, redirectUrl, undefined, expectedVersion);
   }
 
   /**
@@ -180,6 +177,7 @@ export class ReceiversService {
     id: string,
     redirectUrl: string,
     audit?: AuditEntry,
+    expectedVersion?: number,
   ): Promise<{
     receiver: PublicReceiver;
     url: string;
@@ -190,6 +188,21 @@ export class ReceiversService {
     });
     if (!row) throw ApiError.notFound('Receiver not found');
     assertTransition(row.kycStatus, 'pending_user');
+    // The review happened before this request: the caller read the dossier, a
+    // person looked at it, and only then did this call arrive. Nothing stopped
+    // the tenant editing `raw` in between — the status stays `pending_review`
+    // through an edit, so the compare-and-swap below would still match and the
+    // approval would land on data nobody reviewed. `expected_version` is how the
+    // caller says which dossier it is approving.
+    if (
+      expectedVersion !== undefined &&
+      expectedVersion !== row.dossierVersion
+    ) {
+      throw ApiError.conflict(
+        ApiErrorCode.KycStateInvalid,
+        `The KYC data changed after it was read (it is now version ${row.dossierVersion}, you approved ${expectedVersion}). Re-read the receiver, review it again, and approve that version.`,
+      );
+    }
     // BlindPay side-effect cannot join the DB transaction; local write + audit can.
     await this.assertRedirectForReceiver(row.consumerId, redirectUrl);
     const url = await this.tosUrl(redirectUrl, row);
@@ -199,8 +212,18 @@ export class ReceiversService {
       // receiver in between (e.g. back to pending_review after a KYC edit). Matching on
       // the old status means only one of the racing callers wins.
       const claimed = await tx.blindpayReceiver.updateMany({
-        where: { id: row.id, kycStatus: row.kycStatus },
-        data: { kycStatus: 'pending_user', tosSentAt: new Date() },
+        // The version is part of the claim for the same reason the status is:
+        // an edit between this handler's own read and this write must lose.
+        where: {
+          id: row.id,
+          kycStatus: row.kycStatus,
+          dossierVersion: row.dossierVersion,
+        },
+        data: {
+          kycStatus: 'pending_user',
+          tosSentAt: new Date(),
+          reviewedVersion: row.dossierVersion,
+        },
       });
       if (claimed.count === 0) {
         throw ApiError.conflict(
@@ -247,12 +270,15 @@ export class ReceiversService {
     row: BlindpayReceiver,
   ): Promise<string> {
     const isLocal = row.blindpayId.startsWith(LOCAL_RECEIVER_PREFIX);
-    const { url } = await this.blindpay.requestTos({
-      idempotency_key: randomUUID(),
-      // Only reference an existing BlindPay receiver; a brand-new (local) one has none.
-      receiver_id: isLocal ? null : row.blindpayId,
-      redirect_url: redirectUrl,
-    });
+    const { url } = await this.blindpay.requestTos(
+      storedBlindpayEnvironment(row.environment),
+      {
+        idempotency_key: randomUUID(),
+        // Only reference an existing BlindPay receiver; a brand-new (local) one has none.
+        receiver_id: isLocal ? null : row.blindpayId,
+        redirect_url: redirectUrl,
+      },
+    );
     return url;
   }
 
@@ -271,7 +297,11 @@ export class ReceiversService {
   ): Promise<{ url: string; email: string | null; channel: 'code' | 'email' }> {
     const local = await this.consumers.resolve(consumer);
     // Ownership check (404 if the receiver isn't this consumer's) then the shared logic.
-    await this.findReceiverOrThrow(local.id, id);
+    await this.findReceiverOrThrow(
+      local.id,
+      this.blindpay.environmentFor(consumer),
+      id,
+    );
     assertRedirectAllowed(
       consumer.username,
       dto.redirect_url,
@@ -383,7 +413,11 @@ export class ReceiversService {
   async enable(consumer: GatewayConsumer, id: string, tosId: string) {
     const local = await this.consumers.resolve(consumer);
     // Ownership check (404 if not this consumer's) then the shared activation logic.
-    await this.findReceiverOrThrow(local.id, id);
+    await this.findReceiverOrThrow(
+      local.id,
+      this.blindpay.environmentFor(consumer),
+      id,
+    );
     return this.enableById(id, tosId);
   }
 
@@ -415,6 +449,18 @@ export class ReceiversService {
     // The customer can only accept terms after our owner/admin review approved it.
     // Handoff target is BlindPay's typical first status; mirrorReceiver writes the real one.
     assertTransition(row.kycStatus, 'verifying');
+    // This is the call that puts a live identity in front of a regulated
+    // provider, and the payload it sends is `raw` as it stands *now*. The status
+    // machine already sends a post-approval edit back to `pending_review`, which
+    // is the first line; this is the one that does not depend on every future
+    // writer remembering to move the status. If what was reviewed is not what
+    // would be sent, nothing is sent.
+    if (row.reviewedVersion !== row.dossierVersion) {
+      throw ApiError.conflict(
+        ApiErrorCode.KycStateInvalid,
+        'The KYC data changed after it was approved; it has to be reviewed and approved again before the receiver can be created.',
+      );
+    }
 
     // Claim the transition BEFORE the provider call, not after it. This is the one
     // transition with an irreversible side-effect in the middle: a plain
@@ -440,10 +486,10 @@ export class ReceiversService {
     const payload = (row.raw ?? {}) as Record<string, unknown>;
     let created: BlindpayObject;
     try {
-      created = await this.blindpay.createReceiver({
-        ...payload,
-        tos_id: tosId,
-      });
+      created = await this.blindpay.createReceiver(
+        storedBlindpayEnvironment(row.environment),
+        { ...payload, tos_id: tosId },
+      );
     } catch (err) {
       // The upstream create failed, so no identity exists there: release the claim so the
       // customer can retry. Guarded on the placeholder id + our own claimed status so a
@@ -469,7 +515,11 @@ export class ReceiversService {
         await recordAuditInTransaction(tx, audit);
       }
     });
-    await this.sync.mirrorReceiver(row.consumerId, created);
+    await this.sync.mirrorReceiver(
+      row.consumerId,
+      storedBlindpayEnvironment(row.environment),
+      created,
+    );
     return this.publicById(row.id);
   }
 
@@ -491,8 +541,12 @@ export class ReceiversService {
   private async refreshReceiver(row: BlindpayReceiver) {
     if (row.blindpayId.startsWith(LOCAL_RECEIVER_PREFIX)) return row;
     try {
-      const fresh = await this.blindpay.getReceiver(row.blindpayId);
-      return await this.sync.mirrorReceiver(row.consumerId, fresh);
+      const environment = storedBlindpayEnvironment(row.environment);
+      const fresh = await this.blindpay.getReceiver(
+        environment,
+        row.blindpayId,
+      );
+      return await this.sync.mirrorReceiver(row.consumerId, environment, fresh);
     } catch {
       return row;
     }
@@ -500,7 +554,10 @@ export class ReceiversService {
 
   async findAll(consumer: GatewayConsumer, query: PaginationQueryDto) {
     const local = await this.consumers.resolve(consumer);
-    const where = { consumerId: local.id };
+    const where = {
+      consumerId: local.id,
+      environment: this.blindpay.environmentFor(consumer),
+    };
     // `total` is the row count, not the page length — the two only coincide while no
     // pagination is applied, and a client paging on it would silently stop early.
     const [data, total] = await Promise.all([
@@ -525,14 +582,18 @@ export class ReceiversService {
     id: string,
   ): Promise<PublicReceiver> {
     const local = await this.consumers.resolve(consumer);
-    const row = await this.findPublicOrThrow(local.id, id);
+    const environment = this.blindpay.environmentFor(consumer);
+    const row = await this.findPublicOrThrow(local.id, environment, id);
     // An inactive (local-only) receiver has no BlindPay record to refresh from yet.
     if (row.blindpayId.startsWith(LOCAL_RECEIVER_PREFIX)) {
       return row;
     }
     try {
-      const fresh = await this.blindpay.getReceiver(row.blindpayId);
-      await this.sync.mirrorReceiver(local.id, fresh);
+      const fresh = await this.blindpay.getReceiver(
+        environment,
+        row.blindpayId,
+      );
+      await this.sync.mirrorReceiver(local.id, environment, fresh);
       return await this.publicById(row.id);
     } catch {
       return row;
@@ -545,9 +606,10 @@ export class ReceiversService {
     dto: UpdateReceiverDto,
   ): Promise<PublicReceiver> {
     const local = await this.consumers.resolve(consumer);
+    const environment = this.blindpay.environmentFor(consumer);
     // The full row (including `raw`) is needed here to merge the patch into the stored
     // create payload; only the response is narrowed.
-    const row = await this.findReceiverOrThrow(local.id, id);
+    const row = await this.findReceiverOrThrow(local.id, environment, id);
     // The accepted terms-of-service id is set once, at enable() time, and can NEVER be
     // changed afterwards — otherwise a validated receiver's ToS acceptance could be
     // forged. Strip it from any update so it's immutable post-validation.
@@ -582,14 +644,44 @@ export class ReceiversService {
           country: asNullableString(merged.country),
           externalId: asNullableString(merged.external_id),
           kycStatus,
+          // What a reviewer signed off on is a version of this payload, so every
+          // rewrite of it is a new version. An empty patch changes nothing and
+          // must not invalidate a review.
+          ...(Object.keys(patch).length > 0
+            ? { dossierVersion: { increment: 1 } }
+            : {}),
         },
         select: RECEIVER_PUBLIC_SELECT,
       });
     }
 
-    const updated = await this.blindpay.updateReceiver(row.blindpayId, patch);
+    // Past our review gate the provider holds the identity, and this PUT rewrites
+    // it there directly — no pending_review, no second pair of eyes. The local
+    // branch above re-enters review for the same edit; here the only reviewer
+    // left is the elevated caller, so an ordinary `kyc:write` key (the tenant
+    // whose data was reviewed) may change only what does not describe the person.
+    const identityFields = Object.keys(patch).filter(
+      (field) => !RECEIVER_TENANT_EDITABLE_FIELDS.includes(field),
+    );
+    if (identityFields.length > 0 && !isElevatedConsumer(consumer)) {
+      // A service refusal never reaches the access log as anything but a 403;
+      // which fields a tenant tried to rewrite is what an operator needs.
+      this.logger.warn(
+        `Refused identity edit of upstream receiver ${row.id} by ${consumer.username}: ${identityFields.join(', ')}`,
+      );
+      throw ApiError.forbidden(
+        ApiErrorCode.KycReviewRequired,
+        `Changing ${identityFields.join(', ')} on a receiver that already exists at BlindPay requires an elevated (admin) key: identity data must be reviewed before it reaches the provider.`,
+      );
+    }
+
+    const updated = await this.blindpay.updateReceiver(
+      environment,
+      row.blindpayId,
+      patch,
+    );
     // BlindPay PUT may return little; ensure we keep the id.
-    await this.sync.mirrorReceiver(local.id, {
+    await this.sync.mirrorReceiver(local.id, environment, {
       id: row.blindpayId,
       ...updated,
     });
@@ -608,10 +700,11 @@ export class ReceiversService {
    */
   async remove(consumer: GatewayConsumer, id: string, audit?: AuditEntry) {
     const local = await this.consumers.resolve(consumer);
-    const row = await this.findReceiverOrThrow(local.id, id);
+    const environment = this.blindpay.environmentFor(consumer);
+    const row = await this.findReceiverOrThrow(local.id, environment, id);
     // Only delete at BlindPay if it was ever created there (inactive receivers are local-only).
     if (!row.blindpayId.startsWith(LOCAL_RECEIVER_PREFIX)) {
-      await this.blindpay.deleteReceiver(row.blindpayId);
+      await this.blindpay.deleteReceiver(environment, row.blindpayId);
     }
     const entry: AuditEntry = audit ?? {
       // No AdminPrincipal on the tenant path, so the actor is the API key APISIX
@@ -659,7 +752,11 @@ export class ReceiversService {
     }
     const local = await this.consumers.resolve(consumer);
     // Ownership check (404 if the receiver isn't this consumer's) then the shared write.
-    const row = await this.findReceiverOrThrow(local.id, id);
+    const row = await this.findReceiverOrThrow(
+      local.id,
+      this.blindpay.environmentFor(consumer),
+      id,
+    );
     return this.setAccessById(row.id, disabled);
   }
 
@@ -711,7 +808,8 @@ export class ReceiversService {
   /**
    * Resolves a local receiver row for the consumer, or throws 404. Shared with
    * the wallet / bank-account / virtual-account services so a receiver id always
-   * means "owned by this consumer".
+   * means "owned by this consumer, on this caller's BlindPay instance" — a dev key
+   * gets the same 404 for a production receiver as for someone else's.
    *
    * Returns the FULL row, `raw` (the KYC dossier) included, because callers need it
    * internally — `update()` merges into it, `enable()` replays it. Never hand the result
@@ -720,10 +818,11 @@ export class ReceiversService {
    */
   async findReceiverOrThrow(
     consumerLocalId: string,
+    environment: BlindpayEnvironment,
     id: string,
   ): Promise<BlindpayReceiver> {
     const row = await this.prisma.blindpayReceiver.findFirst({
-      where: { id, consumerId: consumerLocalId },
+      where: { id, consumerId: consumerLocalId, environment },
     });
     if (!row) {
       throw ApiError.notFound('Receiver not found');
@@ -737,10 +836,11 @@ export class ReceiversService {
    */
   private async findPublicOrThrow(
     consumerLocalId: string,
+    environment: BlindpayEnvironment,
     id: string,
   ): Promise<PublicReceiver> {
     const row = await this.prisma.blindpayReceiver.findFirst({
-      where: { id, consumerId: consumerLocalId },
+      where: { id, consumerId: consumerLocalId, environment },
       select: RECEIVER_PUBLIC_SELECT,
     });
     if (!row) {

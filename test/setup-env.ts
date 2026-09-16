@@ -23,7 +23,11 @@ process.env.REQUEST_LOG_RETENTION_DAYS = '0';
 // so the suite is hermetic.
 process.env.BLINDPAY_API_KEY = 'test-blindpay-key';
 process.env.BLINDPAY_INSTANCE_ID = 'in_test';
-process.env.BLINDPAY_WEBHOOK_SECRET = 'whsec_test';
+// Real length: env validation refuses a Svix secret whose key decodes to fewer
+// than SVIX_MIN_SECRET_BYTES, which the old `whsec_test` (3 bytes) did.
+process.env.BLINDPAY_WEBHOOK_SECRET = `whsec_${Buffer.from(
+  'e2e-blindpay-webhook-key',
+).toString('base64')}`;
 // Pollar: keys so the routes are reachable (nothing leaves the process — the
 // suite stubs global fetch), plus the bridge callback and a redirect allow-list
 // for the e2e consumer. The prefixes are the real ones because env validation

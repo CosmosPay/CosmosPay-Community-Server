@@ -28,3 +28,46 @@ export const POSITIONS_POOL_PAGE_SIZE = 200;
  * that never runs dry cannot turn one call into an unbounded loop.
  */
 export const POSITIONS_MAX_POOL_PAGES = 5;
+
+/**
+ * Budget for `POST /v1/liquidity-pools/operations/:id/submit`, per consumer +
+ * client address.
+ *
+ * The same defence and the same numbers as `SWAP_SUBMIT_RATE_LIMIT`, for the same
+ * reasons: each call can broadcast to Horizon and each rejection writes a
+ * `LIQUIDITY_FAILED` event, the route takes the shared public key so the address
+ * is what separates anonymous wallets, twenty leaves room for a 503 retry loop
+ * and `SETTLEMENT_MAX_RESUBMITS` honest resubmits from several wallets behind one
+ * NAT, and the one-minute window keeps a refused retry inside the envelope's
+ * `STELLAR_TX_TIMEOUT` lifetime (300 s by default).
+ *
+ * A bucket of its own rather than the swaps one: a wallet that swaps into an
+ * asset and then deposits it is running two honest flows, and one must not
+ * spend the other's retries. Alternating the two routes does get a loop twice
+ * the budget — still bounded, and every row still capped per row.
+ */
+export const LIQUIDITY_SUBMIT_RATE_LIMIT = {
+  name: 'liquidity:submit',
+  limit: 20,
+  windowMs: 60 * 1000,
+};
+
+/**
+ * Budget for `POST /v1/liquidity-pools/deposit` and `POST
+ * /v1/liquidity-pools/withdraw`, per consumer + client address.
+ *
+ * One bucket for both: they are the two directions of one flow, an honest wallet
+ * calls one at a time, and separate buckets would only let a loop alternate and
+ * take both. Each call reads the pool and the account from Horizon — against the
+ * per-IP budget every route here shares — and writes a row holding the account's
+ * next sequence number until it expires.
+ *
+ * Twenty a minute, matching `LIQUIDITY_SUBMIT_RATE_LIMIT`, because a wallet
+ * builds one envelope per submission: the two are spent in step, and a builder
+ * that never signs is bounded like one that does.
+ */
+export const LIQUIDITY_BUILD_RATE_LIMIT = {
+  name: 'liquidity-pools:build',
+  limit: 20,
+  windowMs: 60 * 1000,
+};

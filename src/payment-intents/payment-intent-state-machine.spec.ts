@@ -3,6 +3,7 @@ import {
   PAYMENT_INTENT_TRANSITIONS,
   SUCCESS_REQUIRES_TX_HASH,
   TERMINAL_STATUSES,
+  VERIFIED_SETTLEMENT_ONLY_FROM,
   type PaymentIntentStatusName,
 } from '@/payment-intents/payment-intent-transitions';
 import {
@@ -22,8 +23,18 @@ describe('PaymentIntent state machine (spec / graph)', () => {
   it('marks SUCCEEDED, FAILED, CANCELLED, EXPIRED as terminal', () => {
     for (const status of TERMINAL_STATUSES) {
       expect(isTerminalStatus(status)).toBe(true);
+    }
+  });
+
+  it('keeps SUCCEEDED, FAILED and CANCELLED absorbing', () => {
+    for (const status of ['SUCCEEDED', 'FAILED', 'CANCELLED'] as const) {
       expect(PAYMENT_INTENT_TRANSITIONS[status]).toEqual([]);
     }
+  });
+
+  it('gives EXPIRED one exit, to SUCCEEDED, and only on a verified payment', () => {
+    expect(PAYMENT_INTENT_TRANSITIONS.EXPIRED).toEqual(['SUCCEEDED']);
+    expect(VERIFIED_SETTLEMENT_ONLY_FROM).toEqual(['EXPIRED']);
   });
 
   it('requires on-chain evidence to reach SUCCEEDED', () => {
@@ -59,7 +70,7 @@ describe('PaymentIntent state machine (spec / graph)', () => {
     const valid: Array<{
       from: PaymentIntentStatusName;
       to: PaymentIntentStatusName;
-      evidence?: { txHash?: string };
+      evidence?: { txHash?: string; verifiedOnChain?: boolean };
     }> = [];
 
     for (const from of PAYMENT_INTENT_STATUSES) {
@@ -67,7 +78,10 @@ describe('PaymentIntent state machine (spec / graph)', () => {
         valid.push({
           from,
           to,
-          evidence: to === 'SUCCEEDED' ? { txHash: 'a'.repeat(64) } : undefined,
+          evidence:
+            to === 'SUCCEEDED'
+              ? { txHash: 'a'.repeat(64), verifiedOnChain: true }
+              : undefined,
         });
       }
     }
@@ -117,15 +131,32 @@ describe('PaymentIntent state machine (spec / graph)', () => {
   });
 
   describe('assertTransition — terminal immutability', () => {
-    it.each(TERMINAL_STATUSES)('cannot leave terminal status %s', (from) => {
-      for (const to of PAYMENT_INTENT_STATUSES) {
-        expect(() =>
-          assertTransition(from, to, {
-            txHash: 'b'.repeat(64),
-          }),
-        ).toThrow(InvalidPaymentIntentTransitionError);
-      }
-    });
+    it.each(TERMINAL_STATUSES)(
+      'cannot leave terminal status %s on a txHash alone',
+      (from) => {
+        for (const to of PAYMENT_INTENT_STATUSES) {
+          expect(() =>
+            assertTransition(from, to, {
+              txHash: 'b'.repeat(64),
+            }),
+          ).toThrow(InvalidPaymentIntentTransitionError);
+        }
+      },
+    );
+
+    it.each(['SUCCEEDED', 'FAILED', 'CANCELLED'] as const)(
+      'cannot leave %s even on a verified payment',
+      (from) => {
+        for (const to of PAYMENT_INTENT_STATUSES) {
+          expect(() =>
+            assertTransition(from, to, {
+              txHash: 'b'.repeat(64),
+              verifiedOnChain: true,
+            }),
+          ).toThrow(InvalidPaymentIntentTransitionError);
+        }
+      },
+    );
   });
 
   describe('assertTransition — on-chain evidence for SUCCEEDED', () => {
@@ -157,5 +188,54 @@ describe('PaymentIntent state machine (spec / graph)', () => {
         ).not.toThrow();
       },
     );
+  });
+
+  /**
+   * The observer expired lapsed intents without asking the chain, and EXPIRED
+   * had no exit: an intent paid late in its lifetime stayed EXPIRED and its
+   * PAYMENT_INTENT_SUCCEEDED never went out. The way back must not become a way
+   * for a caller to settle a closed intent on its own say-so.
+   */
+  describe('assertTransition — settling an EXPIRED intent', () => {
+    it('allows EXPIRED → SUCCEEDED on a payment verified on-chain', () => {
+      expect(() =>
+        assertTransition('EXPIRED', 'SUCCEEDED', {
+          txHash: 'd'.repeat(64),
+          verifiedOnChain: true,
+        }),
+      ).not.toThrow();
+    });
+
+    it('refuses EXPIRED → SUCCEEDED on a txHash alone', () => {
+      let caught: unknown;
+      try {
+        assertTransition('EXPIRED', 'SUCCEEDED', { txHash: 'd'.repeat(64) });
+      } catch (err) {
+        caught = err;
+      }
+      expect(caught).toBeInstanceOf(InvalidPaymentIntentTransitionError);
+      expect((caught as Error).message).toMatch(/verified on-chain/);
+    });
+
+    it('still requires the txHash itself', () => {
+      expect(() =>
+        assertTransition('EXPIRED', 'SUCCEEDED', { verifiedOnChain: true }),
+      ).toThrow(InvalidPaymentIntentTransitionError);
+    });
+
+    it.each([
+      'PENDING',
+      'SUBMITTED',
+      'FAILED',
+      'CANCELLED',
+      'EXPIRED',
+    ] as const)('never reopens EXPIRED → %s', (to) => {
+      expect(() =>
+        assertTransition('EXPIRED', to, {
+          txHash: 'd'.repeat(64),
+          verifiedOnChain: true,
+        }),
+      ).toThrow(InvalidPaymentIntentTransitionError);
+    });
   });
 });

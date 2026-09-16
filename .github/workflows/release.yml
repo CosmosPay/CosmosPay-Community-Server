@@ -18,8 +18,12 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
+# Read-only by default. `verify` runs `npm ci`, the build and every test suite —
+# third-party code — so it must not hold a token that can push to main or cut a
+# release. Only the `release` job, which runs our own shell and git-cliff, is
+# granted write below.
 permissions:
-  contents: write # commit the bump, push tags, create releases
+  contents: read
 
 jobs:
   verify:
@@ -65,6 +69,8 @@ jobs:
     name: Version, changelog & release
     needs: verify
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # commit the bump, push tags, create releases
     steps:
       - uses: actions/checkout@v7
         with:

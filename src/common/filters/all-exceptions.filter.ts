@@ -1,3 +1,4 @@
+import { STATUS_CODES } from 'node:http';
 import {
   ArgumentsHost,
   Catch,
@@ -40,7 +41,14 @@ export class AllExceptionsFilter implements ExceptionFilter {
       } else if (typeof res === 'object' && res !== null) {
         const body = res as Record<string, unknown>;
         message = (body.message as string | string[]) ?? exception.message;
-        error = (body.error as string) ?? error;
+        // `error` is a reason phrase, and only a string is one. Terminus puts the
+        // whole health report under `error` — for a failed readiness probe that
+        // is Prisma's connection message, database host and user included — on
+        // a `@Public()` route. A cast let that object through to the response.
+        error =
+          typeof body.error === 'string'
+            ? body.error
+            : (STATUS_CODES[status] ?? error);
         // Present when the throw site used ApiError; absent for a plain Nest
         // exception, which falls back to the status-derived code below so the
         // field is never missing from the envelope.

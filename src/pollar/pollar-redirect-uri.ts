@@ -1,15 +1,10 @@
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import type { PollarRedirectWhitelist } from '@/config/pollar-redirect-uri-whitelist';
-import { LOOPBACK_HOSTS } from '@/pollar/pollar.constants';
+import { isLoopbackHttpUrl } from '@/common/loopback';
 
 // The allow-list itself — `POLLAR_REDIRECT_URI_WHITELIST`, and why it admits
 // loopback and private-use-scheme URIs — is parsed and documented in
 // `@/config/pollar-redirect-uri-whitelist`. This file is what an entry matches.
-
-/** True when `url` is a loopback listener — any port, any path (RFC 8252 §7.3). */
-function isLoopback(url: URL): boolean {
-  return url.protocol === 'http:' && LOOPBACK_HOSTS.has(url.hostname);
-}
 
 /**
  * Whether one allow-list entry covers `candidate`.
@@ -43,8 +38,10 @@ function entryCovers(entry: string, candidate: URL): boolean {
 
   if (allowed.protocol !== candidate.protocol) return false;
 
-  if (isLoopback(allowed)) {
-    return isLoopback(candidate) && allowed.hostname === candidate.hostname;
+  if (isLoopbackHttpUrl(allowed)) {
+    return (
+      isLoopbackHttpUrl(candidate) && allowed.hostname === candidate.hostname
+    );
   }
 
   if (allowed.protocol === 'https:') {
@@ -106,7 +103,7 @@ export function assertPollarRedirectAllowed(
       'redirect_uri must not carry a fragment',
     );
   }
-  if (candidate.protocol === 'http:' && !isLoopback(candidate)) {
+  if (candidate.protocol === 'http:' && !isLoopbackHttpUrl(candidate)) {
     throw ApiError.badRequest(
       ApiErrorCode.ValidationFailed,
       'redirect_uri must be https, a loopback address, or a private-use scheme',

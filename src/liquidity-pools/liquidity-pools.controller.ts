@@ -20,6 +20,7 @@ import {
 import type { Request } from 'express';
 import { CurrentConsumer } from '@/common/decorators/current-consumer.decorator';
 import { AllowPublicKey } from '@/common/decorators/allow-public-key.decorator';
+import { RateLimit } from '@/common/decorators/rate-limit.decorator';
 import { RequireAnyPermission } from '@/common/decorators/require-permissions.decorator';
 import { API_ERROR_BODY_CONTENT } from '@/common/errors/api-error.entity';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
@@ -39,6 +40,10 @@ import {
   LiquiditySubmitResultEntity,
 } from '@/liquidity-pools/entities/liquidity-pool.entity';
 import { LiquidityPoolReaderService } from '@/liquidity-pools/liquidity-pool-reader.service';
+import {
+  LIQUIDITY_BUILD_RATE_LIMIT,
+  LIQUIDITY_SUBMIT_RATE_LIMIT,
+} from '@/liquidity-pools/liquidity-pools.constants';
 import { LiquidityPoolsService } from '@/liquidity-pools/liquidity-pools.service';
 
 // URI versioning => /v1/liquidity-pools. Static segments are declared before
@@ -56,6 +61,9 @@ export class LiquidityPoolsController {
   // Builds an unsigned envelope.
   @AllowPublicKey()
   @RequireAnyPermission('liquidity:write', 'swaps:write')
+  // Reads the pool and the account from Horizon and holds the account's next
+  // sequence number in a row until it expires.
+  @RateLimit(LIQUIDITY_BUILD_RATE_LIMIT)
   @ApiOperation({
     summary:
       'Build a pool deposit → unsigned XDR + SEP-7 tx URI + QR for the wallet to sign',
@@ -98,6 +106,8 @@ export class LiquidityPoolsController {
   // Builds an unsigned envelope.
   @AllowPublicKey()
   @RequireAnyPermission('liquidity:write', 'swaps:write')
+  // One budget with deposit — the two directions of one flow.
+  @RateLimit(LIQUIDITY_BUILD_RATE_LIMIT)
   @ApiOperation({
     summary:
       'Build a pool withdrawal (burn shares) → unsigned XDR + SEP-7 tx URI + QR',
@@ -173,18 +183,48 @@ export class LiquidityPoolsController {
   }
 
   @Post('operations/:id/submit')
-  // Broadcasts a caller-signed envelope.
+  // Broadcasts a caller-signed envelope. Nothing about the operation — not even
+  // its status — is answered until `signedXdr` parses, hashes to its stored
+  // txHash and carries a signature, so reaching another anonymous user's
+  // operation takes its UUID *and* its envelope, which only the caller that
+  // built it was handed. Whether the signature is valid is the network's call:
+  // a bad one comes back as a FAILED `tx_bad_auth`, bounded per operation by the
+  // resubmit cap and the expiry check.
   @AllowPublicKey()
   @RequireAnyPermission('liquidity:write', 'swaps:write')
+  // A rejected broadcast costs a Horizon submission and a LIQUIDITY_FAILED
+  // webhook that no error response refunds, and under the shared public key the
+  // client address is the only thing telling anonymous callers apart.
+  @RateLimit(LIQUIDITY_SUBMIT_RATE_LIMIT)
   // Submit advances an existing operation's status; the operation was created
-  // by POST /v1/liquidity-pools/deposits (or /withdrawals). Nothing new comes
-  // into existence here, so 200 — matching swaps' identical submit route.
+  // by POST /v1/liquidity-pools/deposit (or /withdraw). Nothing new comes into
+  // existence here, so 200 — matching swaps' identical submit route.
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary:
       'Relay the signed transaction to the network (hash-checked); finalizes status',
   })
   @ApiOkResponse({ type: LiquiditySubmitResultEntity })
+  @ApiResponse({
+    status: 400,
+    content: API_ERROR_BODY_CONTENT,
+    description:
+      '`validation_failed` — `signedXdr` is not a transaction envelope, is not ' +
+      'the envelope built for this operation, or carries no signatures. ' +
+      '`invalid_state_transition` — the operation can no longer be submitted: ' +
+      "it is EXPIRED, its transaction's time bounds have passed, or it was " +
+      'already resubmitted the maximum number of times after a rejection. Build ' +
+      'a new deposit or withdrawal.',
+  })
+  @ApiResponse({
+    status: 429,
+    content: API_ERROR_BODY_CONTENT,
+    description:
+      'Rate limited (`rate_limited`), per consumer and client address, in a ' +
+      'bucket separate from the swaps submit route. Honour `Retry-After`: the ' +
+      'window is shorter than the envelope lifetime, so a retry after it still ' +
+      'lands in time.',
+  })
   submit(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Param('id') id: string,

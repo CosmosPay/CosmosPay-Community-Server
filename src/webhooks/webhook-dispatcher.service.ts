@@ -208,7 +208,13 @@ export class WebhookDispatcherService {
           err instanceof Error ? err.message : 'Unknown delivery error';
 
         if (err instanceof WebhookUrlValidationError) {
-          await this.markDestinationBlocked(endpoint.id, lastError);
+          // `lastError` is persisted on the delivery and read back by the
+          // endpoint's owner, so it stays the generic message; the log takes
+          // the reason.
+          await this.markDestinationBlocked(
+            endpoint.id,
+            err.detail ?? lastError,
+          );
           // Do not retry SSRF / destination failures — DNS will not become safe
           // by waiting, and we must not open a connection.
           break;
@@ -255,8 +261,10 @@ export class WebhookDispatcherService {
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error';
       if (err instanceof WebhookUrlValidationError) {
-        await this.markDestinationBlocked(endpoint.id, message);
+        await this.markDestinationBlocked(endpoint.id, err.detail ?? message);
       }
+      // `message`, not `detail` — a ping is a request the caller made, and its
+      // answer is returned to them.
       return { ok: false, responseStatus: null, error: message };
     }
   }

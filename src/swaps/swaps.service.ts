@@ -12,6 +12,7 @@ import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface'
 import { resolvePlanCommissionBps } from '@/common/plan-commission';
 import { isUniqueViolation } from '@/common/prisma-errors';
 import { resolveNetwork } from '@/common/stellar-network';
+import { project } from '@/common/projection';
 import { PrismaService } from '@/prisma/prisma.service';
 import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
 import { StellarAccountLoader } from '@/stellar/account-loader.service';
@@ -28,6 +29,7 @@ import {
   resolveSlippage,
 } from '@/stellar/stellar-operation-policy';
 import { StellarService } from '@/stellar/stellar.service';
+import { cannotHaveSettled } from '@/stellar/stored-envelope';
 import type {
   Prisma,
   Swap,
@@ -56,8 +58,50 @@ import {
 import { SwapRequestTerms, swapMatchesRequest } from '@/swaps/swap-idempotency';
 import { SWAP_COMMISSION_MEMO } from '@/swaps/swaps.constants';
 
-/** A stored swap plus its derived QR — the shape API responses return. */
-export type SwapView = Swap & {
+/**
+ * The columns a swap may leave this service with: every field `SwapEntity`
+ * documents, plus `expiresAt`. An allowlist, because the spread it replaces
+ * answered with the whole row — `consumerId` and the settlement bookkeeping
+ * (`settlementEpoch`, `lastCheckedAt`, `notFoundStreak`) — on routes the shared
+ * public key reaches, and would have answered with any column added later. The
+ * list reads through it as a `select`; the single-row paths, which need the full
+ * row for the relay and the observer, cut it with {@link project}.
+ */
+export const SWAP_PUBLIC_SELECT = {
+  id: true,
+  status: true,
+  network: true,
+  source: true,
+  destination: true,
+  sendAsset: true,
+  sendAssetIssuer: true,
+  sendAmount: true,
+  feeAmount: true,
+  feeBps: true,
+  swapAmount: true,
+  destAsset: true,
+  destAssetIssuer: true,
+  destEstimated: true,
+  destMin: true,
+  slippageBps: true,
+  path: true,
+  memo: true,
+  idempotencyKey: true,
+  xdr: true,
+  uri: true,
+  txHash: true,
+  expiresAt: true,
+  createdAt: true,
+  updatedAt: true,
+} as const satisfies Prisma.SwapSelect;
+
+/** A swap as the list returns it. */
+export type PublicSwap = Prisma.SwapGetPayload<{
+  select: typeof SWAP_PUBLIC_SELECT;
+}>;
+
+/** A public swap plus its derived QR — the shape single-swap responses return. */
+export type SwapView = PublicSwap & {
   qr: string;
   /** The commission MEMO_TEXT label when a commission was collected, else null. */
   commissionMemo: string | null;
@@ -146,7 +190,9 @@ export class SwapsService {
    * `idempotency_conflict` — see {@link replay}. Without a key, the unique
    * `(network, txHash)` constraint still rejects a byte-identical rebuild with
    * 409. Optional `STELLAR_SWAP_SINGLE_INFLIGHT=true` rejects a second
-   * non-expired PENDING swap for the same `(consumer, source, network)` with 409.
+   * non-expired PENDING swap for the same `(consumer, source, network)` with 409
+   * — but only one that may already have settled; see
+   * {@link assertNoInflightSwap}.
    */
   async create(
     consumer: GatewayConsumer,
@@ -171,8 +217,6 @@ export class SwapsService {
       if (existing) return this.replay(existing, terms, consumer);
     }
 
-    await this.assertNoInflightSwap(local.id, dto.source, network);
-
     const priced = await this.priceSwap(
       network,
       dto,
@@ -194,6 +238,14 @@ export class SwapsService {
 
     const stellarCfg = this.config.get('stellar', { infer: true });
     const account = await this.accounts.load(network, dto.source);
+    // Read the sequence before anything builds from `account`:
+    // `TransactionBuilder.build()` advances it in place.
+    await this.assertNoInflightSwap(
+      local.id,
+      dto.source,
+      network,
+      account.sequenceNumber(),
+    );
 
     // The destination must already trust a non-native asset, or the path payment
     // would fail on-chain. Catch it now with a clear message.
@@ -385,12 +437,29 @@ export class SwapsService {
 
   /**
    * Optional guard (`STELLAR_SWAP_SINGLE_INFLIGHT`): at most one non-expired
-   * PENDING swap per (consumer, source, network). Off by default.
+   * PENDING swap per (consumer, source, network) that may already be on-chain.
+   * Off by default.
+   *
+   * **Only a row that may already have settled holds the guard**, which is
+   * {@link cannotHaveSettled}'s question and the reason it exists: `source` is a
+   * public Stellar address and nothing requires the caller to control it, so a
+   * merely-built row is otherwise a way to hand a stranger a 409 for a whole
+   * transaction-timeout window. Consumer scoping does not close that under the
+   * shared public key, where every anonymous wallet is one consumer — one dust
+   * swap naming someone's account froze swapping for it, again and again. The
+   * twin in `liquidity-pools.service.ts` asks the same question, and documents
+   * the residual: a row built before the account's latest transaction does block
+   * until it expires, because from here it looks like one that settled.
+   *
+   * A row whose envelope cannot be read blocks: nothing about it can be vouched
+   * for. The message names the blocking row's id — both rows are the same
+   * consumer's, so that discloses nothing the caller may not see.
    */
   private async assertNoInflightSwap(
     consumerId: string,
     source: string,
-    network: string,
+    network: StellarNetwork,
+    accountSequence: string,
   ): Promise<void> {
     const { singleInflight } = this.config.get('stellar', {
       infer: true,
@@ -406,21 +475,35 @@ export class SwapsService {
         OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
       },
       orderBy: { createdAt: 'asc' },
+      select: { id: true, xdr: true },
     });
-    if (existing) {
-      throw ApiError.conflict(
-        ApiErrorCode.OperationInFlight,
-        `An in-flight swap already exists for this source account (id=${existing.id}). ` +
-          'Wait for it to settle/expire, or disable STELLAR_SWAP_SINGLE_INFLIGHT.',
-      );
+    if (!existing) return;
+    if (
+      cannotHaveSettled(
+        existing.xdr,
+        this.stellar.passphrase(network),
+        accountSequence,
+      )
+    ) {
+      return;
     }
+    throw ApiError.conflict(
+      ApiErrorCode.OperationInFlight,
+      `An in-flight swap already exists for this source account (id=${existing.id}). ` +
+        'Wait for it to settle/expire, or disable STELLAR_SWAP_SINGLE_INFLIGHT.',
+    );
   }
 
   // ── Read (list) ─────────────────────────────────────────────────────────────
   async findAll(
     consumer: GatewayConsumer,
     query: QuerySwapsDto,
-  ): Promise<{ data: Swap[]; total: number; take: number; skip: number }> {
+  ): Promise<{
+    data: PublicSwap[];
+    total: number;
+    take: number;
+    skip: number;
+  }> {
     const where = {
       consumer: { apisixUsername: consumer.username },
       ...(query.status ? { status: query.status } : {}),
@@ -432,6 +515,7 @@ export class SwapsService {
         take: query.take,
         skip: query.skip,
         orderBy: { createdAt: 'desc' },
+        select: SWAP_PUBLIC_SELECT,
       }),
       this.prisma.swap.count({ where }),
     ]);
@@ -753,7 +837,7 @@ export class SwapsService {
   /** A stored swap with its SEP-7 QR and commission label attached. */
   private async withQr(swap: Swap): Promise<SwapView> {
     return {
-      ...swap,
+      ...project(swap, SWAP_PUBLIC_SELECT),
       qr: await sep7Qr(swap.uri),
       // A collected commission (feeAmount > 0) with no caller memo is labelled
       // on-chain with the commission memo text.

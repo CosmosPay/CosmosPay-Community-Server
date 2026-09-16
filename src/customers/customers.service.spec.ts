@@ -1,5 +1,62 @@
 import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
-import { CustomersService } from '@/customers/customers.service';
+import {
+  CUSTOMER_PUBLIC_SELECT,
+  CustomersService,
+} from '@/customers/customers.service';
+
+describe('CustomersService responses', () => {
+  const consumer = { username: 'cosmos_u1', credentialId: 'cred_1' } as any;
+  const stored = {
+    id: 'cus_1',
+    consumerId: 'c_internal',
+    name: 'Ada',
+    alias: null,
+    email: null,
+    account: null,
+    note: null,
+    reference: null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
+
+  function build() {
+    const prisma = {
+      consumer: { upsert: jest.fn().mockResolvedValue({ id: 'c1' }) },
+      customer: {
+        create: jest.fn().mockResolvedValue(stored),
+        findFirst: jest.fn().mockResolvedValue(stored),
+        findMany: jest.fn().mockResolvedValue([stored]),
+        count: jest.fn().mockResolvedValue(1),
+        update: jest.fn().mockResolvedValue(stored),
+      },
+      $queryRaw: jest.fn().mockResolvedValue([]),
+    };
+    const service = new CustomersService(
+      prisma as any,
+      new ConsumerResolverService(prisma as never),
+    );
+    return { service, prisma };
+  }
+
+  it('reads, creates and updates through the public projection', async () => {
+    const { service, prisma } = build();
+
+    await service.create(consumer, { name: 'Ada' });
+    await service.findAll(consumer, { take: 20, skip: 0 });
+    await service.findOne(consumer, 'cus_1');
+    await service.update(consumer, 'cus_1', { note: 'vip' });
+
+    // Every one of these answered with the full row, consumerId included.
+    const projected = expect.objectContaining({
+      select: CUSTOMER_PUBLIC_SELECT,
+    });
+    expect(prisma.customer.create).toHaveBeenCalledWith(projected);
+    expect(prisma.customer.findMany).toHaveBeenCalledWith(projected);
+    expect(prisma.customer.findFirst).toHaveBeenCalledWith(projected);
+    expect(prisma.customer.update).toHaveBeenCalledWith(projected);
+    expect(CUSTOMER_PUBLIC_SELECT).not.toHaveProperty('consumerId');
+  });
+});
 
 describe('CustomersService.findAll', () => {
   const consumer = { username: 'cosmos_u1', credentialId: 'cred_1' } as any;

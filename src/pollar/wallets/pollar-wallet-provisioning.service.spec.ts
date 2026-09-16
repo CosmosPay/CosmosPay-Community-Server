@@ -56,10 +56,11 @@ function build() {
   return { service, table, pollar };
 }
 
+/** A mainnet login — the only kind that provisions a counterpart wallet. */
 const INPUT = {
   consumerId: 'c1',
   externalId: 'ada@example.com',
-  primaryNetwork: 'testnet' as const,
+  primaryNetwork: 'public' as const,
   wallet: { type: 'internal' as const, address: ADDRESS },
   pollarUserId: 'usr_1',
   profile: { first_name: 'Ada', last_name: 'Lovelace' },
@@ -69,7 +70,7 @@ const row = (table: ReturnType<typeof makeTable>, network: string) =>
   table.rows.find((r) => r.network === network);
 
 describe('provisionBothNetworks', () => {
-  it('provisions the counterpart network and reports both', async () => {
+  it('provisions testnet for a mainnet login and reports both', async () => {
     const { service, table, pollar } = build();
     pollar.server.mockResolvedValue({
       id: 'usr_2',
@@ -79,21 +80,43 @@ describe('provisionBothNetworks', () => {
     const wallets = await service.provisionBothNetworks(INPUT);
 
     expect(wallets).toEqual([
-      { network: 'testnet', status: 'ready', address: ADDRESS },
-      { network: 'public', status: 'ready', address: OTHER_ADDRESS },
+      { network: 'public', status: 'ready', address: ADDRESS },
+      { network: 'testnet', status: 'ready', address: OTHER_ADDRESS },
     ]);
-    // A testnet login must register on mainnet, not on itself.
+    // A mainnet login registers on testnet, not on itself.
     expect(pollar.server).toHaveBeenCalledTimes(1);
     expect(pollar.server.mock.calls[0].slice(0, 3)).toEqual([
       'POST',
-      'public',
+      'testnet',
       '/users/with-wallet',
     ]);
-    expect(row(table, 'public')).toMatchObject({
+    expect(row(table, 'testnet')).toMatchObject({
       status: 'READY',
       address: OTHER_ADDRESS,
       pollarUserId: 'usr_2',
     });
+  });
+
+  it('provisions no mainnet wallet for a testnet login', async () => {
+    // Testnet is where `dev` keys land. A key anyone can mint for free must not
+    // spend the operator's real XLM on a mainnet reserve per login.
+    const { service, table, pollar } = build();
+
+    const wallets = await service.provisionBothNetworks({
+      ...INPUT,
+      primaryNetwork: 'testnet',
+    });
+
+    expect(wallets).toEqual([
+      { network: 'testnet', status: 'ready', address: ADDRESS },
+    ]);
+    expect(pollar.server).not.toHaveBeenCalled();
+    // The login's own wallet is still recorded, so its routes recognise it.
+    expect(row(table, 'testnet')).toMatchObject({
+      status: 'READY',
+      address: ADDRESS,
+    });
+    expect(row(table, 'public')).toBeUndefined();
   });
 
   it('registers under the OAuth email, which is what links the two networks', async () => {
@@ -121,19 +144,19 @@ describe('provisionBothNetworks', () => {
     const wallets = await service.provisionBothNetworks(INPUT);
 
     // The whole contract: the login already succeeded, so this resolves.
-    expect(wallets[0]).toMatchObject({ network: 'testnet', status: 'ready' });
+    expect(wallets[0]).toMatchObject({ network: 'public', status: 'ready' });
     expect(wallets[1]).toEqual({
-      network: 'public',
+      network: 'testnet',
       status: 'pending',
       address: null,
     });
-    expect(row(table, 'public')).toMatchObject({
+    expect(row(table, 'testnet')).toMatchObject({
       status: 'PENDING',
       attempts: 1,
       errorCode: 'MISCONFIGURED',
     });
     // Scheduled, so the sweeper picks it up rather than hammering Pollar.
-    expect(row(table, 'public').nextAttemptAt).toBeInstanceOf(Date);
+    expect(row(table, 'testnet').nextAttemptAt).toBeInstanceOf(Date);
   });
 
   it('never rejects, whatever the provider does', async () => {
@@ -152,8 +175,8 @@ describe('provisionBothNetworks', () => {
 
     // The primary entry still comes off the login payload, which is the only
     // part the caller actually needs.
-    expect(wallets[0]).toMatchObject({ network: 'testnet', status: 'ready' });
-    expect(wallets[1]).toMatchObject({ network: 'public', status: 'pending' });
+    expect(wallets[0]).toMatchObject({ network: 'public', status: 'ready' });
+    expect(wallets[1]).toMatchObject({ network: 'testnet', status: 'pending' });
   });
 
   it('skips the counterpart when the provider vouched for no email', async () => {
@@ -167,7 +190,7 @@ describe('provisionBothNetworks', () => {
     // Without the join key a second wallet is an orphan that costs XLM and no
     // login ever reaches.
     expect(wallets).toEqual([
-      { network: 'testnet', status: 'ready', address: ADDRESS },
+      { network: 'public', status: 'ready', address: ADDRESS },
     ]);
     expect(pollar.server).not.toHaveBeenCalled();
   });
@@ -182,11 +205,11 @@ describe('provisionBothNetworks', () => {
     });
 
     expect(wallets[0]).toEqual({
-      network: 'testnet',
+      network: 'public',
       status: 'pending',
       address: null,
     });
-    expect(row(table, 'testnet').status).toBe('PENDING');
+    expect(row(table, 'public').status).toBe('PENDING');
   });
 
   it('does not let a later address-less login erase a known wallet', async () => {
@@ -201,7 +224,7 @@ describe('provisionBothNetworks', () => {
       wallet: { type: 'internal' as const, address: null },
     });
 
-    expect(row(table, 'testnet')).toMatchObject({
+    expect(row(table, 'public')).toMatchObject({
       status: 'READY',
       address: ADDRESS,
     });
@@ -228,8 +251,8 @@ describe('provisionBothNetworks', () => {
 
     const wallets = await service.provisionBothNetworks(INPUT);
 
-    expect(wallets[1]).toMatchObject({ network: 'public', status: 'ready' });
-    expect(row(table, 'public')).toMatchObject({
+    expect(wallets[1]).toMatchObject({ network: 'testnet', status: 'ready' });
+    expect(row(table, 'testnet')).toMatchObject({
       status: 'READY',
       errorCode: null,
     });
@@ -246,7 +269,7 @@ describe('attempt', () => {
       id: 'w1',
       consumerId: 'c1',
       externalId: 'ada@example.com',
-      network: 'public',
+      network: 'testnet',
       status: 'PENDING',
       attempts: POLLAR_WALLET_PROVISION_MAX_ATTEMPTS - 1,
       address: null,

@@ -8,18 +8,21 @@ function makeApi() {
     instancePath: jest.fn((p: string) => `/instances/in_test${p}`),
     get: jest.fn().mockResolvedValue({ ok: true }),
     post: jest.fn().mockResolvedValue({ ok: true }),
+    instance: jest.fn(),
   };
+  client.instance.mockReturnValue(client);
   const api = new BlindpayOnrampApi(client as unknown as BlindpayClient);
   return { api, client };
 }
 
 describe('BlindpayOnrampApi', () => {
-  it('prices a payin quote', async () => {
+  it('prices a payin quote on the named instance', async () => {
     const { api, client } = makeApi();
     const body = { blockchain_wallet_id: 'bw_1', request_amount: 1000 };
 
-    await api.createPayinQuote(body);
+    await api.createPayinQuote('dev', body);
 
+    expect(client.instance).toHaveBeenCalledWith('dev');
     expect(client.post).toHaveBeenCalledWith(
       '/instances/in_test/payin-quotes',
       body,
@@ -29,7 +32,7 @@ describe('BlindpayOnrampApi', () => {
   it('executes every payin through the single /payins/evm route', async () => {
     const { api, client } = makeApi();
 
-    await api.createPayin({ payin_quote_id: 'pq_1' });
+    await api.createPayin('prod', { payin_quote_id: 'pq_1' });
 
     expect(client.post).toHaveBeenCalledWith('/instances/in_test/payins/evm', {
       payin_quote_id: 'pq_1',
@@ -41,14 +44,14 @@ describe('BlindpayOnrampApi', () => {
     const provider = { id: 'pi_1', status: 'completed' };
     client.get.mockResolvedValue(provider);
 
-    await expect(api.getPayin('pi_1')).resolves.toBe(provider);
+    await expect(api.getPayin('prod', 'pi_1')).resolves.toBe(provider);
     expect(client.get).toHaveBeenCalledWith('/instances/in_test/payins/pi_1');
   });
 
   it('builds a trustline transaction', async () => {
     const { api, client } = makeApi();
 
-    await api.createAssetTrustline({ address: 'GABC' });
+    await api.createAssetTrustline('prod', { address: 'GABC' });
 
     expect(client.post).toHaveBeenCalledWith(
       '/instances/in_test/create-asset-trustline',
@@ -59,7 +62,9 @@ describe('BlindpayOnrampApi', () => {
   it('nests virtual accounts under the receiver', async () => {
     const { api, client } = makeApi();
 
-    await api.createVirtualAccount('re_1', { blockchain_wallet_id: 'bw_1' });
+    await api.createVirtualAccount('prod', 're_1', {
+      blockchain_wallet_id: 'bw_1',
+    });
 
     expect(client.post).toHaveBeenCalledWith(
       '/instances/in_test/customers/re_1/virtual-accounts',

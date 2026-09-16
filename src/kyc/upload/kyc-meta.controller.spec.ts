@@ -7,6 +7,8 @@ import { KycMetaService } from '@/kyc/upload/kyc-meta.service';
 
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00]);
 
+const CONSUMER = { username: 'cosmos_u1', environment: 'prod' };
+
 /** `count` distinct text fields, each holding a one-byte value. */
 const extraFields = (count: number, prefix = 'extra') =>
   Object.fromEntries(
@@ -35,6 +37,12 @@ describe('KycMetaController upload limits', () => {
     }).compile();
     app = moduleRef.createNestApplication();
     app.enableVersioning({ type: VersioningType.URI });
+    // Stands in for the gateway middleware: the route reads the caller, whose
+    // environment picks the BlindPay instance the document is stored on.
+    app.use((req: any, _res: unknown, next: () => void) => {
+      req.gatewayConsumer = CONSUMER;
+      next();
+    });
     await app.init();
   });
 
@@ -60,6 +68,7 @@ describe('KycMetaController upload limits', () => {
     }).expect(201);
 
     expect(meta.uploadDocument).toHaveBeenCalledWith(
+      CONSUMER,
       expect.objectContaining({ mimetype: 'image/png' }),
       'onboarding',
     );

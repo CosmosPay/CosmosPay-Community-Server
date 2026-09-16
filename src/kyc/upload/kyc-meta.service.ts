@@ -10,7 +10,7 @@ import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { UPLOAD_SIGNATURES } from '@/kyc/kyc.constants';
 import { PrismaService } from '@/prisma/prisma.service';
 import { InitiateTosDto } from '@/kyc/upload/dto/initiate-tos.dto';
-import type { AppConfig } from '@/config/configuration';
+import type { AppConfig, BlindpayEnvironment } from '@/config/configuration';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import { assertRedirectAllowed } from '@/kyc/redirect-url-whitelist';
 
@@ -37,6 +37,7 @@ export class KycMetaService {
    * this is the first point at which the content is in hand to check it.
    */
   uploadDocument(
+    consumer: GatewayConsumer,
     file: UploadableFile | undefined,
     bucket: string | undefined,
   ): Promise<{ file_url: string }> {
@@ -59,7 +60,14 @@ export class KycMetaService {
         `File content is not a valid "${file.mimetype}".`,
       );
     }
-    return this.blindpay.uploadFile(file, target);
+    // Stored on the caller's instance: a development document never lands in
+    // the production instance's storage, and the returned `file_url` is one that
+    // instance's receivers can reference.
+    return this.blindpay.uploadFile(
+      this.blindpay.environmentFor(consumer),
+      file,
+      target,
+    );
   }
 
   /**
@@ -76,17 +84,18 @@ export class KycMetaService {
       dto.redirect_url,
       this.config.get('kyc', { infer: true }).redirectUrlWhitelist,
     );
-    // Every tenant shares one BlindPay platform instance, so holding a receiver
-    // id proves nothing about who owns it — the same reason `assertQuoteOwned`
-    // exists on the onramp/offramp quote paths. Without this check a tenant
-    // could name another tenant's receiver, get back a hosted acceptance URL
-    // bound to that person, and have the resulting `tos_id` delivered to its
-    // own redirect host: manufactured terms-acceptance evidence for someone
-    // else's customer, against a regulated provider.
+    // Every tenant of an environment shares one BlindPay platform instance, so
+    // holding a receiver id proves nothing about who owns it — the same reason
+    // `assertQuoteOwned` exists on the onramp/offramp quote paths. Without this
+    // check a tenant could name another tenant's receiver, get back a hosted
+    // acceptance URL bound to that person, and have the resulting `tos_id`
+    // delivered to its own redirect host: manufactured terms-acceptance evidence
+    // for someone else's customer, against a regulated provider.
+    const environment = this.blindpay.environmentFor(consumer);
     if (dto.receiver_id) {
-      await this.assertReceiverOwned(consumer, dto.receiver_id);
+      await this.assertReceiverOwned(consumer, environment, dto.receiver_id);
     }
-    return this.blindpay.requestTos({
+    return this.blindpay.requestTos(environment, {
       idempotency_key: dto.idempotency_key ?? randomUUID(),
       receiver_id: dto.receiver_id ?? null,
       redirect_url: dto.redirect_url,
@@ -96,11 +105,12 @@ export class KycMetaService {
   /** 404s unless the provider receiver id is mirrored against this consumer. */
   private async assertReceiverOwned(
     consumer: GatewayConsumer,
+    environment: BlindpayEnvironment,
     blindpayId: string,
   ): Promise<void> {
     const local = await this.consumers.resolve(consumer);
     const owned = await this.prisma.blindpayReceiver.findFirst({
-      where: { blindpayId, consumerId: local.id },
+      where: { blindpayId, consumerId: local.id, environment },
       select: { id: true },
     });
     if (!owned) {
@@ -110,14 +120,20 @@ export class KycMetaService {
     }
   }
 
-  /** Lists the bank rails available for the platform instance. */
-  listRails(): Promise<BlindpayObject> {
-    return this.blindpay.listRails();
+  /** Lists the bank rails available on the caller's platform instance. */
+  listRails(consumer: GatewayConsumer): Promise<BlindpayObject> {
+    return this.blindpay.listRails(this.blindpay.environmentFor(consumer));
   }
 
-  /** Returns the field schema a given rail requires. */
-  bankDetails(rail: string): Promise<BlindpayObject> {
-    return this.blindpay.getBankDetails(rail);
+  /** Returns the field schema a given rail requires on the caller's instance. */
+  bankDetails(
+    consumer: GatewayConsumer,
+    rail: string,
+  ): Promise<BlindpayObject> {
+    return this.blindpay.getBankDetails(
+      this.blindpay.environmentFor(consumer),
+      rail,
+    );
   }
 }
 

@@ -26,12 +26,16 @@ import { KycMetaService } from '@/kyc/upload/kyc-meta.service';
 import { InitiateTosDto } from '@/kyc/upload/dto/initiate-tos.dto';
 import {
   ALLOWED_UPLOAD_TYPES,
+  KYC_TOS_RATE_LIMIT,
+  KYC_UPLOAD_RATE_LIMIT,
   MAX_UPLOAD_BYTES,
   MAX_UPLOAD_FIELD_BYTES,
   MAX_UPLOAD_FIELDS,
   MAX_UPLOAD_FILES,
   MAX_UPLOAD_PARTS,
 } from '@/kyc/kyc.constants';
+import { BLINDPAY_CONSUMER_QUOTA_RATE_LIMIT } from '@/blindpay/blindpay.constants';
+import { RateLimit } from '@/common/decorators/rate-limit.decorator';
 
 /**
  * Multer defaults to memory storage with **no** size limit, so an unbounded file
@@ -83,6 +87,8 @@ export class KycMetaController {
 
   @Post('upload')
   @RequirePermissions('kyc:write')
+  // The provider keeps what it is handed, and a later error deletes nothing.
+  @RateLimit(KYC_UPLOAD_RATE_LIMIT, BLINDPAY_CONSUMER_QUOTA_RATE_LIMIT)
   @UseInterceptors(FileInterceptor('file', KYC_UPLOAD_OPTIONS))
   @ApiConsumes('multipart/form-data')
   @ApiOperation({ summary: 'Upload a KYC document; returns its file_url' })
@@ -124,14 +130,17 @@ export class KycMetaController {
     },
   })
   upload(
+    @CurrentConsumer() consumer: GatewayConsumer,
     @UploadedFile() file: UploadableFile | undefined,
     @Body('bucket') bucket?: string,
   ) {
-    return this.meta.uploadDocument(file, bucket);
+    return this.meta.uploadDocument(consumer, file, bucket);
   }
 
   @Post('terms-of-service')
   @RequirePermissions('kyc:write')
+  // Creates a record at the provider; the response cannot take it back.
+  @RateLimit(KYC_TOS_RATE_LIMIT, BLINDPAY_CONSUMER_QUOTA_RATE_LIMIT)
   @ApiOperation({
     summary: 'Start ToS acceptance; returns the hosted URL (first KYC step)',
   })
@@ -145,20 +154,23 @@ export class KycMetaController {
   @Get('rails')
   @RequirePermissions('kyc:read')
   @ApiOperation({ summary: 'List available bank rails' })
-  rails() {
-    return this.meta.listRails();
+  rails(@CurrentConsumer() consumer: GatewayConsumer) {
+    return this.meta.listRails(consumer);
   }
 
   @Get('bank-details')
   @RequirePermissions('kyc:read')
   @ApiOperation({ summary: 'Get the field schema required by a rail' })
-  bankDetails(@Query('rail') rail?: string) {
+  bankDetails(
+    @CurrentConsumer() consumer: GatewayConsumer,
+    @Query('rail') rail?: string,
+  ) {
     if (!rail) {
       throw ApiError.badRequest(
         ApiErrorCode.ValidationFailed,
         'Query param "rail" is required',
       );
     }
-    return this.meta.bankDetails(rail);
+    return this.meta.bankDetails(consumer, rail);
   }
 }

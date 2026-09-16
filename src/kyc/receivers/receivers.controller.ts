@@ -97,14 +97,19 @@ export class ReceiversController {
   @ApiResponse({
     status: 409,
     description:
-      "Invalid KYC status transition (e.g. receiver is not in 'pending_review')",
+      "`kyc_state_invalid` — the receiver is not in 'pending_review', or the KYC data changed after you read it (`expected_version` names a version that is no longer current). Re-read the receiver, review it again, and approve that version.",
   })
   approve(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Param('id') id: string,
     @Body() dto: ApproveReceiverDto,
   ) {
-    return this.receivers.approve(consumer, id, dto.redirect_url);
+    return this.receivers.approve(
+      consumer,
+      id,
+      dto.redirect_url,
+      dto.expected_version,
+    );
   }
 
   @Post(':id/tos')
@@ -180,8 +185,16 @@ export class ReceiversController {
 
   @Patch(':id')
   @RequirePermissions('kyc:write')
-  @ApiOperation({ summary: 'Update a receiver' })
+  @ApiOperation({
+    summary:
+      'Update a receiver (once it is at BlindPay, identity fields need an elevated key)',
+  })
   @ApiOkResponse({ type: ReceiverEntity })
+  @ApiResponse({
+    status: 403,
+    description:
+      '`kyc_review_required`: the receiver already exists at BlindPay and the patch touches a field other than `external_id` or `image_url`. Only an elevated key (admin role) may rewrite identity at the provider; before enabling, the same edit sends the receiver back to review instead.',
+  })
   update(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Param('id') id: string,

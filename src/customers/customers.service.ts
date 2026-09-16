@@ -23,6 +23,24 @@ const NO_ACTIVITY: CustomerPaymentStats = {
   total: '0',
 };
 
+/**
+ * The columns a customer may leave this service with: every field
+ * `CustomerEntity` documents. Every read and write answered with the full row
+ * before, `consumerId` included; an allowlist also keeps any column added later
+ * in the table until someone lists it here.
+ */
+export const CUSTOMER_PUBLIC_SELECT = {
+  id: true,
+  name: true,
+  alias: true,
+  email: true,
+  account: true,
+  note: true,
+  reference: true,
+  createdAt: true,
+  updatedAt: true,
+} as const satisfies Prisma.CustomerSelect;
+
 @Injectable()
 export class CustomersService {
   private readonly logger = new Logger(CustomersService.name);
@@ -48,6 +66,7 @@ export class CustomersService {
         account: dto.account ?? null,
         reference: dto.reference ?? null,
       },
+      select: CUSTOMER_PUBLIC_SELECT,
     });
   }
 
@@ -96,6 +115,7 @@ export class CustomersService {
         orderBy: { createdAt: 'desc' },
         take: query.take,
         skip: query.skip,
+        select: CUSTOMER_PUBLIC_SELECT,
       }),
       this.prisma.customer.count({ where }),
     ]);
@@ -177,6 +197,7 @@ export class CustomersService {
     const local = await this.resolveConsumer(consumer);
     const customer = await this.prisma.customer.findFirst({
       where: { id, consumerId: local.id },
+      select: CUSTOMER_PUBLIC_SELECT,
     });
     if (!customer) throw ApiError.notFound('Customer not found');
     return customer;
@@ -194,6 +215,7 @@ export class CustomersService {
         ...(dto.account !== undefined ? { account: dto.account } : {}),
         ...(dto.reference !== undefined ? { reference: dto.reference } : {}),
       },
+      select: CUSTOMER_PUBLIC_SELECT,
     });
   }
 

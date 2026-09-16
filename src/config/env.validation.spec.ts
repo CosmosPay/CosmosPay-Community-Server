@@ -5,6 +5,9 @@ import { validateEnv } from '@/config/env.validation';
 const VALID_FEE_WALLET =
   'GARMB7W3FCR3GKIM3FLWVJASC2PUZ4VHUJZTNJVWWKNTCJNKO6TBCT76';
 
+/** The shape Svix mints: `whsec_` + base64 of 24 key bytes. */
+const SVIX_SECRET = `whsec_${Buffer.from('env-validation-svix-key!').toString('base64')}`;
+
 function validEnv(
   overrides: Record<string, string> = {},
 ): Record<string, string> {
@@ -46,6 +49,39 @@ describe('validateEnv', () => {
       validEnv({ APISIX_GATEWAY_SECRET: '' }),
       'APISIX_GATEWAY_SECRET',
     );
+  });
+
+  it('rejects the placeholder .env.example used to ship', () => {
+    // 46 characters, so the length floor alone let it boot — behind a secret
+    // printed in a public repository.
+    expect(() =>
+      validateEnv(
+        validEnv({
+          APISIX_GATEWAY_SECRET:
+            'replace-with-a-long-random-secret-min-32-chars',
+        }),
+      ),
+    ).toThrow(/APISIX_GATEWAY_SECRET is still a placeholder/);
+  });
+
+  it('rejects other obvious placeholder gateway secrets', () => {
+    for (const placeholder of [
+      'change-me-to-a-random-value-of-32-chars',
+      'YOUR_SECRET_GOES_HERE_AT_LEAST_32_CHARS',
+    ]) {
+      expect(() =>
+        validateEnv(validEnv({ APISIX_GATEWAY_SECRET: placeholder })),
+      ).toThrow(/placeholder/);
+    }
+  });
+
+  it('accepts a generated gateway secret', () => {
+    const generated =
+      '9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08';
+    expect(
+      validateEnv(validEnv({ APISIX_GATEWAY_SECRET: generated }))
+        .APISIX_GATEWAY_SECRET,
+    ).toBe(generated);
   });
 
   describe('NODE_ENV', () => {
@@ -319,10 +355,70 @@ describe('validateEnv', () => {
           validEnv({
             BLINDPAY_API_KEY: 'bp_test_key',
             BLINDPAY_INSTANCE_ID: '',
-            BLINDPAY_WEBHOOK_SECRET: 'whsec_test',
+            BLINDPAY_WEBHOOK_SECRET: SVIX_SECRET,
           }),
         ),
       ).toThrow(/BLINDPAY_INSTANCE_ID/i);
+    });
+
+    it('accepts a real-length Svix webhook secret', () => {
+      expect(
+        validateEnv(
+          validEnv({
+            BLINDPAY_API_KEY: 'bp_test_key',
+            BLINDPAY_INSTANCE_ID: 'in_test',
+            BLINDPAY_WEBHOOK_SECRET: SVIX_SECRET,
+          }),
+        ).BLINDPAY_WEBHOOK_SECRET,
+      ).toBe(SVIX_SECRET);
+    });
+
+    it('rejects a BlindPay webhook secret whose key is too short', () => {
+      // `test` decodes to 3 bytes of HMAC key.
+      expect(() =>
+        validateEnv(validEnv({ BLINDPAY_WEBHOOK_SECRET: 'whsec_test' })),
+      ).toThrow(/BLINDPAY_WEBHOOK_SECRET is not a usable Svix signing secret/);
+    });
+
+    it('rejects a BlindPay webhook secret outside the base64 alphabet', () => {
+      // Node decodes this to an EMPTY key without complaint; checked even with
+      // no API key set, because the webhook route reads the secret on its own.
+      expect(() =>
+        validateEnv(
+          validEnv({ BLINDPAY_WEBHOOK_SECRET: `whsec_${'!'.repeat(40)}` }),
+        ),
+      ).toThrow(/BLINDPAY_WEBHOOK_SECRET is not a usable Svix signing secret/);
+    });
+
+    it('holds the development instance to the same rules, naming its own variables', () => {
+      expect(() =>
+        validateEnv(
+          validEnv({
+            BLINDPAY_API_KEY_DEV: 'bp_dev_key',
+            BLINDPAY_INSTANCE_ID_DEV: '',
+            BLINDPAY_WEBHOOK_SECRET_DEV: SVIX_SECRET,
+          }),
+        ),
+      ).toThrow(/BLINDPAY_INSTANCE_ID_DEV is required/);
+      expect(() =>
+        validateEnv(validEnv({ BLINDPAY_WEBHOOK_SECRET_DEV: 'whsec_test' })),
+      ).toThrow(
+        /BLINDPAY_WEBHOOK_SECRET_DEV is not a usable Svix signing secret/,
+      );
+    });
+
+    it('accepts a complete development instance alongside production', () => {
+      const result = validateEnv(
+        validEnv({
+          BLINDPAY_API_KEY: 'bp_live_key',
+          BLINDPAY_INSTANCE_ID: 'in_live',
+          BLINDPAY_WEBHOOK_SECRET: SVIX_SECRET,
+          BLINDPAY_API_KEY_DEV: 'bp_dev_key',
+          BLINDPAY_INSTANCE_ID_DEV: 'in_dev',
+          BLINDPAY_WEBHOOK_SECRET_DEV: SVIX_SECRET,
+        }),
+      );
+      expect(result.BLINDPAY_INSTANCE_ID_DEV).toBe('in_dev');
     });
 
     it('rejects slippage above max slippage', () => {
@@ -334,6 +430,49 @@ describe('validateEnv', () => {
           }),
         ),
       ).toThrow(/STELLAR_SWAP_SLIPPAGE_BPS/i);
+    });
+
+    it('refuses a plain-http Pollar callback on a routable host', () => {
+      // Pollar returns the browser to this URL with the authorization code in
+      // the query string. Over http, every hop on the path gets a credential
+      // that exchanges for the user's session.
+      expect(() =>
+        validateEnv(
+          validEnv({
+            POLLAR_BRIDGE_CALLBACK_URL:
+              'http://gateway.example.com/v1/pollar/oauth/callback',
+          }),
+        ),
+      ).toThrow(/POLLAR_BRIDGE_CALLBACK_URL must use https/i);
+    });
+
+    it('allows the Pollar callback over https, or over http on loopback', () => {
+      expect(
+        validateEnv(
+          validEnv({
+            POLLAR_BRIDGE_CALLBACK_URL:
+              'https://gateway.example.com/v1/pollar/oauth/callback',
+          }),
+        ).POLLAR_BRIDGE_CALLBACK_URL,
+      ).toMatch(/^https:/);
+
+      // A developer's own machine: nothing else on the network sees the code.
+      expect(() =>
+        validateEnv(
+          validEnv({
+            POLLAR_BRIDGE_CALLBACK_URL:
+              'http://127.0.0.1:3000/v1/pollar/oauth/callback',
+          }),
+        ),
+      ).not.toThrow();
+      expect(() =>
+        validateEnv(
+          validEnv({
+            POLLAR_BRIDGE_CALLBACK_URL:
+              'http://localhost:3000/v1/pollar/oauth/callback',
+          }),
+        ),
+      ).not.toThrow();
     });
   });
 });

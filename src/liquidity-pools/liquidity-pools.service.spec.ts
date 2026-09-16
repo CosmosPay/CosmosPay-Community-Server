@@ -18,7 +18,10 @@ import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import { toStroops } from '@/swaps/swap-math';
 import { LiquidityPoolReaderService } from '@/liquidity-pools/liquidity-pool-reader.service';
-import { LiquidityPoolsService } from '@/liquidity-pools/liquidity-pools.service';
+import {
+  LIQUIDITY_OPERATION_PUBLIC_SELECT,
+  LiquidityPoolsService,
+} from '@/liquidity-pools/liquidity-pools.service';
 import { LpCostBasisService } from '@/liquidity-pools/lp-cost-basis.service';
 import { SettlementObserverService } from '@/observer/settlement-observer.service';
 import { SignedTransactionRelay } from '@/stellar/signed-transaction-relay.service';
@@ -582,6 +585,62 @@ describe('LiquidityPoolsService — commission engine', () => {
   });
 });
 
+describe('LiquidityPoolsService responses carry only the public projection', () => {
+  function build() {
+    const prisma = createPrisma();
+    const stellar = makeStellar();
+    const config = { get: () => stellarConfig() } as any;
+    const webhooks = new WebhookTerminalEmitter(prisma, {
+      emit: jest.fn(),
+    } as any);
+    const { service } = makeService(config, prisma, webhooks, stellar);
+    return { service, prisma };
+  }
+
+  it('answers a single operation without its internal columns', async () => {
+    const { service, prisma } = build();
+    prisma.liquidityPoolOperation.findFirst.mockResolvedValueOnce(
+      depositRow({
+        sharesReceived: '5',
+        settledAmountA: '1000',
+        settledAmountB: '100',
+        settlementEpoch: 1,
+      }),
+    );
+
+    const view = await service.findOneOperation(consumer, 'lp_1');
+
+    expect(Object.keys(view).sort()).toEqual(
+      [
+        ...Object.keys(LIQUIDITY_OPERATION_PUBLIC_SELECT),
+        'qr',
+        'commissionMemo',
+      ].sort(),
+    );
+    for (const internal of [
+      'consumerId',
+      'consumer',
+      'sharesReceived',
+      'settledAmountA',
+      'settledAmountB',
+      'settlementEpoch',
+    ]) {
+      expect(view).not.toHaveProperty(internal);
+    }
+  });
+
+  it('lists through the public select', async () => {
+    const { service, prisma } = build();
+    prisma.liquidityPoolOperation.count = jest.fn().mockResolvedValue(0);
+
+    await service.findAllOperations(consumer, { take: 20, skip: 0 });
+
+    expect(prisma.liquidityPoolOperation.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ select: LIQUIDITY_OPERATION_PUBLIC_SELECT }),
+    );
+  });
+});
+
 describe('LiquidityPoolsService.submit vs observer (issue #32 race)', () => {
   let prisma: ReturnType<typeof createPrisma>;
   let stellar: ReturnType<typeof makeStellar>;
@@ -617,9 +676,12 @@ describe('LiquidityPoolsService.submit vs observer (issue #32 race)', () => {
       // No lock: these tests drive `reconcile` directly.
       {} as any,
     );
-    jest
-      .spyOn(TransactionBuilder, 'fromXDR')
-      .mockReturnValue({ hash: () => Buffer.from(TX_HASH, 'hex') } as any);
+    // The envelope the stored operation was built from, signed: its hash matches
+    // and it carries a signature, which is all the relay checks before the status.
+    jest.spyOn(TransactionBuilder, 'fromXDR').mockReturnValue({
+      hash: () => Buffer.from(TX_HASH, 'hex'),
+      signatures: [{}],
+    } as any);
   });
 
   afterEach(() => {

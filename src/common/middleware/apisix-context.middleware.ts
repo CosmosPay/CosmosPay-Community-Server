@@ -1,6 +1,8 @@
 import { Injectable, Logger, NestMiddleware } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { NextFunction, Request, Response } from 'express';
+import { isInternalCall } from '@/admin/admin-auth';
+import { ADMIN_INTERNAL_HEADER } from '@/admin/admin.constants';
 import { AppConfig } from '@/config/configuration';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 
@@ -27,6 +29,7 @@ export class ApisixContextMiddleware implements NestMiddleware {
       organizationHeader,
       planHeader,
       swapFeeBpsHeader,
+      emailHeader,
     } = this.config.get('apisix', { infer: true });
 
     const username = this.firstHeader(req, consumerHeader);
@@ -43,6 +46,7 @@ export class ApisixContextMiddleware implements NestMiddleware {
     const planSwapFeeBps = this.parseFeeBps(
       this.firstHeader(req, swapFeeBpsHeader),
     );
+    const email = this.parseEmail(this.firstHeader(req, emailHeader));
 
     if (username) {
       const consumer: GatewayConsumer = {
@@ -54,6 +58,8 @@ export class ApisixContextMiddleware implements NestMiddleware {
         organizationId,
         plan,
         planSwapFeeBps,
+        email,
+        internal: isInternalCall(req.headers[ADMIN_INTERNAL_HEADER]),
       };
       req.gatewayConsumer = consumer;
     }
@@ -71,6 +77,17 @@ export class ApisixContextMiddleware implements NestMiddleware {
     const n = Number(raw);
     if (!Number.isInteger(n) || n < 0 || n > 10000) return null;
     return n;
+  }
+
+  /**
+   * Normalizes the forwarded account email. Lowercased, so the Pollar identity
+   * check compares like with like. Anything that is not one `@` between two
+   * non-empty parts counts as not forwarded, which fails that check closed.
+   */
+  private parseEmail(raw?: string): string | null {
+    if (!raw) return null;
+    const email = raw.toLowerCase();
+    return /^[^\s@]+@[^\s@]+$/.test(email) ? email : null;
   }
 
   /**

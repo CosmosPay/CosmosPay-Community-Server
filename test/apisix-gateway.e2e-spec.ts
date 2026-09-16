@@ -19,6 +19,9 @@ import { PrismaService } from '@/prisma/prisma.service';
 describe('APISIX gateway validation (e2e)', () => {
   let app: INestApplication;
 
+  /** The rate limiter's counter: the route under test declares a budget. */
+  const rateLimitCounters = new Map<string, number>();
+
   const prismaMock = {
     onModuleInit: jest.fn(),
     onModuleDestroy: jest.fn(),
@@ -27,6 +30,11 @@ describe('APISIX gateway validation (e2e)', () => {
     requestLog: {
       create: jest.fn().mockResolvedValue({ id: 'rl_1' }),
     },
+    $queryRaw: jest.fn((_sql: unknown, key: string) => {
+      const next = (rateLimitCounters.get(key) ?? 0) + 1;
+      rateLimitCounters.set(key, next);
+      return Promise.resolve([{ count: next }]);
+    }),
   };
 
   beforeAll(async () => {

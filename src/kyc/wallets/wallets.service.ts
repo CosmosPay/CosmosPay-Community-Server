@@ -8,6 +8,7 @@ import { BlindpayKycApi } from '@/blindpay/blindpay-kyc.api';
 import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
 import { BlindpayObject } from '@/blindpay/blindpay-sync.service';
 import { asNullableString, asString, toJson } from '@/blindpay/blindpay.util';
+import type { BlindpayEnvironment } from '@/config/configuration';
 import { ReceiversService } from '@/kyc/receivers/receivers.service';
 import { CreateWalletDto } from '@/kyc/wallets/dto/create-wallet.dto';
 
@@ -30,7 +31,8 @@ export const WALLET_PUBLIC_SELECT = {
 /**
  * Blockchain wallets belonging to a receiver — the on-chain endpoints for
  * onramp (mint destination) and offramp (funds source). Mirrored locally and
- * scoped to the consumer through the parent receiver.
+ * scoped to the consumer through the parent receiver, which also pins them to
+ * the caller's BlindPay instance.
  */
 @Injectable()
 export class WalletsService {
@@ -47,16 +49,22 @@ export class WalletsService {
     dto: CreateWalletDto,
   ) {
     const local = await this.consumers.resolve(consumer);
+    const environment = this.blindpay.environmentFor(consumer);
     const receiver = await this.receivers.findReceiverOrThrow(
       local.id,
+      environment,
       receiverId,
     );
     this.receivers.assertEnabled(receiver);
     const created = await this.blindpay.createBlockchainWallet(
+      environment,
       receiver.blindpayId,
       dto,
     );
-    return this.mirror(local.id, receiver.id, { ...dto, ...created });
+    return this.mirror(local.id, environment, receiver.id, {
+      ...dto,
+      ...created,
+    });
   }
 
   async findAll(
@@ -67,6 +75,7 @@ export class WalletsService {
     const local = await this.consumers.resolve(consumer);
     const receiver = await this.receivers.findReceiverOrThrow(
       local.id,
+      this.blindpay.environmentFor(consumer),
       receiverId,
     );
     const where = { receiverId: receiver.id };
@@ -87,17 +96,21 @@ export class WalletsService {
   /** Returns the message the customer must sign for the secure (EOA) flow. */
   async signMessage(consumer: GatewayConsumer, receiverId: string) {
     const local = await this.consumers.resolve(consumer);
+    const environment = this.blindpay.environmentFor(consumer);
     const receiver = await this.receivers.findReceiverOrThrow(
       local.id,
+      environment,
       receiverId,
     );
-    return this.blindpay.getWalletSignMessage(receiver.blindpayId);
+    return this.blindpay.getWalletSignMessage(environment, receiver.blindpayId);
   }
 
   async remove(consumer: GatewayConsumer, receiverId: string, id: string) {
     const local = await this.consumers.resolve(consumer);
+    const environment = this.blindpay.environmentFor(consumer);
     const receiver = await this.receivers.findReceiverOrThrow(
       local.id,
+      environment,
       receiverId,
     );
     const row = await this.prisma.blindpayBlockchainWallet.findFirst({
@@ -107,6 +120,7 @@ export class WalletsService {
       return { id, deleted: true };
     }
     await this.blindpay.deleteBlockchainWallet(
+      environment,
       receiver.blindpayId,
       row.blindpayId,
     );
@@ -116,7 +130,12 @@ export class WalletsService {
     return { id, deleted: true };
   }
 
-  private mirror(consumerId: string, receiverId: string, obj: BlindpayObject) {
+  private mirror(
+    consumerId: string,
+    environment: BlindpayEnvironment,
+    receiverId: string,
+    obj: BlindpayObject,
+  ) {
     const data = {
       receiverId,
       name: asNullableString(obj.name),
@@ -129,7 +148,12 @@ export class WalletsService {
       where: {
         consumerId_blindpayId: { consumerId, blindpayId: asString(obj.id) },
       },
-      create: { consumerId, blindpayId: asString(obj.id), ...data },
+      create: {
+        consumerId,
+        environment,
+        blindpayId: asString(obj.id),
+        ...data,
+      },
       update: data,
       // The create response is a read path too — keep the provider blob out of it.
       select: WALLET_PUBLIC_SELECT,

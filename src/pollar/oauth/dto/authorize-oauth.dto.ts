@@ -31,9 +31,10 @@ export class AuthorizeOauthDto {
     example: 'cosmospay://auth/callback',
     description:
       'Where the bridge delivers the single-use code, as `?code=…&state=…`. ' +
-      'Must be registered for this consumer in POLLAR_REDIRECT_URI_WHITELIST. ' +
-      'Omit it to use the poll flow (GET /v1/pollar/oauth/sessions/{state}), ' +
-      'which is the right shape for a wallet that cannot be addressed by URL.',
+      'Must be registered for this consumer in POLLAR_REDIRECT_URI_WHITELIST, ' +
+      'and requires `code_challenge`. Omit it to use the poll flow ' +
+      '(GET /v1/pollar/oauth/sessions/{state}), which is the right shape for a ' +
+      'wallet that cannot be addressed by URL.',
   })
   @IsOptional()
   @IsString()
@@ -42,10 +43,11 @@ export class AuthorizeOauthDto {
 
   @ApiPropertyOptional({
     description:
-      'PKCE challenge (RFC 7636): BASE64URL(SHA256(code_verifier)). Optional, ' +
-      'but once supplied the matching `code_verifier` is required to redeem. ' +
-      'Bind the code to the wallet that asked for it — a code that leaks out of ' +
-      'a browser or a log is then useless on its own.',
+      'PKCE challenge (RFC 7636): BASE64URL(SHA256(code_verifier)). Required ' +
+      'with `redirect_uri` (400 `validation_failed` without it), optional for ' +
+      'the poll flow; once supplied, the matching `code_verifier` is required ' +
+      'to redeem. It binds the code to the wallet that asked for it — a code ' +
+      'that leaks out of a browser or a log is then useless on its own.',
     example: 'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM',
   })
   @IsOptional()

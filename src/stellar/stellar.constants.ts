@@ -56,3 +56,31 @@ export const BASE_RESERVE_STROOPS = 5_000_000n;
  * precedence over this default, so transaction submission is unaffected.
  */
 export const HORIZON_TIMEOUT_MS = 15_000;
+
+/**
+ * How many times one row's rejected envelope may be relayed again.
+ *
+ * `SignedTransactionRelay` re-sends a FAILED row's envelope on request, and each
+ * re-send bumps `settlementEpoch` so its outcome can be announced: the terminal
+ * webhook dedup key is `type:id:epoch`. Uncapped, that was a loop anyone holding
+ * the envelope could run — POST the rejected envelope, get a fresh FAILED event,
+ * its delivery rows and a Horizon submission, repeat — and the *unsigned*
+ * envelope from the create response was enough to run it, because signatures do
+ * not change a transaction's hash.
+ *
+ * Why three. A resubmission is always the same transaction — same sequence
+ * number, fee and time bounds — so it can only succeed where the rejection was
+ * fixable without rebuilding: a missing or wrong signature (`tx_bad_auth`, fixed
+ * by signing with the right key or collecting a co-signer) or a source that
+ * could not pay the fee (`tx_insufficient_balance`, fixed by topping it up).
+ * Anything decided while applying the operations (`op_underfunded`,
+ * `op_under_dest_min`, …) lands on-chain as a failed transaction and consumes
+ * the sequence number, so no resubmission of it can ever succeed; the fix there
+ * is a new envelope. Three covers both fixable causes with one to spare, and
+ * holds a row to four FAILED events however hard it is driven.
+ *
+ * Enforced twice: the relay refuses up front with an error that says why, and
+ * `SettlementRepository.markSubmitted` carries the bound in its compare-and-swap,
+ * so concurrent resubmits cannot each read `epoch < cap` and all bump past it.
+ */
+export const SETTLEMENT_MAX_RESUBMITS = 3;
