@@ -2,6 +2,14 @@
 
 All notable changes to the Cosmos Pay Community Server are documented here.
 Generated from [Conventional Commits](https://www.conventionalcommits.org) by [git-cliff](https://git-cliff.org).
+## [1.3.0] - 2026-09-16
+
+### Features
+- Add end-to-end tests for payment intents txHash handling (8013ca0)
+- Update API documentation for receiver updates with elevated key requirements (04147e5)
+- Enhance OAuth session handling and user registration (2b19c55)
+- Implement stored envelope handling for Stellar transactions (876a46b)
+
 ## [1.2.0] - 2026-09-15
 
 ### Features
