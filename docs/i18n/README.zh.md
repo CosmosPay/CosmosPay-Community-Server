@@ -347,7 +347,7 @@ APISIX 会在多个实例之间进行负载均衡，因此每个后台定时器�
 
 投递通过 NestJS `EventEmitter2`（`webhook.event`）解耦，因此发出通知永远不会阻塞触发它的 API 请求。
 
-**出站目标策略（SSRF）：** 端点必须使用 `https`，且只能解析到公网地址。注册时会拒绝回环地址、RFC1918 私有地址段、链路本地地址（`169.254.0.0/16`，包括云元数据地址 `169.254.169.254`）以及已知的元数据主机名。每次投递之前会立即再次执行同样的检查（注册之后 DNS 可能发生变化）。HTTP 客户端使用 `redirect: manual`（从不跟随 `3xx`）、来自环境变量的连接/读取超时，以及响应体大小上限。
+**出站目标策略（SSRF）：** 端点必须使用 `https`，且只能解析到公网地址。注册时会拒绝回环地址、RFC1918 私有地址段、链路本地地址（`169.254.0.0/16`，包括云元数据地址 `169.254.169.254`）以及已知的元数据主机名。**所有取决于主机的拒绝都给出同一个答复**——「该主机不是允许的目标」——原因只写进日志：如果能区分「这里解析不到」「解析到 `10.0.4.7`」和「解析到元数据服务」，任何能注册端点的人就能一个 URL 一个 URL 地把本服务所在的网络摸清楚。格式错误的 URL、非 https 协议、内嵌凭证或缺少主机仍会准确说明问题所在：它们描述的是发来的字符串，而不是这张网络。每次投递之前会立即再次执行同样的检查（注册之后 DNS 可能发生变化）。HTTP 客户端使用 `redirect: manual`（从不跟随 `3xx`）、来自环境变量的连接/读取超时，以及响应体大小上限。
 
 | 变量 | 默认值 | 含义 |
 | -------- | ------- | ------- |
@@ -439,7 +439,7 @@ OPENAPI_SERVER_URL=https://gateway.example.com npm run openapi:generate
 
 **网络由网关转发的 API key 类型决定**：`prod` key → public（主网），`dev` key → testnet。`STELLAR_NETWORK` 只是没有网关的本地开发环境中的回退值。每个意图都会存储自己的网络，所有 Horizon 调用（构建、验证、观察器）都以该网络为目标。意图保存在 `payment_intent` 表中，并限定在发起调用的消费者范围内：`PENDING → SUBMITTED → SUCCEEDED/FAILED/CANCELLED/EXPIRED`。唯一能走出终态的路径是 `EXPIRED → SUCCEEDED`，当支付在链上得到验证时。
 
-**memo 是必需的 `MEMO_ID`**——它在链上标识这笔支付，并让创建操作具备**幂等性**：`(consumer, memo)` 是唯一的，因此使用相同的 memo **且相同的条款**再次创建会返回原来的意图。相同的 memo 搭配任何不同的条款——类型（kind）、网络、目标地址、金额、资产、`msg`、`callback`，或 `tx` 的 `source`——都会返回 `409 idempotency_conflict`，且该错误不会透露已存储意图的任何信息。这一点在共享公共 key 下尤为重要，因为所有匿名钱包都是同一个消费者。如果不传 `memo`，会随机生成一个 uint64。
+**memo 是必需的 `MEMO_ID`**——它在链上标识这笔支付，并让创建操作具备**幂等性**：`(consumer, memo)` 是唯一的，因此使用相同的 memo **且相同的条款**再次创建会返回原来的意图。相同的 memo 搭配任何不同的条款——类型（kind）、网络、目标地址、金额、资产、`msg`、`callback`，或 `tx` 的 `source`——都会返回 `409 idempotency_conflict`，且该错误不会透露已存储意图的任何信息。这一点在共享公共 key 下尤为重要，因为所有匿名钱包都是同一个消费者。两个构建路由共用按消费者和客户端地址计算的**每分钟 30 次调用**预算（`429 rate_limited`）：它们都要从 Horizon 读取付款人账户并写入一行记录，而在共享公共 key 下，地址是区分不同匿名钱包的唯一依据。如果不传 `memo`，会随机生成一个 uint64。
 
 **`POST /v1/payment-intents/tx`** — 付款方（`source`）已知，因此我们构建未签名的 `TransactionEnvelope` 和一个 `web+stellar:tx?xdr=...` URI。
 
@@ -568,12 +568,14 @@ quote → build XDR → customer signs in wallet → POST /submit → Stellar ex
 
 **`POST /v1/swaps`** — 构建可签名的交易（`swaps:write`）。接受相同的字段，外加 `source`（付款/签名账户）；`destination` 默认为 `source`（自兑换），可选的 `memo`（MEMO_ID）会原样写入链上。
 
-可选的**幂等**：发送 `Idempotency-Key` 请求头（推荐），或在请求体中发送 `idempotencyKey`。使用相同 key **且相同请求**——网络、源账户、目标账户、两种资产、金额、滑点和 memo——的重试会返回**已有的** swap（`id` + `txHash`），而不会再构建一笔交易。相同的 key 搭配不同的请求会返回 `409 idempotency_conflict`，且该错误不会透露已存储 swap 的任何信息。流动性存入和取出遵循相同的规则，并且还会比较操作的类型。没有 key 时，唯一约束 `(network, txHash)` 仍会以 **409** 拒绝字节级完全相同的重复构建（序列号 / XDR 冲突）。当 `STELLAR_SWAP_SINGLE_INFLIGHT=true` 时，同一 `(consumer, source, network)` 的第二个未过期的 `PENDING` swap 也会返回 **409**，并指明已有的 id（默认**关闭**——仍允许同一账户并发发起不同的 swap）。
+可选的**幂等**：发送 `Idempotency-Key` 请求头（推荐），或在请求体中发送 `idempotencyKey`。使用相同 key **且相同请求**——网络、源账户、目标账户、两种资产、金额、滑点和 memo——的重试会返回**已有的** swap（`id` + `txHash`），而不会再构建一笔交易。相同的 key 搭配不同的请求会返回 `409 idempotency_conflict`，且该错误不会透露已存储 swap 的任何信息。流动性存入和取出遵循相同的规则，并且还会比较操作的类型。没有 key 时，唯一约束 `(network, txHash)` 仍会以 **409** 拒绝字节级完全相同的重复构建（序列号 / XDR 冲突）。当 `STELLAR_SWAP_SINGLE_INFLIGHT=true` 时，同一 `(consumer, source, network)` 的第二个未过期的 `PENDING` swap 也会返回 **409**，并指明已有的 id（默认**关闭**——仍允许同一账户并发发起不同的 swap）。只有**可能已经上链**的 swap 才会占住这道防护：账户尚未用掉其序列号的那一行不可能已经结算，而此刻正在构建的 swap 会取用同一个序列号，因此两者最多只有一个能结算。任何调用方都可以填写任意 `source`，所以在没有这项判断之前，一笔粉尘 swap 就能把别人账户的兑换冻结整整一个超时窗口——在共享公共 key 下，攻击者反复发起就能一直冻结下去。
 
 ```jsonc
 // response → { id, status: "PENDING", network, sendAmount, feeAmount, swapAmount,
 //              destEstimated, destMin, path, xdr, uri: "web+stellar:tx?xdr=…", qr, txHash, … }
 ```
+
+**报价和构建同样有限流**，按消费者和客户端地址计算：**每分钟 60 次报价**和**每分钟 20 次构建**，各自独立于提交的额度。报价不持久化任何东西，却仍要花掉一次 strict-send 路径搜索——本服务向 Horizon 发出的最昂贵的调用——而那份按 IP 的预算由 swap、流动性池和支付意图共同分享，因此在循环里刷价格会同时拖慢这三者，对所有匿名调用方都是如此。
 
 **`POST /v1/swaps/:id/submit`** — 转发已签名的信封（`swaps:write`）。
 
@@ -587,7 +589,7 @@ quote → build XDR → customer signs in wallet → POST /submit → Stellar ex
 
 在广播之前，服务会检查已签名交易的哈希是否与它构建的交易一致，因此它永远不会转发任意交易。swap 会通过同一个分发器触发 `SWAP_CREATED` / `SWAP_SUBMITTED` / `SWAP_SUCCEEDED` / `SWAP_FAILED` webhook 事件。
 
-**提交对它转发的内容非常严格。** 在 `signedXdr` 能被解析、其哈希与该 swap 的 `txHash` 一致、且携带至少一个签名之前，关于这笔 swap 的任何信息——包括它的状态——都不会被回答，因此创建响应中未签名的 `xdr` 会得到 `400 validation_failed`。一笔已超出其时间边界（`STELLAR_TX_TIMEOUT`，默认 300 秒）的 swap 信封会返回 `400 invalid_state_transition` 且不会被广播；如果它已经在时限内到达网络，观察器仍会将其结算。在遭到网络拒绝之后，同一个信封最多可以重新提交 **3** 次，之后请构建一笔新的 swap——在 `503 provider_unavailable` 之后的重试不计入次数。该路由允许每个消费者和客户端地址每分钟调用 **20** 次（`429 rate_limited`）；在共享公共 key 下，每个匿名钱包都是同一个消费者，因此位于同一 NAT 之后的钱包会共用这份预算。`POST /v1/liquidity-pools/operations/:id/submit` 遵循相同的规则，并拥有自己独立的额度。
+**提交对它转发的内容非常严格。** 在 `signedXdr` 能被解析、其哈希与该 swap 的 `txHash` 一致、且携带至少一个签名之前，关于这笔 swap 的任何信息——包括它的状态——都不会被回答，因此创建响应中未签名的 `xdr` 会得到 `400 validation_failed`。一笔已超出其时间边界（`STELLAR_TX_TIMEOUT`，默认 300 秒）的 swap 信封会返回 `400 invalid_state_transition` 且不会被广播；如果它已经在时限内到达网络，观察器仍会将其结算。在遭到网络拒绝之后，同一个信封最多可以重新提交 **3** 次，之后请构建一笔新的 swap——在 `503 provider_unavailable` 之后的重试不计入次数。该路由允许每个消费者和客户端地址每分钟调用 **20** 次（`429 rate_limited`）；在共享公共 key 下，每个匿名钱包都是同一个消费者，因此位于同一 NAT 之后的钱包会共用这份预算。`POST /v1/liquidity-pools/operations/:id/submit` 遵循相同的规则，并拥有自己独立的额度；`POST /v1/liquidity-pools/deposit` · `/withdraw` 共用**每分钟 20 次构建**的一份预算——它们是同一条流程的两个方向，额度分开只会让循环在两者之间交替、把两份都吃掉。
 
 ## 别名 — 可认领的支付标识
 
@@ -683,18 +685,34 @@ wallet ──3. POST /v1/aliases {name, email, nonce, signature} ─────
 
 **身份信息在到达 BlindPay 之前会经过审核，修改也不例外。** receiver 启用之前，任何触及 KYC 数据的 `PATCH` 都会让它回到 `pending_review`。一旦它已存在于 BlindPay，租户 key 只能修改 `external_id` 和 `image_url`；其他任何字段都会返回 `403` `kyc_review_required`，除非该 key 是提升权限的 key（`X-Consumer-Role: admin`），因为这个 `PUT` 会直接在服务商那里改写身份信息。
 
+**一次批准被钉在被审核的那份材料上。** 读取 receiver 时会带上 `dossierVersion`，它统计提交的 KYC 数据被修改过多少次。批准时把它作为 `expected_version` 回传，如果材料在你读取之后发生过变化，就会返回 `409 kyc_state_invalid`，而不是批准一份没人看过的数据——修改只会让状态停留在 `pending_review`，因此批准本身察觉不到。被签字确认的版本记在 `reviewedVersion` 中，只要两者不一致，`POST /v1/kyc/receivers/:id/enable` 就拒绝在 BlindPay 创建该 receiver。
+
+**法币路由都有预算。** 服务商会保留下来的每一次写入都按消费者和客户端地址限流，并且每个由 BlindPay 支撑的路由还会计入**每分钟 60 次服务商请求**的按消费者上限：同一个实例服务该 key 下的所有租户，因此一个租户在报价上打循环就会让其他租户的 payin 失败。超出预算会返回带 `Retry-After` 的 `429 rate_limited`。
+
+| 路由 | 预算（按消费者 + 客户端地址） |
+| ---- | ----------------------------- |
+| `POST /v1/kyc/upload` | 每 10 分钟 20 次 |
+| `POST /v1/kyc/terms-of-service` | 每 10 分钟 10 次 |
+| `POST /v1/onramp/quotes` · `POST /v1/offramp/quotes` | 各每分钟 30 次，额度分开 |
+| `POST /v1/onramp/payins` | 每分钟 10 次 |
+| `POST /v1/offramp/payouts/authorize` · `POST /v1/offramp/payouts` | 每分钟 10 次，共用 |
+| `POST /v1/offramp/payouts/:id/documents` | 每 10 分钟 20 次 |
+| `POST /v1/onramp/trustline` | 每分钟 20 次 |
+
 ### KYC 重定向 URL 按消费者设置白名单
 
 服务条款流程会把用户引导到 BlindPay，再返回到集成方提供的 `redirect_url`。为避免开放重定向，每个 `redirect_url` 都要经过两项检查：
 
 | 层 | 规则 | 位置 |
 | ----- | ---- | ----- |
-| 格式 | 绝对 `https` URL，且不含内嵌凭证（`user:pass@`） | 所有携带该字段的 DTO 上的 `@IsRedirectUrl()` |
+| 格式 | 绝对 `https` URL，且不含内嵌凭证（`user:pass@`）、不含片段（`#…`），也不含反斜杠、空白字符或控制字符 | 所有携带该字段的 DTO 上的 `@IsRedirectUrl()`，以及服务层的再次检查 |
 | 主机 | 位于**发起调用的消费者**的白名单中——完全相同的主机，或在标签边界上的子域名（`app.acme.com` 匹配 `acme.com`；`evilacme.com` 不匹配） | `KYC_REDIRECT_URL_WHITELIST`，在服务层强制执行 |
 
 ```
 KYC_REDIRECT_URL_WHITELIST={"cosmos_acme":["acme.com","app.acme.com"]}
 ```
+
+这些格式规则决定了主机检查值多少钱。WHATWG 解析器把权限部分中的反斜杠读作 `/`，另一些解析器则把它当作 userinfo 的一部分，于是 `https://app.acme.com\@evil.test` 有两种同样成立的读法——而本服务并不是最后一个读它的人：这个值会发给 BlindPay，在托管页面上回来，最后落到浏览器里。空白字符和控制字符属于同一类问题，片段会吞掉服务商追加的 `?tos_id=`，而凭证会把主机挪到 `@` 的另一侧。
 
 它**默认拒绝（fail closed）**：没有条目的消费者完全无法使用重定向，带末尾点号或 IDN 形式的主机会被拒绝，而不是被规范化。每个接受 `redirect_url` 的路由都会检查它，包括管理员批准，后者使用的是该 receiver 所属消费者的白名单。被拒绝的协议或主机返回 `400`。
 
@@ -814,7 +832,7 @@ Pollar 将主网和测试网作为独立的应用运行，使用独立的密钥�
 
 **有两个上限按消费者而不是按地址计算**，所以轮换地址也无法成倍放大它们：一个消费者能引发的 Pollar 请求（每分钟 100 个，覆盖上面除轮询和回调之外的所有路由——Pollar 为该 key 的预算是每分钟 200 个，且所有租户共享），以及它能引发的钱包数量（`authorize` 和 `users/with-wallet`，每天 50 个）。控制台调用（`X-Cosmos-Internal`）不受这两个上限约束：开发者平台通过同一个消费者代理所有没有 key 的钱包，并自行为这部分流量设定预算。
 
-超出预算会返回 **`429` 以及 `code: "rate_limited"`**、`Retry-After`，以及 `RateLimit-Limit` / `-Remaining` / `-Reset` 响应头。同一个限流器还守护着 Pollar 之外的几个路由——swap 和流动性池提交、webhook 的 `ping` 与 `redeliver`、别名 challenge 和恢复、活动数据接收——各自的预算在对应小节中说明。通用的速率限制应由 APISIX 负责。
+超出预算会返回 **`429` 以及 `code: "rate_limited"`**、`Retry-After`，以及 `RateLimit-Limit` / `-Remaining` / `-Reset` 响应头。同一个限流器还守护着 Pollar 之外那些「出错也退不回成本」的路由——swap 与流动性池的构建及其提交、支付意图的构建、KYC 上传与服务条款、onramp 和 offramp 的写入（其上还叠加 BlindPay 的按消费者上限）、webhook 的 `ping` 与 `redeliver`、别名 challenge 和恢复、活动数据接收——各自的预算在对应小节中说明。通用的速率限制应由 APISIX 负责。
 
 **计数器在 Postgres 中，而不是在内存中**，因此限额在多个副本之间依然有效。它是固定窗口（每个请求执行一条原子的 `INSERT … ON CONFLICT … RETURNING`），因此客户端可以在窗口边界两侧各用满一次预算。
 
@@ -883,6 +901,12 @@ Pollar 在 key 的前缀中编码了网络和 key 类型，环境变量校验器
 | `POST /v1/pollar/users` 和 `/v1/pollar/users/with-wallet` 需要提升权限的 key；租户 key 会得到 `403 elevated_key_required` | 用租户 key 预注册用户的集成方 | 注册的用户就是之后社交登录按邮箱解析到的用户，因此租户 key 可以抢注陌生人的邮箱，并被记录为其钱包的所有者 |
 | testnet 登录不再为其用户开通主网钱包：testnet 兑换的 `network_wallets` 只列出 testnet 钱包。主网登录仍会开通 testnet | 读取 testnet 登录的主网条目的任何人 | 任何人都能创建的 `dev` key 每次登录都会花费运营方的真实 XLM 为主网储备金注资 |
 | 轮询、refresh、logout、token 校验、用户注册和删除 trustline 的 Pollar 路由都有了限流，并且在按地址的预算之上还叠加了按消费者的配额（每分钟 100 个 Pollar 请求）和钱包上限（每天 50 个）；超出返回 `429 rate_limited` | 频繁调用这些路由的客户端 | 它们之前没有限制，而每次调用都会消耗所有租户共享的 Pollar 请求预算——一个租户就能让所有其他租户的登录失败 |
+| `POST /v1/kyc/receivers/:id/approve` 接受 `expected_version`（你读到的那个 `dossierVersion`），当 KYC 数据此后发生变化时返回 `409 kyc_state_invalid`。`POST /v1/kyc/receivers/:id/enable` 会拒绝并非被批准的那份材料，receiver 的读取结果也带上了 `dossierVersion` 和 `reviewedVersion` | 开始发送 `expected_version` 的审核方；其他人不受影响——该字段是可选的 | 审核就是有人先读数据、再予以批准，而中间的一次修改只会把状态留在 `pending_review`，于是批准落在了一份没人看过的材料上，`enable` 又把它送到了受监管的服务商 |
+| `POST /v1/kyc/upload`、`/v1/kyc/terms-of-service`、onramp 和 offramp 的写入、`POST /v1/payment-intents/tx` 与 `/pay`、`POST /v1/swaps/quote` 与 `/v1/swaps`，以及 `POST /v1/liquidity-pools/deposit` 与 `/withdraw` 现在超出预算都会按消费者和客户端地址返回 `429 rate_limited`。每个由 BlindPay 支撑的路由还会计入每分钟 60 次服务商请求的按消费者上限 | 在这些路由上打循环的脚本；超过上限的批量导入方应当使用自己的 key | 它们此前完全没有限制：每一个要么在服务商那里留下任何错误都退不回的东西，要么消耗本服务所有路由共享的按 IP 的 Horizon 预算。此前只有提交路由受限 |
+| 对于账户尚未用掉其序列号的 `PENDING` swap（未签名或已放弃的信封），`POST /v1/swaps` 不再返回 `409 operation_in_flight`。仅在 `STELLAR_SWAP_SINGLE_INFLIGHT=true` 时适用 | 此前被挡住的钱包用户 | 任何调用方都可以填写任意 `source`，因此一笔粉尘 swap 能把别人的账户一个超时窗口接一个超时窗口地冻住——与上面流动性池的修复是一对 |
+| 因主机原因被拒绝的 webhook 目标——解析不到、私有地址、链路本地、元数据——统一为一个 `400` 和一条消息；原因留在服务日志里。格式错误的 URL、非 https 协议、内嵌凭证或缺少主机仍会说明问题所在 | 此前从响应里读取原因的集成方 | 注册端点会解析一个本服务能够到达的名称，因此逐条给出原因就等于让人一个 URL 一个 URL 地摸清内网 |
+| 当 `redirect_url` 带有片段、反斜杠、空白字符或控制字符时会被拒绝；不含内嵌凭证的 https 此前就已是必需 | 发送普通 URL 的人不受影响 | `https://app.acme.com\@evil.test` 指向哪个主机取决于谁来解析，而这个值还会被 BlindPay 和浏览器再读一次 |
+| 当 `POLLAR_BRIDGE_CALLBACK_URL` 是可路由主机上的纯 `http` 时，服务拒绝启动 | 在别处终止 TLS 并把回调配置成 `http` 的部署 | Pollar 会把浏览器连同查询字符串里的授权码一起送回该地址，而这个授权码可以换取用户的会话 |
 
 随之而来的部署说明：
 
@@ -900,6 +924,9 @@ Pollar 在 key 的前缀中编码了网络和 key 类型，环境变量校验器
 - **先部署开发者平台的 forwarder 变更。** 网关没有为其转发 `X-Consumer-Email` 的 key，`authorize` 一律拒绝。forwarder 会在账户的 key 每次同步时按账户写入邮箱，因此请重新同步现有消费者（在仪表盘中列出某个用户的 key 就会为该用户完成同步）。在此之前，钱包会回退到开发者平台的代理式登录，它不需要该请求头；其他客户端会得到 `403 pollar_identity_required`。
 - **通过共享 Pollar 应用为第三方终端用户提供的社交登录将停止工作。** 其应用为自有用户登录的租户，会对每个邮箱不是该 key 账户邮箱的用户得到 `403 pollar_identity_mismatch`。
 - **迁移 `20260915180000_pollar_testnet_counterpart_mainnet`** 会关闭 testnet 登录遗留为 `pending` 的主网钱包（`FAILED`、`COUNTERPART_FROM_TESTNET_DISABLED`），让清扫器停止为它们注资。仅修改数据，不改变 schema。
+- **迁移 `20260915200000_receiver_dossier_version`** 为 `blindpay_receiver` 增加 `dossierVersion`（默认 `1`）和 `reviewedVersion`——只改目录，不重写表——并为所有已经通过审核关卡的 receiver 回填 `reviewedVersion`，使它们的 `enable` 继续可用。仍处于 `inactive` 或 `pending_review` 的 receiver 保持 `NULL`，那正是它们的真实状态。
+- **部署前请检查 `POLLAR_BRIDGE_CALLBACK_URL`。** 可路由主机上的纯 `http` 现在会让服务无法启动，错误信息中会点名该变量。回环地址（`http://127.0.0.1:…`）仍然接受，供本地开发使用。
+- **此前从不返回 `429` 的路由现在会返回。** 上表中的预算自本版本起生效；在 KYC 上传、报价、payin、payout、意图构建、swap 报价或流动性池构建上打循环的客户端需要遵守 `Retry-After`。发生故障时可用 `RATE_LIMIT_ENABLED=false` 关闭限流器。
 
 ### NestJS 12、TypeScript 6 与 Node 最低版本 24.9
 
@@ -1104,7 +1131,7 @@ WHERE NOT i.indisvalid;
 | `RATE_LIMIT_PRUNE_INTERVAL_MS` | 否 | `600000` | 计数器窗口清理间隔（ms，最小 1000） |
 | `POLLAR_PUBLISHABLE_KEY_TESTNET` / `_MAINNET` | 否 | — | Pollar publishable key（`pub_<network>_…`），用于 OAuth 桥接 |
 | `POLLAR_SECRET_KEY_TESTNET` / `_MAINNET` | 与 publishable key 同时设置 | — | Pollar secret key（`sec_<network>_…`），用于运营方路由 |
-| `POLLAR_BRIDGE_CALLBACK_URL` | 设置了 Pollar key 时 | — | Pollar 将浏览器送回的公开 URL。必须是 `<gateway>/v1/pollar/oauth/callback`，**并且**是在 Pollar 的 Build → Domains 下注册过的主机 |
+| `POLLAR_BRIDGE_CALLBACK_URL` | 设置了 Pollar key 时 | — | Pollar 将浏览器送回的公开 URL。必须是 `<gateway>/v1/pollar/oauth/callback`、**https**（只有回环主机才允许纯 `http`——否则启动失败：授权码就写在它的查询字符串里），**并且**是在 Pollar 的 Build → Domains 下注册过的主机 |
 | `POLLAR_REDIRECT_URI_WHITELIST` | 否 | — | 按消费者划分的钱包重定向 URI 白名单。为空 ⇒ 该消费者只能使用轮询流程 |
 | `POLLAR_SDK_ORIGIN` | 否 | `POLLAR_BRIDGE_CALLBACK_URL` 的 origin | 发送给 Pollar SDK API 的 `Origin`，后者会根据 Build → Domains 进行检查。仅当回调主机与注册主机不同时才设置 |
 | `POLLAR_SDK_BASE_URL` | 否 | `https://sdk.api.pollar.xyz` | Pollar SDK API 基础 URL |

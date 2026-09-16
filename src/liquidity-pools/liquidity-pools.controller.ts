@@ -40,7 +40,10 @@ import {
   LiquiditySubmitResultEntity,
 } from '@/liquidity-pools/entities/liquidity-pool.entity';
 import { LiquidityPoolReaderService } from '@/liquidity-pools/liquidity-pool-reader.service';
-import { LIQUIDITY_SUBMIT_RATE_LIMIT } from '@/liquidity-pools/liquidity-pools.constants';
+import {
+  LIQUIDITY_BUILD_RATE_LIMIT,
+  LIQUIDITY_SUBMIT_RATE_LIMIT,
+} from '@/liquidity-pools/liquidity-pools.constants';
 import { LiquidityPoolsService } from '@/liquidity-pools/liquidity-pools.service';
 
 // URI versioning => /v1/liquidity-pools. Static segments are declared before
@@ -58,6 +61,9 @@ export class LiquidityPoolsController {
   // Builds an unsigned envelope.
   @AllowPublicKey()
   @RequireAnyPermission('liquidity:write', 'swaps:write')
+  // Reads the pool and the account from Horizon and holds the account's next
+  // sequence number in a row until it expires.
+  @RateLimit(LIQUIDITY_BUILD_RATE_LIMIT)
   @ApiOperation({
     summary:
       'Build a pool deposit → unsigned XDR + SEP-7 tx URI + QR for the wallet to sign',
@@ -100,6 +106,8 @@ export class LiquidityPoolsController {
   // Builds an unsigned envelope.
   @AllowPublicKey()
   @RequireAnyPermission('liquidity:write', 'swaps:write')
+  // One budget with deposit — the two directions of one flow.
+  @RateLimit(LIQUIDITY_BUILD_RATE_LIMIT)
   @ApiOperation({
     summary:
       'Build a pool withdrawal (burn shares) → unsigned XDR + SEP-7 tx URI + QR',

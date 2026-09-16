@@ -405,22 +405,22 @@ model BlindpayReceiver {
   // The BlindPay instance this row lives on: 'prod' or 'dev', from the API key
   // that created it. A tenant's dev and prod keys resolve to one consumer, so
   // every read filters on this too — see BlindpaySyncService.
-  environment String @default("prod")
+  environment String  @default("prod")
   // BlindPay receiver id (`re_...`).
-  blindpayId String
+  blindpayId  String
   // 'individual' | 'business'.
-  type       String
+  type        String
   // 'light' | 'standard' | 'enhanced'.
-  kycType    String?
+  kycType     String?
   // BlindPay KYC status. Receivers start as 'inactive' (created locally, not yet at
   // BlindPay) until the terms-of-service are accepted and the receiver is enabled,
   // at which point this becomes BlindPay's real status — see ReceiversService.
-  kycStatus  String?
-  email      String?
-  name       String?
-  country    String?
-  externalId String?
-  reference  String? // optional merchant reference
+  kycStatus   String?
+  email       String?
+  name        String?
+  country     String?
+  externalId  String?
+  reference   String? // optional merchant reference
 
   // Last time a terms-of-service link was emailed for this receiver — rate limits the
   // "email me the ToS" action to at most once per day.
@@ -432,6 +432,21 @@ model BlindpayReceiver {
   disabled Boolean @default(false)
 
   raw Json?
+
+  // Which dossier an elevated reviewer signed off on.
+  //
+  // `dossierVersion` counts edits to `raw` made through this service while the
+  // receiver is still local — the submitted KYC data. `reviewedVersion` is the
+  // value it had when `approve` accepted it. They are equal exactly while the
+  // approved data is the data that was read, and `enable` refuses to send
+  // anything else to BlindPay: review, edit, enable would otherwise put a
+  // never-reviewed identity in front of a regulated provider.
+  //
+  // The sync service also rewrites `raw`, from BlindPay's own view of a receiver
+  // that already exists there. That is not a dossier edit and does not count:
+  // by then the identity was created and review is over.
+  dossierVersion  Int  @default(1)
+  reviewedVersion Int?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -457,7 +472,7 @@ model BlindpayBlockchainWallet {
   receiverId String
   receiver   BlindpayReceiver @relation(fields: [receiverId], references: [id], onDelete: Cascade)
 
-  environment          String @default("prod") // BlindPay instance, see BlindpayReceiver
+  environment          String  @default("prod") // BlindPay instance, see BlindpayReceiver
   blindpayId           String // `bw_...`
   name                 String?
   network              String
@@ -483,11 +498,11 @@ model BlindpayBankAccount {
   receiverId String
   receiver   BlindpayReceiver @relation(fields: [receiverId], references: [id], onDelete: Cascade)
 
-  environment String @default("prod") // BlindPay instance, see BlindpayReceiver
-  blindpayId String // `ba_...`
-  rail       String?
-  name       String?
-  country    String?
+  environment String  @default("prod") // BlindPay instance, see BlindpayReceiver
+  blindpayId  String // `ba_...`
+  rail        String?
+  name        String?
+  country     String?
 
   raw Json?
 
@@ -613,10 +628,10 @@ model BlindpayQuote {
   consumer   Consumer @relation(fields: [consumerId], references: [id], onDelete: Cascade)
 
   /// The BlindPay instance the quote was minted on — see BlindpayReceiver.
-  environment String @default("prod")
+  environment String            @default("prod")
   /// The upstream BlindPay quote id (`pq_…` for payins, `qu_…` for payouts).
-  blindpayId String
-  kind       BlindpayQuoteKind
+  blindpayId  String
+  kind        BlindpayQuoteKind
 
   createdAt DateTime @default(now())
 

@@ -31,6 +31,8 @@ describe('Payment intent transitions (e2e)', () => {
   const transitions: any[] = [];
   let seq = 0;
 
+  const rateLimitCounters = new Map<string, number>();
+
   const prismaMock: any = {
     onModuleInit: jest.fn(),
     onModuleDestroy: jest.fn(),
@@ -63,6 +65,16 @@ describe('Payment intent transitions (e2e)', () => {
     requestLog: {
       create: jest.fn().mockResolvedValue({ id: 'rl_1' }),
     },
+    /**
+     * The rate limiter's counter. Keyed by bucket alone, not by window: a
+     * one-minute window would now and then roll over in the middle of a test,
+     * and the window arithmetic is rate-limit.service.spec's to pin.
+     */
+    $queryRaw: jest.fn((_sql: unknown, key: string) => {
+      const next = (rateLimitCounters.get(key) ?? 0) + 1;
+      rateLimitCounters.set(key, next);
+      return Promise.resolve([{ count: next }]);
+    }),
 
     paymentIntent: {
       create: jest.fn(({ data }: any) => {

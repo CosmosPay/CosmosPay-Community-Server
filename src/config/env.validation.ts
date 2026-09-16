@@ -15,6 +15,7 @@ import {
   type ValidationError,
 } from 'class-validator';
 import { StrKey } from '@stellar/stellar-sdk';
+import { isLoopbackHttpUrl } from '@/common/loopback';
 
 const URL_OPTIONS = {
   require_protocol: true,
@@ -446,7 +447,7 @@ function formatValidationErrors(errors: ValidationError[]): string {
     .join('\n');
 }
 
-function isNonEmpty(value: string | undefined): boolean {
+function isNonEmpty(value: string | undefined): value is string {
   return value != null && value.trim() !== '';
 }
 
@@ -599,7 +600,7 @@ function assertBlindpayInstancesConsistent(
     // webhook route reads it on its own.
     if (
       isNonEmpty(instance.webhookSecret) &&
-      !decodeSvixSecret(instance.webhookSecret as string)
+      !decodeSvixSecret(instance.webhookSecret)
     ) {
       throw new Error(
         `${instance.webhookSecretVar} is not a usable Svix signing secret: it must be the ` +
@@ -675,6 +676,48 @@ function assertPollarKeysConsistent(validated: EnvironmentVariables): void {
         'that host in the Pollar dashboard under Build -> Domains.',
     );
   }
+
+  assertSecureCallbackUrl(
+    'POLLAR_BRIDGE_CALLBACK_URL',
+    validated.POLLAR_BRIDGE_CALLBACK_URL,
+  );
+}
+
+/**
+ * A URL a single-use authorization code is delivered to must be https, unless
+ * it is a loopback address.
+ *
+ * `@IsUrl` admits http, which is right for most of the URLs here — a Horizon
+ * mirror, a base URL — and wrong for this one: the code arrives in the query
+ * string, so plain http hands every proxy and every network on the path a
+ * credential that exchanges for the user's Pollar session. The same rule the
+ * wallet's own redirect URIs are held to, in `@/pollar/pollar-redirect-uri`.
+ *
+ * Loopback stays allowed so a developer can run the bridge against
+ * `http://127.0.0.1:3000/v1/pollar/oauth/callback`: nothing off that machine
+ * sees the code.
+ *
+ * Boot-time, not per-request, because there is only one right answer per
+ * deployment and a misconfigured one should never serve traffic.
+ */
+function assertSecureCallbackUrl(name: string, value?: string): void {
+  if (!isNonEmpty(value)) return;
+
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    // `@IsUrl` already refused anything unparseable; nothing to add.
+    return;
+  }
+  if (url.protocol === 'https:' || isLoopbackHttpUrl(url)) return;
+
+  throw new Error(
+    `${name} must use https (or http on a loopback host for local ` +
+      'development). Pollar returns the browser to it with the authorization ' +
+      'code in the query string, and plain http exposes that code to every ' +
+      'network it crosses.',
+  );
 }
 
 function assertKeyPrefix(

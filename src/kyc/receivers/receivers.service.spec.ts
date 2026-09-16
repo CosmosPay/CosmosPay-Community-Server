@@ -39,6 +39,9 @@ function baseRow(overrides: Record<string, unknown> = {}) {
     externalId: null,
     disabled: false,
     tosSentAt: null,
+    // Set together on approve; a row awaiting review has never been signed off.
+    dossierVersion: 1,
+    reviewedVersion: null,
     raw: {
       type: 'individual',
       kyc_type: 'standard',
@@ -402,12 +405,14 @@ describe('ReceiversService — the KYC dossier never leaves the database', () =>
         'country',
         'createdAt',
         'disabled',
+        'dossierVersion',
         'email',
         'externalId',
         'id',
         'kycStatus',
         'kycType',
         'name',
+        'reviewedVersion',
         'type',
         'updatedAt',
       ].sort(),
@@ -591,8 +596,16 @@ describe('ReceiversService.approveById — transitions', () => {
     await service.approveById(row.id, 'https://app.example.com/cb');
 
     expect(prisma.blindpayReceiver.updateMany).toHaveBeenCalledWith({
-      where: { id: row.id, kycStatus: 'pending_review' },
-      data: { kycStatus: 'pending_user', tosSentAt: expect.any(Date) },
+      where: {
+        id: row.id,
+        kycStatus: 'pending_review',
+        dossierVersion: 1,
+      },
+      data: {
+        kycStatus: 'pending_user',
+        tosSentAt: expect.any(Date),
+        reviewedVersion: 1,
+      },
     });
     // The unguarded `update({ where: { id } })` must not be used for transitions.
     expect(prisma.blindpayReceiver.update).not.toHaveBeenCalled();
@@ -616,10 +629,124 @@ describe('ReceiversService.approveById — transitions', () => {
   });
 });
 
+describe('ReceiversService — an approval is pinned to the dossier reviewed', () => {
+  /** A receiver awaiting review whose dossier has already been edited twice. */
+  const pendingReview = { kycStatus: 'pending_review', dossierVersion: 3 };
+
+  it('approves the version the caller read and records it', async () => {
+    const { service, prisma, blindpay } = makeService();
+    const row = baseRow(pendingReview);
+    prisma.blindpayReceiver.findUnique.mockResolvedValue(row);
+    blindpay.post.mockResolvedValue({ url: 'https://tos.example/accept' });
+    prisma.blindpayReceiver.findUniqueOrThrow.mockResolvedValue(
+      publicRow({ kycStatus: 'pending_user', reviewedVersion: 3 }),
+    );
+
+    await service.approveById(
+      row.id,
+      'https://app.example.com/cb',
+      undefined,
+      3,
+    );
+
+    expect(prisma.blindpayReceiver.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ reviewedVersion: 3 }),
+      }),
+    );
+  });
+
+  it('409s when the dossier changed after the reviewer read it', async () => {
+    // The hole this closes: a review is a person reading the KYC data and then
+    // approving it, and an edit in between leaves the status at
+    // `pending_review` — so the compare-and-swap still matched and the approval
+    // landed on a payload nobody had seen.
+    const { service, prisma, blindpay } = makeService();
+    prisma.blindpayReceiver.findUnique.mockResolvedValue(
+      baseRow(pendingReview),
+    );
+    blindpay.post.mockResolvedValue({ url: 'https://tos.example/accept' });
+
+    const err = await rejection(
+      service.approveById('rcv_1', 'https://app.example.com/cb', undefined, 2),
+    );
+
+    expect(err.getStatus()).toBe(HttpStatus.CONFLICT);
+    expect(err.code).toBe(ApiErrorCode.KycStateInvalid);
+    expect(err.message).toMatch(/changed after it was read/i);
+    expect(prisma.blindpayReceiver.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('carries expected_version from the tenant route to the review gate', async () => {
+    const { service, prisma, blindpay } = makeService();
+    prisma.blindpayReceiver.findFirst.mockResolvedValue(baseRow(pendingReview));
+    prisma.blindpayReceiver.findUnique.mockResolvedValue(
+      baseRow(pendingReview),
+    );
+    blindpay.post.mockResolvedValue({ url: 'https://tos.example/accept' });
+
+    const err = await rejection(
+      service.approve(ADMIN_CONSUMER, 'rcv_1', 'https://app.example.com/cb', 2),
+    );
+
+    expect(err.code).toBe(ApiErrorCode.KycStateInvalid);
+  });
+
+  it('refuses to create the receiver at BlindPay on an unreviewed dossier', async () => {
+    // The backstop: whatever moved the status, the payload that would be sent
+    // is not the payload that was signed off.
+    const { service, prisma, blindpay } = makeService();
+    prisma.blindpayReceiver.findUnique.mockResolvedValue(
+      baseRow({
+        kycStatus: 'pending_user',
+        dossierVersion: 4,
+        reviewedVersion: 3,
+      }),
+    );
+
+    const err = await rejection(service.enableById('rcv_1', 'tos_1'));
+
+    expect(err.getStatus()).toBe(HttpStatus.CONFLICT);
+    expect(err.code).toBe(ApiErrorCode.KycStateInvalid);
+    expect(blindpay.post).not.toHaveBeenCalled();
+  });
+
+  it('bumps the version when the stored dossier is rewritten', async () => {
+    const { service, prisma } = makeService();
+    prisma.blindpayReceiver.findFirst.mockResolvedValue(
+      baseRow({ kycStatus: 'pending_review', dossierVersion: 3 }),
+    );
+    prisma.blindpayReceiver.update.mockResolvedValue(publicRow());
+
+    await service.update(CONSUMER, 'rcv_1', { country: 'MX' });
+
+    expect(prisma.blindpayReceiver.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ dossierVersion: { increment: 1 } }),
+      }),
+    );
+  });
+
+  it('leaves the version alone when the patch changes nothing', async () => {
+    // An empty patch is not an edit, and invalidating a review for one would
+    // hand any `kyc:write` key a way to undo an approval at will.
+    const { service, prisma } = makeService();
+    prisma.blindpayReceiver.findFirst.mockResolvedValue(
+      baseRow({ kycStatus: 'pending_review', dossierVersion: 3 }),
+    );
+    prisma.blindpayReceiver.update.mockResolvedValue(publicRow());
+
+    await service.update(CONSUMER, 'rcv_1', {});
+
+    const [call] = prisma.blindpayReceiver.update.mock.calls;
+    expect(call[0].data).not.toHaveProperty('dossierVersion');
+  });
+});
+
 describe('ReceiversService.enable — transitions', () => {
   it('pending_user → verifying (active) via enable succeeds', async () => {
     const { service, prisma, blindpay, sync } = makeService();
-    const row = baseRow({ kycStatus: 'pending_user' });
+    const row = baseRow({ kycStatus: 'pending_user', reviewedVersion: 1 });
     prisma.blindpayReceiver.findUnique.mockResolvedValue(row);
     const created = {
       id: REAL_ID,
@@ -681,7 +808,7 @@ describe('ReceiversService.enable — transitions', () => {
 describe('ReceiversService.enableById — the upstream create is claimed first', () => {
   it('claims the transition BEFORE POSTing to BlindPay', async () => {
     const { service, prisma, blindpay, sync } = makeService();
-    const row = baseRow({ kycStatus: 'pending_user' });
+    const row = baseRow({ kycStatus: 'pending_user', reviewedVersion: 1 });
     prisma.blindpayReceiver.findUnique.mockResolvedValue(row);
     blindpay.post.mockResolvedValue({ id: REAL_ID, kyc_status: 'verifying' });
     sync.mirrorReceiver.mockResolvedValue({ ...row, blindpayId: REAL_ID });
@@ -707,7 +834,7 @@ describe('ReceiversService.enableById — the upstream create is claimed first',
   it('never creates a second upstream customer when two enables race', async () => {
     const { service, prisma, blindpay } = makeService();
     prisma.blindpayReceiver.findUnique.mockResolvedValue(
-      baseRow({ kycStatus: 'pending_user' }),
+      baseRow({ kycStatus: 'pending_user', reviewedVersion: 1 }),
     );
     // The other caller already claimed the row.
     prisma.blindpayReceiver.updateMany.mockResolvedValue({ count: 0 });
@@ -722,7 +849,7 @@ describe('ReceiversService.enableById — the upstream create is claimed first',
 
   it('releases the claim when the provider call fails, so the customer can retry', async () => {
     const { service, prisma, blindpay } = makeService();
-    const row = baseRow({ kycStatus: 'pending_user' });
+    const row = baseRow({ kycStatus: 'pending_user', reviewedVersion: 1 });
     prisma.blindpayReceiver.findUnique.mockResolvedValue(row);
     blindpay.post.mockRejectedValue(new Error('BlindPay 502'));
 
@@ -738,7 +865,7 @@ describe('ReceiversService.enableById — the upstream create is claimed first',
 
   it('guards the placeholder → real id write on the id it read', async () => {
     const { service, prisma, blindpay, sync } = makeService();
-    const row = baseRow({ kycStatus: 'pending_user' });
+    const row = baseRow({ kycStatus: 'pending_user', reviewedVersion: 1 });
     prisma.blindpayReceiver.findUnique.mockResolvedValue(row);
     blindpay.post.mockResolvedValue({ id: REAL_ID });
     sync.mirrorReceiver.mockResolvedValue({ ...row, blindpayId: REAL_ID });
@@ -802,7 +929,11 @@ describe('ReceiversService.requestTos — the resend cooldown is not header-driv
     const { service, prisma, blindpay } = makeService();
     const row = pendingUser();
     prisma.blindpayReceiver.findUnique.mockResolvedValue(
-      baseRow({ kycStatus: 'pending_user', tosSentAt: null }),
+      baseRow({
+        kycStatus: 'pending_user',
+        reviewedVersion: 1,
+        tosSentAt: null,
+      }),
     );
     blindpay.post.mockResolvedValue({ url: 'https://tos.example/accept' });
     prisma.blindpayReceiver.updateMany.mockResolvedValue({ count: 0 });

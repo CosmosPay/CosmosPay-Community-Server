@@ -51,3 +51,23 @@ export const LIQUIDITY_SUBMIT_RATE_LIMIT = {
   limit: 20,
   windowMs: 60 * 1000,
 };
+
+/**
+ * Budget for `POST /v1/liquidity-pools/deposit` and `POST
+ * /v1/liquidity-pools/withdraw`, per consumer + client address.
+ *
+ * One bucket for both: they are the two directions of one flow, an honest wallet
+ * calls one at a time, and separate buckets would only let a loop alternate and
+ * take both. Each call reads the pool and the account from Horizon — against the
+ * per-IP budget every route here shares — and writes a row holding the account's
+ * next sequence number until it expires.
+ *
+ * Twenty a minute, matching `LIQUIDITY_SUBMIT_RATE_LIMIT`, because a wallet
+ * builds one envelope per submission: the two are spent in step, and a builder
+ * that never signs is bounded like one that does.
+ */
+export const LIQUIDITY_BUILD_RATE_LIMIT = {
+  name: 'liquidity-pools:build',
+  limit: 20,
+  windowMs: 60 * 1000,
+};

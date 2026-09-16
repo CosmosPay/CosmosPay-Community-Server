@@ -30,6 +30,7 @@ describe('hostnameAllowed', () => {
 describe('assertRedirectAllowed', () => {
   const whitelist = {
     cosmos_acme: ['acme.com'],
+    cosmos_dev: ['127.0.0.1'],
   };
 
   it('allows a redirect_url on a permitted domain', () => {
@@ -59,7 +60,7 @@ describe('assertRedirectAllowed', () => {
 
   it('rejects a redirect_url that is not a URL', () => {
     const err = thrown(() =>
-      assertRedirectAllowed('cosmos_acme', 'not a url', whitelist),
+      assertRedirectAllowed('cosmos_acme', 'not-a-url', whitelist),
     );
 
     expect(err.code).toBe(ApiErrorCode.ValidationFailed);
@@ -77,5 +78,83 @@ describe('assertRedirectAllowed', () => {
 
     expect(err.code).toBe(ApiErrorCode.ValidationFailed);
     expect(err.message).toMatch(/no redirect_url domains are configured/i);
+  });
+
+  it('rejects a backslash before the authority', () => {
+    // WHATWG maps it to `/`, so the hostname reads `app.acme.com` here; a
+    // parser that does not reads userinfo `app.acme.com`, host `evil.com`.
+    const err = thrown(() =>
+      assertRedirectAllowed(
+        'cosmos_acme',
+        'https://app.acme.com\\@evil.com/kyc/return',
+        whitelist,
+      ),
+    );
+
+    expect(err.code).toBe(ApiErrorCode.ValidationFailed);
+    expect(err.message).toMatch(/backslashes, whitespace or control/i);
+  });
+
+  it('rejects whitespace and control characters', () => {
+    const cr = String.fromCharCode(13);
+    for (const raw of [
+      'https://app.acme.com/kyc return',
+      `https://app.acme.com/kyc${cr}/return`,
+    ]) {
+      const err = thrown(() =>
+        assertRedirectAllowed('cosmos_acme', raw, whitelist),
+      );
+      expect(err.message).toMatch(/backslashes, whitespace or control/i);
+    }
+  });
+
+  it('rejects plain http on a permitted domain', () => {
+    const err = thrown(() =>
+      assertRedirectAllowed(
+        'cosmos_acme',
+        'http://app.acme.com/kyc/return',
+        whitelist,
+      ),
+    );
+
+    expect(err.message).toMatch(/must use the https scheme/i);
+  });
+
+  it('rejects plain http even on a loopback host', () => {
+    // `@IsRedirectUrl()` on the DTOs refuses http outright, so an exception here
+    // would only be laxer than the check every caller passes first.
+    const err = thrown(() =>
+      assertRedirectAllowed(
+        'cosmos_dev',
+        'http://127.0.0.1:5173/kyc/return',
+        whitelist,
+      ),
+    );
+
+    expect(err.message).toMatch(/must use the https scheme/i);
+  });
+
+  it('rejects embedded credentials', () => {
+    const err = thrown(() =>
+      assertRedirectAllowed(
+        'cosmos_acme',
+        'https://evil.com:secret@app.acme.com/kyc/return',
+        whitelist,
+      ),
+    );
+
+    expect(err.message).toMatch(/embedded credentials/i);
+  });
+
+  it('rejects a fragment, which would swallow the appended tos_id', () => {
+    const err = thrown(() =>
+      assertRedirectAllowed(
+        'cosmos_acme',
+        'https://app.acme.com/kyc/return#done',
+        whitelist,
+      ),
+    );
+
+    expect(err.message).toMatch(/fragment/i);
   });
 });

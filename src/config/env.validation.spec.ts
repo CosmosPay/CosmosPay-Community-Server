@@ -431,5 +431,48 @@ describe('validateEnv', () => {
         ),
       ).toThrow(/STELLAR_SWAP_SLIPPAGE_BPS/i);
     });
+
+    it('refuses a plain-http Pollar callback on a routable host', () => {
+      // Pollar returns the browser to this URL with the authorization code in
+      // the query string. Over http, every hop on the path gets a credential
+      // that exchanges for the user's session.
+      expect(() =>
+        validateEnv(
+          validEnv({
+            POLLAR_BRIDGE_CALLBACK_URL:
+              'http://gateway.example.com/v1/pollar/oauth/callback',
+          }),
+        ),
+      ).toThrow(/POLLAR_BRIDGE_CALLBACK_URL must use https/i);
+    });
+
+    it('allows the Pollar callback over https, or over http on loopback', () => {
+      expect(
+        validateEnv(
+          validEnv({
+            POLLAR_BRIDGE_CALLBACK_URL:
+              'https://gateway.example.com/v1/pollar/oauth/callback',
+          }),
+        ).POLLAR_BRIDGE_CALLBACK_URL,
+      ).toMatch(/^https:/);
+
+      // A developer's own machine: nothing else on the network sees the code.
+      expect(() =>
+        validateEnv(
+          validEnv({
+            POLLAR_BRIDGE_CALLBACK_URL:
+              'http://127.0.0.1:3000/v1/pollar/oauth/callback',
+          }),
+        ),
+      ).not.toThrow();
+      expect(() =>
+        validateEnv(
+          validEnv({
+            POLLAR_BRIDGE_CALLBACK_URL:
+              'http://localhost:3000/v1/pollar/oauth/callback',
+          }),
+        ),
+      ).not.toThrow();
+    });
   });
 });

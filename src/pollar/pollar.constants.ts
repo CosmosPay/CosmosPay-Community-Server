@@ -81,13 +81,6 @@ export const POLLAR_CODE_BYTES = 32;
 export const POLLAR_PKCE_METHOD = 'S256';
 
 /**
- * Hosts that count as a loopback redirect target. A native wallet listens on an
- * ephemeral port here to catch the code, so the allow-list matches the host and
- * lets the port float (RFC 8252 §7.3).
- */
-export const LOOPBACK_HOSTS = new Set(['127.0.0.1', '[::1]', 'localhost']);
-
-/**
  * Pollar client-session status codes that can never become ready. The bridge
  * turns these into a terminal handshake rather than waiting out the budget.
  */

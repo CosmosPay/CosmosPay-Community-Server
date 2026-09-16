@@ -467,7 +467,12 @@ notification भेजना उस API request को कभी block नही
 **Outbound destination policy (SSRF):** endpoints को `https` का उपयोग करना होगा और वे
 केवल public addresses पर resolve होने चाहिए। रजिस्ट्रेशन loopback, RFC1918 private ranges,
 link-local (`169.254.0.0/16`, जिसमें cloud metadata `169.254.169.254` शामिल है), और
-ज्ञात metadata hostnames को अस्वीकार करता है। यही जाँच हर
+ज्ञात metadata hostnames को अस्वीकार करता है। **host पर निर्भर हर अस्वीकृति एक ही जवाब देती
+है** — «यह host अनुमत destination नहीं है» — और कारण log में जाता है: «यहाँ resolve नहीं
+होता», «`10.0.4.7` पर resolve होता है» और «metadata service पर resolve होता है» में फ़र्क
+बताना किसी को भी, जो endpoint रजिस्टर कर सकता है, एक-एक URL करके उस network का नक्शा बनाने
+देता जिसमें यह सेवा चलती है। malformed URL, गलत scheme, credentials या host का न होना अब भी
+ठीक-ठीक बताते हैं कि क्या गलत है: वे भेजी गई string का वर्णन करते हैं, network का नहीं। यही जाँच हर
 delivery से ठीक पहले फिर से चलती है (रजिस्ट्रेशन के बाद DNS बदल सकता है)। HTTP client `redirect: manual`
 (कभी `3xx` follow नहीं करता), env से connect/read timeouts, और response body के
 अधिकतम आकार का उपयोग करता है।
@@ -610,7 +615,10 @@ intent बनाने को **idempotent** बनाता है: `(consumer,
 memo किसी भी अलग शर्त के साथ — kind, network, destination, amount, asset, `msg`,
 `callback`, या `tx` के लिए `source` — `409 idempotency_conflict` है, और error
 सहेजे गए intent के बारे में कुछ नहीं बताता। साझा public key के तहत यह अहम है, जहाँ हर
-anonymous वॉलेट एक ही consumer है। अगर आप `memo` नहीं देते, तो एक random uint64
+anonymous वॉलेट एक ही consumer है। दोनों builders प्रति consumer और client address **प्रति
+मिनट 30 कॉल** का साझा budget रखते हैं (`429 rate_limited`): हर एक Horizon से payer का
+account पढ़ता है और एक row लिखता है, और साझा public key के तहत address ही एकमात्र चीज़ है जो
+एक anonymous वॉलेट को दूसरे से अलग करती है। अगर आप `memo` नहीं देते, तो एक random uint64
 जनरेट किया जाता है।
 
 **`POST /v1/payment-intents/tx`** — payer (`source`) ज्ञात है, इसलिए हम
@@ -795,12 +803,24 @@ kind भी मिलाते हैं। key के बिना भी, uniq
 byte-identical rebuild को **409** (sequence / XDR collision) के साथ अस्वीकार करता है। जब
 `STELLAR_SWAP_SINGLE_INFLIGHT=true` हो, तो उसी `(consumer, source, network)` के लिए
 दूसरा non-expired `PENDING` swap भी मौजूदा id बताते हुए **409** लौटाता है
-(डिफ़ॉल्ट **बंद** — एक ही account से एक साथ अलग-अलग swaps की अनुमति बनी रहती है)।
+(डिफ़ॉल्ट **बंद** — एक ही account से एक साथ अलग-अलग swaps की अनुमति बनी रहती है)। वह
+guard केवल ऐसा swap रोकता है जो **पहले से on-chain हो सकता है**: जिस row का sequence
+number account ने अभी तक इस्तेमाल नहीं किया, वह settle हो ही नहीं सकती, और अभी बन रहा swap
+वही number लेता है — यानी दोनों में से ज़्यादा से ज़्यादा एक ही कभी settle होगा। कोई भी
+कोई भी `source` बता सकता है, इसलिए इस जाँच के बिना एक अकेला dust swap किसी और के account
+के swaps को पूरी timeout window तक जमा देता था — और साझा public key के तहत तब तक, जब तक
+हमलावर उसे दोहराता रहे।
 
 ```jsonc
 // response → { id, status: "PENDING", network, sendAmount, feeAmount, swapAmount,
 //              destEstimated, destMin, path, xdr, uri: "web+stellar:tx?xdr=…", qr, txHash, … }
 ```
+
+**quote और build पर भी सीमा है**, प्रति consumer और client address: **प्रति मिनट 60
+quotes** और **प्रति मिनट 20 builds**, submit से अलग buckets में। quote कुछ भी persist नहीं
+करता, फिर भी उसकी लागत एक strict-send path search है — Horizon से यह सेवा जो सबसे महँगी कॉल
+करती है — और वह प्रति-IP budget swaps, liquidity pools और payment intents सब साझा करते हैं,
+इसलिए loop में पूछा गया price हर anonymous caller के लिए तीनों को एक साथ धीमा कर देता था।
 
 **`POST /v1/swaps/:id/submit`** — signed envelope को relay करता है (`swaps:write`)।
 
@@ -828,7 +848,9 @@ submit किया जा सकता है, फिर नया swap बन�
 देता है (`429 rate_limited`); साझा public key के तहत हर anonymous वॉलेट एक consumer है,
 इसलिए एक ही NAT के पीछे के वॉलेट यह budget साझा करते हैं।
 `POST /v1/liquidity-pools/operations/:id/submit` भी यही नियम मानता है, अपने ही अलग bucket
-के साथ।
+के साथ, और `POST /v1/liquidity-pools/deposit` · `/withdraw` **प्रति मिनट 20 builds** का एक
+साझा budget रखते हैं — एक ही flow की दो दिशाएँ, इसलिए अलग buckets से कोई loop बस दोनों के
+बीच बदल-बदलकर दोनों budgets ले लेता।
 
 ## Aliases — क्लेम किए जा सकने वाले पेमेंट हैंडल
 
@@ -994,6 +1016,30 @@ instances के dashboard webhooks एक ही `<gateway>/v1/blindpay/webhook
 `403` `kyc_review_required` है, जब तक key elevated (`X-Consumer-Role: admin`) न हो, क्योंकि वह
 `PUT` provider पर पहचान को सीधे फिर से लिख देता है।
 
+**approval उसी dossier से बँधी होती है जिसकी review हुई थी।** receiver पढ़ने पर
+`dossierVersion` आता है, जो भेजे गए KYC data के हर edit को गिनता है। approve करते समय उसे
+`expected_version` के रूप में वापस भेजें, और पढ़ने के बाद बदला हुआ dossier
+`409 kyc_state_invalid` देता है — उस data की approval की बजाय जिसे किसी ने देखा ही नहीं।
+edit होने पर status `pending_review` ही रहता है, इसलिए approval अकेले यह भाँप नहीं सकती थी।
+जिस version को मंज़ूरी मिली वह `reviewedVersion` में रहता है, और जब तक दोनों अलग हैं,
+`POST /v1/kyc/receivers/:id/enable` receiver को BlindPay पर बनाने से मना कर देता है।
+
+**fiat रूट्स के budgets हैं।** provider जिस भी write को रखता है वह प्रति consumer और client
+address सीमित है, और BlindPay पर टिका हर रूट **प्रति मिनट 60 provider requests** की
+प्रति-consumer सीमा में भी गिना जाता है: एक ही instance उस key के सभी tenants को सेवा देता
+है, इसलिए quotes पर loop करने वाला एक tenant बाकियों के payins विफल कर देता है। budget से
+ऊपर जाने पर `Retry-After` के साथ `429 rate_limited` मिलता है।
+
+| रूट | Budget (प्रति consumer + client address) |
+| --- | --------------------------------------- |
+| `POST /v1/kyc/upload` | 10 मिनट में 20 |
+| `POST /v1/kyc/terms-of-service` | 10 मिनट में 10 |
+| `POST /v1/onramp/quotes` · `POST /v1/offramp/quotes` | प्रति मिनट 30, अलग-अलग buckets |
+| `POST /v1/onramp/payins` | प्रति मिनट 10 |
+| `POST /v1/offramp/payouts/authorize` · `POST /v1/offramp/payouts` | प्रति मिनट 10, साझा |
+| `POST /v1/offramp/payouts/:id/documents` | 10 मिनट में 20 |
+| `POST /v1/onramp/trustline` | प्रति मिनट 20 |
+
 ### KYC redirect URL प्रति consumer allow-list किए जाते हैं
 
 terms-of-service flow user को BlindPay पर भेजता है और फिर integrator के दिए
@@ -1002,12 +1048,19 @@ terms-of-service flow user को BlindPay पर भेजता है और 
 
 | परत | नियम | कहाँ |
 | ----- | ---- | ----- |
-| आकार | embedded credentials (`user:pass@`) के बिना एक absolute `https` URL | इसे रखने वाले हर DTO पर `@IsRedirectUrl()` |
+| आकार | embedded credentials (`user:pass@`) के बिना एक absolute `https` URL, बिना fragment (`#…`), और बिना backslash, whitespace या control character | इसे रखने वाले हर DTO पर `@IsRedirectUrl()`, और फिर service layer में दोबारा |
 | Host | **कॉल करने वाले consumer की** allow-list में — सटीक host, या label की सीमा पर एक subdomain (`app.acme.com` `acme.com` से मेल खाता है; `evilacme.com` नहीं) | `KYC_REDIRECT_URL_WHITELIST`, service layer में लागू |
 
 ```
 KYC_REDIRECT_URL_WHITELIST={"cosmos_acme":["acme.com","app.acme.com"]}
 ```
+
+host की जाँच का मूल्य इन्हीं आकार-नियमों से बनता है। WHATWG parser authority के भीतर
+backslash को `/` पढ़ता है, जबकि कुछ दूसरे उसे userinfo का हिस्सा मानते हैं — यानी
+`https://app.acme.com\@evil.test` के दो ईमानदार पाठ हैं, और इसे पढ़ने वाला अंतिम पक्ष यह
+सेवा नहीं है: मान BlindPay तक जाता है, एक hosted page पर लौटता है और अंत में browser में
+पहुँचता है। whitespace और control characters भी इसी श्रेणी के हैं, fragment provider द्वारा
+जोड़े गए `?tos_id=` को निगल जाता है, और credentials host को `@` के दूसरी ओर ले जाते हैं।
 
 यह **fail closed** होता है: जिस consumer की कोई entry नहीं है, वह redirect बिल्कुल इस्तेमाल नहीं कर सकता, और
 अंत में बिंदु वाला या IDN रूप वाला host normalize करने की बजाय अस्वीकार किया जाता है।
@@ -1210,7 +1263,9 @@ consumer से broker करता है और उस traffic का budget �
 
 किसी सीमा को पार करने पर **`429` के साथ `code: "rate_limited"`**, एक `Retry-After`, और
 `RateLimit-Limit` / `-Remaining` / `-Reset` headers लौटते हैं। यही limiter Pollar के बाहर
-भी कुछ रूट्स की रक्षा करता है — swap और liquidity-pool submit, webhook `ping` और
+उन रूट्स की भी रक्षा करता है जिनकी लागत कोई error वापस नहीं करता — swap और liquidity-pool
+builders और उनके submits, payment-intent builders, KYC upload और terms-of-service, onramp
+तथा offramp की writes (उनके ऊपर BlindPay की प्रति-consumer सीमा के साथ), webhook `ping` और
 `redeliver`, alias challenges और recovery, activity ingest — और हर सेक्शन अपना budget
 बताता है। सामान्य rate limiting APISIX का काम है।
 
@@ -1303,6 +1358,12 @@ Pollar नेटवर्क और key का प्रकार key के pre
 | `POST /v1/pollar/users` और `/v1/pollar/users/with-wallet` के लिए elevated key चाहिए; tenant key को `403 elevated_key_required` मिलता है | tenant key से users को पहले से रजिस्टर करने वाले integrators | रजिस्टर हुआ user वही है जिसे बाद का social लॉगिन email से resolve करता है, इसलिए tenant key किसी अजनबी का email claim करके उसके वॉलेट की मालिक के रूप में दर्ज हो सकती थी |
 | testnet लॉगिन अब अपने user के लिए mainnet वॉलेट provision नहीं करता: testnet redemption के `network_wallets` में केवल testnet वॉलेट होता है। mainnet लॉगिन अब भी testnet provision करता है | testnet लॉगिन से mainnet entry पढ़ने वाले | जिस `dev` key को कोई भी बना सकता है, वह हर लॉगिन पर mainnet reserve के लिए operator का असली XLM खर्च करती थी |
 | poll, refresh, logout, token-verify, user-registration और trustline-removal वाले Pollar रूट्स पर सीमा है, और प्रति-address budgets के ऊपर प्रति-consumer quota (प्रति मिनट 100 Pollar requests) और वॉलेट सीमा (प्रति दिन 50) लागू होती है; अधिकता `429 rate_limited` है | इन रूट्स पर लगातार कॉल करने वाले clients | इन पर कोई सीमा नहीं थी, और हर कॉल वह Pollar request budget खर्च करती है जिसे सभी tenants साझा करते हैं — एक tenant बाकी सभी tenants के लॉगिन विफल कर सकता था |
+| `POST /v1/kyc/receivers/:id/approve` अब `expected_version` लेता है (वही `dossierVersion` जो आपने पढ़ा) और KYC data उसके बाद बदल जाने पर `409 kyc_state_invalid` देता है। `POST /v1/kyc/receivers/:id/enable` ऐसे dossier को मना कर देता है जो approve किया हुआ नहीं है, और receiver पढ़ने पर `dossierVersion` तथा `reviewedVersion` आते हैं | reviewers, जब वे `expected_version` भेजना शुरू करें; और कोई नहीं — field वैकल्पिक है | review का मतलब है कोई व्यक्ति data पढ़े और फिर approve करे, और बीच में हुआ edit status को `pending_review` पर ही छोड़ता है — यानी approval ऐसे dossier पर लगती थी जिसे किसी ने देखा नहीं था, और `enable` उसे एक regulated provider को भेज देता था |
+| `POST /v1/kyc/upload`, `/v1/kyc/terms-of-service`, onramp तथा offramp की writes, `POST /v1/payment-intents/tx` और `/pay`, `POST /v1/swaps/quote` और `/v1/swaps`, तथा `POST /v1/liquidity-pools/deposit` और `/withdraw` अब budget से ऊपर `429 rate_limited` देते हैं, प्रति consumer और client address। BlindPay पर टिका हर रूट प्रति मिनट 60 provider requests की प्रति-consumer सीमा में भी गिना जाता है | इन रूट्स पर loop चलाने वाले scripts; सीमा से ऊपर चलने वाले bulk importer की अपनी key होनी चाहिए | इन पर कोई सीमा थी ही नहीं: हर एक या तो provider के पास कुछ छोड़ जाती है जिसे कोई error वापस नहीं करता, या वह प्रति-IP Horizon budget खर्च करती है जिसे यहाँ के सभी रूट साझा करते हैं। सीमित केवल submits थे |
+| `POST /v1/swaps` अब ऐसे `PENDING` swap के लिए `409 operation_in_flight` नहीं देता जिसका sequence number account ने अभी इस्तेमाल नहीं किया (unsigned या छोड़ा हुआ envelope)। यह केवल `STELLAR_SWAP_SINGLE_INFLIGHT=true` पर लागू है | वे वॉलेट users जो ब्लॉक हो जाते थे | कोई भी कोई भी `source` बता सकता है, इसलिए एक dust swap किसी और के account को एक के बाद एक timeout window तक जमा देता था — ऊपर वाले liquidity-pool सुधार का जुड़वाँ |
+| host की वजह से अस्वीकृत webhook destination — resolve न होना, private, link-local, metadata — अब एक ही संदेश वाला एक `400` है; कारण सेवा के log में रहता है। malformed URL, https से अलग scheme, credentials या host का न होना अब भी बताते हैं कि क्या गलत है | वे integrators जो कारण response से पढ़ते थे | endpoint रजिस्टर करना ऐसा नाम resolve करता है जहाँ यह सेवा पहुँच सकती है, इसलिए कारण-दर-कारण जवाब से internal network का नक्शा एक-एक URL करके बनाया जा सकता था |
+| `redirect_url` तब अस्वीकार होती है जब उसमें fragment, backslash, whitespace या control character हो; embedded credentials के बिना https पहले से अनिवार्य था | सामान्य URL भेजने वाला कोई नहीं | `https://app.acme.com\@evil.test` इस बात पर अलग-अलग host बताता है कि उसे कौन parse कर रहा है, और वह मान BlindPay तथा एक browser दोबारा पढ़ते हैं |
+| जब `POLLAR_BRIDGE_CALLBACK_URL` किसी routable host पर सादा `http` हो, तो सेवा boot होने से मना कर देती है | वे deployments जो TLS कहीं और terminate करते हैं और callback को `http` रखते हैं | Pollar browser को उसी URL पर authorization code के साथ query string में लौटाता है, और वह code user के session से बदला जाता है |
 
 इसके साथ आने वाले deploy नोट:
 
@@ -1372,6 +1433,18 @@ Pollar नेटवर्क और key का प्रकार key के pre
   करता है जिन्हें testnet लॉगिन ने `pending` छोड़ा था (`FAILED`,
   `COUNTERPART_FROM_TESTNET_DISABLED`), ताकि sweeper उन्हें fund करना बंद कर दे। केवल data,
   कोई schema बदलाव नहीं।
+- **Migration `20260915200000_receiver_dossier_version`** `blindpay_receiver` में
+  `dossierVersion` (डिफ़ॉल्ट `1`) और `reviewedVersion` जोड़ता है — केवल catalog, कोई table
+  rewrite नहीं — और हर उस receiver के लिए `reviewedVersion` भर देता है जो review gate पार
+  कर चुका है, ताकि उसका `enable` चलता रहे। जो receivers अब भी `inactive` या
+  `pending_review` में हैं, उनके लिए `NULL` रहता है, जो उनके बारे में सच है।
+- **deploy से पहले `POLLAR_BRIDGE_CALLBACK_URL` जाँच लें।** किसी routable host पर सादा
+  `http` अब सेवा को शुरू ही नहीं होने देता, और error में variable का नाम आता है। loopback
+  (`http://127.0.0.1:…`) local development के लिए अब भी स्वीकार है।
+- **उन रूट्स पर नए `429` जिन पर पहले कभी नहीं आते थे।** ऊपर की तालिका वाले budgets इसी
+  रिलीज़ से लागू हैं; KYC uploads, quotes, payins, payouts, intent builds, swap quotes या
+  pool builds पर loop चलाने वाले client को `Retry-After` मानना होगा। किसी incident के
+  दौरान `RATE_LIMIT_ENABLED=false` limiter बंद कर देता है।
 
 ### NestJS 12, TypeScript 6 और न्यूनतम Node 24.9
 
@@ -1652,7 +1725,7 @@ type दोबारा बनाए बिना enum value drop नहीं �
 | `RATE_LIMIT_PRUNE_INTERVAL_MS` | नहीं | `600000` | counter-window prune interval (ms, न्यूनतम 1000) |
 | `POLLAR_PUBLISHABLE_KEY_TESTNET` / `_MAINNET` | नहीं | — | OAuth bridge के लिए Pollar publishable key (`pub_<network>_…`) |
 | `POLLAR_SECRET_KEY_TESTNET` / `_MAINNET` | publishable key के साथ | — | operator रूट्स के लिए Pollar secret key (`sec_<network>_…`) |
-| `POLLAR_BRIDGE_CALLBACK_URL` | जब Pollar key सेट हो | — | सार्वजनिक URL जिस पर Pollar browser को लौटाता है। `<gateway>/v1/pollar/oauth/callback` होना चाहिए **और** Pollar के Build → Domains में रजिस्टर किया गया host |
+| `POLLAR_BRIDGE_CALLBACK_URL` | जब Pollar key सेट हो | — | सार्वजनिक URL जिस पर Pollar browser को लौटाता है। `<gateway>/v1/pollar/oauth/callback` होना चाहिए, **https** (सादा `http` केवल loopback host पर — वरना boot विफल होता है: authorization code उसकी query string में जाता है) **और** Pollar के Build → Domains में रजिस्टर किया गया host |
 | `POLLAR_REDIRECT_URI_WHITELIST` | नहीं | — | प्रति consumer वॉलेट redirect URIs की allow-list। खाली ⇒ वह consumer केवल poll flow उपयोग कर सकता है |
 | `POLLAR_SDK_ORIGIN` | नहीं | `POLLAR_BRIDGE_CALLBACK_URL` का origin | Pollar के SDK API को भेजा जाने वाला `Origin`, जिसे वह Build → Domains से मिलाता है। केवल तब सेट करें जब callback host और रजिस्टर किया गया host अलग हों |
 | `POLLAR_SDK_BASE_URL` | नहीं | `https://sdk.api.pollar.xyz` | Pollar SDK API का base URL |

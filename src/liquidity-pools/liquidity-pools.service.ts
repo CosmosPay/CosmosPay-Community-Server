@@ -2,7 +2,6 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
   Asset,
-  FeeBumpTransaction,
   LiquidityPoolAsset,
   LiquidityPoolFeeV18,
   Memo,
@@ -34,6 +33,7 @@ import {
   resolveSlippage,
 } from '@/stellar/stellar-operation-policy';
 import { StellarService } from '@/stellar/stellar.service';
+import { cannotHaveSettled, storedEnvelope } from '@/stellar/stored-envelope';
 import type {
   LiquidityPoolOperation,
   Prisma,
@@ -788,23 +788,14 @@ export class LiquidityPoolsService {
     return this.withQr(existing);
   }
 
-  /**
-   * The unsigned envelope stored on `op`, or null when it cannot be read. That
-   * never happens for a row this service built, so callers take null to mean
-   * "this row cannot be vouched for" and fail closed.
-   */
+  /** This module's rows read through the shared {@link storedEnvelope}. */
   private storedEnvelope(
     op: Pick<LiquidityPoolOperation, 'xdr' | 'network'>,
   ): Transaction | null {
-    try {
-      const tx = TransactionBuilder.fromXDR(
-        op.xdr,
-        this.stellar.passphrase(op.network as StellarNetwork),
-      );
-      return tx instanceof FeeBumpTransaction ? null : tx;
-    } catch {
-      return null;
-    }
+    return storedEnvelope(
+      op.xdr,
+      this.stellar.passphrase(op.network as StellarNetwork),
+    );
   }
 
   /**
@@ -930,8 +921,13 @@ export class LiquidityPoolsService {
     });
     if (!oldest) return;
 
-    const envelope = this.storedEnvelope(oldest);
-    if (envelope && BigInt(envelope.sequence) > BigInt(accountSequence)) {
+    if (
+      cannotHaveSettled(
+        oldest.xdr,
+        this.stellar.passphrase(oldest.network as StellarNetwork),
+        accountSequence,
+      )
+    ) {
       return;
     }
     throw ApiError.conflict(

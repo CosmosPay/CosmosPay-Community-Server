@@ -29,6 +29,7 @@ import {
   resolveSlippage,
 } from '@/stellar/stellar-operation-policy';
 import { StellarService } from '@/stellar/stellar.service';
+import { cannotHaveSettled } from '@/stellar/stored-envelope';
 import type {
   Prisma,
   Swap,
@@ -189,7 +190,9 @@ export class SwapsService {
    * `idempotency_conflict` — see {@link replay}. Without a key, the unique
    * `(network, txHash)` constraint still rejects a byte-identical rebuild with
    * 409. Optional `STELLAR_SWAP_SINGLE_INFLIGHT=true` rejects a second
-   * non-expired PENDING swap for the same `(consumer, source, network)` with 409.
+   * non-expired PENDING swap for the same `(consumer, source, network)` with 409
+   * — but only one that may already have settled; see
+   * {@link assertNoInflightSwap}.
    */
   async create(
     consumer: GatewayConsumer,
@@ -214,8 +217,6 @@ export class SwapsService {
       if (existing) return this.replay(existing, terms, consumer);
     }
 
-    await this.assertNoInflightSwap(local.id, dto.source, network);
-
     const priced = await this.priceSwap(
       network,
       dto,
@@ -237,6 +238,14 @@ export class SwapsService {
 
     const stellarCfg = this.config.get('stellar', { infer: true });
     const account = await this.accounts.load(network, dto.source);
+    // Read the sequence before anything builds from `account`:
+    // `TransactionBuilder.build()` advances it in place.
+    await this.assertNoInflightSwap(
+      local.id,
+      dto.source,
+      network,
+      account.sequenceNumber(),
+    );
 
     // The destination must already trust a non-native asset, or the path payment
     // would fail on-chain. Catch it now with a clear message.
@@ -428,12 +437,29 @@ export class SwapsService {
 
   /**
    * Optional guard (`STELLAR_SWAP_SINGLE_INFLIGHT`): at most one non-expired
-   * PENDING swap per (consumer, source, network). Off by default.
+   * PENDING swap per (consumer, source, network) that may already be on-chain.
+   * Off by default.
+   *
+   * **Only a row that may already have settled holds the guard**, which is
+   * {@link cannotHaveSettled}'s question and the reason it exists: `source` is a
+   * public Stellar address and nothing requires the caller to control it, so a
+   * merely-built row is otherwise a way to hand a stranger a 409 for a whole
+   * transaction-timeout window. Consumer scoping does not close that under the
+   * shared public key, where every anonymous wallet is one consumer — one dust
+   * swap naming someone's account froze swapping for it, again and again. The
+   * twin in `liquidity-pools.service.ts` asks the same question, and documents
+   * the residual: a row built before the account's latest transaction does block
+   * until it expires, because from here it looks like one that settled.
+   *
+   * A row whose envelope cannot be read blocks: nothing about it can be vouched
+   * for. The message names the blocking row's id — both rows are the same
+   * consumer's, so that discloses nothing the caller may not see.
    */
   private async assertNoInflightSwap(
     consumerId: string,
     source: string,
-    network: string,
+    network: StellarNetwork,
+    accountSequence: string,
   ): Promise<void> {
     const { singleInflight } = this.config.get('stellar', {
       infer: true,
@@ -449,14 +475,23 @@ export class SwapsService {
         OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
       },
       orderBy: { createdAt: 'asc' },
+      select: { id: true, xdr: true },
     });
-    if (existing) {
-      throw ApiError.conflict(
-        ApiErrorCode.OperationInFlight,
-        `An in-flight swap already exists for this source account (id=${existing.id}). ` +
-          'Wait for it to settle/expire, or disable STELLAR_SWAP_SINGLE_INFLIGHT.',
-      );
+    if (!existing) return;
+    if (
+      cannotHaveSettled(
+        existing.xdr,
+        this.stellar.passphrase(network),
+        accountSequence,
+      )
+    ) {
+      return;
     }
+    throw ApiError.conflict(
+      ApiErrorCode.OperationInFlight,
+      `An in-flight swap already exists for this source account (id=${existing.id}). ` +
+        'Wait for it to settle/expire, or disable STELLAR_SWAP_SINGLE_INFLIGHT.',
+    );
   }
 
   // ── Read (list) ─────────────────────────────────────────────────────────────

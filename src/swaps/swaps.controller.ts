@@ -35,7 +35,11 @@ import {
   SwapQuoteEntity,
   SwapSubmitResultEntity,
 } from '@/swaps/entities/swap.entity';
-import { SWAP_SUBMIT_RATE_LIMIT } from '@/swaps/swaps.constants';
+import {
+  SWAP_CREATE_RATE_LIMIT,
+  SWAP_QUOTE_RATE_LIMIT,
+  SWAP_SUBMIT_RATE_LIMIT,
+} from '@/swaps/swaps.constants';
 import { SwapsService } from '@/swaps/swaps.service';
 
 // URI versioning => /v1/swaps
@@ -48,6 +52,10 @@ export class SwapsController {
   // Prices a path from Horizon. Pure function of the request.
   @AllowPublicKey()
   @RequirePermissions('swaps:read')
+  // Persists nothing, but a strict-send path search is one of the most
+  // expensive things Horizon serves, and that per-IP budget is shared by every
+  // route in this service.
+  @RateLimit(SWAP_QUOTE_RATE_LIMIT)
   // POST because the quote parameters are a body, not because anything is
   // created — the route persists nothing, so 200 is the honest status. Nest
   // defaults POST to 201, which is what the committed spec used to record.
@@ -68,6 +76,9 @@ export class SwapsController {
   // Builds an unsigned envelope from the request; the wallet signs it.
   @AllowPublicKey()
   @RequirePermissions('swaps:write')
+  // A quote's Horizon cost plus a row holding the source account's next
+  // sequence number until it expires.
+  @RateLimit(SWAP_CREATE_RATE_LIMIT)
   @ApiOperation({
     summary:
       'Create a swap → unsigned XDR + SEP-7 tx URI + QR for the wallet to sign',

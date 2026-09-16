@@ -479,7 +479,13 @@ lo que emitir una notificación nunca bloquea la solicitud a la API que la origi
 **Política de destinos salientes (SSRF):** los endpoints deben usar `https` y
 resolver solo a direcciones públicas. El registro rechaza loopback, rangos privados
 RFC1918, link-local (`169.254.0.0/16`, incluido el endpoint de metadatos de la nube
-`169.254.169.254`) y hostnames de metadatos conocidos. La misma verificación se
+`169.254.169.254`) y hostnames de metadatos conocidos. **Todo rechazo que dependa del
+host da la misma respuesta** — «el host no es un destino permitido» — y el motivo va
+al log: distinguir «aquí no resuelve» de «resuelve a `10.0.4.7`» y de «resuelve al
+servicio de metadatos» le permitiría a cualquiera que pueda registrar un endpoint
+mapear la red en la que corre este servicio, una URL a la vez. Una URL malformada, un
+esquema incorrecto, credenciales o la falta de host siguen diciendo exactamente qué
+está mal: describen la cadena enviada, no la red. La misma verificación se
 ejecuta de nuevo inmediatamente antes de cada entrega (el DNS puede cambiar después
 del registro). El cliente HTTP usa `redirect: manual` (nunca sigue `3xx`), timeouts de
 conexión/lectura definidos por variables de entorno y un tamaño máximo para el cuerpo
@@ -629,8 +635,12 @@ una intención con el mismo memo **y los mismos términos** devuelve la original
 mismo memo con cualquier término diferente — tipo, red, destino, monto, activo, `msg`,
 `callback`, o `source` para `tx` — es `409 idempotency_conflict`, y el error no dice
 nada sobre la intención almacenada. Esto importa con la API key pública compartida,
-donde todas las wallets anónimas son el mismo consumidor. Si no se envía `memo`, se
-genera un uint64 aleatorio.
+donde todas las wallets anónimas son el mismo consumidor. Ambos constructores
+comparten un presupuesto de **30 llamadas por minuto** por consumidor y dirección del
+cliente (`429 rate_limited`): cada uno lee la cuenta del pagador desde Horizon y
+escribe una fila, y con la key pública compartida la dirección es lo único que separa
+a una wallet anónima de la siguiente. Si no se envía `memo`, se genera un uint64
+aleatorio.
 
 **`POST /v1/payment-intents/tx`** — el pagador (`source`) es conocido, así que se
 construye el `TransactionEnvelope` sin firmar y una URI `web+stellar:tx?xdr=...`.
@@ -824,12 +834,27 @@ comparando además el tipo de operación. Sin key, la restricción única
 **409** (colisión de secuencia / XDR). Cuando `STELLAR_SWAP_SINGLE_INFLIGHT=true`, un segundo swap
 `PENDING` no expirado para el mismo `(consumer, source, network)` también devuelve
 **409** indicando el id existente (por defecto **desactivado** — los swaps
-concurrentes distintos desde una misma cuenta siguen estando permitidos).
+concurrentes distintos desde una misma cuenta siguen estando permitidos). Solo
+retiene ese guard un swap que **podría estar ya on-chain**: una fila cuyo número de
+secuencia la cuenta todavía no usó no puede haberse liquidado, y el swap que se está
+construyendo toma ese mismo número, así que como mucho uno de los dos podrá hacerlo.
+Cualquiera puede indicar cualquier `source`, así que sin esa comprobación un solo swap
+de polvo congelaba los swaps de la cuenta de un tercero durante toda una ventana de
+expiración — y con la key pública compartida, tanto tiempo como el atacante lo
+repitiera.
 
 ```jsonc
 // response → { id, status: "PENDING", network, sendAmount, feeAmount, swapAmount,
 //              destEstimated, destMin, path, xdr, uri: "web+stellar:tx?xdr=…", qr, txHash, … }
 ```
+
+**Cotizar y construir también tienen límite**, por consumidor y dirección del
+cliente: **60 cotizaciones por minuto** y **20 construcciones por minuto**, en buckets
+separados del de submit. Una cotización no persiste nada y aun así cuesta una búsqueda
+de ruta strict-send, la llamada más cara que este servicio le hace a Horizon — y ese
+presupuesto por IP lo comparten swaps, liquidity pools e intenciones de pago por
+igual, así que un precio consultado en bucle degradaba los tres a la vez para todos
+los llamadores anónimos.
 
 **`POST /v1/swaps/:id/submit`** — retransmite el envelope firmado (`swaps:write`).
 
@@ -860,7 +885,10 @@ llamadas por minuto** por consumidor y dirección del cliente (`429 rate_limited
 bajo la key pública compartida, cada wallet anónima es un solo consumidor, así que
 las wallets detrás de un mismo NAT comparten ese cupo.
 `POST /v1/liquidity-pools/operations/:id/submit` sigue las mismas reglas, con su
-propio cupo.
+propio cupo, y `POST /v1/liquidity-pools/deposit` · `/withdraw` comparten un
+presupuesto de **20 construcciones por minuto** — las dos direcciones de un mismo
+flujo, así que buckets separados solo dejarían que un bucle las alternara y se llevara
+ambos.
 
 ## Alias — identificadores de pago reclamables
 
@@ -1034,6 +1062,32 @@ que un receiver se habilita, un `PATCH` que toca datos de KYC lo devuelve a
 que la key sea elevada (`X-Consumer-Role: admin`), porque ese `PUT` reescribe la
 identidad directamente en el proveedor.
 
+**Una aprobación queda fijada al expediente que se revisó.** La lectura de un receiver
+incluye `dossierVersion`, que cuenta cada edición de los datos de KYC enviados.
+Devuélvelo como `expected_version` al aprobar y un expediente que cambió desde que lo
+leíste es `409 kyc_state_invalid` en lugar de la aprobación de datos que nadie vio —
+una edición deja el estado en `pending_review`, así que la aprobación por sí sola no
+podía notarlo. Lo aprobado queda como `reviewedVersion`, y
+`POST /v1/kyc/receivers/:id/enable` se niega a crear el receiver en BlindPay mientras
+los dos difieran.
+
+**Las rutas de fiat tienen presupuestos.** Cada escritura que el proveedor conserva
+está limitada por consumidor y dirección del cliente, y toda ruta respaldada por
+BlindPay cuenta además contra un techo por consumidor de **60 solicitudes al proveedor
+por minuto**: una sola instancia atiende a todos los tenants de la key, así que un
+tenant en bucle sobre las cotizaciones hace fallar los payins de los demás. Pasarse es
+`429 rate_limited` con `Retry-After`.
+
+| Ruta | Presupuesto (por consumidor + dirección del cliente) |
+| ---- | --------------------------------------------------- |
+| `POST /v1/kyc/upload` | 20 cada 10 min |
+| `POST /v1/kyc/terms-of-service` | 10 cada 10 min |
+| `POST /v1/onramp/quotes` · `POST /v1/offramp/quotes` | 30 por minuto, buckets separados |
+| `POST /v1/onramp/payins` | 10 por minuto |
+| `POST /v1/offramp/payouts/authorize` · `POST /v1/offramp/payouts` | 10 por minuto, compartido |
+| `POST /v1/offramp/payouts/:id/documents` | 20 cada 10 min |
+| `POST /v1/onramp/trustline` | 20 por minuto |
+
 ### Las URL de redirección de KYC se validan contra una lista de permitidos por consumidor
 
 El flujo de términos de servicio envía al usuario a BlindPay y luego de vuelta a una
@@ -1042,12 +1096,20 @@ El flujo de términos de servicio envía al usuario a BlindPay y luego de vuelta
 
 | Capa | Regla | Dónde |
 | ---- | ----- | ----- |
-| Forma | una URL `https` absoluta sin credenciales incrustadas (`user:pass@`) | `@IsRedirectUrl()` en cada DTO que incluye una |
+| Forma | una URL `https` absoluta sin credenciales incrustadas (`user:pass@`), sin fragmento (`#…`) y sin barra invertida, espacios ni caracteres de control | `@IsRedirectUrl()` en cada DTO que incluye una, y de nuevo en la capa de servicio |
 | Host | en la lista de permitidos **del consumidor que llama** — el host exacto, o un subdominio en un límite de etiqueta (`app.acme.com` coincide con `acme.com`; `evilacme.com` no) | `KYC_REDIRECT_URL_WHITELIST`, aplicada en la capa de servicio |
 
 ```
 KYC_REDIRECT_URL_WHITELIST={"cosmos_acme":["acme.com","app.acme.com"]}
 ```
+
+Las reglas de forma son lo que hace valiosa la verificación del host. Una barra
+invertida se lee como `/` dentro de la parte de autoridad para un parser WHATWG y como
+parte del userinfo para otros, así que `https://app.acme.com\@evil.test` tiene dos
+lecturas honestas y este servicio no es el último en leerla — el valor va a BlindPay,
+vuelve en una página alojada y termina en un navegador. Los espacios y los caracteres
+de control son la misma categoría, un fragmento se traga el `?tos_id=` que añade el
+proveedor, y las credenciales mueven el host al otro lado del `@`.
 
 **Falla en modo cerrado**: un consumidor sin entrada no puede usar ninguna
 redirección, y un host con un punto al final o en forma IDN se rechaza en lugar de
@@ -1264,9 +1326,12 @@ key a través de un solo consumidor y presupuesta ese tráfico por su cuenta.
 
 Superar uno devuelve **`429` con `code: "rate_limited"`**, un `Retry-After` y los
 headers `RateLimit-Limit` / `-Remaining` / `-Reset`. El mismo limitador protege
-algunas rutas fuera de Pollar — el submit de swaps y de liquidity pools, `ping` y
-`redeliver` de webhooks, los desafíos y la recuperación de alias, la ingesta de
-actividad — y cada sección indica su propio presupuesto. El rate limiting general
+las rutas fuera de Pollar cuyo costo un error no devuelve — los constructores de swaps
+y de liquidity pools y sus submits, los constructores de intenciones de pago, la
+subida de documentos y los términos de servicio de KYC, las escrituras de onramp y
+offramp (con un techo por consumidor de BlindPay por encima), `ping` y `redeliver` de
+webhooks, los desafíos y la recuperación de alias, la ingesta de actividad — y cada
+sección indica su propio presupuesto. El rate limiting general
 corresponde a APISIX.
 
 **El contador está en Postgres, no en memoria**, así que el límite se mantiene entre
@@ -1361,6 +1426,12 @@ columna "Quién lo nota" antes de desplegar.
 | `POST /v1/pollar/users` y `/v1/pollar/users/with-wallet` requieren una key elevada; una key de tenant recibe `403 elevated_key_required` | Integradores que prerregistran usuarios con una key de tenant | Un usuario registrado es el que un login social posterior resuelve por email, así que una key de tenant podía reclamar el email de un desconocido y quedar registrada como dueña de su wallet |
 | Un login en testnet ya no aprovisiona una wallet de mainnet a su usuario: `network_wallets` en un canje de testnet lista solo la wallet de testnet. Un login en mainnet sigue aprovisionando testnet | Quien lea una entrada de mainnet de un login de testnet | Una key `dev` que cualquiera puede generar gastaba XLM real del operador en una reserva de mainnet por cada login |
 | Las rutas de Pollar de sondeo, refresh, logout, verificación de tokens, registro de usuarios y eliminación de trustlines tienen límite, y sobre los presupuestos por dirección se aplican una cuota por consumidor (100 peticiones a Pollar por minuto) y un techo de wallets (50 por día); el exceso es `429 rate_limited` | Clientes que martillean esas rutas | No tenían límite, y cada llamada gasta el presupuesto de peticiones a Pollar que comparten todos los tenants — un tenant podía hacer fallar los logins de todos los demás |
+| `POST /v1/kyc/receivers/:id/approve` acepta `expected_version` (el `dossierVersion` que leíste) y responde `409 kyc_state_invalid` cuando los datos de KYC cambiaron desde entonces. `POST /v1/kyc/receivers/:id/enable` rechaza un expediente que no es el aprobado, y las lecturas de receivers incluyen `dossierVersion` y `reviewedVersion` | Los revisores, cuando empiecen a enviar `expected_version`; nadie más — el campo es opcional | Una revisión es una persona leyendo los datos y aprobándolos después, y una edición en medio deja el estado en `pending_review`, así que la aprobación recaía sobre un expediente que nadie había visto y `enable` lo enviaba a un proveedor regulado |
+| `POST /v1/kyc/upload`, `/v1/kyc/terms-of-service`, las escrituras de onramp y offramp, `POST /v1/payment-intents/tx` y `/pay`, `POST /v1/swaps/quote` y `/v1/swaps`, y `POST /v1/liquidity-pools/deposit` y `/withdraw` ahora responden `429 rate_limited` al pasarse del presupuesto, por consumidor y dirección del cliente. Toda ruta respaldada por BlindPay cuenta además contra un techo por consumidor de 60 peticiones al proveedor por minuto | Scripts que repiten esas rutas en bucle; un importador masivo por encima del techo debería tener su propia key | No tenían ningún límite: cada una deja algo en el proveedor que ningún error devuelve, o gasta el presupuesto de Horizon por IP que comparten todas las rutas de aquí. Solo los submits estaban limitados |
+| `POST /v1/swaps` ya no responde `409 operation_in_flight` por un swap `PENDING` cuyo número de secuencia la cuenta todavía no usó (un envelope sin firmar o abandonado). Solo aplica con `STELLAR_SWAP_SINGLE_INFLIGHT=true` | Usuarios de wallet que quedaban bloqueados | Cualquiera puede indicar cualquier `source`, así que un swap de polvo congelaba la cuenta de un tercero una ventana de expiración tras otra — el gemelo de la corrección de liquidity pools de arriba |
+| Un destino de webhook rechazado por su host — no resuelve, privado, link-local, metadatos — es un solo `400` con un solo mensaje; el motivo queda en el log del servicio. Una URL malformada, un esquema que no es https, credenciales o la falta de host siguen diciendo qué está mal | Integradores que leían el motivo en la respuesta | Registrar un endpoint resuelve un nombre al que este servicio puede llegar, así que una respuesta por motivo permitía mapear la red interna una URL a la vez |
+| Una `redirect_url` se rechaza cuando lleva un fragmento, una barra invertida, espacios o un carácter de control; https sin credenciales incrustadas ya era obligatorio | Nadie que envíe una URL normal | `https://app.acme.com\@evil.test` nombra un host distinto según quién la parsee, y el valor lo vuelven a leer BlindPay y un navegador |
+| El servicio se niega a arrancar cuando `POLLAR_BRIDGE_CALLBACK_URL` es `http` plano en un host enrutable | Despliegues que terminan TLS en otro punto y configuran el callback como `http` | Pollar devuelve el navegador a esa URL con el código de autorización en la query string, y ese código se canjea por la sesión del usuario |
 
 Notas de despliegue que lo acompañan:
 
@@ -1433,6 +1504,19 @@ Notas de despliegue que lo acompañan:
   de mainnet que los logins de testnet habían dejado en `pending` (`FAILED`,
   `COUNTERPART_FROM_TESTNET_DISABLED`), para que el sweeper deje de fondearlas. Solo datos,
   sin cambio de esquema.
+- **La migración `20260915200000_receiver_dossier_version`** agrega `dossierVersion`
+  (por defecto `1`) y `reviewedVersion` a `blindpay_receiver` — solo catálogo, sin
+  reescritura de la tabla — y rellena `reviewedVersion` en todo receiver que ya pasó
+  la revisión, para que su `enable` siga funcionando. Los receivers todavía en
+  `inactive` o `pending_review` quedan en `NULL`, que es la verdad sobre ellos.
+- **Revisar `POLLAR_BRIDGE_CALLBACK_URL` antes de desplegar.** `http` plano en un host
+  enrutable ahora impide que el servicio arranque, con un error que nombra la
+  variable. Loopback (`http://127.0.0.1:…`) se sigue aceptando, para desarrollo local.
+- **Nuevos `429` en rutas que nunca devolvían uno.** Los presupuestos de la tabla de
+  arriba rigen desde esta versión; un cliente que repita en bucle subidas de KYC,
+  cotizaciones, payins, payouts, construcción de intenciones, cotizaciones de swap o
+  construcciones de pool tiene que respetar `Retry-After`. `RATE_LIMIT_ENABLED=false`
+  apaga el limitador durante un incidente.
 
 ### NestJS 12, TypeScript 6 y Node 24.9 como versión mínima
 
@@ -1725,7 +1809,7 @@ Cada variable leída de `process.env` en `src/` se valida en el arranque mediant
 | `RATE_LIMIT_PRUNE_INTERVAL_MS` | no | `600000` | Intervalo de depuración de las ventanas del contador (ms, mín. 1000) |
 | `POLLAR_PUBLISHABLE_KEY_TESTNET` / `_MAINNET` | no | — | Publishable key de Pollar (`pub_<network>_…`), para el puente OAuth |
 | `POLLAR_SECRET_KEY_TESTNET` / `_MAINNET` | junto con la publishable key | — | Clave secreta de Pollar (`sec_<network>_…`), para las rutas de operador |
-| `POLLAR_BRIDGE_CALLBACK_URL` | si hay una key de Pollar | — | URL pública a la que Pollar devuelve el navegador. Debe ser `<gateway>/v1/pollar/oauth/callback` **y** un host registrado en Build → Domains de Pollar |
+| `POLLAR_BRIDGE_CALLBACK_URL` | si hay una key de Pollar | — | URL pública a la que Pollar devuelve el navegador. Debe ser `<gateway>/v1/pollar/oauth/callback`, **https** (`http` solo en un host loopback — si no, el arranque falla: el código de autorización viaja en su query string) **y** un host registrado en Build → Domains de Pollar |
 | `POLLAR_REDIRECT_URI_WHITELIST` | no | — | Lista de URIs de redirección de wallets permitidas por consumidor. Vacía ⇒ ese consumidor solo puede usar el flujo de sondeo |
 | `POLLAR_SDK_ORIGIN` | no | origin de `POLLAR_BRIDGE_CALLBACK_URL` | `Origin` enviado a la SDK API de Pollar, que lo verifica contra Build → Domains. Definirla solo cuando el host del callback y el host registrado difieren |
 | `POLLAR_SDK_BASE_URL` | no | `https://sdk.api.pollar.xyz` | URL base de la SDK API de Pollar |

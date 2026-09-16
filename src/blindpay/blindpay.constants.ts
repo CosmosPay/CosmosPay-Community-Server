@@ -169,3 +169,28 @@ export const SETTLED_STATUSES = [
 
 /** Terminal BlindPay KYC statuses; mirrors `kyc/receivers/receiver-state.ts`. */
 export const SETTLED_KYC_STATUSES = ['approved', 'rejected'] as const;
+
+/**
+ * Every BlindPay-backed request one consumer may cause in a minute, across KYC,
+ * onramp and offramp.
+ *
+ * One BlindPay instance serves every tenant on a key (two, counting the dev
+ * instance), so the provider's quota is a shared resource the way Pollar's is:
+ * a tenant looping quotes does not merely slow itself down, it fails other
+ * tenants' payins. The per-address budgets on each route tell one ordinary
+ * caller from another and do nothing about that, because a tenant chooses how
+ * many addresses it calls from — this ceiling is what it cannot multiply.
+ *
+ * Sixty a minute is far above an integrator's honest use: a quote, a payin and a
+ * document upload are each one call, and a human-driven KYC flow is a handful
+ * per person. A batch importer legitimately above it should hold its own key.
+ *
+ * Stacked *alongside* each route's per-address budget, never instead of it: the
+ * two answer different questions, and the guard counts both.
+ */
+export const BLINDPAY_CONSUMER_QUOTA_RATE_LIMIT = {
+  name: 'blindpay:quota',
+  limit: 60,
+  windowMs: 60 * 1000,
+  per: 'consumer' as const,
+};

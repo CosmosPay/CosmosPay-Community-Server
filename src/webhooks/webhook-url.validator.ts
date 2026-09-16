@@ -10,10 +10,48 @@ import { BLOCKED_HOSTNAMES } from '@/webhooks/webhooks.constants';
  */
 
 export class WebhookUrlValidationError extends Error {
-  constructor(message: string) {
+  /**
+   * Why the destination was refused, for the operator's log only.
+   *
+   * Set on every refusal {@link notAllowed} builds; absent on the ones whose
+   * `message` is already safe to repeat, so a caller logging `detail ?? message`
+   * says the most it may.
+   */
+  readonly detail?: string;
+
+  constructor(message: string, detail?: string) {
     super(message);
     this.name = 'WebhookUrlValidationError';
+    this.detail = detail;
   }
+}
+
+/**
+ * The one answer every host-dependent refusal gives back.
+ *
+ * Registering a webhook is a request this service resolves and evaluates, so a
+ * per-reason message answers questions the caller cannot otherwise ask: "does
+ * `redis.internal` exist here" (resolves vs. does not), "what does it point at"
+ * (private vs. link-local vs. metadata), "is 10.0.4.7 taken". Repeated over a
+ * list, that is a map of the network this process sits in, drawn by anyone who
+ * can POST an endpoint — including, on the shared public key, anyone at all.
+ * One message for all of them answers nothing.
+ *
+ * The distinctions callers legitimately act on are the ones above this in
+ * {@link assertPublicWebhookUrl} — malformed URL, wrong scheme, credentials, no
+ * host — and those stay specific: they describe the string that was sent, not
+ * what this network looks like.
+ *
+ * The reason is not lost, it moves to {@link WebhookUrlValidationError.detail},
+ * which the caller logs.
+ */
+const NOT_ALLOWED_MESSAGE =
+  'Webhook URL host is not an allowed destination. It must be a public ' +
+  'address: not loopback, private, link-local, shared, reserved or a cloud ' +
+  'metadata endpoint, and it must resolve.';
+
+function notAllowed(detail: string): WebhookUrlValidationError {
+  return new WebhookUrlValidationError(NOT_ALLOWED_MESSAGE, detail);
 }
 
 /** Resolves a hostname to one or more IP addresses (IPv4 and/or IPv6). */
@@ -82,9 +120,7 @@ export async function assertPublicWebhookUrl(
   }
 
   if (BLOCKED_HOSTNAMES.has(hostname)) {
-    throw new WebhookUrlValidationError(
-      'Webhook URL host is not allowed (cloud metadata)',
-    );
+    throw notAllowed('Webhook URL host is not allowed (cloud metadata)');
   }
 
   const port = parsed.port ? Number(parsed.port) : 443;
@@ -99,21 +135,17 @@ export async function assertPublicWebhookUrl(
   try {
     addresses = await lookup(hostname);
   } catch {
-    throw new WebhookUrlValidationError(
-      `Webhook URL host could not be resolved: ${hostname}`,
-    );
+    throw notAllowed(`Webhook URL host could not be resolved: ${hostname}`);
   }
 
   if (addresses.length === 0) {
-    throw new WebhookUrlValidationError(
-      `Webhook URL host resolved to no addresses: ${hostname}`,
-    );
+    throw notAllowed(`Webhook URL host resolved to no addresses: ${hostname}`);
   }
 
   for (const address of addresses) {
     const version = isIP(address);
     if (!version) {
-      throw new WebhookUrlValidationError(
+      throw notAllowed(
         `Webhook URL resolved to an unrecognised address: ${address}`,
       );
     }
@@ -140,72 +172,54 @@ function assertIpv4Allowed(address: string): void {
     parts.length !== 4 ||
     parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255)
   ) {
-    throw new WebhookUrlValidationError(`Invalid IPv4 address: ${address}`);
+    throw notAllowed(`Invalid IPv4 address: ${address}`);
   }
   const [a, b, c] = parts;
 
   // Loopback 127.0.0.0/8
   if (a === 127) {
-    throw new WebhookUrlValidationError(
-      'Webhook URL must not resolve to a loopback address',
-    );
+    throw notAllowed('Webhook URL must not resolve to a loopback address');
   }
   // "This" network 0.0.0.0/8
   if (a === 0) {
-    throw new WebhookUrlValidationError(
-      'Webhook URL must not resolve to a non-routable address',
-    );
+    throw notAllowed('Webhook URL must not resolve to a non-routable address');
   }
   // Private 10.0.0.0/8
   if (a === 10) {
-    throw new WebhookUrlValidationError(
-      'Webhook URL must not resolve to a private address',
-    );
+    throw notAllowed('Webhook URL must not resolve to a private address');
   }
   // Private 172.16.0.0/12
   if (a === 172 && b >= 16 && b <= 31) {
-    throw new WebhookUrlValidationError(
-      'Webhook URL must not resolve to a private address',
-    );
+    throw notAllowed('Webhook URL must not resolve to a private address');
   }
   // Private 192.168.0.0/16
   if (a === 192 && b === 168) {
-    throw new WebhookUrlValidationError(
-      'Webhook URL must not resolve to a private address',
-    );
+    throw notAllowed('Webhook URL must not resolve to a private address');
   }
   // IETF protocol assignments 192.0.0.0/24 — not globally routable, and the
   // block holds special-purpose addresses (DS-Lite 192.0.0.1, NAT64 discovery)
   // that resolve on-network rather than on the internet.
   if (a === 192 && b === 0 && c === 0) {
-    throw new WebhookUrlValidationError(
-      'Webhook URL must not resolve to a reserved address',
-    );
+    throw notAllowed('Webhook URL must not resolve to a reserved address');
   }
   // Link-local 169.254.0.0/16 (includes cloud metadata 169.254.169.254)
   if (a === 169 && b === 254) {
-    throw new WebhookUrlValidationError(
+    throw notAllowed(
       'Webhook URL must not resolve to a link-local or cloud-metadata address',
     );
   }
   // CGNAT 100.64.0.0/10
   if (a === 100 && b >= 64 && b <= 127) {
-    throw new WebhookUrlValidationError(
-      'Webhook URL must not resolve to a shared/CGNAT address',
-    );
+    throw notAllowed('Webhook URL must not resolve to a shared/CGNAT address');
   }
   // Benchmarking 198.18.0.0/15 — RFC 2544 test range, routed to lab gear
   // inside a network rather than to the internet.
   if (a === 198 && (b === 18 || b === 19)) {
-    throw new WebhookUrlValidationError(
-      'Webhook URL must not resolve to a benchmarking address',
-    );
+    throw notAllowed('Webhook URL must not resolve to a benchmarking address');
   }
   // Multicast / reserved 224.0.0.0/4 and above
   if (a >= 224) {
-    throw new WebhookUrlValidationError(
-      'Webhook URL must not resolve to a reserved address',
-    );
+    throw notAllowed('Webhook URL must not resolve to a reserved address');
   }
 }
 
@@ -214,36 +228,26 @@ function assertIpv6Allowed(address: string): void {
 
   // Loopback ::1
   if (normalized === '0000:0000:0000:0000:0000:0000:0000:0001') {
-    throw new WebhookUrlValidationError(
-      'Webhook URL must not resolve to a loopback address',
-    );
+    throw notAllowed('Webhook URL must not resolve to a loopback address');
   }
   // Unspecified ::
   if (normalized === '0000:0000:0000:0000:0000:0000:0000:0000') {
-    throw new WebhookUrlValidationError(
-      'Webhook URL must not resolve to a non-routable address',
-    );
+    throw notAllowed('Webhook URL must not resolve to a non-routable address');
   }
 
   const first = Number.parseInt(normalized.slice(0, 4), 16);
 
   // Unique-local fc00::/7
   if ((first & 0xfe00) === 0xfc00) {
-    throw new WebhookUrlValidationError(
-      'Webhook URL must not resolve to a private address',
-    );
+    throw notAllowed('Webhook URL must not resolve to a private address');
   }
   // Link-local fe80::/10
   if ((first & 0xffc0) === 0xfe80) {
-    throw new WebhookUrlValidationError(
-      'Webhook URL must not resolve to a link-local address',
-    );
+    throw notAllowed('Webhook URL must not resolve to a link-local address');
   }
   // Multicast ff00::/8
   if ((first & 0xff00) === 0xff00) {
-    throw new WebhookUrlValidationError(
-      'Webhook URL must not resolve to a reserved address',
-    );
+    throw notAllowed('Webhook URL must not resolve to a reserved address');
   }
 
   // 6to4 2002::/16. The 32 bits after the prefix *are* an IPv4 address the
@@ -251,26 +255,20 @@ function assertIpv6Allowed(address: string): void {
   // smuggled past every v4 check above. The transition mechanism is deprecated
   // (RFC 7526) and no real integrator is reachable only this way.
   if (normalized.startsWith('2002:')) {
-    throw new WebhookUrlValidationError(
-      'Webhook URL must not resolve to a 6to4 address',
-    );
+    throw notAllowed('Webhook URL must not resolve to a 6to4 address');
   }
   // NAT64 64:ff9b::/32 (the well-known /96 plus the local-use 64:ff9b:1::/48).
   // Same shape of problem: the low 32 bits are handed to a translator that
   // opens the connection as IPv4, which may land anywhere private.
   if (normalized.startsWith('0064:ff9b:')) {
-    throw new WebhookUrlValidationError(
-      'Webhook URL must not resolve to a NAT64 address',
-    );
+    throw notAllowed('Webhook URL must not resolve to a NAT64 address');
   }
 
   // Teredo 2001:0000::/32. Embeds a server and a client IPv4 address and
   // tunnels to IPv4 — the same class as 6to4 above, and equally not how any
   // real integrator is reachable.
   if (normalized.startsWith('2001:0000:')) {
-    throw new WebhookUrlValidationError(
-      'Webhook URL must not resolve to a Teredo address',
-    );
+    throw notAllowed('Webhook URL must not resolve to a Teredo address');
   }
 
   // IPv4-mapped IPv6 (::ffff:a.b.c.d) — re-check the embedded v4.

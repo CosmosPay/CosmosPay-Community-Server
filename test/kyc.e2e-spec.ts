@@ -45,6 +45,8 @@ describe('KYC surface (e2e)', () => {
     },
   };
 
+  const rateLimitCounters = new Map<string, number>();
+
   const prismaMock = {
     onModuleInit: jest.fn(),
     onModuleDestroy: jest.fn(),
@@ -57,6 +59,16 @@ describe('KYC surface (e2e)', () => {
     requestLog: {
       create: jest.fn().mockResolvedValue({ id: 'request_log_1' }),
     },
+    /**
+     * The rate limiter's counter. Keyed by bucket alone, not by window: a
+     * one-minute window would now and then roll over in the middle of a test,
+     * and the window arithmetic is rate-limit.service.spec's to pin.
+     */
+    $queryRaw: jest.fn((_sql: unknown, key: string) => {
+      const next = (rateLimitCounters.get(key) ?? 0) + 1;
+      rateLimitCounters.set(key, next);
+      return Promise.resolve([{ count: next }]);
+    }),
     consumer: {
       upsert: jest.fn().mockResolvedValue({
         id: 'consumer_1',

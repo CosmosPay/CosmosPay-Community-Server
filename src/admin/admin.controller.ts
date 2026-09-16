@@ -173,7 +173,12 @@ export class AdminController {
     @Param('id') id: string,
     @Body() dto: ApproveReceiverDto,
   ) {
-    return this.admin.approveReceiver(id, dto.redirect_url, actor);
+    return this.admin.approveReceiver(
+      id,
+      dto.redirect_url,
+      actor,
+      dto.expected_version,
+    );
   }
 
   @Post('receivers/:id/enable')

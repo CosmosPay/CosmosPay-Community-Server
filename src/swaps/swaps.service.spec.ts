@@ -780,26 +780,73 @@ describe('SwapsService.create idempotency (issue #17)', () => {
     ).rejects.toMatchObject({ code: ApiErrorCode.IdempotencyConflict });
   });
 
-  it('returns 409 when STELLAR_SWAP_SINGLE_INFLIGHT blocks a second PENDING source', async () => {
-    const config = makeConfig({ singleInflight: true });
-    const webhooks = makeEmitter(prisma, events);
-    service = new SwapsService(
-      config,
+  /** The service under test with STELLAR_SWAP_SINGLE_INFLIGHT on. */
+  function singleInflightService() {
+    return new SwapsService(
+      makeConfig({ singleInflight: true }),
       prisma,
-      webhooks,
+      makeEmitter(prisma, events),
       stellar as any,
       new ConsumerResolverService(prisma as never),
       new StellarAccountLoader(stellar as never),
       new SignedTransactionRelay(stellar as never),
     );
+  }
+
+  it('returns 409 when STELLAR_SWAP_SINGLE_INFLIGHT blocks a source that may have settled', async () => {
+    service = singleInflightService();
 
     await service.create(consumer, createDto, 'a');
+    // The account consumed the first swap's sequence number: it may be on-chain
+    // already, and the observer simply has not caught up.
+    stellar.loadAccount.mockImplementation(async () => {
+      const account: any = new Account(SOURCE, '2');
+      account.balances = [
+        { asset_type: 'native', balance: '10000' },
+        {
+          asset_type: 'credit_alphanum4',
+          asset_code: 'USDC',
+          asset_issuer: DEST_ISSUER,
+          balance: '0',
+        },
+      ];
+      return account;
+    });
+
     await expect(
       service.create(consumer, createDto, 'b'),
     ).rejects.toMatchObject({ code: ApiErrorCode.OperationInFlight });
     await expect(service.create(consumer, createDto, 'b')).rejects.toThrow(
       /in-flight swap already exists/i,
     );
+  });
+
+  it('does not let an unsettleable row block the account it names', async () => {
+    // The grief this guard used to hand out: `source` is a public address, so
+    // anyone holding the shared public key could post a swap naming a stranger's
+    // account and take the guard for the whole timeout window. That row keeps the
+    // sequence number the next build takes, so it cannot have settled — and only
+    // one of the two ever can.
+    service = singleInflightService();
+
+    // A different memo, so the two rows do not collide on `(network, txHash)`
+    // — this is the in-flight guard under test, not the rebuild guard.
+    await service.create(consumer, { ...createDto, memo: '7' }, 'a');
+
+    await expect(
+      service.create(consumer, createDto, 'b'),
+    ).resolves.toMatchObject({ status: 'PENDING' });
+  });
+
+  it('blocks when the in-flight row carries an envelope it cannot read', async () => {
+    service = singleInflightService();
+
+    await service.create(consumer, createDto, 'a');
+    prisma.rows[0].xdr = 'not-an-envelope';
+
+    await expect(
+      service.create(consumer, createDto, 'b'),
+    ).rejects.toMatchObject({ code: ApiErrorCode.OperationInFlight });
   });
 });
 

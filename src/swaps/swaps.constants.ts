@@ -36,3 +36,37 @@ export const SWAP_SUBMIT_RATE_LIMIT = {
   limit: 20,
   windowMs: 60 * 1000,
 };
+
+/**
+ * Budget for `POST /v1/swaps/quote`, per consumer + client address.
+ *
+ * A quote persists nothing, so it is not the usual "cost an error cannot
+ * refund" — what it spends is the per-IP Horizon budget every other route here
+ * shares, and a strict-send path search is among the most expensive calls
+ * Horizon serves. The route takes the shared public key, so a single wallet
+ * polling a price in a loop would otherwise degrade swaps, liquidity pools and
+ * payment intents for every anonymous caller at once.
+ *
+ * Sixty a minute is a price refreshed once a second, which is faster than a
+ * human re-reads one and faster than the ledger closes.
+ */
+export const SWAP_QUOTE_RATE_LIMIT = {
+  name: 'swaps:quote',
+  limit: 60,
+  windowMs: 60 * 1000,
+};
+
+/**
+ * Budget for `POST /v1/swaps`, per consumer + client address.
+ *
+ * Building a swap costs what the quote costs plus a row, a destination-trustline
+ * check and an envelope that holds the source account's next sequence number for
+ * `STELLAR_TX_TIMEOUT`. Twenty a minute matches `SWAP_SUBMIT_RATE_LIMIT`: an
+ * honest wallet builds at most one envelope per submission, so the two budgets
+ * are spent together, and a builder that never signs is bounded the same way.
+ */
+export const SWAP_CREATE_RATE_LIMIT = {
+  name: 'swaps:create',
+  limit: 20,
+  windowMs: 60 * 1000,
+};

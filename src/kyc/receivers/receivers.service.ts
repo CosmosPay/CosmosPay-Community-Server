@@ -57,6 +57,8 @@ export const RECEIVER_PUBLIC_SELECT = {
   country: true,
   externalId: true,
   disabled: true,
+  dossierVersion: true,
+  reviewedVersion: true,
   createdAt: true,
   updatedAt: true,
 } as const satisfies Prisma.BlindpayReceiverSelect;
@@ -137,6 +139,7 @@ export class ReceiversService {
     consumer: GatewayConsumer,
     id: string,
     redirectUrl: string,
+    expectedVersion?: number,
   ): Promise<{
     receiver: PublicReceiver;
     url: string;
@@ -160,7 +163,7 @@ export class ReceiversService {
       redirectUrl,
       this.redirectWhitelist(),
     );
-    return this.approveById(id, redirectUrl);
+    return this.approveById(id, redirectUrl, undefined, expectedVersion);
   }
 
   /**
@@ -174,6 +177,7 @@ export class ReceiversService {
     id: string,
     redirectUrl: string,
     audit?: AuditEntry,
+    expectedVersion?: number,
   ): Promise<{
     receiver: PublicReceiver;
     url: string;
@@ -184,6 +188,21 @@ export class ReceiversService {
     });
     if (!row) throw ApiError.notFound('Receiver not found');
     assertTransition(row.kycStatus, 'pending_user');
+    // The review happened before this request: the caller read the dossier, a
+    // person looked at it, and only then did this call arrive. Nothing stopped
+    // the tenant editing `raw` in between — the status stays `pending_review`
+    // through an edit, so the compare-and-swap below would still match and the
+    // approval would land on data nobody reviewed. `expected_version` is how the
+    // caller says which dossier it is approving.
+    if (
+      expectedVersion !== undefined &&
+      expectedVersion !== row.dossierVersion
+    ) {
+      throw ApiError.conflict(
+        ApiErrorCode.KycStateInvalid,
+        `The KYC data changed after it was read (it is now version ${row.dossierVersion}, you approved ${expectedVersion}). Re-read the receiver, review it again, and approve that version.`,
+      );
+    }
     // BlindPay side-effect cannot join the DB transaction; local write + audit can.
     await this.assertRedirectForReceiver(row.consumerId, redirectUrl);
     const url = await this.tosUrl(redirectUrl, row);
@@ -193,8 +212,18 @@ export class ReceiversService {
       // receiver in between (e.g. back to pending_review after a KYC edit). Matching on
       // the old status means only one of the racing callers wins.
       const claimed = await tx.blindpayReceiver.updateMany({
-        where: { id: row.id, kycStatus: row.kycStatus },
-        data: { kycStatus: 'pending_user', tosSentAt: new Date() },
+        // The version is part of the claim for the same reason the status is:
+        // an edit between this handler's own read and this write must lose.
+        where: {
+          id: row.id,
+          kycStatus: row.kycStatus,
+          dossierVersion: row.dossierVersion,
+        },
+        data: {
+          kycStatus: 'pending_user',
+          tosSentAt: new Date(),
+          reviewedVersion: row.dossierVersion,
+        },
       });
       if (claimed.count === 0) {
         throw ApiError.conflict(
@@ -420,6 +449,18 @@ export class ReceiversService {
     // The customer can only accept terms after our owner/admin review approved it.
     // Handoff target is BlindPay's typical first status; mirrorReceiver writes the real one.
     assertTransition(row.kycStatus, 'verifying');
+    // This is the call that puts a live identity in front of a regulated
+    // provider, and the payload it sends is `raw` as it stands *now*. The status
+    // machine already sends a post-approval edit back to `pending_review`, which
+    // is the first line; this is the one that does not depend on every future
+    // writer remembering to move the status. If what was reviewed is not what
+    // would be sent, nothing is sent.
+    if (row.reviewedVersion !== row.dossierVersion) {
+      throw ApiError.conflict(
+        ApiErrorCode.KycStateInvalid,
+        'The KYC data changed after it was approved; it has to be reviewed and approved again before the receiver can be created.',
+      );
+    }
 
     // Claim the transition BEFORE the provider call, not after it. This is the one
     // transition with an irreversible side-effect in the middle: a plain
@@ -603,6 +644,12 @@ export class ReceiversService {
           country: asNullableString(merged.country),
           externalId: asNullableString(merged.external_id),
           kycStatus,
+          // What a reviewer signed off on is a version of this payload, so every
+          // rewrite of it is a new version. An empty patch changes nothing and
+          // must not invalidate a review.
+          ...(Object.keys(patch).length > 0
+            ? { dossierVersion: { increment: 1 } }
+            : {}),
         },
         select: RECEIVER_PUBLIC_SELECT,
       });

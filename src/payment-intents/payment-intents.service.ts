@@ -5,7 +5,8 @@ import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import {
   isUniqueViolation,
-  uniqueViolationTarget,
+  uniqueViolationColumns,
+  uniqueViolationNames,
 } from '@/common/prisma-errors';
 import { resolveNetwork } from '@/common/stellar-network';
 import { PrismaService } from '@/prisma/prisma.service';
@@ -935,19 +936,22 @@ export class PaymentIntentsService {
  * observer tick, and an intent that expired although it was paid. The index is
  * scoped now; a collision that remains is between the consumer's own intents.
  *
- * The writes this guards touch no other unique column, so a violation that
- * names no column is the txHash. Through `@prisma/adapter-pg` every violation
- * names none: it reports the index under `meta.driverAdapterError` and leaves
- * `meta.target`, the only thing `uniqueViolationTarget` reads, unset. A target
- * that does name another column is left alone.
+ * Which column fired is read through `uniqueViolationColumns`, so it works on
+ * both paths: Prisma's `meta.target` names the field, `@prisma/adapter-pg`
+ * names the index (`payment_intent_consumerId_txHash_key`) instead — hence the
+ * match is on the name containing the column, not on equality. A violation that
+ * names another column is left alone. One that names nothing at all is still
+ * treated as the txHash: the writes this guards touch no other unique column,
+ * and a client that reports neither target nor constraint leaves no better
+ * answer than a 409 the caller can act on.
  *
  * The message names no intent. The consumer may be the shared public key's,
  * whose intents belong to every anonymous caller.
  */
 function txHashConflict(err: unknown): ApiError | null {
   if (!isUniqueViolation(err)) return null;
-  const target = uniqueViolationTarget(err);
-  if (target.length > 0 && !target.includes('txHash')) return null;
+  const columns = uniqueViolationColumns(err);
+  if (columns.length > 0 && !uniqueViolationNames(err, 'txHash')) return null;
   return ApiError.conflict(
     ApiErrorCode.IdempotencyConflict,
     'This transaction hash is already recorded on another of your payment ' +

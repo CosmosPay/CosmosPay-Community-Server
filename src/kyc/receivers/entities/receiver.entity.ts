@@ -47,6 +47,22 @@ export class ReceiverEntity {
   })
   disabled!: boolean;
 
+  @ApiProperty({
+    example: 3,
+    description:
+      'Version of the submitted KYC data. Bumped on every edit while the receiver is still local. Send it back as `expected_version` when approving, so the approval is pinned to the dossier that was reviewed.',
+  })
+  dossierVersion!: number;
+
+  @ApiPropertyOptional({
+    type: Number,
+    nullable: true,
+    example: 3,
+    description:
+      'The `dossierVersion` an elevated reviewer approved, or null if the receiver has not been approved. Enabling is refused unless it equals `dossierVersion`.',
+  })
+  reviewedVersion!: number | null;
+
   @ApiProperty({ example: '2026-06-28T12:00:00.000Z' })
   createdAt!: Date;
 

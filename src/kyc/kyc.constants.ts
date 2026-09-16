@@ -126,3 +126,46 @@ export const UPLOAD_SIGNATURES: Readonly<
 
 /** The declared types the upload filter lets through: those with a signature. */
 export const ALLOWED_UPLOAD_TYPES = new Set(Object.keys(UPLOAD_SIGNATURES));
+
+// --- Rate limits -------------------------------------------------------------
+//
+// Both routes below reach BlindPay, so both also carry
+// `BLINDPAY_CONSUMER_QUOTA_RATE_LIMIT` — the per-address budgets here separate
+// ordinary callers, the ceiling there separates tenants.
+
+/**
+ * Budget for `POST /v1/kyc/upload`, per consumer + client address.
+ *
+ * What is defended: the route accepts a file, sniffs it, and hands it to
+ * BlindPay's storage, which keeps it. An error response does not delete what was
+ * already stored nor refund the provider call, so this is the shape `@RateLimit`
+ * exists for. Nothing here is anonymous — an upload needs a real key — so the
+ * address is about one integrator's runaway loop, not about telling strangers
+ * apart.
+ *
+ * Why twenty in ten minutes. A receiver submits an identity document, sometimes
+ * a second page, sometimes a proof of address, and retries a failed upload: five
+ * to eight files for a thorough case. Twenty covers two or three people being
+ * onboarded at once from one office address while holding a loop to two a
+ * minute.
+ */
+export const KYC_UPLOAD_RATE_LIMIT = {
+  name: 'kyc:upload',
+  limit: 20,
+  windowMs: 10 * 60 * 1000,
+};
+
+/**
+ * Budget for `POST /v1/kyc/terms-of-service`, per consumer + client address.
+ *
+ * Each call creates a terms-of-service record at BlindPay and returns a hosted
+ * URL; the record stays whatever this service answers afterwards. Ten in ten
+ * minutes is several onboarding attempts — the URL is handed to a person, who
+ * takes minutes, not milliseconds — and leaves no room for a loop that fills the
+ * provider with orphan records.
+ */
+export const KYC_TOS_RATE_LIMIT = {
+  name: 'kyc:tos',
+  limit: 10,
+  windowMs: 10 * 60 * 1000,
+};

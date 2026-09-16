@@ -339,11 +339,23 @@ export class WebhooksService {
     return ApiError.notFound(`Webhook endpoint ${id} not found`);
   }
 
+  /**
+   * Refuses a destination this service must not be made to connect to.
+   *
+   * The 400 repeats `message` and never `detail`: a host-dependent refusal says
+   * only that the host is not allowed, because the reason is a fact about this
+   * network and the caller is asking. The reason goes to the log, where the
+   * operator — who may already know it — is the only reader. See
+   * `webhook-url.validator.ts`.
+   */
   private async assertUrlAllowed(url: string): Promise<void> {
     try {
       await this.destinations.assertSafe(url);
     } catch (err) {
       if (err instanceof WebhookUrlValidationError) {
+        this.logger.warn(
+          `Refused webhook destination: ${err.detail ?? err.message}`,
+        );
         throw ApiError.badRequest(ApiErrorCode.ValidationFailed, err.message);
       }
       throw err;

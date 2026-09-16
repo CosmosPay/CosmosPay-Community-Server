@@ -102,3 +102,25 @@ export const PAYMENT_SCAN_PAGE_SIZE = 200;
  * scanning, EXPIRED included.
  */
 export const PAYMENT_SCAN_MAX_PAGES = 5;
+
+/**
+ * Budget for `POST /v1/payment-intents/tx` and `POST /v1/payment-intents/pay`,
+ * per consumer + client address.
+ *
+ * One bucket for both: they are two spellings of the same step — build the
+ * payment for an intent — and a wallet uses whichever its flow calls for, never
+ * both at once.
+ *
+ * Each call resolves the intent, reads the payer's account from Horizon and
+ * builds an envelope. Both take the shared public API key, under which every
+ * anonymous wallet is one consumer, so the client address is the only thing
+ * separating them and the Horizon budget they share is what a loop here spends.
+ *
+ * Thirty a minute is a wallet rebuilding while the customer picks an asset, then
+ * signing: comfortably above one checkout, and several at once from a NAT.
+ */
+export const PAYMENT_INTENT_BUILD_RATE_LIMIT = {
+  name: 'payment-intents:build',
+  limit: 30,
+  windowMs: 60 * 1000,
+};
