@@ -1,6 +1,18 @@
-import { SetMetadata } from '@nestjs/common';
+import { SetMetadata, applyDecorators } from '@nestjs/common';
+import { ApiExtension } from '@nestjs/swagger';
 
 export const RATE_LIMIT_KEY = 'rateLimitPolicy';
+
+/**
+ * Vendor extension the published spec carries: the route's budgets, verbatim.
+ *
+ * `swagger.ts` reads it back to decide which operations can answer 429 — the
+ * spec used to document that status on all ~107 of them, with a description
+ * that admitted only some could return it. It is published rather than kept
+ * internal because a client that has to pace itself cannot read our source,
+ * and a limit discovered by being refused is one discovered in production.
+ */
+export const RATE_LIMIT_EXTENSION_KEY = 'x-cosmos-rate-limit';
 
 /** What a route is allowed, and over what span. */
 export interface RateLimitPolicy {
@@ -54,4 +66,7 @@ export interface RateLimitPolicy {
  * this process at all.
  */
 export const RateLimit = (...policies: RateLimitPolicy[]) =>
-  SetMetadata(RATE_LIMIT_KEY, policies);
+  applyDecorators(
+    SetMetadata(RATE_LIMIT_KEY, policies),
+    ApiExtension(RATE_LIMIT_EXTENSION_KEY, policies),
+  );

@@ -7,14 +7,15 @@ import {
   ApiQuery,
   ApiResponse,
   ApiTags,
-  type ApiResponseOptions,
 } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { CurrentConsumer } from '@/common/decorators/current-consumer.decorator';
 import { Public } from '@/common/decorators/public.decorator';
 import { RateLimit } from '@/common/decorators/rate-limit.decorator';
+import { ApiErrorResponse } from '@/common/decorators/api-error-response.decorator';
+import { ApiUpstream } from '@/common/decorators/api-upstream.decorator';
 import { RequirePermissions } from '@/common/decorators/require-permissions.decorator';
-import { API_ERROR_BODY_CONTENT } from '@/common/errors/api-error.entity';
+import { ApiErrorCode } from '@/common/errors/api-error';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import { AuthorizeOauthDto } from '@/pollar/oauth/dto/authorize-oauth.dto';
 import { ExchangeCodeDto } from '@/pollar/oauth/dto/exchange-code.dto';
@@ -43,25 +44,35 @@ import {
 } from '@/pollar/pollar.constants';
 
 /** The 403 of opening a login with a key that has no account email. */
-const POLLAR_IDENTITY_REQUIRED_RESPONSE: ApiResponseOptions = {
-  status: 403,
-  description:
-    '`pollar_identity_required`: the gateway forwarded no account email for this ' +
-    'key, so no login can be tied to it. Every tenant shares one Pollar ' +
-    'application, so a session only goes back to the account that owns the key.',
-  content: API_ERROR_BODY_CONTENT,
-};
+const PollarIdentityRequiredResponse = () =>
+  ApiErrorResponse({
+    status: 403,
+    codes: [
+      ApiErrorCode.PollarIdentityRequired,
+      ApiErrorCode.InsufficientScope,
+    ],
+    description:
+      '`pollar_identity_required`: the gateway forwarded no account email for ' +
+      'this key, so no login can be tied to it. Every tenant shares one ' +
+      'Pollar application, so a session only goes back to the account that ' +
+      'owns the key.',
+  });
 
 /** The 403 of a redemption the key's account did not complete. */
-const POLLAR_IDENTITY_MISMATCH_RESPONSE: ApiResponseOptions = {
-  status: 403,
-  description:
-    '`pollar_identity_required` when the key has no account email, or ' +
-    '`pollar_identity_mismatch` when the email the login reports is not the ' +
-    "key's account email. On a mismatch the session is revoked at Pollar, the " +
-    'handshake becomes `failed`, and no token is returned.',
-  content: API_ERROR_BODY_CONTENT,
-};
+const PollarIdentityMismatchResponse = () =>
+  ApiErrorResponse({
+    status: 403,
+    codes: [
+      ApiErrorCode.PollarIdentityRequired,
+      ApiErrorCode.PollarIdentityMismatch,
+      ApiErrorCode.InsufficientScope,
+    ],
+    description:
+      '`pollar_identity_required` when the key has no account email, or ' +
+      '`pollar_identity_mismatch` when the email the login reports is not the ' +
+      "key's account email. On a mismatch the session is revoked at Pollar, " +
+      'the handshake becomes `failed`, and no token is returned.',
+  });
 
 /**
  * The Pollar OAuth bridge — `/v1/pollar/oauth`.
@@ -79,6 +90,9 @@ const POLLAR_IDENTITY_MISMATCH_RESPONSE: ApiResponseOptions = {
  * balances, transaction building or signing, and holds no key that could.
  */
 @ApiTags('pollar')
+// Every step of the handshake is a call to Pollar: minting the session, polling
+// it, redeeming the code, refreshing and revoking.
+@ApiUpstream('Pollar')
 @Controller({ path: 'pollar/oauth', version: '1' })
 export class PollarOauthController {
   constructor(private readonly oauth: PollarOauthService) {}
@@ -103,7 +117,7 @@ export class PollarOauthController {
       "the key's account email.",
   })
   @ApiCreatedResponse({ type: PollarAuthorizationEntity })
-  @ApiResponse(POLLAR_IDENTITY_REQUIRED_RESPONSE)
+  @PollarIdentityRequiredResponse()
   authorize(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Body() dto: AuthorizeOauthDto,
@@ -225,7 +239,7 @@ export class PollarOauthController {
       "returned when the login's email is the key's account email.",
   })
   @ApiCreatedResponse({ type: PollarSessionEntity })
-  @ApiResponse(POLLAR_IDENTITY_MISMATCH_RESPONSE)
+  @PollarIdentityMismatchResponse()
   exchange(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Body() dto: ExchangeCodeDto,

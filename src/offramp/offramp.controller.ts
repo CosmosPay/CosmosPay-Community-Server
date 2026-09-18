@@ -1,4 +1,5 @@
 import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
+import { ApiUpstream } from '@/common/decorators/api-upstream.decorator';
 import { WidePaginationQueryDto } from '@/common/dto/pagination.query.dto';
 import {
   ApiCreatedResponse,
@@ -34,6 +35,7 @@ export class OfframpController {
   constructor(private readonly offramp: OfframpService) {}
 
   @Post('quotes')
+  @ApiUpstream('BlindPay')
   @RequirePermissions('offramp:write')
   // A provider call on the instance every tenant shares, plus a stored row.
   @RateLimit(OFFRAMP_QUOTE_RATE_LIMIT, BLINDPAY_CONSUMER_QUOTA_RATE_LIMIT)
@@ -49,6 +51,7 @@ export class OfframpController {
   }
 
   @Post('payouts/authorize')
+  @ApiUpstream('BlindPay')
   @RequirePermissions('offramp:write')
   // One budget with the payout it prepares — see OFFRAMP_PAYOUT_RATE_LIMIT.
   @RateLimit(OFFRAMP_PAYOUT_RATE_LIMIT, BLINDPAY_CONSUMER_QUOTA_RATE_LIMIT)
@@ -63,6 +66,7 @@ export class OfframpController {
   }
 
   @Post('payouts')
+  @ApiUpstream('BlindPay')
   @RequirePermissions('offramp:write')
   // Money leaving: an error afterwards does not bring it back.
   @RateLimit(OFFRAMP_PAYOUT_RATE_LIMIT, BLINDPAY_CONSUMER_QUOTA_RATE_LIMIT)
@@ -87,6 +91,8 @@ export class OfframpController {
   }
 
   @Get('payouts/:id')
+  // Refreshes the mirror from BlindPay before answering.
+  @ApiUpstream('BlindPay')
   @RequirePermissions('offramp:read')
   @ApiOperation({
     summary:
@@ -101,6 +107,7 @@ export class OfframpController {
   }
 
   @Post('payouts/:id/documents')
+  @ApiUpstream('BlindPay')
   @RequirePermissions('offramp:write')
   // The provider keeps what it is handed.
   @RateLimit(OFFRAMP_DOCUMENT_RATE_LIMIT, BLINDPAY_CONSUMER_QUOTA_RATE_LIMIT)

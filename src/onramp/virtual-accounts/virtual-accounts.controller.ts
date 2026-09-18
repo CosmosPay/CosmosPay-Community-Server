@@ -1,4 +1,5 @@
 import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
+import { ApiUpstream } from '@/common/decorators/api-upstream.decorator';
 import { WidePaginationQueryDto } from '@/common/dto/pagination.query.dto';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { CurrentConsumer } from '@/common/decorators/current-consumer.decorator';
@@ -17,6 +18,8 @@ export class VirtualAccountsController {
   constructor(private readonly virtualAccounts: VirtualAccountsService) {}
 
   @Post()
+  // The account number is issued by BlindPay.
+  @ApiUpstream('BlindPay')
   @RequirePermissions('onramp:write')
   @ApiOperation({ summary: 'Create a virtual account for a receiver' })
   create(

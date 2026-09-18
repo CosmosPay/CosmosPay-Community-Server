@@ -290,10 +290,12 @@ et peut être reformulé :
 ```
 
 L'enveloppe et l'enum `code` complète sont publiées dans la spécification OpenAPI sous le nom
-`ApiErrorBodyEntity` sur chaque opération, de sorte que les clients générés obtiennent aussi le
-type d'erreur (source : `ApiErrorCode` dans `src/common/errors/api-error.ts`). **Les codes ne
-sont jamais renommés une fois publiés** ; de nouveaux peuvent être ajoutés, traitez donc un
-code inconnu selon son statut HTTP.
+`ApiErrorBodyEntity` (source : `ApiErrorCode` dans `src/common/errors/api-error.ts`). Chaque
+opération ne documente que les statuts qu'elle peut réellement renvoyer, et chaque statut porte
+un exemple par `code` possible — le message réel, avec le `statusCode` et l'`error`
+correspondants — afin que Swagger UI et un import Postman affichent le corps que vous recevez
+vraiment. **Les codes ne sont jamais renommés une fois publiés** ; de nouveaux peuvent être
+ajoutés, traitez donc un code inconnu selon son statut HTTP.
 
 Quelques-uns, faciles à confondre :
 
@@ -310,7 +312,7 @@ Quelques-uns, faciles à confondre :
 | `kyc_state_invalid` | 409 | Une transition d'état KYC illégale — pas une requête en double |
 | `operation_in_flight` | 409 | Une opération concurrente est encore en cours de règlement |
 | `payload_expired` | 409 | Le corps de la livraison a dépassé la durée de rétention et ne peut pas être renvoyé |
-| `provider_unavailable` | 503/504 | BlindPay ou Horizon est injoignable. Réessayez |
+| `provider_unavailable` | 502/503/504 | BlindPay ou Horizon est injoignable. Réessayez |
 | `misconfigured` | 503 | Une erreur de configuration côté serveur. Réessayer n'y changera rien |
 
 ### Exécuter plusieurs réplicas
@@ -600,8 +602,31 @@ la génération :
 OPENAPI_SERVER_URL=https://gateway.example.com npm run openapi:generate
 ```
 
-Les deux en-têtes APISIX (`X-Gateway-Secret`, `X-Consumer-Username`) sont documentés comme
-schémas de sécurité dans la spécification.
+**Utilisation depuis Postman.** Importez `openapi/openapi.json`, ou
+`http://localhost:3000/docs/json` depuis un service en cours d'exécution. La spécification
+propose deux serveurs et deux exigences de sécurité ; les outils qui n'en retiennent qu'une
+prennent la première de chaque liste :
+
+| Appel | Serveur | Authentification |
+| ----- | ------- | ---------------- |
+| Directement vers ce service (développement local) | `http://localhost:{port}` (`port` vaut `3000` par défaut) | `X-Gateway-Secret` **et** `X-Consumer-Username`, ensemble |
+| Via la passerelle APISIX | `OPENAPI_SERVER_URL`, en premier lorsqu'il est défini | `Authorization: Bearer <api key>` |
+
+La spécification versionnée est générée sans `OPENAPI_SERVER_URL`, elle utilise donc par
+défaut la paire directe ; générez-la avec la variable définie pour obtenir une collection qui
+passe par défaut par la passerelle. Postman ne conserve qu'une clé d'API par requête : si
+l'import ne configure que `X-Gateway-Secret`, ajoutez `X-Consumer-Username` comme en-tête de
+collection. Les sondes de santé sont publiées avec `security: []`.
+
+Chaque opération porte des extensions fournisseur qui disent ce qu'elle est :
+`x-cosmos-rate-limit` (ses budgets — elle peut répondre `429`), `x-cosmos-upstream` (le
+fournisseur qu'elle appelle — elle peut répondre `502`/`503`/`504`), `x-cosmos-public` et
+`x-cosmos-public-key`.
+
+`npm run openapi:generate` refuse d'écrire une spécification dans laquelle une opération n'a
+pas de summary, un échec n'a ni corps ni exemple, le `statusCode` d'un exemple ne correspond
+pas au statut qu'il documente, ou un `429` figure sur une route sans budget. Chaque fois que
+vous ajoutez ou modifiez une route, relisez son opération régénérée — voir `CLAUDE.md`.
 
 ### Créer des intentions — deux opérations SEP-7, deux endpoints
 
@@ -1500,6 +1525,26 @@ Notes de déploiement associées :
   uploads KYC, les devis, les payins, les payouts, la construction d'intentions, les
   devis de swap ou les constructions de pool doit respecter `Retry-After`.
   `RATE_LIMIT_ENABLED=false` coupe le limiteur pendant un incident.
+
+### Le contrat OpenAPI ne liste que ce que chaque route renvoie
+
+Rien n'a changé sur le fil ; c'est le contrat publié qui a changé. Régénérez tout client
+construit à partir de `openapi/openapi.json` :
+
+- Chaque opération ne liste que les échecs qu'elle peut renvoyer. `409` n'apparaît que là où
+  la route documente un conflit qui lui est propre, `429` uniquement sur les routes limitées
+  en débit, `502`/`503`/`504` uniquement là où la route appelle un fournisseur, et les sondes
+  de santé ne listent ni `401` ni `403`. Les échecs partagés sont des `$ref` vers
+  `components.responses`.
+- Chaque exemple d'échec est réel pour son statut. La spécification affichait auparavant un
+  unique `409 idempotency_conflict` sous chaque statut de chaque route.
+- `X-Gateway-Secret` et `X-Consumer-Username` forment une seule exigence de sécurité (les deux
+  en-têtes), avec `Authorization: Bearer` publié comme alternative pour les appels via la
+  passerelle. C'étaient auparavant deux alternatives, ce qui laissait croire aux outils qu'un
+  seul des deux suffisait.
+- Le `503` de `GET /v1/health/readiness` est documenté comme l'enveloppe d'erreur. Il était
+  auparavant documenté comme le rapport Terminus, que le filtre d'exceptions ne renvoie
+  jamais.
 
 ### NestJS 12, TypeScript 6 et Node 24.9 au minimum
 

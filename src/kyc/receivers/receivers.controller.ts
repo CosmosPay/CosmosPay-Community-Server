@@ -17,11 +17,13 @@ import {
   ApiCreatedResponse,
   ApiOkResponse,
   ApiOperation,
-  ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
 import { CurrentConsumer } from '@/common/decorators/current-consumer.decorator';
+import { ApiErrorResponse } from '@/common/decorators/api-error-response.decorator';
+import { ApiUpstream } from '@/common/decorators/api-upstream.decorator';
 import { RequirePermissions } from '@/common/decorators/require-permissions.decorator';
+import { ApiErrorCode } from '@/common/errors/api-error';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import { ReceiversService } from '@/kyc/receivers/receivers.service';
 import { resolveTosCooldownMs } from '@/kyc/receivers/tos-cooldown-header';
@@ -32,8 +34,11 @@ import { ApproveReceiverDto } from '@/kyc/receivers/dto/approve-receiver.dto';
 import { EnableReceiverDto } from '@/kyc/receivers/dto/enable-receiver.dto';
 import { SetAccessDto } from '@/kyc/receivers/dto/set-access.dto';
 import {
+  ReceiverApprovalEntity,
+  ReceiverDeletedEntity,
   ReceiverEntity,
   ReceiverListEntity,
+  ReceiverTosEntity,
 } from '@/kyc/receivers/entities/receiver.entity';
 
 // /v1/kyc/receivers — the KYC/KYB entities required before any onramp/offramp.
@@ -43,6 +48,8 @@ export class ReceiversController {
   constructor(private readonly receivers: ReceiversService) {}
 
   @Post()
+  // Creates the receiver at BlindPay once its KYC data is approved.
+  @ApiUpstream('BlindPay')
   @RequirePermissions('kyc:write')
   @ApiOperation({ summary: 'Create a receiver (start KYC/KYB)' })
   @ApiCreatedResponse({ type: ReceiverEntity })
@@ -65,6 +72,8 @@ export class ReceiversController {
   }
 
   @Get(':id')
+  // Refreshes the mirror from BlindPay so the caller sees the live KYC status.
+  @ApiUpstream('BlindPay')
   @RequirePermissions('kyc:read')
   @ApiOperation({
     summary: 'Get a receiver (refreshes KYC status from BlindPay)',
@@ -78,6 +87,7 @@ export class ReceiversController {
   }
 
   @Post(':id/approve')
+  @ApiUpstream('BlindPay')
   @RequirePermissions('kyc:write')
   // Approving advances an existing receiver's review state; the receiver was
   // created by POST /v1/kyc/receivers. Nothing new comes into existence here,
@@ -88,14 +98,19 @@ export class ReceiversController {
     summary:
       'Approve a pending-review receiver (admin-only review gate); sends the customer the terms link and returns it',
   })
-  @ApiOkResponse({ description: 'Receiver approved; terms link returned' })
-  @ApiResponse({
-    status: 403,
-    description:
-      'The API key is not elevated (admin role). A key may submit KYC data or approve it, not both.',
+  @ApiOkResponse({
+    description: 'Receiver approved; terms link returned',
+    type: ReceiverApprovalEntity,
   })
-  @ApiResponse({
+  @ApiErrorResponse({
+    status: 403,
+    codes: [ApiErrorCode.KycReviewRequired, ApiErrorCode.InsufficientScope],
+    description:
+      '`kyc_review_required` — the API key is not elevated (admin role). A key may submit KYC data or approve it, not both.',
+  })
+  @ApiErrorResponse({
     status: 409,
+    codes: [ApiErrorCode.KycStateInvalid],
     description:
       "`kyc_state_invalid` — the receiver is not in 'pending_review', or the KYC data changed after you read it (`expected_version` names a version that is no longer current). Re-read the receiver, review it again, and approve that version.",
   })
@@ -113,11 +128,13 @@ export class ReceiversController {
   }
 
   @Post(':id/tos')
+  @ApiUpstream('BlindPay')
   @RequirePermissions('kyc:write')
   @ApiOperation({
     summary:
       "Request a terms-of-service link for a receiver ('code' returns the URL; 'email' sends it, max once/day)",
   })
+  @ApiCreatedResponse({ type: ReceiverTosEntity })
   requestTos(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Param('id') id: string,
@@ -143,6 +160,7 @@ export class ReceiversController {
   }
 
   @Post(':id/enable')
+  @ApiUpstream('BlindPay')
   @RequirePermissions('kyc:write')
   // Enabling flips a flag on an existing receiver; see the note on approve.
   @HttpCode(HttpStatus.OK)
@@ -150,10 +168,11 @@ export class ReceiversController {
     summary: 'Enable an inactive receiver with an accepted terms-of-service id',
   })
   @ApiOkResponse({ type: ReceiverEntity })
-  @ApiResponse({
+  @ApiErrorResponse({
     status: 409,
+    codes: [ApiErrorCode.KycStateInvalid],
     description:
-      "Invalid KYC status transition (e.g. receiver is not in 'pending_user')",
+      "`kyc_state_invalid` — an invalid KYC status transition (e.g. the receiver is not in 'pending_user').",
   })
   enable(
     @CurrentConsumer() consumer: GatewayConsumer,
@@ -170,8 +189,9 @@ export class ReceiversController {
       'Enable or disable a fiat account (admin-only kill-switch for onramp/offramp)',
   })
   @ApiOkResponse({ type: ReceiverEntity })
-  @ApiResponse({
+  @ApiErrorResponse({
     status: 403,
+    codes: [ApiErrorCode.InsufficientScope],
     description:
       'The API key is not elevated (admin role); a tenant key cannot lift a kill-switch an operator applied.',
   })
@@ -184,14 +204,17 @@ export class ReceiversController {
   }
 
   @Patch(':id')
+  // An identity change is rewritten at BlindPay, not only locally.
+  @ApiUpstream('BlindPay')
   @RequirePermissions('kyc:write')
   @ApiOperation({
     summary:
       'Update a receiver (once it is at BlindPay, identity fields need an elevated key)',
   })
   @ApiOkResponse({ type: ReceiverEntity })
-  @ApiResponse({
+  @ApiErrorResponse({
     status: 403,
+    codes: [ApiErrorCode.KycReviewRequired],
     description:
       '`kyc_review_required`: the receiver already exists at BlindPay and the patch touches a field other than `external_id` or `image_url`. Only an elevated key (admin role) may rewrite identity at the provider; before enabling, the same edit sends the receiver back to review instead.',
   })
@@ -204,8 +227,10 @@ export class ReceiversController {
   }
 
   @Delete(':id')
+  @ApiUpstream('BlindPay')
   @RequirePermissions('kyc:write')
   @ApiOperation({ summary: 'Delete a receiver' })
+  @ApiOkResponse({ type: ReceiverDeletedEntity })
   remove(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Param('id') id: string,

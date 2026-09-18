@@ -87,3 +87,42 @@ export class ReceiverListEntity {
   @ApiProperty({ example: 0 })
   skip!: number;
 }
+
+/** What approving a receiver hands back: the terms link it just sent. */
+export class ReceiverApprovalEntity {
+  @ApiProperty({
+    description:
+      'The hosted terms-of-service link, also emailed to the customer.',
+    example:
+      'https://app.blindpay.com/e/terms-of-service?session_token=tos_example',
+  })
+  url!: string;
+
+  @ApiProperty({
+    description:
+      'Where the link was emailed, or null when the receiver has none.',
+    example: 'customer@example.com',
+    nullable: true,
+    type: String,
+  })
+  email!: string | null;
+}
+
+/** A terms-of-service link, and how it reached the customer. */
+export class ReceiverTosEntity extends ReceiverApprovalEntity {
+  @ApiProperty({
+    description:
+      "`code` returns the link to show yourself; `email` also sent it to the receiver's address.",
+    enum: ['code', 'email'],
+    example: 'code',
+  })
+  channel!: 'code' | 'email';
+}
+
+export class ReceiverDeletedEntity {
+  @ApiProperty({ example: 'clz9xreceiver01' })
+  id!: string;
+
+  @ApiProperty({ example: true })
+  deleted!: boolean;
+}

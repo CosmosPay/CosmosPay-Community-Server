@@ -1,8 +1,13 @@
 import { STATUS_CODES } from 'node:http';
 import { HttpException, HttpStatus } from '@nestjs/common';
 
-/** "Conflict", "Not Found", … — the standard reason phrase for a status. */
-function reasonPhrase(status: number): string {
+/**
+ * "Conflict", "Not Found", … — the standard reason phrase for a status.
+ *
+ * Exported because the published error examples carry the same `error` field a
+ * real response does, and deriving it twice is how the two drift apart.
+ */
+export function reasonPhrase(status: number): string {
   return STATUS_CODES[status] ?? 'Error';
 }
 

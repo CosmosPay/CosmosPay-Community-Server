@@ -293,10 +293,13 @@ maschinenlesbare Teil — verzweigen Sie anhand dieses Werts statt anhand von
 ```
 
 Der Umschlag und die vollständige `code`-Enum werden in der OpenAPI-Spezifikation als
-`ApiErrorBodyEntity` an jeder Operation veröffentlicht, sodass generierte Clients auch
-den Fehlertyp erhalten (Quelle: `ApiErrorCode` in `src/common/errors/api-error.ts`).
-**Einmal veröffentlichte Codes werden nie umbenannt**; neue können hinzukommen,
-behandeln Sie einen unbekannten Code daher gemäß seinem HTTP-Status.
+`ApiErrorBodyEntity` veröffentlicht (Quelle: `ApiErrorCode` in
+`src/common/errors/api-error.ts`). Jede Operation dokumentiert nur die Status, die sie
+tatsächlich zurückgeben kann, und jeder Status trägt ein Beispiel pro möglichem `code` –
+die echte Meldung, mit passendem `statusCode` und `error` –, sodass Swagger UI und ein
+Postman-Import den Body zeigen, den Sie wirklich erhalten. **Einmal veröffentlichte
+Codes werden nie umbenannt**; neue können hinzukommen, behandeln Sie einen unbekannten
+Code daher gemäß seinem HTTP-Status.
 
 Einige, die leicht verwechselt werden:
 
@@ -313,7 +316,7 @@ Einige, die leicht verwechselt werden:
 | `kyc_state_invalid` | 409 | Ein unzulässiger KYC-Zustandsübergang — keine doppelte Anfrage |
 | `operation_in_flight` | 409 | Eine kollidierende Operation wird noch abgewickelt |
 | `payload_expired` | 409 | Der Body der Zustellung hat die Aufbewahrungsfrist überschritten und kann nicht erneut gesendet werden |
-| `provider_unavailable` | 503/504 | BlindPay oder Horizon ist nicht erreichbar. Erneut versuchen |
+| `provider_unavailable` | 502/503/504 | BlindPay oder Horizon ist nicht erreichbar. Erneut versuchen |
 | `misconfigured` | 503 | Ein serverseitiger Konfigurationsfehler. Ein erneuter Versuch hilft nicht |
 
 ### Betrieb mit mehr als einem Replikat
@@ -611,8 +614,33 @@ Gateway-Host in den `servers` der Spezifikation festzulegen, setzen Sie
 OPENAPI_SERVER_URL=https://gateway.example.com npm run openapi:generate
 ```
 
-Die beiden APISIX-Header (`X-Gateway-Secret`, `X-Consumer-Username`) sind in der
-Spezifikation als Security Schemes dokumentiert.
+**Verwendung mit Postman.** Importieren Sie `openapi/openapi.json` oder
+`http://localhost:3000/docs/json` von einem laufenden Dienst. Die Spezifikation bietet
+zwei Server und zwei Security-Anforderungen; Werkzeuge, die nur eine auswählen, nehmen
+jeweils die erste:
+
+| Aufruf | Server | Authentifizierung |
+| ------ | ------ | ----------------- |
+| Direkt an diesen Dienst (lokale Entwicklung) | `http://localhost:{port}` (`port` standardmäßig `3000`) | `X-Gateway-Secret` **und** `X-Consumer-Username`, zusammen |
+| Über das APISIX-Gateway | `OPENAPI_SERVER_URL`, zuerst gelistet, wenn gesetzt | `Authorization: Bearer <api key>` |
+
+Die eingecheckte Spezifikation wird ohne `OPENAPI_SERVER_URL` erzeugt und verwendet
+daher standardmäßig das direkte Header-Paar; mit gesetzter Variable erzeugt, ergibt sie
+eine Collection, die standardmäßig das Gateway verwendet. Postman speichert pro Request
+nur einen API-Key: Setzt der Import nur `X-Gateway-Secret`, fügen Sie
+`X-Consumer-Username` als Collection-Header hinzu. Die Health-Probes werden mit
+`security: []` veröffentlicht.
+
+Jede Operation trägt Vendor-Extensions, die sagen, was sie ist: `x-cosmos-rate-limit`
+(ihre Budgets – sie kann `429` antworten), `x-cosmos-upstream` (der aufgerufene
+Anbieter – sie kann `502`/`503`/`504` antworten), `x-cosmos-public` und
+`x-cosmos-public-key`.
+
+`npm run openapi:generate` verweigert das Schreiben einer Spezifikation, in der eine
+Operation keine Summary hat, ein Fehler weder Body noch Beispiel hat, der `statusCode`
+eines Beispiels nicht zum dokumentierten Status passt oder ein `429` an einer Route ohne
+Budget steht. Lesen Sie bei jeder neuen oder geänderten Route deren neu erzeugte
+Operation – siehe `CLAUDE.md`.
 
 ### Intents anlegen — zwei SEP-7-Operationen, zwei Endpunkte
 
@@ -1533,6 +1561,26 @@ Dazugehörige Deploy-Hinweise:
   Payouts, Intent-Bauvorgänge, Swap-Angebote oder Pool-Bauvorgänge in Schleifen
   aufruft, muss `Retry-After` beachten. `RATE_LIMIT_ENABLED=false` schaltet den Limiter
   während eines Vorfalls ab.
+
+### Der OpenAPI-Vertrag listet nur, was jede Route zurückgibt
+
+Auf der Leitung hat sich nichts geändert, wohl aber der veröffentlichte Vertrag.
+Erzeugen Sie jeden aus `openapi/openapi.json` generierten Client neu:
+
+- Jede Operation listet nur die Fehler, die sie zurückgeben kann. `409` erscheint nur,
+  wo die Route einen eigenen Konflikt dokumentiert, `429` nur an Routen mit
+  Rate-Limit, `502`/`503`/`504` nur, wo die Route einen Anbieter aufruft, und die
+  Health-Probes listen kein `401`/`403`. Gemeinsame Fehler sind `$ref`s auf
+  `components.responses`.
+- Jedes Fehlerbeispiel ist für seinen Status echt. Früher zeigte die Spezifikation ein
+  einziges `409 idempotency_conflict` unter jedem Status jeder Route.
+- `X-Gateway-Secret` und `X-Consumer-Username` bilden eine Security-Anforderung (beide
+  Header), mit `Authorization: Bearer` als veröffentlichter Alternative für Aufrufe über
+  das Gateway. Früher waren es zwei Alternativen, was Werkzeugen sagte, dass einer der
+  beiden Header genüge.
+- Das `503` von `GET /v1/health/readiness` ist als Fehler-Umschlag dokumentiert.
+  Früher war es als Terminus-Bericht dokumentiert, den der Exception-Filter nie
+  zurückgibt.
 
 ### NestJS 12, TypeScript 6 und Node 24.9 als Mindestversion
 

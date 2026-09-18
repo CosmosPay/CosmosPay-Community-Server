@@ -16,6 +16,8 @@ import {
   ApiQuery,
   ApiTags,
 } from '@nestjs/swagger';
+import { ApiErrorResponse } from '@/common/decorators/api-error-response.decorator';
+import { ApiErrorCode } from '@/common/errors/api-error';
 import { AllowPublicKey } from '@/common/decorators/allow-public-key.decorator';
 import { CurrentConsumer } from '@/common/decorators/current-consumer.decorator';
 import { RateLimit } from '@/common/decorators/rate-limit.decorator';
@@ -38,6 +40,7 @@ import {
 import {
   AliasAddressEntity,
   AliasAvailabilityEntity,
+  AliasByAddressEntity,
   AliasChallengeEntity,
   AliasDeletedEntity,
   AliasListEntity,
@@ -98,6 +101,7 @@ export class AliasesController {
   @AllowPublicKey()
   @RequirePermissions('payments:read')
   @ApiOperation({ summary: 'Which aliases point at this address' })
+  @ApiOkResponse({ type: AliasByAddressEntity })
   @ApiQuery({ name: 'network', required: false })
   byAddress(
     @Param('address') address: string,
@@ -120,6 +124,10 @@ export class AliasesController {
       'address cannot be replayed to complete a recovery.',
   })
   @ApiCreatedResponse({ type: AliasChallengeEntity })
+  @ApiErrorResponse({
+    status: 400,
+    codes: [ApiErrorCode.ValidationFailed, ApiErrorCode.AliasNameInvalid],
+  })
   challenge(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Body() dto: CreateAliasChallengeDto,
@@ -131,6 +139,23 @@ export class AliasesController {
   @RequirePermissions('payments:write')
   @ApiOperation({ summary: 'Claim an alias with a signature' })
   @ApiCreatedResponse({ type: OwnedAliasEntity })
+  @ApiErrorResponse({
+    status: 400,
+    codes: [
+      ApiErrorCode.ValidationFailed,
+      ApiErrorCode.AliasNameInvalid,
+      ApiErrorCode.AliasChallengeInvalid,
+      ApiErrorCode.AliasSignatureInvalid,
+      ApiErrorCode.AliasAddressConflict,
+    ],
+  })
+  @ApiErrorResponse({
+    status: 409,
+    codes: [ApiErrorCode.AliasTaken],
+    description:
+      '`alias_taken` — someone claimed the handle first. There is no queue ' +
+      'and no reservation: pick another name.',
+  })
   claim(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Body() dto: ClaimAliasDto,
@@ -158,6 +183,15 @@ export class AliasesController {
       'itself. One alias may hold many addresses across many networks.',
   })
   @ApiCreatedResponse({ type: AliasAddressEntity })
+  @ApiErrorResponse({
+    status: 400,
+    codes: [
+      ApiErrorCode.ValidationFailed,
+      ApiErrorCode.AliasChallengeInvalid,
+      ApiErrorCode.AliasSignatureInvalid,
+      ApiErrorCode.AliasAddressConflict,
+    ],
+  })
   addAddress(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Param('name') name: string,
@@ -170,6 +204,13 @@ export class AliasesController {
   @RequirePermissions('payments:write')
   @ApiOperation({ summary: 'Remove one address from the alias' })
   @ApiOkResponse({ type: AliasDeletedEntity })
+  @ApiErrorResponse({
+    status: 400,
+    codes: [ApiErrorCode.AliasAddressConflict],
+    description:
+      '`alias_address_conflict` — an alias must keep at least one address. ' +
+      'Release the alias instead.',
+  })
   removeAddress(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Param('name') name: string,
@@ -229,6 +270,15 @@ export class AliasesController {
       'leaving them resolvable would keep whoever holds them receiving payments.',
   })
   @ApiOkResponse({ type: OwnedAliasEntity })
+  @ApiErrorResponse({
+    status: 400,
+    codes: [
+      ApiErrorCode.ValidationFailed,
+      ApiErrorCode.AliasRecoveryInvalid,
+      ApiErrorCode.AliasSignatureInvalid,
+      ApiErrorCode.AliasAddressConflict,
+    ],
+  })
   completeRecovery(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Param('name') name: string,

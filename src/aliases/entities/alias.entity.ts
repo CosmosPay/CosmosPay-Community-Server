@@ -118,3 +118,18 @@ export class AliasDeletedEntity {
   @ApiProperty() id!: string;
   @ApiProperty() deleted!: boolean;
 }
+
+/** One active alias that names an address — never who owns it. */
+export class AliasByAddressEntryEntity {
+  @ApiProperty({ example: 'alice' }) name!: string;
+  @ApiProperty({ example: 'Alice' }) displayName!: string;
+  @ApiProperty({ example: 'public' }) network!: string;
+  @ApiProperty({ description: 'The default for this network.' })
+  isPrimary!: boolean;
+}
+
+/** Empty, never 404: "no alias points here" is an answer, not a missing resource. */
+export class AliasByAddressEntity {
+  @ApiProperty({ type: [AliasByAddressEntryEntity] })
+  data!: AliasByAddressEntryEntity[];
+}

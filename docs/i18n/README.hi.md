@@ -289,11 +289,13 @@ machine-readable हिस्सा है — branching उसी पर कर
 }
 ```
 
-envelope और पूरा `code` enum OpenAPI spec में हर operation पर
-`ApiErrorBodyEntity` के रूप में प्रकाशित है, इसलिए जनरेट किए गए clients को एरर का type भी
-मिल जाता है (स्रोत: `src/common/errors/api-error.ts` में `ApiErrorCode`)। **एक बार प्रकाशित
-होने के बाद codes का नाम कभी नहीं बदला जाता**; नए codes जोड़े जा सकते हैं, इसलिए किसी
-अनजान code को उसके HTTP status के रूप में ही समझें।
+envelope और पूरा `code` enum OpenAPI spec में `ApiErrorBodyEntity` के रूप में प्रकाशित
+है (स्रोत: `src/common/errors/api-error.ts` में `ApiErrorCode`)। हर operation केवल वही
+statuses दर्ज करता है जो वह सच में लौटा सकता है, और हर status में हर संभव `code` का एक
+उदाहरण होता है — असली message, मेल खाते `statusCode` और `error` के साथ — ताकि Swagger UI
+और Postman import वही body दिखाएँ जो आपको सच में मिलेगी। **एक बार प्रकाशित होने के बाद
+codes का नाम कभी नहीं बदला जाता**; नए codes जोड़े जा सकते हैं, इसलिए किसी अनजान code को
+उसके HTTP status के रूप में ही समझें।
 
 कुछ codes जिनमें आसानी से भ्रम हो जाता है:
 
@@ -310,7 +312,7 @@ envelope और पूरा `code` enum OpenAPI spec में हर operation
 | `kyc_state_invalid` | 409 | KYC state का अवैध transition — यह duplicate request नहीं है |
 | `operation_in_flight` | 409 | एक टकराने वाला operation अभी भी settle हो रहा है |
 | `payload_expired` | 409 | delivery body retention अवधि पार कर चुकी है और दोबारा नहीं भेजी जा सकती |
-| `provider_unavailable` | 503/504 | BlindPay या Horizon तक पहुँचा नहीं जा सकता। दोबारा कोशिश करें |
+| `provider_unavailable` | 502/503/504 | BlindPay या Horizon तक पहुँचा नहीं जा सकता। दोबारा कोशिश करें |
 | `misconfigured` | 503 | सर्वर-साइड कॉन्फ़िगरेशन की गलती। दोबारा कोशिश करने से कोई फ़ायदा नहीं होगा |
 
 ### एक से अधिक replica चलाना
@@ -588,8 +590,30 @@ host सेट करने के लिए, generate करने से प�
 OPENAPI_SERVER_URL=https://gateway.example.com npm run openapi:generate
 ```
 
-दोनों APISIX headers (`X-Gateway-Secret`, `X-Consumer-Username`) spec में
-security schemes के रूप में दर्ज हैं।
+**Postman से इस्तेमाल।** `openapi/openapi.json` import करें, या चल रही सर्विस से
+`http://localhost:3000/docs/json`। spec में दो servers और दो security requirements हैं;
+जो tools एक ही चुनते हैं वे हर सूची का पहला लेते हैं:
+
+| कॉल | Server | Auth |
+| --- | ------ | ---- |
+| सीधे इस सर्विस को (local development) | `http://localhost:{port}` (`port` का default `3000`) | `X-Gateway-Secret` **और** `X-Consumer-Username`, दोनों साथ |
+| APISIX gateway के ज़रिए | `OPENAPI_SERVER_URL`, सेट होने पर सूची में पहला | `Authorization: Bearer <api key>` |
+
+commit किया गया spec `OPENAPI_SERVER_URL` के बिना बनता है, इसलिए default सीधी header
+जोड़ी है; variable सेट करके generate करने पर ऐसी collection मिलती है जो default रूप से
+gateway इस्तेमाल करती है। Postman हर request पर एक ही API key रखता है: अगर import केवल
+`X-Gateway-Secret` सेट करे, तो `X-Consumer-Username` को collection header के रूप में जोड़ें।
+health probes `security: []` के साथ प्रकाशित होते हैं।
+
+हर operation में vendor extensions होते हैं जो बताते हैं कि वह क्या है:
+`x-cosmos-rate-limit` (उसके budgets — वह `429` लौटा सकता है), `x-cosmos-upstream` (जिस
+provider को वह कॉल करता है — वह `502`/`503`/`504` लौटा सकता है), `x-cosmos-public` और
+`x-cosmos-public-key`।
+
+`npm run openapi:generate` ऐसा spec लिखने से मना कर देता है जिसमें किसी operation का summary
+न हो, किसी failure का body या उदाहरण न हो, किसी उदाहरण का `statusCode` उसके status से मेल न
+खाए, या बिना budget वाले route पर `429` हो। जब भी कोई route जोड़ें या बदलें, उसका दोबारा बना
+operation पढ़ें — देखें `CLAUDE.md`।
 
 ### Intent बनाना — दो SEP-7 operations, दो endpoints
 
@@ -1445,6 +1469,23 @@ Pollar नेटवर्क और key का प्रकार key के pre
   रिलीज़ से लागू हैं; KYC uploads, quotes, payins, payouts, intent builds, swap quotes या
   pool builds पर loop चलाने वाले client को `Retry-After` मानना होगा। किसी incident के
   दौरान `RATE_LIMIT_ENABLED=false` limiter बंद कर देता है।
+
+### OpenAPI contract अब केवल वही दिखाता है जो हर route लौटाता है
+
+wire पर कुछ नहीं बदला; प्रकाशित contract बदला है। `openapi/openapi.json` से बना कोई भी client
+दोबारा generate करें:
+
+- हर operation केवल वे failures दिखाता है जो वह लौटा सकता है। `409` केवल वहीं है जहाँ route
+  अपना conflict खुद दर्ज करता है, `429` केवल rate-limited routes पर, `502`/`503`/`504` केवल
+  वहीं जहाँ route किसी provider को कॉल करता है, और health probes में `401`/`403` नहीं है। साझा
+  failures `components.responses` के `$ref` हैं।
+- हर failure उदाहरण अपने status के लिए असली है। पहले spec हर route के हर status के नीचे एक ही
+  `409 idempotency_conflict` दिखाता था।
+- `X-Gateway-Secret` और `X-Consumer-Username` एक ही security requirement हैं (दोनों headers),
+  और gateway से होने वाली calls के लिए `Authorization: Bearer` विकल्प के रूप में प्रकाशित है।
+  पहले ये दो विकल्प थे, जिससे tools को लगता था कि कोई एक header काफ़ी है।
+- `GET /v1/health/readiness` का `503` error envelope के रूप में दर्ज है। पहले यह Terminus
+  report के रूप में दर्ज था, जिसे exception filter कभी लौटाता ही नहीं।
 
 ### NestJS 12, TypeScript 6 और न्यूनतम Node 24.9
 

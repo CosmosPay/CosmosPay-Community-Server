@@ -3,14 +3,14 @@ import {
   ApiCreatedResponse,
   ApiOkResponse,
   ApiOperation,
-  ApiResponse,
   ApiTags,
-  type ApiResponseOptions,
 } from '@nestjs/swagger';
 import { CurrentConsumer } from '@/common/decorators/current-consumer.decorator';
 import { RateLimit } from '@/common/decorators/rate-limit.decorator';
+import { ApiErrorResponse } from '@/common/decorators/api-error-response.decorator';
+import { ApiUpstream } from '@/common/decorators/api-upstream.decorator';
 import { RequirePermissions } from '@/common/decorators/require-permissions.decorator';
-import { API_ERROR_BODY_CONTENT } from '@/common/errors/api-error.entity';
+import { ApiErrorCode } from '@/common/errors/api-error';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import { ActivateWalletDto } from '@/pollar/wallets/dto/activate-wallet.dto';
 import { CreateTrustlinesDto } from '@/pollar/wallets/dto/create-trustlines.dto';
@@ -39,34 +39,39 @@ import {
  * they get one description as well: documenting two would publish the very
  * distinction the route refuses to make.
  */
-const WALLET_NOT_FOUND_RESPONSE: ApiResponseOptions = {
-  status: 404,
-  description:
-    'Wallet not found (`not_found`): the address is unknown, or this consumer ' +
-    'did not obtain it through this service. Both cases answer identically, so ' +
-    'the response never reveals whether the wallet belongs to someone else.',
-  content: API_ERROR_BODY_CONTENT,
-};
+const WalletNotFoundResponse = () =>
+  ApiErrorResponse({
+    status: 404,
+    codes: [ApiErrorCode.NotFound],
+    description:
+      'Wallet not found (`not_found`): the address is unknown, or this ' +
+      'consumer did not obtain it through this service. Both cases answer ' +
+      'identically, so the response never reveals whether the wallet belongs ' +
+      'to someone else.',
+  });
 
 /** The 429 of the two POST trustline routes, which share one budget. */
-const TRUSTLINE_RATE_LIMITED_RESPONSE: ApiResponseOptions = {
-  status: 429,
-  description:
-    'Rate limited (`rate_limited`). Both POST trustline routes draw on the same ' +
-    'budget per consumer and client address, so alternating between them does ' +
-    'not reset it. Honour `Retry-After`.',
-  content: API_ERROR_BODY_CONTENT,
-};
+const TrustlineRateLimitedResponse = () =>
+  ApiErrorResponse({
+    status: 429,
+    codes: [ApiErrorCode.RateLimited],
+    description:
+      'Rate limited (`rate_limited`). Both POST trustline routes draw on the ' +
+      'same budget per consumer and client address, so alternating between ' +
+      'them does not reset it. Honour `Retry-After`.',
+  });
 
 /** The 403 of the two user-registration routes for a key that is not elevated. */
-const ELEVATED_KEY_REQUIRED_RESPONSE: ApiResponseOptions = {
-  status: 403,
-  description:
-    '`elevated_key_required`: only an elevated (admin) key may register Pollar ' +
-    'users. The Pollar user directory is shared by every tenant, and a user ' +
-    'registered here is the same one a later social login resolves by email.',
-  content: API_ERROR_BODY_CONTENT,
-};
+const ElevatedKeyRequiredResponse = () =>
+  ApiErrorResponse({
+    status: 403,
+    codes: [ApiErrorCode.ElevatedKeyRequired, ApiErrorCode.InsufficientScope],
+    description:
+      '`elevated_key_required`: only an elevated (admin) key may register ' +
+      'Pollar users. The Pollar user directory is shared by every tenant, and ' +
+      'a user registered here is the same one a later social login resolves ' +
+      'by email.',
+  });
 
 /**
  * Operator routes for Pollar wallets — `/v1/pollar`.
@@ -81,6 +86,9 @@ const ELEVATED_KEY_REQUIRED_RESPONSE: ApiResponseOptions = {
  * so Pollar itself cannot tell them apart. See `assertWalletOwned`.
  */
 @ApiTags('pollar')
+// Activation funds a reserve and adds trustlines through Pollar, which relays
+// to Horizon; token verification and user registration are Pollar calls too.
+@ApiUpstream('Pollar')
 @Controller({ path: 'pollar', version: '1' })
 export class PollarWalletsController {
   constructor(private readonly wallets: PollarWalletsService) {}
@@ -97,7 +105,7 @@ export class PollarWalletsController {
       'back with `activated: false`, not an error.',
   })
   @ApiCreatedResponse({ type: PollarActivationEntity })
-  @ApiResponse(WALLET_NOT_FOUND_RESPONSE)
+  @WalletNotFoundResponse()
   activate(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Body() dto: ActivateWalletDto,
@@ -114,8 +122,8 @@ export class PollarWalletsController {
     summary: "Enable the app's configured assets on a wallet",
   })
   @ApiCreatedResponse({ type: PollarTrustlineEntity })
-  @ApiResponse(WALLET_NOT_FOUND_RESPONSE)
-  @ApiResponse(TRUSTLINE_RATE_LIMITED_RESPONSE)
+  @WalletNotFoundResponse()
+  @TrustlineRateLimitedResponse()
   defaultTrustlines(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Param('address') address: string,
@@ -129,8 +137,8 @@ export class PollarWalletsController {
   @RateLimit(POLLAR_TRUSTLINE_RATE_LIMIT, POLLAR_CONSUMER_QUOTA_RATE_LIMIT)
   @ApiOperation({ summary: 'Enable specific assets on a wallet' })
   @ApiCreatedResponse({ type: PollarTrustlineEntity })
-  @ApiResponse(WALLET_NOT_FOUND_RESPONSE)
-  @ApiResponse(TRUSTLINE_RATE_LIMITED_RESPONSE)
+  @WalletNotFoundResponse()
+  @TrustlineRateLimitedResponse()
   createTrustlines(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Param('address') address: string,
@@ -153,7 +161,7 @@ export class PollarWalletsController {
       'service does on the way out so neither has to be escaped by the caller.',
   })
   @ApiOkResponse({ type: PollarTrustlineEntity })
-  @ApiResponse(WALLET_NOT_FOUND_RESPONSE)
+  @WalletNotFoundResponse()
   removeTrustline(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Param('address') address: string,
@@ -176,7 +184,7 @@ export class PollarWalletsController {
       'provider payload.',
   })
   @ApiCreatedResponse({ type: PollarUserEntity })
-  @ApiResponse(ELEVATED_KEY_REQUIRED_RESPONSE)
+  @ElevatedKeyRequiredResponse()
   registerUser(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Body() dto: RegisterUserDto,
@@ -201,7 +209,7 @@ export class PollarWalletsController {
       'first login to do it.',
   })
   @ApiCreatedResponse({ type: PollarUserEntity })
-  @ApiResponse(ELEVATED_KEY_REQUIRED_RESPONSE)
+  @ElevatedKeyRequiredResponse()
   registerUserWithWallet(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Body() dto: RegisterUserDto,

@@ -293,10 +293,13 @@ reescrito:
 ```
 
 O envelope e o enum completo de `code` são publicados na spec OpenAPI como
-`ApiErrorBodyEntity` em toda operação, então os clients gerados também recebem o
-tipo de erro (fonte: `ApiErrorCode` em `src/common/errors/api-error.ts`). **Códigos
-nunca são renomeados depois de publicados**; novos podem ser adicionados, então
-trate um código desconhecido pelo seu status HTTP.
+`ApiErrorBodyEntity` (fonte: `ApiErrorCode` em `src/common/errors/api-error.ts`).
+Cada operação documenta apenas os status que realmente pode retornar, e cada status
+traz um exemplo por `code` que pode carregar — a mensagem real, com o `statusCode` e
+o `error` correspondentes —, então o Swagger UI e uma importação no Postman mostram o
+corpo que você de fato recebe. **Códigos nunca são renomeados depois de
+publicados**; novos podem ser adicionados, então trate um código desconhecido pelo
+seu status HTTP.
 
 Alguns que são fáceis de confundir:
 
@@ -313,7 +316,7 @@ Alguns que são fáceis de confundir:
 | `kyc_state_invalid` | 409 | Uma transição de estado de KYC ilegal — não é uma requisição duplicada |
 | `operation_in_flight` | 409 | Uma operação conflitante ainda está sendo liquidada |
 | `payload_expired` | 409 | O corpo da entrega passou do período de retenção e não pode ser reenviado |
-| `provider_unavailable` | 503/504 | BlindPay ou Horizon está inacessível. Tente novamente |
+| `provider_unavailable` | 502/503/504 | BlindPay ou Horizon está inacessível. Tente novamente |
 | `misconfigured` | 503 | Um erro de configuração do lado do servidor. Tentar novamente não vai ajudar |
 
 ### Executando mais de uma réplica
@@ -599,8 +602,31 @@ em `servers` da spec, defina `OPENAPI_SERVER_URL` antes de gerar:
 OPENAPI_SERVER_URL=https://gateway.example.com npm run openapi:generate
 ```
 
-Os dois headers do APISIX (`X-Gateway-Secret`, `X-Consumer-Username`) são
-documentados como security schemes na spec.
+**Usando pelo Postman.** Importe `openapi/openapi.json`, ou
+`http://localhost:3000/docs/json` de um serviço em execução. A spec oferece dois
+servidores e dois requisitos de segurança; ferramentas que escolhem um pegam o
+primeiro de cada lista:
+
+| Chamada | Servidor | Autenticação |
+| ------- | -------- | ------------ |
+| Direto a este serviço (desenvolvimento local) | `http://localhost:{port}` (`port` padrão `3000`) | `X-Gateway-Secret` **e** `X-Consumer-Username`, juntos |
+| Pelo gateway APISIX | `OPENAPI_SERVER_URL`, primeiro da lista quando definido | `Authorization: Bearer <api key>` |
+
+A spec versionada é gerada sem `OPENAPI_SERVER_URL`, então o padrão é o par direto;
+gere com a variável definida para ter uma collection que usa o gateway por padrão. O
+Postman guarda uma única API key por request: se a importação configurar só
+`X-Gateway-Secret`, adicione `X-Consumer-Username` como header da collection. Os
+probes de saúde são publicados com `security: []`.
+
+Cada operação traz extensões de fornecedor que dizem o que ela é:
+`x-cosmos-rate-limit` (seus orçamentos; pode responder `429`), `x-cosmos-upstream`
+(o provedor que chama; pode responder `502`/`503`/`504`), `x-cosmos-public` e
+`x-cosmos-public-key`.
+
+`npm run openapi:generate` se recusa a escrever uma spec em que uma operação não tem
+summary, uma falha não tem corpo nem exemplo, o `statusCode` de um exemplo não bate
+com o status que documenta, ou um `429` aparece em uma rota sem orçamento. Sempre que
+adicionar ou alterar uma rota, revise a operação regenerada; veja `CLAUDE.md`.
 
 ### Criando intents — duas operações SEP-7, dois endpoints
 
@@ -1486,6 +1512,25 @@ Notas de deploy que vêm junto:
   payouts, montagem de intents, cotações de swap ou montagens de pool precisa respeitar
   o `Retry-After`. `RATE_LIMIT_ENABLED=false` desliga o limitador durante um
   incidente.
+
+### O contrato OpenAPI lista apenas o que cada rota retorna
+
+Nada mudou na resposta real; mudou o contrato publicado. Regenere qualquer client
+gerado a partir de `openapi/openapi.json`:
+
+- Cada operação lista apenas as falhas que pode retornar. `409` aparece só onde a
+  rota documenta um conflito próprio, `429` só em rotas com rate limit,
+  `502`/`503`/`504` só onde a rota chama um provedor, e os probes de saúde não listam
+  `401`/`403`. Falhas compartilhadas são `$ref` para `components.responses`.
+- Todo exemplo de falha é real para o seu status. Antes a spec mostrava um único
+  `409 idempotency_conflict` sob todos os status de todas as rotas.
+- `X-Gateway-Secret` e `X-Consumer-Username` formam um único requisito de segurança
+  (os dois headers), com `Authorization: Bearer` publicado como alternativa para
+  chamadas pelo gateway. Antes eram duas alternativas, o que dizia às ferramentas que
+  qualquer um dos headers bastava.
+- O `503` de `GET /v1/health/readiness` é documentado como o envelope de erro. Antes
+  era documentado como o relatório do Terminus, que o filtro de exceções nunca
+  retorna.
 
 ### NestJS 12, TypeScript 6 e Node 24.9 como versão mínima
 

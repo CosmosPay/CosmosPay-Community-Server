@@ -7,6 +7,7 @@ import {
   Post,
   Query,
 } from '@nestjs/common';
+import { ApiUpstream } from '@/common/decorators/api-upstream.decorator';
 import { WidePaginationQueryDto } from '@/common/dto/pagination.query.dto';
 import {
   ApiCreatedResponse,
@@ -22,6 +23,7 @@ import { CreateBankAccountDto } from '@/kyc/bank-accounts/dto/create-bank-accoun
 import {
   BankAccountEntity,
   BankAccountListEntity,
+  BankAccountDeletedEntity,
 } from '@/kyc/bank-accounts/entities/bank-account.entity';
 
 // /v1/kyc/receivers/:receiverId/bank-accounts
@@ -31,6 +33,8 @@ export class BankAccountsController {
   constructor(private readonly bankAccounts: BankAccountsService) {}
 
   @Post()
+  // The account is created at BlindPay; the row here is the mirror.
+  @ApiUpstream('BlindPay')
   @RequirePermissions('kyc:write')
   @ApiOperation({ summary: 'Add a fiat bank account for a receiver' })
   @ApiCreatedResponse({ type: BankAccountEntity })
@@ -55,8 +59,10 @@ export class BankAccountsController {
   }
 
   @Delete(':id')
+  @ApiUpstream('BlindPay')
   @RequirePermissions('kyc:write')
   @ApiOperation({ summary: 'Delete a bank account' })
+  @ApiOkResponse({ type: BankAccountDeletedEntity })
   remove(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Param('receiverId') receiverId: string,

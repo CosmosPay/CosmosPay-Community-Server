@@ -14,15 +14,16 @@ import {
   ApiHeader,
   ApiOkResponse,
   ApiOperation,
-  ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
 import type { Request } from 'express';
 import { CurrentConsumer } from '@/common/decorators/current-consumer.decorator';
 import { AllowPublicKey } from '@/common/decorators/allow-public-key.decorator';
+import { ApiErrorResponse } from '@/common/decorators/api-error-response.decorator';
+import { ApiUpstream } from '@/common/decorators/api-upstream.decorator';
 import { RateLimit } from '@/common/decorators/rate-limit.decorator';
 import { RequirePermissions } from '@/common/decorators/require-permissions.decorator';
-import { API_ERROR_BODY_CONTENT } from '@/common/errors/api-error.entity';
+import { ApiErrorCode } from '@/common/errors/api-error';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import { headerValue } from '@/common/request-header';
 import { CreateSwapDto } from '@/swaps/dto/create-swap.dto';
@@ -49,6 +50,8 @@ export class SwapsController {
   constructor(private readonly swaps: SwapsService) {}
 
   @Post('quote')
+  // A strict-send path search, straight at Horizon.
+  @ApiUpstream('Horizon')
   // Prices a path from Horizon. Pure function of the request.
   @AllowPublicKey()
   @RequirePermissions('swaps:read')
@@ -65,6 +68,15 @@ export class SwapsController {
       'Quote a swap (Horizon strict-send path search + fee/slippage); persists nothing',
   })
   @ApiOkResponse({ type: SwapQuoteEntity })
+  @ApiErrorResponse({
+    status: 400,
+    codes: [
+      ApiErrorCode.ValidationFailed,
+      ApiErrorCode.InvalidAmount,
+      ApiErrorCode.SlippageExceeded,
+      ApiErrorCode.NoPathFound,
+    ],
+  })
   quote(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Body() dto: QuoteSwapDto,
@@ -73,6 +85,8 @@ export class SwapsController {
   }
 
   @Post()
+  // Prices the swap and loads the source account, both from Horizon.
+  @ApiUpstream('Horizon')
   // Builds an unsigned envelope from the request; the wallet signs it.
   @AllowPublicKey()
   @RequirePermissions('swaps:write')
@@ -94,9 +108,20 @@ export class SwapsController {
     example: 'swap-retry-2026-08-23-001',
   })
   @ApiCreatedResponse({ type: SwapEntity })
-  @ApiResponse({
+  @ApiErrorResponse({
+    status: 400,
+    codes: [
+      ApiErrorCode.ValidationFailed,
+      ApiErrorCode.InvalidAmount,
+      ApiErrorCode.SlippageExceeded,
+      ApiErrorCode.NoPathFound,
+      ApiErrorCode.TrustlineMissing,
+      ApiErrorCode.InsufficientBalance,
+    ],
+  })
+  @ApiErrorResponse({
     status: 409,
-    content: API_ERROR_BODY_CONTENT,
+    codes: [ApiErrorCode.IdempotencyConflict, ApiErrorCode.OperationInFlight],
     description:
       '`idempotency_conflict` — this Idempotency-Key was already used for a ' +
       'different request, or an identical swap was already built without a key ' +
@@ -141,6 +166,9 @@ export class SwapsController {
   }
 
   @Post(':id/submit')
+  // Broadcasts through Horizon. The two reads above answer from this
+  // service's own tables and never touch it.
+  @ApiUpstream('Horizon')
   // Broadcasts an envelope the caller signed. Nothing about the swap — not even
   // its status — is answered until `signedXdr` parses, hashes to the swap's
   // stored txHash and carries a signature, so reaching another anonymous user's
@@ -162,9 +190,9 @@ export class SwapsController {
       'Relay the signed swap transaction to the network (hash-checked); finalizes status',
   })
   @ApiOkResponse({ type: SwapSubmitResultEntity })
-  @ApiResponse({
+  @ApiErrorResponse({
     status: 400,
-    content: API_ERROR_BODY_CONTENT,
+    codes: [ApiErrorCode.ValidationFailed, ApiErrorCode.InvalidStateTransition],
     description:
       '`validation_failed` — `signedXdr` is not a transaction envelope, is not ' +
       'the envelope built for this swap, or carries no signatures. ' +
@@ -173,9 +201,9 @@ export class SwapsController {
       'resubmitted the maximum number of times after a rejection. Build a new ' +
       'swap.',
   })
-  @ApiResponse({
+  @ApiErrorResponse({
     status: 429,
-    content: API_ERROR_BODY_CONTENT,
+    codes: [ApiErrorCode.RateLimited],
     description:
       'Rate limited (`rate_limited`), per consumer and client address. Honour ' +
       '`Retry-After`: the window is shorter than the envelope lifetime, so a ' +

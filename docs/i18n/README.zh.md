@@ -258,7 +258,7 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 }
 ```
 
-该响应结构及完整的 `code` 枚举以 `ApiErrorBodyEntity` 的形式发布在 OpenAPI 规范中，附加在每个操作上，因此生成的客户端也能获得错误类型（来源：`src/common/errors/api-error.ts` 中的 `ApiErrorCode`）。**错误码一经发布便永不重命名**；可能会新增错误码，因此请把无法识别的错误码按其 HTTP 状态码处理。
+该响应结构及完整的 `code` 枚举以 `ApiErrorBodyEntity` 的形式发布在 OpenAPI 规范中（来源：`src/common/errors/api-error.ts` 中的 `ApiErrorCode`）。每个操作只记录它实际可能返回的状态码，每个状态码为其可能携带的每个 `code` 各提供一个示例——真实的消息，以及与之匹配的 `statusCode` 和 `error`——因此 Swagger UI 和 Postman 导入显示的就是你真正会收到的响应体。**错误码一经发布便永不重命名**；可能会新增错误码，因此请把无法识别的错误码按其 HTTP 状态码处理。
 
 几个容易混淆的错误码：
 
@@ -275,7 +275,7 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | `kyc_state_invalid` | 409 | 非法的 KYC 状态转换——并非重复请求 |
 | `operation_in_flight` | 409 | 一个与之冲突的操作仍在结算中 |
 | `payload_expired` | 409 | 投递内容已超出保留期，无法重新发送 |
-| `provider_unavailable` | 503/504 | BlindPay 或 Horizon 无法访问。请重试 |
+| `provider_unavailable` | 502/503/504 | BlindPay 或 Horizon 无法访问。请重试 |
 | `misconfigured` | 503 | 服务端配置错误。重试无济于事 |
 
 ### 运行多个副本
@@ -431,7 +431,18 @@ npm run openapi:check
 OPENAPI_SERVER_URL=https://gateway.example.com npm run openapi:generate
 ```
 
-两个 APISIX 请求头（`X-Gateway-Secret`、`X-Consumer-Username`）在规范中被记录为安全方案（security scheme）。
+**在 Postman 中使用。** 导入 `openapi/openapi.json`，或从运行中的服务导入 `http://localhost:3000/docs/json`。规范提供两个服务器和两种安全要求；只选其一的工具会取各自列表中的第一项：
+
+| 调用方式 | 服务器 | 认证 |
+| -------- | ------ | ---- |
+| 直接调用本服务（本地开发） | `http://localhost:{port}`（`port` 默认为 `3000`） | `X-Gateway-Secret` **和** `X-Consumer-Username`，同时提供 |
+| 通过 APISIX 网关 | `OPENAPI_SERVER_URL`，设置后排在第一位 | `Authorization: Bearer <api key>` |
+
+提交到仓库的规范是在未设置 `OPENAPI_SERVER_URL` 的情况下生成的，因此默认使用直连的请求头组合；设置该变量后生成，可得到默认走网关的集合。Postman 每个请求只保存一个 API key：如果导入后只配置了 `X-Gateway-Secret`，请把 `X-Consumer-Username` 添加为集合级请求头。健康探针以 `security: []` 发布。
+
+每个操作都带有说明其性质的厂商扩展：`x-cosmos-rate-limit`（其配额——可能返回 `429`）、`x-cosmos-upstream`（它调用的提供方——可能返回 `502`/`503`/`504`）、`x-cosmos-public` 和 `x-cosmos-public-key`。
+
+`npm run openapi:generate` 会拒绝写出以下规范：某个操作没有 summary、某个失败响应没有响应体或示例、某个示例的 `statusCode` 与其所记录的状态码不一致，或没有配额的路由上出现了 `429`。每次新增或修改路由时，请阅读其重新生成的操作——参见 `CLAUDE.md`。
 
 ### 创建支付意图 — 两种 SEP-7 操作，两个端点
 
@@ -927,6 +938,15 @@ Pollar 在 key 的前缀中编码了网络和 key 类型，环境变量校验器
 - **迁移 `20260915200000_receiver_dossier_version`** 为 `blindpay_receiver` 增加 `dossierVersion`（默认 `1`）和 `reviewedVersion`——只改目录，不重写表——并为所有已经通过审核关卡的 receiver 回填 `reviewedVersion`，使它们的 `enable` 继续可用。仍处于 `inactive` 或 `pending_review` 的 receiver 保持 `NULL`，那正是它们的真实状态。
 - **部署前请检查 `POLLAR_BRIDGE_CALLBACK_URL`。** 可路由主机上的纯 `http` 现在会让服务无法启动，错误信息中会点名该变量。回环地址（`http://127.0.0.1:…`）仍然接受，供本地开发使用。
 - **此前从不返回 `429` 的路由现在会返回。** 上表中的预算自本版本起生效；在 KYC 上传、报价、payin、payout、意图构建、swap 报价或流动性池构建上打循环的客户端需要遵守 `Retry-After`。发生故障时可用 `RATE_LIMIT_ENABLED=false` 关闭限流器。
+
+### OpenAPI 契约只列出每个路由实际返回的内容
+
+线上的响应没有任何变化；变化的是发布的契约。请重新生成所有基于 `openapi/openapi.json` 生成的客户端：
+
+- 每个操作只列出它可能返回的失败。`409` 只出现在路由自行记录了冲突的地方，`429` 只出现在有限流的路由上，`502`/`503`/`504` 只出现在会调用提供方的路由上，健康探针不再列出 `401`/`403`。共用的失败响应以 `$ref` 指向 `components.responses`。
+- 每个失败示例都与其状态码相符。此前规范在每个路由的每个状态码下都显示同一个 `409 idempotency_conflict`。
+- `X-Gateway-Secret` 与 `X-Consumer-Username` 构成同一个安全要求（两个请求头都要），并发布 `Authorization: Bearer` 作为经网关调用时的替代方案。此前它们是两个可选项，让工具以为任意一个请求头就足够。
+- `GET /v1/health/readiness` 的 `503` 以错误响应结构记录。此前它被记录为 Terminus 报告，而异常过滤器从不返回该报告。
 
 ### NestJS 12、TypeScript 6 与 Node 最低版本 24.9
 

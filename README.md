@@ -290,10 +290,12 @@ may be reworded:
 ```
 
 The envelope and the full `code` enum are published in the OpenAPI spec as
-`ApiErrorBodyEntity` on every operation, so generated clients get the error type
-too (source: `ApiErrorCode` in `src/common/errors/api-error.ts`). **Codes are
-never renamed once published**; new ones may be added, so treat an unrecognised
-code as its HTTP status.
+`ApiErrorBodyEntity` (source: `ApiErrorCode` in `src/common/errors/api-error.ts`).
+Each operation documents only the statuses it can actually return, and each status
+carries one example per `code` it can carry — the real message, with the matching
+`statusCode` and `error` — so Swagger UI and a Postman import show the body you
+would really receive. **Codes are never renamed once published**; new ones may be
+added, so treat an unrecognised code as its HTTP status.
 
 A few that are easy to confuse:
 
@@ -310,7 +312,7 @@ A few that are easy to confuse:
 | `kyc_state_invalid` | 409 | An illegal KYC state transition — not a duplicate request |
 | `operation_in_flight` | 409 | A conflicting operation is still settling |
 | `payload_expired` | 409 | The delivery body is past retention and cannot be re-sent |
-| `provider_unavailable` | 503/504 | BlindPay or Horizon is unreachable. Retry |
+| `provider_unavailable` | 502/503/504 | BlindPay or Horizon is unreachable. Retry |
 | `misconfigured` | 503 | A server-side configuration error. Retrying will not help |
 
 ### Running more than one replica
@@ -589,8 +591,30 @@ in the spec's `servers`, set `OPENAPI_SERVER_URL` before generating:
 OPENAPI_SERVER_URL=https://gateway.example.com npm run openapi:generate
 ```
 
-The two APISIX headers (`X-Gateway-Secret`, `X-Consumer-Username`) are
-documented as security schemes in the spec.
+**Using it from Postman.** Import `openapi/openapi.json`, or
+`http://localhost:3000/docs/json` from a running service. The spec offers two
+servers and two security requirements; tools that pick one take the first of each:
+
+| Calling | Server | Auth |
+| ------- | ------ | ---- |
+| This service directly (local development) | `http://localhost:{port}` (`port` defaults to `3000`) | `X-Gateway-Secret` **and** `X-Consumer-Username`, together |
+| Through the APISIX gateway | `OPENAPI_SERVER_URL`, listed first when set | `Authorization: Bearer <api key>` |
+
+The committed spec is generated without `OPENAPI_SERVER_URL`, so it defaults to
+the direct pair; generate it with the variable set for a collection that defaults
+to the gateway. Postman keeps one API key per request: if an import sets only
+`X-Gateway-Secret`, add `X-Consumer-Username` as a collection header. The health
+probes are published with `security: []`.
+
+Every operation carries vendor extensions that say what it is:
+`x-cosmos-rate-limit` (its budgets — it can answer `429`), `x-cosmos-upstream`
+(the provider it calls — it can answer `502`/`503`/`504`), `x-cosmos-public` and
+`x-cosmos-public-key`.
+
+`npm run openapi:generate` refuses to write a spec in which an operation has no
+summary, a failure has no body or example, an example's `statusCode` disagrees
+with the status it documents, or a `429` sits on a route with no budget. Whenever
+you add or change a route, read its regenerated operation — see `CLAUDE.md`.
 
 ### Creating intents — two SEP-7 operations, two endpoints
 
@@ -1466,6 +1490,25 @@ Deploy notes that come with it:
   payouts, intent builds, swap quotes or pool builds needs to honour
   `Retry-After`. `RATE_LIMIT_ENABLED=false` turns the limiter off during an
   incident.
+
+### The OpenAPI contract lists only what each route returns
+
+Nothing changed on the wire; the published contract did. Regenerate any client
+built from `openapi/openapi.json`:
+
+- Each operation lists only the failures it can return. `409` appears only where
+  the route documents a conflict of its own, `429` only on rate-limited routes,
+  `502`/`503`/`504` only where the route calls a provider, and the health probes
+  list no `401`/`403`. Shared failures are `$ref`s into `components.responses`.
+- Every failure example is real for its status. The spec used to show one
+  `409 idempotency_conflict` under every status of every route.
+- `X-Gateway-Secret` and `X-Consumer-Username` are one security requirement (both
+  headers), with `Authorization: Bearer` published as the alternative for calls
+  through the gateway. They used to be two alternatives, which told tools that
+  either header alone was enough.
+- The `503` of `GET /v1/health/readiness` is documented as the error envelope. It
+  used to be documented as the Terminus report, which the exception filter never
+  returns.
 
 ### NestJS 12, TypeScript 6 and a Node floor of 24.9
 
