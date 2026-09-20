@@ -73,6 +73,7 @@ src/
   stellar/                        per-network Horizon servers (bounded timeout), account loader,
                                   SEP-7 links, signed-envelope relay, settlement repository
   payment-intents/                Stellar payment intents (controller, service, DTO) — emits events
+  private-rfqs/                   Sub Rosa sealed-quote registration, reveal, selection + payment handoff
   swaps/                          Stellar native swaps (path payments): quote, build XDR, submit
   liquidity-pools/                AMM deposit/withdraw, pool + position reads, cost basis + commission on gain
   observer/                       background reconciler: swaps + LP ops against Horizon, one adapter per table
@@ -121,6 +122,7 @@ regenerated from the controllers and DTOs on every CI run
 | Area              | Base path                | What it does                                             |
 | ----------------- | ------------------------ | -------------------------------------------------------- |
 | Payment intents   | `/v1/payment-intents`    | SEP-7 `tx` / `pay` intents, validation, on-chain observer |
+| Private RFQs      | `/v1/private-rfqs`       | Sub Rosa sealed quotes before a Cosmos Pay intent         |
 | Swaps             | `/v1/swaps`              | Path-payment quote, build unsigned XDR, submit signed     |
 | Liquidity pools   | `/v1/liquidity-pools`    | AMM deposit / withdraw, positions, commission on gain     |
 | Webhooks          | `/v1/webhooks`           | Endpoint CRUD, secret rotation, deliveries, redelivery    |
@@ -237,6 +239,12 @@ Paths use the OpenAPI `{param}` form.
 | DELETE | `/v1/payment-intents/{id}` | `payments:write` |  |
 | GET | `/v1/payment-intents/{id}/transitions` | `payments:read` |  |
 | POST | `/v1/payment-intents/{id}/validate` | `payments:write` |  |
+| GET | `/v1/private-rfqs` | `private-rfqs:read` |  |
+| POST | `/v1/private-rfqs` | `private-rfqs:write` |  |
+| GET | `/v1/private-rfqs/{id}` | `private-rfqs:read` |  |
+| POST | `/v1/private-rfqs/{id}/payment-intent` | `private-rfqs:write`, `payments:write` |  |
+| POST | `/v1/private-rfqs/{id}/select` | `private-rfqs:write` |  |
+| POST | `/v1/private-rfqs/{id}/sync` | `private-rfqs:write` |  |
 | POST | `/v1/pollar/oauth/authorize` | `pollar:write` |  |
 | GET | `/v1/pollar/oauth/callback` | none — `@Public()` |  |
 | GET | `/v1/pollar/oauth/callback/{state}` | none — `@Public()` |  |
@@ -449,7 +457,8 @@ Event types: `PAYMENT_INTENT_CREATED`, `PAYMENT_INTENT_UPDATED`,
 `PAYMENT_INTENT_SUCCEEDED`, `PAYMENT_INTENT_FAILED`, `PAYMENT_INTENT_CANCELLED`,
 `PAYMENT_INTENT_DELETED`, `SWAP_CREATED`, `SWAP_SUBMITTED`, `SWAP_SUCCEEDED`,
 `SWAP_FAILED`, `LIQUIDITY_CREATED`, `LIQUIDITY_SUBMITTED`, `LIQUIDITY_SUCCEEDED`,
-`LIQUIDITY_FAILED`, plus the BlindPay-sourced `RECEIVER_UPDATED`, `PAYIN_CREATED`,
+`LIQUIDITY_FAILED`, `PRIVATE_RFQ_CREATED`, `PRIVATE_RFQ_REVEALED`,
+`PRIVATE_RFQ_SELECTED`, plus the BlindPay-sourced `RECEIVER_UPDATED`, `PAYIN_CREATED`,
 `PAYIN_UPDATED`, `PAYIN_COMPLETED`, `PAYOUT_CREATED`, `PAYOUT_UPDATED` and
 `PAYOUT_COMPLETED`. The authoritative list is the `WebhookEventType` enum in
 `prisma/schema.prisma`.
@@ -672,6 +681,57 @@ Example `tx` response:
 Network/Horizon/fee/timeout are configured via `STELLAR_*` env vars
 (see `.env.example`). Defaults to **testnet** for safety — set
 `STELLAR_NETWORK=public` for mainnet (real funds).
+
+## Private RFQs with Sub Rosa
+
+Private RFQs add a sealed competitive-quote step before the existing Cosmos Pay
+payment-intent flow. Cosmos Pay imports `@sub-rosa/sdk` and reads the canonical
+Sub Rosa contract directly. The server never holds a Stellar secret key, never
+creates or signs a round transaction, and never stores quote plaintext.
+
+The client creates a Sub Rosa Core v2 round with its own wallet using:
+
+- `ReceiptOnly` mode and `LowestBid` clearing;
+- the SDK's `SEALED_PROPOSAL_SCHEMA_REF`;
+- the canonical Sub Rosa contract for the API key's network; and
+- `itemRef = sha256("cosmos-pay:private-rfq:v1:" + reference.trim())`.
+
+It then registers the on-chain round:
+
+```jsonc
+POST /v1/private-rfqs
+{
+  "reference": "rfq_procurement_2026_09",
+  "network": "testnet",
+  "contractId": "CCOVGOQQZJKZ2R55GRWBLTJTGBAMSHXZVN3ICPG3WRVMLMM6RHISC5OV",
+  "roundId": "42",
+  "assetCode": "USDC",
+  "assetIssuer": "G...",
+  "assetDecimals": 7
+}
+```
+
+`POST /v1/private-rfqs/:id/sync` refreshes the lifecycle from Soroban and emits
+`PRIVATE_RFQ_REVEALED` once reveal is complete. `GET /v1/private-rfqs/:id`
+performs a live read; proposals stay redacted until the whole reveal is complete
+(or the round is cleared/settled). Only the round link, deadlines, lifecycle,
+selection and payment-intent id are persisted.
+
+After reveal, select a valid bidder with
+`POST /v1/private-rfqs/:id/select { "provider": "G..." }`, then create the
+existing Cosmos Pay settlement artifact:
+
+```jsonc
+POST /v1/private-rfqs/:id/payment-intent
+{ "kind": "TX", "source": "G..." }
+```
+
+The selected bidder becomes the destination, the revealed envelope amount is
+converted from `assetDecimals`, and the request is handed to
+`PaymentIntentsService.createTx` (or `createPay` for `{ "kind": "PAY" }`). The
+returned XDR/SEP-7 URI follows the normal non-custodial Cosmos Pay signing flow.
+The handoff uses a deterministic MEMO_ID, so concurrent retries resolve to the
+same intent.
 
 ## The shared public API key
 

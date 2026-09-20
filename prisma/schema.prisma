@@ -26,6 +26,7 @@ model Consumer {
   updatedAt      DateTime @updatedAt
 
   paymentIntents   PaymentIntent[]
+  privateRfqs      PrivateRfq[]
   webhookEndpoints WebhookEndpoint[]
   products         Product[]
   customers        Customer[]
@@ -139,6 +140,11 @@ enum WebhookEventType {
   PAYMENT_INTENT_FAILED
   PAYMENT_INTENT_CANCELLED
   PAYMENT_INTENT_DELETED
+
+  // Private competitive quote requests backed by Sub Rosa sealed rounds.
+  PRIVATE_RFQ_CREATED
+  PRIVATE_RFQ_REVEALED
+  PRIVATE_RFQ_SELECTED
 
   // BlindPay-sourced events re-emitted to integrators after we sync state.
   RECEIVER_UPDATED
@@ -293,6 +299,53 @@ enum PaymentIntentStatus {
   EXPIRED // tx time bounds elapsed before submission
 }
 
+enum PrivateRfqStatus {
+  OPEN
+  REVEALING
+  REVEALED
+  SELECTED
+  VOIDED
+}
+
+// Cosmos Pay metadata for an externally wallet-created Sub Rosa round. Quote
+// plaintext is deliberately absent: revealed proposals are read from Soroban
+// on demand and never persisted in this table.
+model PrivateRfq {
+  id         String   @id @default(cuid())
+  consumerId String
+  consumer   Consumer @relation(fields: [consumerId], references: [id], onDelete: Cascade)
+
+  reference  String
+  network    String // 'public' | 'testnet'
+  contractId String
+  roundId    String // Soroban u64, represented losslessly as a decimal string
+
+  status         PrivateRfqStatus @default(OPEN)
+  roundStatus    String
+  commitDeadline DateTime
+  revealDeadline DateTime
+
+  assetCode     String  @default("native")
+  assetIssuer   String?
+  assetDecimals Int     @default(7)
+
+  selectedProvider String?
+  selectedAmount   String? // base units from the revealed Sub Rosa envelope
+  selectedAt       DateTime?
+  revealedAt       DateTime?
+
+  paymentIntentId String?        @unique
+  paymentIntent   PaymentIntent? @relation(fields: [paymentIntentId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([consumerId, reference])
+  @@unique([network, contractId, roundId])
+  @@index([consumerId, createdAt])
+  @@map("private_rfq")
+}
+
 // How the intent was assembled:
 //  - TX:  source known → a full unsigned transaction (xdr) + SEP-7 `tx` URI.
 //  - PAY: no source → only a SEP-7 `pay` URI (destination[, amount, asset]); no xdr.
@@ -345,6 +398,7 @@ model PaymentIntent {
 
   // Back-relation for the cursor table below. Virtual — no column.
   horizonCursor HorizonAccountCursor?
+  privateRfq    PrivateRfq?
 
   @@unique([consumerId, memo]) // idempotency: one intent per (consumer, memo)
   // One transaction settles at most one of a consumer's intents. Scoped to the

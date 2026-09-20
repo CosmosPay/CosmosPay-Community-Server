@@ -17,5 +17,6 @@ import { StellarObserverService } from '@/payment-intents/stellar-observer.servi
     StellarVerifierService,
     StellarObserverService,
   ],
+  exports: [PaymentIntentsService],
 })
 export class PaymentIntentsModule {}

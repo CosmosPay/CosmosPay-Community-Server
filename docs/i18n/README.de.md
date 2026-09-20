@@ -240,6 +240,12 @@ Konsolen-Backend erreicht sie. Pfade verwenden die OpenAPI-Form `{param}`.
 | DELETE | `/v1/payment-intents/{id}` | `payments:write` |  |
 | GET | `/v1/payment-intents/{id}/transitions` | `payments:read` |  |
 | POST | `/v1/payment-intents/{id}/validate` | `payments:write` |  |
+| GET | `/v1/private-rfqs` | `private-rfqs:read` |  |
+| POST | `/v1/private-rfqs` | `private-rfqs:write` |  |
+| GET | `/v1/private-rfqs/{id}` | `private-rfqs:read` |  |
+| POST | `/v1/private-rfqs/{id}/payment-intent` | `private-rfqs:write`, `payments:write` |  |
+| POST | `/v1/private-rfqs/{id}/select` | `private-rfqs:write` |  |
+| POST | `/v1/private-rfqs/{id}/sync` | `private-rfqs:write` |  |
 | POST | `/v1/pollar/oauth/authorize` | `pollar:write` |  |
 | GET | `/v1/pollar/oauth/callback` | keiner — `@Public()` |  |
 | GET | `/v1/pollar/oauth/callback/{state}` | keiner — `@Public()` |  |
@@ -696,6 +702,13 @@ Beispielantwort für `tx`:
 Netzwerk, Horizon, Gebühr und Timeout werden über die `STELLAR_*`-Umgebungsvariablen
 konfiguriert (siehe `.env.example`). Aus Sicherheitsgründen ist **Testnet** der
 Standard — setzen Sie `STELLAR_NETWORK=public` für Mainnet (echte Gelder).
+
+## Private RFQs mit Sub Rosa
+
+Clients erstellen und signieren die versiegelte Runde mit ihrer eigenen Wallet.
+Cosmos Pay prüft den Zustand nur über `@sub-rosa/sdk`, wählt den offengelegten
+Anbieter und übergibt ihn an den bestehenden Payment-Intent-Ablauf. Der Server
+speichert weder private Schlüssel noch Vorschlagstext.
 
 ## Der gemeinsame öffentliche API-Key
 

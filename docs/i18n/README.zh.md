@@ -208,6 +208,12 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | DELETE | `/v1/payment-intents/{id}` | `payments:write` |  |
 | GET | `/v1/payment-intents/{id}/transitions` | `payments:read` |  |
 | POST | `/v1/payment-intents/{id}/validate` | `payments:write` |  |
+| GET | `/v1/private-rfqs` | `private-rfqs:read` |  |
+| POST | `/v1/private-rfqs` | `private-rfqs:write` |  |
+| GET | `/v1/private-rfqs/{id}` | `private-rfqs:read` |  |
+| POST | `/v1/private-rfqs/{id}/payment-intent` | `private-rfqs:write`, `payments:write` |  |
+| POST | `/v1/private-rfqs/{id}/select` | `private-rfqs:write` |  |
+| POST | `/v1/private-rfqs/{id}/sync` | `private-rfqs:write` |  |
 | POST | `/v1/pollar/oauth/authorize` | `pollar:write` |  |
 | GET | `/v1/pollar/oauth/callback` | 无 — `@Public()` |  |
 | GET | `/v1/pollar/oauth/callback/{state}` | 无 — `@Public()` |  |
@@ -487,6 +493,12 @@ OPENAPI_SERVER_URL=https://gateway.example.com npm run openapi:generate
 ```
 
 网络/Horizon/手续费/超时通过 `STELLAR_*` 环境变量配置（见 `.env.example`）。出于安全考虑，默认使用 **testnet**——设置 `STELLAR_NETWORK=public` 以使用主网（真实资金）。
+
+## 使用 Sub Rosa 的私有 RFQ
+
+客户端使用自己的钱包创建并签署密封轮次。Cosmos Pay 只通过
+`@sub-rosa/sdk` 验证状态、选择已揭示的提供商，并将其交给现有的 payment
+intent 流程。服务器不存储私钥或提案明文。
 
 ## 共享公共 API key
 

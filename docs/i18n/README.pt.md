@@ -240,6 +240,12 @@ console chega até ela. Os caminhos usam a forma `{param}` do OpenAPI.
 | DELETE | `/v1/payment-intents/{id}` | `payments:write` |  |
 | GET | `/v1/payment-intents/{id}/transitions` | `payments:read` |  |
 | POST | `/v1/payment-intents/{id}/validate` | `payments:write` |  |
+| GET | `/v1/private-rfqs` | `private-rfqs:read` |  |
+| POST | `/v1/private-rfqs` | `private-rfqs:write` |  |
+| GET | `/v1/private-rfqs/{id}` | `private-rfqs:read` |  |
+| POST | `/v1/private-rfqs/{id}/payment-intent` | `private-rfqs:write`, `payments:write` |  |
+| POST | `/v1/private-rfqs/{id}/select` | `private-rfqs:write` |  |
+| POST | `/v1/private-rfqs/{id}/sync` | `private-rfqs:write` |  |
 | POST | `/v1/pollar/oauth/authorize` | `pollar:write` |  |
 | GET | `/v1/pollar/oauth/callback` | nenhum — `@Public()` |  |
 | GET | `/v1/pollar/oauth/callback/{state}` | nenhum — `@Public()` |  |
@@ -681,6 +687,13 @@ Exemplo de resposta de `tx`:
 Rede/Horizon/taxa/timeout são configurados pelas variáveis de ambiente `STELLAR_*`
 (veja `.env.example`). O padrão é **testnet** por segurança — defina
 `STELLAR_NETWORK=public` para mainnet (fundos reais).
+
+## RFQs privados com Sub Rosa
+
+Os clientes criam e assinam a rodada selada com sua própria carteira; o Cosmos
+Pay apenas verifica o estado via `@sub-rosa/sdk`, seleciona o provedor revelado
+e o encaminha ao fluxo existente de payment intents. O servidor não armazena
+chaves privadas nem texto de propostas.
 
 ## A API key pública compartilhada
 
