@@ -70,6 +70,11 @@ export enum ApiErrorCode {
   InvalidMemo = 'invalid_memo',
   TransactionRejected = 'transaction_rejected',
 
+  // --- private RFQs / Sub Rosa ---------------------------------------------
+  InvalidSubRosaRound = 'invalid_sub_rosa_round',
+  SubRosaNetworkMismatch = 'sub_rosa_network_mismatch',
+  PrivateRfqStateInvalid = 'private_rfq_state_invalid',
+
   // --- provider / upstream --------------------------------------------------
   ProviderError = 'provider_error',
   ProviderUnavailable = 'provider_unavailable',

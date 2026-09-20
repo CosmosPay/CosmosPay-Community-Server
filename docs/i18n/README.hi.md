@@ -237,6 +237,12 @@ Paths OpenAPI के `{param}` रूप में लिखे गए हैं
 | DELETE | `/v1/payment-intents/{id}` | `payments:write` |  |
 | GET | `/v1/payment-intents/{id}/transitions` | `payments:read` |  |
 | POST | `/v1/payment-intents/{id}/validate` | `payments:write` |  |
+| GET | `/v1/private-rfqs` | `private-rfqs:read` |  |
+| POST | `/v1/private-rfqs` | `private-rfqs:write` |  |
+| GET | `/v1/private-rfqs/{id}` | `private-rfqs:read` |  |
+| POST | `/v1/private-rfqs/{id}/payment-intent` | `private-rfqs:write`, `payments:write` |  |
+| POST | `/v1/private-rfqs/{id}/select` | `private-rfqs:write` |  |
+| POST | `/v1/private-rfqs/{id}/sync` | `private-rfqs:write` |  |
 | POST | `/v1/pollar/oauth/authorize` | `pollar:write` |  |
 | GET | `/v1/pollar/oauth/callback` | कोई नहीं — `@Public()` |  |
 | GET | `/v1/pollar/oauth/callback/{state}` | कोई नहीं — `@Public()` |  |
@@ -671,6 +677,12 @@ unsigned `TransactionEnvelope` और एक `web+stellar:tx?xdr=...` URI बन
 Network/Horizon/fee/timeout `STELLAR_*` env vars से कॉन्फ़िगर किए जाते हैं
 (`.env.example` देखें)। सुरक्षा के लिए डिफ़ॉल्ट **testnet** है — mainnet (असली पैसे) के लिए
 `STELLAR_NETWORK=public` सेट करें।
+
+## Sub Rosa के साथ निजी RFQ
+
+क्लाइंट अपने wallet से sealed round बनाते और sign करते हैं। Cosmos Pay केवल
+`@sub-rosa/sdk` से state verify करता है, revealed provider चुनता है और उसे मौजूदा
+payment-intent flow को देता है। सर्वर private key या proposal plaintext नहीं रखता।
 
 ## साझा सार्वजनिक API key
 

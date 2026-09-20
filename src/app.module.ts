@@ -31,6 +31,7 @@ import { OnrampModule } from '@/onramp/onramp.module';
 import { OfframpModule } from '@/offramp/offramp.module';
 import { PollarModule } from '@/pollar/pollar.module';
 import { CommonModule } from '@/common/common.module';
+import { PrivateRfqsModule } from '@/private-rfqs/private-rfqs.module';
 
 @Module({
   imports: [
@@ -46,6 +47,7 @@ import { CommonModule } from '@/common/common.module';
     StellarModule,
     HealthModule,
     PaymentIntentsModule,
+    PrivateRfqsModule,
     SwapsModule,
     LiquidityPoolsModule,
     // The asset registry: which (code, issuer) pairs we vouch for, per network.

@@ -2060,6 +2060,764 @@
         ]
       }
     },
+    "/v1/private-rfqs": {
+      "post": {
+        "operationId": "PrivateRfqsController_create_v1",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePrivateRfqDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrivateRfqEntity"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed, or the request is not valid in the current state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The API key lacks the required scope, or the request did not arrive through the gateway.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist, or does not belong to this consumer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflicts with existing state — an idempotency clash, an operation already in flight, or an invalid state transition.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — the ones whose cost an error cannot refund, such as creating or funding a Stellar account or broadcasting a transaction. Honour `Retry-After`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error. The detail is logged server-side and never returned.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "An upstream provider returned an error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "An upstream provider is unavailable, or the service is misconfigured.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Register and verify a wallet-created Sub Rosa round",
+        "tags": [
+          "private-rfqs"
+        ]
+      },
+      "get": {
+        "operationId": "PrivateRfqsController_findAll_v1",
+        "parameters": [
+          {
+            "name": "take",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "skip",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 0,
+              "default": 0,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrivateRfqListEntity"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed, or the request is not valid in the current state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The API key lacks the required scope, or the request did not arrive through the gateway.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist, or does not belong to this consumer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflicts with existing state — an idempotency clash, an operation already in flight, or an invalid state transition.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — the ones whose cost an error cannot refund, such as creating or funding a Stellar account or broadcasting a transaction. Honour `Retry-After`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error. The detail is logged server-side and never returned.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "An upstream provider returned an error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "An upstream provider is unavailable, or the service is misconfigured.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          }
+        },
+        "summary": "List the consumer's private RFQs",
+        "tags": [
+          "private-rfqs"
+        ]
+      }
+    },
+    "/v1/private-rfqs/{id}": {
+      "get": {
+        "operationId": "PrivateRfqsController_findOne_v1",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrivateRfqEntity"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed, or the request is not valid in the current state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The API key lacks the required scope, or the request did not arrive through the gateway.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist, or does not belong to this consumer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflicts with existing state — an idempotency clash, an operation already in flight, or an invalid state transition.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — the ones whose cost an error cannot refund, such as creating or funding a Stellar account or broadcasting a transaction. Honour `Retry-After`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error. The detail is logged server-side and never returned.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "An upstream provider returned an error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "An upstream provider is unavailable, or the service is misconfigured.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Get an RFQ with live Sub Rosa reveal state",
+        "tags": [
+          "private-rfqs"
+        ]
+      }
+    },
+    "/v1/private-rfqs/{id}/sync": {
+      "post": {
+        "operationId": "PrivateRfqsController_sync_v1",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrivateRfqEntity"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed, or the request is not valid in the current state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The API key lacks the required scope, or the request did not arrive through the gateway.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist, or does not belong to this consumer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflicts with existing state — an idempotency clash, an operation already in flight, or an invalid state transition.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — the ones whose cost an error cannot refund, such as creating or funding a Stellar account or broadcasting a transaction. Honour `Retry-After`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error. The detail is logged server-side and never returned.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "An upstream provider returned an error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "An upstream provider is unavailable, or the service is misconfigured.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Synchronize lifecycle state from Sub Rosa",
+        "tags": [
+          "private-rfqs"
+        ]
+      }
+    },
+    "/v1/private-rfqs/{id}/select": {
+      "post": {
+        "operationId": "PrivateRfqsController_select_v1",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SelectPrivateQuoteDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrivateRfqEntity"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed, or the request is not valid in the current state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The API key lacks the required scope, or the request did not arrive through the gateway.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist, or does not belong to this consumer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflicts with existing state — an idempotency clash, an operation already in flight, or an invalid state transition.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — the ones whose cost an error cannot refund, such as creating or funding a Stellar account or broadcasting a transaction. Honour `Retry-After`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error. The detail is logged server-side and never returned.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "An upstream provider returned an error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "An upstream provider is unavailable, or the service is misconfigured.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Select a valid provider after reveal",
+        "tags": [
+          "private-rfqs"
+        ]
+      }
+    },
+    "/v1/private-rfqs/{id}/payment-intent": {
+      "post": {
+        "operationId": "PrivateRfqsController_createPaymentIntent_v1",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateRfqPaymentIntentDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrivateRfqPaymentEntity"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed, or the request is not valid in the current state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No authenticated consumer: the gateway forwarded no API key identity (`no_authenticated_consumer`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The API key lacks the required scope, or the request did not arrive through the gateway.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist, or does not belong to this consumer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflicts with existing state — an idempotency clash, an operation already in flight, or an invalid state transition.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited (`rate_limited`). Only routes that declare a budget can return this — the ones whose cost an error cannot refund, such as creating or funding a Stellar account or broadcasting a transaction. Honour `Retry-After`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error. The detail is logged server-side and never returned.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "An upstream provider returned an error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "An upstream provider is unavailable, or the service is misconfigured.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Create a Cosmos Pay intent for the selected quote",
+        "tags": [
+          "private-rfqs"
+        ]
+      }
+    },
     "/v1/swaps/quote": {
       "post": {
         "operationId": "SwapsController_quote_v1",
@@ -14696,6 +15454,258 @@
           "deleted"
         ]
       },
+      "CreatePrivateRfqDto": {
+        "type": "object",
+        "properties": {
+          "reference": {
+            "type": "string",
+            "example": "rfq_procurement_2026_09"
+          },
+          "network": {
+            "type": "string",
+            "enum": [
+              "public",
+              "testnet"
+            ],
+            "example": "testnet"
+          },
+          "contractId": {
+            "type": "string",
+            "example": "CCOVGOQQZJKZ2R55GRWBLTJTGBAMSHXZVN3ICPG3WRVMLMM6RHISC5OV"
+          },
+          "roundId": {
+            "type": "string",
+            "example": "42",
+            "description": "Sub Rosa u64 round id."
+          },
+          "assetCode": {
+            "type": "string",
+            "default": "native",
+            "example": "USDC"
+          },
+          "assetIssuer": {
+            "type": "string",
+            "description": "Required for non-native assets."
+          },
+          "assetDecimals": {
+            "type": "number",
+            "default": 7,
+            "minimum": 0,
+            "maximum": 7
+          }
+        },
+        "required": [
+          "reference",
+          "network",
+          "contractId",
+          "roundId"
+        ]
+      },
+      "PrivateQuoteEntity": {
+        "type": "object",
+        "properties": {
+          "provider": {
+            "type": "string"
+          },
+          "revealed": {
+            "type": "boolean"
+          },
+          "valid": {
+            "type": "boolean"
+          },
+          "amount": {
+            "type": "string",
+            "nullable": true,
+            "description": "Quote base units."
+          },
+          "proposal": {
+            "type": "object",
+            "nullable": true
+          }
+        },
+        "required": [
+          "provider",
+          "revealed",
+          "valid"
+        ]
+      },
+      "PrivateRfqEntity": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "reference": {
+            "type": "string"
+          },
+          "network": {
+            "type": "string",
+            "enum": [
+              "public",
+              "testnet"
+            ]
+          },
+          "contractId": {
+            "type": "string"
+          },
+          "roundId": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "OPEN",
+              "REVEALING",
+              "REVEALED",
+              "SELECTED",
+              "VOIDED"
+            ]
+          },
+          "roundStatus": {
+            "type": "string"
+          },
+          "commitDeadline": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "revealDeadline": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "assetCode": {
+            "type": "string"
+          },
+          "assetIssuer": {
+            "type": "string",
+            "nullable": true
+          },
+          "assetDecimals": {
+            "type": "number"
+          },
+          "selectedProvider": {
+            "type": "string",
+            "nullable": true
+          },
+          "selectedAmount": {
+            "type": "string",
+            "nullable": true
+          },
+          "paymentIntentId": {
+            "type": "string",
+            "nullable": true
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "quotes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PrivateQuoteEntity"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "reference",
+          "network",
+          "contractId",
+          "roundId",
+          "status",
+          "roundStatus",
+          "commitDeadline",
+          "revealDeadline",
+          "assetCode",
+          "assetDecimals",
+          "createdAt",
+          "updatedAt"
+        ]
+      },
+      "PrivateRfqListEntity": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PrivateRfqEntity"
+            }
+          },
+          "total": {
+            "type": "number"
+          },
+          "take": {
+            "type": "number"
+          },
+          "skip": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "data",
+          "total",
+          "take",
+          "skip"
+        ]
+      },
+      "SelectPrivateQuoteDto": {
+        "type": "object",
+        "properties": {
+          "provider": {
+            "type": "string",
+            "description": "Bidder/provider address from the revealed round."
+          }
+        },
+        "required": [
+          "provider"
+        ]
+      },
+      "CreateRfqPaymentIntentDto": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "TX",
+              "PAY"
+            ],
+            "example": "TX"
+          },
+          "source": {
+            "type": "string",
+            "description": "Required for TX; omitted for a SEP-7 pay link."
+          },
+          "msg": {
+            "type": "string",
+            "description": "SEP-7 message shown by the wallet."
+          },
+          "callback": {
+            "type": "string",
+            "description": "SEP-7 callback URL descriptor."
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "PrivateRfqPaymentEntity": {
+        "type": "object",
+        "properties": {
+          "privateRfq": {
+            "$ref": "#/components/schemas/PrivateRfqEntity"
+          },
+          "paymentIntent": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "privateRfq",
+          "paymentIntent"
+        ]
+      },
       "QuoteSwapDto": {
         "type": "object",
         "properties": {
@@ -16217,6 +17227,9 @@
                 "PAYMENT_INTENT_FAILED",
                 "PAYMENT_INTENT_CANCELLED",
                 "PAYMENT_INTENT_DELETED",
+                "PRIVATE_RFQ_CREATED",
+                "PRIVATE_RFQ_REVEALED",
+                "PRIVATE_RFQ_SELECTED",
                 "RECEIVER_UPDATED",
                 "PAYIN_CREATED",
                 "PAYIN_UPDATED",
@@ -16282,6 +17295,9 @@
                 "PAYMENT_INTENT_FAILED",
                 "PAYMENT_INTENT_CANCELLED",
                 "PAYMENT_INTENT_DELETED",
+                "PRIVATE_RFQ_CREATED",
+                "PRIVATE_RFQ_REVEALED",
+                "PRIVATE_RFQ_SELECTED",
                 "RECEIVER_UPDATED",
                 "PAYIN_CREATED",
                 "PAYIN_UPDATED",
@@ -16370,6 +17386,9 @@
                 "PAYMENT_INTENT_FAILED",
                 "PAYMENT_INTENT_CANCELLED",
                 "PAYMENT_INTENT_DELETED",
+                "PRIVATE_RFQ_CREATED",
+                "PRIVATE_RFQ_REVEALED",
+                "PRIVATE_RFQ_SELECTED",
                 "RECEIVER_UPDATED",
                 "PAYIN_CREATED",
                 "PAYIN_UPDATED",
@@ -16466,6 +17485,9 @@
                 "PAYMENT_INTENT_FAILED",
                 "PAYMENT_INTENT_CANCELLED",
                 "PAYMENT_INTENT_DELETED",
+                "PRIVATE_RFQ_CREATED",
+                "PRIVATE_RFQ_REVEALED",
+                "PRIVATE_RFQ_SELECTED",
                 "RECEIVER_UPDATED",
                 "PAYIN_CREATED",
                 "PAYIN_UPDATED",
@@ -16549,6 +17571,9 @@
               "PAYMENT_INTENT_FAILED",
               "PAYMENT_INTENT_CANCELLED",
               "PAYMENT_INTENT_DELETED",
+              "PRIVATE_RFQ_CREATED",
+              "PRIVATE_RFQ_REVEALED",
+              "PRIVATE_RFQ_SELECTED",
               "RECEIVER_UPDATED",
               "PAYIN_CREATED",
               "PAYIN_UPDATED",
@@ -20335,6 +21360,9 @@
               "invalid_amount",
               "invalid_memo",
               "transaction_rejected",
+              "invalid_sub_rosa_round",
+              "sub_rosa_network_mismatch",
+              "private_rfq_state_invalid",
               "provider_error",
               "provider_unavailable",
               "quote_not_found",
