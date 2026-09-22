@@ -101,7 +101,7 @@ export class OfframpService {
   async createPayout(consumer: GatewayConsumer, dto: CreatePayoutDto) {
     const local = await this.consumers.resolve(consumer);
     const environment = this.blindpay.environmentFor(consumer);
-    await this.assertQuoteOwned(local.id, environment, dto.quote_id);
+    const quote = await this.assertQuoteOwned(local.id, environment, dto.quote_id);
     const body: BlindpayPayoutRequest = {
       quote_id: dto.quote_id,
       sender_wallet_address: dto.sender_wallet_address,
@@ -113,6 +113,7 @@ export class OfframpService {
       environment,
       dto.chain,
       body,
+      quote.executionKey,
     );
     const receiverId = await this.resolveReceiverLocalId(
       local.id,
@@ -193,7 +194,7 @@ export class OfframpService {
     consumerId: string,
     environment: BlindpayEnvironment,
     quote: BlindpayObject,
-  ): Promise<void> {
+  ): Promise<{ executionKey: string }> {
     const blindpayId = asString(quote.id);
     if (!blindpayId) {
       throw ApiError.badGateway(
@@ -237,6 +238,7 @@ export class OfframpService {
     ) {
       throw ApiError.notFound('Quote not found', ApiErrorCode.QuoteNotFound);
     }
+    return quote;
   }
 
   /**

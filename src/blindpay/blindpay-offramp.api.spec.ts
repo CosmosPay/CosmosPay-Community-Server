@@ -46,11 +46,12 @@ describe('BlindpayOfframpApi', () => {
       signed_transaction: 'AAAA',
     };
 
-    await api.createPayout('prod', 'solana', body);
+    await api.createPayout('prod', 'solana', body, '48b581d5-a18d-41a7-a3ff-ccfa8f8499fd');
 
     expect(client.post).toHaveBeenCalledWith(
       '/instances/in_test/payouts/solana',
       body,
+      { headers: { 'Idempotency-Key': '48b581d5-a18d-41a7-a3ff-ccfa8f8499fd' } },
     );
   });
 

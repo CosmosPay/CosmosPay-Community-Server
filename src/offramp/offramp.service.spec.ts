@@ -211,7 +211,7 @@ describe('OfframpService quote ownership', () => {
 
   it('executes a quote the caller owns', async () => {
     const { service, prisma, blindpay, sync } = makeService();
-    prisma.blindpayQuote.findUnique.mockResolvedValue(OWNED_QUOTE);
+    prisma.blindpayQuote.findUnique.mockResolvedValue({ ...OWNED_QUOTE, executionKey: '48b581d5-a18d-41a7-a3ff-ccfa8f8499fd' });
     blindpay.post.mockResolvedValue({ id: 'pa_1', receiver_id: null });
 
     await service.createPayout(CONSUMER, {
@@ -223,6 +223,7 @@ describe('OfframpService quote ownership', () => {
     expect(blindpay.post).toHaveBeenCalledWith(
       '/instances/in_test/payouts/evm',
       expect.objectContaining({ quote_id: 'qe_000000000001' }),
+      { headers: { 'Idempotency-Key': '48b581d5-a18d-41a7-a3ff-ccfa8f8499fd' } },
     );
     expect(sync.mirrorPayout).toHaveBeenCalled();
   });
