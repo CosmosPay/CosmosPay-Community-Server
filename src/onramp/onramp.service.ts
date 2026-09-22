@@ -76,7 +76,7 @@ export class OnrampService {
   async createPayin(consumer: GatewayConsumer, dto: CreatePayinDto) {
     const local = await this.consumers.resolve(consumer);
     const environment = this.blindpay.environmentFor(consumer);
-    await this.assertQuoteOwned(local.id, environment, dto.payin_quote_id);
+    await this.assertQuoteUsable(local.id, environment, dto.payin_quote_id);
     // One execution call for every destination network — the chain is determined
     // by the quote's wallet, not chosen here.
     const created = await this.blindpay.createPayin(environment, {
@@ -173,7 +173,7 @@ export class OnrampService {
       );
     }
     await this.prisma.blindpayQuote.create({
-      data: { consumerId, environment, blindpayId, kind: 'PAYIN' },
+      data: { consumerId, environment, blindpayId, kind: 'PAYIN', expiresAt: blindpayExpiry(quote.expires_at) },
     });
   }
 
@@ -188,7 +188,7 @@ export class OnrampService {
    * mirrored into their own records. 404 rather than 403 is deliberate; a 403
    * would confirm the id is live for somebody else.
    */
-  private async assertQuoteOwned(
+  private async assertQuoteUsable(
     consumerId: string,
     environment: BlindpayEnvironment,
     blindpayQuoteId: string,
@@ -203,6 +203,9 @@ export class OnrampService {
     // check rather than a separate error further upstream.
     if (!quote || quote.kind !== 'PAYIN' || quote.environment !== environment) {
       throw ApiError.notFound('Quote not found', ApiErrorCode.QuoteNotFound);
+    }
+    if (quote.expiresAt && quote.expiresAt.getTime() <= Date.now()) {
+      throw ApiError.badRequest(ApiErrorCode.QuoteExpired, 'This BlindPay quote has expired. Request a new quote.');
     }
   }
 
@@ -246,6 +249,11 @@ export class OnrampService {
     });
     return receiver?.id ?? null;
   }
+}
+
+function blindpayExpiry(value: unknown): Date | null {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return null;
+  return new Date(value < 10_000_000_000 ? value * 1000 : value);
 }
 
 /** Drops the two columns {@link PAYIN_READ_SELECT} adds for `findOne`'s own use. */

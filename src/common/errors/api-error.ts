@@ -74,6 +74,7 @@ export enum ApiErrorCode {
   ProviderError = 'provider_error',
   ProviderUnavailable = 'provider_unavailable',
   QuoteNotFound = 'quote_not_found',
+  QuoteExpired = 'quote_expired',
 
   // --- KYC ------------------------------------------------------------------
   KycStateInvalid = 'kyc_state_invalid',
