@@ -632,10 +632,13 @@ model BlindpayQuote {
   /// The upstream BlindPay quote id (`pq_…` for payins, `qu_…` for payouts).
   blindpayId  String
   kind        BlindpayQuoteKind
+  /// Stable UUID reused on every execution attempt for this one quote.
+  executionKey String @default(uuid())
 
   createdAt DateTime @default(now())
 
   @@unique([consumerId, blindpayId])
+  @@unique([executionKey])
   @@index([consumerId])
   @@map("blindpay_quote")
 }

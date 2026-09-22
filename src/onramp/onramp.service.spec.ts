@@ -178,6 +178,7 @@ describe('OnrampService quote ownership', () => {
       environment: 'dev',
       blindpayId: 'pq_000000000001',
       kind: 'PAYIN',
+      executionKey: '48b581d5-a18d-41a7-a3ff-ccfa8f8499fd',
     });
 
     await expect(
@@ -201,6 +202,7 @@ describe('OnrampService quote ownership', () => {
     expect(blindpay.post).toHaveBeenCalledWith(
       '/instances/in_test/payins/evm',
       { payin_quote_id: 'pq_000000000001' },
+      { headers: { 'Idempotency-Key': '48b581d5-a18d-41a7-a3ff-ccfa8f8499fd' } },
     );
     expect(sync.mirrorPayin).toHaveBeenCalled();
   });

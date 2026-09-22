@@ -32,11 +32,9 @@ describe('BlindpayOnrampApi', () => {
   it('executes every payin through the single /payins/evm route', async () => {
     const { api, client } = makeApi();
 
-    await api.createPayin('prod', { payin_quote_id: 'pq_1' });
+    await api.createPayin('prod', { payin_quote_id: 'pq_1' }, '48b581d5-a18d-41a7-a3ff-ccfa8f8499fd');
 
-    expect(client.post).toHaveBeenCalledWith('/instances/in_test/payins/evm', {
-      payin_quote_id: 'pq_1',
-    });
+    expect(client.post).toHaveBeenCalledWith('/instances/in_test/payins/evm', { payin_quote_id: 'pq_1' }, { headers: { 'Idempotency-Key': '48b581d5-a18d-41a7-a3ff-ccfa8f8499fd' } });
   });
 
   it('reads a payin by its BlindPay id', async () => {

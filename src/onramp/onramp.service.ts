@@ -76,12 +76,12 @@ export class OnrampService {
   async createPayin(consumer: GatewayConsumer, dto: CreatePayinDto) {
     const local = await this.consumers.resolve(consumer);
     const environment = this.blindpay.environmentFor(consumer);
-    await this.assertQuoteOwned(local.id, environment, dto.payin_quote_id);
+    const quote = await this.assertQuoteOwned(local.id, environment, dto.payin_quote_id);
     // One execution call for every destination network — the chain is determined
     // by the quote's wallet, not chosen here.
     const created = await this.blindpay.createPayin(environment, {
       payin_quote_id: dto.payin_quote_id,
-    });
+    }, quote.executionKey);
     const receiverId = await this.resolveReceiverLocalId(
       local.id,
       environment,
@@ -164,7 +164,7 @@ export class OnrampService {
     consumerId: string,
     environment: BlindpayEnvironment,
     quote: BlindpayObject,
-  ): Promise<void> {
+  ): Promise<{ executionKey: string }> {
     const blindpayId = asString(quote.id);
     if (!blindpayId) {
       throw ApiError.badGateway(
@@ -204,6 +204,7 @@ export class OnrampService {
     if (!quote || quote.kind !== 'PAYIN' || quote.environment !== environment) {
       throw ApiError.notFound('Quote not found', ApiErrorCode.QuoteNotFound);
     }
+    return quote;
   }
 
   private async resolveWalletBlindpayId(

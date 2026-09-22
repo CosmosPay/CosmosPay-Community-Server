@@ -38,11 +38,13 @@ export class BlindpayOnrampApi {
   createPayin(
     env: BlindpayEnvironment,
     body: { payin_quote_id: string },
+    idempotencyKey: string,
   ): Promise<BlindpayObject> {
     const instance = this.client.instance(env);
     return instance.post<BlindpayObject>(
       instance.instancePath('/payins/evm'),
       body,
+      { headers: { 'Idempotency-Key': idempotencyKey } },
     );
   }
 
