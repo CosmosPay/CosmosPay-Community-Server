@@ -214,6 +214,12 @@ Paths use the OpenAPI `{param}` form.
 | GET | `/v1/liquidity-pools/positions` | one of `liquidity:read`, `swaps:read` | ✓ |
 | POST | `/v1/liquidity-pools/withdraw` | one of `liquidity:write`, `swaps:write` | ✓ |
 | GET | `/v1/liquidity-pools/{poolId}` | one of `liquidity:read`, `swaps:read` | ✓ |
+| GET | `/v1/defindex/vaults` | one of `liquidity:read`, `swaps:read` | ✓ |
+| GET | `/v1/defindex/vaults/{vault}` | one of `liquidity:read`, `swaps:read` | ✓ |
+| GET | `/v1/defindex/vaults/{vault}/balance` | one of `liquidity:read`, `swaps:read` | ✓ |
+| POST | `/v1/defindex/vaults/{vault}/deposit` | one of `liquidity:write`, `swaps:write` | ✓ |
+| POST | `/v1/defindex/vaults/{vault}/withdraw` | one of `liquidity:write`, `swaps:write` | ✓ |
+| POST | `/v1/defindex/submit` | one of `liquidity:write`, `swaps:write` | ✓ |
 | GET | `/v1/logs` | `payments:read` |  |
 | GET | `/v1/logs/webhooks` | `webhooks:read` |  |
 | GET | `/v1/offramp/payouts` | `offramp:read` |  |
@@ -1746,6 +1752,9 @@ at least `DATABASE_URL` and `APISIX_GATEWAY_SECRET`.
 | `BLINDPAY_INSTANCE_ID_DEV` | when dev API key set | — | Development instance id (`in_...`) |
 | `BLINDPAY_WEBHOOK_SECRET_DEV` | when dev API key set | — | Svix secret of the development instance's webhook endpoint; same rules as `BLINDPAY_WEBHOOK_SECRET` |
 | `BLINDPAY_TIMEOUT_MS` | no | `15000` | BlindPay HTTP client timeout (ms) |
+| `DEFINDEX_API_KEY` | no | — | DeFindex server API key; empty disables DeFindex routes |
+| `DEFINDEX_BASE_URL` | no | `https://api.defindex.io` | DeFindex API base URL |
+| `DEFINDEX_TIMEOUT_MS` | no | `30000` | DeFindex HTTP timeout (ms) |
 | `KYC_REDIRECT_URL_WHITELIST` | no | — | Per-consumer KYC redirect host allow-list |
 | `RATE_LIMIT_ENABLED` | no | `true` | Per-address caps on the routes that spend XLM. Incident switch |
 | `RATE_LIMIT_PRUNE_INTERVAL_MS` | no | `600000` | Counter-window prune interval (ms, min 1000) |

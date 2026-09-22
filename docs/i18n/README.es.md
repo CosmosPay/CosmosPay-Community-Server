@@ -217,6 +217,12 @@ consola llega a ella. Las rutas usan la forma `{param}` de OpenAPI.
 | GET | `/v1/liquidity-pools/positions` | uno de `liquidity:read`, `swaps:read` | ✓ |
 | POST | `/v1/liquidity-pools/withdraw` | uno de `liquidity:write`, `swaps:write` | ✓ |
 | GET | `/v1/liquidity-pools/{poolId}` | uno de `liquidity:read`, `swaps:read` | ✓ |
+| GET | `/v1/defindex/vaults` | uno de `liquidity:read`, `swaps:read` | ✓ |
+| GET | `/v1/defindex/vaults/{vault}` | uno de `liquidity:read`, `swaps:read` | ✓ |
+| GET | `/v1/defindex/vaults/{vault}/balance` | uno de `liquidity:read`, `swaps:read` | ✓ |
+| POST | `/v1/defindex/vaults/{vault}/deposit` | uno de `liquidity:write`, `swaps:write` | ✓ |
+| POST | `/v1/defindex/vaults/{vault}/withdraw` | uno de `liquidity:write`, `swaps:write` | ✓ |
+| POST | `/v1/defindex/submit` | uno de `liquidity:write`, `swaps:write` | ✓ |
 | GET | `/v1/logs` | `payments:read` |  |
 | GET | `/v1/logs/webhooks` | `webhooks:read` |  |
 | GET | `/v1/offramp/payouts` | `offramp:read` |  |
@@ -1804,6 +1810,9 @@ Cada variable leída de `process.env` en `src/` se valida en el arranque mediant
 | `BLINDPAY_INSTANCE_ID_DEV` | si hay API key de desarrollo | — | Id de la instancia de desarrollo (`in_...`) |
 | `BLINDPAY_WEBHOOK_SECRET_DEV` | si hay API key de desarrollo | — | Secreto Svix del endpoint de webhook de la instancia de desarrollo; mismas reglas que `BLINDPAY_WEBHOOK_SECRET` |
 | `BLINDPAY_TIMEOUT_MS` | no | `15000` | Timeout del cliente HTTP de BlindPay (ms) |
+| `DEFINDEX_API_KEY` | no | — | Clave API de servidor de DeFindex; vacía deshabilita sus rutas |
+| `DEFINDEX_BASE_URL` | no | `https://api.defindex.io` | URL base de la API DeFindex |
+| `DEFINDEX_TIMEOUT_MS` | no | `30000` | Timeout HTTP de DeFindex (ms) |
 | `KYC_REDIRECT_URL_WHITELIST` | no | — | Lista de hosts permitidos por consumidor para las redirecciones de KYC |
 | `RATE_LIMIT_ENABLED` | no | `true` | Límites por dirección en las rutas que gastan XLM. Interruptor de incidentes |
 | `RATE_LIMIT_PRUNE_INTERVAL_MS` | no | `600000` | Intervalo de depuración de las ventanas del contador (ms, mín. 1000) |

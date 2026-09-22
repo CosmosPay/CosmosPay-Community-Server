@@ -327,6 +327,19 @@ class EnvironmentVariables {
   @Min(1)
   BLINDPAY_TIMEOUT_MS?: number;
 
+  @IsOptional()
+  @IsString()
+  DEFINDEX_API_KEY?: string;
+
+  @IsOptional()
+  @IsUrl(URL_OPTIONS)
+  DEFINDEX_BASE_URL?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  DEFINDEX_TIMEOUT_MS?: number;
+
   /**
    * Per-consumer KYC redirect_url host allow-list (issue #33). Optional at boot —
    * missing/empty means every consumer fails closed until configured. Shape:

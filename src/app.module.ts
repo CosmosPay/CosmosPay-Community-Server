@@ -31,6 +31,7 @@ import { OnrampModule } from '@/onramp/onramp.module';
 import { OfframpModule } from '@/offramp/offramp.module';
 import { PollarModule } from '@/pollar/pollar.module';
 import { CommonModule } from '@/common/common.module';
+import { DefindexModule } from '@/defindex/defindex.module';
 
 @Module({
   imports: [
@@ -48,6 +49,7 @@ import { CommonModule } from '@/common/common.module';
     PaymentIntentsModule,
     SwapsModule,
     LiquidityPoolsModule,
+    DefindexModule,
     // The asset registry: which (code, issuer) pairs we vouch for, per network.
     AssetsModule,
     // Background reconciler: flips swaps/LP ops to SUCCEEDED/FAILED/EXPIRED by
