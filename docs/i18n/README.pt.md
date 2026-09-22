@@ -217,6 +217,12 @@ console chega até ela. Os caminhos usam a forma `{param}` do OpenAPI.
 | GET | `/v1/liquidity-pools/positions` | um de `liquidity:read`, `swaps:read` | ✓ |
 | POST | `/v1/liquidity-pools/withdraw` | um de `liquidity:write`, `swaps:write` | ✓ |
 | GET | `/v1/liquidity-pools/{poolId}` | um de `liquidity:read`, `swaps:read` | ✓ |
+| GET | `/v1/defindex/vaults` | um de `liquidity:read`, `swaps:read` | ✓ |
+| GET | `/v1/defindex/vaults/{vault}` | um de `liquidity:read`, `swaps:read` | ✓ |
+| GET | `/v1/defindex/vaults/{vault}/balance` | um de `liquidity:read`, `swaps:read` | ✓ |
+| POST | `/v1/defindex/vaults/{vault}/deposit` | um de `liquidity:write`, `swaps:write` | ✓ |
+| POST | `/v1/defindex/vaults/{vault}/withdraw` | um de `liquidity:write`, `swaps:write` | ✓ |
+| POST | `/v1/defindex/submit` | um de `liquidity:write`, `swaps:write` | ✓ |
 | GET | `/v1/logs` | `payments:read` |  |
 | GET | `/v1/logs/webhooks` | `webhooks:read` |  |
 | GET | `/v1/offramp/payouts` | `offramp:read` |  |
@@ -1772,6 +1778,9 @@ Toda variável lida de `process.env` em `src/` é validada no boot por
 | `BLINDPAY_INSTANCE_ID_DEV` | quando a API key de dev estiver definida | — | Id da instância de desenvolvimento (`in_...`) |
 | `BLINDPAY_WEBHOOK_SECRET_DEV` | quando a API key de dev estiver definida | — | Segredo Svix do endpoint de webhook da instância de desenvolvimento; mesmas regras de `BLINDPAY_WEBHOOK_SECRET` |
 | `BLINDPAY_TIMEOUT_MS` | não | `15000` | Timeout do client HTTP do BlindPay (ms) |
+| `DEFINDEX_API_KEY` | não | — | Chave de API de servidor DeFindex; vazia desativa as rotas |
+| `DEFINDEX_BASE_URL` | não | `https://api.defindex.io` | URL base da API DeFindex |
+| `DEFINDEX_TIMEOUT_MS` | não | `30000` | Timeout HTTP DeFindex (ms) |
 | `KYC_REDIRECT_URL_WHITELIST` | não | — | Allow-list por consumer de hosts de redirecionamento do KYC |
 | `RATE_LIMIT_ENABLED` | não | `true` | Limites por endereço nas rotas que gastam XLM. Chave de incidente |
 | `RATE_LIMIT_PRUNE_INTERVAL_MS` | não | `600000` | Intervalo de limpeza das janelas do contador (ms, mín. 1000) |

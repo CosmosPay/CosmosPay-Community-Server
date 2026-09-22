@@ -163,6 +163,11 @@ export interface AppConfig {
     timeoutMs: number;
     instances: Record<BlindpayEnvironment, BlindpayInstanceConfig>;
   };
+  defindex: {
+    apiKey: string;
+    baseUrl: string;
+    timeoutMs: number;
+  };
   rateLimit: {
     /**
      * Master switch for `@RateLimit`. On by default — the routes it guards spend
@@ -386,6 +391,11 @@ export default (): AppConfig => ({
         webhookSecret: process.env.BLINDPAY_WEBHOOK_SECRET_DEV ?? '',
       },
     },
+  },
+  defindex: {
+    apiKey: process.env.DEFINDEX_API_KEY ?? '',
+    baseUrl: (process.env.DEFINDEX_BASE_URL ?? 'https://api.defindex.io').replace(/\/+$/, ''),
+    timeoutMs: parseInt(process.env.DEFINDEX_TIMEOUT_MS ?? '30000', 10),
   },
   rateLimit: {
     enabled:
