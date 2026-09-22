@@ -632,11 +632,13 @@ model BlindpayQuote {
   /// The upstream BlindPay quote id (`pq_…` for payins, `qu_…` for payouts).
   blindpayId  String
   kind        BlindpayQuoteKind
+  expiresAt   DateTime?
 
   createdAt DateTime @default(now())
 
   @@unique([consumerId, blindpayId])
   @@index([consumerId])
+  @@index([expiresAt])
   @@map("blindpay_quote")
 }
 

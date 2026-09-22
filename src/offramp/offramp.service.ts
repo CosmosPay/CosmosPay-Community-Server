@@ -82,7 +82,7 @@ export class OfframpService {
   async authorize(consumer: GatewayConsumer, dto: AuthorizePayoutDto) {
     const local = await this.consumers.resolve(consumer);
     const environment = this.blindpay.environmentFor(consumer);
-    await this.assertQuoteOwned(local.id, environment, dto.quote_id);
+    await this.assertQuoteUsable(local.id, environment, dto.quote_id);
     const res = await this.blindpay.authorizePayout(environment, dto.chain, {
       quote_id: dto.quote_id,
       sender_wallet_address: dto.sender_wallet_address,
@@ -101,7 +101,7 @@ export class OfframpService {
   async createPayout(consumer: GatewayConsumer, dto: CreatePayoutDto) {
     const local = await this.consumers.resolve(consumer);
     const environment = this.blindpay.environmentFor(consumer);
-    await this.assertQuoteOwned(local.id, environment, dto.quote_id);
+    await this.assertQuoteUsable(local.id, environment, dto.quote_id);
     const body: BlindpayPayoutRequest = {
       quote_id: dto.quote_id,
       sender_wallet_address: dto.sender_wallet_address,
@@ -202,7 +202,7 @@ export class OfframpService {
       );
     }
     await this.prisma.blindpayQuote.create({
-      data: { consumerId, environment, blindpayId, kind: 'PAYOUT' },
+      data: { consumerId, environment, blindpayId, kind: 'PAYOUT', expiresAt: blindpayExpiry(quote.expires_at) },
     });
   }
 
@@ -217,7 +217,7 @@ export class OfframpService {
    * 404 rather than 403 is deliberate; a 403 would confirm the id is live for
    * somebody else.
    */
-  private async assertQuoteOwned(
+  private async assertQuoteUsable(
     consumerId: string,
     environment: BlindpayEnvironment,
     blindpayQuoteId: string,
@@ -236,6 +236,9 @@ export class OfframpService {
       quote.environment !== environment
     ) {
       throw ApiError.notFound('Quote not found', ApiErrorCode.QuoteNotFound);
+    }
+    if (quote.expiresAt && quote.expiresAt.getTime() <= Date.now()) {
+      throw ApiError.badRequest(ApiErrorCode.QuoteExpired, 'This BlindPay quote has expired. Request a new quote.');
     }
   }
 
@@ -304,6 +307,11 @@ export class OfframpService {
     });
     return receiver?.id ?? null;
   }
+}
+
+function blindpayExpiry(value: unknown): Date | null {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return null;
+  return new Date(value < 10_000_000_000 ? value * 1000 : value);
 }
 
 /** Drops the two columns {@link PAYOUT_READ_SELECT} adds for `findOne`'s own use. */
