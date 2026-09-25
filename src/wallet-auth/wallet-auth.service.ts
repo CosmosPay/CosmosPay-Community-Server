@@ -816,7 +816,7 @@ export class WalletAuthService {
     code: string,
     expiresAt: Date,
   ): Promise<void> {
-    await this.postToConsole('/wallet-auth/login-code', {
+    await this.postToConsole('/wallet/console/login-code', {
       email,
       name,
       code,
@@ -844,7 +844,7 @@ export class WalletAuthService {
     prod: string | null;
   }> {
     const answer = (await this.postToConsole(
-      '/wallet-auth/provision',
+      '/wallet/console/provision',
       input,
     )) as {
       organizationId?: unknown;

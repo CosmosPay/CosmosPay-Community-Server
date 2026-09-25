@@ -376,7 +376,7 @@ describe('WalletAuthService', () => {
       await service.startEmail({ email: EMAIL });
 
       const [url, init] = fetchMock.mock.calls[0];
-      expect(url).toBe('https://console.example.com/wallet-auth/login-code');
+      expect(url).toBe('https://console.example.com/wallet/console/login-code');
       expect(JSON.parse(init.body).code).toMatch(/^\d{6}$/);
       expect(init.headers['x-cosmos-internal']).toBe('1');
     });
@@ -601,7 +601,7 @@ describe('WalletAuthService', () => {
         keys: { dev: 'k_dev', prod: 'k_prod' },
       });
       expect(fetchMock.mock.calls[0][0]).toBe(
-        'https://console.example.com/wallet-auth/provision',
+        'https://console.example.com/wallet/console/provision',
       );
     });
   });
