@@ -9,6 +9,7 @@ import {
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { AppConfig } from '@/config/configuration';
 import { PrismaService } from '@/prisma/prisma.service';
+import { OidcService } from '@/common/oidc/oidc.service';
 import { WalletAuthService } from '@/wallet-auth/wallet-auth.service';
 import { LOGIN_CODE_MAX_ATTEMPTS } from '@/wallet-auth/wallet-auth.constants';
 import {
@@ -46,6 +47,13 @@ const SETTINGS = {
   consoleSecret: 'console-secret',
   google: { clientId: 'gid', clientSecret: 'gsecret' },
   github: { clientId: '', clientSecret: '' },
+  oidc: { issuer: '', clientId: '', clientSecret: '' },
+  signersHorizonUrl: 'https://horizon.example.com',
+  sponsor: {
+    secret: '',
+    networkPassphrase: 'Test SDF Network ; September 2015',
+    horizonUrl: 'https://horizon.example.com',
+  },
   timeoutMs: 1000,
   sweep: { enabled: true, intervalMs: 60_000 },
 };
@@ -62,6 +70,8 @@ function makePrisma() {
     } as Mocked,
     walletLoginCode: {
       create: jest.fn(),
+      // Nothing sent today unless a test says otherwise.
+      count: jest.fn().mockResolvedValue(0),
       findFirst: jest.fn(),
       findUnique: jest.fn(),
       update: jest.fn(),
@@ -84,11 +94,13 @@ function makeService(settings: Partial<typeof SETTINGS> = {}) {
   const config = {
     get: jest.fn().mockReturnValue({ ...SETTINGS, ...settings }),
   } as unknown as ConfigService<AppConfig, true>;
+  const oidc = { verify: jest.fn(), discover: jest.fn() };
   const service = new WalletAuthService(
     prisma as unknown as PrismaService,
     config,
+    oidc as unknown as OidcService,
   );
-  return { service, prisma };
+  return { service, prisma, oidc };
 }
 
 /** The console hop always answers, unless a test says otherwise. */
@@ -247,7 +259,8 @@ describe('WalletAuthService', () => {
 
       expect(prisma.walletAuthHandshake.updateMany).toHaveBeenCalledWith({
         where: { state: 'st', status: WalletAuthHandshakeStatus.AUTHORIZED },
-        data: { status: WalletAuthHandshakeStatus.REDEEMED },
+        // The ID token leaves the row in the same write that burns it.
+        data: { status: WalletAuthHandshakeStatus.REDEEMED, idToken: null },
       });
     });
 
@@ -390,6 +403,19 @@ describe('WalletAuthService', () => {
       await expect(service.startEmail({ email: EMAIL })).rejects.toMatchObject({
         code: ApiErrorCode.Misconfigured,
       });
+    });
+  });
+
+  describe('startEmail daily cap', () => {
+    /* A per-minute cooldown alone is thousands of blind guesses a day at one inbox. */
+    it('refuses past the daily total, even with the cooldown clear', async () => {
+      const { service, prisma } = makeService();
+      prisma.walletLoginCode.findFirst.mockResolvedValue(null);
+      prisma.walletLoginCode.count.mockResolvedValue(10);
+      await expect(service.startEmail({ email: EMAIL })).rejects.toMatchObject({
+        code: ApiErrorCode.WalletLoginCodeCooldown,
+      });
+      expect(prisma.walletLoginCode.create).not.toHaveBeenCalled();
     });
   });
 

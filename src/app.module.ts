@@ -26,6 +26,7 @@ import { ProductsModule } from '@/products/products.module';
 import { CustomersModule } from '@/customers/customers.module';
 import { AliasesModule } from '@/aliases/aliases.module';
 import { WalletAuthModule } from '@/wallet-auth/wallet-auth.module';
+import { RecoveryModule } from '@/recovery/recovery.module';
 import { BlindpayModule } from '@/blindpay/blindpay.module';
 import { KycModule } from '@/kyc/kyc.module';
 import { OnrampModule } from '@/onramp/onramp.module';
@@ -66,6 +67,9 @@ import { CommonModule } from '@/common/common.module';
     CustomersModule,
     AliasesModule,
     WalletAuthModule,
+    // SEP-10 + SEP-30: this deployment as one of the two recovery servers, when
+    // RECOVERY_ROLE says so. Inert (404) everywhere else.
+    RecoveryModule,
     // BlindPay rails: onramp / offramp / KYC. BlindpayModule is global and hosts
     // the shared client + inbound webhook endpoint; the feature modules below use
     // it. OnrampModule imports KycModule (receiver resolution).

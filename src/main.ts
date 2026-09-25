@@ -8,6 +8,7 @@ import { AppModule } from '@/app.module';
 import { AppConfig } from '@/config/configuration';
 import { AllExceptionsFilter } from '@/common/filters/all-exceptions.filter';
 import { setupSwagger } from '@/swagger';
+import { sepCors } from '@/recovery/sep-cors';
 
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
@@ -35,6 +36,11 @@ async function bootstrap(): Promise<void> {
 
   // Security headers. The service sits behind APISIX, but defense in depth.
   app.use(helmet());
+
+  // The standard endpoints (SEP-1/10/30) are read by browser wallets on any
+  // origin, and both specs require open CORS. After helmet, so it can relax the
+  // cross-origin resource policy helmet sets for exactly these paths.
+  app.use(sepCors);
 
   // We trust the gateway's X-Forwarded-* headers for client IP / proto.
   app.set('trust proxy', 1);

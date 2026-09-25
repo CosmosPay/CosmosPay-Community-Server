@@ -3,6 +3,7 @@ import {
   Controller,
   Get,
   Headers,
+  HttpCode,
   Param,
   Post,
   Put,
@@ -33,6 +34,8 @@ import {
   WALLET_AUTH_EMAIL_RATE_LIMIT,
   WALLET_AUTH_FINISH_RATE_LIMIT,
   WALLET_AUTH_POLL_RATE_LIMIT,
+  WALLET_RECOVERY_SETUP_GLOBAL_RATE_LIMIT,
+  WALLET_RECOVERY_SETUP_RATE_LIMIT,
 } from '@/wallet-auth/wallet-auth.constants';
 import { WalletAuthService } from '@/wallet-auth/wallet-auth.service';
 import { callbackPage } from '@/wallet-auth/wallet-auth-page';
@@ -40,6 +43,7 @@ import {
   ClaimWalletOauthDto,
   FinishWalletSignInDto,
   ReplaceWalletBackupDto,
+  SponsorRecoverySetupDto,
   StartWalletEmailDto,
   StartWalletOauthDto,
   VerifyWalletEmailDto,
@@ -54,6 +58,7 @@ import {
   WalletCodeInvalidEntity,
   WalletEmailStartedEntity,
   WalletOauthStartedEntity,
+  WalletRecoverySetupEntity,
   WalletSignInFinishedEntity,
 } from '@/wallet-auth/entities/wallet-auth.entity';
 
@@ -352,6 +357,58 @@ export class WalletBackupController {
   })
   replaceBackup(@Body() dto: ReplaceWalletBackupDto) {
     return this.walletAuth.replaceBackupBox(dto);
+  }
+
+  /**
+   * `POST /v1/wallet/recovery/setup` — the operator pays the reserve of an
+   * account's two SEP-30 signers and hands back the transaction that adds them.
+   *
+   * Here, on the main deployment, and never on a recovery server: the sponsor
+   * key is the operator's money, and the recovery servers are the two hosts that
+   * must not also be able to spend it.
+   */
+  @Post('recovery/setup')
+  @HttpCode(200)
+  @AllowPublicKey()
+  @RequirePermissions('payments:write')
+  @RateLimit(
+    WALLET_RECOVERY_SETUP_RATE_LIMIT,
+    WALLET_RECOVERY_SETUP_GLOBAL_RATE_LIMIT,
+  )
+  @ApiOperation({
+    summary: "Sponsor the reserve of an account's two recovery signers",
+    description:
+      'Send the session token as `Authorization: Bearer`. The signature covers ' +
+      'exactly:\n\n' +
+      '```\n' +
+      'Cosmos Pay Wallet recovery setup\n' +
+      'account: {stellarAddress}\n' +
+      'signers: {signerA},{signerB}\n' +
+      'at: {signedAt}\n' +
+      '```\n\n' +
+      'The envelope comes back signed by the sponsor only. Once per account: ' +
+      'refused when the account already has a signer besides its master key.',
+  })
+  @ApiHeader({
+    name: 'Authorization',
+    description: 'Bearer {sessionToken}',
+    required: true,
+  })
+  @ApiOkResponse({ type: WalletRecoverySetupEntity })
+  @ApiErrorResponse({ status: 401, codes: [ApiErrorCode.WalletSessionInvalid] })
+  @ApiErrorResponse({
+    status: 400,
+    codes: [ApiErrorCode.WalletSignatureInvalid],
+  })
+  @ApiErrorResponse({
+    status: 409,
+    codes: [ApiErrorCode.WalletRecoverySetupRefused],
+  })
+  sponsorRecoverySetup(
+    @Headers('authorization') authorization: string | undefined,
+    @Body() dto: SponsorRecoverySetupDto,
+  ) {
+    return this.walletAuth.sponsorRecoverySetup(bearer(authorization), dto);
   }
 }
 

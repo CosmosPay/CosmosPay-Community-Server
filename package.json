@@ -32,7 +32,8 @@
     "readme:check": "ts-node -r tsconfig-paths/register --transpile-only scripts/check-readme-routes.ts",
     "webhooks:audit-destinations": "ts-node -r tsconfig-paths/register --transpile-only scripts/mark-blocked-webhook-endpoints.ts",
     "seed:request-logs": "ts-node -r tsconfig-paths/register --transpile-only scripts/seed-request-logs.ts",
-    "assets:verify": "ts-node -r tsconfig-paths/register --transpile-only scripts/verify-assets.ts"
+    "assets:verify": "ts-node -r tsconfig-paths/register --transpile-only scripts/verify-assets.ts",
+    "import:platform-wallet-data": "ts-node -r tsconfig-paths/register --transpile-only scripts/import-platform-wallet-data.ts"
   },
   "dependencies": {
     "@nestjs/common": "^12.0.1",

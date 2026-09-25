@@ -1437,6 +1437,19 @@ model WalletAuthHandshake {
   /// The provider's own stable id for the person (`sub`, or GitHub's numeric id).
   subject String?
 
+  /// OIDC providers only (Authentik): the PKCE verifier THIS service presents at
+  /// the provider's token endpoint, and the nonce the ID token must echo. Distinct
+  /// from `codeChallenge`, which binds the handshake to the DEVICE: this pair binds
+  /// the provider's answer to this handshake. Cleared when the handshake leaves
+  /// PENDING.
+  providerVerifier String?
+  nonce            String?
+
+  /// The provider's ID token, kept only until the handshake is redeemed. It is the
+  /// credential the recovery servers accept (`src/recovery/`), so it is released to
+  /// the device only after the inbox has been proven too — see `claimOauth`.
+  idToken String?
+
   /// Why it failed, when it did. A short token the wallet maps to a sentence —
   /// never prose, which cannot be translated on the device.
   failure String?
@@ -1466,6 +1479,11 @@ model WalletLoginCode {
   /// records what actually proved the email.
   via WalletAuthMethod @default(EMAIL)
 
+  /// The OIDC ID token of the provider sign-in that led here, carried until the
+  /// code is answered and cleared the moment it is. It is released only with the
+  /// inbox proof, never on the provider's word alone.
+  idToken String?
+
   /// SHA-256 of the claim token the wallet keeps. The raw token never lands here.
   claimHash String @unique
 
@@ -1492,6 +1510,8 @@ model WalletLoginCode {
 enum WalletAuthMethod {
   GOOGLE
   GITHUB
+  /// The operator's OpenID Connect provider — Authentik.
+  AUTHENTIK
   /// A code typed from their own inbox.
   EMAIL
 }
@@ -1500,6 +1520,10 @@ enum WalletAuthMethod {
 enum WalletAuthProvider {
   GOOGLE
   GITHUB
+  /// Any OpenID Connect provider the operator configures; Authentik in ours. Its
+  /// ID token is verified against the provider's published keys, so this service
+  /// holds no secret that could mint one.
+  AUTHENTIK
 }
 
 enum WalletAuthHandshakeStatus {
@@ -1522,4 +1546,109 @@ enum WalletLoginCodeStatus {
   /// Too many wrong codes. Terminal — a new code means a new row.
   LOCKED
   EXPIRED
+}
+
+/// SEP-30 — an account one recovery server has agreed to help recover.
+///
+/// Each of the two recovery deployments has its own database; `role` is kept on
+/// the row anyway, so two roles pointed at one database by mistake still cannot
+/// read each other's registrations.
+model RecoveryAccount {
+  id String @id @default(cuid())
+
+  /// "a" | "b" — which server registered this account.
+  role String
+
+  /// The Stellar account being protected (G…).
+  address String
+
+  /// "public" | "testnet" | "other": a signer is an entry on ONE ledger.
+  network String
+
+  methods RecoveryAuthMethod[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([role, address])
+  @@map("recovery_account")
+}
+
+/// One way of proving you may recover an account. Stored flat, so "which
+/// accounts can this inbox recover?" is an index lookup, not a scan of JSON.
+model RecoveryAuthMethod {
+  id String @id @default(cuid())
+
+  accountId String
+  account   RecoveryAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  /// SEP-30 identity role: "owner" | "sender" | "receiver".
+  identityRole String
+
+  /// "email" — the only type this server registers.
+  type String
+
+  /// Normalized at write time: an email lowercased and trimmed.
+  value String
+
+  createdAt DateTime @default(now())
+
+  @@index([accountId])
+  @@index([type, value])
+  @@map("recovery_auth_method")
+}
+
+/// A six-digit code a recovery server emailed ITSELF, to prove an inbox without
+/// trusting anyone else's word for it — the fallback when no OIDC provider is
+/// configured. Only hashes are stored.
+model RecoveryEmailCode {
+  id String @id @default(cuid())
+
+  role  String
+  email String
+
+  /// SHA-256 of the claim token the client keeps, and of the emailed code.
+  claimHash String @unique
+  codeHash  String
+
+  attempts Int                     @default(0)
+  status   RecoveryEmailCodeStatus @default(PENDING)
+
+  sentAt    DateTime @default(now())
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([role, email])
+  @@index([status, expiresAt])
+  @@map("recovery_email_code")
+}
+
+enum RecoveryEmailCodeStatus {
+  PENDING
+  /// Answered correctly; an identity token was issued. Terminal.
+  CLAIMED
+  /// Too many wrong codes. Terminal.
+  LOCKED
+  EXPIRED
+}
+
+/// An OIDC ID token this server has already exchanged, by hash.
+///
+/// Single use PER SERVER: the same login is meant to be presented to both
+/// recovery servers — that is what one sign-in proving the inbox to two
+/// independent parties looks like — but never twice to the same one, so a token
+/// lifted from a log after the fact buys nothing here.
+model RecoveryUsedIdToken {
+  id String @id @default(cuid())
+
+  role      String
+  tokenHash String
+
+  /// The token's own `exp`: after it the row proves nothing and is swept.
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@unique([role, tokenHash])
+  @@index([expiresAt])
+  @@map("recovery_used_id_token")
 }

@@ -68,3 +68,17 @@ export const DEFAULT_WALLET_AUTH_TIMEOUT_MS = 10_000;
 
 /** Sweeper cadence for expiring stale sign-in handshakes and login codes. */
 export const DEFAULT_WALLET_AUTH_SWEEP_INTERVAL_MS = 60_000;
+
+/** How long a recovery server waits on Horizon, the OIDC provider or the mailer. */
+export const DEFAULT_RECOVERY_TIMEOUT_MS = 10_000;
+
+/** Sweeper cadence for expired recovery codes and spent ID-token records. */
+export const DEFAULT_RECOVERY_SWEEP_INTERVAL_MS = 60_000;
+
+/**
+ * Stellar's public network passphrase, spelled out rather than imported so this
+ * data-only module takes no runtime dependency on the SDK. Pinned against the
+ * SDK's `Networks.PUBLIC` in `identity-env.spec.ts`.
+ */
+export const NETWORK_PASSPHRASE_PUBLIC =
+  'Public Global Stellar Network ; September 2015';

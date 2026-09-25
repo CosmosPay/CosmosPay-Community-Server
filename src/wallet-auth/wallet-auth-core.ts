@@ -36,6 +36,7 @@ import {
 export const PROVIDER_WIRE = {
   [WalletAuthProvider.GOOGLE]: 'google',
   [WalletAuthProvider.GITHUB]: 'github',
+  [WalletAuthProvider.AUTHENTIK]: 'authentik',
 } as const satisfies Record<WalletAuthProvider, string>;
 
 export type ProviderWire = (typeof PROVIDER_WIRE)[WalletAuthProvider];
@@ -51,6 +52,7 @@ export type ProviderWire = (typeof PROVIDER_WIRE)[WalletAuthProvider];
 const WIRE_TO_PROVIDER = new Map<string, WalletAuthProvider>([
   ['google', WalletAuthProvider.GOOGLE],
   ['github', WalletAuthProvider.GITHUB],
+  ['authentik', WalletAuthProvider.AUTHENTIK],
 ]);
 
 /** The provider a wire value names, or null. Never throws on caller input. */
@@ -63,9 +65,19 @@ export function providerFromWire(value: string): WalletAuthProvider | null {
 export function methodOfProvider(
   provider: WalletAuthProvider,
 ): WalletAuthMethod {
-  return provider === WalletAuthProvider.GOOGLE
-    ? WalletAuthMethod.GOOGLE
-    : WalletAuthMethod.GITHUB;
+  switch (provider) {
+    case WalletAuthProvider.GOOGLE:
+      return WalletAuthMethod.GOOGLE;
+    case WalletAuthProvider.GITHUB:
+      return WalletAuthMethod.GITHUB;
+    case WalletAuthProvider.AUTHENTIK:
+      return WalletAuthMethod.AUTHENTIK;
+  }
+}
+
+/** Is this the operator's OpenID Connect provider, whose endpoints come from discovery? */
+export function isOidcProvider(provider: WalletAuthProvider): boolean {
+  return provider === WalletAuthProvider.AUTHENTIK;
 }
 
 export interface ProviderEndpoints {
@@ -82,24 +94,31 @@ export interface ProviderEndpoints {
   emails?: string;
 }
 
-export const PROVIDER_ENDPOINTS: Record<WalletAuthProvider, ProviderEndpoints> =
-  {
-    [WalletAuthProvider.GOOGLE]: {
-      authorize: 'https://accounts.google.com/o/oauth2/v2/auth',
-      token: 'https://oauth2.googleapis.com/token',
-      scope: 'openid email profile',
-      profile: 'https://openidconnect.googleapis.com/v1/userinfo',
-    },
-    [WalletAuthProvider.GITHUB]: {
-      authorize: 'https://github.com/login/oauth/authorize',
-      token: 'https://github.com/login/oauth/access_token',
-      // `user:email` is what exposes the VERIFIED flag; the public profile email
-      // carries none.
-      scope: 'read:user user:email',
-      profile: 'https://api.github.com/user',
-      emails: 'https://api.github.com/user/emails',
-    },
-  };
+/**
+ * The two providers whose endpoints are fixed. Authentik's are not — they are
+ * whatever its discovery document says — so it is absent here by design and
+ * `authorizationUrl` takes them as an argument for it.
+ */
+export const PROVIDER_ENDPOINTS: Record<
+  Exclude<WalletAuthProvider, 'AUTHENTIK'>,
+  ProviderEndpoints
+> = {
+  [WalletAuthProvider.GOOGLE]: {
+    authorize: 'https://accounts.google.com/o/oauth2/v2/auth',
+    token: 'https://oauth2.googleapis.com/token',
+    scope: 'openid email profile',
+    profile: 'https://openidconnect.googleapis.com/v1/userinfo',
+  },
+  [WalletAuthProvider.GITHUB]: {
+    authorize: 'https://github.com/login/oauth/authorize',
+    token: 'https://github.com/login/oauth/access_token',
+    // `user:email` is what exposes the VERIFIED flag; the public profile email
+    // carries none.
+    scope: 'read:user user:email',
+    profile: 'https://api.github.com/user',
+    emails: 'https://api.github.com/user/emails',
+  },
+};
 
 /**
  * Where a provider sends the person back.
@@ -120,11 +139,47 @@ export function callbackUrl(
   return `${base}/v1/wallet/auth/oauth/callback/${PROVIDER_WIRE[provider]}`;
 }
 
+/** What an OpenID Connect authorization request carries beyond the basics. */
+export interface OidcAuthorization {
+  /** From the provider's discovery document. */
+  authorizationEndpoint: string;
+  /** base64url(SHA-256(providerVerifier)) — PKCE between THIS service and the provider. */
+  codeChallenge: string;
+  /** Echoed inside the ID token; binds the provider's answer to this handshake. */
+  nonce: string;
+}
+
+/** The scopes an OIDC sign-in asks for: an identity, a verified email, a name. */
+export const OIDC_SCOPE = 'openid email profile';
+
 /** The URL the wallet opens in a browser. */
 export function authorizationUrl(
   provider: WalletAuthProvider,
-  input: { clientId: string; redirectUri: string; state: string },
+  input: {
+    clientId: string;
+    redirectUri: string;
+    state: string;
+    oidc?: OidcAuthorization;
+  },
 ): string {
+  if (provider === WalletAuthProvider.AUTHENTIK) {
+    if (!input.oidc)
+      throw new Error('an OIDC sign-in needs its discovery endpoints');
+    const q = new URLSearchParams({
+      client_id: input.clientId,
+      redirect_uri: input.redirectUri,
+      response_type: 'code',
+      scope: OIDC_SCOPE,
+      state: input.state,
+      nonce: input.oidc.nonce,
+      code_challenge: input.oidc.codeChallenge,
+      code_challenge_method: 'S256',
+      // Always ask. A wallet signed in with whichever session the browser
+      // happened to hold is how a second wallet ends up under the wrong person.
+      prompt: 'login',
+    });
+    return `${input.oidc.authorizationEndpoint}?${q.toString()}`;
+  }
   const ep = PROVIDER_ENDPOINTS[provider];
   const q = new URLSearchParams({
     client_id: input.clientId,
@@ -162,6 +217,17 @@ export function normalizeEmail(email: string): string {
 }
 
 /* ---------------------------------- PKCE ---------------------------------- */
+
+/** A PKCE verifier and its S256 challenge, for this service's own leg to a provider. */
+export function newPkcePair(): { verifier: string; challenge: string } {
+  const verifier = randomBytes(32).toString('base64url');
+  return {
+    verifier,
+    challenge: createHash('sha256')
+      .update(verifier, 'ascii')
+      .digest('base64url'),
+  };
+}
 
 /**
  * RFC 7636 S256: does `verifier` hash to `challenge`?
@@ -367,6 +433,27 @@ export function backupMessage(
     `Cosmos Pay Wallet backup\n` +
     `account: ${stellarAddress}\n` +
     `box: ${sha256Hex(box)}\n` +
+    `at: ${signedAt}`
+  );
+}
+
+/**
+ * The challenge for asking the operator to sponsor an account's recovery
+ * signers (`POST /v1/wallet/recovery/setup`). Its own first line, so a signature
+ * made for a sign-in cannot be spent on a sponsorship and the other way round.
+ *
+ * Same contract as the two above: the wallet builds it byte for byte in its
+ * `src/lib/recovery.ts`, and both sides pin the literal in a test.
+ */
+export function recoverySetupMessage(
+  stellarAddress: string,
+  signers: readonly string[],
+  signedAt: string,
+): string {
+  return (
+    `Cosmos Pay Wallet recovery setup\n` +
+    `account: ${stellarAddress}\n` +
+    `signers: ${[...signers].join(',')}\n` +
     `at: ${signedAt}`
   );
 }

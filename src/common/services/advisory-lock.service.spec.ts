@@ -119,7 +119,7 @@ describe('AdvisoryLockService', () => {
     expect(new Set(ids).size).toBe(ids.length);
     expect(ids).toEqual([
       881_001, 881_002, 881_003, 881_004, 881_005, 881_006, 881_007, 881_008,
-      881_009,
+      881_009, 881_010,
     ]);
   });
 });

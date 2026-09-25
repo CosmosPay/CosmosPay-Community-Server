@@ -101,4 +101,5 @@ export enum AdvisoryLockKey {
   PollarWalletProvisionSweeper = 881_007,
   AliasChallengeSweeper = 881_008,
   WalletAuthSweeper = 881_009,
+  RecoverySweeper = 881_010,
 }

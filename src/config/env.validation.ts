@@ -29,6 +29,7 @@ import {
   DEFAULT_SWAP_SLIPPAGE_BPS,
 } from '@/config/config.constants';
 import { POLLAR_KEY_PREFIX } from '@/config/pollar-key-prefix';
+import { assertIdentityConfigConsistent } from '@/config/identity-env';
 import { decodeSvixSecret } from '@/blindpay/blindpay-signature';
 import { SVIX_MIN_SECRET_BYTES } from '@/blindpay/blindpay.constants';
 
@@ -548,6 +549,8 @@ export function validateEnv(config: Record<string, unknown>) {
   assertBlindpayInstancesConsistent(validated);
 
   assertPollarKeysConsistent(validated);
+
+  assertIdentityConfigConsistent(config);
 
   return validated;
 }

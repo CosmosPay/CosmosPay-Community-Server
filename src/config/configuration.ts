@@ -8,8 +8,11 @@ import {
   DEFAULT_POLLAR_SWEEP_INTERVAL_MS,
   DEFAULT_POLLAR_TIMEOUT_MS,
   DEFAULT_RATE_LIMIT_PRUNE_INTERVAL_MS,
+  DEFAULT_RECOVERY_SWEEP_INTERVAL_MS,
+  DEFAULT_RECOVERY_TIMEOUT_MS,
   DEFAULT_WALLET_AUTH_SWEEP_INTERVAL_MS,
   DEFAULT_WALLET_AUTH_TIMEOUT_MS,
+  NETWORK_PASSPHRASE_PUBLIC,
 } from '@/config/config.constants';
 import {
   parseRedirectUrlWhitelist,
@@ -220,10 +223,11 @@ export interface AppConfig {
      */
     publicBaseUrl: string;
     /**
-     * Seals the session token a finished sign-in hands the wallet. Defaults to
-     * the gateway secret, which every deployment already sets — a separate
-     * variable nobody knew about would mean tokens sealed under the empty
-     * string, and `sealed-box` refuses that rather than doing it.
+     * Seals the session token a finished sign-in hands the wallet. Its OWN
+     * secret, required at boot whenever a door is configured
+     * (`identity-env.ts`). It used to fall back to the gateway secret, which the
+     * developer platform also holds — so the platform could mint a session that
+     * creates an account here.
      */
     sessionSecret: string;
     /**
@@ -237,12 +241,61 @@ export interface AppConfig {
      * own sender and owes this service nothing else.
      */
     consoleUrl: string;
-    /** Proves a call to the console came from a backend. Defaults to the gateway secret. */
+    /** Proves a call to the console came from this service. Its own secret. */
     consoleSecret: string;
     /** Per-provider OAuth credentials. An empty pair disables that provider. */
     google: { clientId: string; clientSecret: string };
     github: { clientId: string; clientSecret: string };
+    /**
+     * The operator's OpenID Connect provider — Authentik. The preferred door:
+     * its ID token is verified against the provider's published keys, and the
+     * provider (not this service) owns passwords, MFA and the Google/GitHub
+     * sources. Empty strings disable it.
+     */
+    oidc: { issuer: string; clientId: string; clientSecret: string };
+    /**
+     * The Horizon that says who may sign for an account, for a RECOVERED wallet
+     * whose key is no longer its address. One, chosen by the operator — never by
+     * the request, which would let a caller pick the ledger its signer is read
+     * from.
+     */
+    signersHorizonUrl: string;
+    /**
+     * Pays the reserve of an account's two recovery signers
+     * (`POST /v1/wallet/recovery/setup`). Unset disables the route. Refused at
+     * boot on a recovery server.
+     */
+    sponsor: {
+      secret: string;
+      networkPassphrase: string;
+      horizonUrl: string;
+    };
     /** How long a call out to a provider may take before it is a failure. */
+    timeoutMs: number;
+    sweep: {
+      enabled: boolean;
+      intervalMs: number;
+    };
+  };
+  /**
+   * SEP-10 + SEP-30: this deployment as ONE of the two recovery servers.
+   * `role: null` means it is not one, and every recovery route answers 404.
+   */
+  recovery: {
+    role: 'a' | 'b' | null;
+    /** The https origin plus gateway entry clients reach this server on. */
+    publicBaseUrl: string;
+    /** The WALLET's domain, named by every challenge — the same on both servers. */
+    homeDomain: string;
+    networkPassphrase: string;
+    horizonUrl: string;
+    signerMaster: string;
+    sep10SigningSecret: string;
+    jwtSecret: string;
+    /** ID tokens this server exchanges for an identity; empty issuer disables it. */
+    oidc: { issuer: string; audiences: string[] };
+    /** Where this server posts its own emailed codes; empty url disables them. */
+    emailDelivery: { url: string; secret: string };
     timeoutMs: number;
     sweep: {
       enabled: boolean;
@@ -493,16 +546,11 @@ export default (): AppConfig => ({
       /\/+$/,
       '',
     ),
-    // Falls back to the gateway secret rather than to '' — see the interface.
-    sessionSecret:
-      process.env.WALLET_AUTH_SESSION_SECRET?.trim() ||
-      process.env.APISIX_GATEWAY_SECRET ||
-      '',
+    // No fallback to the gateway secret — see the interface, and
+    // `identity-env.ts`, which refuses to boot without its own.
+    sessionSecret: process.env.WALLET_AUTH_SESSION_SECRET?.trim() ?? '',
     consoleUrl: (process.env.WALLET_AUTH_CONSOLE_URL ?? '').replace(/\/+$/, ''),
-    consoleSecret:
-      process.env.WALLET_AUTH_CONSOLE_SECRET?.trim() ||
-      process.env.APISIX_GATEWAY_SECRET ||
-      '',
+    consoleSecret: process.env.WALLET_AUTH_CONSOLE_SECRET?.trim() ?? '',
     google: {
       clientId: process.env.WALLET_GOOGLE_CLIENT_ID ?? '',
       clientSecret: process.env.WALLET_GOOGLE_CLIENT_SECRET ?? '',
@@ -510,6 +558,25 @@ export default (): AppConfig => ({
     github: {
       clientId: process.env.WALLET_GITHUB_CLIENT_ID ?? '',
       clientSecret: process.env.WALLET_GITHUB_CLIENT_SECRET ?? '',
+    },
+    oidc: {
+      issuer: process.env.WALLET_AUTH_OIDC_ISSUER?.trim() ?? '',
+      clientId: process.env.WALLET_AUTH_OIDC_CLIENT_ID?.trim() ?? '',
+      clientSecret: process.env.WALLET_AUTH_OIDC_CLIENT_SECRET?.trim() ?? '',
+    },
+    signersHorizonUrl: (
+      process.env.WALLET_AUTH_SIGNERS_HORIZON_URL?.trim() ||
+      DEFAULT_HORIZON.public
+    ).replace(/\/+$/, ''),
+    sponsor: {
+      secret: process.env.WALLET_RECOVERY_SPONSOR_SECRET?.trim() ?? '',
+      networkPassphrase:
+        process.env.WALLET_RECOVERY_SPONSOR_NETWORK_PASSPHRASE?.trim() ||
+        NETWORK_PASSPHRASE_PUBLIC,
+      horizonUrl: (
+        process.env.WALLET_RECOVERY_SPONSOR_HORIZON_URL?.trim() ||
+        DEFAULT_HORIZON.public
+      ).replace(/\/+$/, ''),
     },
     timeoutMs: parseInt(
       process.env.WALLET_AUTH_TIMEOUT_MS ??
@@ -525,6 +592,50 @@ export default (): AppConfig => ({
       intervalMs: parseInt(
         process.env.WALLET_AUTH_SWEEP_INTERVAL_MS ??
           String(DEFAULT_WALLET_AUTH_SWEEP_INTERVAL_MS),
+        10,
+      ),
+    },
+  },
+  recovery: {
+    role:
+      process.env.RECOVERY_ROLE === 'a' || process.env.RECOVERY_ROLE === 'b'
+        ? process.env.RECOVERY_ROLE
+        : null,
+    publicBaseUrl: (process.env.RECOVERY_PUBLIC_BASE_URL ?? '')
+      .trim()
+      .replace(/\/+$/, ''),
+    homeDomain: process.env.RECOVERY_HOME_DOMAIN?.trim() ?? '',
+    networkPassphrase:
+      process.env.RECOVERY_NETWORK_PASSPHRASE?.trim() ||
+      NETWORK_PASSPHRASE_PUBLIC,
+    horizonUrl: (
+      process.env.RECOVERY_HORIZON_URL?.trim() || DEFAULT_HORIZON.public
+    ).replace(/\/+$/, ''),
+    signerMaster: process.env.RECOVERY_SIGNER_MASTER?.trim() ?? '',
+    sep10SigningSecret: process.env.RECOVERY_SEP10_SIGNING_SECRET?.trim() ?? '',
+    jwtSecret: process.env.RECOVERY_JWT_SECRET?.trim() ?? '',
+    oidc: {
+      issuer: process.env.RECOVERY_OIDC_ISSUER?.trim() ?? '',
+      audiences: (process.env.RECOVERY_OIDC_AUDIENCES ?? '')
+        .split(',')
+        .map((a) => a.trim())
+        .filter(Boolean),
+    },
+    emailDelivery: {
+      url: process.env.RECOVERY_EMAIL_DELIVERY_URL?.trim() ?? '',
+      secret: process.env.RECOVERY_EMAIL_DELIVERY_SECRET?.trim() ?? '',
+    },
+    timeoutMs: parseInt(
+      process.env.RECOVERY_TIMEOUT_MS ?? String(DEFAULT_RECOVERY_TIMEOUT_MS),
+      10,
+    ),
+    sweep: {
+      enabled:
+        (process.env.RECOVERY_SWEEP_ENABLED ?? 'true').toLowerCase() !==
+        'false',
+      intervalMs: parseInt(
+        process.env.RECOVERY_SWEEP_INTERVAL_MS ??
+          String(DEFAULT_RECOVERY_SWEEP_INTERVAL_MS),
         10,
       ),
     },

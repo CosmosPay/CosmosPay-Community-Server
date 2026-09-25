@@ -45,6 +45,18 @@ export const LOGIN_CODE_MAX_ATTEMPTS = 5;
 export const LOGIN_CODE_RESEND_MS = 60 * 1000;
 
 /**
+ * Emailed codes one mailbox may be sent in a day, by the email door.
+ *
+ * The cooldown above bounds the RATE; this bounds the TOTAL. A code is six digits
+ * and each takes five guesses before it burns, so an attacker who can make this
+ * service mail a victim once a minute gets ~7,200 blind guesses a day at that
+ * inbox — about a 0.7% chance, every day, of finishing a sign-in as them. Ten a
+ * day is 50 guesses: more than a person who fumbles a few emails ever needs, and
+ * a one-in-twenty-thousand chance for the attacker.
+ */
+export const LOGIN_CODE_DAILY_CAP = 10;
+
+/**
  * What a finished sign-in buys.
  *
  * Long enough to type a password and let PBKDF2 run on a slow phone, short
@@ -182,3 +194,41 @@ export const WALLET_AUTH_FINISH_RATE_LIMIT: RateLimitPolicy = {
  * an advisory lock while the rest of the service waits behind it.
  */
 export const WALLET_AUTH_SWEEP_BATCH_SIZE = 500;
+
+// --- Sponsored recovery setup ------------------------------------------------
+//
+// The weights are the WALLET's own (its `src/constants/recovery.ts`), repeated
+// here because this service builds the sponsored variant of the envelope. The
+// wallet matches it against its template before signing, so a drift here is a
+// refusal on the device, never a weaker account.
+
+/** The device key's weight, and every threshold on the account. */
+export const RECOVERY_DEVICE_WEIGHT = 10;
+
+/** Each recovery server's weight: half, so the two together are exactly enough. */
+export const RECOVERY_SERVER_WEIGHT = 5;
+
+/** Seconds a sponsored setup stays valid. Long enough to sign, short enough to expire. */
+export const RECOVERY_SETUP_TIMEOUT_S = 300;
+
+/**
+ * `POST /v1/wallet/recovery/setup`, per client address. Every call it admits
+ * costs the operator a reserve, so it is tight.
+ */
+export const WALLET_RECOVERY_SETUP_RATE_LIMIT: RateLimitPolicy = {
+  name: 'wallet-recovery-setup',
+  limit: 5,
+  windowMs: WALLET_AUTH_WINDOW_MS,
+};
+
+/**
+ * The same route, per consumer: a ceiling no address rotation gets past. Every
+ * anonymous wallet is the one public consumer, so this is the operator's global
+ * budget for sponsorships.
+ */
+export const WALLET_RECOVERY_SETUP_GLOBAL_RATE_LIMIT: RateLimitPolicy = {
+  name: 'wallet-recovery-setup-global',
+  limit: 200,
+  windowMs: WALLET_AUTH_WINDOW_MS,
+  per: 'consumer',
+};

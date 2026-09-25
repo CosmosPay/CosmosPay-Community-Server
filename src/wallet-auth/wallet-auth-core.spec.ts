@@ -13,6 +13,7 @@ import {
   methodOfProvider,
   pkceMatches,
   providerFromWire,
+  recoverySetupMessage,
   readSessionToken,
   signedAtFresh,
   sixDigitCode,
@@ -54,6 +55,24 @@ describe('wallet-auth-core', () => {
           'email: person@example.com\n' +
           'account: GABC\n' +
           'at: 2026-01-02T03:04:05Z',
+      );
+    });
+
+    // The wallet builds this string itself (in its recovery module) and pins
+    // the same literal in its own test: a rename on either side builds cleanly and
+    // produces a signature the other one rejects.
+    it('pins the recovery-setup challenge', () => {
+      expect(
+        recoverySetupMessage(
+          'GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ',
+          ['GAAA', 'GBBB'],
+          '2026-09-19T12:00:00.000Z',
+        ),
+      ).toBe(
+        'Cosmos Pay Wallet recovery setup\n' +
+          'account: GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ\n' +
+          'signers: GAAA,GBBB\n' +
+          'at: 2026-09-19T12:00:00.000Z',
       );
     });
 

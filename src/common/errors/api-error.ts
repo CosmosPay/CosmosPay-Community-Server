@@ -174,6 +174,12 @@ export enum ApiErrorCode {
   WalletAccountMismatch = 'wallet_account_mismatch',
   /** This provider is not configured on this deployment. */
   WalletProviderUnavailable = 'wallet_provider_unavailable',
+  /**
+   * The operator will not sponsor this recovery setup: the account does not
+   * exist yet, or it already has a signer besides its master key — sponsorship
+   * is for turning recovery on once, not a repeatable way to fund signers.
+   */
+  WalletRecoverySetupRefused = 'wallet_recovery_setup_refused',
 
   // --- service --------------------------------------------------------------
   Misconfigured = 'misconfigured',

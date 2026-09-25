@@ -6,11 +6,20 @@ import {
   WalletAuthProvider,
   WalletLoginCodeStatus,
 } from '@generated/prisma/client';
+import { Keypair } from '@stellar/stellar-sdk';
 import { AppConfig } from '@/config/configuration';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
+import { OidcService } from '@/common/oidc/oidc.service';
+import { openJson, sealJson } from '@/common/sealed-box';
 import { PrismaService } from '@/prisma/prisma.service';
 import {
+  fetchAccountSigners,
+  signedByCurrentSigner,
+} from '@/stellar/account-signers';
+import { buildSponsoredRecoverySetup } from '@/wallet-auth/recovery-setup';
+import {
   HANDSHAKE_TTL_MS,
+  LOGIN_CODE_DAILY_CAP,
   LOGIN_CODE_MAX_ATTEMPTS,
   LOGIN_CODE_RESEND_MS,
   LOGIN_CODE_TTL_MS,
@@ -27,17 +36,22 @@ import {
   githubIdentity,
   googleIdentity,
   isBackupBox,
+  isOidcProvider,
+  isStellarAddress,
   issueSessionToken,
   methodOfProvider,
+  newPkcePair,
   normalizeEmail,
   pkceMatches,
   providerFromWire,
   randomToken,
   readSessionToken,
+  recoverySetupMessage,
   sha256Hex,
   signedAtFresh,
   sixDigitCode,
   verifyWalletSignature,
+  type IdentityFailure,
   type IdentityResult,
   type ProviderIdentity,
   type WalletAuthIdentity,
@@ -46,10 +60,16 @@ import {
   ClaimWalletOauthDto,
   FinishWalletSignInDto,
   ReplaceWalletBackupDto,
+  SponsorRecoverySetupDto,
   StartWalletEmailDto,
   StartWalletOauthDto,
   VerifyWalletEmailDto,
 } from '@/wallet-auth/dto/wallet-auth.dto';
+
+/** What a provider callback learned: who, and — from an OIDC provider — its ID token. */
+type ReadIdentity =
+  | { ok: true; identity: ProviderIdentity; idToken: string | null }
+  | { ok: false; error: IdentityFailure };
 
 /** What the callback route needs to render a page for the person. */
 export interface CallbackOutcome {
@@ -106,9 +126,26 @@ export interface CallbackOutcome {
  * whoever holds a session token. The token proves an email; the signature proves
  * the device holds the address the account is being attached to.
  *
- * Ported from the developer platform's `src/lib/wallet-auth.ts`. The wire
- * contract is identical on purpose — the wallet changes a base URL, nothing
- * else.
+ * ## Authentik, and the two flows it has to live beside
+ *
+ * The preferred door is the operator's OpenID Connect provider — Authentik. It
+ * owns passwords, MFA and the Google/GitHub sources, and what it hands back is an
+ * ID token signed with ITS key, verified here against its published key set with
+ * this service's own PKCE and nonce on the leg to it. The direct Google and
+ * GitHub doors remain for a self-hosted deployment with no Authentik: they are
+ * the same protocol from the wallet's side, and `providers()` says which exist.
+ *
+ * Every route here is reached THROUGH APISIX with the shared public key (the
+ * provider callback excepted, which a browser navigates to). Authentik proves
+ * the person; APISIX proves the caller is a wallet talking through the gateway.
+ * The two are independent checks and neither replaces the other.
+ *
+ * The ID token has one more job: it is what the SEP-30 recovery servers accept as
+ * the person's identity (`src/recovery/`), because they can verify it without
+ * trusting this service. So it is released to the device only alongside an inbox
+ * proof — see `claimOauth` — and never stored past redemption.
+ *
+ * Moved here from the developer platform, which no longer serves any of it.
  */
 @Injectable()
 export class WalletAuthService {
@@ -117,6 +154,7 @@ export class WalletAuthService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly config: ConfigService<AppConfig, true>,
+    private readonly oidc: OidcService,
   ) {}
 
   private get settings() {
@@ -130,10 +168,16 @@ export class WalletAuthService {
     provider: WalletAuthProvider,
   ): { clientId: string; clientSecret: string } | null {
     const pair =
-      provider === WalletAuthProvider.GOOGLE
-        ? this.settings.google
-        : this.settings.github;
-    return pair.clientId && pair.clientSecret ? pair : null;
+      provider === WalletAuthProvider.AUTHENTIK
+        ? this.settings.oidc.issuer
+          ? this.settings.oidc
+          : { clientId: '', clientSecret: '' }
+        : provider === WalletAuthProvider.GOOGLE
+          ? this.settings.google
+          : this.settings.github;
+    return pair.clientId && pair.clientSecret
+      ? { clientId: pair.clientId, clientSecret: pair.clientSecret }
+      : null;
   }
 
   /**
@@ -144,8 +188,13 @@ export class WalletAuthService {
    * shows a Google button that dies at the consent screen.
    */
   providers(): { providers: string[]; email: boolean } {
+    // Authentik first: where it is configured it is the door to prefer.
     const available = (
-      [WalletAuthProvider.GOOGLE, WalletAuthProvider.GITHUB] as const
+      [
+        WalletAuthProvider.AUTHENTIK,
+        WalletAuthProvider.GOOGLE,
+        WalletAuthProvider.GITHUB,
+      ] as const
     )
       .filter((p) => this.credentials(p) !== null)
       .map((p) => PROVIDER_WIRE[p]);
@@ -188,6 +237,26 @@ export class WalletAuthService {
     const state = randomToken();
     const expiresAt = new Date(Date.now() + HANDSHAKE_TTL_MS);
 
+    // An OIDC provider gets its own PKCE pair and a nonce, both held here: the
+    // pair binds the provider's code to this handshake, the nonce binds the ID
+    // token to it. Neither ever reaches the device or the browser in the clear.
+    let oidc: {
+      verifier: string;
+      nonce: string;
+      endpoint: string;
+      challenge: string;
+    } | null = null;
+    if (isOidcProvider(provider)) {
+      const discovery = await this.discoverOidc();
+      const pkce = newPkcePair();
+      oidc = {
+        verifier: pkce.verifier,
+        challenge: pkce.challenge,
+        nonce: randomToken(),
+        endpoint: discovery.authorizationEndpoint,
+      };
+    }
+
     await this.prisma.walletAuthHandshake.create({
       data: {
         state,
@@ -195,6 +264,8 @@ export class WalletAuthService {
         codeChallenge: dto.codeChallenge,
         status: WalletAuthHandshakeStatus.PENDING,
         expiresAt,
+        providerVerifier: oidc?.verifier ?? null,
+        nonce: oidc?.nonce ?? null,
       },
     });
 
@@ -204,6 +275,13 @@ export class WalletAuthService {
         clientId: creds.clientId,
         redirectUri: callbackUrl(baseUrl, provider),
         state,
+        oidc: oidc
+          ? {
+              authorizationEndpoint: oidc.endpoint,
+              codeChallenge: oidc.challenge,
+              nonce: oidc.nonce,
+            }
+          : undefined,
       }),
       expiresAt,
     };
@@ -243,9 +321,9 @@ export class WalletAuthService {
       return { ok: false, reason: 'denied' };
     }
 
-    let identity: IdentityResult;
+    let identity: ReadIdentity;
     try {
-      identity = await this.readIdentity(provider, params.code);
+      identity = await this.readIdentity(provider, params.code, handshake);
     } catch (error) {
       this.logger.warn(
         `wallet sign-in: ${PROVIDER_WIRE[provider]} exchange failed: ${
@@ -261,23 +339,34 @@ export class WalletAuthService {
       return { ok: false, reason: identity.error };
     }
 
-    await this.prisma.walletAuthHandshake.update({
-      where: { state },
+    // Conditional on PENDING, so two callbacks racing on one `state` cannot both
+    // write an identity — the second one finds nothing to update.
+    const written = await this.prisma.walletAuthHandshake.updateMany({
+      where: { state, status: WalletAuthHandshakeStatus.PENDING },
       data: {
         status: WalletAuthHandshakeStatus.AUTHORIZED,
         email: identity.identity.email,
         name: identity.identity.name,
         avatar: identity.identity.avatar,
         subject: identity.identity.subject,
+        idToken: identity.idToken ? this.sealIdToken(identity.idToken) : null,
+        providerVerifier: null,
+        nonce: null,
       },
     });
+    if (written.count !== 1) return { ok: false, reason: 'expired' };
     return { ok: true, reason: 'ok' };
   }
 
   private async failHandshake(state: string, failure: string): Promise<void> {
-    await this.prisma.walletAuthHandshake.update({
-      where: { state },
-      data: { status: WalletAuthHandshakeStatus.FAILED, failure },
+    await this.prisma.walletAuthHandshake.updateMany({
+      where: { state, status: WalletAuthHandshakeStatus.PENDING },
+      data: {
+        status: WalletAuthHandshakeStatus.FAILED,
+        failure,
+        providerVerifier: null,
+        nonce: null,
+      },
     });
   }
 
@@ -355,10 +444,10 @@ export class WalletAuthService {
     }
 
     // Single-shot: burn it before anything is handed back, so two concurrent
-    // redemptions cannot both succeed.
+    // redemptions cannot both succeed. The ID token leaves the row with it.
     const burned = await this.prisma.walletAuthHandshake.updateMany({
       where: { state: dto.state, status: WalletAuthHandshakeStatus.AUTHORIZED },
-      data: { status: WalletAuthHandshakeStatus.REDEEMED },
+      data: { status: WalletAuthHandshakeStatus.REDEEMED, idToken: null },
     });
     if (burned.count !== 1) return { status: 'expired' as const };
 
@@ -378,9 +467,12 @@ export class WalletAuthService {
     });
 
     // An existing account is where the backup worth stealing is, so the
-    // provider's word is not enough for it.
-    if (account) {
-      const sent = await this.mintLoginCode(identity);
+    // provider's word is not enough for it. Neither is it for a RECOVERY: the
+    // identity that comes out of this is presented to the recovery servers, and a
+    // stranger who sent someone this authorization link must not be the one who
+    // collects it. Only the inbox answers "who opened the sign-in".
+    if (account || dto.purpose === 'recovery') {
+      const sent = await this.mintLoginCode(identity, handshake.idToken);
       return {
         status: 'verify_email' as const,
         claimToken: sent.claimToken,
@@ -389,7 +481,9 @@ export class WalletAuthService {
       };
     }
 
-    return this.readyPayload(identity, null);
+    // A new email on the provider's word: an account, but no ID token — that is
+    // released only with an inbox proof.
+    return this.readyPayload(identity, null, null);
   }
 
   /* --------------------------------- email -------------------------------- */
@@ -414,6 +508,19 @@ export class WalletAuthService {
       throw ApiError.badRequest(
         ApiErrorCode.WalletLoginCodeCooldown,
         'A code was just sent to that address. Wait a moment before asking for another.',
+      );
+    }
+    // The total as well as the rate: see LOGIN_CODE_DAILY_CAP for the arithmetic.
+    const today = await this.prisma.walletLoginCode.count({
+      where: {
+        email,
+        sentAt: { gt: new Date(Date.now() - 24 * 60 * 60 * 1000) },
+      },
+    });
+    if (today >= LOGIN_CODE_DAILY_CAP) {
+      throw ApiError.badRequest(
+        ApiErrorCode.WalletLoginCodeCooldown,
+        'Too many codes were sent to that address today. Try again tomorrow.',
       );
     }
 
@@ -441,7 +548,10 @@ export class WalletAuthService {
    * either — the row holds SHA-256 of each. A dump of this table lets nobody
    * finish a sign-in.
    */
-  private async mintLoginCode(identity: WalletAuthIdentity) {
+  private async mintLoginCode(
+    identity: WalletAuthIdentity,
+    idToken: string | null = null,
+  ) {
     const claimToken = randomToken();
     const code = sixDigitCode();
     const expiresAt = new Date(Date.now() + LOGIN_CODE_TTL_MS);
@@ -456,6 +566,7 @@ export class WalletAuthService {
         codeHash: sha256Hex(code),
         status: WalletLoginCodeStatus.PENDING,
         expiresAt,
+        idToken,
       },
     });
 
@@ -513,7 +624,12 @@ export class WalletAuthService {
     // Single-shot, for the same reason the handshake is.
     const claimed = await this.prisma.walletLoginCode.updateMany({
       where: { id: row.id, status: WalletLoginCodeStatus.PENDING },
-      data: { attempts, status: WalletLoginCodeStatus.CLAIMED },
+      data: {
+        attempts,
+        status: WalletLoginCodeStatus.CLAIMED,
+        codeHash: '',
+        idToken: null,
+      },
     });
     if (claimed.count !== 1) return { status: 'expired' as const };
 
@@ -527,7 +643,8 @@ export class WalletAuthService {
       where: { email: row.email },
       include: { backup: true },
     });
-    return this.readyPayload(identity, account);
+    // The inbox is proven now, so a provider ID token carried here may go out.
+    return this.readyPayload(identity, account, this.openIdToken(row.idToken));
   }
 
   /* --------------------------------- ready -------------------------------- */
@@ -540,6 +657,7 @@ export class WalletAuthService {
       stellarAddress: string;
       backup: { stellarAddress: string; box: string; updatedAt: Date } | null;
     } | null,
+    idToken: string | null,
   ) {
     return {
       status: 'ready' as const,
@@ -562,6 +680,7 @@ export class WalletAuthService {
         : null,
       sessionToken: issueSessionToken(identity, this.requireSessionSecret()),
       expiresInSeconds: Math.floor(SESSION_TTL_MS / 1000),
+      ...(idToken ? { idToken } : {}),
     };
   }
 
@@ -598,7 +717,9 @@ export class WalletAuthService {
       dto.stellarAddress,
       dto.signedAt,
     );
-    if (!verifyWalletSignature(dto.stellarAddress, message, dto.signature)) {
+    if (
+      !(await this.signedForAccount(dto.stellarAddress, message, dto.signature))
+    ) {
       throw ApiError.badRequest(
         ApiErrorCode.WalletSignatureInvalid,
         'The signature does not verify against that account.',
@@ -699,7 +820,9 @@ export class WalletAuthService {
       );
     }
     const message = backupMessage(dto.stellarAddress, dto.box, dto.signedAt);
-    if (!verifyWalletSignature(dto.stellarAddress, message, dto.signature)) {
+    if (
+      !(await this.signedForAccount(dto.stellarAddress, message, dto.signature))
+    ) {
       throw ApiError.badRequest(
         ApiErrorCode.WalletSignatureInvalid,
         'The signature does not verify against that account.',
@@ -733,34 +856,111 @@ export class WalletAuthService {
   private async readIdentity(
     provider: WalletAuthProvider,
     code: string,
-  ): Promise<IdentityResult> {
+    handshake: { providerVerifier: string | null; nonce: string | null },
+  ): Promise<ReadIdentity> {
     const creds = this.credentials(provider);
     if (!creds) return { ok: false, error: 'profile_invalid' };
+
+    if (provider === WalletAuthProvider.AUTHENTIK) {
+      return this.readOidcIdentity(code, creds, handshake);
+    }
+
     const ep = PROVIDER_ENDPOINTS[provider];
+    const token = await this.exchangeCode(provider, ep.token, code, creds);
+    const profile = await this.getJson(ep.profile, token.accessToken);
 
-    const token = await this.exchangeCode(provider, code, creds);
-    const profile = await this.getJson(ep.profile, token);
+    if (provider === WalletAuthProvider.GOOGLE) {
+      return withoutIdToken(googleIdentity(profile));
+    }
+    const emails = await this.getJson(ep.emails as string, token.accessToken);
+    return withoutIdToken(githubIdentity(profile, emails));
+  }
 
-    if (provider === WalletAuthProvider.GOOGLE) return googleIdentity(profile);
-    const emails = await this.getJson(ep.emails as string, token);
-    return githubIdentity(profile, emails);
+  /**
+   * The Authentik leg: code + this service's PKCE verifier for tokens, and the
+   * ID token verified against the provider's keys with the nonce this handshake
+   * sent. The identity comes from the ID token alone — never from userinfo,
+   * which is an unsigned answer to a bearer token.
+   */
+  private async readOidcIdentity(
+    code: string,
+    creds: { clientId: string; clientSecret: string },
+    handshake: { providerVerifier: string | null; nonce: string | null },
+  ): Promise<ReadIdentity> {
+    if (!handshake.providerVerifier || !handshake.nonce) {
+      return { ok: false, error: 'profile_invalid' };
+    }
+    const discovery = await this.discoverOidc();
+    const token = await this.exchangeCode(
+      WalletAuthProvider.AUTHENTIK,
+      discovery.tokenEndpoint,
+      code,
+      creds,
+      handshake.providerVerifier,
+    );
+    if (!token.idToken) return { ok: false, error: 'profile_invalid' };
+
+    const result = await this.oidc.verify(
+      token.idToken,
+      {
+        issuer: this.settings.oidc.issuer,
+        audiences: [creds.clientId],
+        nonce: handshake.nonce,
+      },
+      this.settings.timeoutMs,
+    );
+    if (!result.ok) {
+      this.logger.warn(
+        `wallet sign-in: authentik ID token refused: ${result.error}`,
+      );
+      return {
+        ok: false,
+        error:
+          result.error === 'email_unverified'
+            ? 'email_unverified'
+            : 'profile_invalid',
+      };
+    }
+    return {
+      ok: true,
+      identity: {
+        email: result.claims.email,
+        name: result.claims.name,
+        avatar: result.claims.picture,
+        subject: result.claims.sub,
+      },
+      idToken: token.idToken,
+    };
+  }
+
+  private async discoverOidc() {
+    const issuer = this.settings.oidc.issuer;
+    if (!issuer) {
+      throw ApiError.unavailable(
+        ApiErrorCode.WalletProviderUnavailable,
+        'authentik sign-in is not configured on this deployment.',
+      );
+    }
+    return this.oidc.discover(issuer, this.settings.timeoutMs);
   }
 
   private async exchangeCode(
     provider: WalletAuthProvider,
+    tokenEndpoint: string,
     code: string,
     creds: { clientId: string; clientSecret: string },
-  ): Promise<string> {
-    const ep = PROVIDER_ENDPOINTS[provider];
+    codeVerifier?: string,
+  ): Promise<{ accessToken: string; idToken: string | null }> {
     const body = new URLSearchParams({
       client_id: creds.clientId,
       client_secret: creds.clientSecret,
       code,
       grant_type: 'authorization_code',
       redirect_uri: callbackUrl(this.requireBaseUrl(), provider),
+      ...(codeVerifier ? { code_verifier: codeVerifier } : {}),
     });
 
-    const res = await fetch(ep.token, {
+    const res = await fetch(tokenEndpoint, {
       method: 'POST',
       headers: {
         'content-type': 'application/x-www-form-urlencoded',
@@ -774,11 +974,17 @@ export class WalletAuthService {
     if (!res.ok) {
       throw new Error(`token exchange answered ${res.status}`);
     }
-    const json = (await res.json()) as { access_token?: unknown };
+    const json = (await res.json()) as {
+      access_token?: unknown;
+      id_token?: unknown;
+    };
     const token =
       typeof json.access_token === 'string' ? json.access_token : null;
     if (!token) throw new Error('token exchange returned no access token');
-    return token;
+    return {
+      accessToken: token,
+      idToken: typeof json.id_token === 'string' ? json.id_token : null,
+    };
   }
 
   private async getJson(url: string, accessToken: string): Promise<unknown> {
@@ -793,6 +999,196 @@ export class WalletAuthService {
     });
     if (!res.ok) throw new Error(`${url} answered ${res.status}`);
     return res.json();
+  }
+
+  /* ------------------------------ ID token at rest -------------------------- */
+
+  /**
+   * Seal a provider ID token for the minutes it waits in a row.
+   *
+   * It is a bearer credential the recovery servers accept, so a read of the
+   * handshake or login-code table must not hand anyone a usable one. Sealed under
+   * the session secret with its own purpose, so it opens as nothing else and
+   * nothing else opens as it.
+   */
+  private sealIdToken(idToken: string): string {
+    return sealJson({ idToken }, this.requireSessionSecret(), ID_TOKEN_PURPOSE);
+  }
+
+  /** The ID token a row carries, or null — sealed, tampered or absent alike. */
+  private openIdToken(sealed: string | null): string | null {
+    if (!sealed) return null;
+    const box = openJson<{ idToken?: unknown }>(
+      sealed,
+      this.requireSessionSecret(),
+      ID_TOKEN_PURPOSE,
+    );
+    return typeof box?.idToken === 'string' ? box.idToken : null;
+  }
+
+  /* --------------------------- account signatures -------------------------- */
+
+  /**
+   * Did someone who may act for `address` sign `message`?
+   *
+   * The master key first, with no network call — that is every wallet that was
+   * never recovered, and a Horizon outage must not stop them. Only when that
+   * fails is the account's CURRENT signer set read, from the one Horizon the
+   * operator configured: a recovered account's address is its old master key,
+   * now at weight 0, and the key that signs for it is whichever replaced it.
+   */
+  private async signedForAccount(
+    address: string,
+    message: string,
+    signature: string,
+  ): Promise<boolean> {
+    if (verifyWalletSignature(address, message, signature)) return true;
+    if (!isStellarAddress(address)) return false;
+    let account;
+    try {
+      account = await fetchAccountSigners(
+        this.settings.signersHorizonUrl,
+        address,
+        this.settings.timeoutMs,
+      );
+    } catch (error) {
+      this.logger.warn(
+        `wallet sign-in: signer lookup failed: ${String(error)}`,
+      );
+      throw ApiError.unavailable(
+        ApiErrorCode.Misconfigured,
+        'Could not read the account to check the signature. Try again shortly.',
+      );
+    }
+    if (!account) return false;
+    return signedByCurrentSigner(account, (key) =>
+      verifyWalletSignature(key, message, signature),
+    );
+  }
+
+  /* ------------------------- sponsored recovery setup ----------------------- */
+
+  /**
+   * Build — and pay for — the transaction that puts an account's two recovery
+   * signers on it.
+   *
+   * Three things gate it, because every call spends the operator's reserve: a
+   * live sign-in session (someone just proved an inbox here), a signature by the
+   * account over the canonical setup challenge naming BOTH signers (so one
+   * signature buys one arrangement), and an account that has no signer besides
+   * its master yet — a sponsorship is for turning recovery on, once, not a
+   * repeatable way to make the operator fund signer entries.
+   */
+  async sponsorRecoverySetup(
+    sessionToken: string,
+    dto: SponsorRecoverySetupDto,
+  ) {
+    const sponsor = this.settings.sponsor;
+    if (!sponsor.secret) {
+      throw ApiError.unavailable(
+        ApiErrorCode.Misconfigured,
+        'Sponsored recovery setup is not available on this deployment.',
+      );
+    }
+    const identity = readSessionToken(
+      sessionToken,
+      this.requireSessionSecret(),
+    );
+    if (!identity) {
+      throw ApiError.unauthorized(
+        ApiErrorCode.WalletSessionInvalid,
+        'This sign-in has expired. Start again.',
+      );
+    }
+
+    const [a, b] = dto.signers;
+    if (
+      a === b ||
+      a === dto.stellarAddress ||
+      b === dto.stellarAddress ||
+      !isStellarAddress(a) ||
+      !isStellarAddress(b)
+    ) {
+      throw ApiError.badRequest(
+        ApiErrorCode.WalletSignatureInvalid,
+        'The two recovery signers must be two distinct keys other than the account.',
+      );
+    }
+    if (!signedAtFresh(dto.signedAt)) {
+      throw ApiError.badRequest(
+        ApiErrorCode.WalletSignatureInvalid,
+        'The signed timestamp is outside the accepted window.',
+      );
+    }
+    const message = recoverySetupMessage(
+      dto.stellarAddress,
+      dto.signers,
+      dto.signedAt,
+    );
+    if (!verifyWalletSignature(dto.stellarAddress, message, dto.signature)) {
+      throw ApiError.badRequest(
+        ApiErrorCode.WalletSignatureInvalid,
+        'The signature does not verify against that account.',
+      );
+    }
+
+    let body: { sequence?: unknown; signers?: unknown[] };
+    try {
+      const res = await fetch(
+        `${sponsor.horizonUrl}/accounts/${encodeURIComponent(dto.stellarAddress)}`,
+        {
+          headers: { accept: 'application/json' },
+          signal: AbortSignal.timeout(this.settings.timeoutMs),
+        },
+      );
+      if (res.status === 404) {
+        throw ApiError.conflict(
+          ApiErrorCode.WalletRecoverySetupRefused,
+          'This account does not exist on the network yet.',
+        );
+      }
+      if (!res.ok) throw new Error(`horizon answered ${res.status}`);
+      body = (await res.json()) as typeof body;
+    } catch (error) {
+      if (error instanceof ApiError) throw error;
+      this.logger.warn(
+        `recovery setup: horizon lookup failed: ${String(error)}`,
+      );
+      throw ApiError.unavailable(
+        ApiErrorCode.Misconfigured,
+        'Could not read the account.',
+      );
+    }
+
+    if (Array.isArray(body.signers) && body.signers.length > 1) {
+      throw ApiError.conflict(
+        ApiErrorCode.WalletRecoverySetupRefused,
+        'This account already has signers besides its own key; sponsorship is for a first setup only.',
+      );
+    }
+    if (typeof body.sequence !== 'string' || !/^\d+$/.test(body.sequence)) {
+      throw ApiError.unavailable(
+        ApiErrorCode.Misconfigured,
+        'Could not read the account.',
+      );
+    }
+
+    const sponsorKey = Keypair.fromSecret(sponsor.secret);
+    const transaction = buildSponsoredRecoverySetup({
+      account: dto.stellarAddress,
+      signers: [a, b],
+      networkPassphrase: sponsor.networkPassphrase,
+      sequence: body.sequence,
+      sponsor: sponsorKey,
+    });
+    this.logger.log(
+      `recovery setup: sponsored for ${dto.stellarAddress} (${identity.email})`,
+    );
+    return {
+      transaction,
+      sponsor: sponsorKey.publicKey(),
+      network_passphrase: sponsor.networkPassphrase,
+    };
   }
 
   /* ------------------------------ console hops ---------------------------- */
@@ -915,6 +1311,16 @@ export class WalletAuthService {
     }
     return secret;
   }
+}
+
+/** Part of the sealing key's derivation for an ID token waiting in a row. */
+const ID_TOKEN_PURPOSE = 'wallet-auth-id-token';
+
+/** A Google or GitHub answer, which carries no ID token worth keeping. */
+function withoutIdToken(result: IdentityResult): ReadIdentity {
+  return result.ok
+    ? { ok: true, identity: result.identity, idToken: null }
+    : { ok: false, error: result.error };
 }
 
 /** Re-exported for the controller's page rendering. */

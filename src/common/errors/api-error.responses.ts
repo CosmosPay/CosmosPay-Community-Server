@@ -364,6 +364,13 @@ export const API_ERROR_CASES: Readonly<Record<ApiErrorCode, ApiErrorCase>> = {
     message: 'No backup is stored for that account.',
     path: '/v1/wallet/backup',
   },
+  [ApiErrorCode.WalletRecoverySetupRefused]: {
+    statuses: [409],
+    summary: 'The account cannot be sponsored: missing, or already has signers',
+    message:
+      'This account already has signers besides its own key; sponsorship is for a first setup only.',
+    path: '/v1/wallet/recovery/setup',
+  },
   [ApiErrorCode.WalletProviderUnavailable]: {
     statuses: [400, 503],
     summary: 'That provider is unknown, or not configured on this deployment',

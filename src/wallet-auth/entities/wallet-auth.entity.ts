@@ -14,7 +14,7 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 export class WalletAuthProvidersEntity {
   @ApiProperty({
     type: [String],
-    example: ['google', 'github'],
+    example: ['authentik', 'google', 'github'],
     description:
       'Which providers this deployment has credentials for. Render buttons ' +
       'from this rather than from a compiled-in list, so a deployment that ' +
@@ -69,7 +69,7 @@ class WalletAuthIdentityEntity {
   @ApiPropertyOptional({ nullable: true }) name!: string | null;
   @ApiPropertyOptional({ nullable: true }) avatar!: string | null;
   @ApiProperty({
-    enum: ['google', 'github', 'email'],
+    enum: ['authentik', 'google', 'github', 'email'],
     description: 'How the email was proven.',
   })
   method!: string;
@@ -125,6 +125,16 @@ export class WalletAuthReadyEntity {
   sessionToken!: string;
 
   @ApiProperty({ example: 1800 }) expiresInSeconds!: number;
+
+  @ApiPropertyOptional({
+    description:
+      "The OIDC provider's ID token, present ONLY when the sign-in went through " +
+      'Authentik AND the inbox was proven with an emailed code after it (a claim ' +
+      "with `purpose: 'recovery'`, or an existing account). It is what the SEP-30 " +
+      "recovery servers accept as the person's identity, each verifying it " +
+      "against the provider's keys. Never stored by the wallet.",
+  })
+  idToken?: string;
 }
 
 /**
@@ -201,4 +211,19 @@ export class WalletBackupUpdatedEntity {
   @ApiProperty({ enum: ['ok'] }) status!: string;
   @ApiProperty() stellarAddress!: string;
   @ApiProperty() updatedAt!: Date;
+}
+
+/** `POST /v1/wallet/recovery/setup` — the sponsored setup, for the account to sign. */
+export class WalletRecoverySetupEntity {
+  @ApiProperty({
+    description:
+      'base64 XDR, signed by the sponsor and NOT by the account: the wallet adds ' +
+      'its signature only after its own guard has decoded every operation.',
+  })
+  transaction!: string;
+
+  @ApiProperty({ description: 'The account paying the two signer reserves.' })
+  sponsor!: string;
+
+  @ApiProperty() network_passphrase!: string;
 }

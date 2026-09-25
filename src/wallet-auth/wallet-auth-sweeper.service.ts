@@ -87,6 +87,9 @@ export class WalletAuthSweeperService extends ScheduledJob {
         name: null,
         avatar: null,
         subject: null,
+        idToken: null,
+        providerVerifier: null,
+        nonce: null,
       },
     });
     this.logger.log(
@@ -110,7 +113,11 @@ export class WalletAuthSweeperService extends ScheduledJob {
       where: { id: { in: stale.map((row) => row.id) } },
       // The code hash goes with it: an expired row that still holds it is a
       // guessable credential with nothing checking the clock.
-      data: { status: WalletLoginCodeStatus.EXPIRED, codeHash: '' },
+      data: {
+        status: WalletLoginCodeStatus.EXPIRED,
+        codeHash: '',
+        idToken: null,
+      },
     });
     this.logger.log(`Expired ${expired.count} stale wallet login code(s)`);
   }

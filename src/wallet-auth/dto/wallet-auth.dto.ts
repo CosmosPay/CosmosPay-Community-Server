@@ -1,5 +1,8 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
+  ArrayMaxSize,
+  ArrayMinSize,
+  IsArray,
   IsBoolean,
   IsEmail,
   IsIn,
@@ -15,7 +18,7 @@ import { BACKUP_BOX_MAX_CHARS } from '@/wallet-auth/wallet-auth.constants';
  * The providers a client may name. Lowercase, which is the wire spelling —
  * `providerFromWire` maps it to the enum and refuses everything else.
  */
-export const WALLET_AUTH_PROVIDER_VALUES = ['google', 'github'];
+export const WALLET_AUTH_PROVIDER_VALUES = ['authentik', 'google', 'github'];
 
 /**
  * Stellar public keys are 56 base32 characters opening with `G`. Validated here
@@ -84,6 +87,20 @@ export class ClaimWalletOauthDto {
   @MaxLength(128)
   @Matches(BASE64URL, { message: 'codeVerifier must be base64url' })
   codeVerifier!: string;
+
+  @ApiPropertyOptional({
+    enum: ['sign-in', 'recovery'],
+    default: 'sign-in',
+    description:
+      '`recovery` when the proven identity is going to be presented to the ' +
+      'SEP-30 recovery servers. It always routes through an emailed code, even ' +
+      'for an email with no account, and only then does the answer carry the ' +
+      "provider's `idToken` — a provider proves who consented, not who opened the " +
+      'sign-in, and a recovery identity is worth a wallet.',
+  })
+  @IsOptional()
+  @IsIn(['sign-in', 'recovery'])
+  purpose?: 'sign-in' | 'recovery';
 }
 
 export class StartWalletEmailDto {
@@ -187,6 +204,47 @@ export class ReplaceWalletBackupDto {
     description:
       'base64 ed25519 signature over the backup challenge, which covers the ' +
       "box's SHA-256 — so one signature stores exactly one box.",
+  })
+  @IsString()
+  @MaxLength(128)
+  signature!: string;
+}
+
+/**
+ * `POST /v1/wallet/recovery/setup` — the operator pays the reserve of an
+ * account's two recovery signers. The session token rides in `Authorization`.
+ */
+export class SponsorRecoverySetupDto {
+  @ApiProperty({
+    example: 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN',
+  })
+  @IsString()
+  @Matches(STELLAR_ADDRESS, {
+    message: 'stellarAddress must be a Stellar public key (G…)',
+  })
+  stellarAddress!: string;
+
+  @ApiProperty({
+    type: [String],
+    description:
+      "The two recovery servers' signers for this account, in role order.",
+  })
+  @IsArray()
+  @ArrayMinSize(2)
+  @ArrayMaxSize(2)
+  @Matches(STELLAR_ADDRESS, {
+    each: true,
+    message: 'each signer must be a G… address',
+  })
+  signers!: string[];
+
+  @ApiProperty({ example: '2026-01-02T03:04:05Z' })
+  @IsString()
+  @Matches(ISO_INSTANT, { message: 'signedAt must be an ISO instant in UTC' })
+  signedAt!: string;
+
+  @ApiProperty({
+    description: 'base64 ed25519 signature over the recovery-setup challenge.',
   })
   @IsString()
   @MaxLength(128)
