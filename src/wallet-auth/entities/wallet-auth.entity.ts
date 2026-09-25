@@ -101,10 +101,10 @@ export class WalletAuthReadyEntity {
   identity!: WalletAuthIdentityEntity;
 
   @ApiProperty({
+    enum: ['existing', 'new'],
     description:
-      'This service’s id for the wallet identity, or an empty string when no ' +
-      'account exists yet — which is how a client knows this is a first ' +
-      'sign-in.',
+      'Whether this email already had an account here. A marker, never an id: ' +
+      'it is what a client branches its onboarding on.',
   })
   account!: string;
 
@@ -169,7 +169,13 @@ class WalletProvisionedKeysEntity {
 /** `status: 'ready'` — the account exists and holds its gateway credentials. */
 export class WalletSignInFinishedEntity {
   @ApiProperty({ enum: ['ready'] }) status!: string;
-  @ApiProperty({ description: 'This service’s id for the wallet identity.' })
+  @ApiProperty({
+    enum: ['created', 'linked'],
+    description:
+      'Whether this call created the account or attached the identity to one ' +
+      'that already existed. A different vocabulary from `ready.account`, ' +
+      'deliberately — they answer two different questions.',
+  })
   account!: string;
   @ApiProperty() organizationId!: string;
   @ApiProperty({ type: WalletProvisionedKeysEntity })

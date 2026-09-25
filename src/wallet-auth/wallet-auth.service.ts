@@ -347,7 +347,7 @@ export class WalletAuthService {
       return { status: 'expired' as const };
     }
 
-    if (!pkceMatches(dto.verifier, handshake.codeChallenge)) {
+    if (!pkceMatches(dto.codeVerifier, handshake.codeChallenge)) {
       throw ApiError.badRequest(
         ApiErrorCode.WalletVerifierInvalid,
         'The verifier does not match this handshake.',
@@ -549,7 +549,10 @@ export class WalletAuthService {
         avatar: identity.avatar,
         method: identity.method.toLowerCase(),
       },
-      account: account?.id ?? '',
+      // A marker, not an id. The wallet types this field `'existing' | 'new'`
+      // and branches its onboarding on it — a cuid here would read as truthy
+      // prose and take the wrong branch in silence.
+      account: account ? ('existing' as const) : ('new' as const),
       backup: account?.backup
         ? {
             stellarAddress: account.backup.stellarAddress,
@@ -666,7 +669,9 @@ export class WalletAuthService {
 
     return {
       status: 'ready' as const,
-      account: account.id,
+      // Again a marker, and a different vocabulary from the one `ready` uses:
+      // the wallet types this one `'created' | 'linked'`.
+      account: existing ? ('linked' as const) : ('created' as const),
       organizationId: keys.organizationId,
       keys: { dev: keys.dev, prod: keys.prod },
     };

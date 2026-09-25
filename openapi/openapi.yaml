@@ -11425,9 +11425,11 @@ components:
           $ref: "#/components/schemas/WalletAuthIdentityEntity"
         account:
           type: string
-          description: This service’s id for the wallet identity, or an empty string when
-            no account exists yet — which is how a client knows this is a first
-            sign-in.
+          enum:
+            - existing
+            - new
+          description: "Whether this email already had an account here. A marker, never an
+            id: it is what a client branches its onboarding on."
         backup:
           nullable: true
           description: The box this account last stored, if any.
@@ -11501,7 +11503,12 @@ components:
             - ready
         account:
           type: string
-          description: This service’s id for the wallet identity.
+          enum:
+            - created
+            - linked
+          description: Whether this call created the account or attached the identity to
+            one that already existed. A different vocabulary from
+            `ready.account`, deliberately — they answer two different questions.
         organizationId:
           type: string
         keys:
@@ -11561,9 +11568,19 @@ components:
             to anyone else, and it is the only thing that can redeem this
             handshake."
           example: E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM
+        codeChallengeMethod:
+          type: string
+          enum:
+            - S256
+          description: "RFC 7636 S256, the only method accepted. Declared rather than
+            ignored: the wallet sends it, and an undeclared field is a 400 under
+            `forbidNonWhitelisted`. Pinned rather than defaulted, because
+            `plain` is the one value that would make the verifier no secret at
+            all."
       required:
         - provider
         - codeChallenge
+        - codeChallengeMethod
     WalletOauthStartedEntity:
       type: object
       properties:
@@ -11612,13 +11629,13 @@ components:
         state:
           type: string
           description: The handshake handle, from /oauth/authorize.
-        verifier:
+        codeVerifier:
           type: string
           description: The PKCE verifier this device kept. Never sent anywhere else, and
             never stored by this service.
       required:
         - state
-        - verifier
+        - codeVerifier
     StartWalletEmailDto:
       type: object
       properties:

@@ -193,9 +193,11 @@ describe('Wallet sign-in guards (e2e)', () => {
 
     it('validates the body before it touches the database', async () => {
       const res = await asPublicKey(
-        request(http())
-          .post('/v1/wallet/auth/oauth/authorize')
-          .send({ provider: 'pollar', codeChallenge: 'short' }),
+        request(http()).post('/v1/wallet/auth/oauth/authorize').send({
+          provider: 'pollar',
+          codeChallenge: 'short',
+          codeChallengeMethod: 'S256',
+        }),
       ).expect(400);
 
       expect(res.body.code).toBe('validation_failed');

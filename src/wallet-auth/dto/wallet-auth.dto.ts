@@ -55,6 +55,17 @@ export class StartWalletOauthDto {
   @MaxLength(128)
   @Matches(BASE64URL, { message: 'codeChallenge must be base64url' })
   codeChallenge!: string;
+
+  @ApiProperty({
+    enum: ['S256'],
+    description:
+      'RFC 7636 S256, the only method accepted. Declared rather than ignored: ' +
+      'the wallet sends it, and an undeclared field is a 400 under ' +
+      '`forbidNonWhitelisted`. Pinned rather than defaulted, because `plain` is ' +
+      'the one value that would make the verifier no secret at all.',
+  })
+  @IsIn(['S256'])
+  codeChallengeMethod!: string;
 }
 
 export class ClaimWalletOauthDto {
@@ -71,8 +82,8 @@ export class ClaimWalletOauthDto {
   @IsString()
   @MinLength(43)
   @MaxLength(128)
-  @Matches(BASE64URL, { message: 'verifier must be base64url' })
-  verifier!: string;
+  @Matches(BASE64URL, { message: 'codeVerifier must be base64url' })
+  codeVerifier!: string;
 }
 
 export class StartWalletEmailDto {

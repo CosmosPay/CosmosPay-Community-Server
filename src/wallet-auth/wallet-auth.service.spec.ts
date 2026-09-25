@@ -135,6 +135,7 @@ describe('WalletAuthService', () => {
         service.startOauth({
           provider: 'github',
           codeChallenge: 'x'.repeat(43),
+          codeChallengeMethod: 'S256',
         }),
       ).rejects.toMatchObject({ code: ApiErrorCode.WalletProviderUnavailable });
     });
@@ -145,6 +146,7 @@ describe('WalletAuthService', () => {
         service.startOauth({
           provider: 'pollar',
           codeChallenge: 'x'.repeat(43),
+          codeChallengeMethod: 'S256',
         }),
       ).rejects.toBeInstanceOf(ApiError);
     });
@@ -156,6 +158,7 @@ describe('WalletAuthService', () => {
       const started = await service.startOauth({
         provider: 'google',
         codeChallenge: 'c'.repeat(43),
+        codeChallengeMethod: 'S256',
       });
 
       const stored = prisma.walletAuthHandshake.create.mock.calls[0][0].data;
@@ -226,7 +229,7 @@ describe('WalletAuthService', () => {
       await expect(
         service.claimOauth({
           state: 'st',
-          verifier: 'wrong-verifier-entirely',
+          codeVerifier: 'wrong-verifier-entirely',
         }),
       ).rejects.toMatchObject({ code: ApiErrorCode.WalletVerifierInvalid });
       expect(prisma.walletAuthHandshake.updateMany).not.toHaveBeenCalled();
@@ -240,7 +243,7 @@ describe('WalletAuthService', () => {
       prisma.walletAuthHandshake.updateMany.mockResolvedValue({ count: 1 });
       prisma.walletAccount.findUnique.mockResolvedValue(null);
 
-      await service.claimOauth({ state: 'st', verifier });
+      await service.claimOauth({ state: 'st', codeVerifier: verifier });
 
       expect(prisma.walletAuthHandshake.updateMany).toHaveBeenCalledWith({
         where: { state: 'st', status: WalletAuthHandshakeStatus.AUTHORIZED },
@@ -256,7 +259,9 @@ describe('WalletAuthService', () => {
       // The other request got there first.
       prisma.walletAuthHandshake.updateMany.mockResolvedValue({ count: 0 });
 
-      expect(await service.claimOauth({ state: 'st', verifier })).toEqual({
+      expect(
+        await service.claimOauth({ state: 'st', codeVerifier: verifier }),
+      ).toEqual({
         status: 'expired',
       });
     });
@@ -269,9 +274,14 @@ describe('WalletAuthService', () => {
       prisma.walletAuthHandshake.updateMany.mockResolvedValue({ count: 1 });
       prisma.walletAccount.findUnique.mockResolvedValue(null);
 
-      const result = await service.claimOauth({ state: 'st', verifier });
+      const result = await service.claimOauth({
+        state: 'st',
+        codeVerifier: verifier,
+      });
 
       expect(result.status).toBe('ready');
+      // A marker the wallet branches its onboarding on, never an id.
+      expect(result).toMatchObject({ account: 'new' });
       expect(prisma.walletLoginCode.create).not.toHaveBeenCalled();
     });
 
@@ -291,7 +301,10 @@ describe('WalletAuthService', () => {
       });
       prisma.walletLoginCode.create.mockResolvedValue({});
 
-      const result = await service.claimOauth({ state: 'st', verifier });
+      const result = await service.claimOauth({
+        state: 'st',
+        codeVerifier: verifier,
+      });
 
       expect(result.status).toBe('verify_email');
       expect(result).not.toHaveProperty('sessionToken');
@@ -305,7 +318,9 @@ describe('WalletAuthService', () => {
         ...authorizedHandshake(),
         status: WalletAuthHandshakeStatus.PENDING,
       });
-      expect(await service.claimOauth({ state: 'st', verifier })).toEqual({
+      expect(
+        await service.claimOauth({ state: 'st', codeVerifier: verifier }),
+      ).toEqual({
         status: 'pending',
       });
     });
@@ -316,7 +331,9 @@ describe('WalletAuthService', () => {
         ...authorizedHandshake(),
         status: WalletAuthHandshakeStatus.REDEEMED,
       });
-      expect(await service.claimOauth({ state: 'st', verifier })).toEqual({
+      expect(
+        await service.claimOauth({ state: 'st', codeVerifier: verifier }),
+      ).toEqual({
         status: 'expired',
       });
     });
@@ -561,6 +578,7 @@ describe('WalletAuthService', () => {
       });
 
       expect(result.status).toBe('ready');
+      expect(result).toMatchObject({ account: 'linked' });
       expect(prisma.walletBackup.upsert).toHaveBeenCalled();
     });
 
@@ -577,7 +595,8 @@ describe('WalletAuthService', () => {
 
       expect(result).toEqual({
         status: 'ready',
-        account: 'acc_1',
+        // `finish` speaks its own two-word vocabulary, and the wallet types it.
+        account: 'created',
         organizationId: 'org_1',
         keys: { dev: 'k_dev', prod: 'k_prod' },
       });
