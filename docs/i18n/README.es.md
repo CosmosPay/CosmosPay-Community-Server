@@ -132,6 +132,7 @@ se regenera a partir de los controllers y DTOs en cada ejecución de CI
 | Productos             | `/v1/products`           | Catálogo del comercio                                     |
 | Clientes              | `/v1/customers`          | Registros de pagadores derivados de las intenciones       |
 | Alias                 | `/v1/aliases`            | Identificadores de pago reclamables: reclamar, resolver, recuperar |
+| Inicio de sesión del wallet | `/v1/wallet` | Google / GitHub / código por email, y el respaldo cifrado de la semilla |
 | Activos               | `/v1/assets`             | Registro curado de activos por red                        |
 | Pollar                | `/v1/pollar`             | Puente OAuth (inicio de sesión social → wallet) + rutas de operador |
 | Analítica             | `/v1/summary`, `/v1/balances`, `/v1/logs` | Agregados y logs del dashboard           |
@@ -265,6 +266,15 @@ consola llega a ella. Las rutas usan la forma `{param}` de OpenAPI.
 | POST | `/v1/swaps/quote` | `swaps:read` | ✓ |
 | GET | `/v1/swaps/{id}` | `swaps:read` |  |
 | POST | `/v1/swaps/{id}/submit` | `swaps:write` | ✓ |
+| GET | `/v1/wallet/auth/providers` | `payments:read` | ✓ |
+| POST | `/v1/wallet/auth/oauth/authorize` | `payments:write` | ✓ |
+| GET | `/v1/wallet/auth/oauth/callback/{provider}` | none — `@Public()`, a browser redirect |  |
+| GET | `/v1/wallet/auth/oauth/session/{state}` | `payments:read` | ✓ |
+| POST | `/v1/wallet/auth/oauth/claim` | `payments:write` | ✓ |
+| POST | `/v1/wallet/auth/email/start` | `payments:write` | ✓ |
+| POST | `/v1/wallet/auth/email/verify` | `payments:write` | ✓ |
+| POST | `/v1/wallet/auth/finish` | `payments:write` | ✓ |
+| PUT | `/v1/wallet/backup` | `payments:write` | ✓ |
 | GET | `/v1/webhooks` | `webhooks:read` |  |
 | POST | `/v1/webhooks` | `webhooks:write` |  |
 | GET | `/v1/webhooks/{id}` | `webhooks:read` |  |

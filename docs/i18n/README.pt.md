@@ -132,6 +132,7 @@ escopo. **Os schemas de requisição e resposta ficam no contrato OpenAPI gerado
 | Produtos          | `/v1/products`           | Catálogo do comerciante                                  |
 | Clientes          | `/v1/customers`          | Registros de pagadores derivados dos intents             |
 | Aliases           | `/v1/aliases`            | Handles de pagamento reivindicáveis: reivindicar, resolver, recuperar |
+| Login da carteira | `/v1/wallet` | Google / GitHub / código por e-mail, e o backup cifrado da seed |
 | Ativos            | `/v1/assets`             | Registro curado de ativos por rede                       |
 | Pollar            | `/v1/pollar`             | Bridge OAuth (login social → carteira) + rotas de operador |
 | Analytics         | `/v1/summary`, `/v1/balances`, `/v1/logs` | Agregados e logs do dashboard           |
@@ -265,6 +266,15 @@ console chega até ela. Os caminhos usam a forma `{param}` do OpenAPI.
 | POST | `/v1/swaps/quote` | `swaps:read` | ✓ |
 | GET | `/v1/swaps/{id}` | `swaps:read` |  |
 | POST | `/v1/swaps/{id}/submit` | `swaps:write` | ✓ |
+| GET | `/v1/wallet/auth/providers` | `payments:read` | ✓ |
+| POST | `/v1/wallet/auth/oauth/authorize` | `payments:write` | ✓ |
+| GET | `/v1/wallet/auth/oauth/callback/{provider}` | none — `@Public()`, a browser redirect |  |
+| GET | `/v1/wallet/auth/oauth/session/{state}` | `payments:read` | ✓ |
+| POST | `/v1/wallet/auth/oauth/claim` | `payments:write` | ✓ |
+| POST | `/v1/wallet/auth/email/start` | `payments:write` | ✓ |
+| POST | `/v1/wallet/auth/email/verify` | `payments:write` | ✓ |
+| POST | `/v1/wallet/auth/finish` | `payments:write` | ✓ |
+| PUT | `/v1/wallet/backup` | `payments:write` | ✓ |
 | GET | `/v1/webhooks` | `webhooks:read` |  |
 | POST | `/v1/webhooks` | `webhooks:write` |  |
 | GET | `/v1/webhooks/{id}` | `webhooks:read` |  |

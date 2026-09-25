@@ -314,6 +314,63 @@ export const API_ERROR_CASES: Readonly<Record<ApiErrorCode, ApiErrorCase>> = {
     path: '/v1/pollar/oauth/token',
   },
 
+  // --- wallet sign-in --------------------------------------------------------
+  [ApiErrorCode.WalletHandshakeInvalid]: {
+    statuses: [400],
+    summary: 'No such sign-in handshake, or one that is no longer open',
+    message: 'This sign-in has expired. Start again.',
+    path: '/v1/wallet/auth/oauth/claim',
+  },
+  [ApiErrorCode.WalletVerifierInvalid]: {
+    statuses: [400],
+    summary: 'The PKCE verifier does not match the handshake',
+    message: 'The verifier does not match this handshake.',
+    path: '/v1/wallet/auth/oauth/claim',
+  },
+  [ApiErrorCode.WalletLoginCodeInvalid]: {
+    statuses: [400],
+    summary: 'The emailed code is wrong, spent or expired',
+    message: 'That code is not right.',
+    path: '/v1/wallet/auth/email/verify',
+  },
+  [ApiErrorCode.WalletLoginCodeCooldown]: {
+    statuses: [400],
+    summary: 'Another code was sent to this mailbox moments ago',
+    message:
+      'A code was just sent to that address. Wait a moment before asking for another.',
+    path: '/v1/wallet/auth/email/start',
+  },
+  [ApiErrorCode.WalletSessionInvalid]: {
+    statuses: [401],
+    summary: 'The sign-in token is missing, expired, or was not minted here',
+    message: 'This sign-in has expired. Start again.',
+    path: '/v1/wallet/auth/finish',
+  },
+  [ApiErrorCode.WalletSignatureInvalid]: {
+    statuses: [400],
+    summary: 'The signature does not verify, or its timestamp is out of window',
+    message: 'The signature does not verify against that account.',
+    path: '/v1/wallet/auth/finish',
+  },
+  [ApiErrorCode.WalletBackupInvalid]: {
+    statuses: [400],
+    summary: 'Not a backup box this service will keep',
+    message: 'That is not a backup box this service will keep.',
+    path: '/v1/wallet/backup',
+  },
+  [ApiErrorCode.WalletAccountMismatch]: {
+    statuses: [404],
+    summary: 'No backup is stored for the account that signed',
+    message: 'No backup is stored for that account.',
+    path: '/v1/wallet/backup',
+  },
+  [ApiErrorCode.WalletProviderUnavailable]: {
+    statuses: [400, 503],
+    summary: 'That provider is unknown, or not configured on this deployment',
+    message: 'google sign-in is not configured on this deployment.',
+    path: '/v1/wallet/auth/oauth/authorize',
+  },
+
   // --- service --------------------------------------------------------------
   [ApiErrorCode.Misconfigured]: {
     statuses: [503],

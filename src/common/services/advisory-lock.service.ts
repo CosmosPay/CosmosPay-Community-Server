@@ -100,4 +100,5 @@ export enum AdvisoryLockKey {
   RateLimitPrune = 881_006,
   PollarWalletProvisionSweeper = 881_007,
   AliasChallengeSweeper = 881_008,
+  WalletAuthSweeper = 881_009,
 }

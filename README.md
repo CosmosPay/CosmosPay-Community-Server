@@ -130,6 +130,7 @@ regenerated from the controllers and DTOs on every CI run
 | Products          | `/v1/products`           | Merchant catalogue                                        |
 | Customers         | `/v1/customers`          | Payer records derived from intents                        |
 | Aliases           | `/v1/aliases`            | Claimable payment handles: claim, resolve, recover        |
+| Wallet sign-in    | `/v1/wallet`             | Google / GitHub / email code, and the encrypted seed backup |
 | Assets            | `/v1/assets`             | Curated asset registry per network                        |
 | Pollar            | `/v1/pollar`             | OAuth bridge (social login → wallet) + operator routes    |
 | Analytics         | `/v1/summary`, `/v1/balances`, `/v1/logs` | Dashboard aggregates and logs            |
@@ -262,6 +263,15 @@ Paths use the OpenAPI `{param}` form.
 | POST | `/v1/swaps/quote` | `swaps:read` | ✓ |
 | GET | `/v1/swaps/{id}` | `swaps:read` |  |
 | POST | `/v1/swaps/{id}/submit` | `swaps:write` | ✓ |
+| GET | `/v1/wallet/auth/providers` | `payments:read` | ✓ |
+| POST | `/v1/wallet/auth/oauth/authorize` | `payments:write` | ✓ |
+| GET | `/v1/wallet/auth/oauth/callback/{provider}` | none — `@Public()`, a browser redirect |  |
+| GET | `/v1/wallet/auth/oauth/session/{state}` | `payments:read` | ✓ |
+| POST | `/v1/wallet/auth/oauth/claim` | `payments:write` | ✓ |
+| POST | `/v1/wallet/auth/email/start` | `payments:write` | ✓ |
+| POST | `/v1/wallet/auth/email/verify` | `payments:write` | ✓ |
+| POST | `/v1/wallet/auth/finish` | `payments:write` | ✓ |
+| PUT | `/v1/wallet/backup` | `payments:write` | ✓ |
 | GET | `/v1/webhooks` | `webhooks:read` |  |
 | POST | `/v1/webhooks` | `webhooks:write` |  |
 | GET | `/v1/webhooks/{id}` | `webhooks:read` |  |

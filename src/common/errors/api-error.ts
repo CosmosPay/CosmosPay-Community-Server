@@ -131,6 +131,50 @@ export enum ApiErrorCode {
    */
   PollarIdentityMismatch = 'pollar_identity_mismatch',
 
+  // --- wallet sign-in --------------------------------------------------------
+  /**
+   * No handshake by that `state`, or one that has expired, failed or already
+   * been redeemed.
+   *
+   * Deliberately ONE code for all of those. A wallet that could tell "expired"
+   * from "already redeemed" from "never existed" could probe which `state`
+   * values this service has seen, and none of the three changes what the wallet
+   * does: start again.
+   */
+  WalletHandshakeInvalid = 'wallet_handshake_invalid',
+  /**
+   * The PKCE verifier does not hash to the challenge the handshake was opened
+   * with. Whoever is redeeming is not the device that started it.
+   */
+  WalletVerifierInvalid = 'wallet_verifier_invalid',
+  /** The emailed code is wrong, spent, expired, or its row is burned. */
+  WalletLoginCodeInvalid = 'wallet_login_code_invalid',
+  /**
+   * Another code was sent to this mailbox moments ago. The cooldown is on the
+   * ROW, so rotating a client address does not buy another email.
+   */
+  WalletLoginCodeCooldown = 'wallet_login_code_cooldown',
+  /** The session token is forged, edited, expired, or was minted elsewhere. */
+  WalletSessionInvalid = 'wallet_session_invalid',
+  /**
+   * The signature does not verify against the address it names, or the signed
+   * timestamp sits outside the accepted window.
+   */
+  WalletSignatureInvalid = 'wallet_signature_invalid',
+  /**
+   * The backup box is not one the wallet could have produced — wrong version,
+   * malformed, oversized, or sealed at a PBKDF2 cost below this service's floor.
+   */
+  WalletBackupInvalid = 'wallet_backup_invalid',
+  /**
+   * The account this sign-in resolves to is attached to a different Stellar
+   * address, and no replacement was authorized. Replacing a backup is the
+   * "forgot the password" door and is never taken implicitly.
+   */
+  WalletAccountMismatch = 'wallet_account_mismatch',
+  /** This provider is not configured on this deployment. */
+  WalletProviderUnavailable = 'wallet_provider_unavailable',
+
   // --- service --------------------------------------------------------------
   Misconfigured = 'misconfigured',
   Internal = 'internal_error',

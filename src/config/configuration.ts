@@ -8,6 +8,8 @@ import {
   DEFAULT_POLLAR_SWEEP_INTERVAL_MS,
   DEFAULT_POLLAR_TIMEOUT_MS,
   DEFAULT_RATE_LIMIT_PRUNE_INTERVAL_MS,
+  DEFAULT_WALLET_AUTH_SWEEP_INTERVAL_MS,
+  DEFAULT_WALLET_AUTH_TIMEOUT_MS,
 } from '@/config/config.constants';
 import {
   parseRedirectUrlWhitelist,
@@ -204,6 +206,44 @@ export interface AppConfig {
     authorizationTtlMs: number;
     codeTtlMs: number;
     loginWaitMs: number;
+    sweep: {
+      enabled: boolean;
+      intervalMs: number;
+    };
+  };
+  walletAuth: {
+    /**
+     * The public origin a BROWSER reaches this service on — the gateway's, not
+     * the upstream's. The OAuth redirect URI is built from it, and a provider
+     * refuses a redirect URI it does not hold verbatim, so a wrong value fails
+     * at the consent screen rather than quietly here.
+     */
+    publicBaseUrl: string;
+    /**
+     * Seals the session token a finished sign-in hands the wallet. Defaults to
+     * the gateway secret, which every deployment already sets — a separate
+     * variable nobody knew about would mean tokens sealed under the empty
+     * string, and `sealed-box` refuses that rather than doing it.
+     */
+    sessionSecret: string;
+    /**
+     * Base URL of the operator console that performs the two legs this service
+     * deliberately does not: sending the login-code email, and minting the
+     * account's gateway credentials (which needs APISIX admin).
+     *
+     * Unset means this deployment has no email door and cannot finish a
+     * sign-in — reported as such by `GET /v1/wallet/auth/providers` rather than
+     * discovered at the end of a flow. A self-hosted deployment points it at its
+     * own sender and owes this service nothing else.
+     */
+    consoleUrl: string;
+    /** Proves a call to the console came from a backend. Defaults to the gateway secret. */
+    consoleSecret: string;
+    /** Per-provider OAuth credentials. An empty pair disables that provider. */
+    google: { clientId: string; clientSecret: string };
+    github: { clientId: string; clientSecret: string };
+    /** How long a call out to a provider may take before it is a failure. */
+    timeoutMs: number;
     sweep: {
       enabled: boolean;
       intervalMs: number;
@@ -444,6 +484,47 @@ export default (): AppConfig => ({
       intervalMs: parseInt(
         process.env.POLLAR_SWEEP_INTERVAL_MS ??
           String(DEFAULT_POLLAR_SWEEP_INTERVAL_MS),
+        10,
+      ),
+    },
+  },
+  walletAuth: {
+    publicBaseUrl: (process.env.WALLET_AUTH_PUBLIC_BASE_URL ?? '').replace(
+      /\/+$/,
+      '',
+    ),
+    // Falls back to the gateway secret rather than to '' — see the interface.
+    sessionSecret:
+      process.env.WALLET_AUTH_SESSION_SECRET?.trim() ||
+      process.env.APISIX_GATEWAY_SECRET ||
+      '',
+    consoleUrl: (process.env.WALLET_AUTH_CONSOLE_URL ?? '').replace(/\/+$/, ''),
+    consoleSecret:
+      process.env.WALLET_AUTH_CONSOLE_SECRET?.trim() ||
+      process.env.APISIX_GATEWAY_SECRET ||
+      '',
+    google: {
+      clientId: process.env.WALLET_GOOGLE_CLIENT_ID ?? '',
+      clientSecret: process.env.WALLET_GOOGLE_CLIENT_SECRET ?? '',
+    },
+    github: {
+      clientId: process.env.WALLET_GITHUB_CLIENT_ID ?? '',
+      clientSecret: process.env.WALLET_GITHUB_CLIENT_SECRET ?? '',
+    },
+    timeoutMs: parseInt(
+      process.env.WALLET_AUTH_TIMEOUT_MS ??
+        String(DEFAULT_WALLET_AUTH_TIMEOUT_MS),
+      10,
+    ),
+    sweep: {
+      // Default on, for the same reason Pollar's is: an AUTHORIZED handshake
+      // left in the table is a redeemable sign-in sitting there.
+      enabled:
+        (process.env.WALLET_AUTH_SWEEP_ENABLED ?? 'true').toLowerCase() !==
+        'false',
+      intervalMs: parseInt(
+        process.env.WALLET_AUTH_SWEEP_INTERVAL_MS ??
+          String(DEFAULT_WALLET_AUTH_SWEEP_INTERVAL_MS),
         10,
       ),
     },

@@ -106,6 +106,7 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | 商品 | `/v1/products` | 商户商品目录 |
 | 客户 | `/v1/customers` | 由支付意图派生的付款方记录 |
 | 别名 | `/v1/aliases` | 可认领的支付标识：认领、解析、恢复 |
+| 钱包登录 | `/v1/wallet` | Google / GitHub / 邮件验证码，以及加密的助记词备份 |
 | 资产 | `/v1/assets` | 按网络划分的精选资产注册表 |
 | Pollar | `/v1/pollar` | OAuth 桥接（社交登录 → 钱包）+ 运营方路由 |
 | 分析 | `/v1/summary`, `/v1/balances`, `/v1/logs` | 仪表盘汇总与日志 |
@@ -233,6 +234,15 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | POST | `/v1/swaps/quote` | `swaps:read` | ✓ |
 | GET | `/v1/swaps/{id}` | `swaps:read` |  |
 | POST | `/v1/swaps/{id}/submit` | `swaps:write` | ✓ |
+| GET | `/v1/wallet/auth/providers` | `payments:read` | ✓ |
+| POST | `/v1/wallet/auth/oauth/authorize` | `payments:write` | ✓ |
+| GET | `/v1/wallet/auth/oauth/callback/{provider}` | none — `@Public()`, a browser redirect |  |
+| GET | `/v1/wallet/auth/oauth/session/{state}` | `payments:read` | ✓ |
+| POST | `/v1/wallet/auth/oauth/claim` | `payments:write` | ✓ |
+| POST | `/v1/wallet/auth/email/start` | `payments:write` | ✓ |
+| POST | `/v1/wallet/auth/email/verify` | `payments:write` | ✓ |
+| POST | `/v1/wallet/auth/finish` | `payments:write` | ✓ |
+| PUT | `/v1/wallet/backup` | `payments:write` | ✓ |
 | GET | `/v1/webhooks` | `webhooks:read` |  |
 | POST | `/v1/webhooks` | `webhooks:write` |  |
 | GET | `/v1/webhooks/{id}` | `webhooks:read` |  |

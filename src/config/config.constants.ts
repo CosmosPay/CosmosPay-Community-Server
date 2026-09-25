@@ -56,3 +56,15 @@ export const DEFAULT_POLLAR_SWEEP_INTERVAL_MS = 60_000;
  * and no reason to wake up more often than that.
  */
 export const DEFAULT_RATE_LIMIT_PRUNE_INTERVAL_MS = 10 * 60 * 1000;
+
+/**
+ * Upstream budget for one call to Google or GitHub during a wallet sign-in.
+ *
+ * Shorter than the Pollar budget: these are a token exchange and a profile read
+ * against two of the most available endpoints on the internet, and the person is
+ * watching a spinner in a browser that just came back from a consent screen.
+ */
+export const DEFAULT_WALLET_AUTH_TIMEOUT_MS = 10_000;
+
+/** Sweeper cadence for expiring stale sign-in handshakes and login codes. */
+export const DEFAULT_WALLET_AUTH_SWEEP_INTERVAL_MS = 60_000;
