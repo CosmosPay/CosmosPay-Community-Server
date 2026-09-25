@@ -661,11 +661,12 @@ export class WalletAuthService {
       });
     }
 
-    const keys = await this.provisionKeys(
-      account.id,
-      dto.stellarAddress,
-      identity.email,
-    );
+    const keys = await this.provisionKeys({
+      accountId: account.id,
+      stellarAddress: dto.stellarAddress,
+      email: identity.email,
+      name,
+    });
 
     return {
       status: 'ready' as const,
@@ -832,20 +833,20 @@ export class WalletAuthService {
    * that list. The console already holds admin for the dashboard's own key
    * management, so the capability lives in one place rather than two.
    */
-  private async provisionKeys(
-    accountId: string,
-    stellarAddress: string,
-    email: string,
-  ): Promise<{
+  private async provisionKeys(input: {
+    accountId: string;
+    stellarAddress: string;
+    email: string;
+    name: string;
+  }): Promise<{
     organizationId: string;
     dev: string | null;
     prod: string | null;
   }> {
-    const answer = (await this.postToConsole('/wallet-auth/provision', {
-      accountId,
-      stellarAddress,
-      email,
-    })) as {
+    const answer = (await this.postToConsole(
+      '/wallet-auth/provision',
+      input,
+    )) as {
       organizationId?: unknown;
       keys?: { dev?: unknown; prod?: unknown };
     };
