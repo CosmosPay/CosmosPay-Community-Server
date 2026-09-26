@@ -102,6 +102,24 @@ export function buildSwaggerConfig(openapi: AppConfig['openapi']) {
           'whatever a client sends.',
       },
       'consumer',
+    )
+    // SEP-30's own credential. Not an API key and not the gateway's: a JWT the
+    // recovery server itself minted, either from a SEP-10 challenge ("holds the
+    // account's key") or from an identity proof ("proved this inbox"). The routes
+    // that take it are `@Public()` to the gateway, so without this scheme the spec
+    // would say they need nothing at all.
+    .addBearerAuth(
+      {
+        type: 'http',
+        scheme: 'bearer',
+        bearerFormat: 'JWT',
+        description:
+          'A token from THIS recovery server: `POST /v1/sep10/auth` (the ' +
+          "account's key) or `POST /v1/sep30/identity` / " +
+          '`/identity/email/verify` (an inbox). The sibling server never ' +
+          'accepts it.',
+      },
+      SEP_TOKEN_SCHEME,
     );
 
   // Optionally point the spec at the public gateway host (root URL — paths
@@ -277,6 +295,12 @@ const RESPONSE_STATUS: Record<SharedErrorResponse, number> = {
   UpstreamTimeout: 504,
 };
 
+/**
+ * The security scheme SEP-30's account routes declare (`@ApiBearerAuth`) —
+ * exported so the controller and the post-processing name the same one.
+ */
+export const SEP_TOKEN_SCHEME = 'sep-token';
+
 /** An operation plus the vendor extensions this codebase's decorators publish. */
 interface CosmosOperation extends OperationObject {
   [PUBLIC_EXTENSION_KEY]?: boolean;
@@ -382,10 +406,16 @@ export function attachErrorResponses(document: OpenAPIObject): OpenAPIObject {
   for (const { path, operation } of operationsOf(document)) {
     const responses: ResponsesObject = (operation.responses ??= {});
 
-    // A public route is served without credentials at all. Saying so is what
-    // makes an imported collection work: the tool otherwise sends the
-    // document-level auth and the reader wonders which header was wrong.
-    if (operation[PUBLIC_EXTENSION_KEY]) operation.security = [];
+    // A public route is served without GATEWAY credentials at all. Saying so is
+    // what makes an imported collection work: the tool otherwise sends the
+    // document-level auth and the reader wonders which header was wrong. The one
+    // requirement a public route may still carry is SEP-30's own token, which it
+    // declared itself and which is not the gateway's to waive.
+    if (operation[PUBLIC_EXTENSION_KEY]) {
+      operation.security = (operation.security ?? []).filter(
+        (requirement) => SEP_TOKEN_SCHEME in requirement,
+      );
+    }
 
     const rateLimited = Boolean(operation[RATE_LIMIT_EXTENSION_KEY]?.length);
 

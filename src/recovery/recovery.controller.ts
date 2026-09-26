@@ -21,6 +21,7 @@ import {
 } from '@nestjs/swagger';
 import { Response } from 'express';
 import { Public } from '@/common/decorators/public.decorator';
+import { SEP_TOKEN_SCHEME } from '@/swagger';
 import { RateLimit } from '@/common/decorators/rate-limit.decorator';
 import {
   RecoveryEmailStartDto,
@@ -132,7 +133,6 @@ export class Sep10Controller {
 
 /** SEP-30 plus this server's two ways to prove an inbox. */
 @ApiTags('recovery')
-@ApiBearerAuth()
 @UseFilters(SepExceptionFilter)
 @Controller({ path: 'sep30', version: '1' })
 export class Sep30Controller {
@@ -184,6 +184,7 @@ export class Sep30Controller {
   /* --------------------------------- SEP-30 -------------------------------- */
 
   @Get('accounts')
+  @ApiBearerAuth(SEP_TOKEN_SCHEME)
   @Public()
   @RateLimit(SEP30_READ_RATE_LIMIT)
   @ApiOperation({
@@ -197,6 +198,7 @@ export class Sep30Controller {
   }
 
   @Post('accounts/:address')
+  @ApiBearerAuth(SEP_TOKEN_SCHEME)
   // 200, as the reference implementation answers; a client reads the body, and
   // one that insisted on 201 would be insisting on a status the spec never names.
   @HttpCode(200)
@@ -218,6 +220,7 @@ export class Sep30Controller {
   }
 
   @Put('accounts/:address')
+  @ApiBearerAuth(SEP_TOKEN_SCHEME)
   @Public()
   @RateLimit(SEP30_WRITE_RATE_LIMIT)
   @ApiOperation({
@@ -237,6 +240,7 @@ export class Sep30Controller {
   }
 
   @Get('accounts/:address')
+  @ApiBearerAuth(SEP_TOKEN_SCHEME)
   @Public()
   @RateLimit(SEP30_READ_RATE_LIMIT)
   @ApiOperation({ summary: 'Describe an account' })
@@ -248,6 +252,7 @@ export class Sep30Controller {
   }
 
   @Delete('accounts/:address')
+  @ApiBearerAuth(SEP_TOKEN_SCHEME)
   @Public()
   @RateLimit(SEP30_WRITE_RATE_LIMIT)
   @ApiOperation({ summary: 'Forget an account (SEP-10 token of that account)' })
@@ -259,6 +264,7 @@ export class Sep30Controller {
   }
 
   @Post('accounts/:address/sign/:signer')
+  @ApiBearerAuth(SEP_TOKEN_SCHEME)
   @HttpCode(200)
   @Public()
   @RateLimit(SEP30_SIGN_RATE_LIMIT)

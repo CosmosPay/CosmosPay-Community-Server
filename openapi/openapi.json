@@ -7471,7 +7471,6 @@
             "$ref": "#/components/responses/InternalError"
           }
         },
-        "security": [],
         "summary": "Exchange an OIDC ID token for this server's identity token",
         "tags": [
           "recovery"
@@ -7483,7 +7482,8 @@
             "limit": 30,
             "windowMs": 600000
           }
-        ]
+        ],
+        "security": []
       }
     },
     "/v1/sep30/identity/email/start": {
@@ -7538,7 +7538,6 @@
             "$ref": "#/components/responses/InternalError"
           }
         },
-        "security": [],
         "summary": "Email a code that proves an inbox to this server",
         "tags": [
           "recovery"
@@ -7550,7 +7549,8 @@
             "limit": 5,
             "windowMs": 600000
           }
-        ]
+        ],
+        "security": []
       }
     },
     "/v1/sep30/identity/email/verify": {
@@ -7605,7 +7605,6 @@
             "$ref": "#/components/responses/InternalError"
           }
         },
-        "security": [],
         "summary": "Answer an emailed code",
         "tags": [
           "recovery"
@@ -7617,7 +7616,8 @@
             "limit": 30,
             "windowMs": 600000
           }
-        ]
+        ],
+        "security": []
       }
     },
     "/v1/sep30/accounts": {
@@ -7671,7 +7671,11 @@
             "$ref": "#/components/responses/InternalError"
           }
         },
-        "security": [],
+        "security": [
+          {
+            "sep-token": []
+          }
+        ],
         "summary": "Accounts this caller may recover (paged by `after`)",
         "tags": [
           "recovery"
@@ -7740,7 +7744,11 @@
             "$ref": "#/components/responses/InternalError"
           }
         },
-        "security": [],
+        "security": [
+          {
+            "sep-token": []
+          }
+        ],
         "summary": "Register an account (SEP-10 token of that account)",
         "tags": [
           "recovery"
@@ -7807,7 +7815,11 @@
             "$ref": "#/components/responses/InternalError"
           }
         },
-        "security": [],
+        "security": [
+          {
+            "sep-token": []
+          }
+        ],
         "summary": "Replace who may recover an account (SEP-10 token of that account)",
         "tags": [
           "recovery"
@@ -7861,7 +7873,11 @@
             "$ref": "#/components/responses/InternalError"
           }
         },
-        "security": [],
+        "security": [
+          {
+            "sep-token": []
+          }
+        ],
         "summary": "Describe an account",
         "tags": [
           "recovery"
@@ -7915,7 +7931,11 @@
             "$ref": "#/components/responses/InternalError"
           }
         },
-        "security": [],
+        "security": [
+          {
+            "sep-token": []
+          }
+        ],
         "summary": "Forget an account (SEP-10 token of that account)",
         "tags": [
           "recovery"
@@ -7985,7 +8005,11 @@
             "$ref": "#/components/responses/InternalError"
           }
         },
-        "security": [],
+        "security": [
+          {
+            "sep-token": []
+          }
+        ],
         "summary": "Co-sign a recovery transaction",
         "tags": [
           "recovery"
@@ -10826,6 +10850,12 @@
         "in": "header",
         "name": "X-Consumer-Username",
         "description": "The authenticated consumer. Every tenant query filters by it, so two values are two separate sets of data. APISIX overwrites whatever a client sends."
+      },
+      "sep-token": {
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "type": "http",
+        "description": "A token from THIS recovery server: `POST /v1/sep10/auth` (the account's key) or `POST /v1/sep30/identity` / `/identity/email/verify` (an inbox). The sibling server never accepts it."
       }
     },
     "schemas": {
