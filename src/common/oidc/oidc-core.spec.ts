@@ -196,6 +196,42 @@ describe('verifyIdToken', () => {
     expect(verifyIdToken(token, keys, expect_, NOW).ok).toBe(true);
   });
 
+  it('reports an unverified email instead of refusing when the caller opts in', () => {
+    const token = jwt(
+      'RS256',
+      'k-rsa',
+      good({ email_verified: 'true' }),
+      rsa.privateKey,
+    );
+    const result = verifyIdToken(
+      token,
+      keys,
+      { ...expect_, allowUnverifiedEmail: true },
+      NOW,
+    );
+    expect(result).toMatchObject({
+      ok: true,
+      claims: { emailVerified: false },
+    });
+  });
+
+  it('still checks everything else when an unverified email is allowed', () => {
+    const token = jwt(
+      'RS256',
+      'k-rsa',
+      good({ email_verified: false, nonce: 'n-2' }),
+      rsa.privateKey,
+    );
+    expect(
+      verifyIdToken(
+        token,
+        keys,
+        { ...expect_, allowUnverifiedEmail: true },
+        NOW,
+      ),
+    ).toEqual({ ok: false, error: 'wrong_nonce' });
+  });
+
   it('refuses a login older than the maximum age', () => {
     const token = jwt(
       'RS256',

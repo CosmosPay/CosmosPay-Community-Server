@@ -36,6 +36,7 @@ import {
   WALLET_AUTH_POLL_RATE_LIMIT,
   WALLET_RECOVERY_SETUP_GLOBAL_RATE_LIMIT,
   WALLET_RECOVERY_SETUP_RATE_LIMIT,
+  WALLET_SESSION_HEADER,
 } from '@/wallet-auth/wallet-auth.constants';
 import { WalletAuthService } from '@/wallet-auth/wallet-auth.service';
 import { callbackPage } from '@/wallet-auth/wallet-auth-page';
@@ -222,12 +223,17 @@ export class WalletAuthController {
       'A NEW email ends here, with a session token. An email that ALREADY has ' +
       'an account gets `verify_email` instead and a code in its inbox: a ' +
       'provider proves who consented, not who opened the sign-in, and an ' +
-      'existing account is where the backup worth stealing is.',
+      'existing account is where the backup worth stealing is. An Authentik ' +
+      'email the provider has not confirmed also gets `verify_email`, account ' +
+      'or not, under the same per-address cooldown as `email/start`.',
   })
   @ApiOkResponse(oneOf(WalletAuthReadyEntity, WalletAuthVerifyEmailEntity))
   @ApiErrorResponse({
     status: 400,
-    codes: [ApiErrorCode.WalletVerifierInvalid],
+    codes: [
+      ApiErrorCode.WalletVerifierInvalid,
+      ApiErrorCode.WalletLoginCodeCooldown,
+    ],
   })
   claimOauth(@Body() dto: ClaimWalletOauthDto) {
     return this.walletAuth.claimOauth(dto);
@@ -278,7 +284,8 @@ export class WalletAuthController {
   @ApiOperation({
     summary: 'Attach the proven identity to the account this device signs for',
     description:
-      'Send the session token as `Authorization: Bearer`. The signature covers ' +
+      'Send the session token as `X-Wallet-Session: {sessionToken}` — the ' +
+      'gateway strips `Authorization`. The signature covers ' +
       'exactly:\n\n' +
       '```\n' +
       'Cosmos Pay Wallet sign-in\n' +
@@ -291,8 +298,11 @@ export class WalletAuthController {
       'is what makes signing it safe.',
   })
   @ApiHeader({
-    name: 'Authorization',
-    description: 'Bearer {sessionToken}, from the sign-in that just finished.',
+    name: 'X-Wallet-Session',
+    description:
+      '{sessionToken}, from the sign-in that just finished. ' +
+      '`Authorization: Bearer {sessionToken}` is read too, but only on a ' +
+      'direct call: APISIX strips it.',
     required: true,
   })
   @ApiOkResponse(oneOf(WalletSignInFinishedEntity, WalletBackupConflictEntity))
@@ -308,10 +318,11 @@ export class WalletAuthController {
     ],
   })
   finish(
+    @Headers(WALLET_SESSION_HEADER) session: string | undefined,
     @Headers('authorization') authorization: string | undefined,
     @Body() dto: FinishWalletSignInDto,
   ) {
-    return this.walletAuth.finish(bearer(authorization), dto);
+    return this.walletAuth.finish(sessionToken(session, authorization), dto);
   }
 }
 
@@ -378,7 +389,8 @@ export class WalletBackupController {
   @ApiOperation({
     summary: "Sponsor the reserve of an account's two recovery signers",
     description:
-      'Send the session token as `Authorization: Bearer`. The signature covers ' +
+      'Send the session token as `X-Wallet-Session: {sessionToken}` — the ' +
+      'gateway strips `Authorization`. The signature covers ' +
       'exactly:\n\n' +
       '```\n' +
       'Cosmos Pay Wallet recovery setup\n' +
@@ -390,8 +402,10 @@ export class WalletBackupController {
       'refused when the account already has a signer besides its master key.',
   })
   @ApiHeader({
-    name: 'Authorization',
-    description: 'Bearer {sessionToken}',
+    name: 'X-Wallet-Session',
+    description:
+      '{sessionToken}. `Authorization: Bearer {sessionToken}` is read too, ' +
+      'but only on a direct call: APISIX strips it.',
     required: true,
   })
   @ApiOkResponse({ type: WalletRecoverySetupEntity })
@@ -405,28 +419,40 @@ export class WalletBackupController {
     codes: [ApiErrorCode.WalletRecoverySetupRefused],
   })
   sponsorRecoverySetup(
+    @Headers(WALLET_SESSION_HEADER) session: string | undefined,
     @Headers('authorization') authorization: string | undefined,
     @Body() dto: SponsorRecoverySetupDto,
   ) {
-    return this.walletAuth.sponsorRecoverySetup(bearer(authorization), dto);
+    return this.walletAuth.sponsorRecoverySetup(
+      sessionToken(session, authorization),
+      dto,
+    );
   }
 }
 
 /**
- * The bearer token, or a refusal.
+ * The session token, or a refusal.
  *
- * Refusing an absent header here rather than letting an empty string reach
+ * `X-Wallet-Session` first: through APISIX it is the only place the token can
+ * ride, because the gateway strips `Authorization` (see WALLET_SESSION_HEADER).
+ * A `Bearer` in `Authorization` is the fallback for a direct call.
+ *
+ * Refusing an absent token here rather than letting an empty string reach
  * `readSessionToken` keeps the two failures apart: "you sent no token" and "the
  * token you sent is not good" are different sentences, and the second one sends
  * whoever is debugging to look at their sealing secret.
  */
-function bearer(authorization: string | undefined): string {
-  const value = authorization?.trim() ?? '';
-  const match = /^Bearer\s+(.+)$/i.exec(value);
+function sessionToken(
+  session: string | undefined,
+  authorization: string | undefined,
+): string {
+  const direct = session?.trim();
+  if (direct) return direct;
+  const match = /^Bearer\s+(.+)$/i.exec(authorization?.trim() ?? '');
   if (!match) {
     throw ApiError.unauthorized(
       ApiErrorCode.WalletSessionInvalid,
-      'Send the session token as `Authorization: Bearer {token}`.',
+      'Send the session token as `X-Wallet-Session: {token}`.',
     );
   }
   return match[1].trim();

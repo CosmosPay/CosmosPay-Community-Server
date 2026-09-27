@@ -78,6 +78,7 @@ function makeService(settings: Partial<typeof SETTINGS> = {}) {
     walletLoginCode: {
       create: jest.fn(),
       count: jest.fn().mockResolvedValue(0),
+      findFirst: jest.fn().mockResolvedValue(null),
       findUnique: jest.fn(),
       update: jest.fn(),
       updateMany: jest.fn(),
@@ -129,7 +130,7 @@ describe('WalletAuthService — Authentik and the recovery identity', () => {
   });
   afterEach(() => jest.useRealTimers());
 
-  function authorized(idToken: string | null) {
+  function authorized(idToken: string | null, emailVerified = true) {
     return {
       state: 'st',
       provider: WalletAuthProvider.AUTHENTIK,
@@ -139,6 +140,7 @@ describe('WalletAuthService — Authentik and the recovery identity', () => {
       name: 'Ada',
       avatar: null,
       subject: 'ak-1',
+      emailVerified,
       idToken,
       expiresAt: new Date(NOW + 60_000),
     };
@@ -214,6 +216,7 @@ describe('WalletAuthService — Authentik and the recovery identity', () => {
         iat: 0,
         iss: OIDC.issuer,
         authTime: 0,
+        emailVerified: true,
       },
     });
 
@@ -235,6 +238,7 @@ describe('WalletAuthService — Authentik and the recovery identity', () => {
       data: {
         status: WalletAuthHandshakeStatus.AUTHORIZED,
         email: EMAIL,
+        emailVerified: true,
         providerVerifier: null,
         nonce: null,
       },
@@ -246,6 +250,94 @@ describe('WalletAuthService — Authentik and the recovery identity', () => {
     expect(openJson(stored, SESSION_SECRET, ID_TOKEN_PURPOSE)).toEqual({
       idToken: 'the.id.token',
     });
+  });
+
+  /* Authentik signed for the address but never confirmed it. That is not a
+     dead end: the handshake completes, flagged, and the claim sends a code. */
+  it('completes the callback for an UNCONFIRMED email, flagged and with no ID token kept', async () => {
+    const { service, prisma, oidc } = makeService();
+    oidc.discover.mockResolvedValue(DISCOVERY);
+    prisma.walletAuthHandshake.findUnique.mockResolvedValue({
+      state: 'st',
+      provider: WalletAuthProvider.AUTHENTIK,
+      status: WalletAuthHandshakeStatus.PENDING,
+      providerVerifier: 'pv',
+      nonce: 'the-nonce',
+      expiresAt: new Date(NOW + 60_000),
+    });
+    prisma.walletAuthHandshake.updateMany.mockResolvedValue({ count: 1 });
+    global.fetch = jest
+      .fn()
+      .mockResolvedValue(
+        answer({ access_token: 'at', id_token: 'the.id.token' }),
+      );
+    oidc.verify.mockResolvedValue({
+      ok: true,
+      claims: {
+        email: EMAIL,
+        name: 'Ada',
+        picture: null,
+        sub: 'ak-1',
+        exp: 0,
+        iat: 0,
+        iss: OIDC.issuer,
+        authTime: 0,
+        emailVerified: false,
+      },
+    });
+
+    expect(
+      await service.handleCallback('authentik', { code: 'c', state: 'st' }),
+    ).toEqual({ ok: true, reason: 'ok' });
+    expect(oidc.verify.mock.calls[0][1]).toMatchObject({
+      allowUnverifiedEmail: true,
+    });
+    expect(
+      prisma.walletAuthHandshake.updateMany.mock.calls[0][0].data,
+    ).toMatchObject({
+      status: WalletAuthHandshakeStatus.AUTHORIZED,
+      emailVerified: false,
+      idToken: null,
+    });
+  });
+
+  it('sends a code for an UNCONFIRMED email even when it has no account', async () => {
+    const { service, prisma } = makeService();
+    prisma.walletAuthHandshake.findUnique.mockResolvedValue(
+      authorized(null, false),
+    );
+    prisma.walletAuthHandshake.updateMany.mockResolvedValue({ count: 1 });
+    prisma.walletAccount.findUnique.mockResolvedValue(null);
+    prisma.walletLoginCode.create.mockResolvedValue({});
+
+    const result = await service.claimOauth({
+      state: 'st',
+      codeVerifier: verifier,
+    });
+
+    expect(result).toMatchObject({ status: 'verify_email', email: EMAIL });
+    expect(result).not.toHaveProperty('sessionToken');
+    expect(prisma.walletLoginCode.create.mock.calls[0][0].data).toMatchObject({
+      email: EMAIL,
+      via: WalletAuthMethod.AUTHENTIK,
+      idToken: null,
+    });
+  });
+
+  it('holds an UNCONFIRMED email to the inbox cooldown, without burning the handshake', async () => {
+    const { service, prisma } = makeService();
+    prisma.walletAuthHandshake.findUnique.mockResolvedValue(
+      authorized(null, false),
+    );
+    prisma.walletLoginCode.findFirst.mockResolvedValue({
+      sentAt: new Date(NOW - 1000),
+    });
+
+    await expect(
+      service.claimOauth({ state: 'st', codeVerifier: verifier }),
+    ).rejects.toMatchObject({ code: ApiErrorCode.WalletLoginCodeCooldown });
+    expect(prisma.walletAuthHandshake.updateMany).not.toHaveBeenCalled();
+    expect(prisma.walletLoginCode.create).not.toHaveBeenCalled();
   });
 
   it('fails the handshake when the ID token does not verify', async () => {

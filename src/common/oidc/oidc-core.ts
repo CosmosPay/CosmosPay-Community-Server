@@ -63,6 +63,11 @@ export interface IdTokenClaims {
   exp: number;
   /** When the person actually authenticated; `iat` when the provider omits it. */
   authTime: number;
+  /**
+   * Whether the provider says it confirmed `email` — literally `true` in the
+   * token. Always true unless the caller passed `allowUnverifiedEmail`.
+   */
+  emailVerified: boolean;
 }
 
 export interface IdTokenExpectations {
@@ -80,6 +85,13 @@ export interface IdTokenExpectations {
   maxAgeSeconds?: number;
   /** Tolerated clock difference, both ways. */
   skewSeconds?: number;
+  /**
+   * Accept a token whose email the provider has NOT confirmed, and report it as
+   * `emailVerified: false` instead of refusing. Only for a caller that proves the
+   * inbox itself before trusting the address — accounts are looked up by email,
+   * so anyone else acting on an unconfirmed one signs in as somebody else.
+   */
+  allowUnverifiedEmail?: boolean;
 }
 
 /** A public JWK (RFC 7517). Only the members this file reads are named. */
@@ -299,7 +311,8 @@ export function verifyIdToken(
   if (!sub || !email) return { ok: false, error: 'email_missing' };
   // Literally `true`. Accounts are looked up by email, so an address the provider
   // never confirmed is a way to sign in as somebody else's existing account.
-  if (c.email_verified !== true)
+  const emailVerified = c.email_verified === true;
+  if (!emailVerified && !expect.allowUnverifiedEmail)
     return { ok: false, error: 'email_unverified' };
 
   return {
@@ -313,6 +326,7 @@ export function verifyIdToken(
       iat: c.iat,
       exp: c.exp,
       authTime,
+      emailVerified,
     },
   };
 }

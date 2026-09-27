@@ -941,6 +941,8 @@ Pollar 在 key 的前缀中编码了网络和 key 类型，环境变量校验器
 | 因主机原因被拒绝的 webhook 目标——解析不到、私有地址、链路本地、元数据——统一为一个 `400` 和一条消息；原因留在服务日志里。格式错误的 URL、非 https 协议、内嵌凭证或缺少主机仍会说明问题所在 | 此前从响应里读取原因的集成方 | 注册端点会解析一个本服务能够到达的名称，因此逐条给出原因就等于让人一个 URL 一个 URL 地摸清内网 |
 | 当 `redirect_url` 带有片段、反斜杠、空白字符或控制字符时会被拒绝；不含内嵌凭证的 https 此前就已是必需 | 发送普通 URL 的人不受影响 | `https://app.acme.com\@evil.test` 指向哪个主机取决于谁来解析，而这个值还会被 BlindPay 和浏览器再读一次 |
 | 当 `POLLAR_BRIDGE_CALLBACK_URL` 是可路由主机上的纯 `http` 时，服务拒绝启动 | 在别处终止 TLS 并把回调配置成 `http` 的部署 | Pollar 会把浏览器连同查询字符串里的授权码一起送回该地址，而这个授权码可以换取用户的会话 |
+| `POST /v1/wallet/auth/oauth/claim`：提供方未确认邮箱（`email_verified` 不为 `true`）的 Authentik 登录，现在会完成回调并返回 `verify_email`，向该邮箱发送验证码（无论账户是否存在），而不再以 `email_unverified` 失败。此时不会发放 ID token，因此无法发起 SEP-30 恢复，并与 `POST /v1/wallet/auth/email/start` 共享按地址的冷却时间（`400 wallet_login_code_cooldown`）。请先运行迁移 `20260926120000_wallet_auth_unverified_email` | 钱包：新账户也要处理 `verify_email` | 用户会停在一个无路可走的页面；验证码证明了提供方未确认的邮箱地址 |
+| `POST /v1/wallet/auth/finish` 和 `POST /v1/wallet/recovery/setup` 从 `X-Wallet-Session: {sessionToken}` 读取会话令牌。`Authorization: Bearer` 仍会读取，但只有直接调用时才能到达服务 | 钱包：在 API key 之外发送 `X-Wallet-Session` | 网关在代理前会移除 `Authorization`（以及 `apikey`），因此经由 APISIX 时令牌从未到达，两个路由都返回 `401 wallet_session_invalid` |
 
 随之而来的部署说明：
 

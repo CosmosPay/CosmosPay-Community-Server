@@ -66,9 +66,17 @@ import {
   VerifyWalletEmailDto,
 } from '@/wallet-auth/dto/wallet-auth.dto';
 
-/** What a provider callback learned: who, and — from an OIDC provider — its ID token. */
+/**
+ * What a provider callback learned: who, whether the provider confirmed the
+ * email, and — from an OIDC provider — its ID token.
+ */
 type ReadIdentity =
-  | { ok: true; identity: ProviderIdentity; idToken: string | null }
+  | {
+      ok: true;
+      identity: ProviderIdentity;
+      emailVerified: boolean;
+      idToken: string | null;
+    }
   | { ok: false; error: IdentityFailure };
 
 /** What the callback route needs to render a page for the person. */
@@ -108,6 +116,9 @@ export interface CallbackOutcome {
  *    consented reads the inbox; a stranger who sent them the link does not. That
  *    is also the only door to an existing backup, which is the thing worth
  *    stealing.
+ *  - An email Authentik signed for but has NOT confirmed is treated the same
+ *    way, new account or not: the code to that inbox is the confirmation the
+ *    provider did not give, so the person is sent one instead of a dead end.
  *  - An email sign-in is the inbox proof itself, so it needs nothing else.
  *
  * ## The three steps, and what each hands out
@@ -349,6 +360,7 @@ export class WalletAuthService {
         name: identity.identity.name,
         avatar: identity.identity.avatar,
         subject: identity.identity.subject,
+        emailVerified: identity.emailVerified,
         idToken: identity.idToken ? this.sealIdToken(identity.idToken) : null,
         providerVerifier: null,
         nonce: null,
@@ -443,6 +455,13 @@ export class WalletAuthService {
       );
     }
 
+    // An unconfirmed email is an address the person merely TYPED into the
+    // provider, so it gets the email door's inbox budget — checked before the
+    // burn, so a refusal leaves the handshake to retry once the cooldown passes.
+    if (!handshake.emailVerified && handshake.email) {
+      await this.assertCanSendCode(normalizeEmail(handshake.email));
+    }
+
     // Single-shot: burn it before anything is handed back, so two concurrent
     // redemptions cannot both succeed. The ID token leaves the row with it.
     const burned = await this.prisma.walletAuthHandshake.updateMany({
@@ -470,8 +489,9 @@ export class WalletAuthService {
     // provider's word is not enough for it. Neither is it for a RECOVERY: the
     // identity that comes out of this is presented to the recovery servers, and a
     // stranger who sent someone this authorization link must not be the one who
-    // collects it. Only the inbox answers "who opened the sign-in".
-    if (account || dto.purpose === 'recovery') {
+    // collects it. Only the inbox answers "who opened the sign-in". And an email
+    // the provider never confirmed is not proven at all until the inbox answers.
+    if (account || dto.purpose === 'recovery' || !handshake.emailVerified) {
       const sent = await this.mintLoginCode(identity, handshake.idToken);
       return {
         status: 'verify_email' as const,
@@ -491,7 +511,32 @@ export class WalletAuthService {
   /** Start an email sign-in: a code to the mailbox, a claim token to the device. */
   async startEmail(dto: StartWalletEmailDto) {
     const email = normalizeEmail(dto.email);
+    await this.assertCanSendCode(email);
 
+    const existing = await this.prisma.walletAccount.findUnique({
+      where: { email },
+      select: { name: true, avatar: true },
+    });
+
+    const sent = await this.mintLoginCode({
+      email,
+      name: existing?.name ?? null,
+      avatar: existing?.avatar ?? null,
+      method: WalletAuthMethod.EMAIL,
+    });
+    return {
+      claimToken: sent.claimToken,
+      expiresInSeconds: sent.expiresInSeconds,
+    };
+  }
+
+  /**
+   * Refuse a code to an inbox that was just sent one, or too many today.
+   *
+   * Used where the caller chose the address: the email door, and an Authentik
+   * sign-in whose email the provider never confirmed.
+   */
+  private async assertCanSendCode(email: string): Promise<void> {
     // The cooldown is on the ROW, not only on the route budget: the route is
     // keyed by consumer plus client address, and the thing being protected is
     // somebody else's inbox. Rotating an address must not buy another email.
@@ -523,22 +568,6 @@ export class WalletAuthService {
         'Too many codes were sent to that address today. Try again tomorrow.',
       );
     }
-
-    const existing = await this.prisma.walletAccount.findUnique({
-      where: { email },
-      select: { name: true, avatar: true },
-    });
-
-    const sent = await this.mintLoginCode({
-      email,
-      name: existing?.name ?? null,
-      avatar: existing?.avatar ?? null,
-      method: WalletAuthMethod.EMAIL,
-    });
-    return {
-      claimToken: sent.claimToken,
-      expiresInSeconds: sent.expiresInSeconds,
-    };
   }
 
   /**
@@ -906,6 +935,8 @@ export class WalletAuthService {
         issuer: this.settings.oidc.issuer,
         audiences: [creds.clientId],
         nonce: handshake.nonce,
+        // Not a refusal: `claimOauth` sends an unconfirmed email a code.
+        allowUnverifiedEmail: true,
       },
       this.settings.timeoutMs,
     );
@@ -913,13 +944,7 @@ export class WalletAuthService {
       this.logger.warn(
         `wallet sign-in: authentik ID token refused: ${result.error}`,
       );
-      return {
-        ok: false,
-        error:
-          result.error === 'email_unverified'
-            ? 'email_unverified'
-            : 'profile_invalid',
-      };
+      return { ok: false, error: 'profile_invalid' };
     }
     return {
       ok: true,
@@ -929,7 +954,10 @@ export class WalletAuthService {
         avatar: result.claims.picture,
         subject: result.claims.sub,
       },
-      idToken: token.idToken,
+      emailVerified: result.claims.emailVerified,
+      // The recovery servers refuse a token whose email is unconfirmed, so one
+      // is never carried — the inbox code proves the email to US, not to them.
+      idToken: result.claims.emailVerified ? token.idToken : null,
     };
   }
 
@@ -1319,7 +1347,12 @@ const ID_TOKEN_PURPOSE = 'wallet-auth-id-token';
 /** A Google or GitHub answer, which carries no ID token worth keeping. */
 function withoutIdToken(result: IdentityResult): ReadIdentity {
   return result.ok
-    ? { ok: true, identity: result.identity, idToken: null }
+    ? {
+        ok: true,
+        identity: result.identity,
+        emailVerified: true,
+        idToken: null,
+      }
     : { ok: false, error: result.error };
 }
 

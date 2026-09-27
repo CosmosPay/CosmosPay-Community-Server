@@ -125,8 +125,8 @@ export class VerifyWalletEmailDto {
 }
 
 /**
- * The session token is NOT in this body — it rides in `Authorization: Bearer`,
- * which is where the wallet already puts it and where a credential belongs.
+ * The session token is NOT in this body — it rides in `X-Wallet-Session`, a
+ * header of its own because APISIX strips `Authorization` on the way here.
  */
 export class FinishWalletSignInDto {
   @ApiProperty({

@@ -215,7 +215,28 @@ describe('Wallet sign-in guards (e2e)', () => {
       ).expect(401);
 
       expect(res.body.code).toBe('wallet_session_invalid');
+      expect(res.body.message).toContain('X-Wallet-Session');
       expect(prismaMock.walletAccount.upsert).not.toHaveBeenCalled();
+    });
+
+    /* Through APISIX `Authorization` is stripped, so X-Wallet-Session is the
+       only place a session token can arrive. A token there must be judged on
+       its merits — refused as expired — not refused as missing. */
+    it('reads the session token from X-Wallet-Session', async () => {
+      const res = await asPublicKey(
+        request(http())
+          .post('/v1/wallet/auth/finish')
+          .set('x-wallet-session', 'v1.not-a-real-session-token')
+          .send({
+            stellarAddress:
+              'GDVEU3DD4KOFECV66VIHWEZOYX4ZKR3WV27L464SIIPOU2IUI3JCZA57',
+            signedAt: '2026-01-02T03:04:05Z',
+            signature: 'AAAA',
+          }),
+      );
+
+      expect(res.status).toBe(401);
+      expect(res.body.message).toBe('This sign-in has expired. Start again.');
     });
   });
 });

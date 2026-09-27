@@ -232,3 +232,14 @@ export const WALLET_RECOVERY_SETUP_GLOBAL_RATE_LIMIT: RateLimitPolicy = {
   windowMs: WALLET_AUTH_WINDOW_MS,
   per: 'consumer',
 };
+
+/**
+ * The header `finish` and `recovery/setup` read the session token from.
+ *
+ * Not `Authorization`: through APISIX that header carries the wallet's API key,
+ * and the gateway route strips `Authorization` and `apikey` before proxying — so
+ * a session token sent there never arrives, and the wallet sees a 401 for a token
+ * it did send. `Authorization: Bearer` is still read as a fallback, for a direct
+ * call with no gateway in front.
+ */
+export const WALLET_SESSION_HEADER = 'x-wallet-session';

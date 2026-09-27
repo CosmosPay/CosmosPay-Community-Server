@@ -229,6 +229,7 @@ describe('WalletAuthService', () => {
         name: 'Ada',
         avatar: null,
         subject: '123',
+        emailVerified: true,
         expiresAt: new Date(NOW + 60_000),
       };
     }

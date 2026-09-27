@@ -1428,14 +1428,18 @@ model WalletAuthHandshake {
 
   status WalletAuthHandshakeStatus @default(PENDING)
 
-  /// What the provider proved, filled at the callback. Always a VERIFIED email:
-  /// an account is looked up by it, so an unverified one would be a way to sign
-  /// in as somebody else.
+  /// What the provider said, filled at the callback. An account is looked up by
+  /// `email`, so an address the provider did not confirm is only ever finished
+  /// through a code to that inbox — see `emailVerified`.
   email   String?
   name    String?
   avatar  String?
   /// The provider's own stable id for the person (`sub`, or GitHub's numeric id).
   subject String?
+  /// False when the provider (Authentik) signed the identity but has not
+  /// confirmed the email. Redemption then always goes through `verify_email`: the
+  /// code to the inbox is the confirmation the provider did not give.
+  emailVerified Boolean @default(true)
 
   /// OIDC providers only (Authentik): the PKCE verifier THIS service presents at
   /// the provider's token endpoint, and the nonce the ID token must echo. Distinct
