@@ -1,4 +1,6 @@
 import {
+  DEFAULT_DEFINDEX_BASE_URL,
+  DEFAULT_DEFINDEX_TIMEOUT_MS,
   DEFAULT_HORIZON,
   DEFAULT_RATE_LIMIT_PRUNE_INTERVAL_MS,
   DEFAULT_RECOVERY_SWEEP_INTERVAL_MS,
@@ -446,9 +448,14 @@ export default (): AppConfig => ({
     },
   },
   defindex: {
-    apiKey: process.env.DEFINDEX_API_KEY ?? '',
-    baseUrl: (process.env.DEFINDEX_BASE_URL ?? 'https://api.defindex.io').replace(/\/+$/, ''),
-    timeoutMs: parseInt(process.env.DEFINDEX_TIMEOUT_MS ?? '30000', 10),
+    apiKey: process.env.DEFINDEX_API_KEY?.trim() ?? '',
+    baseUrl: (
+      process.env.DEFINDEX_BASE_URL ?? DEFAULT_DEFINDEX_BASE_URL
+    ).replace(/\/+$/, ''),
+    timeoutMs: parseInt(
+      process.env.DEFINDEX_TIMEOUT_MS ?? String(DEFAULT_DEFINDEX_TIMEOUT_MS),
+      10,
+    ),
   },
   rateLimit: {
     enabled:

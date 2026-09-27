@@ -14,7 +14,9 @@ import {
 } from '@/defindex/dto/defindex.dto';
 
 @ApiTags('DeFindex')
-@Controller('v1/defindex')
+// No `v1/` here: URI versioning adds it, and writing it twice served every
+// route at /v1/v1/defindex while the wallet calls /v1/defindex.
+@Controller('defindex')
 @AllowPublicKey()
 export class DefindexController {
   constructor(private readonly defindex: DefindexService) {}
