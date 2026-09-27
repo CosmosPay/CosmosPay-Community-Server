@@ -1,6 +1,14 @@
-import { SetMetadata } from '@nestjs/common';
+import { SetMetadata, applyDecorators } from '@nestjs/common';
+import { ApiExtension } from '@nestjs/swagger';
 
 export const ALLOW_PUBLIC_KEY = 'allowPublicKey';
+
+/**
+ * Vendor extension the published spec carries: whether the shared public key
+ * reaches this route. The README's route index answers the same question by
+ * hand, and a generated client or a wallet has no way to read a README.
+ */
+export const ALLOW_PUBLIC_KEY_EXTENSION_KEY = 'x-cosmos-public-key';
 
 /**
  * Marks a handler as reachable by the SHARED public API key.
@@ -30,4 +38,8 @@ export const ALLOW_PUBLIC_KEY = 'allowPublicKey';
  *   @RequirePermissions('swaps:read')
  *   quote(...) { ... }
  */
-export const AllowPublicKey = () => SetMetadata(ALLOW_PUBLIC_KEY, true);
+export const AllowPublicKey = () =>
+  applyDecorators(
+    SetMetadata(ALLOW_PUBLIC_KEY, true),
+    ApiExtension(ALLOW_PUBLIC_KEY_EXTENSION_KEY, true),
+  );

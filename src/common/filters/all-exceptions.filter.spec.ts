@@ -170,9 +170,19 @@ describe('AllExceptionsFilter', () => {
     );
 
     expect(status).toHaveBeenCalledWith(HttpStatus.SERVICE_UNAVAILABLE);
-    expect(body(json).error).toBe('Service Unavailable');
     expect(JSON.stringify(body(json))).not.toContain('db.internal');
     expect(JSON.stringify(body(json))).not.toContain('cosmos_app');
+    // Pinned whole, because this is the 503 `/v1/health/readiness` publishes as
+    // its example. Terminus' report has no `message`, so the envelope falls
+    // back to the exception's own name — the contract says exactly that.
+    expect(body(json)).toEqual({
+      statusCode: HttpStatus.SERVICE_UNAVAILABLE,
+      code: ApiErrorCode.ProviderUnavailable,
+      error: 'Service Unavailable',
+      message: 'Service Unavailable Exception',
+      path: '/v1/swaps',
+      timestamp: expect.any(String),
+    });
   });
 
   it('preserves class-validator message arrays', () => {

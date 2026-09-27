@@ -45,7 +45,7 @@ export const ALIAS_RECOVERY_MAX_ATTEMPTS = 5;
 //
 // Budgets are per consumer + client address (per /64 on IPv6). The window is
 // fixed, so the true ceiling across a window boundary is twice these numbers. The
-// span matches the Pollar and webhook budgets.
+// span matches the webhook budgets.
 
 const ALIAS_RATE_LIMIT_WINDOW_MS = 10 * 60 * 1000;
 

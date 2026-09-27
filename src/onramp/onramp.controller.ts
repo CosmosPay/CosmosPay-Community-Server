@@ -1,4 +1,5 @@
 import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
+import { ApiUpstream } from '@/common/decorators/api-upstream.decorator';
 import { WidePaginationQueryDto } from '@/common/dto/pagination.query.dto';
 import {
   ApiCreatedResponse,
@@ -30,6 +31,7 @@ export class OnrampController {
   constructor(private readonly onramp: OnrampService) {}
 
   @Post('quotes')
+  @ApiUpstream('BlindPay')
   @RequirePermissions('onramp:write')
   // A provider call on the instance every tenant shares, plus a stored row.
   @RateLimit(ONRAMP_QUOTE_RATE_LIMIT, BLINDPAY_CONSUMER_QUOTA_RATE_LIMIT)
@@ -43,6 +45,7 @@ export class OnrampController {
   }
 
   @Post('payins')
+  @ApiUpstream('BlindPay')
   @RequirePermissions('onramp:write')
   // Money: the payin and its bank instructions exist at the provider whatever
   // this service answers next.
@@ -70,6 +73,8 @@ export class OnrampController {
   }
 
   @Get('payins/:id')
+  // Refreshes the mirror from BlindPay before answering.
+  @ApiUpstream('BlindPay')
   @RequirePermissions('onramp:read')
   @ApiOperation({
     summary:
@@ -84,6 +89,7 @@ export class OnrampController {
   }
 
   @Post('trustline')
+  @ApiUpstream('BlindPay')
   @RequirePermissions('onramp:write')
   // Reads the account from Horizon, against the per-IP budget every route here
   // shares.

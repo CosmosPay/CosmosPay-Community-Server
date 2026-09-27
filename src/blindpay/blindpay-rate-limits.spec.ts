@@ -26,7 +26,7 @@ const offramp = OfframpController.prototype;
 describe('BlindPay-backed routes declare a budget', () => {
   it('counts every route that reaches BlindPay against the per-consumer quota', () => {
     // One BlindPay instance serves every tenant on the key, so the provider's
-    // quota is shared the way Pollar's is: a tenant looping quotes fails other
+    // quota is shared: a tenant looping quotes fails other
     // tenants' payins. A per-address budget cannot say that — the tenant picks
     // how many addresses it calls from.
     for (const handler of [

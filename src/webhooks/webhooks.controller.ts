@@ -14,6 +14,8 @@ import {
   ApiOperation,
   ApiTags,
 } from '@nestjs/swagger';
+import { ApiErrorResponse } from '@/common/decorators/api-error-response.decorator';
+import { ApiErrorCode } from '@/common/errors/api-error';
 import { CurrentConsumer } from '@/common/decorators/current-consumer.decorator';
 import { RateLimit } from '@/common/decorators/rate-limit.decorator';
 import { RequirePermissions } from '@/common/decorators/require-permissions.decorator';
@@ -148,6 +150,14 @@ export class WebhooksController {
   @RateLimit(WEBHOOK_REDELIVER_RATE_LIMIT)
   @ApiOperation({ summary: 'Manually re-send a past delivery' })
   @ApiCreatedResponse({ type: WebhookDeliveryEntity })
+  @ApiErrorResponse({
+    status: 409,
+    codes: [ApiErrorCode.PayloadExpired],
+    description:
+      '`payload_expired` — the delivery is past its retention window. The ' +
+      'event body was cleared, so there is nothing left to re-send; the ' +
+      'delivery row itself stays as an audit record.',
+  })
   redeliver(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Param('id') id: string,

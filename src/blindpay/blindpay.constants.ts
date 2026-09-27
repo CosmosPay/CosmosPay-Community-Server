@@ -175,7 +175,7 @@ export const SETTLED_KYC_STATUSES = ['approved', 'rejected'] as const;
  * onramp and offramp.
  *
  * One BlindPay instance serves every tenant on a key (two, counting the dev
- * instance), so the provider's quota is a shared resource the way Pollar's is:
+ * instance), so the provider's quota is a shared resource:
  * a tenant looping quotes does not merely slow itself down, it fails other
  * tenants' payins. The per-address budgets on each route tell one ordinary
  * caller from another and do nothing about that, because a tenant chooses how

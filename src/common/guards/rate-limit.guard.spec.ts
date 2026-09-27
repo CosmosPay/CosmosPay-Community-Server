@@ -2,9 +2,9 @@ import { Reflector } from '@nestjs/core';
 import { RATE_LIMIT_KEY } from '@/common/decorators/rate-limit.decorator';
 import { RateLimitGuard } from '@/common/guards/rate-limit.guard';
 
-const POLICY = { name: 'pollar:authorize', limit: 20, windowMs: 600_000 };
+const POLICY = { name: 'test:authorize', limit: 20, windowMs: 600_000 };
 const CEILING = {
-  name: 'pollar:wallets:daily',
+  name: 'test:daily',
   limit: 50,
   windowMs: 86_400_000,
   per: 'consumer' as const,
