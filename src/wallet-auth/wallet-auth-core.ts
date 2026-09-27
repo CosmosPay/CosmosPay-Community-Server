@@ -11,6 +11,7 @@ import {
   BACKUP_BOX_MAX_CHARS,
   BACKUP_MAX_ITERATIONS,
   BACKUP_MIN_ITERATIONS,
+  OIDC_MAX_AGE_S,
   SESSION_TTL_MS,
   SIGNED_AT_SKEW_MS,
 } from '@/wallet-auth/wallet-auth.constants';
@@ -174,9 +175,12 @@ export function authorizationUrl(
       nonce: input.oidc.nonce,
       code_challenge: input.oidc.codeChallenge,
       code_challenge_method: 'S256',
-      // Always ask. A wallet signed in with whichever session the browser
-      // happened to hold is how a second wallet ends up under the wrong person.
-      prompt: 'login',
+      // A fresh login, not whichever session the browser happened to hold —
+      // that is how a second wallet ends up under the wrong person. The ID
+      // token's `auth_time` is checked against the same bound, so this does
+      // not rest on the provider honouring it. See OIDC_MAX_AGE_S for why this
+      // is not `prompt=login`.
+      max_age: String(OIDC_MAX_AGE_S),
     });
     return `${input.oidc.authorizationEndpoint}?${q.toString()}`;
   }

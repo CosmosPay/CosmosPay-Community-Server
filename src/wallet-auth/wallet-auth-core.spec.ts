@@ -22,6 +22,7 @@ import {
 import {
   BACKUP_MAX_ITERATIONS,
   BACKUP_MIN_ITERATIONS,
+  OIDC_MAX_AGE_S,
   SESSION_TTL_MS,
   SIGNED_AT_SKEW_MS,
 } from '@/wallet-auth/wallet-auth.constants';
@@ -438,6 +439,25 @@ describe('wallet-auth-core', () => {
       expect(url.searchParams.get('prompt')).toBe('select_account');
       expect(url.searchParams.get('response_type')).toBe('code');
       expect(url.searchParams.get('state')).toBe('st');
+    });
+
+    /* Not prompt=login: Authentik makes a browser with no session log in twice
+       under it, and the second login through a social source dead-ends. */
+    it('asks Authentik for a recent login with max_age, not prompt=login', () => {
+      const url = new URL(
+        authorizationUrl(WalletAuthProvider.AUTHENTIK, {
+          clientId: 'cid',
+          redirectUri: 'https://api.example.com/cb',
+          state: 'st',
+          oidc: {
+            authorizationEndpoint: 'https://auth.example.com/authorize/',
+            codeChallenge: 'ch',
+            nonce: 'n',
+          },
+        }),
+      );
+      expect(url.searchParams.get('max_age')).toBe(String(OIDC_MAX_AGE_S));
+      expect(url.searchParams.has('prompt')).toBe(false);
     });
 
     it('asks GitHub for the scope that exposes email verification', () => {

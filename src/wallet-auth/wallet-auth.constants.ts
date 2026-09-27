@@ -16,6 +16,19 @@ import type { RateLimitPolicy } from '@/common/decorators/rate-limit.decorator';
 export const HANDSHAKE_TTL_MS = 10 * 60 * 1000;
 
 /**
+ * The oldest Authentik login a wallet sign-in accepts, in seconds.
+ *
+ * Sent as `max_age` and checked again against the ID token's `auth_time`, so a
+ * browser holding a session from earlier is made to log in again instead of
+ * signing a wallet in as whoever that was. Not `prompt=login`: Authentik asks a
+ * browser that arrived with NO session to log in a second time after the first,
+ * and that second login through a Google/GitHub source dead-ends ("Flow does not
+ * apply to current user"). Five minutes covers a first sign-in that also
+ * enrolls — provider consent plus Authentik's username prompt.
+ */
+export const OIDC_MAX_AGE_S = 5 * 60;
+
+/**
  * How long an emailed code lives.
  *
  * Fifteen minutes. The flow starts in the wallet and finishes in a mail client,

@@ -943,6 +943,7 @@ Pollar 在 key 的前缀中编码了网络和 key 类型，环境变量校验器
 | 当 `POLLAR_BRIDGE_CALLBACK_URL` 是可路由主机上的纯 `http` 时，服务拒绝启动 | 在别处终止 TLS 并把回调配置成 `http` 的部署 | Pollar 会把浏览器连同查询字符串里的授权码一起送回该地址，而这个授权码可以换取用户的会话 |
 | `POST /v1/wallet/auth/oauth/claim`：提供方未确认邮箱（`email_verified` 不为 `true`）的 Authentik 登录，现在会完成回调并返回 `verify_email`，向该邮箱发送验证码（无论账户是否存在），而不再以 `email_unverified` 失败。此时不会发放 ID token，因此无法发起 SEP-30 恢复，并与 `POST /v1/wallet/auth/email/start` 共享按地址的冷却时间（`400 wallet_login_code_cooldown`）。请先运行迁移 `20260926120000_wallet_auth_unverified_email` | 钱包：新账户也要处理 `verify_email` | 用户会停在一个无路可走的页面；验证码证明了提供方未确认的邮箱地址 |
 | `POST /v1/wallet/auth/finish` 和 `POST /v1/wallet/recovery/setup` 从 `X-Wallet-Session: {sessionToken}` 读取会话令牌。`Authorization: Bearer` 仍会读取，但只有直接调用时才能到达服务 | 钱包：在 API key 之外发送 `X-Wallet-Session` | 网关在代理前会移除 `Authorization`（以及 `apikey`），因此经由 APISIX 时令牌从未到达，两个路由都返回 `401 wallet_session_invalid` |
+| 通过 Authentik 的钱包登录改为请求 `max_age=300` 而非 `prompt=login`，且 ID token 的 `auth_time` 必须在这 5 分钟内（否则回调以 `profile_invalid` 失败）。将 Google / GitHub 作为 Authentik 源时，把 `default-source-authentication` 设为 *Authentication: No requirement* | 使用 Authentik 社交源的运维人员 | 在 `prompt=login` 下，Authentik 会让没有会话的浏览器登录两次，而通过源的第二次登录会被 "Flow does not apply to current user" 拒绝 |
 
 随之而来的部署说明：
 

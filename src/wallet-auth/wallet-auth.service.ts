@@ -23,6 +23,7 @@ import {
   LOGIN_CODE_MAX_ATTEMPTS,
   LOGIN_CODE_RESEND_MS,
   LOGIN_CODE_TTL_MS,
+  OIDC_MAX_AGE_S,
   SESSION_TTL_MS,
 } from '@/wallet-auth/wallet-auth.constants';
 import {
@@ -937,6 +938,8 @@ export class WalletAuthService {
         nonce: handshake.nonce,
         // Not a refusal: `claimOauth` sends an unconfirmed email a code.
         allowUnverifiedEmail: true,
+        // The `max_age` the authorization request asked for, enforced here.
+        maxAgeSeconds: OIDC_MAX_AGE_S,
       },
       this.settings.timeoutMs,
     );

@@ -230,6 +230,8 @@ describe('WalletAuthService — Authentik and the recovery identity', () => {
     expect(oidc.verify.mock.calls[0][1]).toMatchObject({
       nonce: 'the-nonce',
       audiences: ['wallet-client'],
+      // The max_age the authorization request sent is enforced on auth_time.
+      maxAgeSeconds: 300,
     });
     expect(
       prisma.walletAuthHandshake.updateMany.mock.calls[0][0],
