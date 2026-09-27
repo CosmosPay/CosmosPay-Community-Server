@@ -14,15 +14,16 @@ import {
   ApiHeader,
   ApiOkResponse,
   ApiOperation,
-  ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
 import type { Request } from 'express';
 import { CurrentConsumer } from '@/common/decorators/current-consumer.decorator';
 import { AllowPublicKey } from '@/common/decorators/allow-public-key.decorator';
+import { ApiErrorResponse } from '@/common/decorators/api-error-response.decorator';
+import { ApiUpstream } from '@/common/decorators/api-upstream.decorator';
 import { RateLimit } from '@/common/decorators/rate-limit.decorator';
 import { RequireAnyPermission } from '@/common/decorators/require-permissions.decorator';
-import { API_ERROR_BODY_CONTENT } from '@/common/errors/api-error.entity';
+import { ApiErrorCode } from '@/common/errors/api-error';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import { headerValue } from '@/common/request-header';
 import { DepositLiquidityDto } from '@/liquidity-pools/dto/deposit-liquidity.dto';
@@ -58,6 +59,7 @@ export class LiquidityPoolsController {
   ) {}
 
   @Post('deposit')
+  @ApiUpstream('Horizon')
   // Builds an unsigned envelope.
   @AllowPublicKey()
   @RequireAnyPermission('liquidity:write', 'swaps:write')
@@ -79,9 +81,18 @@ export class LiquidityPoolsController {
     example: 'lp-deposit-2026-08-23-001',
   })
   @ApiCreatedResponse({ type: LiquidityOperationEntity })
-  @ApiResponse({
+  @ApiErrorResponse({
+    status: 400,
+    codes: [
+      ApiErrorCode.ValidationFailed,
+      ApiErrorCode.InvalidAmount,
+      ApiErrorCode.TrustlineMissing,
+      ApiErrorCode.InsufficientBalance,
+    ],
+  })
+  @ApiErrorResponse({
     status: 409,
-    content: API_ERROR_BODY_CONTENT,
+    codes: [ApiErrorCode.IdempotencyConflict],
     description:
       '`idempotency_conflict` — this Idempotency-Key was already used for a ' +
       'different request, or an identical deposit was already built without a ' +
@@ -103,6 +114,7 @@ export class LiquidityPoolsController {
   }
 
   @Post('withdraw')
+  @ApiUpstream('Horizon')
   // Builds an unsigned envelope.
   @AllowPublicKey()
   @RequireAnyPermission('liquidity:write', 'swaps:write')
@@ -123,9 +135,17 @@ export class LiquidityPoolsController {
     example: 'lp-withdraw-2026-08-23-001',
   })
   @ApiCreatedResponse({ type: LiquidityOperationEntity })
-  @ApiResponse({
+  @ApiErrorResponse({
+    status: 400,
+    codes: [
+      ApiErrorCode.ValidationFailed,
+      ApiErrorCode.InvalidAmount,
+      ApiErrorCode.InsufficientBalance,
+    ],
+  })
+  @ApiErrorResponse({
     status: 409,
-    content: API_ERROR_BODY_CONTENT,
+    codes: [ApiErrorCode.IdempotencyConflict, ApiErrorCode.OperationInFlight],
     description:
       '`idempotency_conflict` — this Idempotency-Key was already used for a ' +
       'different request, or an identical withdrawal was already built without ' +
@@ -145,6 +165,8 @@ export class LiquidityPoolsController {
   }
 
   @Get('positions')
+  // Read live off the account's balances.
+  @ApiUpstream('Horizon')
   // On-chain pool shares for the account in the query, read
   // straight from Horizon — public ledger data, not this consumer's rows.
   @AllowPublicKey()
@@ -183,6 +205,7 @@ export class LiquidityPoolsController {
   }
 
   @Post('operations/:id/submit')
+  @ApiUpstream('Horizon')
   // Broadcasts a caller-signed envelope. Nothing about the operation — not even
   // its status — is answered until `signedXdr` parses, hashes to its stored
   // txHash and carries a signature, so reaching another anonymous user's
@@ -205,9 +228,9 @@ export class LiquidityPoolsController {
       'Relay the signed transaction to the network (hash-checked); finalizes status',
   })
   @ApiOkResponse({ type: LiquiditySubmitResultEntity })
-  @ApiResponse({
+  @ApiErrorResponse({
     status: 400,
-    content: API_ERROR_BODY_CONTENT,
+    codes: [ApiErrorCode.ValidationFailed, ApiErrorCode.InvalidStateTransition],
     description:
       '`validation_failed` — `signedXdr` is not a transaction envelope, is not ' +
       'the envelope built for this operation, or carries no signatures. ' +
@@ -216,9 +239,9 @@ export class LiquidityPoolsController {
       'already resubmitted the maximum number of times after a rejection. Build ' +
       'a new deposit or withdrawal.',
   })
-  @ApiResponse({
+  @ApiErrorResponse({
     status: 429,
-    content: API_ERROR_BODY_CONTENT,
+    codes: [ApiErrorCode.RateLimited],
     description:
       'Rate limited (`rate_limited`), per consumer and client address, in a ' +
       'bucket separate from the swaps submit route. Honour `Retry-After`: the ' +
@@ -234,6 +257,8 @@ export class LiquidityPoolsController {
   }
 
   @Get()
+  // The pool list is Horizon's, not a table of ours.
+  @ApiUpstream('Horizon')
   // Public on-chain pool data from Horizon.
   @AllowPublicKey()
   @RequireAnyPermission('liquidity:read', 'swaps:read')
@@ -247,6 +272,7 @@ export class LiquidityPoolsController {
   }
 
   @Get(':poolId')
+  @ApiUpstream('Horizon')
   // Public on-chain pool data from Horizon.
   @AllowPublicKey()
   @RequireAnyPermission('liquidity:read', 'swaps:read')

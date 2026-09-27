@@ -59,11 +59,13 @@ export class BlindpayOfframpApi {
     env: BlindpayEnvironment,
     chain: ChainVariant,
     body: BlindpayPayoutRequest,
+    idempotencyKey: string,
   ): Promise<BlindpayObject> {
     const instance = this.client.instance(env);
     return instance.post<BlindpayObject>(
       instance.instancePath(`/payouts/${chain}`),
       body,
+      { headers: { 'Idempotency-Key': idempotencyKey } },
     );
   }
 

@@ -10,20 +10,25 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import type { MulterOptions } from '@nestjs/platform-express/multer/interfaces/multer-options.interface';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
-import { API_ERROR_BODY_CONTENT } from '@/common/errors/api-error.entity';
 import {
   ApiBody,
   ApiConsumes,
+  ApiCreatedResponse,
   ApiOperation,
-  ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
+import { ApiErrorResponse } from '@/common/decorators/api-error-response.decorator';
+import { ApiUpstream } from '@/common/decorators/api-upstream.decorator';
 import { RequirePermissions } from '@/common/decorators/require-permissions.decorator';
 import { CurrentConsumer } from '@/common/decorators/current-consumer.decorator';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import { UploadableFile } from '@/blindpay/blindpay.client';
 import { KycMetaService } from '@/kyc/upload/kyc-meta.service';
 import { InitiateTosDto } from '@/kyc/upload/dto/initiate-tos.dto';
+import {
+  KycTermsOfServiceEntity,
+  KycUploadEntity,
+} from '@/kyc/upload/entities/kyc-meta.entity';
 import {
   ALLOWED_UPLOAD_TYPES,
   KYC_TOS_RATE_LIMIT,
@@ -81,6 +86,9 @@ const KYC_UPLOAD_OPTIONS: MulterOptions = {
 
 // /v1/kyc — compliance helpers not scoped to a single receiver.
 @ApiTags('kyc')
+// Every route here relays to BlindPay: the upload, the ToS link, and both
+// catalog reads.
+@ApiUpstream('BlindPay')
 @Controller({ path: 'kyc', version: '1' })
 export class KycMetaController {
   constructor(private readonly meta: KycMetaService) {}
@@ -92,15 +100,18 @@ export class KycMetaController {
   @UseInterceptors(FileInterceptor('file', KYC_UPLOAD_OPTIONS))
   @ApiConsumes('multipart/form-data')
   @ApiOperation({ summary: 'Upload a KYC document; returns its file_url' })
+  // Declaring the failures below drops Nest's implicit 201, so the success
+  // body has to be declared too or the route publishes no success at all.
+  @ApiCreatedResponse({ type: KycUploadEntity })
   // Declared here rather than left to the generic 400 `swagger.ts` attaches: that text
   // ("not valid in the current state") says nothing an integrator can act on, and each
   // of these refusals is a limit they can stay inside. The limits are interpolated from
   // the constants the interceptor enforces, so the contract cannot quote a stale number.
-  // `content` keeps the error envelope's schema, which a route-level declaration would
-  // otherwise replace with a bare description.
-  @ApiResponse({
+  // `@ApiErrorResponse` keeps the envelope's schema and its examples, which a bare
+  // `@ApiResponse({ description })` would replace with nothing at all.
+  @ApiErrorResponse({
     status: 400,
-    content: API_ERROR_BODY_CONTENT,
+    codes: [ApiErrorCode.ValidationFailed],
     description:
       'The multipart form was refused (`validation_failed`), before the provider saw anything: ' +
       `more than ${MAX_UPLOAD_FIELDS} text fields; a text field longer than ${MAX_UPLOAD_FIELD_BYTES} bytes; ` +
@@ -109,9 +120,9 @@ export class KycMetaController {
       ].join(', ')}; ` +
       'file bytes that do not match the declared content type; a missing `file` part; or an unknown `bucket`.',
   })
-  @ApiResponse({
+  @ApiErrorResponse({
     status: 413,
-    content: API_ERROR_BODY_CONTENT,
+    codes: [ApiErrorCode.PayloadTooLarge],
     description:
       `The file is larger than ${MAX_UPLOAD_BYTES} bytes (\`payload_too_large\`). Multer stops ` +
       'reading at the limit, so nothing reaches the provider.',
@@ -144,6 +155,7 @@ export class KycMetaController {
   @ApiOperation({
     summary: 'Start ToS acceptance; returns the hosted URL (first KYC step)',
   })
+  @ApiCreatedResponse({ type: KycTermsOfServiceEntity })
   initiateTos(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Body() dto: InitiateTosDto,

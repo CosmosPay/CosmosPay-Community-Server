@@ -1,4 +1,7 @@
 import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
+import { ApiUpstream } from '@/common/decorators/api-upstream.decorator';
+import { ApiErrorResponse } from '@/common/decorators/api-error-response.decorator';
+import { ApiErrorCode } from '@/common/errors/api-error';
 import { WidePaginationQueryDto } from '@/common/dto/pagination.query.dto';
 import {
   ApiCreatedResponse,
@@ -17,6 +20,7 @@ import {
 } from '@/offramp/offramp.constants';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import { OfframpService } from '@/offramp/offramp.service';
+import { AuthorizedPayoutEntity } from '@/offramp/entities/authorized-payout.entity';
 import { CreatePayoutQuoteDto } from '@/offramp/dto/create-payout-quote.dto';
 import { AuthorizePayoutDto } from '@/offramp/dto/authorize-payout.dto';
 import { CreatePayoutDto } from '@/offramp/dto/create-payout.dto';
@@ -34,6 +38,7 @@ export class OfframpController {
   constructor(private readonly offramp: OfframpService) {}
 
   @Post('quotes')
+  @ApiUpstream('BlindPay')
   @RequirePermissions('offramp:write')
   // A provider call on the instance every tenant shares, plus a stored row.
   @RateLimit(OFFRAMP_QUOTE_RATE_LIMIT, BLINDPAY_CONSUMER_QUOTA_RATE_LIMIT)
@@ -49,11 +54,17 @@ export class OfframpController {
   }
 
   @Post('payouts/authorize')
+  @ApiUpstream('BlindPay')
   @RequirePermissions('offramp:write')
   // One budget with the payout it prepares — see OFFRAMP_PAYOUT_RATE_LIMIT.
   @RateLimit(OFFRAMP_PAYOUT_RATE_LIMIT, BLINDPAY_CONSUMER_QUOTA_RATE_LIMIT)
   @ApiOperation({
     summary: 'Build the unsigned Stellar/Solana payout tx to sign',
+  })
+  @ApiCreatedResponse({ type: AuthorizedPayoutEntity })
+  @ApiErrorResponse({
+    status: 400,
+    codes: [ApiErrorCode.ValidationFailed, ApiErrorCode.QuoteExpired],
   })
   authorize(
     @CurrentConsumer() consumer: GatewayConsumer,
@@ -63,10 +74,15 @@ export class OfframpController {
   }
 
   @Post('payouts')
+  @ApiUpstream('BlindPay')
   @RequirePermissions('offramp:write')
   // Money leaving: an error afterwards does not bring it back.
   @RateLimit(OFFRAMP_PAYOUT_RATE_LIMIT, BLINDPAY_CONSUMER_QUOTA_RATE_LIMIT)
   @ApiOperation({ summary: 'Create a payout from a quote' })
+  @ApiErrorResponse({
+    status: 400,
+    codes: [ApiErrorCode.ValidationFailed, ApiErrorCode.QuoteExpired],
+  })
   @ApiCreatedResponse({ type: PayoutEntity })
   createPayout(
     @CurrentConsumer() consumer: GatewayConsumer,
@@ -87,6 +103,8 @@ export class OfframpController {
   }
 
   @Get('payouts/:id')
+  // Refreshes the mirror from BlindPay before answering.
+  @ApiUpstream('BlindPay')
   @RequirePermissions('offramp:read')
   @ApiOperation({
     summary:
@@ -101,6 +119,7 @@ export class OfframpController {
   }
 
   @Post('payouts/:id/documents')
+  @ApiUpstream('BlindPay')
   @RequirePermissions('offramp:write')
   // The provider keeps what it is handed.
   @RateLimit(OFFRAMP_DOCUMENT_RATE_LIMIT, BLINDPAY_CONSUMER_QUOTA_RATE_LIMIT)

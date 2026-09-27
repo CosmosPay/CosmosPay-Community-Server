@@ -43,3 +43,11 @@ export class WalletListEntity {
   @ApiProperty({ example: 0 })
   skip!: number;
 }
+
+export class WalletDeletedEntity {
+  @ApiProperty({ example: 'clz9xwallet001' })
+  id!: string;
+
+  @ApiProperty({ example: true })
+  deleted!: boolean;
+}

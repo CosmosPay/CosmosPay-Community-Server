@@ -15,6 +15,7 @@ type QueryValue = string | number | boolean | undefined | null;
 export interface BlindpayRequestOptions {
   body?: unknown;
   query?: Record<string, QueryValue>;
+  headers?: Record<string, string>;
 }
 
 /** A multipart file, as produced by Multer's memory storage. */
@@ -140,6 +141,7 @@ export class BlindpayInstance {
           authorization: `Bearer ${this.credentials.apiKey}`,
           accept: 'application/json',
           'user-agent': 'CosmosPay/1.0',
+          ...opts.headers,
           ...(hasBody ? { 'content-type': 'application/json' } : {}),
         },
         body: hasBody ? JSON.stringify(opts.body) : undefined,
