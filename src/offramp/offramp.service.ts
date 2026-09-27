@@ -106,7 +106,11 @@ export class OfframpService {
   async createPayout(consumer: GatewayConsumer, dto: CreatePayoutDto) {
     const local = await this.consumers.resolve(consumer);
     const environment = this.blindpay.environmentFor(consumer);
-    await this.assertQuoteUsable(local.id, environment, dto.quote_id);
+    const quote = await this.assertQuoteUsable(
+      local.id,
+      environment,
+      dto.quote_id,
+    );
     const body: BlindpayPayoutRequest = {
       quote_id: dto.quote_id,
       sender_wallet_address: dto.sender_wallet_address,
@@ -118,6 +122,7 @@ export class OfframpService {
       environment,
       dto.chain,
       body,
+      quote.executionKey,
     );
     const receiverId = await this.resolveReceiverLocalId(
       local.id,
@@ -232,7 +237,7 @@ export class OfframpService {
     consumerId: string,
     environment: BlindpayEnvironment,
     blindpayQuoteId: string,
-  ): Promise<void> {
+  ): Promise<{ executionKey: string }> {
     const quote = await this.prisma.blindpayQuote.findUnique({
       where: {
         consumerId_blindpayId: { consumerId, blindpayId: blindpayQuoteId },
@@ -254,6 +259,7 @@ export class OfframpService {
         'This BlindPay quote has expired. Request a new quote.',
       );
     }
+    return quote;
   }
 
   /**

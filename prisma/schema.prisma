@@ -631,10 +631,14 @@ model BlindpayQuote {
   blindpayId  String
   kind        BlindpayQuoteKind
   expiresAt   DateTime?
+  /// Stable UUID sent as BlindPay's `Idempotency-Key` on every execution attempt
+  /// for this one quote, so a retried payin or payout cannot execute it twice.
+  executionKey String @default(uuid())
 
   createdAt DateTime @default(now())
 
   @@unique([consumerId, blindpayId])
+  @@unique([executionKey])
   @@index([consumerId])
   @@index([expiresAt])
   @@map("blindpay_quote")
