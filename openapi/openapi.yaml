@@ -5895,7 +5895,35 @@ paths:
                 type: integer
                 example: 42
         "400":
-          $ref: "#/components/responses/ValidationFailed"
+          description: |-
+            `validation_failed` — The body, query or headers failed validation
+
+            `quote_expired` — The quote is ours and yours, but past its expiry
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+              examples:
+                validation_failed:
+                  summary: validation_failed — The body, query or headers failed validation
+                  value:
+                    statusCode: 400
+                    code: validation_failed
+                    error: Bad Request
+                    message:
+                      - amount must be a positive decimal string
+                      - destination must be a valid Stellar public key
+                    path: /v1/swaps
+                    timestamp: 2026-09-01T12:00:00.000Z
+                quote_expired:
+                  summary: quote_expired — The quote is ours and yours, but past its expiry
+                  value:
+                    statusCode: 400
+                    code: quote_expired
+                    error: Bad Request
+                    message: This BlindPay quote has expired. Request a new quote.
+                    path: /v1/onramp/payins
+                    timestamp: 2026-09-01T12:00:00.000Z
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -6203,6 +6231,10 @@ paths:
       responses:
         "201":
           description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthorizedPayoutEntity"
           headers:
             ratelimit-limit:
               description: Requests allowed in the current window.
@@ -6220,7 +6252,35 @@ paths:
                 type: integer
                 example: 42
         "400":
-          $ref: "#/components/responses/ValidationFailed"
+          description: |-
+            `validation_failed` — The body, query or headers failed validation
+
+            `quote_expired` — The quote is ours and yours, but past its expiry
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+              examples:
+                validation_failed:
+                  summary: validation_failed — The body, query or headers failed validation
+                  value:
+                    statusCode: 400
+                    code: validation_failed
+                    error: Bad Request
+                    message:
+                      - amount must be a positive decimal string
+                      - destination must be a valid Stellar public key
+                    path: /v1/swaps
+                    timestamp: 2026-09-01T12:00:00.000Z
+                quote_expired:
+                  summary: quote_expired — The quote is ours and yours, but past its expiry
+                  value:
+                    statusCode: 400
+                    code: quote_expired
+                    error: Bad Request
+                    message: This BlindPay quote has expired. Request a new quote.
+                    path: /v1/onramp/payins
+                    timestamp: 2026-09-01T12:00:00.000Z
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -6282,7 +6342,35 @@ paths:
                 type: integer
                 example: 42
         "400":
-          $ref: "#/components/responses/ValidationFailed"
+          description: |-
+            `validation_failed` — The body, query or headers failed validation
+
+            `quote_expired` — The quote is ours and yours, but past its expiry
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+              examples:
+                validation_failed:
+                  summary: validation_failed — The body, query or headers failed validation
+                  value:
+                    statusCode: 400
+                    code: validation_failed
+                    error: Bad Request
+                    message:
+                      - amount must be a positive decimal string
+                      - destination must be a valid Stellar public key
+                    path: /v1/swaps
+                    timestamp: 2026-09-01T12:00:00.000Z
+                quote_expired:
+                  summary: quote_expired — The quote is ours and yours, but past its expiry
+                  value:
+                    statusCode: 400
+                    code: quote_expired
+                    error: Bad Request
+                    message: This BlindPay quote has expired. Request a new quote.
+                    path: /v1/onramp/payins
+                    timestamp: 2026-09-01T12:00:00.000Z
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -11715,6 +11803,16 @@ components:
         - quote_id
         - sender_wallet_address
         - chain
+    AuthorizedPayoutEntity:
+      type: object
+      properties:
+        unsigned_transaction:
+          type: string
+          example: AAAAAgAAAAB…
+          description: The unsigned transaction the customer signs before `POST
+            /v1/offramp/payouts`. Empty when BlindPay returned none.
+      required:
+        - unsigned_transaction
     CreatePayoutDto:
       type: object
       properties:
@@ -11854,6 +11952,7 @@ components:
             - provider_error
             - provider_unavailable
             - quote_not_found
+            - quote_expired
             - kyc_state_invalid
             - kyc_review_required
             - account_disabled

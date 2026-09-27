@@ -1,5 +1,7 @@
 import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
 import { ApiUpstream } from '@/common/decorators/api-upstream.decorator';
+import { ApiErrorResponse } from '@/common/decorators/api-error-response.decorator';
+import { ApiErrorCode } from '@/common/errors/api-error';
 import { WidePaginationQueryDto } from '@/common/dto/pagination.query.dto';
 import {
   ApiCreatedResponse,
@@ -52,6 +54,10 @@ export class OnrampController {
   @RateLimit(ONRAMP_PAYIN_RATE_LIMIT, BLINDPAY_CONSUMER_QUOTA_RATE_LIMIT)
   @ApiOperation({
     summary: 'Create a payin from a quote; returns funding instructions',
+  })
+  @ApiErrorResponse({
+    status: 400,
+    codes: [ApiErrorCode.ValidationFailed, ApiErrorCode.QuoteExpired],
   })
   @ApiCreatedResponse({ type: PayinEntity })
   createPayin(

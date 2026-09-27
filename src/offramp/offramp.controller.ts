@@ -1,5 +1,7 @@
 import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
 import { ApiUpstream } from '@/common/decorators/api-upstream.decorator';
+import { ApiErrorResponse } from '@/common/decorators/api-error-response.decorator';
+import { ApiErrorCode } from '@/common/errors/api-error';
 import { WidePaginationQueryDto } from '@/common/dto/pagination.query.dto';
 import {
   ApiCreatedResponse,
@@ -18,6 +20,7 @@ import {
 } from '@/offramp/offramp.constants';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import { OfframpService } from '@/offramp/offramp.service';
+import { AuthorizedPayoutEntity } from '@/offramp/entities/authorized-payout.entity';
 import { CreatePayoutQuoteDto } from '@/offramp/dto/create-payout-quote.dto';
 import { AuthorizePayoutDto } from '@/offramp/dto/authorize-payout.dto';
 import { CreatePayoutDto } from '@/offramp/dto/create-payout.dto';
@@ -58,6 +61,11 @@ export class OfframpController {
   @ApiOperation({
     summary: 'Build the unsigned Stellar/Solana payout tx to sign',
   })
+  @ApiCreatedResponse({ type: AuthorizedPayoutEntity })
+  @ApiErrorResponse({
+    status: 400,
+    codes: [ApiErrorCode.ValidationFailed, ApiErrorCode.QuoteExpired],
+  })
   authorize(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Body() dto: AuthorizePayoutDto,
@@ -71,6 +79,10 @@ export class OfframpController {
   // Money leaving: an error afterwards does not bring it back.
   @RateLimit(OFFRAMP_PAYOUT_RATE_LIMIT, BLINDPAY_CONSUMER_QUOTA_RATE_LIMIT)
   @ApiOperation({ summary: 'Create a payout from a quote' })
+  @ApiErrorResponse({
+    status: 400,
+    codes: [ApiErrorCode.ValidationFailed, ApiErrorCode.QuoteExpired],
+  })
   @ApiCreatedResponse({ type: PayoutEntity })
   createPayout(
     @CurrentConsumer() consumer: GatewayConsumer,

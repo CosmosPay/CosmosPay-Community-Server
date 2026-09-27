@@ -131,8 +131,26 @@ describe('OfframpService quote ownership', () => {
         environment: 'prod',
         blindpayId: 'qe_000000000001',
         kind: 'PAYOUT',
+        expiresAt: null,
       },
     });
+  });
+
+  it('refuses to execute an expired quote', async () => {
+    const { service, prisma, blindpay } = makeService();
+    prisma.blindpayQuote.findUnique.mockResolvedValue({
+      ...OWNED_QUOTE,
+      expiresAt: new Date(Date.now() - 1000),
+    });
+
+    await expect(
+      service.createPayout(CONSUMER, {
+        quote_id: 'qe_000000000001',
+        chain: 'evm',
+        sender_wallet_address: '0xabc',
+      } as any),
+    ).rejects.toMatchObject({ status: 400, code: 'quote_expired' });
+    expect(blindpay.post).not.toHaveBeenCalled();
   });
 
   it('fails the quote when BlindPay returns no id to own', async () => {

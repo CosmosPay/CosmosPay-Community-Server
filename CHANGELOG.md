@@ -2,6 +2,11 @@
 
 All notable changes to the Cosmos Pay Community Server are documented here.
 Generated from [Conventional Commits](https://www.conventionalcommits.org) by [git-cliff](https://git-cliff.org).
+## [1.3.1] - 2026-09-20
+
+### Miscellaneous
+- Bump the minor-and-patch group with 12 updates (f2c8de7)
+
 ## [1.3.0] - 2026-09-16
 
 ### Features
@@ -55,6 +60,20 @@ Generated from [Conventional Commits](https://www.conventionalcommits.org) by [g
 - Bump globals to 17.12.0 and jest to 30.5.1 (edd32cc)
 - Bump @types/node, eslint and typescript-eslint (72fbcda)
 
+## [0.2.0] - 2026-09-03
+
+### Features
+- Enhance webhook endpoint management and delivery logging (4513ac8)
+- Introduce asset resolution and memo handling utilities (a1e02f6)
+- Add Pollar integration for wallet management and user registration (f2481ea)
+- Add rate limiting for Pollar OAuth routes and configuration (f2f9112)
+
+### Bug Fixes
+- Update APISIX_GATEWAY_SECRET placeholder to meet length requirement for CI (5ccc61d)
+
+### Refactor
+- Update import paths to use absolute imports for better readability and maintainability (5f8e604)
+
 ## [0.1.5] - 2026-08-30
 
 ### Bug Fixes
@@ -82,6 +101,8 @@ Generated from [Conventional Commits](https://www.conventionalcommits.org) by [g
 - Durable Postgres retry queue so deliveries survive restarts (75bdf1d)
 
 ### Bug Fixes
+- Reject unsigned XDRs that would fail on-chain (a957f23)
+- Pre-flight fee-wallet existence for native XLM fees (ce29e8d)
 - Drop leftover merge junk that broke nest build (10b96fc)
 - Expose tick and isRunning for the existing spec (3d39d87)
 - Credit path payments and create_account on-chain (012ec76)
@@ -91,32 +112,13 @@ Generated from [Conventional Commits](https://www.conventionalcommits.org) by [g
 ## [0.1.1] - 2026-08-26
 
 ### Bug Fixes
-- Reject unsigned XDRs that would fail on-chain (a957f23)
-- Pre-flight fee-wallet existence for native XLM fees (ce29e8d)
+- SQL aggregation and stroops precision (#21) (eb9c291)
+- Rebase onto upstream main and repair broken observer merge (6d74ff1)
+- Stabilize health YAML anchors for CI openapi:check (503ebea)
 - Consume in-flight withdraws in cost basis (8a117ce)
 - Restore tick() so CI can compile (047e9e2)
 - Serialize withdraw cost basis with a Postgres advisory lock (f4dd289)
 - Emit and QR after withdraw transaction commits (e4a2439)
-
-## [0.1.0] - 2026-08-25
-
-### Bug Fixes
-- Keep original secret on rapid re-rotation (c3dd3fc)
-
-## [0.0.11] - 2026-08-25
-
-### Features
-- Overlap signing secrets during rotation (73022f5)
-
-### Bug Fixes
-- SQL aggregation and stroops precision (#21) (eb9c291)
-- Rebase onto upstream main and repair broken observer merge (6d74ff1)
-- Stabilize health YAML anchors for CI openapi:check (503ebea)
-- Repair broken merge of watchdog and expiry safety (e6616dc)
-- Stop emitting unstable YAML anchors (61f7885)
-- Bound findMatchingPayment by time and persist Horizon cursor (387b129)
-- Restore settlement-observer after broken #56 merge (902ff0c)
-- Key Horizon cursor by intentId (8b58bd8)
 
 ### Refactor
 - Avoid Number() in asInt helper (1ffdf24)
@@ -127,10 +129,28 @@ Generated from [Conventional Commits](https://www.conventionalcommits.org) by [g
 ### Testing
 - Cover QueryAnalyticsDto validation (from=hola → 400) (b2d2ab9)
 
+## [0.1.0] - 2026-08-25
+
+### Features
+- Overlap signing secrets during rotation (73022f5)
+
+### Bug Fixes
+- Repair broken merge of watchdog and expiry safety (e6616dc)
+- Stop emitting unstable YAML anchors (61f7885)
+- Keep original secret on rapid re-rotation (c3dd3fc)
+
+## [0.0.11] - 2026-08-25
+
+### Bug Fixes
+- Add Horizon timeout, retries, and observer watchdog (92b8413)
+- Probe only the configured Horizon network (cce7d92)
+- Bound findMatchingPayment by time and persist Horizon cursor (387b129)
+- Restore settlement-observer after broken #56 merge (902ff0c)
+- Key Horizon cursor by intentId (8b58bd8)
+
 ## [0.0.10] - 2026-08-25
 
 ### Bug Fixes
-- Probe only the configured Horizon network (cce7d92)
 - Paginate list, fix OpenAPI shape, soft-delete by default (04ab33d)
 - Stabilize health YAML anchors for CI openapi:check (a11d529)
 - Stop expiring settlements on Horizon blips (576f428)
@@ -141,19 +161,8 @@ Generated from [Conventional Commits](https://www.conventionalcommits.org) by [g
 
 ## [0.0.9] - 2026-08-24
 
-### Features
-- Enhance webhook endpoint management and delivery logging (4513ac8)
-- Introduce asset resolution and memo handling utilities (a1e02f6)
-- Add Pollar integration for wallet management and user registration (f2481ea)
-- Add rate limiting for Pollar OAuth routes and configuration (f2f9112)
-
 ### Bug Fixes
-- Update APISIX_GATEWAY_SECRET placeholder to meet length requirement for CI (5ccc61d)
-- Add Horizon timeout, retries, and observer watchdog (92b8413)
 - La coma que falta en package.json deja main inconstruible (#53) (7d65e48)
-
-### Refactor
-- Update import paths to use absolute imports for better readability and maintainability (5f8e604)
 
 ## [0.0.8] - 2026-08-24
 
