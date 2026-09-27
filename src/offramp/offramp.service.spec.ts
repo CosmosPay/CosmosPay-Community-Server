@@ -131,8 +131,26 @@ describe('OfframpService quote ownership', () => {
         environment: 'prod',
         blindpayId: 'qe_000000000001',
         kind: 'PAYOUT',
+        expiresAt: null,
       },
     });
+  });
+
+  it('refuses to execute an expired quote', async () => {
+    const { service, prisma, blindpay } = makeService();
+    prisma.blindpayQuote.findUnique.mockResolvedValue({
+      ...OWNED_QUOTE,
+      expiresAt: new Date(Date.now() - 1000),
+    });
+
+    await expect(
+      service.createPayout(CONSUMER, {
+        quote_id: 'qe_000000000001',
+        chain: 'evm',
+        sender_wallet_address: '0xabc',
+      } as any),
+    ).rejects.toMatchObject({ status: 400, code: 'quote_expired' });
+    expect(blindpay.post).not.toHaveBeenCalled();
   });
 
   it('fails the quote when BlindPay returns no id to own', async () => {
@@ -211,7 +229,10 @@ describe('OfframpService quote ownership', () => {
 
   it('executes a quote the caller owns', async () => {
     const { service, prisma, blindpay, sync } = makeService();
-    prisma.blindpayQuote.findUnique.mockResolvedValue(OWNED_QUOTE);
+    prisma.blindpayQuote.findUnique.mockResolvedValue({
+      ...OWNED_QUOTE,
+      executionKey: '48b581d5-a18d-41a7-a3ff-ccfa8f8499fd',
+    });
     blindpay.post.mockResolvedValue({ id: 'pa_1', receiver_id: null });
 
     await service.createPayout(CONSUMER, {
@@ -223,6 +244,9 @@ describe('OfframpService quote ownership', () => {
     expect(blindpay.post).toHaveBeenCalledWith(
       '/instances/in_test/payouts/evm',
       expect.objectContaining({ quote_id: 'qe_000000000001' }),
+      {
+        headers: { 'Idempotency-Key': '48b581d5-a18d-41a7-a3ff-ccfa8f8499fd' },
+      },
     );
     expect(sync.mirrorPayout).toHaveBeenCalled();
   });

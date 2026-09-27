@@ -1,0 +1,1 @@
+export const DEFINDEX_MAX_AMOUNT = Number.MAX_SAFE_INTEGER;

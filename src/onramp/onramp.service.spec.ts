@@ -118,8 +118,41 @@ describe('OnrampService quote ownership', () => {
         environment: 'prod',
         blindpayId: 'pq_000000000001',
         kind: 'PAYIN',
+        expiresAt: null,
       },
     });
+  });
+
+  it('records when the minted quote expires', async () => {
+    const { service, prisma, blindpay } = makeService();
+    blindpay.post.mockResolvedValue({
+      id: 'pq_000000000001',
+      expires_at: 1_900_000_000,
+    });
+
+    await service.createQuote(CONSUMER, { blockchain_wallet_id: 'w1' } as any);
+
+    expect(prisma.blindpayQuote.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        expiresAt: new Date(1_900_000_000_000),
+      }),
+    });
+  });
+
+  it('refuses to execute an expired quote', async () => {
+    const { service, prisma, blindpay } = makeService();
+    prisma.blindpayQuote.findUnique.mockResolvedValue({
+      consumerId: 'c1',
+      environment: 'prod',
+      blindpayId: 'pq_000000000001',
+      kind: 'PAYIN',
+      expiresAt: new Date(Date.now() - 1000),
+    });
+
+    await expect(
+      service.createPayin(CONSUMER, { payin_quote_id: 'pq_000000000001' }),
+    ).rejects.toMatchObject({ status: 400, code: 'quote_expired' });
+    expect(blindpay.post).not.toHaveBeenCalled();
   });
 
   it('prices the quote against the wallet the caller owns', async () => {
@@ -193,6 +226,7 @@ describe('OnrampService quote ownership', () => {
       environment: 'prod',
       blindpayId: 'pq_000000000001',
       kind: 'PAYIN',
+      executionKey: '48b581d5-a18d-41a7-a3ff-ccfa8f8499fd',
     });
     blindpay.post.mockResolvedValue({ id: 'pi_1', receiver_id: null });
 
@@ -201,6 +235,9 @@ describe('OnrampService quote ownership', () => {
     expect(blindpay.post).toHaveBeenCalledWith(
       '/instances/in_test/payins/evm',
       { payin_quote_id: 'pq_000000000001' },
+      {
+        headers: { 'Idempotency-Key': '48b581d5-a18d-41a7-a3ff-ccfa8f8499fd' },
+      },
     );
     expect(sync.mirrorPayin).toHaveBeenCalled();
   });

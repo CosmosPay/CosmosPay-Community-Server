@@ -11,7 +11,6 @@ import {
   Query,
 } from '@nestjs/common';
 import {
-  ApiConflictResponse,
   ApiCreatedResponse,
   ApiOkResponse,
   ApiOperation,
@@ -19,8 +18,10 @@ import {
 } from '@nestjs/swagger';
 import { CurrentConsumer } from '@/common/decorators/current-consumer.decorator';
 import { AllowPublicKey } from '@/common/decorators/allow-public-key.decorator';
+import { ApiErrorResponse } from '@/common/decorators/api-error-response.decorator';
+import { ApiUpstream } from '@/common/decorators/api-upstream.decorator';
 import { RequirePermissions } from '@/common/decorators/require-permissions.decorator';
-import { API_ERROR_BODY_CONTENT } from '@/common/errors/api-error.entity';
+import { ApiErrorCode } from '@/common/errors/api-error';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import { CreateTxPaymentIntentDto } from '@/payment-intents/dto/create-tx-payment-intent.dto';
 import { CreatePayPaymentIntentDto } from '@/payment-intents/dto/create-pay-payment-intent.dto';
@@ -41,19 +42,21 @@ import { RateLimit } from '@/common/decorators/rate-limit.decorator';
 import { PAYMENT_INTENT_BUILD_RATE_LIMIT } from '@/payment-intents/payment-intents.constants';
 
 /**
- * The 409 both creates return. Documented per route because the generic 409
- * `swagger.ts` attaches cannot say that the memo is the idempotency key — and
- * under the shared public key a memo can already be taken by someone else.
+ * The 409 both creates return, declared per route because nothing central can
+ * know that the memo is this resource's idempotency key — and under the shared
+ * public key a memo can already be taken by someone else.
  */
-const MEMO_CONFLICT_RESPONSE = {
-  content: API_ERROR_BODY_CONTENT,
-  description:
-    '`idempotency_conflict`: an intent with this `memo` already exists for ' +
-    'different payment details. Retry with the original request unchanged, or ' +
-    'use a new memo (omit `memo` to have one generated). ' +
-    '`operation_in_flight`: a concurrent create for the same memo changed it ' +
-    'while this one was being created; retry the request.',
-};
+const MemoConflictResponse = () =>
+  ApiErrorResponse({
+    status: 409,
+    codes: [ApiErrorCode.IdempotencyConflict, ApiErrorCode.OperationInFlight],
+    description:
+      '`idempotency_conflict`: an intent with this `memo` already exists for ' +
+      'different payment details. Retry with the original request unchanged, ' +
+      'or use a new memo (omit `memo` to have one generated). ' +
+      '`operation_in_flight`: a concurrent create for the same memo changed ' +
+      'it while this one was being created; retry the request.',
+  });
 
 // URI versioning => /v1/payment-intents
 @ApiTags('payment-intents')
@@ -73,7 +76,19 @@ export class PaymentIntentsController {
       'Create a SEP-7 `tx` intent (source known → unsigned XDR + tx URI + QR)',
   })
   @ApiCreatedResponse({ type: TxPaymentIntentEntity })
-  @ApiConflictResponse(MEMO_CONFLICT_RESPONSE)
+  // Loads the payer's account from Horizon to build the envelope.
+  @ApiUpstream('Horizon')
+  @ApiErrorResponse({
+    status: 400,
+    codes: [
+      ApiErrorCode.ValidationFailed,
+      ApiErrorCode.InvalidAmount,
+      ApiErrorCode.InvalidMemo,
+      ApiErrorCode.TrustlineMissing,
+      ApiErrorCode.InsufficientBalance,
+    ],
+  })
+  @MemoConflictResponse()
   createTx(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Body() dto: CreateTxPaymentIntentDto,
@@ -91,7 +106,15 @@ export class PaymentIntentsController {
     summary: 'Create a SEP-7 `pay` intent (no source → pay URI + QR, no XDR)',
   })
   @ApiCreatedResponse({ type: PayPaymentIntentEntity })
-  @ApiConflictResponse(MEMO_CONFLICT_RESPONSE)
+  @ApiErrorResponse({
+    status: 400,
+    codes: [
+      ApiErrorCode.ValidationFailed,
+      ApiErrorCode.InvalidAmount,
+      ApiErrorCode.InvalidMemo,
+    ],
+  })
+  @MemoConflictResponse()
   createPay(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Body() dto: CreatePayPaymentIntentDto,
@@ -144,6 +167,16 @@ export class PaymentIntentsController {
       'Validate a submitted tx against the intent (tx success + destination + amount + memo); finalizes status and fires the event',
   })
   @ApiOkResponse({ type: ValidationOutcomeEntity })
+  // Reads the transaction and its operations back from Horizon.
+  @ApiUpstream('Horizon')
+  @ApiErrorResponse({
+    status: 400,
+    codes: [
+      ApiErrorCode.ValidationFailed,
+      ApiErrorCode.TransactionRejected,
+      ApiErrorCode.InvalidStateTransition,
+    ],
+  })
   validate(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Param('id') id: string,
@@ -158,6 +191,23 @@ export class PaymentIntentsController {
     summary: 'Update a payment intent (status / txHash / reference)',
   })
   @ApiOkResponse({ type: PaymentIntentEntity })
+  // Setting `txHash` verifies it against the chain before it is stored.
+  @ApiUpstream('Horizon')
+  @ApiErrorResponse({
+    status: 400,
+    codes: [
+      ApiErrorCode.ValidationFailed,
+      ApiErrorCode.InvalidStateTransition,
+      ApiErrorCode.TransactionRejected,
+    ],
+  })
+  @ApiErrorResponse({
+    status: 409,
+    codes: [ApiErrorCode.OperationInFlight],
+    description:
+      '`operation_in_flight` — the status changed under this update. Re-read ' +
+      'the intent and retry.',
+  })
   update(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Param('id') id: string,
