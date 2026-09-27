@@ -38,3 +38,8 @@ process.env.WALLET_AUTH_RETURN_URLS = 'cosmoswallet://auth/done';
 process.env.WALLET_AUTH_OIDC_ISSUER = '';
 process.env.WALLET_AUTH_OIDC_CLIENT_ID = '';
 process.env.WALLET_AUTH_OIDC_CLIENT_SECRET = '';
+// The key that seals a sign-in session token. Without it every route that seals or
+// opens one answers 503 `misconfigured`, so a suite asserting how a bad token is
+// refused would only ever see the missing configuration.
+process.env.WALLET_AUTH_SESSION_SECRET =
+  'e2e-wallet-session-secret-e2e-wallet-session-secret';

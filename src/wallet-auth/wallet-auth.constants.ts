@@ -47,7 +47,6 @@ export const RETURN_URL_MAX_CHARS = 512;
  */
 export const AUTHENTIK_MFA_SETTINGS_PATH =
   '/if/user/#/settings;{"page":"page-credentials"}';
-('default-authenticator-webauthn-setup');
 
 /**
  * How long an emailed code lives.
