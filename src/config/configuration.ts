@@ -1,4 +1,6 @@
 import {
+  DEFAULT_DEFINDEX_BASE_URL,
+  DEFAULT_DEFINDEX_TIMEOUT_MS,
   DEFAULT_HORIZON,
   DEFAULT_RATE_LIMIT_PRUNE_INTERVAL_MS,
   DEFAULT_RECOVERY_SWEEP_INTERVAL_MS,
@@ -154,6 +156,11 @@ export interface AppConfig {
     baseUrl: string;
     timeoutMs: number;
     instances: Record<BlindpayEnvironment, BlindpayInstanceConfig>;
+  };
+  defindex: {
+    apiKey: string;
+    baseUrl: string;
+    timeoutMs: number;
   };
   rateLimit: {
     /**
@@ -439,6 +446,16 @@ export default (): AppConfig => ({
         webhookSecret: process.env.BLINDPAY_WEBHOOK_SECRET_DEV ?? '',
       },
     },
+  },
+  defindex: {
+    apiKey: process.env.DEFINDEX_API_KEY?.trim() ?? '',
+    baseUrl: (
+      process.env.DEFINDEX_BASE_URL ?? DEFAULT_DEFINDEX_BASE_URL
+    ).replace(/\/+$/, ''),
+    timeoutMs: parseInt(
+      process.env.DEFINDEX_TIMEOUT_MS ?? String(DEFAULT_DEFINDEX_TIMEOUT_MS),
+      10,
+    ),
   },
   rateLimit: {
     enabled:

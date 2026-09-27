@@ -213,6 +213,12 @@ Les chemins utilisent la forme OpenAPI `{param}`.
 | GET | `/v1/liquidity-pools/positions` | l'un de `liquidity:read`, `swaps:read` | ✓ |
 | POST | `/v1/liquidity-pools/withdraw` | l'un de `liquidity:write`, `swaps:write` | ✓ |
 | GET | `/v1/liquidity-pools/{poolId}` | l'un de `liquidity:read`, `swaps:read` | ✓ |
+| GET | `/v1/defindex/vaults` | l'un de `liquidity:read`, `swaps:read` | ✓ |
+| GET | `/v1/defindex/vaults/{vault}` | l'un de `liquidity:read`, `swaps:read` | ✓ |
+| GET | `/v1/defindex/vaults/{vault}/balance` | l'un de `liquidity:read`, `swaps:read` | ✓ |
+| POST | `/v1/defindex/vaults/{vault}/deposit` | l'un de `liquidity:write`, `swaps:write` | ✓ |
+| POST | `/v1/defindex/vaults/{vault}/withdraw` | l'un de `liquidity:write`, `swaps:write` | ✓ |
+| POST | `/v1/defindex/submit` | l'un de `liquidity:write`, `swaps:write` | ✓ |
 | GET | `/v1/logs` | `payments:read` |  |
 | GET | `/v1/logs/webhooks` | `webhooks:read` |  |
 | GET | `/v1/offramp/payouts` | `offramp:read` |  |
@@ -1533,6 +1539,9 @@ Chaque variable lue depuis `process.env` dans `src/` est validée au démarrage 
 | `BLINDPAY_INSTANCE_ID_DEV` | si la clé API de dev est définie | — | Identifiant de l'instance de développement (`in_...`) |
 | `BLINDPAY_WEBHOOK_SECRET_DEV` | si la clé API de dev est définie | — | Secret Svix de l'endpoint de webhook de l'instance de développement ; mêmes règles que `BLINDPAY_WEBHOOK_SECRET` |
 | `BLINDPAY_TIMEOUT_MS` | non | `15000` | Timeout du client HTTP BlindPay (ms) |
+| `DEFINDEX_API_KEY` | non | — | Clé API serveur DeFindex ; vide, les routes sont désactivées |
+| `DEFINDEX_BASE_URL` | non | `https://api.defindex.io` | URL de base de l’API DeFindex |
+| `DEFINDEX_TIMEOUT_MS` | non | `30000` | Timeout HTTP DeFindex (ms) |
 | `KYC_REDIRECT_URL_WHITELIST` | non | — | Liste d'autorisation, par consumer, des hôtes de redirection KYC |
 | `WALLET_AUTH_RETURN_URLS` | non | — | URL de l’application, séparées par des virgules, vers lesquelles le callback de connexion du wallet peut rediriger (`returnTo` sur `POST /v1/wallet/auth/oauth/authorize`) : un schéma propre, un universal/app link, ou `http://127.0.0.1/…` (n’importe quel port). Correspondance exacte ; une entrée en http simple hors loopback, avec une query ou en `javascript:`/`data:`/`file:` est refusée au démarrage. Non définie, chaque callback affiche la page et un `returnTo` est `400 wallet_return_url_not_allowed` |
 | `RATE_LIMIT_ENABLED` | non | `true` | Plafonds par adresse sur les routes qui dépensent des XLM. Interrupteur d'incident |

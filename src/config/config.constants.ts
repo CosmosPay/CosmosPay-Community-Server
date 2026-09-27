@@ -45,3 +45,12 @@ export const DEFAULT_RECOVERY_SWEEP_INTERVAL_MS = 60_000;
  */
 export const NETWORK_PASSPHRASE_PUBLIC =
   'Public Global Stellar Network ; September 2015';
+
+/** DeFindex's hosted API, used when `DEFINDEX_BASE_URL` is unset. */
+export const DEFAULT_DEFINDEX_BASE_URL = 'https://api.defindex.io';
+
+/**
+ * Upstream budget for one DeFindex call. Building a vault deposit simulates a
+ * Soroban transaction on DeFindex's side, which is slower than a plain read.
+ */
+export const DEFAULT_DEFINDEX_TIMEOUT_MS = 30_000;

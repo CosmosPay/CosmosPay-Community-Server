@@ -213,6 +213,12 @@ Paths use the OpenAPI `{param}` form.
 | GET | `/v1/liquidity-pools/positions` | one of `liquidity:read`, `swaps:read` | ✓ |
 | POST | `/v1/liquidity-pools/withdraw` | one of `liquidity:write`, `swaps:write` | ✓ |
 | GET | `/v1/liquidity-pools/{poolId}` | one of `liquidity:read`, `swaps:read` | ✓ |
+| GET | `/v1/defindex/vaults` | one of `liquidity:read`, `swaps:read` | ✓ |
+| GET | `/v1/defindex/vaults/{vault}` | one of `liquidity:read`, `swaps:read` | ✓ |
+| GET | `/v1/defindex/vaults/{vault}/balance` | one of `liquidity:read`, `swaps:read` | ✓ |
+| POST | `/v1/defindex/vaults/{vault}/deposit` | one of `liquidity:write`, `swaps:write` | ✓ |
+| POST | `/v1/defindex/vaults/{vault}/withdraw` | one of `liquidity:write`, `swaps:write` | ✓ |
+| POST | `/v1/defindex/submit` | one of `liquidity:write`, `swaps:write` | ✓ |
 | GET | `/v1/logs` | `payments:read` |  |
 | GET | `/v1/logs/webhooks` | `webhooks:read` |  |
 | GET | `/v1/offramp/payouts` | `offramp:read` |  |
@@ -1498,6 +1504,9 @@ at least `DATABASE_URL` and `APISIX_GATEWAY_SECRET`.
 | `BLINDPAY_INSTANCE_ID_DEV` | when dev API key set | — | Development instance id (`in_...`) |
 | `BLINDPAY_WEBHOOK_SECRET_DEV` | when dev API key set | — | Svix secret of the development instance's webhook endpoint; same rules as `BLINDPAY_WEBHOOK_SECRET` |
 | `BLINDPAY_TIMEOUT_MS` | no | `15000` | BlindPay HTTP client timeout (ms) |
+| `DEFINDEX_API_KEY` | no | — | DeFindex server API key; empty disables DeFindex routes |
+| `DEFINDEX_BASE_URL` | no | `https://api.defindex.io` | DeFindex API base URL |
+| `DEFINDEX_TIMEOUT_MS` | no | `30000` | DeFindex HTTP timeout (ms) |
 | `KYC_REDIRECT_URL_WHITELIST` | no | — | Per-consumer KYC redirect host allow-list |
 | `WALLET_AUTH_RETURN_URLS` | no | — | Comma-separated app URLs the wallet sign-in callback may redirect to (`returnTo` on `POST /v1/wallet/auth/oauth/authorize`): a custom scheme, a universal/app link, or `http://127.0.0.1/…` (any port). Exact match; an entry that is plain http off loopback, carries a query or uses `javascript:`/`data:`/`file:` is refused at boot. Unset, every callback renders the page and a `returnTo` is `400 wallet_return_url_not_allowed` |
 | `RATE_LIMIT_ENABLED` | no | `true` | Per-address caps on the routes that spend XLM. Incident switch |

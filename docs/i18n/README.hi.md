@@ -213,6 +213,12 @@ Paths OpenAPI के `{param}` रूप में लिखे गए हैं
 | GET | `/v1/liquidity-pools/positions` | इनमें से कोई एक `liquidity:read`, `swaps:read` | ✓ |
 | POST | `/v1/liquidity-pools/withdraw` | इनमें से कोई एक `liquidity:write`, `swaps:write` | ✓ |
 | GET | `/v1/liquidity-pools/{poolId}` | इनमें से कोई एक `liquidity:read`, `swaps:read` | ✓ |
+| GET | `/v1/defindex/vaults` | इनमें से कोई एक `liquidity:read`, `swaps:read` | ✓ |
+| GET | `/v1/defindex/vaults/{vault}` | इनमें से कोई एक `liquidity:read`, `swaps:read` | ✓ |
+| GET | `/v1/defindex/vaults/{vault}/balance` | इनमें से कोई एक `liquidity:read`, `swaps:read` | ✓ |
+| POST | `/v1/defindex/vaults/{vault}/deposit` | इनमें से कोई एक `liquidity:write`, `swaps:write` | ✓ |
+| POST | `/v1/defindex/vaults/{vault}/withdraw` | इनमें से कोई एक `liquidity:write`, `swaps:write` | ✓ |
+| POST | `/v1/defindex/submit` | इनमें से कोई एक `liquidity:write`, `swaps:write` | ✓ |
 | GET | `/v1/logs` | `payments:read` |  |
 | GET | `/v1/logs/webhooks` | `webhooks:read` |  |
 | GET | `/v1/offramp/payouts` | `offramp:read` |  |
@@ -1480,6 +1486,9 @@ type दोबारा बनाए बिना enum value drop नहीं �
 | `BLINDPAY_INSTANCE_ID_DEV` | जब dev API key सेट हो | — | development instance id (`in_...`) |
 | `BLINDPAY_WEBHOOK_SECRET_DEV` | जब dev API key सेट हो | — | development instance के webhook endpoint का Svix secret; `BLINDPAY_WEBHOOK_SECRET` जैसे ही नियम |
 | `BLINDPAY_TIMEOUT_MS` | नहीं | `15000` | BlindPay HTTP client timeout (ms) |
+| `DEFINDEX_API_KEY` | नहीं | — | DeFindex server API key; खाली होने पर routes बंद रहती हैं |
+| `DEFINDEX_BASE_URL` | नहीं | `https://api.defindex.io` | DeFindex API base URL |
+| `DEFINDEX_TIMEOUT_MS` | नहीं | `30000` | DeFindex HTTP timeout (ms) |
 | `KYC_REDIRECT_URL_WHITELIST` | नहीं | — | प्रति consumer KYC redirect hosts की allow-list |
 | `WALLET_AUTH_RETURN_URLS` | नहीं | — | ऐप के URL, कॉमा से अलग, जिन पर wallet साइन-इन का callback redirect कर सकता है (`POST /v1/wallet/auth/oauth/authorize` पर `returnTo`): एक custom scheme, एक universal/app link, या `http://127.0.0.1/…` (कोई भी port)। सटीक मिलान; loopback के बाहर plain http, query वाली, या `javascript:`/`data:`/`file:` वाली entry boot पर अस्वीकार होती है। सेट न होने पर हर callback पेज दिखाता है और `returnTo` पर `400 wallet_return_url_not_allowed` मिलता है |
 | `RATE_LIMIT_ENABLED` | नहीं | `true` | XLM खर्च करने वाले रूट्स पर प्रति पता सीमाएँ। incident switch |

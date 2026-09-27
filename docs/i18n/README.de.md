@@ -216,6 +216,12 @@ Konsolen-Backend erreicht sie. Pfade verwenden die OpenAPI-Form `{param}`.
 | GET | `/v1/liquidity-pools/positions` | eines von `liquidity:read`, `swaps:read` | ✓ |
 | POST | `/v1/liquidity-pools/withdraw` | eines von `liquidity:write`, `swaps:write` | ✓ |
 | GET | `/v1/liquidity-pools/{poolId}` | eines von `liquidity:read`, `swaps:read` | ✓ |
+| GET | `/v1/defindex/vaults` | eines von `liquidity:read`, `swaps:read` | ✓ |
+| GET | `/v1/defindex/vaults/{vault}` | eines von `liquidity:read`, `swaps:read` | ✓ |
+| GET | `/v1/defindex/vaults/{vault}/balance` | eines von `liquidity:read`, `swaps:read` | ✓ |
+| POST | `/v1/defindex/vaults/{vault}/deposit` | eines von `liquidity:write`, `swaps:write` | ✓ |
+| POST | `/v1/defindex/vaults/{vault}/withdraw` | eines von `liquidity:write`, `swaps:write` | ✓ |
+| POST | `/v1/defindex/submit` | eines von `liquidity:write`, `swaps:write` | ✓ |
 | GET | `/v1/logs` | `payments:read` |  |
 | GET | `/v1/logs/webhooks` | `webhooks:read` |  |
 | GET | `/v1/offramp/payouts` | `offramp:read` |  |
@@ -1564,6 +1570,9 @@ passen Sie mindestens `DATABASE_URL` und `APISIX_GATEWAY_SECRET` an.
 | `BLINDPAY_INSTANCE_ID_DEV` | wenn Dev-API-Key gesetzt | — | ID der Entwicklungsinstanz (`in_...`) |
 | `BLINDPAY_WEBHOOK_SECRET_DEV` | wenn Dev-API-Key gesetzt | — | Svix-Secret des Webhook-Endpunkts der Entwicklungsinstanz; gleiche Regeln wie `BLINDPAY_WEBHOOK_SECRET` |
 | `BLINDPAY_TIMEOUT_MS` | nein | `15000` | Timeout des BlindPay-HTTP-Clients (ms) |
+| `DEFINDEX_API_KEY` | nein | — | DeFindex-Server-API-Schlüssel; leer deaktiviert die Routen |
+| `DEFINDEX_BASE_URL` | nein | `https://api.defindex.io` | Basis-URL der DeFindex-API |
+| `DEFINDEX_TIMEOUT_MS` | nein | `30000` | DeFindex-HTTP-Timeout (ms) |
 | `KYC_REDIRECT_URL_WHITELIST` | nein | — | Allowlist der KYC-Redirect-Hosts pro Consumer |
 | `WALLET_AUTH_RETURN_URLS` | nein | — | Kommagetrennte App-URLs, auf die der Callback der Wallet-Anmeldung umleiten darf (`returnTo` bei `POST /v1/wallet/auth/oauth/authorize`): ein eigenes Schema, ein Universal/App Link oder `http://127.0.0.1/…` (beliebiger Port). Exakter Vergleich; ein Eintrag mit reinem http außerhalb von Loopback, mit Query oder mit `javascript:`/`data:`/`file:` wird beim Start abgelehnt. Ohne Wert rendert jeder Callback die Seite, und ein `returnTo` ist `400 wallet_return_url_not_allowed` |
 | `RATE_LIMIT_ENABLED` | nein | `true` | Obergrenzen pro Adresse auf den Routen, die XLM ausgeben. Notfallschalter |

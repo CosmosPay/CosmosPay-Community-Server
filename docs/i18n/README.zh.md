@@ -184,6 +184,12 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | GET | `/v1/liquidity-pools/positions` | `liquidity:read`、`swaps:read` 之一 | ✓ |
 | POST | `/v1/liquidity-pools/withdraw` | `liquidity:write`、`swaps:write` 之一 | ✓ |
 | GET | `/v1/liquidity-pools/{poolId}` | `liquidity:read`、`swaps:read` 之一 | ✓ |
+| GET | `/v1/defindex/vaults` | `liquidity:read`、`swaps:read` 之一 | ✓ |
+| GET | `/v1/defindex/vaults/{vault}` | `liquidity:read`、`swaps:read` 之一 | ✓ |
+| GET | `/v1/defindex/vaults/{vault}/balance` | `liquidity:read`、`swaps:read` 之一 | ✓ |
+| POST | `/v1/defindex/vaults/{vault}/deposit` | `liquidity:write`、`swaps:write` 之一 | ✓ |
+| POST | `/v1/defindex/vaults/{vault}/withdraw` | `liquidity:write`、`swaps:write` 之一 | ✓ |
+| POST | `/v1/defindex/submit` | `liquidity:write`、`swaps:write` 之一 | ✓ |
 | GET | `/v1/logs` | `payments:read` |  |
 | GET | `/v1/logs/webhooks` | `webhooks:read` |  |
 | GET | `/v1/offramp/payouts` | `offramp:read` |  |
@@ -1004,6 +1010,9 @@ WHERE NOT i.indisvalid;
 | `BLINDPAY_INSTANCE_ID_DEV` | 设置了开发 API key 时 | — | 开发实例 id（`in_...`） |
 | `BLINDPAY_WEBHOOK_SECRET_DEV` | 设置了开发 API key 时 | — | 开发实例 webhook 端点的 Svix 密钥；规则与 `BLINDPAY_WEBHOOK_SECRET` 相同 |
 | `BLINDPAY_TIMEOUT_MS` | 否 | `15000` | BlindPay HTTP 客户端超时（ms） |
+| `DEFINDEX_API_KEY` | 否 | — | DeFindex 服务端 API 密钥；留空则禁用相关路由 |
+| `DEFINDEX_BASE_URL` | 否 | `https://api.defindex.io` | DeFindex API 基础 URL |
+| `DEFINDEX_TIMEOUT_MS` | 否 | `30000` | DeFindex HTTP 超时（ms） |
 | `KYC_REDIRECT_URL_WHITELIST` | 否 | — | 按消费者划分的 KYC 重定向主机白名单 |
 | `WALLET_AUTH_RETURN_URLS` | 否 | — | 以逗号分隔的应用 URL，钱包登录回调可以重定向到这些地址（`POST /v1/wallet/auth/oauth/authorize` 的 `returnTo`）：自定义 scheme、universal/app link，或 `http://127.0.0.1/…`（任意端口）。精确匹配；回环地址之外的纯 http、带 query 或使用 `javascript:`/`data:`/`file:` 的条目在启动时被拒绝。未设置时，每个回调都渲染页面，`returnTo` 返回 `400 wallet_return_url_not_allowed` |
 | `RATE_LIMIT_ENABLED` | 否 | `true` | 对花费 XLM 的路由按地址设置上限。事故开关 |
