@@ -10,7 +10,10 @@ import { openJson, sealJson } from '@/common/sealed-box';
 import {
   BACKUP_BOX_MAX_CHARS,
   BACKUP_MAX_ITERATIONS,
+  BACKUP_MAX_SLOTS,
   BACKUP_MIN_ITERATIONS,
+  BACKUP_PASSKEY_ID_MAX_CHARS,
+  BACKUP_WRAPPED_KEY_BYTES,
   OIDC_MAX_AGE_S,
   SESSION_TTL_MS,
   SIGNED_AT_SKEW_MS,
@@ -529,36 +532,86 @@ export function signedAtFresh(signedAt: string, now = Date.now()): boolean {
 /* --------------------------------- backup --------------------------------- */
 
 const B64 = /^[A-Za-z0-9+/]+={0,2}$/;
+const B64URL = /^[A-Za-z0-9_-]+$/;
 
-/**
- * Is this a box the wallet could have produced?
- *
- * The wallet's sealed-box JSON — `v: 2`, a salt, an IV, the ciphertext and the
- * PBKDF2 cost — and nothing that would let it sit here as something weaker.
- * Structure only: whether it OPENS is a question for a password this service
- * never sees.
- */
-export function isBackupBox(box: string): boolean {
-  if (typeof box !== 'string' || !box || box.length > BACKUP_BOX_MAX_CHARS)
-    return false;
-  let b: Record<string, unknown>;
-  try {
-    b = JSON.parse(box) as Record<string, unknown>;
-  } catch {
-    return false;
-  }
-  if (!b || typeof b !== 'object' || Array.isArray(b)) return false;
-  if (b.v !== 2) return false;
-  for (const k of ['salt', 'iv', 'data']) {
-    if (typeof b[k] !== 'string' || !B64.test(b[k])) return false;
-  }
-  // 16-byte salt and 12-byte IV, as the wallet writes them.
-  if (Buffer.from(b.salt as string, 'base64').length < 16) return false;
-  if (Buffer.from(b.iv as string, 'base64').length !== 12) return false;
-  const iter = b.iter;
+type Json = Record<string, unknown>;
+
+const b64Bytes = (v: unknown): number | null =>
+  typeof v === 'string' && B64.test(v) ? Buffer.from(v, 'base64').length : null;
+
+/** 16-byte salt at least, and a PBKDF2 cost inside the band this service keeps. */
+function passwordCostOk(salt: unknown, iter: unknown): boolean {
+  const saltBytes = b64Bytes(salt);
   return (
+    saltBytes !== null &&
+    saltBytes >= 16 &&
     Number.isInteger(iter) &&
     (iter as number) >= BACKUP_MIN_ITERATIONS &&
     (iter as number) <= BACKUP_MAX_ITERATIONS
   );
+}
+
+/**
+ * One door of a v3 box: the data key, sealed under a password or a passkey.
+ *
+ * A password slot is held to the same cost floor a v2 box is — it is exactly as
+ * exposed to whoever reads this table. A passkey slot has no cost to check: its
+ * key is the authenticator's PRF output, 32 bytes nobody can guess offline, and
+ * `id` only tells the wallet which credential to ask for.
+ */
+function isBackupSlot(slot: unknown): boolean {
+  if (!slot || typeof slot !== 'object' || Array.isArray(slot)) return false;
+  const s = slot as Json;
+  if (b64Bytes(s.iv) !== 12) return false;
+  if (b64Bytes(s.data) !== BACKUP_WRAPPED_KEY_BYTES) return false;
+  if (s.kind === 'password') return passwordCostOk(s.salt, s.iter);
+  if (s.kind === 'passkey') {
+    return (
+      typeof s.id === 'string' &&
+      s.id.length > 0 &&
+      s.id.length <= BACKUP_PASSKEY_ID_MAX_CHARS &&
+      B64URL.test(s.id)
+    );
+  }
+  return false;
+}
+
+/**
+ * Is this a box the wallet could have produced?
+ *
+ * Two shapes, both the wallet's sealed-box JSON:
+ *
+ *  - `v: 2` — the seed sealed straight under a password: a salt, an IV, the
+ *    ciphertext and the PBKDF2 cost.
+ *  - `v: 3` — the seed sealed under a random data key, and that key sealed once
+ *    per door in `slots`: a password, a passkey, or both. It is what lets a person
+ *    restore with a fingerprint and no password at all.
+ *
+ * Nothing that would let either sit here as something weaker: every password
+ * door meets the cost floor, whichever version carries it. Structure only —
+ * whether it OPENS is a question for a secret this service never sees.
+ */
+export function isBackupBox(box: string): boolean {
+  if (typeof box !== 'string' || !box || box.length > BACKUP_BOX_MAX_CHARS)
+    return false;
+  let b: Json;
+  try {
+    b = JSON.parse(box) as Json;
+  } catch {
+    return false;
+  }
+  if (!b || typeof b !== 'object' || Array.isArray(b)) return false;
+  // 12-byte IV and a ciphertext, as the wallet writes them, in both versions.
+  if (b64Bytes(b.iv) !== 12 || b64Bytes(b.data) === null) return false;
+  if (b.v === 2) return passwordCostOk(b.salt, b.iter);
+  if (b.v === 3) {
+    const slots = b.slots;
+    return (
+      Array.isArray(slots) &&
+      slots.length > 0 &&
+      slots.length <= BACKUP_MAX_SLOTS &&
+      slots.every(isBackupSlot)
+    );
+  }
+  return false;
 }

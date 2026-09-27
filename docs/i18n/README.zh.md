@@ -944,6 +944,7 @@ Pollar 在 key 的前缀中编码了网络和 key 类型，环境变量校验器
 | `POST /v1/wallet/auth/oauth/claim`：提供方未确认邮箱（`email_verified` 不为 `true`）的 Authentik 登录，现在会完成回调并返回 `verify_email`，向该邮箱发送验证码（无论账户是否存在），而不再以 `email_unverified` 失败。此时不会发放 ID token，因此无法发起 SEP-30 恢复，并与 `POST /v1/wallet/auth/email/start` 共享按地址的冷却时间（`400 wallet_login_code_cooldown`）。请先运行迁移 `20260926120000_wallet_auth_unverified_email` | 钱包：新账户也要处理 `verify_email` | 用户会停在一个无路可走的页面；验证码证明了提供方未确认的邮箱地址 |
 | `POST /v1/wallet/auth/finish` 和 `POST /v1/wallet/recovery/setup` 从 `X-Wallet-Session: {sessionToken}` 读取会话令牌。`Authorization: Bearer` 仍会读取，但只有直接调用时才能到达服务 | 钱包：在 API key 之外发送 `X-Wallet-Session` | 网关在代理前会移除 `Authorization`（以及 `apikey`），因此经由 APISIX 时令牌从未到达，两个路由都返回 `401 wallet_session_invalid` |
 | 通过 Authentik 的钱包登录改为请求 `max_age=300` 而非 `prompt=login`，且 ID token 的 `auth_time` 必须在这 5 分钟内（否则回调以 `profile_invalid` 失败）。将 Google / GitHub 作为 Authentik 源时，把 `default-source-authentication` 设为 *Authentication: No requirement* | 使用 Authentik 社交源的运维人员 | 在 `prompt=login` 下，Authentik 会让没有会话的浏览器登录两次，而通过源的第二次登录会被 "Flow does not apply to current user" 拒绝 |
+| `POST /v1/wallet/auth/finish` 和 `PUT /v1/wallet/backup` 现在也接受 `v: 3` 备份盒：种子由一个随机数据密钥加密，该密钥在 `slots` 中按每扇门各封装一次（`kind: "password"` 或 `kind: "passkey"`，最多 8 个）。每个密码门都与 `v: 2` 盒遵守同样的 PBKDF2 下限；passkey 门没有成本，因为其密钥是认证器的 WebAuthn PRF 输出。`v: 2` 盒保持不变 | 钱包：仅含 passkey 的备份是有效的，写入这种备份的钱包需要此服务器 | 让用户用 passkey 而不是输入原密码来恢复，且本服务从不持有能打开备份盒的密钥 |
 
 随之而来的部署说明：
 

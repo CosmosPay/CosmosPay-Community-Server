@@ -81,8 +81,9 @@ class WalletBackupEntity {
 
   @ApiProperty({
     description:
-      'The sealed box, verbatim. Opaque to this service: only the password ' +
-      'opens it, and the password never arrives here.',
+      "The sealed box, verbatim. Opaque to this service: only the person's " +
+      'password or passkey opens it (a `v: 3` box carries one door per ' +
+      'secret), and neither ever arrives here.',
   })
   box!: string;
 

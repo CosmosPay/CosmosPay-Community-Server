@@ -41,6 +41,37 @@ function box(overrides: Record<string, unknown> = {}): string {
   });
 }
 
+const passwordSlot = (overrides: Record<string, unknown> = {}) => ({
+  kind: 'password',
+  salt: Buffer.alloc(16, 4).toString('base64'),
+  iter: BACKUP_MIN_ITERATIONS,
+  iv: Buffer.alloc(12, 5).toString('base64'),
+  data: Buffer.alloc(48, 6).toString('base64'),
+  ...overrides,
+});
+
+const passkeySlot = (overrides: Record<string, unknown> = {}) => ({
+  kind: 'passkey',
+  id: Buffer.alloc(32, 7).toString('base64url'),
+  iv: Buffer.alloc(12, 8).toString('base64'),
+  data: Buffer.alloc(48, 9).toString('base64'),
+  ...overrides,
+});
+
+/** A v3 box: the seed under a data key, the data key under each slot. */
+function boxV3(
+  slots: unknown[] = [passwordSlot(), passkeySlot()],
+  overrides: Record<string, unknown> = {},
+): string {
+  return JSON.stringify({
+    v: 3,
+    iv: Buffer.alloc(12, 2).toString('base64'),
+    data: Buffer.alloc(64, 3).toString('base64'),
+    slots,
+    ...overrides,
+  });
+}
+
 describe('wallet-auth-core', () => {
   /* The cross-repo contract. These literals are built independently by the
      wallet (src/lib/signIn.ts) and the developer platform; all three must agree
@@ -403,6 +434,73 @@ describe('wallet-auth-core', () => {
 
     it('refuses a box larger than anything the wallet writes', () => {
       expect(isBackupBox(box({ data: 'A'.repeat(9000) }))).toBe(false);
+    });
+
+    describe('v3 — a data key behind several doors', () => {
+      it('accepts a password and a passkey door', () => {
+        expect(isBackupBox(boxV3())).toBe(true);
+      });
+
+      it('accepts a passkey door alone, which is a passwordless wallet', () => {
+        expect(isBackupBox(boxV3([passkeySlot()]))).toBe(true);
+      });
+
+      /* The whole point of the floor, and a v3 box must not be a way around it. */
+      it('holds a password door to the same cost floor as a v2 box', () => {
+        expect(
+          isBackupBox(
+            boxV3([passwordSlot({ iter: BACKUP_MIN_ITERATIONS - 1 })]),
+          ),
+        ).toBe(false);
+        expect(
+          isBackupBox(
+            boxV3([
+              passkeySlot(),
+              passwordSlot({ iter: BACKUP_MIN_ITERATIONS - 1 }),
+            ]),
+          ),
+        ).toBe(false);
+      });
+
+      it.each([
+        ['no doors', []],
+        ['too many doors', Array.from({ length: 9 }, () => passkeySlot())],
+        ['an unknown kind', [passkeySlot({ kind: 'pin' })]],
+        [
+          'a wrapped key that is not 32 bytes plus a tag',
+          [passkeySlot({ data: Buffer.alloc(32, 1).toString('base64') })],
+        ],
+        [
+          'a slot IV that is not 12 bytes',
+          [passkeySlot({ iv: Buffer.alloc(16, 1).toString('base64') })],
+        ],
+        ['a passkey with no credential id', [passkeySlot({ id: '' })]],
+        [
+          'a credential id that is not base64url',
+          [passkeySlot({ id: 'has spaces' })],
+        ],
+        [
+          'a password door with a short salt',
+          [passwordSlot({ salt: Buffer.alloc(8, 1).toString('base64') })],
+        ],
+        ['a slot that is not an object', ['passkey']],
+      ])('refuses %s', (_label, slots) => {
+        expect(isBackupBox(boxV3(slots))).toBe(false);
+      });
+
+      it('refuses slots that are not a list', () => {
+        expect(isBackupBox(boxV3(undefined, { slots: passkeySlot() }))).toBe(
+          false,
+        );
+      });
+
+      it('refuses a v3 box whose own IV is not 12 bytes', () => {
+        expect(
+          isBackupBox(
+            boxV3(undefined, { iv: Buffer.alloc(16, 1).toString('base64') }),
+          ),
+        ).toBe(false);
+      });
     });
   });
 

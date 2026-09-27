@@ -118,6 +118,24 @@ export const BACKUP_BOX_MAX_CHARS = 8192;
 export const BACKUP_MIN_ITERATIONS = 600_000;
 export const BACKUP_MAX_ITERATIONS = 4_000_000;
 
+/**
+ * How many doors a v3 box may carry — a password and a few passkeys.
+ *
+ * Each slot is another way to open the same backup, so this is a ceiling on how
+ * many keys to one person's seed the wallet can file here, not a feature limit.
+ * The wallet writes one password slot at most and one passkey per device family.
+ */
+export const BACKUP_MAX_SLOTS = 8;
+
+/**
+ * A slot holds the box's 32-byte data key, AES-GCM-sealed: 32 bytes of key and
+ * a 16-byte tag. Anything else is not a key the wallet wrapped.
+ */
+export const BACKUP_WRAPPED_KEY_BYTES = 48;
+
+/** WebAuthn caps a credential id at 1023 bytes; base64url makes that 1364 chars. */
+export const BACKUP_PASSKEY_ID_MAX_CHARS = 1364;
+
 // --- Rate limits -----------------------------------------------------------
 //
 // Budgets are per consumer + client address (per /64 on IPv6). The window is
