@@ -156,7 +156,7 @@ describe('WalletAuthService', () => {
       const { service } = makeService();
       await expect(
         service.startOauth({
-          provider: 'pollar',
+          provider: 'myspace',
           codeChallenge: 'x'.repeat(43),
           codeChallengeMethod: 'S256',
         }),

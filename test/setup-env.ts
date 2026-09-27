@@ -28,16 +28,3 @@ process.env.BLINDPAY_INSTANCE_ID = 'in_test';
 process.env.BLINDPAY_WEBHOOK_SECRET = `whsec_${Buffer.from(
   'e2e-blindpay-webhook-key',
 ).toString('base64')}`;
-// Pollar: keys so the routes are reachable (nothing leaves the process — the
-// suite stubs global fetch), plus the bridge callback and a redirect allow-list
-// for the e2e consumer. The prefixes are the real ones because env validation
-// checks them.
-process.env.POLLAR_PUBLISHABLE_KEY_TESTNET = 'pub_testnet_e2e';
-process.env.POLLAR_SECRET_KEY_TESTNET = 'sec_testnet_e2e';
-process.env.POLLAR_BRIDGE_CALLBACK_URL =
-  'https://gw.test/v1/pollar/oauth/callback';
-process.env.POLLAR_REDIRECT_URI_WHITELIST = JSON.stringify({
-  cosmos_u1: ['cosmospay://auth'],
-});
-// Keep the handshake sweeper's timer out of a test run.
-process.env.POLLAR_SWEEP_ENABLED = 'false';

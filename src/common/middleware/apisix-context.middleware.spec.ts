@@ -31,8 +31,8 @@ describe('ApisixContextMiddleware', () => {
   });
 
   it('reads the account email the gateway forwards, lowercased', () => {
-    // The Pollar bridge compares it with the email that completed a login, so
-    // a casing difference must not read as a different person.
+    // Anything that compares it with another email must not read a casing
+    // difference as a different person.
     const consumer = consumerFor({
       'x-consumer-username': 'cosmos_u1',
       'x-consumer-email': '  Ada@Example.COM ',
@@ -41,7 +41,7 @@ describe('ApisixContextMiddleware', () => {
   });
 
   it('treats a malformed email as not forwarded', () => {
-    // Null fails the Pollar identity check closed; a garbled value must not be
+    // Null fails any identity check closed; a garbled value must not be
     // compared as though it named someone.
     for (const raw of ['ada', '@example.com', 'ada@', 'a b@example.com']) {
       expect(

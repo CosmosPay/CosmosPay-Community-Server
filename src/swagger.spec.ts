@@ -169,7 +169,7 @@ describe('attachErrorResponses', () => {
     );
 
     it('distinguishes an HTTP provider from the Stellar SDK', () => {
-      // BlindPay and Pollar are `fetch` calls that can be refused (502) or time
+      // BlindPay is a `fetch` call that can be refused (502) or time
       // out (504); Horizon is wrapped by the SDK and only ever a 503 here.
       expect(statusesOf(document, '/v1/offramp/quotes', 'post')).toEqual(
         expect.arrayContaining(['502', '503', '504']),

@@ -118,8 +118,11 @@ describe('AdvisoryLockService', () => {
     // constant with a new number silently disables the exclusion.
     expect(new Set(ids).size).toBe(ids.length);
     expect(ids).toEqual([
-      881_001, 881_002, 881_003, 881_004, 881_005, 881_006, 881_007, 881_008,
-      881_009, 881_010,
+      881_001, 881_002, 881_003, 881_004, 881_006, 881_008, 881_009, 881_010,
     ]);
+    // Retired with Pollar: a replica still on the old build takes these, so a new
+    // task must never be given one.
+    expect(ids).not.toContain(881_005);
+    expect(ids).not.toContain(881_007);
   });
 });

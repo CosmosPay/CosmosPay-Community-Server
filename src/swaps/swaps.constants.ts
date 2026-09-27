@@ -26,7 +26,7 @@ export const SWAP_COMMISSION_MEMO = 'Cosmos Swap Commission';
  * household, a carrier NAT — while holding a loop to twenty broadcasts a minute
  * (forty across a fixed-window boundary).
  *
- * Why a one-minute window, when Pollar's are ten: the envelope being retried only
+ * Why a one-minute window, when most budgets here are ten: the envelope being retried only
  * lives `STELLAR_TX_TIMEOUT` (300 s by default). A wallet refused early in a
  * ten-minute window would watch its envelope expire before `Retry-After` came
  * round; a minute keeps the retry inside the envelope's life.

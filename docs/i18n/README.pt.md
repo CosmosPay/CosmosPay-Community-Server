@@ -58,7 +58,7 @@ src/
   config/
     configuration.ts              typed config
     env.validation.ts             fail-fast env validation (secret required when enforcing)
-    *-whitelist.ts                KYC and Pollar redirect allow-lists
+    *-whitelist.ts                KYC redirect allow-list
   prisma/                         PrismaModule + PrismaService (global)
   common/
     guards/apisix.guard.ts        THE gateway gate
@@ -83,7 +83,6 @@ src/
   kyc/                            receivers (KYC/KYB), wallets, bank accounts, doc upload
   onramp/                         fiat → stablecoin: payin quotes, payins, virtual accounts
   offramp/                        stablecoin → fiat: payout quotes, payouts (client-signed)
-  pollar/                         Pollar OAuth bridge (social login → a wallet on both networks) + operator routes
   products/                       merchant catalogue
   customers/                      payer records derived from intents
   aliases/                        claimable payment handles: signed claims, resolution, email recovery
@@ -96,13 +95,12 @@ src/
 prisma/schema.prisma              Consumer, PaymentIntent, Swap, LiquidityPoolOperation,
                                   WebhookEndpoint/Delivery/EmittedEvent, BlindpayReceiver,
                                   Blockchain/BankAccount/VirtualAccount, BlindpayQuote,
-                                  BlindpayWebhookEvent, Payin, Payout, PollarOauthSession,
-                                  PollarUserWallet, RequestLog, ActivityEvent,
+                                  BlindpayWebhookEvent, Payin, Payout, RequestLog,
+                                  ActivityEvent,
                                   AdminAuditLog, Alias, AliasAddress,
                                   AliasChallenge, AliasRecovery
 test/                             e2e suites: gateway gate, admin + alias console gates,
-                                  payment intents, swaps, liquidity pools, KYC, webhooks,
-                                  Pollar
+                                  payment intents, swaps, liquidity pools, KYC, webhooks
 scripts/                          OpenAPI generator, README check, operator scripts
 docs/i18n/                        this README in es, pt, de, fr, hi, zh
 ```
@@ -134,7 +132,6 @@ escopo. **Os schemas de requisição e resposta ficam no contrato OpenAPI gerado
 | Aliases           | `/v1/aliases`            | Handles de pagamento reivindicáveis: reivindicar, resolver, recuperar |
 | Login da carteira | `/v1/wallet` | Google / GitHub / código por e-mail, e o backup cifrado da seed |
 | Ativos            | `/v1/assets`             | Registro curado de ativos por rede                       |
-| Pollar            | `/v1/pollar`             | Bridge OAuth (login social → carteira) + rotas de operador |
 | Analytics         | `/v1/summary`, `/v1/balances`, `/v1/logs` | Agregados e logs do dashboard           |
 | Atividade         | `/v1/activity`           | Eventos reportados pelo cliente: ingestão, feed, consolidação |
 | Admin             | `/v1/admin`              | Leituras/escritas cross-tenant — somente console da plataforma, auditado |
@@ -241,20 +238,6 @@ console chega até ela. Os caminhos usam a forma `{param}` do OpenAPI.
 | DELETE | `/v1/payment-intents/{id}` | `payments:write` |  |
 | GET | `/v1/payment-intents/{id}/transitions` | `payments:read` |  |
 | POST | `/v1/payment-intents/{id}/validate` | `payments:write` |  |
-| POST | `/v1/pollar/oauth/authorize` | `pollar:write` |  |
-| GET | `/v1/pollar/oauth/callback` | nenhum — `@Public()` |  |
-| GET | `/v1/pollar/oauth/callback/{state}` | nenhum — `@Public()` |  |
-| POST | `/v1/pollar/oauth/logout` | `pollar:write` |  |
-| POST | `/v1/pollar/oauth/refresh` | `pollar:write` |  |
-| GET | `/v1/pollar/oauth/sessions/{state}` | `pollar:read` |  |
-| POST | `/v1/pollar/oauth/token` | `pollar:write` |  |
-| POST | `/v1/pollar/tokens/verify` | `pollar:read` |  |
-| POST | `/v1/pollar/users` | `pollar:write` |  |
-| POST | `/v1/pollar/users/with-wallet` | `pollar:write` |  |
-| POST | `/v1/pollar/wallets/activate` | `pollar:write` |  |
-| POST | `/v1/pollar/wallets/{address}/trustlines` | `pollar:write` |  |
-| POST | `/v1/pollar/wallets/{address}/trustlines/default` | `pollar:write` |  |
-| DELETE | `/v1/pollar/wallets/{address}/trustlines/{code}/{issuer}` | `pollar:write` |  |
 | GET | `/v1/products` | `products:read` |  |
 | POST | `/v1/products` | `products:write` |  |
 | GET | `/v1/products/{id}` | `products:read` |  |
@@ -332,9 +315,6 @@ Alguns que são fáceis de confundir:
 | `account_disabled` | 403 | Um operador desativou esta conta fiat. Não é um problema da chave |
 | `gateway_required` | 403 | A requisição não chegou pelo APISIX |
 | `admin_console_only` | 403 | A rota pertence ao console da plataforma (`/v1/admin`, iniciar a recuperação de um alias). Nenhuma API key pode chamá-la |
-| `elevated_key_required` | 403 | A rota escreve em algo que todos os tenants compartilham (o diretório de usuários da Pollar). Só uma key elevada (admin) pode chamá-la; mais scopes não ajudam |
-| `pollar_identity_required` | 403 | O gateway não encaminhou o e-mail da conta desta key, então um login da Pollar não pode ser vinculado a ela |
-| `pollar_identity_mismatch` | 403 | O login da Pollar foi concluído por uma conta diferente da conta da key. A sessão foi revogada, não devolvida |
 | `idempotency_conflict` | 409 | Este `Idempotency-Key` (ou o memo do payment intent) já produziu um recurso para uma requisição *diferente*. Repita a requisição original ou use uma chave nova |
 | `kyc_state_invalid` | 409 | Uma transição de estado de KYC ilegal — não é uma requisição duplicada |
 | `operation_in_flight` | 409 | Uma operação conflitante ainda está sendo liquidada |
@@ -357,9 +337,7 @@ o seu ciclo quando outra réplica o detém:
 | `StellarObserverService`       | `PaymentIntentObserver`  |
 | `RequestLogRetentionService`   | `RequestLogRetention`    |
 | Sweeper de entregas de webhook | `WebhookDeliverySweeper` |
-| `PollarOauthSweeperService`    | `PollarOauthSweeper`     |
 | `RateLimitPruneService`        | `RateLimitPrune`         |
-| `PollarWalletProvisionSweeperService` | `PollarWalletProvisionSweeper` |
 | `AliasChallengeSweeperService` | `AliasChallengeSweeper`  |
 
 `pg_try_advisory_xact_lock` nunca bloqueia e é liberado quando a transação termina,
@@ -1142,262 +1120,24 @@ um host com ponto final ou em forma IDN é recusado em vez de normalizado. Toda 
 que recebe uma `redirect_url` a verifica, incluindo a aprovação pelo admin, que usa a
 lista do próprio consumer do receiver. Um esquema ou host recusado resulta em `400`.
 
-## Pollar — login social que devolve uma carteira Stellar
-
-A [Pollar](https://docs.pollar.xyz/docs) transforma um login Google/GitHub em uma
-conta Stellar: autentica o usuário, cria uma carteira, custodia a chave no AWS KMS,
-adiciona as trustlines configuradas e financia a reserva — o usuário nunca vê uma
-seed phrase. Este serviço a expõe como uma **bridge OAuth**.
-
-### Por que uma bridge e não um passthrough
-
-O login hospedado da Pollar foi projetado para um SDK de navegador. Ele leva o
-usuário a `GET /auth/{provider}` com uma publishable key, um id de client session e
-uma `redirect_uri` — e essa redirect URI precisa ser um host **registrado na
-Pollar**. Uma carteira não consegue cumprir esses requisitos: um listener de loopback
-ou um deep link `cosmospay://` nunca é um host registrado, e a carteira não deveria
-lidar com essas chaves e ids de sessão. Então a bridge cuida do lado da Pollar, e a
-carteira faz só dois passos: **abrir uma autorização, resgatar um código**.
-
-```
-wallet ──1. POST /v1/pollar/oauth/authorize ────────────▶ bridge ──▶ POST /v2/auth/session
-       ◀── authorization_url + state ──────────────────── bridge     (Pollar mints a client session)
-
-browser ─2. open authorization_url ──▶ Pollar ──▶ Google/GitHub consent
-        ◀─────────────── 3. redirect ─────────── Pollar ──▶ GET /v1/pollar/oauth/callback/{state}
-                                                                     (bridge mints a single-use code)
-
-wallet ──4. absorbs the code ────── from its own redirect URI, or GET /oauth/sessions/{state}
-wallet ──5. POST /v1/pollar/oauth/token ────────────────▶ bridge ──▶ POST /v2/auth/login
-       ◀── access_token + refresh_token + wallet ──────── bridge     (waits for Pollar to be READY)
-
-wallet ──6. talks to Pollar DIRECTLY from here on ──────▶ https://sdk.api.pollar.xyz/v2
-```
-
-A partir do passo 6, a carteira fala diretamente com a Pollar: a resposta do resgate
-inclui a `publishable_key` e a `api_base_url`, que a carteira usa para ler saldos e
-montar e enviar transações. **Este serviço não faz proxy dessas chamadas.**
-
-### Duas formas de absorver o código
-
-|                  | Fluxo de redirect                                | Fluxo de polling                                |
-| ---------------- | ------------------------------------------------ | ----------------------------------------------- |
-| A carteira fornece | `redirect_uri` (precisa estar na allow-list) e um `code_challenge` PKCE | nada (PKCE opcional) |
-| O código chega   | como `?code=…&state=…` no redirect               | por `GET /v1/pollar/oauth/sessions/{state}`     |
-| O navegador vê   | a sua própria URI                                | uma página simples de "você pode fechar esta janela" — nunca o código |
-| Use quando       | a carteira tem um deep link ou um listener de loopback | não tem nenhum dos dois (quiosque, headless, view embutida) |
-
-Cada polling emite um código novo e invalida o anterior, então resgate o código do
-seu polling mais recente. Só um SHA-256 do código é armazenado.
-
-**Prefira o fluxo de polling.** O fluxo hospedado da Pollar não devolve o navegador
-para o callback: ele termina na sua própria página (`www.pollar.xyz/auth/status`) e
-marca a client session como `READY` do lado da Pollar. Por isso, enquanto um
-handshake está `pending`, a rota de polling consulta a client session na Pollar e
-promove o handshake assim que a Pollar informa `READY`.
-
-- **Mantenha a rota de callback registrada na Pollar.** O fluxo de redirect depende
-  dela.
-- **A Pollar é consultada no máximo uma vez a cada dois segundos por handshake**
-  (`POLLAR_SESSION_PROBE_INTERVAL_MS`), limite compartilhado entre as réplicas por
-  meio de `providerCheckedAt`. Uma carteira fazendo polling a cada segundo custa 30
-  requisições por minuto à Pollar, contra um orçamento de 200 da chave.
-
-Um handshake cuja client session a Pollar rejeita (`INVALID_CLIENT_SESSION_ID`,
-`EXPIRED_CLIENT_ID`, ou um `404`/`410`) é encerrado imediatamente como `failed` com
-esse código.
-
-### Um login, uma carteira em ambas as redes
-
-A Pollar roda mainnet e testnet como aplicações separadas, com pares de chaves
-separados, então um login hospedado só cria uma carteira na rede para a qual a sua
-API key resolve (`prod` → `public`, `dev` → `testnet` — veja `resolveNetwork`). Para
-dar ao usuário uma carteira nas duas, um resgate na **mainnet** também o registra na
-**testnet**, pelo `POST /users/with-wallet` da Server API, e `POST /v1/pollar/oauth/token`
-informa as duas. Um resgate na testnet não provisiona a mainnet: a testnet é onde caem as
-keys `dev`, e uma key que qualquer um pode gerar não deve gastar XLM real numa reserva de
-mainnet a cada login. A carteira de mainnet desse usuário vem do seu primeiro login na
-mainnet.
-
-```jsonc
-"network_wallets": [
-  { "network": "public",  "status": "ready",   "address": "GA5Z…" },
-  { "network": "testnet", "status": "pending", "address": null    }
-]
-```
-
-**Uma entrada `pending` não é um erro.** O login teve sucesso; só a segunda carteira
-ainda não está pronta, e ela nunca faz o login falhar. A requisição faz uma única
-tentativa de cinco segundos; o que não terminar é retentado em segundo plano pelo
-sweeper de provisionamento (`POLLAR_SWEEP_*`), com backoff exponencial e até dez
-tentativas antes de a linha passar a `failed`.
-
-A causa mais comum de `pending` é que **as chaves da outra rede não estão
-configuradas**. Assim que forem definidas, a próxima varredura provisiona o backlog
-sem que os usuários precisem fazer login de novo, então defina as chaves das duas
-redes mesmo que você só atenda uma.
-
-- **Os usuários são associados pelo e-mail do OAuth**, a mesma chave que um login
-  hospedado na outra rede usa. Um provedor que não retorna e-mail não recebe segunda
-  carteira.
-- **Um login na mainnet gasta XLM nas duas redes** — a própria reserva e uma na
-  testnet. Um login na testnet só gasta XLM de testnet. O estado fica em `pollar_user_wallet`, uma linha por
-  (consumer, email, network), então um login repetido não provisiona de novo.
-
-### O que a bridge armazena
-
-Uma linha de handshake, sem nada que possa gastar dinheiro: o `state` impossível
-de adivinhar, o id da client session da Pollar, um **hash** do código e o endereço
-Stellar público resultante. **Nenhum token da Pollar é persistido** — a troca
-`/auth/login` roda dentro da requisição de resgate e os tokens saem direto na
-resposta dela. Handshakes que ninguém concluiu são expirados por um timer
-(`POLLAR_SWEEP_*`), porque uma linha `AUTHORIZED` é um código resgatável até ser
-varrida.
-
-Toda transição é um compare-and-swap no status da linha, então um callback repetido
-não emite um segundo código, e duas carteiras disputando um mesmo código não podem
-vencer as duas.
-
-### Endurecimento
-
-- **PKCE (RFC 7636, S256)** é **obrigatório no fluxo de redirect** e opcional no de
-  polling: passe `code_challenge` no authorize e `code_verifier` no resgate, e um
-  código que vaze de um navegador ou de um log fica inútil sem o verifier. Um código
-  do fluxo de redirect atravessa um navegador, e o callback público o entrega a quem
-  apresentar o `state` — que está dentro de `authorization_url` —, por isso
-  `authorize` com `redirect_uri` e sem `code_challenge` é `400 validation_failed`.
-- **`dpop_jwk`** vincula os tokens que a Pollar emite à própria chave P-256 da
-  carteira (RFC 9449), então um access token roubado fica inerte sem uma prova
-  assinada. Isso também significa que a bridge não pode mais agir em nome da carteira
-  — `/refresh` e `/logout` atendem sessões bearer, e uma carteira vinculada por DPoP
-  chama a Pollar diretamente.
-- **`POLLAR_REDIRECT_URI_WHITELIST`** é por consumer e fail-closed, já que a
-  redirect URI recebe o código. Aceita hosts de loopback (qualquer porta, conforme a
-  RFC 8252), deep links com esquema de uso privado e hosts https.
-- **Uma sessão só volta para a conta que consentiu.** Todos os tenants compartilham uma
-  aplicação da Pollar, e um link de login funciona no navegador de qualquer pessoa: uma key
-  poderia enviar a sua `authorization_url` a alguém, esperar o consentimento e resgatar a
-  carteira dessa pessoa — PKCE e `dpop_jwk` não ajudam, porque foi essa key que abriu o
-  handshake. Por isso `POST /v1/pollar/oauth/token` compara o e-mail que a Pollar informa
-  para o login com o e-mail da conta que o gateway encaminha para a key
-  (`X-Consumer-Email`, veja `APISIX_EMAIL_HEADER`). Uma divergência revoga a sessão na
-  Pollar, marca o handshake como `failed` e retorna `403 pollar_identity_mismatch`; uma
-  key sem e-mail encaminhado é recusada no `authorize` com `403 pollar_identity_required`.
-  A única exceção é o onboarding intermediado do dev platform (`X-Cosmos-Internal`): ele
-  faz login de pessoas que ainda não têm key, e comprova o e-mail por conta própria antes
-  de entregar qualquer coisa.
-- **`POST /v1/pollar/users` e `/users/with-wallet` exigem uma key elevada**
-  (`X-Consumer-Role: admin`, caso contrário `403 elevated_key_required`). Um usuário
-  registrado ali é o mesmo que um login social posterior resolve pelo e-mail; de outra
-  forma, uma key de tenant poderia reivindicar o e-mail de um estranho e ficar registrada
-  como dona da carteira que ele recebe.
-
-### Rotas
-
-| Método | Caminho                                               | Escopo         | Descrição |
-| ------ | ----------------------------------------------------- | -------------- | --------- |
-| POST   | `/v1/pollar/oauth/authorize`                          | `pollar:write` | Abrir um login → `authorization_url` + `state` |
-| GET    | `/v1/pollar/oauth/callback/:state`                    | _público_      | Para onde a Pollar devolve o navegador (uma navegação — não há chave para enviar) |
-| GET    | `/v1/pollar/oauth/callback?state=`                    | _público_      | O mesmo callback, para uma cadeia de redirects que preserva a query, mas não o path |
-| GET    | `/v1/pollar/oauth/sessions/:state`                    | `pollar:read`  | Consultar um handshake e coletar o seu código |
-| POST   | `/v1/pollar/oauth/token`                              | `pollar:write` | Resgatar o código → sessão Pollar + carteira |
-| POST   | `/v1/pollar/oauth/refresh`                            | `pollar:write` | Rotacionar um par de tokens (sessões bearer) |
-| POST   | `/v1/pollar/oauth/logout`                             | `pollar:write` | Revogar uma sessão (este dispositivo, ou todas) |
-| POST   | `/v1/pollar/wallets/activate`                         | `pollar:write` | Financiar a reserva de XLM (modo de financiamento Deferred) |
-| POST   | `/v1/pollar/wallets/:address/trustlines/default`      | `pollar:write` | Habilitar os ativos configurados do app |
-| POST   | `/v1/pollar/wallets/:address/trustlines`              | `pollar:write` | Habilitar ativos específicos |
-| DELETE | `/v1/pollar/wallets/:address/trustlines/:code/:issuer`| `pollar:write` | Remover uma trustline (somente com saldo zero) |
-| POST   | `/v1/pollar/users` · `/v1/pollar/users/with-wallet`   | `pollar:write` | Registrar um usuário, opcionalmente com uma carteira (só keys elevadas) |
-| POST   | `/v1/pollar/tokens/verify`                            | `pollar:read`  | Validar um token que uma carteira apresentou a você |
-
-As últimas seis usam a chave **secreta** da Pollar, e é por isso que rodam aqui e
-não na carteira.
-
-### Rate limiting
-
-Criar uma carteira Pollar custa dinheiro: a Pollar cria a conta Stellar, financia a
-sua reserva base (1 XLM) e adiciona uma trustline por ativo configurado (0.5 XLM
-cada) **a partir da sua carteira de financiamento**. Um script em loop sobre o fluxo
-de login poderia gastar isso sem nenhum usuário real, então este serviço aplica os
-limites por conta própria, antes que qualquer XLM seja gasto.
-
-**O limite fica no `authorize`, não no `token`.** Um handshake gera no máximo uma
-carteira, então limitar os handshakes por endereço limita as carteiras. `token` é
-mais frouxo porque os clientes são orientados a repeti-lo enquanto a Pollar
-provisiona a conta, e resgatar não cria nada novo.
-
-| Rota | Orçamento (por 10 min) | Por quê |
-| ---- | ---------------------- | ------- |
-| `POST /v1/pollar/oauth/authorize` | 20 | Limita a criação de carteiras |
-| `POST /v1/pollar/oauth/token` | 60 | Os clientes o repetem enquanto a conta é provisionada |
-| `GET /v1/pollar/oauth/callback` | 60 | A única acessível sem API key |
-| `GET /v1/pollar/oauth/sessions/{state}` | 400 | Uma carteira faz polling a cada poucos segundos; cada polling pode chegar à Pollar |
-| `POST /v1/pollar/oauth/refresh` · `/logout` | 60, compartilhado | Uma requisição à Pollar cada |
-| `POST /v1/pollar/users` · `/users/with-wallet` | 10, compartilhado | Escrevem no diretório de usuários que todos os tenants compartilham; `with-wallet` também cria uma carteira sem tela de consentimento |
-| `POST /v1/pollar/wallets/activate` | 20 | Gasta XLM a cada chamada |
-| `POST /v1/pollar/wallets/:address/trustlines` · `/default` | 20, compartilhado | Cada asset bloqueia reserva da carteira de financiamento |
-| `DELETE /v1/pollar/wallets/:address/trustlines/:code/:issuer` | 20 | Uma requisição à Pollar cada |
-| `POST /v1/pollar/tokens/verify` | 120 | Uma requisição à Pollar cada |
-
-**Dois tetos são por consumer em vez de por endereço**, então trocar de endereço não os
-multiplica: as requisições à Pollar que um consumer pode causar (100 por minuto, em todas
-as rotas acima exceto o polling e o callback — a Pollar orça a key em 200 por minuto e
-todos os tenants a compartilham) e as carteiras que ele pode causar (`authorize` e
-`users/with-wallet`, 50 por dia). As chamadas do console (`X-Cosmos-Internal`) ficam
-isentas de ambos: o dev platform intermedia toda carteira sem key através de um único
-consumer e orça esse tráfego por conta própria.
-
-Exceder um deles retorna **`429` com `code: "rate_limited"`**, um `Retry-After` e os
-headers `RateLimit-Limit` / `-Remaining` / `-Reset`. O mesmo limitador protege
-as rotas fora do Pollar cujo custo um erro não devolve — os construtores de swap e de
-liquidity-pool e os seus submits, os construtores de payment intent, o upload de
-documentos e os termos de serviço do KYC, as escritas de onramp e offramp (com um teto
-por consumer do BlindPay por cima), `ping` e `redeliver` de webhook, challenges e
-recuperação de alias, ingestão de activity — e cada seção informa o seu orçamento. O rate limiting geral é papel do APISIX.
-
-**O contador fica no Postgres, não em memória**, então o limite vale para todas as
-réplicas juntas. É uma janela fixa (um `INSERT … ON CONFLICT … RETURNING` atômico por
-requisição), então um cliente pode usar um orçamento inteiro de cada lado de uma
-virada de janela.
-
-**Endereço do cliente.** `main.ts` define `trust proxy` como `1`, então o Express lê a
-entrada *mais à direita* de `X-Forwarded-For` — a que o APISIX acrescentou. As
-entradas que um cliente adiciona ficam à esquerda dela e são ignoradas.
-
-> **Não aumente `trust proxy`.** Em `2`, o Express confia em um hop fornecido pelo
-> cliente, e qualquer cliente consegue contornar esses limites com um header.
-
-Chamadores IPv6 são agrupados por **/64**, já que um cliente normalmente controla um
-/64 inteiro; usuários que compartilham um /64 compartilham um limite, como
-aconteceria atrás de um NAT IPv4. Os limites também são por consumer, então o tráfego
-de um integrador não afeta o de outro.
-
-Se o contador não puder ser gravado, o limitador é **fail-closed** (`503`); essas
-rotas precisam do banco de qualquer forma. Defina `RATE_LIMIT_ENABLED=false` para
-desligar os limites durante um incidente.
-
-### Configuração
-
-1. Crie um app em [dashboard.pollar.xyz](https://dashboard.pollar.xyz) e pegue as duas
-   chaves da sua rede (`pub_testnet_…` / `sec_testnet_…`). Faça isso para **as duas**
-   redes: um login na mainnet também provisiona uma carteira na testnet, e sem chaves de
-   testnet essa segunda carteira fica `pending` até que elas sejam definidas. Os dois
-   dashboards são separados — registre o host de callback em cada um.
-2. Registre o **host do gateway** de `POLLAR_BRIDGE_CALLBACK_URL` em
-   **Build → Domains**. A SDK API verifica essa lista em *toda* chamada, contra o
-   header `Origin`, que a bridge define com esse host (`POLLAR_SDK_ORIGIN` o
-   sobrescreve). Um host não registrado recebe `403 ORIGIN_NOT_ALLOWED` em
-   `POST /auth/session`, a primeira chamada de todo login.
-3. Defina `POLLAR_BRIDGE_CALLBACK_URL` como `<gateway>/v1/pollar/oauth/callback` — a
-   bridge acrescenta `/{state}` por conta própria.
-4. Adicione a redirect URI de cada carteira a `POLLAR_REDIRECT_URI_WHITELIST`, ou
-   omita-a e use o fluxo de polling.
-
-A Pollar codifica a rede e o tipo de chave no prefixo da chave, e o validador de env
-rejeita uma incompatibilidade no boot. Deixe as chaves em branco para desativar a
-funcionalidade (as rotas da Pollar passam a retornar `503`). Veja `.env.example`.
-
 ## Atualização — mudanças incompatíveis e notas de deploy
+
+### O Pollar foi removido
+
+Tudo o que havia sob `/v1/pollar` foi removido — o bridge OAuth (`/v1/pollar/oauth/*`), o
+provisionamento de wallets e trustlines (`/v1/pollar/wallets/*`) e `/v1/pollar/users` — junto
+com os códigos de erro `pollar_identity_required`, `pollar_identity_mismatch` e
+`elevated_key_required`, e todas as variáveis `POLLAR_*`. Essas rotas agora respondem `404`.
+
+- **A migração `20260927120000_remove_pollar`** remove `pollar_oauth_session` e
+  `pollar_user_wallet`. Não pode ser desfeita: se precisar desse histórico, faça backup das
+  duas tabelas antes.
+- **Apague as rotas do APISIX para `/v1/pollar/*`**, em especial a do callback sem
+  key-auth, e remova as variáveis `POLLAR_*` — são ignoradas.
+- **As keys ainda podem ter scopes `pollar:*`.** Nada mais os verifica.
+- **Os ids de advisory lock `881_005` e `881_007` ficam aposentados** e não são reutilizados.
+- **Wallets:** a Cosmos Wallet remove qualquer wallet Pollar do dispositivo na próxima vez
+  que inicia. Os fundos continuam na Pollar, no mesmo endereço.
 
 ### Correções da revisão de segurança
 
@@ -1408,9 +1148,8 @@ a coluna "Quem percebe" antes do deploy.
 | ------- | ------------ | ------- |
 | `POST /v1/aliases/:name/recovery` é **exclusiva do console da plataforma**: uma API key recebe `403 admin_console_only`, e a rota saiu do contrato publicado | Quem iniciava recuperações com uma API key | A resposta traz o token de recuperação, que prova o controle da caixa de e-mail do dono |
 | Concluir uma recuperação em um alias `SUSPENDED` resulta em `404` | Ninguém legítimo | Um token emitido antes de uma suspensão podia contornar o bloqueio do operador |
-| Rotas `@Public()` (callback da Pollar, webhook do BlindPay, health) ignoram `X-Consumer-Username` | Dashboards: essas requisições agora aparecem no log como anônimas | Essas rotas não têm key-auth, então o header vinha do cliente |
+| Rotas `@Public()` (webhook do BlindPay, health) ignoram `X-Consumer-Username` | Dashboards: essas requisições agora aparecem no log como anônimas | Essas rotas não têm key-auth, então o header vinha do cliente |
 | Recusas do `AdminGuard` e do `ConsoleOnlyGuard` são registradas em nível `warn` | Operadores | Os guards rodam antes do log de acesso, então as requisições recusadas não deixavam rastro |
-| `POST /v1/pollar/wallets/activate` e as três rotas `/v1/pollar/wallets/:address/trustlines…` retornam `404` para uma carteira que o consumer que chama não obteve por meio deste serviço naquela rede | Integradores que agem sobre carteiras que só viram via `tokens/verify`, sobre carteiras não primárias de um login ou sobre uma carteira de contraparte que outro tenant já registrou | Todos os tenants compartilham um único conjunto de chaves secretas da Pollar. Carteiras alheias e desconhecidas recebem o mesmo `404`, então a resposta não revela a titularidade |
 | As duas rotas `POST …/trustlines` compartilham um orçamento de `429` de 20 chamadas a cada 10 minutos | Scripts que adicionam trustlines em massa | Cada trustline trava 0.5 XLM da carteira de financiamento do operador |
 | `GET /v1/offramp/payouts/:id` não retorna mais `raw`, `consumerId`, `receiverId`, `quoteId`, `bankAccountId` nem `updatedAt`; a resposta de criação de conta virtual não retorna mais `raw`, `receiverId`, `consumerId` nem `updatedAt` | Quem lê esses campos | `raw` é o objeto armazenado do BlindPay, com dados bancários e do beneficiário |
 | `POST /v1/kyc/upload` retorna `400` para mais de 4 campos de texto, um campo acima de 1 KiB, um segundo arquivo ou bytes de arquivo que não correspondem ao tipo declarado | Ninguém que envie um upload bem formado | Os campos não tinham limite e a verificação de tipo confiava no `Content-Type` do cliente |
@@ -1429,7 +1168,6 @@ a coluna "Quem percebe" antes do deploy.
 | O serviço recusa iniciar quando `BLINDPAY_WEBHOOK_SECRET` está definido mas a sua chave (o base64 depois de `whsec_`) é malformada ou decodifica para menos de 24 bytes, e `POST /v1/blindpay/webhooks` rejeita toda entrega enquanto a chave configurada estiver inutilizável | Deploys com um segredo truncado ou digitado errado, cujos webhooks do BlindPay já estavam falhando | O Node decodifica base64 inválido para uma chave HMAC curta ou vazia sem erro, e uma entrega assinada com uma chave vazia pode ser forjada por qualquer um |
 | `GET /v1/health/readiness` responde uma verificação com falha com o envelope de erro padrão (`error: "Service Unavailable"`); antes colocava o relatório de saúde, incluindo a mensagem de erro do banco, em `error` | Probes que leem o relatório do corpo em vez do status code | A rota é `@Public()`, e a mensagem do Prisma nomeia o host e o usuário do banco |
 | `POST /v1/onramp/receivers/:id/virtual-accounts` é `403 account_disabled` quando o receiver, ou o receiver dono de `blockchain_wallet_id`, está desabilitado | Ninguém legítimo | Era a única operação fiat que o kill switch não cobria: uma conta desabilitada ainda podia abrir um novo trilho de depósito |
-| `POST /v1/pollar/oauth/token` não resgata mais um código que um polling mais recente de `GET /v1/pollar/oauth/sessions/:state` substituiu, mesmo quando esse polling ocorre no meio do resgate | Ninguém legítimo | A claim correspondia ao handshake mas não ao código, então um código aposentado ainda podia ser gasto nessa janela |
 | `POST /v1/swaps/:id/submit` e `POST /v1/liquidity-pools/operations/:id/submit` verificam o envelope antes de qualquer outra coisa: um corpo que não analisa, que não é o envelope da linha, ou que não traz assinaturas é `400 validation_failed` seja qual for o status da linha. Um `signedXdr` arbitrário não retorna mais uma linha `SUCCEEDED`, e uma linha `EXPIRED` responde a um corpo incompatível com `validation_failed` em vez de `invalid_state_transition` | Clientes que enviavam o `xdr` não assinado e contavam com a rejeição `tx_bad_auth` | Assinaturas não mudam o hash de uma transação, então o envelope não assinado podia ser retransmitido e rejeitado em loop, e sob a chave pública compartilhada só o id da linha bastava para ler uma linha já liquidada |
 | As duas rotas de submit recusam um envelope fora do seu prazo (`400 invalid_state_transition`, não transmitido; o observer ainda o liquida se ele chegou à rede) e uma linha `FAILED` já reenviada 3 vezes (`400 invalid_state_transition`: monte uma nova). Uma retentativa após `503 provider_unavailable` não conta | Clientes que reenviam o submit em loop: pare em `invalid_state_transition` | Cada reenvio recusado era uma submissão ao Horizon e um novo evento de webhook terminal, sem limite |
 | As duas rotas de submit permitem 20 chamadas por minuto por consumer e endereço do cliente, em orçamentos separados (`429 rate_limited`) | Carteiras atrás de um mesmo NAT compartilhando a chave pública | As rotas aceitam a chave pública compartilhada, e cada chamada pode transmitir para o Horizon |
@@ -1438,20 +1176,15 @@ a coluna "Quem percebe" antes do deploy.
 | `POST /v1/aliases/:name/recovery/complete` (10 a cada 10 min), `POST /v1/aliases/challenges` (30), `POST /v1/webhooks/:id/ping` (20) e `POST /v1/webhooks/:id/deliveries/:deliveryId/redeliver` (30) são `429 rate_limited` acima do orçamento, por consumer e endereço do cliente | Scripts que fazem loop nessas rotas | Cada chamada grava uma linha, tenta um token de recuperação, ou envia requisições para uma URL que quem chama escolheu |
 | `PATCH /v1/payment-intents/:id` exige que `txHash` seja um hash de transação Stellar em hex de 64 caracteres (qualquer outra coisa é `400`) e o armazena em minúsculas; `POST /v1/payment-intents/:id/validate` converte o seu próprio para minúsculas. Um hash é único entre os intents de um consumer, em vez de em todos os tenants, e um hash já presente em outro dos seus intents é `409 idempotency_conflict` (era `500`) | Chamadores enviando hashes placeholder ou truncados | Qualquer tenant podia estacionar o hash de transação de outro tenant em um intent próprio; a liquidação do outro tenant então caía no índice global, respondia `500`, e o intent pago expirava sem `PAYMENT_INTENT_SUCCEEDED` |
 | Um intent `EXPIRED` passa a `SUCCEEDED` quando o seu pagamento é verificado on-chain: pelo observer, que agora verifica a chain antes de expirar, ou por `POST /v1/payment-intents/:id/validate` e `PATCH {status: SUCCEEDED}`, que passam a responder `200` em vez de `400 invalid_state_transition`. `PAYMENT_INTENT_SUCCEEDED` pode seguir a atualização que `EXPIRED` disparou | Consumidores de webhook que tratam `EXPIRED` como final | A expiração nunca olhava para a chain, e o verificador lia apenas os 50 pagamentos mais recentes ao destino, então um pagamento atrasado ou enterrado deixava um intent pago `EXPIRED` para sempre |
-| `POST /v1/pollar/oauth/authorize` com `redirect_uri` exige `code_challenge` (PKCE, S256), e resgatar esse handshake exige `code_verifier`; sem ele a chamada é `400 validation_failed` antes de uma sessão Pollar ser aberta. O fluxo de polling não muda | Carteiras do fluxo de redirect que não enviam PKCE | O callback público entrega o código a quem apresentar o `state`, que está dentro de `authorization_url`, e sem PKCE esse código era resgatado como estava |
 | As respostas de swaps, operações de liquidity pool, payment intents e customers retornam apenas os campos documentados, mais `expiresAt` em swaps e payment intents, agora documentado. `consumerId` e a contabilidade de liquidação (`settlementEpoch`, `lastCheckedAt`, `notFoundStreak`, `sharesReceived`, `settledAmountA`/`B`, `horizonCursor`) não são mais enviados | Quem lia esses campos | São internos, e várias dessas rotas são alcançáveis com a key pública compartilhada |
 | `PATCH /v1/kyc/receivers/:id` em um receiver que já existe no BlindPay é `403 kyc_review_required` para qualquer campo exceto `external_id` e `image_url`, a menos que a key seja elevada (`X-Consumer-Role: admin`) | Integradores corrigindo a identidade de um receiver ativo com uma key de tenant: passe pelo revisor | O `PUT` enviava dados de identidade nunca revisados direto a um provedor regulado, enquanto a mesma edição antes de habilitar volta para revisão |
 | As rotas do BlindPay usam a instância do ambiente da key: keys `prod` a das variáveis `BLINDPAY_*` sem sufixo, keys `dev` a de `BLINDPAY_*_DEV`, e uma key `dev` sem instância de desenvolvimento configurada recebe `503 misconfigured`. Receivers, carteiras, contas bancárias, contas virtuais, cotações, payins e payouts só são lidos e executados nessa instância | Quem usa o BlindPay com keys `dev` | Uma key `dev` operava a instância de produção: podia listar e excluir identidades KYC reais e criar payouts reais |
-| `POST /v1/pollar/oauth/token` só retorna uma sessão quando o e-mail que a Pollar informa para o login é o e-mail da conta que o gateway encaminha para a key (`X-Consumer-Email`). Uma divergência revoga a sessão, falha o handshake e é `403 pollar_identity_mismatch`; uma key sem e-mail encaminhado recebe `403 pollar_identity_required` no `authorize` | Tenants que fazem login dos próprios usuários finais pela aplicação compartilhada da Pollar, e quem entra com um e-mail diferente do da sua conta | Todos os tenants compartilham uma aplicação da Pollar e um link de login funciona em qualquer navegador: uma key podia enviar a sua `authorization_url` a alguém, esperar o consentimento e resgatar a carteira custodiada dessa pessoa |
-| `POST /v1/pollar/users` e `/v1/pollar/users/with-wallet` exigem uma key elevada; uma key de tenant recebe `403 elevated_key_required` | Integradores que pré-registram usuários com uma key de tenant | Um usuário registrado é o que um login social posterior resolve pelo e-mail, então uma key de tenant podia reivindicar o e-mail de um estranho e ficar registrada como dona da carteira dele |
 | Um login na testnet não provisiona mais uma carteira de mainnet para o usuário: `network_wallets` num resgate na testnet lista só a carteira da testnet. Um login na mainnet continua provisionando a testnet | Quem lê uma entrada de mainnet de um login na testnet | Uma key `dev` que qualquer um pode gerar gastava XLM real do operador numa reserva de mainnet a cada login |
-| As rotas da Pollar de polling, refresh, logout, verificação de token, registro de usuários e remoção de trustline têm limite, e além dos orçamentos por endereço valem uma cota por consumer (100 requisições à Pollar por minuto) e um teto de carteiras (50 por dia); o excesso é `429 rate_limited` | Clientes que martelam essas rotas | Não tinham limite, e cada chamada gasta o orçamento de requisições à Pollar que todos os tenants compartilham — um tenant podia derrubar os logins de todos os outros |
 | `POST /v1/kyc/receivers/:id/approve` aceita `expected_version` (o `dossierVersion` que você leu) e responde `409 kyc_state_invalid` quando os dados de KYC mudaram desde então. `POST /v1/kyc/receivers/:id/enable` recusa um dossiê que não é o aprovado, e as leituras de receiver trazem `dossierVersion` e `reviewedVersion` | Os revisores, quando começarem a enviar `expected_version`; mais ninguém — o campo é opcional | Uma revisão é uma pessoa lendo os dados e então aprovando, e uma edição no meio deixa o status em `pending_review`, então a aprovação recaía sobre um dossiê que ninguém tinha visto e o `enable` o enviava a um provedor regulado |
 | `POST /v1/kyc/upload`, `/v1/kyc/terms-of-service`, as escritas de onramp e offramp, `POST /v1/payment-intents/tx` e `/pay`, `POST /v1/swaps/quote` e `/v1/swaps`, e `POST /v1/liquidity-pools/deposit` e `/withdraw` agora respondem `429 rate_limited` acima do orçamento, por consumer e endereço do cliente. Toda rota apoiada no BlindPay conta também contra um teto por consumer de 60 requisições ao provedor por minuto | Scripts que rodam essas rotas em loop; um importador em lote acima do teto deve ter a própria chave | Não tinham limite nenhum: cada uma deixa algo no provedor que erro nenhum devolve, ou gasta o orçamento por IP do Horizon que todas as rotas daqui compartilham. Só os submits eram limitados |
 | `POST /v1/swaps` não responde mais `409 operation_in_flight` para um swap `PENDING` cujo sequence number a conta ainda não usou (um envelope não assinado ou abandonado). Só vale com `STELLAR_SWAP_SINGLE_INFLIGHT=true` | Usuários de carteira que ficavam bloqueados | Qualquer um pode indicar qualquer `source`, então um swap de poeira congelava a conta de um terceiro uma janela de expiração após a outra — o gêmeo da correção de liquidity pools acima |
 | Um destino de webhook recusado pelo host — não resolve, privado, link-local, metadata — é um único `400` com uma única mensagem; o motivo fica no log do serviço. Uma URL malformada, um esquema que não é https, credenciais ou a falta de host continuam dizendo o que está errado | Integradores que liam o motivo na resposta | Cadastrar um endpoint resolve um nome que este serviço alcança, então uma resposta por motivo permitia mapear a rede interna uma URL por vez |
 | Uma `redirect_url` é recusada quando traz fragmento, barra invertida, espaços ou caractere de controle; https sem credenciais embutidas já era obrigatório | Ninguém que envie uma URL comum | `https://app.acme.com\@evil.test` nomeia um host diferente dependendo de quem a analisa, e o valor ainda é lido pelo BlindPay e por um navegador |
-| O serviço se recusa a subir quando `POLLAR_BRIDGE_CALLBACK_URL` é `http` puro em um host roteável | Deploys que terminam TLS em outro ponto e configuram o callback como `http` | A Pollar devolve o navegador para essa URL com o código de autorização na query string, e esse código é trocado pela sessão do usuário |
 | `POST /v1/wallet/auth/oauth/claim`: um login com Authentik cujo email o provedor não confirmou (`email_verified` diferente de `true`) conclui o callback e responde `verify_email` com um código enviado para essa caixa, com ou sem conta, em vez de falhar com `email_unverified`. Nenhum ID token é liberado nesse caso, então ele não pode iniciar uma recuperação SEP-30, e compartilha o intervalo por endereço de `POST /v1/wallet/auth/email/start` (`400 wallet_login_code_cooldown`). Rode antes a migração `20260926120000_wallet_auth_unverified_email` | Wallets: tratar `verify_email` também em uma conta nova | A pessoa ficava numa página sem saída; o código prova o endereço que o provedor não confirmou |
 | `POST /v1/wallet/auth/finish` e `POST /v1/wallet/recovery/setup` leem o token de sessão de `X-Wallet-Session: {sessionToken}`. `Authorization: Bearer` continua sendo lido, mas só chega ao serviço numa chamada direta | Wallets: enviar `X-Wallet-Session` junto com a API key | O gateway remove `Authorization` (e `apikey`) antes do proxy, então via APISIX o token nunca chegava e as duas rotas respondiam `401 wallet_session_invalid` |
 | Um login do wallet com Authentik pede `max_age=300` em vez de `prompt=login`, e o `auth_time` do ID token precisa estar dentro desses 5 minutos (senão o callback falha com `profile_invalid`). Com Google / GitHub como fontes do Authentik, configure `default-source-authentication` como *Authentication: No requirement* | Operadores com Authentik e fontes sociais | Com `prompt=login`, o Authentik pedia dois logins a um navegador sem sessão, e o segundo login por uma fonte era recusado com "Flow does not apply to current user" |
@@ -1479,16 +1212,6 @@ Notas de deploy que vêm junto:
   anulável `liquidity_pool_operation.memo`: não reescreve a tabela, apenas um lock
   exclusivo breve. Não há backfill — o memo das linhas antigas está em XDR base64,
   que o SQL não consegue decodificar, e o serviço recorre ao envelope para elas.
-- **A migration `20260915120100_lookup_indexes`** constrói dois índices
-  `CONCURRENTLY` para a verificação de posse de wallets Pollar
-  (`pollar_oauth_session(consumerId, network, walletAddress)` e
-  `pollar_user_wallet(consumerId, network, address)`). Não bloqueia escritas, mas um
-  build que falha deixa um índice `INVALID` que `IF NOT EXISTS` considera presente:
-  encontre-o com
-  `SELECT c.relname FROM pg_class c JOIN pg_index i ON i.indexrelid = c.oid WHERE NOT i.indisvalid;`,
-  remova-o com `DROP INDEX CONCURRENTLY`, rode
-  `prisma migrate resolve --rolled-back 20260915120100_lookup_indexes` e faça o
-  deploy de novo.
 - **Duas variáveis agora são verificadas no boot.** Um `APISIX_GATEWAY_SECRET`
   placeholder, ou um `BLINDPAY_WEBHOOK_SECRET` cuja chave não decodifica para pelo
   menos 24 bytes, impede o serviço de iniciar com um erro que nomeia a variável.
@@ -1513,27 +1236,11 @@ Notas de deploy que vêm junto:
 - **Configure a instância de desenvolvimento do BlindPay** (`BLINDPAY_API_KEY_DEV`,
   `BLINDPAY_INSTANCE_ID_DEV`, `BLINDPAY_WEBHOOK_SECRET_DEV`) se keys `dev` usam o
   BlindPay, e aponte o webhook do dashboard dela para a mesma URL `/v1/blindpay/webhooks`.
-- **Faça o deploy da mudança do forwarder do dev platform primeiro.** O `authorize`
-  recusa toda key para a qual o gateway não encaminha `X-Consumer-Email`. O forwarder grava
-  o e-mail por conta sempre que as keys dessa conta são sincronizadas, então ressincronize
-  os consumers existentes (listar as keys de um usuário no dashboard faz isso para esse
-  usuário). Até lá a carteira recorre ao login intermediado do dev platform, que não
-  precisa do header; os outros clientes recebem `403 pollar_identity_required`.
-- **O login social de usuários finais de terceiros pela aplicação compartilhada da Pollar
-  deixa de funcionar.** Um tenant cujo app faz login dos próprios usuários recebe
-  `403 pollar_identity_mismatch` para todo usuário cujo e-mail não seja o da conta da key.
-- **A migration `20260915180000_pollar_testnet_counterpart_mainnet`** fecha as carteiras
-  de mainnet que logins na testnet tinham deixado `pending` (`FAILED`,
-  `COUNTERPART_FROM_TESTNET_DISABLED`), para que o sweeper pare de financiá-las. Só dados,
-  sem mudança de schema.
 - **A migration `20260915200000_receiver_dossier_version`** adiciona `dossierVersion`
   (padrão `1`) e `reviewedVersion` a `blindpay_receiver` — só catálogo, sem reescrita
   da tabela — e preenche `reviewedVersion` em todo receiver que já passou pelo portão
   de revisão, para que o `enable` deles continue funcionando. Receivers ainda em
   `inactive` ou `pending_review` ficam com `NULL`, que é a verdade sobre eles.
-- **Confira `POLLAR_BRIDGE_CALLBACK_URL` antes do deploy.** `http` puro em um host
-  roteável agora impede o serviço de subir, com um erro que nomeia a variável.
-  Loopback (`http://127.0.0.1:…`) continua aceito, para desenvolvimento local.
 - **Novos `429` em rotas que nunca retornaram um.** Os orçamentos da tabela acima valem
   a partir desta versão; um cliente que roda em loop uploads de KYC, cotações, payins,
   payouts, montagem de intents, cotações de swap ou montagens de pool precisa respeitar
@@ -1617,39 +1324,6 @@ volta. Nenhuma resposta existente mudou. No deploy:
 - **`ACTIVITY_RETENTION_DAYS`** (padrão 30) entra no job de retenção. Essas linhas
   guardam dados pessoais, como o log de acesso.
 
-### A rota de polling da Pollar agora descobre sozinha um login concluído
-
-`GET /v1/pollar/oauth/sessions/{state}` costumava esperar o callback da bridge, que
-a Pollar nunca chama, então os logins do fluxo de polling ficavam `pending` até
-expirar. O polling agora consulta a Pollar e promove o handshake em `READY`. Nenhuma
-mudança de formato da API ou do cliente é necessária. No deploy:
-
-- **A migration `20260906120000_pollar_oauth_provider_probe`** adiciona uma coluna
-  anulável `providerCheckedAt` a `pollar_oauth_session`. Sem backfill.
-- **O tráfego de polling agora chega à Pollar.** Reserve orçamento para uma
-  requisição ao provedor por login em andamento a cada dois segundos, na publishable
-  key daquela rede.
-
-### Logins da Pollar agora provisionam uma carteira nas duas redes
-
-`POST /v1/pollar/oauth/token` ganhou um array `network_wallets` — uma entrada por
-rede Stellar, cada uma `ready`, `pending` ou `failed`. A mudança é aditiva. No
-deploy:
-
-- **Rode a migration.** `20260905120000_pollar_user_wallet` adiciona
-  `pollar_user_wallet` e o enum `PollarWalletStatus`. Sem ela, todo resgate registra
-  um provisionamento com falha e a carteira de contraparte fica sem registro — o
-  login em si continua funcionando.
-- **Defina as chaves das duas redes.** `POLLAR_*_MAINNET` e `POLLAR_*_TESTNET` são
-  opcionais individualmente, e uma rede sem chaves aparece como uma carteira
-  `pending` em todo login. Assim que o segundo par for definido, o sweeper provisiona
-  o backlog no próximo ciclo; caso contrário, as linhas ficam `pending` até esgotarem
-  as tentativas. Em nenhum dos casos um login falha.
-
-Um login na mainnet financia uma reserva nas *duas* redes. Um login na testnet só financia
-a testnet — antes também financiava a mainnet, o que as correções da revisão de segurança
-acima removeram.
-
 ### `429` agora informa `rate_limited`
 
 Um `429` costumava informar `code: "provider_unavailable"`. Agora ele informa
@@ -1666,8 +1340,7 @@ Quando o BlindPay não está configurado, duas respostas mudaram:
 | `POST /v1/blindpay/webhooks` enquanto `BLINDPAY_WEBHOOK_SECRET` não está definido | `400` `validation_failed` | `503` `misconfigured` |
 
 As duas são erros de configuração do deploy que um retry não resolve. O Svix faz
-retry em qualquer resposta que não seja 2xx, então a entrega de webhooks não muda. O
-Pollar já retornava `misconfigured` na mesma situação.
+retry em qualquer resposta que não seja 2xx, então a entrega de webhooks não muda.
 
 ### Formatos de resposta que mudaram
 
@@ -1803,7 +1476,7 @@ Toda variável lida de `process.env` em `src/` é validada no boot por
 | `APISIX_ORGANIZATION_HEADER` | não | `x-consumer-org` | Id da organização |
 | `APISIX_PLAN_HEADER` | não | `x-consumer-plan` | Plano da organização |
 | `APISIX_SWAP_FEE_BPS_HEADER` | não | `x-plan-swap-fee-bps` | Taxa de swap do plano (bps) |
-| `APISIX_EMAIL_HEADER` | não | `x-consumer-email` | E-mail verificado da conta da key. O bridge da Pollar só devolve a sessão de um login a essa conta, e recusa uma key sem ele |
+| `APISIX_EMAIL_HEADER` | não | `x-consumer-email` | E-mail verificado da conta da key, repassado pelo gateway. Hoje nada neste serviço depende dele |
 | `APISIX_PUBLIC_CONSUMER` | não | — | Username do consumer público compartilhado (veja acima). Defina-o onde quer que uma chave pública seja publicada |
 | `STELLAR_NETWORK` | não | `testnet` | Rede Stellar de fallback (`public` / `testnet`) |
 | `STELLAR_HORIZON_URL_PUBLIC` | não | `https://horizon.stellar.org` | URL base do Horizon da mainnet |
@@ -1847,19 +1520,6 @@ Toda variável lida de `process.env` em `src/` é validada no boot por
 | `KYC_REDIRECT_URL_WHITELIST` | não | — | Allow-list por consumer de hosts de redirecionamento do KYC |
 | `RATE_LIMIT_ENABLED` | não | `true` | Limites por endereço nas rotas que gastam XLM. Chave de incidente |
 | `RATE_LIMIT_PRUNE_INTERVAL_MS` | não | `600000` | Intervalo de limpeza das janelas do contador (ms, mín. 1000) |
-| `POLLAR_PUBLISHABLE_KEY_TESTNET` / `_MAINNET` | não | — | Publishable key da Pollar (`pub_<network>_…`), para a bridge OAuth |
-| `POLLAR_SECRET_KEY_TESTNET` / `_MAINNET` | junto com a publishable key | — | Chave secreta da Pollar (`sec_<network>_…`), para as rotas de operador |
-| `POLLAR_BRIDGE_CALLBACK_URL` | quando uma chave da Pollar estiver definida | — | URL pública para a qual a Pollar devolve o navegador. Precisa ser `<gateway>/v1/pollar/oauth/callback`, **https** (`http` puro só em host loopback — caso contrário o boot falha: o código de autorização viaja na query string) **e** um host registrado em Build → Domains na Pollar |
-| `POLLAR_REDIRECT_URI_WHITELIST` | não | — | Allow-list por consumer das redirect URIs das carteiras. Vazia ⇒ esse consumer só pode usar o fluxo de polling |
-| `POLLAR_SDK_ORIGIN` | não | origem de `POLLAR_BRIDGE_CALLBACK_URL` | `Origin` enviado à SDK API da Pollar, que o confere com Build → Domains. Defina apenas quando o host de callback e o host registrado forem diferentes |
-| `POLLAR_SDK_BASE_URL` | não | `https://sdk.api.pollar.xyz` | URL base da SDK API da Pollar |
-| `POLLAR_SERVER_BASE_URL` | não | `https://api.pollar.xyz` | URL base da Server API da Pollar |
-| `POLLAR_TIMEOUT_MS` | não | `15000` | Timeout do client HTTP da Pollar (ms) |
-| `POLLAR_AUTHORIZATION_TTL_MS` | não | `300000` | Por quanto tempo um handshake de login fica aberto |
-| `POLLAR_CODE_TTL_MS` | não | `120000` | Por quanto tempo um código emitido pela bridge continua resgatável |
-| `POLLAR_LOGIN_WAIT_MS` | não | `20000` | Quanto tempo o resgate espera a Pollar provisionar a carteira |
-| `POLLAR_SWEEP_ENABLED` | não | `true` | Expira handshakes que ninguém concluiu e retenta as carteiras na outra rede que um login deixou `pending` |
-| `POLLAR_SWEEP_INTERVAL_MS` | não | `60000` | Intervalo do sweeper de handshakes (ms, mín. 1000) |
 
 O antigo `STELLAR_HORIZON_URL` é rejeitado no boot — use
 `STELLAR_HORIZON_URL_PUBLIC` / `STELLAR_HORIZON_URL_TESTNET` no lugar dele.

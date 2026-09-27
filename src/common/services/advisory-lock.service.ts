@@ -96,9 +96,9 @@ export enum AdvisoryLockKey {
   PaymentIntentObserver = 881_002,
   RequestLogRetention = 881_003,
   WebhookDeliverySweeper = 881_004,
-  PollarOauthSweeper = 881_005,
+  // 881_005 and 881_007 were the Pollar sweepers. Retired: never reuse them — a
+  // replica still running the old build would take the same lock for other work.
   RateLimitPrune = 881_006,
-  PollarWalletProvisionSweeper = 881_007,
   AliasChallengeSweeper = 881_008,
   WalletAuthSweeper = 881_009,
   RecoverySweeper = 881_010,

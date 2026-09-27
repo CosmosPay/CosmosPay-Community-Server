@@ -38,11 +38,6 @@ model Consumer {
   payouts           Payout[]
   blindpayQuotes    BlindpayQuote[]
 
-  // Pollar OAuth bridge handshakes started by this consumer.
-  pollarOauthSessions PollarOauthSession[]
-  // Per-network Pollar wallet provisioning state for this consumer's users.
-  pollarUserWallets   PollarUserWallet[]
-
   // Client-side telemetry (wallet + dashboard) reported under this consumer.
   activityEvents ActivityEvent[]
 
@@ -887,179 +882,6 @@ model AdminAuditLog {
 }
 
 // ---------------------------------------------------------------------------
-// Pollar OAuth bridge.
-//
-// Pollar mints its own end-user session from a hosted OAuth flow, but that flow
-// only ever returns the browser to a `redirect_uri` Pollar has been told about.
-// A wallet that completes the code exchange locally cannot register a loopback
-// or a custom scheme there, and must not hold the Pollar keys. So the bridge
-// owns the Pollar half of the handshake: it mints the Pollar client session,
-// assembles the authorization URL, receives the browser back on its own
-// callback, and hands the wallet a single-use code of its own to redeem.
-//
-// A row is a bridge handshake in flight. It never holds a Pollar token: the
-// `/auth/login` exchange runs during the redemption call and its result goes
-// straight to the wallet.
-// ---------------------------------------------------------------------------
-enum PollarOauthStatus {
-  // Authorization URL handed out; waiting for the browser to come back.
-  PENDING
-  // The callback fired and a single-use bridge code was minted.
-  AUTHORIZED
-  // A redemption is in flight (guards against a concurrent double redeem).
-  EXCHANGING
-  // The code was redeemed for a Pollar session. Terminal.
-  CONSUMED
-  // The handshake failed and cannot be retried. Terminal.
-  FAILED
-  // The handshake ran out of time before the code was redeemed. Terminal.
-  EXPIRED
-}
-
-model PollarOauthSession {
-  id         String   @id @default(cuid())
-  consumerId String
-  consumer   Consumer @relation(fields: [consumerId], references: [id], onDelete: Cascade)
-
-  // Opaque bridge handle. Travels in the browser URL (callback path) and back
-  // to the wallet, so it is a random 32-byte value and never a guessable id.
-  state    String            @unique
-  provider String // 'google' | 'github'
-  status   PollarOauthStatus @default(PENDING)
-  // Which Pollar key pair this handshake was started with, so the redemption
-  // talks to the same network the authorization URL was built for.
-  network  String
-
-  // Pollar's own client session id, from POST /auth/session. The wallet never
-  // sees it — it is what the bridge redeems at POST /auth/login.
-  clientSessionId String
-
-  // Where the wallet wants the bridge code delivered. Null means poll mode: the
-  // wallet has no addressable redirect and reads the code back from the bridge.
-  redirectUri   String?
-  // PKCE (RFC 7636) challenge, S256 only. Optional, enforced when present.
-  codeChallenge String?
-
-  // The wallet's DPoP public JWK, forwarded to Pollar so the minted tokens are
-  // bound to the WALLET's key rather than to the bridge. When set, the bridge
-  // can no longer refresh or revoke on the wallet's behalf — only the holder of
-  // the private key can — which is exactly the point.
-  dpopJwk     Json?
-  deviceLabel String?
-
-  // SHA-256 of the single-use bridge code. The code itself is never stored, so
-  // a database read cannot redeem a handshake.
-  codeHash      String?   @unique
-  codeExpiresAt DateTime?
-
-  // Public identity of the resulting Pollar wallet, kept for support and for
-  // the poll response. No token and no profile PII is ever persisted.
-  walletAddress String?
-  walletType    String?
-  pollarUserId  String?
-
-  // Pollar's error code when the handshake ended in FAILED/EXPIRED.
-  errorCode String?
-
-  // When the poll route last asked Pollar whether this login had finished.
-  // Pollar does not call the bridge back (see the service's `probeProvider`), so
-  // the poll is what discovers a finished login — and the wallet polls every few
-  // seconds. This column is the floor on how often that question reaches the
-  // provider, and it is on the row rather than in memory so replicas share it.
-  providerCheckedAt DateTime?
-
-  // Deadline for the whole handshake, independent of the code's shorter TTL.
-  expiresAt DateTime
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  @@index([consumerId, createdAt])
-  // The sweeper expires stale handshakes oldest-first.
-  @@index([status, expiresAt])
-  // Wallet ownership check, `PollarWalletsService.assertWalletOwned`
-  // (src/pollar/wallets/pollar-wallets.service.ts): findFirst by consumerId,
-  // network and walletAddress on every wallet route. The sweeper marks rows
-  // EXPIRED but never deletes them, so without this the check walks every
-  // handshake the consumer ever started, and the shared public key is one
-  // consumer for every anonymous wallet.
-  @@index([consumerId, network, walletAddress])
-  @@map("pollar_oauth_session")
-}
-
-// The provisioning state of one user's Pollar wallet on ONE network.
-//
-// A login only ever produces a wallet on the network its API key resolved to —
-// Pollar runs mainnet and testnet as two separate applications with two separate
-// key pairs, so a single hosted handshake cannot touch both. Wallets that exist
-// on only one network are a problem the moment a user moves between the two: the
-// address they funded on testnet is not the address that receives on mainnet,
-// and the second wallet is created lazily, at the worst possible moment.
-//
-// So a redemption provisions the counterpart network too, and this table is
-// where that attempt is remembered. It is deliberately NOT on the handshake row:
-// a handshake is expired by the sweeper within minutes, and a wallet that failed
-// to provision has to outlive it to be retried at all.
-//
-// The row is not a mirror of Pollar's wallet — Pollar owns that — it is the
-// record of whether WE have managed to ask for it yet.
-enum PollarWalletStatus {
-  // Asked for, not confirmed. Retried by the provisioning sweeper.
-  PENDING
-  // Pollar has the user and their wallet on this network. Terminal.
-  READY
-  // Out of retry budget. Terminal until an operator intervenes.
-  FAILED
-}
-
-model PollarUserWallet {
-  id         String   @id @default(cuid())
-  consumerId String
-  consumer   Consumer @relation(fields: [consumerId], references: [id], onDelete: Cascade)
-
-  // Pollar's handle on this user, and the join key across the two networks.
-  // For a row a login wrote, it is the email the OAuth provider vouched for —
-  // what a later hosted login on the other network resolves the same person by,
-  // so anything else there would provision a wallet nobody ever logs into. A
-  // row written by `POST /v1/pollar/users/with-wallet` holds the operator's own
-  // id instead: it is READY on arrival, never swept, and exists so the wallet
-  // routes can tell that this consumer owns the address.
-  externalId String
-  // 'public' | 'testnet' — Stellar's names, as everywhere else in this schema.
-  network    String
-
-  status PollarWalletStatus @default(PENDING)
-
-  // Public identity of the wallet, once there is one. Null while PENDING.
-  address      String?
-  walletType   String?
-  pollarUserId String?
-
-  // Retry bookkeeping. `attempts` is the whole budget across all sweeps, not
-  // per cycle, so a wallet Pollar keeps refusing stops being asked for.
-  attempts      Int       @default(0)
-  errorCode     String?
-  nextAttemptAt DateTime?
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  // One row per user per network. This is also the idempotency of the whole
-  // feature: every login upserts through it, so repeat logins cannot fan out
-  // into duplicate provisioning attempts.
-  @@unique([consumerId, externalId, network])
-  // The sweeper claims due PENDING rows oldest-first.
-  @@index([status, nextAttemptAt])
-  // Wallet ownership check, `PollarWalletsService.assertWalletOwned`
-  // (src/pollar/wallets/pollar-wallets.service.ts): findFirst by consumerId,
-  // network and address when no login matched. The unique index above can only
-  // narrow that to the consumer, since `externalId` sits between consumerId and
-  // network and `address` is not in it, so the check read every wallet the
-  // consumer's users hold.
-  @@index([consumerId, network, address])
-  @@map("pollar_user_wallet")
-}
-
-// ---------------------------------------------------------------------------
 // Rate limiting.
 //
 // One row per (policy + subject, window). The counter lives in Postgres rather
@@ -1431,11 +1253,11 @@ model WalletAuthHandshake {
   /// What the provider said, filled at the callback. An account is looked up by
   /// `email`, so an address the provider did not confirm is only ever finished
   /// through a code to that inbox — see `emailVerified`.
-  email   String?
-  name    String?
-  avatar  String?
+  email         String?
+  name          String?
+  avatar        String?
   /// The provider's own stable id for the person (`sub`, or GitHub's numeric id).
-  subject String?
+  subject       String?
   /// False when the provider (Authentik) signed the identity but has not
   /// confirmed the email. Redemption then always goes through `verify_email`: the
   /// code to the inbox is the confirmation the provider did not give.

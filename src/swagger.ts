@@ -178,7 +178,6 @@ const TAG_DESCRIPTIONS: Record<string, string> = {
   kyc: 'Receivers, their documents, wallets and bank accounts (BlindPay).',
   onramp: 'Fiat in: quotes, payins and virtual accounts (BlindPay).',
   offramp: 'Fiat out: quotes and payouts (BlindPay).',
-  pollar: 'Social login that hands back a Stellar wallet.',
   webhooks: 'Endpoints this service notifies, and their delivery history.',
   activity: 'What a wallet or dashboard reports back about a session.',
   analytics: 'Aggregates over this consumer’s own traffic.',
@@ -279,7 +278,6 @@ const UPSTREAM_FAILURES: Record<
   readonly SharedErrorResponse[]
 > = {
   BlindPay: ['UpstreamError', 'UpstreamUnavailable', 'UpstreamTimeout'],
-  Pollar: ['UpstreamError', 'UpstreamUnavailable', 'UpstreamTimeout'],
   Horizon: ['UpstreamUnavailable'],
 };
 

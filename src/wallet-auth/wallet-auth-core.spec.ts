@@ -513,7 +513,7 @@ describe('wallet-auth-core', () => {
       );
     });
 
-    it.each([['pollar'], [''], ['__proto__']])(
+    it.each([['myspace'], [''], ['__proto__']])(
       'refuses %p as a provider',
       (value) => {
         expect(providerFromWire(value)).toBeNull();

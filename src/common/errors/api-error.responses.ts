@@ -79,14 +79,6 @@ export const API_ERROR_CASES: Readonly<Record<ApiErrorCode, ApiErrorCase>> = {
     message: 'This endpoint is reserved for the platform console',
     path: '/v1/aliases/alice/recovery/complete',
   },
-  [ApiErrorCode.ElevatedKeyRequired]: {
-    statuses: [403],
-    summary: 'The route writes to something every tenant shares',
-    message:
-      'Registering Pollar users requires an elevated (admin) key: the Pollar ' +
-      'user directory is shared by every tenant.',
-    path: '/v1/pollar/users',
-  },
 
   // --- resources -----------------------------------------------------------
   [ApiErrorCode.NotFound]: {
@@ -293,25 +285,6 @@ export const API_ERROR_CASES: Readonly<Record<ApiErrorCode, ApiErrorCase>> = {
     summary: 'The address is already on the alias, or the alias is at its cap',
     message: 'That address is already on this alias for that network.',
     path: '/v1/aliases/alice/addresses',
-  },
-
-  // --- Pollar ----------------------------------------------------------------
-  [ApiErrorCode.PollarIdentityRequired]: {
-    statuses: [403],
-    summary: 'The key has no account email to tie a Pollar login to',
-    message:
-      'This key has no account email, so a Pollar login cannot be tied to it. ' +
-      'Social login is only available to the account that owns the key.',
-    path: '/v1/pollar/oauth/authorize',
-  },
-  [ApiErrorCode.PollarIdentityMismatch]: {
-    statuses: [403],
-    summary: 'Someone other than the key’s account completed the login',
-    message:
-      'This Pollar login was completed by a different account than the one ' +
-      'that owns this key, so no session is returned. Sign in with the email ' +
-      "of the key's account.",
-    path: '/v1/pollar/oauth/token',
   },
 
   // --- wallet sign-in --------------------------------------------------------

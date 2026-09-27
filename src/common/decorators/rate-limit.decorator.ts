@@ -52,8 +52,8 @@ export interface RateLimitPolicy {
  * route with no `@RateLimit` is not limited here at all; the gateway's own
  * throttling is the only thing in front of it.
  *
- *   @RateLimit(POLLAR_AUTHORIZE_RATE_LIMIT, POLLAR_WALLET_DAILY_RATE_LIMIT)
- *   authorize(...) { ... }
+ *   @RateLimit(WALLET_RECOVERY_SETUP_RATE_LIMIT, WALLET_RECOVERY_SETUP_GLOBAL_RATE_LIMIT)
+ *   sponsorRecoverySetup(...) { ... }
  *
  * Several policies may be stacked on one route, typically a per-address budget
  * and a per-consumer ceiling. Every one is counted, and the first one spent

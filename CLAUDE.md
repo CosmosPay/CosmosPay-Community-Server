@@ -82,7 +82,6 @@ src/kyc/kyc.constants.ts
 src/liquidity-pools/liquidity-pools.constants.ts
 src/observer/observer.constants.ts
 src/payment-intents/payment-intents.constants.ts
-src/pollar/pollar.constants.ts
 src/prisma/prisma.constants.ts
 src/stellar/stellar.constants.ts
 src/swaps/swaps.constants.ts
@@ -128,7 +127,7 @@ Six places go stale on their own, and each has a specific trigger:
 | add or remove a file under `src/` that is a module, not a leaf | the **Project layout** tree |
 | add, rename, remove or re-scope a route | the **Route index**, and the module's own `##` section if it has one |
 | add, rename or delete a `process.env` read | the **Environment variables** table *and* `.env.example` |
-| integrate a provider, or change how an existing one behaves | that provider's own `##` section (see the BlindPay and Pollar ones for the shape) |
+| integrate a provider, or change how an existing one behaves | that provider's own `##` section (see the BlindPay one for the shape) |
 | change a published response shape, a status code, or a scope | **Upgrading — breaking changes and deploy notes** |
 | learn something an operator or integrator must not miss — a security caveat, a deploy step, a limit, a failure mode | the section it belongs to, as a note in the same commit |
 
@@ -209,7 +208,7 @@ table. These are the rules that did not hold on their own:
   flow. When a file grows a second job (reading pools from Horizon *and* building
   transactions *and* cost basis), extract the new job into its own provider
   instead of adding a section divider. Length is not the signal —
-  `pollar-oauth.service.ts` is long and does one thing; a second vocabulary is.
+  `wallet-auth.service.ts` is long and does one thing; a second vocabulary is.
 - **O — dispatch with a table, not a chain.** When code branches on a type,
   provider, network or chain, the second branch on the same value is the signal to
   make it a `Record` (see `EVENT_MAP` in `blindpay-sync.service.ts`), so a new
@@ -226,7 +225,7 @@ table. These are the rules that did not hold on their own:
 - **D — depend on injected collaborators, never construct them.**
   - Never `new` a collaborator, and never default a constructor parameter to one:
     a default turns a missing provider into a silent real network call instead of
-    a boot failure. Horizon, BlindPay, Pollar and outbound HTTP go through their
+    a boot failure. Horizon, BlindPay and outbound HTTP go through their
     injected clients.
   - A service writes only its own module's tables. To change another module's
     row, inject that module's service or emit an event it handles.
@@ -298,7 +297,7 @@ How failures get documented — use these, never a hand-written
 | validates input, is gated, takes a `{param}`, or can throw at all | nothing | 400 / 401 + 403 / 404 / 500, attached by `swagger.ts` |
 | is `@Public()` | nothing — the decorator does it | `security: []`, no 401/403 |
 | is `@RateLimit(...)` | nothing — the decorator does it | 429 + `Retry-After`, `ratelimit-*` on 2xx |
-| calls BlindPay, Pollar or Horizon while serving | `@ApiUpstream('BlindPay')` on **that handler** | 502/503/504 (Horizon: 503 only) |
+| calls BlindPay or Horizon while serving | `@ApiUpstream('BlindPay')` on **that handler** | 502/503/504 (Horizon: 503 only) |
 | throws a code of its own (409, a domain 400, a kill-switch 403) | `@ApiErrorResponse({ status, codes })` | that status with one real example per code |
 
 - **A new `ApiErrorCode` needs an entry in `API_ERROR_CASES`**

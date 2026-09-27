@@ -124,7 +124,7 @@ describe('ApisixGuard', () => {
       // as the client typed it.
       const request: Record<string, unknown> = {
         method: 'GET',
-        url: '/v1/pollar/oauth/callback/abc',
+        url: '/v1/wallet/auth/oauth/callback/authentik',
         headers: { 'x-consumer-username': 'cosmos_victim' },
         gatewayConsumer: { username: 'cosmos_victim' },
       };

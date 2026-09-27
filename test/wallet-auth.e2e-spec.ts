@@ -194,7 +194,7 @@ describe('Wallet sign-in guards (e2e)', () => {
     it('validates the body before it touches the database', async () => {
       const res = await asPublicKey(
         request(http()).post('/v1/wallet/auth/oauth/authorize').send({
-          provider: 'pollar',
+          provider: 'myspace',
           codeChallenge: 'short',
           codeChallengeMethod: 'S256',
         }),
