@@ -13,7 +13,11 @@ import {
   PAYIN_PUBLIC_SELECT,
   PublicPayin,
 } from '@/blindpay/blindpay-sync.service';
-import { asString, isMirrorFresh } from '@/blindpay/blindpay.util';
+import {
+  asString,
+  isMirrorFresh,
+  quoteExpiresAt,
+} from '@/blindpay/blindpay.util';
 import type { BlindpayEnvironment } from '@/config/configuration';
 import { CreatePayinQuoteDto } from '@/onramp/dto/create-payin-quote.dto';
 import { CreatePayinDto } from '@/onramp/dto/create-payin.dto';
@@ -76,12 +80,20 @@ export class OnrampService {
   async createPayin(consumer: GatewayConsumer, dto: CreatePayinDto) {
     const local = await this.consumers.resolve(consumer);
     const environment = this.blindpay.environmentFor(consumer);
-    await this.assertQuoteOwned(local.id, environment, dto.payin_quote_id);
+    const quote = await this.assertQuoteUsable(
+      local.id,
+      environment,
+      dto.payin_quote_id,
+    );
     // One execution call for every destination network — the chain is determined
     // by the quote's wallet, not chosen here.
-    const created = await this.blindpay.createPayin(environment, {
-      payin_quote_id: dto.payin_quote_id,
-    });
+    const created = await this.blindpay.createPayin(
+      environment,
+      {
+        payin_quote_id: dto.payin_quote_id,
+      },
+      quote.executionKey,
+    );
     const receiverId = await this.resolveReceiverLocalId(
       local.id,
       environment,
@@ -173,7 +185,13 @@ export class OnrampService {
       );
     }
     await this.prisma.blindpayQuote.create({
-      data: { consumerId, environment, blindpayId, kind: 'PAYIN' },
+      data: {
+        consumerId,
+        environment,
+        blindpayId,
+        kind: 'PAYIN',
+        expiresAt: quoteExpiresAt(quote.expires_at),
+      },
     });
   }
 
@@ -188,11 +206,11 @@ export class OnrampService {
    * mirrored into their own records. 404 rather than 403 is deliberate; a 403
    * would confirm the id is live for somebody else.
    */
-  private async assertQuoteOwned(
+  private async assertQuoteUsable(
     consumerId: string,
     environment: BlindpayEnvironment,
     blindpayQuoteId: string,
-  ): Promise<void> {
+  ): Promise<{ executionKey: string }> {
     const quote = await this.prisma.blindpayQuote.findUnique({
       where: {
         consumerId_blindpayId: { consumerId, blindpayId: blindpayQuoteId },
@@ -204,6 +222,13 @@ export class OnrampService {
     if (!quote || quote.kind !== 'PAYIN' || quote.environment !== environment) {
       throw ApiError.notFound('Quote not found', ApiErrorCode.QuoteNotFound);
     }
+    if (quote.expiresAt && quote.expiresAt.getTime() <= Date.now()) {
+      throw ApiError.badRequest(
+        ApiErrorCode.QuoteExpired,
+        'This BlindPay quote has expired. Request a new quote.',
+      );
+    }
+    return quote;
   }
 
   private async resolveWalletBlindpayId(

@@ -28,16 +28,18 @@ process.env.BLINDPAY_INSTANCE_ID = 'in_test';
 process.env.BLINDPAY_WEBHOOK_SECRET = `whsec_${Buffer.from(
   'e2e-blindpay-webhook-key',
 ).toString('base64')}`;
-// Pollar: keys so the routes are reachable (nothing leaves the process — the
-// suite stubs global fetch), plus the bridge callback and a redirect allow-list
-// for the e2e consumer. The prefixes are the real ones because env validation
-// checks them.
-process.env.POLLAR_PUBLISHABLE_KEY_TESTNET = 'pub_testnet_e2e';
-process.env.POLLAR_SECRET_KEY_TESTNET = 'sec_testnet_e2e';
-process.env.POLLAR_BRIDGE_CALLBACK_URL =
-  'https://gw.test/v1/pollar/oauth/callback';
-process.env.POLLAR_REDIRECT_URI_WHITELIST = JSON.stringify({
-  cosmos_u1: ['cosmospay://auth'],
-});
-// Keep the handshake sweeper's timer out of a test run.
-process.env.POLLAR_SWEEP_ENABLED = 'false';
+// The wallet return URL the callback suite redirects to. Pinned for the same
+// reason as the BlindPay trio: a developer's .env may list others.
+process.env.WALLET_AUTH_RETURN_URLS = 'cosmoswallet://auth/done';
+// No Authentik: a developer's .env usually points at a local one, which would
+// change what GET /v1/wallet/auth/providers reports here and nowhere in CI.
+// Empty rather than deleted, because dotenv does not overwrite a set variable;
+// all three, because identity-env refuses the trio half-configured.
+process.env.WALLET_AUTH_OIDC_ISSUER = '';
+process.env.WALLET_AUTH_OIDC_CLIENT_ID = '';
+process.env.WALLET_AUTH_OIDC_CLIENT_SECRET = '';
+// The key that seals a sign-in session token. Without it every route that seals or
+// opens one answers 503 `misconfigured`, so a suite asserting how a bad token is
+// refused would only ever see the missing configuration.
+process.env.WALLET_AUTH_SESSION_SECRET =
+  'e2e-wallet-session-secret-e2e-wallet-session-secret';

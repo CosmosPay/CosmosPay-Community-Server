@@ -12,8 +12,7 @@ import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface'
  *
  * A plain tenant key is NOT elevated. A `kyc:write` key belongs to the tenant whose KYC
  * data is under review, so it can neither sign off on that review nor lift an
- * operator's kill-switch; a `pollar:write` key cannot write to the Pollar user
- * directory every tenant shares.
+ * operator's kill-switch.
  */
 export function isElevatedConsumer(consumer: GatewayConsumer): boolean {
   return consumer.role === 'admin';

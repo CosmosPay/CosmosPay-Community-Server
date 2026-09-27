@@ -80,9 +80,9 @@ export class ApisixContextMiddleware implements NestMiddleware {
   }
 
   /**
-   * Normalizes the forwarded account email. Lowercased, so the Pollar identity
-   * check compares like with like. Anything that is not one `@` between two
-   * non-empty parts counts as not forwarded, which fails that check closed.
+   * Normalizes the forwarded account email. Lowercased, so a comparison compares
+   * like with like. Anything that is not one `@` between two non-empty parts
+   * counts as not forwarded, which fails any identity check closed.
    */
   private parseEmail(raw?: string): string | null {
     if (!raw) return null;

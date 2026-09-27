@@ -15,7 +15,6 @@ import {
   type ValidationError,
 } from 'class-validator';
 import { StrKey } from '@stellar/stellar-sdk';
-import { isLoopbackHttpUrl } from '@/common/loopback';
 
 const URL_OPTIONS = {
   require_protocol: true,
@@ -28,7 +27,7 @@ import {
   DEFAULT_SWAP_MAX_SLIPPAGE_BPS,
   DEFAULT_SWAP_SLIPPAGE_BPS,
 } from '@/config/config.constants';
-import { POLLAR_KEY_PREFIX } from '@/config/pollar-key-prefix';
+import { assertIdentityConfigConsistent } from '@/config/identity-env';
 import { decodeSvixSecret } from '@/blindpay/blindpay-signature';
 import { SVIX_MIN_SECRET_BYTES } from '@/blindpay/blindpay.constants';
 
@@ -349,91 +348,6 @@ class EnvironmentVariables {
   @IsString()
   KYC_REDIRECT_URL_WHITELIST?: string;
 
-  // --- Pollar (hosted OAuth + virtual Stellar wallets) ---
-  // All optional: the service boots without them and the Pollar routes return
-  // 503 only when one is actually exercised. Keys are network-specific by
-  // prefix, so each network has its own pair.
-  @IsOptional()
-  @IsString()
-  POLLAR_PUBLISHABLE_KEY_TESTNET?: string;
-
-  @IsOptional()
-  @IsString()
-  POLLAR_PUBLISHABLE_KEY_MAINNET?: string;
-
-  @IsOptional()
-  @IsString()
-  POLLAR_SECRET_KEY_TESTNET?: string;
-
-  @IsOptional()
-  @IsString()
-  POLLAR_SECRET_KEY_MAINNET?: string;
-
-  @IsOptional()
-  @IsUrl(URL_OPTIONS)
-  POLLAR_SDK_BASE_URL?: string;
-
-  @IsOptional()
-  @IsUrl(URL_OPTIONS)
-  POLLAR_SERVER_BASE_URL?: string;
-
-  /**
-   * The `Origin` presented to Pollar's SDK API, which checks it against the
-   * app's Build -> Domains list. Defaults to the origin of
-   * POLLAR_BRIDGE_CALLBACK_URL, which already has to be registered there — set
-   * this only when the two differ.
-   */
-  @IsOptional()
-  @IsUrl(URL_OPTIONS)
-  POLLAR_SDK_ORIGIN?: string;
-
-  /**
-   * Public URL of this service's Pollar OAuth callback, as a browser reaches it
-   * through the gateway. Handed to Pollar as `redirect_uri`, so it must also be
-   * registered in the Pollar dashboard under Build -> Domains.
-   */
-  @IsOptional()
-  @IsUrl(URL_OPTIONS)
-  POLLAR_BRIDGE_CALLBACK_URL?: string;
-
-  /**
-   * Per-consumer allow-list of wallet redirect URIs the bridge may hand a code
-   * to. Missing/empty means a consumer can only use the poll flow. Shape:
-   * {"cosmos_acme":["cosmospay://auth","http://127.0.0.1"]}
-   */
-  @IsOptional()
-  @IsString()
-  POLLAR_REDIRECT_URI_WHITELIST?: string;
-
-  @IsOptional()
-  @IsInt()
-  @Min(1)
-  POLLAR_TIMEOUT_MS?: number;
-
-  @IsOptional()
-  @IsInt()
-  @Min(1000)
-  POLLAR_AUTHORIZATION_TTL_MS?: number;
-
-  @IsOptional()
-  @IsInt()
-  @Min(1000)
-  POLLAR_CODE_TTL_MS?: number;
-
-  @IsOptional()
-  @IsInt()
-  @Min(1000)
-  POLLAR_LOGIN_WAIT_MS?: number;
-
-  @IsOptional()
-  @IsBooleanString()
-  POLLAR_SWEEP_ENABLED?: string;
-
-  @IsOptional()
-  @IsInt()
-  @Min(1000)
-  POLLAR_SWEEP_INTERVAL_MS?: number;
-
   // --- Rate limiting ---
   /**
    * Master switch for the per-address caps declared with `@RateLimit`. Default
@@ -560,7 +474,7 @@ export function validateEnv(config: Record<string, unknown>) {
 
   assertBlindpayInstancesConsistent(validated);
 
-  assertPollarKeysConsistent(validated);
+  assertIdentityConfigConsistent(config);
 
   return validated;
 }
@@ -622,126 +536,5 @@ function assertBlindpayInstancesConsistent(
           'decodes to a short or empty key, and a webhook signed with that proves nothing.',
       );
     }
-  }
-}
-
-/**
- * Pollar keys carry their key type and network in the prefix, and the API
- * rejects a mismatch with `API_KEY_TYPE_NOT_ALLOWED` — at request time, on a
- * user-facing login. Catching it at boot turns a mystery 403 into a startup
- * error naming the variable. A configured network also needs both halves: the
- * publishable key drives the OAuth bridge and the secret key the operator
- * routes, and half a pair is a feature that fails on its second call.
- */
-function assertPollarKeysConsistent(validated: EnvironmentVariables): void {
-  const pairs = [
-    {
-      network: 'testnet' as const,
-      publishable: validated.POLLAR_PUBLISHABLE_KEY_TESTNET,
-      publishableVar: 'POLLAR_PUBLISHABLE_KEY_TESTNET',
-      secret: validated.POLLAR_SECRET_KEY_TESTNET,
-      secretVar: 'POLLAR_SECRET_KEY_TESTNET',
-    },
-    {
-      network: 'public' as const,
-      publishable: validated.POLLAR_PUBLISHABLE_KEY_MAINNET,
-      publishableVar: 'POLLAR_PUBLISHABLE_KEY_MAINNET',
-      secret: validated.POLLAR_SECRET_KEY_MAINNET,
-      secretVar: 'POLLAR_SECRET_KEY_MAINNET',
-    },
-  ];
-
-  for (const pair of pairs) {
-    const hasPublishable = isNonEmpty(pair.publishable);
-    const hasSecret = isNonEmpty(pair.secret);
-    if (!hasPublishable && !hasSecret) continue;
-
-    if (!hasPublishable || !hasSecret) {
-      throw new Error(
-        `${pair.publishableVar} and ${pair.secretVar} must be set together: the ` +
-          'publishable key authenticates the OAuth bridge and the secret key the ' +
-          'operator routes, and Pollar refuses each on the other API.',
-      );
-    }
-
-    assertKeyPrefix(
-      pair.publishableVar,
-      pair.publishable,
-      POLLAR_KEY_PREFIX.publishable[pair.network],
-    );
-    assertKeyPrefix(
-      pair.secretVar,
-      pair.secret,
-      POLLAR_KEY_PREFIX.secret[pair.network],
-    );
-  }
-
-  if (
-    (isNonEmpty(validated.POLLAR_PUBLISHABLE_KEY_TESTNET) ||
-      isNonEmpty(validated.POLLAR_PUBLISHABLE_KEY_MAINNET)) &&
-    !isNonEmpty(validated.POLLAR_BRIDGE_CALLBACK_URL)
-  ) {
-    throw new Error(
-      'POLLAR_BRIDGE_CALLBACK_URL is required when a Pollar key is set: it is the ' +
-        'redirect_uri Pollar returns the browser to, so the bridge cannot build an ' +
-        'authorization URL without it. Point it at this service through the gateway ' +
-        '(e.g. https://gateway.example.com/v1/pollar/oauth/callback) and register ' +
-        'that host in the Pollar dashboard under Build -> Domains.',
-    );
-  }
-
-  assertSecureCallbackUrl(
-    'POLLAR_BRIDGE_CALLBACK_URL',
-    validated.POLLAR_BRIDGE_CALLBACK_URL,
-  );
-}
-
-/**
- * A URL a single-use authorization code is delivered to must be https, unless
- * it is a loopback address.
- *
- * `@IsUrl` admits http, which is right for most of the URLs here — a Horizon
- * mirror, a base URL — and wrong for this one: the code arrives in the query
- * string, so plain http hands every proxy and every network on the path a
- * credential that exchanges for the user's Pollar session. The same rule the
- * wallet's own redirect URIs are held to, in `@/pollar/pollar-redirect-uri`.
- *
- * Loopback stays allowed so a developer can run the bridge against
- * `http://127.0.0.1:3000/v1/pollar/oauth/callback`: nothing off that machine
- * sees the code.
- *
- * Boot-time, not per-request, because there is only one right answer per
- * deployment and a misconfigured one should never serve traffic.
- */
-function assertSecureCallbackUrl(name: string, value?: string): void {
-  if (!isNonEmpty(value)) return;
-
-  let url: URL;
-  try {
-    url = new URL(value);
-  } catch {
-    // `@IsUrl` already refused anything unparseable; nothing to add.
-    return;
-  }
-  if (url.protocol === 'https:' || isLoopbackHttpUrl(url)) return;
-
-  throw new Error(
-    `${name} must use https (or http on a loopback host for local ` +
-      'development). Pollar returns the browser to it with the authorization ' +
-      'code in the query string, and plain http exposes that code to every ' +
-      'network it crosses.',
-  );
-}
-
-function assertKeyPrefix(
-  name: string,
-  value: string | undefined,
-  prefix: string,
-): void {
-  if (value && !value.startsWith(prefix)) {
-    throw new Error(
-      `${name} must start with '${prefix}': Pollar encodes the key type and ` +
-        'network in the prefix and rejects a key used on the wrong API or network.',
-    );
   }
 }

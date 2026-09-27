@@ -1,22 +1,17 @@
 import {
   DEFAULT_HORIZON,
-  DEFAULT_POLLAR_AUTHORIZATION_TTL_MS,
-  DEFAULT_POLLAR_CODE_TTL_MS,
-  DEFAULT_POLLAR_LOGIN_WAIT_MS,
-  DEFAULT_POLLAR_SDK_BASE_URL,
-  DEFAULT_POLLAR_SERVER_BASE_URL,
-  DEFAULT_POLLAR_SWEEP_INTERVAL_MS,
-  DEFAULT_POLLAR_TIMEOUT_MS,
   DEFAULT_RATE_LIMIT_PRUNE_INTERVAL_MS,
+  DEFAULT_RECOVERY_SWEEP_INTERVAL_MS,
+  DEFAULT_RECOVERY_TIMEOUT_MS,
+  DEFAULT_WALLET_AUTH_SWEEP_INTERVAL_MS,
+  DEFAULT_WALLET_AUTH_TIMEOUT_MS,
+  NETWORK_PASSPHRASE_PUBLIC,
 } from '@/config/config.constants';
+import { parseReturnUrls } from '@/common/return-url';
 import {
   parseRedirectUrlWhitelist,
   type RedirectUrlWhitelist,
 } from '@/config/kyc-redirect-url-whitelist';
-import {
-  parsePollarRedirectWhitelist,
-  type PollarRedirectWhitelist,
-} from '@/config/pollar-redirect-uri-whitelist';
 
 /**
  * Centralized, typed configuration loaded from environment variables.
@@ -63,10 +58,7 @@ export interface AppConfig {
     organizationHeader: string;
     planHeader: string;
     swapFeeBpsHeader: string;
-    /**
-     * Verified email of the account that owns the key. The Pollar bridge binds a
-     * login to it: a session only goes back to the key whose account consented.
-     */
+    /** Verified email of the account that owns the key, as the gateway forwards it. */
     emailHeader: string;
     /**
      * Username of the SHARED public consumer — the one credential embedded in
@@ -179,36 +171,97 @@ export interface AppConfig {
     /** How often rolled-over counter windows are deleted. */
     pruneIntervalMs: number;
   };
-  pollar: {
-    // Pollar is the hosted onboarding rail: social login in, a Stellar wallet
-    // out. Its keys are network-specific by prefix, so we hold one pair per
-    // network and pick by the API key's environment (like Horizon above).
-    publishableKey: Record<StellarNetwork, string>;
-    secretKey: Record<StellarNetwork, string>;
-    sdkBaseUrl: string;
-    serverBaseUrl: string;
+  walletAuth: {
     /**
-     * Public URL of this service's OAuth callback, as reachable from a browser
-     * — it is what Pollar is handed as `redirect_uri`, so it must be a real
-     * gateway URL and must be registered under the Pollar dashboard's
-     * Build -> Domains. The bridge appends `/{state}` to it.
+     * The public origin a BROWSER reaches this service on — the gateway's, not
+     * the upstream's. The OAuth redirect URI is built from it, and a provider
+     * refuses a redirect URI it does not hold verbatim, so a wrong value fails
+     * at the consent screen rather than quietly here.
      */
-    bridgeCallbackUrl: string;
+    publicBaseUrl: string;
     /**
-     * The `Origin` sent on every SDK-API call. Pollar's SDK API is built for a
-     * browser and checks this against the app's Build -> Domains list, refusing
-     * a request without one (`ORIGIN_NOT_ALLOWED`) — including a server-side
-     * one, which has no origin of its own to send.
+     * Seals the session token a finished sign-in hands the wallet. Its OWN
+     * secret, required at boot whenever a door is configured
+     * (`identity-env.ts`). It used to fall back to the gateway secret, which the
+     * developer platform also holds — so the platform could mint a session that
+     * creates an account here.
      */
-    sdkOrigin: string;
-    /** Per-consumer allow-list of the wallet redirect URIs codes may go to. */
-    redirectUriWhitelist: PollarRedirectWhitelist;
+    sessionSecret: string;
+    /**
+     * Base URL of the operator console that performs the two legs this service
+     * deliberately does not: sending the login-code email, and minting the
+     * account's gateway credentials (which needs APISIX admin).
+     *
+     * Unset means this deployment has no email door and cannot finish a
+     * sign-in — reported as such by `GET /v1/wallet/auth/providers` rather than
+     * discovered at the end of a flow. A self-hosted deployment points it at its
+     * own sender and owes this service nothing else.
+     */
+    consoleUrl: string;
+    /** Proves a call to the console came from this service. Its own secret. */
+    consoleSecret: string;
+    /** Per-provider OAuth credentials. An empty pair disables that provider. */
+    google: { clientId: string; clientSecret: string };
+    github: { clientId: string; clientSecret: string };
+    /**
+     * The operator's OpenID Connect provider — Authentik. The preferred door:
+     * its ID token is verified against the provider's published keys, and the
+     * provider (not this service) owns passwords, MFA and the Google/GitHub
+     * sources. Empty strings disable it.
+     */
+    oidc: { issuer: string; clientId: string; clientSecret: string };
+    /**
+     * The app URLs a provider callback may send the browser back to, for a
+     * native wallet whose auth session (`ASWebAuthenticationSession`, a Custom
+     * Tab, a desktop app's deep link or loopback listener) only closes when the
+     * browser reaches a URL the app owns. Exact match; a loopback entry matches
+     * any port. Empty means every callback renders the page instead.
+     */
+    returnUrls: string[];
+    /**
+     * The Horizon that says who may sign for an account, for a RECOVERED wallet
+     * whose key is no longer its address. One, chosen by the operator — never by
+     * the request, which would let a caller pick the ledger its signer is read
+     * from.
+     */
+    signersHorizonUrl: string;
+    /**
+     * Pays the reserve of an account's two recovery signers
+     * (`POST /v1/wallet/recovery/setup`). Unset disables the route. Refused at
+     * boot on a recovery server.
+     */
+    sponsor: {
+      secret: string;
+      networkPassphrase: string;
+      horizonUrl: string;
+    };
+    /** How long a call out to a provider may take before it is a failure. */
     timeoutMs: number;
-    // Handshake lifetime, code lifetime, and how long redemption waits for
-    // Pollar to finish resolving the user's wallet.
-    authorizationTtlMs: number;
-    codeTtlMs: number;
-    loginWaitMs: number;
+    sweep: {
+      enabled: boolean;
+      intervalMs: number;
+    };
+  };
+  /**
+   * SEP-10 + SEP-30: this deployment as ONE of the two recovery servers.
+   * `role: null` means it is not one, and every recovery route answers 404.
+   */
+  recovery: {
+    role: 'a' | 'b' | null;
+    /** The https origin plus gateway entry clients reach this server on. */
+    publicBaseUrl: string;
+    /** The WALLET's domain, named by every challenge — the same on both servers. */
+    homeDomain: string;
+    networkPassphrase: string;
+    horizonUrl: string;
+    signerMaster: string;
+    sep10SigningSecret: string;
+    jwtSecret: string;
+    /** ID tokens this server exchanges for an identity; empty issuer disables it. */
+    oidc: { issuer: string; audiences: string[] };
+    /** Where this server posts its own emailed codes; empty url disables them. */
+    emailDelivery: { url: string; secret: string };
+    timeoutMs: number;
     sweep: {
       enabled: boolean;
       intervalMs: number;
@@ -406,85 +459,105 @@ export default (): AppConfig => ({
       10,
     ),
   },
-  pollar: {
-    publishableKey: {
-      public: process.env.POLLAR_PUBLISHABLE_KEY_MAINNET ?? '',
-      testnet: process.env.POLLAR_PUBLISHABLE_KEY_TESTNET ?? '',
-    },
-    secretKey: {
-      public: process.env.POLLAR_SECRET_KEY_MAINNET ?? '',
-      testnet: process.env.POLLAR_SECRET_KEY_TESTNET ?? '',
-    },
-    sdkBaseUrl: (
-      process.env.POLLAR_SDK_BASE_URL ?? DEFAULT_POLLAR_SDK_BASE_URL
-    ).replace(/\/+$/, ''),
-    serverBaseUrl: (
-      process.env.POLLAR_SERVER_BASE_URL ?? DEFAULT_POLLAR_SERVER_BASE_URL
-    ).replace(/\/+$/, ''),
-    bridgeCallbackUrl: (process.env.POLLAR_BRIDGE_CALLBACK_URL ?? '').replace(
+  walletAuth: {
+    publicBaseUrl: (process.env.WALLET_AUTH_PUBLIC_BASE_URL ?? '').replace(
       /\/+$/,
       '',
     ),
-    sdkOrigin: pollarSdkOrigin(),
-    redirectUriWhitelist: parsePollarRedirectWhitelist(
-      process.env.POLLAR_REDIRECT_URI_WHITELIST,
-    ),
+    // No fallback to the gateway secret — see the interface, and
+    // `identity-env.ts`, which refuses to boot without its own.
+    sessionSecret: process.env.WALLET_AUTH_SESSION_SECRET?.trim() ?? '',
+    consoleUrl: (process.env.WALLET_AUTH_CONSOLE_URL ?? '').replace(/\/+$/, ''),
+    consoleSecret: process.env.WALLET_AUTH_CONSOLE_SECRET?.trim() ?? '',
+    google: {
+      clientId: process.env.WALLET_GOOGLE_CLIENT_ID ?? '',
+      clientSecret: process.env.WALLET_GOOGLE_CLIENT_SECRET ?? '',
+    },
+    github: {
+      clientId: process.env.WALLET_GITHUB_CLIENT_ID ?? '',
+      clientSecret: process.env.WALLET_GITHUB_CLIENT_SECRET ?? '',
+    },
+    oidc: {
+      issuer: process.env.WALLET_AUTH_OIDC_ISSUER?.trim() ?? '',
+      clientId: process.env.WALLET_AUTH_OIDC_CLIENT_ID?.trim() ?? '',
+      clientSecret: process.env.WALLET_AUTH_OIDC_CLIENT_SECRET?.trim() ?? '',
+    },
+    // Each entry was checked at boot by `identity-env.ts`.
+    returnUrls: parseReturnUrls(process.env.WALLET_AUTH_RETURN_URLS),
+    signersHorizonUrl: (
+      process.env.WALLET_AUTH_SIGNERS_HORIZON_URL?.trim() ||
+      DEFAULT_HORIZON.public
+    ).replace(/\/+$/, ''),
+    sponsor: {
+      secret: process.env.WALLET_RECOVERY_SPONSOR_SECRET?.trim() ?? '',
+      networkPassphrase:
+        process.env.WALLET_RECOVERY_SPONSOR_NETWORK_PASSPHRASE?.trim() ||
+        NETWORK_PASSPHRASE_PUBLIC,
+      horizonUrl: (
+        process.env.WALLET_RECOVERY_SPONSOR_HORIZON_URL?.trim() ||
+        DEFAULT_HORIZON.public
+      ).replace(/\/+$/, ''),
+    },
     timeoutMs: parseInt(
-      process.env.POLLAR_TIMEOUT_MS ?? String(DEFAULT_POLLAR_TIMEOUT_MS),
-      10,
-    ),
-    authorizationTtlMs: parseInt(
-      process.env.POLLAR_AUTHORIZATION_TTL_MS ??
-        String(DEFAULT_POLLAR_AUTHORIZATION_TTL_MS),
-      10,
-    ),
-    codeTtlMs: parseInt(
-      process.env.POLLAR_CODE_TTL_MS ?? String(DEFAULT_POLLAR_CODE_TTL_MS),
-      10,
-    ),
-    loginWaitMs: parseInt(
-      process.env.POLLAR_LOGIN_WAIT_MS ?? String(DEFAULT_POLLAR_LOGIN_WAIT_MS),
+      process.env.WALLET_AUTH_TIMEOUT_MS ??
+        String(DEFAULT_WALLET_AUTH_TIMEOUT_MS),
       10,
     ),
     sweep: {
-      // Default on: a handshake row outlives its usefulness in minutes, and an
-      // AUTHORIZED row left behind is a redeemable code sitting in the table.
+      // Default on: an AUTHORIZED handshake left in the table is a redeemable
+      // sign-in sitting there.
       enabled:
-        (process.env.POLLAR_SWEEP_ENABLED ?? 'true').toLowerCase() !== 'false',
+        (process.env.WALLET_AUTH_SWEEP_ENABLED ?? 'true').toLowerCase() !==
+        'false',
       intervalMs: parseInt(
-        process.env.POLLAR_SWEEP_INTERVAL_MS ??
-          String(DEFAULT_POLLAR_SWEEP_INTERVAL_MS),
+        process.env.WALLET_AUTH_SWEEP_INTERVAL_MS ??
+          String(DEFAULT_WALLET_AUTH_SWEEP_INTERVAL_MS),
+        10,
+      ),
+    },
+  },
+  recovery: {
+    role:
+      process.env.RECOVERY_ROLE === 'a' || process.env.RECOVERY_ROLE === 'b'
+        ? process.env.RECOVERY_ROLE
+        : null,
+    publicBaseUrl: (process.env.RECOVERY_PUBLIC_BASE_URL ?? '')
+      .trim()
+      .replace(/\/+$/, ''),
+    homeDomain: process.env.RECOVERY_HOME_DOMAIN?.trim() ?? '',
+    networkPassphrase:
+      process.env.RECOVERY_NETWORK_PASSPHRASE?.trim() ||
+      NETWORK_PASSPHRASE_PUBLIC,
+    horizonUrl: (
+      process.env.RECOVERY_HORIZON_URL?.trim() || DEFAULT_HORIZON.public
+    ).replace(/\/+$/, ''),
+    signerMaster: process.env.RECOVERY_SIGNER_MASTER?.trim() ?? '',
+    sep10SigningSecret: process.env.RECOVERY_SEP10_SIGNING_SECRET?.trim() ?? '',
+    jwtSecret: process.env.RECOVERY_JWT_SECRET?.trim() ?? '',
+    oidc: {
+      issuer: process.env.RECOVERY_OIDC_ISSUER?.trim() ?? '',
+      audiences: (process.env.RECOVERY_OIDC_AUDIENCES ?? '')
+        .split(',')
+        .map((a) => a.trim())
+        .filter(Boolean),
+    },
+    emailDelivery: {
+      url: process.env.RECOVERY_EMAIL_DELIVERY_URL?.trim() ?? '',
+      secret: process.env.RECOVERY_EMAIL_DELIVERY_SECRET?.trim() ?? '',
+    },
+    timeoutMs: parseInt(
+      process.env.RECOVERY_TIMEOUT_MS ?? String(DEFAULT_RECOVERY_TIMEOUT_MS),
+      10,
+    ),
+    sweep: {
+      enabled:
+        (process.env.RECOVERY_SWEEP_ENABLED ?? 'true').toLowerCase() !==
+        'false',
+      intervalMs: parseInt(
+        process.env.RECOVERY_SWEEP_INTERVAL_MS ??
+          String(DEFAULT_RECOVERY_SWEEP_INTERVAL_MS),
         10,
       ),
     },
   },
 });
-
-/**
- * The `Origin` header the bridge presents to Pollar's SDK API.
- *
- * That API is built for a browser SDK and enforces the app's Build -> Domains
- * list on every call, so a request with no `Origin` — which is every request a
- * server makes — comes back `403 ORIGIN_NOT_ALLOWED`, on the very first call of
- * the login flow.
- *
- * The default is the origin of `POLLAR_BRIDGE_CALLBACK_URL`, because that host
- * already has to be registered under Build -> Domains for the redirect to work
- * at all: one registration, not two, and no new variable to forget.
- * `POLLAR_SDK_ORIGIN` overrides it for the deployment where the callback is
- * served from a different host than the one Pollar has on its list.
- */
-function pollarSdkOrigin(): string {
-  const explicit = process.env.POLLAR_SDK_ORIGIN?.trim();
-  if (explicit) return explicit.replace(/\/+$/, '');
-
-  const callback = process.env.POLLAR_BRIDGE_CALLBACK_URL?.trim();
-  if (!callback) return '';
-  try {
-    return new URL(callback).origin;
-  } catch {
-    // A malformed callback URL is already reported by env validation; there is
-    // nothing useful to send, and an empty header is the same as none.
-    return '';
-  }
-}
