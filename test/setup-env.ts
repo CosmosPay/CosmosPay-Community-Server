@@ -28,3 +28,13 @@ process.env.BLINDPAY_INSTANCE_ID = 'in_test';
 process.env.BLINDPAY_WEBHOOK_SECRET = `whsec_${Buffer.from(
   'e2e-blindpay-webhook-key',
 ).toString('base64')}`;
+// The wallet return URL the callback suite redirects to. Pinned for the same
+// reason as the BlindPay trio: a developer's .env may list others.
+process.env.WALLET_AUTH_RETURN_URLS = 'cosmoswallet://auth/done';
+// No Authentik: a developer's .env usually points at a local one, which would
+// change what GET /v1/wallet/auth/providers reports here and nowhere in CI.
+// Empty rather than deleted, because dotenv does not overwrite a set variable;
+// all three, because identity-env refuses the trio half-configured.
+process.env.WALLET_AUTH_OIDC_ISSUER = '';
+process.env.WALLET_AUTH_OIDC_CLIENT_ID = '';
+process.env.WALLET_AUTH_OIDC_CLIENT_SECRET = '';

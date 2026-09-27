@@ -7,6 +7,7 @@ import {
   DEFAULT_WALLET_AUTH_TIMEOUT_MS,
   NETWORK_PASSPHRASE_PUBLIC,
 } from '@/config/config.constants';
+import { parseReturnUrls } from '@/common/return-url';
 import {
   parseRedirectUrlWhitelist,
   type RedirectUrlWhitelist,
@@ -204,6 +205,14 @@ export interface AppConfig {
      * sources. Empty strings disable it.
      */
     oidc: { issuer: string; clientId: string; clientSecret: string };
+    /**
+     * The app URLs a provider callback may send the browser back to, for a
+     * native wallet whose auth session (`ASWebAuthenticationSession`, a Custom
+     * Tab, a desktop app's deep link or loopback listener) only closes when the
+     * browser reaches a URL the app owns. Exact match; a loopback entry matches
+     * any port. Empty means every callback renders the page instead.
+     */
+    returnUrls: string[];
     /**
      * The Horizon that says who may sign for an account, for a RECOVERED wallet
      * whose key is no longer its address. One, chosen by the operator — never by
@@ -463,6 +472,8 @@ export default (): AppConfig => ({
       clientId: process.env.WALLET_AUTH_OIDC_CLIENT_ID?.trim() ?? '',
       clientSecret: process.env.WALLET_AUTH_OIDC_CLIENT_SECRET?.trim() ?? '',
     },
+    // Each entry was checked at boot by `identity-env.ts`.
+    returnUrls: parseReturnUrls(process.env.WALLET_AUTH_RETURN_URLS),
     signersHorizonUrl: (
       process.env.WALLET_AUTH_SIGNERS_HORIZON_URL?.trim() ||
       DEFAULT_HORIZON.public

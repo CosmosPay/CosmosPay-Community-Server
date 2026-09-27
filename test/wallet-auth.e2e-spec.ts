@@ -168,13 +168,54 @@ describe('Wallet sign-in guards (e2e)', () => {
       // No consumer is read on a public route, so nothing here can 401/403.
       expect(res.text).not.toContain('no_authenticated_consumer');
     });
+
+    /* A native wallet's auth session closes only on the wallet's own URL. */
+    it('sends the browser back to an allowlisted returnTo with only the state', async () => {
+      prismaMock.walletAuthHandshake.findUnique.mockResolvedValueOnce({
+        state: 'st',
+        provider: 'GOOGLE',
+        codeChallenge: 'c',
+        status: 'PENDING',
+        expiresAt: new Date(Date.now() + 60_000),
+        returnTo: 'cosmoswallet://auth/done',
+      });
+
+      const res = await request(http())
+        .get(`${path}?state=st&error=access_denied`)
+        .expect(302);
+
+      expect(res.headers.location).toBe(
+        'cosmoswallet://auth/done?state=st&error=denied',
+      );
+    });
+
+    /* Whatever the row says, only the deployment's list is ever redirected to. */
+    it('renders the page for a returnTo the deployment does not list', async () => {
+      prismaMock.walletAuthHandshake.findUnique.mockResolvedValueOnce({
+        state: 'st',
+        provider: 'GOOGLE',
+        codeChallenge: 'c',
+        status: 'PENDING',
+        expiresAt: new Date(Date.now() + 60_000),
+        returnTo: 'https://evil.example.com/done',
+      });
+
+      const res = await request(http())
+        .get(`${path}?state=st&error=access_denied`)
+        .expect(200);
+
+      expect(res.headers.location).toBeUndefined();
+      expect(res.headers['content-type']).toMatch(/text\/html/);
+    });
   });
 
   describe('the wallet routes', () => {
     it('admits the shared public key, which is all a wallet has before it has an account', async () => {
-      await asPublicKey(
+      const res = await asPublicKey(
         request(http()).get('/v1/wallet/auth/providers'),
       ).expect(200);
+      // No Authentik in this suite, so there are no second factors to manage.
+      expect(res.body.mfaSettingsUrl).toBeNull();
     });
 
     it('admits an account key too', async () => {
@@ -198,6 +239,22 @@ describe('Wallet sign-in guards (e2e)', () => {
           codeChallenge: 'short',
           codeChallengeMethod: 'S256',
         }),
+      ).expect(400);
+
+      expect(res.body.code).toBe('validation_failed');
+      expect(prismaMock.walletAuthHandshake.create).not.toHaveBeenCalled();
+    });
+
+    it('refuses an oversized returnTo before it touches the database', async () => {
+      const res = await asPublicKey(
+        request(http())
+          .post('/v1/wallet/auth/oauth/authorize')
+          .send({
+            provider: 'google',
+            codeChallenge: 'c'.repeat(43),
+            codeChallengeMethod: 'S256',
+            returnTo: `cosmoswallet://auth/${'x'.repeat(600)}`,
+          }),
       ).expect(400);
 
       expect(res.body.code).toBe('validation_failed');

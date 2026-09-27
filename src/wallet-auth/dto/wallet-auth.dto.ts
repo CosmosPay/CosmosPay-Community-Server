@@ -12,7 +12,10 @@ import {
   MaxLength,
   MinLength,
 } from 'class-validator';
-import { BACKUP_BOX_MAX_CHARS } from '@/wallet-auth/wallet-auth.constants';
+import {
+  BACKUP_BOX_MAX_CHARS,
+  RETURN_URL_MAX_CHARS,
+} from '@/wallet-auth/wallet-auth.constants';
 
 /**
  * The providers a client may name. Lowercase, which is the wire spelling —
@@ -69,6 +72,22 @@ export class StartWalletOauthDto {
   })
   @IsIn(['S256'])
   codeChallengeMethod!: string;
+
+  @ApiPropertyOptional({
+    description:
+      'A native wallet’s own URL — a custom scheme, a universal/app link, or ' +
+      '`http://127.0.0.1:<port>/…` from a desktop app. When set, the callback ' +
+      'answers `302` to it with `?state=…` (plus `&error=<reason>` on failure) ' +
+      'instead of rendering a page, which is what closes the platform’s auth ' +
+      'session. Must be listed in the deployment’s `WALLET_AUTH_RETURN_URLS` ' +
+      '(a loopback entry matches any port). Only the `state` travels: the ' +
+      'handshake is still redeemed with the verifier.',
+    example: 'cosmoswallet://auth/done',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(RETURN_URL_MAX_CHARS)
+  returnTo?: string;
 }
 
 export class ClaimWalletOauthDto {

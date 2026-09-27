@@ -4513,8 +4513,13 @@ paths:
                 type: integer
                 example: 42
         "400":
-          description: "`wallet_provider_unavailable` — That provider is unknown, or not
-            configured on this deployment"
+          description: >-
+            `wallet_provider_unavailable` — That provider is unknown, or not
+            configured on this deployment
+
+
+            `wallet_return_url_not_allowed` — The return URL is not one this
+            deployment redirects to
           content:
             application/json:
               schema:
@@ -4528,6 +4533,17 @@ paths:
                     code: wallet_provider_unavailable
                     error: Bad Request
                     message: google sign-in is not configured on this deployment.
+                    path: /v1/wallet/auth/oauth/authorize
+                    timestamp: 2026-09-01T12:00:00.000Z
+                wallet_return_url_not_allowed:
+                  summary: wallet_return_url_not_allowed — The return URL is not one this
+                    deployment redirects to
+                  value:
+                    statusCode: 400
+                    code: wallet_return_url_not_allowed
+                    error: Bad Request
+                    message: returnTo is not one of this deployment’s wallet return URLs
+                      (WALLET_AUTH_RETURN_URLS).
                     path: /v1/wallet/auth/oauth/authorize
                     timestamp: 2026-09-01T12:00:00.000Z
         "401":
@@ -4568,8 +4584,9 @@ paths:
     get:
       description: "Not called by your code — the person’s browser lands here. Public
         by necessity: a navigation carries no API key and no gateway consumer.
-        It renders a page and nothing else; the identity is collected by the
-        device that holds the PKCE verifier. Register
+        It renders a page — or, when the handshake was opened with a `returnTo`,
+        redirects to it with the `state` — and nothing else; the identity is
+        collected by the device that holds the PKCE verifier. Register
         `{WALLET_AUTH_PUBLIC_BASE_URL}/v1/wallet/auth/oauth/callback/{provider}`
         with each provider."
       operationId: WalletAuthController_callback_v1
@@ -4579,6 +4596,7 @@ paths:
           in: path
           schema:
             enum:
+              - authentik
               - google
               - github
             type: string
@@ -4600,6 +4618,16 @@ paths:
             identity or a token.
           content:
             text/html:
+              schema:
+                type: string
+        "302":
+          description: "The handshake was opened with a `returnTo`: the browser is sent
+            there with `?state=…`, plus `&error=<reason>` when the sign-in did
+            not succeed. The same reason tokens the poll reports; never the
+            identity."
+          headers:
+            Location:
+              description: The wallet return URL with `state` (and `error`).
               schema:
                 type: string
         "400":
@@ -10991,9 +11019,20 @@ components:
           type: boolean
           description: Whether the email-code door works here. False when no console is
             configured to deliver the mail.
+        mfaSettingsUrl:
+          type: string
+          nullable: true
+          example: https://auth.example.com/if/user/#/settings;{"page":"page-credentials"}
+          description: The page of the person’s Cosmos Pay (Authentik) account where they
+            add or remove a second factor — a security key or passkey, an
+            authenticator app, recovery codes — to open in a browser. It goes
+            through the Authentik login first when there is no session. A second
+            factor is optional — the sign-in only offers one — so offer this as
+            a setting. Null when this deployment has no Authentik.
       required:
         - providers
         - email
+        - mfaSettingsUrl
     StartWalletOauthDto:
       type: object
       properties:
@@ -11020,6 +11059,17 @@ components:
             `forbidNonWhitelisted`. Pinned rather than defaulted, because
             `plain` is the one value that would make the verifier no secret at
             all."
+        returnTo:
+          type: string
+          description: "A native wallet’s own URL — a custom scheme, a universal/app link,
+            or `http://127.0.0.1:<port>/…` from a desktop app. When set, the
+            callback answers `302` to it with `?state=…` (plus `&error=<reason>`
+            on failure) instead of rendering a page, which is what closes the
+            platform’s auth session. Must be listed in the deployment’s
+            `WALLET_AUTH_RETURN_URLS` (a loopback entry matches any port). Only
+            the `state` travels: the handshake is still redeemed with the
+            verifier."
+          example: cosmoswallet://auth/done
       required:
         - provider
         - codeChallenge
@@ -11824,6 +11874,7 @@ components:
             - wallet_backup_invalid
             - wallet_account_mismatch
             - wallet_provider_unavailable
+            - wallet_return_url_not_allowed
             - wallet_recovery_setup_refused
             - misconfigured
             - internal_error

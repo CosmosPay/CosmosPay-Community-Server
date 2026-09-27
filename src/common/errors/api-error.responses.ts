@@ -350,6 +350,13 @@ export const API_ERROR_CASES: Readonly<Record<ApiErrorCode, ApiErrorCase>> = {
     message: 'google sign-in is not configured on this deployment.',
     path: '/v1/wallet/auth/oauth/authorize',
   },
+  [ApiErrorCode.WalletReturnUrlNotAllowed]: {
+    statuses: [400],
+    summary: 'The return URL is not one this deployment redirects to',
+    message:
+      'returnTo is not one of this deployment’s wallet return URLs (WALLET_AUTH_RETURN_URLS).',
+    path: '/v1/wallet/auth/oauth/authorize',
+  },
 
   // --- service --------------------------------------------------------------
   [ApiErrorCode.Misconfigured]: {

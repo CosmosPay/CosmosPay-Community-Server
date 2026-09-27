@@ -29,6 +29,21 @@ export class WalletAuthProvidersEntity {
       'configured to deliver the mail.',
   })
   email!: boolean;
+
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    example:
+      'https://auth.example.com/if/user/#/settings;{"page":"page-credentials"}',
+    description:
+      'The page of the person’s Cosmos Pay (Authentik) account where they add ' +
+      'or remove a second factor — a security key or passkey, an ' +
+      'authenticator app, recovery codes — to open in a browser. It goes ' +
+      'through the Authentik login first when there is no session. A second ' +
+      'factor is optional — the sign-in only offers one — so offer this as a ' +
+      'setting. Null when this deployment has no Authentik.',
+  })
+  mfaSettingsUrl!: string | null;
 }
 
 export class WalletOauthStartedEntity {

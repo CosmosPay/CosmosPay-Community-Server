@@ -10,6 +10,7 @@ import { Keypair } from '@stellar/stellar-sdk';
 import { AppConfig } from '@/config/configuration';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { OidcService } from '@/common/oidc/oidc.service';
+import { isReturnUrlAllowed, returnRedirectUrl } from '@/common/return-url';
 import { openJson, sealJson } from '@/common/sealed-box';
 import { PrismaService } from '@/prisma/prisma.service';
 import {
@@ -25,6 +26,7 @@ import {
   LOGIN_CODE_TTL_MS,
   OIDC_MAX_AGE_S,
   SESSION_TTL_MS,
+  AUTHENTIK_MFA_SETTINGS_PATH,
 } from '@/wallet-auth/wallet-auth.constants';
 import {
   PROVIDER_ENDPOINTS,
@@ -48,6 +50,7 @@ import {
   randomToken,
   readSessionToken,
   recoverySetupMessage,
+  mfaSettingsUrl,
   sha256Hex,
   signedAtFresh,
   sixDigitCode,
@@ -91,6 +94,12 @@ export interface CallbackOutcome {
     | 'email_unverified'
     | 'profile_invalid'
     | 'failed';
+  /**
+   * The wallet's own URL to send the browser to, with the `state` and reason,
+   * instead of rendering a page. Only when the handshake asked for one and it is
+   * still allowlisted; null renders the page.
+   */
+  redirectTo: string | null;
 }
 
 /**
@@ -199,7 +208,11 @@ export class WalletAuthService {
    * compiled-in list is how a self-hosted deployment with no Google credentials
    * shows a Google button that dies at the consent screen.
    */
-  providers(): { providers: string[]; email: boolean } {
+  providers(): {
+    providers: string[];
+    email: boolean;
+    mfaSettingsUrl: string | null;
+  } {
     // Authentik first: where it is configured it is the door to prefer.
     const available = (
       [
@@ -210,7 +223,15 @@ export class WalletAuthService {
     )
       .filter((p) => this.credentials(p) !== null)
       .map((p) => PROVIDER_WIRE[p]);
-    return { providers: available, email: this.emailAvailable() };
+    return {
+      providers: available,
+      email: this.emailAvailable(),
+      // Only with Authentik: the direct Google and GitHub doors have no second
+      // factor of this service's choosing to manage.
+      mfaSettingsUrl: this.credentials(WalletAuthProvider.AUTHENTIK)
+        ? mfaSettingsUrl(this.settings.oidc.issuer, AUTHENTIK_MFA_SETTINGS_PATH)
+        : null,
+    };
   }
 
   /** The email door needs somewhere to hand the code to. */
@@ -245,6 +266,13 @@ export class WalletAuthService {
       );
     }
     const baseUrl = this.requireBaseUrl();
+    const returnTo = dto.returnTo?.trim() || null;
+    if (returnTo && !isReturnUrlAllowed(returnTo, this.settings.returnUrls)) {
+      throw ApiError.badRequest(
+        ApiErrorCode.WalletReturnUrlNotAllowed,
+        'returnTo is not one of this deployment’s wallet return URLs (WALLET_AUTH_RETURN_URLS).',
+      );
+    }
 
     const state = randomToken();
     const expiresAt = new Date(Date.now() + HANDSHAKE_TTL_MS);
@@ -278,6 +306,7 @@ export class WalletAuthService {
         expiresAt,
         providerVerifier: oidc?.verifier ?? null,
         nonce: oidc?.nonce ?? null,
+        returnTo,
       },
     });
 
@@ -303,8 +332,9 @@ export class WalletAuthService {
    * Where the provider returns the browser.
    *
    * Everything this learns is written to the handshake row; nothing is handed to
-   * the browser but a page. The device collects the identity by presenting the
-   * verifier, which the browser never had.
+   * the browser but a page, or a redirect to the wallet carrying the `state` it
+   * already had. The device collects the identity by presenting the verifier,
+   * which the browser never had.
    */
   async handleCallback(
     providerWire: string,
@@ -312,11 +342,16 @@ export class WalletAuthService {
   ): Promise<CallbackOutcome> {
     const provider = providerFromWire(providerWire);
     const state = params.state?.trim();
-    if (!provider || !state) return { ok: false, reason: 'expired' };
+    if (!provider || !state)
+      return { ok: false, reason: 'expired', redirectTo: null };
 
     const handshake = await this.prisma.walletAuthHandshake.findUnique({
       where: { state },
     });
+    const outcome = this.callbackOutcome(
+      handshake?.provider === provider ? handshake.returnTo : null,
+      state,
+    );
     // A handshake that is not PENDING has already been answered, and answering
     // it twice is how a second callback overwrites the first one's identity.
     if (
@@ -325,12 +360,12 @@ export class WalletAuthService {
       handshake.status !== WalletAuthHandshakeStatus.PENDING ||
       handshake.expiresAt.getTime() < Date.now()
     ) {
-      return { ok: false, reason: 'expired' };
+      return outcome('expired');
     }
 
     if (params.error || !params.code) {
       await this.failHandshake(state, 'denied');
-      return { ok: false, reason: 'denied' };
+      return outcome('denied');
     }
 
     let identity: ReadIdentity;
@@ -343,12 +378,12 @@ export class WalletAuthService {
         }`,
       );
       await this.failHandshake(state, 'failed');
-      return { ok: false, reason: 'failed' };
+      return outcome('failed');
     }
 
     if (!identity.ok) {
       await this.failHandshake(state, identity.error);
-      return { ok: false, reason: identity.error };
+      return outcome(identity.error);
     }
 
     // Conditional on PENDING, so two callbacks racing on one `state` cannot both
@@ -367,8 +402,29 @@ export class WalletAuthService {
         nonce: null,
       },
     });
-    if (written.count !== 1) return { ok: false, reason: 'expired' };
-    return { ok: true, reason: 'ok' };
+    if (written.count !== 1) return outcome('expired');
+    return outcome('ok');
+  }
+
+  /**
+   * Builds the callback's outcomes for one handshake. The return URL is checked
+   * against the allowlist again here, not only when the handshake was opened: an
+   * operator who removes an entry expects it to stop being redirected to now,
+   * not ten minutes from now.
+   */
+  private callbackOutcome(
+    returnTo: string | null,
+    state: string,
+  ): (reason: CallbackOutcome['reason']) => CallbackOutcome {
+    const target =
+      returnTo && isReturnUrlAllowed(returnTo, this.settings.returnUrls)
+        ? returnTo
+        : null;
+    return (reason) => ({
+      ok: reason === 'ok',
+      reason,
+      redirectTo: target ? returnRedirectUrl(target, state, reason) : null,
+    });
   }
 
   private async failHandshake(state: string, failure: string): Promise<void> {

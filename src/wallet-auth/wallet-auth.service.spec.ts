@@ -48,6 +48,7 @@ const SETTINGS = {
   google: { clientId: 'gid', clientSecret: 'gsecret' },
   github: { clientId: '', clientSecret: '' },
   oidc: { issuer: '', clientId: '', clientSecret: '' },
+  returnUrls: [] as string[],
   signersHorizonUrl: 'https://horizon.example.com',
   sponsor: {
     secret: '',
@@ -131,6 +132,7 @@ describe('WalletAuthService', () => {
       expect(service.providers()).toEqual({
         providers: ['google'],
         email: true,
+        mfaSettingsUrl: null,
       });
     });
 
@@ -181,6 +183,131 @@ describe('WalletAuthService', () => {
       expect(url.searchParams.get('redirect_uri')).toBe(
         'https://api.example.com/v1/wallet/auth/oauth/callback/google',
       );
+    });
+
+    it('stores an allowlisted returnTo on the handshake', async () => {
+      const { service, prisma } = makeService({
+        returnUrls: ['cosmoswallet://auth/done', 'http://127.0.0.1/auth/done'],
+      });
+      prisma.walletAuthHandshake.create.mockResolvedValue({});
+
+      await service.startOauth({
+        provider: 'google',
+        codeChallenge: 'c'.repeat(43),
+        codeChallengeMethod: 'S256',
+        returnTo: 'http://127.0.0.1:53682/auth/done',
+      });
+
+      expect(
+        prisma.walletAuthHandshake.create.mock.calls[0][0].data.returnTo,
+      ).toBe('http://127.0.0.1:53682/auth/done');
+    });
+
+    /* The callback redirects to it, so anything unlisted is an open redirect. */
+    it('refuses a returnTo the deployment does not list, before writing anything', async () => {
+      const { service, prisma } = makeService({
+        returnUrls: ['cosmoswallet://auth/done'],
+      });
+
+      await expect(
+        service.startOauth({
+          provider: 'google',
+          codeChallenge: 'c'.repeat(43),
+          codeChallengeMethod: 'S256',
+          returnTo: 'https://evil.example.com/auth/done',
+        }),
+      ).rejects.toMatchObject({ code: ApiErrorCode.WalletReturnUrlNotAllowed });
+      expect(prisma.walletAuthHandshake.create).not.toHaveBeenCalled();
+    });
+
+    it('stores no returnTo when none was asked for', async () => {
+      const { service, prisma } = makeService();
+      prisma.walletAuthHandshake.create.mockResolvedValue({});
+
+      await service.startOauth({
+        provider: 'google',
+        codeChallenge: 'c'.repeat(43),
+        codeChallengeMethod: 'S256',
+      });
+
+      expect(
+        prisma.walletAuthHandshake.create.mock.calls[0][0].data.returnTo,
+      ).toBeNull();
+    });
+  });
+
+  describe('handleCallback with a returnTo', () => {
+    const pending = (returnTo: string | null) => ({
+      state: 'st',
+      provider: WalletAuthProvider.GOOGLE,
+      status: WalletAuthHandshakeStatus.PENDING,
+      expiresAt: new Date(NOW + 60_000),
+      returnTo,
+    });
+
+    it('sends a refusal back to the wallet with the state and reason', async () => {
+      const { service, prisma } = makeService({
+        returnUrls: ['cosmoswallet://auth/done'],
+      });
+      prisma.walletAuthHandshake.findUnique.mockResolvedValue(
+        pending('cosmoswallet://auth/done'),
+      );
+      prisma.walletAuthHandshake.updateMany.mockResolvedValue({ count: 1 });
+
+      expect(
+        await service.handleCallback('google', {
+          state: 'st',
+          error: 'access_denied',
+        }),
+      ).toEqual({
+        ok: false,
+        reason: 'denied',
+        redirectTo: 'cosmoswallet://auth/done?state=st&error=denied',
+      });
+    });
+
+    it('sends an already-answered handshake back as expired', async () => {
+      const { service, prisma } = makeService({
+        returnUrls: ['cosmoswallet://auth/done'],
+      });
+      prisma.walletAuthHandshake.findUnique.mockResolvedValue({
+        ...pending('cosmoswallet://auth/done'),
+        status: WalletAuthHandshakeStatus.AUTHORIZED,
+      });
+
+      expect(
+        (await service.handleCallback('google', { state: 'st', code: 'c' }))
+          .redirectTo,
+      ).toBe('cosmoswallet://auth/done?state=st&error=expired');
+    });
+
+    /* Removing an entry must stop redirects now, not when handshakes expire. */
+    it('renders the page when the return URL was delisted since the handshake opened', async () => {
+      const { service, prisma } = makeService({ returnUrls: [] });
+      prisma.walletAuthHandshake.findUnique.mockResolvedValue(
+        pending('cosmoswallet://auth/done'),
+      );
+      prisma.walletAuthHandshake.updateMany.mockResolvedValue({ count: 1 });
+
+      expect(
+        await service.handleCallback('google', {
+          state: 'st',
+          error: 'access_denied',
+        }),
+      ).toEqual({ ok: false, reason: 'denied', redirectTo: null });
+    });
+
+    it('never redirects for a handshake of another provider', async () => {
+      const { service, prisma } = makeService({
+        returnUrls: ['cosmoswallet://auth/done'],
+      });
+      prisma.walletAuthHandshake.findUnique.mockResolvedValue(
+        pending('cosmoswallet://auth/done'),
+      );
+
+      expect(
+        await service.handleCallback('github', { state: 'st', code: 'c' }),
+      ).toEqual({ ok: false, reason: 'expired', redirectTo: null });
     });
   });
 

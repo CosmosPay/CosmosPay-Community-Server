@@ -65,6 +65,33 @@ describe('assertIdentityConfigConsistent', () => {
     ).toThrow(/together/);
   });
 
+  /* A return URL that could redirect anywhere is an open redirect, not a typo. */
+  it('refuses a return URL the callback must never redirect to', () => {
+    const env = { APISIX_GATEWAY_SECRET: secret('g') };
+    expect(() =>
+      assertIdentityConfigConsistent({
+        ...env,
+        WALLET_AUTH_RETURN_URLS:
+          'cosmoswallet://auth/done, http://127.0.0.1/auth/done',
+      }),
+    ).not.toThrow();
+    expect(() =>
+      assertIdentityConfigConsistent({
+        ...env,
+        WALLET_AUTH_RETURN_URLS:
+          'cosmoswallet://auth/done,http://evil.example.com/done',
+      }),
+    ).toThrow(
+      /WALLET_AUTH_RETURN_URLS entry "http:\/\/evil.example.com\/done"/,
+    );
+    expect(() =>
+      assertIdentityConfigConsistent({
+        ...env,
+        WALLET_AUTH_RETURN_URLS: 'javascript://x/alert(1)',
+      }),
+    ).toThrow(/javascript/);
+  });
+
   it('boots a well-formed recovery server', () => {
     expect(() =>
       assertIdentityConfigConsistent(recoveryServer()),

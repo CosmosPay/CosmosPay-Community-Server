@@ -138,7 +138,10 @@ export class WalletAuthController {
   @ApiOkResponse({ type: WalletOauthStartedEntity })
   @ApiErrorResponse({
     status: 400,
-    codes: [ApiErrorCode.WalletProviderUnavailable],
+    codes: [
+      ApiErrorCode.WalletProviderUnavailable,
+      ApiErrorCode.WalletReturnUrlNotAllowed,
+    ],
   })
   @ApiErrorResponse({
     status: 503,
@@ -149,7 +152,7 @@ export class WalletAuthController {
   }
 
   /**
-   * Where Google or GitHub returns the browser.
+   * Where Authentik, Google or GitHub returns the browser.
    *
    * Documented rather than hidden: this URL is something the operator registers
    * with each provider, so leaving it out of the contract hides the one part of
@@ -163,12 +166,13 @@ export class WalletAuthController {
     description:
       'Not called by your code — the person’s browser lands here. Public by ' +
       'necessity: a navigation carries no API key and no gateway consumer. It ' +
-      'renders a page and nothing else; the identity is collected by the device ' +
-      'that holds the PKCE verifier. Register ' +
+      'renders a page — or, when the handshake was opened with a `returnTo`, ' +
+      'redirects to it with the `state` — and nothing else; the identity is ' +
+      'collected by the device that holds the PKCE verifier. Register ' +
       '`{WALLET_AUTH_PUBLIC_BASE_URL}/v1/wallet/auth/oauth/callback/{provider}` ' +
       'with each provider.',
   })
-  @ApiParam({ name: 'provider', enum: ['google', 'github'] })
+  @ApiParam({ name: 'provider', enum: ['authentik', 'google', 'github'] })
   @ApiQuery({ name: 'code', required: false })
   @ApiQuery({ name: 'state', required: false })
   @ApiQuery({ name: 'error', required: false })
@@ -178,6 +182,19 @@ export class WalletAuthController {
       'A "you can go back to your wallet" page. It never contains the identity ' +
       'or a token.',
     content: { 'text/html': { schema: { type: 'string' } } },
+  })
+  @ApiResponse({
+    status: 302,
+    description:
+      'The handshake was opened with a `returnTo`: the browser is sent there ' +
+      'with `?state=…`, plus `&error=<reason>` when the sign-in did not ' +
+      'succeed. The same reason tokens the poll reports; never the identity.',
+    headers: {
+      Location: {
+        description: 'The wallet return URL with `state` (and `error`).',
+        schema: { type: 'string' },
+      },
+    },
   })
   async callback(
     @Param('provider') provider: string,
@@ -191,8 +208,14 @@ export class WalletAuthController {
       state,
       error,
     });
-    // Always 200 with a page. A status code is for the client that made the
-    // request, and the client here is a person looking at a browser window.
+    // A native wallet's auth session closes only when the browser reaches the
+    // wallet's own URL, so a handshake opened with one is sent back there.
+    if (outcome.redirectTo) {
+      res.redirect(302, outcome.redirectTo);
+      return;
+    }
+    // Otherwise always 200 with a page. A status code is for the client that
+    // made the request, and the client here is a person looking at a browser.
     res.status(200).type('text/html').send(callbackPage(outcome));
   }
 

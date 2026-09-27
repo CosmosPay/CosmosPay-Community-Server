@@ -79,6 +79,7 @@ prisma/schema.prisma              Consumer, PaymentIntent, Swap, LiquidityPoolOp
 test/                             e2e suites: gateway gate, admin + alias console gates,
                                   payment intents, swaps, liquidity pools, KYC, webhooks
 scripts/                          OpenAPI generator, README check, operator scripts
+deploy/authentik/                 Authentik blueprint: the wallet sign-in and sign-up
 docs/i18n/                        this README in es, pt, de, fr, hi, zh
 ```
 
@@ -794,6 +795,8 @@ KYC_REDIRECT_URL_WHITELIST={"cosmos_acme":["acme.com","app.acme.com"]}
 | `POST /v1/wallet/auth/finish` 和 `POST /v1/wallet/recovery/setup` 从 `X-Wallet-Session: {sessionToken}` 读取会话令牌。`Authorization: Bearer` 仍会读取，但只有直接调用时才能到达服务 | 钱包：在 API key 之外发送 `X-Wallet-Session` | 网关在代理前会移除 `Authorization`（以及 `apikey`），因此经由 APISIX 时令牌从未到达，两个路由都返回 `401 wallet_session_invalid` |
 | 通过 Authentik 的钱包登录改为请求 `max_age=300` 而非 `prompt=login`，且 ID token 的 `auth_time` 必须在这 5 分钟内（否则回调以 `profile_invalid` 失败）。将 Google / GitHub 作为 Authentik 源时，把 `default-source-authentication` 设为 *Authentication: No requirement* | 使用 Authentik 社交源的运维人员 | 在 `prompt=login` 下，Authentik 会让没有会话的浏览器登录两次，而通过源的第二次登录会被 "Flow does not apply to current user" 拒绝 |
 | `POST /v1/wallet/auth/finish` 和 `PUT /v1/wallet/backup` 现在也接受 `v: 3` 备份盒：种子由一个随机数据密钥加密，该密钥在 `slots` 中按每扇门各封装一次（`kind: "password"` 或 `kind: "passkey"`，最多 8 个）。每个密码门都与 `v: 2` 盒遵守同样的 PBKDF2 下限；passkey 门没有成本，因为其密钥是认证器的 WebAuthn PRF 输出。`v: 2` 盒保持不变 | 钱包：仅含 passkey 的备份是有效的，写入这种备份的钱包需要此服务器 | 让用户用 passkey 而不是输入原密码来恢复，且本服务从不持有能打开备份盒的密钥 |
+| `POST /v1/wallet/auth/oauth/authorize` 接受可选的 `returnTo`。当它列在 `WALLET_AUTH_RETURN_URLS` 中时，`GET /v1/wallet/auth/oauth/callback/{provider}` 不再渲染页面，而是以 `302` 重定向到它，附带 `?state=…`（失败时另加 `&error=<reason>`）；未列出的返回 `400 wallet_return_url_not_allowed`。只传递 `state`——握手仍需用 PKCE verifier 兑换。请先执行迁移 `20260927180000_wallet_auth_return_to` | 原生钱包（桌面和移动端）：发送 `returnTo` 并在操作系统中注册该 URL | 平台的认证会话（`ASWebAuthenticationSession`、Custom Tab、桌面 deep link 或 loopback 监听）只有在浏览器到达应用自己的 URL 时才会关闭，因此用户会停留在页面上，只能手动关闭 |
+| `GET /v1/wallet/auth/providers` 还会返回 `mfaSettingsUrl`：Authentik 账户中用户添加或移除第二因素（安全密钥或 passkey、身份验证器应用、恢复码）的页面，没有会话时先经过 Authentik 登录；没有 Authentik 时为 `null`。钱包登录时第二因素是可选的——`deploy/authentik/wallet-sign-in.yaml` 将 MFA 阶段改回 *skip*，在输入密码后向已有因素的用户索取它，允许 passkey 在用户名页面直接登录，并在输入密码后为没有任何因素的用户提供选择（暂不、安全密钥、身份验证器应用）。它还在注册页面的表单上方加入 Google / GitHub。密码登录和注册保持不变 | 运行 Authentik 的运维：导入该 blueprint。钱包：将该 URL 作为一项设置提供 | 第二因素要么对所有人强制，要么无法到达：钱包用户从不打开 Authentik 自身的设置，设置 flow 会拒绝没有 Authentik 会话的浏览器，而识别阶段的 passwordless 按钮指向同一个 flow，只会重新加载页面 |
 
 随之而来的部署说明：
 
@@ -1002,6 +1005,7 @@ WHERE NOT i.indisvalid;
 | `BLINDPAY_WEBHOOK_SECRET_DEV` | 设置了开发 API key 时 | — | 开发实例 webhook 端点的 Svix 密钥；规则与 `BLINDPAY_WEBHOOK_SECRET` 相同 |
 | `BLINDPAY_TIMEOUT_MS` | 否 | `15000` | BlindPay HTTP 客户端超时（ms） |
 | `KYC_REDIRECT_URL_WHITELIST` | 否 | — | 按消费者划分的 KYC 重定向主机白名单 |
+| `WALLET_AUTH_RETURN_URLS` | 否 | — | 以逗号分隔的应用 URL，钱包登录回调可以重定向到这些地址（`POST /v1/wallet/auth/oauth/authorize` 的 `returnTo`）：自定义 scheme、universal/app link，或 `http://127.0.0.1/…`（任意端口）。精确匹配；回环地址之外的纯 http、带 query 或使用 `javascript:`/`data:`/`file:` 的条目在启动时被拒绝。未设置时，每个回调都渲染页面，`returnTo` 返回 `400 wallet_return_url_not_allowed` |
 | `RATE_LIMIT_ENABLED` | 否 | `true` | 对花费 XLM 的路由按地址设置上限。事故开关 |
 | `RATE_LIMIT_PRUNE_INTERVAL_MS` | 否 | `600000` | 计数器窗口清理间隔（ms，最小 1000） |
 

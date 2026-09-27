@@ -15,6 +15,7 @@ import {
   providerFromWire,
   recoverySetupMessage,
   readSessionToken,
+  mfaSettingsUrl,
   signedAtFresh,
   sixDigitCode,
   verifyWalletSignature,
@@ -581,5 +582,26 @@ describe('wallet-auth-core', () => {
       expect(fallbackName('ada@example.com', '  ')).toBe('ada');
       expect(fallbackName('ada@example.com', 'Ada')).toBe('Ada');
     });
+  });
+});
+
+describe('mfaSettingsUrl', () => {
+  const PATH = '/if/user/#/settings;{"page":"page-credentials"}';
+
+  it('serves the page from the issuer origin, not under its application path', () => {
+    expect(
+      mfaSettingsUrl('https://auth.example.com/application/o/wallet/', PATH),
+    ).toBe(`https://auth.example.com${PATH}`);
+  });
+
+  it('keeps a non-default port', () => {
+    expect(
+      mfaSettingsUrl('https://localhost:9444/application/o/wallet/', PATH),
+    ).toBe(`https://localhost:9444${PATH}`);
+  });
+
+  it('offers nothing for an issuer that is not a URL', () => {
+    expect(mfaSettingsUrl('', PATH)).toBeNull();
+    expect(mfaSettingsUrl('not a url', PATH)).toBeNull();
   });
 });

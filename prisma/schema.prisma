@@ -1280,6 +1280,12 @@ model WalletAuthHandshake {
   /// never prose, which cannot be translated on the device.
   failure String?
 
+  /// Where the callback sends the browser when it is done, instead of rendering
+  /// a page: a native wallet's own URL, which is what closes its auth session.
+  /// Checked against `WALLET_AUTH_RETURN_URLS` when the handshake is opened and
+  /// again at the callback. Null renders the page.
+  returnTo String?
+
   expiresAt DateTime
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

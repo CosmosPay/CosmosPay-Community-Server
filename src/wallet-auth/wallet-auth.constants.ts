@@ -29,6 +29,27 @@ export const HANDSHAKE_TTL_MS = 10 * 60 * 1000;
 export const OIDC_MAX_AGE_S = 5 * 60;
 
 /**
+ * The longest `returnTo` a wallet may send. An app URL is a scheme and a short
+ * path; anything near this is not one, and the column is stored per handshake.
+ */
+export const RETURN_URL_MAX_CHARS = 512;
+
+/**
+ * Where a person manages their second factors in Authentik — security keys and
+ * passkeys, authenticator apps, recovery codes — relative to its origin. A second
+ * factor is optional (the sign-in only offers one), so the wallet links here from
+ * its settings (`mfaSettingsUrl` on `GET /v1/wallet/auth/providers`).
+ *
+ * The user interface rather than a setup flow on purpose: a setup flow answers
+ * "Flow does not apply to current user" to a browser with no Authentik session,
+ * while this page sends it through the login first and keeps the `#` route, so
+ * the person lands on the MFA page either way.
+ */
+export const AUTHENTIK_MFA_SETTINGS_PATH =
+  '/if/user/#/settings;{"page":"page-credentials"}';
+('default-authenticator-webauthn-setup');
+
+/**
  * How long an emailed code lives.
  *
  * Fifteen minutes. The flow starts in the wallet and finishes in a mail client,

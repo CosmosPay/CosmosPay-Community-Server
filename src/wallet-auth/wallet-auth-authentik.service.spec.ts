@@ -56,6 +56,7 @@ const SETTINGS = {
   google: { clientId: '', clientSecret: '' },
   github: { clientId: '', clientSecret: '' },
   oidc: OIDC,
+  returnUrls: [] as string[],
   signersHorizonUrl: 'https://horizon.example.com',
   sponsor: {
     secret: '',
@@ -151,11 +152,20 @@ describe('WalletAuthService — Authentik and the recovery identity', () => {
     expect(service.providers().providers[0]).toBe('authentik');
   });
 
+  /* A second factor is optional: offered from the wallet's settings, never forced. */
+  it('points at the MFA settings page on the issuer origin', () => {
+    const { service } = makeService();
+    expect(service.providers().mfaSettingsUrl).toBe(
+      `${new URL(OIDC.issuer).origin}/if/user/#/settings;{"page":"page-credentials"}`,
+    );
+  });
+
   it('does not offer Authentik without an issuer', () => {
     const { service } = makeService({
       oidc: { issuer: '', clientId: 'x', clientSecret: 'y' },
     });
     expect(service.providers().providers).not.toContain('authentik');
+    expect(service.providers().mfaSettingsUrl).toBeNull();
   });
 
   it('opens a sign-in with its own PKCE pair and a nonce, held server-side', async () => {
@@ -222,7 +232,7 @@ describe('WalletAuthService — Authentik and the recovery identity', () => {
 
     expect(
       await service.handleCallback('authentik', { code: 'c', state: 'st' }),
-    ).toEqual({ ok: true, reason: 'ok' });
+    ).toEqual({ ok: true, reason: 'ok', redirectTo: null });
 
     const [url, init] = (global.fetch as jest.Mock).mock.calls[0];
     expect(url).toBe(DISCOVERY.tokenEndpoint);
@@ -252,6 +262,57 @@ describe('WalletAuthService — Authentik and the recovery identity', () => {
     expect(openJson(stored, SESSION_SECRET, ID_TOKEN_PURPOSE)).toEqual({
       idToken: 'the.id.token',
     });
+  });
+
+  /* A native wallet's auth session closes only on the wallet's own URL. */
+  it('redirects a finished sign-in to the wallet with the state and nothing else', async () => {
+    const { service, prisma, oidc } = makeService({
+      returnUrls: ['cosmoswallet://auth/done'],
+    });
+    oidc.discover.mockResolvedValue(DISCOVERY);
+    prisma.walletAuthHandshake.findUnique.mockResolvedValue({
+      state: 'st',
+      provider: WalletAuthProvider.AUTHENTIK,
+      status: WalletAuthHandshakeStatus.PENDING,
+      providerVerifier: 'pv',
+      nonce: 'the-nonce',
+      expiresAt: new Date(NOW + 60_000),
+      returnTo: 'cosmoswallet://auth/done',
+    });
+    prisma.walletAuthHandshake.updateMany.mockResolvedValue({ count: 1 });
+    global.fetch = jest
+      .fn()
+      .mockResolvedValue(
+        answer({ access_token: 'at', id_token: 'the.id.token' }),
+      );
+    oidc.verify.mockResolvedValue({
+      ok: true,
+      claims: {
+        email: EMAIL,
+        name: 'Ada',
+        picture: null,
+        sub: 'ak-1',
+        exp: 0,
+        iat: 0,
+        iss: OIDC.issuer,
+        authTime: 0,
+        emailVerified: true,
+      },
+    });
+
+    const outcome = await service.handleCallback('authentik', {
+      code: 'c',
+      state: 'st',
+    });
+
+    expect(outcome).toEqual({
+      ok: true,
+      reason: 'ok',
+      redirectTo: 'cosmoswallet://auth/done?state=st',
+    });
+    // The identity and the ID token stay on the row, for the verifier to claim.
+    expect(outcome.redirectTo).not.toContain(EMAIL);
+    expect(outcome.redirectTo).not.toContain('the.id.token');
   });
 
   /* Authentik signed for the address but never confirmed it. That is not a
@@ -290,7 +351,7 @@ describe('WalletAuthService — Authentik and the recovery identity', () => {
 
     expect(
       await service.handleCallback('authentik', { code: 'c', state: 'st' }),
-    ).toEqual({ ok: true, reason: 'ok' });
+    ).toEqual({ ok: true, reason: 'ok', redirectTo: null });
     expect(oidc.verify.mock.calls[0][1]).toMatchObject({
       allowUnverifiedEmail: true,
     });

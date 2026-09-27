@@ -1,5 +1,6 @@
 import { StrKey } from '@stellar/stellar-sdk';
 import { isProviderUrl } from '@/common/oidc/oidc-core';
+import { parseReturnUrls, returnUrlProblem } from '@/common/return-url';
 
 /**
  * Boot-time rules for the wallet sign-in and the recovery servers.
@@ -117,6 +118,16 @@ export function assertIdentityConfigConsistent(env: Env): void {
       );
     }
   }
+  // Refused whole rather than skipped entry by entry: a typo here is a wallet
+  // whose sign-in sheet never closes, and an entry that would redirect anywhere
+  // off the service's own domain is the one mistake this list exists to stop.
+  for (const entry of parseReturnUrls(read(env, 'WALLET_AUTH_RETURN_URLS'))) {
+    const problem = returnUrlProblem(entry);
+    if (problem) {
+      throw new Error(`WALLET_AUTH_RETURN_URLS entry "${entry}" ${problem}.`);
+    }
+  }
+
   if (consoleUrl) {
     requireSecret(
       env,

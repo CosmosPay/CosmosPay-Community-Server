@@ -154,6 +154,11 @@ export enum ApiErrorCode {
   /** This provider is not configured on this deployment. */
   WalletProviderUnavailable = 'wallet_provider_unavailable',
   /**
+   * The `returnTo` a wallet asked the sign-in callback to redirect to is not in
+   * this deployment's `WALLET_AUTH_RETURN_URLS`.
+   */
+  WalletReturnUrlNotAllowed = 'wallet_return_url_not_allowed',
+  /**
    * The operator will not sponsor this recovery setup: the account does not
    * exist yet, or it already has a signer besides its master key — sponsorship
    * is for turning recovery on once, not a repeatable way to fund signers.

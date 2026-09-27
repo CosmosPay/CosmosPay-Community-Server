@@ -143,6 +143,22 @@ export function callbackUrl(
   return `${base}/v1/wallet/auth/oauth/callback/${PROVIDER_WIRE[provider]}`;
 }
 
+/**
+ * The operator's Authentik page where a person manages their second factors,
+ * derived from its issuer: an Authentik issuer is `{origin}/application/o/{slug}/`,
+ * and its user interface is served from the same origin. Null for an issuer that
+ * is not a URL — nothing is offered rather than a link that cannot load.
+ */
+export function mfaSettingsUrl(issuer: string, path: string): string | null {
+  try {
+    const { origin } = new URL(issuer);
+    if (origin === 'null') return null;
+    return `${origin}${path}`;
+  } catch {
+    return null;
+  }
+}
+
 /** What an OpenID Connect authorization request carries beyond the basics. */
 export interface OidcAuthorization {
   /** From the provider's discovery document. */
