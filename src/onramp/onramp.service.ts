@@ -80,12 +80,20 @@ export class OnrampService {
   async createPayin(consumer: GatewayConsumer, dto: CreatePayinDto) {
     const local = await this.consumers.resolve(consumer);
     const environment = this.blindpay.environmentFor(consumer);
-    await this.assertQuoteUsable(local.id, environment, dto.payin_quote_id);
+    const quote = await this.assertQuoteUsable(
+      local.id,
+      environment,
+      dto.payin_quote_id,
+    );
     // One execution call for every destination network — the chain is determined
     // by the quote's wallet, not chosen here.
-    const created = await this.blindpay.createPayin(environment, {
-      payin_quote_id: dto.payin_quote_id,
-    }, quote.executionKey);
+    const created = await this.blindpay.createPayin(
+      environment,
+      {
+        payin_quote_id: dto.payin_quote_id,
+      },
+      quote.executionKey,
+    );
     const receiverId = await this.resolveReceiverLocalId(
       local.id,
       environment,
@@ -168,7 +176,7 @@ export class OnrampService {
     consumerId: string,
     environment: BlindpayEnvironment,
     quote: BlindpayObject,
-  ): Promise<{ executionKey: string }> {
+  ): Promise<void> {
     const blindpayId = asString(quote.id);
     if (!blindpayId) {
       throw ApiError.badGateway(
@@ -202,7 +210,7 @@ export class OnrampService {
     consumerId: string,
     environment: BlindpayEnvironment,
     blindpayQuoteId: string,
-  ): Promise<void> {
+  ): Promise<{ executionKey: string }> {
     const quote = await this.prisma.blindpayQuote.findUnique({
       where: {
         consumerId_blindpayId: { consumerId, blindpayId: blindpayQuoteId },
@@ -220,6 +228,7 @@ export class OnrampService {
         'This BlindPay quote has expired. Request a new quote.',
       );
     }
+    return quote;
   }
 
   private async resolveWalletBlindpayId(
