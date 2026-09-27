@@ -38,3 +38,11 @@ export class BankAccountListEntity {
   @ApiProperty({ example: 0 })
   skip!: number;
 }
+
+export class BankAccountDeletedEntity {
+  @ApiProperty({ example: 'clz9xbank00001' })
+  id!: string;
+
+  @ApiProperty({ example: true })
+  deleted!: boolean;
+}

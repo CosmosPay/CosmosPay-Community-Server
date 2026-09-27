@@ -7,6 +7,7 @@ import {
   Post,
   Query,
 } from '@nestjs/common';
+import { ApiUpstream } from '@/common/decorators/api-upstream.decorator';
 import { WidePaginationQueryDto } from '@/common/dto/pagination.query.dto';
 import {
   ApiCreatedResponse,
@@ -22,6 +23,7 @@ import { CreateWalletDto } from '@/kyc/wallets/dto/create-wallet.dto';
 import {
   WalletEntity,
   WalletListEntity,
+  WalletDeletedEntity,
 } from '@/kyc/wallets/entities/wallet.entity';
 
 // /v1/kyc/receivers/:receiverId/wallets
@@ -31,6 +33,8 @@ export class WalletsController {
   constructor(private readonly wallets: WalletsService) {}
 
   @Get('sign-message')
+  // The challenge is BlindPay's to issue.
+  @ApiUpstream('BlindPay')
   @RequirePermissions('kyc:read')
   @ApiOperation({
     summary: 'Get the message to sign for the secure wallet flow',
@@ -43,6 +47,7 @@ export class WalletsController {
   }
 
   @Post()
+  @ApiUpstream('BlindPay')
   @RequirePermissions('kyc:write')
   @ApiOperation({ summary: 'Register a blockchain wallet for a receiver' })
   @ApiCreatedResponse({ type: WalletEntity })
@@ -67,8 +72,10 @@ export class WalletsController {
   }
 
   @Delete(':id')
+  @ApiUpstream('BlindPay')
   @RequirePermissions('kyc:write')
   @ApiOperation({ summary: 'Delete a wallet' })
+  @ApiOkResponse({ type: WalletDeletedEntity })
   remove(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Param('receiverId') receiverId: string,

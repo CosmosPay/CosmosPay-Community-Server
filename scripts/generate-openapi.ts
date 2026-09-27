@@ -4,7 +4,7 @@ import { VersioningType } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { stringify } from 'yaml';
 import configuration from '@/config/configuration';
-import { createOpenApiDocument } from '@/swagger';
+import { createOpenApiDocument, findOpenApiIssues } from '@/swagger';
 
 /**
  * Writes the OpenAPI spec to `openapi/openapi.{json,yaml}` without starting the
@@ -64,16 +64,27 @@ async function generate(): Promise<void> {
   // exactly as it was when swagger.ts read the variable itself.
   const document = createOpenApiDocument(app, configuration().openapi);
 
+  // Refuse to write a spec that documents something the service cannot do. CI
+  // runs `openapi:check`, which runs this, so the contract's own invariants are
+  // gated by the same job that catches drift.
+  const issues = findOpenApiIssues(document);
+  if (issues.length > 0) {
+    console.error(`The OpenAPI document has ${issues.length} problem(s):`);
+    for (const issue of issues) console.error(`  ${issue}`);
+    process.exit(1);
+  }
+
   const outDir = join(process.cwd(), 'openapi');
   mkdirSync(outDir, { recursive: true });
 
   const jsonPath = join(outDir, 'openapi.json');
   const yamlPath = join(outDir, 'openapi.yaml');
   writeFileSync(jsonPath, JSON.stringify(document, null, 2), 'utf8');
-  writeFileSync(yamlPath, stabilizeOpenApiYaml(stringify(document)), 'utf8');
   // Inline duplicate objects instead of YAML anchors (`&a1` / `*a1`). Anchor
   // assignment is not stable across Node/OS runs, so CI `openapi:check` would
-  // fail even when the JSON spec is identical.
+  // fail even when the JSON spec is identical. This used to be written twice —
+  // once through a hand-rolled anchor patcher for the Terminus health blocks,
+  // then immediately overwritten by this line, which solves it generally.
   writeFileSync(
     yamlPath,
     stringify(document, { aliasDuplicateObjects: false }),
@@ -83,20 +94,6 @@ async function generate(): Promise<void> {
   await app.close();
 
   console.log(`OpenAPI spec written to:\n  ${jsonPath}\n  ${yamlPath}`);
-}
-
-/**
- * Pin the Terminus health/readiness YAML anchors to the shape Ubuntu CI emits.
- * Without this, `openapi:check` flakes when local `yaml` assigns `&a2` on the
- * 200-response `database` node instead of the 503 `info` block (see a11d529).
- */
-function stabilizeOpenApiYaml(yaml: string): string {
-  return yaml
-    .replace(/(example: &a1\n\s+database:) &a2\n/g, '$1\n')
-    .replace(
-      /(\n\s+example: error\n\s+info:\n\s+type: object\n\s+)example: \*a1\n/g,
-      '$1example:\n                      database: &a2\n                        status: up\n',
-    );
 }
 
 generate().catch((err) => {

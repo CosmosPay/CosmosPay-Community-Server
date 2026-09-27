@@ -23,7 +23,7 @@ export const CLAIM_TIMEOUT_MS = 15_000;
 // answer. Budgets are per consumer + client address, and the fixed window means
 // the true ceiling is twice these numbers across a boundary.
 
-/** One window for both, the same span the Pollar and alias budgets use. */
+/** One window for both, the same span the alias budgets use. */
 const WEBHOOK_RATE_LIMIT_WINDOW_MS = 10 * 60 * 1000;
 
 /**

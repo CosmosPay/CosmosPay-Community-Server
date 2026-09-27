@@ -35,7 +35,7 @@ src/
   config/
     configuration.ts              typed config
     env.validation.ts             fail-fast env validation (secret required when enforcing)
-    *-whitelist.ts                KYC and Pollar redirect allow-lists
+    *-whitelist.ts                KYC redirect allow-list
   prisma/                         PrismaModule + PrismaService (global)
   common/
     guards/apisix.guard.ts        THE gateway gate
@@ -60,7 +60,6 @@ src/
   kyc/                            receivers (KYC/KYB), wallets, bank accounts, doc upload
   onramp/                         fiat → stablecoin: payin quotes, payins, virtual accounts
   offramp/                        stablecoin → fiat: payout quotes, payouts (client-signed)
-  pollar/                         Pollar OAuth bridge (social login → a wallet on both networks) + operator routes
   products/                       merchant catalogue
   customers/                      payer records derived from intents
   aliases/                        claimable payment handles: signed claims, resolution, email recovery
@@ -73,14 +72,14 @@ src/
 prisma/schema.prisma              Consumer, PaymentIntent, Swap, LiquidityPoolOperation,
                                   WebhookEndpoint/Delivery/EmittedEvent, BlindpayReceiver,
                                   Blockchain/BankAccount/VirtualAccount, BlindpayQuote,
-                                  BlindpayWebhookEvent, Payin, Payout, PollarOauthSession,
-                                  PollarUserWallet, RequestLog, ActivityEvent,
+                                  BlindpayWebhookEvent, Payin, Payout, RequestLog,
+                                  ActivityEvent,
                                   AdminAuditLog, Alias, AliasAddress,
                                   AliasChallenge, AliasRecovery
 test/                             e2e suites: gateway gate, admin + alias console gates,
-                                  payment intents, swaps, liquidity pools, KYC, webhooks,
-                                  Pollar
+                                  payment intents, swaps, liquidity pools, KYC, webhooks
 scripts/                          OpenAPI generator, README check, operator scripts
+deploy/authentik/                 Authentik blueprint: the wallet sign-in and sign-up
 docs/i18n/                        this README in es, pt, de, fr, hi, zh
 ```
 
@@ -106,8 +105,8 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | 商品 | `/v1/products` | 商户商品目录 |
 | 客户 | `/v1/customers` | 由支付意图派生的付款方记录 |
 | 别名 | `/v1/aliases` | 可认领的支付标识：认领、解析、恢复 |
+| 钱包登录 | `/v1/wallet` | Google / GitHub / 邮件验证码，以及加密的助记词备份 |
 | 资产 | `/v1/assets` | 按网络划分的精选资产注册表 |
-| Pollar | `/v1/pollar` | OAuth 桥接（社交登录 → 钱包）+ 运营方路由 |
 | 分析 | `/v1/summary`, `/v1/balances`, `/v1/logs` | 仪表盘汇总与日志 |
 | 活动 | `/v1/activity` | 客户端上报的事件：接收、事件流、汇总 |
 | 管理 | `/v1/admin` | 跨租户读写 — 仅限平台控制台，全程审计 |
@@ -208,31 +207,39 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | DELETE | `/v1/payment-intents/{id}` | `payments:write` |  |
 | GET | `/v1/payment-intents/{id}/transitions` | `payments:read` |  |
 | POST | `/v1/payment-intents/{id}/validate` | `payments:write` |  |
-| POST | `/v1/pollar/oauth/authorize` | `pollar:write` |  |
-| GET | `/v1/pollar/oauth/callback` | 无 — `@Public()` |  |
-| GET | `/v1/pollar/oauth/callback/{state}` | 无 — `@Public()` |  |
-| POST | `/v1/pollar/oauth/logout` | `pollar:write` |  |
-| POST | `/v1/pollar/oauth/refresh` | `pollar:write` |  |
-| GET | `/v1/pollar/oauth/sessions/{state}` | `pollar:read` |  |
-| POST | `/v1/pollar/oauth/token` | `pollar:write` |  |
-| POST | `/v1/pollar/tokens/verify` | `pollar:read` |  |
-| POST | `/v1/pollar/users` | `pollar:write` |  |
-| POST | `/v1/pollar/users/with-wallet` | `pollar:write` |  |
-| POST | `/v1/pollar/wallets/activate` | `pollar:write` |  |
-| POST | `/v1/pollar/wallets/{address}/trustlines` | `pollar:write` |  |
-| POST | `/v1/pollar/wallets/{address}/trustlines/default` | `pollar:write` |  |
-| DELETE | `/v1/pollar/wallets/{address}/trustlines/{code}/{issuer}` | `pollar:write` |  |
 | GET | `/v1/products` | `products:read` |  |
 | POST | `/v1/products` | `products:write` |  |
 | GET | `/v1/products/{id}` | `products:read` |  |
 | PATCH | `/v1/products/{id}` | `products:write` |  |
 | DELETE | `/v1/products/{id}` | `products:write` |  |
+| GET | `/.well-known/stellar.toml` | none — `@Public()`, SEP-1 discovery (recovery servers only) |  |
+| GET | `/v1/sep10/auth` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
+| POST | `/v1/sep10/auth` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
+| POST | `/v1/sep30/identity` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
+| POST | `/v1/sep30/identity/email/start` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
+| POST | `/v1/sep30/identity/email/verify` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
+| GET | `/v1/sep30/accounts` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
+| POST | `/v1/sep30/accounts/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
+| PUT | `/v1/sep30/accounts/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
+| GET | `/v1/sep30/accounts/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
+| DELETE | `/v1/sep30/accounts/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
+| POST | `/v1/sep30/accounts/{address}/sign/{signer}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | GET | `/v1/summary` | `payments:read` |  |
 | GET | `/v1/swaps` | `swaps:read` |  |
 | POST | `/v1/swaps` | `swaps:write` | ✓ |
 | POST | `/v1/swaps/quote` | `swaps:read` | ✓ |
 | GET | `/v1/swaps/{id}` | `swaps:read` |  |
 | POST | `/v1/swaps/{id}/submit` | `swaps:write` | ✓ |
+| GET | `/v1/wallet/auth/providers` | `payments:read` | ✓ |
+| POST | `/v1/wallet/auth/oauth/authorize` | `payments:write` | ✓ |
+| GET | `/v1/wallet/auth/oauth/callback/{provider}` | none — `@Public()`, a browser redirect |  |
+| GET | `/v1/wallet/auth/oauth/session/{state}` | `payments:read` | ✓ |
+| POST | `/v1/wallet/auth/oauth/claim` | `payments:write` | ✓ |
+| POST | `/v1/wallet/auth/email/start` | `payments:write` | ✓ |
+| POST | `/v1/wallet/auth/email/verify` | `payments:write` | ✓ |
+| POST | `/v1/wallet/auth/finish` | `payments:write` | ✓ |
+| PUT | `/v1/wallet/backup` | `payments:write` | ✓ |
+| POST | `/v1/wallet/recovery/setup` | `payments:write` | ✓ |
 | GET | `/v1/webhooks` | `webhooks:read` |  |
 | POST | `/v1/webhooks` | `webhooks:write` |  |
 | GET | `/v1/webhooks/{id}` | `webhooks:read` |  |
@@ -258,7 +265,7 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 }
 ```
 
-该响应结构及完整的 `code` 枚举以 `ApiErrorBodyEntity` 的形式发布在 OpenAPI 规范中，附加在每个操作上，因此生成的客户端也能获得错误类型（来源：`src/common/errors/api-error.ts` 中的 `ApiErrorCode`）。**错误码一经发布便永不重命名**；可能会新增错误码，因此请把无法识别的错误码按其 HTTP 状态码处理。
+该响应结构及完整的 `code` 枚举以 `ApiErrorBodyEntity` 的形式发布在 OpenAPI 规范中（来源：`src/common/errors/api-error.ts` 中的 `ApiErrorCode`）。每个操作只记录它实际可能返回的状态码，每个状态码为其可能携带的每个 `code` 各提供一个示例——真实的消息，以及与之匹配的 `statusCode` 和 `error`——因此 Swagger UI 和 Postman 导入显示的就是你真正会收到的响应体。**错误码一经发布便永不重命名**；可能会新增错误码，因此请把无法识别的错误码按其 HTTP 状态码处理。
 
 几个容易混淆的错误码：
 
@@ -268,14 +275,11 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | `account_disabled` | 403 | 运营人员停用了该法币账户。与 key 无关 |
 | `gateway_required` | 403 | 请求并非经由 APISIX 到达 |
 | `admin_console_only` | 403 | 该路由属于平台控制台（`/v1/admin`、发起别名恢复）。任何 API key 都无法调用 |
-| `elevated_key_required` | 403 | 该路由会写入所有租户共享的资源（Pollar 用户目录）。只有提升权限的（admin）key 才能调用；增加 scope 也无济于事 |
-| `pollar_identity_required` | 403 | 网关没有为该 key 转发账户邮箱，因此无法把 Pollar 登录绑定到它 |
-| `pollar_identity_mismatch` | 403 | 该 Pollar 登录由 key 所属账户之外的另一个账户完成。会话已被吊销，不会返回 |
 | `idempotency_conflict` | 409 | 该 `Idempotency-Key`（或支付意图的 memo）已经为一个*不同的*请求创建过资源。请重复原始请求，或改用新的 key |
 | `kyc_state_invalid` | 409 | 非法的 KYC 状态转换——并非重复请求 |
 | `operation_in_flight` | 409 | 一个与之冲突的操作仍在结算中 |
 | `payload_expired` | 409 | 投递内容已超出保留期，无法重新发送 |
-| `provider_unavailable` | 503/504 | BlindPay 或 Horizon 无法访问。请重试 |
+| `provider_unavailable` | 502/503/504 | BlindPay 或 Horizon 无法访问。请重试 |
 | `misconfigured` | 503 | 服务端配置错误。重试无济于事 |
 
 ### 运行多个副本
@@ -288,9 +292,7 @@ APISIX 会在多个实例之间进行负载均衡，因此每个后台定时器�
 | `StellarObserverService`       | `PaymentIntentObserver`  |
 | `RequestLogRetentionService`   | `RequestLogRetention`    |
 | Webhook 投递清扫器             | `WebhookDeliverySweeper` |
-| `PollarOauthSweeperService`    | `PollarOauthSweeper`     |
 | `RateLimitPruneService`        | `RateLimitPrune`         |
-| `PollarWalletProvisionSweeperService` | `PollarWalletProvisionSweeper` |
 | `AliasChallengeSweeperService` | `AliasChallengeSweeper`  |
 
 `pg_try_advisory_xact_lock` 从不阻塞，并且在事务结束时释放，即使发生崩溃或连接断开也是如此。与会话级锁不同，它在事务池模式的 PgBouncer 之后也能正常工作。
@@ -431,7 +433,18 @@ npm run openapi:check
 OPENAPI_SERVER_URL=https://gateway.example.com npm run openapi:generate
 ```
 
-两个 APISIX 请求头（`X-Gateway-Secret`、`X-Consumer-Username`）在规范中被记录为安全方案（security scheme）。
+**在 Postman 中使用。** 导入 `openapi/openapi.json`，或从运行中的服务导入 `http://localhost:3000/docs/json`。规范提供两个服务器和两种安全要求；只选其一的工具会取各自列表中的第一项：
+
+| 调用方式 | 服务器 | 认证 |
+| -------- | ------ | ---- |
+| 直接调用本服务（本地开发） | `http://localhost:{port}`（`port` 默认为 `3000`） | `X-Gateway-Secret` **和** `X-Consumer-Username`，同时提供 |
+| 通过 APISIX 网关 | `OPENAPI_SERVER_URL`，设置后排在第一位 | `Authorization: Bearer <api key>` |
+
+提交到仓库的规范是在未设置 `OPENAPI_SERVER_URL` 的情况下生成的，因此默认使用直连的请求头组合；设置该变量后生成，可得到默认走网关的集合。Postman 每个请求只保存一个 API key：如果导入后只配置了 `X-Gateway-Secret`，请把 `X-Consumer-Username` 添加为集合级请求头。健康探针以 `security: []` 发布。
+
+每个操作都带有说明其性质的厂商扩展：`x-cosmos-rate-limit`（其配额——可能返回 `429`）、`x-cosmos-upstream`（它调用的提供方——可能返回 `502`/`503`/`504`）、`x-cosmos-public` 和 `x-cosmos-public-key`。
+
+`npm run openapi:generate` 会拒绝写出以下规范：某个操作没有 summary、某个失败响应没有响应体或示例、某个示例的 `statusCode` 与其所记录的状态码不一致，或没有配额的路由上出现了 `429`。每次新增或修改路由时，请阅读其重新生成的操作——参见 `CLAUDE.md`。
 
 ### 创建支付意图 — 两种 SEP-7 操作，两个端点
 
@@ -716,144 +729,22 @@ KYC_REDIRECT_URL_WHITELIST={"cosmos_acme":["acme.com","app.acme.com"]}
 
 它**默认拒绝（fail closed）**：没有条目的消费者完全无法使用重定向，带末尾点号或 IDN 形式的主机会被拒绝，而不是被规范化。每个接受 `redirect_url` 的路由都会检查它，包括管理员批准，后者使用的是该 receiver 所属消费者的白名单。被拒绝的协议或主机返回 `400`。
 
-## Pollar — 返回 Stellar 钱包的社交登录
-
-[Pollar](https://docs.pollar.xyz/docs) 把 Google/GitHub 登录变成一个 Stellar 账户：它对用户进行身份验证、创建钱包、在 AWS KMS 中托管密钥、添加配置好的 trustline 并为储备金注资——用户永远不会看到助记词。本服务将其作为 **OAuth 桥接**对外提供。
-
-### 为什么是桥接而不是透传
-
-Pollar 的托管登录是为浏览器 SDK 设计的。它会把用户带到 `GET /auth/{provider}`，并附带 publishable key、客户端会话 id 和 `redirect_uri`——而这个重定向 URI 必须是**在 Pollar 注册过的**主机。钱包无法满足这些要求：回环监听器或 `cosmospay://` 深度链接永远不会是已注册的主机，而且钱包不应该经手这些密钥和会话 id。因此由桥接处理 Pollar 这一侧，钱包只需要两步：**发起授权，兑换 code**。
-
-```
-wallet ──1. POST /v1/pollar/oauth/authorize ────────────▶ bridge ──▶ POST /v2/auth/session
-       ◀── authorization_url + state ──────────────────── bridge     (Pollar mints a client session)
-
-browser ─2. open authorization_url ──▶ Pollar ──▶ Google/GitHub consent
-        ◀─────────────── 3. redirect ─────────── Pollar ──▶ GET /v1/pollar/oauth/callback/{state}
-                                                                     (bridge mints a single-use code)
-
-wallet ──4. absorbs the code ────── from its own redirect URI, or GET /oauth/sessions/{state}
-wallet ──5. POST /v1/pollar/oauth/token ────────────────▶ bridge ──▶ POST /v2/auth/login
-       ◀── access_token + refresh_token + wallet ──────── bridge     (waits for Pollar to be READY)
-
-wallet ──6. talks to Pollar DIRECTLY from here on ──────▶ https://sdk.api.pollar.xyz/v2
-```
-
-第 6 步之后，钱包直接与 Pollar 通信：兑换响应中包含 `publishable_key` 和 `api_base_url`，钱包用它们读取余额、构建并提交交易。**本服务不代理这些调用。**
-
-### 获取 code 的两种方式
-
-|                  | 重定向流程 | 轮询流程 |
-| ---------------- | ------------------------------------------------ | ----------------------------------------------- |
-| 钱包提供 | `redirect_uri`（必须在白名单中）和 PKCE `code_challenge` | 无（PKCE 可选） |
-| code 的到达方式 | 作为重定向上的 `?code=…&state=…` | 来自 `GET /v1/pollar/oauth/sessions/{state}` |
-| 浏览器看到的 | 你自己的 URI | 一个简单的“可以关闭此窗口”页面——永远看不到 code |
-| 适用场景 | 钱包有深度链接或回环监听器 | 两者都没有（自助终端、无界面环境、嵌入式视图） |
-
-每次轮询都会签发一个新的 code 并让前一个作废，因此请兑换最近一次轮询得到的 code。只存储 code 的 SHA-256。
-
-**优先使用轮询流程。** Pollar 的托管流程不会把浏览器送回回调地址：它结束在自己的页面上（`www.pollar.xyz/auth/status`），并在 Pollar 一侧把客户端会话标记为 `READY`。因此当握手处于 `pending` 时，轮询路由会向 Pollar 检查客户端会话，并在 Pollar 报告 `READY` 后立即推进握手。
-
-- **保持回调路由在 Pollar 中的注册。** 重定向流程依赖于它。
-- **每个握手最多每两秒向 Pollar 检查一次**（`POLLAR_SESSION_PROBE_INTERVAL_MS`），通过 `providerCheckedAt` 在所有副本之间共享。一个每秒轮询一次的钱包每分钟会产生 30 个 Pollar 请求，而该 key 的预算是 200。
-
-如果某个握手的客户端会话被 Pollar 拒绝（`INVALID_CLIENT_SESSION_ID`、`EXPIRED_CLIENT_ID`，或 `404`/`410`），它会立即以该错误码被关闭为 `failed`。
-
-### 一次登录，两个网络各一个钱包
-
-Pollar 将主网和测试网作为独立的应用运行，使用独立的密钥对，因此一次托管登录只会在其 API key 所解析到的网络上创建钱包（`prod` → `public`，`dev` → `testnet`——见 `resolveNetwork`）。为了让用户在两个网络上都有钱包，**主网**兑换还会通过 Server API 的 `POST /users/with-wallet` 在 **testnet** 上注册该用户，`POST /v1/pollar/oauth/token` 会同时报告两者。testnet 兑换不会开通主网：`dev` key 落在 testnet 上，而任何人都能创建的 key 不应在每次登录时为主网储备金花费真实 XLM。该用户的主网钱包来自其首次主网登录。
-
-```jsonc
-"network_wallets": [
-  { "network": "public",  "status": "ready",   "address": "GA5Z…" },
-  { "network": "testnet", "status": "pending", "address": null    }
-]
-```
-
-**`pending` 条目不是错误。** 登录已经成功；只是第二个钱包尚未就绪，而它永远不会导致登录失败。请求期间只进行一次五秒的尝试；未完成的部分会由开通清扫器在后台重试（`POLLAR_SWEEP_*`），采用指数退避，最多尝试十次，之后该行变为 `failed`。
-
-出现 `pending` 的通常原因是**另一个网络的密钥没有配置**。配置好之后，下一次清扫就会开通全部积压，用户无需重新登录，因此即使目前只服务一个网络，也请为两个网络都设置密钥。
-
-- **用户通过 OAuth 邮箱进行匹配**，这也是另一个网络上的托管登录所使用的键。不返回邮箱的服务商不会获得第二个钱包。
-- **主网登录会在两个网络上花费 XLM**——自身的储备金和一份 testnet 储备金。testnet 登录只花费 testnet XLM。状态保存在 `pollar_user_wallet` 中，每个（consumer、email、network）一行，因此重复登录不会再次开通。
-
-### 桥接存储了什么
-
-一条握手记录，其中没有任何能花钱的东西：不可猜测的 `state`、Pollar 客户端会话 id、code 的**哈希**，以及最终得到的 Stellar 公开地址。**从不持久化任何 Pollar token**——`/auth/login` 交换在兑换请求内部执行，token 直接随其响应返回。无人完成的握手会由定时器（`POLLAR_SWEEP_*`）置为过期，因为 `AUTHORIZED` 状态的行在被清扫之前都是一个可兑换的 code。
-
-每次状态转换都是对该行状态的 compare-and-swap，因此重放的回调不会生成第二个 code，两个钱包争抢同一个 code 也不可能都成功。
-
-### 加固措施
-
-- **PKCE（RFC 7636，S256）** 在**重定向流程中是必需的**，在轮询流程中是可选的：在授权时传入 `code_challenge`，在兑换时传入 `code_verifier`，这样从浏览器或日志中泄露的 code 在没有 verifier 的情况下毫无用处。重定向流程的 code 会经过浏览器，而公开的回调会把它交给任何出示 `state` 的人——`state` 就在 `authorization_url` 里——因此带 `redirect_uri` 但没有 `code_challenge` 的 `authorize` 会返回 `400 validation_failed`。
-- **`dpop_jwk`** 把 Pollar 签发的 token 绑定到钱包自己的 P-256 密钥（RFC 9449），因此被盗的 access token 在没有签名证明的情况下无法使用。这也意味着桥接无法再代表钱包行事——`/refresh` 和 `/logout` 服务于 bearer 会话，而绑定了 DPoP 的钱包会直接调用 Pollar。
-- **`POLLAR_REDIRECT_URI_WHITELIST`** 按消费者划分，且默认拒绝，因为 code 会被送到重定向 URI。它接受回环主机（任意端口，依据 RFC 8252）、私有 scheme 深度链接和 https 主机。
-- **会话只会返回给给出同意的账户。** 所有租户共享同一个 Pollar 应用，而登录链接在任何人的浏览器里都能用：一个 key 可以把自己的 `authorization_url` 发给别人，等对方同意后兑换对方的钱包——PKCE 和 `dpop_jwk` 帮不上忙，因为握手正是这个 key 发起的。因此 `POST /v1/pollar/oauth/token` 会把 Pollar 为该登录报告的邮箱与网关为该 key 转发的账户邮箱（`X-Consumer-Email`，见 `APISIX_EMAIL_HEADER`）进行比较。不一致时会在 Pollar 吊销会话、把握手标记为 `failed` 并返回 `403 pollar_identity_mismatch`；没有转发邮箱的 key 会在 `authorize` 时被 `403 pollar_identity_required` 拒绝。唯一的例外是开发者平台的代理式注册流程（`X-Cosmos-Internal`）：它为还没有 key 的人登录，并在交出任何东西之前自行验证邮箱。
-- **`POST /v1/pollar/users` 和 `/users/with-wallet` 需要提升权限的 key**（`X-Consumer-Role: admin`，否则返回 `403 elevated_key_required`）。在那里注册的用户，就是之后社交登录按邮箱解析到的同一个用户；否则租户 key 可以抢注陌生人的邮箱，并被记录为其所获钱包的所有者。
-
-### 路由
-
-| 方法 | 路径                                                  | Scope          | 说明 |
-| ------ | ----------------------------------------------------- | -------------- | ----------- |
-| POST   | `/v1/pollar/oauth/authorize`                          | `pollar:write` | 发起登录 → `authorization_url` + `state` |
-| GET    | `/v1/pollar/oauth/callback/:state`                    | _公开_         | Pollar 将浏览器送回的位置（一次页面导航——无法携带 key） |
-| GET    | `/v1/pollar/oauth/callback?state=`                    | _公开_         | 同一个回调，供保留查询参数但不保留路径的重定向链使用 |
-| GET    | `/v1/pollar/oauth/sessions/:state`                    | `pollar:read`  | 轮询握手，并获取其 code |
-| POST   | `/v1/pollar/oauth/token`                              | `pollar:write` | 兑换 code → Pollar 会话 + 钱包 |
-| POST   | `/v1/pollar/oauth/refresh`                            | `pollar:write` | 轮换 token 对（bearer 会话） |
-| POST   | `/v1/pollar/oauth/logout`                             | `pollar:write` | 撤销会话（当前设备或全部） |
-| POST   | `/v1/pollar/wallets/activate`                         | `pollar:write` | 为 XLM 储备金注资（Deferred 注资模式） |
-| POST   | `/v1/pollar/wallets/:address/trustlines/default`      | `pollar:write` | 启用应用配置的资产 |
-| POST   | `/v1/pollar/wallets/:address/trustlines`              | `pollar:write` | 启用指定资产 |
-| DELETE | `/v1/pollar/wallets/:address/trustlines/:code/:issuer`| `pollar:write` | 移除 trustline（仅限零余额） |
-| POST   | `/v1/pollar/users` · `/v1/pollar/users/with-wallet`   | `pollar:write` | 注册用户，可选同时创建钱包（仅限提升权限的 key） |
-| POST   | `/v1/pollar/tokens/verify`                            | `pollar:read`  | 验证钱包向你出示的 token |
-
-最后六个路由使用 Pollar 的 **secret** key，这就是它们在这里运行、而不是在钱包中运行的原因。
-
-### 速率限制
-
-创建 Pollar 钱包是要花钱的：Pollar 会创建 Stellar 账户、为其基础储备金注资（1 XLM），并为每个配置的资产添加 trustline（每个 0.5 XLM），**费用出自你的注资钱包**。一个循环调用登录流程的脚本无需任何真实用户就能花掉这些钱，因此本服务在花费任何 XLM 之前自行实施限额。
-
-**限额加在 `authorize` 上，而不是 `token` 上。** 一次握手最多产生一个钱包，因此限制每个地址的握手次数就限制了钱包数量。`token` 更宽松，因为客户端会被告知在 Pollar 开通账户期间重试它，而且兑换不会创建任何新东西。
-
-| 路由 | 预算（每 10 分钟） | 原因 |
-| ----- | ------------------- | --- |
-| `POST /v1/pollar/oauth/authorize` | 20 | 限制钱包创建数量 |
-| `POST /v1/pollar/oauth/token` | 60 | 客户端会在账户开通期间重试它 |
-| `GET /v1/pollar/oauth/callback` | 60 | 唯一无需 API key 即可访问的路由 |
-| `GET /v1/pollar/oauth/sessions/{state}` | 400 | 钱包每隔几秒轮询一次；每次轮询都可能请求 Pollar |
-| `POST /v1/pollar/oauth/refresh` · `/logout` | 60，共享 | 每次一个 Pollar 请求 |
-| `POST /v1/pollar/users` · `/users/with-wallet` | 10，共享 | 写入所有租户共享的用户目录；`with-wallet` 还会在没有授权页面的情况下创建钱包 |
-| `POST /v1/pollar/wallets/activate` | 20 | 每次调用都花费 XLM |
-| `POST /v1/pollar/wallets/:address/trustlines` · `/default` | 20，共享 | 每个资产都会锁定注资钱包的储备金 |
-| `DELETE /v1/pollar/wallets/:address/trustlines/:code/:issuer` | 20 | 每次一个 Pollar 请求 |
-| `POST /v1/pollar/tokens/verify` | 120 | 每次一个 Pollar 请求 |
-
-**有两个上限按消费者而不是按地址计算**，所以轮换地址也无法成倍放大它们：一个消费者能引发的 Pollar 请求（每分钟 100 个，覆盖上面除轮询和回调之外的所有路由——Pollar 为该 key 的预算是每分钟 200 个，且所有租户共享），以及它能引发的钱包数量（`authorize` 和 `users/with-wallet`，每天 50 个）。控制台调用（`X-Cosmos-Internal`）不受这两个上限约束：开发者平台通过同一个消费者代理所有没有 key 的钱包，并自行为这部分流量设定预算。
-
-超出预算会返回 **`429` 以及 `code: "rate_limited"`**、`Retry-After`，以及 `RateLimit-Limit` / `-Remaining` / `-Reset` 响应头。同一个限流器还守护着 Pollar 之外那些「出错也退不回成本」的路由——swap 与流动性池的构建及其提交、支付意图的构建、KYC 上传与服务条款、onramp 和 offramp 的写入（其上还叠加 BlindPay 的按消费者上限）、webhook 的 `ping` 与 `redeliver`、别名 challenge 和恢复、活动数据接收——各自的预算在对应小节中说明。通用的速率限制应由 APISIX 负责。
-
-**计数器在 Postgres 中，而不是在内存中**，因此限额在多个副本之间依然有效。它是固定窗口（每个请求执行一条原子的 `INSERT … ON CONFLICT … RETURNING`），因此客户端可以在窗口边界两侧各用满一次预算。
-
-**客户端地址。** `main.ts` 将 `trust proxy` 设置为 `1`，因此 Express 读取 `X-Forwarded-For` 中*最右侧*的条目——即 APISIX 追加的那一项。客户端添加的条目位于它的左侧，会被忽略。
-
-> **不要调高 `trust proxy`。** 设为 `2` 时，Express 会信任一个由客户端提供的跳点，任何客户端都能通过一个请求头绕过这些限制。
-
-IPv6 调用方按 **/64** 分组，因为客户端通常控制着整个 /64；共用同一个 /64 的用户共享一个限额，就像位于同一个 IPv4 NAT 之后一样。限额还按消费者划分，因此一个集成方的流量不会影响另一个集成方。
-
-如果计数器无法写入，限流器会**默认拒绝**（`503`）；这些路由本来就依赖数据库。在事故期间，设置 `RATE_LIMIT_ENABLED=false` 可关闭限制。
-
-### 配置
-
-1. 在 [dashboard.pollar.xyz](https://dashboard.pollar.xyz) 创建一个应用，并获取你所在网络的两个 key（`pub_testnet_…` / `sec_testnet_…`）。请为**两个**网络都这样做：一次主网登录还会开通一个 testnet 钱包，而缺少 testnet key 会让这第二个钱包一直处于 `pending`，直到 key 被设置。两个仪表盘是相互独立的——请在每个仪表盘中都注册回调主机。
-2. 在 **Build → Domains** 下注册 `POLLAR_BRIDGE_CALLBACK_URL` 的**网关主机**。SDK API 会在*每次*调用时根据 `Origin` 请求头检查该列表，而桥接会把这个请求头设为该主机（`POLLAR_SDK_ORIGIN` 可覆盖）。未注册的主机在 `POST /auth/session` 上会得到 `403 ORIGIN_NOT_ALLOWED`，这是每次登录的第一个调用。
-3. 将 `POLLAR_BRIDGE_CALLBACK_URL` 设置为 `<gateway>/v1/pollar/oauth/callback`——桥接会自行追加 `/{state}`。
-4. 将每个钱包的重定向 URI 添加到 `POLLAR_REDIRECT_URI_WHITELIST`，或者省略它并使用轮询流程。
-
-Pollar 在 key 的前缀中编码了网络和 key 类型，环境变量校验器会在启动时拒绝不匹配的 key。将 key 留空即可禁用该功能（Pollar 路由随后返回 `503`）。见 `.env.example`。
-
 ## 升级 — 破坏性变更与部署说明
+
+### 已移除 Pollar
+
+`/v1/pollar` 下的全部内容都已移除——OAuth bridge（`/v1/pollar/oauth/*`）、钱包与 trustline
+开通（`/v1/pollar/wallets/*`）以及 `/v1/pollar/users`——同时移除的还有错误码
+`pollar_identity_required`、`pollar_identity_mismatch` 和 `elevated_key_required`，以及所有
+`POLLAR_*` 变量。这些路由现在返回 `404`。
+
+- **迁移 `20260927120000_remove_pollar`** 会删除 `pollar_oauth_session` 和
+  `pollar_user_wallet`。该操作不可撤销：如需保留其历史，请先备份这两张表。
+- **删除 `/v1/pollar/*` 的 APISIX 路由**，尤其是关闭了 key-auth 的回调路由，并移除 `POLLAR_*`
+  变量——它们会被忽略。
+- **key 上可能仍带有 `pollar:*` scope。** 现在已不再检查它们。
+- **advisory lock id `881_005` 和 `881_007` 已停用**，永不复用。
+- **钱包：** Cosmos Wallet 会在下次启动时从设备上移除所有 Pollar 钱包。资金仍在 Pollar，地址不变。
 
 ### 安全审查修复
 
@@ -863,9 +754,8 @@ Pollar 在 key 的前缀中编码了网络和 key 类型，环境变量校验器
 | ------ | ----------- | --- |
 | `POST /v1/aliases/:name/recovery` **仅限平台控制台**：API key 会得到 `403 admin_console_only`，且该路由已从发布的契约中移除 | 用 API key 发起过恢复的任何人 | 响应携带恢复 token，而它证明了对所有者邮箱的控制权 |
 | 对 `SUSPENDED` 别名完成恢复会返回 `404` | 没有正当用户会注意到 | 冻结之前签发的 token 可以绕过运营方冻结 |
-| `@Public()` 路由（Pollar 回调、BlindPay webhook、健康检查）会忽略 `X-Consumer-Username` | 仪表盘：这些请求现在记录为匿名 | 这些路由不经过 key-auth，因此该请求头来自客户端 |
+| `@Public()` 路由（BlindPay webhook、健康检查）会忽略 `X-Consumer-Username` | 仪表盘：这些请求现在记录为匿名 | 这些路由不经过 key-auth，因此该请求头来自客户端 |
 | `AdminGuard` 和 `ConsoleOnlyGuard` 的拒绝会以 `warn` 级别记录 | 运维人员 | guard 在访问日志之前运行，因此被拒绝的请求此前不会留下任何痕迹 |
-| `POST /v1/pollar/wallets/activate` 以及三个 `/v1/pollar/wallets/:address/trustlines…` 路由，对于发起调用的消费者并非通过本服务在该网络上获得的钱包，返回 `404` | 对仅通过 `tokens/verify` 看到的钱包、某次登录的非主钱包，或已被其他租户注册的对应钱包执行操作的集成方 | 所有租户共用一套 Pollar secret key。他人的钱包和未知的钱包都得到 `404`，因此响应不会泄露所有权 |
 | 两个 `POST …/trustlines` 路由共享一个 `429` 预算：每 10 分钟 20 次调用 | 批量添加 trustline 的脚本 | 每个 trustline 都会从运营方的注资钱包中锁定 0.5 XLM |
 | `GET /v1/offramp/payouts/:id` 不再返回 `raw`、`consumerId`、`receiverId`、`quoteId`、`bankAccountId` 或 `updatedAt`；创建虚拟账户的响应不再返回 `raw`、`receiverId`、`consumerId` 或 `updatedAt` | 读取这些字段的调用方 | `raw` 是存储下来的 BlindPay 对象，含有银行和受益人数据 |
 | `POST /v1/kyc/upload` 在以下情况返回 `400`：文本字段超过 4 个、单个字段超过 1 KiB、出现第二个文件，或文件字节与声明的类型不符 | 发送格式正确的上传请求的调用方不受影响 | 字段此前不受限制，而类型检查信任的是客户端的 `Content-Type` |
@@ -884,7 +774,6 @@ Pollar 在 key 的前缀中编码了网络和 key 类型，环境变量校验器
 | 当 `BLINDPAY_WEBHOOK_SECRET` 已设置但其 key（`whsec_` 之后的 base64 部分）格式错误或解码后不足 24 字节时，服务拒绝启动；在配置的 key 不可用期间，`POST /v1/blindpay/webhooks` 会拒绝所有投递 | 密钥被截断或拼写错误的部署，其 BlindPay webhook 此前就已经在失败 | Node 会把无效的 base64 静默解码成一个很短甚至为空的 HMAC key，而用空 key 签名的投递任何人都能伪造 |
 | `GET /v1/health/readiness` 在检查失败时返回标准的错误响应结构（`error: "Service Unavailable"`）；此前它会把健康报告——包括数据库错误信息——放在 `error` 中 | 从响应体而不是状态码读取报告的探针 | 该路由是 `@Public()`，而 Prisma 的错误信息会带出数据库主机名和用户名 |
 | 当 receiver、或拥有 `blockchain_wallet_id` 的 receiver 被停用时，`POST /v1/onramp/receivers/:id/virtual-accounts` 返回 `403 account_disabled` | 没有正当用户会注意到 | 这是熔断开关此前唯一没有覆盖到的法币操作：被停用的账户仍能开出一条新的入金通道 |
-| `POST /v1/pollar/oauth/token` 不再兑换一个已被 `GET /v1/pollar/oauth/sessions/:state` 的更新一次轮询替换掉的 code，即使那次轮询恰好落在兑换过程中途 | 没有正当用户会注意到 | 此前的校验只匹配握手，不匹配 code，因此一个已作废的 code 仍能在这个窗口期内被使用 |
 | `POST /v1/swaps/:id/submit` 和 `POST /v1/liquidity-pools/operations/:id/submit` 会最先检查信封：无法解析、不是该行自己的信封，或不携带任何签名的请求体，无论该行处于什么状态都返回 `400 validation_failed`。任意的 `signedXdr` 不会再返回一行 `SUCCEEDED`，而 `EXPIRED` 行面对不匹配的请求体会返回 `validation_failed`，而不是 `invalid_state_transition` | 提交未签名的 `xdr` 并依赖 `tx_bad_auth` 拒绝的客户端 | 签名不会改变交易的哈希，因此未签名的信封可能被循环转发并遭拒绝，而在共享公共 key 下，仅凭一个行 id 就能读到一笔已结算的记录 |
 | 两个提交路由都会拒绝一个已超出时间边界的信封（`400 invalid_state_transition`，不会广播；如果它已经上链，观察器仍会将其结算），以及一行已经重新提交过 3 次的 `FAILED` 记录（`400 invalid_state_transition`：请构建一笔新的）。在 `503 provider_unavailable` 之后的重试不计入次数 | 在循环中重试提交的客户端：遇到 `invalid_state_transition` 就应停止 | 每一次被拒绝的重新提交都是一次 Horizon 提交和一个新的终态 webhook 事件，且此前没有任何上限 |
 | 两个提交路由都允许每个消费者和客户端地址每分钟调用 20 次，各自使用独立的额度（`429 rate_limited`） | 位于同一 NAT 之后、共用公共 key 的钱包 | 这两个路由都接受共享公共 key，且每次调用都可能向 Horizon 广播 |
@@ -893,20 +782,21 @@ Pollar 在 key 的前缀中编码了网络和 key 类型，环境变量校验器
 | `POST /v1/aliases/:name/recovery/complete`（每 10 分钟 10 次）、`POST /v1/aliases/challenges`（30 次）、`POST /v1/webhooks/:id/ping`（20 次）和 `POST /v1/webhooks/:id/deliveries/:deliveryId/redeliver`（30 次）在超出预算时返回 `429 rate_limited`，按消费者和客户端地址计算 | 在循环中调用这些路由的脚本 | 每次调用都会存储一行记录、尝试一个恢复 token，或向调用方选择的 URL 发送请求 |
 | `PATCH /v1/payment-intents/:id` 要求 `txHash` 必须是 64 字符的十六进制 Stellar 交易哈希（其他任何值都返回 `400`），并以小写形式存储；`POST /v1/payment-intents/:id/validate` 会将自己收到的哈希转为小写。哈希唯一性现在只在一个消费者自己的意图范围内校验，而不是跨所有租户；与你自己另一个意图上的哈希冲突会返回 `409 idempotency_conflict`（此前是 `500`） | 发送占位符或被截断哈希的调用方 | 此前任何租户都能把别的租户的交易哈希占用到自己的意图上；那个租户的结算随后命中全局索引、得到 `500`，而那笔已支付的意图则在没有触发 `PAYMENT_INTENT_SUCCEEDED` 的情况下过期 |
 | 当一笔 `EXPIRED` 意图的支付在链上得到验证时，它会转为 `SUCCEEDED`：既可能是观察器验证的——它现在会在使意图过期之前先查链，也可能是 `POST /v1/payment-intents/:id/validate` 或 `PATCH {status: SUCCEEDED}` 验证的，这两者现在返回 `200`，而不是 `400 invalid_state_transition`。`PAYMENT_INTENT_SUCCEEDED` 可能紧跟在 `EXPIRED` 这次更新触发的事件之后到来 | 把 `EXPIRED` 当作最终状态的 webhook 消费方 | 过期检查此前从不查链，而验证器只读取发往目标地址的最新 50 笔支付，因此一笔延迟到达或排在靠后位置的支付会让一个已支付的意图永久停留在 `EXPIRED` |
-| 带 `redirect_uri` 的 `POST /v1/pollar/oauth/authorize` 需要 `code_challenge`（PKCE，S256），兑换该握手需要 `code_verifier`；缺少时，在打开 Pollar 会话之前调用就会返回 `400 validation_failed`。轮询流程不变 | 不发送 PKCE 的重定向流程钱包 | 公开回调会把 code 交给任何出示 `state` 的人，而 `state` 就在 `authorization_url` 里；没有 PKCE 时，这个 code 可以被原样兑换 |
 | swap、流动性池操作、支付意图和客户的响应现在只返回其文档化字段，另外 swap 和支付意图上的 `expiresAt` 现已写入文档。`consumerId` 以及结算记账字段（`settlementEpoch`、`lastCheckedAt`、`notFoundStreak`、`sharesReceived`、`settledAmountA`/`B`、`horizonCursor`）不再发送 | 读取这些字段的调用方 | 它们是内部字段，而且其中好几个路由可以用共享公共 key 访问 |
 | 对已存在于 BlindPay 的 receiver 调用 `PATCH /v1/kyc/receivers/:id` 时，除 `external_id` 和 `image_url` 外的任何字段都会返回 `403 kyc_review_required`，除非该 key 是提升权限的 key（`X-Consumer-Role: admin`） | 用租户 key 修正已上线 receiver 身份信息的集成方：请交由审核者处理 | 该 `PUT` 会把从未审核过的身份数据直接发给受监管的服务商，而启用之前的同样修改会重新进入审核 |
 | BlindPay 路由使用调用方 key 所属环境的实例：`prod` key 使用无后缀的 `BLINDPAY_*` 实例，`dev` key 使用 `BLINDPAY_*_DEV` 实例；未配置开发实例时，`dev` key 会得到 `503 misconfigured`。receiver、钱包、银行账户、虚拟账户、报价、payin 和 payout 只在该实例上读取和执行 | 使用 `dev` key 调用 BlindPay 的任何人 | 此前 `dev` key 操作的是生产实例：它可以列出和删除真实的 KYC 身份，并创建真实的 payout |
-| 只有当 Pollar 为该登录报告的邮箱就是网关为该 key 转发的账户邮箱（`X-Consumer-Email`）时，`POST /v1/pollar/oauth/token` 才会返回会话。不一致时会吊销会话、使握手失败并返回 `403 pollar_identity_mismatch`；没有转发邮箱的 key 在 `authorize` 时会得到 `403 pollar_identity_required` | 通过共享的 Pollar 应用为自己的终端用户登录的租户，以及用与账户不同的邮箱登录的任何人 | 所有租户共享同一个 Pollar 应用，而登录链接在任何浏览器里都能用：一个 key 可以把自己的 `authorization_url` 发给某人，等待其同意，然后兑换那个人的托管钱包 |
-| `POST /v1/pollar/users` 和 `/v1/pollar/users/with-wallet` 需要提升权限的 key；租户 key 会得到 `403 elevated_key_required` | 用租户 key 预注册用户的集成方 | 注册的用户就是之后社交登录按邮箱解析到的用户，因此租户 key 可以抢注陌生人的邮箱，并被记录为其钱包的所有者 |
 | testnet 登录不再为其用户开通主网钱包：testnet 兑换的 `network_wallets` 只列出 testnet 钱包。主网登录仍会开通 testnet | 读取 testnet 登录的主网条目的任何人 | 任何人都能创建的 `dev` key 每次登录都会花费运营方的真实 XLM 为主网储备金注资 |
-| 轮询、refresh、logout、token 校验、用户注册和删除 trustline 的 Pollar 路由都有了限流，并且在按地址的预算之上还叠加了按消费者的配额（每分钟 100 个 Pollar 请求）和钱包上限（每天 50 个）；超出返回 `429 rate_limited` | 频繁调用这些路由的客户端 | 它们之前没有限制，而每次调用都会消耗所有租户共享的 Pollar 请求预算——一个租户就能让所有其他租户的登录失败 |
 | `POST /v1/kyc/receivers/:id/approve` 接受 `expected_version`（你读到的那个 `dossierVersion`），当 KYC 数据此后发生变化时返回 `409 kyc_state_invalid`。`POST /v1/kyc/receivers/:id/enable` 会拒绝并非被批准的那份材料，receiver 的读取结果也带上了 `dossierVersion` 和 `reviewedVersion` | 开始发送 `expected_version` 的审核方；其他人不受影响——该字段是可选的 | 审核就是有人先读数据、再予以批准，而中间的一次修改只会把状态留在 `pending_review`，于是批准落在了一份没人看过的材料上，`enable` 又把它送到了受监管的服务商 |
 | `POST /v1/kyc/upload`、`/v1/kyc/terms-of-service`、onramp 和 offramp 的写入、`POST /v1/payment-intents/tx` 与 `/pay`、`POST /v1/swaps/quote` 与 `/v1/swaps`，以及 `POST /v1/liquidity-pools/deposit` 与 `/withdraw` 现在超出预算都会按消费者和客户端地址返回 `429 rate_limited`。每个由 BlindPay 支撑的路由还会计入每分钟 60 次服务商请求的按消费者上限 | 在这些路由上打循环的脚本；超过上限的批量导入方应当使用自己的 key | 它们此前完全没有限制：每一个要么在服务商那里留下任何错误都退不回的东西，要么消耗本服务所有路由共享的按 IP 的 Horizon 预算。此前只有提交路由受限 |
 | 对于账户尚未用掉其序列号的 `PENDING` swap（未签名或已放弃的信封），`POST /v1/swaps` 不再返回 `409 operation_in_flight`。仅在 `STELLAR_SWAP_SINGLE_INFLIGHT=true` 时适用 | 此前被挡住的钱包用户 | 任何调用方都可以填写任意 `source`，因此一笔粉尘 swap 能把别人的账户一个超时窗口接一个超时窗口地冻住——与上面流动性池的修复是一对 |
 | 因主机原因被拒绝的 webhook 目标——解析不到、私有地址、链路本地、元数据——统一为一个 `400` 和一条消息；原因留在服务日志里。格式错误的 URL、非 https 协议、内嵌凭证或缺少主机仍会说明问题所在 | 此前从响应里读取原因的集成方 | 注册端点会解析一个本服务能够到达的名称，因此逐条给出原因就等于让人一个 URL 一个 URL 地摸清内网 |
 | 当 `redirect_url` 带有片段、反斜杠、空白字符或控制字符时会被拒绝；不含内嵌凭证的 https 此前就已是必需 | 发送普通 URL 的人不受影响 | `https://app.acme.com\@evil.test` 指向哪个主机取决于谁来解析，而这个值还会被 BlindPay 和浏览器再读一次 |
-| 当 `POLLAR_BRIDGE_CALLBACK_URL` 是可路由主机上的纯 `http` 时，服务拒绝启动 | 在别处终止 TLS 并把回调配置成 `http` 的部署 | Pollar 会把浏览器连同查询字符串里的授权码一起送回该地址，而这个授权码可以换取用户的会话 |
+| `POST /v1/wallet/auth/oauth/claim`：提供方未确认邮箱（`email_verified` 不为 `true`）的 Authentik 登录，现在会完成回调并返回 `verify_email`，向该邮箱发送验证码（无论账户是否存在），而不再以 `email_unverified` 失败。此时不会发放 ID token，因此无法发起 SEP-30 恢复，并与 `POST /v1/wallet/auth/email/start` 共享按地址的冷却时间（`400 wallet_login_code_cooldown`）。请先运行迁移 `20260926120000_wallet_auth_unverified_email` | 钱包：新账户也要处理 `verify_email` | 用户会停在一个无路可走的页面；验证码证明了提供方未确认的邮箱地址 |
+| `POST /v1/wallet/auth/finish` 和 `POST /v1/wallet/recovery/setup` 从 `X-Wallet-Session: {sessionToken}` 读取会话令牌。`Authorization: Bearer` 仍会读取，但只有直接调用时才能到达服务 | 钱包：在 API key 之外发送 `X-Wallet-Session` | 网关在代理前会移除 `Authorization`（以及 `apikey`），因此经由 APISIX 时令牌从未到达，两个路由都返回 `401 wallet_session_invalid` |
+| 通过 Authentik 的钱包登录改为请求 `max_age=300` 而非 `prompt=login`，且 ID token 的 `auth_time` 必须在这 5 分钟内（否则回调以 `profile_invalid` 失败）。将 Google / GitHub 作为 Authentik 源时，把 `default-source-authentication` 设为 *Authentication: No requirement* | 使用 Authentik 社交源的运维人员 | 在 `prompt=login` 下，Authentik 会让没有会话的浏览器登录两次，而通过源的第二次登录会被 "Flow does not apply to current user" 拒绝 |
+| `POST /v1/wallet/auth/finish` 和 `PUT /v1/wallet/backup` 现在也接受 `v: 3` 备份盒：种子由一个随机数据密钥加密，该密钥在 `slots` 中按每扇门各封装一次（`kind: "password"` 或 `kind: "passkey"`，最多 8 个）。每个密码门都与 `v: 2` 盒遵守同样的 PBKDF2 下限；passkey 门没有成本，因为其密钥是认证器的 WebAuthn PRF 输出。`v: 2` 盒保持不变 | 钱包：仅含 passkey 的备份是有效的，写入这种备份的钱包需要此服务器 | 让用户用 passkey 而不是输入原密码来恢复，且本服务从不持有能打开备份盒的密钥 |
+| `POST /v1/wallet/auth/oauth/authorize` 接受可选的 `returnTo`。当它列在 `WALLET_AUTH_RETURN_URLS` 中时，`GET /v1/wallet/auth/oauth/callback/{provider}` 不再渲染页面，而是以 `302` 重定向到它，附带 `?state=…`（失败时另加 `&error=<reason>`）；未列出的返回 `400 wallet_return_url_not_allowed`。只传递 `state`——握手仍需用 PKCE verifier 兑换。请先执行迁移 `20260927180000_wallet_auth_return_to` | 原生钱包（桌面和移动端）：发送 `returnTo` 并在操作系统中注册该 URL | 平台的认证会话（`ASWebAuthenticationSession`、Custom Tab、桌面 deep link 或 loopback 监听）只有在浏览器到达应用自己的 URL 时才会关闭，因此用户会停留在页面上，只能手动关闭 |
+| `GET /v1/wallet/auth/providers` 还会返回 `mfaSettingsUrl`：Authentik 账户中用户添加或移除第二因素（安全密钥或 passkey、身份验证器应用、恢复码）的页面，没有会话时先经过 Authentik 登录；没有 Authentik 时为 `null`。钱包登录时第二因素是可选的——`deploy/authentik/wallet-sign-in.yaml` 将 MFA 阶段改回 *skip*，在输入密码后向已有因素的用户索取它，允许 passkey 在用户名页面直接登录，并在输入密码后为没有任何因素的用户提供选择（暂不、安全密钥、身份验证器应用）。它还在注册页面的表单上方加入 Google / GitHub。密码登录和注册保持不变 | 运行 Authentik 的运维：导入该 blueprint。钱包：将该 URL 作为一项设置提供 | 第二因素要么对所有人强制，要么无法到达：钱包用户从不打开 Authentik 自身的设置，设置 flow 会拒绝没有 Authentik 会话的浏览器，而识别阶段的 passwordless 按钮指向同一个 flow，只会重新加载页面 |
 
 随之而来的部署说明：
 
@@ -915,18 +805,22 @@ Pollar 在 key 的前缀中编码了网络和 key 类型，环境变量校验器
 - **在生产环境中设置 `NODE_ENV=production`。** `.env.example` 中提供的是 `development`，而有两项保护依赖于它：缺少 `X-Plan-Swap-Fee-Bps` 的请求只有在生产环境中才会返回 `503`（在其他任何环境中，swap 会悄悄回退到 `STELLAR_SWAP_FEE_BPS`），而 `/docs`——不受任何 guard 保护——也只有在生产环境中才默认关闭。
 - **结算观察器的日志行已更改**为 `Settlement observer started (every Nms)`、`Settlement observer (OBSERVER_ENABLED=false) disabled`，以及 `error` 级别的 `SettlementObserverService cycle failed`。请更新匹配旧文案的告警。`OBSERVER_ENABLED`、`OBSERVER_INTERVAL_MS` 和咨询锁均未改变。
 - **迁移 `20260915120000_liquidity_pool_operation_memo`** 添加可空列 `liquidity_pool_operation.memo`：不会重写表，只会短暂持有排他锁。没有回填——旧行的 memo 位于 base64 XDR 中，SQL 无法解码，服务会对这些行回退到信封。
-- **迁移 `20260915120100_lookup_indexes`** 以 `CONCURRENTLY` 方式为 Pollar 钱包归属检查构建两个索引（`pollar_oauth_session(consumerId, network, walletAddress)` 和 `pollar_user_wallet(consumerId, network, address)`）。它不会阻塞写入，但构建失败会留下一个 `INVALID` 索引，而 `IF NOT EXISTS` 会把它视为已存在：用 `SELECT c.relname FROM pg_class c JOIN pg_index i ON i.indexrelid = c.oid WHERE NOT i.indisvalid;` 找到它，用 `DROP INDEX CONCURRENTLY` 删除，运行 `prisma migrate resolve --rolled-back 20260915120100_lookup_indexes`，然后重新部署。
 - **现在有两个变量会在启动时被检查。** 一个占位符形式的 `APISIX_GATEWAY_SECRET`，或一个 key 解码后不足 24 字节的 `BLINDPAY_WEBHOOK_SECRET`，都会让服务无法启动，并给出一条指名该变量的错误信息。请在同一次变更中，同时替换 APISIX 路由上和这里的占位符网关密钥（`openssl rand -hex 32`）；两边不一致会让每个请求都被判定为并非来自网关。
 - **迁移 `20260915150000_payment_intent_tx_hash_per_consumer`** 把 `payment_intent."txHash"` 上的唯一索引替换为一个建在 `("consumerId", "txHash")` 上的索引。它不是 `CONCURRENTLY` 的：索引构建期间 `payment_intent` 会被加写锁。没有回填。
 - **已存储的 `webhook_endpoint.previousSecret` 值不再被返回，但没有任何东西会清除它们。** 如果某次更早版本上的轮换留下了这样一个值，而你想把它从数据库中彻底清除，请自行把这两列置空。
 - **迁移 `20260915160000_blindpay_environment`** 为七张 BlindPay 镜像表添加 `environment` 列（默认 `'prod'`）——只改动目录，不重写表——因此现有行都会被标记为生产。**如果你之前无后缀的 `BLINDPAY_*` 变量指向的是 BlindPay 开发实例**，请把它们移到 `_DEV` 变量，并重新标记这些行（在 `blindpay_receiver`、`blindpay_blockchain_wallet`、`blindpay_bank_account`、`blindpay_virtual_account`、`payin`、`payout` 和 `blindpay_quote` 上执行 `UPDATE … SET environment = 'dev'`），否则 `prod` key 会继续读到它们。
 - **如果 `dev` key 要使用 BlindPay，请配置 BlindPay 开发实例**（`BLINDPAY_API_KEY_DEV`、`BLINDPAY_INSTANCE_ID_DEV`、`BLINDPAY_WEBHOOK_SECRET_DEV`），并把它的仪表盘 webhook 指向同一个 `/v1/blindpay/webhooks` URL。
-- **先部署开发者平台的 forwarder 变更。** 网关没有为其转发 `X-Consumer-Email` 的 key，`authorize` 一律拒绝。forwarder 会在账户的 key 每次同步时按账户写入邮箱，因此请重新同步现有消费者（在仪表盘中列出某个用户的 key 就会为该用户完成同步）。在此之前，钱包会回退到开发者平台的代理式登录，它不需要该请求头；其他客户端会得到 `403 pollar_identity_required`。
-- **通过共享 Pollar 应用为第三方终端用户提供的社交登录将停止工作。** 其应用为自有用户登录的租户，会对每个邮箱不是该 key 账户邮箱的用户得到 `403 pollar_identity_mismatch`。
-- **迁移 `20260915180000_pollar_testnet_counterpart_mainnet`** 会关闭 testnet 登录遗留为 `pending` 的主网钱包（`FAILED`、`COUNTERPART_FROM_TESTNET_DISABLED`），让清扫器停止为它们注资。仅修改数据，不改变 schema。
 - **迁移 `20260915200000_receiver_dossier_version`** 为 `blindpay_receiver` 增加 `dossierVersion`（默认 `1`）和 `reviewedVersion`——只改目录，不重写表——并为所有已经通过审核关卡的 receiver 回填 `reviewedVersion`，使它们的 `enable` 继续可用。仍处于 `inactive` 或 `pending_review` 的 receiver 保持 `NULL`，那正是它们的真实状态。
-- **部署前请检查 `POLLAR_BRIDGE_CALLBACK_URL`。** 可路由主机上的纯 `http` 现在会让服务无法启动，错误信息中会点名该变量。回环地址（`http://127.0.0.1:…`）仍然接受，供本地开发使用。
 - **此前从不返回 `429` 的路由现在会返回。** 上表中的预算自本版本起生效；在 KYC 上传、报价、payin、payout、意图构建、swap 报价或流动性池构建上打循环的客户端需要遵守 `Retry-After`。发生故障时可用 `RATE_LIMIT_ENABLED=false` 关闭限流器。
+
+### OpenAPI 契约只列出每个路由实际返回的内容
+
+线上的响应没有任何变化；变化的是发布的契约。请重新生成所有基于 `openapi/openapi.json` 生成的客户端：
+
+- 每个操作只列出它可能返回的失败。`409` 只出现在路由自行记录了冲突的地方，`429` 只出现在有限流的路由上，`502`/`503`/`504` 只出现在会调用提供方的路由上，健康探针不再列出 `401`/`403`。共用的失败响应以 `$ref` 指向 `components.responses`。
+- 每个失败示例都与其状态码相符。此前规范在每个路由的每个状态码下都显示同一个 `409 idempotency_conflict`。
+- `X-Gateway-Secret` 与 `X-Consumer-Username` 构成同一个安全要求（两个请求头都要），并发布 `Authorization: Bearer` 作为经网关调用时的替代方案。此前它们是两个可选项，让工具以为任意一个请求头就足够。
+- `GET /v1/health/readiness` 的 `503` 以错误响应结构记录。此前它被记录为 Terminus 报告，而异常过滤器从不返回该报告。
 
 ### NestJS 12、TypeScript 6 与 Node 最低版本 24.9
 
@@ -963,22 +857,6 @@ NestJS 12 以 ESM 形式发布，而 Jest 只有在 Node >= 24.9 且使用 `--ex
 - **scope `activity:write` 和 `activity:read` 是新增的。** 现有的 key 不会自动获得它们，会收到 `insufficient_scope`。开发者平台会把这两个 scope 授予为钱包配置的 key，并在轮换时重新应用；手动创建的 key 需要手动添加。
 - **`ACTIVITY_RETENTION_DAYS`**（默认 30）加入保留期清理任务。这些行与访问日志一样包含个人数据。
 
-### Pollar 轮询路由现在会自行发现已完成的登录
-
-`GET /v1/pollar/oauth/sessions/{state}` 过去会等待桥接回调，而 Pollar 从不调用该回调，因此轮询流程的登录会一直停留在 `pending` 直到过期。现在轮询会向 Pollar 检查，并在 `READY` 时推进握手。API 结构和客户端都无需改动。部署时：
-
-- **迁移 `20260906120000_pollar_oauth_provider_probe`** 为 `pollar_oauth_session` 添加一个可为空的 `providerCheckedAt`。不做回填。
-- **轮询流量现在会到达 Pollar。** 请按每个进行中的登录每两秒一个服务商请求来做预算，使用的是该网络的 publishable key。
-
-### Pollar 登录现在会在两个网络上各开通一个钱包
-
-`POST /v1/pollar/oauth/token` 新增了一个 `network_wallets` 数组——每个 Stellar 网络一个条目，状态为 `ready`、`pending` 或 `failed`。这是纯新增的变更。部署时：
-
-- **运行迁移。** `20260905120000_pollar_user_wallet` 添加了 `pollar_user_wallet` 和 `PollarWalletStatus` 枚举。没有它，每次兑换都会记录一次开通失败，对应钱包也不会被记录——登录本身仍然正常工作。
-- **为两个网络都设置 key。** `POLLAR_*_MAINNET` 和 `POLLAR_*_TESTNET` 各自都是可选的，而没有 key 的网络会在每次登录时显示为一个 `pending` 钱包。设置第二组 key 后，清扫器会在下一个周期开通积压的钱包；否则这些行会保持 `pending`，直到尝试次数用完。无论哪种情况，登录都不会失败。
-
-主网登录会在*两个*网络上都为储备金注资。testnet 登录只为 testnet 注资——它过去也会为主网注资，上面的安全审查修复已将其移除。
-
 ### `429` 现在报告 `rate_limited`
 
 过去 `429` 会报告 `code: "provider_unavailable"`。现在它报告 `code: "rate_limited"`（`ApiErrorCode.RateLimited`，属于已发布的枚举）。如果你在被限流时重试，请基于它做分支判断。
@@ -992,7 +870,7 @@ NestJS 12 以 ESM 形式发布，而 Jest 只有在 Node >= 24.9 且使用 `--ex
 | 在 `BLINDPAY_API_KEY` 或 `BLINDPAY_INSTANCE_ID` 未设置时，调用 BlindPay 的路由（位于 `/v1/kyc`、`/v1/onramp` 或 `/v1/offramp` 下） | `503` `provider_unavailable` | `503` `misconfigured` |
 | 在 `BLINDPAY_WEBHOOK_SECRET` 未设置时的 `POST /v1/blindpay/webhooks` | `400` `validation_failed` | `503` `misconfigured` |
 
-这两者都是部署配置错误，重试无法修复。Svix 会对任何非 2xx 响应重试，因此 webhook 投递不受影响。Pollar 在同样的情况下早已返回 `misconfigured`。
+这两者都是部署配置错误，重试无法修复。Svix 会对任何非 2xx 响应重试，因此 webhook 投递不受影响。
 
 ### 发生变化的响应结构
 
@@ -1085,7 +963,7 @@ WHERE NOT i.indisvalid;
 | `APISIX_ORGANIZATION_HEADER` | 否 | `x-consumer-org` | 组织 id |
 | `APISIX_PLAN_HEADER` | 否 | `x-consumer-plan` | 组织套餐 |
 | `APISIX_SWAP_FEE_BPS_HEADER` | 否 | `x-plan-swap-fee-bps` | 套餐 swap 手续费（bps） |
-| `APISIX_EMAIL_HEADER` | 否 | `x-consumer-email` | key 所属账户的已验证邮箱。Pollar bridge 只会把登录的会话返回给该账户，并拒绝没有邮箱的 key |
+| `APISIX_EMAIL_HEADER` | 否 | `x-consumer-email` | key 所属账户的已验证邮箱，由网关转发。目前本服务中没有任何功能依赖它 |
 | `APISIX_PUBLIC_CONSUMER` | 否 | — | 共享公共消费者的用户名（见上文）。凡是发布了公共 key 的地方都要设置 |
 | `STELLAR_NETWORK` | 否 | `testnet` | 回退使用的 Stellar 网络（`public` / `testnet`） |
 | `STELLAR_HORIZON_URL_PUBLIC` | 否 | `https://horizon.stellar.org` | 主网 Horizon 基础 URL |
@@ -1127,21 +1005,9 @@ WHERE NOT i.indisvalid;
 | `BLINDPAY_WEBHOOK_SECRET_DEV` | 设置了开发 API key 时 | — | 开发实例 webhook 端点的 Svix 密钥；规则与 `BLINDPAY_WEBHOOK_SECRET` 相同 |
 | `BLINDPAY_TIMEOUT_MS` | 否 | `15000` | BlindPay HTTP 客户端超时（ms） |
 | `KYC_REDIRECT_URL_WHITELIST` | 否 | — | 按消费者划分的 KYC 重定向主机白名单 |
+| `WALLET_AUTH_RETURN_URLS` | 否 | — | 以逗号分隔的应用 URL，钱包登录回调可以重定向到这些地址（`POST /v1/wallet/auth/oauth/authorize` 的 `returnTo`）：自定义 scheme、universal/app link，或 `http://127.0.0.1/…`（任意端口）。精确匹配；回环地址之外的纯 http、带 query 或使用 `javascript:`/`data:`/`file:` 的条目在启动时被拒绝。未设置时，每个回调都渲染页面，`returnTo` 返回 `400 wallet_return_url_not_allowed` |
 | `RATE_LIMIT_ENABLED` | 否 | `true` | 对花费 XLM 的路由按地址设置上限。事故开关 |
 | `RATE_LIMIT_PRUNE_INTERVAL_MS` | 否 | `600000` | 计数器窗口清理间隔（ms，最小 1000） |
-| `POLLAR_PUBLISHABLE_KEY_TESTNET` / `_MAINNET` | 否 | — | Pollar publishable key（`pub_<network>_…`），用于 OAuth 桥接 |
-| `POLLAR_SECRET_KEY_TESTNET` / `_MAINNET` | 与 publishable key 同时设置 | — | Pollar secret key（`sec_<network>_…`），用于运营方路由 |
-| `POLLAR_BRIDGE_CALLBACK_URL` | 设置了 Pollar key 时 | — | Pollar 将浏览器送回的公开 URL。必须是 `<gateway>/v1/pollar/oauth/callback`、**https**（只有回环主机才允许纯 `http`——否则启动失败：授权码就写在它的查询字符串里），**并且**是在 Pollar 的 Build → Domains 下注册过的主机 |
-| `POLLAR_REDIRECT_URI_WHITELIST` | 否 | — | 按消费者划分的钱包重定向 URI 白名单。为空 ⇒ 该消费者只能使用轮询流程 |
-| `POLLAR_SDK_ORIGIN` | 否 | `POLLAR_BRIDGE_CALLBACK_URL` 的 origin | 发送给 Pollar SDK API 的 `Origin`，后者会根据 Build → Domains 进行检查。仅当回调主机与注册主机不同时才设置 |
-| `POLLAR_SDK_BASE_URL` | 否 | `https://sdk.api.pollar.xyz` | Pollar SDK API 基础 URL |
-| `POLLAR_SERVER_BASE_URL` | 否 | `https://api.pollar.xyz` | Pollar Server API 基础 URL |
-| `POLLAR_TIMEOUT_MS` | 否 | `15000` | Pollar HTTP 客户端超时（ms） |
-| `POLLAR_AUTHORIZATION_TTL_MS` | 否 | `300000` | 登录握手保持开放的时长 |
-| `POLLAR_CODE_TTL_MS` | 否 | `120000` | 已签发的桥接 code 保持可兑换的时长 |
-| `POLLAR_LOGIN_WAIT_MS` | 否 | `20000` | 兑换时等待 Pollar 开通钱包的时长 |
-| `POLLAR_SWEEP_ENABLED` | 否 | `true` | 使无人完成的握手过期，并重试登录遗留为 `pending` 的跨网络钱包 |
-| `POLLAR_SWEEP_INTERVAL_MS` | 否 | `60000` | 握手清扫器间隔（ms，最小 1000） |
 
 旧版的 `STELLAR_HORIZON_URL` 会在启动时被拒绝——请改用 `STELLAR_HORIZON_URL_PUBLIC` / `STELLAR_HORIZON_URL_TESTNET`。
 

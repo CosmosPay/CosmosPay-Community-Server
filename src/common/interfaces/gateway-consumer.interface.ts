@@ -50,10 +50,9 @@ export interface GatewayConsumer {
   planSwapFeeBps: number | null;
   /**
    * The verified email of the account that owns the API key (X-Consumer-Email),
-   * lowercased. Forwarded by the gateway; the client cannot set it. The Pollar
-   * bridge only returns a login's session to the key whose account completed it,
-   * because every tenant shares one Pollar application. Absent when not
-   * forwarded, which that check treats as a refusal.
+   * lowercased. Forwarded by the gateway; the client cannot set it. Absent when
+   * not forwarded — and anything that reads it must treat that as "unknown", never
+   * as a match.
    */
   email?: string | null;
   /**

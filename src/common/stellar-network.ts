@@ -27,9 +27,9 @@ export function resolveNetwork(
 
 /**
  * The other network. Both are always meaningful — a Stellar deployment is two
- * chains, not one with a flag — so callers that have to touch both (Pollar
- * provisions a wallet on each) name the pair through this rather than repeating
- * the ternary and getting it backwards once.
+ * chains, not one with a flag — so callers that have to touch both name the
+ * pair through this rather than repeating the ternary and getting it backwards
+ * once.
  */
 export function counterpartNetwork(network: StellarNetwork): StellarNetwork {
   return network === 'public' ? 'testnet' : 'public';

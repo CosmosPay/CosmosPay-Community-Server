@@ -38,16 +38,14 @@ model Consumer {
   payouts           Payout[]
   blindpayQuotes    BlindpayQuote[]
 
-  // Pollar OAuth bridge handshakes started by this consumer.
-  pollarOauthSessions PollarOauthSession[]
-  // Per-network Pollar wallet provisioning state for this consumer's users.
-  pollarUserWallets   PollarUserWallet[]
-
   // Client-side telemetry (wallet + dashboard) reported under this consumer.
   activityEvents ActivityEvent[]
 
   // Claimable payment handles owned by this consumer's users.
   aliases Alias[]
+
+  // Wallet sign-in identities granted a credential as this consumer.
+  walletAccounts WalletAccount[]
 
   @@map("consumer")
 }
@@ -632,14 +630,14 @@ model BlindpayQuote {
   /// The upstream BlindPay quote id (`pq_…` for payins, `qu_…` for payouts).
   blindpayId  String
   kind        BlindpayQuoteKind
-  /// Stable UUID reused on every execution attempt for this one quote.
-  executionKey String @default(uuid())
+  expiresAt   DateTime?
 
   createdAt DateTime @default(now())
 
   @@unique([consumerId, blindpayId])
   @@unique([executionKey])
   @@index([consumerId])
+  @@index([expiresAt])
   @@map("blindpay_quote")
 }
 
@@ -884,179 +882,6 @@ model AdminAuditLog {
   @@index([actorId])
   @@index([resourceType, resourceId])
   @@map("admin_audit_log")
-}
-
-// ---------------------------------------------------------------------------
-// Pollar OAuth bridge.
-//
-// Pollar mints its own end-user session from a hosted OAuth flow, but that flow
-// only ever returns the browser to a `redirect_uri` Pollar has been told about.
-// A wallet that completes the code exchange locally cannot register a loopback
-// or a custom scheme there, and must not hold the Pollar keys. So the bridge
-// owns the Pollar half of the handshake: it mints the Pollar client session,
-// assembles the authorization URL, receives the browser back on its own
-// callback, and hands the wallet a single-use code of its own to redeem.
-//
-// A row is a bridge handshake in flight. It never holds a Pollar token: the
-// `/auth/login` exchange runs during the redemption call and its result goes
-// straight to the wallet.
-// ---------------------------------------------------------------------------
-enum PollarOauthStatus {
-  // Authorization URL handed out; waiting for the browser to come back.
-  PENDING
-  // The callback fired and a single-use bridge code was minted.
-  AUTHORIZED
-  // A redemption is in flight (guards against a concurrent double redeem).
-  EXCHANGING
-  // The code was redeemed for a Pollar session. Terminal.
-  CONSUMED
-  // The handshake failed and cannot be retried. Terminal.
-  FAILED
-  // The handshake ran out of time before the code was redeemed. Terminal.
-  EXPIRED
-}
-
-model PollarOauthSession {
-  id         String   @id @default(cuid())
-  consumerId String
-  consumer   Consumer @relation(fields: [consumerId], references: [id], onDelete: Cascade)
-
-  // Opaque bridge handle. Travels in the browser URL (callback path) and back
-  // to the wallet, so it is a random 32-byte value and never a guessable id.
-  state    String            @unique
-  provider String // 'google' | 'github'
-  status   PollarOauthStatus @default(PENDING)
-  // Which Pollar key pair this handshake was started with, so the redemption
-  // talks to the same network the authorization URL was built for.
-  network  String
-
-  // Pollar's own client session id, from POST /auth/session. The wallet never
-  // sees it — it is what the bridge redeems at POST /auth/login.
-  clientSessionId String
-
-  // Where the wallet wants the bridge code delivered. Null means poll mode: the
-  // wallet has no addressable redirect and reads the code back from the bridge.
-  redirectUri   String?
-  // PKCE (RFC 7636) challenge, S256 only. Optional, enforced when present.
-  codeChallenge String?
-
-  // The wallet's DPoP public JWK, forwarded to Pollar so the minted tokens are
-  // bound to the WALLET's key rather than to the bridge. When set, the bridge
-  // can no longer refresh or revoke on the wallet's behalf — only the holder of
-  // the private key can — which is exactly the point.
-  dpopJwk     Json?
-  deviceLabel String?
-
-  // SHA-256 of the single-use bridge code. The code itself is never stored, so
-  // a database read cannot redeem a handshake.
-  codeHash      String?   @unique
-  codeExpiresAt DateTime?
-
-  // Public identity of the resulting Pollar wallet, kept for support and for
-  // the poll response. No token and no profile PII is ever persisted.
-  walletAddress String?
-  walletType    String?
-  pollarUserId  String?
-
-  // Pollar's error code when the handshake ended in FAILED/EXPIRED.
-  errorCode String?
-
-  // When the poll route last asked Pollar whether this login had finished.
-  // Pollar does not call the bridge back (see the service's `probeProvider`), so
-  // the poll is what discovers a finished login — and the wallet polls every few
-  // seconds. This column is the floor on how often that question reaches the
-  // provider, and it is on the row rather than in memory so replicas share it.
-  providerCheckedAt DateTime?
-
-  // Deadline for the whole handshake, independent of the code's shorter TTL.
-  expiresAt DateTime
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  @@index([consumerId, createdAt])
-  // The sweeper expires stale handshakes oldest-first.
-  @@index([status, expiresAt])
-  // Wallet ownership check, `PollarWalletsService.assertWalletOwned`
-  // (src/pollar/wallets/pollar-wallets.service.ts): findFirst by consumerId,
-  // network and walletAddress on every wallet route. The sweeper marks rows
-  // EXPIRED but never deletes them, so without this the check walks every
-  // handshake the consumer ever started, and the shared public key is one
-  // consumer for every anonymous wallet.
-  @@index([consumerId, network, walletAddress])
-  @@map("pollar_oauth_session")
-}
-
-// The provisioning state of one user's Pollar wallet on ONE network.
-//
-// A login only ever produces a wallet on the network its API key resolved to —
-// Pollar runs mainnet and testnet as two separate applications with two separate
-// key pairs, so a single hosted handshake cannot touch both. Wallets that exist
-// on only one network are a problem the moment a user moves between the two: the
-// address they funded on testnet is not the address that receives on mainnet,
-// and the second wallet is created lazily, at the worst possible moment.
-//
-// So a redemption provisions the counterpart network too, and this table is
-// where that attempt is remembered. It is deliberately NOT on the handshake row:
-// a handshake is expired by the sweeper within minutes, and a wallet that failed
-// to provision has to outlive it to be retried at all.
-//
-// The row is not a mirror of Pollar's wallet — Pollar owns that — it is the
-// record of whether WE have managed to ask for it yet.
-enum PollarWalletStatus {
-  // Asked for, not confirmed. Retried by the provisioning sweeper.
-  PENDING
-  // Pollar has the user and their wallet on this network. Terminal.
-  READY
-  // Out of retry budget. Terminal until an operator intervenes.
-  FAILED
-}
-
-model PollarUserWallet {
-  id         String   @id @default(cuid())
-  consumerId String
-  consumer   Consumer @relation(fields: [consumerId], references: [id], onDelete: Cascade)
-
-  // Pollar's handle on this user, and the join key across the two networks.
-  // For a row a login wrote, it is the email the OAuth provider vouched for —
-  // what a later hosted login on the other network resolves the same person by,
-  // so anything else there would provision a wallet nobody ever logs into. A
-  // row written by `POST /v1/pollar/users/with-wallet` holds the operator's own
-  // id instead: it is READY on arrival, never swept, and exists so the wallet
-  // routes can tell that this consumer owns the address.
-  externalId String
-  // 'public' | 'testnet' — Stellar's names, as everywhere else in this schema.
-  network    String
-
-  status PollarWalletStatus @default(PENDING)
-
-  // Public identity of the wallet, once there is one. Null while PENDING.
-  address      String?
-  walletType   String?
-  pollarUserId String?
-
-  // Retry bookkeeping. `attempts` is the whole budget across all sweeps, not
-  // per cycle, so a wallet Pollar keeps refusing stops being asked for.
-  attempts      Int       @default(0)
-  errorCode     String?
-  nextAttemptAt DateTime?
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  // One row per user per network. This is also the idempotency of the whole
-  // feature: every login upserts through it, so repeat logins cannot fan out
-  // into duplicate provisioning attempts.
-  @@unique([consumerId, externalId, network])
-  // The sweeper claims due PENDING rows oldest-first.
-  @@index([status, nextAttemptAt])
-  // Wallet ownership check, `PollarWalletsService.assertWalletOwned`
-  // (src/pollar/wallets/pollar-wallets.service.ts): findFirst by consumerId,
-  // network and address when no login matched. The unique index above can only
-  // narrow that to the consumer, since `externalId` sits between consumerId and
-  // network and `address` is not in it, so the check read every wallet the
-  // consumer's users hold.
-  @@index([consumerId, network, address])
-  @@map("pollar_user_wallet")
 }
 
 // ---------------------------------------------------------------------------
@@ -1338,4 +1163,327 @@ model AliasRecovery {
   @@index([aliasId])
   @@index([expiresAt])
   @@map("alias_recovery")
+}
+
+/// The wallet's own sign-in — see `src/wallet-auth/`.
+///
+/// This is END-USER identity, and it is deliberately not the `Consumer` that
+/// authenticates API calls. A person proves an email here; a consumer is what
+/// their wallet later gets a key as. Keeping them apart is what lets one person
+/// hold several wallets, and what stops a sign-in from implying a credential.
+model WalletAccount {
+  id String @id @default(cuid())
+
+  /// Normalized (lowercased, trimmed): the identity an account is looked up by,
+  /// so the same mailbox cannot register twice in two shapes.
+  email String @unique
+
+  /// Display only. Never matched on.
+  name   String
+  avatar String?
+
+  /// How the email was proven the last time this account signed in.
+  method WalletAuthMethod
+
+  /// The Stellar ACCOUNT this identity is attached to — not necessarily the key
+  /// that signs for it. A SEP-30 recovery re-keys the account and leaves this
+  /// address unchanged, which is the whole point of recovering rather than
+  /// restoring.
+  stellarAddress String
+
+  /// Filled when the account is granted a gateway credential. Nullable because
+  /// identity comes first: a sign-in that proved an email but has not been given
+  /// a key yet is a real, valid state.
+  consumerId String?
+  consumer   Consumer? @relation(fields: [consumerId], references: [id], onDelete: SetNull)
+
+  backup WalletBackup?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([stellarAddress])
+  @@index([consumerId])
+  @@map("wallet_account")
+}
+
+/// The encrypted seed box a device left here, to be handed back on the next one.
+///
+/// Opaque to this service, and that is not an accident of implementation — it is
+/// the product. The box is sealed on the device under a key derived from the
+/// person's password, which never arrives here. Whoever reads this table gets
+/// unlimited offline guesses and nothing else, which is why the box's own PBKDF2
+/// cost is checked against a floor before a row is written (`isBackupBox`).
+model WalletBackup {
+  id              String        @id @default(cuid())
+  walletAccountId String        @unique
+  walletAccount   WalletAccount @relation(fields: [walletAccountId], references: [id], onDelete: Cascade)
+
+  /// The address the box restores to — and the key that must sign any later
+  /// change to it. Stored beside the box so a replacement can be authorized
+  /// without opening anything.
+  stellarAddress String
+
+  /// The wallet's own sealed-box JSON (v, salt, iv, data, iter). Never parsed
+  /// for meaning, only validated for shape.
+  box String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([stellarAddress])
+  @@map("wallet_backup")
+}
+
+/// One open provider sign-in: a person is reading a consent screen somewhere.
+///
+/// `state` is the only thing that travels through the browser, and knowing it
+/// buys a POLL, never a redemption — that needs the PKCE verifier behind
+/// `codeChallenge`, which never leaves the device that opened the handshake.
+model WalletAuthHandshake {
+  id String @id @default(cuid())
+
+  /// Random, unique, and public by construction: it is in a URL bar.
+  state String @unique
+
+  provider WalletAuthProvider
+
+  /// base64url(SHA-256(verifier)) — RFC 7636 S256, the only method accepted.
+  codeChallenge String
+
+  status WalletAuthHandshakeStatus @default(PENDING)
+
+  /// What the provider said, filled at the callback. An account is looked up by
+  /// `email`, so an address the provider did not confirm is only ever finished
+  /// through a code to that inbox — see `emailVerified`.
+  email         String?
+  name          String?
+  avatar        String?
+  /// The provider's own stable id for the person (`sub`, or GitHub's numeric id).
+  subject       String?
+  /// False when the provider (Authentik) signed the identity but has not
+  /// confirmed the email. Redemption then always goes through `verify_email`: the
+  /// code to the inbox is the confirmation the provider did not give.
+  emailVerified Boolean @default(true)
+
+  /// OIDC providers only (Authentik): the PKCE verifier THIS service presents at
+  /// the provider's token endpoint, and the nonce the ID token must echo. Distinct
+  /// from `codeChallenge`, which binds the handshake to the DEVICE: this pair binds
+  /// the provider's answer to this handshake. Cleared when the handshake leaves
+  /// PENDING.
+  providerVerifier String?
+  nonce            String?
+
+  /// The provider's ID token, kept only until the handshake is redeemed. It is the
+  /// credential the recovery servers accept (`src/recovery/`), so it is released to
+  /// the device only after the inbox has been proven too — see `claimOauth`.
+  idToken String?
+
+  /// Why it failed, when it did. A short token the wallet maps to a sentence —
+  /// never prose, which cannot be translated on the device.
+  failure String?
+
+  /// Where the callback sends the browser when it is done, instead of rendering
+  /// a page: a native wallet's own URL, which is what closes its auth session.
+  /// Checked against `WALLET_AUTH_RETURN_URLS` when the handshake is opened and
+  /// again at the callback. Null renders the page.
+  returnTo String?
+
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status, expiresAt])
+  @@map("wallet_auth_handshake")
+}
+
+/// A six-digit code emailed to prove a mailbox.
+///
+/// Two doors end here: an email sign-in, and a PROVIDER sign-in for an email
+/// that already has an account. The second is the one that matters — a provider
+/// proves who consented, not who opened the sign-in, and an existing account is
+/// where the backup worth stealing lives.
+model WalletLoginCode {
+  id String @id @default(cuid())
+
+  email  String
+  name   String?
+  avatar String?
+
+  /// How the sign-in that needs this code was started, so the finished identity
+  /// records what actually proved the email.
+  via WalletAuthMethod @default(EMAIL)
+
+  /// The OIDC ID token of the provider sign-in that led here, carried until the
+  /// code is answered and cleared the moment it is. It is released only with the
+  /// inbox proof, never on the provider's word alone.
+  idToken String?
+
+  /// SHA-256 of the claim token the wallet keeps. The raw token never lands here.
+  claimHash String @unique
+
+  /// SHA-256 of the emailed code.
+  codeHash String
+
+  attempts Int @default(0)
+
+  status WalletLoginCodeStatus @default(PENDING)
+
+  /// When the code was last sent, for the resend cooldown. The email leg is the
+  /// one that can make this service send mail to a stranger.
+  sentAt DateTime @default(now())
+
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([email])
+  @@index([status, expiresAt])
+  @@map("wallet_login_code")
+}
+
+/// How a person proved who they are.
+enum WalletAuthMethod {
+  GOOGLE
+  GITHUB
+  /// The operator's OpenID Connect provider — Authentik.
+  AUTHENTIK
+  /// A code typed from their own inbox.
+  EMAIL
+}
+
+/// The providers this service can start a sign-in with.
+enum WalletAuthProvider {
+  GOOGLE
+  GITHUB
+  /// Any OpenID Connect provider the operator configures; Authentik in ours. Its
+  /// ID token is verified against the provider's published keys, so this service
+  /// holds no secret that could mint one.
+  AUTHENTIK
+}
+
+enum WalletAuthHandshakeStatus {
+  /// Authorization URL handed out; waiting for the browser to come back.
+  PENDING
+  /// The callback fired and an identity was read from the provider.
+  AUTHORIZED
+  /// Redeemed for a session token by the device holding the verifier. Terminal.
+  REDEEMED
+  /// The provider refused, or returned something unusable. Terminal.
+  FAILED
+  /// Nobody came back in time. Terminal.
+  EXPIRED
+}
+
+enum WalletLoginCodeStatus {
+  PENDING
+  /// The right code arrived and a session token was issued. Terminal.
+  CLAIMED
+  /// Too many wrong codes. Terminal — a new code means a new row.
+  LOCKED
+  EXPIRED
+}
+
+/// SEP-30 — an account one recovery server has agreed to help recover.
+///
+/// Each of the two recovery deployments has its own database; `role` is kept on
+/// the row anyway, so two roles pointed at one database by mistake still cannot
+/// read each other's registrations.
+model RecoveryAccount {
+  id String @id @default(cuid())
+
+  /// "a" | "b" — which server registered this account.
+  role String
+
+  /// The Stellar account being protected (G…).
+  address String
+
+  /// "public" | "testnet" | "other": a signer is an entry on ONE ledger.
+  network String
+
+  methods RecoveryAuthMethod[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([role, address])
+  @@map("recovery_account")
+}
+
+/// One way of proving you may recover an account. Stored flat, so "which
+/// accounts can this inbox recover?" is an index lookup, not a scan of JSON.
+model RecoveryAuthMethod {
+  id String @id @default(cuid())
+
+  accountId String
+  account   RecoveryAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  /// SEP-30 identity role: "owner" | "sender" | "receiver".
+  identityRole String
+
+  /// "email" — the only type this server registers.
+  type String
+
+  /// Normalized at write time: an email lowercased and trimmed.
+  value String
+
+  createdAt DateTime @default(now())
+
+  @@index([accountId])
+  @@index([type, value])
+  @@map("recovery_auth_method")
+}
+
+/// A six-digit code a recovery server emailed ITSELF, to prove an inbox without
+/// trusting anyone else's word for it — the fallback when no OIDC provider is
+/// configured. Only hashes are stored.
+model RecoveryEmailCode {
+  id String @id @default(cuid())
+
+  role  String
+  email String
+
+  /// SHA-256 of the claim token the client keeps, and of the emailed code.
+  claimHash String @unique
+  codeHash  String
+
+  attempts Int                     @default(0)
+  status   RecoveryEmailCodeStatus @default(PENDING)
+
+  sentAt    DateTime @default(now())
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([role, email])
+  @@index([status, expiresAt])
+  @@map("recovery_email_code")
+}
+
+enum RecoveryEmailCodeStatus {
+  PENDING
+  /// Answered correctly; an identity token was issued. Terminal.
+  CLAIMED
+  /// Too many wrong codes. Terminal.
+  LOCKED
+  EXPIRED
+}
+
+/// An OIDC ID token this server has already exchanged, by hash.
+///
+/// Single use PER SERVER: the same login is meant to be presented to both
+/// recovery servers — that is what one sign-in proving the inbox to two
+/// independent parties looks like — but never twice to the same one, so a token
+/// lifted from a log after the fact buys nothing here.
+model RecoveryUsedIdToken {
+  id String @id @default(cuid())
+
+  role      String
+  tokenHash String
+
+  /// The token's own `exp`: after it the row proves nothing and is swept.
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@unique([role, tokenHash])
+  @@index([expiresAt])
+  @@map("recovery_used_id_token")
 }

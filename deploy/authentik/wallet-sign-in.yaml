@@ -1,0 +1,260 @@
+# Cosmos Pay — the wallet's Authentik sign-in and sign-up.
+#
+# Import: Admin → Customization → Blueprints → Create → "Blueprint content", or
+# mount this file into the worker's /blueprints directory. Idempotent: applying
+# it again changes nothing.
+#
+# What it leaves the default authentication flow doing:
+#
+#   1. A second factor is NEVER required. The MFA validation stage is set back
+#      to "skip" for anyone with no authenticator, so a person with only a
+#      password signs in exactly as before.
+#   2. Whoever HAS one — a security key or passkey, an authenticator app (TOTP),
+#      recovery codes — is asked for it after the password. A passkey also signs
+#      in straight from the username screen (the identification stage's passkey
+#      stage). The identification stage's "passwordless flow" is cleared: it
+#      pointed at this same flow, so its button only reloaded the page.
+#   3. Someone with NO second factor is offered one after the password: "Not
+#      now", "Security key or passkey" or "Authenticator app". "Not now" carries
+#      on with the sign-in; the other two enroll that factor first. Nobody who
+#      already has any factor sees the question.
+#   4. The sign-up page (cosmos-pay-enrollment) offers Google and GitHub above
+#      its form. The form itself — username, name, email, password — is kept
+#      exactly as it is, so signing up with a password still works.
+#
+# Signing in with a password is not touched anywhere: the password stage stays
+# in the flow, and Authentik's own policy on it skips it only for someone who
+# already proved themselves with a passkey on the username screen.
+#
+# The wallet also links to the account's MFA settings page from its own
+# settings (`mfaSettingsUrl` on GET /v1/wallet/auth/providers) — where all three
+# kinds of factor, recovery codes included, can be added or removed later.
+#
+# Google / GitHub logins go through default-source-authentication, not this
+# flow, and are not changed.
+#
+# WebAuthn only works on a HOSTNAME over https with a certificate the browser
+# trusts — never an IP address, never plain http off localhost. See the
+# Authentik notes in .env.example.
+#
+# The labels are shown as written (Authentik does not translate prompt text):
+# change them in `context` below, or in the admin afterwards. A label must not
+# contain a double quote: the choice labels are spliced into an expression.
+#
+# Google / GitHub on the sign-up page are links to the sources' own login URLs.
+# A source creates the account when the person has none (its enrollment flow,
+# default-source-enrollment) and signs them in when they do, and it returns to
+# wherever the page was opened from — the wallet's authorization request
+# included — because Authentik keeps the flow's `next` in the session.
+
+version: 1
+metadata:
+  name: Cosmos Pay - wallet sign-in and sign-up
+  labels:
+    blueprints.goauthentik.io/description: >-
+      Offers (never requires) a second factor after the password, fixes the
+      passkey button on the username screen, and adds Google / GitHub to the
+      sign-up page.
+context:
+  offer_label: Add a second factor to your account?
+  offer_help: >-
+    Optional. It protects your account if your password leaks. You can also add
+    or remove one later from your wallet's settings.
+  offer_none: Not now
+  offer_webauthn: Security key or passkey
+  offer_totp: Authenticator app
+  signup_sources_html: >-
+    <a class="pf-c-button pf-m-secondary pf-m-block" href="/source/oauth/login/google/">Sign up with Google</a>
+    <br>
+    <a class="pf-c-button pf-m-secondary pf-m-block" href="/source/oauth/login/github/">Sign up with GitHub</a>
+    <br>
+    Or create an account with your email and a password:
+entries:
+  # --- the first version's checkbox, replaced by the choice below -------------
+  # Deleting the stage and the policies removes their bindings with them.
+
+  - model: authentik_stages_prompt.promptstage
+    state: absent
+    identifiers:
+      name: cosmos-offer-security-key
+  - model: authentik_stages_prompt.prompt
+    state: absent
+    identifiers:
+      name: cosmos-offer-security-key-field
+  - model: authentik_policies_expression.expressionpolicy
+    state: absent
+    identifiers:
+      name: cosmos-user-has-no-security-key
+  - model: authentik_policies_expression.expressionpolicy
+    state: absent
+    identifiers:
+      name: cosmos-user-asked-for-security-key
+
+  # --- 1 + 2: optional MFA, and the passkey on the username screen ------------
+
+  - model: authentik_stages_authenticator_validate.authenticatorvalidatestage
+    identifiers:
+      name: default-authentication-mfa-validation
+    attrs:
+      not_configured_action: skip
+
+  - model: authentik_stages_identification.identificationstage
+    identifiers:
+      name: default-authentication-identification
+    attrs:
+      # Restated because Authentik validates the stage whole; this is its default.
+      user_fields: [username, email]
+      passwordless_flow: null
+      webauthn_stage: !Find [authentik_stages_authenticator_validate.authenticatorvalidatestage, [name, default-authentication-mfa-validation]]
+
+  # --- 3: the offer -----------------------------------------------------------
+
+  - model: authentik_stages_prompt.prompt
+    id: offer-field
+    identifiers:
+      name: cosmos-offer-mfa-field
+    attrs:
+      field_key: mfa_choice
+      label: !Context offer_label
+      sub_text: !Context offer_help
+      type: radio-button-group
+      required: true
+      # "Not now" preselected: carrying on is the default, adding one the choice.
+      initial_value: none
+      placeholder_expression: true
+      placeholder: !Format
+        - 'return [{"value": "none", "label": "%s"}, {"value": "webauthn", "label": "%s"}, {"value": "totp", "label": "%s"}]'
+        - !Context offer_none
+        - !Context offer_webauthn
+        - !Context offer_totp
+      order: 0
+
+  - model: authentik_stages_prompt.promptstage
+    id: offer-stage
+    identifiers:
+      name: cosmos-offer-mfa
+    attrs:
+      fields:
+        - !KeyOf offer-field
+
+  - model: authentik_policies_expression.expressionpolicy
+    id: has-no-factor
+    identifiers:
+      name: cosmos-user-has-no-second-factor
+    attrs:
+      execution_logging: false
+      # Any confirmed factor counts — key, app, recovery codes — so nobody who
+      # already protected the account is asked again.
+      expression: |
+        from authentik.stages.authenticator import devices_for_user
+        user = request.context.get("pending_user")
+        if user is None:
+            return False
+        return next(iter(devices_for_user(user)), None) is None
+
+  - model: authentik_policies_expression.expressionpolicy
+    id: chose-webauthn
+    identifiers:
+      name: cosmos-user-chose-security-key
+    attrs:
+      execution_logging: false
+      expression: |
+        return request.context.get("prompt_data", {}).get("mfa_choice") == "webauthn"
+
+  - model: authentik_policies_expression.expressionpolicy
+    id: chose-totp
+    identifiers:
+      name: cosmos-user-chose-authenticator-app
+    attrs:
+      execution_logging: false
+      expression: |
+        return request.context.get("prompt_data", {}).get("mfa_choice") == "totp"
+
+  # After the MFA validation (30), before the login (100). Every binding here is
+  # evaluated when the stage is reached, not when the flow is planned: the user
+  # is not known at planning time, and the choice has not been made yet.
+
+  - model: authentik_flows.flowstagebinding
+    id: offer-binding
+    identifiers:
+      target: !Find [authentik_flows.flow, [slug, default-authentication-flow]]
+      stage: !KeyOf offer-stage
+    attrs:
+      order: 40
+      evaluate_on_plan: false
+      re_evaluate_policies: true
+      policy_engine_mode: all
+
+  - model: authentik_policies.policybinding
+    identifiers:
+      target: !KeyOf offer-binding
+      policy: !KeyOf has-no-factor
+    attrs:
+      order: 0
+
+  - model: authentik_flows.flowstagebinding
+    id: webauthn-binding
+    identifiers:
+      target: !Find [authentik_flows.flow, [slug, default-authentication-flow]]
+      stage: !Find [authentik_stages_authenticator_webauthn.authenticatorwebauthnstage, [name, default-authenticator-webauthn-setup]]
+    attrs:
+      order: 50
+      evaluate_on_plan: false
+      re_evaluate_policies: true
+      policy_engine_mode: all
+
+  - model: authentik_policies.policybinding
+    identifiers:
+      target: !KeyOf webauthn-binding
+      policy: !KeyOf chose-webauthn
+    attrs:
+      order: 0
+
+  - model: authentik_flows.flowstagebinding
+    id: totp-binding
+    identifiers:
+      target: !Find [authentik_flows.flow, [slug, default-authentication-flow]]
+      stage: !Find [authentik_stages_authenticator_totp.authenticatortotpstage, [name, default-authenticator-totp-setup]]
+    attrs:
+      order: 60
+      evaluate_on_plan: false
+      re_evaluate_policies: true
+      policy_engine_mode: all
+
+  - model: authentik_policies.policybinding
+    identifiers:
+      target: !KeyOf totp-binding
+      policy: !KeyOf chose-totp
+    attrs:
+      order: 0
+
+  # --- 4: Google / GitHub on the sign-up page ----------------------------------
+
+  - model: authentik_stages_prompt.prompt
+    id: signup-sources-field
+    identifiers:
+      name: cosmos-signup-sources
+    attrs:
+      field_key: signup_sources
+      label: Sign up with
+      # Static: rendered as HTML, never submitted.
+      type: static
+      required: false
+      placeholder: ""
+      initial_value: !Context signup_sources_html
+      order: -10
+
+  # The form's existing fields are restated because `fields` is replaced whole.
+  # Add a field in the admin later and it must be added here too, or applying
+  # this blueprint again drops it.
+  - model: authentik_stages_prompt.promptstage
+    identifiers:
+      name: cosmos-prompt
+    attrs:
+      fields:
+        - !KeyOf signup-sources-field
+        - !Find [authentik_stages_prompt.prompt, [name, invitation-enrollment-field-username-enrollment-with-invitation]]
+        - !Find [authentik_stages_prompt.prompt, [name, invitation-enrollment-field-name-enrollment-with-invitation]]
+        - !Find [authentik_stages_prompt.prompt, [name, invitation-enrollment-field-email-enrollment-with-invitation]]
+        - !Find [authentik_stages_prompt.prompt, [name, invitation-enrollment-field-password-enrollment-with-invitation]]
+        - !Find [authentik_stages_prompt.prompt, [name, invitation-enrollment-field-password-repeat-enrollment-with-invitation]]
