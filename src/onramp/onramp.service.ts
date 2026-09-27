@@ -13,7 +13,11 @@ import {
   PAYIN_PUBLIC_SELECT,
   PublicPayin,
 } from '@/blindpay/blindpay-sync.service';
-import { asString, isMirrorFresh } from '@/blindpay/blindpay.util';
+import {
+  asString,
+  isMirrorFresh,
+  quoteExpiresAt,
+} from '@/blindpay/blindpay.util';
 import type { BlindpayEnvironment } from '@/config/configuration';
 import { CreatePayinQuoteDto } from '@/onramp/dto/create-payin-quote.dto';
 import { CreatePayinDto } from '@/onramp/dto/create-payin.dto';
@@ -173,7 +177,13 @@ export class OnrampService {
       );
     }
     await this.prisma.blindpayQuote.create({
-      data: { consumerId, environment, blindpayId, kind: 'PAYIN', expiresAt: blindpayExpiry(quote.expires_at) },
+      data: {
+        consumerId,
+        environment,
+        blindpayId,
+        kind: 'PAYIN',
+        expiresAt: quoteExpiresAt(quote.expires_at),
+      },
     });
   }
 
@@ -205,7 +215,10 @@ export class OnrampService {
       throw ApiError.notFound('Quote not found', ApiErrorCode.QuoteNotFound);
     }
     if (quote.expiresAt && quote.expiresAt.getTime() <= Date.now()) {
-      throw ApiError.badRequest(ApiErrorCode.QuoteExpired, 'This BlindPay quote has expired. Request a new quote.');
+      throw ApiError.badRequest(
+        ApiErrorCode.QuoteExpired,
+        'This BlindPay quote has expired. Request a new quote.',
+      );
     }
   }
 
@@ -249,11 +262,6 @@ export class OnrampService {
     });
     return receiver?.id ?? null;
   }
-}
-
-function blindpayExpiry(value: unknown): Date | null {
-  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return null;
-  return new Date(value < 10_000_000_000 ? value * 1000 : value);
 }
 
 /** Drops the two columns {@link PAYIN_READ_SELECT} adds for `findOne`'s own use. */

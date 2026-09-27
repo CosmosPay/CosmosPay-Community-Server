@@ -201,6 +201,12 @@ export const API_ERROR_CASES: Readonly<Record<ApiErrorCode, ApiErrorCase>> = {
     message: 'Quote not found',
     path: '/v1/onramp/payins',
   },
+  [ApiErrorCode.QuoteExpired]: {
+    statuses: [400],
+    summary: 'The quote is ours and yours, but past its expiry',
+    message: 'This BlindPay quote has expired. Request a new quote.',
+    path: '/v1/onramp/payins',
+  },
 
   // --- KYC ------------------------------------------------------------------
   [ApiErrorCode.KycStateInvalid]: {

@@ -1,5 +1,8 @@
 import type { Prisma } from '@generated/prisma/client';
-import { MIRROR_FRESHNESS_MS } from '@/blindpay/blindpay.constants';
+import {
+  EPOCH_SECONDS_CEILING,
+  MIRROR_FRESHNESS_MS,
+} from '@/blindpay/blindpay.constants';
 
 /**
  * Casts a provider payload (`unknown`) to Prisma's JSON input type so it can be
@@ -51,4 +54,17 @@ export function asNumber(value: unknown): number {
     return Number.isFinite(n) ? n : 0;
   }
   return 0;
+}
+
+/**
+ * When a BlindPay quote stops being usable, from its `expires_at` (seconds or
+ * milliseconds since the epoch — see {@link EPOCH_SECONDS_CEILING}). Null when the
+ * provider sent nothing readable: such a quote is not refused as expired, and
+ * BlindPay still rejects it upstream if it has lapsed.
+ */
+export function quoteExpiresAt(value: unknown): Date | null {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+    return null;
+  }
+  return new Date(value < EPOCH_SECONDS_CEILING ? value * 1000 : value);
 }
