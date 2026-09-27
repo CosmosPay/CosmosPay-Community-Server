@@ -82,7 +82,6 @@ src/kyc/kyc.constants.ts
 src/liquidity-pools/liquidity-pools.constants.ts
 src/observer/observer.constants.ts
 src/payment-intents/payment-intents.constants.ts
-src/pollar/pollar.constants.ts
 src/prisma/prisma.constants.ts
 src/stellar/stellar.constants.ts
 src/swaps/swaps.constants.ts
@@ -128,7 +127,7 @@ Six places go stale on their own, and each has a specific trigger:
 | add or remove a file under `src/` that is a module, not a leaf | the **Project layout** tree |
 | add, rename, remove or re-scope a route | the **Route index**, and the module's own `##` section if it has one |
 | add, rename or delete a `process.env` read | the **Environment variables** table *and* `.env.example` |
-| integrate a provider, or change how an existing one behaves | that provider's own `##` section (see the BlindPay and Pollar ones for the shape) |
+| integrate a provider, or change how an existing one behaves | that provider's own `##` section (see the BlindPay one for the shape) |
 | change a published response shape, a status code, or a scope | **Upgrading — breaking changes and deploy notes** |
 | learn something an operator or integrator must not miss — a security caveat, a deploy step, a limit, a failure mode | the section it belongs to, as a note in the same commit |
 
@@ -209,7 +208,7 @@ table. These are the rules that did not hold on their own:
   flow. When a file grows a second job (reading pools from Horizon *and* building
   transactions *and* cost basis), extract the new job into its own provider
   instead of adding a section divider. Length is not the signal —
-  `pollar-oauth.service.ts` is long and does one thing; a second vocabulary is.
+  `wallet-auth.service.ts` is long and does one thing; a second vocabulary is.
 - **O — dispatch with a table, not a chain.** When code branches on a type,
   provider, network or chain, the second branch on the same value is the signal to
   make it a `Record` (see `EVENT_MAP` in `blindpay-sync.service.ts`), so a new
@@ -226,7 +225,7 @@ table. These are the rules that did not hold on their own:
 - **D — depend on injected collaborators, never construct them.**
   - Never `new` a collaborator, and never default a constructor parameter to one:
     a default turns a missing provider into a silent real network call instead of
-    a boot failure. Horizon, BlindPay, Pollar and outbound HTTP go through their
+    a boot failure. Horizon, BlindPay and outbound HTTP go through their
     injected clients.
   - A service writes only its own module's tables. To change another module's
     row, inject that module's service or emit an event it handles.
@@ -266,6 +265,57 @@ Each of these was a real finding in this codebase, not a hypothetical:
   on-chain — carries `@RateLimit`.**
 - **A guard that refuses logs the refusal.** Interceptors run after guards, so
   the access log never sees a request a guard turned away.
+
+## The OpenAPI contract ships with the route — review Swagger every time
+
+`openapi/openapi.json` is what Swagger UI renders at `/docs` and what an
+integrator imports into Postman or a client generator. It is generated from the
+decorators, so a route whose decorators are wrong publishes a wrong contract and
+nothing fails. It used to: every error of every route showed the same
+`409 idempotency_conflict` example, a 401 was documented on the health probes,
+and the two gateway headers were published as "either one" so a Postman import
+was refused on every call.
+
+**Every time you add or change an endpoint, open the regenerated spec and read
+that operation** — `npm run openapi:generate`, then the diff of
+`openapi/openapi.json`, or `/docs` with `SWAGGER_ENABLED=true`. Check, for that
+operation:
+
+- it has a `summary`, and every success status has a body (`@ApiOkResponse` /
+  `@ApiCreatedResponse` with a `type`). Declaring any failure yourself drops
+  Nest's implicit success response, so declare that too;
+- the failures listed are the ones it can really return, and each example is
+  one it would really send;
+- the extensions say what the route is: `x-cosmos-rate-limit`,
+  `x-cosmos-upstream`, `x-cosmos-public`, `x-cosmos-public-key`.
+
+How failures get documented — use these, never a hand-written
+`@ApiResponse({ status: 4xx, ... })`:
+
+| The route… | Declare | Published as |
+| --- | --- | --- |
+| validates input, is gated, takes a `{param}`, or can throw at all | nothing | 400 / 401 + 403 / 404 / 500, attached by `swagger.ts` |
+| is `@Public()` | nothing — the decorator does it | `security: []`, no 401/403 |
+| is `@RateLimit(...)` | nothing — the decorator does it | 429 + `Retry-After`, `ratelimit-*` on 2xx |
+| calls BlindPay or Horizon while serving | `@ApiUpstream('BlindPay')` on **that handler** | 502/503/504 (Horizon: 503 only) |
+| throws a code of its own (409, a domain 400, a kill-switch 403) | `@ApiErrorResponse({ status, codes })` | that status with one real example per code |
+
+- **A new `ApiErrorCode` needs an entry in `API_ERROR_CASES`**
+  (`src/common/errors/api-error.responses.ts`): its statuses, a one-line summary,
+  and the real message from the throw site. The table is a
+  `Record<ApiErrorCode, …>`, so `tsc --noEmit` fails until it has one.
+- **`@ApiUpstream` goes on the handler, not the controller**, unless every route
+  in the controller really calls the provider. A list route that reads only our
+  own mirror cannot fail on BlindPay, and documenting that it can is the same
+  noise this section exists to remove.
+- **Never document a status a route cannot return.** 409 is never attached
+  centrally, because a conflict is always specific to what the route writes.
+- `npm run openapi:generate` refuses to write a spec with a missing summary, a
+  failure with no body or example, an example whose `statusCode` disagrees with
+  its status, or a 429 on a route with no budget (`findOpenApiIssues` in
+  `src/swagger.ts`). `openapi:check` runs it in CI. It cannot tell whether the
+  codes you listed are the ones the service throws — reading the operation is
+  part of review.
 
 ## Tests ship with the change
 

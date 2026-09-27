@@ -1,8 +1,13 @@
 import { STATUS_CODES } from 'node:http';
 import { HttpException, HttpStatus } from '@nestjs/common';
 
-/** "Conflict", "Not Found", … — the standard reason phrase for a status. */
-function reasonPhrase(status: number): string {
+/**
+ * "Conflict", "Not Found", … — the standard reason phrase for a status.
+ *
+ * Exported because the published error examples carry the same `error` field a
+ * real response does, and deriving it twice is how the two drift apart.
+ */
+export function reasonPhrase(status: number): string {
   return STATUS_CODES[status] ?? 'Error';
 }
 
@@ -37,13 +42,6 @@ export enum ApiErrorCode {
    * a per-service admin secret that no longer exists.
    */
   AdminConsoleOnly = 'admin_console_only',
-  /**
-   * The route writes to something every tenant shares — today the Pollar
-   * application's user directory — so only an elevated (admin) key may call it.
-   * Distinct from `insufficient_scope`: granting the key more scopes would not
-   * help.
-   */
-  ElevatedKeyRequired = 'elevated_key_required',
 
   // --- resources -----------------------------------------------------------
   NotFound = 'not_found',
@@ -74,6 +72,7 @@ export enum ApiErrorCode {
   ProviderError = 'provider_error',
   ProviderUnavailable = 'provider_unavailable',
   QuoteNotFound = 'quote_not_found',
+  QuoteExpired = 'quote_expired',
 
   // --- KYC ------------------------------------------------------------------
   KycStateInvalid = 'kyc_state_invalid',
@@ -112,19 +111,60 @@ export enum ApiErrorCode {
   /** This address is already on the alias, or the alias is at its address cap. */
   AliasAddressConflict = 'alias_address_conflict',
 
-  // --- Pollar ----------------------------------------------------------------
+  // --- wallet sign-in --------------------------------------------------------
   /**
-   * The gateway forwarded no account email for this key, so a Pollar login
-   * cannot be tied to the account that opened it. Every tenant shares one Pollar
-   * application: a session handed to a key that cannot say whose it is would be
-   * a session for whoever consented on its link.
+   * No handshake by that `state`, or one that has expired, failed or already
+   * been redeemed.
+   *
+   * Deliberately ONE code for all of those. A wallet that could tell "expired"
+   * from "already redeemed" from "never existed" could probe which `state`
+   * values this service has seen, and none of the three changes what the wallet
+   * does: start again.
    */
-  PollarIdentityRequired = 'pollar_identity_required',
+  WalletHandshakeInvalid = 'wallet_handshake_invalid',
   /**
-   * The person who completed the Pollar login is not the account that holds the
-   * key. The session was revoked at Pollar and never returned.
+   * The PKCE verifier does not hash to the challenge the handshake was opened
+   * with. Whoever is redeeming is not the device that started it.
    */
-  PollarIdentityMismatch = 'pollar_identity_mismatch',
+  WalletVerifierInvalid = 'wallet_verifier_invalid',
+  /** The emailed code is wrong, spent, expired, or its row is burned. */
+  WalletLoginCodeInvalid = 'wallet_login_code_invalid',
+  /**
+   * Another code was sent to this mailbox moments ago. The cooldown is on the
+   * ROW, so rotating a client address does not buy another email.
+   */
+  WalletLoginCodeCooldown = 'wallet_login_code_cooldown',
+  /** The session token is forged, edited, expired, or was minted elsewhere. */
+  WalletSessionInvalid = 'wallet_session_invalid',
+  /**
+   * The signature does not verify against the address it names, or the signed
+   * timestamp sits outside the accepted window.
+   */
+  WalletSignatureInvalid = 'wallet_signature_invalid',
+  /**
+   * The backup box is not one the wallet could have produced — wrong version,
+   * malformed, oversized, or sealed at a PBKDF2 cost below this service's floor.
+   */
+  WalletBackupInvalid = 'wallet_backup_invalid',
+  /**
+   * The account this sign-in resolves to is attached to a different Stellar
+   * address, and no replacement was authorized. Replacing a backup is the
+   * "forgot the password" door and is never taken implicitly.
+   */
+  WalletAccountMismatch = 'wallet_account_mismatch',
+  /** This provider is not configured on this deployment. */
+  WalletProviderUnavailable = 'wallet_provider_unavailable',
+  /**
+   * The `returnTo` a wallet asked the sign-in callback to redirect to is not in
+   * this deployment's `WALLET_AUTH_RETURN_URLS`.
+   */
+  WalletReturnUrlNotAllowed = 'wallet_return_url_not_allowed',
+  /**
+   * The operator will not sponsor this recovery setup: the account does not
+   * exist yet, or it already has a signer besides its master key — sponsorship
+   * is for turning recovery on once, not a repeatable way to fund signers.
+   */
+  WalletRecoverySetupRefused = 'wallet_recovery_setup_refused',
 
   // --- service --------------------------------------------------------------
   Misconfigured = 'misconfigured',

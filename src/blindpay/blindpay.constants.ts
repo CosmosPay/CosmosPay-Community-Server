@@ -175,7 +175,7 @@ export const SETTLED_KYC_STATUSES = ['approved', 'rejected'] as const;
  * onramp and offramp.
  *
  * One BlindPay instance serves every tenant on a key (two, counting the dev
- * instance), so the provider's quota is a shared resource the way Pollar's is:
+ * instance), so the provider's quota is a shared resource:
  * a tenant looping quotes does not merely slow itself down, it fails other
  * tenants' payins. The per-address budgets on each route tell one ordinary
  * caller from another and do nothing about that, because a tenant chooses how
@@ -194,3 +194,10 @@ export const BLINDPAY_CONSUMER_QUOTA_RATE_LIMIT = {
   windowMs: 60 * 1000,
   per: 'consumer' as const,
 };
+
+/**
+ * Below this, a quote's `expires_at` is read as Unix SECONDS; at or above it, as
+ * milliseconds. BlindPay documents neither, and 10^10 seconds is the year 2286
+ * while 10^10 milliseconds is April 1970, so no real expiry sits on the wrong side.
+ */
+export const EPOCH_SECONDS_CEILING = 10_000_000_000;
