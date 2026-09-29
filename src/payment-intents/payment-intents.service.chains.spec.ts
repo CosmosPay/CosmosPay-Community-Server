@@ -16,6 +16,8 @@ const LINK = {
   uri: `solana:${SOL_DEST}?amount=1&reference=REF`,
   chainReference: 'REF',
   chainCursor: null,
+  networkFee: null,
+  deposit: null,
 };
 
 function build(stored: unknown[] = [null]) {
@@ -91,6 +93,54 @@ describe('PaymentIntentsService on Solana and Monad', () => {
     });
     expect(view).toMatchObject({ chain: 'solana', chainReference: 'REF' });
     expect(view.qr).toMatch(/^data:image\/png;base64,/);
+  });
+
+  it('writes a Monad deposit address in the same insert as its intent', async () => {
+    const { service, prisma, chainLinks } = build();
+    const deposit = {
+      address: '0xC830d264C14ebDB31cdEa0Fb6f83C5b0D8EEc52F',
+      salt: `0x${'11'.repeat(32)}`,
+      destination: EVM_DEST,
+      token: null,
+      relayer: '0xfB6916095ca1df60bB79Ce92cE3Ea74c37c5d359',
+      fee: 57_375_000_000_000_000n,
+    };
+    chainLinks.build.mockResolvedValueOnce({
+      ...LINK,
+      destination: EVM_DEST,
+      uri: `ethereum:${deposit.address}@10143?value=1000000000000000000`,
+      chainReference: deposit.address,
+      networkFee: '0.057375',
+      deposit,
+    });
+
+    const view = await service.createPay(consumer, {
+      chain: 'monad',
+      destination: EVM_DEST,
+      amount: '1',
+      memo: '42',
+    });
+
+    expect(prisma.paymentIntent.create).toHaveBeenCalledTimes(1);
+    const data = prisma.paymentIntent.create.mock.calls[0][0].data;
+    expect(data).toMatchObject({
+      chain: 'monad',
+      chainReference: deposit.address,
+      networkFee: '0.057375',
+      evmDeposit: {
+        create: {
+          chain: 'monad',
+          network: 'testnet',
+          address: deposit.address,
+          salt: deposit.salt,
+          destination: EVM_DEST,
+          token: null,
+          relayer: deposit.relayer,
+          fee: '57375000000000000',
+        },
+      },
+    });
+    expect(view).toMatchObject({ networkFee: '0.057375' });
   });
 
   it('refuses a SEP-7 callback off Stellar', async () => {

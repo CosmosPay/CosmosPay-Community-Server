@@ -106,6 +106,7 @@ test/                             e2e suites: gateway gate, admin + alias consol
                                   payment intents, swaps, liquidity pools, KYC, webhooks
 plugins/                          THE plugins folder: one <slug>/ per plugin (plugin.json, index.ts, signature.json)
 scripts/                          OpenAPI generator, README check, operator scripts
+contracts/                        PaymentForwarder.sol — Monad deposit addresses (npm run contracts:compile)
 deploy/authentik/                 Authentik blueprint: the wallet sign-in and sign-up
 docs/i18n/                        this README in es, pt, de, fr, hi, zh
 ```
@@ -744,9 +745,9 @@ Stellar : un `tx` SEP-7 est une enveloppe Stellar.
 | Lien (`uri`) | SEP-7 `web+stellar:pay` | Solana Pay `solana:<recipient>?…` | EIP-681 `ethereum:<payee>@143?…` |
 | Monnaie (sans `assetCode`) | XLM | SOL | MON |
 | Jeton (`assetCode` + `assetIssuer`) | compte émetteur | mint SPL | contrat ERC-20 |
-| Comment le paiement est trouvé | `MEMO_ID` | une clé `reference` neuve par intention (`chainReference`) | destination + montant exact, depuis le bloc de création de l'intention |
-| Observateur | paiements vers la destination | les signatures de la clé de référence | les logs `Transfer` du jeton (MON natif : `validate` uniquement) |
-| `amount` | facultatif | facultatif | obligatoire |
+| Comment le paiement est trouvé | `MEMO_ID` | une clé `reference` neuve par intention (`chainReference`) | l'adresse de dépôt propre à l'intention (avec relayer) ; sinon destination + montant exact |
+| Observateur | paiements vers la destination | les signatures de la clé de référence | le solde de l'adresse de dépôt, MON natif compris (avec relayer) ; sinon les logs `Transfer` du jeton |
+| `amount` | facultatif | facultatif | facultatif avec relayer, obligatoire sans |
 | `msg` / `callback` | les deux | `msg` (`message` de Solana Pay) | aucun |
 | `txHash` pour `validate` / `PATCH` | 64 hex | signature base58 | `0x` + 64 hex |
 
@@ -768,6 +769,29 @@ Stellar : un `tx` SEP-7 est une enveloppe Stellar.
   paiements ERC-20 sont trouvés par l'observateur, `MONAD_LOG_BLOCK_RANGE` blocs par
   appel et cinq appels par intention et par cycle, en reprenant là où il s'est
   arrêté (`chainCursor`).
+- **Adresses de dépôt (avec `MONAD_RELAYER_PRIVATE_KEY`).** Chaque intention
+  Monad reçoit sa propre adresse, et le lien paie celle-ci plutôt que le marchand :
+  une adresse `CREATE2` de `contracts/PaymentForwarder.sol` via le proxy de
+  déploiement déterministe (`0x4e59…956c`, présent sur Monad mainnet et testnet),
+  dont le code d'initialisation fixe le marchand, l'actif, le relayer et sa
+  commission. L'adresse est l'engagement — personne, ce service compris, ne peut y
+  déployer du code qui paie quelqu'un d'autre —, donc le service ne détient aucune
+  clé de l'argent. Le transféreur de dépôts surveille le solde de l'adresse (MON
+  natif compris, sans logs) ; dès qu'il couvre l'intention (tout montant supérieur à
+  la commission, si elle est ouverte), le relayer déploie le transféreur, dont le
+  constructeur verse sa commission au relayer et le reste au marchand, et
+  l'intention est réglée sur cette transaction. La commission est fixée à la
+  création de l'intention et affichée dans `networkFee` : pour le MON, le budget de
+  gas du transfert au prix actuel plus 25 % ; pour un jeton, l'entrée de
+  `MONAD_DEPOSIT_TOKEN_FEES` de l'opérateur, ou rien (le relayer absorbe le gas). Un
+  montant que la commission absorberait donne `400 invalid_amount`. Ce qui arrive
+  après l'expiration ou l'annulation d'une intention est quand même transféré au
+  marchand, et le payeur peut régler plus tôt avec `validate` et son propre hash. La
+  clé du relayer ne détient que de l'argent pour le gas : approvisionnez-la
+  modérément et surveillez son solde. Le bytecode est commité
+  (`src/evm/payment-forwarder.artifact.ts`) et un spec recompile la source pour le
+  comparer ; toute adresse de dépôt en dépend, ne le modifiez donc jamais tant que
+  d'anciennes adresses peuvent encore recevoir de l'argent.
 - **Un nœud RPC est vérifié avant qu'on s'y fie** : avant sa première lecture d'un
   niveau, le service compare le genesis hash du nœud (Solana) ou son `eth_chainId`
   (Monad) à celui de la chaîne, et répond `503 misconfigured` quand une URL de
@@ -1482,6 +1506,10 @@ plugins isolés.
 - **`/wallet/console/provision` de la plateforme développeur** reçoit désormais
   `chain` et `address`, et `stellarAddress: null` pour une connexion Solana ou
   Monad ; elle doit l'accepter avant que les portefeuilles proposent ces chaînes.
+- **Les adresses de dépôt Monad** ne sont actives qu'avec
+  `MONAD_RELAYER_PRIVATE_KEY` ; la migration crée aussi `evm_deposit_address`, et
+  les intentions gagnent `networkFee`. Sans la clé, les intentions Monad se
+  comportent comme avant (paiement direct au marchand).
 - **Aucun changement APISIX.**
 
 ### Plugins : un nouveau module, deux nouvelles tables et deux nouveaux scopes
@@ -1889,6 +1917,8 @@ Chaque variable lue depuis `process.env` dans `src/` est validée au démarrage 
 | `MONAD_RPC_URL_TESTNET` | non | `https://testnet-rpc.monad.xyz` | RPC Monad pour les clés `dev` (chain id 10143) |
 | `MONAD_RPC_TIMEOUT_MS` | non | `10000` | Budget d'un appel RPC Monad (ms) |
 | `MONAD_LOG_BLOCK_RANGE` | non | `100` | Blocs qu'un `eth_getLogs` peut couvrir — la limite du fournisseur RPC (le RPC public en autorise 100) |
+| `MONAD_RELAYER_PRIVATE_KEY` | non | — | Clé du relayer (hex de 32 octets). Définie, chaque intention Monad reçoit sa propre adresse de dépôt et le relayer transfère les dépôts au marchand, moins une commission. Ne détient que de l'argent pour le gas : les transféreurs qu'elle déploie ne peuvent payer personne d'autre |
+| `MONAD_DEPOSIT_TOKEN_FEES` | non | — | Commission du relayer par dépôt de chaque ERC-20, JSON `{"0xToken": "0.05"}` en unités du jeton. Un jeton sans entrée est transféré gratuitement (le relayer paie le gas) |
 | `STELLAR_BASE_FEE` | non | `100` | Frais de base Stellar (stroops) pour la construction des tx |
 | `STELLAR_TX_TIMEOUT` | non | `300` | Timeout de transaction (secondes) |
 | `STELLAR_SWAP_FEE_WALLET` | si frais > 0 | — | Compte G... de la plateforme qui reçoit les frais de swap |

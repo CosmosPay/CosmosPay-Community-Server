@@ -8,6 +8,7 @@ import {
   IsOptional,
   IsString,
   IsUrl,
+  Matches,
   Max,
   Min,
   MinLength,
@@ -27,6 +28,7 @@ import {
   DEFAULT_SWAP_MAX_SLIPPAGE_BPS,
   DEFAULT_SWAP_SLIPPAGE_BPS,
 } from '@/config/config.constants';
+import { parseEvmTokenFees } from '@/config/evm-token-fees';
 import { assertIdentityConfigConsistent } from '@/config/identity-env';
 
 /**
@@ -167,6 +169,22 @@ class EnvironmentVariables {
   @IsInt()
   @Min(1)
   MONAD_LOG_BLOCK_RANGE?: number;
+
+  /**
+   * Turns on Monad deposit addresses. A hot key, but only for gas: the
+   * forwarders it deploys can pay nobody but the merchant (and the relayer its
+   * fee).
+   */
+  @IsOptional()
+  @Matches(/^(0x)?[0-9a-fA-F]{64}$/, {
+    message: 'MONAD_RELAYER_PRIVATE_KEY must be a 32-byte hex secret key',
+  })
+  MONAD_RELAYER_PRIVATE_KEY?: string;
+
+  /** `{"0xToken…": "0.05"}` — checked in full by `parseEvmTokenFees`. */
+  @IsOptional()
+  @IsString()
+  MONAD_DEPOSIT_TOKEN_FEES?: string;
 
   @IsOptional()
   @IsInt()
@@ -528,6 +546,10 @@ export function validateEnv(config: Record<string, unknown>) {
   }
 
   assertIdentityConfigConsistent(config);
+
+  // Parsed here as well, so a malformed value fails the boot naming its
+  // variable instead of surfacing from the configuration factory.
+  parseEvmTokenFees(validated.MONAD_DEPOSIT_TOKEN_FEES);
 
   return validated;
 }

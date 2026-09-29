@@ -100,6 +100,7 @@ export const PAYMENT_INTENT_PUBLIC_SELECT = {
   assetIssuer: true,
   memo: true,
   chainReference: true,
+  networkFee: true,
   msg: true,
   callback: true,
   xdr: true,
@@ -447,6 +448,26 @@ export class PaymentIntentsService {
       assetDecimals: link.assetDecimals,
       chainReference: link.chainReference,
       chainCursor: link.chainCursor,
+      networkFee: link.networkFee,
+      // In the same insert as the intent: a deposit address the service forgot
+      // is money at an address nobody can ever move, so the two commit or fail
+      // together.
+      ...(link.deposit
+        ? {
+            evmDeposit: {
+              create: {
+                chain,
+                network,
+                address: link.deposit.address,
+                salt: link.deposit.salt,
+                destination: link.deposit.destination,
+                token: link.deposit.token,
+                relayer: link.deposit.relayer,
+                fee: link.deposit.fee.toString(),
+              },
+            },
+          }
+        : {}),
     });
     if (!intent) {
       return this.replayOf(

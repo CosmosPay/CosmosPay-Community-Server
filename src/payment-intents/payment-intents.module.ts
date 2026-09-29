@@ -2,6 +2,8 @@ import { Module } from '@nestjs/common';
 import { CustomersModule } from '@/customers/customers.module';
 import { EvmModule } from '@/evm/evm.module';
 import { ChainPayLinkBuilder } from '@/payment-intents/chain-pay-link-builder.service';
+import { EvmDepositAddressFactory } from '@/payment-intents/evm-deposit-address.factory';
+import { EvmDepositForwarderService } from '@/payment-intents/evm-deposit-forwarder.service';
 import { EvmVerifierService } from '@/payment-intents/evm-verifier.service';
 import { PaymentIntentObserverService } from '@/payment-intents/payment-intent-observer.service';
 import { PaymentIntentsController } from '@/payment-intents/payment-intents.controller';
@@ -27,6 +29,8 @@ import { SolanaModule } from '@/solana/solana.module';
     EvmVerifierService,
     PaymentVerifiers,
     PaymentIntentObserverService,
+    EvmDepositAddressFactory,
+    EvmDepositForwarderService,
   ],
   // Plugins read intents through this service's tenant-scoped reads.
   exports: [PaymentIntentsService],

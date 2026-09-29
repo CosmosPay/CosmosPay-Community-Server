@@ -9,6 +9,7 @@ import {
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import type { AppConfig, StellarNetwork } from '@/config/configuration';
 import {
+  ERC20_BALANCE_OF_SELECTOR,
   ERC20_DECIMALS_SELECTOR,
   EVM_CHAIN_IDS,
   EVM_PROVIDER_NAMES,
@@ -186,6 +187,120 @@ export class EvmRpcClient {
         toBlock: `0x${filter.toBlock.toString(16)}`,
       },
     ]);
+  }
+
+  /** The native balance of an account, in wei. */
+  async getBalance(
+    chain: EvmChain,
+    network: StellarNetwork,
+    address: string,
+  ): Promise<bigint> {
+    return BigInt(
+      await this.call<string>(chain, network, 'eth_getBalance', [
+        address,
+        'latest',
+      ]),
+    );
+  }
+
+  /** Whether an account has code — i.e. whether a forwarder is deployed there. */
+  async hasCode(
+    chain: EvmChain,
+    network: StellarNetwork,
+    address: string,
+  ): Promise<boolean> {
+    const code = await this.call<string>(chain, network, 'eth_getCode', [
+      address,
+      'latest',
+    ]);
+    return code !== '0x' && code !== '';
+  }
+
+  /** An ERC-20 balance, in the token's base units; zero when it does not answer. */
+  async erc20BalanceOf(
+    chain: EvmChain,
+    network: StellarNetwork,
+    token: string,
+    owner: string,
+  ): Promise<bigint> {
+    const data =
+      ERC20_BALANCE_OF_SELECTOR +
+      owner.toLowerCase().replace(/^0x/, '').padStart(64, '0');
+    let answer: string;
+    try {
+      answer = await this.rawCall<string>(chain, network, 'eth_call', [
+        { to: token, data },
+        'latest',
+      ]);
+    } catch (err) {
+      if (err instanceof JsonRpcError) return 0n;
+      throw err;
+    }
+    return /^0x[0-9a-fA-F]{64}$/.test(answer) ? BigInt(answer) : 0n;
+  }
+
+  /** The next nonce of `address`, counting transactions still in the pool. */
+  async pendingNonce(
+    chain: EvmChain,
+    network: StellarNetwork,
+    address: string,
+  ): Promise<bigint> {
+    return BigInt(
+      await this.call<string>(chain, network, 'eth_getTransactionCount', [
+        address,
+        'pending',
+      ]),
+    );
+  }
+
+  async estimateGas(
+    chain: EvmChain,
+    network: StellarNetwork,
+    tx: { from: string; to: string; data: string },
+  ): Promise<bigint> {
+    return BigInt(
+      await this.call<string>(chain, network, 'eth_estimateGas', [tx]),
+    );
+  }
+
+  /**
+   * What to bid for gas now: the latest block's base fee and the node's
+   * suggested tip, as EIP-1559 `maxFeePerGas` (twice the base, plus the tip —
+   * room for the base fee to climb for a few blocks) and `maxPriorityFeePerGas`.
+   */
+  async feeData(
+    chain: EvmChain,
+    network: StellarNetwork,
+  ): Promise<{ maxFeePerGas: bigint; maxPriorityFeePerGas: bigint }> {
+    const [block, tip] = await Promise.all([
+      this.call<{ baseFeePerGas?: string } | null>(
+        chain,
+        network,
+        'eth_getBlockByNumber',
+        ['latest', false],
+      ),
+      this.call<string>(chain, network, 'eth_maxPriorityFeePerGas', []),
+    ]);
+    const base = BigInt(block?.baseFeePerGas ?? '0x0');
+    const priority = BigInt(tip);
+    return {
+      maxFeePerGas: base * 2n + priority,
+      maxPriorityFeePerGas: priority,
+    };
+  }
+
+  /** The gas price a transaction would pay now (base fee + tip), in wei. */
+  async gasPrice(chain: EvmChain, network: StellarNetwork): Promise<bigint> {
+    return BigInt(await this.call<string>(chain, network, 'eth_gasPrice', []));
+  }
+
+  /** Broadcasts a signed transaction; answers its hash. */
+  sendRawTransaction(
+    chain: EvmChain,
+    network: StellarNetwork,
+    raw: string,
+  ): Promise<string> {
+    return this.call(chain, network, 'eth_sendRawTransaction', [raw]);
   }
 
   /**

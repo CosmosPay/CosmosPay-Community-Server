@@ -5,8 +5,11 @@ export interface Eip681Request {
   chainId: number;
   /** The payee. */
   recipient: string;
-  /** In the asset's smallest unit (wei, or the token's base unit). */
-  value: bigint;
+  /**
+   * In the asset's smallest unit (wei, or the token's base unit). Omitted, the
+   * wallet asks the payer how much — an open-amount link.
+   */
+  value?: bigint;
   /** The ERC-20 contract, for a token payment; omit for the native coin. */
   token?: string;
 }
@@ -20,15 +23,16 @@ export interface Eip681Request {
  */
 export function eip681Uri(request: Eip681Request): string {
   if (request.token) {
+    const amount =
+      request.value === undefined ? '' : `&uint256=${request.value.toString()}`;
     return (
       `${EIP681_SCHEME}${request.token}@${request.chainId}/transfer` +
-      `?address=${request.recipient}&uint256=${request.value.toString()}`
+      `?address=${request.recipient}${amount}`
     );
   }
-  return (
-    `${EIP681_SCHEME}${request.recipient}@${request.chainId}` +
-    `?value=${request.value.toString()}`
-  );
+  const value =
+    request.value === undefined ? '' : `?value=${request.value.toString()}`;
+  return `${EIP681_SCHEME}${request.recipient}@${request.chainId}${value}`;
 }
 
 /** A 20-byte address as a 32-byte log topic, as `Transfer` indexes it. */

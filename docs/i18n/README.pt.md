@@ -108,6 +108,7 @@ test/                             e2e suites: gateway gate, admin + alias consol
                                   payment intents, swaps, liquidity pools, KYC, webhooks
 plugins/                          THE plugins folder: one <slug>/ per plugin (plugin.json, index.ts, signature.json)
 scripts/                          OpenAPI generator, README check, operator scripts
+contracts/                        PaymentForwarder.sol — Monad deposit addresses (npm run contracts:compile)
 deploy/authentik/                 Authentik blueprint: the wallet sign-in and sign-up
 docs/i18n/                        this README in es, pt, de, fr, hi, zh
 ```
@@ -744,9 +745,9 @@ envelope da Stellar.
 | Link (`uri`) | SEP-7 `web+stellar:pay` | Solana Pay `solana:<recipient>?…` | EIP-681 `ethereum:<payee>@143?…` |
 | Moeda (sem `assetCode`) | XLM | SOL | MON |
 | Token (`assetCode` + `assetIssuer`) | conta emissora | mint SPL | contrato ERC-20 |
-| Como o pagamento é encontrado | `MEMO_ID` | uma chave `reference` nova por intenção (`chainReference`) | destino + valor exato, a partir do bloco de criação da intenção |
-| Observador | pagamentos ao destino | as assinaturas da chave de referência | os logs `Transfer` do token (MON nativo: só `validate`) |
-| `amount` | opcional | opcional | obrigatório |
+| Como o pagamento é encontrado | `MEMO_ID` | uma chave `reference` nova por intenção (`chainReference`) | o endereço de depósito próprio da intenção (com relayer); senão, destino + valor exato |
+| Observador | pagamentos ao destino | as assinaturas da chave de referência | o saldo do endereço de depósito, MON nativo incluído (com relayer); senão, os logs `Transfer` do token |
+| `amount` | opcional | opcional | opcional com relayer, obrigatório sem ele |
 | `msg` / `callback` | ambos | `msg` (`message` do Solana Pay) | nenhum |
 | `txHash` para `validate` / `PATCH` | 64 hex | assinatura base58 | `0x` + 64 hex |
 
@@ -766,6 +767,27 @@ envelope da Stellar.
   `POST /v1/payment-intents/{id}/validate` e o hash da transação. Pagamentos ERC-20
   são encontrados pelo observador, `MONAD_LOG_BLOCK_RANGE` blocos por chamada e
   cinco chamadas por intenção por ciclo, retomando de onde parou (`chainCursor`).
+- **Endereços de depósito (com `MONAD_RELAYER_PRIVATE_KEY`).** Cada intenção na
+  Monad recebe seu próprio endereço, e o link paga para ele em vez do comerciante:
+  um endereço `CREATE2` de `contracts/PaymentForwarder.sol` pelo proxy de deploy
+  determinístico (`0x4e59…956c`, presente na Monad mainnet e testnet), cujo código
+  de inicialização fixa o comerciante, o ativo, o relayer e a taxa dele. O endereço
+  é o compromisso — ninguém, este serviço incluído, consegue fazer deploy ali de um
+  código que pague a outro —, então o serviço não tem nenhuma chave do dinheiro. O
+  encaminhador de depósitos observa o saldo do endereço (MON nativo incluído, sem
+  precisar de logs); quando cobre a intenção (qualquer valor acima da taxa, se for
+  aberta), o relayer faz o deploy do encaminhador, cujo construtor paga ao relayer
+  a taxa e o restante ao comerciante, e a intenção é liquidada com essa transação.
+  A taxa é fixada na criação da intenção e mostrada como `networkFee`: para MON, o
+  orçamento de gas do encaminhamento ao preço atual mais 25%; para um token, a
+  entrada de `MONAD_DEPOSIT_TOKEN_FEES` do operador, ou nada (o relayer absorve o
+  gas). Um valor que a taxa consumiria dá `400 invalid_amount`. O que chega depois
+  que uma intenção expira ou é cancelada ainda é encaminhado ao comerciante, e o
+  pagador pode liquidar antes com `validate` e o próprio hash. A chave do relayer
+  guarda só dinheiro para gas: abasteça-a com moderação e crie alertas de saldo. O
+  bytecode está commitado (`src/evm/payment-forwarder.artifact.ts`) e um spec
+  recompila o código-fonte para compará-lo; todo endereço de depósito depende dele,
+  então nunca o altere enquanto endereços antigos ainda puderem receber dinheiro.
 - **Um nó RPC é verificado antes de ser confiável**: antes da primeira leitura de
   um nível, o serviço compara o genesis hash do nó (Solana) ou seu `eth_chainId`
   (Monad) com o da chain, e responde `503 misconfigured` quando uma URL de mainnet
@@ -1466,6 +1488,10 @@ serviço em `src/native-plugins/<slug>/`, ligados pela mesma lista
 - **`/wallet/console/provision` da plataforma de desenvolvimento** agora recebe
   `chain` e `address`, e `stellarAddress: null` num login Solana ou Monad; ela
   precisa aceitar isso antes que as wallets ofereçam essas chains.
+- **Os endereços de depósito da Monad** só são ativados com
+  `MONAD_RELAYER_PRIVATE_KEY`; a migração também cria `evm_deposit_address`, e as
+  intenções ganham `networkFee`. Sem a chave, as intenções na Monad se comportam
+  como antes (pagando diretamente ao comerciante).
 - **Nenhuma mudança no APISIX.**
 
 ### Plugins: um novo módulo, duas novas tabelas e dois novos escopos
@@ -1864,6 +1890,8 @@ Toda variável lida de `process.env` em `src/` é validada no boot por
 | `MONAD_RPC_URL_TESTNET` | não | `https://testnet-rpc.monad.xyz` | RPC da Monad para chaves `dev` (chain id 10143) |
 | `MONAD_RPC_TIMEOUT_MS` | não | `10000` | Orçamento de uma chamada RPC à Monad (ms) |
 | `MONAD_LOG_BLOCK_RANGE` | não | `100` | Blocos que um `eth_getLogs` pode abranger: o limite do provedor RPC (o RPC público permite 100) |
+| `MONAD_RELAYER_PRIVATE_KEY` | não | — | Chave do relayer (hex de 32 bytes). Configurada, cada intenção na Monad recebe seu próprio endereço de depósito e o relayer encaminha os depósitos ao comerciante, menos uma taxa. Guarda só dinheiro para gas: os encaminhadores que ela implanta não podem pagar mais ninguém |
+| `MONAD_DEPOSIT_TOKEN_FEES` | não | — | Taxa do relayer por depósito de cada ERC-20, JSON `{"0xToken": "0.05"}` em unidades do token. Um token sem entrada é encaminhado de graça (o relayer paga o gas) |
 | `STELLAR_BASE_FEE` | não | `100` | Taxa base da Stellar (stroops) para montagem de tx |
 | `STELLAR_TX_TIMEOUT` | não | `300` | Timeout da transação (segundos) |
 | `STELLAR_SWAP_FEE_WALLET` | quando fee > 0 | — | Conta G... da plataforma para as taxas de swap |

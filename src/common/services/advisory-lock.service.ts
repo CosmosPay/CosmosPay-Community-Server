@@ -102,4 +102,5 @@ export enum AdvisoryLockKey {
   AliasChallengeSweeper = 881_008,
   WalletAuthSweeper = 881_009,
   RecoverySweeper = 881_010,
+  EvmDepositForwarder = 881_011,
 }

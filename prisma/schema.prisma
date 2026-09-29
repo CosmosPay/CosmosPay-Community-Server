@@ -332,8 +332,14 @@ model PaymentIntent {
   network     String // 'public' | 'testnet' — the tier, on every chain
 
   // How the payment is found on chains without a Stellar memo. Solana: the
-  // Solana Pay `reference` key the wallet adds to the transfer. Null elsewhere.
+  // Solana Pay `reference` key the wallet adds to the transfer. Monad with a
+  // relayer: the intent's CREATE2 deposit address (see `evmDeposit`). Null
+  // otherwise.
   chainReference String?
+  // What is deducted before the merchant receives the payment, as a decimal in
+  // the asset's units: the relayer's fee for forwarding a Monad deposit. Null
+  // when nothing is.
+  networkFee     String?
   // Monad: the last block the observer has scanned for this intent's ERC-20
   // transfer, as a decimal string. Starts at the chain head when created.
   chainCursor    String?
@@ -365,6 +371,9 @@ model PaymentIntent {
   // Back-relation for the cursor table below. Virtual — no column.
   horizonCursor HorizonAccountCursor?
 
+  // A Monad intent's deposit address, when the deployment has a relayer.
+  evmDeposit EvmDepositAddress?
+
   @@unique([consumerId, memo]) // idempotency: one intent per (consumer, memo)
   // One transaction settles at most one of a consumer's intents. Scoped to the
   // consumer because PATCH records a reported hash unverified: unique across
@@ -383,6 +392,57 @@ model PaymentIntent {
   @@index([consumerId, network, createdAt])
   @@index([consumerId, chain, createdAt])
   @@map("payment_intent")
+}
+
+// The CREATE2 deposit address of one Monad payment intent — see
+// `contracts/PaymentForwarder.sol`. The payer pays here; the relayer deploys a
+// forwarder at this address that sends the money on to `destination`, less
+// `fee`. Every field that went into the address is kept, because the address
+// can only be deployed again from exactly these: lose one and the money at it
+// can never be moved.
+model EvmDepositAddress {
+  id String @id @default(cuid())
+
+  // Nullable and SET NULL: deleting an intent must not forget an address that
+  // may hold, or later receive, the merchant's money. The forwarder keeps
+  // watching it either way.
+  intentId String?        @unique
+  intent   PaymentIntent? @relation(fields: [intentId], references: [id], onDelete: SetNull)
+
+  chain   String // 'monad'
+  network String // 'public' | 'testnet'
+
+  // EIP-55. Unique: one salt, one address, one intent.
+  address     String  @unique
+  // The CREATE2 salt: 0x + 64 hex, random per intent.
+  salt        String
+  // The forwarder's constructor arguments, exactly as baked into `address`.
+  destination String
+  token       String? // ERC-20 contract; null for native MON
+  relayer     String
+  fee         String // base units (wei or token units)
+
+  status EvmDepositStatus @default(AWAITING)
+
+  // The forward (deployment or flush) in flight or done, and what it moved.
+  forwardTxHash   String?
+  forwardedAmount String? // base units, the balance when the forward was sent
+  forwardSentAt   DateTime?
+  forwardAttempts Int       @default(0)
+  forwardedAt     DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // The forwarder's sweep: live rows, oldest first.
+  @@index([status, createdAt])
+  @@map("evm_deposit_address")
+}
+
+enum EvmDepositStatus {
+  AWAITING // nothing forwarded yet: watching the balance
+  FORWARDING // a forward transaction is in flight
+  FORWARDED // confirmed; the merchant has the money
 }
 
 // Immutable history of every PaymentIntent status change. Written only by the

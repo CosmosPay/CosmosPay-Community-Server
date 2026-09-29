@@ -264,6 +264,17 @@ table. These are the rules that did not hold on their own:
   point in the core (see `AdminExtensions`) and have the plugin register into it.
   A new native plugin needs its slug in `NATIVE_PLUGIN_SLUGS`, its module in
   `NATIVE_PLUGIN_MODULES` and its own lint entry in `eslint.config.mjs`.
+- **Monad deposit addresses are `CREATE2` addresses of
+  `contracts/PaymentForwarder.sol`**, so every one of them depends on the exact
+  bytecode in `src/evm/payment-forwarder.artifact.ts`. Regenerate it only with
+  `npm run contracts:compile` (the spec fails if source and artifact disagree),
+  and never while a deposit address built from the old bytecode may still hold
+  or receive money: the forwarder rebuilds each address from the CURRENT
+  artifact, finds it no longer matches the stored one, and refuses to deploy — the
+  money stays safe but stuck until the old artifact is restored. The relayer key
+  signs only forwarder deployments and
+  flushes; it must never gain another use, because "it holds gas money only" is
+  the whole security argument.
 
 ## Security invariants a change must keep
 

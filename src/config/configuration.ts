@@ -18,6 +18,7 @@ import {
   parseRedirectUrlWhitelist,
   type RedirectUrlWhitelist,
 } from '@/config/kyc-redirect-url-whitelist';
+import { type EvmTokenFees, parseEvmTokenFees } from '@/config/evm-token-fees';
 import {
   isNativePluginSlug,
   type NativePluginSlug,
@@ -151,6 +152,15 @@ export interface AppConfig {
     timeoutMs: number;
     /** Blocks one `eth_getLogs` call may span; the RPC provider's limit. */
     logBlockRange: number;
+    /**
+     * The relayer's secret key (hex). Set, every Monad PAY intent gets its own
+     * CREATE2 deposit address and the relayer forwards what arrives; empty,
+     * Monad intents pay the merchant directly and are matched by amount. It
+     * holds gas money only — see `contracts/PaymentForwarder.sol`.
+     */
+    relayerPrivateKey: string;
+    /** Per-token relayer fees for token deposits (`MONAD_DEPOSIT_TOKEN_FEES`). */
+    depositTokenFees: EvmTokenFees;
   };
   observer: {
     enabled: boolean;
@@ -453,6 +463,8 @@ export default (): AppConfig => ({
         String(DEFAULT_MONAD_LOG_BLOCK_RANGE),
       10,
     ),
+    relayerPrivateKey: process.env.MONAD_RELAYER_PRIVATE_KEY?.trim() ?? '',
+    depositTokenFees: parseEvmTokenFees(process.env.MONAD_DEPOSIT_TOKEN_FEES),
   },
   observer: {
     // Permanent reconciler that watches every chain and finalizes paid intents.

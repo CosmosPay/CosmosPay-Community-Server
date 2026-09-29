@@ -72,10 +72,20 @@ export class PaymentIntentEntity {
     nullable: true,
     example: null,
     description:
-      'Solana only: the Solana Pay `reference` key the payment is found by. ' +
-      'Null on Stellar and Monad.',
+      'How the payment is found off Stellar. Solana: the Solana Pay ' +
+      '`reference` key. Monad with deposit addresses: the intent’s own ' +
+      'deposit address, which the link pays. Null otherwise.',
   })
   chainReference!: string | null;
+
+  @ApiProperty({
+    nullable: true,
+    example: null,
+    description:
+      'Deducted before the merchant is paid, in the asset’s units: the ' +
+      'relayer’s fee for forwarding a Monad deposit. Null when nothing is.',
+  })
+  networkFee!: string | null;
 
   @ApiProperty({ nullable: true, example: null, description: 'SEP-7 msg.' })
   msg!: string | null;
@@ -181,10 +191,20 @@ export class TxPaymentIntentEntity {
     nullable: true,
     example: null,
     description:
-      'Solana only: the Solana Pay `reference` key the payment is found by. ' +
-      'Null on Stellar and Monad.',
+      'How the payment is found off Stellar. Solana: the Solana Pay ' +
+      '`reference` key. Monad with deposit addresses: the intent’s own ' +
+      'deposit address, which the link pays. Null otherwise.',
   })
   chainReference!: string | null;
+
+  @ApiProperty({
+    nullable: true,
+    example: null,
+    description:
+      'Deducted before the merchant is paid, in the asset’s units: the ' +
+      'relayer’s fee for forwarding a Monad deposit. Null when nothing is.',
+  })
+  networkFee!: string | null;
 
   @ApiProperty({ nullable: true, example: 'Order #24' })
   msg!: string | null;
@@ -278,10 +298,20 @@ export class PayPaymentIntentEntity {
     nullable: true,
     example: null,
     description:
-      'Solana only: the Solana Pay `reference` key the payment is found by. ' +
-      'Null on Stellar and Monad.',
+      'How the payment is found off Stellar. Solana: the Solana Pay ' +
+      '`reference` key. Monad with deposit addresses: the intent’s own ' +
+      'deposit address, which the link pays. Null otherwise.',
   })
   chainReference!: string | null;
+
+  @ApiProperty({
+    nullable: true,
+    example: null,
+    description:
+      'Deducted before the merchant is paid, in the asset’s units: the ' +
+      'relayer’s fee for forwarding a Monad deposit. Null when nothing is.',
+  })
+  networkFee!: string | null;
 
   @ApiProperty({ nullable: true, example: 'pay me with lumens' })
   msg!: string | null;

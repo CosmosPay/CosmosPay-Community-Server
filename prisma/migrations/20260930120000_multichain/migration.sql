@@ -10,7 +10,8 @@
 ALTER TABLE "payment_intent" ADD COLUMN     "assetDecimals" INTEGER,
 ADD COLUMN     "chain" TEXT NOT NULL DEFAULT 'stellar',
 ADD COLUMN     "chainCursor" TEXT,
-ADD COLUMN     "chainReference" TEXT;
+ADD COLUMN     "chainReference" TEXT,
+ADD COLUMN     "networkFee" TEXT;
 
 CREATE INDEX "payment_intent_consumerId_chain_createdAt_idx" ON "payment_intent"("consumerId", "chain", "createdAt");
 
@@ -30,3 +31,39 @@ CREATE UNIQUE INDEX "alias_address_aliasId_chain_network_address_key" ON "alias_
 -- `address`.
 ALTER TABLE "wallet_account" ADD COLUMN     "chain" TEXT NOT NULL DEFAULT 'stellar';
 ALTER TABLE "wallet_backup" ADD COLUMN     "chain" TEXT NOT NULL DEFAULT 'stellar';
+
+-- Monad deposit addresses: one CREATE2 forwarder per intent (see
+-- contracts/PaymentForwarder.sol). Every constructor argument is kept — the
+-- address can only ever be deployed from exactly these.
+CREATE TYPE "EvmDepositStatus" AS ENUM ('AWAITING', 'FORWARDING', 'FORWARDED');
+
+CREATE TABLE "evm_deposit_address" (
+    "id" TEXT NOT NULL,
+    "intentId" TEXT,
+    "chain" TEXT NOT NULL,
+    "network" TEXT NOT NULL,
+    "address" TEXT NOT NULL,
+    "salt" TEXT NOT NULL,
+    "destination" TEXT NOT NULL,
+    "token" TEXT,
+    "relayer" TEXT NOT NULL,
+    "fee" TEXT NOT NULL,
+    "status" "EvmDepositStatus" NOT NULL DEFAULT 'AWAITING',
+    "forwardTxHash" TEXT,
+    "forwardedAmount" TEXT,
+    "forwardSentAt" TIMESTAMP(3),
+    "forwardAttempts" INTEGER NOT NULL DEFAULT 0,
+    "forwardedAt" TIMESTAMP(3),
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "evm_deposit_address_pkey" PRIMARY KEY ("id")
+);
+
+CREATE UNIQUE INDEX "evm_deposit_address_intentId_key" ON "evm_deposit_address"("intentId");
+CREATE UNIQUE INDEX "evm_deposit_address_address_key" ON "evm_deposit_address"("address");
+CREATE INDEX "evm_deposit_address_status_createdAt_idx" ON "evm_deposit_address"("status", "createdAt");
+
+-- SET NULL: deleting an intent must not forget an address that holds, or may
+-- still receive, the merchant's money.
+ALTER TABLE "evm_deposit_address" ADD CONSTRAINT "evm_deposit_address_intentId_fkey" FOREIGN KEY ("intentId") REFERENCES "payment_intent"("id") ON DELETE SET NULL ON UPDATE CASCADE;

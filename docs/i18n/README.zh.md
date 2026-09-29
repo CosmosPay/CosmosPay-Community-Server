@@ -85,6 +85,7 @@ test/                             e2e suites: gateway gate, admin + alias consol
                                   payment intents, swaps, liquidity pools, KYC, webhooks
 plugins/                          THE plugins folder: one <slug>/ per plugin (plugin.json, index.ts, signature.json)
 scripts/                          OpenAPI generator, README check, operator scripts
+contracts/                        PaymentForwarder.sol — Monad deposit addresses (npm run contracts:compile)
 deploy/authentik/                 Authentik blueprint: the wallet sign-in and sign-up
 docs/i18n/                        this README in es, pt, de, fr, hi, zh
 ```
@@ -533,9 +534,9 @@ devnet 和 Monad testnet（10143）——所有链上的 `network` 都存为 `pu
 | 链接（`uri`） | SEP-7 `web+stellar:pay` | Solana Pay `solana:<recipient>?…` | EIP-681 `ethereum:<payee>@143?…` |
 | 原生币（不传 `assetCode`） | XLM | SOL | MON |
 | 代币（`assetCode` + `assetIssuer`） | 发行账户 | SPL mint | ERC-20 合约 |
-| 如何找到付款 | `MEMO_ID` | 每个意图新生成的 `reference` 密钥（`chainReference`） | 目标地址 + 精确金额，从意图创建时的区块起 |
-| 观察器 | 向目标地址的付款 | reference 密钥的签名 | 代币的 `Transfer` 日志（原生 MON：仅 `validate`） |
-| `amount` | 可选 | 可选 | 必填 |
+| 如何找到付款 | `MEMO_ID` | 每个意图新生成的 `reference` 密钥（`chainReference`） | 意图专属的充值地址（有 relayer 时）；否则为目标地址 + 精确金额 |
+| 观察器 | 向目标地址的付款 | reference 密钥的签名 | 充值地址的余额，含原生 MON（有 relayer 时）；否则为代币的 `Transfer` 日志 |
+| `amount` | 可选 | 可选 | 有 relayer 时可选，否则必填 |
 | `msg` / `callback` | 都支持 | `msg`（Solana Pay `message`） | 都不支持 |
 | `validate` / `PATCH` 的 `txHash` | 64 位 hex | base58 签名 | `0x` + 64 位 hex |
 
@@ -551,6 +552,20 @@ devnet 和 Monad testnet（10143）——所有链上的 `network` 都存为 `pu
   `POST /v1/payment-intents/{id}/validate` 和交易哈希完成结算。ERC-20 付款由观察器查找，
   每次调用 `MONAD_LOG_BLOCK_RANGE` 个区块、每个意图每轮最多五次调用，并从上次停止处继续
   （`chainCursor`）。
+- **充值地址（配置 `MONAD_RELAYER_PRIVATE_KEY` 时）。** 每个 Monad 意图都有自己的地址，
+  链接付款到该地址而不是商户：它是 `contracts/PaymentForwarder.sol` 通过确定性部署代理
+  （`0x4e59…956c`，Monad mainnet 和 testnet 上均已存在）得到的 `CREATE2` 地址，其初始化
+  代码固定了商户、资产、relayer 及其手续费。地址本身就是承诺——任何人（包括本服务）都
+  无法在该地址部署向他人付款的代码——因此本服务不持有资金的任何密钥。充值转发器监控该
+  地址的余额（含原生 MON，无需日志）；余额覆盖意图金额后（开放金额意图为高于手续费的
+  任意金额），relayer 部署转发合约，其构造函数把手续费付给 relayer、其余付给商户，意图
+  以这笔交易结算。手续费在创建意图时确定，并以 `networkFee` 显示：MON 为按当前价格计算的
+  转发 gas 预算加 25%；代币为运营方在 `MONAD_DEPOSIT_TOKEN_FEES` 中的配置，未配置则为零
+  （由 relayer 承担 gas）。会被手续费吞掉的金额返回 `400 invalid_amount`。意图过期或取消
+  后才到账的资金仍会转发给商户，付款方也可以用 `validate` 和自己的交易哈希提前结算。
+  relayer 密钥只存放 gas 资金：请适度充值并设置余额告警。字节码已提交
+  （`src/evm/payment-forwarder.artifact.ts`），有一个 spec 会重新编译源码进行比对；所有
+  充值地址都依赖它，只要旧地址仍可能收到资金，就绝不要修改它。
 - **信任 RPC 节点前会先校验**：在首次读取某个层级前，服务会将节点的 genesis hash
   （Solana）或 `eth_chainId`（Monad）与该链比较；当 mainnet URL 指向测试网时返回
   `503 misconfigured`。默认使用公共 RPC，速率限制很严——生产环境请将
@@ -1025,6 +1040,9 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
   为这些链上的待处理意图轮询 Solana 和 Monad。
 - **开发者平台的 `/wallet/console/provision`** 现在会收到 `chain` 和 `address`，Solana 或
   Monad 登录时 `stellarAddress: null`；在钱包提供这些链之前，它必须能接受这种情况。
+- **Monad 充值地址**仅在配置 `MONAD_RELAYER_PRIVATE_KEY` 时启用；迁移还会创建
+  `evm_deposit_address`，意图新增 `networkFee`。未配置密钥时，Monad 意图行为不变
+  （直接付款给商户）。
 - **APISIX 无需改动。**
 
 ### 插件：一个新模块、两张新表和两个新 scope
@@ -1294,6 +1312,8 @@ WHERE NOT i.indisvalid;
 | `MONAD_RPC_URL_TESTNET` | 否 | `https://testnet-rpc.monad.xyz` | `dev` 密钥使用的 Monad RPC（chain id 10143） |
 | `MONAD_RPC_TIMEOUT_MS` | 否 | `10000` | 单次 Monad RPC 调用的时间预算（毫秒） |
 | `MONAD_LOG_BLOCK_RANGE` | 否 | `100` | 一次 `eth_getLogs` 可覆盖的区块数——RPC 服务商的上限（公共 RPC 允许 100） |
+| `MONAD_RELAYER_PRIVATE_KEY` | 否 | — | relayer 密钥（32 字节 hex）。设置后每个 Monad 意图都有自己的充值地址，relayer 会扣除手续费后把充值转发给商户。只存放 gas 资金：它部署的转发合约不能向其他任何人付款 |
+| `MONAD_DEPOSIT_TOKEN_FEES` | 否 | — | 每种 ERC-20 充值的 relayer 手续费，JSON `{"0xToken": "0.05"}`，以代币单位计。未配置的代币免费转发（gas 由 relayer 支付） |
 | `STELLAR_BASE_FEE` | 否 | `100` | 构建交易时使用的 Stellar 基础手续费（stroops） |
 | `STELLAR_TX_TIMEOUT` | 否 | `300` | 交易超时（秒） |
 | `STELLAR_SWAP_FEE_WALLET` | 手续费 > 0 时 | — | 收取 swap 手续费的平台 G... 账户 |

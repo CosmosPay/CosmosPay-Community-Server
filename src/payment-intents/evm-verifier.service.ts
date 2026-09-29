@@ -25,6 +25,12 @@ import type {
 /**
  * Confirms that an EVM transaction pays an intent (Monad).
  *
+ * With a relayer configured, every Monad intent has its own deposit address
+ * (`chainReference`) and that address is the identification — the rules
+ * below then apply to it instead of the merchant, the amount becomes "at
+ * least", and discovery is the deposit forwarder's (by balance, native MON
+ * included). What follows is the direct mode, paying the merchant.
+ *
  * An EIP-681 payment carries no memo: a plain value transfer and an ERC-20
  * `transfer` have no field a wallet fills with an intent id. So the payment is
  * identified by what it moves — to the intent's destination, in its asset, for
@@ -61,13 +67,14 @@ export class EvmVerifierService implements PaymentVerifier {
     }
 
     const expected = this.expected(intent);
-    if (expected === null) {
+    if (expected === null && !isDeposit(intent)) {
       return { valid: false, reason: 'The intent has no payable amount' };
     }
+    const accepts = amountRule(intent, expected);
 
     const paysIntent = intent.assetIssuer
-      ? this.erc20Pays(intent, tx, receipt, expected)
-      : this.nativePays(intent, tx, expected);
+      ? this.erc20Pays(intent, tx, receipt, accepts)
+      : this.nativePays(intent, tx, accepts);
     if (!paysIntent) {
       return {
         valid: false,
@@ -115,6 +122,14 @@ export class EvmVerifierService implements PaymentVerifier {
   async findMatchingPayment(
     intent: PaymentIntent,
   ): Promise<VerificationResult> {
+    // A deposit address is watched by its balance, by the deposit forwarder,
+    // which settles the intent once the money is on its way to the merchant.
+    if (isDeposit(intent)) {
+      return {
+        valid: false,
+        reason: 'Awaiting a deposit at the intent address',
+      };
+    }
     if (!intent.assetIssuer) {
       return {
         valid: false,
@@ -184,11 +199,11 @@ export class EvmVerifierService implements PaymentVerifier {
   private nativePays(
     intent: PaymentIntent,
     tx: EvmTransaction,
-    expected: bigint,
+    accepts: (value: bigint | null) => boolean,
   ): boolean {
     return (
-      tx.to?.toLowerCase() === intent.destination.toLowerCase() &&
-      safeBigInt(tx.value) === expected
+      tx.to?.toLowerCase() === payee(intent).toLowerCase() &&
+      accepts(safeBigInt(tx.value))
     );
   }
 
@@ -201,16 +216,16 @@ export class EvmVerifierService implements PaymentVerifier {
     intent: PaymentIntent,
     tx: EvmTransaction,
     receipt: EvmReceipt,
-    expected: bigint,
+    accepts: (value: bigint | null) => boolean,
   ): boolean {
     const token = intent.assetIssuer!.toLowerCase();
-    const destination = addressTopic(intent.destination);
+    const destination = addressTopic(payee(intent));
     const logged = receipt.logs.some(
       (log) =>
         log.address.toLowerCase() === token &&
         log.topics[0] === ERC20_TRANSFER_TOPIC &&
         log.topics[2]?.toLowerCase() === destination &&
-        safeBigInt(log.data) === expected,
+        accepts(safeBigInt(log.data)),
     );
     if (logged) return true;
     if (receipt.status === '0x1' || tx.to?.toLowerCase() !== token) {
@@ -220,9 +235,34 @@ export class EvmVerifierService implements PaymentVerifier {
     return (
       input.startsWith(ERC20_TRANSFER_SELECTOR) &&
       `0x${input.slice(10, 74)}` === destination &&
-      safeBigInt(`0x${input.slice(74, 138)}`) === expected
+      accepts(safeBigInt(`0x${input.slice(74, 138)}`))
     );
   }
+}
+
+/** Whether the intent has its own deposit address (the relayer is on). */
+function isDeposit(intent: PaymentIntent): boolean {
+  return intent.chainReference !== null && intent.chainReference !== undefined;
+}
+
+/** Where the payer pays: the intent's deposit address, else the merchant. */
+function payee(intent: PaymentIntent): string {
+  return intent.chainReference ?? intent.destination;
+}
+
+/**
+ * Which amounts settle the intent. Paying the merchant directly, only the
+ * exact amount: it is half of how the payment is recognised. Paying a deposit
+ * address, the address alone identifies the intent, so the amount or more
+ * does — any positive amount for an open intent.
+ */
+function amountRule(
+  intent: PaymentIntent,
+  expected: bigint | null,
+): (value: bigint | null) => boolean {
+  if (!isDeposit(intent)) return (value) => value === expected;
+  if (expected === null) return (value) => value !== null && value > 0n;
+  return (value) => value !== null && value >= expected;
 }
 
 /** A hex quantity as a bigint, or null when it is not one. */

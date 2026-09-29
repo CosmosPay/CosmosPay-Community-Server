@@ -106,6 +106,7 @@ test/                             e2e suites: gateway gate, admin + alias consol
                                   payment intents, swaps, liquidity pools, KYC, webhooks
 plugins/                          THE plugins folder: one <slug>/ per plugin (plugin.json, index.ts, signature.json)
 scripts/                          OpenAPI generator, README check, operator scripts
+contracts/                        PaymentForwarder.sol — Monad deposit addresses (npm run contracts:compile)
 deploy/authentik/                 Authentik blueprint: the wallet sign-in and sign-up
 docs/i18n/                        this README in es, pt, de, fr, hi, zh
 ```
@@ -732,9 +733,9 @@ and `network` is stored as `public` / `testnet` on every chain.
 | Link (`uri`) | SEP-7 `web+stellar:pay` | Solana Pay `solana:<recipient>?…` | EIP-681 `ethereum:<payee>@143?…` |
 | Coin (no `assetCode`) | XLM | SOL | MON |
 | Token (`assetCode` + `assetIssuer`) | issuer account | SPL mint | ERC-20 contract |
-| How the payment is found | `MEMO_ID` | a fresh `reference` key per intent (`chainReference`) | destination + exact amount, from the intent's creation block |
-| Observer | payments to the destination | the reference key's signatures | the token's `Transfer` logs (native MON: `validate` only) |
-| `amount` | optional | optional | required |
+| How the payment is found | `MEMO_ID` | a fresh `reference` key per intent (`chainReference`) | the intent's own deposit address (with a relayer); else destination + exact amount |
+| Observer | payments to the destination | the reference key's signatures | the deposit address's balance, native MON included (with a relayer); else the token's `Transfer` logs |
+| `amount` | optional | optional | optional with a relayer, required without |
 | `msg` / `callback` | both | `msg` (Solana Pay `message`) | neither |
 | `txHash` for `validate` / `PATCH` | 64 hex | base58 signature | `0x` + 64 hex |
 
@@ -754,6 +755,27 @@ and `network` is stored as `public` / `testnet` on every chain.
   `POST /v1/payment-intents/{id}/validate` and the transaction hash. ERC-20
   payments are found by the observer, `MONAD_LOG_BLOCK_RANGE` blocks per call and
   five calls per intent per tick, resuming where it stopped (`chainCursor`).
+- **Deposit addresses (with `MONAD_RELAYER_PRIVATE_KEY`).** Every Monad intent
+  gets its own address, and the link pays it instead of the merchant: a
+  `CREATE2` address of `contracts/PaymentForwarder.sol` through the deterministic
+  deployment proxy (`0x4e59…956c`, present on Monad mainnet and testnet), whose
+  init code embeds the merchant, the asset, the relayer and the relayer's fee. The
+  address is the commitment — nobody, this service included, can deploy code at
+  it that pays anyone else — so the service holds no key to the money. The
+  deposit forwarder watches the address's balance (native MON included, no logs
+  needed); once it covers the intent (any amount above the fee, for an open one)
+  the relayer deploys the forwarder, whose constructor pays the relayer its fee
+  and the rest to the merchant, and the intent settles on that transaction. The
+  fee is fixed when the intent is created and shown as `networkFee`: for MON, the
+  forward's gas budget at the current price plus 25%; for a token, the operator's
+  `MONAD_DEPOSIT_TOKEN_FEES` entry, or nothing (the relayer absorbs the gas). An
+  amount the fee would swallow is `400 invalid_amount`. What arrives after an
+  intent expires or is cancelled is still forwarded to the merchant, and a payer
+  can settle sooner with `validate` and their own hash. The relayer key holds gas
+  money only: fund it modestly and alert on its balance. The bytecode is committed
+  (`src/evm/payment-forwarder.artifact.ts`) and a spec recompiles the source
+  against it — every deposit address depends on it, so never change it while old
+  addresses may still receive money.
 - **An RPC node is checked before it is trusted**: before its first read of a
   tier the service compares the node's genesis hash (Solana) or `eth_chainId`
   (Monad) with the chain's, and answers `503 misconfigured` when a mainnet URL
@@ -1443,6 +1465,9 @@ the service under `src/native-plugins/<slug>/`, switched on by the same
 - **The developer platform's `/wallet/console/provision`** now receives `chain`
   and `address`, and `stellarAddress: null` for a Solana or Monad sign-in; it must
   accept that before wallets offer those chains.
+- **Monad deposit addresses** are on only with `MONAD_RELAYER_PRIVATE_KEY`; the
+  migration also creates `evm_deposit_address`, and intents gain `networkFee`.
+  Without the key Monad intents behave as before (paying the merchant directly).
 - **No APISIX change.**
 
 ### Plugins: a new module, two new tables and two new scopes
@@ -1833,6 +1858,8 @@ at least `DATABASE_URL` and `APISIX_GATEWAY_SECRET`.
 | `MONAD_RPC_URL_TESTNET` | no | `https://testnet-rpc.monad.xyz` | Monad RPC for `dev` keys (chain id 10143) |
 | `MONAD_RPC_TIMEOUT_MS` | no | `10000` | Budget for one Monad RPC call (ms) |
 | `MONAD_LOG_BLOCK_RANGE` | no | `100` | Blocks one `eth_getLogs` may span — the RPC provider's limit (the public RPC allows 100) |
+| `MONAD_RELAYER_PRIVATE_KEY` | no | — | Relayer key (32-byte hex). Set, every Monad intent gets its own deposit address and the relayer forwards deposits to the merchant, less a fee. Holds gas money only: the forwarders it deploys can pay nobody else |
+| `MONAD_DEPOSIT_TOKEN_FEES` | no | — | Relayer fee per ERC-20 deposit, JSON `{"0xToken": "0.05"}` in token units. A token with no entry is forwarded free (the relayer pays the gas) |
 | `STELLAR_BASE_FEE` | no | `100` | Stellar base fee (stroops) for tx builds |
 | `STELLAR_TX_TIMEOUT` | no | `300` | Transaction timeout (seconds) |
 | `STELLAR_SWAP_FEE_WALLET` | when fee > 0 | — | Platform G... account for swap fees |

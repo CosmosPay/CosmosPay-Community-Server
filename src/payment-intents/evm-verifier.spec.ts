@@ -194,3 +194,50 @@ describe('EvmVerifierService.findMatchingPayment', () => {
     expect(rpc.getLogs).not.toHaveBeenCalled();
   });
 });
+
+describe('EvmVerifierService with a deposit address', () => {
+  const DEPOSIT = '0xC830d264C14ebDB31cdEa0Fb6f83C5b0D8EEc52F';
+  const native = (over: Partial<PaymentIntent> = {}) =>
+    intent({
+      asset: 'native',
+      assetIssuer: null,
+      assetDecimals: null,
+      amount: '1',
+      chainReference: DEPOSIT,
+      ...over,
+    });
+  const payTo = (to: string, wei: bigint) =>
+    make({
+      tx: tx({ to: to.toLowerCase(), value: `0x${wei.toString(16)}` }),
+      receipt: receipt({ logs: [] }),
+    });
+
+  it('settles a native MON payment to the deposit address, at or above the amount', async () => {
+    for (const wei of [10n ** 18n, 2n * 10n ** 18n]) {
+      const { verifier } = payTo(DEPOSIT, wei);
+      expect((await verifier.verifyByHash(native(), HASH)).valid).toBe(true);
+    }
+    const { verifier } = payTo(DEPOSIT, 10n ** 18n - 1n);
+    expect((await verifier.verifyByHash(native(), HASH)).valid).toBe(false);
+  });
+
+  it('does not count a payment made to the merchant directly', async () => {
+    const { verifier } = payTo(DEST, 10n ** 18n);
+    expect((await verifier.verifyByHash(native(), HASH)).valid).toBe(false);
+  });
+
+  it('settles any positive amount for an open intent', async () => {
+    const { verifier } = payTo(DEPOSIT, 1n);
+    expect(
+      (await verifier.verifyByHash(native({ amount: null }), HASH)).valid,
+    ).toBe(true);
+  });
+
+  it('leaves discovery to the deposit forwarder: no log scan', async () => {
+    const { verifier, rpc } = make({});
+    const result = await verifier.findMatchingPayment(native());
+    expect(result.valid).toBe(false);
+    expect(rpc.getLogs).not.toHaveBeenCalled();
+    expect(rpc.blockNumber).not.toHaveBeenCalled();
+  });
+});

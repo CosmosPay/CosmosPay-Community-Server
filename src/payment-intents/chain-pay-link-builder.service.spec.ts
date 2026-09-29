@@ -8,7 +8,11 @@ const EVM_DEST = '0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed';
 const TOKEN = '0x754704Bc059F8C67012fEd69BC8A327a5aafb603';
 
 function make(
-  opts: { mintDecimals?: number | null; erc20Decimals?: number | null } = {},
+  opts: {
+    mintDecimals?: number | null;
+    erc20Decimals?: number | null;
+    deposits?: unknown;
+  } = {},
 ) {
   const solana = {
     getMintDecimals: jest
@@ -26,8 +30,14 @@ function make(
     chainId: jest.fn().mockReturnValue(143),
     blockNumber: jest.fn().mockResolvedValue(12_345n),
   };
+  // No relayer by default: the direct mode, paying the merchant.
+  const deposits = opts.deposits ?? { isEnabled: () => false };
   return {
-    builder: new ChainPayLinkBuilder(solana as never, evm as never),
+    builder: new ChainPayLinkBuilder(
+      solana as never,
+      evm as never,
+      deposits as never,
+    ),
     solana,
     evm,
   };
@@ -181,5 +191,75 @@ describe('ChainPayLinkBuilder — monad', () => {
         }),
       ),
     ).toBe(ApiErrorCode.ValidationFailed);
+  });
+});
+
+describe('ChainPayLinkBuilder — monad with deposit addresses', () => {
+  const DEPOSIT = '0xC830d264C14ebDB31cdEa0Fb6f83C5b0D8EEc52F';
+  const deposits = (fee: bigint) => ({
+    isEnabled: () => true,
+    mint: jest.fn(
+      async (
+        _chain: string,
+        _network: string,
+        destination: string,
+        token: { address: string } | null,
+      ) => ({
+        address: DEPOSIT,
+        salt: `0x${'11'.repeat(32)}`,
+        destination,
+        token: token?.address ?? null,
+        relayer: '0xfB6916095ca1df60bB79Ce92cE3Ea74c37c5d359',
+        fee,
+      }),
+    ),
+  });
+
+  it('points the link at the intent’s deposit address and shows the fee', async () => {
+    const d = deposits(2n * 10n ** 16n);
+    const { builder, evm } = make({ deposits: d });
+    const link = await builder.build('monad', {
+      network: 'public',
+      destination: EVM_DEST,
+      amount: '1',
+      memo: '42',
+    });
+    expect(link.uri).toBe(`ethereum:${DEPOSIT}@143?value=1000000000000000000`);
+    expect(link).toMatchObject({
+      destination: EVM_DEST,
+      chainReference: DEPOSIT,
+      chainCursor: null,
+      networkFee: '0.02',
+    });
+    expect(link.deposit).toMatchObject({ address: DEPOSIT, token: null });
+    // No head block needed: the address is the identification, not a window.
+    expect(evm.blockNumber).not.toHaveBeenCalled();
+  });
+
+  it('allows an open amount, which the deposit address makes recognisable', async () => {
+    const { builder } = make({ deposits: deposits(0n) });
+    const link = await builder.build('monad', {
+      network: 'public',
+      destination: EVM_DEST,
+      assetCode: 'USDC',
+      assetIssuer: TOKEN,
+      memo: '42',
+    });
+    expect(link.uri).toBe(`ethereum:${TOKEN}@143/transfer?address=${DEPOSIT}`);
+    expect(link.networkFee).toBeNull();
+  });
+
+  it('refuses an amount the fee would swallow', async () => {
+    const { builder } = make({ deposits: deposits(10n ** 18n) });
+    expect(
+      await codeOf(
+        builder.build('monad', {
+          network: 'public',
+          destination: EVM_DEST,
+          amount: '1',
+          memo: '42',
+        }),
+      ),
+    ).toBe(ApiErrorCode.InvalidAmount);
   });
 });

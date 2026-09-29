@@ -12,6 +12,10 @@ import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import type { StellarNetwork } from '@/config/configuration';
 import { eip681Uri } from '@/evm/eip681';
 import { EvmRpcClient } from '@/evm/evm-rpc.client';
+import {
+  EvmDepositAddressFactory,
+  type EvmDepositTerms,
+} from '@/payment-intents/evm-deposit-address.factory';
 import { solanaPayUri } from '@/solana/solana-pay';
 import { SolanaRpcClient } from '@/solana/solana-rpc.client';
 
@@ -35,6 +39,10 @@ export interface ChainPayLink {
   uri: string;
   chainReference: string | null;
   chainCursor: string | null;
+  /** What is deducted before the merchant is paid, as a decimal; null for nothing. */
+  networkFee: string | null;
+  /** A Monad intent's deposit address and its terms, when the relayer is on. */
+  deposit: EvmDepositTerms | null;
 }
 
 /** The asset an intent settles in, resolved against the chain. */
@@ -61,6 +69,7 @@ export class ChainPayLinkBuilder {
   constructor(
     private readonly solana: SolanaRpcClient,
     private readonly evm: EvmRpcClient,
+    private readonly deposits: EvmDepositAddressFactory,
   ) {}
 
   build(chain: OtherChain, request: ChainPayRequest): Promise<ChainPayLink> {
@@ -112,6 +121,8 @@ export class ChainPayLinkBuilder {
       uri,
       chainReference: reference,
       chainCursor: null,
+      networkFee: null,
+      deposit: null,
     };
   }
 
@@ -126,13 +137,74 @@ export class ChainPayLinkBuilder {
     const asset = await this.resolveAsset('monad', request, (token) =>
       this.evm.erc20Decimals('monad', request.network, token),
     );
-    // An EVM payment carries no memo, so the amount is part of what
-    // identifies it; an open-amount link could be settled by any transfer.
+    const chainId = this.evm.chainId('monad', request.network);
+    return this.deposits.isEnabled('monad')
+      ? this.monadDeposit(request, destination, asset, chainId)
+      : this.monadDirect(request, destination, asset, chainId);
+  }
+
+  /**
+   * With a relayer: the payer pays the intent's own CREATE2 deposit address,
+   * so the payment is recognised by where it went rather than by its amount —
+   * native MON included, and an open amount is possible. The relayer later
+   * forwards it to the merchant, less the fee fixed here.
+   */
+  private async monadDeposit(
+    request: ChainPayRequest,
+    destination: string,
+    asset: ResolvedAsset,
+    chainId: number,
+  ): Promise<ChainPayLink> {
+    const value = checkAmount(request.amount, asset, false);
+    const deposit = await this.deposits.mint(
+      'monad',
+      request.network,
+      destination,
+      asset.issuer ? { address: asset.issuer, decimals: asset.decimals } : null,
+    );
+    if (value !== null && value <= deposit.fee) {
+      throw ApiError.badRequest(
+        ApiErrorCode.InvalidAmount,
+        `amount must be more than the network fee (${EvmDepositAddressFactory.displayFee(
+          deposit.fee,
+          asset.decimals,
+        )}), which is deducted before the merchant is paid`,
+      );
+    }
+    return {
+      destination,
+      asset: asset.code,
+      assetIssuer: asset.issuer,
+      assetDecimals: asset.issuer ? asset.decimals : null,
+      uri: eip681Uri({
+        chainId,
+        recipient: deposit.address,
+        value: value ?? undefined,
+        token: asset.issuer ?? undefined,
+      }),
+      chainReference: deposit.address,
+      chainCursor: null,
+      networkFee:
+        deposit.fee > 0n
+          ? EvmDepositAddressFactory.displayFee(deposit.fee, asset.decimals)
+          : null,
+      deposit,
+    };
+  }
+
+  /**
+   * Without a relayer: the payer pays the merchant directly. An EVM payment
+   * carries no memo, so the amount is part of what identifies it — an
+   * open-amount link could be settled by any transfer.
+   */
+  private async monadDirect(
+    request: ChainPayRequest,
+    destination: string,
+    asset: ResolvedAsset,
+    chainId: number,
+  ): Promise<ChainPayLink> {
     const value = checkAmount(request.amount, asset, true)!;
-    const [chainId, head] = [
-      this.evm.chainId('monad', request.network),
-      await this.evm.blockNumber('monad', request.network),
-    ];
+    const head = await this.evm.blockNumber('monad', request.network);
     return {
       destination,
       asset: asset.code,
@@ -147,6 +219,8 @@ export class ChainPayLinkBuilder {
       chainReference: null,
       // The observer scans for the payment from the block after this one.
       chainCursor: head.toString(),
+      networkFee: null,
+      deposit: null,
     };
   }
 
@@ -221,8 +295,8 @@ function checkAmount(
     if (required) {
       throw ApiError.badRequest(
         ApiErrorCode.InvalidAmount,
-        'amount is required on monad: an EIP-681 payment carries no memo, so ' +
-          'the amount is part of how it is recognised.',
+        'amount is required on monad without deposit addresses: an EIP-681 ' +
+          'payment carries no memo, so the amount is part of how it is recognised.',
       );
     }
     return null;

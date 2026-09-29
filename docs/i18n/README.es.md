@@ -108,6 +108,7 @@ test/                             e2e suites: gateway gate, admin + alias consol
                                   payment intents, swaps, liquidity pools, KYC, webhooks
 plugins/                          THE plugins folder: one <slug>/ per plugin (plugin.json, index.ts, signature.json)
 scripts/                          OpenAPI generator, README check, operator scripts
+contracts/                        PaymentForwarder.sol — Monad deposit addresses (npm run contracts:compile)
 deploy/authentik/                 Authentik blueprint: the wallet sign-in and sign-up
 docs/i18n/                        this README in es, pt, de, fr, hi, zh
 ```
@@ -755,9 +756,9 @@ sobre de Stellar.
 | Enlace (`uri`) | SEP-7 `web+stellar:pay` | Solana Pay `solana:<recipient>?…` | EIP-681 `ethereum:<payee>@143?…` |
 | Moneda (sin `assetCode`) | XLM | SOL | MON |
 | Token (`assetCode` + `assetIssuer`) | cuenta emisora | mint SPL | contrato ERC-20 |
-| Cómo se encuentra el pago | `MEMO_ID` | una clave `reference` nueva por intención (`chainReference`) | destino + importe exacto, desde el bloque en que se creó la intención |
-| Observador | pagos al destino | las firmas de la clave de referencia | los logs `Transfer` del token (MON nativo: solo `validate`) |
-| `amount` | opcional | opcional | obligatorio |
+| Cómo se encuentra el pago | `MEMO_ID` | una clave `reference` nueva por intención (`chainReference`) | la dirección de depósito propia de la intención (con relayer); si no, destino + importe exacto |
+| Observador | pagos al destino | las firmas de la clave de referencia | el saldo de la dirección de depósito, MON nativo incluido (con relayer); si no, los logs `Transfer` del token |
+| `amount` | opcional | opcional | opcional con relayer, obligatorio sin él |
 | `msg` / `callback` | ambos | `msg` (`message` de Solana Pay) | ninguno |
 | `txHash` para `validate` / `PATCH` | 64 hex | firma base58 | `0x` + 64 hex |
 
@@ -778,6 +779,28 @@ sobre de Stellar.
   hash de la transacción. Los pagos ERC-20 los encuentra el observador,
   `MONAD_LOG_BLOCK_RANGE` bloques por llamada y cinco llamadas por intención y por
   ciclo, retomando donde se detuvo (`chainCursor`).
+- **Direcciones de depósito (con `MONAD_RELAYER_PRIVATE_KEY`).** Cada intención
+  en Monad recibe su propia dirección, y el enlace paga a ella en vez de al
+  comercio: una dirección `CREATE2` de `contracts/PaymentForwarder.sol` a través del
+  proxy de despliegue determinista (`0x4e59…956c`, presente en Monad mainnet y
+  testnet), cuyo código de inicialización fija el comercio, el activo, el relayer y
+  su comisión. La dirección es el compromiso —nadie, este servicio incluido, puede
+  desplegar ahí código que pague a otro—, así que el servicio no tiene ninguna
+  clave del dinero. El reenviador de depósitos vigila el saldo de la dirección (MON
+  nativo incluido, sin necesidad de logs); cuando cubre la intención (cualquier
+  importe por encima de la comisión, si es abierta), el relayer despliega el
+  reenviador, cuyo constructor paga al relayer su comisión y el resto al comercio,
+  y la intención se liquida con esa transacción. La comisión se fija al crear la
+  intención y se muestra como `networkFee`: para MON, el presupuesto de gas del
+  reenvío al precio actual más un 25 %; para un token, la entrada de
+  `MONAD_DEPOSIT_TOKEN_FEES` del operador, o nada (el relayer absorbe el gas). Un
+  importe que la comisión se comería es `400 invalid_amount`. Lo que llega después
+  de que una intención expire o se cancele se reenvía igualmente al comercio, y el
+  pagador puede liquidar antes con `validate` y su propio hash. La clave del relayer
+  solo guarda dinero para gas: fondéela con moderación y ponga alertas de saldo. El
+  bytecode está commiteado (`src/evm/payment-forwarder.artifact.ts`) y un spec
+  recompila la fuente para compararlo; toda dirección de depósito depende de él, así
+  que nunca lo cambie mientras direcciones antiguas puedan seguir recibiendo dinero.
 - **Un nodo RPC se comprueba antes de confiar en él**: antes de su primera lectura
   de un nivel, el servicio compara el genesis hash del nodo (Solana) o su
   `eth_chainId` (Monad) con el de la cadena, y responde `503 misconfigured` cuando
@@ -1495,6 +1518,10 @@ misma lista `PLUGINS_ENABLED` que los plugins aislados.
 - **`/wallet/console/provision` de la plataforma de desarrollo** recibe ahora
   `chain` y `address`, y `stellarAddress: null` en un inicio de sesión de Solana o
   Monad; debe aceptarlo antes de que las wallets ofrezcan esas cadenas.
+- **Las direcciones de depósito de Monad** solo se activan con
+  `MONAD_RELAYER_PRIVATE_KEY`; la migración también crea `evm_deposit_address`, y
+  las intenciones ganan `networkFee`. Sin la clave, las intenciones en Monad se
+  comportan como antes (pagando directamente al comercio).
 - **Sin cambios en APISIX.**
 
 ### Plugins: un módulo nuevo, dos tablas nuevas y dos scopes nuevos
@@ -1894,6 +1921,8 @@ Cada variable leída de `process.env` en `src/` se valida en el arranque mediant
 | `MONAD_RPC_URL_TESTNET` | no | `https://testnet-rpc.monad.xyz` | RPC de Monad para claves `dev` (chain id 10143) |
 | `MONAD_RPC_TIMEOUT_MS` | no | `10000` | Presupuesto de una llamada RPC a Monad (ms) |
 | `MONAD_LOG_BLOCK_RANGE` | no | `100` | Bloques que puede abarcar un `eth_getLogs`: el límite del proveedor RPC (el RPC público admite 100) |
+| `MONAD_RELAYER_PRIVATE_KEY` | no | — | Clave del relayer (hex de 32 bytes). Configurada, cada intención en Monad recibe su propia dirección de depósito y el relayer reenvía los depósitos al comercio, menos una comisión. Solo guarda dinero para gas: los reenviadores que despliega no pueden pagar a nadie más |
+| `MONAD_DEPOSIT_TOKEN_FEES` | no | — | Comisión del relayer por depósito de cada ERC-20, JSON `{"0xToken": "0.05"}` en unidades del token. Un token sin entrada se reenvía gratis (el relayer paga el gas) |
 | `STELLAR_BASE_FEE` | no | `100` | Fee base de Stellar (stroops) para construir txs |
 | `STELLAR_TX_TIMEOUT` | no | `300` | Timeout de la transacción (segundos) |
 | `STELLAR_SWAP_FEE_WALLET` | cuando fee > 0 | — | Cuenta G... de la plataforma para las comisiones de swap |

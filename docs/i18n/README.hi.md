@@ -106,6 +106,7 @@ test/                             e2e suites: gateway gate, admin + alias consol
                                   payment intents, swaps, liquidity pools, KYC, webhooks
 plugins/                          THE plugins folder: one <slug>/ per plugin (plugin.json, index.ts, signature.json)
 scripts/                          OpenAPI generator, README check, operator scripts
+contracts/                        PaymentForwarder.sol — Monad deposit addresses (npm run contracts:compile)
 deploy/authentik/                 Authentik blueprint: the wallet sign-in and sign-up
 docs/i18n/                        this README in es, pt, de, fr, hi, zh
 ```
@@ -731,9 +732,9 @@ Network/Horizon/fee/timeout `STELLAR_*` env vars से कॉन्फ़िग
 | लिंक (`uri`) | SEP-7 `web+stellar:pay` | Solana Pay `solana:<recipient>?…` | EIP-681 `ethereum:<payee>@143?…` |
 | सिक्का (`assetCode` के बिना) | XLM | SOL | MON |
 | टोकन (`assetCode` + `assetIssuer`) | issuer खाता | SPL mint | ERC-20 contract |
-| भुगतान कैसे खोजा जाता है | `MEMO_ID` | हर intent के लिए नई `reference` कुंजी (`chainReference`) | destination + सटीक राशि, intent के बनने वाले block से |
-| Observer | destination को भुगतान | reference कुंजी के signatures | टोकन के `Transfer` logs (native MON: केवल `validate`) |
-| `amount` | वैकल्पिक | वैकल्पिक | अनिवार्य |
+| भुगतान कैसे खोजा जाता है | `MEMO_ID` | हर intent के लिए नई `reference` कुंजी (`chainReference`) | intent का अपना deposit address (relayer के साथ); अन्यथा destination + सटीक राशि |
+| Observer | destination को भुगतान | reference कुंजी के signatures | deposit address का balance, native MON सहित (relayer के साथ); अन्यथा टोकन के `Transfer` logs |
+| `amount` | वैकल्पिक | वैकल्पिक | relayer के साथ वैकल्पिक, बिना relayer अनिवार्य |
 | `msg` / `callback` | दोनों | `msg` (Solana Pay `message`) | कोई नहीं |
 | `validate` / `PATCH` के लिए `txHash` | 64 hex | base58 signature | `0x` + 64 hex |
 
@@ -753,6 +754,26 @@ Network/Horizon/fee/timeout `STELLAR_*` env vars से कॉन्फ़िग
   transaction hash से settle करें। ERC-20 भुगतान observer खोजता है — हर कॉल में
   `MONAD_LOG_BLOCK_RANGE` blocks और हर tick में हर intent के लिए पाँच कॉल, और जहाँ रुका
   था वहीं से आगे बढ़ता है (`chainCursor`)।
+- **Deposit addresses (`MONAD_RELAYER_PRIVATE_KEY` के साथ)।** हर Monad intent को अपना
+  पता मिलता है, और link merchant के बजाय उसी को भुगतान करता है: deterministic
+  deployment proxy (`0x4e59…956c`, Monad mainnet और testnet पर मौजूद) के ज़रिए
+  `contracts/PaymentForwarder.sol` का एक `CREATE2` पता, जिसका init code merchant,
+  asset, relayer और relayer की fee को तय कर देता है। पता ही प्रतिबद्धता है — कोई भी,
+  यह सेवा भी, वहाँ ऐसा code deploy नहीं कर सकता जो किसी और को भुगतान करे — इसलिए सेवा
+  के पास पैसे की कोई कुंजी नहीं होती। Deposit forwarder पते के balance पर नज़र रखता है
+  (native MON सहित, logs की ज़रूरत नहीं); जब यह intent को पूरा कर देता है (open intent
+  के लिए fee से ऊपर कोई भी राशि), relayer forwarder को deploy करता है, जिसका
+  constructor relayer को उसकी fee और बाकी merchant को देता है, और intent उसी
+  transaction पर settle होता है। Fee intent बनते समय तय होती है और `networkFee` के रूप
+  में दिखती है: MON के लिए, मौजूदा कीमत पर forward का gas budget और 25%; टोकन के लिए,
+  operator की `MONAD_DEPOSIT_TOKEN_FEES` प्रविष्टि, या कुछ नहीं (gas relayer उठाता है)।
+  जिस राशि को fee निगल जाए वह `400 invalid_amount` है। Intent के expire या cancel होने के
+  बाद जो आता है वह भी merchant को forward होता है, और payer `validate` और अपने hash से
+  पहले settle कर सकता है। Relayer कुंजी में केवल gas का पैसा होता है: उसे सीमित रूप से
+  fund करें और balance पर alert रखें। Bytecode commit किया गया है
+  (`src/evm/payment-forwarder.artifact.ts`) और एक spec source को फिर से compile करके
+  उससे मिलाता है; हर deposit address उस पर निर्भर है, इसलिए जब तक पुराने पतों पर पैसा आ
+  सकता है, उसे कभी न बदलें।
 - **RPC node पर भरोसा करने से पहले उसकी जाँच होती है**: किसी स्तर को पहली बार पढ़ने से
   पहले सेवा node के genesis hash (Solana) या `eth_chainId` (Monad) की तुलना chain से
   करती है, और mainnet URL के test network की ओर इशारा करने पर `503 misconfigured`
@@ -1430,6 +1451,9 @@ seal होती हैं और कभी लौटाई नहीं जा
 - **Developer platform का `/wallet/console/provision`** अब `chain` और `address` पाता
   है, और Solana या Monad sign-in पर `stellarAddress: null`; wallets के इन chains को
   देने से पहले उसे यह स्वीकार करना होगा।
+- **Monad deposit addresses** केवल `MONAD_RELAYER_PRIVATE_KEY` के साथ चालू होते हैं;
+  migration `evm_deposit_address` भी बनाता है, और intents को `networkFee` मिलता है।
+  कुंजी के बिना Monad intents पहले जैसे चलते हैं (merchant को सीधे भुगतान)।
 - **APISIX में कोई बदलाव नहीं।**
 
 ### Plugins: एक नया module, दो नई tables और दो नए scopes
@@ -1813,6 +1837,8 @@ type दोबारा बनाए बिना enum value drop नहीं �
 | `MONAD_RPC_URL_TESTNET` | नहीं | `https://testnet-rpc.monad.xyz` | `dev` कुंजियों के लिए Monad RPC (chain id 10143) |
 | `MONAD_RPC_TIMEOUT_MS` | नहीं | `10000` | एक Monad RPC कॉल का बजट (ms) |
 | `MONAD_LOG_BLOCK_RANGE` | नहीं | `100` | एक `eth_getLogs` कितने blocks तक फैल सकता है — RPC प्रदाता की सीमा (सार्वजनिक RPC 100 की अनुमति देता है) |
+| `MONAD_RELAYER_PRIVATE_KEY` | नहीं | — | Relayer कुंजी (32-byte hex)। सेट होने पर हर Monad intent को अपना deposit address मिलता है और relayer deposits को fee घटाकर merchant तक forward करता है। इसमें केवल gas का पैसा होता है: इसके deploy किए forwarders किसी और को भुगतान नहीं कर सकते |
+| `MONAD_DEPOSIT_TOKEN_FEES` | नहीं | — | हर ERC-20 deposit पर relayer fee, JSON `{"0xToken": "0.05"}` टोकन इकाइयों में। जिस टोकन की प्रविष्टि नहीं वह मुफ़्त forward होता है (gas relayer देता है) |
 | `STELLAR_BASE_FEE` | नहीं | `100` | tx builds के लिए Stellar base fee (stroops) |
 | `STELLAR_TX_TIMEOUT` | नहीं | `300` | ट्रांज़ैक्शन timeout (सेकंड) |
 | `STELLAR_SWAP_FEE_WALLET` | जब fee > 0 हो | — | swap fees के लिए प्लेटफ़ॉर्म का G... account |
