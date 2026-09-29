@@ -179,8 +179,14 @@ export interface AppConfig {
      * whose bundles this deployment runs. Parsed by the bundle loader.
      */
     trustedKeys: string;
-    /** Load bundles with no signature. Refused when NODE_ENV=production. */
+    /** Load plugins with no signature. Refused when NODE_ENV=production. */
     allowUnsigned: boolean;
+    /**
+     * Whether node started with `--no-node-snapshot`, which the plugin sandbox
+     * (`isolated-vm`) requires on Node 20+. Checked at boot when a plugin is
+     * enabled; the npm scripts pass it.
+     */
+    nodeSnapshotDisabled: boolean;
   };
   rateLimit: {
     /**
@@ -476,6 +482,9 @@ export default (): AppConfig => ({
     trustedKeys: process.env.PLUGINS_TRUSTED_KEYS?.trim() ?? '',
     allowUnsigned:
       (process.env.PLUGINS_ALLOW_UNSIGNED ?? 'false').toLowerCase() === 'true',
+    nodeSnapshotDisabled:
+      process.execArgv.includes('--no-node-snapshot') ||
+      (process.env.NODE_OPTIONS ?? '').includes('--no-node-snapshot'),
   },
   defindex: {
     apiKey: process.env.DEFINDEX_API_KEY?.trim() ?? '',

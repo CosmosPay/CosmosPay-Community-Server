@@ -156,12 +156,17 @@ export class PluginInstallationsService {
     return this.view(plugin, installation);
   }
 
-  /** Removes the installation and, by cascade, every record the plugin kept. */
+  /**
+   * Removes the installation and, by cascade, every record the plugin kept.
+   *
+   * Deliberately does not require the plugin to be served: a deployment that
+   * disables a plugin must not leave its tenants unable to delete what that
+   * plugin stored about them.
+   */
   async uninstall(
     consumer: GatewayConsumer,
     slug: string,
   ): Promise<{ slug: string; uninstalled: true }> {
-    this.requirePlugin(slug);
     const { count } = await this.prisma.pluginInstallation.deleteMany({
       where: {
         pluginSlug: slug,

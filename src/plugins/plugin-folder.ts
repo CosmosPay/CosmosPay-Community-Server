@@ -1,23 +1,20 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { createContext, Script } from 'node:vm';
 import ts from 'typescript';
+import { PluginSandbox, type SandboxLimits } from '@/plugins/plugin-sandbox';
 import {
   verifyPluginSignature,
   type PluginFiles,
   type TrustedPluginKey,
 } from '@/plugins/plugin-signature';
 import {
-  PLUGIN_EVAL_TIMEOUT_MS,
   PLUGIN_MANIFEST_FILE,
   PLUGIN_MANIFEST_MAX_BYTES,
-  PLUGIN_SDK_IMPORTS,
   PLUGIN_SIGNATURE_FILE,
   PLUGIN_SLUG_RE,
   PLUGIN_SOURCE_FILE,
   PLUGIN_SOURCE_MAX_BYTES,
 } from '@/plugins/plugins.constants';
-import * as sdk from '@/plugins/sdk';
 import type {
   PluginDefinition,
   PluginHandlers,
@@ -44,9 +41,6 @@ export interface LoadPluginsOptions {
   warn: (message: string) => void;
 }
 
-/** The SDK, as plugin code's `import` receives it. Frozen: shared by every plugin. */
-const SDK_MODULE = Object.freeze({ ...sdk });
-
 const MANIFEST_KEYS = new Set([
   'slug',
   'name',
@@ -57,7 +51,6 @@ const MANIFEST_KEYS = new Set([
   'egress',
   'config',
 ]);
-const HANDLER_KEYS = new Set(['queries', 'commands', 'events']);
 
 /**
  * Loads the enabled plugins from the plugins folder.
@@ -70,7 +63,8 @@ const HANDLER_KEYS = new Set(['queries', 'commands', 'events']);
  * prove who vouches for it.
  *
  * Only enabled slugs are read. A plugin that sits in the folder disabled is
- * never parsed, compiled or evaluated.
+ * never parsed, compiled or evaluated — and an enabled one runs only inside a
+ * V8 isolate (`plugin-sandbox.ts`), never in this process.
  */
 export function loadPlugins(options: LoadPluginsOptions): PluginDefinition[] {
   if (options.slugs.length === 0) return [];
@@ -131,7 +125,7 @@ function loadPlugin(
     );
   }
 
-  const handlers = evaluatePluginSource(
+  const handlers = sandboxPluginSource(
     files.source,
     join(root, slug, PLUGIN_SOURCE_FILE),
   );
@@ -230,55 +224,20 @@ export function compilePluginSource(source: string, fileName: string): string {
 }
 
 /**
- * Compiles and runs a plugin's `index.ts` in a fresh context, returning the
- * handlers it exports as default.
- *
- * The context has no `process`, `require`, `Buffer`, timers or `console`,
- * `eval`/`new Function` are disabled, and `import` resolves only the SDK. That
- * turns the easy ways out into load errors. It is NOT a sandbox — `vm` never is
- * — which is why the signature is checked before this runs, and is the actual
- * boundary.
+ * Compiles a plugin's `index.ts`, loads it once in an isolate to read what it
+ * exports, and returns the handlers the runtime calls — each of which runs the
+ * plugin in a fresh isolate of its own (`plugin-sandbox.ts`). No plugin code
+ * ever runs in this process.
  */
-export function evaluatePluginSource(
+export function sandboxPluginSource(
   source: string,
   fileName: string,
+  limits?: SandboxLimits,
 ): PluginHandlers {
-  const code = compilePluginSource(source, fileName);
-  const module = { exports: {} as Record<string, unknown> };
-  const requireSdk = (id: string): unknown => {
-    if (PLUGIN_SDK_IMPORTS.has(id)) return SDK_MODULE;
-    throw new Error(
-      `a plugin may only import ${[...PLUGIN_SDK_IMPORTS].join(' or ')}, not "${id}"`,
-    );
-  };
-  // The wrapper is defined AND called inside the script, so the timeout covers
-  // the plugin's whole top level — a `while (true) {}` there would otherwise
-  // hang the boot with no limit at all.
-  const context = createContext(
-    {
-      __cosmosPlugin: { module, exports: module.exports, require: requireSdk },
-    },
-    { codeGeneration: { strings: false, wasm: false } },
+  const sandbox = new PluginSandbox(
+    compilePluginSource(source, fileName),
+    fileName,
+    limits,
   );
-  new Script(
-    `(function (module, exports, require) {\n${code}\n}).call(undefined, ` +
-      '__cosmosPlugin.module, __cosmosPlugin.exports, __cosmosPlugin.require);',
-    { filename: fileName },
-  ).runInContext(context, { timeout: PLUGIN_EVAL_TIMEOUT_MS });
-  delete (context as { __cosmosPlugin?: unknown }).__cosmosPlugin;
-
-  const handlers = module.exports.default;
-  if (!handlers || typeof handlers !== 'object') {
-    throw new Error(
-      `${PLUGIN_SOURCE_FILE} must \`export default defineHandlers({ ... })\``,
-    );
-  }
-  const unknown = Object.keys(handlers).filter((k) => !HANDLER_KEYS.has(k));
-  if (unknown.length > 0) {
-    throw new Error(
-      `${PLUGIN_SOURCE_FILE} exports unknown field(s): ${unknown.join(', ')} — ` +
-        `name, version, capabilities and the rest belong in ${PLUGIN_MANIFEST_FILE}`,
-    );
-  }
-  return handlers;
+  return sandbox.handlers(sandbox.describe());
 }

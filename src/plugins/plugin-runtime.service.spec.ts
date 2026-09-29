@@ -259,6 +259,26 @@ describe('PluginRuntimeService.invoke', () => {
     expect(store.get).toHaveBeenCalledTimes(PLUGIN_MAX_CALLS_PER_INVOCATION);
   });
 
+  it('charges logging against the call budget, so a plugin cannot flood the log', async () => {
+    const { runtime } = build(
+      plugin({
+        queries: {
+          spam: (ctx) => {
+            for (let i = 0; i <= PLUGIN_MAX_CALLS_PER_INVOCATION; i++) {
+              ctx.log.log(`line ${i}`);
+            }
+            return null;
+          },
+        },
+      }),
+    );
+
+    const err = await apiError(
+      runtime.invoke(consumer, 'acme', 'query', 'spam', {}),
+    );
+    expect(err.getStatus()).toBe(502);
+  });
+
   it('hands the plugin a frozen context and a frozen input', async () => {
     let seen: PluginContext | undefined;
     const { runtime } = build(

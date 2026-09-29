@@ -91,7 +91,7 @@ src/
   activity/                       client telemetry ingest + feed (wallet, dashboard)
   admin/                          cross-tenant platform admin (console-only), audited
   audit/                          audit-trail writer, called inside other modules' transactions
-  plugins/                        plugin runtime + SDK (sdk.ts): folder loader, signatures, scoped context
+  plugins/                        plugin runtime + SDK (sdk.ts): folder loader, signatures, V8-isolate sandbox
   health/                         liveness/readiness probes (@Public)
 prisma/schema.prisma              Consumer, PaymentIntent, Swap, LiquidityPoolOperation,
                                   WebhookEndpoint/Delivery/EmittedEvent, BlindpayReceiver,
@@ -1214,6 +1214,10 @@ trabalha localmente, e é recusado quando `NODE_ENV=production`. Abra um pull re
 a pasta; depois da revisão, o suporte assina e ele passa a ser distribuído
 pré-instalado.
 
+Assinar nunca executa o código do plugin — só o `check` executa, e a CI o roda em
+todo pull request —, então um pull request não consegue ter seu código executado na
+máquina que guarda a chave do suporte. Assine o que a revisão e a CI já aprovaram.
+
 ### O que um plugin pode e não pode alcançar
 
 Os handlers de um plugin recebem um `PluginContext` e nada mais: nada de Prisma,
@@ -1243,12 +1247,15 @@ O que o runtime garante em cada invocação:
 - **Falhas ficam contidas.** Um `PluginError` vira `400 plugin_rejected` com a mensagem
   dele; qualquer outra coisa vira `502 plugin_failed`, registrada e nunca devolvida. Um
   plugin que falha num evento não afeta o webhook desse evento nem outros plugins.
-- **Confinamento.** O ESLint só deixa `plugins/**/*.ts` importar o SDK e recusa
-  `process`, `require`, `import()`, `fetch`, `globalThis`, `eval`/`Function` e qualquer
-  acesso a `constructor`/`__proto__`. Na inicialização, o código roda num contexto `vm`
-  separado que também não tem nada disso. Nenhum dos dois é um sandbox — o JavaScript
-  não tem um dentro do processo —, então a fronteira é quem responde pelo código
-  (abaixo).
+- **Isolamento.** O código de um plugin nunca roda neste processo. Cada invocação
+  recebe um isolate V8 novo (`isolated-vm`) sem nada do Node dentro — sem `process`,
+  `require`, rede, sistema de arquivos ou timers —, um heap de 32 MB e uma thread
+  própria. Sua única saída é uma ponte que aceita os nomes dos métodos do contexto
+  acima, com cópias JSON na ida e na volta; nenhum objeto deste processo chega a ele,
+  então código escrito para escapar não encontra de onde subir. Quando o orçamento
+  acaba o isolate é descartado, o que para o plugin onde estiver — um loop síncrono
+  inclusive — e nada que ele guardou em memória sobrevive à próxima chamada, nem à de
+  outro tenant. Além disso, o ESLint só deixa `plugins/**/*.ts` importar o SDK.
 
 ### Quem responde por um plugin
 
@@ -1318,6 +1325,14 @@ requisições por minuto por consumer.
 - **Defina `PLUGINS_SECRET`** antes de habilitar um plugin com configurações secretas —
   caso contrário a inicialização recusa. `PLUGINS_TRUSTED_KEYS` adiciona assinantes
   além dos do suporte.
+- **Implante a pasta `plugins/` junto com o build.** Ela é lida do diretório de
+  trabalho na inicialização, ao lado de `dist/`; uma implantação que copia só `dist/`
+  e `node_modules/` não serve nenhum plugin, e um habilitado interrompe a
+  inicialização.
+- **O Node deve rodar com `--no-node-snapshot` quando um plugin está habilitado** — o
+  sandbox (`isolated-vm`, um módulo nativo) exige isso, e sem ele a inicialização
+  recusa. Todos os scripts npm o passam (`start`, `start:prod`, `test`, …); um processo
+  iniciado de outra forma precisa dele no comando ou em `NODE_OPTIONS`.
 - **Nenhuma mudança no APISIX:** a rota coringa já encaminha `/v1/plugins`.
 - **Novos códigos de erro:** `plugin_not_installed`, `plugin_consent_mismatch`,
   `plugin_rejected`, `plugin_quota_exceeded`, `plugin_failed`.

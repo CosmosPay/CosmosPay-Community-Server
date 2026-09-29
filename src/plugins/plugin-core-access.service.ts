@@ -10,7 +10,10 @@ import { CustomersService } from '@/customers/customers.service';
 import { QueryPaymentIntentsDto } from '@/payment-intents/dto/query-payment-intents.dto';
 import { PaymentIntentsService } from '@/payment-intents/payment-intents.service';
 import { PluginViolationError } from '@/plugins/plugin-errors';
-import { PLUGIN_MAX_PAGE_SIZE } from '@/plugins/plugins.constants';
+import {
+  PLUGIN_CORE_ID_RE,
+  PLUGIN_MAX_PAGE_SIZE,
+} from '@/plugins/plugins.constants';
 import { CreateProductDto } from '@/products/dto/create-product.dto';
 import { QueryProductsDto } from '@/products/dto/query-products.dto';
 import { UpdateProductDto } from '@/products/dto/update-product.dto';
@@ -72,9 +75,6 @@ const PAYMENT_INTENT_FIELDS = [
   'createdAt',
   'updatedAt',
 ] as const satisfies readonly (keyof PluginPaymentIntent)[];
-
-/** Core ids are cuids; anything else is refused before it reaches a query. */
-const CORE_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 
 /**
  * The only way plugin code reaches the core's data.
@@ -223,7 +223,7 @@ function pageQuery(query: { take?: number; skip?: number } | undefined): {
 }
 
 function assertId(id: unknown): asserts id is string {
-  if (typeof id !== 'string' || !CORE_ID_RE.test(id)) {
+  if (typeof id !== 'string' || !PLUGIN_CORE_ID_RE.test(id)) {
     throw new PluginError('id must be a core resource id');
   }
 }

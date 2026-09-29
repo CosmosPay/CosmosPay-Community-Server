@@ -3,7 +3,7 @@
 Every plugin lives here, one folder each. Nothing in this folder runs until its
 slug is listed in `PLUGINS_ENABLED`.
 
-```
+```text
 plugins/
   example/
     plugin.json      what the plugin is, and what it may touch

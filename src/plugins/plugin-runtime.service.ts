@@ -262,11 +262,13 @@ export class PluginRuntimeService {
         paymentIntents: leased(lease, core.paymentIntents),
       },
       http: leased(lease, http),
-      log: {
+      // Charged like every other call: a plugin logging in a loop would
+      // otherwise flood the service's log for as long as its budget lasts.
+      log: leased(lease, {
         log: (message: string) => logger.log(logLine(message)),
         warn: (message: string) => logger.warn(logLine(message)),
         error: (message: string) => logger.error(logLine(message)),
-      },
+      }),
     });
   }
 
@@ -295,7 +297,7 @@ export class PluginRuntimeService {
       );
     }
     if (err instanceof PluginTimeoutError) {
-      this.logger.warn(`${where}: ${err.message}`);
+      this.logger.warn(`${where}: ${logLine(err.message)}`);
       return new ApiError(
         HttpStatus.GATEWAY_TIMEOUT,
         ApiErrorCode.PluginFailed,
@@ -303,10 +305,10 @@ export class PluginRuntimeService {
       );
     }
     if (err instanceof PluginViolationError) {
-      this.logger.warn(`${where} refused: ${err.message}`);
+      this.logger.warn(`${where} refused: ${logLine(err.message)}`);
     } else {
       this.logger.error(
-        `${where} threw: ${err instanceof Error ? err.message : String(err)}`,
+        `${where} threw: ${logLine(err instanceof Error ? err.message : String(err))}`,
         err instanceof Error ? err.stack : undefined,
       );
     }

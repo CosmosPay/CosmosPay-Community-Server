@@ -10,9 +10,9 @@ import {
 } from 'node:fs';
 import { join, resolve } from 'node:path';
 import {
-  evaluatePluginSource,
   parseManifest,
   readPluginFolder,
+  sandboxPluginSource,
 } from '@/plugins/plugin-folder';
 import { validatePluginDefinition } from '@/plugins/plugin-manifest';
 import {
@@ -26,6 +26,9 @@ import {
 import {
   PLUGIN_MANIFEST_FILE,
   PLUGIN_MANIFEST_MAX_BYTES,
+  PLUGIN_REGISTRY_INDEX_MAX_BYTES,
+  PLUGIN_REGISTRY_TIMEOUT_MS,
+  PLUGIN_SIGNATURE_MAX_BYTES,
   PLUGIN_SIGNATURE_FILE,
   PLUGIN_SLUG_RE,
   PLUGIN_SOURCE_FILE,
@@ -38,7 +41,7 @@ import {
  * Everything about plugin folders, from the first file to a deployment:
  *
  *   npm run plugins -- new my-plugin                  create plugins/my-plugin/ from a template
- *   npm run plugins -- check my-plugin                validate it without signing (runs its top level)
+ *   npm run plugins -- check my-plugin                compile, load (sandboxed) and validate it
  *   npm run plugins -- sign my-plugin --key k.pem --key-id cosmos-support
  *   npm run plugins -- verify my-plugin               is it signed by a key this deployment trusts?
  *   npm run plugins -- keygen --out k.pem --key-id my-registry
@@ -59,6 +62,11 @@ import {
  * keys, plus PLUGINS_TRUSTED_KEYS) before writing anything, and the server
  * verifies it again at every boot. A compromised host can withhold plugins,
  * not forge them.
+ *
+ * Only `check` runs a plugin's code, and only inside a V8 isolate with no Node
+ * in it (`plugin-sandbox.ts`). `sign` and `install` do not run it at all:
+ * signing is a statement about code a person reviewed, and needs nothing but
+ * the files.
  */
 
 const ROOT = resolve(PLUGINS_FOLDER);
@@ -98,7 +106,7 @@ function trustedKeys(flags: Flags) {
 /** Reads, compiles, runs the top level and validates one plugin — no signature. */
 function checkPlugin(slug: string) {
   const { files, manifest } = readPluginFolder(ROOT, slug);
-  const handlers = evaluatePluginSource(
+  const handlers = sandboxPluginSource(
     files.source,
     join(ROOT, slug, PLUGIN_SOURCE_FILE),
   );
@@ -188,7 +196,10 @@ function sign(positional: string[], flags: Flags): void {
   const slug = need(positional[0], '<slug>');
   const keyFile = need(flags.key, '--key <private key file>');
   const keyId = need(flags['key-id'], '--key-id <id>');
-  const { files, manifest } = checkPlugin(slug);
+  // Reads the files; never runs them (see the header).
+  const { files, manifest } = readPluginFolder(ROOT, slug);
+  const errors = validatePluginDefinition(manifest);
+  if (errors.length > 0) throw new Error(errors.join('\n'));
   const signature = signPlugin(
     files,
     { slug, version: manifest.version, keyId },
@@ -293,7 +304,7 @@ async function fetchText(url: URL, maxBytes: number): Promise<string> {
   }
   const res = await fetch(url, {
     redirect: 'error',
-    signal: AbortSignal.timeout(30_000),
+    signal: AbortSignal.timeout(PLUGIN_REGISTRY_TIMEOUT_MS),
   });
   if (!res.ok) throw new Error(`${url.href}: HTTP ${res.status}`);
   const bytes = Buffer.from(await res.arrayBuffer());
@@ -319,7 +330,10 @@ async function install(positional: string[], flags: Flags): Promise<void> {
   const base = new URL(registry.endsWith('/') ? registry : `${registry}/`);
 
   const index = JSON.parse(
-    await fetchText(new URL('index.json', base), 1024 * 1024),
+    await fetchText(
+      new URL('index.json', base),
+      PLUGIN_REGISTRY_INDEX_MAX_BYTES,
+    ),
   ) as RegistryIndex;
   const entry = index.plugins?.[slug];
   if (!entry) throw new Error(`the registry has no plugin "${slug}"`);
@@ -337,7 +351,7 @@ async function install(positional: string[], flags: Flags): Promise<void> {
   );
   const signatureText = await fetchText(
     new URL(files.signature, base),
-    64 * 1024,
+    PLUGIN_SIGNATURE_MAX_BYTES,
   );
 
   // Everything is checked before a byte lands in plugins/.
@@ -353,10 +367,9 @@ async function install(positional: string[], flags: Flags): Promise<void> {
     { slug, version },
   );
   if (problem) throw new Error(problem);
-  const errors = validatePluginDefinition({
-    ...manifest,
-    ...evaluatePluginSource(source, `${slug}/${PLUGIN_SOURCE_FILE}`),
-  });
+  // The manifest is checked; the code is not run here — the server compiles
+  // and loads it at boot, under the signature just verified.
+  const errors = validatePluginDefinition(manifest);
   if (errors.length > 0) throw new Error(errors.join('\n'));
 
   // Write beside the target and swap, so a crash never leaves half a plugin.

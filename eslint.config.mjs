@@ -64,10 +64,10 @@ export default tseslint.config(
     // `@/plugins/sdk` and nothing else: no
     // Prisma, no Nest provider, no `node:*`, no npm package, no ambient escape
     // hatch (`process`, `require`, `fetch`, `globalThis`, …). The runtime hands
-    // a plugin a capability-scoped context; these rules stop a plugin from
-    // walking around it. They are a review aid, not a sandbox — code in this
-    // process can always be clever — so `plugins/` is also reviewed like core
-    // code (`.github/CODEOWNERS`). See the Plugins section of the README.
+    // a plugin a capability-scoped context; these rules keep plugin code
+    // honest about that where it is written and reviewed. The enforcement is
+    // the sandbox (`src/plugins/plugin-sandbox.ts`): plugin code only ever runs
+    // in a V8 isolate with none of those things in it. See the README, Plugins.
     files: ['plugins/**/*.ts'],
     rules: {
       'no-restricted-imports': [

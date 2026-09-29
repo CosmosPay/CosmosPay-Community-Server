@@ -157,6 +157,18 @@ describe('PluginInstallationsService', () => {
     ).toBe(404);
   });
 
+  it('lets a tenant uninstall a plugin the deployment no longer serves', async () => {
+    const { service, prisma } = build();
+    // `ghost` is not in the registry: its data must still be deletable.
+    await expect(service.uninstall(consumer, 'ghost')).resolves.toEqual({
+      slug: 'ghost',
+      uninstalled: true,
+    });
+    expect(prisma.pluginInstallation.deleteMany).toHaveBeenCalledWith({
+      where: { pluginSlug: 'ghost', consumer: { apisixUsername: 'cosmos_u1' } },
+    });
+  });
+
   it('scopes uninstall to the calling consumer', async () => {
     const { service, prisma } = build();
     await service.uninstall(consumer, 'acme');

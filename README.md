@@ -89,7 +89,7 @@ src/
   activity/                       client telemetry ingest + feed (wallet, dashboard)
   admin/                          cross-tenant platform admin (console-only), audited
   audit/                          audit-trail writer, called inside other modules' transactions
-  plugins/                        plugin runtime + SDK (sdk.ts): folder loader, signatures, scoped context
+  plugins/                        plugin runtime + SDK (sdk.ts): folder loader, signatures, V8-isolate sandbox
   health/                         liveness/readiness probes (@Public)
 prisma/schema.prisma              Consumer, PaymentIntent, Swap, LiquidityPoolOperation,
                                   WebhookEndpoint/Delivery/EmittedEvent, BlindpayReceiver,
@@ -1196,6 +1196,10 @@ npm run plugins -- sign my-plugin --key support.pem --key-id cosmos-support
 refused when `NODE_ENV=production`. Open a pull request with the folder; once it is
 reviewed, support signs it and it ships preinstalled.
 
+Signing never runs the plugin's code — only `check` does, and CI runs it on every
+pull request — so a pull request cannot get its code executed on the machine that
+holds the support key. Sign what review and CI have already passed.
+
 ### What a plugin can and cannot reach
 
 A plugin's handlers receive a `PluginContext` and nothing else — no Prisma, no Nest
@@ -1225,11 +1229,15 @@ What the runtime guarantees around every invocation:
 - **Failures stay contained.** A `PluginError` is `400 plugin_rejected` with its
   message; anything else is `502 plugin_failed`, logged and never echoed. A plugin
   failing on an event disturbs neither the webhook of that event nor other plugins.
-- **Confinement.** ESLint lets `plugins/**/*.ts` import only the SDK and refuses
-  `process`, `require`, `import()`, `fetch`, `globalThis`, `eval`/`Function` and any
-  reach for `constructor`/`__proto__`. At boot the code runs in a separate `vm`
-  context with none of those either. Neither is a sandbox — JavaScript has none
-  in-process — so the boundary is who vouches for the code, below.
+- **Isolation.** Plugin code never runs in this process. Every invocation gets a
+  fresh V8 isolate (`isolated-vm`) with no Node inside — no `process`, `require`,
+  network, file system or timers — a 32 MB heap, and a thread of its own. Its only
+  way out is a bridge that accepts the context method names above, with JSON copies
+  in and out; no object of this process ever reaches it, so code written to escape
+  finds nothing to climb from. When the budget ends the isolate is disposed, which
+  stops the plugin wherever it is — a synchronous loop included — and nothing it
+  kept in memory survives into the next call, another tenant's included. ESLint
+  additionally lets `plugins/**/*.ts` import only the SDK.
 
 ### Who vouches for a plugin
 
@@ -1294,6 +1302,13 @@ The two action routes share a budget of 120 requests per minute per consumer.
   boot. Do not prune it from production installs.
 - **Set `PLUGINS_SECRET`** before enabling a plugin with secret settings — the boot
   refuses otherwise. `PLUGINS_TRUSTED_KEYS` adds signers beside support's.
+- **Ship the `plugins/` folder with the build.** It is read from the working
+  directory at boot, next to `dist/`; a deployment that copies only `dist/` and
+  `node_modules/` serves no plugins, and an enabled one stops the boot.
+- **Node must run with `--no-node-snapshot` when a plugin is enabled** — the sandbox
+  (`isolated-vm`, a native module) requires it, and the boot refuses otherwise. Every
+  npm script passes it (`start`, `start:prod`, `test`, …); a process started another
+  way needs it in the command or in `NODE_OPTIONS`.
 - **No APISIX change:** the catch-all route already forwards `/v1/plugins`.
 - **New error codes:** `plugin_not_installed`, `plugin_consent_mismatch`,
   `plugin_rejected`, `plugin_quota_exceeded`, `plugin_failed`.

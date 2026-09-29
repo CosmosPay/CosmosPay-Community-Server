@@ -39,6 +39,13 @@ import { ProductsModule } from '@/products/products.module';
       ): readonly PluginDefinition[] => {
         const plugins = config.get('plugins', { infer: true });
         const logger = new Logger('PluginLoader');
+        if (plugins.enabled.length > 0 && !plugins.nodeSnapshotDisabled) {
+          throw new Error(
+            'PLUGINS_ENABLED is set, so node must run with --no-node-snapshot: ' +
+              'the plugin sandbox (isolated-vm) requires it. Use the npm scripts, ' +
+              'which pass it, or add it to NODE_OPTIONS.',
+          );
+        }
         return loadPlugins({
           // Relative to the working directory, like the other paths the
           // service reads: the repo root, under `npm start` and `start:prod`.

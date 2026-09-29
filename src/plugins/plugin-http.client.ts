@@ -6,6 +6,7 @@ import {
   PLUGIN_HTTP_FORBIDDEN_HEADERS,
   PLUGIN_HTTP_MAX_REQUEST_BYTES,
   PLUGIN_HTTP_MAX_RESPONSE_BYTES,
+  PLUGIN_HTTP_METHODS,
   PLUGIN_HTTP_TIMEOUT_MS,
 } from '@/plugins/plugins.constants';
 import {
@@ -23,8 +24,6 @@ import {
   type ValidatedWebhookDestination,
   WebhookUrlValidationError,
 } from '@/webhooks/webhook-url.validator';
-
-const METHODS = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
 
 /** One outbound request, after every check has passed. */
 export interface PluginHttpSend {
@@ -74,9 +73,9 @@ export class PluginHttpClient {
     request: PluginHttpRequest,
   ): Promise<PluginHttpSend> {
     const method = String(request?.method ?? '').toUpperCase();
-    if (!METHODS.has(method)) {
+    if (!PLUGIN_HTTP_METHODS.has(method)) {
       throw new PluginError(
-        `http method must be one of ${[...METHODS].join(', ')}`,
+        `http method must be one of ${[...PLUGIN_HTTP_METHODS].join(', ')}`,
       );
     }
 

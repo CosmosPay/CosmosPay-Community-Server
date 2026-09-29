@@ -68,7 +68,7 @@ src/
   activity/                       client telemetry ingest + feed (wallet, dashboard)
   admin/                          cross-tenant platform admin (console-only), audited
   audit/                          audit-trail writer, called inside other modules' transactions
-  plugins/                        plugin runtime + SDK (sdk.ts): folder loader, signatures, scoped context
+  plugins/                        plugin runtime + SDK (sdk.ts): folder loader, signatures, V8-isolate sandbox
   health/                         liveness/readiness probes (@Public)
 prisma/schema.prisma              Consumer, PaymentIntent, Swap, LiquidityPoolOperation,
                                   WebhookEndpoint/Delivery/EmittedEvent, BlindpayReceiver,
@@ -818,6 +818,9 @@ npm run plugins -- sign my-plugin --key support.pem --key-id cosmos-support
 本地开发时无需签名即可运行，`NODE_ENV=production` 时会被拒绝。带着这个目录发起 pull
 request；评审通过后，由支持团队签名，它就会作为预装插件发布。
 
+签名从不运行插件代码——只有 `check` 会运行，CI 会在每个 pull request 上运行它——因此
+pull request 无法让自己的代码在持有支持密钥的机器上执行。只签署已通过评审和 CI 的内容。
+
 ### 插件能访问什么、不能访问什么
 
 插件的 handlers 只收到一个 `PluginContext`，别无其他——没有 Prisma、没有 Nest provider、
@@ -845,10 +848,13 @@ runtime 在每次调用前后保证：
 - **故障被隔离。** `PluginError` 变为带其消息的 `400 plugin_rejected`；其他任何错误变为
   `502 plugin_failed`，记录日志且从不回显。插件处理事件失败不会影响该事件的 webhook，也不
   影响其他插件。
-- **约束。** ESLint 只允许 `plugins/**/*.ts` 导入 SDK，并拒绝 `process`、`require`、
-  `import()`、`fetch`、`globalThis`、`eval`/`Function` 以及任何对
-  `constructor`/`__proto__` 的访问。启动时，代码在单独的 `vm` 上下文中运行，同样没有这些。
-  两者都不是沙箱——JavaScript 没有进程内沙箱——所以边界在于由谁为代码担保（见下文）。
+- **隔离。** 插件代码从不在本进程中运行。每次调用都会获得一个全新的 V8 isolate
+  （`isolated-vm`），其中没有任何 Node——没有 `process`、`require`、网络、文件系统或
+  定时器——堆上限 32 MB，并有自己的线程。它唯一的出口是一个桥，只接受上面列出的上下文
+  方法名，进出都是 JSON 副本；本进程的任何对象都不会到达它，因此专为逃逸编写的代码无处
+  可攀。预算用尽时 isolate 会被销毁，无论插件运行到哪里（包括同步循环）都会停止，它在内存
+  中保存的任何内容都不会留到下一次调用，包括其他 tenant 的调用。此外，ESLint 只允许
+  `plugins/**/*.ts` 导入 SDK。
 
 ### 谁为插件担保
 
@@ -908,6 +914,11 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
   移除它。
 - **启用带 secret 设置的插件前先设置 `PLUGINS_SECRET`**——否则启动会拒绝。
   `PLUGINS_TRUSTED_KEYS` 在支持团队之外添加签名者。
+- **随构建产物一起部署 `plugins/` 目录。** 它在启动时从工作目录读取，与 `dist/` 并列；
+  只复制 `dist/` 和 `node_modules/` 的部署不会提供任何插件，而已启用的插件会使启动失败。
+- **启用插件时 Node 必须以 `--no-node-snapshot` 运行**——沙箱（`isolated-vm`，一个
+  原生模块）需要它，否则启动会拒绝。所有 npm 脚本都会传入它（`start`、`start:prod`、
+  `test`……）；以其他方式启动的进程需要在命令或 `NODE_OPTIONS` 中加上它。
 - **APISIX 无需改动：** 通配路由已经会转发 `/v1/plugins`。
 - **新错误码：** `plugin_not_installed`、`plugin_consent_mismatch`、
   `plugin_rejected`、`plugin_quota_exceeded`、`plugin_failed`。

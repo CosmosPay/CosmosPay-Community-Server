@@ -1,7 +1,9 @@
 import {
   PLUGIN_ACTION_RE,
   PLUGIN_CONFIG_FIELD_RE,
+  PLUGIN_CONFIG_VALUE_MAX,
   PLUGIN_EGRESS_HOST_RE,
+  PLUGIN_MANIFEST_TEXT_MAX,
   PLUGIN_SLUG_RE,
   PLUGIN_VERSION_RE,
 } from '@/plugins/plugins.constants';
@@ -40,9 +42,11 @@ export function validatePluginDefinition(
     if (
       typeof value !== 'string' ||
       value.trim() === '' ||
-      value.length > 500
+      value.length > PLUGIN_MANIFEST_TEXT_MAX
     ) {
-      errors.push(`${at}: ${field} must be a non-empty string (≤ 500 chars)`);
+      errors.push(
+        `${at}: ${field} must be a non-empty string (≤ ${PLUGIN_MANIFEST_TEXT_MAX} chars)`,
+      );
     }
   }
 
@@ -162,8 +166,10 @@ export function parsePluginConfig(
       errors.push(`config.${name} must be a ${field.type}`);
       continue;
     }
-    if (typeof given === 'string' && given.length > 2000) {
-      errors.push(`config.${name} must be at most 2000 characters`);
+    if (typeof given === 'string' && given.length > PLUGIN_CONFIG_VALUE_MAX) {
+      errors.push(
+        `config.${name} must be at most ${PLUGIN_CONFIG_VALUE_MAX} characters`,
+      );
       continue;
     }
     if (typeof given === 'number' && !Number.isFinite(given)) {

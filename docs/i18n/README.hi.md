@@ -89,7 +89,7 @@ src/
   activity/                       client telemetry ingest + feed (wallet, dashboard)
   admin/                          cross-tenant platform admin (console-only), audited
   audit/                          audit-trail writer, called inside other modules' transactions
-  plugins/                        plugin runtime + SDK (sdk.ts): folder loader, signatures, scoped context
+  plugins/                        plugin runtime + SDK (sdk.ts): folder loader, signatures, V8-isolate sandbox
   health/                         liveness/readiness probes (@Public)
 prisma/schema.prisma              Consumer, PaymentIntent, Swap, LiquidityPoolOperation,
                                   WebhookEndpoint/Delivery/EmittedEvent, BlindpayReceiver,
@@ -1185,6 +1185,10 @@ npm run plugins -- sign my-plugin --key support.pem --key-id cosmos-support
 `NODE_ENV=production` में मना होता है। Folder के साथ pull request खोलें; review के बाद
 support उसे sign करता है और वह preinstalled भेजा जाता है।
 
+Sign करना कभी plugin का code नहीं चलाता — केवल `check` चलाता है, और CI उसे हर pull
+request पर चलाता है — इसलिए कोई pull request अपना code उस machine पर नहीं चलवा सकता
+जिस पर support key है। वही sign करें जो review और CI पहले ही पास कर चुके हैं।
+
 ### Plugin क्या पहुँच सकता है और क्या नहीं
 
 Plugin के handlers को एक `PluginContext` मिलता है और कुछ नहीं — न Prisma, न Nest provider,
@@ -1214,12 +1218,15 @@ Plugin के handlers को एक `PluginContext` मिलता है औ�
 - **Failures सीमित रहते हैं.** `PluginError` उसके message के साथ `400 plugin_rejected`
   बनता है; बाकी सब `502 plugin_failed`, log होता है और कभी लौटाया नहीं जाता। किसी event
   पर fail होने वाला plugin न उस event के webhook को बिगाड़ता है, न दूसरे plugins को।
-- **Confinement.** ESLint `plugins/**/*.ts` को केवल SDK import करने देता है और `process`,
-  `require`, `import()`, `fetch`, `globalThis`, `eval`/`Function` और
-  `constructor`/`__proto__` तक किसी भी पहुँच को refuse करता है। Boot पर code एक अलग `vm`
-  context में चलता है जिसमें इनमें से कुछ नहीं होता। दोनों में से कोई sandbox नहीं —
-  JavaScript में process के अंदर कोई नहीं — इसलिए सीमा यह है कि code के लिए कौन ज़िम्मेदारी
-  लेता है (नीचे)।
+- **Isolation.** Plugin का code कभी इस process में नहीं चलता। हर invocation को एक नया
+  V8 isolate (`isolated-vm`) मिलता है जिसमें Node का कुछ नहीं — न `process`, न `require`,
+  न network, न file system, न timers — 32 MB heap और अपना thread। बाहर निकलने का इसका
+  एकमात्र रास्ता एक bridge है जो ऊपर के context method names स्वीकार करता है, आने-जाने
+  में JSON copies के साथ; इस process का कोई object कभी उस तक नहीं पहुँचता, इसलिए बचने के
+  लिए लिखे गए code को चढ़ने के लिए कुछ नहीं मिलता। Budget खत्म होने पर isolate dispose हो
+  जाता है, जो plugin को जहाँ भी हो रोक देता है — synchronous loop समेत — और memory में
+  रखा कुछ भी अगली call तक नहीं बचता, किसी दूसरे tenant की call तक भी नहीं। इसके अलावा
+  ESLint `plugins/**/*.ts` को केवल SDK import करने देता है।
 
 ### Plugin की ज़िम्मेदारी कौन लेता है
 
@@ -1285,6 +1292,13 @@ seal होती हैं और कभी लौटाई नहीं जा
   है। इसे production installs से न हटाएँ।
 - **Secret settings वाला plugin enable करने से पहले `PLUGINS_SECRET` set करें** — वरना
   boot मना कर देता है। `PLUGINS_TRUSTED_KEYS` support के अलावा signers जोड़ता है।
+- **Build के साथ `plugins/` folder भी deploy करें।** Boot पर इसे working directory
+  से पढ़ा जाता है, `dist/` के बगल में; जो deployment केवल `dist/` और `node_modules/`
+  copy करता है वह कोई plugin serve नहीं करता, और enabled plugin boot रोक देता है।
+- **Plugin enabled होने पर Node को `--no-node-snapshot` के साथ चलना चाहिए** — sandbox
+  (`isolated-vm`, एक native module) को इसकी ज़रूरत है, वरना boot मना कर देता है। सभी npm
+  scripts इसे देते हैं (`start`, `start:prod`, `test`, …); किसी और तरह शुरू किए गए
+  process को इसे command में या `NODE_OPTIONS` में देना होगा।
 - **APISIX में कोई बदलाव नहीं:** catch-all route पहले से `/v1/plugins` forward करता है।
 - **नए error codes:** `plugin_not_installed`, `plugin_consent_mismatch`,
   `plugin_rejected`, `plugin_quota_exceeded`, `plugin_failed`।

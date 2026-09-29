@@ -46,10 +46,10 @@ export const PLUGIN_EGRESS_HOST_RE =
   /^(?=.{4,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
 
 /**
- * Wall-clock budget for one action or one event handler. The HTTP request is
- * answered `504 plugin_failed` when it runs out; the plugin's context is revoked
- * at the same moment, so work it left running cannot reach storage, the core or
- * the network afterwards.
+ * Wall-clock budget for one action or one event handler. When it runs out the
+ * caller gets `504 plugin_failed`, the plugin's context is revoked, and its
+ * isolate is disposed — which stops the plugin wherever it is, a synchronous
+ * loop included.
  */
 export const PLUGIN_INVOCATION_TIMEOUT_MS = 10_000;
 
@@ -165,8 +165,8 @@ export const PLUGIN_SOURCE_MAX_BYTES = 512 * 1024;
 export const PLUGIN_MANIFEST_MAX_BYTES = 64 * 1024;
 
 /**
- * Budget for evaluating a plugin's top level at boot. Only the synchronous part
- * is bounded — which is the part that could hang the boot forever.
+ * Budget for a plugin's top level — the module body, before any handler runs.
+ * Bounds the boot-time load and every invocation's load alike.
  */
 export const PLUGIN_EVAL_TIMEOUT_MS = 1_000;
 
@@ -199,3 +199,40 @@ export const PLUGIN_KEY_ID_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
 export const PLUGIN_SUPPORT_KEYS: readonly string[] = [
   'cosmos-support:WbPYsfv0GAnXAtPELNbzDZWjKbCjKZWnn8aZ6LF7_oo',
 ];
+
+/** Longest `name`, `description` or `author` a manifest may carry. */
+export const PLUGIN_MANIFEST_TEXT_MAX = 500;
+
+/** Longest string value a tenant may give a plugin setting. */
+export const PLUGIN_CONFIG_VALUE_MAX = 2000;
+
+/** HTTP methods `ctx.http` sends. */
+export const PLUGIN_HTTP_METHODS: ReadonlySet<string> = new Set([
+  'GET',
+  'POST',
+  'PUT',
+  'PATCH',
+  'DELETE',
+]);
+
+/**
+ * What a core id looks like (a cuid). A plugin-supplied id that is anything
+ * else is refused before it reaches a query.
+ */
+export const PLUGIN_CORE_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+
+/** `npm run plugins -- install`: budget for each registry request. */
+export const PLUGIN_REGISTRY_TIMEOUT_MS = 30_000;
+
+/** `npm run plugins -- install`: the registry's `index.json`. */
+export const PLUGIN_REGISTRY_INDEX_MAX_BYTES = 1024 * 1024;
+
+/** A `signature.json` is a few hundred bytes; anything this size is not one. */
+export const PLUGIN_SIGNATURE_MAX_BYTES = 64 * 1024;
+
+/**
+ * Heap cap for the isolate one invocation runs in. A plugin that needs more is
+ * doing more than a plugin should; it fails alone, and the service's own heap
+ * is never touched.
+ */
+export const PLUGIN_ISOLATE_MEMORY_MB = 32;
