@@ -1,8 +1,11 @@
 import { Injectable } from '@nestjs/common';
 import type { BlindpayEnvironment } from '@/config/configuration';
 import type { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
-import { BlindpayClient, UploadableFile } from '@/blindpay/blindpay.client';
-import type { BlindpayObject } from '@/blindpay/blindpay-sync.service';
+import {
+  BlindpayClient,
+  UploadableFile,
+} from '@/native-plugins/blindpay/blindpay.client';
+import type { BlindpayObject } from '@/native-plugins/blindpay/blindpay-sync.service';
 
 /** The body of BlindPay's hosted terms-of-service request. */
 export interface BlindpayTosRequest {

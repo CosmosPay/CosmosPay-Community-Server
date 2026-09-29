@@ -6,6 +6,7 @@ import {
   PLUGIN_MANIFEST_TEXT_MAX,
   PLUGIN_SLUG_RE,
   PLUGIN_VERSION_RE,
+  isNativePluginSlug,
 } from '@/plugins/plugins.constants';
 import {
   PLUGIN_CAPABILITIES,
@@ -33,6 +34,11 @@ export function validatePluginDefinition(
 
   if (!PLUGIN_SLUG_RE.test(definition.slug ?? '')) {
     errors.push(`${at}: slug must match ${PLUGIN_SLUG_RE}`);
+  }
+  // PLUGINS_ENABLED names both kinds, so a sandboxed plugin with a native one's
+  // slug could never be told apart from it — and would take its routes.
+  if (isNativePluginSlug(definition.slug ?? '')) {
+    errors.push(`${at}: slug is reserved for the native plugin of that name`);
   }
   if (!PLUGIN_VERSION_RE.test(definition.version ?? '')) {
     errors.push(`${at}: version must be semver (MAJOR.MINOR.PATCH)`);

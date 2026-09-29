@@ -1,4 +1,9 @@
 import { createHash } from 'node:crypto';
+import { Keypair } from '@stellar/stellar-sdk';
+import { secp256k1 } from '@noble/curves/secp256k1.js';
+import { keccak_256 } from '@noble/hashes/sha3.js';
+import { encodeBase58, toChecksumAddress } from '@/chains/chain-address';
+import { eip191Digest } from '@/chains/message-signature';
 import { ConfigService } from '@nestjs/config';
 import {
   WalletAuthHandshakeStatus,
@@ -437,8 +442,14 @@ describe('WalletAuthService', () => {
       prisma.walletAuthHandshake.updateMany.mockResolvedValue({ count: 1 });
       prisma.walletAccount.findUnique.mockResolvedValue({
         id: 'acc_1',
-        stellarAddress: ADDRESS,
-        backup: { stellarAddress: ADDRESS, box: BOX, updatedAt: new Date(NOW) },
+        chain: 'stellar',
+        address: ADDRESS,
+        backup: {
+          chain: 'stellar',
+          address: ADDRESS,
+          box: BOX,
+          updatedAt: new Date(NOW),
+        },
       });
       prisma.walletLoginCode.create.mockResolvedValue({});
 
@@ -602,8 +613,14 @@ describe('WalletAuthService', () => {
       prisma.walletLoginCode.updateMany.mockResolvedValue({ count: 1 });
       prisma.walletAccount.findUnique.mockResolvedValue({
         id: 'acc_1',
-        stellarAddress: ADDRESS,
-        backup: { stellarAddress: ADDRESS, box: BOX, updatedAt: new Date(NOW) },
+        chain: 'stellar',
+        address: ADDRESS,
+        backup: {
+          chain: 'stellar',
+          address: ADDRESS,
+          box: BOX,
+          updatedAt: new Date(NOW),
+        },
       });
 
       const result = await service.verifyEmail({
@@ -694,9 +711,11 @@ describe('WalletAuthService', () => {
       const { service, prisma } = makeService();
       prisma.walletAccount.findUnique.mockResolvedValue({
         id: 'acc_1',
-        stellarAddress: OTHER_ADDRESS,
+        chain: 'stellar',
+        address: OTHER_ADDRESS,
         backup: {
-          stellarAddress: OTHER_ADDRESS,
+          chain: 'stellar',
+          address: OTHER_ADDRESS,
           box: BOX,
           updatedAt: new Date(NOW),
         },
@@ -706,6 +725,8 @@ describe('WalletAuthService', () => {
 
       expect(result).toEqual({
         status: 'backup_conflict',
+        chain: 'stellar',
+        address: OTHER_ADDRESS,
         stellarAddress: OTHER_ADDRESS,
       });
       expect(prisma.walletAccount.upsert).not.toHaveBeenCalled();
@@ -715,9 +736,11 @@ describe('WalletAuthService', () => {
       const { service, prisma } = makeService();
       prisma.walletAccount.findUnique.mockResolvedValue({
         id: 'acc_1',
-        stellarAddress: OTHER_ADDRESS,
+        chain: 'stellar',
+        address: OTHER_ADDRESS,
         backup: {
-          stellarAddress: OTHER_ADDRESS,
+          chain: 'stellar',
+          address: OTHER_ADDRESS,
           box: BOX,
           updatedAt: new Date(NOW),
         },
@@ -758,6 +781,94 @@ describe('WalletAuthService', () => {
         'https://console.example.com/wallet/console/provision',
       );
     });
+
+    describe('on Solana and Monad', () => {
+      it('attaches a Solana account that signed the chain-bound challenge', async () => {
+        const fetchMock = stubConsole();
+        const kp = Keypair.random();
+        const address = encodeBase58(kp.rawPublicKey());
+        const message = finishMessage(EMAIL, address, SIGNED_AT, 'solana');
+        expect(message).toContain('\nchain: solana\n');
+        const { service, prisma } = makeService();
+        prisma.walletAccount.findUnique.mockResolvedValue(null);
+        prisma.walletAccount.upsert.mockResolvedValue({ id: 'acc_1' });
+
+        const result = await service.finish(token(), {
+          chain: 'solana',
+          address,
+          signedAt: SIGNED_AT,
+          signature: encodeBase58(kp.sign(Buffer.from(message))),
+        });
+
+        expect(result.status).toBe('ready');
+        expect(
+          prisma.walletAccount.upsert.mock.calls[0][0].create,
+        ).toMatchObject({ chain: 'solana', address });
+        expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toMatchObject({
+          chain: 'solana',
+          address,
+          stellarAddress: null,
+        });
+      });
+
+      it('refuses a Stellar-format signature replayed as a Solana sign-in', async () => {
+        // Same ed25519 key, but signed over the Stellar challenge, which has
+        // no chain line: it must not open the Solana account.
+        const kp = Keypair.random();
+        const stellarSig = Buffer.from(
+          kp.sign(
+            Buffer.from(
+              finishMessage(EMAIL, encodeBase58(kp.rawPublicKey()), SIGNED_AT),
+            ),
+          ),
+        ).toString('base64');
+        const { service } = makeService();
+        await expect(
+          service.finish(token(), {
+            chain: 'solana',
+            address: encodeBase58(kp.rawPublicKey()),
+            signedAt: SIGNED_AT,
+            signature: stellarSig,
+          }),
+        ).rejects.toMatchObject({ code: ApiErrorCode.WalletSignatureInvalid });
+      });
+
+      it('attaches a Monad account that signed with personal_sign, stored EIP-55', async () => {
+        stubConsole();
+        const secret = secp256k1.utils.randomSecretKey();
+        const pub = secp256k1.getPublicKey(secret, false);
+        const lower = `0x${Buffer.from(keccak_256(pub.subarray(1)).subarray(12)).toString('hex')}`;
+        const checksummed = toChecksumAddress(lower);
+        const message = finishMessage(EMAIL, checksummed, SIGNED_AT, 'monad');
+        const sig = secp256k1.sign(eip191Digest(Buffer.from(message)), secret, {
+          prehash: false,
+          format: 'recovered',
+        });
+        const personalSig = `0x${Buffer.from(sig.subarray(1)).toString('hex')}${(27 + sig[0]).toString(16)}`;
+        const { service, prisma } = makeService();
+        prisma.walletAccount.findUnique.mockResolvedValue(null);
+        prisma.walletAccount.upsert.mockResolvedValue({ id: 'acc_1' });
+
+        const result = await service.finish(token(), {
+          chain: 'monad',
+          address: lower,
+          signedAt: SIGNED_AT,
+          signature: personalSig,
+        });
+
+        expect(result.status).toBe('ready');
+        expect(
+          prisma.walletAccount.upsert.mock.calls[0][0].create,
+        ).toMatchObject({ chain: 'monad', address: checksummed });
+      });
+
+      it('refuses `stellarAddress` sent with another chain', async () => {
+        const { service } = makeService();
+        await expect(
+          service.finish(token(), { ...body(), chain: 'solana' }),
+        ).rejects.toMatchObject({ code: ApiErrorCode.ValidationFailed });
+      });
+    });
   });
 
   describe('replaceBackupBox', () => {
@@ -772,7 +883,8 @@ describe('WalletAuthService', () => {
       const { service, prisma } = makeService();
       prisma.walletBackup.findFirst.mockResolvedValue({ id: 'b_1' });
       prisma.walletBackup.update.mockResolvedValue({
-        stellarAddress: ADDRESS,
+        chain: 'stellar',
+        address: ADDRESS,
         updatedAt: new Date(NOW),
       });
 
@@ -800,14 +912,15 @@ describe('WalletAuthService', () => {
       const { service, prisma } = makeService();
       prisma.walletBackup.findFirst.mockResolvedValue({ id: 'b_1' });
       prisma.walletBackup.update.mockResolvedValue({
-        stellarAddress: ADDRESS,
+        chain: 'stellar',
+        address: ADDRESS,
         updatedAt: new Date(NOW),
       });
 
       await service.replaceBackupBox(body());
 
       expect(prisma.walletBackup.findFirst).toHaveBeenCalledWith({
-        where: { stellarAddress: ADDRESS },
+        where: { chain: 'stellar', address: ADDRESS },
         select: { id: true },
       });
     });

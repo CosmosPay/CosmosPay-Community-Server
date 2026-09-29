@@ -28,8 +28,6 @@ import {
   DEFAULT_SWAP_SLIPPAGE_BPS,
 } from '@/config/config.constants';
 import { assertIdentityConfigConsistent } from '@/config/identity-env';
-import { decodeSvixSecret } from '@/blindpay/blindpay-signature';
-import { SVIX_MIN_SECRET_BYTES } from '@/blindpay/blindpay.constants';
 
 /**
  * Gateway secrets that are documentation, not secrets. `.env.example` used to
@@ -137,6 +135,38 @@ class EnvironmentVariables {
   @IsOptional()
   @IsString()
   STELLAR_BASE_FEE?: string;
+
+  // --- Solana / Monad RPC (payment intents, wallet sign-in, aliases) ---
+  @IsOptional()
+  @IsUrl(URL_OPTIONS)
+  SOLANA_RPC_URL_MAINNET?: string;
+
+  @IsOptional()
+  @IsUrl(URL_OPTIONS)
+  SOLANA_RPC_URL_DEVNET?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  SOLANA_RPC_TIMEOUT_MS?: number;
+
+  @IsOptional()
+  @IsUrl(URL_OPTIONS)
+  MONAD_RPC_URL_MAINNET?: string;
+
+  @IsOptional()
+  @IsUrl(URL_OPTIONS)
+  MONAD_RPC_URL_TESTNET?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  MONAD_RPC_TIMEOUT_MS?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  MONAD_LOG_BLOCK_RANGE?: number;
 
   @IsOptional()
   @IsInt()
@@ -287,9 +317,10 @@ class EnvironmentVariables {
   @IsBooleanString()
   SWAGGER_ENABLED?: string;
 
-  // --- BlindPay (onramp / offramp / KYC rails) ---
-  // All optional: the service boots without them; the BlindPay client fails with
-  // a clear 503 only when a BlindPay-backed route is actually exercised.
+  // --- BlindPay (onramp / offramp / KYC rails) — the `blindpay` native plugin ---
+  // All optional here: the plugin checks that each instance's trio is whole when
+  // it boots (`assertBlindpayInstancesConsistent`), and a deployment that does
+  // not enable it never reads them.
   @IsOptional()
   @IsString()
   BLINDPAY_API_KEY?: string;
@@ -496,69 +527,7 @@ export function validateEnv(config: Record<string, unknown>) {
     );
   }
 
-  assertBlindpayInstancesConsistent(validated);
-
   assertIdentityConfigConsistent(config);
 
   return validated;
-}
-
-/**
- * Each BlindPay instance is configured by its own trio of variables — unsuffixed
- * for production, `_DEV` for development — and a trio must be whole: an instance
- * id is required alongside its key, and so is the webhook secret, because without
- * it that instance's deliveries cannot be verified at all.
- */
-function assertBlindpayInstancesConsistent(
-  validated: EnvironmentVariables,
-): void {
-  const instances = [
-    {
-      apiKey: validated.BLINDPAY_API_KEY,
-      apiKeyVar: 'BLINDPAY_API_KEY',
-      instanceId: validated.BLINDPAY_INSTANCE_ID,
-      instanceIdVar: 'BLINDPAY_INSTANCE_ID',
-      webhookSecret: validated.BLINDPAY_WEBHOOK_SECRET,
-      webhookSecretVar: 'BLINDPAY_WEBHOOK_SECRET',
-    },
-    {
-      apiKey: validated.BLINDPAY_API_KEY_DEV,
-      apiKeyVar: 'BLINDPAY_API_KEY_DEV',
-      instanceId: validated.BLINDPAY_INSTANCE_ID_DEV,
-      instanceIdVar: 'BLINDPAY_INSTANCE_ID_DEV',
-      webhookSecret: validated.BLINDPAY_WEBHOOK_SECRET_DEV,
-      webhookSecretVar: 'BLINDPAY_WEBHOOK_SECRET_DEV',
-    },
-  ];
-
-  for (const instance of instances) {
-    if (isNonEmpty(instance.apiKey)) {
-      if (!isNonEmpty(instance.instanceId)) {
-        throw new Error(
-          `${instance.instanceIdVar} is required when ${instance.apiKeyVar} is set: ` +
-            'every BlindPay API call is scoped to a platform instance id (in_...).',
-        );
-      }
-      if (!isNonEmpty(instance.webhookSecret)) {
-        throw new Error(
-          `${instance.webhookSecretVar} is required when ${instance.apiKeyVar} is set: ` +
-            'inbound BlindPay webhooks are verified with the Svix signing secret (whsec_...).',
-        );
-      }
-    }
-
-    // Checked whenever it is set, not only alongside the API key: the inbound
-    // webhook route reads it on its own.
-    if (
-      isNonEmpty(instance.webhookSecret) &&
-      !decodeSvixSecret(instance.webhookSecret)
-    ) {
-      throw new Error(
-        `${instance.webhookSecretVar} is not a usable Svix signing secret: it must be the ` +
-          'whsec_... value BlindPay shows for the endpoint, whose base64 key decodes ' +
-          `to at least ${SVIX_MIN_SECRET_BYTES} bytes. A truncated or mistyped secret ` +
-          'decodes to a short or empty key, and a webhook signed with that proves nothing.',
-      );
-    }
-  }
 }

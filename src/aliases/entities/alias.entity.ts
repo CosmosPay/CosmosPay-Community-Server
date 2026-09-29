@@ -1,11 +1,16 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { CHAINS } from '@/chains/chains.constants';
 
 export class AliasAddressEntity {
   @ApiProperty() id!: string;
-  @ApiProperty() address!: string;
+  @ApiProperty({ enum: CHAINS, example: 'stellar' }) chain!: string;
+  @ApiProperty({
+    description: 'On `chain`: Stellar G…, Solana base58, Monad 0x… (EIP-55).',
+  })
+  address!: string;
   @ApiProperty({ example: 'public' }) network!: string;
   @ApiPropertyOptional({ nullable: true }) label!: string | null;
-  @ApiProperty({ description: 'The default for this network.' })
+  @ApiProperty({ description: 'The default for this chain and network.' })
   isPrimary!: boolean;
   @ApiProperty({ description: 'When this address proved control of itself.' })
   verifiedAt!: Date;
@@ -45,9 +50,10 @@ export class AliasChallengeEntity {
   nonce!: string;
   @ApiProperty({
     description:
-      'The EXACT string to digest and sign. Returned rather than described so a ' +
-      'client never rebuilds it from prose — a client that assembles the fields ' +
-      'itself is one field-order change away from producing signatures nothing accepts.',
+      'The EXACT string to sign — digested first on Stellar, signed as text on ' +
+      'Solana and Monad. Returned rather than described so a client never ' +
+      'rebuilds it from prose — a client that assembles the fields itself is ' +
+      'one field-order change away from producing signatures nothing accepts.',
   })
   message!: string;
   @ApiProperty({ description: 'Domain tag the digest is framed with.' })
@@ -65,9 +71,14 @@ export class AliasResolutionEntity {
   @ApiProperty() name!: string;
   @ApiProperty() displayName!: string;
   @ApiProperty({
+    enum: CHAINS,
+    description: 'The chain resolved on: the one asked for, else Stellar.',
+  })
+  chain!: string;
+  @ApiProperty({
     type: [AliasAddressEntity],
     description:
-      'Every verified address on the requested network, primary first.',
+      'Every verified address on the requested chain and network, primary first.',
   })
   addresses!: AliasAddressEntity[];
   @ApiPropertyOptional({
@@ -123,6 +134,7 @@ export class AliasDeletedEntity {
 export class AliasByAddressEntryEntity {
   @ApiProperty({ example: 'alice' }) name!: string;
   @ApiProperty({ example: 'Alice' }) displayName!: string;
+  @ApiProperty({ enum: CHAINS, example: 'stellar' }) chain!: string;
   @ApiProperty({ example: 'public' }) network!: string;
   @ApiProperty({ description: 'The default for this network.' })
   isPrimary!: boolean;

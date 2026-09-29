@@ -60,6 +60,59 @@ export default tseslint.config(
     },
   },
   {
+    // Native plugins (`src/native-plugins/<slug>/`) depend on the core, never the
+    // other way round: the core reaches them only through
+    // `src/native-plugins/native-plugins.module.ts`, which imports one when
+    // PLUGINS_ENABLED names it. A core file that imported a plugin would keep
+    // compiling against it while the plugin is disabled — and would break the
+    // day the plugin is removed. The rule is restated in full because a later
+    // `no-restricted-imports` replaces the earlier one rather than adding to it.
+    files: ['src/**/*.ts', 'scripts/**/*.ts'],
+    ignores: ['src/native-plugins/**', 'src/app.module.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: ['./*', '../*'],
+              message:
+                'Use the "@/..." alias (or "@generated/..." for the Prisma client) instead of a relative path.',
+            },
+            {
+              regex: '^@/native-plugins/',
+              message:
+                'The core may not import a native plugin. Expose an extension point in the core (see AdminExtensions) and let the plugin register into it.',
+            },
+          ],
+        },
+      ],
+    },
+  },
+  ...['blindpay', 'defindex'].map((slug) => ({
+    // One native plugin may not import another: each can be disabled on its own.
+    files: [`src/native-plugins/${slug}/**/*.ts`],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: ['./*', '../*'],
+              message:
+                'Use the "@/..." alias (or "@generated/..." for the Prisma client) instead of a relative path.',
+            },
+            {
+              regex: `^@/native-plugins/(?!${slug}/)`,
+              message:
+                'A native plugin may import the core and itself, never another plugin: each one is enabled on its own.',
+            },
+          ],
+        },
+      ],
+    },
+  })),
+  {
     // Plugins (`plugins/<slug>/index.ts`) reach the core through
     // `@/plugins/sdk` and nothing else: no
     // Prisma, no Nest provider, no `node:*`, no npm package, no ambient escape

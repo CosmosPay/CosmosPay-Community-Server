@@ -5,9 +5,6 @@ import { validateEnv } from '@/config/env.validation';
 const VALID_FEE_WALLET =
   'GARMB7W3FCR3GKIM3FLWVJASC2PUZ4VHUJZTNJVWWKNTCJNKO6TBCT76';
 
-/** The shape Svix mints: `whsec_` + base64 of 24 key bytes. */
-const SVIX_SECRET = `whsec_${Buffer.from('env-validation-svix-key!').toString('base64')}`;
-
 function validEnv(
   overrides: Record<string, string> = {},
 ): Record<string, string> {
@@ -335,90 +332,6 @@ describe('validateEnv', () => {
           }),
         ),
       ).toThrow(/STELLAR_SWAP_FEE_WALLET/i);
-    });
-
-    it('requires BlindPay webhook secret when API key is set', () => {
-      expect(() =>
-        validateEnv(
-          validEnv({
-            BLINDPAY_API_KEY: 'bp_test_key',
-            BLINDPAY_INSTANCE_ID: 'in_test',
-            BLINDPAY_WEBHOOK_SECRET: '',
-          }),
-        ),
-      ).toThrow(/BLINDPAY_WEBHOOK_SECRET/i);
-    });
-
-    it('requires BlindPay instance id when API key is set', () => {
-      expect(() =>
-        validateEnv(
-          validEnv({
-            BLINDPAY_API_KEY: 'bp_test_key',
-            BLINDPAY_INSTANCE_ID: '',
-            BLINDPAY_WEBHOOK_SECRET: SVIX_SECRET,
-          }),
-        ),
-      ).toThrow(/BLINDPAY_INSTANCE_ID/i);
-    });
-
-    it('accepts a real-length Svix webhook secret', () => {
-      expect(
-        validateEnv(
-          validEnv({
-            BLINDPAY_API_KEY: 'bp_test_key',
-            BLINDPAY_INSTANCE_ID: 'in_test',
-            BLINDPAY_WEBHOOK_SECRET: SVIX_SECRET,
-          }),
-        ).BLINDPAY_WEBHOOK_SECRET,
-      ).toBe(SVIX_SECRET);
-    });
-
-    it('rejects a BlindPay webhook secret whose key is too short', () => {
-      // `test` decodes to 3 bytes of HMAC key.
-      expect(() =>
-        validateEnv(validEnv({ BLINDPAY_WEBHOOK_SECRET: 'whsec_test' })),
-      ).toThrow(/BLINDPAY_WEBHOOK_SECRET is not a usable Svix signing secret/);
-    });
-
-    it('rejects a BlindPay webhook secret outside the base64 alphabet', () => {
-      // Node decodes this to an EMPTY key without complaint; checked even with
-      // no API key set, because the webhook route reads the secret on its own.
-      expect(() =>
-        validateEnv(
-          validEnv({ BLINDPAY_WEBHOOK_SECRET: `whsec_${'!'.repeat(40)}` }),
-        ),
-      ).toThrow(/BLINDPAY_WEBHOOK_SECRET is not a usable Svix signing secret/);
-    });
-
-    it('holds the development instance to the same rules, naming its own variables', () => {
-      expect(() =>
-        validateEnv(
-          validEnv({
-            BLINDPAY_API_KEY_DEV: 'bp_dev_key',
-            BLINDPAY_INSTANCE_ID_DEV: '',
-            BLINDPAY_WEBHOOK_SECRET_DEV: SVIX_SECRET,
-          }),
-        ),
-      ).toThrow(/BLINDPAY_INSTANCE_ID_DEV is required/);
-      expect(() =>
-        validateEnv(validEnv({ BLINDPAY_WEBHOOK_SECRET_DEV: 'whsec_test' })),
-      ).toThrow(
-        /BLINDPAY_WEBHOOK_SECRET_DEV is not a usable Svix signing secret/,
-      );
-    });
-
-    it('accepts a complete development instance alongside production', () => {
-      const result = validateEnv(
-        validEnv({
-          BLINDPAY_API_KEY: 'bp_live_key',
-          BLINDPAY_INSTANCE_ID: 'in_live',
-          BLINDPAY_WEBHOOK_SECRET: SVIX_SECRET,
-          BLINDPAY_API_KEY_DEV: 'bp_dev_key',
-          BLINDPAY_INSTANCE_ID_DEV: 'in_dev',
-          BLINDPAY_WEBHOOK_SECRET_DEV: SVIX_SECRET,
-        }),
-      );
-      expect(result.BLINDPAY_INSTANCE_ID_DEV).toBe('in_dev');
     });
 
     it('rejects slippage above max slippage', () => {

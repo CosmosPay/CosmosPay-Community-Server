@@ -3,8 +3,8 @@ import { IsIn, IsString } from 'class-validator';
 import {
   CHAIN_VARIANTS,
   type ChainVariant,
-} from '@/blindpay/blindpay.constants';
-import { IsRequiredForChain } from '@/common/validators/is-required-for-chain.validator';
+} from '@/native-plugins/blindpay/blindpay.constants';
+import { IsRequiredForChain } from '@/native-plugins/blindpay/validators/is-required-for-chain.validator';
 import { IsWalletAddressForChain } from '@/common/validators/is-wallet-address-for-chain.validator';
 
 /**

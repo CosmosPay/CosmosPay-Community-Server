@@ -7,31 +7,35 @@ import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface'
 import { PaginationQueryDto } from '@/common/dto/pagination.query.dto';
 import { page } from '@/common/pagination';
 import { PrismaService } from '@/prisma/prisma.service';
-import { BlindpayKycApi } from '@/blindpay/blindpay-kyc.api';
+import { BlindpayKycApi } from '@/native-plugins/blindpay/blindpay-kyc.api';
 import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
 import {
   BlindpaySyncService,
   BlindpayObject,
-} from '@/blindpay/blindpay-sync.service';
-import { asNullableString, asString, toJson } from '@/blindpay/blindpay.util';
-import { storedBlindpayEnvironment } from '@/blindpay/blindpay-environment';
+} from '@/native-plugins/blindpay/blindpay-sync.service';
+import {
+  asNullableString,
+  asString,
+  toJson,
+} from '@/native-plugins/blindpay/blindpay.util';
+import { storedBlindpayEnvironment } from '@/native-plugins/blindpay/blindpay-environment';
 import type { BlindpayEnvironment } from '@/config/configuration';
 import type { BlindpayReceiver, Prisma } from '@generated/prisma/client';
 import {
   recordAuditInTransaction,
   type AuditEntry,
 } from '@/audit/audit-writer';
-import { CreateReceiverDto } from '@/kyc/receivers/dto/create-receiver.dto';
-import { UpdateReceiverDto } from '@/kyc/receivers/dto/update-receiver.dto';
-import { RequestTosDto } from '@/kyc/receivers/dto/request-tos.dto';
+import { CreateReceiverDto } from '@/native-plugins/blindpay/kyc/receivers/dto/create-receiver.dto';
+import { UpdateReceiverDto } from '@/native-plugins/blindpay/kyc/receivers/dto/update-receiver.dto';
+import { RequestTosDto } from '@/native-plugins/blindpay/kyc/receivers/dto/request-tos.dto';
 import type { AppConfig } from '@/config/configuration';
-import { assertRedirectAllowed } from '@/kyc/redirect-url-whitelist';
-import { assertTransition } from '@/kyc/receivers/receiver-state';
+import { assertRedirectAllowed } from '@/native-plugins/blindpay/kyc/redirect-url-whitelist';
+import { assertTransition } from '@/native-plugins/blindpay/kyc/receivers/receiver-state';
 import {
   LOCAL_RECEIVER_PREFIX,
   RECEIVER_TENANT_EDITABLE_FIELDS,
   TOS_EMAIL_COOLDOWN_MS,
-} from '@/kyc/kyc.constants';
+} from '@/native-plugins/blindpay/kyc/kyc.constants';
 
 /**
  * The columns a receiver is allowed to leave this service with — deliberately the

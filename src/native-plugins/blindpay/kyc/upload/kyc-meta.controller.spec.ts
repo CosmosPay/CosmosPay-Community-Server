@@ -1,9 +1,12 @@
 import { INestApplication, VersioningType } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
-import { MAX_UPLOAD_FIELD_BYTES, MAX_UPLOAD_FIELDS } from '@/kyc/kyc.constants';
-import { KycMetaController } from '@/kyc/upload/kyc-meta.controller';
-import { KycMetaService } from '@/kyc/upload/kyc-meta.service';
+import {
+  MAX_UPLOAD_FIELD_BYTES,
+  MAX_UPLOAD_FIELDS,
+} from '@/native-plugins/blindpay/kyc/kyc.constants';
+import { KycMetaController } from '@/native-plugins/blindpay/kyc/upload/kyc-meta.controller';
+import { KycMetaService } from '@/native-plugins/blindpay/kyc/upload/kyc-meta.service';
 
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00]);
 

@@ -1,13 +1,16 @@
 import { HttpStatus } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
-import { BlindpayClient, UploadableFile } from '@/blindpay/blindpay.client';
-import { BlindpayKycApi } from '@/blindpay/blindpay-kyc.api';
+import {
+  BlindpayClient,
+  UploadableFile,
+} from '@/native-plugins/blindpay/blindpay.client';
+import { BlindpayKycApi } from '@/native-plugins/blindpay/blindpay-kyc.api';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import { AppConfig } from '@/config/configuration';
 import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
 import { PrismaService } from '@/prisma/prisma.service';
-import { KycMetaService } from '@/kyc/upload/kyc-meta.service';
+import { KycMetaService } from '@/native-plugins/blindpay/kyc/upload/kyc-meta.service';
 
 const consumer: GatewayConsumer = {
   username: 'cosmos_u1',

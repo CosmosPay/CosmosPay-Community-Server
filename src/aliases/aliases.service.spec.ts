@@ -12,6 +12,7 @@ const kp = Keypair.random();
 function signFor(body: {
   purpose: AliasChallengePurpose;
   name: string;
+  chain: 'stellar';
   address: string;
   network: string;
   nonce: string;
@@ -28,6 +29,7 @@ function challengeRow(over: Partial<Record<string, unknown>> = {}) {
     aliasId: null,
     purpose: AliasChallengePurpose.CLAIM,
     name: 'emanuel250',
+    chain: 'stellar',
     address: kp.publicKey(),
     network: 'public',
     nonce: 'nonce-1',
@@ -94,6 +96,7 @@ describe('AliasesService — claiming', () => {
   const good = {
     purpose: AliasChallengePurpose.CLAIM,
     name: 'emanuel250',
+    chain: 'stellar' as const,
     address: kp.publicKey(),
     network: 'public',
     nonce: 'nonce-1',
@@ -160,6 +163,7 @@ describe('AliasesService — claiming', () => {
             aliasChallengeMessage({
               purpose: AliasChallengePurpose.CLAIM,
               name: 'emanuel250',
+              chain: 'stellar',
               address: other.publicKey(),
               network: 'testnet',
               nonce: 'nonce-1',
@@ -301,6 +305,66 @@ describe('AliasesService — resolution', () => {
     });
     const res = await service.resolve('emanuel250');
     expect(JSON.stringify(res)).not.toContain('secret@example.com');
+  });
+});
+
+describe('AliasesService — chains', () => {
+  const MONAD = '0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed';
+
+  it('resolves on Stellar unless the payer names a chain', async () => {
+    const { service, prisma } = build();
+    prisma.alias.findUnique.mockResolvedValue({
+      name: 'emanuel250',
+      displayName: 'e',
+      status: AliasStatus.ACTIVE,
+      addresses: [],
+    });
+
+    await service.resolve('emanuel250', 'public');
+    expect(
+      prisma.alias.findUnique.mock.calls[0][0].include.addresses.where,
+    ).toEqual({ chain: 'stellar', network: 'public' });
+
+    const res = await service.resolve('emanuel250', undefined, 'monad');
+    expect(
+      prisma.alias.findUnique.mock.calls[1][0].include.addresses.where,
+    ).toEqual({ chain: 'monad' });
+    expect(res.chain).toBe('monad');
+  });
+
+  it('reads the chain off an address, and matches a Monad one in its EIP-55 spelling', async () => {
+    const { service, prisma } = build();
+    await service.findByAddress(MONAD.toLowerCase());
+    expect(prisma.aliasAddress.findMany.mock.calls[0][0].where).toEqual({
+      chain: 'monad',
+      address: MONAD,
+    });
+
+    await service.findByAddress(kp.publicKey());
+    expect(prisma.aliasAddress.findMany.mock.calls[1][0].where).toMatchObject({
+      chain: 'stellar',
+    });
+  });
+
+  it('answers an address of no chain with no aliases', async () => {
+    const { service, prisma } = build();
+    expect(await service.findByAddress('not-an-address')).toEqual({ data: [] });
+    expect(prisma.aliasAddress.findMany).not.toHaveBeenCalled();
+  });
+
+  it('issues a challenge bound to its chain, in the chain’s stored spelling', async () => {
+    const { service, prisma } = build();
+    const res = await service.createChallenge(consumer, {
+      name: 'emanuel250',
+      chain: 'monad',
+      address: MONAD.toLowerCase(),
+      network: 'public',
+    });
+    expect(prisma.aliasChallenge.create.mock.calls[0][0].data).toMatchObject({
+      chain: 'monad',
+      address: MONAD,
+    });
+    expect(res.message).toContain(`chain: monad\naddress: ${MONAD}`);
   });
 });
 
@@ -697,6 +761,7 @@ function good() {
   return {
     purpose: AliasChallengePurpose.CLAIM,
     name: 'emanuel250',
+    chain: 'stellar' as const,
     address: kp.publicKey(),
     network: 'public',
     nonce: 'nonce-1',

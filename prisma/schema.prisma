@@ -282,13 +282,13 @@ model WebhookEmittedEvent {
   @@map("webhook_emitted_event")
 }
 
-// Lifecycle of a Stellar payment intent. Kept for traceability — the unsigned
-// transaction (xdr/uri) is persisted at creation and the status is advanced as
-// the customer signs/submits it on the network.
+// Lifecycle of a payment intent. Kept for traceability — the payment link
+// (uri, and for Stellar TX the unsigned xdr) is persisted at creation and the
+// status is advanced as the customer pays it on its chain.
 enum PaymentIntentStatus {
   PENDING // created, unsigned tx handed to the customer
   SUBMITTED // a signed tx hash was reported back to us
-  SUCCEEDED // confirmed on the Stellar network
+  SUCCEEDED // confirmed on the intent's chain
   FAILED // rejected / errored on the network
   CANCELLED // abandoned by the merchant/customer
   EXPIRED // tx time bounds elapsed before submission
@@ -309,16 +309,34 @@ model PaymentIntent {
 
   kind PaymentIntentKind @default(TX)
 
-  // Stellar payment details.
-  source      String? // payer account (G...) — null for PAY intents
-  destination String // payee account (G...)
+  // Which chain the payment settles on: 'stellar' | 'solana' | 'monad'. Every
+  // row created before Solana and Monad existed is Stellar. TX intents are
+  // Stellar only (SEP-7 `tx` is a Stellar envelope).
+  chain String @default("stellar")
+
+  // Payment details, in the chain's own address and asset vocabulary.
+  source      String? // payer account (Stellar G…, Solana base58, Monad 0x…) — null for PAY intents
+  destination String // payee account, same vocabulary
   amount      String? // decimal string, e.g. "25.5" — optional for PAY intents
-  asset       String  @default("native") // asset code, or "native" for XLM
-  assetIssuer String? // issuer account for non-native assets
+  asset       String  @default("native") // asset code, or "native" for the chain's coin
+  // Stellar: the asset's issuer. Solana: the SPL mint. Monad: the ERC-20
+  // contract (EIP-55). Null for the native coin.
+  assetIssuer String?
+  // The asset's decimals, read from the chain at creation (SPL mint, ERC-20
+  // `decimals()`). Null on Stellar, where every amount has 7.
+  assetDecimals Int?
   // Mandatory MEMO_ID (uint64 as string). Auto-generated when not supplied.
-  // Identifies the payment on-chain and gives the intent idempotency per consumer.
+  // The intent's idempotency key per consumer on every chain; on Stellar it is
+  // also what identifies the payment on-chain.
   memo        String
-  network     String // 'public' | 'testnet'
+  network     String // 'public' | 'testnet' — the tier, on every chain
+
+  // How the payment is found on chains without a Stellar memo. Solana: the
+  // Solana Pay `reference` key the wallet adds to the transfer. Null elsewhere.
+  chainReference String?
+  // Monad: the last block the observer has scanned for this intent's ERC-20
+  // transfer, as a decimal string. Starts at the chain head when created.
+  chainCursor    String?
 
   // Optional SEP-7 extras (informational; echoed back, not validated on-chain).
   msg      String? // message shown to the user in their wallet
@@ -363,6 +381,7 @@ model PaymentIntent {
   // `20260825210000_analytics_indexes` on main. Declared to match the database.
   @@index([consumerId, source])
   @@index([consumerId, network, createdAt])
+  @@index([consumerId, chain, createdAt])
   @@map("payment_intent")
 }
 
@@ -1077,21 +1096,25 @@ model Alias {
   @@map("alias")
 }
 
-/// One Stellar account an alias resolves to, per network.
+/// One account an alias resolves to, per chain and network.
 model AliasAddress {
   id      String @id @default(cuid())
   aliasId String
   alias   Alias  @relation(fields: [aliasId], references: [id], onDelete: Cascade)
 
-  /// Stellar public key (G…).
+  /// `stellar` | `solana` | `monad`. Every row from before the others existed is
+  /// Stellar.
+  chain   String @default("stellar")
+  /// The chain's own address: Stellar G…, Solana base58, Monad 0x… (EIP-55).
   address String
   /// Network id as the wallet names it: `public` | `testnet` | a custom id.
   network String
   /// Optional human label ("phone", "cold wallet").
   label   String?
 
-  /// The one a payer gets when they resolve the alias on this network without
-  /// asking for a specific address. Exactly one per (alias, network) — enforced
+  /// The one a payer gets when they resolve the alias on this chain and network
+  /// without asking for a specific address. Exactly one per (alias, chain,
+  /// network) — enforced
   /// in the service, since a partial unique index cannot be expressed here.
   isPrimary Boolean @default(false)
 
@@ -1102,10 +1125,10 @@ model AliasAddress {
 
   createdAt DateTime @default(now())
 
-  @@unique([aliasId, network, address])
+  @@unique([aliasId, chain, network, address])
   // A payer resolves by name; a wallet asks "which aliases point at me?".
   @@index([address])
-  @@index([aliasId, network])
+  @@index([aliasId, chain, network])
   @@map("alias_address")
 }
 
@@ -1121,7 +1144,8 @@ model AliasChallenge {
   /// issued for a cheap unclaimed name cannot be spent on a contested one.
   name String
 
-  /// The address expected to sign. Bound for the same reason.
+  /// The address expected to sign, and its chain. Bound for the same reason.
+  chain   String @default("stellar")
   address String
   network String
 
@@ -1191,11 +1215,14 @@ model WalletAccount {
   /// How the email was proven the last time this account signed in.
   method WalletAuthMethod
 
-  /// The Stellar ACCOUNT this identity is attached to — not necessarily the key
-  /// that signs for it. A SEP-30 recovery re-keys the account and leaves this
-  /// address unchanged, which is the whole point of recovering rather than
-  /// restoring.
-  stellarAddress String
+  /// Which chain `address` is on: `stellar` | `solana` | `monad`.
+  chain   String @default("stellar")
+  /// The ACCOUNT this identity is attached to — not necessarily the key that
+  /// signs for it. On Stellar a SEP-30 recovery re-keys the account and leaves
+  /// this address unchanged, which is the whole point of recovering rather than
+  /// restoring. The column keeps its original name: renaming it bought nothing
+  /// but a table rewrite.
+  address String @map("stellarAddress")
 
   /// Filled when the account is granted a gateway credential. Nullable because
   /// identity comes first: a sign-in that proved an email but has not been given
@@ -1208,7 +1235,7 @@ model WalletAccount {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  @@index([stellarAddress])
+  @@index([address])
   @@index([consumerId])
   @@map("wallet_account")
 }
@@ -1225,10 +1252,11 @@ model WalletBackup {
   walletAccountId String        @unique
   walletAccount   WalletAccount @relation(fields: [walletAccountId], references: [id], onDelete: Cascade)
 
-  /// The address the box restores to — and the key that must sign any later
-  /// change to it. Stored beside the box so a replacement can be authorized
-  /// without opening anything.
-  stellarAddress String
+  /// The address the box restores to, and its chain — the key that must sign
+  /// any later change to it. Stored beside the box so a replacement can be
+  /// authorized without opening anything.
+  chain   String @default("stellar")
+  address String @map("stellarAddress")
 
   /// The wallet's own sealed-box JSON (v, salt, iv, data, iter). Never parsed
   /// for meaning, only validated for shape.
@@ -1237,7 +1265,7 @@ model WalletBackup {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  @@index([stellarAddress])
+  @@index([address])
   @@map("wallet_backup")
 }
 

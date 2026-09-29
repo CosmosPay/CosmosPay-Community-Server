@@ -1,15 +1,15 @@
 import { HttpStatus } from '@nestjs/common';
-import { BlindpayKycApi } from '@/blindpay/blindpay-kyc.api';
+import { BlindpayKycApi } from '@/native-plugins/blindpay/blindpay-kyc.api';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { isElevatedConsumer } from '@/common/elevated-consumer';
 import {
   RECEIVER_PUBLIC_SELECT,
   ReceiversService,
-} from '@/kyc/receivers/receivers.service';
+} from '@/native-plugins/blindpay/kyc/receivers/receivers.service';
 import {
   ALLOWED_TRANSITIONS,
   assertTransition,
-} from '@/kyc/receivers/receiver-state';
+} from '@/native-plugins/blindpay/kyc/receivers/receiver-state';
 
 /** An ordinary tenant key: `kyc:write`, no elevation. */
 const CONSUMER = {

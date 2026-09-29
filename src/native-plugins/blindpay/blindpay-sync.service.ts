@@ -9,12 +9,16 @@ import { EventEmitter2 } from 'eventemitter2';
 import { PrismaService } from '@/prisma/prisma.service';
 import { isUniqueViolation } from '@/common/prisma-errors';
 import { WEBHOOK_EVENT, WebhookEventPayload } from '@/webhooks/webhook-events';
-import { redactProviderEvent } from '@/blindpay/blindpay-event-redaction';
-import { asNullableString, asString, toJson } from '@/blindpay/blindpay.util';
+import { redactProviderEvent } from '@/native-plugins/blindpay/blindpay-event-redaction';
+import {
+  asNullableString,
+  asString,
+  toJson,
+} from '@/native-plugins/blindpay/blindpay.util';
 import {
   SETTLED_KYC_STATUSES,
   SETTLED_STATUSES,
-} from '@/blindpay/blindpay.constants';
+} from '@/native-plugins/blindpay/blindpay.constants';
 import type {
   BlindpayReceiver,
   Prisma,

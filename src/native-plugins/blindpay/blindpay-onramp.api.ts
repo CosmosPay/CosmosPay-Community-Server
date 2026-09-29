@@ -1,8 +1,8 @@
 import { Injectable } from '@nestjs/common';
 import type { BlindpayEnvironment } from '@/config/configuration';
 import type { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
-import { BlindpayClient } from '@/blindpay/blindpay.client';
-import type { BlindpayObject } from '@/blindpay/blindpay-sync.service';
+import { BlindpayClient } from '@/native-plugins/blindpay/blindpay.client';
+import type { BlindpayObject } from '@/native-plugins/blindpay/blindpay-sync.service';
 
 /**
  * BlindPay's onramp surface — payin quotes, payins, virtual accounts and the Stellar

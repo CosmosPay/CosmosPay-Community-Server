@@ -18,13 +18,13 @@ import {
 import { CurrentConsumer } from '@/common/decorators/current-consumer.decorator';
 import { RequirePermissions } from '@/common/decorators/require-permissions.decorator';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
-import { BankAccountsService } from '@/kyc/bank-accounts/bank-accounts.service';
-import { CreateBankAccountDto } from '@/kyc/bank-accounts/dto/create-bank-account.dto';
+import { BankAccountsService } from '@/native-plugins/blindpay/kyc/bank-accounts/bank-accounts.service';
+import { CreateBankAccountDto } from '@/native-plugins/blindpay/kyc/bank-accounts/dto/create-bank-account.dto';
 import {
   BankAccountEntity,
   BankAccountListEntity,
   BankAccountDeletedEntity,
-} from '@/kyc/bank-accounts/entities/bank-account.entity';
+} from '@/native-plugins/blindpay/kyc/bank-accounts/entities/bank-account.entity';
 
 // /v1/kyc/receivers/:receiverId/bank-accounts
 @ApiTags('kyc')

@@ -25,21 +25,21 @@ import { ApiUpstream } from '@/common/decorators/api-upstream.decorator';
 import { RequirePermissions } from '@/common/decorators/require-permissions.decorator';
 import { ApiErrorCode } from '@/common/errors/api-error';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
-import { ReceiversService } from '@/kyc/receivers/receivers.service';
-import { resolveTosCooldownMs } from '@/kyc/receivers/tos-cooldown-header';
-import { CreateReceiverDto } from '@/kyc/receivers/dto/create-receiver.dto';
-import { UpdateReceiverDto } from '@/kyc/receivers/dto/update-receiver.dto';
-import { RequestTosDto } from '@/kyc/receivers/dto/request-tos.dto';
-import { ApproveReceiverDto } from '@/kyc/receivers/dto/approve-receiver.dto';
-import { EnableReceiverDto } from '@/kyc/receivers/dto/enable-receiver.dto';
-import { SetAccessDto } from '@/kyc/receivers/dto/set-access.dto';
+import { ReceiversService } from '@/native-plugins/blindpay/kyc/receivers/receivers.service';
+import { resolveTosCooldownMs } from '@/native-plugins/blindpay/kyc/receivers/tos-cooldown-header';
+import { CreateReceiverDto } from '@/native-plugins/blindpay/kyc/receivers/dto/create-receiver.dto';
+import { UpdateReceiverDto } from '@/native-plugins/blindpay/kyc/receivers/dto/update-receiver.dto';
+import { RequestTosDto } from '@/native-plugins/blindpay/kyc/receivers/dto/request-tos.dto';
+import { ApproveReceiverDto } from '@/native-plugins/blindpay/kyc/receivers/dto/approve-receiver.dto';
+import { EnableReceiverDto } from '@/native-plugins/blindpay/kyc/receivers/dto/enable-receiver.dto';
+import { SetAccessDto } from '@/native-plugins/blindpay/kyc/receivers/dto/set-access.dto';
 import {
   ReceiverApprovalEntity,
   ReceiverDeletedEntity,
   ReceiverEntity,
   ReceiverListEntity,
   ReceiverTosEntity,
-} from '@/kyc/receivers/entities/receiver.entity';
+} from '@/native-plugins/blindpay/kyc/receivers/entities/receiver.entity';
 
 // /v1/kyc/receivers — the KYC/KYB entities required before any onramp/offramp.
 @ApiTags('kyc')

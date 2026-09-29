@@ -1,4 +1,4 @@
-import { BlindpaySyncService } from '@/blindpay/blindpay-sync.service';
+import { BlindpaySyncService } from '@/native-plugins/blindpay/blindpay-sync.service';
 import { WEBHOOK_EVENT } from '@/webhooks/webhook-events';
 
 function makeService() {

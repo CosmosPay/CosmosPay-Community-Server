@@ -12,6 +12,7 @@ import {
 describe('isSameIntentRequest', () => {
   const tx: PaymentIntentTerms = {
     kind: 'TX',
+    chain: 'stellar',
     network: 'testnet',
     source: 'GSOURCE',
     destination: 'GDEST',
@@ -28,12 +29,26 @@ describe('isSameIntentRequest', () => {
     expect(isSameIntentRequest(pay, { ...pay })).toBe(true);
   });
 
-  it('compares amounts in stroops, not as text', () => {
+  it('compares amounts as exact decimals, not as text', () => {
     expect(isSameIntentRequest(tx, { ...tx, amount: '25.5000000' })).toBe(true);
+    // Beyond Stellar's 7 places too: a Monad amount has up to 18.
+    expect(
+      isSameIntentRequest(
+        { ...pay, chain: 'monad', amount: '1.000000000000000001' },
+        { ...pay, chain: 'monad', amount: '1.0000000000000000010' },
+      ),
+    ).toBe(true);
+    expect(
+      isSameIntentRequest(
+        { ...pay, chain: 'monad', amount: '1.000000000000000001' },
+        { ...pay, chain: 'monad', amount: '1.000000000000000002' },
+      ),
+    ).toBe(false);
   });
 
   it.each([
     ['kind', 'PAY'],
+    ['chain', 'solana'],
     ['network', 'public'],
     ['source', 'GOTHERSOURCE'],
     ['destination', 'GATTACKER'],
@@ -65,7 +80,7 @@ describe('isSameIntentRequest', () => {
     expect(isSameIntentRequest({ ...pay, source: 'GPAYER' }, pay)).toBe(true);
   });
 
-  it('falls back to exact text for an amount too large to be a Stellar amount', () => {
+  it('compares an amount too large to be a Stellar amount exactly, not as a float', () => {
     const huge = '99999999999999999999';
     expect(
       isSameIntentRequest({ ...tx, amount: huge }, { ...tx, amount: huge }),
@@ -74,6 +89,13 @@ describe('isSameIntentRequest', () => {
       isSameIntentRequest(
         { ...tx, amount: huge },
         { ...tx, amount: `${huge}.0` },
+      ),
+    ).toBe(true);
+    // One unit apart is a different payment, however many digits.
+    expect(
+      isSameIntentRequest(
+        { ...tx, amount: huge },
+        { ...tx, amount: '99999999999999999998' },
       ),
     ).toBe(false);
   });

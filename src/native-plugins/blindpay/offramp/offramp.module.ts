@@ -1,6 +1,6 @@
 import { Module } from '@nestjs/common';
-import { OfframpController } from '@/offramp/offramp.controller';
-import { OfframpService } from '@/offramp/offramp.service';
+import { OfframpController } from '@/native-plugins/blindpay/offramp/offramp.controller';
+import { OfframpService } from '@/native-plugins/blindpay/offramp/offramp.service';
 
 /**
  * Offramp (stablecoin -> fiat): payout quotes, the on-chain authorize step for

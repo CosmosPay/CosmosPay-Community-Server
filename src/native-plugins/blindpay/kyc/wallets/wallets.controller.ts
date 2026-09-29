@@ -18,13 +18,13 @@ import {
 import { CurrentConsumer } from '@/common/decorators/current-consumer.decorator';
 import { RequirePermissions } from '@/common/decorators/require-permissions.decorator';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
-import { WalletsService } from '@/kyc/wallets/wallets.service';
-import { CreateWalletDto } from '@/kyc/wallets/dto/create-wallet.dto';
+import { WalletsService } from '@/native-plugins/blindpay/kyc/wallets/wallets.service';
+import { CreateWalletDto } from '@/native-plugins/blindpay/kyc/wallets/dto/create-wallet.dto';
 import {
   WalletEntity,
   WalletListEntity,
   WalletDeletedEntity,
-} from '@/kyc/wallets/entities/wallet.entity';
+} from '@/native-plugins/blindpay/kyc/wallets/entities/wallet.entity';
 
 // /v1/kyc/receivers/:receiverId/wallets
 @ApiTags('kyc')

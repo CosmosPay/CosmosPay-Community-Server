@@ -1,8 +1,8 @@
-import { BlindpayKycApi } from '@/blindpay/blindpay-kyc.api';
+import { BlindpayKycApi } from '@/native-plugins/blindpay/blindpay-kyc.api';
 import {
   WALLET_PUBLIC_SELECT,
   WalletsService,
-} from '@/kyc/wallets/wallets.service';
+} from '@/native-plugins/blindpay/kyc/wallets/wallets.service';
 
 const CONSUMER = { username: 'cosmos_u1', role: 'user' } as any;
 

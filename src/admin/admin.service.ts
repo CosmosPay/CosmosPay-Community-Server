@@ -1,19 +1,16 @@
 import { Injectable } from '@nestjs/common';
-import { ApiError } from '@/common/errors/api-error';
+import { AdminExtensions } from '@/admin/admin-extensions';
+import {
+  ADMIN_CONSUMER_INCLUDE as consumerSelect,
+  type AdminListOpts as ListOpts,
+  adminSkip as skip,
+  adminTake as take,
+  consumerWhere,
+  sumCounts as sum,
+  tallyBy,
+} from '@/admin/admin-list';
 import { PrismaService } from '@/prisma/prisma.service';
-import { ReceiversService } from '@/kyc/receivers/receivers.service';
-import { RequestTosDto } from '@/kyc/receivers/dto/request-tos.dto';
-import type { AdminPrincipal } from '@/admin/admin-auth';
-import { toAuditEntry } from '@/audit/audit-writer';
 
-/** Clamp a requested page size to a sane range. */
-function take(n?: number): number {
-  if (!n || n < 1) return 50;
-  return Math.min(n, 200);
-}
-function skip(n?: number): number {
-  return !n || n < 0 ? 0 : n;
-}
 function num(amount: string | null): number {
   if (!amount) return 0;
   const v = Number(amount);
@@ -22,79 +19,22 @@ function num(amount: string | null): number {
 function money(n: number): string {
   return Number(n.toFixed(7)).toString();
 }
-const consumerSelect = {
-  consumer: { select: { apisixUsername: true, credentialId: true } },
-};
 
 /**
  * Platform-admin (owner) reads: the SAME data as the per-consumer services, but across
  * EVERY consumer/organization — no consumer scoping. Reached only via the AdminGuard
  * (a platform-console call). Every list carries the owning consumer for attribution.
+ *
+ * Only the core's own tables are read here. A native plugin that keeps rows of its
+ * own (BlindPay's receivers, payins and payouts) serves its admin routes itself and
+ * adds its section of the summary through {@link AdminExtensions}.
  */
 @Injectable()
 export class AdminService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly receiversSvc: ReceiversService,
+    private readonly extensions: AdminExtensions,
   ) {}
-
-  /**
-   * Platform-admin (owner) review of ANY pending receiver across consumers: approve it
-   * (pending_review → pending_user) and return BlindPay's hosted terms url + the
-   * customer's email so the dev platform sends the terms email. The org-scoped approve
-   * only works for the owner's own org, so the global admin Fiat view needs this.
-   * Local status write + audit row commit in one transaction.
-   */
-  async approveReceiver(
-    id: string,
-    redirectUrl: string,
-    actor: AdminPrincipal,
-    expectedVersion?: number,
-  ) {
-    return this.receiversSvc.approveById(
-      id,
-      redirectUrl,
-      toAuditEntry(actor, 'receivers.approve', 'receiver', id, {
-        redirect_url: redirectUrl,
-        expected_version: expectedVersion ?? null,
-      }),
-      expectedVersion,
-    );
-  }
-
-  /** Platform-admin activation of ANY receiver across consumers (post terms acceptance). */
-  async enableReceiver(id: string, tosId: string, actor: AdminPrincipal) {
-    return this.receiversSvc.enableById(
-      id,
-      tosId,
-      toAuditEntry(actor, 'receivers.enable', 'receiver', id, {
-        tos_id: tosId,
-      }),
-    );
-  }
-
-  /**
-   * Platform-admin resend of the terms-of-service link for ANY receiver across consumers.
-   * The customer accepting these terms is what kicks off BlindPay verification, so the global
-   * Admin → Fiat view uses this to re-send the verification email for a pending_user receiver.
-   * Returns the ToS url + customer email so the dev platform sends the email (we have no mailer).
-   */
-  async requestReceiverTos(
-    id: string,
-    dto: RequestTosDto,
-    actor: AdminPrincipal,
-    cooldownMs?: number,
-  ) {
-    return this.receiversSvc.requestTosById(
-      id,
-      dto,
-      cooldownMs,
-      toAuditEntry(actor, 'receivers.requestTos', 'receiver', id, {
-        channel: dto.channel ?? 'code',
-        redirect_url: dto.redirect_url,
-      }),
-    );
-  }
 
   /** Global, cross-consumer summary — the owner's "everything at a glance". */
   async summary(network?: string) {
@@ -107,10 +47,8 @@ export class AdminService {
       webhookEndpoints,
       intentsByStatus,
       swapsByStatus,
-      receiversByStatus,
-      payinsByStatus,
-      payoutsByStatus,
       succeededIntents,
+      sections,
     ] = await Promise.all([
       this.prisma.consumer.count(),
       this.prisma.customer.count(),
@@ -126,22 +64,23 @@ export class AdminService {
         where: netWhere,
         _count: { _all: true },
       }),
-      this.prisma.blindpayReceiver.groupBy({
-        by: ['kycStatus'],
-        _count: { _all: true },
-      }),
-      this.prisma.payin.groupBy({ by: ['status'], _count: { _all: true } }),
-      this.prisma.payout.groupBy({ by: ['status'], _count: { _all: true } }),
       this.prisma.paymentIntent.findMany({
         where: { status: 'SUCCEEDED', ...netWhere },
-        select: { amount: true, asset: true },
+        select: { amount: true, asset: true, chain: true },
       }),
+      Promise.all(
+        this.extensions
+          .list()
+          .map(async (ext) => [ext.key, await ext.summary()] as const),
+      ),
     ]);
 
-    // Settled volume per asset (succeeded payment intents).
+    // Settled volume per asset (succeeded payment intents). An asset code is
+    // only unique per chain, so a chain other than Stellar prefixes it.
     const volMap = new Map<string, { amount: number; count: number }>();
     for (const i of succeededIntents) {
-      const key = !i.asset || i.asset === 'native' ? 'XLM' : i.asset;
+      const code = !i.asset || i.asset === 'native' ? 'XLM' : i.asset;
+      const key = i.chain === 'stellar' ? code : `${i.chain}:${i.asset}`;
       const cur = volMap.get(key) ?? { amount: 0, count: 0 };
       cur.amount += num(i.amount);
       cur.count += 1;
@@ -153,27 +92,8 @@ export class AdminService {
       count: v.count,
     }));
 
-    const tally = (
-      rows: { _count: { _all: number } }[],
-      key: 'status' | 'kycStatus',
-    ): Record<string, number> => {
-      const out: Record<string, number> = {};
-      for (const r of rows as unknown as Array<
-        Record<string, unknown> & { _count: { _all: number } }
-      >) {
-        const k = (r[key] as string | null) ?? 'unknown';
-        out[k] = (out[k] ?? 0) + r._count._all;
-      }
-      return out;
-    };
-    const sum = (m: Record<string, number>) =>
-      Object.values(m).reduce((a, b) => a + b, 0);
-
-    const paymentIntents = tally(intentsByStatus, 'status');
-    const swaps = tally(swapsByStatus, 'status');
-    const receivers = tally(receiversByStatus, 'kycStatus');
-    const payins = tally(payinsByStatus, 'status');
-    const payouts = tally(payoutsByStatus, 'status');
+    const paymentIntents = tallyBy(intentsByStatus, 'status');
+    const swaps = tallyBy(swapsByStatus, 'status');
 
     return {
       network: network ?? 'all',
@@ -183,11 +103,7 @@ export class AdminService {
       webhookEndpoints,
       paymentIntents: { total: sum(paymentIntents), byStatus: paymentIntents },
       swaps: { total: sum(swaps), byStatus: swaps },
-      fiat: {
-        receivers: { total: sum(receivers), byStatus: receivers },
-        payins: { total: sum(payins), byStatus: payins },
-        payouts: { total: sum(payouts), byStatus: payouts },
-      },
+      ...Object.fromEntries(sections),
       volume,
     };
   }
@@ -208,9 +124,6 @@ export class AdminService {
               swaps: true,
               products: true,
               customers: true,
-              blindpayReceivers: true,
-              payins: true,
-              payouts: true,
               webhookEndpoints: true,
             },
           },
@@ -218,7 +131,20 @@ export class AdminService {
       }),
       this.prisma.consumer.count({ where }),
     ]);
-    return { data: rows, total, take: take(t), skip: skip(s) };
+
+    // Each plugin's counts for this page, merged into the core's `_count`.
+    const ids = rows.map((r) => r.id);
+    const extra = await Promise.all(
+      this.extensions.list().map((ext) => ext.countsByConsumer(ids)),
+    );
+    const data = rows.map((row) => ({
+      ...row,
+      _count: Object.assign(
+        { ...row._count },
+        ...extra.map((counts) => counts.get(row.id) ?? {}),
+      ) as Record<string, number>,
+    }));
+    return { data, total, take: take(t), skip: skip(s) };
   }
 
   async paymentIntents(opts: ListOpts & { network?: string; status?: string }) {
@@ -288,124 +214,4 @@ export class AdminService {
     ]);
     return { data, total, take: take(opts.take), skip: skip(opts.skip) };
   }
-
-  async receivers(opts: ListOpts = {}) {
-    const where = consumerWhere(opts.consumer);
-    const [data, total] = await Promise.all([
-      this.prisma.blindpayReceiver.findMany({
-        where,
-        take: take(opts.take),
-        skip: skip(opts.skip),
-        orderBy: { createdAt: 'desc' },
-        include: consumerSelect,
-        // The provider blob holds the full KYC dossier / bank credentials. Admin
-        // operators need to see that a record EXISTS and its state, not to have
-        // every tax id and IBAN on the platform streamed into a list response.
-        omit: { raw: true },
-      }),
-      this.prisma.blindpayReceiver.count({ where }),
-    ]);
-    return { data, total, take: take(opts.take), skip: skip(opts.skip) };
-  }
-
-  async payins(opts: ListOpts = {}) {
-    const where = consumerWhere(opts.consumer);
-    const [data, total] = await Promise.all([
-      this.prisma.payin.findMany({
-        where,
-        take: take(opts.take),
-        skip: skip(opts.skip),
-        orderBy: { createdAt: 'desc' },
-        include: consumerSelect,
-        // The provider blob holds the full KYC dossier / bank credentials. Admin
-        // operators need to see that a record EXISTS and its state, not to have
-        // every tax id and IBAN on the platform streamed into a list response.
-        //
-        // `instructions` is omitted for exactly the same reason and was missed:
-        // `pickInstructions` deliberately keeps `pse_tax_id`, `pse_full_name`,
-        // `pse_document_type`, `clabe`, `cbu` and `blindpay_bank_details`, so
-        // omitting only `raw` left the tax ids and IBANs one column over. The
-        // owning tenant still gets them from GET /v1/onramp/payins/:id — they
-        // are that payer's funding instructions — but a platform-wide admin list
-        // has no need of them.
-        omit: { raw: true, instructions: true },
-      }),
-      this.prisma.payin.count({ where }),
-    ]);
-    return { data, total, take: take(opts.take), skip: skip(opts.skip) };
-  }
-
-  /**
-   * Platform-admin fiat kill-switch across ANY consumer: enable/disable a receiver by id
-   * without consumer scoping (the owner acts globally). Mirrors the per-org access toggle.
-   *
-   * The flag write and its audit row commit in one transaction inside
-   * `ReceiversService.setAccessById` (issue #34 / Gitar review). This method used to run
-   * that transaction itself, straight against the receiver table — the one admin receiver
-   * action that bypassed the kyc module owning the row — so the kill-switch had two
-   * implementations. Now, like approve/enable/requestTos, it only supplies the actor.
-   *
-   * The response is re-read afterwards in the admin shape (owning consumer attached),
-   * which is what this route has always returned; `setAccessById` answers with the tenant
-   * projection, which leaves out the attribution the console shows.
-   */
-  async setReceiverAccess(
-    id: string,
-    disabled: boolean,
-    actor: AdminPrincipal,
-  ) {
-    await this.receiversSvc.setAccessById(
-      id,
-      disabled,
-      toAuditEntry(actor, 'receivers.setAccess', 'receiver', id, {
-        disabled,
-      }),
-    );
-    const receiver = await this.prisma.blindpayReceiver.findUnique({
-      where: { id },
-      include: consumerSelect,
-      // Same reason the list queries omit it: `raw` is the provider's full
-      // KYC dossier — tax id, address, bank credentials. Toggling a
-      // receiver's access is an authorization change and has no business
-      // returning the dossier as its 200 body, where it lands in the
-      // operator's browser, any proxy log, and the admin audit trail's
-      // response capture.
-      omit: { raw: true },
-    });
-    // setAccessById already 404s a missing receiver; this only fires if it was deleted
-    // between the committed toggle and this read.
-    if (!receiver) throw ApiError.notFound('Receiver not found');
-    return receiver;
-  }
-
-  async payouts(opts: ListOpts = {}) {
-    const where = consumerWhere(opts.consumer);
-    const [data, total] = await Promise.all([
-      this.prisma.payout.findMany({
-        where,
-        take: take(opts.take),
-        skip: skip(opts.skip),
-        orderBy: { createdAt: 'desc' },
-        include: consumerSelect,
-        // The provider blob holds the full KYC dossier / bank credentials. Admin
-        // operators need to see that a record EXISTS and its state, not to have
-        // every tax id and IBAN on the platform streamed into a list response.
-        omit: { raw: true },
-      }),
-      this.prisma.payout.count({ where }),
-    ]);
-    return { data, total, take: take(opts.take), skip: skip(opts.skip) };
-  }
-}
-
-/** Shared list options: pagination + an optional owning-consumer filter (local id). */
-interface ListOpts {
-  consumer?: string;
-  take?: number;
-  skip?: number;
-}
-
-/** Where-clause fragment scoping to a single consumer (org), or `{}` for all. */
-function consumerWhere(consumer?: string): { consumerId?: string } {
-  return consumer ? { consumerId: consumer } : {};
 }

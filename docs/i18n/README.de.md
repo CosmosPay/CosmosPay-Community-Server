@@ -74,15 +74,15 @@ src/
     services/advisory-lock...     cluster-wide lock for the background timers
   stellar/                        per-network Horizon servers (bounded timeout), account loader,
                                   SEP-7 links, signed-envelope relay, settlement repository
-  payment-intents/                Stellar payment intents (controller, service, DTO) — emits events
+  payment-intents/                payment intents on Stellar, Solana and Monad: controller, service, DTOs,
+                                  per-chain link builders and verifiers, the observer — emits events
+  chains/                         chain list, per-chain address rules, units, message signatures, JSON-RPC
+  solana/                         Solana RPC client (cluster-checked), Solana Pay links
+  evm/                            EVM RPC client for Monad (chain-id-checked), EIP-681 links
   swaps/                          Stellar native swaps (path payments): quote, build XDR, submit
   liquidity-pools/                AMM deposit/withdraw, pool + position reads, cost basis + commission on gain
   observer/                       background reconciler: swaps + LP ops against Horizon, one adapter per table
   webhooks/                       webhook endpoints CRUD + dispatcher (HMAC-signed, retried)
-  blindpay/                       BlindPay core: HTTP client, Svix verify, sync + inbound webhook
-  kyc/                            receivers (KYC/KYB), wallets, bank accounts, doc upload
-  onramp/                         fiat → stablecoin: payin quotes, payins, virtual accounts
-  offramp/                        stablecoin → fiat: payout quotes, payouts (client-signed)
   products/                       merchant catalogue
   customers/                      payer records derived from intents
   aliases/                        claimable payment handles: signed claims, resolution, email recovery
@@ -92,6 +92,9 @@ src/
   admin/                          cross-tenant platform admin (console-only), audited
   audit/                          audit-trail writer, called inside other modules' transactions
   plugins/                        plugin runtime + SDK (sdk.ts): folder loader, signatures, V8-isolate sandbox
+  native-plugins/                 first-party plugins, imported only when PLUGINS_ENABLED names them:
+    blindpay/                     BlindPay: client, Svix verify, sync + webhook, kyc/, onramp/, offramp/, admin/
+    defindex/                     DeFindex vaults (Stellar)
   health/                         liveness/readiness probes (@Public)
 prisma/schema.prisma              Consumer, PaymentIntent, Swap, LiquidityPoolOperation,
                                   WebhookEndpoint/Delivery/EmittedEvent, BlindpayReceiver,
@@ -124,7 +127,7 @@ jedem CI-Lauf aus den Controllern und DTOs neu erzeugt wird
 
 | Bereich           | Basispfad                | Funktion                                                  |
 | ----------------- | ------------------------ | --------------------------------------------------------- |
-| Payment Intents   | `/v1/payment-intents`    | SEP-7-Intents `tx` / `pay`, Validierung, On-Chain-Observer |
+| Zahlungsabsichten   | `/v1/payment-intents`    | `pay`-Absichten auf Stellar (SEP-7), Solana (Solana Pay) und Monad (EIP-681), SEP-7-`tx`, Validierung, On-Chain-Beobachter |
 | Swaps             | `/v1/swaps`              | Path-Payment-Quote, unsigniertes XDR bauen, signiertes übermitteln |
 | Liquiditätspools  | `/v1/liquidity-pools`    | AMM-Einzahlung / -Auszahlung, Positionen, Provision auf Gewinn |
 | Webhooks          | `/v1/webhooks`           | Endpunkt-CRUD, Secret-Rotation, Zustellungen, erneute Zustellung |
@@ -351,7 +354,7 @@ PostgreSQL-**Advisory-Lock auf Transaktionsebene** (`AdvisoryLockService`) und
 | Timer                          | Lock-Schlüssel           |
 | ------------------------------ | ------------------------ |
 | `SettlementObserverService`    | `SettlementObserver`     |
-| `StellarObserverService`       | `PaymentIntentObserver`  |
+| `PaymentIntentObserverService`       | `PaymentIntentObserver`  |
 | `RequestLogRetentionService`   | `RequestLogRetention`    |
 | Sweeper für Webhook-Zustellungen | `WebhookDeliverySweeper` |
 | `RateLimitPruneService`        | `RateLimitPrune`         |
@@ -389,7 +392,7 @@ Zwei Pfade nutzen diese eine Regel:
   von sich aus: Er muss ein 64-stelliger Hex-Hash sein, wird kleingeschrieben
   gespeichert und ist nur unter den Intents des aufrufenden Consumers eindeutig
   (`409 idempotency_conflict` bei einer Kollision mit einem anderen davon).
-- **Automatisch (permanenter Observer):** `StellarObserverService` fragt Horizon alle
+- **Automatisch (permanenter Observer):** `PaymentIntentObserverService` fragt Horizon alle
   `OBSERVER_INTERVAL_MS` nach `PENDING`-Intents ab — über den gemeldeten `txHash` oder
   durch Durchsuchen der Zahlungen an die Zieladresse — und finalisiert Treffer auf
   dieselbe Weise, sodass sich Status ändern und Events ausgelöst werden, **ohne dass
@@ -493,7 +496,7 @@ Das Provider-Objekt wird nicht weitergeleitet, weil ein Receiver-Payload ein
 vollständiges KYC-Dossier ist und für ein Abonnement nur `webhooks:write` nötig ist.
 Rufen Sie die Details über die API mit einem Key ab, der `kyc:read` / `onramp:read` /
 `offramp:read` besitzt. Die Feld-Allowlist steht in
-`src/blindpay/blindpay-event-redaction.ts`.
+`src/native-plugins/blindpay/blindpay-event-redaction.ts`.
 
 Die Zustellung ist über NestJS `EventEmitter2` (`webhook.event`) entkoppelt, sodass das
 Auslösen einer Benachrichtigung die API-Anfrage, die sie verursacht hat, nie blockiert.
@@ -742,6 +745,76 @@ Beispielantwort für `tx`:
 Netzwerk, Horizon, Gebühr und Timeout werden über die `STELLAR_*`-Umgebungsvariablen
 konfiguriert (siehe `.env.example`). Aus Sicherheitsgründen ist **Testnet** der
 Standard — setzen Sie `STELLAR_NETWORK=public` für Mainnet (echte Gelder).
+
+### Zahlungsabsichten auf Solana und Monad
+
+`POST /v1/payment-intents/pay` nimmt ein optionales `chain` an: `stellar`
+(Standard), `solana` oder `monad`. Eine Anfrage ohne das Feld ist genau die
+Stellar-Anfrage von oben. Die Netzwerkstufe bleibt die des API-Schlüssels — ein
+`prod`-Schlüssel erreicht Solana mainnet-beta und Monad mainnet (Chain-ID 143), ein
+`dev`-Schlüssel Solana devnet und Monad testnet (10143) — und `network` wird auf
+jeder Chain als `public` / `testnet` gespeichert. `POST /v1/payment-intents/tx`
+bleibt Stellar-only: ein SEP-7-`tx` ist ein Stellar-Envelope.
+
+| | Stellar | Solana | Monad |
+| --- | --- | --- | --- |
+| Link (`uri`) | SEP-7 `web+stellar:pay` | Solana Pay `solana:<recipient>?…` | EIP-681 `ethereum:<payee>@143?…` |
+| Münze (ohne `assetCode`) | XLM | SOL | MON |
+| Token (`assetCode` + `assetIssuer`) | Emittentenkonto | SPL-Mint | ERC-20-Vertrag |
+| Wie die Zahlung gefunden wird | `MEMO_ID` | ein neuer `reference`-Schlüssel je Absicht (`chainReference`) | Ziel + exakter Betrag, ab dem Erstellungsblock der Absicht |
+| Beobachter | Zahlungen an das Ziel | die Signaturen des Referenzschlüssels | die `Transfer`-Logs des Tokens (natives MON: nur `validate`) |
+| `amount` | optional | optional | Pflicht |
+| `msg` / `callback` | beide | `msg` (Solana-Pay-`message`) | keines |
+| `txHash` für `validate` / `PATCH` | 64 Hex | Base58-Signatur | `0x` + 64 Hex |
+
+- **Das Memo bleibt der Idempotenzschlüssel**, und `chain` gehört zu den
+  Bedingungen, die eine Wiederholung erfüllen muss: Memo `42` auf Stellar und Memo
+  `42` auf Solana sind verschiedene Zahlungen (`409 idempotency_conflict`). Auf
+  Solana schreibt das SPL-Memo-Programm das Memo zusätzlich on-chain.
+- **Ein Token wird gegen die Chain aufgelöst, bevor die Absicht gespeichert
+  wird** — die Dezimalstellen eines SPL-Mints (Token- oder Token-2022-Programm), das
+  `decimals()` eines ERC-20. Eine Adresse, die keiner ist, ergibt
+  `400 validation_failed`; ein Betrag mit mehr Dezimalstellen, als der Token hat,
+  `400 invalid_amount`.
+- **Eine Monad-Zahlung trägt kein Memo.** EIP-681 hat kein Feld, das eine Wallet
+  mit der ID der Absicht füllt, also wird eine Monad-Absicht an dem erkannt, was sie
+  zahlt: Ziel, Token und exakter Betrag, im Erstellungsblock oder danach. Geben Sie
+  gleichzeitigen Absichten an dasselbe Ziel **unterschiedliche Beträge**. Eine
+  Zahlung in **nativem MON** erzeugt kein Log, also kann der Beobachter sie nicht
+  finden: schließen Sie sie mit `POST /v1/payment-intents/{id}/validate` und dem
+  Transaktions-Hash ab. ERC-20-Zahlungen findet der Beobachter,
+  `MONAD_LOG_BLOCK_RANGE` Blöcke pro Aufruf und fünf Aufrufe je Absicht und Durchlauf,
+  und setzt dort fort, wo er aufgehört hat (`chainCursor`).
+- **Ein RPC-Knoten wird geprüft, bevor ihm vertraut wird**: vor seinem ersten Lesen
+  einer Stufe vergleicht der Dienst den Genesis-Hash (Solana) bzw. `eth_chainId`
+  (Monad) des Knotens mit dem der Chain und antwortet mit `503 misconfigured`, wenn
+  eine Mainnet-URL auf ein Testnetz zeigt. Die öffentlichen RPCs sind der Standard
+  und stark ratenbegrenzt — setzen Sie in Produktion `SOLANA_RPC_URL_MAINNET` und
+  `MONAD_RPC_URL_MAINNET` auf die Endpunkte eines Anbieters.
+- **Swaps, Liquiditätspools und DeFindex bleiben Stellar-only.**
+
+```jsonc
+// POST /v1/payment-intents/pay — USDC auf Solana
+{ "chain": "solana", "destination": "<base58>", "amount": "25.5",
+  "assetCode": "USDC", "assetIssuer": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v" }
+// response → { chain: "solana", uri: "solana:<base58>?amount=25.5&spl-token=…&reference=…&memo=…", chainReference, qr, … }
+```
+
+### Wallet-Anmeldung auf Solana und Monad
+
+`POST /v1/wallet/auth/finish` und `PUT /v1/wallet/backup` nehmen ein optionales
+`chain` und das Konto als `address` an; `stellarAddress` wird für Stellar weiterhin
+akzeptiert und weiterhin neben `chain` und `address` zurückgegeben. Die
+Herausforderung, die ein Solana- oder Monad-Konto signiert, hat nach der ersten
+Zeile eine Zeile `chain: <chain>` — ein ed25519-Schlüssel ist zugleich Stellar- und
+Solana-Adresse, und die Zeile verhindert, dass eine Signatur für das eine das andere
+öffnet —, während die Stellar-Herausforderungen byte-genau unverändert bleiben.
+Solana signiert die UTF-8-Bytes mit ed25519 (`signMessage`; Base64 oder Base58),
+Monad mit EIP-191 `personal_sign` (0x-Hex; High-s-Signaturen werden abgelehnt). Eine
+Monad-Adresse wird in ihrer EIP-55-Schreibweise gespeichert. Die
+Wiederherstellungseinrichtung (`POST /v1/wallet/recovery/setup`) bleibt
+Stellar-only. Der Provisionierungsaufruf an die Konsole erhält jetzt auch `chain`
+und `address`, mit `stellarAddress: null` außerhalb von Stellar.
 
 ## Der gemeinsame öffentliche API-Key
 
@@ -1028,6 +1101,21 @@ Client-Adresse (`429 rate_limited`).
 Abgelaufene Challenges und Wiederherstellungen werden einen Tag nach ihrem Ablauf von
 `AliasChallengeSweeperService` gelöscht (stündlich, ein Replikat pro Tick).
 
+### Adressen auf Solana und Monad
+
+Ein Alias kann neben Stellar- auch auf Solana- und Monad-Konten zeigen.
+`POST /v1/aliases/challenges`, `POST /v1/aliases/{name}/addresses` und
+`POST /v1/aliases/{name}/recovery/complete` nehmen ein optionales `chain` an; die
+Challenge-Nachricht trägt dann eine Zeile `chain:`, die die Signatur an diese Chain
+bindet. Stellar signiert weiterhin den gerahmten Digest; Solana signiert den
+Challenge-Text mit ed25519, Monad mit EIP-191 `personal_sign`. Die Standardadresse
+gilt je Chain und Netzwerk, also stuft eine hinzugefügte Solana-Adresse nie eine
+Stellar-Adresse herab. `GET /v1/aliases/resolve/{name}` löst auf Stellar auf, sofern
+`?chain=` keine andere Chain nennt — eine Wallet, die nach keiner fragt, bekommt nie
+eine Adresse, die sie nicht bezahlen kann —, und
+`GET /v1/aliases/by-address/{address}` liest die Chain an der Form der Adresse ab.
+Eine Monad-Adresse wird in ihrer EIP-55-Schreibweise gespeichert und verglichen.
+
 ### Routen
 
 | Methode | Pfad | Scope | Beschreibung |
@@ -1045,6 +1133,13 @@ Abgelaufene Challenges und Wiederherstellungen werden einen Tag nach ihrem Ablau
 | POST | `/v1/aliases/:name/recovery/complete` | `payments:write` | Eine Wiederherstellung mit dem Token und der Signatur des neuen Schlüssels abschließen |
 
 ## BlindPay — Onramp / Offramp / KYC (Fiat ⇄ Stablecoin)
+
+> **Ein natives Plugin.** Alles in diesem Abschnitt ist das Plugin `blindpay`
+> (`src/native-plugins/blindpay/`), das nur ausgeliefert wird, wenn
+> `PLUGINS_ENABLED` `blindpay` aufführt — siehe *Native Plugins: BlindPay und
+> DeFindex*. BlindPay wickelt auf Stellar, Solana, EVM-Chains (Ethereum, Base,
+> Arbitrum, Polygon) und Tron ab; **Monad ist kein BlindPay-Netzwerk**, dort gibt es
+> also keine Fiat-On-/Off-Ramp.
 
 Zusätzlich zu On-Chain-Payment-Intents integriert der Dienst
 [BlindPay](https://www.blindpay.com/docs), um Geld zwischen **Fiat und Stablecoins** zu
@@ -1348,7 +1443,79 @@ Keine Plugin-Route lässt den gemeinsamen öffentlichen API-Key zu: Ein Plugin h
 auf den Daten genau eines Tenants. Die beiden Aktionsrouten teilen sich ein Budget von
 120 Anfragen pro Minute und Consumer.
 
+### Native Plugins: BlindPay und DeFindex
+
+Manche Integrationen sind nicht die Chain selbst — ein Fiat-Anbieter, ein
+DeFi-Protokoll — und brauchen, was die Sandbox absichtlich verweigert: eigene
+Tabellen, eingehende Webhooks, deploymentweite Zugangsdaten. Das sind **native
+Plugins**: Nest-Module, die unter `src/native-plugins/<slug>/` in den Dienst
+kompiliert und über dieselbe Liste `PLUGINS_ENABLED` wie isolierte Plugins
+eingeschaltet werden.
+
+| Slug | Was es ausliefert |
+| ---- | ----------------- |
+| `blindpay` | KYC, Onramp, Offramp, den BlindPay-Webhook, seine `/v1/admin`-Routen (`receivers`, `payins`, `payouts`) und den Abschnitt `fiat` der Admin-Übersicht |
+| `defindex` | `/v1/defindex` — DeFindex-Vaults auf Stellar |
+
+- **Nicht aufgeführt, nicht vorhanden.** Ein natives Plugin, das `PLUGINS_ENABLED`
+  nicht nennt, wird nie instanziiert: seine Routen antworten mit 404, seine Jobs
+  starten nie und seine Variablen werden nicht validiert. Der Start warnt, wenn seine
+  Schlüssel gesetzt sind, sein Slug aber nicht.
+- **Der Kern importiert nie ein Plugin.** Der Lint verweigert `@/native-plugins/*`
+  überall in `src/` außer in `src/native-plugins/native-plugins.module.ts` und
+  verweigert, dass ein Plugin ein anderes importiert. Wo der Kern Daten eines Plugins
+  braucht — die Admin-Übersicht —, stellt er einen Erweiterungspunkt
+  (`AdminExtensions`) bereit, in den sich das Plugin einträgt.
+- **Weder isoliert noch pro Mandant.** Ein natives Plugin ist geprüfter Code mit den
+  Rechten des Kerns; es wird nicht pro Mandant installiert, und seine Routen behalten
+  ihre eigenen Scopes (`kyc:*`, `onramp:*`, `offramp:*`, `liquidity:*`). Ein
+  isoliertes Plugin darf keinen nativen Slug verwenden.
+- **Der OpenAPI-Vertrag dokumentiert die Routen jedes nativen Plugins**, ob
+  eingeschaltet oder nicht: `openapi:generate` schaltet alle ein.
+
 ## Upgrade — Breaking Changes und Deploy-Hinweise
+
+### Solana und Monad; BlindPay und DeFindex werden native Plugins
+
+- **Die Migration `20260930120000_multichain`** fügt `payment_intent`,
+  `alias_address`, `alias_challenge`, `wallet_account` und `wallet_backup` die Spalte
+  `chain` (Standard `stellar`) hinzu, dazu `assetDecimals`, `chainReference` und
+  `chainCursor` in `payment_intent`, und erweitert den eindeutigen Index der
+  Alias-Adressen auf `(aliasId, chain, network, address)`. Jede bestehende Zeile
+  bleibt Stellar; nichts wird umgeschrieben.
+- **BlindPay (KYC, Onramp, Offramp) und DeFindex werden nur ausgeliefert, wenn
+  `PLUGINS_ENABLED` `blindpay` / `defindex` aufführt.** Ein Deployment, das ihre
+  Schlüssel gesetzt hatte und die Slugs nicht ergänzt, verliert `/v1/kyc`,
+  `/v1/onramp`, `/v1/offramp`, `/v1/blindpay/webhooks`, `/v1/defindex` und die
+  BlindPay-Routen unter `/v1/admin` (404), und der Start protokolliert eine Warnung
+  mit dem Slug. Setzen Sie vor dem Deployment z. B.
+  `PLUGINS_ENABLED=blindpay,defindex`. Routen, Scopes, Tabellen und Antworten bleiben
+  ansonsten unverändert.
+- **Die BlindPay-Variablen werden beim Start des Plugins geprüft**, nicht von der
+  Umgebungsvalidierung: eine halb konfigurierte Instanz verhindert den Start
+  weiterhin, aber nur dort, wo `blindpay` eingeschaltet ist.
+- **`GET /v1/admin/summary` enthält `fiat` nur mit eingeschaltetem `blindpay`**,
+  und `GET /v1/admin/consumers` zählt `blindpayReceivers`, `payins` und `payouts` nur
+  dann. Das `volume` der Übersicht beschriftet eine Solana- oder Monad-Zeile als
+  `<chain>:<asset>`.
+- **Neue Antwortfelder** (additiv): `chain` und `chainReference` an
+  Zahlungsabsichten; `chain` an Alias-Adressen, Auflösungen und by-address-Zeilen;
+  `chain` und `address` an Wallet-Backups, neben `stellarAddress`; `chain` an den
+  Zeilen `volume`, `recent` und den Salden des Dashboards, die jetzt je Chain
+  gruppiert werden — SOL und MON fallen nicht mehr mit XLM zusammen.
+- **`txHash` akzeptiert die Form jeder Chain** bei `validate` und `PATCH` und wird
+  gegen die Chain der Absicht geprüft (sonst `400 validation_failed`). Nur Hex wird
+  kleingeschrieben; eine Solana-Signatur wird so gespeichert, wie sie ankommt.
+- **Die Alias-Auflösung ohne `?chain=` liefert nur Stellar-Adressen.**
+- **Neue Variablen**, alle optional (öffentliche RPCs als Standard):
+  `SOLANA_RPC_URL_MAINNET`, `SOLANA_RPC_URL_DEVNET`, `SOLANA_RPC_TIMEOUT_MS`,
+  `MONAD_RPC_URL_MAINNET`, `MONAD_RPC_URL_TESTNET`, `MONAD_RPC_TIMEOUT_MS`,
+  `MONAD_LOG_BLOCK_RANGE`. Der Beobachter fragt jetzt auch Solana und Monad nach
+  offenen Absichten auf diesen Chains ab.
+- **`/wallet/console/provision` der Entwicklerplattform** erhält jetzt `chain` und
+  `address` sowie `stellarAddress: null` bei einer Solana- oder Monad-Anmeldung; sie
+  muss das akzeptieren, bevor Wallets diese Chains anbieten.
+- **Keine Änderung an APISIX.**
 
 ### Plugins: ein neues Modul, zwei neue Tabellen und zwei neue Scopes
 
@@ -1750,6 +1917,13 @@ passen Sie mindestens `DATABASE_URL` und `APISIX_GATEWAY_SECRET` an.
 | `STELLAR_NETWORK` | nein | `testnet` | Fallback-Stellar-Netzwerk (`public` / `testnet`) |
 | `STELLAR_HORIZON_URL_PUBLIC` | nein | `https://horizon.stellar.org` | Horizon-Basis-URL für Mainnet |
 | `STELLAR_HORIZON_URL_TESTNET` | nein | `https://horizon-testnet.stellar.org` | Horizon-Basis-URL für Testnet |
+| `SOLANA_RPC_URL_MAINNET` | nein | `https://api.mainnet-beta.solana.com` | Solana-RPC für `prod`-Schlüssel (mainnet-beta; der Genesis-Hash wird vor der Nutzung geprüft). Der öffentliche Endpunkt ist ratenbegrenzt: in Produktion den eines Anbieters verwenden |
+| `SOLANA_RPC_URL_DEVNET` | nein | `https://api.devnet.solana.com` | Solana-RPC für `dev`-Schlüssel (devnet) |
+| `SOLANA_RPC_TIMEOUT_MS` | nein | `10000` | Budget für einen Solana-RPC-Aufruf (ms) |
+| `MONAD_RPC_URL_MAINNET` | nein | `https://rpc.monad.xyz` | Monad-RPC für `prod`-Schlüssel (Chain-ID 143, vor der Nutzung geprüft) |
+| `MONAD_RPC_URL_TESTNET` | nein | `https://testnet-rpc.monad.xyz` | Monad-RPC für `dev`-Schlüssel (Chain-ID 10143) |
+| `MONAD_RPC_TIMEOUT_MS` | nein | `10000` | Budget für einen Monad-RPC-Aufruf (ms) |
+| `MONAD_LOG_BLOCK_RANGE` | nein | `100` | Blöcke, die ein `eth_getLogs` umfassen darf — das Limit des RPC-Anbieters (der öffentliche RPC erlaubt 100) |
 | `STELLAR_BASE_FEE` | nein | `100` | Stellar-Basisgebühr (Stroops) für Transaktions-Builds |
 | `STELLAR_TX_TIMEOUT` | nein | `300` | Transaktions-Timeout (Sekunden) |
 | `STELLAR_SWAP_FEE_WALLET` | wenn Gebühr > 0 | — | G...-Plattformkonto für Swap-Gebühren |
@@ -1786,10 +1960,10 @@ passen Sie mindestens `DATABASE_URL` und `APISIX_GATEWAY_SECRET` an.
 | `BLINDPAY_INSTANCE_ID_DEV` | wenn Dev-API-Key gesetzt | — | ID der Entwicklungsinstanz (`in_...`) |
 | `BLINDPAY_WEBHOOK_SECRET_DEV` | wenn Dev-API-Key gesetzt | — | Svix-Secret des Webhook-Endpunkts der Entwicklungsinstanz; gleiche Regeln wie `BLINDPAY_WEBHOOK_SECRET` |
 | `BLINDPAY_TIMEOUT_MS` | nein | `15000` | Timeout des BlindPay-HTTP-Clients (ms) |
-| `DEFINDEX_API_KEY` | nein | — | DeFindex-Server-API-Schlüssel; leer deaktiviert die Routen |
+| `DEFINDEX_API_KEY` | nein | — | Server-API-Schlüssel von DeFindex. Die Routen existieren nur mit `defindex` in `PLUGINS_ENABLED`; ohne Schlüssel antworten sie mit `503 misconfigured` |
 | `DEFINDEX_BASE_URL` | nein | `https://api.defindex.io` | Basis-URL der DeFindex-API |
 | `DEFINDEX_TIMEOUT_MS` | nein | `30000` | DeFindex-HTTP-Timeout (ms) |
-| `PLUGINS_ENABLED` | nein | — | Kommagetrennte Slugs der Plugins in `plugins/`, die dieses Deployment bereitstellt. Leer stellt keines bereit; ein nicht gelistetes Plugin wird nie gelesen |
+| `PLUGINS_ENABLED` | nein | — | Kommagetrennte Slugs der Plugins, die dieses Deployment ausliefert: die isolierten in `plugins/` und die nativen `blindpay` und `defindex`. Leer liefert keines aus; ein nicht aufgeführtes Plugin wird nie geladen |
 | `PLUGINS_SECRET` | wenn ein aktiviertes Plugin geheime Einstellungen hat | — | Versiegelt die geheimen Einstellungen von Plugin-Installationen (mindestens 32 Zeichen). Eine Änderung macht alle gespeicherten Plugin-Geheimnisse unlesbar |
 | `PLUGINS_TRUSTED_KEYS` | nein | — | Signierer, deren Plugins hier neben dem Cosmos-Pay-Support laufen: kommagetrennt `<keyId>:<base64url Ed25519 Public Key>`. Ein von jemand anderem signiertes oder nach dem Signieren verändertes Plugin bricht den Start ab |
 | `PLUGINS_ALLOW_UNSIGNED` | nein | `false` | Plugins ohne `signature.json` ausführen, um lokal eines zu schreiben. Abgelehnt bei `NODE_ENV=production` |

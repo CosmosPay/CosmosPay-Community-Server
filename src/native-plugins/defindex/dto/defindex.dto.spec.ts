@@ -1,4 +1,4 @@
-import { defindexAmount } from '@/defindex/dto/defindex.dto';
+import { defindexAmount } from '@/native-plugins/defindex/dto/defindex.dto';
 
 describe('defindexAmount', () => {
   it('preserves exact protocol minor units inside the SDK safe range', () => {

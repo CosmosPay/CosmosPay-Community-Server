@@ -5,6 +5,7 @@ import {
   timingSafeEqual,
 } from 'node:crypto';
 import { Keypair } from '@stellar/stellar-sdk';
+import type { Chain } from '@/chains/chains.constants';
 import { WalletAuthMethod, WalletAuthProvider } from '@generated/prisma/client';
 import { openJson, sealJson } from '@/common/sealed-box';
 import {
@@ -429,15 +430,29 @@ export function readSessionToken(
  */
 export function finishMessage(
   email: string,
-  stellarAddress: string,
+  address: string,
   signedAt: string,
+  chain: Chain = 'stellar',
 ): string {
   return (
     `Cosmos Pay Wallet sign-in\n` +
+    chainLine(chain) +
     `email: ${normalizeEmail(email)}\n` +
-    `account: ${stellarAddress}\n` +
+    `account: ${address}\n` +
     `at: ${signedAt}`
   );
+}
+
+/**
+ * The `chain:` line of a challenge, on every chain but Stellar.
+ *
+ * Absent on Stellar so the Stellar challenges stay byte for byte what the
+ * wallet already signs. Present elsewhere because an ed25519 key is both a
+ * Stellar G… and a Solana base58 address: the line binds a signature to the
+ * chain it was made for, whatever the key.
+ */
+function chainLine(chain: Chain): string {
+  return chain === 'stellar' ? '' : `chain: ${chain}\n`;
 }
 
 /**
@@ -448,13 +463,15 @@ export function finishMessage(
  * store another. Same contract as above: the wallet builds this string itself.
  */
 export function backupMessage(
-  stellarAddress: string,
+  address: string,
   box: string,
   signedAt: string,
+  chain: Chain = 'stellar',
 ): string {
   return (
     `Cosmos Pay Wallet backup\n` +
-    `account: ${stellarAddress}\n` +
+    chainLine(chain) +
+    `account: ${address}\n` +
     `box: ${sha256Hex(box)}\n` +
     `at: ${signedAt}`
   );

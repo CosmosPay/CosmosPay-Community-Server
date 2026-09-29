@@ -7,6 +7,7 @@ import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { AppModule } from '@/app.module';
 import { AdminService } from '@/admin/admin.service';
+import { BlindpayAdminService } from '@/native-plugins/blindpay/admin/blindpay-admin.service';
 import { PrismaService } from '@/prisma/prisma.service';
 
 /**
@@ -149,6 +150,10 @@ describe('Admin auth & audit (e2e)', () => {
       .overrideProvider(PrismaService)
       .useValue(prismaMock)
       .overrideProvider(AdminService)
+      .useValue(adminServiceMock)
+      // The receiver routes are the BlindPay plugin's, served under the same
+      // /v1/admin prefix behind the same guard; one mock answers both.
+      .overrideProvider(BlindpayAdminService)
       .useValue(adminServiceMock)
       .compile();
 

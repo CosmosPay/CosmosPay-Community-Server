@@ -4,13 +4,17 @@ import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface'
 import { PaginationQueryDto } from '@/common/dto/pagination.query.dto';
 import { page } from '@/common/pagination';
 import { PrismaService } from '@/prisma/prisma.service';
-import { BlindpayKycApi } from '@/blindpay/blindpay-kyc.api';
+import { BlindpayKycApi } from '@/native-plugins/blindpay/blindpay-kyc.api';
 import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
-import { BlindpayObject } from '@/blindpay/blindpay-sync.service';
-import { asNullableString, asString, toJson } from '@/blindpay/blindpay.util';
+import { BlindpayObject } from '@/native-plugins/blindpay/blindpay-sync.service';
+import {
+  asNullableString,
+  asString,
+  toJson,
+} from '@/native-plugins/blindpay/blindpay.util';
 import type { BlindpayEnvironment } from '@/config/configuration';
-import { ReceiversService } from '@/kyc/receivers/receivers.service';
-import { CreateBankAccountDto } from '@/kyc/bank-accounts/dto/create-bank-account.dto';
+import { ReceiversService } from '@/native-plugins/blindpay/kyc/receivers/receivers.service';
+import { CreateBankAccountDto } from '@/native-plugins/blindpay/kyc/bank-accounts/dto/create-bank-account.dto';
 
 /**
  * The columns a bank account is allowed to leave this service with — the exact field

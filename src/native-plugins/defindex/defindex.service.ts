@@ -10,7 +10,7 @@ import {
   DefindexSubmitDto,
   DefindexWithdrawDto,
   defindexAmount,
-} from '@/defindex/dto/defindex.dto';
+} from '@/native-plugins/defindex/dto/defindex.dto';
 
 @Injectable()
 export class DefindexService {

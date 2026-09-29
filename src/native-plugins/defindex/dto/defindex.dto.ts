@@ -13,7 +13,7 @@ import {
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { StrKey } from '@stellar/stellar-sdk';
-import { DEFINDEX_MAX_AMOUNT } from '@/defindex/defindex.constants';
+import { DEFINDEX_MAX_AMOUNT } from '@/native-plugins/defindex/defindex.constants';
 import { IsStellarAddress } from '@/common/validators/is-stellar-address.validator';
 
 const UINT_RE = /^(0|[1-9]\d*)$/;

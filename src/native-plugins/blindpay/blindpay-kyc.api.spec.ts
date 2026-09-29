@@ -1,5 +1,5 @@
-import { BlindpayKycApi } from '@/blindpay/blindpay-kyc.api';
-import { BlindpayClient } from '@/blindpay/blindpay.client';
+import { BlindpayKycApi } from '@/native-plugins/blindpay/blindpay-kyc.api';
+import { BlindpayClient } from '@/native-plugins/blindpay/blindpay.client';
 
 /**
  * The client is mocked with the real `instancePath` rule, so every assertion here

@@ -1,12 +1,12 @@
 import { Module } from '@nestjs/common';
-import { ReceiversController } from '@/kyc/receivers/receivers.controller';
-import { ReceiversService } from '@/kyc/receivers/receivers.service';
-import { WalletsController } from '@/kyc/wallets/wallets.controller';
-import { WalletsService } from '@/kyc/wallets/wallets.service';
-import { BankAccountsController } from '@/kyc/bank-accounts/bank-accounts.controller';
-import { BankAccountsService } from '@/kyc/bank-accounts/bank-accounts.service';
-import { KycMetaController } from '@/kyc/upload/kyc-meta.controller';
-import { KycMetaService } from '@/kyc/upload/kyc-meta.service';
+import { ReceiversController } from '@/native-plugins/blindpay/kyc/receivers/receivers.controller';
+import { ReceiversService } from '@/native-plugins/blindpay/kyc/receivers/receivers.service';
+import { WalletsController } from '@/native-plugins/blindpay/kyc/wallets/wallets.controller';
+import { WalletsService } from '@/native-plugins/blindpay/kyc/wallets/wallets.service';
+import { BankAccountsController } from '@/native-plugins/blindpay/kyc/bank-accounts/bank-accounts.controller';
+import { BankAccountsService } from '@/native-plugins/blindpay/kyc/bank-accounts/bank-accounts.service';
+import { KycMetaController } from '@/native-plugins/blindpay/kyc/upload/kyc-meta.controller';
+import { KycMetaService } from '@/native-plugins/blindpay/kyc/upload/kyc-meta.service';
 
 /**
  * KYC/compliance surface: receivers (the KYC/KYB entities) and their blockchain

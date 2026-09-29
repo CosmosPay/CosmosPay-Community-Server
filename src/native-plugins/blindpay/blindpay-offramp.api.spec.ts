@@ -1,5 +1,5 @@
-import { BlindpayOfframpApi } from '@/blindpay/blindpay-offramp.api';
-import { BlindpayClient } from '@/blindpay/blindpay.client';
+import { BlindpayOfframpApi } from '@/native-plugins/blindpay/blindpay-offramp.api';
+import { BlindpayClient } from '@/native-plugins/blindpay/blindpay.client';
 
 /** The real `instancePath` rule, so each assertion is the request BlindPay gets. */
 function makeApi() {

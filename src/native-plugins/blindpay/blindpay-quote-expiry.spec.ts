@@ -1,4 +1,4 @@
-import { quoteExpiresAt } from '@/blindpay/blindpay.util';
+import { quoteExpiresAt } from '@/native-plugins/blindpay/blindpay.util';
 
 describe('quoteExpiresAt', () => {
   it('reads a Unix-seconds expiry', () => {

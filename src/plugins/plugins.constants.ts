@@ -16,6 +16,22 @@ import type { RateLimitPolicy } from '@/common/decorators/rate-limit.decorator';
  */
 export const PLUGIN_SLUG_RE = /^[a-z][a-z0-9-]{2,39}$/;
 
+/**
+ * Plugins compiled into this service rather than loaded from `plugins/`: first-
+ * party integrations that are not the chain itself — a fiat provider, a DeFi
+ * protocol — and that need what the sandbox deliberately withholds (their own
+ * tables, inbound webhooks, deployment-wide credentials). They live under
+ * `src/native-plugins/<slug>/`, the core never imports them, and they are
+ * switched on by the same `PLUGINS_ENABLED` list as sandboxed plugins. A
+ * sandboxed plugin may not take one of these slugs.
+ */
+export const NATIVE_PLUGIN_SLUGS = ['blindpay', 'defindex'] as const;
+export type NativePluginSlug = (typeof NATIVE_PLUGIN_SLUGS)[number];
+
+export function isNativePluginSlug(slug: string): slug is NativePluginSlug {
+  return (NATIVE_PLUGIN_SLUGS as readonly string[]).includes(slug);
+}
+
 /** An action name inside a plugin: same alphabet as the slug. */
 export const PLUGIN_ACTION_RE = /^[a-z][a-z0-9-]{0,63}$/;
 

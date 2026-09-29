@@ -102,8 +102,10 @@ async function main() {
         // The platform did not record how the email was proven; every door it
         // had ended in a verified email, and the next sign-in overwrites this.
         method: WalletAuthMethod.EMAIL,
-        stellarAddress: address,
-        backup: { create: { stellarAddress: address, box } },
+        // The platform only ever issued Stellar wallets.
+        chain: 'stellar',
+        address,
+        backup: { create: { chain: 'stellar', address, box } },
       },
     });
   }

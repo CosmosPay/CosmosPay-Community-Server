@@ -9,24 +9,25 @@ import {
 import { JobSchedule, ScheduledJob } from '@/common/services/scheduled-job';
 import { PrismaService } from '@/prisma/prisma.service';
 import type { PaymentIntent } from '@generated/prisma/client';
+import { DEFAULT_CHAIN, isChain } from '@/chains/chains.constants';
 import { PaymentIntentsService } from '@/payment-intents/payment-intents.service';
-import {
-  StellarVerifierService,
-  type VerificationResult,
-} from '@/payment-intents/stellar-verifier.service';
+import type { VerificationResult } from '@/payment-intents/payment-verifier';
+import { PaymentVerifiers } from '@/payment-intents/payment-verifiers';
 import {
   OBSERVER_MAX_INTENTS_PER_CONSUMER,
   RECONCILE_CONCURRENCY,
-  TX_HASH_RE,
 } from '@/payment-intents/payment-intents.constants';
+import { isTxIdFor, normalizeTxId } from '@/payment-intents/tx-id';
 
 /** An intent as the observer reads it: with the consumer its webhooks go to. */
 type ObservedIntent = PaymentIntent & { consumer: { apisixUsername: string } };
 
 /**
- * Permanent on-chain observer. On a fixed interval it pulls PENDING intents and
- * asks the verifier whether a matching payment has landed — by the reported
- * txHash when present, otherwise by scanning payments to the destination. On a
+ * Permanent on-chain observer, for every chain. On a fixed interval it pulls
+ * PENDING intents and asks the intent's chain verifier whether a matching
+ * payment has landed — by the reported transaction when present, otherwise by
+ * looking for it: payments to the destination on Stellar, the reference key's
+ * transactions on Solana, the token's transfer logs on Monad. On a
  * confirmed match it finalizes the intent (status + txHash) and the webhook
  * event fires automatically, so integrators are notified without polling us.
  * An intent past its lifetime is asked the same question once more before it
@@ -45,14 +46,14 @@ type ObservedIntent = PaymentIntent & { consumer: { apisixUsername: string } };
  * swallowing a failed cycle come from {@link ScheduledJob}.
  */
 @Injectable()
-export class StellarObserverService extends ScheduledJob {
-  protected readonly logger = new Logger(StellarObserverService.name);
+export class PaymentIntentObserverService extends ScheduledJob {
+  protected readonly logger = new Logger(PaymentIntentObserverService.name);
   protected readonly lockKey = AdvisoryLockKey.PaymentIntentObserver;
 
   constructor(
     private readonly config: ConfigService<AppConfig, true>,
     private readonly prisma: PrismaService,
-    private readonly verifier: StellarVerifierService,
+    private readonly verifiers: PaymentVerifiers,
     private readonly paymentIntents: PaymentIntentsService,
     locks: AdvisoryLockService,
   ) {
@@ -243,19 +244,33 @@ export class StellarObserverService extends ScheduledJob {
   }
 
   /**
-   * What the chain says about one intent: by its reported hash when it has one
-   * (the precise path), otherwise by scanning payments to its destination.
+   * What the chain says about one intent: by its reported transaction when it
+   * has one (the precise path), otherwise by looking for the payment.
    *
-   * A stored hash that is not a transaction hash is scanned for instead of
-   * looked up. `PATCH /:id` accepted any string until {@link TX_HASH_RE}, so
-   * older rows can carry one, and a lookup of it cannot find anything — while
-   * where Horizon refuses it outright (a 400, not a 404) the verifier rethrows,
-   * and an intent that throws on every tick would never expire.
+   * A stored hash that is not a transaction id of the intent's chain is looked
+   * for instead of looked up. `PATCH /:id` accepted any string until the
+   * per-chain shapes (`tx-id.ts`), so older rows can carry one, and a lookup of
+   * it cannot find anything — while where Horizon refuses it outright (a 400,
+   * not a 404) the verifier rethrows, and an intent that throws on every tick
+   * would never expire.
+   *
+   * A scan that pages through blocks (Monad) reports where it stopped, and the
+   * intent keeps it, so the next tick resumes there rather than at the start.
    */
-  private verify(intent: PaymentIntent): Promise<VerificationResult> {
-    return intent.txHash && TX_HASH_RE.test(intent.txHash)
-      ? this.verifier.verifyByHash(intent, intent.txHash.toLowerCase())
-      : this.verifier.findMatchingPayment(intent);
+  private async verify(intent: PaymentIntent): Promise<VerificationResult> {
+    // Every row has a chain (the column defaults to Stellar); one this build
+    // does not know is refused by the registry rather than checked by the
+    // wrong chain's rules.
+    const chain = intent.chain ?? DEFAULT_CHAIN;
+    const verifier = this.verifiers.for(chain);
+    if (intent.txHash && isChain(chain) && isTxIdFor(chain, intent.txHash)) {
+      return verifier.verifyByHash(intent, normalizeTxId(chain, intent.txHash));
+    }
+    const result = await verifier.findMatchingPayment(intent);
+    if (!result.valid && result.nextCursor !== undefined) {
+      await this.paymentIntents.advanceCursor(intent.id, result.nextCursor);
+    }
+    return result;
   }
 }
 

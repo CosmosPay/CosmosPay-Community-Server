@@ -3,7 +3,7 @@ import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import {
   assertRedirectAllowed,
   hostnameAllowed,
-} from '@/kyc/redirect-url-whitelist';
+} from '@/native-plugins/blindpay/kyc/redirect-url-whitelist';
 
 /** What `fn` throws, so its status and code can be asserted, not just its class. */
 function thrown(fn: () => void): ApiError {

@@ -1,4 +1,4 @@
-import { resolveTosCooldownMs } from '@/kyc/receivers/tos-cooldown-header';
+import { resolveTosCooldownMs } from '@/native-plugins/blindpay/kyc/receivers/tos-cooldown-header';
 
 describe('resolveTosCooldownMs — parsing only', () => {
   it('returns undefined without the internal marker', () => {

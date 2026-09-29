@@ -4,7 +4,7 @@ import {
   AdvisoryLockKey,
   AdvisoryLockService,
 } from '@/common/services/advisory-lock.service';
-import { StellarObserverService } from '@/payment-intents/stellar-observer.service';
+import { PaymentIntentObserverService } from '@/payment-intents/payment-intent-observer.service';
 import { OBSERVER_MAX_INTENTS_PER_CONSUMER } from '@/payment-intents/payment-intents.constants';
 
 /**
@@ -12,7 +12,13 @@ import { OBSERVER_MAX_INTENTS_PER_CONSUMER } from '@/payment-intents/payment-int
  * intents out to Horizon. These cover the two properties that made it unsafe at
  * more than one replica: cluster-wide exclusion, and a bounded burst.
  */
-describe('StellarObserverService.tick', () => {
+/**
+ * The observer asks a registry for each intent's chain verifier; these intents
+ * are all Stellar, so the registry hands back the one under test.
+ */
+const verifiersOf = (verifier: unknown) => ({ for: () => verifier }) as any;
+
+describe('PaymentIntentObserverService.tick', () => {
   const BATCH_SIZE = 50;
 
   // Logger and timer spies must not leak from one test into the next.
@@ -58,7 +64,7 @@ describe('StellarObserverService.tick', () => {
   it('sweeps under the payment-intent advisory lock', async () => {
     const lock = grantingLock();
     const prisma = makePrisma([]);
-    const observer = new StellarObserverService(
+    const observer = new PaymentIntentObserverService(
       config,
       prisma,
       {} as any,
@@ -82,10 +88,10 @@ describe('StellarObserverService.tick', () => {
     } as unknown as AdvisoryLockService;
     const prisma = makePrisma(pendingIntents(5));
     const verifier = { findMatchingPayment: jest.fn() };
-    const observer = new StellarObserverService(
+    const observer = new PaymentIntentObserverService(
       config,
       prisma,
-      verifier as any,
+      verifiersOf(verifier),
       {} as any,
       lock,
     );
@@ -106,7 +112,7 @@ describe('StellarObserverService.tick', () => {
       await gate;
       return [];
     });
-    const observer = new StellarObserverService(
+    const observer = new PaymentIntentObserverService(
       config,
       prisma,
       {} as any,
@@ -137,10 +143,10 @@ describe('StellarObserverService.tick', () => {
         return { valid: false, reason: 'No matching payment found yet' };
       }),
     };
-    const observer = new StellarObserverService(
+    const observer = new PaymentIntentObserverService(
       config,
       prisma,
-      verifier as any,
+      verifiersOf(verifier),
       {} as any,
       grantingLock(),
     );
@@ -164,10 +170,10 @@ describe('StellarObserverService.tick', () => {
         return { valid: false };
       }),
     };
-    const observer = new StellarObserverService(
+    const observer = new PaymentIntentObserverService(
       config,
       prisma,
-      verifier as any,
+      verifiersOf(verifier),
       {} as any,
       grantingLock(),
     );
@@ -183,10 +189,10 @@ describe('StellarObserverService.tick', () => {
       findMatchingPayment: jest.fn().mockResolvedValue(matched),
     };
     const paymentIntents = { markSucceeded: jest.fn().mockResolvedValue({}) };
-    const observer = new StellarObserverService(
+    const observer = new PaymentIntentObserverService(
       config,
       prisma,
-      verifier as any,
+      verifiersOf(verifier),
       paymentIntents as any,
       grantingLock(),
     );
@@ -202,6 +208,63 @@ describe('StellarObserverService.tick', () => {
     );
   });
 
+  it('keeps where a block scan stopped, so the next tick resumes there (Monad)', async () => {
+    const prisma = makePrisma(
+      pendingIntents(1).map((i) => ({ ...i, chain: 'monad' })),
+    );
+    const verifier = {
+      findMatchingPayment: jest
+        .fn()
+        .mockResolvedValue({ valid: false, nextCursor: '600' }),
+    };
+    const verifiers = { for: jest.fn(() => verifier) };
+    const paymentIntents = { advanceCursor: jest.fn() };
+    const observer = new PaymentIntentObserverService(
+      config,
+      prisma,
+      verifiers as any,
+      paymentIntents as any,
+      grantingLock(),
+    );
+
+    await observer.tick();
+
+    expect(verifiers.for).toHaveBeenCalledWith('monad');
+    expect(paymentIntents.advanceCursor).toHaveBeenCalledWith('pi_1', '600');
+  });
+
+  it('looks a reported Solana signature up rather than scanning for it', async () => {
+    const signature =
+      '5VERv8NMvzbJMEkV8xnrLkEaWRtSz9CosKDYjCJjBRnbJLgp8uirBgmQpjKhoR4tjF3ZpRzrFmBV6UjKdiSZkQUW';
+    const prisma = makePrisma(
+      pendingIntents(1).map((i) => ({
+        ...i,
+        chain: 'solana',
+        txHash: signature,
+      })),
+    );
+    const verifier = {
+      verifyByHash: jest.fn().mockResolvedValue({ valid: false }),
+      findMatchingPayment: jest.fn(),
+    };
+    const observer = new PaymentIntentObserverService(
+      config,
+      prisma,
+      verifiersOf(verifier),
+      {} as any,
+      grantingLock(),
+    );
+
+    await observer.tick();
+
+    // Case-sensitive base58: passed through exactly, never lowercased.
+    expect(verifier.verifyByHash).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'pi_1' }),
+      signature,
+    );
+    expect(verifier.findMatchingPayment).not.toHaveBeenCalled();
+  });
+
   it('survives a failed cycle and still runs the next one', async () => {
     // A cycle that throws must cost one interval, not the job: the latch has
     // to be released and the rejection must not escape a `void this.tick()`.
@@ -212,7 +275,7 @@ describe('StellarObserverService.tick', () => {
       .fn()
       .mockRejectedValueOnce(new Error('database unavailable'))
       .mockResolvedValue([]);
-    const observer = new StellarObserverService(
+    const observer = new PaymentIntentObserverService(
       config,
       prisma,
       {} as any,
@@ -229,7 +292,7 @@ describe('StellarObserverService.tick', () => {
 
   describe('schedule', () => {
     const observerWith = (enabled: boolean) =>
-      new StellarObserverService(
+      new PaymentIntentObserverService(
         { get: () => ({ enabled, intervalMs: 7_000, batchSize: 50 }) } as any,
         {} as any,
         {} as any,
@@ -282,10 +345,10 @@ describe('StellarObserverService.tick', () => {
         .replace(/\s+/g, ' ');
 
     async function tickWith(prisma: any, verifier: unknown = {}) {
-      const observer = new StellarObserverService(
+      const observer = new PaymentIntentObserverService(
         config,
         prisma,
-        verifier as any,
+        verifiersOf(verifier),
         {} as any,
         grantingLock(),
       );
@@ -385,10 +448,10 @@ describe('StellarObserverService.tick', () => {
       verifier: object,
       paymentIntents: object,
     ) {
-      const observer = new StellarObserverService(
+      const observer = new PaymentIntentObserverService(
         config,
         makePrisma([], lapsed),
-        verifier as any,
+        verifiersOf(verifier),
         paymentIntents as any,
         grantingLock(),
       );
@@ -482,7 +545,7 @@ describe('StellarObserverService.tick', () => {
         ApiError.conflict(
           ApiErrorCode.IdempotencyConflict,
           'This transaction hash is already recorded on another of your ' +
-            'payment intents. A Stellar transaction settles at most one of them.',
+            'payment intents. A transaction settles at most one of them.',
         ),
       );
       const verifier = {

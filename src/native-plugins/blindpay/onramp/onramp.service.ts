@@ -5,23 +5,23 @@ import { PaginationQueryDto } from '@/common/dto/pagination.query.dto';
 import { page } from '@/common/pagination';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { PrismaService } from '@/prisma/prisma.service';
-import { BlindpayOnrampApi } from '@/blindpay/blindpay-onramp.api';
+import { BlindpayOnrampApi } from '@/native-plugins/blindpay/blindpay-onramp.api';
 import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
 import {
   BlindpaySyncService,
   BlindpayObject,
   PAYIN_PUBLIC_SELECT,
   PublicPayin,
-} from '@/blindpay/blindpay-sync.service';
+} from '@/native-plugins/blindpay/blindpay-sync.service';
 import {
   asString,
   isMirrorFresh,
   quoteExpiresAt,
-} from '@/blindpay/blindpay.util';
+} from '@/native-plugins/blindpay/blindpay.util';
 import type { BlindpayEnvironment } from '@/config/configuration';
-import { CreatePayinQuoteDto } from '@/onramp/dto/create-payin-quote.dto';
-import { CreatePayinDto } from '@/onramp/dto/create-payin.dto';
-import { CreateTrustlineDto } from '@/onramp/dto/create-trustline.dto';
+import { CreatePayinQuoteDto } from '@/native-plugins/blindpay/onramp/dto/create-payin-quote.dto';
+import { CreatePayinDto } from '@/native-plugins/blindpay/onramp/dto/create-payin.dto';
+import { CreateTrustlineDto } from '@/native-plugins/blindpay/onramp/dto/create-trustline.dto';
 
 /**
  * What a single-payin read takes out of the mirror: the public projection, plus

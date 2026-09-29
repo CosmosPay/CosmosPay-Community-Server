@@ -1,18 +1,18 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'node:crypto';
-import type { UploadableFile } from '@/blindpay/blindpay.client';
-import { BlindpayKycApi } from '@/blindpay/blindpay-kyc.api';
-import { BlindpayObject } from '@/blindpay/blindpay-sync.service';
+import type { UploadableFile } from '@/native-plugins/blindpay/blindpay.client';
+import { BlindpayKycApi } from '@/native-plugins/blindpay/blindpay-kyc.api';
+import { BlindpayObject } from '@/native-plugins/blindpay/blindpay-sync.service';
 import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
-import { UPLOAD_BUCKETS } from '@/blindpay/blindpay.constants';
+import { UPLOAD_BUCKETS } from '@/native-plugins/blindpay/blindpay.constants';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
-import { UPLOAD_SIGNATURES } from '@/kyc/kyc.constants';
+import { UPLOAD_SIGNATURES } from '@/native-plugins/blindpay/kyc/kyc.constants';
 import { PrismaService } from '@/prisma/prisma.service';
-import { InitiateTosDto } from '@/kyc/upload/dto/initiate-tos.dto';
+import { InitiateTosDto } from '@/native-plugins/blindpay/kyc/upload/dto/initiate-tos.dto';
 import type { AppConfig, BlindpayEnvironment } from '@/config/configuration';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
-import { assertRedirectAllowed } from '@/kyc/redirect-url-whitelist';
+import { assertRedirectAllowed } from '@/native-plugins/blindpay/kyc/redirect-url-whitelist';
 
 /**
  * Compliance helpers that aren't tied to a single receiver: document upload and

@@ -2,7 +2,7 @@ import type { Prisma } from '@generated/prisma/client';
 import {
   EPOCH_SECONDS_CEILING,
   MIRROR_FRESHNESS_MS,
-} from '@/blindpay/blindpay.constants';
+} from '@/native-plugins/blindpay/blindpay.constants';
 
 /**
  * Casts a provider payload (`unknown`) to Prisma's JSON input type so it can be

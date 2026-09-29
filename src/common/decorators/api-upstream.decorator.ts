@@ -1,7 +1,7 @@
 import { ApiExtension } from '@nestjs/swagger';
 
 /** The providers this service calls out to while serving a request. */
-export type UpstreamProvider = 'BlindPay' | 'Horizon';
+export type UpstreamProvider = 'BlindPay' | 'Horizon' | 'Solana' | 'Monad';
 
 /**
  * Vendor extension the published spec carries, and `swagger.ts` reads back.

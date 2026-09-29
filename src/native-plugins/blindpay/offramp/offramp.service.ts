@@ -7,26 +7,26 @@ import { PrismaService } from '@/prisma/prisma.service';
 import {
   BlindpayOfframpApi,
   type BlindpayPayoutRequest,
-} from '@/blindpay/blindpay-offramp.api';
+} from '@/native-plugins/blindpay/blindpay-offramp.api';
 import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
 import {
   BlindpaySyncService,
   BlindpayObject,
   PAYOUT_PUBLIC_SELECT,
   PublicPayout,
-} from '@/blindpay/blindpay-sync.service';
+} from '@/native-plugins/blindpay/blindpay-sync.service';
 import {
   asString,
   asNumber,
   isMirrorFresh,
   quoteExpiresAt,
-} from '@/blindpay/blindpay.util';
+} from '@/native-plugins/blindpay/blindpay.util';
 import type { Prisma } from '@generated/prisma/client';
 import type { BlindpayEnvironment } from '@/config/configuration';
-import { CreatePayoutQuoteDto } from '@/offramp/dto/create-payout-quote.dto';
-import { AuthorizePayoutDto } from '@/offramp/dto/authorize-payout.dto';
-import { CreatePayoutDto } from '@/offramp/dto/create-payout.dto';
-import { PayoutDocumentDto } from '@/offramp/dto/payout-document.dto';
+import { CreatePayoutQuoteDto } from '@/native-plugins/blindpay/offramp/dto/create-payout-quote.dto';
+import { AuthorizePayoutDto } from '@/native-plugins/blindpay/offramp/dto/authorize-payout.dto';
+import { CreatePayoutDto } from '@/native-plugins/blindpay/offramp/dto/create-payout.dto';
+import { PayoutDocumentDto } from '@/native-plugins/blindpay/offramp/dto/payout-document.dto';
 
 /**
  * What a single-payout read takes out of the mirror: the public projection, plus

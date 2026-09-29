@@ -4,14 +4,14 @@ import { AllowPublicKey } from '@/common/decorators/allow-public-key.decorator';
 import { CurrentConsumer } from '@/common/decorators/current-consumer.decorator';
 import { RequireAnyPermission } from '@/common/decorators/require-permissions.decorator';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
-import { DefindexService } from '@/defindex/defindex.service';
+import { DefindexService } from '@/native-plugins/defindex/defindex.service';
 import {
   DefindexBalanceQueryDto,
   DefindexDepositDto,
   DefindexSubmitDto,
   DefindexVaultParamsDto,
   DefindexWithdrawDto,
-} from '@/defindex/dto/defindex.dto';
+} from '@/native-plugins/defindex/dto/defindex.dto';
 
 @ApiTags('DeFindex')
 // No `v1/` here: URI versioning adds it, and writing it twice served every

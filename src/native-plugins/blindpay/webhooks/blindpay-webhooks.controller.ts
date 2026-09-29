@@ -6,12 +6,12 @@ import { AppConfig } from '@/config/configuration';
 import { Public } from '@/common/decorators/public.decorator';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { headerValue } from '@/common/request-header';
-import { verifySvixSignature } from '@/blindpay/blindpay-signature';
-import { BLINDPAY_ENVIRONMENTS } from '@/blindpay/blindpay.constants';
+import { verifySvixSignature } from '@/native-plugins/blindpay/blindpay-signature';
+import { BLINDPAY_ENVIRONMENTS } from '@/native-plugins/blindpay/blindpay.constants';
 import {
   BlindpaySyncService,
   BlindpayObject,
-} from '@/blindpay/blindpay-sync.service';
+} from '@/native-plugins/blindpay/blindpay-sync.service';
 
 /**
  * Receives BlindPay (Svix) webhook deliveries from both platform instances.

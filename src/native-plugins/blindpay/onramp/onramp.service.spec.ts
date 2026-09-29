@@ -1,7 +1,7 @@
 import { HttpException } from '@nestjs/common';
-import { BlindpayOnrampApi } from '@/blindpay/blindpay-onramp.api';
-import { PAYIN_PUBLIC_SELECT } from '@/blindpay/blindpay-sync.service';
-import { OnrampService } from '@/onramp/onramp.service';
+import { BlindpayOnrampApi } from '@/native-plugins/blindpay/blindpay-onramp.api';
+import { PAYIN_PUBLIC_SELECT } from '@/native-plugins/blindpay/blindpay-sync.service';
+import { OnrampService } from '@/native-plugins/blindpay/onramp/onramp.service';
 
 const CONSUMER = { username: 'cosmos_u1' } as any;
 

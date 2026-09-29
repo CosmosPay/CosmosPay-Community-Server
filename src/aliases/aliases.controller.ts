@@ -48,6 +48,8 @@ import {
   AliasResolutionEntity,
   OwnedAliasEntity,
 } from '@/aliases/entities/alias.entity';
+import { CHAINS, type Chain } from '@/chains/chains.constants';
+import { ParseOptionalChainPipe } from '@/chains/parse-chain.pipe';
 
 /**
  * Claimable payment handles — `emanuel250` instead of `GA5ZSE…`.
@@ -83,9 +85,21 @@ export class AliasesController {
     required: false,
     description: 'Limit to one network (public | testnet | a custom id).',
   })
+  @ApiQuery({
+    name: 'chain',
+    required: false,
+    enum: CHAINS,
+    description:
+      'The chain to resolve on. Omit for Stellar: a wallet that does not ask ' +
+      'for a chain is never handed another chain’s address.',
+  })
   @ApiOkResponse({ type: AliasResolutionEntity })
-  resolve(@Param('name') name: string, @Query('network') network?: string) {
-    return this.aliases.resolve(name, network);
+  resolve(
+    @Param('name') name: string,
+    @Query('network') network?: string,
+    @Query('chain', ParseOptionalChainPipe) chain?: Chain,
+  ) {
+    return this.aliases.resolve(name, network, chain);
   }
 
   @Get('availability/:name')
@@ -103,11 +117,18 @@ export class AliasesController {
   @ApiOperation({ summary: 'Which aliases point at this address' })
   @ApiOkResponse({ type: AliasByAddressEntity })
   @ApiQuery({ name: 'network', required: false })
+  @ApiQuery({
+    name: 'chain',
+    required: false,
+    enum: CHAINS,
+    description: 'Omit to read the chain off the address’s own shape.',
+  })
   byAddress(
     @Param('address') address: string,
     @Query('network') network?: string,
+    @Query('chain', ParseOptionalChainPipe) chain?: Chain,
   ) {
-    return this.aliases.findByAddress(address, network);
+    return this.aliases.findByAddress(address, network, chain);
   }
 
   /* ------------------------------- owner side ------------------------------ */

@@ -3,6 +3,10 @@
 Every plugin lives here, one folder each. Nothing in this folder runs until its
 slug is listed in `PLUGINS_ENABLED`.
 
+These are the **sandboxed** plugins. BlindPay and DeFindex are *native* plugins —
+compiled in under `src/native-plugins/`, switched on by the same `PLUGINS_ENABLED`
+— and their slugs (`blindpay`, `defindex`) cannot be taken here.
+
 ```text
 plugins/
   example/

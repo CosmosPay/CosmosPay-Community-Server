@@ -7,8 +7,8 @@ import type {
 } from '@/config/configuration';
 import type { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
-import { resolveBlindpayEnvironment } from '@/blindpay/blindpay-environment';
-import { BLINDPAY_INSTANCE_ENV_VARS } from '@/blindpay/blindpay.constants';
+import { resolveBlindpayEnvironment } from '@/native-plugins/blindpay/blindpay-environment';
+import { BLINDPAY_INSTANCE_ENV_VARS } from '@/native-plugins/blindpay/blindpay.constants';
 
 type QueryValue = string | number | boolean | undefined | null;
 

@@ -17,8 +17,8 @@ import {
   type BlindpayToken,
   type CurrencyType,
   type PayinMethod,
-} from '@/blindpay/blindpay.constants';
-import { PayerRulesMatchPaymentMethod } from '@/common/validators/payer-rules-match-payment-method.validator';
+} from '@/native-plugins/blindpay/blindpay.constants';
+import { PayerRulesMatchPaymentMethod } from '@/native-plugins/blindpay/validators/payer-rules-match-payment-method.validator';
 
 /**
  * Payer constraints / details some payin methods require. Argentina Transfers

@@ -1,20 +1,23 @@
 import { Reflector } from '@nestjs/core';
-import { BLINDPAY_CONSUMER_QUOTA_RATE_LIMIT } from '@/blindpay/blindpay.constants';
+import { BLINDPAY_CONSUMER_QUOTA_RATE_LIMIT } from '@/native-plugins/blindpay/blindpay.constants';
 import { RATE_LIMIT_KEY } from '@/common/decorators/rate-limit.decorator';
-import { KYC_TOS_RATE_LIMIT, KYC_UPLOAD_RATE_LIMIT } from '@/kyc/kyc.constants';
-import { KycMetaController } from '@/kyc/upload/kyc-meta.controller';
-import { OfframpController } from '@/offramp/offramp.controller';
+import {
+  KYC_TOS_RATE_LIMIT,
+  KYC_UPLOAD_RATE_LIMIT,
+} from '@/native-plugins/blindpay/kyc/kyc.constants';
+import { KycMetaController } from '@/native-plugins/blindpay/kyc/upload/kyc-meta.controller';
+import { OfframpController } from '@/native-plugins/blindpay/offramp/offramp.controller';
 import {
   OFFRAMP_DOCUMENT_RATE_LIMIT,
   OFFRAMP_PAYOUT_RATE_LIMIT,
   OFFRAMP_QUOTE_RATE_LIMIT,
-} from '@/offramp/offramp.constants';
-import { OnrampController } from '@/onramp/onramp.controller';
+} from '@/native-plugins/blindpay/offramp/offramp.constants';
+import { OnrampController } from '@/native-plugins/blindpay/onramp/onramp.controller';
 import {
   ONRAMP_PAYIN_RATE_LIMIT,
   ONRAMP_QUOTE_RATE_LIMIT,
   ONRAMP_TRUSTLINE_RATE_LIMIT,
-} from '@/onramp/onramp.constants';
+} from '@/native-plugins/blindpay/onramp/onramp.constants';
 
 const policiesOf = (handler: (...args: any[]) => unknown) =>
   new Reflector().get(RATE_LIMIT_KEY, handler) ?? [];

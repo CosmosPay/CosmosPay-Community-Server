@@ -1,8 +1,8 @@
-import { BlindpayOnrampApi } from '@/blindpay/blindpay-onramp.api';
-import { VIRTUAL_ACCOUNT_PUBLIC_SELECT } from '@/blindpay/blindpay-sync.service';
+import { BlindpayOnrampApi } from '@/native-plugins/blindpay/blindpay-onramp.api';
+import { VIRTUAL_ACCOUNT_PUBLIC_SELECT } from '@/native-plugins/blindpay/blindpay-sync.service';
 import { ApiErrorCode } from '@/common/errors/api-error';
-import { ReceiversService } from '@/kyc/receivers/receivers.service';
-import { VirtualAccountsService } from '@/onramp/virtual-accounts/virtual-accounts.service';
+import { ReceiversService } from '@/native-plugins/blindpay/kyc/receivers/receivers.service';
+import { VirtualAccountsService } from '@/native-plugins/blindpay/onramp/virtual-accounts/virtual-accounts.service';
 
 const CONSUMER = { username: 'cosmos_u1' } as any;
 

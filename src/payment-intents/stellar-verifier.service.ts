@@ -9,20 +9,12 @@ import {
   PAYMENT_SCAN_PAGE_SIZE,
   TX_CREATED_AT_SKEW_MS,
 } from '@/payment-intents/payment-intents.constants';
+import type {
+  PaymentVerifier,
+  VerificationResult,
+} from '@/payment-intents/payment-verifier';
 
-export interface VerificationResult {
-  valid: boolean;
-  txHash?: string;
-  reason?: string;
-  /** The payer (source) account of the matched on-chain payment, when valid. */
-  payer?: string;
-  /**
-   * The transaction is this intent's payment — memo, age and a payment
-   * operation all match — but it failed on-chain. Only this may settle an
-   * intent as FAILED; every other invalid result is a mismatch.
-   */
-  failedOnChain?: boolean;
-}
+export type { VerificationResult } from '@/payment-intents/payment-verifier';
 
 /**
  * Confirms that an on-chain Stellar transaction actually fulfills a payment
@@ -34,7 +26,7 @@ export interface VerificationResult {
  * observer, so the rule lives in one place.
  */
 @Injectable()
-export class StellarVerifierService {
+export class StellarVerifierService implements PaymentVerifier {
   private readonly logger = new Logger(StellarVerifierService.name);
 
   constructor(private readonly stellar: StellarService) {}

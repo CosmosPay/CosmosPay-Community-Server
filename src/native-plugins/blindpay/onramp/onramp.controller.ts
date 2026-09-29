@@ -12,19 +12,22 @@ import {
 import { CurrentConsumer } from '@/common/decorators/current-consumer.decorator';
 import { RequirePermissions } from '@/common/decorators/require-permissions.decorator';
 import { RateLimit } from '@/common/decorators/rate-limit.decorator';
-import { BLINDPAY_CONSUMER_QUOTA_RATE_LIMIT } from '@/blindpay/blindpay.constants';
+import { BLINDPAY_CONSUMER_QUOTA_RATE_LIMIT } from '@/native-plugins/blindpay/blindpay.constants';
 import {
   ONRAMP_PAYIN_RATE_LIMIT,
   ONRAMP_QUOTE_RATE_LIMIT,
   ONRAMP_TRUSTLINE_RATE_LIMIT,
-} from '@/onramp/onramp.constants';
+} from '@/native-plugins/blindpay/onramp/onramp.constants';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
-import { OnrampService } from '@/onramp/onramp.service';
-import { CreatePayinQuoteDto } from '@/onramp/dto/create-payin-quote.dto';
-import { CreatePayinDto } from '@/onramp/dto/create-payin.dto';
-import { CreateTrustlineDto } from '@/onramp/dto/create-trustline.dto';
-import { PayinQuoteEntity } from '@/onramp/entities/payin-quote.entity';
-import { PayinEntity, PayinListEntity } from '@/onramp/entities/payin.entity';
+import { OnrampService } from '@/native-plugins/blindpay/onramp/onramp.service';
+import { CreatePayinQuoteDto } from '@/native-plugins/blindpay/onramp/dto/create-payin-quote.dto';
+import { CreatePayinDto } from '@/native-plugins/blindpay/onramp/dto/create-payin.dto';
+import { CreateTrustlineDto } from '@/native-plugins/blindpay/onramp/dto/create-trustline.dto';
+import { PayinQuoteEntity } from '@/native-plugins/blindpay/onramp/entities/payin-quote.entity';
+import {
+  PayinEntity,
+  PayinListEntity,
+} from '@/native-plugins/blindpay/onramp/entities/payin.entity';
 
 // /v1/onramp — fiat -> stablecoin.
 @ApiTags('onramp')

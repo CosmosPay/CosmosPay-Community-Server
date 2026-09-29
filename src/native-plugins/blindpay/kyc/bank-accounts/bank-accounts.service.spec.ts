@@ -1,8 +1,8 @@
-import { BlindpayKycApi } from '@/blindpay/blindpay-kyc.api';
+import { BlindpayKycApi } from '@/native-plugins/blindpay/blindpay-kyc.api';
 import {
   BANK_ACCOUNT_PUBLIC_SELECT,
   BankAccountsService,
-} from '@/kyc/bank-accounts/bank-accounts.service';
+} from '@/native-plugins/blindpay/kyc/bank-accounts/bank-accounts.service';
 
 const CONSUMER = { username: 'cosmos_u1', role: 'user' } as any;
 

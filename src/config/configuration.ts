@@ -1,10 +1,14 @@
 import {
   DEFAULT_DEFINDEX_BASE_URL,
   DEFAULT_DEFINDEX_TIMEOUT_MS,
+  DEFAULT_CHAIN_RPC_TIMEOUT_MS,
   DEFAULT_HORIZON,
+  DEFAULT_MONAD_LOG_BLOCK_RANGE,
+  DEFAULT_MONAD_RPC,
   DEFAULT_RATE_LIMIT_PRUNE_INTERVAL_MS,
   DEFAULT_RECOVERY_SWEEP_INTERVAL_MS,
   DEFAULT_RECOVERY_TIMEOUT_MS,
+  DEFAULT_SOLANA_RPC,
   DEFAULT_WALLET_AUTH_SWEEP_INTERVAL_MS,
   DEFAULT_WALLET_AUTH_TIMEOUT_MS,
   NETWORK_PASSPHRASE_PUBLIC,
@@ -14,6 +18,30 @@ import {
   parseRedirectUrlWhitelist,
   type RedirectUrlWhitelist,
 } from '@/config/kyc-redirect-url-whitelist';
+import {
+  isNativePluginSlug,
+  type NativePluginSlug,
+} from '@/plugins/plugins.constants';
+
+/** The slugs in `PLUGINS_ENABLED`, sandboxed and native alike. */
+function parsePluginsEnabled(env: NodeJS.ProcessEnv): string[] {
+  return (env.PLUGINS_ENABLED ?? '')
+    .split(',')
+    .map((slug) => slug.trim())
+    .filter(Boolean);
+}
+
+/**
+ * Whether `PLUGINS_ENABLED` names a native plugin — the condition
+ * `NativePluginsModule` imports it on. It has to be a predicate over the
+ * environment rather than a `ConfigService` read, because it decides which
+ * modules exist, before any provider does.
+ */
+export function nativePluginEnabled(
+  slug: NativePluginSlug,
+): (env: NodeJS.ProcessEnv) => boolean {
+  return (env) => parsePluginsEnabled(env).includes(slug);
+}
 
 /**
  * Centralized, typed configuration loaded from environment variables.
@@ -106,6 +134,24 @@ export interface AppConfig {
       singleInflight: boolean;
     };
   };
+  /**
+   * Solana, per network tier: `public` is mainnet-beta, `testnet` is devnet —
+   * the tier the caller's API key picks, exactly as for Stellar.
+   */
+  solana: {
+    rpcUrls: Record<StellarNetwork, string>;
+    timeoutMs: number;
+  };
+  /**
+   * Monad (EVM), per network tier: `public` is mainnet, `testnet` is Monad's
+   * testnet. The chain ids are not configurable — see `MONAD_CHAIN_IDS`.
+   */
+  monad: {
+    rpcUrls: Record<StellarNetwork, string>;
+    timeoutMs: number;
+    /** Blocks one `eth_getLogs` call may span; the RPC provider's limit. */
+    logBlockRange: number;
+  };
   observer: {
     enabled: boolean;
     intervalMs: number;
@@ -169,6 +215,12 @@ export interface AppConfig {
      * handlers never run. Empty — the default — serves none.
      */
     enabled: string[];
+    /**
+     * The native plugins (`src/native-plugins/`) named in the same
+     * `PLUGINS_ENABLED` list. One that is not listed is never instantiated: its
+     * routes do not exist and its background jobs never start.
+     */
+    native: NativePluginSlug[];
     /**
      * Key the secret half of every installation's config is sealed under.
      * Required at boot when an enabled plugin declares a secret field.
@@ -377,8 +429,33 @@ export default (): AppConfig => ({
         'true',
     },
   },
+  solana: {
+    rpcUrls: {
+      public: process.env.SOLANA_RPC_URL_MAINNET ?? DEFAULT_SOLANA_RPC.public,
+      testnet: process.env.SOLANA_RPC_URL_DEVNET ?? DEFAULT_SOLANA_RPC.testnet,
+    },
+    timeoutMs: parseInt(
+      process.env.SOLANA_RPC_TIMEOUT_MS ?? String(DEFAULT_CHAIN_RPC_TIMEOUT_MS),
+      10,
+    ),
+  },
+  monad: {
+    rpcUrls: {
+      public: process.env.MONAD_RPC_URL_MAINNET ?? DEFAULT_MONAD_RPC.public,
+      testnet: process.env.MONAD_RPC_URL_TESTNET ?? DEFAULT_MONAD_RPC.testnet,
+    },
+    timeoutMs: parseInt(
+      process.env.MONAD_RPC_TIMEOUT_MS ?? String(DEFAULT_CHAIN_RPC_TIMEOUT_MS),
+      10,
+    ),
+    logBlockRange: parseInt(
+      process.env.MONAD_LOG_BLOCK_RANGE ??
+        String(DEFAULT_MONAD_LOG_BLOCK_RANGE),
+      10,
+    ),
+  },
   observer: {
-    // Permanent reconciler that watches Stellar and finalizes paid intents.
+    // Permanent reconciler that watches every chain and finalizes paid intents.
     enabled: (process.env.OBSERVER_ENABLED ?? 'true').toLowerCase() !== 'false',
     intervalMs: parseInt(process.env.OBSERVER_INTERVAL_MS ?? '15000', 10),
     batchSize: parseInt(process.env.OBSERVER_BATCH_SIZE ?? '50', 10),
@@ -474,10 +551,10 @@ export default (): AppConfig => ({
     },
   },
   plugins: {
-    enabled: (process.env.PLUGINS_ENABLED ?? '')
-      .split(',')
-      .map((slug) => slug.trim())
-      .filter(Boolean),
+    enabled: parsePluginsEnabled(process.env).filter(
+      (slug) => !isNativePluginSlug(slug),
+    ),
+    native: parsePluginsEnabled(process.env).filter(isNativePluginSlug),
     secret: process.env.PLUGINS_SECRET?.trim() ?? '',
     trustedKeys: process.env.PLUGINS_TRUSTED_KEYS?.trim() ?? '',
     allowUnsigned:

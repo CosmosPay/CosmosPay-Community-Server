@@ -111,7 +111,7 @@ describe('KYC surface (e2e)', () => {
       await Promise.all([
         import('../src/app.module'),
         import('../src/prisma/prisma.service'),
-        import('../src/blindpay/blindpay.client'),
+        import('../src/native-plugins/blindpay/blindpay.client'),
       ]);
 
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] })

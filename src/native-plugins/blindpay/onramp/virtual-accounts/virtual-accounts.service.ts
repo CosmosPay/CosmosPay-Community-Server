@@ -4,16 +4,20 @@ import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface'
 import { PaginationQueryDto } from '@/common/dto/pagination.query.dto';
 import { page } from '@/common/pagination';
 import { PrismaService } from '@/prisma/prisma.service';
-import { BlindpayOnrampApi } from '@/blindpay/blindpay-onramp.api';
+import { BlindpayOnrampApi } from '@/native-plugins/blindpay/blindpay-onramp.api';
 import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
 import {
   BlindpayObject,
   VIRTUAL_ACCOUNT_PUBLIC_SELECT,
-} from '@/blindpay/blindpay-sync.service';
-import { asNullableString, asString, toJson } from '@/blindpay/blindpay.util';
+} from '@/native-plugins/blindpay/blindpay-sync.service';
+import {
+  asNullableString,
+  asString,
+  toJson,
+} from '@/native-plugins/blindpay/blindpay.util';
 import type { BlindpayEnvironment } from '@/config/configuration';
-import { ReceiversService } from '@/kyc/receivers/receivers.service';
-import { CreateVirtualAccountDto } from '@/onramp/dto/create-virtual-account.dto';
+import { ReceiversService } from '@/native-plugins/blindpay/kyc/receivers/receivers.service';
+import { CreateVirtualAccountDto } from '@/native-plugins/blindpay/onramp/dto/create-virtual-account.dto';
 
 /**
  * Virtual accounts: dedicated fiat accounts in a receiver's name that auto-

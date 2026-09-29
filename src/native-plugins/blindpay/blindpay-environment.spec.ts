@@ -1,7 +1,7 @@
 import {
   resolveBlindpayEnvironment,
   storedBlindpayEnvironment,
-} from '@/blindpay/blindpay-environment';
+} from '@/native-plugins/blindpay/blindpay-environment';
 
 describe('storedBlindpayEnvironment', () => {
   it('accepts the two values rows are written with', () => {

@@ -1,9 +1,9 @@
 import { HttpStatus, type RawBodyRequest } from '@nestjs/common';
 import type { ConfigService } from '@nestjs/config';
 import type { Request } from 'express';
-import { computeSvixSignature } from '@/blindpay/blindpay-signature';
-import type { BlindpaySyncService } from '@/blindpay/blindpay-sync.service';
-import { BlindpayWebhooksController } from '@/blindpay/webhooks/blindpay-webhooks.controller';
+import { computeSvixSignature } from '@/native-plugins/blindpay/blindpay-signature';
+import type { BlindpaySyncService } from '@/native-plugins/blindpay/blindpay-sync.service';
+import { BlindpayWebhooksController } from '@/native-plugins/blindpay/webhooks/blindpay-webhooks.controller';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import type { AppConfig } from '@/config/configuration';
 

@@ -35,6 +35,11 @@ describe('validatePluginDefinition', () => {
 
   it.each<[string, Partial<PluginDefinition>, RegExp]>([
     ['a slug that is not URL-safe', { slug: 'Acme Sync' }, /slug must match/],
+    [
+      "a native plugin's slug",
+      { slug: 'blindpay' },
+      /reserved for the native plugin/,
+    ],
     ['a non-semver version', { version: 'latest' }, /semver/],
     [
       'an unknown capability',

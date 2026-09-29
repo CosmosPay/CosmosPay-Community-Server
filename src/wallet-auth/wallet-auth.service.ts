@@ -8,6 +8,9 @@ import {
 } from '@generated/prisma/client';
 import { Keypair } from '@stellar/stellar-sdk';
 import { AppConfig } from '@/config/configuration';
+import { normalizeAddress } from '@/chains/chain-address';
+import { type Chain, DEFAULT_CHAIN } from '@/chains/chains.constants';
+import { verifyMessageSignature } from '@/chains/message-signature';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { OidcService } from '@/common/oidc/oidc.service';
 import { isReturnUrlAllowed, returnRedirectUrl } from '@/common/return-url';
@@ -740,8 +743,12 @@ export class WalletAuthService {
     identity: WalletAuthIdentity,
     account: {
       id: string;
-      stellarAddress: string;
-      backup: { stellarAddress: string; box: string; updatedAt: Date } | null;
+      backup: {
+        chain: string;
+        address: string;
+        box: string;
+        updatedAt: Date;
+      } | null;
     } | null,
     idToken: string | null,
   ) {
@@ -759,7 +766,10 @@ export class WalletAuthService {
       account: account ? ('existing' as const) : ('new' as const),
       backup: account?.backup
         ? {
-            stellarAddress: account.backup.stellarAddress,
+            chain: account.backup.chain,
+            address: account.backup.address,
+            // The field's original name, kept for the wallets that read it.
+            stellarAddress: account.backup.address,
             box: account.backup.box,
             updatedAt: account.backup.updatedAt.toISOString(),
           }
@@ -798,13 +808,10 @@ export class WalletAuthService {
         'The signed timestamp is outside the accepted window.',
       );
     }
-    const message = finishMessage(
-      identity.email,
-      dto.stellarAddress,
-      dto.signedAt,
-    );
+    const { chain, address } = accountOf(dto);
+    const message = finishMessage(identity.email, address, dto.signedAt, chain);
     if (
-      !(await this.signedForAccount(dto.stellarAddress, message, dto.signature))
+      !(await this.signedForAccount(chain, address, message, dto.signature))
     ) {
       throw ApiError.badRequest(
         ApiErrorCode.WalletSignatureInvalid,
@@ -829,12 +836,16 @@ export class WalletAuthService {
     // person to acknowledge that before it ever sets `replaceBackup`.
     if (
       existing?.backup &&
-      existing.backup.stellarAddress !== dto.stellarAddress &&
+      (existing.backup.chain !== chain ||
+        existing.backup.address !== address) &&
       !dto.replaceBackup
     ) {
       return {
         status: 'backup_conflict' as const,
-        stellarAddress: existing.backup.stellarAddress,
+        chain: existing.backup.chain,
+        address: existing.backup.address,
+        // The field's original name, kept for the wallets that read it.
+        stellarAddress: existing.backup.address,
       };
     }
 
@@ -846,13 +857,15 @@ export class WalletAuthService {
         name,
         avatar: identity.avatar,
         method: identity.method,
-        stellarAddress: dto.stellarAddress,
+        chain,
+        address,
       },
       update: {
         name,
         avatar: identity.avatar,
         method: identity.method,
-        stellarAddress: dto.stellarAddress,
+        chain,
+        address,
       },
     });
 
@@ -861,16 +874,20 @@ export class WalletAuthService {
         where: { walletAccountId: account.id },
         create: {
           walletAccountId: account.id,
-          stellarAddress: dto.stellarAddress,
+          chain,
+          address,
           box: dto.backup,
         },
-        update: { stellarAddress: dto.stellarAddress, box: dto.backup },
+        update: { chain, address, box: dto.backup },
       });
     }
 
     const keys = await this.provisionKeys({
       accountId: account.id,
-      stellarAddress: dto.stellarAddress,
+      chain,
+      address,
+      // The console's original field; null off Stellar, where there is none.
+      stellarAddress: chain === 'stellar' ? address : null,
       email: identity.email,
       name,
     });
@@ -905,9 +922,10 @@ export class WalletAuthService {
         'That is not a backup box this service will keep.',
       );
     }
-    const message = backupMessage(dto.stellarAddress, dto.box, dto.signedAt);
+    const { chain, address } = accountOf(dto);
+    const message = backupMessage(address, dto.box, dto.signedAt, chain);
     if (
-      !(await this.signedForAccount(dto.stellarAddress, message, dto.signature))
+      !(await this.signedForAccount(chain, address, message, dto.signature))
     ) {
       throw ApiError.badRequest(
         ApiErrorCode.WalletSignatureInvalid,
@@ -916,9 +934,10 @@ export class WalletAuthService {
     }
 
     // Scoped to the address that signed, which is what makes the signature the
-    // credential: a valid signature by A can only ever move A's own box.
+    // credential: a valid signature by A can only ever move A's own box — and
+    // only on A's chain, since one ed25519 key is an address on two.
     const backup = await this.prisma.walletBackup.findFirst({
-      where: { stellarAddress: dto.stellarAddress },
+      where: { chain, address },
       select: { id: true },
     });
     if (!backup) {
@@ -931,9 +950,14 @@ export class WalletAuthService {
     const updated = await this.prisma.walletBackup.update({
       where: { id: backup.id },
       data: { box: dto.box },
-      select: { stellarAddress: true, updatedAt: true },
+      select: { chain: true, address: true, updatedAt: true },
     });
-    return { status: 'ok' as const, ...updated };
+    return {
+      status: 'ok' as const,
+      ...updated,
+      // The field's original name, kept for the wallets that read it.
+      stellarAddress: updated.address,
+    };
   }
 
   /* ------------------------------ provider I/O ---------------------------- */
@@ -1125,10 +1149,17 @@ export class WalletAuthService {
    * now at weight 0, and the key that signs for it is whichever replaced it.
    */
   private async signedForAccount(
+    chain: Chain,
     address: string,
     message: string,
     signature: string,
   ): Promise<boolean> {
+    // Solana and Monad accounts are their key: no signer set to consult, and
+    // no network call. Each chain's wallets sign the way `message-signature`
+    // describes.
+    if (chain !== 'stellar') {
+      return verifyMessageSignature(chain, address, message, signature);
+    }
     if (verifyWalletSignature(address, message, signature)) return true;
     if (!isStellarAddress(address)) return false;
     let account;
@@ -1318,7 +1349,9 @@ export class WalletAuthService {
    */
   private async provisionKeys(input: {
     accountId: string;
-    stellarAddress: string;
+    chain: Chain;
+    address: string;
+    stellarAddress: string | null;
     email: string;
     name: string;
   }): Promise<{
@@ -1417,3 +1450,38 @@ function withoutIdToken(result: IdentityResult): ReadIdentity {
 
 /** Re-exported for the controller's page rendering. */
 export type { ProviderIdentity };
+
+/**
+ * The account a sign-in or backup request names, on its chain and in the
+ * chain's stored spelling (EIP-55 on Monad). `stellarAddress` is the field's
+ * original name and means Stellar; a request that sends it with another chain,
+ * or sends both fields with two different accounts, is refused rather than
+ * guessed at.
+ */
+function accountOf(dto: {
+  chain?: Chain;
+  address?: string;
+  stellarAddress?: string;
+}): { chain: Chain; address: string } {
+  const chain = dto.chain ?? DEFAULT_CHAIN;
+  if (dto.stellarAddress !== undefined) {
+    if (
+      chain !== 'stellar' ||
+      (dto.address !== undefined && dto.address !== dto.stellarAddress)
+    ) {
+      throw ApiError.badRequest(
+        ApiErrorCode.ValidationFailed,
+        'Send the account as `address` (with `chain`); `stellarAddress` is ' +
+          'only for a Stellar account, and not together with a different address.',
+      );
+    }
+    return { chain, address: dto.stellarAddress };
+  }
+  if (dto.address === undefined) {
+    throw ApiError.badRequest(
+      ApiErrorCode.ValidationFailed,
+      'address is required',
+    );
+  }
+  return { chain, address: normalizeAddress(chain, dto.address) };
+}

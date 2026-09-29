@@ -1,3 +1,4 @@
+import { CHAINS } from '@/chains/chains.constants';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 /**
@@ -24,7 +25,13 @@ export class SummaryTotalsEntity {
 }
 
 export class AssetVolumeEntity {
-  @ApiProperty({ example: 'XLM' }) asset!: string;
+  @ApiProperty({ enum: CHAINS, example: 'stellar' }) chain!: string;
+  @ApiProperty({
+    description:
+      'The chain’s coin (XLM, SOL, MON) for `native`, else the code.',
+    example: 'XLM',
+  })
+  asset!: string;
 
   @ApiProperty({
     description:
@@ -53,6 +60,7 @@ export class RecentPaymentEntity {
   @ApiProperty({ example: 'clz9xpi00001' }) id!: string;
   @ApiProperty({ example: 'PAY' }) kind!: string;
   @ApiProperty({ example: 'SUCCEEDED' }) status!: string;
+  @ApiProperty({ enum: CHAINS, example: 'stellar' }) chain!: string;
   @ApiPropertyOptional({ nullable: true, example: '25.5' })
   amount!: string | null;
   @ApiProperty({ example: 'XLM' }) asset!: string;
@@ -79,6 +87,7 @@ export class AnalyticsSummaryEntity {
 }
 
 export class AssetBalanceEntity {
+  @ApiProperty({ enum: CHAINS, example: 'stellar' }) chain!: string;
   @ApiProperty({ example: 'XLM' }) asset!: string;
   @ApiProperty({ description: 'Settled.', example: '10420.5' }) amount!: string;
   @ApiProperty({ description: 'In flight.', example: '120' }) pending!: string;

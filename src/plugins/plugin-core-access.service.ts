@@ -68,6 +68,7 @@ const PAYMENT_INTENT_FIELDS = [
   'asset',
   'assetIssuer',
   'memo',
+  'chain',
   'network',
   'txHash',
   'reference',

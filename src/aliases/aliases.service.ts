@@ -35,10 +35,18 @@ import {
   QueryAliasesDto,
   StartAliasRecoveryDto,
 } from '@/aliases/dto/alias.dto';
+import { isAddressForChain, normalizeAddress } from '@/chains/chain-address';
+import {
+  type Chain,
+  CHAINS,
+  DEFAULT_CHAIN,
+  isChain,
+} from '@/chains/chains.constants';
 
 /** Columns safe to hand a stranger. Everything absent here is absent on purpose. */
 const PUBLIC_ADDRESS_SELECT = {
   id: true,
+  chain: true,
   address: true,
   network: true,
   label: true,
@@ -100,13 +108,17 @@ export class AliasesService {
 
     const nonce = randomBytes(24).toString('base64url');
     const expiresAt = new Date(Date.now() + ALIAS_CHALLENGE_TTL_MS);
+    // Stored and signed in the chain's one spelling (EIP-55 on Monad), so the
+    // address a payer later resolves is the address that signed, byte for byte.
+    const { chain, address } = addressOf(dto);
 
     await this.prisma.aliasChallenge.create({
       data: {
         aliasId: alias?.id ?? null,
         purpose,
         name,
-        address: dto.address,
+        chain,
+        address,
         network: dto.network,
         nonce,
         expiresAt,
@@ -116,7 +128,8 @@ export class AliasesService {
     const message = aliasChallengeMessage({
       purpose,
       name,
-      address: dto.address,
+      chain,
+      address,
       network: dto.network,
       nonce,
     });
@@ -140,6 +153,7 @@ export class AliasesService {
     nonce: string;
     purpose: AliasChallengePurpose;
     name: string;
+    chain: Chain;
     address: string;
     network: string;
     signature: string;
@@ -152,6 +166,7 @@ export class AliasesService {
       !challenge ||
       challenge.purpose !== input.purpose ||
       challenge.name !== input.name ||
+      challenge.chain !== input.chain ||
       challenge.address !== input.address ||
       challenge.network !== input.network ||
       challenge.consumedAt !== null ||
@@ -170,6 +185,7 @@ export class AliasesService {
       {
         purpose: input.purpose,
         name: input.name,
+        chain: input.chain,
         address: input.address,
         network: input.network,
         nonce: input.nonce,
@@ -233,11 +249,14 @@ export class AliasesService {
     // body. The claim DTO has no address field at all for that reason: the
     // signature covers the challenge's copy, so a body field here would be a way
     // to sign for one address and register another.
-    const { address, network } = await this.challengeCoordinates(dto.nonce);
+    const { chain, address, network } = await this.challengeCoordinates(
+      dto.nonce,
+    );
     const challenge = await this.spendChallenge({
       nonce: dto.nonce,
       purpose: AliasChallengePurpose.CLAIM,
       name,
+      chain,
       address,
       network,
       signature: dto.signature,
@@ -252,6 +271,7 @@ export class AliasesService {
           email: normalizeAliasEmail(dto.email),
           addresses: {
             create: {
+              chain: challenge.chain,
               address: challenge.address,
               network: challenge.network,
               label: dto.label ?? null,
@@ -263,7 +283,7 @@ export class AliasesService {
         include: { addresses: { select: PUBLIC_ADDRESS_SELECT } },
       });
       this.logger.log(
-        `Alias "${name}" claimed by ${challenge.address} (${challenge.network})`,
+        `Alias "${name}" claimed by ${challenge.address} (${challenge.chain} ${challenge.network})`,
       );
       return this.ownedView(alias);
     } catch (e) {
@@ -291,15 +311,15 @@ export class AliasesService {
   private async challengeCoordinates(nonce: string) {
     const row = await this.prisma.aliasChallenge.findUnique({
       where: { nonce },
-      select: { address: true, network: true },
+      select: { chain: true, address: true, network: true },
     });
-    if (!row) {
+    if (!row || !isChain(row.chain)) {
       throw ApiError.badRequest(
         ApiErrorCode.AliasChallengeInvalid,
         'The challenge is unknown or expired.',
       );
     }
-    return { address: row.address, network: row.network };
+    return { chain: row.chain, address: row.address, network: row.network };
   }
 
   /* ------------------------------- addresses ------------------------------- */
@@ -330,20 +350,24 @@ export class AliasesService {
       );
     }
 
+    const { chain, address } = addressOf(dto);
     await this.spendChallenge({
       nonce: dto.nonce,
       purpose: AliasChallengePurpose.ADD_ADDRESS,
       name: alias.name,
-      address: dto.address,
+      chain,
+      address,
       network: dto.network,
       signature: dto.signature,
     });
 
-    // First address on a network is its default whether or not the caller asked;
-    // otherwise `primary` decides. Done inside a transaction with the demotion so
-    // the partial unique index can never see two primaries at once.
+    // First address on a chain's network is its default whether or not the
+    // caller asked; otherwise `primary` decides. Done inside a transaction with
+    // the demotion so the partial unique index can never see two primaries at
+    // once. Per chain as well as network: a Solana address is not a Stellar
+    // address's alternative, and must not demote it.
     const existingOnNetwork = await this.prisma.aliasAddress.count({
-      where: { aliasId: alias.id, network: dto.network },
+      where: { aliasId: alias.id, chain, network: dto.network },
     });
     const primary = existingOnNetwork === 0 || dto.primary === true;
 
@@ -351,14 +375,20 @@ export class AliasesService {
       return await this.prisma.$transaction(async (tx) => {
         if (primary) {
           await tx.aliasAddress.updateMany({
-            where: { aliasId: alias.id, network: dto.network, isPrimary: true },
+            where: {
+              aliasId: alias.id,
+              chain,
+              network: dto.network,
+              isPrimary: true,
+            },
             data: { isPrimary: false },
           });
         }
         return tx.aliasAddress.create({
           data: {
             aliasId: alias.id,
-            address: dto.address,
+            chain,
+            address,
             network: dto.network,
             label: dto.label ?? null,
             isPrimary: primary,
@@ -373,7 +403,7 @@ export class AliasesService {
       ) {
         throw ApiError.conflict(
           ApiErrorCode.AliasAddressConflict,
-          'That address is already on this alias for that network.',
+          'That address is already on this alias for that chain and network.',
         );
       }
       throw e;
@@ -416,7 +446,7 @@ export class AliasesService {
       // has somewhere to send.
       if (row.isPrimary) {
         const next = await tx.aliasAddress.findFirst({
-          where: { aliasId: alias.id, network: row.network },
+          where: { aliasId: alias.id, chain: row.chain, network: row.network },
           orderBy: { createdAt: 'asc' },
         });
         if (next) {
@@ -443,14 +473,19 @@ export class AliasesService {
    * A SUSPENDED alias resolves to nothing rather than to its addresses. A
    * suspension that still hands out an account is a suspension that does nothing
    * about the money.
+   *
+   * One chain at a time, Stellar unless the payer names another. A wallet
+   * written before Solana and Monad existed asks without a chain and pays what
+   * `primaryAddress` says; handing it a Monad address there would be a payment
+   * it cannot make, or worse, one it makes to the wrong kind of account.
    */
-  async resolve(name: string, network?: string) {
+  async resolve(name: string, network?: string, chain: Chain = DEFAULT_CHAIN) {
     const normalized = normalizeAliasName(name);
     const alias = await this.prisma.alias.findUnique({
       where: { name: normalized },
       include: {
         addresses: {
-          where: network ? { network } : undefined,
+          where: { chain, ...(network ? { network } : {}) },
           select: PUBLIC_ADDRESS_SELECT,
           orderBy: [{ isPrimary: 'desc' }, { createdAt: 'asc' }],
         },
@@ -464,15 +499,27 @@ export class AliasesService {
     return {
       name: alias.name,
       displayName: alias.displayName,
+      chain,
       addresses: alias.addresses,
       primaryAddress: alias.addresses.find((a) => a.isPrimary)?.address ?? null,
     };
   }
 
-  /** Which aliases point at an address? Public for the same reason resolution is. */
-  async findByAddress(address: string, network?: string) {
+  /**
+   * Which aliases point at an address? Public for the same reason resolution
+   * is. The chain is read off the address's own shape when not named — a G…,
+   * a 0x… and a base58 key cannot be mistaken for one another — and a Monad
+   * address is matched in its stored EIP-55 spelling whatever case it came in.
+   */
+  async findByAddress(address: string, network?: string, chain?: Chain) {
+    const onChain = chain ?? chainOfAddress(address);
+    if (!onChain) return { data: [] };
     const rows = await this.prisma.aliasAddress.findMany({
-      where: { address, ...(network ? { network } : {}) },
+      where: {
+        chain: onChain,
+        address: normalizeAddress(onChain, address),
+        ...(network ? { network } : {}),
+      },
       include: {
         alias: { select: { name: true, displayName: true, status: true } },
       },
@@ -484,6 +531,7 @@ export class AliasesService {
         .map((r) => ({
           name: r.alias.name,
           displayName: r.alias.displayName,
+          chain: r.chain,
           network: r.network,
           isPrimary: r.isPrimary,
         })),
@@ -687,11 +735,13 @@ export class AliasesService {
     // The signature is checked before the token is spent, for the same reason a
     // claim's is: otherwise a junk signature burns a real recovery. A failure
     // here has already used one of the attempts counted above.
+    const { chain, address } = addressOf(dto);
     await this.spendChallenge({
       nonce: dto.nonce,
       purpose: AliasChallengePurpose.RECOVER,
       name: alias.name,
-      address: dto.address,
+      chain,
+      address,
       network: dto.network,
       signature: dto.signature,
     });
@@ -711,7 +761,8 @@ export class AliasesService {
       await tx.aliasAddress.create({
         data: {
           aliasId: alias.id,
-          address: dto.address,
+          chain,
+          address,
           network: dto.network,
           isPrimary: true,
         },
@@ -729,7 +780,7 @@ export class AliasesService {
     });
 
     this.logger.warn(
-      `Alias "${alias.name}" recovered to ${dto.address} (${dto.network}) — previous addresses dropped`,
+      `Alias "${alias.name}" recovered to ${address} (${chain} ${dto.network}) — previous addresses dropped`,
     );
     return this.ownedView(updated);
   }
@@ -795,4 +846,21 @@ function emailMatches(stored: string, provided: string): boolean {
     return false;
   }
   return timingSafeEqual(a, b);
+}
+
+/**
+ * The chain and address a request names, in the chain's stored spelling
+ * (EIP-55 on Monad). A request that names no chain is Stellar.
+ */
+function addressOf(dto: { chain?: Chain; address: string }): {
+  chain: Chain;
+  address: string;
+} {
+  const chain = dto.chain ?? DEFAULT_CHAIN;
+  return { chain, address: normalizeAddress(chain, dto.address) };
+}
+
+/** The one chain whose address rule `address` satisfies, if any. */
+function chainOfAddress(address: string): Chain | undefined {
+  return CHAINS.find((chain) => isAddressForChain(chain, address));
 }

@@ -1,3 +1,4 @@
+import { CHAINS } from '@/chains/chains.constants';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 /*
@@ -91,7 +92,17 @@ class WalletAuthIdentityEntity {
 }
 
 class WalletBackupEntity {
-  @ApiProperty({ description: 'The account this box restores to.' })
+  @ApiProperty({ enum: CHAINS, example: 'stellar' }) chain!: string;
+  @ApiProperty({
+    description:
+      'The account this box restores to, on `chain` (Stellar G…, Solana base58, Monad 0x…).',
+  })
+  address!: string;
+  @ApiProperty({
+    description:
+      'Same as `address` — the field’s original name, kept for older wallets.',
+    deprecated: true,
+  })
   stellarAddress!: string;
 
   @ApiProperty({
@@ -219,13 +230,34 @@ export class WalletSignInFinishedEntity {
  */
 export class WalletBackupConflictEntity {
   @ApiProperty({ enum: ['backup_conflict'] }) status!: string;
-  @ApiProperty({ description: 'The address the stored box restores to.' })
+  @ApiProperty({ enum: CHAINS, example: 'stellar' }) chain!: string;
+  @ApiProperty({
+    description:
+      'The address the stored box restores to, on `chain` (Stellar G…, Solana base58, Monad 0x…).',
+  })
+  address!: string;
+  @ApiProperty({
+    description:
+      'Same as `address` — the field’s original name, kept for older wallets.',
+    deprecated: true,
+  })
   stellarAddress!: string;
 }
 
 export class WalletBackupUpdatedEntity {
   @ApiProperty({ enum: ['ok'] }) status!: string;
-  @ApiProperty() stellarAddress!: string;
+  @ApiProperty({ enum: CHAINS, example: 'stellar' }) chain!: string;
+  @ApiProperty({
+    description:
+      'The account whose box was replaced, on `chain` (Stellar G…, Solana base58, Monad 0x…).',
+  })
+  address!: string;
+  @ApiProperty({
+    description:
+      'Same as `address` — the field’s original name, kept for older wallets.',
+    deprecated: true,
+  })
+  stellarAddress!: string;
   @ApiProperty() updatedAt!: Date;
 }
 

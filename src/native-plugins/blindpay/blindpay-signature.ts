@@ -13,7 +13,7 @@ import {
   SVIX_MIN_SECRET_BYTES,
   SVIX_SECRET_PREFIX,
   SVIX_TOLERANCE_SECONDS,
-} from '@/blindpay/blindpay.constants';
+} from '@/native-plugins/blindpay/blindpay.constants';
 
 /** Standard base64 — the alphabet Svix encodes the key in after its prefix. */
 const BASE64_RE = /^[A-Za-z0-9+/]+={0,2}$/;

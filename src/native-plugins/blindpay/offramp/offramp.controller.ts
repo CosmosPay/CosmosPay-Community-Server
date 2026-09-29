@@ -12,24 +12,24 @@ import {
 import { CurrentConsumer } from '@/common/decorators/current-consumer.decorator';
 import { RequirePermissions } from '@/common/decorators/require-permissions.decorator';
 import { RateLimit } from '@/common/decorators/rate-limit.decorator';
-import { BLINDPAY_CONSUMER_QUOTA_RATE_LIMIT } from '@/blindpay/blindpay.constants';
+import { BLINDPAY_CONSUMER_QUOTA_RATE_LIMIT } from '@/native-plugins/blindpay/blindpay.constants';
 import {
   OFFRAMP_DOCUMENT_RATE_LIMIT,
   OFFRAMP_PAYOUT_RATE_LIMIT,
   OFFRAMP_QUOTE_RATE_LIMIT,
-} from '@/offramp/offramp.constants';
+} from '@/native-plugins/blindpay/offramp/offramp.constants';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
-import { OfframpService } from '@/offramp/offramp.service';
-import { AuthorizedPayoutEntity } from '@/offramp/entities/authorized-payout.entity';
-import { CreatePayoutQuoteDto } from '@/offramp/dto/create-payout-quote.dto';
-import { AuthorizePayoutDto } from '@/offramp/dto/authorize-payout.dto';
-import { CreatePayoutDto } from '@/offramp/dto/create-payout.dto';
-import { PayoutDocumentDto } from '@/offramp/dto/payout-document.dto';
-import { PayoutQuoteEntity } from '@/offramp/entities/payout-quote.entity';
+import { OfframpService } from '@/native-plugins/blindpay/offramp/offramp.service';
+import { AuthorizedPayoutEntity } from '@/native-plugins/blindpay/offramp/entities/authorized-payout.entity';
+import { CreatePayoutQuoteDto } from '@/native-plugins/blindpay/offramp/dto/create-payout-quote.dto';
+import { AuthorizePayoutDto } from '@/native-plugins/blindpay/offramp/dto/authorize-payout.dto';
+import { CreatePayoutDto } from '@/native-plugins/blindpay/offramp/dto/create-payout.dto';
+import { PayoutDocumentDto } from '@/native-plugins/blindpay/offramp/dto/payout-document.dto';
+import { PayoutQuoteEntity } from '@/native-plugins/blindpay/offramp/entities/payout-quote.entity';
 import {
   PayoutEntity,
   PayoutListEntity,
-} from '@/offramp/entities/payout.entity';
+} from '@/native-plugins/blindpay/offramp/entities/payout.entity';
 
 // /v1/offramp — stablecoin -> fiat.
 @ApiTags('offramp')

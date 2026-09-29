@@ -31,6 +31,7 @@ import {
   PLUGIN_SIGNATURE_MAX_BYTES,
   PLUGIN_SIGNATURE_FILE,
   PLUGIN_SLUG_RE,
+  isNativePluginSlug,
   PLUGIN_SOURCE_FILE,
   PLUGIN_SOURCE_MAX_BYTES,
   PLUGIN_VERSION_RE,
@@ -121,6 +122,9 @@ function newPlugin(positional: string[]): void {
   const slug = need(positional[0], '<slug>');
   if (!PLUGIN_SLUG_RE.test(slug)) {
     throw new Error(`the slug must match ${PLUGIN_SLUG_RE} (e.g. my-plugin)`);
+  }
+  if (isNativePluginSlug(slug)) {
+    throw new Error(`"${slug}" is reserved for the native plugin of that name`);
   }
   const dir = join(ROOT, slug);
   if (existsSync(dir)) throw new Error(`${dir} already exists`);

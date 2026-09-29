@@ -1,7 +1,7 @@
 import { ConfigService } from '@nestjs/config';
 import { HttpException, HttpStatus } from '@nestjs/common';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
-import { BlindpayClient } from '@/blindpay/blindpay.client';
+import { BlindpayClient } from '@/native-plugins/blindpay/blindpay.client';
 
 /** A client whose production instance takes `overrides`; dev is its own pair. */
 function makeBlindpay(overrides: Record<string, unknown> = {}) {

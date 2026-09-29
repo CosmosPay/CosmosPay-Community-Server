@@ -1,8 +1,8 @@
 import { BadRequestException, ValidationPipe } from '@nestjs/common';
-import { CreateReceiverDto } from '@/kyc/receivers/dto/create-receiver.dto';
-import { CreateBankAccountDto } from '@/kyc/bank-accounts/dto/create-bank-account.dto';
-import { CreatePayinQuoteDto } from '@/onramp/dto/create-payin-quote.dto';
-import { CreatePayoutQuoteDto } from '@/offramp/dto/create-payout-quote.dto';
+import { CreateReceiverDto } from '@/native-plugins/blindpay/kyc/receivers/dto/create-receiver.dto';
+import { CreateBankAccountDto } from '@/native-plugins/blindpay/kyc/bank-accounts/dto/create-bank-account.dto';
+import { CreatePayinQuoteDto } from '@/native-plugins/blindpay/onramp/dto/create-payin-quote.dto';
+import { CreatePayoutQuoteDto } from '@/native-plugins/blindpay/offramp/dto/create-payout-quote.dto';
 
 /**
  * Proves every BlindPay-backed DTO supports the full range of inputs — a minimal

@@ -1,9 +1,9 @@
 import { Injectable } from '@nestjs/common';
 import type { BlindpayEnvironment } from '@/config/configuration';
 import type { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
-import { BlindpayClient } from '@/blindpay/blindpay.client';
-import type { BlindpayObject } from '@/blindpay/blindpay-sync.service';
-import type { ChainVariant } from '@/blindpay/blindpay.constants';
+import { BlindpayClient } from '@/native-plugins/blindpay/blindpay.client';
+import type { BlindpayObject } from '@/native-plugins/blindpay/blindpay-sync.service';
+import type { ChainVariant } from '@/native-plugins/blindpay/blindpay.constants';
 
 /** What BlindPay needs to authorize a payout on a non-EVM chain. */
 export interface BlindpayPayoutAuthorization {

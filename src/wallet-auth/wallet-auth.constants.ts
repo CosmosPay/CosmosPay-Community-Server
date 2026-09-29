@@ -294,3 +294,11 @@ export const WALLET_RECOVERY_SETUP_GLOBAL_RATE_LIMIT: RateLimitPolicy = {
  * call with no gateway in front.
  */
 export const WALLET_SESSION_HEADER = 'x-wallet-session';
+
+/**
+ * Longest signature a sign-in or backup request may carry: a 65-byte EVM
+ * signature in 0x-hex is 132 characters, the longest of the three encodings
+ * accepted (base64 ed25519 is 88, base58 up to 88). Bounded so the verifier
+ * never decodes a megabyte of junk on a route the shared key reaches.
+ */
+export const WALLET_SIGNATURE_MAX_CHARS = 200;

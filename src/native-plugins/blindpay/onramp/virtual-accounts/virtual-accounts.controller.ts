@@ -5,8 +5,8 @@ import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { CurrentConsumer } from '@/common/decorators/current-consumer.decorator';
 import { RequirePermissions } from '@/common/decorators/require-permissions.decorator';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
-import { VirtualAccountsService } from '@/onramp/virtual-accounts/virtual-accounts.service';
-import { CreateVirtualAccountDto } from '@/onramp/dto/create-virtual-account.dto';
+import { VirtualAccountsService } from '@/native-plugins/blindpay/onramp/virtual-accounts/virtual-accounts.service';
+import { CreateVirtualAccountDto } from '@/native-plugins/blindpay/onramp/dto/create-virtual-account.dto';
 
 // /v1/onramp/receivers/:receiverId/virtual-accounts
 @ApiTags('onramp')

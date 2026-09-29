@@ -11,6 +11,36 @@ export const DEFAULT_HORIZON: Record<StellarNetwork, string> = {
   testnet: 'https://horizon-testnet.stellar.org',
 };
 
+/**
+ * Public Solana RPC endpoints, per network tier (`public` → mainnet-beta,
+ * `testnet` → devnet). Rate-limited hard: fine for a trial, not for production
+ * traffic — set `SOLANA_RPC_URL_MAINNET` to a provider's endpoint.
+ */
+export const DEFAULT_SOLANA_RPC: Record<StellarNetwork, string> = {
+  public: 'https://api.mainnet-beta.solana.com',
+  testnet: 'https://api.devnet.solana.com',
+};
+
+/** Monad's public RPC endpoints, per network tier (mainnet, testnet). */
+export const DEFAULT_MONAD_RPC: Record<StellarNetwork, string> = {
+  public: 'https://rpc.monad.xyz',
+  testnet: 'https://testnet-rpc.monad.xyz',
+};
+
+/**
+ * Budget for one JSON-RPC call to Solana or Monad. A single read (a
+ * transaction, a block number, a page of logs) — slower than that is an RPC
+ * provider in trouble, and the observer retries on its next tick.
+ */
+export const DEFAULT_CHAIN_RPC_TIMEOUT_MS = 10_000;
+
+/**
+ * Blocks one `eth_getLogs` may span. Monad's public RPC refuses anything wider
+ * ("eth_getLogs is limited to a 100 range"); a paid provider usually allows
+ * more, and raising it lets the observer catch up in fewer calls.
+ */
+export const DEFAULT_MONAD_LOG_BLOCK_RANGE = 100;
+
 // --- Rate limiting ---
 
 /**

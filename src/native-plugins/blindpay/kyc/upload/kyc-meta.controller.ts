@@ -22,13 +22,13 @@ import { ApiUpstream } from '@/common/decorators/api-upstream.decorator';
 import { RequirePermissions } from '@/common/decorators/require-permissions.decorator';
 import { CurrentConsumer } from '@/common/decorators/current-consumer.decorator';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
-import { UploadableFile } from '@/blindpay/blindpay.client';
-import { KycMetaService } from '@/kyc/upload/kyc-meta.service';
-import { InitiateTosDto } from '@/kyc/upload/dto/initiate-tos.dto';
+import { UploadableFile } from '@/native-plugins/blindpay/blindpay.client';
+import { KycMetaService } from '@/native-plugins/blindpay/kyc/upload/kyc-meta.service';
+import { InitiateTosDto } from '@/native-plugins/blindpay/kyc/upload/dto/initiate-tos.dto';
 import {
   KycTermsOfServiceEntity,
   KycUploadEntity,
-} from '@/kyc/upload/entities/kyc-meta.entity';
+} from '@/native-plugins/blindpay/kyc/upload/entities/kyc-meta.entity';
 import {
   ALLOWED_UPLOAD_TYPES,
   KYC_TOS_RATE_LIMIT,
@@ -38,8 +38,8 @@ import {
   MAX_UPLOAD_FIELDS,
   MAX_UPLOAD_FILES,
   MAX_UPLOAD_PARTS,
-} from '@/kyc/kyc.constants';
-import { BLINDPAY_CONSUMER_QUOTA_RATE_LIMIT } from '@/blindpay/blindpay.constants';
+} from '@/native-plugins/blindpay/kyc/kyc.constants';
+import { BLINDPAY_CONSUMER_QUOTA_RATE_LIMIT } from '@/native-plugins/blindpay/blindpay.constants';
 import { RateLimit } from '@/common/decorators/rate-limit.decorator';
 
 /**

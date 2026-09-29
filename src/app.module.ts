@@ -27,13 +27,9 @@ import { CustomersModule } from '@/customers/customers.module';
 import { AliasesModule } from '@/aliases/aliases.module';
 import { WalletAuthModule } from '@/wallet-auth/wallet-auth.module';
 import { RecoveryModule } from '@/recovery/recovery.module';
-import { BlindpayModule } from '@/blindpay/blindpay.module';
-import { KycModule } from '@/kyc/kyc.module';
-import { OnrampModule } from '@/onramp/onramp.module';
-import { OfframpModule } from '@/offramp/offramp.module';
 import { CommonModule } from '@/common/common.module';
-import { DefindexModule } from '@/defindex/defindex.module';
 import { PluginsModule } from '@/plugins/plugins.module';
+import { NativePluginsModule } from '@/native-plugins/native-plugins.module';
 
 @Module({
   imports: [
@@ -51,7 +47,6 @@ import { PluginsModule } from '@/plugins/plugins.module';
     PaymentIntentsModule,
     SwapsModule,
     LiquidityPoolsModule,
-    DefindexModule,
     // The asset registry: which (code, issuer) pairs we vouch for, per network.
     AssetsModule,
     // Background reconciler: flips swaps/LP ops to SUCCEEDED/FAILED/EXPIRED by
@@ -72,17 +67,14 @@ import { PluginsModule } from '@/plugins/plugins.module';
     // SEP-10 + SEP-30: this deployment as one of the two recovery servers, when
     // RECOVERY_ROLE says so. Inert (404) everywhere else.
     RecoveryModule,
-    // BlindPay rails: onramp / offramp / KYC. BlindpayModule is global and hosts
-    // the shared client + inbound webhook endpoint; the feature modules below use
-    // it. OnrampModule imports KycModule (receiver resolution).
-    BlindpayModule,
-    KycModule,
-    OnrampModule,
-    OfframpModule,
     // Compiled-in extensions under /v1/plugins/{slug}: they reach the core only
     // through the capabilities a tenant grants, never Prisma. PLUGINS_ENABLED
     // picks which ones this deployment serves; none by default.
     PluginsModule,
+    // First-party integrations that are not the chain itself — BlindPay's fiat
+    // rails and KYC, DeFindex vaults — compiled in but imported only when
+    // PLUGINS_ENABLED names them. The core never imports them directly.
+    NativePluginsModule,
   ],
   providers: [
     // Persist a RequestLog row per request (powers the API logs view).

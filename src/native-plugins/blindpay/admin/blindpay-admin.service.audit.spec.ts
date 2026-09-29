@@ -1,10 +1,11 @@
 import { HttpStatus } from '@nestjs/common';
-import { AdminService } from '@/admin/admin.service';
+import { AdminExtensions } from '@/admin/admin-extensions';
+import { BlindpayAdminService } from '@/native-plugins/blindpay/admin/blindpay-admin.service';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import {
   RECEIVER_PUBLIC_SELECT,
   ReceiversService,
-} from '@/kyc/receivers/receivers.service';
+} from '@/native-plugins/blindpay/kyc/receivers/receivers.service';
 
 const ACTOR = { id: 'cosmos_u1', role: 'owner' };
 
@@ -12,7 +13,7 @@ const ACTOR = { id: 'cosmos_u1', role: 'owner' };
  * The write moved into `ReceiversService.setAccessById`, so these run the REAL receivers
  * service over one Prisma fake rather than a stub of it: what is under test is still
  * that the admin kill-switch and its audit row commit or roll back together, and a stub
- * would only prove that AdminService calls a method.
+ * would only prove that BlindpayAdminService calls a method.
  */
 function makeService(prisma: any) {
   const receivers = new ReceiversService(
@@ -22,10 +23,10 @@ function makeService(prisma: any) {
     {} as any,
     {} as any,
   );
-  return new AdminService(prisma, receivers);
+  return new BlindpayAdminService(prisma, receivers, new AdminExtensions());
 }
 
-describe('AdminService.setReceiverAccess (atomic audit)', () => {
+describe('BlindpayAdminService.setReceiverAccess (atomic audit)', () => {
   it('rolls back the mutation when the audit insert fails', async () => {
     let disabled = false;
     const tx = {
@@ -109,7 +110,7 @@ describe('AdminService.setReceiverAccess (atomic audit)', () => {
         resourceId: 'rcv_1',
       }),
     ]);
-    // The row is byte-for-byte what AdminService wrote before the write moved.
+    // The row is byte-for-byte what the admin service wrote before the write moved.
     expect(created[0]).toEqual({
       actorId: 'cosmos_u1',
       actorRole: 'owner',

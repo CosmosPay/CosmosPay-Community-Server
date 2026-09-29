@@ -129,6 +129,9 @@ export interface PluginPaymentIntent {
   asset: string;
   assetIssuer: string | null;
   memo: string;
+  /** `stellar` | `solana` | `monad`. */
+  chain: string;
+  /** `public` | `testnet` — the network tier, on every chain. */
   network: string;
   txHash: string | null;
   reference: string | null;

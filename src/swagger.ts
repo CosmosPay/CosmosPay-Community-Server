@@ -270,8 +270,9 @@ type SharedErrorResponse = keyof typeof SHARED_ERROR_RESPONSES;
 /**
  * Which statuses each provider can fail with. Horizon is reached through the
  * Stellar SDK, which this service wraps in a plain `503` — it has no timeout
- * of its own to report and no body to pass through — while the two HTTP
- * clients distinguish "refused" (502), "down" (503) and "timed out" (504).
+ * of its own to report and no body to pass through — while the HTTP clients
+ * (BlindPay's, and the Solana and Monad JSON-RPC transport) distinguish
+ * "refused" (502), "down" (503) and "timed out" (504).
  */
 const UPSTREAM_FAILURES: Record<
   UpstreamProvider,
@@ -279,6 +280,8 @@ const UPSTREAM_FAILURES: Record<
 > = {
   BlindPay: ['UpstreamError', 'UpstreamUnavailable', 'UpstreamTimeout'],
   Horizon: ['UpstreamUnavailable'],
+  Solana: ['UpstreamError', 'UpstreamUnavailable', 'UpstreamTimeout'],
+  Monad: ['UpstreamError', 'UpstreamUnavailable', 'UpstreamTimeout'],
 };
 
 const RESPONSE_STATUS: Record<SharedErrorResponse, number> = {
