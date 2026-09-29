@@ -60,6 +60,86 @@ export default tseslint.config(
     },
   },
   {
+    // Plugins (`plugins/<slug>/index.ts`) reach the core through
+    // `@/plugins/sdk` and nothing else: no
+    // Prisma, no Nest provider, no `node:*`, no npm package, no ambient escape
+    // hatch (`process`, `require`, `fetch`, `globalThis`, …). The runtime hands
+    // a plugin a capability-scoped context; these rules stop a plugin from
+    // walking around it. They are a review aid, not a sandbox — code in this
+    // process can always be clever — so `plugins/` is also reviewed like core
+    // code (`.github/CODEOWNERS`). See the Plugins section of the README.
+    files: ['plugins/**/*.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              regex: '^(?!@/plugins/sdk$)',
+              message:
+                'A plugin may import only "@/plugins/sdk". Reach the core through ctx.core, the network through ctx.http, and keep data in ctx.storage.',
+            },
+          ],
+        },
+      ],
+      'no-restricted-globals': [
+        'error',
+        ...[
+          'process',
+          'globalThis',
+          'global',
+          'require',
+          'module',
+          'exports',
+          '__dirname',
+          '__filename',
+          'eval',
+          'Function',
+          'Reflect',
+          'Proxy',
+          'fetch',
+          'XMLHttpRequest',
+          'WebSocket',
+          'setInterval',
+          'setImmediate',
+        ].map((name) => ({
+          name,
+          message: `"${name}" is outside what a plugin may touch; use the PluginContext.`,
+        })),
+      ],
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector: 'ImportExpression',
+          message: 'A plugin may not import dynamically.',
+        },
+        {
+          selector: 'TSImportEqualsDeclaration',
+          message: 'A plugin may not use import = require().',
+        },
+        {
+          selector:
+            'MemberExpression[property.name=/^(constructor|__proto__|prototype|__defineGetter__|__defineSetter__)$/]',
+          message:
+            'A plugin may not reach constructors or prototypes — that is the way out to Function and the globals.',
+        },
+        {
+          selector:
+            'MemberExpression[computed=true][property.value=/^(constructor|__proto__|prototype)$/]',
+          message:
+            'A plugin may not reach constructors or prototypes — that is the way out to Function and the globals.',
+        },
+        {
+          selector:
+            "MemberExpression[object.name='Object'][property.name=/^(defineProperty|defineProperties|setPrototypeOf|getPrototypeOf|getOwnPropertyDescriptors?)$/]",
+          message: 'A plugin may not redefine or inspect object internals.',
+        },
+      ],
+      'no-eval': 'error',
+      'no-new-func': 'error',
+    },
+  },
+  {
     // Test doubles are untyped by nature: a hand-rolled Prisma fake or a mocked
     // Horizon chain is `any` all the way down, and 979 of the repo's ~1010
     // findings came from exactly that. Muting these here is what lets `npm run

@@ -9410,6 +9410,637 @@
           "BlindPay"
         ]
       }
+    },
+    "/v1/plugins": {
+      "get": {
+        "operationId": "PluginsController_list_v1",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PluginListEntity"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "summary": "List the plugins this deployment serves, with this key’s installations",
+        "tags": [
+          "plugins"
+        ]
+      }
+    },
+    "/v1/plugins/{slug}": {
+      "get": {
+        "operationId": "PluginsController_describe_v1",
+        "parameters": [
+          {
+            "name": "slug",
+            "required": true,
+            "in": "path",
+            "description": "The plugin, e.g. `example`.",
+            "schema": {
+              "example": "example",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PluginEntity"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "summary": "Describe a plugin: capabilities, egress, settings, actions",
+        "tags": [
+          "plugins"
+        ]
+      }
+    },
+    "/v1/plugins/{slug}/installation": {
+      "put": {
+        "operationId": "PluginsController_install_v1",
+        "parameters": [
+          {
+            "name": "slug",
+            "required": true,
+            "in": "path",
+            "description": "The plugin, e.g. `example`.",
+            "schema": {
+              "example": "example",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InstallPluginDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PluginEntity"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`validation_failed` — The body, query or headers failed validation\n\n`plugin_consent_mismatch` — grantCapabilities must list exactly the capabilities the plugin declares",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                },
+                "examples": {
+                  "validation_failed": {
+                    "summary": "validation_failed — The body, query or headers failed validation",
+                    "value": {
+                      "statusCode": 400,
+                      "code": "validation_failed",
+                      "error": "Bad Request",
+                      "message": [
+                        "config.apiKey is required"
+                      ],
+                      "path": "/v1/plugins/example/installation",
+                      "timestamp": "2026-09-01T12:00:00.000Z"
+                    }
+                  },
+                  "plugin_consent_mismatch": {
+                    "summary": "plugin_consent_mismatch — grantCapabilities must list exactly the capabilities the plugin declares",
+                    "value": {
+                      "statusCode": 400,
+                      "code": "plugin_consent_mismatch",
+                      "error": "Bad Request",
+                      "message": "grantCapabilities must be exactly the capabilities example declares: payment_intents:read",
+                      "path": "/v1/plugins/example/installation",
+                      "timestamp": "2026-09-01T12:00:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "summary": "Install a plugin (or re-consent / reconfigure it), granting its capabilities",
+        "tags": [
+          "plugins"
+        ]
+      },
+      "delete": {
+        "operationId": "PluginsController_uninstall_v1",
+        "parameters": [
+          {
+            "name": "slug",
+            "required": true,
+            "in": "path",
+            "description": "The plugin, e.g. `example`.",
+            "schema": {
+              "example": "example",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PluginUninstalledEntity"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "summary": "Uninstall a plugin and delete every record it kept for this key",
+        "tags": [
+          "plugins"
+        ]
+      }
+    },
+    "/v1/plugins/{slug}/queries/{action}": {
+      "post": {
+        "operationId": "PluginsController_query_v1",
+        "parameters": [
+          {
+            "name": "slug",
+            "required": true,
+            "in": "path",
+            "description": "The plugin, e.g. `example`.",
+            "schema": {
+              "example": "example",
+              "type": "string"
+            }
+          },
+          {
+            "name": "action",
+            "required": true,
+            "in": "path",
+            "description": "An action the plugin lists under `queries` / `commands`.",
+            "schema": {
+              "example": "get-notes",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InvokePluginActionDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PluginActionResultEntity"
+                }
+              }
+            },
+            "headers": {
+              "ratelimit-limit": {
+                "description": "Requests allowed in the current window.",
+                "schema": {
+                  "type": "integer",
+                  "example": 30
+                }
+              },
+              "ratelimit-remaining": {
+                "description": "Requests left in the current window.",
+                "schema": {
+                  "type": "integer",
+                  "example": 0
+                }
+              },
+              "ratelimit-reset": {
+                "description": "Seconds until the window resets.",
+                "schema": {
+                  "type": "integer",
+                  "example": 42
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`validation_failed` — The body, query or headers failed validation\n\n`plugin_rejected` — The plugin refused the input; the message is the plugin’s own",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                },
+                "examples": {
+                  "validation_failed": {
+                    "summary": "validation_failed — The body, query or headers failed validation",
+                    "value": {
+                      "statusCode": 400,
+                      "code": "validation_failed",
+                      "error": "Bad Request",
+                      "message": "input must be at most 65536 bytes as JSON",
+                      "path": "/v1/plugins/example/queries/get-notes",
+                      "timestamp": "2026-09-01T12:00:00.000Z"
+                    }
+                  },
+                  "plugin_rejected": {
+                    "summary": "plugin_rejected — The plugin refused the input; the message is the plugin’s own",
+                    "value": {
+                      "statusCode": 400,
+                      "code": "plugin_rejected",
+                      "error": "Bad Request",
+                      "message": "paymentIntentId must be a non-empty string of at most 64 characters",
+                      "path": "/v1/plugins/example/commands/add-note",
+                      "timestamp": "2026-09-01T12:00:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "`plugin_not_installed` — The plugin is not installed for this key, or its consent is out of date",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                },
+                "examples": {
+                  "plugin_not_installed": {
+                    "summary": "plugin_not_installed — The plugin is not installed for this key, or its consent is out of date",
+                    "value": {
+                      "statusCode": 409,
+                      "code": "plugin_not_installed",
+                      "error": "Conflict",
+                      "message": "Plugin example is not installed. Install it with PUT /v1/plugins/example/installation.",
+                      "path": "/v1/plugins/example/queries/get-notes",
+                      "timestamp": "2026-09-01T12:00:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "502": {
+            "description": "`plugin_failed` — The plugin failed or timed out — the detail is logged, never returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                },
+                "examples": {
+                  "plugin_failed": {
+                    "summary": "plugin_failed — The plugin failed or timed out — the detail is logged, never returned",
+                    "value": {
+                      "statusCode": 502,
+                      "code": "plugin_failed",
+                      "error": "Bad Gateway",
+                      "message": "Plugin example failed while handling get-notes.",
+                      "path": "/v1/plugins/example/queries/get-notes",
+                      "timestamp": "2026-09-01T12:00:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`plugin_failed` — The plugin failed or timed out — the detail is logged, never returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                },
+                "examples": {
+                  "plugin_failed": {
+                    "summary": "plugin_failed — The plugin ran out of time",
+                    "value": {
+                      "statusCode": 504,
+                      "code": "plugin_failed",
+                      "error": "Gateway Timeout",
+                      "message": "Plugin example did not respond in time.",
+                      "path": "/v1/plugins/example/queries/get-notes",
+                      "timestamp": "2026-09-01T12:00:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "summary": "Run a read-only plugin action",
+        "tags": [
+          "plugins"
+        ],
+        "x-cosmos-rate-limit": [
+          {
+            "name": "plugins:action",
+            "limit": 120,
+            "windowMs": 60000,
+            "per": "consumer"
+          }
+        ]
+      }
+    },
+    "/v1/plugins/{slug}/commands/{action}": {
+      "post": {
+        "operationId": "PluginsController_command_v1",
+        "parameters": [
+          {
+            "name": "slug",
+            "required": true,
+            "in": "path",
+            "description": "The plugin, e.g. `example`.",
+            "schema": {
+              "example": "example",
+              "type": "string"
+            }
+          },
+          {
+            "name": "action",
+            "required": true,
+            "in": "path",
+            "description": "An action the plugin lists under `queries` / `commands`.",
+            "schema": {
+              "example": "add-note",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InvokePluginActionDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PluginActionResultEntity"
+                }
+              }
+            },
+            "headers": {
+              "ratelimit-limit": {
+                "description": "Requests allowed in the current window.",
+                "schema": {
+                  "type": "integer",
+                  "example": 30
+                }
+              },
+              "ratelimit-remaining": {
+                "description": "Requests left in the current window.",
+                "schema": {
+                  "type": "integer",
+                  "example": 0
+                }
+              },
+              "ratelimit-reset": {
+                "description": "Seconds until the window resets.",
+                "schema": {
+                  "type": "integer",
+                  "example": 42
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`validation_failed` — The body, query or headers failed validation\n\n`plugin_rejected` — The plugin refused the input; the message is the plugin’s own",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                },
+                "examples": {
+                  "validation_failed": {
+                    "summary": "validation_failed — The body, query or headers failed validation",
+                    "value": {
+                      "statusCode": 400,
+                      "code": "validation_failed",
+                      "error": "Bad Request",
+                      "message": "input must be at most 65536 bytes as JSON",
+                      "path": "/v1/plugins/example/queries/get-notes",
+                      "timestamp": "2026-09-01T12:00:00.000Z"
+                    }
+                  },
+                  "plugin_rejected": {
+                    "summary": "plugin_rejected — The plugin refused the input; the message is the plugin’s own",
+                    "value": {
+                      "statusCode": 400,
+                      "code": "plugin_rejected",
+                      "error": "Bad Request",
+                      "message": "paymentIntentId must be a non-empty string of at most 64 characters",
+                      "path": "/v1/plugins/example/commands/add-note",
+                      "timestamp": "2026-09-01T12:00:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "`plugin_not_installed` — The plugin is not installed for this key, or its consent is out of date\n\n`plugin_quota_exceeded` — The installation holds as many records as it may",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                },
+                "examples": {
+                  "plugin_not_installed": {
+                    "summary": "plugin_not_installed — The plugin is not installed for this key, or its consent is out of date",
+                    "value": {
+                      "statusCode": 409,
+                      "code": "plugin_not_installed",
+                      "error": "Conflict",
+                      "message": "Plugin example is not installed. Install it with PUT /v1/plugins/example/installation.",
+                      "path": "/v1/plugins/example/queries/get-notes",
+                      "timestamp": "2026-09-01T12:00:00.000Z"
+                    }
+                  },
+                  "plugin_quota_exceeded": {
+                    "summary": "plugin_quota_exceeded — The installation holds as many records as it may",
+                    "value": {
+                      "statusCode": 409,
+                      "code": "plugin_quota_exceeded",
+                      "error": "Conflict",
+                      "message": "Plugin example has reached its limit of 10000 records.",
+                      "path": "/v1/plugins/example/commands/add-note",
+                      "timestamp": "2026-09-01T12:00:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "502": {
+            "description": "`plugin_failed` — The plugin failed or timed out — the detail is logged, never returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                },
+                "examples": {
+                  "plugin_failed": {
+                    "summary": "plugin_failed — The plugin failed or timed out — the detail is logged, never returned",
+                    "value": {
+                      "statusCode": 502,
+                      "code": "plugin_failed",
+                      "error": "Bad Gateway",
+                      "message": "Plugin example failed while handling add-note.",
+                      "path": "/v1/plugins/example/commands/add-note",
+                      "timestamp": "2026-09-01T12:00:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`plugin_failed` — The plugin failed or timed out — the detail is logged, never returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                },
+                "examples": {
+                  "plugin_failed": {
+                    "summary": "plugin_failed — The plugin ran out of time",
+                    "value": {
+                      "statusCode": 504,
+                      "code": "plugin_failed",
+                      "error": "Gateway Timeout",
+                      "message": "Plugin example did not respond in time.",
+                      "path": "/v1/plugins/example/commands/add-note",
+                      "timestamp": "2026-09-01T12:00:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "summary": "Run a plugin action that writes",
+        "tags": [
+          "plugins"
+        ],
+        "x-cosmos-rate-limit": [
+          {
+            "name": "plugins:action",
+            "limit": 120,
+            "windowMs": 60000,
+            "per": "consumer"
+          }
+        ]
+      }
     }
   },
   "info": {
@@ -16320,6 +16951,340 @@
           "transaction_document_file"
         ]
       },
+      "PluginConfigFieldEntity": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "string",
+              "number",
+              "boolean"
+            ],
+            "example": "string"
+          },
+          "description": {
+            "type": "string",
+            "example": "API key for your account at the provider."
+          },
+          "required": {
+            "type": "boolean",
+            "example": true
+          },
+          "secret": {
+            "type": "boolean",
+            "example": true,
+            "description": "Sealed at rest; never returned by any route."
+          }
+        },
+        "required": [
+          "type",
+          "description",
+          "required",
+          "secret"
+        ]
+      },
+      "PluginInstallationEntity": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "clx9z8a1b0000abcd1234efgh"
+          },
+          "pluginVersion": {
+            "type": "string",
+            "example": "1.0.0",
+            "description": "The plugin version this consent was given to."
+          },
+          "grantedCapabilities": {
+            "type": "array",
+            "example": [
+              "payment_intents:read"
+            ],
+            "items": {
+              "type": "string",
+              "enum": [
+                "customers:read",
+                "customers:write",
+                "products:read",
+                "products:write",
+                "payment_intents:read"
+              ]
+            }
+          },
+          "pendingCapabilities": {
+            "type": "array",
+            "example": [],
+            "description": "Declared by the current plugin version and not granted yet. While non-empty, every action answers 409 plugin_not_installed: install again to consent.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "customers:read",
+                "customers:write",
+                "products:read",
+                "products:write",
+                "payment_intents:read"
+              ]
+            }
+          },
+          "config": {
+            "type": "object",
+            "additionalProperties": true,
+            "example": {},
+            "description": "Non-secret settings."
+          },
+          "secretsSet": {
+            "example": [],
+            "description": "Names of the secret settings that hold a value. Values are never returned.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "pluginVersion",
+          "grantedCapabilities",
+          "pendingCapabilities",
+          "config",
+          "secretsSet",
+          "createdAt",
+          "updatedAt"
+        ]
+      },
+      "PluginEntity": {
+        "type": "object",
+        "properties": {
+          "slug": {
+            "type": "string",
+            "example": "example"
+          },
+          "name": {
+            "type": "string",
+            "example": "Example: payment notes"
+          },
+          "version": {
+            "type": "string",
+            "example": "1.0.0"
+          },
+          "description": {
+            "type": "string",
+            "example": "Reference plugin: keeps a timeline of notes per payment intent, and adds one when it is paid."
+          },
+          "author": {
+            "type": "string",
+            "example": "Cosmos Pay support"
+          },
+          "capabilities": {
+            "type": "array",
+            "example": [
+              "payment_intents:read"
+            ],
+            "items": {
+              "type": "string",
+              "enum": [
+                "customers:read",
+                "customers:write",
+                "products:read",
+                "products:write",
+                "payment_intents:read"
+              ]
+            }
+          },
+          "egress": {
+            "example": [],
+            "description": "The only hosts the plugin can reach over HTTPS.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "config": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/PluginConfigFieldEntity"
+            },
+            "example": {
+              "label": {
+                "type": "string",
+                "description": "Optional prefix for every note, e.g. your team name.",
+                "required": false,
+                "secret": false
+              }
+            }
+          },
+          "queries": {
+            "example": [
+              "get-notes"
+            ],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "commands": {
+            "example": [
+              "add-note"
+            ],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "events": {
+            "type": "array",
+            "example": [
+              "PAYMENT_INTENT_SUCCEEDED"
+            ],
+            "items": {
+              "type": "string",
+              "enum": [
+                "PAYMENT_INTENT_CREATED",
+                "PAYMENT_INTENT_UPDATED",
+                "PAYMENT_INTENT_SUCCEEDED",
+                "PAYMENT_INTENT_FAILED",
+                "PAYMENT_INTENT_CANCELLED",
+                "PAYMENT_INTENT_DELETED"
+              ]
+            }
+          },
+          "installation": {
+            "nullable": true,
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PluginInstallationEntity"
+              }
+            ]
+          }
+        },
+        "required": [
+          "slug",
+          "name",
+          "version",
+          "description",
+          "author",
+          "capabilities",
+          "egress",
+          "config",
+          "queries",
+          "commands",
+          "events",
+          "installation"
+        ]
+      },
+      "PluginListEntity": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PluginEntity"
+            }
+          }
+        },
+        "required": [
+          "data"
+        ]
+      },
+      "InstallPluginDto": {
+        "type": "object",
+        "properties": {
+          "grantCapabilities": {
+            "description": "Consent: exactly the capabilities the plugin declares (see GET /v1/plugins/{slug}). A partial or extra list is refused, so installing means having read it.",
+            "example": [
+              "payment_intents:read"
+            ],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "config": {
+            "type": "object",
+            "description": "Settings, as the plugin declares them. Secret fields are sealed at rest and never returned; leave one out on a re-install to keep the value already stored.",
+            "additionalProperties": true,
+            "example": {
+              "label": "ops"
+            }
+          }
+        },
+        "required": [
+          "grantCapabilities"
+        ]
+      },
+      "PluginUninstalledEntity": {
+        "type": "object",
+        "properties": {
+          "slug": {
+            "type": "string",
+            "example": "example"
+          },
+          "uninstalled": {
+            "type": "boolean",
+            "example": true
+          }
+        },
+        "required": [
+          "slug",
+          "uninstalled"
+        ]
+      },
+      "InvokePluginActionDto": {
+        "type": "object",
+        "properties": {
+          "input": {
+            "type": "object",
+            "description": "The action input, as the plugin documents it. Plain JSON, at most 64 KiB.",
+            "additionalProperties": true,
+            "example": {
+              "paymentIntentId": "clx9z8a1b0000abcd1234efgh",
+              "text": "Customer called"
+            }
+          }
+        }
+      },
+      "PluginActionResultEntity": {
+        "type": "object",
+        "properties": {
+          "plugin": {
+            "type": "string",
+            "example": "example"
+          },
+          "action": {
+            "type": "string",
+            "example": "get-notes"
+          },
+          "output": {
+            "type": "object",
+            "description": "Whatever the plugin returned, as JSON.",
+            "example": {
+              "paymentIntentId": "clx9z8a1b0000abcd1234efgh",
+              "notes": [
+                {
+                  "at": "2026-09-29T12:00:00.000Z",
+                  "text": "Customer called",
+                  "source": "tenant"
+                }
+              ]
+            }
+          }
+        },
+        "required": [
+          "plugin",
+          "action",
+          "output"
+        ]
+      },
       "ApiErrorBodyEntity": {
         "type": "object",
         "properties": {
@@ -16375,6 +17340,11 @@
               "wallet_provider_unavailable",
               "wallet_return_url_not_allowed",
               "wallet_recovery_setup_refused",
+              "plugin_not_installed",
+              "plugin_consent_mismatch",
+              "plugin_rejected",
+              "plugin_quota_exceeded",
+              "plugin_failed",
               "misconfigured",
               "internal_error"
             ],

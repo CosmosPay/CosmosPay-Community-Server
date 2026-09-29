@@ -364,6 +364,44 @@ export const API_ERROR_CASES: Readonly<Record<ApiErrorCode, ApiErrorCase>> = {
     path: '/v1/wallet/auth/oauth/authorize',
   },
 
+  // --- plugins --------------------------------------------------------------
+  [ApiErrorCode.PluginNotInstalled]: {
+    statuses: [409],
+    summary:
+      'The plugin is not installed for this key, or its consent is out of date',
+    message:
+      'Plugin example is not installed. Install it with PUT /v1/plugins/example/installation.',
+    path: '/v1/plugins/example/queries/get-notes',
+  },
+  [ApiErrorCode.PluginConsentMismatch]: {
+    statuses: [400],
+    summary:
+      'grantCapabilities must list exactly the capabilities the plugin declares',
+    message:
+      'grantCapabilities must be exactly the capabilities example declares: payment_intents:read',
+    path: '/v1/plugins/example/installation',
+  },
+  [ApiErrorCode.PluginRejected]: {
+    statuses: [400],
+    summary: 'The plugin refused the input; the message is the plugin’s own',
+    message:
+      'paymentIntentId must be a non-empty string of at most 64 characters',
+    path: '/v1/plugins/example/commands/add-note',
+  },
+  [ApiErrorCode.PluginQuotaExceeded]: {
+    statuses: [409],
+    summary: 'The installation holds as many records as it may',
+    message: 'Plugin example has reached its limit of 10000 records.',
+    path: '/v1/plugins/example/commands/add-note',
+  },
+  [ApiErrorCode.PluginFailed]: {
+    statuses: [502, 504],
+    summary:
+      'The plugin failed or timed out — the detail is logged, never returned',
+    message: 'Plugin example failed while handling add-note.',
+    path: '/v1/plugins/example/commands/add-note',
+  },
+
   // --- service --------------------------------------------------------------
   [ApiErrorCode.Misconfigured]: {
     statuses: [503],

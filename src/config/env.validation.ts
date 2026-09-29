@@ -330,6 +330,30 @@ class EnvironmentVariables {
   @IsString()
   DEFINDEX_API_KEY?: string;
 
+  /** Comma-separated slugs of the plugins in `plugins/` to serve. */
+  @IsOptional()
+  @IsString()
+  PLUGINS_ENABLED?: string;
+
+  /**
+   * Seals the secret config fields of plugin installations. Checked for
+   * presence by the plugin registry, which knows whether any enabled plugin
+   * declares one.
+   */
+  @IsOptional()
+  @IsString()
+  @MinLength(32)
+  PLUGINS_SECRET?: string;
+
+  /** Signers whose plugins run here, beside support's; checked by the loader. */
+  @IsOptional()
+  @IsString()
+  PLUGINS_TRUSTED_KEYS?: string;
+
+  @IsOptional()
+  @IsBooleanString()
+  PLUGINS_ALLOW_UNSIGNED?: string;
+
   @IsOptional()
   @IsUrl(URL_OPTIONS)
   DEFINDEX_BASE_URL?: string;

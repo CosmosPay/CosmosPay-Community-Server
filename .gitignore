@@ -59,3 +59,5 @@ prisma/*.db
 /generated
 
 .claude/council-cache
+# A plugin signing key never belongs in any repository.
+*.pem

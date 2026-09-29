@@ -1,0 +1,30 @@
+# Code owners — a pull request that touches any path below needs an approval
+# from one of its owners before it can merge into `dev` (ruleset "Code owner
+# review (dev)") or `main` (branch protection). Paths no one owns keep the
+# usual flow: no approval required.
+#
+# Two owners on every line, because GitHub never counts an author's approval
+# of their own pull request: with one owner, that owner's own changes could not
+# merge at all.
+
+# The plugin runtime and SDK. Plugins run inside this process, so this review
+# is the barrier between a plugin and the core (see README, Plugins).
+/src/plugins/                @Emanuel250YT @leocagli
+
+# The lint rules that confine plugin code, and the CLI that creates, signs and
+# installs plugins. Loosening either one is loosening the boundary, so
+# they get the same review as the plugins themselves.
+/eslint.config.mjs           @Emanuel250YT @leocagli
+/scripts/plugins.ts          @Emanuel250YT @leocagli
+
+# The plugins folder: what support ships preinstalled, signed, to every
+# deployment — reviewed like the core.
+/plugins/                    @Emanuel250YT @leocagli
+
+# CI decides whether lint and tests gate a merge; a change here could switch
+# the checks above off.
+/.github/workflows/          @Emanuel250YT @leocagli
+
+# This file: otherwise anyone could remove an owner in the same PR that
+# needs their review.
+/.github/CODEOWNERS          @Emanuel250YT @leocagli

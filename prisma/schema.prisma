@@ -47,6 +47,9 @@ model Consumer {
   // Wallet sign-in identities granted a credential as this consumer.
   walletAccounts WalletAccount[]
 
+  // Plugins this consumer installed (and consented to).
+  pluginInstallations PluginInstallation[]
+
   @@map("consumer")
 }
 
@@ -1489,4 +1492,57 @@ model RecoveryUsedIdToken {
   @@unique([role, tokenHash])
   @@index([expiresAt])
   @@map("recovery_used_id_token")
+}
+
+// ── Plugins ──────────────────────────────────────────────────────────────────
+// A plugin is code compiled into this service (src/plugins/catalog/<slug>) that
+// only ever reaches the core through the capabilities its tenant granted. These
+// two tables are the plugin runtime's own: no plugin reads or writes them
+// directly, and no core table has a column a plugin owns.
+
+// One consumer's opt-in to one plugin, with the consent it gave. A plugin sees
+// nothing of a consumer that has not installed it.
+model PluginInstallation {
+  id         String   @id @default(cuid())
+  consumerId String
+  consumer   Consumer @relation(fields: [consumerId], references: [id], onDelete: Cascade)
+
+  pluginSlug          String
+  // The manifest version the consent below was given to.
+  pluginVersion       String
+  // Capabilities the tenant granted. A later plugin version that asks for more
+  // is refused until the tenant installs again.
+  grantedCapabilities String[]
+  // Non-secret settings, returned to the tenant as they were given.
+  config              Json     @default("{}")
+  // Secret settings, sealed under PLUGINS_SECRET (sealed-box, per-slug purpose).
+  // Never returned by any route.
+  sealedSecrets       String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  records PluginRecord[]
+
+  @@unique([consumerId, pluginSlug])
+  @@index([pluginSlug])
+  @@map("plugin_installation")
+}
+
+// A plugin's own data: a JSON document per (collection, key), scoped to one
+// installation. Uninstalling deletes it with the installation.
+model PluginRecord {
+  id             String             @id @default(cuid())
+  installationId String
+  installation   PluginInstallation @relation(fields: [installationId], references: [id], onDelete: Cascade)
+
+  collection String
+  key        String
+  value      Json
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([installationId, collection, key])
+  @@map("plugin_record")
 }

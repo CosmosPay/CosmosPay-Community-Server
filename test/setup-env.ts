@@ -43,3 +43,9 @@ process.env.WALLET_AUTH_OIDC_CLIENT_SECRET = '';
 // refused would only ever see the missing configuration.
 process.env.WALLET_AUTH_SESSION_SECRET =
   'e2e-wallet-session-secret-e2e-wallet-session-secret';
+// Serve the example plugin preinstalled in plugins/, so the plugins suite goes
+// through the real loader, signature check and registry. Pinned for the same
+// reason as the rest: a developer's .env may enable others, or none.
+process.env.PLUGINS_ENABLED = 'example';
+process.env.PLUGINS_TRUSTED_KEYS = '';
+process.env.PLUGINS_ALLOW_UNSIGNED = 'false';

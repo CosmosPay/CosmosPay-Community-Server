@@ -89,6 +89,7 @@ src/
   activity/                       client telemetry ingest + feed (wallet, dashboard)
   admin/                          cross-tenant platform admin (console-only), audited
   audit/                          audit-trail writer, called inside other modules' transactions
+  plugins/                        plugin runtime + SDK (sdk.ts): folder loader, signatures, scoped context
   health/                         liveness/readiness probes (@Public)
 prisma/schema.prisma              Consumer, PaymentIntent, Swap, LiquidityPoolOperation,
                                   WebhookEndpoint/Delivery/EmittedEvent, BlindpayReceiver,
@@ -97,8 +98,10 @@ prisma/schema.prisma              Consumer, PaymentIntent, Swap, LiquidityPoolOp
                                   ActivityEvent,
                                   AdminAuditLog, Alias, AliasAddress,
                                   AliasChallenge, AliasRecovery
+                                  PluginInstallation, PluginRecord
 test/                             e2e suites: gateway gate, admin + alias console gates,
                                   payment intents, swaps, liquidity pools, KYC, webhooks
+plugins/                          THE plugins folder: one <slug>/ per plugin (plugin.json, index.ts, signature.json)
 scripts/                          OpenAPI generator, README check, operator scripts
 deploy/authentik/                 Authentik blueprint: the wallet sign-in and sign-up
 docs/i18n/                        this README in es, pt, de, fr, hi, zh
@@ -133,6 +136,7 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | एसेट्स            | `/v1/assets`             | प्रति नेटवर्क चुनी हुई एसेट रजिस्ट्री                   |
 | Analytics         | `/v1/summary`, `/v1/balances`, `/v1/logs` | डैशबोर्ड के aggregates और लॉग           |
 | एक्टिविटी         | `/v1/activity`           | client द्वारा रिपोर्ट किए गए events: ingest, feed, rollup |
+| Plugins           | `/v1/plugins`            | एक slug के तहत compile किए गए extensions, हर tenant के लिए install |
 | Admin             | `/v1/admin`              | Cross-tenant reads/writes — केवल प्लेटफ़ॉर्म कंसोल, audited |
 | Health            | `/v1/health`             | Liveness / readiness (`@Public`)                          |
 
@@ -242,6 +246,12 @@ Paths OpenAPI के `{param}` रूप में लिखे गए हैं
 | DELETE | `/v1/payment-intents/{id}` | `payments:write` |  |
 | GET | `/v1/payment-intents/{id}/transitions` | `payments:read` |  |
 | POST | `/v1/payment-intents/{id}/validate` | `payments:write` |  |
+| GET | `/v1/plugins` | `plugins:read` |  |
+| GET | `/v1/plugins/{slug}` | `plugins:read` |  |
+| PUT | `/v1/plugins/{slug}/installation` | `plugins:write` |  |
+| DELETE | `/v1/plugins/{slug}/installation` | `plugins:write` |  |
+| POST | `/v1/plugins/{slug}/queries/{action}` | `plugins:read` |  |
+| POST | `/v1/plugins/{slug}/commands/{action}` | `plugins:write` |  |
 | GET | `/v1/products` | `products:read` |  |
 | POST | `/v1/products` | `products:write` |  |
 | GET | `/v1/products/{id}` | `products:read` |  |
@@ -1099,7 +1109,185 @@ backslash को `/` पढ़ता है, जबकि कुछ दूसर
 `redirect_url` लेने वाला हर रूट इसकी जाँच करता है, admin approval सहित, जो receiver के
 अपने consumer की सूची इस्तेमाल करता है। अस्वीकार किया गया scheme या host `400` है।
 
+## Plugins — एक slug के तहत extensions
+
+दूसरी टीमें अपनी technology को इस service में एक **plugin** के रूप में जोड़ती हैं:
+`plugins/` में एक folder, जो `/v1/plugins/<slug>/…` पर serve होता है और किसी tenant के
+customers, products और payment intents के साथ काम करता है — core को कभी सीधे छुए बिना।
+लक्ष्य यह है कि plugin गलत हो सकता है — bugs वाला, धीमा, लालची — बिना core के उसके साथ
+गलत हुए।
+
+### Plugin एक folder है
+
+सभी plugins **एक ही folder** में रहते हैं, repository की root में `plugins/` — वे जो
+Cosmos Pay support देता है और वे जो कोई operator install करता है। एक plugin तीन पढ़ने
+योग्य files है, और कोई भी तब तक नहीं चलता जब तक उसका slug `PLUGINS_ENABLED` में न हो:
+
+```
+plugins/
+  README.md
+  example/
+    plugin.json       what the plugin is, and what it may touch
+    index.ts          what it does — plain TypeScript, no build step
+    signature.json    who vouches for the two files above
+```
+
+`plugin.json` बताता है कि plugin क्या है और क्या छू सकता है — reviewer और tenant सबसे पहले यही पढ़ते हैं:
+
+```json
+{
+  "slug": "example",
+  "name": "Example: payment notes",
+  "version": "1.0.0",
+  "description": "Keeps a timeline of notes per payment intent.",
+  "author": "Cosmos Pay support",
+  "capabilities": ["payment_intents:read"],
+  "egress": [],
+  "config": { "label": { "type": "string", "description": "Prefix for every note." } }
+}
+```
+
+`index.ts` code है: सामान्य TypeScript, service शुरू होने पर transpile होता है। इसका एकमात्र import SDK है (`@/plugins/sdk`):
+
+```ts
+import { defineHandlers, PluginError, requireString } from '@/plugins/sdk';
+
+export default defineHandlers({
+  queries: {
+    'get-notes': async (ctx, input) => {
+      const id = requireString(input, 'paymentIntentId');
+      return { notes: (await ctx.storage.get('notes', id)) ?? [] };
+    },
+  },
+  commands: {
+    'add-note': async (ctx, input) => { /* … */ },
+  },
+  events: {
+    PAYMENT_INTENT_SUCCEEDED: async (ctx, event) => { /* … */ },
+  },
+});
+```
+
+`example` preinstalled और disabled है: एक reference plugin जो एक query, एक command, एक
+event और एक tenant setting इस्तेमाल करता है। वहीं से शुरू करें।
+
+### एक लिखना
+
+```sh
+npm run plugins -- new my-plugin          # plugins/my-plugin/ from a template
+npm run plugins -- check my-plugin        # compile, load and validate it
+PLUGINS_ENABLED=my-plugin PLUGINS_ALLOW_UNSIGNED=true npm run start:dev
+npm run plugins -- sign my-plugin --key support.pem --key-id cosmos-support
+```
+
+`check` plugin को compile करता है और हर वह validation चलाता है जो server boot पर चलाता
+है। `PLUGINS_ALLOW_UNSIGNED=true` local काम के दौरान इसे बिना signature चलने देता है, और
+`NODE_ENV=production` में मना होता है। Folder के साथ pull request खोलें; review के बाद
+support उसे sign करता है और वह preinstalled भेजा जाता है।
+
+### Plugin क्या पहुँच सकता है और क्या नहीं
+
+Plugin के handlers को एक `PluginContext` मिलता है और कुछ नहीं — न Prisma, न Nest provider,
+न `process.env`, न socket:
+
+| `ctx.` | पहुँचता है | सीमा |
+| ------ | ---------- | ---- |
+| `storage` | plugin के अपने records (`plugin_record`), केवल इसी installation के | प्रति value 16 KiB, प्रति installation 10 000 records |
+| `core.customers`, `core.products` | list / get / create / update, core की अपनी services और DTOs के ज़रिए | दी गई capability (`customers:read`, `customers:write`, …); delete है ही नहीं |
+| `core.paymentIntents` | list / get, केवल पढ़ना | `payment_intents:read`; sign करने या पैसा हिलाने वाला कुछ नहीं |
+| `http` | port 443 पर HTTPS, `egress` के hosts तक | केवल public addresses (webhook के SSRF नियम), socket जाँचे गए address पर pinned, कोई redirect नहीं, 1 MiB responses |
+| `installation.config` | tenant की settings; secret वाली केवल इसी call के लिए decrypt | — |
+
+हर invocation के आसपास runtime क्या guarantee करता है:
+
+- **Tenant isolation.** Context को call करने वाले consumer और उसकी installation से बनाया
+  जाता है; कोई method consumer या installation id नहीं लेता।
+- **Projections, rows नहीं.** Core reads एक fixed projection के रूप में आते हैं — न
+  `consumerId`, न `xdr`/`uri`, न provider payloads — copy और frozen।
+- **Core का validation लागू रहता है.** Writes उन्हीं DTOs से गुज़रते हैं जिनसे HTTP routes
+  validate करते हैं; अज्ञात fields refuse होते हैं।
+- **Queries write नहीं कर सकतीं.** एक query `plugins:read` से call हो सकती है, इसलिए उसके
+  अंदर हर storage और core write refuse होता है।
+- **Budgets.** प्रति invocation 10 s, 200 context calls, 64 KiB input, 256 KiB output।
+  समय खत्म होने पर caller को `504 plugin_failed` मिलता है और context revoke हो जाता है,
+  ताकि चलता छोड़ा गया काम बाद में write न कर सके।
+- **Failures सीमित रहते हैं.** `PluginError` उसके message के साथ `400 plugin_rejected`
+  बनता है; बाकी सब `502 plugin_failed`, log होता है और कभी लौटाया नहीं जाता। किसी event
+  पर fail होने वाला plugin न उस event के webhook को बिगाड़ता है, न दूसरे plugins को।
+- **Confinement.** ESLint `plugins/**/*.ts` को केवल SDK import करने देता है और `process`,
+  `require`, `import()`, `fetch`, `globalThis`, `eval`/`Function` और
+  `constructor`/`__proto__` तक किसी भी पहुँच को refuse करता है। Boot पर code एक अलग `vm`
+  context में चलता है जिसमें इनमें से कुछ नहीं होता। दोनों में से कोई sandbox नहीं —
+  JavaScript में process के अंदर कोई नहीं — इसलिए सीमा यह है कि code के लिए कौन ज़िम्मेदारी
+  लेता है (नीचे)।
+
+### Plugin की ज़िम्मेदारी कौन लेता है
+
+Plugin तभी चलता है जब किसी भरोसेमंद key ने ठीक उसका `plugin.json` और `index.ts`, उसके
+slug और version के साथ sign किया हो (`signature.json`)। Code का एक अक्षर या एक capability
+बदलें और signature fail होता है — boot रुक जाता है। `plugin.json` की formatting और line
+endings बदलाव नहीं गिने जाते।
+
+- **Support द्वारा preinstalled.** Support की public keys code में हैं
+  (`PLUGIN_SUPPORT_KEYS`), इसलिए support द्वारा sign किया और `plugins/` में commit किया
+  गया plugin किसी भी deployment पर बिना configuration load होता है। `plugins/`
+  `.github/CODEOWNERS` में है, और CI जाँचता है कि उसका हर folder signed और valid है।
+- **हाथ से install किया गया.** बाकी सब एक registry — कोई भी static HTTPS host — से install
+  होता है और support या `PLUGINS_TRUSTED_KEYS` की किसी key से signed होना चाहिए:
+
+```sh
+npm run plugins -- install acme@1.0.0 --registry https://plugins.example.com
+# then add "acme" to PLUGINS_ENABLED and restart
+```
+
+Registry पर भरोसा नहीं किया जाता: `install` कुछ भी लिखने से पहले signature जाँचता है,
+और server हर boot पर फिर जाँचता है।
+
+### Install करना सहमति है
+
+कोई plugin किसी tenant के लिए तभी चलता है जब वह tenant उसे
+`PUT /v1/plugins/{slug}/installation` से install करे, और `grantCapabilities` ठीक
+`plugin.json` की list के बराबर भेजे — न subset, न superset (`400 plugin_consent_mismatch`)।
+अगर बाद का version ज़्यादा declare करता है, तो installation अपनी पुरानी सहमति रखती है और हर
+action `409 plugin_not_installed` लौटाता है जब तक tenant फिर से install न करे
+(`installation.pendingCapabilities` अंतर दिखाता है)। Uninstall करने पर उस tenant के लिए
+plugin के सभी records delete हो जाते हैं। `secret` चिह्नित settings `PLUGINS_SECRET` से
+seal होती हैं और कभी लौटाई नहीं जातीं।
+
+### Plugin routes
+
+| Method | Path | उद्देश्य |
+| ------ | ---- | -------- |
+| GET | `/v1/plugins` | यह deployment जो plugins serve करता है, caller की installations के साथ |
+| GET | `/v1/plugins/{slug}` | एक plugin: capabilities, egress, settings, actions, installation |
+| PUT | `/v1/plugins/{slug}/installation` | Install, फिर से सहमति या reconfigure |
+| DELETE | `/v1/plugins/{slug}/installation` | Uninstall, plugin के records delete करते हुए |
+| POST | `/v1/plugins/{slug}/queries/{action}` | केवल पढ़ने वाला action चलाएँ (`plugins:read`) |
+| POST | `/v1/plugins/{slug}/commands/{action}` | Write करने वाला action चलाएँ (`plugins:write`) |
+
+कोई plugin route साझा public API key स्वीकार नहीं करता: plugin एक ही tenant के data पर
+काम करता है। दोनों action routes प्रति consumer प्रति मिनट 120 requests का budget साझा
+करते हैं।
+
 ## अपग्रेड — breaking changes और deploy नोट्स
+
+### Plugins: एक नया module, दो नई tables और दो नए scopes
+
+`/v1/plugins` नया है; कोई मौजूदा route या response नहीं बदला। Deploy के समय:
+
+- **Migration `20260929120000_plugins`** `plugin_installation` और `plugin_record` बनाता
+  है। कोई core table नहीं बदलती।
+- **Scopes `plugins:read` और `plugins:write` नए हैं।** मौजूदा keys को ये नहीं मिलते और
+  उन्हें `insufficient_scope` मिलता है; इन्हें developer platform से दें।
+- **जब तक `PLUGINS_ENABLED` में कोई plugin न हो, कुछ नहीं चलता**, और तब भी केवल उन tenants
+  के लिए जिन्होंने उसे install किया। `plugins/example` preinstalled और disabled है।
+- **`typescript` अब runtime dependency है**: plugins का `index.ts` boot पर transpile होता
+  है। इसे production installs से न हटाएँ।
+- **Secret settings वाला plugin enable करने से पहले `PLUGINS_SECRET` set करें** — वरना
+  boot मना कर देता है। `PLUGINS_TRUSTED_KEYS` support के अलावा signers जोड़ता है।
+- **APISIX में कोई बदलाव नहीं:** catch-all route पहले से `/v1/plugins` forward करता है।
+- **नए error codes:** `plugin_not_installed`, `plugin_consent_mismatch`,
+  `plugin_rejected`, `plugin_quota_exceeded`, `plugin_failed`।
 
 ### Pollar हटा दिया गया
 
@@ -1489,6 +1677,10 @@ type दोबारा बनाए बिना enum value drop नहीं �
 | `DEFINDEX_API_KEY` | नहीं | — | DeFindex server API key; खाली होने पर routes बंद रहती हैं |
 | `DEFINDEX_BASE_URL` | नहीं | `https://api.defindex.io` | DeFindex API base URL |
 | `DEFINDEX_TIMEOUT_MS` | नहीं | `30000` | DeFindex HTTP timeout (ms) |
+| `PLUGINS_ENABLED` | नहीं | — | Comma से अलग `plugins/` के plugins के slugs जिन्हें यह deployment serve करता है। खाली होने पर कोई नहीं; list में न होने वाला plugin कभी पढ़ा नहीं जाता |
+| `PLUGINS_SECRET` | जब किसी enabled plugin में secret settings हों | — | Plugin installations की secret settings को seal करता है (कम से कम 32 अक्षर)। इसे बदलने पर सभी stored plugin secrets पढ़े नहीं जा सकते |
+| `PLUGINS_TRUSTED_KEYS` | नहीं | — | Cosmos Pay support के अलावा वे signers जिनके plugins यहाँ चलते हैं: comma से अलग `<keyId>:<base64url Ed25519 public key>`। किसी और का sign किया, या sign के बाद बदला गया plugin boot रोक देता है |
+| `PLUGINS_ALLOW_UNSIGNED` | नहीं | `false` | बिना `signature.json` के plugins चलाएँ, local में एक लिखने के लिए। `NODE_ENV=production` में मना |
 | `KYC_REDIRECT_URL_WHITELIST` | नहीं | — | प्रति consumer KYC redirect hosts की allow-list |
 | `WALLET_AUTH_RETURN_URLS` | नहीं | — | ऐप के URL, कॉमा से अलग, जिन पर wallet साइन-इन का callback redirect कर सकता है (`POST /v1/wallet/auth/oauth/authorize` पर `returnTo`): एक custom scheme, एक universal/app link, या `http://127.0.0.1/…` (कोई भी port)। सटीक मिलान; loopback के बाहर plain http, query वाली, या `javascript:`/`data:`/`file:` वाली entry boot पर अस्वीकार होती है। सेट न होने पर हर callback पेज दिखाता है और `returnTo` पर `400 wallet_return_url_not_allowed` मिलता है |
 | `RATE_LIMIT_ENABLED` | नहीं | `true` | XLM खर्च करने वाले रूट्स पर प्रति पता सीमाएँ। incident switch |

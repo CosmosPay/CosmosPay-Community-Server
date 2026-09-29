@@ -166,6 +166,25 @@ export enum ApiErrorCode {
    */
   WalletRecoverySetupRefused = 'wallet_recovery_setup_refused',
 
+  // --- plugins --------------------------------------------------------------
+  /**
+   * The consumer has not installed this plugin, or installed an older version
+   * that asked for fewer capabilities than the current one does. Either way
+   * the answer is the same: install it (again) and consent to the list.
+   */
+  PluginNotInstalled = 'plugin_not_installed',
+  /** The capabilities consented to are not exactly the ones the plugin declares. */
+  PluginConsentMismatch = 'plugin_consent_mismatch',
+  /** The plugin refused the input, with a message of its own. */
+  PluginRejected = 'plugin_rejected',
+  /** The installation is at its storage cap. */
+  PluginQuotaExceeded = 'plugin_quota_exceeded',
+  /**
+   * The plugin crashed, overstepped what it was granted, or ran out of time.
+   * The detail is logged; the caller learns only which plugin it was.
+   */
+  PluginFailed = 'plugin_failed',
+
   // --- service --------------------------------------------------------------
   Misconfigured = 'misconfigured',
   Internal = 'internal_error',

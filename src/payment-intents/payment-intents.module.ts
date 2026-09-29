@@ -17,5 +17,7 @@ import { StellarObserverService } from '@/payment-intents/stellar-observer.servi
     StellarVerifierService,
     StellarObserverService,
   ],
+  // Plugins read intents through this service's tenant-scoped reads.
+  exports: [PaymentIntentsService],
 })
 export class PaymentIntentsModule {}

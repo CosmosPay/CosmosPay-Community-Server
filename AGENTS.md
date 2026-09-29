@@ -82,6 +82,7 @@ src/kyc/kyc.constants.ts
 src/liquidity-pools/liquidity-pools.constants.ts
 src/observer/observer.constants.ts
 src/payment-intents/payment-intents.constants.ts
+src/plugins/plugins.constants.ts
 src/prisma/prisma.constants.ts
 src/stellar/stellar.constants.ts
 src/swaps/swaps.constants.ts

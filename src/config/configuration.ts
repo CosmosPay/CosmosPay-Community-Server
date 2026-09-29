@@ -162,6 +162,26 @@ export interface AppConfig {
     baseUrl: string;
     timeoutMs: number;
   };
+  plugins: {
+    /**
+     * Slugs of the plugins in `plugins/` this deployment serves. A plugin that
+     * is not listed is not even read: its routes answer 404 and its event
+     * handlers never run. Empty — the default — serves none.
+     */
+    enabled: string[];
+    /**
+     * Key the secret half of every installation's config is sealed under.
+     * Required at boot when an enabled plugin declares a secret field.
+     */
+    secret: string;
+    /**
+     * `<keyId>:<base64url Ed25519 public key>`, comma-separated: the signers
+     * whose bundles this deployment runs. Parsed by the bundle loader.
+     */
+    trustedKeys: string;
+    /** Load bundles with no signature. Refused when NODE_ENV=production. */
+    allowUnsigned: boolean;
+  };
   rateLimit: {
     /**
      * Master switch for `@RateLimit`. On by default — the routes it guards spend
@@ -446,6 +466,16 @@ export default (): AppConfig => ({
         webhookSecret: process.env.BLINDPAY_WEBHOOK_SECRET_DEV ?? '',
       },
     },
+  },
+  plugins: {
+    enabled: (process.env.PLUGINS_ENABLED ?? '')
+      .split(',')
+      .map((slug) => slug.trim())
+      .filter(Boolean),
+    secret: process.env.PLUGINS_SECRET?.trim() ?? '',
+    trustedKeys: process.env.PLUGINS_TRUSTED_KEYS?.trim() ?? '',
+    allowUnsigned:
+      (process.env.PLUGINS_ALLOW_UNSIGNED ?? 'false').toLowerCase() === 'true',
   },
   defindex: {
     apiKey: process.env.DEFINDEX_API_KEY?.trim() ?? '',

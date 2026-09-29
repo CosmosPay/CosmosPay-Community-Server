@@ -68,6 +68,7 @@ src/
   activity/                       client telemetry ingest + feed (wallet, dashboard)
   admin/                          cross-tenant platform admin (console-only), audited
   audit/                          audit-trail writer, called inside other modules' transactions
+  plugins/                        plugin runtime + SDK (sdk.ts): folder loader, signatures, scoped context
   health/                         liveness/readiness probes (@Public)
 prisma/schema.prisma              Consumer, PaymentIntent, Swap, LiquidityPoolOperation,
                                   WebhookEndpoint/Delivery/EmittedEvent, BlindpayReceiver,
@@ -76,8 +77,10 @@ prisma/schema.prisma              Consumer, PaymentIntent, Swap, LiquidityPoolOp
                                   ActivityEvent,
                                   AdminAuditLog, Alias, AliasAddress,
                                   AliasChallenge, AliasRecovery
+                                  PluginInstallation, PluginRecord
 test/                             e2e suites: gateway gate, admin + alias console gates,
                                   payment intents, swaps, liquidity pools, KYC, webhooks
+plugins/                          THE plugins folder: one <slug>/ per plugin (plugin.json, index.ts, signature.json)
 scripts/                          OpenAPI generator, README check, operator scripts
 deploy/authentik/                 Authentik blueprint: the wallet sign-in and sign-up
 docs/i18n/                        this README in es, pt, de, fr, hi, zh
@@ -109,6 +112,7 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | 资产 | `/v1/assets` | 按网络划分的精选资产注册表 |
 | 分析 | `/v1/summary`, `/v1/balances`, `/v1/logs` | 仪表盘汇总与日志 |
 | 活动 | `/v1/activity` | 客户端上报的事件：接收、事件流、汇总 |
+| 插件 | `/v1/plugins` | 以 slug 命名的编译内置扩展，按 tenant 安装 |
 | 管理 | `/v1/admin` | 跨租户读写 — 仅限平台控制台，全程审计 |
 | 健康检查 | `/v1/health` | 存活 / 就绪（`@Public`） |
 
@@ -213,6 +217,12 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | DELETE | `/v1/payment-intents/{id}` | `payments:write` |  |
 | GET | `/v1/payment-intents/{id}/transitions` | `payments:read` |  |
 | POST | `/v1/payment-intents/{id}/validate` | `payments:write` |  |
+| GET | `/v1/plugins` | `plugins:read` |  |
+| GET | `/v1/plugins/{slug}` | `plugins:read` |  |
+| PUT | `/v1/plugins/{slug}/installation` | `plugins:write` |  |
+| DELETE | `/v1/plugins/{slug}/installation` | `plugins:write` |  |
+| POST | `/v1/plugins/{slug}/queries/{action}` | `plugins:read` |  |
+| POST | `/v1/plugins/{slug}/commands/{action}` | `plugins:write` |  |
 | GET | `/v1/products` | `products:read` |  |
 | POST | `/v1/products` | `products:write` |  |
 | GET | `/v1/products/{id}` | `products:read` |  |
@@ -735,7 +745,172 @@ KYC_REDIRECT_URL_WHITELIST={"cosmos_acme":["acme.com","app.acme.com"]}
 
 它**默认拒绝（fail closed）**：没有条目的消费者完全无法使用重定向，带末尾点号或 IDN 形式的主机会被拒绝，而不是被规范化。每个接受 `redirect_url` 的路由都会检查它，包括管理员批准，后者使用的是该 receiver 所属消费者的白名单。被拒绝的协议或主机返回 `400`。
 
+## 插件 — 以 slug 命名的扩展
+
+其他团队以**插件**的形式把自己的技术集成到本服务：`plugins/` 下的一个目录，在
+`/v1/plugins/<slug>/…` 提供服务，处理某个 tenant 的 customers、products 和 payment
+intents，但从不直接接触 core。目标是：插件可以出错——有 bug、慢、贪婪——而 core 不会跟着出错。
+
+### 插件就是一个目录
+
+所有插件都位于**同一个目录**：仓库根目录下的 `plugins/`——包括 Cosmos Pay 支持团队
+发布的插件和运维人员安装的插件。一个插件由三个可读文件组成，在其 slug 出现在
+`PLUGINS_ENABLED` 中之前，任何插件都不会运行：
+
+```
+plugins/
+  README.md
+  example/
+    plugin.json       what the plugin is, and what it may touch
+    index.ts          what it does — plain TypeScript, no build step
+    signature.json    who vouches for the two files above
+```
+
+`plugin.json` 说明插件是什么、可以访问什么——评审者和 tenant 最先阅读的文件：
+
+```json
+{
+  "slug": "example",
+  "name": "Example: payment notes",
+  "version": "1.0.0",
+  "description": "Keeps a timeline of notes per payment intent.",
+  "author": "Cosmos Pay support",
+  "capabilities": ["payment_intents:read"],
+  "egress": [],
+  "config": { "label": { "type": "string", "description": "Prefix for every note." } }
+}
+```
+
+`index.ts` 是代码：普通的 TypeScript，在服务启动时转译。它唯一的 import 是 SDK（`@/plugins/sdk`）：
+
+```ts
+import { defineHandlers, PluginError, requireString } from '@/plugins/sdk';
+
+export default defineHandlers({
+  queries: {
+    'get-notes': async (ctx, input) => {
+      const id = requireString(input, 'paymentIntentId');
+      return { notes: (await ctx.storage.get('notes', id)) ?? [] };
+    },
+  },
+  commands: {
+    'add-note': async (ctx, input) => { /* … */ },
+  },
+  events: {
+    PAYMENT_INTENT_SUCCEEDED: async (ctx, event) => { /* … */ },
+  },
+});
+```
+
+`example` 已预装且处于禁用状态：一个使用了 query、command、事件和 tenant 设置的参考插件。
+从它开始。
+
+### 编写插件
+
+```sh
+npm run plugins -- new my-plugin          # plugins/my-plugin/ from a template
+npm run plugins -- check my-plugin        # compile, load and validate it
+PLUGINS_ENABLED=my-plugin PLUGINS_ALLOW_UNSIGNED=true npm run start:dev
+npm run plugins -- sign my-plugin --key support.pem --key-id cosmos-support
+```
+
+`check` 会编译插件，并运行服务器启动时的所有校验。`PLUGINS_ALLOW_UNSIGNED=true` 让你在
+本地开发时无需签名即可运行，`NODE_ENV=production` 时会被拒绝。带着这个目录发起 pull
+request；评审通过后，由支持团队签名，它就会作为预装插件发布。
+
+### 插件能访问什么、不能访问什么
+
+插件的 handlers 只收到一个 `PluginContext`，别无其他——没有 Prisma、没有 Nest provider、
+没有 `process.env`、没有 socket：
+
+| `ctx.` | 可访问 | 限制 |
+| ------ | ------ | ---- |
+| `storage` | 插件自己的记录（`plugin_record`），仅限本次安装 | 每个值 16 KiB，每个安装 10 000 条记录 |
+| `core.customers`, `core.products` | list / get / create / update，经由 core 自己的 service 和 DTO | 已授予的 capability（`customers:read`、`customers:write`……）；没有删除 |
+| `core.paymentIntents` | list / get，只读 | `payment_intents:read`；没有任何签名或转移资金的操作 |
+| `http` | 通过 443 端口的 HTTPS，访问 `egress` 中列出的 host | 仅公网地址（webhook 的 SSRF 规则），socket 固定到已校验的地址，不跟随重定向，响应上限 1 MiB |
+| `installation.config` | tenant 的设置；secret 仅为本次调用解密 | — |
+
+runtime 在每次调用前后保证：
+
+- **Tenant 隔离。** 上下文由发起调用的 consumer 及其安装构建；没有任何方法接收 consumer 或
+  安装 id。
+- **投影，而非整行。** core 的读取结果是固定投影——没有 `consumerId`、没有 `xdr`/`uri`、
+  没有供应商 payload——经复制并冻结。
+- **core 的校验照常生效。** 写入经过与 HTTP 路由相同的 DTO 校验；未知字段会被拒绝。
+- **Query 不能写入。** Query 可以用 `plugins:read` 调用，所以在 query 中所有 storage 和
+  core 写入都会被拒绝。
+- **预算。** 每次调用 10 s、200 次上下文调用、输入 64 KiB、输出 256 KiB。超时后调用方收到
+  `504 plugin_failed`，上下文被撤销，仍在运行的工作之后无法再写入。
+- **故障被隔离。** `PluginError` 变为带其消息的 `400 plugin_rejected`；其他任何错误变为
+  `502 plugin_failed`，记录日志且从不回显。插件处理事件失败不会影响该事件的 webhook，也不
+  影响其他插件。
+- **约束。** ESLint 只允许 `plugins/**/*.ts` 导入 SDK，并拒绝 `process`、`require`、
+  `import()`、`fetch`、`globalThis`、`eval`/`Function` 以及任何对
+  `constructor`/`__proto__` 的访问。启动时，代码在单独的 `vm` 上下文中运行，同样没有这些。
+  两者都不是沙箱——JavaScript 没有进程内沙箱——所以边界在于由谁为代码担保（见下文）。
+
+### 谁为插件担保
+
+只有当受信任的密钥以插件的 slug 和版本签署了它的 `plugin.json` 和 `index.ts`
+（`signature.json`）时，插件才会运行。改动一个代码字符或一项 capability，签名就会失败——
+启动随之停止。`plugin.json` 的格式和换行符不算改动。
+
+- **由支持团队预装。** 支持团队的公钥写在代码中（`PLUGIN_SUPPORT_KEYS`），因此由支持团队
+  签名并提交到 `plugins/` 的插件，无需任何配置即可在所有部署中加载。`plugins/` 受
+  `.github/CODEOWNERS` 保护，CI 会检查其中每个目录都已签名且有效。
+- **手动安装。** 其他插件都从 registry（任何静态 HTTPS 主机）安装，并且必须由支持团队或
+  `PLUGINS_TRUSTED_KEYS` 中的密钥签名：
+
+```sh
+npm run plugins -- install acme@1.0.0 --registry https://plugins.example.com
+# then add "acme" to PLUGINS_ENABLED and restart
+```
+
+registry 不被信任：`install` 在写入任何内容前验证签名，服务器在每次启动时再次验证。
+
+### 安装即授权
+
+只有在 tenant 通过 `PUT /v1/plugins/{slug}/installation` 安装插件，且
+`grantCapabilities` 与 `plugin.json` 中的列表完全一致——不能是子集，也不能是超集
+（`400 plugin_consent_mismatch`）——之后，插件才会为该 tenant 运行。若后续版本声明了更多，
+安装会保留旧的授权，所有 action 都返回 `409 plugin_not_installed`，直到 tenant 重新安装
+（`installation.pendingCapabilities` 显示差异）。卸载会删除插件为该 tenant 保存的所有记录。
+标记为 `secret` 的设置用 `PLUGINS_SECRET` 封存，永不返回。
+
+### 插件路由
+
+| 方法 | 路径 | 用途 |
+| ---- | ---- | ---- |
+| GET | `/v1/plugins` | 本部署提供的插件，以及调用方的安装 |
+| GET | `/v1/plugins/{slug}` | 单个插件：capability、egress、设置、action、安装 |
+| PUT | `/v1/plugins/{slug}/installation` | 安装、重新授权或重新配置 |
+| DELETE | `/v1/plugins/{slug}/installation` | 卸载，并删除插件的记录 |
+| POST | `/v1/plugins/{slug}/queries/{action}` | 运行只读 action (`plugins:read`) |
+| POST | `/v1/plugins/{slug}/commands/{action}` | 运行会写入的 action (`plugins:write`) |
+
+没有任何插件路由接受共享公共 API key：插件只作用于单个 tenant 的数据。两个 action 路由
+共享每个 consumer 每分钟 120 次请求的预算。
+
 ## 升级 — 破坏性变更与部署说明
+
+### 插件：一个新模块、两张新表和两个新 scope
+
+`/v1/plugins` 是新增的；现有路由和响应均未改变。部署时：
+
+- **迁移 `20260929120000_plugins`** 创建 `plugin_installation` 和 `plugin_record`。core
+  表没有变化。
+- **scope `plugins:read` 和 `plugins:write` 是新增的。** 现有 key 没有它们，会收到
+  `insufficient_scope`；请在开发者平台上授予。
+- **在 `PLUGINS_ENABLED` 列出插件之前，什么都不会运行**，而且只对安装了该插件的 tenant
+  运行。`plugins/example` 已预装且处于禁用状态。
+- **`typescript` 现在是运行时依赖**：插件的 `index.ts` 在启动时转译。不要从生产环境安装中
+  移除它。
+- **启用带 secret 设置的插件前先设置 `PLUGINS_SECRET`**——否则启动会拒绝。
+  `PLUGINS_TRUSTED_KEYS` 在支持团队之外添加签名者。
+- **APISIX 无需改动：** 通配路由已经会转发 `/v1/plugins`。
+- **新错误码：** `plugin_not_installed`、`plugin_consent_mismatch`、
+  `plugin_rejected`、`plugin_quota_exceeded`、`plugin_failed`。
 
 ### 已移除 Pollar
 
@@ -1013,6 +1188,10 @@ WHERE NOT i.indisvalid;
 | `DEFINDEX_API_KEY` | 否 | — | DeFindex 服务端 API 密钥；留空则禁用相关路由 |
 | `DEFINDEX_BASE_URL` | 否 | `https://api.defindex.io` | DeFindex API 基础 URL |
 | `DEFINDEX_TIMEOUT_MS` | 否 | `30000` | DeFindex HTTP 超时（ms） |
+| `PLUGINS_ENABLED` | 否 | — | 本部署提供的 `plugins/` 中插件的 slug，逗号分隔。为空则不提供任何插件；未列出的插件永远不会被读取 |
+| `PLUGINS_SECRET` | 当已启用的插件有 secret 设置时 | — | 封存插件安装的 secret 设置（至少 32 个字符）。更改它会使所有已存储的插件 secret 无法读取 |
+| `PLUGINS_TRUSTED_KEYS` | 否 | — | 除 Cosmos Pay 支持团队之外，其插件可在此运行的签名者：逗号分隔的 `<keyId>:<base64url Ed25519 公钥>`。由其他人签名、或签名后被修改的插件会使启动失败 |
+| `PLUGINS_ALLOW_UNSIGNED` | 否 | `false` | 运行没有 `signature.json` 的插件，用于在本地编写插件。`NODE_ENV=production` 时拒绝 |
 | `KYC_REDIRECT_URL_WHITELIST` | 否 | — | 按消费者划分的 KYC 重定向主机白名单 |
 | `WALLET_AUTH_RETURN_URLS` | 否 | — | 以逗号分隔的应用 URL，钱包登录回调可以重定向到这些地址（`POST /v1/wallet/auth/oauth/authorize` 的 `returnTo`）：自定义 scheme、universal/app link，或 `http://127.0.0.1/…`（任意端口）。精确匹配；回环地址之外的纯 http、带 query 或使用 `javascript:`/`data:`/`file:` 的条目在启动时被拒绝。未设置时，每个回调都渲染页面，`returnTo` 返回 `400 wallet_return_url_not_allowed` |
 | `RATE_LIMIT_ENABLED` | 否 | `true` | 对花费 XLM 的路由按地址设置上限。事故开关 |

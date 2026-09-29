@@ -1,0 +1,15 @@
+{
+  "slug": "example",
+  "name": "Example: payment notes",
+  "version": "1.0.0",
+  "description": "Reference plugin: keeps a timeline of notes per payment intent, and adds one when it is paid.",
+  "author": "Cosmos Pay support",
+  "capabilities": ["payment_intents:read"],
+  "egress": [],
+  "config": {
+    "label": {
+      "type": "string",
+      "description": "Optional prefix for every note, e.g. your team name."
+    }
+  }
+}

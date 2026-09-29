@@ -33,6 +33,7 @@ import { OnrampModule } from '@/onramp/onramp.module';
 import { OfframpModule } from '@/offramp/offramp.module';
 import { CommonModule } from '@/common/common.module';
 import { DefindexModule } from '@/defindex/defindex.module';
+import { PluginsModule } from '@/plugins/plugins.module';
 
 @Module({
   imports: [
@@ -78,6 +79,10 @@ import { DefindexModule } from '@/defindex/defindex.module';
     KycModule,
     OnrampModule,
     OfframpModule,
+    // Compiled-in extensions under /v1/plugins/{slug}: they reach the core only
+    // through the capabilities a tenant grants, never Prisma. PLUGINS_ENABLED
+    // picks which ones this deployment serves; none by default.
+    PluginsModule,
   ],
   providers: [
     // Persist a RequestLog row per request (powers the API logs view).

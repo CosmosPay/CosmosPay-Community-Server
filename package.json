@@ -17,8 +17,8 @@
     "start:dev": "nest start --watch",
     "start:debug": "nest start --debug --watch",
     "start:prod": "node dist/src/main",
-    "lint": "eslint \"{src,apps,libs,scripts,test}/**/*.ts\" --max-warnings=0",
-    "lint:fix": "eslint \"{src,apps,libs,scripts,test}/**/*.ts\" --fix",
+    "lint": "eslint \"{src,apps,libs,scripts,test,plugins}/**/*.ts\" --max-warnings=0",
+    "lint:fix": "eslint \"{src,apps,libs,scripts,test,plugins}/**/*.ts\" --fix",
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
     "test:watch": "node --experimental-vm-modules node_modules/jest/bin/jest.js --watch",
     "test:e2e": "node --experimental-vm-modules node_modules/jest/bin/jest.js --config ./test/jest-e2e.json",
@@ -32,6 +32,7 @@
     "readme:check": "ts-node -r tsconfig-paths/register --transpile-only scripts/check-readme-routes.ts",
     "webhooks:audit-destinations": "ts-node -r tsconfig-paths/register --transpile-only scripts/mark-blocked-webhook-endpoints.ts",
     "seed:request-logs": "ts-node -r tsconfig-paths/register --transpile-only scripts/seed-request-logs.ts",
+    "plugins": "ts-node -r tsconfig-paths/register --transpile-only scripts/plugins.ts",
     "assets:verify": "ts-node -r tsconfig-paths/register --transpile-only scripts/verify-assets.ts",
     "import:platform-wallet-data": "ts-node -r tsconfig-paths/register --transpile-only scripts/import-platform-wallet-data.ts"
   },
@@ -55,7 +56,8 @@
     "pg": "^8.23.0",
     "qrcode": "^1.5.4",
     "reflect-metadata": "^0.2.2",
-    "rxjs": "^7.8.2"
+    "rxjs": "^7.8.2",
+    "typescript": "^6.0.3"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
@@ -82,7 +84,6 @@
     "ts-node": "^10.9.2",
     "tsc-alias": "^1.9.5",
     "tsconfig-paths": "^4.2.0",
-    "typescript": "^6.0.3",
     "typescript-eslint": "^8.70.1",
     "yaml": "^2.9.1"
   },

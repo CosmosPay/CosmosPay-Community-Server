@@ -89,6 +89,7 @@ src/
   activity/                       client telemetry ingest + feed (wallet, dashboard)
   admin/                          cross-tenant platform admin (console-only), audited
   audit/                          audit-trail writer, called inside other modules' transactions
+  plugins/                        plugin runtime + SDK (sdk.ts): folder loader, signatures, scoped context
   health/                         liveness/readiness probes (@Public)
 prisma/schema.prisma              Consumer, PaymentIntent, Swap, LiquidityPoolOperation,
                                   WebhookEndpoint/Delivery/EmittedEvent, BlindpayReceiver,
@@ -97,8 +98,10 @@ prisma/schema.prisma              Consumer, PaymentIntent, Swap, LiquidityPoolOp
                                   ActivityEvent,
                                   AdminAuditLog, Alias, AliasAddress,
                                   AliasChallenge, AliasRecovery
+                                  PluginInstallation, PluginRecord
 test/                             e2e suites: gateway gate, admin + alias console gates,
                                   payment intents, swaps, liquidity pools, KYC, webhooks
+plugins/                          THE plugins folder: one <slug>/ per plugin (plugin.json, index.ts, signature.json)
 scripts/                          OpenAPI generator, README check, operator scripts
 deploy/authentik/                 Authentik blueprint: the wallet sign-in and sign-up
 docs/i18n/                        this README in es, pt, de, fr, hi, zh
@@ -133,6 +136,7 @@ régénéré à partir des contrôleurs et des DTO à chaque exécution de la CI
 | Actifs                 | `/v1/assets`             | Registre d'actifs sélectionnés, par réseau               |
 | Analytique             | `/v1/summary`, `/v1/balances`, `/v1/logs` | Agrégats et journaux du tableau de bord  |
 | Activité               | `/v1/activity`           | Événements rapportés par les clients : ingestion, flux, agrégation |
+| Plugins                | `/v1/plugins`            | Extensions compilées sous un slug, installées par tenant |
 | Admin                  | `/v1/admin`              | Lectures/écritures inter-tenants — console de la plateforme uniquement, auditées |
 | Santé                  | `/v1/health`             | Liveness / readiness (`@Public`)                         |
 
@@ -242,6 +246,12 @@ Les chemins utilisent la forme OpenAPI `{param}`.
 | DELETE | `/v1/payment-intents/{id}` | `payments:write` |  |
 | GET | `/v1/payment-intents/{id}/transitions` | `payments:read` |  |
 | POST | `/v1/payment-intents/{id}/validate` | `payments:write` |  |
+| GET | `/v1/plugins` | `plugins:read` |  |
+| GET | `/v1/plugins/{slug}` | `plugins:read` |  |
+| PUT | `/v1/plugins/{slug}/installation` | `plugins:write` |  |
+| DELETE | `/v1/plugins/{slug}/installation` | `plugins:write` |  |
+| POST | `/v1/plugins/{slug}/queries/{action}` | `plugins:read` |  |
+| POST | `/v1/plugins/{slug}/commands/{action}` | `plugins:write` |  |
 | GET | `/v1/products` | `products:read` |  |
 | POST | `/v1/products` | `products:write` |  |
 | GET | `/v1/products/{id}` | `products:read` |  |
@@ -1132,7 +1142,194 @@ route qui accepte une `redirect_url` la vérifie, y compris l'approbation par l'
 utilise la liste du consumer auquel appartient le receiver. Un schéma ou un hôte refusé donne
 un `400`.
 
+## Plugins — des extensions sous un slug
+
+D'autres équipes intègrent leur technologie à ce service sous forme de **plugin** : un
+dossier dans `plugins/`, servi sur `/v1/plugins/<slug>/…`, qui travaille avec les
+clients, produits et payment intents d'un tenant sans jamais toucher directement au
+core. L'objectif : qu'un plugin puisse être défaillant — bogué, lent, gourmand — sans que
+le core le devienne avec lui.
+
+### Un plugin est un dossier
+
+Tous les plugins vivent dans **un seul dossier**, `plugins/` à la racine du dépôt —
+ceux que livre le support Cosmos Pay et ceux qu'installe un opérateur. Un plugin, ce
+sont trois fichiers lisibles, et aucun ne s'exécute tant que son slug n'est pas dans
+`PLUGINS_ENABLED` :
+
+```
+plugins/
+  README.md
+  example/
+    plugin.json       what the plugin is, and what it may touch
+    index.ts          what it does — plain TypeScript, no build step
+    signature.json    who vouches for the two files above
+```
+
+`plugin.json` dit ce qu'est le plugin et ce qu'il peut toucher — le fichier qu'un relecteur et un tenant lisent en premier :
+
+```json
+{
+  "slug": "example",
+  "name": "Example: payment notes",
+  "version": "1.0.0",
+  "description": "Keeps a timeline of notes per payment intent.",
+  "author": "Cosmos Pay support",
+  "capabilities": ["payment_intents:read"],
+  "egress": [],
+  "config": { "label": { "type": "string", "description": "Prefix for every note." } }
+}
+```
+
+`index.ts` est le code : du TypeScript ordinaire, transpilé au démarrage du service. Son seul import est le SDK (`@/plugins/sdk`) :
+
+```ts
+import { defineHandlers, PluginError, requireString } from '@/plugins/sdk';
+
+export default defineHandlers({
+  queries: {
+    'get-notes': async (ctx, input) => {
+      const id = requireString(input, 'paymentIntentId');
+      return { notes: (await ctx.storage.get('notes', id)) ?? [] };
+    },
+  },
+  commands: {
+    'add-note': async (ctx, input) => { /* … */ },
+  },
+  events: {
+    PAYMENT_INTENT_SUCCEEDED: async (ctx, event) => { /* … */ },
+  },
+});
+```
+
+`example` est préinstallé et désactivé : un plugin de référence qui utilise une query,
+un command, un événement et un réglage du tenant. Commencez par lui.
+
+### En écrire un
+
+```sh
+npm run plugins -- new my-plugin          # plugins/my-plugin/ from a template
+npm run plugins -- check my-plugin        # compile, load and validate it
+PLUGINS_ENABLED=my-plugin PLUGINS_ALLOW_UNSIGNED=true npm run start:dev
+npm run plugins -- sign my-plugin --key support.pem --key-id cosmos-support
+```
+
+`check` compile le plugin et exécute toutes les validations que le serveur fait au
+démarrage. `PLUGINS_ALLOW_UNSIGNED=true` le laisse tourner sans signature pendant que
+vous travaillez en local, et est refusé quand `NODE_ENV=production`. Ouvrez une pull
+request avec le dossier ; une fois relu, le support le signe et il est livré
+préinstallé.
+
+### Ce qu'un plugin peut atteindre, et ce qu'il ne peut pas
+
+Les handlers d'un plugin reçoivent un `PluginContext` et rien d'autre — ni Prisma, ni
+provider Nest, ni `process.env`, ni socket :
+
+| `ctx.` | Atteint | Limité par |
+| ------ | ------- | ---------- |
+| `storage` | les enregistrements propres du plugin (`plugin_record`), pour cette installation seulement | 16 Kio par valeur, 10 000 enregistrements par installation |
+| `core.customers`, `core.products` | lister / lire / créer / modifier, via les services et DTO du core lui-même | la capacité accordée (`customers:read`, `customers:write`, …) ; la suppression n'existe pas |
+| `core.paymentIntents` | lister / lire, en lecture seule | `payment_intents:read` ; rien qui signe ou déplace de l'argent |
+| `http` | HTTPS sur le port 443 vers les hôtes de `egress` | adresses publiques uniquement (les règles SSRF des webhooks), socket épinglé sur l'adresse vérifiée, pas de redirections, réponses de 1 Mio |
+| `installation.config` | les réglages du tenant ; les secrets déchiffrés pour cet appel seulement | — |
+
+Ce que le runtime garantit autour de chaque invocation :
+
+- **Isolation des tenants.** Le contexte est construit à partir du consumer appelant et
+  de son installation ; aucune méthode ne prend d'id de consumer ou d'installation.
+- **Des projections, pas des lignes.** Les lectures du core arrivent sous forme d'une
+  projection fixe — pas de `consumerId`, pas de `xdr`/`uri`, pas de payloads de
+  fournisseurs —, copiées et gelées.
+- **La validation du core s'applique toujours.** Les écritures passent par les mêmes DTO
+  que les routes HTTP ; les champs inconnus sont refusés.
+- **Les queries ne peuvent pas écrire.** Une query est appelable avec `plugins:read` ; à
+  l'intérieur, toute écriture de storage ou du core refuse.
+- **Budgets.** 10 s par invocation, 200 appels au contexte, 64 Kio en entrée, 256 Kio en
+  sortie. Quand le temps est écoulé, l'appelant reçoit `504 plugin_failed` et le
+  contexte est révoqué : le travail resté en cours ne peut plus écrire ensuite.
+- **Les défaillances restent confinées.** Un `PluginError` donne `400 plugin_rejected`
+  avec son message ; tout le reste donne `502 plugin_failed`, journalisé et jamais
+  renvoyé. Un plugin qui échoue sur un événement ne perturbe ni le webhook de cet
+  événement, ni les autres plugins.
+- **Confinement.** ESLint ne laisse `plugins/**/*.ts` importer que le SDK et refuse
+  `process`, `require`, `import()`, `fetch`, `globalThis`, `eval`/`Function` et tout
+  accès à `constructor`/`__proto__`. Au démarrage, le code s'exécute dans un contexte
+  `vm` séparé qui n'a rien de tout cela non plus. Aucun des deux n'est un sandbox —
+  JavaScript n'en a pas au sein du processus —, donc la frontière, c'est qui répond du
+  code (ci-dessous).
+
+### Qui répond d'un plugin
+
+Un plugin ne s'exécute que si une clé de confiance a signé exactement son `plugin.json`
+et son `index.ts` sous son slug et sa version (`signature.json`). Changez un caractère de
+code ou une capacité et la signature échoue — le démarrage s'arrête. La mise en forme de
+`plugin.json` et les fins de ligne ne comptent pas comme des changements.
+
+- **Préinstallé par le support.** Les clés publiques du support sont dans le code
+  (`PLUGIN_SUPPORT_KEYS`) : un plugin signé par le support et versionné dans `plugins/`
+  se charge sur tout déploiement sans configuration. `plugins/` est couvert par
+  `.github/CODEOWNERS`, et la CI vérifie que chaque dossier est signé et valide.
+- **Installé à la main.** Tout le reste s'installe depuis un registry — n'importe quel
+  hôte HTTPS statique — et doit être signé par le support ou par une clé de
+  `PLUGINS_TRUSTED_KEYS` :
+
+```sh
+npm run plugins -- install acme@1.0.0 --registry https://plugins.example.com
+# then add "acme" to PLUGINS_ENABLED and restart
+```
+
+Le registry n'est pas de confiance : `install` vérifie la signature avant d'écrire quoi
+que ce soit, et le serveur la revérifie à chaque démarrage.
+
+### Installer, c'est consentir
+
+Un plugin ne s'exécute pour un tenant qu'une fois que ce tenant l'a installé via
+`PUT /v1/plugins/{slug}/installation`, en envoyant `grantCapabilities` égal à la liste de
+`plugin.json` — ni un sous-ensemble, ni un sur-ensemble (`400 plugin_consent_mismatch`).
+Quand une version ultérieure en déclare davantage, l'installation garde son ancien
+consentement et chaque action répond `409 plugin_not_installed` jusqu'à ce que le tenant
+réinstalle (`installation.pendingCapabilities` montre la différence). Désinstaller
+supprime tous les enregistrements du plugin pour ce tenant. Les réglages marqués
+`secret` sont scellés avec `PLUGINS_SECRET` et jamais renvoyés.
+
+### Routes des plugins
+
+| Méthode | Chemin | Rôle |
+| ------- | ------ | ---- |
+| GET | `/v1/plugins` | Les plugins que sert ce déploiement, avec les installations de l'appelant |
+| GET | `/v1/plugins/{slug}` | Un plugin : capacités, egress, réglages, actions, installation |
+| PUT | `/v1/plugins/{slug}/installation` | Installer, consentir à nouveau ou reconfigurer |
+| DELETE | `/v1/plugins/{slug}/installation` | Désinstaller, en supprimant les enregistrements du plugin |
+| POST | `/v1/plugins/{slug}/queries/{action}` | Exécuter une action en lecture seule (`plugins:read`) |
+| POST | `/v1/plugins/{slug}/commands/{action}` | Exécuter une action qui écrit (`plugins:write`) |
+
+Aucune route de plugins n'admet la clé API publique partagée : un plugin agit sur les
+données d'un seul tenant. Les deux routes d'actions partagent un budget de 120 requêtes
+par minute et par consumer.
+
 ## Mise à niveau — changements incompatibles et notes de déploiement
+
+### Plugins : un nouveau module, deux nouvelles tables et deux nouveaux scopes
+
+`/v1/plugins` est nouveau ; aucune route ni réponse existante n'a changé. Au
+déploiement :
+
+- **La migration `20260929120000_plugins`** crée `plugin_installation` et
+  `plugin_record`. Aucune table du core ne change.
+- **Les scopes `plugins:read` et `plugins:write` sont nouveaux.** Les clés existantes ne
+  les ont pas et reçoivent `insufficient_scope` ; accordez-les depuis la plateforme
+  développeurs.
+- **Rien ne s'exécute tant que `PLUGINS_ENABLED` ne liste pas un plugin**, et alors
+  seulement pour les tenants qui l'ont installé. `plugins/example` est préinstallé et
+  désactivé.
+- **`typescript` est désormais une dépendance d'exécution** : l'`index.ts` des plugins
+  est transpilé au démarrage. Ne le retirez pas des installations de production.
+- **Définissez `PLUGINS_SECRET`** avant d'activer un plugin qui a des réglages secrets —
+  sinon le démarrage refuse. `PLUGINS_TRUSTED_KEYS` ajoute des signataires en plus de
+  ceux du support.
+- **Aucun changement APISIX :** la route fourre-tout transmet déjà `/v1/plugins`.
+- **Nouveaux codes d'erreur :** `plugin_not_installed`, `plugin_consent_mismatch`,
+  `plugin_rejected`, `plugin_quota_exceeded`, `plugin_failed`.
 
 ### Pollar a été retiré
 
@@ -1542,6 +1739,10 @@ Chaque variable lue depuis `process.env` dans `src/` est validée au démarrage 
 | `DEFINDEX_API_KEY` | non | — | Clé API serveur DeFindex ; vide, les routes sont désactivées |
 | `DEFINDEX_BASE_URL` | non | `https://api.defindex.io` | URL de base de l’API DeFindex |
 | `DEFINDEX_TIMEOUT_MS` | non | `30000` | Timeout HTTP DeFindex (ms) |
+| `PLUGINS_ENABLED` | non | — | Slugs, séparés par des virgules, des plugins de `plugins/` que sert ce déploiement. Vide n'en sert aucun ; un plugin non listé n'est jamais lu |
+| `PLUGINS_SECRET` | quand un plugin activé a des réglages secrets | — | Scelle les réglages secrets des installations de plugins (au moins 32 caractères). Le changer rend illisibles tous les secrets de plugins stockés |
+| `PLUGINS_TRUSTED_KEYS` | non | — | Signataires dont les plugins s'exécutent ici en plus du support Cosmos Pay : `<keyId>:<clé publique Ed25519 en base64url>` séparés par des virgules. Un plugin signé par quelqu'un d'autre, ou modifié après signature, bloque le démarrage |
+| `PLUGINS_ALLOW_UNSIGNED` | non | `false` | Exécuter des plugins sans `signature.json`, pour en écrire un en local. Refusé quand `NODE_ENV=production` |
 | `KYC_REDIRECT_URL_WHITELIST` | non | — | Liste d'autorisation, par consumer, des hôtes de redirection KYC |
 | `WALLET_AUTH_RETURN_URLS` | non | — | URL de l’application, séparées par des virgules, vers lesquelles le callback de connexion du wallet peut rediriger (`returnTo` sur `POST /v1/wallet/auth/oauth/authorize`) : un schéma propre, un universal/app link, ou `http://127.0.0.1/…` (n’importe quel port). Correspondance exacte ; une entrée en http simple hors loopback, avec une query ou en `javascript:`/`data:`/`file:` est refusée au démarrage. Non définie, chaque callback affiche la page et un `returnTo` est `400 wallet_return_url_not_allowed` |
 | `RATE_LIMIT_ENABLED` | non | `true` | Plafonds par adresse sur les routes qui dépensent des XLM. Interrupteur d'incident |
