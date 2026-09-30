@@ -3,13 +3,21 @@ import {
   DEFAULT_DEFINDEX_TIMEOUT_MS,
   DEFAULT_ENV_FILE,
   DEFAULT_CHAIN_RPC_TIMEOUT_MS,
+  DEFAULT_CROSS_CHAIN_DEADLINE_SECONDS,
+  DEFAULT_CROSS_CHAIN_MAX_SLIPPAGE_BPS,
+  DEFAULT_CROSS_CHAIN_SLIPPAGE_BPS,
   DEFAULT_HORIZON,
+  DEFAULT_JUPITER_BASE_URL,
+  DEFAULT_KURU_BASE_URL,
   DEFAULT_MONAD_LOG_BLOCK_RANGE,
   DEFAULT_MONAD_RPC,
+  DEFAULT_NEAR_INTENTS_BASE_URL,
+  DEFAULT_NEAR_INTENTS_TIMEOUT_MS,
   DEFAULT_RATE_LIMIT_PRUNE_INTERVAL_MS,
   DEFAULT_RECOVERY_SWEEP_INTERVAL_MS,
   DEFAULT_RECOVERY_TIMEOUT_MS,
   DEFAULT_SOLANA_RPC,
+  DEFAULT_SWAP_AGGREGATOR_TIMEOUT_MS,
   DEFAULT_WALLET_AUTH_SWEEP_INTERVAL_MS,
   DEFAULT_WALLET_AUTH_TIMEOUT_MS,
   NETWORK_PASSPHRASE_PUBLIC,
@@ -199,6 +207,12 @@ export interface AppConfig {
   solana: {
     rpcUrls: Record<StellarNetwork, string>;
     timeoutMs: number;
+    /**
+     * Owner of the token accounts the Solana swap commission is paid into
+     * (Jupiter's `feeAccount` is this wallet's account for the output mint).
+     * Empty disables the commission; a plan that charges one then refuses.
+     */
+    swapFeeWallet: string;
   };
   /**
    * Monad (EVM), per network tier: `public` is mainnet, `testnet` is Monad's
@@ -218,6 +232,41 @@ export interface AppConfig {
     relayerPrivateKey: string;
     /** Per-token relayer fees for token deposits (`MONAD_DEPOSIT_TOKEN_FEES`). */
     depositTokenFees: EvmTokenFees;
+    /**
+     * The address the Monad swap commission is paid to (Kuru Flow's
+     * `referrerAddress`). Empty disables it; a plan that charges one refuses.
+     */
+    swapFeeWallet: string;
+  };
+  /**
+   * The aggregators that build same-chain swaps off Stellar: Jupiter on
+   * Solana, Kuru Flow on Monad. Mainnet only, both of them.
+   */
+  swapAggregators: {
+    jupiter: { baseUrl: string; apiKey: string; timeoutMs: number };
+    kuru: { baseUrl: string; apiKey: string; timeoutMs: number };
+  };
+  /**
+   * Cross-chain swaps, settled by NEAR Intents' 1Click API. Mainnet only:
+   * 1Click has no test network, so a `dev` key can quote but not create.
+   */
+  nearIntents: {
+    baseUrl: string;
+    /**
+     * The partner key (`X-API-Key`). Optional to 1Click, not to the operator:
+     * without it 1Click adds a fee of its own and takes a share of ours.
+     */
+    apiKey: string;
+    /**
+     * The NEAR Intents account the plan commission is paid to (`appFees`).
+     * Empty disables the commission; a plan that charges one then refuses to
+     * quote rather than swap for free.
+     */
+    feeRecipient: string;
+    timeoutMs: number;
+    slippageBps: number;
+    maxSlippageBps: number;
+    deadlineSeconds: number;
   };
   observer: {
     enabled: boolean;
@@ -539,6 +588,7 @@ export default (): AppConfig => ({
       process.env.SOLANA_RPC_TIMEOUT_MS ?? String(DEFAULT_CHAIN_RPC_TIMEOUT_MS),
       10,
     ),
+    swapFeeWallet: process.env.SOLANA_SWAP_FEE_WALLET?.trim() ?? '',
   },
   monad: {
     rpcUrls: {
@@ -556,6 +606,59 @@ export default (): AppConfig => ({
     ),
     relayerPrivateKey: process.env.MONAD_RELAYER_PRIVATE_KEY?.trim() ?? '',
     depositTokenFees: parseEvmTokenFees(process.env.MONAD_DEPOSIT_TOKEN_FEES),
+    swapFeeWallet: process.env.MONAD_SWAP_FEE_WALLET?.trim() ?? '',
+  },
+  swapAggregators: {
+    jupiter: {
+      baseUrl: (
+        process.env.JUPITER_BASE_URL ?? DEFAULT_JUPITER_BASE_URL
+      ).replace(/\/+$/, ''),
+      apiKey: process.env.JUPITER_API_KEY?.trim() ?? '',
+      timeoutMs: parseInt(
+        process.env.JUPITER_TIMEOUT_MS ??
+          String(DEFAULT_SWAP_AGGREGATOR_TIMEOUT_MS),
+        10,
+      ),
+    },
+    kuru: {
+      baseUrl: (process.env.KURU_BASE_URL ?? DEFAULT_KURU_BASE_URL).replace(
+        /\/+$/,
+        '',
+      ),
+      apiKey: process.env.KURU_API_KEY?.trim() ?? '',
+      timeoutMs: parseInt(
+        process.env.KURU_TIMEOUT_MS ??
+          String(DEFAULT_SWAP_AGGREGATOR_TIMEOUT_MS),
+        10,
+      ),
+    },
+  },
+  nearIntents: {
+    baseUrl: (
+      process.env.NEAR_INTENTS_BASE_URL ?? DEFAULT_NEAR_INTENTS_BASE_URL
+    ).replace(/\/+$/, ''),
+    apiKey: process.env.NEAR_INTENTS_API_KEY?.trim() ?? '',
+    feeRecipient: process.env.NEAR_INTENTS_FEE_RECIPIENT?.trim() ?? '',
+    timeoutMs: parseInt(
+      process.env.NEAR_INTENTS_TIMEOUT_MS ??
+        String(DEFAULT_NEAR_INTENTS_TIMEOUT_MS),
+      10,
+    ),
+    slippageBps: parseInt(
+      process.env.CROSS_CHAIN_SWAP_SLIPPAGE_BPS ??
+        String(DEFAULT_CROSS_CHAIN_SLIPPAGE_BPS),
+      10,
+    ),
+    maxSlippageBps: parseInt(
+      process.env.CROSS_CHAIN_SWAP_MAX_SLIPPAGE_BPS ??
+        String(DEFAULT_CROSS_CHAIN_MAX_SLIPPAGE_BPS),
+      10,
+    ),
+    deadlineSeconds: parseInt(
+      process.env.CROSS_CHAIN_SWAP_DEADLINE_SECONDS ??
+        String(DEFAULT_CROSS_CHAIN_DEADLINE_SECONDS),
+      10,
+    ),
   },
   observer: {
     // Permanent reconciler that watches every chain and finalizes paid intents.

@@ -15,6 +15,7 @@ import { StellarModule } from '@/stellar/stellar.module';
 import { HealthModule } from '@/health/health.module';
 import { PaymentIntentsModule } from '@/payment-intents/payment-intents.module';
 import { SwapsModule } from '@/swaps/swaps.module';
+import { CrossChainSwapsModule } from '@/cross-chain-swaps/cross-chain-swaps.module';
 import { AssetsModule } from '@/assets/assets.module';
 import { PublicKeyModule } from '@/public-key/public-key.module';
 import { LiquidityPoolsModule } from '@/liquidity-pools/liquidity-pools.module';
@@ -48,6 +49,9 @@ import { NativePluginsModule } from '@/native-plugins/native-plugins.module';
     HealthModule,
     PaymentIntentsModule,
     SwapsModule,
+    // Swaps between Stellar, Solana and Monad, settled by NEAR Intents (1Click).
+    // Core, not a native plugin: it is how this service swaps across chains.
+    CrossChainSwapsModule,
     LiquidityPoolsModule,
     // The asset registry: which (code, issuer) pairs we vouch for, per network.
     AssetsModule,

@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
+  broadcastRejected,
   callJsonRpc,
   JsonRpcError,
   type JsonRpcTarget,
@@ -9,6 +10,7 @@ import {
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import type { AppConfig, StellarNetwork } from '@/config/configuration';
 import {
+  ERC20_ALLOWANCE_SELECTOR,
   ERC20_BALANCE_OF_SELECTOR,
   ERC20_DECIMALS_SELECTOR,
   EVM_CHAIN_IDS,
@@ -294,13 +296,56 @@ export class EvmRpcClient {
     return BigInt(await this.call<string>(chain, network, 'eth_gasPrice', []));
   }
 
-  /** Broadcasts a signed transaction; answers its hash. */
-  sendRawTransaction(
+  /**
+   * How much `spender` may move of `owner`'s `token`, in base units. Zero when
+   * the token does not answer, which only makes the caller ask for an approval
+   * it may not need — never skip one it does.
+   */
+  async erc20Allowance(
+    chain: EvmChain,
+    network: StellarNetwork,
+    token: string,
+    owner: string,
+    spender: string,
+  ): Promise<bigint> {
+    const word = (address: string) =>
+      address.toLowerCase().replace(/^0x/, '').padStart(64, '0');
+    const data = ERC20_ALLOWANCE_SELECTOR + word(owner) + word(spender);
+    let answer: string;
+    try {
+      answer = await this.rawCall<string>(chain, network, 'eth_call', [
+        { to: token, data },
+        'latest',
+      ]);
+    } catch (err) {
+      if (err instanceof JsonRpcError) return 0n;
+      throw err;
+    }
+    return /^0x[0-9a-fA-F]{64}$/.test(answer) ? BigInt(answer) : 0n;
+  }
+
+  /**
+   * Broadcasts a signed transaction; answers its hash. A node refusing it is a
+   * 400 `transaction_rejected` with its reason — see `broadcastRejected`.
+   */
+  async sendRawTransaction(
     chain: EvmChain,
     network: StellarNetwork,
     raw: string,
   ): Promise<string> {
-    return this.call(chain, network, 'eth_sendRawTransaction', [raw]);
+    try {
+      return await this.rawCall<string>(
+        chain,
+        network,
+        'eth_sendRawTransaction',
+        [raw],
+      );
+    } catch (err) {
+      if (err instanceof JsonRpcError) {
+        throw broadcastRejected(EVM_PROVIDER_NAMES[chain], err);
+      }
+      throw err;
+    }
   }
 
   /**

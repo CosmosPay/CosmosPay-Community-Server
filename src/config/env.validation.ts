@@ -186,6 +186,46 @@ class EnvironmentVariables {
   @IsString()
   MONAD_DEPOSIT_TOKEN_FEES?: string;
 
+  // --- Same-chain swaps off Stellar: Jupiter (Solana), Kuru Flow (Monad) ---
+  /** Owner of the token accounts the Solana swap commission lands in. */
+  @IsOptional()
+  @Matches(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/, {
+    message: 'SOLANA_SWAP_FEE_WALLET must be a Solana address (base58)',
+  })
+  SOLANA_SWAP_FEE_WALLET?: string;
+
+  @IsOptional()
+  @Matches(/^0x[0-9a-fA-F]{40}$/, {
+    message: 'MONAD_SWAP_FEE_WALLET must be an EVM address (0x + 40 hex)',
+  })
+  MONAD_SWAP_FEE_WALLET?: string;
+
+  @IsOptional()
+  @IsUrl(URL_OPTIONS)
+  JUPITER_BASE_URL?: string;
+
+  @IsOptional()
+  @IsString()
+  JUPITER_API_KEY?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  JUPITER_TIMEOUT_MS?: number;
+
+  @IsOptional()
+  @IsUrl(URL_OPTIONS)
+  KURU_BASE_URL?: string;
+
+  @IsOptional()
+  @IsString()
+  KURU_API_KEY?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  KURU_TIMEOUT_MS?: number;
+
   @IsOptional()
   @IsInt()
   @Min(1)
@@ -213,6 +253,52 @@ class EnvironmentVariables {
   @Min(0)
   @Max(10000)
   STELLAR_SWAP_MAX_SLIPPAGE_BPS?: number;
+
+  // --- Cross-chain swaps (NEAR Intents 1Click) ---
+  @IsOptional()
+  @IsUrl(URL_OPTIONS)
+  NEAR_INTENTS_BASE_URL?: string;
+
+  @IsOptional()
+  @IsString()
+  NEAR_INTENTS_API_KEY?: string;
+
+  /**
+   * A NEAR account id: named (`cosmospay.near`) or implicit (64 hex). Checked
+   * here because a typo is not refused by 1Click at quote time — the commission
+   * would accrue to an account nobody controls.
+   */
+  @IsOptional()
+  @Matches(
+    /^(?=.{2,64}$)(([a-z\d]+[-_])*[a-z\d]+\.)*([a-z\d]+[-_])*[a-z\d]+$/,
+    {
+      message:
+        'NEAR_INTENTS_FEE_RECIPIENT must be a NEAR account id (e.g. cosmospay.near)',
+    },
+  )
+  NEAR_INTENTS_FEE_RECIPIENT?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  NEAR_INTENTS_TIMEOUT_MS?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(10000)
+  CROSS_CHAIN_SWAP_SLIPPAGE_BPS?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(10000)
+  CROSS_CHAIN_SWAP_MAX_SLIPPAGE_BPS?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(60)
+  CROSS_CHAIN_SWAP_DEADLINE_SECONDS?: number;
 
   /** When "true", at most one non-expired PENDING swap per (consumer, source, network). */
   @IsOptional()

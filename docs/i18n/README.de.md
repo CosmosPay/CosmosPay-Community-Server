@@ -82,6 +82,12 @@ src/
   solana/                         Solana RPC client (cluster-checked), Solana Pay links
   evm/                            EVM RPC client for Monad (chain-id-checked), EIP-681 links
   swaps/                          Stellar native swaps (path payments): quote, build XDR, submit
+                                  + Solana (Jupiter) and Monad (Kuru Flow): venues/, chain swaps, observer
+  jupiter/                        Jupiter Swap API client (Solana aggregator)
+  kuru/                           Kuru Flow API client (Monad aggregator)
+  cross-chain-swaps/              swaps between Stellar, Solana and Monad via NEAR Intents: quote,
+                                  deposit address + per-chain wallet link, status observer
+  near-intents/                   NEAR Intents 1Click client: tokens, quote, status, deposit submit
   liquidity-pools/                AMM deposit/withdraw, pool + position reads, cost basis + commission on gain
   observer/                       background reconciler: swaps + LP ops against Horizon, one adapter per table
   webhooks/                       webhook endpoints CRUD + dispatcher (HMAC-signed, retried)
@@ -101,7 +107,7 @@ src/
     blindpay/                     BlindPay: client, Svix verify, sync + webhook, kyc/, onramp/, offramp/, admin/
     defindex/                     DeFindex vaults (Stellar)
   health/                         liveness/readiness probes (@Public)
-prisma/schema.prisma              Consumer, PaymentIntent, Swap, LiquidityPoolOperation,
+prisma/schema.prisma              Consumer, PaymentIntent, Swap, ChainSwap, CrossChainSwap, LiquidityPoolOperation,
                                   WebhookEndpoint/Delivery/EmittedEvent, BlindpayReceiver,
                                   Blockchain/BankAccount/VirtualAccount, BlindpayQuote,
                                   BlindpayWebhookEvent, Payin, Payout, RequestLog,
@@ -134,7 +140,8 @@ jedem CI-Lauf aus den Controllern und DTOs neu erzeugt wird
 | Bereich           | Basispfad                | Funktion                                                  |
 | ----------------- | ------------------------ | --------------------------------------------------------- |
 | Zahlungsabsichten   | `/v1/payment-intents`    | `pay`-Absichten auf Stellar (SEP-7), Solana (Solana Pay) und Monad (EIP-681), SEP-7-`tx`, Validierung, On-Chain-Beobachter |
-| Swaps             | `/v1/swaps`              | Path-Payment-Quote, unsigniertes XDR bauen, signiertes übermitteln |
+| Swaps             | `/v1/swaps`              | Path-Payment-Quote, unsigniertes XDR bauen, signiertes übermitteln · Solana über Jupiter, Monad über Kuru Flow |
+| Chain-übergreifende Swaps | `/v1/cross-chain-swaps` | Stellar ⇄ Solana ⇄ Monad über NEAR Intents: Quote, Einzahlungsadresse, Status |
 | Liquiditätspools  | `/v1/liquidity-pools`    | AMM-Einzahlung / -Auszahlung, Positionen, Provision auf Gewinn |
 | Webhooks          | `/v1/webhooks`           | Endpunkt-CRUD, Secret-Rotation, Zustellungen, erneute Zustellung |
 | KYC               | `/v1/kyc`                | Receiver (KYC/KYB), Wallets, Bankkonten, Dokument-Upload  |
@@ -195,6 +202,12 @@ Konsolen-Backend erreicht sie. Pfade verwenden die OpenAPI-Form `{param}`.
 | GET | `/v1/assets` | — | ✓ |
 | GET | `/v1/balances` | `payments:read` |  |
 | POST | `/v1/blindpay/webhooks` | keiner — `@Public()`, Svix-Signatur |  |
+| GET | `/v1/cross-chain-swaps` | `swaps:read` |  |
+| POST | `/v1/cross-chain-swaps` | `swaps:write` | ✓ |
+| GET | `/v1/cross-chain-swaps/assets` | `swaps:read` | ✓ |
+| POST | `/v1/cross-chain-swaps/quote` | `swaps:read` | ✓ |
+| GET | `/v1/cross-chain-swaps/{id}` | `swaps:read` |  |
+| POST | `/v1/cross-chain-swaps/{id}/deposit` | `swaps:write` | ✓ |
 | GET | `/v1/customers` | `customers:read` |  |
 | POST | `/v1/customers` | `customers:write` |  |
 | GET | `/v1/customers/{id}` | `customers:read` |  |
@@ -503,7 +516,7 @@ Event-Typen: `PAYMENT_INTENT_CREATED`, `PAYMENT_INTENT_UPDATED`,
 `PAYMENT_INTENT_SUCCEEDED`, `PAYMENT_INTENT_FAILED`, `PAYMENT_INTENT_CANCELLED`,
 `PAYMENT_INTENT_DELETED`, `SWAP_CREATED`, `SWAP_SUBMITTED`, `SWAP_SUCCEEDED`,
 `SWAP_FAILED`, `LIQUIDITY_CREATED`, `LIQUIDITY_SUBMITTED`, `LIQUIDITY_SUCCEEDED`,
-`LIQUIDITY_FAILED` sowie die aus BlindPay stammenden `RECEIVER_UPDATED`,
+`LIQUIDITY_FAILED`, `CROSS_CHAIN_SWAP_CREATED`, `CROSS_CHAIN_SWAP_UPDATED`, `CROSS_CHAIN_SWAP_SUCCEEDED`, `CROSS_CHAIN_SWAP_REFUNDED`, `CROSS_CHAIN_SWAP_FAILED`, `CROSS_CHAIN_SWAP_EXPIRED` sowie die aus BlindPay stammenden `RECEIVER_UPDATED`,
 `PAYIN_CREATED`, `PAYIN_UPDATED`, `PAYIN_COMPLETED`, `PAYOUT_CREATED`, `PAYOUT_UPDATED`
 und `PAYOUT_COMPLETED`. Die maßgebliche Liste ist die Enum `WebhookEventType` in
 `prisma/schema.prisma`.
@@ -889,6 +902,9 @@ Heute mit dem öffentlichen Key erreichbar:
 | `POST /v1/swaps/quote` | Bepreist einen Pfad über Horizon; eine reine Funktion der Anfrage |
 | `POST /v1/swaps` | Baut einen unsignierten Envelope, den der Aufrufer signiert |
 | `POST /v1/swaps/:id/submit` | Sendet einen vom Aufrufer signierten Envelope — nichts zum Swap, nicht einmal sein Status, wird beantwortet, bevor der Body der Envelope dieses Swaps mit einer Signatur ist; rate-limitiert |
+| `GET /v1/cross-chain-swaps/assets` \| `POST /v1/cross-chain-swaps/quote` | Die Token-Liste von NEAR Intents und ein Trocken-Quote; reine Funktionen des Requests |
+| `POST /v1/cross-chain-swaps` | Eine Einzahlungsadresse für das eigene Geld des Aufrufers; ein wiederholter `Idempotency-Key` wird nur beantwortet, wenn der Request übereinstimmt |
+| `POST /v1/cross-chain-swaps/:id/deposit` | Verweist NEAR Intents auf eine Transaktion, die es selbst on-chain prüft; rate-limitiert |
 | `POST /v1/liquidity-pools/deposit` \| `withdraw` | Bauen unsignierte Envelopes |
 | `POST /v1/liquidity-pools/operations/:id/submit` | Sendet einen vom Aufrufer signierten Envelope, unter denselben Prüfungen wie beim Swap-Submit; rate-limitiert |
 | `GET /v1/liquidity-pools` \| `/:poolId` \| `/positions` | Öffentliche On-Chain-Daten, gelesen von Horizon |
@@ -897,7 +913,7 @@ Heute mit dem öffentlichen Key erreichbar:
 | `GET /v1/assets` | Der öffentliche Asset-Katalog |
 | `GET /v1/aliases/resolve/:name` \| `availability/:name` \| `by-address/:address` | Ein Zahler, der ein Handle auflöst, ist genau der anonyme Aufrufer, für den dieser Key existiert; die Antwort ist eine reine Funktion der Anfrage und enthält nie das Postfach des Inhabers |
 
-Abgewiesen: `GET /v1/swaps`, `GET /v1/swaps/:id`,
+Abgewiesen: `GET /v1/swaps`, `GET /v1/swaps/:id`, `GET /v1/cross-chain-swaps`, `GET /v1/cross-chain-swaps/:id`,
 `GET /v1/liquidity-pools/operations{,/:id}`, `GET /v1/activity/events`,
 `GET /v1/activity/summary`, jeder Lesezugriff auf Payment Intents, jede Inhaber-Route
 für Aliase (Beanspruchen, Auflisten, Hinzufügen oder Entfernen einer Adresse, Freigeben,
@@ -1100,6 +1116,130 @@ denselben Regeln, mit einem eigenen Kontingent, und `POST
 Bauvorgängen pro Minute** — die beiden Richtungen eines Ablaufs, getrennte Buckets
 würden eine Schleife nur zwischen ihnen wechseln und beide verbrauchen lassen.
 
+### Swaps auf Solana und Monad (Jupiter, Kuru Flow)
+
+`/v1/swaps` nimmt ein optionales `chain`. Ohne es — oder mit `stellar` — wird
+jede Anfrage genau wie bisher beantwortet. `solana` läuft über
+[Jupiter](https://jup.ag) und `monad` über [Kuru Flow](https://kuru.io):
+Aggregatoren, die jede Liquiditätsquelle ihrer Chain durchsuchen, sodass ein
+Swap dort den besten Kurs bekommt statt des Preises eines einzelnen Pools. Der
+Ablauf ist der von Stellar, durchgehend nicht verwahrend:
+
+```
+POST /v1/swaps/quote {chain} → POST /v1/swaps {chain, source} → wallet signs `transaction`
+  → POST /v1/swaps/{id}/submit {signedTransaction} → observer → SUCCEEDED / FAILED
+```
+
+- **Assets** sind der native Ticker (`SOL`, `MON`), `native` oder die SPL-Mint- /
+  ERC-20-Adresse. Issuer, `memo` und eine abweichende `destination` gibt es nur
+  auf Stellar; anderswo werden sie abgelehnt: Der Output geht an `source`.
+- **`transaction`** ist das, was die Wallet signiert. Solana: eine unsignierte
+  VersionedTransaction (base64), etwa eine Minute gültig, bis ihr Blockhash
+  abläuft. Monad: `{ to, data, value, chainId }`, als EIP-1559-Transaktion
+  signiert, zwei Minuten gültig. Wer auf Monad ein ERC-20 mit zu kleiner
+  Allowance verkauft, bekommt zusätzlich `approval`: den exakten
+  `approve`-Aufruf, der zuerst gesendet und bestätigt werden muss.
+- **Submit** prüft, dass die signierte Transaktion die gebaute ist — dieselben
+  Message-Bytes auf Solana, derselbe Aufruf auf Monad — und von `source`
+  signiert, und sendet sie über den eigenen RPC dieses Dienstes. Lehnt ein Node
+  sie ab, ist das `400 transaction_rejected` und der Swap bleibt `PENDING`; nur
+  das Urteil der Chain selbst, vom Observer gelesen, macht ihn `SUCCEEDED` oder
+  `FAILED`. Nicht übermittelte oder nicht gesehene Swaps werden `EXPIRED`. Die
+  Webhooks sind dieselben `SWAP_*`-Events.
+- **Provision:** der Plan-Satz wie auf Stellar, aber vom Aggregator aus dem
+  **Output** genommen. Jupiter zahlt seine `platformFeeBps` auf das Token-Konto
+  von `SOLANA_SWAP_FEE_WALLET` für die Output-Mint, das existieren muss — fehlt
+  es, lautet die Antwort `503 misconfigured` mit dem anzulegenden Konto. Kuru
+  Flow zahlt seine `referrerFeeBps` an `MONAD_SWAP_FEE_WALLET`.
+- **Nur Mainnet**; ein `dev`-Key ist `400 network_unsupported`.
+  `GET /v1/swaps?chain=solana` listet diese Chain; IDs sind über alle Chains
+  eindeutig, daher finden `GET /v1/swaps/{id}` und Submit jeden Swap.
+- **Keys.** Kuru Flow ohne `KURU_API_KEY` stellt pro Adresse ein Token aus, das
+  auf eine Anfrage pro Sekunde begrenzt ist — genug zum Ausprobieren, nicht für
+  Produktion. Jupiters Stufe ohne Key ist der Standard; mit `JUPITER_API_KEY`
+  `JUPITER_BASE_URL` auf `https://api.jup.ag/swap/v1` setzen.
+
+## Chain-übergreifende Swaps (NEAR Intents)
+
+Swaps **zwischen** Stellar, Solana und Monad werden von
+[NEAR Intents](https://intents.near.org/) über dessen 1Click-API abgewickelt. Wie die
+Stellar-Swaps oben sind sie **nicht verwahrend**: Der Zahlende sendet den Input an
+eine Einzahlungsadresse, die 1Click für genau dieses eine Quote ableitet, und die
+Solver von NEAR Intents zahlen den Output an den Empfänger auf der anderen Chain aus
+— oder erstatten den Zahlenden. Keines der beiden Beine läuft über Cosmos Pay.
+
+```
+quote → create (deposit address + wallet link + QR) → payer sends the deposit
+      → POST /deposit (optional) → observer polls 1Click → SUCCEEDED / REFUNDED / FAILED + webhook
+```
+
+**Welcher Swap wohin geht.**
+
+| Paar | Abgewickelt von | Warum |
+| --- | --- | --- |
+| Stellar → Stellar | `/v1/swaps` (Stellar-DEX) | Das Protokoll swappt nativ; `/v1/cross-chain-swaps` antwortet mit `400` und verweist dorthin |
+| Stellar ⇄ Solana ⇄ Monad | NEAR Intents | Es braucht eine Brücke, und NEAR Intents ist diese Brücke |
+| Solana → Solana, Monad → Monad | `/v1/swaps` mit `chain` (Jupiter, Kuru Flow) | Jeder Aggregator routet über jede Liquiditätsquelle seiner Chain zum besten Kurs; `/v1/cross-chain-swaps` antwortet mit `400` und verweist dorthin |
+
+Was dieser Dienst auf jeder Chain selbst erledigt: Er löst die Assets gegen die
+Token-Liste von 1Click auf (`GET /v1/cross-chain-swaps/assets`), validiert jede
+Adresse gegen ihre eigene Chain, baut die Einzahlungsanfrage im Wallet-Standard
+dieser Chain — SEP-7 `pay`, Solana Pay, EIP-681 —, prüft auf Horizon, dass ein
+Stellar-Empfänger dem Asset vertraut, das er gleich erhält, und spiegelt den Status
+in seine eigene Tabelle.
+
+**Provision.** Der Satz aus dem Plan der Organisation — derselbe vertrauenswürdige
+`X-Plan-Swap-Fee-Bps` wie bei Stellar-Swaps, nie ein Request-Parameter — geht als
+`appFees`-Eintrag an 1Click, zahlbar an `NEAR_INTENTS_FEE_RECIPIENT`, ein NEAR-Konto.
+NEAR Intents zieht ihn vom Input ab, der quotierte Output ist bereits netto, und er
+sammelt sich auf diesem Konto innerhalb von NEAR Intents, von wo der Betreiber ihn
+abhebt. Ein Plan mit Satz ohne konfigurierten Empfänger antwortet mit
+`503 misconfigured`, statt kostenlos zu swappen.
+
+**Setze `NEAR_INTENTS_API_KEY`.** 1Click funktioniert ohne Partner-Key, aber nicht
+zum selben Preis: Ohne ihn (geprüft am 2026-09-30) trägt jedes Quote eine eigene
+1Click-Gebühr von 0,2 %, und die Hälfte der in `appFees` angefragten Provision geht an
+1Click statt an `NEAR_INTENTS_FEE_RECIPIENT`.
+
+**Nur Mainnet.** NEAR Intents hat kein Testnetz. Ein `dev`-Key darf Assets auflisten
+und quoten — der Preis ist ohnehin der des Mainnets —, aber
+`POST /v1/cross-chain-swaps` antwortet mit `400 network_unsupported`: Eine
+Einzahlungsadresse würde echtes Geld annehmen.
+
+**Stellar-Einzahlungen tragen ein Memo.** 1Click empfängt jede Stellar-Einzahlung auf
+einem einzigen Konto und unterscheidet sie am Memo, deshalb ist `depositMemo` dort
+Pflicht, und der SEP-7-Link hängt es als **`MEMO_TEXT`** an — den Typ, den die
+Einzahlungen auf dieses Konto tragen. Eine Einzahlung ohne Memo oder mit `MEMO_ID`
+wird dem Swap nicht gutgeschrieben.
+
+**Status.** `AWAITING_DEPOSIT` → `DEPOSIT_DETECTED` / `INCOMPLETE_DEPOSIT` →
+`PROCESSING` → `SUCCEEDED`, `REFUNDED` oder `FAILED`, die endgültig sind. Das eigene
+Wort von 1Click steht in `providerStatus`. Ein Swap, der beim Ablauf seiner Frist
+noch wartet (`CROSS_CHAIN_SWAP_DEADLINE_SECONDS`, standardmäßig 30 Minuten), wird
+`EXPIRED`; eine später eintreffende Einzahlung erstattet NEAR Intents, daher wird ein
+`EXPIRED`-Swap noch einen Tag lang abgefragt und folgt bis `REFUNDED`. Der Observer
+läuft mit dem Settlement-Observer (`OBSERVER_ENABLED`, `OBSERVER_INTERVAL_MS`); keine
+Wallet muss zurückkommen, damit ein Swap abgeschlossen wird. Jeder Wechsel sendet
+`CROSS_CHAIN_SWAP_UPDATED`, `_EXPIRED`, `_SUCCEEDED`, `_REFUNDED` oder `_FAILED`; die
+letzten drei sind dauerhaft und dedupliziert wie die der Payment Intents.
+
+**Bewahre `quoteSignature` auf.** Das ist die Signatur von 1Click über das Quote und
+seine Einzahlungsadresse — das, was einen Streit mit NEAR Intents entscheidet. Das
+vollständige signierte Quote wird zusätzlich serverseitig gespeichert.
+
+**Limits.** Quote: 60 Aufrufe pro Minute; Create und Deposit: je 20, pro Consumer und
+Client-Adresse (`429 rate_limited`).
+
+### Routen für chain-übergreifende Swaps
+
+| Route | Scope | Zweck |
+| --- | --- | --- |
+| `GET /v1/cross-chain-swaps/assets` | `swaps:read` | Die Token, die NEAR Intents auf Stellar, Solana und Monad swappen kann |
+| `POST /v1/cross-chain-swaps/quote` | `swaps:read` | Ein Trocken-Quote: Output, Minimum, Provision; speichert nichts |
+| `POST /v1/cross-chain-swaps` | `swaps:write` | Ein Live-Quote: Einzahlungsadresse, Memo, Wallet-Link und QR; unterstützt `Idempotency-Key` |
+| `GET /v1/cross-chain-swaps` | `swaps:read` | Die chain-übergreifenden Swaps des Consumers |
+| `GET /v1/cross-chain-swaps/{id}` | `swaps:read` | Ein Swap, wie der Observer ihn zuletzt gesehen hat |
+| `POST /v1/cross-chain-swaps/{id}/deposit` | `swaps:write` | Die Einzahlungstransaktion melden, damit NEAR Intents startet, ohne auf seinen Indexer zu warten |
 ## Aliase — beanspruchbare Zahlungs-Handles
 
 Ein Alias ermöglicht es einem Zahler, `emanuel250` statt `GA5ZSE…` einzugeben. Zahler
@@ -1567,6 +1707,45 @@ eingeschaltet werden.
 
 ## Upgrade — Breaking Changes und Deploy-Hinweise
 
+### Swaps auf Solana und Monad: `chain` auf `/v1/swaps` und eine neue Tabelle
+
+- **Die Migration `20261003120000_chain_swaps`** legt die Tabelle `chain_swap` an.
+  Nichts Bestehendes ändert sich: `/v1/swaps` ohne `chain` antwortet Byte für Byte
+  wie bisher.
+- **`/v1/swaps` nimmt `chain`** (`stellar` | `solana` | `monad`) in den Bodies von
+  Quote und Create sowie als Query-Parameter der Liste. Für Solana und Monad
+  antworten Create, der Einzelabruf und Submit mit einer `ChainSwapEntity`
+  (`oneOf` im Vertrag).
+- **`POST /v1/swaps/{id}/submit`:** `signedXdr` ist nicht mehr Pflicht, wenn
+  `signedTransaction` gesendet wird. Ein Stellar-Swap braucht es weiterhin, mit
+  derselben Meldung.
+- **`/v1/cross-chain-swaps` lehnt jetzt jedes Paar auf derselben Chain ab** — früher
+  quotierte es Solana → Solana und Monad → Monad über NEAR Intents — und verweist
+  auf `/v1/swaps`.
+- **Lehnt ein Solana- oder Monad-Node einen Broadcast ab, ist das
+  `400 transaction_rejected`**, nicht mehr `502 provider_error`. Das gilt auch für
+  den Relayer des Monad-Einzahlungs-Forwarders, der wie bisher loggt und es erneut
+  versucht.
+- **Vor dem Aktivieren:** `SOLANA_SWAP_FEE_WALLET` setzen und dessen Token-Konto für
+  jede erwartete Output-Mint anlegen, `MONAD_SWAP_FEE_WALLET` setzen und für
+  Produktionsvolumen einen `KURU_API_KEY` besorgen.
+
+### Chain-übergreifende Swaps: ein neues Modul, eine neue Tabelle und sechs Webhook-Events
+
+- **Die Migration `20261002120000_cross_chain_swaps`** legt die Tabelle
+  `cross_chain_swap` an und hängt sechs Werte an `WebhookEventType` an:
+  `CROSS_CHAIN_SWAP_CREATED`, `_UPDATED`, `_SUCCEEDED`, `_REFUNDED`, `_FAILED`,
+  `_EXPIRED`. Nichts Bestehendes wird umgeschrieben.
+- **Neue Routen unter `/v1/cross-chain-swaps`**, die die Scopes `swaps:read` /
+  `swaps:write` wiederverwenden; der gemeinsame öffentliche Key erreicht assets,
+  quote, create und deposit, nie die beiden Lesezugriffe.
+- **Vor dem Aktivieren:** `NEAR_INTENTS_FEE_RECIPIENT` (ein NEAR-Konto) setzen, sonst
+  antwortet jeder Plan mit Provision mit `503 misconfigured`, und
+  `NEAR_INTENTS_API_KEY` setzen, sonst erhebt 1Click eine eigene Gebühr und behält die
+  Hälfte der Provision.
+- **`provider_error` ist jetzt auch ein `400`**: Lehnt NEAR Intents ein Quote ab
+  ("amount is too low for bridge"), kann der Aufrufer das ändern, daher kommt es als
+  `400 provider_error` mit dem Grund von 1Click an, wie schon ein 4xx von BlindPay.
 ### Wallet-Backups: Argon2id und Verschlüsselung im Ruhezustand
 
 - **Setzen Sie `WALLET_BACKUP_ENCRYPTION_KEY` vor dem Deployment**
@@ -2104,6 +2283,21 @@ passen Sie mindestens `DATABASE_URL` und `APISIX_GATEWAY_SECRET` an.
 | `STELLAR_SWAP_SLIPPAGE_BPS` | nein | `50` | Standardtoleranz für Swap-Slippage (bps) |
 | `STELLAR_SWAP_MAX_SLIPPAGE_BPS` | nein | `500` | Harte Obergrenze für die Slippage des Aufrufers (bps) |
 | `STELLAR_SWAP_SINGLE_INFLIGHT` | nein | `false` | Bei `true` 409, wenn für dieselbe Quelle bereits ein nicht abgelaufener PENDING-Swap existiert |
+| `NEAR_INTENTS_BASE_URL` | nein | `https://1click.chaindefuser.com` | 1Click-API von NEAR Intents, für chain-übergreifende Swaps |
+| `NEAR_INTENTS_API_KEY` | empfohlen | — | 1Click-Partner-Key (`X-API-Key`). Ohne ihn erhebt 1Click eine eigene Gebühr von 0,2 % und behält die Hälfte der Provision |
+| `NEAR_INTENTS_FEE_RECIPIENT` | bei Plan-Provision | — | NEAR-Konto, an das die chain-übergreifende Provision geht (`appFees`). Ungesetzt bei einem Plan-Satz: `503 misconfigured` |
+| `NEAR_INTENTS_TIMEOUT_MS` | nein | `20000` | Budget für einen 1Click-Aufruf (ms) |
+| `CROSS_CHAIN_SWAP_SLIPPAGE_BPS` | nein | `100` | Standard-Slippage chain-übergreifend (bps); unter dem Minimum erstattet NEAR Intents |
+| `CROSS_CHAIN_SWAP_MAX_SLIPPAGE_BPS` | nein | `500` | Die höchste Slippage, die ein Aufrufer verlangen darf |
+| `CROSS_CHAIN_SWAP_DEADLINE_SECONDS` | nein | `1800` | Wie lange eine Einzahlungsadresse die Einzahlung annimmt; spätere werden erstattet |
+| `SOLANA_SWAP_FEE_WALLET` | bei Plan-Provision | — | Eigentümer der Token-Konten, auf die die Provision der Solana-Swaps geht (Jupiter-`feeAccount`, eines pro Output-Mint — vorher anlegen). Ungesetzt bei einem Plan-Satz: `503 misconfigured` |
+| `MONAD_SWAP_FEE_WALLET` | bei Plan-Provision | — | Adresse, an die die Provision der Monad-Swaps geht (Kuru-Flow-`referrerAddress`) |
+| `JUPITER_BASE_URL` | nein | `https://lite-api.jup.ag/swap/v1` | Jupiter-Swap-API; mit Key `https://api.jup.ag/swap/v1` |
+| `JUPITER_API_KEY` | nein | — | Jupiter-API-Key (`x-api-key`), für höhere Limits |
+| `JUPITER_TIMEOUT_MS` | nein | `15000` | Budget für einen Jupiter-Aufruf (ms) |
+| `KURU_BASE_URL` | nein | `https://ws.kuru.io` | Kuru-Flow-API (Monad) |
+| `KURU_API_KEY` | für Produktion | — | Kuru-Flow-API-Key (`X-API-Key`). Ohne ihn bekommt jede Adresse ein Token mit einer Anfrage pro Sekunde |
+| `KURU_TIMEOUT_MS` | nein | `15000` | Budget für einen Kuru-Flow-Aufruf (ms) |
 | `OBSERVER_ENABLED` | nein | `true` | `true` / `false` — On-Chain-Reconciler |
 | `OBSERVER_INTERVAL_MS` | nein | `15000` | Abfrageintervall des Observers (ms, mind. 1000) |
 | `OBSERVER_BATCH_SIZE` | nein | `50` | Max. Intents/Swaps pro Observer-Tick |

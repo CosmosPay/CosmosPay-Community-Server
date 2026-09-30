@@ -90,3 +90,44 @@ export const DEFAULT_DEFINDEX_BASE_URL = 'https://api.defindex.io';
  * Soroban transaction on DeFindex's side, which is slower than a plain read.
  */
 export const DEFAULT_DEFINDEX_TIMEOUT_MS = 30_000;
+
+/** The NEAR Intents 1Click API, used when `NEAR_INTENTS_BASE_URL` is unset. */
+export const DEFAULT_NEAR_INTENTS_BASE_URL = 'https://1click.chaindefuser.com';
+
+/**
+ * Upstream budget for one 1Click call. A live quote asks the solver network for
+ * a price and derives a deposit address, which takes a few seconds on a good
+ * day; slower than this is 1Click in trouble, and the caller gets a 504.
+ */
+export const DEFAULT_NEAR_INTENTS_TIMEOUT_MS = 20_000;
+
+/**
+ * Default slippage for a cross-chain swap, in bps. Higher than a Stellar path
+ * payment's: the price is fixed at quote time but the swap settles after the
+ * deposit confirms on the origin chain, and 1Click refunds rather than fills
+ * below the minimum — so a tight default refunds honest swaps in a moving market.
+ */
+export const DEFAULT_CROSS_CHAIN_SLIPPAGE_BPS = 100;
+
+/** The most slippage a caller may ask for on a cross-chain swap, in bps. */
+export const DEFAULT_CROSS_CHAIN_MAX_SLIPPAGE_BPS = 500;
+
+/**
+ * How long a cross-chain deposit address accepts the deposit, in seconds. Half
+ * an hour covers a wallet round-trip on Stellar, Solana and Monad, which all
+ * finalize in seconds; past it 1Click refunds whatever arrives.
+ */
+export const DEFAULT_CROSS_CHAIN_DEADLINE_SECONDS = 30 * 60;
+
+/** Jupiter's Swap API, used when `JUPITER_BASE_URL` is unset: the keyless tier. */
+export const DEFAULT_JUPITER_BASE_URL = 'https://lite-api.jup.ag/swap/v1';
+
+/** Kuru Flow's API (Monad), used when `KURU_BASE_URL` is unset. */
+export const DEFAULT_KURU_BASE_URL = 'https://ws.kuru.io';
+
+/**
+ * Upstream budget for one aggregator call (Jupiter or Kuru Flow). A quote is a
+ * route search and a swap build simulates the transaction; both answer in well
+ * under a second when healthy.
+ */
+export const DEFAULT_SWAP_AGGREGATOR_TIMEOUT_MS = 15_000;

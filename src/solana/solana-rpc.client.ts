@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { SOLANA_GENESIS_HASHES } from '@/chains/chains.constants';
 import {
+  broadcastRejected,
   callJsonRpc,
   JsonRpcError,
   type JsonRpcTarget,
@@ -184,6 +185,81 @@ export class SolanaRpcClient {
     }
     const decimals = value.data.parsed.info?.decimals;
     return typeof decimals === 'number' ? decimals : null;
+  }
+
+  /**
+   * The program that owns an account, or null when there is no account — how
+   * a mint tells whether it is SPL Token or Token-2022, and a token account
+   * whether it exists yet.
+   */
+  async getAccountOwner(
+    network: StellarNetwork,
+    address: string,
+  ): Promise<string | null> {
+    try {
+      const account = await this.call<{ value: { owner: string } | null }>(
+        network,
+        'getAccountInfo',
+        [
+          address,
+          {
+            encoding: 'base64',
+            dataSlice: { offset: 0, length: 0 },
+            commitment: SOLANA_COMMITMENT,
+          },
+        ],
+      );
+      return account.value?.owner ?? null;
+    } catch (err) {
+      throw rpcFault(err, 'getAccountInfo');
+    }
+  }
+
+  /**
+   * Broadcasts a signed transaction (base64 wire bytes) and answers its
+   * signature. Preflight stays on: a transaction the cluster would reject is
+   * refused here, with the reason, instead of burning its fee on-chain.
+   */
+  async sendTransaction(
+    network: StellarNetwork,
+    base64: string,
+  ): Promise<string> {
+    try {
+      return await this.call<string>(network, 'sendTransaction', [
+        base64,
+        { encoding: 'base64', preflightCommitment: SOLANA_COMMITMENT },
+      ]);
+    } catch (err) {
+      if (err instanceof JsonRpcError) throw broadcastRejected('Solana', err);
+      throw rpcFault(err, 'sendTransaction');
+    }
+  }
+
+  /**
+   * Where a signature stands: null while the cluster has not seen it, else
+   * its error (null for success) and how far it is confirmed.
+   */
+  async getSignatureStatus(
+    network: StellarNetwork,
+    signature: string,
+  ): Promise<{ err: unknown; confirmationStatus: string | null } | null> {
+    try {
+      const answer = await this.call<{
+        value: ({ err: unknown; confirmationStatus?: string | null } | null)[];
+      }>(network, 'getSignatureStatuses', [
+        [signature],
+        { searchTransactionHistory: true },
+      ]);
+      const status = answer.value[0];
+      return status
+        ? {
+            err: status.err,
+            confirmationStatus: status.confirmationStatus ?? null,
+          }
+        : null;
+    } catch (err) {
+      throw rpcFault(err, 'getSignatureStatuses');
+    }
   }
 }
 

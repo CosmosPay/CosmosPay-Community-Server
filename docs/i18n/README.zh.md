@@ -56,6 +56,12 @@ src/
   solana/                         Solana RPC client (cluster-checked), Solana Pay links
   evm/                            EVM RPC client for Monad (chain-id-checked), EIP-681 links
   swaps/                          Stellar native swaps (path payments): quote, build XDR, submit
+                                  + Solana (Jupiter) and Monad (Kuru Flow): venues/, chain swaps, observer
+  jupiter/                        Jupiter Swap API client (Solana aggregator)
+  kuru/                           Kuru Flow API client (Monad aggregator)
+  cross-chain-swaps/              swaps between Stellar, Solana and Monad via NEAR Intents: quote,
+                                  deposit address + per-chain wallet link, status observer
+  near-intents/                   NEAR Intents 1Click client: tokens, quote, status, deposit submit
   liquidity-pools/                AMM deposit/withdraw, pool + position reads, cost basis + commission on gain
   observer/                       background reconciler: swaps + LP ops against Horizon, one adapter per table
   webhooks/                       webhook endpoints CRUD + dispatcher (HMAC-signed, retried)
@@ -75,7 +81,7 @@ src/
     blindpay/                     BlindPay: client, Svix verify, sync + webhook, kyc/, onramp/, offramp/, admin/
     defindex/                     DeFindex vaults (Stellar)
   health/                         liveness/readiness probes (@Public)
-prisma/schema.prisma              Consumer, PaymentIntent, Swap, LiquidityPoolOperation,
+prisma/schema.prisma              Consumer, PaymentIntent, Swap, ChainSwap, CrossChainSwap, LiquidityPoolOperation,
                                   WebhookEndpoint/Delivery/EmittedEvent, BlindpayReceiver,
                                   Blockchain/BankAccount/VirtualAccount, BlindpayQuote,
                                   BlindpayWebhookEvent, Payin, Payout, RequestLog,
@@ -105,7 +111,8 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | 领域 | 基础路径 | 功能 |
 | ----------------- | ------------------------ | -------------------------------------------------------- |
 | 支付意图          | `/v1/payment-intents`    | Stellar（SEP-7）、Solana（Solana Pay）和 Monad（EIP-681）上的 `pay` 意图、SEP-7 `tx`、校验、链上观察器 |
-| Swap | `/v1/swaps` | 路径支付报价、构建未签名 XDR、提交已签名交易 |
+| Swap | `/v1/swaps` | 路径支付报价、构建未签名 XDR、提交已签名交易 · Solana 经由 Jupiter，Monad 经由 Kuru Flow |
+| 跨链 swap | `/v1/cross-chain-swaps` | 通过 NEAR Intents 在 Stellar ⇄ Solana ⇄ Monad 之间：报价、充值地址、状态 |
 | 流动性池 | `/v1/liquidity-pools` | AMM 存入 / 取出、持仓、按收益收取佣金 |
 | Webhooks | `/v1/webhooks` | 端点 CRUD、密钥轮换、投递记录、重新投递 |
 | KYC | `/v1/kyc` | Receiver（KYC/KYB）、钱包、银行账户、文档上传 |
@@ -160,6 +167,12 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | GET | `/v1/assets` | — | ✓ |
 | GET | `/v1/balances` | `payments:read` |  |
 | POST | `/v1/blindpay/webhooks` | 无 — `@Public()`，Svix 签名 |  |
+| GET | `/v1/cross-chain-swaps` | `swaps:read` |  |
+| POST | `/v1/cross-chain-swaps` | `swaps:write` | ✓ |
+| GET | `/v1/cross-chain-swaps/assets` | `swaps:read` | ✓ |
+| POST | `/v1/cross-chain-swaps/quote` | `swaps:read` | ✓ |
+| GET | `/v1/cross-chain-swaps/{id}` | `swaps:read` |  |
+| POST | `/v1/cross-chain-swaps/{id}/deposit` | `swaps:write` | ✓ |
 | GET | `/v1/customers` | `customers:read` |  |
 | POST | `/v1/customers` | `customers:write` |  |
 | GET | `/v1/customers/{id}` | `customers:read` |  |
@@ -369,7 +382,7 @@ APISIX 会在多个实例之间进行负载均衡，因此每个后台定时器�
 
 每个集成方（APISIX 消费者）可以注册一个或多个 webhook 端点。当支付意图发生变化时，平台会触发一个领域事件；**分发器（dispatcher）**会将其扇出到该消费者所有已启用、且订阅了该事件类型的端点（订阅为空 = 全部），记录每次尝试以便追溯，并按线性退避进行重试（`WEBHOOK_*` 环境变量）。
 
-事件类型：`PAYMENT_INTENT_CREATED`、`PAYMENT_INTENT_UPDATED`、`PAYMENT_INTENT_SUCCEEDED`、`PAYMENT_INTENT_FAILED`、`PAYMENT_INTENT_CANCELLED`、`PAYMENT_INTENT_DELETED`、`SWAP_CREATED`、`SWAP_SUBMITTED`、`SWAP_SUCCEEDED`、`SWAP_FAILED`、`LIQUIDITY_CREATED`、`LIQUIDITY_SUBMITTED`、`LIQUIDITY_SUCCEEDED`、`LIQUIDITY_FAILED`，以及来自 BlindPay 的 `RECEIVER_UPDATED`、`PAYIN_CREATED`、`PAYIN_UPDATED`、`PAYIN_COMPLETED`、`PAYOUT_CREATED`、`PAYOUT_UPDATED` 和 `PAYOUT_COMPLETED`。权威列表是 `prisma/schema.prisma` 中的 `WebhookEventType` 枚举。
+事件类型：`PAYMENT_INTENT_CREATED`、`PAYMENT_INTENT_UPDATED`、`PAYMENT_INTENT_SUCCEEDED`、`PAYMENT_INTENT_FAILED`、`PAYMENT_INTENT_CANCELLED`、`PAYMENT_INTENT_DELETED`、`SWAP_CREATED`、`SWAP_SUBMITTED`、`SWAP_SUCCEEDED`、`SWAP_FAILED`、`LIQUIDITY_CREATED`、`LIQUIDITY_SUBMITTED`、`LIQUIDITY_SUCCEEDED`、`LIQUIDITY_FAILED`、`CROSS_CHAIN_SWAP_CREATED`、`CROSS_CHAIN_SWAP_UPDATED`、`CROSS_CHAIN_SWAP_SUCCEEDED`、`CROSS_CHAIN_SWAP_REFUNDED`、`CROSS_CHAIN_SWAP_FAILED`、`CROSS_CHAIN_SWAP_EXPIRED`，以及来自 BlindPay 的 `RECEIVER_UPDATED`、`PAYIN_CREATED`、`PAYIN_UPDATED`、`PAYIN_COMPLETED`、`PAYOUT_CREATED`、`PAYOUT_UPDATED` 和 `PAYOUT_COMPLETED`。权威列表是 `prisma/schema.prisma` 中的 `WebhookEventType` 枚举。
 
 **来自 BlindPay 的事件体。** `RECEIVER_UPDATED` / `PAYIN_*` / `PAYOUT_*` 只携带标识和状态——id、状态、金额、支付通道——绝不包含个人数据。服务商对象不会被转发，因为 receiver 的 payload 是一份完整的 KYC 档案，而订阅事件只需要 `webhooks:write`。请使用持有 `kyc:read` / `onramp:read` / `offramp:read` 的 key 通过 API 获取详细信息。字段白名单见 `src/native-plugins/blindpay/blindpay-event-redaction.ts`。
 
@@ -618,6 +631,9 @@ where: { id, consumer: { apisixUsername: consumer.username } }
 | `POST /v1/swaps/quote` | 通过 Horizon 为路径定价；结果完全由请求决定 |
 | `POST /v1/swaps` | 构建一个由调用方签名的未签名信封 |
 | `POST /v1/swaps/:id/submit` | 广播调用方签名的信封——在请求体确实是该 swap 的信封、并携带签名之前，关于这笔 swap 的任何信息，包括它的状态，都不会被回答；带有速率限制 |
+| `GET /v1/cross-chain-swaps/assets` \| `POST /v1/cross-chain-swaps/quote` | NEAR Intents 的代币列表与试算报价；是请求的纯函数 |
+| `POST /v1/cross-chain-swaps` | 为调用方自己的资金生成充值地址；重放的 `Idempotency-Key` 仅在请求一致时才会得到响应 |
+| `POST /v1/cross-chain-swaps/:id/deposit` | 告诉 NEAR Intents 一笔由它自己在链上验证的交易；带有速率限制 |
 | `POST /v1/liquidity-pools/deposit` \| `withdraw` | 构建未签名信封 |
 | `POST /v1/liquidity-pools/operations/:id/submit` | 广播调用方签名的信封，遵循与 swap submit 相同的检查；带有速率限制 |
 | `GET /v1/liquidity-pools` \| `/:poolId` \| `/positions` | 从 Horizon 读取的公开链上数据 |
@@ -626,7 +642,7 @@ where: { id, consumer: { apisixUsername: consumer.username } }
 | `GET /v1/assets` | 公开的资产目录 |
 | `GET /v1/aliases/resolve/:name` \| `availability/:name` \| `by-address/:address` | 解析标识的付款方正是这个 key 所服务的匿名调用方；答案完全由请求决定，且从不包含所有者的邮箱 |
 
-被拒绝的路由：`GET /v1/swaps`、`GET /v1/swaps/:id`、`GET /v1/liquidity-pools/operations{,/:id}`、`GET /v1/activity/events`、`GET /v1/activity/summary`、所有支付意图读取、所有别名所有者路由（认领、列出、添加或移除地址、释放、恢复），以及 `/v1/kyc`、`/v1/onramp`、`/v1/offramp` 和 `/v1/webhooks` 下的所有路由。没有账户的钱包改为从 Horizon 读取自己的历史记录。
+被拒绝的路由：`GET /v1/swaps`、`GET /v1/swaps/:id`、`GET /v1/cross-chain-swaps`、`GET /v1/cross-chain-swaps/:id`、`GET /v1/liquidity-pools/operations{,/:id}`、`GET /v1/activity/events`、`GET /v1/activity/summary`、所有支付意图读取、所有别名所有者路由（认领、列出、添加或移除地址、释放、恢复），以及 `/v1/kyc`、`/v1/onramp`、`/v1/offramp` 和 `/v1/webhooks` 下的所有路由。没有账户的钱包改为从 Horizon 读取自己的历史记录。
 
 **允许遥测**，这样来自没有账户的钱包的崩溃报告仍然能够送达。通过这个 key 到达的事件是匿名的（一个共享消费者），因此钱包在发送之前会去除地址、目标、金额和 txHash。
 
@@ -721,6 +737,104 @@ quote → build XDR → customer signs in wallet → POST /submit → Stellar ex
 
 **提交对它转发的内容非常严格。** 在 `signedXdr` 能被解析、其哈希与该 swap 的 `txHash` 一致、且携带至少一个签名之前，关于这笔 swap 的任何信息——包括它的状态——都不会被回答，因此创建响应中未签名的 `xdr` 会得到 `400 validation_failed`。一笔已超出其时间边界（`STELLAR_TX_TIMEOUT`，默认 300 秒）的 swap 信封会返回 `400 invalid_state_transition` 且不会被广播；如果它已经在时限内到达网络，观察器仍会将其结算。在遭到网络拒绝之后，同一个信封最多可以重新提交 **3** 次，之后请构建一笔新的 swap——在 `503 provider_unavailable` 之后的重试不计入次数。该路由允许每个消费者和客户端地址每分钟调用 **20** 次（`429 rate_limited`）；在共享公共 key 下，每个匿名钱包都是同一个消费者，因此位于同一 NAT 之后的钱包会共用这份预算。`POST /v1/liquidity-pools/operations/:id/submit` 遵循相同的规则，并拥有自己独立的额度；`POST /v1/liquidity-pools/deposit` · `/withdraw` 共用**每分钟 20 次构建**的一份预算——它们是同一条流程的两个方向，额度分开只会让循环在两者之间交替、把两份都吃掉。
 
+### Solana 与 Monad 上的 swap（Jupiter、Kuru Flow）
+
+`/v1/swaps` 接受可选的 `chain`。不传——或传 `stellar`——时，每个请求的响应都与以前完全
+相同。`solana` 经由 [Jupiter](https://jup.ag)，`monad` 经由 [Kuru Flow](https://kuru.io)：
+它们是会搜索本链所有流动性来源的聚合器，因此 swap 得到的是该链上的最佳汇率，而不是单个池子
+的价格。流程与 Stellar 相同，全程非托管：
+
+```
+POST /v1/swaps/quote {chain} → POST /v1/swaps {chain, source} → wallet signs `transaction`
+  → POST /v1/swaps/{id}/submit {signedTransaction} → observer → SUCCEEDED / FAILED
+```
+
+- **资产**是原生代币代号（`SOL`、`MON`）、`native`，或 SPL mint / ERC-20 地址。发行方、
+  `memo` 以及不同的 `destination` 仅适用于 Stellar，在其他链上会被拒绝：输出发给 `source`。
+- **`transaction`** 是钱包要签名的内容。Solana：一笔未签名的 VersionedTransaction
+  （base64），约一分钟内有效，直到其 blockhash 过期。Monad：`{ to, data, value, chainId }`，
+  以 EIP-1559 交易签名，两分钟内有效。在 Monad 上出售授权额度不足的 ERC-20 时，还会返回
+  `approval`：需要先发送并确认的精确 `approve` 调用。
+- **Submit** 会检查签名后的交易正是所构建的那一笔——Solana 上消息字节相同，Monad 上调用
+  相同——且由 `source` 签名，然后通过本服务自己的 RPC 广播。节点拒绝时返回
+  `400 transaction_rejected`，swap 保持 `PENDING`；只有观察器读取到的链上结果才会让它变为
+  `SUCCEEDED` 或 `FAILED`。未提交或未上链的 swap 会变为 `EXPIRED`。Webhook 仍是相同的
+  `SWAP_*` 事件。
+- **佣金：**与 Stellar 一样按套餐费率，但由聚合器从**输出**中扣除。Jupiter 把
+  `platformFeeBps` 付到 `SOLANA_SWAP_FEE_WALLET` 针对输出 mint 的代币账户，该账户必须已存在
+  ——缺失时返回 `503 misconfigured`，并指明需要创建的账户。Kuru Flow 把 `referrerFeeBps`
+  付给 `MONAD_SWAP_FEE_WALLET`。
+- **仅限主网**；`dev` key 返回 `400 network_unsupported`。`GET /v1/swaps?chain=solana`
+  列出该链的 swap；id 在各链之间唯一，所以 `GET /v1/swaps/{id}` 和 submit 能找到任何 swap。
+- **Key。**没有 `KURU_API_KEY` 时，Kuru Flow 为每个地址签发一个限速为每秒一次请求的 token
+  ——足够试用，不适合生产。Jupiter 默认使用免 key 档位；设置 `JUPITER_API_KEY` 后，请把
+  `JUPITER_BASE_URL` 指向 `https://api.jup.ag/swap/v1`。
+
+## 跨链 swap（NEAR Intents）
+
+Stellar、Solana 与 Monad **之间**的 swap 由 [NEAR Intents](https://intents.near.org/)
+通过其 1Click API 结算。与上文的 Stellar swap 一样，它们是**非托管**的：付款方把输入发送到
+1Click 专为这一笔报价派生的充值地址，NEAR Intents 的求解器（solver）在另一条链上把输出付给
+收款方，或者退款给付款方。两条腿都不经过 Cosmos Pay。
+
+```
+quote → create (deposit address + wallet link + QR) → payer sends the deposit
+      → POST /deposit (optional) → observer polls 1Click → SUCCEEDED / REFUNDED / FAILED + webhook
+```
+
+**哪种 swap 走哪条路。**
+
+| 交易对 | 结算方 | 原因 |
+| --- | --- | --- |
+| Stellar → Stellar | `/v1/swaps`（Stellar DEX） | 协议原生支持 swap；`/v1/cross-chain-swaps` 返回 `400` 并指向那里 |
+| Stellar ⇄ Solana ⇄ Monad | NEAR Intents | 需要一座桥，NEAR Intents 就是这座桥 |
+| Solana → Solana、Monad → Monad | 带 `chain` 的 `/v1/swaps`（Jupiter、Kuru Flow） | 各聚合器在本链所有流动性来源中路由以获得最佳汇率；`/v1/cross-chain-swaps` 返回 `400` 并指向那里 |
+
+本服务在每条链上自己完成的工作：对照 1Click 的代币列表（`GET /v1/cross-chain-swaps/assets`）
+解析资产，按各自的链校验每个地址，以该链的钱包标准——SEP-7 `pay`、Solana Pay、EIP-681——
+构建充值请求，在 Horizon 上检查 Stellar 收款方是否信任即将收到的资产，并把状态镜像到自己的表中。
+
+**佣金。** 组织套餐的费率——与 Stellar swap 相同的可信 `X-Plan-Swap-Fee-Bps`，绝不是请求
+参数——作为一条 `appFees` 发送给 1Click，付给 `NEAR_INTENTS_FEE_RECIPIENT`（一个 NEAR 账户）。
+NEAR Intents 从输入中扣除它，报价的输出已是扣除后的净额，佣金累积在 NEAR Intents 内的该账户中，
+由运营方从那里提取。有费率但未配置收款账户的套餐会返回 `503 misconfigured`，而不是免费 swap。
+
+**请设置 `NEAR_INTENTS_API_KEY`。** 没有合作伙伴 key 时 1Click 也能工作，但价格不同：没有它时
+（2026-09-30 核实），每笔报价都带有 1Click 自己的 0.2% 费用，并且 `appFees` 中请求的佣金有一半
+归 1Click，而不是 `NEAR_INTENTS_FEE_RECIPIENT`。
+
+**仅限主网。** NEAR Intents 没有测试网。`dev` key 可以列出资产和报价——价格反正都是主网的——
+但 `POST /v1/cross-chain-swaps` 会返回 `400 network_unsupported`：充值地址会收取真实的资金。
+
+**Stellar 充值带有 memo。** 1Click 在同一个账户上接收所有 Stellar 充值，并按 memo 区分，因此
+那里的 `depositMemo` 是必需的，SEP-7 链接以 **`MEMO_TEXT`** 形式附带它——这正是充值到该账户
+所用的类型。没有 memo 或使用 `MEMO_ID` 的充值不会记入该 swap。
+
+**状态。** `AWAITING_DEPOSIT` → `DEPOSIT_DETECTED` / `INCOMPLETE_DEPOSIT` → `PROCESSING` →
+`SUCCEEDED`、`REFUNDED` 或 `FAILED`，后三者为最终状态。1Click 自己的状态词保存在
+`providerStatus` 中。截止时间（`CROSS_CHAIN_SWAP_DEADLINE_SECONDS`，默认 30 分钟）过后仍在等待
+的 swap 变为 `EXPIRED`；之后到达的充值会被 NEAR Intents 退款，因此 `EXPIRED` 的 swap 仍会被轮询
+一天，并跟随到 `REFUNDED`。观察器与结算观察器一起运行（`OBSERVER_ENABLED`、
+`OBSERVER_INTERVAL_MS`）；钱包无需回来，swap 也能完成结算。每次变化都会发出
+`CROSS_CHAIN_SWAP_UPDATED`、`_EXPIRED`、`_SUCCEEDED`、`_REFUNDED` 或 `_FAILED`；后三者与支付意图
+的事件一样持久且去重。
+
+**请保存 `quoteSignature`。** 它是 1Click 对报价及其充值地址的签名——与 NEAR Intents 发生争议时
+以它为准。完整的已签名报价也会在服务端保存。
+
+**限制。** Quote：每分钟 60 次；create 与 deposit：各 20 次，按 consumer 和客户端地址计
+（`429 rate_limited`）。
+
+### 跨链 swap 路由
+
+| 路由 | Scope | 用途 |
+| --- | --- | --- |
+| `GET /v1/cross-chain-swaps/assets` | `swaps:read` | NEAR Intents 可在 Stellar、Solana 和 Monad 上 swap 的代币 |
+| `POST /v1/cross-chain-swaps/quote` | `swaps:read` | 试算报价：输出、最小值、佣金；不持久化任何内容 |
+| `POST /v1/cross-chain-swaps` | `swaps:write` | 正式报价：充值地址、memo、钱包链接和二维码；支持 `Idempotency-Key` |
+| `GET /v1/cross-chain-swaps` | `swaps:read` | 该 consumer 的跨链 swap |
+| `GET /v1/cross-chain-swaps/{id}` | `swaps:read` | 单笔 swap，即观察器最后一次看到的状态 |
+| `POST /v1/cross-chain-swaps/{id}/deposit` | `swaps:write` | 上报充值交易，让 NEAR Intents 无需等待其索引器即可开始 |
 ## 别名 — 可认领的支付标识
 
 别名让付款方可以输入 `emanuel250`，而不是 `GA5ZSE…`。付款方在转账前一刻信任的正是这个名称，因此下面的规则很严格：一旦出错，就是一笔打到错误账户的付款。
@@ -1038,6 +1152,35 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
 
 ## 升级 — 破坏性变更与部署说明
 
+### Solana 与 Monad 上的 swap：`/v1/swaps` 支持 `chain`，并新增一张表
+
+- **迁移 `20261003120000_chain_swaps`** 新增 `chain_swap` 表。已有内容均不变：不带
+  `chain` 的 `/v1/swaps` 响应与以前逐字节相同。
+- **`/v1/swaps` 接受 `chain`**（`stellar` | `solana` | `monad`），在 quote 和 create 的
+  请求体中，以及列表的查询参数中。对 Solana 和 Monad，create、单条读取和 submit 返回
+  `ChainSwapEntity`（契约中为 `oneOf`）。
+- **`POST /v1/swaps/{id}/submit`：**发送 `signedTransaction` 时不再必须提供 `signedXdr`。
+  Stellar swap 仍然需要它，错误消息不变。
+- **`/v1/cross-chain-swaps` 现在拒绝所有同链交易对**——以前它通过 NEAR Intents 为
+  Solana → Solana 和 Monad → Monad 报价——并指向 `/v1/swaps`。
+- **Solana 或 Monad 节点拒绝广播时返回 `400 transaction_rejected`**，不再是
+  `502 provider_error`。这也包括 Monad 充值转发器的 relayer，它会像以前一样记录并重试。
+- **启用前：**设置 `SOLANA_SWAP_FEE_WALLET` 并为每个预期的输出 mint 创建其代币账户，设置
+  `MONAD_SWAP_FEE_WALLET`，并为生产流量申请 `KURU_API_KEY`。
+
+### 跨链 swap：一个新模块、一张新表和六个 webhook 事件
+
+- **迁移 `20261002120000_cross_chain_swaps`** 新增 `cross_chain_swap` 表，并向
+  `WebhookEventType` 追加六个值：`CROSS_CHAIN_SWAP_CREATED`、`_UPDATED`、`_SUCCEEDED`、
+  `_REFUNDED`、`_FAILED`、`_EXPIRED`。不改写任何已有数据。
+- **`/v1/cross-chain-swaps` 下的新路由**，复用 `swaps:read` / `swaps:write` scope；共享公共
+  key 可以访问 assets、quote、create 和 deposit，但永远无法访问两个读取路由。
+- **启用前：** 设置 `NEAR_INTENTS_FEE_RECIPIENT`（一个 NEAR 账户），否则所有带佣金的套餐都会
+  返回 `503 misconfigured`；并设置 `NEAR_INTENTS_API_KEY`，否则 1Click 会加收自己的费用并拿走
+  一半佣金。
+- **`provider_error` 现在也可能是 `400`**：NEAR Intents 拒绝报价（"amount is too low for
+  bridge"）是调用方可以改正的问题，因此它以带有 1Click 原因的 `400 provider_error` 返回，与
+  BlindPay 的 4xx 一样。
 ### 钱包备份：Argon2id 与静态加密
 
 - **部署前设置 `WALLET_BACKUP_ENCRYPTION_KEY`**（`openssl rand -base64 32`）；缺少它时，只要配置了登录入口就会拒绝启动。每个存储的备份都会用它再次加密（AES-256-GCM，绑定到其 `chain:address`），因此数据库的转储、副本或备份都不是任何人备份的副本。然后运行一次 **`npm run backups:reencrypt`**：它会加密之前写入的记录。轮换：把旧密钥移到 `WALLET_BACKUP_ENCRYPTION_PREVIOUS_KEYS`，设置新密钥，运行脚本，再移除旧密钥。
@@ -1391,6 +1534,21 @@ WHERE NOT i.indisvalid;
 | `STELLAR_SWAP_SLIPPAGE_BPS` | 否 | `50` | 默认 swap 滑点容忍度（bps） |
 | `STELLAR_SWAP_MAX_SLIPPAGE_BPS` | 否 | `500` | 调用方滑点的硬上限（bps） |
 | `STELLAR_SWAP_SINGLE_INFLIGHT` | 否 | `false` | 为 `true` 时，如果同一 source 已存在未过期的 PENDING swap，则返回 409 |
+| `NEAR_INTENTS_BASE_URL` | 否 | `https://1click.chaindefuser.com` | NEAR Intents 的 1Click API，用于跨链 swap |
+| `NEAR_INTENTS_API_KEY` | 建议 | — | 1Click 合作伙伴 key（`X-API-Key`）。没有它时 1Click 加收自己的 0.2% 费用，并拿走一半佣金 |
+| `NEAR_INTENTS_FEE_RECIPIENT` | 有套餐佣金时 | — | 接收跨链佣金的 NEAR 账户（`appFees`）。有套餐费率却未设置：`503 misconfigured` |
+| `NEAR_INTENTS_TIMEOUT_MS` | 否 | `20000` | 单次 1Click 调用的时间预算（毫秒） |
+| `CROSS_CHAIN_SWAP_SLIPPAGE_BPS` | 否 | `100` | 跨链默认滑点（bps）；低于最小值时 NEAR Intents 退款 |
+| `CROSS_CHAIN_SWAP_MAX_SLIPPAGE_BPS` | 否 | `500` | 调用方可请求的最大滑点 |
+| `CROSS_CHAIN_SWAP_DEADLINE_SECONDS` | 否 | `1800` | 充值地址接受充值的时长；之后的充值会被退款 |
+| `SOLANA_SWAP_FEE_WALLET` | 有套餐佣金时 | — | 接收 Solana swap 佣金的代币账户所有者（Jupiter `feeAccount`，每个输出 mint 一个——请先创建）。有套餐费率却未设置：`503 misconfigured` |
+| `MONAD_SWAP_FEE_WALLET` | 有套餐佣金时 | — | 接收 Monad swap 佣金的地址（Kuru Flow `referrerAddress`） |
+| `JUPITER_BASE_URL` | 否 | `https://lite-api.jup.ag/swap/v1` | Jupiter Swap API；使用 key 时为 `https://api.jup.ag/swap/v1` |
+| `JUPITER_API_KEY` | 否 | — | Jupiter API key（`x-api-key`），用于更高的限额 |
+| `JUPITER_TIMEOUT_MS` | 否 | `15000` | 单次 Jupiter 调用的时间预算（毫秒） |
+| `KURU_BASE_URL` | 否 | `https://ws.kuru.io` | Kuru Flow API（Monad） |
+| `KURU_API_KEY` | 生产环境需要 | — | Kuru Flow API key（`X-API-Key`）。没有它时每个地址只能拿到限速每秒一次请求的 token |
+| `KURU_TIMEOUT_MS` | 否 | `15000` | 单次 Kuru Flow 调用的时间预算（毫秒） |
 | `OBSERVER_ENABLED` | 否 | `true` | `true` / `false` — 链上对账器 |
 | `OBSERVER_INTERVAL_MS` | 否 | `15000` | 观察器轮询间隔（ms，最小 1000） |
 | `OBSERVER_BATCH_SIZE` | 否 | `50` | 每个观察器周期处理的意图/swap 上限 |

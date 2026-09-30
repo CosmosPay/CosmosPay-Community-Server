@@ -51,6 +51,12 @@ describe('Swaps guards (e2e)', () => {
       count: jest.fn().mockResolvedValue(0),
       findFirst: jest.fn().mockResolvedValue(null),
     },
+    // Solana and Monad swaps: `/v1/swaps/{id}` looks here before Stellar's.
+    chainSwap: {
+      findMany: jest.fn().mockResolvedValue([]),
+      count: jest.fn().mockResolvedValue(0),
+      findFirst: jest.fn().mockResolvedValue(null),
+    },
   };
 
   beforeAll(async () => {
@@ -83,6 +89,7 @@ describe('Swaps guards (e2e)', () => {
   beforeEach(() => {
     prismaMock.swap.findMany.mockClear();
     prismaMock.swap.findFirst.mockClear();
+    prismaMock.chainSwap.findMany.mockClear();
     counters.clear();
   });
 
@@ -222,6 +229,74 @@ describe('Swaps guards (e2e)', () => {
       }
     },
   );
+
+  describe('the chain field (Solana through Jupiter, Monad through Kuru Flow)', () => {
+    const quote = (body: Record<string, unknown>) =>
+      request(app.getHttpServer())
+        .post(QUOTE[1])
+        .set('x-gateway-secret', SECRET)
+        .set('x-consumer-username', 'cosmos_u1')
+        .set('x-consumer-permissions', 'swaps:read')
+        .send(body);
+
+    it('validates assets and amounts against the chain named', async () => {
+      const res = await quote({
+        chain: 'solana',
+        sourceAssetCode: 'not-a-mint',
+        destAssetCode: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+        amount: '1',
+      }).expect(400);
+      expect(res.body.code).toBe('validation_failed');
+      expect(res.body.message).toContain(
+        'sourceAssetCode must be SOL, "native" or an SPL mint address for chain solana',
+      );
+    });
+
+    it('keeps the Stellar message for a request that names no chain', async () => {
+      const res = await quote({
+        // A mint-shaped value: fine on Solana, not a Stellar asset code.
+        destAssetCode: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+        amount: '1',
+      }).expect(400);
+      expect(res.body.message).toContain(
+        'destAssetCode must be 1-12 alphanumeric characters',
+      );
+    });
+
+    it('refuses a testnet key on Monad before calling anyone: mainnet only', async () => {
+      const res = await quote({
+        chain: 'monad',
+        sourceAssetCode: 'MON',
+        destAssetCode: '0x754704bc059f8c67012fed69bc8a327a5aafb603',
+        amount: '1',
+      })
+        .set('x-consumer-env', 'dev')
+        .expect(400);
+      expect(res.body.code).toBe('network_unsupported');
+    });
+
+    it('lists another chain from its own table, still scoped to the consumer', async () => {
+      await tenant(['get', '/v1/swaps?chain=solana'], 'swaps:read').expect(200);
+      expect(prismaMock.chainSwap.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { chain: 'solana', consumer: { apisixUsername: 'cosmos_u1' } },
+        }),
+      );
+      expect(prismaMock.swap.findMany).not.toHaveBeenCalled();
+    });
+
+    it('asks a Stellar submit for signedXdr, whatever else it sent', async () => {
+      const res = await request(app.getHttpServer())
+        .post(SUBMIT[1])
+        .set('x-gateway-secret', SECRET)
+        .set('x-consumer-username', 'cosmos_u1')
+        .set('x-consumer-permissions', 'swaps:write')
+        .send({ signedTransaction: '0x02' })
+        .expect(400);
+      expect(res.body.message).toBe('signedXdr is required for a Stellar swap');
+      expect(prismaMock.swap.findFirst).not.toHaveBeenCalled();
+    });
+  });
 
   describe(`the rate limit on ${label(SUBMIT)}`, () => {
     const { limit } = SWAP_SUBMIT_RATE_LIMIT;

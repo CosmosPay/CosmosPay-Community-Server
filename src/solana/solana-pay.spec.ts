@@ -28,4 +28,10 @@ describe('solanaPayUri', () => {
     const uri = solanaPayUri({ recipient: 'R', reference: 'REF' });
     expect(uri).toBe('solana:R?reference=REF');
   });
+
+  it('leaves out the reference where the payee needs none (a one-off deposit address)', () => {
+    expect(solanaPayUri({ recipient: 'R', amount: '0.5' })).toBe(
+      'solana:R?amount=0.5',
+    );
+  });
 });

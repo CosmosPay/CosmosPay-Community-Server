@@ -68,6 +68,17 @@ export enum ApiErrorCode {
   InvalidMemo = 'invalid_memo',
   TransactionRejected = 'transaction_rejected',
 
+  // --- cross-chain swaps (NEAR Intents) --------------------------------------
+  /**
+   * The caller's API key reaches a network the provider does not run on. NEAR
+   * Intents settles on mainnets only, so a `dev` key (testnet) can quote a
+   * cross-chain swap but never open one: a deposit address it handed out would
+   * take real money.
+   */
+  NetworkUnsupported = 'network_unsupported',
+  /** The asset is not one NEAR Intents can swap on the chain the request names. */
+  AssetUnsupported = 'asset_unsupported',
+
   // --- provider / upstream --------------------------------------------------
   ProviderError = 'provider_error',
   ProviderUnavailable = 'provider_unavailable',

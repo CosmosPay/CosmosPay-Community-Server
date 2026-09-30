@@ -11,8 +11,10 @@ export interface SolanaPayRequest {
    * The intent's reference key. The wallet adds it to the transfer as a
    * read-only account, which is what makes the payment findable on-chain by
    * `getSignaturesForAddress` — Solana's equivalent of a Stellar MEMO_ID.
+   * Omitted where the payee finds the payment itself (a NEAR Intents deposit
+   * address is unique to one swap, so its balance is the match).
    */
-  reference: string;
+  reference?: string;
   /** Shown to the payer. */
   message?: string;
   /** Recorded on-chain by the SPL Memo program — the merchant's own id. */
@@ -27,7 +29,9 @@ export function solanaPayUri(request: SolanaPayRequest): string {
   const params = new URLSearchParams();
   if (request.amount !== undefined) params.set('amount', request.amount);
   if (request.splToken !== undefined) params.set('spl-token', request.splToken);
-  params.set('reference', request.reference);
+  if (request.reference !== undefined) {
+    params.set('reference', request.reference);
+  }
   if (request.message !== undefined) params.set('message', request.message);
   if (request.memo !== undefined) params.set('memo', request.memo);
   return `${SOLANA_PAY_SCHEME}${request.recipient}?${params.toString()}`;

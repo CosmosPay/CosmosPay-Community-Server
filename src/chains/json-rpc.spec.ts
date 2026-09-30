@@ -1,5 +1,9 @@
 import { HttpStatus } from '@nestjs/common';
-import { callJsonRpc, JsonRpcError } from '@/chains/json-rpc';
+import {
+  broadcastRejected,
+  callJsonRpc,
+  JsonRpcError,
+} from '@/chains/json-rpc';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 
 const target = {
@@ -73,5 +77,23 @@ describe('callJsonRpc', () => {
     err = (await errorOf(callJsonRpc(target, 'm', []))) as ApiError;
     expect(err.getStatus()).toBe(HttpStatus.SERVICE_UNAVAILABLE);
     expect(err.message).toMatch(/Solana RPC/);
+  });
+});
+
+describe('broadcastRejected', () => {
+  it('reports a node judging the transaction as a 400 with its reason', () => {
+    const err = broadcastRejected(
+      'Solana',
+      new JsonRpcError(-32002, 'Blockhash not found'),
+    );
+    expect(err.getStatus()).toBe(400);
+    expect(err.code).toBe(ApiErrorCode.TransactionRejected);
+    expect(err.message).toContain('Blockhash not found');
+  });
+
+  it('keeps a node that is only throttling a retryable 503', () => {
+    const err = broadcastRejected('Monad', new JsonRpcError(-32005, 'limit'));
+    expect(err.getStatus()).toBe(503);
+    expect(err.code).toBe(ApiErrorCode.ProviderUnavailable);
   });
 });

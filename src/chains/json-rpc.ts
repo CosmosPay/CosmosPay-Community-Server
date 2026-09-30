@@ -122,3 +122,32 @@ export function unexpectedRpcError(
     `${provider} RPC refused ${method}: ${detail}`,
   );
 }
+
+/**
+ * JSON-RPC codes a node answers a broadcast with when it is throttling, not
+ * judging the transaction: -32005 "limit exceeded" (EIP-1474) and -32029, the
+ * rate-limit code Solana RPC providers use.
+ */
+const RATE_LIMIT_CODES = new Set([-32005, -32029]);
+
+/**
+ * What a refused broadcast means for the caller. The node read the signed
+ * transaction and said no — a spent blockhash, a nonce already used, no gas
+ * money, a failed simulation — which is a 400 carrying its reason, not the 502
+ * of a node that is down. A node that is only throttling stays a 503.
+ */
+export function broadcastRejected(
+  provider: string,
+  err: JsonRpcError,
+): ApiError {
+  if (RATE_LIMIT_CODES.has(err.code)) {
+    return ApiError.unavailable(
+      ApiErrorCode.ProviderUnavailable,
+      `${provider} RPC is rate limiting this service. Retry shortly.`,
+    );
+  }
+  return ApiError.badRequest(
+    ApiErrorCode.TransactionRejected,
+    `${provider} rejected the transaction: ${err.message}`,
+  );
+}

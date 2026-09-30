@@ -78,8 +78,11 @@ src/assets/assets.constants.ts
 src/chains/chains.constants.ts
 src/common/rate-limit.constants.ts
 src/config/config.constants.ts
+src/cross-chain-swaps/cross-chain-swaps.constants.ts
 src/evm/evm.constants.ts
+src/kuru/kuru.constants.ts
 src/liquidity-pools/liquidity-pools.constants.ts
+src/near-intents/near-intents.constants.ts
 src/native-plugins/blindpay/blindpay.constants.ts
 src/native-plugins/blindpay/kyc/kyc.constants.ts
 src/observer/observer.constants.ts
@@ -264,6 +267,18 @@ table. These are the rules that did not hold on their own:
   point in the core (see `AdminExtensions`) and have the plugin register into it.
   A new native plugin needs its slug in `NATIVE_PLUGIN_SLUGS`, its module in
   `NATIVE_PLUGIN_MODULES` and its own lint entry in `eslint.config.mjs`.
+- **Swap venues are the exception, by decision: they are core.** A same-chain
+  swap is `/v1/swaps` on the chain's own venue — the Stellar DEX, Jupiter on
+  Solana, Kuru Flow on Monad (`src/jupiter/`, `src/kuru/`, one
+  `ChainSwapVenue` per chain in `src/swaps/venues/`). A swap between chains is
+  `/v1/cross-chain-swaps` on NEAR Intents (`src/near-intents/`), which refuses
+  every same-chain pair. All of them are always compiled in, not plugins.
+  Each aggregator only prices and builds: the wallet signs, and this service
+  checks the signed transaction is the one it built before broadcasting it
+  through its own RPC. Anything per chain is a `Record<Chain, …>`
+  (`NEAR_INTENTS_BLOCKCHAINS`, `DEPOSIT_LINK_BUILDERS`, `CHAIN_SWAP_PROVIDERS`),
+  deposit links use this service's own SEP-7 / Solana Pay / EIP-681 builders, and
+  third-party HTTP goes through `requestUpstreamJson` (`src/common/upstream-http.ts`).
 - **Monad deposit addresses are `CREATE2` addresses of
   `contracts/PaymentForwarder.sol`**, so every one of them depends on the exact
   bytecode in `src/evm/payment-forwarder.artifact.ts`. Regenerate it only with

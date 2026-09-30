@@ -1,4 +1,10 @@
-import { bigintToBytes, bytesToHex, rlpEncode } from '@/evm/rlp';
+import {
+  bigintToBytes,
+  bytesToHex,
+  hexToBytes,
+  rlpDecode,
+  rlpEncode,
+} from '@/evm/rlp';
 
 const text = (s: string) => Uint8Array.from(Buffer.from(s));
 
@@ -28,5 +34,27 @@ describe('rlpEncode', () => {
     const encoded = rlpEncode(long);
     expect(encoded[0]).toBe(0xb8);
     expect(encoded[1]).toBe(56);
+  });
+});
+
+describe('rlpDecode', () => {
+  it('reads back what rlpEncode wrote, nested lists and long strings included', () => {
+    const item = [
+      bigintToBytes(0n),
+      bigintToBytes(1024n),
+      new Uint8Array(60).fill(0xab),
+      [Uint8Array.of(0x7f), [new Uint8Array()]],
+    ];
+    expect(rlpDecode(rlpEncode(item))).toEqual(item);
+  });
+
+  it('refuses trailing bytes, a truncated item and a non-canonical encoding', () => {
+    expect(() => rlpDecode(hexToBytes('0x8201'))).toThrow();
+    expect(() => rlpDecode(hexToBytes('0x0102'))).toThrow('trailing');
+    // 0x05 written in the long form: two spellings of one value.
+    expect(() => rlpDecode(hexToBytes('0x8105'))).toThrow('non-canonical');
+    expect(bytesToHex(rlpDecode(hexToBytes('0x05')) as Uint8Array)).toBe(
+      '0x05',
+    );
   });
 });

@@ -2,6 +2,7 @@ import { secp256k1 } from '@noble/curves/secp256k1.js';
 import { keccak_256 } from '@noble/hashes/sha3.js';
 import {
   addressOfSecretKey,
+  decodeSignedEip1559,
   signEip1559,
   unsignedPayload,
 } from '@/evm/evm-transaction';
@@ -78,5 +79,33 @@ describe('signEip1559', () => {
     expect(signEip1559(TX, key).hash).not.toBe(
       signEip1559({ ...TX, chainId: 143 }, key).hash,
     );
+  });
+});
+
+describe('decodeSignedEip1559', () => {
+  const key = new Uint8Array(32).fill(7);
+
+  it('reads the fields back and recovers who signed, not who claims to', () => {
+    const signed = signEip1559({ ...TX, value: 10n ** 18n }, key);
+    const tx = decodeSignedEip1559(signed.raw);
+
+    expect(tx.from).toBe(addressOfSecretKey(key));
+    expect(tx.hash).toBe(signed.hash);
+    expect(tx).toMatchObject({
+      chainId: TX.chainId,
+      nonce: TX.nonce,
+      gasLimit: TX.gasLimit,
+      value: 10n ** 18n,
+      data: TX.data,
+    });
+    expect(tx.to.toLowerCase()).toBe(TX.to);
+  });
+
+  it('refuses anything but a type-2 transaction', () => {
+    const signed = signEip1559(TX, key);
+    expect(() => decodeSignedEip1559(`0x01${signed.raw.slice(4)}`)).toThrow(
+      'type 2',
+    );
+    expect(() => decodeSignedEip1559('0x02c0')).toThrow('12 fields');
   });
 });

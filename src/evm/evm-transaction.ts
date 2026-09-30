@@ -6,6 +6,8 @@ import {
   bytesToHex,
   concat,
   hexToBytes,
+  type RlpItem,
+  rlpDecode,
   rlpEncode,
 } from '@/evm/rlp';
 
@@ -84,4 +86,69 @@ export function signEip1559(
     ]),
   ]);
   return { raw: bytesToHex(raw), hash: bytesToHex(keccak_256(raw)) };
+}
+
+/** A signed type-2 transaction, read back: its fields, signer and hash. */
+export interface DecodedEip1559 extends Eip1559Transaction {
+  /** The address that signed it, EIP-55 — recovered, not claimed. */
+  from: string;
+  hash: string;
+}
+
+/**
+ * Reads a signed EIP-1559 transaction (`0x02 || rlp(...)`) and recovers who
+ * signed it. Only type 2: it is what every wallet sends on Monad, and a legacy
+ * or type-1 envelope is refused rather than half-understood. Throws on
+ * anything malformed.
+ */
+export function decodeSignedEip1559(raw: string): DecodedEip1559 {
+  const bytes = hexToBytes(raw);
+  if (bytes[0] !== 0x02) {
+    throw new Error('not an EIP-1559 (type 2) transaction');
+  }
+  const item = rlpDecode(bytes.subarray(1));
+  if (!Array.isArray(item) || item.length !== 12) {
+    throw new Error('a type-2 transaction has 12 fields');
+  }
+  const [chainId, nonce, tip, maxFee, gas, to, value, data, access, v, r, s] =
+    item;
+  const field = (x: RlpItem, name: string): Uint8Array => {
+    if (!(x instanceof Uint8Array)) throw new Error(`${name} must be bytes`);
+    return x;
+  };
+  const num = (x: RlpItem, name: string) => {
+    const b = field(x, name);
+    return b.length ? BigInt(bytesToHex(b)) : 0n;
+  };
+  const toBytes = field(to, 'to');
+  if (toBytes.length !== 20) {
+    throw new Error('a contract creation is not a swap');
+  }
+  if (!Array.isArray(access) || access.length !== 0) {
+    throw new Error('an access list is not expected on a swap');
+  }
+  const tx: Eip1559Transaction = {
+    chainId: Number(num(chainId, 'chainId')),
+    nonce: num(nonce, 'nonce'),
+    maxPriorityFeePerGas: num(tip, 'maxPriorityFeePerGas'),
+    maxFeePerGas: num(maxFee, 'maxFeePerGas'),
+    gasLimit: num(gas, 'gasLimit'),
+    to: toChecksumAddress(bytesToHex(toBytes)),
+    value: num(value, 'value'),
+    data: bytesToHex(field(data, 'data')),
+  };
+  const yParity = num(v, 'yParity');
+  if (yParity > 1n) throw new Error('yParity must be 0 or 1');
+  const sig = new secp256k1.Signature(
+    num(r, 'r'),
+    num(s, 's'),
+    Number(yParity),
+  );
+  const pub = sig
+    .recoverPublicKey(keccak_256(unsignedPayload(tx)))
+    .toBytes(false);
+  const from = toChecksumAddress(
+    bytesToHex(keccak_256(pub.subarray(1)).subarray(12)),
+  );
+  return { ...tx, from, hash: bytesToHex(keccak_256(bytes)) };
 }

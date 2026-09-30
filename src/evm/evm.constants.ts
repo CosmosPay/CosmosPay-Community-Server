@@ -91,3 +91,9 @@ export const DEPOSIT_WATCH_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
  * retry path checks for code first.
  */
 export const DEPOSIT_FORWARD_RESEND_MS = 5 * 60 * 1000;
+
+/** `allowance(address,address)` — how much a spender may pull from an owner. */
+export const ERC20_ALLOWANCE_SELECTOR = '0xdd62ed3e';
+
+/** `approve(address,uint256)` — the call a wallet sends before an ERC-20 swap. */
+export const ERC20_APPROVE_SELECTOR = '0x095ea7b3';

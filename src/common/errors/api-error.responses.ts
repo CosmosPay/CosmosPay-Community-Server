@@ -173,6 +173,21 @@ export const API_ERROR_CASES: Readonly<Record<ApiErrorCode, ApiErrorCase>> = {
     message: 'memo must be a MEMO_ID: a numeric uint64',
     path: '/v1/payment-intents/pay',
   },
+  [ApiErrorCode.NetworkUnsupported]: {
+    statuses: [400],
+    summary:
+      'Cross-chain swaps settle on mainnet only; a dev key cannot open one',
+    message:
+      'Cross-chain swaps run on mainnet only — NEAR Intents has no test network. Use a prod API key.',
+    path: '/v1/cross-chain-swaps',
+  },
+  [ApiErrorCode.AssetUnsupported]: {
+    statuses: [400],
+    summary: 'NEAR Intents cannot swap this asset on the named chain',
+    message:
+      'NEAR Intents does not support asset "yXLM" on stellar. GET /v1/cross-chain-swaps/assets lists the ones it does.',
+    path: '/v1/cross-chain-swaps/quote',
+  },
   [ApiErrorCode.TransactionRejected]: {
     statuses: [400],
     summary: 'The submitted transaction does not do what the route needs',
@@ -184,7 +199,10 @@ export const API_ERROR_CASES: Readonly<Record<ApiErrorCode, ApiErrorCase>> = {
 
   // --- provider / upstream --------------------------------------------------
   [ApiErrorCode.ProviderError]: {
-    statuses: [502],
+    // 400 when the provider refused the request itself — something the caller
+    // can change: BlindPay passes its 4xx through, NEAR Intents' 400s ("amount
+    // is too low for bridge") arrive as 400 `provider_error`.
+    statuses: [502, 400],
     summary: 'The upstream provider refused the request',
     message: 'The payment provider rejected the request.',
     path: '/v1/onramp/quotes',

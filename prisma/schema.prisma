@@ -30,6 +30,8 @@ model Consumer {
   products         Product[]
   customers        Customer[]
   swaps            Swap[]
+  chainSwaps       ChainSwap[]
+  crossChainSwaps  CrossChainSwap[]
   liquidityOps     LiquidityPoolOperation[]
 
   // BlindPay (onramp/offramp/KYC) resources mirrored from the provider.
@@ -166,6 +168,15 @@ enum WebhookEventType {
   // declared order PostgreSQL actually stores them in (ADD VALUE appends).
   SWAP_EXPIRED
   LIQUIDITY_EXPIRED
+
+  // Cross-chain swaps settled by NEAR Intents (appended by
+  // `20261002120000_cross_chain_swaps`).
+  CROSS_CHAIN_SWAP_CREATED
+  CROSS_CHAIN_SWAP_UPDATED
+  CROSS_CHAIN_SWAP_SUCCEEDED
+  CROSS_CHAIN_SWAP_REFUNDED
+  CROSS_CHAIN_SWAP_FAILED
+  CROSS_CHAIN_SWAP_EXPIRED
 }
 
 enum WebhookDeliveryStatus {
@@ -315,21 +326,21 @@ model PaymentIntent {
   chain String @default("stellar")
 
   // Payment details, in the chain's own address and asset vocabulary.
-  source      String? // payer account (Stellar G…, Solana base58, Monad 0x…) — null for PAY intents
-  destination String // payee account, same vocabulary
-  amount      String? // decimal string, e.g. "25.5" — optional for PAY intents
-  asset       String  @default("native") // asset code, or "native" for the chain's coin
+  source        String? // payer account (Stellar G…, Solana base58, Monad 0x…) — null for PAY intents
+  destination   String // payee account, same vocabulary
+  amount        String? // decimal string, e.g. "25.5" — optional for PAY intents
+  asset         String  @default("native") // asset code, or "native" for the chain's coin
   // Stellar: the asset's issuer. Solana: the SPL mint. Monad: the ERC-20
   // contract (EIP-55). Null for the native coin.
-  assetIssuer String?
+  assetIssuer   String?
   // The asset's decimals, read from the chain at creation (SPL mint, ERC-20
   // `decimals()`). Null on Stellar, where every amount has 7.
   assetDecimals Int?
   // Mandatory MEMO_ID (uint64 as string). Auto-generated when not supplied.
   // The intent's idempotency key per consumer on every chain; on Stellar it is
   // also what identifies the payment on-chain.
-  memo        String
-  network     String // 'public' | 'testnet' — the tier, on every chain
+  memo          String
+  network       String // 'public' | 'testnet' — the tier, on every chain
 
   // How the payment is found on chains without a Stellar memo. Solana: the
   // Solana Pay `reference` key the wallet adds to the transfer. Monad with a
@@ -708,14 +719,14 @@ model BlindpayQuote {
   consumer   Consumer @relation(fields: [consumerId], references: [id], onDelete: Cascade)
 
   /// The BlindPay instance the quote was minted on — see BlindpayReceiver.
-  environment String            @default("prod")
+  environment  String            @default("prod")
   /// The upstream BlindPay quote id (`pq_…` for payins, `qu_…` for payouts).
-  blindpayId  String
-  kind        BlindpayQuoteKind
-  expiresAt   DateTime?
+  blindpayId   String
+  kind         BlindpayQuoteKind
+  expiresAt    DateTime?
   /// Stable UUID sent as BlindPay's `Idempotency-Key` on every execution attempt
   /// for this one quote, so a retried payin or payout cannot execute it twice.
-  executionKey String @default(uuid())
+  executionKey String            @default(uuid())
 
   createdAt DateTime @default(now())
 
@@ -841,6 +852,172 @@ model Swap {
   // Observer sweep: pending rows oldest-first.
   @@index([status, createdAt])
   @@map("swap")
+}
+
+// ---------------------------------------------------------------------------
+// Same-chain swaps off Stellar, served by `/v1/swaps` with a `chain`: Solana
+// through Jupiter, Monad through Kuru Flow. Non-custodial like Stellar swaps:
+// the aggregator builds the transaction, the wallet signs it, this service
+// checks it is the one it handed out and broadcasts it through its own RPC.
+// A table of its own because `swap` is Stellar-shaped — a hash known before
+// signing, an XDR envelope, a Horizon observer — and none of that holds here.
+model ChainSwap {
+  id         String   @id @default(cuid())
+  consumerId String
+  consumer   Consumer @relation(fields: [consumerId], references: [id], onDelete: Cascade)
+
+  chain    String // 'solana' | 'monad'
+  // Always 'public': neither aggregator serves a test network.
+  network  String
+  // 'jupiter' | 'kuru'
+  provider String
+  status   SwapStatus @default(PENDING)
+
+  // The wallet that signs, pays and receives.
+  source String
+
+  // Assets: the SPL mint / ERC-20 address, or 'native' (SOL, MON). Amounts are
+  // decimals in each asset's own units.
+  sendAsset     String
+  sendDecimals  Int
+  sendAmount    String
+  destAsset     String
+  destDecimals  Int
+  // Quoted output and the on-chain minimum, both net of the commission.
+  destEstimated String
+  destMin       String
+  // The plan commission, taken from the output by the aggregator.
+  feeBps        Int
+  feeAmount     String
+  slippageBps   Int
+  // Intermediate assets of the route: [{ code, issuer: null }].
+  path          Json
+
+  // What the wallet signs: Solana { encoding: 'base64', data } (a
+  // VersionedTransaction), Monad { to, data, value, chainId }.
+  transaction Json
+  // Monad selling an ERC-20 with too small an allowance: the approve call to
+  // send first. Null otherwise.
+  approval    Json?
+  // Known only once signed: the Solana signature / EVM hash.
+  txHash      String?
+
+  // The aggregator's quote, kept whole for support and disputes.
+  quote Json
+
+  idempotencyKey String?
+  // After this the transaction is stale (a spent Solana blockhash, an old
+  // price) and submit refuses it.
+  expiresAt      DateTime
+  lastCheckedAt  DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([consumerId, idempotencyKey])
+  @@unique([chain, txHash])
+  // Listing endpoint: filter by consumer and chain, order createdAt desc.
+  @@index([consumerId, chain, createdAt])
+  // Observer sweep: in-flight rows, least recently checked first.
+  @@index([status, lastCheckedAt])
+  @@map("chain_swap")
+}
+
+// ---------------------------------------------------------------------------
+// Cross-chain swaps between Stellar, Solana and Monad, settled by NEAR Intents'
+// 1Click API. Non-custodial like the Stellar swaps, but the other way round:
+// the payer sends the input to a deposit address 1Click derived for this one
+// quote, and 1Click's solvers pay the output to `recipient` on the destination
+// chain — or refund `refundTo` on the origin chain. This service never holds
+// either leg; it quotes, hands out the deposit request, and mirrors the status.
+enum CrossChainSwapStatus {
+  AWAITING_DEPOSIT // quote live, nothing received yet
+  DEPOSIT_DETECTED // 1Click has seen the deposit transaction
+  INCOMPLETE_DEPOSIT // less than amountIn arrived; refunded at the deadline unless topped up
+  PROCESSING // deposit confirmed, solvers are filling the swap
+  SUCCEEDED // output paid to the recipient
+  REFUNDED // input returned to refundTo
+  FAILED // 1Click gave up; see its status for why
+  EXPIRED // the deadline passed with nothing deposited (rescued if a late deposit shows up)
+}
+
+model CrossChainSwap {
+  id         String   @id @default(cuid())
+  consumerId String
+  consumer   Consumer @relation(fields: [consumerId], references: [id], onDelete: Cascade)
+
+  // Always 'public': NEAR Intents runs on mainnets only. Kept as a column so
+  // filters and analytics read the same vocabulary as every other table.
+  network        String
+  status         CrossChainSwapStatus @default(AWAITING_DEPOSIT)
+  // 1Click's own status word, verbatim, for support and for statuses this
+  // service maps onto a coarser one.
+  providerStatus String
+
+  // Origin leg: what the payer sends. `*Asset` is the symbol we answered with,
+  // `*AssetId` 1Click's id for it, `*Contract` the SPL mint / ERC-20 / Stellar
+  // issuer (null for the chain's native coin).
+  originChain         String
+  originAsset         String
+  originAssetId       String
+  originContract      String?
+  originDecimals      Int
+  // Destination leg: what the recipient gets.
+  destinationChain    String
+  destinationAsset    String
+  destinationAssetId  String
+  destinationContract String?
+  destinationDecimals Int
+
+  // Decimal strings in each asset's own units. `amountIn` is gross; the plan
+  // commission (`feeBps` of it, as `feeAmount`) is taken by 1Click as an app
+  // fee, and `amountOutEstimated` / `amountOutMin` are already net of it.
+  amountIn           String
+  feeBps             Int
+  feeAmount          String
+  amountOutEstimated String
+  amountOutMin       String
+  slippageBps        Int
+
+  recipient String // on destinationChain
+  refundTo  String // on originChain
+
+  // Where, and with what memo, the payer sends `amountIn`; and the wallet link
+  // for it on the origin chain (SEP-7 pay, Solana Pay, EIP-681).
+  depositAddress String
+  depositMemo    String?
+  depositUri     String
+  // The payer's deposit transaction, when a caller reported it.
+  depositTxHash  String?
+
+  // Settlement, as 1Click reports it.
+  amountOut           String?
+  refundedAmount      String?
+  originTxHashes      Json?
+  destinationTxHashes Json?
+
+  timeEstimateSeconds Int
+  // 1Click's signed quote. Its docs ask integrators to keep the whole response:
+  // the signature over the deposit address is what settles a dispute.
+  correlationId       String
+  quoteSignature      String
+  quote               Json
+
+  idempotencyKey String?
+  // When the deposit address stops accepting a deposit (1Click's deadline).
+  expiresAt      DateTime
+  lastCheckedAt  DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([consumerId, idempotencyKey])
+  @@unique([depositAddress, depositMemo])
+  // Listing endpoint: filter by consumer, order createdAt desc.
+  @@index([consumerId, createdAt])
+  // Observer sweep: open rows, least recently checked first.
+  @@index([status, lastCheckedAt])
+  @@map("cross_chain_swap")
 }
 
 // ---------------------------------------------------------------------------
@@ -1164,7 +1341,7 @@ model AliasAddress {
 
   /// `stellar` | `solana` | `monad`. Every row from before the others existed is
   /// Stellar.
-  chain   String @default("stellar")
+  chain   String  @default("stellar")
   /// The chain's own address: Stellar G…, Solana base58, Monad 0x… (EIP-55).
   address String
   /// Network id as the wallet names it: `public` | `testnet` | a custom id.

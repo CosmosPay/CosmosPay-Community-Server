@@ -31,3 +31,13 @@ export const SOLANA_COMMITMENT = 'confirmed';
  * payer's attempts at this one payment — a handful, never a page.
  */
 export const SOLANA_REFERENCE_SIGNATURE_LIMIT = 20;
+
+/** The Associated Token Account program: where a wallet holds each token by default. */
+export const ASSOCIATED_TOKEN_PROGRAM_ID =
+  'ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL';
+
+/**
+ * Wrapped SOL. Jupiter swaps native SOL through it (wrapping and unwrapping in
+ * the same transaction), so it is the mint a quote names for SOL.
+ */
+export const WRAPPED_SOL_MINT = 'So11111111111111111111111111111111111111112';

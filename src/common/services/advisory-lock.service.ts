@@ -103,4 +103,6 @@ export enum AdvisoryLockKey {
   WalletAuthSweeper = 881_009,
   RecoverySweeper = 881_010,
   EvmDepositForwarder = 881_011,
+  CrossChainSwapObserver = 881_012,
+  ChainSwapObserver = 881_013,
 }
