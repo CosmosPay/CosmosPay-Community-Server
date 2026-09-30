@@ -298,6 +298,9 @@ consola llega a ella. Las rutas usan la forma `{param}` de OpenAPI.
 | GET | `/v1/sep30/accounts/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | DELETE | `/v1/sep30/accounts/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | POST | `/v1/sep30/accounts/{address}/sign/{signer}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
+| PUT | `/v1/sep30/shares/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
+| GET | `/v1/sep30/shares/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
+| DELETE | `/v1/sep30/shares/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | GET | `/v1/summary` | `payments:read` |  |
 | GET | `/v1/swaps` | `swaps:read` |  |
 | POST | `/v1/swaps` | `swaps:write` | ✓ |
@@ -1688,6 +1691,27 @@ misma lista `PLUGINS_ENABLED` que los plugins aislados.
   activados o no: `openapi:generate` los activa todos.
 
 ## Actualización — cambios incompatibles y notas de despliegue
+
+### Respaldos de la wallet: una puerta de recuperación por email, en manos de los dos servidores de recuperación
+
+- **La migración `20261004120000_recovery_backup_shares`** añade `recovery_backup_share`. Solo
+  la escribe un servidor de recuperación (`RECOVERY_ROLE`); aplica la migración en ambos.
+- **Rutas nuevas en los servidores de recuperación:** `PUT`, `GET` y `DELETE /v1/sep30/shares/{address}`,
+  `@Public()` como el resto de SEP-30 y servidas desde la misma ruta sin clave. La wallet parte
+  una clave aleatoria en dos, entrega una mitad a cada servidor con el token SEP-10 de la cuenta
+  y sella la clave de datos del respaldo bajo la clave completa como una puerta `recovery`.
+  Probar el email ante AMBOS servidores (el ID token de Authentik, o el código que envía cada
+  servidor) devuelve las dos mitades: el respaldo se abre y la persona pone una contraseña
+  nueva. La semilla — y la dirección en cada cadena — sobrevive, a diferencia de SEP-30, que
+  solo recupera la cuenta de Stellar.
+- **La confianza que añade:** un servidor solo guarda ruido aleatorio. Los dos juntos, o quien
+  controle el buzón Y consiga que ambos servidores lo acepten, pueden abrir un respaldo que
+  tenga esta puerta. Despliega los dos en infraestructura separada y con remitentes `MAIL_*`
+  distintos, como SEP-30 ya exige.
+- **`isBackupBox` acepta una ranura `recovery` en una caja `v: 4`**, junto a al menos una ranura
+  de contraseña o de passkey. Se rechaza una caja cuya única puerta sea `recovery`.
+- **El código por email de un servidor de recuperación** ahora también llega a un buzón que
+  solo guarda allí una mitad de respaldo.
 
 ### Swaps en Solana y Monad: `chain` en `/v1/swaps` y una tabla nueva
 

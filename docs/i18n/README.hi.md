@@ -295,6 +295,9 @@ Paths OpenAPI के `{param}` रूप में लिखे गए हैं
 | GET | `/v1/sep30/accounts/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | DELETE | `/v1/sep30/accounts/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | POST | `/v1/sep30/accounts/{address}/sign/{signer}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
+| PUT | `/v1/sep30/shares/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
+| GET | `/v1/sep30/shares/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
+| DELETE | `/v1/sep30/shares/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | GET | `/v1/summary` | `payments:read` |  |
 | GET | `/v1/swaps` | `swaps:read` |  |
 | POST | `/v1/swaps` | `swaps:write` | ✓ |
@@ -1619,6 +1622,25 @@ seal होती हैं और कभी लौटाई नहीं जा
   `openapi:generate` सभी को चालू करता है।
 
 ## अपग्रेड — breaking changes और deploy नोट्स
+
+### वॉलेट बैकअप: ईमेल से रिकवरी का दरवाज़ा, दोनों रिकवरी सर्वरों के पास
+
+- **माइग्रेशन `20261004120000_recovery_backup_shares`** `recovery_backup_share` जोड़ता है। इसे केवल
+  रिकवरी सर्वर (`RECOVERY_ROLE`) लिखता है; माइग्रेशन दोनों पर चलाएँ।
+- **रिकवरी सर्वरों पर नए रूट:** `PUT`, `GET` और `DELETE /v1/sep30/shares/{address}`, बाकी SEP-30 की
+  तरह `@Public()`, और उसी बिना-key वाले रूट से परोसे जाते हैं। वॉलेट एक रैंडम key को दो हिस्सों में
+  बाँटता है, खाते के SEP-10 टोकन से हर सर्वर को एक हिस्सा देता है, और बैकअप की डेटा key को पूरी key
+  के नीचे `recovery` दरवाज़े के रूप में सील करता है। दोनों सर्वरों के सामने ईमेल साबित करने पर
+  (Authentik का ID टोकन, या हर सर्वर का अपना ईमेल कोड) दोनों हिस्से वापस मिलते हैं: बैकअप खुल जाता है
+  और व्यक्ति नया पासवर्ड रखता है। सीड — और हर चेन का पता — बचा रहता है, SEP-30 के विपरीत, जो केवल
+  Stellar खाता वापस लाता है।
+- **इससे जुड़ने वाला भरोसा:** अकेले एक सर्वर के पास केवल रैंडम शोर है। दोनों सर्वर मिलकर, या जो
+  इनबॉक्स पर नियंत्रण रखता है और दोनों सर्वरों से उसे स्वीकार करवा लेता है, इस दरवाज़े वाला बैकअप खोल
+  सकते हैं। दोनों को अलग इंफ्रास्ट्रक्चर पर और अलग `MAIL_*` प्रेषकों के साथ चलाएँ, जैसा SEP-30 पहले से
+  माँगता है।
+- **`isBackupBox` एक `v: 4` बॉक्स में एक `recovery` स्लॉट स्वीकार करता है**, कम से कम एक पासवर्ड या
+  passkey स्लॉट के साथ। ऐसा बॉक्स अस्वीकार होता है जिसका एकमात्र दरवाज़ा `recovery` हो।
+- **रिकवरी सर्वर का ईमेल कोड** अब उस इनबॉक्स को भी जाता है जिसके पास वहाँ केवल एक बैकअप हिस्सा है।
 
 ### Solana और Monad पर swaps: `/v1/swaps` पर `chain`, और एक नई table
 

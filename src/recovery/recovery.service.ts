@@ -349,10 +349,18 @@ export class RecoveryService {
       },
     });
 
-    const registered = await this.prisma.recoveryAuthMethod.count({
-      where: { type: 'email', value: email, account: { role: rules.role } },
-    });
-    if (registered > 0) void this.deliver(email, code, expiresAt);
+    // An inbox is "registered" here for an account (SEP-30) or for a backup's
+    // half of its recovery key (`RecoverySharesService`) — either is something
+    // this code could recover.
+    const [accounts, shares] = await Promise.all([
+      this.prisma.recoveryAuthMethod.count({
+        where: { type: 'email', value: email, account: { role: rules.role } },
+      }),
+      this.prisma.recoveryBackupShare.count({
+        where: { role: rules.role, email },
+      }),
+    ]);
+    if (accounts + shares > 0) void this.deliver(email, code, expiresAt);
 
     return {
       claim_token: claimToken,

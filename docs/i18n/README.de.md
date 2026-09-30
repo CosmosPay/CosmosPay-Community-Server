@@ -298,6 +298,9 @@ Konsolen-Backend erreicht sie. Pfade verwenden die OpenAPI-Form `{param}`.
 | GET | `/v1/sep30/accounts/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | DELETE | `/v1/sep30/accounts/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | POST | `/v1/sep30/accounts/{address}/sign/{signer}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
+| PUT | `/v1/sep30/shares/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
+| GET | `/v1/sep30/shares/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
+| DELETE | `/v1/sep30/shares/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | GET | `/v1/summary` | `payments:read` |  |
 | GET | `/v1/swaps` | `swaps:read` |  |
 | POST | `/v1/swaps` | `swaps:write` | ✓ |
@@ -1708,6 +1711,27 @@ eingeschaltet werden.
   eingeschaltet oder nicht: `openapi:generate` schaltet alle ein.
 
 ## Upgrade — Breaking Changes und Deploy-Hinweise
+
+### Wallet-Backups: eine E-Mail-Wiederherstellungstür, verwahrt von den beiden Recovery-Servern
+
+- **Die Migration `20261004120000_recovery_backup_shares`** fügt `recovery_backup_share` hinzu.
+  Nur ein Recovery-Server (`RECOVERY_ROLE`) schreibt sie; führen Sie die Migration auf beiden aus.
+- **Neue Routen auf den Recovery-Servern:** `PUT`, `GET` und `DELETE /v1/sep30/shares/{address}`,
+  `@Public()` wie der Rest von SEP-30 und über dieselbe schlüssellose Route ausgeliefert. Die
+  Wallet teilt einen Zufallsschlüssel in zwei Hälften, hinterlegt je eine Hälfte mit dem
+  SEP-10-Token des Kontos bei jedem Server und versiegelt den Datenschlüssel des Backups unter
+  dem ganzen Schlüssel als `recovery`-Tür. Wer die E-Mail gegenüber BEIDEN Servern nachweist
+  (das Authentik-ID-Token oder der eigene E-Mail-Code jedes Servers), erhält beide Hälften: Das
+  Backup öffnet sich, und die Person setzt ein neues Passwort. Der Seed — und die Adresse auf
+  jeder Chain — bleibt erhalten, anders als bei SEP-30, das nur das Stellar-Konto wiederherstellt.
+- **Das zusätzliche Vertrauen:** Ein Server allein hält nur Zufallsrauschen. Beide Server
+  zusammen, oder wer das Postfach kontrolliert UND beide Server dazu bringt, es zu akzeptieren,
+  können ein Backup mit dieser Tür öffnen. Betreiben Sie beide auf getrennter Infrastruktur mit
+  getrennten `MAIL_*`-Absendern, wie SEP-30 es bereits verlangt.
+- **`isBackupBox` akzeptiert einen `recovery`-Slot in einer `v: 4`-Box**, neben mindestens einem
+  Passwort- oder Passkey-Slot. Eine Box, deren einzige Tür `recovery` ist, wird abgelehnt.
+- **Der E-Mail-Code eines Recovery-Servers** geht jetzt auch an ein Postfach, das dort nur eine
+  Backup-Hälfte hält.
 
 ### Swaps auf Solana und Monad: `chain` auf `/v1/swaps` und eine neue Tabelle
 

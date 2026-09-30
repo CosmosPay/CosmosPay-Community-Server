@@ -614,7 +614,10 @@ function argon2CostOk(
  * A password slot is held to the same cost floor a v2 box is — it is exactly as
  * exposed to whoever reads this table. A passkey slot has no cost to check: its
  * key is the authenticator's PRF output, 32 bytes nobody can guess offline, and
- * `id` only tells the wallet which credential to ask for.
+ * `id` only tells the wallet which credential to ask for. A recovery slot (v4
+ * only) is sealed under a random 32-byte key split between the two recovery
+ * servers — nothing to guess offline either, and nothing but the IV and the
+ * sealed key to check.
  */
 function isBackupSlot(slot: unknown, version: 3 | 4): boolean {
   if (!slot || typeof slot !== 'object' || Array.isArray(slot)) return false;
@@ -628,6 +631,9 @@ function isBackupSlot(slot: unknown, version: 3 | 4): boolean {
       ? s.kdf === 'argon2id' && argon2CostOk(s.salt, s.m, s.t, s.p)
       : passwordCostOk(s.salt, s.iter);
   }
+  if (s.kind === 'recovery') {
+    return version === 4 && Object.keys(s).length === 3;
+  }
   if (s.kind === 'passkey') {
     return (
       typeof s.id === 'string' &&
@@ -637,6 +643,17 @@ function isBackupSlot(slot: unknown, version: 3 | 4): boolean {
     );
   }
   return false;
+}
+
+/**
+ * At most one recovery door, and never ONLY that one. The recovery door is how
+ * a forgotten password is replaced, not the lock itself: a box whose sole door
+ * is the two servers' key would be a backup those two servers, together, hold
+ * outright — and a person who never set a password or a passkey.
+ */
+function recoveryDoorsOk(slots: Json[]): boolean {
+  const recovery = slots.filter((s) => s.kind === 'recovery').length;
+  return recovery <= 1 && recovery < slots.length;
 }
 
 /**
@@ -674,7 +691,8 @@ export function isBackupBox(box: string): boolean {
       Array.isArray(slots) &&
       slots.length > 0 &&
       slots.length <= BACKUP_MAX_SLOTS &&
-      slots.every((slot) => isBackupSlot(slot, version))
+      slots.every((slot) => isBackupSlot(slot, version)) &&
+      recoveryDoorsOk(slots as Json[])
     );
   }
   return false;

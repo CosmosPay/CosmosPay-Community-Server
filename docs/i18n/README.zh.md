@@ -263,6 +263,9 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | GET | `/v1/sep30/accounts/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | DELETE | `/v1/sep30/accounts/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | POST | `/v1/sep30/accounts/{address}/sign/{signer}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
+| PUT | `/v1/sep30/shares/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
+| GET | `/v1/sep30/shares/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
+| DELETE | `/v1/sep30/shares/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | GET | `/v1/summary` | `payments:read` |  |
 | GET | `/v1/swaps` | `swaps:read` |  |
 | POST | `/v1/swaps` | `swaps:write` | ✓ |
@@ -1153,6 +1156,22 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
 - **OpenAPI 契约记录每个原生插件的路由**，无论是否开启：`openapi:generate` 会全部开启。
 
 ## 升级 — 破坏性变更与部署说明
+
+### 钱包备份：由两台恢复服务器持有的邮箱恢复之门
+
+- **迁移 `20261004120000_recovery_backup_shares`** 新增 `recovery_backup_share` 表。只有恢复服务器
+  （`RECOVERY_ROLE`）会写入它；请在两台上都执行迁移。
+- **恢复服务器上的新路由：** `PUT`、`GET` 和 `DELETE /v1/sep30/shares/{address}`，与其余 SEP-30 路由
+  一样是 `@Public()`，并通过同一条无密钥路由提供。钱包把一个随机密钥拆成两半，用账户的 SEP-10 令牌
+  分别交给每台服务器一半，并以完整密钥把备份的数据密钥封装为一个 `recovery` 门。向两台服务器都证明
+  邮箱（Authentik 的 ID 令牌，或每台服务器各自发送的邮件验证码）即可取回两半：备份被打开，用户设置
+  新密码。种子——以及每条链上的地址——都得以保留，这与只恢复 Stellar 账户的 SEP-30 不同。
+- **由此增加的信任：** 单独一台服务器只持有随机噪声。两台服务器联合，或控制该邮箱且让两台服务器都
+  接受它的人，可以打开带有此门的备份。请将两台服务器部署在彼此独立的基础设施上，并使用不同的
+  `MAIL_*` 发件方，这正是 SEP-30 已有的要求。
+- **`isBackupBox` 接受 `v: 4` 盒子中的一个 `recovery` 槽位**，且旁边至少要有一个密码或 passkey
+  槽位。唯一一道门是 `recovery` 的盒子会被拒绝。
+- **恢复服务器发送的邮件验证码** 现在也会发往在该服务器上仅持有一半备份密钥的邮箱。
 
 ### Solana 与 Monad 上的 swap：`/v1/swaps` 支持 `chain`，并新增一张表
 

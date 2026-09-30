@@ -62,6 +62,14 @@ const passkeySlot = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
+/** A v4 recovery door: the data key under the key the two recovery servers split. */
+const recoverySlot = (overrides: Record<string, unknown> = {}) => ({
+  kind: 'recovery',
+  iv: Buffer.alloc(12, 10).toString('base64'),
+  data: Buffer.alloc(48, 11).toString('base64'),
+  ...overrides,
+});
+
 /** A v4 password door: Argon2id at the wallet's cost. */
 const argonSlot = (overrides: Record<string, unknown> = {}) => ({
   kind: 'password',
@@ -428,6 +436,33 @@ describe('wallet-auth-core', () => {
       expect(v4(argonSlot({ p: 0 }))).toBe(false);
       expect(
         v4(argonSlot({ salt: Buffer.alloc(8, 1).toString('base64') })),
+      ).toBe(false);
+    });
+
+    /* The email-recovery door: beside a password or a passkey, never alone, never twice. */
+    it('accepts one recovery door beside a password or passkey door in a v4 box', () => {
+      expect(isBackupBox(boxV3([argonSlot(), recoverySlot()], { v: 4 }))).toBe(
+        true,
+      );
+      expect(
+        isBackupBox(
+          boxV3([argonSlot(), passkeySlot(), recoverySlot()], { v: 4 }),
+        ),
+      ).toBe(true);
+    });
+
+    it('refuses a recovery door alone, twice, in a v3 box, or with extra fields', () => {
+      expect(isBackupBox(boxV3([recoverySlot()], { v: 4 }))).toBe(false);
+      expect(
+        isBackupBox(
+          boxV3([argonSlot(), recoverySlot(), recoverySlot()], { v: 4 }),
+        ),
+      ).toBe(false);
+      expect(isBackupBox(boxV3([passwordSlot(), recoverySlot()]))).toBe(false);
+      expect(
+        isBackupBox(
+          boxV3([argonSlot(), recoverySlot({ email: 'a@b.com' })], { v: 4 }),
+        ),
       ).toBe(false);
     });
 

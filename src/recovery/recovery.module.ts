@@ -2,11 +2,13 @@ import { Module } from '@nestjs/common';
 import { OidcModule } from '@/common/oidc/oidc.module';
 import { MailerModule } from '@/mailer/mailer.module';
 import {
+  RecoverySharesController,
   Sep10Controller,
   Sep30Controller,
   StellarTomlController,
 } from '@/recovery/recovery.controller';
 import { RecoveryService } from '@/recovery/recovery.service';
+import { RecoverySharesService } from '@/recovery/recovery-shares.service';
 import { RecoverySweeperService } from '@/recovery/recovery-sweeper.service';
 
 /**
@@ -19,7 +21,12 @@ import { RecoverySweeperService } from '@/recovery/recovery-sweeper.service';
  */
 @Module({
   imports: [OidcModule, MailerModule],
-  controllers: [StellarTomlController, Sep10Controller, Sep30Controller],
-  providers: [RecoveryService, RecoverySweeperService],
+  controllers: [
+    StellarTomlController,
+    Sep10Controller,
+    Sep30Controller,
+    RecoverySharesController,
+  ],
+  providers: [RecoveryService, RecoverySharesService, RecoverySweeperService],
 })
 export class RecoveryModule {}

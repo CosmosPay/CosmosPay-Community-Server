@@ -295,6 +295,9 @@ Paths use the OpenAPI `{param}` form.
 | GET | `/v1/sep30/accounts/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | DELETE | `/v1/sep30/accounts/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | POST | `/v1/sep30/accounts/{address}/sign/{signer}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
+| PUT | `/v1/sep30/shares/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
+| GET | `/v1/sep30/shares/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
+| DELETE | `/v1/sep30/shares/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | GET | `/v1/summary` | `payments:read` |  |
 | GET | `/v1/swaps` | `swaps:read` |  |
 | POST | `/v1/swaps` | `swaps:write` | ✓ |
@@ -1630,6 +1633,26 @@ the service under `src/native-plugins/<slug>/`, switched on by the same
   `openapi:generate` turns them all on.
 
 ## Upgrading — breaking changes and deploy notes
+
+### Wallet backups: an email-recovery door, held by the two recovery servers
+
+- **Migration `20261004120000_recovery_backup_shares`** adds `recovery_backup_share`. Only a
+  recovery server (`RECOVERY_ROLE`) writes it; run the migration on both.
+- **New routes on the recovery servers:** `PUT`, `GET` and `DELETE /v1/sep30/shares/{address}`,
+  `@Public()` like the rest of SEP-30 and served from the same keyless route. The wallet splits
+  a random key in two, files one half with each server under the account's SEP-10 token, and
+  seals the backup's data key under the whole as a `recovery` door. Proving the email to BOTH
+  servers (the Authentik ID token, or each server's own emailed code) returns both halves: the
+  backup opens and the person sets a new password. The seed — and every chain's address —
+  survives, unlike SEP-30, which recovers only the Stellar account.
+- **The trust this adds:** one server alone holds random noise. Both servers together, or
+  whoever controls the inbox AND gets both servers to accept it, can open a backup that has
+  this door. Run the two on separate infrastructure with separate `MAIL_*` senders, as SEP-30
+  already requires.
+- **`isBackupBox` accepts one `recovery` slot in a `v: 4` box**, beside at least one password or
+  passkey slot. A box whose only door is `recovery` is refused.
+- **A recovery server's emailed code** now also goes to an inbox that only holds a backup half
+  there.
 
 ### Swaps on Solana and Monad: `chain` on `/v1/swaps`, and a new table
 

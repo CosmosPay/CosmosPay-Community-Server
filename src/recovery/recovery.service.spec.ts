@@ -43,6 +43,7 @@ function makeService(
       updateMany: jest.fn(),
     },
     recoveryAuthMethod: { count: jest.fn() },
+    recoveryBackupShare: { count: jest.fn().mockResolvedValue(0) },
     recoveryAccount: {
       findUnique: jest.fn(),
       findMany: jest.fn(),
@@ -158,6 +159,21 @@ describe('RecoveryService', () => {
 
       // The same answer either way: the response does not say which inbox is registered.
       expect(Object.keys(unregistered)).toEqual(Object.keys(registered));
+    });
+
+    it('also sends one to an inbox that only holds a backup share here', async () => {
+      const { service, prisma, mailer } = makeService();
+      prisma.recoveryEmailCode.findFirst.mockResolvedValue(null);
+      prisma.recoveryEmailCode.create.mockResolvedValue({});
+      prisma.recoveryAuthMethod.count.mockResolvedValue(0);
+      prisma.recoveryBackupShare.count.mockResolvedValue(1);
+
+      await service.startEmail('ada@example.com');
+      await new Promise((r) => setImmediate(r));
+      expect(mailer.send).toHaveBeenCalledTimes(1);
+      expect(prisma.recoveryBackupShare.count).toHaveBeenCalledWith({
+        where: { role: 'a', email: 'ada@example.com' },
+      });
     });
   });
 

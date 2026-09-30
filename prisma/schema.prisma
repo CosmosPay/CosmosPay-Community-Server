@@ -1707,6 +1707,38 @@ model RecoveryAuthMethod {
   @@map("recovery_auth_method")
 }
 
+/// This server's half of the key that opens a wallet backup's "recovery" door.
+///
+/// The wallet splits a random 32-byte key in two (XOR) and gives one half to
+/// each recovery server; the backup the community server keeps carries the data
+/// key sealed under the whole. One half is uniformly random noise on its own, so
+/// neither server — nor the community server, which holds only the sealed box —
+/// can open anything alone. Whoever proves `email` to BOTH servers gets both
+/// halves back, which is what lets a person who forgot their password (and has
+/// no passkey there) restore the whole wallet, seed phrase included.
+model RecoveryBackupShare {
+  id String @id @default(cuid())
+
+  /// "a" | "b" — which server holds this half.
+  role String
+
+  /// The wallet's Stellar account (G…), whose SEP-10 token writes the half.
+  address String
+
+  /// The half, base64: exactly RECOVERY_SHARE_BYTES bytes.
+  share String
+
+  /// Who may take it back: normalized at write time (lowercased, trimmed).
+  email String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([role, address])
+  @@index([role, email])
+  @@map("recovery_backup_share")
+}
+
 /// A six-digit code a recovery server emailed ITSELF, to prove an inbox without
 /// trusting anyone else's word for it — the fallback when no OIDC provider is
 /// configured. Only hashes are stored.

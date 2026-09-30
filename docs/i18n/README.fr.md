@@ -295,6 +295,9 @@ Les chemins utilisent la forme OpenAPI `{param}`.
 | GET | `/v1/sep30/accounts/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | DELETE | `/v1/sep30/accounts/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | POST | `/v1/sep30/accounts/{address}/sign/{signer}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
+| PUT | `/v1/sep30/shares/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
+| GET | `/v1/sep30/shares/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
+| DELETE | `/v1/sep30/shares/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | GET | `/v1/summary` | `payments:read` |  |
 | GET | `/v1/swaps` | `swaps:read` |  |
 | POST | `/v1/swaps` | `swaps:write` | ✓ |
@@ -1676,6 +1679,27 @@ plugins isolés.
   `openapi:generate` les active tous.
 
 ## Mise à niveau — changements incompatibles et notes de déploiement
+
+### Sauvegardes du portefeuille : une porte de récupération par email, détenue par les deux serveurs de récupération
+
+- **La migration `20261004120000_recovery_backup_shares`** ajoute `recovery_backup_share`. Seul un
+  serveur de récupération (`RECOVERY_ROLE`) l'écrit ; appliquez la migration sur les deux.
+- **Nouvelles routes sur les serveurs de récupération :** `PUT`, `GET` et `DELETE /v1/sep30/shares/{address}`,
+  `@Public()` comme le reste de SEP-30 et servies par la même route sans clé. Le portefeuille
+  coupe une clé aléatoire en deux, dépose une moitié chez chaque serveur avec le jeton SEP-10 du
+  compte, et scelle la clé de données de la sauvegarde sous la clé entière comme porte
+  `recovery`. Prouver l'email aux DEUX serveurs (le jeton d'identité Authentik, ou le code que
+  chaque serveur envoie) rend les deux moitiés : la sauvegarde s'ouvre et la personne choisit un
+  nouveau mot de passe. La graine — et l'adresse sur chaque chaîne — survit, contrairement à
+  SEP-30, qui ne récupère que le compte Stellar.
+- **La confiance ajoutée :** un serveur seul ne détient que du bruit aléatoire. Les deux
+  ensemble, ou quiconque contrôle la boîte mail ET la fait accepter par les deux serveurs,
+  peuvent ouvrir une sauvegarde dotée de cette porte. Exploitez les deux sur des
+  infrastructures séparées avec des expéditeurs `MAIL_*` distincts, comme SEP-30 l'exige déjà.
+- **`isBackupBox` accepte un emplacement `recovery` dans une boîte `v: 4`**, à côté d'au moins un
+  emplacement mot de passe ou passkey. Une boîte dont la seule porte est `recovery` est refusée.
+- **Le code envoyé par un serveur de récupération** part désormais aussi vers une boîte mail qui
+  n'y détient qu'une moitié de sauvegarde.
 
 ### Swaps sur Solana et Monad : `chain` sur `/v1/swaps` et une nouvelle table
 
