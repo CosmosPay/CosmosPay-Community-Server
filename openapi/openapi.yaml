@@ -2059,6 +2059,55 @@ paths:
       tags:
         - assets
       x-cosmos-public-key: true
+  /v1/public-key:
+    get:
+      operationId: PublicKeyController_get_v1
+      parameters:
+        - name: env
+          required: false
+          in: query
+          description: "`dev` is the testnet key, `prod` the public-network one."
+          schema:
+            default: dev
+            type: string
+            enum:
+              - dev
+              - prod
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PublicKeyEntity"
+        "400":
+          $ref: "#/components/responses/ValidationFailed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          description: "`misconfigured` — A server-side configuration error — retrying
+            will not help"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+              examples:
+                misconfigured:
+                  summary: misconfigured — A server-side configuration error — retrying will not
+                    help
+                  value:
+                    statusCode: 503
+                    code: misconfigured
+                    error: Service Unavailable
+                    message: "No public key is published for the prod environment: set
+                      PUBLIC_API_KEY_PROD."
+                    path: /v1/public-key
+                    timestamp: 2026-09-01T12:00:00.000Z
+      summary: The shared public API key for an environment
+      tags:
+        - public-key
+      x-cosmos-public: true
+      security: []
   /v1/webhooks:
     post:
       operationId: WebhooksController_create_v1
@@ -9373,6 +9422,25 @@ components:
         - network
         - version
         - data
+    PublicKeyEntity:
+      type: object
+      properties:
+        env:
+          type: string
+          enum:
+            - dev
+            - prod
+          example: dev
+        apiKey:
+          type: string
+          example: dv_4f1c9a7e0b2d6c8e3a5f7b9d1e3c5a7f9b1d3e5c7a9f1b3d5e7c9a1f3b5d7e9c
+          description: "The shared key every wallet without an account of its own
+            presents. Not a secret: it ships inside an open-source wallet, and
+            what it may reach is confined server-side to the routes marked for
+            it."
+      required:
+        - env
+        - apiKey
     CreateWebhookEndpointDto:
       type: object
       properties:

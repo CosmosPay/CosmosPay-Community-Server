@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { OidcModule } from '@/common/oidc/oidc.module';
+import { MailerModule } from '@/mailer/mailer.module';
 import {
   Sep10Controller,
   Sep30Controller,
@@ -17,7 +18,7 @@ import { RecoverySweeperService } from '@/recovery/recovery-sweeper.service';
  * of each as the load needs; nothing here is per-process state.
  */
 @Module({
-  imports: [OidcModule],
+  imports: [OidcModule, MailerModule],
   controllers: [StellarTomlController, Sep10Controller, Sep30Controller],
   providers: [RecoveryService, RecoverySweeperService],
 })

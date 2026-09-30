@@ -4,7 +4,7 @@
 
 基于 **NestJS 12** + **Prisma 7 (PostgreSQL)** 构建的支付微服务。
 
-它是一个与 Cosmos 开发者平台（`paydev`）*相互独立*的应用。开发者平台只负责为下游服务**签发** APISIX 访问令牌（消费者 + `key-auth` 凭证）。本服务正是这些下游服务之一：它位于 **APISIX 之后**，APISIX 对每个请求进行负载均衡和身份验证，然后才将其转发到这里。因此本服务从不接触原始 API key——它只信任网关转发过来的内容。
+它是一个与 Cosmos 开发者平台（`paydev`）*相互独立*的应用。开发者平台是一个仪表盘：它为开发者**签发** API key，并**展示**他们的数据。它不在任何客户端请求的路径上——每次调用都是 客户端 → APISIX → 本服务，所以平台宕机时，钱包和集成方都不会察觉（见[没有任何请求依赖开发者平台](#没有任何请求依赖开发者平台)）。本服务位于 **APISIX 之后**，APISIX 对每个请求进行负载均衡和身份验证，然后才将其转发到这里。本服务从不接触原始 API key——它只信任网关转发过来的内容。
 
 ## 如何强制“只经由 APISIX”
 
@@ -64,6 +64,9 @@ src/
   customers/                      payer records derived from intents
   aliases/                        claimable payment handles: signed claims, resolution, email recovery
   assets/                         curated asset registry: the (code, issuer) pairs vouched for, per network
+  public-key/                     GET /v1/public-key: the shared public key, keyless
+  mailer/                         this service's own sender (Resend): sign-in and recovery codes
+  gateway-keys/                   mints wallet accounts' keys in APISIX (admin client, consumer forwarder)
   analytics/                      summary, balances, API logs, webhook logs
   activity/                       client telemetry ingest + feed (wallet, dashboard)
   admin/                          cross-tenant platform admin (console-only), audited
@@ -114,6 +117,7 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | 别名 | `/v1/aliases` | 可认领的支付标识：认领、解析、恢复 |
 | 钱包登录 | `/v1/wallet` | Google / GitHub / 邮件验证码，以及加密的助记词备份 |
 | 资产 | `/v1/assets` | 按网络划分的精选资产注册表 |
+| 公共 key | `/v1/public-key` | 共享的公共 API key，无需 key 即可获取（`@Public`） |
 | 分析 | `/v1/summary`, `/v1/balances`, `/v1/logs` | 仪表盘汇总与日志 |
 | 活动 | `/v1/activity` | 客户端上报的事件：接收、事件流、汇总 |
 | 插件 | `/v1/plugins` | 以 slug 命名的编译内置扩展，按 tenant 安装 |
@@ -232,6 +236,7 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | GET | `/v1/products/{id}` | `products:read` |  |
 | PATCH | `/v1/products/{id}` | `products:write` |  |
 | DELETE | `/v1/products/{id}` | `products:write` |  |
+| GET | `/v1/public-key` | none — `@Public()` |  |
 | GET | `/.well-known/stellar.toml` | none — `@Public()`, SEP-1 discovery (recovery servers only) |  |
 | GET | `/v1/sep10/auth` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | POST | `/v1/sep10/auth` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
@@ -587,8 +592,8 @@ Solana 或 Monad 账户签名的挑战在第一行之后多一行 `chain: <chain
 既是 Stellar 地址也是 Solana 地址，这一行防止为其一所做的签名打开另一个——而 Stellar 的
 挑战逐字节保持不变。Solana 用 ed25519 对 UTF-8 字节签名（`signMessage`；base64 或
 base58）；Monad 用 EIP-191 `personal_sign`（0x 十六进制；拒绝 high-s 签名）。Monad 地址以
-EIP-55 写法保存。恢复设置（`POST /v1/wallet/recovery/setup`）仍仅限 Stellar。控制台的开通
-调用现在也会收到 `chain` 和 `address`，非 Stellar 时 `stellarAddress: null`。
+EIP-55 写法保存。恢复设置（`POST /v1/wallet/recovery/setup`）仍仅限 Stellar。账户的 key
+在每条链上都以同样的方式签发（见[没有任何请求依赖开发者平台](#没有任何请求依赖开发者平台)）。
 
 ## 共享公共 API key
 
@@ -625,6 +630,28 @@ where: { id, consumer: { apisixUsername: consumer.username } }
 **允许遥测**，这样来自没有账户的钱包的崩溃报告仍然能够送达。通过这个 key 到达的事件是匿名的（一个共享消费者），因此钱包在发送之前会去除地址、目标、金额和 txHash。
 
 guard 通过**以下任一**信号识别公共消费者：转发的角色（`X-Consumer-Role: public`）**或** `APISIX_PUBLIC_CONSUMER` 用户名。两个都要设置：如果网关停止转发角色，用户名仍然能够匹配；而没有用户名时，guard 只能依赖一个请求头。
+
+**钱包从哪里获取它。** `GET /v1/public-key?env=dev|prod` 在没有 key、也没有网关密钥的情况下（`@Public()`）返回 `{ env, apiKey }`，取值来自 `PUBLIC_API_KEY_DEV` / `PUBLIC_API_KEY_PROD`；没有 key 的环境返回 `503 misconfigured`。轮换 key 就是修改这些变量——每个钱包会在 5 分钟缓存内取到新 key。该路径的 APISIX 路由**不得**运行 `key-auth`（调用方还没有 key）：请像 `/v1/wallet/auth/oauth/callback/*` 一样，通过无 key 路由提供它。
+
+## 没有任何请求依赖开发者平台
+
+开发者平台为开发者创建 API key 并展示数据。客户端所做的任何事都不经过它：钱包和每个集成都与 APISIX 通信，APISIX 再与本服务通信。以前并非如此，而平台——最常宕机的那一环——会连带让每一次登录失败：
+
+| 以前经过平台 | 现在 |
+| --- | --- |
+| 发送钱包的登录验证码 | 由本服务发送（`MAIL_FROM` + `MAIL_RESEND_API_KEY` / `MAIL_SMTP_*`） |
+| 在登录结束时为钱包账户签发 API key | 由本服务在 APISIX 中签发（`APISIX_ADMIN_URL`、`APISIX_ADMIN_KEY`） |
+| 恢复服务器通过邮件发送的验证码 | 每台恢复服务器自己发送（`RECOVERY_EMAIL_CODES=true` + 各自的 `MAIL_*`） |
+| 共享公共 key（`/api/public-key`） | `GET /v1/public-key` |
+| 资产目录与匿名遥测（`/api/assets`、`/api/telemetry`） | 钱包使用公共 key 调用 `GET /v1/assets` 和 `POST /v1/activity/events` |
+
+平台仍在做的都是它自己的事：开发者的 key、仪表盘，以及由它调用的 `/v1/admin`——从不反向调用。平台宕机时，没人能创建开发者 key 或打开仪表盘；钱包照常登录、付款和兑换。
+
+**钱包 key。** 完成登录后，会在消费者 `cosmos_wallet_<accountId>` 下获得一个 `dev` key 和一个 `prod` key，带有平台以前生成的 scope、label 和消费者 forwarder（套餐 `community`，兑换佣金 `WALLET_KEY_SWAP_FEE_BPS`，默认 150 bps）。第二次登录会返回账户已有的 key，而不是再签发一对。响应中的 `organizationId` 就是账户 id。
+
+**admin key 是安全上的代价。** APISIX 没有比 admin key 更窄的授权，而 admin key 能改写所有路由。这里的客户端只写入 `cosmos_wallet_` 下的消费者，并在构造请求前拒绝任何其他名称，但这是本代码的承诺，不是 APISIX 的：请像对待 `APISIX_GATEWAY_SECRET` 一样对待 `APISIX_ADMIN_KEY`，只让本服务的 pod 通过网络访问 admin API 而不开放其他任何东西，并且绝不在恢复服务器上设置它（启动会拒绝）。
+
+**在此变更之前由平台开通的账户**仍可使用其现有 key。下次登录时，它们会在 `cosmos_wallet_<accountId>` 下获得新 key，即一个新的消费者，因此记录在旧消费者（`cosmos_<platformUserId>`）下的历史用新 key 看不到。
 
 ## Stellar 原生 swap（路径支付）
 
@@ -1010,6 +1037,16 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
 
 ## 升级 — 破坏性变更与部署说明
 
+### 开发者平台退出请求路径
+
+- **已移除的变量：** `WALLET_AUTH_CONSOLE_URL`、`WALLET_AUTH_CONSOLE_SECRET`、`RECOVERY_EMAIL_DELIVERY_URL`、`RECOVERY_EMAIL_DELIVERY_SECRET`。它们会被忽略。
+- **邮件入口现在需要** `MAIL_FROM` + `MAIL_RESEND_API_KEY` / `MAIL_SMTP_*`（在 Resend 上验证过的发件人）**以及** `APISIX_ADMIN_URL` + `APISIX_ADMIN_KEY`。两者缺一，`GET /v1/wallet/auth/providers` 就报告 `email: false`；通过身份提供方登录仍能完成回调，但在设置 admin 这一对之前，`POST /v1/wallet/auth/finish` 返回 `503 misconfigured`。每一对变量必须同时设置，否则拒绝启动。
+- **原先通过邮件发送验证码的恢复服务器**需设置 `RECOVERY_EMAIL_CODES=true` 和自己的 `MAIL_*`。恢复服务器上设置 `APISIX_ADMIN_KEY` 会导致拒绝启动。
+- **新路由 `GET /v1/public-key`**（`@Public()`），由 `PUBLIC_API_KEY_DEV` / `PUBLIC_API_KEY_PROD` 提供：复制平台为公共 key 签发的值。把该路径加入 APISIX 的无 key 路由（不带 `key-auth`），否则钱包会收到 `401`。
+- **钱包 key 现在位于 `cosmos_wallet_<accountId>` 之下**；由平台开通的账户见上面的章节。响应结构不变。
+- **不带 `backup` 的 `POST /v1/wallet/auth/finish`** 会把签名的钱包连接到该账户并返回其 key：当账户备份的是另一个钱包时，不再返回 `backup_conflict`，也不再移动账户的 `address`。带 `backup` 时没有变化。从助记词导入的钱包现在就是这样连接 Cosmos Pay 的。
+- **无需迁移。**
+
 ### Solana 与 Monad；BlindPay 与 DeFindex 成为原生插件
 
 - **迁移 `20260930120000_multichain`** 为 `payment_intent`、`alias_address`、
@@ -1302,6 +1339,21 @@ WHERE NOT i.indisvalid;
 | `APISIX_SWAP_FEE_BPS_HEADER` | 否 | `x-plan-swap-fee-bps` | 套餐 swap 手续费（bps） |
 | `APISIX_EMAIL_HEADER` | 否 | `x-consumer-email` | key 所属账户的已验证邮箱，由网关转发。目前本服务中没有任何功能依赖它 |
 | `APISIX_PUBLIC_CONSUMER` | 否 | — | 共享公共消费者的用户名（见上文）。凡是发布了公共 key 的地方都要设置 |
+| `PUBLIC_API_KEY_DEV` | 否 | — | 测试网的共享公共 key，由 `GET /v1/public-key?env=dev` 提供。未设置时返回 `503 misconfigured` |
+| `PUBLIC_API_KEY_PROD` | 否 | — | 主网同上（`env=prod`） |
+| `APISIX_ADMIN_URL` | 与 admin key 一起 | — | APISIX Admin API 的基础地址，如 `http://apisix:9180/apisix/admin`。仅用于签发钱包账户的 key |
+| `APISIX_ADMIN_KEY` | 钱包登录需要 | — | APISIX admin key。作用于整个网关——见[没有任何请求依赖开发者平台](#没有任何请求依赖开发者平台)。在恢复服务器上会被拒绝 |
+| `APISIX_ADMIN_TIMEOUT_MS` | 否 | `10000` | 一次 Admin API 调用的时间预算（ms） |
+| `WALLET_KEY_SWAP_FEE_BPS` | 否 | `150` | 写入钱包账户 key 的兑换佣金（`community` 套餐的费率） |
+| `MAIL_RESEND_API_KEY` | 邮件入口需要 | — | 本服务发送登录与恢复验证码所用的 Resend API key |
+| `MAIL_FROM` | 与 Resend / SMTP key 一起 | — | 已验证的发件人，如 `Cosmos Pay <no-reply@example.com>` |
+| `MAIL_SMTP_HOST` | 否 | — | SMTP 服务器，在未设置 `MAIL_RESEND_API_KEY` 时使用 |
+| `MAIL_SMTP_PORT` | 否 | `587` | SMTP 端口 |
+| `MAIL_SMTP_SECURE` | 否 | `false` | 隐式 TLS（465）用 `true`，STARTTLS（587）用 `false` |
+| `MAIL_SMTP_USER` | 否 | — | SMTP 用户名 |
+| `MAIL_SMTP_PASS` | 否 | — | SMTP 密码 |
+| `MAIL_TIMEOUT_MS` | 否 | `15000` | 一次发送的时间预算（ms） |
+| `RECOVERY_EMAIL_CODES` | 否 | `false` | 在恢复服务器上：通过自己的 `MAIL_*` 发送自己的验证码 |
 | `STELLAR_NETWORK` | 否 | `testnet` | 回退使用的 Stellar 网络（`public` / `testnet`） |
 | `STELLAR_HORIZON_URL_PUBLIC` | 否 | `https://horizon.stellar.org` | 主网 Horizon 基础 URL |
 | `STELLAR_HORIZON_URL_TESTNET` | 否 | `https://horizon-testnet.stellar.org` | 测试网 Horizon 基础 URL |

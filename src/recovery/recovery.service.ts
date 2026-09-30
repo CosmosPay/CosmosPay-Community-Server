@@ -9,6 +9,8 @@ import { RecoveryEmailCodeStatus } from '@generated/prisma/client';
 import { OidcService } from '@/common/oidc/oidc.service';
 import { isUniqueViolation } from '@/common/prisma-errors';
 import { AppConfig } from '@/config/configuration';
+import { MailerService } from '@/mailer/mailer.service';
+import { minutesUntil, renderRecoveryCodeEmail } from '@/mailer/wallet-emails';
 import { PrismaService } from '@/prisma/prisma.service';
 import { fetchAccountSigners, isAccountId } from '@/stellar/account-signers';
 import {
@@ -96,8 +98,8 @@ type AccountRow = {
  *    verifies the same token on its own. Each server takes a given token once.
  *  - **Its own emailed code** (`startEmail` / `verifyEmail`), for a deployment
  *    with no provider. The code is minted and checked here; the other server
- *    sends its own. Only as independent as the two mail paths are — point each
- *    server's `RECOVERY_EMAIL_DELIVERY_URL` at its own sender for that.
+ *    sends its own. Only as independent as the two mail paths are — give each
+ *    server its own `MAIL_*` sender (its own Resend account) for that.
  *
  * What replaced both was an identity token minted in exchange for a SIGN-IN
  * session, verified with an HMAC secret that the sign-in server and both
@@ -112,10 +114,16 @@ export class RecoveryService {
     private readonly prisma: PrismaService,
     private readonly config: ConfigService<AppConfig, true>,
     private readonly oidc: OidcService,
+    private readonly mailer: MailerService,
   ) {}
 
   private get settings() {
     return this.config.get('recovery', { infer: true });
+  }
+
+  /** Whether this server emails its own codes: switched on AND able to send. */
+  private get sendsEmailCodes(): boolean {
+    return this.settings.emailCodes && this.mailer.configured;
   }
 
   /**
@@ -152,7 +160,7 @@ export class RecoveryService {
       horizonUrl: s.horizonUrl,
       sep30Endpoint: `${s.publicBaseUrl}/v1/sep30`,
       oidcIssuer: s.oidc.issuer || null,
-      emailCodes: Boolean(s.emailDelivery.url),
+      emailCodes: this.sendsEmailCodes,
     });
   }
 
@@ -288,8 +296,7 @@ export class RecoveryService {
    */
   async startEmail(rawEmail: string) {
     const rules = this.rules();
-    const delivery = this.settings.emailDelivery;
-    if (!delivery.url) {
+    if (!this.sendsEmailCodes) {
       throw new SepError(
         'This server does not send recovery codes.',
         HttpStatus.NOT_FOUND,
@@ -412,24 +419,15 @@ export class RecoveryService {
     code: string,
     expiresAt: Date,
   ): Promise<void> {
-    const { url, secret } = this.settings.emailDelivery;
+    const role = this.settings.role;
+    if (!role) return;
+    const msg = renderRecoveryCodeEmail({
+      role,
+      code,
+      minutes: minutesUntil(expiresAt),
+    });
     try {
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          'x-cosmos-recovery-secret': secret,
-        },
-        body: JSON.stringify({
-          email,
-          code,
-          expiresAt: expiresAt.toISOString(),
-          role: this.settings.role,
-        }),
-        signal: AbortSignal.timeout(this.settings.timeoutMs),
-      });
-      if (!res.ok)
-        this.logger.error(`recovery code delivery answered ${res.status}`);
+      await this.mailer.send({ to: email, ...msg });
     } catch (error) {
       this.logger.error(`recovery code delivery failed: ${String(error)}`);
     }

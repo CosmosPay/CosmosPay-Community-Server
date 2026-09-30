@@ -5,11 +5,14 @@
 Payments microservice built with **NestJS 12** + **Prisma 7 (PostgreSQL)**.
 
 It is a *separate* application from the Cosmos developer platform (`paydev`). The
-dev platform only **issues** APISIX access tokens (consumers + `key-auth`
-credentials) for downstream services. This service is one of those downstream
-services: it sits **behind APISIX**, which load-balances and authenticates every
-request before forwarding it here. The service therefore never sees raw API keys
-— it only trusts what the gateway forwards.
+dev platform is a dashboard: it **issues** API keys for developers and **shows**
+their data. It is not in the path of any request a client makes — every call goes
+client → APISIX → this service, so the platform can be down without a wallet or an
+integration noticing (see
+[No request depends on the developer platform](#no-request-depends-on-the-developer-platform)).
+This service sits **behind APISIX**, which load-balances and authenticates every
+request before forwarding it here. It never sees raw API keys — it only trusts
+what the gateway forwards.
 
 ## How "only APISIX" is enforced
 
@@ -85,6 +88,9 @@ src/
   customers/                      payer records derived from intents
   aliases/                        claimable payment handles: signed claims, resolution, email recovery
   assets/                         curated asset registry: the (code, issuer) pairs vouched for, per network
+  public-key/                     GET /v1/public-key: the shared public key, keyless
+  mailer/                         this service's own sender (Resend): sign-in and recovery codes
+  gateway-keys/                   mints wallet accounts' keys in APISIX (admin client, consumer forwarder)
   analytics/                      summary, balances, API logs, webhook logs
   activity/                       client telemetry ingest + feed (wallet, dashboard)
   admin/                          cross-tenant platform admin (console-only), audited
@@ -138,6 +144,7 @@ regenerated from the controllers and DTOs on every CI run
 | Aliases           | `/v1/aliases`            | Claimable payment handles: claim, resolve, recover        |
 | Wallet sign-in    | `/v1/wallet`             | Google / GitHub / email code, and the encrypted seed backup |
 | Assets            | `/v1/assets`             | Curated asset registry per network                        |
+| Public key        | `/v1/public-key`         | The shared public API key, served without a key (`@Public`) |
 | Analytics         | `/v1/summary`, `/v1/balances`, `/v1/logs` | Dashboard aggregates and logs            |
 | Activity          | `/v1/activity`           | Client-reported events: ingest, feed, rollup               |
 | Plugins           | `/v1/plugins`            | Compiled-in extensions under a slug, installed per tenant |
@@ -261,6 +268,7 @@ Paths use the OpenAPI `{param}` form.
 | GET | `/v1/products/{id}` | `products:read` |  |
 | PATCH | `/v1/products/{id}` | `products:write` |  |
 | DELETE | `/v1/products/{id}` | `products:write` |  |
+| GET | `/v1/public-key` | none — `@Public()` |  |
 | GET | `/.well-known/stellar.toml` | none — `@Public()`, SEP-1 discovery (recovery servers only) |  |
 | GET | `/v1/sep10/auth` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | POST | `/v1/sep10/auth` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
@@ -802,9 +810,9 @@ opening the other — while the Stellar challenges are unchanged byte for byte.
 Solana signs the UTF-8 bytes with ed25519 (`signMessage`; base64 or base58); Monad
 with EIP-191 `personal_sign` (0x-hex; high-s signatures are refused). A Monad
 address is stored in its EIP-55 spelling. The recovery setup
-(`POST /v1/wallet/recovery/setup`) stays Stellar-only. The console's provisioning
-call now receives `chain` and `address` too, with `stellarAddress: null` off
-Stellar.
+(`POST /v1/wallet/recovery/setup`) stays Stellar-only. The account's keys are
+minted the same way on every chain (see
+[No request depends on the developer platform](#no-request-depends-on-the-developer-platform)).
 
 ## The shared public API key
 
@@ -860,6 +868,53 @@ The guard identifies the public consumer by **either** the forwarded role
 (`X-Consumer-Role: public`) **or** the `APISIX_PUBLIC_CONSUMER` username. Set
 both: if the gateway stops forwarding roles, the username still matches, and
 without the username the guard depends only on a header.
+
+**Where a wallet gets it.** `GET /v1/public-key?env=dev|prod` answers
+`{ env, apiKey }` with no key and no gateway secret (`@Public()`), from
+`PUBLIC_API_KEY_DEV` / `PUBLIC_API_KEY_PROD`; an environment with no key answers
+`503 misconfigured`. Rotating the key is changing those variables — every wallet
+picks the new one up within the 5-minute cache. The APISIX route for this path
+must NOT run `key-auth` (the caller has no key yet): serve it from the keyless
+route, as `/v1/wallet/auth/oauth/callback/*` is.
+
+## No request depends on the developer platform
+
+The developer platform creates API keys for developers and shows data. Nothing a
+client does passes through it: the wallet and every integration talk to APISIX,
+and APISIX talks to this service. It used to be otherwise, and the platform — the
+piece that goes down most — took every sign-in with it:
+
+| Used to go through the platform | Now |
+| --- | --- |
+| Sending the wallet's sign-in code | This service sends it (`MAIL_FROM` + `MAIL_RESEND_API_KEY` / `MAIL_SMTP_*`) |
+| Minting a wallet account's API keys at the end of a sign-in | This service mints them in APISIX (`APISIX_ADMIN_URL`, `APISIX_ADMIN_KEY`) |
+| A recovery server's emailed code | Each recovery server sends its own (`RECOVERY_EMAIL_CODES=true` + its own `MAIL_*`) |
+| The shared public key (`/api/public-key`) | `GET /v1/public-key` |
+| The asset catalog and anonymous telemetry (`/api/assets`, `/api/telemetry`) | The wallet calls `GET /v1/assets` and `POST /v1/activity/events` with the public key |
+
+What the platform still does is its own: developers' keys, the dashboard, and
+`/v1/admin`, which it calls — never the other way round. If it is down, nobody
+can create a developer key or open the dashboard; wallets sign in, pay and swap as
+usual.
+
+**Wallet keys.** A finished sign-in gets a `dev` and a `prod` key under the
+consumer `cosmos_wallet_<accountId>`, with the scopes, labels and consumer
+forwarder the platform used to bake (plan `community`, swap commission
+`WALLET_KEY_SWAP_FEE_BPS`, default 150 bps). A second sign-in returns the keys the
+account already has instead of minting another pair. `organizationId` in the
+answer is the account id.
+
+**The admin key is the security trade.** APISIX has no narrower grant than its
+admin key, which can rewrite every route. The client here only writes consumers
+under `cosmos_wallet_` and refuses any other name before building a request, but
+that is this code's promise, not APISIX's: treat `APISIX_ADMIN_KEY` like
+`APISIX_GATEWAY_SECRET`, give this service's pods network access to the admin API
+and nothing else to it, and never set it on a recovery server (boot refuses).
+
+**Accounts provisioned by the platform before this change** keep working with the
+keys they hold. On their next sign-in they get new keys under
+`cosmos_wallet_<accountId>`, a new consumer, so history recorded under the old
+consumer (`cosmos_<platformUserId>`) is not visible with the new key.
 
 ## Stellar native swaps (path payments)
 
@@ -1427,6 +1482,26 @@ the service under `src/native-plugins/<slug>/`, switched on by the same
 
 ## Upgrading — breaking changes and deploy notes
 
+### The developer platform leaves the request path
+
+- **Removed variables:** `WALLET_AUTH_CONSOLE_URL`, `WALLET_AUTH_CONSOLE_SECRET`,
+  `RECOVERY_EMAIL_DELIVERY_URL`, `RECOVERY_EMAIL_DELIVERY_SECRET`. They are ignored.
+- **The email door now needs** `MAIL_FROM` + `MAIL_RESEND_API_KEY` / `MAIL_SMTP_*` (a verified
+  Resend sender) **and** `APISIX_ADMIN_URL` + `APISIX_ADMIN_KEY`. Without both,
+  `GET /v1/wallet/auth/providers` reports `email: false`; a provider sign-in still
+  completes the callback but `POST /v1/wallet/auth/finish` answers
+  `503 misconfigured` until the admin pair is set. Each pair is set together or
+  boot refuses.
+- **A recovery server that emailed codes** sets `RECOVERY_EMAIL_CODES=true` and
+  its own `MAIL_*`. `APISIX_ADMIN_KEY` on a recovery server refuses to boot.
+- **New route `GET /v1/public-key`** (`@Public()`), fed by `PUBLIC_API_KEY_DEV` /
+  `PUBLIC_API_KEY_PROD`: copy the values the platform minted for the public key.
+  Add the path to APISIX's keyless route (no `key-auth`), or wallets get `401`.
+- **Wallet keys now live under `cosmos_wallet_<accountId>`**; see the section above
+  for accounts the platform provisioned. Response shapes are unchanged.
+- **`POST /v1/wallet/auth/finish` without `backup`** connects the signing wallet to the account and returns its keys: it no longer answers `backup_conflict` when the account backs up another wallet, and it no longer moves the account's `address`. With `backup` nothing changed. This is how a wallet imported from a seed connects to Cosmos Pay now.
+- **No migration.**
+
 ### Solana and Monad; BlindPay and DeFindex become native plugins
 
 - **Migration `20260930120000_multichain`** adds `chain` (default `stellar`) to
@@ -1848,6 +1923,21 @@ at least `DATABASE_URL` and `APISIX_GATEWAY_SECRET`.
 | `APISIX_SWAP_FEE_BPS_HEADER` | no | `x-plan-swap-fee-bps` | Plan swap fee (bps) |
 | `APISIX_EMAIL_HEADER` | no | `x-consumer-email` | Verified email of the key's account, forwarded by the gateway. Nothing in this service depends on it today |
 | `APISIX_PUBLIC_CONSUMER` | no | — | Username of the shared public consumer (see above). Set it wherever a public key is published |
+| `PUBLIC_API_KEY_DEV` | no | — | The shared public key for testnet, served by `GET /v1/public-key?env=dev`. Unset answers `503 misconfigured` |
+| `PUBLIC_API_KEY_PROD` | no | — | The same for mainnet (`env=prod`) |
+| `APISIX_ADMIN_URL` | with the admin key | — | APISIX Admin API base, e.g. `http://apisix:9180/apisix/admin`. Used only to mint wallet accounts' keys |
+| `APISIX_ADMIN_KEY` | for the wallet sign-in | — | APISIX admin key. Gateway-wide — see [No request depends on the developer platform](#no-request-depends-on-the-developer-platform). Refused on a recovery server |
+| `APISIX_ADMIN_TIMEOUT_MS` | no | `10000` | Budget for one Admin API call (ms) |
+| `WALLET_KEY_SWAP_FEE_BPS` | no | `150` | Swap commission baked into wallet accounts' keys (the `community` plan's rate) |
+| `MAIL_RESEND_API_KEY` | for the email door | — | Resend API key this service sends sign-in and recovery codes with |
+| `MAIL_FROM` | with the Resend / SMTP key | — | Verified sender, e.g. `Cosmos Pay <no-reply@example.com>` |
+| `MAIL_SMTP_HOST` | no | — | SMTP server, used when `MAIL_RESEND_API_KEY` is unset |
+| `MAIL_SMTP_PORT` | no | `587` | SMTP port |
+| `MAIL_SMTP_SECURE` | no | `false` | `true` for implicit TLS (465), `false` for STARTTLS (587) |
+| `MAIL_SMTP_USER` | no | — | SMTP user |
+| `MAIL_SMTP_PASS` | no | — | SMTP password |
+| `MAIL_TIMEOUT_MS` | no | `15000` | Budget for one send (ms) |
+| `RECOVERY_EMAIL_CODES` | no | `false` | On a recovery server: email its own codes through its `MAIL_*` |
 | `STELLAR_NETWORK` | no | `testnet` | Fallback Stellar network (`public` / `testnet`) |
 | `STELLAR_HORIZON_URL_PUBLIC` | no | `https://horizon.stellar.org` | Mainnet Horizon base URL |
 | `STELLAR_HORIZON_URL_TESTNET` | no | `https://horizon-testnet.stellar.org` | Testnet Horizon base URL |

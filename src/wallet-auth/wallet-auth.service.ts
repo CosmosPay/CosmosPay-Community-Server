@@ -15,6 +15,9 @@ import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { OidcService } from '@/common/oidc/oidc.service';
 import { isReturnUrlAllowed, returnRedirectUrl } from '@/common/return-url';
 import { openJson, sealJson } from '@/common/sealed-box';
+import { WalletKeysService } from '@/gateway-keys/wallet-keys.service';
+import { MailerService } from '@/mailer/mailer.service';
+import { minutesUntil, renderLoginCodeEmail } from '@/mailer/wallet-emails';
 import { PrismaService } from '@/prisma/prisma.service';
 import {
   fetchAccountSigners,
@@ -179,6 +182,8 @@ export class WalletAuthService {
     private readonly prisma: PrismaService,
     private readonly config: ConfigService<AppConfig, true>,
     private readonly oidc: OidcService,
+    private readonly mailer: MailerService,
+    private readonly walletKeys: WalletKeysService,
   ) {}
 
   private get settings() {
@@ -237,9 +242,9 @@ export class WalletAuthService {
     };
   }
 
-  /** The email door needs somewhere to hand the code to. */
+  /** The email door needs a sender for the code and a way to mint the keys. */
   private emailAvailable(): boolean {
-    return Boolean(this.settings.consoleUrl);
+    return this.mailer.configured && this.walletKeys.configured;
   }
 
   /* --------------------------------- OAuth -------------------------------- */
@@ -834,7 +839,14 @@ export class WalletAuthService {
     // Refusing here rather than overwriting is the whole point. The box being
     // discarded may be the only copy of a funded wallet, and the wallet asks the
     // person to acknowledge that before it ever sets `replaceBackup`.
+    //
+    // Only when this call WRITES a backup. Without one it is a wallet connecting
+    // to an account it already proved the email of — a second wallet of the same
+    // person — and there is nothing to discard: the account keeps backing up the
+    // wallet it did.
+    const writesBackup = dto.backup !== undefined;
     if (
+      writesBackup &&
       existing?.backup &&
       (existing.backup.chain !== chain ||
         existing.backup.address !== address) &&
@@ -860,12 +872,13 @@ export class WalletAuthService {
         chain,
         address,
       },
+      // The account's own wallet moves only with its backup: a wallet connecting
+      // without one gets the account's keys and leaves `address` where it was.
       update: {
         name,
         avatar: identity.avatar,
         method: identity.method,
-        chain,
-        address,
+        ...(writesBackup || !existing ? { chain, address } : {}),
       },
     });
 
@@ -882,14 +895,10 @@ export class WalletAuthService {
       });
     }
 
-    const keys = await this.provisionKeys({
+    // Minted (or found) in APISIX directly — no other service is in this path.
+    const keys = await this.walletKeys.provision({
       accountId: account.id,
-      chain,
-      address,
-      // The console's original field; null off Stellar, where there is none.
-      stellarAddress: chain === 'stellar' ? address : null,
       email: identity.email,
-      name,
     });
 
     return {
@@ -1309,16 +1318,10 @@ export class WalletAuthService {
     };
   }
 
-  /* ------------------------------ console hops ---------------------------- */
+  /* --------------------------------- mail --------------------------------- */
 
   /**
-   * Hand the code to whatever sends mail.
-   *
-   * This service deliberately owns no mailer. It mints the code and posts it to
-   * the operator's console, which delivers it — the same split `ConsoleOnlyGuard`
-   * already makes for alias recovery, in the other direction. A self-hosted
-   * deployment points `WALLET_AUTH_CONSOLE_URL` at its own sender and owes this
-   * service nothing else.
+   * Email the code.
    *
    * A failure here is a failure of the whole call, not a warning: a code minted
    * and never delivered is a person staring at an empty inbox with a live row
@@ -1330,82 +1333,25 @@ export class WalletAuthService {
     code: string,
     expiresAt: Date,
   ): Promise<void> {
-    await this.postToConsole('/wallet/console/login-code', {
-      email,
-      name,
+    if (!this.mailer.configured) {
+      throw ApiError.unavailable(
+        ApiErrorCode.Misconfigured,
+        'This deployment has no mail sender configured to deliver a sign-in code.',
+      );
+    }
+    const msg = renderLoginCodeEmail({
+      name: fallbackName(email, name),
       code,
-      expiresAt: expiresAt.toISOString(),
+      minutes: minutesUntil(expiresAt),
     });
-  }
-
-  /**
-   * Ask the console to mint this account's gateway credentials.
-   *
-   * Key minting needs APISIX admin, and this service deliberately does not hold
-   * it: everything registered here is something an attacker who reached this
-   * process could also call, and "mint a credential for any consumer" is not on
-   * that list. The console already holds admin for the dashboard's own key
-   * management, so the capability lives in one place rather than two.
-   */
-  private async provisionKeys(input: {
-    accountId: string;
-    chain: Chain;
-    address: string;
-    stellarAddress: string | null;
-    email: string;
-    name: string;
-  }): Promise<{
-    organizationId: string;
-    dev: string | null;
-    prod: string | null;
-  }> {
-    const answer = (await this.postToConsole(
-      '/wallet/console/provision',
-      input,
-    )) as {
-      organizationId?: unknown;
-      keys?: { dev?: unknown; prod?: unknown };
-    };
-
-    const str = (v: unknown): string | null =>
-      typeof v === 'string' && v ? v : null;
-    return {
-      organizationId: str(answer.organizationId) ?? '',
-      dev: str(answer.keys?.dev),
-      prod: str(answer.keys?.prod),
-    };
-  }
-
-  private async postToConsole(path: string, body: unknown): Promise<unknown> {
-    const base = this.settings.consoleUrl;
-    if (!base) {
+    try {
+      await this.mailer.send({ to: email, ...msg });
+    } catch {
       throw ApiError.unavailable(
         ApiErrorCode.Misconfigured,
-        'This deployment has no console configured to complete a sign-in.',
+        'The sign-in code could not be sent. Try again shortly.',
       );
     }
-    const res = await fetch(`${base}${path}`, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        // The same marker APISIX strips from everything it proxies, which is
-        // what makes it proof of a backend-to-backend call.
-        'x-cosmos-internal': '1',
-        'x-gateway-secret': this.settings.consoleSecret,
-      },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(this.settings.timeoutMs),
-    });
-    if (!res.ok) {
-      this.logger.error(
-        `wallet sign-in: console ${path} answered ${res.status}`,
-      );
-      throw ApiError.unavailable(
-        ApiErrorCode.Misconfigured,
-        'The sign-in could not be completed. Try again shortly.',
-      );
-    }
-    return res.json().catch(() => ({}));
   }
 
   /* -------------------------------- config -------------------------------- */

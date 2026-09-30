@@ -15,6 +15,14 @@ import {
 } from '@/config/config.constants';
 import { parseReturnUrls } from '@/common/return-url';
 import {
+  DEFAULT_APISIX_ADMIN_TIMEOUT_MS,
+  DEFAULT_WALLET_KEY_SWAP_FEE_BPS,
+} from '@/gateway-keys/gateway-keys.constants';
+import {
+  DEFAULT_MAIL_SMTP_PORT,
+  DEFAULT_MAIL_TIMEOUT_MS,
+} from '@/mailer/mailer.constants';
+import {
   parseRedirectUrlWhitelist,
   type RedirectUrlWhitelist,
 } from '@/config/kyc-redirect-url-whitelist';
@@ -102,6 +110,40 @@ export interface AppConfig {
      * anonymous population wrote.
      */
     publicConsumer: string;
+  };
+  /**
+   * The APISIX Admin API, used for one thing: minting the gateway keys of a
+   * wallet account at the end of its sign-in (`WalletKeysService`). Unset means
+   * this deployment cannot finish a sign-in. The client only writes consumers
+   * under `cosmos_wallet_`, but the key itself is gateway-wide — see the README.
+   */
+  apisixAdmin: {
+    url: string;
+    key: string;
+    timeoutMs: number;
+    /** Swap commission (bps) baked into a wallet account's keys. */
+    walletSwapFeeBps: number;
+  };
+  /**
+   * The shared public key per environment, served keyless at `GET /v1/public-key`
+   * to wallets that have no account. Empty answers 503 for that environment.
+   */
+  publicKeys: { dev: string; prod: string };
+  /**
+   * This service's own sender: Resend when `resendApiKey` is set, otherwise SMTP.
+   * No `from`, or neither transport, disables every email door.
+   */
+  mail: {
+    resendApiKey: string;
+    smtp: {
+      host: string;
+      port: number;
+      secure: boolean;
+      user: string;
+      pass: string;
+    };
+    from: string;
+    timeoutMs: number;
   };
   kyc: {
     /**
@@ -277,19 +319,6 @@ export interface AppConfig {
      * creates an account here.
      */
     sessionSecret: string;
-    /**
-     * Base URL of the operator console that performs the two legs this service
-     * deliberately does not: sending the login-code email, and minting the
-     * account's gateway credentials (which needs APISIX admin).
-     *
-     * Unset means this deployment has no email door and cannot finish a
-     * sign-in — reported as such by `GET /v1/wallet/auth/providers` rather than
-     * discovered at the end of a flow. A self-hosted deployment points it at its
-     * own sender and owes this service nothing else.
-     */
-    consoleUrl: string;
-    /** Proves a call to the console came from this service. Its own secret. */
-    consoleSecret: string;
     /** Per-provider OAuth credentials. An empty pair disables that provider. */
     google: { clientId: string; clientSecret: string };
     github: { clientId: string; clientSecret: string };
@@ -349,8 +378,11 @@ export interface AppConfig {
     jwtSecret: string;
     /** ID tokens this server exchanges for an identity; empty issuer disables it. */
     oidc: { issuer: string; audiences: string[] };
-    /** Where this server posts its own emailed codes; empty url disables them. */
-    emailDelivery: { url: string; secret: string };
+    /**
+     * Whether this server emails its own codes, through its own `MAIL_*`
+     * sender. Off disables that way of proving an inbox.
+     */
+    emailCodes: boolean;
     timeoutMs: number;
     sweep: {
       enabled: boolean;
@@ -408,6 +440,44 @@ export default (): AppConfig => ({
       process.env.APISIX_EMAIL_HEADER ?? 'x-consumer-email'
     ).toLowerCase(),
     publicConsumer: (process.env.APISIX_PUBLIC_CONSUMER ?? '').trim(),
+  },
+  apisixAdmin: {
+    url: (process.env.APISIX_ADMIN_URL ?? '').trim().replace(/\/+$/, ''),
+    key: process.env.APISIX_ADMIN_KEY?.trim() ?? '',
+    timeoutMs: parseInt(
+      process.env.APISIX_ADMIN_TIMEOUT_MS ??
+        String(DEFAULT_APISIX_ADMIN_TIMEOUT_MS),
+      10,
+    ),
+    walletSwapFeeBps: parseInt(
+      process.env.WALLET_KEY_SWAP_FEE_BPS ??
+        String(DEFAULT_WALLET_KEY_SWAP_FEE_BPS),
+      10,
+    ),
+  },
+  publicKeys: {
+    dev: process.env.PUBLIC_API_KEY_DEV?.trim() ?? '',
+    prod: process.env.PUBLIC_API_KEY_PROD?.trim() ?? '',
+  },
+  mail: {
+    resendApiKey: process.env.MAIL_RESEND_API_KEY?.trim() ?? '',
+    smtp: {
+      host: process.env.MAIL_SMTP_HOST?.trim() ?? '',
+      port: parseInt(
+        process.env.MAIL_SMTP_PORT ?? String(DEFAULT_MAIL_SMTP_PORT),
+        10,
+      ),
+      // 465 is implicit TLS; 587 upgrades with STARTTLS and wants `false`.
+      secure:
+        (process.env.MAIL_SMTP_SECURE ?? 'false').toLowerCase() === 'true',
+      user: process.env.MAIL_SMTP_USER?.trim() ?? '',
+      pass: process.env.MAIL_SMTP_PASS ?? '',
+    },
+    from: process.env.MAIL_FROM?.trim() ?? '',
+    timeoutMs: parseInt(
+      process.env.MAIL_TIMEOUT_MS ?? String(DEFAULT_MAIL_TIMEOUT_MS),
+      10,
+    ),
   },
   kyc: {
     redirectUrlWhitelist: parseRedirectUrlWhitelist(
@@ -602,8 +672,6 @@ export default (): AppConfig => ({
     // No fallback to the gateway secret — see the interface, and
     // `identity-env.ts`, which refuses to boot without its own.
     sessionSecret: process.env.WALLET_AUTH_SESSION_SECRET?.trim() ?? '',
-    consoleUrl: (process.env.WALLET_AUTH_CONSOLE_URL ?? '').replace(/\/+$/, ''),
-    consoleSecret: process.env.WALLET_AUTH_CONSOLE_SECRET?.trim() ?? '',
     google: {
       clientId: process.env.WALLET_GOOGLE_CLIENT_ID ?? '',
       clientSecret: process.env.WALLET_GOOGLE_CLIENT_SECRET ?? '',
@@ -676,10 +744,8 @@ export default (): AppConfig => ({
         .map((a) => a.trim())
         .filter(Boolean),
     },
-    emailDelivery: {
-      url: process.env.RECOVERY_EMAIL_DELIVERY_URL?.trim() ?? '',
-      secret: process.env.RECOVERY_EMAIL_DELIVERY_SECRET?.trim() ?? '',
-    },
+    emailCodes:
+      (process.env.RECOVERY_EMAIL_CODES ?? 'false').toLowerCase() === 'true',
     timeoutMs: parseInt(
       process.env.RECOVERY_TIMEOUT_MS ?? String(DEFAULT_RECOVERY_TIMEOUT_MS),
       10,

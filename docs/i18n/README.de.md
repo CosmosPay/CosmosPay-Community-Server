@@ -5,11 +5,14 @@
 Zahlungs-Microservice auf Basis von **NestJS 12** + **Prisma 7 (PostgreSQL)**.
 
 Er ist eine *eigenständige* Anwendung, getrennt von der Cosmos-Entwicklerplattform
-(`paydev`). Die Entwicklerplattform **stellt** lediglich APISIX-Zugriffstoken
-(Consumer + `key-auth`-Credentials) für nachgelagerte Dienste **aus**. Dieser Dienst
-ist einer dieser nachgelagerten Dienste: Er steht **hinter APISIX**, das jede Anfrage
-lastverteilt und authentifiziert, bevor es sie hierher weiterleitet. Der Dienst sieht
-daher nie rohe API-Keys — er vertraut ausschließlich dem, was das Gateway weiterleitet.
+(`paydev`). Die Entwicklerplattform ist ein Dashboard: Sie **stellt** API-Keys für
+Entwickler **aus** und **zeigt** deren Daten. Sie liegt im Pfad keiner Anfrage, die
+ein Client stellt — jeder Aufruf läuft Client → APISIX → dieser Dienst, sodass die
+Plattform ausfallen kann, ohne dass eine Wallet oder eine Integration es bemerkt
+(siehe [Keine Anfrage hängt von der Entwicklerplattform ab](#keine-anfrage-hängt-von-der-entwicklerplattform-ab)).
+Dieser Dienst steht **hinter APISIX**, das jede Anfrage lastverteilt und
+authentifiziert, bevor es sie hierher weiterleitet. Er sieht nie rohe API-Keys — er
+vertraut ausschließlich dem, was das Gateway weiterleitet.
 
 ## Wie „nur APISIX“ durchgesetzt wird
 
@@ -87,6 +90,9 @@ src/
   customers/                      payer records derived from intents
   aliases/                        claimable payment handles: signed claims, resolution, email recovery
   assets/                         curated asset registry: the (code, issuer) pairs vouched for, per network
+  public-key/                     GET /v1/public-key: the shared public key, keyless
+  mailer/                         this service's own sender (Resend): sign-in and recovery codes
+  gateway-keys/                   mints wallet accounts' keys in APISIX (admin client, consumer forwarder)
   analytics/                      summary, balances, API logs, webhook logs
   activity/                       client telemetry ingest + feed (wallet, dashboard)
   admin/                          cross-tenant platform admin (console-only), audited
@@ -140,6 +146,7 @@ jedem CI-Lauf aus den Controllern und DTOs neu erzeugt wird
 | Aliase            | `/v1/aliases`            | Beanspruchbare Zahlungs-Handles: beanspruchen, auflösen, wiederherstellen |
 | Wallet-Anmeldung | `/v1/wallet` | Google / GitHub / E-Mail-Code, und das verschlüsselte Seed-Backup |
 | Assets            | `/v1/assets`             | Kuratiertes Asset-Register pro Netzwerk                   |
+| Öffentlicher Key  | `/v1/public-key`         | Der gemeinsame öffentliche API-Key, ohne Key ausgeliefert (`@Public`) |
 | Analytik          | `/v1/summary`, `/v1/balances`, `/v1/logs` | Dashboard-Aggregate und Logs             |
 | Aktivität         | `/v1/activity`           | Vom Client gemeldete Events: Aufnahme, Feed, Zusammenfassung |
 | Plugins           | `/v1/plugins`            | Einkompilierte Erweiterungen unter einem Slug, pro Tenant installiert |
@@ -264,6 +271,7 @@ Konsolen-Backend erreicht sie. Pfade verwenden die OpenAPI-Form `{param}`.
 | GET | `/v1/products/{id}` | `products:read` |  |
 | PATCH | `/v1/products/{id}` | `products:write` |  |
 | DELETE | `/v1/products/{id}` | `products:write` |  |
+| GET | `/v1/public-key` | none — `@Public()` |  |
 | GET | `/.well-known/stellar.toml` | none — `@Public()`, SEP-1 discovery (recovery servers only) |  |
 | GET | `/v1/sep10/auth` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | POST | `/v1/sep10/auth` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
@@ -837,8 +845,8 @@ Solana signiert die UTF-8-Bytes mit ed25519 (`signMessage`; Base64 oder Base58),
 Monad mit EIP-191 `personal_sign` (0x-Hex; High-s-Signaturen werden abgelehnt). Eine
 Monad-Adresse wird in ihrer EIP-55-Schreibweise gespeichert. Die
 Wiederherstellungseinrichtung (`POST /v1/wallet/recovery/setup`) bleibt
-Stellar-only. Der Provisionierungsaufruf an die Konsole erhält jetzt auch `chain`
-und `address`, mit `stellarAddress: null` außerhalb von Stellar.
+Stellar-only. Die Keys des Kontos werden auf jeder Chain gleich ausgestellt (siehe
+[Keine Anfrage hängt von der Entwicklerplattform ab](#keine-anfrage-hängt-von-der-entwicklerplattform-ab)).
 
 ## Der gemeinsame öffentliche API-Key
 
@@ -895,6 +903,55 @@ Der Guard erkennt den öffentlichen Consumer **entweder** an der weitergeleitete
 (`X-Consumer-Role: public`) **oder** am Benutzernamen `APISIX_PUBLIC_CONSUMER`. Setzen
 Sie beides: Leitet das Gateway keine Rollen mehr weiter, passt immer noch der
 Benutzername, und ohne den Benutzernamen hängt der Guard allein von einem Header ab.
+
+**Woher eine Wallet ihn bekommt.** `GET /v1/public-key?env=dev|prod` antwortet
+`{ env, apiKey }` ohne Key und ohne Gateway-Secret (`@Public()`), aus
+`PUBLIC_API_KEY_DEV` / `PUBLIC_API_KEY_PROD`; eine Umgebung ohne Key antwortet
+`503 misconfigured`. Den Key zu rotieren heißt, diese Variablen zu ändern — jede
+Wallet übernimmt den neuen innerhalb des 5-Minuten-Caches. Die APISIX-Route für
+diesen Pfad darf KEIN `key-auth` ausführen (der Aufrufer hat noch keinen Key):
+liefern Sie ihn über die schlüssellose Route aus, wie
+`/v1/wallet/auth/oauth/callback/*`.
+
+## Keine Anfrage hängt von der Entwicklerplattform ab
+
+Die Entwicklerplattform erstellt API-Keys für Entwickler und zeigt Daten an. Nichts,
+was ein Client tut, läuft über sie: Die Wallet und jede Integration sprechen mit
+APISIX, und APISIX mit diesem Dienst. Früher war das anders, und die Plattform — das
+Teil, das am häufigsten ausfällt — riss jede Anmeldung mit:
+
+| Lief früher über die Plattform | Jetzt |
+| --- | --- |
+| Den Anmeldecode der Wallet senden | Dieser Dienst sendet ihn (`MAIL_FROM` + `MAIL_RESEND_API_KEY` / `MAIL_SMTP_*`) |
+| Die API-Keys eines Wallet-Kontos am Ende einer Anmeldung ausstellen | Dieser Dienst stellt sie in APISIX aus (`APISIX_ADMIN_URL`, `APISIX_ADMIN_KEY`) |
+| Der per E-Mail versandte Code eines Wiederherstellungsservers | Jeder Wiederherstellungsserver sendet seinen eigenen (`RECOVERY_EMAIL_CODES=true` + eigenes `MAIL_*`) |
+| Der gemeinsame öffentliche Key (`/api/public-key`) | `GET /v1/public-key` |
+| Der Asset-Katalog und anonyme Telemetrie (`/api/assets`, `/api/telemetry`) | Die Wallet ruft `GET /v1/assets` und `POST /v1/activity/events` mit dem öffentlichen Key auf |
+
+Was die Plattform weiterhin tut, ist ihr Eigenes: die Keys der Entwickler, das
+Dashboard und `/v1/admin`, das sie aufruft — nie umgekehrt. Ist sie ausgefallen,
+kann niemand einen Entwickler-Key erstellen oder das Dashboard öffnen; Wallets melden
+sich an, zahlen und tauschen wie gewohnt.
+
+**Wallet-Keys.** Eine abgeschlossene Anmeldung erhält einen `dev`- und einen
+`prod`-Key unter dem Consumer `cosmos_wallet_<accountId>`, mit den Scopes, Labels und
+dem Consumer-Forwarder, den früher die Plattform erzeugte (Plan `community`,
+Swap-Provision `WALLET_KEY_SWAP_FEE_BPS`, standardmäßig 150 bps). Eine zweite
+Anmeldung liefert die Keys zurück, die das Konto schon hat, statt ein weiteres Paar
+auszustellen. `organizationId` in der Antwort ist die Konto-ID.
+
+**Der Admin-Key ist der Sicherheitspreis.** APISIX kennt keine engere Berechtigung
+als seinen Admin-Key, der jede Route umschreiben kann. Der Client hier schreibt nur
+Consumer unter `cosmos_wallet_` und lehnt jeden anderen Namen ab, bevor er eine
+Anfrage baut — aber das ist ein Versprechen dieses Codes, nicht von APISIX: Behandeln
+Sie `APISIX_ADMIN_KEY` wie `APISIX_GATEWAY_SECRET`, geben Sie den Pods dieses Dienstes
+Netzwerkzugriff auf die Admin-API und auf nichts sonst davon, und setzen Sie ihn nie
+auf einem Wiederherstellungsserver (der Start verweigert es).
+
+**Konten, die die Plattform vor dieser Änderung provisioniert hat,** funktionieren mit
+ihren Keys weiter. Bei ihrer nächsten Anmeldung erhalten sie neue Keys unter
+`cosmos_wallet_<accountId>`, einem neuen Consumer; die unter dem alten Consumer
+(`cosmos_<platformUserId>`) erfasste Historie ist mit dem neuen Key nicht sichtbar.
 
 ## Native Stellar-Swaps (Path Payments)
 
@@ -1499,6 +1556,30 @@ eingeschaltet werden.
 
 ## Upgrade — Breaking Changes und Deploy-Hinweise
 
+### Die Entwicklerplattform verlässt den Anfragepfad
+
+- **Entfernte Variablen:** `WALLET_AUTH_CONSOLE_URL`, `WALLET_AUTH_CONSOLE_SECRET`,
+  `RECOVERY_EMAIL_DELIVERY_URL`, `RECOVERY_EMAIL_DELIVERY_SECRET`. Sie werden
+  ignoriert.
+- **Die E-Mail-Tür braucht jetzt** `MAIL_FROM` + `MAIL_RESEND_API_KEY` / `MAIL_SMTP_*` (einen bei
+  Resend verifizierten Absender) **und** `APISIX_ADMIN_URL` + `APISIX_ADMIN_KEY`. Ohne
+  beide meldet `GET /v1/wallet/auth/providers` `email: false`; eine Anmeldung über
+  einen Provider schließt den Callback zwar ab, aber `POST /v1/wallet/auth/finish`
+  antwortet `503 misconfigured`, bis das Admin-Paar gesetzt ist. Jedes Paar wird
+  gemeinsam gesetzt, sonst verweigert der Start.
+- **Ein Wiederherstellungsserver, der Codes per E-Mail versandte,** setzt
+  `RECOVERY_EMAIL_CODES=true` und sein eigenes `MAIL_*`. `APISIX_ADMIN_KEY` auf einem
+  Wiederherstellungsserver verhindert den Start.
+- **Neue Route `GET /v1/public-key`** (`@Public()`), gespeist aus
+  `PUBLIC_API_KEY_DEV` / `PUBLIC_API_KEY_PROD`: Übernehmen Sie die Werte, die die
+  Plattform für den öffentlichen Key ausgestellt hat. Fügen Sie den Pfad der
+  schlüssellosen APISIX-Route hinzu (ohne `key-auth`), sonst erhalten Wallets `401`.
+- **Wallet-Keys liegen jetzt unter `cosmos_wallet_<accountId>`**; zu den von der
+  Plattform provisionierten Konten siehe den Abschnitt oben. Die Antwortformen
+  bleiben unverändert.
+- **`POST /v1/wallet/auth/finish` ohne `backup`** verbindet die signierende Wallet mit dem Konto und liefert dessen Keys: Es antwortet nicht mehr `backup_conflict`, wenn das Konto eine andere Wallet sichert, und verschiebt die `address` des Kontos nicht mehr. Mit `backup` hat sich nichts geändert. So verbindet sich jetzt eine aus einer Seed importierte Wallet mit Cosmos Pay.
+- **Keine Migration.**
+
 ### Solana und Monad; BlindPay und DeFindex werden native Plugins
 
 - **Die Migration `20260930120000_multichain`** fügt `payment_intent`,
@@ -1942,6 +2023,21 @@ passen Sie mindestens `DATABASE_URL` und `APISIX_GATEWAY_SECRET` an.
 | `APISIX_SWAP_FEE_BPS_HEADER` | nein | `x-plan-swap-fee-bps` | Swap-Gebühr des Plans (bps) |
 | `APISIX_EMAIL_HEADER` | nein | `x-consumer-email` | Verifizierte E-Mail des Kontos des Keys, vom Gateway weitergereicht. Derzeit hängt in diesem Dienst nichts davon ab |
 | `APISIX_PUBLIC_CONSUMER` | nein | — | Benutzername des gemeinsamen öffentlichen Consumers (siehe oben). Setzen Sie ihn überall, wo ein öffentlicher Key veröffentlicht wird |
+| `PUBLIC_API_KEY_DEV` | nein | — | Der gemeinsame öffentliche Key für das Testnet, ausgeliefert von `GET /v1/public-key?env=dev`. Nicht gesetzt: `503 misconfigured` |
+| `PUBLIC_API_KEY_PROD` | nein | — | Dasselbe für das Mainnet (`env=prod`) |
+| `APISIX_ADMIN_URL` | mit dem Admin-Key | — | Basis der APISIX-Admin-API, z. B. `http://apisix:9180/apisix/admin`. Nur zum Ausstellen der Keys von Wallet-Konten |
+| `APISIX_ADMIN_KEY` | für die Wallet-Anmeldung | — | APISIX-Admin-Key. Gilt für das ganze Gateway — siehe [Keine Anfrage hängt von der Entwicklerplattform ab](#keine-anfrage-hängt-von-der-entwicklerplattform-ab). Auf einem Wiederherstellungsserver abgelehnt |
+| `APISIX_ADMIN_TIMEOUT_MS` | nein | `10000` | Budget für einen Admin-API-Aufruf (ms) |
+| `WALLET_KEY_SWAP_FEE_BPS` | nein | `150` | Swap-Provision in den Keys von Wallet-Konten (der Satz des Plans `community`) |
+| `MAIL_RESEND_API_KEY` | für die E-Mail-Tür | — | Resend-API-Key, mit dem dieser Dienst Anmelde- und Wiederherstellungscodes sendet |
+| `MAIL_FROM` | mit dem Resend / SMTP-Key | — | Verifizierter Absender, z. B. `Cosmos Pay <no-reply@example.com>` |
+| `MAIL_SMTP_HOST` | nein | — | SMTP-Server, genutzt wenn `MAIL_RESEND_API_KEY` nicht gesetzt ist |
+| `MAIL_SMTP_PORT` | nein | `587` | SMTP-Port |
+| `MAIL_SMTP_SECURE` | nein | `false` | `true` für implizites TLS (465), `false` für STARTTLS (587) |
+| `MAIL_SMTP_USER` | nein | — | SMTP-Benutzer |
+| `MAIL_SMTP_PASS` | nein | — | SMTP-Passwort |
+| `MAIL_TIMEOUT_MS` | nein | `15000` | Budget für einen Versand (ms) |
+| `RECOVERY_EMAIL_CODES` | nein | `false` | Auf einem Wiederherstellungsserver: eigene Codes über sein `MAIL_*` senden |
 | `STELLAR_NETWORK` | nein | `testnet` | Fallback-Stellar-Netzwerk (`public` / `testnet`) |
 | `STELLAR_HORIZON_URL_PUBLIC` | nein | `https://horizon.stellar.org` | Horizon-Basis-URL für Mainnet |
 | `STELLAR_HORIZON_URL_TESTNET` | nein | `https://horizon-testnet.stellar.org` | Horizon-Basis-URL für Testnet |

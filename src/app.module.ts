@@ -16,6 +16,7 @@ import { HealthModule } from '@/health/health.module';
 import { PaymentIntentsModule } from '@/payment-intents/payment-intents.module';
 import { SwapsModule } from '@/swaps/swaps.module';
 import { AssetsModule } from '@/assets/assets.module';
+import { PublicKeyModule } from '@/public-key/public-key.module';
 import { LiquidityPoolsModule } from '@/liquidity-pools/liquidity-pools.module';
 import { ObserverModule } from '@/observer/observer.module';
 import { WebhooksModule } from '@/webhooks/webhooks.module';
@@ -49,6 +50,7 @@ import { NativePluginsModule } from '@/native-plugins/native-plugins.module';
     LiquidityPoolsModule,
     // The asset registry: which (code, issuer) pairs we vouch for, per network.
     AssetsModule,
+    PublicKeyModule,
     // Background reconciler: flips swaps/LP ops to SUCCEEDED/FAILED/EXPIRED by
     // checking their txHash on Horizon, even when the customer self-broadcasts.
     ObserverModule,

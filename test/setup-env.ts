@@ -49,3 +49,15 @@ process.env.WALLET_AUTH_SESSION_SECRET =
 process.env.PLUGINS_ENABLED = 'example,blindpay,defindex';
 process.env.PLUGINS_TRUSTED_KEYS = '';
 process.env.PLUGINS_ALLOW_UNSIGNED = 'false';
+// The shared public key GET /v1/public-key serves. Dev only, so the suite can see
+// both answers: the key, and the 503 for an environment that publishes none.
+process.env.PUBLIC_API_KEY_DEV = `dv_${'e'.repeat(64)}`;
+process.env.PUBLIC_API_KEY_PROD = '';
+// No sender and no APISIX admin: a developer's .env may point at real ones, and a
+// suite must never send mail or write the gateway. Empty rather than deleted, for
+// the same dotenv reason as above; in pairs, because identity-env refuses half.
+process.env.MAIL_RESEND_API_KEY = '';
+process.env.MAIL_SMTP_HOST = '';
+process.env.MAIL_FROM = '';
+process.env.APISIX_ADMIN_URL = '';
+process.env.APISIX_ADMIN_KEY = '';

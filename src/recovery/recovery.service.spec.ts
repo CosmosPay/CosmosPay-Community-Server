@@ -2,6 +2,7 @@ import { ConfigService } from '@nestjs/config';
 import { Keypair, Networks } from '@stellar/stellar-sdk';
 import { OidcService } from '@/common/oidc/oidc.service';
 import { AppConfig } from '@/config/configuration';
+import { MailerService } from '@/mailer/mailer.service';
 import { PrismaService } from '@/prisma/prisma.service';
 import { issueIdentityToken, issueSep10Token } from '@/recovery/recovery-core';
 import { RecoveryService, SepError } from '@/recovery/recovery.service';
@@ -19,10 +20,7 @@ const SETTINGS = {
     issuer: 'https://auth.example.com/application/o/wallet/',
     audiences: ['wallet-client'],
   },
-  emailDelivery: {
-    url: 'https://console.example.com/api/wallet/console/recovery-code',
-    secret: 'x'.repeat(40),
-  },
+  emailCodes: true,
   timeoutMs: 1000,
   sweep: { enabled: true, intervalMs: 60_000 },
 };
@@ -31,7 +29,10 @@ function unique() {
   return Object.assign(new Error('unique'), { code: 'P2002' });
 }
 
-function makeService(settings: Partial<typeof SETTINGS> = {}) {
+function makeService(
+  settings: Partial<typeof SETTINGS> = {},
+  { mailConfigured = true } = {},
+) {
   const prisma = {
     recoveryUsedIdToken: { create: jest.fn() },
     recoveryEmailCode: {
@@ -53,12 +54,17 @@ function makeService(settings: Partial<typeof SETTINGS> = {}) {
     get: jest.fn().mockReturnValue({ ...SETTINGS, ...settings }),
   } as unknown as ConfigService<AppConfig, true>;
   const oidc = { verify: jest.fn(), discover: jest.fn() };
+  const mailer = {
+    configured: mailConfigured,
+    send: jest.fn().mockResolvedValue(undefined),
+  };
   const service = new RecoveryService(
     prisma as unknown as PrismaService,
     config,
     oidc as unknown as OidcService,
+    mailer as unknown as MailerService,
   );
-  return { service, prisma, oidc };
+  return { service, prisma, oidc, mailer };
 }
 
 const claims = {
@@ -131,21 +137,34 @@ describe('RecoveryService', () => {
 
   describe('startEmail', () => {
     it('sends a code only to an inbox that recovers something here', async () => {
-      const { service, prisma } = makeService();
+      const { service, prisma, mailer } = makeService();
       prisma.recoveryEmailCode.findFirst.mockResolvedValue(null);
       prisma.recoveryEmailCode.create.mockResolvedValue({});
       prisma.recoveryAuthMethod.count.mockResolvedValue(0);
 
       const unregistered = await service.startEmail('stranger@example.com');
-      expect(global.fetch).not.toHaveBeenCalled();
+      expect(mailer.send).not.toHaveBeenCalled();
 
       prisma.recoveryAuthMethod.count.mockResolvedValue(1);
       const registered = await service.startEmail('ada@example.com');
       await new Promise((r) => setImmediate(r));
-      expect(global.fetch).toHaveBeenCalledTimes(1);
+      expect(mailer.send).toHaveBeenCalledTimes(1);
+      // Its own sender, naming which of the two servers the code is from.
+      expect(mailer.send.mock.calls[0][0]).toMatchObject({
+        to: 'ada@example.com',
+        subject: expect.stringContaining('server A'),
+      });
+      expect(global.fetch).not.toHaveBeenCalled();
 
       // The same answer either way: the response does not say which inbox is registered.
       expect(Object.keys(unregistered)).toEqual(Object.keys(registered));
+    });
+  });
+
+  it('is a 404 when this server sends no codes, even if switched on', async () => {
+    const { service } = makeService({}, { mailConfigured: false });
+    await expect(service.startEmail('ada@example.com')).rejects.toMatchObject({
+      status: 404,
     });
   });
 

@@ -135,12 +135,97 @@ describe('assertIdentityConfigConsistent', () => {
       assertIdentityConfigConsistent(
         recoveryServer({
           WALLET_RECOVERY_SPONSOR_SECRET: Keypair.random().secret(),
-          WALLET_AUTH_CONSOLE_URL: 'https://console.example.com',
-          WALLET_AUTH_CONSOLE_SECRET: secret('c'),
+          MAIL_RESEND_API_KEY: 're_test',
+          MAIL_FROM: 'wallet@example.com',
+          APISIX_ADMIN_URL: 'http://apisix:9180/apisix/admin',
+          APISIX_ADMIN_KEY: secret('k'),
           WALLET_AUTH_SESSION_SECRET: secret('s'),
         }),
       ),
     ).toThrow(/must not be set on a recovery server/);
+  });
+
+  /* Nor the credential that mints accounts. */
+  it('refuses the APISIX admin key on a recovery server', () => {
+    expect(() =>
+      assertIdentityConfigConsistent(
+        recoveryServer({
+          APISIX_ADMIN_URL: 'http://apisix:9180/apisix/admin',
+          APISIX_ADMIN_KEY: secret('k'),
+        }),
+      ),
+    ).toThrow(/APISIX_ADMIN_KEY must not be set on a recovery server/);
+  });
+
+  it('needs a sender for a recovery server that emails its own codes', () => {
+    const emailOnly = {
+      RECOVERY_OIDC_ISSUER: '',
+      RECOVERY_OIDC_AUDIENCES: '',
+      RECOVERY_EMAIL_CODES: 'true',
+    };
+    expect(() =>
+      assertIdentityConfigConsistent(recoveryServer(emailOnly)),
+    ).toThrow(/MAIL_FROM/);
+    expect(() =>
+      assertIdentityConfigConsistent(
+        recoveryServer({
+          ...emailOnly,
+          MAIL_RESEND_API_KEY: 're_test',
+          MAIL_FROM: 'recovery-a@example.com',
+        }),
+      ),
+    ).not.toThrow();
+  });
+
+  it('takes the mail and admin pairs whole or not at all', () => {
+    const base = { APISIX_GATEWAY_SECRET: secret('g') };
+    expect(() =>
+      assertIdentityConfigConsistent({ ...base, MAIL_FROM: 'a@example.com' }),
+    ).toThrow(/MAIL_FROM is set together/);
+    expect(() =>
+      assertIdentityConfigConsistent({
+        ...base,
+        MAIL_SMTP_HOST: 'smtp.example.com',
+      }),
+    ).toThrow(/MAIL_FROM is set together/);
+    expect(() =>
+      assertIdentityConfigConsistent({
+        ...base,
+        MAIL_SMTP_HOST: 'smtp.example.com',
+        MAIL_FROM: 'a@example.com',
+      }),
+    ).not.toThrow();
+    expect(() =>
+      assertIdentityConfigConsistent({
+        ...base,
+        APISIX_ADMIN_KEY: secret('k'),
+      }),
+    ).toThrow(/set together/);
+  });
+
+  /* The email door needs both: a sender for the code and a way to mint keys. */
+  it('opens the email door, and requires its session secret, only with both halves', () => {
+    const base = {
+      APISIX_GATEWAY_SECRET: secret('g'),
+      MAIL_RESEND_API_KEY: 're_test',
+      MAIL_FROM: 'wallet@example.com',
+    };
+    expect(() => assertIdentityConfigConsistent(base)).not.toThrow();
+    expect(() =>
+      assertIdentityConfigConsistent({
+        ...base,
+        APISIX_ADMIN_URL: 'http://apisix:9180/apisix/admin',
+        APISIX_ADMIN_KEY: secret('k'),
+      }),
+    ).toThrow(/WALLET_AUTH_SESSION_SECRET/);
+    expect(() =>
+      assertIdentityConfigConsistent({
+        ...base,
+        APISIX_ADMIN_URL: 'http://apisix:9180/apisix/admin',
+        APISIX_ADMIN_KEY: secret('g'),
+        WALLET_AUTH_SESSION_SECRET: secret('s'),
+      }),
+    ).toThrow(/same value/);
   });
 
   it('refuses a plain-http public base', () => {

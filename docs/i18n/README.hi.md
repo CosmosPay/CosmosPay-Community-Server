@@ -5,11 +5,14 @@
 **NestJS 12** + **Prisma 7 (PostgreSQL)** से बनी पेमेंट्स माइक्रोसर्विस।
 
 यह Cosmos developer platform (`paydev`) से एक *अलग* एप्लिकेशन है। dev platform
-downstream सर्विसों के लिए केवल APISIX access tokens (consumers + `key-auth`
-credentials) **जारी** करता है। यह सर्विस उन्हीं downstream सर्विसों में से एक है: यह
-**APISIX के पीछे** रहती है, जो हर request को यहाँ भेजने से पहले load-balance और
-authenticate करता है। इसलिए यह सर्विस कभी raw API keys नहीं देखती
-— यह केवल उसी पर भरोसा करती है जो gateway आगे भेजता है।
+एक dashboard है: यह developers के लिए API keys **जारी** करता है और उनका data
+**दिखाता** है। यह किसी client की किसी भी request के रास्ते में नहीं है — हर कॉल
+client → APISIX → यह सर्विस जाती है, इसलिए platform down हो सकता है और किसी wallet
+या integration को पता भी नहीं चलता (देखें
+[कोई भी request developer platform पर निर्भर नहीं है](#कोई-भी-request-developer-platform-पर-निर्भर-नहीं-है))।
+यह सर्विस **APISIX के पीछे** रहती है, जो हर request को यहाँ भेजने से पहले
+load-balance और authenticate करता है। यह कभी raw API keys नहीं देखती — यह केवल
+उसी पर भरोसा करती है जो gateway आगे भेजता है।
 
 ## "केवल APISIX" कैसे लागू किया जाता है
 
@@ -85,6 +88,9 @@ src/
   customers/                      payer records derived from intents
   aliases/                        claimable payment handles: signed claims, resolution, email recovery
   assets/                         curated asset registry: the (code, issuer) pairs vouched for, per network
+  public-key/                     GET /v1/public-key: the shared public key, keyless
+  mailer/                         this service's own sender (Resend): sign-in and recovery codes
+  gateway-keys/                   mints wallet accounts' keys in APISIX (admin client, consumer forwarder)
   analytics/                      summary, balances, API logs, webhook logs
   activity/                       client telemetry ingest + feed (wallet, dashboard)
   admin/                          cross-tenant platform admin (console-only), audited
@@ -138,6 +144,7 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | Aliases           | `/v1/aliases`            | क्लेम किए जा सकने वाले पेमेंट हैंडल: claim, resolve, recover |
 | Wallet sign-in    | `/v1/wallet`             | Google / GitHub / ईमेल कोड, और एन्क्रिप्टेड seed बैकअप |
 | एसेट्स            | `/v1/assets`             | प्रति नेटवर्क चुनी हुई एसेट रजिस्ट्री                   |
+| पब्लिक key         | `/v1/public-key`         | साझा public API key, बिना key के दी जाती है (`@Public`) |
 | Analytics         | `/v1/summary`, `/v1/balances`, `/v1/logs` | डैशबोर्ड के aggregates और लॉग           |
 | एक्टिविटी         | `/v1/activity`           | client द्वारा रिपोर्ट किए गए events: ingest, feed, rollup |
 | Plugins           | `/v1/plugins`            | एक slug के तहत compile किए गए extensions, हर tenant के लिए install |
@@ -261,6 +268,7 @@ Paths OpenAPI के `{param}` रूप में लिखे गए हैं
 | GET | `/v1/products/{id}` | `products:read` |  |
 | PATCH | `/v1/products/{id}` | `products:write` |  |
 | DELETE | `/v1/products/{id}` | `products:write` |  |
+| GET | `/v1/public-key` | none — `@Public()` |  |
 | GET | `/.well-known/stellar.toml` | none — `@Public()`, SEP-1 discovery (recovery servers only) |  |
 | GET | `/v1/sep10/auth` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | POST | `/v1/sep10/auth` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
@@ -800,8 +808,9 @@ Network/Horizon/fee/timeout `STELLAR_*` env vars से कॉन्फ़िग
 बदलते। Solana UTF-8 bytes पर ed25519 से हस्ताक्षर करता है (`signMessage`; base64 या
 base58); Monad EIP-191 `personal_sign` से (0x-hex; high-s हस्ताक्षर अस्वीकार होते हैं)।
 Monad पता अपनी EIP-55 वर्तनी में सहेजा जाता है। Recovery setup
-(`POST /v1/wallet/recovery/setup`) केवल Stellar रहता है। Console की provisioning कॉल
-अब `chain` और `address` भी पाती है, Stellar के बाहर `stellarAddress: null` के साथ।
+(`POST /v1/wallet/recovery/setup`) केवल Stellar रहता है। खाते की
+keys हर chain पर एक ही तरह जारी होती हैं (देखें
+[कोई भी request developer platform पर निर्भर नहीं है](#कोई-भी-request-developer-platform-पर-निर्भर-नहीं-है))।
 
 ## साझा सार्वजनिक API key
 
@@ -857,6 +866,54 @@ guard public consumer की पहचान forwarded role
 (`X-Consumer-Role: public`) **या** `APISIX_PUBLIC_CONSUMER` username — **इनमें से
 किसी से भी** करता है। दोनों सेट करें: अगर gateway roles forward करना बंद कर दे, तो
 username फिर भी मेल खाता है, और username के बिना guard केवल एक header पर निर्भर रहता है।
+
+**Wallet इसे कहाँ से पाता है।** `GET /v1/public-key?env=dev|prod` बिना key और
+बिना gateway secret के (`@Public()`) `{ env, apiKey }` लौटाता है, जो
+`PUBLIC_API_KEY_DEV` / `PUBLIC_API_KEY_PROD` से आता है; जिस environment की key नहीं
+है वह `503 misconfigured` लौटाता है। Key rotate करना इन variables को बदलना है — हर
+wallet 5 मिनट के cache के भीतर नई key ले लेता है। इस path का APISIX route `key-auth`
+नहीं चलाना चाहिए (कॉल करने वाले के पास अभी key नहीं है): इसे keyless route से serve
+करें, जैसे `/v1/wallet/auth/oauth/callback/*`।
+
+## कोई भी request developer platform पर निर्भर नहीं है
+
+Developer platform developers के लिए API keys बनाता है और data दिखाता है। Client
+जो कुछ भी करता है वह इससे होकर नहीं जाता: wallet और हर integration APISIX से बात
+करते हैं, और APISIX इस सर्विस से। पहले ऐसा नहीं था, और platform — जो हिस्सा सबसे
+ज़्यादा down होता है — हर sign-in को अपने साथ गिरा देता था:
+
+| पहले platform से होकर जाता था | अब |
+| --- | --- |
+| Wallet का sign-in code भेजना | यह सर्विस भेजती है (`MAIL_FROM` + `MAIL_RESEND_API_KEY` / `MAIL_SMTP_*`) |
+| Sign-in के अंत में wallet खाते की API keys जारी करना | यह सर्विस उन्हें APISIX में जारी करती है (`APISIX_ADMIN_URL`, `APISIX_ADMIN_KEY`) |
+| किसी recovery server का email से भेजा code | हर recovery server अपना code खुद भेजता है (`RECOVERY_EMAIL_CODES=true` + अपना `MAIL_*`) |
+| साझा public key (`/api/public-key`) | `GET /v1/public-key` |
+| Asset catalog और anonymous telemetry (`/api/assets`, `/api/telemetry`) | Wallet public key के साथ `GET /v1/assets` और `POST /v1/activity/events` को कॉल करता है |
+
+Platform जो अब भी करता है वह उसका अपना काम है: developers की keys, dashboard, और
+`/v1/admin`, जिसे वह कॉल करता है — कभी उल्टा नहीं। अगर वह down है तो कोई developer
+key नहीं बना सकता और dashboard नहीं खुलता; wallets हमेशा की तरह sign in, भुगतान और
+swap करते हैं।
+
+**Wallet keys.** पूरा हुआ sign-in consumer `cosmos_wallet_<accountId>` के तहत एक
+`dev` और एक `prod` key पाता है, उन्हीं scopes, labels और consumer forwarder के साथ
+जो पहले platform बनाता था (plan `community`, swap commission
+`WALLET_KEY_SWAP_FEE_BPS`, डिफ़ॉल्ट 150 bps)। दूसरा sign-in नई जोड़ी जारी करने के
+बजाय खाते के पास पहले से मौजूद keys लौटाता है। Response में `organizationId` खाते का
+id है।
+
+**Admin key सुरक्षा की कीमत है।** APISIX के पास अपनी admin key से छोटी कोई अनुमति
+नहीं है, और वह हर route को दोबारा लिख सकती है। यहाँ का client केवल `cosmos_wallet_`
+के तहत consumers लिखता है और request बनाने से पहले कोई भी दूसरा नाम अस्वीकार कर देता
+है, लेकिन यह इस code का वादा है, APISIX का नहीं: `APISIX_ADMIN_KEY` को
+`APISIX_GATEWAY_SECRET` की तरह रखें, इस सर्विस के pods को admin API तक network पहुँच
+दें और उसके अलावा कुछ नहीं, और इसे कभी recovery server पर सेट न करें (boot मना कर
+देता है)।
+
+**इस बदलाव से पहले platform द्वारा provision किए गए खाते** अपनी मौजूदा keys के साथ
+काम करते रहते हैं। अगले sign-in पर उन्हें `cosmos_wallet_<accountId>` के तहत नई keys
+मिलती हैं, यानी नया consumer, इसलिए पुराने consumer (`cosmos_<platformUserId>`) के
+तहत दर्ज history नई key से नहीं दिखती।
 
 ## Stellar नेटिव swaps (path payments)
 
@@ -1414,6 +1471,28 @@ seal होती हैं और कभी लौटाई नहीं जा
 
 ## अपग्रेड — breaking changes और deploy नोट्स
 
+### Developer platform request path से बाहर
+
+- **हटाए गए variables:** `WALLET_AUTH_CONSOLE_URL`, `WALLET_AUTH_CONSOLE_SECRET`,
+  `RECOVERY_EMAIL_DELIVERY_URL`, `RECOVERY_EMAIL_DELIVERY_SECRET`। इन्हें अनदेखा किया
+  जाता है।
+- **Email door को अब चाहिए** `MAIL_FROM` + `MAIL_RESEND_API_KEY` / `MAIL_SMTP_*` (Resend पर verified
+  sender) **और** `APISIX_ADMIN_URL` + `APISIX_ADMIN_KEY`। दोनों के बिना
+  `GET /v1/wallet/auth/providers` `email: false` बताता है; provider से sign-in फिर भी
+  callback पूरा करता है, लेकिन admin जोड़ी सेट होने तक `POST /v1/wallet/auth/finish`
+  `503 misconfigured` लौटाता है। हर जोड़ी साथ में सेट होती है, वरना boot मना कर देता
+  है।
+- **जो recovery server email से codes भेजता था** वह `RECOVERY_EMAIL_CODES=true` और
+  अपना `MAIL_*` सेट करता है। Recovery server पर `APISIX_ADMIN_KEY` boot रोक देता है।
+- **नया route `GET /v1/public-key`** (`@Public()`), `PUBLIC_API_KEY_DEV` /
+  `PUBLIC_API_KEY_PROD` से: public key के लिए platform ने जो values जारी कीं उन्हें
+  कॉपी करें। Path को APISIX के keyless route में जोड़ें (बिना `key-auth`), वरना wallets
+  को `401` मिलेगा।
+- **Wallet keys अब `cosmos_wallet_<accountId>` के तहत रहती हैं**; platform द्वारा
+  provision किए गए खातों के लिए ऊपर का section देखें। Response shapes नहीं बदले।
+- **`backup` के बिना `POST /v1/wallet/auth/finish`** sign करने वाले wallet को खाते से जोड़ता है और उसकी keys लौटाता है: खाता किसी दूसरे wallet का backup रखता हो तब भी अब `backup_conflict` नहीं लौटाता, और खाते का `address` नहीं बदलता। `backup` के साथ कुछ नहीं बदला। Seed से import किया गया wallet अब इसी तरह Cosmos Pay से जुड़ता है।
+- **कोई migration नहीं।**
+
 ### Solana और Monad; BlindPay और DeFindex native plugins बने
 
 - **Migration `20260930120000_multichain`** `payment_intent`, `alias_address`,
@@ -1827,6 +1906,21 @@ type दोबारा बनाए बिना enum value drop नहीं �
 | `APISIX_SWAP_FEE_BPS_HEADER` | नहीं | `x-plan-swap-fee-bps` | plan की swap fee (bps) |
 | `APISIX_EMAIL_HEADER` | नहीं | `x-consumer-email` | key के account का verified email, जिसे gateway आगे भेजता है। अभी इस सेवा में कुछ भी इस पर निर्भर नहीं है |
 | `APISIX_PUBLIC_CONSUMER` | नहीं | — | साझा public consumer का username (ऊपर देखें)। जहाँ भी public key प्रकाशित हो, इसे सेट करें |
+| `PUBLIC_API_KEY_DEV` | नहीं | — | Testnet की साझा public key, `GET /v1/public-key?env=dev` द्वारा दी जाती है। सेट न हो तो `503 misconfigured` |
+| `PUBLIC_API_KEY_PROD` | नहीं | — | Mainnet के लिए वही (`env=prod`) |
+| `APISIX_ADMIN_URL` | admin key के साथ | — | APISIX Admin API का base, जैसे `http://apisix:9180/apisix/admin`। केवल wallet खातों की keys जारी करने के लिए |
+| `APISIX_ADMIN_KEY` | wallet sign-in के लिए | — | APISIX admin key। पूरे gateway पर लागू — देखें [कोई भी request developer platform पर निर्भर नहीं है](#कोई-भी-request-developer-platform-पर-निर्भर-नहीं-है)। Recovery server पर अस्वीकार |
+| `APISIX_ADMIN_TIMEOUT_MS` | नहीं | `10000` | एक Admin API कॉल का बजट (ms) |
+| `WALLET_KEY_SWAP_FEE_BPS` | नहीं | `150` | Wallet खातों की keys में शामिल swap commission (`community` plan की दर) |
+| `MAIL_RESEND_API_KEY` | email door के लिए | — | Resend API key जिससे यह सर्विस sign-in और recovery codes भेजती है |
+| `MAIL_FROM` | Resend / SMTP key के साथ | — | Verified sender, जैसे `Cosmos Pay <no-reply@example.com>` |
+| `MAIL_SMTP_HOST` | नहीं | — | SMTP server, जब `MAIL_RESEND_API_KEY` सेट न हो तब उपयोग होता है |
+| `MAIL_SMTP_PORT` | नहीं | `587` | SMTP port |
+| `MAIL_SMTP_SECURE` | नहीं | `false` | implicit TLS (465) के लिए `true`, STARTTLS (587) के लिए `false` |
+| `MAIL_SMTP_USER` | नहीं | — | SMTP user |
+| `MAIL_SMTP_PASS` | नहीं | — | SMTP password |
+| `MAIL_TIMEOUT_MS` | नहीं | `15000` | एक भेजने का बजट (ms) |
+| `RECOVERY_EMAIL_CODES` | नहीं | `false` | Recovery server पर: अपने `MAIL_*` से अपने codes भेजता है |
 | `STELLAR_NETWORK` | नहीं | `testnet` | fallback Stellar नेटवर्क (`public` / `testnet`) |
 | `STELLAR_HORIZON_URL_PUBLIC` | नहीं | `https://horizon.stellar.org` | Mainnet Horizon का base URL |
 | `STELLAR_HORIZON_URL_TESTNET` | नहीं | `https://horizon-testnet.stellar.org` | Testnet Horizon का base URL |

@@ -10,6 +10,8 @@ import {
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { OidcService } from '@/common/oidc/oidc.service';
 import { AppConfig } from '@/config/configuration';
+import { WalletKeysService } from '@/gateway-keys/wallet-keys.service';
+import { MailerService } from '@/mailer/mailer.service';
 import { PrismaService } from '@/prisma/prisma.service';
 import { WalletAuthService } from '@/wallet-auth/wallet-auth.service';
 import {
@@ -51,8 +53,6 @@ const DISCOVERY = {
 const SETTINGS = {
   publicBaseUrl: 'https://api.example.com',
   sessionSecret: SESSION_SECRET,
-  consoleUrl: 'https://console.example.com',
-  consoleSecret: 'console-secret',
   google: { clientId: '', clientSecret: '' },
   github: { clientId: '', clientSecret: '' },
   oidc: OIDC,
@@ -95,10 +95,22 @@ function makeService(settings: Partial<typeof SETTINGS> = {}) {
     get: jest.fn().mockReturnValue({ ...SETTINGS, ...settings }),
   } as unknown as ConfigService<AppConfig, true>;
   const oidc = { verify: jest.fn(), discover: jest.fn() };
+  const mailer = {
+    configured: true,
+    send: jest.fn().mockResolvedValue(undefined),
+  };
+  const walletKeys = {
+    configured: true,
+    provision: jest
+      .fn()
+      .mockResolvedValue({ organizationId: 'org_1', dev: null, prod: null }),
+  };
   const service = new WalletAuthService(
     prisma as unknown as PrismaService,
     config,
     oidc as unknown as OidcService,
+    mailer as unknown as MailerService,
+    walletKeys as unknown as WalletKeysService,
   );
   return { service, prisma, oidc };
 }
