@@ -19,6 +19,7 @@ import {
   DEFAULT_APISIX_ADMIN_TIMEOUT_MS,
   DEFAULT_WALLET_KEY_SWAP_FEE_BPS,
 } from '@/gateway-keys/gateway-keys.constants';
+import { keyringFrom, type BackupKeyring } from '@/wallet-auth/backup-cipher';
 import {
   DEFAULT_MAIL_SMTP_PORT,
   DEFAULT_MAIL_TIMEOUT_MS,
@@ -333,6 +334,12 @@ export interface AppConfig {
      * creates an account here.
      */
     sessionSecret: string;
+    /**
+     * The at-rest keys for stored wallet backups (`BackupCipher`): the current one
+     * seals every write, the previous ones only read rows written before a
+     * rotation. Kept out of the database on purpose — see `backup-cipher.ts`.
+     */
+    backupKeyring: BackupKeyring;
     /** Per-provider OAuth credentials. An empty pair disables that provider. */
     google: { clientId: string; clientSecret: string };
     github: { clientId: string; clientSecret: string };
@@ -686,6 +693,11 @@ export default (): AppConfig => ({
     // No fallback to the gateway secret — see the interface, and
     // `identity-env.ts`, which refuses to boot without its own.
     sessionSecret: process.env.WALLET_AUTH_SESSION_SECRET?.trim() ?? '',
+    // Validated at boot by `identity-env.ts`; malformed keys never reach here.
+    backupKeyring: keyringFrom(
+      process.env.WALLET_BACKUP_ENCRYPTION_KEY ?? '',
+      process.env.WALLET_BACKUP_ENCRYPTION_PREVIOUS_KEYS ?? '',
+    ),
     google: {
       clientId: process.env.WALLET_GOOGLE_CLIENT_ID ?? '',
       clientSecret: process.env.WALLET_GOOGLE_CLIENT_SECRET ?? '',

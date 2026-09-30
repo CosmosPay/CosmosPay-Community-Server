@@ -1480,6 +1480,24 @@ seal होती हैं और कभी लौटाई नहीं जा
 
 ## अपग्रेड — breaking changes और deploy नोट्स
 
+### Wallet backups: Argon2id और at-rest encryption
+
+- **Deploy से पहले `WALLET_BACKUP_ENCRYPTION_KEY` सेट करें** (`openssl rand -base64 32`);
+  इसके बिना sign-in door होने पर boot मना कर देता है। हर सहेजा गया box इससे दोबारा
+  एन्क्रिप्ट होता है (AES-256-GCM, अपने `chain:address` से बंधा), इसलिए database का dump,
+  replica या backup किसी के backup की कॉपी नहीं है। फिर एक बार **`npm run backups:reencrypt`**
+  चलाएँ: यह पहले लिखी गई rows को एन्क्रिप्ट करता है। Rotation: पुरानी key को
+  `WALLET_BACKUP_ENCRYPTION_PREVIOUS_KEYS` में ले जाएँ, नई सेट करें, script चलाएँ, पुरानी हटाएँ।
+- **`v: 4` boxes स्वीकार होते हैं**: v3 का slot आकार, Argon2id password door के साथ
+  (`kdf: "argon2id"`, `m` ≥ 19 MiB, `t` ≥ 2)। Wallet हर नया backup v4 (64 MiB, 2 passes) में
+  सील करता है और restore करते समय केवल-password v2/v3 box को v4 में दोबारा सील करता है।
+  v2 और v3 अब भी स्वीकार और दिए जाते हैं।
+- **Wallet 12 अक्षरों का password माँगता है** जो आम न हो; मौजूदा passwords बदले जाने तक
+  काम करते रहते हैं।
+- **Database को खुद** storage स्तर पर encryption (disk / volume), एन्क्रिप्टेड backups और
+  केवल इस सर्विस तक सीमित पहुँच चाहिए: at-rest key backup column की रक्षा करती है, बाकी
+  rows की नहीं।
+
 ### Wallet backups: हर wallet का एक, login पर सभी restore
 
 - **Migration `20261001120000_wallet_backups_per_wallet`** प्रति खाता एक backup के नियम को
@@ -1944,6 +1962,8 @@ type दोबारा बनाए बिना enum value drop नहीं �
 | `MAIL_SMTP_PASS` | नहीं | — | SMTP password |
 | `MAIL_TIMEOUT_MS` | नहीं | `15000` | एक भेजने का बजट (ms) |
 | `RECOVERY_EMAIL_CODES` | नहीं | `false` | Recovery server पर: अपने `MAIL_*` से अपने codes भेजता है |
+| `WALLET_BACKUP_ENCRYPTION_KEY` | किसी भी sign-in door के साथ | — | हर सहेजे गए wallet backup को at rest एन्क्रिप्ट करती है (AES-256-GCM, 32 bytes base64/hex)। केवल environment में रहती है: database की कॉपी में device के ciphertext का ciphertext होता है। इसे खोने पर सहेजे गए backups फिर से नहीं दिए जा सकते |
+| `WALLET_BACKUP_ENCRYPTION_PREVIOUS_KEYS` | नहीं | — | rotation के लिए comma से अलग पुरानी keys, केवल पढ़ने के लिए; `npm run backups:reencrypt` के बाद हटाएँ |
 | `STELLAR_NETWORK` | नहीं | `testnet` | fallback Stellar नेटवर्क (`public` / `testnet`) |
 | `STELLAR_HORIZON_URL_PUBLIC` | नहीं | `https://horizon.stellar.org` | Mainnet Horizon का base URL |
 | `STELLAR_HORIZON_URL_TESTNET` | नहीं | `https://horizon-testnet.stellar.org` | Testnet Horizon का base URL |

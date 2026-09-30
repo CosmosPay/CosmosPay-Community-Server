@@ -1536,6 +1536,25 @@ plugins isolés.
 
 ## Mise à niveau — changements incompatibles et notes de déploiement
 
+### Sauvegardes de wallet : Argon2id et chiffrement au repos
+
+- **Définissez `WALLET_BACKUP_ENCRYPTION_KEY` avant de déployer** (`openssl rand -base64 32`) ;
+  le démarrage refuse une porte de connexion sans elle. Chaque boîte stockée est chiffrée à
+  nouveau avec elle (AES-256-GCM, liée à son `chain:address`), si bien qu'un dump, une
+  réplique ou une sauvegarde de la base n'est la copie de la sauvegarde de personne. Lancez
+  ensuite **`npm run backups:reencrypt`** une fois : il chiffre les lignes écrites avant.
+  Rotation : déplacez l'ancienne clé dans `WALLET_BACKUP_ENCRYPTION_PREVIOUS_KEYS`, définissez
+  une nouvelle, lancez le script, retirez l'ancienne.
+- **Les boîtes `v: 4` sont acceptées** : la forme à slots de v3 avec une porte mot de passe
+  Argon2id (`kdf: "argon2id"`, `m` ≥ 19 Mio, `t` ≥ 2). Le wallet scelle chaque nouvelle
+  sauvegarde en v4 (64 Mio, 2 passes) et rescelle en v4 une boîte v2/v3 à mot de passe seul
+  lorsqu'il la restaure. v2 et v3 restent acceptées et servies.
+- **Le wallet demande un mot de passe de 12 caractères** qui ne soit pas courant ; les mots
+  de passe existants continuent de fonctionner jusqu'à leur changement.
+- **La base elle-même** a toujours besoin d'un chiffrement au niveau du stockage (disque /
+  volume), de sauvegardes chiffrées et d'un accès limité à ce service : la clé au repos
+  protège la colonne des sauvegardes, pas le reste des lignes.
+
 ### Sauvegardes de wallet : une par wallet, toutes restaurées à la connexion
 
 - **La migration `20261001120000_wallet_backups_per_wallet`** remplace la règle d'une
@@ -2031,6 +2050,8 @@ Chaque variable lue depuis `process.env` dans `src/` est validée au démarrage 
 | `MAIL_SMTP_PASS` | non | — | Mot de passe SMTP |
 | `MAIL_TIMEOUT_MS` | non | `15000` | Budget d'un envoi (ms) |
 | `RECOVERY_EMAIL_CODES` | non | `false` | Sur un serveur de récupération : envoie ses propres codes via son `MAIL_*` |
+| `WALLET_BACKUP_ENCRYPTION_KEY` | avec toute porte de connexion | — | Chiffre au repos chaque sauvegarde de wallet stockée (AES-256-GCM, 32 octets base64/hex). Ne vit que dans l'environnement : une copie de la base contient le chiffré du chiffré de l'appareil. La perdre signifie que les sauvegardes stockées ne peuvent plus être servies |
+| `WALLET_BACKUP_ENCRYPTION_PREVIOUS_KEYS` | non | — | Clés retirées séparées par des virgules, en lecture seule, pour une rotation ; à retirer après `npm run backups:reencrypt` |
 | `STELLAR_NETWORK` | non | `testnet` | Réseau Stellar de repli (`public` / `testnet`) |
 | `STELLAR_HORIZON_URL_PUBLIC` | non | `https://horizon.stellar.org` | URL de base d'Horizon sur le mainnet |
 | `STELLAR_HORIZON_URL_TESTNET` | non | `https://horizon-testnet.stellar.org` | URL de base d'Horizon sur le testnet |

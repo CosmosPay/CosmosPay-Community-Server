@@ -1,6 +1,7 @@
 import { StrKey } from '@stellar/stellar-sdk';
 import { isProviderUrl } from '@/common/oidc/oidc-core';
 import { parseReturnUrls, returnUrlProblem } from '@/common/return-url';
+import { parseAtRestKey } from '@/wallet-auth/backup-cipher';
 
 /**
  * Boot-time rules for the wallet sign-in and the recovery servers.
@@ -148,6 +149,31 @@ export function assertIdentityConfigConsistent(env: Env): void {
   const emailDoor = mail && minting;
   const signInServed = Boolean(google || github || authentik || emailDoor);
 
+  // The at-rest key for stored backups: required wherever a sign-in can store one,
+  // and well-formed wherever it is set (a key that failed to parse would be a
+  // backup that silently stops opening).
+  const backupKey = read(env, 'WALLET_BACKUP_ENCRYPTION_KEY');
+  if (signInServed && !backupKey) {
+    throw new Error(
+      'WALLET_BACKUP_ENCRYPTION_KEY is required whenever a wallet sign-in door is configured: ' +
+        'it seals every stored backup at rest (openssl rand -base64 32).',
+    );
+  }
+  for (const [name, value] of [
+    ['WALLET_BACKUP_ENCRYPTION_KEY', backupKey],
+    ...read(env, 'WALLET_BACKUP_ENCRYPTION_PREVIOUS_KEYS')
+      .split(',')
+      .map((v) => v.trim())
+      .filter(Boolean)
+      .map((v) => ['WALLET_BACKUP_ENCRYPTION_PREVIOUS_KEYS', v]),
+  ]) {
+    if (value && !parseAtRestKey(value)) {
+      throw new Error(
+        `${name} must be 32 bytes, in base64 or hex (openssl rand -base64 32).`,
+      );
+    }
+  }
+
   if (signInServed) {
     requireSecret(
       env,
@@ -260,6 +286,7 @@ export function assertIdentityConfigConsistent(env: Env): void {
     'APISIX_GATEWAY_SECRET',
     'WALLET_AUTH_SESSION_SECRET',
     'APISIX_ADMIN_KEY',
+    'WALLET_BACKUP_ENCRYPTION_KEY',
     'RECOVERY_JWT_SECRET',
   ]);
 }

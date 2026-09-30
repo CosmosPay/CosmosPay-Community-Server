@@ -3,6 +3,8 @@ import { NETWORK_PASSPHRASE_PUBLIC } from '@/config/config.constants';
 import { assertIdentityConfigConsistent } from '@/config/identity-env';
 
 const secret = (c: string) => c.repeat(40);
+/** A well-formed at-rest key for stored backups: 32 bytes, base64. */
+const BACKUP_KEY = Buffer.alloc(32, 7).toString('base64');
 
 function recoveryServer(over: Record<string, string> = {}) {
   return {
@@ -37,6 +39,7 @@ describe('assertIdentityConfigConsistent', () => {
       WALLET_GOOGLE_CLIENT_ID: 'id',
       WALLET_GOOGLE_CLIENT_SECRET: 'sec',
       WALLET_AUTH_PUBLIC_BASE_URL: 'https://api.example.com/cosmos-api',
+      WALLET_BACKUP_ENCRYPTION_KEY: BACKUP_KEY,
     };
     expect(() => assertIdentityConfigConsistent(env)).toThrow(
       /WALLET_AUTH_SESSION_SECRET/,
@@ -140,6 +143,7 @@ describe('assertIdentityConfigConsistent', () => {
           APISIX_ADMIN_URL: 'http://apisix:9180/apisix/admin',
           APISIX_ADMIN_KEY: secret('k'),
           WALLET_AUTH_SESSION_SECRET: secret('s'),
+          WALLET_BACKUP_ENCRYPTION_KEY: BACKUP_KEY,
         }),
       ),
     ).toThrow(/must not be set on a recovery server/);
@@ -209,6 +213,7 @@ describe('assertIdentityConfigConsistent', () => {
       APISIX_GATEWAY_SECRET: secret('g'),
       MAIL_RESEND_API_KEY: 're_test',
       MAIL_FROM: 'wallet@example.com',
+      WALLET_BACKUP_ENCRYPTION_KEY: BACKUP_KEY,
     };
     expect(() => assertIdentityConfigConsistent(base)).not.toThrow();
     expect(() =>
@@ -226,6 +231,39 @@ describe('assertIdentityConfigConsistent', () => {
         WALLET_AUTH_SESSION_SECRET: secret('s'),
       }),
     ).toThrow(/same value/);
+  });
+
+  /* Every stored backup is sealed at rest under it; a sign-in cannot run without one. */
+  it('requires a well-formed backup encryption key wherever a sign-in door exists', () => {
+    const env = {
+      APISIX_GATEWAY_SECRET: secret('g'),
+      WALLET_GOOGLE_CLIENT_ID: 'id',
+      WALLET_GOOGLE_CLIENT_SECRET: 'sec',
+      WALLET_AUTH_PUBLIC_BASE_URL: 'https://api.example.com/cosmos-api',
+      WALLET_AUTH_SESSION_SECRET: secret('s'),
+    };
+    expect(() => assertIdentityConfigConsistent(env)).toThrow(
+      /WALLET_BACKUP_ENCRYPTION_KEY is required/,
+    );
+    expect(() =>
+      assertIdentityConfigConsistent({
+        ...env,
+        WALLET_BACKUP_ENCRYPTION_KEY: 'short',
+      }),
+    ).toThrow(/32 bytes/);
+    expect(() =>
+      assertIdentityConfigConsistent({
+        ...env,
+        WALLET_BACKUP_ENCRYPTION_KEY: BACKUP_KEY,
+        WALLET_BACKUP_ENCRYPTION_PREVIOUS_KEYS: 'nope',
+      }),
+    ).toThrow(/WALLET_BACKUP_ENCRYPTION_PREVIOUS_KEYS/);
+    expect(() =>
+      assertIdentityConfigConsistent({
+        ...env,
+        WALLET_BACKUP_ENCRYPTION_KEY: BACKUP_KEY,
+      }),
+    ).not.toThrow();
   });
 
   it('refuses a plain-http public base', () => {

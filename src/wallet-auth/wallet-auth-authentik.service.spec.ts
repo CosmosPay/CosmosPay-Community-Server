@@ -12,6 +12,7 @@ import { OidcService } from '@/common/oidc/oidc.service';
 import { AppConfig } from '@/config/configuration';
 import { WalletKeysService } from '@/gateway-keys/wallet-keys.service';
 import { MailerService } from '@/mailer/mailer.service';
+import { BackupCipher } from '@/wallet-auth/backup-cipher';
 import { PrismaService } from '@/prisma/prisma.service';
 import { WalletAuthService } from '@/wallet-auth/wallet-auth.service';
 import {
@@ -105,12 +106,21 @@ function makeService(settings: Partial<typeof SETTINGS> = {}) {
       .fn()
       .mockResolvedValue({ organizationId: 'org_1', dev: null, prod: null }),
   };
+  // Transparent at rest: these tests are about what the service decides, not the seal
+  // (backup-cipher.spec.ts). `seal` marks what it stores so a test can tell.
+  const backupCipher = {
+    seal: jest.fn((box: string, _chain: string, _address: string) => box),
+    open: jest.fn(
+      (box: string, _chain: string, _address: string): string | null => box,
+    ),
+  };
   const service = new WalletAuthService(
     prisma as unknown as PrismaService,
     config,
     oidc as unknown as OidcService,
     mailer as unknown as MailerService,
     walletKeys as unknown as WalletKeysService,
+    backupCipher as unknown as BackupCipher,
   );
   return { service, prisma, oidc };
 }

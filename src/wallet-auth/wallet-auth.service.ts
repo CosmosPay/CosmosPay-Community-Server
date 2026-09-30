@@ -16,6 +16,7 @@ import { OidcService } from '@/common/oidc/oidc.service';
 import { isReturnUrlAllowed, returnRedirectUrl } from '@/common/return-url';
 import { openJson, sealJson } from '@/common/sealed-box';
 import { WalletKeysService } from '@/gateway-keys/wallet-keys.service';
+import { BackupCipher } from '@/wallet-auth/backup-cipher';
 import { MailerService } from '@/mailer/mailer.service';
 import { minutesUntil, renderLoginCodeEmail } from '@/mailer/wallet-emails';
 import { PrismaService } from '@/prisma/prisma.service';
@@ -185,6 +186,7 @@ export class WalletAuthService {
     private readonly oidc: OidcService,
     private readonly mailer: MailerService,
     private readonly walletKeys: WalletKeysService,
+    private readonly backupCipher: BackupCipher,
   ) {}
 
   private get settings() {
@@ -758,14 +760,23 @@ export class WalletAuthService {
     } | null,
     idToken: string | null,
   ) {
-    const boxes = (account?.backups ?? []).map((b) => ({
-      chain: b.chain,
-      address: b.address,
-      // The field's original name, kept for the wallets that read it.
-      stellarAddress: b.address,
-      box: b.box,
-      updatedAt: b.updatedAt.toISOString(),
-    }));
+    // Opened from the at-rest seal; a row no configured key opens is left out (and
+    // logged by the cipher) rather than failing the sign-in for every other wallet.
+    const boxes = (account?.backups ?? []).flatMap((b) => {
+      const box = this.backupCipher.open(b.box, b.chain, b.address);
+      return box === null
+        ? []
+        : [
+            {
+              chain: b.chain,
+              address: b.address,
+              // The field's original name, kept for the wallets that read it.
+              stellarAddress: b.address,
+              box,
+              updatedAt: b.updatedAt.toISOString(),
+            },
+          ];
+    });
     return {
       status: 'ready' as const,
       identity: {
@@ -881,6 +892,8 @@ export class WalletAuthService {
     });
 
     if (dto.backup !== undefined) {
+      // Sealed again at rest, under this deployment's key — see `BackupCipher`.
+      const sealed = this.backupCipher.seal(dto.backup, chain, address);
       await this.prisma.walletBackup.upsert({
         where: {
           walletAccountId_chain_address: {
@@ -893,9 +906,9 @@ export class WalletAuthService {
           walletAccountId: account.id,
           chain,
           address,
-          box: dto.backup,
+          box: sealed,
         },
-        update: { chain, address, box: dto.backup },
+        update: { chain, address, box: sealed },
       });
     }
 
@@ -962,7 +975,7 @@ export class WalletAuthService {
 
     const updated = await this.prisma.walletBackup.update({
       where: { id: backup.id },
-      data: { box: dto.box },
+      data: { box: this.backupCipher.seal(dto.box, chain, address) },
       select: { chain: true, address: true, updatedAt: true },
     });
     return {

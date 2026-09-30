@@ -61,3 +61,9 @@ process.env.MAIL_SMTP_HOST = '';
 process.env.MAIL_FROM = '';
 process.env.APISIX_ADMIN_URL = '';
 process.env.APISIX_ADMIN_KEY = '';
+// The at-rest key for stored wallet backups: required wherever a sign-in door is, and
+// pinned so a developer's .env cannot change what the suites seal with.
+process.env.WALLET_BACKUP_ENCRYPTION_KEY = Buffer.alloc(32, 9).toString(
+  'base64',
+);
+process.env.WALLET_BACKUP_ENCRYPTION_PREVIOUS_KEYS = '';

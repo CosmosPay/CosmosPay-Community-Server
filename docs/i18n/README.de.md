@@ -1567,6 +1567,26 @@ eingeschaltet werden.
 
 ## Upgrade — Breaking Changes und Deploy-Hinweise
 
+### Wallet-Backups: Argon2id und Verschlüsselung im Ruhezustand
+
+- **Setzen Sie `WALLET_BACKUP_ENCRYPTION_KEY` vor dem Deployment**
+  (`openssl rand -base64 32`); der Start verweigert eine Anmeldetür ohne ihn. Jede
+  gespeicherte Box wird damit erneut verschlüsselt (AES-256-GCM, an ihr `chain:address`
+  gebunden), sodass ein Dump, eine Replik oder ein Backup der Datenbank keine Kopie von
+  jemandes Backup ist. Führen Sie danach einmal **`npm run backups:reencrypt`** aus: Es
+  verschlüsselt die zuvor geschriebenen Zeilen. Rotation: alten Schlüssel nach
+  `WALLET_BACKUP_ENCRYPTION_PREVIOUS_KEYS` verschieben, neuen setzen, Skript ausführen, alten
+  entfernen.
+- **`v: 4`-Boxen werden akzeptiert**: die Slot-Form von v3 mit einer Argon2id-Passworttür
+  (`kdf: "argon2id"`, `m` ≥ 19 MiB, `t` ≥ 2). Die Wallet versiegelt jedes neue Backup als v4
+  (64 MiB, 2 Durchläufe) und versiegelt eine reine Passwort-v2/v3-Box bei der
+  Wiederherstellung erneut als v4. v2 und v3 werden weiter akzeptiert und ausgeliefert.
+- **Die Wallet verlangt ein 12-stelliges Passwort**, das nicht gängig ist; bestehende
+  Passwörter funktionieren weiter, bis sie geändert werden.
+- **Die Datenbank selbst** braucht weiterhin Verschlüsselung auf Speicherebene (Festplatte /
+  Volume), verschlüsselte Backups und auf diesen Dienst beschränkten Zugriff: Der
+  Ruheschlüssel schützt die Backup-Spalte, nicht die übrigen Zeilen.
+
 ### Wallet-Backups: eines pro Wallet, alle bei der Anmeldung wiederhergestellt
 
 - **Die Migration `20261001120000_wallet_backups_per_wallet`** ersetzt die Regel „ein Backup
@@ -2063,6 +2083,8 @@ passen Sie mindestens `DATABASE_URL` und `APISIX_GATEWAY_SECRET` an.
 | `MAIL_SMTP_PASS` | nein | — | SMTP-Passwort |
 | `MAIL_TIMEOUT_MS` | nein | `15000` | Budget für einen Versand (ms) |
 | `RECOVERY_EMAIL_CODES` | nein | `false` | Auf einem Wiederherstellungsserver: eigene Codes über sein `MAIL_*` senden |
+| `WALLET_BACKUP_ENCRYPTION_KEY` | mit jeder Anmeldetür | — | Verschlüsselt jedes gespeicherte Wallet-Backup im Ruhezustand (AES-256-GCM, 32 Bytes base64/hex). Liegt nur in der Umgebung: Eine Kopie der Datenbank enthält Chiffretext des Geräte-Chiffretexts. Geht er verloren, können die gespeicherten Backups nicht mehr ausgeliefert werden |
+| `WALLET_BACKUP_ENCRYPTION_PREVIOUS_KEYS` | nein | — | Kommagetrennte ausgemusterte Schlüssel, nur lesend, für eine Rotation; nach `npm run backups:reencrypt` entfernen |
 | `STELLAR_NETWORK` | nein | `testnet` | Fallback-Stellar-Netzwerk (`public` / `testnet`) |
 | `STELLAR_HORIZON_URL_PUBLIC` | nein | `https://horizon.stellar.org` | Horizon-Basis-URL für Mainnet |
 | `STELLAR_HORIZON_URL_TESTNET` | nein | `https://horizon-testnet.stellar.org` | Horizon-Basis-URL für Testnet |

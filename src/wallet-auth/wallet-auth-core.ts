@@ -10,6 +10,11 @@ import { WalletAuthMethod, WalletAuthProvider } from '@generated/prisma/client';
 import { openJson, sealJson } from '@/common/sealed-box';
 import {
   BACKUP_BOX_MAX_CHARS,
+  BACKUP_ARGON2_MAX_MEMORY_KIB,
+  BACKUP_ARGON2_MAX_PARALLELISM,
+  BACKUP_ARGON2_MAX_PASSES,
+  BACKUP_ARGON2_MIN_MEMORY_KIB,
+  BACKUP_ARGON2_MIN_PASSES,
   BACKUP_MAX_ITERATIONS,
   BACKUP_MAX_SLOTS,
   BACKUP_MIN_ITERATIONS,
@@ -584,6 +589,25 @@ function passwordCostOk(salt: unknown, iter: unknown): boolean {
   );
 }
 
+/** A v4 password door's Argon2id cost, within the floor and the ceiling. */
+function argon2CostOk(
+  salt: unknown,
+  m: unknown,
+  t: unknown,
+  p: unknown,
+): boolean {
+  const saltBytes = b64Bytes(salt);
+  const within = (v: unknown, min: number, max: number) =>
+    Number.isInteger(v) && (v as number) >= min && (v as number) <= max;
+  return (
+    saltBytes !== null &&
+    saltBytes >= 16 &&
+    within(m, BACKUP_ARGON2_MIN_MEMORY_KIB, BACKUP_ARGON2_MAX_MEMORY_KIB) &&
+    within(t, BACKUP_ARGON2_MIN_PASSES, BACKUP_ARGON2_MAX_PASSES) &&
+    within(p, 1, BACKUP_ARGON2_MAX_PARALLELISM)
+  );
+}
+
 /**
  * One door of a v3 box: the data key, sealed under a password or a passkey.
  *
@@ -592,12 +616,18 @@ function passwordCostOk(salt: unknown, iter: unknown): boolean {
  * key is the authenticator's PRF output, 32 bytes nobody can guess offline, and
  * `id` only tells the wallet which credential to ask for.
  */
-function isBackupSlot(slot: unknown): boolean {
+function isBackupSlot(slot: unknown, version: 3 | 4): boolean {
   if (!slot || typeof slot !== 'object' || Array.isArray(slot)) return false;
   const s = slot as Json;
   if (b64Bytes(s.iv) !== 12) return false;
   if (b64Bytes(s.data) !== BACKUP_WRAPPED_KEY_BYTES) return false;
-  if (s.kind === 'password') return passwordCostOk(s.salt, s.iter);
+  // Each version has one kind of password door: PBKDF2 in v3, Argon2id in v4 —
+  // so a v4 box cannot smuggle in a cheap PBKDF2 door under the new version.
+  if (s.kind === 'password') {
+    return version === 4
+      ? s.kdf === 'argon2id' && argon2CostOk(s.salt, s.m, s.t, s.p)
+      : passwordCostOk(s.salt, s.iter);
+  }
   if (s.kind === 'passkey') {
     return (
       typeof s.id === 'string' &&
@@ -637,13 +667,14 @@ export function isBackupBox(box: string): boolean {
   // 12-byte IV and a ciphertext, as the wallet writes them, in both versions.
   if (b64Bytes(b.iv) !== 12 || b64Bytes(b.data) === null) return false;
   if (b.v === 2) return passwordCostOk(b.salt, b.iter);
-  if (b.v === 3) {
+  if (b.v === 3 || b.v === 4) {
+    const version = b.v;
     const slots = b.slots;
     return (
       Array.isArray(slots) &&
       slots.length > 0 &&
       slots.length <= BACKUP_MAX_SLOTS &&
-      slots.every(isBackupSlot)
+      slots.every((slot) => isBackupSlot(slot, version))
     );
   }
   return false;

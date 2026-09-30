@@ -1493,6 +1493,24 @@ the service under `src/native-plugins/<slug>/`, switched on by the same
 
 ## Upgrading — breaking changes and deploy notes
 
+### Wallet backups: Argon2id and encryption at rest
+
+- **Set `WALLET_BACKUP_ENCRYPTION_KEY` before deploying** (`openssl rand -base64 32`);
+  boot refuses a sign-in door without it. Every stored box is sealed again under it
+  (AES-256-GCM, bound to its `chain:address`), so a dump, replica or backup file of the
+  database is not a copy of anyone's backup. Then run **`npm run backups:reencrypt`** once:
+  it seals the rows written before. Rotation: move the old key to
+  `WALLET_BACKUP_ENCRYPTION_PREVIOUS_KEYS`, set a new one, run the script, drop the old one.
+- **`v: 4` boxes are accepted**: the slot shape of v3 with an Argon2id password door
+  (`kdf: "argon2id"`, `m` ≥ 19 MiB, `t` ≥ 2). The wallet seals every new backup as v4
+  (64 MiB, 2 passes) and re-seals a password-only v2/v3 box as v4 when it restores it.
+  v2 and v3 are still accepted and served.
+- **The wallet asks for a 12-character password** that is not a common one; existing
+  passwords keep working until they are changed.
+- **The database itself** still wants encryption at the storage layer (disk / volume
+  encryption), encrypted backups and access limited to this service: the at-rest key
+  protects the backup column, not the rest of the rows.
+
 ### Wallet backups: one per wallet, all restored at sign-in
 
 - **Migration `20261001120000_wallet_backups_per_wallet`** turns the one-backup-per-account
@@ -1962,6 +1980,8 @@ at least `DATABASE_URL` and `APISIX_GATEWAY_SECRET`.
 | `MAIL_SMTP_PASS` | no | — | SMTP password |
 | `MAIL_TIMEOUT_MS` | no | `15000` | Budget for one send (ms) |
 | `RECOVERY_EMAIL_CODES` | no | `false` | On a recovery server: email its own codes through its `MAIL_*` |
+| `WALLET_BACKUP_ENCRYPTION_KEY` | with any sign-in door | — | Seals every stored wallet backup at rest (AES-256-GCM, 32 bytes base64/hex). Lives only in the environment: a copy of the database holds ciphertext of the device's ciphertext. Losing it means the stored backups cannot be served |
+| `WALLET_BACKUP_ENCRYPTION_PREVIOUS_KEYS` | no | — | Comma-separated retired keys, read-only, for a rotation; drop them after `npm run backups:reencrypt` |
 | `STELLAR_NETWORK` | no | `testnet` | Fallback Stellar network (`public` / `testnet`) |
 | `STELLAR_HORIZON_URL_PUBLIC` | no | `https://horizon.stellar.org` | Mainnet Horizon base URL |
 | `STELLAR_HORIZON_URL_TESTNET` | no | `https://horizon-testnet.stellar.org` | Testnet Horizon base URL |

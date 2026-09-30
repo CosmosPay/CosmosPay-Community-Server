@@ -1547,6 +1547,25 @@ misma lista `PLUGINS_ENABLED` que los plugins aislados.
 
 ## Actualización — cambios incompatibles y notas de despliegue
 
+### Backups de wallet: Argon2id y cifrado en reposo
+
+- **Define `WALLET_BACKUP_ENCRYPTION_KEY` antes de desplegar** (`openssl rand -base64 32`);
+  el arranque rechaza una puerta de inicio de sesión sin ella. Cada caja guardada se cifra
+  de nuevo con ella (AES-256-GCM, ligada a su `chain:address`), así que un volcado, réplica
+  o respaldo de la base no es una copia del backup de nadie. Luego ejecuta
+  **`npm run backups:reencrypt`** una vez: cifra las filas escritas antes. Rotación: mueve la
+  clave vieja a `WALLET_BACKUP_ENCRYPTION_PREVIOUS_KEYS`, define una nueva, ejecuta el script
+  y quita la vieja.
+- **Se aceptan cajas `v: 4`**: la forma por slots de v3 con una puerta de contraseña Argon2id
+  (`kdf: "argon2id"`, `m` ≥ 19 MiB, `t` ≥ 2). El wallet sella cada backup nuevo como v4
+  (64 MiB, 2 pasadas) y vuelve a sellar como v4 una caja v2/v3 solo con contraseña al
+  restaurarla. v2 y v3 se siguen aceptando y entregando.
+- **El wallet pide una contraseña de 12 caracteres** que no sea común; las contraseñas
+  existentes siguen funcionando hasta que se cambien.
+- **La base de datos en sí** sigue necesitando cifrado en la capa de almacenamiento (disco /
+  volumen), respaldos cifrados y acceso limitado a este servicio: la clave en reposo protege
+  la columna de backups, no el resto de las filas.
+
 ### Backups de wallet: uno por wallet, todos restaurados al iniciar sesión
 
 - **La migración `20261001120000_wallet_backups_per_wallet`** cambia la regla de un backup
@@ -2031,6 +2050,8 @@ Cada variable leída de `process.env` en `src/` se valida en el arranque mediant
 | `MAIL_SMTP_PASS` | no | — | Contraseña SMTP |
 | `MAIL_TIMEOUT_MS` | no | `15000` | Presupuesto de un envío (ms) |
 | `RECOVERY_EMAIL_CODES` | no | `false` | En un servidor de recuperación: envía sus propios códigos con su `MAIL_*` |
+| `WALLET_BACKUP_ENCRYPTION_KEY` | con cualquier puerta de inicio de sesión | — | Cifra en reposo cada backup de wallet guardado (AES-256-GCM, 32 bytes en base64/hex). Vive solo en el entorno: una copia de la base contiene cifrado del cifrado del dispositivo. Perderla significa que los backups guardados no se pueden volver a entregar |
+| `WALLET_BACKUP_ENCRYPTION_PREVIOUS_KEYS` | no | — | Claves retiradas separadas por comas, solo lectura, para una rotación; se quitan tras `npm run backups:reencrypt` |
 | `STELLAR_NETWORK` | no | `testnet` | Red de Stellar de fallback (`public` / `testnet`) |
 | `STELLAR_HORIZON_URL_PUBLIC` | no | `https://horizon.stellar.org` | URL base de Horizon para mainnet |
 | `STELLAR_HORIZON_URL_TESTNET` | no | `https://horizon-testnet.stellar.org` | URL base de Horizon para testnet |

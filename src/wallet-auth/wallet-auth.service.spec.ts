@@ -17,6 +17,7 @@ import { PrismaService } from '@/prisma/prisma.service';
 import { OidcService } from '@/common/oidc/oidc.service';
 import { WalletKeysService } from '@/gateway-keys/wallet-keys.service';
 import { MailerService } from '@/mailer/mailer.service';
+import { BackupCipher } from '@/wallet-auth/backup-cipher';
 import { WalletAuthService } from '@/wallet-auth/wallet-auth.service';
 import {
   LOGIN_CODE_MAX_ATTEMPTS,
@@ -117,14 +118,23 @@ function makeService(
       .fn()
       .mockResolvedValue({ organizationId: 'org_1', dev: null, prod: null }),
   };
+  // Transparent at rest: these tests are about what the service decides, not the seal
+  // (backup-cipher.spec.ts). `seal` marks what it stores so a test can tell.
+  const backupCipher = {
+    seal: jest.fn((box: string, _chain: string, _address: string) => box),
+    open: jest.fn(
+      (box: string, _chain: string, _address: string): string | null => box,
+    ),
+  };
   const service = new WalletAuthService(
     prisma as unknown as PrismaService,
     config,
     oidc as unknown as OidcService,
     mailer as unknown as MailerService,
     walletKeys as unknown as WalletKeysService,
+    backupCipher as unknown as BackupCipher,
   );
-  return { service, prisma, oidc, mailer, walletKeys };
+  return { service, prisma, oidc, mailer, walletKeys, backupCipher };
 }
 
 /** Outbound HTTP always answers, unless a test says otherwise. */
@@ -771,6 +781,26 @@ describe('WalletAuthService', () => {
           address: ADDRESS,
         },
       });
+    });
+
+    /* What reaches the table is the at-rest seal, never the device's box as sent. */
+    it('stores the box sealed at rest, bound to its chain and address', async () => {
+      const { service, prisma, backupCipher } = makeService();
+      backupCipher.seal.mockImplementation(
+        (box: string, chain: string, address: string) =>
+          `enc1:${chain}:${address}:${box.length}`,
+      );
+      prisma.walletAccount.findUnique.mockResolvedValue(null);
+      prisma.walletAccount.upsert.mockResolvedValue({ id: 'acc_1' });
+      prisma.walletBackup.upsert.mockResolvedValue({});
+
+      await service.finish(token(), { ...body(), backup: BOX });
+
+      const stored = prisma.walletBackup.upsert.mock.calls[0][0];
+      expect(backupCipher.seal).toHaveBeenCalledWith(BOX, 'stellar', ADDRESS);
+      expect(stored.create.box).toBe(`enc1:stellar:${ADDRESS}:${BOX.length}`);
+      expect(stored.update.box).toBe(stored.create.box);
+      expect(JSON.stringify(stored)).not.toContain(BOX);
     });
 
     it('refuses a new wallet past the per-account cap, but still re-seals a kept one', async () => {

@@ -1038,6 +1038,13 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
 
 ## 升级 — 破坏性变更与部署说明
 
+### 钱包备份：Argon2id 与静态加密
+
+- **部署前设置 `WALLET_BACKUP_ENCRYPTION_KEY`**（`openssl rand -base64 32`）；缺少它时，只要配置了登录入口就会拒绝启动。每个存储的备份都会用它再次加密（AES-256-GCM，绑定到其 `chain:address`），因此数据库的转储、副本或备份都不是任何人备份的副本。然后运行一次 **`npm run backups:reencrypt`**：它会加密之前写入的记录。轮换：把旧密钥移到 `WALLET_BACKUP_ENCRYPTION_PREVIOUS_KEYS`，设置新密钥，运行脚本，再移除旧密钥。
+- **接受 `v: 4` 备份**：沿用 v3 的槽位结构，密码入口使用 Argon2id（`kdf: "argon2id"`，`m` ≥ 19 MiB，`t` ≥ 2）。钱包把每个新备份封装为 v4（64 MiB，2 轮），并在恢复仅含密码入口的 v2/v3 备份时将其重新封装为 v4。v2 与 v3 仍被接受和提供。
+- **钱包要求 12 个字符且不常见的密码**；现有密码在被修改之前仍然可用。
+- **数据库本身**仍需要存储层加密（磁盘 / 卷）、加密的备份以及仅限本服务的访问：静态密钥保护的是备份列，而不是其余记录。
+
 ### 钱包备份：每个钱包一份，登录时全部恢复
 
 - **迁移 `20261001120000_wallet_backups_per_wallet`** 把“每个账户一份备份”的规则改为账户内每个 `(chain, address)` 一份。现有记录保持不变。
@@ -1363,6 +1370,8 @@ WHERE NOT i.indisvalid;
 | `MAIL_SMTP_PASS` | 否 | — | SMTP 密码 |
 | `MAIL_TIMEOUT_MS` | 否 | `15000` | 一次发送的时间预算（ms） |
 | `RECOVERY_EMAIL_CODES` | 否 | `false` | 在恢复服务器上：通过自己的 `MAIL_*` 发送自己的验证码 |
+| `WALLET_BACKUP_ENCRYPTION_KEY` | 配置任一登录入口时 | — | 对每个已存储的钱包备份进行静态加密（AES-256-GCM，32 字节 base64/hex）。只存在于环境变量中：数据库副本里只有设备密文的密文。丢失它意味着已存储的备份无法再被提供 |
+| `WALLET_BACKUP_ENCRYPTION_PREVIOUS_KEYS` | 否 | — | 以逗号分隔的已停用密钥，只读，用于轮换；运行 `npm run backups:reencrypt` 后移除 |
 | `STELLAR_NETWORK` | 否 | `testnet` | 回退使用的 Stellar 网络（`public` / `testnet`） |
 | `STELLAR_HORIZON_URL_PUBLIC` | 否 | `https://horizon.stellar.org` | 主网 Horizon 基础 URL |
 | `STELLAR_HORIZON_URL_TESTNET` | 否 | `https://horizon-testnet.stellar.org` | 测试网 Horizon 基础 URL |

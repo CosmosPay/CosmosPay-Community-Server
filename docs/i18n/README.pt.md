@@ -1518,6 +1518,24 @@ serviço em `src/native-plugins/<slug>/`, ligados pela mesma lista
 
 ## Atualização — mudanças incompatíveis e notas de deploy
 
+### Backups de wallet: Argon2id e cifragem em repouso
+
+- **Defina `WALLET_BACKUP_ENCRYPTION_KEY` antes do deploy** (`openssl rand -base64 32`); o
+  boot recusa uma porta de login sem ela. Cada caixa guardada é cifrada de novo com ela
+  (AES-256-GCM, ligada ao seu `chain:address`), então um dump, réplica ou backup do banco
+  não é uma cópia do backup de ninguém. Depois rode **`npm run backups:reencrypt`** uma vez:
+  ele cifra as linhas escritas antes. Rotação: mova a chave antiga para
+  `WALLET_BACKUP_ENCRYPTION_PREVIOUS_KEYS`, defina uma nova, rode o script e remova a antiga.
+- **Caixas `v: 4` são aceitas**: o formato por slots do v3 com uma porta de senha Argon2id
+  (`kdf: "argon2id"`, `m` ≥ 19 MiB, `t` ≥ 2). A wallet sela todo backup novo como v4
+  (64 MiB, 2 passadas) e sela de novo como v4 uma caixa v2/v3 só com senha ao restaurá-la.
+  v2 e v3 continuam aceitas e entregues.
+- **A wallet pede uma senha de 12 caracteres** que não seja comum; as senhas existentes
+  continuam funcionando até serem trocadas.
+- **O banco em si** ainda precisa de cifragem na camada de armazenamento (disco / volume),
+  backups cifrados e acesso limitado a este serviço: a chave em repouso protege a coluna de
+  backups, não o resto das linhas.
+
 ### Backups de wallet: um por wallet, todos restaurados no login
 
 - **A migração `20261001120000_wallet_backups_per_wallet`** troca a regra de um backup por
@@ -2000,6 +2018,8 @@ Toda variável lida de `process.env` em `src/` é validada no boot por
 | `MAIL_SMTP_PASS` | não | — | Senha SMTP |
 | `MAIL_TIMEOUT_MS` | não | `15000` | Orçamento de um envio (ms) |
 | `RECOVERY_EMAIL_CODES` | não | `false` | Num servidor de recuperação: envia os próprios códigos pelo seu `MAIL_*` |
+| `WALLET_BACKUP_ENCRYPTION_KEY` | com qualquer porta de login | — | Cifra em repouso cada backup de wallet guardado (AES-256-GCM, 32 bytes em base64/hex). Fica só no ambiente: uma cópia do banco contém cifra da cifra do dispositivo. Perdê-la significa que os backups guardados não podem mais ser entregues |
+| `WALLET_BACKUP_ENCRYPTION_PREVIOUS_KEYS` | não | — | Chaves aposentadas separadas por vírgula, só leitura, para uma rotação; remova-as depois de `npm run backups:reencrypt` |
 | `STELLAR_NETWORK` | não | `testnet` | Rede Stellar de fallback (`public` / `testnet`) |
 | `STELLAR_HORIZON_URL_PUBLIC` | não | `https://horizon.stellar.org` | URL base do Horizon da mainnet |
 | `STELLAR_HORIZON_URL_TESTNET` | não | `https://horizon-testnet.stellar.org` | URL base do Horizon da testnet |
