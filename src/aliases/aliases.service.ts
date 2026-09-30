@@ -8,12 +8,15 @@ import {
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import { PrismaService } from '@/prisma/prisma.service';
+import { MailerService } from '@/mailer/mailer.service';
+import { minutesUntil, renderAliasRecoveryEmail } from '@/mailer/wallet-emails';
 import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
 import {
   ALIAS_CHALLENGE_TTL_MS,
   ALIAS_MAX_ADDRESSES,
   ALIAS_MAX_PER_CONSUMER,
   ALIAS_RECOVERY_MAX_ATTEMPTS,
+  ALIAS_RECOVERY_RESEND_MS,
   ALIAS_RECOVERY_TTL_MS,
 } from '@/aliases/aliases.constants';
 import {
@@ -69,6 +72,7 @@ export class AliasesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly consumers: ConsumerResolverService,
+    private readonly mailer: MailerService,
   ) {}
 
   /* ------------------------------ challenges ------------------------------ */
@@ -610,22 +614,49 @@ export class AliasesService {
   /**
    * Begin an email recovery.
    *
-   * **The response is identical whether or not anything matched.** An alias is
-   * public and its owner's mailbox is not, so an endpoint that answered "no such
-   * alias" or "wrong email" differently would confirm which address owns a handle
-   * to anyone who asked. The token is null in the negative case and the caller —
-   * which sends the mail — simply has nothing to send.
+   * **The response is identical whether or not anything matched** — always
+   * `{ accepted: true }`. An alias is public and its owner's mailbox is not, so an
+   * endpoint that answered "no such alias" or "wrong email" differently would
+   * confirm which address owns a handle to anyone who asked.
    *
-   * This service does NOT send email, matching the KYC terms-of-service flow: it
-   * returns the token and the mailbox, and the platform delivers it. The plaintext
-   * exists only in this response; what is stored is its SHA-256.
+   * **The token never goes back to the caller.** It is the proof of mailbox
+   * control, so this service emails it to the mailbox on record and returns
+   * nothing that could complete a recovery. That is what lets any caller —
+   * the shared public key included — start one: all they can do is make the
+   * owner receive a mail, bounded by {@link ALIAS_RECOVERY_RESEND_MS} per alias
+   * and the route's per-address budget. What is stored is the token's SHA-256.
    *
-   * **Which is why only the platform console may call it** (`ConsoleOnlyGuard` on
-   * the route). The token is the proof of mailbox control. Handed to an API-key
-   * caller it proves nothing — anyone who knew a handle and its owner's email
-   * would get the token back and complete the recovery with a key of their own.
+   * The send is not awaited. A failure to deliver must not surface as a
+   * different answer — that would say the alias and mailbox matched — so it is
+   * logged, and the owner asks again.
    */
   async startRecovery(name: string, dto: StartAliasRecoveryDto) {
+    if (!this.mailer.configured) {
+      // Before the lookup: the same answer for every alias.
+      throw ApiError.unavailable(
+        ApiErrorCode.Misconfigured,
+        'This deployment has no mail sender, so it cannot send recovery tokens.',
+      );
+    }
+    const issued = await this.issueRecovery(name, dto);
+    if (issued) void this.mailRecoveryToken(issued);
+    return { accepted: true as const };
+  }
+
+  /**
+   * Mint a recovery token, or null when there is nothing to recover or one was
+   * just sent. Separate from `startRecovery` so the rule is testable without
+   * reading it back out of an email.
+   */
+  async issueRecovery(
+    name: string,
+    dto: StartAliasRecoveryDto,
+  ): Promise<{
+    name: string;
+    email: string;
+    token: string;
+    expiresAt: Date;
+  } | null> {
     const normalized = normalizeAliasName(name);
     const email = normalizeAliasEmail(dto.email);
     const alias = await this.prisma.alias.findUnique({
@@ -636,9 +667,17 @@ export class AliasesService {
       !alias ||
       alias.status !== AliasStatus.ACTIVE ||
       !emailMatches(alias.email, email);
-    if (nothingToDo) {
-      return { accepted: true, token: null, email: null, expiresAt: null };
-    }
+    if (nothingToDo) return null;
+
+    // One mail per alias per window, whoever asks.
+    const recent = await this.prisma.aliasRecovery.findFirst({
+      where: {
+        aliasId: alias.id,
+        createdAt: { gt: new Date(Date.now() - ALIAS_RECOVERY_RESEND_MS) },
+      },
+      select: { id: true },
+    });
+    if (recent) return null;
 
     // Any earlier recovery is burned. Two live tokens for one alias means the
     // older one keeps working after its owner started again because the first
@@ -660,7 +699,27 @@ export class AliasesService {
     });
 
     this.logger.log(`Recovery started for alias "${normalized}"`);
-    return { accepted: true, token, email: alias.email, expiresAt };
+    return { name: normalized, email: alias.email, token, expiresAt };
+  }
+
+  private async mailRecoveryToken(issued: {
+    name: string;
+    email: string;
+    token: string;
+    expiresAt: Date;
+  }): Promise<void> {
+    try {
+      const msg = renderAliasRecoveryEmail({
+        name: issued.name,
+        token: issued.token,
+        minutes: minutesUntil(issued.expiresAt),
+      });
+      await this.mailer.send({ to: issued.email, ...msg });
+    } catch (error) {
+      this.logger.error(
+        `alias recovery: the token for "${issued.name}" could not be mailed: ${String(error)}`,
+      );
+    }
   }
 
   /**

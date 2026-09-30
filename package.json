@@ -15,6 +15,7 @@
     "dev": "prisma migrate deploy && nest start --watch --exec \"node --no-node-snapshot\"",
     "start": "nest start --exec \"node --no-node-snapshot\"",
     "start:dev": "nest start --watch --exec \"node --no-node-snapshot\"",
+    "dev:replica": "nest start --watch -p tsconfig.replica.json --env-file .env.b --exec \"node --no-node-snapshot\"",
     "start:debug": "nest start --debug --watch --exec \"node --no-node-snapshot\"",
     "start:prod": "node --no-node-snapshot dist/src/main",
     "lint": "eslint \"{src,apps,libs,scripts,test,plugins}/**/*.ts\" --max-warnings=0",

@@ -77,7 +77,7 @@ export const API_ERROR_CASES: Readonly<Record<ApiErrorCode, ApiErrorCase>> = {
     summary:
       'The route belongs to the platform console; no API key may call it',
     message: 'This endpoint is reserved for the platform console',
-    path: '/v1/aliases/alice/recovery/complete',
+    path: '/v1/admin/summary',
   },
 
   // --- resources -----------------------------------------------------------
@@ -336,6 +336,12 @@ export const API_ERROR_CASES: Readonly<Record<ApiErrorCode, ApiErrorCase>> = {
     summary: 'Not a backup box this service will keep',
     message: 'That is not a backup box this service will keep.',
     path: '/v1/wallet/backup',
+  },
+  [ApiErrorCode.WalletBackupLimit]: {
+    statuses: [400],
+    summary: 'The account already keeps as many wallet backups as it may',
+    message: 'This account already keeps 20 wallet backups.',
+    path: '/v1/wallet/auth/finish',
   },
   [ApiErrorCode.WalletAccountMismatch]: {
     statuses: [404],

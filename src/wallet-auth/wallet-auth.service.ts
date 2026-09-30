@@ -33,6 +33,7 @@ import {
   OIDC_MAX_AGE_S,
   SESSION_TTL_MS,
   AUTHENTIK_MFA_SETTINGS_PATH,
+  WALLET_MAX_BACKUPS,
 } from '@/wallet-auth/wallet-auth.constants';
 import {
   PROVIDER_ENDPOINTS,
@@ -547,7 +548,7 @@ export class WalletAuthService {
 
     const account = await this.prisma.walletAccount.findUnique({
       where: { email },
-      include: { backup: true },
+      include: { backups: { orderBy: { updatedAt: 'desc' } } },
     });
 
     // An existing account is where the backup worth stealing is, so the
@@ -735,7 +736,7 @@ export class WalletAuthService {
     };
     const account = await this.prisma.walletAccount.findUnique({
       where: { email: row.email },
-      include: { backup: true },
+      include: { backups: { orderBy: { updatedAt: 'desc' } } },
     });
     // The inbox is proven now, so a provider ID token carried here may go out.
     return this.readyPayload(identity, account, this.openIdToken(row.idToken));
@@ -743,20 +744,28 @@ export class WalletAuthService {
 
   /* --------------------------------- ready -------------------------------- */
 
-  /** What a proven email is worth: an identity, the backup if any, and a token. */
+  /** What a proven email is worth: an identity, its backups if any, and a token. */
   private readyPayload(
     identity: WalletAuthIdentity,
     account: {
       id: string;
-      backup: {
+      backups: {
         chain: string;
         address: string;
         box: string;
         updatedAt: Date;
-      } | null;
+      }[];
     } | null,
     idToken: string | null,
   ) {
+    const boxes = (account?.backups ?? []).map((b) => ({
+      chain: b.chain,
+      address: b.address,
+      // The field's original name, kept for the wallets that read it.
+      stellarAddress: b.address,
+      box: b.box,
+      updatedAt: b.updatedAt.toISOString(),
+    }));
     return {
       status: 'ready' as const,
       identity: {
@@ -769,16 +778,10 @@ export class WalletAuthService {
       // and branches its onboarding on it — a cuid here would read as truthy
       // prose and take the wrong branch in silence.
       account: account ? ('existing' as const) : ('new' as const),
-      backup: account?.backup
-        ? {
-            chain: account.backup.chain,
-            address: account.backup.address,
-            // The field's original name, kept for the wallets that read it.
-            stellarAddress: account.backup.address,
-            box: account.backup.box,
-            updatedAt: account.backup.updatedAt.toISOString(),
-          }
-        : null,
+      // Every wallet this account backed up, newest first — what a new device
+      // brings back. `backup` is the newest of them, for wallets that read one.
+      backups: boxes,
+      backup: boxes[0] ?? null,
       sessionToken: issueSessionToken(identity, this.requireSessionSecret()),
       expiresInSeconds: Math.floor(SESSION_TTL_MS / 1000),
       ...(idToken ? { idToken } : {}),
@@ -833,32 +836,27 @@ export class WalletAuthService {
 
     const existing = await this.prisma.walletAccount.findUnique({
       where: { email: identity.email },
-      include: { backup: true },
+      include: { backups: { orderBy: { updatedAt: 'desc' } } },
     });
 
-    // Refusing here rather than overwriting is the whole point. The box being
-    // discarded may be the only copy of a funded wallet, and the wallet asks the
-    // person to acknowledge that before it ever sets `replaceBackup`.
-    //
-    // Only when this call WRITES a backup. Without one it is a wallet connecting
-    // to an account it already proved the email of — a second wallet of the same
-    // person — and there is nothing to discard: the account keeps backing up the
-    // wallet it did.
+    // One box per wallet: a backup for another address is ADDED beside the ones
+    // the account keeps, never written over them — the box that used to be
+    // discarded here could be the only copy of a funded wallet. A box for the same
+    // wallet replaces its own (a re-seal). `replaceBackup` is accepted and has
+    // nothing left to decide.
     const writesBackup = dto.backup !== undefined;
     if (
       writesBackup &&
-      existing?.backup &&
-      (existing.backup.chain !== chain ||
-        existing.backup.address !== address) &&
-      !dto.replaceBackup
+      existing &&
+      !existing.backups.some(
+        (b) => b.chain === chain && b.address === address,
+      ) &&
+      existing.backups.length >= WALLET_MAX_BACKUPS
     ) {
-      return {
-        status: 'backup_conflict' as const,
-        chain: existing.backup.chain,
-        address: existing.backup.address,
-        // The field's original name, kept for the wallets that read it.
-        stellarAddress: existing.backup.address,
-      };
+      throw ApiError.badRequest(
+        ApiErrorCode.WalletBackupLimit,
+        `This account already keeps ${WALLET_MAX_BACKUPS} wallet backups.`,
+      );
     }
 
     const name = fallbackName(identity.email, identity.name);
@@ -884,7 +882,13 @@ export class WalletAuthService {
 
     if (dto.backup !== undefined) {
       await this.prisma.walletBackup.upsert({
-        where: { walletAccountId: account.id },
+        where: {
+          walletAccountId_chain_address: {
+            walletAccountId: account.id,
+            chain,
+            address,
+          },
+        },
         create: {
           walletAccountId: account.id,
           chain,

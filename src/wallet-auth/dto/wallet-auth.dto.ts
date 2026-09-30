@@ -209,8 +209,9 @@ export class FinishWalletSignInDto {
 
   @ApiPropertyOptional({
     description:
-      "The device's sealed seed box, to keep for the next device. Opaque here: " +
-      'it is sealed under a key derived from a password this service never sees.',
+      "The device's sealed seed box, to keep for the next device — one per " +
+      '(chain, address), up to 20 per account. Opaque here: it is sealed under a ' +
+      'key derived from a password this service never sees.',
   })
   @IsOptional()
   @IsString()
@@ -219,10 +220,9 @@ export class FinishWalletSignInDto {
 
   @ApiPropertyOptional({
     description:
-      'Replace the backup this account already has, discarding it. The "forgot ' +
-      'the password" door: the box being discarded may be the only copy of a ' +
-      'funded wallet, so it is never implied — a client sends it only after the ' +
-      'person has acknowledged what it gives up.',
+      'Accepted for older wallets and ignored. Backups are kept per wallet: a box ' +
+      'for another address is added beside the ones the account keeps, and a box ' +
+      'for the same wallet replaces its own — nothing is ever discarded to make room.',
     default: false,
   })
   @IsOptional()

@@ -146,6 +146,7 @@ export enum ApiErrorCode {
    * malformed, oversized, or sealed at a PBKDF2 cost below this service's floor.
    */
   WalletBackupInvalid = 'wallet_backup_invalid',
+  WalletBackupLimit = 'wallet_backup_limit',
   /**
    * The account this sign-in resolves to is attached to a different Stellar
    * address, and no replacement was authorized. Replacing a backup is the

@@ -1,5 +1,6 @@
 # compiled output
 /dist
+/dist-replica
 /node_modules
 /build
 
@@ -39,6 +40,9 @@ yarn-error.log*
 
 # dotenv environment variable files
 .env
+# Local replicas' copies (`.env.b`, …). Only the example is committed.
+.env.*
+!.env.example
 .env.development.local
 .env.test.local
 .env.production.local

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { Keypair } from '@stellar/stellar-sdk';
 import { AliasChallengePurpose, AliasStatus } from '@generated/prisma/client';
 import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
@@ -67,6 +68,7 @@ function build(over: Record<string, unknown> = {}) {
     },
     aliasRecovery: {
       findUnique: jest.fn().mockResolvedValue(null),
+      findFirst: jest.fn().mockResolvedValue(null),
       create: jest.fn(),
       updateMany: jest.fn().mockResolvedValue({ count: 1 }),
     },
@@ -76,11 +78,16 @@ function build(over: Record<string, unknown> = {}) {
         : Promise.all(arg as Promise<unknown>[]),
     ...over,
   };
+  const mailer = {
+    configured: true,
+    send: jest.fn().mockResolvedValue(undefined),
+  };
   const service = new AliasesService(
     prisma as never,
     new ConsumerResolverService(prisma as never),
+    mailer as never,
   );
-  return { service, prisma };
+  return { service, prisma, mailer };
 }
 
 async function codeOf(run: Promise<unknown>): Promise<string | undefined> {
@@ -390,8 +397,84 @@ describe('AliasesService — recovery', () => {
     });
 
     expect(a).toEqual(b);
-    expect(a.accepted).toBe(true);
-    expect(a.token).toBeNull();
+    expect(a).toEqual({ accepted: true });
+    expect(missing.mailer.send).not.toHaveBeenCalled();
+    expect(wrongEmail.mailer.send).not.toHaveBeenCalled();
+  });
+
+  /* The token proves the mailbox, so it goes TO the mailbox and never back to the caller. */
+  it('emails the token to the mailbox on record and never returns it', async () => {
+    const { service, prisma, mailer } = build();
+    prisma.alias.findUnique.mockResolvedValue({
+      id: 'al_1',
+      name: 'emanuel250',
+      email: 'real@example.com',
+      status: AliasStatus.ACTIVE,
+    });
+
+    const res = await service.startRecovery('emanuel250', {
+      email: 'real@example.com',
+    });
+    await new Promise((r) => setImmediate(r));
+
+    expect(res).toEqual({ accepted: true });
+    const sent = mailer.send.mock.calls[0][0];
+    expect(sent.to).toBe('real@example.com');
+    expect(sent.subject).not.toMatch(/[A-Za-z0-9_-]{43}/);
+    const token = /\b([A-Za-z0-9_-]{43})\b/.exec(sent.text)?.[1];
+    expect(token).toBeDefined();
+    const stored = prisma.aliasRecovery.create.mock.calls[0][0].data;
+    expect(stored.tokenHash).toBe(
+      createHash('sha256').update(token!).digest('hex'),
+    );
+  });
+
+  /* Rotating addresses must not turn this into a way to flood the owner's inbox. */
+  it('sends nothing while a recovery for the alias was just started, answering the same', async () => {
+    const { service, prisma, mailer } = build();
+    prisma.alias.findUnique.mockResolvedValue({
+      id: 'al_1',
+      name: 'emanuel250',
+      email: 'real@example.com',
+      status: AliasStatus.ACTIVE,
+    });
+    prisma.aliasRecovery.findFirst.mockResolvedValue({ id: 'rec_recent' });
+
+    const res = await service.startRecovery('emanuel250', {
+      email: 'real@example.com',
+    });
+    await new Promise((r) => setImmediate(r));
+
+    expect(res).toEqual({ accepted: true });
+    expect(prisma.aliasRecovery.create).not.toHaveBeenCalled();
+    expect(prisma.aliasRecovery.updateMany).not.toHaveBeenCalled();
+    expect(mailer.send).not.toHaveBeenCalled();
+  });
+
+  it('answers the same when the mail cannot be delivered', async () => {
+    const { service, prisma, mailer } = build();
+    prisma.alias.findUnique.mockResolvedValue({
+      id: 'al_1',
+      name: 'emanuel250',
+      email: 'real@example.com',
+      status: AliasStatus.ACTIVE,
+    });
+    mailer.send.mockRejectedValue(new Error('smtp down'));
+
+    await expect(
+      service.startRecovery('emanuel250', { email: 'real@example.com' }),
+    ).resolves.toEqual({ accepted: true });
+  });
+
+  it('is a 503 before any lookup when this deployment cannot send mail', async () => {
+    const { service, prisma, mailer } = build();
+    mailer.configured = false;
+    expect(
+      await codeOf(
+        service.startRecovery('emanuel250', { email: 'real@example.com' }),
+      ),
+    ).toBe(ApiErrorCode.Misconfigured);
+    expect(prisma.alias.findUnique).not.toHaveBeenCalled();
   });
 
   it('mints a token, stores only its hash, and burns any earlier one', async () => {
@@ -403,9 +486,9 @@ describe('AliasesService — recovery', () => {
       status: AliasStatus.ACTIVE,
     });
 
-    const res = await service.startRecovery('emanuel250', {
+    const res = (await service.issueRecovery('emanuel250', {
       email: 'REAL@example.com',
-    });
+    }))!;
 
     expect(res.token).toEqual(expect.any(String));
     expect(res.email).toBe('real@example.com');
@@ -525,6 +608,8 @@ describe('AliasesService — recovery', () => {
             rows.find((r) => r.tokenHash === where.tokenHash) ?? null,
           ),
         ),
+        // No resend window in these tests: each starts from an empty table.
+        findFirst: jest.fn(() => Promise.resolve(null)),
         create: jest.fn(({ data }: any) => {
           const row = {
             id: `rec_${rows.length + 1}`,
@@ -548,7 +633,7 @@ describe('AliasesService — recovery', () => {
       };
     }
 
-    /** A live recovery for `emanuel250`, started the way the console starts it. */
+    /** A live recovery for `emanuel250`, as `startRecovery` issues it. */
     async function started() {
       const table = recoveryTable();
       const { service, prisma } = build({ aliasRecovery: table });
@@ -566,10 +651,10 @@ describe('AliasesService — recovery', () => {
         createdAt: new Date(),
         addresses: [],
       });
-      const { token } = await service.startRecovery('emanuel250', {
+      const issued = await service.issueRecovery('emanuel250', {
         email: 'real@example.com',
       });
-      return { service, prisma, table, token: token! };
+      return { service, prisma, table, token: issued!.token };
     }
 
     it('junk tokens from any caller leave the owner’s live recovery usable', async () => {

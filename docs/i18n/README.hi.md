@@ -64,7 +64,6 @@ src/
   common/
     guards/apisix.guard.ts        THE gateway gate
     guards/public-key.guard.ts    confines the SHARED public key to @AllowPublicKey routes
-    guards/console-only.guard.ts  confines a route to the platform console (alias recovery start)
     middleware/apisix-context...  extracts consumer identity from gateway headers
     decorators/                   @Public(), @CurrentConsumer(), @AllowPublicKey()
     filters/                      consistent error responses
@@ -188,7 +187,7 @@ Paths OpenAPI के `{param}` रूप में लिखे गए हैं
 | DELETE | `/v1/aliases/{name}` | `payments:write` |  |
 | POST | `/v1/aliases/{name}/addresses` | `payments:write` |  |
 | DELETE | `/v1/aliases/{name}/addresses/{addressId}` | `payments:write` |  |
-| POST | `/v1/aliases/{name}/recovery` | प्लेटफ़ॉर्म कंसोल |  |
+| POST | `/v1/aliases/{name}/recovery` | `payments:write` | ✓ |
 | POST | `/v1/aliases/{name}/recovery/complete` | `payments:write` |  |
 | GET | `/v1/assets` | — | ✓ |
 | GET | `/v1/balances` | `payments:read` |  |
@@ -339,7 +338,7 @@ codes का नाम कभी नहीं बदला जाता**; न�
 | `insufficient_scope` | 403 | API key के पास वह scope नहीं है। key को दोबारा provision करें |
 | `account_disabled` | 403 | किसी operator ने यह fiat खाता बंद कर दिया है। यह key की समस्या नहीं है |
 | `gateway_required` | 403 | request APISIX से होकर नहीं आई |
-| `admin_console_only` | 403 | यह रूट प्लेटफ़ॉर्म कंसोल का है (`/v1/admin`, alias recovery शुरू करना)। कोई भी API key इसे कॉल नहीं कर सकती |
+| `admin_console_only` | 403 | यह रूट प्लेटफ़ॉर्म कंसोल का है (`/v1/admin`)। कोई भी API key इसे कॉल नहीं कर सकती |
 | `idempotency_conflict` | 409 | यह `Idempotency-Key` (या payment-intent memo) किसी *दूसरी* request के लिए पहले ही एक resource बना चुकी है। मूल request दोहराएँ, या नई key का उपयोग करें |
 | `kyc_state_invalid` | 409 | KYC state का अवैध transition — यह duplicate request नहीं है |
 | `operation_in_flight` | 409 | एक टकराने वाला operation अभी भी settle हो रहा है |
@@ -371,6 +370,15 @@ transaction-pooling mode में PgBouncer के पीछे भी का�
 Lock ids `AdvisoryLockKey` enum में रहते हैं। किसी मौजूदा id का नंबर न बदलें —
 rolling deploy के दौरान पुराने और नए replicas अलग-अलग locks लेंगे — और रिटायर किया
 गया id दोबारा इस्तेमाल न करें।
+
+**एक ही checkout से दो replicas, local में।** `.env` को `.env.b` में कॉपी करें और
+`PORT` बदलें (और `WALLET_AUTH_PUBLIC_BASE_URL`, अगर sign-in callback उसी replica पर
+आना चाहिए — वह callback URL OIDC provider में भी register करें)। फिर
+`npm run dev:replica` उसे `.env.b` से चलाता है और `dist-replica/` में compile करता है,
+ताकि दोनों `--watch` builds एक-दूसरे को overwrite न करें; `ENV_FILE=.env.b` किसी भी
+दूसरे script के लिए फ़ाइल चुनता है। वही `DATABASE_URL` और वही secrets: कुछ भी
+per-process state नहीं है। दोनों को APISIX upstream में जोड़ें (developer platform का
+`COSMOS_API_URL`, comma से अलग, फिर वहाँ `npm run sync:route`)।
 
 ### पेमेंट वैलिडेशन और on-chain observer
 
@@ -1090,26 +1098,27 @@ unique index लागू करता है। पता जोड़ने �
 
 `SUSPENDED` alias (operator का hold) किसी भी चीज़ पर resolve नहीं होता।
 
-### Recovery ईमेल से होकर, और प्लेटफ़ॉर्म कंसोल से होकर जाती है
+### Recovery ईमेल से होकर जाती है, जिसे यही सर्विस भेजती है
 
-claim एक recovery ईमेल रिकॉर्ड करता है ताकि key खोने का मतलब नाम खोना न हो। Recovery
-ऐसे काम करती है:
+Claim एक recovery ईमेल दर्ज करता है ताकि key खोने का मतलब नाम खोना न हो। Recovery
+इस तरह काम करती है:
 
-1. **प्लेटफ़ॉर्म कंसोल** `POST /v1/aliases/:name/recovery {email}` कॉल करता है।
-   response एक जैसा रहता है, चाहे हैंडल और mailbox मेल खाए हों या नहीं; मेल खाने पर
-   उसमें एक बार इस्तेमाल होने वाला token होता है (30 मिनट, केवल SHA-256 के रूप में सहेजा गया), जिसे
-   कंसोल ईमेल करता है। यह सर्विस कोई मेल नहीं भेजती।
-2. user नई key के लिए एक `RECOVER` challenge लेता है और अपनी API key से
+1. Wallet (`payments:write` वाली कोई भी key, साझा public key भी) `POST /v1/aliases/:name/recovery {email}`
+   कॉल करता है। जवाब हमेशा `{ accepted: true }` होता है, चाहे handle और mailbox मेल खाएँ
+   या नहीं; मेल खाने पर यह सर्विस दर्ज mailbox पर एक single-use token (30 मिनट, केवल
+   SHA-256 के रूप में सहेजा गया) **ईमेल करती है**। Token कभी किसी जवाब में नहीं आता।
+2. उपयोगकर्ता नई key के लिए एक `RECOVER` challenge लेता है और अपनी API key से
    `POST /v1/aliases/:name/recovery/complete {token, address, network, nonce, signature}`
-   कॉल करता है। दोनों प्रमाण ज़रूरी हैं: token mailbox साबित करता है,
-   signature key साबित करता है।
-3. स्वामित्व कॉल करने वाले consumer के पास चला जाता है और **पिछला हर पता
-   हटा दिया जाता है**, इसलिए पुरानी keys रखने वाले को पेमेंट मिलना बंद हो जाता है।
+   कॉल करता है। दोनों प्रमाण ज़रूरी हैं: token mailbox साबित करता है, signature key।
+3. स्वामित्व कॉल करने वाले consumer के पास चला जाता है और **पिछले सभी पते हटा दिए
+   जाते हैं**, ताकि पुरानी keys रखने वाले को भुगतान मिलना बंद हो जाए।
 
-चरण 1 केवल कंसोल के लिए है क्योंकि token mailbox पर नियंत्रण साबित करता है, इसलिए वह
-केवल ईमेल भेजने वाले तक ही पहुँचना चाहिए। `ConsoleOnlyGuard` alias देखे जाने से पहले ही
-हर API-key caller को `403 admin_console_only` के साथ मना कर देता है, और यह रूट प्रकाशित
-contract में नहीं है। suspended alias को recover नहीं किया जा सकता।
+Recovery शुरू करना हर किसी के लिए खुला है क्योंकि token केवल mailbox तक पहुँचता है:
+कोई अजनबी बस इतना कर सकता है कि मालिक को एक ईमेल मिले। इसकी दो सीमाएँ हैं — प्रति पता
+हर 10 मिनट में 5 शुरुआत (`429 rate_limited`), और प्रति alias प्रति मिनट अधिकतम एक ईमेल,
+चाहे कोई भी माँगे (उस मिनट के भीतर दोहराने पर जवाब वही रहता है और कुछ नहीं भेजा जाता)।
+बिना mail sender वाला deployment `503 misconfigured` लौटाता है। निलंबित alias को recover
+नहीं किया जा सकता।
 
 एक recovery token **पाँच** बार प्रस्तुत किया जा सकता है। जिस प्रस्तुति में challenge या
 signature विफल हो, वह भी एक प्रयास गिनी जाती है, और छठी बार मना कर दिया जाता है; मालिक
@@ -1149,7 +1158,7 @@ Stellar पर resolve करता है जब तक `?chain=` कोई द
 | POST | `/v1/aliases/:name/addresses` | `payments:write` | पता जोड़ना, उसी पते से signed |
 | DELETE | `/v1/aliases/:name/addresses/:addressId` | `payments:write` | पता हटाना |
 | DELETE | `/v1/aliases/:name` | `payments:write` | alias release करना |
-| POST | `/v1/aliases/:name/recovery` | _केवल प्लेटफ़ॉर्म कंसोल_ | recovery शुरू करना → कंसोल के ईमेल करने के लिए एक token |
+| POST | `/v1/aliases/:name/recovery` | `payments:write` | recovery शुरू करना → token मालिक को ईमेल किया जाता है |
 | POST | `/v1/aliases/:name/recovery/complete` | `payments:write` | token और नई key के signature के साथ recovery पूरी करना |
 
 ## BlindPay — onramp / offramp / KYC (fiat ⇄ stablecoin)
@@ -1471,6 +1480,18 @@ seal होती हैं और कभी लौटाई नहीं जा
 
 ## अपग्रेड — breaking changes और deploy नोट्स
 
+### Wallet backups: हर wallet का एक, login पर सभी restore
+
+- **Migration `20261001120000_wallet_backups_per_wallet`** प्रति खाता एक backup के नियम को
+  खाते के भीतर प्रति `(chain, address)` एक backup में बदलता है। मौजूदा rows जैसी हैं वैसी
+  रहती हैं।
+- **`POST /v1/wallet/auth/oauth/claim` और `email/verify` अब `backups` लौटाते हैं**, खाते के
+  सभी boxes, सबसे नया पहले। `backup` उनमें से सबसे नया बना रहता है और deprecated है।
+- **किसी दूसरे wallet के `backup` के साथ `POST /v1/wallet/auth/finish` उसे जोड़ देता है**; अब
+  `backup_conflict` नहीं लौटाता। उसी wallet का box अपना box बदल देता है। `replaceBackup`
+  स्वीकार किया जाता है और अनदेखा होता है। प्रति खाता अधिकतम 20 wallets; 21वाँ
+  `400 wallet_backup_limit` है।
+
 ### Developer platform request path से बाहर
 
 - **हटाए गए variables:** `WALLET_AUTH_CONSOLE_URL`, `WALLET_AUTH_CONSOLE_SECRET`,
@@ -1491,6 +1512,7 @@ seal होती हैं और कभी लौटाई नहीं जा
 - **Wallet keys अब `cosmos_wallet_<accountId>` के तहत रहती हैं**; platform द्वारा
   provision किए गए खातों के लिए ऊपर का section देखें। Response shapes नहीं बदले।
 - **`backup` के बिना `POST /v1/wallet/auth/finish`** sign करने वाले wallet को खाते से जोड़ता है और उसकी keys लौटाता है: खाता किसी दूसरे wallet का backup रखता हो तब भी अब `backup_conflict` नहीं लौटाता, और खाते का `address` नहीं बदलता। `backup` के साथ कुछ नहीं बदला। Seed से import किया गया wallet अब इसी तरह Cosmos Pay से जुड़ता है।
+- **`POST /v1/aliases/{name}/recovery` अब `payments:write` keys के लिए खुला है, साझा public key भी**, और केवल `{ accepted: true }` लौटाता है: यह सर्विस token खुद ईमेल करती है, इसलिए जवाब से `token`, `email` और `expiresAt` हट गए हैं और प्लेटफ़ॉर्म कंसोल अब इसमें शामिल नहीं है (यह रूट अब `403 admin_console_only` नहीं लौटाता)। `MAIL_*` चाहिए; उसके बिना रूट `503 misconfigured` लौटाता है।
 - **कोई migration नहीं।**
 
 ### Solana और Monad; BlindPay और DeFindex native plugins बने
@@ -1893,6 +1915,7 @@ type दोबारा बनाए बिना enum value drop नहीं �
 | -------- | -------- | ------- | ------ |
 | `NODE_ENV` | नहीं | `development` | `development`, `test`, या `production` होना चाहिए। **production में `production` सेट करें** — fail-closed plan-fee जाँच और डिफ़ॉल्ट रूप से बंद docs, दोनों इसी पर निर्भर हैं |
 | `PORT` | नहीं | `3000` | HTTP listen port |
+| `ENV_FILE` | नहीं | `.env` | यह process जो dotenv फ़ाइल पढ़ता है (Nest और Prisma)। दूसरी local replica `.env.b` सेट करती है; environment में पहले से मौजूद values ही मान्य रहती हैं |
 | `DATABASE_URL` | **हाँ** | — | Prisma के लिए PostgreSQL connection |
 | `APISIX_GATEWAY_SECRET` | **हाँ** | — | साझा secret जो साबित करता है कि request APISIX से होकर आई। **न्यूनतम 32 अक्षर**; कोई placeholder boot पर अस्वीकार कर दिया जाता है |
 | `APISIX_GATEWAY_SECRET_HEADER` | नहीं | `x-gateway-secret` | gateway secret वाले header का नाम |

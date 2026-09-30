@@ -296,6 +296,14 @@ export const WALLET_RECOVERY_SETUP_GLOBAL_RATE_LIMIT: RateLimitPolicy = {
 export const WALLET_SESSION_HEADER = 'x-wallet-session';
 
 /**
+ * Wallets one account may keep a backup of. A person has a handful — one per
+ * device they set up, a savings wallet, a testnet one. The cap exists because a
+ * sign-in hands every box back in one response, on a route the shared key
+ * reaches, and an unbounded list is an unbounded response.
+ */
+export const WALLET_MAX_BACKUPS = 20;
+
+/**
  * Longest signature a sign-in or backup request may carry: a 65-byte EVM
  * signature in 0x-hex is 132 characters, the longest of the three encodings
  * accepted (base64 ed25519 is 88, base58 up to 88). Bounded so the verifier

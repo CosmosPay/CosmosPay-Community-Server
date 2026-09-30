@@ -108,6 +108,56 @@ export function renderLoginCodeEmail(v: {
 }
 
 /**
+ * An alias recovery token (`POST /v1/aliases/:name/recovery`).
+ *
+ * The token is half of what moves a payment handle — and every payment sent to
+ * it — to a new key, so the copy tells someone who did not ask to share nothing.
+ * It stays out of the subject for the usual reason: a subject is what a locked
+ * phone shows on its notification.
+ */
+export function renderAliasRecoveryEmail(v: {
+  name: string;
+  token: string;
+  minutes: number;
+}): RenderedEmail {
+  const name = escapeHtml(v.name);
+  const token =
+    '<div style="font-size:15px;font-weight:600;word-break:break-all;text-align:center;background:#f3f1ff;' +
+    `color:#13112a;padding:16px;border-radius:12px;border:1px solid #e4def9;font-family:monospace;">${escapeHtml(v.token)}</div>`;
+  const html =
+    CARD_OPEN +
+    eyebrow('Cosmos&nbsp;Pay') +
+    heading('Recover your payment alias') +
+    lead(
+      `Someone asked to recover the alias <b>${name}</b>, which is registered to this email. ` +
+        'Paste the token below into your wallet, together with the new address that should ' +
+        'receive payments sent to this alias.',
+    ) +
+    token +
+    footnote(
+      `This token expires in ${v.minutes}&nbsp;minutes and can be used once. <b>If you did not ` +
+        'ask to recover this alias, ignore this email and do not share the token</b> with ' +
+        'anyone — whoever uses it takes the payments sent to this name.',
+    ) +
+    CARD_CLOSE;
+  const text = [
+    'Hi,',
+    '',
+    `Someone asked to recover the alias "${v.name}", which is registered to this email.`,
+    'Paste this token into your wallet, with the new address that should receive payments:',
+    '',
+    `    ${v.token}`,
+    '',
+    `It expires in ${v.minutes} minutes and can be used once. If you did not ask to recover`,
+    'this alias, ignore this email and do not share the token with anyone — whoever uses it',
+    'takes the payments sent to this name.',
+    '',
+    '— CosmosPay',
+  ].join('\n');
+  return { subject: 'Recover your CosmosPay payment alias', html, text };
+}
+
+/**
  * A recovery server's code (SEP-30, roles `a` and `b`).
  *
  * The copy names WHICH server sent it and says up front that the other one

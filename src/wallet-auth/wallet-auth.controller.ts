@@ -54,7 +54,6 @@ import {
   WalletAuthReadyEntity,
   WalletAuthStatusEntity,
   WalletAuthVerifyEmailEntity,
-  WalletBackupConflictEntity,
   WalletBackupUpdatedEntity,
   WalletCodeInvalidEntity,
   WalletEmailStartedEntity,
@@ -100,7 +99,6 @@ const oneOf = (...models: Parameters<typeof getSchemaPath>[0][]) => ({
   WalletAuthVerifyEmailEntity,
   WalletCodeInvalidEntity,
   WalletSignInFinishedEntity,
-  WalletBackupConflictEntity,
 )
 @Controller({ path: 'wallet/auth', version: '1' })
 export class WalletAuthController {
@@ -331,7 +329,7 @@ export class WalletAuthController {
       'direct call: APISIX strips it.',
     required: true,
   })
-  @ApiOkResponse(oneOf(WalletSignInFinishedEntity, WalletBackupConflictEntity))
+  @ApiOkResponse({ type: WalletSignInFinishedEntity })
   @ApiErrorResponse({
     status: 401,
     codes: [ApiErrorCode.WalletSessionInvalid],
@@ -341,6 +339,7 @@ export class WalletAuthController {
     codes: [
       ApiErrorCode.WalletSignatureInvalid,
       ApiErrorCode.WalletBackupInvalid,
+      ApiErrorCode.WalletBackupLimit,
     ],
   })
   finish(

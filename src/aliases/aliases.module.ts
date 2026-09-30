@@ -2,8 +2,10 @@ import { Module } from '@nestjs/common';
 import { AliasChallengeSweeperService } from '@/aliases/alias-challenge-sweeper.service';
 import { AliasesController } from '@/aliases/aliases.controller';
 import { AliasesService } from '@/aliases/aliases.service';
+import { MailerModule } from '@/mailer/mailer.module';
 
 @Module({
+  imports: [MailerModule],
   controllers: [AliasesController],
   providers: [AliasesService, AliasChallengeSweeperService],
   // Exported so a payment flow can resolve a handle before building an envelope

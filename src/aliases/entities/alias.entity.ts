@@ -98,20 +98,12 @@ export class AliasResolutionEntity {
  */
 export class AliasRecoveryStartedEntity {
   @ApiProperty({
-    description: 'Always true — see the note on enumeration in the service.',
+    example: true,
+    description:
+      'Always true, whether or not anything matched. The token, when there is ' +
+      'one, is emailed to the mailbox on record — never returned here.',
   })
   accepted!: boolean;
-  @ApiPropertyOptional({
-    nullable: true,
-    description: 'The token to email. Null when there was nothing to recover.',
-  })
-  token!: string | null;
-  @ApiPropertyOptional({
-    nullable: true,
-    description: 'The mailbox to deliver to.',
-  })
-  email!: string | null;
-  @ApiPropertyOptional({ nullable: true }) expiresAt!: Date | null;
 }
 
 export class AliasAvailabilityEntity {

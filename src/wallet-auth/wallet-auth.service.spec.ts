@@ -18,7 +18,10 @@ import { OidcService } from '@/common/oidc/oidc.service';
 import { WalletKeysService } from '@/gateway-keys/wallet-keys.service';
 import { MailerService } from '@/mailer/mailer.service';
 import { WalletAuthService } from '@/wallet-auth/wallet-auth.service';
-import { LOGIN_CODE_MAX_ATTEMPTS } from '@/wallet-auth/wallet-auth.constants';
+import {
+  LOGIN_CODE_MAX_ATTEMPTS,
+  WALLET_MAX_BACKUPS,
+} from '@/wallet-auth/wallet-auth.constants';
 import {
   backupMessage,
   finishMessage,
@@ -459,12 +462,14 @@ describe('WalletAuthService', () => {
         id: 'acc_1',
         chain: 'stellar',
         address: ADDRESS,
-        backup: {
-          chain: 'stellar',
-          address: ADDRESS,
-          box: BOX,
-          updatedAt: new Date(NOW),
-        },
+        backups: [
+          {
+            chain: 'stellar',
+            address: ADDRESS,
+            box: BOX,
+            updatedAt: new Date(NOW),
+          },
+        ],
       });
       prisma.walletLoginCode.create.mockResolvedValue({});
 
@@ -644,12 +649,14 @@ describe('WalletAuthService', () => {
         id: 'acc_1',
         chain: 'stellar',
         address: ADDRESS,
-        backup: {
-          chain: 'stellar',
-          address: ADDRESS,
-          box: BOX,
-          updatedAt: new Date(NOW),
-        },
+        backups: [
+          {
+            chain: 'stellar',
+            address: ADDRESS,
+            box: BOX,
+            updatedAt: new Date(NOW),
+          },
+        ],
       });
 
       const result = await service.verifyEmail({
@@ -659,6 +666,7 @@ describe('WalletAuthService', () => {
 
       expect(result.status).toBe('ready');
       expect(result).toMatchObject({
+        backups: [{ chain: 'stellar', address: ADDRESS, box: BOX }],
         backup: { stellarAddress: ADDRESS, box: BOX },
       });
     });
@@ -734,31 +742,69 @@ describe('WalletAuthService', () => {
       ).rejects.toMatchObject({ code: ApiErrorCode.WalletBackupInvalid });
     });
 
-    /* The box being discarded may be the only copy of a funded wallet, so it is
-       never replaced by implication. */
-    it('refuses to overwrite a backup held for another address', async () => {
+    /* The box that used to be discarded here could be the only copy of a funded wallet. */
+    it('adds a backup for another wallet beside the ones the account keeps', async () => {
       const { service, prisma } = makeService();
       prisma.walletAccount.findUnique.mockResolvedValue({
         id: 'acc_1',
         chain: 'stellar',
         address: OTHER_ADDRESS,
-        backup: {
-          chain: 'stellar',
-          address: OTHER_ADDRESS,
-          box: BOX,
-          updatedAt: new Date(NOW),
-        },
+        backups: [
+          {
+            chain: 'stellar',
+            address: OTHER_ADDRESS,
+            box: BOX,
+            updatedAt: new Date(NOW),
+          },
+        ],
       });
+      prisma.walletAccount.upsert.mockResolvedValue({ id: 'acc_1' });
+      prisma.walletBackup.upsert.mockResolvedValue({});
 
       const result = await service.finish(token(), { ...body(), backup: BOX });
 
-      expect(result).toEqual({
-        status: 'backup_conflict',
-        chain: 'stellar',
-        address: OTHER_ADDRESS,
-        stellarAddress: OTHER_ADDRESS,
+      expect(result).toMatchObject({ status: 'ready', account: 'linked' });
+      expect(prisma.walletBackup.upsert.mock.calls[0][0].where).toEqual({
+        walletAccountId_chain_address: {
+          walletAccountId: 'acc_1',
+          chain: 'stellar',
+          address: ADDRESS,
+        },
       });
-      expect(prisma.walletAccount.upsert).not.toHaveBeenCalled();
+    });
+
+    it('refuses a new wallet past the per-account cap, but still re-seals a kept one', async () => {
+      const kept = Array.from({ length: WALLET_MAX_BACKUPS }, (_, i) => ({
+        chain: 'stellar',
+        address: i === 0 ? ADDRESS : `G${String(i).padStart(55, 'A')}`,
+        box: BOX,
+        updatedAt: new Date(NOW),
+      }));
+      const full = makeService();
+      full.prisma.walletAccount.findUnique.mockResolvedValue({
+        id: 'acc_1',
+        chain: 'stellar',
+        address: ADDRESS,
+        backups: kept
+          .slice(1)
+          .concat({ ...kept[1], address: `G${'B'.repeat(55)}` }),
+      });
+      await expect(
+        full.service.finish(token(), { ...body(), backup: BOX }),
+      ).rejects.toMatchObject({ code: ApiErrorCode.WalletBackupLimit });
+
+      const reseal = makeService();
+      reseal.prisma.walletAccount.findUnique.mockResolvedValue({
+        id: 'acc_1',
+        chain: 'stellar',
+        address: ADDRESS,
+        backups: kept,
+      });
+      reseal.prisma.walletAccount.upsert.mockResolvedValue({ id: 'acc_1' });
+      reseal.prisma.walletBackup.upsert.mockResolvedValue({});
+      await expect(
+        reseal.service.finish(token(), { ...body(), backup: BOX }),
+      ).resolves.toMatchObject({ status: 'ready' });
     });
 
     /* A second wallet of the same person connects for keys; nothing is discarded. */
@@ -768,12 +814,14 @@ describe('WalletAuthService', () => {
         id: 'acc_1',
         chain: 'stellar',
         address: OTHER_ADDRESS,
-        backup: {
-          chain: 'stellar',
-          address: OTHER_ADDRESS,
-          box: BOX,
-          updatedAt: new Date(NOW),
-        },
+        backups: [
+          {
+            chain: 'stellar',
+            address: OTHER_ADDRESS,
+            box: BOX,
+            updatedAt: new Date(NOW),
+          },
+        ],
       });
       prisma.walletAccount.upsert.mockResolvedValue({ id: 'acc_1' });
 
@@ -790,18 +838,20 @@ describe('WalletAuthService', () => {
       });
     });
 
-    it('replaces it when the person explicitly asked', async () => {
+    it('accepts `replaceBackup` from older wallets, which changes nothing', async () => {
       const { service, prisma } = makeService();
       prisma.walletAccount.findUnique.mockResolvedValue({
         id: 'acc_1',
         chain: 'stellar',
         address: OTHER_ADDRESS,
-        backup: {
-          chain: 'stellar',
-          address: OTHER_ADDRESS,
-          box: BOX,
-          updatedAt: new Date(NOW),
-        },
+        backups: [
+          {
+            chain: 'stellar',
+            address: OTHER_ADDRESS,
+            box: BOX,
+            updatedAt: new Date(NOW),
+          },
+        ],
       });
       prisma.walletAccount.upsert.mockResolvedValue({ id: 'acc_1' });
       prisma.walletBackup.upsert.mockResolvedValue({});

@@ -40,7 +40,6 @@ src/
   common/
     guards/apisix.guard.ts        THE gateway gate
     guards/public-key.guard.ts    confines the SHARED public key to @AllowPublicKey routes
-    guards/console-only.guard.ts  confines a route to the platform console (alias recovery start)
     middleware/apisix-context...  extracts consumer identity from gateway headers
     decorators/                   @Public(), @CurrentConsumer(), @AllowPublicKey()
     filters/                      consistent error responses
@@ -156,7 +155,7 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | DELETE | `/v1/aliases/{name}` | `payments:write` |  |
 | POST | `/v1/aliases/{name}/addresses` | `payments:write` |  |
 | DELETE | `/v1/aliases/{name}/addresses/{addressId}` | `payments:write` |  |
-| POST | `/v1/aliases/{name}/recovery` | 平台控制台 |  |
+| POST | `/v1/aliases/{name}/recovery` | `payments:write` | ✓ |
 | POST | `/v1/aliases/{name}/recovery/complete` | `payments:write` |  |
 | GET | `/v1/assets` | — | ✓ |
 | GET | `/v1/balances` | `payments:read` |  |
@@ -299,7 +298,7 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | `insufficient_scope` | 403 | API key 缺少所需的 scope。请重新配置该 key |
 | `account_disabled` | 403 | 运营人员停用了该法币账户。与 key 无关 |
 | `gateway_required` | 403 | 请求并非经由 APISIX 到达 |
-| `admin_console_only` | 403 | 该路由属于平台控制台（`/v1/admin`、发起别名恢复）。任何 API key 都无法调用 |
+| `admin_console_only` | 403 | 该路由属于平台控制台（`/v1/admin`）。任何 API key 都无法调用 |
 | `idempotency_conflict` | 409 | 该 `Idempotency-Key`（或支付意图的 memo）已经为一个*不同的*请求创建过资源。请重复原始请求，或改用新的 key |
 | `kyc_state_invalid` | 409 | 非法的 KYC 状态转换——并非重复请求 |
 | `operation_in_flight` | 409 | 一个与之冲突的操作仍在结算中 |
@@ -323,6 +322,8 @@ APISIX 会在多个实例之间进行负载均衡，因此每个后台定时器�
 `pg_try_advisory_xact_lock` 从不阻塞，并且在事务结束时释放，即使发生崩溃或连接断开也是如此。与会话级锁不同，它在事务池模式的 PgBouncer 之后也能正常工作。
 
 锁 id 定义在 `AdvisoryLockKey` 枚举中。不要给已有的 id 重新编号——滚动部署期间，新旧副本会拿到不同的锁——也不要复用已退役的 id。
+
+**本地从同一份代码运行两个副本。** 把 `.env` 复制为 `.env.b` 并修改 `PORT`（如果登录回调要落到这个副本，还要改 `WALLET_AUTH_PUBLIC_BASE_URL`，并在 OIDC 提供方登记该回调 URL）。然后 `npm run dev:replica` 会从 `.env.b` 启动它，编译到 `dist-replica/`，这样两个 `--watch` 构建不会互相覆盖；`ENV_FILE=.env.b` 可为任何其他脚本选择该文件。相同的 `DATABASE_URL` 和相同的密钥：没有任何按进程保存的状态。把两者都列入 APISIX 的 upstream（开发者平台的 `COSMOS_API_URL`，逗号分隔，然后在那里运行 `npm run sync:route`）。
 
 ### 支付验证与链上观察器
 
@@ -749,15 +750,15 @@ wallet ──3. POST /v1/aliases {name, email, nonce, signature} ─────
 
 处于 `SUSPENDED` 状态的别名（运营方冻结）不会解析到任何地址。
 
-### 恢复经由邮箱，并经由平台控制台
+### 恢复经由邮箱，由本服务发送
 
 认领时会记录一个恢复邮箱，这样丢失密钥并不意味着失去这个名称。恢复流程如下：
 
-1. **平台控制台**调用 `POST /v1/aliases/:name/recovery {email}`。无论标识与邮箱是否匹配，响应都完全相同；匹配时，响应会携带一个一次性 token（30 分钟，仅以 SHA-256 形式存储），由控制台通过邮件发送。本服务不发送任何邮件。
+1. 钱包（任何持有 `payments:write` 的 key，包括共享公共 key）调用 `POST /v1/aliases/:name/recovery {email}`。无论标识与邮箱是否匹配，响应始终是 `{ accepted: true }`；匹配时，本服务会把一个一次性 token（30 分钟，仅以 SHA-256 形式存储）**通过邮件发送**到登记的邮箱。token 永远不会出现在响应中。
 2. 用户为新密钥获取一个 `RECOVER` challenge，并使用自己的 API key 调用 `POST /v1/aliases/:name/recovery/complete {token, address, network, nonce, signature}`。两项证明缺一不可：token 证明邮箱，签名证明密钥。
 3. 所有权转移到发起调用的消费者，并且**之前的所有地址都会被移除**，因此持有旧密钥的人不会再收到付款。
 
-第 1 步仅限控制台，因为 token 证明的是对邮箱的控制权，所以它只能到达负责发送邮件的一方。`ConsoleOnlyGuard` 会在查找别名之前，就以 `403 admin_console_only` 拒绝所有 API key 调用方，并且该路由不在发布的契约中。被冻结的别名无法被恢复。
+任何人都可以发起恢复，因为 token 只会到达邮箱：陌生人最多只能让所有者收到一封邮件。这有两重限制——每个地址每 10 分钟 5 次发起（`429 rate_limited`），以及无论谁请求，每个别名每分钟最多一封邮件（该分钟内的重复请求得到同样的响应且不发送任何内容）。没有配置邮件发件人的部署会返回 `503 misconfigured`。被冻结的别名无法被恢复。
 
 一个恢复 token 最多可以被提交**五**次。即使某次提交的 challenge 或签名验证失败，也会算作一次用量，第六次会被拒绝；此时所有者可以重新发起一次恢复。一个与该别名任何一次有效恢复都不匹配的 token 会得到同样的 `400 alias_recovery_invalid`，且不会改变任何状态，因此没有人能靠发送垃圾 token 来耗尽所有者发起的恢复次数。`POST /v1/aliases/:name/recovery/complete` 每 10 分钟允许 10 次调用，`POST /v1/aliases/challenges` 每 10 分钟允许 30 次调用，均按消费者和客户端地址计算（`429 rate_limited`）。
 
@@ -787,7 +788,7 @@ EIP-55 写法保存和匹配。
 | POST | `/v1/aliases/:name/addresses` | `payments:write` | 添加地址，由该地址签名 |
 | DELETE | `/v1/aliases/:name/addresses/:addressId` | `payments:write` | 移除地址 |
 | DELETE | `/v1/aliases/:name` | `payments:write` | 释放别名 |
-| POST | `/v1/aliases/:name/recovery` | _仅限平台控制台_ | 发起恢复 → 一个供控制台通过邮件发送的 token |
+| POST | `/v1/aliases/:name/recovery` | `payments:write` | 发起恢复 → token 通过邮件发送给所有者 |
 | POST | `/v1/aliases/:name/recovery/complete` | `payments:write` | 使用 token 和新密钥的签名完成恢复 |
 
 ## BlindPay — onramp / offramp / KYC（法币 ⇄ 稳定币）
@@ -1037,6 +1038,12 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
 
 ## 升级 — 破坏性变更与部署说明
 
+### 钱包备份：每个钱包一份，登录时全部恢复
+
+- **迁移 `20261001120000_wallet_backups_per_wallet`** 把“每个账户一份备份”的规则改为账户内每个 `(chain, address)` 一份。现有记录保持不变。
+- **`POST /v1/wallet/auth/oauth/claim` 和 `email/verify` 返回 `backups`**，即账户保存的全部备份，按从新到旧排列。`backup` 仍为其中最新的一份，已弃用。
+- **携带其他钱包 `backup` 的 `POST /v1/wallet/auth/finish` 会新增该备份**；不再返回 `backup_conflict`。同一钱包的备份会替换其自身。`replaceBackup` 仍被接受但会被忽略。每个账户最多 20 个钱包；第 21 个返回 `400 wallet_backup_limit`。
+
 ### 开发者平台退出请求路径
 
 - **已移除的变量：** `WALLET_AUTH_CONSOLE_URL`、`WALLET_AUTH_CONSOLE_SECRET`、`RECOVERY_EMAIL_DELIVERY_URL`、`RECOVERY_EMAIL_DELIVERY_SECRET`。它们会被忽略。
@@ -1045,6 +1052,7 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
 - **新路由 `GET /v1/public-key`**（`@Public()`），由 `PUBLIC_API_KEY_DEV` / `PUBLIC_API_KEY_PROD` 提供：复制平台为公共 key 签发的值。把该路径加入 APISIX 的无 key 路由（不带 `key-auth`），否则钱包会收到 `401`。
 - **钱包 key 现在位于 `cosmos_wallet_<accountId>` 之下**；由平台开通的账户见上面的章节。响应结构不变。
 - **不带 `backup` 的 `POST /v1/wallet/auth/finish`** 会把签名的钱包连接到该账户并返回其 key：当账户备份的是另一个钱包时，不再返回 `backup_conflict`，也不再移动账户的 `address`。带 `backup` 时没有变化。从助记词导入的钱包现在就是这样连接 Cosmos Pay 的。
+- **`POST /v1/aliases/{name}/recovery` 现在对持有 `payments:write` 的 key 开放，包括共享公共 key**，且只返回 `{ accepted: true }`：本服务自己通过邮件发送 token，因此响应中不再有 `token`、`email` 和 `expiresAt`，平台控制台也不再参与（该路由不再返回 `403 admin_console_only`）。需要 `MAIL_*`；没有时该路由返回 `503 misconfigured`。
 - **无需迁移。**
 
 ### Solana 与 Monad；BlindPay 与 DeFindex 成为原生插件
@@ -1326,6 +1334,7 @@ WHERE NOT i.indisvalid;
 | -------- | -------- | ------- | ------ |
 | `NODE_ENV` | 否 | `development` | 必须为 `development`、`test` 或 `production`。**在生产环境中设置为 `production`**——默认拒绝的套餐手续费检查和默认关闭文档都依赖于它 |
 | `PORT` | 否 | `3000` | HTTP 监听端口 |
+| `ENV_FILE` | 否 | `.env` | 本进程读取的 dotenv 文件（Nest 与 Prisma）。本地第二个副本设为 `.env.b`；环境中已有的值仍然优先 |
 | `DATABASE_URL` | **是** | — | Prisma 使用的 PostgreSQL 连接 |
 | `APISIX_GATEWAY_SECRET` | **是** | — | 证明请求经由 APISIX 到达的共享密钥。**至少 32 个字符**；占位符值会在启动时被拒绝 |
 | `APISIX_GATEWAY_SECRET_HEADER` | 否 | `x-gateway-secret` | 网关密钥的请求头名称 |

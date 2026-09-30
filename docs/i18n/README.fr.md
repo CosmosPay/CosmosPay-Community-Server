@@ -64,7 +64,6 @@ src/
   common/
     guards/apisix.guard.ts        THE gateway gate
     guards/public-key.guard.ts    confines the SHARED public key to @AllowPublicKey routes
-    guards/console-only.guard.ts  confines a route to the platform console (alias recovery start)
     middleware/apisix-context...  extracts consumer identity from gateway headers
     decorators/                   @Public(), @CurrentConsumer(), @AllowPublicKey()
     filters/                      consistent error responses
@@ -188,7 +187,7 @@ Les chemins utilisent la forme OpenAPI `{param}`.
 | DELETE | `/v1/aliases/{name}` | `payments:write` |  |
 | POST | `/v1/aliases/{name}/addresses` | `payments:write` |  |
 | DELETE | `/v1/aliases/{name}/addresses/{addressId}` | `payments:write` |  |
-| POST | `/v1/aliases/{name}/recovery` | console de la plateforme |  |
+| POST | `/v1/aliases/{name}/recovery` | `payments:write` | ✓ |
 | POST | `/v1/aliases/{name}/recovery/complete` | `payments:write` |  |
 | GET | `/v1/assets` | — | ✓ |
 | GET | `/v1/balances` | `payments:read` |  |
@@ -339,7 +338,7 @@ Quelques-uns, faciles à confondre :
 | `insufficient_scope` | 403 | La clé API ne possède pas le scope. Reprovisionnez la clé |
 | `account_disabled` | 403 | Un opérateur a désactivé ce compte fiat. Ce n'est pas un problème de clé |
 | `gateway_required` | 403 | La requête n'est pas passée par APISIX |
-| `admin_console_only` | 403 | La route appartient à la console de la plateforme (`/v1/admin`, le lancement d'une récupération d'alias). Aucune clé API ne peut l'appeler |
+| `admin_console_only` | 403 | La route appartient à la console de la plateforme (`/v1/admin`). Aucune clé API ne peut l'appeler |
 | `idempotency_conflict` | 409 | Cette `Idempotency-Key` (ou le mémo d'une intention de paiement) a déjà produit une ressource pour une requête *différente*. Répétez la requête d'origine, ou utilisez une nouvelle clé |
 | `kyc_state_invalid` | 409 | Une transition d'état KYC illégale — pas une requête en double |
 | `operation_in_flight` | 409 | Une opération concurrente est encore en cours de règlement |
@@ -372,6 +371,16 @@ fonctionne aussi derrière PgBouncer en mode transaction pooling.
 Les identifiants de verrou se trouvent dans l'enum `AdvisoryLockKey`. Ne renumérotez pas un
 identifiant existant — pendant un déploiement progressif, les anciens et les nouveaux réplicas
 prendraient des verrous différents — et ne réutilisez pas un identifiant retiré.
+
+**Deux répliques depuis un même checkout, en local.** Copiez `.env` vers `.env.b`
+et changez `PORT` (et `WALLET_AUTH_PUBLIC_BASE_URL` si le callback de connexion doit
+arriver sur cette réplique — enregistrez aussi cette URL de callback auprès du
+fournisseur OIDC). Ensuite `npm run dev:replica` la démarre depuis `.env.b`, en
+compilant dans `dist-replica/` pour que les deux builds `--watch` ne s'écrasent pas ;
+`ENV_FILE=.env.b` choisit le fichier pour tout autre script. Même `DATABASE_URL` et
+mêmes secrets : rien n'est un état par processus. Listez les deux dans l'upstream
+d'APISIX (le `COSMOS_API_URL` de la plateforme développeur, séparé par des virgules,
+puis `npm run sync:route` là-bas).
 
 ### Validation des paiements et observateur on-chain
 
@@ -1120,28 +1129,32 @@ consumer peut détenir au plus 25 alias.
 
 Un alias `SUSPENDED` (suspendu par un opérateur) ne se résout vers rien.
 
-### La récupération passe par l'e-mail et par la console de la plateforme
+### La récupération passe par l'e-mail, envoyé par ce service
 
-Une revendication enregistre un e-mail de récupération, afin que perdre une clé ne signifie
-pas perdre le nom. La récupération se déroule ainsi :
+Une revendication enregistre un e-mail de récupération pour que perdre une clé ne
+signifie pas perdre le nom. La récupération fonctionne ainsi :
 
-1. La **console de la plateforme** appelle `POST /v1/aliases/:name/recovery {email}`. La
-   réponse est identique, que l'identifiant et la boîte mail correspondent ou non ; en cas de
-   correspondance, elle porte un jeton à usage unique (30 minutes, stocké uniquement sous
-   forme de SHA-256), que la console envoie par e-mail. Ce service n'envoie aucun e-mail.
-2. L'utilisateur obtient un challenge `RECOVER` pour la nouvelle clé et appelle
+1. Le wallet (toute clé avec `payments:write`, y compris la clé publique partagée)
+   appelle `POST /v1/aliases/:name/recovery {email}`. La réponse est toujours
+   `{ accepted: true }`, que l'identifiant et la boîte mail correspondent ou non ; s'ils
+   correspondent, ce service **envoie par e-mail** un jeton à usage unique (30 minutes,
+   stocké uniquement en SHA-256) à la boîte enregistrée. Le jeton n'apparaît jamais
+   dans une réponse.
+2. L'utilisateur obtient un défi `RECOVER` pour la nouvelle clé et appelle
    `POST /v1/aliases/:name/recovery/complete {token, address, network, nonce, signature}`
-   avec sa propre clé API. Les deux preuves sont requises : le jeton prouve la boîte mail,
-   la signature prouve la clé.
+   avec sa propre clé API. Les deux preuves sont requises : le jeton prouve la boîte
+   mail, la signature prouve la clé.
 3. La propriété passe au consumer appelant et **toutes les adresses précédentes sont
-   supprimées**, de sorte que quiconque détient les anciennes clés cesse de recevoir les
+   supprimées**, si bien que quiconque détient les anciennes clés cesse de recevoir des
    paiements.
 
-L'étape 1 est réservée à la console parce que le jeton prouve le contrôle de la boîte mail ;
-il ne doit donc parvenir qu'à celui qui envoie l'e-mail. `ConsoleOnlyGuard` refuse tout
-appelant muni d'une clé API avec `403 admin_console_only` avant que l'alias ne soit
-recherché, et la route ne figure pas dans le contrat publié. Un alias suspendu ne peut pas être
-récupéré.
+Lancer une récupération est ouvert à tous parce que le jeton n'atteint que la boîte
+mail : tout ce qu'un inconnu peut faire, c'est faire recevoir un e-mail au
+propriétaire. C'est borné deux fois — 5 lancements par 10 minutes et par adresse
+(`429 rate_limited`), et au plus un e-mail par alias et par minute, quel que soit le
+demandeur (une répétition dans cette minute répond pareil et n'envoie rien). Un
+déploiement sans expéditeur d'e-mail répond `503 misconfigured`. Un alias suspendu ne
+peut pas être récupéré.
 
 Un jeton de récupération peut être présenté **cinq** fois. Une présentation dont le challenge
 ou la signature échoue en consomme tout de même une, et la sixième est refusée ; le
@@ -1183,7 +1196,7 @@ dans sa graphie EIP-55.
 | POST | `/v1/aliases/:name/addresses` | `payments:write` | Ajouter une adresse, signée par cette adresse |
 | DELETE | `/v1/aliases/:name/addresses/:addressId` | `payments:write` | Retirer une adresse |
 | DELETE | `/v1/aliases/:name` | `payments:write` | Libérer l'alias |
-| POST | `/v1/aliases/:name/recovery` | _console de la plateforme uniquement_ | Lancer une récupération → un jeton que la console envoie par e-mail |
+| POST | `/v1/aliases/:name/recovery` | `payments:write` | Lancer une récupération → le jeton est envoyé par e-mail au propriétaire |
 | POST | `/v1/aliases/:name/recovery/complete` | `payments:write` | Terminer une récupération avec le jeton et la signature de la nouvelle clé |
 
 ## BlindPay — onramp / offramp / KYC (fiat ⇄ stablecoin)
@@ -1523,6 +1536,19 @@ plugins isolés.
 
 ## Mise à niveau — changements incompatibles et notes de déploiement
 
+### Sauvegardes de wallet : une par wallet, toutes restaurées à la connexion
+
+- **La migration `20261001120000_wallet_backups_per_wallet`** remplace la règle d'une
+  sauvegarde par compte par une par `(chain, address)` dans le compte. Les lignes existantes
+  sont conservées telles quelles.
+- **`POST /v1/wallet/auth/oauth/claim` et `email/verify` renvoient `backups`**, toutes les
+  boîtes que garde le compte, de la plus récente à la plus ancienne. `backup` reste la plus
+  récente et devient obsolète.
+- **`POST /v1/wallet/auth/finish` avec un `backup` d'un autre wallet l'ajoute** ; il ne
+  répond plus `backup_conflict`. Une boîte du même wallet remplace la sienne. `replaceBackup`
+  est accepté et ignoré. Jusqu'à 20 wallets par compte ; le 21e est
+  `400 wallet_backup_limit`.
+
 ### La plateforme développeur sort du chemin des requêtes
 
 - **Variables supprimées :** `WALLET_AUTH_CONSOLE_URL`, `WALLET_AUTH_CONSOLE_SECRET`,
@@ -1545,6 +1571,7 @@ plugins isolés.
   section ci-dessus pour les comptes provisionnés par la plateforme. Les formes de
   réponse ne changent pas.
 - **`POST /v1/wallet/auth/finish` sans `backup`** connecte le wallet qui signe au compte et renvoie ses clés : il ne répond plus `backup_conflict` quand le compte sauvegarde un autre wallet, et ne déplace plus l'`address` du compte. Avec `backup`, rien ne change. C'est ainsi qu'un wallet importé depuis une seed se connecte désormais à Cosmos Pay.
+- **`POST /v1/aliases/{name}/recovery` est ouvert aux clés `payments:write`, y compris la clé publique partagée**, et répond seulement `{ accepted: true }` : ce service envoie lui-même le jeton par e-mail, donc `token`, `email` et `expiresAt` disparaissent de la réponse et la console de la plateforme n'intervient plus (cette route ne renvoie plus `403 admin_console_only`). Nécessite `MAIL_*` ; sans cela la route répond `503 misconfigured`.
 - **Aucune migration.**
 
 ### Solana et Monad ; BlindPay et DeFindex deviennent des plugins natifs
@@ -1975,6 +2002,7 @@ Chaque variable lue depuis `process.env` dans `src/` est validée au démarrage 
 | -------- | ------- | ------ | ----- |
 | `NODE_ENV` | non | `development` | Doit valoir `development`, `test` ou `production`. **Définissez `production` en production** — la vérification fail-closed des frais de plan et la désactivation par défaut de la documentation en dépendent toutes deux |
 | `PORT` | non | `3000` | Port d'écoute HTTP |
+| `ENV_FILE` | non | `.env` | Le fichier dotenv que lit ce processus (Nest et Prisma). Une seconde réplique locale utilise `.env.b` ; les valeurs déjà présentes dans l'environnement restent prioritaires |
 | `DATABASE_URL` | **oui** | — | Connexion PostgreSQL pour Prisma |
 | `APISIX_GATEWAY_SECRET` | **oui** | — | Secret partagé prouvant que la requête est passée par APISIX. **32 caractères minimum** ; un placeholder est refusé au démarrage |
 | `APISIX_GATEWAY_SECRET_HEADER` | non | `x-gateway-secret` | Nom de l'en-tête portant le secret de la passerelle |

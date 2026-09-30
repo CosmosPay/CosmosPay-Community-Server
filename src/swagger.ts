@@ -18,6 +18,7 @@ import {
   type UpstreamProvider,
 } from '@/common/decorators/api-upstream.decorator';
 import { PUBLIC_EXTENSION_KEY } from '@/common/decorators/public.decorator';
+import { UNIFORM_ANSWER_EXTENSION_KEY } from '@/common/decorators/uniform-answer.decorator';
 import {
   RATE_LIMIT_EXTENSION_KEY,
   type RateLimitPolicy,
@@ -308,6 +309,7 @@ interface CosmosOperation extends OperationObject {
   [ALLOW_PUBLIC_KEY_EXTENSION_KEY]?: boolean;
   [RATE_LIMIT_EXTENSION_KEY]?: RateLimitPolicy[];
   [UPSTREAM_EXTENSION_KEY]?: UpstreamProvider[];
+  [UNIFORM_ANSWER_EXTENSION_KEY]?: boolean;
 }
 
 const HTTP_METHODS = [
@@ -369,8 +371,11 @@ function sharedFailuresFor(
     failures.push('Unauthorized', 'Forbidden');
   }
 
-  // A path parameter is a resource this consumer may not own, or may not exist.
-  if (path.includes('{')) failures.push('NotFound');
+  // A path parameter is a resource this consumer may not own, or may not exist —
+  // unless the route answers the same either way (`@UniformAnswer`).
+  if (path.includes('{') && !operation[UNIFORM_ANSWER_EXTENSION_KEY]) {
+    failures.push('NotFound');
+  }
 
   if (operation[RATE_LIMIT_EXTENSION_KEY]?.length) failures.push('RateLimited');
 

@@ -3,7 +3,7 @@ import { ConfigModule } from '@nestjs/config';
 import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { EventEmitterModule } from '@nestjs/event-emitter';
 import { LoggingInterceptor } from '@/common/interceptors/logging.interceptor';
-import configuration from '@/config/configuration';
+import configuration, { envFilePath } from '@/config/configuration';
 import { validateEnv } from '@/config/env.validation';
 import { ApisixGuard } from '@/common/guards/apisix.guard';
 import { PermissionsGuard } from '@/common/guards/permissions.guard';
@@ -37,6 +37,7 @@ import { NativePluginsModule } from '@/native-plugins/native-plugins.module';
     ConfigModule.forRoot({
       isGlobal: true,
       cache: true,
+      envFilePath: envFilePath(),
       load: [configuration],
       validate: validateEnv,
     }),

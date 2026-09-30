@@ -289,8 +289,10 @@ Each of these was a real finding in this codebase, not a hypothetical:
   `ApisixGuard` drops whatever `X-Consumer-Username` the client sent. Never read
   `@CurrentConsumer()` there.
 - **A secret that proves something never goes back to a caller who could not
-  already prove it.** A recovery token proves a mailbox, so only the platform
-  console receives it (`ConsoleOnlyGuard`), and the console emails it.
+  already prove it.** A recovery token proves a mailbox, so this service emails
+  it to that mailbox and never puts it in a response — which is what lets any
+  caller start an alias recovery, and why its answer is identical either way
+  (`@UniformAnswer`).
 - **Reads return a `*_PUBLIC_SELECT` projection**, never the full row — the full
   row carries `raw` provider payloads and internal ids.
 - **Every tenant query filters by the calling consumer**, and a miss on someone

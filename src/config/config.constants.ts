@@ -1,6 +1,12 @@
 /** Defaults applied when the corresponding environment variable is unset. */
 import type { StellarNetwork } from '@/config/configuration';
 
+/**
+ * The file the environment is read from when `ENV_FILE` is unset. A second local
+ * replica points `ENV_FILE` at its own copy (`.env.b`) to run beside the first.
+ */
+export const DEFAULT_ENV_FILE = '.env';
+
 export const DEFAULT_SWAP_FEE_BPS = 50;
 export const DEFAULT_SWAP_SLIPPAGE_BPS = 50;
 export const DEFAULT_SWAP_MAX_SLIPPAGE_BPS = 500;

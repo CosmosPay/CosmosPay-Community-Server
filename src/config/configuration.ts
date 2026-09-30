@@ -1,6 +1,7 @@
 import {
   DEFAULT_DEFINDEX_BASE_URL,
   DEFAULT_DEFINDEX_TIMEOUT_MS,
+  DEFAULT_ENV_FILE,
   DEFAULT_CHAIN_RPC_TIMEOUT_MS,
   DEFAULT_HORIZON,
   DEFAULT_MONAD_LOG_BLOCK_RANGE,
@@ -50,6 +51,19 @@ export function nativePluginEnabled(
   slug: NativePluginSlug,
 ): (env: NodeJS.ProcessEnv) => boolean {
   return (env) => parsePluginsEnabled(env).includes(slug);
+}
+
+/**
+ * The dotenv file this process reads: `ENV_FILE`, or `.env`.
+ *
+ * A function over the raw environment rather than config, because it decides
+ * where the config comes FROM — ConfigModule needs it before any provider
+ * exists. It is what lets two replicas run from one checkout: the second one
+ * starts with `ENV_FILE=.env.b` (or `npm run dev:replica`) and only its port
+ * differs. Values already in the environment still win over the file.
+ */
+export function envFilePath(env: NodeJS.ProcessEnv = process.env): string {
+  return env.ENV_FILE?.trim() || DEFAULT_ENV_FILE;
 }
 
 /**
