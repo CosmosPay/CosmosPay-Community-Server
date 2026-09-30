@@ -175,7 +175,9 @@ consola llega a ella. Las rutas usan la forma `{param}` de OpenAPI.
 | POST | `/v1/activity/events` | `activity:write` | ✓ |
 | GET | `/v1/activity/summary` | `activity:read` |  |
 | GET | `/v1/admin/audit-logs` | consola de la plataforma |  |
+| GET | `/v1/admin/chain-swaps` | consola de la plataforma |  |
 | GET | `/v1/admin/consumers` | consola de la plataforma |  |
+| GET | `/v1/admin/cross-chain-swaps` | consola de la plataforma |  |
 | GET | `/v1/admin/customers` | consola de la plataforma |  |
 | GET | `/v1/admin/payins` | consola de la plataforma |  |
 | GET | `/v1/admin/payment-intents` | consola de la plataforma |  |

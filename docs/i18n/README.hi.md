@@ -172,7 +172,9 @@ Paths OpenAPI के `{param}` रूप में लिखे गए हैं
 | POST | `/v1/activity/events` | `activity:write` | ✓ |
 | GET | `/v1/activity/summary` | `activity:read` |  |
 | GET | `/v1/admin/audit-logs` | प्लेटफ़ॉर्म कंसोल |  |
+| GET | `/v1/admin/chain-swaps` | प्लेटफ़ॉर्म कंसोल |  |
 | GET | `/v1/admin/consumers` | प्लेटफ़ॉर्म कंसोल |  |
+| GET | `/v1/admin/cross-chain-swaps` | प्लेटफ़ॉर्म कंसोल |  |
 | GET | `/v1/admin/customers` | प्लेटफ़ॉर्म कंसोल |  |
 | GET | `/v1/admin/payins` | प्लेटफ़ॉर्म कंसोल |  |
 | GET | `/v1/admin/payment-intents` | प्लेटफ़ॉर्म कंसोल |  |

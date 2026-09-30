@@ -83,4 +83,24 @@ describe('SolanaRpcClient', () => {
       new SolanaRpcClient(config).getMintDecimals('testnet', 'wallet'),
     ).resolves.toBeNull();
   });
+
+  it('accepts a Token-2022 mint (PYUSD) — the program id as it is on-chain', async () => {
+    // A literal, not the constant: the constant once held an id no account has,
+    // and every Token-2022 mint was answered "not a mint".
+    node({
+      getGenesisHash: SOLANA_GENESIS_HASHES.public,
+      getAccountInfo: {
+        value: {
+          owner: 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb',
+          data: { parsed: { type: 'mint', info: { decimals: 6 } } },
+        },
+      },
+    });
+    await expect(
+      new SolanaRpcClient(config).getMintDecimals(
+        'public',
+        '2b1kV6DkPAnxd5ixfnxCpjxmKwqjjaYmCZfHsFu24GXo',
+      ),
+    ).resolves.toBe(6);
+  });
 });

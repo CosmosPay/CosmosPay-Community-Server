@@ -21,6 +21,12 @@ function prismaFake() {
       ]),
     },
     swap: { groupBy: jest.fn().mockResolvedValue([]) },
+    chainSwap: {
+      groupBy: jest
+        .fn()
+        .mockResolvedValue([{ status: 'SUCCEEDED', _count: { _all: 2 } }]),
+    },
+    crossChainSwap: { groupBy: jest.fn().mockResolvedValue([]) },
   };
 }
 
@@ -76,5 +82,42 @@ describe('AdminService with plugin extensions', () => {
     const extensions = new AdminExtensions();
     extensions.register(fiat);
     expect(() => extensions.register(fiat)).toThrow(/registered twice/);
+  });
+});
+
+describe('AdminService — Solana/Monad and cross-chain swaps', () => {
+  it('counts them in the summary beside the Stellar swaps', async () => {
+    const summary = await new AdminService(
+      prismaFake() as never,
+      new AdminExtensions(),
+    ).summary();
+    expect(summary.chainSwaps).toEqual({
+      total: 2,
+      byStatus: { SUCCEEDED: 2 },
+    });
+    expect(summary.crossChainSwaps).toEqual({ total: 0, byStatus: {} });
+  });
+
+  it('lists them across consumers, filtered, without the raw quote', async () => {
+    const findMany = jest.fn().mockResolvedValue([]);
+    const count = jest.fn().mockResolvedValue(0);
+    const prisma = {
+      chainSwap: { findMany, count },
+      crossChainSwap: { findMany, count },
+    };
+    const admin = new AdminService(prisma as never, new AdminExtensions());
+
+    await admin.chainSwaps({ chain: 'monad', status: 'SUCCEEDED', take: 10 });
+    await admin.crossChainSwaps({ consumer: 'c1' });
+
+    expect(findMany.mock.calls[0][0]).toMatchObject({
+      where: { chain: 'monad', status: 'SUCCEEDED' },
+      take: 10,
+      omit: { quote: true },
+    });
+    expect(findMany.mock.calls[1][0]).toMatchObject({
+      where: { consumerId: 'c1' },
+      omit: { quote: true },
+    });
   });
 });

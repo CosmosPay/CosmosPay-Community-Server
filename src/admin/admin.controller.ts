@@ -76,6 +76,38 @@ export class AdminController {
     });
   }
 
+  @Get('chain-swaps')
+  chainSwaps(
+    @Query('consumer') consumer?: string,
+    @Query('chain') chain?: string,
+    @Query('status') status?: string,
+    @Query('take') take?: string,
+    @Query('skip') skip?: string,
+  ) {
+    return this.admin.chainSwaps({
+      consumer,
+      chain,
+      status,
+      take: toNum(take),
+      skip: toNum(skip),
+    });
+  }
+
+  @Get('cross-chain-swaps')
+  crossChainSwaps(
+    @Query('consumer') consumer?: string,
+    @Query('status') status?: string,
+    @Query('take') take?: string,
+    @Query('skip') skip?: string,
+  ) {
+    return this.admin.crossChainSwaps({
+      consumer,
+      status,
+      take: toNum(take),
+      skip: toNum(skip),
+    });
+  }
+
   @Get('customers')
   customers(
     @Query('consumer') consumer?: string,

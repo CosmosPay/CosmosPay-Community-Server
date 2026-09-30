@@ -175,7 +175,9 @@ console chega até ela. Os caminhos usam a forma `{param}` do OpenAPI.
 | POST | `/v1/activity/events` | `activity:write` | ✓ |
 | GET | `/v1/activity/summary` | `activity:read` |  |
 | GET | `/v1/admin/audit-logs` | console da plataforma |  |
+| GET | `/v1/admin/chain-swaps` | console da plataforma |  |
 | GET | `/v1/admin/consumers` | console da plataforma |  |
+| GET | `/v1/admin/cross-chain-swaps` | console da plataforma |  |
 | GET | `/v1/admin/customers` | console da plataforma |  |
 | GET | `/v1/admin/payins` | console da plataforma |  |
 | GET | `/v1/admin/payment-intents` | console da plataforma |  |

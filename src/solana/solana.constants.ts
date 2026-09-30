@@ -4,7 +4,7 @@ export const SPL_TOKEN_PROGRAM_ID =
 
 /** Token-2022, the SPL Token extension program. Its mints are accepted too. */
 export const SPL_TOKEN_2022_PROGRAM_ID =
-  'TokenzQdBNbLqP5VEhdkAS5EcLBgGgNnf5bMZFhdtTZ';
+  'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb';
 
 /** Programs a mint may belong to for an intent to accept it as its asset. */
 export const SPL_TOKEN_PROGRAM_IDS: readonly string[] = [

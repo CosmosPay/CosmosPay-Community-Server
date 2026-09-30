@@ -172,7 +172,9 @@ Les chemins utilisent la forme OpenAPI `{param}`.
 | POST | `/v1/activity/events` | `activity:write` | ✓ |
 | GET | `/v1/activity/summary` | `activity:read` |  |
 | GET | `/v1/admin/audit-logs` | console de la plateforme |  |
+| GET | `/v1/admin/chain-swaps` | console de la plateforme |  |
 | GET | `/v1/admin/consumers` | console de la plateforme |  |
+| GET | `/v1/admin/cross-chain-swaps` | console de la plateforme |  |
 | GET | `/v1/admin/customers` | console de la plateforme |  |
 | GET | `/v1/admin/payins` | console de la plateforme |  |
 | GET | `/v1/admin/payment-intents` | console de la plateforme |  |

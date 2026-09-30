@@ -140,7 +140,9 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | POST | `/v1/activity/events` | `activity:write` | ✓ |
 | GET | `/v1/activity/summary` | `activity:read` |  |
 | GET | `/v1/admin/audit-logs` | 平台控制台 |  |
+| GET | `/v1/admin/chain-swaps` | 平台控制台 |  |
 | GET | `/v1/admin/consumers` | 平台控制台 |  |
+| GET | `/v1/admin/cross-chain-swaps` | 平台控制台 |  |
 | GET | `/v1/admin/customers` | 平台控制台 |  |
 | GET | `/v1/admin/payins` | 平台控制台 |  |
 | GET | `/v1/admin/payment-intents` | 平台控制台 |  |

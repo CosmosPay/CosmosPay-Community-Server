@@ -47,6 +47,8 @@ export class AdminService {
       webhookEndpoints,
       intentsByStatus,
       swapsByStatus,
+      chainSwapsByStatus,
+      crossChainSwapsByStatus,
       succeededIntents,
       sections,
     ] = await Promise.all([
@@ -60,6 +62,18 @@ export class AdminService {
         _count: { _all: true },
       }),
       this.prisma.swap.groupBy({
+        by: ['status'],
+        where: netWhere,
+        _count: { _all: true },
+      }),
+      // Solana (Jupiter) and Monad (Kuru Flow) swaps, and swaps between chains:
+      // both mainnet-only, so a testnet summary counts none of them.
+      this.prisma.chainSwap.groupBy({
+        by: ['status'],
+        where: netWhere,
+        _count: { _all: true },
+      }),
+      this.prisma.crossChainSwap.groupBy({
         by: ['status'],
         where: netWhere,
         _count: { _all: true },
@@ -94,6 +108,8 @@ export class AdminService {
 
     const paymentIntents = tallyBy(intentsByStatus, 'status');
     const swaps = tallyBy(swapsByStatus, 'status');
+    const chainSwaps = tallyBy(chainSwapsByStatus, 'status');
+    const crossChainSwaps = tallyBy(crossChainSwapsByStatus, 'status');
 
     return {
       network: network ?? 'all',
@@ -103,6 +119,11 @@ export class AdminService {
       webhookEndpoints,
       paymentIntents: { total: sum(paymentIntents), byStatus: paymentIntents },
       swaps: { total: sum(swaps), byStatus: swaps },
+      chainSwaps: { total: sum(chainSwaps), byStatus: chainSwaps },
+      crossChainSwaps: {
+        total: sum(crossChainSwaps),
+        byStatus: crossChainSwaps,
+      },
       ...Object.fromEntries(sections),
       volume,
     };
@@ -122,6 +143,8 @@ export class AdminService {
             select: {
               paymentIntents: true,
               swaps: true,
+              chainSwaps: true,
+              crossChainSwaps: true,
               products: true,
               customers: true,
               webhookEndpoints: true,
@@ -181,6 +204,50 @@ export class AdminService {
         include: consumerSelect,
       }),
       this.prisma.swap.count({ where }),
+    ]);
+    return { data, total, take: take(opts.take), skip: skip(opts.skip) };
+  }
+
+  /**
+   * Solana and Monad swaps across every consumer. The aggregator's raw quote is
+   * left out: it is a support artefact, not something the console renders.
+   */
+  async chainSwaps(opts: ListOpts & { chain?: string; status?: string }) {
+    const where = {
+      ...consumerWhere(opts.consumer),
+      ...(opts.chain ? { chain: opts.chain } : {}),
+      ...(opts.status ? { status: opts.status as never } : {}),
+    };
+    const [data, total] = await Promise.all([
+      this.prisma.chainSwap.findMany({
+        where,
+        take: take(opts.take),
+        skip: skip(opts.skip),
+        orderBy: { createdAt: 'desc' },
+        include: consumerSelect,
+        omit: { quote: true },
+      }),
+      this.prisma.chainSwap.count({ where }),
+    ]);
+    return { data, total, take: take(opts.take), skip: skip(opts.skip) };
+  }
+
+  /** Cross-chain swaps (NEAR Intents) across every consumer, raw quote left out. */
+  async crossChainSwaps(opts: ListOpts & { status?: string }) {
+    const where = {
+      ...consumerWhere(opts.consumer),
+      ...(opts.status ? { status: opts.status as never } : {}),
+    };
+    const [data, total] = await Promise.all([
+      this.prisma.crossChainSwap.findMany({
+        where,
+        take: take(opts.take),
+        skip: skip(opts.skip),
+        orderBy: { createdAt: 'desc' },
+        include: consumerSelect,
+        omit: { quote: true },
+      }),
+      this.prisma.crossChainSwap.count({ where }),
     ]);
     return { data, total, take: take(opts.take), skip: skip(opts.skip) };
   }

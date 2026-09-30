@@ -175,7 +175,9 @@ Konsolen-Backend erreicht sie. Pfade verwenden die OpenAPI-Form `{param}`.
 | POST | `/v1/activity/events` | `activity:write` | ✓ |
 | GET | `/v1/activity/summary` | `activity:read` |  |
 | GET | `/v1/admin/audit-logs` | Plattform-Konsole |  |
+| GET | `/v1/admin/chain-swaps` | Plattform-Konsole |  |
 | GET | `/v1/admin/consumers` | Plattform-Konsole |  |
+| GET | `/v1/admin/cross-chain-swaps` | Plattform-Konsole |  |
 | GET | `/v1/admin/customers` | Plattform-Konsole |  |
 | GET | `/v1/admin/payins` | Plattform-Konsole |  |
 | GET | `/v1/admin/payment-intents` | Plattform-Konsole |  |
