@@ -596,29 +596,40 @@ describe('WalletAuthService — Authentik and the recovery identity', () => {
         horizonUrl: 'https://horizon.example.com',
       },
     };
-    const body = (signers: string[] = [a, b]) => ({
+    const body = (signers: string[] = [a, b], signer: Keypair = owner) => ({
       stellarAddress: owner.publicKey(),
       signers,
       signedAt: SIGNED_AT,
       signature: sign(
-        owner,
+        signer,
         recoverySetupMessage(owner.publicKey(), [a, b], SIGNED_AT),
       ),
     });
-    const horizon = (signers: number) => {
-      global.fetch = jest.fn().mockResolvedValue(
-        answer({
-          sequence: '100',
-          signers: Array.from({ length: signers }, () => ({
-            key: Keypair.random().publicKey(),
-            weight: 1,
-          })),
-        }),
-      );
+    /** Horizon's answer: the master at weight 1, plus `others` co-signers. */
+    const horizon = (others = 0) => {
+      ledger([
+        { key: owner.publicKey(), weight: 1 },
+        ...Array.from({ length: others }, () => ({
+          key: Keypair.random().publicKey(),
+          weight: 1,
+        })),
+      ]);
+    };
+    const ledger = (signers: { key: string; weight: number }[]) => {
+      global.fetch = jest
+        .fn()
+        .mockResolvedValue(answer({ sequence: '100', signers }));
+    };
+    const lastOp = (xdr: string) => {
+      const tx = TransactionBuilder.fromXDR(xdr, TESTNET) as Transaction;
+      return tx.operations[tx.operations.length - 1] as {
+        masterWeight?: number;
+        highThreshold?: number;
+      };
     };
 
     it('builds the sponsored envelope, signed by the sponsor and not by the account', async () => {
-      horizon(1);
+      horizon();
       const { service } = makeService(settings);
       const built = await service.sponsorRecoverySetup(session(), body());
       const tx = TransactionBuilder.fromXDR(
@@ -638,7 +649,7 @@ describe('WalletAuthService — Authentik and the recovery identity', () => {
     });
 
     it('sponsors a first setup only', async () => {
-      horizon(3);
+      horizon(2);
       const { service } = makeService(settings);
       await expect(
         service.sponsorRecoverySetup(session(), body()),
@@ -648,7 +659,7 @@ describe('WalletAuthService — Authentik and the recovery identity', () => {
     });
 
     it('refuses a signature over a different pair of signers', async () => {
-      horizon(1);
+      horizon();
       const { service } = makeService(settings);
       await expect(
         service.sponsorRecoverySetup(session(), body([b, a])),
@@ -658,11 +669,89 @@ describe('WalletAuthService — Authentik and the recovery identity', () => {
     });
 
     it('refuses a pair that names the account itself', async () => {
-      horizon(1);
+      horizon();
       const { service } = makeService(settings);
       await expect(
         service.sponsorRecoverySetup(session(), body([owner.publicKey(), b])),
       ).rejects.toMatchObject({ code: ApiErrorCode.WalletSignatureInvalid });
+    });
+
+    it('raises the master on a never-recovered account', async () => {
+      horizon();
+      const { service } = makeService(settings);
+      const built = await service.sponsorRecoverySetup(session(), body());
+      expect(lastOp(built.transaction).masterWeight).toBe(10);
+    });
+
+    describe('a recovered account', () => {
+      // SEP-30 recovery leaves the master — the key on the lost device — at 0,
+      // and a replacement key at the device weight signing for the account.
+      const device = Keypair.random();
+      const recovered = () =>
+        ledger([
+          { key: owner.publicKey(), weight: 0 },
+          { key: device.publicKey(), weight: 10 },
+        ]);
+
+      it('is sponsored on the replacement key’s signature, and the retired master stays at 0', async () => {
+        recovered();
+        const { service } = makeService(settings);
+        const built = await service.sponsorRecoverySetup(
+          session(),
+          body([a, b], device),
+        );
+        const last = lastOp(built.transaction);
+        // Raising it would hand the account back to the lost device.
+        expect(last.masterWeight).toBeUndefined();
+        expect(last.highThreshold).toBe(10);
+      });
+
+      it('refuses a signature by the retired master', async () => {
+        recovered();
+        const { service } = makeService(settings);
+        await expect(
+          service.sponsorRecoverySetup(session(), body()),
+        ).rejects.toMatchObject({ code: ApiErrorCode.WalletSignatureInvalid });
+      });
+
+      it('refuses a replacement key below the device weight', async () => {
+        ledger([
+          { key: owner.publicKey(), weight: 0 },
+          { key: device.publicKey(), weight: 5 },
+        ]);
+        const { service } = makeService(settings);
+        await expect(
+          service.sponsorRecoverySetup(session(), body([a, b], device)),
+        ).rejects.toMatchObject({
+          code: ApiErrorCode.WalletRecoverySetupRefused,
+        });
+      });
+
+      it('refuses when recovery is already on', async () => {
+        ledger([
+          { key: owner.publicKey(), weight: 0 },
+          { key: device.publicKey(), weight: 10 },
+          { key: a, weight: 5 },
+          { key: b, weight: 5 },
+        ]);
+        const { service } = makeService(settings);
+        await expect(
+          service.sponsorRecoverySetup(session(), body([a, b], device)),
+        ).rejects.toMatchObject({
+          code: ApiErrorCode.WalletRecoverySetupRefused,
+        });
+      });
+
+      it('refuses a recovery signer that is the device key itself', async () => {
+        recovered();
+        const { service } = makeService(settings);
+        await expect(
+          service.sponsorRecoverySetup(
+            session(),
+            body([device.publicKey(), b], device),
+          ),
+        ).rejects.toMatchObject({ code: ApiErrorCode.WalletSignatureInvalid });
+      });
     });
 
     it('is off without a sponsor key', async () => {

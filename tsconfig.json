@@ -40,5 +40,5 @@
       "@generated/*": ["./generated/*"]
     }
   },
-  "exclude": ["node_modules", "dist", "dist-replica"]
+  "exclude": ["node_modules", "dist", "dist-local"]
 }

@@ -341,7 +341,15 @@ APISIX 会在多个实例之间进行负载均衡，因此每个后台定时器�
 
 锁 id 定义在 `AdvisoryLockKey` 枚举中。不要给已有的 id 重新编号——滚动部署期间，新旧副本会拿到不同的锁——也不要复用已退役的 id。
 
-**本地从同一份代码运行两个副本。** 把 `.env` 复制为 `.env.b` 并修改 `PORT`（如果登录回调要落到这个副本，还要改 `WALLET_AUTH_PUBLIC_BASE_URL`，并在 OIDC 提供方登记该回调 URL）。然后 `npm run dev:replica` 会从 `.env.b` 启动它，编译到 `dist-replica/`，这样两个 `--watch` 构建不会互相覆盖；`ENV_FILE=.env.b` 可为任何其他脚本选择该文件。相同的 `DATABASE_URL` 和相同的密钥：没有任何按进程保存的状态。把两者都列入 APISIX 的 upstream（开发者平台的 `COSMOS_API_URL`，逗号分隔，然后在那里运行 `npm run sync:route`）。
+**本地从同一份代码运行多个实例。** `npm run dev:local` 用同一个 `.env` 启动 api 和第二个副本；
+`npm run dev:local -- recovery` 启动 api 和两台恢复服务器（A 在 `:3002`，B 在 `:3003`，testnet），
+`-- all` 则启动全部四个。每个实例的差异只写在 `dev-instances.json` 中（被 git 忽略；首次运行时从
+`dev-instances.example.json` 生成，并只生成一次每台恢复服务器的密钥——请妥善保留，这些密钥会派生出
+链上的签名者）：其中的键会替换 `.env` 中的同名键，`""` 表示删除该键，嵌套对象表示前缀
+（`{ "RECOVERY": { "ROLE": "a" } }` 即 `RECOVERY_ROLE=a`）。只有一个 watch 构建，输出到
+`dist-local/`，因此不会与 `npm run dev` 争用 `dist/`——但它也会启动 api，所以二者择一运行。各副本
+共享 `DATABASE_URL` 与密钥：没有任何按进程保存的状态。请把两者都加入 APISIX 的 upstream（developer
+platform 的 `COSMOS_API_URL`，用逗号分隔，然后在那里运行 `npm run sync:route`）。
 
 ### 支付验证与链上观察器
 
@@ -1157,6 +1165,13 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
 
 ## 升级 — 破坏性变更与部署说明
 
+### 钱包登录：已恢复钱包的签名者跟随 `STELLAR_NETWORK`
+
+- **`WALLET_AUTH_SIGNERS_HORIZON_URL` 现在默认使用 `STELLAR_NETWORK` 对应的 Horizon**（`STELLAR_HORIZON_URL_PUBLIC` / `STELLAR_HORIZON_URL_TESTNET`，否则使用 SDF 的），而不再总是公共网络的。当通过 SEP-30 恢复的钱包用替换其主密钥的那把密钥签署 `POST /v1/wallet/auth/finish` 时会读取它。在 testnet 部署上，查询原本发往主网，找不到账户，于是每个已恢复钱包的登录都返回 `400 wallet_signature_invalid`。
+- **`WALLET_RECOVERY_SPONSOR_NETWORK_PASSPHRASE` 和 `WALLET_RECOVERY_SPONSOR_HORIZON_URL` 也随之变化**，让 sponsor 在同一个账本上读取账户。
+- **部署步骤：** `STELLAR_NETWORK` 本身默认是 `testnet`。服务主网钱包却未设置它的部署（API key 按请求选择网络），现在必须显式设置 `STELLAR_NETWORK=public` 或这三个变量。否则已恢复的主网钱包将无法登录，已配置的 sponsor 会构建 testnet 交易。
+- **始终只读取一个账本。** 同时检查两个账本会让在另一个网络上添加到同一地址的密钥为本网络签名。
+
 ### 钱包备份：由两台恢复服务器持有的邮箱恢复之门
 
 - **迁移 `20261004120000_recovery_backup_shares`** 新增 `recovery_backup_share` 表。只有恢复服务器
@@ -1505,7 +1520,7 @@ WHERE NOT i.indisvalid;
 | -------- | -------- | ------- | ------ |
 | `NODE_ENV` | 否 | `development` | 必须为 `development`、`test` 或 `production`。**在生产环境中设置为 `production`**——默认拒绝的套餐手续费检查和默认关闭文档都依赖于它 |
 | `PORT` | 否 | `3000` | HTTP 监听端口 |
-| `ENV_FILE` | 否 | `.env` | 本进程读取的 dotenv 文件（Nest 与 Prisma）。本地第二个副本设为 `.env.b`；环境中已有的值仍然优先 |
+| `ENV_FILE` | 否 | `.env` | 本进程读取的 dotenv 文件（Nest 与 Prisma）。本地各实例共用它——每个实例的差异写在 `dev-instances.json` 中（`npm run dev:local`）；环境中已有的值仍然优先 |
 | `DATABASE_URL` | **是** | — | Prisma 使用的 PostgreSQL 连接 |
 | `APISIX_GATEWAY_SECRET` | **是** | — | 证明请求经由 APISIX 到达的共享密钥。**至少 32 个字符**；占位符值会在启动时被拒绝 |
 | `APISIX_GATEWAY_SECRET_HEADER` | 否 | `x-gateway-secret` | 网关密钥的请求头名称 |
@@ -1608,6 +1623,9 @@ WHERE NOT i.indisvalid;
 | `PLUGINS_ALLOW_UNSIGNED` | 否 | `false` | 运行没有 `signature.json` 的插件，用于在本地编写插件。`NODE_ENV=production` 时拒绝 |
 | `KYC_REDIRECT_URL_WHITELIST` | 否 | — | 按消费者划分的 KYC 重定向主机白名单 |
 | `WALLET_AUTH_RETURN_URLS` | 否 | — | 以逗号分隔的应用 URL，钱包登录回调可以重定向到这些地址（`POST /v1/wallet/auth/oauth/authorize` 的 `returnTo`）：自定义 scheme、universal/app link，或 `http://127.0.0.1/…`（任意端口）。精确匹配；回环地址之外的纯 http、带 query 或使用 `javascript:`/`data:`/`file:` 的条目在启动时被拒绝。未设置时，每个回调都渲染页面，`returnTo` 返回 `400 wallet_return_url_not_allowed` |
+| `WALLET_AUTH_SIGNERS_HORIZON_URL` | 否 | `STELLAR_NETWORK` 的 Horizon | 列出谁可以为账户签名；当已恢复的钱包用替换其主密钥的密钥签名时读取。必须是钱包所在的账本：其他账本返回 404，登录结果为 `400 wallet_signature_invalid` |
+| `WALLET_RECOVERY_SPONSOR_NETWORK_PASSPHRASE` | 否 | `STELLAR_NETWORK` 的 passphrase | 赞助的恢复设置（`POST /v1/wallet/recovery/setup`）所针对的网络 |
+| `WALLET_RECOVERY_SPONSOR_HORIZON_URL` | 否 | `STELLAR_NETWORK` 的 Horizon | 赞助的恢复设置读取账户所用的 Horizon |
 | `RATE_LIMIT_ENABLED` | 否 | `true` | 对花费 XLM 的路由按地址设置上限。事故开关 |
 | `RATE_LIMIT_PRUNE_INTERVAL_MS` | 否 | `600000` | 计数器窗口清理间隔（ms，最小 1000） |
 

@@ -389,14 +389,18 @@ Lock ids `AdvisoryLockKey` enum में रहते हैं। किसी
 rolling deploy के दौरान पुराने और नए replicas अलग-अलग locks लेंगे — और रिटायर किया
 गया id दोबारा इस्तेमाल न करें।
 
-**एक ही checkout से दो replicas, local में।** `.env` को `.env.b` में कॉपी करें और
-`PORT` बदलें (और `WALLET_AUTH_PUBLIC_BASE_URL`, अगर sign-in callback उसी replica पर
-आना चाहिए — वह callback URL OIDC provider में भी register करें)। फिर
-`npm run dev:replica` उसे `.env.b` से चलाता है और `dist-replica/` में compile करता है,
-ताकि दोनों `--watch` builds एक-दूसरे को overwrite न करें; `ENV_FILE=.env.b` किसी भी
-दूसरे script के लिए फ़ाइल चुनता है। वही `DATABASE_URL` और वही secrets: कुछ भी
-per-process state नहीं है। दोनों को APISIX upstream में जोड़ें (developer platform का
-`COSMOS_API_URL`, comma से अलग, फिर वहाँ `npm run sync:route`)।
+**एक ही checkout से कई instances, local में।** `npm run dev:local` एक ही `.env` से api और
+एक दूसरी replica चलाता है; `npm run dev:local -- recovery` api और दोनों रिकवरी सर्वर (A
+`:3002` पर, B `:3003` पर, testnet) चलाता है, और `-- all` चारों। हर instance में जो अलग है,
+केवल वही `dev-instances.json` में रहता है (git इसे ignore करता है; पहली बार चलाने पर यह
+`dev-instances.example.json` से बनती है और हर रिकवरी सर्वर की keys एक ही बार बनाई जाती
+हैं — इसे संभालकर रखें, ये keys ledger पर मौजूद signers derive करती हैं): वहाँ की कोई key
+`.env` वाली को बदल देती है, `""` उसे हटा देती है, और nested object एक prefix है
+(`{ "RECOVERY": { "ROLE": "a" } }` यानी `RECOVERY_ROLE=a`)। एक ही watch build `dist-local/`
+में compile करता है, इसलिए यह `dist/` पर `npm run dev` से कभी नहीं टकराता — पर यह api भी
+चलाता है, इसलिए दोनों में से एक ही चलाएँ। replicas `DATABASE_URL` और secrets साझा करती हैं:
+कुछ भी per-process state नहीं है। दोनों को APISIX के upstream में जोड़ें (developer platform
+का `COSMOS_API_URL`, comma से अलग, फिर वहाँ `npm run sync:route`)।
 
 ### पेमेंट वैलिडेशन और on-chain observer
 
@@ -1623,6 +1627,13 @@ seal होती हैं और कभी लौटाई नहीं जा
 
 ## अपग्रेड — breaking changes और deploy नोट्स
 
+### Wallet साइन-इन: रिकवर किए गए wallet के signers अब `STELLAR_NETWORK` का पालन करते हैं
+
+- **`WALLET_AUTH_SIGNERS_HORIZON_URL` अब डिफ़ॉल्ट रूप से `STELLAR_NETWORK` के Horizon का उपयोग करता है** (`STELLAR_HORIZON_URL_PUBLIC` / `STELLAR_HORIZON_URL_TESTNET`, वरना SDF का), हमेशा पब्लिक नेटवर्क का नहीं। इसे तब पढ़ा जाता है जब SEP-30 से रिकवर किया गया wallet `POST /v1/wallet/auth/finish` को उस key से साइन करता है जिसने उसकी master key की जगह ली। testnet deployment पर यह lookup mainnet पर जाता था, खाता नहीं मिलता था, और हर रिकवर किए गए wallet का साइन-इन `400 wallet_signature_invalid` लौटाता था।
+- **`WALLET_RECOVERY_SPONSOR_NETWORK_PASSPHRASE` और `WALLET_RECOVERY_SPONSOR_HORIZON_URL` भी इसका पालन करते हैं**, ताकि sponsor उसी ledger पर खाता पढ़े।
+- **Deploy चरण:** `STELLAR_NETWORK` का डिफ़ॉल्ट `testnet` है। जो deployment mainnet wallets को सर्व करता है और इसे सेट नहीं करता (API keys हर request पर नेटवर्क चुनती हैं), उसे अब `STELLAR_NETWORK=public`, या ये तीनों वेरिएबल, स्पष्ट रूप से सेट करने होंगे। वरना रिकवर किए गए mainnet wallets साइन-इन नहीं कर पाएँगे, और कॉन्फ़िगर किया गया sponsor testnet transactions बनाएगा।
+- **हमेशा सिर्फ़ एक ledger पढ़ा जाता है।** दोनों को जाँचने से दूसरे नेटवर्क पर उसी address में जोड़ी गई key इस नेटवर्क के लिए साइन कर सकती।
+
 ### वॉलेट बैकअप: ईमेल से रिकवरी का दरवाज़ा, दोनों रिकवरी सर्वरों के पास
 
 - **माइग्रेशन `20261004120000_recovery_backup_shares`** `recovery_backup_share` जोड़ता है। इसे केवल
@@ -2129,7 +2140,7 @@ type दोबारा बनाए बिना enum value drop नहीं �
 | -------- | -------- | ------- | ------ |
 | `NODE_ENV` | नहीं | `development` | `development`, `test`, या `production` होना चाहिए। **production में `production` सेट करें** — fail-closed plan-fee जाँच और डिफ़ॉल्ट रूप से बंद docs, दोनों इसी पर निर्भर हैं |
 | `PORT` | नहीं | `3000` | HTTP listen port |
-| `ENV_FILE` | नहीं | `.env` | यह process जो dotenv फ़ाइल पढ़ता है (Nest और Prisma)। दूसरी local replica `.env.b` सेट करती है; environment में पहले से मौजूद values ही मान्य रहती हैं |
+| `ENV_FILE` | नहीं | `.env` | यह process जो dotenv फ़ाइल पढ़ता है (Nest और Prisma)। local instances इसे साझा करते हैं — हर instance में जो अलग है वह `dev-instances.json` में है (`npm run dev:local`); environment में पहले से मौजूद values ही मान्य रहती हैं |
 | `DATABASE_URL` | **हाँ** | — | Prisma के लिए PostgreSQL connection |
 | `APISIX_GATEWAY_SECRET` | **हाँ** | — | साझा secret जो साबित करता है कि request APISIX से होकर आई। **न्यूनतम 32 अक्षर**; कोई placeholder boot पर अस्वीकार कर दिया जाता है |
 | `APISIX_GATEWAY_SECRET_HEADER` | नहीं | `x-gateway-secret` | gateway secret वाले header का नाम |
@@ -2232,6 +2243,9 @@ type दोबारा बनाए बिना enum value drop नहीं �
 | `PLUGINS_ALLOW_UNSIGNED` | नहीं | `false` | बिना `signature.json` के plugins चलाएँ, local में एक लिखने के लिए। `NODE_ENV=production` में मना |
 | `KYC_REDIRECT_URL_WHITELIST` | नहीं | — | प्रति consumer KYC redirect hosts की allow-list |
 | `WALLET_AUTH_RETURN_URLS` | नहीं | — | ऐप के URL, कॉमा से अलग, जिन पर wallet साइन-इन का callback redirect कर सकता है (`POST /v1/wallet/auth/oauth/authorize` पर `returnTo`): एक custom scheme, एक universal/app link, या `http://127.0.0.1/…` (कोई भी port)। सटीक मिलान; loopback के बाहर plain http, query वाली, या `javascript:`/`data:`/`file:` वाली entry boot पर अस्वीकार होती है। सेट न होने पर हर callback पेज दिखाता है और `returnTo` पर `400 wallet_return_url_not_allowed` मिलता है |
+| `WALLET_AUTH_SIGNERS_HORIZON_URL` | नहीं | `STELLAR_NETWORK` का Horizon | बताता है कि किसी खाते के लिए कौन साइन कर सकता है; तब पढ़ा जाता है जब रिकवर किया गया wallet उस key से साइन करता है जिसने उसकी master की जगह ली। यह वही ledger होना चाहिए जिस पर wallets हैं: दूसरा 404 देता है और साइन-इन `400 wallet_signature_invalid` होता है |
+| `WALLET_RECOVERY_SPONSOR_NETWORK_PASSPHRASE` | नहीं | `STELLAR_NETWORK` की passphrase | वह नेटवर्क जिसके लिए sponsored recovery setup (`POST /v1/wallet/recovery/setup`) बनाया जाता है |
+| `WALLET_RECOVERY_SPONSOR_HORIZON_URL` | नहीं | `STELLAR_NETWORK` का Horizon | वह Horizon जिससे sponsored recovery setup खाता पढ़ता है |
 | `RATE_LIMIT_ENABLED` | नहीं | `true` | XLM खर्च करने वाले रूट्स पर प्रति पता सीमाएँ। incident switch |
 | `RATE_LIMIT_PRUNE_INTERVAL_MS` | नहीं | `600000` | counter-window prune interval (ms, न्यूनतम 1000) |
 

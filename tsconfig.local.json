@@ -1,0 +1,9 @@
+{
+  // `npm run dev:local` (scripts/dev-local.mts): one watch build for every local instance,
+  // in its own outDir so it never fights `npm run dev` over dist/.
+  "extends": "./tsconfig.build.json",
+  "compilerOptions": {
+    "outDir": "./dist-local"
+  },
+  "exclude": ["node_modules", "test", "dist", "dist-local", "plugins", "**/*spec.ts"]
+}

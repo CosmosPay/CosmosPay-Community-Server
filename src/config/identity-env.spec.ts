@@ -1,5 +1,8 @@
 import { Keypair, Networks } from '@stellar/stellar-sdk';
-import { NETWORK_PASSPHRASE_PUBLIC } from '@/config/config.constants';
+import {
+  NETWORK_PASSPHRASE_PUBLIC,
+  NETWORK_PASSPHRASE_TESTNET,
+} from '@/config/config.constants';
 import { assertIdentityConfigConsistent } from '@/config/identity-env';
 
 const secret = (c: string) => c.repeat(40);
@@ -24,6 +27,7 @@ function recoveryServer(over: Record<string, string> = {}) {
 describe('assertIdentityConfigConsistent', () => {
   it('pins the public passphrase constant to the SDK', () => {
     expect(NETWORK_PASSPHRASE_PUBLIC).toBe(Networks.PUBLIC);
+    expect(NETWORK_PASSPHRASE_TESTNET).toBe(Networks.TESTNET);
   });
 
   it('lets a deployment with no sign-in and no recovery boot untouched', () => {

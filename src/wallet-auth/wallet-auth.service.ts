@@ -22,9 +22,13 @@ import { minutesUntil, renderLoginCodeEmail } from '@/mailer/wallet-emails';
 import { PrismaService } from '@/prisma/prisma.service';
 import {
   fetchAccountSigners,
+  parseAccountSigners,
   signedByCurrentSigner,
 } from '@/stellar/account-signers';
-import { buildSponsoredRecoverySetup } from '@/wallet-auth/recovery-setup';
+import {
+  buildSponsoredRecoverySetup,
+  sponsorableDeviceKey,
+} from '@/wallet-auth/recovery-setup';
 import {
   HANDSHAKE_TTL_MS,
   LOGIN_CODE_DAILY_CAP,
@@ -1219,9 +1223,13 @@ export class WalletAuthService {
    * Three things gate it, because every call spends the operator's reserve: a
    * live sign-in session (someone just proved an inbox here), a signature by the
    * account over the canonical setup challenge naming BOTH signers (so one
-   * signature buys one arrangement), and an account that has no signer besides
-   * its master yet — a sponsorship is for turning recovery on, once, not a
-   * repeatable way to make the operator fund signer entries.
+   * signature buys one arrangement), and an account signed for by exactly one
+   * key — a sponsorship is for turning recovery on, once, not a repeatable way to
+   * make the operator fund signer entries.
+   *
+   * That one key is usually the master. On a RECOVERED account it is the key that
+   * replaced it (`sponsorableDeviceKey`): the challenge is verified against it,
+   * and the envelope leaves the retired master at 0 instead of raising it.
    */
   async sponsorRecoverySetup(
     sessionToken: string,
@@ -1264,18 +1272,9 @@ export class WalletAuthService {
         'The signed timestamp is outside the accepted window.',
       );
     }
-    const message = recoverySetupMessage(
-      dto.stellarAddress,
-      dto.signers,
-      dto.signedAt,
-    );
-    if (!verifyWalletSignature(dto.stellarAddress, message, dto.signature)) {
-      throw ApiError.badRequest(
-        ApiErrorCode.WalletSignatureInvalid,
-        'The signature does not verify against that account.',
-      );
-    }
-
+    // The ledger first: WHICH key may sign the challenge depends on it. A
+    // recovered account's address is its retired master, and the signature comes
+    // from the key that replaced it.
     let body: { sequence?: unknown; signers?: unknown[] };
     try {
       const res = await fetch(
@@ -1303,13 +1302,6 @@ export class WalletAuthService {
         'Could not read the account.',
       );
     }
-
-    if (Array.isArray(body.signers) && body.signers.length > 1) {
-      throw ApiError.conflict(
-        ApiErrorCode.WalletRecoverySetupRefused,
-        'This account already has signers besides its own key; sponsorship is for a first setup only.',
-      );
-    }
     if (typeof body.sequence !== 'string' || !/^\d+$/.test(body.sequence)) {
       throw ApiError.unavailable(
         ApiErrorCode.Misconfigured,
@@ -1317,9 +1309,41 @@ export class WalletAuthService {
       );
     }
 
+    const deviceKey = sponsorableDeviceKey(
+      dto.stellarAddress,
+      parseAccountSigners(body).signers,
+    );
+    if (!deviceKey) {
+      throw ApiError.conflict(
+        ApiErrorCode.WalletRecoverySetupRefused,
+        'This account already has signers besides its own key; sponsorship is for a first setup only.',
+      );
+    }
+    // A recovery signer that IS the device key would be one party holding both
+    // the device's weight and a server's share.
+    if (a === deviceKey || b === deviceKey) {
+      throw ApiError.badRequest(
+        ApiErrorCode.WalletSignatureInvalid,
+        'The two recovery signers must be two distinct keys other than the account.',
+      );
+    }
+
+    const message = recoverySetupMessage(
+      dto.stellarAddress,
+      dto.signers,
+      dto.signedAt,
+    );
+    if (!verifyWalletSignature(deviceKey, message, dto.signature)) {
+      throw ApiError.badRequest(
+        ApiErrorCode.WalletSignatureInvalid,
+        'The signature does not verify against that account.',
+      );
+    }
+
     const sponsorKey = Keypair.fromSecret(sponsor.secret);
     const transaction = buildSponsoredRecoverySetup({
       account: dto.stellarAddress,
+      deviceKey,
       signers: [a, b],
       networkPassphrase: sponsor.networkPassphrase,
       sequence: body.sequence,

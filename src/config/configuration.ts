@@ -20,6 +20,7 @@ import {
   DEFAULT_SWAP_AGGREGATOR_TIMEOUT_MS,
   DEFAULT_WALLET_AUTH_SWEEP_INTERVAL_MS,
   DEFAULT_WALLET_AUTH_TIMEOUT_MS,
+  NETWORK_PASSPHRASE,
   NETWORK_PASSPHRASE_PUBLIC,
 } from '@/config/config.constants';
 import { parseReturnUrls } from '@/common/return-url';
@@ -67,9 +68,10 @@ export function nativePluginEnabled(
  *
  * A function over the raw environment rather than config, because it decides
  * where the config comes FROM — ConfigModule needs it before any provider
- * exists. It is what lets two replicas run from one checkout: the second one
- * starts with `ENV_FILE=.env.b` (or `npm run dev:replica`) and only its port
- * differs. Values already in the environment still win over the file.
+ * exists. Values already in the environment win over the file, which is what
+ * lets several instances run from one checkout and one `.env`:
+ * `npm run dev:local` starts each with its own differences (dev-instances.json)
+ * already set, and a value set to "" is one the file cannot fill back in.
  */
 export function envFilePath(env: NodeJS.ProcessEnv = process.env): string {
   return env.ENV_FILE?.trim() || DEFAULT_ENV_FILE;
@@ -469,6 +471,21 @@ function parseSwaggerEnabled(): boolean {
   return (process.env.NODE_ENV ?? 'development') !== 'production';
 }
 
+/** `STELLAR_NETWORK`: the fallback network, and the one Stellar defaults follow. */
+function stellarNetwork(): StellarNetwork {
+  return (process.env.STELLAR_NETWORK ?? 'testnet').toLowerCase() === 'public'
+    ? 'public'
+    : 'testnet';
+}
+
+/** The operator's Horizon for each network: `STELLAR_HORIZON_URL_*`, else SDF's. */
+function operatorHorizon(): Record<StellarNetwork, string> {
+  return {
+    public: process.env.STELLAR_HORIZON_URL_PUBLIC ?? DEFAULT_HORIZON.public,
+    testnet: process.env.STELLAR_HORIZON_URL_TESTNET ?? DEFAULT_HORIZON.testnet,
+  };
+}
+
 export default (): AppConfig => ({
   nodeEnv: process.env.NODE_ENV ?? 'development',
   swaggerEnabled: parseSwaggerEnabled(),
@@ -555,15 +572,8 @@ export default (): AppConfig => ({
     ),
   },
   stellar: {
-    network:
-      (process.env.STELLAR_NETWORK ?? 'testnet').toLowerCase() === 'public'
-        ? 'public'
-        : 'testnet',
-    horizon: {
-      public: process.env.STELLAR_HORIZON_URL_PUBLIC ?? DEFAULT_HORIZON.public,
-      testnet:
-        process.env.STELLAR_HORIZON_URL_TESTNET ?? DEFAULT_HORIZON.testnet,
-    },
+    network: stellarNetwork(),
+    horizon: operatorHorizon(),
     baseFee: process.env.STELLAR_BASE_FEE ?? '100',
     timeoutSeconds: parseInt(process.env.STELLAR_TX_TIMEOUT ?? '300', 10),
     swap: {
@@ -816,18 +826,22 @@ export default (): AppConfig => ({
     },
     // Each entry was checked at boot by `identity-env.ts`.
     returnUrls: parseReturnUrls(process.env.WALLET_AUTH_RETURN_URLS),
+    // Both default to `STELLAR_NETWORK`'s ledger: a signer read from another
+    // network than the account's is a 404, and every recovered wallet's sign-in
+    // fails with `wallet_signature_invalid`. Never both networks — a key added on
+    // the other ledger would then sign for this one.
     signersHorizonUrl: (
       process.env.WALLET_AUTH_SIGNERS_HORIZON_URL?.trim() ||
-      DEFAULT_HORIZON.public
+      operatorHorizon()[stellarNetwork()]
     ).replace(/\/+$/, ''),
     sponsor: {
       secret: process.env.WALLET_RECOVERY_SPONSOR_SECRET?.trim() ?? '',
       networkPassphrase:
         process.env.WALLET_RECOVERY_SPONSOR_NETWORK_PASSPHRASE?.trim() ||
-        NETWORK_PASSPHRASE_PUBLIC,
+        NETWORK_PASSPHRASE[stellarNetwork()],
       horizonUrl: (
         process.env.WALLET_RECOVERY_SPONSOR_HORIZON_URL?.trim() ||
-        DEFAULT_HORIZON.public
+        operatorHorizon()[stellarNetwork()]
       ).replace(/\/+$/, ''),
     },
     timeoutMs: parseInt(

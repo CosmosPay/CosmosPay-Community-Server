@@ -389,14 +389,18 @@ Lock ids live in the `AdvisoryLockKey` enum. Do not renumber an existing id —
 during a rolling deploy, old and new replicas would take different locks — and do
 not reuse a retired one.
 
-**Two replicas from one checkout, locally.** Copy `.env` to `.env.b` and change
-`PORT` (and `WALLET_AUTH_PUBLIC_BASE_URL`, if the sign-in callback should land on
-that replica — register that callback URL with the OIDC provider too). Then
-`npm run dev:replica` starts it from `.env.b`, compiling into `dist-replica/` so
-the two `--watch` builds do not overwrite each other; `ENV_FILE=.env.b` selects the
-file for any other script. Same `DATABASE_URL` and secrets: nothing is per-process
-state. List both in APISIX's upstream (the developer platform's `COSMOS_API_URL`,
-comma-separated, then `npm run sync:route` there).
+**Several instances from one checkout, locally.** `npm run dev:local` starts the api and
+a second replica from one `.env`; `npm run dev:local -- recovery` starts the api and the two
+recovery servers (A on `:3002`, B on `:3003`, testnet), and `-- all` all four. Only what
+differs per instance lives in `dev-instances.json` (git-ignored; the first run creates it
+from `dev-instances.example.json` and generates each recovery server's keys once — keep it,
+those keys derive signers that are on the ledger): a key there replaces the `.env` one, `""`
+removes it, and a nested object is a prefix (`{ "RECOVERY": { "ROLE": "a" } }` is
+`RECOVERY_ROLE=a`). One watch build compiles into `dist-local/`, so it never fights
+`npm run dev` over `dist/` — but it starts the api too, so run one or the other. The
+replicas share `DATABASE_URL` and secrets: nothing is per-process state. List both in
+APISIX's upstream (the developer platform's `COSMOS_API_URL`, comma-separated, then
+`npm run sync:route` there).
 
 ### Payment validation & the on-chain observer
 
@@ -1634,6 +1638,13 @@ the service under `src/native-plugins/<slug>/`, switched on by the same
 
 ## Upgrading — breaking changes and deploy notes
 
+### Wallet sign-in: a recovered wallet's signers follow `STELLAR_NETWORK`
+
+- **`WALLET_AUTH_SIGNERS_HORIZON_URL` now defaults to `STELLAR_NETWORK`'s Horizon** (`STELLAR_HORIZON_URL_PUBLIC` / `STELLAR_HORIZON_URL_TESTNET`, else SDF's), not always the public network's. It is read when a wallet recovered through SEP-30 signs `POST /v1/wallet/auth/finish` with the key that replaced its master. On a testnet deployment the lookup went to mainnet, found no account, and every recovered wallet's sign-in answered `400 wallet_signature_invalid`.
+- **`WALLET_RECOVERY_SPONSOR_NETWORK_PASSPHRASE` and `WALLET_RECOVERY_SPONSOR_HORIZON_URL` follow it too**, so the sponsor reads the account on the same ledger.
+- **Deploy step:** `STELLAR_NETWORK` itself defaults to `testnet`. A deployment that serves mainnet wallets and leaves it unset (API keys pick the network per request) must now set `STELLAR_NETWORK=public`, or these three variables, explicitly. Otherwise recovered mainnet wallets can no longer sign in, and a configured sponsor builds testnet transactions.
+- **Only one ledger is ever read.** Checking both would let a key added to the same address on the other network sign for this one.
+
 ### Wallet backups: an email-recovery door, held by the two recovery servers
 
 - **Migration `20261004120000_recovery_backup_shares`** adds `recovery_backup_share`. Only a
@@ -2144,7 +2155,7 @@ at least `DATABASE_URL` and `APISIX_GATEWAY_SECRET`.
 | -------- | -------- | ------- | ------ |
 | `NODE_ENV` | no | `development` | Must be `development`, `test`, or `production`. **Set `production` in production** — the fail-closed plan-fee check and docs-off-by-default both key on it |
 | `PORT` | no | `3000` | HTTP listen port |
-| `ENV_FILE` | no | `.env` | The dotenv file this process reads (Nest and Prisma). A second local replica sets `.env.b`; values already in the environment still win |
+| `ENV_FILE` | no | `.env` | The dotenv file this process reads (Nest and Prisma). Local instances share it — what differs per instance is in `dev-instances.json` (`npm run dev:local`); values already in the environment still win |
 | `DATABASE_URL` | **yes** | — | PostgreSQL connection for Prisma |
 | `APISIX_GATEWAY_SECRET` | **yes** | — | Shared secret proving the request came through APISIX. **Minimum 32 characters**; a placeholder is refused at boot |
 | `APISIX_GATEWAY_SECRET_HEADER` | no | `x-gateway-secret` | Header name for the gateway secret |
@@ -2247,6 +2258,9 @@ at least `DATABASE_URL` and `APISIX_GATEWAY_SECRET`.
 | `PLUGINS_ALLOW_UNSIGNED` | no | `false` | Run plugins with no `signature.json`, for writing one locally. Refused when `NODE_ENV=production` |
 | `KYC_REDIRECT_URL_WHITELIST` | no | — | Per-consumer KYC redirect host allow-list |
 | `WALLET_AUTH_RETURN_URLS` | no | — | Comma-separated app URLs the wallet sign-in callback may redirect to (`returnTo` on `POST /v1/wallet/auth/oauth/authorize`): a custom scheme, a universal/app link, or `http://127.0.0.1/…` (any port). Exact match; an entry that is plain http off loopback, carries a query or uses `javascript:`/`data:`/`file:` is refused at boot. Unset, every callback renders the page and a `returnTo` is `400 wallet_return_url_not_allowed` |
+| `WALLET_AUTH_SIGNERS_HORIZON_URL` | no | `STELLAR_NETWORK`'s Horizon | Lists who may sign for an account, read when a recovered wallet signs with the key that replaced its master. Must be the ledger the wallets live on: another one answers 404 and the sign-in is `400 wallet_signature_invalid` |
+| `WALLET_RECOVERY_SPONSOR_NETWORK_PASSPHRASE` | no | `STELLAR_NETWORK`'s passphrase | Network the sponsored recovery setup (`POST /v1/wallet/recovery/setup`) is built for |
+| `WALLET_RECOVERY_SPONSOR_HORIZON_URL` | no | `STELLAR_NETWORK`'s Horizon | Horizon the sponsored recovery setup reads the account from |
 | `RATE_LIMIT_ENABLED` | no | `true` | Per-address caps on the routes that spend XLM. Incident switch |
 | `RATE_LIMIT_PRUNE_INTERVAL_MS` | no | `600000` | Counter-window prune interval (ms, min 1000) |
 

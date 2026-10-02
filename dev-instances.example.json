@@ -1,0 +1,61 @@
+{
+  "$comment": "Per-instance overrides of .env for `npm run dev:local` (scripts/dev-local.mts). The first run copies this to dev-instances.json (git-ignored) and fills every <generate:…> once. A key here replaces the .env one for that instance, \"\" removes it, and a nested object is a prefix: { \"RECOVERY\": { \"ROLE\": \"a\" } } is RECOVERY_ROLE=a.",
+  "default": "replica",
+  "profiles": {
+    "replica": ["api", "replica"],
+    "recovery": ["api", "recovery-a", "recovery-b"],
+    "all": ["api", "replica", "recovery-a", "recovery-b"]
+  },
+  "instances": {
+    "api": {},
+    "replica": {
+      "$comment": "A second replica of the api: same database and secrets. Register its sign-in callback with the OIDC provider too, or point PUBLIC_BASE_URL back at the api.",
+      "PORT": 3001,
+      "WALLET_AUTH": { "PUBLIC_BASE_URL": "http://localhost:3001" }
+    },
+    "recovery-a": {
+      "$comment": "Recovery server A. No wallet sign-in, no gateway admin key (boot refuses it), no background jobs — the api runs those. Testnet, like the api's default STELLAR_NETWORK. Production runs A and B as separate deployments with their own databases and mail senders.",
+      "PORT": 3002,
+      "APISIX_ADMIN_KEY": "",
+      "APISIX_ADMIN_URL": "",
+      "WALLET_AUTH": { "PUBLIC_BASE_URL": "", "OIDC_ISSUER": "", "OIDC_CLIENT_ID": "", "OIDC_CLIENT_SECRET": "", "SESSION_SECRET": "" },
+      "OBSERVER_ENABLED": false,
+      "WEBHOOK_SWEEP_ENABLED": false,
+      "RECOVERY": {
+        "ROLE": "a",
+        "PUBLIC_BASE_URL": "http://localhost:3002",
+        "HOME_DOMAIN": "localhost",
+        "NETWORK_PASSPHRASE": "Test SDF Network ; September 2015",
+        "HORIZON_URL": "https://horizon-testnet.stellar.org",
+        "SIGNER_MASTER": "<generate:stellar-secret>",
+        "SEP10_SIGNING_SECRET": "<generate:stellar-secret>",
+        "JWT_SECRET": "<generate:hex32>",
+        "OIDC_ISSUER": "https://localhost:9444/application/o/wallet/",
+        "OIDC_AUDIENCES": "your-wallet-oidc-client-id",
+        "EMAIL_CODES": true
+      }
+    },
+    "recovery-b": {
+      "$comment": "Recovery server B: the same, with its OWN keys — never A's.",
+      "PORT": 3003,
+      "APISIX_ADMIN_KEY": "",
+      "APISIX_ADMIN_URL": "",
+      "WALLET_AUTH": { "PUBLIC_BASE_URL": "", "OIDC_ISSUER": "", "OIDC_CLIENT_ID": "", "OIDC_CLIENT_SECRET": "", "SESSION_SECRET": "" },
+      "OBSERVER_ENABLED": false,
+      "WEBHOOK_SWEEP_ENABLED": false,
+      "RECOVERY": {
+        "ROLE": "b",
+        "PUBLIC_BASE_URL": "http://localhost:3003",
+        "HOME_DOMAIN": "localhost",
+        "NETWORK_PASSPHRASE": "Test SDF Network ; September 2015",
+        "HORIZON_URL": "https://horizon-testnet.stellar.org",
+        "SIGNER_MASTER": "<generate:stellar-secret>",
+        "SEP10_SIGNING_SECRET": "<generate:stellar-secret>",
+        "JWT_SECRET": "<generate:hex32>",
+        "OIDC_ISSUER": "https://localhost:9444/application/o/wallet/",
+        "OIDC_AUDIENCES": "your-wallet-oidc-client-id",
+        "EMAIL_CODES": true
+      }
+    }
+  }
+}

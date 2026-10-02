@@ -2,8 +2,9 @@
 import type { StellarNetwork } from '@/config/configuration';
 
 /**
- * The file the environment is read from when `ENV_FILE` is unset. A second local
- * replica points `ENV_FILE` at its own copy (`.env.b`) to run beside the first.
+ * The file the environment is read from when `ENV_FILE` is unset. Local instances
+ * beside the first (`npm run dev:local`) read it too, with their differences
+ * already in the environment.
  */
 export const DEFAULT_ENV_FILE = '.env';
 
@@ -81,6 +82,15 @@ export const DEFAULT_RECOVERY_SWEEP_INTERVAL_MS = 60_000;
  */
 export const NETWORK_PASSPHRASE_PUBLIC =
   'Public Global Stellar Network ; September 2015';
+
+/** Stellar's test network passphrase, pinned the same way. */
+export const NETWORK_PASSPHRASE_TESTNET = 'Test SDF Network ; September 2015';
+
+/** Each network's passphrase, for defaults that follow `STELLAR_NETWORK`. */
+export const NETWORK_PASSPHRASE: Record<StellarNetwork, string> = {
+  public: NETWORK_PASSPHRASE_PUBLIC,
+  testnet: NETWORK_PASSPHRASE_TESTNET,
+};
 
 /** DeFindex's hosted API, used when `DEFINDEX_BASE_URL` is unset. */
 export const DEFAULT_DEFINDEX_BASE_URL = 'https://api.defindex.io';

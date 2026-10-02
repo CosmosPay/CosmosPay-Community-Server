@@ -390,15 +390,19 @@ Les identifiants de verrou se trouvent dans l'enum `AdvisoryLockKey`. Ne renumé
 identifiant existant — pendant un déploiement progressif, les anciens et les nouveaux réplicas
 prendraient des verrous différents — et ne réutilisez pas un identifiant retiré.
 
-**Deux répliques depuis un même checkout, en local.** Copiez `.env` vers `.env.b`
-et changez `PORT` (et `WALLET_AUTH_PUBLIC_BASE_URL` si le callback de connexion doit
-arriver sur cette réplique — enregistrez aussi cette URL de callback auprès du
-fournisseur OIDC). Ensuite `npm run dev:replica` la démarre depuis `.env.b`, en
-compilant dans `dist-replica/` pour que les deux builds `--watch` ne s'écrasent pas ;
-`ENV_FILE=.env.b` choisit le fichier pour tout autre script. Même `DATABASE_URL` et
-mêmes secrets : rien n'est un état par processus. Listez les deux dans l'upstream
-d'APISIX (le `COSMOS_API_URL` de la plateforme développeur, séparé par des virgules,
-puis `npm run sync:route` là-bas).
+**Plusieurs instances depuis un même checkout, en local.** `npm run dev:local` démarre
+l'api et une seconde réplique depuis un seul `.env` ; `npm run dev:local -- recovery`
+démarre l'api et les deux serveurs de récupération (A sur `:3002`, B sur `:3003`, testnet),
+et `-- all` les quatre. Seul ce qui diffère par instance vit dans `dev-instances.json`
+(ignoré par git ; la première exécution le crée depuis `dev-instances.example.json` et génère
+une seule fois les clés de chaque serveur de récupération — conservez-le, ces clés dérivent
+des signataires inscrits dans le ledger) : une clé y remplace celle de `.env`, `""` la
+supprime, et un objet imbriqué est un préfixe (`{ "RECOVERY": { "ROLE": "a" } }` donne
+`RECOVERY_ROLE=a`). Un seul build en mode watch compile dans `dist-local/`, il ne dispute donc
+jamais `dist/` à `npm run dev` — mais il démarre aussi l'api : utilisez l'un ou l'autre. Les
+répliques partagent `DATABASE_URL` et les secrets : rien n'est un état par processus.
+Déclarez-les toutes deux dans l'upstream d'APISIX (`COSMOS_API_URL` de la developer
+platform, séparées par des virgules, puis `npm run sync:route` là-bas).
 
 ### Validation des paiements et observateur on-chain
 
@@ -1680,6 +1684,13 @@ plugins isolés.
 
 ## Mise à niveau — changements incompatibles et notes de déploiement
 
+### Connexion du portefeuille : les signataires d'un portefeuille récupéré suivent `STELLAR_NETWORK`
+
+- **`WALLET_AUTH_SIGNERS_HORIZON_URL` prend désormais par défaut le Horizon de `STELLAR_NETWORK`** (`STELLAR_HORIZON_URL_PUBLIC` / `STELLAR_HORIZON_URL_TESTNET`, sinon celui de SDF), et non plus toujours celui du réseau public. Il est lu quand un portefeuille récupéré via SEP-30 signe `POST /v1/wallet/auth/finish` avec la clé qui a remplacé sa clé maîtresse. Sur un déploiement testnet, la requête partait vers le mainnet, ne trouvait pas le compte, et la connexion de tout portefeuille récupéré répondait `400 wallet_signature_invalid`.
+- **`WALLET_RECOVERY_SPONSOR_NETWORK_PASSPHRASE` et `WALLET_RECOVERY_SPONSOR_HORIZON_URL` le suivent aussi**, pour que le sponsor lise le compte sur le même ledger.
+- **Étape de déploiement :** `STELLAR_NETWORK` vaut `testnet` par défaut. Un déploiement qui sert des portefeuilles mainnet sans la définir (les clés d'API choisissent le réseau à chaque requête) doit désormais définir `STELLAR_NETWORK=public`, ou ces trois variables, explicitement. Sinon les portefeuilles mainnet récupérés ne peuvent plus se connecter, et un sponsor configuré construit des transactions testnet.
+- **Un seul ledger est jamais lu.** Interroger les deux laisserait une clé ajoutée à la même adresse sur l'autre réseau signer pour celui-ci.
+
 ### Sauvegardes du portefeuille : une porte de récupération par email, détenue par les deux serveurs de récupération
 
 - **La migration `20261004120000_recovery_backup_shares`** ajoute `recovery_backup_share`. Seul un
@@ -2223,7 +2234,7 @@ Chaque variable lue depuis `process.env` dans `src/` est validée au démarrage 
 | -------- | ------- | ------ | ----- |
 | `NODE_ENV` | non | `development` | Doit valoir `development`, `test` ou `production`. **Définissez `production` en production** — la vérification fail-closed des frais de plan et la désactivation par défaut de la documentation en dépendent toutes deux |
 | `PORT` | non | `3000` | Port d'écoute HTTP |
-| `ENV_FILE` | non | `.env` | Le fichier dotenv que lit ce processus (Nest et Prisma). Une seconde réplique locale utilise `.env.b` ; les valeurs déjà présentes dans l'environnement restent prioritaires |
+| `ENV_FILE` | non | `.env` | Le fichier dotenv que lit ce processus (Nest et Prisma). Les instances locales le partagent — ce qui diffère par instance est dans `dev-instances.json` (`npm run dev:local`) ; les valeurs déjà présentes dans l'environnement l'emportent toujours |
 | `DATABASE_URL` | **oui** | — | Connexion PostgreSQL pour Prisma |
 | `APISIX_GATEWAY_SECRET` | **oui** | — | Secret partagé prouvant que la requête est passée par APISIX. **32 caractères minimum** ; un placeholder est refusé au démarrage |
 | `APISIX_GATEWAY_SECRET_HEADER` | non | `x-gateway-secret` | Nom de l'en-tête portant le secret de la passerelle |
@@ -2326,6 +2337,9 @@ Chaque variable lue depuis `process.env` dans `src/` est validée au démarrage 
 | `PLUGINS_ALLOW_UNSIGNED` | non | `false` | Exécuter des plugins sans `signature.json`, pour en écrire un en local. Refusé quand `NODE_ENV=production` |
 | `KYC_REDIRECT_URL_WHITELIST` | non | — | Liste d'autorisation, par consumer, des hôtes de redirection KYC |
 | `WALLET_AUTH_RETURN_URLS` | non | — | URL de l’application, séparées par des virgules, vers lesquelles le callback de connexion du wallet peut rediriger (`returnTo` sur `POST /v1/wallet/auth/oauth/authorize`) : un schéma propre, un universal/app link, ou `http://127.0.0.1/…` (n’importe quel port). Correspondance exacte ; une entrée en http simple hors loopback, avec une query ou en `javascript:`/`data:`/`file:` est refusée au démarrage. Non définie, chaque callback affiche la page et un `returnTo` est `400 wallet_return_url_not_allowed` |
+| `WALLET_AUTH_SIGNERS_HORIZON_URL` | non | le Horizon de `STELLAR_NETWORK` | Liste qui peut signer pour un compte ; lu quand un portefeuille récupéré signe avec la clé qui a remplacé sa clé maîtresse. Doit être le ledger des portefeuilles : un autre répond 404 et la connexion est `400 wallet_signature_invalid` |
+| `WALLET_RECOVERY_SPONSOR_NETWORK_PASSPHRASE` | non | la passphrase de `STELLAR_NETWORK` | Réseau pour lequel la mise en place de récupération sponsorisée (`POST /v1/wallet/recovery/setup`) est construite |
+| `WALLET_RECOVERY_SPONSOR_HORIZON_URL` | non | le Horizon de `STELLAR_NETWORK` | Horizon où la mise en place de récupération sponsorisée lit le compte |
 | `RATE_LIMIT_ENABLED` | non | `true` | Plafonds par adresse sur les routes qui dépensent des XLM. Interrupteur d'incident |
 | `RATE_LIMIT_PRUNE_INTERVAL_MS` | non | `600000` | Intervalle de purge des fenêtres de compteur (ms, min 1000) |
 
