@@ -13,6 +13,16 @@ const SETTINGS = {
   homeDomain: 'example.com',
   networkPassphrase: Networks.TESTNET,
   horizonUrl: 'https://horizon.example.com',
+  networks: {
+    testnet: {
+      networkPassphrase: Networks.TESTNET,
+      horizonUrl: 'https://horizon.example.com',
+    },
+    public: {
+      networkPassphrase: Networks.PUBLIC,
+      horizonUrl: 'https://horizon-public.example.com',
+    },
+  } as Record<string, { networkPassphrase: string; horizonUrl: string }>,
   signerMaster: Keypair.random().secret(),
   sep10SigningSecret: Keypair.random().secret(),
   jwtSecret: 'a-recovery-jwt-secret-long-enough-000000',
@@ -91,6 +101,74 @@ describe('RecoveryService', () => {
   it('answers 404 on a deployment that is not a recovery server', () => {
     const { service } = makeService({ role: null as never });
     expect(() => service.stellarToml()).toThrow(SepError);
+  });
+
+  /* One server, both ledgers: each named ledger is its own passphrase, its own
+     Horizon, its own registrations and its own SEP-10 tokens. */
+  describe('ledgers', () => {
+    const address = Keypair.random().publicKey();
+
+    it('publishes each ledger under its own segment', () => {
+      const { service } = makeService();
+      const toml = service.stellarToml('public');
+      expect(toml).toContain(`NETWORK_PASSPHRASE = "${Networks.PUBLIC}"`);
+      expect(toml).toContain(
+        'HORIZON_URL = "https://horizon-public.example.com"',
+      );
+      expect(toml).toContain(
+        'WEB_AUTH_ENDPOINT = "https://recovery-a.example.com/cosmos-api/v1/sep10/public/auth"',
+      );
+      expect(toml).toContain(
+        'ENDPOINT = "https://recovery-a.example.com/cosmos-api/v1/sep30/public"',
+      );
+      // No segment is the default ledger, exactly as before.
+      expect(service.stellarToml()).toContain(
+        'WEB_AUTH_ENDPOINT = "https://recovery-a.example.com/cosmos-api/v1/sep10/auth"',
+      );
+    });
+
+    it('answers 404 for a ledger it does not serve, never the default instead', () => {
+      const { service } = makeService({
+        networks: { testnet: SETTINGS.networks.testnet },
+      });
+      expect(() => service.stellarToml('public')).toThrow(SepError);
+      expect(() => service.challenge(address, 'public')).toThrow(SepError);
+    });
+
+    it('issues a challenge for the ledger the request named', () => {
+      const { service } = makeService();
+      expect(service.challenge(address, 'public').network_passphrase).toBe(
+        Networks.PUBLIC,
+      );
+      expect(service.challenge(address).network_passphrase).toBe(
+        Networks.TESTNET,
+      );
+    });
+
+    it('reads registrations of the named ledger only', async () => {
+      const { service, prisma } = makeService();
+      prisma.recoveryAccount.findUnique.mockResolvedValue(null);
+      const token = issueSep10Token(service.rules('public'), address);
+      await expect(
+        service.get(`Bearer ${token}`, address, 'public'),
+      ).rejects.toThrow(SepError);
+      expect(prisma.recoveryAccount.findUnique).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            role_network_address: { role: 'a', network: 'public', address },
+          },
+        }),
+      );
+    });
+
+    it('refuses a testnet SEP-10 token on the mainnet routes', async () => {
+      const { service, prisma } = makeService();
+      const testnetToken = issueSep10Token(service.rules('testnet'), address);
+      await expect(
+        service.get(`Bearer ${testnetToken}`, address, 'public'),
+      ).rejects.toMatchObject({ status: 401 });
+      expect(prisma.recoveryAccount.findUnique).not.toHaveBeenCalled();
+    });
   });
 
   describe('exchangeIdToken', () => {

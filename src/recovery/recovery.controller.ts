@@ -50,6 +50,8 @@ import {
   SEP30_WRITE_RATE_LIMIT,
 } from '@/recovery/recovery.constants';
 import { RecoveryService } from '@/recovery/recovery.service';
+import { RecoveryNetwork, tomlNetwork } from '@/recovery/recovery-network';
+import type { StellarNetwork } from '@/config/configuration';
 import { RecoverySharesService } from '@/recovery/recovery-shares.service';
 import { SepExceptionFilter } from '@/recovery/sep-exception.filter';
 
@@ -84,10 +86,13 @@ export class StellarTomlController {
     status: 200,
     content: { 'text/plain': { schema: { type: 'string' } } },
   })
-  toml(@Res() res: Response): void {
+  toml(@Res() res: Response, @Query('network') rawNetwork?: string): void {
     let body: string;
     try {
-      body = this.recovery.stellarToml();
+      // `?network=public|testnet` picks the ledger; none is the default one.
+      const network = tomlNetwork(rawNetwork);
+      if (network === undefined) throw new Error('unknown network');
+      body = this.recovery.stellarToml(network);
     } catch {
       // Absent is a fact a client can act on; a file of empty fields looks
       // answerable and is not.
@@ -116,8 +121,11 @@ export class Sep10Controller {
     summary: 'A challenge for an account',
     description: 'Sequence 0: unsubmittable by construction.',
   })
-  challenge(@Query() query: Sep10ChallengeQueryDto) {
-    return this.recovery.challenge(query.account);
+  challenge(
+    @Query() query: Sep10ChallengeQueryDto,
+    @RecoveryNetwork() network: StellarNetwork | null,
+  ) {
+    return this.recovery.challenge(query.account, network);
   }
 
   @Post('auth')
@@ -130,8 +138,11 @@ export class Sep10Controller {
       "Weighed against the account's CURRENT signers and medium threshold, so a " +
       'recovered account authenticates with the key that replaced its master.',
   })
-  token(@Body() body: Sep10TokenDto) {
-    return this.recovery.token(body.transaction);
+  token(
+    @Body() body: Sep10TokenDto,
+    @RecoveryNetwork() network: StellarNetwork | null,
+  ) {
+    return this.recovery.token(body.transaction, network);
   }
 }
 
@@ -155,8 +166,11 @@ export class Sep30Controller {
       "provider's published keys, must stand for a login in the last 15 " +
       'minutes, must carry a VERIFIED email, and is accepted once per server.',
   })
-  exchange(@Body() body: RecoveryIdTokenDto) {
-    return this.recovery.exchangeIdToken(body.id_token);
+  exchange(
+    @Body() body: RecoveryIdTokenDto,
+    @RecoveryNetwork() network: StellarNetwork | null,
+  ) {
+    return this.recovery.exchangeIdToken(body.id_token, network);
   }
 
   @Post('identity/email/start')
@@ -169,8 +183,11 @@ export class Sep30Controller {
       'The same answer whether or not the address recovers anything here; a ' +
       'code is only sent to one that does.',
   })
-  startEmail(@Body() body: RecoveryEmailStartDto) {
-    return this.recovery.startEmail(body.email);
+  startEmail(
+    @Body() body: RecoveryEmailStartDto,
+    @RecoveryNetwork() network: StellarNetwork | null,
+  ) {
+    return this.recovery.startEmail(body.email, network);
   }
 
   @Post('identity/email/verify')
@@ -181,8 +198,11 @@ export class Sep30Controller {
     summary: 'Answer an emailed code',
     description: 'Five wrong answers burn it.',
   })
-  verifyEmail(@Body() body: RecoveryEmailVerifyDto) {
-    return this.recovery.verifyEmail(body.claim_token, body.code);
+  verifyEmail(
+    @Body() body: RecoveryEmailVerifyDto,
+    @RecoveryNetwork() network: StellarNetwork | null,
+  ) {
+    return this.recovery.verifyEmail(body.claim_token, body.code, network);
   }
 
   /* --------------------------------- SEP-30 -------------------------------- */
@@ -197,8 +217,9 @@ export class Sep30Controller {
   list(
     @Headers('authorization') authorization: string | undefined,
     @Query() query: Sep30ListQueryDto,
+    @RecoveryNetwork() network: StellarNetwork | null,
   ) {
-    return this.recovery.list(authorization, query.after);
+    return this.recovery.list(authorization, query.after, network);
   }
 
   @Post('accounts/:address')
@@ -215,11 +236,13 @@ export class Sep30Controller {
     @Headers('authorization') authorization: string | undefined,
     @Param() params: Sep30AddressParamDto,
     @Body() body: Sep30IdentitiesDto,
+    @RecoveryNetwork() network: StellarNetwork | null,
   ) {
     return this.recovery.register(
       authorization,
       params.address,
       body.identities as Identity[],
+      network,
     );
   }
 
@@ -235,11 +258,13 @@ export class Sep30Controller {
     @Headers('authorization') authorization: string | undefined,
     @Param() params: Sep30AddressParamDto,
     @Body() body: Sep30IdentitiesDto,
+    @RecoveryNetwork() network: StellarNetwork | null,
   ) {
     return this.recovery.update(
       authorization,
       params.address,
       body.identities as Identity[],
+      network,
     );
   }
 
@@ -251,8 +276,9 @@ export class Sep30Controller {
   get(
     @Headers('authorization') authorization: string | undefined,
     @Param() params: Sep30AddressParamDto,
+    @RecoveryNetwork() network: StellarNetwork | null,
   ) {
-    return this.recovery.get(authorization, params.address);
+    return this.recovery.get(authorization, params.address, network);
   }
 
   @Delete('accounts/:address')
@@ -263,8 +289,9 @@ export class Sep30Controller {
   remove(
     @Headers('authorization') authorization: string | undefined,
     @Param() params: Sep30AddressParamDto,
+    @RecoveryNetwork() network: StellarNetwork | null,
   ) {
-    return this.recovery.remove(authorization, params.address);
+    return this.recovery.remove(authorization, params.address, network);
   }
 
   @Post('accounts/:address/sign/:signer')
@@ -283,12 +310,14 @@ export class Sep30Controller {
     @Headers('authorization') authorization: string | undefined,
     @Param() params: Sep30SignParamDto,
     @Body() body: Sep30SignDto,
+    @RecoveryNetwork() network: StellarNetwork | null,
   ) {
     return this.recovery.sign(
       authorization,
       params.address,
       params.signer,
       body.transaction,
+      network,
     );
   }
 }
@@ -319,12 +348,14 @@ export class RecoverySharesController {
     @Headers('authorization') authorization: string | undefined,
     @Param() params: Sep30AddressParamDto,
     @Body() body: RecoveryShareDto,
+    @RecoveryNetwork() network: StellarNetwork | null,
   ) {
     return this.shares.put(
       authorization,
       params.address,
       body.share,
       body.email,
+      network,
     );
   }
 
@@ -342,8 +373,9 @@ export class RecoverySharesController {
   get(
     @Headers('authorization') authorization: string | undefined,
     @Param() params: Sep30AddressParamDto,
+    @RecoveryNetwork() network: StellarNetwork | null,
   ) {
-    return this.shares.get(authorization, params.address);
+    return this.shares.get(authorization, params.address, network);
   }
 
   @Delete(':address')
@@ -356,7 +388,8 @@ export class RecoverySharesController {
   remove(
     @Headers('authorization') authorization: string | undefined,
     @Param() params: Sep30AddressParamDto,
+    @RecoveryNetwork() network: StellarNetwork | null,
   ) {
-    return this.shares.remove(authorization, params.address);
+    return this.shares.remove(authorization, params.address, network);
   }
 }

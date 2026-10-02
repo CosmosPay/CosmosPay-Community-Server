@@ -1671,7 +1671,9 @@ model RecoveryAccount {
   /// The Stellar account being protected (G…).
   address String
 
-  /// "public" | "testnet" | "other": a signer is an entry on ONE ledger.
+  /// "public" | "testnet" | "other": a signer is an entry on ONE ledger, so the
+  /// same G… registered on two ledgers is two rows — the address space is shared,
+  /// the accounts are not.
   network String
 
   methods RecoveryAuthMethod[]
@@ -1679,7 +1681,7 @@ model RecoveryAccount {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  @@unique([role, address])
+  @@unique([role, network, address])
   @@map("recovery_account")
 }
 

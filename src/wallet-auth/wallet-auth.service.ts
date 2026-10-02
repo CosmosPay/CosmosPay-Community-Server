@@ -7,7 +7,7 @@ import {
   WalletLoginCodeStatus,
 } from '@generated/prisma/client';
 import { Keypair } from '@stellar/stellar-sdk';
-import { AppConfig } from '@/config/configuration';
+import { AppConfig, type StellarNetwork } from '@/config/configuration';
 import { normalizeAddress } from '@/chains/chain-address';
 import { type Chain, DEFAULT_CHAIN } from '@/chains/chains.constants';
 import { verifyMessageSignature } from '@/chains/message-signature';
@@ -834,7 +834,13 @@ export class WalletAuthService {
     const { chain, address } = accountOf(dto);
     const message = finishMessage(identity.email, address, dto.signedAt, chain);
     if (
-      !(await this.signedForAccount(chain, address, message, dto.signature))
+      !(await this.signedForAccount(
+        chain,
+        address,
+        message,
+        dto.signature,
+        dto.network,
+      ))
     ) {
       throw ApiError.badRequest(
         ApiErrorCode.WalletSignatureInvalid,
@@ -955,7 +961,13 @@ export class WalletAuthService {
     const { chain, address } = accountOf(dto);
     const message = backupMessage(address, dto.box, dto.signedAt, chain);
     if (
-      !(await this.signedForAccount(chain, address, message, dto.signature))
+      !(await this.signedForAccount(
+        chain,
+        address,
+        message,
+        dto.signature,
+        dto.network,
+      ))
     ) {
       throw ApiError.badRequest(
         ApiErrorCode.WalletSignatureInvalid,
@@ -1174,15 +1186,21 @@ export class WalletAuthService {
    *
    * The master key first, with no network call — that is every wallet that was
    * never recovered, and a Horizon outage must not stop them. Only when that
-   * fails is the account's CURRENT signer set read, from the one Horizon the
-   * operator configured: a recovered account's address is its old master key,
-   * now at weight 0, and the key that signs for it is whichever replaced it.
+   * fails is the account's CURRENT signer set read: a recovered account's address
+   * is its old master key, now at weight 0, and the key that signs for it is
+   * whichever replaced it.
+   *
+   * Read from ONE ledger — `network`, or the operator's default — through the
+   * operator's own Horizon for it. A re-key lands on one ledger, so a wallet
+   * recovered on testnet names testnet here; what no request can do is make a
+   * key count on a ledger whose account does not list it.
    */
   private async signedForAccount(
     chain: Chain,
     address: string,
     message: string,
     signature: string,
+    network?: StellarNetwork,
   ): Promise<boolean> {
     // Solana and Monad accounts are their key: no signer set to consult, and
     // no network call. Each chain's wallets sign the way `message-signature`
@@ -1195,7 +1213,9 @@ export class WalletAuthService {
     let account;
     try {
       account = await fetchAccountSigners(
-        this.settings.signersHorizonUrl,
+        this.settings.signersHorizonUrls[
+          network ?? this.settings.signersNetwork
+        ],
         address,
         this.settings.timeoutMs,
       );
@@ -1242,6 +1262,21 @@ export class WalletAuthService {
         'Sponsored recovery setup is not available on this deployment.',
       );
     }
+    // The ledger the setup is for: the one the request names, if this key
+    // sponsors there, or the default. Never a fallback from a named ledger to
+    // the default — that would build a mainnet transaction for a testnet wallet.
+    const ledger = dto.network
+      ? sponsor.networks[dto.network]
+      : {
+          networkPassphrase: sponsor.networkPassphrase,
+          horizonUrl: sponsor.horizonUrl,
+        };
+    if (!ledger) {
+      throw ApiError.unavailable(
+        ApiErrorCode.Misconfigured,
+        'Sponsored recovery setup is not available on that network.',
+      );
+    }
     const identity = readSessionToken(
       sessionToken,
       this.requireSessionSecret(),
@@ -1278,7 +1313,7 @@ export class WalletAuthService {
     let body: { sequence?: unknown; signers?: unknown[] };
     try {
       const res = await fetch(
-        `${sponsor.horizonUrl}/accounts/${encodeURIComponent(dto.stellarAddress)}`,
+        `${ledger.horizonUrl}/accounts/${encodeURIComponent(dto.stellarAddress)}`,
         {
           headers: { accept: 'application/json' },
           signal: AbortSignal.timeout(this.settings.timeoutMs),
@@ -1345,7 +1380,7 @@ export class WalletAuthService {
       account: dto.stellarAddress,
       deviceKey,
       signers: [a, b],
-      networkPassphrase: sponsor.networkPassphrase,
+      networkPassphrase: ledger.networkPassphrase,
       sequence: body.sequence,
       sponsor: sponsorKey,
     });
@@ -1355,7 +1390,7 @@ export class WalletAuthService {
     return {
       transaction,
       sponsor: sponsorKey.publicKey(),
-      network_passphrase: sponsor.networkPassphrase,
+      network_passphrase: ledger.networkPassphrase,
     };
   }
 

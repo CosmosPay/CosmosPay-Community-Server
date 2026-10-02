@@ -1,4 +1,5 @@
 import { HttpStatus, Injectable, Logger } from '@nestjs/common';
+import type { StellarNetwork } from '@/config/configuration';
 import { PrismaService } from '@/prisma/prisma.service';
 import { normalizeEmail, type Actor } from '@/recovery/recovery-core';
 import { RECOVERY_SHARE_BYTES } from '@/recovery/recovery.constants';
@@ -50,9 +51,10 @@ export class RecoverySharesService {
     address: string,
     share: string,
     email: string,
+    network?: StellarNetwork | null,
   ): Promise<ShareReceipt> {
-    const rules = this.recovery.rules();
-    const actor = this.recovery.actor(authorization);
+    const rules = this.recovery.rules(network);
+    const actor = this.recovery.actor(authorization, network);
     assertKeyHolder(actor, address);
     if (Buffer.from(share, 'base64').length !== RECOVERY_SHARE_BYTES) {
       throw new SepError(
@@ -79,9 +81,10 @@ export class RecoverySharesService {
   async get(
     authorization: string | undefined,
     address: string,
+    network?: StellarNetwork | null,
   ): Promise<{ address: string; share: string }> {
-    const rules = this.recovery.rules();
-    const actor = this.recovery.actor(authorization);
+    const rules = this.recovery.rules(network);
+    const actor = this.recovery.actor(authorization, network);
     const row = await this.prisma.recoveryBackupShare.findUnique({
       where: { role_address: { role: rules.role, address } },
       select: { address: true, share: true, email: true },
@@ -97,9 +100,10 @@ export class RecoverySharesService {
   async remove(
     authorization: string | undefined,
     address: string,
+    network?: StellarNetwork | null,
   ): Promise<{ address: string }> {
-    const rules = this.recovery.rules();
-    const actor = this.recovery.actor(authorization);
+    const rules = this.recovery.rules(network);
+    const actor = this.recovery.actor(authorization, network);
     assertKeyHolder(actor, address);
     const { count } = await this.prisma.recoveryBackupShare.deleteMany({
       where: { role: rules.role, address },

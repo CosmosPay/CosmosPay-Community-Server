@@ -138,12 +138,13 @@ async function main() {
       }
       accounts += 1;
       if (dryRun) continue;
+      const network = str(row.network) || 'public';
       await prisma.recoveryAccount.upsert({
-        where: { role_address: { role, address } },
+        where: { role_network_address: { role, network, address } },
         create: {
           role,
           address,
-          network: str(row.network) || 'public',
+          network,
           methods: { create: methods },
         },
         // Present already means registered here since the move: newer, kept.

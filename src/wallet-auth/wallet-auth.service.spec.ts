@@ -58,7 +58,11 @@ const SETTINGS = {
   github: { clientId: '', clientSecret: '' },
   oidc: { issuer: '', clientId: '', clientSecret: '' },
   returnUrls: [] as string[],
-  signersHorizonUrl: 'https://horizon.example.com',
+  signersHorizonUrls: {
+    testnet: 'https://horizon.example.com',
+    public: 'https://horizon-public.example.com',
+  },
+  signersNetwork: 'testnet' as const,
   sponsor: {
     secret: '',
     networkPassphrase: 'Test SDF Network ; September 2015',

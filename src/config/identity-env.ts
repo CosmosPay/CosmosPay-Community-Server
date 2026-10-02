@@ -59,6 +59,22 @@ function assertDistinct(env: Env, names: string[]): void {
   }
 }
 
+/**
+ * A comma list of ledger names: `public`, `testnet`, or both. Anything else is a
+ * typo the parser would otherwise drop, leaving a ledger unserved with no sign.
+ */
+function requireNetworkList(env: Env, name: string): void {
+  const raw = read(env, name);
+  if (!raw) return;
+  for (const entry of raw.split(',').map((s) => s.trim().toLowerCase())) {
+    if (entry !== 'public' && entry !== 'testnet') {
+      throw new Error(
+        `${name} entry "${entry}" must be "public" or "testnet".`,
+      );
+    }
+  }
+}
+
 function requireStellarSecret(env: Env, name: string): string {
   const value = read(env, name);
   if (!StrKey.isValidEd25519SecretSeed(value)) {
@@ -198,6 +214,9 @@ export function assertIdentityConfigConsistent(env: Env): void {
       throw new Error(`WALLET_AUTH_RETURN_URLS entry "${entry}" ${problem}.`);
     }
   }
+
+  requireNetworkList(env, 'WALLET_RECOVERY_SPONSOR_NETWORKS');
+  requireNetworkList(env, 'RECOVERY_NETWORKS');
 
   const sponsor = read(env, 'WALLET_RECOVERY_SPONSOR_SECRET');
   if (sponsor) {

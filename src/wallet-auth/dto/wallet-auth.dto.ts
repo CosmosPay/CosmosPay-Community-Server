@@ -14,6 +14,7 @@ import {
   ValidateIf,
 } from 'class-validator';
 import { CHAINS, type Chain } from '@/chains/chains.constants';
+import type { StellarNetwork } from '@/config/configuration';
 import { IsChainAddress } from '@/common/validators/is-chain-address.validator';
 import {
   BACKUP_BOX_MAX_CHARS,
@@ -148,6 +149,27 @@ export class VerifyWalletEmailDto {
 }
 
 /**
+ * The Stellar ledger whose signer list decides a signature by a key that is not
+ * the address — a RECOVERED account, re-keyed on ONE ledger. Omit it and the
+ * operator's default ledger is read, as before. A name, never a URL: it only
+ * picks which of the operator's two configured Horizons is asked.
+ */
+function LedgerField(): PropertyDecorator {
+  return (target, key) => {
+    ApiPropertyOptional({
+      enum: STELLAR_LEDGERS,
+      description:
+        "The ledger the account's signers are read from (a recovered account's " +
+        'key signs for it on the ledger it was re-keyed on). Omit for the default.',
+    })(target, key);
+    IsOptional()(target, key);
+    IsIn(STELLAR_LEDGERS)(target, key);
+  };
+}
+
+const STELLAR_LEDGERS: StellarNetwork[] = ['public', 'testnet'];
+
+/**
  * The session token is NOT in this body — it rides in `X-Wallet-Session`, a
  * header of its own because APISIX strips `Authorization` on the way here.
  */
@@ -228,6 +250,9 @@ export class FinishWalletSignInDto {
   @IsOptional()
   @IsBoolean()
   replaceBackup?: boolean;
+
+  @LedgerField()
+  network?: StellarNetwork;
 }
 
 export class ReplaceWalletBackupDto {
@@ -286,6 +311,9 @@ export class ReplaceWalletBackupDto {
   @IsString()
   @MaxLength(WALLET_SIGNATURE_MAX_CHARS)
   signature!: string;
+
+  @LedgerField()
+  network?: StellarNetwork;
 }
 
 /**
@@ -327,4 +355,8 @@ export class SponsorRecoverySetupDto {
   @IsString()
   @MaxLength(128)
   signature!: string;
+
+  /** Also the ledger the setup is built and sponsored on. */
+  @LedgerField()
+  network?: StellarNetwork;
 }

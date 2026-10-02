@@ -411,20 +411,33 @@ export interface AppConfig {
     returnUrls: string[];
     /**
      * The Horizon that says who may sign for an account, for a RECOVERED wallet
-     * whose key is no longer its address. One, chosen by the operator — never by
-     * the request, which would let a caller pick the ledger its signer is read
-     * from.
+     * whose key is no longer its address — per ledger, because a SEP-30 re-key
+     * lands on ONE ledger and the wallet says which. The URLs are the operator's,
+     * never the request's: a caller may name `public` or `testnet`, and that only
+     * picks which of these two this service reads.
      */
-    signersHorizonUrl: string;
+    signersHorizonUrls: Record<StellarNetwork, string>;
+    /** The ledger read when a request names none — every client before the field. */
+    signersNetwork: StellarNetwork;
     /**
      * Pays the reserve of an account's two recovery signers
      * (`POST /v1/wallet/recovery/setup`). Unset disables the route. Refused at
      * boot on a recovery server.
+     *
+     * `networkPassphrase` / `horizonUrl` are the ledger a request that names none
+     * is sponsored on; `networks` is every ledger the same key sponsors on (it
+     * must hold a balance on each).
      */
     sponsor: {
       secret: string;
       networkPassphrase: string;
       horizonUrl: string;
+      networks: Partial<
+        Record<
+          StellarNetwork,
+          { networkPassphrase: string; horizonUrl: string }
+        >
+      >;
     };
     /** How long a call out to a provider may take before it is a failure. */
     timeoutMs: number;
@@ -443,8 +456,17 @@ export interface AppConfig {
     publicBaseUrl: string;
     /** The WALLET's domain, named by every challenge — the same on both servers. */
     homeDomain: string;
+    /** The DEFAULT ledger: served on the routes that name no network, as before. */
     networkPassphrase: string;
     horizonUrl: string;
+    /**
+     * Every ledger this server recovers on, by name: `stellar.toml?network=`,
+     * `/v1/sep10/{network}/auth`, `/v1/sep30/{network}/…`. A signer is an entry
+     * on one ledger, so each is its own registration and its own SEP-10 token.
+     */
+    networks: Partial<
+      Record<StellarNetwork, { networkPassphrase: string; horizonUrl: string }>
+    >;
     signerMaster: string;
     sep10SigningSecret: string;
     jwtSecret: string;
@@ -483,6 +505,101 @@ function operatorHorizon(): Record<StellarNetwork, string> {
   return {
     public: process.env.STELLAR_HORIZON_URL_PUBLIC ?? DEFAULT_HORIZON.public,
     testnet: process.env.STELLAR_HORIZON_URL_TESTNET ?? DEFAULT_HORIZON.testnet,
+  };
+}
+
+const trimSlash = (url: string) => url.replace(/\/+$/, '');
+
+/** The ledger a passphrase names, or null for a custom network. */
+export function stellarNetworkOf(passphrase: string): StellarNetwork | null {
+  if (passphrase === NETWORK_PASSPHRASE.public) return 'public';
+  if (passphrase === NETWORK_PASSPHRASE.testnet) return 'testnet';
+  return null;
+}
+
+/**
+ * A comma list of ledger names (`public,testnet`). Anything else is dropped here
+ * and refused at boot by `identity-env.ts`, so a typo never silently serves less.
+ */
+function networkList(raw: string | undefined): StellarNetwork[] {
+  const names = (raw ?? '')
+    .split(',')
+    .map((s) => s.trim().toLowerCase())
+    .filter((s): s is StellarNetwork => s === 'public' || s === 'testnet');
+  return [...new Set(names)];
+}
+
+/**
+ * The ledgers a deployment serves: its own (`passphrase` + `horizonUrl`, when
+ * that is a named network) plus every one `listed`. Each other ledger's Horizon
+ * is `horizonFor(n)`.
+ */
+function ledgers(
+  passphrase: string,
+  horizonUrl: string,
+  listed: StellarNetwork[],
+  horizonFor: (n: StellarNetwork) => string,
+): Partial<
+  Record<StellarNetwork, { networkPassphrase: string; horizonUrl: string }>
+> {
+  const own = stellarNetworkOf(passphrase);
+  const out: Partial<
+    Record<StellarNetwork, { networkPassphrase: string; horizonUrl: string }>
+  > = {};
+  for (const n of own && !listed.includes(own) ? [own, ...listed] : listed) {
+    out[n] = {
+      networkPassphrase: NETWORK_PASSPHRASE[n],
+      horizonUrl: trimSlash(n === own ? horizonUrl : horizonFor(n)),
+    };
+  }
+  return out;
+}
+
+/** The recovery server's ledgers — see `AppConfig.recovery.networks`. */
+function recoveryLedgers() {
+  const networkPassphrase =
+    process.env.RECOVERY_NETWORK_PASSPHRASE?.trim() ||
+    NETWORK_PASSPHRASE_PUBLIC;
+  const horizonUrl = trimSlash(
+    process.env.RECOVERY_HORIZON_URL?.trim() || DEFAULT_HORIZON.public,
+  );
+  const networks = ledgers(
+    networkPassphrase,
+    horizonUrl,
+    networkList(process.env.RECOVERY_NETWORKS),
+    (n) =>
+      process.env[`RECOVERY_HORIZON_URL_${n.toUpperCase()}`]?.trim() ||
+      DEFAULT_HORIZON[n],
+  );
+  return { networkPassphrase, horizonUrl, networks };
+}
+
+/** The sponsor's ledgers — see `AppConfig.walletAuth.sponsor`. */
+function sponsorLedgers() {
+  const networkPassphrase =
+    process.env.WALLET_RECOVERY_SPONSOR_NETWORK_PASSPHRASE?.trim() ||
+    NETWORK_PASSPHRASE[stellarNetwork()];
+  const horizonUrl = trimSlash(
+    process.env.WALLET_RECOVERY_SPONSOR_HORIZON_URL?.trim() ||
+      operatorHorizon()[stellarNetwork()],
+  );
+  const networks = ledgers(
+    networkPassphrase,
+    horizonUrl,
+    networkList(process.env.WALLET_RECOVERY_SPONSOR_NETWORKS),
+    (n) => operatorHorizon()[n],
+  );
+  return { networkPassphrase, horizonUrl, networks };
+}
+
+/** The Horizon each ledger's signers are read from for the wallet sign-in. */
+function signersHorizons(): Record<StellarNetwork, string> {
+  const horizons = operatorHorizon();
+  const override = process.env.WALLET_AUTH_SIGNERS_HORIZON_URL?.trim();
+  if (override) horizons[stellarNetwork()] = override;
+  return {
+    public: trimSlash(horizons.public),
+    testnet: trimSlash(horizons.testnet),
   };
 }
 
@@ -826,23 +943,17 @@ export default (): AppConfig => ({
     },
     // Each entry was checked at boot by `identity-env.ts`.
     returnUrls: parseReturnUrls(process.env.WALLET_AUTH_RETURN_URLS),
-    // Both default to `STELLAR_NETWORK`'s ledger: a signer read from another
-    // network than the account's is a 404, and every recovered wallet's sign-in
-    // fails with `wallet_signature_invalid`. Never both networks — a key added on
-    // the other ledger would then sign for this one.
-    signersHorizonUrl: (
-      process.env.WALLET_AUTH_SIGNERS_HORIZON_URL?.trim() ||
-      operatorHorizon()[stellarNetwork()]
-    ).replace(/\/+$/, ''),
+    // One Horizon per ledger, and the request picks which ledger — never a URL.
+    // A re-key lands on ONE ledger, so a recovered wallet's key signs for its
+    // account there and nowhere else; reading only `STELLAR_NETWORK`'s ledger
+    // failed every wallet recovered on the other one with
+    // `wallet_signature_invalid`. What the request cannot do is make a key count
+    // on a ledger where it is not a signer: each check reads ONE ledger.
+    signersHorizonUrls: signersHorizons(),
+    signersNetwork: stellarNetwork(),
     sponsor: {
       secret: process.env.WALLET_RECOVERY_SPONSOR_SECRET?.trim() ?? '',
-      networkPassphrase:
-        process.env.WALLET_RECOVERY_SPONSOR_NETWORK_PASSPHRASE?.trim() ||
-        NETWORK_PASSPHRASE[stellarNetwork()],
-      horizonUrl: (
-        process.env.WALLET_RECOVERY_SPONSOR_HORIZON_URL?.trim() ||
-        operatorHorizon()[stellarNetwork()]
-      ).replace(/\/+$/, ''),
+      ...sponsorLedgers(),
     },
     timeoutMs: parseInt(
       process.env.WALLET_AUTH_TIMEOUT_MS ??
@@ -871,12 +982,7 @@ export default (): AppConfig => ({
       .trim()
       .replace(/\/+$/, ''),
     homeDomain: process.env.RECOVERY_HOME_DOMAIN?.trim() ?? '',
-    networkPassphrase:
-      process.env.RECOVERY_NETWORK_PASSPHRASE?.trim() ||
-      NETWORK_PASSPHRASE_PUBLIC,
-    horizonUrl: (
-      process.env.RECOVERY_HORIZON_URL?.trim() || DEFAULT_HORIZON.public
-    ).replace(/\/+$/, ''),
+    ...recoveryLedgers(),
     signerMaster: process.env.RECOVERY_SIGNER_MASTER?.trim() ?? '',
     sep10SigningSecret: process.env.RECOVERY_SEP10_SIGNING_SECRET?.trim() ?? '',
     jwtSecret: process.env.RECOVERY_JWT_SECRET?.trim() ?? '',

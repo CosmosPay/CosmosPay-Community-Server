@@ -96,6 +96,32 @@ describe('actorFromToken', () => {
       actorFromToken(r, issueIdentityToken(b, 'ada@example.com')),
     ).toBeNull();
   });
+
+  /* Control of G… on one ledger is not control of G… on the other: a re-key
+     lands on one, and the key it adds is a stranger to the other. */
+  it('reads a SEP-10 token only on the ledger it was issued for', () => {
+    const mainnet: RecoveryRules = {
+      ...r,
+      sep10: { ...r.sep10, networkPassphrase: Networks.PUBLIC },
+    };
+    expect(actorFromToken(mainnet, issueSep10Token(r, account))).toBeNull();
+    expect(actorFromToken(r, issueSep10Token(mainnet, account))).toBeNull();
+    expect(actorFromToken(mainnet, issueSep10Token(mainnet, account))).toEqual({
+      kind: 'address',
+      address: account,
+    });
+  });
+
+  /* An inbox is the same inbox on both: one proof lists what it recovers anywhere. */
+  it('reads an identity token on every ledger', () => {
+    const mainnet: RecoveryRules = {
+      ...r,
+      sep10: { ...r.sep10, networkPassphrase: Networks.PUBLIC },
+    };
+    expect(
+      actorFromToken(mainnet, issueIdentityToken(r, 'ada@example.com')),
+    ).toEqual({ kind: 'identity', type: 'email', value: 'ada@example.com' });
+  });
 });
 
 describe('mayAct / listWhere', () => {
@@ -131,6 +157,7 @@ describe('mayAct / listWhere', () => {
   it('combines the cursor with the scope rather than merging it', () => {
     const where = listWhere(
       'a',
+      'testnet',
       { kind: 'identity', type: 'email', value: 'ada@example.com' },
       address,
     );
@@ -138,6 +165,7 @@ describe('mayAct / listWhere', () => {
       AND: [
         {
           role: 'a',
+          network: 'testnet',
           methods: { some: { type: 'email', value: 'ada@example.com' } },
         },
         { address: { gt: address } },

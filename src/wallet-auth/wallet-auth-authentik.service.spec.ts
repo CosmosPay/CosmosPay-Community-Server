@@ -58,7 +58,11 @@ const SETTINGS = {
   github: { clientId: '', clientSecret: '' },
   oidc: OIDC,
   returnUrls: [] as string[],
-  signersHorizonUrl: 'https://horizon.example.com',
+  signersHorizonUrls: {
+    testnet: 'https://horizon.example.com',
+    public: 'https://horizon-public.example.com',
+  },
+  signersNetwork: 'testnet' as const,
   sponsor: {
     secret: '',
     networkPassphrase: TESTNET,
@@ -562,6 +566,52 @@ describe('WalletAuthService — Authentik and the recovery identity', () => {
     expect((global.fetch as jest.Mock).mock.calls[0][0]).toBe(
       `https://horizon.example.com/accounts/${ADDRESS}`,
     );
+  });
+
+  /* A re-key lands on ONE ledger: the wallet names it, and only that ledger's
+     signer list — read from the operator's Horizon for it — decides. */
+  it('reads the signers of the ledger the finish names', async () => {
+    const newKey = Keypair.random();
+    const { service, prisma } = makeService();
+    prisma.walletAccount.findUnique.mockResolvedValue(null);
+    prisma.walletAccount.upsert.mockResolvedValue({ id: 'acc_1' });
+    global.fetch = jest.fn().mockImplementation((url: string) =>
+      Promise.resolve(
+        answer(
+          url.startsWith('https://horizon-public.example.com/accounts/')
+            ? {
+                signers: [
+                  { key: ADDRESS, weight: 0, type: 'ed25519_public_key' },
+                  {
+                    key: newKey.publicKey(),
+                    weight: 10,
+                    type: 'ed25519_public_key',
+                  },
+                ],
+                thresholds: { med_threshold: 10, high_threshold: 10 },
+              }
+            : url.includes('/accounts/')
+              ? { signers: [{ key: ADDRESS, weight: 10 }] }
+              : { organizationId: 'org_1', keys: {} },
+        ),
+      ),
+    );
+    const body = {
+      stellarAddress: ADDRESS,
+      signedAt: SIGNED_AT,
+      signature: sign(newKey, finishMessage(EMAIL, ADDRESS, SIGNED_AT)),
+    };
+
+    // On the default ledger (testnet here) the new key is nobody.
+    await expect(service.finish(session(), body)).rejects.toMatchObject({
+      code: ApiErrorCode.WalletSignatureInvalid,
+    });
+    // On the ledger it was re-keyed on, it signs for the account.
+    const result = await service.finish(session(), {
+      ...body,
+      network: 'public',
+    });
+    expect(result.status).toBe('ready');
   });
 
   it('refuses a finish signed by a half-weight recovery signer', async () => {
