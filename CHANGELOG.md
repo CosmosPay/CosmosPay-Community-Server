@@ -2,6 +2,64 @@
 
 All notable changes to the Cosmos Pay Community Server are documented here.
 Generated from [Conventional Commits](https://www.conventionalcommits.org) by [git-cliff](https://git-cliff.org).
+## [1.5.0] - 2026-10-04
+
+### Features
+- Implement plugin architecture with controller, module, and SDK (9f0a323)
+- Implement plugin sandboxing with isolated-vm for enhanced security (09ebd25)
+- Implement Defindex module, service, and DTOs (ee8e0a5)
+- Enhance multi-chain support with address validation and signature handling (a28e0f0)
+- Add EVM deposit address handling and forwarding logic (2e4edca)
+- Implement public key retrieval endpoint with caching (42cc2ec)
+- Remove ConsoleOnlyGuard implementation and tests (bde1801)
+- Implement alias recovery email functionality (1af3929)
+- Implement at-rest encryption for wallet backups using AES-256-GCM (1a516d7)
+- Add Solana and Monad swap venues with comprehensive tests (4d27fd2)
+- Add endpoints and functionality for chain swaps and cross-chain swaps in admin service (0d1f22d)
+- Implement recovery shares functionality (9d7bfe8)
+- Enable running multiple local instances with shared configuration (2da2a41)
+- Support multiple ledgers in recovery service (c2c369a)
+
+### Dependencies
+- Apply Dependabot minor-and-patch bumps and patch fast-uri (95eadcb)
+
+## [1.4.0] - 2026-09-27
+
+### Features
+- Add DeFindex gateway API (d5559ea)
+- Add Swagger tests and enhance OpenAPI documentation (68cdd89)
+- Add AGENTS.md with repository conventions and guidelines (afb37ec)
+- Serve the wallet's own sign-in from the community server (3abb392)
+- Add support for Authentik as an OIDC provider (c47422a)
+- Implement SEP-30 security scheme for account routes in OpenAPI (0811412)
+- Handle unverified emails in Authentik sign-in flow (c9490ad)
+- Implement max_age for Authentik sign-in flow to enhance security (8c055bc)
+- Implement v3 backup box structure supporting password and passkey slots (d446d02)
+- Implement return URL handling for wallet authentication (0424ad2)
+
+### Bug Fixes
+- Make payment execution idempotent (a459067)
+- Reject expired quotes (c4ab364)
+- Match the wire contract the wallet actually sends (ae3ec36)
+- Make dev CI green again (lint + wallet-auth e2e) (f4bf2a3)
+- Fit quote expiry into dev's error contract (c4dad32)
+- Return the execution key from the quote check (11d19c8)
+- Serve the routes at /v1/defindex and pin the wiring (be576b2)
+
+### Miscellaneous
+- Bump dotenv from 17.4.2 to 18.0.3 (b97c5d8)
+- Bump the minor-and-patch group with 15 updates (cb795ec)
+- Sync package-lock with dev (d7ac10c)
+
+### Refactor
+- Send the display name to the provisioner (813b069)
+- Keep the console legs inside the wallet namespace (1a93099)
+- Remove PollarWalletsService and related e2e tests (c7b80cc)
+- Remove Pollar references and related code (e68b6ed)
+
+### Dependencies
+- Update dependencies and actions to latest (7539e51)
+
 ## [1.3.1] - 2026-09-20
 
 ### Miscellaneous
