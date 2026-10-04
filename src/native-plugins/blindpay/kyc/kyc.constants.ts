@@ -22,6 +22,40 @@ export const RECEIVER_TENANT_EDITABLE_FIELDS: readonly string[] = [
   'image_url',
 ];
 
+// --- Receiver field formats -----------------------------------------------
+//
+// `CreateReceiverDto` used to take these as any string. A receiver is created
+// locally and only reaches BlindPay once its terms are accepted, so a value the
+// provider refuses was stored, reviewed and approved first — and failed at the
+// very last step, after a person had already signed off on it.
+
+/**
+ * ISO 3166-1 alpha-2, upper case: the spelling BlindPay documents and the one
+ * every client of this service sends. `IsISO31661Alpha2` alone accepts `us`,
+ * which would be stored and forwarded as typed.
+ */
+export const COUNTRY_CODE_RE = /^[A-Z]{2}$/;
+
+/**
+ * An ISO 8601 date-time with an explicit offset (`1985-04-12T00:00:00.000Z`).
+ * BlindPay rejects a date-only value, so `1985-04-12` is refused here instead
+ * of at enable time; `IsISO8601({ strict: true })` next to it rejects a
+ * calendar date that does not exist.
+ */
+export const ISO_DATETIME_RE =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,9})?)?(Z|[+-]\d{2}:\d{2})$/;
+
+/**
+ * Schemes a business `website` may use. Both, unlike `IsRedirectUrl`'s
+ * https-only rule: that one guards a URL this service sends a user to, while a
+ * website is a fact about the business forwarded to the provider for review,
+ * and refusing a plain-http site would refuse a real business, not an attack.
+ */
+export const RECEIVER_WEBSITE_PROTOCOLS = ['http', 'https'];
+
+/** Longest `website` accepted — a URL, not a document. */
+export const RECEIVER_WEBSITE_MAX_LENGTH = 2048;
+
 // --- Document upload -------------------------------------------------------
 //
 // Multer buffers every part of an upload in memory, and its defaults bound

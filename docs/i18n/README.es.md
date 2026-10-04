@@ -1705,6 +1705,12 @@ misma lista `PLUGINS_ENABLED` que los plugins aislados.
 - **Desplegar juntos el servicio y la plataforma para desarrolladores.** Ahora es la consola la que genera el marcador. Una consola antigua contra este servicio recibe `403` en cada llamada de administración; una consola nueva contra un servicio anterior sigue funcionando, porque el servicio anterior admite cualquier valor salvo `0`, `false`, `no` y `off`. Si no pueden salir a la vez, desplegar primero la plataforma para desarrolladores.
 - **Ninguna variable de entorno nueva.** El MAC se firma con `APISIX_GATEWAY_SECRET`, que el servicio y la consola ya comparten.
 
+### Campos de receptor y consultas de listas de admin más estrictos
+
+- **`POST /v1/kyc/receivers` y `PUT /v1/kyc/receivers/{id}` rechazan con `400` los campos de identidad mal formados.** `country` e `id_doc_country` (en el nivel superior y en `owners[]`) deben ser códigos ISO 3166-1 alfa-2 en mayúsculas (`US`, no `us` ni `USA`); `date_of_birth` (en el nivel superior y en `owners[]`) y `formation_date` deben ser fechas-hora ISO 8601 con desfase (`1985-04-12T00:00:00.000Z`, no `1985-04-12`); `owners[].ownership_percentage` debe ser un número de 0 a 100; `website` debe ser una URL `http`/`https` absoluta sin credenciales. Antes cada uno se guardaba tal cual y fallaba en BlindPay solo al habilitar el receptor, después de la revisión.
+- **Las consultas de las listas de `/v1/admin` se validan.** Un `status` desconocido para esa lista, un `take` fuera de 1–200, un `skip` negativo o un parámetro que la ruta no acepta ahora es `400`; un `status` inválido llegaba antes a la base de datos y volvía como `500`. Los valores por defecto no cambian (`take=50`, `skip=0`).
+- **Las lecturas de admin de receptores, payins y payouts devuelven una lista explícita de campos.** Los campos son los que se devolvían antes; una columna añadida más adelante a esas tablas ya no se devuelve hasta que se incluya en la lista.
+
 ### Inicio de sesión de la wallet: los firmantes de una wallet recuperada siguen a `STELLAR_NETWORK`
 
 - **`WALLET_AUTH_SIGNERS_HORIZON_URL` ahora usa por defecto el Horizon de `STELLAR_NETWORK`** (`STELLAR_HORIZON_URL_PUBLIC` / `STELLAR_HORIZON_URL_TESTNET`, o el de SDF), y no siempre el de la red pública. Se consulta cuando una wallet recuperada por SEP-30 firma `POST /v1/wallet/auth/finish` con la clave que reemplazó a su clave maestra. En un despliegue en testnet la consulta iba a mainnet, no encontraba la cuenta, y el inicio de sesión de toda wallet recuperada respondía `400 wallet_signature_invalid`.

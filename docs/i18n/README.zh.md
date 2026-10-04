@@ -1173,6 +1173,12 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
 - **本服务与开发者平台一起部署。** 标记现在由控制台生成。旧控制台调用本服务时，每个管理调用都会得到 `403`；新控制台调用旧服务仍然可用，因为旧服务接受除 `0`、`false`、`no` 和 `off` 之外的任何值。如果两者无法同时上线，请先部署开发者平台。
 - **没有新的环境变量。** MAC 以 `APISIX_GATEWAY_SECRET` 为键，本服务和控制台已经共享该密钥。
 
+### 收款人字段与管理列表查询更严格
+
+- **`POST /v1/kyc/receivers` 与 `PUT /v1/kyc/receivers/{id}` 以 `400` 拒绝格式错误的身份字段。** `country` 与 `id_doc_country`（顶层及 `owners[]` 中）必须是大写的 ISO 3166-1 alpha-2 代码（`US`，而非 `us` 或 `USA`）；`date_of_birth`（顶层及 `owners[]` 中）与 `formation_date` 必须是带时区偏移的 ISO 8601 日期时间（`1985-04-12T00:00:00.000Z`，而非 `1985-04-12`）；`owners[].ownership_percentage` 必须是 0 到 100 之间的数字；`website` 必须是不含凭据的绝对 `http`/`https` URL。此前这些值按原样保存，直到审核之后启用收款人时才在 BlindPay 处失败。
+- **`/v1/admin` 列表查询会被校验。** 该列表未知的 `status`、超出 1–200 的 `take`、负数 `skip` 或路由不接受的参数现在返回 `400`；此前无效的 `status` 会到达数据库并以 `500` 返回。默认值不变（`take=50`、`skip=0`）。
+- **管理端对收款人、payin 与 payout 的读取返回显式字段列表。** 字段与此前返回的相同；之后加入这些表的列在被列出之前不会返回。
+
 ### 钱包登录：已恢复钱包的签名者跟随 `STELLAR_NETWORK`
 
 - **`WALLET_AUTH_SIGNERS_HORIZON_URL` 现在默认使用 `STELLAR_NETWORK` 对应的 Horizon**（`STELLAR_HORIZON_URL_PUBLIC` / `STELLAR_HORIZON_URL_TESTNET`，否则使用 SDF 的），而不再总是公共网络的。当通过 SEP-30 恢复的钱包用替换其主密钥的那把密钥签署 `POST /v1/wallet/auth/finish` 时会读取它。在 testnet 部署上，查询原本发往主网，找不到账户，于是每个已恢复钱包的登录都返回 `400 wallet_signature_invalid`。

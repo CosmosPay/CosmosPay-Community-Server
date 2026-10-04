@@ -59,3 +59,17 @@ export const CONSOLE_MARKER_LABEL = 'cosmos-admin-console:v1:';
  * being a standing admin credential.
  */
 export const CONSOLE_MARKER_MAX_SKEW_S = 300;
+
+/**
+ * Page size of an admin list when the console names none. Larger than the
+ * tenant lists' 20 because the console renders one operator-facing table per
+ * resource rather than a paged feed.
+ */
+export const ADMIN_DEFAULT_PAGE_SIZE = 50;
+
+/**
+ * The largest page an admin list serves. The console asks for exactly this
+ * many rows on every global view, so lowering it is a breaking change for it;
+ * a request above it is a 400, not a silent clamp.
+ */
+export const ADMIN_MAX_PAGE_SIZE = 200;

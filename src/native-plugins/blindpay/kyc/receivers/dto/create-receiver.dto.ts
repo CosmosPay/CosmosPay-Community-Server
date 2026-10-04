@@ -1,3 +1,4 @@
+import { applyDecorators } from '@nestjs/common';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
@@ -5,9 +6,16 @@ import {
   IsBoolean,
   IsEmail,
   IsIn,
+  IsISO31661Alpha2,
+  IsISO8601,
+  IsNumber,
   IsOptional,
   IsString,
+  IsUrl,
+  Matches,
+  Max,
   MaxLength,
+  Min,
   ValidateNested,
 } from 'class-validator';
 import {
@@ -16,6 +24,30 @@ import {
   type KycType,
   type ReceiverType,
 } from '@/native-plugins/blindpay/blindpay.constants';
+import {
+  COUNTRY_CODE_RE,
+  ISO_DATETIME_RE,
+  RECEIVER_WEBSITE_MAX_LENGTH,
+  RECEIVER_WEBSITE_PROTOCOLS,
+} from '@/native-plugins/blindpay/kyc/kyc.constants';
+
+/** An ISO 3166-1 alpha-2 code that exists, spelled upper case. */
+const IsCountryCode = () =>
+  applyDecorators(
+    IsISO31661Alpha2(),
+    Matches(COUNTRY_CODE_RE, {
+      message: '$property must be an upper-case ISO 3166-1 alpha-2 code',
+    }),
+  );
+
+/** A real calendar date-time with an offset — never a bare date. */
+const IsIsoDateTime = () =>
+  applyDecorators(
+    IsISO8601({ strict: true, strictSeparator: true }),
+    Matches(ISO_DATETIME_RE, {
+      message: '$property must be an ISO 8601 date-time with an offset',
+    }),
+  );
 
 /**
  * Beneficial owner / controlling person for a business (KYB) receiver.
@@ -36,9 +68,14 @@ export class ReceiverOwnerDto {
   @IsString()
   last_name?: string;
 
-  @ApiPropertyOptional({ example: '1985-04-12T00:00:00.000Z' })
+  @ApiPropertyOptional({
+    example: '1985-04-12T00:00:00.000Z',
+    format: 'date-time',
+    description:
+      'ISO 8601 date-time with an offset (BlindPay rejects date-only values).',
+  })
   @IsOptional()
-  @IsString()
+  @IsIsoDateTime()
   date_of_birth?: string;
 
   @ApiPropertyOptional({ example: '123-45-6789' })
@@ -46,9 +83,13 @@ export class ReceiverOwnerDto {
   @IsString()
   tax_id?: string;
 
-  @ApiPropertyOptional({ example: 'US' })
+  @ApiPropertyOptional({
+    example: 'US',
+    pattern: '^[A-Z]{2}$',
+    description: 'ISO 3166-1 alpha-2 country code, upper case',
+  })
   @IsOptional()
-  @IsString()
+  @IsCountryCode()
   country?: string;
 
   @ApiPropertyOptional({ example: '123 Main St' })
@@ -76,8 +117,16 @@ export class ReceiverOwnerDto {
   @IsString()
   postal_code?: string;
 
-  @ApiPropertyOptional({ example: 25.5, description: 'Ownership percentage' })
+  @ApiPropertyOptional({
+    example: 25.5,
+    minimum: 0,
+    maximum: 100,
+    description: 'Ownership percentage',
+  })
   @IsOptional()
+  @IsNumber({ allowNaN: false, allowInfinity: false })
+  @Min(0)
+  @Max(100)
   ownership_percentage?: number;
 
   @ApiPropertyOptional({ example: 'Director' })
@@ -85,9 +134,13 @@ export class ReceiverOwnerDto {
   @IsString()
   title?: string;
 
-  @ApiPropertyOptional({ example: 'US' })
+  @ApiPropertyOptional({
+    example: 'US',
+    pattern: '^[A-Z]{2}$',
+    description: 'ISO 3166-1 alpha-2 country code, upper case',
+  })
   @IsOptional()
-  @IsString()
+  @IsCountryCode()
   id_doc_country?: string;
 
   @ApiPropertyOptional({ example: 'PASSPORT' })
@@ -143,9 +196,10 @@ export class CreateReceiverDto {
 
   @ApiProperty({
     example: 'US',
-    description: 'ISO 3166-1 alpha-2 country code',
+    pattern: '^[A-Z]{2}$',
+    description: 'ISO 3166-1 alpha-2 country code, upper case',
   })
-  @IsString()
+  @IsCountryCode()
   country!: string;
 
   // --- Individual ---
@@ -161,10 +215,12 @@ export class CreateReceiverDto {
 
   @ApiPropertyOptional({
     example: '1985-04-12T00:00:00.000Z',
-    description: 'ISO 8601 datetime (BlindPay rejects date-only values).',
+    format: 'date-time',
+    description:
+      'ISO 8601 date-time with an offset (BlindPay rejects date-only values).',
   })
   @IsOptional()
-  @IsString()
+  @IsIsoDateTime()
   date_of_birth?: string;
 
   @ApiPropertyOptional({ example: '123-45-6789' })
@@ -177,9 +233,13 @@ export class CreateReceiverDto {
   @IsString()
   occupation?: string;
 
-  @ApiPropertyOptional({ example: 'US' })
+  @ApiPropertyOptional({
+    example: 'US',
+    pattern: '^[A-Z]{2}$',
+    description: 'ISO 3166-1 alpha-2 country code, upper case',
+  })
   @IsOptional()
-  @IsString()
+  @IsCountryCode()
   id_doc_country?: string;
 
   @ApiPropertyOptional({ example: 'PASSPORT' })
@@ -287,9 +347,14 @@ export class CreateReceiverDto {
   @IsString()
   business_description?: string;
 
-  @ApiPropertyOptional({ example: '2015-01-01T00:00:00.000Z' })
+  @ApiPropertyOptional({
+    example: '2015-01-01T00:00:00.000Z',
+    format: 'date-time',
+    description:
+      'ISO 8601 date-time with an offset (BlindPay rejects date-only values).',
+  })
   @IsOptional()
-  @IsString()
+  @IsIsoDateTime()
   formation_date?: string;
 
   @ApiPropertyOptional({ example: '1000000_4999999' })
@@ -302,9 +367,19 @@ export class CreateReceiverDto {
   @IsBoolean()
   publicly_traded?: boolean;
 
-  @ApiPropertyOptional({ example: 'https://acme.com' })
+  @ApiPropertyOptional({
+    example: 'https://acme.com',
+    description: 'Absolute http(s) URL, without credentials.',
+    maxLength: RECEIVER_WEBSITE_MAX_LENGTH,
+  })
   @IsOptional()
-  @IsString()
+  @IsUrl({
+    protocols: RECEIVER_WEBSITE_PROTOCOLS,
+    require_protocol: true,
+    require_tld: true,
+    disallow_auth: true,
+  })
+  @MaxLength(RECEIVER_WEBSITE_MAX_LENGTH)
   website?: string;
 
   @ApiPropertyOptional()

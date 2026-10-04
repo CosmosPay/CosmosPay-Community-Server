@@ -18268,7 +18268,9 @@
           },
           "date_of_birth": {
             "type": "string",
-            "example": "1985-04-12T00:00:00.000Z"
+            "example": "1985-04-12T00:00:00.000Z",
+            "format": "date-time",
+            "description": "ISO 8601 date-time with an offset (BlindPay rejects date-only values)."
           },
           "tax_id": {
             "type": "string",
@@ -18276,7 +18278,9 @@
           },
           "country": {
             "type": "string",
-            "example": "US"
+            "example": "US",
+            "pattern": "^[A-Z]{2}$",
+            "description": "ISO 3166-1 alpha-2 country code, upper case"
           },
           "address_line_1": {
             "type": "string",
@@ -18300,6 +18304,8 @@
           "ownership_percentage": {
             "type": "number",
             "example": 25.5,
+            "minimum": 0,
+            "maximum": 100,
             "description": "Ownership percentage"
           },
           "title": {
@@ -18308,7 +18314,9 @@
           },
           "id_doc_country": {
             "type": "string",
-            "example": "US"
+            "example": "US",
+            "pattern": "^[A-Z]{2}$",
+            "description": "ISO 3166-1 alpha-2 country code, upper case"
           },
           "id_doc_type": {
             "type": "string",
@@ -18362,7 +18370,8 @@
           "country": {
             "type": "string",
             "example": "US",
-            "description": "ISO 3166-1 alpha-2 country code"
+            "pattern": "^[A-Z]{2}$",
+            "description": "ISO 3166-1 alpha-2 country code, upper case"
           },
           "first_name": {
             "type": "string",
@@ -18375,7 +18384,8 @@
           "date_of_birth": {
             "type": "string",
             "example": "1985-04-12T00:00:00.000Z",
-            "description": "ISO 8601 datetime (BlindPay rejects date-only values)."
+            "format": "date-time",
+            "description": "ISO 8601 date-time with an offset (BlindPay rejects date-only values)."
           },
           "tax_id": {
             "type": "string",
@@ -18387,7 +18397,9 @@
           },
           "id_doc_country": {
             "type": "string",
-            "example": "US"
+            "example": "US",
+            "pattern": "^[A-Z]{2}$",
+            "description": "ISO 3166-1 alpha-2 country code, upper case"
           },
           "id_doc_type": {
             "type": "string",
@@ -18464,7 +18476,9 @@
           },
           "formation_date": {
             "type": "string",
-            "example": "2015-01-01T00:00:00.000Z"
+            "example": "2015-01-01T00:00:00.000Z",
+            "format": "date-time",
+            "description": "ISO 8601 date-time with an offset (BlindPay rejects date-only values)."
           },
           "estimated_annual_revenue": {
             "type": "string",
@@ -18476,7 +18490,9 @@
           },
           "website": {
             "type": "string",
-            "example": "https://acme.com"
+            "example": "https://acme.com",
+            "description": "Absolute http(s) URL, without credentials.",
+            "maxLength": 2048
           },
           "incorporation_doc_file": {
             "type": "string"
@@ -18785,7 +18801,8 @@
           "country": {
             "type": "string",
             "example": "US",
-            "description": "ISO 3166-1 alpha-2 country code"
+            "pattern": "^[A-Z]{2}$",
+            "description": "ISO 3166-1 alpha-2 country code, upper case"
           },
           "first_name": {
             "type": "string",
@@ -18798,7 +18815,8 @@
           "date_of_birth": {
             "type": "string",
             "example": "1985-04-12T00:00:00.000Z",
-            "description": "ISO 8601 datetime (BlindPay rejects date-only values)."
+            "format": "date-time",
+            "description": "ISO 8601 date-time with an offset (BlindPay rejects date-only values)."
           },
           "tax_id": {
             "type": "string",
@@ -18810,7 +18828,9 @@
           },
           "id_doc_country": {
             "type": "string",
-            "example": "US"
+            "example": "US",
+            "pattern": "^[A-Z]{2}$",
+            "description": "ISO 3166-1 alpha-2 country code, upper case"
           },
           "id_doc_type": {
             "type": "string",
@@ -18887,7 +18907,9 @@
           },
           "formation_date": {
             "type": "string",
-            "example": "2015-01-01T00:00:00.000Z"
+            "example": "2015-01-01T00:00:00.000Z",
+            "format": "date-time",
+            "description": "ISO 8601 date-time with an offset (BlindPay rejects date-only values)."
           },
           "estimated_annual_revenue": {
             "type": "string",
@@ -18899,7 +18921,9 @@
           },
           "website": {
             "type": "string",
-            "example": "https://acme.com"
+            "example": "https://acme.com",
+            "description": "Absolute http(s) URL, without credentials.",
+            "maxLength": 2048
           },
           "incorporation_doc_file": {
             "type": "string"

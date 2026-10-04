@@ -1636,6 +1636,12 @@ seal होती हैं और कभी लौटाई नहीं जा
 - **सर्विस और developer platform को एक साथ deploy करें।** marker अब कंसोल बनाता है। इस सर्विस के सामने पुराना कंसोल हर admin कॉल पर `403` पाता है; पुरानी सर्विस के सामने नया कंसोल काम करता रहता है, क्योंकि पुरानी सर्विस `0`, `false`, `no` और `off` के अलावा कोई भी मान स्वीकार करती है। अगर दोनों एक साथ नहीं जा सकते, तो पहले developer platform deploy करें।
 - **कोई नया environment variable नहीं।** MAC `APISIX_GATEWAY_SECRET` से keyed है, जिसे सर्विस और कंसोल पहले से साझा करते हैं।
 
+### Receiver फ़ील्ड और admin सूची queries अब अधिक सख़्त
+
+- **`POST /v1/kyc/receivers` और `PUT /v1/kyc/receivers/{id}` ग़लत रूप वाले पहचान फ़ील्ड को `400` से अस्वीकार करते हैं।** `country` और `id_doc_country` (शीर्ष स्तर पर और `owners[]` में) बड़े अक्षरों में ISO 3166-1 alpha-2 कोड होने चाहिए (`US`, `us` या `USA` नहीं); `date_of_birth` (शीर्ष स्तर पर और `owners[]` में) और `formation_date` offset वाले ISO 8601 date-time होने चाहिए (`1985-04-12T00:00:00.000Z`, `1985-04-12` नहीं); `owners[].ownership_percentage` 0 से 100 के बीच की संख्या होनी चाहिए; `website` credentials के बिना एक absolute `http`/`https` URL होना चाहिए। पहले इनमें से हर एक जैसा लिखा गया वैसा ही सहेजा जाता था और समीक्षा के बाद, receiver को enable करते समय ही BlindPay पर विफल होता था।
+- **`/v1/admin` सूची queries अब validate होती हैं।** उस सूची के लिए अज्ञात `status`, 1–200 से बाहर `take`, ऋणात्मक `skip` या ऐसा parameter जिसे route स्वीकार नहीं करता, अब `400` है; पहले अमान्य `status` database तक पहुँचकर `500` के रूप में लौटता था। Defaults नहीं बदले (`take=50`, `skip=0`)।
+- **Receivers, payins और payouts के admin reads अब फ़ील्ड की एक स्पष्ट सूची लौटाते हैं।** फ़ील्ड वही हैं जो पहले लौटते थे; इन tables में बाद में जोड़ा गया column तब तक नहीं लौटेगा जब तक उसे सूची में न जोड़ा जाए।
+
 ### Wallet साइन-इन: रिकवर किए गए wallet के signers अब `STELLAR_NETWORK` का पालन करते हैं
 
 - **`WALLET_AUTH_SIGNERS_HORIZON_URL` अब डिफ़ॉल्ट रूप से `STELLAR_NETWORK` के Horizon का उपयोग करता है** (`STELLAR_HORIZON_URL_PUBLIC` / `STELLAR_HORIZON_URL_TESTNET`, वरना SDF का), हमेशा पब्लिक नेटवर्क का नहीं। इसे तब पढ़ा जाता है जब SEP-30 से रिकवर किया गया wallet `POST /v1/wallet/auth/finish` को उस key से साइन करता है जिसने उसकी master key की जगह ली। testnet deployment पर यह lookup mainnet पर जाता था, खाता नहीं मिलता था, और हर रिकवर किए गए wallet का साइन-इन `400 wallet_signature_invalid` लौटाता था।
