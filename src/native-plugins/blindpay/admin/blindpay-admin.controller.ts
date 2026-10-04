@@ -88,14 +88,14 @@ export class BlindpayAdminController {
     @CurrentAdmin() actor: AdminPrincipal,
     @Param('id') id: string,
     @Body() dto: RequestTosDto,
-    @Headers('x-cosmos-internal') internal?: string,
     @Headers('x-cosmos-tos-cooldown-ms') cooldown?: string,
   ) {
+    // Behind AdminGuard, so the console marker has already verified.
     return this.admin.requestReceiverTos(
       id,
       dto,
       actor,
-      resolveTosCooldownMs(internal, cooldown),
+      resolveTosCooldownMs(true, cooldown),
     );
   }
 }
