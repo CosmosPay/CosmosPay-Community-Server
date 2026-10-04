@@ -304,7 +304,11 @@ export class LiquiditySubmitResultEntity {
     required: false,
     nullable: true,
     example: null,
-    description: 'Why submission failed, when `submitted` is false.',
+    description:
+      'Why submission failed, when `submitted` is false. With `status` ' +
+      'FAILED the ledger confirms the failure; with `status` SUBMITTED the ' +
+      'network refused this broadcast but the transaction may still be on ' +
+      'the ledger, and its outcome arrives as a terminal webhook.',
   })
   reason?: string;
 

@@ -8,7 +8,10 @@ import { EventEmitter2 } from 'eventemitter2';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import { SettlementObserverService } from '@/observer/settlement-observer.service';
 import { SETTLEMENT_MAX_RESUBMITS } from '@/stellar/stellar.constants';
-import { WEBHOOK_EVENT } from '@/webhooks/webhook-events';
+import {
+  WEBHOOK_EVENT,
+  terminalEventDedupKey,
+} from '@/webhooks/webhook-events';
 import { WebhookTerminalEmitter } from '@/webhooks/webhook-terminal-emitter.service';
 import { SWAP_PUBLIC_SELECT, SwapsService } from '@/swaps/swaps.service';
 
@@ -206,14 +209,18 @@ function createPrisma(seed: any[] = []) {
         return { count: matched.length };
       }),
     },
-    // Stands in for the observer's ranking query, which is SQL a fake cannot
-    // run. These tests are about what happens to the rows it deals, so it
-    // deals every in-flight one.
-    $queryRaw: jest.fn(async () =>
-      rows
-        .filter((r) => ['PENDING', 'SUBMITTED'].includes(r.status))
-        .map((r) => ({ id: r.id })),
-    ),
+    // Stands in for the observer's ranking queries, which are SQL a fake
+    // cannot run. These tests are about what happens to the rows they deal, so
+    // the in-flight query deals every in-flight row and the FAILED re-check
+    // deals every FAILED one.
+    $queryRaw: jest.fn(async (sql: readonly string[]) => {
+      const statuses = sql.join('?').includes("'FAILED'")
+        ? ['FAILED']
+        : ['PENDING', 'SUBMITTED'];
+      return rows
+        .filter((r) => statuses.includes(r.status))
+        .map((r) => ({ id: r.id }));
+    }),
     webhookEmittedEvent: uniqueEmittedEvents(),
     // The emitter claims the dedup row and persists deliveries in one
     // interactive transaction; the fake just runs the callback against itself.
@@ -515,9 +522,12 @@ describe('SwapsService.submit vs observer (issue #29 double terminal event)', ()
     expect(row.status).toBe('FAILED');
     expect(terminalEmits(events, 'SWAP_FAILED')).toHaveLength(1);
 
+    // A bad signature is decided after the sequence check, so with the ledger
+    // agreeing the transaction is not there, it is a rejection proper.
     stellar.submitTransaction.mockRejectedValue(
       horizonReject({ transaction: 'tx_bad_auth' }),
     );
+    stellar.txCall.mockRejectedValue({ response: { status: 404 } });
     const outcome = await service.submit(consumer, row.id, 'signed-xdr');
 
     expect(outcome.status).toBe('FAILED');
@@ -534,6 +544,7 @@ describe('SwapsService.submit vs observer (issue #29 double terminal event)', ()
     stellar.submitTransaction.mockRejectedValue(
       horizonReject({ transaction: 'tx_bad_auth' }),
     );
+    stellar.txCall.mockRejectedValue({ response: { status: 404 } });
 
     for (let attempt = 0; attempt <= SETTLEMENT_MAX_RESUBMITS; attempt++) {
       const outcome = await service.submit(consumer, row.id, 'signed-xdr');
@@ -572,6 +583,160 @@ describe('SwapsService.submit vs observer (issue #29 double terminal event)', ()
     expect(row.status).toBe('FAILED');
     expect(row.settlementEpoch).toBe(SETTLEMENT_MAX_RESUBMITS);
     expect(stellar.submitTransaction).not.toHaveBeenCalled();
+  });
+
+  describe('a rejected broadcast is checked against the ledger first', () => {
+    // The wallet can broadcast the envelope itself through the SEP-7 link, so
+    // by the time the merchant's submit reaches the relay the transaction may
+    // already be on-chain, and the re-submission comes back `tx_bad_seq`.
+    // Recording that FAILED was permanent: the observer swept only in-flight
+    // rows and never looked at the row again.
+
+    it('settles SUCCEEDED, once, when the wallet already broadcast it (tx_bad_seq)', async () => {
+      const row = swapRow({ status: 'PENDING' });
+      prisma.rows.push(row);
+      stellar.submitTransaction.mockRejectedValue(
+        horizonReject({ transaction: 'tx_bad_seq' }),
+      );
+      stellar.txCall.mockResolvedValue({ successful: true });
+
+      const outcome = await service.submit(consumer, row.id, 'signed-xdr');
+
+      expect(outcome).toMatchObject({
+        submitted: true,
+        status: 'SUCCEEDED',
+        txHash: TX_HASH,
+      });
+      expect(row.status).toBe('SUCCEEDED');
+      expect(terminalEmits(events, 'SWAP_FAILED')).toHaveLength(0);
+      expect(terminalEmits(events, 'SWAP_SUCCEEDED')).toHaveLength(1);
+
+      // The observer's next tick, in-flight sweep and FAILED re-check alike,
+      // announces nothing more.
+      await (observer as any).reconcile('swaps', 50);
+      await (observer as any).heal('swaps');
+      expect(terminalEmits(events, 'SWAP_SUCCEEDED')).toHaveLength(1);
+    });
+
+    it('records FAILED when the ledger shows the transaction failed on-chain', async () => {
+      const row = swapRow({ status: 'PENDING' });
+      prisma.rows.push(row);
+      stellar.submitTransaction.mockRejectedValue(
+        horizonReject({
+          transaction: 'tx_failed',
+          operations: ['op_under_dest_min'],
+        }),
+      );
+      stellar.txCall.mockResolvedValue({ successful: false });
+
+      const outcome = await service.submit(consumer, row.id, 'signed-xdr');
+
+      expect(outcome).toMatchObject({ submitted: false, status: 'FAILED' });
+      expect(row.status).toBe('FAILED');
+      expect(terminalEmits(events, 'SWAP_FAILED')).toHaveLength(1);
+    });
+
+    it('leaves it SUBMITTED on op_underfunded while Horizon answers 404, for the observer to settle', async () => {
+      // A failed application is on-chain by definition; a 404 a moment later
+      // is Horizon not having ingested it, not proof it is absent.
+      const row = swapRow({ status: 'PENDING' });
+      prisma.rows.push(row);
+      stellar.submitTransaction.mockRejectedValue(
+        horizonReject({
+          transaction: 'tx_failed',
+          operations: ['op_underfunded'],
+        }),
+      );
+      stellar.txCall.mockRejectedValue({ response: { status: 404 } });
+
+      const outcome = await service.submit(consumer, row.id, 'signed-xdr');
+
+      expect(outcome).toMatchObject({
+        submitted: false,
+        status: 'SUBMITTED',
+        resultCodes: ['tx_failed', 'op_underfunded'],
+      });
+      expect(outcome.swap.status).toBe('SUBMITTED');
+      expect(row.status).toBe('SUBMITTED');
+      expect(row.settlementEpoch).toBe(0);
+      expect(terminalEmits(events, 'SWAP_FAILED')).toHaveLength(0);
+
+      // Once Horizon has it, the observer records the failure, once.
+      stellar.txCall.mockResolvedValue({ successful: false });
+      await (observer as any).reconcile('swaps', 50);
+      expect(row.status).toBe('FAILED');
+      expect(terminalEmits(events, 'SWAP_FAILED')).toHaveLength(1);
+    });
+
+    it('leaves it SUBMITTED when the lookup itself fails', async () => {
+      const row = swapRow({ status: 'PENDING' });
+      prisma.rows.push(row);
+      stellar.submitTransaction.mockRejectedValue(
+        horizonReject({ transaction: 'tx_bad_auth' }),
+      );
+      stellar.txCall.mockRejectedValue({ response: { status: 503 } });
+
+      const outcome = await service.submit(consumer, row.id, 'signed-xdr');
+
+      expect(outcome).toMatchObject({ submitted: false, status: 'SUBMITTED' });
+      expect(row.status).toBe('SUBMITTED');
+      expect(terminalEmits(events, 'SWAP_FAILED')).toHaveLength(0);
+      expect(terminalEmits(events, 'SWAP_SUCCEEDED')).toHaveLength(0);
+    });
+  });
+
+  describe('the observer re-checks FAILED swaps', () => {
+    it('heals a FAILED swap whose transaction is on-chain, announcing SUCCEEDED once', async () => {
+      // Recorded FAILED by a relay that never asked the ledger.
+      const row = swapRow({ status: 'PENDING' });
+      prisma.rows.push(row);
+      await service.finalizeFailed(row.id, consumer.username);
+      expect(terminalEmits(events, 'SWAP_FAILED')).toHaveLength(1);
+      stellar.txCall.mockResolvedValue({ successful: true });
+
+      await (observer as any).heal('swaps');
+      await (observer as any).heal('swaps');
+      await (observer as any).reconcile('swaps', 50);
+
+      expect(row.status).toBe('SUCCEEDED');
+      expect(row.settlementEpoch).toBe(0);
+      // Delivered, not swallowed: the correction keeps the attempt's epoch,
+      // and the success key is one the failure never claimed.
+      const [[, success]] = terminalEmits(events, 'SWAP_SUCCEEDED');
+      expect(terminalEmits(events, 'SWAP_SUCCEEDED')).toHaveLength(1);
+      expect(success.data).toMatchObject({ id: row.id, status: 'SUCCEEDED' });
+      const keys = prisma.webhookEmittedEvent.create.mock.calls.map(
+        ([{ data }]: any) => data.dedupKey,
+      );
+      expect(keys).toEqual([
+        terminalEventDedupKey('SWAP_FAILED', row.id, 0),
+        terminalEventDedupKey('SWAP_SUCCEEDED', row.id, 0),
+      ]);
+    });
+
+    it('leaves a FAILED swap alone when the ledger agrees or cannot say', async () => {
+      const failedOnChain = swapRow({
+        id: 'swap_failed',
+        status: 'FAILED',
+        txHash: 'cd'.repeat(32),
+      });
+      const unknown = swapRow({
+        id: 'swap_unknown',
+        status: 'FAILED',
+        txHash: 'ef'.repeat(32),
+      });
+      prisma.rows.push(failedOnChain, unknown);
+      stellar.txCall
+        .mockResolvedValueOnce({ successful: false })
+        .mockRejectedValueOnce({ response: { status: 404 } });
+
+      await (observer as any).heal('swaps');
+
+      expect(failedOnChain.status).toBe('FAILED');
+      expect(unknown.status).toBe('FAILED');
+      expect(prisma.swap.updateMany).not.toHaveBeenCalled();
+      expect(events.emit).not.toHaveBeenCalled();
+    });
   });
 
   it('leaves a lapsed swap to the observer instead of broadcasting it', async () => {

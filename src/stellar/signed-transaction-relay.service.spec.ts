@@ -85,15 +85,30 @@ function horizonReject(codes: { transaction?: string; operations?: string[] }) {
   return err;
 }
 
-/** Stellar whose broadcast confirms unless a test says otherwise. */
+/** Horizon's answer to a lookup by hash: 404 unless a test says otherwise. */
+function notFound(status = 404) {
+  return Object.assign(new Error('Horizon'), { response: { status } });
+}
+
+/**
+ * Stellar whose broadcast confirms unless a test says otherwise, and whose
+ * ledger does not hold the transaction (a 404 on lookup by hash).
+ */
 function makeStellar() {
   const submitTransaction = jest.fn().mockResolvedValue({ hash: SIGNED.hash });
+  const lookup = jest.fn().mockRejectedValue(notFound());
+  const transaction = jest.fn(() => ({ call: lookup }));
   return {
     passphrase: jest.fn((network: string) =>
       network === 'public' ? Networks.PUBLIC : Networks.TESTNET,
     ),
-    server: jest.fn().mockReturnValue({ submitTransaction }),
+    server: jest.fn().mockReturnValue({
+      submitTransaction,
+      transactions: () => ({ transaction }),
+    }),
     submitTransaction,
+    transaction,
+    lookup,
   };
 }
 
@@ -617,7 +632,7 @@ describe('SignedTransactionRelay', () => {
     expect(stellar.submitTransaction).not.toHaveBeenCalled();
   });
 
-  it('finalizes FAILED with the result codes when the network rejects it', async () => {
+  it('finalizes FAILED with the result codes when the ledger shows it failed', async () => {
     const pending = row();
     const settlement = makeSettlement(pending);
     stellar.submitTransaction.mockRejectedValue(
@@ -626,6 +641,7 @@ describe('SignedTransactionRelay', () => {
         operations: ['op_underfunded'],
       }),
     );
+    stellar.lookup.mockResolvedValue({ successful: false });
 
     const outcome = await relay.submit(
       pending,
@@ -658,6 +674,7 @@ describe('SignedTransactionRelay', () => {
       settlement.force('SUCCEEDED');
       throw horizonReject({ transaction: 'tx_already_included' });
     });
+    stellar.lookup.mockResolvedValue({ successful: true });
 
     const outcome = await relay.submit(
       pending,
@@ -673,6 +690,168 @@ describe('SignedTransactionRelay', () => {
       view: { id: 'row_1', status: 'SUCCEEDED' },
     });
     expect(settlement.status()).toBe('SUCCEEDED');
+  });
+
+  describe('a rejection is checked against the ledger before it is recorded', () => {
+    // The wallet can broadcast the envelope itself (SEP-7), so the merchant's
+    // re-submission is refused while the transaction sits on-chain, settled.
+
+    it('settles SUCCEEDED through the post-settlement hook when the tx is on-chain (tx_bad_seq)', async () => {
+      const pending = row();
+      const settlement = makeSettlement(pending);
+      const afterSucceeded = jest.fn(async (settled: RelayRow) => settled);
+      const profile = makeProfile(settlement, { afterSucceeded });
+      stellar.submitTransaction.mockRejectedValue(
+        horizonReject({ transaction: 'tx_bad_seq' }),
+      );
+      stellar.lookup.mockResolvedValue({ successful: true });
+
+      const outcome = await relay.submit(
+        pending,
+        USERNAME,
+        SIGNED.xdr,
+        profile,
+      );
+
+      expect(stellar.transaction).toHaveBeenCalledWith(SIGNED.hash);
+      expect(stellar.server).toHaveBeenLastCalledWith('testnet');
+      expect(settlement.finalizeSucceeded).toHaveBeenCalledTimes(1);
+      expect(settlement.finalizeSucceeded).toHaveBeenCalledWith(
+        'row_1',
+        USERNAME,
+        SIGNED.hash,
+      );
+      expect(settlement.finalizeFailed).not.toHaveBeenCalled();
+      expect(afterSucceeded).toHaveBeenCalledTimes(1);
+      expect(outcome).toEqual({
+        submitted: true,
+        status: 'SUCCEEDED',
+        txHash: SIGNED.hash,
+        view: { id: 'row_1', status: 'SUCCEEDED' },
+      });
+    });
+
+    it.each([
+      ['op_underfunded, before Horizon has ingested it', 404],
+      ['a lookup that errors', 503],
+    ])('leaves the row SUBMITTED on %s', async (_case, status) => {
+      const pending = row();
+      const settlement = makeSettlement(pending);
+      const profile = makeProfile(settlement);
+      stellar.submitTransaction.mockRejectedValueOnce(
+        horizonReject({
+          transaction: 'tx_failed',
+          operations: ['op_underfunded'],
+        }),
+      );
+      stellar.lookup.mockRejectedValue(notFound(status));
+
+      const outcome = await relay.submit(
+        pending,
+        USERNAME,
+        SIGNED.xdr,
+        profile,
+      );
+
+      expect(settlement.finalizeFailed).not.toHaveBeenCalled();
+      expect(settlement.finalizeSucceeded).not.toHaveBeenCalled();
+      expect(settlement.status()).toBe('SUBMITTED');
+      expect(Object.keys(outcome)).toEqual([
+        'submitted',
+        'status',
+        'reason',
+        'resultCodes',
+        'view',
+      ]);
+      expect(outcome).toEqual({
+        submitted: false,
+        status: 'SUBMITTED',
+        reason:
+          'Transaction rejected by the network; its on-chain outcome is not ' +
+          'known yet',
+        resultCodes: ['tx_failed', 'op_underfunded'],
+        view: { id: 'row_1', status: 'SUBMITTED' },
+      });
+      // Only the SUBMITTED announcement; no terminal one.
+      expect(profile.emit).toHaveBeenCalledTimes(1);
+
+      // A retry is a retry of the same attempt, not a resubmit.
+      const retried = await relay.submit(
+        settlement.read(),
+        USERNAME,
+        SIGNED.xdr,
+        profile,
+      );
+      expect(retried.status).toBe('SUCCEEDED');
+      expect(settlement.epoch()).toBe(0);
+    });
+
+    it('does not record FAILED on a lookup error even for a rejection that proves non-application', async () => {
+      const pending = row();
+      const settlement = makeSettlement(pending);
+      stellar.submitTransaction.mockRejectedValue(
+        horizonReject({ transaction: 'tx_bad_auth' }),
+      );
+      stellar.lookup.mockRejectedValue(new Error('socket hang up'));
+
+      const outcome = await relay.submit(
+        pending,
+        USERNAME,
+        SIGNED.xdr,
+        makeProfile(settlement),
+      );
+
+      expect(outcome.status).toBe('SUBMITTED');
+      expect(settlement.finalizeFailed).not.toHaveBeenCalled();
+    });
+
+    it.each(['tx_bad_auth', 'tx_bad_auth_extra', 'tx_insufficient_balance'])(
+      'records FAILED on %s with the ledger answering 404',
+      async (code) => {
+        // Decided after the sequence check: the transaction was not applied.
+        const pending = row();
+        const settlement = makeSettlement(pending);
+        stellar.submitTransaction.mockRejectedValue(
+          horizonReject({ transaction: code }),
+        );
+
+        const outcome = await relay.submit(
+          pending,
+          USERNAME,
+          SIGNED.xdr,
+          makeProfile(settlement),
+        );
+
+        expect(outcome).toMatchObject({
+          submitted: false,
+          status: 'FAILED',
+          resultCodes: [code],
+        });
+        expect(settlement.finalizeFailed).toHaveBeenCalledTimes(1);
+        expect(settlement.status()).toBe('FAILED');
+      },
+    );
+
+    it.each(['tx_bad_seq', 'tx_already_included', 'tx_insufficient_fee'])(
+      'does not record FAILED on %s with the ledger answering 404',
+      async (code) => {
+        const pending = row();
+        const settlement = makeSettlement(pending);
+        stellar.submitTransaction.mockRejectedValue(
+          horizonReject({ transaction: code }),
+        );
+
+        const outcome = await relay.submit(
+          pending,
+          USERNAME,
+          SIGNED.xdr,
+          makeProfile(settlement),
+        );
+
+        expect(outcome.status).toBe('SUBMITTED');
+        expect(settlement.finalizeFailed).not.toHaveBeenCalled();
+      },
+    );
   });
 
   it('answers 503 and leaves the row re-submittable when Horizon is unreachable', async () => {

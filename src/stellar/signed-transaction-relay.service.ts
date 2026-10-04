@@ -9,8 +9,12 @@ import type {
   SettlementRepository,
   SettlementRow,
 } from '@/stellar/settlement.repository';
-import { SETTLEMENT_MAX_RESUBMITS } from '@/stellar/stellar.constants';
+import {
+  NOT_APPLIED_REJECTION_CODES,
+  SETTLEMENT_MAX_RESUBMITS,
+} from '@/stellar/stellar.constants';
 import { StellarService } from '@/stellar/stellar.service';
+import { transactionSettlement } from '@/stellar/transaction-settlement';
 
 /**
  * Statuses a signed envelope may be relayed from. SUBMITTED is included so a
@@ -72,12 +76,16 @@ export interface RelayProfile<TRow extends RelayRow, TView> {
  * What a relay attempt came to. The owning service renames `view` to its own
  * response key; the other keys are the response, in the order it has always
  * been serialized.
+ *
+ * A rejection comes back FAILED only once the ledger agrees. SUBMITTED with
+ * `submitted: false` is a rejection of this broadcast whose transaction's own
+ * outcome is not known yet — see step 4 on {@link SignedTransactionRelay}.
  */
 export type RelayOutcome<TView> =
   | { submitted: true; status: 'SUCCEEDED'; txHash: string; view: TView }
   | {
       submitted: false;
-      status: 'FAILED';
+      status: 'FAILED' | 'SUBMITTED';
       reason: string;
       resultCodes: string[];
       view: TView;
@@ -116,10 +124,22 @@ type Envelope = ReturnType<typeof TransactionBuilder.fromXDR>;
  *      and only the winner of that write announces the submission. The same
  *      write carries the resubmit cap, so concurrent resubmits cannot all pass
  *      step 2 and bump past it.
- *   4. **A rejection finalizes FAILED only while the row is still in flight.**
- *      The observer may have settled the same hash during the round-trip (a
- *      `tx_already_included` rejection is exactly that), and on-chain success
- *      wins.
+ *   4. **A rejection is checked against the ledger before it is recorded.**
+ *      Horizon refusing *this* broadcast says nothing about the transaction: the
+ *      wallet may have broadcast the same envelope itself (SEP-7) moments
+ *      earlier, so the re-submission comes back `tx_bad_seq` or a duplicate
+ *      while the transaction sits on-chain, settled. Recording FAILED there was
+ *      permanent — the observer swept only in-flight rows, so the row was never
+ *      healed and a deposit's cost basis was never captured. So the hash is
+ *      looked up first: on-chain and successful settles SUCCEEDED, through the
+ *      same transition and hook as a confirmed broadcast; on-chain and failed is
+ *      FAILED; a lookup that cannot answer leaves the row SUBMITTED for the
+ *      observer, which settles it from the ledger or expires it on a 404. A 404
+ *      is FAILED only when the rejection itself proves the transaction was never
+ *      applied ({@link NOT_APPLIED_REJECTION_CODES}); otherwise it may simply not
+ *      be ingested yet. FAILED is still written only while the row is in flight:
+ *      the observer may have settled the hash during the round-trip, and
+ *      on-chain success wins.
  *   5. **An unreachable Horizon is a 503** and changes nothing further.
  */
 @Injectable()
@@ -198,50 +218,19 @@ export class SignedTransactionRelay {
       const res = await this.stellar
         .server(row.network as StellarNetwork)
         .submitTransaction(tx);
-      const succeeded = await settlement.finalizeSucceeded(
-        row.id,
-        username,
-        res.hash,
-      );
-      const settled = profile.afterSucceeded
-        ? await profile.afterSucceeded(succeeded.row)
-        : succeeded.row;
       logger.log(
         `${labels.log} ${row.id} submitted and confirmed (tx=${res.hash})`,
       );
-      return {
-        submitted: true,
-        status: 'SUCCEEDED',
-        txHash: settled.txHash,
-        view: await profile.present(settled),
-      };
+      return await this.settleSucceeded(row.id, username, res.hash, profile);
     } catch (err) {
       const resultCodes = extractResultCodes(err);
       if (resultCodes) {
-        const failed = await settlement.finalizeFailed(row.id, username);
-        if (failed.row.status === 'SUCCEEDED') {
-          // Observer already settled this tx on-chain. Do not report failure,
-          // and do not touch what its settlement recorded.
-          logger.log(
-            `${labels.log} ${row.id} Horizon rejection ignored; already SUCCEEDED`,
-          );
-          return {
-            submitted: true,
-            status: 'SUCCEEDED',
-            txHash: failed.row.txHash,
-            view: await profile.present(failed.row),
-          };
-        }
-        logger.warn(
-          `${labels.log} ${row.id} rejected on submit: ${resultCodes.join(', ')}`,
-        );
-        return {
-          submitted: false,
-          status: 'FAILED',
-          reason: 'Transaction rejected by the network',
+        return this.settleRejected(
+          submitted.row,
+          username,
           resultCodes,
-          view: await profile.present(failed.row),
-        };
+          profile,
+        );
       }
       // Couldn't reach Horizon — leave it SUBMITTED so it can be retried.
       logger.error(`${labels.log} ${row.id} submission error`, err);
@@ -250,6 +239,103 @@ export class SignedTransactionRelay {
         'Could not submit the transaction to the Stellar network',
       );
     }
+  }
+
+  /**
+   * Settles the row SUCCEEDED and runs the post-settlement hook. One path for a
+   * confirmed broadcast and for a rejected one the ledger shows settled, so a
+   * deposit settled either way records its basis the same way.
+   */
+  private async settleSucceeded<TRow extends RelayRow, TView>(
+    id: string,
+    username: string,
+    txHash: string,
+    profile: RelayProfile<TRow, TView>,
+  ): Promise<RelayOutcome<TView>> {
+    const succeeded = await profile.settlement.finalizeSucceeded(
+      id,
+      username,
+      txHash,
+    );
+    const settled = profile.afterSucceeded
+      ? await profile.afterSucceeded(succeeded.row)
+      : succeeded.row;
+    return {
+      submitted: true,
+      status: 'SUCCEEDED',
+      txHash: settled.txHash,
+      view: await profile.present(settled),
+    };
+  }
+
+  /** Step 4: what a Horizon rejection comes to, decided by the ledger. */
+  private async settleRejected<TRow extends RelayRow, TView>(
+    row: TRow,
+    username: string,
+    resultCodes: string[],
+    profile: RelayProfile<TRow, TView>,
+  ): Promise<RelayOutcome<TView>> {
+    const { settlement, labels, logger } = profile;
+    const codes = resultCodes.join(', ');
+    const onChain = await transactionSettlement(
+      this.stellar,
+      row.network,
+      row.txHash,
+      logger,
+    );
+
+    if (onChain === 'succeeded') {
+      logger.log(
+        `${labels.log} ${row.id} rejected on submit (${codes}) but already ` +
+          `settled on-chain (tx=${row.txHash})`,
+      );
+      return this.settleSucceeded(row.id, username, row.txHash, profile);
+    }
+
+    const neverApplied = resultCodes.some((code) =>
+      NOT_APPLIED_REJECTION_CODES.includes(code),
+    );
+    if (onChain === 'unknown' || (onChain === 'absent' && !neverApplied)) {
+      // Not FAILED: the transaction may be on-chain and not yet ingested, or
+      // we could not ask. The observer settles it from the ledger, or expires
+      // it on a 404 once its time bounds have closed.
+      logger.warn(
+        `${labels.log} ${row.id} rejected on submit (${codes}); its ` +
+          'on-chain outcome is not known yet, left SUBMITTED',
+      );
+      return {
+        submitted: false,
+        status: 'SUBMITTED',
+        reason:
+          'Transaction rejected by the network; its on-chain outcome is not ' +
+          'known yet',
+        resultCodes,
+        view: await profile.present(row),
+      };
+    }
+
+    const failed = await settlement.finalizeFailed(row.id, username);
+    if (failed.row.status === 'SUCCEEDED') {
+      // Observer already settled this tx on-chain. Do not report failure,
+      // and do not touch what its settlement recorded.
+      logger.log(
+        `${labels.log} ${row.id} Horizon rejection ignored; already SUCCEEDED`,
+      );
+      return {
+        submitted: true,
+        status: 'SUCCEEDED',
+        txHash: failed.row.txHash,
+        view: await profile.present(failed.row),
+      };
+    }
+    logger.warn(`${labels.log} ${row.id} rejected on submit: ${codes}`);
+    return {
+      submitted: false,
+      status: 'FAILED',
+      reason: 'Transaction rejected by the network',
+      resultCodes,
+      view: await profile.present(failed.row),
+    };
   }
 
   /** Step 1: the caller's envelope, once it is shown to be this row's, signed. */
