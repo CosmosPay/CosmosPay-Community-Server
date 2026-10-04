@@ -15,7 +15,7 @@
 
 路由可以通过 `@Public()` 退出该检查（编排器直接访问的健康探针使用了它）。强制检查始终开启——不存在关闭它的开关。本地开发时，请在 APISIX 之后运行，或自行发送 `X-Gateway-Secret` + `X-Consumer-*` 请求头。
 
-`/v1/admin` 是跨租户的，因此 `AdminGuard` 还要求请求携带 `X-Cosmos-Internal`。APISIX 会从它代理的所有请求中**移除**这个请求头，因此只有持有网关密钥、直接调用本服务的后端才能发送它——也就是开发者平台，由它判定当前登录的账户是否为 owner 或 admin。不存在单独的管理员凭证：保护跨租户数据的是网关密钥、网络隔离以及网关路由中的请求头移除列表。
+`/v1/admin` 是跨租户的，因此 `AdminGuard` 还要求 `X-Cosmos-Internal` 携带一个以网关密钥为键的新鲜 MAC（`src/admin/console-marker.ts`）。API key 调用方从不持有这个密钥，因此只有直接调用本服务的后端才能生成它——也就是开发者平台，由它判定当前登录的账户是否为 owner 或 admin。不存在单独的管理员凭证。APISIX 也会从它代理的所有请求中移除这个请求头，但那只是纵深防御：一个忘记剥离它的路由转发的是任何客户端都无法伪造的值。
 
 处理流程：
 
@@ -1165,6 +1165,13 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
 
 ## 升级 — 破坏性变更与部署说明
 
+### `X-Cosmos-Internal` 必须携带网关密钥的 MAC
+
+- **单独的 `X-Cosmos-Internal: 1` 会被拒绝。** `/v1/admin` 对它返回 `403 admin_console_only`，调用方也不再在任何地方被视为内部调用：它受按消费者计算的速率限制约束，其请求日志记录也不再被标记。该请求头现在携带 `v1.<unix seconds>.<hex>`——以 `APISIX_GATEWAY_SECRET` 为键的 HMAC-SHA256，在服务器时钟前后五分钟内有效（`src/admin/console-marker.ts`）。
+- **直接调用 `/v1/admin` 的运维脚本必须在每次调用时生成该标记。** 下文 `ADMIN_API_CREDENTIALS` 条目末尾的 `openssl` + `curl` 片段就是这样做的。
+- **本服务与开发者平台一起部署。** 标记现在由控制台生成。旧控制台调用本服务时，每个管理调用都会得到 `403`；新控制台调用旧服务仍然可用，因为旧服务接受除 `0`、`false`、`no` 和 `off` 之外的任何值。如果两者无法同时上线，请先部署开发者平台。
+- **没有新的环境变量。** MAC 以 `APISIX_GATEWAY_SECRET` 为键，本服务和控制台已经共享该密钥。
+
 ### 钱包登录：已恢复钱包的签名者跟随 `STELLAR_NETWORK`
 
 - **`WALLET_AUTH_SIGNERS_HORIZON_URL` 现在默认使用 `STELLAR_NETWORK` 对应的 Horizon**（`STELLAR_HORIZON_URL_PUBLIC` / `STELLAR_HORIZON_URL_TESTNET`，否则使用 SDF 的），而不再总是公共网络的。当通过 SEP-30 恢复的钱包用替换其主密钥的那把密钥签署 `POST /v1/wallet/auth/finish` 时会读取它。在 testnet 部署上，查询原本发往主网，找不到账户，于是每个已恢复钱包的登录都返回 `400 wallet_signature_invalid`。
@@ -1365,6 +1372,7 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
 | `POST /v1/wallet/auth/finish` 和 `PUT /v1/wallet/backup` 现在也接受 `v: 3` 备份盒：种子由一个随机数据密钥加密，该密钥在 `slots` 中按每扇门各封装一次（`kind: "password"` 或 `kind: "passkey"`，最多 8 个）。每个密码门都与 `v: 2` 盒遵守同样的 PBKDF2 下限；passkey 门没有成本，因为其密钥是认证器的 WebAuthn PRF 输出。`v: 2` 盒保持不变 | 钱包：仅含 passkey 的备份是有效的，写入这种备份的钱包需要此服务器 | 让用户用 passkey 而不是输入原密码来恢复，且本服务从不持有能打开备份盒的密钥 |
 | `POST /v1/wallet/auth/oauth/authorize` 接受可选的 `returnTo`。当它列在 `WALLET_AUTH_RETURN_URLS` 中时，`GET /v1/wallet/auth/oauth/callback/{provider}` 不再渲染页面，而是以 `302` 重定向到它，附带 `?state=…`（失败时另加 `&error=<reason>`）；未列出的返回 `400 wallet_return_url_not_allowed`。只传递 `state`——握手仍需用 PKCE verifier 兑换。请先执行迁移 `20260927180000_wallet_auth_return_to` | 原生钱包（桌面和移动端）：发送 `returnTo` 并在操作系统中注册该 URL | 平台的认证会话（`ASWebAuthenticationSession`、Custom Tab、桌面 deep link 或 loopback 监听）只有在浏览器到达应用自己的 URL 时才会关闭，因此用户会停留在页面上，只能手动关闭 |
 | `GET /v1/wallet/auth/providers` 还会返回 `mfaSettingsUrl`：Authentik 账户中用户添加或移除第二因素（安全密钥或 passkey、身份验证器应用、恢复码）的页面，没有会话时先经过 Authentik 登录；没有 Authentik 时为 `null`。钱包登录时第二因素是可选的——`deploy/authentik/wallet-sign-in.yaml` 将 MFA 阶段改回 *skip*，在输入密码后向已有因素的用户索取它，允许 passkey 在用户名页面直接登录，并在输入密码后为没有任何因素的用户提供选择（暂不、安全密钥、身份验证器应用）。它还在注册页面的表单上方加入 Google / GitHub。密码登录和注册保持不变 | 运行 Authentik 的运维：导入该 blueprint。钱包：将该 URL 作为一项设置提供 | 第二因素要么对所有人强制，要么无法到达：钱包用户从不打开 Authentik 自身的设置，设置 flow 会拒绝没有 Authentik 会话的浏览器，而识别阶段的 passwordless 按钮指向同一个 flow，只会重新加载页面 |
+| `/v1/admin` 要求 `X-Cosmos-Internal` 携带以 `APISIX_GATEWAY_SECRET` 为键的新鲜 MAC（`v1.<unix seconds>.<hex>`，五分钟内有效）；单独的 `1` 返回 `403 admin_console_only`，并且只有经过验证的标记才能让调用方免受按消费者计算的速率限制或标记其请求日志记录 | 直接调用 `/v1/admin` 的运维脚本，以及未随本变更一起部署的开发者平台 | 除 `0`、`false`、`no` 或 `off` 之外的任何值都算数，因此只要有一个 APISIX 路由忘记剥离该请求头，每个 API key 就能获得跨租户管理接口、速率限制豁免，以及在租户请求日志中隐藏自身调用的方法 |
 
 随之而来的部署说明：
 
@@ -1477,9 +1485,10 @@ WHERE NOT i.indisvalid;
 它是叠加在开发者平台自身角色检查之上的第二道管理员检查，跳过它的部署在控制台发起跨租户读取时会得到 `401 admin_credentials_required`。现在 `/v1/admin` 只接受来自平台控制台的请求，这由请求上的两点来确认：
 
 1. `X-Gateway-Secret` 与 `APISIX_GATEWAY_SECRET` 匹配——由 `ApisixGuard` 检查，与其他所有路由一样。只有网关和控制台后端持有它。
-2. 存在 `X-Cosmos-Internal`。APISIX 会从它代理的每个请求中剥离该请求头（`proxy-rewrite.headers.remove`），因此 API key 调用方无法携带它；只有持有网关密钥的后端发起的直接调用才能携带。
+2. `X-Cosmos-Internal` 是控制台标记：`v1.<unix seconds>.<hex>`，其中 hex 为 `HMAC-SHA256(APISIX_GATEWAY_SECRET, "cosmos-admin-console:v1:" +
+   seconds)`，且时间戳与服务器时钟相差不超过五分钟。API key 调用方不持有网关密钥，因此即使通过一个忘记剥离该请求头的路由（`proxy-rewrite.headers.remove`）也无法生成它。正是这个经过验证的标志让控制台免受按消费者计算的速率限制，并在请求日志中标记它的记录。
 
-第 2 点依赖于开发者平台仓库中的网关路由配置，而不是本服务持有的密钥。作为交换，控制台是唯一决定谁是平台管理员的地方，并且审计记录会记下执行操作的控制台账户（`cosmos_<userId>`）及其平台角色，每次变更**和**每次读取都会记录。
+单独的 `X-Cosmos-Internal: 1`——控制台以前发送的值——会像任何其他伪造一样被拒绝，因此本服务和开发者平台必须一起部署。两个仓库为该标记固定了同一个测试向量。控制台是唯一决定谁是平台管理员的地方，并且审计记录会记下执行操作的控制台账户（`cosmos_<userId>`）及其平台角色，每次变更**和**每次读取都会记录。
 
 这对调用方意味着什么：
 
@@ -1489,7 +1498,13 @@ WHERE NOT i.indisvalid;
 | `read` 凭证执行变更操作时返回 `403` `admin_role_required` | 已移除——控制台已经判定该账户可以执行操作 |
 | 审计记录上的 `actorId` / `actorRole` 指的是凭证 | 它们指的是控制台账户及其平台角色 |
 
-要直接调用 `/v1/admin`（例如从运维脚本），请发送 `X-Gateway-Secret`、`X-Consumer-Username` 和 `X-Cosmos-Internal: 1`；再添加 `X-Cosmos-Admin-Role: owner` 为审计记录打上标签。请让服务远离公网。
+要直接调用 `/v1/admin`（例如从运维脚本），请发送 `X-Gateway-Secret`、`X-Consumer-Username` 和一个新生成的 `X-Cosmos-Internal`；再添加 `X-Cosmos-Admin-Role: owner` 为审计记录打上标签。请让服务远离公网。
+
+```sh
+TS=$(date +%s)
+MAC=$(printf 'cosmos-admin-console:v1:%s' "$TS"   | openssl dgst -sha256 -hmac "$APISIX_GATEWAY_SECRET" -r | cut -d' ' -f1)
+curl -H "X-Gateway-Secret: $APISIX_GATEWAY_SECRET"      -H "X-Consumer-Username: ops"      -H "X-Cosmos-Internal: v1.$TS.$MAC"      http://localhost:3000/v1/admin/summary
+```
 
 ### `APISIX_GATEWAY_SECRET` 现在要求 32 个字符
 
@@ -1705,6 +1720,6 @@ npm run readme:check     # the seven READMEs match in structure and list every r
 
 `key-auth` 在认证成功后会把 `X-Consumer-Username` / `X-Credential-Identifier` 转发给上游，并覆盖客户端提供的任何副本，guard 正是依赖这一点。
 
-> **移除列表是一项安全控制，而且无法在本仓库中验证。** 本服务对列表中的每个请求头都照单全收；`X-Gateway-Secret` 只能证明请求经过了网关，而不能证明这些值是可信的。每当添加或复制路由时都要审查这个列表——一个没有剥离 `X-Cosmos-Internal` 的路由会让每个 API key 都能访问 `/v1/admin`。请让服务位于私有网络中，使 APISIX 成为唯一入口；共享密钥是第二层防护，而不是唯一的一层。
+> **移除列表是一项安全控制，而且无法在本仓库中验证。** 本服务对列表中的每个请求头都照单全收；`X-Gateway-Secret` 只能证明请求经过了网关，而不能证明这些值是可信的。每当添加或复制路由时都要审查这个列表。`X-Cosmos-Internal` 已不再依赖它——服务会验证以网关密钥为键的 MAC——但每个 `X-Consumer-*` 请求头仍然依赖它，一个转发客户端副本的路由会让客户端冒充任意消费者。请让服务位于私有网络中，使 APISIX 成为唯一入口；共享密钥是第二层防护，而不是唯一的一层。
 >
 > 在生产环境中，缺少 `X-Plan-Swap-Fee-Bps` 会返回 `503`，而不是回退到环境变量的默认值。
