@@ -89,6 +89,23 @@ export class SwapQuoteEntity {
   @ApiProperty({ example: 'testnet' })
   network!: string;
 
+  @ApiProperty({
+    required: false,
+    enum: ['solana', 'monad'],
+    example: 'solana',
+    description:
+      'Solana and Monad quotes only. Absent on Stellar, which answers as it always has.',
+  })
+  chain?: string;
+
+  @ApiProperty({
+    required: false,
+    enum: ['jupiter', 'kuru'],
+    example: 'jupiter',
+    description: 'The aggregator that priced a Solana or Monad swap.',
+  })
+  provider?: string;
+
   @ApiProperty({ type: SwapAssetAmount, description: 'Gross source input.' })
   source!: SwapAssetAmount;
 
@@ -288,4 +305,149 @@ export class SwapSubmitResultEntity {
 
   @ApiProperty({ type: SwapEntity })
   swap!: SwapEntity;
+}
+
+/**
+ * A Solana or Monad swap (`chain_swap`): built by Jupiter or Kuru Flow, signed
+ * by the wallet, relayed by this service. Returned by `/v1/swaps` when the
+ * request names `chain: solana | monad`.
+ */
+export class ChainSwapEntity {
+  @ApiProperty({ example: 'cm1x2y3z4a5b6c7d8e9f0g1h2' })
+  id!: string;
+
+  @ApiProperty({ enum: ['solana', 'monad'], example: 'solana' })
+  chain!: string;
+
+  @ApiProperty({ example: 'public', description: 'Always mainnet.' })
+  network!: string;
+
+  @ApiProperty({ enum: ['jupiter', 'kuru'], example: 'jupiter' })
+  provider!: string;
+
+  @ApiProperty({ enum: SwapStatus, example: 'PENDING' })
+  status!: SwapStatus;
+
+  @ApiProperty({
+    example: '13QkxhNMrTPxoCkRdYdJ65tFuwXPhL5gLS2Z5Nr6gjRK',
+    description: 'The wallet that signs, pays and receives.',
+  })
+  source!: string;
+
+  @ApiProperty({
+    example: 'native',
+    description: '`native` (SOL / MON), or the SPL mint / ERC-20 address.',
+  })
+  sendAsset!: string;
+
+  @ApiProperty({ example: '0.1' })
+  sendAmount!: string;
+
+  @ApiProperty({ example: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v' })
+  destAsset!: string;
+
+  @ApiProperty({
+    example: '11.87',
+    description: 'Quoted output, net of the commission.',
+  })
+  destEstimated!: string;
+
+  @ApiProperty({
+    example: '11.81',
+    description: 'On-chain minimum after slippage.',
+  })
+  destMin!: string;
+
+  @ApiProperty({ example: 50 })
+  feeBps!: number;
+
+  @ApiProperty({
+    example: '0.059',
+    description:
+      'The commission, in the destination asset (taken from the output).',
+  })
+  feeAmount!: string;
+
+  @ApiProperty({ example: 50 })
+  slippageBps!: number;
+
+  @ApiProperty({ type: [SwapPathHop] })
+  path!: SwapPathHop[];
+
+  @ApiProperty({
+    type: 'object',
+    additionalProperties: true,
+    example: { encoding: 'base64', data: 'AQAAAAAAAAAAAAAAA…' },
+    description:
+      'What the wallet signs. Solana: `{ encoding: "base64", data, lastValidBlockHeight }`, ' +
+      'an unsigned VersionedTransaction. Monad: `{ to, data, value, chainId }`, ' +
+      'a call the wallet signs as an EIP-1559 transaction (it fills nonce and gas).',
+  })
+  transaction!: Record<string, unknown>;
+
+  @ApiProperty({
+    type: 'object',
+    additionalProperties: true,
+    nullable: true,
+    example: null,
+    description:
+      'Monad only, selling an ERC-20 whose allowance is short: the exact ' +
+      '`approve` call `{ to, data, value, chainId }` to send and confirm first. ' +
+      'The wallet broadcasts it itself.',
+  })
+  approval!: Record<string, unknown> | null;
+
+  @ApiProperty({
+    nullable: true,
+    example: null,
+    description: 'The Solana signature / EVM hash, once submitted.',
+  })
+  txHash!: string | null;
+
+  @ApiProperty({ nullable: true, example: null })
+  idempotencyKey!: string | null;
+
+  @ApiProperty({
+    example: '2026-10-03T12:01:00.000Z',
+    description: 'Submit refuses the transaction after this; build a new swap.',
+  })
+  expiresAt!: Date;
+
+  @ApiProperty()
+  createdAt!: Date;
+
+  @ApiProperty()
+  updatedAt!: Date;
+}
+
+export class ChainSwapListEntity {
+  @ApiProperty({ type: [ChainSwapEntity] })
+  data!: ChainSwapEntity[];
+
+  @ApiProperty({ example: 1 })
+  total!: number;
+
+  @ApiProperty({ example: 20 })
+  take!: number;
+
+  @ApiProperty({ example: 0 })
+  skip!: number;
+}
+
+/** Result of `POST /v1/swaps/:id/submit` for a Solana or Monad swap. */
+export class ChainSwapSubmitResultEntity {
+  @ApiProperty({ example: true })
+  submitted!: boolean;
+
+  @ApiProperty({ enum: SwapStatus, example: 'SUBMITTED' })
+  status!: SwapStatus;
+
+  @ApiProperty({
+    example:
+      '5VERv8NMvzbJMEkV8xnrLkEaWRtSz9CosKDYjCJjBRnbJLgp8uirBgmQpjKhoR4tjF3ZpRzrFmBV6UjKdiSZkQUW',
+  })
+  txHash!: string;
+
+  @ApiProperty({ type: ChainSwapEntity })
+  swap!: ChainSwapEntity;
 }

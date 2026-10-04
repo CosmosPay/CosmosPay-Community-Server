@@ -65,6 +65,29 @@ export const ALIAS_CHALLENGE_RATE_LIMIT = {
 };
 
 /**
+ * `POST /v1/aliases/:name/recovery` — starting one.
+ *
+ * Every accepted call may send an email, and the route is open to the shared
+ * public key: a person who lost their keys has no account to call it with. So
+ * it is budgeted per address like the other routes that cost something an
+ * error cannot refund. {@link ALIAS_RECOVERY_RESEND_MS} is what protects one
+ * owner's inbox from many addresses.
+ */
+export const ALIAS_RECOVERY_START_RATE_LIMIT = {
+  name: 'aliases:recovery-start',
+  limit: 5,
+  windowMs: ALIAS_RATE_LIMIT_WINDOW_MS,
+};
+
+/**
+ * Minimum gap between two recovery emails for the same alias. Inside it a
+ * repeated start answers exactly as usual and sends nothing, so rotating
+ * addresses cannot turn this route into a way to flood the owner's inbox — and
+ * the answer still says nothing about whether the alias or mailbox matched.
+ */
+export const ALIAS_RECOVERY_RESEND_MS = 60 * 1000;
+
+/**
  * `POST /v1/aliases/:name/recovery/complete`.
  *
  * A completed recovery hands a name, and every payment sent to it, to the caller.

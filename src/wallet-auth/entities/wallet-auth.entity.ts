@@ -1,3 +1,4 @@
+import { CHAINS } from '@/chains/chains.constants';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 /*
@@ -91,7 +92,17 @@ class WalletAuthIdentityEntity {
 }
 
 class WalletBackupEntity {
-  @ApiProperty({ description: 'The account this box restores to.' })
+  @ApiProperty({ enum: CHAINS, example: 'stellar' }) chain!: string;
+  @ApiProperty({
+    description:
+      'The account this box restores to, on `chain` (Stellar G…, Solana base58, Monad 0x…).',
+  })
+  address!: string;
+  @ApiProperty({
+    description:
+      'Same as `address` — the field’s original name, kept for older wallets.',
+    deprecated: true,
+  })
   stellarAddress!: string;
 
   @ApiProperty({
@@ -124,10 +135,20 @@ export class WalletAuthReadyEntity {
   })
   account!: string;
 
+  @ApiProperty({
+    type: [WalletBackupEntity],
+    description:
+      'Every wallet this account keeps a backup of, newest first — one box per ' +
+      '(chain, address). A new device opens each with the password (or passkey) ' +
+      'it was sealed under; a box sealed under another password stays closed.',
+  })
+  backups!: WalletBackupEntity[];
+
   @ApiPropertyOptional({
     type: WalletBackupEntity,
     nullable: true,
-    description: 'The box this account last stored, if any.',
+    description: 'The newest of `backups`, for wallets that read a single box.',
+    deprecated: true,
   })
   backup!: WalletBackupEntity | null;
 
@@ -208,24 +229,20 @@ export class WalletSignInFinishedEntity {
   keys!: WalletProvisionedKeysEntity;
 }
 
-/**
- * `status: 'backup_conflict'` — this account already holds a box for a
- * DIFFERENT address, and nothing authorized discarding it.
- *
- * Not an error: it is the state a client turns into "you already have a wallet
- * backed up here". Retry with `replaceBackup: true` only after the person has
- * acknowledged what that gives up — the box may be the only copy of a funded
- * wallet.
- */
-export class WalletBackupConflictEntity {
-  @ApiProperty({ enum: ['backup_conflict'] }) status!: string;
-  @ApiProperty({ description: 'The address the stored box restores to.' })
-  stellarAddress!: string;
-}
-
 export class WalletBackupUpdatedEntity {
   @ApiProperty({ enum: ['ok'] }) status!: string;
-  @ApiProperty() stellarAddress!: string;
+  @ApiProperty({ enum: CHAINS, example: 'stellar' }) chain!: string;
+  @ApiProperty({
+    description:
+      'The account whose box was replaced, on `chain` (Stellar G…, Solana base58, Monad 0x…).',
+  })
+  address!: string;
+  @ApiProperty({
+    description:
+      'Same as `address` — the field’s original name, kept for older wallets.',
+    deprecated: true,
+  })
+  stellarAddress!: string;
   @ApiProperty() updatedAt!: Date;
 }
 

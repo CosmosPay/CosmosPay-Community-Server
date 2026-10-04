@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { Keypair } from '@stellar/stellar-sdk';
 import { AliasChallengePurpose, AliasStatus } from '@generated/prisma/client';
 import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
@@ -12,6 +13,7 @@ const kp = Keypair.random();
 function signFor(body: {
   purpose: AliasChallengePurpose;
   name: string;
+  chain: 'stellar';
   address: string;
   network: string;
   nonce: string;
@@ -28,6 +30,7 @@ function challengeRow(over: Partial<Record<string, unknown>> = {}) {
     aliasId: null,
     purpose: AliasChallengePurpose.CLAIM,
     name: 'emanuel250',
+    chain: 'stellar',
     address: kp.publicKey(),
     network: 'public',
     nonce: 'nonce-1',
@@ -65,6 +68,7 @@ function build(over: Record<string, unknown> = {}) {
     },
     aliasRecovery: {
       findUnique: jest.fn().mockResolvedValue(null),
+      findFirst: jest.fn().mockResolvedValue(null),
       create: jest.fn(),
       updateMany: jest.fn().mockResolvedValue({ count: 1 }),
     },
@@ -74,11 +78,16 @@ function build(over: Record<string, unknown> = {}) {
         : Promise.all(arg as Promise<unknown>[]),
     ...over,
   };
+  const mailer = {
+    configured: true,
+    send: jest.fn().mockResolvedValue(undefined),
+  };
   const service = new AliasesService(
     prisma as never,
     new ConsumerResolverService(prisma as never),
+    mailer as never,
   );
-  return { service, prisma };
+  return { service, prisma, mailer };
 }
 
 async function codeOf(run: Promise<unknown>): Promise<string | undefined> {
@@ -94,6 +103,7 @@ describe('AliasesService — claiming', () => {
   const good = {
     purpose: AliasChallengePurpose.CLAIM,
     name: 'emanuel250',
+    chain: 'stellar' as const,
     address: kp.publicKey(),
     network: 'public',
     nonce: 'nonce-1',
@@ -160,6 +170,7 @@ describe('AliasesService — claiming', () => {
             aliasChallengeMessage({
               purpose: AliasChallengePurpose.CLAIM,
               name: 'emanuel250',
+              chain: 'stellar',
               address: other.publicKey(),
               network: 'testnet',
               nonce: 'nonce-1',
@@ -304,6 +315,66 @@ describe('AliasesService — resolution', () => {
   });
 });
 
+describe('AliasesService — chains', () => {
+  const MONAD = '0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed';
+
+  it('resolves on Stellar unless the payer names a chain', async () => {
+    const { service, prisma } = build();
+    prisma.alias.findUnique.mockResolvedValue({
+      name: 'emanuel250',
+      displayName: 'e',
+      status: AliasStatus.ACTIVE,
+      addresses: [],
+    });
+
+    await service.resolve('emanuel250', 'public');
+    expect(
+      prisma.alias.findUnique.mock.calls[0][0].include.addresses.where,
+    ).toEqual({ chain: 'stellar', network: 'public' });
+
+    const res = await service.resolve('emanuel250', undefined, 'monad');
+    expect(
+      prisma.alias.findUnique.mock.calls[1][0].include.addresses.where,
+    ).toEqual({ chain: 'monad' });
+    expect(res.chain).toBe('monad');
+  });
+
+  it('reads the chain off an address, and matches a Monad one in its EIP-55 spelling', async () => {
+    const { service, prisma } = build();
+    await service.findByAddress(MONAD.toLowerCase());
+    expect(prisma.aliasAddress.findMany.mock.calls[0][0].where).toEqual({
+      chain: 'monad',
+      address: MONAD,
+    });
+
+    await service.findByAddress(kp.publicKey());
+    expect(prisma.aliasAddress.findMany.mock.calls[1][0].where).toMatchObject({
+      chain: 'stellar',
+    });
+  });
+
+  it('answers an address of no chain with no aliases', async () => {
+    const { service, prisma } = build();
+    expect(await service.findByAddress('not-an-address')).toEqual({ data: [] });
+    expect(prisma.aliasAddress.findMany).not.toHaveBeenCalled();
+  });
+
+  it('issues a challenge bound to its chain, in the chain’s stored spelling', async () => {
+    const { service, prisma } = build();
+    const res = await service.createChallenge(consumer, {
+      name: 'emanuel250',
+      chain: 'monad',
+      address: MONAD.toLowerCase(),
+      network: 'public',
+    });
+    expect(prisma.aliasChallenge.create.mock.calls[0][0].data).toMatchObject({
+      chain: 'monad',
+      address: MONAD,
+    });
+    expect(res.message).toContain(`chain: monad\naddress: ${MONAD}`);
+  });
+});
+
 describe('AliasesService — recovery', () => {
   it('answers identically whether or not the alias and mailbox matched', async () => {
     // The handle is public and the mailbox behind it is not. A differing answer
@@ -326,8 +397,84 @@ describe('AliasesService — recovery', () => {
     });
 
     expect(a).toEqual(b);
-    expect(a.accepted).toBe(true);
-    expect(a.token).toBeNull();
+    expect(a).toEqual({ accepted: true });
+    expect(missing.mailer.send).not.toHaveBeenCalled();
+    expect(wrongEmail.mailer.send).not.toHaveBeenCalled();
+  });
+
+  /* The token proves the mailbox, so it goes TO the mailbox and never back to the caller. */
+  it('emails the token to the mailbox on record and never returns it', async () => {
+    const { service, prisma, mailer } = build();
+    prisma.alias.findUnique.mockResolvedValue({
+      id: 'al_1',
+      name: 'emanuel250',
+      email: 'real@example.com',
+      status: AliasStatus.ACTIVE,
+    });
+
+    const res = await service.startRecovery('emanuel250', {
+      email: 'real@example.com',
+    });
+    await new Promise((r) => setImmediate(r));
+
+    expect(res).toEqual({ accepted: true });
+    const sent = mailer.send.mock.calls[0][0];
+    expect(sent.to).toBe('real@example.com');
+    expect(sent.subject).not.toMatch(/[A-Za-z0-9_-]{43}/);
+    const token = /\b([A-Za-z0-9_-]{43})\b/.exec(sent.text)?.[1];
+    expect(token).toBeDefined();
+    const stored = prisma.aliasRecovery.create.mock.calls[0][0].data;
+    expect(stored.tokenHash).toBe(
+      createHash('sha256').update(token!).digest('hex'),
+    );
+  });
+
+  /* Rotating addresses must not turn this into a way to flood the owner's inbox. */
+  it('sends nothing while a recovery for the alias was just started, answering the same', async () => {
+    const { service, prisma, mailer } = build();
+    prisma.alias.findUnique.mockResolvedValue({
+      id: 'al_1',
+      name: 'emanuel250',
+      email: 'real@example.com',
+      status: AliasStatus.ACTIVE,
+    });
+    prisma.aliasRecovery.findFirst.mockResolvedValue({ id: 'rec_recent' });
+
+    const res = await service.startRecovery('emanuel250', {
+      email: 'real@example.com',
+    });
+    await new Promise((r) => setImmediate(r));
+
+    expect(res).toEqual({ accepted: true });
+    expect(prisma.aliasRecovery.create).not.toHaveBeenCalled();
+    expect(prisma.aliasRecovery.updateMany).not.toHaveBeenCalled();
+    expect(mailer.send).not.toHaveBeenCalled();
+  });
+
+  it('answers the same when the mail cannot be delivered', async () => {
+    const { service, prisma, mailer } = build();
+    prisma.alias.findUnique.mockResolvedValue({
+      id: 'al_1',
+      name: 'emanuel250',
+      email: 'real@example.com',
+      status: AliasStatus.ACTIVE,
+    });
+    mailer.send.mockRejectedValue(new Error('smtp down'));
+
+    await expect(
+      service.startRecovery('emanuel250', { email: 'real@example.com' }),
+    ).resolves.toEqual({ accepted: true });
+  });
+
+  it('is a 503 before any lookup when this deployment cannot send mail', async () => {
+    const { service, prisma, mailer } = build();
+    mailer.configured = false;
+    expect(
+      await codeOf(
+        service.startRecovery('emanuel250', { email: 'real@example.com' }),
+      ),
+    ).toBe(ApiErrorCode.Misconfigured);
+    expect(prisma.alias.findUnique).not.toHaveBeenCalled();
   });
 
   it('mints a token, stores only its hash, and burns any earlier one', async () => {
@@ -339,9 +486,9 @@ describe('AliasesService — recovery', () => {
       status: AliasStatus.ACTIVE,
     });
 
-    const res = await service.startRecovery('emanuel250', {
+    const res = (await service.issueRecovery('emanuel250', {
       email: 'REAL@example.com',
-    });
+    }))!;
 
     expect(res.token).toEqual(expect.any(String));
     expect(res.email).toBe('real@example.com');
@@ -461,6 +608,8 @@ describe('AliasesService — recovery', () => {
             rows.find((r) => r.tokenHash === where.tokenHash) ?? null,
           ),
         ),
+        // No resend window in these tests: each starts from an empty table.
+        findFirst: jest.fn(() => Promise.resolve(null)),
         create: jest.fn(({ data }: any) => {
           const row = {
             id: `rec_${rows.length + 1}`,
@@ -484,7 +633,7 @@ describe('AliasesService — recovery', () => {
       };
     }
 
-    /** A live recovery for `emanuel250`, started the way the console starts it. */
+    /** A live recovery for `emanuel250`, as `startRecovery` issues it. */
     async function started() {
       const table = recoveryTable();
       const { service, prisma } = build({ aliasRecovery: table });
@@ -502,10 +651,10 @@ describe('AliasesService — recovery', () => {
         createdAt: new Date(),
         addresses: [],
       });
-      const { token } = await service.startRecovery('emanuel250', {
+      const issued = await service.issueRecovery('emanuel250', {
         email: 'real@example.com',
       });
-      return { service, prisma, table, token: token! };
+      return { service, prisma, table, token: issued!.token };
     }
 
     it('junk tokens from any caller leave the owner’s live recovery usable', async () => {
@@ -697,6 +846,7 @@ function good() {
   return {
     purpose: AliasChallengePurpose.CLAIM,
     name: 'emanuel250',
+    chain: 'stellar' as const,
     address: kp.publicKey(),
     network: 'public',
     nonce: 'nonce-1',

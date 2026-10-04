@@ -1,0 +1,11 @@
+{
+  "format": "cosmos-plugin-signature/v2",
+  "slug": "example",
+  "version": "1.0.0",
+  "files": {
+    "plugin.json": "5584cdc3ace168342a65eb6bde07a8875ad8caf2955f025eecec306124d7f5e0",
+    "index.ts": "4190a1fb5a1307c3fd292022d1fd918363584eb0909bc3c438ce7bba6bfb0cb0"
+  },
+  "keyId": "cosmos-support",
+  "signature": "ohWuRdDp5dUgs0puWQgr1sldzNfe9OIk_KW1t9QiGtAnaY1AN597PEZdFGpRxcA9zG_pT7Di8h5_1g_ak6h6AQ"
+}

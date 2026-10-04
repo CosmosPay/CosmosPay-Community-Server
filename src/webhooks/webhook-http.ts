@@ -146,8 +146,9 @@ export function postWebhook({
  * A `lookup` that answers with the already-validated address instead of asking
  * the resolver a second time. This is the whole point: validation and
  * connection now resolve once, together, so there is no window to rebind in.
+ * Exported for the plugin egress client, which pins its sockets the same way.
  */
-function pinnedLookup(
+export function pinnedLookup(
   destination: ValidatedWebhookDestination,
 ): LookupFunction {
   return (_hostname, options, callback) => {

@@ -77,7 +77,7 @@ export const API_ERROR_CASES: Readonly<Record<ApiErrorCode, ApiErrorCase>> = {
     summary:
       'The route belongs to the platform console; no API key may call it',
     message: 'This endpoint is reserved for the platform console',
-    path: '/v1/aliases/alice/recovery/complete',
+    path: '/v1/admin/summary',
   },
 
   // --- resources -----------------------------------------------------------
@@ -173,6 +173,21 @@ export const API_ERROR_CASES: Readonly<Record<ApiErrorCode, ApiErrorCase>> = {
     message: 'memo must be a MEMO_ID: a numeric uint64',
     path: '/v1/payment-intents/pay',
   },
+  [ApiErrorCode.NetworkUnsupported]: {
+    statuses: [400],
+    summary:
+      'Cross-chain swaps settle on mainnet only; a dev key cannot open one',
+    message:
+      'Cross-chain swaps run on mainnet only — NEAR Intents has no test network. Use a prod API key.',
+    path: '/v1/cross-chain-swaps',
+  },
+  [ApiErrorCode.AssetUnsupported]: {
+    statuses: [400],
+    summary: 'NEAR Intents cannot swap this asset on the named chain',
+    message:
+      'NEAR Intents does not support asset "yXLM" on stellar. GET /v1/cross-chain-swaps/assets lists the ones it does.',
+    path: '/v1/cross-chain-swaps/quote',
+  },
   [ApiErrorCode.TransactionRejected]: {
     statuses: [400],
     summary: 'The submitted transaction does not do what the route needs',
@@ -184,7 +199,10 @@ export const API_ERROR_CASES: Readonly<Record<ApiErrorCode, ApiErrorCase>> = {
 
   // --- provider / upstream --------------------------------------------------
   [ApiErrorCode.ProviderError]: {
-    statuses: [502],
+    // 400 when the provider refused the request itself — something the caller
+    // can change: BlindPay passes its 4xx through, NEAR Intents' 400s ("amount
+    // is too low for bridge") arrive as 400 `provider_error`.
+    statuses: [502, 400],
     summary: 'The upstream provider refused the request',
     message: 'The payment provider rejected the request.',
     path: '/v1/onramp/quotes',
@@ -337,6 +355,12 @@ export const API_ERROR_CASES: Readonly<Record<ApiErrorCode, ApiErrorCase>> = {
     message: 'That is not a backup box this service will keep.',
     path: '/v1/wallet/backup',
   },
+  [ApiErrorCode.WalletBackupLimit]: {
+    statuses: [400],
+    summary: 'The account already keeps as many wallet backups as it may',
+    message: 'This account already keeps 20 wallet backups.',
+    path: '/v1/wallet/auth/finish',
+  },
   [ApiErrorCode.WalletAccountMismatch]: {
     statuses: [404],
     summary: 'No backup is stored for the account that signed',
@@ -362,6 +386,44 @@ export const API_ERROR_CASES: Readonly<Record<ApiErrorCode, ApiErrorCase>> = {
     message:
       'returnTo is not one of this deployment’s wallet return URLs (WALLET_AUTH_RETURN_URLS).',
     path: '/v1/wallet/auth/oauth/authorize',
+  },
+
+  // --- plugins --------------------------------------------------------------
+  [ApiErrorCode.PluginNotInstalled]: {
+    statuses: [409],
+    summary:
+      'The plugin is not installed for this key, or its consent is out of date',
+    message:
+      'Plugin example is not installed. Install it with PUT /v1/plugins/example/installation.',
+    path: '/v1/plugins/example/queries/get-notes',
+  },
+  [ApiErrorCode.PluginConsentMismatch]: {
+    statuses: [400],
+    summary:
+      'grantCapabilities must list exactly the capabilities the plugin declares',
+    message:
+      'grantCapabilities must be exactly the capabilities example declares: payment_intents:read',
+    path: '/v1/plugins/example/installation',
+  },
+  [ApiErrorCode.PluginRejected]: {
+    statuses: [400],
+    summary: 'The plugin refused the input; the message is the plugin’s own',
+    message:
+      'paymentIntentId must be a non-empty string of at most 64 characters',
+    path: '/v1/plugins/example/commands/add-note',
+  },
+  [ApiErrorCode.PluginQuotaExceeded]: {
+    statuses: [409],
+    summary: 'The installation holds as many records as it may',
+    message: 'Plugin example has reached its limit of 10000 records.',
+    path: '/v1/plugins/example/commands/add-note',
+  },
+  [ApiErrorCode.PluginFailed]: {
+    statuses: [502, 504],
+    summary:
+      'The plugin failed or timed out — the detail is logged, never returned',
+    message: 'Plugin example failed while handling add-note.',
+    path: '/v1/plugins/example/commands/add-note',
   },
 
   // --- service --------------------------------------------------------------

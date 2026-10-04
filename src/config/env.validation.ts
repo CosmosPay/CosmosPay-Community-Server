@@ -8,6 +8,7 @@ import {
   IsOptional,
   IsString,
   IsUrl,
+  Matches,
   Max,
   Min,
   MinLength,
@@ -27,9 +28,8 @@ import {
   DEFAULT_SWAP_MAX_SLIPPAGE_BPS,
   DEFAULT_SWAP_SLIPPAGE_BPS,
 } from '@/config/config.constants';
+import { parseEvmTokenFees } from '@/config/evm-token-fees';
 import { assertIdentityConfigConsistent } from '@/config/identity-env';
-import { decodeSvixSecret } from '@/blindpay/blindpay-signature';
-import { SVIX_MIN_SECRET_BYTES } from '@/blindpay/blindpay.constants';
 
 /**
  * Gateway secrets that are documentation, not secrets. `.env.example` used to
@@ -138,6 +138,94 @@ class EnvironmentVariables {
   @IsString()
   STELLAR_BASE_FEE?: string;
 
+  // --- Solana / Monad RPC (payment intents, wallet sign-in, aliases) ---
+  @IsOptional()
+  @IsUrl(URL_OPTIONS)
+  SOLANA_RPC_URL_MAINNET?: string;
+
+  @IsOptional()
+  @IsUrl(URL_OPTIONS)
+  SOLANA_RPC_URL_DEVNET?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  SOLANA_RPC_TIMEOUT_MS?: number;
+
+  @IsOptional()
+  @IsUrl(URL_OPTIONS)
+  MONAD_RPC_URL_MAINNET?: string;
+
+  @IsOptional()
+  @IsUrl(URL_OPTIONS)
+  MONAD_RPC_URL_TESTNET?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  MONAD_RPC_TIMEOUT_MS?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  MONAD_LOG_BLOCK_RANGE?: number;
+
+  /**
+   * Turns on Monad deposit addresses. A hot key, but only for gas: the
+   * forwarders it deploys can pay nobody but the merchant (and the relayer its
+   * fee).
+   */
+  @IsOptional()
+  @Matches(/^(0x)?[0-9a-fA-F]{64}$/, {
+    message: 'MONAD_RELAYER_PRIVATE_KEY must be a 32-byte hex secret key',
+  })
+  MONAD_RELAYER_PRIVATE_KEY?: string;
+
+  /** `{"0xToken…": "0.05"}` — checked in full by `parseEvmTokenFees`. */
+  @IsOptional()
+  @IsString()
+  MONAD_DEPOSIT_TOKEN_FEES?: string;
+
+  // --- Same-chain swaps off Stellar: Jupiter (Solana), Kuru Flow (Monad) ---
+  /** Owner of the token accounts the Solana swap commission lands in. */
+  @IsOptional()
+  @Matches(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/, {
+    message: 'SOLANA_SWAP_FEE_WALLET must be a Solana address (base58)',
+  })
+  SOLANA_SWAP_FEE_WALLET?: string;
+
+  @IsOptional()
+  @Matches(/^0x[0-9a-fA-F]{40}$/, {
+    message: 'MONAD_SWAP_FEE_WALLET must be an EVM address (0x + 40 hex)',
+  })
+  MONAD_SWAP_FEE_WALLET?: string;
+
+  @IsOptional()
+  @IsUrl(URL_OPTIONS)
+  JUPITER_BASE_URL?: string;
+
+  @IsOptional()
+  @IsString()
+  JUPITER_API_KEY?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  JUPITER_TIMEOUT_MS?: number;
+
+  @IsOptional()
+  @IsUrl(URL_OPTIONS)
+  KURU_BASE_URL?: string;
+
+  @IsOptional()
+  @IsString()
+  KURU_API_KEY?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  KURU_TIMEOUT_MS?: number;
+
   @IsOptional()
   @IsInt()
   @Min(1)
@@ -165,6 +253,52 @@ class EnvironmentVariables {
   @Min(0)
   @Max(10000)
   STELLAR_SWAP_MAX_SLIPPAGE_BPS?: number;
+
+  // --- Cross-chain swaps (NEAR Intents 1Click) ---
+  @IsOptional()
+  @IsUrl(URL_OPTIONS)
+  NEAR_INTENTS_BASE_URL?: string;
+
+  @IsOptional()
+  @IsString()
+  NEAR_INTENTS_API_KEY?: string;
+
+  /**
+   * A NEAR account id: named (`cosmospay.near`) or implicit (64 hex). Checked
+   * here because a typo is not refused by 1Click at quote time — the commission
+   * would accrue to an account nobody controls.
+   */
+  @IsOptional()
+  @Matches(
+    /^(?=.{2,64}$)(([a-z\d]+[-_])*[a-z\d]+\.)*([a-z\d]+[-_])*[a-z\d]+$/,
+    {
+      message:
+        'NEAR_INTENTS_FEE_RECIPIENT must be a NEAR account id (e.g. cosmospay.near)',
+    },
+  )
+  NEAR_INTENTS_FEE_RECIPIENT?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  NEAR_INTENTS_TIMEOUT_MS?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(10000)
+  CROSS_CHAIN_SWAP_SLIPPAGE_BPS?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(10000)
+  CROSS_CHAIN_SWAP_MAX_SLIPPAGE_BPS?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(60)
+  CROSS_CHAIN_SWAP_DEADLINE_SECONDS?: number;
 
   /** When "true", at most one non-expired PENDING swap per (consumer, source, network). */
   @IsOptional()
@@ -287,9 +421,10 @@ class EnvironmentVariables {
   @IsBooleanString()
   SWAGGER_ENABLED?: string;
 
-  // --- BlindPay (onramp / offramp / KYC rails) ---
-  // All optional: the service boots without them; the BlindPay client fails with
-  // a clear 503 only when a BlindPay-backed route is actually exercised.
+  // --- BlindPay (onramp / offramp / KYC rails) — the `blindpay` native plugin ---
+  // All optional here: the plugin checks that each instance's trio is whole when
+  // it boots (`assertBlindpayInstancesConsistent`), and a deployment that does
+  // not enable it never reads them.
   @IsOptional()
   @IsString()
   BLINDPAY_API_KEY?: string;
@@ -329,6 +464,30 @@ class EnvironmentVariables {
   @IsOptional()
   @IsString()
   DEFINDEX_API_KEY?: string;
+
+  /** Comma-separated slugs of the plugins in `plugins/` to serve. */
+  @IsOptional()
+  @IsString()
+  PLUGINS_ENABLED?: string;
+
+  /**
+   * Seals the secret config fields of plugin installations. Checked for
+   * presence by the plugin registry, which knows whether any enabled plugin
+   * declares one.
+   */
+  @IsOptional()
+  @IsString()
+  @MinLength(32)
+  PLUGINS_SECRET?: string;
+
+  /** Signers whose plugins run here, beside support's; checked by the loader. */
+  @IsOptional()
+  @IsString()
+  PLUGINS_TRUSTED_KEYS?: string;
+
+  @IsOptional()
+  @IsBooleanString()
+  PLUGINS_ALLOW_UNSIGNED?: string;
 
   @IsOptional()
   @IsUrl(URL_OPTIONS)
@@ -472,69 +631,11 @@ export function validateEnv(config: Record<string, unknown>) {
     );
   }
 
-  assertBlindpayInstancesConsistent(validated);
-
   assertIdentityConfigConsistent(config);
 
+  // Parsed here as well, so a malformed value fails the boot naming its
+  // variable instead of surfacing from the configuration factory.
+  parseEvmTokenFees(validated.MONAD_DEPOSIT_TOKEN_FEES);
+
   return validated;
-}
-
-/**
- * Each BlindPay instance is configured by its own trio of variables — unsuffixed
- * for production, `_DEV` for development — and a trio must be whole: an instance
- * id is required alongside its key, and so is the webhook secret, because without
- * it that instance's deliveries cannot be verified at all.
- */
-function assertBlindpayInstancesConsistent(
-  validated: EnvironmentVariables,
-): void {
-  const instances = [
-    {
-      apiKey: validated.BLINDPAY_API_KEY,
-      apiKeyVar: 'BLINDPAY_API_KEY',
-      instanceId: validated.BLINDPAY_INSTANCE_ID,
-      instanceIdVar: 'BLINDPAY_INSTANCE_ID',
-      webhookSecret: validated.BLINDPAY_WEBHOOK_SECRET,
-      webhookSecretVar: 'BLINDPAY_WEBHOOK_SECRET',
-    },
-    {
-      apiKey: validated.BLINDPAY_API_KEY_DEV,
-      apiKeyVar: 'BLINDPAY_API_KEY_DEV',
-      instanceId: validated.BLINDPAY_INSTANCE_ID_DEV,
-      instanceIdVar: 'BLINDPAY_INSTANCE_ID_DEV',
-      webhookSecret: validated.BLINDPAY_WEBHOOK_SECRET_DEV,
-      webhookSecretVar: 'BLINDPAY_WEBHOOK_SECRET_DEV',
-    },
-  ];
-
-  for (const instance of instances) {
-    if (isNonEmpty(instance.apiKey)) {
-      if (!isNonEmpty(instance.instanceId)) {
-        throw new Error(
-          `${instance.instanceIdVar} is required when ${instance.apiKeyVar} is set: ` +
-            'every BlindPay API call is scoped to a platform instance id (in_...).',
-        );
-      }
-      if (!isNonEmpty(instance.webhookSecret)) {
-        throw new Error(
-          `${instance.webhookSecretVar} is required when ${instance.apiKeyVar} is set: ` +
-            'inbound BlindPay webhooks are verified with the Svix signing secret (whsec_...).',
-        );
-      }
-    }
-
-    // Checked whenever it is set, not only alongside the API key: the inbound
-    // webhook route reads it on its own.
-    if (
-      isNonEmpty(instance.webhookSecret) &&
-      !decodeSvixSecret(instance.webhookSecret)
-    ) {
-      throw new Error(
-        `${instance.webhookSecretVar} is not a usable Svix signing secret: it must be the ` +
-          'whsec_... value BlindPay shows for the endpoint, whose base64 key decodes ' +
-          `to at least ${SVIX_MIN_SECRET_BYTES} bytes. A truncated or mistyped secret ` +
-          'decodes to a short or empty key, and a webhook signed with that proves nothing.',
-      );
-    }
-  }
 }

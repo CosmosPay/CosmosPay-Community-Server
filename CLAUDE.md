@@ -75,14 +75,21 @@ src/admin/admin.constants.ts
 src/aliases/aliases.constants.ts
 src/analytics/analytics.constants.ts
 src/assets/assets.constants.ts
-src/blindpay/blindpay.constants.ts
+src/chains/chains.constants.ts
 src/common/rate-limit.constants.ts
 src/config/config.constants.ts
-src/kyc/kyc.constants.ts
+src/cross-chain-swaps/cross-chain-swaps.constants.ts
+src/evm/evm.constants.ts
+src/kuru/kuru.constants.ts
 src/liquidity-pools/liquidity-pools.constants.ts
+src/near-intents/near-intents.constants.ts
+src/native-plugins/blindpay/blindpay.constants.ts
+src/native-plugins/blindpay/kyc/kyc.constants.ts
 src/observer/observer.constants.ts
 src/payment-intents/payment-intents.constants.ts
+src/plugins/plugins.constants.ts
 src/prisma/prisma.constants.ts
+src/solana/solana.constants.ts
 src/stellar/stellar.constants.ts
 src/swaps/swaps.constants.ts
 src/webhooks/webhooks.constants.ts
@@ -242,6 +249,48 @@ table. These are the rules that did not hold on their own:
   `stellar/sep7.ts` and `SignedTransactionRelay` exist because private copies
   drifted apart.
 
+## Chains and native plugins
+
+- **Stellar, Solana and Monad are one `Chain` union** (`@/chains/chains.constants`).
+  Anything per chain — address rules, transaction-id shapes, payment verifiers,
+  message signatures, analytics labels — is a `Record<Chain, …>`, so a new chain
+  does not compile until every table has its entry. A request that names no chain
+  means Stellar, and must keep behaving byte for byte as it did: the Stellar
+  signing challenges have no `chain:` line, alias resolution defaults to Stellar.
+- **Solana and Monad are reached only through `SolanaRpcClient` / `EvmRpcClient`**,
+  which check the node's genesis hash / `eth_chainId` before trusting it. Never
+  call a node URL directly.
+- **Integrations that are not the chain itself are native plugins** under
+  `src/native-plugins/<slug>/` (BlindPay, DeFindex), switched on by
+  `PLUGINS_ENABLED`. The core never imports one — lint enforces it — and a plugin
+  never imports another. When the core needs a plugin's data, add an extension
+  point in the core (see `AdminExtensions`) and have the plugin register into it.
+  A new native plugin needs its slug in `NATIVE_PLUGIN_SLUGS`, its module in
+  `NATIVE_PLUGIN_MODULES` and its own lint entry in `eslint.config.mjs`.
+- **Swap venues are the exception, by decision: they are core.** A same-chain
+  swap is `/v1/swaps` on the chain's own venue — the Stellar DEX, Jupiter on
+  Solana, Kuru Flow on Monad (`src/jupiter/`, `src/kuru/`, one
+  `ChainSwapVenue` per chain in `src/swaps/venues/`). A swap between chains is
+  `/v1/cross-chain-swaps` on NEAR Intents (`src/near-intents/`), which refuses
+  every same-chain pair. All of them are always compiled in, not plugins.
+  Each aggregator only prices and builds: the wallet signs, and this service
+  checks the signed transaction is the one it built before broadcasting it
+  through its own RPC. Anything per chain is a `Record<Chain, …>`
+  (`NEAR_INTENTS_BLOCKCHAINS`, `DEPOSIT_LINK_BUILDERS`, `CHAIN_SWAP_PROVIDERS`),
+  deposit links use this service's own SEP-7 / Solana Pay / EIP-681 builders, and
+  third-party HTTP goes through `requestUpstreamJson` (`src/common/upstream-http.ts`).
+- **Monad deposit addresses are `CREATE2` addresses of
+  `contracts/PaymentForwarder.sol`**, so every one of them depends on the exact
+  bytecode in `src/evm/payment-forwarder.artifact.ts`. Regenerate it only with
+  `npm run contracts:compile` (the spec fails if source and artifact disagree),
+  and never while a deposit address built from the old bytecode may still hold
+  or receive money: the forwarder rebuilds each address from the CURRENT
+  artifact, finds it no longer matches the stored one, and refuses to deploy — the
+  money stays safe but stuck until the old artifact is restored. The relayer key
+  signs only forwarder deployments and
+  flushes; it must never gain another use, because "it holds gas money only" is
+  the whole security argument.
+
 ## Security invariants a change must keep
 
 Each of these was a real finding in this codebase, not a hypothetical:
@@ -255,8 +304,10 @@ Each of these was a real finding in this codebase, not a hypothetical:
   `ApisixGuard` drops whatever `X-Consumer-Username` the client sent. Never read
   `@CurrentConsumer()` there.
 - **A secret that proves something never goes back to a caller who could not
-  already prove it.** A recovery token proves a mailbox, so only the platform
-  console receives it (`ConsoleOnlyGuard`), and the console emails it.
+  already prove it.** A recovery token proves a mailbox, so this service emails
+  it to that mailbox and never puts it in a response — which is what lets any
+  caller start an alias recovery, and why its answer is identical either way
+  (`@UniformAnswer`).
 - **Reads return a `*_PUBLIC_SELECT` projection**, never the full row — the full
   row carries `raw` provider payloads and internal ids.
 - **Every tenant query filters by the calling consumer**, and a miss on someone

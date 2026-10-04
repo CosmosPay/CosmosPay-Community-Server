@@ -1,4 +1,9 @@
 import { createHash } from 'node:crypto';
+import { Keypair } from '@stellar/stellar-sdk';
+import { secp256k1 } from '@noble/curves/secp256k1.js';
+import { keccak_256 } from '@noble/hashes/sha3.js';
+import { encodeBase58, toChecksumAddress } from '@/chains/chain-address';
+import { eip191Digest } from '@/chains/message-signature';
 import { ConfigService } from '@nestjs/config';
 import {
   WalletAuthHandshakeStatus,
@@ -10,8 +15,14 @@ import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { AppConfig } from '@/config/configuration';
 import { PrismaService } from '@/prisma/prisma.service';
 import { OidcService } from '@/common/oidc/oidc.service';
+import { WalletKeysService } from '@/gateway-keys/wallet-keys.service';
+import { MailerService } from '@/mailer/mailer.service';
+import { BackupCipher } from '@/wallet-auth/backup-cipher';
 import { WalletAuthService } from '@/wallet-auth/wallet-auth.service';
-import { LOGIN_CODE_MAX_ATTEMPTS } from '@/wallet-auth/wallet-auth.constants';
+import {
+  LOGIN_CODE_MAX_ATTEMPTS,
+  WALLET_MAX_BACKUPS,
+} from '@/wallet-auth/wallet-auth.constants';
 import {
   backupMessage,
   finishMessage,
@@ -43,13 +54,15 @@ const BOX = JSON.stringify({
 const SETTINGS = {
   publicBaseUrl: 'https://api.example.com',
   sessionSecret: SESSION_SECRET,
-  consoleUrl: 'https://console.example.com',
-  consoleSecret: 'console-secret',
   google: { clientId: 'gid', clientSecret: 'gsecret' },
   github: { clientId: '', clientSecret: '' },
   oidc: { issuer: '', clientId: '', clientSecret: '' },
   returnUrls: [] as string[],
-  signersHorizonUrl: 'https://horizon.example.com',
+  signersHorizonUrls: {
+    testnet: 'https://horizon.example.com',
+    public: 'https://horizon-public.example.com',
+  },
+  signersNetwork: 'testnet' as const,
   sponsor: {
     secret: '',
     networkPassphrase: 'Test SDF Network ; September 2015',
@@ -90,22 +103,46 @@ function makePrisma() {
   };
 }
 
-function makeService(settings: Partial<typeof SETTINGS> = {}) {
+function makeService(
+  settings: Partial<typeof SETTINGS> = {},
+  { mailConfigured = true } = {},
+) {
   const prisma = makePrisma();
   const config = {
     get: jest.fn().mockReturnValue({ ...SETTINGS, ...settings }),
   } as unknown as ConfigService<AppConfig, true>;
   const oidc = { verify: jest.fn(), discover: jest.fn() };
+  const mailer = {
+    configured: mailConfigured,
+    send: jest.fn().mockResolvedValue(undefined),
+  };
+  const walletKeys = {
+    configured: true,
+    provision: jest
+      .fn()
+      .mockResolvedValue({ organizationId: 'org_1', dev: null, prod: null }),
+  };
+  // Transparent at rest: these tests are about what the service decides, not the seal
+  // (backup-cipher.spec.ts). `seal` marks what it stores so a test can tell.
+  const backupCipher = {
+    seal: jest.fn((box: string, _chain: string, _address: string) => box),
+    open: jest.fn(
+      (box: string, _chain: string, _address: string): string | null => box,
+    ),
+  };
   const service = new WalletAuthService(
     prisma as unknown as PrismaService,
     config,
     oidc as unknown as OidcService,
+    mailer as unknown as MailerService,
+    walletKeys as unknown as WalletKeysService,
+    backupCipher as unknown as BackupCipher,
   );
-  return { service, prisma, oidc };
+  return { service, prisma, oidc, mailer, walletKeys, backupCipher };
 }
 
-/** The console hop always answers, unless a test says otherwise. */
-function stubConsole(body: unknown = { organizationId: 'org_1', keys: {} }) {
+/** Outbound HTTP always answers, unless a test says otherwise. */
+function stubFetch(body: unknown = {}) {
   const fetchMock = jest.fn().mockResolvedValue({
     ok: true,
     status: 200,
@@ -118,7 +155,7 @@ function stubConsole(body: unknown = { organizationId: 'org_1', keys: {} }) {
 describe('WalletAuthService', () => {
   beforeEach(() => {
     jest.useFakeTimers().setSystemTime(NOW);
-    stubConsole();
+    stubFetch();
   });
 
   afterEach(() => {
@@ -137,7 +174,7 @@ describe('WalletAuthService', () => {
     });
 
     it('reports no email door when nothing can deliver the code', () => {
-      const { service } = makeService({ consoleUrl: '' });
+      const { service } = makeService({}, { mailConfigured: false });
       expect(service.providers().email).toBe(false);
     });
   });
@@ -437,8 +474,16 @@ describe('WalletAuthService', () => {
       prisma.walletAuthHandshake.updateMany.mockResolvedValue({ count: 1 });
       prisma.walletAccount.findUnique.mockResolvedValue({
         id: 'acc_1',
-        stellarAddress: ADDRESS,
-        backup: { stellarAddress: ADDRESS, box: BOX, updatedAt: new Date(NOW) },
+        chain: 'stellar',
+        address: ADDRESS,
+        backups: [
+          {
+            chain: 'stellar',
+            address: ADDRESS,
+            box: BOX,
+            updatedAt: new Date(NOW),
+          },
+        ],
       });
       prisma.walletLoginCode.create.mockResolvedValue({});
 
@@ -507,23 +552,37 @@ describe('WalletAuthService', () => {
       expect(JSON.stringify(stored)).not.toContain(sent.claimToken);
     });
 
-    it('hands the code to the console rather than keeping a mailer', async () => {
-      const fetchMock = stubConsole();
-      const { service, prisma } = makeService();
+    it('emails the code itself, with no other service in the path', async () => {
+      const fetchMock = stubFetch();
+      const { service, prisma, mailer } = makeService();
       prisma.walletLoginCode.findFirst.mockResolvedValue(null);
       prisma.walletAccount.findUnique.mockResolvedValue(null);
       prisma.walletLoginCode.create.mockResolvedValue({});
 
       await service.startEmail({ email: EMAIL });
 
-      const [url, init] = fetchMock.mock.calls[0];
-      expect(url).toBe('https://console.example.com/wallet/console/login-code');
-      expect(JSON.parse(init.body).code).toMatch(/^\d{6}$/);
-      expect(init.headers['x-cosmos-internal']).toBe('1');
+      const sent = mailer.send.mock.calls[0][0];
+      expect(sent.to).toBe(EMAIL);
+      expect(sent.text).toMatch(/\b\d{6}\b/);
+      // Never in the subject: that is what a locked phone shows.
+      expect(sent.subject).not.toMatch(/\d{6}/);
+      expect(fetchMock).not.toHaveBeenCalled();
     });
 
-    it('refuses when no console is configured rather than minting a code nobody sends', async () => {
-      const { service, prisma } = makeService({ consoleUrl: '' });
+    it('refuses when the send fails rather than leaving a code nobody received', async () => {
+      const { service, prisma, mailer } = makeService();
+      prisma.walletLoginCode.findFirst.mockResolvedValue(null);
+      prisma.walletAccount.findUnique.mockResolvedValue(null);
+      prisma.walletLoginCode.create.mockResolvedValue({});
+      mailer.send.mockRejectedValue(new Error('provider down'));
+
+      await expect(service.startEmail({ email: EMAIL })).rejects.toMatchObject({
+        code: ApiErrorCode.Misconfigured,
+      });
+    });
+
+    it('refuses when no sender is configured rather than minting a code nobody sends', async () => {
+      const { service, prisma } = makeService({}, { mailConfigured: false });
       prisma.walletLoginCode.findFirst.mockResolvedValue(null);
       prisma.walletAccount.findUnique.mockResolvedValue(null);
       prisma.walletLoginCode.create.mockResolvedValue({});
@@ -602,8 +661,16 @@ describe('WalletAuthService', () => {
       prisma.walletLoginCode.updateMany.mockResolvedValue({ count: 1 });
       prisma.walletAccount.findUnique.mockResolvedValue({
         id: 'acc_1',
-        stellarAddress: ADDRESS,
-        backup: { stellarAddress: ADDRESS, box: BOX, updatedAt: new Date(NOW) },
+        chain: 'stellar',
+        address: ADDRESS,
+        backups: [
+          {
+            chain: 'stellar',
+            address: ADDRESS,
+            box: BOX,
+            updatedAt: new Date(NOW),
+          },
+        ],
       });
 
       const result = await service.verifyEmail({
@@ -613,6 +680,7 @@ describe('WalletAuthService', () => {
 
       expect(result.status).toBe('ready');
       expect(result).toMatchObject({
+        backups: [{ chain: 'stellar', address: ADDRESS, box: BOX }],
         backup: { stellarAddress: ADDRESS, box: BOX },
       });
     });
@@ -688,39 +756,136 @@ describe('WalletAuthService', () => {
       ).rejects.toMatchObject({ code: ApiErrorCode.WalletBackupInvalid });
     });
 
-    /* The box being discarded may be the only copy of a funded wallet, so it is
-       never replaced by implication. */
-    it('refuses to overwrite a backup held for another address', async () => {
+    /* The box that used to be discarded here could be the only copy of a funded wallet. */
+    it('adds a backup for another wallet beside the ones the account keeps', async () => {
       const { service, prisma } = makeService();
       prisma.walletAccount.findUnique.mockResolvedValue({
         id: 'acc_1',
-        stellarAddress: OTHER_ADDRESS,
-        backup: {
-          stellarAddress: OTHER_ADDRESS,
-          box: BOX,
-          updatedAt: new Date(NOW),
-        },
+        chain: 'stellar',
+        address: OTHER_ADDRESS,
+        backups: [
+          {
+            chain: 'stellar',
+            address: OTHER_ADDRESS,
+            box: BOX,
+            updatedAt: new Date(NOW),
+          },
+        ],
       });
+      prisma.walletAccount.upsert.mockResolvedValue({ id: 'acc_1' });
+      prisma.walletBackup.upsert.mockResolvedValue({});
 
       const result = await service.finish(token(), { ...body(), backup: BOX });
 
-      expect(result).toEqual({
-        status: 'backup_conflict',
-        stellarAddress: OTHER_ADDRESS,
+      expect(result).toMatchObject({ status: 'ready', account: 'linked' });
+      expect(prisma.walletBackup.upsert.mock.calls[0][0].where).toEqual({
+        walletAccountId_chain_address: {
+          walletAccountId: 'acc_1',
+          chain: 'stellar',
+          address: ADDRESS,
+        },
       });
-      expect(prisma.walletAccount.upsert).not.toHaveBeenCalled();
     });
 
-    it('replaces it when the person explicitly asked', async () => {
+    /* What reaches the table is the at-rest seal, never the device's box as sent. */
+    it('stores the box sealed at rest, bound to its chain and address', async () => {
+      const { service, prisma, backupCipher } = makeService();
+      backupCipher.seal.mockImplementation(
+        (box: string, chain: string, address: string) =>
+          `enc1:${chain}:${address}:${box.length}`,
+      );
+      prisma.walletAccount.findUnique.mockResolvedValue(null);
+      prisma.walletAccount.upsert.mockResolvedValue({ id: 'acc_1' });
+      prisma.walletBackup.upsert.mockResolvedValue({});
+
+      await service.finish(token(), { ...body(), backup: BOX });
+
+      const stored = prisma.walletBackup.upsert.mock.calls[0][0];
+      expect(backupCipher.seal).toHaveBeenCalledWith(BOX, 'stellar', ADDRESS);
+      expect(stored.create.box).toBe(`enc1:stellar:${ADDRESS}:${BOX.length}`);
+      expect(stored.update.box).toBe(stored.create.box);
+      expect(JSON.stringify(stored)).not.toContain(BOX);
+    });
+
+    it('refuses a new wallet past the per-account cap, but still re-seals a kept one', async () => {
+      const kept = Array.from({ length: WALLET_MAX_BACKUPS }, (_, i) => ({
+        chain: 'stellar',
+        address: i === 0 ? ADDRESS : `G${String(i).padStart(55, 'A')}`,
+        box: BOX,
+        updatedAt: new Date(NOW),
+      }));
+      const full = makeService();
+      full.prisma.walletAccount.findUnique.mockResolvedValue({
+        id: 'acc_1',
+        chain: 'stellar',
+        address: ADDRESS,
+        backups: kept
+          .slice(1)
+          .concat({ ...kept[1], address: `G${'B'.repeat(55)}` }),
+      });
+      await expect(
+        full.service.finish(token(), { ...body(), backup: BOX }),
+      ).rejects.toMatchObject({ code: ApiErrorCode.WalletBackupLimit });
+
+      const reseal = makeService();
+      reseal.prisma.walletAccount.findUnique.mockResolvedValue({
+        id: 'acc_1',
+        chain: 'stellar',
+        address: ADDRESS,
+        backups: kept,
+      });
+      reseal.prisma.walletAccount.upsert.mockResolvedValue({ id: 'acc_1' });
+      reseal.prisma.walletBackup.upsert.mockResolvedValue({});
+      await expect(
+        reseal.service.finish(token(), { ...body(), backup: BOX }),
+      ).resolves.toMatchObject({ status: 'ready' });
+    });
+
+    /* A second wallet of the same person connects for keys; nothing is discarded. */
+    it('connects another wallet without a backup, leaving the account where it was', async () => {
+      const { service, prisma, walletKeys } = makeService();
+      prisma.walletAccount.findUnique.mockResolvedValue({
+        id: 'acc_1',
+        chain: 'stellar',
+        address: OTHER_ADDRESS,
+        backups: [
+          {
+            chain: 'stellar',
+            address: OTHER_ADDRESS,
+            box: BOX,
+            updatedAt: new Date(NOW),
+          },
+        ],
+      });
+      prisma.walletAccount.upsert.mockResolvedValue({ id: 'acc_1' });
+
+      const result = await service.finish(token(), body());
+
+      expect(result).toMatchObject({ status: 'ready', account: 'linked' });
+      const update = prisma.walletAccount.upsert.mock.calls[0][0].update;
+      expect(update.address).toBeUndefined();
+      expect(update.chain).toBeUndefined();
+      expect(prisma.walletBackup.upsert).not.toHaveBeenCalled();
+      expect(walletKeys.provision).toHaveBeenCalledWith({
+        accountId: 'acc_1',
+        email: EMAIL,
+      });
+    });
+
+    it('accepts `replaceBackup` from older wallets, which changes nothing', async () => {
       const { service, prisma } = makeService();
       prisma.walletAccount.findUnique.mockResolvedValue({
         id: 'acc_1',
-        stellarAddress: OTHER_ADDRESS,
-        backup: {
-          stellarAddress: OTHER_ADDRESS,
-          box: BOX,
-          updatedAt: new Date(NOW),
-        },
+        chain: 'stellar',
+        address: OTHER_ADDRESS,
+        backups: [
+          {
+            chain: 'stellar',
+            address: OTHER_ADDRESS,
+            box: BOX,
+            updatedAt: new Date(NOW),
+          },
+        ],
       });
       prisma.walletAccount.upsert.mockResolvedValue({ id: 'acc_1' });
       prisma.walletBackup.upsert.mockResolvedValue({});
@@ -736,12 +901,14 @@ describe('WalletAuthService', () => {
       expect(prisma.walletBackup.upsert).toHaveBeenCalled();
     });
 
-    it('creates the account and asks the console for its keys', async () => {
-      const fetchMock = stubConsole({
+    it('creates the account and mints its keys directly', async () => {
+      const fetchMock = stubFetch();
+      const { service, prisma, walletKeys } = makeService();
+      walletKeys.provision.mockResolvedValue({
         organizationId: 'org_1',
-        keys: { dev: 'k_dev', prod: 'k_prod' },
+        dev: 'k_dev',
+        prod: 'k_prod',
       });
-      const { service, prisma } = makeService();
       prisma.walletAccount.findUnique.mockResolvedValue(null);
       prisma.walletAccount.upsert.mockResolvedValue({ id: 'acc_1' });
 
@@ -754,9 +921,97 @@ describe('WalletAuthService', () => {
         organizationId: 'org_1',
         keys: { dev: 'k_dev', prod: 'k_prod' },
       });
-      expect(fetchMock.mock.calls[0][0]).toBe(
-        'https://console.example.com/wallet/console/provision',
-      );
+      expect(walletKeys.provision).toHaveBeenCalledWith({
+        accountId: 'acc_1',
+        email: EMAIL,
+      });
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    describe('on Solana and Monad', () => {
+      it('attaches a Solana account that signed the chain-bound challenge', async () => {
+        const kp = Keypair.random();
+        const address = encodeBase58(kp.rawPublicKey());
+        const message = finishMessage(EMAIL, address, SIGNED_AT, 'solana');
+        expect(message).toContain('\nchain: solana\n');
+        const { service, prisma, walletKeys } = makeService();
+        prisma.walletAccount.findUnique.mockResolvedValue(null);
+        prisma.walletAccount.upsert.mockResolvedValue({ id: 'acc_1' });
+
+        const result = await service.finish(token(), {
+          chain: 'solana',
+          address,
+          signedAt: SIGNED_AT,
+          signature: encodeBase58(kp.sign(Buffer.from(message))),
+        });
+
+        expect(result.status).toBe('ready');
+        expect(
+          prisma.walletAccount.upsert.mock.calls[0][0].create,
+        ).toMatchObject({ chain: 'solana', address });
+        expect(walletKeys.provision).toHaveBeenCalledWith({
+          accountId: 'acc_1',
+          email: EMAIL,
+        });
+      });
+
+      it('refuses a Stellar-format signature replayed as a Solana sign-in', async () => {
+        // Same ed25519 key, but signed over the Stellar challenge, which has
+        // no chain line: it must not open the Solana account.
+        const kp = Keypair.random();
+        const stellarSig = Buffer.from(
+          kp.sign(
+            Buffer.from(
+              finishMessage(EMAIL, encodeBase58(kp.rawPublicKey()), SIGNED_AT),
+            ),
+          ),
+        ).toString('base64');
+        const { service } = makeService();
+        await expect(
+          service.finish(token(), {
+            chain: 'solana',
+            address: encodeBase58(kp.rawPublicKey()),
+            signedAt: SIGNED_AT,
+            signature: stellarSig,
+          }),
+        ).rejects.toMatchObject({ code: ApiErrorCode.WalletSignatureInvalid });
+      });
+
+      it('attaches a Monad account that signed with personal_sign, stored EIP-55', async () => {
+        stubFetch();
+        const secret = secp256k1.utils.randomSecretKey();
+        const pub = secp256k1.getPublicKey(secret, false);
+        const lower = `0x${Buffer.from(keccak_256(pub.subarray(1)).subarray(12)).toString('hex')}`;
+        const checksummed = toChecksumAddress(lower);
+        const message = finishMessage(EMAIL, checksummed, SIGNED_AT, 'monad');
+        const sig = secp256k1.sign(eip191Digest(Buffer.from(message)), secret, {
+          prehash: false,
+          format: 'recovered',
+        });
+        const personalSig = `0x${Buffer.from(sig.subarray(1)).toString('hex')}${(27 + sig[0]).toString(16)}`;
+        const { service, prisma } = makeService();
+        prisma.walletAccount.findUnique.mockResolvedValue(null);
+        prisma.walletAccount.upsert.mockResolvedValue({ id: 'acc_1' });
+
+        const result = await service.finish(token(), {
+          chain: 'monad',
+          address: lower,
+          signedAt: SIGNED_AT,
+          signature: personalSig,
+        });
+
+        expect(result.status).toBe('ready');
+        expect(
+          prisma.walletAccount.upsert.mock.calls[0][0].create,
+        ).toMatchObject({ chain: 'monad', address: checksummed });
+      });
+
+      it('refuses `stellarAddress` sent with another chain', async () => {
+        const { service } = makeService();
+        await expect(
+          service.finish(token(), { ...body(), chain: 'solana' }),
+        ).rejects.toMatchObject({ code: ApiErrorCode.ValidationFailed });
+      });
     });
   });
 
@@ -772,7 +1027,8 @@ describe('WalletAuthService', () => {
       const { service, prisma } = makeService();
       prisma.walletBackup.findFirst.mockResolvedValue({ id: 'b_1' });
       prisma.walletBackup.update.mockResolvedValue({
-        stellarAddress: ADDRESS,
+        chain: 'stellar',
+        address: ADDRESS,
         updatedAt: new Date(NOW),
       });
 
@@ -800,14 +1056,15 @@ describe('WalletAuthService', () => {
       const { service, prisma } = makeService();
       prisma.walletBackup.findFirst.mockResolvedValue({ id: 'b_1' });
       prisma.walletBackup.update.mockResolvedValue({
-        stellarAddress: ADDRESS,
+        chain: 'stellar',
+        address: ADDRESS,
         updatedAt: new Date(NOW),
       });
 
       await service.replaceBackupBox(body());
 
       expect(prisma.walletBackup.findFirst).toHaveBeenCalledWith({
-        where: { stellarAddress: ADDRESS },
+        where: { chain: 'stellar', address: ADDRESS },
         select: { id: true },
       });
     });

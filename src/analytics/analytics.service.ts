@@ -8,12 +8,44 @@ import { PaginationQueryDto } from '@/common/dto/pagination.query.dto';
 import { page } from '@/common/pagination';
 import { resolveNetwork } from '@/common/stellar-network';
 import { PrismaService } from '@/prisma/prisma.service';
-import type { PaymentIntentStatus } from '@generated/prisma/client';
+import { Prisma, type PaymentIntentStatus } from '@generated/prisma/client';
 import { DAY_MS } from '@/analytics/analytics.constants';
+import {
+  isChain,
+  MAX_TOKEN_DECIMALS,
+  NATIVE_ASSET_CODES,
+} from '@/chains/chains.constants';
+import { STELLAR_DECIMALS } from '@/stellar/stellar.constants';
 
-function assetLabel(asset: string): string {
-  return !asset || asset === 'native' ? 'XLM' : asset;
+/** The ticker a row is reported under: the chain's coin for `native`. */
+function assetLabel(asset: string, chain: string): string {
+  if (asset && asset !== 'native') return asset;
+  return NATIVE_ASSET_CODES[isChain(chain) ? chain : 'stellar'];
 }
+
+/**
+ * How many places a chain's summed amounts are reported with: Stellar's 7, or
+ * the widest a token may have elsewhere — cutting a Monad sum at 7 would
+ * report a different amount than was paid.
+ */
+function placesFor(chain: string): number {
+  return chain === 'stellar' ? STELLAR_DECIMALS : MAX_TOKEN_DECIMALS;
+}
+
+/**
+ * The same label in SQL, for the grouped aggregates: `native` is XLM on
+ * Stellar, SOL on Solana, MON on Monad. Grouped together with `chain`, so SOL
+ * never lands in XLM's row and a token of one name on two chains is two rows.
+ * `Prisma.raw` over constants of our own, never over anything a caller sent.
+ */
+const ASSET_LABEL_SQL = Prisma.raw(`
+  CASE WHEN "asset" IN ('', 'native') THEN
+    CASE "chain"
+      WHEN 'solana' THEN '${NATIVE_ASSET_CODES.solana}'
+      WHEN 'monad' THEN '${NATIVE_ASSET_CODES.monad}'
+      ELSE '${NATIVE_ASSET_CODES.stellar}'
+    END
+  ELSE "asset" END`);
 
 /**
  * Read-only aggregates derived from the consumer's existing payment intents and
@@ -75,17 +107,22 @@ export class AnalyticsService {
           _count: { _all: true },
         }),
         this.prisma.$queryRaw<
-          { asset: string; amount: string | null; count: bigint }[]
+          {
+            chain: string;
+            asset: string;
+            amount: string | null;
+            count: bigint;
+          }[]
         >`
-          SELECT CASE WHEN "asset" IN ('', 'native') THEN 'XLM' ELSE "asset" END
-                   AS asset,
+          SELECT "chain",
+                 ${ASSET_LABEL_SQL} AS asset,
                  SUM("amount"::numeric) AS amount,
                  COUNT(*)               AS count
           FROM "payment_intent"
           WHERE "consumerId" = ${consumerId}
             AND "network" = ${network}
             AND "status" = 'SUCCEEDED'
-          GROUP BY 1
+          GROUP BY 1, 2
         `,
         this.prisma.$queryRaw<
           { day: Date; count: bigint; volume: string | null }[]
@@ -114,6 +151,7 @@ export class AnalyticsService {
             status: true,
             amount: true,
             asset: true,
+            chain: true,
             destination: true,
             createdAt: true,
           },
@@ -131,15 +169,16 @@ export class AnalyticsService {
       ? Math.round((succeededCount / total) * 1000) / 10
       : 0;
 
-    // Gross settled volume per asset (succeeded intents). The native alias is
-    // folded onto 'XLM' by the CASE in the GROUP BY, so every row already
-    // carries a distinct label. Re-folding here would mean parsing the numeric
+    // Gross settled volume per chain and asset (succeeded intents). The native
+    // alias is folded onto the chain's coin by the CASE in the GROUP BY, so
+    // every row already carries a distinct label. Re-folding here would mean parsing the numeric
     // back through Number and adding in float64 — exactly what
     // `formatNumericAmount` exists to avoid, since a seven-decimal Stellar
     // amount does not survive the round trip.
     const volume = volumeRows.map((row) => ({
+      chain: row.chain,
       asset: row.asset,
-      amount: formatNumericAmount(row.amount),
+      amount: formatNumericAmount(row.amount, placesFor(row.chain)),
       count: toCount(row.count),
     }));
 
@@ -215,6 +254,7 @@ export class AnalyticsService {
     status: PaymentIntentStatus;
     amount: string | null;
     asset: string;
+    chain: string;
     destination: string;
     createdAt: Date;
   }) {
@@ -222,8 +262,9 @@ export class AnalyticsService {
       id: i.id,
       kind: i.kind,
       status: i.status,
+      chain: i.chain,
       amount: i.amount,
-      asset: assetLabel(i.asset),
+      asset: assetLabel(i.asset, i.chain),
       destination: i.destination,
       createdAt: i.createdAt,
     };
@@ -238,21 +279,22 @@ export class AnalyticsService {
     // gives the settled and in-flight sums in a single pass over the index.
     const rows = await this.prisma.$queryRaw<
       {
+        chain: string;
         asset: string;
         settled: string | null;
         pending: string | null;
         settled_count: bigint;
       }[]
     >`
-      SELECT CASE WHEN "asset" IN ('', 'native') THEN 'XLM' ELSE "asset" END
-               AS asset,
+      SELECT "chain",
+             ${ASSET_LABEL_SQL} AS asset,
              SUM("amount"::numeric) FILTER (WHERE "status" = 'SUCCEEDED') AS settled,
              SUM("amount"::numeric) FILTER (WHERE "status" IN ('PENDING', 'SUBMITTED')) AS pending,
              COUNT(*) FILTER (WHERE "status" = 'SUCCEEDED') AS settled_count
       FROM "payment_intent"
       WHERE "consumerId" = ${consumerId}
         AND "network" = ${network}
-      GROUP BY 1
+      GROUP BY 1, 2
       ORDER BY SUM("amount"::numeric) FILTER (WHERE "status" = 'SUCCEEDED')
                DESC NULLS LAST
     `;
@@ -262,9 +304,10 @@ export class AnalyticsService {
     // to float64 and lose the precision the `String` amount column was chosen
     // to keep.
     const data = rows.map((row) => ({
+      chain: row.chain,
       asset: row.asset,
-      amount: formatNumericAmount(row.settled),
-      pending: formatNumericAmount(row.pending),
+      amount: formatNumericAmount(row.settled, placesFor(row.chain)),
+      pending: formatNumericAmount(row.pending, placesFor(row.chain)),
       count: toCount(row.settled_count),
     }));
 

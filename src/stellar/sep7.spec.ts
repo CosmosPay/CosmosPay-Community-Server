@@ -64,6 +64,21 @@ describe('sep7PayUri', () => {
       `web+stellar:pay?destination=${destination}&memo=7&memo_type=MEMO_ID`,
     );
   });
+
+  it('writes a MEMO_TEXT when asked — a NEAR Intents deposit is matched on one', () => {
+    expect(
+      sep7PayUri({
+        destination,
+        amount: '100',
+        asset: resolveAsset(),
+        memo: '188866795',
+        memoType: 'MEMO_TEXT',
+      }),
+    ).toBe(
+      `web+stellar:pay?destination=${destination}&amount=100` +
+        '&memo=188866795&memo_type=MEMO_TEXT',
+    );
+  });
 });
 
 describe('sep7Qr', () => {

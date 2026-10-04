@@ -3,7 +3,7 @@ import { ConfigModule } from '@nestjs/config';
 import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { EventEmitterModule } from '@nestjs/event-emitter';
 import { LoggingInterceptor } from '@/common/interceptors/logging.interceptor';
-import configuration from '@/config/configuration';
+import configuration, { envFilePath } from '@/config/configuration';
 import { validateEnv } from '@/config/env.validation';
 import { ApisixGuard } from '@/common/guards/apisix.guard';
 import { PermissionsGuard } from '@/common/guards/permissions.guard';
@@ -15,7 +15,9 @@ import { StellarModule } from '@/stellar/stellar.module';
 import { HealthModule } from '@/health/health.module';
 import { PaymentIntentsModule } from '@/payment-intents/payment-intents.module';
 import { SwapsModule } from '@/swaps/swaps.module';
+import { CrossChainSwapsModule } from '@/cross-chain-swaps/cross-chain-swaps.module';
 import { AssetsModule } from '@/assets/assets.module';
+import { PublicKeyModule } from '@/public-key/public-key.module';
 import { LiquidityPoolsModule } from '@/liquidity-pools/liquidity-pools.module';
 import { ObserverModule } from '@/observer/observer.module';
 import { WebhooksModule } from '@/webhooks/webhooks.module';
@@ -27,18 +29,16 @@ import { CustomersModule } from '@/customers/customers.module';
 import { AliasesModule } from '@/aliases/aliases.module';
 import { WalletAuthModule } from '@/wallet-auth/wallet-auth.module';
 import { RecoveryModule } from '@/recovery/recovery.module';
-import { BlindpayModule } from '@/blindpay/blindpay.module';
-import { KycModule } from '@/kyc/kyc.module';
-import { OnrampModule } from '@/onramp/onramp.module';
-import { OfframpModule } from '@/offramp/offramp.module';
 import { CommonModule } from '@/common/common.module';
-import { DefindexModule } from '@/defindex/defindex.module';
+import { PluginsModule } from '@/plugins/plugins.module';
+import { NativePluginsModule } from '@/native-plugins/native-plugins.module';
 
 @Module({
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
       cache: true,
+      envFilePath: envFilePath(),
       load: [configuration],
       validate: validateEnv,
     }),
@@ -49,10 +49,13 @@ import { DefindexModule } from '@/defindex/defindex.module';
     HealthModule,
     PaymentIntentsModule,
     SwapsModule,
+    // Swaps between Stellar, Solana and Monad, settled by NEAR Intents (1Click).
+    // Core, not a native plugin: it is how this service swaps across chains.
+    CrossChainSwapsModule,
     LiquidityPoolsModule,
-    DefindexModule,
     // The asset registry: which (code, issuer) pairs we vouch for, per network.
     AssetsModule,
+    PublicKeyModule,
     // Background reconciler: flips swaps/LP ops to SUCCEEDED/FAILED/EXPIRED by
     // checking their txHash on Horizon, even when the customer self-broadcasts.
     ObserverModule,
@@ -71,13 +74,14 @@ import { DefindexModule } from '@/defindex/defindex.module';
     // SEP-10 + SEP-30: this deployment as one of the two recovery servers, when
     // RECOVERY_ROLE says so. Inert (404) everywhere else.
     RecoveryModule,
-    // BlindPay rails: onramp / offramp / KYC. BlindpayModule is global and hosts
-    // the shared client + inbound webhook endpoint; the feature modules below use
-    // it. OnrampModule imports KycModule (receiver resolution).
-    BlindpayModule,
-    KycModule,
-    OnrampModule,
-    OfframpModule,
+    // Compiled-in extensions under /v1/plugins/{slug}: they reach the core only
+    // through the capabilities a tenant grants, never Prisma. PLUGINS_ENABLED
+    // picks which ones this deployment serves; none by default.
+    PluginsModule,
+    // First-party integrations that are not the chain itself — BlindPay's fiat
+    // rails and KYC, DeFindex vaults — compiled in but imported only when
+    // PLUGINS_ENABLED names them. The core never imports them directly.
+    NativePluginsModule,
   ],
   providers: [
     // Persist a RequestLog row per request (powers the API logs view).

@@ -1,9 +1,19 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsEnum, IsInt, IsOptional, Max, Min } from 'class-validator';
+import { IsEnum, IsIn, IsInt, IsOptional, Max, Min } from 'class-validator';
+import { CHAINS, type Chain } from '@/chains/chains.constants';
 import { SwapStatus } from '@generated/prisma/client';
 
 export class QuerySwapsDto {
+  @ApiPropertyOptional({
+    enum: CHAINS,
+    default: 'stellar',
+    description: 'Which chain to list. Omitted means Stellar.',
+  })
+  @IsOptional()
+  @IsIn(CHAINS)
+  chain?: Chain;
+
   @ApiPropertyOptional({ enum: SwapStatus })
   @IsOptional()
   @IsEnum(SwapStatus)

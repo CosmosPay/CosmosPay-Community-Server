@@ -34,6 +34,7 @@ describe('PaymentIntentsService create replay', () => {
     id: 'pi_attacker',
     consumerId: 'c1',
     kind: 'PAY',
+    chain: 'stellar',
     source: null,
     destination: attacker,
     amount: '10',
@@ -106,6 +107,7 @@ describe('PaymentIntentsService create replay', () => {
       new Sep7LinkBuilder(config, stellar as never, accounts),
       new ConsumerResolverService(prisma),
       { ensureForPayer: jest.fn() } as never,
+      {} as never,
     );
     return { service, prisma, loadAccount };
   }

@@ -102,8 +102,10 @@ async function main() {
         // The platform did not record how the email was proven; every door it
         // had ended in a verified email, and the next sign-in overwrites this.
         method: WalletAuthMethod.EMAIL,
-        stellarAddress: address,
-        backup: { create: { stellarAddress: address, box } },
+        // The platform only ever issued Stellar wallets.
+        chain: 'stellar',
+        address,
+        backup: { create: { chain: 'stellar', address, box } },
       },
     });
   }
@@ -136,12 +138,13 @@ async function main() {
       }
       accounts += 1;
       if (dryRun) continue;
+      const network = str(row.network) || 'public';
       await prisma.recoveryAccount.upsert({
-        where: { role_address: { role, address } },
+        where: { role_network_address: { role, network, address } },
         create: {
           role,
           address,
-          network: str(row.network) || 'public',
+          network,
           methods: { create: methods },
         },
         // Present already means registered here since the move: newer, kept.

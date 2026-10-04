@@ -1,3 +1,4 @@
+import { Prisma } from '@generated/prisma/client';
 import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
 import { AnalyticsService } from '@/analytics/analytics.service';
 import type { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
@@ -21,8 +22,22 @@ const consumer = {
  */
 describe('AnalyticsService', () => {
   /** The SQL text of the nth `$queryRaw` tagged template, whitespace-collapsed. */
-  const sqlOf = (queryRaw: jest.Mock, nth: number): string =>
-    (queryRaw.mock.calls[nth][0] as string[]).join('?').replace(/\s+/g, ' ');
+  // A nested `Prisma.sql` / `Prisma.raw` fragment is spliced in as its text,
+  // the way the real client composes it; anything else is a bound parameter.
+  const sqlOf = (queryRaw: jest.Mock, nth: number): string => {
+    const [strings, ...values] = queryRaw.mock.calls[nth] as [
+      string[],
+      ...unknown[],
+    ];
+    return strings
+      .map((part, i) => {
+        if (i === strings.length - 1) return part;
+        const value = values[i];
+        return value instanceof Prisma.Sql ? part + value.sql : `${part}?`;
+      })
+      .join('')
+      .replace(/\s+/g, ' ');
+  };
 
   function build(queryResults: unknown[][]) {
     const queryRaw = jest.fn();
@@ -101,7 +116,7 @@ describe('AnalyticsService', () => {
     ]);
   });
 
-  it('folds the native alias onto XLM in SQL, not in JS', async () => {
+  it('folds the native alias onto each chain’s coin in SQL, not in JS', async () => {
     // The fold has to happen inside the GROUP BY. Folding it afterwards in JS
     // meant adding two exact numerics back through `Number`, which is the one
     // thing `formatNumericAmount` exists to prevent.
@@ -110,20 +125,26 @@ describe('AnalyticsService', () => {
     await service.summary(consumer);
 
     const sql = sqlOf(prisma.$queryRaw, 0);
-    expect(sql).toContain(`CASE WHEN "asset" IN ('', 'native') THEN 'XLM'`);
-    expect(sql).toContain('GROUP BY 1');
+    expect(sql).toContain(`CASE WHEN "asset" IN ('', 'native') THEN`);
+    expect(sql).toContain(`WHEN 'solana' THEN 'SOL'`);
+    expect(sql).toContain(`WHEN 'monad' THEN 'MON'`);
+    expect(sql).toContain(`ELSE 'XLM'`);
+    // Grouped by chain too: SOL never lands in XLM's row.
+    expect(sql).toContain('GROUP BY 1, 2');
   });
 
   it('passes an aggregated row straight through and tolerates a null sum', async () => {
     const { service } = build([
-      [{ asset: 'XLM', amount: null, count: 0n }],
+      [{ chain: 'stellar', asset: 'XLM', amount: null, count: 0n }],
       [],
       [{ payers: 0n }],
     ]);
 
     const result = await service.summary(consumer);
 
-    expect(result.volume).toEqual([{ asset: 'XLM', amount: '0', count: 0 }]);
+    expect(result.volume).toEqual([
+      { chain: 'stellar', asset: 'XLM', amount: '0', count: 0 },
+    ]);
   });
 
   it('seeds 30 day buckets and fills only the days that have rows', async () => {
@@ -179,6 +200,7 @@ describe('AnalyticsService', () => {
     const { service, prisma } = build([
       [
         {
+          chain: 'stellar',
           asset: 'USDC',
           settled: '90071992547409.9100000',
           pending: '0.1000000',
@@ -190,8 +212,8 @@ describe('AnalyticsService', () => {
     const result = await service.balances(consumer);
 
     const sql = sqlOf(prisma.$queryRaw, 0);
-    expect(sql).toContain(`CASE WHEN "asset" IN ('', 'native') THEN 'XLM'`);
-    expect(sql).toContain('GROUP BY 1');
+    expect(sql).toContain(`ELSE 'XLM'`);
+    expect(sql).toContain('GROUP BY 1, 2');
     // Ordering is the database's job too — a JS sort would have to parse the
     // amounts back to numbers to compare them.
     expect(sql).toContain('ORDER BY');

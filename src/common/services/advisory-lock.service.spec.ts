@@ -119,6 +119,7 @@ describe('AdvisoryLockService', () => {
     expect(new Set(ids).size).toBe(ids.length);
     expect(ids).toEqual([
       881_001, 881_002, 881_003, 881_004, 881_006, 881_008, 881_009, 881_010,
+      881_011, 881_012, 881_013,
     ]);
     // Retired with Pollar: a replica still on the old build takes these, so a new
     // task must never be given one.

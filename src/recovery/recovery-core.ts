@@ -131,7 +131,15 @@ export function signerFor(signerMaster: string, address: string): Keypair {
 
 /* ------------------------------- the tokens -------------------------------- */
 
-const sep10Purpose = (role: string) => `sep10:${role}`;
+/**
+ * A SEP-10 token proves control of an account on ONE ledger — the one whose
+ * passphrase the challenge was signed under — so the ledger is in its purpose.
+ * Control of G… on testnet says nothing about G… on mainnet: a key the testnet
+ * account lists as a signer may be one the mainnet account has never heard of.
+ * Identity tokens carry no ledger: an inbox is the same inbox on both.
+ */
+const sep10Purpose = (role: string, passphrase: string) =>
+  `sep10:${role}:${networkOf(passphrase)}`;
 const identityPurpose = (role: string) => `recovery-identity:${role}`;
 
 /** The SEP-10 token a verified challenge buys. */
@@ -151,7 +159,7 @@ export function issueSep10Token(
       home_domain: rules.sep10.homeDomain,
     },
     rules.jwtSecret,
-    sep10Purpose(rules.role),
+    sep10Purpose(rules.role, rules.sep10.networkPassphrase),
   );
 }
 
@@ -190,7 +198,7 @@ export function actorFromToken(
   const sep10 = readJwt(
     token,
     rules.jwtSecret,
-    sep10Purpose(rules.role),
+    sep10Purpose(rules.role, rules.sep10.networkPassphrase),
     audience,
     nowSeconds,
   );
@@ -225,13 +233,20 @@ export function actorFromToken(
  */
 export function listWhere(
   role: string,
+  network: string,
   actor: Actor,
   after?: string,
 ): Record<string, unknown> {
+  // One ledger per listing: an account registered on testnet is not one this
+  // server can recover on mainnet, and listing it there offers a dead end.
   const scope =
     actor.kind === 'address'
-      ? { role, address: actor.address }
-      : { role, methods: { some: { type: actor.type, value: actor.value } } };
+      ? { role, network, address: actor.address }
+      : {
+          role,
+          network,
+          methods: { some: { type: actor.type, value: actor.value } },
+        };
   return after ? { AND: [scope, { address: { gt: after } }] } : scope;
 }
 

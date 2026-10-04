@@ -72,6 +72,19 @@ const FIXTURES: Record<
     ],
     message: 'address must be a valid EVM address (0x + 40 hex) for chain evm',
   },
+  monad: {
+    valid: [
+      '0x52908400098527886E0F7030069857D2E4169EE7',
+      `0x${'a'.repeat(40)}`,
+    ],
+    invalid: [
+      '52908400098527886E0F7030069857D2E4169EE7',
+      '0x52908400098527886E0F7030069857D2E4169EE',
+      'GARMB7W3FCR3GKIM3FLWVJASC2PUZ4VHUJZTNJVWWKNTCJNKO6TBCT76',
+    ],
+    message:
+      'address must be a valid Monad (EVM) address (0x + 40 hex) for chain monad',
+  },
 };
 
 const CHAINS = Object.keys(WALLET_ADDRESS_RULES) as WalletAddressChain[];
@@ -96,7 +109,13 @@ describe('IsWalletAddressForChain', () => {
     );
 
     it('rejects a valid address of every other chain', async () => {
-      for (const other of CHAINS.filter((c) => c !== chain)) {
+      // `monad` is an EVM chain: it and BlindPay's `evm` family share one
+      // address space, so each accepts the other's addresses by design.
+      const sameFamily = (a: string, b: string) =>
+        [a, b].every((c) => c === 'evm' || c === 'monad');
+      for (const other of CHAINS.filter(
+        (c) => c !== chain && !sameFamily(c, chain),
+      )) {
         for (const address of FIXTURES[other].valid) {
           await expect(errorsFor(chain, address)).resolves.toEqual([message]);
         }

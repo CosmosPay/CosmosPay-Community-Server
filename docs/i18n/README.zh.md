@@ -4,7 +4,7 @@
 
 基于 **NestJS 12** + **Prisma 7 (PostgreSQL)** 构建的支付微服务。
 
-它是一个与 Cosmos 开发者平台（`paydev`）*相互独立*的应用。开发者平台只负责为下游服务**签发** APISIX 访问令牌（消费者 + `key-auth` 凭证）。本服务正是这些下游服务之一：它位于 **APISIX 之后**，APISIX 对每个请求进行负载均衡和身份验证，然后才将其转发到这里。因此本服务从不接触原始 API key——它只信任网关转发过来的内容。
+它是一个与 Cosmos 开发者平台（`paydev`）*相互独立*的应用。开发者平台是一个仪表盘：它为开发者**签发** API key，并**展示**他们的数据。它不在任何客户端请求的路径上——每次调用都是 客户端 → APISIX → 本服务，所以平台宕机时，钱包和集成方都不会察觉（见[没有任何请求依赖开发者平台](#没有任何请求依赖开发者平台)）。本服务位于 **APISIX 之后**，APISIX 对每个请求进行负载均衡和身份验证，然后才将其转发到这里。本服务从不接触原始 API key——它只信任网关转发过来的内容。
 
 ## 如何强制“只经由 APISIX”
 
@@ -40,7 +40,6 @@ src/
   common/
     guards/apisix.guard.ts        THE gateway gate
     guards/public-key.guard.ts    confines the SHARED public key to @AllowPublicKey routes
-    guards/console-only.guard.ts  confines a route to the platform console (alias recovery start)
     middleware/apisix-context...  extracts consumer identity from gateway headers
     decorators/                   @Public(), @CurrentConsumer(), @AllowPublicKey()
     filters/                      consistent error responses
@@ -51,34 +50,50 @@ src/
     services/advisory-lock...     cluster-wide lock for the background timers
   stellar/                        per-network Horizon servers (bounded timeout), account loader,
                                   SEP-7 links, signed-envelope relay, settlement repository
-  payment-intents/                Stellar payment intents (controller, service, DTO) — emits events
+  payment-intents/                payment intents on Stellar, Solana and Monad: controller, service, DTOs,
+                                  per-chain link builders and verifiers, the observer — emits events
+  chains/                         chain list, per-chain address rules, units, message signatures, JSON-RPC
+  solana/                         Solana RPC client (cluster-checked), Solana Pay links
+  evm/                            EVM RPC client for Monad (chain-id-checked), EIP-681 links
   swaps/                          Stellar native swaps (path payments): quote, build XDR, submit
+                                  + Solana (Jupiter) and Monad (Kuru Flow): venues/, chain swaps, observer
+  jupiter/                        Jupiter Swap API client (Solana aggregator)
+  kuru/                           Kuru Flow API client (Monad aggregator)
+  cross-chain-swaps/              swaps between Stellar, Solana and Monad via NEAR Intents: quote,
+                                  deposit address + per-chain wallet link, status observer
+  near-intents/                   NEAR Intents 1Click client: tokens, quote, status, deposit submit
   liquidity-pools/                AMM deposit/withdraw, pool + position reads, cost basis + commission on gain
   observer/                       background reconciler: swaps + LP ops against Horizon, one adapter per table
   webhooks/                       webhook endpoints CRUD + dispatcher (HMAC-signed, retried)
-  blindpay/                       BlindPay core: HTTP client, Svix verify, sync + inbound webhook
-  kyc/                            receivers (KYC/KYB), wallets, bank accounts, doc upload
-  onramp/                         fiat → stablecoin: payin quotes, payins, virtual accounts
-  offramp/                        stablecoin → fiat: payout quotes, payouts (client-signed)
   products/                       merchant catalogue
   customers/                      payer records derived from intents
   aliases/                        claimable payment handles: signed claims, resolution, email recovery
   assets/                         curated asset registry: the (code, issuer) pairs vouched for, per network
+  public-key/                     GET /v1/public-key: the shared public key, keyless
+  mailer/                         this service's own sender (Resend): sign-in and recovery codes
+  gateway-keys/                   mints wallet accounts' keys in APISIX (admin client, consumer forwarder)
   analytics/                      summary, balances, API logs, webhook logs
   activity/                       client telemetry ingest + feed (wallet, dashboard)
   admin/                          cross-tenant platform admin (console-only), audited
   audit/                          audit-trail writer, called inside other modules' transactions
+  plugins/                        plugin runtime + SDK (sdk.ts): folder loader, signatures, V8-isolate sandbox
+  native-plugins/                 first-party plugins, imported only when PLUGINS_ENABLED names them:
+    blindpay/                     BlindPay: client, Svix verify, sync + webhook, kyc/, onramp/, offramp/, admin/
+    defindex/                     DeFindex vaults (Stellar)
   health/                         liveness/readiness probes (@Public)
-prisma/schema.prisma              Consumer, PaymentIntent, Swap, LiquidityPoolOperation,
+prisma/schema.prisma              Consumer, PaymentIntent, Swap, ChainSwap, CrossChainSwap, LiquidityPoolOperation,
                                   WebhookEndpoint/Delivery/EmittedEvent, BlindpayReceiver,
                                   Blockchain/BankAccount/VirtualAccount, BlindpayQuote,
                                   BlindpayWebhookEvent, Payin, Payout, RequestLog,
                                   ActivityEvent,
                                   AdminAuditLog, Alias, AliasAddress,
                                   AliasChallenge, AliasRecovery
+                                  PluginInstallation, PluginRecord
 test/                             e2e suites: gateway gate, admin + alias console gates,
                                   payment intents, swaps, liquidity pools, KYC, webhooks
+plugins/                          THE plugins folder: one <slug>/ per plugin (plugin.json, index.ts, signature.json)
 scripts/                          OpenAPI generator, README check, operator scripts
+contracts/                        PaymentForwarder.sol — Monad deposit addresses (npm run contracts:compile)
 deploy/authentik/                 Authentik blueprint: the wallet sign-in and sign-up
 docs/i18n/                        this README in es, pt, de, fr, hi, zh
 ```
@@ -95,8 +110,9 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 
 | 领域 | 基础路径 | 功能 |
 | ----------------- | ------------------------ | -------------------------------------------------------- |
-| 支付意图 | `/v1/payment-intents` | SEP-7 `tx` / `pay` 意图、验证、链上观察器 |
-| Swap | `/v1/swaps` | 路径支付报价、构建未签名 XDR、提交已签名交易 |
+| 支付意图          | `/v1/payment-intents`    | Stellar（SEP-7）、Solana（Solana Pay）和 Monad（EIP-681）上的 `pay` 意图、SEP-7 `tx`、校验、链上观察器 |
+| Swap | `/v1/swaps` | 路径支付报价、构建未签名 XDR、提交已签名交易 · Solana 经由 Jupiter，Monad 经由 Kuru Flow |
+| 跨链 swap | `/v1/cross-chain-swaps` | 通过 NEAR Intents 在 Stellar ⇄ Solana ⇄ Monad 之间：报价、充值地址、状态 |
 | 流动性池 | `/v1/liquidity-pools` | AMM 存入 / 取出、持仓、按收益收取佣金 |
 | Webhooks | `/v1/webhooks` | 端点 CRUD、密钥轮换、投递记录、重新投递 |
 | KYC | `/v1/kyc` | Receiver（KYC/KYB）、钱包、银行账户、文档上传 |
@@ -107,8 +123,10 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | 别名 | `/v1/aliases` | 可认领的支付标识：认领、解析、恢复 |
 | 钱包登录 | `/v1/wallet` | Google / GitHub / 邮件验证码，以及加密的助记词备份 |
 | 资产 | `/v1/assets` | 按网络划分的精选资产注册表 |
+| 公共 key | `/v1/public-key` | 共享的公共 API key，无需 key 即可获取（`@Public`） |
 | 分析 | `/v1/summary`, `/v1/balances`, `/v1/logs` | 仪表盘汇总与日志 |
 | 活动 | `/v1/activity` | 客户端上报的事件：接收、事件流、汇总 |
+| 插件 | `/v1/plugins` | 以 slug 命名的编译内置扩展，按 tenant 安装 |
 | 管理 | `/v1/admin` | 跨租户读写 — 仅限平台控制台，全程审计 |
 | 健康检查 | `/v1/health` | 存活 / 就绪（`@Public`） |
 
@@ -122,7 +140,9 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | POST | `/v1/activity/events` | `activity:write` | ✓ |
 | GET | `/v1/activity/summary` | `activity:read` |  |
 | GET | `/v1/admin/audit-logs` | 平台控制台 |  |
+| GET | `/v1/admin/chain-swaps` | 平台控制台 |  |
 | GET | `/v1/admin/consumers` | 平台控制台 |  |
+| GET | `/v1/admin/cross-chain-swaps` | 平台控制台 |  |
 | GET | `/v1/admin/customers` | 平台控制台 |  |
 | GET | `/v1/admin/payins` | 平台控制台 |  |
 | GET | `/v1/admin/payment-intents` | 平台控制台 |  |
@@ -144,11 +164,17 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | DELETE | `/v1/aliases/{name}` | `payments:write` |  |
 | POST | `/v1/aliases/{name}/addresses` | `payments:write` |  |
 | DELETE | `/v1/aliases/{name}/addresses/{addressId}` | `payments:write` |  |
-| POST | `/v1/aliases/{name}/recovery` | 平台控制台 |  |
+| POST | `/v1/aliases/{name}/recovery` | `payments:write` | ✓ |
 | POST | `/v1/aliases/{name}/recovery/complete` | `payments:write` |  |
 | GET | `/v1/assets` | — | ✓ |
 | GET | `/v1/balances` | `payments:read` |  |
 | POST | `/v1/blindpay/webhooks` | 无 — `@Public()`，Svix 签名 |  |
+| GET | `/v1/cross-chain-swaps` | `swaps:read` |  |
+| POST | `/v1/cross-chain-swaps` | `swaps:write` | ✓ |
+| GET | `/v1/cross-chain-swaps/assets` | `swaps:read` | ✓ |
+| POST | `/v1/cross-chain-swaps/quote` | `swaps:read` | ✓ |
+| GET | `/v1/cross-chain-swaps/{id}` | `swaps:read` |  |
+| POST | `/v1/cross-chain-swaps/{id}/deposit` | `swaps:write` | ✓ |
 | GET | `/v1/customers` | `customers:read` |  |
 | POST | `/v1/customers` | `customers:write` |  |
 | GET | `/v1/customers/{id}` | `customers:read` |  |
@@ -213,11 +239,18 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | DELETE | `/v1/payment-intents/{id}` | `payments:write` |  |
 | GET | `/v1/payment-intents/{id}/transitions` | `payments:read` |  |
 | POST | `/v1/payment-intents/{id}/validate` | `payments:write` |  |
+| GET | `/v1/plugins` | `plugins:read` |  |
+| GET | `/v1/plugins/{slug}` | `plugins:read` |  |
+| PUT | `/v1/plugins/{slug}/installation` | `plugins:write` |  |
+| DELETE | `/v1/plugins/{slug}/installation` | `plugins:write` |  |
+| POST | `/v1/plugins/{slug}/queries/{action}` | `plugins:read` |  |
+| POST | `/v1/plugins/{slug}/commands/{action}` | `plugins:write` |  |
 | GET | `/v1/products` | `products:read` |  |
 | POST | `/v1/products` | `products:write` |  |
 | GET | `/v1/products/{id}` | `products:read` |  |
 | PATCH | `/v1/products/{id}` | `products:write` |  |
 | DELETE | `/v1/products/{id}` | `products:write` |  |
+| GET | `/v1/public-key` | none — `@Public()` |  |
 | GET | `/.well-known/stellar.toml` | none — `@Public()`, SEP-1 discovery (recovery servers only) |  |
 | GET | `/v1/sep10/auth` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | POST | `/v1/sep10/auth` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
@@ -230,6 +263,9 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | GET | `/v1/sep30/accounts/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | DELETE | `/v1/sep30/accounts/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | POST | `/v1/sep30/accounts/{address}/sign/{signer}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
+| PUT | `/v1/sep30/shares/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
+| GET | `/v1/sep30/shares/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
+| DELETE | `/v1/sep30/shares/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | GET | `/v1/summary` | `payments:read` |  |
 | GET | `/v1/swaps` | `swaps:read` |  |
 | POST | `/v1/swaps` | `swaps:write` | ✓ |
@@ -280,7 +316,7 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | `insufficient_scope` | 403 | API key 缺少所需的 scope。请重新配置该 key |
 | `account_disabled` | 403 | 运营人员停用了该法币账户。与 key 无关 |
 | `gateway_required` | 403 | 请求并非经由 APISIX 到达 |
-| `admin_console_only` | 403 | 该路由属于平台控制台（`/v1/admin`、发起别名恢复）。任何 API key 都无法调用 |
+| `admin_console_only` | 403 | 该路由属于平台控制台（`/v1/admin`）。任何 API key 都无法调用 |
 | `idempotency_conflict` | 409 | 该 `Idempotency-Key`（或支付意图的 memo）已经为一个*不同的*请求创建过资源。请重复原始请求，或改用新的 key |
 | `kyc_state_invalid` | 409 | 非法的 KYC 状态转换——并非重复请求 |
 | `operation_in_flight` | 409 | 一个与之冲突的操作仍在结算中 |
@@ -295,7 +331,7 @@ APISIX 会在多个实例之间进行负载均衡，因此每个后台定时器�
 | 定时器 | 锁键 |
 | ------------------------------ | ------------------------ |
 | `SettlementObserverService`    | `SettlementObserver`     |
-| `StellarObserverService`       | `PaymentIntentObserver`  |
+| `PaymentIntentObserverService`       | `PaymentIntentObserver`  |
 | `RequestLogRetentionService`   | `RequestLogRetention`    |
 | Webhook 投递清扫器             | `WebhookDeliverySweeper` |
 | `RateLimitPruneService`        | `RateLimitPrune`         |
@@ -305,6 +341,16 @@ APISIX 会在多个实例之间进行负载均衡，因此每个后台定时器�
 
 锁 id 定义在 `AdvisoryLockKey` 枚举中。不要给已有的 id 重新编号——滚动部署期间，新旧副本会拿到不同的锁——也不要复用已退役的 id。
 
+**本地从同一份代码运行多个实例。** `npm run dev:local` 用同一个 `.env` 启动 api 和第二个副本；
+`npm run dev:local -- recovery` 启动 api 和两台恢复服务器（A 在 `:3002`，B 在 `:3003`，testnet），
+`-- all` 则启动全部四个。每个实例的差异只写在 `dev-instances.json` 中（被 git 忽略；首次运行时从
+`dev-instances.example.json` 生成，并只生成一次每台恢复服务器的密钥——请妥善保留，这些密钥会派生出
+链上的签名者）：其中的键会替换 `.env` 中的同名键，`""` 表示删除该键，嵌套对象表示前缀
+（`{ "RECOVERY": { "ROLE": "a" } }` 即 `RECOVERY_ROLE=a`）。只有一个 watch 构建，输出到
+`dist-local/`，因此不会与 `npm run dev` 争用 `dist/`——但它也会启动 api，所以二者择一运行。各副本
+共享 `DATABASE_URL` 与密钥：没有任何按进程保存的状态。请把两者都加入 APISIX 的 upstream（developer
+platform 的 `COSMOS_API_URL`，用逗号分隔，然后在那里运行 `npm run sync:route`）。
+
 ### 支付验证与链上观察器
 
 支付只在一个地方（`StellarVerifierService`）根据 Stellar 网络进行确认：交易必须**成功**；必须包含一笔发往意图 `destination` 的**原生（XLM）支付**且**金额完全一致**；当意图带有 memo 时，必须带有**匹配的 memo**（`memo_type: id`）；并且其关闭时间**不得早于意图创建前一分钟**（`TX_CREATED_AT_SKEW_MS`）。正是这个时间下限，阻止了一笔条款相同的旧链上支付去结算一个新的意图。
@@ -312,7 +358,7 @@ APISIX 会在多个实例之间进行负载均衡，因此每个后台定时器�
 有两条路径使用这同一条规则：
 
 - **手动：** `POST /v1/payment-intents/:id/validate`，请求体为 `{ "txHash": "<64-hex>" }`。匹配时，意图被置为 `SUCCEEDED`（并保存 `txHash`），同时触发 `PAYMENT_INTENT_SUCCEEDED` webhook。链上失败的交易**只有在它确实是该意图自己的支付时**——memo、目标地址和资产均相同——才会把意图标记为 `FAILED`。其他任何交易，无论失败与否，都属于不匹配，状态保持不变，以便仍可提交正确的交易。通过 `PATCH /v1/payment-intents/:id` 上报的 `txHash` 永远不会单凭自己结算一个意图：它必须是一个 64 字符的十六进制哈希，会以小写形式存储，并且只在发起调用的消费者自己的意图范围内保持唯一（与该消费者另一个意图冲突时返回 `409 idempotency_conflict`）。
-- **自动（常驻观察器）：** `StellarObserverService` 每隔 `OBSERVER_INTERVAL_MS` 轮询一次 Horizon，查找 `PENDING` 状态的意图——按上报的 `txHash`，或扫描发往目标地址的支付——并以同样的方式终结匹配的意图，因此状态会变化、事件会触发，**无需任何人调用 API**。每个周期对每个消费者最多处理 `OBSERVER_MAX_INTENTS_PER_CONSUMER`（10）个意图，且从不扫描已过期的意图，因此单个消费者无法拖慢其他所有人的结算。本地开发时可用 `OBSERVER_ENABLED=false` 关闭。
+- **自动（常驻观察器）：** `PaymentIntentObserverService` 每隔 `OBSERVER_INTERVAL_MS` 轮询一次 Horizon，查找 `PENDING` 状态的意图——按上报的 `txHash`，或扫描发往目标地址的支付——并以同样的方式终结匹配的意图，因此状态会变化、事件会触发，**无需任何人调用 API**。每个周期对每个消费者最多处理 `OBSERVER_MAX_INTENTS_PER_CONSUMER`（10）个意图，且从不扫描已过期的意图，因此单个消费者无法拖慢其他所有人的结算。本地开发时可用 `OBSERVER_ENABLED=false` 关闭。
 
 **过期检查会先查链。** 一个已超过生命周期的意图在被标记为 `EXPIRED` 之前会再验证一次：如果它的支付已经上链，就改为结算为 `SUCCEEDED`；如果无法连接 Horizon，就留给下一个周期处理。当该笔支付的哈希已经存在于同一个消费者的另一个意图上时，该意图会被置为过期，而不是无休止地重试。在过期*之后*才被验证的支付——无论是被观察器还是被 `validate`——仍会把一个 `EXPIRED` 的意图变为 `SUCCEEDED` 并触发 `PAYMENT_INTENT_SUCCEEDED`，因此请不要把 `EXPIRED` 当作最终状态。该扫描会回溯读取目标地址自意图创建以来的所有支付，最多 1,000 条（5 页，每页 200 条）；如果某个目标地址在一个意图的生命周期内收到的支付超过这个数量，请改用 `validate` 并携带哈希。
 
@@ -349,9 +395,9 @@ APISIX 会在多个实例之间进行负载均衡，因此每个后台定时器�
 
 每个集成方（APISIX 消费者）可以注册一个或多个 webhook 端点。当支付意图发生变化时，平台会触发一个领域事件；**分发器（dispatcher）**会将其扇出到该消费者所有已启用、且订阅了该事件类型的端点（订阅为空 = 全部），记录每次尝试以便追溯，并按线性退避进行重试（`WEBHOOK_*` 环境变量）。
 
-事件类型：`PAYMENT_INTENT_CREATED`、`PAYMENT_INTENT_UPDATED`、`PAYMENT_INTENT_SUCCEEDED`、`PAYMENT_INTENT_FAILED`、`PAYMENT_INTENT_CANCELLED`、`PAYMENT_INTENT_DELETED`、`SWAP_CREATED`、`SWAP_SUBMITTED`、`SWAP_SUCCEEDED`、`SWAP_FAILED`、`LIQUIDITY_CREATED`、`LIQUIDITY_SUBMITTED`、`LIQUIDITY_SUCCEEDED`、`LIQUIDITY_FAILED`，以及来自 BlindPay 的 `RECEIVER_UPDATED`、`PAYIN_CREATED`、`PAYIN_UPDATED`、`PAYIN_COMPLETED`、`PAYOUT_CREATED`、`PAYOUT_UPDATED` 和 `PAYOUT_COMPLETED`。权威列表是 `prisma/schema.prisma` 中的 `WebhookEventType` 枚举。
+事件类型：`PAYMENT_INTENT_CREATED`、`PAYMENT_INTENT_UPDATED`、`PAYMENT_INTENT_SUCCEEDED`、`PAYMENT_INTENT_FAILED`、`PAYMENT_INTENT_CANCELLED`、`PAYMENT_INTENT_DELETED`、`SWAP_CREATED`、`SWAP_SUBMITTED`、`SWAP_SUCCEEDED`、`SWAP_FAILED`、`LIQUIDITY_CREATED`、`LIQUIDITY_SUBMITTED`、`LIQUIDITY_SUCCEEDED`、`LIQUIDITY_FAILED`、`CROSS_CHAIN_SWAP_CREATED`、`CROSS_CHAIN_SWAP_UPDATED`、`CROSS_CHAIN_SWAP_SUCCEEDED`、`CROSS_CHAIN_SWAP_REFUNDED`、`CROSS_CHAIN_SWAP_FAILED`、`CROSS_CHAIN_SWAP_EXPIRED`，以及来自 BlindPay 的 `RECEIVER_UPDATED`、`PAYIN_CREATED`、`PAYIN_UPDATED`、`PAYIN_COMPLETED`、`PAYOUT_CREATED`、`PAYOUT_UPDATED` 和 `PAYOUT_COMPLETED`。权威列表是 `prisma/schema.prisma` 中的 `WebhookEventType` 枚举。
 
-**来自 BlindPay 的事件体。** `RECEIVER_UPDATED` / `PAYIN_*` / `PAYOUT_*` 只携带标识和状态——id、状态、金额、支付通道——绝不包含个人数据。服务商对象不会被转发，因为 receiver 的 payload 是一份完整的 KYC 档案，而订阅事件只需要 `webhooks:write`。请使用持有 `kyc:read` / `onramp:read` / `offramp:read` 的 key 通过 API 获取详细信息。字段白名单见 `src/blindpay/blindpay-event-redaction.ts`。
+**来自 BlindPay 的事件体。** `RECEIVER_UPDATED` / `PAYIN_*` / `PAYOUT_*` 只携带标识和状态——id、状态、金额、支付通道——绝不包含个人数据。服务商对象不会被转发，因为 receiver 的 payload 是一份完整的 KYC 档案，而订阅事件只需要 `webhooks:write`。请使用持有 `kyc:read` / `onramp:read` / `offramp:read` 的 key 通过 API 获取详细信息。字段白名单见 `src/native-plugins/blindpay/blindpay-event-redaction.ts`。
 
 投递通过 NestJS `EventEmitter2`（`webhook.event`）解耦，因此发出通知永远不会阻塞触发它的 API 请求。
 
@@ -507,6 +553,75 @@ OPENAPI_SERVER_URL=https://gateway.example.com npm run openapi:generate
 
 网络/Horizon/手续费/超时通过 `STELLAR_*` 环境变量配置（见 `.env.example`）。出于安全考虑，默认使用 **testnet**——设置 `STELLAR_NETWORK=public` 以使用主网（真实资金）。
 
+### Solana 与 Monad 上的支付意图
+
+`POST /v1/payment-intents/pay` 接受可选的 `chain`：`stellar`（默认）、`solana` 或
+`monad`。不带该字段的请求就是上文的 Stellar 请求。网络层级仍由 API 密钥决定——`prod`
+密钥对应 Solana mainnet-beta 和 Monad mainnet（chain id 143），`dev` 密钥对应 Solana
+devnet 和 Monad testnet（10143）——所有链上的 `network` 都存为 `public` / `testnet`。
+`POST /v1/payment-intents/tx` 仍仅限 Stellar：SEP-7 `tx` 是 Stellar 交易信封。
+
+| | Stellar | Solana | Monad |
+| --- | --- | --- | --- |
+| 链接（`uri`） | SEP-7 `web+stellar:pay` | Solana Pay `solana:<recipient>?…` | EIP-681 `ethereum:<payee>@143?…` |
+| 原生币（不传 `assetCode`） | XLM | SOL | MON |
+| 代币（`assetCode` + `assetIssuer`） | 发行账户 | SPL mint | ERC-20 合约 |
+| 如何找到付款 | `MEMO_ID` | 每个意图新生成的 `reference` 密钥（`chainReference`） | 意图专属的充值地址（有 relayer 时）；否则为目标地址 + 精确金额 |
+| 观察器 | 向目标地址的付款 | reference 密钥的签名 | 充值地址的余额，含原生 MON（有 relayer 时）；否则为代币的 `Transfer` 日志 |
+| `amount` | 可选 | 可选 | 有 relayer 时可选，否则必填 |
+| `msg` / `callback` | 都支持 | `msg`（Solana Pay `message`） | 都不支持 |
+| `validate` / `PATCH` 的 `txHash` | 64 位 hex | base58 签名 | `0x` + 64 位 hex |
+
+- **memo 仍是幂等键**，且 `chain` 是重放必须一致的条件之一：Stellar 上的 memo `42` 与
+  Solana 上的 memo `42` 是不同的付款（`409 idempotency_conflict`）。在 Solana 上，memo
+  还会由 SPL Memo 程序写到链上。
+- **保存意图前会向链解析代币**——SPL mint 的精度（Token 或 Token-2022 程序）、ERC-20 的
+  `decimals()`。不是代币的地址返回 `400 validation_failed`；小数位多于代币精度的金额返回
+  `400 invalid_amount`。
+- **Monad 付款不带 memo。** EIP-681 没有供钱包填入意图 id 的字段，因此 Monad 意图按它支付
+  的内容识别：目标地址、代币和精确金额，且在创建区块或之后。对同一目标地址的并发意图请使用
+  **不同的金额**。**原生 MON** 付款不产生日志，观察器无法自行找到：请用
+  `POST /v1/payment-intents/{id}/validate` 和交易哈希完成结算。ERC-20 付款由观察器查找，
+  每次调用 `MONAD_LOG_BLOCK_RANGE` 个区块、每个意图每轮最多五次调用，并从上次停止处继续
+  （`chainCursor`）。
+- **充值地址（配置 `MONAD_RELAYER_PRIVATE_KEY` 时）。** 每个 Monad 意图都有自己的地址，
+  链接付款到该地址而不是商户：它是 `contracts/PaymentForwarder.sol` 通过确定性部署代理
+  （`0x4e59…956c`，Monad mainnet 和 testnet 上均已存在）得到的 `CREATE2` 地址，其初始化
+  代码固定了商户、资产、relayer 及其手续费。地址本身就是承诺——任何人（包括本服务）都
+  无法在该地址部署向他人付款的代码——因此本服务不持有资金的任何密钥。充值转发器监控该
+  地址的余额（含原生 MON，无需日志）；余额覆盖意图金额后（开放金额意图为高于手续费的
+  任意金额），relayer 部署转发合约，其构造函数把手续费付给 relayer、其余付给商户，意图
+  以这笔交易结算。手续费在创建意图时确定，并以 `networkFee` 显示：MON 为按当前价格计算的
+  转发 gas 预算加 25%；代币为运营方在 `MONAD_DEPOSIT_TOKEN_FEES` 中的配置，未配置则为零
+  （由 relayer 承担 gas）。会被手续费吞掉的金额返回 `400 invalid_amount`。意图过期或取消
+  后才到账的资金仍会转发给商户，付款方也可以用 `validate` 和自己的交易哈希提前结算。
+  relayer 密钥只存放 gas 资金：请适度充值并设置余额告警。字节码已提交
+  （`src/evm/payment-forwarder.artifact.ts`），有一个 spec 会重新编译源码进行比对；所有
+  充值地址都依赖它，只要旧地址仍可能收到资金，就绝不要修改它。
+- **信任 RPC 节点前会先校验**：在首次读取某个层级前，服务会将节点的 genesis hash
+  （Solana）或 `eth_chainId`（Monad）与该链比较；当 mainnet URL 指向测试网时返回
+  `503 misconfigured`。默认使用公共 RPC，速率限制很严——生产环境请将
+  `SOLANA_RPC_URL_MAINNET` 和 `MONAD_RPC_URL_MAINNET` 设为服务商的端点。
+- **兑换、流动性池和 DeFindex 仍仅限 Stellar。**
+
+```jsonc
+// POST /v1/payment-intents/pay — Solana 上的 USDC
+{ "chain": "solana", "destination": "<base58>", "amount": "25.5",
+  "assetCode": "USDC", "assetIssuer": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v" }
+// response → { chain: "solana", uri: "solana:<base58>?amount=25.5&spl-token=…&reference=…&memo=…", chainReference, qr, … }
+```
+
+### Solana 与 Monad 上的钱包登录
+
+`POST /v1/wallet/auth/finish` 和 `PUT /v1/wallet/backup` 接受可选的 `chain`，账户以
+`address` 传入；Stellar 仍接受 `stellarAddress`，并仍会与 `chain`、`address` 一并返回。
+Solana 或 Monad 账户签名的挑战在第一行之后多一行 `chain: <chain>`——同一个 ed25519 密钥
+既是 Stellar 地址也是 Solana 地址，这一行防止为其一所做的签名打开另一个——而 Stellar 的
+挑战逐字节保持不变。Solana 用 ed25519 对 UTF-8 字节签名（`signMessage`；base64 或
+base58）；Monad 用 EIP-191 `personal_sign`（0x 十六进制；拒绝 high-s 签名）。Monad 地址以
+EIP-55 写法保存。恢复设置（`POST /v1/wallet/recovery/setup`）仍仅限 Stellar。账户的 key
+在每条链上都以同样的方式签发（见[没有任何请求依赖开发者平台](#没有任何请求依赖开发者平台)）。
+
 ## 共享公共 API key
 
 开源钱包内置了一个所有人共用的 API key，因此任何人无需注册即可进行 swap、添加流动性或创建支付链接。这些调用需要支付 `community` 套餐的佣金（150 bps，最高的费率）；注册后可以获得更低的费率。网关注入费率的方式与私有 key 完全相同（见 `resolvePlanCommissionBps`）。
@@ -529,6 +644,9 @@ where: { id, consumer: { apisixUsername: consumer.username } }
 | `POST /v1/swaps/quote` | 通过 Horizon 为路径定价；结果完全由请求决定 |
 | `POST /v1/swaps` | 构建一个由调用方签名的未签名信封 |
 | `POST /v1/swaps/:id/submit` | 广播调用方签名的信封——在请求体确实是该 swap 的信封、并携带签名之前，关于这笔 swap 的任何信息，包括它的状态，都不会被回答；带有速率限制 |
+| `GET /v1/cross-chain-swaps/assets` \| `POST /v1/cross-chain-swaps/quote` | NEAR Intents 的代币列表与试算报价；是请求的纯函数 |
+| `POST /v1/cross-chain-swaps` | 为调用方自己的资金生成充值地址；重放的 `Idempotency-Key` 仅在请求一致时才会得到响应 |
+| `POST /v1/cross-chain-swaps/:id/deposit` | 告诉 NEAR Intents 一笔由它自己在链上验证的交易；带有速率限制 |
 | `POST /v1/liquidity-pools/deposit` \| `withdraw` | 构建未签名信封 |
 | `POST /v1/liquidity-pools/operations/:id/submit` | 广播调用方签名的信封，遵循与 swap submit 相同的检查；带有速率限制 |
 | `GET /v1/liquidity-pools` \| `/:poolId` \| `/positions` | 从 Horizon 读取的公开链上数据 |
@@ -537,11 +655,33 @@ where: { id, consumer: { apisixUsername: consumer.username } }
 | `GET /v1/assets` | 公开的资产目录 |
 | `GET /v1/aliases/resolve/:name` \| `availability/:name` \| `by-address/:address` | 解析标识的付款方正是这个 key 所服务的匿名调用方；答案完全由请求决定，且从不包含所有者的邮箱 |
 
-被拒绝的路由：`GET /v1/swaps`、`GET /v1/swaps/:id`、`GET /v1/liquidity-pools/operations{,/:id}`、`GET /v1/activity/events`、`GET /v1/activity/summary`、所有支付意图读取、所有别名所有者路由（认领、列出、添加或移除地址、释放、恢复），以及 `/v1/kyc`、`/v1/onramp`、`/v1/offramp` 和 `/v1/webhooks` 下的所有路由。没有账户的钱包改为从 Horizon 读取自己的历史记录。
+被拒绝的路由：`GET /v1/swaps`、`GET /v1/swaps/:id`、`GET /v1/cross-chain-swaps`、`GET /v1/cross-chain-swaps/:id`、`GET /v1/liquidity-pools/operations{,/:id}`、`GET /v1/activity/events`、`GET /v1/activity/summary`、所有支付意图读取、所有别名所有者路由（认领、列出、添加或移除地址、释放、恢复），以及 `/v1/kyc`、`/v1/onramp`、`/v1/offramp` 和 `/v1/webhooks` 下的所有路由。没有账户的钱包改为从 Horizon 读取自己的历史记录。
 
 **允许遥测**，这样来自没有账户的钱包的崩溃报告仍然能够送达。通过这个 key 到达的事件是匿名的（一个共享消费者），因此钱包在发送之前会去除地址、目标、金额和 txHash。
 
 guard 通过**以下任一**信号识别公共消费者：转发的角色（`X-Consumer-Role: public`）**或** `APISIX_PUBLIC_CONSUMER` 用户名。两个都要设置：如果网关停止转发角色，用户名仍然能够匹配；而没有用户名时，guard 只能依赖一个请求头。
+
+**钱包从哪里获取它。** `GET /v1/public-key?env=dev|prod` 在没有 key、也没有网关密钥的情况下（`@Public()`）返回 `{ env, apiKey }`，取值来自 `PUBLIC_API_KEY_DEV` / `PUBLIC_API_KEY_PROD`；没有 key 的环境返回 `503 misconfigured`。轮换 key 就是修改这些变量——每个钱包会在 5 分钟缓存内取到新 key。该路径的 APISIX 路由**不得**运行 `key-auth`（调用方还没有 key）：请像 `/v1/wallet/auth/oauth/callback/*` 一样，通过无 key 路由提供它。
+
+## 没有任何请求依赖开发者平台
+
+开发者平台为开发者创建 API key 并展示数据。客户端所做的任何事都不经过它：钱包和每个集成都与 APISIX 通信，APISIX 再与本服务通信。以前并非如此，而平台——最常宕机的那一环——会连带让每一次登录失败：
+
+| 以前经过平台 | 现在 |
+| --- | --- |
+| 发送钱包的登录验证码 | 由本服务发送（`MAIL_FROM` + `MAIL_RESEND_API_KEY` / `MAIL_SMTP_*`） |
+| 在登录结束时为钱包账户签发 API key | 由本服务在 APISIX 中签发（`APISIX_ADMIN_URL`、`APISIX_ADMIN_KEY`） |
+| 恢复服务器通过邮件发送的验证码 | 每台恢复服务器自己发送（`RECOVERY_EMAIL_CODES=true` + 各自的 `MAIL_*`） |
+| 共享公共 key（`/api/public-key`） | `GET /v1/public-key` |
+| 资产目录与匿名遥测（`/api/assets`、`/api/telemetry`） | 钱包使用公共 key 调用 `GET /v1/assets` 和 `POST /v1/activity/events` |
+
+平台仍在做的都是它自己的事：开发者的 key、仪表盘，以及由它调用的 `/v1/admin`——从不反向调用。平台宕机时，没人能创建开发者 key 或打开仪表盘；钱包照常登录、付款和兑换。
+
+**钱包 key。** 完成登录后，会在消费者 `cosmos_wallet_<accountId>` 下获得一个 `dev` key 和一个 `prod` key，带有平台以前生成的 scope、label 和消费者 forwarder（套餐 `community`，兑换佣金 `WALLET_KEY_SWAP_FEE_BPS`，默认 150 bps）。第二次登录会返回账户已有的 key，而不是再签发一对。响应中的 `organizationId` 就是账户 id。
+
+**admin key 是安全上的代价。** APISIX 没有比 admin key 更窄的授权，而 admin key 能改写所有路由。这里的客户端只写入 `cosmos_wallet_` 下的消费者，并在构造请求前拒绝任何其他名称，但这是本代码的承诺，不是 APISIX 的：请像对待 `APISIX_GATEWAY_SECRET` 一样对待 `APISIX_ADMIN_KEY`，只让本服务的 pod 通过网络访问 admin API 而不开放其他任何东西，并且绝不在恢复服务器上设置它（启动会拒绝）。
+
+**在此变更之前由平台开通的账户**仍可使用其现有 key。下次登录时，它们会在 `cosmos_wallet_<accountId>` 下获得新 key，即一个新的消费者，因此记录在旧消费者（`cosmos_<platformUserId>`）下的历史用新 key 看不到。
 
 ## Stellar 原生 swap（路径支付）
 
@@ -610,6 +750,104 @@ quote → build XDR → customer signs in wallet → POST /submit → Stellar ex
 
 **提交对它转发的内容非常严格。** 在 `signedXdr` 能被解析、其哈希与该 swap 的 `txHash` 一致、且携带至少一个签名之前，关于这笔 swap 的任何信息——包括它的状态——都不会被回答，因此创建响应中未签名的 `xdr` 会得到 `400 validation_failed`。一笔已超出其时间边界（`STELLAR_TX_TIMEOUT`，默认 300 秒）的 swap 信封会返回 `400 invalid_state_transition` 且不会被广播；如果它已经在时限内到达网络，观察器仍会将其结算。在遭到网络拒绝之后，同一个信封最多可以重新提交 **3** 次，之后请构建一笔新的 swap——在 `503 provider_unavailable` 之后的重试不计入次数。该路由允许每个消费者和客户端地址每分钟调用 **20** 次（`429 rate_limited`）；在共享公共 key 下，每个匿名钱包都是同一个消费者，因此位于同一 NAT 之后的钱包会共用这份预算。`POST /v1/liquidity-pools/operations/:id/submit` 遵循相同的规则，并拥有自己独立的额度；`POST /v1/liquidity-pools/deposit` · `/withdraw` 共用**每分钟 20 次构建**的一份预算——它们是同一条流程的两个方向，额度分开只会让循环在两者之间交替、把两份都吃掉。
 
+### Solana 与 Monad 上的 swap（Jupiter、Kuru Flow）
+
+`/v1/swaps` 接受可选的 `chain`。不传——或传 `stellar`——时，每个请求的响应都与以前完全
+相同。`solana` 经由 [Jupiter](https://jup.ag)，`monad` 经由 [Kuru Flow](https://kuru.io)：
+它们是会搜索本链所有流动性来源的聚合器，因此 swap 得到的是该链上的最佳汇率，而不是单个池子
+的价格。流程与 Stellar 相同，全程非托管：
+
+```
+POST /v1/swaps/quote {chain} → POST /v1/swaps {chain, source} → wallet signs `transaction`
+  → POST /v1/swaps/{id}/submit {signedTransaction} → observer → SUCCEEDED / FAILED
+```
+
+- **资产**是原生代币代号（`SOL`、`MON`）、`native`，或 SPL mint / ERC-20 地址。发行方、
+  `memo` 以及不同的 `destination` 仅适用于 Stellar，在其他链上会被拒绝：输出发给 `source`。
+- **`transaction`** 是钱包要签名的内容。Solana：一笔未签名的 VersionedTransaction
+  （base64），约一分钟内有效，直到其 blockhash 过期。Monad：`{ to, data, value, chainId }`，
+  以 EIP-1559 交易签名，两分钟内有效。在 Monad 上出售授权额度不足的 ERC-20 时，还会返回
+  `approval`：需要先发送并确认的精确 `approve` 调用。
+- **Submit** 会检查签名后的交易正是所构建的那一笔——Solana 上消息字节相同，Monad 上调用
+  相同——且由 `source` 签名，然后通过本服务自己的 RPC 广播。节点拒绝时返回
+  `400 transaction_rejected`，swap 保持 `PENDING`；只有观察器读取到的链上结果才会让它变为
+  `SUCCEEDED` 或 `FAILED`。未提交或未上链的 swap 会变为 `EXPIRED`。Webhook 仍是相同的
+  `SWAP_*` 事件。
+- **佣金：**与 Stellar 一样按套餐费率，但由聚合器从**输出**中扣除。Jupiter 把
+  `platformFeeBps` 付到 `SOLANA_SWAP_FEE_WALLET` 针对输出 mint 的代币账户，该账户必须已存在
+  ——缺失时返回 `503 misconfigured`，并指明需要创建的账户。Kuru Flow 把 `referrerFeeBps`
+  付给 `MONAD_SWAP_FEE_WALLET`。
+- **仅限主网**；`dev` key 返回 `400 network_unsupported`。`GET /v1/swaps?chain=solana`
+  列出该链的 swap；id 在各链之间唯一，所以 `GET /v1/swaps/{id}` 和 submit 能找到任何 swap。
+- **Key。**没有 `KURU_API_KEY` 时，Kuru Flow 为每个地址签发一个限速为每秒一次请求的 token
+  ——足够试用，不适合生产。Jupiter 默认使用免 key 档位；设置 `JUPITER_API_KEY` 后，请把
+  `JUPITER_BASE_URL` 指向 `https://api.jup.ag/swap/v1`。
+
+## 跨链 swap（NEAR Intents）
+
+Stellar、Solana 与 Monad **之间**的 swap 由 [NEAR Intents](https://intents.near.org/)
+通过其 1Click API 结算。与上文的 Stellar swap 一样，它们是**非托管**的：付款方把输入发送到
+1Click 专为这一笔报价派生的充值地址，NEAR Intents 的求解器（solver）在另一条链上把输出付给
+收款方，或者退款给付款方。两条腿都不经过 Cosmos Pay。
+
+```
+quote → create (deposit address + wallet link + QR) → payer sends the deposit
+      → POST /deposit (optional) → observer polls 1Click → SUCCEEDED / REFUNDED / FAILED + webhook
+```
+
+**哪种 swap 走哪条路。**
+
+| 交易对 | 结算方 | 原因 |
+| --- | --- | --- |
+| Stellar → Stellar | `/v1/swaps`（Stellar DEX） | 协议原生支持 swap；`/v1/cross-chain-swaps` 返回 `400` 并指向那里 |
+| Stellar ⇄ Solana ⇄ Monad | NEAR Intents | 需要一座桥，NEAR Intents 就是这座桥 |
+| Solana → Solana、Monad → Monad | 带 `chain` 的 `/v1/swaps`（Jupiter、Kuru Flow） | 各聚合器在本链所有流动性来源中路由以获得最佳汇率；`/v1/cross-chain-swaps` 返回 `400` 并指向那里 |
+
+本服务在每条链上自己完成的工作：对照 1Click 的代币列表（`GET /v1/cross-chain-swaps/assets`）
+解析资产，按各自的链校验每个地址，以该链的钱包标准——SEP-7 `pay`、Solana Pay、EIP-681——
+构建充值请求，在 Horizon 上检查 Stellar 收款方是否信任即将收到的资产，并把状态镜像到自己的表中。
+
+**佣金。** 组织套餐的费率——与 Stellar swap 相同的可信 `X-Plan-Swap-Fee-Bps`，绝不是请求
+参数——作为一条 `appFees` 发送给 1Click，付给 `NEAR_INTENTS_FEE_RECIPIENT`（一个 NEAR 账户）。
+NEAR Intents 从输入中扣除它，报价的输出已是扣除后的净额，佣金累积在 NEAR Intents 内的该账户中，
+由运营方从那里提取。有费率但未配置收款账户的套餐会返回 `503 misconfigured`，而不是免费 swap。
+
+**请设置 `NEAR_INTENTS_API_KEY`。** 没有合作伙伴 key 时 1Click 也能工作，但价格不同：没有它时
+（2026-09-30 核实），每笔报价都带有 1Click 自己的 0.2% 费用，并且 `appFees` 中请求的佣金有一半
+归 1Click，而不是 `NEAR_INTENTS_FEE_RECIPIENT`。
+
+**仅限主网。** NEAR Intents 没有测试网。`dev` key 可以列出资产和报价——价格反正都是主网的——
+但 `POST /v1/cross-chain-swaps` 会返回 `400 network_unsupported`：充值地址会收取真实的资金。
+
+**Stellar 充值带有 memo。** 1Click 在同一个账户上接收所有 Stellar 充值，并按 memo 区分，因此
+那里的 `depositMemo` 是必需的，SEP-7 链接以 **`MEMO_TEXT`** 形式附带它——这正是充值到该账户
+所用的类型。没有 memo 或使用 `MEMO_ID` 的充值不会记入该 swap。
+
+**状态。** `AWAITING_DEPOSIT` → `DEPOSIT_DETECTED` / `INCOMPLETE_DEPOSIT` → `PROCESSING` →
+`SUCCEEDED`、`REFUNDED` 或 `FAILED`，后三者为最终状态。1Click 自己的状态词保存在
+`providerStatus` 中。截止时间（`CROSS_CHAIN_SWAP_DEADLINE_SECONDS`，默认 30 分钟）过后仍在等待
+的 swap 变为 `EXPIRED`；之后到达的充值会被 NEAR Intents 退款，因此 `EXPIRED` 的 swap 仍会被轮询
+一天，并跟随到 `REFUNDED`。观察器与结算观察器一起运行（`OBSERVER_ENABLED`、
+`OBSERVER_INTERVAL_MS`）；钱包无需回来，swap 也能完成结算。每次变化都会发出
+`CROSS_CHAIN_SWAP_UPDATED`、`_EXPIRED`、`_SUCCEEDED`、`_REFUNDED` 或 `_FAILED`；后三者与支付意图
+的事件一样持久且去重。
+
+**请保存 `quoteSignature`。** 它是 1Click 对报价及其充值地址的签名——与 NEAR Intents 发生争议时
+以它为准。完整的已签名报价也会在服务端保存。
+
+**限制。** Quote：每分钟 60 次；create 与 deposit：各 20 次，按 consumer 和客户端地址计
+（`429 rate_limited`）。
+
+### 跨链 swap 路由
+
+| 路由 | Scope | 用途 |
+| --- | --- | --- |
+| `GET /v1/cross-chain-swaps/assets` | `swaps:read` | NEAR Intents 可在 Stellar、Solana 和 Monad 上 swap 的代币 |
+| `POST /v1/cross-chain-swaps/quote` | `swaps:read` | 试算报价：输出、最小值、佣金；不持久化任何内容 |
+| `POST /v1/cross-chain-swaps` | `swaps:write` | 正式报价：充值地址、memo、钱包链接和二维码；支持 `Idempotency-Key` |
+| `GET /v1/cross-chain-swaps` | `swaps:read` | 该 consumer 的跨链 swap |
+| `GET /v1/cross-chain-swaps/{id}` | `swaps:read` | 单笔 swap，即观察器最后一次看到的状态 |
+| `POST /v1/cross-chain-swaps/{id}/deposit` | `swaps:write` | 上报充值交易，让 NEAR Intents 无需等待其索引器即可开始 |
 ## 别名 — 可认领的支付标识
 
 别名让付款方可以输入 `emanuel250`，而不是 `GA5ZSE…`。付款方在转账前一刻信任的正是这个名称，因此下面的规则很严格：一旦出错，就是一笔打到错误账户的付款。
@@ -639,19 +877,30 @@ wallet ──3. POST /v1/aliases {name, email, nonce, signature} ─────
 
 处于 `SUSPENDED` 状态的别名（运营方冻结）不会解析到任何地址。
 
-### 恢复经由邮箱，并经由平台控制台
+### 恢复经由邮箱，由本服务发送
 
 认领时会记录一个恢复邮箱，这样丢失密钥并不意味着失去这个名称。恢复流程如下：
 
-1. **平台控制台**调用 `POST /v1/aliases/:name/recovery {email}`。无论标识与邮箱是否匹配，响应都完全相同；匹配时，响应会携带一个一次性 token（30 分钟，仅以 SHA-256 形式存储），由控制台通过邮件发送。本服务不发送任何邮件。
+1. 钱包（任何持有 `payments:write` 的 key，包括共享公共 key）调用 `POST /v1/aliases/:name/recovery {email}`。无论标识与邮箱是否匹配，响应始终是 `{ accepted: true }`；匹配时，本服务会把一个一次性 token（30 分钟，仅以 SHA-256 形式存储）**通过邮件发送**到登记的邮箱。token 永远不会出现在响应中。
 2. 用户为新密钥获取一个 `RECOVER` challenge，并使用自己的 API key 调用 `POST /v1/aliases/:name/recovery/complete {token, address, network, nonce, signature}`。两项证明缺一不可：token 证明邮箱，签名证明密钥。
 3. 所有权转移到发起调用的消费者，并且**之前的所有地址都会被移除**，因此持有旧密钥的人不会再收到付款。
 
-第 1 步仅限控制台，因为 token 证明的是对邮箱的控制权，所以它只能到达负责发送邮件的一方。`ConsoleOnlyGuard` 会在查找别名之前，就以 `403 admin_console_only` 拒绝所有 API key 调用方，并且该路由不在发布的契约中。被冻结的别名无法被恢复。
+任何人都可以发起恢复，因为 token 只会到达邮箱：陌生人最多只能让所有者收到一封邮件。这有两重限制——每个地址每 10 分钟 5 次发起（`429 rate_limited`），以及无论谁请求，每个别名每分钟最多一封邮件（该分钟内的重复请求得到同样的响应且不发送任何内容）。没有配置邮件发件人的部署会返回 `503 misconfigured`。被冻结的别名无法被恢复。
 
 一个恢复 token 最多可以被提交**五**次。即使某次提交的 challenge 或签名验证失败，也会算作一次用量，第六次会被拒绝；此时所有者可以重新发起一次恢复。一个与该别名任何一次有效恢复都不匹配的 token 会得到同样的 `400 alias_recovery_invalid`，且不会改变任何状态，因此没有人能靠发送垃圾 token 来耗尽所有者发起的恢复次数。`POST /v1/aliases/:name/recovery/complete` 每 10 分钟允许 10 次调用，`POST /v1/aliases/challenges` 每 10 分钟允许 30 次调用，均按消费者和客户端地址计算（`429 rate_limited`）。
 
 过期的 challenge 和恢复记录会在过期一天后由 `AliasChallengeSweeperService` 删除（每小时一次，每个周期只有一个副本执行）。
+
+### Solana 与 Monad 上的地址
+
+别名除 Stellar 账户外，还可以指向 Solana 和 Monad 账户。`POST /v1/aliases/challenges`、
+`POST /v1/aliases/{name}/addresses` 和 `POST /v1/aliases/{name}/recovery/complete` 接受可选
+的 `chain`；此时挑战消息带有 `chain:` 行，把签名绑定到该链。Stellar 仍对带帧的摘要签名；
+Solana 用 ed25519 对挑战文本签名，Monad 用 EIP-191 `personal_sign`。默认地址按链和网络
+区分，因此添加 Solana 地址永远不会降级 Stellar 地址。`GET /v1/aliases/resolve/{name}` 默认
+在 Stellar 上解析，除非 `?chain=` 指定了其他链——不指定链的钱包永远不会拿到它无法支付的
+地址——`GET /v1/aliases/by-address/{address}` 则根据地址本身的格式判断链。Monad 地址以
+EIP-55 写法保存和匹配。
 
 ### 路由
 
@@ -666,10 +915,15 @@ wallet ──3. POST /v1/aliases {name, email, nonce, signature} ─────
 | POST | `/v1/aliases/:name/addresses` | `payments:write` | 添加地址，由该地址签名 |
 | DELETE | `/v1/aliases/:name/addresses/:addressId` | `payments:write` | 移除地址 |
 | DELETE | `/v1/aliases/:name` | `payments:write` | 释放别名 |
-| POST | `/v1/aliases/:name/recovery` | _仅限平台控制台_ | 发起恢复 → 一个供控制台通过邮件发送的 token |
+| POST | `/v1/aliases/:name/recovery` | `payments:write` | 发起恢复 → token 通过邮件发送给所有者 |
 | POST | `/v1/aliases/:name/recovery/complete` | `payments:write` | 使用 token 和新密钥的签名完成恢复 |
 
 ## BlindPay — onramp / offramp / KYC（法币 ⇄ 稳定币）
+
+> **原生插件。** 本节的全部内容都是 `blindpay` 插件（`src/native-plugins/blindpay/`），
+> 仅当 `PLUGINS_ENABLED` 包含 `blindpay` 时提供——参见*原生插件：BlindPay 与 DeFindex*。
+> BlindPay 在 Stellar、Solana、EVM 链（Ethereum、Base、Arbitrum、Polygon）和 Tron 上结算；
+> **Monad 不是 BlindPay 支持的网络**，因此其上没有法币出入金通道。
 
 除了链上支付意图之外，本服务还集成了 [BlindPay](https://www.blindpay.com/docs)，用于在**法币与稳定币**之间转移资金：入金（**onramp / payin**）、出金（**offramp / payout**），以及两者背后必需的 **KYC**（BlindPay *receiver*）。我们**为每个 API key 环境运行一个平台级 BlindPay 实例**——`prod` key 使用生产实例（`BLINDPAY_API_KEY` + `BLINDPAY_INSTANCE_ID`），`dev` key 使用开发实例（`_DEV` 变量）；每个 receiver/钱包/银行账户/payin/payout 都会镜像到我们的 Postgres 中，并**限定在发起调用的 APISIX 消费者范围内**，因此每个集成方只能看到自己的记录。本服务**从不持有区块链密钥**——offramp 返回需要签名的内容（EVM `approve` 合约 / Stellar XDR），并接收签名后的交易，与支付意图完全一样。
 
@@ -735,7 +989,315 @@ KYC_REDIRECT_URL_WHITELIST={"cosmos_acme":["acme.com","app.acme.com"]}
 
 它**默认拒绝（fail closed）**：没有条目的消费者完全无法使用重定向，带末尾点号或 IDN 形式的主机会被拒绝，而不是被规范化。每个接受 `redirect_url` 的路由都会检查它，包括管理员批准，后者使用的是该 receiver 所属消费者的白名单。被拒绝的协议或主机返回 `400`。
 
+## 插件 — 以 slug 命名的扩展
+
+其他团队以**插件**的形式把自己的技术集成到本服务：`plugins/` 下的一个目录，在
+`/v1/plugins/<slug>/…` 提供服务，处理某个 tenant 的 customers、products 和 payment
+intents，但从不直接接触 core。目标是：插件可以出错——有 bug、慢、贪婪——而 core 不会跟着出错。
+
+### 插件就是一个目录
+
+所有插件都位于**同一个目录**：仓库根目录下的 `plugins/`——包括 Cosmos Pay 支持团队
+发布的插件和运维人员安装的插件。一个插件由三个可读文件组成，在其 slug 出现在
+`PLUGINS_ENABLED` 中之前，任何插件都不会运行：
+
+```
+plugins/
+  README.md
+  example/
+    plugin.json       what the plugin is, and what it may touch
+    index.ts          what it does — plain TypeScript, no build step
+    signature.json    who vouches for the two files above
+```
+
+`plugin.json` 说明插件是什么、可以访问什么——评审者和 tenant 最先阅读的文件：
+
+```json
+{
+  "slug": "example",
+  "name": "Example: payment notes",
+  "version": "1.0.0",
+  "description": "Keeps a timeline of notes per payment intent.",
+  "author": "Cosmos Pay support",
+  "capabilities": ["payment_intents:read"],
+  "egress": [],
+  "config": { "label": { "type": "string", "description": "Prefix for every note." } }
+}
+```
+
+`index.ts` 是代码：普通的 TypeScript，在服务启动时转译。它唯一的 import 是 SDK（`@/plugins/sdk`）：
+
+```ts
+import { defineHandlers, PluginError, requireString } from '@/plugins/sdk';
+
+export default defineHandlers({
+  queries: {
+    'get-notes': async (ctx, input) => {
+      const id = requireString(input, 'paymentIntentId');
+      return { notes: (await ctx.storage.get('notes', id)) ?? [] };
+    },
+  },
+  commands: {
+    'add-note': async (ctx, input) => { /* … */ },
+  },
+  events: {
+    PAYMENT_INTENT_SUCCEEDED: async (ctx, event) => { /* … */ },
+  },
+});
+```
+
+`example` 已预装且处于禁用状态：一个使用了 query、command、事件和 tenant 设置的参考插件。
+从它开始。
+
+### 编写插件
+
+```sh
+npm run plugins -- new my-plugin          # plugins/my-plugin/ from a template
+npm run plugins -- check my-plugin        # compile, load and validate it
+PLUGINS_ENABLED=my-plugin PLUGINS_ALLOW_UNSIGNED=true npm run start:dev
+npm run plugins -- sign my-plugin --key support.pem --key-id cosmos-support
+```
+
+`check` 会编译插件，并运行服务器启动时的所有校验。`PLUGINS_ALLOW_UNSIGNED=true` 让你在
+本地开发时无需签名即可运行，`NODE_ENV=production` 时会被拒绝。带着这个目录发起 pull
+request；评审通过后，由支持团队签名，它就会作为预装插件发布。
+
+签名从不运行插件代码——只有 `check` 会运行，CI 会在每个 pull request 上运行它——因此
+pull request 无法让自己的代码在持有支持密钥的机器上执行。只签署已通过评审和 CI 的内容。
+
+### 插件能访问什么、不能访问什么
+
+插件的 handlers 只收到一个 `PluginContext`，别无其他——没有 Prisma、没有 Nest provider、
+没有 `process.env`、没有 socket：
+
+| `ctx.` | 可访问 | 限制 |
+| ------ | ------ | ---- |
+| `storage` | 插件自己的记录（`plugin_record`），仅限本次安装 | 每个值 16 KiB，每个安装 10 000 条记录 |
+| `core.customers`, `core.products` | list / get / create / update，经由 core 自己的 service 和 DTO | 已授予的 capability（`customers:read`、`customers:write`……）；没有删除 |
+| `core.paymentIntents` | list / get，只读 | `payment_intents:read`；没有任何签名或转移资金的操作 |
+| `http` | 通过 443 端口的 HTTPS，访问 `egress` 中列出的 host | 仅公网地址（webhook 的 SSRF 规则），socket 固定到已校验的地址，不跟随重定向，响应上限 1 MiB |
+| `installation.config` | tenant 的设置；secret 仅为本次调用解密 | — |
+
+runtime 在每次调用前后保证：
+
+- **Tenant 隔离。** 上下文由发起调用的 consumer 及其安装构建；没有任何方法接收 consumer 或
+  安装 id。
+- **投影，而非整行。** core 的读取结果是固定投影——没有 `consumerId`、没有 `xdr`/`uri`、
+  没有供应商 payload——经复制并冻结。
+- **core 的校验照常生效。** 写入经过与 HTTP 路由相同的 DTO 校验；未知字段会被拒绝。
+- **Query 不能写入。** Query 可以用 `plugins:read` 调用，所以在 query 中所有 storage 和
+  core 写入都会被拒绝。
+- **预算。** 每次调用 10 s、200 次上下文调用、输入 64 KiB、输出 256 KiB。超时后调用方收到
+  `504 plugin_failed`，上下文被撤销，仍在运行的工作之后无法再写入。
+- **故障被隔离。** `PluginError` 变为带其消息的 `400 plugin_rejected`；其他任何错误变为
+  `502 plugin_failed`，记录日志且从不回显。插件处理事件失败不会影响该事件的 webhook，也不
+  影响其他插件。
+- **隔离。** 插件代码从不在本进程中运行。每次调用都会获得一个全新的 V8 isolate
+  （`isolated-vm`），其中没有任何 Node——没有 `process`、`require`、网络、文件系统或
+  定时器——堆上限 32 MB，并有自己的线程。它唯一的出口是一个桥，只接受上面列出的上下文
+  方法名，进出都是 JSON 副本；本进程的任何对象都不会到达它，因此专为逃逸编写的代码无处
+  可攀。预算用尽时 isolate 会被销毁，无论插件运行到哪里（包括同步循环）都会停止，它在内存
+  中保存的任何内容都不会留到下一次调用，包括其他 tenant 的调用。此外，ESLint 只允许
+  `plugins/**/*.ts` 导入 SDK。
+
+### 谁为插件担保
+
+只有当受信任的密钥以插件的 slug 和版本签署了它的 `plugin.json` 和 `index.ts`
+（`signature.json`）时，插件才会运行。改动一个代码字符或一项 capability，签名就会失败——
+启动随之停止。`plugin.json` 的格式和换行符不算改动。
+
+- **由支持团队预装。** 支持团队的公钥写在代码中（`PLUGIN_SUPPORT_KEYS`），因此由支持团队
+  签名并提交到 `plugins/` 的插件，无需任何配置即可在所有部署中加载。`plugins/` 受
+  `.github/CODEOWNERS` 保护，CI 会检查其中每个目录都已签名且有效。
+- **手动安装。** 其他插件都从 registry（任何静态 HTTPS 主机）安装，并且必须由支持团队或
+  `PLUGINS_TRUSTED_KEYS` 中的密钥签名：
+
+```sh
+npm run plugins -- install acme@1.0.0 --registry https://plugins.example.com
+# then add "acme" to PLUGINS_ENABLED and restart
+```
+
+registry 不被信任：`install` 在写入任何内容前验证签名，服务器在每次启动时再次验证。
+
+### 安装即授权
+
+只有在 tenant 通过 `PUT /v1/plugins/{slug}/installation` 安装插件，且
+`grantCapabilities` 与 `plugin.json` 中的列表完全一致——不能是子集，也不能是超集
+（`400 plugin_consent_mismatch`）——之后，插件才会为该 tenant 运行。若后续版本声明了更多，
+安装会保留旧的授权，所有 action 都返回 `409 plugin_not_installed`，直到 tenant 重新安装
+（`installation.pendingCapabilities` 显示差异）。卸载会删除插件为该 tenant 保存的所有记录。
+标记为 `secret` 的设置用 `PLUGINS_SECRET` 封存，永不返回。
+
+### 插件路由
+
+| 方法 | 路径 | 用途 |
+| ---- | ---- | ---- |
+| GET | `/v1/plugins` | 本部署提供的插件，以及调用方的安装 |
+| GET | `/v1/plugins/{slug}` | 单个插件：capability、egress、设置、action、安装 |
+| PUT | `/v1/plugins/{slug}/installation` | 安装、重新授权或重新配置 |
+| DELETE | `/v1/plugins/{slug}/installation` | 卸载，并删除插件的记录 |
+| POST | `/v1/plugins/{slug}/queries/{action}` | 运行只读 action (`plugins:read`) |
+| POST | `/v1/plugins/{slug}/commands/{action}` | 运行会写入的 action (`plugins:write`) |
+
+没有任何插件路由接受共享公共 API key：插件只作用于单个 tenant 的数据。两个 action 路由
+共享每个 consumer 每分钟 120 次请求的预算。
+
+### 原生插件：BlindPay 与 DeFindex
+
+有些集成并不是链本身——一个法币服务商、一个 DeFi 协议——它们需要沙箱刻意不提供的东西：
+自己的数据表、入站 webhook、整个部署范围的凭据。它们是**原生插件**：编译进服务、位于
+`src/native-plugins/<slug>/` 下的 Nest 模块，与沙箱插件使用同一个 `PLUGINS_ENABLED` 列表开启。
+
+| Slug | 提供的内容 |
+| ---- | ---------- |
+| `blindpay` | KYC、入金、出金、BlindPay webhook、其 `/v1/admin` 路由（`receivers`、`payins`、`payouts`）以及管理概览中的 `fiat` 部分 |
+| `defindex` | `/v1/defindex`——Stellar 上的 DeFindex vaults |
+
+- **未列出即不存在。** `PLUGINS_ENABLED` 未列出的原生插件永远不会被实例化：其路由返回
+  404，其任务从不启动，其变量也不会被校验。若其密钥已设置而 slug 未列出，启动时会发出警告。
+- **核心从不导入插件。** lint 禁止在 `src/` 中任何地方导入 `@/native-plugins/*`，
+  `src/native-plugins/native-plugins.module.ts` 除外，也禁止一个插件导入另一个。核心需要插件
+  数据的地方——管理概览——会提供一个扩展点（`AdminExtensions`），由插件注册进来。
+- **不在沙箱中，也不按租户安装。** 原生插件是经过审查、拥有核心权限的代码；它不按租户安装，
+  其路由保留各自的 scope（`kyc:*`、`onramp:*`、`offramp:*`、`liquidity:*`）。沙箱插件不能
+  使用原生插件的 slug。
+- **OpenAPI 契约记录每个原生插件的路由**，无论是否开启：`openapi:generate` 会全部开启。
+
 ## 升级 — 破坏性变更与部署说明
+
+### 钱包登录：已恢复钱包的签名者跟随 `STELLAR_NETWORK`
+
+- **`WALLET_AUTH_SIGNERS_HORIZON_URL` 现在默认使用 `STELLAR_NETWORK` 对应的 Horizon**（`STELLAR_HORIZON_URL_PUBLIC` / `STELLAR_HORIZON_URL_TESTNET`，否则使用 SDF 的），而不再总是公共网络的。当通过 SEP-30 恢复的钱包用替换其主密钥的那把密钥签署 `POST /v1/wallet/auth/finish` 时会读取它。在 testnet 部署上，查询原本发往主网，找不到账户，于是每个已恢复钱包的登录都返回 `400 wallet_signature_invalid`。
+- **`WALLET_RECOVERY_SPONSOR_NETWORK_PASSPHRASE` 和 `WALLET_RECOVERY_SPONSOR_HORIZON_URL` 也随之变化**，让 sponsor 在同一个账本上读取账户。
+- **部署步骤：** `STELLAR_NETWORK` 本身默认是 `testnet`。服务主网钱包却未设置它的部署（API key 按请求选择网络），现在必须显式设置 `STELLAR_NETWORK=public` 或这三个变量。否则已恢复的主网钱包将无法登录，已配置的 sponsor 会构建 testnet 交易。
+- **始终只读取一个账本。** 同时检查两个账本会让在另一个网络上添加到同一地址的密钥为本网络签名。
+
+### 钱包备份：由两台恢复服务器持有的邮箱恢复之门
+
+- **迁移 `20261004120000_recovery_backup_shares`** 新增 `recovery_backup_share` 表。只有恢复服务器
+  （`RECOVERY_ROLE`）会写入它；请在两台上都执行迁移。
+- **恢复服务器上的新路由：** `PUT`、`GET` 和 `DELETE /v1/sep30/shares/{address}`，与其余 SEP-30 路由
+  一样是 `@Public()`，并通过同一条无密钥路由提供。钱包把一个随机密钥拆成两半，用账户的 SEP-10 令牌
+  分别交给每台服务器一半，并以完整密钥把备份的数据密钥封装为一个 `recovery` 门。向两台服务器都证明
+  邮箱（Authentik 的 ID 令牌，或每台服务器各自发送的邮件验证码）即可取回两半：备份被打开，用户设置
+  新密码。种子——以及每条链上的地址——都得以保留，这与只恢复 Stellar 账户的 SEP-30 不同。
+- **由此增加的信任：** 单独一台服务器只持有随机噪声。两台服务器联合，或控制该邮箱且让两台服务器都
+  接受它的人，可以打开带有此门的备份。请将两台服务器部署在彼此独立的基础设施上，并使用不同的
+  `MAIL_*` 发件方，这正是 SEP-30 已有的要求。
+- **`isBackupBox` 接受 `v: 4` 盒子中的一个 `recovery` 槽位**，且旁边至少要有一个密码或 passkey
+  槽位。唯一一道门是 `recovery` 的盒子会被拒绝。
+- **恢复服务器发送的邮件验证码** 现在也会发往在该服务器上仅持有一半备份密钥的邮箱。
+
+### Solana 与 Monad 上的 swap：`/v1/swaps` 支持 `chain`，并新增一张表
+
+- **迁移 `20261003120000_chain_swaps`** 新增 `chain_swap` 表。已有内容均不变：不带
+  `chain` 的 `/v1/swaps` 响应与以前逐字节相同。
+- **`/v1/swaps` 接受 `chain`**（`stellar` | `solana` | `monad`），在 quote 和 create 的
+  请求体中，以及列表的查询参数中。对 Solana 和 Monad，create、单条读取和 submit 返回
+  `ChainSwapEntity`（契约中为 `oneOf`）。
+- **`POST /v1/swaps/{id}/submit`：**发送 `signedTransaction` 时不再必须提供 `signedXdr`。
+  Stellar swap 仍然需要它，错误消息不变。
+- **`/v1/cross-chain-swaps` 现在拒绝所有同链交易对**——以前它通过 NEAR Intents 为
+  Solana → Solana 和 Monad → Monad 报价——并指向 `/v1/swaps`。
+- **Solana 或 Monad 节点拒绝广播时返回 `400 transaction_rejected`**，不再是
+  `502 provider_error`。这也包括 Monad 充值转发器的 relayer，它会像以前一样记录并重试。
+- **启用前：**设置 `SOLANA_SWAP_FEE_WALLET` 并为每个预期的输出 mint 创建其代币账户，设置
+  `MONAD_SWAP_FEE_WALLET`，并为生产流量申请 `KURU_API_KEY`。
+
+### 跨链 swap：一个新模块、一张新表和六个 webhook 事件
+
+- **迁移 `20261002120000_cross_chain_swaps`** 新增 `cross_chain_swap` 表，并向
+  `WebhookEventType` 追加六个值：`CROSS_CHAIN_SWAP_CREATED`、`_UPDATED`、`_SUCCEEDED`、
+  `_REFUNDED`、`_FAILED`、`_EXPIRED`。不改写任何已有数据。
+- **`/v1/cross-chain-swaps` 下的新路由**，复用 `swaps:read` / `swaps:write` scope；共享公共
+  key 可以访问 assets、quote、create 和 deposit，但永远无法访问两个读取路由。
+- **启用前：** 设置 `NEAR_INTENTS_FEE_RECIPIENT`（一个 NEAR 账户），否则所有带佣金的套餐都会
+  返回 `503 misconfigured`；并设置 `NEAR_INTENTS_API_KEY`，否则 1Click 会加收自己的费用并拿走
+  一半佣金。
+- **`provider_error` 现在也可能是 `400`**：NEAR Intents 拒绝报价（"amount is too low for
+  bridge"）是调用方可以改正的问题，因此它以带有 1Click 原因的 `400 provider_error` 返回，与
+  BlindPay 的 4xx 一样。
+### 钱包备份：Argon2id 与静态加密
+
+- **部署前设置 `WALLET_BACKUP_ENCRYPTION_KEY`**（`openssl rand -base64 32`）；缺少它时，只要配置了登录入口就会拒绝启动。每个存储的备份都会用它再次加密（AES-256-GCM，绑定到其 `chain:address`），因此数据库的转储、副本或备份都不是任何人备份的副本。然后运行一次 **`npm run backups:reencrypt`**：它会加密之前写入的记录。轮换：把旧密钥移到 `WALLET_BACKUP_ENCRYPTION_PREVIOUS_KEYS`，设置新密钥，运行脚本，再移除旧密钥。
+- **接受 `v: 4` 备份**：沿用 v3 的槽位结构，密码入口使用 Argon2id（`kdf: "argon2id"`，`m` ≥ 19 MiB，`t` ≥ 2）。钱包把每个新备份封装为 v4（64 MiB，2 轮），并在恢复仅含密码入口的 v2/v3 备份时将其重新封装为 v4。v2 与 v3 仍被接受和提供。
+- **钱包要求 12 个字符且不常见的密码**；现有密码在被修改之前仍然可用。
+- **数据库本身**仍需要存储层加密（磁盘 / 卷）、加密的备份以及仅限本服务的访问：静态密钥保护的是备份列，而不是其余记录。
+
+### 钱包备份：每个钱包一份，登录时全部恢复
+
+- **迁移 `20261001120000_wallet_backups_per_wallet`** 把“每个账户一份备份”的规则改为账户内每个 `(chain, address)` 一份。现有记录保持不变。
+- **`POST /v1/wallet/auth/oauth/claim` 和 `email/verify` 返回 `backups`**，即账户保存的全部备份，按从新到旧排列。`backup` 仍为其中最新的一份，已弃用。
+- **携带其他钱包 `backup` 的 `POST /v1/wallet/auth/finish` 会新增该备份**；不再返回 `backup_conflict`。同一钱包的备份会替换其自身。`replaceBackup` 仍被接受但会被忽略。每个账户最多 20 个钱包；第 21 个返回 `400 wallet_backup_limit`。
+
+### 开发者平台退出请求路径
+
+- **已移除的变量：** `WALLET_AUTH_CONSOLE_URL`、`WALLET_AUTH_CONSOLE_SECRET`、`RECOVERY_EMAIL_DELIVERY_URL`、`RECOVERY_EMAIL_DELIVERY_SECRET`。它们会被忽略。
+- **邮件入口现在需要** `MAIL_FROM` + `MAIL_RESEND_API_KEY` / `MAIL_SMTP_*`（在 Resend 上验证过的发件人）**以及** `APISIX_ADMIN_URL` + `APISIX_ADMIN_KEY`。两者缺一，`GET /v1/wallet/auth/providers` 就报告 `email: false`；通过身份提供方登录仍能完成回调，但在设置 admin 这一对之前，`POST /v1/wallet/auth/finish` 返回 `503 misconfigured`。每一对变量必须同时设置，否则拒绝启动。
+- **原先通过邮件发送验证码的恢复服务器**需设置 `RECOVERY_EMAIL_CODES=true` 和自己的 `MAIL_*`。恢复服务器上设置 `APISIX_ADMIN_KEY` 会导致拒绝启动。
+- **新路由 `GET /v1/public-key`**（`@Public()`），由 `PUBLIC_API_KEY_DEV` / `PUBLIC_API_KEY_PROD` 提供：复制平台为公共 key 签发的值。把该路径加入 APISIX 的无 key 路由（不带 `key-auth`），否则钱包会收到 `401`。
+- **钱包 key 现在位于 `cosmos_wallet_<accountId>` 之下**；由平台开通的账户见上面的章节。响应结构不变。
+- **不带 `backup` 的 `POST /v1/wallet/auth/finish`** 会把签名的钱包连接到该账户并返回其 key：当账户备份的是另一个钱包时，不再返回 `backup_conflict`，也不再移动账户的 `address`。带 `backup` 时没有变化。从助记词导入的钱包现在就是这样连接 Cosmos Pay 的。
+- **`POST /v1/aliases/{name}/recovery` 现在对持有 `payments:write` 的 key 开放，包括共享公共 key**，且只返回 `{ accepted: true }`：本服务自己通过邮件发送 token，因此响应中不再有 `token`、`email` 和 `expiresAt`，平台控制台也不再参与（该路由不再返回 `403 admin_console_only`）。需要 `MAIL_*`；没有时该路由返回 `503 misconfigured`。
+- **无需迁移。**
+
+### Solana 与 Monad；BlindPay 与 DeFindex 成为原生插件
+
+- **迁移 `20260930120000_multichain`** 为 `payment_intent`、`alias_address`、
+  `alias_challenge`、`wallet_account` 和 `wallet_backup` 增加 `chain`（默认 `stellar`），
+  为 `payment_intent` 增加 `assetDecimals`、`chainReference` 和 `chainCursor`，并把别名地址
+  的唯一索引扩展为 `(aliasId, chain, network, address)`。所有现有行仍为 Stellar，不会改写
+  任何数据。
+- **BlindPay（KYC、入金、出金）和 DeFindex 仅在 `PLUGINS_ENABLED` 包含 `blindpay` /
+  `defindex` 时提供。** 已设置其密钥但未添加 slug 的部署会失去 `/v1/kyc`、`/v1/onramp`、
+  `/v1/offramp`、`/v1/blindpay/webhooks`、`/v1/defindex` 以及 `/v1/admin` 下的 BlindPay
+  路由（404），启动时会记录一条点名该 slug 的警告。部署前请设置例如
+  `PLUGINS_ENABLED=blindpay,defindex`。除此之外，路由、scope、数据表和响应均不变。
+- **BlindPay 的变量在插件启动时校验**，不再由环境校验负责：只配置了一半的实例仍会阻止启动，
+  但仅在开启 `blindpay` 的部署上。
+- **`GET /v1/admin/summary` 仅在开启 `blindpay` 时包含 `fiat`**，`GET /v1/admin/consumers`
+  也仅在此时统计 `blindpayReceivers`、`payins` 和 `payouts`。概览中的 `volume` 会把 Solana 或
+  Monad 行标记为 `<chain>:<asset>`。
+- **新增响应字段**（仅新增）：支付意图上的 `chain` 和 `chainReference`；别名地址、解析结果和
+  by-address 行上的 `chain`；钱包备份上与 `stellarAddress` 并列的 `chain` 和 `address`；
+  仪表盘 `volume`、`recent` 和余额行上的 `chain`，这些行现在按链分组——SOL 和 MON 不再并入
+  XLM。
+- **`txHash` 在 `validate` 和 `PATCH` 上接受各链的格式**，并按意图所在链校验（否则
+  `400 validation_failed`）。只有 hex 会转为小写；Solana 签名按原样保存。
+- **不带 `?chain=` 的别名解析只返回 Stellar 地址。**
+- **新增变量**，均为可选（默认使用公共 RPC）：`SOLANA_RPC_URL_MAINNET`、
+  `SOLANA_RPC_URL_DEVNET`、`SOLANA_RPC_TIMEOUT_MS`、`MONAD_RPC_URL_MAINNET`、
+  `MONAD_RPC_URL_TESTNET`、`MONAD_RPC_TIMEOUT_MS`、`MONAD_LOG_BLOCK_RANGE`。观察器现在也会
+  为这些链上的待处理意图轮询 Solana 和 Monad。
+- **开发者平台的 `/wallet/console/provision`** 现在会收到 `chain` 和 `address`，Solana 或
+  Monad 登录时 `stellarAddress: null`；在钱包提供这些链之前，它必须能接受这种情况。
+- **Monad 充值地址**仅在配置 `MONAD_RELAYER_PRIVATE_KEY` 时启用；迁移还会创建
+  `evm_deposit_address`，意图新增 `networkFee`。未配置密钥时，Monad 意图行为不变
+  （直接付款给商户）。
+- **APISIX 无需改动。**
+
+### 插件：一个新模块、两张新表和两个新 scope
+
+`/v1/plugins` 是新增的；现有路由和响应均未改变。部署时：
+
+- **迁移 `20260929120000_plugins`** 创建 `plugin_installation` 和 `plugin_record`。core
+  表没有变化。
+- **scope `plugins:read` 和 `plugins:write` 是新增的。** 现有 key 没有它们，会收到
+  `insufficient_scope`；请在开发者平台上授予。
+- **在 `PLUGINS_ENABLED` 列出插件之前，什么都不会运行**，而且只对安装了该插件的 tenant
+  运行。`plugins/example` 已预装且处于禁用状态。
+- **`typescript` 现在是运行时依赖**：插件的 `index.ts` 在启动时转译。不要从生产环境安装中
+  移除它。
+- **启用带 secret 设置的插件前先设置 `PLUGINS_SECRET`**——否则启动会拒绝。
+  `PLUGINS_TRUSTED_KEYS` 在支持团队之外添加签名者。
+- **随构建产物一起部署 `plugins/` 目录。** 它在启动时从工作目录读取，与 `dist/` 并列；
+  只复制 `dist/` 和 `node_modules/` 的部署不会提供任何插件，而已启用的插件会使启动失败。
+- **启用插件时 Node 必须以 `--no-node-snapshot` 运行**——沙箱（`isolated-vm`，一个
+  原生模块）需要它，否则启动会拒绝。所有 npm 脚本都会传入它（`start`、`start:prod`、
+  `test`……）；以其他方式启动的进程需要在命令或 `NODE_OPTIONS` 中加上它。
+- **APISIX 无需改动：** 通配路由已经会转发 `/v1/plugins`。
+- **新错误码：** `plugin_not_installed`、`plugin_consent_mismatch`、
+  `plugin_rejected`、`plugin_quota_exceeded`、`plugin_failed`。
 
 ### 已移除 Pollar
 
@@ -958,6 +1520,7 @@ WHERE NOT i.indisvalid;
 | -------- | -------- | ------- | ------ |
 | `NODE_ENV` | 否 | `development` | 必须为 `development`、`test` 或 `production`。**在生产环境中设置为 `production`**——默认拒绝的套餐手续费检查和默认关闭文档都依赖于它 |
 | `PORT` | 否 | `3000` | HTTP 监听端口 |
+| `ENV_FILE` | 否 | `.env` | 本进程读取的 dotenv 文件（Nest 与 Prisma）。本地各实例共用它——每个实例的差异写在 `dev-instances.json` 中（`npm run dev:local`）；环境中已有的值仍然优先 |
 | `DATABASE_URL` | **是** | — | Prisma 使用的 PostgreSQL 连接 |
 | `APISIX_GATEWAY_SECRET` | **是** | — | 证明请求经由 APISIX 到达的共享密钥。**至少 32 个字符**；占位符值会在启动时被拒绝 |
 | `APISIX_GATEWAY_SECRET_HEADER` | 否 | `x-gateway-secret` | 网关密钥的请求头名称 |
@@ -971,9 +1534,35 @@ WHERE NOT i.indisvalid;
 | `APISIX_SWAP_FEE_BPS_HEADER` | 否 | `x-plan-swap-fee-bps` | 套餐 swap 手续费（bps） |
 | `APISIX_EMAIL_HEADER` | 否 | `x-consumer-email` | key 所属账户的已验证邮箱，由网关转发。目前本服务中没有任何功能依赖它 |
 | `APISIX_PUBLIC_CONSUMER` | 否 | — | 共享公共消费者的用户名（见上文）。凡是发布了公共 key 的地方都要设置 |
+| `PUBLIC_API_KEY_DEV` | 否 | — | 测试网的共享公共 key，由 `GET /v1/public-key?env=dev` 提供。未设置时返回 `503 misconfigured` |
+| `PUBLIC_API_KEY_PROD` | 否 | — | 主网同上（`env=prod`） |
+| `APISIX_ADMIN_URL` | 与 admin key 一起 | — | APISIX Admin API 的基础地址，如 `http://apisix:9180/apisix/admin`。仅用于签发钱包账户的 key |
+| `APISIX_ADMIN_KEY` | 钱包登录需要 | — | APISIX admin key。作用于整个网关——见[没有任何请求依赖开发者平台](#没有任何请求依赖开发者平台)。在恢复服务器上会被拒绝 |
+| `APISIX_ADMIN_TIMEOUT_MS` | 否 | `10000` | 一次 Admin API 调用的时间预算（ms） |
+| `WALLET_KEY_SWAP_FEE_BPS` | 否 | `150` | 写入钱包账户 key 的兑换佣金（`community` 套餐的费率） |
+| `MAIL_RESEND_API_KEY` | 邮件入口需要 | — | 本服务发送登录与恢复验证码所用的 Resend API key |
+| `MAIL_FROM` | 与 Resend / SMTP key 一起 | — | 已验证的发件人，如 `Cosmos Pay <no-reply@example.com>` |
+| `MAIL_SMTP_HOST` | 否 | — | SMTP 服务器，在未设置 `MAIL_RESEND_API_KEY` 时使用 |
+| `MAIL_SMTP_PORT` | 否 | `587` | SMTP 端口 |
+| `MAIL_SMTP_SECURE` | 否 | `false` | 隐式 TLS（465）用 `true`，STARTTLS（587）用 `false` |
+| `MAIL_SMTP_USER` | 否 | — | SMTP 用户名 |
+| `MAIL_SMTP_PASS` | 否 | — | SMTP 密码 |
+| `MAIL_TIMEOUT_MS` | 否 | `15000` | 一次发送的时间预算（ms） |
+| `RECOVERY_EMAIL_CODES` | 否 | `false` | 在恢复服务器上：通过自己的 `MAIL_*` 发送自己的验证码 |
+| `WALLET_BACKUP_ENCRYPTION_KEY` | 配置任一登录入口时 | — | 对每个已存储的钱包备份进行静态加密（AES-256-GCM，32 字节 base64/hex）。只存在于环境变量中：数据库副本里只有设备密文的密文。丢失它意味着已存储的备份无法再被提供 |
+| `WALLET_BACKUP_ENCRYPTION_PREVIOUS_KEYS` | 否 | — | 以逗号分隔的已停用密钥，只读，用于轮换；运行 `npm run backups:reencrypt` 后移除 |
 | `STELLAR_NETWORK` | 否 | `testnet` | 回退使用的 Stellar 网络（`public` / `testnet`） |
 | `STELLAR_HORIZON_URL_PUBLIC` | 否 | `https://horizon.stellar.org` | 主网 Horizon 基础 URL |
 | `STELLAR_HORIZON_URL_TESTNET` | 否 | `https://horizon-testnet.stellar.org` | 测试网 Horizon 基础 URL |
+| `SOLANA_RPC_URL_MAINNET` | 否 | `https://api.mainnet-beta.solana.com` | `prod` 密钥使用的 Solana RPC（mainnet-beta；使用前校验 genesis hash）。公共端点有速率限制：生产环境请使用服务商的端点 |
+| `SOLANA_RPC_URL_DEVNET` | 否 | `https://api.devnet.solana.com` | `dev` 密钥使用的 Solana RPC（devnet） |
+| `SOLANA_RPC_TIMEOUT_MS` | 否 | `10000` | 单次 Solana RPC 调用的时间预算（毫秒） |
+| `MONAD_RPC_URL_MAINNET` | 否 | `https://rpc.monad.xyz` | `prod` 密钥使用的 Monad RPC（chain id 143，使用前校验） |
+| `MONAD_RPC_URL_TESTNET` | 否 | `https://testnet-rpc.monad.xyz` | `dev` 密钥使用的 Monad RPC（chain id 10143） |
+| `MONAD_RPC_TIMEOUT_MS` | 否 | `10000` | 单次 Monad RPC 调用的时间预算（毫秒） |
+| `MONAD_LOG_BLOCK_RANGE` | 否 | `100` | 一次 `eth_getLogs` 可覆盖的区块数——RPC 服务商的上限（公共 RPC 允许 100） |
+| `MONAD_RELAYER_PRIVATE_KEY` | 否 | — | relayer 密钥（32 字节 hex）。设置后每个 Monad 意图都有自己的充值地址，relayer 会扣除手续费后把充值转发给商户。只存放 gas 资金：它部署的转发合约不能向其他任何人付款 |
+| `MONAD_DEPOSIT_TOKEN_FEES` | 否 | — | 每种 ERC-20 充值的 relayer 手续费，JSON `{"0xToken": "0.05"}`，以代币单位计。未配置的代币免费转发（gas 由 relayer 支付） |
 | `STELLAR_BASE_FEE` | 否 | `100` | 构建交易时使用的 Stellar 基础手续费（stroops） |
 | `STELLAR_TX_TIMEOUT` | 否 | `300` | 交易超时（秒） |
 | `STELLAR_SWAP_FEE_WALLET` | 手续费 > 0 时 | — | 收取 swap 手续费的平台 G... 账户 |
@@ -981,6 +1570,21 @@ WHERE NOT i.indisvalid;
 | `STELLAR_SWAP_SLIPPAGE_BPS` | 否 | `50` | 默认 swap 滑点容忍度（bps） |
 | `STELLAR_SWAP_MAX_SLIPPAGE_BPS` | 否 | `500` | 调用方滑点的硬上限（bps） |
 | `STELLAR_SWAP_SINGLE_INFLIGHT` | 否 | `false` | 为 `true` 时，如果同一 source 已存在未过期的 PENDING swap，则返回 409 |
+| `NEAR_INTENTS_BASE_URL` | 否 | `https://1click.chaindefuser.com` | NEAR Intents 的 1Click API，用于跨链 swap |
+| `NEAR_INTENTS_API_KEY` | 建议 | — | 1Click 合作伙伴 key（`X-API-Key`）。没有它时 1Click 加收自己的 0.2% 费用，并拿走一半佣金 |
+| `NEAR_INTENTS_FEE_RECIPIENT` | 有套餐佣金时 | — | 接收跨链佣金的 NEAR 账户（`appFees`）。有套餐费率却未设置：`503 misconfigured` |
+| `NEAR_INTENTS_TIMEOUT_MS` | 否 | `20000` | 单次 1Click 调用的时间预算（毫秒） |
+| `CROSS_CHAIN_SWAP_SLIPPAGE_BPS` | 否 | `100` | 跨链默认滑点（bps）；低于最小值时 NEAR Intents 退款 |
+| `CROSS_CHAIN_SWAP_MAX_SLIPPAGE_BPS` | 否 | `500` | 调用方可请求的最大滑点 |
+| `CROSS_CHAIN_SWAP_DEADLINE_SECONDS` | 否 | `1800` | 充值地址接受充值的时长；之后的充值会被退款 |
+| `SOLANA_SWAP_FEE_WALLET` | 有套餐佣金时 | — | 接收 Solana swap 佣金的代币账户所有者（Jupiter `feeAccount`，每个输出 mint 一个——请先创建）。有套餐费率却未设置：`503 misconfigured` |
+| `MONAD_SWAP_FEE_WALLET` | 有套餐佣金时 | — | 接收 Monad swap 佣金的地址（Kuru Flow `referrerAddress`） |
+| `JUPITER_BASE_URL` | 否 | `https://lite-api.jup.ag/swap/v1` | Jupiter Swap API；使用 key 时为 `https://api.jup.ag/swap/v1` |
+| `JUPITER_API_KEY` | 否 | — | Jupiter API key（`x-api-key`），用于更高的限额 |
+| `JUPITER_TIMEOUT_MS` | 否 | `15000` | 单次 Jupiter 调用的时间预算（毫秒） |
+| `KURU_BASE_URL` | 否 | `https://ws.kuru.io` | Kuru Flow API（Monad） |
+| `KURU_API_KEY` | 生产环境需要 | — | Kuru Flow API key（`X-API-Key`）。没有它时每个地址只能拿到限速每秒一次请求的 token |
+| `KURU_TIMEOUT_MS` | 否 | `15000` | 单次 Kuru Flow 调用的时间预算（毫秒） |
 | `OBSERVER_ENABLED` | 否 | `true` | `true` / `false` — 链上对账器 |
 | `OBSERVER_INTERVAL_MS` | 否 | `15000` | 观察器轮询间隔（ms，最小 1000） |
 | `OBSERVER_BATCH_SIZE` | 否 | `50` | 每个观察器周期处理的意图/swap 上限 |
@@ -1010,11 +1614,18 @@ WHERE NOT i.indisvalid;
 | `BLINDPAY_INSTANCE_ID_DEV` | 设置了开发 API key 时 | — | 开发实例 id（`in_...`） |
 | `BLINDPAY_WEBHOOK_SECRET_DEV` | 设置了开发 API key 时 | — | 开发实例 webhook 端点的 Svix 密钥；规则与 `BLINDPAY_WEBHOOK_SECRET` 相同 |
 | `BLINDPAY_TIMEOUT_MS` | 否 | `15000` | BlindPay HTTP 客户端超时（ms） |
-| `DEFINDEX_API_KEY` | 否 | — | DeFindex 服务端 API 密钥；留空则禁用相关路由 |
+| `DEFINDEX_API_KEY` | 否 | — | DeFindex 服务端 API 密钥。仅当 `PLUGINS_ENABLED` 包含 `defindex` 时路由才存在；没有密钥时返回 `503 misconfigured` |
 | `DEFINDEX_BASE_URL` | 否 | `https://api.defindex.io` | DeFindex API 基础 URL |
 | `DEFINDEX_TIMEOUT_MS` | 否 | `30000` | DeFindex HTTP 超时（ms） |
+| `PLUGINS_ENABLED` | 否 | — | 本部署提供的插件 slug，逗号分隔：`plugins/` 中的沙箱插件，以及原生插件 `blindpay` 和 `defindex`。为空则不提供任何插件；未列出的插件永远不会被加载 |
+| `PLUGINS_SECRET` | 当已启用的插件有 secret 设置时 | — | 封存插件安装的 secret 设置（至少 32 个字符）。更改它会使所有已存储的插件 secret 无法读取 |
+| `PLUGINS_TRUSTED_KEYS` | 否 | — | 除 Cosmos Pay 支持团队之外，其插件可在此运行的签名者：逗号分隔的 `<keyId>:<base64url Ed25519 公钥>`。由其他人签名、或签名后被修改的插件会使启动失败 |
+| `PLUGINS_ALLOW_UNSIGNED` | 否 | `false` | 运行没有 `signature.json` 的插件，用于在本地编写插件。`NODE_ENV=production` 时拒绝 |
 | `KYC_REDIRECT_URL_WHITELIST` | 否 | — | 按消费者划分的 KYC 重定向主机白名单 |
 | `WALLET_AUTH_RETURN_URLS` | 否 | — | 以逗号分隔的应用 URL，钱包登录回调可以重定向到这些地址（`POST /v1/wallet/auth/oauth/authorize` 的 `returnTo`）：自定义 scheme、universal/app link，或 `http://127.0.0.1/…`（任意端口）。精确匹配；回环地址之外的纯 http、带 query 或使用 `javascript:`/`data:`/`file:` 的条目在启动时被拒绝。未设置时，每个回调都渲染页面，`returnTo` 返回 `400 wallet_return_url_not_allowed` |
+| `WALLET_AUTH_SIGNERS_HORIZON_URL` | 否 | `STELLAR_NETWORK` 的 Horizon | 列出谁可以为账户签名；当已恢复的钱包用替换其主密钥的密钥签名时读取。必须是钱包所在的账本：其他账本返回 404，登录结果为 `400 wallet_signature_invalid` |
+| `WALLET_RECOVERY_SPONSOR_NETWORK_PASSPHRASE` | 否 | `STELLAR_NETWORK` 的 passphrase | 赞助的恢复设置（`POST /v1/wallet/recovery/setup`）所针对的网络 |
+| `WALLET_RECOVERY_SPONSOR_HORIZON_URL` | 否 | `STELLAR_NETWORK` 的 Horizon | 赞助的恢复设置读取账户所用的 Horizon |
 | `RATE_LIMIT_ENABLED` | 否 | `true` | 对花费 XLM 的路由按地址设置上限。事故开关 |
 | `RATE_LIMIT_PRUNE_INTERVAL_MS` | 否 | `600000` | 计数器窗口清理间隔（ms，最小 1000） |
 

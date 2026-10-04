@@ -4,6 +4,7 @@ import { VersioningType } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { stringify } from 'yaml';
 import configuration from '@/config/configuration';
+import { NATIVE_PLUGIN_SLUGS } from '@/plugins/plugins.constants';
 import { createOpenApiDocument, findOpenApiIssues } from '@/swagger';
 
 /**
@@ -40,6 +41,14 @@ async function generate(): Promise<void> {
   process.env.BLINDPAY_WEBHOOK_SECRET ??= `whsec_${Buffer.from(
     'openapi-generation-only!',
   ).toString('base64')}`;
+
+  // The contract documents every route this service CAN serve, so every native
+  // plugin is on while it is written — whatever a developer's .env enables.
+  // Assigned, not defaulted, for the same reason as the BlindPay trio: the spec
+  // must not depend on the machine. No sandboxed plugin is listed: they are
+  // served under the generic /v1/plugins routes, which exist either way, and the
+  // sandbox needs a `--no-node-snapshot` this command does not run with.
+  process.env.PLUGINS_ENABLED = NATIVE_PLUGIN_SLUGS.join(',');
 
   // Import only after the offline defaults are set: ConfigModule validates the
   // environment as soon as AppModule is evaluated.

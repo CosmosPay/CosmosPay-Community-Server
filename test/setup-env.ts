@@ -43,3 +43,27 @@ process.env.WALLET_AUTH_OIDC_CLIENT_SECRET = '';
 // refused would only ever see the missing configuration.
 process.env.WALLET_AUTH_SESSION_SECRET =
   'e2e-wallet-session-secret-e2e-wallet-session-secret';
+// Serve the example plugin preinstalled in plugins/, so the plugins suite goes
+// through the real loader, signature check and registry. Pinned for the same
+// reason as the rest: a developer's .env may enable others, or none.
+process.env.PLUGINS_ENABLED = 'example,blindpay,defindex';
+process.env.PLUGINS_TRUSTED_KEYS = '';
+process.env.PLUGINS_ALLOW_UNSIGNED = 'false';
+// The shared public key GET /v1/public-key serves. Dev only, so the suite can see
+// both answers: the key, and the 503 for an environment that publishes none.
+process.env.PUBLIC_API_KEY_DEV = `dv_${'e'.repeat(64)}`;
+process.env.PUBLIC_API_KEY_PROD = '';
+// No sender and no APISIX admin: a developer's .env may point at real ones, and a
+// suite must never send mail or write the gateway. Empty rather than deleted, for
+// the same dotenv reason as above; in pairs, because identity-env refuses half.
+process.env.MAIL_RESEND_API_KEY = '';
+process.env.MAIL_SMTP_HOST = '';
+process.env.MAIL_FROM = '';
+process.env.APISIX_ADMIN_URL = '';
+process.env.APISIX_ADMIN_KEY = '';
+// The at-rest key for stored wallet backups: required wherever a sign-in door is, and
+// pinned so a developer's .env cannot change what the suites seal with.
+process.env.WALLET_BACKUP_ENCRYPTION_KEY = Buffer.alloc(32, 9).toString(
+  'base64',
+);
+process.env.WALLET_BACKUP_ENCRYPTION_PREVIOUS_KEYS = '';

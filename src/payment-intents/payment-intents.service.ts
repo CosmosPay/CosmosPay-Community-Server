@@ -38,7 +38,19 @@ import {
   type PaymentIntentTerms,
 } from '@/payment-intents/payment-intent-replay';
 import { Sep7LinkBuilder } from '@/payment-intents/sep7-link-builder.service';
-import { StellarVerifierService } from '@/payment-intents/stellar-verifier.service';
+import { ChainPayLinkBuilder } from '@/payment-intents/chain-pay-link-builder.service';
+import { PaymentVerifiers } from '@/payment-intents/payment-verifiers';
+import {
+  expectedTxId,
+  isTxIdFor,
+  normalizeTxId,
+} from '@/payment-intents/tx-id';
+import {
+  type Chain,
+  DEFAULT_CHAIN,
+  isChain,
+  type OtherChain,
+} from '@/chains/chains.constants';
 
 /** Who triggered a status change — stored on the audit row. */
 export type PaymentIntentTransitionActor =
@@ -52,7 +64,7 @@ export interface TransitionOptions {
   /** On-chain payer for PAY intents settled by observer/validate. */
   payer?: string;
   /**
-   * `StellarVerifierService` confirmed that `txHash` pays this intent. Only
+   * The intent's chain verifier confirmed that `txHash` pays this intent. Only
    * {@link PaymentIntentsService.markSucceeded} sets it, and settling an
    * EXPIRED intent requires it (`VERIFIED_SETTLEMENT_ONLY_FROM`).
    */
@@ -79,6 +91,7 @@ export const PAYMENT_INTENT_PUBLIC_SELECT = {
   id: true,
   kind: true,
   status: true,
+  chain: true,
   network: true,
   source: true,
   destination: true,
@@ -86,6 +99,8 @@ export const PAYMENT_INTENT_PUBLIC_SELECT = {
   asset: true,
   assetIssuer: true,
   memo: true,
+  chainReference: true,
+  networkFee: true,
   msg: true,
   callback: true,
   xdr: true,
@@ -123,10 +138,11 @@ export class PaymentIntentsService {
     private readonly config: ConfigService<AppConfig, true>,
     private readonly prisma: PrismaService,
     private readonly webhooks: WebhookTerminalEmitter,
-    private readonly verifier: StellarVerifierService,
+    private readonly verifiers: PaymentVerifiers,
     private readonly links: Sep7LinkBuilder,
     private readonly consumers: ConsumerResolverService,
     private readonly customers: CustomersService,
+    private readonly chainLinks: ChainPayLinkBuilder,
   ) {}
 
   /**
@@ -258,6 +274,7 @@ export class PaymentIntentsService {
     const memo = resolveOrMintMemoId(dto.memo);
     const terms: PaymentIntentTerms = {
       kind: 'TX',
+      chain: 'stellar',
       network,
       source: dto.source,
       destination: dto.destination,
@@ -316,12 +333,17 @@ export class PaymentIntentsService {
     consumer: GatewayConsumer,
     dto: CreatePayPaymentIntentDto,
   ): Promise<PaymentIntentView> {
+    const chain = dto.chain ?? DEFAULT_CHAIN;
+    if (chain !== 'stellar') {
+      return this.createPayOnChain(consumer, chain, dto);
+    }
     const network = this.resolveNetwork(consumer);
     const localConsumer = await this.resolveConsumer(consumer);
     const asset = resolveAsset(dto.assetCode, dto.assetIssuer);
     const memo = resolveOrMintMemoId(dto.memo);
     const terms: PaymentIntentTerms = {
       kind: 'PAY',
+      chain: 'stellar',
       network,
       source: null,
       destination: dto.destination,
@@ -369,6 +391,101 @@ export class PaymentIntentsService {
   }
 
   /**
+   * A PAY intent on Solana or Monad: a Solana Pay transfer request or an
+   * EIP-681 link, built by {@link ChainPayLinkBuilder}. The memo is still the
+   * idempotency key, and a retry is still held to the same payment
+   * ({@link replayOf}) — compared in the chain's stored spelling, so an EVM
+   * address sent in another case is the same destination.
+   */
+  private async createPayOnChain(
+    consumer: GatewayConsumer,
+    chain: OtherChain,
+    dto: CreatePayPaymentIntentDto,
+  ): Promise<PaymentIntentView> {
+    if (dto.callback !== undefined) {
+      throw ApiError.badRequest(
+        ApiErrorCode.ValidationFailed,
+        `callback is a SEP-7 field and is not supported on ${chain}.`,
+      );
+    }
+    const network = this.resolveNetwork(consumer);
+    const localConsumer = await this.resolveConsumer(consumer);
+    const memo = resolveOrMintMemoId(dto.memo);
+    const normalized = this.chainLinks.normalize(chain, dto);
+    const terms: PaymentIntentTerms = {
+      kind: 'PAY',
+      chain,
+      network,
+      source: null,
+      destination: normalized.destination,
+      amount: dto.amount ?? null,
+      asset: normalized.asset,
+      assetIssuer: normalized.assetIssuer,
+      msg: dto.msg ?? null,
+      callback: null,
+    };
+
+    const existing = await this.findByMemo(localConsumer.id, memo);
+    if (existing) return this.replayOf(existing, terms);
+
+    const link = await this.chainLinks.build(chain, {
+      network,
+      destination: dto.destination,
+      amount: dto.amount,
+      assetCode: dto.assetCode,
+      assetIssuer: dto.assetIssuer,
+      memo,
+      msg: dto.msg,
+    });
+
+    const intent = await this.persist({
+      ...terms,
+      consumerId: localConsumer.id,
+      memo,
+      status: 'PENDING',
+      xdr: null,
+      uri: link.uri,
+      assetDecimals: link.assetDecimals,
+      chainReference: link.chainReference,
+      chainCursor: link.chainCursor,
+      networkFee: link.networkFee,
+      // In the same insert as the intent: a deposit address the service forgot
+      // is money at an address nobody can ever move, so the two commit or fail
+      // together.
+      ...(link.deposit
+        ? {
+            evmDeposit: {
+              create: {
+                chain,
+                network,
+                address: link.deposit.address,
+                salt: link.deposit.salt,
+                destination: link.deposit.destination,
+                token: link.deposit.token,
+                relayer: link.deposit.relayer,
+                fee: link.deposit.fee.toString(),
+              },
+            },
+          }
+        : {}),
+    });
+    if (!intent) {
+      return this.replayOf(
+        await this.findByMemo(localConsumer.id, memo),
+        terms,
+      );
+    }
+
+    this.logger.log(
+      `Created PAY payment intent ${intent.id} on ${chain}: ` +
+        `${dto.amount ?? '(open)'} ${terms.asset} → ${terms.destination} ` +
+        `(consumer=${consumer.username}, network=${network}, memo=${memo})`,
+    );
+    await this.emit(consumer.username, 'PAYMENT_INTENT_CREATED', intent);
+    return this.withQr(intent);
+  }
+
+  /**
    * Persists a new intent. Returns null on a (consumer, memo) unique-violation
    * race so the caller can put the winning row through the same replay check
    * as any other retry — losing the race is not a way around it.
@@ -405,6 +522,7 @@ export class PaymentIntentsService {
     const where = {
       consumer: { apisixUsername: consumer.username },
       ...(query.status ? { status: query.status } : {}),
+      ...(query.chain ? { chain: query.chain } : {}),
     };
 
     // `Promise.all`, not `$transaction`: a snapshot-consistent page and count
@@ -447,7 +565,13 @@ export class PaymentIntentsService {
     dto: UpdatePaymentIntentDto,
   ): Promise<PaymentIntentView> {
     // Authorize ownership before mutating.
-    await this.assertOwned(consumer, id);
+    const chain = await this.assertOwned(consumer, id);
+    // A reported transaction must be one of the intent's own chain, stored in
+    // that chain's spelling. The DTO admits every chain's shape; only here is
+    // the chain known.
+    if (dto.txHash !== undefined) {
+      dto = { ...dto, txHash: checkedTxId(chain, dto.txHash) };
+    }
 
     // Settling from the API requires the chain to agree.
     //
@@ -804,6 +928,7 @@ export class PaymentIntentsService {
     if (!intent) {
       throw ApiError.notFound(`Payment intent ${id} not found`);
     }
+    txHash = checkedTxId(chainOf(intent.chain), txHash);
 
     // Already settled — return current state without re-querying the network.
     if (intent.status === 'SUCCEEDED') {
@@ -814,7 +939,9 @@ export class PaymentIntentsService {
       };
     }
 
-    const result = await this.verifier.verifyByHash(intent, txHash);
+    const result = await this.verifiers
+      .for(intent.chain)
+      .verifyByHash(intent, txHash);
 
     if (result.valid) {
       const updated = await this.markSucceeded(
@@ -859,8 +986,8 @@ export class PaymentIntentsService {
   /**
    * Finalizes an intent as SUCCEEDED and emits the event. Reused by the observer.
    *
-   * `txHash` must be a hash {@link StellarVerifierService} has confirmed pays
-   * this intent: this is the settlement that counts as verified on-chain, and
+   * `txHash` must be a transaction the intent's chain verifier
+   * ({@link PaymentVerifiers}) has confirmed pays this intent: this is the settlement that counts as verified on-chain, and
    * the only one that may settle an EXPIRED intent. Both callers — `validate`
    * and the observer — hold that verifier result when they call it.
    */
@@ -909,19 +1036,63 @@ export class PaymentIntentsService {
     });
   }
 
-  /** Throws 404 unless the intent exists and belongs to the consumer. */
+  /**
+   * Records how far the observer has scanned for an intent's payment (Monad),
+   * so its next tick resumes there. Only while the intent is still PENDING: a
+   * settled intent needs no cursor, and writing one must not race a
+   * settlement's status change.
+   */
+  async advanceCursor(intentId: string, cursor: string): Promise<void> {
+    await this.prisma.paymentIntent.updateMany({
+      where: { id: intentId, status: 'PENDING' },
+      data: { chainCursor: cursor },
+    });
+  }
+
+  /**
+   * Throws 404 unless the intent exists and belongs to the consumer, and
+   * answers the chain it is on.
+   */
   private async assertOwned(
     consumer: GatewayConsumer,
     id: string,
-  ): Promise<void> {
+  ): Promise<Chain> {
     const owned = await this.prisma.paymentIntent.findFirst({
       where: { id, consumer: { apisixUsername: consumer.username } },
-      select: { id: true },
+      select: { id: true, chain: true },
     });
     if (!owned) {
       throw ApiError.notFound(`Payment intent ${id} not found`);
     }
+    return chainOf(owned.chain);
   }
+}
+
+/**
+ * A stored intent's chain. Rows from before the column existed are Stellar by
+ * its default; a value this build does not know is a data error.
+ */
+function chainOf(value: string | null | undefined): Chain {
+  if (value === undefined || value === null) return DEFAULT_CHAIN;
+  if (!isChain(value)) {
+    throw new Error(`Payment intent on unknown chain "${value}"`);
+  }
+  return value;
+}
+
+/**
+ * `txHash` checked against the intent's chain and returned in the spelling it
+ * is stored in, or a 400 naming the shape that chain expects.
+ */
+function checkedTxId(chain: Chain, txHash: string): string {
+  const trimmed = txHash.trim();
+  if (!isTxIdFor(chain, trimmed)) {
+    throw ApiError.badRequest(
+      ApiErrorCode.ValidationFailed,
+      `txHash must be ${expectedTxId(chain)} for a ${chain} payment intent`,
+    );
+  }
+  return normalizeTxId(chain, trimmed);
 }
 
 /**
@@ -955,6 +1126,6 @@ function txHashConflict(err: unknown): ApiError | null {
   return ApiError.conflict(
     ApiErrorCode.IdempotencyConflict,
     'This transaction hash is already recorded on another of your payment ' +
-      'intents. A Stellar transaction settles at most one of them.',
+      'intents. A transaction settles at most one of them.',
   );
 }

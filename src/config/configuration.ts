@@ -1,19 +1,81 @@
 import {
   DEFAULT_DEFINDEX_BASE_URL,
   DEFAULT_DEFINDEX_TIMEOUT_MS,
+  DEFAULT_ENV_FILE,
+  DEFAULT_CHAIN_RPC_TIMEOUT_MS,
+  DEFAULT_CROSS_CHAIN_DEADLINE_SECONDS,
+  DEFAULT_CROSS_CHAIN_MAX_SLIPPAGE_BPS,
+  DEFAULT_CROSS_CHAIN_SLIPPAGE_BPS,
   DEFAULT_HORIZON,
+  DEFAULT_JUPITER_BASE_URL,
+  DEFAULT_KURU_BASE_URL,
+  DEFAULT_MONAD_LOG_BLOCK_RANGE,
+  DEFAULT_MONAD_RPC,
+  DEFAULT_NEAR_INTENTS_BASE_URL,
+  DEFAULT_NEAR_INTENTS_TIMEOUT_MS,
   DEFAULT_RATE_LIMIT_PRUNE_INTERVAL_MS,
   DEFAULT_RECOVERY_SWEEP_INTERVAL_MS,
   DEFAULT_RECOVERY_TIMEOUT_MS,
+  DEFAULT_SOLANA_RPC,
+  DEFAULT_SWAP_AGGREGATOR_TIMEOUT_MS,
   DEFAULT_WALLET_AUTH_SWEEP_INTERVAL_MS,
   DEFAULT_WALLET_AUTH_TIMEOUT_MS,
+  NETWORK_PASSPHRASE,
   NETWORK_PASSPHRASE_PUBLIC,
 } from '@/config/config.constants';
 import { parseReturnUrls } from '@/common/return-url';
 import {
+  DEFAULT_APISIX_ADMIN_TIMEOUT_MS,
+  DEFAULT_WALLET_KEY_SWAP_FEE_BPS,
+} from '@/gateway-keys/gateway-keys.constants';
+import { keyringFrom, type BackupKeyring } from '@/wallet-auth/backup-cipher';
+import {
+  DEFAULT_MAIL_SMTP_PORT,
+  DEFAULT_MAIL_TIMEOUT_MS,
+} from '@/mailer/mailer.constants';
+import {
   parseRedirectUrlWhitelist,
   type RedirectUrlWhitelist,
 } from '@/config/kyc-redirect-url-whitelist';
+import { type EvmTokenFees, parseEvmTokenFees } from '@/config/evm-token-fees';
+import {
+  isNativePluginSlug,
+  type NativePluginSlug,
+} from '@/plugins/plugins.constants';
+
+/** The slugs in `PLUGINS_ENABLED`, sandboxed and native alike. */
+function parsePluginsEnabled(env: NodeJS.ProcessEnv): string[] {
+  return (env.PLUGINS_ENABLED ?? '')
+    .split(',')
+    .map((slug) => slug.trim())
+    .filter(Boolean);
+}
+
+/**
+ * Whether `PLUGINS_ENABLED` names a native plugin — the condition
+ * `NativePluginsModule` imports it on. It has to be a predicate over the
+ * environment rather than a `ConfigService` read, because it decides which
+ * modules exist, before any provider does.
+ */
+export function nativePluginEnabled(
+  slug: NativePluginSlug,
+): (env: NodeJS.ProcessEnv) => boolean {
+  return (env) => parsePluginsEnabled(env).includes(slug);
+}
+
+/**
+ * The dotenv file this process reads: `ENV_FILE`, or `.env`.
+ *
+ * A function over the raw environment rather than config, because it decides
+ * where the config comes FROM — ConfigModule needs it before any provider
+ * exists. Values already in the environment win over the file, which is what
+ * lets several instances run from one checkout and one `.env`:
+ * `npm run dev:local` starts each with its own differences (dev-instances.json)
+ * already set, and a value set to "" is one the file cannot fill back in.
+ */
+export function envFilePath(env: NodeJS.ProcessEnv = process.env): string {
+  return env.ENV_FILE?.trim() || DEFAULT_ENV_FILE;
+}
 
 /**
  * Centralized, typed configuration loaded from environment variables.
@@ -74,6 +136,40 @@ export interface AppConfig {
      */
     publicConsumer: string;
   };
+  /**
+   * The APISIX Admin API, used for one thing: minting the gateway keys of a
+   * wallet account at the end of its sign-in (`WalletKeysService`). Unset means
+   * this deployment cannot finish a sign-in. The client only writes consumers
+   * under `cosmos_wallet_`, but the key itself is gateway-wide — see the README.
+   */
+  apisixAdmin: {
+    url: string;
+    key: string;
+    timeoutMs: number;
+    /** Swap commission (bps) baked into a wallet account's keys. */
+    walletSwapFeeBps: number;
+  };
+  /**
+   * The shared public key per environment, served keyless at `GET /v1/public-key`
+   * to wallets that have no account. Empty answers 503 for that environment.
+   */
+  publicKeys: { dev: string; prod: string };
+  /**
+   * This service's own sender: Resend when `resendApiKey` is set, otherwise SMTP.
+   * No `from`, or neither transport, disables every email door.
+   */
+  mail: {
+    resendApiKey: string;
+    smtp: {
+      host: string;
+      port: number;
+      secure: boolean;
+      user: string;
+      pass: string;
+    };
+    from: string;
+    timeoutMs: number;
+  };
   kyc: {
     /**
      * Per-consumer redirect_url host allow-list (issue #33).
@@ -105,6 +201,74 @@ export interface AppConfig {
        */
       singleInflight: boolean;
     };
+  };
+  /**
+   * Solana, per network tier: `public` is mainnet-beta, `testnet` is devnet —
+   * the tier the caller's API key picks, exactly as for Stellar.
+   */
+  solana: {
+    rpcUrls: Record<StellarNetwork, string>;
+    timeoutMs: number;
+    /**
+     * Owner of the token accounts the Solana swap commission is paid into
+     * (Jupiter's `feeAccount` is this wallet's account for the output mint).
+     * Empty disables the commission; a plan that charges one then refuses.
+     */
+    swapFeeWallet: string;
+  };
+  /**
+   * Monad (EVM), per network tier: `public` is mainnet, `testnet` is Monad's
+   * testnet. The chain ids are not configurable — see `MONAD_CHAIN_IDS`.
+   */
+  monad: {
+    rpcUrls: Record<StellarNetwork, string>;
+    timeoutMs: number;
+    /** Blocks one `eth_getLogs` call may span; the RPC provider's limit. */
+    logBlockRange: number;
+    /**
+     * The relayer's secret key (hex). Set, every Monad PAY intent gets its own
+     * CREATE2 deposit address and the relayer forwards what arrives; empty,
+     * Monad intents pay the merchant directly and are matched by amount. It
+     * holds gas money only — see `contracts/PaymentForwarder.sol`.
+     */
+    relayerPrivateKey: string;
+    /** Per-token relayer fees for token deposits (`MONAD_DEPOSIT_TOKEN_FEES`). */
+    depositTokenFees: EvmTokenFees;
+    /**
+     * The address the Monad swap commission is paid to (Kuru Flow's
+     * `referrerAddress`). Empty disables it; a plan that charges one refuses.
+     */
+    swapFeeWallet: string;
+  };
+  /**
+   * The aggregators that build same-chain swaps off Stellar: Jupiter on
+   * Solana, Kuru Flow on Monad. Mainnet only, both of them.
+   */
+  swapAggregators: {
+    jupiter: { baseUrl: string; apiKey: string; timeoutMs: number };
+    kuru: { baseUrl: string; apiKey: string; timeoutMs: number };
+  };
+  /**
+   * Cross-chain swaps, settled by NEAR Intents' 1Click API. Mainnet only:
+   * 1Click has no test network, so a `dev` key can quote but not create.
+   */
+  nearIntents: {
+    baseUrl: string;
+    /**
+     * The partner key (`X-API-Key`). Optional to 1Click, not to the operator:
+     * without it 1Click adds a fee of its own and takes a share of ours.
+     */
+    apiKey: string;
+    /**
+     * The NEAR Intents account the plan commission is paid to (`appFees`).
+     * Empty disables the commission; a plan that charges one then refuses to
+     * quote rather than swap for free.
+     */
+    feeRecipient: string;
+    timeoutMs: number;
+    slippageBps: number;
+    maxSlippageBps: number;
+    deadlineSeconds: number;
   };
   observer: {
     enabled: boolean;
@@ -162,6 +326,38 @@ export interface AppConfig {
     baseUrl: string;
     timeoutMs: number;
   };
+  plugins: {
+    /**
+     * Slugs of the plugins in `plugins/` this deployment serves. A plugin that
+     * is not listed is not even read: its routes answer 404 and its event
+     * handlers never run. Empty — the default — serves none.
+     */
+    enabled: string[];
+    /**
+     * The native plugins (`src/native-plugins/`) named in the same
+     * `PLUGINS_ENABLED` list. One that is not listed is never instantiated: its
+     * routes do not exist and its background jobs never start.
+     */
+    native: NativePluginSlug[];
+    /**
+     * Key the secret half of every installation's config is sealed under.
+     * Required at boot when an enabled plugin declares a secret field.
+     */
+    secret: string;
+    /**
+     * `<keyId>:<base64url Ed25519 public key>`, comma-separated: the signers
+     * whose bundles this deployment runs. Parsed by the bundle loader.
+     */
+    trustedKeys: string;
+    /** Load plugins with no signature. Refused when NODE_ENV=production. */
+    allowUnsigned: boolean;
+    /**
+     * Whether node started with `--no-node-snapshot`, which the plugin sandbox
+     * (`isolated-vm`) requires on Node 20+. Checked at boot when a plugin is
+     * enabled; the npm scripts pass it.
+     */
+    nodeSnapshotDisabled: boolean;
+  };
   rateLimit: {
     /**
      * Master switch for `@RateLimit`. On by default — the routes it guards spend
@@ -190,18 +386,11 @@ export interface AppConfig {
      */
     sessionSecret: string;
     /**
-     * Base URL of the operator console that performs the two legs this service
-     * deliberately does not: sending the login-code email, and minting the
-     * account's gateway credentials (which needs APISIX admin).
-     *
-     * Unset means this deployment has no email door and cannot finish a
-     * sign-in — reported as such by `GET /v1/wallet/auth/providers` rather than
-     * discovered at the end of a flow. A self-hosted deployment points it at its
-     * own sender and owes this service nothing else.
+     * The at-rest keys for stored wallet backups (`BackupCipher`): the current one
+     * seals every write, the previous ones only read rows written before a
+     * rotation. Kept out of the database on purpose — see `backup-cipher.ts`.
      */
-    consoleUrl: string;
-    /** Proves a call to the console came from this service. Its own secret. */
-    consoleSecret: string;
+    backupKeyring: BackupKeyring;
     /** Per-provider OAuth credentials. An empty pair disables that provider. */
     google: { clientId: string; clientSecret: string };
     github: { clientId: string; clientSecret: string };
@@ -222,20 +411,33 @@ export interface AppConfig {
     returnUrls: string[];
     /**
      * The Horizon that says who may sign for an account, for a RECOVERED wallet
-     * whose key is no longer its address. One, chosen by the operator — never by
-     * the request, which would let a caller pick the ledger its signer is read
-     * from.
+     * whose key is no longer its address — per ledger, because a SEP-30 re-key
+     * lands on ONE ledger and the wallet says which. The URLs are the operator's,
+     * never the request's: a caller may name `public` or `testnet`, and that only
+     * picks which of these two this service reads.
      */
-    signersHorizonUrl: string;
+    signersHorizonUrls: Record<StellarNetwork, string>;
+    /** The ledger read when a request names none — every client before the field. */
+    signersNetwork: StellarNetwork;
     /**
      * Pays the reserve of an account's two recovery signers
      * (`POST /v1/wallet/recovery/setup`). Unset disables the route. Refused at
      * boot on a recovery server.
+     *
+     * `networkPassphrase` / `horizonUrl` are the ledger a request that names none
+     * is sponsored on; `networks` is every ledger the same key sponsors on (it
+     * must hold a balance on each).
      */
     sponsor: {
       secret: string;
       networkPassphrase: string;
       horizonUrl: string;
+      networks: Partial<
+        Record<
+          StellarNetwork,
+          { networkPassphrase: string; horizonUrl: string }
+        >
+      >;
     };
     /** How long a call out to a provider may take before it is a failure. */
     timeoutMs: number;
@@ -254,15 +456,27 @@ export interface AppConfig {
     publicBaseUrl: string;
     /** The WALLET's domain, named by every challenge — the same on both servers. */
     homeDomain: string;
+    /** The DEFAULT ledger: served on the routes that name no network, as before. */
     networkPassphrase: string;
     horizonUrl: string;
+    /**
+     * Every ledger this server recovers on, by name: `stellar.toml?network=`,
+     * `/v1/sep10/{network}/auth`, `/v1/sep30/{network}/…`. A signer is an entry
+     * on one ledger, so each is its own registration and its own SEP-10 token.
+     */
+    networks: Partial<
+      Record<StellarNetwork, { networkPassphrase: string; horizonUrl: string }>
+    >;
     signerMaster: string;
     sep10SigningSecret: string;
     jwtSecret: string;
     /** ID tokens this server exchanges for an identity; empty issuer disables it. */
     oidc: { issuer: string; audiences: string[] };
-    /** Where this server posts its own emailed codes; empty url disables them. */
-    emailDelivery: { url: string; secret: string };
+    /**
+     * Whether this server emails its own codes, through its own `MAIL_*`
+     * sender. Off disables that way of proving an inbox.
+     */
+    emailCodes: boolean;
     timeoutMs: number;
     sweep: {
       enabled: boolean;
@@ -277,6 +491,116 @@ function parseSwaggerEnabled(): boolean {
     return raw.toLowerCase() === 'true';
   }
   return (process.env.NODE_ENV ?? 'development') !== 'production';
+}
+
+/** `STELLAR_NETWORK`: the fallback network, and the one Stellar defaults follow. */
+function stellarNetwork(): StellarNetwork {
+  return (process.env.STELLAR_NETWORK ?? 'testnet').toLowerCase() === 'public'
+    ? 'public'
+    : 'testnet';
+}
+
+/** The operator's Horizon for each network: `STELLAR_HORIZON_URL_*`, else SDF's. */
+function operatorHorizon(): Record<StellarNetwork, string> {
+  return {
+    public: process.env.STELLAR_HORIZON_URL_PUBLIC ?? DEFAULT_HORIZON.public,
+    testnet: process.env.STELLAR_HORIZON_URL_TESTNET ?? DEFAULT_HORIZON.testnet,
+  };
+}
+
+const trimSlash = (url: string) => url.replace(/\/+$/, '');
+
+/** The ledger a passphrase names, or null for a custom network. */
+export function stellarNetworkOf(passphrase: string): StellarNetwork | null {
+  if (passphrase === NETWORK_PASSPHRASE.public) return 'public';
+  if (passphrase === NETWORK_PASSPHRASE.testnet) return 'testnet';
+  return null;
+}
+
+/**
+ * A comma list of ledger names (`public,testnet`). Anything else is dropped here
+ * and refused at boot by `identity-env.ts`, so a typo never silently serves less.
+ */
+function networkList(raw: string | undefined): StellarNetwork[] {
+  const names = (raw ?? '')
+    .split(',')
+    .map((s) => s.trim().toLowerCase())
+    .filter((s): s is StellarNetwork => s === 'public' || s === 'testnet');
+  return [...new Set(names)];
+}
+
+/**
+ * The ledgers a deployment serves: its own (`passphrase` + `horizonUrl`, when
+ * that is a named network) plus every one `listed`. Each other ledger's Horizon
+ * is `horizonFor(n)`.
+ */
+function ledgers(
+  passphrase: string,
+  horizonUrl: string,
+  listed: StellarNetwork[],
+  horizonFor: (n: StellarNetwork) => string,
+): Partial<
+  Record<StellarNetwork, { networkPassphrase: string; horizonUrl: string }>
+> {
+  const own = stellarNetworkOf(passphrase);
+  const out: Partial<
+    Record<StellarNetwork, { networkPassphrase: string; horizonUrl: string }>
+  > = {};
+  for (const n of own && !listed.includes(own) ? [own, ...listed] : listed) {
+    out[n] = {
+      networkPassphrase: NETWORK_PASSPHRASE[n],
+      horizonUrl: trimSlash(n === own ? horizonUrl : horizonFor(n)),
+    };
+  }
+  return out;
+}
+
+/** The recovery server's ledgers — see `AppConfig.recovery.networks`. */
+function recoveryLedgers() {
+  const networkPassphrase =
+    process.env.RECOVERY_NETWORK_PASSPHRASE?.trim() ||
+    NETWORK_PASSPHRASE_PUBLIC;
+  const horizonUrl = trimSlash(
+    process.env.RECOVERY_HORIZON_URL?.trim() || DEFAULT_HORIZON.public,
+  );
+  const networks = ledgers(
+    networkPassphrase,
+    horizonUrl,
+    networkList(process.env.RECOVERY_NETWORKS),
+    (n) =>
+      process.env[`RECOVERY_HORIZON_URL_${n.toUpperCase()}`]?.trim() ||
+      DEFAULT_HORIZON[n],
+  );
+  return { networkPassphrase, horizonUrl, networks };
+}
+
+/** The sponsor's ledgers — see `AppConfig.walletAuth.sponsor`. */
+function sponsorLedgers() {
+  const networkPassphrase =
+    process.env.WALLET_RECOVERY_SPONSOR_NETWORK_PASSPHRASE?.trim() ||
+    NETWORK_PASSPHRASE[stellarNetwork()];
+  const horizonUrl = trimSlash(
+    process.env.WALLET_RECOVERY_SPONSOR_HORIZON_URL?.trim() ||
+      operatorHorizon()[stellarNetwork()],
+  );
+  const networks = ledgers(
+    networkPassphrase,
+    horizonUrl,
+    networkList(process.env.WALLET_RECOVERY_SPONSOR_NETWORKS),
+    (n) => operatorHorizon()[n],
+  );
+  return { networkPassphrase, horizonUrl, networks };
+}
+
+/** The Horizon each ledger's signers are read from for the wallet sign-in. */
+function signersHorizons(): Record<StellarNetwork, string> {
+  const horizons = operatorHorizon();
+  const override = process.env.WALLET_AUTH_SIGNERS_HORIZON_URL?.trim();
+  if (override) horizons[stellarNetwork()] = override;
+  return {
+    public: trimSlash(horizons.public),
+    testnet: trimSlash(horizons.testnet),
+  };
 }
 
 export default (): AppConfig => ({
@@ -321,21 +645,52 @@ export default (): AppConfig => ({
     ).toLowerCase(),
     publicConsumer: (process.env.APISIX_PUBLIC_CONSUMER ?? '').trim(),
   },
+  apisixAdmin: {
+    url: (process.env.APISIX_ADMIN_URL ?? '').trim().replace(/\/+$/, ''),
+    key: process.env.APISIX_ADMIN_KEY?.trim() ?? '',
+    timeoutMs: parseInt(
+      process.env.APISIX_ADMIN_TIMEOUT_MS ??
+        String(DEFAULT_APISIX_ADMIN_TIMEOUT_MS),
+      10,
+    ),
+    walletSwapFeeBps: parseInt(
+      process.env.WALLET_KEY_SWAP_FEE_BPS ??
+        String(DEFAULT_WALLET_KEY_SWAP_FEE_BPS),
+      10,
+    ),
+  },
+  publicKeys: {
+    dev: process.env.PUBLIC_API_KEY_DEV?.trim() ?? '',
+    prod: process.env.PUBLIC_API_KEY_PROD?.trim() ?? '',
+  },
+  mail: {
+    resendApiKey: process.env.MAIL_RESEND_API_KEY?.trim() ?? '',
+    smtp: {
+      host: process.env.MAIL_SMTP_HOST?.trim() ?? '',
+      port: parseInt(
+        process.env.MAIL_SMTP_PORT ?? String(DEFAULT_MAIL_SMTP_PORT),
+        10,
+      ),
+      // 465 is implicit TLS; 587 upgrades with STARTTLS and wants `false`.
+      secure:
+        (process.env.MAIL_SMTP_SECURE ?? 'false').toLowerCase() === 'true',
+      user: process.env.MAIL_SMTP_USER?.trim() ?? '',
+      pass: process.env.MAIL_SMTP_PASS ?? '',
+    },
+    from: process.env.MAIL_FROM?.trim() ?? '',
+    timeoutMs: parseInt(
+      process.env.MAIL_TIMEOUT_MS ?? String(DEFAULT_MAIL_TIMEOUT_MS),
+      10,
+    ),
+  },
   kyc: {
     redirectUrlWhitelist: parseRedirectUrlWhitelist(
       process.env.KYC_REDIRECT_URL_WHITELIST,
     ),
   },
   stellar: {
-    network:
-      (process.env.STELLAR_NETWORK ?? 'testnet').toLowerCase() === 'public'
-        ? 'public'
-        : 'testnet',
-    horizon: {
-      public: process.env.STELLAR_HORIZON_URL_PUBLIC ?? DEFAULT_HORIZON.public,
-      testnet:
-        process.env.STELLAR_HORIZON_URL_TESTNET ?? DEFAULT_HORIZON.testnet,
-    },
+    network: stellarNetwork(),
+    horizon: operatorHorizon(),
     baseFee: process.env.STELLAR_BASE_FEE ?? '100',
     timeoutSeconds: parseInt(process.env.STELLAR_TX_TIMEOUT ?? '300', 10),
     swap: {
@@ -351,8 +706,89 @@ export default (): AppConfig => ({
         'true',
     },
   },
+  solana: {
+    rpcUrls: {
+      public: process.env.SOLANA_RPC_URL_MAINNET ?? DEFAULT_SOLANA_RPC.public,
+      testnet: process.env.SOLANA_RPC_URL_DEVNET ?? DEFAULT_SOLANA_RPC.testnet,
+    },
+    timeoutMs: parseInt(
+      process.env.SOLANA_RPC_TIMEOUT_MS ?? String(DEFAULT_CHAIN_RPC_TIMEOUT_MS),
+      10,
+    ),
+    swapFeeWallet: process.env.SOLANA_SWAP_FEE_WALLET?.trim() ?? '',
+  },
+  monad: {
+    rpcUrls: {
+      public: process.env.MONAD_RPC_URL_MAINNET ?? DEFAULT_MONAD_RPC.public,
+      testnet: process.env.MONAD_RPC_URL_TESTNET ?? DEFAULT_MONAD_RPC.testnet,
+    },
+    timeoutMs: parseInt(
+      process.env.MONAD_RPC_TIMEOUT_MS ?? String(DEFAULT_CHAIN_RPC_TIMEOUT_MS),
+      10,
+    ),
+    logBlockRange: parseInt(
+      process.env.MONAD_LOG_BLOCK_RANGE ??
+        String(DEFAULT_MONAD_LOG_BLOCK_RANGE),
+      10,
+    ),
+    relayerPrivateKey: process.env.MONAD_RELAYER_PRIVATE_KEY?.trim() ?? '',
+    depositTokenFees: parseEvmTokenFees(process.env.MONAD_DEPOSIT_TOKEN_FEES),
+    swapFeeWallet: process.env.MONAD_SWAP_FEE_WALLET?.trim() ?? '',
+  },
+  swapAggregators: {
+    jupiter: {
+      baseUrl: (
+        process.env.JUPITER_BASE_URL ?? DEFAULT_JUPITER_BASE_URL
+      ).replace(/\/+$/, ''),
+      apiKey: process.env.JUPITER_API_KEY?.trim() ?? '',
+      timeoutMs: parseInt(
+        process.env.JUPITER_TIMEOUT_MS ??
+          String(DEFAULT_SWAP_AGGREGATOR_TIMEOUT_MS),
+        10,
+      ),
+    },
+    kuru: {
+      baseUrl: (process.env.KURU_BASE_URL ?? DEFAULT_KURU_BASE_URL).replace(
+        /\/+$/,
+        '',
+      ),
+      apiKey: process.env.KURU_API_KEY?.trim() ?? '',
+      timeoutMs: parseInt(
+        process.env.KURU_TIMEOUT_MS ??
+          String(DEFAULT_SWAP_AGGREGATOR_TIMEOUT_MS),
+        10,
+      ),
+    },
+  },
+  nearIntents: {
+    baseUrl: (
+      process.env.NEAR_INTENTS_BASE_URL ?? DEFAULT_NEAR_INTENTS_BASE_URL
+    ).replace(/\/+$/, ''),
+    apiKey: process.env.NEAR_INTENTS_API_KEY?.trim() ?? '',
+    feeRecipient: process.env.NEAR_INTENTS_FEE_RECIPIENT?.trim() ?? '',
+    timeoutMs: parseInt(
+      process.env.NEAR_INTENTS_TIMEOUT_MS ??
+        String(DEFAULT_NEAR_INTENTS_TIMEOUT_MS),
+      10,
+    ),
+    slippageBps: parseInt(
+      process.env.CROSS_CHAIN_SWAP_SLIPPAGE_BPS ??
+        String(DEFAULT_CROSS_CHAIN_SLIPPAGE_BPS),
+      10,
+    ),
+    maxSlippageBps: parseInt(
+      process.env.CROSS_CHAIN_SWAP_MAX_SLIPPAGE_BPS ??
+        String(DEFAULT_CROSS_CHAIN_MAX_SLIPPAGE_BPS),
+      10,
+    ),
+    deadlineSeconds: parseInt(
+      process.env.CROSS_CHAIN_SWAP_DEADLINE_SECONDS ??
+        String(DEFAULT_CROSS_CHAIN_DEADLINE_SECONDS),
+      10,
+    ),
+  },
   observer: {
-    // Permanent reconciler that watches Stellar and finalizes paid intents.
+    // Permanent reconciler that watches every chain and finalizes paid intents.
     enabled: (process.env.OBSERVER_ENABLED ?? 'true').toLowerCase() !== 'false',
     intervalMs: parseInt(process.env.OBSERVER_INTERVAL_MS ?? '15000', 10),
     batchSize: parseInt(process.env.OBSERVER_BATCH_SIZE ?? '50', 10),
@@ -447,6 +883,19 @@ export default (): AppConfig => ({
       },
     },
   },
+  plugins: {
+    enabled: parsePluginsEnabled(process.env).filter(
+      (slug) => !isNativePluginSlug(slug),
+    ),
+    native: parsePluginsEnabled(process.env).filter(isNativePluginSlug),
+    secret: process.env.PLUGINS_SECRET?.trim() ?? '',
+    trustedKeys: process.env.PLUGINS_TRUSTED_KEYS?.trim() ?? '',
+    allowUnsigned:
+      (process.env.PLUGINS_ALLOW_UNSIGNED ?? 'false').toLowerCase() === 'true',
+    nodeSnapshotDisabled:
+      process.execArgv.includes('--no-node-snapshot') ||
+      (process.env.NODE_OPTIONS ?? '').includes('--no-node-snapshot'),
+  },
   defindex: {
     apiKey: process.env.DEFINDEX_API_KEY?.trim() ?? '',
     baseUrl: (
@@ -474,8 +923,11 @@ export default (): AppConfig => ({
     // No fallback to the gateway secret — see the interface, and
     // `identity-env.ts`, which refuses to boot without its own.
     sessionSecret: process.env.WALLET_AUTH_SESSION_SECRET?.trim() ?? '',
-    consoleUrl: (process.env.WALLET_AUTH_CONSOLE_URL ?? '').replace(/\/+$/, ''),
-    consoleSecret: process.env.WALLET_AUTH_CONSOLE_SECRET?.trim() ?? '',
+    // Validated at boot by `identity-env.ts`; malformed keys never reach here.
+    backupKeyring: keyringFrom(
+      process.env.WALLET_BACKUP_ENCRYPTION_KEY ?? '',
+      process.env.WALLET_BACKUP_ENCRYPTION_PREVIOUS_KEYS ?? '',
+    ),
     google: {
       clientId: process.env.WALLET_GOOGLE_CLIENT_ID ?? '',
       clientSecret: process.env.WALLET_GOOGLE_CLIENT_SECRET ?? '',
@@ -491,19 +943,17 @@ export default (): AppConfig => ({
     },
     // Each entry was checked at boot by `identity-env.ts`.
     returnUrls: parseReturnUrls(process.env.WALLET_AUTH_RETURN_URLS),
-    signersHorizonUrl: (
-      process.env.WALLET_AUTH_SIGNERS_HORIZON_URL?.trim() ||
-      DEFAULT_HORIZON.public
-    ).replace(/\/+$/, ''),
+    // One Horizon per ledger, and the request picks which ledger — never a URL.
+    // A re-key lands on ONE ledger, so a recovered wallet's key signs for its
+    // account there and nowhere else; reading only `STELLAR_NETWORK`'s ledger
+    // failed every wallet recovered on the other one with
+    // `wallet_signature_invalid`. What the request cannot do is make a key count
+    // on a ledger where it is not a signer: each check reads ONE ledger.
+    signersHorizonUrls: signersHorizons(),
+    signersNetwork: stellarNetwork(),
     sponsor: {
       secret: process.env.WALLET_RECOVERY_SPONSOR_SECRET?.trim() ?? '',
-      networkPassphrase:
-        process.env.WALLET_RECOVERY_SPONSOR_NETWORK_PASSPHRASE?.trim() ||
-        NETWORK_PASSPHRASE_PUBLIC,
-      horizonUrl: (
-        process.env.WALLET_RECOVERY_SPONSOR_HORIZON_URL?.trim() ||
-        DEFAULT_HORIZON.public
-      ).replace(/\/+$/, ''),
+      ...sponsorLedgers(),
     },
     timeoutMs: parseInt(
       process.env.WALLET_AUTH_TIMEOUT_MS ??
@@ -532,12 +982,7 @@ export default (): AppConfig => ({
       .trim()
       .replace(/\/+$/, ''),
     homeDomain: process.env.RECOVERY_HOME_DOMAIN?.trim() ?? '',
-    networkPassphrase:
-      process.env.RECOVERY_NETWORK_PASSPHRASE?.trim() ||
-      NETWORK_PASSPHRASE_PUBLIC,
-    horizonUrl: (
-      process.env.RECOVERY_HORIZON_URL?.trim() || DEFAULT_HORIZON.public
-    ).replace(/\/+$/, ''),
+    ...recoveryLedgers(),
     signerMaster: process.env.RECOVERY_SIGNER_MASTER?.trim() ?? '',
     sep10SigningSecret: process.env.RECOVERY_SEP10_SIGNING_SECRET?.trim() ?? '',
     jwtSecret: process.env.RECOVERY_JWT_SECRET?.trim() ?? '',
@@ -548,10 +993,8 @@ export default (): AppConfig => ({
         .map((a) => a.trim())
         .filter(Boolean),
     },
-    emailDelivery: {
-      url: process.env.RECOVERY_EMAIL_DELIVERY_URL?.trim() ?? '',
-      secret: process.env.RECOVERY_EMAIL_DELIVERY_SECRET?.trim() ?? '',
-    },
+    emailCodes:
+      (process.env.RECOVERY_EMAIL_CODES ?? 'false').toLowerCase() === 'true',
     timeoutMs: parseInt(
       process.env.RECOVERY_TIMEOUT_MS ?? String(DEFAULT_RECOVERY_TIMEOUT_MS),
       10,

@@ -139,6 +139,20 @@ export const BACKUP_MIN_ITERATIONS = 600_000;
 export const BACKUP_MAX_ITERATIONS = 4_000_000;
 
 /**
+ * The floor and ceiling on a `v: 4` password door, which is Argon2id.
+ *
+ * Why Argon2id: whoever reads this table attacks every box offline, on GPUs, and
+ * PBKDF2 (v2/v3) costs a GPU almost nothing but time. Argon2id also costs memory
+ * per guess. The floor is OWASP's (19 MiB, 2 passes); the wallet seals at 64 MiB.
+ * The ceilings stop a caller filing a box no device could open.
+ */
+export const BACKUP_ARGON2_MIN_MEMORY_KIB = 19_456;
+export const BACKUP_ARGON2_MAX_MEMORY_KIB = 262_144;
+export const BACKUP_ARGON2_MIN_PASSES = 2;
+export const BACKUP_ARGON2_MAX_PASSES = 10;
+export const BACKUP_ARGON2_MAX_PARALLELISM = 4;
+
+/**
  * How many doors a v3 box may carry — a password and a few passkeys.
  *
  * Each slot is another way to open the same backup, so this is a ceiling on how
@@ -294,3 +308,28 @@ export const WALLET_RECOVERY_SETUP_GLOBAL_RATE_LIMIT: RateLimitPolicy = {
  * call with no gateway in front.
  */
 export const WALLET_SESSION_HEADER = 'x-wallet-session';
+
+/**
+ * Wallets one account may keep a backup of. A person has a handful — one per
+ * device they set up, a savings wallet, a testnet one. The cap exists because a
+ * sign-in hands every box back in one response, on a route the shared key
+ * reaches, and an unbounded list is an unbounded response.
+ */
+export const WALLET_MAX_BACKUPS = 20;
+
+/**
+ * The at-rest seal on stored backups (`backup-cipher.ts`): the prefix that marks a
+ * sealed row (a row without it predates the seal), an AES-256 key, and GCM's IV.
+ * The prefix carries the scheme's version so a later one can sit beside it.
+ */
+export const BACKUP_AT_REST_PREFIX = 'enc1';
+export const BACKUP_AT_REST_KEY_BYTES = 32;
+export const BACKUP_AT_REST_IV_BYTES = 12;
+
+/**
+ * Longest signature a sign-in or backup request may carry: a 65-byte EVM
+ * signature in 0x-hex is 132 characters, the longest of the three encodings
+ * accepted (base64 ed25519 is 88, base58 up to 88). Bounded so the verifier
+ * never decodes a megabyte of junk on a route the shared key reaches.
+ */
+export const WALLET_SIGNATURE_MAX_CHARS = 200;
