@@ -1169,7 +1169,7 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
 
 - **迁移 `20261006120000_payment_settlement`** 新增 `payment_settlement` 表，并从每个 SUCCEEDED intent 回填。若同一哈希已结算多个 intent，则最早的那个保留占用；迁移文件中附有列出其余 intent 以供核查的查询。
 - **已经结算过某个 payment intent（无论属于哪个 consumer）的交易，不再结算其他 intent。** `POST /v1/payment-intents/{id}/validate` 以及带 `status: SUCCEEDED` 的 `PATCH /v1/payment-intents/{id}` 返回 `409 transaction_already_settled`，intent 保持原状。目标地址不绑定 consumer，memo 由调用方自选，因此另一个 tenant（或共享公钥下的任何调用方）可以逐项复制一个 intent，并被其付款人的交易结算。observer 将这种匹配视为未付款：intent 保持 PENDING，并以未付款状态过期。
-- **付款归属于它所支付的最早的 intent。** 当交易同时支付了另一个 consumer 的更早的 intent 时，当前 intent 同样得到 `409 transaction_already_settled`；因此在原始 intent 之后创建的副本即使先执行结算也会失败，原始 intent 会在下一轮结算。在原始 intent 之前创建的副本则会胜出；这需要预先知道原始 intent 的 memo，因此请让本服务生成 memo（省略 `memo`），而不是发送订单号等可预测的 memo。在 Monad 上，这也涵盖支付到另一个 intent 的存款地址的副本，即使该付款已由 relayer 的转发以另一个哈希结算。
+- **付款归属于它所支付的最早的 intent。** 当交易同时支付了另一个 consumer 的更早的 intent 时，当前 intent 同样得到 `409 transaction_already_settled`；因此在原始 intent 之后创建的副本即使先执行结算也会失败，原始 intent 会在下一轮结算。在原始 intent 之前创建的副本则会胜出，但仅限于其仍处于开放状态时：EXPIRED 的 intent 不优先于任何 intent，因此副本一旦过期，原始 intent 即可结算。创建这种副本需要预先知道原始 intent 的 memo，因此请让本服务生成 memo（省略 `memo`），而不是发送订单号等可预测的 memo。这条规则的另一面：在原始 intent 过期之后到达的付款，可能归属于一个尚未过期的较新副本。在 Monad 上，这也涵盖支付到另一个 intent 的存款地址的副本，即使该付款已由 relayer 的转发以另一个哈希结算。
 - **`DELETE /v1/payment-intents/{id}` 返回 `409 operation_in_flight`**：当 intent 的状态在读取与删除之间发生变化时（通常是刚刚被支付）。此前它仍会被删除。
 
 ### 钱包登录：已恢复钱包的签名者跟随 `STELLAR_NETWORK`

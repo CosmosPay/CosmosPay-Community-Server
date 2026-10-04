@@ -54,10 +54,17 @@ export const SETTLEMENT_RIVAL_FILTERS: Record<
 /**
  * The query for `intent`'s rivals, oldest first: same chain and network, a
  * different consumer, created before it (the id breaks a tie in `createdAt`),
- * and in any status a payment can still be or has been credited to — PENDING,
- * SUBMITTED, EXPIRED (a verified payment settles it) and SUCCEEDED (the relayer
- * may have settled it on its forward, under another hash). Only CANCELLED and
- * FAILED give a payment up.
+ * and PENDING, SUBMITTED or SUCCEEDED: open for the payment, or already
+ * credited with it (the relayer may have settled it on its forward, under
+ * another hash).
+ *
+ * EXPIRED is left out on purpose, although a verified payment still settles an
+ * EXPIRED intent. Counted, it let a copy made BEFORE the original, with a
+ * guessed, predictable memo, outrank the original forever. Left out, a copy
+ * outranks it only for the copy's own lifetime. The price: a payment that
+ * lands after the original has expired can go to a newer copy that has not.
+ * The original no longer outranks it, and the claim then goes to whichever
+ * settles first. CANCELLED and FAILED give a payment up.
  *
  * One more than {@link SETTLEMENT_RIVALS_MAX} is read, so the caller can tell
  * a full list from an overflowing one.
@@ -74,7 +81,7 @@ export function settlementRivalsQuery(
           chain,
           network: intent.network,
           consumerId: { not: intent.consumerId },
-          status: { notIn: ['CANCELLED', 'FAILED'] },
+          status: { in: ['PENDING', 'SUBMITTED', 'SUCCEEDED'] },
           OR: [
             { createdAt: { lt: intent.createdAt } },
             { createdAt: intent.createdAt, id: { lt: intent.id } },

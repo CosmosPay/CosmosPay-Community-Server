@@ -1061,11 +1061,24 @@ export class PaymentIntentsService {
    * A verifier that cannot answer throws, and the settlement is retried rather
    * than decided without it.
    *
-   * Under concurrency the outcome holds without a lock: a rival counts in every
-   * status but CANCELLED and FAILED, and an intent never re-enters that set
-   * once it leaves it, so a rival this read finds cannot turn into one a later
-   * read would miss. The oldest intent is never refused here, and every younger
-   * one is refused here or at the claim — exactly one settles, the oldest.
+   * What concurrency can and cannot do. AT MOST one intent settles on a
+   * transaction, always: that is the claim's primary key, whatever this check
+   * read. Which one is decided here, without a lock, from statuses read at one
+   * moment: a rival counts while PENDING, SUBMITTED or SUCCEEDED, and an intent
+   * leaves that set only for EXPIRED, CANCELLED or FAILED — never to come back,
+   * except EXPIRED → SUCCEEDED. So:
+   *
+   * - The oldest intent in that set is never refused here, and a younger one is
+   *   refused for as long as the older stays in it. While both are open, the
+   *   older wins whichever settlement runs first.
+   * - A younger intent is refused only by a rival that was in the set when it
+   *   looked. If that rival then leaves it (expires unpaid, is cancelled), the
+   *   younger is not refused again, and its next pass settles it: the payment
+   *   is never stranded behind an intent that will not take it.
+   * - An older intent that EXPIRED no longer outranks anyone. A payment that
+   *   reaches it late (`validate` settles EXPIRED) and a younger open intent
+   *   then race at the claim, first come. That is the cost of not counting
+   *   EXPIRED — see `settlementRivalsQuery`.
    *
    * The same code as an already-settled hash, deliberately: a distinct answer
    * would tell a caller holding a payment that another tenant has an unsettled

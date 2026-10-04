@@ -357,25 +357,56 @@ describe('PaymentIntentsService: one transaction settles one intent', () => {
      * copy made BEFORE the original needs the original's memo, destination
      * and amount in advance: a memo the integrator lets this service mint is
      * 64 random bits, so this takes a memo the merchant chose predictably
-     * (an order number). The pre-made copy then wins and the original is
-     * refused — and stays refused after the copy expires, since an EXPIRED
-     * intent can still be settled. Age is the only order this service can
-     * see between two tenants describing the same payment.
+     * (an order number). Age is the only order this service can see between
+     * two tenants describing the same payment, so while the pre-made copy is
+     * open it outranks the original — but only that long.
      */
-    it('lets a copy made BEFORE the original, with a guessed memo, outrank it', async () => {
-      rows.set('pi_b', {
-        ...rows.get('pi_b')!,
-        createdAt: new Date(T0 - 120_000),
+    describe('a copy made BEFORE the original, with a guessed memo', () => {
+      beforeEach(() => {
+        rows.set('pi_b', {
+          ...rows.get('pi_b')!,
+          createdAt: new Date(T0 - 120_000),
+        });
       });
 
+      it('outranks the original while it is open', async () => {
+        const err = await errorOf(
+          service.markSucceeded('pi_a', 'cosmos_a', HASH),
+        );
+        expect(err!.code).toBe(ApiErrorCode.TransactionAlreadySettled);
+        expect(rows.get('pi_a')!.status).toBe('PENDING');
+      });
+
+      it('no longer outranks it once the copy has expired: the original then settles', async () => {
+        // Refused while the copy is open...
+        await errorOf(service.markSucceeded('pi_a', 'cosmos_a', HASH));
+        // ...and the copy lapses unpaid.
+        await service.markExpired('pi_b', 'cosmos_b');
+
+        await service.markSucceeded('pi_a', 'cosmos_a', HASH);
+
+        expect(rows.get('pi_a')!.status).toBe('SUCCEEDED');
+        expect([...settlements.values()]).toEqual([{ intentId: 'pi_a' }]);
+      });
+    });
+
+    /**
+     * The cost of not counting EXPIRED, pinned: an original that expired no
+     * longer outranks a newer copy, so a payment landing after that goes to
+     * whichever claims it first.
+     */
+    it('lets a newer copy win a payment that lands after the original expired', async () => {
+      rows.set('pi_a', { ...rows.get('pi_a')!, status: 'EXPIRED' });
+
+      await service.markSucceeded('pi_b', 'cosmos_b', HASH);
+
+      expect(rows.get('pi_b')!.status).toBe('SUCCEEDED');
+      // ...and the claim keeps the late validate of the original out.
       const err = await errorOf(
         service.markSucceeded('pi_a', 'cosmos_a', HASH),
       );
       expect(err!.code).toBe(ApiErrorCode.TransactionAlreadySettled);
-
-      await service.markSucceeded('pi_b', 'cosmos_b', HASH);
-      expect(rows.get('pi_b')!.status).toBe('SUCCEEDED');
-      expect(rows.get('pi_a')!.status).toBe('PENDING');
+      expect(rows.get('pi_a')!.status).toBe('EXPIRED');
     });
 
     it('is not outranked by an older intent the payment does not pay', async () => {
