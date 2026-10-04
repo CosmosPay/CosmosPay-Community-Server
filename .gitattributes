@@ -12,3 +12,7 @@
 package-lock.json  linguist-generated=true
 openapi/openapi.json  linguist-generated=true
 openapi/openapi.yaml  linguist-generated=true
+
+# Hashed byte-for-byte: src/evm/payment-forwarder.spec.ts pins the SHA-256 of the
+# Solidity source it compiles, so a native CRLF checkout fails it on Windows.
+contracts/*.sol  text eol=lf
