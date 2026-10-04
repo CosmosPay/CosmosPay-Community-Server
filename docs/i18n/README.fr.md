@@ -1374,6 +1374,31 @@ sur le corps brut) et **réémis** vers les propres endpoints de webhook de l'in
 forme de nouveaux types d'événements (`RECEIVER_UPDATED`, `PAYIN_*`, `PAYOUT_*`) via le
 dispatcher existant.
 
+**Un payin ou un payout est enregistré avant que BlindPay ne soit appelé pour le
+créer.** `POST /v1/onramp/payins` et `POST /v1/offramp/payouts` écrivent d'abord une
+ligne en `pending_provider` portant le devis et sa clé d'exécution, appellent ensuite
+BlindPay avec cette clé comme `Idempotency-Key`, puis renseignent l'identifiant du
+fournisseur. Un timeout, ou une écriture qui échoue après l'appel, laisse donc une
+ligne et non un paiement que personne ici ne connaît : relancer le même create avec le
+même devis réutilise la ligne et rejoue la clé, et le webhook de BlindPay complète la
+ligne par `quote_id`. Les lectures du tenant omettent ces lignes tant qu'elles n'ont
+pas d'identifiant fournisseur. Une ligne toujours sans identifiant au bout d'une heure
+passe en `provider_unconfirmed` et est journalisée pour un opérateur — rien ne
+renvoie le create, car l'appelant a pu payer entre-temps avec un autre devis. Un
+refus de BlindPay (tout 4xx sauf 408 et 409) supprime la ligne.
+
+**Un webhook qui ne correspond à aucune ligne n'est pas abandonné.** Un événement de
+payin ou de payout est attribué par le devis qu'il a exécuté — au consumer qui l'a
+émis — et le miroir y est créé ou réparé. Un événement qui ne peut toujours pas être
+attribué est acquitté mais reste ouvert, et le réconciliateur BlindPay (actif avec
+`OBSERVER_ENABLED`, une fois par minute, sur une seule réplique à la fois) le relit
+auprès de BlindPay pendant sept jours, en journalisant son `svix-id` à chaque échec
+pour que la livraison puisse être rejouée depuis le tableau de bord Svix. Le même
+réconciliateur relit les payins et payouts ouverts dont les webhooks se sont tus et
+répare leur statut. `PAYIN_COMPLETED` et `PAYOUT_COMPLETED` partent une seule fois par
+payin ou payout, quel que soit le chemin qui voit la finalisation en premier — le
+webhook, un renvoi sous un nouveau `svix-id` ou le réconciliateur.
+
 | Méthode | Chemin                                                | Scope          | Description |
 | ------ | ----------------------------------------------------- | -------------- | ----------- |
 | POST   | `/v1/kyc/receivers`                                   | `kyc:write`    | Créer un receiver (démarrer le KYC/KYB) |
@@ -1683,6 +1708,24 @@ plugins isolés.
   `openapi:generate` les active tous.
 
 ## Mise à niveau — changements incompatibles et notes de déploiement
+
+### BlindPay : des lignes avant l'appel au fournisseur, et une seule finalisation par paiement
+
+- **La migration `20261006120000_blindpay_pending_rows`** rend `payin.blindpayId`
+  et `payout.blindpayId` nullables, ajoute `executionKey` (unique) et
+  `lastCheckedAt` aux deux tables, et ajoute `environment`, `blindpayId`,
+  `appliedAt` et `lastAttemptAt` à `blindpay_webhook_event`. Les lignes de livraison
+  existantes sont marquées comme appliquées.
+- **Aucune réponse ne change de forme.** Les lignes qui attendent encore un
+  identifiant fournisseur (`pending_provider`, `provider_unconfirmed`) ne sont pas
+  renvoyées par les routes du tenant ; les listes d'administration
+  `/v1/admin/payins` et `/v1/admin/payouts` les affichent, avec `blindpayId: null`.
+- **`PAYIN_COMPLETED` et `PAYOUT_COMPLETED` sont dédupliqués** comme les autres
+  événements terminaux : une seconde finalisation sous un nouveau `svix-id` ne
+  produit plus un second événement avec un nouvel `evt_`. Les autres événements
+  BlindPay ne sont réémis que si la ligne a réellement changé.
+- **Le réconciliateur BlindPay tourne avec l'observateur de règlement**
+  (`OBSERVER_ENABLED`) ; désactiver l'observateur le désactive aussi.
 
 ### Connexion du portefeuille : les signataires d'un portefeuille récupéré suivent `STELLAR_NETWORK`
 

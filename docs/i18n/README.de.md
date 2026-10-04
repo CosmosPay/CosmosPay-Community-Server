@@ -1400,6 +1400,33 @@ den rohen Body verifiziert) und als neue Event-Typen (`RECEIVER_UPDATED`, `PAYIN
 `PAYOUT_*`) über den bestehenden Dispatcher an die eigenen Webhook-Endpunkte des
 Integrators **weitergegeben**.
 
+**Ein Payin oder Payout wird gespeichert, bevor BlindPay ihn anlegen soll.**
+`POST /v1/onramp/payins` und `POST /v1/offramp/payouts` schreiben zuerst eine Zeile
+in `pending_provider` mit dem Quote und seinem Ausführungsschlüssel, rufen dann
+BlindPay mit diesem Schlüssel als `Idempotency-Key` auf und tragen danach die
+Provider-ID ein. Ein Timeout oder ein fehlgeschlagener Schreibvorgang nach dem Aufruf
+hinterlässt also eine Zeile statt einer Zahlung, von der hier niemand weiß: Derselbe
+Create-Aufruf mit demselben Quote verwendet die Zeile wieder und wiederholt den
+Schlüssel, und der Webhook von BlindPay füllt die Zeile über `quote_id`. Lesezugriffe
+des Tenants lassen solche Zeilen aus, bis sie eine Provider-ID haben. Eine Zeile, die
+nach einer Stunde noch keine ID hat, wird zu `provider_unconfirmed` und für einen
+Operator geloggt — nichts sendet den Create-Aufruf erneut, denn der Aufrufer hat
+inzwischen vielleicht über einen anderen Quote bezahlt. Eine Ablehnung durch
+BlindPay (jeder 4xx außer 408 und 409) entfernt die Zeile.
+
+**Ein Webhook ohne passende Zeile wird nicht verworfen.** Ein Payin- oder
+Payout-Event wird über den Quote zugeordnet, den es ausgeführt hat — dem Consumer,
+der ihn erzeugt hat —, und der Spiegel wird dort angelegt oder repariert. Ein Event,
+das sich auch so nicht zuordnen lässt, wird bestätigt, bleibt aber offen, und der
+BlindPay-Reconciler (aktiv mit `OBSERVER_ENABLED`, einmal pro Minute, auf jeweils
+einer Replika) liest es sieben Tage lang erneut von BlindPay und loggt bei jedem
+Fehlschlag seine `svix-id`, damit die Zustellung im Svix-Dashboard erneut ausgelöst
+werden kann. Derselbe Reconciler liest offene Payins und Payouts, deren Webhooks
+ausbleiben, erneut und repariert ihren Status. `PAYIN_COMPLETED` und
+`PAYOUT_COMPLETED` gehen pro Payin bzw. Payout genau einmal hinaus, gleich welcher
+Weg den Abschluss zuerst sieht — der Webhook, eine erneute Sendung unter einer neuen
+`svix-id` oder der Reconciler.
+
 | Methode | Pfad                                                  | Scope          | Beschreibung |
 | ------- | ----------------------------------------------------- | -------------- | ------------ |
 | POST   | `/v1/kyc/receivers`                                   | `kyc:write`    | Einen Receiver anlegen (KYC/KYB starten) |
@@ -1715,6 +1742,24 @@ eingeschaltet werden.
   eingeschaltet oder nicht: `openapi:generate` schaltet alle ein.
 
 ## Upgrade — Breaking Changes und Deploy-Hinweise
+
+### BlindPay: Zeilen vor dem Provider-Aufruf und ein Abschluss pro Zahlung
+
+- **Die Migration `20261006120000_blindpay_pending_rows`** macht `payin.blindpayId`
+  und `payout.blindpayId` nullable, ergänzt beide um `executionKey` (eindeutig) und
+  `lastCheckedAt` und ergänzt `blindpay_webhook_event` um `environment`,
+  `blindpayId`, `appliedAt` und `lastAttemptAt`. Bestehende Zustellungszeilen werden
+  als angewendet markiert.
+- **Keine Antwort ändert ihre Form.** Zeilen, die noch auf eine Provider-ID warten
+  (`pending_provider`, `provider_unconfirmed`), geben die Tenant-Routen nicht zurück;
+  die Admin-Listen `/v1/admin/payins` und `/v1/admin/payouts` zeigen sie, mit
+  `blindpayId: null`.
+- **`PAYIN_COMPLETED` und `PAYOUT_COMPLETED` werden dedupliziert** wie die anderen
+  terminalen Events: Ein zweiter Abschluss unter einer neuen `svix-id` erzeugt kein
+  zweites Event mit neuer `evt_` mehr. Andere BlindPay-Events werden nur dann erneut
+  gesendet, wenn sich die Zeile tatsächlich geändert hat.
+- **Der BlindPay-Reconciler läuft mit dem Settlement-Observer**
+  (`OBSERVER_ENABLED`); wer den Observer abschaltet, schaltet auch ihn ab.
 
 ### Wallet-Anmeldung: die Signer einer wiederhergestellten Wallet folgen `STELLAR_NETWORK`
 

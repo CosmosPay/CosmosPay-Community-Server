@@ -105,4 +105,5 @@ export enum AdvisoryLockKey {
   EvmDepositForwarder = 881_011,
   CrossChainSwapObserver = 881_012,
   ChainSwapObserver = 881_013,
+  BlindpayReconciler = 881_014,
 }

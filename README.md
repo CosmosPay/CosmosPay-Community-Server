@@ -1338,6 +1338,29 @@ State changes are synced from BlindPay's **Svix webhooks** (verified over the ra
 body) and **re-emitted** to the integrator's own webhook endpoints as new event
 types (`RECEIVER_UPDATED`, `PAYIN_*`, `PAYOUT_*`) through the existing dispatcher.
 
+**A payin or payout is recorded before BlindPay is asked to create it.**
+`POST /v1/onramp/payins` and `POST /v1/offramp/payouts` first write a row in
+`pending_provider` carrying the quote and its execution key, then call BlindPay
+with that key as `Idempotency-Key`, then fill in the provider id. A timeout, or a
+failed write after the call, therefore leaves a row rather than a payment nobody
+here knows about: retrying the same create with the same quote reuses the row and
+replays the key, and BlindPay's webhook fills the row in by `quote_id`. Tenant
+reads leave such rows out until they have a provider id. One still without an id
+after an hour becomes `provider_unconfirmed` and is logged for an operator —
+nothing re-sends the create, since the caller may have paid through another quote
+meanwhile. A BlindPay refusal (any 4xx but 408 and 409) removes the row.
+
+**A webhook that matches no row is not dropped.** A payin or payout event is
+attributed through the quote it executed — to the consumer that minted it —
+and the mirror is created or repaired there. An event that still cannot be
+attributed is acknowledged but kept open, and the BlindPay reconciler (on with
+`OBSERVER_ENABLED`, once a minute, on one replica at a time) re-reads it from
+BlindPay for seven days, logging its `svix-id` on every miss so the delivery can
+be replayed from the Svix dashboard. The same reconciler re-reads open payins and
+payouts whose webhooks went quiet and repairs their status. `PAYIN_COMPLETED` and
+`PAYOUT_COMPLETED` go out once per payin or payout, whichever path sees the
+completion first — the webhook, a resend under a new `svix-id`, or the reconciler.
+
 | Method | Path                                                  | Scope          | Description |
 | ------ | ----------------------------------------------------- | -------------- | ----------- |
 | POST   | `/v1/kyc/receivers`                                   | `kyc:write`    | Create a receiver (start KYC/KYB) |
@@ -1637,6 +1660,24 @@ the service under `src/native-plugins/<slug>/`, switched on by the same
   `openapi:generate` turns them all on.
 
 ## Upgrading — breaking changes and deploy notes
+
+### BlindPay: rows before the provider call, and one completion per payment
+
+- **Migration `20261006120000_blindpay_pending_rows`** makes `payin.blindpayId`
+  and `payout.blindpayId` nullable, adds `executionKey` (unique) and
+  `lastCheckedAt` to both, and adds `environment`, `blindpayId`, `appliedAt` and
+  `lastAttemptAt` to `blindpay_webhook_event`. Existing delivery rows are marked
+  applied.
+- **No response shape changes.** Rows still waiting for a provider id
+  (`pending_provider`, `provider_unconfirmed`) are not returned by the tenant
+  routes; the admin lists `/v1/admin/payins` and `/v1/admin/payouts` show them,
+  with `blindpayId: null`.
+- **`PAYIN_COMPLETED` and `PAYOUT_COMPLETED` are deduplicated** like the other
+  terminal events: a second completion under a new `svix-id` no longer produces a
+  second event with a new `evt_`. Other BlindPay events are re-emitted only when
+  the row actually changed.
+- **The BlindPay reconciler runs with the settlement observer**
+  (`OBSERVER_ENABLED`); turning the observer off turns it off too.
 
 ### Wallet sign-in: a recovered wallet's signers follow `STELLAR_NETWORK`
 

@@ -929,6 +929,11 @@ EIP-55 写法保存和匹配。
 
 状态变更通过 BlindPay 的 **Svix webhook** 同步（基于原始请求体验证），并通过现有的分发器以新的事件类型（`RECEIVER_UPDATED`、`PAYIN_*`、`PAYOUT_*`）**重新发送**到集成方自己的 webhook 端点。
 
+**在请求 BlindPay 创建 payin 或 payout 之前，先记录它。**
+`POST /v1/onramp/payins` 和 `POST /v1/offramp/payouts` 先写入一行状态为 `pending_provider` 的记录，其中带有报价及其执行密钥，然后以该密钥作为 `Idempotency-Key` 调用 BlindPay，最后补上服务商 id。因此，超时或调用之后的写入失败留下的是一行记录，而不是一笔这里无人知晓的付款：用同一报价重试同一个创建请求会复用这一行并重放该密钥，BlindPay 的 webhook 也会按 `quote_id` 补全这一行。在拥有服务商 id 之前，租户读取不会返回这些行。一小时后仍没有 id 的行会变为 `provider_unconfirmed` 并记录日志供运维处理——不会有任何东西重新发送创建请求，因为调用方可能已在此期间通过另一个报价付款。BlindPay 的拒绝（除 408 和 409 之外的任何 4xx）会删除该行。
+
+**匹配不到任何行的 webhook 不会被丢弃。** payin 或 payout 事件会通过它所执行的报价进行归属——归属到生成该报价的 consumer——并在那里创建或修复镜像。仍无法归属的事件会被确认但保持打开状态，BlindPay 对账器（随 `OBSERVER_ENABLED` 开启，每分钟一次，同一时间只在一个副本上运行）会在七天内从 BlindPay 重新读取它，并在每次未命中时记录其 `svix-id`，以便从 Svix 控制台重放该投递。同一个对账器还会重新读取 webhook 停止到达的未结 payin 和 payout，并修复其状态。`PAYIN_COMPLETED` 和 `PAYOUT_COMPLETED` 对每个 payin 或 payout 只发送一次，无论哪条路径最先看到完成——webhook、使用新 `svix-id` 的重发，还是对账器。
+
 | 方法 | 路径                                                  | Scope          | 说明 |
 | ------ | ----------------------------------------------------- | -------------- | ----------- |
 | POST   | `/v1/kyc/receivers`                                   | `kyc:write`    | 创建 receiver（开始 KYC/KYB） |
@@ -1164,6 +1169,13 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
 - **OpenAPI 契约记录每个原生插件的路由**，无论是否开启：`openapi:generate` 会全部开启。
 
 ## 升级 — 破坏性变更与部署说明
+
+### BlindPay：在调用服务商之前写入行，每笔付款只完成一次
+
+- **迁移 `20261006120000_blindpay_pending_rows`** 将 `payin.blindpayId` 和 `payout.blindpayId` 改为可为空，为两者添加 `executionKey`（唯一）和 `lastCheckedAt`，并为 `blindpay_webhook_event` 添加 `environment`、`blindpayId`、`appliedAt` 和 `lastAttemptAt`。现有的投递行会被标记为已应用。
+- **任何响应的结构都不变。** 仍在等待服务商 id 的行（`pending_provider`、`provider_unconfirmed`）不会由租户路由返回；管理列表 `/v1/admin/payins` 和 `/v1/admin/payouts` 会显示它们，`blindpayId` 为 `null`。
+- **`PAYIN_COMPLETED` 和 `PAYOUT_COMPLETED` 会去重**，与其他终态事件一样：使用新 `svix-id` 的第二次完成不再产生带有新 `evt_` 的第二个事件。其他 BlindPay 事件只有在行确实发生变化时才会重新发送。
+- **BlindPay 对账器随结算观察器运行**（`OBSERVER_ENABLED`）；关闭观察器也会关闭它。
 
 ### 钱包登录：已恢复钱包的签名者跟随 `STELLAR_NETWORK`
 

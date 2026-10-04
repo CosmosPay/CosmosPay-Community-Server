@@ -3,6 +3,9 @@ import { BlindpayOnrampApi } from '@/native-plugins/blindpay/blindpay-onramp.api
 import { PAYIN_PUBLIC_SELECT } from '@/native-plugins/blindpay/blindpay-sync.service';
 import { OnrampService } from '@/native-plugins/blindpay/onramp/onramp.service';
 
+/** The row `openPayin` opens before the provider call. */
+const OPENED = { id: 'payin_1', createdAt: new Date(), isNew: true };
+
 const CONSUMER = { username: 'cosmos_u1' } as any;
 
 /** Straight out of the stored BlindPay payload — must never reach a response. */
@@ -86,6 +89,11 @@ function makeService() {
     mirrorPayin: jest
       .fn()
       .mockResolvedValue(project(payinRow(), PAYIN_PUBLIC_SELECT)),
+    openPayin: jest.fn().mockResolvedValue(OPENED),
+    attachCreatedPayin: jest
+      .fn()
+      .mockResolvedValue(project(payinRow(), PAYIN_PUBLIC_SELECT)),
+    discardOpened: jest.fn().mockResolvedValue(undefined),
   };
   const service = new OnrampService(
     prisma,
@@ -239,7 +247,41 @@ describe('OnrampService quote ownership', () => {
         headers: { 'Idempotency-Key': '48b581d5-a18d-41a7-a3ff-ccfa8f8499fd' },
       },
     );
-    expect(sync.mirrorPayin).toHaveBeenCalled();
+    // The row was opened first, then given what BlindPay created.
+    expect(sync.openPayin).toHaveBeenCalledWith('c1', 'prod', {
+      quoteId: 'pq_000000000001',
+      executionKey: '48b581d5-a18d-41a7-a3ff-ccfa8f8499fd',
+    });
+    expect(sync.openPayin.mock.invocationCallOrder[0]).toBeLessThan(
+      blindpay.post.mock.invocationCallOrder[0],
+    );
+    expect(sync.attachCreatedPayin).toHaveBeenCalledWith(OPENED, 'c1', 'prod', {
+      id: 'pi_1',
+      receiver_id: null,
+    });
+  });
+
+  it('keeps the opened row on an ambiguous failure and drops it on a refusal', async () => {
+    const { service, prisma, blindpay, sync } = makeService();
+    prisma.blindpayQuote.findUnique.mockResolvedValue({
+      consumerId: 'c1',
+      environment: 'prod',
+      blindpayId: 'pq_000000000001',
+      kind: 'PAYIN',
+      executionKey: '48b581d5-a18d-41a7-a3ff-ccfa8f8499fd',
+    });
+    blindpay.post.mockRejectedValue(new HttpException('bad gateway', 502));
+
+    await expect(
+      service.createPayin(CONSUMER, { payin_quote_id: 'pq_000000000001' }),
+    ).rejects.toThrow('bad gateway');
+    expect(sync.discardOpened).not.toHaveBeenCalled();
+
+    blindpay.post.mockRejectedValue(new HttpException('unprocessable', 422));
+    await expect(
+      service.createPayin(CONSUMER, { payin_quote_id: 'pq_000000000001' }),
+    ).rejects.toThrow('unprocessable');
+    expect(sync.discardOpened).toHaveBeenCalledWith('payin', 'payin_1');
   });
 });
 
