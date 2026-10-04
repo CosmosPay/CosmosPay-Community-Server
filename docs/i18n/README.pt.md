@@ -457,7 +457,7 @@ Toda requisição recebida, exceto `/v1/health` e `/docs`, é gravada em
 (`GET /v1/logs`). As linhas incluem caminho, status, duração e — quando presentes —
 o `ip` / `userAgent` do pagador.
 
-O tráfego do dashboard (`X-Cosmos-Internal`) é **registrado e marcado**
+O tráfego do dashboard (marcador `X-Cosmos-Internal` verificado) é **registrado e marcado**
 (`request_log.internal`), não ignorado, e a visão de logs da API filtra por essa
 coluna, então nenhum header de requisição consegue deixar tráfego fora do log.
 
@@ -2170,8 +2170,8 @@ serviço fora da internet pública.
 
 ```sh
 TS=$(date +%s)
-MAC=$(printf 'cosmos-admin-console:v1:%s' "$TS"   | openssl dgst -sha256 -hmac "$APISIX_GATEWAY_SECRET" -r | cut -d' ' -f1)
-curl -H "X-Gateway-Secret: $APISIX_GATEWAY_SECRET"      -H "X-Consumer-Username: ops"      -H "X-Cosmos-Internal: v1.$TS.$MAC"      http://localhost:3000/v1/admin/summary
+MAC=$(printf 'cosmos-admin-console:v1:%s' "$TS" | openssl dgst -sha256 -hmac "$APISIX_GATEWAY_SECRET" -r | cut -d' ' -f1)
+curl -H "X-Gateway-Secret: $APISIX_GATEWAY_SECRET" -H "X-Consumer-Username: ops" -H "X-Cosmos-Internal: v1.$TS.$MAC" http://localhost:3000/v1/admin/summary
 ```
 
 ### `APISIX_GATEWAY_SECRET` agora exige 32 caracteres

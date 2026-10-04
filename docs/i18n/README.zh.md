@@ -366,7 +366,7 @@ platform 的 `COSMOS_API_URL`，用逗号分隔，然后在那里运行 `npm run
 
 除 `/v1/health` 和 `/docs` 之外，每个入站请求都会由 `LoggingInterceptor` 追加到 `request_log`，并为仪表盘的 **API 日志**视图（`GET /v1/logs`）提供数据。每行包含路径、状态码、耗时，以及——如果存在——付款方的 `ip` / `userAgent`。
 
-仪表盘流量（`X-Cosmos-Internal`）会被**记录并打上标记**（`request_log.internal`），而不是被跳过，API 日志视图基于该列进行过滤，因此任何请求头都无法让流量不进入日志。
+仪表盘流量（经过验证的 `X-Cosmos-Internal` 标记）会被**记录并打上标记**（`request_log.internal`），而不是被跳过，API 日志视图基于该列进行过滤，因此任何请求头都无法让流量不进入日志。
 
 日志行**不会永久保留**。`RequestLogRetentionService` 通过定时器（`REQUEST_LOG_PRUNE_INTERVAL_MS`，默认 **1h**）删除早于 `REQUEST_LOG_RETENTION_DAYS`（默认 **30**）的行。每个周期以较小的 `REQUEST_LOG_PRUNE_BATCH_SIZE` 分块删除（默认 **1000**），并持续循环，直到积压清空或达到 `REQUEST_LOG_PRUNE_MAX_PER_CYCLE`（默认 **50000**），这样大量历史数据可以逐步清理完毕，而无需长时间持有表锁。设置 `REQUEST_LOG_RETENTION_DAYS=0` 可完全禁用清理（服务会在启动时记录这一点）。`(consumer, createdAt)` 上的复合索引可在数据量增长时保持仪表盘查询的速度。
 
@@ -1502,8 +1502,8 @@ WHERE NOT i.indisvalid;
 
 ```sh
 TS=$(date +%s)
-MAC=$(printf 'cosmos-admin-console:v1:%s' "$TS"   | openssl dgst -sha256 -hmac "$APISIX_GATEWAY_SECRET" -r | cut -d' ' -f1)
-curl -H "X-Gateway-Secret: $APISIX_GATEWAY_SECRET"      -H "X-Consumer-Username: ops"      -H "X-Cosmos-Internal: v1.$TS.$MAC"      http://localhost:3000/v1/admin/summary
+MAC=$(printf 'cosmos-admin-console:v1:%s' "$TS" | openssl dgst -sha256 -hmac "$APISIX_GATEWAY_SECRET" -r | cut -d' ' -f1)
+curl -H "X-Gateway-Secret: $APISIX_GATEWAY_SECRET" -H "X-Consumer-Username: ops" -H "X-Cosmos-Internal: v1.$TS.$MAC" http://localhost:3000/v1/admin/summary
 ```
 
 ### `APISIX_GATEWAY_SECRET` 现在要求 32 个字符

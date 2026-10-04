@@ -451,7 +451,7 @@ hash के साथ `validate` कॉल करें।
 view (`GET /v1/logs`) को चलाती है। rows में path, status, duration, और — जब मौजूद हों —
 payer का `ip` / `userAgent` शामिल होते हैं।
 
-डैशबोर्ड का traffic (`X-Cosmos-Internal`) छोड़ा नहीं जाता, बल्कि **रिकॉर्ड और चिह्नित** किया जाता है
+डैशबोर्ड का traffic (सत्यापित `X-Cosmos-Internal` marker) छोड़ा नहीं जाता, बल्कि **रिकॉर्ड और चिह्नित** किया जाता है
 (`request_log.internal`), और API-log view उसी
 कॉलम पर filter करता है, इसलिए कोई भी request header traffic को log से बाहर नहीं रख सकता।
 
@@ -2115,8 +2115,8 @@ caller के लिए इससे क्या बदलता है:
 
 ```sh
 TS=$(date +%s)
-MAC=$(printf 'cosmos-admin-console:v1:%s' "$TS"   | openssl dgst -sha256 -hmac "$APISIX_GATEWAY_SECRET" -r | cut -d' ' -f1)
-curl -H "X-Gateway-Secret: $APISIX_GATEWAY_SECRET"      -H "X-Consumer-Username: ops"      -H "X-Cosmos-Internal: v1.$TS.$MAC"      http://localhost:3000/v1/admin/summary
+MAC=$(printf 'cosmos-admin-console:v1:%s' "$TS" | openssl dgst -sha256 -hmac "$APISIX_GATEWAY_SECRET" -r | cut -d' ' -f1)
+curl -H "X-Gateway-Secret: $APISIX_GATEWAY_SECRET" -H "X-Consumer-Username: ops" -H "X-Cosmos-Internal: v1.$TS.$MAC" http://localhost:3000/v1/admin/summary
 ```
 
 ### `APISIX_GATEWAY_SECRET` के लिए अब 32 अक्षर ज़रूरी हैं

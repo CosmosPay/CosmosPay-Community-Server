@@ -460,7 +460,7 @@ mediante `LoggingInterceptor` y alimenta la vista **API logs** del dashboard
 (`GET /v1/logs`). Las filas incluyen ruta, status, duración y — cuando están
 presentes — `ip` / `userAgent` del pagador.
 
-El tráfico del dashboard (`X-Cosmos-Internal`) se **registra y se marca**
+El tráfico del dashboard (marcador `X-Cosmos-Internal` verificado) se **registra y se marca**
 (`request_log.internal`), no se omite, y la vista de logs de la API filtra por esa
 columna, así que ningún header de solicitud puede dejar tráfico fuera del log.
 
@@ -2207,8 +2207,8 @@ Mantener el servicio fuera de internet pública.
 
 ```sh
 TS=$(date +%s)
-MAC=$(printf 'cosmos-admin-console:v1:%s' "$TS"   | openssl dgst -sha256 -hmac "$APISIX_GATEWAY_SECRET" -r | cut -d' ' -f1)
-curl -H "X-Gateway-Secret: $APISIX_GATEWAY_SECRET"      -H "X-Consumer-Username: ops"      -H "X-Cosmos-Internal: v1.$TS.$MAC"      http://localhost:3000/v1/admin/summary
+MAC=$(printf 'cosmos-admin-console:v1:%s' "$TS" | openssl dgst -sha256 -hmac "$APISIX_GATEWAY_SECRET" -r | cut -d' ' -f1)
+curl -H "X-Gateway-Secret: $APISIX_GATEWAY_SECRET" -H "X-Consumer-Username: ops" -H "X-Cosmos-Internal: v1.$TS.$MAC" http://localhost:3000/v1/admin/summary
 ```
 
 ### `APISIX_GATEWAY_SECRET` ahora requiere 32 caracteres

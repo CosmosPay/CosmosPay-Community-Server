@@ -451,7 +451,7 @@ Every inbound request except `/v1/health` and `/docs` is appended to
 view (`GET /v1/logs`). Rows include path, status, duration, and — when present —
 the payer's `ip` / `userAgent`.
 
-Dashboard traffic (`X-Cosmos-Internal`) is **recorded and flagged**
+Dashboard traffic (a verified `X-Cosmos-Internal` marker) is **recorded and flagged**
 (`request_log.internal`), not skipped, and the API-log view filters on that
 column, so no request header can keep traffic out of the log.
 
@@ -2130,8 +2130,8 @@ Keep the service off the public internet.
 
 ```sh
 TS=$(date +%s)
-MAC=$(printf 'cosmos-admin-console:v1:%s' "$TS"   | openssl dgst -sha256 -hmac "$APISIX_GATEWAY_SECRET" -r | cut -d' ' -f1)
-curl -H "X-Gateway-Secret: $APISIX_GATEWAY_SECRET"      -H "X-Consumer-Username: ops"      -H "X-Cosmos-Internal: v1.$TS.$MAC"      http://localhost:3000/v1/admin/summary
+MAC=$(printf 'cosmos-admin-console:v1:%s' "$TS" | openssl dgst -sha256 -hmac "$APISIX_GATEWAY_SECRET" -r | cut -d' ' -f1)
+curl -H "X-Gateway-Secret: $APISIX_GATEWAY_SECRET" -H "X-Consumer-Username: ops" -H "X-Cosmos-Internal: v1.$TS.$MAC" http://localhost:3000/v1/admin/summary
 ```
 
 ### `APISIX_GATEWAY_SECRET` now requires 32 characters

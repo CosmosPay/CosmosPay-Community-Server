@@ -456,7 +456,7 @@ Chaque requête entrante, à l'exception de `/v1/health` et `/docs`, est ajouté
 (`GET /v1/logs`). Les lignes incluent le chemin, le statut, la durée et — lorsqu'ils sont
 présents — l'`ip` / `userAgent` du payeur.
 
-Le trafic du tableau de bord (`X-Cosmos-Internal`) est **enregistré et marqué**
+Le trafic du tableau de bord (marqueur `X-Cosmos-Internal` vérifié) est **enregistré et marqué**
 (`request_log.internal`), et non ignoré, et la vue des journaux API filtre sur cette
 colonne ; aucun en-tête de requête ne peut donc tenir du trafic à l'écart du journal.
 
@@ -2210,8 +2210,8 @@ de l'internet public.
 
 ```sh
 TS=$(date +%s)
-MAC=$(printf 'cosmos-admin-console:v1:%s' "$TS"   | openssl dgst -sha256 -hmac "$APISIX_GATEWAY_SECRET" -r | cut -d' ' -f1)
-curl -H "X-Gateway-Secret: $APISIX_GATEWAY_SECRET"      -H "X-Consumer-Username: ops"      -H "X-Cosmos-Internal: v1.$TS.$MAC"      http://localhost:3000/v1/admin/summary
+MAC=$(printf 'cosmos-admin-console:v1:%s' "$TS" | openssl dgst -sha256 -hmac "$APISIX_GATEWAY_SECRET" -r | cut -d' ' -f1)
+curl -H "X-Gateway-Secret: $APISIX_GATEWAY_SECRET" -H "X-Consumer-Username: ops" -H "X-Cosmos-Internal: v1.$TS.$MAC" http://localhost:3000/v1/admin/summary
 ```
 
 ### `APISIX_GATEWAY_SECRET` exige désormais 32 caractères

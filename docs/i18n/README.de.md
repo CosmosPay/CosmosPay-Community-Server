@@ -462,7 +462,7 @@ an `request_log` angehängt und speist die Dashboard-Ansicht **API-Logs**
 (`GET /v1/logs`). Die Zeilen enthalten Pfad, Status, Dauer und — falls vorhanden —
 `ip` / `userAgent` des Zahlers.
 
-Dashboard-Traffic (`X-Cosmos-Internal`) wird **aufgezeichnet und markiert**
+Dashboard-Traffic (verifizierter `X-Cosmos-Internal`-Marker) wird **aufgezeichnet und markiert**
 (`request_log.internal`), nicht übersprungen, und die API-Log-Ansicht filtert nach
 dieser Spalte, sodass kein Request-Header Traffic aus dem Log heraushalten kann.
 
@@ -2244,8 +2244,8 @@ zu kennzeichnen. Halten Sie den Dienst vom öffentlichen Internet fern.
 
 ```sh
 TS=$(date +%s)
-MAC=$(printf 'cosmos-admin-console:v1:%s' "$TS"   | openssl dgst -sha256 -hmac "$APISIX_GATEWAY_SECRET" -r | cut -d' ' -f1)
-curl -H "X-Gateway-Secret: $APISIX_GATEWAY_SECRET"      -H "X-Consumer-Username: ops"      -H "X-Cosmos-Internal: v1.$TS.$MAC"      http://localhost:3000/v1/admin/summary
+MAC=$(printf 'cosmos-admin-console:v1:%s' "$TS" | openssl dgst -sha256 -hmac "$APISIX_GATEWAY_SECRET" -r | cut -d' ' -f1)
+curl -H "X-Gateway-Secret: $APISIX_GATEWAY_SECRET" -H "X-Consumer-Username: ops" -H "X-Cosmos-Internal: v1.$TS.$MAC" http://localhost:3000/v1/admin/summary
 ```
 
 ### `APISIX_GATEWAY_SECRET` erfordert jetzt 32 Zeichen
