@@ -641,8 +641,17 @@ model Payin {
   receiver   BlindpayReceiver? @relation(fields: [receiverId], references: [id], onDelete: SetNull)
 
   environment    String  @default("prod") // BlindPay instance, see BlindpayReceiver
-  blindpayId     String // `pi_...`
+  /// `pi_...`. Null only while the row is `pending_provider`: it is written
+  /// BEFORE the provider call, so a payin BlindPay created is never one we
+  /// have no row for. Tenant reads leave such rows out.
+  blindpayId     String?
   quoteId        String?
+  /// The quote's `executionKey`, set on the row opened before the provider
+  /// call. Unique, so a retried create finds the row its first attempt opened
+  /// instead of opening a second one. Null on rows mirrored before it existed.
+  executionKey   String?   @unique
+  /// When the reconciler last read this payin from BlindPay.
+  lastCheckedAt  DateTime?
   status         String?
   token          String?
   network        String?
@@ -664,6 +673,8 @@ model Payin {
   @@index([status])
   // Inbound BlindPay webhooks look a payin up by provider id alone.
   @@index([blindpayId])
+  // The reconciler: open rows of one instance, least recently checked first.
+  @@index([environment, status, lastCheckedAt])
   @@map("payin")
 }
 
@@ -677,8 +688,13 @@ model Payout {
   receiver   BlindpayReceiver? @relation(fields: [receiverId], references: [id], onDelete: SetNull)
 
   environment         String  @default("prod") // BlindPay instance, see BlindpayReceiver
-  blindpayId          String // `pa_...`
+  /// `pa_...`. Null only while `pending_provider` — see Payin.blindpayId.
+  blindpayId          String?
   quoteId             String?
+  /// See Payin.executionKey.
+  executionKey        String?   @unique
+  /// When the reconciler last read this payout from BlindPay.
+  lastCheckedAt       DateTime?
   status              String?
   token               String?
   network             String?
@@ -701,6 +717,8 @@ model Payout {
   // this the composite above cannot serve the query (blindpayId is its second
   // column), so every webhook was a sequential scan.
   @@index([blindpayId])
+  // The reconciler: open rows of one instance, least recently checked first.
+  @@index([environment, status, lastCheckedAt])
   @@map("payout")
 }
 
@@ -749,14 +767,30 @@ enum BlindpayQuoteKind {
 /// an outbound notification, so an integrator saw "payout completed" more than
 /// once for one event. The unique index is the claim: the first delivery to
 /// insert the row wins and processes; a retry hits the constraint and is dropped.
+///
+/// A claim is only final once `appliedAt` is set. A payin/payout event that
+/// matched no local row — the provider call outran our write, or the write
+/// failed — stays open (`appliedAt` null) and is acknowledged, and the
+/// reconciler re-reads the resource from BlindPay and applies it later. No
+/// payload is kept: the resource id is enough to fetch it again, and the payload
+/// is the payer's bank details.
 model BlindpayWebhookEvent {
-  id        String   @id @default(cuid())
+  id            String    @id @default(cuid())
   /// The `svix-id` header — stable across retries of the same event.
-  svixId    String   @unique
-  eventType String
-  createdAt DateTime @default(now())
+  svixId        String    @unique
+  eventType     String
+  /// The instance whose secret verified the delivery.
+  environment   String?
+  /// The provider id of the resource the event is about (`pi_…`, `pa_…`).
+  blindpayId    String?
+  /// When the event reached a local row. Null = still waiting to be attributed.
+  appliedAt     DateTime?
+  /// When the reconciler last tried to attribute an open event.
+  lastAttemptAt DateTime?
+  createdAt     DateTime  @default(now())
 
   @@index([createdAt])
+  @@index([appliedAt, lastAttemptAt])
   @@map("blindpay_webhook_event")
 }
 

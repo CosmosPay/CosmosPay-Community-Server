@@ -1361,6 +1361,31 @@ As mudanças de estado são sincronizadas a partir dos **webhooks Svix** do Blin
 próprio integrador como novos tipos de evento (`RECEIVER_UPDATED`, `PAYIN_*`,
 `PAYOUT_*`) pelo dispatcher existente.
 
+**Um payin ou payout é registrado antes de o BlindPay ser chamado para criá-lo.**
+`POST /v1/onramp/payins` e `POST /v1/offramp/payouts` primeiro gravam uma linha em
+`pending_provider` com a cotação e sua chave de execução, depois chamam o BlindPay
+com essa chave como `Idempotency-Key` e por fim preenchem o id do provedor. Um
+timeout, ou uma gravação que falha depois da chamada, deixa portanto uma linha, e não
+um pagamento que ninguém aqui conhece: repetir o mesmo create com a mesma cotação
+reutiliza a linha e repete a chave, e o webhook do BlindPay preenche a linha pelo
+`quote_id`. As leituras do tenant omitem essas linhas até que tenham um id do
+provedor. Uma que continua sem id depois de uma hora passa a `provider_unconfirmed`
+e é registrada no log para um operador — nada reenvia o create, porque quem chamou
+pode ter pago com outra cotação nesse meio-tempo. Uma recusa do BlindPay (qualquer
+4xx exceto 408 e 409) remove a linha.
+
+**Um webhook que não corresponde a nenhuma linha não é descartado.** Um evento de
+payin ou payout é atribuído pela cotação que executou — ao consumer que a emitiu — e
+o espelho é criado ou reparado ali. Um evento que ainda assim não pode ser atribuído
+é confirmado mas fica aberto, e o reconciliador do BlindPay (ativo com
+`OBSERVER_ENABLED`, uma vez por minuto, em uma réplica por vez) o relê do BlindPay
+durante sete dias, registrando seu `svix-id` a cada tentativa sem sucesso para que a
+entrega possa ser reenviada pelo painel do Svix. O mesmo reconciliador relê os
+payins e payouts abertos cujos webhooks pararam de chegar e repara seu status.
+`PAYIN_COMPLETED` e `PAYOUT_COMPLETED` saem uma única vez por payin ou payout, qualquer
+que seja o caminho que veja a conclusão primeiro — o webhook, um reenvio com um
+`svix-id` novo ou o reconciliador.
+
 | Método | Caminho                                               | Escopo         | Descrição |
 | ------ | ----------------------------------------------------- | -------------- | --------- |
 | POST   | `/v1/kyc/receivers`                                   | `kyc:write`    | Criar um receiver (iniciar KYC/KYB) |
@@ -1677,6 +1702,24 @@ serviço em `src/native-plugins/<slug>/`, ligados pela mesma lista
 - **`POST /v1/kyc/receivers` e `PUT /v1/kyc/receivers/{id}` recusam com `400` campos de identidade malformados.** `country` e `id_doc_country` (no nível superior e em `owners[]`) devem ser códigos ISO 3166-1 alfa-2 em maiúsculas (`US`, não `us` nem `USA`); `date_of_birth` (no nível superior e em `owners[]`) e `formation_date` devem ser data-horas ISO 8601 com deslocamento (`1985-04-12T00:00:00.000Z`, não `1985-04-12`); `owners[].ownership_percentage` deve ser um número de 0 a 100; `website` deve ser uma URL `http`/`https` absoluta sem credenciais. Antes cada um era guardado como digitado e falhava na BlindPay só ao habilitar o recebedor, depois da revisão.
 - **As consultas das listas de `/v1/admin` são validadas.** Um `status` desconhecido para aquela lista, um `take` fora de 1–200, um `skip` negativo ou um parâmetro que a rota não aceita agora é `400`; um `status` inválido chegava antes ao banco de dados e voltava como `500`. Os padrões não mudam (`take=50`, `skip=0`).
 - **As leituras de admin de recebedores, payins e payouts retornam uma lista explícita de campos.** Os campos são os que eram retornados antes; uma coluna adicionada depois a essas tabelas não é mais retornada até ser incluída na lista.
+
+### BlindPay: linhas antes da chamada ao provedor, e uma única conclusão por pagamento
+
+- **A migração `20261006120000_blindpay_pending_rows`** torna anuláveis
+  `payin.blindpayId` e `payout.blindpayId`, adiciona `executionKey` (único) e
+  `lastCheckedAt` às duas tabelas, e adiciona `environment`, `blindpayId`,
+  `appliedAt` e `lastAttemptAt` a `blindpay_webhook_event`. As linhas de entrega
+  existentes são marcadas como aplicadas.
+- **Nenhuma resposta muda de formato.** As linhas que ainda esperam um id do provedor
+  (`pending_provider`, `provider_unconfirmed`) não são devolvidas pelas rotas do
+  tenant; as listas de administração `/v1/admin/payins` e `/v1/admin/payouts` as
+  mostram, com `blindpayId: null`.
+- **`PAYIN_COMPLETED` e `PAYOUT_COMPLETED` são deduplicados** como os demais eventos
+  terminais: uma segunda conclusão com um `svix-id` novo não produz mais um segundo
+  evento com um `evt_` novo. Os outros eventos do BlindPay são reemitidos apenas
+  quando a linha realmente mudou.
+- **O reconciliador do BlindPay roda junto com o observador de liquidação**
+  (`OBSERVER_ENABLED`); desligar o observador também o desliga.
 
 ### Login da wallet: os signatários de uma wallet recuperada seguem `STELLAR_NETWORK`
 

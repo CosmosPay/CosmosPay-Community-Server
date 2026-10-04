@@ -19,6 +19,7 @@ import {
   asString,
   asNumber,
   isMirrorFresh,
+  isProviderRefusal,
   quoteExpiresAt,
 } from '@/native-plugins/blindpay/blindpay.util';
 import type { Prisma } from '@generated/prisma/client';
@@ -40,9 +41,10 @@ const PAYOUT_READ_SELECT = {
   updatedAt: true,
 } as const satisfies Prisma.PayoutSelect;
 
+/** A payout read back for `findOne`, which only ever sees rows with a provider id. */
 type MirroredPayout = Prisma.PayoutGetPayload<{
   select: typeof PAYOUT_READ_SELECT;
-}>;
+}> & { blindpayId: string };
 
 /**
  * Offramp (stablecoin -> fiat). Quotes are priced through BlindPay (the EVM quote
@@ -118,25 +120,46 @@ export class OfframpService {
     if (dto.signed_transaction !== undefined) {
       body.signed_transaction = dto.signed_transaction;
     }
-    const created = await this.blindpay.createPayout(
-      environment,
-      dto.chain,
-      body,
-      quote.executionKey,
-    );
-    const receiverId = await this.resolveReceiverLocalId(
+    // The row comes first: once BlindPay holds a payout there must be a row
+    // here to attach it to, whatever happens to the answer on its way back.
+    const opened = await this.sync.openPayout(local.id, environment, {
+      quoteId: dto.quote_id,
+      executionKey: quote.executionKey,
+      senderWalletAddress: dto.sender_wallet_address ?? null,
+    });
+    let created: BlindpayObject;
+    try {
+      created = await this.blindpay.createPayout(
+        environment,
+        dto.chain,
+        body,
+        quote.executionKey,
+      );
+    } catch (err) {
+      // Only a refusal proves nothing was created. A timeout or a 5xx leaves
+      // the row for the webhook — or this caller's retry, which replays the
+      // same Idempotency-Key — to complete.
+      if (opened.isNew && isProviderRefusal(err)) {
+        await this.sync.discardOpened('payout', opened.id);
+      }
+      throw err;
+    }
+    return this.sync.attachCreatedPayout(
+      opened,
       local.id,
       environment,
-      created.receiver_id,
+      created,
     );
-    return this.sync.mirrorPayout(local.id, environment, receiverId, created);
   }
 
   async findAll(consumer: GatewayConsumer, query: PaginationQueryDto) {
     const local = await this.consumers.resolve(consumer);
+    // A row still waiting for its provider id is bookkeeping, not a payout
+    // anyone can act on yet; see BLINDPAY_PENDING_PROVIDER_STATUS.
     const where = {
       consumerId: local.id,
       environment: this.blindpay.environmentFor(consumer),
+      blindpayId: { not: null },
     };
     // `total` is the row count, not the page length. Returning `data.length`
     // made the field useless: it always equalled what the caller just received,
@@ -278,13 +301,13 @@ export class OfframpService {
     id: string,
   ): Promise<MirroredPayout> {
     const row = await this.prisma.payout.findFirst({
-      where: { id, consumerId, environment },
+      where: { id, consumerId, environment, blindpayId: { not: null } },
       select: PAYOUT_READ_SELECT,
     });
-    if (!row) {
+    if (!row?.blindpayId) {
       throw ApiError.notFound('Payout not found');
     }
-    return row;
+    return { ...row, blindpayId: row.blindpayId };
   }
 
   private async resolveBankAccountBlindpayId(
@@ -310,22 +333,6 @@ export class OfframpService {
       );
     }
     return account.blindpayId;
-  }
-
-  private async resolveReceiverLocalId(
-    consumerId: string,
-    environment: BlindpayEnvironment,
-    receiverBlindpayId: unknown,
-  ): Promise<string | null> {
-    if (!receiverBlindpayId) return null;
-    const receiver = await this.prisma.blindpayReceiver.findFirst({
-      where: {
-        consumerId,
-        environment,
-        blindpayId: asString(receiverBlindpayId),
-      },
-    });
-    return receiver?.id ?? null;
   }
 }
 

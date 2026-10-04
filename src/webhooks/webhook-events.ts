@@ -65,6 +65,12 @@ export const TERMINAL_WEBHOOK_EVENTS = [
   'CROSS_CHAIN_SWAP_SUCCEEDED',
   'CROSS_CHAIN_SWAP_REFUNDED',
   'CROSS_CHAIN_SWAP_FAILED',
+  // Dedup: BlindPay's completion reaches us as a webhook — under a new
+  // `svix-id` each time it is sent, so the delivery claim cannot tell two of
+  // them apart — and through the BlindPay reconciler. The claim is what makes
+  // that one notification per payin/payout.
+  'PAYIN_COMPLETED',
+  'PAYOUT_COMPLETED',
 ] as const satisfies readonly WebhookEventType[];
 
 export type TerminalWebhookEventType = (typeof TERMINAL_WEBHOOK_EVENTS)[number];

@@ -1334,6 +1334,32 @@ State के बदलाव BlindPay के **Svix webhooks** से sync ह�
 body पर verify किए जाते हैं) और मौजूदा dispatcher के ज़रिए integrator के अपने webhook endpoints पर नए event
 types (`RECEIVER_UPDATED`, `PAYIN_*`, `PAYOUT_*`) के रूप में **फिर से भेजे जाते हैं**।
 
+**BlindPay से payin या payout बनवाने से पहले ही उसकी row दर्ज कर ली जाती है।**
+`POST /v1/onramp/payins` और `POST /v1/offramp/payouts` पहले `pending_provider` में
+एक row लिखते हैं जिसमें quote और उसकी execution key होती है, फिर उसी key को
+`Idempotency-Key` बनाकर BlindPay को call करते हैं, और उसके बाद provider id भरते हैं।
+इसलिए timeout, या call के बाद write का fail होना, एक row छोड़ता है — ऐसा भुगतान
+नहीं जिसके बारे में यहाँ किसी को पता न हो: उसी quote के साथ वही create दोबारा करने
+पर वही row इस्तेमाल होती है और key दोहराई जाती है, और BlindPay का webhook
+`quote_id` से row भर देता है। Tenant reads ऐसी rows को तब तक नहीं दिखाते जब तक उनके
+पास provider id न हो। एक घंटे बाद भी बिना id वाली row `provider_unconfirmed` बन
+जाती है और operator के लिए log होती है — create दोबारा कुछ नहीं भेजता, क्योंकि
+caller ने इस बीच किसी दूसरे quote से भुगतान कर दिया हो सकता है। BlindPay का इनकार
+(408 और 409 को छोड़कर कोई भी 4xx) row को हटा देता है।
+
+**जिस webhook से कोई row मेल नहीं खाती, उसे छोड़ा नहीं जाता।** Payin या payout
+event को उस quote के ज़रिए attribute किया जाता है जिसे उसने execute किया — उस
+consumer को जिसने वह quote बनाया था — और mirror वहीं बनाया या ठीक किया जाता है।
+जो event फिर भी attribute नहीं हो पाता उसे acknowledge किया जाता है पर खुला रखा
+जाता है, और BlindPay reconciler (`OBSERVER_ENABLED` के साथ चालू, हर मिनट, एक समय
+में एक ही replica पर) उसे सात दिनों तक BlindPay से दोबारा पढ़ता है, और हर असफल
+प्रयास पर उसका `svix-id` log करता है ताकि delivery को Svix dashboard से फिर से
+भेजा जा सके। यही reconciler उन खुले payins और payouts को भी दोबारा पढ़ता है जिनके
+webhooks आने बंद हो गए, और उनका status ठीक करता है। `PAYIN_COMPLETED` और
+`PAYOUT_COMPLETED` हर payin या payout के लिए एक ही बार भेजे जाते हैं, चाहे completion
+पहले कोई भी रास्ता देखे — webhook, नए `svix-id` के साथ दोबारा भेजा गया event, या
+reconciler।
+
 | मेथड   | पाथ                                                   | Scope          | विवरण |
 | ------ | ----------------------------------------------------- | -------------- | ----------- |
 | POST   | `/v1/kyc/receivers`                                   | `kyc:write`    | receiver बनाना (KYC/KYB शुरू करना) |
@@ -1641,6 +1667,23 @@ seal होती हैं और कभी लौटाई नहीं जा
 - **`POST /v1/kyc/receivers` और `PUT /v1/kyc/receivers/{id}` ग़लत रूप वाले पहचान फ़ील्ड को `400` से अस्वीकार करते हैं।** `country` और `id_doc_country` (शीर्ष स्तर पर और `owners[]` में) बड़े अक्षरों में ISO 3166-1 alpha-2 कोड होने चाहिए (`US`, `us` या `USA` नहीं); `date_of_birth` (शीर्ष स्तर पर और `owners[]` में) और `formation_date` offset वाले ISO 8601 date-time होने चाहिए (`1985-04-12T00:00:00.000Z`, `1985-04-12` नहीं); `owners[].ownership_percentage` 0 से 100 के बीच की संख्या होनी चाहिए; `website` credentials के बिना एक absolute `http`/`https` URL होना चाहिए। पहले इनमें से हर एक जैसा लिखा गया वैसा ही सहेजा जाता था और समीक्षा के बाद, receiver को enable करते समय ही BlindPay पर विफल होता था।
 - **`/v1/admin` सूची queries अब validate होती हैं।** उस सूची के लिए अज्ञात `status`, 1–200 से बाहर `take`, ऋणात्मक `skip` या ऐसा parameter जिसे route स्वीकार नहीं करता, अब `400` है; पहले अमान्य `status` database तक पहुँचकर `500` के रूप में लौटता था। Defaults नहीं बदले (`take=50`, `skip=0`)।
 - **Receivers, payins और payouts के admin reads अब फ़ील्ड की एक स्पष्ट सूची लौटाते हैं।** फ़ील्ड वही हैं जो पहले लौटते थे; इन tables में बाद में जोड़ा गया column तब तक नहीं लौटेगा जब तक उसे सूची में न जोड़ा जाए।
+
+### BlindPay: provider call से पहले rows, और हर भुगतान के लिए एक ही completion
+
+- **Migration `20261006120000_blindpay_pending_rows`** `payin.blindpayId` और
+  `payout.blindpayId` को nullable बनाता है, दोनों में `executionKey` (unique) और
+  `lastCheckedAt` जोड़ता है, और `blindpay_webhook_event` में `environment`,
+  `blindpayId`, `appliedAt` और `lastAttemptAt` जोड़ता है। मौजूदा delivery rows को
+  applied चिह्नित किया जाता है।
+- **किसी response का आकार नहीं बदलता।** जो rows अभी provider id का इंतज़ार कर रही
+  हैं (`pending_provider`, `provider_unconfirmed`) उन्हें tenant routes नहीं लौटाते;
+  admin lists `/v1/admin/payins` और `/v1/admin/payouts` उन्हें `blindpayId: null` के
+  साथ दिखाती हैं।
+- **`PAYIN_COMPLETED` और `PAYOUT_COMPLETED` deduplicate होते हैं**, बाकी terminal
+  events की तरह: नए `svix-id` के साथ दूसरी completion अब नए `evt_` वाला दूसरा event
+  नहीं बनाती। BlindPay के बाकी events तभी दोबारा भेजे जाते हैं जब row सच में बदली हो।
+- **BlindPay reconciler settlement observer के साथ चलता है** (`OBSERVER_ENABLED`);
+  observer बंद करने से यह भी बंद हो जाता है।
 
 ### Wallet साइन-इन: रिकवर किए गए wallet के signers अब `STELLAR_NETWORK` का पालन करते हैं
 

@@ -201,3 +201,86 @@ export const BLINDPAY_CONSUMER_QUOTA_RATE_LIMIT = {
  * while 10^10 milliseconds is April 1970, so no real expiry sits on the wrong side.
  */
 export const EPOCH_SECONDS_CEILING = 10_000_000_000;
+
+/** The status a payin/payout reaches when BlindPay reports it settled for good. */
+export const BLINDPAY_COMPLETED_STATUS = 'completed';
+
+/**
+ * The status of a payin/payout row opened BEFORE the provider call, until the
+ * provider answers with the resource it created.
+ *
+ * Writing the row first is what keeps a payin or payout BlindPay created from
+ * existing nowhere here: when the POST timed out, or the write after it failed,
+ * the row is still there, carrying the quote and its execution key, and the
+ * webhook (by `quote_id`) or a retried create (by the same Idempotency-Key)
+ * fills in the provider id. Tenant reads leave such rows out — there is nothing
+ * at the provider to show for them yet.
+ */
+export const BLINDPAY_PENDING_PROVIDER_STATUS = 'pending_provider';
+
+/**
+ * What the reconciler moves a {@link BLINDPAY_PENDING_PROVIDER_STATUS} row to
+ * once {@link BLINDPAY_UNCONFIRMED_AFTER_MS} has passed with no provider id.
+ *
+ * It does not say the resource does not exist: the provider call was ambiguous
+ * (a timeout, a 5xx) and nothing has attributed it since. It stops the row from
+ * being reported again and makes it findable for an operator; a late webhook or
+ * a retried create still attaches it, since the status is not settled.
+ */
+export const BLINDPAY_UNCONFIRMED_STATUS = 'provider_unconfirmed';
+
+/**
+ * Upstream statuses after which a failed payin/payout POST may still have
+ * created the resource: a timeout, and a conflict (which an Idempotency-Key
+ * replay of a request still in flight answers with). Any other 4xx is a refusal
+ * — nothing was created, and the row opened for it is discarded. 5xx and
+ * transport failures are ambiguous by default.
+ */
+export const BLINDPAY_AMBIGUOUS_CLIENT_STATUSES: readonly number[] = [408, 409];
+
+/**
+ * How often the reconciler runs. It is a safety net under the webhook, not the
+ * primary path, so once a minute is plenty — and it shares the instance's
+ * request quota with every tenant (see BLINDPAY_CONSUMER_QUOTA_RATE_LIMIT).
+ */
+export const BLINDPAY_RECONCILE_INTERVAL_MS = 60_000;
+
+/**
+ * Provider reads per kind (payins, payouts, open webhook events) per instance in
+ * one reconciler tick. Bounded so one tick costs at most
+ * 3 × {@link BLINDPAY_RECONCILE_BATCH} requests per instance however far behind
+ * the mirror is: a backlog drains over several ticks instead of in one burst
+ * against a quota other tenants are using.
+ */
+export const BLINDPAY_RECONCILE_BATCH = 10;
+
+/**
+ * The reconciler's lock spans its provider reads, so its transaction must
+ * outlive every one of them timing out: one read per row of each batch for two
+ * instances, plus the database work around them.
+ */
+export const BLINDPAY_RECONCILE_LOCK_TIMEOUT_MULTIPLIER =
+  BLINDPAY_RECONCILE_BATCH * 3 * 2 + 1;
+
+/**
+ * How long a {@link BLINDPAY_PENDING_PROVIDER_STATUS} row may wait for a provider
+ * id before it is marked {@link BLINDPAY_UNCONFIRMED_STATUS}. A quote lives about
+ * five minutes, and Svix's first retries land within the hour, so a row still
+ * unattributed after that is one an operator should look at.
+ */
+export const BLINDPAY_UNCONFIRMED_AFTER_MS = 60 * 60 * 1000;
+
+/**
+ * How old an open webhook event must be before the reconciler retries it.
+ * Younger ones may still be in the hands of the request that recorded them, or
+ * of Svix's own retry.
+ */
+export const BLINDPAY_OPEN_EVENT_MIN_AGE_MS = 60_000;
+
+/**
+ * How long the reconciler keeps trying to attribute an open webhook event. Past
+ * this it stops. Every failed attempt before that logged the `svix-id`, so the
+ * delivery can be replayed from the Svix dashboard once whatever kept it
+ * unattributed is fixed — and the row stays, still open, for an operator.
+ */
+export const BLINDPAY_OPEN_EVENT_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
