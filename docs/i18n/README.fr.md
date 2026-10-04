@@ -1684,6 +1684,12 @@ plugins isolés.
 
 ## Mise à niveau — changements incompatibles et notes de déploiement
 
+### Champs de bénéficiaire et requêtes des listes d'admin plus stricts
+
+- **`POST /v1/kyc/receivers` et `PUT /v1/kyc/receivers/{id}` refusent en `400` les champs d'identité mal formés.** `country` et `id_doc_country` (au premier niveau et dans `owners[]`) doivent être des codes ISO 3166-1 alpha-2 en majuscules (`US`, pas `us` ni `USA`) ; `date_of_birth` (au premier niveau et dans `owners[]`) et `formation_date` doivent être des date-heures ISO 8601 avec décalage (`1985-04-12T00:00:00.000Z`, pas `1985-04-12`) ; `owners[].ownership_percentage` doit être un nombre de 0 à 100 ; `website` doit être une URL `http`/`https` absolue sans identifiants. Chacun était auparavant stocké tel quel et n'échouait chez BlindPay qu'à l'activation du bénéficiaire, après la revue.
+- **Les requêtes des listes `/v1/admin` sont validées.** Un `status` inconnu pour cette liste, un `take` hors de 1–200, un `skip` négatif ou un paramètre que la route n'accepte pas donne désormais `400` ; un `status` invalide atteignait auparavant la base de données et revenait en `500`. Les valeurs par défaut ne changent pas (`take=50`, `skip=0`).
+- **Les lectures d'admin des bénéficiaires, payins et payouts renvoient une liste explicite de champs.** Ce sont les champs renvoyés jusqu'ici ; une colonne ajoutée plus tard à ces tables n'est renvoyée qu'une fois listée.
+
 ### Connexion du portefeuille : les signataires d'un portefeuille récupéré suivent `STELLAR_NETWORK`
 
 - **`WALLET_AUTH_SIGNERS_HORIZON_URL` prend désormais par défaut le Horizon de `STELLAR_NETWORK`** (`STELLAR_HORIZON_URL_PUBLIC` / `STELLAR_HORIZON_URL_TESTNET`, sinon celui de SDF), et non plus toujours celui du réseau public. Il est lu quand un portefeuille récupéré via SEP-30 signe `POST /v1/wallet/auth/finish` avec la clé qui a remplacé sa clé maîtresse. Sur un déploiement testnet, la requête partait vers le mainnet, ne trouvait pas le compte, et la connexion de tout portefeuille récupéré répondait `400 wallet_signature_invalid`.

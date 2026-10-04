@@ -1716,6 +1716,12 @@ eingeschaltet werden.
 
 ## Upgrade — Breaking Changes und Deploy-Hinweise
 
+### Strengere Empfängerfelder und Admin-Listenabfragen
+
+- **`POST /v1/kyc/receivers` und `PUT /v1/kyc/receivers/{id}` lehnen fehlerhafte Identitätsfelder mit `400` ab.** `country` und `id_doc_country` (auf oberster Ebene und in `owners[]`) müssen ISO-3166-1-Alpha-2-Codes in Großbuchstaben sein (`US`, nicht `us` oder `USA`); `date_of_birth` (auf oberster Ebene und in `owners[]`) und `formation_date` müssen ISO-8601-Zeitpunkte mit Offset sein (`1985-04-12T00:00:00.000Z`, nicht `1985-04-12`); `owners[].ownership_percentage` muss eine Zahl von 0 bis 100 sein; `website` muss eine absolute `http`/`https`-URL ohne Zugangsdaten sein. Bisher wurde jedes davon wie eingegeben gespeichert und scheiterte bei BlindPay erst beim Aktivieren des Empfängers, nach der Prüfung.
+- **Abfragen der `/v1/admin`-Listen werden validiert.** Ein für diese Liste unbekannter `status`, ein `take` außerhalb von 1–200, ein negatives `skip` oder ein Parameter, den die Route nicht kennt, ergibt jetzt `400`; ein ungültiger `status` erreichte bisher die Datenbank und kam als `500` zurück. Die Standardwerte bleiben (`take=50`, `skip=0`).
+- **Die Admin-Lesezugriffe auf Empfänger, Payins und Payouts liefern eine explizite Feldliste.** Es sind die bisher gelieferten Felder; eine später zu diesen Tabellen hinzugefügte Spalte wird erst geliefert, wenn sie aufgeführt ist.
+
 ### Wallet-Anmeldung: die Signer einer wiederhergestellten Wallet folgen `STELLAR_NETWORK`
 
 - **`WALLET_AUTH_SIGNERS_HORIZON_URL` nutzt jetzt standardmäßig den Horizon von `STELLAR_NETWORK`** (`STELLAR_HORIZON_URL_PUBLIC` / `STELLAR_HORIZON_URL_TESTNET`, sonst den von SDF), nicht mehr immer den des öffentlichen Netzes. Er wird gelesen, wenn eine per SEP-30 wiederhergestellte Wallet `POST /v1/wallet/auth/finish` mit dem Schlüssel signiert, der ihren Master ersetzt hat. Auf einem Testnet-Deployment ging die Abfrage ans Mainnet, fand kein Konto, und die Anmeldung jeder wiederhergestellten Wallet antwortete `400 wallet_signature_invalid`.

@@ -1638,6 +1638,12 @@ the service under `src/native-plugins/<slug>/`, switched on by the same
 
 ## Upgrading — breaking changes and deploy notes
 
+### Stricter receiver fields and admin list queries
+
+- **`POST /v1/kyc/receivers` and `PUT /v1/kyc/receivers/{id}` refuse malformed identity fields with `400`.** `country` and `id_doc_country` (top level and in `owners[]`) must be upper-case ISO 3166-1 alpha-2 codes (`US`, not `us` or `USA`); `date_of_birth` (top level and in `owners[]`) and `formation_date` must be ISO 8601 date-times with an offset (`1985-04-12T00:00:00.000Z`, not `1985-04-12`); `owners[].ownership_percentage` must be a number from 0 to 100; `website` must be an absolute `http`/`https` URL without credentials. Each of these used to be stored as typed and fail at BlindPay only when the receiver was enabled, after review.
+- **`/v1/admin` list queries are validated.** An unknown `status` for that list, a `take` outside 1–200, a negative `skip` or a parameter the route does not take is now `400`; an invalid `status` used to reach the database and come back as `500`. Defaults are unchanged (`take=50`, `skip=0`).
+- **The admin receiver, payin and payout reads return an explicit field list.** The fields are the ones returned before; a column added to those tables later is no longer returned until it is listed.
+
 ### Wallet sign-in: a recovered wallet's signers follow `STELLAR_NETWORK`
 
 - **`WALLET_AUTH_SIGNERS_HORIZON_URL` now defaults to `STELLAR_NETWORK`'s Horizon** (`STELLAR_HORIZON_URL_PUBLIC` / `STELLAR_HORIZON_URL_TESTNET`, else SDF's), not always the public network's. It is read when a wallet recovered through SEP-30 signs `POST /v1/wallet/auth/finish` with the key that replaced its master. On a testnet deployment the lookup went to mainnet, found no account, and every recovered wallet's sign-in answered `400 wallet_signature_invalid`.

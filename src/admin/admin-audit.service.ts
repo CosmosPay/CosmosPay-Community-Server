@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import type { Prisma } from '@generated/prisma/client';
 import type { AdminPrincipal } from '@/admin/admin-auth';
+import { adminSkip, adminTake } from '@/admin/admin-list';
 import { toAuditEntry } from '@/audit/audit-writer';
 import { PrismaService } from '@/prisma/prisma.service';
 
@@ -37,8 +38,8 @@ export class AdminAuditService {
   }
 
   async list(opts: { take?: number; skip?: number } = {}) {
-    const take = !opts.take || opts.take < 1 ? 50 : Math.min(opts.take, 200);
-    const skip = !opts.skip || opts.skip < 0 ? 0 : opts.skip;
+    const take = adminTake(opts.take);
+    const skip = adminSkip(opts.skip);
     const [data, total] = await Promise.all([
       this.prisma.adminAuditLog.findMany({
         orderBy: { createdAt: 'desc' },

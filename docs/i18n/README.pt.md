@@ -1663,6 +1663,12 @@ serviço em `src/native-plugins/<slug>/`, ligados pela mesma lista
 
 ## Atualização — mudanças incompatíveis e notas de deploy
 
+### Campos de recebedor e consultas de listas de admin mais rígidos
+
+- **`POST /v1/kyc/receivers` e `PUT /v1/kyc/receivers/{id}` recusam com `400` campos de identidade malformados.** `country` e `id_doc_country` (no nível superior e em `owners[]`) devem ser códigos ISO 3166-1 alfa-2 em maiúsculas (`US`, não `us` nem `USA`); `date_of_birth` (no nível superior e em `owners[]`) e `formation_date` devem ser data-horas ISO 8601 com deslocamento (`1985-04-12T00:00:00.000Z`, não `1985-04-12`); `owners[].ownership_percentage` deve ser um número de 0 a 100; `website` deve ser uma URL `http`/`https` absoluta sem credenciais. Antes cada um era guardado como digitado e falhava na BlindPay só ao habilitar o recebedor, depois da revisão.
+- **As consultas das listas de `/v1/admin` são validadas.** Um `status` desconhecido para aquela lista, um `take` fora de 1–200, um `skip` negativo ou um parâmetro que a rota não aceita agora é `400`; um `status` inválido chegava antes ao banco de dados e voltava como `500`. Os padrões não mudam (`take=50`, `skip=0`).
+- **As leituras de admin de recebedores, payins e payouts retornam uma lista explícita de campos.** Os campos são os que eram retornados antes; uma coluna adicionada depois a essas tabelas não é mais retornada até ser incluída na lista.
+
 ### Login da wallet: os signatários de uma wallet recuperada seguem `STELLAR_NETWORK`
 
 - **`WALLET_AUTH_SIGNERS_HORIZON_URL` agora usa por padrão o Horizon de `STELLAR_NETWORK`** (`STELLAR_HORIZON_URL_PUBLIC` / `STELLAR_HORIZON_URL_TESTNET`, ou o da SDF), e não sempre o da rede pública. É consultado quando uma wallet recuperada via SEP-30 assina `POST /v1/wallet/auth/finish` com a chave que substituiu sua chave mestra. Num deploy em testnet a consulta ia para a mainnet, não encontrava a conta, e o login de toda wallet recuperada respondia `400 wallet_signature_invalid`.

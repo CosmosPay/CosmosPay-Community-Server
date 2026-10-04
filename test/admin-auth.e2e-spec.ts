@@ -266,6 +266,38 @@ describe('Admin auth & audit (e2e)', () => {
     });
   });
 
+  describe('list query validation', () => {
+    it.each([
+      'chain-swaps?status=BANANA',
+      'cross-chain-swaps?status=PENDING',
+      'chain-swaps?take=201',
+      'cross-chain-swaps?take=0',
+      'chain-swaps?skip=-1',
+      'chain-swaps?take=abc',
+      'audit-logs?take=1000',
+    ])('answers 400 for %s, before the service runs', async (query) => {
+      adminServiceMock.chainSwaps.mockClear();
+      adminServiceMock.crossChainSwaps.mockClear();
+      await asConsole(request(http()).get(`${base}/${query}`)).expect(400);
+      expect(adminServiceMock.chainSwaps).not.toHaveBeenCalled();
+      expect(adminServiceMock.crossChainSwaps).not.toHaveBeenCalled();
+    });
+
+    it('applies the admin page defaults when none are given', async () => {
+      adminServiceMock.chainSwaps.mockClear();
+      await asConsole(request(http()).get(`${base}/chain-swaps`)).expect(200);
+      expect(adminServiceMock.chainSwaps).toHaveBeenCalledWith(
+        expect.objectContaining({ take: 50, skip: 0 }),
+      );
+    });
+
+    it('still refuses an ordinary gateway caller with a bad query', async () => {
+      await gateway(
+        request(http()).get(`${base}/chain-swaps?status=BANANA`),
+      ).expect(403);
+    });
+  });
+
   describe.each(mutators)('$name', ({ method, path, body, action }) => {
     it('returns 403 for a caller that is not the console', async () => {
       await gateway(request(http())[method](path).send(body)).expect(403);
