@@ -71,9 +71,10 @@ const SettlementConflictResponse = () =>
       ApiErrorCode.OperationInFlight,
     ],
     description:
-      '`transaction_already_settled`: the transaction already settled a ' +
-      'payment intent — of any consumer — and one payment settles at most ' +
-      'one; this intent is not paid by it. `idempotency_conflict`: the hash ' +
+      '`transaction_already_settled`: the transaction already settled, or ' +
+      'also pays an older, payment intent of any consumer, and one payment ' +
+      'settles at most one intent, the oldest it pays; this intent is not ' +
+      'paid by it. `idempotency_conflict`: the hash ' +
       'is already recorded on another of your intents. ' +
       '`operation_in_flight`: the status changed under this request; re-read ' +
       'the intent and retry.',

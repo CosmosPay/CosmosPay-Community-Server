@@ -4,6 +4,7 @@ import { ConsumerResolverService } from '@/common/services/consumer-resolver.ser
 import { WebhookTerminalEmitter } from '@/webhooks/webhook-terminal-emitter.service';
 import { PaymentIntentsService } from '@/payment-intents/payment-intents.service';
 import { Sep7LinkBuilder } from '@/payment-intents/sep7-link-builder.service';
+import { SETTLEMENT_RIVALS_MAX } from '@/payment-intents/payment-intents.constants';
 
 /**
  * One on-chain payment settles at most one payment intent, whoever owns it.
@@ -14,10 +15,14 @@ import { Sep7LinkBuilder } from '@/payment-intents/sep7-link-builder.service';
  * consumer — had an intent the payer's single transaction also verified
  * against, and both settled SUCCEEDED on the same hash.
  *
+ * And it settles the OLDEST intent it pays. With the claim alone the first
+ * settlement to run won, and a copycat's observer tick could come before the
+ * original's — the copy took the payment and the original expired unpaid.
+ *
  * The fake database below keeps what these tests depend on: the settlement
- * claim's primary key, and a transaction that rolls its own writes back when
- * its callback throws. Two transactions may run interleaved, as two replicas'
- * would; each undoes only what it wrote.
+ * claim's primary key, the rival query's filters, and a transaction that rolls
+ * its own writes back when its callback throws. Two transactions may run
+ * interleaved, as two replicas' would; each undoes only what it wrote.
  */
 describe('PaymentIntentsService: one transaction settles one intent', () => {
   const HASH = 'a'.repeat(64);
@@ -34,13 +39,21 @@ describe('PaymentIntentsService: one transaction settles one intent', () => {
   } as never;
   const consumerB = { ...(consumerA as object), username: 'cosmos_b' } as never;
 
-  /** The same payment terms on both intents — B copied A's. */
-  const intent = (id: string, consumerId: string, username: string) => ({
+  const T0 = Date.now();
+
+  /** The same payment terms on every intent — B copied A's. */
+  const intent = (
+    id: string,
+    consumerId: string,
+    username: string,
+    createdAt: Date,
+  ) => ({
     id,
     consumerId,
     consumer: { apisixUsername: username },
     kind: 'PAY',
     chain: 'stellar',
+    chainReference: null as string | null,
     status: 'PENDING',
     source: null,
     destination: 'GDEST',
@@ -52,9 +65,9 @@ describe('PaymentIntentsService: one transaction settles one intent', () => {
     uri: 'web+stellar:pay?destination=GDEST',
     txHash: null as string | null,
     reference: null,
-    expiresAt: new Date(Date.now() + 60_000),
-    createdAt: new Date(),
-    updatedAt: new Date(),
+    expiresAt: new Date(T0 + 60 * 60_000),
+    createdAt,
+    updatedAt: createdAt,
   });
 
   type Row = ReturnType<typeof intent>;
@@ -81,6 +94,31 @@ describe('PaymentIntentsService: one transaction settles one intent', () => {
         },
       },
     });
+
+  /**
+   * The subset of a Prisma `where` the rival query uses: AND / OR, equality,
+   * `not`, `notIn`, `in` and `lt` (dates compared by time).
+   */
+  function matches(row: any, where: any): boolean {
+    return Object.entries(where).every(([key, cond]: [string, any]) => {
+      if (key === 'AND') return cond.every((w: any) => matches(row, w));
+      if (key === 'OR') return cond.some((w: any) => matches(row, w));
+      const value = row[key];
+      const time = (v: unknown) => (v instanceof Date ? v.getTime() : v);
+      if (
+        cond !== null &&
+        typeof cond === 'object' &&
+        !(cond instanceof Date)
+      ) {
+        if ('not' in cond) return value !== cond.not;
+        if ('notIn' in cond) return !cond.notIn.includes(value);
+        if ('in' in cond) return cond.in.includes(value);
+        if ('lt' in cond) return time(value)! < time(cond.lt)!;
+        throw new Error(`unsupported filter on ${key}`);
+      }
+      return time(value) === time(cond);
+    });
+  }
 
   /** A client whose writes register an undo with `undo`, when given one. */
   function client(undo?: Array<() => void>): any {
@@ -114,6 +152,17 @@ describe('PaymentIntentsService: one transaction settles one intent', () => {
           if (!row) throw new Error('not found');
           return { ...row };
         }),
+        findMany: jest.fn(async ({ where, take }: any) =>
+          [...rows.values()]
+            .filter((row) => matches(row, where))
+            .sort(
+              (a, b) =>
+                a.createdAt.getTime() - b.createdAt.getTime() ||
+                a.id.localeCompare(b.id),
+            )
+            .slice(0, take)
+            .map((row) => ({ ...row })),
+        ),
         updateMany: jest.fn(async ({ where, data }: any) => {
           const row = rows.get(where.id);
           if (!row || row.status !== where.status) return { count: 0 };
@@ -161,9 +210,10 @@ describe('PaymentIntentsService: one transaction settles one intent', () => {
   let service: PaymentIntentsService;
 
   beforeEach(() => {
+    // A is the original; B copied it a minute later.
     rows = new Map([
-      ['pi_a', intent('pi_a', 'c_a', 'cosmos_a')],
-      ['pi_b', intent('pi_b', 'c_b', 'cosmos_b')],
+      ['pi_a', intent('pi_a', 'c_a', 'cosmos_a', new Date(T0 - 60_000))],
+      ['pi_b', intent('pi_b', 'c_b', 'cosmos_b', new Date(T0))],
     ]);
     settlements = new Map();
     audit = [];
@@ -240,6 +290,180 @@ describe('PaymentIntentsService: one transaction settles one intent', () => {
 
     expect(err!.code).toBe(ApiErrorCode.TransactionAlreadySettled);
     expect(rows.get('pi_b')!.status).toBe('PENDING');
+  });
+
+  describe('the oldest intent the payment pays wins it', () => {
+    it("refuses the copy even when the copy's settlement runs first, and the original then settles", async () => {
+      const err = await errorOf(
+        service.markSucceeded('pi_b', 'cosmos_b', HASH, 'GPAYER', 'observer'),
+      );
+
+      expect(err).toBeInstanceOf(ApiError);
+      expect(err!.getStatus()).toBe(HttpStatus.CONFLICT);
+      expect(err!.code).toBe(ApiErrorCode.TransactionAlreadySettled);
+      // One answer for "settled" and "owed to an older intent": a distinct
+      // one would tell the copier the original exists and is unsettled.
+      expect(err!.message).not.toMatch(/pi_a|cosmos_a|older/);
+      // Asked the chain about the original, with the same predicate that
+      // would settle it.
+      expect(verify).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'pi_a' }),
+        HASH,
+      );
+      expect(rows.get('pi_b')!.status).toBe('PENDING');
+      expect(settlements.size).toBe(0);
+
+      await service.markSucceeded(
+        'pi_a',
+        'cosmos_a',
+        HASH,
+        'GPAYER',
+        'observer',
+      );
+
+      expect(rows.get('pi_a')!.status).toBe('SUCCEEDED');
+      expect([...settlements.values()]).toEqual([{ intentId: 'pi_a' }]);
+    });
+
+    it('settles the original whichever of the two racing settlements starts first', async () => {
+      let arrived = 0;
+      let release!: () => void;
+      const bothRead = new Promise<void>((resolve) => (release = resolve));
+      readBarrier = async () => {
+        arrived += 1;
+        if (arrived === 2) release();
+        await bothRead;
+      };
+
+      // The copy's settlement is issued first.
+      const [copy, original] = await Promise.allSettled([
+        service.markSucceeded('pi_b', 'cosmos_b', HASH),
+        service.markSucceeded('pi_a', 'cosmos_a', HASH),
+      ]);
+
+      expect(original.status).toBe('fulfilled');
+      expect(copy.status).toBe('rejected');
+      expect(((copy as PromiseRejectedResult).reason as ApiError).code).toBe(
+        ApiErrorCode.TransactionAlreadySettled,
+      );
+      expect(rows.get('pi_a')!.status).toBe('SUCCEEDED');
+      expect(rows.get('pi_b')!.status).toBe('PENDING');
+      expect([...settlements.values()]).toEqual([{ intentId: 'pi_a' }]);
+      expect(emitted).toEqual(['PAYMENT_INTENT_SUCCEEDED']);
+    });
+
+    /**
+     * The limit of the rule, pinned so it is a decision and not a surprise. A
+     * copy made BEFORE the original needs the original's memo, destination
+     * and amount in advance: a memo the integrator lets this service mint is
+     * 64 random bits, so this takes a memo the merchant chose predictably
+     * (an order number). The pre-made copy then wins and the original is
+     * refused — and stays refused after the copy expires, since an EXPIRED
+     * intent can still be settled. Age is the only order this service can
+     * see between two tenants describing the same payment.
+     */
+    it('lets a copy made BEFORE the original, with a guessed memo, outrank it', async () => {
+      rows.set('pi_b', {
+        ...rows.get('pi_b')!,
+        createdAt: new Date(T0 - 120_000),
+      });
+
+      const err = await errorOf(
+        service.markSucceeded('pi_a', 'cosmos_a', HASH),
+      );
+      expect(err!.code).toBe(ApiErrorCode.TransactionAlreadySettled);
+
+      await service.markSucceeded('pi_b', 'cosmos_b', HASH);
+      expect(rows.get('pi_b')!.status).toBe('SUCCEEDED');
+      expect(rows.get('pi_a')!.status).toBe('PENDING');
+    });
+
+    it('is not outranked by an older intent the payment does not pay', async () => {
+      // The chain's answer decides, not the shared memo and destination.
+      verify.mockImplementation(async (intent: { id: string }) =>
+        intent.id === 'pi_a'
+          ? { valid: false, reason: 'amount mismatch' }
+          : { valid: true, txHash: HASH },
+      );
+
+      await service.markSucceeded('pi_b', 'cosmos_b', HASH);
+
+      expect(rows.get('pi_b')!.status).toBe('SUCCEEDED');
+    });
+
+    it('is not outranked by an older intent that was cancelled', async () => {
+      rows.set('pi_a', { ...rows.get('pi_a')!, status: 'CANCELLED' });
+
+      await service.markSucceeded('pi_b', 'cosmos_b', HASH);
+
+      expect(rows.get('pi_b')!.status).toBe('SUCCEEDED');
+      expect(verify).not.toHaveBeenCalled();
+    });
+
+    it('is not decided when the chain cannot be asked about the older intent', async () => {
+      verify.mockRejectedValue(new Error('Horizon 503'));
+
+      await expect(
+        service.markSucceeded('pi_b', 'cosmos_b', HASH),
+      ).rejects.toThrow('Horizon 503');
+      expect(rows.get('pi_b')!.status).toBe('PENDING');
+    });
+
+    it('refuses, without asking the chain, past the cap on older rivals', async () => {
+      for (let i = 0; i < SETTLEMENT_RIVALS_MAX + 1; i += 1) {
+        rows.set(
+          `pi_r${i}`,
+          intent(
+            `pi_r${i}`,
+            `c_r${i}`,
+            `cosmos_r${i}`,
+            new Date(T0 - 1_000 * (i + 2)),
+          ),
+        );
+      }
+      rows.delete('pi_a');
+
+      const err = await errorOf(
+        service.markSucceeded('pi_b', 'cosmos_b', HASH),
+      );
+
+      expect(err!.code).toBe(ApiErrorCode.TransactionAlreadySettled);
+      expect(verify).not.toHaveBeenCalled();
+    });
+
+    /**
+     * Monad with a relayer: the original's payer pays its deposit address, and
+     * the relayer's forward settles it under the FORWARD's hash. A copy whose
+     * destination is that deposit address was paid by the payer's own
+     * transaction — a different hash, so the claim never met it.
+     */
+    it("refuses a Monad copy paid at another intent's deposit address after the forward settled it", async () => {
+      const PAYER_TX = `0x${'b'.repeat(64)}`;
+      const monad = { chain: 'monad', destination: '0xMERCHANT' };
+      rows.set('pi_a', {
+        ...rows.get('pi_a')!,
+        ...monad,
+        chainReference: '0xDEPOSIT',
+        status: 'SUCCEEDED',
+        txHash: `0x${'c'.repeat(64)}`,
+      });
+      rows.set('pi_b', {
+        ...rows.get('pi_b')!,
+        ...monad,
+        destination: '0xDEPOSIT',
+      });
+
+      const err = await errorOf(
+        service.markSucceeded('pi_b', 'cosmos_b', PAYER_TX),
+      );
+
+      expect(err!.code).toBe(ApiErrorCode.TransactionAlreadySettled);
+      expect(verify).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'pi_a' }),
+        PAYER_TX,
+      );
+      expect(rows.get('pi_b')!.status).toBe('PENDING');
+    });
   });
 
   it('holds when both settlements race past their reads before either writes', async () => {

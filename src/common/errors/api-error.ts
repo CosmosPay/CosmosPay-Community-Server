@@ -68,8 +68,9 @@ export enum ApiErrorCode {
   InvalidMemo = 'invalid_memo',
   TransactionRejected = 'transaction_rejected',
   /**
-   * The transaction already settled a payment intent — any consumer's — and
-   * one payment settles at most one intent. Distinct from
+   * The transaction already settled a payment intent — any consumer's — or
+   * also pays an OLDER intent of another consumer, which outranks this one: one
+   * payment settles at most one intent, the oldest it pays. Distinct from
    * `idempotency_conflict`, which says a hash is recorded on another of the
    * caller's OWN intents: this one names a payment someone else may have been
    * paid with, so retrying it on any intent is pointless.

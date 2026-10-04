@@ -40,6 +40,8 @@ import {
 import { Sep7LinkBuilder } from '@/payment-intents/sep7-link-builder.service';
 import { ChainPayLinkBuilder } from '@/payment-intents/chain-pay-link-builder.service';
 import { PaymentVerifiers } from '@/payment-intents/payment-verifiers';
+import { SETTLEMENT_RIVALS_MAX } from '@/payment-intents/payment-intents.constants';
+import { settlementRivalsQuery } from '@/payment-intents/settlement-rivals';
 import {
   expectedTxId,
   isTxIdFor,
@@ -1018,6 +1020,10 @@ export class PaymentIntentsService {
    * ({@link PaymentVerifiers}) has confirmed pays this intent: this is the settlement that counts as verified on-chain, and
    * the only one that may settle an EXPIRED intent. Both callers — `validate`
    * and the observer — hold that verifier result when they call it.
+   *
+   * The payment goes to the OLDEST intent it pays: an older intent of another
+   * consumer that it also pays refuses this one first
+   * ({@link assertOldestClaimant}).
    */
   async markSucceeded(
     intentId: string,
@@ -1026,6 +1032,7 @@ export class PaymentIntentsService {
     payer?: string,
     actor: PaymentIntentTransitionActor = 'validate',
   ): Promise<PaymentIntent> {
+    await this.assertOldestClaimant(intentId, txHash);
     return this.transition(intentId, 'SUCCEEDED', {
       consumerUsername,
       actor,
@@ -1034,6 +1041,70 @@ export class PaymentIntentsService {
       payer,
       verifiedOnChain: true,
     });
+  }
+
+  /**
+   * Refuses to settle `intentId` on `txHash` when the transaction also pays an
+   * older intent of another consumer, with the 409 a hash that already settled
+   * one gets (`transaction_already_settled`).
+   *
+   * The settlement claim makes one transaction settle one intent, but alone it
+   * hands the payment to whichever settlement runs first, and a copycat's
+   * observer tick can come before the original's: the copy settled and the
+   * original, refused at the claim, expired although it was paid. A copy is
+   * made of an intent that already exists, so the original is the older; it is
+   * refused nothing here (none of its rivals is older) and settles on its own
+   * next pass.
+   *
+   * Which rivals are looked at is `settlement-rivals.ts`; whether one is paid is
+   * the chain verifier's answer, the same `verifyByHash` that would settle it.
+   * A verifier that cannot answer throws, and the settlement is retried rather
+   * than decided without it.
+   *
+   * Under concurrency the outcome holds without a lock: a rival counts in every
+   * status but CANCELLED and FAILED, and an intent never re-enters that set
+   * once it leaves it, so a rival this read finds cannot turn into one a later
+   * read would miss. The oldest intent is never refused here, and every younger
+   * one is refused here or at the claim — exactly one settles, the oldest.
+   *
+   * The same code as an already-settled hash, deliberately: a distinct answer
+   * would tell a caller holding a payment that another tenant has an unsettled
+   * intent for it.
+   */
+  private async assertOldestClaimant(
+    intentId: string,
+    txHash: string,
+  ): Promise<void> {
+    const intent = await this.prisma.paymentIntent.findUnique({
+      where: { id: intentId },
+    });
+    // A missing intent is `transition`'s 404 to answer.
+    if (!intent) return;
+    const chain = chainOf(intent.chain);
+    const rivals = await this.prisma.paymentIntent.findMany(
+      settlementRivalsQuery(chain, intent),
+    );
+    if (rivals.length === 0) return;
+    if (rivals.length > SETTLEMENT_RIVALS_MAX) {
+      this.logger.warn(
+        `Not settling intent ${intentId} on ${txHash}: more than ` +
+          `${SETTLEMENT_RIVALS_MAX} older intents of other consumers could ` +
+          'claim the same payment',
+      );
+      throw transactionAlreadySettled();
+    }
+    const verifier = this.verifiers.for(chain);
+    const hash = normalizeTxId(chain, txHash);
+    for (const rival of rivals) {
+      const result = await verifier.verifyByHash(rival, hash);
+      if (result.valid) {
+        this.logger.warn(
+          `Not settling intent ${intentId} on ${hash}: the payment also pays ` +
+            `the older intent ${rival.id} of another consumer`,
+        );
+        throw transactionAlreadySettled();
+      }
+    }
   }
 
   /** Finalizes an intent as FAILED and emits the event. */
@@ -1160,12 +1231,21 @@ async function claimSettlement(
     });
   } catch (err) {
     if (!isUniqueViolation(err)) throw err;
-    throw ApiError.conflict(
-      ApiErrorCode.TransactionAlreadySettled,
-      'This transaction has already settled a payment intent. One payment ' +
-        'settles at most one intent.',
-    );
+    throw transactionAlreadySettled();
   }
+}
+
+/**
+ * The 409 for a transaction that settles, or already settled, another payment
+ * intent. One message for both causes, naming no intent and no consumer: the
+ * other intent is not this caller's to learn about.
+ */
+function transactionAlreadySettled(): ApiError {
+  return ApiError.conflict(
+    ApiErrorCode.TransactionAlreadySettled,
+    'This transaction settles another payment intent. One payment settles ' +
+      'at most one intent: the oldest it pays.',
+  );
 }
 
 /**

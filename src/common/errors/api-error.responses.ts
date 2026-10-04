@@ -198,10 +198,10 @@ export const API_ERROR_CASES: Readonly<Record<ApiErrorCode, ApiErrorCase>> = {
   },
   [ApiErrorCode.TransactionAlreadySettled]: {
     statuses: [409],
-    summary: 'That transaction already settled a payment intent',
+    summary: 'That transaction settles another payment intent',
     message:
-      'This transaction has already settled a payment intent. One payment ' +
-      'settles at most one intent.',
+      'This transaction settles another payment intent. One payment settles ' +
+      'at most one intent: the oldest it pays.',
     path: '/v1/payment-intents/pi_7Yc3Qn0Kx2/validate',
   },
 

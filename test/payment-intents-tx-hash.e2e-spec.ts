@@ -10,6 +10,7 @@ import { Horizon, Keypair } from '@stellar/stellar-sdk';
 import request from 'supertest';
 import { AppModule } from '@/app.module';
 import { PrismaService } from '@/prisma/prisma.service';
+import { rivalsOf } from './payment-intent-rivals';
 
 /**
  * The PaymentIntent unique keys `prisma/schema.prisma` declares: every `@unique`
@@ -209,6 +210,10 @@ describe('Payment intent txHash (e2e)', () => {
         if (!row) throw new Error('not found');
         return row;
       }),
+      // Only the settlement-precedence query reads a list here.
+      findMany: jest.fn(
+        async (args: any) => rivalsOf(store.values(), args) ?? [],
+      ),
       update: jest.fn(async ({ where, data }: any) => {
         const row = { ...store.get(where.id), ...data, updatedAt: new Date() };
         assertUnique(row);
@@ -433,6 +438,24 @@ describe('Payment intent txHash (e2e)', () => {
         status: 'PENDING',
         txHash: null,
       });
+    });
+
+    /**
+     * The copy's settlement can run first — its observer tick, or its own
+     * validate. The payment still goes to the original, the older intent.
+     */
+    it('settles the original, not the copy, when the copy is validated first', async () => {
+      const original = await createIntent(tenantB, destinationB);
+      const copy = await createIntent(tenantA, destinationB, original.memo);
+      const hash = `${'0'.repeat(63)}3`;
+      onChain.set(hash, { memo: original.memo, to: destinationB });
+
+      const refused = await validate(tenantA, copy.id, hash).expect(409);
+      expect(refused.body.code).toBe('transaction_already_settled');
+      expect(store.get(copy.id).status).toBe('PENDING');
+
+      const res = await validate(tenantB, original.id, hash).expect(200);
+      expect(res.body.status).toBe('SUCCEEDED');
     });
 
     it("answers a settlement that collides with the tenant's own report with 409, not 500", async () => {

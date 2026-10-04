@@ -8,6 +8,7 @@ import { Account, Horizon, Keypair } from '@stellar/stellar-sdk';
 import request from 'supertest';
 import { AppModule } from '@/app.module';
 import { PrismaService } from '@/prisma/prisma.service';
+import { rivalsOf } from './payment-intent-rivals';
 
 /**
  * Issue #36 — payment-intent state-machine guards at the HTTP boundary.
@@ -90,7 +91,9 @@ describe('Payment intent transitions (e2e)', () => {
         store.set(row.id, row);
         return Promise.resolve(row);
       }),
-      findMany: jest.fn(() => Promise.resolve([...store.values()])),
+      findMany: jest.fn((args: any) =>
+        Promise.resolve(rivalsOf(store.values(), args) ?? [...store.values()]),
+      ),
       count: jest.fn(() => Promise.resolve(store.size)),
       findFirst: jest.fn(({ where }: any) =>
         Promise.resolve(store.get(where.id) ?? null),

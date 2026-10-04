@@ -187,7 +187,8 @@ export class PaymentIntentObserverService extends ScheduledJob {
         // warning, not the error a failed reconcile logs — nothing failed.
         this.logger.warn(
           `Intent ${intent.id} is not settled by ${result.txHash}: that ` +
-            'transaction already settled another payment intent',
+            'transaction settles another payment intent, an older one it ' +
+            'also pays or one it already settled',
         );
       }
     }
@@ -211,9 +212,10 @@ export class PaymentIntentObserverService extends ScheduledJob {
    * Two settlement failures are final instead, and the intent expires with a
    * warning.
    *
-   * The hash already settled an intent of any consumer (409
-   * `transaction_already_settled`): that payment is spoken for, so it did not
-   * pay this intent, which expires as the unpaid intent it is.
+   * The payment already settled an intent of any consumer, or also pays an
+   * older one of another consumer, which outranks this one (409
+   * `transaction_already_settled`): it is spoken for, so it did not pay this
+   * intent, which expires as the unpaid intent it is.
    *
    * The hash is already recorded on another of the same consumer's intents
    * (409 `idempotency_conflict`). No
@@ -242,7 +244,7 @@ export class PaymentIntentObserverService extends ScheduledJob {
         if (isAlreadySettled(err)) {
           this.logger.warn(
             `Expiring intent ${intent.id} unpaid: ${result.txHash} matches ` +
-              'it but already settled another payment intent',
+              'it but settles another payment intent, older or already settled',
           );
         } else if (
           // Only the txHash conflict: `markSucceeded` raises no other

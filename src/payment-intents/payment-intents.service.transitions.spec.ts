@@ -61,6 +61,9 @@ describe('PaymentIntentsService.transition (guards + audit)', () => {
         findFirst: jest.fn(async ({ where }: any) =>
           where.id === row.id ? { ...row } : null,
         ),
+        // No older intent of another consumer competes for the payment; the
+        // precedence rule has its own spec.
+        findMany: jest.fn(async () => []),
         findUniqueOrThrow: jest.fn(async ({ where }: any) => {
           if (where.id !== row.id) throw new Error('not found');
           return { ...row };
@@ -576,6 +579,7 @@ describe('PaymentIntentsService API settlement is chain-verified', () => {
       paymentIntent: {
         findUnique: jest.fn(async () => ({ ...row })),
         findFirst: jest.fn(async () => ({ ...row })),
+        findMany: jest.fn(async () => []),
         update: jest.fn(async () => ({ ...row })),
         updateMany: jest.fn(async () => ({ count: 1 })),
         findUniqueOrThrow: jest.fn(async () => ({ ...row })),

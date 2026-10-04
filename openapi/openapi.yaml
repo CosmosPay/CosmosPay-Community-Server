@@ -562,26 +562,26 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
-          description: "`transaction_already_settled`: the transaction already settled a
-            payment intent — of any consumer — and one payment settles at most
-            one; this intent is not paid by it. `idempotency_conflict`: the hash
-            is already recorded on another of your intents.
-            `operation_in_flight`: the status changed under this request;
-            re-read the intent and retry."
+          description: "`transaction_already_settled`: the transaction already settled, or
+            also pays an older, payment intent of any consumer, and one payment
+            settles at most one intent, the oldest it pays; this intent is not
+            paid by it. `idempotency_conflict`: the hash is already recorded on
+            another of your intents. `operation_in_flight`: the status changed
+            under this request; re-read the intent and retry."
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
               examples:
                 transaction_already_settled:
-                  summary: transaction_already_settled — That transaction already settled a
-                    payment intent
+                  summary: transaction_already_settled — That transaction settles another payment
+                    intent
                   value:
                     statusCode: 409
                     code: transaction_already_settled
                     error: Conflict
-                    message: This transaction has already settled a payment intent. One payment
-                      settles at most one intent.
+                    message: "This transaction settles another payment intent. One payment settles
+                      at most one intent: the oldest it pays."
                     path: /v1/payment-intents/pi_7Yc3Qn0Kx2/validate
                     timestamp: 2026-09-01T12:00:00.000Z
                 idempotency_conflict:
@@ -779,26 +779,26 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
-          description: "`transaction_already_settled`: the transaction already settled a
-            payment intent — of any consumer — and one payment settles at most
-            one; this intent is not paid by it. `idempotency_conflict`: the hash
-            is already recorded on another of your intents.
-            `operation_in_flight`: the status changed under this request;
-            re-read the intent and retry."
+          description: "`transaction_already_settled`: the transaction already settled, or
+            also pays an older, payment intent of any consumer, and one payment
+            settles at most one intent, the oldest it pays; this intent is not
+            paid by it. `idempotency_conflict`: the hash is already recorded on
+            another of your intents. `operation_in_flight`: the status changed
+            under this request; re-read the intent and retry."
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
               examples:
                 transaction_already_settled:
-                  summary: transaction_already_settled — That transaction already settled a
-                    payment intent
+                  summary: transaction_already_settled — That transaction settles another payment
+                    intent
                   value:
                     statusCode: 409
                     code: transaction_already_settled
                     error: Conflict
-                    message: This transaction has already settled a payment intent. One payment
-                      settles at most one intent.
+                    message: "This transaction settles another payment intent. One payment settles
+                      at most one intent: the oldest it pays."
                     path: /v1/payment-intents/pi_7Yc3Qn0Kx2/validate
                     timestamp: 2026-09-01T12:00:00.000Z
                 idempotency_conflict:
