@@ -30,6 +30,7 @@ export class ApisixContextMiddleware implements NestMiddleware {
       planHeader,
       swapFeeBpsHeader,
       emailHeader,
+      gatewaySecret,
     } = this.config.get('apisix', { infer: true });
 
     const username = this.firstHeader(req, consumerHeader);
@@ -59,7 +60,10 @@ export class ApisixContextMiddleware implements NestMiddleware {
         plan,
         planSwapFeeBps,
         email,
-        internal: isInternalCall(req.headers[ADMIN_INTERNAL_HEADER]),
+        internal: isInternalCall(
+          req.headers[ADMIN_INTERNAL_HEADER],
+          gatewaySecret,
+        ),
       };
       req.gatewayConsumer = consumer;
     }

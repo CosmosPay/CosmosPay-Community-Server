@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
+import { signConsoleMarker } from '@/admin/console-marker';
 
 process.env.KYC_REDIRECT_URL_WHITELIST = JSON.stringify({
   cosmos_u1: ['app.example.com'],
@@ -228,7 +229,7 @@ describe('KYC surface (e2e)', () => {
       .set('x-gateway-secret', GATEWAY_SECRET)
       .set('x-consumer-username', 'cosmos_u1')
       .set('x-consumer-permissions', 'kyc:write')
-      .set('x-cosmos-internal', '1')
+      .set('x-cosmos-internal', signConsoleMarker(GATEWAY_SECRET, Date.now()))
       .set('x-cosmos-tos-cooldown-ms', '0')
       .send({
         channel: 'email',
@@ -249,7 +250,7 @@ describe('KYC surface (e2e)', () => {
       // must not be what grants the privilege, so the admin role is required
       // alongside it.
       .set('x-consumer-role', 'admin')
-      .set('x-cosmos-internal', '1')
+      .set('x-cosmos-internal', signConsoleMarker(GATEWAY_SECRET, Date.now()))
       .set('x-cosmos-tos-cooldown-ms', '0')
       .send({
         channel: 'email',

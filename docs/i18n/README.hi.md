@@ -34,12 +34,13 @@ load-balance और authenticate करता है। यह कभी raw API
 development के लिए, APISIX के पीछे चलाएँ या `X-Gateway-Secret` + `X-Consumer-*`
 headers खुद भेजें।
 
-`/v1/admin` cross-tenant है, इसलिए `AdminGuard` को `X-Cosmos-Internal` भी चाहिए।
-APISIX अपने proxy किए हर request से यह header **हटा** देता है, इसलिए इसे केवल वही
-backend भेज सकता है जो gateway secret के साथ सर्विस को सीधे कॉल करता है — यानी developer
-platform, जो तय करता है कि signed-in account owner है या admin। कोई अलग admin
-credential नहीं है: gateway secret, network isolation और gateway रूट की header remove
-list ही cross-tenant डेटा की रक्षा करते हैं।
+`/v1/admin` cross-tenant है, इसलिए `AdminGuard` यह भी माँगता है कि `X-Cosmos-Internal`
+में gateway secret से बना एक ताज़ा MAC हो (`src/admin/console-marker.ts`)। API-key callers
+के पास यह secret कभी नहीं होता, इसलिए इसे केवल वही backend बना सकता है जो सर्विस को सीधे
+कॉल करता है — यानी developer platform, जो तय करता है कि signed-in account owner है या
+admin। कोई अलग admin credential नहीं है। APISIX अपने proxy किए हर request से यह header
+हटाता भी है, लेकिन वह defence in depth है: जो रूट इसे हटाना भूल जाए, वह ऐसा मान आगे
+भेजता है जिसे कोई client जाली नहीं बना सकता।
 
 पाइपलाइन:
 
@@ -450,7 +451,7 @@ hash के साथ `validate` कॉल करें।
 view (`GET /v1/logs`) को चलाती है। rows में path, status, duration, और — जब मौजूद हों —
 payer का `ip` / `userAgent` शामिल होते हैं।
 
-डैशबोर्ड का traffic (`X-Cosmos-Internal`) छोड़ा नहीं जाता, बल्कि **रिकॉर्ड और चिह्नित** किया जाता है
+डैशबोर्ड का traffic (सत्यापित `X-Cosmos-Internal` marker) छोड़ा नहीं जाता, बल्कि **रिकॉर्ड और चिह्नित** किया जाता है
 (`request_log.internal`), और API-log view उसी
 कॉलम पर filter करता है, इसलिए कोई भी request header traffic को log से बाहर नहीं रख सकता।
 
@@ -1627,6 +1628,13 @@ seal होती हैं और कभी लौटाई नहीं जा
 
 ## अपग्रेड — breaking changes और deploy नोट्स
 
+### `X-Cosmos-Internal` में gateway secret का MAC होना ज़रूरी है
+
+- **केवल `X-Cosmos-Internal: 1` अस्वीकार किया जाता है।** `/v1/admin` इसका जवाब `403 admin_console_only` से देता है, और caller को अब कहीं भी internal नहीं माना जाता: उस पर per-consumer rate limits लागू होते हैं, और request log में उसकी rows चिह्नित नहीं होतीं। header में अब `v1.<unix seconds>.<hex>` होता है — `APISIX_GATEWAY_SECRET` से keyed एक HMAC-SHA256, जो सर्वर की घड़ी से पाँच मिनट के भीतर स्वीकार होता है (`src/admin/console-marker.ts`)।
+- **जो ops scripts `/v1/admin` को सीधे कॉल करती हैं, उन्हें हर कॉल पर marker बनाना होगा।** नीचे `ADMIN_API_CREDENTIALS` वाली entry के अंत में दिया `openssl` + `curl` snippet यही करता है।
+- **सर्विस और developer platform को एक साथ deploy करें।** marker अब कंसोल बनाता है। इस सर्विस के सामने पुराना कंसोल हर admin कॉल पर `403` पाता है; पुरानी सर्विस के सामने नया कंसोल काम करता रहता है, क्योंकि पुरानी सर्विस `0`, `false`, `no` और `off` के अलावा कोई भी मान स्वीकार करती है। अगर दोनों एक साथ नहीं जा सकते, तो पहले developer platform deploy करें।
+- **कोई नया environment variable नहीं।** MAC `APISIX_GATEWAY_SECRET` से keyed है, जिसे सर्विस और कंसोल पहले से साझा करते हैं।
+
 ### Wallet साइन-इन: रिकवर किए गए wallet के signers अब `STELLAR_NETWORK` का पालन करते हैं
 
 - **`WALLET_AUTH_SIGNERS_HORIZON_URL` अब डिफ़ॉल्ट रूप से `STELLAR_NETWORK` के Horizon का उपयोग करता है** (`STELLAR_HORIZON_URL_PUBLIC` / `STELLAR_HORIZON_URL_TESTNET`, वरना SDF का), हमेशा पब्लिक नेटवर्क का नहीं। इसे तब पढ़ा जाता है जब SEP-30 से रिकवर किया गया wallet `POST /v1/wallet/auth/finish` को उस key से साइन करता है जिसने उसकी master key की जगह ली। testnet deployment पर यह lookup mainnet पर जाता था, खाता नहीं मिलता था, और हर रिकवर किए गए wallet का साइन-इन `400 wallet_signature_invalid` लौटाता था।
@@ -1877,6 +1885,7 @@ trustline provisioning (`/v1/pollar/wallets/*`) और `/v1/pollar/users` — �
 | `POST /v1/wallet/auth/finish` और `PUT /v1/wallet/backup` अब `v: 3` बैकअप बॉक्स भी स्वीकार करते हैं: seed एक यादृच्छिक डेटा key के नीचे, और वह key `slots` में हर दरवाज़े के लिए एक बार सील (`kind: "password"` या `kind: "passkey"`, अधिकतम 8)। हर password दरवाज़े पर वही PBKDF2 न्यूनतम लागू है जो `v: 2` बॉक्स पर; passkey दरवाज़े की कोई लागत नहीं, क्योंकि उसकी key authenticator का WebAuthn PRF आउटपुट है। `v: 2` बॉक्स नहीं बदलते | Wallets: केवल-passkey बैकअप मान्य है, और जिस wallet ने ऐसा लिखा उसे यह सर्वर चाहिए | मूल password टाइप करने के बजाय passkey से पुनर्स्थापना संभव करता है, बिना इस सेवा के कभी बॉक्स खोलने वाली key रखे |
 | `POST /v1/wallet/auth/oauth/authorize` अब एक वैकल्पिक `returnTo` स्वीकार करता है। अगर वह `WALLET_AUTH_RETURN_URLS` में है, तो `GET /v1/wallet/auth/oauth/callback/{provider}` पेज दिखाने के बजाय उस पर `?state=…` (विफलता पर `&error=<reason>` भी) के साथ `302` देता है; सूची से बाहर वाला `400 wallet_return_url_not_allowed` है। केवल `state` जाता है — handshake अब भी PKCE verifier से ही redeem होता है। पहले migration `20260927180000_wallet_auth_return_to` चलाएँ | Native wallets (desktop और mobile): `returnTo` भेजें और वह URL OS में register करें | प्लेटफ़ॉर्म का auth session (`ASWebAuthenticationSession`, Custom Tab, desktop deep link या loopback listener) तभी बंद होता है जब browser ऐप के अपने URL पर पहुँचे, इसलिए व्यक्ति पेज पर अटका रहता था और उसे हाथ से बंद करना पड़ता था |
 | `GET /v1/wallet/auth/providers` अब `mfaSettingsUrl` भी लौटाता है: Authentik खाते का वह पेज जहाँ व्यक्ति दूसरा factor (security key या passkey, authenticator app, recovery codes) जोड़ता या हटाता है, session न हो तो Authentik login से होकर; Authentik न होने पर `null`। Wallet साइन-इन पर दूसरा factor वैकल्पिक है — `deploy/authentik/wallet-sign-in.yaml` MFA stage को फिर से *skip* पर रखता है, जिसके पास factor है उससे पासवर्ड के बाद वह माँगता है, passkey को username स्क्रीन से ही साइन-इन करने देता है, और जिसके पास कोई नहीं है उसे पासवर्ड के बाद विकल्प देता है (अभी नहीं, security key, authenticator app)। यह sign-up पेज पर फ़ॉर्म के ऊपर Google / GitHub भी जोड़ता है। पासवर्ड से साइन-इन और sign-up नहीं बदलते | Authentik चलाने वाले operators: blueprint import करें। Wallets: URL को एक setting के रूप में दिखाएँ | दूसरा factor या तो सबके लिए अनिवार्य था या पहुँच से बाहर: wallet users कभी Authentik की settings नहीं खोलते, setup flows बिना Authentik session वाले browser को अस्वीकार करते हैं, और identification stage का passwordless बटन उसी flow की ओर था, इसलिए वह सिर्फ़ पेज reload करता था |
+| `/v1/admin` माँगता है कि `X-Cosmos-Internal` में `APISIX_GATEWAY_SECRET` से keyed ताज़ा MAC हो (`v1.<unix seconds>.<hex>`, पाँच मिनट के भीतर); केवल `1` पर `403 admin_console_only` मिलता है, और केवल verified marker ही caller को per-consumer rate limits से छूट देता है या उसकी request-log rows चिह्नित करता है | `/v1/admin` को सीधे कॉल करने वाली ops scripts, और इस बदलाव के बिना deploy किया गया developer platform | `0`, `false`, `no` या `off` के अलावा कोई भी मान चल जाता था, इसलिए header हटाना भूला एक अकेला APISIX रूट हर API key को cross-tenant admin surface, rate-limit छूट और tenant के request log से अपनी कॉल छिपाने का तरीका दे देता था |
 
 इसके साथ आने वाले deploy नोट:
 
@@ -2078,13 +2087,18 @@ deployments ने इसे छोड़ दिया, उन्हें क�
 
 1. `X-Gateway-Secret` `APISIX_GATEWAY_SECRET` से मेल खाता है — जिसे `ApisixGuard`
    बाकी हर रूट की तरह जाँचता है। यह केवल gateway और कंसोल backend के पास है।
-2. `X-Cosmos-Internal` मौजूद है। APISIX इसे अपने proxy किए हर request से हटा देता है
-   (`proxy-rewrite.headers.remove`), इसलिए API-key caller इसे साथ नहीं ला सकता;
-   केवल gateway secret रखने वाले backend की सीधी कॉल ही ला सकती है।
+2. `X-Cosmos-Internal` एक कंसोल marker है: `v1.<unix seconds>.<hex>`, जहाँ hex
+   `HMAC-SHA256(APISIX_GATEWAY_SECRET, "cosmos-admin-console:v1:" +
+   seconds)` है और timestamp सर्वर की घड़ी से पाँच मिनट के भीतर है। API-key caller के
+   पास gateway secret नहीं होता, इसलिए वह इसे नहीं बना सकता — उस रूट से भी नहीं जो
+   header हटाना भूल गया हो (`proxy-rewrite.headers.remove`)। यही verified flag कंसोल
+   को per-consumer rate limits से छूट देता है और request log में उसकी rows को चिह्नित
+   करता है।
 
-बिंदु 2 इस सर्विस के पास रखे किसी secret पर नहीं, बल्कि developer-platform repo में
-मौजूद gateway रूट configuration पर निर्भर है। बदले में, कंसोल ही वह अकेली जगह है जो तय
-करती है कि platform admin कौन है, और audit rows काम करने वाले कंसोल account
+केवल `X-Cosmos-Internal: 1` — जो कंसोल पहले भेजता था — किसी भी दूसरी जालसाज़ी की तरह
+अस्वीकार किया जाता है, इसलिए सर्विस और developer platform एक साथ deploy होते हैं। दोनों
+repositories marker के लिए एक ही test vector pin करती हैं। कंसोल ही वह अकेली जगह है जो
+तय करती है कि platform admin कौन है, और audit rows काम करने वाले कंसोल account
 (`cosmos_<userId>`) और उसकी platform role का नाम देती हैं, हर mutation **और** हर read पर।
 
 caller के लिए इससे क्या बदलता है:
@@ -2096,8 +2110,14 @@ caller के लिए इससे क्या बदलता है:
 | audit row पर `actorId` / `actorRole` credential का नाम देते थे | वे कंसोल account और उसकी platform role का नाम देते हैं |
 
 `/v1/admin` को सीधे कॉल करने के लिए (जैसे किसी ops script से), `X-Gateway-Secret`,
-`X-Consumer-Username` और `X-Cosmos-Internal: 1` भेजें; audit row पर label लगाने के लिए
-`X-Cosmos-Admin-Role: owner` जोड़ें। सर्विस को सार्वजनिक internet से दूर रखें।
+`X-Consumer-Username` और ताज़ा बनाया गया `X-Cosmos-Internal` भेजें; audit row पर label
+लगाने के लिए `X-Cosmos-Admin-Role: owner` जोड़ें। सर्विस को सार्वजनिक internet से दूर रखें।
+
+```sh
+TS=$(date +%s)
+MAC=$(printf 'cosmos-admin-console:v1:%s' "$TS" | openssl dgst -sha256 -hmac "$APISIX_GATEWAY_SECRET" -r | cut -d' ' -f1)
+curl -H "X-Gateway-Secret: $APISIX_GATEWAY_SECRET" -H "X-Consumer-Username: ops" -H "X-Cosmos-Internal: v1.$TS.$MAC" http://localhost:3000/v1/admin/summary
+```
 
 ### `APISIX_GATEWAY_SECRET` के लिए अब 32 अक्षर ज़रूरी हैं
 
@@ -2335,10 +2355,12 @@ guard इसी पर निर्भर है।
 > **remove सूची एक security control है, और इसे इस repository से verify नहीं किया जा
 > सकता।** यह सर्विस इसमें दिए हर header को जैसा है वैसा ही मान लेती है;
 > `X-Gateway-Secret` केवल यह साबित करता है कि request किसी gateway से होकर आई, यह नहीं
-> कि वे मान ईमानदार हैं। जब भी कोई रूट जोड़ा या कॉपी किया जाए, इस सूची का review करें —
-> जो रूट `X-Cosmos-Internal` नहीं हटाता, वह हर API key को `/v1/admin` तक पहुँच दे देता है।
-> सर्विस को private network पर रखें ताकि अंदर आने का एकमात्र रास्ता APISIX हो; साझा
-> secret दूसरी परत है, अकेली परत नहीं।
+> कि वे मान ईमानदार हैं। जब भी कोई रूट जोड़ा या कॉपी किया जाए, इस सूची का review करें।
+> `X-Cosmos-Internal` अब इस पर निर्भर नहीं है — सर्विस gateway secret से बना MAC verify
+> करती है — लेकिन हर `X-Consumer-*` header अब भी निर्भर है, और जो रूट client की भेजी
+> copy आगे भेज देता है, वह उसे किसी भी consumer का नाम लेने देता है। सर्विस को private
+> network पर रखें ताकि अंदर आने का एकमात्र रास्ता APISIX हो; साझा secret दूसरी परत है,
+> अकेली परत नहीं।
 >
 > production में `X-Plan-Swap-Fee-Bps` न होने पर environment default पर लौटने की बजाय
 > `503` लौटता है।

@@ -34,12 +34,14 @@ l'orchestrateur interroge directement). Le contrôle est toujours actif — il n
 indicateur pour le désactiver. Pour le développement local, placez le service derrière APISIX
 ou envoyez vous-même `X-Gateway-Secret` + les en-têtes `X-Consumer-*`.
 
-`/v1/admin` est inter-tenants, donc `AdminGuard` exige en plus `X-Cosmos-Internal`.
-APISIX **supprime** cet en-tête de tout ce qu'il relaie, de sorte que seul un backend qui
-appelle le service directement avec le secret de la passerelle peut l'envoyer — la plateforme
-développeur, qui décide si le compte connecté est owner ou admin. Il n'y a pas d'identifiant
-d'administration distinct : ce sont le secret de la passerelle, l'isolation réseau et la liste
-de suppression d'en-têtes de la route de la passerelle qui protègent les données inter-tenants.
+`/v1/admin` est inter-tenants, donc `AdminGuard` exige en plus que `X-Cosmos-Internal`
+porte un MAC récent calculé avec le secret de la passerelle (`src/admin/console-marker.ts`).
+Les appelants munis d'une clé API ne détiennent jamais ce secret, de sorte que seul un backend
+qui appelle le service directement peut en produire un — la plateforme développeur, qui décide
+si le compte connecté est owner ou admin. Il n'y a pas d'identifiant d'administration distinct.
+APISIX supprime aussi l'en-tête de tout ce qu'il relaie, mais c'est une défense en
+profondeur : une route qui oublie de le supprimer relaie une valeur qu'aucun client ne pourrait
+falsifier.
 
 Le pipeline :
 
@@ -454,7 +456,7 @@ Chaque requête entrante, à l'exception de `/v1/health` et `/docs`, est ajouté
 (`GET /v1/logs`). Les lignes incluent le chemin, le statut, la durée et — lorsqu'ils sont
 présents — l'`ip` / `userAgent` du payeur.
 
-Le trafic du tableau de bord (`X-Cosmos-Internal`) est **enregistré et marqué**
+Le trafic du tableau de bord (marqueur `X-Cosmos-Internal` vérifié) est **enregistré et marqué**
 (`request_log.internal`), et non ignoré, et la vue des journaux API filtre sur cette
 colonne ; aucun en-tête de requête ne peut donc tenir du trafic à l'écart du journal.
 
@@ -1684,6 +1686,13 @@ plugins isolés.
 
 ## Mise à niveau — changements incompatibles et notes de déploiement
 
+### `X-Cosmos-Internal` doit porter un MAC du secret de la passerelle
+
+- **Un `X-Cosmos-Internal: 1` nu est refusé.** `/v1/admin` y répond par `403 admin_console_only`, et l'appelant n'est plus traité comme interne nulle part : les limites de débit par consommateur s'appliquent à lui, et ses lignes du journal des requêtes ne sont pas marquées. L'en-tête porte désormais `v1.<unix seconds>.<hex>`, un HMAC-SHA256 calculé avec `APISIX_GATEWAY_SECRET` et accepté à cinq minutes près de l'horloge du serveur (`src/admin/console-marker.ts`).
+- **Les scripts d'exploitation qui appellent `/v1/admin` directement doivent produire le marqueur à chaque appel.** L'extrait `openssl` + `curl` à la fin de l'entrée `ADMIN_API_CREDENTIALS`, plus bas, le fait.
+- **Déployez le service et la plateforme développeur ensemble.** C'est désormais la console qui produit le marqueur. Une ancienne console face à ce service reçoit `403` sur chaque appel d'administration ; une nouvelle console face à un service plus ancien continue de fonctionner, car le service plus ancien admet toute valeur sauf `0`, `false`, `no` et `off`. Si les deux ne peuvent pas partir en même temps, déployez d'abord la plateforme développeur.
+- **Aucune nouvelle variable d'environnement.** Le MAC est calculé avec `APISIX_GATEWAY_SECRET`, que le service et la console partagent déjà.
+
 ### Connexion du portefeuille : les signataires d'un portefeuille récupéré suivent `STELLAR_NETWORK`
 
 - **`WALLET_AUTH_SIGNERS_HORIZON_URL` prend désormais par défaut le Horizon de `STELLAR_NETWORK`** (`STELLAR_HORIZON_URL_PUBLIC` / `STELLAR_HORIZON_URL_TESTNET`, sinon celui de SDF), et non plus toujours celui du réseau public. Il est lu quand un portefeuille récupéré via SEP-30 signe `POST /v1/wallet/auth/finish` avec la clé qui a remplacé sa clé maîtresse. Sur un déploiement testnet, la requête partait vers le mainnet, ne trouvait pas le compte, et la connexion de tout portefeuille récupéré répondait `400 wallet_signature_invalid`.
@@ -1952,6 +1961,7 @@ correctement ; consultez la colonne « Qui le remarque » avant de déployer.
 | `POST /v1/wallet/auth/finish` et `PUT /v1/wallet/backup` acceptent aussi une boîte de sauvegarde `v: 3` : la graine sous une clé de données aléatoire, et cette clé scellée une fois par porte dans `slots` (`kind: "password"` ou `kind: "passkey"`, 8 au plus). Toute porte mot de passe est soumise au même plancher PBKDF2 qu'une boîte `v: 2` ; une porte passkey n'a pas de coût, car sa clé est la sortie PRF WebAuthn de l'authentificateur. Les boîtes `v: 2` ne changent pas | Wallets : une sauvegarde uniquement par passkey est valide, et un wallet qui en a écrit une a besoin de ce serveur | Permet de restaurer avec une passkey au lieu de saisir le mot de passe d'origine, sans que ce service ne détienne jamais une clé qui ouvre la boîte |
 | `POST /v1/wallet/auth/oauth/authorize` accepte un `returnTo` facultatif. S’il figure dans `WALLET_AUTH_RETURN_URLS`, `GET /v1/wallet/auth/oauth/callback/{provider}` répond `302` vers lui avec `?state=…` (plus `&error=<reason>` en cas d’échec) au lieu d’afficher la page ; un `returnTo` non listé est `400 wallet_return_url_not_allowed`. Seul le `state` voyage — le handshake est toujours échangé avec le vérificateur PKCE. Exécutez d’abord la migration `20260927180000_wallet_auth_return_to` | Wallets natifs (bureau et mobile) : envoyer `returnTo` et enregistrer cette URL auprès du système | Une session d’authentification de la plateforme (`ASWebAuthenticationSession`, un Custom Tab, un deep link ou un listener loopback de bureau) ne se ferme que lorsque le navigateur atteint une URL propre à l’application : la personne restait donc sur la page et devait la fermer à la main |
 | `GET /v1/wallet/auth/providers` renvoie aussi `mfaSettingsUrl` : la page du compte Authentik où une personne ajoute ou retire un second facteur (clé de sécurité ou passkey, application d’authentification, codes de récupération), en passant par la connexion Authentik s’il n’y a pas de session ; `null` sans Authentik. Le second facteur est facultatif à la connexion du wallet : `deploy/authentik/wallet-sign-in.yaml` remet l’étape MFA sur *skip*, demande le facteur après le mot de passe à qui en a un, permet à une passkey de se connecter depuis l’écran du nom d’utilisateur et propose un choix après le mot de passe à qui n’en a pas (pas maintenant, une clé de sécurité, une application d’authentification). Il ajoute aussi Google / GitHub à la page d’inscription, au-dessus du formulaire. La connexion et l’inscription par mot de passe ne changent pas | Opérateurs avec Authentik : importer le blueprint. Wallets : proposer l’URL comme réglage | Un second facteur était soit imposé à tous, soit inaccessible : les utilisateurs du wallet n’ouvrent jamais les réglages d’Authentik, les flows de configuration refusent un navigateur sans session Authentik, et le bouton passwordless de l’étape d’identification pointait vers le même flow, si bien qu’il ne faisait que recharger la page |
+| `/v1/admin` exige que `X-Cosmos-Internal` porte un MAC récent calculé avec `APISIX_GATEWAY_SECRET` (`v1.<unix seconds>.<hex>`, à cinq minutes près) ; un `1` nu est `403 admin_console_only`, et seul un marqueur vérifié exempte un appelant des limites de débit par consommateur ou marque ses lignes du journal des requêtes | Les scripts d'exploitation qui appellent `/v1/admin` directement, et une plateforme développeur déployée sans ce changement | Toute valeur sauf `0`, `false`, `no` ou `off` comptait, donc une seule route APISIX qui oubliait de supprimer l'en-tête donnait à chaque clé API la surface d'administration inter-tenants, l'exemption de limites de débit et un moyen de cacher ses appels du journal des requêtes du tenant |
 
 Notes de déploiement associées :
 
@@ -2170,15 +2180,20 @@ qu'établissent deux éléments de la requête :
 1. `X-Gateway-Secret` correspond à `APISIX_GATEWAY_SECRET` — vérifié par `ApisixGuard`
    comme sur toutes les autres routes. Seuls la passerelle et le backend de la console le
    détiennent.
-2. `X-Cosmos-Internal` est présent. APISIX le supprime de chaque requête qu'il relaie
-   (`proxy-rewrite.headers.remove`), de sorte qu'un appelant muni d'une clé API ne peut pas le
-   porter ; seul un appel direct depuis un backend détenant le secret de la passerelle le peut.
+2. `X-Cosmos-Internal` est un marqueur de console : `v1.<unix seconds>.<hex>`, où
+   l'hex est `HMAC-SHA256(APISIX_GATEWAY_SECRET, "cosmos-admin-console:v1:" +
+   seconds)` et l'horodatage se situe à moins de cinq minutes de l'horloge du serveur. Un
+   appelant muni d'une clé API ne détient pas le secret de la passerelle, il ne peut donc pas
+   en produire un, même par une route qui a oublié de supprimer l'en-tête
+   (`proxy-rewrite.headers.remove`). C'est ce même indicateur vérifié qui exempte la console
+   des limites de débit par consommateur et marque ses lignes dans le journal des requêtes.
 
-Le point 2 dépend de la configuration de la route de la passerelle dans le dépôt de la
-plateforme développeur, et non d'un secret détenu par ce service. En contrepartie, la console
-est le seul endroit qui décide qui est administrateur de la plateforme, et les lignes d'audit
-nomment le compte de la console qui a agi (`cosmos_<userId>`) et son rôle de plateforme, pour
-chaque mutation **et** chaque lecture.
+Un `X-Cosmos-Internal: 1` nu — ce qu'envoyait la console auparavant — est refusé comme
+n'importe quelle autre falsification, donc le service et la plateforme développeur se déploient
+ensemble. Les deux dépôts figent le même vecteur de test pour le marqueur. La console est le
+seul endroit qui décide qui est administrateur de la plateforme, et les lignes d'audit nomment
+le compte de la console qui a agi (`cosmos_<userId>`) et son rôle de plateforme, pour chaque
+mutation **et** chaque lecture.
 
 Ce que cela change pour un appelant :
 
@@ -2189,9 +2204,15 @@ Ce que cela change pour un appelant :
 | `actorId` / `actorRole` sur une ligne d'audit nommaient l'identifiant | ils nomment le compte de la console et son rôle de plateforme |
 
 Pour appeler `/v1/admin` directement (depuis un script d'exploitation, par exemple), envoyez
-`X-Gateway-Secret`, `X-Consumer-Username` et `X-Cosmos-Internal: 1` ; ajoutez
-`X-Cosmos-Admin-Role: owner` pour étiqueter la ligne d'audit. Gardez le service hors de
-l'internet public.
+`X-Gateway-Secret`, `X-Consumer-Username` et un `X-Cosmos-Internal` fraîchement produit ;
+ajoutez `X-Cosmos-Admin-Role: owner` pour étiqueter la ligne d'audit. Gardez le service hors
+de l'internet public.
+
+```sh
+TS=$(date +%s)
+MAC=$(printf 'cosmos-admin-console:v1:%s' "$TS" | openssl dgst -sha256 -hmac "$APISIX_GATEWAY_SECRET" -r | cut -d' ' -f1)
+curl -H "X-Gateway-Secret: $APISIX_GATEWAY_SECRET" -H "X-Consumer-Username: ops" -H "X-Cosmos-Internal: v1.$TS.$MAC" http://localhost:3000/v1/admin/summary
+```
 
 ### `APISIX_GATEWAY_SECRET` exige désormais 32 caractères
 
@@ -2430,10 +2451,12 @@ sur ce comportement.
 > **La liste de suppression est un contrôle de sécurité, et elle ne peut pas être vérifiée
 > depuis ce dépôt.** Ce service accepte tel quel chaque en-tête qu'elle contient ;
 > `X-Gateway-Secret` prouve seulement que la requête est passée par une passerelle, pas que
-> ces valeurs sont honnêtes. Relisez la liste chaque fois qu'une route est ajoutée ou copiée —
-> une route qui ne supprime pas `X-Cosmos-Internal` donne à chaque clé API l'accès à
-> `/v1/admin`. Gardez le service sur un réseau privé afin qu'APISIX soit le seul point
-> d'entrée ; le secret partagé est une seconde couche, pas la seule.
+> ces valeurs sont honnêtes. Relisez la liste chaque fois qu'une route est ajoutée ou copiée.
+> `X-Cosmos-Internal` n'en dépend plus — le service vérifie un MAC calculé avec le secret de
+> la passerelle —, mais chaque en-tête `X-Consumer-*` en dépend toujours, et une route qui
+> relaie la copie d'un client lui permet de nommer n'importe quel consommateur. Gardez le
+> service sur un réseau privé afin qu'APISIX soit le seul point d'entrée ; le secret partagé
+> est une seconde couche, pas la seule.
 >
 > En production, un `X-Plan-Swap-Fee-Bps` absent renvoie `503` au lieu de se rabattre sur la
 > valeur par défaut de l'environnement.

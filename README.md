@@ -34,12 +34,13 @@ hits directly). Enforcement is always on — there is no opt-out flag. For local
 development, run behind APISIX or send `X-Gateway-Secret` + the `X-Consumer-*`
 headers yourself.
 
-`/v1/admin` is cross-tenant, so `AdminGuard` also requires `X-Cosmos-Internal`.
-APISIX **removes** that header from everything it proxies, so only a backend
-calling the service directly with the gateway secret can send it — the developer
-platform, which decides whether the signed-in account is an owner or admin. There
-is no separate admin credential: the gateway secret, network isolation and the
-header remove list in the gateway route are what protect cross-tenant data.
+`/v1/admin` is cross-tenant, so `AdminGuard` also requires `X-Cosmos-Internal`
+to carry a fresh MAC keyed by the gateway secret (`src/admin/console-marker.ts`).
+API-key callers never hold that secret, so only a backend calling the service
+directly can mint one — the developer platform, which decides whether the
+signed-in account is an owner or admin. There is no separate admin credential.
+APISIX also removes the header from everything it proxies, but that is defence in
+depth: a route that forgets to strip it forwards a value no client could forge.
 
 The pipeline:
 
@@ -450,7 +451,7 @@ Every inbound request except `/v1/health` and `/docs` is appended to
 view (`GET /v1/logs`). Rows include path, status, duration, and — when present —
 the payer's `ip` / `userAgent`.
 
-Dashboard traffic (`X-Cosmos-Internal`) is **recorded and flagged**
+Dashboard traffic (a verified `X-Cosmos-Internal` marker) is **recorded and flagged**
 (`request_log.internal`), not skipped, and the API-log view filters on that
 column, so no request header can keep traffic out of the log.
 
@@ -1638,6 +1639,13 @@ the service under `src/native-plugins/<slug>/`, switched on by the same
 
 ## Upgrading — breaking changes and deploy notes
 
+### `X-Cosmos-Internal` must carry a gateway-secret MAC
+
+- **A bare `X-Cosmos-Internal: 1` is refused.** `/v1/admin` answers it with `403 admin_console_only`, and the caller is no longer treated as internal anywhere: it gets the per-consumer rate limits, and its request-log rows are not flagged. The header now carries `v1.<unix seconds>.<hex>`, an HMAC-SHA256 keyed by `APISIX_GATEWAY_SECRET` and accepted within five minutes of the server's clock (`src/admin/console-marker.ts`).
+- **Ops scripts that call `/v1/admin` directly must mint the marker on every call.** The `openssl` + `curl` snippet at the end of the `ADMIN_API_CREDENTIALS` entry below does it.
+- **Deploy the service and the developer platform together.** The console now mints the marker. An old console against this service gets `403` on every admin call; a new console against an older service keeps working, because the older service admits any value but `0`, `false`, `no` and `off`. If the two cannot land at once, deploy the developer platform first.
+- **No new environment variable.** The MAC is keyed by `APISIX_GATEWAY_SECRET`, which the service and the console already share.
+
 ### Wallet sign-in: a recovered wallet's signers follow `STELLAR_NETWORK`
 
 - **`WALLET_AUTH_SIGNERS_HORIZON_URL` now defaults to `STELLAR_NETWORK`'s Horizon** (`STELLAR_HORIZON_URL_PUBLIC` / `STELLAR_HORIZON_URL_TESTNET`, else SDF's), not always the public network's. It is read when a wallet recovered through SEP-30 signs `POST /v1/wallet/auth/finish` with the key that replaced its master. On a testnet deployment the lookup went to mainnet, found no account, and every recovered wallet's sign-in answered `400 wallet_signature_invalid`.
@@ -1884,6 +1892,7 @@ column before deploying.
 | `POST /v1/wallet/auth/finish` and `PUT /v1/wallet/backup` also accept a `v: 3` backup box: the seed under a random data key, and that key sealed once per door in `slots` (`kind: "password"` or `kind: "passkey"`, at most 8). Every password door is held to the same PBKDF2 floor a `v: 2` box is; a passkey door has no cost, because its key is the authenticator's WebAuthn PRF output. `v: 2` boxes are unchanged | Wallets: a passkey-only backup is valid, and a wallet that wrote one needs this server | Lets a person restore with a passkey instead of typing the original password, without this service ever holding a key that opens the box |
 | `POST /v1/wallet/auth/oauth/authorize` accepts an optional `returnTo`. When it is listed in `WALLET_AUTH_RETURN_URLS`, `GET /v1/wallet/auth/oauth/callback/{provider}` answers `302` to it with `?state=…` (plus `&error=<reason>` on failure) instead of rendering the page; one that is not listed is `400 wallet_return_url_not_allowed`. Only the `state` travels — the handshake is still redeemed with the PKCE verifier. Run migration `20260927180000_wallet_auth_return_to` first | Native wallets (desktop and mobile): send `returnTo` and register that URL with the OS | A platform auth session (`ASWebAuthenticationSession`, a Custom Tab, a desktop deep link or loopback listener) closes only when the browser reaches the app's own URL, so the person was left on the page and had to dismiss it by hand |
 | `GET /v1/wallet/auth/providers` also returns `mfaSettingsUrl`: the page of a person's Authentik account where they add or remove a second factor (security key or passkey, authenticator app, recovery codes), through the Authentik login when there is no session; `null` without Authentik. A second factor is optional on the wallet sign-in — `deploy/authentik/wallet-sign-in.yaml` sets the MFA stage back to *skip*, asks whoever has a factor for it after the password, lets a passkey sign in from the username screen, and offers whoever has none a choice after the password (not now, a security key, an authenticator app). It also adds Google / GitHub to the sign-up page above its form. Signing in and signing up with a password are unchanged | Operators running Authentik: import the blueprint. Wallets: offer the URL as a setting | A second factor was either forced on everyone or unreachable: the wallet's users never visit Authentik's own settings, the setup flows refuse a browser with no Authentik session, and the identification stage's passwordless button pointed at the same flow, so it only reloaded the page |
+| `/v1/admin` requires `X-Cosmos-Internal` to carry a fresh MAC keyed by `APISIX_GATEWAY_SECRET` (`v1.<unix seconds>.<hex>`, within five minutes); a bare `1` is `403 admin_console_only`, and only a verified marker exempts a caller from per-consumer rate limits or flags its request-log rows | Ops scripts calling `/v1/admin` directly, and a developer platform deployed without this change | Any value but `0`, `false`, `no` or `off` counted, so one APISIX route that forgot to strip the header handed every API key the cross-tenant admin surface, the rate-limit exemption and a way to hide its calls from the tenant's request log |
 
 Deploy notes that come with it:
 
@@ -2091,12 +2100,17 @@ it comes from the platform console, which two things on the request establish:
 
 1. `X-Gateway-Secret` matches `APISIX_GATEWAY_SECRET` — checked by `ApisixGuard`
    as on every other route. Only the gateway and the console backend hold it.
-2. `X-Cosmos-Internal` is present. APISIX strips it from every request it
-   proxies (`proxy-rewrite.headers.remove`), so an API-key caller cannot carry
-   it; only a direct call from a backend holding the gateway secret can.
+2. `X-Cosmos-Internal` is a console marker: `v1.<unix seconds>.<hex>`, where
+   the hex is `HMAC-SHA256(APISIX_GATEWAY_SECRET, "cosmos-admin-console:v1:" +
+   seconds)` and the timestamp is within five minutes of the server's clock.
+   An API-key caller holds no gateway secret, so it cannot mint one even through
+   a route that forgot to strip the header (`proxy-rewrite.headers.remove`).
+   The same verified flag is what exempts the console from per-consumer rate
+   limits and flags its request-log rows.
 
-Point 2 depends on the gateway route configuration in the developer-platform
-repo, not on a secret held by this service. In exchange, the console is the only
+A bare `X-Cosmos-Internal: 1` — what the console sent before — is refused like
+any other forgery, so the service and the developer platform deploy together.
+Both repositories pin the same test vector for the marker. The console is the only
 place that decides who is a platform admin, and audit rows name the console
 account that acted (`cosmos_<userId>`) and its platform role, on every mutation
 **and** every read.
@@ -2110,9 +2124,15 @@ What this changes for a caller:
 | `actorId` / `actorRole` on an audit row named the credential | they name the console account and its platform role |
 
 To call `/v1/admin` directly (from an ops script, for example), send
-`X-Gateway-Secret`, `X-Consumer-Username` and `X-Cosmos-Internal: 1`; add
-`X-Cosmos-Admin-Role: owner` to label the audit row. Keep the service off the
-public internet.
+`X-Gateway-Secret`, `X-Consumer-Username` and a freshly minted
+`X-Cosmos-Internal`; add `X-Cosmos-Admin-Role: owner` to label the audit row.
+Keep the service off the public internet.
+
+```sh
+TS=$(date +%s)
+MAC=$(printf 'cosmos-admin-console:v1:%s' "$TS" | openssl dgst -sha256 -hmac "$APISIX_GATEWAY_SECRET" -r | cut -d' ' -f1)
+curl -H "X-Gateway-Secret: $APISIX_GATEWAY_SECRET" -H "X-Consumer-Username: ops" -H "X-Cosmos-Internal: v1.$TS.$MAC" http://localhost:3000/v1/admin/summary
+```
 
 ### `APISIX_GATEWAY_SECRET` now requires 32 characters
 
@@ -2350,9 +2370,10 @@ guard relies on that.
 > **The remove list is a security control, and it cannot be verified from this
 > repository.** This service accepts every header in it at face value;
 > `X-Gateway-Secret` only proves the request came through a gateway, not that
-> those values are honest. Review the list whenever a route is added or copied —
-> a route that does not strip `X-Cosmos-Internal` gives every API key access to
-> `/v1/admin`. Keep the service on a private network so APISIX is the only way
+> those values are honest. Review the list whenever a route is added or copied.
+> `X-Cosmos-Internal` no longer depends on it — the service verifies a MAC keyed
+> by the gateway secret — but every `X-Consumer-*` header still does, and a route
+> that forwards a client's copy lets it name any consumer. Keep the service on a private network so APISIX is the only way
 > in; the shared secret is a second layer, not the only one.
 >
 > In production, a missing `X-Plan-Swap-Fee-Bps` returns `503` instead of falling
