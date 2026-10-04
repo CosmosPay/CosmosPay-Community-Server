@@ -2,6 +2,27 @@
 
 All notable changes to the Cosmos Pay Community Server are documented here.
 Generated from [Conventional Commits](https://www.conventionalcommits.org) by [git-cliff](https://git-cliff.org).
+## [1.5.0] - 2026-10-04
+
+### Features
+- Implement plugin architecture with controller, module, and SDK (9f0a323)
+- Implement plugin sandboxing with isolated-vm for enhanced security (09ebd25)
+- Implement Defindex module, service, and DTOs (ee8e0a5)
+- Enhance multi-chain support with address validation and signature handling (a28e0f0)
+- Add EVM deposit address handling and forwarding logic (2e4edca)
+- Implement public key retrieval endpoint with caching (42cc2ec)
+- Remove ConsoleOnlyGuard implementation and tests (bde1801)
+- Implement alias recovery email functionality (1af3929)
+- Implement at-rest encryption for wallet backups using AES-256-GCM (1a516d7)
+- Add Solana and Monad swap venues with comprehensive tests (4d27fd2)
+- Add endpoints and functionality for chain swaps and cross-chain swaps in admin service (0d1f22d)
+- Implement recovery shares functionality (9d7bfe8)
+- Enable running multiple local instances with shared configuration (2da2a41)
+- Support multiple ledgers in recovery service (c2c369a)
+
+### Dependencies
+- Apply Dependabot minor-and-patch bumps and patch fast-uri (95eadcb)
+
 ## [1.4.0] - 2026-09-27
 
 ### Features
