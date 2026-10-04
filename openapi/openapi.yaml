@@ -13753,12 +13753,17 @@ components:
         date_of_birth:
           type: string
           example: 1985-04-12T00:00:00.000Z
+          format: date-time
+          description: ISO 8601 date-time with an offset (BlindPay rejects date-only
+            values).
         tax_id:
           type: string
           example: 123-45-6789
         country:
           type: string
           example: US
+          pattern: ^[A-Z]{2}$
+          description: ISO 3166-1 alpha-2 country code, upper case
         address_line_1:
           type: string
           example: 123 Main St
@@ -13776,6 +13781,8 @@ components:
         ownership_percentage:
           type: number
           example: 25.5
+          minimum: 0
+          maximum: 100
           description: Ownership percentage
         title:
           type: string
@@ -13783,6 +13790,8 @@ components:
         id_doc_country:
           type: string
           example: US
+          pattern: ^[A-Z]{2}$
+          description: ISO 3166-1 alpha-2 country code, upper case
         id_doc_type:
           type: string
           example: PASSPORT
@@ -13822,7 +13831,8 @@ components:
         country:
           type: string
           example: US
-          description: ISO 3166-1 alpha-2 country code
+          pattern: ^[A-Z]{2}$
+          description: ISO 3166-1 alpha-2 country code, upper case
         first_name:
           type: string
           example: Jane
@@ -13832,7 +13842,9 @@ components:
         date_of_birth:
           type: string
           example: 1985-04-12T00:00:00.000Z
-          description: ISO 8601 datetime (BlindPay rejects date-only values).
+          format: date-time
+          description: ISO 8601 date-time with an offset (BlindPay rejects date-only
+            values).
         tax_id:
           type: string
           example: 123-45-6789
@@ -13842,6 +13854,8 @@ components:
         id_doc_country:
           type: string
           example: US
+          pattern: ^[A-Z]{2}$
+          description: ISO 3166-1 alpha-2 country code, upper case
         id_doc_type:
           type: string
           example: PASSPORT
@@ -13898,6 +13912,9 @@ components:
         formation_date:
           type: string
           example: 2015-01-01T00:00:00.000Z
+          format: date-time
+          description: ISO 8601 date-time with an offset (BlindPay rejects date-only
+            values).
         estimated_annual_revenue:
           type: string
           example: 1000000_4999999
@@ -13907,6 +13924,8 @@ components:
         website:
           type: string
           example: https://acme.com
+          description: Absolute http(s) URL, without credentials.
+          maxLength: 2048
         incorporation_doc_file:
           type: string
         proof_of_ownership_doc_file:
@@ -14151,7 +14170,8 @@ components:
         country:
           type: string
           example: US
-          description: ISO 3166-1 alpha-2 country code
+          pattern: ^[A-Z]{2}$
+          description: ISO 3166-1 alpha-2 country code, upper case
         first_name:
           type: string
           example: Jane
@@ -14161,7 +14181,9 @@ components:
         date_of_birth:
           type: string
           example: 1985-04-12T00:00:00.000Z
-          description: ISO 8601 datetime (BlindPay rejects date-only values).
+          format: date-time
+          description: ISO 8601 date-time with an offset (BlindPay rejects date-only
+            values).
         tax_id:
           type: string
           example: 123-45-6789
@@ -14171,6 +14193,8 @@ components:
         id_doc_country:
           type: string
           example: US
+          pattern: ^[A-Z]{2}$
+          description: ISO 3166-1 alpha-2 country code, upper case
         id_doc_type:
           type: string
           example: PASSPORT
@@ -14227,6 +14251,9 @@ components:
         formation_date:
           type: string
           example: 2015-01-01T00:00:00.000Z
+          format: date-time
+          description: ISO 8601 date-time with an offset (BlindPay rejects date-only
+            values).
         estimated_annual_revenue:
           type: string
           example: 1000000_4999999
@@ -14236,6 +14263,8 @@ components:
         website:
           type: string
           example: https://acme.com
+          description: Absolute http(s) URL, without credentials.
+          maxLength: 2048
         incorporation_doc_file:
           type: string
         proof_of_ownership_doc_file:
