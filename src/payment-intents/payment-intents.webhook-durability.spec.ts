@@ -71,6 +71,8 @@ describe('payment intent terminal webhooks are durable', () => {
         }),
       },
       paymentIntentTransition: { create: jest.fn(async () => ({})) },
+      // The settled hash's claim, written with the status change.
+      paymentSettlement: { create: jest.fn(async () => ({})) },
       webhookEmittedEvent: { create: jest.fn(async () => ({})) },
       webhookDelivery: {
         create: jest.fn(async ({ data }: any) => ({

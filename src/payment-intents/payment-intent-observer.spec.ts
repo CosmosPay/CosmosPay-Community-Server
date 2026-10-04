@@ -208,6 +208,47 @@ describe('PaymentIntentObserverService.tick', () => {
     );
   });
 
+  /**
+   * A payment that already settled another intent — another consumer copied
+   * this one's destination, amount and memo, or the other way round — does not
+   * pay this one. Nothing failed: the intent stays PENDING for the next scan,
+   * and the expiry pass finalizes it like any unpaid intent.
+   */
+  it('leaves an intent PENDING, with a warning, when its match already settled another intent', async () => {
+    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation();
+    const error = jest.spyOn(Logger.prototype, 'error').mockImplementation();
+    const prisma = makePrisma(pendingIntents(1));
+    const verifier = {
+      findMatchingPayment: jest
+        .fn()
+        .mockResolvedValue({ valid: true, txHash: 'a'.repeat(64) }),
+    };
+    const paymentIntents = {
+      markSucceeded: jest
+        .fn()
+        .mockRejectedValue(
+          ApiError.conflict(
+            ApiErrorCode.TransactionAlreadySettled,
+            'This transaction has already settled a payment intent.',
+          ),
+        ),
+      markExpired: jest.fn(),
+    };
+    const observer = new PaymentIntentObserverService(
+      config,
+      prisma,
+      verifiersOf(verifier),
+      paymentIntents as any,
+      grantingLock(),
+    );
+
+    await observer.tick();
+
+    expect(paymentIntents.markExpired).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('pi_1'));
+    expect(error).not.toHaveBeenCalled();
+  });
+
   it('keeps where a block scan stopped, so the next tick resumes there (Monad)', async () => {
     const prisma = makePrisma(
       pendingIntents(1).map((i) => ({ ...i, chain: 'monad' })),
@@ -546,6 +587,31 @@ describe('PaymentIntentObserverService.tick', () => {
           ApiErrorCode.IdempotencyConflict,
           'This transaction hash is already recorded on another of your ' +
             'payment intents. A transaction settles at most one of them.',
+        ),
+      );
+      const verifier = {
+        findMatchingPayment: jest.fn().mockResolvedValue({
+          valid: true,
+          txHash: 'b'.repeat(64),
+        }),
+      };
+
+      await tickOver([lapsedIntent()], verifier, paymentIntents);
+
+      expect(paymentIntents.markExpired).toHaveBeenCalledWith(
+        'pi_lapsed',
+        'cosmos_u1',
+      );
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('pi_lapsed'));
+    });
+
+    it('expires, as unpaid, an intent whose match already settled another intent', async () => {
+      const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation();
+      const paymentIntents = paymentIntentsMock();
+      paymentIntents.markSucceeded.mockRejectedValue(
+        ApiError.conflict(
+          ApiErrorCode.TransactionAlreadySettled,
+          'This transaction has already settled a payment intent.',
         ),
       );
       const verifier = {
