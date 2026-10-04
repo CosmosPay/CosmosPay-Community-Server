@@ -7,6 +7,7 @@ import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { AppModule } from '@/app.module';
 import { AdminService } from '@/admin/admin.service';
+import { signConsoleMarker } from '@/admin/console-marker';
 import { BlindpayAdminService } from '@/native-plugins/blindpay/admin/blindpay-admin.service';
 import { PrismaService } from '@/prisma/prisma.service';
 
@@ -14,8 +15,8 @@ import { PrismaService } from '@/prisma/prisma.service';
  * Platform-admin auth + audit.
  *
  * The gate is "did this call come from the platform console?" — the gateway
- * secret (ApisixGuard) plus the internal marker APISIX strips from everything it
- * proxies. There is no admin secret to deploy: an owner who can change another
+ * secret (ApisixGuard) plus the internal marker, a fresh MAC keyed by that same
+ * secret. There is no admin secret to deploy: an owner who can change another
  * account's plan and role in the console can also read and act here, which is
  * exactly what a second credential kept breaking.
  *
@@ -187,7 +188,13 @@ describe('Admin auth & audit (e2e)', () => {
   /** The platform console, acting for a signed-in owner. */
   const asConsole = (r: request.Test) =>
     gateway(r)
-      .set('x-cosmos-internal', '1')
+      .set(
+        'x-cosmos-internal',
+        signConsoleMarker(
+          'topsecret-topsecret-topsecret-topsecret',
+          Date.now(),
+        ),
+      )
       .set('x-cosmos-admin-role', 'owner');
 
   const mutators: Array<{
@@ -230,6 +237,12 @@ describe('Admin auth & audit (e2e)', () => {
   it('rejects legacy plaintext X-Cosmos-Admin: 1 with 403', async () => {
     await gateway(request(http()).get(`${base}/summary`))
       .set('x-cosmos-admin', '1')
+      .expect(403);
+  });
+
+  it('rejects the bare X-Cosmos-Internal: 1 a misrouted request could carry', async () => {
+    await gateway(request(http()).get(`${base}/summary`))
+      .set('x-cosmos-internal', '1')
       .expect(403);
   });
 

@@ -4,9 +4,11 @@ import {
   Injectable,
   Logger,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { Request } from 'express';
 import { resolveAdminPrincipal } from '@/admin/admin-auth';
+import { AppConfig } from '@/config/configuration';
 import {
   ADMIN_ACTOR_ROLE_HEADER,
   ADMIN_INTERNAL_HEADER,
@@ -17,8 +19,8 @@ import {
  *
  * ApisixGuard already proved the request carries the gateway secret and an
  * authenticated consumer. This guard adds the one fact that separates the
- * platform console from an API-key caller: the internal marker APISIX strips
- * from everything it proxies. Whether the human behind the console may be here
+ * platform console from an API-key caller: the internal marker, a fresh MAC
+ * keyed by the gateway secret that no API-key caller holds. Whether the human behind the console may be here
  * was decided there, against their account role — the same check that gates the
  * plan/role screens — so there is no second credential to deploy and no way for
  * the two answers to disagree. See {@link resolveAdminPrincipal} for the full
@@ -32,6 +34,8 @@ import {
 export class AdminGuard implements CanActivate {
   private readonly logger = new Logger(AdminGuard.name);
 
+  constructor(private readonly config: ConfigService<AppConfig, true>) {}
+
   canActivate(context: ExecutionContext): boolean {
     const request = context.switchToHttp().getRequest<Request>();
 
@@ -44,6 +48,7 @@ export class AdminGuard implements CanActivate {
 
     const principal = resolveAdminPrincipal({
       internal: headers[ADMIN_INTERNAL_HEADER],
+      gatewaySecret: this.config.get('apisix', { infer: true }).gatewaySecret,
       actorRole: headers[ADMIN_ACTOR_ROLE_HEADER],
       consumer: request.gatewayConsumer?.username,
     });

@@ -34,12 +34,13 @@ hits directly). Enforcement is always on — there is no opt-out flag. For local
 development, run behind APISIX or send `X-Gateway-Secret` + the `X-Consumer-*`
 headers yourself.
 
-`/v1/admin` is cross-tenant, so `AdminGuard` also requires `X-Cosmos-Internal`.
-APISIX **removes** that header from everything it proxies, so only a backend
-calling the service directly with the gateway secret can send it — the developer
-platform, which decides whether the signed-in account is an owner or admin. There
-is no separate admin credential: the gateway secret, network isolation and the
-header remove list in the gateway route are what protect cross-tenant data.
+`/v1/admin` is cross-tenant, so `AdminGuard` also requires `X-Cosmos-Internal`
+to carry a fresh MAC keyed by the gateway secret (`src/admin/console-marker.ts`).
+API-key callers never hold that secret, so only a backend calling the service
+directly can mint one — the developer platform, which decides whether the
+signed-in account is an owner or admin. There is no separate admin credential.
+APISIX also removes the header from everything it proxies, but that is defence in
+depth: a route that forgets to strip it forwards a value no client could forge.
 
 The pipeline:
 
@@ -2091,12 +2092,17 @@ it comes from the platform console, which two things on the request establish:
 
 1. `X-Gateway-Secret` matches `APISIX_GATEWAY_SECRET` — checked by `ApisixGuard`
    as on every other route. Only the gateway and the console backend hold it.
-2. `X-Cosmos-Internal` is present. APISIX strips it from every request it
-   proxies (`proxy-rewrite.headers.remove`), so an API-key caller cannot carry
-   it; only a direct call from a backend holding the gateway secret can.
+2. `X-Cosmos-Internal` is a console marker: `v1.<unix seconds>.<hex>`, where
+   the hex is `HMAC-SHA256(APISIX_GATEWAY_SECRET, "cosmos-admin-console:v1:" +
+   seconds)` and the timestamp is within five minutes of the server's clock.
+   An API-key caller holds no gateway secret, so it cannot mint one even through
+   a route that forgot to strip the header (`proxy-rewrite.headers.remove`).
+   The same verified flag is what exempts the console from per-consumer rate
+   limits and flags its request-log rows.
 
-Point 2 depends on the gateway route configuration in the developer-platform
-repo, not on a secret held by this service. In exchange, the console is the only
+A bare `X-Cosmos-Internal: 1` — what the console sent before — is refused like
+any other forgery, so the service and the developer platform deploy together.
+Both repositories pin the same test vector for the marker. The console is the only
 place that decides who is a platform admin, and audit rows name the console
 account that acted (`cosmos_<userId>`) and its platform role, on every mutation
 **and** every read.
@@ -2110,9 +2116,15 @@ What this changes for a caller:
 | `actorId` / `actorRole` on an audit row named the credential | they name the console account and its platform role |
 
 To call `/v1/admin` directly (from an ops script, for example), send
-`X-Gateway-Secret`, `X-Consumer-Username` and `X-Cosmos-Internal: 1`; add
-`X-Cosmos-Admin-Role: owner` to label the audit row. Keep the service off the
-public internet.
+`X-Gateway-Secret`, `X-Consumer-Username` and a freshly minted
+`X-Cosmos-Internal`; add `X-Cosmos-Admin-Role: owner` to label the audit row.
+Keep the service off the public internet.
+
+```sh
+TS=$(date +%s)
+MAC=$(printf 'cosmos-admin-console:v1:%s' "$TS"   | openssl dgst -sha256 -hmac "$APISIX_GATEWAY_SECRET" -r | cut -d' ' -f1)
+curl -H "X-Gateway-Secret: $APISIX_GATEWAY_SECRET"      -H "X-Consumer-Username: ops"      -H "X-Cosmos-Internal: v1.$TS.$MAC"      http://localhost:3000/v1/admin/summary
+```
 
 ### `APISIX_GATEWAY_SECRET` now requires 32 characters
 
@@ -2350,9 +2362,10 @@ guard relies on that.
 > **The remove list is a security control, and it cannot be verified from this
 > repository.** This service accepts every header in it at face value;
 > `X-Gateway-Secret` only proves the request came through a gateway, not that
-> those values are honest. Review the list whenever a route is added or copied —
-> a route that does not strip `X-Cosmos-Internal` gives every API key access to
-> `/v1/admin`. Keep the service on a private network so APISIX is the only way
+> those values are honest. Review the list whenever a route is added or copied.
+> `X-Cosmos-Internal` no longer depends on it — the service verifies a MAC keyed
+> by the gateway secret — but every `X-Consumer-*` header still does, and a route
+> that forwards a client's copy lets it name any consumer. Keep the service on a private network so APISIX is the only way
 > in; the shared secret is a second layer, not the only one.
 >
 > In production, a missing `X-Plan-Swap-Fee-Bps` returns `503` instead of falling
