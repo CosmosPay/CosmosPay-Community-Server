@@ -29,6 +29,7 @@ describe('Payment intent transitions (e2e)', () => {
 
   const store = new Map<string, any>();
   const transitions: any[] = [];
+  const settlements = new Set<string>();
   let seq = 0;
 
   const rateLimitCounters = new Map<string, number>();
@@ -119,10 +120,29 @@ describe('Payment intent transitions (e2e)', () => {
         store.set(where.id, next);
         return Promise.resolve({ count: 1 });
       }),
-      delete: jest.fn(({ where }: any) => {
+      // DELETE is a compare-and-swap on the status it read.
+      deleteMany: jest.fn(({ where }: any) => {
         const row = store.get(where.id);
+        if (!row || (where.status && row.status !== where.status)) {
+          return Promise.resolve({ count: 0 });
+        }
         store.delete(where.id);
-        return Promise.resolve(row);
+        return Promise.resolve({ count: 1 });
+      }),
+    },
+    // The settled hash's claim: one per (chain, network, txHash).
+    paymentSettlement: {
+      create: jest.fn(({ data }: any) => {
+        const key = `${data.chain}|${data.network}|${data.txHash}`;
+        if (settlements.has(key)) {
+          return Promise.reject(
+            Object.assign(new Error('Unique constraint failed'), {
+              code: 'P2002',
+            }),
+          );
+        }
+        settlements.add(key);
+        return Promise.resolve(data);
       }),
     },
     paymentIntentTransition: {

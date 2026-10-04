@@ -1165,6 +1165,12 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
 
 ## 升级 — 破坏性变更与部署说明
 
+### Payment intents：一笔交易只结算一个 intent，跨所有 tenant
+
+- **迁移 `20261006120000_payment_settlement`** 新增 `payment_settlement` 表，并从每个 SUCCEEDED intent 回填。若同一哈希已结算多个 intent，则最早的那个保留占用；迁移文件中附有列出其余 intent 以供核查的查询。
+- **已经结算过某个 payment intent（无论属于哪个 consumer）的交易，不再结算其他 intent。** `POST /v1/payment-intents/{id}/validate` 以及带 `status: SUCCEEDED` 的 `PATCH /v1/payment-intents/{id}` 返回 `409 transaction_already_settled`，intent 保持原状。目标地址不绑定 consumer，memo 由调用方自选，因此另一个 tenant（或共享公钥下的任何调用方）可以逐项复制一个 intent，并被其付款人的交易结算。observer 将这种匹配视为未付款：intent 保持 PENDING，并以未付款状态过期。
+- **`DELETE /v1/payment-intents/{id}` 返回 `409 operation_in_flight`**：当 intent 的状态在读取与删除之间发生变化时（通常是刚刚被支付）。此前它仍会被删除。
+
 ### 钱包登录：已恢复钱包的签名者跟随 `STELLAR_NETWORK`
 
 - **`WALLET_AUTH_SIGNERS_HORIZON_URL` 现在默认使用 `STELLAR_NETWORK` 对应的 Horizon**（`STELLAR_HORIZON_URL_PUBLIC` / `STELLAR_HORIZON_URL_TESTNET`，否则使用 SDF 的），而不再总是公共网络的。当通过 SEP-30 恢复的钱包用替换其主密钥的那把密钥签署 `POST /v1/wallet/auth/finish` 时会读取它。在 testnet 部署上，查询原本发往主网，找不到账户，于是每个已恢复钱包的登录都返回 `400 wallet_signature_invalid`。

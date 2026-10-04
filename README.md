@@ -1638,6 +1638,12 @@ the service under `src/native-plugins/<slug>/`, switched on by the same
 
 ## Upgrading — breaking changes and deploy notes
 
+### Payment intents: one transaction settles one intent, across every tenant
+
+- **Migration `20261006120000_payment_settlement`** adds `payment_settlement` and backfills it from every SUCCEEDED intent. Where one hash already settled several intents, the earliest keeps the claim; the migration file carries the query that lists the others for review.
+- **A transaction that already settled a payment intent — any consumer's — no longer settles another.** `POST /v1/payment-intents/{id}/validate` and `PATCH /v1/payment-intents/{id}` with `status: SUCCEEDED` answer `409 transaction_already_settled` and leave the intent as it was. The destination is not bound to a consumer and the memo is the caller's to choose, so another tenant — or any caller under the shared public key — could copy an intent term for term and be settled by its payer's transaction. The observer treats such a match as no payment: the intent stays PENDING and expires unpaid.
+- **`DELETE /v1/payment-intents/{id}` answers `409 operation_in_flight`** when the intent's status changes between its read and the delete, typically because it was just paid. It used to delete it anyway.
+
 ### Wallet sign-in: a recovered wallet's signers follow `STELLAR_NETWORK`
 
 - **`WALLET_AUTH_SIGNERS_HORIZON_URL` now defaults to `STELLAR_NETWORK`'s Horizon** (`STELLAR_HORIZON_URL_PUBLIC` / `STELLAR_HORIZON_URL_TESTNET`, else SDF's), not always the public network's. It is read when a wallet recovered through SEP-30 signs `POST /v1/wallet/auth/finish` with the key that replaced its master. On a testnet deployment the lookup went to mainnet, found no account, and every recovered wallet's sign-in answered `400 wallet_signature_invalid`.

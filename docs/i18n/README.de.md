@@ -1716,6 +1716,12 @@ eingeschaltet werden.
 
 ## Upgrade — Breaking Changes und Deploy-Hinweise
 
+### Payment Intents: eine Transaktion begleicht einen Intent, über alle Tenants hinweg
+
+- **Die Migration `20261006120000_payment_settlement`** legt `payment_settlement` an und füllt sie aus jedem SUCCEEDED-Intent. Wo ein Hash bereits mehrere Intents beglichen hat, behält der früheste den Anspruch; die Migrationsdatei enthält die Abfrage, die die übrigen zur Prüfung auflistet.
+- **Eine Transaktion, die bereits einen Payment Intent — gleich welchen Consumers — beglichen hat, begleicht keinen weiteren mehr.** `POST /v1/payment-intents/{id}/validate` und `PATCH /v1/payment-intents/{id}` mit `status: SUCCEEDED` antworten `409 transaction_already_settled` und lassen den Intent unverändert. Das Ziel ist an keinen Consumer gebunden und das Memo wählt der Aufrufer, also konnte ein anderer Tenant — oder jeder Aufrufer unter dem geteilten Public Key — einen Intent Punkt für Punkt kopieren und von der Transaktion dessen Zahlers beglichen werden. Der Observer behandelt einen solchen Treffer als keine Zahlung: Der Intent bleibt PENDING und läuft unbezahlt ab.
+- **`DELETE /v1/payment-intents/{id}` antwortet `409 operation_in_flight`**, wenn sich der Status des Intents zwischen dem Lesen und dem Löschen ändert, typischerweise weil er gerade bezahlt wurde. Früher wurde er trotzdem gelöscht.
+
 ### Wallet-Anmeldung: die Signer einer wiederhergestellten Wallet folgen `STELLAR_NETWORK`
 
 - **`WALLET_AUTH_SIGNERS_HORIZON_URL` nutzt jetzt standardmäßig den Horizon von `STELLAR_NETWORK`** (`STELLAR_HORIZON_URL_PUBLIC` / `STELLAR_HORIZON_URL_TESTNET`, sonst den von SDF), nicht mehr immer den des öffentlichen Netzes. Er wird gelesen, wenn eine per SEP-30 wiederhergestellte Wallet `POST /v1/wallet/auth/finish` mit dem Schlüssel signiert, der ihren Master ersetzt hat. Auf einem Testnet-Deployment ging die Abfrage ans Mainnet, fand kein Konto, und die Anmeldung jeder wiederhergestellten Wallet antwortete `400 wallet_signature_invalid`.

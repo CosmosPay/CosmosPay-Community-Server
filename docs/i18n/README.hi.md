@@ -1627,6 +1627,12 @@ seal होती हैं और कभी लौटाई नहीं जा
 
 ## अपग्रेड — breaking changes और deploy नोट्स
 
+### Payment intents: एक transaction सभी tenants में केवल एक intent को settle करता है
+
+- **Migration `20261006120000_payment_settlement`** `payment_settlement` जोड़ता है और हर SUCCEEDED intent से उसे backfill करता है। जहाँ एक hash पहले ही कई intents को settle कर चुका है, वहाँ सबसे पुराना intent claim रखता है; migration फ़ाइल में वह query है जो बाकी intents को समीक्षा के लिए सूचीबद्ध करती है।
+- **जो transaction पहले ही किसी payment intent को — किसी भी consumer के — settle कर चुका है, वह अब दूसरे को settle नहीं करता।** `POST /v1/payment-intents/{id}/validate` और `status: SUCCEEDED` के साथ `PATCH /v1/payment-intents/{id}` `409 transaction_already_settled` लौटाते हैं और intent को जैसा था वैसा छोड़ देते हैं। Destination किसी consumer से बंधा नहीं है और memo caller चुनता है, इसलिए कोई दूसरा tenant — या shared public key के तहत कोई भी caller — किसी intent की हूबहू नकल कर सकता था और उसके payer के transaction से settle हो सकता था। Observer ऐसे match को भुगतान नहीं मानता: intent PENDING रहता है और बिना भुगतान के expire होता है।
+- **`DELETE /v1/payment-intents/{id}` `409 operation_in_flight` लौटाता है** जब intent का status उसे पढ़ने और delete करने के बीच बदल जाता है, आमतौर पर इसलिए कि उसका अभी भुगतान हुआ है। पहले वह फिर भी delete हो जाता था।
+
 ### Wallet साइन-इन: रिकवर किए गए wallet के signers अब `STELLAR_NETWORK` का पालन करते हैं
 
 - **`WALLET_AUTH_SIGNERS_HORIZON_URL` अब डिफ़ॉल्ट रूप से `STELLAR_NETWORK` के Horizon का उपयोग करता है** (`STELLAR_HORIZON_URL_PUBLIC` / `STELLAR_HORIZON_URL_TESTNET`, वरना SDF का), हमेशा पब्लिक नेटवर्क का नहीं। इसे तब पढ़ा जाता है जब SEP-30 से रिकवर किया गया wallet `POST /v1/wallet/auth/finish` को उस key से साइन करता है जिसने उसकी master key की जगह ली। testnet deployment पर यह lookup mainnet पर जाता था, खाता नहीं मिलता था, और हर रिकवर किए गए wallet का साइन-इन `400 wallet_signature_invalid` लौटाता था।

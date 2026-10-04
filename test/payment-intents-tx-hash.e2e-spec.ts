@@ -88,6 +88,8 @@ describe('Payment intent txHash (e2e)', () => {
   const UNIQUE_KEYS = paymentIntentUniqueKeys();
   const store = new Map<string, any>();
   const transitions: any[] = [];
+  /** `payment_settlement`'s primary key: (chain, network, txHash). */
+  const settlements = new Set<string>();
   let seq = 0;
   let memoSeq = 7000;
   const nextMemo = () => String(++memoSeq);
@@ -123,9 +125,22 @@ describe('Payment intent txHash (e2e)', () => {
     onModuleDestroy: jest.fn(),
     $connect: jest.fn(),
     $disconnect: jest.fn(),
+    // Rolls back on a throw, as PostgreSQL does: a settlement refused at its
+    // claim must leave its intent as it found it. Requests here run one at a
+    // time, so a snapshot is enough.
     $transaction: async (arg: any) => {
-      if (typeof arg === 'function') return arg(prismaMock);
-      return Promise.all(arg);
+      if (typeof arg !== 'function') return Promise.all(arg);
+      const rows = new Map(store);
+      const claims = new Set(settlements);
+      try {
+        return await arg(prismaMock);
+      } catch (err) {
+        store.clear();
+        rows.forEach((row, id) => store.set(id, row));
+        settlements.clear();
+        claims.forEach((key) => settlements.add(key));
+        throw err;
+      }
     },
     consumer: {
       upsert: jest.fn(async ({ where }: any) => ({
@@ -211,6 +226,29 @@ describe('Payment intent txHash (e2e)', () => {
         return { count: 1 };
       }),
     },
+    paymentSettlement: {
+      create: jest.fn(async ({ data }: any) => {
+        const key = `${data.chain}|${data.network}|${data.txHash}`;
+        if (settlements.has(key)) {
+          throw Object.assign(new Error('Unique constraint failed'), {
+            code: 'P2002',
+            meta: {
+              modelName: 'PaymentSettlement',
+              driverAdapterError: {
+                cause: {
+                  originalCode: '23505',
+                  kind: 'UniqueConstraintViolation',
+                  constraint: { index: 'payment_settlement_pkey' },
+                  table: 'payment_settlement',
+                },
+              },
+            },
+          });
+        }
+        settlements.add(key);
+        return data;
+      }),
+    },
     paymentIntentTransition: {
       create: jest.fn(async ({ data }: any) => {
         const row = {
@@ -293,12 +331,13 @@ describe('Payment intent txHash (e2e)', () => {
   async function createIntent(
     username: string,
     destination: string,
+    memo = nextMemo(),
   ): Promise<{ id: string; memo: string }> {
     const res = await as(
       username,
       request(http())
         .post(`${route}/pay`)
-        .send({ destination, amount: '10', memo: nextMemo() }),
+        .send({ destination, amount: '10', memo }),
     ).expect(201);
     return res.body;
   }
@@ -371,6 +410,29 @@ describe('Payment intent txHash (e2e)', () => {
       expect(res.body.code).toBe('idempotency_conflict');
       expect(res.body.message).not.toContain(first.id);
       expect(store.get(second.id).txHash).toBeNull();
+    });
+
+    /**
+     * The destination is not bound to a tenant and the memo is the caller's
+     * to choose, so tenant A can copy tenant B's intent term for term. The
+     * payer's one transaction then verified against both, and both settled.
+     */
+    it("refuses to settle a copy of another tenant's intent with the payment that settled it (409)", async () => {
+      const paid = await createIntent(tenantB, destinationB);
+      const copy = await createIntent(tenantA, destinationB, paid.memo);
+      const hash = `${'0'.repeat(63)}2`;
+      onChain.set(hash, { memo: paid.memo, to: destinationB });
+
+      await validate(tenantB, paid.id, hash).expect(200);
+      const res = await validate(tenantA, copy.id, hash).expect(409);
+
+      expect(res.body.code).toBe('transaction_already_settled');
+      expect(res.body.message).not.toContain(paid.id);
+      expect(store.get(paid.id).status).toBe('SUCCEEDED');
+      expect(store.get(copy.id)).toMatchObject({
+        status: 'PENDING',
+        txHash: null,
+      });
     });
 
     it("answers a settlement that collides with the tenant's own report with 409, not 500", async () => {

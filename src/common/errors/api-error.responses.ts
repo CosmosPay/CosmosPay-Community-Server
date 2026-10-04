@@ -196,6 +196,14 @@ export const API_ERROR_CASES: Readonly<Record<ApiErrorCode, ApiErrorCase>> = {
       'is below the amount requested',
     path: '/v1/payment-intents/pi_7Yc3Qn0Kx2/validate',
   },
+  [ApiErrorCode.TransactionAlreadySettled]: {
+    statuses: [409],
+    summary: 'That transaction already settled a payment intent',
+    message:
+      'This transaction has already settled a payment intent. One payment ' +
+      'settles at most one intent.',
+    path: '/v1/payment-intents/pi_7Yc3Qn0Kx2/validate',
+  },
 
   // --- provider / upstream --------------------------------------------------
   [ApiErrorCode.ProviderError]: {

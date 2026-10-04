@@ -1696,6 +1696,12 @@ misma lista `PLUGINS_ENABLED` que los plugins aislados.
 
 ## Actualización — cambios incompatibles y notas de despliegue
 
+### Payment intents: una transacción liquida un solo intent, entre todos los tenants
+
+- **La migración `20261006120000_payment_settlement`** añade `payment_settlement` y la rellena a partir de cada intent SUCCEEDED. Donde un mismo hash ya liquidó varios intents, el más antiguo conserva la reclamación; el archivo de la migración incluye la consulta que lista los demás para revisarlos.
+- **Una transacción que ya liquidó un payment intent — de cualquier consumer — ya no liquida otro.** `POST /v1/payment-intents/{id}/validate` y `PATCH /v1/payment-intents/{id}` con `status: SUCCEEDED` responden `409 transaction_already_settled` y dejan el intent como estaba. El destino no está ligado a un consumer y el memo lo elige quien llama, así que otro tenant — o cualquier llamante con la clave pública compartida — podía copiar un intent término a término y quedar liquidado con la transacción de su pagador. El observer trata esa coincidencia como ausencia de pago: el intent sigue PENDING y expira sin pagar.
+- **`DELETE /v1/payment-intents/{id}` responde `409 operation_in_flight`** cuando el estado del intent cambia entre su lectura y el borrado, normalmente porque se acaba de pagar. Antes lo borraba igualmente.
+
 ### Inicio de sesión de la wallet: los firmantes de una wallet recuperada siguen a `STELLAR_NETWORK`
 
 - **`WALLET_AUTH_SIGNERS_HORIZON_URL` ahora usa por defecto el Horizon de `STELLAR_NETWORK`** (`STELLAR_HORIZON_URL_PUBLIC` / `STELLAR_HORIZON_URL_TESTNET`, o el de SDF), y no siempre el de la red pública. Se consulta cuando una wallet recuperada por SEP-30 firma `POST /v1/wallet/auth/finish` con la clave que reemplazó a su clave maestra. En un despliegue en testnet la consulta iba a mainnet, no encontraba la cuenta, y el inicio de sesión de toda wallet recuperada respondía `400 wallet_signature_invalid`.

@@ -1684,6 +1684,12 @@ plugins isolés.
 
 ## Mise à niveau — changements incompatibles et notes de déploiement
 
+### Payment intents : une transaction règle un seul intent, tous tenants confondus
+
+- **La migration `20261006120000_payment_settlement`** ajoute `payment_settlement` et la remplit à partir de chaque intent SUCCEEDED. Là où un même hash a déjà réglé plusieurs intents, le plus ancien garde la revendication ; le fichier de migration contient la requête qui liste les autres pour vérification.
+- **Une transaction qui a déjà réglé un payment intent — de n'importe quel consumer — n'en règle plus un autre.** `POST /v1/payment-intents/{id}/validate` et `PATCH /v1/payment-intents/{id}` avec `status: SUCCEEDED` répondent `409 transaction_already_settled` et laissent l'intent tel quel. La destination n'est liée à aucun consumer et le memo est choisi par l'appelant, donc un autre tenant — ou tout appelant sous la clé publique partagée — pouvait copier un intent terme à terme et être réglé par la transaction de son payeur. L'observer traite une telle correspondance comme une absence de paiement : l'intent reste PENDING et expire impayé.
+- **`DELETE /v1/payment-intents/{id}` répond `409 operation_in_flight`** quand le statut de l'intent change entre sa lecture et la suppression, typiquement parce qu'il vient d'être payé. Auparavant, il était supprimé quand même.
+
 ### Connexion du portefeuille : les signataires d'un portefeuille récupéré suivent `STELLAR_NETWORK`
 
 - **`WALLET_AUTH_SIGNERS_HORIZON_URL` prend désormais par défaut le Horizon de `STELLAR_NETWORK`** (`STELLAR_HORIZON_URL_PUBLIC` / `STELLAR_HORIZON_URL_TESTNET`, sinon celui de SDF), et non plus toujours celui du réseau public. Il est lu quand un portefeuille récupéré via SEP-30 signe `POST /v1/wallet/auth/finish` avec la clé qui a remplacé sa clé maîtresse. Sur un déploiement testnet, la requête partait vers le mainnet, ne trouvait pas le compte, et la connexion de tout portefeuille récupéré répondait `400 wallet_signature_invalid`.

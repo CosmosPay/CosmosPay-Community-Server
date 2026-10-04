@@ -58,6 +58,27 @@ const MemoConflictResponse = () =>
       'it while this one was being created; retry the request.',
   });
 
+/**
+ * The 409s a settlement can end in, shared by the two routes that settle:
+ * `validate`, and `PATCH` with `status: SUCCEEDED`, which goes through it.
+ */
+const SettlementConflictResponse = () =>
+  ApiErrorResponse({
+    status: 409,
+    codes: [
+      ApiErrorCode.TransactionAlreadySettled,
+      ApiErrorCode.IdempotencyConflict,
+      ApiErrorCode.OperationInFlight,
+    ],
+    description:
+      '`transaction_already_settled`: the transaction already settled a ' +
+      'payment intent — of any consumer — and one payment settles at most ' +
+      'one; this intent is not paid by it. `idempotency_conflict`: the hash ' +
+      'is already recorded on another of your intents. ' +
+      '`operation_in_flight`: the status changed under this request; re-read ' +
+      'the intent and retry.',
+  });
+
 // URI versioning => /v1/payment-intents
 @ApiTags('payment-intents')
 @Controller({ path: 'payment-intents', version: '1' })
@@ -181,6 +202,7 @@ export class PaymentIntentsController {
       ApiErrorCode.InvalidStateTransition,
     ],
   })
+  @SettlementConflictResponse()
   validate(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Param('id') id: string,
@@ -205,13 +227,7 @@ export class PaymentIntentsController {
       ApiErrorCode.TransactionRejected,
     ],
   })
-  @ApiErrorResponse({
-    status: 409,
-    codes: [ApiErrorCode.OperationInFlight],
-    description:
-      '`operation_in_flight` — the status changed under this update. Re-read ' +
-      'the intent and retry.',
-  })
+  @SettlementConflictResponse()
   update(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Param('id') id: string,
@@ -224,6 +240,17 @@ export class PaymentIntentsController {
   @RequirePermissions('payments:write')
   @ApiOperation({ summary: 'Delete a payment intent' })
   @ApiOkResponse({ type: DeletedEntity })
+  @ApiErrorResponse({
+    status: 400,
+    codes: [ApiErrorCode.ValidationFailed, ApiErrorCode.InvalidStateTransition],
+  })
+  @ApiErrorResponse({
+    status: 409,
+    codes: [ApiErrorCode.OperationInFlight],
+    description:
+      '`operation_in_flight`: the status changed under this delete — the ' +
+      'intent may have just been paid. Re-read it before retrying.',
+  })
   remove(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Param('id') id: string,

@@ -365,7 +365,8 @@ model PaymentIntent {
   xdr       String?
   uri       String
   // Set once a signed transaction is submitted/confirmed. Lowercase hex, and
-  // unique per consumer (the @@unique below), not across the table.
+  // unique per consumer (the @@unique below), not across the table. Across the
+  // table, a SETTLED hash is unique through `PaymentSettlement`.
   txHash    String?
   reference String? // optional merchant reference
 
@@ -385,11 +386,16 @@ model PaymentIntent {
   // A Monad intent's deposit address, when the deployment has a relayer.
   evmDeposit EvmDepositAddress?
 
+  // The transaction that settled it, once it has. Virtual — no column.
+  settlement PaymentSettlement?
+
   @@unique([consumerId, memo]) // idempotency: one intent per (consumer, memo)
-  // One transaction settles at most one of a consumer's intents. Scoped to the
-  // consumer because PATCH records a reported hash unverified: unique across
-  // the table, any tenant could park another tenant's hash on an intent of its
-  // own and make that tenant's settlement fail on the index.
+  // A consumer's intents carry distinct hashes, settled or merely reported.
+  // Scoped to the consumer because PATCH records a reported hash unverified:
+  // unique across the table, any tenant could park another tenant's hash on an
+  // intent of its own and make that tenant's settlement fail on the index. That
+  // one transaction settles at most one intent of ANY consumer is
+  // `PaymentSettlement`'s job, which only a verified settlement writes.
   @@unique([consumerId, txHash])
   @@index([consumerId])
   @@index([status])
@@ -454,6 +460,37 @@ enum EvmDepositStatus {
   AWAITING // nothing forwarded yet: watching the balance
   FORWARDING // a forward transaction is in flight
   FORWARDED // confirmed; the merchant has the money
+}
+
+// The transaction that settled a payment intent, claimed once across every
+// tenant: one on-chain payment settles at most one intent, whoever owns it.
+//
+// `payment_intent`'s own (consumerId, txHash) index cannot say that. It is per
+// consumer, the destination is not bound to the consumer, the memo is the
+// caller's to choose, and every anonymous caller under the shared public key is
+// one consumer — so a second tenant could copy an intent's destination, amount
+// and memo, and the payer's one transaction settled both. Written only by
+// `transition()` in the same database transaction as the SUCCEEDED status
+// change, so of two settlements racing for one hash the primary key admits
+// exactly one and the other rolls back with its intent unsettled. PATCH never
+// writes here: a reported hash is unverified, and a claim it could make is the
+// cross-tenant parking the per-consumer index was scoped to prevent.
+//
+// SET NULL, not CASCADE: a deleted intent (a consumer's, cascading) must not
+// hand its payment back to be claimed again.
+model PaymentSettlement {
+  chain   String // 'stellar' | 'solana' | 'monad'
+  network String // 'public' | 'testnet'
+  // In the chain's stored spelling (`tx-id.ts`), as on the intent.
+  txHash  String
+
+  intentId String?        @unique
+  intent   PaymentIntent? @relation(fields: [intentId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@id([chain, network, txHash])
+  @@map("payment_settlement")
 }
 
 // Immutable history of every PaymentIntent status change. Written only by the

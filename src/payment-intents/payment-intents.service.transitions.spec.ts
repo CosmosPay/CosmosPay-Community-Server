@@ -71,6 +71,9 @@ describe('PaymentIntentsService.transition (guards + audit)', () => {
           return { ...row };
         }),
       },
+      // The settled hash's claim, written with the status change; its
+      // uniqueness across consumers has its own spec.
+      paymentSettlement: { create: jest.fn(async ({ data }: any) => data) },
       paymentIntentTransition: {
         create: jest.fn(async ({ data }: any) => {
           const created = { id: `tr_${auditCreates.length + 1}`, ...data };
@@ -579,6 +582,7 @@ describe('PaymentIntentsService API settlement is chain-verified', () => {
       },
       consumer: { upsert: jest.fn(async () => ({ id: 'c1' })) },
       paymentIntentTransition: { create: jest.fn(async () => ({})) },
+      paymentSettlement: { create: jest.fn(async () => ({})) },
       webhookEmittedEvent: { create: jest.fn(async () => ({})) },
       webhookEndpoint: { findMany: jest.fn(async () => []) },
       $transaction: jest.fn(async (fn: any) =>

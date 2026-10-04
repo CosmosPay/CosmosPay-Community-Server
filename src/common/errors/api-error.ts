@@ -67,6 +67,14 @@ export enum ApiErrorCode {
   InvalidAmount = 'invalid_amount',
   InvalidMemo = 'invalid_memo',
   TransactionRejected = 'transaction_rejected',
+  /**
+   * The transaction already settled a payment intent — any consumer's — and
+   * one payment settles at most one intent. Distinct from
+   * `idempotency_conflict`, which says a hash is recorded on another of the
+   * caller's OWN intents: this one names a payment someone else may have been
+   * paid with, so retrying it on any intent is pointless.
+   */
+  TransactionAlreadySettled = 'transaction_already_settled',
 
   // --- cross-chain swaps (NEAR Intents) --------------------------------------
   /**
