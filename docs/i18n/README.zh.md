@@ -744,6 +744,7 @@ quote → build XDR → customer signs in wallet → POST /submit → Stellar ex
 // response
 { "submitted": true, "status": "SUCCEEDED", "txHash": "…", "swap": { … } }
 // on a network rejection → { "submitted": false, "status": "FAILED", "reason": "…", "resultCodes": ["op_under_dest_min"], "swap": { … } }
+// rejected, outcome not on the ledger yet → { "submitted": false, "status": "SUBMITTED", "reason": "…", "resultCodes": ["tx_bad_seq"], "swap": { … } }
 ```
 
 在广播之前，服务会检查已签名交易的哈希是否与它构建的交易一致，因此它永远不会转发任意交易。swap 会通过同一个分发器触发 `SWAP_CREATED` / `SWAP_SUBMITTED` / `SWAP_SUCCEEDED` / `SWAP_FAILED` webhook 事件。
@@ -1351,6 +1352,7 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
 | 当 receiver、或拥有 `blockchain_wallet_id` 的 receiver 被停用时，`POST /v1/onramp/receivers/:id/virtual-accounts` 返回 `403 account_disabled` | 没有正当用户会注意到 | 这是熔断开关此前唯一没有覆盖到的法币操作：被停用的账户仍能开出一条新的入金通道 |
 | `POST /v1/swaps/:id/submit` 和 `POST /v1/liquidity-pools/operations/:id/submit` 会最先检查信封：无法解析、不是该行自己的信封，或不携带任何签名的请求体，无论该行处于什么状态都返回 `400 validation_failed`。任意的 `signedXdr` 不会再返回一行 `SUCCEEDED`，而 `EXPIRED` 行面对不匹配的请求体会返回 `validation_failed`，而不是 `invalid_state_transition` | 提交未签名的 `xdr` 并依赖 `tx_bad_auth` 拒绝的客户端 | 签名不会改变交易的哈希，因此未签名的信封可能被循环转发并遭拒绝，而在共享公共 key 下，仅凭一个行 id 就能读到一笔已结算的记录 |
 | 两个提交路由都会拒绝一个已超出时间边界的信封（`400 invalid_state_transition`，不会广播；如果它已经上链，观察器仍会将其结算），以及一行已经重新提交过 3 次的 `FAILED` 记录（`400 invalid_state_transition`：请构建一笔新的）。在 `503 provider_unavailable` 之后的重试不计入次数 | 在循环中重试提交的客户端：遇到 `invalid_state_transition` 就应停止 | 每一次被拒绝的重新提交都是一次 Horizon 提交和一个新的终态 webhook 事件，且此前没有任何上限 |
+| 被拒绝的提交在记录之前会先与账本核对。已经上链且成功的交易（钱包自行广播了它，重新提交返回 `tx_bad_seq`）会返回 `SUCCEEDED` 并触发 `*_SUCCEEDED`；账本暂时还无法给出结果的交易会返回 `submitted: false` 和 `status: "SUBMITTED"`，并保持进行中，交由观察器处理。观察器还会重新检查最近 24 小时内创建的 `FAILED` 记录，并将其交易已结算的记录提升为成功，在先前的 `*_FAILED` 之后触发 `*_SUCCEEDED` | 将 `submitted: false` 视为最终结果的客户端：请检查 `status`，并把同一资源在 `*_FAILED` 之后收到的 `*_SUCCEEDED` 视为更正 | 一笔已结算的兑换或存入可能被永久记录为 `FAILED`，既没有成功 webhook，存入也没有成本基础 |
 | 两个提交路由都允许每个消费者和客户端地址每分钟调用 20 次，各自使用独立的额度（`429 rate_limited`） | 位于同一 NAT 之后、共用公共 key 的钱包 | 这两个路由都接受共享公共 key，且每次调用都可能向 Horizon 广播 |
 | `GET /v1/webhooks`、`GET /v1/webhooks/:id` 和 `PATCH /v1/webhooks/:id` 只返回已发布的端点字段；`POST /v1/webhooks` 和 `POST /v1/webhooks/:id/rotate-secret` 在此基础上额外返回 `secret`。`consumerId`、`previousSecret` 和 `previousSecretExpiresAt` 从这五个路由的响应中全部移除 | 读取这些字段的调用方 | `previousSecret` 是一个集成方可能仍在接受的签名密钥，而只持有 `webhooks:read` 的 key 就能读到它 |
 | 一个与该别名任何一次有效恢复都不匹配的 token，不再计入该次恢复的尝试次数。一个有效的 token 在每次提交时都会消耗一次用量，包括之后 challenge 或签名验证失败的那次；第五次之后返回 `400 alias_recovery_invalid` | 没有正当用户会注意到 | 别名名称是公开的，因此任何一个 key 发送的五个垃圾 token 就能耗尽控制台发起的每一次恢复 |

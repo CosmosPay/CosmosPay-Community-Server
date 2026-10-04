@@ -1,7 +1,10 @@
 import { PrismaService } from '@/prisma/prisma.service';
 import { SETTLEMENT_MAX_ROWS_PER_CONSUMER } from '@/observer/observer.constants';
 
-/** The columns the sweep reads off an in-flight row, whichever table it is in. */
+/**
+ * The columns the sweep reads off a row it looks up — in flight, or FAILED and
+ * re-checked — whichever table it is in.
+ */
 export interface InFlightRow {
   id: string;
   network: string;
@@ -43,6 +46,11 @@ export interface SettlementResource {
   label: string;
   /** This tick's in-flight rows, fairly dealt across consumers; see below. */
   selectInFlight(batchSize: number): Promise<InFlightRow[]>;
+  /**
+   * FAILED rows created since `since`, dealt the same way, newest first per
+   * consumer — the ones the sweep re-checks in case they settled after all.
+   */
+  selectRecentlyFailed(limit: number, since: Date): Promise<InFlightRow[]>;
   transitions: SettlementTransitions;
 }
 
@@ -72,6 +80,11 @@ export interface SettlementResource {
  * The SQL is written out per table rather than templated on the table name: a
  * `$queryRaw` identifier cannot be a bound parameter, and splicing one in with
  * `Prisma.raw` is the kind of string-built SQL this codebase does not do.
+ *
+ * `selectRecentlyFailed` is the same deal over FAILED rows inside the re-check
+ * window (see `SETTLEMENT_FAILED_LOOKBACK_MS`), newest first: the sweep looks
+ * them up again because a row recorded FAILED may have settled on-chain all the
+ * same, and FAILED → SUCCEEDED is an edge both tables' machines allow.
  */
 export function swapSettlementResource(
   prisma: PrismaService,
@@ -104,6 +117,29 @@ export function swapSettlementResource(
         },
         include: { consumer: true },
         orderBy: { createdAt: 'asc' },
+      });
+    },
+    async selectRecentlyFailed(limit, since) {
+      const ranked = await prisma.$queryRaw<{ id: string }[]>`
+        SELECT "id"
+        FROM (
+          SELECT "id",
+                 "createdAt",
+                 ROW_NUMBER() OVER (
+                   PARTITION BY "consumerId" ORDER BY "createdAt" DESC, "id"
+                 ) AS "rank"
+          FROM "swap"
+          WHERE "status" = 'FAILED' AND "createdAt" >= ${since}
+        ) AS "failed"
+        WHERE "rank" <= ${SETTLEMENT_MAX_ROWS_PER_CONSUMER}
+        ORDER BY "rank", "createdAt" DESC, "id"
+        LIMIT ${limit}
+      `;
+      if (ranked.length === 0) return [];
+      return prisma.swap.findMany({
+        where: { id: { in: ranked.map((row) => row.id) }, status: 'FAILED' },
+        include: { consumer: true },
+        orderBy: { createdAt: 'desc' },
       });
     },
   };
@@ -141,6 +177,29 @@ export function liquiditySettlementResource(
         },
         include: { consumer: true },
         orderBy: { createdAt: 'asc' },
+      });
+    },
+    async selectRecentlyFailed(limit, since) {
+      const ranked = await prisma.$queryRaw<{ id: string }[]>`
+        SELECT "id"
+        FROM (
+          SELECT "id",
+                 "createdAt",
+                 ROW_NUMBER() OVER (
+                   PARTITION BY "consumerId" ORDER BY "createdAt" DESC, "id"
+                 ) AS "rank"
+          FROM "liquidity_pool_operation"
+          WHERE "status" = 'FAILED' AND "createdAt" >= ${since}
+        ) AS "failed"
+        WHERE "rank" <= ${SETTLEMENT_MAX_ROWS_PER_CONSUMER}
+        ORDER BY "rank", "createdAt" DESC, "id"
+        LIMIT ${limit}
+      `;
+      if (ranked.length === 0) return [];
+      return prisma.liquidityPoolOperation.findMany({
+        where: { id: { in: ranked.map((row) => row.id) }, status: 'FAILED' },
+        include: { consumer: true },
+        orderBy: { createdAt: 'desc' },
       });
     },
   };

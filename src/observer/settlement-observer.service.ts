@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { AppConfig, StellarNetwork } from '@/config/configuration';
+import { AppConfig } from '@/config/configuration';
 import {
   AdvisoryLockKey,
   AdvisoryLockService,
@@ -8,10 +8,16 @@ import {
 import { JobSchedule, ScheduledJob } from '@/common/services/scheduled-job';
 import { PrismaService } from '@/prisma/prisma.service';
 import { StellarService } from '@/stellar/stellar.service';
+import {
+  TransactionSettlement,
+  transactionSettlement,
+} from '@/stellar/transaction-settlement';
 import { LiquidityPoolsService } from '@/liquidity-pools/liquidity-pools.service';
 import { LpCostBasisService } from '@/liquidity-pools/lp-cost-basis.service';
 import { SwapsService } from '@/swaps/swaps.service';
 import {
+  SETTLEMENT_FAILED_LOOKBACK_MS,
+  SETTLEMENT_FAILED_RECHECK_MAX_ROWS,
   SETTLEMENT_LOCK_MIN_TIMEOUT_MS,
   SETTLEMENT_LOCK_TIMEOUT_INTERVALS,
 } from '@/observer/observer.constants';
@@ -21,20 +27,6 @@ import {
   liquiditySettlementResource,
   swapSettlementResource,
 } from '@/observer/settlement-resources';
-
-/**
- * What the chain says about a transaction.
- *
- * `absent` and `unknown` must stay distinct. They used to be one value
- * (`unsettled`), which meant "Horizon returned 404" and "we could not reach
- * Horizon" were indistinguishable — and the expiry branch acted on both. A
- * transaction that had settled on-chain and paid the platform its commission
- * was marked EXPIRED during a Horizon outage, and since the observer only
- * selects PENDING/SUBMITTED rows it was never looked at again. There is no
- * recovery path from that state: the terminal statuses exclude EXPIRED, so no
- * webhook can still fire, and submit() rejects a retry.
- */
-type Settlement = 'succeeded' | 'failed' | 'absent' | 'unknown';
 
 /** The tables a sweep reconciles, in the order it reconciles them. */
 const SETTLEMENT_KINDS = ['swaps', 'liquidity'] as const;
@@ -49,6 +41,10 @@ type SettlementKind = (typeof SETTLEMENT_KINDS)[number];
  * stored txHash** and finalize it — SUCCEEDED / FAILED (with the matching webhook
  * event) or EXPIRED once its timebounds lapse. Mirrors the payment-intent
  * observer; polling survives restarts with no cursor bookkeeping.
+ *
+ * It also re-checks recently FAILED rows ({@link heal}), because FAILED is not
+ * proof the transaction did not settle: a re-submission rejected `tx_bad_seq`
+ * after the wallet broadcast the same envelope itself is exactly that case.
  *
  * Observer never emits webhooks itself. Terminal events are a consequence of
  * winning `finalizeSucceeded` / `finalizeFailed` on the domain service — the
@@ -125,6 +121,9 @@ export class SettlementObserverService extends ScheduledJob {
     const { batchSize } = this.config.get('observer', { infer: true });
     for (const kind of SETTLEMENT_KINDS) {
       await this.reconcile(kind, batchSize);
+    }
+    for (const kind of SETTLEMENT_KINDS) {
+      await this.heal(kind);
     }
     await this.backfillDepositBasis(batchSize);
   }
@@ -225,6 +224,48 @@ export class SettlementObserverService extends ScheduledJob {
   }
 
   /**
+   * Promotes FAILED rows whose transaction the ledger shows settled.
+   *
+   * Only the `succeeded` verdict acts: a FAILED row cannot be failed again or
+   * expired (both are guarded on the in-flight statuses), and a 404 is what a
+   * genuinely rejected transaction looks like. The promotion goes through the
+   * same `finalizeSucceeded` the in-flight sweep and `submit` use — FAILED is
+   * in both tables' can-succeed set — so a deposit captures its cost basis on
+   * the way, and the compare-and-swap leaves exactly one writer to announce it.
+   *
+   * That announcement is delivered, not deduplicated away. The terminal emitter
+   * keys its claim on `type:id:settlementEpoch`, and a correction keeps the
+   * epoch of the attempt it corrects, so `…_SUCCEEDED:id:N` is a key the
+   * earlier `…_FAILED:id:N` never claimed. The integrator sees FAILED, then
+   * SUCCEEDED, for the same attempt — and SUCCEEDED is absorbing, so nothing
+   * follows it. No row here shares its hash with another: both tables are
+   * unique on `(network, txHash)`, and the duplicates that predate that sit
+   * far outside the window.
+   */
+  private async heal(kind: SettlementKind): Promise<void> {
+    const { label, transitions } = this.resources[kind];
+    const since = new Date(Date.now() - SETTLEMENT_FAILED_LOOKBACK_MS);
+    const rows = await this.resources[kind].selectRecentlyFailed(
+      SETTLEMENT_FAILED_RECHECK_MAX_ROWS,
+      since,
+    );
+
+    for (const row of rows) {
+      const settlement = await this.settlementOf(row.network, row.txHash);
+      if (settlement !== 'succeeded') continue;
+      const { applied } = await transitions.finalizeSucceeded(
+        row.id,
+        row.consumer.apisixUsername,
+      );
+      if (applied) {
+        this.logger.warn(
+          `Healed ${label} ${row.id} FAILED → SUCCEEDED (settled on-chain)`,
+        );
+      }
+    }
+  }
+
+  /**
    * Re-attempts cost-basis capture for settled deposits that never got one.
    *
    * `captureDepositBasis` runs once, at the moment a deposit transitions to
@@ -269,38 +310,11 @@ export class SettlementObserverService extends ScheduledJob {
     }
   }
 
-  /**
-   * Looks a transaction up by its deterministic hash on Horizon. Because signing
-   * does not change the hash, a customer who signs and broadcasts the tx
-   * themselves (bypassing our submit endpoint) still settles under this hash. A
-   * 404 means it is simply not on-chain yet (`absent`). Any other Horizon error
-   * is transient (`unknown`) and the row is left in flight for the next cycle —
-   * crucially it is NOT eligible for expiry, because we did not manage to ask
-   * the chain.
-   */
-  private async settlementOf(
+  /** See {@link transactionSettlement}; shared with the relay. */
+  private settlementOf(
     network: string,
     txHash: string,
-  ): Promise<Settlement> {
-    try {
-      const tx = await this.stellar
-        .server(network as StellarNetwork)
-        .transactions()
-        .transaction(txHash)
-        .call();
-      return tx.successful ? 'succeeded' : 'failed';
-    } catch (err) {
-      const status = (err as { response?: { status?: number } })?.response
-        ?.status;
-      // Only a 404 is Horizon telling us the transaction is not on-chain. A
-      // 429, a 504 or a socket timeout tells us nothing about the transaction
-      // at all, and must never be read as "it never settled".
-      if (status === 404) return 'absent';
-      this.logger.warn(
-        `Horizon lookup failed for tx ${txHash} (status ${status ?? 'none'}); ` +
-          'leaving the operation in flight for the next cycle',
-      );
-      return 'unknown';
-    }
+  ): Promise<TransactionSettlement> {
+    return transactionSettlement(this.stellar, network, txHash, this.logger);
   }
 }

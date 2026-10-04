@@ -84,3 +84,28 @@ export const HORIZON_TIMEOUT_MS = 15_000;
  * so concurrent resubmits cannot each read `epoch < cap` and all bump past it.
  */
 export const SETTLEMENT_MAX_RESUBMITS = 3;
+
+/**
+ * Rejection codes that prove the rejected transaction had not been applied.
+ *
+ * When Horizon refuses a relayed envelope, the relay looks its hash up before
+ * recording FAILED, because a refusal of *this* broadcast is no evidence about
+ * the transaction: a wallet that broadcast the same envelope itself makes our
+ * re-submission come back `tx_bad_seq`, while the transaction sits on-chain. A
+ * 404 on that lookup is not enough either — Horizon can lag the ledger it just
+ * consulted — so the row is left SUBMITTED for the observer.
+ *
+ * These codes are the exception. stellar-core decides each of them only after
+ * the sequence-number check has passed, so the account's sequence still sat
+ * just below this transaction's: it had not been applied, and a 404 agrees. They
+ * are also exactly the rejections a resubmission can fix (see
+ * {@link SETTLEMENT_MAX_RESUBMITS}), so recording them FAILED is what keeps that
+ * cap holding — a row left SUBMITTED re-sends without spending a resubmit. If
+ * the same transaction lands later anyway, the observer's FAILED re-check heals
+ * the row.
+ */
+export const NOT_APPLIED_REJECTION_CODES: readonly string[] = [
+  'tx_bad_auth',
+  'tx_bad_auth_extra',
+  'tx_insufficient_balance',
+];

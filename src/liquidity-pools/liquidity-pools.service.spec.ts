@@ -26,7 +26,10 @@ import { LpCostBasisService } from '@/liquidity-pools/lp-cost-basis.service';
 import { SettlementObserverService } from '@/observer/settlement-observer.service';
 import { SignedTransactionRelay } from '@/stellar/signed-transaction-relay.service';
 import { WebhookTerminalEmitter } from '@/webhooks/webhook-terminal-emitter.service';
-import { WEBHOOK_EVENT } from '@/webhooks/webhook-events';
+import {
+  WEBHOOK_EVENT,
+  terminalEventDedupKey,
+} from '@/webhooks/webhook-events';
 
 jest.mock('qrcode', () => ({
   __esModule: true,
@@ -261,14 +264,18 @@ function createPrisma(seed: any[] = []) {
         return { ...created };
       }),
     },
-    // Stands in for the observer's ranking query, which is SQL a fake cannot
-    // run. These tests are about what happens to the rows it deals, so it
-    // deals every in-flight one.
-    $queryRaw: jest.fn(async () =>
-      rows
-        .filter((r) => ['PENDING', 'SUBMITTED'].includes(r.status))
-        .map((r) => ({ id: r.id })),
-    ),
+    // Stands in for the observer's ranking queries, which are SQL a fake
+    // cannot run. These tests are about what happens to the rows they deal, so
+    // the in-flight query deals every in-flight row and the FAILED re-check
+    // deals every FAILED one.
+    $queryRaw: jest.fn(async (sql: readonly string[]) => {
+      const statuses = sql.join('?').includes("'FAILED'")
+        ? ['FAILED']
+        : ['PENDING', 'SUBMITTED'];
+      return rows
+        .filter((r) => statuses.includes(r.status))
+        .map((r) => ({ id: r.id }));
+    }),
     webhookEmittedEvent: uniqueEmittedEvents(),
   };
   return prisma;
@@ -784,6 +791,91 @@ describe('LiquidityPoolsService.submit vs observer (issue #32 race)', () => {
     expect(result.applied).toBe(false);
     expect(row.status).toBe('SUCCEEDED');
     expect(row.sharesReceived).toBe('50');
+  });
+
+  it('settles a deposit the wallet already broadcast as SUCCEEDED, with its basis, on tx_bad_seq', async () => {
+    // The wallet broadcast the envelope itself (SEP-7); the merchant's submit
+    // arrives before the observer's next tick and Horizon rejects the
+    // re-submission. FAILED here was permanent, and the basis never captured.
+    const row = depositRow({ status: 'PENDING' });
+    prisma.rows.push(row);
+    stellar.submitTransaction.mockRejectedValue(
+      horizonReject({ transaction: 'tx_bad_seq' }),
+    );
+    stellar.txCall.mockResolvedValue({ successful: true });
+
+    const outcome = await service.submit(consumer, row.id, 'signed-xdr');
+
+    expect(outcome).toMatchObject({ submitted: true, status: 'SUCCEEDED' });
+    expect(row.status).toBe('SUCCEEDED');
+    expect(row.sharesReceived).toBe('100');
+    expect(terminalEmits(events, 'LIQUIDITY_FAILED')).toHaveLength(0);
+    expect(terminalEmits(events, 'LIQUIDITY_SUCCEEDED')).toHaveLength(1);
+
+    await (observer as any).reconcile('liquidity', 50);
+    await (observer as any).heal('liquidity');
+    expect(terminalEmits(events, 'LIQUIDITY_SUCCEEDED')).toHaveLength(1);
+  });
+
+  it('leaves an operation SUBMITTED on op_underfunded while Horizon answers 404', async () => {
+    const row = depositRow({ status: 'PENDING' });
+    prisma.rows.push(row);
+    stellar.submitTransaction.mockRejectedValue(
+      horizonReject({
+        transaction: 'tx_failed',
+        operations: ['op_underfunded'],
+      }),
+    );
+    stellar.txCall.mockRejectedValue({ response: { status: 404 } });
+
+    const outcome = await service.submit(consumer, row.id, 'signed-xdr');
+
+    expect(outcome).toMatchObject({ submitted: false, status: 'SUBMITTED' });
+    expect(row.status).toBe('SUBMITTED');
+    expect(terminalEmits(events, 'LIQUIDITY_FAILED')).toHaveLength(0);
+  });
+
+  it('leaves an operation SUBMITTED when the lookup itself fails', async () => {
+    const row = depositRow({ status: 'PENDING' });
+    prisma.rows.push(row);
+    stellar.submitTransaction.mockRejectedValue(
+      horizonReject({ transaction: 'tx_bad_seq' }),
+    );
+    stellar.txCall.mockRejectedValue(new Error('socket hang up'));
+
+    const outcome = await service.submit(consumer, row.id, 'signed-xdr');
+
+    expect(outcome).toMatchObject({ submitted: false, status: 'SUBMITTED' });
+    expect(row.status).toBe('SUBMITTED');
+    expect(row.sharesReceived).toBeNull();
+    expect(terminalEmits(events, 'LIQUIDITY_FAILED')).toHaveLength(0);
+    expect(terminalEmits(events, 'LIQUIDITY_SUCCEEDED')).toHaveLength(0);
+  });
+
+  it('observer heals a FAILED deposit whose transaction is on-chain: basis captured, SUCCEEDED once', async () => {
+    const row = depositRow({ status: 'PENDING' });
+    prisma.rows.push(row);
+    await service.finalizeFailed(row.id, consumer.username);
+    expect(row.status).toBe('FAILED');
+    stellar.txCall.mockResolvedValue({ successful: true });
+
+    await (observer as any).heal('liquidity');
+    await (observer as any).heal('liquidity');
+
+    expect(row.status).toBe('SUCCEEDED');
+    expect(row.sharesReceived).toBe('100');
+    expect(row.settledAmountA).toBe('1000');
+    const basis = await costBasis.costBasis(SOURCE, POOL_ID, 'testnet');
+    expect(basis.remainingShares).toBe(toStroops('100'));
+    expect(terminalEmits(events, 'LIQUIDITY_FAILED')).toHaveLength(1);
+    expect(terminalEmits(events, 'LIQUIDITY_SUCCEEDED')).toHaveLength(1);
+    const keys = prisma.webhookEmittedEvent.create.mock.calls.map(
+      ([{ data }]: any) => data.dedupKey,
+    );
+    expect(keys).toEqual([
+      terminalEventDedupKey('LIQUIDITY_FAILED', row.id, 0),
+      terminalEventDedupKey('LIQUIDITY_SUCCEEDED', row.id, 0),
+    ]);
   });
 
   it('observer and submit in parallel emit LIQUIDITY_SUCCEEDED once (used to emit twice)', async () => {
