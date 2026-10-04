@@ -40,7 +40,6 @@ import {
 import { Sep7LinkBuilder } from '@/payment-intents/sep7-link-builder.service';
 import { ChainPayLinkBuilder } from '@/payment-intents/chain-pay-link-builder.service';
 import { PaymentVerifiers } from '@/payment-intents/payment-verifiers';
-import { SETTLEMENT_RIVALS_MAX } from '@/payment-intents/payment-intents.constants';
 import { settlementRivalsQuery } from '@/payment-intents/settlement-rivals';
 import {
   expectedTxId,
@@ -1059,7 +1058,9 @@ export class PaymentIntentsService {
    * Which rivals are looked at is `settlement-rivals.ts`; whether one is paid is
    * the chain verifier's answer, the same `verifyByHash` that would settle it.
    * A verifier that cannot answer throws, and the settlement is retried rather
-   * than decided without it.
+   * than decided without it. Only a rival the chain says is paid refuses this
+   * intent — never how many there are: at most `SETTLEMENT_RIVALS_MAX` are
+   * asked about, oldest first, and when none of them is paid the claim decides.
    *
    * What concurrency can and cannot do. AT MOST one intent settles on a
    * transaction, always: that is the claim's primary key, whatever this check
@@ -1098,14 +1099,6 @@ export class PaymentIntentsService {
       settlementRivalsQuery(chain, intent),
     );
     if (rivals.length === 0) return;
-    if (rivals.length > SETTLEMENT_RIVALS_MAX) {
-      this.logger.warn(
-        `Not settling intent ${intentId} on ${txHash}: more than ` +
-          `${SETTLEMENT_RIVALS_MAX} older intents of other consumers could ` +
-          'claim the same payment',
-      );
-      throw transactionAlreadySettled();
-    }
     const verifier = this.verifiers.for(chain);
     const hash = normalizeTxId(chain, txHash);
     for (const rival of rivals) {

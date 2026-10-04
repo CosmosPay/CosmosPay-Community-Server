@@ -245,12 +245,8 @@ function isDeposit(intent: PaymentIntent): boolean {
   return intent.chainReference !== null && intent.chainReference !== undefined;
 }
 
-/**
- * Where the payer pays: the intent's deposit address, else the merchant.
- * Exported for the settlement precedence check (`settlement-rivals.ts`), which
- * must look for older intents paid at the same address this rule pays.
- */
-export function payee(intent: PaymentIntent): string {
+/** Where the payer pays: the intent's deposit address, else the merchant. */
+function payee(intent: PaymentIntent): string {
   return intent.chainReference ?? intent.destination;
 }
 

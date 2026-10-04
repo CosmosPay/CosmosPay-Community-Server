@@ -57,9 +57,9 @@ describe('PaymentIntentsService: one transaction settles one intent', () => {
     status: 'PENDING',
     source: null,
     destination: 'GDEST',
-    amount: '25.5',
+    amount: '25.5' as string | null,
     asset: 'native',
-    assetIssuer: null,
+    assetIssuer: null as string | null,
     memo: '123',
     network: 'testnet',
     uri: 'web+stellar:pay?destination=GDEST',
@@ -440,25 +440,131 @@ describe('PaymentIntentsService: one transaction settles one intent', () => {
       expect(rows.get('pi_b')!.status).toBe('PENDING');
     });
 
-    it('refuses, without asking the chain, past the cap on older rivals', async () => {
-      for (let i = 0; i < SETTLEMENT_RIVALS_MAX + 1; i += 1) {
-        rows.set(
-          `pi_r${i}`,
-          intent(
+    /** Older intents of other consumers, oldest first, each with `terms`. */
+    const olderRivals = (n: number, terms: Record<string, unknown> = {}) => {
+      for (let i = 0; i < n; i += 1) {
+        rows.set(`pi_r${i}`, {
+          ...intent(
             `pi_r${i}`,
             `c_r${i}`,
             `cosmos_r${i}`,
-            new Date(T0 - 1_000 * (i + 2)),
+            new Date(T0 - 600_000 + 1_000 * i),
           ),
-        );
+          ...terms,
+        });
       }
+    };
+
+    /**
+     * A count never refuses a settlement. Past the cap it used to, without
+     * asking the chain, so six junk intents refused every settlement after
+     * them.
+     */
+    it('is not refused by more older look-alikes than the cap when the chain says none is paid', async () => {
       rows.delete('pi_a');
+      olderRivals(SETTLEMENT_RIVALS_MAX + 2);
+      verify.mockImplementation(async (rival: { id: string }) =>
+        rival.id === 'pi_b'
+          ? { valid: true, txHash: HASH }
+          : { valid: false, reason: 'not this payment' },
+      );
+
+      await service.markSucceeded('pi_b', 'cosmos_b', HASH);
+
+      expect(rows.get('pi_b')!.status).toBe('SUCCEEDED');
+      // The bound on chain calls: the oldest SETTLEMENT_RIVALS_MAX, no more.
+      expect(verify).toHaveBeenCalledTimes(SETTLEMENT_RIVALS_MAX);
+    });
+
+    it('leaves a paid rival past the oldest few to the claim instead of refusing', async () => {
+      rows.delete('pi_a');
+      olderRivals(SETTLEMENT_RIVALS_MAX + 1);
+      const paidPastWindow = `pi_r${SETTLEMENT_RIVALS_MAX}`;
+      verify.mockImplementation(async (rival: { id: string }) =>
+        rival.id === paidPastWindow
+          ? { valid: true, txHash: HASH }
+          : { valid: false, reason: 'not this payment' },
+      );
+
+      await service.markSucceeded('pi_b', 'cosmos_b', HASH);
+
+      expect(rows.get('pi_b')!.status).toBe('SUCCEEDED');
+      expect(verify).not.toHaveBeenCalledWith(
+        expect.objectContaining({ id: paidPastWindow }),
+        HASH,
+      );
+    });
+
+    it('does not even ask about older intents for another amount or asset', async () => {
+      rows.delete('pi_a');
+      olderRivals(SETTLEMENT_RIVALS_MAX + 1, { amount: '1' });
+      rows.set('pi_usdc', {
+        ...intent('pi_usdc', 'c_usdc', 'cosmos_usdc', new Date(T0 - 1_000)),
+        asset: 'USDC',
+        assetIssuer: 'GISSUER',
+      });
+
+      await service.markSucceeded('pi_b', 'cosmos_b', HASH);
+
+      expect(rows.get('pi_b')!.status).toBe('SUCCEEDED');
+      expect(verify).not.toHaveBeenCalled();
+    });
+
+    it('matches an older rival for the same amount in another spelling', async () => {
+      rows.set('pi_a', { ...rows.get('pi_a')!, amount: '25.5000000' });
 
       const err = await errorOf(
         service.markSucceeded('pi_b', 'cosmos_b', HASH),
       );
 
       expect(err!.code).toBe(ApiErrorCode.TransactionAlreadySettled);
+    });
+
+    describe('open-amount intents', () => {
+      it('an older open-amount rival, paid by any amount, outranks a fixed one', async () => {
+        rows.set('pi_a', { ...rows.get('pi_a')!, amount: null });
+
+        const err = await errorOf(
+          service.markSucceeded('pi_b', 'cosmos_b', HASH),
+        );
+
+        expect(err!.code).toBe(ApiErrorCode.TransactionAlreadySettled);
+      });
+
+      it('an open-amount intent is outranked by an older rival of any amount the payment pays', async () => {
+        rows.set('pi_a', { ...rows.get('pi_a')!, amount: '99' });
+        rows.set('pi_b', { ...rows.get('pi_b')!, amount: null });
+
+        const err = await errorOf(
+          service.markSucceeded('pi_b', 'cosmos_b', HASH),
+        );
+
+        expect(err!.code).toBe(ApiErrorCode.TransactionAlreadySettled);
+        expect(verify).toHaveBeenCalledWith(
+          expect.objectContaining({ id: 'pi_a' }),
+          HASH,
+        );
+      });
+    });
+
+    /**
+     * Monad without a relayer: the payment carries nothing that is the
+     * intent's own, so age would favour whoever pre-creates intents at a
+     * merchant's address. Two direct intents are left to the claim.
+     */
+    it('does not rank direct-mode Monad intents: older exact copies at the merchant address do not block', async () => {
+      const direct = {
+        chain: 'monad',
+        destination: '0xMERCHANT',
+        assetIssuer: '0xTOKEN',
+      };
+      rows.delete('pi_a');
+      olderRivals(SETTLEMENT_RIVALS_MAX + 1, direct);
+      rows.set('pi_b', { ...rows.get('pi_b')!, ...direct });
+
+      await service.markSucceeded('pi_b', 'cosmos_b', `0x${'d'.repeat(64)}`);
+
+      expect(rows.get('pi_b')!.status).toBe('SUCCEEDED');
       expect(verify).not.toHaveBeenCalled();
     });
 
