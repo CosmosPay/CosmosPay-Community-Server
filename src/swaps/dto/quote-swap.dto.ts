@@ -1,35 +1,48 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import {
-  IsInt,
-  IsOptional,
-  IsString,
-  Matches,
-  Max,
-  Min,
-} from 'class-validator';
+import { IsIn, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
+import { CHAINS, type Chain } from '@/chains/chains.constants';
+import { IsDecimalAmount } from '@/common/validators/is-decimal-amount.validator';
 import { IsStellarAddress } from '@/common/validators/is-stellar-address.validator';
+import { IsSwapAsset } from '@/common/validators/is-swap-asset.validator';
 
 /**
  * A swap quote request: how much of which asset you want to sell (`amount` of the
- * source asset) and which asset you want to buy. The service prices it through
- * Horizon's strict-send path search over the DEX + AMM pools. Omit an asset code
- * (or pass "XLM"/"native") for native lumens; a non-native asset needs its issuer.
+ * source asset) and which asset you want to buy, on one chain.
+ *
+ * Stellar (the default when `chain` is omitted, exactly as before it existed):
+ * priced through Horizon's strict-send path search over the DEX + AMM pools. Omit
+ * an asset code (or pass "XLM"/"native") for native lumens; a non-native asset
+ * needs its issuer. Solana: priced and built by Jupiter. Monad: by Kuru Flow. On
+ * those two an asset is the native ticker, "native", or the mint / ERC-20 address,
+ * and there is no issuer.
  */
 export class QuoteSwapDto {
   @ApiPropertyOptional({
-    description: 'Source asset code (the asset being sold). Native if omitted.',
+    enum: CHAINS,
+    default: 'stellar',
+    description:
+      'The chain to swap on. Omitted means Stellar. solana → Jupiter, ' +
+      'monad → Kuru Flow; both mainnet only. Swaps between chains are ' +
+      '/v1/cross-chain-swaps.',
+  })
+  @IsOptional()
+  @IsIn(CHAINS)
+  chain?: Chain;
+
+  @ApiPropertyOptional({
+    description:
+      'The asset being sold. Stellar: an asset code (native if omitted). ' +
+      'Solana / Monad: SOL / MON, "native", or the mint / ERC-20 address.',
     example: 'XLM',
   })
   @IsOptional()
   @IsString()
-  @Matches(/^[a-zA-Z0-9]{1,12}$/, {
-    message: 'sourceAssetCode must be 1-12 alphanumeric characters',
-  })
+  @IsSwapAsset('chain')
   sourceAssetCode?: string;
 
   @ApiPropertyOptional({
-    description: 'Issuer account for a non-native source asset.',
+    description: 'Stellar only: issuer account for a non-native source asset.',
     example: 'GCRCUE2C5TBNIPYHMEP7NK5RWTT2WBSZ75CMARH7GDOHDDCQH3XANFOB',
   })
   @IsOptional()
@@ -38,29 +51,26 @@ export class QuoteSwapDto {
 
   @ApiProperty({
     description:
-      'Gross amount of the source asset to swap (decimal, ≤ 7 places). ' +
-      'The platform fee is deducted from this and the remainder is routed.',
+      'Gross amount of the source asset to swap, in its own units (decimal; ' +
+      'at most 7 places on Stellar, the token decimals elsewhere). Stellar ' +
+      'deducts the platform fee from it; Solana and Monad take it from the output.',
     example: '100',
   })
   @IsString()
-  @Matches(/^\d+(\.\d{1,7})?$/, {
-    message: 'amount must be a positive decimal with up to 7 decimal places',
-  })
+  @IsDecimalAmount('chain')
   amount!: string;
 
   @ApiProperty({
-    description: 'Destination asset code (the asset being bought).',
+    description: 'The asset being bought, spelled as for sourceAssetCode.',
     example: 'USDC',
   })
   @IsString()
-  @Matches(/^[a-zA-Z0-9]{1,12}$/, {
-    message: 'destAssetCode must be 1-12 alphanumeric characters',
-  })
+  @IsSwapAsset('chain')
   destAssetCode!: string;
 
   @ApiPropertyOptional({
     description:
-      'Issuer account for the destination asset (required unless it is native).',
+      'Stellar only: issuer account for the destination asset (required unless it is native).',
     example: 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTR6F3DSZL5A3W4G4M4N4A5U4QY3T6',
   })
   @IsOptional()

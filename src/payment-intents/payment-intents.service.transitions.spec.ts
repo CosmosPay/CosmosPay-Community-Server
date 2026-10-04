@@ -122,6 +122,7 @@ describe('PaymentIntentsService.transition (guards + audit)', () => {
       new Sep7LinkBuilder(config, {} as never, {} as never),
       new ConsumerResolverService(prisma as never),
       customers as any,
+      {} as any,
     );
   });
 
@@ -597,10 +598,12 @@ describe('PaymentIntentsService API settlement is chain-verified', () => {
       config,
       prisma,
       new WebhookTerminalEmitter(prisma, { emit: jest.fn() } as never),
-      { verifyByHash: verify } as never,
+      // Every intent here is Stellar; the registry hands back its verifier.
+      { for: () => ({ verifyByHash: verify }) } as never,
       new Sep7LinkBuilder(config, {} as never, {} as never),
       new ConsumerResolverService(prisma),
       { ensureForPayer: jest.fn().mockResolvedValue(undefined) } as never,
+      {} as never,
     );
     return { service, prisma, verify };
   }
@@ -627,7 +630,9 @@ describe('PaymentIntentsService API settlement is chain-verified', () => {
     const err = await service
       .update(consumer, 'pi_1', {
         status: 'SUCCEEDED',
-        txHash: 'deadbeef',
+        // Shaped like a Stellar hash, so it reaches the chain — which then
+        // does not corroborate it.
+        txHash: 'deadbeef'.repeat(8),
       } as never)
       .catch((e: unknown) => e as ApiError);
 

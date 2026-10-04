@@ -8,7 +8,9 @@ import {
 import { RecoveryEmailCodeStatus } from '@generated/prisma/client';
 import { OidcService } from '@/common/oidc/oidc.service';
 import { isUniqueViolation } from '@/common/prisma-errors';
-import { AppConfig } from '@/config/configuration';
+import { AppConfig, type StellarNetwork } from '@/config/configuration';
+import { MailerService } from '@/mailer/mailer.service';
+import { minutesUntil, renderRecoveryCodeEmail } from '@/mailer/wallet-emails';
 import { PrismaService } from '@/prisma/prisma.service';
 import { fetchAccountSigners, isAccountId } from '@/stellar/account-signers';
 import {
@@ -96,8 +98,8 @@ type AccountRow = {
  *    verifies the same token on its own. Each server takes a given token once.
  *  - **Its own emailed code** (`startEmail` / `verifyEmail`), for a deployment
  *    with no provider. The code is minted and checked here; the other server
- *    sends its own. Only as independent as the two mail paths are — point each
- *    server's `RECOVERY_EMAIL_DELIVERY_URL` at its own sender for that.
+ *    sends its own. Only as independent as the two mail paths are — give each
+ *    server its own `MAIL_*` sender (its own Resend account) for that.
  *
  * What replaced both was an identity token minted in exchange for a SIGN-IN
  * session, verified with an HMAC secret that the sign-in server and both
@@ -112,54 +114,92 @@ export class RecoveryService {
     private readonly prisma: PrismaService,
     private readonly config: ConfigService<AppConfig, true>,
     private readonly oidc: OidcService,
+    private readonly mailer: MailerService,
   ) {}
 
   private get settings() {
     return this.config.get('recovery', { infer: true });
   }
 
+  /** Whether this server emails its own codes: switched on AND able to send. */
+  private get sendsEmailCodes(): boolean {
+    return this.settings.emailCodes && this.mailer.configured;
+  }
+
   /**
-   * The rules this deployment runs, or a 404.
+   * The ledger a request is for: the one it named (`recovery-network.ts`), or the
+   * default. A ledger this deployment does not serve is a 404, like everything
+   * else it does not serve — never a fallback to the default, which would answer
+   * a testnet request with a mainnet challenge.
+   */
+  private ledger(network?: StellarNetwork | null): {
+    networkPassphrase: string;
+    horizonUrl: string;
+    /** The path segment that names it: empty for the default. */
+    segment: string;
+  } {
+    const s = this.settings;
+    if (!network) {
+      return {
+        networkPassphrase: s.networkPassphrase,
+        horizonUrl: s.horizonUrl,
+        segment: '',
+      };
+    }
+    const named = s.networks[network];
+    if (!named) throw notFound();
+    return { ...named, segment: `/${network}` };
+  }
+
+  /**
+   * The rules this deployment runs on `network`'s ledger, or a 404.
    *
    * A deployment that is not a recovery server answers as if the routes did not
    * exist: the main API host carries the same code, and a 503 there would invite
    * a client to retry somewhere it was never meant to register.
    */
-  rules(): RecoveryRules {
+  rules(network?: StellarNetwork | null): RecoveryRules {
     const s = this.settings;
     if (!s.role) throw notFound();
+    const ledger = this.ledger(network);
     return {
       role: s.role,
       sep10: {
         signingSecret: s.sep10SigningSecret,
         homeDomain: s.homeDomain,
         webAuthDomain: new URL(s.publicBaseUrl).host,
-        networkPassphrase: s.networkPassphrase,
+        networkPassphrase: ledger.networkPassphrase,
       },
       signerMaster: s.signerMaster,
       jwtSecret: s.jwtSecret,
-      webAuthEndpoint: `${s.publicBaseUrl}/v1/sep10/auth`,
+      webAuthEndpoint: `${s.publicBaseUrl}/v1/sep10${ledger.segment}/auth`,
     };
+  }
+
+  /** The `network` column a ledger's registrations are stored under. */
+  private rowNetwork(rules: RecoveryRules): string {
+    return networkOf(rules.sep10.networkPassphrase);
   }
 
   /* --------------------------------- SEP-1 --------------------------------- */
 
-  stellarToml(): string {
-    const rules = this.rules();
+  stellarToml(network?: StellarNetwork | null): string {
+    const rules = this.rules(network);
     const s = this.settings;
+    const ledger = this.ledger(network);
     return buildStellarToml({
       rules,
-      horizonUrl: s.horizonUrl,
-      sep30Endpoint: `${s.publicBaseUrl}/v1/sep30`,
+      horizonUrl: ledger.horizonUrl,
+      sep30Endpoint: `${s.publicBaseUrl}/v1/sep30${ledger.segment}`,
       oidcIssuer: s.oidc.issuer || null,
-      emailCodes: Boolean(s.emailDelivery.url),
+      emailCodes: this.sendsEmailCodes,
     });
   }
 
   /* --------------------------------- SEP-10 -------------------------------- */
 
-  challenge(account: string) {
-    const rules = this.rules();
+  challenge(account: string, network?: StellarNetwork | null) {
+    const rules = this.rules(network);
     // G… only, checksummed: a muxed or mistyped account would be authenticated
     // under a string no registration can ever match.
     if (!account.startsWith('G') || !isAccountId(account)) {
@@ -171,8 +211,8 @@ export class RecoveryService {
     };
   }
 
-  async token(transaction: string) {
-    const rules = this.rules();
+  async token(transaction: string, network?: StellarNetwork | null) {
+    const rules = this.rules(network);
     // Structure first, Horizon second: a challenge that is not ours is refused
     // without a network call.
     const structure = readChallenge(rules.sep10, transaction);
@@ -185,8 +225,10 @@ export class RecoveryService {
 
     let signers;
     try {
+      // The ledger the challenge was signed for, and only that one: a signer
+      // read from the other ledger would authenticate a key there for this one.
       signers = await fetchAccountSigners(
-        this.settings.horizonUrl,
+        this.ledger(network).horizonUrl,
         structure.account,
         this.settings.timeoutMs,
       );
@@ -217,8 +259,8 @@ export class RecoveryService {
    * and this server accepts it once: the hash is recorded before anything is
    * issued, so two concurrent exchanges of one token cannot both succeed.
    */
-  async exchangeIdToken(idToken: string) {
-    const rules = this.rules();
+  async exchangeIdToken(idToken: string, network?: StellarNetwork | null) {
+    const rules = this.rules(network);
     const { oidc, timeoutMs } = this.settings;
     if (!oidc.issuer) {
       throw new SepError(
@@ -286,10 +328,9 @@ export class RecoveryService {
    * caller which inboxes are registered. A code is only actually sent to one that
    * is: this route must not be a way to make the service mail strangers.
    */
-  async startEmail(rawEmail: string) {
-    const rules = this.rules();
-    const delivery = this.settings.emailDelivery;
-    if (!delivery.url) {
+  async startEmail(rawEmail: string, network?: StellarNetwork | null) {
+    const rules = this.rules(network);
+    if (!this.sendsEmailCodes) {
       throw new SepError(
         'This server does not send recovery codes.',
         HttpStatus.NOT_FOUND,
@@ -342,10 +383,18 @@ export class RecoveryService {
       },
     });
 
-    const registered = await this.prisma.recoveryAuthMethod.count({
-      where: { type: 'email', value: email, account: { role: rules.role } },
-    });
-    if (registered > 0) void this.deliver(email, code, expiresAt);
+    // An inbox is "registered" here for an account (SEP-30) or for a backup's
+    // half of its recovery key (`RecoverySharesService`) — either is something
+    // this code could recover.
+    const [accounts, shares] = await Promise.all([
+      this.prisma.recoveryAuthMethod.count({
+        where: { type: 'email', value: email, account: { role: rules.role } },
+      }),
+      this.prisma.recoveryBackupShare.count({
+        where: { role: rules.role, email },
+      }),
+    ]);
+    if (accounts + shares > 0) void this.deliver(email, code, expiresAt);
 
     return {
       claim_token: claimToken,
@@ -354,8 +403,12 @@ export class RecoveryService {
   }
 
   /** Answer a code. The attempt is counted before the comparison, on the row. */
-  async verifyEmail(claimToken: string, code: string) {
-    const rules = this.rules();
+  async verifyEmail(
+    claimToken: string,
+    code: string,
+    network?: StellarNetwork | null,
+  ) {
+    const rules = this.rules(network);
     const row = await this.prisma.recoveryEmailCode.findUnique({
       where: { claimHash: sha256Hex(claimToken) },
     });
@@ -412,24 +465,15 @@ export class RecoveryService {
     code: string,
     expiresAt: Date,
   ): Promise<void> {
-    const { url, secret } = this.settings.emailDelivery;
+    const role = this.settings.role;
+    if (!role) return;
+    const msg = renderRecoveryCodeEmail({
+      role,
+      code,
+      minutes: minutesUntil(expiresAt),
+    });
     try {
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          'x-cosmos-recovery-secret': secret,
-        },
-        body: JSON.stringify({
-          email,
-          code,
-          expiresAt: expiresAt.toISOString(),
-          role: this.settings.role,
-        }),
-        signal: AbortSignal.timeout(this.settings.timeoutMs),
-      });
-      if (!res.ok)
-        this.logger.error(`recovery code delivery answered ${res.status}`);
+      await this.mailer.send({ to: email, ...msg });
     } catch (error) {
       this.logger.error(`recovery code delivery failed: ${String(error)}`);
     }
@@ -437,9 +481,15 @@ export class RecoveryService {
 
   /* --------------------------------- SEP-30 -------------------------------- */
 
-  /** Who presented the bearer token, or a 401. */
-  actor(authorization: string | undefined): Actor {
-    const rules = this.rules();
+  /**
+   * Who presented the bearer token, or a 401. A SEP-10 token is read on the
+   * ledger it was issued for only (`recovery-core.ts`); an identity token on any.
+   */
+  actor(
+    authorization: string | undefined,
+    network?: StellarNetwork | null,
+  ): Actor {
+    const rules = this.rules(network);
     const token = /^Bearer\s+(\S+)$/i.exec(authorization?.trim() ?? '')?.[1];
     const actor = token ? actorFromToken(rules, token) : null;
     if (!actor) throw unauthorized();
@@ -478,7 +528,13 @@ export class RecoveryService {
     address: string,
   ): Promise<AccountRow | null> {
     return this.prisma.recoveryAccount.findUnique({
-      where: { role_address: { role: rules.role, address } },
+      where: {
+        role_network_address: {
+          role: rules.role,
+          network: this.rowNetwork(rules),
+          address,
+        },
+      },
       include: { methods: true },
     });
   }
@@ -489,14 +545,13 @@ export class RecoveryService {
     identities: Identity[],
   ): Promise<AccountRow> {
     return this.prisma.$transaction(async (tx) => {
+      const network = this.rowNetwork(rules);
       const account = await tx.recoveryAccount.upsert({
-        where: { role_address: { role: rules.role, address } },
-        create: {
-          role: rules.role,
-          address,
-          network: networkOf(rules.sep10.networkPassphrase),
+        where: {
+          role_network_address: { role: rules.role, network, address },
         },
-        update: { network: networkOf(rules.sep10.networkPassphrase) },
+        create: { role: rules.role, address, network },
+        update: {},
         select: { id: true },
       });
       // Replace, never merge: SEP-30's identities are "who may recover NOW", and a
@@ -530,9 +585,10 @@ export class RecoveryService {
     authorization: string | undefined,
     address: string,
     identities: Identity[],
+    network?: StellarNetwork | null,
   ) {
-    const rules = this.rules();
-    const actor = this.actor(authorization);
+    const rules = this.rules(network);
+    const actor = this.actor(authorization, network);
     if (actor.kind !== 'address' || actor.address !== address)
       throw notTheKeyHolder();
     if (await this.find(rules, address)) {
@@ -564,9 +620,10 @@ export class RecoveryService {
     authorization: string | undefined,
     address: string,
     identities: Identity[],
+    network?: StellarNetwork | null,
   ) {
-    const rules = this.rules();
-    const actor = this.actor(authorization);
+    const rules = this.rules(network);
+    const actor = this.actor(authorization, network);
     if (actor.kind !== 'address' || actor.address !== address)
       throw notTheKeyHolder();
     return this.response(
@@ -580,18 +637,26 @@ export class RecoveryService {
    * GET — describe. Absent and not-yours are the same 404 on purpose: a 403
    * would tell someone holding a stolen inbox that the account IS registered.
    */
-  async get(authorization: string | undefined, address: string) {
-    const rules = this.rules();
-    const actor = this.actor(authorization);
+  async get(
+    authorization: string | undefined,
+    address: string,
+    network?: StellarNetwork | null,
+  ) {
+    const rules = this.rules(network);
+    const actor = this.actor(authorization, network);
     const row = await this.find(rules, address);
     if (!row || !mayAct(actor, address, row.methods)) throw notFound();
     return this.response(rules, row, actor);
   }
 
   /** DELETE — forget. Answers with the account it deleted, per SEP-30. */
-  async remove(authorization: string | undefined, address: string) {
-    const rules = this.rules();
-    const actor = this.actor(authorization);
+  async remove(
+    authorization: string | undefined,
+    address: string,
+    network?: StellarNetwork | null,
+  ) {
+    const rules = this.rules(network);
+    const actor = this.actor(authorization, network);
     if (actor.kind !== 'address' || actor.address !== address)
       throw notTheKeyHolder();
     const row = await this.find(rules, address);
@@ -602,11 +667,15 @@ export class RecoveryService {
   }
 
   /** GET /accounts — one page, keyset on the address. */
-  async list(authorization: string | undefined, after?: string) {
-    const rules = this.rules();
-    const actor = this.actor(authorization);
+  async list(
+    authorization: string | undefined,
+    after?: string,
+    network?: StellarNetwork | null,
+  ) {
+    const rules = this.rules(network);
+    const actor = this.actor(authorization, network);
     const rows = await this.prisma.recoveryAccount.findMany({
-      where: listWhere(rules.role, actor, after),
+      where: listWhere(rules.role, this.rowNetwork(rules), actor, after),
       include: { methods: true },
       orderBy: { address: 'asc' },
       take: RECOVERY_PAGE_SIZE,
@@ -625,9 +694,10 @@ export class RecoveryService {
     address: string,
     signingAddress: string,
     xdr: string,
+    network?: StellarNetwork | null,
   ) {
-    const rules = this.rules();
-    const actor = this.actor(authorization);
+    const rules = this.rules(network);
+    const actor = this.actor(authorization, network);
     const row = await this.find(rules, address);
     if (!row || !mayAct(actor, address, row.methods)) throw notFound();
 

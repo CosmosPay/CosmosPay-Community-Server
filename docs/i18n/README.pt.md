@@ -5,11 +5,14 @@
 Microsserviço de pagamentos construído com **NestJS 12** + **Prisma 7 (PostgreSQL)**.
 
 É uma aplicação *separada* da plataforma de desenvolvedores Cosmos (`paydev`). A
-plataforma de desenvolvedores apenas **emite** tokens de acesso do APISIX (consumers +
-credenciais `key-auth`) para os serviços downstream. Este serviço é um desses
-serviços downstream: ele fica **atrás do APISIX**, que faz o balanceamento de carga e
-autentica cada requisição antes de encaminhá-la para cá. Por isso, o serviço nunca
-vê API keys em texto puro — ele confia apenas no que o gateway encaminha.
+plataforma de desenvolvedores é um painel: **emite** API keys para desenvolvedores e
+**mostra** os dados deles. Ela não está no caminho de nenhuma requisição que um
+cliente faz — toda chamada vai cliente → APISIX → este serviço, então a plataforma
+pode cair sem que uma wallet ou uma integração perceba (veja
+[Nenhuma requisição depende da plataforma de desenvolvedores](#nenhuma-requisição-depende-da-plataforma-de-desenvolvedores)).
+Este serviço fica **atrás do APISIX**, que faz o balanceamento de carga e autentica
+cada requisição antes de encaminhá-la para cá. Ele nunca vê API keys em texto puro —
+confia apenas no que o gateway encaminha.
 
 ## Como "somente APISIX" é garantido
 
@@ -63,7 +66,6 @@ src/
   common/
     guards/apisix.guard.ts        THE gateway gate
     guards/public-key.guard.ts    confines the SHARED public key to @AllowPublicKey routes
-    guards/console-only.guard.ts  confines a route to the platform console (alias recovery start)
     middleware/apisix-context...  extracts consumer identity from gateway headers
     decorators/                   @Public(), @CurrentConsumer(), @AllowPublicKey()
     filters/                      consistent error responses
@@ -74,34 +76,50 @@ src/
     services/advisory-lock...     cluster-wide lock for the background timers
   stellar/                        per-network Horizon servers (bounded timeout), account loader,
                                   SEP-7 links, signed-envelope relay, settlement repository
-  payment-intents/                Stellar payment intents (controller, service, DTO) — emits events
+  payment-intents/                payment intents on Stellar, Solana and Monad: controller, service, DTOs,
+                                  per-chain link builders and verifiers, the observer — emits events
+  chains/                         chain list, per-chain address rules, units, message signatures, JSON-RPC
+  solana/                         Solana RPC client (cluster-checked), Solana Pay links
+  evm/                            EVM RPC client for Monad (chain-id-checked), EIP-681 links
   swaps/                          Stellar native swaps (path payments): quote, build XDR, submit
+                                  + Solana (Jupiter) and Monad (Kuru Flow): venues/, chain swaps, observer
+  jupiter/                        Jupiter Swap API client (Solana aggregator)
+  kuru/                           Kuru Flow API client (Monad aggregator)
+  cross-chain-swaps/              swaps between Stellar, Solana and Monad via NEAR Intents: quote,
+                                  deposit address + per-chain wallet link, status observer
+  near-intents/                   NEAR Intents 1Click client: tokens, quote, status, deposit submit
   liquidity-pools/                AMM deposit/withdraw, pool + position reads, cost basis + commission on gain
   observer/                       background reconciler: swaps + LP ops against Horizon, one adapter per table
   webhooks/                       webhook endpoints CRUD + dispatcher (HMAC-signed, retried)
-  blindpay/                       BlindPay core: HTTP client, Svix verify, sync + inbound webhook
-  kyc/                            receivers (KYC/KYB), wallets, bank accounts, doc upload
-  onramp/                         fiat → stablecoin: payin quotes, payins, virtual accounts
-  offramp/                        stablecoin → fiat: payout quotes, payouts (client-signed)
   products/                       merchant catalogue
   customers/                      payer records derived from intents
   aliases/                        claimable payment handles: signed claims, resolution, email recovery
   assets/                         curated asset registry: the (code, issuer) pairs vouched for, per network
+  public-key/                     GET /v1/public-key: the shared public key, keyless
+  mailer/                         this service's own sender (Resend): sign-in and recovery codes
+  gateway-keys/                   mints wallet accounts' keys in APISIX (admin client, consumer forwarder)
   analytics/                      summary, balances, API logs, webhook logs
   activity/                       client telemetry ingest + feed (wallet, dashboard)
   admin/                          cross-tenant platform admin (console-only), audited
   audit/                          audit-trail writer, called inside other modules' transactions
+  plugins/                        plugin runtime + SDK (sdk.ts): folder loader, signatures, V8-isolate sandbox
+  native-plugins/                 first-party plugins, imported only when PLUGINS_ENABLED names them:
+    blindpay/                     BlindPay: client, Svix verify, sync + webhook, kyc/, onramp/, offramp/, admin/
+    defindex/                     DeFindex vaults (Stellar)
   health/                         liveness/readiness probes (@Public)
-prisma/schema.prisma              Consumer, PaymentIntent, Swap, LiquidityPoolOperation,
+prisma/schema.prisma              Consumer, PaymentIntent, Swap, ChainSwap, CrossChainSwap, LiquidityPoolOperation,
                                   WebhookEndpoint/Delivery/EmittedEvent, BlindpayReceiver,
                                   Blockchain/BankAccount/VirtualAccount, BlindpayQuote,
                                   BlindpayWebhookEvent, Payin, Payout, RequestLog,
                                   ActivityEvent,
                                   AdminAuditLog, Alias, AliasAddress,
                                   AliasChallenge, AliasRecovery
+                                  PluginInstallation, PluginRecord
 test/                             e2e suites: gateway gate, admin + alias console gates,
                                   payment intents, swaps, liquidity pools, KYC, webhooks
+plugins/                          THE plugins folder: one <slug>/ per plugin (plugin.json, index.ts, signature.json)
 scripts/                          OpenAPI generator, README check, operator scripts
+contracts/                        PaymentForwarder.sol — Monad deposit addresses (npm run contracts:compile)
 deploy/authentik/                 Authentik blueprint: the wallet sign-in and sign-up
 docs/i18n/                        this README in es, pt, de, fr, hi, zh
 ```
@@ -121,8 +139,9 @@ escopo. **Os schemas de requisição e resposta ficam no contrato OpenAPI gerado
 
 | Área              | Caminho base             | O que faz                                                |
 | ----------------- | ------------------------ | -------------------------------------------------------- |
-| Payment intents   | `/v1/payment-intents`    | Intents SEP-7 `tx` / `pay`, validação, observer on-chain |
-| Swaps             | `/v1/swaps`              | Cotação de path payment, montagem do XDR não assinado, envio do assinado |
+| Intenções de pagamento | `/v1/payment-intents`    | Intenções `pay` em Stellar (SEP-7), Solana (Solana Pay) e Monad (EIP-681), `tx` SEP-7, validação, observador on-chain |
+| Swaps             | `/v1/swaps`              | Cotação de path payment, montagem do XDR não assinado, envio do assinado · Solana via Jupiter, Monad via Kuru Flow |
+| Swaps entre redes | `/v1/cross-chain-swaps` | Stellar ⇄ Solana ⇄ Monad pela NEAR Intents: cotação, endereço de depósito, status |
 | Liquidity pools   | `/v1/liquidity-pools`    | Depósito / saque em AMM, posições, comissão sobre o ganho |
 | Webhooks          | `/v1/webhooks`           | CRUD de endpoints, rotação de segredo, entregas, reentrega |
 | KYC               | `/v1/kyc`                | Receivers (KYC/KYB), carteiras, contas bancárias, upload de documentos |
@@ -133,8 +152,10 @@ escopo. **Os schemas de requisição e resposta ficam no contrato OpenAPI gerado
 | Aliases           | `/v1/aliases`            | Handles de pagamento reivindicáveis: reivindicar, resolver, recuperar |
 | Login da carteira | `/v1/wallet` | Google / GitHub / código por e-mail, e o backup cifrado da seed |
 | Ativos            | `/v1/assets`             | Registro curado de ativos por rede                       |
+| Chave pública     | `/v1/public-key`         | A API key pública compartilhada, servida sem chave (`@Public`) |
 | Analytics         | `/v1/summary`, `/v1/balances`, `/v1/logs` | Agregados e logs do dashboard           |
 | Atividade         | `/v1/activity`           | Eventos reportados pelo cliente: ingestão, feed, consolidação |
+| Plugins           | `/v1/plugins`            | Extensões compiladas sob um slug, instaladas por tenant |
 | Admin             | `/v1/admin`              | Leituras/escritas cross-tenant — somente console da plataforma, auditado |
 | Health            | `/v1/health`             | Liveness / readiness (`@Public`)                         |
 
@@ -154,7 +175,9 @@ console chega até ela. Os caminhos usam a forma `{param}` do OpenAPI.
 | POST | `/v1/activity/events` | `activity:write` | ✓ |
 | GET | `/v1/activity/summary` | `activity:read` |  |
 | GET | `/v1/admin/audit-logs` | console da plataforma |  |
+| GET | `/v1/admin/chain-swaps` | console da plataforma |  |
 | GET | `/v1/admin/consumers` | console da plataforma |  |
+| GET | `/v1/admin/cross-chain-swaps` | console da plataforma |  |
 | GET | `/v1/admin/customers` | console da plataforma |  |
 | GET | `/v1/admin/payins` | console da plataforma |  |
 | GET | `/v1/admin/payment-intents` | console da plataforma |  |
@@ -176,11 +199,17 @@ console chega até ela. Os caminhos usam a forma `{param}` do OpenAPI.
 | DELETE | `/v1/aliases/{name}` | `payments:write` |  |
 | POST | `/v1/aliases/{name}/addresses` | `payments:write` |  |
 | DELETE | `/v1/aliases/{name}/addresses/{addressId}` | `payments:write` |  |
-| POST | `/v1/aliases/{name}/recovery` | console da plataforma |  |
+| POST | `/v1/aliases/{name}/recovery` | `payments:write` | ✓ |
 | POST | `/v1/aliases/{name}/recovery/complete` | `payments:write` |  |
 | GET | `/v1/assets` | — | ✓ |
 | GET | `/v1/balances` | `payments:read` |  |
 | POST | `/v1/blindpay/webhooks` | nenhum — `@Public()`, assinatura Svix |  |
+| GET | `/v1/cross-chain-swaps` | `swaps:read` |  |
+| POST | `/v1/cross-chain-swaps` | `swaps:write` | ✓ |
+| GET | `/v1/cross-chain-swaps/assets` | `swaps:read` | ✓ |
+| POST | `/v1/cross-chain-swaps/quote` | `swaps:read` | ✓ |
+| GET | `/v1/cross-chain-swaps/{id}` | `swaps:read` |  |
+| POST | `/v1/cross-chain-swaps/{id}/deposit` | `swaps:write` | ✓ |
 | GET | `/v1/customers` | `customers:read` |  |
 | POST | `/v1/customers` | `customers:write` |  |
 | GET | `/v1/customers/{id}` | `customers:read` |  |
@@ -245,11 +274,18 @@ console chega até ela. Os caminhos usam a forma `{param}` do OpenAPI.
 | DELETE | `/v1/payment-intents/{id}` | `payments:write` |  |
 | GET | `/v1/payment-intents/{id}/transitions` | `payments:read` |  |
 | POST | `/v1/payment-intents/{id}/validate` | `payments:write` |  |
+| GET | `/v1/plugins` | `plugins:read` |  |
+| GET | `/v1/plugins/{slug}` | `plugins:read` |  |
+| PUT | `/v1/plugins/{slug}/installation` | `plugins:write` |  |
+| DELETE | `/v1/plugins/{slug}/installation` | `plugins:write` |  |
+| POST | `/v1/plugins/{slug}/queries/{action}` | `plugins:read` |  |
+| POST | `/v1/plugins/{slug}/commands/{action}` | `plugins:write` |  |
 | GET | `/v1/products` | `products:read` |  |
 | POST | `/v1/products` | `products:write` |  |
 | GET | `/v1/products/{id}` | `products:read` |  |
 | PATCH | `/v1/products/{id}` | `products:write` |  |
 | DELETE | `/v1/products/{id}` | `products:write` |  |
+| GET | `/v1/public-key` | none — `@Public()` |  |
 | GET | `/.well-known/stellar.toml` | none — `@Public()`, SEP-1 discovery (recovery servers only) |  |
 | GET | `/v1/sep10/auth` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | POST | `/v1/sep10/auth` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
@@ -262,6 +298,9 @@ console chega até ela. Os caminhos usam a forma `{param}` do OpenAPI.
 | GET | `/v1/sep30/accounts/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | DELETE | `/v1/sep30/accounts/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | POST | `/v1/sep30/accounts/{address}/sign/{signer}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
+| PUT | `/v1/sep30/shares/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
+| GET | `/v1/sep30/shares/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
+| DELETE | `/v1/sep30/shares/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | GET | `/v1/summary` | `payments:read` |  |
 | GET | `/v1/swaps` | `swaps:read` |  |
 | POST | `/v1/swaps` | `swaps:write` | ✓ |
@@ -321,7 +360,7 @@ Alguns que são fáceis de confundir:
 | `insufficient_scope` | 403 | A API key não tem o escopo. Provisione a chave novamente |
 | `account_disabled` | 403 | Um operador desativou esta conta fiat. Não é um problema da chave |
 | `gateway_required` | 403 | A requisição não chegou pelo APISIX |
-| `admin_console_only` | 403 | A rota pertence ao console da plataforma (`/v1/admin`, iniciar a recuperação de um alias). Nenhuma API key pode chamá-la |
+| `admin_console_only` | 403 | A rota pertence ao console da plataforma (`/v1/admin`). Nenhuma API key pode chamá-la |
 | `idempotency_conflict` | 409 | Este `Idempotency-Key` (ou o memo do payment intent) já produziu um recurso para uma requisição *diferente*. Repita a requisição original ou use uma chave nova |
 | `kyc_state_invalid` | 409 | Uma transição de estado de KYC ilegal — não é uma requisição duplicada |
 | `operation_in_flight` | 409 | Uma operação conflitante ainda está sendo liquidada |
@@ -341,7 +380,7 @@ o seu ciclo quando outra réplica o detém:
 | Timer                          | Chave do lock            |
 | ------------------------------ | ------------------------ |
 | `SettlementObserverService`    | `SettlementObserver`     |
-| `StellarObserverService`       | `PaymentIntentObserver`  |
+| `PaymentIntentObserverService`       | `PaymentIntentObserver`  |
 | `RequestLogRetentionService`   | `RequestLogRetention`    |
 | Sweeper de entregas de webhook | `WebhookDeliverySweeper` |
 | `RateLimitPruneService`        | `RateLimitPrune`         |
@@ -354,6 +393,19 @@ sessão, ele também funciona atrás do PgBouncer em modo transaction pooling.
 Os ids de lock ficam no enum `AdvisoryLockKey`. Não renumere um id existente —
 durante um rolling deploy, réplicas antigas e novas obteriam locks diferentes — e não
 reutilize um id aposentado.
+
+**Várias instâncias a partir do mesmo checkout, localmente.** `npm run dev:local` inicia a
+api e uma segunda réplica a partir de um único `.env`; `npm run dev:local -- recovery` inicia
+a api e os dois servidores de recuperação (A em `:3002`, B em `:3003`, testnet), e `-- all`
+as quatro. Só o que muda por instância fica em `dev-instances.json` (ignorado pelo git; a
+primeira execução o cria a partir de `dev-instances.example.json` e gera uma única vez as
+chaves de cada servidor de recuperação — guarde-o, essas chaves derivam signatários que
+estão no ledger): uma chave ali substitui a do `.env`, `""` a remove, e um objeto aninhado é
+um prefixo (`{ "RECOVERY": { "ROLE": "a" } }` é `RECOVERY_ROLE=a`). Um único build em modo
+watch compila em `dist-local/`, então nunca disputa `dist/` com `npm run dev` — mas também
+inicia a api, então use um ou outro. As réplicas compartilham `DATABASE_URL` e segredos:
+nada é estado por processo. Liste ambas no upstream do APISIX (`COSMOS_API_URL` do developer
+platform, separadas por vírgula, e depois `npm run sync:route` lá).
 
 ### Validação de pagamentos e o observer on-chain
 
@@ -377,7 +429,7 @@ Dois caminhos usam essa regra única:
   intent sozinho: precisa ser um hash hex de 64 caracteres, é armazenado em
   minúsculas e é único apenas entre os intents do consumer que chama
   (`409 idempotency_conflict` em caso de colisão com outro intent dele).
-- **Automático (observer permanente):** `StellarObserverService` consulta o Horizon
+- **Automático (observer permanente):** `PaymentIntentObserverService` consulta o Horizon
   a cada `OBSERVER_INTERVAL_MS` em busca de intents `PENDING` — pelo `txHash`
   informado, ou varrendo os pagamentos para o destino — e finaliza as
   correspondências da mesma forma, de modo que os status mudam e os eventos disparam
@@ -466,7 +518,7 @@ Tipos de evento: `PAYMENT_INTENT_CREATED`, `PAYMENT_INTENT_UPDATED`,
 `PAYMENT_INTENT_SUCCEEDED`, `PAYMENT_INTENT_FAILED`, `PAYMENT_INTENT_CANCELLED`,
 `PAYMENT_INTENT_DELETED`, `SWAP_CREATED`, `SWAP_SUBMITTED`, `SWAP_SUCCEEDED`,
 `SWAP_FAILED`, `LIQUIDITY_CREATED`, `LIQUIDITY_SUBMITTED`, `LIQUIDITY_SUCCEEDED`,
-`LIQUIDITY_FAILED`, além dos originados no BlindPay `RECEIVER_UPDATED`,
+`LIQUIDITY_FAILED`, `CROSS_CHAIN_SWAP_CREATED`, `CROSS_CHAIN_SWAP_UPDATED`, `CROSS_CHAIN_SWAP_SUCCEEDED`, `CROSS_CHAIN_SWAP_REFUNDED`, `CROSS_CHAIN_SWAP_FAILED`, `CROSS_CHAIN_SWAP_EXPIRED`, além dos originados no BlindPay `RECEIVER_UPDATED`,
 `PAYIN_CREATED`, `PAYIN_UPDATED`, `PAYIN_COMPLETED`, `PAYOUT_CREATED`,
 `PAYOUT_UPDATED` e `PAYOUT_COMPLETED`. A lista oficial é o enum `WebhookEventType`
 em `prisma/schema.prisma`.
@@ -476,7 +528,7 @@ trazem apenas identidade e estado — ids, status, valores, rails — nunca dado
 pessoais. O objeto do provedor não é encaminhado, porque o payload de um receiver é
 um dossiê de KYC completo e se inscrever exige apenas `webhooks:write`. Busque os
 detalhes na API com uma chave que tenha `kyc:read` / `onramp:read` / `offramp:read`.
-A allowlist de campos está em `src/blindpay/blindpay-event-redaction.ts`.
+A allowlist de campos está em `src/native-plugins/blindpay/blindpay-event-redaction.ts`.
 
 A entrega é desacoplada via `EventEmitter2` do NestJS (`webhook.event`), então
 emitir uma notificação nunca bloqueia a requisição da API que a disparou.
@@ -716,6 +768,94 @@ Rede/Horizon/taxa/timeout são configurados pelas variáveis de ambiente `STELLA
 (veja `.env.example`). O padrão é **testnet** por segurança — defina
 `STELLAR_NETWORK=public` para mainnet (fundos reais).
 
+### Intenções de pagamento em Solana e Monad
+
+`POST /v1/payment-intents/pay` aceita um `chain` opcional: `stellar` (o padrão),
+`solana` ou `monad`. Uma requisição sem ele é exatamente a requisição Stellar acima.
+O nível de rede continua sendo o da chave de API — uma chave `prod` chega à Solana
+mainnet-beta e à Monad mainnet (chain id 143), uma `dev` à Solana devnet e à Monad
+testnet (10143) — e `network` é gravado como `public` / `testnet` em todas as
+chains. `POST /v1/payment-intents/tx` continua só Stellar: um `tx` SEP-7 é um
+envelope da Stellar.
+
+| | Stellar | Solana | Monad |
+| --- | --- | --- | --- |
+| Link (`uri`) | SEP-7 `web+stellar:pay` | Solana Pay `solana:<recipient>?…` | EIP-681 `ethereum:<payee>@143?…` |
+| Moeda (sem `assetCode`) | XLM | SOL | MON |
+| Token (`assetCode` + `assetIssuer`) | conta emissora | mint SPL | contrato ERC-20 |
+| Como o pagamento é encontrado | `MEMO_ID` | uma chave `reference` nova por intenção (`chainReference`) | o endereço de depósito próprio da intenção (com relayer); senão, destino + valor exato |
+| Observador | pagamentos ao destino | as assinaturas da chave de referência | o saldo do endereço de depósito, MON nativo incluído (com relayer); senão, os logs `Transfer` do token |
+| `amount` | opcional | opcional | opcional com relayer, obrigatório sem ele |
+| `msg` / `callback` | ambos | `msg` (`message` do Solana Pay) | nenhum |
+| `txHash` para `validate` / `PATCH` | 64 hex | assinatura base58 | `0x` + 64 hex |
+
+- **O memo continua sendo a chave de idempotência**, e `chain` é um dos termos que
+  uma repetição precisa igualar: o memo `42` na Stellar e o memo `42` na Solana são
+  pagamentos diferentes (`409 idempotency_conflict`). Na Solana o memo também é
+  gravado on-chain pelo programa SPL Memo.
+- **Um token é resolvido contra a chain antes de a intenção ser gravada**: as
+  casas decimais de um mint SPL (programa Token ou Token-2022), o `decimals()` de um
+  ERC-20. Um endereço que não é um token dá `400 validation_failed`; um valor com
+  mais casas decimais do que o token tem, `400 invalid_amount`.
+- **Um pagamento na Monad não leva memo.** O EIP-681 não tem campo que uma wallet
+  preencha com o id da intenção, então uma intenção na Monad é reconhecida pelo que
+  paga: destino, token e valor exato, no bloco de criação ou depois. Dê **valores
+  distintos** a intenções simultâneas para um mesmo destino. Um pagamento em **MON
+  nativo** não emite log, então o observador não consegue encontrá-lo: liquide-o com
+  `POST /v1/payment-intents/{id}/validate` e o hash da transação. Pagamentos ERC-20
+  são encontrados pelo observador, `MONAD_LOG_BLOCK_RANGE` blocos por chamada e
+  cinco chamadas por intenção por ciclo, retomando de onde parou (`chainCursor`).
+- **Endereços de depósito (com `MONAD_RELAYER_PRIVATE_KEY`).** Cada intenção na
+  Monad recebe seu próprio endereço, e o link paga para ele em vez do comerciante:
+  um endereço `CREATE2` de `contracts/PaymentForwarder.sol` pelo proxy de deploy
+  determinístico (`0x4e59…956c`, presente na Monad mainnet e testnet), cujo código
+  de inicialização fixa o comerciante, o ativo, o relayer e a taxa dele. O endereço
+  é o compromisso — ninguém, este serviço incluído, consegue fazer deploy ali de um
+  código que pague a outro —, então o serviço não tem nenhuma chave do dinheiro. O
+  encaminhador de depósitos observa o saldo do endereço (MON nativo incluído, sem
+  precisar de logs); quando cobre a intenção (qualquer valor acima da taxa, se for
+  aberta), o relayer faz o deploy do encaminhador, cujo construtor paga ao relayer
+  a taxa e o restante ao comerciante, e a intenção é liquidada com essa transação.
+  A taxa é fixada na criação da intenção e mostrada como `networkFee`: para MON, o
+  orçamento de gas do encaminhamento ao preço atual mais 25%; para um token, a
+  entrada de `MONAD_DEPOSIT_TOKEN_FEES` do operador, ou nada (o relayer absorve o
+  gas). Um valor que a taxa consumiria dá `400 invalid_amount`. O que chega depois
+  que uma intenção expira ou é cancelada ainda é encaminhado ao comerciante, e o
+  pagador pode liquidar antes com `validate` e o próprio hash. A chave do relayer
+  guarda só dinheiro para gas: abasteça-a com moderação e crie alertas de saldo. O
+  bytecode está commitado (`src/evm/payment-forwarder.artifact.ts`) e um spec
+  recompila o código-fonte para compará-lo; todo endereço de depósito depende dele,
+  então nunca o altere enquanto endereços antigos ainda puderem receber dinheiro.
+- **Um nó RPC é verificado antes de ser confiável**: antes da primeira leitura de
+  um nível, o serviço compara o genesis hash do nó (Solana) ou seu `eth_chainId`
+  (Monad) com o da chain, e responde `503 misconfigured` quando uma URL de mainnet
+  aponta para uma rede de testes. Os RPCs públicos são o padrão e têm limites de
+  taxa rígidos: em produção configure `SOLANA_RPC_URL_MAINNET` e
+  `MONAD_RPC_URL_MAINNET` com os endpoints de um provedor.
+- **Swaps, pools de liquidez e DeFindex continuam só Stellar.**
+
+```jsonc
+// POST /v1/payment-intents/pay — USDC na Solana
+{ "chain": "solana", "destination": "<base58>", "amount": "25.5",
+  "assetCode": "USDC", "assetIssuer": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v" }
+// response → { chain: "solana", uri: "solana:<base58>?amount=25.5&spl-token=…&reference=…&memo=…", chainReference, qr, … }
+```
+
+### Login da wallet em Solana e Monad
+
+`POST /v1/wallet/auth/finish` e `PUT /v1/wallet/backup` aceitam um `chain` opcional e
+a conta como `address`; `stellarAddress` continua aceito para a Stellar, e continua
+sendo devolvido ao lado de `chain` e `address`. O desafio que uma conta Solana ou
+Monad assina tem uma linha `chain: <chain>` depois da primeira — uma mesma chave
+ed25519 é endereço Stellar e Solana, e a linha impede que uma assinatura para uma
+abra a outra — enquanto os desafios da Stellar não mudam um byte. A Solana assina os
+bytes UTF-8 com ed25519 (`signMessage`; base64 ou base58); a Monad com
+`personal_sign` do EIP-191 (hex com 0x; assinaturas high-s são recusadas). Um
+endereço Monad é gravado em sua grafia EIP-55. A configuração de recuperação
+(`POST /v1/wallet/recovery/setup`) continua só Stellar. As chaves da
+conta são emitidas do mesmo jeito em todas as chains (veja
+[Nenhuma requisição depende da plataforma de desenvolvedores](#nenhuma-requisição-depende-da-plataforma-de-desenvolvedores)).
+
 ## A API key pública compartilhada
 
 A carteira open source distribui uma API key que todo mundo compartilha, para que
@@ -747,6 +887,9 @@ Acessível com a chave pública hoje:
 | `POST /v1/swaps/quote` | Precifica um caminho a partir do Horizon; uma função pura da requisição |
 | `POST /v1/swaps` | Monta um envelope não assinado que quem chama assina |
 | `POST /v1/swaps/:id/submit` | Transmite um envelope assinado por quem chama — nada sobre o swap, nem mesmo seu status, é respondido até que o corpo seja o envelope daquele swap trazendo uma assinatura; com limite de taxa |
+| `GET /v1/cross-chain-swaps/assets` \| `POST /v1/cross-chain-swaps/quote` | A lista de tokens da NEAR Intents e uma cotação a seco; funções puras da requisição |
+| `POST /v1/cross-chain-swaps` | Um endereço de depósito para os fundos de quem chama; um `Idempotency-Key` repetido só é respondido se a requisição coincidir |
+| `POST /v1/cross-chain-swaps/:id/deposit` | Aponta à NEAR Intents uma transação que ela mesma verifica on-chain; com limite de taxa |
 | `POST /v1/liquidity-pools/deposit` \| `withdraw` | Montam envelopes não assinados |
 | `POST /v1/liquidity-pools/operations/:id/submit` | Transmite um envelope assinado por quem chama, sob as mesmas verificações do submit de swaps; com limite de taxa |
 | `GET /v1/liquidity-pools` \| `/:poolId` \| `/positions` | Dados públicos on-chain lidos do Horizon |
@@ -755,7 +898,7 @@ Acessível com a chave pública hoje:
 | `GET /v1/assets` | O catálogo público de ativos |
 | `GET /v1/aliases/resolve/:name` \| `availability/:name` \| `by-address/:address` | Um pagador resolvendo um handle é justamente o chamador anônimo para o qual esta chave existe; a resposta é uma função pura da requisição e nunca inclui a caixa de e-mail do dono |
 
-Recusadas: `GET /v1/swaps`, `GET /v1/swaps/:id`,
+Recusadas: `GET /v1/swaps`, `GET /v1/swaps/:id`, `GET /v1/cross-chain-swaps`, `GET /v1/cross-chain-swaps/:id`,
 `GET /v1/liquidity-pools/operations{,/:id}`, `GET /v1/activity/events`,
 `GET /v1/activity/summary`, toda leitura de payment intent, toda rota do dono de um
 alias (reivindicar, listar, adicionar ou remover um endereço, liberar, recuperar) e
@@ -771,6 +914,53 @@ O guard identifica o consumer público **ou** pelo papel encaminhado
 (`X-Consumer-Role: public`) **ou** pelo username em `APISIX_PUBLIC_CONSUMER`. Defina
 os dois: se o gateway deixar de encaminhar papéis, o username continua
 correspondendo, e sem o username o guard depende apenas de um header.
+
+**De onde uma wallet a obtém.** `GET /v1/public-key?env=dev|prod` responde
+`{ env, apiKey }` sem chave e sem segredo do gateway (`@Public()`), a partir de
+`PUBLIC_API_KEY_DEV` / `PUBLIC_API_KEY_PROD`; um ambiente sem chave responde
+`503 misconfigured`. Rotacionar a chave é mudar essas variáveis — toda wallet pega a
+nova dentro dos 5 minutos de cache. A rota do APISIX para este path NÃO deve rodar
+`key-auth` (quem chama ainda não tem chave): sirva-a pela rota sem chave, como
+`/v1/wallet/auth/oauth/callback/*`.
+
+## Nenhuma requisição depende da plataforma de desenvolvedores
+
+A plataforma de desenvolvedores cria API keys para desenvolvedores e mostra dados.
+Nada do que um cliente faz passa por ela: a wallet e toda integração falam com o
+APISIX, e o APISIX com este serviço. Antes não era assim, e a plataforma — a peça
+que mais cai — levava junto todo login:
+
+| Antes passava pela plataforma | Agora |
+| --- | --- |
+| Enviar o código de login da wallet | Este serviço envia (`MAIL_FROM` + `MAIL_RESEND_API_KEY` / `MAIL_SMTP_*`) |
+| Emitir as API keys de uma conta de wallet ao fim do login | Este serviço as emite no APISIX (`APISIX_ADMIN_URL`, `APISIX_ADMIN_KEY`) |
+| O código por email de um servidor de recuperação | Cada servidor de recuperação envia o seu (`RECOVERY_EMAIL_CODES=true` + seu próprio `MAIL_*`) |
+| A chave pública compartilhada (`/api/public-key`) | `GET /v1/public-key` |
+| O catálogo de ativos e a telemetria anônima (`/api/assets`, `/api/telemetry`) | A wallet chama `GET /v1/assets` e `POST /v1/activity/events` com a chave pública |
+
+O que a plataforma continua fazendo é dela: as chaves dos desenvolvedores, o painel,
+e `/v1/admin`, que ela chama — nunca o contrário. Se ela estiver fora, ninguém cria
+uma chave de desenvolvedor nem abre o painel; as wallets fazem login, pagam e fazem
+swaps normalmente.
+
+**Chaves de wallet.** Um login concluído recebe uma chave `dev` e uma `prod` sob o
+consumer `cosmos_wallet_<accountId>`, com os scopes, labels e o forwarder de consumer
+que a plataforma gerava (plano `community`, comissão de swap
+`WALLET_KEY_SWAP_FEE_BPS`, 150 bps por padrão). Um segundo login devolve as chaves
+que a conta já tem em vez de emitir outro par. `organizationId` na resposta é o id
+da conta.
+
+**A admin key é o custo de segurança.** O APISIX não tem permissão mais estreita que
+a admin key, que pode reescrever todas as rotas. O cliente daqui só escreve consumers
+sob `cosmos_wallet_` e recusa qualquer outro nome antes de montar a requisição, mas
+essa é uma promessa deste código, não do APISIX: trate `APISIX_ADMIN_KEY` como
+`APISIX_GATEWAY_SECRET`, dê aos pods deste serviço acesso de rede à admin API e a
+nada mais dela, e nunca a defina num servidor de recuperação (o boot recusa).
+
+**Contas que a plataforma provisionou antes desta mudança** continuam funcionando com
+as chaves que têm. No próximo login recebem chaves novas sob
+`cosmos_wallet_<accountId>`, um consumer novo, então o histórico gravado sob o
+consumer anterior (`cosmos_<platformUserId>`) não aparece com a chave nova.
 
 ## Swaps nativos da Stellar (path payments)
 
@@ -903,6 +1093,127 @@ orçamento só seu, e `POST /v1/liquidity-pools/deposit` · `/withdraw` dividem 
 orçamento de **20 montagens por minuto** — as duas direções de um mesmo fluxo, então
 buckets separados só deixariam um loop alternar entre elas e levar os dois.
 
+### Swaps na Solana e na Monad (Jupiter, Kuru Flow)
+
+`/v1/swaps` aceita um `chain` opcional. Sem ele — ou com `stellar` — cada
+requisição é respondida exatamente como antes. `solana` passa pelo
+[Jupiter](https://jup.ag) e `monad` pelo [Kuru Flow](https://kuru.io):
+agregadores que percorrem todas as fontes de liquidez da sua rede, então um swap
+obtém a melhor taxa daquela rede em vez do preço de um único pool. O fluxo é o
+da Stellar, não custodial de ponta a ponta:
+
+```
+POST /v1/swaps/quote {chain} → POST /v1/swaps {chain, source} → wallet signs `transaction`
+  → POST /v1/swaps/{id}/submit {signedTransaction} → observer → SUCCEEDED / FAILED
+```
+
+- **Ativos:** o ticker nativo (`SOL`, `MON`), `native`, ou o endereço do mint
+  SPL / ERC-20. Emissores, `memo` e um `destination` diferente são só da Stellar
+  e são recusados nas outras redes: a saída vai para `source`.
+- **`transaction`** é o que a carteira assina. Solana: uma VersionedTransaction
+  não assinada (base64), válida cerca de um minuto, até o blockhash expirar.
+  Monad: `{ to, data, value, chainId }`, assinado como transação EIP-1559, válido
+  por dois minutos. Vender um ERC-20 na Monad com allowance insuficiente também
+  devolve `approval`: a chamada `approve` exata a enviar e confirmar antes.
+- **Submit** verifica que a transação assinada é a montada — os mesmos bytes de
+  mensagem na Solana, a mesma chamada na Monad — e assinada por `source`, e a
+  transmite pelo RPC próprio deste serviço. Um nó recusá-la é
+  `400 transaction_rejected` e o swap fica `PENDING`; só o veredito da própria
+  rede, lido pelo observador, o torna `SUCCEEDED` ou `FAILED`. Swaps não enviados
+  ou não vistos passam a `EXPIRED`. Os webhooks são os mesmos eventos `SWAP_*`.
+- **Comissão:** a taxa do plano, como na Stellar, mas o agregador a tira da
+  **saída**. O Jupiter paga seu `platformFeeBps` na conta de tokens de
+  `SOLANA_SWAP_FEE_WALLET` para o mint de saída, que precisa existir — se faltar,
+  a resposta é `503 misconfigured` indicando a conta a criar. O Kuru Flow paga
+  seu `referrerFeeBps` a `MONAD_SWAP_FEE_WALLET`.
+- **Somente mainnet**; uma chave `dev` é `400 network_unsupported`.
+  `GET /v1/swaps?chain=solana` lista aquela rede; os ids são únicos entre redes,
+  então `GET /v1/swaps/{id}` e submit encontram qualquer swap.
+- **Chaves.** O Kuru Flow sem `KURU_API_KEY` emite um token por endereço limitado
+  a uma requisição por segundo — suficiente para testar, não para produção. O
+  nível sem chave do Jupiter é o padrão; com `JUPITER_API_KEY`, aponte
+  `JUPITER_BASE_URL` para `https://api.jup.ag/swap/v1`.
+
+## Swaps entre redes (NEAR Intents)
+
+Os swaps **entre** Stellar, Solana e Monad são liquidados pela
+[NEAR Intents](https://intents.near.org/) através da sua API 1Click. Como os swaps
+da Stellar acima, eles são **não custodiais**: quem paga envia a entrada para um
+endereço de depósito que o 1Click deriva para aquela única cotação, e os solvers da
+NEAR Intents pagam a saída ao destinatário na outra rede, ou reembolsam quem pagou.
+Nenhuma das duas pernas passa pela Cosmos Pay.
+
+```
+quote → create (deposit address + wallet link + QR) → payer sends the deposit
+      → POST /deposit (optional) → observer polls 1Click → SUCCEEDED / REFUNDED / FAILED + webhook
+```
+
+**Qual swap vai por onde.**
+
+| Par | Liquidado por | Por quê |
+| --- | --- | --- |
+| Stellar → Stellar | `/v1/swaps` (DEX da Stellar) | O protocolo faz o swap nativamente; `/v1/cross-chain-swaps` responde `400` e aponta para lá |
+| Stellar ⇄ Solana ⇄ Monad | NEAR Intents | É preciso uma ponte, e a NEAR Intents é essa ponte |
+| Solana → Solana, Monad → Monad | `/v1/swaps` com `chain` (Jupiter, Kuru Flow) | Cada agregador percorre todas as fontes de liquidez da sua rede pela melhor taxa; `/v1/cross-chain-swaps` responde `400` e aponta para lá |
+
+O que este serviço faz por conta própria, em cada rede: resolve os ativos contra a
+lista de tokens do 1Click (`GET /v1/cross-chain-swaps/assets`), valida cada endereço
+contra a sua própria rede, monta a solicitação de depósito no padrão de carteira
+daquela rede — SEP-7 `pay`, Solana Pay, EIP-681 —, verifica no Horizon que um
+destinatário da Stellar confia no ativo que vai receber, e espelha o status na sua
+própria tabela.
+
+**Comissão.** A taxa do plano da organização — o mesmo `X-Plan-Swap-Fee-Bps`
+confiável dos swaps da Stellar, nunca um parâmetro da requisição — é enviada ao
+1Click como uma entrada de `appFees` paga a `NEAR_INTENTS_FEE_RECIPIENT`, uma conta
+NEAR. A NEAR Intents a desconta da entrada, a saída cotada já vem líquida dela, e ela
+se acumula nessa conta dentro da NEAR Intents, de onde o operador a saca. Um plano
+com taxa e sem destinatário configurado responde `503 misconfigured` em vez de fazer
+o swap de graça.
+
+**Configure `NEAR_INTENTS_API_KEY`.** O 1Click funciona sem chave de parceiro, mas
+não pelo mesmo preço: sem ela (verificado em 2026-09-30) cada cotação leva uma taxa
+própria do 1Click de 0,2 %, e metade da comissão pedida em `appFees` vai para o
+1Click em vez de para `NEAR_INTENTS_FEE_RECIPIENT`.
+
+**Somente mainnet.** A NEAR Intents não tem rede de testes. Uma chave `dev` pode
+listar ativos e cotar — o preço é o da mainnet de qualquer forma —, mas
+`POST /v1/cross-chain-swaps` responde `400 network_unsupported`: um endereço de
+depósito receberia dinheiro real.
+
+**Depósitos na Stellar levam memo.** O 1Click recebe todos os depósitos da Stellar
+em uma única conta e os distingue pelo memo, então `depositMemo` é obrigatório ali e
+o link SEP-7 o anexa como **`MEMO_TEXT`** — o tipo que os depósitos para essa conta
+carregam. Um depósito sem ele, ou com um `MEMO_ID`, não é creditado ao swap.
+
+**Status.** `AWAITING_DEPOSIT` → `DEPOSIT_DETECTED` / `INCOMPLETE_DEPOSIT` →
+`PROCESSING` → `SUCCEEDED`, `REFUNDED` ou `FAILED`, que são finais. A palavra do
+próprio 1Click fica em `providerStatus`. Um swap ainda esperando quando o prazo vence
+(`CROSS_CHAIN_SWAP_DEADLINE_SECONDS`, 30 minutos por padrão) passa a `EXPIRED`; um
+depósito que chega depois é reembolsado pela NEAR Intents, então um swap `EXPIRED`
+continua sendo consultado por um dia e o acompanha até `REFUNDED`. O observador roda
+junto com o observador de liquidação (`OBSERVER_ENABLED`, `OBSERVER_INTERVAL_MS`);
+nenhuma carteira precisa voltar para que um swap seja liquidado. Cada mudança emite
+`CROSS_CHAIN_SWAP_UPDATED`, `_EXPIRED`, `_SUCCEEDED`, `_REFUNDED` ou `_FAILED`; os três
+últimos são duráveis e deduplicados como os das payment intents.
+
+**Guarde `quoteSignature`.** É a assinatura do 1Click sobre a cotação e o seu
+endereço de depósito — o que resolve uma disputa com a NEAR Intents. A cotação
+assinada completa também é armazenada do lado do servidor.
+
+**Limites.** Quote: 60 chamadas por minuto; create e deposit: 20 cada, por
+consumidor e endereço de cliente (`429 rate_limited`).
+
+### Rotas de swaps entre redes
+
+| Rota | Scope | Finalidade |
+| --- | --- | --- |
+| `GET /v1/cross-chain-swaps/assets` | `swaps:read` | Os tokens que a NEAR Intents pode trocar na Stellar, Solana e Monad |
+| `POST /v1/cross-chain-swaps/quote` | `swaps:read` | Uma cotação a seco: saída, mínimo, comissão; não persiste nada |
+| `POST /v1/cross-chain-swaps` | `swaps:write` | Uma cotação ao vivo: endereço de depósito, memo, link de carteira e QR; aceita `Idempotency-Key` |
+| `GET /v1/cross-chain-swaps` | `swaps:read` | Os swaps entre redes do consumidor |
+| `GET /v1/cross-chain-swaps/{id}` | `swaps:read` | Um swap, como o observador o viu por último |
+| `POST /v1/cross-chain-swaps/{id}/deposit` | `swaps:write` | Informar a transação de depósito para que a NEAR Intents comece sem esperar o seu indexador |
 ## Aliases — handles de pagamento reivindicáveis
 
 Um alias permite que um pagador digite `emanuel250` em vez de `GA5ZSE…`. O pagador
@@ -956,26 +1267,30 @@ pode ter no máximo 25 aliases.
 
 Um alias `SUSPENDED` (um bloqueio imposto por um operador) não resolve para nada.
 
-### A recuperação passa pelo e-mail e pelo console da plataforma
+### A recuperação passa pelo e-mail, enviado por este serviço
 
-Uma reivindicação registra um e-mail de recuperação, para que perder uma chave não
+Uma reivindicação registra um e-mail de recuperação para que perder uma chave não
 signifique perder o nome. A recuperação funciona assim:
 
-1. O **console da plataforma** chama `POST /v1/aliases/:name/recovery {email}`. A
-   resposta é idêntica quer o handle e a caixa de e-mail coincidam, quer não; quando
-   coincidem, ela traz um token de uso único (30 minutos, armazenado apenas como
-   SHA-256), que o console envia por e-mail. Este serviço não envia e-mail.
-2. O usuário obtém um challenge `RECOVER` para a nova chave e chama
+1. A wallet (qualquer chave com `payments:write`, inclusive a chave pública
+   compartilhada) chama `POST /v1/aliases/:name/recovery {email}`. A resposta é
+   sempre `{ accepted: true }`, coincidam ou não o identificador e a caixa de e-mail;
+   se coincidirem, este serviço **envia por e-mail** um token de uso único (30
+   minutos, armazenado só como SHA-256) para a caixa registrada. O token nunca aparece
+   numa resposta.
+2. O usuário obtém um desafio `RECOVER` para a nova chave e chama
    `POST /v1/aliases/:name/recovery/complete {token, address, network, nonce, signature}`
-   com a sua própria API key. As duas provas são exigidas: o token prova a caixa de
-   e-mail, a assinatura prova a chave.
-3. A titularidade passa para o consumer que chama e **todos os endereços anteriores
-   são removidos**, então quem detém as chaves antigas deixa de receber pagamentos.
+   com a sua própria API key. As duas provas são necessárias: o token prova a caixa de
+   e-mail e a assinatura prova a chave.
+3. A propriedade passa para o consumer que chama e **todos os endereços anteriores são
+   removidos**, então quem tiver as chaves antigas deixa de receber pagamentos.
 
-O passo 1 é exclusivo do console porque o token prova o controle da caixa de e-mail,
-então ele só pode chegar a quem envia o e-mail. O `ConsoleOnlyGuard` recusa todo
-chamador com API key com `403 admin_console_only` antes de o alias ser consultado, e
-a rota não está no contrato publicado. Um alias suspenso não pode ser recuperado.
+Iniciar uma recuperação é aberto a qualquer um porque o token só chega à caixa de
+e-mail: tudo o que um estranho consegue é fazer o dono receber um e-mail. Isso é
+limitado duas vezes — 5 inícios a cada 10 minutos por endereço (`429 rate_limited`), e
+no máximo um e-mail por alias por minuto, peça quem pedir (uma repetição dentro desse
+minuto responde igual e não envia nada). Um deploy sem remetente de e-mail responde
+`503 misconfigured`. Um alias suspenso não pode ser recuperado.
 
 Um token de recuperação pode ser apresentado **cinco** vezes. Uma apresentação cujo
 challenge ou assinatura falhe ainda consome uma tentativa, e a sexta é recusada; o
@@ -988,6 +1303,20 @@ endereço do cliente (`429 rate_limited`).
 
 Challenges e recuperações expirados são apagados um dia depois de expirarem pelo
 `AliasChallengeSweeperService` (de hora em hora, uma réplica por ciclo).
+
+### Endereços em Solana e Monad
+
+Um alias pode apontar para contas Solana e Monad além das Stellar.
+`POST /v1/aliases/challenges`, `POST /v1/aliases/{name}/addresses` e
+`POST /v1/aliases/{name}/recovery/complete` aceitam um `chain` opcional; a mensagem
+do desafio passa a ter uma linha `chain:`, que prende a assinatura àquela chain. A
+Stellar continua assinando o digest emoldurado; a Solana assina o texto do desafio
+com ed25519, a Monad com `personal_sign` do EIP-191. O endereço padrão é por chain e
+rede, então adicionar um endereço Solana nunca rebaixa um Stellar.
+`GET /v1/aliases/resolve/{name}` resolve na Stellar a menos que `?chain=` nomeie
+outra chain — uma wallet que não pede nenhuma nunca recebe um endereço que não
+consegue pagar — e `GET /v1/aliases/by-address/{address}` deduz a chain pelo formato
+do próprio endereço. Um endereço Monad é gravado e comparado em sua grafia EIP-55.
 
 ### Rotas
 
@@ -1002,10 +1331,16 @@ Challenges e recuperações expirados são apagados um dia depois de expirarem p
 | POST | `/v1/aliases/:name/addresses` | `payments:write` | Adicionar um endereço, assinado por esse endereço |
 | DELETE | `/v1/aliases/:name/addresses/:addressId` | `payments:write` | Remover um endereço |
 | DELETE | `/v1/aliases/:name` | `payments:write` | Liberar o alias |
-| POST | `/v1/aliases/:name/recovery` | _somente console da plataforma_ | Iniciar uma recuperação → um token para o console enviar por e-mail |
+| POST | `/v1/aliases/:name/recovery` | `payments:write` | Iniciar uma recuperação → o token é enviado por e-mail ao dono |
 | POST | `/v1/aliases/:name/recovery/complete` | `payments:write` | Concluir uma recuperação com o token e a assinatura da nova chave |
 
 ## BlindPay — onramp / offramp / KYC (fiat ⇄ stablecoin)
+
+> **Um plugin nativo.** Tudo nesta seção é o plugin `blindpay`
+> (`src/native-plugins/blindpay/`), servido só quando `PLUGINS_ENABLED` lista
+> `blindpay`; veja *Plugins nativos: BlindPay e DeFindex*. A BlindPay liquida em
+> Stellar, Solana, chains EVM (Ethereum, Base, Arbitrum, Polygon) e Tron; **a Monad
+> não é uma rede da BlindPay**, então nela não há rampa fiat de entrada nem de saída.
 
 Além dos payment intents on-chain, o serviço integra o
 [BlindPay](https://www.blindpay.com/docs) para movimentar dinheiro entre **fiat e
@@ -1127,7 +1462,395 @@ um host com ponto final ou em forma IDN é recusado em vez de normalizado. Toda 
 que recebe uma `redirect_url` a verifica, incluindo a aprovação pelo admin, que usa a
 lista do próprio consumer do receiver. Um esquema ou host recusado resulta em `400`.
 
+## Plugins — extensões sob um slug
+
+Outras equipes integram sua tecnologia a este serviço como um **plugin**: uma pasta em
+`plugins/`, servida em `/v1/plugins/<slug>/…`, que trabalha com os clientes, produtos e
+intents de pagamento de um tenant sem nunca tocar o core diretamente. O objetivo é que
+um plugin possa estar errado — com bugs, lento, guloso — sem que o core fique errado
+junto.
+
+### Um plugin é uma pasta
+
+Todos os plugins vivem em **uma única pasta**, `plugins/` na raiz do repositório — os
+que o suporte da Cosmos Pay distribui e os que um operador instala. Um plugin são três
+arquivos legíveis, e nenhum roda até que seu slug esteja em `PLUGINS_ENABLED`:
+
+```
+plugins/
+  README.md
+  example/
+    plugin.json       what the plugin is, and what it may touch
+    index.ts          what it does — plain TypeScript, no build step
+    signature.json    who vouches for the two files above
+```
+
+`plugin.json` diz o que o plugin é e o que pode tocar — o primeiro arquivo que um revisor e um tenant leem:
+
+```json
+{
+  "slug": "example",
+  "name": "Example: payment notes",
+  "version": "1.0.0",
+  "description": "Keeps a timeline of notes per payment intent.",
+  "author": "Cosmos Pay support",
+  "capabilities": ["payment_intents:read"],
+  "egress": [],
+  "config": { "label": { "type": "string", "description": "Prefix for every note." } }
+}
+```
+
+`index.ts` é o código: TypeScript comum, transpilado quando o serviço inicia. Seu único import é o SDK (`@/plugins/sdk`):
+
+```ts
+import { defineHandlers, PluginError, requireString } from '@/plugins/sdk';
+
+export default defineHandlers({
+  queries: {
+    'get-notes': async (ctx, input) => {
+      const id = requireString(input, 'paymentIntentId');
+      return { notes: (await ctx.storage.get('notes', id)) ?? [] };
+    },
+  },
+  commands: {
+    'add-note': async (ctx, input) => { /* … */ },
+  },
+  events: {
+    PAYMENT_INTENT_SUCCEEDED: async (ctx, event) => { /* … */ },
+  },
+});
+```
+
+`example` vem pré-instalado e desativado: um plugin de referência que usa uma query, um
+command, um evento e uma configuração do tenant. Comece por ele.
+
+### Escrevendo um
+
+```sh
+npm run plugins -- new my-plugin          # plugins/my-plugin/ from a template
+npm run plugins -- check my-plugin        # compile, load and validate it
+PLUGINS_ENABLED=my-plugin PLUGINS_ALLOW_UNSIGNED=true npm run start:dev
+npm run plugins -- sign my-plugin --key support.pem --key-id cosmos-support
+```
+
+`check` compila o plugin e roda todas as validações que o servidor roda na
+inicialização. `PLUGINS_ALLOW_UNSIGNED=true` deixa rodar sem assinatura enquanto você
+trabalha localmente, e é recusado quando `NODE_ENV=production`. Abra um pull request com
+a pasta; depois da revisão, o suporte assina e ele passa a ser distribuído
+pré-instalado.
+
+Assinar nunca executa o código do plugin — só o `check` executa, e a CI o roda em
+todo pull request —, então um pull request não consegue ter seu código executado na
+máquina que guarda a chave do suporte. Assine o que a revisão e a CI já aprovaram.
+
+### O que um plugin pode e não pode alcançar
+
+Os handlers de um plugin recebem um `PluginContext` e nada mais: nada de Prisma,
+provider do Nest, `process.env` ou socket:
+
+| `ctx.` | Alcança | Limitado por |
+| ------ | ------- | ------------ |
+| `storage` | os registros próprios do plugin (`plugin_record`), apenas desta instalação | 16 KiB por valor, 10 000 registros por instalação |
+| `core.customers`, `core.products` | listar / ler / criar / atualizar, pelos serviços e DTOs do próprio core | a capacidade concedida (`customers:read`, `customers:write`, …); não existe exclusão |
+| `core.paymentIntents` | listar / ler, somente leitura | `payment_intents:read`; nada que assine ou movimente dinheiro |
+| `http` | HTTPS na porta 443 para os hosts em `egress` | apenas endereços públicos (as regras SSRF dos webhooks), socket fixado no endereço verificado, sem redirecionamentos, respostas de 1 MiB |
+| `installation.config` | as configurações do tenant; as secretas, decifradas só para esta chamada | — |
+
+O que o runtime garante em cada invocação:
+
+- **Isolamento entre tenants.** O contexto é construído a partir do consumer que chama
+  e da sua instalação; nenhum método recebe um id de consumer ou de instalação.
+- **Projeções, não linhas.** As leituras do core chegam como uma projeção fixa — sem
+  `consumerId`, sem `xdr`/`uri`, sem payloads de provedores —, copiadas e congeladas.
+- **A validação do core continua valendo.** As escritas passam pelos mesmos DTOs com
+  que as rotas HTTP validam; campos desconhecidos são recusados.
+- **Queries não podem escrever.** Uma query pode ser chamada com `plugins:read`, então
+  dentro dela toda escrita no storage ou no core é recusada.
+- **Orçamentos.** 10 s por invocação, 200 chamadas ao contexto, 64 KiB de entrada,
+  256 KiB de saída. Quando o tempo acaba, quem chamou recebe `504 plugin_failed` e o
+  contexto é revogado, então o trabalho que ficou rodando não consegue escrever depois.
+- **Falhas ficam contidas.** Um `PluginError` vira `400 plugin_rejected` com a mensagem
+  dele; qualquer outra coisa vira `502 plugin_failed`, registrada e nunca devolvida. Um
+  plugin que falha num evento não afeta o webhook desse evento nem outros plugins.
+- **Isolamento.** O código de um plugin nunca roda neste processo. Cada invocação
+  recebe um isolate V8 novo (`isolated-vm`) sem nada do Node dentro — sem `process`,
+  `require`, rede, sistema de arquivos ou timers —, um heap de 32 MB e uma thread
+  própria. Sua única saída é uma ponte que aceita os nomes dos métodos do contexto
+  acima, com cópias JSON na ida e na volta; nenhum objeto deste processo chega a ele,
+  então código escrito para escapar não encontra de onde subir. Quando o orçamento
+  acaba o isolate é descartado, o que para o plugin onde estiver — um loop síncrono
+  inclusive — e nada que ele guardou em memória sobrevive à próxima chamada, nem à de
+  outro tenant. Além disso, o ESLint só deixa `plugins/**/*.ts` importar o SDK.
+
+### Quem responde por um plugin
+
+Um plugin só roda se uma chave confiável assinou exatamente seu `plugin.json` e seu
+`index.ts` com seu slug e sua versão (`signature.json`). Mude um caractere do código ou
+uma capacidade e a assinatura falha — a inicialização para. A formatação do
+`plugin.json` e os finais de linha não contam como mudanças.
+
+- **Pré-instalado pelo suporte.** As chaves públicas do suporte estão no código
+  (`PLUGIN_SUPPORT_KEYS`), então um plugin assinado pelo suporte e versionado em
+  `plugins/` carrega em qualquer implantação sem configuração. `plugins/` está no
+  `.github/CODEOWNERS`, e a CI verifica que cada pasta está assinada e válida.
+- **Instalado manualmente.** Todo o resto é instalado de um registry — qualquer host
+  HTTPS estático — e deve ser assinado pelo suporte ou por uma chave de
+  `PLUGINS_TRUSTED_KEYS`:
+
+```sh
+npm run plugins -- install acme@1.0.0 --registry https://plugins.example.com
+# then add "acme" to PLUGINS_ENABLED and restart
+```
+
+O registry não é confiável: `install` verifica a assinatura antes de escrever qualquer
+coisa, e o servidor a verifica de novo a cada inicialização.
+
+### Instalar é consentir
+
+Um plugin roda para um tenant só depois que esse tenant o instala com
+`PUT /v1/plugins/{slug}/installation`, enviando `grantCapabilities` igual à lista do
+`plugin.json` — nem um subconjunto, nem um superconjunto
+(`400 plugin_consent_mismatch`). Quando uma versão posterior declara mais, a instalação
+mantém o consentimento anterior e toda ação responde `409 plugin_not_installed` até o
+tenant instalar de novo (`installation.pendingCapabilities` mostra a diferença).
+Desinstalar apaga todos os registros que o plugin guardou para esse tenant.
+Configurações marcadas como `secret` são seladas com `PLUGINS_SECRET` e nunca
+devolvidas.
+
+### Rotas de plugins
+
+| Método | Caminho | Finalidade |
+| ------ | ------- | ---------- |
+| GET | `/v1/plugins` | Os plugins que esta implantação serve, com as instalações de quem chama |
+| GET | `/v1/plugins/{slug}` | Um plugin: capacidades, egress, configurações, ações, instalação |
+| PUT | `/v1/plugins/{slug}/installation` | Instalar, consentir de novo ou reconfigurar |
+| DELETE | `/v1/plugins/{slug}/installation` | Desinstalar, apagando os registros do plugin |
+| POST | `/v1/plugins/{slug}/queries/{action}` | Executar uma ação somente leitura (`plugins:read`) |
+| POST | `/v1/plugins/{slug}/commands/{action}` | Executar uma ação que escreve (`plugins:write`) |
+
+Nenhuma rota de plugins admite a API key pública compartilhada: um plugin age sobre os
+dados de um único tenant. As duas rotas de ações compartilham um orçamento de 120
+requisições por minuto por consumer.
+
+### Plugins nativos: BlindPay e DeFindex
+
+Algumas integrações não são a chain em si — um provedor fiat, um protocolo DeFi — e
+precisam do que o sandbox nega de propósito: tabelas próprias, webhooks de entrada,
+credenciais do deploy inteiro. São **plugins nativos**: módulos Nest compilados no
+serviço em `src/native-plugins/<slug>/`, ligados pela mesma lista
+`PLUGINS_ENABLED` que os plugins isolados.
+
+| Slug | O que serve |
+| ---- | ----------- |
+| `blindpay` | KYC, onramp, offramp, o webhook da BlindPay, suas rotas de `/v1/admin` (`receivers`, `payins`, `payouts`) e a seção `fiat` do resumo de administração |
+| `defindex` | `/v1/defindex` — vaults da DeFindex na Stellar |
+
+- **Fora da lista, não existe.** Um plugin nativo que `PLUGINS_ENABLED` não nomeia
+  nunca é instanciado: suas rotas respondem 404, suas tarefas nunca iniciam e suas
+  variáveis não são validadas. O boot avisa quando suas chaves estão configuradas mas
+  seu slug não.
+- **O núcleo nunca importa um plugin.** O lint recusa `@/native-plugins/*` em
+  qualquer lugar de `src/` exceto `src/native-plugins/native-plugins.module.ts`, e
+  recusa que um plugin importe outro. Onde o núcleo precisa de dados de um plugin —
+  a visão geral de administração — ele expõe um ponto de extensão
+  (`AdminExtensions`) no qual o plugin se registra.
+- **Nem isolado, nem por tenant.** Um plugin nativo é código revisado com os
+  privilégios do núcleo; não é instalado por tenant, e suas rotas mantêm seus
+  próprios scopes (`kyc:*`, `onramp:*`, `offramp:*`, `liquidity:*`). Um plugin
+  isolado não pode usar um slug nativo.
+- **O contrato OpenAPI documenta as rotas de todo plugin nativo**, ligado ou não:
+  `openapi:generate` liga todos.
+
 ## Atualização — mudanças incompatíveis e notas de deploy
+
+### Login da wallet: os signatários de uma wallet recuperada seguem `STELLAR_NETWORK`
+
+- **`WALLET_AUTH_SIGNERS_HORIZON_URL` agora usa por padrão o Horizon de `STELLAR_NETWORK`** (`STELLAR_HORIZON_URL_PUBLIC` / `STELLAR_HORIZON_URL_TESTNET`, ou o da SDF), e não sempre o da rede pública. É consultado quando uma wallet recuperada via SEP-30 assina `POST /v1/wallet/auth/finish` com a chave que substituiu sua chave mestra. Num deploy em testnet a consulta ia para a mainnet, não encontrava a conta, e o login de toda wallet recuperada respondia `400 wallet_signature_invalid`.
+- **`WALLET_RECOVERY_SPONSOR_NETWORK_PASSPHRASE` e `WALLET_RECOVERY_SPONSOR_HORIZON_URL` também a seguem**, para que o sponsor leia a conta no mesmo ledger.
+- **Passo de deploy:** `STELLAR_NETWORK` vale `testnet` por padrão. Um deploy que serve wallets da mainnet e a deixa sem definir (as API keys escolhem a rede a cada request) agora precisa definir `STELLAR_NETWORK=public`, ou estas três variáveis, explicitamente. Caso contrário, as wallets da mainnet recuperadas não conseguem mais fazer login, e um sponsor configurado monta transações de testnet.
+- **Só um ledger é consultado.** Consultar os dois permitiria que uma chave adicionada ao mesmo endereço na outra rede assinasse por esta.
+
+### Backups da carteira: uma porta de recuperação por email, nas mãos dos dois servidores de recuperação
+
+- **A migração `20261004120000_recovery_backup_shares`** adiciona `recovery_backup_share`. Só um
+  servidor de recuperação (`RECOVERY_ROLE`) a escreve; aplique a migração nos dois.
+- **Rotas novas nos servidores de recuperação:** `PUT`, `GET` e `DELETE /v1/sep30/shares/{address}`,
+  `@Public()` como o resto do SEP-30 e servidas pela mesma rota sem chave. A carteira divide uma
+  chave aleatória em duas, entrega uma metade a cada servidor com o token SEP-10 da conta e sela
+  a chave de dados do backup sob a chave inteira como uma porta `recovery`. Provar o email aos
+  DOIS servidores (o ID token do Authentik, ou o código que cada servidor envia) devolve as duas
+  metades: o backup abre e a pessoa define uma senha nova. A semente — e o endereço em cada
+  rede — sobrevive, ao contrário do SEP-30, que recupera só a conta Stellar.
+- **A confiança que isto acrescenta:** um servidor sozinho guarda ruído aleatório. Os dois
+  juntos, ou quem controle a caixa de email E consiga que os dois servidores a aceitem, podem
+  abrir um backup com esta porta. Execute os dois em infraestrutura separada e com remetentes
+  `MAIL_*` distintos, como o SEP-30 já exige.
+- **`isBackupBox` aceita um slot `recovery` numa caixa `v: 4`**, ao lado de pelo menos um slot de
+  senha ou de passkey. Uma caixa cuja única porta seja `recovery` é recusada.
+- **O código por email de um servidor de recuperação** agora também vai para uma caixa de email
+  que só guarda ali uma metade de backup.
+
+### Swaps na Solana e na Monad: `chain` em `/v1/swaps` e uma tabela nova
+
+- **A migração `20261003120000_chain_swaps`** adiciona a tabela `chain_swap`. Nada
+  existente muda: `/v1/swaps` sem `chain` responde byte a byte como antes.
+- **`/v1/swaps` aceita `chain`** (`stellar` | `solana` | `monad`) nos corpos de quote
+  e create, e como parâmetro da listagem. Para Solana e Monad, create, a leitura
+  individual e submit respondem um `ChainSwapEntity` (`oneOf` no contrato).
+- **`POST /v1/swaps/{id}/submit`:** `signedXdr` deixa de ser obrigatório quando
+  `signedTransaction` é enviado. Um swap da Stellar continua exigindo-o, com a
+  mesma mensagem.
+- **`/v1/cross-chain-swaps` agora recusa todo par na mesma rede** — antes cotava
+  Solana → Solana e Monad → Monad pela NEAR Intents — e aponta para `/v1/swaps`.
+- **Um nó da Solana ou da Monad recusar uma transmissão é `400 transaction_rejected`**,
+  não mais `502 provider_error`. Isso inclui o relayer do encaminhador de depósitos
+  da Monad, que registra e tenta de novo como antes.
+- **Antes de habilitar:** configure `SOLANA_SWAP_FEE_WALLET` e crie sua conta de
+  tokens para cada mint de saída esperado, configure `MONAD_SWAP_FEE_WALLET` e obtenha
+  uma `KURU_API_KEY` para volume de produção.
+
+### Swaps entre redes: um módulo novo, uma tabela nova e seis eventos de webhook
+
+- **A migração `20261002120000_cross_chain_swaps`** adiciona a tabela
+  `cross_chain_swap` e acrescenta seis valores a `WebhookEventType`:
+  `CROSS_CHAIN_SWAP_CREATED`, `_UPDATED`, `_SUCCEEDED`, `_REFUNDED`, `_FAILED`,
+  `_EXPIRED`. Nada existente é reescrito.
+- **Rotas novas sob `/v1/cross-chain-swaps`**, reutilizando os scopes `swaps:read` /
+  `swaps:write`; a chave pública compartilhada alcança assets, quote, create e
+  deposit, nunca as duas leituras.
+- **Antes de habilitar:** configure `NEAR_INTENTS_FEE_RECIPIENT` (uma conta NEAR) ou
+  todo plano com comissão responde `503 misconfigured`, e configure
+  `NEAR_INTENTS_API_KEY`, ou o 1Click adiciona a própria taxa e fica com metade da
+  comissão.
+- **`provider_error` agora também é um `400`**: a NEAR Intents recusar uma cotação
+  ("amount is too low for bridge") é algo que quem chama pode mudar, então chega como
+  `400 provider_error` com o motivo do 1Click, como já acontecia com um 4xx do
+  BlindPay.
+### Backups de wallet: Argon2id e cifragem em repouso
+
+- **Defina `WALLET_BACKUP_ENCRYPTION_KEY` antes do deploy** (`openssl rand -base64 32`); o
+  boot recusa uma porta de login sem ela. Cada caixa guardada é cifrada de novo com ela
+  (AES-256-GCM, ligada ao seu `chain:address`), então um dump, réplica ou backup do banco
+  não é uma cópia do backup de ninguém. Depois rode **`npm run backups:reencrypt`** uma vez:
+  ele cifra as linhas escritas antes. Rotação: mova a chave antiga para
+  `WALLET_BACKUP_ENCRYPTION_PREVIOUS_KEYS`, defina uma nova, rode o script e remova a antiga.
+- **Caixas `v: 4` são aceitas**: o formato por slots do v3 com uma porta de senha Argon2id
+  (`kdf: "argon2id"`, `m` ≥ 19 MiB, `t` ≥ 2). A wallet sela todo backup novo como v4
+  (64 MiB, 2 passadas) e sela de novo como v4 uma caixa v2/v3 só com senha ao restaurá-la.
+  v2 e v3 continuam aceitas e entregues.
+- **A wallet pede uma senha de 12 caracteres** que não seja comum; as senhas existentes
+  continuam funcionando até serem trocadas.
+- **O banco em si** ainda precisa de cifragem na camada de armazenamento (disco / volume),
+  backups cifrados e acesso limitado a este serviço: a chave em repouso protege a coluna de
+  backups, não o resto das linhas.
+
+### Backups de wallet: um por wallet, todos restaurados no login
+
+- **A migração `20261001120000_wallet_backups_per_wallet`** troca a regra de um backup por
+  conta por um por `(chain, address)` dentro da conta. As linhas existentes são mantidas
+  como estão.
+- **`POST /v1/wallet/auth/oauth/claim` e `email/verify` devolvem `backups`**, todas as caixas
+  que a conta guarda, da mais nova para a mais antiga. `backup` continua como a mais nova e
+  fica obsoleto.
+- **`POST /v1/wallet/auth/finish` com um `backup` de outra wallet o adiciona**; não responde
+  mais `backup_conflict`. Uma caixa da mesma wallet substitui a sua. `replaceBackup` é aceito
+  e ignorado. Até 20 wallets por conta; a 21ª é `400 wallet_backup_limit`.
+
+### A plataforma de desenvolvedores sai do caminho das requisições
+
+- **Variáveis removidas:** `WALLET_AUTH_CONSOLE_URL`, `WALLET_AUTH_CONSOLE_SECRET`,
+  `RECOVERY_EMAIL_DELIVERY_URL`, `RECOVERY_EMAIL_DELIVERY_SECRET`. São ignoradas.
+- **A porta de email agora precisa de** `MAIL_FROM` + `MAIL_RESEND_API_KEY` / `MAIL_SMTP_*` (um
+  remetente verificado no Resend) **e** `APISIX_ADMIN_URL` + `APISIX_ADMIN_KEY`. Sem
+  os dois, `GET /v1/wallet/auth/providers` informa `email: false`; um login por
+  provedor ainda conclui o callback, mas `POST /v1/wallet/auth/finish` responde
+  `503 misconfigured` até o par admin ser definido. Cada par é definido junto ou o
+  boot recusa.
+- **Um servidor de recuperação que enviava códigos por email** define
+  `RECOVERY_EMAIL_CODES=true` e seu próprio `MAIL_*`. `APISIX_ADMIN_KEY` num servidor
+  de recuperação impede o boot.
+- **Nova rota `GET /v1/public-key`** (`@Public()`), alimentada por
+  `PUBLIC_API_KEY_DEV` / `PUBLIC_API_KEY_PROD`: copie os valores que a plataforma
+  emitiu para a chave pública. Adicione o path à rota sem chave do APISIX (sem
+  `key-auth`), ou as wallets recebem `401`.
+- **As chaves de wallet agora ficam sob `cosmos_wallet_<accountId>`**; veja a seção
+  acima para as contas que a plataforma provisionou. Os formatos de resposta não
+  mudam.
+- **`POST /v1/wallet/auth/finish` sem `backup`** conecta a wallet que assina à conta e devolve suas chaves: não responde mais `backup_conflict` quando a conta faz backup de outra wallet, e não move mais o `address` da conta. Com `backup` nada mudou. É assim que uma wallet importada de uma seed se conecta agora ao Cosmos Pay.
+- **`POST /v1/aliases/{name}/recovery` fica aberto a chaves com `payments:write`, inclusive a chave pública compartilhada**, e responde só `{ accepted: true }`: este serviço envia o token por e-mail ele mesmo, então `token`, `email` e `expiresAt` saem da resposta e o console da plataforma não participa mais (essa rota não devolve mais `403 admin_console_only`). Precisa de `MAIL_*`; sem ele a rota responde `503 misconfigured`.
+- **Sem migração.**
+
+### Solana e Monad; BlindPay e DeFindex viram plugins nativos
+
+- **A migração `20260930120000_multichain`** adiciona `chain` (padrão `stellar`) a
+  `payment_intent`, `alias_address`, `alias_challenge`, `wallet_account` e
+  `wallet_backup`, além de `assetDecimals`, `chainReference` e `chainCursor` a
+  `payment_intent`, e amplia o índice único de endereços de alias para
+  `(aliasId, chain, network, address)`. Toda linha existente continua Stellar; nada
+  é reescrito.
+- **BlindPay (KYC, onramp, offramp) e DeFindex só são servidos quando
+  `PLUGINS_ENABLED` lista `blindpay` / `defindex`.** Um deploy que tinha as chaves
+  configuradas e não adiciona os slugs perde `/v1/kyc`, `/v1/onramp`,
+  `/v1/offramp`, `/v1/blindpay/webhooks`, `/v1/defindex` e as rotas da BlindPay em
+  `/v1/admin` (404), e o boot registra um aviso com o slug. Configure por exemplo
+  `PLUGINS_ENABLED=blindpay,defindex` antes do deploy. Fora isso, rotas, scopes,
+  tabelas e respostas não mudam.
+- **As variáveis da BlindPay são verificadas quando o plugin inicia**, não pela
+  validação do ambiente: uma instância configurada pela metade continua impedindo o
+  boot, mas só onde `blindpay` está ligado.
+- **`GET /v1/admin/summary` traz `fiat` só com `blindpay` ligado**, e
+  `GET /v1/admin/consumers` conta `blindpayReceivers`, `payins` e `payouts` só então.
+  O `volume` do resumo rotula uma linha Solana ou Monad como `<chain>:<asset>`.
+- **Campos novos nas respostas** (aditivos): `chain` e `chainReference` nas
+  intenções de pagamento; `chain` nos endereços de alias, nas resoluções e nas linhas
+  de by-address; `chain` e `address` nos backups da wallet, ao lado de
+  `stellarAddress`; `chain` nas linhas `volume`, `recent` e de saldos do painel, que
+  agora são agrupadas por chain — SOL e MON não se somam mais ao XLM.
+- **`txHash` aceita o formato de qualquer chain** em `validate` e `PATCH`,
+  verificado contra a chain da intenção (senão, `400 validation_failed`). Só o hex é
+  passado para minúsculas; uma assinatura Solana é gravada como chega.
+- **A resolução de alias sem `?chain=` devolve só endereços Stellar.**
+- **Variáveis novas**, todas opcionais (RPCs públicos por padrão):
+  `SOLANA_RPC_URL_MAINNET`, `SOLANA_RPC_URL_DEVNET`, `SOLANA_RPC_TIMEOUT_MS`,
+  `MONAD_RPC_URL_MAINNET`, `MONAD_RPC_URL_TESTNET`, `MONAD_RPC_TIMEOUT_MS`,
+  `MONAD_LOG_BLOCK_RANGE`. O observador agora também consulta Solana e Monad para as
+  intenções pendentes nessas chains.
+- **`/wallet/console/provision` da plataforma de desenvolvimento** agora recebe
+  `chain` e `address`, e `stellarAddress: null` num login Solana ou Monad; ela
+  precisa aceitar isso antes que as wallets ofereçam essas chains.
+- **Os endereços de depósito da Monad** só são ativados com
+  `MONAD_RELAYER_PRIVATE_KEY`; a migração também cria `evm_deposit_address`, e as
+  intenções ganham `networkFee`. Sem a chave, as intenções na Monad se comportam
+  como antes (pagando diretamente ao comerciante).
+- **Nenhuma mudança no APISIX.**
+
+### Plugins: um novo módulo, duas novas tabelas e dois novos escopos
+
+`/v1/plugins` é novo; nenhuma rota ou resposta existente mudou. Na implantação:
+
+- **A migração `20260929120000_plugins`** cria `plugin_installation` e
+  `plugin_record`. Nenhuma tabela do core muda.
+- **Os escopos `plugins:read` e `plugins:write` são novos.** Keys existentes não os
+  recebem e ganham `insufficient_scope`; conceda-os pela plataforma de
+  desenvolvedores.
+- **Nada roda até que `PLUGINS_ENABLED` liste um plugin**, e então só para os tenants
+  que o instalaram. `plugins/example` vem pré-instalado e desativado.
+- **`typescript` agora é dependência de runtime**: o `index.ts` dos plugins é
+  transpilado na inicialização. Não o remova das instalações de produção.
+- **Defina `PLUGINS_SECRET`** antes de habilitar um plugin com configurações secretas —
+  caso contrário a inicialização recusa. `PLUGINS_TRUSTED_KEYS` adiciona assinantes
+  além dos do suporte.
+- **Implante a pasta `plugins/` junto com o build.** Ela é lida do diretório de
+  trabalho na inicialização, ao lado de `dist/`; uma implantação que copia só `dist/`
+  e `node_modules/` não serve nenhum plugin, e um habilitado interrompe a
+  inicialização.
+- **O Node deve rodar com `--no-node-snapshot` quando um plugin está habilitado** — o
+  sandbox (`isolated-vm`, um módulo nativo) exige isso, e sem ele a inicialização
+  recusa. Todos os scripts npm o passam (`start`, `start:prod`, `test`, …); um processo
+  iniciado de outra forma precisa dele no comando ou em `NODE_OPTIONS`.
+- **Nenhuma mudança no APISIX:** a rota coringa já encaminha `/v1/plugins`.
+- **Novos códigos de erro:** `plugin_not_installed`, `plugin_consent_mismatch`,
+  `plugin_rejected`, `plugin_quota_exceeded`, `plugin_failed`.
 
 ### O Pollar foi removido
 
@@ -1474,6 +2197,7 @@ Toda variável lida de `process.env` em `src/` é validada no boot por
 | -------- | ----------- | ------ | ------ |
 | `NODE_ENV` | não | `development` | Deve ser `development`, `test` ou `production`. **Defina `production` em produção** — a verificação fail-closed da taxa do plano e a documentação desligada por padrão dependem disso |
 | `PORT` | não | `3000` | Porta HTTP de escuta |
+| `ENV_FILE` | não | `.env` | O arquivo dotenv que este processo lê (Nest e Prisma). As instâncias locais o compartilham — o que muda por instância está em `dev-instances.json` (`npm run dev:local`); valores já presentes no ambiente continuam prevalecendo |
 | `DATABASE_URL` | **sim** | — | Conexão PostgreSQL para o Prisma |
 | `APISIX_GATEWAY_SECRET` | **sim** | — | Segredo compartilhado que prova que a requisição veio pelo APISIX. **Mínimo de 32 caracteres**; um placeholder é recusado no boot |
 | `APISIX_GATEWAY_SECRET_HEADER` | não | `x-gateway-secret` | Nome do header do segredo do gateway |
@@ -1487,9 +2211,35 @@ Toda variável lida de `process.env` em `src/` é validada no boot por
 | `APISIX_SWAP_FEE_BPS_HEADER` | não | `x-plan-swap-fee-bps` | Taxa de swap do plano (bps) |
 | `APISIX_EMAIL_HEADER` | não | `x-consumer-email` | E-mail verificado da conta da key, repassado pelo gateway. Hoje nada neste serviço depende dele |
 | `APISIX_PUBLIC_CONSUMER` | não | — | Username do consumer público compartilhado (veja acima). Defina-o onde quer que uma chave pública seja publicada |
+| `PUBLIC_API_KEY_DEV` | não | — | A chave pública compartilhada da testnet, servida por `GET /v1/public-key?env=dev`. Sem definir responde `503 misconfigured` |
+| `PUBLIC_API_KEY_PROD` | não | — | O mesmo para a mainnet (`env=prod`) |
+| `APISIX_ADMIN_URL` | com a admin key | — | Base da Admin API do APISIX, ex. `http://apisix:9180/apisix/admin`. Usada só para emitir as chaves das contas de wallet |
+| `APISIX_ADMIN_KEY` | para o login da wallet | — | Admin key do APISIX. Vale para todo o gateway — veja [Nenhuma requisição depende da plataforma de desenvolvedores](#nenhuma-requisição-depende-da-plataforma-de-desenvolvedores). Recusada num servidor de recuperação |
+| `APISIX_ADMIN_TIMEOUT_MS` | não | `10000` | Orçamento de uma chamada à Admin API (ms) |
+| `WALLET_KEY_SWAP_FEE_BPS` | não | `150` | Comissão de swap embutida nas chaves das contas de wallet (a taxa do plano `community`) |
+| `MAIL_RESEND_API_KEY` | para a porta de email | — | API key do Resend com a qual este serviço envia os códigos de login e de recuperação |
+| `MAIL_FROM` | com a chave do Resend / SMTP | — | Remetente verificado, ex. `Cosmos Pay <no-reply@example.com>` |
+| `MAIL_SMTP_HOST` | não | — | Servidor SMTP, usado quando `MAIL_RESEND_API_KEY` não está definida |
+| `MAIL_SMTP_PORT` | não | `587` | Porta SMTP |
+| `MAIL_SMTP_SECURE` | não | `false` | `true` para TLS implícito (465), `false` para STARTTLS (587) |
+| `MAIL_SMTP_USER` | não | — | Usuário SMTP |
+| `MAIL_SMTP_PASS` | não | — | Senha SMTP |
+| `MAIL_TIMEOUT_MS` | não | `15000` | Orçamento de um envio (ms) |
+| `RECOVERY_EMAIL_CODES` | não | `false` | Num servidor de recuperação: envia os próprios códigos pelo seu `MAIL_*` |
+| `WALLET_BACKUP_ENCRYPTION_KEY` | com qualquer porta de login | — | Cifra em repouso cada backup de wallet guardado (AES-256-GCM, 32 bytes em base64/hex). Fica só no ambiente: uma cópia do banco contém cifra da cifra do dispositivo. Perdê-la significa que os backups guardados não podem mais ser entregues |
+| `WALLET_BACKUP_ENCRYPTION_PREVIOUS_KEYS` | não | — | Chaves aposentadas separadas por vírgula, só leitura, para uma rotação; remova-as depois de `npm run backups:reencrypt` |
 | `STELLAR_NETWORK` | não | `testnet` | Rede Stellar de fallback (`public` / `testnet`) |
 | `STELLAR_HORIZON_URL_PUBLIC` | não | `https://horizon.stellar.org` | URL base do Horizon da mainnet |
 | `STELLAR_HORIZON_URL_TESTNET` | não | `https://horizon-testnet.stellar.org` | URL base do Horizon da testnet |
+| `SOLANA_RPC_URL_MAINNET` | não | `https://api.mainnet-beta.solana.com` | RPC da Solana para chaves `prod` (mainnet-beta; o genesis hash é verificado antes do uso). O endpoint público tem limite de taxa: em produção use o de um provedor |
+| `SOLANA_RPC_URL_DEVNET` | não | `https://api.devnet.solana.com` | RPC da Solana para chaves `dev` (devnet) |
+| `SOLANA_RPC_TIMEOUT_MS` | não | `10000` | Orçamento de uma chamada RPC à Solana (ms) |
+| `MONAD_RPC_URL_MAINNET` | não | `https://rpc.monad.xyz` | RPC da Monad para chaves `prod` (chain id 143, verificado antes do uso) |
+| `MONAD_RPC_URL_TESTNET` | não | `https://testnet-rpc.monad.xyz` | RPC da Monad para chaves `dev` (chain id 10143) |
+| `MONAD_RPC_TIMEOUT_MS` | não | `10000` | Orçamento de uma chamada RPC à Monad (ms) |
+| `MONAD_LOG_BLOCK_RANGE` | não | `100` | Blocos que um `eth_getLogs` pode abranger: o limite do provedor RPC (o RPC público permite 100) |
+| `MONAD_RELAYER_PRIVATE_KEY` | não | — | Chave do relayer (hex de 32 bytes). Configurada, cada intenção na Monad recebe seu próprio endereço de depósito e o relayer encaminha os depósitos ao comerciante, menos uma taxa. Guarda só dinheiro para gas: os encaminhadores que ela implanta não podem pagar mais ninguém |
+| `MONAD_DEPOSIT_TOKEN_FEES` | não | — | Taxa do relayer por depósito de cada ERC-20, JSON `{"0xToken": "0.05"}` em unidades do token. Um token sem entrada é encaminhado de graça (o relayer paga o gas) |
 | `STELLAR_BASE_FEE` | não | `100` | Taxa base da Stellar (stroops) para montagem de tx |
 | `STELLAR_TX_TIMEOUT` | não | `300` | Timeout da transação (segundos) |
 | `STELLAR_SWAP_FEE_WALLET` | quando fee > 0 | — | Conta G... da plataforma para as taxas de swap |
@@ -1497,6 +2247,21 @@ Toda variável lida de `process.env` em `src/` é validada no boot por
 | `STELLAR_SWAP_SLIPPAGE_BPS` | não | `50` | Tolerância de slippage padrão do swap (bps) |
 | `STELLAR_SWAP_MAX_SLIPPAGE_BPS` | não | `500` | Limite rígido para o slippage de quem chama (bps) |
 | `STELLAR_SWAP_SINGLE_INFLIGHT` | não | `false` | Quando `true`, 409 se já existir um swap PENDING não expirado para a mesma origem |
+| `NEAR_INTENTS_BASE_URL` | não | `https://1click.chaindefuser.com` | API 1Click da NEAR Intents, para os swaps entre redes |
+| `NEAR_INTENTS_API_KEY` | recomendada | — | Chave de parceiro do 1Click (`X-API-Key`). Sem ela o 1Click adiciona uma taxa própria de 0,2 % e fica com metade da comissão |
+| `NEAR_INTENTS_FEE_RECIPIENT` | com comissão de plano | — | Conta NEAR que recebe a comissão entre redes (`appFees`). Sem configurar e com taxa de plano: `503 misconfigured` |
+| `NEAR_INTENTS_TIMEOUT_MS` | não | `20000` | Orçamento de uma chamada ao 1Click (ms) |
+| `CROSS_CHAIN_SWAP_SLIPPAGE_BPS` | não | `100` | Slippage padrão entre redes (bps); abaixo do mínimo a NEAR Intents reembolsa |
+| `CROSS_CHAIN_SWAP_MAX_SLIPPAGE_BPS` | não | `500` | O maior slippage que quem chama pode pedir |
+| `CROSS_CHAIN_SWAP_DEADLINE_SECONDS` | não | `1800` | Por quanto tempo um endereço de depósito aceita o depósito; os posteriores são reembolsados |
+| `SOLANA_SWAP_FEE_WALLET` | com comissão de plano | — | Dono das contas de tokens onde a comissão dos swaps na Solana é paga (`feeAccount` do Jupiter, uma por mint de saída — crie-as antes). Sem configurar e com taxa de plano: `503 misconfigured` |
+| `MONAD_SWAP_FEE_WALLET` | com comissão de plano | — | Endereço que recebe a comissão dos swaps na Monad (`referrerAddress` do Kuru Flow) |
+| `JUPITER_BASE_URL` | não | `https://lite-api.jup.ag/swap/v1` | API de swaps do Jupiter; `https://api.jup.ag/swap/v1` com chave |
+| `JUPITER_API_KEY` | não | — | Chave de API do Jupiter (`x-api-key`), para limites maiores |
+| `JUPITER_TIMEOUT_MS` | não | `15000` | Orçamento de uma chamada ao Jupiter (ms) |
+| `KURU_BASE_URL` | não | `https://ws.kuru.io` | API do Kuru Flow (Monad) |
+| `KURU_API_KEY` | para produção | — | Chave de API do Kuru Flow (`X-API-Key`). Sem ela cada endereço recebe um token limitado a uma requisição por segundo |
+| `KURU_TIMEOUT_MS` | não | `15000` | Orçamento de uma chamada ao Kuru Flow (ms) |
 | `OBSERVER_ENABLED` | não | `true` | `true` / `false` — reconciliador on-chain |
 | `OBSERVER_INTERVAL_MS` | não | `15000` | Intervalo de polling do observer (ms, mín. 1000) |
 | `OBSERVER_BATCH_SIZE` | não | `50` | Máximo de intents/swaps por ciclo do observer |
@@ -1526,11 +2291,18 @@ Toda variável lida de `process.env` em `src/` é validada no boot por
 | `BLINDPAY_INSTANCE_ID_DEV` | quando a API key de dev estiver definida | — | Id da instância de desenvolvimento (`in_...`) |
 | `BLINDPAY_WEBHOOK_SECRET_DEV` | quando a API key de dev estiver definida | — | Segredo Svix do endpoint de webhook da instância de desenvolvimento; mesmas regras de `BLINDPAY_WEBHOOK_SECRET` |
 | `BLINDPAY_TIMEOUT_MS` | não | `15000` | Timeout do client HTTP do BlindPay (ms) |
-| `DEFINDEX_API_KEY` | não | — | Chave de API de servidor DeFindex; vazia desativa as rotas |
+| `DEFINDEX_API_KEY` | não | — | Chave de API de servidor da DeFindex. As rotas só existem com `defindex` em `PLUGINS_ENABLED`; sem a chave respondem `503 misconfigured` |
 | `DEFINDEX_BASE_URL` | não | `https://api.defindex.io` | URL base da API DeFindex |
 | `DEFINDEX_TIMEOUT_MS` | não | `30000` | Timeout HTTP DeFindex (ms) |
+| `PLUGINS_ENABLED` | não | — | Slugs, separados por vírgula, dos plugins que este deploy serve: os isolados em `plugins/` e os nativos `blindpay` e `defindex`. Vazio não serve nenhum; um plugin não listado nunca é carregado |
+| `PLUGINS_SECRET` | quando um plugin habilitado tem configurações secretas | — | Sela as configurações secretas das instalações de plugins (no mínimo 32 caracteres). Alterá-lo torna ilegíveis todos os segredos de plugins armazenados |
+| `PLUGINS_TRUSTED_KEYS` | não | — | Assinantes cujos plugins rodam aqui além do suporte da Cosmos Pay: `<keyId>:<chave pública Ed25519 em base64url>` separados por vírgula. Um plugin assinado por outro, ou alterado depois de assinado, interrompe a inicialização |
+| `PLUGINS_ALLOW_UNSIGNED` | não | `false` | Rodar plugins sem `signature.json`, para escrever um localmente. Recusado quando `NODE_ENV=production` |
 | `KYC_REDIRECT_URL_WHITELIST` | não | — | Allow-list por consumer de hosts de redirecionamento do KYC |
 | `WALLET_AUTH_RETURN_URLS` | não | — | URLs do app, separadas por vírgula, para as quais o callback do login da wallet pode redirecionar (`returnTo` em `POST /v1/wallet/auth/oauth/authorize`): um esquema próprio, um universal/app link, ou `http://127.0.0.1/…` (qualquer porta). Correspondência exata; uma entrada em http puro fora do loopback, com query ou com `javascript:`/`data:`/`file:` é recusada na inicialização. Sem valor, todo callback renderiza a página e um `returnTo` é `400 wallet_return_url_not_allowed` |
+| `WALLET_AUTH_SIGNERS_HORIZON_URL` | não | o Horizon de `STELLAR_NETWORK` | Lista quem pode assinar por uma conta; consultado quando uma wallet recuperada assina com a chave que substituiu sua chave mestra. Precisa ser o ledger onde as wallets vivem: outro responde 404 e o login é `400 wallet_signature_invalid` |
+| `WALLET_RECOVERY_SPONSOR_NETWORK_PASSPHRASE` | não | a passphrase de `STELLAR_NETWORK` | Rede para a qual o setup de recuperação patrocinado (`POST /v1/wallet/recovery/setup`) é montado |
+| `WALLET_RECOVERY_SPONSOR_HORIZON_URL` | não | o Horizon de `STELLAR_NETWORK` | Horizon do qual o setup de recuperação patrocinado lê a conta |
 | `RATE_LIMIT_ENABLED` | não | `true` | Limites por endereço nas rotas que gastam XLM. Chave de incidente |
 | `RATE_LIMIT_PRUNE_INTERVAL_MS` | não | `600000` | Intervalo de limpeza das janelas do contador (ms, mín. 1000) |
 

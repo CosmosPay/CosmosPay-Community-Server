@@ -5,5 +5,7 @@ import { ProductsService } from '@/products/products.service';
 @Module({
   controllers: [ProductsController],
   providers: [ProductsService],
+  // Plugins read and write the catalogue through this service, never the table.
+  exports: [ProductsService],
 })
 export class ProductsModule {}

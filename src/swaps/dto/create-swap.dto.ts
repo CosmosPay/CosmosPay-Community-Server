@@ -1,6 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsOptional, IsString, Matches } from 'class-validator';
-import { IsStellarAddress } from '@/common/validators/is-stellar-address.validator';
+import { IsChainAddress } from '@/common/validators/is-chain-address.validator';
 import { QuoteSwapDto } from '@/swaps/dto/quote-swap.dto';
 
 /**
@@ -11,25 +11,27 @@ import { QuoteSwapDto } from '@/swaps/dto/quote-swap.dto';
  */
 export class CreateSwapDto extends QuoteSwapDto {
   @ApiProperty({
-    description: 'Account paying for (and signing) the swap — the tx source.',
+    description:
+      'Account paying for (and signing) the swap — the tx source — on `chain`.',
     example: 'GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ',
   })
-  @IsStellarAddress()
+  @IsChainAddress('chain')
   source!: string;
 
   @ApiPropertyOptional({
     description:
       'Account credited the destination asset. Defaults to `source` ' +
-      '(a self-swap). Must already trust a non-native destination asset.',
+      '(a self-swap). Must already trust a non-native destination asset. ' +
+      'Stellar only: on Solana and Monad the output always goes to `source`.',
     example: 'GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ',
   })
   @IsOptional()
-  @IsStellarAddress()
+  @IsChainAddress('chain')
   destination?: string;
 
   @ApiPropertyOptional({
     description:
-      'Optional MEMO_ID (numeric uint64) echoed on-chain for reconciliation.',
+      'Stellar only: optional MEMO_ID (numeric uint64) echoed on-chain for reconciliation.',
     example: '123456789',
   })
   @IsOptional()

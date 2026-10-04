@@ -151,3 +151,29 @@ export const RECOVERY_CODE_RATE_LIMIT: RateLimitPolicy = {
   limit: 30,
   windowMs: WINDOW_MS,
 };
+
+/* ----------------------------- backup shares ------------------------------ */
+
+/**
+ * The size of one half of a backup's recovery key. The wallet's key is 32
+ * random bytes (an AES-256 key) split by XOR, so each half is 32 bytes too —
+ * and anything else is not a half this wallet wrote.
+ */
+export const RECOVERY_SHARE_BYTES = 32;
+
+/** Writing or deleting a half: the key holder, as often as it re-seals a backup. */
+export const RECOVERY_SHARE_WRITE_RATE_LIMIT: RateLimitPolicy = {
+  name: 'recovery-share-write',
+  limit: 30,
+  windowMs: WINDOW_MS,
+};
+
+/**
+ * Reading a half back. As tight as the co-signature: with the sibling's half it
+ * opens a whole wallet, so it is the other route here that yields power.
+ */
+export const RECOVERY_SHARE_READ_RATE_LIMIT: RateLimitPolicy = {
+  name: 'recovery-share-read',
+  limit: 20,
+  windowMs: WINDOW_MS,
+};

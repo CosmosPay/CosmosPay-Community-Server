@@ -1,3 +1,4 @@
+import { encodeBase58 } from '@/chains/chain-address';
 import {
   Account,
   Asset,
@@ -29,6 +30,7 @@ describe('alias signing', () => {
   const body: AliasChallengeBody = {
     purpose: AliasChallengePurpose.CLAIM,
     name: 'emanuel250',
+    chain: 'stellar',
     address: kp.publicKey(),
     network: 'public',
     nonce: 'nonce-1',
@@ -148,5 +150,28 @@ describe('alias signing', () => {
     expect(isStellarAddress(kp.publicKey())).toBe(true);
     expect(isStellarAddress(kp.secret())).toBe(false);
     expect(isStellarAddress('GA')).toBe(false);
+  });
+
+  describe('on Solana and Monad', () => {
+    it('keeps the Stellar challenge byte for byte, and adds the chain line elsewhere', () => {
+      expect(aliasChallengeMessage(body)).not.toContain('chain:');
+      expect(aliasChallengeMessage({ ...body, chain: 'solana' })).toContain(
+        '\nchain: solana\n',
+      );
+    });
+
+    it('verifies a Solana ed25519 signature over the challenge text', () => {
+      const solana = {
+        ...body,
+        chain: 'solana' as const,
+        address: encodeBase58(kp.rawPublicKey()),
+      };
+      const sig = Buffer.from(
+        kp.sign(Buffer.from(aliasChallengeMessage(solana))),
+      ).toString('base64');
+      expect(verifyAliasSignature(solana, sig)).toBe(true);
+      // The same key's Stellar-style digest signature is not a Solana claim.
+      expect(verifyAliasSignature(solana, sign(body))).toBe(false);
+    });
   });
 });

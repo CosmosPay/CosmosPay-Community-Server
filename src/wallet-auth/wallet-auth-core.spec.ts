@@ -23,6 +23,9 @@ import {
 import {
   BACKUP_MAX_ITERATIONS,
   BACKUP_MIN_ITERATIONS,
+  BACKUP_ARGON2_MAX_MEMORY_KIB,
+  BACKUP_ARGON2_MIN_MEMORY_KIB,
+  BACKUP_ARGON2_MIN_PASSES,
   OIDC_MAX_AGE_S,
   SESSION_TTL_MS,
   SIGNED_AT_SKEW_MS,
@@ -56,6 +59,27 @@ const passkeySlot = (overrides: Record<string, unknown> = {}) => ({
   id: Buffer.alloc(32, 7).toString('base64url'),
   iv: Buffer.alloc(12, 8).toString('base64'),
   data: Buffer.alloc(48, 9).toString('base64'),
+  ...overrides,
+});
+
+/** A v4 recovery door: the data key under the key the two recovery servers split. */
+const recoverySlot = (overrides: Record<string, unknown> = {}) => ({
+  kind: 'recovery',
+  iv: Buffer.alloc(12, 10).toString('base64'),
+  data: Buffer.alloc(48, 11).toString('base64'),
+  ...overrides,
+});
+
+/** A v4 password door: Argon2id at the wallet's cost. */
+const argonSlot = (overrides: Record<string, unknown> = {}) => ({
+  kind: 'password',
+  kdf: 'argon2id',
+  salt: Buffer.alloc(16, 4).toString('base64'),
+  m: 65_536,
+  t: 2,
+  p: 1,
+  iv: Buffer.alloc(12, 5).toString('base64'),
+  data: Buffer.alloc(48, 6).toString('base64'),
   ...overrides,
 });
 
@@ -389,6 +413,63 @@ describe('wallet-auth-core', () => {
   describe('isBackupBox', () => {
     it('accepts a box the wallet could have written', () => {
       expect(isBackupBox(box())).toBe(true);
+    });
+
+    /* v4: what the wallet seals now. Its password door is Argon2id, held to OWASP's floor. */
+    it('accepts a v4 box with an Argon2id password door and a passkey door', () => {
+      expect(isBackupBox(boxV3([argonSlot(), passkeySlot()], { v: 4 }))).toBe(
+        true,
+      );
+      expect(isBackupBox(boxV3([passkeySlot()], { v: 4 }))).toBe(true);
+    });
+
+    it('holds a v4 password door to the Argon2id floor and ceiling', () => {
+      const v4 = (slot: unknown) => isBackupBox(boxV3([slot], { v: 4 }));
+      expect(v4(argonSlot({ m: BACKUP_ARGON2_MIN_MEMORY_KIB }))).toBe(true);
+      expect(v4(argonSlot({ m: BACKUP_ARGON2_MIN_MEMORY_KIB - 1 }))).toBe(
+        false,
+      );
+      expect(v4(argonSlot({ t: BACKUP_ARGON2_MIN_PASSES - 1 }))).toBe(false);
+      expect(v4(argonSlot({ m: BACKUP_ARGON2_MAX_MEMORY_KIB + 1 }))).toBe(
+        false,
+      );
+      expect(v4(argonSlot({ p: 0 }))).toBe(false);
+      expect(
+        v4(argonSlot({ salt: Buffer.alloc(8, 1).toString('base64') })),
+      ).toBe(false);
+    });
+
+    /* The email-recovery door: beside a password or a passkey, never alone, never twice. */
+    it('accepts one recovery door beside a password or passkey door in a v4 box', () => {
+      expect(isBackupBox(boxV3([argonSlot(), recoverySlot()], { v: 4 }))).toBe(
+        true,
+      );
+      expect(
+        isBackupBox(
+          boxV3([argonSlot(), passkeySlot(), recoverySlot()], { v: 4 }),
+        ),
+      ).toBe(true);
+    });
+
+    it('refuses a recovery door alone, twice, in a v3 box, or with extra fields', () => {
+      expect(isBackupBox(boxV3([recoverySlot()], { v: 4 }))).toBe(false);
+      expect(
+        isBackupBox(
+          boxV3([argonSlot(), recoverySlot(), recoverySlot()], { v: 4 }),
+        ),
+      ).toBe(false);
+      expect(isBackupBox(boxV3([passwordSlot(), recoverySlot()]))).toBe(false);
+      expect(
+        isBackupBox(
+          boxV3([argonSlot(), recoverySlot({ email: 'a@b.com' })], { v: 4 }),
+        ),
+      ).toBe(false);
+    });
+
+    /* Each version has one kind of password door, so neither can carry the other's. */
+    it('refuses a PBKDF2 door in a v4 box, and an Argon2id door in a v3 one', () => {
+      expect(isBackupBox(boxV3([passwordSlot()], { v: 4 }))).toBe(false);
+      expect(isBackupBox(boxV3([argonSlot()]))).toBe(false);
     });
 
     it('refuses a cost below the floor, which is the whole point of checking', () => {

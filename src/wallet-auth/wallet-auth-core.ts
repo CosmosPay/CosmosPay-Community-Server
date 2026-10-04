@@ -5,10 +5,16 @@ import {
   timingSafeEqual,
 } from 'node:crypto';
 import { Keypair } from '@stellar/stellar-sdk';
+import type { Chain } from '@/chains/chains.constants';
 import { WalletAuthMethod, WalletAuthProvider } from '@generated/prisma/client';
 import { openJson, sealJson } from '@/common/sealed-box';
 import {
   BACKUP_BOX_MAX_CHARS,
+  BACKUP_ARGON2_MAX_MEMORY_KIB,
+  BACKUP_ARGON2_MAX_PARALLELISM,
+  BACKUP_ARGON2_MAX_PASSES,
+  BACKUP_ARGON2_MIN_MEMORY_KIB,
+  BACKUP_ARGON2_MIN_PASSES,
   BACKUP_MAX_ITERATIONS,
   BACKUP_MAX_SLOTS,
   BACKUP_MIN_ITERATIONS,
@@ -429,15 +435,29 @@ export function readSessionToken(
  */
 export function finishMessage(
   email: string,
-  stellarAddress: string,
+  address: string,
   signedAt: string,
+  chain: Chain = 'stellar',
 ): string {
   return (
     `Cosmos Pay Wallet sign-in\n` +
+    chainLine(chain) +
     `email: ${normalizeEmail(email)}\n` +
-    `account: ${stellarAddress}\n` +
+    `account: ${address}\n` +
     `at: ${signedAt}`
   );
+}
+
+/**
+ * The `chain:` line of a challenge, on every chain but Stellar.
+ *
+ * Absent on Stellar so the Stellar challenges stay byte for byte what the
+ * wallet already signs. Present elsewhere because an ed25519 key is both a
+ * Stellar G… and a Solana base58 address: the line binds a signature to the
+ * chain it was made for, whatever the key.
+ */
+function chainLine(chain: Chain): string {
+  return chain === 'stellar' ? '' : `chain: ${chain}\n`;
 }
 
 /**
@@ -448,13 +468,15 @@ export function finishMessage(
  * store another. Same contract as above: the wallet builds this string itself.
  */
 export function backupMessage(
-  stellarAddress: string,
+  address: string,
   box: string,
   signedAt: string,
+  chain: Chain = 'stellar',
 ): string {
   return (
     `Cosmos Pay Wallet backup\n` +
-    `account: ${stellarAddress}\n` +
+    chainLine(chain) +
+    `account: ${address}\n` +
     `box: ${sha256Hex(box)}\n` +
     `at: ${signedAt}`
   );
@@ -567,20 +589,51 @@ function passwordCostOk(salt: unknown, iter: unknown): boolean {
   );
 }
 
+/** A v4 password door's Argon2id cost, within the floor and the ceiling. */
+function argon2CostOk(
+  salt: unknown,
+  m: unknown,
+  t: unknown,
+  p: unknown,
+): boolean {
+  const saltBytes = b64Bytes(salt);
+  const within = (v: unknown, min: number, max: number) =>
+    Number.isInteger(v) && (v as number) >= min && (v as number) <= max;
+  return (
+    saltBytes !== null &&
+    saltBytes >= 16 &&
+    within(m, BACKUP_ARGON2_MIN_MEMORY_KIB, BACKUP_ARGON2_MAX_MEMORY_KIB) &&
+    within(t, BACKUP_ARGON2_MIN_PASSES, BACKUP_ARGON2_MAX_PASSES) &&
+    within(p, 1, BACKUP_ARGON2_MAX_PARALLELISM)
+  );
+}
+
 /**
  * One door of a v3 box: the data key, sealed under a password or a passkey.
  *
  * A password slot is held to the same cost floor a v2 box is — it is exactly as
  * exposed to whoever reads this table. A passkey slot has no cost to check: its
  * key is the authenticator's PRF output, 32 bytes nobody can guess offline, and
- * `id` only tells the wallet which credential to ask for.
+ * `id` only tells the wallet which credential to ask for. A recovery slot (v4
+ * only) is sealed under a random 32-byte key split between the two recovery
+ * servers — nothing to guess offline either, and nothing but the IV and the
+ * sealed key to check.
  */
-function isBackupSlot(slot: unknown): boolean {
+function isBackupSlot(slot: unknown, version: 3 | 4): boolean {
   if (!slot || typeof slot !== 'object' || Array.isArray(slot)) return false;
   const s = slot as Json;
   if (b64Bytes(s.iv) !== 12) return false;
   if (b64Bytes(s.data) !== BACKUP_WRAPPED_KEY_BYTES) return false;
-  if (s.kind === 'password') return passwordCostOk(s.salt, s.iter);
+  // Each version has one kind of password door: PBKDF2 in v3, Argon2id in v4 —
+  // so a v4 box cannot smuggle in a cheap PBKDF2 door under the new version.
+  if (s.kind === 'password') {
+    return version === 4
+      ? s.kdf === 'argon2id' && argon2CostOk(s.salt, s.m, s.t, s.p)
+      : passwordCostOk(s.salt, s.iter);
+  }
+  if (s.kind === 'recovery') {
+    return version === 4 && Object.keys(s).length === 3;
+  }
   if (s.kind === 'passkey') {
     return (
       typeof s.id === 'string' &&
@@ -590,6 +643,17 @@ function isBackupSlot(slot: unknown): boolean {
     );
   }
   return false;
+}
+
+/**
+ * At most one recovery door, and never ONLY that one. The recovery door is how
+ * a forgotten password is replaced, not the lock itself: a box whose sole door
+ * is the two servers' key would be a backup those two servers, together, hold
+ * outright — and a person who never set a password or a passkey.
+ */
+function recoveryDoorsOk(slots: Json[]): boolean {
+  const recovery = slots.filter((s) => s.kind === 'recovery').length;
+  return recovery <= 1 && recovery < slots.length;
 }
 
 /**
@@ -620,13 +684,15 @@ export function isBackupBox(box: string): boolean {
   // 12-byte IV and a ciphertext, as the wallet writes them, in both versions.
   if (b64Bytes(b.iv) !== 12 || b64Bytes(b.data) === null) return false;
   if (b.v === 2) return passwordCostOk(b.salt, b.iter);
-  if (b.v === 3) {
+  if (b.v === 3 || b.v === 4) {
+    const version = b.v;
     const slots = b.slots;
     return (
       Array.isArray(slots) &&
       slots.length > 0 &&
       slots.length <= BACKUP_MAX_SLOTS &&
-      slots.every(isBackupSlot)
+      slots.every((slot) => isBackupSlot(slot, version)) &&
+      recoveryDoorsOk(slots as Json[])
     );
   }
   return false;

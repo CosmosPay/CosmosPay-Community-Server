@@ -1,4 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
+import { CHAINS } from '@/chains/chains.constants';
 import {
   PaymentIntentKind,
   PaymentIntentStatus,
@@ -18,7 +19,19 @@ export class PaymentIntentEntity {
   @ApiProperty({ enum: PaymentIntentStatus, example: 'PENDING' })
   status!: PaymentIntentStatus;
 
-  @ApiProperty({ example: 'testnet' })
+  @ApiProperty({
+    enum: CHAINS,
+    example: 'stellar',
+    description: 'Chain the payment settles on. TX intents are always Stellar.',
+  })
+  chain!: string;
+
+  @ApiProperty({
+    example: 'testnet',
+    description:
+      'Network tier, on every chain: `public` (mainnet) or `testnet` (Stellar ' +
+      'testnet, Solana devnet, Monad testnet) — the one the API key is for.',
+  })
   network!: string;
 
   @ApiProperty({
@@ -36,11 +49,17 @@ export class PaymentIntentEntity {
 
   @ApiProperty({
     example: 'native',
-    description: 'Asset code, or "native" for XLM.',
+    description:
+      'Asset code, or "native" for the chain’s coin (XLM, SOL, MON).',
   })
   asset!: string;
 
-  @ApiProperty({ nullable: true, example: null })
+  @ApiProperty({
+    nullable: true,
+    example: null,
+    description:
+      'Stellar: the issuer. Solana: the SPL mint. Monad: the ERC-20 contract.',
+  })
   assetIssuer!: string | null;
 
   @ApiProperty({
@@ -48,6 +67,25 @@ export class PaymentIntentEntity {
     description: 'Mandatory MEMO_ID (auto-generated if not provided).',
   })
   memo!: string;
+
+  @ApiProperty({
+    nullable: true,
+    example: null,
+    description:
+      'How the payment is found off Stellar. Solana: the Solana Pay ' +
+      '`reference` key. Monad with deposit addresses: the intent’s own ' +
+      'deposit address, which the link pays. Null otherwise.',
+  })
+  chainReference!: string | null;
+
+  @ApiProperty({
+    nullable: true,
+    example: null,
+    description:
+      'Deducted before the merchant is paid, in the asset’s units: the ' +
+      'relayer’s fee for forwarding a Monad deposit. Null when nothing is.',
+  })
+  networkFee!: string | null;
 
   @ApiProperty({ nullable: true, example: null, description: 'SEP-7 msg.' })
   msg!: string | null;
@@ -68,13 +106,14 @@ export class PaymentIntentEntity {
 
   @ApiProperty({
     description:
-      'SEP-7 deep link (`tx` for TX intents, `pay` for PAY intents).',
+      'The payment link: SEP-7 on Stellar (`tx` for TX intents, `pay` for ' +
+      'PAY), a Solana Pay transfer request on Solana, EIP-681 on Monad.',
     example: 'web+stellar:tx?xdr=AAAAAgAAAABx…',
   })
   uri!: string;
 
   @ApiProperty({
-    description: 'QR code of the SEP-7 URI (PNG data URL), derived on read.',
+    description: 'QR code of `uri` (PNG data URL), derived on read.',
     example: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA…',
   })
   qr!: string;
@@ -111,7 +150,19 @@ export class TxPaymentIntentEntity {
   @ApiProperty({ enum: PaymentIntentStatus, example: 'PENDING' })
   status!: PaymentIntentStatus;
 
-  @ApiProperty({ example: 'testnet' })
+  @ApiProperty({
+    enum: CHAINS,
+    example: 'stellar',
+    description: 'Chain the payment settles on. TX intents are always Stellar.',
+  })
+  chain!: string;
+
+  @ApiProperty({
+    example: 'testnet',
+    description:
+      'Network tier, on every chain: `public` (mainnet) or `testnet` (Stellar ' +
+      'testnet, Solana devnet, Monad testnet) — the one the API key is for.',
+  })
   network!: string;
 
   @ApiProperty({
@@ -135,6 +186,25 @@ export class TxPaymentIntentEntity {
 
   @ApiProperty({ example: '123456789', description: 'Mandatory MEMO_ID.' })
   memo!: string;
+
+  @ApiProperty({
+    nullable: true,
+    example: null,
+    description:
+      'How the payment is found off Stellar. Solana: the Solana Pay ' +
+      '`reference` key. Monad with deposit addresses: the intent’s own ' +
+      'deposit address, which the link pays. Null otherwise.',
+  })
+  chainReference!: string | null;
+
+  @ApiProperty({
+    nullable: true,
+    example: null,
+    description:
+      'Deducted before the merchant is paid, in the asset’s units: the ' +
+      'relayer’s fee for forwarding a Monad deposit. Null when nothing is.',
+  })
+  networkFee!: string | null;
 
   @ApiProperty({ nullable: true, example: 'Order #24' })
   msg!: string | null;
@@ -185,7 +255,19 @@ export class PayPaymentIntentEntity {
   @ApiProperty({ enum: PaymentIntentStatus, example: 'PENDING' })
   status!: PaymentIntentStatus;
 
-  @ApiProperty({ example: 'testnet' })
+  @ApiProperty({
+    enum: CHAINS,
+    example: 'stellar',
+    description: 'Chain the payment settles on. TX intents are always Stellar.',
+  })
+  chain!: string;
+
+  @ApiProperty({
+    example: 'testnet',
+    description:
+      'Network tier, on every chain: `public` (mainnet) or `testnet` (Stellar ' +
+      'testnet, Solana devnet, Monad testnet) — the one the API key is for.',
+  })
   network!: string;
 
   @ApiProperty({
@@ -211,6 +293,25 @@ export class PayPaymentIntentEntity {
 
   @ApiProperty({ example: '123456789', description: 'Mandatory MEMO_ID.' })
   memo!: string;
+
+  @ApiProperty({
+    nullable: true,
+    example: null,
+    description:
+      'How the payment is found off Stellar. Solana: the Solana Pay ' +
+      '`reference` key. Monad with deposit addresses: the intent’s own ' +
+      'deposit address, which the link pays. Null otherwise.',
+  })
+  chainReference!: string | null;
+
+  @ApiProperty({
+    nullable: true,
+    example: null,
+    description:
+      'Deducted before the merchant is paid, in the asset’s units: the ' +
+      'relayer’s fee for forwarding a Monad deposit. Null when nothing is.',
+  })
+  networkFee!: string | null;
 
   @ApiProperty({ nullable: true, example: 'pay me with lumens' })
   msg!: string | null;

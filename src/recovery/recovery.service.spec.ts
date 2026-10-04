@@ -2,6 +2,7 @@ import { ConfigService } from '@nestjs/config';
 import { Keypair, Networks } from '@stellar/stellar-sdk';
 import { OidcService } from '@/common/oidc/oidc.service';
 import { AppConfig } from '@/config/configuration';
+import { MailerService } from '@/mailer/mailer.service';
 import { PrismaService } from '@/prisma/prisma.service';
 import { issueIdentityToken, issueSep10Token } from '@/recovery/recovery-core';
 import { RecoveryService, SepError } from '@/recovery/recovery.service';
@@ -12,6 +13,16 @@ const SETTINGS = {
   homeDomain: 'example.com',
   networkPassphrase: Networks.TESTNET,
   horizonUrl: 'https://horizon.example.com',
+  networks: {
+    testnet: {
+      networkPassphrase: Networks.TESTNET,
+      horizonUrl: 'https://horizon.example.com',
+    },
+    public: {
+      networkPassphrase: Networks.PUBLIC,
+      horizonUrl: 'https://horizon-public.example.com',
+    },
+  } as Record<string, { networkPassphrase: string; horizonUrl: string }>,
   signerMaster: Keypair.random().secret(),
   sep10SigningSecret: Keypair.random().secret(),
   jwtSecret: 'a-recovery-jwt-secret-long-enough-000000',
@@ -19,10 +30,7 @@ const SETTINGS = {
     issuer: 'https://auth.example.com/application/o/wallet/',
     audiences: ['wallet-client'],
   },
-  emailDelivery: {
-    url: 'https://console.example.com/api/wallet/console/recovery-code',
-    secret: 'x'.repeat(40),
-  },
+  emailCodes: true,
   timeoutMs: 1000,
   sweep: { enabled: true, intervalMs: 60_000 },
 };
@@ -31,7 +39,10 @@ function unique() {
   return Object.assign(new Error('unique'), { code: 'P2002' });
 }
 
-function makeService(settings: Partial<typeof SETTINGS> = {}) {
+function makeService(
+  settings: Partial<typeof SETTINGS> = {},
+  { mailConfigured = true } = {},
+) {
   const prisma = {
     recoveryUsedIdToken: { create: jest.fn() },
     recoveryEmailCode: {
@@ -42,6 +53,7 @@ function makeService(settings: Partial<typeof SETTINGS> = {}) {
       updateMany: jest.fn(),
     },
     recoveryAuthMethod: { count: jest.fn() },
+    recoveryBackupShare: { count: jest.fn().mockResolvedValue(0) },
     recoveryAccount: {
       findUnique: jest.fn(),
       findMany: jest.fn(),
@@ -53,12 +65,17 @@ function makeService(settings: Partial<typeof SETTINGS> = {}) {
     get: jest.fn().mockReturnValue({ ...SETTINGS, ...settings }),
   } as unknown as ConfigService<AppConfig, true>;
   const oidc = { verify: jest.fn(), discover: jest.fn() };
+  const mailer = {
+    configured: mailConfigured,
+    send: jest.fn().mockResolvedValue(undefined),
+  };
   const service = new RecoveryService(
     prisma as unknown as PrismaService,
     config,
     oidc as unknown as OidcService,
+    mailer as unknown as MailerService,
   );
-  return { service, prisma, oidc };
+  return { service, prisma, oidc, mailer };
 }
 
 const claims = {
@@ -84,6 +101,74 @@ describe('RecoveryService', () => {
   it('answers 404 on a deployment that is not a recovery server', () => {
     const { service } = makeService({ role: null as never });
     expect(() => service.stellarToml()).toThrow(SepError);
+  });
+
+  /* One server, both ledgers: each named ledger is its own passphrase, its own
+     Horizon, its own registrations and its own SEP-10 tokens. */
+  describe('ledgers', () => {
+    const address = Keypair.random().publicKey();
+
+    it('publishes each ledger under its own segment', () => {
+      const { service } = makeService();
+      const toml = service.stellarToml('public');
+      expect(toml).toContain(`NETWORK_PASSPHRASE = "${Networks.PUBLIC}"`);
+      expect(toml).toContain(
+        'HORIZON_URL = "https://horizon-public.example.com"',
+      );
+      expect(toml).toContain(
+        'WEB_AUTH_ENDPOINT = "https://recovery-a.example.com/cosmos-api/v1/sep10/public/auth"',
+      );
+      expect(toml).toContain(
+        'ENDPOINT = "https://recovery-a.example.com/cosmos-api/v1/sep30/public"',
+      );
+      // No segment is the default ledger, exactly as before.
+      expect(service.stellarToml()).toContain(
+        'WEB_AUTH_ENDPOINT = "https://recovery-a.example.com/cosmos-api/v1/sep10/auth"',
+      );
+    });
+
+    it('answers 404 for a ledger it does not serve, never the default instead', () => {
+      const { service } = makeService({
+        networks: { testnet: SETTINGS.networks.testnet },
+      });
+      expect(() => service.stellarToml('public')).toThrow(SepError);
+      expect(() => service.challenge(address, 'public')).toThrow(SepError);
+    });
+
+    it('issues a challenge for the ledger the request named', () => {
+      const { service } = makeService();
+      expect(service.challenge(address, 'public').network_passphrase).toBe(
+        Networks.PUBLIC,
+      );
+      expect(service.challenge(address).network_passphrase).toBe(
+        Networks.TESTNET,
+      );
+    });
+
+    it('reads registrations of the named ledger only', async () => {
+      const { service, prisma } = makeService();
+      prisma.recoveryAccount.findUnique.mockResolvedValue(null);
+      const token = issueSep10Token(service.rules('public'), address);
+      await expect(
+        service.get(`Bearer ${token}`, address, 'public'),
+      ).rejects.toThrow(SepError);
+      expect(prisma.recoveryAccount.findUnique).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            role_network_address: { role: 'a', network: 'public', address },
+          },
+        }),
+      );
+    });
+
+    it('refuses a testnet SEP-10 token on the mainnet routes', async () => {
+      const { service, prisma } = makeService();
+      const testnetToken = issueSep10Token(service.rules('testnet'), address);
+      await expect(
+        service.get(`Bearer ${testnetToken}`, address, 'public'),
+      ).rejects.toMatchObject({ status: 401 });
+      expect(prisma.recoveryAccount.findUnique).not.toHaveBeenCalled();
+    });
   });
 
   describe('exchangeIdToken', () => {
@@ -131,21 +216,49 @@ describe('RecoveryService', () => {
 
   describe('startEmail', () => {
     it('sends a code only to an inbox that recovers something here', async () => {
-      const { service, prisma } = makeService();
+      const { service, prisma, mailer } = makeService();
       prisma.recoveryEmailCode.findFirst.mockResolvedValue(null);
       prisma.recoveryEmailCode.create.mockResolvedValue({});
       prisma.recoveryAuthMethod.count.mockResolvedValue(0);
 
       const unregistered = await service.startEmail('stranger@example.com');
-      expect(global.fetch).not.toHaveBeenCalled();
+      expect(mailer.send).not.toHaveBeenCalled();
 
       prisma.recoveryAuthMethod.count.mockResolvedValue(1);
       const registered = await service.startEmail('ada@example.com');
       await new Promise((r) => setImmediate(r));
-      expect(global.fetch).toHaveBeenCalledTimes(1);
+      expect(mailer.send).toHaveBeenCalledTimes(1);
+      // Its own sender, naming which of the two servers the code is from.
+      expect(mailer.send.mock.calls[0][0]).toMatchObject({
+        to: 'ada@example.com',
+        subject: expect.stringContaining('server A'),
+      });
+      expect(global.fetch).not.toHaveBeenCalled();
 
       // The same answer either way: the response does not say which inbox is registered.
       expect(Object.keys(unregistered)).toEqual(Object.keys(registered));
+    });
+
+    it('also sends one to an inbox that only holds a backup share here', async () => {
+      const { service, prisma, mailer } = makeService();
+      prisma.recoveryEmailCode.findFirst.mockResolvedValue(null);
+      prisma.recoveryEmailCode.create.mockResolvedValue({});
+      prisma.recoveryAuthMethod.count.mockResolvedValue(0);
+      prisma.recoveryBackupShare.count.mockResolvedValue(1);
+
+      await service.startEmail('ada@example.com');
+      await new Promise((r) => setImmediate(r));
+      expect(mailer.send).toHaveBeenCalledTimes(1);
+      expect(prisma.recoveryBackupShare.count).toHaveBeenCalledWith({
+        where: { role: 'a', email: 'ada@example.com' },
+      });
+    });
+  });
+
+  it('is a 404 when this server sends no codes, even if switched on', async () => {
+    const { service } = makeService({}, { mailConfigured: false });
+    await expect(service.startEmail('ada@example.com')).rejects.toMatchObject({
+      status: 404,
     });
   });
 

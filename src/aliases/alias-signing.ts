@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
 import { Keypair } from '@stellar/stellar-sdk';
 import { AliasChallengePurpose } from '@generated/prisma/client';
+import type { Chain } from '@/chains/chains.constants';
+import { verifyMessageSignature } from '@/chains/message-signature';
 
 /**
  * The bytes a claimant signs, and how this service checks them.
@@ -34,6 +36,14 @@ import { AliasChallengePurpose } from '@generated/prisma/client';
  * window; if the tags were shared it would ask for a well-formed alias claim and
  * get one, and the alias would be pointed at the attacker's account by a
  * signature the real owner produced.
+ *
+ * ## Solana and Monad sign the message, not the digest
+ *
+ * Their wallets sign messages through their own framed APIs — Solana's
+ * `signMessage`, which refuses anything shaped like a transaction, and EVM's
+ * `personal_sign`, whose EIP-191 prefix no transaction can begin with — so the
+ * guarantee the digest buys on Stellar is already theirs. They sign the
+ * challenge text itself, which is also what their wallets can show the person.
  */
 export const ALIAS_SIGN_DOMAIN = 'Cosmos Pay alias claim v1';
 
@@ -42,6 +52,7 @@ export interface AliasChallengeBody {
   purpose: AliasChallengePurpose;
   /** Normalized handle. */
   name: string;
+  chain: Chain;
   address: string;
   network: string;
   nonce: string;
@@ -64,6 +75,10 @@ export function aliasChallengeMessage(body: AliasChallengeBody): string {
     `domain: ${ALIAS_SIGN_DOMAIN}`,
     `purpose: ${body.purpose}`,
     `alias: ${body.name}`,
+    // Stellar challenges carry no chain line, so they stay byte for byte what
+    // the wallet already signs. Everywhere else it binds the signature to its
+    // chain: one ed25519 key is both a Stellar and a Solana address.
+    ...(body.chain === 'stellar' ? [] : [`chain: ${body.chain}`]),
     `address: ${body.address}`,
     `network: ${body.network}`,
     `nonce: ${body.nonce}`,
@@ -93,6 +108,14 @@ export function verifyAliasSignature(
   body: AliasChallengeBody,
   signatureBase64: string,
 ): boolean {
+  if (body.chain !== 'stellar') {
+    return verifyMessageSignature(
+      body.chain,
+      body.address,
+      aliasChallengeMessage(body),
+      signatureBase64,
+    );
+  }
   try {
     const digest = aliasDigest(aliasChallengeMessage(body));
     const sig = Buffer.from(signatureBase64, 'base64');

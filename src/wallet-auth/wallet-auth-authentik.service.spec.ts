@@ -10,6 +10,9 @@ import {
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { OidcService } from '@/common/oidc/oidc.service';
 import { AppConfig } from '@/config/configuration';
+import { WalletKeysService } from '@/gateway-keys/wallet-keys.service';
+import { MailerService } from '@/mailer/mailer.service';
+import { BackupCipher } from '@/wallet-auth/backup-cipher';
 import { PrismaService } from '@/prisma/prisma.service';
 import { WalletAuthService } from '@/wallet-auth/wallet-auth.service';
 import {
@@ -51,13 +54,15 @@ const DISCOVERY = {
 const SETTINGS = {
   publicBaseUrl: 'https://api.example.com',
   sessionSecret: SESSION_SECRET,
-  consoleUrl: 'https://console.example.com',
-  consoleSecret: 'console-secret',
   google: { clientId: '', clientSecret: '' },
   github: { clientId: '', clientSecret: '' },
   oidc: OIDC,
   returnUrls: [] as string[],
-  signersHorizonUrl: 'https://horizon.example.com',
+  signersHorizonUrls: {
+    testnet: 'https://horizon.example.com',
+    public: 'https://horizon-public.example.com',
+  },
+  signersNetwork: 'testnet' as const,
   sponsor: {
     secret: '',
     networkPassphrase: TESTNET,
@@ -95,10 +100,31 @@ function makeService(settings: Partial<typeof SETTINGS> = {}) {
     get: jest.fn().mockReturnValue({ ...SETTINGS, ...settings }),
   } as unknown as ConfigService<AppConfig, true>;
   const oidc = { verify: jest.fn(), discover: jest.fn() };
+  const mailer = {
+    configured: true,
+    send: jest.fn().mockResolvedValue(undefined),
+  };
+  const walletKeys = {
+    configured: true,
+    provision: jest
+      .fn()
+      .mockResolvedValue({ organizationId: 'org_1', dev: null, prod: null }),
+  };
+  // Transparent at rest: these tests are about what the service decides, not the seal
+  // (backup-cipher.spec.ts). `seal` marks what it stores so a test can tell.
+  const backupCipher = {
+    seal: jest.fn((box: string, _chain: string, _address: string) => box),
+    open: jest.fn(
+      (box: string, _chain: string, _address: string): string | null => box,
+    ),
+  };
   const service = new WalletAuthService(
     prisma as unknown as PrismaService,
     config,
     oidc as unknown as OidcService,
+    mailer as unknown as MailerService,
+    walletKeys as unknown as WalletKeysService,
+    backupCipher as unknown as BackupCipher,
   );
   return { service, prisma, oidc };
 }
@@ -542,6 +568,52 @@ describe('WalletAuthService — Authentik and the recovery identity', () => {
     );
   });
 
+  /* A re-key lands on ONE ledger: the wallet names it, and only that ledger's
+     signer list — read from the operator's Horizon for it — decides. */
+  it('reads the signers of the ledger the finish names', async () => {
+    const newKey = Keypair.random();
+    const { service, prisma } = makeService();
+    prisma.walletAccount.findUnique.mockResolvedValue(null);
+    prisma.walletAccount.upsert.mockResolvedValue({ id: 'acc_1' });
+    global.fetch = jest.fn().mockImplementation((url: string) =>
+      Promise.resolve(
+        answer(
+          url.startsWith('https://horizon-public.example.com/accounts/')
+            ? {
+                signers: [
+                  { key: ADDRESS, weight: 0, type: 'ed25519_public_key' },
+                  {
+                    key: newKey.publicKey(),
+                    weight: 10,
+                    type: 'ed25519_public_key',
+                  },
+                ],
+                thresholds: { med_threshold: 10, high_threshold: 10 },
+              }
+            : url.includes('/accounts/')
+              ? { signers: [{ key: ADDRESS, weight: 10 }] }
+              : { organizationId: 'org_1', keys: {} },
+        ),
+      ),
+    );
+    const body = {
+      stellarAddress: ADDRESS,
+      signedAt: SIGNED_AT,
+      signature: sign(newKey, finishMessage(EMAIL, ADDRESS, SIGNED_AT)),
+    };
+
+    // On the default ledger (testnet here) the new key is nobody.
+    await expect(service.finish(session(), body)).rejects.toMatchObject({
+      code: ApiErrorCode.WalletSignatureInvalid,
+    });
+    // On the ledger it was re-keyed on, it signs for the account.
+    const result = await service.finish(session(), {
+      ...body,
+      network: 'public',
+    });
+    expect(result.status).toBe('ready');
+  });
+
   it('refuses a finish signed by a half-weight recovery signer', async () => {
     const server = Keypair.random();
     const { service } = makeService();
@@ -574,29 +646,40 @@ describe('WalletAuthService — Authentik and the recovery identity', () => {
         horizonUrl: 'https://horizon.example.com',
       },
     };
-    const body = (signers: string[] = [a, b]) => ({
+    const body = (signers: string[] = [a, b], signer: Keypair = owner) => ({
       stellarAddress: owner.publicKey(),
       signers,
       signedAt: SIGNED_AT,
       signature: sign(
-        owner,
+        signer,
         recoverySetupMessage(owner.publicKey(), [a, b], SIGNED_AT),
       ),
     });
-    const horizon = (signers: number) => {
-      global.fetch = jest.fn().mockResolvedValue(
-        answer({
-          sequence: '100',
-          signers: Array.from({ length: signers }, () => ({
-            key: Keypair.random().publicKey(),
-            weight: 1,
-          })),
-        }),
-      );
+    /** Horizon's answer: the master at weight 1, plus `others` co-signers. */
+    const horizon = (others = 0) => {
+      ledger([
+        { key: owner.publicKey(), weight: 1 },
+        ...Array.from({ length: others }, () => ({
+          key: Keypair.random().publicKey(),
+          weight: 1,
+        })),
+      ]);
+    };
+    const ledger = (signers: { key: string; weight: number }[]) => {
+      global.fetch = jest
+        .fn()
+        .mockResolvedValue(answer({ sequence: '100', signers }));
+    };
+    const lastOp = (xdr: string) => {
+      const tx = TransactionBuilder.fromXDR(xdr, TESTNET) as Transaction;
+      return tx.operations[tx.operations.length - 1] as {
+        masterWeight?: number;
+        highThreshold?: number;
+      };
     };
 
     it('builds the sponsored envelope, signed by the sponsor and not by the account', async () => {
-      horizon(1);
+      horizon();
       const { service } = makeService(settings);
       const built = await service.sponsorRecoverySetup(session(), body());
       const tx = TransactionBuilder.fromXDR(
@@ -616,7 +699,7 @@ describe('WalletAuthService — Authentik and the recovery identity', () => {
     });
 
     it('sponsors a first setup only', async () => {
-      horizon(3);
+      horizon(2);
       const { service } = makeService(settings);
       await expect(
         service.sponsorRecoverySetup(session(), body()),
@@ -626,7 +709,7 @@ describe('WalletAuthService — Authentik and the recovery identity', () => {
     });
 
     it('refuses a signature over a different pair of signers', async () => {
-      horizon(1);
+      horizon();
       const { service } = makeService(settings);
       await expect(
         service.sponsorRecoverySetup(session(), body([b, a])),
@@ -636,11 +719,89 @@ describe('WalletAuthService — Authentik and the recovery identity', () => {
     });
 
     it('refuses a pair that names the account itself', async () => {
-      horizon(1);
+      horizon();
       const { service } = makeService(settings);
       await expect(
         service.sponsorRecoverySetup(session(), body([owner.publicKey(), b])),
       ).rejects.toMatchObject({ code: ApiErrorCode.WalletSignatureInvalid });
+    });
+
+    it('raises the master on a never-recovered account', async () => {
+      horizon();
+      const { service } = makeService(settings);
+      const built = await service.sponsorRecoverySetup(session(), body());
+      expect(lastOp(built.transaction).masterWeight).toBe(10);
+    });
+
+    describe('a recovered account', () => {
+      // SEP-30 recovery leaves the master — the key on the lost device — at 0,
+      // and a replacement key at the device weight signing for the account.
+      const device = Keypair.random();
+      const recovered = () =>
+        ledger([
+          { key: owner.publicKey(), weight: 0 },
+          { key: device.publicKey(), weight: 10 },
+        ]);
+
+      it('is sponsored on the replacement key’s signature, and the retired master stays at 0', async () => {
+        recovered();
+        const { service } = makeService(settings);
+        const built = await service.sponsorRecoverySetup(
+          session(),
+          body([a, b], device),
+        );
+        const last = lastOp(built.transaction);
+        // Raising it would hand the account back to the lost device.
+        expect(last.masterWeight).toBeUndefined();
+        expect(last.highThreshold).toBe(10);
+      });
+
+      it('refuses a signature by the retired master', async () => {
+        recovered();
+        const { service } = makeService(settings);
+        await expect(
+          service.sponsorRecoverySetup(session(), body()),
+        ).rejects.toMatchObject({ code: ApiErrorCode.WalletSignatureInvalid });
+      });
+
+      it('refuses a replacement key below the device weight', async () => {
+        ledger([
+          { key: owner.publicKey(), weight: 0 },
+          { key: device.publicKey(), weight: 5 },
+        ]);
+        const { service } = makeService(settings);
+        await expect(
+          service.sponsorRecoverySetup(session(), body([a, b], device)),
+        ).rejects.toMatchObject({
+          code: ApiErrorCode.WalletRecoverySetupRefused,
+        });
+      });
+
+      it('refuses when recovery is already on', async () => {
+        ledger([
+          { key: owner.publicKey(), weight: 0 },
+          { key: device.publicKey(), weight: 10 },
+          { key: a, weight: 5 },
+          { key: b, weight: 5 },
+        ]);
+        const { service } = makeService(settings);
+        await expect(
+          service.sponsorRecoverySetup(session(), body([a, b], device)),
+        ).rejects.toMatchObject({
+          code: ApiErrorCode.WalletRecoverySetupRefused,
+        });
+      });
+
+      it('refuses a recovery signer that is the device key itself', async () => {
+        recovered();
+        const { service } = makeService(settings);
+        await expect(
+          service.sponsorRecoverySetup(
+            session(),
+            body([device.publicKey(), b], device),
+          ),
+        ).rejects.toMatchObject({ code: ApiErrorCode.WalletSignatureInvalid });
+      });
     });
 
     it('is off without a sponsor key', async () => {

@@ -9,6 +9,7 @@ import { AppConfig } from '@/config/configuration';
 import { AllExceptionsFilter } from '@/common/filters/all-exceptions.filter';
 import { setupSwagger } from '@/swagger';
 import { sepCors } from '@/recovery/sep-cors';
+import { recoveryNetworkRewrite } from '@/recovery/recovery-network';
 
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
@@ -41,6 +42,11 @@ async function bootstrap(): Promise<void> {
   // origin, and both specs require open CORS. After helmet, so it can relax the
   // cross-origin resource policy helmet sets for exactly these paths.
   app.use(sepCors);
+
+  // `/v1/sep10/{network}/…` and `/v1/sep30/{network}/…` name the ledger a
+  // recovery request is for; the segment comes off before routing. After
+  // `sepCors`, which matches the prefixes the segment sits inside.
+  app.use(recoveryNetworkRewrite);
 
   // We trust the gateway's X-Forwarded-* headers for client IP / proto.
   app.set('trust proxy', 1);

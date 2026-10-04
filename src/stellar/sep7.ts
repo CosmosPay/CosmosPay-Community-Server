@@ -13,8 +13,15 @@ export interface Sep7PayTerms extends Sep7Extras {
   /** Absent for an open amount: the payer chooses. */
   amount?: string;
   asset: ResolvedAsset;
-  /** A MEMO_ID, already validated or minted. */
+  /** A MEMO_ID (the default), already validated or minted — or a MEMO_TEXT. */
   memo: string;
+  /**
+   * How the wallet must attach `memo`. Payment intents are matched on a
+   * MEMO_ID and leave this unset. A NEAR Intents deposit address on Stellar is
+   * matched on a MEMO_TEXT, which is what nearly every deposit to it carries;
+   * the wrong type is worse than none, because the payment still "succeeds".
+   */
+  memoType?: 'MEMO_ID' | 'MEMO_TEXT';
 }
 
 /**
@@ -44,8 +51,8 @@ export function sep7TxUri(xdr: string, extras: Sep7Extras = {}): string {
 /**
  * SEP-7 `pay`: no source and no envelope. The wallet builds the transaction,
  * so the URI has to carry every term the payment must match — `memo_type`
- * included, because SEP-7 defaults a memo to text and the verifier only
- * accepts a MEMO_ID.
+ * included, always written out, because SEP-7 defaults a memo to text and the
+ * payment-intent verifier only accepts a MEMO_ID.
  */
 export function sep7PayUri(terms: Sep7PayTerms): string {
   const params = new URLSearchParams({ destination: terms.destination });
@@ -57,7 +64,7 @@ export function sep7PayUri(terms: Sep7PayTerms): string {
     }
   }
   params.set('memo', terms.memo);
-  params.set('memo_type', 'MEMO_ID');
+  params.set('memo_type', terms.memoType ?? 'MEMO_ID');
   appendExtras(params, terms);
   return `web+stellar:pay?${params.toString()}`;
 }

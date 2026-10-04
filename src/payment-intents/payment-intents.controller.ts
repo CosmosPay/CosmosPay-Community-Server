@@ -103,9 +103,13 @@ export class PaymentIntentsController {
   // Same budget as `tx`: one bucket for the one step they spell two ways.
   @RateLimit(PAYMENT_INTENT_BUILD_RATE_LIMIT)
   @ApiOperation({
-    summary: 'Create a SEP-7 `pay` intent (no source → pay URI + QR, no XDR)',
+    summary:
+      'Create a `pay` intent: a payment link + QR (SEP-7 on Stellar, Solana Pay on Solana, EIP-681 on Monad)',
   })
   @ApiCreatedResponse({ type: PayPaymentIntentEntity })
+  // A Solana or Monad intent reads its token's decimals (and Monad's head
+  // block) from the chain before it is stored. A Stellar one calls nobody.
+  @ApiUpstream('Solana', 'Monad')
   @ApiErrorResponse({
     status: 400,
     codes: [
@@ -164,11 +168,11 @@ export class PaymentIntentsController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary:
-      'Validate a submitted tx against the intent (tx success + destination + amount + memo); finalizes status and fires the event',
+      'Validate a submitted tx against the intent (tx success + destination + amount + memo/reference); finalizes status and fires the event',
   })
   @ApiOkResponse({ type: ValidationOutcomeEntity })
-  // Reads the transaction and its operations back from Horizon.
-  @ApiUpstream('Horizon')
+  // Reads the transaction back from the intent's chain.
+  @ApiUpstream('Horizon', 'Solana', 'Monad')
   @ApiErrorResponse({
     status: 400,
     codes: [
@@ -192,7 +196,7 @@ export class PaymentIntentsController {
   })
   @ApiOkResponse({ type: PaymentIntentEntity })
   // Setting `txHash` verifies it against the chain before it is stored.
-  @ApiUpstream('Horizon')
+  @ApiUpstream('Horizon', 'Solana', 'Monad')
   @ApiErrorResponse({
     status: 400,
     codes: [

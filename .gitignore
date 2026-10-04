@@ -1,5 +1,6 @@
 # compiled output
 /dist
+/dist-local
 /node_modules
 /build
 
@@ -39,6 +40,10 @@ yarn-error.log*
 
 # dotenv environment variable files
 .env
+# Local replicas' copies (`.env.b`, …). Only the example is committed.
+.env.*
+dev-instances.json
+!.env.example
 .env.development.local
 .env.test.local
 .env.production.local
@@ -59,3 +64,5 @@ prisma/*.db
 /generated
 
 .claude/council-cache
+# A plugin signing key never belongs in any repository.
+*.pem

@@ -11,10 +11,15 @@ import {
   Matches,
   MaxLength,
   MinLength,
+  ValidateIf,
 } from 'class-validator';
+import { CHAINS, type Chain } from '@/chains/chains.constants';
+import type { StellarNetwork } from '@/config/configuration';
+import { IsChainAddress } from '@/common/validators/is-chain-address.validator';
 import {
   BACKUP_BOX_MAX_CHARS,
   RETURN_URL_MAX_CHARS,
+  WALLET_SIGNATURE_MAX_CHARS,
 } from '@/wallet-auth/wallet-auth.constants';
 
 /**
@@ -144,22 +149,69 @@ export class VerifyWalletEmailDto {
 }
 
 /**
+ * The Stellar ledger whose signer list decides a signature by a key that is not
+ * the address — a RECOVERED account, re-keyed on ONE ledger. Omit it and the
+ * operator's default ledger is read, as before. A name, never a URL: it only
+ * picks which of the operator's two configured Horizons is asked.
+ */
+function LedgerField(): PropertyDecorator {
+  return (target, key) => {
+    ApiPropertyOptional({
+      enum: STELLAR_LEDGERS,
+      description:
+        "The ledger the account's signers are read from (a recovered account's " +
+        'key signs for it on the ledger it was re-keyed on). Omit for the default.',
+    })(target, key);
+    IsOptional()(target, key);
+    IsIn(STELLAR_LEDGERS)(target, key);
+  };
+}
+
+const STELLAR_LEDGERS: StellarNetwork[] = ['public', 'testnet'];
+
+/**
  * The session token is NOT in this body — it rides in `X-Wallet-Session`, a
  * header of its own because APISIX strips `Authorization` on the way here.
  */
 export class FinishWalletSignInDto {
-  @ApiProperty({
+  // The ACCOUNT this identity is attached to. Not necessarily the key that
+  // signs: a recovered Stellar account keeps its address and changes its signer.
+  @ApiPropertyOptional({
+    enum: CHAINS,
+    default: 'stellar',
     description:
-      'The Stellar ACCOUNT this identity is attached to. Not necessarily the ' +
-      'key that signs: a recovered account keeps its address and changes its ' +
-      'signer.',
+      'Chain the account is on. Omit for Stellar. Solana signs the challenge ' +
+      'with ed25519 over its UTF-8 bytes; Monad with EIP-191 `personal_sign`.',
+  })
+  @IsOptional()
+  @IsIn(CHAINS)
+  chain?: Chain;
+
+  @ApiPropertyOptional({
+    description:
+      'The account on `chain`: Stellar G…, Solana base58, Monad 0x…. Send this ' +
+      'or `stellarAddress`, not both.',
     example: 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN',
   })
+  @ValidateIf(
+    (o: { stellarAddress?: string }) => o.stellarAddress === undefined,
+  )
+  @IsChainAddress('chain')
+  address?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'The Stellar account — the field’s original name, still accepted for ' +
+      'Stellar. New clients send `address`.',
+    example: 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN',
+    deprecated: true,
+  })
+  @ValidateIf((o: { address?: string }) => o.address === undefined)
   @IsString()
   @Matches(STELLAR_ADDRESS, {
     message: 'stellarAddress must be a Stellar public key (G…)',
   })
-  stellarAddress!: string;
+  stellarAddress?: string;
 
   @ApiProperty({ example: '2026-01-02T03:04:05Z' })
   @IsString()
@@ -168,18 +220,20 @@ export class FinishWalletSignInDto {
 
   @ApiProperty({
     description:
-      'base64 ed25519 signature over the sign-in challenge. The exact bytes are ' +
-      'documented on the operation; a client that rebuilds them from prose is ' +
-      'one field-order change away from producing signatures nothing accepts.',
+      'Signature over the sign-in challenge: base64 ed25519 on Stellar, base64 ' +
+      'or base58 ed25519 on Solana, 0x-hex EIP-191 on Monad. The exact bytes ' +
+      'are documented on the operation; a client that rebuilds them from prose ' +
+      'is one field-order change away from producing signatures nothing accepts.',
   })
   @IsString()
-  @MaxLength(128)
+  @MaxLength(WALLET_SIGNATURE_MAX_CHARS)
   signature!: string;
 
   @ApiPropertyOptional({
     description:
-      "The device's sealed seed box, to keep for the next device. Opaque here: " +
-      'it is sealed under a key derived from a password this service never sees.',
+      "The device's sealed seed box, to keep for the next device — one per " +
+      '(chain, address), up to 20 per account. Opaque here: it is sealed under a ' +
+      'key derived from a password this service never sees.',
   })
   @IsOptional()
   @IsString()
@@ -188,26 +242,56 @@ export class FinishWalletSignInDto {
 
   @ApiPropertyOptional({
     description:
-      'Replace the backup this account already has, discarding it. The "forgot ' +
-      'the password" door: the box being discarded may be the only copy of a ' +
-      'funded wallet, so it is never implied — a client sends it only after the ' +
-      'person has acknowledged what it gives up.',
+      'Accepted for older wallets and ignored. Backups are kept per wallet: a box ' +
+      'for another address is added beside the ones the account keeps, and a box ' +
+      'for the same wallet replaces its own — nothing is ever discarded to make room.',
     default: false,
   })
   @IsOptional()
   @IsBoolean()
   replaceBackup?: boolean;
+
+  @LedgerField()
+  network?: StellarNetwork;
 }
 
 export class ReplaceWalletBackupDto {
-  @ApiProperty({
+  @ApiPropertyOptional({
+    enum: CHAINS,
+    default: 'stellar',
+    description:
+      'Chain the account is on. Omit for Stellar. Solana signs the challenge ' +
+      'with ed25519 over its UTF-8 bytes; Monad with EIP-191 `personal_sign`.',
+  })
+  @IsOptional()
+  @IsIn(CHAINS)
+  chain?: Chain;
+
+  @ApiPropertyOptional({
+    description:
+      'The account on `chain`: Stellar G…, Solana base58, Monad 0x…. Send this ' +
+      'or `stellarAddress`, not both.',
     example: 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN',
   })
+  @ValidateIf(
+    (o: { stellarAddress?: string }) => o.stellarAddress === undefined,
+  )
+  @IsChainAddress('chain')
+  address?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'The Stellar account — the field’s original name, still accepted for ' +
+      'Stellar. New clients send `address`.',
+    example: 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN',
+    deprecated: true,
+  })
+  @ValidateIf((o: { address?: string }) => o.address === undefined)
   @IsString()
   @Matches(STELLAR_ADDRESS, {
     message: 'stellarAddress must be a Stellar public key (G…)',
   })
-  stellarAddress!: string;
+  stellarAddress?: string;
 
   @ApiProperty({ description: 'The re-sealed box. Opaque to this service.' })
   @IsString()
@@ -221,12 +305,15 @@ export class ReplaceWalletBackupDto {
 
   @ApiProperty({
     description:
-      'base64 ed25519 signature over the backup challenge, which covers the ' +
-      "box's SHA-256 — so one signature stores exactly one box.",
+      'Signature over the backup challenge (encoded as for sign-in), which ' +
+      "covers the box's SHA-256 — so one signature stores exactly one box.",
   })
   @IsString()
-  @MaxLength(128)
+  @MaxLength(WALLET_SIGNATURE_MAX_CHARS)
   signature!: string;
+
+  @LedgerField()
+  network?: StellarNetwork;
 }
 
 /**
@@ -268,4 +355,8 @@ export class SponsorRecoverySetupDto {
   @IsString()
   @MaxLength(128)
   signature!: string;
+
+  /** Also the ledger the setup is built and sponsored on. */
+  @LedgerField()
+  network?: StellarNetwork;
 }

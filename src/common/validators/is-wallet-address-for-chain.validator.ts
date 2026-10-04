@@ -3,50 +3,7 @@ import {
   ValidationArguments,
   ValidationOptions,
 } from 'class-validator';
-import { StrKey } from '@stellar/stellar-sdk';
-
-const EVM_ADDRESS_RE = /^0x[a-fA-F0-9]{40}$/;
-const BASE58_ALPHABET =
-  '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
-
-/**
- * Decodes a Solana-style base58 public key. Returns null when the string is not
- * valid base58 or does not decode to exactly 32 bytes.
- */
-function decodeSolanaAddress(value: string): Uint8Array | null {
-  if (typeof value !== 'string' || value.length === 0) {
-    return null;
-  }
-
-  let num = 0n;
-  for (const char of value) {
-    const index = BASE58_ALPHABET.indexOf(char);
-    if (index < 0) {
-      return null;
-    }
-    num = num * 58n + BigInt(index);
-  }
-
-  const bytes: number[] = [];
-  while (num > 0n) {
-    bytes.push(Number(num % 256n));
-    num = num / 256n;
-  }
-  bytes.reverse();
-
-  // Preserve leading zero bytes encoded as leading '1' characters in base58.
-  for (const char of value) {
-    if (char !== '1') {
-      break;
-    }
-    bytes.unshift(0);
-  }
-
-  if (bytes.length !== 32) {
-    return null;
-  }
-  return Uint8Array.from(bytes);
-}
+import { CHAIN_ADDRESS_RULES, isEvmAddress } from '@/chains/chain-address';
 
 /** What one chain accepts as a wallet address, and how its error names it. */
 interface WalletAddressRule {
@@ -62,19 +19,13 @@ interface WalletAddressRule {
  * that can fall out of step. A chain with no entry is rejected.
  */
 export const WALLET_ADDRESS_RULES = {
-  // G... account, checksum verified by StrKey.
-  stellar: {
-    isValid: (address) => StrKey.isValidEd25519PublicKey(address),
-    expected: 'a valid Stellar account address (G...)',
-  },
-  // base58 that decodes to a 32-byte public key.
-  solana: {
-    isValid: (address) => decodeSolanaAddress(address) !== null,
-    expected: 'a valid Solana address (base58, 32 bytes)',
-  },
-  // 0x + 40 hex. Shape only — no EIP-55 checksum.
+  stellar: CHAIN_ADDRESS_RULES.stellar,
+  solana: CHAIN_ADDRESS_RULES.solana,
+  monad: CHAIN_ADDRESS_RULES.monad,
+  // BlindPay's name for its EVM chain family. 0x + 40 hex, shape only — no
+  // EIP-55 checksum.
   evm: {
-    isValid: (address) => EVM_ADDRESS_RE.test(address),
+    isValid: isEvmAddress,
     expected: 'a valid EVM address (0x + 40 hex)',
   },
 } satisfies Record<string, WalletAddressRule>;
@@ -105,7 +56,7 @@ function chainRule(
 /**
  * Validates that a wallet address matches the `chain` field on the same object,
  * by that chain's entry in {@link WALLET_ADDRESS_RULES}: Stellar (G... via
- * StrKey), Solana (base58 → 32 bytes), or EVM (0x + 40 hex).
+ * StrKey), Solana (base58 → 32 bytes), or Monad / EVM (0x + 40 hex).
  */
 export function IsWalletAddressForChain(
   chainProperty = 'chain',

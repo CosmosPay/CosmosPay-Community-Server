@@ -54,7 +54,6 @@ import {
   WalletAuthReadyEntity,
   WalletAuthStatusEntity,
   WalletAuthVerifyEmailEntity,
-  WalletBackupConflictEntity,
   WalletBackupUpdatedEntity,
   WalletCodeInvalidEntity,
   WalletEmailStartedEntity,
@@ -100,7 +99,6 @@ const oneOf = (...models: Parameters<typeof getSchemaPath>[0][]) => ({
   WalletAuthVerifyEmailEntity,
   WalletCodeInvalidEntity,
   WalletSignInFinishedEntity,
-  WalletBackupConflictEntity,
 )
 @Controller({ path: 'wallet/auth', version: '1' })
 export class WalletAuthController {
@@ -313,12 +311,15 @@ export class WalletAuthController {
       '```\n' +
       'Cosmos Pay Wallet sign-in\n' +
       'email: {lowercased email}\n' +
-      'account: {stellarAddress}\n' +
+      'account: {address}\n' +
       'at: {signedAt}\n' +
       '```\n\n' +
       'signed over those raw UTF-8 bytes with the account key, base64. The ' +
       'first line is one no Stellar transaction envelope can begin with, which ' +
-      'is what makes signing it safe.',
+      'is what makes signing it safe.\n\n' +
+      'On Solana and Monad (`chain`), a `chain: {chain}` line follows the ' +
+      'first one. Solana signs the bytes with ed25519 (`signMessage`; base64 ' +
+      'or base58); Monad with EIP-191 `personal_sign` (0x-hex).',
   })
   @ApiHeader({
     name: 'X-Wallet-Session',
@@ -328,7 +329,7 @@ export class WalletAuthController {
       'direct call: APISIX strips it.',
     required: true,
   })
-  @ApiOkResponse(oneOf(WalletSignInFinishedEntity, WalletBackupConflictEntity))
+  @ApiOkResponse({ type: WalletSignInFinishedEntity })
   @ApiErrorResponse({
     status: 401,
     codes: [ApiErrorCode.WalletSessionInvalid],
@@ -338,6 +339,7 @@ export class WalletAuthController {
     codes: [
       ApiErrorCode.WalletSignatureInvalid,
       ApiErrorCode.WalletBackupInvalid,
+      ApiErrorCode.WalletBackupLimit,
     ],
   })
   finish(
@@ -372,10 +374,12 @@ export class WalletBackupController {
       'bytes are:\n\n' +
       '```\n' +
       'Cosmos Pay Wallet backup\n' +
-      'account: {stellarAddress}\n' +
+      'account: {address}\n' +
       'box: {sha256 hex of box}\n' +
       'at: {signedAt}\n' +
-      '```',
+      '```\n\n' +
+      'On Solana and Monad a `chain: {chain}` line follows the first one, and ' +
+      'the bytes are signed as for sign-in.',
   })
   @ApiOkResponse({ type: WalletBackupUpdatedEntity })
   @ApiErrorResponse({

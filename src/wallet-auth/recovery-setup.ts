@@ -33,6 +33,15 @@ import {
  */
 export interface SponsoredSetupInput {
   account: string;
+  /**
+   * The key that signs for the account today — from `sponsorableDeviceKey`, never
+   * from the request. When it is the account itself the master is raised to the
+   * device weight, as it always was. When it is not, the account was RECOVERED:
+   * its master is the key on the lost device, retired at 0, and raising it would
+   * hand the account back to whoever holds that device — so `masterWeight` is left
+   * out. The wallet's guard refuses the envelope that gets this wrong.
+   */
+  deviceKey: string;
   signers: readonly [string, string];
   networkPassphrase: string;
   /** Current sequence of `account`, from Horizon. */
@@ -71,7 +80,9 @@ export function buildSponsoredRecoverySetup(
     .addOperation(
       Operation.setOptions({
         source: input.account,
-        masterWeight: RECOVERY_DEVICE_WEIGHT,
+        ...(input.deviceKey === input.account
+          ? { masterWeight: RECOVERY_DEVICE_WEIGHT }
+          : {}),
         lowThreshold: RECOVERY_DEVICE_WEIGHT,
         medThreshold: RECOVERY_DEVICE_WEIGHT,
         highThreshold: RECOVERY_DEVICE_WEIGHT,
@@ -81,4 +92,34 @@ export function buildSponsoredRecoverySetup(
   const tx = builder.setTimeout(RECOVERY_SETUP_TIMEOUT_S).build();
   tx.sign(input.sponsor);
   return tx.toXDR();
+}
+
+/**
+ * The one key that may ask for a sponsorship, or null when the account is not
+ * one this endpoint sponsors.
+ *
+ * Sponsorship is for turning recovery on, once — not a repeatable way to make
+ * the operator fund signer entries — so the account must be signed for by
+ * exactly ONE key, and nothing else with any weight:
+ *
+ *  - a never-recovered account: its master, at any weight above 0 (the setup
+ *    raises it to the device weight);
+ *  - a RECOVERED account: master at 0 and one replacement key at exactly the
+ *    device weight. Below it, thresholds of 10 would lock the account out.
+ *
+ * An account with recovery already on has two more signers and is refused, as is
+ * any account with a co-signer this endpoint knows nothing about.
+ */
+export function sponsorableDeviceKey(
+  account: string,
+  signers: readonly { key: string; weight: number }[],
+): string | null {
+  const active = signers.filter((s) => s.weight > 0);
+  if (active.length !== 1) return null;
+  const [only] = active;
+  if (only.key === account) return only.key;
+  const master = signers.find((s) => s.key === account)?.weight ?? 0;
+  return master === 0 && only.weight === RECOVERY_DEVICE_WEIGHT
+    ? only.key
+    : null;
 }

@@ -7,7 +7,6 @@ import {
   IsInt,
   IsOptional,
   IsString,
-  Matches,
   Max,
   MaxLength,
   Min,
@@ -16,17 +15,30 @@ import {
 import { AliasChallengePurpose } from '@generated/prisma/client';
 import { ALIAS_MAX_LENGTH, ALIAS_MIN_LENGTH } from '@/aliases/alias-name';
 import { ALIAS_PAGE_SIZE } from '@/aliases/aliases.constants';
+import { CHAINS, type Chain } from '@/chains/chains.constants';
+import { IsChainAddress } from '@/common/validators/is-chain-address.validator';
 
 /** The purposes a client may ask for. `RECOVER` is issued by the recovery flow. */
 export const ALIAS_CLIENT_PURPOSES = ['CLAIM', 'ADD_ADDRESS', 'RECOVER'];
 
 /**
- * Stellar public keys are 56 base32 characters opening with `G`. Validated here
- * as SHAPE only — `alias-signing.ts` decodes and checksums it. Two layers,
- * because a shape check gives a clean 400 with a field name, and the decode gives
- * the guarantee.
+ * The `chain` an address is on, on every request that names one. Omit it for
+ * Stellar — every client written before Solana and Monad keeps working.
  */
-const STELLAR_ADDRESS = /^G[A-Z2-7]{55}$/;
+function ChainField(): PropertyDecorator {
+  return (target, key) => {
+    ApiPropertyOptional({
+      enum: CHAINS,
+      default: 'stellar',
+      description:
+        'Chain the address is on. Omit for Stellar. Stellar signs the ' +
+        'challenge digest (ed25519); Solana signs the challenge text (ed25519, ' +
+        '`signMessage`); Monad signs it with EIP-191 `personal_sign`.',
+    })(target, key);
+    IsOptional()(target, key);
+    IsIn(CHAINS)(target, key);
+  };
+}
 
 export class CreateAliasChallengeDto {
   @ApiProperty({
@@ -38,13 +50,16 @@ export class CreateAliasChallengeDto {
   @MaxLength(ALIAS_MAX_LENGTH)
   name!: string;
 
+  @ChainField()
+  chain?: Chain;
+
   @ApiProperty({
+    description:
+      'The address on `chain`: Stellar G…, Solana base58, Monad 0x….',
     example: 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN',
   })
   @IsString()
-  @Matches(STELLAR_ADDRESS, {
-    message: 'address must be a Stellar public key (G…)',
-  })
+  @IsChainAddress('chain')
   address!: string;
 
   @ApiProperty({
@@ -84,7 +99,12 @@ export class ClaimAliasDto {
   @MaxLength(128)
   nonce!: string;
 
-  @ApiProperty({ description: 'base64 ed25519 over the challenge digest.' })
+  @ApiProperty({
+    description:
+      'Stellar: base64 ed25519 over the challenge digest. Solana: base64 or ' +
+      'base58 ed25519 over the challenge text. Monad: 0x-hex EIP-191 ' +
+      'signature over the challenge text.',
+  })
   @IsString()
   @MaxLength(200)
   signature!: string;
@@ -100,11 +120,15 @@ export class ClaimAliasDto {
 }
 
 export class AddAliasAddressDto {
-  @ApiProperty()
-  @IsString()
-  @Matches(STELLAR_ADDRESS, {
-    message: 'address must be a Stellar public key (G…)',
+  @ChainField()
+  chain?: Chain;
+
+  @ApiProperty({
+    description:
+      'The address on `chain`: Stellar G…, Solana base58, Monad 0x….',
   })
+  @IsString()
+  @IsChainAddress('chain')
   address!: string;
 
   @ApiProperty({ example: 'testnet' })
@@ -117,7 +141,12 @@ export class AddAliasAddressDto {
   @MaxLength(128)
   nonce!: string;
 
-  @ApiProperty({ description: 'base64 ed25519 over the challenge digest.' })
+  @ApiProperty({
+    description:
+      'Stellar: base64 ed25519 over the challenge digest. Solana: base64 or ' +
+      'base58 ed25519 over the challenge text. Monad: 0x-hex EIP-191 ' +
+      'signature over the challenge text.',
+  })
   @IsString()
   @MaxLength(200)
   signature!: string;
@@ -158,13 +187,16 @@ export class CompleteAliasRecoveryDto {
   @MaxLength(200)
   token!: string;
 
+  @ChainField()
+  chain?: Chain;
+
   @ApiProperty({
-    description: 'The address that will own the alias from now on.',
+    description:
+      'The address that will own the alias from now on, on `chain`: Stellar ' +
+      'G…, Solana base58, Monad 0x….',
   })
   @IsString()
-  @Matches(STELLAR_ADDRESS, {
-    message: 'address must be a Stellar public key (G…)',
-  })
+  @IsChainAddress('chain')
   address!: string;
 
   @ApiProperty({ example: 'public' })
@@ -177,7 +209,12 @@ export class CompleteAliasRecoveryDto {
   @MaxLength(128)
   nonce!: string;
 
-  @ApiProperty({ description: 'base64 ed25519 over the challenge digest.' })
+  @ApiProperty({
+    description:
+      'Stellar: base64 ed25519 over the challenge digest. Solana: base64 or ' +
+      'base58 ed25519 over the challenge text. Monad: 0x-hex EIP-191 ' +
+      'signature over the challenge text.',
+  })
   @IsString()
   @MaxLength(200)
   signature!: string;

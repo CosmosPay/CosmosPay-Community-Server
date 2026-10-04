@@ -75,14 +75,18 @@ src/admin/admin.constants.ts
 src/aliases/aliases.constants.ts
 src/analytics/analytics.constants.ts
 src/assets/assets.constants.ts
-src/blindpay/blindpay.constants.ts
+src/chains/chains.constants.ts
 src/common/rate-limit.constants.ts
 src/config/config.constants.ts
-src/kyc/kyc.constants.ts
+src/evm/evm.constants.ts
 src/liquidity-pools/liquidity-pools.constants.ts
+src/native-plugins/blindpay/blindpay.constants.ts
+src/native-plugins/blindpay/kyc/kyc.constants.ts
 src/observer/observer.constants.ts
 src/payment-intents/payment-intents.constants.ts
+src/plugins/plugins.constants.ts
 src/prisma/prisma.constants.ts
+src/solana/solana.constants.ts
 src/stellar/stellar.constants.ts
 src/swaps/swaps.constants.ts
 src/webhooks/webhooks.constants.ts
@@ -241,6 +245,36 @@ table. These are the rules that did not hold on their own:
   `resolveSlippage` / `resolveIdempotencyKey`, the SEP-7 builders in
   `stellar/sep7.ts` and `SignedTransactionRelay` exist because private copies
   drifted apart.
+
+## Chains and native plugins
+
+- **Stellar, Solana and Monad are one `Chain` union** (`@/chains/chains.constants`).
+  Anything per chain — address rules, transaction-id shapes, payment verifiers,
+  message signatures, analytics labels — is a `Record<Chain, …>`, so a new chain
+  does not compile until every table has its entry. A request that names no chain
+  means Stellar, and must keep behaving byte for byte as it did: the Stellar
+  signing challenges have no `chain:` line, alias resolution defaults to Stellar.
+- **Solana and Monad are reached only through `SolanaRpcClient` / `EvmRpcClient`**,
+  which check the node's genesis hash / `eth_chainId` before trusting it. Never
+  call a node URL directly.
+- **Integrations that are not the chain itself are native plugins** under
+  `src/native-plugins/<slug>/` (BlindPay, DeFindex), switched on by
+  `PLUGINS_ENABLED`. The core never imports one — lint enforces it — and a plugin
+  never imports another. When the core needs a plugin's data, add an extension
+  point in the core (see `AdminExtensions`) and have the plugin register into it.
+  A new native plugin needs its slug in `NATIVE_PLUGIN_SLUGS`, its module in
+  `NATIVE_PLUGIN_MODULES` and its own lint entry in `eslint.config.mjs`.
+- **Monad deposit addresses are `CREATE2` addresses of
+  `contracts/PaymentForwarder.sol`**, so every one of them depends on the exact
+  bytecode in `src/evm/payment-forwarder.artifact.ts`. Regenerate it only with
+  `npm run contracts:compile` (the spec fails if source and artifact disagree),
+  and never while a deposit address built from the old bytecode may still hold
+  or receive money: the forwarder rebuilds each address from the CURRENT
+  artifact, finds it no longer matches the stored one, and refuses to deploy — the
+  money stays safe but stuck until the old artifact is restored. The relayer key
+  signs only forwarder deployments and
+  flushes; it must never gain another use, because "it holds gas money only" is
+  the whole security argument.
 
 ## Security invariants a change must keep
 

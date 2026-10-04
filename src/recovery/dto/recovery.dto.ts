@@ -123,3 +123,29 @@ export class RecoveryEmailVerifyDto {
   @Matches(/^\d{6}$/, { message: 'code must be six digits' })
   code!: string;
 }
+
+/** Standard base64 — how the wallet encodes a half of a backup's recovery key. */
+const BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
+
+export class RecoveryShareDto {
+  @ApiProperty({
+    description:
+      "This server's half of the backup's recovery key: 32 random-looking " +
+      "bytes, base64. Useless without the other server's half.",
+    example: 'q83vEjRWeJCrze8SNFZ4kKvN7xI0VniQq83vEjRWeJA=',
+  })
+  @IsString()
+  @MaxLength(64)
+  @Matches(BASE64, { message: 'share must be base64' })
+  share!: string;
+
+  @ApiProperty({
+    description:
+      'The inbox that may take the half back, proven to THIS server with its ' +
+      'identity token.',
+    example: 'person@example.com',
+  })
+  @IsEmail()
+  @MaxLength(254)
+  email!: string;
+}

@@ -16,8 +16,9 @@
 import { STELLAR_DECIMALS } from '@/stellar/stellar.constants';
 
 /**
- * Formats a value returned by a `SUM(...::numeric)` as a Stellar amount:
- * at most 7 decimal places, trailing zeros dropped, never via a float.
+ * Formats a value returned by a `SUM(...::numeric)` as an amount: at most
+ * `places` decimal places — 7 for Stellar, the default; up to 18 for a Solana
+ * or Monad asset — trailing zeros dropped, never via a float.
  *
  * `null`/`undefined` become `'0'` — `SUM` over no rows is NULL, which is a
  * legitimate "nothing settled yet", not an error. Anything that does not look
@@ -26,14 +27,17 @@ import { STELLAR_DECIMALS } from '@/stellar/stellar.constants';
  * response down. (Blind `String(value)` is what this replaces — on an object it
  * silently yields `'[object Object]'`.)
  */
-export function formatNumericAmount(value: unknown): string {
+export function formatNumericAmount(
+  value: unknown,
+  places: number = STELLAR_DECIMALS,
+): string {
   const raw = numericToString(value);
   if (raw === null) return '0';
 
   const negative = raw.startsWith('-');
   const unsigned = negative ? raw.slice(1) : raw;
   const [whole, fraction = ''] = unsigned.split('.');
-  const trimmed = fraction.slice(0, STELLAR_DECIMALS).replace(/0+$/, '');
+  const trimmed = fraction.slice(0, places).replace(/0+$/, '');
   const body = trimmed ? `${whole}.${trimmed}` : whole;
 
   // Never render "-0".

@@ -68,6 +68,17 @@ export enum ApiErrorCode {
   InvalidMemo = 'invalid_memo',
   TransactionRejected = 'transaction_rejected',
 
+  // --- cross-chain swaps (NEAR Intents) --------------------------------------
+  /**
+   * The caller's API key reaches a network the provider does not run on. NEAR
+   * Intents settles on mainnets only, so a `dev` key (testnet) can quote a
+   * cross-chain swap but never open one: a deposit address it handed out would
+   * take real money.
+   */
+  NetworkUnsupported = 'network_unsupported',
+  /** The asset is not one NEAR Intents can swap on the chain the request names. */
+  AssetUnsupported = 'asset_unsupported',
+
   // --- provider / upstream --------------------------------------------------
   ProviderError = 'provider_error',
   ProviderUnavailable = 'provider_unavailable',
@@ -146,6 +157,7 @@ export enum ApiErrorCode {
    * malformed, oversized, or sealed at a PBKDF2 cost below this service's floor.
    */
   WalletBackupInvalid = 'wallet_backup_invalid',
+  WalletBackupLimit = 'wallet_backup_limit',
   /**
    * The account this sign-in resolves to is attached to a different Stellar
    * address, and no replacement was authorized. Replacing a backup is the
@@ -165,6 +177,25 @@ export enum ApiErrorCode {
    * is for turning recovery on once, not a repeatable way to fund signers.
    */
   WalletRecoverySetupRefused = 'wallet_recovery_setup_refused',
+
+  // --- plugins --------------------------------------------------------------
+  /**
+   * The consumer has not installed this plugin, or installed an older version
+   * that asked for fewer capabilities than the current one does. Either way
+   * the answer is the same: install it (again) and consent to the list.
+   */
+  PluginNotInstalled = 'plugin_not_installed',
+  /** The capabilities consented to are not exactly the ones the plugin declares. */
+  PluginConsentMismatch = 'plugin_consent_mismatch',
+  /** The plugin refused the input, with a message of its own. */
+  PluginRejected = 'plugin_rejected',
+  /** The installation is at its storage cap. */
+  PluginQuotaExceeded = 'plugin_quota_exceeded',
+  /**
+   * The plugin crashed, overstepped what it was granted, or ran out of time.
+   * The detail is logged; the caller learns only which plugin it was.
+   */
+  PluginFailed = 'plugin_failed',
 
   // --- service --------------------------------------------------------------
   Misconfigured = 'misconfigured',

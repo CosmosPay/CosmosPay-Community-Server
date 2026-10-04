@@ -8,7 +8,7 @@ const log = new Logger('RedirectUrlWhitelist');
  * `KYC_REDIRECT_URL_WHITELIST={"cosmos_acme":["acme.com","app.acme.com"]}`
  *
  * Parsed here, with the rest of the environment, and enforced in
- * `@/kyc/redirect-url-whitelist` (`assertRedirectAllowed`). Configuration loads
+ * `@/native-plugins/blindpay/kyc/redirect-url-whitelist` (`assertRedirectAllowed`). Configuration loads
  * before every feature module, so it must not import one to read a variable.
  */
 export type RedirectUrlWhitelist = Readonly<Record<string, readonly string[]>>;

@@ -6,11 +6,9 @@ import {
   Param,
   Post,
   Query,
-  UseGuards,
 } from '@nestjs/common';
 import {
   ApiCreatedResponse,
-  ApiExcludeEndpoint,
   ApiOkResponse,
   ApiOperation,
   ApiQuery,
@@ -22,11 +20,12 @@ import { AllowPublicKey } from '@/common/decorators/allow-public-key.decorator';
 import { CurrentConsumer } from '@/common/decorators/current-consumer.decorator';
 import { RateLimit } from '@/common/decorators/rate-limit.decorator';
 import { RequirePermissions } from '@/common/decorators/require-permissions.decorator';
-import { ConsoleOnlyGuard } from '@/common/guards/console-only.guard';
+import { UniformAnswer } from '@/common/decorators/uniform-answer.decorator';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import {
   ALIAS_CHALLENGE_RATE_LIMIT,
   ALIAS_RECOVERY_COMPLETE_RATE_LIMIT,
+  ALIAS_RECOVERY_START_RATE_LIMIT,
 } from '@/aliases/aliases.constants';
 import { AliasesService } from '@/aliases/aliases.service';
 import {
@@ -48,6 +47,8 @@ import {
   AliasResolutionEntity,
   OwnedAliasEntity,
 } from '@/aliases/entities/alias.entity';
+import { CHAINS, type Chain } from '@/chains/chains.constants';
+import { ParseOptionalChainPipe } from '@/chains/parse-chain.pipe';
 
 /**
  * Claimable payment handles — `emanuel250` instead of `GA5ZSE…`.
@@ -83,9 +84,21 @@ export class AliasesController {
     required: false,
     description: 'Limit to one network (public | testnet | a custom id).',
   })
+  @ApiQuery({
+    name: 'chain',
+    required: false,
+    enum: CHAINS,
+    description:
+      'The chain to resolve on. Omit for Stellar: a wallet that does not ask ' +
+      'for a chain is never handed another chain’s address.',
+  })
   @ApiOkResponse({ type: AliasResolutionEntity })
-  resolve(@Param('name') name: string, @Query('network') network?: string) {
-    return this.aliases.resolve(name, network);
+  resolve(
+    @Param('name') name: string,
+    @Query('network') network?: string,
+    @Query('chain', ParseOptionalChainPipe) chain?: Chain,
+  ) {
+    return this.aliases.resolve(name, network, chain);
   }
 
   @Get('availability/:name')
@@ -103,11 +116,18 @@ export class AliasesController {
   @ApiOperation({ summary: 'Which aliases point at this address' })
   @ApiOkResponse({ type: AliasByAddressEntity })
   @ApiQuery({ name: 'network', required: false })
+  @ApiQuery({
+    name: 'chain',
+    required: false,
+    enum: CHAINS,
+    description: 'Omit to read the chain off the address’s own shape.',
+  })
   byAddress(
     @Param('address') address: string,
     @Query('network') network?: string,
+    @Query('chain', ParseOptionalChainPipe) chain?: Chain,
   ) {
-    return this.aliases.findByAddress(address, network);
+    return this.aliases.findByAddress(address, network, chain);
   }
 
   /* ------------------------------- owner side ------------------------------ */
@@ -233,23 +253,26 @@ export class AliasesController {
   /* -------------------------------- recovery ------------------------------- */
 
   @Post(':name/recovery')
-  // Console only, and out of the published contract. This service sends no mail,
-  // so the response carries the token for the console to deliver — and the token
-  // IS the proof of mailbox control. Behind a scope it proved nothing: any key
-  // holder who knew a handle and its owner's email got the token back and could
-  // complete the recovery with a key of their own, taking every payment sent to
-  // that name. No scope is declared because a console call is not an API-key call
-  // (the same as `/v1/admin`); the guard refuses before the alias is looked up.
-  @UseGuards(ConsoleOnlyGuard)
-  @ApiExcludeEndpoint()
+  // Open to the shared public key: whoever lost their keys has no account to call
+  // it with. That is safe because the token — the proof of mailbox control — is
+  // emailed to the mailbox on record and never returned: a caller can make the
+  // owner receive a mail, nothing more. It used to be returned to the developer
+  // platform's console to deliver, which put the platform in this path.
+  @AllowPublicKey()
+  @RequirePermissions('payments:write')
+  // Every accepted call may send an email.
+  @RateLimit(ALIAS_RECOVERY_START_RATE_LIMIT)
+  @UniformAnswer()
   @ApiOperation({
-    summary: 'Start email recovery (platform console only)',
+    summary: 'Start email recovery: the token is emailed to the owner',
     description:
-      'The response is IDENTICAL whether or not the alias and mailbox matched. A ' +
-      'handle is public and the mailbox behind it is not, so a differing answer ' +
-      'would confirm who owns it to anyone who asked.',
+      'Always `{ accepted: true }`, whether or not the alias exists and the mailbox ' +
+      'matched — a handle is public and the mailbox behind it is not. When both ' +
+      'match, the token is emailed to the mailbox on record (at most once a minute ' +
+      'per alias); it never appears in the response.',
   })
   @ApiCreatedResponse({ type: AliasRecoveryStartedEntity })
+  @ApiErrorResponse({ status: 503, codes: [ApiErrorCode.Misconfigured] })
   startRecovery(
     @Param('name') name: string,
     @Body() dto: StartAliasRecoveryDto,

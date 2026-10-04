@@ -3,6 +3,7 @@ import { ALLOW_PUBLIC_KEY_EXTENSION_KEY } from '@/common/decorators/allow-public
 import { UPSTREAM_EXTENSION_KEY } from '@/common/decorators/api-upstream.decorator';
 import { PUBLIC_EXTENSION_KEY } from '@/common/decorators/public.decorator';
 import { RATE_LIMIT_EXTENSION_KEY } from '@/common/decorators/rate-limit.decorator';
+import { UNIFORM_ANSWER_EXTENSION_KEY } from '@/common/decorators/uniform-answer.decorator';
 import {
   attachErrorResponses,
   buildSwaggerConfig,
@@ -83,6 +84,20 @@ describe('attachErrorResponses', () => {
     );
     expect(statusesOf(document, '/v1/products')).not.toContain('404');
     expect(statusesOf(document, '/v1/products/{id}')).toContain('404');
+  });
+
+  /* Alias recovery answers the same for any name: a 404 there would be an ownership oracle. */
+  it('documents no 404 on a route that answers uniformly', () => {
+    const document = attachErrorResponses(
+      documentWith({
+        'POST /v1/aliases/{name}/recovery': {
+          [UNIFORM_ANSWER_EXTENSION_KEY]: true,
+        },
+      }),
+    );
+    expect(
+      statusesOf(document, '/v1/aliases/{name}/recovery', 'post'),
+    ).not.toContain('404');
   });
 
   it('documents 400 only where there is something to validate', () => {

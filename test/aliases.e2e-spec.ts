@@ -7,19 +7,21 @@ import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { AppModule } from '@/app.module';
 import { PrismaService } from '@/prisma/prisma.service';
+import { MailerService } from '@/mailer/mailer.service';
 import {
   ALIAS_CHALLENGE_RATE_LIMIT,
   ALIAS_RECOVERY_COMPLETE_RATE_LIMIT,
+  ALIAS_RECOVERY_START_RATE_LIMIT,
 } from '@/aliases/aliases.constants';
 
 /**
  * Alias recovery (e2e).
  *
- * Starting a recovery returns the token that stands for control of the owner's
- * mailbox, for the platform console to email. So the route is closed to every
- * API-key caller — an `admin` key included, since it clears every scope check —
- * and the refusal happens BEFORE the alias is looked up, so it reveals nothing
- * about whether the handle or the mailbox exist.
+ * Starting a recovery is open to any `payments:write` key, the shared public one
+ * included — whoever lost their keys has no account. That is only safe because
+ * the token, which stands for control of the owner's mailbox, is EMAILED to that
+ * mailbox and never appears in the response: the answer is `{ accepted: true }`
+ * whether or not the handle exists and the mailbox matched.
  *
  * Completing one is open to any `payments:write` key, and handles are public,
  * so a junk token must write nothing and the route must carry a rate limit.
@@ -73,15 +75,25 @@ describe('Alias recovery (e2e)', () => {
     aliasRecovery: {
       // No stored hash matches a junk token.
       findUnique: jest.fn().mockResolvedValue(null),
+      // No recovery started in the resend window.
+      findFirst: jest.fn().mockResolvedValue(null),
       updateMany: jest.fn().mockResolvedValue({ count: 0 }),
       create: jest.fn().mockResolvedValue({ id: 'rec_1' }),
     },
+  };
+
+  // A sender that records instead of sending: the suite asserts WHERE the token goes.
+  const mailer = {
+    configured: true,
+    send: jest.fn().mockResolvedValue(undefined),
   };
 
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
       .overrideProvider(PrismaService)
       .useValue(prismaMock)
+      .overrideProvider(MailerService)
+      .useValue(mailer)
       .compile();
 
     app = moduleRef.createNestApplication();
@@ -119,58 +131,75 @@ describe('Alias recovery (e2e)', () => {
       .set('x-consumer-username', 'cosmos_u1')
       .set('x-consumer-role', 'admin');
 
-  /** The platform console. */
-  const asConsole = (r: request.Test) =>
+  /** A wallet with no account: the SHARED public key. */
+  const publicKey = (r: request.Test) =>
     r
       .set('x-gateway-secret', SECRET)
-      .set('x-consumer-username', 'cosmos_console')
-      .set('x-cosmos-internal', '1');
+      .set('x-consumer-username', 'cosmos_public')
+      .set('x-consumer-role', 'public')
+      .set('x-consumer-permissions', 'payments:read,payments:write');
 
-  it('refuses an API-key caller before looking the alias up', async () => {
-    const res = await apiKey(
-      request(http()).post(path).send({ email: 'owner@example.com' }),
-    ).expect(403);
+  const flush = () => new Promise((r) => setImmediate(r));
 
-    expect(res.body.code).toBe('admin_console_only');
-    expect(res.body).not.toHaveProperty('token');
-    expect(prismaMock.alias.findUnique).not.toHaveBeenCalled();
-    expect(prismaMock.aliasRecovery.create).not.toHaveBeenCalled();
-  });
+  describe('starting a recovery', () => {
+    beforeEach(() => mailer.send.mockClear());
 
-  it('refuses the internal marker when the call did not come through the gateway', async () => {
-    const res = await request(http())
-      .post(path)
-      .set('x-cosmos-internal', '1')
-      .send({ email: 'owner@example.com' })
-      .expect(403);
+    it('accepts the shared public key, and emails the token instead of returning it', async () => {
+      const res = await publicKey(
+        request(http()).post(path).send({ email: 'OWNER@example.com' }),
+      ).expect(201);
+      await flush();
 
-    expect(res.body.code).toBe('gateway_required');
-    expect(prismaMock.alias.findUnique).not.toHaveBeenCalled();
-  });
-
-  it('hands the console a token for a matching mailbox', async () => {
-    const res = await asConsole(
-      request(http()).post(path).send({ email: 'OWNER@example.com' }),
-    ).expect(201);
-
-    expect(res.body.accepted).toBe(true);
-    expect(typeof res.body.token).toBe('string');
-    expect(res.body.email).toBe('owner@example.com');
-    expect(prismaMock.aliasRecovery.create).toHaveBeenCalledTimes(1);
-  });
-
-  it('answers the console identically when the mailbox does not match', async () => {
-    const res = await asConsole(
-      request(http()).post(path).send({ email: 'guess@example.com' }),
-    ).expect(201);
-
-    expect(res.body).toEqual({
-      accepted: true,
-      token: null,
-      email: null,
-      expiresAt: null,
+      expect(res.body).toEqual({ accepted: true });
+      expect(prismaMock.aliasRecovery.create).toHaveBeenCalledTimes(1);
+      expect(mailer.send).toHaveBeenCalledTimes(1);
+      expect(mailer.send.mock.calls[0][0].to).toBe('owner@example.com');
     });
-    expect(prismaMock.aliasRecovery.create).not.toHaveBeenCalled();
+
+    it('answers identically when the mailbox does not match, and sends nothing', async () => {
+      const res = await apiKey(
+        request(http()).post(path).send({ email: 'guess@example.com' }),
+      ).expect(201);
+      await flush();
+
+      expect(res.body).toEqual({ accepted: true });
+      expect(prismaMock.aliasRecovery.create).not.toHaveBeenCalled();
+      expect(mailer.send).not.toHaveBeenCalled();
+    });
+
+    it('answers identically for an alias that does not exist', async () => {
+      prismaMock.alias.findUnique.mockResolvedValue(null);
+      const res = await apiKey(
+        request(http())
+          .post('/v1/aliases/nobody/recovery')
+          .send({ email: 'x@example.com' }),
+      ).expect(201);
+
+      expect(res.body).toEqual({ accepted: true });
+    });
+
+    it('still refuses a call that did not come through the gateway', async () => {
+      const res = await request(http())
+        .post(path)
+        .send({ email: 'owner@example.com' })
+        .expect(403);
+
+      expect(res.body.code).toBe('gateway_required');
+      expect(prismaMock.alias.findUnique).not.toHaveBeenCalled();
+    });
+
+    it('is rate limited per address', async () => {
+      const { limit } = ALIAS_RECOVERY_START_RATE_LIMIT;
+      for (let i = 0; i < limit; i++) {
+        await publicKey(
+          request(http()).post(path).send({ email: 'guess@example.com' }),
+        ).expect(201);
+      }
+      const refused = await publicKey(
+        request(http()).post(path).send({ email: 'guess@example.com' }),
+      ).expect(429);
+      expect(refused.body.code).toBe('rate_limited');
+    });
   });
 
   describe('completing a recovery', () => {

@@ -1,6 +1,7 @@
 import { StrKey } from '@stellar/stellar-sdk';
 import { isProviderUrl } from '@/common/oidc/oidc-core';
 import { parseReturnUrls, returnUrlProblem } from '@/common/return-url';
+import { parseAtRestKey } from '@/wallet-auth/backup-cipher';
 
 /**
  * Boot-time rules for the wallet sign-in and the recovery servers.
@@ -58,12 +59,64 @@ function assertDistinct(env: Env, names: string[]): void {
   }
 }
 
+/**
+ * A comma list of ledger names: `public`, `testnet`, or both. Anything else is a
+ * typo the parser would otherwise drop, leaving a ledger unserved with no sign.
+ */
+function requireNetworkList(env: Env, name: string): void {
+  const raw = read(env, name);
+  if (!raw) return;
+  for (const entry of raw.split(',').map((s) => s.trim().toLowerCase())) {
+    if (entry !== 'public' && entry !== 'testnet') {
+      throw new Error(
+        `${name} entry "${entry}" must be "public" or "testnet".`,
+      );
+    }
+  }
+}
+
 function requireStellarSecret(env: Env, name: string): string {
   const value = read(env, name);
   if (!StrKey.isValidEd25519SecretSeed(value)) {
     throw new Error(`${name} must be a Stellar secret seed (S…).`);
   }
   return value;
+}
+
+/**
+ * A sender is `MAIL_FROM` plus a transport — `MAIL_RESEND_API_KEY` or
+ * `MAIL_SMTP_HOST`. Either half alone is refused: a from-address with nothing to
+ * send it, or a transport that would send from nobody.
+ */
+function mailConfigured(env: Env): boolean {
+  const from = Boolean(read(env, 'MAIL_FROM'));
+  const transport = Boolean(
+    read(env, 'MAIL_RESEND_API_KEY') || read(env, 'MAIL_SMTP_HOST'),
+  );
+  if (from !== transport) {
+    throw new Error(
+      'MAIL_FROM is set together with a transport (MAIL_RESEND_API_KEY or MAIL_SMTP_HOST), or not at all.',
+    );
+  }
+  return from;
+}
+
+/** Two variables that only mean something together: both set, or neither. */
+function pairConfigured(env: Env, a: string, b: string): boolean {
+  const hasA = Boolean(read(env, a));
+  const hasB = Boolean(read(env, b));
+  if (hasA !== hasB)
+    throw new Error(`${a} and ${b} are set together or not at all.`);
+  return hasA;
+}
+
+function isHttpUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch {
+    return false;
+  }
 }
 
 /** The OIDC trio is whole or absent. */
@@ -100,8 +153,42 @@ export function assertIdentityConfigConsistent(env: Env): void {
     read(env, 'WALLET_GITHUB_CLIENT_ID') &&
     read(env, 'WALLET_GITHUB_CLIENT_SECRET');
   const authentik = oidcConfigured(env, 'WALLET_AUTH_OIDC', true);
-  const consoleUrl = read(env, 'WALLET_AUTH_CONSOLE_URL');
-  const signInServed = Boolean(google || github || authentik || consoleUrl);
+  const mail = mailConfigured(env);
+  const minting = pairConfigured(env, 'APISIX_ADMIN_URL', 'APISIX_ADMIN_KEY');
+  if (minting && !isHttpUrl(read(env, 'APISIX_ADMIN_URL'))) {
+    throw new Error(
+      'APISIX_ADMIN_URL must be an http(s) URL, e.g. http://apisix:9180/apisix/admin.',
+    );
+  }
+  // The email door needs both halves: a sender for the code and a way to mint
+  // the keys the sign-in ends with.
+  const emailDoor = mail && minting;
+  const signInServed = Boolean(google || github || authentik || emailDoor);
+
+  // The at-rest key for stored backups: required wherever a sign-in can store one,
+  // and well-formed wherever it is set (a key that failed to parse would be a
+  // backup that silently stops opening).
+  const backupKey = read(env, 'WALLET_BACKUP_ENCRYPTION_KEY');
+  if (signInServed && !backupKey) {
+    throw new Error(
+      'WALLET_BACKUP_ENCRYPTION_KEY is required whenever a wallet sign-in door is configured: ' +
+        'it seals every stored backup at rest (openssl rand -base64 32).',
+    );
+  }
+  for (const [name, value] of [
+    ['WALLET_BACKUP_ENCRYPTION_KEY', backupKey],
+    ...read(env, 'WALLET_BACKUP_ENCRYPTION_PREVIOUS_KEYS')
+      .split(',')
+      .map((v) => v.trim())
+      .filter(Boolean)
+      .map((v) => ['WALLET_BACKUP_ENCRYPTION_PREVIOUS_KEYS', v]),
+  ]) {
+    if (value && !parseAtRestKey(value)) {
+      throw new Error(
+        `${name} must be 32 bytes, in base64 or hex (openssl rand -base64 32).`,
+      );
+    }
+  }
 
   if (signInServed) {
     requireSecret(
@@ -128,13 +215,8 @@ export function assertIdentityConfigConsistent(env: Env): void {
     }
   }
 
-  if (consoleUrl) {
-    requireSecret(
-      env,
-      'WALLET_AUTH_CONSOLE_SECRET',
-      'when WALLET_AUTH_CONSOLE_URL is set: it proves a call to the console came from this service',
-    );
-  }
+  requireNetworkList(env, 'WALLET_RECOVERY_SPONSOR_NETWORKS');
+  requireNetworkList(env, 'RECOVERY_NETWORKS');
 
   const sponsor = read(env, 'WALLET_RECOVERY_SPONSOR_SECRET');
   if (sponsor) {
@@ -159,6 +241,14 @@ export function assertIdentityConfigConsistent(env: Env): void {
       throw new Error(
         'WALLET_RECOVERY_SPONSOR_SECRET must not be set on a recovery server (RECOVERY_ROLE). ' +
           'Sponsor recovery setups from the main deployment.',
+      );
+    }
+    // Nor the credential that mints accounts: a recovery server that could also
+    // write the gateway is worth compromising for that alone.
+    if (read(env, 'APISIX_ADMIN_KEY')) {
+      throw new Error(
+        'APISIX_ADMIN_KEY must not be set on a recovery server (RECOVERY_ROLE). ' +
+          'Only the main deployment mints wallet keys.',
       );
     }
 
@@ -196,20 +286,17 @@ export function assertIdentityConfigConsistent(env: Env): void {
     if (oidc && !isProviderUrl(oidc))
       throw new Error('RECOVERY_OIDC_ISSUER must be an https URL.');
 
-    const mailUrl = read(env, 'RECOVERY_EMAIL_DELIVERY_URL');
-    if (mailUrl) {
-      if (!isProviderUrl(mailUrl))
-        throw new Error('RECOVERY_EMAIL_DELIVERY_URL must be an https URL.');
-      requireSecret(
-        env,
-        'RECOVERY_EMAIL_DELIVERY_SECRET',
-        'when RECOVERY_EMAIL_DELIVERY_URL is set',
+    const emailCodes =
+      read(env, 'RECOVERY_EMAIL_CODES').toLowerCase() === 'true';
+    if (emailCodes && !mail) {
+      throw new Error(
+        'RECOVERY_EMAIL_CODES=true needs MAIL_FROM and a transport (MAIL_RESEND_API_KEY or MAIL_SMTP_HOST): this server sends its own codes.',
       );
     }
-    if (!oidc && !mailUrl) {
+    if (!oidc && !emailCodes) {
       throw new Error(
         'A recovery server needs a way to prove an inbox: RECOVERY_OIDC_ISSUER (+ AUDIENCES) ' +
-          'for ID tokens, RECOVERY_EMAIL_DELIVERY_URL for its own emailed codes, or both.',
+          'for ID tokens, RECOVERY_EMAIL_CODES=true (+ MAIL_*) for its own emailed codes, or both.',
       );
     }
   }
@@ -217,8 +304,8 @@ export function assertIdentityConfigConsistent(env: Env): void {
   assertDistinct(env, [
     'APISIX_GATEWAY_SECRET',
     'WALLET_AUTH_SESSION_SECRET',
-    'WALLET_AUTH_CONSOLE_SECRET',
+    'APISIX_ADMIN_KEY',
+    'WALLET_BACKUP_ENCRYPTION_KEY',
     'RECOVERY_JWT_SECRET',
-    'RECOVERY_EMAIL_DELIVERY_SECRET',
   ]);
 }

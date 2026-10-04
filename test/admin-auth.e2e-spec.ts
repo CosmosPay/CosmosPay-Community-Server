@@ -7,6 +7,7 @@ import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { AppModule } from '@/app.module';
 import { AdminService } from '@/admin/admin.service';
+import { BlindpayAdminService } from '@/native-plugins/blindpay/admin/blindpay-admin.service';
 import { PrismaService } from '@/prisma/prisma.service';
 
 /**
@@ -33,6 +34,8 @@ describe('Admin auth & audit (e2e)', () => {
 
   const adminServiceMock = {
     summary: jest.fn().mockResolvedValue({ ok: true }),
+    chainSwaps: jest.fn().mockResolvedValue({ data: [], total: 0 }),
+    crossChainSwaps: jest.fn().mockResolvedValue({ data: [], total: 0 }),
     setReceiverAccess: jest.fn(
       async (
         _id: string,
@@ -150,6 +153,10 @@ describe('Admin auth & audit (e2e)', () => {
       .useValue(prismaMock)
       .overrideProvider(AdminService)
       .useValue(adminServiceMock)
+      // The receiver routes are the BlindPay plugin's, served under the same
+      // /v1/admin prefix behind the same guard; one mock answers both.
+      .overrideProvider(BlindpayAdminService)
+      .useValue(adminServiceMock)
       .compile();
 
     app = moduleRef.createNestApplication();
@@ -238,6 +245,25 @@ describe('Admin auth & audit (e2e)', () => {
 
   it('allows the console on a read endpoint', async () => {
     await asConsole(request(http()).get(`${base}/summary`)).expect(200);
+  });
+
+  describe.each(['chain-swaps', 'cross-chain-swaps'])('GET /%s', (path) => {
+    it('refuses an ordinary gateway caller', async () => {
+      await gateway(request(http()).get(`${base}/${path}`)).expect(403);
+    });
+
+    it('serves the console, with its filters', async () => {
+      await asConsole(
+        request(http()).get(`${base}/${path}?status=SUCCEEDED&take=5`),
+      ).expect(200);
+      const call =
+        path === 'chain-swaps'
+          ? adminServiceMock.chainSwaps
+          : adminServiceMock.crossChainSwaps;
+      expect(call).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'SUCCEEDED', take: 5 }),
+      );
+    });
   });
 
   describe.each(mutators)('$name', ({ method, path, body, action }) => {

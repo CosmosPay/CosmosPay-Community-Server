@@ -59,6 +59,12 @@ export const TERMINAL_WEBHOOK_EVENTS = [
   'LIQUIDITY_FAILED',
   'PAYMENT_INTENT_SUCCEEDED',
   'PAYMENT_INTENT_FAILED',
+  // Durability, like payment intents: the cross-chain observer is the only
+  // writer and its status change is a compare-and-swap, but the money moved
+  // on two chains and the notification must not die with the pod.
+  'CROSS_CHAIN_SWAP_SUCCEEDED',
+  'CROSS_CHAIN_SWAP_REFUNDED',
+  'CROSS_CHAIN_SWAP_FAILED',
 ] as const satisfies readonly WebhookEventType[];
 
 export type TerminalWebhookEventType = (typeof TERMINAL_WEBHOOK_EVENTS)[number];

@@ -1,4 +1,9 @@
-/** Constants for the Stellar path-payment swap flow. */
+/**
+ * Constants for `/v1/swaps`: Stellar path payments, and same-chain swaps on
+ * Solana (Jupiter) and Monad (Kuru Flow).
+ */
+
+import type { OtherChain } from '@/chains/chains.constants';
 
 /**
  * On-chain MEMO_TEXT stamped on a swap that collects the platform commission
@@ -70,3 +75,42 @@ export const SWAP_CREATE_RATE_LIMIT = {
   limit: 20,
   windowMs: 60 * 1000,
 };
+
+/** The aggregator that builds same-chain swaps on each chain off Stellar. */
+export const CHAIN_SWAP_PROVIDERS: Record<OtherChain, 'jupiter' | 'kuru'> = {
+  solana: 'jupiter',
+  monad: 'kuru',
+};
+
+/**
+ * How long a built transaction may still be submitted. Solana: a transaction
+ * carries a recent blockhash that the cluster stops accepting after ~150
+ * blocks (about a minute), so past this it cannot land at all. Monad: nothing
+ * expires on-chain, but the price does — the minimum out still protects the
+ * payer, and a two-minute-old route is one worth quoting again.
+ */
+export const CHAIN_SWAP_TX_TTL_MS: Record<OtherChain, number> = {
+  solana: 60 * 1000,
+  monad: 2 * 60 * 1000,
+};
+
+/**
+ * How long a SUBMITTED swap may go unseen on-chain before it is EXPIRED.
+ * Solana: once the blockhash is spent it never lands, so a few minutes is
+ * final. Monad: a transaction can sit in the mempool behind a low fee; half an
+ * hour, and a later sighting still settles it (see the rescue window).
+ */
+export const CHAIN_SWAP_LANDING_WINDOW_MS: Record<OtherChain, number> = {
+  solana: 3 * 60 * 1000,
+  monad: 30 * 60 * 1000,
+};
+
+/**
+ * How long past its expiry an EXPIRED Monad or Solana swap with a hash is
+ * still looked for, so one that landed late is promoted rather than left
+ * looking lost. A day, as for cross-chain swaps.
+ */
+export const CHAIN_SWAP_RESCUE_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+/** Swaps the chain-swap observer checks per tick; one RPC read each. */
+export const CHAIN_SWAP_OBSERVER_BATCH = 50;

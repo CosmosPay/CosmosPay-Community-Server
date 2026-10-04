@@ -7,17 +7,28 @@ import {
   WalletLoginCodeStatus,
 } from '@generated/prisma/client';
 import { Keypair } from '@stellar/stellar-sdk';
-import { AppConfig } from '@/config/configuration';
+import { AppConfig, type StellarNetwork } from '@/config/configuration';
+import { normalizeAddress } from '@/chains/chain-address';
+import { type Chain, DEFAULT_CHAIN } from '@/chains/chains.constants';
+import { verifyMessageSignature } from '@/chains/message-signature';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { OidcService } from '@/common/oidc/oidc.service';
 import { isReturnUrlAllowed, returnRedirectUrl } from '@/common/return-url';
 import { openJson, sealJson } from '@/common/sealed-box';
+import { WalletKeysService } from '@/gateway-keys/wallet-keys.service';
+import { BackupCipher } from '@/wallet-auth/backup-cipher';
+import { MailerService } from '@/mailer/mailer.service';
+import { minutesUntil, renderLoginCodeEmail } from '@/mailer/wallet-emails';
 import { PrismaService } from '@/prisma/prisma.service';
 import {
   fetchAccountSigners,
+  parseAccountSigners,
   signedByCurrentSigner,
 } from '@/stellar/account-signers';
-import { buildSponsoredRecoverySetup } from '@/wallet-auth/recovery-setup';
+import {
+  buildSponsoredRecoverySetup,
+  sponsorableDeviceKey,
+} from '@/wallet-auth/recovery-setup';
 import {
   HANDSHAKE_TTL_MS,
   LOGIN_CODE_DAILY_CAP,
@@ -27,6 +38,7 @@ import {
   OIDC_MAX_AGE_S,
   SESSION_TTL_MS,
   AUTHENTIK_MFA_SETTINGS_PATH,
+  WALLET_MAX_BACKUPS,
 } from '@/wallet-auth/wallet-auth.constants';
 import {
   PROVIDER_ENDPOINTS,
@@ -176,6 +188,9 @@ export class WalletAuthService {
     private readonly prisma: PrismaService,
     private readonly config: ConfigService<AppConfig, true>,
     private readonly oidc: OidcService,
+    private readonly mailer: MailerService,
+    private readonly walletKeys: WalletKeysService,
+    private readonly backupCipher: BackupCipher,
   ) {}
 
   private get settings() {
@@ -234,9 +249,9 @@ export class WalletAuthService {
     };
   }
 
-  /** The email door needs somewhere to hand the code to. */
+  /** The email door needs a sender for the code and a way to mint the keys. */
   private emailAvailable(): boolean {
-    return Boolean(this.settings.consoleUrl);
+    return this.mailer.configured && this.walletKeys.configured;
   }
 
   /* --------------------------------- OAuth -------------------------------- */
@@ -539,7 +554,7 @@ export class WalletAuthService {
 
     const account = await this.prisma.walletAccount.findUnique({
       where: { email },
-      include: { backup: true },
+      include: { backups: { orderBy: { updatedAt: 'desc' } } },
     });
 
     // An existing account is where the backup worth stealing is, so the
@@ -727,7 +742,7 @@ export class WalletAuthService {
     };
     const account = await this.prisma.walletAccount.findUnique({
       where: { email: row.email },
-      include: { backup: true },
+      include: { backups: { orderBy: { updatedAt: 'desc' } } },
     });
     // The inbox is proven now, so a provider ID token carried here may go out.
     return this.readyPayload(identity, account, this.openIdToken(row.idToken));
@@ -735,16 +750,37 @@ export class WalletAuthService {
 
   /* --------------------------------- ready -------------------------------- */
 
-  /** What a proven email is worth: an identity, the backup if any, and a token. */
+  /** What a proven email is worth: an identity, its backups if any, and a token. */
   private readyPayload(
     identity: WalletAuthIdentity,
     account: {
       id: string;
-      stellarAddress: string;
-      backup: { stellarAddress: string; box: string; updatedAt: Date } | null;
+      backups: {
+        chain: string;
+        address: string;
+        box: string;
+        updatedAt: Date;
+      }[];
     } | null,
     idToken: string | null,
   ) {
+    // Opened from the at-rest seal; a row no configured key opens is left out (and
+    // logged by the cipher) rather than failing the sign-in for every other wallet.
+    const boxes = (account?.backups ?? []).flatMap((b) => {
+      const box = this.backupCipher.open(b.box, b.chain, b.address);
+      return box === null
+        ? []
+        : [
+            {
+              chain: b.chain,
+              address: b.address,
+              // The field's original name, kept for the wallets that read it.
+              stellarAddress: b.address,
+              box,
+              updatedAt: b.updatedAt.toISOString(),
+            },
+          ];
+    });
     return {
       status: 'ready' as const,
       identity: {
@@ -757,13 +793,10 @@ export class WalletAuthService {
       // and branches its onboarding on it — a cuid here would read as truthy
       // prose and take the wrong branch in silence.
       account: account ? ('existing' as const) : ('new' as const),
-      backup: account?.backup
-        ? {
-            stellarAddress: account.backup.stellarAddress,
-            box: account.backup.box,
-            updatedAt: account.backup.updatedAt.toISOString(),
-          }
-        : null,
+      // Every wallet this account backed up, newest first — what a new device
+      // brings back. `backup` is the newest of them, for wallets that read one.
+      backups: boxes,
+      backup: boxes[0] ?? null,
       sessionToken: issueSessionToken(identity, this.requireSessionSecret()),
       expiresInSeconds: Math.floor(SESSION_TTL_MS / 1000),
       ...(idToken ? { idToken } : {}),
@@ -798,13 +831,16 @@ export class WalletAuthService {
         'The signed timestamp is outside the accepted window.',
       );
     }
-    const message = finishMessage(
-      identity.email,
-      dto.stellarAddress,
-      dto.signedAt,
-    );
+    const { chain, address } = accountOf(dto);
+    const message = finishMessage(identity.email, address, dto.signedAt, chain);
     if (
-      !(await this.signedForAccount(dto.stellarAddress, message, dto.signature))
+      !(await this.signedForAccount(
+        chain,
+        address,
+        message,
+        dto.signature,
+        dto.network,
+      ))
     ) {
       throw ApiError.badRequest(
         ApiErrorCode.WalletSignatureInvalid,
@@ -821,21 +857,27 @@ export class WalletAuthService {
 
     const existing = await this.prisma.walletAccount.findUnique({
       where: { email: identity.email },
-      include: { backup: true },
+      include: { backups: { orderBy: { updatedAt: 'desc' } } },
     });
 
-    // Refusing here rather than overwriting is the whole point. The box being
-    // discarded may be the only copy of a funded wallet, and the wallet asks the
-    // person to acknowledge that before it ever sets `replaceBackup`.
+    // One box per wallet: a backup for another address is ADDED beside the ones
+    // the account keeps, never written over them — the box that used to be
+    // discarded here could be the only copy of a funded wallet. A box for the same
+    // wallet replaces its own (a re-seal). `replaceBackup` is accepted and has
+    // nothing left to decide.
+    const writesBackup = dto.backup !== undefined;
     if (
-      existing?.backup &&
-      existing.backup.stellarAddress !== dto.stellarAddress &&
-      !dto.replaceBackup
+      writesBackup &&
+      existing &&
+      !existing.backups.some(
+        (b) => b.chain === chain && b.address === address,
+      ) &&
+      existing.backups.length >= WALLET_MAX_BACKUPS
     ) {
-      return {
-        status: 'backup_conflict' as const,
-        stellarAddress: existing.backup.stellarAddress,
-      };
+      throw ApiError.badRequest(
+        ApiErrorCode.WalletBackupLimit,
+        `This account already keeps ${WALLET_MAX_BACKUPS} wallet backups.`,
+      );
     }
 
     const name = fallbackName(identity.email, identity.name);
@@ -846,33 +888,44 @@ export class WalletAuthService {
         name,
         avatar: identity.avatar,
         method: identity.method,
-        stellarAddress: dto.stellarAddress,
+        chain,
+        address,
       },
+      // The account's own wallet moves only with its backup: a wallet connecting
+      // without one gets the account's keys and leaves `address` where it was.
       update: {
         name,
         avatar: identity.avatar,
         method: identity.method,
-        stellarAddress: dto.stellarAddress,
+        ...(writesBackup || !existing ? { chain, address } : {}),
       },
     });
 
     if (dto.backup !== undefined) {
+      // Sealed again at rest, under this deployment's key — see `BackupCipher`.
+      const sealed = this.backupCipher.seal(dto.backup, chain, address);
       await this.prisma.walletBackup.upsert({
-        where: { walletAccountId: account.id },
+        where: {
+          walletAccountId_chain_address: {
+            walletAccountId: account.id,
+            chain,
+            address,
+          },
+        },
         create: {
           walletAccountId: account.id,
-          stellarAddress: dto.stellarAddress,
-          box: dto.backup,
+          chain,
+          address,
+          box: sealed,
         },
-        update: { stellarAddress: dto.stellarAddress, box: dto.backup },
+        update: { chain, address, box: sealed },
       });
     }
 
-    const keys = await this.provisionKeys({
+    // Minted (or found) in APISIX directly — no other service is in this path.
+    const keys = await this.walletKeys.provision({
       accountId: account.id,
-      stellarAddress: dto.stellarAddress,
       email: identity.email,
-      name,
     });
 
     return {
@@ -905,9 +958,16 @@ export class WalletAuthService {
         'That is not a backup box this service will keep.',
       );
     }
-    const message = backupMessage(dto.stellarAddress, dto.box, dto.signedAt);
+    const { chain, address } = accountOf(dto);
+    const message = backupMessage(address, dto.box, dto.signedAt, chain);
     if (
-      !(await this.signedForAccount(dto.stellarAddress, message, dto.signature))
+      !(await this.signedForAccount(
+        chain,
+        address,
+        message,
+        dto.signature,
+        dto.network,
+      ))
     ) {
       throw ApiError.badRequest(
         ApiErrorCode.WalletSignatureInvalid,
@@ -916,9 +976,10 @@ export class WalletAuthService {
     }
 
     // Scoped to the address that signed, which is what makes the signature the
-    // credential: a valid signature by A can only ever move A's own box.
+    // credential: a valid signature by A can only ever move A's own box — and
+    // only on A's chain, since one ed25519 key is an address on two.
     const backup = await this.prisma.walletBackup.findFirst({
-      where: { stellarAddress: dto.stellarAddress },
+      where: { chain, address },
       select: { id: true },
     });
     if (!backup) {
@@ -930,10 +991,15 @@ export class WalletAuthService {
 
     const updated = await this.prisma.walletBackup.update({
       where: { id: backup.id },
-      data: { box: dto.box },
-      select: { stellarAddress: true, updatedAt: true },
+      data: { box: this.backupCipher.seal(dto.box, chain, address) },
+      select: { chain: true, address: true, updatedAt: true },
     });
-    return { status: 'ok' as const, ...updated };
+    return {
+      status: 'ok' as const,
+      ...updated,
+      // The field's original name, kept for the wallets that read it.
+      stellarAddress: updated.address,
+    };
   }
 
   /* ------------------------------ provider I/O ---------------------------- */
@@ -1120,21 +1186,36 @@ export class WalletAuthService {
    *
    * The master key first, with no network call — that is every wallet that was
    * never recovered, and a Horizon outage must not stop them. Only when that
-   * fails is the account's CURRENT signer set read, from the one Horizon the
-   * operator configured: a recovered account's address is its old master key,
-   * now at weight 0, and the key that signs for it is whichever replaced it.
+   * fails is the account's CURRENT signer set read: a recovered account's address
+   * is its old master key, now at weight 0, and the key that signs for it is
+   * whichever replaced it.
+   *
+   * Read from ONE ledger — `network`, or the operator's default — through the
+   * operator's own Horizon for it. A re-key lands on one ledger, so a wallet
+   * recovered on testnet names testnet here; what no request can do is make a
+   * key count on a ledger whose account does not list it.
    */
   private async signedForAccount(
+    chain: Chain,
     address: string,
     message: string,
     signature: string,
+    network?: StellarNetwork,
   ): Promise<boolean> {
+    // Solana and Monad accounts are their key: no signer set to consult, and
+    // no network call. Each chain's wallets sign the way `message-signature`
+    // describes.
+    if (chain !== 'stellar') {
+      return verifyMessageSignature(chain, address, message, signature);
+    }
     if (verifyWalletSignature(address, message, signature)) return true;
     if (!isStellarAddress(address)) return false;
     let account;
     try {
       account = await fetchAccountSigners(
-        this.settings.signersHorizonUrl,
+        this.settings.signersHorizonUrls[
+          network ?? this.settings.signersNetwork
+        ],
         address,
         this.settings.timeoutMs,
       );
@@ -1162,9 +1243,13 @@ export class WalletAuthService {
    * Three things gate it, because every call spends the operator's reserve: a
    * live sign-in session (someone just proved an inbox here), a signature by the
    * account over the canonical setup challenge naming BOTH signers (so one
-   * signature buys one arrangement), and an account that has no signer besides
-   * its master yet — a sponsorship is for turning recovery on, once, not a
-   * repeatable way to make the operator fund signer entries.
+   * signature buys one arrangement), and an account signed for by exactly one
+   * key — a sponsorship is for turning recovery on, once, not a repeatable way to
+   * make the operator fund signer entries.
+   *
+   * That one key is usually the master. On a RECOVERED account it is the key that
+   * replaced it (`sponsorableDeviceKey`): the challenge is verified against it,
+   * and the envelope leaves the retired master at 0 instead of raising it.
    */
   async sponsorRecoverySetup(
     sessionToken: string,
@@ -1175,6 +1260,21 @@ export class WalletAuthService {
       throw ApiError.unavailable(
         ApiErrorCode.Misconfigured,
         'Sponsored recovery setup is not available on this deployment.',
+      );
+    }
+    // The ledger the setup is for: the one the request names, if this key
+    // sponsors there, or the default. Never a fallback from a named ledger to
+    // the default — that would build a mainnet transaction for a testnet wallet.
+    const ledger = dto.network
+      ? sponsor.networks[dto.network]
+      : {
+          networkPassphrase: sponsor.networkPassphrase,
+          horizonUrl: sponsor.horizonUrl,
+        };
+    if (!ledger) {
+      throw ApiError.unavailable(
+        ApiErrorCode.Misconfigured,
+        'Sponsored recovery setup is not available on that network.',
       );
     }
     const identity = readSessionToken(
@@ -1207,22 +1307,13 @@ export class WalletAuthService {
         'The signed timestamp is outside the accepted window.',
       );
     }
-    const message = recoverySetupMessage(
-      dto.stellarAddress,
-      dto.signers,
-      dto.signedAt,
-    );
-    if (!verifyWalletSignature(dto.stellarAddress, message, dto.signature)) {
-      throw ApiError.badRequest(
-        ApiErrorCode.WalletSignatureInvalid,
-        'The signature does not verify against that account.',
-      );
-    }
-
+    // The ledger first: WHICH key may sign the challenge depends on it. A
+    // recovered account's address is its retired master, and the signature comes
+    // from the key that replaced it.
     let body: { sequence?: unknown; signers?: unknown[] };
     try {
       const res = await fetch(
-        `${sponsor.horizonUrl}/accounts/${encodeURIComponent(dto.stellarAddress)}`,
+        `${ledger.horizonUrl}/accounts/${encodeURIComponent(dto.stellarAddress)}`,
         {
           headers: { accept: 'application/json' },
           signal: AbortSignal.timeout(this.settings.timeoutMs),
@@ -1246,13 +1337,6 @@ export class WalletAuthService {
         'Could not read the account.',
       );
     }
-
-    if (Array.isArray(body.signers) && body.signers.length > 1) {
-      throw ApiError.conflict(
-        ApiErrorCode.WalletRecoverySetupRefused,
-        'This account already has signers besides its own key; sponsorship is for a first setup only.',
-      );
-    }
     if (typeof body.sequence !== 'string' || !/^\d+$/.test(body.sequence)) {
       throw ApiError.unavailable(
         ApiErrorCode.Misconfigured,
@@ -1260,11 +1344,43 @@ export class WalletAuthService {
       );
     }
 
+    const deviceKey = sponsorableDeviceKey(
+      dto.stellarAddress,
+      parseAccountSigners(body).signers,
+    );
+    if (!deviceKey) {
+      throw ApiError.conflict(
+        ApiErrorCode.WalletRecoverySetupRefused,
+        'This account already has signers besides its own key; sponsorship is for a first setup only.',
+      );
+    }
+    // A recovery signer that IS the device key would be one party holding both
+    // the device's weight and a server's share.
+    if (a === deviceKey || b === deviceKey) {
+      throw ApiError.badRequest(
+        ApiErrorCode.WalletSignatureInvalid,
+        'The two recovery signers must be two distinct keys other than the account.',
+      );
+    }
+
+    const message = recoverySetupMessage(
+      dto.stellarAddress,
+      dto.signers,
+      dto.signedAt,
+    );
+    if (!verifyWalletSignature(deviceKey, message, dto.signature)) {
+      throw ApiError.badRequest(
+        ApiErrorCode.WalletSignatureInvalid,
+        'The signature does not verify against that account.',
+      );
+    }
+
     const sponsorKey = Keypair.fromSecret(sponsor.secret);
     const transaction = buildSponsoredRecoverySetup({
       account: dto.stellarAddress,
+      deviceKey,
       signers: [a, b],
-      networkPassphrase: sponsor.networkPassphrase,
+      networkPassphrase: ledger.networkPassphrase,
       sequence: body.sequence,
       sponsor: sponsorKey,
     });
@@ -1274,20 +1390,14 @@ export class WalletAuthService {
     return {
       transaction,
       sponsor: sponsorKey.publicKey(),
-      network_passphrase: sponsor.networkPassphrase,
+      network_passphrase: ledger.networkPassphrase,
     };
   }
 
-  /* ------------------------------ console hops ---------------------------- */
+  /* --------------------------------- mail --------------------------------- */
 
   /**
-   * Hand the code to whatever sends mail.
-   *
-   * This service deliberately owns no mailer. It mints the code and posts it to
-   * the operator's console, which delivers it — the same split `ConsoleOnlyGuard`
-   * already makes for alias recovery, in the other direction. A self-hosted
-   * deployment points `WALLET_AUTH_CONSOLE_URL` at its own sender and owes this
-   * service nothing else.
+   * Email the code.
    *
    * A failure here is a failure of the whole call, not a warning: a code minted
    * and never delivered is a person staring at an empty inbox with a live row
@@ -1299,80 +1409,25 @@ export class WalletAuthService {
     code: string,
     expiresAt: Date,
   ): Promise<void> {
-    await this.postToConsole('/wallet/console/login-code', {
-      email,
-      name,
+    if (!this.mailer.configured) {
+      throw ApiError.unavailable(
+        ApiErrorCode.Misconfigured,
+        'This deployment has no mail sender configured to deliver a sign-in code.',
+      );
+    }
+    const msg = renderLoginCodeEmail({
+      name: fallbackName(email, name),
       code,
-      expiresAt: expiresAt.toISOString(),
+      minutes: minutesUntil(expiresAt),
     });
-  }
-
-  /**
-   * Ask the console to mint this account's gateway credentials.
-   *
-   * Key minting needs APISIX admin, and this service deliberately does not hold
-   * it: everything registered here is something an attacker who reached this
-   * process could also call, and "mint a credential for any consumer" is not on
-   * that list. The console already holds admin for the dashboard's own key
-   * management, so the capability lives in one place rather than two.
-   */
-  private async provisionKeys(input: {
-    accountId: string;
-    stellarAddress: string;
-    email: string;
-    name: string;
-  }): Promise<{
-    organizationId: string;
-    dev: string | null;
-    prod: string | null;
-  }> {
-    const answer = (await this.postToConsole(
-      '/wallet/console/provision',
-      input,
-    )) as {
-      organizationId?: unknown;
-      keys?: { dev?: unknown; prod?: unknown };
-    };
-
-    const str = (v: unknown): string | null =>
-      typeof v === 'string' && v ? v : null;
-    return {
-      organizationId: str(answer.organizationId) ?? '',
-      dev: str(answer.keys?.dev),
-      prod: str(answer.keys?.prod),
-    };
-  }
-
-  private async postToConsole(path: string, body: unknown): Promise<unknown> {
-    const base = this.settings.consoleUrl;
-    if (!base) {
+    try {
+      await this.mailer.send({ to: email, ...msg });
+    } catch {
       throw ApiError.unavailable(
         ApiErrorCode.Misconfigured,
-        'This deployment has no console configured to complete a sign-in.',
+        'The sign-in code could not be sent. Try again shortly.',
       );
     }
-    const res = await fetch(`${base}${path}`, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        // The same marker APISIX strips from everything it proxies, which is
-        // what makes it proof of a backend-to-backend call.
-        'x-cosmos-internal': '1',
-        'x-gateway-secret': this.settings.consoleSecret,
-      },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(this.settings.timeoutMs),
-    });
-    if (!res.ok) {
-      this.logger.error(
-        `wallet sign-in: console ${path} answered ${res.status}`,
-      );
-      throw ApiError.unavailable(
-        ApiErrorCode.Misconfigured,
-        'The sign-in could not be completed. Try again shortly.',
-      );
-    }
-    return res.json().catch(() => ({}));
   }
 
   /* -------------------------------- config -------------------------------- */
@@ -1417,3 +1472,38 @@ function withoutIdToken(result: IdentityResult): ReadIdentity {
 
 /** Re-exported for the controller's page rendering. */
 export type { ProviderIdentity };
+
+/**
+ * The account a sign-in or backup request names, on its chain and in the
+ * chain's stored spelling (EIP-55 on Monad). `stellarAddress` is the field's
+ * original name and means Stellar; a request that sends it with another chain,
+ * or sends both fields with two different accounts, is refused rather than
+ * guessed at.
+ */
+function accountOf(dto: {
+  chain?: Chain;
+  address?: string;
+  stellarAddress?: string;
+}): { chain: Chain; address: string } {
+  const chain = dto.chain ?? DEFAULT_CHAIN;
+  if (dto.stellarAddress !== undefined) {
+    if (
+      chain !== 'stellar' ||
+      (dto.address !== undefined && dto.address !== dto.stellarAddress)
+    ) {
+      throw ApiError.badRequest(
+        ApiErrorCode.ValidationFailed,
+        'Send the account as `address` (with `chain`); `stellarAddress` is ' +
+          'only for a Stellar account, and not together with a different address.',
+      );
+    }
+    return { chain, address: dto.stellarAddress };
+  }
+  if (dto.address === undefined) {
+    throw ApiError.badRequest(
+      ApiErrorCode.ValidationFailed,
+      'address is required',
+    );
+  }
+  return { chain, address: normalizeAddress(chain, dto.address) };
+}

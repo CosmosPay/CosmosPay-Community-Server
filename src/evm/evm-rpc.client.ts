@@ -1,0 +1,376 @@
+import { Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import {
+  broadcastRejected,
+  callJsonRpc,
+  JsonRpcError,
+  type JsonRpcTarget,
+  unexpectedRpcError,
+} from '@/chains/json-rpc';
+import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
+import type { AppConfig, StellarNetwork } from '@/config/configuration';
+import {
+  ERC20_ALLOWANCE_SELECTOR,
+  ERC20_BALANCE_OF_SELECTOR,
+  ERC20_DECIMALS_SELECTOR,
+  EVM_CHAIN_IDS,
+  EVM_PROVIDER_NAMES,
+  type EvmChain,
+} from '@/evm/evm.constants';
+
+/** The parts of `eth_getTransactionByHash` this service reads. */
+export interface EvmTransaction {
+  hash: string;
+  from: string;
+  to: string | null;
+  value: string;
+  input: string;
+  blockNumber: string | null;
+}
+
+/** The parts of `eth_getTransactionReceipt` this service reads. */
+export interface EvmReceipt {
+  transactionHash: string;
+  from: string;
+  to: string | null;
+  /** `0x1` success, `0x0` reverted. */
+  status: string;
+  blockNumber: string;
+  logs: EvmLog[];
+}
+
+export interface EvmLog {
+  address: string;
+  topics: string[];
+  data: string;
+  blockNumber: string;
+  transactionHash: string;
+  logIndex: string;
+  removed?: boolean;
+}
+
+export interface EvmLogFilter {
+  address: string;
+  topics: (string | null)[];
+  fromBlock: bigint;
+  toBlock: bigint;
+}
+
+/**
+ * JSON-RPC access to the EVM chains this service speaks (Monad), per network
+ * tier. Like the Solana client it refuses a node on the wrong chain: before
+ * the first read of a tier it compares `eth_chainId` with the chain's EIP-155
+ * id, because that id is written into every payment link and a link that
+ * settles on another chain is a payment nobody will ever see.
+ */
+@Injectable()
+export class EvmRpcClient {
+  private readonly chainChecks = new Map<string, Promise<void>>();
+
+  constructor(private readonly config: ConfigService<AppConfig, true>) {}
+
+  /** The chain's EIP-155 id on a tier. */
+  chainId(chain: EvmChain, network: StellarNetwork): number {
+    return EVM_CHAIN_IDS[chain][network];
+  }
+
+  private target(chain: EvmChain, network: StellarNetwork): JsonRpcTarget {
+    const settings = this.config.get(chain, { infer: true });
+    return {
+      provider: EVM_PROVIDER_NAMES[chain],
+      url: settings.rpcUrls[network],
+      timeoutMs: settings.timeoutMs,
+    };
+  }
+
+  /** Blocks one `eth_getLogs` may span on this chain's configured node. */
+  logBlockRange(chain: EvmChain): number {
+    return this.config.get(chain, { infer: true }).logBlockRange;
+  }
+
+  /** One call, a JSON-RPC error left as a {@link JsonRpcError}. */
+  private async rawCall<T>(
+    chain: EvmChain,
+    network: StellarNetwork,
+    method: string,
+    params: unknown[],
+  ): Promise<T> {
+    await this.assertChain(chain, network);
+    return callJsonRpc<T>(this.target(chain, network), method, params);
+  }
+
+  /** One call, any JSON-RPC error answered as the 502 a route reports. */
+  private async call<T>(
+    chain: EvmChain,
+    network: StellarNetwork,
+    method: string,
+    params: unknown[],
+  ): Promise<T> {
+    try {
+      return await this.rawCall<T>(chain, network, method, params);
+    } catch (err) {
+      throw err instanceof JsonRpcError
+        ? unexpectedRpcError(EVM_PROVIDER_NAMES[chain], method, err)
+        : err;
+    }
+  }
+
+  private assertChain(chain: EvmChain, network: StellarNetwork): Promise<void> {
+    const key = `${chain}:${network}`;
+    const cached = this.chainChecks.get(key);
+    if (cached) return cached;
+    const expected = this.chainId(chain, network);
+    const check = callJsonRpc<string>(
+      this.target(chain, network),
+      'eth_chainId',
+      [],
+    ).then((answered) => {
+      if (Number(BigInt(answered)) !== expected) {
+        throw ApiError.unavailable(
+          ApiErrorCode.Misconfigured,
+          `The ${EVM_PROVIDER_NAMES[chain]} RPC configured for the ${network} ` +
+            `tier serves chain ${Number(BigInt(answered))}, not ${expected}. ` +
+            `Check ${chain.toUpperCase()}_RPC_URL_${network === 'public' ? 'MAINNET' : 'TESTNET'}.`,
+        );
+      }
+    });
+    this.chainChecks.set(key, check);
+    check.catch(() => this.chainChecks.delete(key));
+    return check;
+  }
+
+  async blockNumber(chain: EvmChain, network: StellarNetwork): Promise<bigint> {
+    return BigInt(
+      await this.call<string>(chain, network, 'eth_blockNumber', []),
+    );
+  }
+
+  /** Unix seconds of a block. */
+  async blockTimestamp(
+    chain: EvmChain,
+    network: StellarNetwork,
+    blockNumber: string,
+  ): Promise<number | null> {
+    const block = await this.call<{ timestamp: string } | null>(
+      chain,
+      network,
+      'eth_getBlockByNumber',
+      [blockNumber, false],
+    );
+    return block ? Number(BigInt(block.timestamp)) : null;
+  }
+
+  getTransaction(
+    chain: EvmChain,
+    network: StellarNetwork,
+    hash: string,
+  ): Promise<EvmTransaction | null> {
+    return this.call(chain, network, 'eth_getTransactionByHash', [hash]);
+  }
+
+  getReceipt(
+    chain: EvmChain,
+    network: StellarNetwork,
+    hash: string,
+  ): Promise<EvmReceipt | null> {
+    return this.call(chain, network, 'eth_getTransactionReceipt', [hash]);
+  }
+
+  getLogs(
+    chain: EvmChain,
+    network: StellarNetwork,
+    filter: EvmLogFilter,
+  ): Promise<EvmLog[]> {
+    return this.call(chain, network, 'eth_getLogs', [
+      {
+        address: filter.address,
+        topics: filter.topics,
+        fromBlock: `0x${filter.fromBlock.toString(16)}`,
+        toBlock: `0x${filter.toBlock.toString(16)}`,
+      },
+    ]);
+  }
+
+  /** The native balance of an account, in wei. */
+  async getBalance(
+    chain: EvmChain,
+    network: StellarNetwork,
+    address: string,
+  ): Promise<bigint> {
+    return BigInt(
+      await this.call<string>(chain, network, 'eth_getBalance', [
+        address,
+        'latest',
+      ]),
+    );
+  }
+
+  /** Whether an account has code — i.e. whether a forwarder is deployed there. */
+  async hasCode(
+    chain: EvmChain,
+    network: StellarNetwork,
+    address: string,
+  ): Promise<boolean> {
+    const code = await this.call<string>(chain, network, 'eth_getCode', [
+      address,
+      'latest',
+    ]);
+    return code !== '0x' && code !== '';
+  }
+
+  /** An ERC-20 balance, in the token's base units; zero when it does not answer. */
+  async erc20BalanceOf(
+    chain: EvmChain,
+    network: StellarNetwork,
+    token: string,
+    owner: string,
+  ): Promise<bigint> {
+    const data =
+      ERC20_BALANCE_OF_SELECTOR +
+      owner.toLowerCase().replace(/^0x/, '').padStart(64, '0');
+    let answer: string;
+    try {
+      answer = await this.rawCall<string>(chain, network, 'eth_call', [
+        { to: token, data },
+        'latest',
+      ]);
+    } catch (err) {
+      if (err instanceof JsonRpcError) return 0n;
+      throw err;
+    }
+    return /^0x[0-9a-fA-F]{64}$/.test(answer) ? BigInt(answer) : 0n;
+  }
+
+  /** The next nonce of `address`, counting transactions still in the pool. */
+  async pendingNonce(
+    chain: EvmChain,
+    network: StellarNetwork,
+    address: string,
+  ): Promise<bigint> {
+    return BigInt(
+      await this.call<string>(chain, network, 'eth_getTransactionCount', [
+        address,
+        'pending',
+      ]),
+    );
+  }
+
+  async estimateGas(
+    chain: EvmChain,
+    network: StellarNetwork,
+    tx: { from: string; to: string; data: string },
+  ): Promise<bigint> {
+    return BigInt(
+      await this.call<string>(chain, network, 'eth_estimateGas', [tx]),
+    );
+  }
+
+  /**
+   * What to bid for gas now: the latest block's base fee and the node's
+   * suggested tip, as EIP-1559 `maxFeePerGas` (twice the base, plus the tip —
+   * room for the base fee to climb for a few blocks) and `maxPriorityFeePerGas`.
+   */
+  async feeData(
+    chain: EvmChain,
+    network: StellarNetwork,
+  ): Promise<{ maxFeePerGas: bigint; maxPriorityFeePerGas: bigint }> {
+    const [block, tip] = await Promise.all([
+      this.call<{ baseFeePerGas?: string } | null>(
+        chain,
+        network,
+        'eth_getBlockByNumber',
+        ['latest', false],
+      ),
+      this.call<string>(chain, network, 'eth_maxPriorityFeePerGas', []),
+    ]);
+    const base = BigInt(block?.baseFeePerGas ?? '0x0');
+    const priority = BigInt(tip);
+    return {
+      maxFeePerGas: base * 2n + priority,
+      maxPriorityFeePerGas: priority,
+    };
+  }
+
+  /** The gas price a transaction would pay now (base fee + tip), in wei. */
+  async gasPrice(chain: EvmChain, network: StellarNetwork): Promise<bigint> {
+    return BigInt(await this.call<string>(chain, network, 'eth_gasPrice', []));
+  }
+
+  /**
+   * How much `spender` may move of `owner`'s `token`, in base units. Zero when
+   * the token does not answer, which only makes the caller ask for an approval
+   * it may not need — never skip one it does.
+   */
+  async erc20Allowance(
+    chain: EvmChain,
+    network: StellarNetwork,
+    token: string,
+    owner: string,
+    spender: string,
+  ): Promise<bigint> {
+    const word = (address: string) =>
+      address.toLowerCase().replace(/^0x/, '').padStart(64, '0');
+    const data = ERC20_ALLOWANCE_SELECTOR + word(owner) + word(spender);
+    let answer: string;
+    try {
+      answer = await this.rawCall<string>(chain, network, 'eth_call', [
+        { to: token, data },
+        'latest',
+      ]);
+    } catch (err) {
+      if (err instanceof JsonRpcError) return 0n;
+      throw err;
+    }
+    return /^0x[0-9a-fA-F]{64}$/.test(answer) ? BigInt(answer) : 0n;
+  }
+
+  /**
+   * Broadcasts a signed transaction; answers its hash. A node refusing it is a
+   * 400 `transaction_rejected` with its reason — see `broadcastRejected`.
+   */
+  async sendRawTransaction(
+    chain: EvmChain,
+    network: StellarNetwork,
+    raw: string,
+  ): Promise<string> {
+    try {
+      return await this.rawCall<string>(
+        chain,
+        network,
+        'eth_sendRawTransaction',
+        [raw],
+      );
+    } catch (err) {
+      if (err instanceof JsonRpcError) {
+        throw broadcastRejected(EVM_PROVIDER_NAMES[chain], err);
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * An ERC-20's `decimals()`, or null when `token` does not answer it — an
+   * account with no code, or a contract that is not a token.
+   */
+  async erc20Decimals(
+    chain: EvmChain,
+    network: StellarNetwork,
+    token: string,
+  ): Promise<number | null> {
+    let answer: string;
+    try {
+      answer = await this.rawCall<string>(chain, network, 'eth_call', [
+        { to: token, data: ERC20_DECIMALS_SELECTOR },
+        'latest',
+      ]);
+    } catch (err) {
+      // A revert is an answer about the contract, not about the node.
+      if (err instanceof JsonRpcError) return null;
+      throw err;
+    }
+    // No code at the address answers `0x`; a token answers one 32-byte word.
+    if (!/^0x[0-9a-fA-F]{64}$/.test(answer)) return null;
+    const decimals = BigInt(answer);
+    return decimals <= 255n ? Number(decimals) : null;
+  }
+}
