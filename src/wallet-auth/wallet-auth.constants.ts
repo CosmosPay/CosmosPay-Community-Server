@@ -153,7 +153,8 @@ export const BACKUP_ARGON2_MAX_PASSES = 10;
 export const BACKUP_ARGON2_MAX_PARALLELISM = 4;
 
 /**
- * How many doors a v3 box may carry — a password and a few passkeys.
+ * How many doors a v3 or v4 box may carry — a password, a few passkeys and (v4)
+ * one recovery door.
  *
  * Each slot is another way to open the same backup, so this is a ceiling on how
  * many keys to one person's seed the wallet can file here, not a feature limit.
