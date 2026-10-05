@@ -5857,6 +5857,53 @@ paths:
         - name: sep30-sign
           limit: 20
           windowMs: 600000
+  /v1/sep30/shares:
+    get:
+      description: This server's identity token for an email. One proof brings back
+        the halves of every wallet backed up under it.
+      operationId: RecoverySharesController_list_v1
+      parameters:
+        - name: after
+          required: false
+          in: query
+          description: The last address of the previous page.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          headers:
+            ratelimit-limit:
+              description: Requests allowed in the current window.
+              schema:
+                type: integer
+                example: 30
+            ratelimit-remaining:
+              description: Requests left in the current window.
+              schema:
+                type: integer
+                example: 0
+            ratelimit-reset:
+              description: Seconds until the window resets.
+              schema:
+                type: integer
+                example: 42
+        "400":
+          $ref: "#/components/responses/ValidationFailed"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+      security:
+        - sep-token: []
+      summary: Every half this server holds for the proven inbox (paged by `after`)
+      tags:
+        - recovery
+      x-cosmos-public: true
+      x-cosmos-rate-limit:
+        - name: recovery-share-read
+          limit: 20
+          windowMs: 600000
   /v1/sep30/shares/{address}:
     put:
       description: "Replaces any half filed before: a re-sealed backup has a new key.

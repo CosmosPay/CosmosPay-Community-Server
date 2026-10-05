@@ -297,6 +297,7 @@ Les chemins utilisent la forme OpenAPI `{param}`.
 | GET | `/v1/sep30/accounts/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | DELETE | `/v1/sep30/accounts/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | POST | `/v1/sep30/accounts/{address}/sign/{signer}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
+| GET | `/v1/sep30/shares` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | PUT | `/v1/sep30/shares/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | GET | `/v1/sep30/shares/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | DELETE | `/v1/sep30/shares/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
@@ -1773,6 +1774,12 @@ plugins isolés.
   ensemble, ou quiconque contrôle la boîte mail ET la fait accepter par les deux serveurs,
   peuvent ouvrir une sauvegarde dotée de cette porte. Exploitez les deux sur des
   infrastructures séparées avec des expéditeurs `MAIL_*` distincts, comme SEP-30 l'exige déjà.
+- **`GET /v1/sep30/shares` (sans adresse) liste toutes les moitiés déposées sous la boîte mail
+  prouvée**, paginé par `after` comme `GET /v1/sep30/accounts`. Une personne qui a sauvegardé
+  plusieurs wallets sous un même e-mail oublie le mot de passe de tous à la fois ; une preuve par
+  serveur ramène désormais chaque sauvegarde, et pas seulement la plus récente. Uniquement avec un
+  jeton d'identité : le jeton SEP-10 d'un compte reçoit `403`, puisqu'il atteint déjà sa seule
+  moitié par l'adresse.
 - **`isBackupBox` accepte un emplacement `recovery` dans une boîte `v: 4`**, à côté d'au moins un
   emplacement mot de passe ou passkey. Une boîte dont la seule porte est `recovery` est refusée.
 - **Le code envoyé par un serveur de récupération** part désormais aussi vers une boîte mail qui

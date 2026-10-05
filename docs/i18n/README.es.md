@@ -299,6 +299,7 @@ consola llega a ella. Las rutas usan la forma `{param}` de OpenAPI.
 | GET | `/v1/sep30/accounts/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | DELETE | `/v1/sep30/accounts/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | POST | `/v1/sep30/accounts/{address}/sign/{signer}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
+| GET | `/v1/sep30/shares` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | PUT | `/v1/sep30/shares/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | GET | `/v1/sep30/shares/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | DELETE | `/v1/sep30/shares/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
@@ -1784,6 +1785,11 @@ misma lista `PLUGINS_ENABLED` que los plugins aislados.
   controle el buzón Y consiga que ambos servidores lo acepten, pueden abrir un respaldo que
   tenga esta puerta. Despliega los dos en infraestructura separada y con remitentes `MAIL_*`
   distintos, como SEP-30 ya exige.
+- **`GET /v1/sep30/shares` (sin dirección) lista todas las mitades archivadas bajo el correo
+  probado**, paginado por `after` como `GET /v1/sep30/accounts`. Quien respaldó varias wallets con
+  un mismo correo olvida la contraseña de todas a la vez; ahora una prueba por servidor devuelve
+  todos los respaldos y no solo el más reciente. Solo con un token de identidad: el token SEP-10 de
+  una cuenta recibe `403`, porque ya alcanza su única mitad por dirección.
 - **`isBackupBox` acepta una ranura `recovery` en una caja `v: 4`**, junto a al menos una ranura
   de contraseña o de passkey. Se rechaza una caja cuya única puerta sea `recovery`.
 - **El código por email de un servidor de recuperación** ahora también llega a un buzón que

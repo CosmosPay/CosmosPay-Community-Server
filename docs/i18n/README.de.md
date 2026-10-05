@@ -299,6 +299,7 @@ Konsolen-Backend erreicht sie. Pfade verwenden die OpenAPI-Form `{param}`.
 | GET | `/v1/sep30/accounts/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | DELETE | `/v1/sep30/accounts/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | POST | `/v1/sep30/accounts/{address}/sign/{signer}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
+| GET | `/v1/sep30/shares` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | PUT | `/v1/sep30/shares/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | GET | `/v1/sep30/shares/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | DELETE | `/v1/sep30/shares/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
@@ -1806,6 +1807,12 @@ eingeschaltet werden.
   zusammen, oder wer das Postfach kontrolliert UND beide Server dazu bringt, es zu akzeptieren,
   können ein Backup mit dieser Tür öffnen. Betreiben Sie beide auf getrennter Infrastruktur mit
   getrennten `MAIL_*`-Absendern, wie SEP-30 es bereits verlangt.
+- **`GET /v1/sep30/shares` (ohne Adresse) listet alle unter dem nachgewiesenen Postfach
+  hinterlegten Hälften**, geblättert über `after` wie `GET /v1/sep30/accounts`. Wer mehrere
+  Wallets unter einer E-Mail gesichert hat, vergisst das Passwort für alle zugleich; ein Nachweis
+  pro Server bringt jetzt jedes Backup zurück statt nur des neuesten. Nur mit einem
+  Identitäts-Token: das SEP-10-Token eines Kontos erhält `403`, da es seine eine Hälfte bereits
+  über die Adresse erreicht.
 - **`isBackupBox` akzeptiert einen `recovery`-Slot in einer `v: 4`-Box**, neben mindestens einem
   Passwort- oder Passkey-Slot. Eine Box, deren einzige Tür `recovery` ist, wird abgelehnt.
 - **Der E-Mail-Code eines Recovery-Servers** geht jetzt auch an ein Postfach, das dort nur eine

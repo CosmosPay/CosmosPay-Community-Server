@@ -263,6 +263,7 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | GET | `/v1/sep30/accounts/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | DELETE | `/v1/sep30/accounts/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | POST | `/v1/sep30/accounts/{address}/sign/{signer}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
+| GET | `/v1/sep30/shares` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | PUT | `/v1/sep30/shares/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | GET | `/v1/sep30/shares/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | DELETE | `/v1/sep30/shares/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
@@ -1217,6 +1218,10 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
 - **由此增加的信任：** 单独一台服务器只持有随机噪声。两台服务器联合，或控制该邮箱且让两台服务器都
   接受它的人，可以打开带有此门的备份。请将两台服务器部署在彼此独立的基础设施上，并使用不同的
   `MAIL_*` 发件方，这正是 SEP-30 已有的要求。
+- **`GET /v1/sep30/shares`（不带地址）列出以已验证邮箱登记的每一半密钥**，与
+  `GET /v1/sep30/accounts` 一样按 `after` 分页。用同一邮箱备份了多个钱包的人会同时忘记所有钱包的密码；
+  现在每台服务器一次证明即可取回全部备份，而不只是最新的一个。仅接受身份令牌：账户的 SEP-10 令牌会得到
+  `403`，因为它已经可以按地址取回自己那一半。
 - **`isBackupBox` 接受 `v: 4` 盒子中的一个 `recovery` 槽位**，且旁边至少要有一个密码或 passkey
   槽位。唯一一道门是 `recovery` 的盒子会被拒绝。
 - **恢复服务器发送的邮件验证码** 现在也会发往在该服务器上仅持有一半备份密钥的邮箱。

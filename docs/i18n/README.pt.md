@@ -299,6 +299,7 @@ console chega até ela. Os caminhos usam a forma `{param}` do OpenAPI.
 | GET | `/v1/sep30/accounts/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | DELETE | `/v1/sep30/accounts/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | POST | `/v1/sep30/accounts/{address}/sign/{signer}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
+| GET | `/v1/sep30/shares` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | PUT | `/v1/sep30/shares/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | GET | `/v1/sep30/shares/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | DELETE | `/v1/sep30/shares/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
@@ -1750,6 +1751,11 @@ serviço em `src/native-plugins/<slug>/`, ligados pela mesma lista
   juntos, ou quem controle a caixa de email E consiga que os dois servidores a aceitem, podem
   abrir um backup com esta porta. Execute os dois em infraestrutura separada e com remetentes
   `MAIL_*` distintos, como o SEP-30 já exige.
+- **`GET /v1/sep30/shares` (sem endereço) lista todas as metades arquivadas sob o e-mail
+  comprovado**, paginado por `after` como `GET /v1/sep30/accounts`. Quem fez backup de várias
+  carteiras com um mesmo e-mail esquece a senha de todas de uma vez; agora uma prova por servidor
+  devolve todos os backups e não só o mais recente. Apenas com um token de identidade: o token
+  SEP-10 de uma conta recebe `403`, pois já alcança a sua única metade pelo endereço.
 - **`isBackupBox` aceita um slot `recovery` numa caixa `v: 4`**, ao lado de pelo menos um slot de
   senha ou de passkey. Uma caixa cuja única porta seja `recovery` é recusada.
 - **O código por email de um servidor de recuperação** agora também vai para uma caixa de email

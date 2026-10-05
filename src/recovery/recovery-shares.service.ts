@@ -2,7 +2,10 @@ import { HttpStatus, Injectable, Logger } from '@nestjs/common';
 import type { StellarNetwork } from '@/config/configuration';
 import { PrismaService } from '@/prisma/prisma.service';
 import { normalizeEmail, type Actor } from '@/recovery/recovery-core';
-import { RECOVERY_SHARE_BYTES } from '@/recovery/recovery.constants';
+import {
+  RECOVERY_PAGE_SIZE,
+  RECOVERY_SHARE_BYTES,
+} from '@/recovery/recovery.constants';
 import { RecoveryService, SepError } from '@/recovery/recovery.service';
 
 const notFound = () => new SepError('Not found.', HttpStatus.NOT_FOUND);
@@ -94,6 +97,41 @@ export class RecoverySharesService {
       `recovery: released a backup share for ${address} as ${actor.kind}`,
     );
     return { address: row.address, share: row.share };
+  }
+
+  /**
+   * GET (no address) — every half filed under the proven inbox, one page keyed
+   * on the address.
+   *
+   * A person may back up several wallets under one email, and forgetting the
+   * password forgets it for all of them. Asking per address would make the
+   * wallet name each one first — and the inbox is the only thing it has. The
+   * identity only: a key holder already reaches its single half by address.
+   */
+  async list(
+    authorization: string | undefined,
+    after?: string,
+    network?: StellarNetwork | null,
+  ): Promise<{ shares: { address: string; share: string }[] }> {
+    const rules = this.recovery.rules(network);
+    const actor = this.recovery.actor(authorization, network);
+    if (actor.kind === 'address' || actor.type !== 'email') {
+      throw new SepError(
+        'This needs an identity token for an email.',
+        HttpStatus.FORBIDDEN,
+      );
+    }
+    const scope = { role: rules.role, email: actor.value };
+    const rows = await this.prisma.recoveryBackupShare.findMany({
+      where: after ? { ...scope, address: { gt: after } } : scope,
+      select: { address: true, share: true },
+      orderBy: { address: 'asc' },
+      take: RECOVERY_PAGE_SIZE,
+    });
+    this.logger.log(
+      `recovery: released ${rows.length} backup share(s) to an inbox`,
+    );
+    return { shares: rows };
   }
 
   /** DELETE — forget the half. The key holder only. */

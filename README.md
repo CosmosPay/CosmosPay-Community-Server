@@ -296,6 +296,7 @@ Paths use the OpenAPI `{param}` form.
 | GET | `/v1/sep30/accounts/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | DELETE | `/v1/sep30/accounts/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | POST | `/v1/sep30/accounts/{address}/sign/{signer}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
+| GET | `/v1/sep30/shares` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | PUT | `/v1/sep30/shares/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | GET | `/v1/sep30/shares/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | DELETE | `/v1/sep30/shares/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
@@ -1723,6 +1724,11 @@ the service under `src/native-plugins/<slug>/`, switched on by the same
   whoever controls the inbox AND gets both servers to accept it, can open a backup that has
   this door. Run the two on separate infrastructure with separate `MAIL_*` senders, as SEP-30
   already requires.
+- **`GET /v1/sep30/shares` (no address) lists every half filed under the proven inbox**, paged by
+  `after` like `GET /v1/sep30/accounts`. A person who backed up several wallets under one email
+  forgets the password for all of them at once; one proof per server now brings every backup
+  back instead of the newest alone. An identity token only — an account's SEP-10 token is refused
+  with `403`, since it already reaches its one half by address.
 - **`isBackupBox` accepts one `recovery` slot in a `v: 4` box**, beside at least one password or
   passkey slot. A box whose only door is `recovery` is refused.
 - **A recovery server's emailed code** now also goes to an inbox that only holds a backup half

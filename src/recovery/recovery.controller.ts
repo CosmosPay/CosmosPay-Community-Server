@@ -333,6 +333,25 @@ export class Sep30Controller {
 export class RecoverySharesController {
   constructor(private readonly shares: RecoverySharesService) {}
 
+  @Get()
+  @ApiBearerAuth(SEP_TOKEN_SCHEME)
+  @Public()
+  @RateLimit(RECOVERY_SHARE_READ_RATE_LIMIT)
+  @ApiOperation({
+    summary:
+      'Every half this server holds for the proven inbox (paged by `after`)',
+    description:
+      "This server's identity token for an email. One proof brings back the " +
+      'halves of every wallet backed up under it.',
+  })
+  list(
+    @Headers('authorization') authorization: string | undefined,
+    @Query() query: Sep30ListQueryDto,
+    @RecoveryNetwork() network: StellarNetwork | null,
+  ) {
+    return this.shares.list(authorization, query.after, network);
+  }
+
   @Put(':address')
   @ApiBearerAuth(SEP_TOKEN_SCHEME)
   @Public()
