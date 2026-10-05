@@ -1224,7 +1224,7 @@ export class WalletAuthService {
         `wallet sign-in: signer lookup failed: ${String(error)}`,
       );
       throw ApiError.unavailable(
-        ApiErrorCode.Misconfigured,
+        ApiErrorCode.ProviderUnavailable,
         'Could not read the account to check the signature. Try again shortly.',
       );
     }
@@ -1333,7 +1333,7 @@ export class WalletAuthService {
         `recovery setup: horizon lookup failed: ${String(error)}`,
       );
       throw ApiError.unavailable(
-        ApiErrorCode.Misconfigured,
+        ApiErrorCode.ProviderUnavailable,
         'Could not read the account.',
       );
     }

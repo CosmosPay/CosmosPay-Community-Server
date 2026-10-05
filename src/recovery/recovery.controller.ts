@@ -20,6 +20,7 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { Response } from 'express';
+import { ApiUpstream } from '@/common/decorators/api-upstream.decorator';
 import { Public } from '@/common/decorators/public.decorator';
 import { SEP_TOKEN_SCHEME } from '@/swagger';
 import { RateLimit } from '@/common/decorators/rate-limit.decorator';
@@ -132,6 +133,9 @@ export class Sep10Controller {
   @HttpCode(200)
   @Public()
   @RateLimit(SEP10_TOKEN_RATE_LIMIT)
+  // The challenge is weighed against the signer set Horizon reports; a lookup
+  // that fails answers 503 (`{ error }`, via SepExceptionFilter).
+  @ApiUpstream('Horizon')
   @ApiOperation({
     summary: 'Exchange a signed challenge for a token',
     description:

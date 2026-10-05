@@ -24,6 +24,7 @@ import {
 } from '@nestjs/swagger';
 import { AllowPublicKey } from '@/common/decorators/allow-public-key.decorator';
 import { ApiErrorResponse } from '@/common/decorators/api-error-response.decorator';
+import { ApiUpstream } from '@/common/decorators/api-upstream.decorator';
 import { Public } from '@/common/decorators/public.decorator';
 import { RateLimit } from '@/common/decorators/rate-limit.decorator';
 import { RequirePermissions } from '@/common/decorators/require-permissions.decorator';
@@ -302,6 +303,9 @@ export class WalletAuthController {
   // Verifies an ed25519 signature before it writes, which is real CPU on a route
   // the shared key can reach.
   @RateLimit(WALLET_AUTH_FINISH_RATE_LIMIT)
+  // A Stellar signature not by the master key is weighed against the account's
+  // current signers, read from Horizon (`signedForAccount`).
+  @ApiUpstream('Horizon')
   @ApiOperation({
     summary: 'Attach the proven identity to the account this device signs for',
     description:
@@ -365,6 +369,8 @@ export class WalletBackupController {
   @AllowPublicKey()
   @RequirePermissions('payments:write')
   @RateLimit(WALLET_AUTH_FINISH_RATE_LIMIT)
+  // Same signer lookup as `finish`: a recovered account signs with a key Horizon lists.
+  @ApiUpstream('Horizon')
   @ApiOperation({
     summary: 'Replace the sealed box stored for an account',
     description:
@@ -413,6 +419,8 @@ export class WalletBackupController {
     WALLET_RECOVERY_SETUP_RATE_LIMIT,
     WALLET_RECOVERY_SETUP_GLOBAL_RATE_LIMIT,
   )
+  // Reads the account's sequence and signers from Horizon on every call.
+  @ApiUpstream('Horizon')
   @ApiOperation({
     summary: "Sponsor the reserve of an account's two recovery signers",
     description:
