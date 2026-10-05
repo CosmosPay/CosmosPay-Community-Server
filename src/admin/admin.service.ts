@@ -1,4 +1,9 @@
 import { Injectable } from '@nestjs/common';
+import type {
+  CrossChainSwapStatus,
+  PaymentIntentStatus,
+  SwapStatus,
+} from '@generated/prisma/client';
 import { AdminExtensions } from '@/admin/admin-extensions';
 import {
   ADMIN_CONSUMER_INCLUDE as consumerSelect,
@@ -170,11 +175,13 @@ export class AdminService {
     return { data, total, take: take(t), skip: skip(s) };
   }
 
-  async paymentIntents(opts: ListOpts & { network?: string; status?: string }) {
+  async paymentIntents(
+    opts: ListOpts & { network?: string; status?: PaymentIntentStatus },
+  ) {
     const where = {
       ...consumerWhere(opts.consumer),
       ...(opts.network ? { network: opts.network } : {}),
-      ...(opts.status ? { status: opts.status as never } : {}),
+      ...(opts.status ? { status: opts.status } : {}),
     };
     const [data, total] = await Promise.all([
       this.prisma.paymentIntent.findMany({
@@ -189,11 +196,11 @@ export class AdminService {
     return { data, total, take: take(opts.take), skip: skip(opts.skip) };
   }
 
-  async swaps(opts: ListOpts & { network?: string; status?: string }) {
+  async swaps(opts: ListOpts & { network?: string; status?: SwapStatus }) {
     const where = {
       ...consumerWhere(opts.consumer),
       ...(opts.network ? { network: opts.network } : {}),
-      ...(opts.status ? { status: opts.status as never } : {}),
+      ...(opts.status ? { status: opts.status } : {}),
     };
     const [data, total] = await Promise.all([
       this.prisma.swap.findMany({
@@ -212,11 +219,11 @@ export class AdminService {
    * Solana and Monad swaps across every consumer. The aggregator's raw quote is
    * left out: it is a support artefact, not something the console renders.
    */
-  async chainSwaps(opts: ListOpts & { chain?: string; status?: string }) {
+  async chainSwaps(opts: ListOpts & { chain?: string; status?: SwapStatus }) {
     const where = {
       ...consumerWhere(opts.consumer),
       ...(opts.chain ? { chain: opts.chain } : {}),
-      ...(opts.status ? { status: opts.status as never } : {}),
+      ...(opts.status ? { status: opts.status } : {}),
     };
     const [data, total] = await Promise.all([
       this.prisma.chainSwap.findMany({
@@ -233,10 +240,10 @@ export class AdminService {
   }
 
   /** Cross-chain swaps (NEAR Intents) across every consumer, raw quote left out. */
-  async crossChainSwaps(opts: ListOpts & { status?: string }) {
+  async crossChainSwaps(opts: ListOpts & { status?: CrossChainSwapStatus }) {
     const where = {
       ...consumerWhere(opts.consumer),
-      ...(opts.status ? { status: opts.status as never } : {}),
+      ...(opts.status ? { status: opts.status } : {}),
     };
     const [data, total] = await Promise.all([
       this.prisma.crossChainSwap.findMany({

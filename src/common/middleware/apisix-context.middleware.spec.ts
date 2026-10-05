@@ -1,4 +1,5 @@
 import { ApisixContextMiddleware } from '@/common/middleware/apisix-context.middleware';
+import { signConsoleMarker } from '@/admin/console-marker';
 
 const APISIX = {
   consumerHeader: 'x-consumer-username',
@@ -10,6 +11,7 @@ const APISIX = {
   planHeader: 'x-consumer-plan',
   swapFeeBpsHeader: 'x-plan-swap-fee-bps',
   emailHeader: 'x-consumer-email',
+  gatewaySecret: 'topsecret-topsecret-topsecret-topsecret',
 };
 
 /** Runs the middleware over a request carrying `headers` and returns the consumer. */
@@ -60,9 +62,20 @@ describe('ApisixContextMiddleware', () => {
     expect(
       consumerFor({
         'x-consumer-username': 'cosmos_u1',
-        'x-cosmos-internal': '1',
+        'x-cosmos-internal': signConsoleMarker(
+          APISIX.gatewaySecret,
+          Date.now(),
+        ),
       }).internal,
     ).toBe(true);
+    // The bare marker exempted its sender from per-consumer rate limits once;
+    // a route that forgot to strip the header handed that to any API key.
+    expect(
+      consumerFor({
+        'x-consumer-username': 'cosmos_u1',
+        'x-cosmos-internal': '1',
+      }).internal,
+    ).toBe(false);
     expect(
       consumerFor({
         'x-consumer-username': 'cosmos_u1',

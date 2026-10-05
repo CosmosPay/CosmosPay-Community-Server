@@ -3,6 +3,9 @@ import { BlindpayOfframpApi } from '@/native-plugins/blindpay/blindpay-offramp.a
 import { PAYOUT_PUBLIC_SELECT } from '@/native-plugins/blindpay/blindpay-sync.service';
 import { OfframpService } from '@/native-plugins/blindpay/offramp/offramp.service';
 
+/** The row `openPayout` opens before the provider call. */
+const OPENED = { id: 'payout_1', createdAt: new Date(), isNew: true };
+
 const CONSUMER = { username: 'cosmos_u1' } as any;
 
 /** Straight out of the stored BlindPay payload — must never reach a response. */
@@ -89,6 +92,11 @@ function makeService() {
     mirrorPayout: jest
       .fn()
       .mockResolvedValue(project(payoutRow(), PAYOUT_PUBLIC_SELECT)),
+    openPayout: jest.fn().mockResolvedValue(OPENED),
+    attachCreatedPayout: jest
+      .fn()
+      .mockResolvedValue(project(payoutRow(), PAYOUT_PUBLIC_SELECT)),
+    discardOpened: jest.fn().mockResolvedValue(undefined),
   };
   const service = new OfframpService(
     prisma,
@@ -248,7 +256,84 @@ describe('OfframpService quote ownership', () => {
         headers: { 'Idempotency-Key': '48b581d5-a18d-41a7-a3ff-ccfa8f8499fd' },
       },
     );
-    expect(sync.mirrorPayout).toHaveBeenCalled();
+    expect(sync.attachCreatedPayout).toHaveBeenCalledWith(
+      OPENED,
+      'c1',
+      'prod',
+      { id: 'pa_1', receiver_id: null },
+    );
+  });
+});
+
+describe('OfframpService opens the payout row before the provider call', () => {
+  const EXECUTION_KEY = '48b581d5-a18d-41a7-a3ff-ccfa8f8499fd';
+
+  function owned() {
+    const made = makeService();
+    made.prisma.blindpayQuote.findUnique.mockResolvedValue({
+      ...OWNED_QUOTE,
+      executionKey: EXECUTION_KEY,
+    });
+    return made;
+  }
+
+  const DTO = {
+    quote_id: 'qe_000000000001',
+    chain: 'evm',
+    sender_wallet_address: '0xabc',
+  } as any;
+
+  it('writes the row, carrying quote and execution key, before BlindPay is asked', async () => {
+    const { service, blindpay, sync } = owned();
+    blindpay.post.mockResolvedValue({ id: 'pa_1' });
+
+    await service.createPayout(CONSUMER, DTO);
+
+    expect(sync.openPayout).toHaveBeenCalledWith('c1', 'prod', {
+      quoteId: 'qe_000000000001',
+      executionKey: EXECUTION_KEY,
+      senderWalletAddress: '0xabc',
+    });
+    expect(sync.openPayout.mock.invocationCallOrder[0]).toBeLessThan(
+      blindpay.post.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('keeps the row when the provider call timed out, since the payout may exist', async () => {
+    const { service, blindpay, sync } = owned();
+    blindpay.post.mockRejectedValue(new HttpException('timed out', 504));
+
+    await expect(service.createPayout(CONSUMER, DTO)).rejects.toThrow(
+      'timed out',
+    );
+    expect(sync.discardOpened).not.toHaveBeenCalled();
+  });
+
+  it('drops the row when BlindPay refused the request outright', async () => {
+    const { service, blindpay, sync } = owned();
+    blindpay.post.mockRejectedValue(new HttpException('bad quote', 400));
+
+    await expect(service.createPayout(CONSUMER, DTO)).rejects.toThrow(
+      'bad quote',
+    );
+    expect(sync.discardOpened).toHaveBeenCalledWith('payout', 'payout_1');
+  });
+
+  it('never drops a row an earlier attempt opened, even on a refusal', async () => {
+    const { service, blindpay, sync } = owned();
+    sync.openPayout.mockResolvedValue({ ...OPENED, isNew: false });
+    blindpay.post.mockRejectedValue(new HttpException('bad quote', 400));
+
+    await expect(service.createPayout(CONSUMER, DTO)).rejects.toThrow();
+    expect(sync.discardOpened).not.toHaveBeenCalled();
+  });
+
+  it('keeps the row on a 409, which an in-flight idempotent replay answers', async () => {
+    const { service, blindpay, sync } = owned();
+    blindpay.post.mockRejectedValue(new HttpException('in flight', 409));
+
+    await expect(service.createPayout(CONSUMER, DTO)).rejects.toThrow();
+    expect(sync.discardOpened).not.toHaveBeenCalled();
   });
 });
 

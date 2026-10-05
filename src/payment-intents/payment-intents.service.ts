@@ -40,6 +40,7 @@ import {
 import { Sep7LinkBuilder } from '@/payment-intents/sep7-link-builder.service';
 import { ChainPayLinkBuilder } from '@/payment-intents/chain-pay-link-builder.service';
 import { PaymentVerifiers } from '@/payment-intents/payment-verifiers';
+import { settlementRivalsQuery } from '@/payment-intents/settlement-rivals';
 import {
   expectedTxId,
   isTxIdFor,
@@ -817,6 +818,11 @@ export class PaymentIntentsService {
           );
         }
 
+        // The assertion above guarantees a hash on every SUCCEEDED.
+        if (to === 'SUCCEEDED') {
+          await claimSettlement(tx, current, txHash!);
+        }
+
         await tx.paymentIntentTransition.create({
           data: {
             intentId,
@@ -833,6 +839,8 @@ export class PaymentIntentsService {
     } catch (err) {
       // Settling on a hash another of the consumer's intents already carries:
       // a 409 for validate, a logged failure the observer retries — not a 500.
+      // A hash that settled someone else's intent arrives here already mapped
+      // (`claimSettlement`), so it is never mistaken for this one.
       throw txHashConflict(err) ?? err;
     }
 
@@ -883,28 +891,49 @@ export class PaymentIntentsService {
   }
 
   // ── DELETE ────────────────────────────────────────────────────────────────
+  /**
+   * Deletes an intent that has not been paid.
+   *
+   * A paid (SUCCEEDED) intent is an immutable record of a settled payment — it
+   * must not be deletable. The delete is a compare-and-swap on the status just
+   * read, scoped to the consumer, as in {@link transition}: it used to be an
+   * unconditional delete by id, so an intent the observer settled between the
+   * read and the delete was deleted anyway, its settlement already notified and
+   * counted. Now that intent is refused with the 409 every other lost race
+   * answers, and a re-read shows it SUCCEEDED.
+   */
   async remove(
     consumer: GatewayConsumer,
     id: string,
   ): Promise<{ id: string; deleted: true }> {
-    await this.assertOwned(consumer, id);
-    // A paid (SUCCEEDED) intent is an immutable record of a settled payment — it
-    // must not be deletable.
-    const existing = await this.prisma.paymentIntent.findUnique({
-      where: { id },
-      select: { status: true },
+    const owned = { id, consumer: { apisixUsername: consumer.username } };
+    const existing = await this.prisma.paymentIntent.findFirst({
+      where: owned,
     });
-    if (existing?.status === 'SUCCEEDED') {
+    if (!existing) {
+      throw ApiError.notFound(`Payment intent ${id} not found`);
+    }
+    if (existing.status === 'SUCCEEDED') {
       throw ApiError.badRequest(
         ApiErrorCode.InvalidStateTransition,
         'A paid payment intent cannot be deleted.',
       );
     }
-    const deleted = await this.prisma.paymentIntent.delete({ where: { id } });
+    const guarded = await this.prisma.paymentIntent.deleteMany({
+      where: { ...owned, status: existing.status },
+    });
+    if (guarded.count === 0) {
+      throw ApiError.conflict(
+        ApiErrorCode.OperationInFlight,
+        `Payment intent ${id} status changed concurrently; expected ${existing.status}`,
+      );
+    }
     this.logger.log(
       `Deleted payment intent ${id} (consumer=${consumer.username})`,
     );
-    await this.emit(consumer.username, 'PAYMENT_INTENT_DELETED', deleted);
+    // `deleteMany` returns no row; the one read above is what was deleted, its
+    // status pinned by the guard.
+    await this.emit(consumer.username, 'PAYMENT_INTENT_DELETED', existing);
     return { id, deleted: true };
   }
 
@@ -990,6 +1019,10 @@ export class PaymentIntentsService {
    * ({@link PaymentVerifiers}) has confirmed pays this intent: this is the settlement that counts as verified on-chain, and
    * the only one that may settle an EXPIRED intent. Both callers — `validate`
    * and the observer — hold that verifier result when they call it.
+   *
+   * The payment goes to the OLDEST intent it pays: an older intent of another
+   * consumer that it also pays refuses this one first
+   * ({@link assertOldestClaimant}).
    */
   async markSucceeded(
     intentId: string,
@@ -998,6 +1031,7 @@ export class PaymentIntentsService {
     payer?: string,
     actor: PaymentIntentTransitionActor = 'validate',
   ): Promise<PaymentIntent> {
+    await this.assertOldestClaimant(intentId, txHash);
     return this.transition(intentId, 'SUCCEEDED', {
       consumerUsername,
       actor,
@@ -1006,6 +1040,77 @@ export class PaymentIntentsService {
       payer,
       verifiedOnChain: true,
     });
+  }
+
+  /**
+   * Refuses to settle `intentId` on `txHash` when the transaction also pays an
+   * older intent of another consumer, with the 409 a hash that already settled
+   * one gets (`transaction_already_settled`).
+   *
+   * The settlement claim makes one transaction settle one intent, but alone it
+   * hands the payment to whichever settlement runs first, and a copycat's
+   * observer tick can come before the original's: the copy settled and the
+   * original, refused at the claim, expired although it was paid. A copy is
+   * made of an intent that already exists, so the original is the older; it is
+   * refused nothing here (none of its rivals is older) and settles on its own
+   * next pass.
+   *
+   * Which rivals are looked at is `settlement-rivals.ts`; whether one is paid is
+   * the chain verifier's answer, the same `verifyByHash` that would settle it.
+   * A verifier that cannot answer throws, and the settlement is retried rather
+   * than decided without it. Only a rival the chain says is paid refuses this
+   * intent — never how many there are: at most `SETTLEMENT_RIVALS_MAX` are
+   * asked about, oldest first, and when none of them is paid the claim decides.
+   *
+   * What concurrency can and cannot do. AT MOST one intent settles on a
+   * transaction, always: that is the claim's primary key, whatever this check
+   * read. Which one is decided here, without a lock, from statuses read at one
+   * moment: a rival counts while PENDING, SUBMITTED or SUCCEEDED, and an intent
+   * leaves that set only for EXPIRED, CANCELLED or FAILED — never to come back,
+   * except EXPIRED → SUCCEEDED. So:
+   *
+   * - The oldest intent in that set is never refused here, and a younger one is
+   *   refused for as long as the older stays in it. While both are open, the
+   *   older wins whichever settlement runs first.
+   * - A younger intent is refused only by a rival that was in the set when it
+   *   looked. If that rival then leaves it (expires unpaid, is cancelled), the
+   *   younger is not refused again, and its next pass settles it: the payment
+   *   is never stranded behind an intent that will not take it.
+   * - An older intent that EXPIRED no longer outranks anyone. A payment that
+   *   reaches it late (`validate` settles EXPIRED) and a younger open intent
+   *   then race at the claim, first come. That is the cost of not counting
+   *   EXPIRED — see `settlementRivalsQuery`.
+   *
+   * The same code as an already-settled hash, deliberately: a distinct answer
+   * would tell a caller holding a payment that another tenant has an unsettled
+   * intent for it.
+   */
+  private async assertOldestClaimant(
+    intentId: string,
+    txHash: string,
+  ): Promise<void> {
+    const intent = await this.prisma.paymentIntent.findUnique({
+      where: { id: intentId },
+    });
+    // A missing intent is `transition`'s 404 to answer.
+    if (!intent) return;
+    const chain = chainOf(intent.chain);
+    const rivals = await this.prisma.paymentIntent.findMany(
+      settlementRivalsQuery(chain, intent),
+    );
+    if (rivals.length === 0) return;
+    const verifier = this.verifiers.for(chain);
+    const hash = normalizeTxId(chain, txHash);
+    for (const rival of rivals) {
+      const result = await verifier.verifyByHash(rival, hash);
+      if (result.valid) {
+        this.logger.warn(
+          `Not settling intent ${intentId} on ${hash}: the payment also pays ` +
+            `the older intent ${rival.id} of another consumer`,
+        );
+        throw transactionAlreadySettled();
+      }
+    }
   }
 
   /** Finalizes an intent as FAILED and emits the event. */
@@ -1093,6 +1198,60 @@ function checkedTxId(chain: Chain, txHash: string): string {
     );
   }
   return normalizeTxId(chain, trimmed);
+}
+
+/**
+ * Claims `txHash` for `intent`'s settlement, inside the transaction that marks
+ * it SUCCEEDED, or throws 409 `transaction_already_settled` when the hash
+ * already settled an intent — of any consumer.
+ *
+ * The (consumerId, txHash) index cannot refuse that on its own: it is per
+ * consumer, and a tenant that copies another's destination, amount and memo
+ * (the memo is the caller's to choose, and the shared public key is one
+ * consumer for every anonymous caller) built an intent the payer's one
+ * transaction also verified against. Both settled. Checking for an earlier
+ * settlement first and settling after would leave two settlements racing
+ * between the read and the write; the primary key decides instead, and the
+ * loser's whole transaction — its status change included — rolls back.
+ *
+ * The violation is mapped here, at the one statement that can raise it: by
+ * the time it reaches `transition`'s catch, Prisma's `meta.target` would name
+ * `txHash` and {@link txHashConflict} would answer it as a collision among the
+ * caller's own intents. The message names no intent and no consumer: the one
+ * already paid is not this caller's.
+ */
+async function claimSettlement(
+  tx: Prisma.TransactionClient,
+  intent: PaymentIntent,
+  txHash: string,
+): Promise<void> {
+  const chain = chainOf(intent.chain);
+  try {
+    await tx.paymentSettlement.create({
+      data: {
+        chain,
+        network: intent.network,
+        txHash: normalizeTxId(chain, txHash),
+        intentId: intent.id,
+      },
+    });
+  } catch (err) {
+    if (!isUniqueViolation(err)) throw err;
+    throw transactionAlreadySettled();
+  }
+}
+
+/**
+ * The 409 for a transaction that settles, or already settled, another payment
+ * intent. One message for both causes, naming no intent and no consumer: the
+ * other intent is not this caller's to learn about.
+ */
+function transactionAlreadySettled(): ApiError {
+  return ApiError.conflict(
+    ApiErrorCode.TransactionAlreadySettled,
+    'This transaction settles another payment intent. One payment settles ' +
+      'at most one intent: the oldest it pays.',
+  );
 }
 
 /**

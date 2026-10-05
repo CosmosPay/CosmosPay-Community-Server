@@ -3,6 +3,7 @@ import { BlindpayClient } from '@/native-plugins/blindpay/blindpay.client';
 import { BlindpayKycApi } from '@/native-plugins/blindpay/blindpay-kyc.api';
 import { BlindpayOfframpApi } from '@/native-plugins/blindpay/blindpay-offramp.api';
 import { BlindpayOnrampApi } from '@/native-plugins/blindpay/blindpay-onramp.api';
+import { BlindpayReconcilerService } from '@/native-plugins/blindpay/blindpay-reconciler.service';
 import { BlindpaySyncService } from '@/native-plugins/blindpay/blindpay-sync.service';
 import { BlindpayWebhooksController } from '@/native-plugins/blindpay/webhooks/blindpay-webhooks.controller';
 
@@ -16,7 +17,8 @@ import { BlindpayWebhooksController } from '@/native-plugins/blindpay/webhooks/b
  * Feature services inject the `Blindpay*Api` surface for their area, not the raw
  * client: the provider's URL layout is this module's knowledge. `BlindpayClient`
  * stays exported because it is the transport those surfaces wrap, and the e2e
- * suites override it to keep BlindPay off the network.
+ * suites override it to keep BlindPay off the network. Also hosts the reconciler
+ * that repairs the mirror from BlindPay when a webhook did not.
  */
 @Global()
 @Module({
@@ -27,6 +29,9 @@ import { BlindpayWebhooksController } from '@/native-plugins/blindpay/webhooks/b
     BlindpayOnrampApi,
     BlindpayOfframpApi,
     BlindpaySyncService,
+    // Re-reads from BlindPay what the webhook did not settle. A job, so it
+    // starts only when this plugin is enabled.
+    BlindpayReconcilerService,
   ],
   exports: [
     BlindpayClient,

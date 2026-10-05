@@ -38,3 +38,30 @@ export const SETTLEMENT_MAX_ROWS_PER_CONSUMER = 10;
  */
 export const SETTLEMENT_LOCK_TIMEOUT_INTERVALS = 4;
 export const SETTLEMENT_LOCK_MIN_TIMEOUT_MS = 60_000;
+
+/**
+ * How far back the sweep re-checks FAILED rows against the ledger, by the row's
+ * `createdAt`, and the most it re-checks per table per tick.
+ *
+ * FAILED used to be final as far as the observer was concerned: it selected only
+ * PENDING/SUBMITTED. But a row could be recorded FAILED while its transaction
+ * sat on-chain, settled — the wallet broadcast the envelope itself (SEP-7) and
+ * the merchant's re-submission came back `tx_bad_seq` — and nothing ever looked
+ * at it again: no success webhook, and for a deposit no cost basis, so the
+ * commission on the position it opened was forfeited. The relay now asks the
+ * ledger before it records FAILED; this re-check is what heals a row that was
+ * recorded FAILED anyway, by an earlier release or a lookup that read a lagging
+ * Horizon.
+ *
+ * A day, like the other rescue windows here: an envelope stops being valid
+ * minutes after it is built, so by then its fate on the ledger is long fixed,
+ * and the rest of the day is for Horizon to have answered at all. The batch is
+ * its own, smaller budget so that re-checks never take lookups from rows still
+ * in flight — FAILED rows are cheap to produce (any signature yields a
+ * `tx_bad_auth`), and each one would otherwise be looked up every tick for the
+ * whole window. Rows are dealt per consumer as the in-flight ones are
+ * ({@link SETTLEMENT_MAX_ROWS_PER_CONSUMER}), newest first, since a fresh
+ * failure is the one most likely to have been misread.
+ */
+export const SETTLEMENT_FAILED_LOOKBACK_MS = 24 * 60 * 60 * 1000;
+export const SETTLEMENT_FAILED_RECHECK_MAX_ROWS = 10;

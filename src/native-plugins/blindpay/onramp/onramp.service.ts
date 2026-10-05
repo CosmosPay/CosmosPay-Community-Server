@@ -16,6 +16,7 @@ import {
 import {
   asString,
   isMirrorFresh,
+  isProviderRefusal,
   quoteExpiresAt,
 } from '@/native-plugins/blindpay/blindpay.util';
 import type { BlindpayEnvironment } from '@/config/configuration';
@@ -85,28 +86,43 @@ export class OnrampService {
       environment,
       dto.payin_quote_id,
     );
-    // One execution call for every destination network — the chain is determined
-    // by the quote's wallet, not chosen here.
-    const created = await this.blindpay.createPayin(
-      environment,
-      {
-        payin_quote_id: dto.payin_quote_id,
-      },
-      quote.executionKey,
-    );
-    const receiverId = await this.resolveReceiverLocalId(
-      local.id,
-      environment,
-      created.receiver_id,
-    );
-    return this.sync.mirrorPayin(local.id, environment, receiverId, created);
+    // The row comes first: once BlindPay holds a payin there must be a row
+    // here to attach it to, whatever happens to the answer on its way back.
+    const opened = await this.sync.openPayin(local.id, environment, {
+      quoteId: dto.payin_quote_id,
+      executionKey: quote.executionKey,
+    });
+    let created: BlindpayObject;
+    try {
+      // One execution call for every destination network — the chain is
+      // determined by the quote's wallet, not chosen here.
+      created = await this.blindpay.createPayin(
+        environment,
+        {
+          payin_quote_id: dto.payin_quote_id,
+        },
+        quote.executionKey,
+      );
+    } catch (err) {
+      // Only a refusal proves nothing was created. A timeout or a 5xx leaves
+      // the row for the webhook — or this caller's retry, which replays the
+      // same Idempotency-Key — to complete.
+      if (opened.isNew && isProviderRefusal(err)) {
+        await this.sync.discardOpened('payin', opened.id);
+      }
+      throw err;
+    }
+    return this.sync.attachCreatedPayin(opened, local.id, environment, created);
   }
 
   async findAll(consumer: GatewayConsumer, query: PaginationQueryDto) {
     const local = await this.consumers.resolve(consumer);
+    // A row still waiting for its provider id is bookkeeping, not a payin
+    // anyone can act on yet; see BLINDPAY_PENDING_PROVIDER_STATUS.
     const where = {
       consumerId: local.id,
       environment: this.blindpay.environmentFor(consumer),
+      blindpayId: { not: null },
     };
     // `total` is the row count, not the page length. Returning `data.length`
     // made the field useless: it always equalled what the caller just received,
@@ -133,10 +149,15 @@ export class OnrampService {
     const local = await this.consumers.resolve(consumer);
     const environment = this.blindpay.environmentFor(consumer);
     const row = await this.prisma.payin.findFirst({
-      where: { id, consumerId: local.id, environment },
+      where: {
+        id,
+        consumerId: local.id,
+        environment,
+        blindpayId: { not: null },
+      },
       select: PAYIN_READ_SELECT,
     });
-    if (!row) {
+    if (!row?.blindpayId) {
       throw ApiError.notFound('Payin not found');
     }
     if (isMirrorFresh(row)) {
@@ -254,22 +275,6 @@ export class OnrampService {
       );
     }
     return wallet.blindpayId;
-  }
-
-  private async resolveReceiverLocalId(
-    consumerId: string,
-    environment: BlindpayEnvironment,
-    receiverBlindpayId: unknown,
-  ): Promise<string | null> {
-    if (!receiverBlindpayId) return null;
-    const receiver = await this.prisma.blindpayReceiver.findFirst({
-      where: {
-        consumerId,
-        environment,
-        blindpayId: asString(receiverBlindpayId),
-      },
-    });
-    return receiver?.id ?? null;
   }
 }
 

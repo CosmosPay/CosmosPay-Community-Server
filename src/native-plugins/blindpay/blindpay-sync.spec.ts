@@ -1,5 +1,4 @@
 import { BlindpaySyncService } from '@/native-plugins/blindpay/blindpay-sync.service';
-import { WEBHOOK_EVENT } from '@/webhooks/webhook-events';
 
 function makeService() {
   const prisma = {
@@ -10,9 +9,15 @@ function makeService() {
       updateMany: jest.fn(),
       upsert: jest.fn(),
     },
-    blindpayWebhookEvent: { create: jest.fn().mockResolvedValue({}) },
+    blindpayQuote: { findMany: jest.fn().mockResolvedValue([]) },
+    blindpayWebhookEvent: {
+      create: jest.fn().mockResolvedValue({}),
+      findUnique: jest.fn().mockResolvedValue({ appliedAt: new Date() }),
+      updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+    },
   };
-  const events = { emit: jest.fn() };
+  // Stands in for WebhookTerminalEmitter, the one emission path.
+  const events = { emit: jest.fn().mockResolvedValue(true) };
   const service = new BlindpaySyncService(prisma as any, events as any);
   return { service, prisma, events };
 }
@@ -50,11 +55,9 @@ describe('BlindpaySyncService.handleWebhook', () => {
       }),
     );
     expect(events.emit).toHaveBeenCalledWith(
-      WEBHOOK_EVENT,
-      expect.objectContaining({
-        consumerUsername: 'cosmos_u1',
-        type: 'PAYIN_COMPLETED',
-      }),
+      'cosmos_u1',
+      'PAYIN_COMPLETED',
+      expect.objectContaining({ id: 'pi_1' }),
     );
   });
 
@@ -107,8 +110,9 @@ describe('BlindpaySyncService.handleWebhook', () => {
     );
 
     expect(events.emit).toHaveBeenCalledWith(
-      WEBHOOK_EVENT,
-      expect.objectContaining({ type: 'PAYOUT_UPDATED' }),
+      'cosmos_u2',
+      'PAYOUT_UPDATED',
+      expect.anything(),
     );
   });
 
@@ -243,7 +247,12 @@ describe('BlindpaySyncService delivery de-duplication', () => {
     );
 
     expect(prisma.blindpayWebhookEvent.create).toHaveBeenCalledWith({
-      data: { svixId: 'msg_claim', eventType: 'payin.complete' },
+      data: {
+        svixId: 'msg_claim',
+        eventType: 'payin.complete',
+        environment: 'prod',
+        blindpayId: 'pi_1',
+      },
     });
   });
 

@@ -1,5 +1,6 @@
 import { BadRequestException, ValidationPipe } from '@nestjs/common';
 import { CreateReceiverDto } from '@/native-plugins/blindpay/kyc/receivers/dto/create-receiver.dto';
+import { UpdateReceiverDto } from '@/native-plugins/blindpay/kyc/receivers/dto/update-receiver.dto';
 import { CreateBankAccountDto } from '@/native-plugins/blindpay/kyc/bank-accounts/dto/create-bank-account.dto';
 import { CreatePayinQuoteDto } from '@/native-plugins/blindpay/onramp/dto/create-payin-quote.dto';
 import { CreatePayoutQuoteDto } from '@/native-plugins/blindpay/offramp/dto/create-payout-quote.dto';
@@ -122,6 +123,100 @@ describe('BlindPay DTOs — minimum-to-maximum parameter coverage', () => {
           not_a_real_field: 'x',
         }),
       ).rejects.toBeInstanceOf(BadRequestException);
+    });
+  });
+
+  describe('CreateReceiverDto — field formats', () => {
+    const base = {
+      type: 'business',
+      kyc_type: 'standard',
+      email: 'a@b.com',
+      country: 'US',
+    };
+    const withField = (field: string, value: unknown) => ({
+      ...base,
+      [field]: value,
+    });
+    const withOwner = (field: string, value: unknown) => ({
+      ...base,
+      owners: [{ first_name: 'Jane', [field]: value }],
+    });
+
+    it.each([
+      ['country', 'us'],
+      ['country', 'USA'],
+      ['country', 'XX'],
+      ['country', ''],
+      ['id_doc_country', 'br'],
+      ['id_doc_country', 'Brazil'],
+      ['date_of_birth', '1985-04-12'],
+      ['date_of_birth', '12/04/1985'],
+      ['date_of_birth', '1985-02-30T00:00:00.000Z'],
+      ['date_of_birth', '1985-04-12T00:00:00'],
+      ['date_of_birth', 'yesterday'],
+      ['formation_date', '2015-01-01'],
+      ['formation_date', '2015-13-01T00:00:00Z'],
+      ['website', 'acme.com'],
+      ['website', 'javascript:alert(1)'],
+      ['website', 'ftp://acme.com'],
+      ['website', 'https://user:pass@acme.com'],
+      ['website', 'https://localhost'],
+    ])('rejects %s = %j', async (field, value) => {
+      await expect(
+        run(CreateReceiverDto, withField(field, value)),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it.each([
+      ['country', 'us'],
+      ['id_doc_country', 'XX'],
+      ['date_of_birth', '1985-04-12'],
+      ['ownership_percentage', -1],
+      ['ownership_percentage', 100.01],
+      ['ownership_percentage', 'a lot'],
+      ['ownership_percentage', Number.NaN],
+    ])('rejects owners[].%s = %j', async (field, value) => {
+      await expect(
+        run(CreateReceiverDto, withOwner(field, value)),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it.each([
+      ['country', 'BR'],
+      ['id_doc_country', 'MX'],
+      ['date_of_birth', '1985-04-12T00:00:00.000Z'],
+      ['date_of_birth', '1985-04-12T00:00:00-03:00'],
+      ['date_of_birth', '1985-04-12T00:00Z'],
+      ['formation_date', '2015-01-01T00:00:00Z'],
+      ['website', 'https://acme.com'],
+      ['website', 'http://acme.com.br/about?x=1'],
+    ])('accepts %s = %j', async (field, value) => {
+      await expect(
+        run(CreateReceiverDto, withField(field, value)),
+      ).resolves.toBeDefined();
+    });
+
+    it.each([0, 25.5, 100, '40'])(
+      'accepts owners[].ownership_percentage = %j',
+      async (value) => {
+        const out = await run(
+          CreateReceiverDto,
+          withOwner('ownership_percentage', value),
+        );
+        expect(typeof out.owners[0].ownership_percentage).toBe('number');
+      },
+    );
+
+    it('applies the same rules to a partial update', async () => {
+      await expect(
+        run(UpdateReceiverDto, { country: 'us' }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      await expect(
+        run(UpdateReceiverDto, { date_of_birth: '1985-04-12' }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      await expect(
+        run(UpdateReceiverDto, { country: 'AR' }),
+      ).resolves.toBeDefined();
     });
   });
 

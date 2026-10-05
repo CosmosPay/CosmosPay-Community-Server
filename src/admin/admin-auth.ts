@@ -1,9 +1,9 @@
 import {
   ADMIN_ACTOR_ROLES,
-  ADMIN_INTERNAL_FALSY,
   DEFAULT_ADMIN_ACTOR_ID,
   DEFAULT_ADMIN_ACTOR_ROLE,
 } from '@/admin/admin.constants';
+import { verifyConsoleMarker } from '@/admin/console-marker';
 
 /**
  * Executable spec for platform-admin auth.
@@ -24,14 +24,15 @@ import {
  *
  *   1. `ApisixGuard` (global) verified `X-Gateway-Secret`. Only the gateway and
  *      the console backend hold it.
- *   2. The internal marker below is present. APISIX strips it from every request
- *      it proxies, so an API-key caller cannot carry it — only a direct call from
- *      a backend holding the gateway secret can.
+ *   2. The internal marker below is a fresh MAC keyed by that same secret (see
+ *      `console-marker.ts`). APISIX also strips the header from every request it
+ *      proxies, but that is defence in depth now, not the proof: an API-key
+ *      caller holds no gateway secret, so even a route that forgets the strip
+ *      forwards a marker nobody outside could have minted.
  *
- * The trade is deliberate and worth naming: fact 2 rests on gateway routing
- * config that lives in the dev-platform repo rather than on a secret this
- * service holds. What it buys is a single source of truth for "who is a platform
- * admin" instead of two that silently disagree. The audit trail is what makes it
+ * Both facts rest on the one secret the service already holds, so there is
+ * still no second credential to deploy, and still a single source of truth for
+ * "who is a platform admin" instead of two that silently disagree. The audit trail is what makes it
  * answerable after the fact — every read and every mutation records the console
  * account that made it (see `AdminAuditService`).
  */
@@ -46,6 +47,10 @@ export interface AdminPrincipal {
 export interface AdminCallContext {
   /** Raw `X-Cosmos-Internal` header value. */
   internal?: string | string[];
+  /** The gateway secret the marker must be keyed with. Empty fails closed. */
+  gatewaySecret: string;
+  /** Clock for the marker's freshness window; `Date.now()` outside tests. */
+  nowMs?: number;
   /** Raw `X-Cosmos-Admin-Role` header value. */
   actorRole?: string | string[];
   /** `X-Consumer-Username` as normalized by ApisixContextMiddleware. */
@@ -60,7 +65,7 @@ export interface AdminCallContext {
 export function resolveAdminPrincipal(
   ctx: AdminCallContext,
 ): AdminPrincipal | null {
-  if (!isInternalCall(ctx.internal)) return null;
+  if (!isInternalCall(ctx.internal, ctx.gatewaySecret, ctx.nowMs)) return null;
   return {
     id: firstHeader(ctx.consumer) ?? DEFAULT_ADMIN_ACTOR_ID,
     role: normalizeActorRole(ctx.actorRole),
@@ -68,16 +73,16 @@ export function resolveAdminPrincipal(
 }
 
 /**
- * Whether the internal marker is set. Any value counts except the explicit
- * negatives, so `1` (what the console sends) and `true` both work while a
- * forwarded `0` does not quietly grant everything.
+ * Whether the request carries a valid platform-console marker: a MAC minted with
+ * the gateway secret inside the freshness window. The bare `1` the console used
+ * to send is refused like any other forgery.
  */
-export function isInternalCall(raw?: string | string[]): boolean {
-  const value = firstHeader(raw)?.toLowerCase();
-  if (!value) return false;
-  return !ADMIN_INTERNAL_FALSY.includes(
-    value as (typeof ADMIN_INTERNAL_FALSY)[number],
-  );
+export function isInternalCall(
+  raw: string | string[] | undefined,
+  gatewaySecret: string,
+  nowMs: number = Date.now(),
+): boolean {
+  return verifyConsoleMarker(firstHeader(raw), gatewaySecret, nowMs);
 }
 
 /** Console role → audit label. Unknown/absent collapses to the default label. */

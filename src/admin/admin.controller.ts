@@ -7,9 +7,16 @@ import {
 } from '@nestjs/common';
 import { ApiExcludeController } from '@nestjs/swagger';
 import { AdminAuditService } from '@/admin/admin-audit.service';
-import { toNum } from '@/admin/admin-list';
 import { AdminReadAuditInterceptor } from '@/admin/admin-read-audit.interceptor';
 import { AdminService } from '@/admin/admin.service';
+import {
+  AdminChainSwapsQueryDto,
+  AdminConsumerListQueryDto,
+  AdminCrossChainSwapsQueryDto,
+  AdminPageQueryDto,
+  AdminPaymentIntentsQueryDto,
+  AdminSwapsQueryDto,
+} from '@/admin/dto/admin-list.query.dto';
 import { AdminGuard } from '@/common/guards/admin.guard';
 
 /**
@@ -38,100 +45,38 @@ export class AdminController {
   }
 
   @Get('consumers')
-  consumers(@Query('take') take?: string, @Query('skip') skip?: string) {
-    return this.admin.consumers(toNum(take), toNum(skip));
+  consumers(@Query() q: AdminPageQueryDto) {
+    return this.admin.consumers(q.take, q.skip);
   }
 
   @Get('payment-intents')
-  paymentIntents(
-    @Query('consumer') consumer?: string,
-    @Query('network') network?: string,
-    @Query('status') status?: string,
-    @Query('take') take?: string,
-    @Query('skip') skip?: string,
-  ) {
-    return this.admin.paymentIntents({
-      consumer,
-      network,
-      status,
-      take: toNum(take),
-      skip: toNum(skip),
-    });
+  paymentIntents(@Query() q: AdminPaymentIntentsQueryDto) {
+    return this.admin.paymentIntents(q);
   }
 
   @Get('swaps')
-  swaps(
-    @Query('consumer') consumer?: string,
-    @Query('network') network?: string,
-    @Query('status') status?: string,
-    @Query('take') take?: string,
-    @Query('skip') skip?: string,
-  ) {
-    return this.admin.swaps({
-      consumer,
-      network,
-      status,
-      take: toNum(take),
-      skip: toNum(skip),
-    });
+  swaps(@Query() q: AdminSwapsQueryDto) {
+    return this.admin.swaps(q);
   }
 
   @Get('chain-swaps')
-  chainSwaps(
-    @Query('consumer') consumer?: string,
-    @Query('chain') chain?: string,
-    @Query('status') status?: string,
-    @Query('take') take?: string,
-    @Query('skip') skip?: string,
-  ) {
-    return this.admin.chainSwaps({
-      consumer,
-      chain,
-      status,
-      take: toNum(take),
-      skip: toNum(skip),
-    });
+  chainSwaps(@Query() q: AdminChainSwapsQueryDto) {
+    return this.admin.chainSwaps(q);
   }
 
   @Get('cross-chain-swaps')
-  crossChainSwaps(
-    @Query('consumer') consumer?: string,
-    @Query('status') status?: string,
-    @Query('take') take?: string,
-    @Query('skip') skip?: string,
-  ) {
-    return this.admin.crossChainSwaps({
-      consumer,
-      status,
-      take: toNum(take),
-      skip: toNum(skip),
-    });
+  crossChainSwaps(@Query() q: AdminCrossChainSwapsQueryDto) {
+    return this.admin.crossChainSwaps(q);
   }
 
   @Get('customers')
-  customers(
-    @Query('consumer') consumer?: string,
-    @Query('take') take?: string,
-    @Query('skip') skip?: string,
-  ) {
-    return this.admin.customers({
-      consumer,
-      take: toNum(take),
-      skip: toNum(skip),
-    });
+  customers(@Query() q: AdminConsumerListQueryDto) {
+    return this.admin.customers(q);
   }
 
   @Get('products')
-  products(
-    @Query('consumer') consumer?: string,
-    @Query('take') take?: string,
-    @Query('skip') skip?: string,
-  ) {
-    return this.admin.products({
-      consumer,
-      take: toNum(take),
-      skip: toNum(skip),
-    });
+  products(@Query() q: AdminConsumerListQueryDto) {
+    return this.admin.products(q);
   }
 
   /**
@@ -139,7 +84,7 @@ export class AdminController {
    * there is no DELETE/PATCH route for these rows (issue #34).
    */
   @Get('audit-logs')
-  auditLogs(@Query('take') take?: string, @Query('skip') skip?: string) {
-    return this.audit.list({ take: toNum(take), skip: toNum(skip) });
+  auditLogs(@Query() q: AdminPageQueryDto) {
+    return this.audit.list(q);
   }
 }

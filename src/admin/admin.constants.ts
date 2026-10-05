@@ -39,8 +39,37 @@ export const DEFAULT_ADMIN_ACTOR_ID = 'internal';
 export const DEFAULT_ADMIN_ACTOR_ROLE = 'internal';
 
 /**
- * Values of {@link ADMIN_INTERNAL_HEADER} that do NOT mark an internal call, so
- * a console that forwards `0` / `false` for "not internal" is taken at its word
- * instead of being read as "any value present ⇒ admin".
+ * Version tag of the console marker's wire format: `v1.<unix seconds>.<hex mac>`.
+ * A new format gets a new tag, so an old console is refused rather than misread.
  */
-export const ADMIN_INTERNAL_FALSY = ['0', 'false', 'no', 'off'] as const;
+export const CONSOLE_MARKER_VERSION = 'v1';
+
+/**
+ * Domain-separation prefix for the marker's HMAC. The key is the gateway secret,
+ * which signs nothing else in this service today; the label keeps it that way if
+ * something else ever derives from the same key. The dev platform holds its own
+ * copy of this literal — `console-marker.spec.ts` pins a shared test vector.
+ */
+export const CONSOLE_MARKER_LABEL = 'cosmos-admin-console:v1:';
+
+/**
+ * How far a marker's timestamp may sit from this server's clock, either way.
+ * The console mints a fresh marker per request, so this only has to absorb clock
+ * skew between two servers; it is what stops a marker copied out of a log from
+ * being a standing admin credential.
+ */
+export const CONSOLE_MARKER_MAX_SKEW_S = 300;
+
+/**
+ * Page size of an admin list when the console names none. Larger than the
+ * tenant lists' 20 because the console renders one operator-facing table per
+ * resource rather than a paged feed.
+ */
+export const ADMIN_DEFAULT_PAGE_SIZE = 50;
+
+/**
+ * The largest page an admin list serves. The console asks for exactly this
+ * many rows on every global view, so lowering it is a breaking change for it;
+ * a request above it is a 400, not a silent clamp.
+ */
+export const ADMIN_MAX_PAGE_SIZE = 200;

@@ -1,12 +1,17 @@
 import { ExecutionContext, HttpStatus } from '@nestjs/common';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { AdminGuard } from '@/common/guards/admin.guard';
+import { signConsoleMarker } from '@/admin/console-marker';
+
+const SECRET = 'topsecret-topsecret-topsecret-topsecret';
+/** A marker the console would send right now. */
+const marker = () => signConsoleMarker(SECRET, Date.now());
 
 /**
  * AdminGuard admits the platform console and nothing else. There is no admin
  * secret to present any more: `ApisixGuard` has already verified the gateway
- * secret, and the internal marker — which APISIX strips from everything it
- * proxies — is what separates a console call from an API-key call.
+ * secret, and the internal marker — a fresh MAC keyed by that secret, which no
+ * API-key caller holds — is what separates a console call from an API-key call.
  */
 /** Asserts the guard denied with a specific status *and* error code. */
 function expectDenied(
@@ -37,7 +42,8 @@ describe('AdminGuard', () => {
         : undefined,
       adminPrincipal: undefined,
     };
-    const guard = new AdminGuard();
+    const config: any = { get: () => ({ gatewaySecret: SECRET }) };
+    const guard = new AdminGuard(config);
     const context = {
       switchToHttp: () => ({ getRequest: () => request }),
       getHandler: () => ({}),
@@ -76,6 +82,29 @@ describe('AdminGuard', () => {
     );
   });
 
+  it('returns 403 for the old bare marker — a misrouted header is not a way in', () => {
+    const { guard, context } = ctx({ 'x-cosmos-internal': '1' });
+    expectDenied(
+      () => guard.canActivate(context),
+      HttpStatus.FORBIDDEN,
+      ApiErrorCode.AdminConsoleOnly,
+    );
+  });
+
+  it('returns 403 for a marker minted with another secret', () => {
+    const { guard, context } = ctx({
+      'x-cosmos-internal': signConsoleMarker(
+        'a-guess-at-the-secret-xyz',
+        Date.now(),
+      ),
+    });
+    expectDenied(
+      () => guard.canActivate(context),
+      HttpStatus.FORBIDDEN,
+      ApiErrorCode.AdminConsoleOnly,
+    );
+  });
+
   it('returns 403 when the marker is explicitly negative', () => {
     const { guard, context } = ctx({ 'x-cosmos-internal': '0' });
     expectDenied(
@@ -87,7 +116,7 @@ describe('AdminGuard', () => {
 
   it('admits a console call and attaches the principal for the audit trail', () => {
     const { guard, context, request } = ctx({
-      'x-cosmos-internal': '1',
+      'x-cosmos-internal': marker(),
       'x-cosmos-admin-role': 'owner',
     });
     expect(guard.canActivate(context)).toBe(true);
@@ -96,7 +125,7 @@ describe('AdminGuard', () => {
 
   it('admits a console call that asserts no role, labelling the audit row', () => {
     const { guard, context, request } = ctx(
-      { 'x-cosmos-internal': '1' },
+      { 'x-cosmos-internal': marker() },
       'cosmos_u9',
     );
     expect(guard.canActivate(context)).toBe(true);
@@ -108,7 +137,7 @@ describe('AdminGuard', () => {
 
   it('does not gate on the asserted role — the console already decided', () => {
     const { guard, context, request } = ctx({
-      'x-cosmos-internal': '1',
+      'x-cosmos-internal': marker(),
       'x-cosmos-admin-role': 'support',
     });
     expect(guard.canActivate(context)).toBe(true);
