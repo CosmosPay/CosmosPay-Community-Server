@@ -34,7 +34,7 @@ export default tseslint.config(
       // Imports are written with the `@/*` (src) and `@generated/*` aliases,
       // never with `./` or `../`. A relative path breaks the moment a file
       // moves and makes the same module read differently from each directory;
-      // the alias is stable and greppable. `tsc-alias` rewrites both back to
+      // the alias is stable and greppable. `nest build` rewrites both back to
       // real relative paths at build time, so `dist` stays plain CommonJS.
       'no-restricted-imports': [
         'error',

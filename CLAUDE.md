@@ -35,18 +35,28 @@ so no alias can address them — the rule is turned off for that directory.
 1. `tsconfig.json` → `compilerOptions.paths` (typecheck + editor)
 2. `package.json` → `jest.moduleNameMapper` (unit tests)
 3. `test/jest-e2e.json` → `moduleNameMapper` (e2e tests)
-4. `package.json` → `build` runs `tsc-alias -p tsconfig.build.json`
+4. `nest build` → its own tsconfig-paths hook rewrites the aliases in `dist/`
 
-Point 4 matters: `tsc` emits `require("@/...")` verbatim and Node cannot resolve
-it, so `tsc-alias` rewrites the aliases back to real relative paths after
-`nest build`. Never drop it from the build script or `npm start:prod` breaks.
-The `ts-node` scripts pass `-r tsconfig-paths/register` for the same reason.
+Point 4 matters: plain `tsc` emits `require("@/...")` verbatim and Node cannot
+resolve it. The Nest CLI's tsc compiler rewrites every alias to a real relative
+path as it emits, so `dist/src/**/*.js` is clean with no extra step — and the
+build then runs `scripts/check-dist-aliases.mjs`, which fails it if any
+`require` of an alias survives. Keep that check: switching the Nest compiler
+(to swc, say) can turn the hook off, and the result builds and dies on boot.
+
+`tsc-alias` used to run after `nest build` and is gone. Diffing its output
+against the bare build showed it changed no runtime file: only `.d.ts`,
+`dist/scripts/` (never run from `dist`) and a code TEMPLATE string in
+`scripts/plugins.ts`, which it corrupted. It also carried the only path to
+`braces`, whose advisory has no patched release. Do not bring it back.
+The `ts-node` scripts pass `-r tsconfig-paths/register` because they never go
+through `nest build`.
 
 **There is no `baseUrl`.** TypeScript 6 deprecates it and 7 removes it, so the
 `paths` entries are written as explicit `"./src/*"` / `"./generated/*"` and
 resolve relative to `tsconfig.json` itself. All four consumers above were checked
-against that: `tsc --noEmit` is clean, `tsc-alias` still rewrites every alias out
-of `dist/` (grep it for `@/` — there are none), and both `ts-node` scripts
+against that: `tsc --noEmit` is clean, `nest build` still rewrites every alias out
+of `dist/src` (`check-dist-aliases.mjs` asserts it), and both `ts-node` scripts
 (`openapi:generate`, `assets:verify`) still resolve. Do not reintroduce it.
 
 `types` IS set, to `["node", "jest"]`, and that is a different thing: TypeScript 6
