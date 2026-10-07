@@ -2074,6 +2074,15 @@ exists on its network, that `contract` matches Horizon's `contract_id`, and that
 the issuer flags match the chain. Run it when editing the registry; it needs
 internet access, so it is not part of the unit tests.
 
+**Registry version 2** adds the network's standard assets to mainnet: Paxos
+PYUSD, Ondo USDY, Glo Dollar, GYEN, AUDD, VNX VCHF, ZEAM ZARZ/USDZ, LINK NGNC,
+Anclap ARS/PEN, CLPX, Etherfuse CETES/USTRY/TESOURO/KTB, Ultra Capital
+yUSDC/yBTC/yETH/BTC/ETH, Fchain XRP, SHX, MOBI, AFR, TFT, LSP and KALE, plus Velo
+(listed, not verified: no home domain). Testnet gains Circle's EURC. Every new
+verified row is backed by its issuer's on-chain `home_domain` and a stellar.toml
+that lists it. The response shape is unchanged; clients that bundle a copy (the
+wallet, the MetaMask Snap) pick the new rows up because the version is higher.
+
 ### Client activity: a new module, a new table and two new scopes
 
 `POST /v1/activity/events` accepts telemetry from the wallet and the developer
