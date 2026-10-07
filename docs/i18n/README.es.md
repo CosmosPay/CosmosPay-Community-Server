@@ -877,7 +877,7 @@ de la cuenta se emiten igual en todas las cadenas (ver
 
 La wallet de código abierto incluye una API key que comparten todos, para que
 cualquiera pueda hacer swaps, agregar liquidez o crear un enlace de pago sin
-registrarse. Esas llamadas pagan la comisión del plan `community` (150 bps, la tarifa
+registrarse. Esas llamadas pagan la comisión del plan `community` (50 bps, la tarifa
 más alta); registrarse permite obtener una menor. El gateway inyecta la tarifa
 exactamente igual que para una key privada (ver `resolvePlanCommissionBps`).
 
@@ -966,7 +966,7 @@ y hacen swaps como siempre.
 **Keys de wallet.** Un inicio de sesión terminado recibe una key `dev` y una `prod`
 bajo el consumidor `cosmos_wallet_<accountId>`, con los scopes, labels y el
 forwarder de consumidor que antes generaba la plataforma (plan `community`, comisión
-de swap `WALLET_KEY_SWAP_FEE_BPS`, 150 bps por defecto). Un segundo inicio de sesión
+de swap `WALLET_KEY_SWAP_FEE_BPS`, 50 bps por defecto). Un segundo inicio de sesión
 devuelve las keys que la cuenta ya tiene en lugar de emitir otro par.
 `organizationId` en la respuesta es el id de la cuenta.
 
@@ -2336,7 +2336,7 @@ Cada variable leída de `process.env` en `src/` se valida en el arranque mediant
 | `APISIX_ADMIN_URL` | con la admin key | — | Base de la Admin API de APISIX, p. ej. `http://apisix:9180/apisix/admin`. Solo se usa para emitir las keys de las cuentas de wallet |
 | `APISIX_ADMIN_KEY` | para el inicio de sesión del wallet | — | Admin key de APISIX. Vale para todo el gateway — ver [Ninguna solicitud depende de la plataforma para desarrolladores](#ninguna-solicitud-depende-de-la-plataforma-para-desarrolladores). Rechazada en un servidor de recuperación |
 | `APISIX_ADMIN_TIMEOUT_MS` | no | `10000` | Presupuesto de una llamada a la Admin API (ms) |
-| `WALLET_KEY_SWAP_FEE_BPS` | no | `150` | Comisión de swap incluida en las keys de las cuentas de wallet (la tarifa del plan `community`) |
+| `WALLET_KEY_SWAP_FEE_BPS` | no | `50` | Comisión de swap incluida en las keys de las cuentas de wallet (la tarifa del plan `community`) |
 | `MAIL_RESEND_API_KEY` | para la puerta de email | — | API key de Resend con la que este servicio envía los códigos de inicio de sesión y de recuperación |
 | `MAIL_FROM` | con la key de Resend / SMTP | — | Remitente verificado, p. ej. `Cosmos Pay <no-reply@example.com>` |
 | `MAIL_SMTP_HOST` | no | — | Servidor SMTP, usado cuando `MAIL_RESEND_API_KEY` no está definida |

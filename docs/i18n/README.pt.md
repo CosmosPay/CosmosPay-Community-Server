@@ -862,7 +862,7 @@ conta são emitidas do mesmo jeito em todas as chains (veja
 
 A carteira open source distribui uma API key que todo mundo compartilha, para que
 qualquer pessoa possa fazer swap, adicionar liquidez ou criar um link de pagamento
-sem se cadastrar. Essas chamadas pagam a comissão do plano `community` (150 bps, a
+sem se cadastrar. Essas chamadas pagam a comissão do plano `community` (50 bps, a
 taxa mais alta); o cadastro dá acesso a uma menor. O gateway injeta a taxa
 exatamente como faz para uma chave privada (veja `resolvePlanCommissionBps`).
 
@@ -948,7 +948,7 @@ swaps normalmente.
 **Chaves de wallet.** Um login concluído recebe uma chave `dev` e uma `prod` sob o
 consumer `cosmos_wallet_<accountId>`, com os scopes, labels e o forwarder de consumer
 que a plataforma gerava (plano `community`, comissão de swap
-`WALLET_KEY_SWAP_FEE_BPS`, 150 bps por padrão). Um segundo login devolve as chaves
+`WALLET_KEY_SWAP_FEE_BPS`, 50 bps por padrão). Um segundo login devolve as chaves
 que a conta já tem em vez de emitir outro par. `organizationId` na resposta é o id
 da conta.
 
@@ -2299,7 +2299,7 @@ Toda variável lida de `process.env` em `src/` é validada no boot por
 | `APISIX_ADMIN_URL` | com a admin key | — | Base da Admin API do APISIX, ex. `http://apisix:9180/apisix/admin`. Usada só para emitir as chaves das contas de wallet |
 | `APISIX_ADMIN_KEY` | para o login da wallet | — | Admin key do APISIX. Vale para todo o gateway — veja [Nenhuma requisição depende da plataforma de desenvolvedores](#nenhuma-requisição-depende-da-plataforma-de-desenvolvedores). Recusada num servidor de recuperação |
 | `APISIX_ADMIN_TIMEOUT_MS` | não | `10000` | Orçamento de uma chamada à Admin API (ms) |
-| `WALLET_KEY_SWAP_FEE_BPS` | não | `150` | Comissão de swap embutida nas chaves das contas de wallet (a taxa do plano `community`) |
+| `WALLET_KEY_SWAP_FEE_BPS` | não | `50` | Comissão de swap embutida nas chaves das contas de wallet (a taxa do plano `community`) |
 | `MAIL_RESEND_API_KEY` | para a porta de email | — | API key do Resend com a qual este serviço envia os códigos de login e de recuperação |
 | `MAIL_FROM` | com a chave do Resend / SMTP | — | Remetente verificado, ex. `Cosmos Pay <no-reply@example.com>` |
 | `MAIL_SMTP_HOST` | não | — | Servidor SMTP, usado quando `MAIL_RESEND_API_KEY` não está definida |
