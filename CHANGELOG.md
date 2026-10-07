@@ -2,6 +2,38 @@
 
 All notable changes to the Cosmos Pay Community Server are documented here.
 Generated from [Conventional Commits](https://www.conventionalcommits.org) by [git-cliff](https://git-cliff.org).
+## [1.5.2] - 2026-10-07
+
+### Features
+- Add endpoint to list all shares for a proven inbox (8844eb5)
+- Update CLAUDE.md with new commands and improve wallet-auth documentation (dd95b2a)
+- Add 503 response for upstream unavailability and implement ApiUpstream decorator (2bc86cb)
+- Update asset registry with new stablecoins and improve test coverage (adb8aac)
+
+### Bug Fixes
+- Require a gateway-secret MAC as the console marker (c3658b5)
+- Check the ledger before recording a rejected relay as FAILED (4167030)
+- Validate receiver country, date, ownership and website formats (70d97e4)
+- Read admin receivers, payins and payouts through an allowlist (17a209b)
+- Validate admin list query strings with DTOs (ac3dd8c)
+- Record payins and payouts before the provider call, and notify a completion once (11722a7)
+- Settle each transaction once across tenants, guard delete (3c7054b)
+- Settle a payment on the oldest intent it pays (7f3bd8e)
+- Stop counting EXPIRED intents as settlement rivals (5a5c214)
+- Never refuse a settlement on a count of rivals (25a8fa7)
+- Honour the ToS cooldown override only for a verified console call (0d17b5a)
+- Patch proxy-addr and smol-toml advisories (9bf4499)
+
+### Miscellaneous
+- Check out Solidity sources with LF on every platform (f7e9580)
+
+### Refactor
+- Remove tsc-alias and implement alias checks in build process (d34b85a)
+
+### Documentation
+- Document the MAC console marker in all seven READMEs (ca81573)
+- Say the request-log flag needs a verified marker; tidy the ops snippet (e211ef9)
+
 ## [1.5.1] - 2026-10-04
 
 ### Dependencies
