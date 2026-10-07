@@ -1,5 +1,9 @@
 import { randomBytes, randomUUID } from 'node:crypto';
-import { Injectable, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  type OnApplicationBootstrap,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { AppConfig } from '@/config/configuration';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
@@ -11,6 +15,7 @@ import {
   consumerForwardingPlugin,
   type ForwardEntry,
   luaSafe,
+  parseForwardMap,
 } from '@/gateway-keys/consumer-forwarder';
 import {
   GATEWAY_KEY_RE,
@@ -56,7 +61,7 @@ function forwardableEmail(email: string): string {
  * credential per sign-in that nobody could revoke by name.
  */
 @Injectable()
-export class WalletKeysService {
+export class WalletKeysService implements OnApplicationBootstrap {
   private readonly logger = new Logger(WalletKeysService.name);
 
   constructor(
@@ -67,6 +72,67 @@ export class WalletKeysService {
   /** Whether this deployment can mint keys at all. */
   get configured(): boolean {
     return this.admin.configured;
+  }
+
+  /** The swap commission (bps) a wallet account's keys are baked with. */
+  private get swapFeeBps(): number {
+    return this.config.get('apisixAdmin', { infer: true }).walletSwapFeeBps;
+  }
+
+  /**
+   * Off the boot path: a gateway that is down must not keep the service from
+   * starting, and the next boot tries again.
+   */
+  onApplicationBootstrap(): void {
+    if (!this.admin.configured) return;
+    void this.rebakeSwapFees().catch((error: unknown) => {
+      this.logger.warn(`wallet keys: fee re-bake skipped: ${String(error)}`);
+    });
+  }
+
+  /**
+   * Re-bakes every wallet consumer whose forwarder carries a swap commission
+   * other than `WALLET_KEY_SWAP_FEE_BPS`.
+   *
+   * The commission is baked into the forwarder at sign-in, so a rate change
+   * would otherwise reach an account only on its next sign-in — and until then
+   * it keeps paying the old one. Only `f` changes: every other field is kept as
+   * it was baked, in the same order, so the body is the one `provision` would
+   * write and its next sign-in skips the consumer write. A body this service
+   * did not write is left alone.
+   */
+  async rebakeSwapFees(): Promise<{ rebaked: number; current: number }> {
+    const fee = this.swapFeeBps;
+    let rebaked = 0;
+    let current = 0;
+    for (const consumer of await this.admin.listWalletConsumers()) {
+      const map = consumer.forwarder
+        ? parseForwardMap(consumer.forwarder)
+        : null;
+      if (!map) continue;
+      const entries = Object.values(map);
+      if (entries.every((entry) => entry.f === fee)) {
+        current++;
+        continue;
+      }
+      for (const entry of entries) entry.f = fee;
+      try {
+        await this.admin.putConsumer(
+          consumer.username,
+          { 'serverless-pre-function': consumerForwardingPlugin(map) },
+          consumer.labels,
+        );
+        rebaked++;
+      } catch (error) {
+        this.logger.warn(
+          `wallet keys: re-baking ${consumer.username} failed: ${String(error)}`,
+        );
+      }
+    }
+    this.logger.log(
+      `wallet keys: swap fee ${fee} bps — ${rebaked} consumer(s) re-baked, ${current} already current`,
+    );
+    return { rebaked, current };
   }
 
   /** The consumer an account's keys live under. */
@@ -178,9 +244,7 @@ export class WalletKeysService {
     organizationId: string,
     email: string,
   ): Record<string, ForwardEntry> {
-    const fee = this.config.get('apisixAdmin', {
-      infer: true,
-    }).walletSwapFeeBps;
+    const fee = this.swapFeeBps;
     const em = forwardableEmail(email);
     const map: Record<string, ForwardEntry> = {};
     for (const c of [...credentials].sort((a, b) => (a.id < b.id ? -1 : 1))) {

@@ -678,7 +678,7 @@ guard 通过**以下任一**信号识别公共消费者：转发的角色（`X-C
 
 平台仍在做的都是它自己的事：开发者的 key、仪表盘，以及由它调用的 `/v1/admin`——从不反向调用。平台宕机时，没人能创建开发者 key 或打开仪表盘；钱包照常登录、付款和兑换。
 
-**钱包 key。** 完成登录后，会在消费者 `cosmos_wallet_<accountId>` 下获得一个 `dev` key 和一个 `prod` key，带有平台以前生成的 scope、label 和消费者 forwarder（套餐 `community`，兑换佣金 `WALLET_KEY_SWAP_FEE_BPS`，默认 50 bps）。第二次登录会返回账户已有的 key，而不是再签发一对。响应中的 `organizationId` 就是账户 id。
+**钱包 key。** 完成登录后，会在消费者 `cosmos_wallet_<accountId>` 下获得一个 `dev` key 和一个 `prod` key，带有平台以前生成的 scope、label 和消费者 forwarder（套餐 `community`，兑换佣金 `WALLET_KEY_SWAP_FEE_BPS`，默认 50 bps）。每次启动都会重新生成仍带有其他费率的钱包消费者，因此 `WALLET_KEY_SWAP_FEE_BPS` 的变更会立即作用于所有账户，而不必等到下次登录。第二次登录会返回账户已有的 key，而不是再签发一对。响应中的 `organizationId` 就是账户 id。
 
 **admin key 是安全上的代价。** APISIX 没有比 admin key 更窄的授权，而 admin key 能改写所有路由。这里的客户端只写入 `cosmos_wallet_` 下的消费者，并在构造请求前拒绝任何其他名称，但这是本代码的承诺，不是 APISIX 的：请像对待 `APISIX_GATEWAY_SECRET` 一样对待 `APISIX_ADMIN_KEY`，只让本服务的 pod 通过网络访问 admin API 而不开放其他任何东西，并且绝不在恢复服务器上设置它（启动会拒绝）。
 

@@ -935,7 +935,9 @@ usual.
 **Wallet keys.** A finished sign-in gets a `dev` and a `prod` key under the
 consumer `cosmos_wallet_<accountId>`, with the scopes, labels and consumer
 forwarder the platform used to bake (plan `community`, swap commission
-`WALLET_KEY_SWAP_FEE_BPS`, default 50 bps). A second sign-in returns the keys the
+`WALLET_KEY_SWAP_FEE_BPS`, default 50 bps). Every boot re-bakes the wallet consumers still carrying another
+rate, so a change to `WALLET_KEY_SWAP_FEE_BPS` reaches every account at once
+instead of on its next sign-in. A second sign-in returns the keys the
 account already has instead of minting another pair. `organizationId` in the
 answer is the account id.
 

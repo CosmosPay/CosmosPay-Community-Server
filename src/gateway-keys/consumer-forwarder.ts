@@ -25,6 +25,26 @@ export function luaSafe(value: string): string {
 }
 
 /**
+ * The map a forwarder body was baked with, or null when the body is not one
+ * `consumerForwardingPlugin` wrote. Every value in the map went through
+ * `luaSafe`, so the first `]==]` closes it.
+ */
+export function parseForwardMap(
+  body: string,
+): Record<string, ForwardEntry> | null {
+  const match = /\[==\[([\s\S]*?)\]==\]/.exec(body);
+  if (!match) return null;
+  try {
+    const map: unknown = JSON.parse(match[1]);
+    return map && typeof map === 'object' && !Array.isArray(map)
+      ? (map as Record<string, ForwardEntry>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * The consumer-level `serverless-pre-function` that turns the key that
  * authenticated into the `X-Consumer-*` headers this service reads.
  *

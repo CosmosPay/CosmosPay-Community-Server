@@ -948,7 +948,9 @@ swaps normalmente.
 **Chaves de wallet.** Um login concluído recebe uma chave `dev` e uma `prod` sob o
 consumer `cosmos_wallet_<accountId>`, com os scopes, labels e o forwarder de consumer
 que a plataforma gerava (plano `community`, comissão de swap
-`WALLET_KEY_SWAP_FEE_BPS`, 50 bps por padrão). Um segundo login devolve as chaves
+`WALLET_KEY_SWAP_FEE_BPS`, 50 bps por padrão). Cada inicialização gera de novo os consumers de wallet que
+ainda carregam outra taxa, então uma mudança de `WALLET_KEY_SWAP_FEE_BPS` chega a
+todas as contas de uma vez, e não só no próximo login. Um segundo login devolve as chaves
 que a conta já tem em vez de emitir outro par. `organizationId` na resposta é o id
 da conta.
 
