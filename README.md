@@ -850,7 +850,7 @@ minted the same way on every chain (see
 
 The open-source wallet ships one API key that everybody shares, so anyone can
 swap, add liquidity or create a pay link without registering. Those calls pay the
-`community` plan's commission (150 bps, the highest rate); registering gets a
+`community` plan's commission (50 bps, the highest rate); registering gets a
 lower one. The gateway injects the rate exactly as it does for a private key
 (see `resolvePlanCommissionBps`).
 
@@ -935,7 +935,7 @@ usual.
 **Wallet keys.** A finished sign-in gets a `dev` and a `prod` key under the
 consumer `cosmos_wallet_<accountId>`, with the scopes, labels and consumer
 forwarder the platform used to bake (plan `community`, swap commission
-`WALLET_KEY_SWAP_FEE_BPS`, default 150 bps). A second sign-in returns the keys the
+`WALLET_KEY_SWAP_FEE_BPS`, default 50 bps). A second sign-in returns the keys the
 account already has instead of minting another pair. `organizationId` in the
 answer is the account id.
 
@@ -2265,7 +2265,7 @@ at least `DATABASE_URL` and `APISIX_GATEWAY_SECRET`.
 | `APISIX_ADMIN_URL` | with the admin key | — | APISIX Admin API base, e.g. `http://apisix:9180/apisix/admin`. Used only to mint wallet accounts' keys |
 | `APISIX_ADMIN_KEY` | for the wallet sign-in | — | APISIX admin key. Gateway-wide — see [No request depends on the developer platform](#no-request-depends-on-the-developer-platform). Refused on a recovery server |
 | `APISIX_ADMIN_TIMEOUT_MS` | no | `10000` | Budget for one Admin API call (ms) |
-| `WALLET_KEY_SWAP_FEE_BPS` | no | `150` | Swap commission baked into wallet accounts' keys (the `community` plan's rate) |
+| `WALLET_KEY_SWAP_FEE_BPS` | no | `50` | Swap commission baked into wallet accounts' keys (the `community` plan's rate) |
 | `MAIL_RESEND_API_KEY` | for the email door | — | Resend API key this service sends sign-in and recovery codes with |
 | `MAIL_FROM` | with the Resend / SMTP key | — | Verified sender, e.g. `Cosmos Pay <no-reply@example.com>` |
 | `MAIL_SMTP_HOST` | no | — | SMTP server, used when `MAIL_RESEND_API_KEY` is unset |
