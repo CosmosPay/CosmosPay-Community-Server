@@ -2,6 +2,11 @@
 
 All notable changes to the Cosmos Pay Community Server are documented here.
 Generated from [Conventional Commits](https://www.conventionalcommits.org) by [git-cliff](https://git-cliff.org).
+## [1.6.0] - 2026-10-07
+
+### Features
+- Wallet accounts pay the community plan's new 0.5% swap rate (c359841)
+
 ## [1.5.2] - 2026-10-07
 
 ### Features
