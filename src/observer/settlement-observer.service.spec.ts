@@ -1,5 +1,9 @@
 import { AdvisoryLockKey } from '@/common/services/advisory-lock.service';
-import { SETTLEMENT_MAX_ROWS_PER_CONSUMER } from '@/observer/observer.constants';
+import {
+  SETTLEMENT_FAILED_LOOKBACK_MS,
+  SETTLEMENT_FAILED_RECHECK_MAX_ROWS,
+  SETTLEMENT_MAX_ROWS_PER_CONSUMER,
+} from '@/observer/observer.constants';
 import { SettlementObserverService } from '@/observer/settlement-observer.service';
 
 /**
@@ -40,7 +44,10 @@ function makePrisma(swaps: any[], operations: any[] = []) {
       rows
         .filter(
           (r) =>
-            where.id.in.includes(r.id) && where.status.in.includes(r.status),
+            where.id.in.includes(r.id) &&
+            (typeof where.status === 'string'
+              ? where.status === r.status
+              : where.status.in.includes(r.status)),
         )
         .map((r) => ({ ...r })),
     ),
@@ -242,6 +249,97 @@ describe('SettlementObserverService — one tick is fair across consumers', () =
   });
 });
 
+describe('SettlementObserverService — re-checks recently FAILED rows', () => {
+  // FAILED is not proof a transaction did not settle: a re-submission refused
+  // `tx_bad_seq` after the wallet broadcast the same envelope is exactly that.
+
+  function make(rows: any[], outcomes: Record<string, Outcome>) {
+    const prisma = makePrisma(rows);
+    prisma.$queryRaw.mockResolvedValue(dealt(...rows.map((r) => r.id)));
+    const { stellar, lookups } = makeStellar(outcomes);
+    const swaps = makeDomain();
+    const observer = new SettlementObserverService(
+      config,
+      prisma as any,
+      stellar as any,
+      makeDomain() as any,
+      swaps as any,
+      {} as any,
+      {} as any,
+    );
+    return { observer, prisma, swaps, lookups };
+  }
+
+  it('deals FAILED rows inside the lookback window, on their own budget', async () => {
+    const { observer, prisma } = make([], {});
+    const before = Date.now();
+
+    await (observer as any).heal('swaps');
+    const after = Date.now();
+
+    const [sql, ...values] = prisma.$queryRaw.mock.calls[0];
+    const text = (sql as string[]).join('?');
+    expect(text).toMatch(/FROM "swap"/);
+    expect(text).toMatch(/"status" = 'FAILED' AND "createdAt" >= \?/);
+    expect(text).toMatch(
+      /PARTITION BY "consumerId" ORDER BY "createdAt" DESC, "id"/,
+    );
+    const [since, perConsumer, limit] = values as [Date, number, number];
+    expect(since.getTime()).toBeGreaterThanOrEqual(
+      before - SETTLEMENT_FAILED_LOOKBACK_MS,
+    );
+    expect(since.getTime()).toBeLessThanOrEqual(
+      after - SETTLEMENT_FAILED_LOOKBACK_MS,
+    );
+    expect(perConsumer).toBe(SETTLEMENT_MAX_ROWS_PER_CONSUMER);
+    expect(limit).toBe(SETTLEMENT_FAILED_RECHECK_MAX_ROWS);
+  });
+
+  it('promotes only a row the ledger shows succeeded, through the announcing finalizer', async () => {
+    const rows = [
+      inflightRow('settled', 'cosmos_u1', { status: 'FAILED' }),
+      inflightRow('failed', 'cosmos_u2', { status: 'FAILED' }),
+      inflightRow('absent', 'cosmos_u3', {
+        status: 'FAILED',
+        expiresAt: new Date(Date.now() - 60_000),
+      }),
+      inflightRow('unknown', 'cosmos_u4', { status: 'FAILED' }),
+    ];
+    const { observer, swaps, lookups } = make(rows, {
+      tx_settled: 'succeeded',
+      tx_failed: 'failed',
+      tx_unknown: 503,
+    });
+
+    await (observer as any).heal('swaps');
+
+    expect(lookups).toEqual([
+      'tx_settled',
+      'tx_failed',
+      'tx_absent',
+      'tx_unknown',
+    ]);
+    expect(swaps.finalizeSucceeded).toHaveBeenCalledTimes(1);
+    expect(swaps.finalizeSucceeded).toHaveBeenCalledWith(
+      'settled',
+      'cosmos_u1',
+    );
+    expect(swaps.finalizeSucceededQuiet).not.toHaveBeenCalled();
+    expect(swaps.finalizeFailed).not.toHaveBeenCalled();
+    expect(swaps.finalizeExpired).not.toHaveBeenCalled();
+  });
+
+  it('looks nothing up when no FAILED row is in the window', async () => {
+    const { observer, prisma, lookups } = make([], {});
+    prisma.$queryRaw.mockResolvedValue([]);
+
+    await (observer as any).heal('liquidity');
+
+    expect(lookups).toHaveLength(0);
+    expect(prisma.liquidityPoolOperation.findMany).not.toHaveBeenCalled();
+  });
+});
+
 describe('SettlementObserverService — runs as a ScheduledJob', () => {
   function observerConfig(overrides: Record<string, unknown> = {}) {
     return {
@@ -310,15 +408,22 @@ describe('SettlementObserverService — runs as a ScheduledJob', () => {
     expect(locks.runExclusive.mock.calls[0][2]).toBe(60_000);
   });
 
-  it('reconciles swaps, then liquidity pool operations, then backfills cost basis', async () => {
+  it('reconciles swaps and liquidity pool operations, re-checks their FAILED rows, then backfills cost basis', async () => {
     const { observer, prisma } = make(observerConfig());
 
     await observer.tick();
 
-    const tables = prisma.$queryRaw.mock.calls.map(
-      ([sql]) => /FROM "(\w+)"/.exec((sql as string[]).join('?'))?.[1],
-    );
-    expect(tables).toEqual(['swap', 'liquidity_pool_operation']);
+    const queries = prisma.$queryRaw.mock.calls.map(([sql]) => {
+      const text = (sql as string[]).join('?');
+      const table = /FROM "(\w+)"/.exec(text)?.[1];
+      return `${table}:${text.includes("'FAILED'") ? 'failed' : 'inflight'}`;
+    });
+    expect(queries).toEqual([
+      'swap:inflight',
+      'liquidity_pool_operation:inflight',
+      'swap:failed',
+      'liquidity_pool_operation:failed',
+    ]);
     expect(prisma.liquidityPoolOperation.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { kind: 'DEPOSIT', status: 'SUCCEEDED', sharesReceived: null },
@@ -327,7 +432,7 @@ describe('SettlementObserverService — runs as a ScheduledJob', () => {
     );
     expect(
       prisma.liquidityPoolOperation.findMany.mock.invocationCallOrder[0],
-    ).toBeGreaterThan(prisma.$queryRaw.mock.invocationCallOrder[1]);
+    ).toBeGreaterThan(prisma.$queryRaw.mock.invocationCallOrder[3]);
   });
 
   it('sweeps nothing on a replica that lost the lock', async () => {

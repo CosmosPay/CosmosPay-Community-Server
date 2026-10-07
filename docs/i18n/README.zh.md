@@ -15,7 +15,7 @@
 
 路由可以通过 `@Public()` 退出该检查（编排器直接访问的健康探针使用了它）。强制检查始终开启——不存在关闭它的开关。本地开发时，请在 APISIX 之后运行，或自行发送 `X-Gateway-Secret` + `X-Consumer-*` 请求头。
 
-`/v1/admin` 是跨租户的，因此 `AdminGuard` 还要求请求携带 `X-Cosmos-Internal`。APISIX 会从它代理的所有请求中**移除**这个请求头，因此只有持有网关密钥、直接调用本服务的后端才能发送它——也就是开发者平台，由它判定当前登录的账户是否为 owner 或 admin。不存在单独的管理员凭证：保护跨租户数据的是网关密钥、网络隔离以及网关路由中的请求头移除列表。
+`/v1/admin` 是跨租户的，因此 `AdminGuard` 还要求 `X-Cosmos-Internal` 携带一个以网关密钥为键的新鲜 MAC（`src/admin/console-marker.ts`）。API key 调用方从不持有这个密钥，因此只有直接调用本服务的后端才能生成它——也就是开发者平台，由它判定当前登录的账户是否为 owner 或 admin。不存在单独的管理员凭证。APISIX 也会从它代理的所有请求中移除这个请求头，但那只是纵深防御：一个忘记剥离它的路由转发的是任何客户端都无法伪造的值。
 
 处理流程：
 
@@ -263,6 +263,7 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | GET | `/v1/sep30/accounts/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | DELETE | `/v1/sep30/accounts/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | POST | `/v1/sep30/accounts/{address}/sign/{signer}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
+| GET | `/v1/sep30/shares` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | PUT | `/v1/sep30/shares/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | GET | `/v1/sep30/shares/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | DELETE | `/v1/sep30/shares/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
@@ -366,7 +367,7 @@ platform 的 `COSMOS_API_URL`，用逗号分隔，然后在那里运行 `npm run
 
 除 `/v1/health` 和 `/docs` 之外，每个入站请求都会由 `LoggingInterceptor` 追加到 `request_log`，并为仪表盘的 **API 日志**视图（`GET /v1/logs`）提供数据。每行包含路径、状态码、耗时，以及——如果存在——付款方的 `ip` / `userAgent`。
 
-仪表盘流量（`X-Cosmos-Internal`）会被**记录并打上标记**（`request_log.internal`），而不是被跳过，API 日志视图基于该列进行过滤，因此任何请求头都无法让流量不进入日志。
+仪表盘流量（经过验证的 `X-Cosmos-Internal` 标记）会被**记录并打上标记**（`request_log.internal`），而不是被跳过，API 日志视图基于该列进行过滤，因此任何请求头都无法让流量不进入日志。
 
 日志行**不会永久保留**。`RequestLogRetentionService` 通过定时器（`REQUEST_LOG_PRUNE_INTERVAL_MS`，默认 **1h**）删除早于 `REQUEST_LOG_RETENTION_DAYS`（默认 **30**）的行。每个周期以较小的 `REQUEST_LOG_PRUNE_BATCH_SIZE` 分块删除（默认 **1000**），并持续循环，直到积压清空或达到 `REQUEST_LOG_PRUNE_MAX_PER_CYCLE`（默认 **50000**），这样大量历史数据可以逐步清理完毕，而无需长时间持有表锁。设置 `REQUEST_LOG_RETENTION_DAYS=0` 可完全禁用清理（服务会在启动时记录这一点）。`(consumer, createdAt)` 上的复合索引可在数据量增长时保持仪表盘查询的速度。
 
@@ -744,6 +745,7 @@ quote → build XDR → customer signs in wallet → POST /submit → Stellar ex
 // response
 { "submitted": true, "status": "SUCCEEDED", "txHash": "…", "swap": { … } }
 // on a network rejection → { "submitted": false, "status": "FAILED", "reason": "…", "resultCodes": ["op_under_dest_min"], "swap": { … } }
+// rejected, outcome not on the ledger yet → { "submitted": false, "status": "SUBMITTED", "reason": "…", "resultCodes": ["tx_bad_seq"], "swap": { … } }
 ```
 
 在广播之前，服务会检查已签名交易的哈希是否与它构建的交易一致，因此它永远不会转发任意交易。swap 会通过同一个分发器触发 `SWAP_CREATED` / `SWAP_SUBMITTED` / `SWAP_SUCCEEDED` / `SWAP_FAILED` webhook 事件。
@@ -928,6 +930,11 @@ EIP-55 写法保存和匹配。
 除了链上支付意图之外，本服务还集成了 [BlindPay](https://www.blindpay.com/docs)，用于在**法币与稳定币**之间转移资金：入金（**onramp / payin**）、出金（**offramp / payout**），以及两者背后必需的 **KYC**（BlindPay *receiver*）。我们**为每个 API key 环境运行一个平台级 BlindPay 实例**——`prod` key 使用生产实例（`BLINDPAY_API_KEY` + `BLINDPAY_INSTANCE_ID`），`dev` key 使用开发实例（`_DEV` 变量）；每个 receiver/钱包/银行账户/payin/payout 都会镜像到我们的 Postgres 中，并**限定在发起调用的 APISIX 消费者范围内**，因此每个集成方只能看到自己的记录。本服务**从不持有区块链密钥**——offramp 返回需要签名的内容（EVM `approve` 合约 / Stellar XDR），并接收签名后的交易，与支付意图完全一样。
 
 状态变更通过 BlindPay 的 **Svix webhook** 同步（基于原始请求体验证），并通过现有的分发器以新的事件类型（`RECEIVER_UPDATED`、`PAYIN_*`、`PAYOUT_*`）**重新发送**到集成方自己的 webhook 端点。
+
+**在请求 BlindPay 创建 payin 或 payout 之前，先记录它。**
+`POST /v1/onramp/payins` 和 `POST /v1/offramp/payouts` 先写入一行状态为 `pending_provider` 的记录，其中带有报价及其执行密钥，然后以该密钥作为 `Idempotency-Key` 调用 BlindPay，最后补上服务商 id。因此，超时或调用之后的写入失败留下的是一行记录，而不是一笔这里无人知晓的付款：用同一报价重试同一个创建请求会复用这一行并重放该密钥，BlindPay 的 webhook 也会按 `quote_id` 补全这一行。在拥有服务商 id 之前，租户读取不会返回这些行。一小时后仍没有 id 的行会变为 `provider_unconfirmed` 并记录日志供运维处理——不会有任何东西重新发送创建请求，因为调用方可能已在此期间通过另一个报价付款。BlindPay 的拒绝（除 408 和 409 之外的任何 4xx）会删除该行。
+
+**匹配不到任何行的 webhook 不会被丢弃。** payin 或 payout 事件会通过它所执行的报价进行归属——归属到生成该报价的 consumer——并在那里创建或修复镜像。仍无法归属的事件会被确认但保持打开状态，BlindPay 对账器（随 `OBSERVER_ENABLED` 开启，每分钟一次，同一时间只在一个副本上运行）会在七天内从 BlindPay 重新读取它，并在每次未命中时记录其 `svix-id`，以便从 Svix 控制台重放该投递。同一个对账器还会重新读取 webhook 停止到达的未结 payin 和 payout，并修复其状态。`PAYIN_COMPLETED` 和 `PAYOUT_COMPLETED` 对每个 payin 或 payout 只发送一次，无论哪条路径最先看到完成——webhook、使用新 `svix-id` 的重发，还是对账器。
 
 | 方法 | 路径                                                  | Scope          | 说明 |
 | ------ | ----------------------------------------------------- | -------------- | ----------- |
@@ -1165,6 +1172,33 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
 
 ## 升级 — 破坏性变更与部署说明
 
+### `X-Cosmos-Internal` 必须携带网关密钥的 MAC
+
+- **单独的 `X-Cosmos-Internal: 1` 会被拒绝。** `/v1/admin` 对它返回 `403 admin_console_only`，调用方也不再在任何地方被视为内部调用：它受按消费者计算的速率限制约束，其请求日志记录也不再被标记。该请求头现在携带 `v1.<unix seconds>.<hex>`——以 `APISIX_GATEWAY_SECRET` 为键的 HMAC-SHA256，在服务器时钟前后五分钟内有效（`src/admin/console-marker.ts`）。
+- **直接调用 `/v1/admin` 的运维脚本必须在每次调用时生成该标记。** 下文 `ADMIN_API_CREDENTIALS` 条目末尾的 `openssl` + `curl` 片段就是这样做的。
+- **本服务与开发者平台一起部署。** 标记现在由控制台生成。旧控制台调用本服务时，每个管理调用都会得到 `403`；新控制台调用旧服务仍然可用，因为旧服务接受除 `0`、`false`、`no` 和 `off` 之外的任何值。如果两者无法同时上线，请先部署开发者平台。
+- **没有新的环境变量。** MAC 以 `APISIX_GATEWAY_SECRET` 为键，本服务和控制台已经共享该密钥。
+
+### 收款人字段与管理列表查询更严格
+
+- **`POST /v1/kyc/receivers` 与 `PUT /v1/kyc/receivers/{id}` 以 `400` 拒绝格式错误的身份字段。** `country` 与 `id_doc_country`（顶层及 `owners[]` 中）必须是大写的 ISO 3166-1 alpha-2 代码（`US`，而非 `us` 或 `USA`）；`date_of_birth`（顶层及 `owners[]` 中）与 `formation_date` 必须是带时区偏移的 ISO 8601 日期时间（`1985-04-12T00:00:00.000Z`，而非 `1985-04-12`）；`owners[].ownership_percentage` 必须是 0 到 100 之间的数字；`website` 必须是不含凭据的绝对 `http`/`https` URL。此前这些值按原样保存，直到审核之后启用收款人时才在 BlindPay 处失败。
+- **`/v1/admin` 列表查询会被校验。** 该列表未知的 `status`、超出 1–200 的 `take`、负数 `skip` 或路由不接受的参数现在返回 `400`；此前无效的 `status` 会到达数据库并以 `500` 返回。默认值不变（`take=50`、`skip=0`）。
+- **管理端对收款人、payin 与 payout 的读取返回显式字段列表。** 字段与此前返回的相同；之后加入这些表的列在被列出之前不会返回。
+
+### BlindPay：在调用服务商之前写入行，每笔付款只完成一次
+
+- **迁移 `20261006120000_blindpay_pending_rows`** 将 `payin.blindpayId` 和 `payout.blindpayId` 改为可为空，为两者添加 `executionKey`（唯一）和 `lastCheckedAt`，并为 `blindpay_webhook_event` 添加 `environment`、`blindpayId`、`appliedAt` 和 `lastAttemptAt`。现有的投递行会被标记为已应用。
+- **任何响应的结构都不变。** 仍在等待服务商 id 的行（`pending_provider`、`provider_unconfirmed`）不会由租户路由返回；管理列表 `/v1/admin/payins` 和 `/v1/admin/payouts` 会显示它们，`blindpayId` 为 `null`。
+- **`PAYIN_COMPLETED` 和 `PAYOUT_COMPLETED` 会去重**，与其他终态事件一样：使用新 `svix-id` 的第二次完成不再产生带有新 `evt_` 的第二个事件。其他 BlindPay 事件只有在行确实发生变化时才会重新发送。
+- **BlindPay 对账器随结算观察器运行**（`OBSERVER_ENABLED`）；关闭观察器也会关闭它。
+
+### Payment intents：一笔交易只结算一个 intent，跨所有 tenant
+
+- **迁移 `20261006130000_payment_settlement`** 新增 `payment_settlement` 表，并从每个 SUCCEEDED intent 回填。若同一哈希已结算多个 intent，则最早的那个保留占用；迁移文件中附有列出其余 intent 以供核查的查询。
+- **已经结算过某个 payment intent（无论属于哪个 consumer）的交易，不再结算其他 intent。** `POST /v1/payment-intents/{id}/validate` 以及带 `status: SUCCEEDED` 的 `PATCH /v1/payment-intents/{id}` 返回 `409 transaction_already_settled`，intent 保持原状。目标地址不绑定 consumer，memo 由调用方自选，因此另一个 tenant（或共享公钥下的任何调用方）可以逐项复制一个 intent，并被其付款人的交易结算。observer 将这种匹配视为未付款：intent 保持 PENDING，并以未付款状态过期。
+- **付款归属于它所支付的最早的 intent。** 当交易同时支付了另一个 consumer 的更早的 intent 时，当前 intent 同样得到 `409 transaction_already_settled`；因此在原始 intent 之后创建的副本即使先执行结算也会失败，原始 intent 会在下一轮结算。在原始 intent 之前创建的副本则会胜出，但仅限于其仍处于开放状态时：EXPIRED 的 intent 不优先于任何 intent，因此副本一旦过期，原始 intent 即可结算。创建这种副本需要预先知道原始 intent 的 memo，因此请让本服务生成 memo（省略 `memo`），而不是发送订单号等可预测的 memo。这条规则的另一面：在原始 intent 过期之后到达的付款，可能归属于一个尚未过期的较新副本。在 Monad 上，这也涵盖支付到另一个 intent 的存款地址的副本，即使该付款已由 relayer 的转发以另一个哈希结算。只有链上确认已被支付的竞争 intent 才会拒绝一次结算，竞争 intent 的数量本身永远不会；并且竞争 intent 必须描述同一笔付款（在 Stellar 上为 memo、目标地址、资产和金额）。**没有 relayer 的 Monad 是例外：**直接付款不携带任何属于该 intent 自身的信息——目标地址、代币和金额都是公开的——因此同一地址、同一金额的两个直接模式 intent 无法区分，也不按创建时间排序；先结算者获得该付款。请在 Monad 上使用 relayer 的存款地址，在 Stellar 上使用由本服务生成的 memo。
+- **`DELETE /v1/payment-intents/{id}` 返回 `409 operation_in_flight`**：当 intent 的状态在读取与删除之间发生变化时（通常是刚刚被支付）。此前它仍会被删除。
+
 ### 钱包登录：已恢复钱包的签名者跟随 `STELLAR_NETWORK`
 
 - **`WALLET_AUTH_SIGNERS_HORIZON_URL` 现在默认使用 `STELLAR_NETWORK` 对应的 Horizon**（`STELLAR_HORIZON_URL_PUBLIC` / `STELLAR_HORIZON_URL_TESTNET`，否则使用 SDF 的），而不再总是公共网络的。当通过 SEP-30 恢复的钱包用替换其主密钥的那把密钥签署 `POST /v1/wallet/auth/finish` 时会读取它。在 testnet 部署上，查询原本发往主网，找不到账户，于是每个已恢复钱包的登录都返回 `400 wallet_signature_invalid`。
@@ -1184,6 +1218,10 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
 - **由此增加的信任：** 单独一台服务器只持有随机噪声。两台服务器联合，或控制该邮箱且让两台服务器都
   接受它的人，可以打开带有此门的备份。请将两台服务器部署在彼此独立的基础设施上，并使用不同的
   `MAIL_*` 发件方，这正是 SEP-30 已有的要求。
+- **`GET /v1/sep30/shares`（不带地址）列出以已验证邮箱登记的每一半密钥**，与
+  `GET /v1/sep30/accounts` 一样按 `after` 分页。用同一邮箱备份了多个钱包的人会同时忘记所有钱包的密码；
+  现在每台服务器一次证明即可取回全部备份，而不只是最新的一个。仅接受身份令牌：账户的 SEP-10 令牌会得到
+  `403`，因为它已经可以按地址取回自己那一半。
 - **`isBackupBox` 接受 `v: 4` 盒子中的一个 `recovery` 槽位**，且旁边至少要有一个密码或 passkey
   槽位。唯一一道门是 `recovery` 的盒子会被拒绝。
 - **恢复服务器发送的邮件验证码** 现在也会发往在该服务器上仅持有一半备份密钥的邮箱。
@@ -1344,6 +1382,7 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
 | 当 receiver、或拥有 `blockchain_wallet_id` 的 receiver 被停用时，`POST /v1/onramp/receivers/:id/virtual-accounts` 返回 `403 account_disabled` | 没有正当用户会注意到 | 这是熔断开关此前唯一没有覆盖到的法币操作：被停用的账户仍能开出一条新的入金通道 |
 | `POST /v1/swaps/:id/submit` 和 `POST /v1/liquidity-pools/operations/:id/submit` 会最先检查信封：无法解析、不是该行自己的信封，或不携带任何签名的请求体，无论该行处于什么状态都返回 `400 validation_failed`。任意的 `signedXdr` 不会再返回一行 `SUCCEEDED`，而 `EXPIRED` 行面对不匹配的请求体会返回 `validation_failed`，而不是 `invalid_state_transition` | 提交未签名的 `xdr` 并依赖 `tx_bad_auth` 拒绝的客户端 | 签名不会改变交易的哈希，因此未签名的信封可能被循环转发并遭拒绝，而在共享公共 key 下，仅凭一个行 id 就能读到一笔已结算的记录 |
 | 两个提交路由都会拒绝一个已超出时间边界的信封（`400 invalid_state_transition`，不会广播；如果它已经上链，观察器仍会将其结算），以及一行已经重新提交过 3 次的 `FAILED` 记录（`400 invalid_state_transition`：请构建一笔新的）。在 `503 provider_unavailable` 之后的重试不计入次数 | 在循环中重试提交的客户端：遇到 `invalid_state_transition` 就应停止 | 每一次被拒绝的重新提交都是一次 Horizon 提交和一个新的终态 webhook 事件，且此前没有任何上限 |
+| 被拒绝的提交在记录之前会先与账本核对。已经上链且成功的交易（钱包自行广播了它，重新提交返回 `tx_bad_seq`）会返回 `SUCCEEDED` 并触发 `*_SUCCEEDED`；账本暂时还无法给出结果的交易会返回 `submitted: false` 和 `status: "SUBMITTED"`，并保持进行中，交由观察器处理。观察器还会重新检查最近 24 小时内创建的 `FAILED` 记录，并将其交易已结算的记录提升为成功，在先前的 `*_FAILED` 之后触发 `*_SUCCEEDED` | 将 `submitted: false` 视为最终结果的客户端：请检查 `status`，并把同一资源在 `*_FAILED` 之后收到的 `*_SUCCEEDED` 视为更正 | 一笔已结算的兑换或存入可能被永久记录为 `FAILED`，既没有成功 webhook，存入也没有成本基础 |
 | 两个提交路由都允许每个消费者和客户端地址每分钟调用 20 次，各自使用独立的额度（`429 rate_limited`） | 位于同一 NAT 之后、共用公共 key 的钱包 | 这两个路由都接受共享公共 key，且每次调用都可能向 Horizon 广播 |
 | `GET /v1/webhooks`、`GET /v1/webhooks/:id` 和 `PATCH /v1/webhooks/:id` 只返回已发布的端点字段；`POST /v1/webhooks` 和 `POST /v1/webhooks/:id/rotate-secret` 在此基础上额外返回 `secret`。`consumerId`、`previousSecret` 和 `previousSecretExpiresAt` 从这五个路由的响应中全部移除 | 读取这些字段的调用方 | `previousSecret` 是一个集成方可能仍在接受的签名密钥，而只持有 `webhooks:read` 的 key 就能读到它 |
 | 一个与该别名任何一次有效恢复都不匹配的 token，不再计入该次恢复的尝试次数。一个有效的 token 在每次提交时都会消耗一次用量，包括之后 challenge 或签名验证失败的那次；第五次之后返回 `400 alias_recovery_invalid` | 没有正当用户会注意到 | 别名名称是公开的，因此任何一个 key 发送的五个垃圾 token 就能耗尽控制台发起的每一次恢复 |
@@ -1365,6 +1404,7 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
 | `POST /v1/wallet/auth/finish` 和 `PUT /v1/wallet/backup` 现在也接受 `v: 3` 备份盒：种子由一个随机数据密钥加密，该密钥在 `slots` 中按每扇门各封装一次（`kind: "password"` 或 `kind: "passkey"`，最多 8 个）。每个密码门都与 `v: 2` 盒遵守同样的 PBKDF2 下限；passkey 门没有成本，因为其密钥是认证器的 WebAuthn PRF 输出。`v: 2` 盒保持不变 | 钱包：仅含 passkey 的备份是有效的，写入这种备份的钱包需要此服务器 | 让用户用 passkey 而不是输入原密码来恢复，且本服务从不持有能打开备份盒的密钥 |
 | `POST /v1/wallet/auth/oauth/authorize` 接受可选的 `returnTo`。当它列在 `WALLET_AUTH_RETURN_URLS` 中时，`GET /v1/wallet/auth/oauth/callback/{provider}` 不再渲染页面，而是以 `302` 重定向到它，附带 `?state=…`（失败时另加 `&error=<reason>`）；未列出的返回 `400 wallet_return_url_not_allowed`。只传递 `state`——握手仍需用 PKCE verifier 兑换。请先执行迁移 `20260927180000_wallet_auth_return_to` | 原生钱包（桌面和移动端）：发送 `returnTo` 并在操作系统中注册该 URL | 平台的认证会话（`ASWebAuthenticationSession`、Custom Tab、桌面 deep link 或 loopback 监听）只有在浏览器到达应用自己的 URL 时才会关闭，因此用户会停留在页面上，只能手动关闭 |
 | `GET /v1/wallet/auth/providers` 还会返回 `mfaSettingsUrl`：Authentik 账户中用户添加或移除第二因素（安全密钥或 passkey、身份验证器应用、恢复码）的页面，没有会话时先经过 Authentik 登录；没有 Authentik 时为 `null`。钱包登录时第二因素是可选的——`deploy/authentik/wallet-sign-in.yaml` 将 MFA 阶段改回 *skip*，在输入密码后向已有因素的用户索取它，允许 passkey 在用户名页面直接登录，并在输入密码后为没有任何因素的用户提供选择（暂不、安全密钥、身份验证器应用）。它还在注册页面的表单上方加入 Google / GitHub。密码登录和注册保持不变 | 运行 Authentik 的运维：导入该 blueprint。钱包：将该 URL 作为一项设置提供 | 第二因素要么对所有人强制，要么无法到达：钱包用户从不打开 Authentik 自身的设置，设置 flow 会拒绝没有 Authentik 会话的浏览器，而识别阶段的 passwordless 按钮指向同一个 flow，只会重新加载页面 |
+| `/v1/admin` 要求 `X-Cosmos-Internal` 携带以 `APISIX_GATEWAY_SECRET` 为键的新鲜 MAC（`v1.<unix seconds>.<hex>`，五分钟内有效）；单独的 `1` 返回 `403 admin_console_only`，并且只有经过验证的标记才能让调用方免受按消费者计算的速率限制或标记其请求日志记录 | 直接调用 `/v1/admin` 的运维脚本，以及未随本变更一起部署的开发者平台 | 除 `0`、`false`、`no` 或 `off` 之外的任何值都算数，因此只要有一个 APISIX 路由忘记剥离该请求头，每个 API key 就能获得跨租户管理接口、速率限制豁免，以及在租户请求日志中隐藏自身调用的方法 |
 
 随之而来的部署说明：
 
@@ -1477,9 +1517,10 @@ WHERE NOT i.indisvalid;
 它是叠加在开发者平台自身角色检查之上的第二道管理员检查，跳过它的部署在控制台发起跨租户读取时会得到 `401 admin_credentials_required`。现在 `/v1/admin` 只接受来自平台控制台的请求，这由请求上的两点来确认：
 
 1. `X-Gateway-Secret` 与 `APISIX_GATEWAY_SECRET` 匹配——由 `ApisixGuard` 检查，与其他所有路由一样。只有网关和控制台后端持有它。
-2. 存在 `X-Cosmos-Internal`。APISIX 会从它代理的每个请求中剥离该请求头（`proxy-rewrite.headers.remove`），因此 API key 调用方无法携带它；只有持有网关密钥的后端发起的直接调用才能携带。
+2. `X-Cosmos-Internal` 是控制台标记：`v1.<unix seconds>.<hex>`，其中 hex 为 `HMAC-SHA256(APISIX_GATEWAY_SECRET, "cosmos-admin-console:v1:" +
+   seconds)`，且时间戳与服务器时钟相差不超过五分钟。API key 调用方不持有网关密钥，因此即使通过一个忘记剥离该请求头的路由（`proxy-rewrite.headers.remove`）也无法生成它。正是这个经过验证的标志让控制台免受按消费者计算的速率限制，并在请求日志中标记它的记录。
 
-第 2 点依赖于开发者平台仓库中的网关路由配置，而不是本服务持有的密钥。作为交换，控制台是唯一决定谁是平台管理员的地方，并且审计记录会记下执行操作的控制台账户（`cosmos_<userId>`）及其平台角色，每次变更**和**每次读取都会记录。
+单独的 `X-Cosmos-Internal: 1`——控制台以前发送的值——会像任何其他伪造一样被拒绝，因此本服务和开发者平台必须一起部署。两个仓库为该标记固定了同一个测试向量。控制台是唯一决定谁是平台管理员的地方，并且审计记录会记下执行操作的控制台账户（`cosmos_<userId>`）及其平台角色，每次变更**和**每次读取都会记录。
 
 这对调用方意味着什么：
 
@@ -1489,7 +1530,13 @@ WHERE NOT i.indisvalid;
 | `read` 凭证执行变更操作时返回 `403` `admin_role_required` | 已移除——控制台已经判定该账户可以执行操作 |
 | 审计记录上的 `actorId` / `actorRole` 指的是凭证 | 它们指的是控制台账户及其平台角色 |
 
-要直接调用 `/v1/admin`（例如从运维脚本），请发送 `X-Gateway-Secret`、`X-Consumer-Username` 和 `X-Cosmos-Internal: 1`；再添加 `X-Cosmos-Admin-Role: owner` 为审计记录打上标签。请让服务远离公网。
+要直接调用 `/v1/admin`（例如从运维脚本），请发送 `X-Gateway-Secret`、`X-Consumer-Username` 和一个新生成的 `X-Cosmos-Internal`；再添加 `X-Cosmos-Admin-Role: owner` 为审计记录打上标签。请让服务远离公网。
+
+```sh
+TS=$(date +%s)
+MAC=$(printf 'cosmos-admin-console:v1:%s' "$TS" | openssl dgst -sha256 -hmac "$APISIX_GATEWAY_SECRET" -r | cut -d' ' -f1)
+curl -H "X-Gateway-Secret: $APISIX_GATEWAY_SECRET" -H "X-Consumer-Username: ops" -H "X-Cosmos-Internal: v1.$TS.$MAC" http://localhost:3000/v1/admin/summary
+```
 
 ### `APISIX_GATEWAY_SECRET` 现在要求 32 个字符
 
@@ -1705,6 +1752,6 @@ npm run readme:check     # the seven READMEs match in structure and list every r
 
 `key-auth` 在认证成功后会把 `X-Consumer-Username` / `X-Credential-Identifier` 转发给上游，并覆盖客户端提供的任何副本，guard 正是依赖这一点。
 
-> **移除列表是一项安全控制，而且无法在本仓库中验证。** 本服务对列表中的每个请求头都照单全收；`X-Gateway-Secret` 只能证明请求经过了网关，而不能证明这些值是可信的。每当添加或复制路由时都要审查这个列表——一个没有剥离 `X-Cosmos-Internal` 的路由会让每个 API key 都能访问 `/v1/admin`。请让服务位于私有网络中，使 APISIX 成为唯一入口；共享密钥是第二层防护，而不是唯一的一层。
+> **移除列表是一项安全控制，而且无法在本仓库中验证。** 本服务对列表中的每个请求头都照单全收；`X-Gateway-Secret` 只能证明请求经过了网关，而不能证明这些值是可信的。每当添加或复制路由时都要审查这个列表。`X-Cosmos-Internal` 已不再依赖它——服务会验证以网关密钥为键的 MAC——但每个 `X-Consumer-*` 请求头仍然依赖它，一个转发客户端副本的路由会让客户端冒充任意消费者。请让服务位于私有网络中，使 APISIX 成为唯一入口；共享密钥是第二层防护，而不是唯一的一层。
 >
 > 在生产环境中，缺少 `X-Plan-Swap-Fee-Bps` 会返回 `503`，而不是回退到环境变量的默认值。

@@ -1,8 +1,11 @@
 /**
- * PARSE the dev platform's ToS email-resend cooldown headers — `X-Cosmos-Internal: 1`
- * marks the call as dashboard-internal and `X-Cosmos-Tos-Cooldown-Ms` carries the
- * role-derived value (owner → 0, admin → 60000). Returns undefined for a missing or
- * invalid pair, which means "use the 24h default".
+ * PARSE the dev platform's ToS email-resend cooldown header — `X-Cosmos-Tos-Cooldown-Ms`
+ * carries the role-derived value (owner → 0, admin → 60000) — for a call already known to
+ * be dashboard-internal. `internal` is the VERIFIED console flag (a valid
+ * `X-Cosmos-Internal` MAC, see `src/admin/console-marker.ts`), never the raw header:
+ * this used to compare the header to `'1'` on its own, a fourth reader of the marker
+ * that the MAC check would otherwise have bypassed. Returns undefined when the call is
+ * not internal or the value is missing or invalid, which means "use the 24h default".
  *
  * It lives beside the receivers service rather than inside it because two controllers
  * read these headers — the tenant `ReceiversController` and the platform
@@ -26,12 +29,9 @@
  * there lands in the admin audit trail under the console account that did it.
  */
 export function resolveTosCooldownMs(
-  internalHeader?: string | string[],
+  internal: boolean,
   cooldownHeader?: string | string[],
 ): number | undefined {
-  const internal =
-    (Array.isArray(internalHeader) ? internalHeader[0] : internalHeader) ===
-    '1';
   if (!internal) return undefined;
   const raw = Array.isArray(cooldownHeader)
     ? cooldownHeader[0]

@@ -10,7 +10,7 @@
     "node": ">=24.9.0"
   },
   "scripts": {
-    "build": "prisma generate && nest build && tsc-alias -p tsconfig.build.json",
+    "build": "prisma generate && nest build && node scripts/check-dist-aliases.mjs",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "dev": "prisma migrate deploy && nest start --watch --exec \"node --no-node-snapshot\"",
     "start": "nest start --exec \"node --no-node-snapshot\"",
@@ -91,7 +91,6 @@
     "ts-jest": "^29.4.14",
     "ts-loader": "^9.6.2",
     "ts-node": "^10.9.2",
-    "tsc-alias": "^1.9.5",
     "tsconfig-paths": "^4.2.0",
     "typescript-eslint": "^8.71.0",
     "yaml": "^2.9.1"

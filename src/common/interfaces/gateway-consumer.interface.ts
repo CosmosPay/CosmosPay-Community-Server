@@ -56,10 +56,11 @@ export interface GatewayConsumer {
    */
   email?: string | null;
   /**
-   * True for a server-to-server call from the platform console
-   * (`X-Cosmos-Internal`), a marker APISIX strips from every client request. It
-   * is only meaningful behind ApisixGuard's gateway-secret check, which runs
-   * before every handler that reads it.
+   * True for a server-to-server call from the platform console: an
+   * `X-Cosmos-Internal` marker that verified as a fresh MAC keyed by the gateway
+   * secret (`src/admin/console-marker.ts`). It exempts the caller from per-consumer
+   * rate limits and flags its request-log rows, so it must never be set from the
+   * header's mere presence.
    */
   internal?: boolean;
 }

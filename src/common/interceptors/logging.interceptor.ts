@@ -101,8 +101,10 @@ export class LoggingInterceptor implements NestInterceptor {
     // This used to `return` here, which meant anyone who could set
     // `X-Cosmos-Internal` kept their requests out of the audit log entirely —
     // a request header must never be able to make traffic invisible. The
-    // API-log view filters on the column instead (analytics.apiLogs).
-    const internal = request.headers['x-cosmos-internal'] !== undefined;
+    // API-log view filters on the column instead (analytics.apiLogs). The flag is
+    // the middleware's VERIFIED one, not the header's presence: a forged header
+    // would otherwise move a tenant's own calls out of the view they audit.
+    const internal = request.gatewayConsumer?.internal === true;
 
     const ua = request.headers['user-agent'] as string | string[] | undefined;
     this.prisma.requestLog

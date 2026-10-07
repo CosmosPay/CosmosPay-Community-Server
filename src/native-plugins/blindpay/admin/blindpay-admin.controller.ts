@@ -12,8 +12,8 @@ import {
 } from '@nestjs/common';
 import { ApiExcludeController } from '@nestjs/swagger';
 import type { AdminPrincipal } from '@/admin/admin-auth';
-import { toNum } from '@/admin/admin-list';
 import { AdminReadAuditInterceptor } from '@/admin/admin-read-audit.interceptor';
+import { AdminConsumerListQueryDto } from '@/admin/dto/admin-list.query.dto';
 import { CurrentAdmin } from '@/common/decorators/current-admin.decorator';
 import { AdminGuard } from '@/common/guards/admin.guard';
 import { BlindpayAdminService } from '@/native-plugins/blindpay/admin/blindpay-admin.service';
@@ -37,42 +37,18 @@ export class BlindpayAdminController {
   constructor(private readonly admin: BlindpayAdminService) {}
 
   @Get('receivers')
-  receivers(
-    @Query('consumer') consumer?: string,
-    @Query('take') take?: string,
-    @Query('skip') skip?: string,
-  ) {
-    return this.admin.receivers({
-      consumer,
-      take: toNum(take),
-      skip: toNum(skip),
-    });
+  receivers(@Query() q: AdminConsumerListQueryDto) {
+    return this.admin.receivers(q);
   }
 
   @Get('payins')
-  payins(
-    @Query('consumer') consumer?: string,
-    @Query('take') take?: string,
-    @Query('skip') skip?: string,
-  ) {
-    return this.admin.payins({
-      consumer,
-      take: toNum(take),
-      skip: toNum(skip),
-    });
+  payins(@Query() q: AdminConsumerListQueryDto) {
+    return this.admin.payins(q);
   }
 
   @Get('payouts')
-  payouts(
-    @Query('consumer') consumer?: string,
-    @Query('take') take?: string,
-    @Query('skip') skip?: string,
-  ) {
-    return this.admin.payouts({
-      consumer,
-      take: toNum(take),
-      skip: toNum(skip),
-    });
+  payouts(@Query() q: AdminConsumerListQueryDto) {
+    return this.admin.payouts(q);
   }
 
   @Patch('receivers/:id/access')
@@ -112,14 +88,14 @@ export class BlindpayAdminController {
     @CurrentAdmin() actor: AdminPrincipal,
     @Param('id') id: string,
     @Body() dto: RequestTosDto,
-    @Headers('x-cosmos-internal') internal?: string,
     @Headers('x-cosmos-tos-cooldown-ms') cooldown?: string,
   ) {
+    // Behind AdminGuard, so the console marker has already verified.
     return this.admin.requestReceiverTos(
       id,
       dto,
       actor,
-      resolveTosCooldownMs(internal, cooldown),
+      resolveTosCooldownMs(true, cooldown),
     );
   }
 }

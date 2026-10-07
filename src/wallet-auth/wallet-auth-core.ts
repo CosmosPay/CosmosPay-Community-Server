@@ -426,9 +426,9 @@ export function readSessionToken(
  * The challenge a device signs to finish a sign-in: it binds the proven email to
  * the address whose key the device holds, at a moment.
  *
- * MUST match the wallet byte for byte (`finishMessage` in its `src/lib/signIn.ts`)
- * and the developer platform's copy. All three pin the same literal in their own
- * tests; change one and no sign-in can finish.
+ * MUST match the wallet byte for byte (`finishMessage` in its `src/lib/signIn.ts`).
+ * Both sides pin the same literal in a test — `wallet-auth-core.spec.ts` here,
+ * `tests/unit/signIn.test.ts` in the wallet; change one and no sign-in can finish.
  *
  * A distinct first line from every other message this service verifies, so a
  * signature made for one flow is worth nothing in another.
@@ -609,7 +609,8 @@ function argon2CostOk(
 }
 
 /**
- * One door of a v3 box: the data key, sealed under a password or a passkey.
+ * One door of a v3 or v4 box: the data key, sealed under a password, a passkey
+ * or (v4) the recovery key.
  *
  * A password slot is held to the same cost floor a v2 box is — it is exactly as
  * exposed to whoever reads this table. A passkey slot has no cost to check: its
@@ -659,16 +660,18 @@ function recoveryDoorsOk(slots: Json[]): boolean {
 /**
  * Is this a box the wallet could have produced?
  *
- * Two shapes, both the wallet's sealed-box JSON:
+ * Three shapes, all the wallet's sealed-box JSON:
  *
  *  - `v: 2` — the seed sealed straight under a password: a salt, an IV, the
  *    ciphertext and the PBKDF2 cost.
  *  - `v: 3` — the seed sealed under a random data key, and that key sealed once
- *    per door in `slots`: a password, a passkey, or both. It is what lets a person
- *    restore with a fingerprint and no password at all.
+ *    per door in `slots`: a password (PBKDF2), a passkey, or both. It is what
+ *    lets a person restore with a fingerprint and no password at all.
+ *  - `v: 4` — the same slots, but its password door is Argon2id (never PBKDF2),
+ *    and it may add one recovery door, never as the only one.
  *
- * Nothing that would let either sit here as something weaker: every password
- * door meets the cost floor, whichever version carries it. Structure only —
+ * Nothing that would let any of them sit here as something weaker: every password
+ * door meets its KDF's cost floor, whichever version carries it. Structure only —
  * whether it OPENS is a question for a secret this service never sees.
  */
 export function isBackupBox(box: string): boolean {

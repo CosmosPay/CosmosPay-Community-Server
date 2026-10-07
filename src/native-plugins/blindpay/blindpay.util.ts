@@ -1,5 +1,8 @@
+import { HttpException } from '@nestjs/common';
 import type { Prisma } from '@generated/prisma/client';
+import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import {
+  BLINDPAY_AMBIGUOUS_CLIENT_STATUSES,
   EPOCH_SECONDS_CEILING,
   MIRROR_FRESHNESS_MS,
 } from '@/native-plugins/blindpay/blindpay.constants';
@@ -67,4 +70,24 @@ export function quoteExpiresAt(value: unknown): Date | null {
     return null;
   }
   return new Date(value < EPOCH_SECONDS_CEILING ? value * 1000 : value);
+}
+
+/**
+ * True when a failed provider call certainly created nothing: BlindPay refused
+ * it with a 4xx that is not {@link BLINDPAY_AMBIGUOUS_CLIENT_STATUSES}, or the
+ * instance is not configured and the request never left. A timeout, a 5xx or a
+ * transport failure is NOT a refusal — the provider may have acted before the
+ * answer was lost, so a row opened for the call has to stay.
+ */
+export function isProviderRefusal(err: unknown): boolean {
+  if (err instanceof ApiError && err.code === ApiErrorCode.Misconfigured) {
+    return true;
+  }
+  if (!(err instanceof HttpException)) return false;
+  const status = err.getStatus();
+  return (
+    status >= 400 &&
+    status < 500 &&
+    !BLINDPAY_AMBIGUOUS_CLIENT_STATUSES.includes(status)
+  );
 }

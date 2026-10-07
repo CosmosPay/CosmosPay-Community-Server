@@ -83,6 +83,34 @@ describe.each(cases)(
       expect(prisma[other].findMany).not.toHaveBeenCalled();
     });
 
+    it('deals its own FAILED rows created since the cutoff, newest first per consumer', async () => {
+      const prisma = makePrisma();
+      prisma.$queryRaw.mockResolvedValue([{ id: 'a' }, { id: 'b' }]);
+      const reread = [{ id: 'b' }];
+      prisma[delegate].findMany.mockResolvedValue(reread);
+      const since = new Date('2026-10-01T00:00:00Z');
+
+      const rows = await build(prisma as any, {} as any).selectRecentlyFailed(
+        10,
+        since,
+      );
+
+      const [sql, ...values] = prisma.$queryRaw.mock.calls[0];
+      const text = (sql as string[]).join('?');
+      expect(text).toContain(`FROM "${table}"`);
+      expect(text).toMatch(/"status" = 'FAILED' AND "createdAt" >= \?/);
+      expect(text).toMatch(/ORDER BY "rank", "createdAt" DESC, "id"/);
+      expect(values).toEqual([since, SETTLEMENT_MAX_ROWS_PER_CONSUMER, 10]);
+      // Re-read still FAILED, so a row resubmitted in between is not looked up.
+      expect(rows).toBe(reread);
+      expect(prisma[delegate].findMany).toHaveBeenCalledWith({
+        where: { id: { in: ['a', 'b'] }, status: 'FAILED' },
+        include: { consumer: true },
+        orderBy: { createdAt: 'desc' },
+      });
+      expect(prisma[other].findMany).not.toHaveBeenCalled();
+    });
+
     it('reads nothing further when nothing was dealt', async () => {
       const prisma = makePrisma();
 

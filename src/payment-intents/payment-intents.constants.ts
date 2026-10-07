@@ -140,3 +140,21 @@ export const PAYMENT_INTENT_BUILD_RATE_LIMIT = {
   limit: 30,
   windowMs: 60 * 1000,
 };
+
+/**
+ * The most older intents a settlement asks the chain about before it claims a
+ * transaction (`settlement-rivals.ts`): rivals of other consumers that the same
+ * payment may also pay, and that therefore outrank the intent being settled.
+ * Each one costs a verifier call, so this is the bound on those calls.
+ *
+ * Only the OLDEST this many are asked about, and if none of them is paid the
+ * intent settles; rivals past them are left to the claim, first come. A count
+ * never refuses a settlement. It used to: past the cap the intent was refused
+ * without asking the chain, so six junk intents at a merchant's address
+ * refused every settlement the merchant made after them. Oldest first, because
+ * that is the order precedence runs in: an original is the oldest intent its
+ * payment pays, so it is in the window unless more than this many older ones
+ * describe the same payment — which, for a rival to be admitted at all, means
+ * the same memo, destination, asset and amount (`SETTLEMENT_RIVAL_FILTERS`).
+ */
+export const SETTLEMENT_RIVALS_MAX = 5;

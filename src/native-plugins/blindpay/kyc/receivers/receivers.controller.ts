@@ -153,7 +153,7 @@ export class ReceiversController {
       id,
       dto,
       resolveTosCooldownMs(
-        request.headers['x-cosmos-internal'],
+        consumer.internal === true,
         request.headers['x-cosmos-tos-cooldown-ms'],
       ),
     );

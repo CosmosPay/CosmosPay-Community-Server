@@ -2,6 +2,22 @@
 
 Conventions for this repo. They are enforced by `npm run lint`, which CI gates on.
 
+## Commands
+
+| Command | What it does, and the trap in it |
+| --- | --- |
+| `npm run dev` | `prisma migrate deploy`, then `nest start --watch` — one instance on `.env` |
+| `npm run dev:local` | several instances from ONE `.env`, overrides in `dev-instances.json` (git-ignored, created from `dev-instances.example.json` on first run — keep it, it holds the recovery servers' keys). Default profile is `api` + `replica`; `-- recovery` runs `api` + `recovery-a` + `recovery-b`, `-- all` all four (`scripts/dev-local.mts`) |
+| `npm test` | jest under `node --experimental-vm-modules`. **Never `npx jest`:** without the flag most suites fail to load at `@stellar/stellar-sdk`'s ESM dependencies, which looks like real breakage and is not |
+| `npm run test:e2e` | the suites in `test/` (`test/jest-e2e.json`), which `npm test` never sees |
+| `npm run lint` | eslint over `src`, `scripts`, `test` and `plugins`, zero warnings |
+| `npm run openapi:generate` | regenerates `openapi/openapi.json` + `.yaml`. A new or changed controller means running it and committing the spec — `openapi:check` fails CI on any diff |
+| `npm run readme:check` | the seven READMEs exist, share a skeleton, and index every route |
+| `npx tsc --noEmit -p tsconfig.json` | the only typecheck that covers the spec files; CI does not run it (see the gate in **Tests ship with the change**) |
+| `npm run db:migrate` | `prisma migrate dev`. A schema change ships its migration: CI applies every migration to a real Postgres and runs `prisma migrate diff --exit-code` against `schema.prisma` |
+| `npm run backups:reencrypt` | re-seals stored wallet backups under the current `WALLET_BACKUP_ENCRYPTION_KEY` — run it after turning the seal on and after every rotation, then drop the old key from `WALLET_BACKUP_ENCRYPTION_PREVIOUS_KEYS` (`-- --dry-run` only counts) |
+| `npm run plugins -- <cmd>` | third-party plugin folders: `new`, `check`, `sign`, `verify`, `keygen`, `publish`, `install` (`scripts/plugins.ts`) |
+
 ## Imports: always use the path aliases, never relative paths
 
 Every import inside `src/` and `scripts/` uses an alias. `./` and `../` are
@@ -35,19 +51,30 @@ so no alias can address them — the rule is turned off for that directory.
 1. `tsconfig.json` → `compilerOptions.paths` (typecheck + editor)
 2. `package.json` → `jest.moduleNameMapper` (unit tests)
 3. `test/jest-e2e.json` → `moduleNameMapper` (e2e tests)
-4. `package.json` → `build` runs `tsc-alias -p tsconfig.build.json`
+4. `nest build` → its own tsconfig-paths hook rewrites the aliases in `dist/`
 
-Point 4 matters: `tsc` emits `require("@/...")` verbatim and Node cannot resolve
-it, so `tsc-alias` rewrites the aliases back to real relative paths after
-`nest build`. Never drop it from the build script or `npm start:prod` breaks.
-The `ts-node` scripts pass `-r tsconfig-paths/register` for the same reason.
+Point 4 matters: plain `tsc` emits `require("@/...")` verbatim and Node cannot
+resolve it. The Nest CLI's tsc compiler rewrites every alias to a real relative
+path as it emits, so `dist/src/**/*.js` is clean with no extra step — and the
+build then runs `scripts/check-dist-aliases.mjs`, which fails it if any
+`require` of an alias survives. Keep that check: switching the Nest compiler
+(to swc, say) can turn the hook off, and the result builds and dies on boot.
+
+`tsc-alias` used to run after `nest build` and is gone. Diffing its output
+against the bare build showed it changed no runtime file: only `.d.ts`,
+`dist/scripts/` (never run from `dist`) and a code TEMPLATE string in
+`scripts/plugins.ts`, which it corrupted. It also carried the only path to
+`braces`, whose advisory has no patched release. Do not bring it back.
+The `ts-node` scripts pass `-r tsconfig-paths/register` because they never go
+through `nest build`.
 
 **There is no `baseUrl`.** TypeScript 6 deprecates it and 7 removes it, so the
 `paths` entries are written as explicit `"./src/*"` / `"./generated/*"` and
 resolve relative to `tsconfig.json` itself. All four consumers above were checked
-against that: `tsc --noEmit` is clean, `tsc-alias` still rewrites every alias out
-of `dist/` (grep it for `@/` — there are none), and both `ts-node` scripts
-(`openapi:generate`, `assets:verify`) still resolve. Do not reintroduce it.
+against that: `tsc --noEmit` is clean, `nest build` still rewrites every alias out
+of `dist/src` (`check-dist-aliases.mjs` asserts it), and every `ts-node` script in
+`package.json` (each passes `-r tsconfig-paths/register`) still resolves. Do not
+reintroduce it.
 
 `types` IS set, to `["node", "jest"]`, and that is a different thing: TypeScript 6
 stopped auto-including every `@types` package, so the two AMBIENT ones — the ones
@@ -59,7 +86,7 @@ Do not add `typeRoots` either. It looks like the natural companion to dropping
 `baseUrl` and it is the opposite: TypeScript already discovers every
 `node_modules/@types` package on its own, and naming one root NARROWS that to the
 list you wrote. Adding `["./node_modules/@types"]` here silently dropped the
-ambient jest globals, so all 62 spec files failed `tsc --noEmit` while still
+ambient jest globals, so every spec file failed `tsc --noEmit` while still
 running green under ts-jest — a split where the compiler and the runner disagree
 about the same file.
 
@@ -68,32 +95,14 @@ about the same file.
 Each module keeps its tunable values — timeouts, batch sizes, limits,
 cooldowns, prefixes, policy lists, on-chain memo labels — in one file named
 after the module, so they can be found and changed without reading the service:
-
-```
-src/activity/activity.constants.ts
-src/admin/admin.constants.ts
-src/aliases/aliases.constants.ts
-src/analytics/analytics.constants.ts
-src/assets/assets.constants.ts
-src/chains/chains.constants.ts
-src/common/rate-limit.constants.ts
-src/config/config.constants.ts
-src/cross-chain-swaps/cross-chain-swaps.constants.ts
-src/evm/evm.constants.ts
-src/kuru/kuru.constants.ts
-src/liquidity-pools/liquidity-pools.constants.ts
-src/near-intents/near-intents.constants.ts
-src/native-plugins/blindpay/blindpay.constants.ts
-src/native-plugins/blindpay/kyc/kyc.constants.ts
-src/observer/observer.constants.ts
-src/payment-intents/payment-intents.constants.ts
-src/plugins/plugins.constants.ts
-src/prisma/prisma.constants.ts
-src/solana/solana.constants.ts
-src/stellar/stellar.constants.ts
-src/swaps/swaps.constants.ts
-src/webhooks/webhooks.constants.ts
-```
+`src/<module>/<module>.constants.ts` (a sub-module or a `common/` concern gets its
+own, e.g. `src/native-plugins/blindpay/kyc/kyc.constants.ts`,
+`src/common/rate-limit.constants.ts`). `git ls-files 'src/**/*.constants.ts'` is
+the list — there is no hand-kept copy here, because the last one had drifted ten
+files behind. The ones a security review reads first are
+`src/wallet-auth/wallet-auth.constants.ts` (backup cost floors, slot ceiling),
+`src/recovery/recovery.constants.ts` (SEP-10/SEP-30 lifetimes, per-route
+budgets) and `src/stellar/stellar.constants.ts` (the precision every amount goes through).
 
 Rules of thumb:
 
@@ -267,10 +276,18 @@ table. These are the rules that did not hold on their own:
   point in the core (see `AdminExtensions`) and have the plugin register into it.
   A new native plugin needs its slug in `NATIVE_PLUGIN_SLUGS`, its module in
   `NATIVE_PLUGIN_MODULES` and its own lint entry in `eslint.config.mjs`.
+- **Third-party plugins are a different thing:** signed folders under `plugins/`
+  (scaffolded, checked, signed and installed with `npm run plugins`), run only in
+  a V8 isolate with no Node in it (`src/plugins/plugin-sandbox.ts`). Their own
+  lint block lets them import `@/plugins/sdk` and nothing else; the isolate, not
+  the lint rule, is the enforcement.
 - **Swap venues are the exception, by decision: they are core.** A same-chain
   swap is `/v1/swaps` on the chain's own venue — the Stellar DEX, Jupiter on
-  Solana, Kuru Flow on Monad (`src/jupiter/`, `src/kuru/`, one
-  `ChainSwapVenue` per chain in `src/swaps/venues/`). A swap between chains is
+  Solana, Kuru Flow on Monad (`src/jupiter/`, `src/kuru/`). The Stellar DEX stays
+  in `swaps.service.ts`; every OTHER chain is one `ChainSwapVenue` in
+  `src/swaps/venues/`, held as `Record<OtherChain, ChainSwapVenue>` in
+  `chain-swaps.service.ts` (`OtherChain = Exclude<Chain, 'stellar'>`), so a new
+  chain does not compile until it has a venue. A swap between chains is
   `/v1/cross-chain-swaps` on NEAR Intents (`src/near-intents/`), which refuses
   every same-chain pair. All of them are always compiled in, not plugins.
   Each aggregator only prices and builds: the wallet signs, and this service
@@ -317,6 +334,56 @@ Each of these was a real finding in this codebase, not a hypothetical:
 - **A guard that refuses logs the refusal.** Interceptors run after guards, so
   the access log never sees a request a guard turned away.
 
+## Wallet sign-in, backups and the recovery servers
+
+**One codebase, three deployments.** The main deployment serves the wallet's
+sign-in and backups (`/v1/wallet/*`, `src/wallet-auth/`). `RECOVERY_ROLE=a` or `=b`
+makes a deployment a SEP-10/SEP-30 recovery server (`src/recovery/`); with no role,
+every recovery route answers 404 (`RecoveryService.rules`), so the main host never
+invites a wallet to register where it was not meant to. `src/config/identity-env.ts`
+refuses to boot a recovery server holding `WALLET_RECOVERY_SPONSOR_SECRET` or
+`APISIX_ADMIN_KEY`, and any deployment where two boundary secrets
+(`APISIX_GATEWAY_SECRET`, `WALLET_AUTH_SESSION_SECRET`, `APISIX_ADMIN_KEY`,
+`WALLET_BACKUP_ENCRYPTION_KEY`, `RECOVERY_JWT_SECRET`) share a value. Do not relax
+either: the two servers' independence IS the design, and a shared value is one leak
+that breaks two boundaries.
+
+- **Recovery routes are `@Public()`, budgeted per client address**
+  (`recovery.constants.ts`), and answer SEP's `{ "error": "…" }` through
+  `SepExceptionFilter` — never an `ApiErrorCode` envelope, which a SEP-30 client
+  reads as "the server said nothing".
+- **One server, every ledger.** `RECOVERY_NETWORKS` lists them; a request names one
+  as a path segment INSIDE the prefix (`/v1/sep10/testnet/auth`,
+  `/v1/sep30/testnet/accounts/G…`, `stellar.toml?network=testnet`), stripped by
+  `recovery-network.ts`. Never in front of `/v1`: the gateway route and `sepCors`
+  cover only `/v1/sep10/*` and `/v1/sep30/*`. An unserved ledger is a 404, never
+  the default one.
+- **`isBackupBox` decides what is kept** (`wallet-auth-core.ts`): `v: 2`/`v: 3`
+  password doors are PBKDF2 within `BACKUP_MIN_ITERATIONS`..`BACKUP_MAX_ITERATIONS`;
+  `v: 4` doors are Argon2id within `BACKUP_ARGON2_MIN_*`..`BACKUP_ARGON2_MAX_*`, and a
+  v4 box may not carry a PBKDF2 door; at most one recovery slot (v4 only), never the
+  only door. Whoever reads the table guesses offline, so the floor is the security.
+  Stored boxes are sealed again at rest (`backup-cipher.ts`,
+  `WALLET_BACKUP_ENCRYPTION_KEY`; rotate with `npm run backups:reencrypt`).
+- **Recovery shares (`/v1/sep30/shares`) recover the SEED; SEP-30 recovers the
+  ACCOUNT.** Only a SEP-10 token of that account writes or deletes a half; that, or
+  this server's identity token for the filed email, reads it; absent and not-yours
+  are the same 404; listing by inbox takes an email identity token and refuses a
+  SEP-10 one (`recovery-shares.service.ts`).
+- **Each server proves the inbox itself** — an Authentik ID token verified against
+  the provider's keys and accepted once per server, or its own emailed code. No
+  secret is shared with the sign-in server: the HMAC identity this replaced was one
+  leaked value from a recovery identity for every account.
+- **Sponsored setup runs only on the main deployment**
+  (`POST /v1/wallet/recovery/setup`, `recovery-setup.ts`). On a recovered account
+  (`sponsorableDeviceKey` returns a key that is not the account) the last
+  `setOptions` omits `masterWeight`: raising the retired master hands the account
+  back to the lost device.
+- **`finishMessage`, `backupMessage` and `recoverySetupMessage` are a cross-repo
+  contract**, pinned as literals in `src/wallet-auth/wallet-auth-core.spec.ts` and
+  in the wallet's `tests/unit/signIn.test.ts` / `tests/unit/recovery.test.ts`.
+  Change one side and no sign-in or setup can finish.
+
 ## The OpenAPI contract ships with the route — review Swagger every time
 
 `openapi/openapi.json` is what Swagger UI renders at `/docs` and what an
@@ -348,7 +415,7 @@ How failures get documented — use these, never a hand-written
 | validates input, is gated, takes a `{param}`, or can throw at all | nothing | 400 / 401 + 403 / 404 / 500, attached by `swagger.ts` |
 | is `@Public()` | nothing — the decorator does it | `security: []`, no 401/403 |
 | is `@RateLimit(...)` | nothing — the decorator does it | 429 + `Retry-After`, `ratelimit-*` on 2xx |
-| calls BlindPay or Horizon while serving | `@ApiUpstream('BlindPay')` on **that handler** | 502/503/504 (Horizon: 503 only) |
+| calls a third party while serving — any `UpstreamProvider`: BlindPay, Horizon, Solana, Monad, NEAR Intents, Jupiter, Kuru Flow | `@ApiUpstream('BlindPay', …)` on **that handler**, naming each one it reaches | 502/503/504 per provider (Horizon: 503 only — `UPSTREAM_FAILURES` in `src/swagger.ts`) |
 | throws a code of its own (409, a domain 400, a kill-switch 403) | `@ApiErrorResponse({ status, codes })` | that status with one real example per code |
 
 - **A new `ApiErrorCode` needs an entry in `API_ERROR_CASES`**
@@ -376,8 +443,9 @@ A change is not done until its tests are, in the same commit:
 - A new route gets e2e coverage of its wiring in `test/` — at minimum that the
   guards in front of it refuse the callers they must refuse.
 - A security fix gets a test that fails without the fix.
-- The gate is `npm run lint`, `npm test`, `npm run test:e2e`,
-  `npm run openapi:check` and `npm run readme:check`, which CI runs, plus
+- The gate (each command is in **Commands** above) is `npm run lint`,
+  `npm test`, `npm run test:e2e`, `npm run openapi:check` and
+  `npm run readme:check`, which CI runs, plus
   `npx tsc --noEmit -p tsconfig.json`, which it does not — run that one yourself:
   the build compiles `tsconfig.build.json`, which leaves the spec files out, and
   ts-jest will run a spec green that the compiler rejects.

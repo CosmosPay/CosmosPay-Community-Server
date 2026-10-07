@@ -1,6 +1,9 @@
 import { HttpStatus } from '@nestjs/common';
 import { AdminExtensions } from '@/admin/admin-extensions';
-import { BlindpayAdminService } from '@/native-plugins/blindpay/admin/blindpay-admin.service';
+import {
+  BlindpayAdminService,
+  RECEIVER_ADMIN_SELECT,
+} from '@/native-plugins/blindpay/admin/blindpay-admin.service';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import {
   RECEIVER_PUBLIC_SELECT,
@@ -152,11 +155,12 @@ describe('BlindpayAdminService.setReceiverAccess (atomic audit)', () => {
     expect(result).toBe(adminRow);
     expect(prisma.blindpayReceiver.findUnique).toHaveBeenCalledWith({
       where: { id: 'rcv_1' },
-      include: {
-        consumer: { select: { apisixUsername: true, credentialId: true } },
-      },
-      omit: { raw: true },
+      select: RECEIVER_ADMIN_SELECT,
     });
+    expect(RECEIVER_ADMIN_SELECT.consumer).toEqual({
+      select: { apisixUsername: true, credentialId: true },
+    });
+    expect(RECEIVER_ADMIN_SELECT).not.toHaveProperty('raw');
   });
 
   it('throws NotFound without writing audit when the receiver is missing', async () => {

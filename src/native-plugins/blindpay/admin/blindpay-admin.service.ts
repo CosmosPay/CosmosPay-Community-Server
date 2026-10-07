@@ -1,4 +1,5 @@
 import { Injectable, OnModuleInit } from '@nestjs/common';
+import type { Prisma } from '@generated/prisma/client';
 import type { AdminPrincipal } from '@/admin/admin-auth';
 import { AdminExtension, AdminExtensions } from '@/admin/admin-extensions';
 import {
@@ -12,9 +13,73 @@ import {
 } from '@/admin/admin-list';
 import { toAuditEntry } from '@/audit/audit-writer';
 import { ApiError } from '@/common/errors/api-error';
-import { ReceiversService } from '@/native-plugins/blindpay/kyc/receivers/receivers.service';
+import { PAYOUT_PUBLIC_SELECT } from '@/native-plugins/blindpay/blindpay-sync.service';
+import {
+  RECEIVER_PUBLIC_SELECT,
+  ReceiversService,
+} from '@/native-plugins/blindpay/kyc/receivers/receivers.service';
 import { RequestTosDto } from '@/native-plugins/blindpay/kyc/receivers/dto/request-tos.dto';
 import { PrismaService } from '@/prisma/prisma.service';
+
+/**
+ * What an admin read of a receiver returns: the tenant projection plus the
+ * bookkeeping an operator works with (owner, BlindPay instance, reference, last
+ * terms email) and the owning consumer for attribution.
+ *
+ * An allowlist, not `omit: { raw: true }`. These tables mirror a regulated
+ * provider, and `raw` — the full KYC dossier, tax ids, bank credentials — was
+ * not the last sensitive column anyone will add: with an omit list, the next
+ * one is streamed into every admin list the day it lands. With a select it is
+ * absent until someone names it here.
+ */
+export const RECEIVER_ADMIN_SELECT = {
+  ...RECEIVER_PUBLIC_SELECT,
+  consumerId: true,
+  environment: true,
+  reference: true,
+  tosSentAt: true,
+  ...consumerSelect,
+} as const satisfies Prisma.BlindpayReceiverSelect;
+
+/**
+ * As {@link RECEIVER_ADMIN_SELECT}, for payins — written out rather than built
+ * on `PAYIN_PUBLIC_SELECT`, because the tenant projection carries
+ * `instructions` and the admin one must not. `pickInstructions` deliberately
+ * keeps `pse_tax_id`, `pse_full_name`, `pse_document_type`, `clabe`, `cbu` and
+ * `blindpay_bank_details`: the owning tenant still gets them from
+ * GET /v1/onramp/payins/:id — they are that payer's funding instructions — but
+ * a platform-wide list has no need of anyone's tax id or IBAN.
+ */
+export const PAYIN_ADMIN_SELECT = {
+  id: true,
+  consumerId: true,
+  receiverId: true,
+  environment: true,
+  blindpayId: true,
+  quoteId: true,
+  status: true,
+  token: true,
+  network: true,
+  paymentMethod: true,
+  currency: true,
+  senderAmount: true,
+  receiverAmount: true,
+  createdAt: true,
+  updatedAt: true,
+  ...consumerSelect,
+} as const satisfies Prisma.PayinSelect;
+
+/** As {@link RECEIVER_ADMIN_SELECT}, for payouts. */
+export const PAYOUT_ADMIN_SELECT = {
+  ...PAYOUT_PUBLIC_SELECT,
+  consumerId: true,
+  receiverId: true,
+  environment: true,
+  quoteId: true,
+  bankAccountId: true,
+  updatedAt: true,
+  ...consumerSelect,
+} as const satisfies Prisma.PayoutSelect;
 
 /**
  * The platform-admin (owner) half of the BlindPay plugin: cross-consumer reads of
@@ -184,14 +249,12 @@ export class BlindpayAdminService implements AdminExtension, OnModuleInit {
     );
     const receiver = await this.prisma.blindpayReceiver.findUnique({
       where: { id },
-      include: consumerSelect,
-      // Same reason the list queries omit it: `raw` is the provider's full
-      // KYC dossier — tax id, address, bank credentials. Toggling a
-      // receiver's access is an authorization change and has no business
-      // returning the dossier as its 200 body, where it lands in the
-      // operator's browser, any proxy log, and the admin audit trail's
-      // response capture.
-      omit: { raw: true },
+      // Same projection as the list: `raw` is the provider's full KYC
+      // dossier — tax id, address, bank credentials. Toggling a receiver's
+      // access is an authorization change and has no business returning the
+      // dossier as its 200 body, where it lands in the operator's browser,
+      // any proxy log, and the admin audit trail's response capture.
+      select: RECEIVER_ADMIN_SELECT,
     });
     // setAccessById already 404s a missing receiver; this only fires if it was deleted
     // between the committed toggle and this read.
@@ -207,11 +270,10 @@ export class BlindpayAdminService implements AdminExtension, OnModuleInit {
         take: take(opts.take),
         skip: skip(opts.skip),
         orderBy: { createdAt: 'desc' },
-        include: consumerSelect,
         // The provider blob holds the full KYC dossier / bank credentials. Admin
         // operators need to see that a record EXISTS and its state, not to have
         // every tax id and IBAN on the platform streamed into a list response.
-        omit: { raw: true },
+        select: RECEIVER_ADMIN_SELECT,
       }),
       this.prisma.blindpayReceiver.count({ where }),
     ]);
@@ -226,19 +288,8 @@ export class BlindpayAdminService implements AdminExtension, OnModuleInit {
         take: take(opts.take),
         skip: skip(opts.skip),
         orderBy: { createdAt: 'desc' },
-        include: consumerSelect,
-        // The provider blob holds the full KYC dossier / bank credentials. Admin
-        // operators need to see that a record EXISTS and its state, not to have
-        // every tax id and IBAN on the platform streamed into a list response.
-        //
-        // `instructions` is omitted for exactly the same reason and was missed:
-        // `pickInstructions` deliberately keeps `pse_tax_id`, `pse_full_name`,
-        // `pse_document_type`, `clabe`, `cbu` and `blindpay_bank_details`, so
-        // omitting only `raw` left the tax ids and IBANs one column over. The
-        // owning tenant still gets them from GET /v1/onramp/payins/:id — they
-        // are that payer's funding instructions — but a platform-wide admin list
-        // has no need of them.
-        omit: { raw: true, instructions: true },
+        // Neither `raw` nor `instructions` — see PAYIN_ADMIN_SELECT.
+        select: PAYIN_ADMIN_SELECT,
       }),
       this.prisma.payin.count({ where }),
     ]);
@@ -253,11 +304,8 @@ export class BlindpayAdminService implements AdminExtension, OnModuleInit {
         take: take(opts.take),
         skip: skip(opts.skip),
         orderBy: { createdAt: 'desc' },
-        include: consumerSelect,
-        // The provider blob holds the full KYC dossier / bank credentials. Admin
-        // operators need to see that a record EXISTS and its state, not to have
-        // every tax id and IBAN on the platform streamed into a list response.
-        omit: { raw: true },
+        // `raw` is the provider payload whole — see RECEIVER_ADMIN_SELECT.
+        select: PAYOUT_ADMIN_SELECT,
       }),
       this.prisma.payout.count({ where }),
     ]);

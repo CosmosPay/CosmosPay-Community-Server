@@ -23,6 +23,7 @@ describe('LoggingInterceptor', () => {
     headers: Record<string, string> = {},
     method = 'GET',
     responseStatus = 200,
+    internal = false,
   ) {
     const create = jest.fn().mockResolvedValue({});
     const prisma = { requestLog: { create } } as never;
@@ -34,7 +35,7 @@ describe('LoggingInterceptor', () => {
       originalUrl: '/v1/swaps?take=10',
       headers,
       ip: '203.0.113.7',
-      gatewayConsumer: { username: 'cosmos_u1' },
+      gatewayConsumer: { username: 'cosmos_u1', internal },
     };
     const context = {
       switchToHttp: () => ({
@@ -115,6 +116,19 @@ describe('LoggingInterceptor', () => {
   });
 
   it('still writes a row for internal traffic, flagged rather than skipped', async () => {
+    const { interceptor, context, create } = build({}, 'GET', 200, true);
+    const next: CallHandler = { handle: () => of({ ok: true }) };
+
+    await firstValueFrom(interceptor.intercept(context, next));
+    await flush();
+
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(create.mock.calls[0][0].data.internal).toBe(true);
+  });
+
+  it('does not flag a call whose marker header failed verification', async () => {
+    // The middleware sets `internal` only for a valid console MAC; a forged
+    // header must not move a tenant's own calls out of their API-log view.
     const { interceptor, context, create } = build({
       'x-cosmos-internal': '1',
     });
@@ -123,8 +137,7 @@ describe('LoggingInterceptor', () => {
     await firstValueFrom(interceptor.intercept(context, next));
     await flush();
 
-    expect(create).toHaveBeenCalledTimes(1);
-    expect(create.mock.calls[0][0].data.internal).toBe(true);
+    expect(create.mock.calls[0][0].data.internal).toBe(false);
   });
 
   it('marks ordinary traffic as not internal', async () => {

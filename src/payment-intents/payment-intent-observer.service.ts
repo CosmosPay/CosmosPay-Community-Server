@@ -171,13 +171,26 @@ export class PaymentIntentObserverService extends ScheduledJob {
     const result = await this.verify(intent);
 
     if (result.valid && result.txHash) {
-      await this.paymentIntents.markSucceeded(
-        intent.id,
-        intent.consumer.apisixUsername,
-        result.txHash,
-        result.payer,
-        'observer',
-      );
+      try {
+        await this.paymentIntents.markSucceeded(
+          intent.id,
+          intent.consumer.apisixUsername,
+          result.txHash,
+          result.payer,
+          'observer',
+        );
+      } catch (err) {
+        if (!isAlreadySettled(err)) throw err;
+        // Not this intent's payment after all: the intent stays PENDING, the
+        // next tick looks again (a later payment that pays it still settles
+        // it), and the expiry pass finalizes it like any unpaid intent. A
+        // warning, not the error a failed reconcile logs — nothing failed.
+        this.logger.warn(
+          `Intent ${intent.id} is not settled by ${result.txHash}: that ` +
+            'transaction settles another payment intent, an older one it ' +
+            'also pays or one it already settled',
+        );
+      }
     }
   }
 
@@ -196,8 +209,16 @@ export class PaymentIntentObserverService extends ScheduledJob {
    * confusion that once expired settled swaps during a Horizon outage (see
    * `SettlementObserverService`).
    *
-   * One settlement failure is final instead: the hash is already recorded on
-   * another of the same consumer's intents (409 `idempotency_conflict`). No
+   * Two settlement failures are final instead, and the intent expires with a
+   * warning.
+   *
+   * The payment already settled an intent of any consumer, or also pays an
+   * older one of another consumer, which outranks this one (409
+   * `transaction_already_settled`): it is spoken for, so it did not pay this
+   * intent, which expires as the unpaid intent it is.
+   *
+   * The hash is already recorded on another of the same consumer's intents
+   * (409 `idempotency_conflict`). No
    * later tick clears that — the (consumerId, txHash) index still holds it — so
    * the intent stayed PENDING and took a slot in every expiry batch after, and
    * about `OBSERVER_BATCH_SIZE` of them, each costing a dust payment and a hash
@@ -220,20 +241,26 @@ export class PaymentIntentObserverService extends ScheduledJob {
         );
         return;
       } catch (err) {
-        // Only the txHash conflict: `markSucceeded` raises no other
-        // `idempotency_conflict`, and every other failure is retried.
-        if (
-          !(err instanceof ApiError) ||
-          err.code !== ApiErrorCode.IdempotencyConflict
+        if (isAlreadySettled(err)) {
+          this.logger.warn(
+            `Expiring intent ${intent.id} unpaid: ${result.txHash} matches ` +
+              'it but settles another payment intent, older or already settled',
+          );
+        } else if (
+          // Only the txHash conflict: `markSucceeded` raises no other
+          // `idempotency_conflict`, and every other failure is retried.
+          err instanceof ApiError &&
+          err.code === ApiErrorCode.IdempotencyConflict
         ) {
+          this.logger.warn(
+            `Expiring intent ${intent.id} although ${result.txHash} pays it: ` +
+              'that hash is already recorded on another of consumer ' +
+              `${intent.consumer.apisixUsername}'s intents, so settling it ` +
+              'cannot succeed on any later tick',
+          );
+        } else {
           throw err;
         }
-        this.logger.warn(
-          `Expiring intent ${intent.id} although ${result.txHash} pays it: ` +
-            'that hash is already recorded on another of consumer ' +
-            `${intent.consumer.apisixUsername}'s intents, so settling it ` +
-            'cannot succeed on any later tick',
-        );
       }
     }
 
@@ -272,6 +299,17 @@ export class PaymentIntentObserverService extends ScheduledJob {
     }
     return result;
   }
+}
+
+/**
+ * Whether a settlement was refused because its transaction already settled
+ * another intent. Read by `code`, never by the message.
+ */
+function isAlreadySettled(err: unknown): boolean {
+  return (
+    err instanceof ApiError &&
+    err.code === ApiErrorCode.TransactionAlreadySettled
+  );
 }
 
 /**

@@ -35,13 +35,14 @@ orquestrador chama diretamente). A verificação está sempre ativa — não exi
 para desligá-la. Em desenvolvimento local, rode atrás do APISIX ou envie você mesmo
 `X-Gateway-Secret` + os headers `X-Consumer-*`.
 
-`/v1/admin` é cross-tenant, então o `AdminGuard` também exige `X-Cosmos-Internal`.
-O APISIX **remove** esse header de tudo o que passa pelo seu proxy, então só um
-backend que chama o serviço diretamente com o segredo do gateway pode enviá-lo — a
-plataforma de desenvolvedores, que decide se a conta autenticada é owner ou admin.
-Não há uma credencial de admin separada: o segredo do gateway, o isolamento de rede
-e a lista de remoção de headers na rota do gateway são o que protege os dados
-cross-tenant.
+`/v1/admin` é cross-tenant, então o `AdminGuard` também exige que
+`X-Cosmos-Internal` traga um MAC recente assinado com o segredo do gateway
+(`src/admin/console-marker.ts`). Quem chama com uma API key nunca tem esse segredo,
+então só um backend que chama o serviço diretamente consegue gerá-lo — a plataforma de
+desenvolvedores, que decide se a conta autenticada é owner ou admin. Não há uma
+credencial de admin separada. O APISIX também remove o header de tudo o que passa pelo
+seu proxy, mas isso é defesa em profundidade: uma rota que esqueça de removê-lo
+encaminha um valor que nenhum cliente conseguiria forjar.
 
 O pipeline:
 
@@ -298,6 +299,7 @@ console chega até ela. Os caminhos usam a forma `{param}` do OpenAPI.
 | GET | `/v1/sep30/accounts/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | DELETE | `/v1/sep30/accounts/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | POST | `/v1/sep30/accounts/{address}/sign/{signer}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
+| GET | `/v1/sep30/shares` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | PUT | `/v1/sep30/shares/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | GET | `/v1/sep30/shares/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | DELETE | `/v1/sep30/shares/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
@@ -456,7 +458,7 @@ Toda requisição recebida, exceto `/v1/health` e `/docs`, é gravada em
 (`GET /v1/logs`). As linhas incluem caminho, status, duração e — quando presentes —
 o `ip` / `userAgent` do pagador.
 
-O tráfego do dashboard (`X-Cosmos-Internal`) é **registrado e marcado**
+O tráfego do dashboard (marcador `X-Cosmos-Internal` verificado) é **registrado e marcado**
 (`request_log.internal`), não ignorado, e a visão de logs da API filtra por essa
 coluna, então nenhum header de requisição consegue deixar tráfego fora do log.
 
@@ -1070,6 +1072,7 @@ em loop degradava os três de uma vez para todos os chamadores anônimos.
 // response
 { "submitted": true, "status": "SUCCEEDED", "txHash": "…", "swap": { … } }
 // on a network rejection → { "submitted": false, "status": "FAILED", "reason": "…", "resultCodes": ["op_under_dest_min"], "swap": { … } }
+// rejected, outcome not on the ledger yet → { "submitted": false, "status": "SUBMITTED", "reason": "…", "resultCodes": ["tx_bad_seq"], "swap": { … } }
 ```
 
 Antes de transmitir, o serviço verifica se o hash da transação assinada corresponde
@@ -1358,6 +1361,31 @@ As mudanças de estado são sincronizadas a partir dos **webhooks Svix** do Blin
 (verificados sobre o corpo bruto) e **reemitidas** para os endpoints de webhook do
 próprio integrador como novos tipos de evento (`RECEIVER_UPDATED`, `PAYIN_*`,
 `PAYOUT_*`) pelo dispatcher existente.
+
+**Um payin ou payout é registrado antes de o BlindPay ser chamado para criá-lo.**
+`POST /v1/onramp/payins` e `POST /v1/offramp/payouts` primeiro gravam uma linha em
+`pending_provider` com a cotação e sua chave de execução, depois chamam o BlindPay
+com essa chave como `Idempotency-Key` e por fim preenchem o id do provedor. Um
+timeout, ou uma gravação que falha depois da chamada, deixa portanto uma linha, e não
+um pagamento que ninguém aqui conhece: repetir o mesmo create com a mesma cotação
+reutiliza a linha e repete a chave, e o webhook do BlindPay preenche a linha pelo
+`quote_id`. As leituras do tenant omitem essas linhas até que tenham um id do
+provedor. Uma que continua sem id depois de uma hora passa a `provider_unconfirmed`
+e é registrada no log para um operador — nada reenvia o create, porque quem chamou
+pode ter pago com outra cotação nesse meio-tempo. Uma recusa do BlindPay (qualquer
+4xx exceto 408 e 409) remove a linha.
+
+**Um webhook que não corresponde a nenhuma linha não é descartado.** Um evento de
+payin ou payout é atribuído pela cotação que executou — ao consumer que a emitiu — e
+o espelho é criado ou reparado ali. Um evento que ainda assim não pode ser atribuído
+é confirmado mas fica aberto, e o reconciliador do BlindPay (ativo com
+`OBSERVER_ENABLED`, uma vez por minuto, em uma réplica por vez) o relê do BlindPay
+durante sete dias, registrando seu `svix-id` a cada tentativa sem sucesso para que a
+entrega possa ser reenviada pelo painel do Svix. O mesmo reconciliador relê os
+payins e payouts abertos cujos webhooks pararam de chegar e repara seu status.
+`PAYIN_COMPLETED` e `PAYOUT_COMPLETED` saem uma única vez por payin ou payout, qualquer
+que seja o caminho que veja a conclusão primeiro — o webhook, um reenvio com um
+`svix-id` novo ou o reconciliador.
 
 | Método | Caminho                                               | Escopo         | Descrição |
 | ------ | ----------------------------------------------------- | -------------- | --------- |
@@ -1663,6 +1691,44 @@ serviço em `src/native-plugins/<slug>/`, ligados pela mesma lista
 
 ## Atualização — mudanças incompatíveis e notas de deploy
 
+### `X-Cosmos-Internal` precisa trazer um MAC do segredo do gateway
+
+- **Um `X-Cosmos-Internal: 1` puro é recusado.** `/v1/admin` responde `403 admin_console_only`, e quem chama deixa de ser tratado como interno em qualquer lugar: recebe os limites de taxa por consumidor, e suas linhas no log de requisições não são marcadas. O header agora traz `v1.<unix seconds>.<hex>`, um HMAC-SHA256 assinado com `APISIX_GATEWAY_SECRET` e aceito dentro de cinco minutos do relógio do servidor (`src/admin/console-marker.ts`).
+- **Scripts de operações que chamam `/v1/admin` diretamente precisam gerar o marcador a cada chamada.** O trecho `openssl` + `curl` no fim da entrada de `ADMIN_API_CREDENTIALS`, mais abaixo, faz isso.
+- **Implante o serviço e a plataforma de desenvolvedores juntos.** Agora é o console que gera o marcador. Um console antigo contra este serviço recebe `403` em toda chamada de admin; um console novo contra um serviço anterior continua funcionando, porque o serviço anterior aceita qualquer valor exceto `0`, `false`, `no` e `off`. Se os dois não puderem sair ao mesmo tempo, implante primeiro a plataforma de desenvolvedores.
+- **Nenhuma variável de ambiente nova.** O MAC é assinado com `APISIX_GATEWAY_SECRET`, que o serviço e o console já compartilham.
+
+### Campos de recebedor e consultas de listas de admin mais rígidos
+
+- **`POST /v1/kyc/receivers` e `PUT /v1/kyc/receivers/{id}` recusam com `400` campos de identidade malformados.** `country` e `id_doc_country` (no nível superior e em `owners[]`) devem ser códigos ISO 3166-1 alfa-2 em maiúsculas (`US`, não `us` nem `USA`); `date_of_birth` (no nível superior e em `owners[]`) e `formation_date` devem ser data-horas ISO 8601 com deslocamento (`1985-04-12T00:00:00.000Z`, não `1985-04-12`); `owners[].ownership_percentage` deve ser um número de 0 a 100; `website` deve ser uma URL `http`/`https` absoluta sem credenciais. Antes cada um era guardado como digitado e falhava na BlindPay só ao habilitar o recebedor, depois da revisão.
+- **As consultas das listas de `/v1/admin` são validadas.** Um `status` desconhecido para aquela lista, um `take` fora de 1–200, um `skip` negativo ou um parâmetro que a rota não aceita agora é `400`; um `status` inválido chegava antes ao banco de dados e voltava como `500`. Os padrões não mudam (`take=50`, `skip=0`).
+- **As leituras de admin de recebedores, payins e payouts retornam uma lista explícita de campos.** Os campos são os que eram retornados antes; uma coluna adicionada depois a essas tabelas não é mais retornada até ser incluída na lista.
+
+### BlindPay: linhas antes da chamada ao provedor, e uma única conclusão por pagamento
+
+- **A migração `20261006120000_blindpay_pending_rows`** torna anuláveis
+  `payin.blindpayId` e `payout.blindpayId`, adiciona `executionKey` (único) e
+  `lastCheckedAt` às duas tabelas, e adiciona `environment`, `blindpayId`,
+  `appliedAt` e `lastAttemptAt` a `blindpay_webhook_event`. As linhas de entrega
+  existentes são marcadas como aplicadas.
+- **Nenhuma resposta muda de formato.** As linhas que ainda esperam um id do provedor
+  (`pending_provider`, `provider_unconfirmed`) não são devolvidas pelas rotas do
+  tenant; as listas de administração `/v1/admin/payins` e `/v1/admin/payouts` as
+  mostram, com `blindpayId: null`.
+- **`PAYIN_COMPLETED` e `PAYOUT_COMPLETED` são deduplicados** como os demais eventos
+  terminais: uma segunda conclusão com um `svix-id` novo não produz mais um segundo
+  evento com um `evt_` novo. Os outros eventos do BlindPay são reemitidos apenas
+  quando a linha realmente mudou.
+- **O reconciliador do BlindPay roda junto com o observador de liquidação**
+  (`OBSERVER_ENABLED`); desligar o observador também o desliga.
+
+### Payment intents: uma transação liquida um único intent, entre todos os tenants
+
+- **A migração `20261006130000_payment_settlement`** adiciona `payment_settlement` e a preenche a partir de cada intent SUCCEEDED. Onde um mesmo hash já liquidou vários intents, o mais antigo mantém a reivindicação; o arquivo da migração traz a consulta que lista os demais para revisão.
+- **Uma transação que já liquidou um payment intent — de qualquer consumer — não liquida mais outro.** `POST /v1/payment-intents/{id}/validate` e `PATCH /v1/payment-intents/{id}` com `status: SUCCEEDED` respondem `409 transaction_already_settled` e deixam o intent como estava. O destino não está vinculado a um consumer e o memo é escolhido por quem chama, então outro tenant — ou qualquer chamador sob a chave pública compartilhada — podia copiar um intent termo a termo e ser liquidado pela transação do pagador dele. O observer trata essa correspondência como ausência de pagamento: o intent continua PENDING e expira sem pagamento.
+- **O pagamento vai para o intent mais antigo que ele paga.** Um intent recebe o mesmo `409 transaction_already_settled` quando a transação também paga um intent mais antigo de outro consumer, então uma cópia feita depois do original perde mesmo que sua liquidação rode primeiro, e o original é liquidado na passada seguinte. Uma cópia feita ANTES do original vence, mas só enquanto está aberta: um intent EXPIRED não supera ninguém, então quando a cópia expira o original é liquidado. Criá-la exige conhecer o memo do original de antemão, então deixe este serviço gerar os memos (omita `memo`) em vez de enviar memos previsíveis como números de pedido. O outro lado da regra: um pagamento que chega depois que o original expirou pode ir para uma cópia mais recente que não expirou. Na Monad isso também cobre uma cópia paga no endereço de depósito de outro intent, cujo pagamento o repasse do relayer liquidou com outro hash. Só um rival que a cadeia confirma como pago recusa uma liquidação, nunca a quantidade de rivais, e um rival precisa descrever o mesmo pagamento (memo, destino, ativo e valor na Stellar). **Monad sem relayer é a exceção:** um pagamento direto não carrega nada próprio do intent — destino, token e valor são públicos —, então dois intents em modo direto para o mesmo endereço e valor são indistinguíveis e não são ordenados por idade; o primeiro a liquidar fica com o pagamento. Use os endereços de depósito do relayer na Monad e memos gerados pelo serviço na Stellar.
+- **`DELETE /v1/payment-intents/{id}` responde `409 operation_in_flight`** quando o status do intent muda entre a leitura e a exclusão, normalmente porque acabou de ser pago. Antes ele era excluído mesmo assim.
+
 ### Login da wallet: os signatários de uma wallet recuperada seguem `STELLAR_NETWORK`
 
 - **`WALLET_AUTH_SIGNERS_HORIZON_URL` agora usa por padrão o Horizon de `STELLAR_NETWORK`** (`STELLAR_HORIZON_URL_PUBLIC` / `STELLAR_HORIZON_URL_TESTNET`, ou o da SDF), e não sempre o da rede pública. É consultado quando uma wallet recuperada via SEP-30 assina `POST /v1/wallet/auth/finish` com a chave que substituiu sua chave mestra. Num deploy em testnet a consulta ia para a mainnet, não encontrava a conta, e o login de toda wallet recuperada respondia `400 wallet_signature_invalid`.
@@ -1685,6 +1751,11 @@ serviço em `src/native-plugins/<slug>/`, ligados pela mesma lista
   juntos, ou quem controle a caixa de email E consiga que os dois servidores a aceitem, podem
   abrir um backup com esta porta. Execute os dois em infraestrutura separada e com remetentes
   `MAIL_*` distintos, como o SEP-30 já exige.
+- **`GET /v1/sep30/shares` (sem endereço) lista todas as metades arquivadas sob o e-mail
+  comprovado**, paginado por `after` como `GET /v1/sep30/accounts`. Quem fez backup de várias
+  carteiras com um mesmo e-mail esquece a senha de todas de uma vez; agora uma prova por servidor
+  devolve todos os backups e não só o mais recente. Apenas com um token de identidade: o token
+  SEP-10 de uma conta recebe `403`, pois já alcança a sua única metade pelo endereço.
 - **`isBackupBox` aceita um slot `recovery` numa caixa `v: 4`**, ao lado de pelo menos um slot de
   senha ou de passkey. Uma caixa cuja única porta seja `recovery` é recusada.
 - **O código por email de um servidor de recuperação** agora também vai para uma caixa de email
@@ -1900,6 +1971,7 @@ a coluna "Quem percebe" antes do deploy.
 | `POST /v1/onramp/receivers/:id/virtual-accounts` é `403 account_disabled` quando o receiver, ou o receiver dono de `blockchain_wallet_id`, está desabilitado | Ninguém legítimo | Era a única operação fiat que o kill switch não cobria: uma conta desabilitada ainda podia abrir um novo trilho de depósito |
 | `POST /v1/swaps/:id/submit` e `POST /v1/liquidity-pools/operations/:id/submit` verificam o envelope antes de qualquer outra coisa: um corpo que não analisa, que não é o envelope da linha, ou que não traz assinaturas é `400 validation_failed` seja qual for o status da linha. Um `signedXdr` arbitrário não retorna mais uma linha `SUCCEEDED`, e uma linha `EXPIRED` responde a um corpo incompatível com `validation_failed` em vez de `invalid_state_transition` | Clientes que enviavam o `xdr` não assinado e contavam com a rejeição `tx_bad_auth` | Assinaturas não mudam o hash de uma transação, então o envelope não assinado podia ser retransmitido e rejeitado em loop, e sob a chave pública compartilhada só o id da linha bastava para ler uma linha já liquidada |
 | As duas rotas de submit recusam um envelope fora do seu prazo (`400 invalid_state_transition`, não transmitido; o observer ainda o liquida se ele chegou à rede) e uma linha `FAILED` já reenviada 3 vezes (`400 invalid_state_transition`: monte uma nova). Uma retentativa após `503 provider_unavailable` não conta | Clientes que reenviam o submit em loop: pare em `invalid_state_transition` | Cada reenvio recusado era uma submissão ao Horizon e um novo evento de webhook terminal, sem limite |
+| Um submit recusado é conferido com o ledger antes de ser registrado. Uma transação já on-chain e bem-sucedida (a wallet a transmitiu por conta própria e o reenvio voltou com `tx_bad_seq`) responde `SUCCEEDED` e dispara `*_SUCCEEDED`; uma pela qual o ledger ainda não consegue responder responde `submitted: false` com `status: "SUBMITTED"` e fica em andamento para o observer. O observer também reverifica as linhas `FAILED` criadas nas últimas 24 horas e promove aquela cuja transação foi liquidada, disparando `*_SUCCEEDED` depois do `*_FAILED` anterior | Clientes que leem `submitted: false` como definitivo: verifiquem `status`, e tratem um `*_SUCCEEDED` posterior a um `*_FAILED` do mesmo recurso como uma correção | Um swap ou depósito liquidado podia ficar `FAILED` para sempre, sem webhook de sucesso e, num depósito, sem base de custo |
 | As duas rotas de submit permitem 20 chamadas por minuto por consumer e endereço do cliente, em orçamentos separados (`429 rate_limited`) | Carteiras atrás de um mesmo NAT compartilhando a chave pública | As rotas aceitam a chave pública compartilhada, e cada chamada pode transmitir para o Horizon |
 | `GET /v1/webhooks`, `GET /v1/webhooks/:id` e `PATCH /v1/webhooks/:id` retornam apenas os campos documentados do endpoint; `POST /v1/webhooks` e `POST /v1/webhooks/:id/rotate-secret` retornam esses mais `secret`. `consumerId`, `previousSecret` e `previousSecretExpiresAt` saíram dos cinco | Quem lê esses campos | `previousSecret` é um segredo de assinatura que um integrador ainda pode aceitar, e uma chave com apenas `webhooks:read` conseguia lê-lo |
 | Um token de recuperação que não corresponde a nenhuma recuperação ativa do alias deixa de contar contra ela. Um token ativo consome uma tentativa em toda apresentação, inclusive uma cujo challenge ou assinatura depois falha; após cinco é `400 alias_recovery_invalid` | Ninguém legítimo | Nomes de alias são públicos, então cinco tokens de lixo vindos de qualquer chave queimavam toda recuperação que o console iniciava |
@@ -1921,6 +1993,7 @@ a coluna "Quem percebe" antes do deploy.
 | `POST /v1/wallet/auth/finish` e `PUT /v1/wallet/backup` também aceitam uma caixa de backup `v: 3`: a semente sob uma chave de dados aleatória, e essa chave selada uma vez por porta em `slots` (`kind: "password"` ou `kind: "passkey"`, no máximo 8). Toda porta de palavra-passe tem o mesmo mínimo de PBKDF2 de uma caixa `v: 2`; uma porta de passkey não tem custo, porque a sua chave é a saída PRF do WebAuthn do autenticador. As caixas `v: 2` não mudam | Wallets: um backup só com passkey é válido, e uma wallet que escreveu um precisa deste servidor | Permite recuperar com uma passkey em vez de digitar a palavra-passe original, sem que este serviço tenha alguma vez uma chave que abra a caixa |
 | `POST /v1/wallet/auth/oauth/authorize` aceita um `returnTo` opcional. Quando ele está em `WALLET_AUTH_RETURN_URLS`, `GET /v1/wallet/auth/oauth/callback/{provider}` responde `302` para ele com `?state=…` (mais `&error=<reason>` em caso de falha) em vez de renderizar a página; um que não está na lista é `400 wallet_return_url_not_allowed`. Só o `state` viaja — o handshake continua sendo resgatado com o verificador PKCE. Rode antes a migração `20260927180000_wallet_auth_return_to` | Wallets nativas (desktop e mobile): enviar `returnTo` e registrar essa URL no sistema operacional | Uma sessão de autenticação da plataforma (`ASWebAuthenticationSession`, uma Custom Tab, um deep link ou listener loopback de desktop) só fecha quando o navegador chega a uma URL do próprio app, então a pessoa ficava na página e tinha que fechá-la à mão |
 | `GET /v1/wallet/auth/providers` também retorna `mfaSettingsUrl`: a página da conta do Authentik onde a pessoa adiciona ou remove um segundo fator (chave de segurança ou passkey, app autenticador, códigos de recuperação), passando pelo login do Authentik quando não há sessão; `null` sem Authentik. O segundo fator é opcional no login da wallet: `deploy/authentik/wallet-sign-in.yaml` volta a etapa de MFA para *skip*, pede o fator depois da senha a quem tem um, deixa entrar com passkey pela tela do usuário e, a quem não tem nenhum, oferece uma escolha depois da senha (agora não, uma chave de segurança, um app autenticador). Também adiciona Google / GitHub à página de cadastro, acima do formulário. O login e o cadastro com senha não mudam | Operadores com Authentik: importar o blueprint. Wallets: oferecer a URL como uma configuração | O segundo fator era obrigatório para todos ou inalcançável: os usuários da wallet nunca abrem as configurações do Authentik, os flows de configuração recusam um navegador sem sessão do Authentik, e o botão passwordless da etapa de identificação apontava para o mesmo flow, então só recarregava a página |
+| `/v1/admin` exige que `X-Cosmos-Internal` traga um MAC recente assinado com `APISIX_GATEWAY_SECRET` (`v1.<unix seconds>.<hex>`, dentro de cinco minutos); um `1` puro é `403 admin_console_only`, e só um marcador verificado isenta quem chama dos limites de taxa por consumidor ou marca suas linhas no log de requisições | Scripts de operações que chamam `/v1/admin` diretamente, e uma plataforma de desenvolvedores implantada sem esta mudança | Qualquer valor exceto `0`, `false`, `no` ou `off` valia, então uma única rota do APISIX que esquecesse de remover o header dava a toda API key a superfície de admin cross-tenant, a isenção de limites de taxa e um jeito de esconder suas chamadas do log de requisições do tenant |
 
 Notas de deploy que vêm junto:
 
@@ -2131,16 +2204,20 @@ estabelecido por duas coisas presentes na requisição:
 1. `X-Gateway-Secret` corresponde a `APISIX_GATEWAY_SECRET` — verificado pelo
    `ApisixGuard`, como em todas as outras rotas. Só o gateway e o backend do console o
    têm.
-2. `X-Cosmos-Internal` está presente. O APISIX o remove de toda requisição que passa
-   pelo seu proxy (`proxy-rewrite.headers.remove`), então quem chama com uma API key
-   não consegue enviá-lo; só uma chamada direta de um backend que detém o segredo do
-   gateway consegue.
+2. `X-Cosmos-Internal` é um marcador do console: `v1.<unix seconds>.<hex>`, onde
+   o hex é `HMAC-SHA256(APISIX_GATEWAY_SECRET, "cosmos-admin-console:v1:" +
+   seconds)` e o timestamp está a até cinco minutos do relógio do servidor. Quem
+   chama com uma API key não tem o segredo do gateway, então não consegue gerá-lo nem
+   mesmo por uma rota que esqueceu de remover o header
+   (`proxy-rewrite.headers.remove`). É essa mesma verificação que isenta o console dos
+   limites de taxa por consumidor e marca suas linhas no log de requisições.
 
-O ponto 2 depende da configuração de rotas do gateway no repositório da plataforma
-de desenvolvedores, e não de um segredo guardado por este serviço. Em troca, o console
-é o único lugar que decide quem é admin da plataforma, e as linhas de auditoria
-nomeiam a conta do console que agiu (`cosmos_<userId>`) e o seu papel na plataforma,
-em toda mutação **e** em toda leitura.
+Um `X-Cosmos-Internal: 1` puro — o que o console enviava antes — é recusado como
+qualquer outra falsificação, então o serviço e a plataforma de desenvolvedores são
+implantados juntos. Os dois repositórios fixam o mesmo vetor de teste para o marcador.
+O console é o único lugar que decide quem é admin da plataforma, e as linhas de
+auditoria nomeiam a conta do console que agiu (`cosmos_<userId>`) e o seu papel na
+plataforma, em toda mutação **e** em toda leitura.
 
 O que isso muda para quem chama:
 
@@ -2151,9 +2228,15 @@ O que isso muda para quem chama:
 | `actorId` / `actorRole` em uma linha de auditoria nomeavam a credencial | eles nomeiam a conta do console e o seu papel na plataforma |
 
 Para chamar `/v1/admin` diretamente (de um script de operações, por exemplo), envie
-`X-Gateway-Secret`, `X-Consumer-Username` e `X-Cosmos-Internal: 1`; adicione
-`X-Cosmos-Admin-Role: owner` para rotular a linha de auditoria. Mantenha o serviço
-fora da internet pública.
+`X-Gateway-Secret`, `X-Consumer-Username` e um `X-Cosmos-Internal` recém-gerado;
+adicione `X-Cosmos-Admin-Role: owner` para rotular a linha de auditoria. Mantenha o
+serviço fora da internet pública.
+
+```sh
+TS=$(date +%s)
+MAC=$(printf 'cosmos-admin-console:v1:%s' "$TS" | openssl dgst -sha256 -hmac "$APISIX_GATEWAY_SECRET" -r | cut -d' ' -f1)
+curl -H "X-Gateway-Secret: $APISIX_GATEWAY_SECRET" -H "X-Consumer-Username: ops" -H "X-Cosmos-Internal: v1.$TS.$MAC" http://localhost:3000/v1/admin/summary
+```
 
 ### `APISIX_GATEWAY_SECRET` agora exige 32 caracteres
 
@@ -2393,8 +2476,10 @@ cliente, e o guard depende disso.
 > **A lista de remoção é um controle de segurança, e não pode ser verificada a partir
 > deste repositório.** Este serviço aceita cada header dela pelo valor declarado;
 > `X-Gateway-Secret` só prova que a requisição passou por um gateway, não que esses
-> valores são honestos. Revise a lista sempre que uma rota for adicionada ou copiada —
-> uma rota que não remova `X-Cosmos-Internal` dá a toda API key acesso a `/v1/admin`.
+> valores são honestos. Revise a lista sempre que uma rota for adicionada ou copiada.
+> `X-Cosmos-Internal` não depende mais dela — o serviço verifica um MAC assinado com o
+> segredo do gateway —, mas cada header `X-Consumer-*` ainda depende, e uma rota que
+> encaminhe a cópia de um cliente permite que ele se passe por qualquer consumidor.
 > Mantenha o serviço em uma rede privada para que o APISIX seja o único caminho de
 > entrada; o segredo compartilhado é uma segunda camada, não a única.
 >

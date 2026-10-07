@@ -34,12 +34,14 @@ l'orchestrateur interroge directement). Le contrôle est toujours actif — il n
 indicateur pour le désactiver. Pour le développement local, placez le service derrière APISIX
 ou envoyez vous-même `X-Gateway-Secret` + les en-têtes `X-Consumer-*`.
 
-`/v1/admin` est inter-tenants, donc `AdminGuard` exige en plus `X-Cosmos-Internal`.
-APISIX **supprime** cet en-tête de tout ce qu'il relaie, de sorte que seul un backend qui
-appelle le service directement avec le secret de la passerelle peut l'envoyer — la plateforme
-développeur, qui décide si le compte connecté est owner ou admin. Il n'y a pas d'identifiant
-d'administration distinct : ce sont le secret de la passerelle, l'isolation réseau et la liste
-de suppression d'en-têtes de la route de la passerelle qui protègent les données inter-tenants.
+`/v1/admin` est inter-tenants, donc `AdminGuard` exige en plus que `X-Cosmos-Internal`
+porte un MAC récent calculé avec le secret de la passerelle (`src/admin/console-marker.ts`).
+Les appelants munis d'une clé API ne détiennent jamais ce secret, de sorte que seul un backend
+qui appelle le service directement peut en produire un — la plateforme développeur, qui décide
+si le compte connecté est owner ou admin. Il n'y a pas d'identifiant d'administration distinct.
+APISIX supprime aussi l'en-tête de tout ce qu'il relaie, mais c'est une défense en
+profondeur : une route qui oublie de le supprimer relaie une valeur qu'aucun client ne pourrait
+falsifier.
 
 Le pipeline :
 
@@ -295,6 +297,7 @@ Les chemins utilisent la forme OpenAPI `{param}`.
 | GET | `/v1/sep30/accounts/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | DELETE | `/v1/sep30/accounts/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | POST | `/v1/sep30/accounts/{address}/sign/{signer}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
+| GET | `/v1/sep30/shares` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | PUT | `/v1/sep30/shares/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | GET | `/v1/sep30/shares/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | DELETE | `/v1/sep30/shares/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
@@ -454,7 +457,7 @@ Chaque requête entrante, à l'exception de `/v1/health` et `/docs`, est ajouté
 (`GET /v1/logs`). Les lignes incluent le chemin, le statut, la durée et — lorsqu'ils sont
 présents — l'`ip` / `userAgent` du payeur.
 
-Le trafic du tableau de bord (`X-Cosmos-Internal`) est **enregistré et marqué**
+Le trafic du tableau de bord (marqueur `X-Cosmos-Internal` vérifié) est **enregistré et marqué**
 (`request_log.internal`), et non ignoré, et la vue des journaux API filtre sur cette
 colonne ; aucun en-tête de requête ne peut donc tenir du trafic à l'écart du journal.
 
@@ -1080,6 +1083,7 @@ pour tous les appelants anonymes.
 // response
 { "submitted": true, "status": "SUCCEEDED", "txHash": "…", "swap": { … } }
 // on a network rejection → { "submitted": false, "status": "FAILED", "reason": "…", "resultCodes": ["op_under_dest_min"], "swap": { … } }
+// rejected, outcome not on the ledger yet → { "submitted": false, "status": "SUBMITTED", "reason": "…", "resultCodes": ["tx_bad_seq"], "swap": { … } }
 ```
 
 Avant la diffusion, le service vérifie que le hash de la transaction signée correspond à
@@ -1373,6 +1377,31 @@ Les changements d'état sont synchronisés à partir des **webhooks Svix** de Bl
 sur le corps brut) et **réémis** vers les propres endpoints de webhook de l'intégrateur sous
 forme de nouveaux types d'événements (`RECEIVER_UPDATED`, `PAYIN_*`, `PAYOUT_*`) via le
 dispatcher existant.
+
+**Un payin ou un payout est enregistré avant que BlindPay ne soit appelé pour le
+créer.** `POST /v1/onramp/payins` et `POST /v1/offramp/payouts` écrivent d'abord une
+ligne en `pending_provider` portant le devis et sa clé d'exécution, appellent ensuite
+BlindPay avec cette clé comme `Idempotency-Key`, puis renseignent l'identifiant du
+fournisseur. Un timeout, ou une écriture qui échoue après l'appel, laisse donc une
+ligne et non un paiement que personne ici ne connaît : relancer le même create avec le
+même devis réutilise la ligne et rejoue la clé, et le webhook de BlindPay complète la
+ligne par `quote_id`. Les lectures du tenant omettent ces lignes tant qu'elles n'ont
+pas d'identifiant fournisseur. Une ligne toujours sans identifiant au bout d'une heure
+passe en `provider_unconfirmed` et est journalisée pour un opérateur — rien ne
+renvoie le create, car l'appelant a pu payer entre-temps avec un autre devis. Un
+refus de BlindPay (tout 4xx sauf 408 et 409) supprime la ligne.
+
+**Un webhook qui ne correspond à aucune ligne n'est pas abandonné.** Un événement de
+payin ou de payout est attribué par le devis qu'il a exécuté — au consumer qui l'a
+émis — et le miroir y est créé ou réparé. Un événement qui ne peut toujours pas être
+attribué est acquitté mais reste ouvert, et le réconciliateur BlindPay (actif avec
+`OBSERVER_ENABLED`, une fois par minute, sur une seule réplique à la fois) le relit
+auprès de BlindPay pendant sept jours, en journalisant son `svix-id` à chaque échec
+pour que la livraison puisse être rejouée depuis le tableau de bord Svix. Le même
+réconciliateur relit les payins et payouts ouverts dont les webhooks se sont tus et
+répare leur statut. `PAYIN_COMPLETED` et `PAYOUT_COMPLETED` partent une seule fois par
+payin ou payout, quel que soit le chemin qui voit la finalisation en premier — le
+webhook, un renvoi sous un nouveau `svix-id` ou le réconciliateur.
 
 | Méthode | Chemin                                                | Scope          | Description |
 | ------ | ----------------------------------------------------- | -------------- | ----------- |
@@ -1684,6 +1713,44 @@ plugins isolés.
 
 ## Mise à niveau — changements incompatibles et notes de déploiement
 
+### `X-Cosmos-Internal` doit porter un MAC du secret de la passerelle
+
+- **Un `X-Cosmos-Internal: 1` nu est refusé.** `/v1/admin` y répond par `403 admin_console_only`, et l'appelant n'est plus traité comme interne nulle part : les limites de débit par consommateur s'appliquent à lui, et ses lignes du journal des requêtes ne sont pas marquées. L'en-tête porte désormais `v1.<unix seconds>.<hex>`, un HMAC-SHA256 calculé avec `APISIX_GATEWAY_SECRET` et accepté à cinq minutes près de l'horloge du serveur (`src/admin/console-marker.ts`).
+- **Les scripts d'exploitation qui appellent `/v1/admin` directement doivent produire le marqueur à chaque appel.** L'extrait `openssl` + `curl` à la fin de l'entrée `ADMIN_API_CREDENTIALS`, plus bas, le fait.
+- **Déployez le service et la plateforme développeur ensemble.** C'est désormais la console qui produit le marqueur. Une ancienne console face à ce service reçoit `403` sur chaque appel d'administration ; une nouvelle console face à un service plus ancien continue de fonctionner, car le service plus ancien admet toute valeur sauf `0`, `false`, `no` et `off`. Si les deux ne peuvent pas partir en même temps, déployez d'abord la plateforme développeur.
+- **Aucune nouvelle variable d'environnement.** Le MAC est calculé avec `APISIX_GATEWAY_SECRET`, que le service et la console partagent déjà.
+
+### Champs de bénéficiaire et requêtes des listes d'admin plus stricts
+
+- **`POST /v1/kyc/receivers` et `PUT /v1/kyc/receivers/{id}` refusent en `400` les champs d'identité mal formés.** `country` et `id_doc_country` (au premier niveau et dans `owners[]`) doivent être des codes ISO 3166-1 alpha-2 en majuscules (`US`, pas `us` ni `USA`) ; `date_of_birth` (au premier niveau et dans `owners[]`) et `formation_date` doivent être des date-heures ISO 8601 avec décalage (`1985-04-12T00:00:00.000Z`, pas `1985-04-12`) ; `owners[].ownership_percentage` doit être un nombre de 0 à 100 ; `website` doit être une URL `http`/`https` absolue sans identifiants. Chacun était auparavant stocké tel quel et n'échouait chez BlindPay qu'à l'activation du bénéficiaire, après la revue.
+- **Les requêtes des listes `/v1/admin` sont validées.** Un `status` inconnu pour cette liste, un `take` hors de 1–200, un `skip` négatif ou un paramètre que la route n'accepte pas donne désormais `400` ; un `status` invalide atteignait auparavant la base de données et revenait en `500`. Les valeurs par défaut ne changent pas (`take=50`, `skip=0`).
+- **Les lectures d'admin des bénéficiaires, payins et payouts renvoient une liste explicite de champs.** Ce sont les champs renvoyés jusqu'ici ; une colonne ajoutée plus tard à ces tables n'est renvoyée qu'une fois listée.
+
+### BlindPay : des lignes avant l'appel au fournisseur, et une seule finalisation par paiement
+
+- **La migration `20261006120000_blindpay_pending_rows`** rend `payin.blindpayId`
+  et `payout.blindpayId` nullables, ajoute `executionKey` (unique) et
+  `lastCheckedAt` aux deux tables, et ajoute `environment`, `blindpayId`,
+  `appliedAt` et `lastAttemptAt` à `blindpay_webhook_event`. Les lignes de livraison
+  existantes sont marquées comme appliquées.
+- **Aucune réponse ne change de forme.** Les lignes qui attendent encore un
+  identifiant fournisseur (`pending_provider`, `provider_unconfirmed`) ne sont pas
+  renvoyées par les routes du tenant ; les listes d'administration
+  `/v1/admin/payins` et `/v1/admin/payouts` les affichent, avec `blindpayId: null`.
+- **`PAYIN_COMPLETED` et `PAYOUT_COMPLETED` sont dédupliqués** comme les autres
+  événements terminaux : une seconde finalisation sous un nouveau `svix-id` ne
+  produit plus un second événement avec un nouvel `evt_`. Les autres événements
+  BlindPay ne sont réémis que si la ligne a réellement changé.
+- **Le réconciliateur BlindPay tourne avec l'observateur de règlement**
+  (`OBSERVER_ENABLED`) ; désactiver l'observateur le désactive aussi.
+
+### Payment intents : une transaction règle un seul intent, tous tenants confondus
+
+- **La migration `20261006130000_payment_settlement`** ajoute `payment_settlement` et la remplit à partir de chaque intent SUCCEEDED. Là où un même hash a déjà réglé plusieurs intents, le plus ancien garde la revendication ; le fichier de migration contient la requête qui liste les autres pour vérification.
+- **Une transaction qui a déjà réglé un payment intent — de n'importe quel consumer — n'en règle plus un autre.** `POST /v1/payment-intents/{id}/validate` et `PATCH /v1/payment-intents/{id}` avec `status: SUCCEEDED` répondent `409 transaction_already_settled` et laissent l'intent tel quel. La destination n'est liée à aucun consumer et le memo est choisi par l'appelant, donc un autre tenant — ou tout appelant sous la clé publique partagée — pouvait copier un intent terme à terme et être réglé par la transaction de son payeur. L'observer traite une telle correspondance comme une absence de paiement : l'intent reste PENDING et expire impayé.
+- **Le paiement va à l'intent le plus ancien qu'il paie.** Un intent reçoit le même `409 transaction_already_settled` quand la transaction paie aussi un intent plus ancien d'un autre consumer : une copie faite après l'original perd même si son règlement s'exécute en premier, et l'original est réglé au passage suivant. Une copie faite AVANT l'original gagne en revanche, mais seulement tant qu'elle est ouverte : un intent EXPIRED ne prime sur personne, donc une fois la copie expirée l'original est réglé. La créer exige de connaître le memo de l'original à l'avance, donc laissez ce service générer les memos (omettez `memo`) plutôt que d'envoyer des memos prévisibles comme des numéros de commande. Le revers de la règle : un paiement arrivé après l'expiration de l'original peut aller à une copie plus récente qui n'a pas expiré. Sur Monad, cela couvre aussi une copie payée à l'adresse de dépôt d'un autre intent, dont le paiement a été réglé par le transfert du relayer sous un autre hash. Seul un rival que la chaîne confirme comme payé refuse un règlement, jamais le nombre de rivaux, et un rival doit décrire le même paiement (memo, destination, actif et montant sur Stellar). **Monad sans relayer est l'exception :** un paiement direct ne porte rien de propre à l'intent — destination, token et montant sont publics —, donc deux intents en mode direct pour la même adresse et le même montant sont indiscernables et ne sont pas classés par âge ; le premier à se régler prend le paiement. Utilisez les adresses de dépôt du relayer sur Monad et des memos générés par le service sur Stellar.
+- **`DELETE /v1/payment-intents/{id}` répond `409 operation_in_flight`** quand le statut de l'intent change entre sa lecture et la suppression, typiquement parce qu'il vient d'être payé. Auparavant, il était supprimé quand même.
+
 ### Connexion du portefeuille : les signataires d'un portefeuille récupéré suivent `STELLAR_NETWORK`
 
 - **`WALLET_AUTH_SIGNERS_HORIZON_URL` prend désormais par défaut le Horizon de `STELLAR_NETWORK`** (`STELLAR_HORIZON_URL_PUBLIC` / `STELLAR_HORIZON_URL_TESTNET`, sinon celui de SDF), et non plus toujours celui du réseau public. Il est lu quand un portefeuille récupéré via SEP-30 signe `POST /v1/wallet/auth/finish` avec la clé qui a remplacé sa clé maîtresse. Sur un déploiement testnet, la requête partait vers le mainnet, ne trouvait pas le compte, et la connexion de tout portefeuille récupéré répondait `400 wallet_signature_invalid`.
@@ -1707,6 +1774,12 @@ plugins isolés.
   ensemble, ou quiconque contrôle la boîte mail ET la fait accepter par les deux serveurs,
   peuvent ouvrir une sauvegarde dotée de cette porte. Exploitez les deux sur des
   infrastructures séparées avec des expéditeurs `MAIL_*` distincts, comme SEP-30 l'exige déjà.
+- **`GET /v1/sep30/shares` (sans adresse) liste toutes les moitiés déposées sous la boîte mail
+  prouvée**, paginé par `after` comme `GET /v1/sep30/accounts`. Une personne qui a sauvegardé
+  plusieurs wallets sous un même e-mail oublie le mot de passe de tous à la fois ; une preuve par
+  serveur ramène désormais chaque sauvegarde, et pas seulement la plus récente. Uniquement avec un
+  jeton d'identité : le jeton SEP-10 d'un compte reçoit `403`, puisqu'il atteint déjà sa seule
+  moitié par l'adresse.
 - **`isBackupBox` accepte un emplacement `recovery` dans une boîte `v: 4`**, à côté d'au moins un
   emplacement mot de passe ou passkey. Une boîte dont la seule porte est `recovery` est refusée.
 - **Le code envoyé par un serveur de récupération** part désormais aussi vers une boîte mail qui
@@ -1931,6 +2004,7 @@ correctement ; consultez la colonne « Qui le remarque » avant de déployer.
 | `POST /v1/onramp/receivers/:id/virtual-accounts` donne `403 account_disabled` lorsque le receiver, ou le receiver propriétaire de `blockchain_wallet_id`, est désactivé | Personne de légitime | C'était la seule opération fiat que l'interrupteur d'arrêt ne couvrait pas : un compte désactivé pouvait encore ouvrir un nouveau rail de dépôt |
 | `POST /v1/swaps/:id/submit` et `POST /v1/liquidity-pools/operations/:id/submit` vérifient l'enveloppe avant toute autre chose : un corps qui ne s'analyse pas, qui n'est pas l'enveloppe de la ligne, ou qui ne porte aucune signature donne `400 validation_failed` quel que soit le statut de la ligne. Un `signedXdr` arbitraire ne renvoie plus une ligne `SUCCEEDED`, et une ligne `EXPIRED` répond à un corps qui ne correspond pas par `validation_failed` au lieu de `invalid_state_transition` | Les clients qui soumettaient le `xdr` non signé et comptaient sur le rejet `tx_bad_auth` | Les signatures ne changent pas le hash d'une transaction, de sorte que l'enveloppe non signée pouvait être relayée et rejetée en boucle, et sous la clé publique partagée, le seul identifiant de ligne permettait de lire une ligne déjà réglée |
 | Les deux routes de submit refusent une enveloppe dont les bornes temporelles sont dépassées (`400 invalid_state_transition`, non diffusée ; l'observateur la règle tout de même si elle a atteint le réseau) ainsi qu'une ligne `FAILED` déjà resoumise 3 fois (`400 invalid_state_transition` : construisez-en une nouvelle). Une nouvelle tentative après `503 provider_unavailable` ne compte pas | Les clients qui resoumettent en boucle : arrêtez-vous sur `invalid_state_transition` | Chaque resoumission rejetée était une soumission Horizon et un nouvel événement webhook terminal, sans aucune limite |
+| Un submit rejeté est confronté au ledger avant d'être enregistré. Une transaction déjà on-chain et réussie (le wallet l'a diffusée lui-même et la resoumission est revenue avec `tx_bad_seq`) répond `SUCCEEDED` et déclenche `*_SUCCEEDED` ; une transaction dont le ledger ne peut pas encore répondre répond `submitted: false` avec `status: "SUBMITTED"` et reste en cours pour l'observateur. L'observateur revérifie aussi les lignes `FAILED` créées au cours des dernières 24 heures et promeut celle dont la transaction a été réglée, en déclenchant `*_SUCCEEDED` après le `*_FAILED` précédent | Les clients qui lisent `submitted: false` comme définitif : vérifiez `status`, et traitez un `*_SUCCEEDED` qui suit un `*_FAILED` pour la même ressource comme une correction | Un swap ou un dépôt réglé pouvait rester `FAILED` pour de bon, sans webhook de succès et, pour un dépôt, sans base de coût |
 | Les deux routes de submit autorisent 20 appels par minute par consumer et adresse cliente, dans des compartiments séparés (`429 rate_limited`) | Les wallets derrière un même NAT qui partagent la clé publique | Les routes acceptent la clé publique partagée, et chaque appel peut diffuser vers Horizon |
 | `GET /v1/webhooks`, `GET /v1/webhooks/:id` et `PATCH /v1/webhooks/:id` ne renvoient que les champs documentés de l'endpoint ; `POST /v1/webhooks` et `POST /v1/webhooks/:id/rotate-secret` renvoient ceux-là plus `secret`. `consumerId`, `previousSecret` et `previousSecretExpiresAt` ont disparu des cinq | Les appelants qui lisent ces champs | `previousSecret` est un secret de signature qu'un intégrateur peut encore accepter, et une clé munie du seul `webhooks:read` pouvait le lire |
 | Un jeton de récupération qui ne correspond à aucune récupération active de l'alias ne compte plus contre elle. Un jeton actif consomme une tentative à chaque présentation, y compris une dont le challenge ou la signature échoue ensuite ; après cinq, c'est `400 alias_recovery_invalid` | Personne de légitime | Les noms d'alias sont publics, donc cinq jetons invalides envoyés depuis n'importe quelle clé épuisaient toute récupération lancée par la console |
@@ -1952,6 +2026,7 @@ correctement ; consultez la colonne « Qui le remarque » avant de déployer.
 | `POST /v1/wallet/auth/finish` et `PUT /v1/wallet/backup` acceptent aussi une boîte de sauvegarde `v: 3` : la graine sous une clé de données aléatoire, et cette clé scellée une fois par porte dans `slots` (`kind: "password"` ou `kind: "passkey"`, 8 au plus). Toute porte mot de passe est soumise au même plancher PBKDF2 qu'une boîte `v: 2` ; une porte passkey n'a pas de coût, car sa clé est la sortie PRF WebAuthn de l'authentificateur. Les boîtes `v: 2` ne changent pas | Wallets : une sauvegarde uniquement par passkey est valide, et un wallet qui en a écrit une a besoin de ce serveur | Permet de restaurer avec une passkey au lieu de saisir le mot de passe d'origine, sans que ce service ne détienne jamais une clé qui ouvre la boîte |
 | `POST /v1/wallet/auth/oauth/authorize` accepte un `returnTo` facultatif. S’il figure dans `WALLET_AUTH_RETURN_URLS`, `GET /v1/wallet/auth/oauth/callback/{provider}` répond `302` vers lui avec `?state=…` (plus `&error=<reason>` en cas d’échec) au lieu d’afficher la page ; un `returnTo` non listé est `400 wallet_return_url_not_allowed`. Seul le `state` voyage — le handshake est toujours échangé avec le vérificateur PKCE. Exécutez d’abord la migration `20260927180000_wallet_auth_return_to` | Wallets natifs (bureau et mobile) : envoyer `returnTo` et enregistrer cette URL auprès du système | Une session d’authentification de la plateforme (`ASWebAuthenticationSession`, un Custom Tab, un deep link ou un listener loopback de bureau) ne se ferme que lorsque le navigateur atteint une URL propre à l’application : la personne restait donc sur la page et devait la fermer à la main |
 | `GET /v1/wallet/auth/providers` renvoie aussi `mfaSettingsUrl` : la page du compte Authentik où une personne ajoute ou retire un second facteur (clé de sécurité ou passkey, application d’authentification, codes de récupération), en passant par la connexion Authentik s’il n’y a pas de session ; `null` sans Authentik. Le second facteur est facultatif à la connexion du wallet : `deploy/authentik/wallet-sign-in.yaml` remet l’étape MFA sur *skip*, demande le facteur après le mot de passe à qui en a un, permet à une passkey de se connecter depuis l’écran du nom d’utilisateur et propose un choix après le mot de passe à qui n’en a pas (pas maintenant, une clé de sécurité, une application d’authentification). Il ajoute aussi Google / GitHub à la page d’inscription, au-dessus du formulaire. La connexion et l’inscription par mot de passe ne changent pas | Opérateurs avec Authentik : importer le blueprint. Wallets : proposer l’URL comme réglage | Un second facteur était soit imposé à tous, soit inaccessible : les utilisateurs du wallet n’ouvrent jamais les réglages d’Authentik, les flows de configuration refusent un navigateur sans session Authentik, et le bouton passwordless de l’étape d’identification pointait vers le même flow, si bien qu’il ne faisait que recharger la page |
+| `/v1/admin` exige que `X-Cosmos-Internal` porte un MAC récent calculé avec `APISIX_GATEWAY_SECRET` (`v1.<unix seconds>.<hex>`, à cinq minutes près) ; un `1` nu est `403 admin_console_only`, et seul un marqueur vérifié exempte un appelant des limites de débit par consommateur ou marque ses lignes du journal des requêtes | Les scripts d'exploitation qui appellent `/v1/admin` directement, et une plateforme développeur déployée sans ce changement | Toute valeur sauf `0`, `false`, `no` ou `off` comptait, donc une seule route APISIX qui oubliait de supprimer l'en-tête donnait à chaque clé API la surface d'administration inter-tenants, l'exemption de limites de débit et un moyen de cacher ses appels du journal des requêtes du tenant |
 
 Notes de déploiement associées :
 
@@ -2170,15 +2245,20 @@ qu'établissent deux éléments de la requête :
 1. `X-Gateway-Secret` correspond à `APISIX_GATEWAY_SECRET` — vérifié par `ApisixGuard`
    comme sur toutes les autres routes. Seuls la passerelle et le backend de la console le
    détiennent.
-2. `X-Cosmos-Internal` est présent. APISIX le supprime de chaque requête qu'il relaie
-   (`proxy-rewrite.headers.remove`), de sorte qu'un appelant muni d'une clé API ne peut pas le
-   porter ; seul un appel direct depuis un backend détenant le secret de la passerelle le peut.
+2. `X-Cosmos-Internal` est un marqueur de console : `v1.<unix seconds>.<hex>`, où
+   l'hex est `HMAC-SHA256(APISIX_GATEWAY_SECRET, "cosmos-admin-console:v1:" +
+   seconds)` et l'horodatage se situe à moins de cinq minutes de l'horloge du serveur. Un
+   appelant muni d'une clé API ne détient pas le secret de la passerelle, il ne peut donc pas
+   en produire un, même par une route qui a oublié de supprimer l'en-tête
+   (`proxy-rewrite.headers.remove`). C'est ce même indicateur vérifié qui exempte la console
+   des limites de débit par consommateur et marque ses lignes dans le journal des requêtes.
 
-Le point 2 dépend de la configuration de la route de la passerelle dans le dépôt de la
-plateforme développeur, et non d'un secret détenu par ce service. En contrepartie, la console
-est le seul endroit qui décide qui est administrateur de la plateforme, et les lignes d'audit
-nomment le compte de la console qui a agi (`cosmos_<userId>`) et son rôle de plateforme, pour
-chaque mutation **et** chaque lecture.
+Un `X-Cosmos-Internal: 1` nu — ce qu'envoyait la console auparavant — est refusé comme
+n'importe quelle autre falsification, donc le service et la plateforme développeur se déploient
+ensemble. Les deux dépôts figent le même vecteur de test pour le marqueur. La console est le
+seul endroit qui décide qui est administrateur de la plateforme, et les lignes d'audit nomment
+le compte de la console qui a agi (`cosmos_<userId>`) et son rôle de plateforme, pour chaque
+mutation **et** chaque lecture.
 
 Ce que cela change pour un appelant :
 
@@ -2189,9 +2269,15 @@ Ce que cela change pour un appelant :
 | `actorId` / `actorRole` sur une ligne d'audit nommaient l'identifiant | ils nomment le compte de la console et son rôle de plateforme |
 
 Pour appeler `/v1/admin` directement (depuis un script d'exploitation, par exemple), envoyez
-`X-Gateway-Secret`, `X-Consumer-Username` et `X-Cosmos-Internal: 1` ; ajoutez
-`X-Cosmos-Admin-Role: owner` pour étiqueter la ligne d'audit. Gardez le service hors de
-l'internet public.
+`X-Gateway-Secret`, `X-Consumer-Username` et un `X-Cosmos-Internal` fraîchement produit ;
+ajoutez `X-Cosmos-Admin-Role: owner` pour étiqueter la ligne d'audit. Gardez le service hors
+de l'internet public.
+
+```sh
+TS=$(date +%s)
+MAC=$(printf 'cosmos-admin-console:v1:%s' "$TS" | openssl dgst -sha256 -hmac "$APISIX_GATEWAY_SECRET" -r | cut -d' ' -f1)
+curl -H "X-Gateway-Secret: $APISIX_GATEWAY_SECRET" -H "X-Consumer-Username: ops" -H "X-Cosmos-Internal: v1.$TS.$MAC" http://localhost:3000/v1/admin/summary
+```
 
 ### `APISIX_GATEWAY_SECRET` exige désormais 32 caractères
 
@@ -2430,10 +2516,12 @@ sur ce comportement.
 > **La liste de suppression est un contrôle de sécurité, et elle ne peut pas être vérifiée
 > depuis ce dépôt.** Ce service accepte tel quel chaque en-tête qu'elle contient ;
 > `X-Gateway-Secret` prouve seulement que la requête est passée par une passerelle, pas que
-> ces valeurs sont honnêtes. Relisez la liste chaque fois qu'une route est ajoutée ou copiée —
-> une route qui ne supprime pas `X-Cosmos-Internal` donne à chaque clé API l'accès à
-> `/v1/admin`. Gardez le service sur un réseau privé afin qu'APISIX soit le seul point
-> d'entrée ; le secret partagé est une seconde couche, pas la seule.
+> ces valeurs sont honnêtes. Relisez la liste chaque fois qu'une route est ajoutée ou copiée.
+> `X-Cosmos-Internal` n'en dépend plus — le service vérifie un MAC calculé avec le secret de
+> la passerelle —, mais chaque en-tête `X-Consumer-*` en dépend toujours, et une route qui
+> relaie la copie d'un client lui permet de nommer n'importe quel consommateur. Gardez le
+> service sur un réseau privé afin qu'APISIX soit le seul point d'entrée ; le secret partagé
+> est une seconde couche, pas la seule.
 >
 > En production, un `X-Plan-Swap-Fee-Bps` absent renvoie `503` au lieu de se rabattre sur la
 > valeur par défaut de l'environnement.

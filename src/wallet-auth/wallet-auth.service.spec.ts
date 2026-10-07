@@ -1045,6 +1045,18 @@ describe('WalletAuthService', () => {
       ).rejects.toMatchObject({ code: ApiErrorCode.WalletSignatureInvalid });
     });
 
+    it('answers provider_unavailable when Horizon cannot be read, like every Horizon caller', async () => {
+      const { service } = makeService();
+      // Not the master key, so the signer set has to come from Horizon.
+      global.fetch = jest.fn().mockRejectedValue(new Error('horizon down'));
+      await expect(
+        service.replaceBackupBox({ ...body(), stellarAddress: OTHER_ADDRESS }),
+      ).rejects.toMatchObject({
+        code: ApiErrorCode.ProviderUnavailable,
+        status: 503,
+      });
+    });
+
     it('refuses a box that is not one the wallet could have written', async () => {
       const { service } = makeService();
       await expect(

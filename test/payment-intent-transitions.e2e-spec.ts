@@ -8,6 +8,7 @@ import { Account, Horizon, Keypair } from '@stellar/stellar-sdk';
 import request from 'supertest';
 import { AppModule } from '@/app.module';
 import { PrismaService } from '@/prisma/prisma.service';
+import { rivalsOf } from './payment-intent-rivals';
 
 /**
  * Issue #36 — payment-intent state-machine guards at the HTTP boundary.
@@ -29,6 +30,7 @@ describe('Payment intent transitions (e2e)', () => {
 
   const store = new Map<string, any>();
   const transitions: any[] = [];
+  const settlements = new Set<string>();
   let seq = 0;
 
   const rateLimitCounters = new Map<string, number>();
@@ -89,7 +91,9 @@ describe('Payment intent transitions (e2e)', () => {
         store.set(row.id, row);
         return Promise.resolve(row);
       }),
-      findMany: jest.fn(() => Promise.resolve([...store.values()])),
+      findMany: jest.fn((args: any) =>
+        Promise.resolve(rivalsOf(store.values(), args) ?? [...store.values()]),
+      ),
       count: jest.fn(() => Promise.resolve(store.size)),
       findFirst: jest.fn(({ where }: any) =>
         Promise.resolve(store.get(where.id) ?? null),
@@ -119,10 +123,29 @@ describe('Payment intent transitions (e2e)', () => {
         store.set(where.id, next);
         return Promise.resolve({ count: 1 });
       }),
-      delete: jest.fn(({ where }: any) => {
+      // DELETE is a compare-and-swap on the status it read.
+      deleteMany: jest.fn(({ where }: any) => {
         const row = store.get(where.id);
+        if (!row || (where.status && row.status !== where.status)) {
+          return Promise.resolve({ count: 0 });
+        }
         store.delete(where.id);
-        return Promise.resolve(row);
+        return Promise.resolve({ count: 1 });
+      }),
+    },
+    // The settled hash's claim: one per (chain, network, txHash).
+    paymentSettlement: {
+      create: jest.fn(({ data }: any) => {
+        const key = `${data.chain}|${data.network}|${data.txHash}`;
+        if (settlements.has(key)) {
+          return Promise.reject(
+            Object.assign(new Error('Unique constraint failed'), {
+              code: 'P2002',
+            }),
+          );
+        }
+        settlements.add(key);
+        return Promise.resolve(data);
       }),
     },
     paymentIntentTransition: {
