@@ -296,6 +296,7 @@ Paths OpenAPI के `{param}` रूप में लिखे गए हैं
 | GET | `/v1/sep30/accounts/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | DELETE | `/v1/sep30/accounts/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | POST | `/v1/sep30/accounts/{address}/sign/{signer}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
+| GET | `/v1/sep30/shares` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | PUT | `/v1/sep30/shares/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | GET | `/v1/sep30/shares/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | DELETE | `/v1/sep30/shares/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
@@ -1714,6 +1715,10 @@ seal होती हैं और कभी लौटाई नहीं जा
   इनबॉक्स पर नियंत्रण रखता है और दोनों सर्वरों से उसे स्वीकार करवा लेता है, इस दरवाज़े वाला बैकअप खोल
   सकते हैं। दोनों को अलग इंफ्रास्ट्रक्चर पर और अलग `MAIL_*` प्रेषकों के साथ चलाएँ, जैसा SEP-30 पहले से
   माँगता है।
+- **`GET /v1/sep30/shares` (बिना पते के) सिद्ध इनबॉक्स के अंतर्गत दर्ज हर आधा हिस्सा सूचीबद्ध करता है**,
+  `GET /v1/sep30/accounts` की तरह `after` से पेज किया हुआ। जिसने एक ही ईमेल से कई वॉलेट का बैकअप लिया है,
+  वह सबका पासवर्ड एक साथ भूलता है; अब हर सर्वर पर एक प्रमाण सिर्फ़ सबसे नए नहीं, बल्कि हर बैकअप को वापस लाता है।
+  केवल पहचान टोकन से: किसी खाते का SEP-10 टोकन `403` पाता है, क्योंकि वह अपना एक हिस्सा पहले से पते से पा लेता है।
 - **`isBackupBox` एक `v: 4` बॉक्स में एक `recovery` स्लॉट स्वीकार करता है**, कम से कम एक पासवर्ड या
   passkey स्लॉट के साथ। ऐसा बॉक्स अस्वीकार होता है जिसका एकमात्र दरवाज़ा `recovery` हो।
 - **रिकवरी सर्वर का ईमेल कोड** अब उस इनबॉक्स को भी जाता है जिसके पास वहाँ केवल एक बैकअप हिस्सा है।

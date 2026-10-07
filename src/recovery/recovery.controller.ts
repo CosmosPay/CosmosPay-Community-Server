@@ -20,6 +20,7 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { Response } from 'express';
+import { ApiUpstream } from '@/common/decorators/api-upstream.decorator';
 import { Public } from '@/common/decorators/public.decorator';
 import { SEP_TOKEN_SCHEME } from '@/swagger';
 import { RateLimit } from '@/common/decorators/rate-limit.decorator';
@@ -132,6 +133,9 @@ export class Sep10Controller {
   @HttpCode(200)
   @Public()
   @RateLimit(SEP10_TOKEN_RATE_LIMIT)
+  // The challenge is weighed against the signer set Horizon reports; a lookup
+  // that fails answers 503 (`{ error }`, via SepExceptionFilter).
+  @ApiUpstream('Horizon')
   @ApiOperation({
     summary: 'Exchange a signed challenge for a token',
     description:
@@ -332,6 +336,25 @@ export class Sep30Controller {
 @Controller({ path: 'sep30/shares', version: '1' })
 export class RecoverySharesController {
   constructor(private readonly shares: RecoverySharesService) {}
+
+  @Get()
+  @ApiBearerAuth(SEP_TOKEN_SCHEME)
+  @Public()
+  @RateLimit(RECOVERY_SHARE_READ_RATE_LIMIT)
+  @ApiOperation({
+    summary:
+      'Every half this server holds for the proven inbox (paged by `after`)',
+    description:
+      "This server's identity token for an email. One proof brings back the " +
+      'halves of every wallet backed up under it.',
+  })
+  list(
+    @Headers('authorization') authorization: string | undefined,
+    @Query() query: Sep30ListQueryDto,
+    @RecoveryNetwork() network: StellarNetwork | null,
+  ) {
+    return this.shares.list(authorization, query.after, network);
+  }
 
   @Put(':address')
   @ApiBearerAuth(SEP_TOKEN_SCHEME)

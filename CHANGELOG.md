@@ -2,6 +2,11 @@
 
 All notable changes to the Cosmos Pay Community Server are documented here.
 Generated from [Conventional Commits](https://www.conventionalcommits.org) by [git-cliff](https://git-cliff.org).
+## [1.5.1] - 2026-10-04
+
+### Dependencies
+- Apply Dependabot minor-and-patch bumps (#103) (8db50b4)
+
 ## [1.5.0] - 2026-10-04
 
 ### Features

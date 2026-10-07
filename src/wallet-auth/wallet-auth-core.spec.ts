@@ -98,9 +98,9 @@ function boxV3(
 }
 
 describe('wallet-auth-core', () => {
-  /* The cross-repo contract. These literals are built independently by the
-     wallet (src/lib/signIn.ts) and the developer platform; all three must agree
-     byte for byte or no sign-in can finish. Pinned as whole strings on purpose —
+  /* The cross-repo contract. These literals are built independently here and by
+     the wallet (src/lib/signIn.ts, pinned in its tests/unit/signIn.test.ts); both
+     must agree byte for byte or no sign-in can finish. Pinned as whole strings on purpose —
      asserting "it contains the email" would pass through a reordering that
      breaks every device in the field. */
   describe('the signed challenges are a contract, not an implementation detail', () => {

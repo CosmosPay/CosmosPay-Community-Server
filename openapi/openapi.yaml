@@ -5075,6 +5075,8 @@ paths:
           $ref: "#/components/responses/RateLimited"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/UpstreamUnavailable"
       summary: Attach the proven identity to the account this device signs for
       tags:
         - wallet-auth
@@ -5083,6 +5085,8 @@ paths:
         - name: wallet-auth-finish
           limit: 20
           windowMs: 600000
+      x-cosmos-upstream:
+        - Horizon
   /v1/wallet/backup:
     put:
       description: >-
@@ -5195,6 +5199,8 @@ paths:
           $ref: "#/components/responses/RateLimited"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/UpstreamUnavailable"
       summary: Replace the sealed box stored for an account
       tags:
         - wallet-auth
@@ -5203,6 +5209,8 @@ paths:
         - name: wallet-auth-finish
           limit: 20
           windowMs: 600000
+      x-cosmos-upstream:
+        - Horizon
   /v1/wallet/recovery/setup:
     post:
       description: >-
@@ -5324,6 +5332,8 @@ paths:
           $ref: "#/components/responses/RateLimited"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/UpstreamUnavailable"
       summary: Sponsor the reserve of an account's two recovery signers
       tags:
         - wallet-auth
@@ -5336,6 +5346,8 @@ paths:
           limit: 200
           windowMs: 600000
           per: consumer
+      x-cosmos-upstream:
+        - Horizon
   /.well-known/stellar.toml:
     get:
       description: WEB_AUTH_ENDPOINT and SIGNING_KEY (SEP-10), HOME_DOMAIN, and a
@@ -5446,6 +5458,8 @@ paths:
           $ref: "#/components/responses/RateLimited"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/UpstreamUnavailable"
       summary: Exchange a signed challenge for a token
       tags:
         - recovery
@@ -5454,6 +5468,8 @@ paths:
         - name: sep10-token
           limit: 60
           windowMs: 600000
+      x-cosmos-upstream:
+        - Horizon
       security: []
   /v1/sep30/identity:
     post:
@@ -5855,6 +5871,53 @@ paths:
       x-cosmos-public: true
       x-cosmos-rate-limit:
         - name: sep30-sign
+          limit: 20
+          windowMs: 600000
+  /v1/sep30/shares:
+    get:
+      description: This server's identity token for an email. One proof brings back
+        the halves of every wallet backed up under it.
+      operationId: RecoverySharesController_list_v1
+      parameters:
+        - name: after
+          required: false
+          in: query
+          description: The last address of the previous page.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          headers:
+            ratelimit-limit:
+              description: Requests allowed in the current window.
+              schema:
+                type: integer
+                example: 30
+            ratelimit-remaining:
+              description: Requests left in the current window.
+              schema:
+                type: integer
+                example: 0
+            ratelimit-reset:
+              description: Seconds until the window resets.
+              schema:
+                type: integer
+                example: 42
+        "400":
+          $ref: "#/components/responses/ValidationFailed"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+      security:
+        - sep-token: []
+      summary: Every half this server holds for the proven inbox (paged by `after`)
+      tags:
+        - recovery
+      x-cosmos-public: true
+      x-cosmos-rate-limit:
+        - name: recovery-share-read
           limit: 20
           windowMs: 600000
   /v1/sep30/shares/{address}:

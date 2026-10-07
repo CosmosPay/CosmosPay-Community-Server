@@ -40,6 +40,7 @@ function makeService(settings: Partial<typeof SETTINGS> = {}) {
         updatedAt: new Date('2026-10-04T12:00:00Z'),
       }),
       findUnique: jest.fn(),
+      findMany: jest.fn().mockResolvedValue([]),
       deleteMany: jest.fn(),
     },
   };
@@ -174,6 +175,64 @@ describe('RecoverySharesService', () => {
       await expect(
         service.get(inbox(sibling.rules, 'ada@example.com'), ADDRESS),
       ).rejects.toMatchObject({ status: 401 });
+    });
+  });
+
+  describe('list', () => {
+    it("hands every half filed under the proven inbox, scoped to this server's role", async () => {
+      const { service, prisma, rules } = makeService();
+      prisma.recoveryBackupShare.findMany.mockResolvedValue([
+        { address: ADDRESS, share: SHARE },
+        { address: OTHER, share: SHARE },
+      ]);
+      await expect(
+        service.list(inbox(rules, 'ADA@example.com')),
+      ).resolves.toEqual({
+        shares: [
+          { address: ADDRESS, share: SHARE },
+          { address: OTHER, share: SHARE },
+        ],
+      });
+      expect(prisma.recoveryBackupShare.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { role: 'a', email: 'ada@example.com' },
+          orderBy: { address: 'asc' },
+        }),
+      );
+    });
+
+    it('pages on the address after the cursor', async () => {
+      const { service, prisma, rules } = makeService();
+      await service.list(inbox(rules, 'ada@example.com'), ADDRESS);
+      expect(prisma.recoveryBackupShare.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            role: 'a',
+            email: 'ada@example.com',
+            address: { gt: ADDRESS },
+          },
+        }),
+      );
+    });
+
+    it('refuses a key holder — an account token is not an inbox', async () => {
+      const { service, prisma, rules } = makeService();
+      await expect(service.list(keyOf(rules, ADDRESS))).rejects.toMatchObject({
+        status: 403,
+      });
+      expect(prisma.recoveryBackupShare.findMany).not.toHaveBeenCalled();
+    });
+
+    it("refuses no token, and the sibling server's identity token", async () => {
+      const { service, prisma } = makeService();
+      await expect(service.list(undefined)).rejects.toMatchObject({
+        status: 401,
+      });
+      const sibling = makeService({ role: 'b' });
+      await expect(
+        service.list(inbox(sibling.rules, 'ada@example.com')),
+      ).rejects.toMatchObject({ status: 401 });
+      expect(prisma.recoveryBackupShare.findMany).not.toHaveBeenCalled();
     });
   });
 
