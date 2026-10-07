@@ -625,7 +625,7 @@ EIP-55 写法保存。恢复设置（`POST /v1/wallet/recovery/setup`）仍仅�
 
 ## 共享公共 API key
 
-开源钱包内置了一个所有人共用的 API key，因此任何人无需注册即可进行 swap、添加流动性或创建支付链接。这些调用需要支付 `community` 套餐的佣金（150 bps，最高的费率）；注册后可以获得更低的费率。网关注入费率的方式与私有 key 完全相同（见 `resolvePlanCommissionBps`）。
+开源钱包内置了一个所有人共用的 API key，因此任何人无需注册即可进行 swap、添加流动性或创建支付链接。这些调用需要支付 `community` 套餐的佣金（50 bps，最高的费率）；注册后可以获得更低的费率。网关注入费率的方式与私有 key 完全相同（见 `resolvePlanCommissionBps`）。
 
 区别在于租户隔离。每个匿名调用方都以同一个 APISIX 消费者的身份到达，而读取端点按消费者过滤行：
 
@@ -678,7 +678,7 @@ guard 通过**以下任一**信号识别公共消费者：转发的角色（`X-C
 
 平台仍在做的都是它自己的事：开发者的 key、仪表盘，以及由它调用的 `/v1/admin`——从不反向调用。平台宕机时，没人能创建开发者 key 或打开仪表盘；钱包照常登录、付款和兑换。
 
-**钱包 key。** 完成登录后，会在消费者 `cosmos_wallet_<accountId>` 下获得一个 `dev` key 和一个 `prod` key，带有平台以前生成的 scope、label 和消费者 forwarder（套餐 `community`，兑换佣金 `WALLET_KEY_SWAP_FEE_BPS`，默认 150 bps）。第二次登录会返回账户已有的 key，而不是再签发一对。响应中的 `organizationId` 就是账户 id。
+**钱包 key。** 完成登录后，会在消费者 `cosmos_wallet_<accountId>` 下获得一个 `dev` key 和一个 `prod` key，带有平台以前生成的 scope、label 和消费者 forwarder（套餐 `community`，兑换佣金 `WALLET_KEY_SWAP_FEE_BPS`，默认 50 bps）。第二次登录会返回账户已有的 key，而不是再签发一对。响应中的 `organizationId` 就是账户 id。
 
 **admin key 是安全上的代价。** APISIX 没有比 admin key 更窄的授权，而 admin key 能改写所有路由。这里的客户端只写入 `cosmos_wallet_` 下的消费者，并在构造请求前拒绝任何其他名称，但这是本代码的承诺，不是 APISIX 的：请像对待 `APISIX_GATEWAY_SECRET` 一样对待 `APISIX_ADMIN_KEY`，只让本服务的 pod 通过网络访问 admin API 而不开放其他任何东西，并且绝不在恢复服务器上设置它（启动会拒绝）。
 
@@ -1586,7 +1586,7 @@ curl -H "X-Gateway-Secret: $APISIX_GATEWAY_SECRET" -H "X-Consumer-Username: ops"
 | `APISIX_ADMIN_URL` | 与 admin key 一起 | — | APISIX Admin API 的基础地址，如 `http://apisix:9180/apisix/admin`。仅用于签发钱包账户的 key |
 | `APISIX_ADMIN_KEY` | 钱包登录需要 | — | APISIX admin key。作用于整个网关——见[没有任何请求依赖开发者平台](#没有任何请求依赖开发者平台)。在恢复服务器上会被拒绝 |
 | `APISIX_ADMIN_TIMEOUT_MS` | 否 | `10000` | 一次 Admin API 调用的时间预算（ms） |
-| `WALLET_KEY_SWAP_FEE_BPS` | 否 | `150` | 写入钱包账户 key 的兑换佣金（`community` 套餐的费率） |
+| `WALLET_KEY_SWAP_FEE_BPS` | 否 | `50` | 写入钱包账户 key 的兑换佣金（`community` 套餐的费率） |
 | `MAIL_RESEND_API_KEY` | 邮件入口需要 | — | 本服务发送登录与恢复验证码所用的 Resend API key |
 | `MAIL_FROM` | 与 Resend / SMTP key 一起 | — | 已验证的发件人，如 `Cosmos Pay <no-reply@example.com>` |
 | `MAIL_SMTP_HOST` | 否 | — | SMTP 服务器，在未设置 `MAIL_RESEND_API_KEY` 时使用 |

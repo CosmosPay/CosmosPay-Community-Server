@@ -885,7 +885,7 @@ Stellar-only. Die Keys des Kontos werden auf jeder Chain gleich ausgestellt (sie
 
 Die Open-Source-Wallet liefert einen API-Key mit, den sich alle teilen, sodass jeder
 swappen, Liquidität bereitstellen oder einen Zahlungslink erstellen kann, ohne sich zu
-registrieren. Diese Aufrufe zahlen die Provision des `community`-Plans (150 bps, der
+registrieren. Diese Aufrufe zahlen die Provision des `community`-Plans (50 bps, der
 höchste Satz); mit einer Registrierung gibt es einen niedrigeren. Das Gateway injiziert
 den Satz genau wie bei einem privaten Key (siehe `resolvePlanCommissionBps`).
 
@@ -972,7 +972,7 @@ sich an, zahlen und tauschen wie gewohnt.
 **Wallet-Keys.** Eine abgeschlossene Anmeldung erhält einen `dev`- und einen
 `prod`-Key unter dem Consumer `cosmos_wallet_<accountId>`, mit den Scopes, Labels und
 dem Consumer-Forwarder, den früher die Plattform erzeugte (Plan `community`,
-Swap-Provision `WALLET_KEY_SWAP_FEE_BPS`, standardmäßig 150 bps). Eine zweite
+Swap-Provision `WALLET_KEY_SWAP_FEE_BPS`, standardmäßig 50 bps). Eine zweite
 Anmeldung liefert die Keys zurück, die das Konto schon hat, statt ein weiteres Paar
 auszustellen. `organizationId` in der Antwort ist die Konto-ID.
 
@@ -2375,7 +2375,7 @@ passen Sie mindestens `DATABASE_URL` und `APISIX_GATEWAY_SECRET` an.
 | `APISIX_ADMIN_URL` | mit dem Admin-Key | — | Basis der APISIX-Admin-API, z. B. `http://apisix:9180/apisix/admin`. Nur zum Ausstellen der Keys von Wallet-Konten |
 | `APISIX_ADMIN_KEY` | für die Wallet-Anmeldung | — | APISIX-Admin-Key. Gilt für das ganze Gateway — siehe [Keine Anfrage hängt von der Entwicklerplattform ab](#keine-anfrage-hängt-von-der-entwicklerplattform-ab). Auf einem Wiederherstellungsserver abgelehnt |
 | `APISIX_ADMIN_TIMEOUT_MS` | nein | `10000` | Budget für einen Admin-API-Aufruf (ms) |
-| `WALLET_KEY_SWAP_FEE_BPS` | nein | `150` | Swap-Provision in den Keys von Wallet-Konten (der Satz des Plans `community`) |
+| `WALLET_KEY_SWAP_FEE_BPS` | nein | `50` | Swap-Provision in den Keys von Wallet-Konten (der Satz des Plans `community`) |
 | `MAIL_RESEND_API_KEY` | für die E-Mail-Tür | — | Resend-API-Key, mit dem dieser Dienst Anmelde- und Wiederherstellungscodes sendet |
 | `MAIL_FROM` | mit dem Resend / SMTP-Key | — | Verifizierter Absender, z. B. `Cosmos Pay <no-reply@example.com>` |
 | `MAIL_SMTP_HOST` | nein | — | SMTP-Server, genutzt wenn `MAIL_RESEND_API_KEY` nicht gesetzt ist |

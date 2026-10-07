@@ -848,7 +848,7 @@ keys हर chain पर एक ही तरह जारी होती ह�
 
 open-source वॉलेट एक ऐसी API key के साथ आता है जो सब साझा करते हैं, ताकि कोई भी
 रजिस्टर किए बिना swap कर सके, liquidity जोड़ सके या pay link बना सके। इन कॉल पर
-`community` plan का कमीशन लगता है (150 bps, सबसे ऊँची दर); रजिस्टर करने पर कम दर
+`community` plan का कमीशन लगता है (50 bps, सबसे ऊँची दर); रजिस्टर करने पर कम दर
 मिलती है। gateway यह दर ठीक उसी तरह inject करता है जैसे private key के लिए करता है
 (देखें `resolvePlanCommissionBps`)।
 
@@ -933,7 +933,7 @@ swap करते हैं।
 **Wallet keys.** पूरा हुआ sign-in consumer `cosmos_wallet_<accountId>` के तहत एक
 `dev` और एक `prod` key पाता है, उन्हीं scopes, labels और consumer forwarder के साथ
 जो पहले platform बनाता था (plan `community`, swap commission
-`WALLET_KEY_SWAP_FEE_BPS`, डिफ़ॉल्ट 150 bps)। दूसरा sign-in नई जोड़ी जारी करने के
+`WALLET_KEY_SWAP_FEE_BPS`, डिफ़ॉल्ट 50 bps)। दूसरा sign-in नई जोड़ी जारी करने के
 बजाय खाते के पास पहले से मौजूद keys लौटाता है। Response में `organizationId` खाते का
 id है।
 
@@ -2242,7 +2242,7 @@ type दोबारा बनाए बिना enum value drop नहीं �
 | `APISIX_ADMIN_URL` | admin key के साथ | — | APISIX Admin API का base, जैसे `http://apisix:9180/apisix/admin`। केवल wallet खातों की keys जारी करने के लिए |
 | `APISIX_ADMIN_KEY` | wallet sign-in के लिए | — | APISIX admin key। पूरे gateway पर लागू — देखें [कोई भी request developer platform पर निर्भर नहीं है](#कोई-भी-request-developer-platform-पर-निर्भर-नहीं-है)। Recovery server पर अस्वीकार |
 | `APISIX_ADMIN_TIMEOUT_MS` | नहीं | `10000` | एक Admin API कॉल का बजट (ms) |
-| `WALLET_KEY_SWAP_FEE_BPS` | नहीं | `150` | Wallet खातों की keys में शामिल swap commission (`community` plan की दर) |
+| `WALLET_KEY_SWAP_FEE_BPS` | नहीं | `50` | Wallet खातों की keys में शामिल swap commission (`community` plan की दर) |
 | `MAIL_RESEND_API_KEY` | email door के लिए | — | Resend API key जिससे यह सर्विस sign-in और recovery codes भेजती है |
 | `MAIL_FROM` | Resend / SMTP key के साथ | — | Verified sender, जैसे `Cosmos Pay <no-reply@example.com>` |
 | `MAIL_SMTP_HOST` | नहीं | — | SMTP server, जब `MAIL_RESEND_API_KEY` सेट न हो तब उपयोग होता है |

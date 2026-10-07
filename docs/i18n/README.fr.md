@@ -869,7 +869,7 @@ réservée à Stellar. Les clés du compte sont émises de la même façon sur c
 
 Le wallet open source embarque une clé API que tout le monde partage, de sorte que n'importe
 qui peut effectuer un swap, ajouter de la liquidité ou créer un lien de paiement sans
-s'inscrire. Ces appels paient la commission du plan `community` (150 bps, le taux le plus
+s'inscrire. Ces appels paient la commission du plan `community` (50 bps, le taux le plus
 élevé) ; l'inscription donne accès à un taux plus bas. La passerelle injecte le taux
 exactement comme pour une clé privée (voir `resolvePlanCommissionBps`).
 
@@ -956,7 +956,7 @@ wallets se connectent, paient et font des swaps comme d'habitude.
 **Clés de wallet.** Une connexion terminée reçoit une clé `dev` et une clé `prod` sous
 le consumer `cosmos_wallet_<accountId>`, avec les scopes, labels et le forwarder de
 consumer que générait la plateforme (plan `community`, commission de swap
-`WALLET_KEY_SWAP_FEE_BPS`, 150 bps par défaut). Une deuxième connexion renvoie les
+`WALLET_KEY_SWAP_FEE_BPS`, 50 bps par défaut). Une deuxième connexion renvoie les
 clés que le compte possède déjà au lieu d'en émettre une nouvelle paire.
 `organizationId` dans la réponse est l'id du compte.
 
@@ -2339,7 +2339,7 @@ Chaque variable lue depuis `process.env` dans `src/` est validée au démarrage 
 | `APISIX_ADMIN_URL` | avec la clé admin | — | Base de l'Admin API d'APISIX, p. ex. `http://apisix:9180/apisix/admin`. Sert uniquement à émettre les clés des comptes wallet |
 | `APISIX_ADMIN_KEY` | pour la connexion du wallet | — | Clé admin d'APISIX. Vaut pour toute la passerelle — voir [Aucune requête ne dépend de la plateforme développeur](#aucune-requête-ne-dépend-de-la-plateforme-développeur). Refusée sur un serveur de récupération |
 | `APISIX_ADMIN_TIMEOUT_MS` | non | `10000` | Budget d'un appel à l'Admin API (ms) |
-| `WALLET_KEY_SWAP_FEE_BPS` | non | `150` | Commission de swap intégrée aux clés des comptes wallet (le taux du plan `community`) |
+| `WALLET_KEY_SWAP_FEE_BPS` | non | `50` | Commission de swap intégrée aux clés des comptes wallet (le taux du plan `community`) |
 | `MAIL_RESEND_API_KEY` | pour la porte email | — | Clé API Resend avec laquelle ce service envoie les codes de connexion et de récupération |
 | `MAIL_FROM` | avec la clé Resend / SMTP | — | Expéditeur vérifié, p. ex. `Cosmos Pay <no-reply@example.com>` |
 | `MAIL_SMTP_HOST` | non | — | Serveur SMTP, utilisé quand `MAIL_RESEND_API_KEY` n'est pas définie |

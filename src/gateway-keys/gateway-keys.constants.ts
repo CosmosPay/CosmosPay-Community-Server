@@ -49,7 +49,7 @@ export const WALLET_KEY_PLAN = 'community';
  * `community` plan's rate in the platform's plan table. Overridable with
  * `WALLET_KEY_SWAP_FEE_BPS` so a self-hosted deployment is not bound to it.
  */
-export const DEFAULT_WALLET_KEY_SWAP_FEE_BPS = 150;
+export const DEFAULT_WALLET_KEY_SWAP_FEE_BPS = 50;
 
 /** Upstream budget for one call to the APISIX Admin API. */
 export const DEFAULT_APISIX_ADMIN_TIMEOUT_MS = 10_000;
