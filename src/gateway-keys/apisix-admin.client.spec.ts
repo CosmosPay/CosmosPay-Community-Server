@@ -72,6 +72,48 @@ describe('ApisixAdminClient', () => {
     expect(init.headers['x-api-key']).toBe('admin-key');
   });
 
+  /* The list holds every developer's consumer too; none of them may leak out. */
+  it('lists only the wallet consumers', async () => {
+    (global.fetch as jest.Mock).mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () =>
+        Promise.resolve({
+          list: [
+            {
+              value: {
+                username: 'cosmos_wallet_acc1',
+                labels: { wallet_account: 'acc1' },
+                plugins: {
+                  'serverless-pre-function': { functions: ['return 1'] },
+                },
+              },
+            },
+            {
+              value: {
+                username: 'cosmos_someone',
+                plugins: {
+                  'serverless-pre-function': { functions: ['return 2'] },
+                },
+              },
+            },
+            { value: { username: 'cosmos_wallet_acc2' } },
+          ],
+        }),
+    });
+    await expect(makeClient().listWalletConsumers()).resolves.toEqual([
+      {
+        username: 'cosmos_wallet_acc1',
+        forwarder: 'return 1',
+        labels: { wallet_account: 'acc1' },
+      },
+      { username: 'cosmos_wallet_acc2', forwarder: null, labels: {} },
+    ]);
+    expect((global.fetch as jest.Mock).mock.calls[0][0]).toBe(
+      'http://apisix:9180/apisix/admin/consumers',
+    );
+  });
+
   it('treats a missing consumer as no credentials', async () => {
     (global.fetch as jest.Mock).mockResolvedValue({ ok: false, status: 404 });
     await expect(

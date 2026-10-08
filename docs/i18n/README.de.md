@@ -972,7 +972,9 @@ sich an, zahlen und tauschen wie gewohnt.
 **Wallet-Keys.** Eine abgeschlossene Anmeldung erhält einen `dev`- und einen
 `prod`-Key unter dem Consumer `cosmos_wallet_<accountId>`, mit den Scopes, Labels und
 dem Consumer-Forwarder, den früher die Plattform erzeugte (Plan `community`,
-Swap-Provision `WALLET_KEY_SWAP_FEE_BPS`, standardmäßig 50 bps). Eine zweite
+Swap-Provision `WALLET_KEY_SWAP_FEE_BPS`, standardmäßig 50 bps). Jeder Start erzeugt die Wallet-Consumer neu, die noch einen
+anderen Satz tragen, sodass eine Änderung von `WALLET_KEY_SWAP_FEE_BPS` jedes Konto
+sofort erreicht statt erst bei seiner nächsten Anmeldung. Eine zweite
 Anmeldung liefert die Keys zurück, die das Konto schon hat, statt ein weiteres Paar
 auszustellen. `organizationId` in der Antwort ist die Konto-ID.
 

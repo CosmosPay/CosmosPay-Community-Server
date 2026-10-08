@@ -966,7 +966,9 @@ y hacen swaps como siempre.
 **Keys de wallet.** Un inicio de sesión terminado recibe una key `dev` y una `prod`
 bajo el consumidor `cosmos_wallet_<accountId>`, con los scopes, labels y el
 forwarder de consumidor que antes generaba la plataforma (plan `community`, comisión
-de swap `WALLET_KEY_SWAP_FEE_BPS`, 50 bps por defecto). Un segundo inicio de sesión
+de swap `WALLET_KEY_SWAP_FEE_BPS`, 50 bps por defecto). Cada arranque vuelve a generar los consumidores de wallet que
+todavía llevan otra tarifa, así que un cambio de `WALLET_KEY_SWAP_FEE_BPS` llega a
+todas las cuentas de inmediato y no recién en su próximo inicio de sesión. Un segundo inicio de sesión
 devuelve las keys que la cuenta ya tiene en lugar de emitir otro par.
 `organizationId` en la respuesta es el id de la cuenta.
 

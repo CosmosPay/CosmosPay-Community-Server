@@ -956,7 +956,9 @@ wallets se connectent, paient et font des swaps comme d'habitude.
 **Clés de wallet.** Une connexion terminée reçoit une clé `dev` et une clé `prod` sous
 le consumer `cosmos_wallet_<accountId>`, avec les scopes, labels et le forwarder de
 consumer que générait la plateforme (plan `community`, commission de swap
-`WALLET_KEY_SWAP_FEE_BPS`, 50 bps par défaut). Une deuxième connexion renvoie les
+`WALLET_KEY_SWAP_FEE_BPS`, 50 bps par défaut). Chaque démarrage régénère les consumers de wallet qui portent
+encore un autre taux, si bien qu'un changement de `WALLET_KEY_SWAP_FEE_BPS` atteint
+tous les comptes d'un coup plutôt qu'à leur prochaine connexion. Une deuxième connexion renvoie les
 clés que le compte possède déjà au lieu d'en émettre une nouvelle paire.
 `organizationId` dans la réponse est l'id du compte.
 

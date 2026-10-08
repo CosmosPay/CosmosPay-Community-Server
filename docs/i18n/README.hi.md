@@ -933,7 +933,9 @@ swap करते हैं।
 **Wallet keys.** पूरा हुआ sign-in consumer `cosmos_wallet_<accountId>` के तहत एक
 `dev` और एक `prod` key पाता है, उन्हीं scopes, labels और consumer forwarder के साथ
 जो पहले platform बनाता था (plan `community`, swap commission
-`WALLET_KEY_SWAP_FEE_BPS`, डिफ़ॉल्ट 50 bps)। दूसरा sign-in नई जोड़ी जारी करने के
+`WALLET_KEY_SWAP_FEE_BPS`, डिफ़ॉल्ट 50 bps)। हर boot उन wallet consumers को फिर से बनाता है जिनमें अभी भी
+कोई और दर है, इसलिए `WALLET_KEY_SWAP_FEE_BPS` का बदलाव अगले sign-in का इंतज़ार किए
+बिना हर खाते तक तुरंत पहुँचता है। दूसरा sign-in नई जोड़ी जारी करने के
 बजाय खाते के पास पहले से मौजूद keys लौटाता है। Response में `organizationId` खाते का
 id है।
 
