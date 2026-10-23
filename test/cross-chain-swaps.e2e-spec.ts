@@ -47,6 +47,7 @@ describe('Cross-chain swaps guards (e2e)', () => {
     tokens: jest.fn().mockResolvedValue([
       { assetId: 'xlm', decimals: 7, blockchain: 'stellar', symbol: 'XLM' },
       { assetId: 'btc', decimals: 8, blockchain: 'btc', symbol: 'BTC' },
+      { assetId: 'wnear', decimals: 24, blockchain: 'near', symbol: 'wNEAR' },
     ]),
     quote: jest.fn(),
     status: jest.fn(),
@@ -167,6 +168,13 @@ describe('Cross-chain swaps guards (e2e)', () => {
           decimals: 7,
           contract: null,
         },
+        {
+          chain: 'bitcoin',
+          symbol: 'BTC',
+          assetId: 'btc',
+          decimals: 8,
+          contract: null,
+        },
       ]);
     });
 
@@ -202,6 +210,40 @@ describe('Cross-chain swaps guards (e2e)', () => {
       expect(res.body.code).toBe('validation_failed');
       expect(res.body.message.join(' ')).toMatch(/recipient.*monad/i);
       expect(res.body.message.join(' ')).toMatch(/refundTo.*solana/i);
+    });
+
+    it('validates Bitcoin and Arbitrum addresses, checksum included', async () => {
+      const res = await tenant(QUOTE, 'swaps:read')
+        .send({
+          originChain: 'arbitrum',
+          originAsset: 'ETH',
+          destinationChain: 'bitcoin',
+          destinationAsset: 'BTC',
+          amount: '1',
+          // One character off the BIP-173 example: the bech32 checksum fails.
+          recipient: 'bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t5',
+          refundTo: 'bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4',
+        })
+        .expect(400);
+      expect(res.body.code).toBe('validation_failed');
+      expect(res.body.message.join(' ')).toMatch(/recipient.*bitcoin/i);
+      expect(res.body.message.join(' ')).toMatch(/refundTo.*arbitrum/i);
+      expect(nearIntentsMock.quote).not.toHaveBeenCalled();
+    });
+
+    it('refuses a chain outside the swap vocabulary', async () => {
+      const res = await tenant(QUOTE, 'swaps:read')
+        .send({
+          originChain: 'tron',
+          originAsset: 'TRX',
+          destinationChain: 'bitcoin',
+          destinationAsset: 'BTC',
+          amount: '1',
+          recipient: 'bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4',
+          refundTo: 'TJRabPrwbZy45sbavfcjinPJC18kjpRTv8',
+        })
+        .expect(400);
+      expect(res.body.message.join(' ')).toMatch(/originChain/);
     });
 
     it('lists only its own swaps', async () => {

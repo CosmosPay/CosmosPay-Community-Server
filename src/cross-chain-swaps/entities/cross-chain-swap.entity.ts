@@ -1,11 +1,11 @@
 import { ApiProperty, OmitType } from '@nestjs/swagger';
 import { CrossChainSwapStatus } from '@generated/prisma/client';
-import { CHAINS, type Chain } from '@/chains/chains.constants';
+import { SWAP_CHAINS, type SwapChain } from '@/chains/chains.constants';
 
-/** A token NEAR Intents can swap on one of our chains. */
+/** A token NEAR Intents can swap on one of our swap chains. */
 export class CrossChainAssetEntity {
-  @ApiProperty({ enum: CHAINS, example: 'stellar' })
-  chain!: Chain;
+  @ApiProperty({ enum: SWAP_CHAINS, example: 'stellar' })
+  chain!: SwapChain;
 
   @ApiProperty({ example: 'USDC' })
   symbol!: string;
@@ -36,8 +36,8 @@ export class CrossChainAssetListEntity {
 
 /** One leg of a quote. */
 export class CrossChainQuoteLeg {
-  @ApiProperty({ enum: CHAINS, example: 'stellar' })
-  chain!: Chain;
+  @ApiProperty({ enum: SWAP_CHAINS, example: 'stellar' })
+  chain!: SwapChain;
 
   @ApiProperty({ example: 'XLM' })
   asset!: string;
@@ -140,7 +140,7 @@ export class CrossChainSwapEntity {
   @ApiProperty({ example: 'public' })
   network!: string;
 
-  @ApiProperty({ enum: CHAINS, example: 'stellar' })
+  @ApiProperty({ enum: SWAP_CHAINS, example: 'stellar' })
   originChain!: string;
 
   @ApiProperty({ example: 'XLM' })
@@ -149,7 +149,7 @@ export class CrossChainSwapEntity {
   @ApiProperty({ nullable: true, example: null })
   originContract!: string | null;
 
-  @ApiProperty({ enum: CHAINS, example: 'solana' })
+  @ApiProperty({ enum: SWAP_CHAINS, example: 'solana' })
   destinationChain!: string;
 
   @ApiProperty({ example: 'USDC' })
@@ -205,7 +205,7 @@ export class CrossChainSwapEntity {
     example:
       'web+stellar:pay?destination=GDJ4…&amount=100&memo=188866795&memo_type=MEMO_TEXT',
     description:
-      'The deposit as a wallet link on the origin chain: SEP-7 pay, Solana Pay or EIP-681.',
+      'The deposit as a wallet link on the origin chain: SEP-7 pay, Solana Pay, EIP-681 (Monad, Ethereum, Arbitrum, Base) or BIP-21 (Bitcoin).',
   })
   depositUri!: string;
 

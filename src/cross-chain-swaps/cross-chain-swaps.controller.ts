@@ -57,7 +57,7 @@ export class CrossChainSwapsController {
   @RequirePermissions('swaps:read')
   @ApiOperation({
     summary:
-      'List the assets NEAR Intents can swap on Stellar, Solana and Monad',
+      'List the assets NEAR Intents can swap on Stellar, Solana, Monad, Ethereum, Arbitrum, Base and Bitcoin',
   })
   @ApiOkResponse({ type: CrossChainAssetListEntity })
   assets() {
@@ -88,8 +88,11 @@ export class CrossChainSwapsController {
       ApiErrorCode.ProviderError,
     ],
     description:
-      '`provider_error` — NEAR Intents refused the quote (an amount below its ' +
-      'minimum, a route it cannot fill); `message` carries its reason.',
+      '`validation_failed` — among the field checks, a pair with both legs on ' +
+      'stellar, solana or monad (POST /v1/swaps settles it on that chain), or ' +
+      'the same asset on both legs. `provider_error` — NEAR Intents refused ' +
+      'the quote (an amount below its minimum, a route it cannot fill); ' +
+      '`message` carries its reason.',
   })
   @ApiErrorResponse({
     status: 503,
@@ -117,7 +120,7 @@ export class CrossChainSwapsController {
   @RateLimit(CROSS_CHAIN_CREATE_RATE_LIMIT)
   @ApiOperation({
     summary:
-      'Create a cross-chain swap → NEAR Intents deposit address + wallet link (SEP-7 / Solana Pay / EIP-681) + QR',
+      'Create a cross-chain swap → NEAR Intents deposit address + wallet link (SEP-7 / Solana Pay / EIP-681 / BIP-21) + QR',
   })
   @ApiHeader({
     name: 'Idempotency-Key',
@@ -142,9 +145,12 @@ export class CrossChainSwapsController {
       ApiErrorCode.ProviderError,
     ],
     description:
-      '`network_unsupported` — a dev (testnet) key: NEAR Intents settles on ' +
-      'mainnet only. `trustline_missing` — a Stellar recipient does not trust ' +
-      'the destination asset. `provider_error` — NEAR Intents refused the quote.',
+      '`validation_failed` — among the field checks, a pair with both legs on ' +
+      'stellar, solana or monad (POST /v1/swaps settles it on that chain), or ' +
+      'the same asset on both legs. `network_unsupported` — a dev (testnet) ' +
+      'key: NEAR Intents settles on mainnet only. `trustline_missing` — a ' +
+      'Stellar recipient does not trust the destination asset. ' +
+      '`provider_error` — NEAR Intents refused the quote.',
   })
   @ApiErrorResponse({
     status: 409,

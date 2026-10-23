@@ -49,7 +49,8 @@ import { NativePluginsModule } from '@/native-plugins/native-plugins.module';
     HealthModule,
     PaymentIntentsModule,
     SwapsModule,
-    // Swaps between Stellar, Solana and Monad, settled by NEAR Intents (1Click).
+    // Swaps between Stellar, Solana, Monad, Ethereum, Arbitrum, Base and
+    // Bitcoin, settled by NEAR Intents (1Click).
     // Core, not a native plugin: it is how this service swaps across chains.
     CrossChainSwapsModule,
     LiquidityPoolsModule,

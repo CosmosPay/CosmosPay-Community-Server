@@ -1667,7 +1667,8 @@ paths:
           $ref: "#/components/responses/UpstreamUnavailable"
         "504":
           $ref: "#/components/responses/UpstreamTimeout"
-      summary: List the assets NEAR Intents can swap on Stellar, Solana and Monad
+      summary: List the assets NEAR Intents can swap on Stellar, Solana, Monad,
+        Ethereum, Arbitrum, Base and Bitcoin
       tags:
         - cross-chain-swaps
       x-cosmos-public-key: true
@@ -1707,8 +1708,11 @@ paths:
                 type: integer
                 example: 42
         "400":
-          description: "`provider_error` — NEAR Intents refused the quote (an amount below
-            its minimum, a route it cannot fill); `message` carries its reason."
+          description: "`validation_failed` — among the field checks, a pair with both
+            legs on stellar, solana or monad (POST /v1/swaps settles it on that
+            chain), or the same asset on both legs. `provider_error` — NEAR
+            Intents refused the quote (an amount below its minimum, a route it
+            cannot fill); `message` carries its reason."
           content:
             application/json:
               schema:
@@ -1861,10 +1865,13 @@ paths:
                 type: integer
                 example: 42
         "400":
-          description: "`network_unsupported` — a dev (testnet) key: NEAR Intents settles
-            on mainnet only. `trustline_missing` — a Stellar recipient does not
-            trust the destination asset. `provider_error` — NEAR Intents refused
-            the quote."
+          description: "`validation_failed` — among the field checks, a pair with both
+            legs on stellar, solana or monad (POST /v1/swaps settles it on that
+            chain), or the same asset on both legs. `network_unsupported` — a
+            dev (testnet) key: NEAR Intents settles on mainnet only.
+            `trustline_missing` — a Stellar recipient does not trust the
+            destination asset. `provider_error` — NEAR Intents refused the
+            quote."
           content:
             application/json:
               schema:
@@ -2005,7 +2012,7 @@ paths:
         "504":
           $ref: "#/components/responses/UpstreamTimeout"
       summary: Create a cross-chain swap → NEAR Intents deposit address + wallet link
-        (SEP-7 / Solana Pay / EIP-681) + QR
+        (SEP-7 / Solana Pay / EIP-681 / BIP-21) + QR
       tags:
         - cross-chain-swaps
       x-cosmos-public-key: true
@@ -8421,7 +8428,8 @@ tags:
   - name: swaps
     description: "Path payments between assets: quote, build, submit."
   - name: cross-chain-swaps
-    description: Swaps between Stellar, Solana and Monad, settled by NEAR Intents.
+    description: Swaps between Stellar, Solana, Monad, Ethereum, Arbitrum, Base and
+      Bitcoin, settled by NEAR Intents.
   - name: liquidity-pools
     description: Non-custodial AMM deposits and withdrawals.
   - name: aliases
@@ -10095,6 +10103,10 @@ components:
             - stellar
             - solana
             - monad
+            - ethereum
+            - arbitrum
+            - base
+            - bitcoin
           example: stellar
         symbol:
           type: string
@@ -10135,13 +10147,21 @@ components:
             - stellar
             - solana
             - monad
+            - ethereum
+            - arbitrum
+            - base
+            - bitcoin
           example: stellar
+          description: The chain the payer deposits on. A pair with both legs on stellar,
+            solana or monad is refused here — POST /v1/swaps settles it on that
+            chain's own venue; one on ethereum, arbitrum or base is settled by
+            NEAR Intents.
         originAsset:
           type: string
-          description: "The asset sold: the native ticker (XLM, SOL, MON), a symbol listed
-            once on the chain (USDC), a contract (SPL mint, ERC-20 address,
-            Stellar issuer) or Stellar CODE:ISSUER. See GET
-            /v1/cross-chain-swaps/assets."
+          description: 'The asset sold: the native ticker (XLM, SOL, MON, ETH, BTC) or
+            "native", a symbol listed once on the chain (USDC), a contract (SPL
+            mint, ERC-20 address, Stellar issuer) or Stellar CODE:ISSUER. See
+            GET /v1/cross-chain-swaps/assets.'
           example: XLM
         destinationChain:
           type: string
@@ -10149,7 +10169,12 @@ components:
             - stellar
             - solana
             - monad
+            - ethereum
+            - arbitrum
+            - base
+            - bitcoin
           example: solana
+          description: The chain the recipient is paid on.
         destinationAsset:
           type: string
           description: The asset bought, spelled as for originAsset.
@@ -10161,7 +10186,10 @@ components:
           example: "100"
         recipient:
           type: string
-          description: Who receives the output, on destinationChain.
+          description: "Who receives the output, on destinationChain: a Stellar G…
+            account, a Solana address, an EVM 0x address (Monad, Ethereum,
+            Arbitrum, Base) or a Bitcoin mainnet address (bc1q…, bc1p…, 1…,
+            3…)."
           example: 13QkxhNMrTPxoCkRdYdJ65tFuwXPhL5gLS2Z5Nr6gjRK
         refundTo:
           type: string
@@ -10174,6 +10202,13 @@ components:
             minimum, NEAR Intents refunds instead of filling. Defaults to the
             service setting; capped by it.
           example: 100
+        venueFallback:
+          type: boolean
+          description: "Settle a pair that stays on Solana or Monad through NEAR Intents,
+            because that chain's own venue (Jupiter, Kuru Flow) is not
+            answering. Without it such a pair is refused and pointed at POST
+            /v1/swaps. Stellar has no fallback: its DEX is part of the network."
+          example: false
       required:
         - originChain
         - originAsset
@@ -10191,6 +10226,10 @@ components:
             - stellar
             - solana
             - monad
+            - ethereum
+            - arbitrum
+            - base
+            - bitcoin
           example: stellar
         asset:
           type: string
@@ -10228,6 +10267,10 @@ components:
             - stellar
             - solana
             - monad
+            - ethereum
+            - arbitrum
+            - base
+            - bitcoin
           example: stellar
         asset:
           type: string
@@ -10315,13 +10358,21 @@ components:
             - stellar
             - solana
             - monad
+            - ethereum
+            - arbitrum
+            - base
+            - bitcoin
           example: stellar
+          description: The chain the payer deposits on. A pair with both legs on stellar,
+            solana or monad is refused here — POST /v1/swaps settles it on that
+            chain's own venue; one on ethereum, arbitrum or base is settled by
+            NEAR Intents.
         originAsset:
           type: string
-          description: "The asset sold: the native ticker (XLM, SOL, MON), a symbol listed
-            once on the chain (USDC), a contract (SPL mint, ERC-20 address,
-            Stellar issuer) or Stellar CODE:ISSUER. See GET
-            /v1/cross-chain-swaps/assets."
+          description: 'The asset sold: the native ticker (XLM, SOL, MON, ETH, BTC) or
+            "native", a symbol listed once on the chain (USDC), a contract (SPL
+            mint, ERC-20 address, Stellar issuer) or Stellar CODE:ISSUER. See
+            GET /v1/cross-chain-swaps/assets.'
           example: XLM
         destinationChain:
           type: string
@@ -10329,7 +10380,12 @@ components:
             - stellar
             - solana
             - monad
+            - ethereum
+            - arbitrum
+            - base
+            - bitcoin
           example: solana
+          description: The chain the recipient is paid on.
         destinationAsset:
           type: string
           description: The asset bought, spelled as for originAsset.
@@ -10341,7 +10397,10 @@ components:
           example: "100"
         recipient:
           type: string
-          description: Who receives the output, on destinationChain.
+          description: "Who receives the output, on destinationChain: a Stellar G…
+            account, a Solana address, an EVM 0x address (Monad, Ethereum,
+            Arbitrum, Base) or a Bitcoin mainnet address (bc1q…, bc1p…, 1…,
+            3…)."
           example: 13QkxhNMrTPxoCkRdYdJ65tFuwXPhL5gLS2Z5Nr6gjRK
         refundTo:
           type: string
@@ -10354,6 +10413,13 @@ components:
             minimum, NEAR Intents refunds instead of filling. Defaults to the
             service setting; capped by it.
           example: 100
+        venueFallback:
+          type: boolean
+          description: "Settle a pair that stays on Solana or Monad through NEAR Intents,
+            because that chain's own venue (Jupiter, Kuru Flow) is not
+            answering. Without it such a pair is refused and pointed at POST
+            /v1/swaps. Stellar has no fallback: its DEX is part of the network."
+          example: false
         idempotencyKey:
           type: string
           description: Idempotency key. The Idempotency-Key header takes precedence over
@@ -10410,6 +10476,10 @@ components:
             - stellar
             - solana
             - monad
+            - ethereum
+            - arbitrum
+            - base
+            - bitcoin
           example: stellar
         originAsset:
           type: string
@@ -10424,6 +10494,10 @@ components:
             - stellar
             - solana
             - monad
+            - ethereum
+            - arbitrum
+            - base
+            - bitcoin
           example: solana
         destinationAsset:
           type: string
@@ -10471,7 +10545,8 @@ components:
           type: string
           example: web+stellar:pay?destination=GDJ4…&amount=100&memo=188866795&memo_type=MEMO_TEXT
           description: "The deposit as a wallet link on the origin chain: SEP-7 pay,
-            Solana Pay or EIP-681."
+            Solana Pay, EIP-681 (Monad, Ethereum, Arbitrum, Base) or BIP-21
+            (Bitcoin)."
         qr:
           type: string
           example: data:image/png;base64,iVBORw0KGgo…
@@ -10591,6 +10666,10 @@ components:
             - stellar
             - solana
             - monad
+            - ethereum
+            - arbitrum
+            - base
+            - bitcoin
           example: stellar
         originAsset:
           type: string
@@ -10605,6 +10684,10 @@ components:
             - stellar
             - solana
             - monad
+            - ethereum
+            - arbitrum
+            - base
+            - bitcoin
           example: solana
         destinationAsset:
           type: string
@@ -10652,7 +10735,8 @@ components:
           type: string
           example: web+stellar:pay?destination=GDJ4…&amount=100&memo=188866795&memo_type=MEMO_TEXT
           description: "The deposit as a wallet link on the origin chain: SEP-7 pay,
-            Solana Pay or EIP-681."
+            Solana Pay, EIP-681 (Monad, Ethereum, Arbitrum, Base) or BIP-21
+            (Bitcoin)."
         depositTxHash:
           type: object
           nullable: true
@@ -10764,8 +10848,9 @@ components:
         txHash:
           type: string
           description: "The transaction that paid the deposit address, on the origin
-            chain: a Stellar hash (64 hex), a Solana signature (base58) or a
-            Monad hash (0x + 64 hex)."
+            chain: a Stellar hash (64 hex), a Solana signature (base58), a
+            Monad, Ethereum, Arbitrum or Base hash (0x + 64 hex) or a Bitcoin
+            txid (64 hex, no prefix)."
           example: 5f0e8a1d3c7b9e2f4a6c8d0b1e3f5a7c9d2b4e6f8a0c1d3e5f7a9b2c4d6e8f0a
       required:
         - txHash

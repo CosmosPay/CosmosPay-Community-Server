@@ -125,7 +125,10 @@ export const DEFAULT_CROSS_CHAIN_MAX_SLIPPAGE_BPS = 500;
 /**
  * How long a cross-chain deposit address accepts the deposit, in seconds. Half
  * an hour covers a wallet round-trip on Stellar, Solana and Monad, which all
- * finalize in seconds; past it 1Click refunds whatever arrives.
+ * finalize in seconds, and on Ethereum, Arbitrum and Base; past it 1Click
+ * refunds whatever arrives. A swap from Bitcoin never gets less than
+ * `BITCOIN_ORIGIN_MIN_DEADLINE_SECONDS` (two hours): ten-minute blocks, and
+ * 1Click waits for confirmations.
  */
 export const DEFAULT_CROSS_CHAIN_DEADLINE_SECONDS = 30 * 60;
 

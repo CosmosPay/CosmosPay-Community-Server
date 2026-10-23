@@ -1,16 +1,17 @@
 import {
-  CHAINS,
-  type Chain,
-  NATIVE_ASSET_CODES,
+  SWAP_CHAINS,
+  SWAP_NATIVE_ASSET_CODES,
+  SWAP_NATIVE_DECIMALS,
+  type SwapChain,
 } from '@/chains/chains.constants';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { NEAR_INTENTS_BLOCKCHAINS } from '@/near-intents/near-intents.constants';
 import type { NearIntentsToken } from '@/near-intents/near-intents.types';
 
-/** A token NEAR Intents can swap, on one of our chains. */
+/** A token NEAR Intents can swap, on one of our swap chains. */
 export interface CrossChainAsset {
-  chain: Chain;
-  /** The token's symbol as 1Click lists it (`XLM`, `USDC`, `SOL`, `MON`). */
+  chain: SwapChain;
+  /** The token's symbol as 1Click lists it (`XLM`, `USDC`, `ETH`, `BTC`). */
   symbol: string;
   /** 1Click's id for it — what a quote names. */
   assetId: string;
@@ -20,15 +21,30 @@ export interface CrossChainAsset {
 }
 
 /** The chain 1Click's `blockchain` names, when it is one of ours. */
-const CHAIN_BY_BLOCKCHAIN = new Map<string, Chain>(
-  CHAINS.map((chain) => [NEAR_INTENTS_BLOCKCHAINS[chain], chain]),
+const CHAIN_BY_BLOCKCHAIN = new Map<string, SwapChain>(
+  SWAP_CHAINS.map((chain) => [NEAR_INTENTS_BLOCKCHAINS[chain], chain]),
 );
 
 /**
- * The tokens NEAR Intents lists on Stellar, Solana and Monad — the rest of its
- * catalogue (Bitcoin, Ethereum, …) is reachable through 1Click but not through
- * this service, which can validate addresses and build payment links only on
- * the chains it knows.
+ * Whether a chain's contract ids are hex, and so one token in any case: an
+ * ERC-20 address is `0xABC…` and `0xabc…` alike, while an SPL mint (base58)
+ * and a Stellar issuer (StrKey) are case-sensitive. Bitcoin has no contracts.
+ */
+const CONTRACT_IGNORES_CASE: Record<SwapChain, boolean> = {
+  stellar: false,
+  solana: false,
+  monad: true,
+  ethereum: true,
+  arbitrum: true,
+  base: true,
+  bitcoin: false,
+};
+
+/**
+ * The tokens NEAR Intents lists on Stellar, Solana, Monad, Ethereum, Arbitrum,
+ * Base and Bitcoin — the rest of its catalogue (NEAR, Tron, TON, …) is
+ * reachable through 1Click but not through this service, which can validate
+ * addresses and build deposit links only on the chains it knows.
  */
 export function supportedAssets(tokens: NearIntentsToken[]): CrossChainAsset[] {
   const assets: CrossChainAsset[] = [];
@@ -50,28 +66,37 @@ export function supportedAssets(tokens: NearIntentsToken[]): CrossChainAsset[] {
  * The asset a request names on `chain`. Accepted spellings, in the order they
  * are tried:
  *
- *   - the native coin by its ticker (`XLM`, `SOL`, `MON`) or `native`;
+ *   - the native coin by its ticker (`XLM`, `SOL`, `MON`, `ETH`, `BTC`) or
+ *     `native`;
  *   - Stellar's `CODE:ISSUER`;
  *   - a contract — SPL mint, ERC-20 address (any case), Stellar issuer;
  *   - a symbol, when exactly one token on that chain carries it.
+ *
+ * The native coin is the listing with no contract, the chain's own ticker and
+ * the chain's own decimals. 1Click lists Bitcoin twice — `BTC` and
+ * `BTC(OMNI)`, both without a contract — and only the first is the one named
+ * by `BTC`; the decimals guard a deposit link written in base units against a
+ * listing that disagrees with the chain.
  *
  * A symbol two tokens share is refused rather than guessed: picking the wrong
  * `USDC` is a swap into a different asset.
  */
 export function resolveCrossChainAsset(
   tokens: NearIntentsToken[],
-  chain: Chain,
+  chain: SwapChain,
   requested: string,
 ): CrossChainAsset {
   const onChain = supportedAssets(tokens).filter((a) => a.chain === chain);
   const wanted = requested.trim();
   const lower = wanted.toLowerCase();
+  const ticker = SWAP_NATIVE_ASSET_CODES[chain];
 
-  if (lower === 'native' || lower === NATIVE_ASSET_CODES[chain].toLowerCase()) {
+  if (lower === 'native' || lower === ticker.toLowerCase()) {
     const native = onChain.find(
       (a) =>
         a.contract === null &&
-        a.symbol.toUpperCase() === NATIVE_ASSET_CODES[chain],
+        a.symbol.toUpperCase() === ticker &&
+        a.decimals === SWAP_NATIVE_DECIMALS[chain],
     );
     if (native) return native;
     throw unsupported(chain, wanted);
@@ -90,9 +115,7 @@ export function resolveCrossChainAsset(
   const byContract = onChain.find(
     (a) =>
       a.contract !== null &&
-      (chain === 'monad'
-        ? a.contract.toLowerCase() === lower
-        : a.contract === wanted),
+      contractKey(chain, a.contract) === contractKey(chain, wanted),
   );
   if (byContract) return byContract;
 
@@ -108,7 +131,29 @@ export function resolveCrossChainAsset(
   throw unsupported(chain, wanted);
 }
 
-function unsupported(chain: Chain, asset: string): ApiError {
+/**
+ * Whether two listings are one asset on-chain. Two 1Click ids can name the
+ * same coin — Bitcoin's `BTC` and `BTC(OMNI)` are both native BTC — and a
+ * "swap" between them only pays fees to get back what was sent. Same chain
+ * and both native, or the same contract (and, on Stellar, where one issuer
+ * issues many codes, the same code).
+ */
+export function isSameAsset(a: CrossChainAsset, b: CrossChainAsset): boolean {
+  if (a.assetId === b.assetId) return true;
+  if (a.chain !== b.chain) return false;
+  if (a.contract === null || b.contract === null) {
+    return a.contract === b.contract;
+  }
+  if (a.chain === 'stellar' && a.symbol !== b.symbol) return false;
+  return contractKey(a.chain, a.contract) === contractKey(b.chain, b.contract);
+}
+
+/** A contract id in the one spelling it compares in on `chain`. */
+function contractKey(chain: SwapChain, contract: string): string {
+  return CONTRACT_IGNORES_CASE[chain] ? contract.toLowerCase() : contract;
+}
+
+function unsupported(chain: SwapChain, asset: string): ApiError {
   return ApiError.badRequest(
     ApiErrorCode.AssetUnsupported,
     `NEAR Intents does not support asset "${asset}" on ${chain}. ` +

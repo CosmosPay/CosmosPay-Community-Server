@@ -1,8 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { CrossChainSwap, Prisma } from '@generated/prisma/client';
-import { normalizeAddress } from '@/chains/chain-address';
-import type { Chain } from '@/chains/chains.constants';
+import type { SwapChain } from '@/chains/chains.constants';
+import { normalizeSwapAddress } from '@/chains/swap-chain-address';
 import { formatUnits, parseUnits } from '@/chains/units';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
@@ -14,6 +14,7 @@ import { resolveNetwork } from '@/common/stellar-network';
 import type { AppConfig } from '@/config/configuration';
 import {
   type CrossChainAsset,
+  isSameAsset,
   resolveCrossChainAsset,
   supportedAssets,
 } from '@/cross-chain-swaps/cross-chain-assets';
@@ -22,7 +23,15 @@ import {
   isTerminal,
   nextStatus,
 } from '@/cross-chain-swaps/cross-chain-swap-transitions';
-import { depositLink } from '@/cross-chain-swaps/deposit-request';
+import {
+  CROSS_CHAIN_DEPOSIT_TX_IDS,
+  SAME_CHAIN_VENUES,
+  VENUE_FALLBACK_CHAINS,
+} from '@/cross-chain-swaps/cross-chain-swaps.constants';
+import {
+  depositLink,
+  depositWindowSeconds,
+} from '@/cross-chain-swaps/deposit-request';
 import { CreateCrossChainSwapDto } from '@/cross-chain-swaps/dto/create-cross-chain-swap.dto';
 import { QueryCrossChainSwapsDto } from '@/cross-chain-swaps/dto/query-cross-chain-swaps.dto';
 import { QuoteCrossChainSwapDto } from '@/cross-chain-swaps/dto/quote-cross-chain-swap.dto';
@@ -34,11 +43,6 @@ import type {
   NearIntentsQuoteResponse,
   NearIntentsStatusResponse,
 } from '@/near-intents/near-intents.types';
-import {
-  EVM_TX_ID_RE,
-  SOLANA_TX_ID_RE,
-  TX_HASH_RE,
-} from '@/payment-intents/payment-intents.constants';
 import { PrismaService } from '@/prisma/prisma.service';
 import { StellarAccountLoader } from '@/stellar/account-loader.service';
 import { resolveAsset } from '@/stellar/asset';
@@ -98,20 +102,6 @@ export type PublicCrossChainSwap = Prisma.CrossChainSwapGetPayload<{
 /** A public swap plus the QR of its deposit link. */
 export type CrossChainSwapView = PublicCrossChainSwap & { qr: string };
 
-/** Where `/v1/swaps` settles a same-chain swap, named in the refusal. */
-const SAME_CHAIN_VENUES: Record<Chain, string> = {
-  stellar: 'the Stellar DEX',
-  solana: 'Jupiter',
-  monad: 'Kuru Flow',
-};
-
-/** How each origin chain spells a transaction id. */
-const DEPOSIT_TX_ID_RE: Record<Chain, RegExp> = {
-  stellar: TX_HASH_RE,
-  solana: SOLANA_TX_ID_RE,
-  monad: EVM_TX_ID_RE,
-};
-
 /** A swap priced by 1Click — everything quote and create both need. */
 interface PricedCrossChainSwap {
   origin: CrossChainAsset;
@@ -139,7 +129,8 @@ interface CrossChainRequestTerms {
 }
 
 /**
- * Cross-chain swaps between Stellar, Solana and Monad, settled by NEAR Intents.
+ * Cross-chain swaps between Stellar, Solana, Monad, Ethereum, Arbitrum, Base
+ * and Bitcoin, settled by NEAR Intents.
  *
  * Non-custodial, and one step removed from the chain: this service resolves
  * the assets, prices the swap through 1Click with the plan commission as an
@@ -149,9 +140,11 @@ interface CrossChainRequestTerms {
  * leg passes through Cosmos Pay. What happens after the deposit is mirrored by
  * {@link CrossChainSwapObserverService}, which asks 1Click and moves the row.
  *
- * A same-chain pair is refused here: `/v1/swaps` settles it on the chain's own
- * venue — the Stellar DEX, Jupiter on Solana, Kuru Flow on Monad — with no
- * bridge in between.
+ * A same-chain pair on Stellar, Solana or Monad is refused here: `/v1/swaps`
+ * settles it on the chain's own venue — the Stellar DEX, Jupiter on Solana,
+ * Kuru Flow on Monad — with no bridge in between. Ethereum, Arbitrum and Base
+ * have no venue in this service, so their same-chain pairs are NEAR Intents'
+ * too ({@link SAME_CHAIN_VENUES}).
  */
 @Injectable()
 export class CrossChainSwapsService {
@@ -167,7 +160,7 @@ export class CrossChainSwapsService {
   ) {}
 
   // ── Assets ────────────────────────────────────────────────────────────────
-  /** What NEAR Intents can swap on Stellar, Solana and Monad. */
+  /** What NEAR Intents can swap on the swap chains (`SWAP_CHAINS`). */
   async assets(): Promise<{ data: CrossChainAsset[] }> {
     return { data: supportedAssets(await this.nearIntents.tokens()) };
   }
@@ -378,8 +371,9 @@ export class CrossChainSwapsService {
     txHash: string,
   ): Promise<CrossChainSwapView> {
     const swap = await this.findOwned(consumer, id);
-    const chain = swap.originChain as Chain;
-    if (!DEPOSIT_TX_ID_RE[chain].test(txHash)) {
+    const chain = swap.originChain as SwapChain;
+    const rule = CROSS_CHAIN_DEPOSIT_TX_IDS[chain];
+    if (!rule.pattern.test(txHash)) {
       throw ApiError.badRequest(
         ApiErrorCode.ValidationFailed,
         `txHash is not a ${chain} transaction id`,
@@ -391,9 +385,7 @@ export class CrossChainSwapsService {
         `Cross-chain swap ${swap.id} is already ${swap.status}`,
       );
     }
-    // Stellar and Solana ids are case-sensitive or case-free by encoding;
-    // hex is stored lowercase, as everywhere else in this service.
-    const hash = chain === 'solana' ? txHash : txHash.toLowerCase();
+    const hash = rule.lowercase ? txHash.toLowerCase() : txHash;
     const status = await this.nearIntents.submitDeposit({
       txHash: hash,
       depositAddress: swap.depositAddress,
@@ -490,11 +482,19 @@ export class CrossChainSwapsService {
     dto: QuoteCrossChainSwapDto,
     live: boolean,
   ): Promise<PricedCrossChainSwap> {
-    if (dto.originChain === dto.destinationChain) {
+    const venue =
+      dto.originChain === dto.destinationChain
+        ? SAME_CHAIN_VENUES[dto.originChain]
+        : null;
+    // A client whose venue call failed may settle the pair here instead.
+    const fallback =
+      dto.venueFallback === true &&
+      VENUE_FALLBACK_CHAINS.includes(dto.originChain);
+    if (venue && !fallback) {
       throw ApiError.badRequest(
         ApiErrorCode.ValidationFailed,
         `${dto.originChain} → ${dto.originChain} is a same-chain swap: use ` +
-          `POST /v1/swaps with chain "${dto.originChain}" (${SAME_CHAIN_VENUES[dto.originChain]}).`,
+          `POST /v1/swaps with chain "${dto.originChain}" (${venue}).`,
       );
     }
     const tokens = await this.nearIntents.tokens();
@@ -508,7 +508,7 @@ export class CrossChainSwapsService {
       dto.destinationChain,
       dto.destinationAsset,
     );
-    if (origin.assetId === destination.assetId) {
+    if (isSameAsset(origin, destination)) {
       throw ApiError.badRequest(
         ApiErrorCode.ValidationFailed,
         'Origin and destination assets must differ for a swap',
@@ -527,8 +527,8 @@ export class CrossChainSwapsService {
         'A swap commission applies to this plan but NEAR_INTENTS_FEE_RECIPIENT is not set',
       );
     }
-    const recipient = normalizeAddress(dto.destinationChain, dto.recipient);
-    const refundTo = normalizeAddress(dto.originChain, dto.refundTo);
+    const recipient = normalizeSwapAddress(dto.destinationChain, dto.recipient);
+    const refundTo = normalizeSwapAddress(dto.originChain, dto.refundTo);
 
     const request: NearIntentsQuoteRequest = {
       dry: !live,
@@ -544,8 +544,12 @@ export class CrossChainSwapsService {
       refundType: 'ORIGIN_CHAIN',
       recipient,
       recipientType: 'DESTINATION_CHAIN',
+      // Raised to two hours when the origin is Bitcoin: ten-minute blocks, and
+      // 1Click waits for confirmations. `expiresAt` is set from this deadline,
+      // so the observer does not call a confirming BTC deposit EXPIRED.
       deadline: new Date(
-        Date.now() + nearCfg.deadlineSeconds * 1000,
+        Date.now() +
+          depositWindowSeconds(origin.chain, nearCfg.deadlineSeconds) * 1000,
       ).toISOString(),
       referral: NEAR_INTENTS_REFERRAL,
       ...(feeBps > 0
@@ -602,6 +606,10 @@ export class CrossChainSwapsService {
    * A Stellar recipient must already trust an issued asset, or NEAR Intents'
    * payout fails on-chain and the swap is refunded after the fact. Caught here,
    * with the same loader and message Stellar swaps use.
+   *
+   * Stellar is the only chain checked: an ERC-20 on Monad, Ethereum, Arbitrum
+   * or Base needs no opt-in before an address can hold it, and a Bitcoin
+   * address receives BTC as it is.
    */
   private async assertRecipientCanReceive(
     priced: PricedCrossChainSwap,
@@ -641,8 +649,8 @@ export class CrossChainSwapsService {
         this.baseUnits(dto.amount, origin),
         origin.decimals,
       ),
-      recipient: normalizeAddress(dto.destinationChain, dto.recipient),
-      refundTo: normalizeAddress(dto.originChain, dto.refundTo),
+      recipient: normalizeSwapAddress(dto.destinationChain, dto.recipient),
+      refundTo: normalizeSwapAddress(dto.originChain, dto.refundTo),
       slippageBps: resolveSlippage(
         dto.slippageBps,
         this.config.get('nearIntents', { infer: true }),

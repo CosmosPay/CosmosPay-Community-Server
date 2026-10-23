@@ -172,7 +172,7 @@ const TAG_DESCRIPTIONS: Record<string, string> = {
   'payment-intents': 'Request a Stellar payment, then watch it settle.',
   swaps: 'Path payments between assets: quote, build, submit.',
   'cross-chain-swaps':
-    'Swaps between Stellar, Solana and Monad, settled by NEAR Intents.',
+    'Swaps between Stellar, Solana, Monad, Ethereum, Arbitrum, Base and Bitcoin, settled by NEAR Intents.',
   'liquidity-pools': 'Non-custodial AMM deposits and withdrawals.',
   aliases: 'Claimable payment handles, resolved to Stellar addresses.',
   customers: 'End users a payment intent can be attributed to.',

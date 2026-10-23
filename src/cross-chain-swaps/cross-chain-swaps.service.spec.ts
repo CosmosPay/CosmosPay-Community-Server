@@ -24,6 +24,12 @@ const SOLANA_RECIPIENT = '13QkxhNMrTPxoCkRdYdJ65tFuwXPhL5gLS2Z5Nr6gjRK';
 const STELLAR_PAYER = Keypair.random().publicKey();
 const STELLAR_DEPOSIT = Keypair.random().publicKey();
 const USDC_ISSUER = 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN';
+const EVM_ADDRESS = '0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed';
+const EVM_DEPOSIT = '0x76b4c56085ED136a8744D52bE956396624a730E8';
+const BTC_ADDRESS = 'bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4';
+const BTC_DEPOSIT =
+  'bc1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3qccfmv3';
+const ARB_USDC = '0xaf88d065e77c8cc2239327c5edb3a432268e5831';
 
 const TOKENS: NearIntentsToken[] = [
   { assetId: 'xlm-id', decimals: 7, blockchain: 'stellar', symbol: 'XLM' },
@@ -42,7 +48,33 @@ const TOKENS: NearIntentsToken[] = [
     symbol: 'USDC',
     contractAddress: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
   },
+  { assetId: 'eth-id', decimals: 18, blockchain: 'eth', symbol: 'ETH' },
+  { assetId: 'eth-arb-id', decimals: 18, blockchain: 'arb', symbol: 'ETH' },
+  {
+    assetId: 'usdc-arb-id',
+    decimals: 6,
+    blockchain: 'arb',
+    symbol: 'USDC',
+    contractAddress: ARB_USDC,
+  },
+  { assetId: 'btc-id', decimals: 8, blockchain: 'btc', symbol: 'BTC' },
+  {
+    assetId: 'btc-omni-id',
+    decimals: 8,
+    blockchain: 'btc',
+    symbol: 'BTC(OMNI)',
+  },
 ];
+
+/** 1Click's deposit address per origin asset; Stellar's (with a memo) otherwise. */
+const DEPOSITS: Record<
+  string,
+  { depositAddress: string; depositMemo?: string }
+> = {
+  'eth-id': { depositAddress: EVM_DEPOSIT },
+  'eth-arb-id': { depositAddress: EVM_DEPOSIT },
+  'btc-id': { depositAddress: BTC_DEPOSIT },
+};
 
 const prodConsumer: GatewayConsumer = {
   username: 'cosmos_u1',
@@ -84,8 +116,10 @@ function quoteResponse(request: NearIntentsQuoteRequest) {
       ...(request.dry
         ? {}
         : {
-            depositAddress: STELLAR_DEPOSIT,
-            depositMemo: '188866795',
+            ...(DEPOSITS[request.originAsset] ?? {
+              depositAddress: STELLAR_DEPOSIT,
+              depositMemo: '188866795',
+            }),
             deadline: '2026-10-02T12:30:00.000Z',
           }),
     },
@@ -167,7 +201,11 @@ function fakePrisma() {
 }
 
 function setup(
-  opts: { feeRecipient?: string; network?: 'public' | 'testnet' } = {},
+  opts: {
+    feeRecipient?: string;
+    network?: 'public' | 'testnet';
+    deadlineSeconds?: number;
+  } = {},
 ) {
   const cfg: Record<string, unknown> = {
     nodeEnv: 'test',
@@ -178,7 +216,7 @@ function setup(
       timeoutMs: 5000,
       slippageBps: 100,
       maxSlippageBps: 500,
-      deadlineSeconds: 1800,
+      deadlineSeconds: opts.deadlineSeconds ?? 1800,
     },
     stellar: {
       network: opts.network ?? 'testnet',
@@ -301,6 +339,84 @@ describe('CrossChainSwapsService', () => {
       expect(nearIntents.quote).not.toHaveBeenCalled();
     });
 
+    it('settles SOL → USDC on Solana through NEAR Intents when the client says Jupiter is down', async () => {
+      const { service, nearIntents } = setup();
+      await service.quote(prodConsumer, {
+        ...BASE_DTO,
+        originChain: 'solana',
+        originAsset: 'SOL',
+        refundTo: SOLANA_RECIPIENT,
+        venueFallback: true,
+      });
+      expect(nearIntents.quote.mock.calls[0][0]).toMatchObject({
+        originAsset: 'sol-id',
+        destinationAsset: 'usdc-sol-id',
+      });
+    });
+
+    it('has no fallback for Stellar → Stellar: its DEX is the network', async () => {
+      const { service, nearIntents } = setup();
+      const err = await rejection(
+        service.quote(prodConsumer, {
+          ...BASE_DTO,
+          destinationChain: 'stellar',
+          destinationAsset: 'USDC',
+          recipient: STELLAR_PAYER,
+          venueFallback: true,
+        }),
+      );
+      expect(err.code).toBe(ApiErrorCode.ValidationFailed);
+      expect(nearIntents.quote).not.toHaveBeenCalled();
+    });
+
+    it('settles ETH → USDC on Arbitrum through NEAR Intents: no venue there', async () => {
+      const { service, nearIntents } = setup();
+
+      const quote = await service.quote(prodConsumer, {
+        originChain: 'arbitrum',
+        originAsset: 'ETH',
+        destinationChain: 'arbitrum',
+        destinationAsset: 'USDC',
+        amount: '0.5',
+        recipient: EVM_ADDRESS.toLowerCase(),
+        refundTo: EVM_ADDRESS.toLowerCase(),
+      });
+
+      expect(nearIntents.quote.mock.calls[0][0]).toMatchObject({
+        depositMode: 'SIMPLE',
+        originAsset: 'eth-arb-id',
+        destinationAsset: 'usdc-arb-id',
+        amount: '500000000000000000',
+        // Stored and sent EIP-55, whatever case they arrived in.
+        recipient: EVM_ADDRESS,
+        refundTo: EVM_ADDRESS,
+      });
+      expect(quote.origin).toMatchObject({ chain: 'arbitrum', asset: 'ETH' });
+      expect(quote.destination).toMatchObject({
+        chain: 'arbitrum',
+        asset: 'USDC',
+        contract: ARB_USDC,
+      });
+    });
+
+    it('refuses BTC → BTC(OMNI): two 1Click listings of one coin', async () => {
+      const { service, nearIntents } = setup();
+      const err = await rejection(
+        service.quote(prodConsumer, {
+          originChain: 'bitcoin',
+          originAsset: 'BTC',
+          destinationChain: 'bitcoin',
+          destinationAsset: 'BTC(OMNI)',
+          amount: '0.01',
+          recipient: BTC_ADDRESS,
+          refundTo: BTC_ADDRESS,
+        }),
+      );
+      expect(err.code).toBe(ApiErrorCode.ValidationFailed);
+      expect(err.message).toContain('must differ');
+      expect(nearIntents.quote).not.toHaveBeenCalled();
+    });
+
     it('refuses more decimals than the origin asset has', async () => {
       const { service } = setup();
       const err = await rejection(
@@ -370,6 +486,54 @@ describe('CrossChainSwapsService', () => {
       );
       expect(err.code).toBe(ApiErrorCode.TrustlineMissing);
       expect(accounts.load).toHaveBeenCalledWith('public', STELLAR_PAYER);
+    });
+
+    it('Bitcoin → Ethereum: a BIP-21 deposit, no memo, no Horizon round-trip', async () => {
+      const { service, accounts, nearIntents } = setup();
+
+      const swap = await service.create(prodConsumer, {
+        originChain: 'bitcoin',
+        originAsset: 'native',
+        destinationChain: 'ethereum',
+        destinationAsset: 'ETH',
+        amount: '0.0125',
+        recipient: EVM_ADDRESS.toLowerCase(),
+        refundTo: BTC_ADDRESS.toUpperCase(),
+      });
+
+      expect(nearIntents.quote.mock.calls[0][0]).toMatchObject({
+        depositMode: 'SIMPLE',
+        originAsset: 'btc-id',
+        destinationAsset: 'eth-id',
+        amount: '1250000',
+      });
+      expect(swap).toMatchObject({
+        originChain: 'bitcoin',
+        originAsset: 'BTC',
+        destinationChain: 'ethereum',
+        depositAddress: BTC_DEPOSIT,
+        depositMemo: null,
+        depositUri: `bitcoin:${BTC_DEPOSIT}?amount=0.0125`,
+        recipient: EVM_ADDRESS,
+        refundTo: BTC_ADDRESS,
+      });
+      expect(accounts.load).not.toHaveBeenCalled();
+    });
+
+    it('Ethereum → Arbitrum: an EIP-681 deposit on chain 1', async () => {
+      const { service } = setup();
+      const swap = await service.create(prodConsumer, {
+        originChain: 'ethereum',
+        originAsset: 'ETH',
+        destinationChain: 'arbitrum',
+        destinationAsset: 'USDC',
+        amount: '1',
+        recipient: EVM_ADDRESS,
+        refundTo: EVM_ADDRESS,
+      });
+      expect(swap.depositUri).toBe(
+        `ethereum:${EVM_DEPOSIT}@1?value=1000000000000000000`,
+      );
     });
 
     it('replays the same request under the same key without a second deposit address', async () => {
@@ -506,5 +670,209 @@ describe('CrossChainSwapsService', () => {
       );
       expect(err.getStatus()).toBe(404);
     });
+
+    const HEX = 'AB'.repeat(32);
+    it.each([
+      {
+        chain: 'ethereum',
+        dto: {
+          originChain: 'ethereum' as const,
+          originAsset: 'ETH',
+          destinationChain: 'bitcoin' as const,
+          destinationAsset: 'BTC',
+          amount: '1',
+          recipient: BTC_ADDRESS,
+          refundTo: EVM_ADDRESS,
+        },
+        good: `0x${HEX}`,
+        bad: HEX,
+      },
+      {
+        chain: 'arbitrum',
+        dto: {
+          originChain: 'arbitrum' as const,
+          originAsset: 'ETH',
+          destinationChain: 'arbitrum' as const,
+          destinationAsset: 'USDC',
+          amount: '1',
+          recipient: EVM_ADDRESS,
+          refundTo: EVM_ADDRESS,
+        },
+        good: `0x${HEX}`,
+        bad: HEX,
+      },
+      {
+        chain: 'bitcoin',
+        dto: {
+          originChain: 'bitcoin' as const,
+          originAsset: 'BTC',
+          destinationChain: 'ethereum' as const,
+          destinationAsset: 'ETH',
+          amount: '0.01',
+          recipient: EVM_ADDRESS,
+          refundTo: BTC_ADDRESS,
+        },
+        good: HEX,
+        bad: `0x${HEX}`,
+      },
+    ])(
+      '$chain: takes its own transaction id shape, stored lowercase, and refuses the other',
+      async ({ dto, good, bad }) => {
+        const { service, nearIntents } = setup();
+        const swap = await service.create(prodConsumer, dto);
+
+        const err = await rejection(
+          service.submitDeposit(prodConsumer, swap.id, bad),
+        );
+        expect(err.code).toBe(ApiErrorCode.ValidationFailed);
+        expect(nearIntents.submitDeposit).not.toHaveBeenCalled();
+
+        nearIntents.submitDeposit.mockResolvedValue({
+          correlationId: 'c',
+          status: 'KNOWN_DEPOSIT_TX',
+          updatedAt: '',
+        });
+        const view = await service.submitDeposit(prodConsumer, swap.id, good);
+        expect(nearIntents.submitDeposit).toHaveBeenCalledWith({
+          txHash: good.toLowerCase(),
+          depositAddress: swap.depositAddress,
+        });
+        expect(view.depositTxHash).toBe(good.toLowerCase());
+      },
+    );
+
+    it('solana: keeps a base58 signature exactly as given', async () => {
+      const { service, nearIntents } = setup();
+      const swap = await service.create(prodConsumer, {
+        originChain: 'solana',
+        originAsset: 'SOL',
+        destinationChain: 'arbitrum',
+        destinationAsset: 'USDC',
+        amount: '1',
+        recipient: EVM_ADDRESS,
+        refundTo: SOLANA_RECIPIENT,
+      });
+      nearIntents.submitDeposit.mockResolvedValue({
+        correlationId: 'c',
+        status: 'KNOWN_DEPOSIT_TX',
+        updatedAt: '',
+      });
+      const signature = '5'.repeat(44) + 'Ab'.repeat(22);
+
+      const view = await service.submitDeposit(
+        prodConsumer,
+        swap.id,
+        signature,
+      );
+
+      expect(view.depositTxHash).toBe(signature);
+    });
+  });
+});
+
+describe('CrossChainSwapsService deposit window', () => {
+  const T0 = new Date('2026-10-23T12:00:00.000Z').getTime();
+  const MINUTE = 60 * 1000;
+
+  const BTC_TO_ETH = {
+    originChain: 'bitcoin' as const,
+    originAsset: 'BTC',
+    destinationChain: 'ethereum' as const,
+    destinationAsset: 'ETH',
+    amount: '0.01',
+    recipient: EVM_ADDRESS,
+    refundTo: BTC_ADDRESS,
+  };
+
+  /** 1Click echoes the deadline it was asked for, as the live API does. */
+  function echoingDeadline(ctx: ReturnType<typeof setup>) {
+    ctx.nearIntents.quote.mockImplementation(
+      async (request: NearIntentsQuoteRequest) => {
+        const response = quoteResponse(request);
+        return request.dry
+          ? response
+          : {
+              ...response,
+              quote: { ...response.quote, deadline: request.deadline },
+            };
+      },
+    );
+    return ctx;
+  }
+
+  const minutesAfterT0 = (iso: string) => (Date.parse(iso) - T0) / MINUTE;
+
+  beforeEach(() => {
+    jest.useFakeTimers({
+      now: T0,
+      doNotFake: ['nextTick', 'setImmediate', 'queueMicrotask'],
+    });
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it('asks 1Click for a two-hour deadline when the origin is Bitcoin, the configured one otherwise', async () => {
+    const { service, nearIntents } = setup();
+
+    await service.quote(prodConsumer, BTC_TO_ETH);
+    await service.quote(prodConsumer, BASE_DTO);
+
+    const [bitcoin, stellar] = nearIntents.quote.mock.calls.map(
+      ([request]: [NearIntentsQuoteRequest]) => request.deadline,
+    );
+    expect(minutesAfterT0(bitcoin)).toBe(120);
+    expect(minutesAfterT0(stellar)).toBe(30);
+  });
+
+  it('keeps a configured deadline longer than the Bitcoin floor', async () => {
+    const { service, nearIntents } = setup({ deadlineSeconds: 3 * 60 * 60 });
+    await service.quote(prodConsumer, BTC_TO_ETH);
+    expect(minutesAfterT0(nearIntents.quote.mock.calls[0][0].deadline)).toBe(
+      180,
+    );
+  });
+
+  it('does not call a confirming BTC deposit EXPIRED inside the two hours', async () => {
+    const { service, rows, webhooks } = echoingDeadline(setup());
+    const btc = await service.create(prodConsumer, BTC_TO_ETH);
+    const xlm = await service.create(prodConsumer, BASE_DTO);
+    expect(minutesAfterT0(btc.expiresAt.toISOString())).toBe(120);
+    expect(minutesAfterT0(xlm.expiresAt.toISOString())).toBe(30);
+    webhooks.emit.mockClear();
+
+    // Three blocks later 1Click still says PENDING_DEPOSIT: it waits for
+    // confirmations before it reports the deposit.
+    jest.setSystemTime(T0 + 45 * MINUTE);
+    const pending = {
+      correlationId: 'c',
+      status: 'PENDING_DEPOSIT' as const,
+      updatedAt: '',
+    };
+    const row = (id: string) => ({ ...rows.find((r) => r.id === id) });
+
+    expect(
+      (await service.applyProviderStatus(row(btc.id), pending, 'cosmos_u1'))
+        .status,
+    ).toBe('AWAITING_DEPOSIT');
+    expect(
+      (await service.applyProviderStatus(row(xlm.id), pending, 'cosmos_u1'))
+        .status,
+    ).toBe('EXPIRED');
+    expect(webhooks.emit).toHaveBeenCalledTimes(1);
+
+    // Unknown to 1Click is judged by the same expiresAt.
+    expect(
+      (await service.applyProviderStatus(row(btc.id), null, 'cosmos_u1'))
+        .status,
+    ).toBe('AWAITING_DEPOSIT');
+
+    // Past the two hours, nothing arrived: EXPIRED like any other swap.
+    jest.setSystemTime(T0 + 121 * MINUTE);
+    expect(
+      (await service.applyProviderStatus(row(btc.id), pending, 'cosmos_u1'))
+        .status,
+    ).toBe('EXPIRED');
   });
 });

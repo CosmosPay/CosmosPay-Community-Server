@@ -1,16 +1,22 @@
-import type { Chain } from '@/chains/chains.constants';
+import type { SwapChain } from '@/chains/chains.constants';
 
 /**
- * What 1Click calls each of our chains in `TokenResponse.blockchain`. A
- * `Record` over the chain union, so a chain added to `CHAINS` does not compile
- * until it says whether — and as what — NEAR Intents reaches it. Checked
- * against `GET /v0/tokens` (2026-09-30): Stellar lists XLM and USDC, Solana SOL
- * and SPL tokens, Monad MON, USDC and USDT0.
+ * What 1Click calls each of our swap chains in `TokenResponse.blockchain`. A
+ * `Record` over the swap-chain union, so a chain added to `SWAP_CHAINS` does
+ * not compile until it says as what NEAR Intents reaches it. Checked against
+ * `GET /v0/tokens` (2026-09-30 for the first three, 2026-10-23 for the rest):
+ * Stellar lists XLM and USDC, Solana SOL and SPL tokens, Monad MON, USDC and
+ * USDT0; Ethereum, Arbitrum and Base ETH and ERC-20s; Bitcoin BTC — twice, as
+ * `BTC` and `BTC(OMNI)`, two routes to the one coin.
  */
-export const NEAR_INTENTS_BLOCKCHAINS: Record<Chain, string> = {
+export const NEAR_INTENTS_BLOCKCHAINS: Record<SwapChain, string> = {
   stellar: 'stellar',
   solana: 'sol',
   monad: 'monad',
+  ethereum: 'eth',
+  arbitrum: 'arb',
+  base: 'base',
+  bitcoin: 'btc',
 };
 
 /**

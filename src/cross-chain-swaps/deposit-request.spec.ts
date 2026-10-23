@@ -1,4 +1,9 @@
-import { depositLink } from '@/cross-chain-swaps/deposit-request';
+import { SWAP_CHAINS } from '@/chains/chains.constants';
+import { BITCOIN_ORIGIN_MIN_DEADLINE_SECONDS } from '@/cross-chain-swaps/cross-chain-swaps.constants';
+import {
+  depositLink,
+  depositWindowSeconds,
+} from '@/cross-chain-swaps/deposit-request';
 
 const STELLAR_DEPOSIT =
   'GDJ4JZXZELZD737NVFORH4PSSQDWFDZTKW3AIDKHYQG23ZXBPDGGQBJK';
@@ -95,4 +100,81 @@ describe('depositLink', () => {
       }),
     ).toBe(`ethereum:${usdc}@143/transfer?address=${deposit}&uint256=10000000`);
   });
+
+  it.each([
+    ['ethereum', 1],
+    ['arbitrum', 42161],
+    ['base', 8453],
+  ] as const)('%s: EIP-681 on chain %d, ETH in wei', (chain, chainId) => {
+    const deposit = '0x76b4c56085ED136a8744D52bE956396624a730E8';
+    expect(
+      depositLink({
+        address: deposit,
+        memo: null,
+        amount: '0.25',
+        asset: {
+          chain,
+          symbol: 'ETH',
+          assetId: 'x',
+          decimals: 18,
+          contract: null,
+        },
+      }),
+    ).toBe(`ethereum:${deposit}@${chainId}?value=250000000000000000`);
+  });
+
+  it('Arbitrum: an ERC-20 deposit is a transfer call on the token, on 42161', () => {
+    const deposit = '0x76b4c56085ED136a8744D52bE956396624a730E8';
+    const usdc = '0xaf88d065e77c8cc2239327c5edb3a432268e5831';
+    expect(
+      depositLink({
+        address: deposit,
+        memo: null,
+        amount: '25.5',
+        asset: {
+          chain: 'arbitrum',
+          symbol: 'USDC',
+          assetId: 'x',
+          decimals: 6,
+          contract: usdc,
+        },
+      }),
+    ).toBe(
+      `ethereum:${usdc}@42161/transfer?address=${deposit}&uint256=25500000`,
+    );
+  });
+
+  it('Bitcoin: BIP-21, the amount in decimal BTC', () => {
+    const deposit =
+      'bc1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3qccfmv3';
+    expect(
+      depositLink({
+        address: deposit,
+        memo: null,
+        amount: '0.0015',
+        asset: {
+          chain: 'bitcoin',
+          symbol: 'BTC',
+          assetId: 'nep141:btc.omft.near',
+          decimals: 8,
+          contract: null,
+        },
+      }),
+    ).toBe(`bitcoin:${deposit}?amount=0.0015`);
+  });
+});
+
+describe('depositWindowSeconds', () => {
+  it('raises a Bitcoin-origin window to two hours, and keeps a longer one', () => {
+    expect(BITCOIN_ORIGIN_MIN_DEADLINE_SECONDS).toBe(2 * 60 * 60);
+    expect(depositWindowSeconds('bitcoin', 1800)).toBe(7200);
+    expect(depositWindowSeconds('bitcoin', 3 * 60 * 60)).toBe(10800);
+  });
+
+  it.each(SWAP_CHAINS.filter((chain) => chain !== 'bitcoin'))(
+    'leaves the configured window alone on %s',
+    (chain) => {
+      expect(depositWindowSeconds(chain, 1800)).toBe(1800);
+    },
+  );
 });
