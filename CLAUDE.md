@@ -266,6 +266,17 @@ table. These are the rules that did not hold on their own:
   does not compile until every table has its entry. A request that names no chain
   means Stellar, and must keep behaving byte for byte as it did: the Stellar
   signing challenges have no `chain:` line, alias resolution defaults to Stellar.
+- **Cross-chain swaps have a wider vocabulary, `SwapChain`** (`SWAP_CHAINS` =
+  `CHAINS` + Ethereum, Arbitrum, Base and Bitcoin). Those four are reached only
+  through NEAR Intents, which watches the deposit address and pays the output, so
+  they need an address rule, a deposit link and 1Click's name for the chain — not
+  an RPC client, a verifier or a signature scheme. Never add them to `CHAINS`:
+  every module keyed by it would then accept a chain it cannot serve. The
+  cross-chain module's tables (`SWAP_CHAIN_ADDRESS_RULES`,
+  `NEAR_INTENTS_BLOCKCHAINS`, `DEPOSIT_LINK_BUILDERS`, `CROSS_CHAIN_DEPOSIT_TX_IDS`,
+  `SAME_CHAIN_VENUES`) are `Record<SwapChain, …>`, and its DTOs validate with
+  `IsSwapChainAddress` / `IsSwapDecimalAmount`; `IsChainAddress` and
+  `IsDecimalAmount` stay on `Chain` for every other module.
 - **Solana and Monad are reached only through `SolanaRpcClient` / `EvmRpcClient`**,
   which check the node's genesis hash / `eth_chainId` before trusting it. Never
   call a node URL directly.
@@ -288,14 +299,20 @@ table. These are the rules that did not hold on their own:
   `src/swaps/venues/`, held as `Record<OtherChain, ChainSwapVenue>` in
   `chain-swaps.service.ts` (`OtherChain = Exclude<Chain, 'stellar'>`), so a new
   chain does not compile until it has a venue. A swap between chains is
-  `/v1/cross-chain-swaps` on NEAR Intents (`src/near-intents/`), which refuses
-  every same-chain pair. All of them are always compiled in, not plugins.
+  `/v1/cross-chain-swaps` on NEAR Intents (`src/near-intents/`), which refuses a
+  same-chain pair on every chain that has a venue here; Ethereum, Arbitrum and
+  Base have none, so their same-chain pairs are NEAR Intents' too
+  (`SAME_CHAIN_VENUES`) — unless the client sends `venueFallback`, which it
+  does only after Jupiter or Kuru Flow failed to answer a quote
+  (`VENUE_FALLBACK_CHAINS`; the Stellar DEX has none, being the network).
+  All of them are always compiled in, not plugins.
   Each aggregator only prices and builds: the wallet signs, and this service
   checks the signed transaction is the one it built before broadcasting it
   through its own RPC. Anything per chain is a `Record<Chain, …>`
-  (`NEAR_INTENTS_BLOCKCHAINS`, `DEPOSIT_LINK_BUILDERS`, `CHAIN_SWAP_PROVIDERS`),
-  deposit links use this service's own SEP-7 / Solana Pay / EIP-681 builders, and
-  third-party HTTP goes through `requestUpstreamJson` (`src/common/upstream-http.ts`).
+  (`CHAIN_SWAP_PROVIDERS`) — `Record<SwapChain, …>` in the cross-chain module
+  (`NEAR_INTENTS_BLOCKCHAINS`, `DEPOSIT_LINK_BUILDERS`) — deposit links use this
+  service's own SEP-7 / Solana Pay / EIP-681 / BIP-21 builders, and third-party
+  HTTP goes through `requestUpstreamJson` (`src/common/upstream-http.ts`).
 - **Monad deposit addresses are `CREATE2` addresses of
   `contracts/PaymentForwarder.sol`**, so every one of them depends on the exact
   bytecode in `src/evm/payment-forwarder.artifact.ts`. Regenerate it only with
