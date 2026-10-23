@@ -26,6 +26,35 @@ export function isChain(value: unknown): value is Chain {
   );
 }
 
+/** The EVM chains a cross-chain swap reaches beside Monad. */
+export const SWAP_EVM_CHAINS = ['ethereum', 'arbitrum', 'base'] as const;
+export type SwapEvmChain = (typeof SWAP_EVM_CHAINS)[number];
+
+/**
+ * The chains a cross-chain swap (`/v1/cross-chain-swaps`, settled by NEAR
+ * Intents) may start or end on: every {@link Chain}, plus Ethereum, Arbitrum,
+ * Base and Bitcoin.
+ *
+ * A vocabulary of its own, on purpose. `CHAINS` drives payment intents,
+ * aliases, wallet sign-in and same-chain swaps, and each of those needs an RPC
+ * client, a verifier or a signature scheme per chain it names. A cross-chain
+ * swap needs none of that — 1Click watches the deposit address and its solvers
+ * pay the output — only an address rule, a deposit link and 1Click's name for
+ * the chain. Adding these four to `CHAINS` would make every other module accept
+ * chains it cannot serve; keeping them here means only the cross-chain module
+ * does, and its `Record<SwapChain, …>` tables do not compile until a new chain
+ * has an entry in each.
+ */
+export const SWAP_CHAINS = [...CHAINS, ...SWAP_EVM_CHAINS, 'bitcoin'] as const;
+export type SwapChain = (typeof SWAP_CHAINS)[number];
+
+export function isSwapChain(value: unknown): value is SwapChain {
+  return (
+    typeof value === 'string' &&
+    (SWAP_CHAINS as readonly string[]).includes(value)
+  );
+}
+
 /** How each chain's own documentation names each network tier. */
 export const CHAIN_NETWORK_NAMES: Record<
   Chain,
@@ -53,6 +82,55 @@ export const NATIVE_DECIMALS: Record<Chain, number> = {
   solana: 9,
   monad: 18,
 };
+
+/** {@link NATIVE_ASSET_CODES} over every swap chain: ETH on the three EVM chains. */
+export const SWAP_NATIVE_ASSET_CODES: Record<SwapChain, string> = {
+  ...NATIVE_ASSET_CODES,
+  ethereum: 'ETH',
+  arbitrum: 'ETH',
+  base: 'ETH',
+  bitcoin: 'BTC',
+};
+
+/**
+ * {@link NATIVE_DECIMALS} over every swap chain: wei on the EVM chains,
+ * satoshis on Bitcoin. A deposit link in base units (EIP-681's `value`) is
+ * written with these, so a 1Click listing of a native coin that disagrees is
+ * not trusted — it would ask the payer for a different amount than the quote.
+ */
+export const SWAP_NATIVE_DECIMALS: Record<SwapChain, number> = {
+  ...NATIVE_DECIMALS,
+  ethereum: 18,
+  arbitrum: 18,
+  base: 18,
+  bitcoin: 8,
+};
+
+/**
+ * EIP-155 chain ids of the swap-only EVM chains, mainnet only — NEAR Intents
+ * has no test network. Not configurable, for the reason {@link MONAD_CHAIN_IDS}
+ * is not: the id in an EIP-681 link is what makes a wallet pay on Arbitrum
+ * rather than on whichever chain it has open, and an Arbitrum deposit sent on
+ * Ethereum is money 1Click never sees.
+ */
+export const SWAP_EVM_CHAIN_IDS: Record<SwapEvmChain, number> = {
+  ethereum: 1,
+  arbitrum: 42161,
+  base: 8453,
+};
+
+/**
+ * Bitcoin mainnet's address parameters: the bech32 human-readable part of a
+ * segwit address (BIP-173), and the base58check version bytes of a legacy
+ * P2PKH (`1…`) and P2SH (`3…`) address. Testnet's (`tb`, `0x6f`, `0xc4`) are
+ * refused, as every swap is on mainnet.
+ */
+export const BITCOIN_BECH32_HRP = 'bc';
+export const BITCOIN_P2PKH_VERSION = 0x00;
+export const BITCOIN_P2SH_VERSION = 0x05;
+
+/** BIP-21's URI scheme. */
+export const BIP21_SCHEME = 'bitcoin:';
 
 /**
  * Monad's EIP-155 chain ids. Not configurable, on purpose: the id goes into
