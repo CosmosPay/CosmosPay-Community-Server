@@ -710,6 +710,17 @@ account पढ़ता है और एक row लिखता है, और 
 एक anonymous वॉलेट को दूसरे से अलग करती है। अगर आप `memo` नहीं देते, तो एक random uint64
 जनरेट किया जाता है।
 
+**Checkout design.** दोनों builders एक वैकल्पिक `checkoutTheme` लेते हैं — वह design
+जिसमें hosted checkout page (`https://payments.cosmospay.lat/<id>`) intent को दिखाता
+है: `classic` (default), `split`, `ticket` या `card` (`CHECKOUT_THEMES`,
+`src/payment-intents/payment-intents.constants.ts` में)। कोई और value
+`400 validation_failed` है। `PATCH /v1/payment-intents/{id}` इसे किसी भी status में
+बदल देता है, final status में भी, क्योंकि यह भुगतान के बारे में कुछ नहीं बदलता। हर जवाब
+design बताता है: बिना design के सहेजा गया intent — इस field से पहले बना हर intent —
+`classic` जवाब देता है। यह उन शर्तों में नहीं है जिनसे retry की तुलना होती है, इसलिए
+दूसरे `checkoutTheme` के साथ retry सहेजा गया intent उसके सहेजे गए design के साथ लौटाता
+है; इसे बदलने के लिए `PATCH` का उपयोग करें।
+
 **`POST /v1/payment-intents/tx`** — payer (`source`) ज्ञात है, इसलिए हम
 unsigned `TransactionEnvelope` और एक `web+stellar:tx?xdr=...` URI बनाते हैं।
 
@@ -856,6 +867,11 @@ link और उसका QR दिखाने के लिए, और भु�
   `PAY_TO`, वही नियम जिससे Monad verifier भुगतान जाँचता है): Stellar और Solana पर
   merchant का account — Solana Pay की reference key कभी नहीं — और relayer वाले Monad पर
   intent का deposit address, जो पैसा `networkFee` घटाकर merchant को आगे भेजता है।
+- **`checkoutTheme` वह design है जिसे draw करना है** — `classic`, `split`, `ticket`
+  या `card`, जैसा merchant ने create के समय या `PATCH` से रखा — और यह कभी `null` नहीं
+  होता: जो intent कोई design नहीं बताता वह `classic` जवाब देता है। जिस page को ऐसी value
+  मिले जिसे वह अभी नहीं जानता, उसे भी `classic` draw करना चाहिए; नए designs इसी सूची में
+  जोड़े जाते हैं।
 - **Status live है, और `EXPIRED` अंतिम नहीं है।** हर जवाब में `Cache-Control: no-store`
   होता है। `expiresAt` के बाद भी unpaid intent तब तक `PENDING` दिखता है जब तक observer
   उसे expire न करे, और बाद में verify हुआ भुगतान `EXPIRED` को भी `SUCCEEDED` कर देता
@@ -1704,6 +1720,19 @@ seal होती हैं और कभी लौटाई नहीं जा
   `openapi:generate` सभी को चालू करता है।
 
 ## अपग्रेड — breaking changes और deploy नोट्स
+
+### Payment intents: हर intent के लिए एक checkout design
+
+- **नया वैकल्पिक field `checkoutTheme`** (`classic`, `split`, `ticket` या `card`)
+  `POST /v1/payment-intents/tx`, `POST /v1/payment-intents/pay` और
+  `PATCH /v1/payment-intents/{id}` पर, और हर payment-intent response तथा
+  `GET /v1/payment-links/{id}` में। यह additive है: इसके बिना request पहले जैसा ही
+  व्यवहार करता है, और हर मौजूदा intent `classic` जवाब देता है। जो client अज्ञात
+  response fields को अस्वीकार करता है, उसे contract से फिर से generate करना होगा।
+- **Migration `20261024120000_payment_intent_checkout_theme`** एक nullable column
+  जोड़ता है, `payment_intent.checkoutTheme`; कुछ भी दोबारा नहीं लिखा जाता। नए build के
+  traffic serve करने से पहले `migrate deploy` चलाएँ: हर payment-intent read इस column
+  को select करता है।
 
 ### Payment links: hosted checkout pages के लिए एक public read
 

@@ -5,6 +5,10 @@ import {
   PaymentLinksService,
   toPublicPaymentLink,
 } from '@/payment-intents/payment-links.service';
+import {
+  CHECKOUT_THEMES,
+  DEFAULT_CHECKOUT_THEME,
+} from '@/payment-intents/payment-intents.constants';
 import { PaymentIntentsService } from '@/payment-intents/payment-intents.service';
 import { Sep7LinkBuilder } from '@/payment-intents/sep7-link-builder.service';
 import { sep7Qr } from '@/stellar/sep7';
@@ -28,6 +32,7 @@ const CONTRACT_FIELDS = [
   'networkFee',
   'expiresAt',
   'createdAt',
+  'checkoutTheme',
 ].sort();
 
 /** What a payer must never be handed, whatever the row holds. */
@@ -87,6 +92,7 @@ function fullRow(overrides: Partial<PaymentIntent> = {}): PaymentIntent {
       '&memo=4127759120438726917&memo_type=MEMO_ID&msg=Order+%2324',
     txHash: null,
     reference: 'merchant-order-24',
+    checkoutTheme: null,
     expiresAt: EXPIRES,
     createdAt: CREATED,
     updatedAt: new Date('2026-10-24T12:40:00.000Z'),
@@ -117,6 +123,7 @@ describe('toPublicPaymentLink', () => {
       networkFee: null,
       expiresAt: '2026-10-24T13:34:56.000Z',
       createdAt: '2026-10-24T12:34:56.000Z',
+      checkoutTheme: 'classic',
     });
   });
 
@@ -197,6 +204,30 @@ describe('toPublicPaymentLink', () => {
     expect(toPublicPaymentLink(fullRow({ expiresAt: null }), 'qr')).toEqual(
       expect.objectContaining({ expiresAt: null }),
     );
+  });
+
+  it.each(CHECKOUT_THEMES)(
+    'tells the page to draw the %s design the merchant chose',
+    (theme) => {
+      const link = toPublicPaymentLink(fullRow({ checkoutTheme: theme }), 'qr');
+      expect(link.checkoutTheme).toBe(theme);
+    },
+  );
+
+  it('answers the default design for an intent that names none', () => {
+    // Stored null: the intent predates the column or was created without one.
+    // The page is told the design outright rather than left to read null.
+    const link = toPublicPaymentLink(fullRow({ checkoutTheme: null }), 'qr');
+    expect(link.checkoutTheme).toBe(DEFAULT_CHECKOUT_THEME);
+    expect(link.checkoutTheme).toBe('classic');
+  });
+
+  it('answers the default design for a stored one this release does not draw', () => {
+    const link = toPublicPaymentLink(
+      fullRow({ checkoutTheme: 'retired-design' }),
+      'qr',
+    );
+    expect(link.checkoutTheme).toBe('classic');
   });
 
   it('refuses a row on a chain it does not know rather than guess its payee', () => {

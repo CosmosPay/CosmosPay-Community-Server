@@ -1,6 +1,10 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { CHAINS } from '@/chains/chains.constants';
 import {
+  CHECKOUT_THEMES,
+  type CheckoutTheme,
+} from '@/payment-intents/payment-intents.constants';
+import {
   PaymentIntentKind,
   PaymentIntentStatus,
 } from '@generated/prisma/client';
@@ -125,6 +129,14 @@ export class PaymentIntentEntity {
   reference!: string | null;
 
   @ApiProperty({
+    enum: CHECKOUT_THEMES,
+    example: 'classic',
+    description:
+      'Design of the hosted checkout page. `classic` when none was chosen.',
+  })
+  checkoutTheme!: CheckoutTheme;
+
+  @ApiProperty({
     nullable: true,
     description:
       'When an unpaid intent expires. A payment verified later still settles it.',
@@ -229,6 +241,14 @@ export class TxPaymentIntentEntity {
 
   @ApiProperty({ nullable: true, example: null })
   reference!: string | null;
+
+  @ApiProperty({
+    enum: CHECKOUT_THEMES,
+    example: 'classic',
+    description:
+      'Design of the hosted checkout page. `classic` when none was chosen.',
+  })
+  checkoutTheme!: CheckoutTheme;
 
   @ApiProperty({
     nullable: true,
@@ -340,6 +360,14 @@ export class PayPaymentIntentEntity {
 
   @ApiProperty({ nullable: true, example: null })
   reference!: string | null;
+
+  @ApiProperty({
+    enum: CHECKOUT_THEMES,
+    example: 'classic',
+    description:
+      'Design of the hosted checkout page. `classic` when none was chosen.',
+  })
+  checkoutTheme!: CheckoutTheme;
 
   @ApiProperty({
     nullable: true,

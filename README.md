@@ -711,6 +711,17 @@ shared public key the address is all that separates one anonymous wallet from
 the next. If you don't pass `memo`, a
 random uint64 is generated.
 
+**The checkout design.** Both builders take an optional `checkoutTheme`, the
+design the hosted checkout page (`https://payments.cosmospay.lat/<id>`) shows the
+intent in: `classic` (the default), `split`, `ticket` or `card`
+(`CHECKOUT_THEMES` in `src/payment-intents/payment-intents.constants.ts`).
+Anything else is `400 validation_failed`. `PATCH /v1/payment-intents/{id}`
+changes it in any status, final ones included, because it changes nothing about
+the payment. Every response names the design: an intent stored without one —
+every intent created before the field existed — answers `classic`. It is not one
+of the terms a retry is compared on, so a retry with another `checkoutTheme`
+returns the stored intent with its stored design; change it with `PATCH`.
+
 **`POST /v1/payment-intents/tx`** — the payer (`source`) is known, so we build
 the unsigned `TransactionEnvelope` and a `web+stellar:tx?xdr=...` URI.
 
@@ -859,6 +870,10 @@ removed: it is built field by field (`toPublicPaymentLink`), so a column added t
   payments against): the merchant's account on Stellar and Solana — never the
   Solana Pay reference key — and, on Monad with a relayer, the intent's deposit
   address, which forwards the money to the merchant less `networkFee`.
+- **`checkoutTheme` is the design to draw** — `classic`, `split`, `ticket` or
+  `card`, as the merchant set it on create or with `PATCH` — and is never `null`:
+  an intent that names none answers `classic`. A page that meets a value it does
+  not know yet should draw `classic` too; new designs are added to this list.
 - **The status is live, and `EXPIRED` is not final.** Every answer carries
   `Cache-Control: no-store`. An unpaid intent past `expiresAt` reads `PENDING`
   until the observer expires it, and a payment verified later still moves
@@ -1714,6 +1729,19 @@ the service under `src/native-plugins/<slug>/`, switched on by the same
   `openapi:generate` turns them all on.
 
 ## Upgrading — breaking changes and deploy notes
+
+### Payment intents: a checkout design per intent
+
+- **New optional field `checkoutTheme`** (`classic`, `split`, `ticket` or `card`)
+  on `POST /v1/payment-intents/tx`, `POST /v1/payment-intents/pay` and
+  `PATCH /v1/payment-intents/{id}`, and in every payment-intent response and
+  `GET /v1/payment-links/{id}`. Additive: a request without it behaves as before,
+  and every existing intent answers `classic`. A client that refuses unknown
+  response fields must be regenerated from the contract.
+- **Migration `20261024120000_payment_intent_checkout_theme`** adds one nullable
+  column, `payment_intent.checkoutTheme`; nothing is rewritten. Run
+  `migrate deploy` before the new build serves traffic: every payment-intent read
+  selects the column.
 
 ### Payment links: a public read for hosted checkout pages
 

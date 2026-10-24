@@ -370,6 +370,12 @@ model PaymentIntent {
   txHash    String?
   reference String? // optional merchant reference
 
+  // The design the hosted checkout page (payments.cosmospay.lat/<id>) shows the
+  // intent in: one of `CHECKOUT_THEMES`. Null means 'classic'. A string like
+  // `chain`, not an enum, so a new design needs no migration; the API validates
+  // it on the way in.
+  checkoutTheme String?
+
   // Lifetime: an unpaid intent past this instant is auto-finalized to EXPIRED by
   // the observer. Set at creation from the configured TTL.
   expiresAt DateTime?

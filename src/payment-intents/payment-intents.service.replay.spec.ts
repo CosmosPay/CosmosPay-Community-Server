@@ -193,6 +193,23 @@ describe('PaymentIntentsService create replay', () => {
     expect(changed.loadAccount).not.toHaveBeenCalled();
   });
 
+  it('answers a retry naming another design with the stored intent, design and all', async () => {
+    // The design is not a term of the payment, and PATCH may have changed it
+    // since the create: a retry must not become a conflict with its own intent.
+    const { service, prisma } = build(attackerPay({ checkoutTheme: 'ticket' }));
+
+    const res = await service.createPay(consumer, {
+      destination: attacker,
+      amount: '10',
+      memo: '42',
+      checkoutTheme: 'split',
+    });
+
+    expect(res.id).toBe('pi_attacker');
+    expect(res.checkoutTheme).toBe('ticket');
+    expect(prisma.paymentIntent.create).not.toHaveBeenCalled();
+  });
+
   describe('when a concurrent create wins the insert', () => {
     const uniqueViolation = Object.assign(new Error('Unique constraint'), {
       code: 'P2002',

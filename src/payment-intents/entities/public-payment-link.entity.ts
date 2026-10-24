@@ -1,6 +1,10 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { CHAINS, type Chain } from '@/chains/chains.constants';
 import {
+  CHECKOUT_THEMES,
+  type CheckoutTheme,
+} from '@/payment-intents/payment-intents.constants';
+import {
   PaymentIntentKind,
   PaymentIntentStatus,
 } from '@generated/prisma/client';
@@ -162,4 +166,13 @@ export class PublicPaymentLinkEntity {
 
   @ApiProperty({ format: 'date-time', example: '2026-10-24T12:34:56.000Z' })
   createdAt!: string;
+
+  @ApiProperty({
+    enum: CHECKOUT_THEMES,
+    example: 'classic',
+    description:
+      'The design the merchant chose for this checkout page; render it. ' +
+      '`classic` when none was chosen.',
+  })
+  checkoutTheme!: CheckoutTheme;
 }

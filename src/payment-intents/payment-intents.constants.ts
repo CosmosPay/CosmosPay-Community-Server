@@ -1,4 +1,7 @@
-/** Tuning knobs for payment-intent verification and the on-chain observer. */
+/**
+ * Tuning knobs for payment-intent verification and the on-chain observer, and
+ * the designs a hosted checkout page may be shown in.
+ */
 
 /**
  * How many intents are checked against Horizon at once — by the reconcile pass,
@@ -186,3 +189,36 @@ export const PAYMENT_LINK_READ_RATE_LIMIT = {
  * the same memo, destination, asset and amount (`SETTLEMENT_RIVAL_FILTERS`).
  */
 export const SETTLEMENT_RIVALS_MAX = 5;
+
+/**
+ * The prebuilt designs a payment intent's hosted checkout page
+ * (`https://payments.cosmospay.lat/<id>`) can be shown in. The merchant picks
+ * one per intent (`checkoutTheme` on create and on `PATCH`), and both the
+ * owner's reads and the public `GET /v1/payment-links/{id}` answer it, so the
+ * page renders the design without knowing who the merchant is.
+ *
+ * Stored as a plain string, like `chain`, so adding a design is an entry here
+ * and a page that can draw it — no migration. Removing one is safe too: a
+ * stored value no longer listed reads as {@link DEFAULT_CHECKOUT_THEME}.
+ */
+export const CHECKOUT_THEMES = ['classic', 'split', 'ticket', 'card'] as const;
+export type CheckoutTheme = (typeof CHECKOUT_THEMES)[number];
+
+/** The design an intent that names none is shown in (stored as null). */
+export const DEFAULT_CHECKOUT_THEME: CheckoutTheme = 'classic';
+
+export function isCheckoutTheme(value: unknown): value is CheckoutTheme {
+  return (
+    typeof value === 'string' &&
+    (CHECKOUT_THEMES as readonly string[]).includes(value)
+  );
+}
+
+/**
+ * The design a stored intent is shown in: its own, or the default when it
+ * names none (null) or one this release no longer draws. Every response says
+ * the design outright, so no client has to know what null means.
+ */
+export function effectiveCheckoutTheme(stored: string | null): CheckoutTheme {
+  return isCheckoutTheme(stored) ? stored : DEFAULT_CHECKOUT_THEME;
+}

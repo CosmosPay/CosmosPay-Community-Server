@@ -9,7 +9,10 @@ import request from 'supertest';
 import { AppModule } from '@/app.module';
 import { PrismaService } from '@/prisma/prisma.service';
 import { rivalsOf } from './payment-intent-rivals';
-import { PAYMENT_INTENT_BUILD_RATE_LIMIT } from '@/payment-intents/payment-intents.constants';
+import {
+  CHECKOUT_THEMES,
+  PAYMENT_INTENT_BUILD_RATE_LIMIT,
+} from '@/payment-intents/payment-intents.constants';
 
 /**
  * Full CRUD for Stellar payment intents behind the APISIX gate. Horizon and
@@ -30,6 +33,9 @@ describe('Payment intents CRUD (e2e)', () => {
 
   const rateLimitCounters = new Map<string, number>();
 
+  /** One local consumer row per gateway username, as the resolver upserts it. */
+  const consumerIdOf = (username: string) => `c_${username}`;
+
   const prismaMock: any = {
     onModuleInit: jest.fn(),
     onModuleDestroy: jest.fn(),
@@ -40,9 +46,12 @@ describe('Payment intents CRUD (e2e)', () => {
       return Promise.all(arg);
     },
     consumer: {
-      upsert: jest
-        .fn()
-        .mockResolvedValue({ id: 'c1', apisixUsername: 'cosmos_u1' }),
+      upsert: jest.fn(({ where }: any) =>
+        Promise.resolve({
+          id: consumerIdOf(where.apisixUsername),
+          apisixUsername: where.apisixUsername,
+        }),
+      ),
     },
     customer: {
       findFirst: jest.fn().mockResolvedValue(null),
@@ -91,9 +100,16 @@ describe('Payment intents CRUD (e2e)', () => {
         Promise.resolve(rivalsOf(store.values(), args) ?? [...store.values()]),
       ),
       count: jest.fn(() => Promise.resolve(store.size)),
-      findFirst: jest.fn(({ where }: any) =>
-        Promise.resolve(store.get(where.id) ?? null),
-      ),
+      // Scoped like the real query: another consumer's row is not found.
+      findFirst: jest.fn(({ where }: any) => {
+        const row = store.get(where.id);
+        const owner = where.consumer?.apisixUsername;
+        return Promise.resolve(
+          row && (!owner || row.consumerId === consumerIdOf(owner))
+            ? row
+            : null,
+        );
+      }),
       findUnique: jest.fn(({ where }: any) => {
         if (where?.id) {
           return Promise.resolve(store.get(where.id) ?? null);
@@ -222,11 +238,12 @@ describe('Payment intents CRUD (e2e)', () => {
   const route = '/v1/payment-intents';
   const txRoute = `${route}/tx`;
   const payRoute = `${route}/pay`;
-  const gw = (r: request.Test) =>
+  const gwAs = (username: string) => (r: request.Test) =>
     r
       .set('x-gateway-secret', 'topsecret-topsecret-topsecret-topsecret')
-      .set('x-consumer-username', 'cosmos_u1')
+      .set('x-consumer-username', username)
       .set('x-consumer-permissions', 'payments:read,payments:write');
+  const gw = gwAs('cosmos_u1');
 
   let createdId: string;
 
@@ -430,6 +447,126 @@ describe('Payment intents CRUD (e2e)', () => {
 
   it('rejects deleting a SUCCEEDED (paid) intent (400)', async () => {
     await gw(request(http()).delete(`${route}/${createdId}`)).expect(400);
+  });
+
+  describe('the checkout design', () => {
+    const publicRead = (id: string) =>
+      request(http()).get(`/v1/payment-links/${id}`).expect(200);
+
+    it.each(CHECKOUT_THEMES)(
+      'creates a PAY intent in the %s design, and every read answers it',
+      async (theme) => {
+        const created = await gw(
+          request(http())
+            .post(payRoute)
+            .send({ destination, amount: '4', checkoutTheme: theme }),
+        ).expect(201);
+        expect(created.body.checkoutTheme).toBe(theme);
+        expect(store.get(created.body.id).checkoutTheme).toBe(theme);
+
+        const read = await gw(
+          request(http()).get(`${route}/${created.body.id}`),
+        ).expect(200);
+        expect(read.body.checkoutTheme).toBe(theme);
+        expect((await publicRead(created.body.id)).body.checkoutTheme).toBe(
+          theme,
+        );
+      },
+    );
+
+    it('creates a TX intent in the chosen design', async () => {
+      const res = await gw(
+        request(http())
+          .post(txRoute)
+          .send({ source, destination, amount: '4', checkoutTheme: 'ticket' }),
+      ).expect(201);
+      expect(res.body.checkoutTheme).toBe('ticket');
+      expect(store.get(res.body.id).checkoutTheme).toBe('ticket');
+    });
+
+    it('stores none when the create names none, and answers classic everywhere', async () => {
+      const res = await gw(
+        request(http()).post(payRoute).send({ destination, amount: '4' }),
+      ).expect(201);
+      expect(res.body.checkoutTheme).toBe('classic');
+      expect(store.get(res.body.id).checkoutTheme).toBeNull();
+
+      const list = await gw(request(http()).get(route)).expect(200);
+      const listed = list.body.data.find(
+        (row: { id: string }) => row.id === res.body.id,
+      );
+      expect(listed.checkoutTheme).toBe('classic');
+      expect((await publicRead(res.body.id)).body.checkoutTheme).toBe(
+        'classic',
+      );
+    });
+
+    it.each([
+      ['TX', () => ({ source, destination, amount: '4' })],
+      ['PAY', () => ({ destination, amount: '4' })],
+    ])(
+      'refuses a %s create naming a design it does not draw (400)',
+      async (kind, body) => {
+        const before = store.size;
+        const res = await gw(
+          request(http())
+            .post(kind === 'TX' ? txRoute : payRoute)
+            .send({ ...body(), checkoutTheme: 'neon' }),
+        ).expect(400);
+        expect(JSON.stringify(res.body)).toContain('checkoutTheme');
+        expect(store.size).toBe(before);
+      },
+    );
+
+    it('changes the design of a settled intent, and nothing else (200)', async () => {
+      // `createdId` is SUCCEEDED by now; the design is cosmetic, so a final
+      // status does not freeze it.
+      const before = { ...store.get(createdId) };
+      const res = await gw(
+        request(http())
+          .patch(`${route}/${createdId}`)
+          .send({ checkoutTheme: 'split' }),
+      ).expect(200);
+
+      expect(res.body.checkoutTheme).toBe('split');
+      expect(res.body.status).toBe('SUCCEEDED');
+      expect(res.body.txHash).toBe(before.txHash);
+      expect((await publicRead(createdId)).body.checkoutTheme).toBe('split');
+    });
+
+    it('changes the design alongside a status change (200)', async () => {
+      const created = await gw(
+        request(http()).post(payRoute).send({ destination, amount: '4' }),
+      ).expect(201);
+
+      const res = await gw(
+        request(http())
+          .patch(`${route}/${created.body.id}`)
+          .send({ status: 'CANCELLED', checkoutTheme: 'card' }),
+      ).expect(200);
+      expect(res.body.status).toBe('CANCELLED');
+      expect(res.body.checkoutTheme).toBe('card');
+    });
+
+    it('refuses a design it does not draw (400), leaving the stored one', async () => {
+      const res = await gw(
+        request(http())
+          .patch(`${route}/${createdId}`)
+          .send({ checkoutTheme: 'Classic' }),
+      ).expect(400);
+      expect(JSON.stringify(res.body)).toContain('checkoutTheme');
+      expect(store.get(createdId).checkoutTheme).toBe('split');
+    });
+
+    it("answers another consumer's intent as not found (404), not forbidden", async () => {
+      const res = await gwAs('cosmos_u2')(
+        request(http())
+          .patch(`${route}/${createdId}`)
+          .send({ checkoutTheme: 'ticket' }),
+      ).expect(404);
+      expect(res.body.message).toBe(`Payment intent ${createdId} not found`);
+      expect(store.get(createdId).checkoutTheme).toBe('split');
+    });
   });
 
   describe('the rate limit on the builders', () => {

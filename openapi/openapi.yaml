@@ -614,7 +614,7 @@ paths:
           $ref: "#/components/responses/UpstreamUnavailable"
         "504":
           $ref: "#/components/responses/UpstreamTimeout"
-      summary: Update a payment intent (status / txHash / reference)
+      summary: Update a payment intent (status / txHash / reference / checkoutTheme)
       tags:
         - payment-intents
       x-cosmos-upstream:
@@ -8613,6 +8613,20 @@ components:
           description: SEP-7 `callback` where the wallet POSTs the signed XDR, e.g.
             `url:https://...`.
           example: url:https://merchant.example.com/sep7/callback
+        checkoutTheme:
+          type: string
+          enum:
+            - classic
+            - split
+            - ticket
+            - card
+          default: classic
+          description: "Design of the hosted checkout page
+            (`https://payments.cosmospay.lat/<id>`) for this intent. Omit for
+            `classic`. Cosmetic: it is not part of the payment, so `PATCH
+            /v1/payment-intents/{id}` can change it later, and a retry with the
+            same memo returns the stored intent with its stored design."
+          example: ticket
       required:
         - source
         - destination
@@ -8712,6 +8726,15 @@ components:
           type: object
           nullable: true
           example: null
+        checkoutTheme:
+          type: string
+          enum:
+            - classic
+            - split
+            - ticket
+            - card
+          example: classic
+          description: Design of the hosted checkout page. `classic` when none was chosen.
         expiresAt:
           type: object
           nullable: true
@@ -8746,6 +8769,7 @@ components:
         - qr
         - txHash
         - reference
+        - checkoutTheme
         - expiresAt
         - createdAt
         - updatedAt
@@ -8800,6 +8824,20 @@ components:
           type: string
           description: SEP-7 `callback`, e.g. `url:https://...`. Stellar only.
           example: url:https://merchant.example.com/sep7/callback
+        checkoutTheme:
+          type: string
+          enum:
+            - classic
+            - split
+            - ticket
+            - card
+          default: classic
+          description: "Design of the hosted checkout page
+            (`https://payments.cosmospay.lat/<id>`) for this intent. Omit for
+            `classic`. Cosmetic: it is not part of the payment, so `PATCH
+            /v1/payment-intents/{id}` can change it later, and a retry with the
+            same memo returns the stored intent with its stored design."
+          example: ticket
       required:
         - destination
     PayPaymentIntentEntity:
@@ -8901,6 +8939,15 @@ components:
           type: object
           nullable: true
           example: null
+        checkoutTheme:
+          type: string
+          enum:
+            - classic
+            - split
+            - ticket
+            - card
+          example: classic
+          description: Design of the hosted checkout page. `classic` when none was chosen.
         expiresAt:
           type: object
           nullable: true
@@ -8935,6 +8982,7 @@ components:
         - qr
         - txHash
         - reference
+        - checkoutTheme
         - expiresAt
         - createdAt
         - updatedAt
@@ -9045,6 +9093,15 @@ components:
           type: object
           nullable: true
           example: null
+        checkoutTheme:
+          type: string
+          enum:
+            - classic
+            - split
+            - ticket
+            - card
+          example: classic
+          description: Design of the hosted checkout page. `classic` when none was chosen.
         expiresAt:
           type: object
           nullable: true
@@ -9080,6 +9137,7 @@ components:
         - qr
         - txHash
         - reference
+        - checkoutTheme
         - expiresAt
         - createdAt
         - updatedAt
@@ -9217,6 +9275,18 @@ components:
           type: string
           description: Merchant reference.
           example: order_1234
+        checkoutTheme:
+          type: string
+          enum:
+            - classic
+            - split
+            - ticket
+            - card
+          description: "Design of the hosted checkout page
+            (`https://payments.cosmospay.lat/<id>`). Accepted in any status,
+            final ones included, alone or with the other fields: it changes
+            nothing about the payment."
+          example: split
     DeletedEntity:
       type: object
       properties:
@@ -9339,6 +9409,16 @@ components:
           type: string
           format: date-time
           example: 2026-10-24T12:34:56.000Z
+        checkoutTheme:
+          type: string
+          enum:
+            - classic
+            - split
+            - ticket
+            - card
+          example: classic
+          description: The design the merchant chose for this checkout page; render it.
+            `classic` when none was chosen.
       required:
         - id
         - kind
@@ -9357,6 +9437,7 @@ components:
         - networkFee
         - expiresAt
         - createdAt
+        - checkoutTheme
     CreateCustomerDto:
       type: object
       properties:

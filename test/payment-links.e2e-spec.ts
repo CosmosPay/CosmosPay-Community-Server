@@ -50,6 +50,8 @@ describe('Payment links (e2e)', () => {
         uri: `web+stellar:pay?destination=${MERCHANT}&amount=25.5&memo=4127759120438726917&memo_type=MEMO_ID&msg=Order+%2324`,
         txHash: null,
         reference: 'merchant-order-24',
+        // Created without a design: the page is told `classic`.
+        checkoutTheme: null,
         networkFee: null,
         expiresAt: new Date('2026-10-24T13:34:56.000Z'),
         createdAt: new Date('2026-10-24T12:34:56.000Z'),
@@ -78,6 +80,7 @@ describe('Payment links (e2e)', () => {
         uri: `ethereum:${DEPOSIT}@143?value=1000000000000000000`,
         txHash: `0x${'ab'.repeat(32)}`,
         reference: null,
+        checkoutTheme: 'ticket',
         networkFee: '0.02',
         expiresAt: null,
         createdAt: new Date('2026-10-24T12:34:56.000Z'),
@@ -171,6 +174,7 @@ describe('Payment links (e2e)', () => {
       networkFee: null,
       expiresAt: '2026-10-24T13:34:56.000Z',
       createdAt: '2026-10-24T12:34:56.000Z',
+      checkoutTheme: 'classic',
     });
     for (const field of [
       'consumerId',
@@ -196,6 +200,7 @@ describe('Payment links (e2e)', () => {
       payTo: DEPOSIT,
       networkFee: '0.02',
       expiresAt: null,
+      checkoutTheme: 'ticket',
     });
     expect(JSON.stringify(res.body)).not.toContain(EVM_MERCHANT);
   });

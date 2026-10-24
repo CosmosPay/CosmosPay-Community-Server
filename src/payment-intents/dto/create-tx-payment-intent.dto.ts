@@ -1,6 +1,17 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsOptional, IsString, Matches, MaxLength } from 'class-validator';
+import {
+  IsIn,
+  IsOptional,
+  IsString,
+  Matches,
+  MaxLength,
+} from 'class-validator';
 import { IsStellarAddress } from '@/common/validators/is-stellar-address.validator';
+import {
+  CHECKOUT_THEMES,
+  type CheckoutTheme,
+  DEFAULT_CHECKOUT_THEME,
+} from '@/payment-intents/payment-intents.constants';
 
 /**
  * SEP-7 `tx` request: the payer (`source`) is known, so we build the unsigned
@@ -81,4 +92,19 @@ export class CreateTxPaymentIntentDto {
   @IsString()
   @MaxLength(2048)
   callback?: string;
+
+  @ApiPropertyOptional({
+    enum: CHECKOUT_THEMES,
+    default: DEFAULT_CHECKOUT_THEME,
+    description:
+      'Design of the hosted checkout page (`https://payments.cosmospay.lat/<id>`) ' +
+      'for this intent. Omit for `classic`. Cosmetic: it is not part of the ' +
+      'payment, so `PATCH /v1/payment-intents/{id}` can change it later, and a ' +
+      'retry with the same memo returns the stored intent with its stored ' +
+      'design.',
+    example: 'ticket',
+  })
+  @IsOptional()
+  @IsIn(CHECKOUT_THEMES)
+  checkoutTheme?: CheckoutTheme;
 }

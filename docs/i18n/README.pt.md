@@ -722,6 +722,18 @@ conta do pagador no Horizon e escreve uma linha, e sob a chave pública comparti
 endereço é tudo o que separa uma carteira anônima da seguinte. Se você não passar
 `memo`, um uint64 aleatório é gerado.
 
+**O design do checkout.** Os dois construtores aceitam um `checkoutTheme`
+opcional, o design com que a página de checkout hospedada
+(`https://payments.cosmospay.lat/<id>`) mostra o intent: `classic` (o padrão),
+`split`, `ticket` ou `card` (`CHECKOUT_THEMES` em
+`src/payment-intents/payment-intents.constants.ts`). Qualquer outro valor resulta
+em `400 validation_failed`. `PATCH /v1/payment-intents/{id}` o altera em qualquer
+status, inclusive os finais, porque ele não muda nada no pagamento. Toda resposta
+informa o design: um intent armazenado sem um — todo intent criado antes de o
+campo existir — responde `classic`. Ele não é um dos termos com que uma nova
+tentativa é comparada, então uma nova tentativa com outro `checkoutTheme` devolve o
+intent armazenado com o design armazenado; para alterá-lo, use `PATCH`.
+
 **`POST /v1/payment-intents/tx`** — o pagador (`source`) é conhecido, então montamos
 o `TransactionEnvelope` não assinado e uma URI `web+stellar:tx?xdr=...`.
 
@@ -871,6 +883,11 @@ a campo (`toPublicPaymentLink`), então uma coluna adicionada depois a
   confere os pagamentos): a conta do comerciante em Stellar e Solana — nunca a
   reference key do Solana Pay — e, em Monad com relayer, o endereço de depósito da
   intenção, que repassa o dinheiro ao comerciante menos `networkFee`.
+- **`checkoutTheme` é o design a desenhar** — `classic`, `split`, `ticket` ou
+  `card`, como o comerciante definiu ao criar ou com `PATCH` — e nunca é `null`:
+  uma intenção que não nomeia nenhum responde `classic`. Uma página que encontrar
+  um valor que ainda não conhece deve desenhar `classic` também; novos designs são
+  adicionados a esta lista.
 - **O status é ao vivo, e `EXPIRED` não é final.** Toda resposta leva
   `Cache-Control: no-store`. Uma intenção não paga depois de `expiresAt` aparece como
   `PENDING` até o observador expirá-la, e um pagamento verificado depois ainda move
@@ -1742,6 +1759,19 @@ serviço em `src/native-plugins/<slug>/`, ligados pela mesma lista
   `openapi:generate` liga todos.
 
 ## Atualização — mudanças incompatíveis e notas de deploy
+
+### Intenções de pagamento: um design de checkout por intenção
+
+- **Novo campo opcional `checkoutTheme`** (`classic`, `split`, `ticket` ou `card`)
+  em `POST /v1/payment-intents/tx`, `POST /v1/payment-intents/pay` e
+  `PATCH /v1/payment-intents/{id}`, e em toda resposta de intenção de pagamento e em
+  `GET /v1/payment-links/{id}`. É aditivo: uma requisição sem ele se comporta como
+  antes, e toda intenção existente responde `classic`. Um cliente que recusa campos
+  de resposta desconhecidos precisa ser regenerado a partir do contrato.
+- **A migração `20261024120000_payment_intent_checkout_theme`** adiciona uma coluna
+  nullable, `payment_intent.checkoutTheme`; nada é reescrito. Rode
+  `migrate deploy` antes de o novo build receber tráfego: toda leitura de intenções
+  de pagamento seleciona a coluna.
 
 ### Links de pagamento: uma leitura pública para páginas de checkout hospedadas
 

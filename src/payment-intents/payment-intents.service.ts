@@ -40,6 +40,10 @@ import {
 import { Sep7LinkBuilder } from '@/payment-intents/sep7-link-builder.service';
 import { ChainPayLinkBuilder } from '@/payment-intents/chain-pay-link-builder.service';
 import { PaymentVerifiers } from '@/payment-intents/payment-verifiers';
+import {
+  type CheckoutTheme,
+  effectiveCheckoutTheme,
+} from '@/payment-intents/payment-intents.constants';
 import { settlementRivalsQuery } from '@/payment-intents/settlement-rivals';
 import {
   expectedTxId,
@@ -108,15 +112,25 @@ export const PAYMENT_INTENT_PUBLIC_SELECT = {
   uri: true,
   txHash: true,
   reference: true,
+  checkoutTheme: true,
   expiresAt: true,
   createdAt: true,
   updatedAt: true,
 } as const satisfies Prisma.PaymentIntentSelect;
 
-/** An intent as the list returns it. */
-export type PublicPaymentIntent = Prisma.PaymentIntentGetPayload<{
+/** An intent's columns as {@link PAYMENT_INTENT_PUBLIC_SELECT} reads them. */
+type PublicPaymentIntentRow = Prisma.PaymentIntentGetPayload<{
   select: typeof PAYMENT_INTENT_PUBLIC_SELECT;
 }>;
+
+/**
+ * An intent as the list returns it: the public columns, with `checkoutTheme`
+ * read as the design the page shows rather than the null stored for "none".
+ */
+export type PublicPaymentIntent = Omit<
+  PublicPaymentIntentRow,
+  'checkoutTheme'
+> & { checkoutTheme: CheckoutTheme };
 
 /** A public intent plus its derived QR code — what single-intent responses return. */
 export type PaymentIntentView = PublicPaymentIntent & { qr: string };
@@ -209,7 +223,7 @@ export class PaymentIntentsService {
   /** QR is derived from the stored SEP-7 URI rather than persisted. */
   private async withQr(intent: PaymentIntent): Promise<PaymentIntentView> {
     return {
-      ...project(intent, PAYMENT_INTENT_PUBLIC_SELECT),
+      ...toPublicPaymentIntent(project(intent, PAYMENT_INTENT_PUBLIC_SELECT)),
       qr: await this.links.qr(intent.uri),
     };
   }
@@ -308,6 +322,9 @@ export class PaymentIntentsService {
       status: 'PENDING',
       xdr,
       uri,
+      // Beside the terms, not among them: a retry is not compared on the
+      // design (see `isSameIntentRequest`).
+      checkoutTheme: dto.checkoutTheme ?? null,
     });
     if (!intent) {
       return this.replayOf(
@@ -374,6 +391,7 @@ export class PaymentIntentsService {
       status: 'PENDING',
       xdr: null,
       uri,
+      checkoutTheme: dto.checkoutTheme ?? null,
     });
     if (!intent) {
       return this.replayOf(
@@ -446,6 +464,7 @@ export class PaymentIntentsService {
       status: 'PENDING',
       xdr: null,
       uri: link.uri,
+      checkoutTheme: dto.checkoutTheme ?? null,
       assetDecimals: link.assetDecimals,
       chainReference: link.chainReference,
       chainCursor: link.chainCursor,
@@ -530,7 +549,7 @@ export class PaymentIntentsService {
     // buys nothing here (the client sees a moving list either way), while the
     // transaction costs four serial round trips — BEGIN, page, count, COMMIT —
     // instead of two issued in parallel.
-    const [data, total] = await Promise.all([
+    const [rows, total] = await Promise.all([
       this.prisma.paymentIntent.findMany({
         where,
         take: query.take,
@@ -541,7 +560,12 @@ export class PaymentIntentsService {
       this.prisma.paymentIntent.count({ where }),
     ]);
 
-    return { data, total, take: query.take, skip: query.skip };
+    return {
+      data: rows.map(toPublicPaymentIntent),
+      total,
+      take: query.take,
+      skip: query.skip,
+    };
   }
 
   // ── READ (one) ──────────────────────────────────────────────────────────────
@@ -600,10 +624,11 @@ export class PaymentIntentsService {
         txHash: dto.txHash,
       });
       // Non-status fields can still be patched alongside a status change.
-      if (dto.reference !== undefined && dto.reference !== updated.reference) {
+      const fields = merchantFieldsOf(dto);
+      if (fields) {
         const patched = await this.prisma.paymentIntent.update({
           where: { id },
-          data: { reference: dto.reference },
+          data: fields,
         });
         return this.withQr(patched);
       }
@@ -612,14 +637,10 @@ export class PaymentIntentsService {
 
     const updated =
       dto.txHash !== undefined
-        ? await this.patchTxHash(id, dto.txHash, dto.reference)
+        ? await this.patchTxHash(id, dto.txHash, merchantFieldsOf(dto))
         : await this.prisma.paymentIntent.update({
             where: { id },
-            data: {
-              ...(dto.reference !== undefined
-                ? { reference: dto.reference }
-                : {}),
-            },
+            data: merchantFieldsOf(dto) ?? {},
           });
 
     this.logger.log(
@@ -631,8 +652,8 @@ export class PaymentIntentsService {
   }
 
   /**
-   * Records a reported `txHash` (and any `reference` sent with it) without a
-   * status change. Only a PENDING or SUBMITTED intent accepts a new hash.
+   * Records a reported `txHash` (and any merchant fields sent with it) without
+   * a status change. Only a PENDING or SUBMITTED intent accepts a new hash.
    *
    * This branch had no status check, so a terminal intent's hash could be
    * rewritten: a SUCCEEDED row's `txHash` — the transaction its settlement was
@@ -646,12 +667,9 @@ export class PaymentIntentsService {
   private async patchTxHash(
     id: string,
     txHash: string,
-    reference: string | undefined,
+    fields: MerchantFields | null,
   ): Promise<PaymentIntent> {
-    const data = {
-      txHash,
-      ...(reference !== undefined ? { reference } : {}),
-    };
+    const data = { txHash, ...fields };
     const current = await this.prisma.paymentIntent.findUnique({
       where: { id },
       select: { status: true, txHash: true },
@@ -745,11 +763,12 @@ export class PaymentIntentsService {
       );
     }
 
-    // `reference` may be patched alongside the settlement.
-    if (dto.reference !== undefined) {
+    // The merchant's fields may be patched alongside the settlement.
+    const fields = merchantFieldsOf(dto);
+    if (fields) {
       const patched = await this.prisma.paymentIntent.update({
         where: { id },
-        data: { reference: dto.reference },
+        data: fields,
       });
       return this.withQr(patched);
     }
@@ -1171,6 +1190,35 @@ export class PaymentIntentsService {
     }
     return chainOf(owned.chain);
   }
+}
+
+/**
+ * What a public row stores, resolved into what the owner is answered. It
+ * spreads, so it takes only a row already cut to
+ * {@link PAYMENT_INTENT_PUBLIC_SELECT} — never a full one.
+ */
+function toPublicPaymentIntent(
+  row: PublicPaymentIntentRow,
+): PublicPaymentIntent {
+  return { ...row, checkoutTheme: effectiveCheckoutTheme(row.checkoutTheme) };
+}
+
+/** The columns a PATCH writes that are the merchant's, not the payment's. */
+type MerchantFields = { reference?: string; checkoutTheme?: CheckoutTheme };
+
+/**
+ * The merchant's own fields a PATCH sent — its `reference` and the checkout
+ * page's design — or null when it sent neither. They prove nothing about the
+ * payment, so they are written in any status, with or without a status change.
+ */
+function merchantFieldsOf(dto: UpdatePaymentIntentDto): MerchantFields | null {
+  const fields: MerchantFields = {
+    ...(dto.reference !== undefined ? { reference: dto.reference } : {}),
+    ...(dto.checkoutTheme !== undefined
+      ? { checkoutTheme: dto.checkoutTheme }
+      : {}),
+  };
+  return Object.keys(fields).length > 0 ? fields : null;
 }
 
 /**

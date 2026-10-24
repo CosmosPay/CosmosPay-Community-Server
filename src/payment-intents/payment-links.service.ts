@@ -4,6 +4,7 @@ import { isChain } from '@/chains/chains.constants';
 import { ApiError } from '@/common/errors/api-error';
 import { PrismaService } from '@/prisma/prisma.service';
 import type { PublicPaymentLinkEntity } from '@/payment-intents/entities/public-payment-link.entity';
+import { effectiveCheckoutTheme } from '@/payment-intents/payment-intents.constants';
 import { PAY_TO } from '@/payment-intents/pay-to';
 import { Sep7LinkBuilder } from '@/payment-intents/sep7-link-builder.service';
 
@@ -34,6 +35,7 @@ export const PAYMENT_LINK_SELECT = {
   networkFee: true,
   expiresAt: true,
   createdAt: true,
+  checkoutTheme: true,
 } as const satisfies Prisma.PaymentIntentSelect;
 
 /** An intent as the public read loads it. */
@@ -78,6 +80,7 @@ export function toPublicPaymentLink(
     networkFee: row.networkFee,
     expiresAt: row.expiresAt ? row.expiresAt.toISOString() : null,
     createdAt: row.createdAt.toISOString(),
+    checkoutTheme: effectiveCheckoutTheme(row.checkoutTheme),
   };
 }
 

@@ -740,6 +740,19 @@ des Zahlers von Horizon und schreibt eine Zeile, und unter dem gemeinsamen
 öffentlichen Key ist die Adresse das Einzige, was eine anonyme Wallet von der nächsten
 trennt. Wenn Sie kein `memo` übergeben, wird ein zufälliges uint64 erzeugt.
 
+**Das Checkout-Design.** Beide Bauer nehmen ein optionales `checkoutTheme`
+entgegen, das Design, in dem die gehostete Checkout-Seite
+(`https://payments.cosmospay.lat/<id>`) den Intent zeigt: `classic` (der
+Standard), `split`, `ticket` oder `card` (`CHECKOUT_THEMES` in
+`src/payment-intents/payment-intents.constants.ts`). Jeder andere Wert ergibt
+`400 validation_failed`. `PATCH /v1/payment-intents/{id}` ändert es in jedem
+Status, auch in den endgültigen, denn es ändert nichts an der Zahlung. Jede Antwort
+nennt das Design: Ein Intent, der ohne Design gespeichert ist — jeder Intent, der
+vor diesem Feld angelegt wurde —, antwortet `classic`. Es ist keine der
+Konditionen, die ein erneutes Anlegen vergleicht; ein erneutes Anlegen mit einem
+anderen `checkoutTheme` liefert daher den gespeicherten Intent mit seinem
+gespeicherten Design. Ändern Sie es mit `PATCH`.
+
 **`POST /v1/payment-intents/tx`** — der Zahler (`source`) ist bekannt, daher bauen wir
 das unsignierte `TransactionEnvelope` und eine `web+stellar:tx?xdr=...`-URI.
 
@@ -896,6 +909,11 @@ jemand sie bewusst ergänzt.
   auf Stellar und Solana — nie der Reference-Key von Solana Pay — und auf Monad mit
   Relayer die Einzahlungsadresse der Absicht, die das Geld abzüglich `networkFee` an den
   Händler weiterleitet.
+- **`checkoutTheme` ist das Design, das zu zeichnen ist** — `classic`, `split`,
+  `ticket` oder `card`, wie der Händler es beim Anlegen oder per `PATCH` gesetzt
+  hat — und nie `null`: Eine Absicht ohne Design antwortet `classic`. Eine Seite,
+  die auf einen Wert trifft, den sie noch nicht kennt, sollte ebenfalls `classic`
+  zeichnen; neue Designs kommen zu dieser Liste hinzu.
 - **Der Status ist live, und `EXPIRED` ist nicht endgültig.** Jede Antwort trägt
   `Cache-Control: no-store`. Eine unbezahlte Absicht nach `expiresAt` steht auf
   `PENDING`, bis der Beobachter sie verfallen lässt, und eine später verifizierte
@@ -1799,6 +1817,19 @@ eingeschaltet werden.
   eingeschaltet oder nicht: `openapi:generate` schaltet alle ein.
 
 ## Upgrade — Breaking Changes und Deploy-Hinweise
+
+### Zahlungsabsichten: ein Checkout-Design pro Absicht
+
+- **Neues optionales Feld `checkoutTheme`** (`classic`, `split`, `ticket` oder
+  `card`) bei `POST /v1/payment-intents/tx`, `POST /v1/payment-intents/pay` und
+  `PATCH /v1/payment-intents/{id}` sowie in jeder Antwort einer Zahlungsabsicht und
+  in `GET /v1/payment-links/{id}`. Rein additiv: Eine Anfrage ohne das Feld verhält
+  sich wie bisher, und jede bestehende Absicht antwortet `classic`. Ein Client, der
+  unbekannte Antwortfelder ablehnt, muss aus dem Vertrag neu generiert werden.
+- **Die Migration `20261024120000_payment_intent_checkout_theme`** fügt eine
+  nullable Spalte hinzu, `payment_intent.checkoutTheme`; nichts wird umgeschrieben.
+  Führen Sie `migrate deploy` aus, bevor der neue Build Traffic bedient: Jeder
+  Lesezugriff auf Zahlungsabsichten wählt die Spalte aus.
 
 ### Zahlungslinks: ein öffentlicher Lesezugriff für gehostete Checkout-Seiten
 

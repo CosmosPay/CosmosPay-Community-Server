@@ -9,6 +9,11 @@ import {
 import { CHAINS, type Chain } from '@/chains/chains.constants';
 import { IsChainAddress } from '@/common/validators/is-chain-address.validator';
 import { IsDecimalAmount } from '@/common/validators/is-decimal-amount.validator';
+import {
+  CHECKOUT_THEMES,
+  type CheckoutTheme,
+  DEFAULT_CHECKOUT_THEME,
+} from '@/payment-intents/payment-intents.constants';
 
 /**
  * A `pay` request: no payer is known, so the intent is a payment link the
@@ -108,4 +113,19 @@ export class CreatePayPaymentIntentDto {
   @IsString()
   @MaxLength(2048)
   callback?: string;
+
+  @ApiPropertyOptional({
+    enum: CHECKOUT_THEMES,
+    default: DEFAULT_CHECKOUT_THEME,
+    description:
+      'Design of the hosted checkout page (`https://payments.cosmospay.lat/<id>`) ' +
+      'for this intent. Omit for `classic`. Cosmetic: it is not part of the ' +
+      'payment, so `PATCH /v1/payment-intents/{id}` can change it later, and a ' +
+      'retry with the same memo returns the stored intent with its stored ' +
+      'design.',
+    example: 'ticket',
+  })
+  @IsOptional()
+  @IsIn(CHECKOUT_THEMES)
+  checkoutTheme?: CheckoutTheme;
 }

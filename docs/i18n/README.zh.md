@@ -510,6 +510,8 @@ OPENAPI_SERVER_URL=https://gateway.example.com npm run openapi:generate
 
 **memo 是必需的 `MEMO_ID`**——它在链上标识这笔支付，并让创建操作具备**幂等性**：`(consumer, memo)` 是唯一的，因此使用相同的 memo **且相同的条款**再次创建会返回原来的意图。相同的 memo 搭配任何不同的条款——类型（kind）、网络、目标地址、金额、资产、`msg`、`callback`，或 `tx` 的 `source`——都会返回 `409 idempotency_conflict`，且该错误不会透露已存储意图的任何信息。这一点在共享公共 key 下尤为重要，因为所有匿名钱包都是同一个消费者。两个构建路由共用按消费者和客户端地址计算的**每分钟 30 次调用**预算（`429 rate_limited`）：它们都要从 Horizon 读取付款人账户并写入一行记录，而在共享公共 key 下，地址是区分不同匿名钱包的唯一依据。如果不传 `memo`，会随机生成一个 uint64。
 
+**收银页设计。** 两个构建路由都接受可选的 `checkoutTheme`，即托管收银页（`https://payments.cosmospay.lat/<id>`）展示该意图所用的设计：`classic`（默认）、`split`、`ticket` 或 `card`（`src/payment-intents/payment-intents.constants.ts` 中的 `CHECKOUT_THEMES`）。其他任何值都会返回 `400 validation_failed`。`PATCH /v1/payment-intents/{id}` 可以在任何状态下修改它，包括终态，因为它不改变支付的任何内容。每个响应都会给出设计：未存储设计的意图——包括该字段出现之前创建的所有意图——返回 `classic`。它不属于重试时比较的条款，因此带着另一个 `checkoutTheme` 的重试会返回已存储的意图及其已存储的设计；要修改它，请使用 `PATCH`。
+
 **`POST /v1/payment-intents/tx`** — 付款方（`source`）已知，因此我们构建未签名的 `TransactionEnvelope` 和一个 `web+stellar:tx?xdr=...` URI。
 
 ```jsonc
@@ -622,6 +624,7 @@ devnet 和 Monad testnet（10143）——所有链上的 `network` 都存为 `pu
 - **id 本身就是访问权限。** 任何持有链接的人都可以在这里读取它，无论它属于哪个租户——这正是支付链接的含义。从未存在过的 id 和已删除的意图，得到的都是所有者读取时同样的 `404 not_found`。
 - **永不返回：** 所属 consumer、付款方的 `source`、交易信封（`xdr`）、商户的 `reference` 和 `callback`、状态历史，以及付款方向存款地址付款时商户自己的地址。不过 `uri` 是原样的链接，因此 SEP-7 链接仍会带着商户设置的 `callback`，`tx` 链接仍带着未签名的信封——这正是付款方钱包从二维码读到的内容。切勿在 `callback` URL 中放入任何密钥。
 - **`payTo` 就是 `uri` 里的地址**（`src/payment-intents/pay-to.ts` 中的 `PAY_TO`，也是 Monad 校验器核对付款所用的同一规则）：在 Stellar 和 Solana 上是商户的账户——绝不是 Solana Pay 的 reference key——在启用中继（relayer）的 Monad 上是该意图的存款地址，它会把资金扣除 `networkFee` 后转给商户。
+- **`checkoutTheme` 是要渲染的设计**——`classic`、`split`、`ticket` 或 `card`，即商户在创建时或通过 `PATCH` 设定的值——且永远不为 `null`：未指定设计的意图返回 `classic`。页面遇到尚不认识的值时也应渲染 `classic`；新设计会加入这个列表。
 - **状态是实时的，且 `EXPIRED` 不是终态。** 每个响应都带 `Cache-Control: no-store`。超过 `expiresAt` 仍未支付的意图，在观察器将其过期之前显示为 `PENDING`；之后才验证的付款仍会把 `EXPIRED` 变为 `SUCCEEDED`，所以页面遇到已过期的链接应放慢频率继续轮询，而不是停止。
 - **每个客户端地址每分钟 60 次读取**（`PAYMENT_LINK_READ_RATE_LIMIT`；IPv6 调用方按 /64 计），超出后返回带 `Retry-After` 的 `429 rate_limited`。每 5 秒轮询一次的页面消耗 12 次。地址就是全部的键，因此页面必须从付款方的浏览器发起调用：代理这些读取或在服务端渲染它们的服务器，会把所有付款方放进它唯一的一个桶里。
 - **id 难以猜测，但不是秘密。** id 是 Prisma 的 `cuid()`（v1）：毫秒时间戳、计数器、主机指纹，以及来自 `Math.random()` 的约 41 位随机数，而 `Math.random()` 并非密码学生成器。在这一预算下盲猜一个 id 不可行；但仍应把链接视为付款方与商户之间的私有信息，而不是访问凭证。
@@ -1186,6 +1189,11 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
 - **OpenAPI 契约记录每个原生插件的路由**，无论是否开启：`openapi:generate` 会全部开启。
 
 ## 升级 — 破坏性变更与部署说明
+
+### 支付意图：每个意图一个收银页设计
+
+- **新的可选字段 `checkoutTheme`**（`classic`、`split`、`ticket` 或 `card`），出现在 `POST /v1/payment-intents/tx`、`POST /v1/payment-intents/pay` 和 `PATCH /v1/payment-intents/{id}` 中，也出现在每个支付意图响应和 `GET /v1/payment-links/{id}` 中。这是新增字段：不带它的请求行为与以前相同，所有现有意图都返回 `classic`。拒绝未知响应字段的客户端需要根据契约重新生成。
+- **迁移 `20261024120000_payment_intent_checkout_theme`** 新增一个可为空的列 `payment_intent.checkoutTheme`；不改写任何数据。在新版本承接流量之前运行 `migrate deploy`：每次读取支付意图都会选取该列。
 
 ### 支付链接：供托管收银页使用的公开读取
 

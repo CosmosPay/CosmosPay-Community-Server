@@ -215,7 +215,8 @@ export class PaymentIntentsController {
   @Patch(':id')
   @RequirePermissions('payments:write')
   @ApiOperation({
-    summary: 'Update a payment intent (status / txHash / reference)',
+    summary:
+      'Update a payment intent (status / txHash / reference / checkoutTheme)',
   })
   @ApiOkResponse({ type: PaymentIntentEntity })
   // Setting `txHash` verifies it against the chain before it is stored.
