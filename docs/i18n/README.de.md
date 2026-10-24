@@ -79,6 +79,7 @@ src/
                                   SEP-7 links, signed-envelope relay, settlement repository
   payment-intents/                payment intents on Stellar, Solana and Monad: controller, service, DTOs,
                                   per-chain link builders and verifiers, the observer — emits events
+                                  + GET /v1/payment-links/{id}: the payer's view, read with no API key
   chains/                         chain list, per-chain address rules, units, message signatures, JSON-RPC
   solana/                         Solana RPC client (cluster-checked), Solana Pay links
   evm/                            EVM RPC client for Monad (chain-id-checked), EIP-681 links
@@ -141,6 +142,7 @@ jedem CI-Lauf aus den Controllern und DTOs neu erzeugt wird
 | Bereich           | Basispfad                | Funktion                                                  |
 | ----------------- | ------------------------ | --------------------------------------------------------- |
 | Zahlungsabsichten   | `/v1/payment-intents`    | `pay`-Absichten auf Stellar (SEP-7), Solana (Solana Pay) und Monad (EIP-681), SEP-7-`tx`, Validierung, On-Chain-Beobachter |
+| Zahlungslinks       | `/v1/payment-links`      | Eine Zahlungsabsicht, wie der Zahlende sie sieht, für gehostete Checkout-Seiten — ohne API-Key (`@Public`) |
 | Swaps             | `/v1/swaps`              | Path-Payment-Quote, unsigniertes XDR bauen, signiertes übermitteln · Solana über Jupiter, Monad über Kuru Flow |
 | Chain-übergreifende Swaps | `/v1/cross-chain-swaps` | Stellar ⇄ Solana ⇄ Monad über NEAR Intents: Quote, Einzahlungsadresse, Status |
 | Liquiditätspools  | `/v1/liquidity-pools`    | AMM-Einzahlung / -Auszahlung, Positionen, Provision auf Gewinn |
@@ -275,6 +277,7 @@ Konsolen-Backend erreicht sie. Pfade verwenden die OpenAPI-Form `{param}`.
 | DELETE | `/v1/payment-intents/{id}` | `payments:write` |  |
 | GET | `/v1/payment-intents/{id}/transitions` | `payments:read` |  |
 | POST | `/v1/payment-intents/{id}/validate` | `payments:write` |  |
+| GET | `/v1/payment-links/{id}` | keiner — `@Public()`, Budget pro Client-Adresse |  |
 | GET | `/v1/plugins` | `plugins:read` |  |
 | GET | `/v1/plugins/{slug}` | `plugins:read` |  |
 | PUT | `/v1/plugins/{slug}/installation` | `plugins:write` |  |
@@ -864,6 +867,55 @@ bleibt Stellar-only: ein SEP-7-`tx` ist ein Stellar-Envelope.
   "assetCode": "USDC", "assetIssuer": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v" }
 // response → { chain: "solana", uri: "solana:<base58>?amount=25.5&spl-token=…&reference=…&memo=…", chainReference, qr, … }
 ```
+
+### Zahlungslinks: der öffentliche Lesezugriff hinter einem gehosteten Checkout
+
+`GET /v1/payment-links/{id}` liefert eine Zahlungsabsicht, per id, an einen Aufrufer
+ohne API-Key und ohne Gateway-Secret (`@Public()`). Das liest die Checkout-Seite unter
+`https://payments.cosmospay.lat/<id>`, um Betrag, Asset und Netzwerk, die
+Zahlungsadresse, den Link und seinen QR-Code anzuzeigen und den Status abzufragen, bis
+die Zahlung abgewickelt ist. Die Antwort (`PublicPaymentLinkEntity` im Vertrag) hat
+eine eigene Form und ist nicht das `GET /v1/payment-intents/{id}` des Eigentümers mit
+entfernten Feldern: Sie wird Feld für Feld aufgebaut (`toPublicPaymentLink`), sodass
+eine später zu `payment_intent` hinzugefügte Spalte hier erst veröffentlicht wird, wenn
+jemand sie bewusst ergänzt.
+
+- **Die id ist die Berechtigung.** Wer einen Link hat, liest ihn hier, egal welchem
+  Tenant er gehört — genau das ist ein Zahlungslink. Eine id, die nie existierte, und
+  eine gelöschte Absicht erhalten dasselbe `404 not_found`, das der Lesezugriff des
+  Eigentümers liefert.
+- **Nie zurückgegeben:** der besitzende Consumer, die `source` des Zahlenden, der
+  Envelope (`xdr`), `reference` und `callback` des Händlers, der Statusverlauf und die
+  eigene Adresse des Händlers, wenn der Zahlende an eine Einzahlungsadresse zahlt.
+  `uri` ist allerdings der Link im Wortlaut: Ein SEP-7-Link trägt also weiterhin einen
+  vom Händler gesetzten `callback` und ein `tx`-Link den unsignierten Envelope — genau
+  das, was die Wallet des Zahlenden aus dem QR-Code liest. Legen Sie nie ein Geheimnis
+  in eine `callback`-URL.
+- **`payTo` ist die Adresse in `uri`** (`PAY_TO` in `src/payment-intents/pay-to.ts`,
+  dieselbe Regel, gegen die der Monad-Verifier Zahlungen prüft): das Konto des Händlers
+  auf Stellar und Solana — nie der Reference-Key von Solana Pay — und auf Monad mit
+  Relayer die Einzahlungsadresse der Absicht, die das Geld abzüglich `networkFee` an den
+  Händler weiterleitet.
+- **Der Status ist live, und `EXPIRED` ist nicht endgültig.** Jede Antwort trägt
+  `Cache-Control: no-store`. Eine unbezahlte Absicht nach `expiresAt` steht auf
+  `PENDING`, bis der Beobachter sie verfallen lässt, und eine später verifizierte
+  Zahlung setzt `EXPIRED` noch auf `SUCCEEDED` — eine Seite sollte einen abgelaufenen
+  Link daher langsamer weiter abfragen, statt aufzuhören.
+- **60 Lesezugriffe pro Minute pro Client-Adresse** (`PAYMENT_LINK_READ_RATE_LIMIT`;
+  ein IPv6-Aufrufer pro /64), danach `429 rate_limited` mit `Retry-After`. Eine Seite,
+  die alle 5 s abfragt, verbraucht 12. Die Adresse ist der ganze Schlüssel, also muss
+  die Seite aus dem Browser des Zahlenden aufrufen: Ein Server, der diese Abfragen
+  weiterreicht oder serverseitig rendert, steckt alle Zahlenden in seinen einen Bucket.
+- **Eine id ist schwer zu erraten, aber nicht geheim.** Ids sind Prisma-`cuid()`s
+  (v1): ein Millisekunden-Zeitstempel, ein Zähler, ein Host-Fingerabdruck und etwa 41
+  Bit aus `Math.random()`, das kein kryptografischer Generator ist. Eine blind zu
+  erraten ist bei diesem Budget außer Reichweite; behandeln Sie einen Link trotzdem als
+  privat für Zahlenden und Händler, nicht als Zugangsdaten.
+- **Deployment:** Liefern Sie `/v1/payment-links/*` über die schlüssellose APISIX-Route
+  aus (ohne `key-auth`), wie `/v1/public-key`, sonst erhält die Seite `401`. Dieser
+  Dienst sendet auf diesem Pfad keine CORS-Header, also muss das CORS-Plugin dieser
+  Route `GET` vom Origin des Checkouts erlauben und `Retry-After` sowie `ratelimit-*`
+  freigeben; ohne das verwirft der Browser jede Antwort.
 
 ### Wallet-Anmeldung auf Solana und Monad
 
@@ -1747,6 +1799,18 @@ eingeschaltet werden.
   eingeschaltet oder nicht: `openapi:generate` schaltet alle ein.
 
 ## Upgrade — Breaking Changes und Deploy-Hinweise
+
+### Zahlungslinks: ein öffentlicher Lesezugriff für gehostete Checkout-Seiten
+
+- **Neue Route `GET /v1/payment-links/{id}`** (`@Public()`): eine Zahlungsabsicht, wie
+  der Zahlende sie sehen darf, für den Checkout unter
+  `https://payments.cosmospay.lat/<id>`. Was sie liefert und warum, steht unter API.
+  Keine Migration, keine neue Variable, und keine bestehende Antwort hat sich geändert.
+- **Deploy-Schritt:** Fügen Sie `/v1/payment-links/*` der schlüssellosen APISIX-Route
+  hinzu (ohne `key-auth`) und erlauben Sie `https://payments.cosmospay.lat` im
+  CORS-Plugin dieser Route für `GET`, mit `Retry-After` und `ratelimit-*` als
+  freigegebenen Headern. Ohne die Route erhält die Seite `401`; ohne CORS verwirft der
+  Browser jede Antwort.
 
 ### `X-Cosmos-Internal` muss einen MAC des Gateway-Secrets tragen
 

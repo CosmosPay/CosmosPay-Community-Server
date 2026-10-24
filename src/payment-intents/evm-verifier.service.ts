@@ -17,6 +17,7 @@ import {
   type EvmTransaction,
 } from '@/evm/evm-rpc.client';
 import { TX_CREATED_AT_SKEW_MS } from '@/payment-intents/payment-intents.constants';
+import { PAY_TO } from '@/payment-intents/pay-to';
 import type {
   PaymentVerifier,
   VerificationResult,
@@ -202,7 +203,7 @@ export class EvmVerifierService implements PaymentVerifier {
     accepts: (value: bigint | null) => boolean,
   ): boolean {
     return (
-      tx.to?.toLowerCase() === payee(intent).toLowerCase() &&
+      tx.to?.toLowerCase() === PAY_TO.monad(intent).toLowerCase() &&
       accepts(safeBigInt(tx.value))
     );
   }
@@ -219,7 +220,7 @@ export class EvmVerifierService implements PaymentVerifier {
     accepts: (value: bigint | null) => boolean,
   ): boolean {
     const token = intent.assetIssuer!.toLowerCase();
-    const destination = addressTopic(payee(intent));
+    const destination = addressTopic(PAY_TO.monad(intent));
     const logged = receipt.logs.some(
       (log) =>
         log.address.toLowerCase() === token &&
@@ -243,11 +244,6 @@ export class EvmVerifierService implements PaymentVerifier {
 /** Whether the intent has its own deposit address (the relayer is on). */
 function isDeposit(intent: PaymentIntent): boolean {
   return intent.chainReference !== null && intent.chainReference !== undefined;
-}
-
-/** Where the payer pays: the intent's deposit address, else the merchant. */
-function payee(intent: PaymentIntent): string {
-  return intent.chainReference ?? intent.destination;
 }
 
 /**

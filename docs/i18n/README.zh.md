@@ -52,6 +52,7 @@ src/
                                   SEP-7 links, signed-envelope relay, settlement repository
   payment-intents/                payment intents on Stellar, Solana and Monad: controller, service, DTOs,
                                   per-chain link builders and verifiers, the observer — emits events
+                                  + GET /v1/payment-links/{id}: the payer's view, read with no API key
   chains/                         chain list, per-chain address rules, units, message signatures, JSON-RPC
   solana/                         Solana RPC client (cluster-checked), Solana Pay links
   evm/                            EVM RPC client for Monad (chain-id-checked), EIP-681 links
@@ -111,6 +112,7 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | 领域 | 基础路径 | 功能 |
 | ----------------- | ------------------------ | -------------------------------------------------------- |
 | 支付意图          | `/v1/payment-intents`    | Stellar（SEP-7）、Solana（Solana Pay）和 Monad（EIP-681）上的 `pay` 意图、SEP-7 `tx`、校验、链上观察器 |
+| 支付链接          | `/v1/payment-links`      | 付款方所见的单个支付意图，供托管收银页使用——无需 API key（`@Public`） |
 | Swap | `/v1/swaps` | 路径支付报价、构建未签名 XDR、提交已签名交易 · Solana 经由 Jupiter，Monad 经由 Kuru Flow |
 | 跨链 swap | `/v1/cross-chain-swaps` | 通过 NEAR Intents 在 Stellar ⇄ Solana ⇄ Monad 之间：报价、充值地址、状态 |
 | 流动性池 | `/v1/liquidity-pools` | AMM 存入 / 取出、持仓、按收益收取佣金 |
@@ -239,6 +241,7 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | DELETE | `/v1/payment-intents/{id}` | `payments:write` |  |
 | GET | `/v1/payment-intents/{id}/transitions` | `payments:read` |  |
 | POST | `/v1/payment-intents/{id}/validate` | `payments:write` |  |
+| GET | `/v1/payment-links/{id}` | 无 — `@Public()`，按客户端地址计预算 |  |
 | GET | `/v1/plugins` | `plugins:read` |  |
 | GET | `/v1/plugins/{slug}` | `plugins:read` |  |
 | PUT | `/v1/plugins/{slug}/installation` | `plugins:write` |  |
@@ -611,6 +614,18 @@ devnet 和 Monad testnet（10143）——所有链上的 `network` 都存为 `pu
   "assetCode": "USDC", "assetIssuer": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v" }
 // response → { chain: "solana", uri: "solana:<base58>?amount=25.5&spl-token=…&reference=…&memo=…", chainReference, qr, … }
 ```
+
+### 支付链接：托管收银页背后的公开读取
+
+`GET /v1/payment-links/{id}` 按 id 向没有 API key、也没有网关密钥的调用方（`@Public()`）返回一个支付意图。位于 `https://payments.cosmospay.lat/<id>` 的收银页读取它，用来展示金额、资产和网络、付款地址、链接及其二维码，并轮询状态直到付款结算。响应（契约中的 `PublicPaymentLinkEntity`）有自己的结构，并不是去掉若干字段的所有者版 `GET /v1/payment-intents/{id}`：它逐字段构建（`toPublicPaymentLink`），因此之后加到 `payment_intent` 的列，在有人有意添加之前不会在这里公开。
+
+- **id 本身就是访问权限。** 任何持有链接的人都可以在这里读取它，无论它属于哪个租户——这正是支付链接的含义。从未存在过的 id 和已删除的意图，得到的都是所有者读取时同样的 `404 not_found`。
+- **永不返回：** 所属 consumer、付款方的 `source`、交易信封（`xdr`）、商户的 `reference` 和 `callback`、状态历史，以及付款方向存款地址付款时商户自己的地址。不过 `uri` 是原样的链接，因此 SEP-7 链接仍会带着商户设置的 `callback`，`tx` 链接仍带着未签名的信封——这正是付款方钱包从二维码读到的内容。切勿在 `callback` URL 中放入任何密钥。
+- **`payTo` 就是 `uri` 里的地址**（`src/payment-intents/pay-to.ts` 中的 `PAY_TO`，也是 Monad 校验器核对付款所用的同一规则）：在 Stellar 和 Solana 上是商户的账户——绝不是 Solana Pay 的 reference key——在启用中继（relayer）的 Monad 上是该意图的存款地址，它会把资金扣除 `networkFee` 后转给商户。
+- **状态是实时的，且 `EXPIRED` 不是终态。** 每个响应都带 `Cache-Control: no-store`。超过 `expiresAt` 仍未支付的意图，在观察器将其过期之前显示为 `PENDING`；之后才验证的付款仍会把 `EXPIRED` 变为 `SUCCEEDED`，所以页面遇到已过期的链接应放慢频率继续轮询，而不是停止。
+- **每个客户端地址每分钟 60 次读取**（`PAYMENT_LINK_READ_RATE_LIMIT`；IPv6 调用方按 /64 计），超出后返回带 `Retry-After` 的 `429 rate_limited`。每 5 秒轮询一次的页面消耗 12 次。地址就是全部的键，因此页面必须从付款方的浏览器发起调用：代理这些读取或在服务端渲染它们的服务器，会把所有付款方放进它唯一的一个桶里。
+- **id 难以猜测，但不是秘密。** id 是 Prisma 的 `cuid()`（v1）：毫秒时间戳、计数器、主机指纹，以及来自 `Math.random()` 的约 41 位随机数，而 `Math.random()` 并非密码学生成器。在这一预算下盲猜一个 id 不可行；但仍应把链接视为付款方与商户之间的私有信息，而不是访问凭证。
+- **部署：** 从 APISIX 的无 key 路由（不带 `key-auth`）提供 `/v1/payment-links/*`，与 `/v1/public-key` 一样，否则页面会收到 `401`。本服务在该路径上不发送任何 CORS 头，因此该路由的 CORS 插件必须允许来自收银页源站的 `GET`，并暴露 `Retry-After` 和 `ratelimit-*`；否则浏览器会丢弃每个响应。
 
 ### Solana 与 Monad 上的钱包登录
 
@@ -1171,6 +1186,11 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
 - **OpenAPI 契约记录每个原生插件的路由**，无论是否开启：`openapi:generate` 会全部开启。
 
 ## 升级 — 破坏性变更与部署说明
+
+### 支付链接：供托管收银页使用的公开读取
+
+- **新路由 `GET /v1/payment-links/{id}`**（`@Public()`）：付款方可见的单个支付意图，供位于 `https://payments.cosmospay.lat/<id>` 的收银页使用。它返回什么以及原因，见 API 一节。无迁移、无新变量，现有响应均未改变。
+- **部署步骤：** 把 `/v1/payment-links/*` 加入 APISIX 的无 key 路由（不带 `key-auth`），并在该路由的 CORS 插件中为 `GET` 允许 `https://payments.cosmospay.lat`，同时暴露 `Retry-After` 和 `ratelimit-*`。没有该路由，页面会收到 `401`；没有 CORS，浏览器会丢弃每个响应。
 
 ### `X-Cosmos-Internal` 必须携带网关密钥的 MAC
 

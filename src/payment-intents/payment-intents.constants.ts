@@ -142,6 +142,34 @@ export const PAYMENT_INTENT_BUILD_RATE_LIMIT = {
 };
 
 /**
+ * Budget for `GET /v1/payment-links/{id}`, the hosted checkout's anonymous read,
+ * per client address (an IPv6 caller per /64).
+ *
+ * The route is `@Public()`, so there is no consumer to key on: every caller is
+ * the same `anonymous` subject and the address is the whole budget. That is why
+ * this policy must stay `per: 'address'` (the default) — a `consumer` budget
+ * here would be ONE bucket for every payer on the internet.
+ *
+ * Sixty a minute is five checkout tabs' worth: a page polling every 5 s spends
+ * 12, so one payer can poll, reload a few times and open the link on a second
+ * device behind the same router, and a handful of payers behind one NAT (a
+ * shop's Wi-Fi) still fit. The fixed window lets a caller spend up to twice this
+ * across a boundary, which is still only two reads a second.
+ *
+ * What it bounds is guessing and scraping, not load — APISIX shapes traffic.
+ * Each request is a primary-key read and a QR render, and at this rate an
+ * address cannot get meaningfully closer to guessing an id (a cuid carries
+ * about 41 random bits besides its timestamp and counter). Raise it if a
+ * carrier-grade NAT puts many payers behind one IPv4 address; the client should
+ * honour `Retry-After` either way.
+ */
+export const PAYMENT_LINK_READ_RATE_LIMIT = {
+  name: 'payment-links:read',
+  limit: 60,
+  windowMs: 60 * 1000,
+};
+
+/**
  * The most older intents a settlement asks the chain about before it claims a
  * transaction (`settlement-rivals.ts`): rivals of other consumers that the same
  * payment may also pay, and that therefore outrank the intent being settled.

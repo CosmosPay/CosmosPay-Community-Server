@@ -170,6 +170,8 @@ export function buildSwaggerConfig(openapi: AppConfig['openapi']) {
  */
 const TAG_DESCRIPTIONS: Record<string, string> = {
   'payment-intents': 'Request a Stellar payment, then watch it settle.',
+  'payment-links':
+    'A payment link as its payer sees it, read without an API key — for hosted checkout pages.',
   swaps: 'Path payments between assets: quote, build, submit.',
   'cross-chain-swaps':
     'Swaps between Stellar, Solana and Monad, settled by NEAR Intents.',

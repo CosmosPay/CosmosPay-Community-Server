@@ -79,6 +79,7 @@ src/
                                   SEP-7 links, signed-envelope relay, settlement repository
   payment-intents/                payment intents on Stellar, Solana and Monad: controller, service, DTOs,
                                   per-chain link builders and verifiers, the observer — emits events
+                                  + GET /v1/payment-links/{id}: the payer's view, read with no API key
   chains/                         chain list, per-chain address rules, units, message signatures, JSON-RPC
   solana/                         Solana RPC client (cluster-checked), Solana Pay links
   evm/                            EVM RPC client for Monad (chain-id-checked), EIP-681 links
@@ -141,6 +142,7 @@ escopo. **Os schemas de requisição e resposta ficam no contrato OpenAPI gerado
 | Área              | Caminho base             | O que faz                                                |
 | ----------------- | ------------------------ | -------------------------------------------------------- |
 | Intenções de pagamento | `/v1/payment-intents`    | Intenções `pay` em Stellar (SEP-7), Solana (Solana Pay) e Monad (EIP-681), `tx` SEP-7, validação, observador on-chain |
+| Links de pagamento | `/v1/payment-links`      | Uma intenção de pagamento como quem paga a vê, para páginas de checkout hospedadas — sem API key (`@Public`) |
 | Swaps             | `/v1/swaps`              | Cotação de path payment, montagem do XDR não assinado, envio do assinado · Solana via Jupiter, Monad via Kuru Flow |
 | Swaps entre redes | `/v1/cross-chain-swaps` | Stellar ⇄ Solana ⇄ Monad pela NEAR Intents: cotação, endereço de depósito, status |
 | Liquidity pools   | `/v1/liquidity-pools`    | Depósito / saque em AMM, posições, comissão sobre o ganho |
@@ -275,6 +277,7 @@ console chega até ela. Os caminhos usam a forma `{param}` do OpenAPI.
 | DELETE | `/v1/payment-intents/{id}` | `payments:write` |  |
 | GET | `/v1/payment-intents/{id}/transitions` | `payments:read` |  |
 | POST | `/v1/payment-intents/{id}/validate` | `payments:write` |  |
+| GET | `/v1/payment-links/{id}` | nenhum — `@Public()`, orçamento por endereço de cliente |  |
 | GET | `/v1/plugins` | `plugins:read` |  |
 | GET | `/v1/plugins/{slug}` | `plugins:read` |  |
 | PUT | `/v1/plugins/{slug}/installation` | `plugins:write` |  |
@@ -842,6 +845,53 @@ envelope da Stellar.
   "assetCode": "USDC", "assetIssuer": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v" }
 // response → { chain: "solana", uri: "solana:<base58>?amount=25.5&spl-token=…&reference=…&memo=…", chainReference, qr, … }
 ```
+
+### Links de pagamento: a leitura pública por trás de um checkout hospedado
+
+`GET /v1/payment-links/{id}` responde uma intenção de pagamento, por id, a quem chama
+sem API key e sem segredo do gateway (`@Public()`). É o que a página de checkout em
+`https://payments.cosmospay.lat/<id>` lê para mostrar o valor, o ativo e a rede, o
+endereço para pagar, o link e seu QR, e para consultar o status até o pagamento ser
+liquidado. A resposta (`PublicPaymentLinkEntity` no contrato) tem forma própria: não
+é o `GET /v1/payment-intents/{id}` do dono com campos removidos, mas é montada campo
+a campo (`toPublicPaymentLink`), então uma coluna adicionada depois a
+`payment_intent` não é publicada aqui até alguém adicioná-la de propósito.
+
+- **O id é a capacidade.** Qualquer um que tenha um link o lê aqui, seja de qual
+  tenant for — é isso que um link de pagamento é. Um id que nunca existiu e uma
+  intenção apagada recebem o mesmo `404 not_found` que a leitura do dono dá.
+- **Nunca é devolvido:** o consumer dono, o `source` do pagador, o envelope (`xdr`),
+  o `reference` e o `callback` do comerciante, o histórico de status, nem o endereço
+  do próprio comerciante quando o pagador paga um endereço de depósito. Mas `uri` é
+  o link literal, então um link SEP-7 ainda leva um `callback` que o comerciante
+  definiu, e um link `tx` o envelope não assinado — exatamente o que a wallet do
+  pagador lê do QR. Nunca coloque um segredo numa URL de `callback`.
+- **`payTo` é o endereço dentro de `uri`** (`PAY_TO` em
+  `src/payment-intents/pay-to.ts`, a mesma regra com que o verificador do Monad
+  confere os pagamentos): a conta do comerciante em Stellar e Solana — nunca a
+  reference key do Solana Pay — e, em Monad com relayer, o endereço de depósito da
+  intenção, que repassa o dinheiro ao comerciante menos `networkFee`.
+- **O status é ao vivo, e `EXPIRED` não é final.** Toda resposta leva
+  `Cache-Control: no-store`. Uma intenção não paga depois de `expiresAt` aparece como
+  `PENDING` até o observador expirá-la, e um pagamento verificado depois ainda move
+  `EXPIRED` para `SUCCEEDED`, então uma página deve continuar consultando um link
+  expirado, mais devagar, em vez de parar.
+- **60 leituras por minuto por endereço de cliente** (`PAYMENT_LINK_READ_RATE_LIMIT`;
+  um cliente IPv6 por /64), e depois `429 rate_limited` com `Retry-After`. Uma página
+  que consulta a cada 5 s gasta 12. O endereço é a chave inteira, então a página
+  precisa chamar a partir do navegador do pagador: um servidor que faz proxy dessas
+  leituras, ou as renderiza no servidor, coloca todos os pagadores no seu único
+  bucket.
+- **Um id é difícil de adivinhar, não secreto.** Os ids são `cuid()`s do Prisma (v1):
+  um timestamp em milissegundos, um contador, uma impressão do host e cerca de 41
+  bits de `Math.random()`, que não é um gerador criptográfico. Adivinhar um às cegas
+  está fora de alcance com esse orçamento; ainda assim, trate um link como privado do
+  pagador e do comerciante, não como uma credencial.
+- **Deploy:** sirva `/v1/payment-links/*` pela rota sem chave do APISIX (sem
+  `key-auth`), como `/v1/public-key`, ou a página recebe `401`. Este serviço não envia
+  cabeçalhos CORS neste path, então o plugin CORS dessa rota precisa permitir `GET` da
+  origem do checkout e expor `Retry-After` e `ratelimit-*`; sem isso o navegador
+  descarta toda resposta.
 
 ### Login da wallet em Solana e Monad
 
@@ -1692,6 +1742,17 @@ serviço em `src/native-plugins/<slug>/`, ligados pela mesma lista
   `openapi:generate` liga todos.
 
 ## Atualização — mudanças incompatíveis e notas de deploy
+
+### Links de pagamento: uma leitura pública para páginas de checkout hospedadas
+
+- **Nova rota `GET /v1/payment-links/{id}`** (`@Public()`): uma intenção de pagamento
+  como quem paga pode vê-la, para o checkout em `https://payments.cosmospay.lat/<id>`.
+  O que ela devolve, e por quê, está em API. Sem migração, sem variável nova, e
+  nenhuma resposta existente mudou.
+- **Passo de deploy:** adicione `/v1/payment-links/*` à rota sem chave do APISIX (sem
+  `key-auth`) e permita `https://payments.cosmospay.lat` no plugin CORS dessa rota
+  para `GET`, expondo `Retry-After` e `ratelimit-*`. Sem a rota a página recebe `401`;
+  sem CORS o navegador descarta toda resposta.
 
 ### `X-Cosmos-Internal` precisa trazer um MAC do segredo do gateway
 
