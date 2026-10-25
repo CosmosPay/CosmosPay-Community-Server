@@ -234,7 +234,7 @@ export class LiquidityPoolsController {
     description:
       '`validation_failed`: `signedXdr` is not a transaction envelope, is not ' +
       'the envelope built for this operation, or carries no signatures. ' +
-      '`invalid_state_transition`: the operation can no longer be submitted: ' +
+      '`invalid_state_transition`: the operation can no longer be submitted, because ' +
       "it is EXPIRED, its transaction's time bounds have passed, or it was " +
       'already resubmitted the maximum number of times after a rejection. Build ' +
       'a new deposit or withdrawal.',

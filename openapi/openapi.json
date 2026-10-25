@@ -2128,7 +2128,7 @@
             }
           },
           "400": {
-            "description": "`validation_failed`: `signedXdr` (Stellar) / `signedTransaction` (Solana, Monad) is not a transaction, is not the one built for this swap, or carries no signature of its source. `transaction_rejected`: the Solana or Monad node refused the broadcast; the swap stays PENDING. `invalid_state_transition`: the swap can no longer be submitted: it is EXPIRED, its transaction's validity window has passed, or it was already resubmitted the maximum number of times after a rejection. Build a new swap.",
+            "description": "`validation_failed`: `signedXdr` (Stellar) / `signedTransaction` (Solana, Monad) is not a transaction, is not the one built for this swap, or carries no signature of its source. `transaction_rejected`: the Solana or Monad node refused the broadcast; the swap stays PENDING. `invalid_state_transition`: the swap can no longer be submitted, because it is EXPIRED, its transaction's validity window has passed, or it was already resubmitted the maximum number of times after a rejection. Build a new swap.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3594,7 +3594,7 @@
             }
           },
           "400": {
-            "description": "`validation_failed`: `signedXdr` is not a transaction envelope, is not the envelope built for this operation, or carries no signatures. `invalid_state_transition`: the operation can no longer be submitted: it is EXPIRED, its transaction's time bounds have passed, or it was already resubmitted the maximum number of times after a rejection. Build a new deposit or withdrawal.",
+            "description": "`validation_failed`: `signedXdr` is not a transaction envelope, is not the envelope built for this operation, or carries no signatures. `invalid_state_transition`: the operation can no longer be submitted, because it is EXPIRED, its transaction's time bounds have passed, or it was already resubmitted the maximum number of times after a rejection. Build a new deposit or withdrawal.",
             "content": {
               "application/json": {
                 "schema": {

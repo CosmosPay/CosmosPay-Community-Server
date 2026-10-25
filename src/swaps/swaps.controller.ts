@@ -292,7 +292,7 @@ export class SwapsController {
       '(Solana, Monad) is not a transaction, is not the one built for this ' +
       'swap, or carries no signature of its source. `transaction_rejected`: ' +
       'the Solana or Monad node refused the broadcast; the swap stays PENDING. ' +
-      '`invalid_state_transition`: the swap can no longer be submitted: it is ' +
+      '`invalid_state_transition`: the swap can no longer be submitted, because it is ' +
       "EXPIRED, its transaction's validity window has passed, or it was already " +
       'resubmitted the maximum number of times after a rejection. Build a new ' +
       'swap.',

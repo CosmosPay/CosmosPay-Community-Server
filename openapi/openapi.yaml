@@ -1635,9 +1635,9 @@ paths:
             swap, or carries no signature of its source. `transaction_rejected`:
             the Solana or Monad node refused the broadcast; the swap stays
             PENDING. `invalid_state_transition`: the swap can no longer be
-            submitted: it is EXPIRED, its transaction's validity window has
-            passed, or it was already resubmitted the maximum number of times
-            after a rejection. Build a new swap."
+            submitted, because it is EXPIRED, its transaction's validity window
+            has passed, or it was already resubmitted the maximum number of
+            times after a rejection. Build a new swap."
           content:
             application/json:
               schema:
@@ -2752,9 +2752,9 @@ paths:
           description: "`validation_failed`: `signedXdr` is not a transaction envelope, is
             not the envelope built for this operation, or carries no signatures.
             `invalid_state_transition`: the operation can no longer be
-            submitted: it is EXPIRED, its transaction's time bounds have passed,
-            or it was already resubmitted the maximum number of times after a
-            rejection. Build a new deposit or withdrawal."
+            submitted, because it is EXPIRED, its transaction's time bounds have
+            passed, or it was already resubmitted the maximum number of times
+            after a rejection. Build a new deposit or withdrawal."
           content:
             application/json:
               schema:
