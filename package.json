@@ -37,7 +37,9 @@
     "plugins": "node --no-node-snapshot -r ts-node/register/transpile-only -r tsconfig-paths/register scripts/plugins.ts",
     "assets:verify": "ts-node -r tsconfig-paths/register --transpile-only scripts/verify-assets.ts",
     "import:platform-wallet-data": "ts-node -r tsconfig-paths/register --transpile-only scripts/import-platform-wallet-data.ts",
-    "contracts:compile": "ts-node -r tsconfig-paths/register --transpile-only scripts/compile-contracts.ts && prettier --write src/evm/payment-forwarder.artifact.ts"
+    "contracts:compile": "ts-node -r tsconfig-paths/register --transpile-only scripts/compile-contracts.ts && prettier --write src/evm/payment-forwarder.artifact.ts",
+    "zk:deploy-testnet": "ts-node -r tsconfig-paths/register --transpile-only scripts/zk/deploy-testnet.ts",
+    "zk:e2e-testnet": "ts-node -r tsconfig-paths/register --transpile-only scripts/zk/e2e-testnet.ts"
   },
   "dependencies": {
     "@defindex/sdk": "^0.3.0",
@@ -64,6 +66,7 @@
     "qrcode": "^1.5.4",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2",
+    "stellar-confidential-token-sdk": "github:brozorec/stellar-confidential-token-sdk#aad17069714713bcb36fa376d0f2a87743e8e2a7",
     "typescript": "^6.0.3"
   },
   "devDependencies": {

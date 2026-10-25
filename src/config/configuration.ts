@@ -20,9 +20,12 @@ import {
   DEFAULT_SWAP_AGGREGATOR_TIMEOUT_MS,
   DEFAULT_WALLET_AUTH_SWEEP_INTERVAL_MS,
   DEFAULT_WALLET_AUTH_TIMEOUT_MS,
+  DEFAULT_ZK_PAYMENTS_RPC,
   NETWORK_PASSPHRASE,
   NETWORK_PASSPHRASE_PUBLIC,
 } from '@/config/config.constants';
+import { Asset } from '@stellar/stellar-sdk';
+import { zkPaymentsEnvName } from '@/config/zk-payments-env';
 import { parseReturnUrls } from '@/common/return-url';
 import {
   DEFAULT_APISIX_ADMIN_TIMEOUT_MS,
@@ -85,6 +88,32 @@ export type StellarNetwork = 'public' | 'testnet';
 
 /** The API-key environment a BlindPay instance serves (`dev` keys, `prod` keys). */
 export type BlindpayEnvironment = 'dev' | 'prod';
+
+/**
+ * Cosmos Pay's confidential token on one network tier: the contracts a ZK
+ * payment is made on, the auditor secret its amounts decrypt under, and the
+ * account the commission is paid to. Every field is the operator's
+ * (`ZK_PAYMENTS_<NETWORK>_*`), printed by `scripts/zk/deploy-testnet.ts`.
+ */
+export interface ZkNetworkConfig {
+  /** Soroban RPC every read goes through; its passphrase is checked first. */
+  rpcUrl: string;
+  networkPassphrase: string;
+  /** The vanilla confidential token wrapping native XLM (C...). */
+  token: string;
+  /** The auditor registry holding Cosmos Pay's key under auditor id 0 (C...). */
+  auditorRegistry: string;
+  /** The UltraHonk verifier registry the token checks proofs against (C...). */
+  verifier: string;
+  /** Native XLM's Stellar Asset Contract on this network: what the token wraps. */
+  underlying: string;
+  /** The auditor scalar `k` (K_aud = k·H), 64 hex characters. A secret. */
+  auditorSecret: string;
+  /** The account the commission is paid to, registered on the token (G...). */
+  feeAccount: string;
+  /** The ledger the token was deployed at: where a wallet's event replay starts. */
+  deployedAtLedger: number;
+}
 
 /** Credentials of one BlindPay platform instance. */
 export interface BlindpayInstanceConfig {
@@ -307,6 +336,12 @@ export interface AppConfig {
     // Lifetime of a payment intent; unpaid intents past this are marked EXPIRED.
     ttlSeconds: number;
   };
+  /**
+   * ZK payments, per network tier. Null where `ZK_PAYMENTS_<NETWORK>_TOKEN` is
+   * unset: the feature is off on that network and its routes answer
+   * `network_unsupported`. Mainnet stays null until an operator deploys there.
+   */
+  zkPayments: Record<StellarNetwork, ZkNetworkConfig | null>;
   webhooks: {
     // Overall AbortController budget ≈ connect + read (defense in depth).
     timeoutMs: number;
@@ -610,6 +645,29 @@ function signersHorizons(): Record<StellarNetwork, string> {
   };
 }
 
+/**
+ * One network's ZK payments set, or null when its token is unset. Completeness
+ * and shape were checked at boot (`zk-payments-env.ts`), so this only reads.
+ */
+function zkNetwork(network: StellarNetwork): ZkNetworkConfig | null {
+  const env = (field: Parameters<typeof zkPaymentsEnvName>[1]) =>
+    process.env[zkPaymentsEnvName(network, field)]?.trim() ?? '';
+  const token = env('token');
+  if (!token) return null;
+  const networkPassphrase = NETWORK_PASSPHRASE[network];
+  return {
+    rpcUrl: trimSlash(env('rpcUrl') || DEFAULT_ZK_PAYMENTS_RPC[network]),
+    networkPassphrase,
+    token,
+    auditorRegistry: env('auditorRegistry'),
+    verifier: env('verifier'),
+    underlying: Asset.native().contractId(networkPassphrase),
+    auditorSecret: env('auditorSecret').replace(/^0x/i, '').toLowerCase(),
+    feeAccount: env('feeAccount'),
+    deployedAtLedger: parseInt(env('deployedAtLedger'), 10),
+  };
+}
+
 export default (): AppConfig => ({
   nodeEnv: process.env.NODE_ENV ?? 'development',
   swapCommissionDevWaiver:
@@ -846,6 +904,10 @@ export default (): AppConfig => ({
   },
   paymentIntents: {
     ttlSeconds: parseInt(process.env.PAYMENT_INTENT_TTL_SECONDS ?? '3600', 10),
+  },
+  zkPayments: {
+    testnet: zkNetwork('testnet'),
+    public: zkNetwork('public'),
   },
   webhooks: {
     // Legacy single timeout kept for callers that still read timeoutMs;

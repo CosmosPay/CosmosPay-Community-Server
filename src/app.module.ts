@@ -16,6 +16,7 @@ import { HealthModule } from '@/health/health.module';
 import { PaymentIntentsModule } from '@/payment-intents/payment-intents.module';
 import { SwapsModule } from '@/swaps/swaps.module';
 import { CrossChainSwapsModule } from '@/cross-chain-swaps/cross-chain-swaps.module';
+import { ZkPaymentsModule } from '@/zk-payments/zk-payments.module';
 import { AssetsModule } from '@/assets/assets.module';
 import { PublicKeyModule } from '@/public-key/public-key.module';
 import { LiquidityPoolsModule } from '@/liquidity-pools/liquidity-pools.module';
@@ -82,6 +83,10 @@ import { NativePluginsModule } from '@/native-plugins/native-plugins.module';
     // rails and KYC, DeFindex vaults — compiled in but imported only when
     // PLUGINS_ENABLED names them. The core never imports them directly.
     NativePluginsModule,
+    // Confidential payments on Cosmos Pay's own confidential token (amount
+    // hidden on-chain, 0.01% commission). Off on a network until its
+    // ZK_PAYMENTS_<NETWORK>_* set is configured.
+    ZkPaymentsModule,
   ],
   providers: [
     // Persist a RequestLog row per request (powers the API logs view).

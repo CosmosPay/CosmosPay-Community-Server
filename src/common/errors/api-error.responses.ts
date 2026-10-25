@@ -215,6 +215,61 @@ export const API_ERROR_CASES: Readonly<Record<ApiErrorCode, ApiErrorCase>> = {
     message: 'The payment provider rejected the request.',
     path: '/v1/onramp/quotes',
   },
+  // --- ZK payments ---------------------------------------------------------
+  [ApiErrorCode.RecipientNotRegistered]: {
+    statuses: [400],
+    summary:
+      "The recipient holds no confidential account on Cosmos Pay's token under auditor 0",
+    message:
+      'The recipient GCALNQQBXAPZ2WIRSDDBMSTAKCUH5SG6U76YBFLQLIXJTF7FE5AX7AOO is not ' +
+      "registered on Cosmos Pay's confidential token. Register it with the " +
+      'wallet first, under auditor id 0.',
+    path: '/v1/zk-payments',
+  },
+  [ApiErrorCode.PaymentTransferMismatch]: {
+    statuses: [400],
+    summary:
+      "The payment transaction does not pay this payment's net amount to its recipient",
+    message:
+      'The payment transaction does not settle this ZK payment: it is not a ' +
+      "confidential transfer of the payment's net amount to its recipient.",
+    path: '/v1/zk-checkout/cmh4x2k9a0001l70g8v5q3z2w/confirm',
+  },
+  [ApiErrorCode.FeeTransferMismatch]: {
+    statuses: [400],
+    summary:
+      "The fee transaction does not pay this payment's commission to the fee account",
+    message:
+      'The fee transaction does not settle this ZK payment: it is not a ' +
+      'confidential transfer of the commission to the fee account.',
+    path: '/v1/zk-checkout/cmh4x2k9a0001l70g8v5q3z2w/confirm',
+  },
+  [ApiErrorCode.PayerMismatch]: {
+    statuses: [400],
+    summary: 'The payment and fee transfers come from different accounts',
+    message:
+      'The payment and fee transfers must come from the same account; they ' +
+      'come from two different ones.',
+    path: '/v1/zk-checkout/cmh4x2k9a0001l70g8v5q3z2w/confirm',
+  },
+  [ApiErrorCode.TransactionNotFound]: {
+    statuses: [400],
+    summary:
+      'No such transaction on the network yet, or it is older than the RPC keeps',
+    message:
+      'Transaction 5f0e8a1d3c7b9e2f4a6c8d0b1e3f5a7c9d2b4e6f8a0c1d3e5f7a9b2c4d6e8f0a ' +
+      'was not found on testnet: it has not closed yet, or it is older than ' +
+      'the RPC keeps. Retry in a few seconds.',
+    path: '/v1/zk-checkout/cmh4x2k9a0001l70g8v5q3z2w/confirm',
+  },
+  [ApiErrorCode.Expired]: {
+    statuses: [400],
+    summary: 'A transfer of the ZK payment closed after the payment expired',
+    message:
+      'The payment transaction closed at 2026-10-25T14:05:12.000Z, after this ' +
+      'ZK payment expired at 2026-10-25T14:00:00.000Z.',
+    path: '/v1/zk-checkout/cmh4x2k9a0001l70g8v5q3z2w/confirm',
+  },
   [ApiErrorCode.ProviderUnavailable]: {
     statuses: [503, 502, 504],
     summary: 'The upstream provider could not be reached, or timed out',

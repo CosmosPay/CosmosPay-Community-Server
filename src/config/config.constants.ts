@@ -28,6 +28,17 @@ export const DEFAULT_SOLANA_RPC: Record<StellarNetwork, string> = {
   testnet: 'https://api.devnet.solana.com',
 };
 
+/**
+ * The Soroban RPC ZK payments read the confidential token through, per network
+ * tier, when `ZK_PAYMENTS_<NETWORK>_RPC_URL` is unset. SDF runs a public one on
+ * testnet only; mainnet has no default, so a mainnet deployment must name a
+ * provider's endpoint (`zk-payments-env.ts` refuses to boot without one).
+ */
+export const DEFAULT_ZK_PAYMENTS_RPC: Record<StellarNetwork, string> = {
+  public: '',
+  testnet: 'https://soroban-testnet.stellar.org',
+};
+
 /** Monad's public RPC endpoints, per network tier (mainnet, testnet). */
 export const DEFAULT_MONAD_RPC: Record<StellarNetwork, string> = {
   public: 'https://rpc.monad.xyz',

@@ -17,6 +17,8 @@ Conventions for this repo. They are enforced by `npm run lint`, which CI gates o
 | `npm run db:migrate` | `prisma migrate dev`. A schema change ships its migration: CI applies every migration to a real Postgres and runs `prisma migrate diff --exit-code` against `schema.prisma` |
 | `npm run backups:reencrypt` | re-seals stored wallet backups under the current `WALLET_BACKUP_ENCRYPTION_KEY` — run it after turning the seal on and after every rotation, then drop the old key from `WALLET_BACKUP_ENCRYPTION_PREVIOUS_KEYS` (`-- --dry-run` only counts) |
 | `npm run plugins -- <cmd>` | third-party plugin folders: `new`, `check`, `sign`, `verify`, `keygen`, `publish`, `install` (`scripts/plugins.ts`) |
+| `npm run zk:deploy-testnet` | deploys the ZK payments token, auditor registry and fee account on TESTNET (Friendbot, no real funds). `-- --env-file .env --secrets-file .zk-secrets/testnet.json` writes the values instead of printing secrets; run again it only verifies; `-- --redeploy` strands every payment on the old token |
+| `npm run zk:e2e-testnet` | the real-chain check of ZK payments on testnet: registers, proves, transfers and confirms through the module's own services. Slow (UltraHonk proofs in Node), needs the deployed set in `.env` |
 
 ## Imports: always use the path aliases, never relative paths
 
@@ -407,6 +409,109 @@ that breaks two boundaries.
   contract**, pinned as literals in `src/wallet-auth/wallet-auth-core.spec.ts` and
   in the wallet's `tests/unit/signIn.test.ts` / `tests/unit/recovery.test.ts`.
   Change one side and no sign-in or setup can finish.
+
+## ZK payments: Cosmos Pay's confidential token, and how confirm decides
+
+`src/zk-payments/` serves payments whose amount is hidden on-chain, on Cosmos Pay's
+OWN instance of OpenZeppelin's Confidential Token (`stellar-confidential` 0.8.0),
+for a 0.01% commission (`ZK_PAYMENT_FEE_BPS = 1`, a constant: the price of the
+product, never an env var). Testnet only; mainnet is off until `ZK_PAYMENTS_MAINNET_*`
+is set.
+
+**The model.** `scripts/zk/deploy-testnet.ts` deploys, from wasm already on testnet
+(read from the demo's instances, no Rust build), a NEW auditor registry whose key id 0
+is `K_aud = k·H` for a scalar only Cosmos Pay holds, and a NEW vanilla token over
+native XLM that points at it and at the demo's verifier (`CAN45PFA…`, its v0.8.0 VKs
+registered). So every account on our token is under OUR auditor key, and the server
+can read every amount. A fee account is registered on the token by the same script
+(a register proof generated in Node). Run again, the script verifies the configured
+set on-chain and stops; `--redeploy` strands every payment on the old token.
+`scripts/zk/e2e-testnet.ts` is the real-chain check (Friendbot accounts, proofs in
+Node, the module's own services over an in-memory Prisma).
+
+**The environment.** One set per tier, `ZK_PAYMENTS_TESTNET_*` and
+`ZK_PAYMENTS_MAINNET_*` (`TOKEN`, `AUDITOR_REGISTRY`, `VERIFIER`, `AUDITOR_SECRET`,
+`FEE_ACCOUNT`, `DEPLOYED_LEDGER`, `RPC_URL`). A set is all or nothing:
+`src/config/zk-payments-env.ts` refuses half of one at boot, and the boot never needs
+any of it. `ZkNetworksService` is the module's one reader of `zkPayments`, and its
+`configFor(network)` is the ONE builder behind both `GET /v1/zk-payments/config` and
+the keyless `GET /v1/zk-checkout/config`: never build that shape twice. The auditor
+secret is in no response, no log and no tracked file; the deployer's and the fee
+account's keys are operator secrets the server never needs (`.zk-secrets/`, git-ignored).
+
+**Two prefixes, on purpose.** The merchant's routes are `/v1/zk-payments` (API key);
+the payer's are `/v1/zk-checkout` (`@Public()`, per-address budgets, `Cache-Control:
+no-store`, no CORS headers written here). APISIX serves a keyless read as a PREFIX
+route, which works only when nothing under the prefix needs a key, so a new keyless
+route goes under `/v1/zk-checkout` and a keyed one never does.
+
+**How confirm decides** (`zk-payment-verification.ts`, pure, and its spec pins the
+order). The route is public and decrypts whatever hashes it is given with the
+auditor key, so the ORDER of the checks is security, not style:
+
+1. neither hash settled another ZK payment (DB, before any RPC call; `409`);
+2. both transactions exist and succeeded;
+3. each is ONE operation calling `confidential_transfer` on the payment's token, with
+   exactly one `transfer` event from that contract;
+4. both closed inside `[createdAt - 60 s, expiresAt]` (ledger close time);
+5. both come from the same payer;
+6. the right recipients (merchant, fee account);
+7. only then the amounts: the recipient-auditor channel decrypts to exactly
+   `netAmount` / `feeAmount`, the sender channel agrees (`channelsAgree`), and
+   `commit(amount, r_transfer)` equals the `C_transfer` of the invocation.
+
+Steps 4 and 5 before 7 are what keep confirm from being an amount oracle on someone
+else's transfer (a payment created after it closed fails on time; a stranger's
+transfer fails on payer). No message may ever contain a decrypted amount. A refusal
+leaves the row `PENDING`; settling is a compare-and-swap on `PENDING`, and the hashes
+are `@unique` across the table. A same-hash replay on a settled row emits
+`ZK_PAYMENT_SUCCEEDED` again on purpose: the emitter's dedup claim absorbs it, and it
+is what heals a settle that died between the compare-and-swap and the emit. `EXPIRED` is never stored: a `PENDING` row past
+`expiresAt` READS as `EXPIRED` (`zk-payment-status.ts`, list filter included) and can
+still settle with transfers that closed in time.
+
+**The SDK boundary.** `stellar-confidential-token-sdk` is pinned to a GitHub commit
+and imported ONLY by `src/zk-payments/confidential-sdk.ts`, which hands the rest of
+the module plain data (strings, bigints, dates). Every spec mocks `ConfidentialSdk`;
+jest cannot load the SDK's ESM graph. Proving (`bb.js`) is for `scripts/zk/` only.
+
+Gotchas hit while building it:
+
+- **The SDK is ESM-only and this build is CommonJS**, where TypeScript turns
+  `import()` into `require()`, which the SDK's `exports` map (no `require` condition)
+  refuses. The adapter imports through `new Function('url', 'return import(url)')`.
+  And such an `import()` resolves a BARE specifier against the process's cwd, not the
+  module: it worked from the repo root and failed elsewhere. So `sdkEntryUrl` finds
+  the package on `require.resolve.paths` and imports its `exports` target as a
+  `file://` URL. Keep both halves.
+- **The SDK nests its own `@stellar/stellar-sdk` v14**; this repo has v17. Never pass
+  an `xdr` object, `Transaction` or `Contract` across the boundary: the classes are
+  different. The deploy script builds and submits with v17 itself and lets the SDK
+  submit only its own operations.
+- **v17's XDR is a new object model**: union arms and struct fields are properties
+  (`func.invokeContract.args`), not methods (`.contractData()` throws). Prefer
+  `scValToNative` / `humanizeEvents`, `Address.fromScAddress`, and
+  `getContractWasmByContractId` + SHA-256 for a contract's wasm hash.
+- **`C_transfer` is not in the `transfer` event.** It travels only in the invocation's
+  `data` argument (`ScVal` XDR bytes of `{ payload: { c_transfer, … }, proof }`), so
+  the adapter reads it from the envelope (a fee bump's inner transaction included).
+- **The SDK does not export its RPC event parser**, so the adapter feeds
+  `buildConfidentialEvent` an accessor over `humanizeEvents` output: the field mapping
+  stays the SDK's.
+- **The RPC keeps transactions about seven days** on SDF's testnet RPC
+  (`ledgerRetentionWindow` 120960); past it, confirm is `transaction_not_found`.
+  `expiresInMinutes` is capped at seven days for that reason.
+- **Testnet is reset** every few months, and the demo's verifier with it: redeploy
+  after a reset. The registry's manager (the throwaway deployer) can `rotate_key` id
+  0; if it ever does, every confirm fails until `_AUDITOR_SECRET` follows.
+- **The Soroban RPC is checked before it is trusted**: its `getNetwork` passphrase must
+  be the configured one (`ConfidentialSdk.assertNetwork`), like the Solana genesis
+  check. It is documented as the `Soroban RPC` upstream (503 only, like Horizon).
+- **`ZkPaymentsModule` is registered LAST in `AppModule`.** The spec lists paths in
+  module order, and registering it mid-list moved other modules' paths and turned an
+  additive change into a 400-line spec diff.
+- **`test/setup-env.ts` pins a fixture ZK set**: the developer `.env` carries the real
+  testnet one, and dotenv never overwrites a set value.
 
 ## Dashboard analytics read other modules' tables, in Postgres
 

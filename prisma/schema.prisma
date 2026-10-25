@@ -33,6 +33,7 @@ model Consumer {
   chainSwaps       ChainSwap[]
   crossChainSwaps  CrossChainSwap[]
   liquidityOps     LiquidityPoolOperation[]
+  zkPayments       ZkPayment[]
 
   // BlindPay (onramp/offramp/KYC) resources mirrored from the provider.
   blindpayReceivers BlindpayReceiver[]
@@ -177,6 +178,10 @@ enum WebhookEventType {
   CROSS_CHAIN_SWAP_REFUNDED
   CROSS_CHAIN_SWAP_FAILED
   CROSS_CHAIN_SWAP_EXPIRED
+
+  // A ZK payment settled: both confidential transfers verified on-chain
+  // (appended by `20261025180000_zk_payments`).
+  ZK_PAYMENT_SUCCEEDED
 }
 
 enum WebhookDeliveryStatus {
@@ -1928,4 +1933,71 @@ model PluginRecord {
 
   @@unique([installationId, collection, key])
   @@map("plugin_record")
+}
+
+// A ZK payment's lifecycle. PENDING until both confidential transfers are
+// verified on-chain. EXPIRED is never stored today: a PENDING payment past
+// `expiresAt` READS as EXPIRED, and stays confirmable, because transfers that
+// closed before `expiresAt` paid it even when the payer confirms late.
+enum ZkPaymentStatus {
+  PENDING
+  SUCCEEDED
+  EXPIRED
+}
+
+// A payment on Cosmos Pay's confidential token: the amount is hidden on-chain
+// (Pedersen commitments, UltraHonk proofs verified by the token). The payer
+// makes two confidential transfers, `netAmount` to `recipient` and `feeAmount`
+// to `feeAccount`, and `POST /v1/zk-checkout/{id}/confirm` decrypts both with
+// the auditor key before settling. Amounts are decimal strings in XLM (7
+// places), like every other amount column.
+model ZkPayment {
+  id         String   @id @default(cuid())
+  consumerId String
+  consumer   Consumer @relation(fields: [consumerId], references: [id], onDelete: Cascade)
+
+  // 'public' | 'testnet': the tier of the API key that created it.
+  network       String
+  // The confidential token the transfers must be made on (C...), as configured
+  // when the payment was created.
+  tokenContract String
+
+  // What the payer pays in total, what the merchant receives, and the
+  // commission: amount = netAmount + feeAmount.
+  amount    String
+  netAmount String
+  feeAmount String
+  // The commission rate it was priced at (1 = 0.01%).
+  feeBps    Int
+
+  // The merchant (G...), registered on the token, and Cosmos Pay's fee account.
+  recipient  String
+  feeAccount String
+  // The account both transfers came from; set when it settles.
+  payer      String?
+
+  // The two transactions that settled it, lowercase hex. Unique across the
+  // table: one transaction settles one ZK payment, of any consumer.
+  paymentTxHash String? @unique
+  feeTxHash     String? @unique
+
+  description String?
+  // Per consumer: a retry with the same key returns the same payment. Minted
+  // (`zkp_…`) when the request names none.
+  idempotencyKey String
+
+  status    ZkPaymentStatus @default(PENDING)
+  expiresAt DateTime
+  settledAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([consumerId, idempotencyKey])
+  @@index([consumerId])
+  // Listing endpoint: filter by consumer, order createdAt desc.
+  @@index([consumerId, createdAt])
+  @@index([consumerId, network, createdAt])
+  @@index([status, createdAt])
+  @@map("zk_payment")
 }

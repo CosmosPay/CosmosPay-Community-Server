@@ -71,6 +71,9 @@ export const TERMINAL_WEBHOOK_EVENTS = [
   // that one notification per payin/payout.
   'PAYIN_COMPLETED',
   'PAYOUT_COMPLETED',
+  // Durability: a ZK payment settles once (a compare-and-swap on PENDING), and
+  // the merchant was paid on-chain whatever happens to this pod.
+  'ZK_PAYMENT_SUCCEEDED',
 ] as const satisfies readonly WebhookEventType[];
 
 export type TerminalWebhookEventType = (typeof TERMINAL_WEBHOOK_EVENTS)[number];

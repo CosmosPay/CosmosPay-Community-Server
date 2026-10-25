@@ -89,6 +89,8 @@ src/
   cross-chain-swaps/              swaps across 35 networks via NEAR Intents (Stellar, Solana, Monad, EVM,
                                   UTXO, ...): network registry, quote, deposit address + wallet link, observer
   near-intents/                   NEAR Intents 1Click client: tokens, quote, status, deposit submit
+  zk-payments/                    ZK payments: confidential transfers on Cosmos Pay's token, verified on-chain;
+                                  the confidential token SDK is loaded only by confidential-sdk.ts
   liquidity-pools/                AMM deposit/withdraw, pool + position reads, cost basis + commission on gain
   observer/                       background reconciler: swaps + LP ops against Horizon, one adapter per table
   webhooks/                       webhook endpoints CRUD + dispatcher (HMAC-signed, retried)
@@ -114,12 +116,13 @@ prisma/schema.prisma              Consumer, PaymentIntent, Swap, ChainSwap, Cros
                                   BlindpayWebhookEvent, Payin, Payout, RequestLog,
                                   ActivityEvent,
                                   AdminAuditLog, Alias, AliasAddress,
-                                  AliasChallenge, AliasRecovery
+                                  AliasChallenge, AliasRecovery, ZkPayment
                                   PluginInstallation, PluginRecord
 test/                             e2e suites: gateway gate, admin + alias console gates,
                                   payment intents, swaps, liquidity pools, KYC, webhooks
 plugins/                          THE plugins folder: one <slug>/ per plugin (plugin.json, index.ts, signature.json)
-scripts/                          OpenAPI generator, README check, operator scripts
+scripts/                          OpenAPI generator, README check, operator scripts,
+                                  zk/: deploy and check the ZK payments token on testnet
 contracts/                        PaymentForwarder.sol — Monad deposit addresses (npm run contracts:compile)
 deploy/authentik/                 Authentik blueprint: the wallet sign-in and sign-up
 docs/i18n/                        this README in es, pt, de, fr, hi, zh
@@ -144,6 +147,8 @@ régénéré à partir des contrôleurs et des DTO à chaque exécution de la CI
 | Liens de paiement      | `/v1/payment-links`      | Une intention de paiement telle que la voit le payeur, pour les pages de paiement hébergées — sans clé API (`@Public`) |
 | Swaps                  | `/v1/swaps`              | Cotation path-payment, construction du XDR non signé, soumission du XDR signé · Solana via Jupiter, Monad via Kuru Flow |
 | Swaps inter-chaînes | `/v1/cross-chain-swaps` | Entre 35 réseaux via NEAR Intents (Stellar, Solana, Monad, chaînes EVM, Bitcoin et les monnaies UTXO, ...) : cotation, adresse de dépôt, statut |
+| Paiements ZK           | `/v1/zk-payments`        | Paiements confidentiels sur le jeton confidentiel de Cosmos Pay (montant masqué on-chain, commission de 0,01 %), testnet uniquement pour l'instant |
+| Checkout ZK            | `/v1/zk-checkout`        | La moitié d'un paiement ZK côté payeur : le lire, le confirmer, la configuration réseau (`@Public`) |
 | Pools de liquidité     | `/v1/liquidity-pools`    | Dépôt / retrait AMM, positions, commission sur le gain   |
 | Webhooks               | `/v1/webhooks`           | CRUD des endpoints, rotation du secret, livraisons, relivraison |
 | KYC                    | `/v1/kyc`                | Receivers (KYC/KYB), wallets, comptes bancaires, envoi de documents |
@@ -330,6 +335,13 @@ Les chemins utilisent la forme OpenAPI `{param}`.
 | POST | `/v1/webhooks/{id}/deliveries/{deliveryId}/redeliver` | `webhooks:write` |  |
 | POST | `/v1/webhooks/{id}/ping` | `webhooks:write` |  |
 | POST | `/v1/webhooks/{id}/rotate-secret` | `webhooks:write` |  |
+| GET | `/v1/zk-checkout/config` | aucun, `@Public()`, budget par adresse client |  |
+| GET | `/v1/zk-checkout/{id}` | aucun, `@Public()`, budget par adresse client |  |
+| POST | `/v1/zk-checkout/{id}/confirm` | aucun, `@Public()`, budget par adresse client |  |
+| GET | `/v1/zk-payments` | `payments:read` |  |
+| POST | `/v1/zk-payments` | `payments:write` |  |
+| GET | `/v1/zk-payments/config` | `payments:read` |  |
+| GET | `/v1/zk-payments/{id}` | `payments:read` |  |
 
 ### Réponses d'erreur
 
@@ -526,7 +538,7 @@ Types d'événements : `PAYMENT_INTENT_CREATED`, `PAYMENT_INTENT_UPDATED`,
 `SWAP_FAILED`, `LIQUIDITY_CREATED`, `LIQUIDITY_SUBMITTED`, `LIQUIDITY_SUCCEEDED`,
 `LIQUIDITY_FAILED`, `CROSS_CHAIN_SWAP_CREATED`, `CROSS_CHAIN_SWAP_UPDATED`, `CROSS_CHAIN_SWAP_SUCCEEDED`, `CROSS_CHAIN_SWAP_REFUNDED`, `CROSS_CHAIN_SWAP_FAILED`, `CROSS_CHAIN_SWAP_EXPIRED`, plus ceux issus de BlindPay : `RECEIVER_UPDATED`, `PAYIN_CREATED`,
 `PAYIN_UPDATED`, `PAYIN_COMPLETED`, `PAYOUT_CREATED`, `PAYOUT_UPDATED` et
-`PAYOUT_COMPLETED`. La liste de référence est l'enum `WebhookEventType` dans
+`PAYOUT_COMPLETED`, ainsi que `ZK_PAYMENT_SUCCEEDED`. La liste de référence est l'enum `WebhookEventType` dans
 `prisma/schema.prisma`.
 
 **Corps issus de BlindPay.** `RECEIVER_UPDATED` / `PAYIN_*` / `PAYOUT_*` ne transportent
@@ -1333,6 +1345,152 @@ consommateur et adresse client (`429 rate_limited`).
 | `GET /v1/cross-chain-swaps` | `swaps:read` | Les swaps inter-chaînes du consommateur |
 | `GET /v1/cross-chain-swaps/{id}` | `swaps:read` | Un swap, tel que l'observateur l'a vu en dernier |
 | `POST /v1/cross-chain-swaps/{id}/deposit` | `swaps:write` | Signaler la transaction de dépôt pour que NEAR Intents démarre sans attendre son indexeur |
+## Paiements ZK (montants confidentiels sur Stellar)
+
+Un **paiement ZK** est un paiement dont le montant est masqué on-chain. Il passe par
+l'instance propre à Cosmos Pay du Confidential Token d'OpenZeppelin
+(`stellar-confidential` 0.8.0) : les soldes sont des engagements de Pedersen, chaque
+transfert porte une preuve UltraHonk que le jeton vérifie on-chain, et le montant
+voyage chiffré vers le destinataire et vers l'auditeur. Cosmos Pay déploie le registre
+d'auditeurs de ce jeton : il détient donc la clé d'auditeur (id 0) de chaque compte du
+jeton et lit le montant de chaque transfert qui y est fait. Personne d'autre parmi ceux
+qui observent le ledger ne le peut.
+
+**Testnet uniquement, pour l'instant.** Le jeton enveloppe le XLM natif. Le mainnet
+reste désactivé tant qu'un opérateur n'y a pas déployé et n'a pas défini
+`ZK_PAYMENTS_MAINNET_*` : d'ici là, `GET /v1/zk-payments/config` répond
+`enabled: false` à une clé `prod`, et une création répond `400 network_unsupported`.
+
+**Commission : 0,01 % (1 bps) par paiement**, `ZK_PAYMENT_FEE_BPS` dans
+`src/zk-payments/zk-payments.constants.ts`, la même sur chaque déploiement. Sur un
+paiement de `amount`, `feeAmount = ceil(amount_in_stroops * 1 / 10000)` stroops, au
+moins un, et `netAmount = amount - feeAmount` : le marchand reçoit le net, Cosmos Pay
+la commission, et le payeur paie `amount` au total. Un montant dont le net serait nul
+est refusé (`400 invalid_amount`).
+
+```
+merchant: POST /v1/zk-payments (recipient registered on the token)
+payer:    GET  /v1/zk-checkout/{id}
+          -> confidential transfer of netAmount to the recipient
+          -> confidential transfer of feeAmount to the fee account
+          POST /v1/zk-checkout/{id}/confirm { paymentTxHash, feeTxHash }
+          -> both read back from the chain and decrypted with the auditor key
+          -> SUCCEEDED + ZK_PAYMENT_SUCCEEDED webhook
+```
+
+**Deux préfixes.** Les routes du marchand vivent sous `/v1/zk-payments` et exigent une
+clé API ; celles du payeur vivent sous `/v1/zk-checkout` et n'en exigent aucune
+(`@Public()`, budget par adresse client). La séparation sert la passerelle : APISIX
+sert une lecture sans clé comme une route de préfixe, ce qui ne fonctionne que si rien
+sous le préfixe n'exige de clé. La page de compte confidentiel du marchand
+(enregistrement, solde, retrait) n'a pas de session non plus : elle lit donc les
+contrats contre lesquels elle prouve depuis
+`GET /v1/zk-checkout/config?network=testnet` (ou `public`), avec le même constructeur,
+et la même réponse, que le `GET /v1/zk-payments/config` authentifié. Tout ce qu'elle
+contient est une donnée publique on-chain ; le secret d'auditeur ne quitte jamais le
+serveur.
+
+**Le destinataire doit d'abord être enregistré.** `POST /v1/zk-payments` lit le compte
+confidentiel du destinataire via le RPC Soroban et refuse un destinataire sans compte
+sur le jeton, ou enregistré sous un autre auditeur (`400 recipient_not_registered`) :
+un transfert vers lui échouerait on-chain après que le payeur a dépensé une preuve.
+
+**Ce que confirm vérifie, dans cet ordre.** `POST /v1/zk-checkout/{id}/confirm` relit
+les deux transactions via le RPC Soroban et ne règle le paiement que si :
+
+1. aucun des deux hashs n'a réglé un autre paiement ZK, de quelque marchand que ce soit
+   (vérifié en base de données avant toute question à la chaîne ;
+   `409 transaction_already_settled`) ;
+2. les deux transactions existent (`transaction_not_found`) et ont réussi
+   (`transaction_rejected`) ;
+3. chacune est un unique appel `confidential_transfer` sur le jeton du paiement, avec
+   un seul événement `transfer` ;
+4. les deux se sont clôturées pendant que le paiement était ouvert : pas avant sa
+   création (moins une minute de tolérance pour le décalage d'horloge), et pas après
+   `expiresAt` (`expired`) ;
+5. les deux viennent du même compte (`payer_mismatch`) ;
+6. le transfert du paiement va au destinataire, et le transfert de la commission au
+   compte de commission ;
+7. chacun se déchiffre avec la clé d'auditeur en exactement `netAmount` ou
+   `feeAmount`, sur les deux canaux d'auditeur, et l'ouverture déchiffrée correspond à
+   l'engagement de transfert (`C_transfer`) que portait l'invocation.
+
+Les étapes 3, 6 et 7 répondent `payment_transfer_mismatch` ou `fee_transfer_mismatch`,
+selon la jambe concernée. Un refus laisse le paiement en `PENDING` ; un confirm avec
+les hashs qui ont déjà réglé un paiement renvoie de nouveau ce paiement.
+
+**Confirm n'est pas un oracle de montants.** Il est public et déchiffre ce qu'on lui
+donne : il ne dit donc jamais en quoi un montant s'est déchiffré, et il compare les
+montants en dernier. Un paiement créé après la clôture d'un transfert refuse ce
+transfert sur la fenêtre temporelle, et un transfert de commission depuis son propre
+compte ne peut pas se porter garant du transfert de paiement de quelqu'un d'autre.
+Conservez cet ordre si vous modifiez confirm.
+
+**Statuts.** `PENDING` jusqu'à la confirmation, puis `SUCCEEDED`. Rien ne stocke
+`EXPIRED` : un paiement `PENDING` au-delà de `expiresAt` se lit `EXPIRED`, dans chaque
+réponse et dans le filtre de liste, et peut encore être confirmé, car des transferts
+clôturés avant `expiresAt` l'ont payé. `expiresInMinutes` vaut 60 par défaut et sept
+jours au plus.
+
+**Confirmez rapidement.** Le RPC Soroban conserve les transactions pendant une fenêtre
+limitée (environ sept jours sur le RPC testnet de SDF) ; au-delà, confirm répond
+`transaction_not_found`. Un checkout confirme juste après les transferts.
+
+**Limites.** Création : 30 par minute par consommateur et adresse client. Les lectures
+sans clé (`/config` et `/{id}` partagent un même budget) : 60 par minute par adresse
+client. Confirm : 20 par minute par adresse client. Chacune répond `429 rate_limited`
+avec `Retry-After`.
+
+**Déploiement :** servez `/v1/zk-checkout/*` depuis la route APISIX sans clé (sans
+`key-auth`), comme `/v1/payment-links/*`. Ce service n'y envoie aucun en-tête CORS ;
+le plugin CORS de la route les ajoute.
+
+### Déployer le jeton testnet
+
+```bash
+npm run zk:deploy-testnet -- --env-file .env --secrets-file .zk-secrets/testnet.json
+npm run zk:e2e-testnet
+```
+
+`scripts/zk/deploy-testnet.ts` ne demande ni build Rust ni fonds réels : avec un
+déployeur jetable financé par Friendbot, il lit les hashs wasm du registre d'auditeurs
+et du jeton vanilla de la démo du confidential token depuis leurs instances sur
+testnet, déploie un nouveau registre d'auditeurs (admin et manager : le déployeur)
+avec la clé de Cosmos Pay `K_aud = k·H` sous l'id 0, déploie un nouveau jeton vanilla
+sur le XLM natif avec le vérificateur de la démo (ses clés de vérification v0.8.0 y
+sont enregistrées, et la vérification est publique), contrôle la parité `addr_f`, et
+enregistre le compte de commission sur le jeton avec une preuve d'enregistrement
+générée dans Node. Avec `--env-file`, il écrit l'ensemble `ZK_PAYMENTS_TESTNET_*` dans
+ce fichier, et avec `--secrets-file` les clés de l'opérateur (l'admin du registre,
+ainsi que le secret et le scalaire de dépense confidentiel du compte de commission,
+qui servent à retirer les commissions perçues) dans celui-là ; sans eux, il affiche
+les deux. Le serveur n'a besoin d'aucune des clés de l'opérateur. Relancé, il vérifie
+on-chain l'ensemble configuré au lieu de redéployer ; `--redeploy` déploie un ensemble
+neuf, ce qui laisse orphelins tous les paiements faits sur l'ancien jeton.
+
+`scripts/zk/e2e-testnet.ts` est la vérification sur la chaîne réelle. Avec des comptes
+Friendbot, il enregistre un marchand et un payeur, crée des paiements via le service
+propre au module, effectue le dépôt et la fusion, fait les deux transferts, et confirme
+via le confirm propre au module : un montant erroné est refusé, le bon règle le
+paiement, et les hashs ne peuvent pas être réutilisés.
+
+**Le testnet est réinitialisé** tous les quelques mois, et ses contrats avec lui :
+relancez le déploiement après une réinitialisation. Le vérificateur qu'il réutilise
+est celui de la démo ; s'il a disparu, le déploiement échoue jusqu'à ce qu'un
+vérificateur avec les clés v0.8.0 existe et que le script le désigne.
+
+### Routes des paiements ZK
+
+| Route | Scope | Rôle |
+| --- | --- | --- |
+| `GET /v1/zk-payments/config` | `payments:read` | Le réseau de la clé : jeton, registres, id d'auditeur, commission, compte de commission |
+| `POST /v1/zk-payments` | `payments:write` | Créer un paiement vers un marchand enregistré ; `Idempotency-Key` accepté |
+| `GET /v1/zk-payments` | `payments:read` | Les paiements ZK du consommateur, filtrés par statut tel qu'il se lit maintenant |
+| `GET /v1/zk-payments/{id}` | `payments:read` | Un paiement, tel que son propriétaire le voit |
+| `GET /v1/zk-checkout/config` | aucun, `@Public()` | La même configuration pour `?network=testnet` ou `public`, pour une page sans clé |
+| `GET /v1/zk-checkout/{id}` | aucun, `@Public()` | Un paiement tel que son payeur le voit : quoi transférer, à qui, sur quels contrats |
+| `POST /v1/zk-checkout/{id}/confirm` | aucun, `@Public()` | Le régler avec les deux transferts, vérifiés on-chain |
+
 ## Alias — identifiants de paiement revendicables
 
 Un alias permet à un payeur de saisir `emanuel250` au lieu de `GA5ZSE…`. Les payeurs font
@@ -1815,6 +1973,31 @@ plugins isolés.
   `openapi:generate` les active tous.
 
 ## Mise à niveau — changements incompatibles et notes de déploiement
+
+### Paiements ZK : un nouveau module, une nouvelle table et un événement webhook
+
+- **Nouvelles routes** sous `/v1/zk-payments` (`payments:read` / `payments:write`) et
+  sous `/v1/zk-checkout`, sans clé (`@Public()`) : des paiements confidentiels sur le
+  jeton confidentiel de Cosmos Pay, testnet uniquement pour l'instant. Ce qu'elles
+  font est décrit dans [Paiements ZK](#paiements-zk-montants-confidentiels-sur-stellar).
+  Aucune réponse existante n'a changé.
+- **La migration `20261025180000_zk_payments`** crée la table `zk_payment` et l'enum
+  `ZkPaymentStatus`, et ajoute `ZK_PAYMENT_SUCCEEDED` à `WebhookEventType` ; rien n'est
+  réécrit. Lancez `migrate deploy` avant que le nouveau build ne serve du trafic.
+- **Nouvel événement webhook `ZK_PAYMENT_SUCCEEDED`**, durable comme les autres
+  événements de règlement. Un endpoint abonné à tous les événements le reçoit ; un
+  endpoint avec une liste explicite ne le reçoit pas tant que l'événement n'y est pas
+  ajouté.
+- **Nouvelles variables**, toutes facultatives : l'ensemble `ZK_PAYMENTS_TESTNET_*`
+  active la fonctionnalité pour les clés `dev` (`npm run zk:deploy-testnet` l'écrit),
+  et le démarrage refuse un ensemble à moitié configuré. `ZK_PAYMENTS_MAINNET_*` existe
+  et reste non défini.
+- **Nouvelle dépendance** `stellar-confidential-token-sdk`, épinglée à un commit de son
+  dépôt GitHub (elle n'est pas sur npm) ; `npm ci` construit son `dist/` via son script
+  `prepare`. Le serveur la charge à la demande, à la première requête ZK.
+- **Étape de déploiement :** ajoutez `/v1/zk-checkout/*` à la route APISIX sans clé,
+  avec CORS pour `GET` et `POST`, en exposant `Retry-After` et `ratelimit-*`, comme
+  pour `/v1/payment-links/*`.
 
 ### Clients : un compte sur n'importe quelle chaîne, et des statistiques sur le réseau de la clé
 
@@ -2624,6 +2807,14 @@ Chaque variable lue depuis `process.env` dans `src/` est validée au démarrage 
 | `WALLET_RECOVERY_SPONSOR_HORIZON_URL` | non | le Horizon de `STELLAR_NETWORK` | Horizon où la mise en place de récupération sponsorisée lit le compte |
 | `RATE_LIMIT_ENABLED` | non | `true` | Plafonds par adresse sur les routes qui dépensent des XLM. Interrupteur d'incident |
 | `RATE_LIMIT_PRUNE_INTERVAL_MS` | non | `600000` | Intervalle de purge des fenêtres de compteur (ms, min 1000) |
+| `ZK_PAYMENTS_TESTNET_TOKEN` | pour les paiements ZK sur testnet | aucun | Le jeton confidentiel de Cosmos Pay sur testnet (C...). Sa présence active les paiements ZK pour les clés `dev` ; avec elle, toutes les autres variables de l'ensemble sauf `_RPC_URL` sont requises au démarrage |
+| `ZK_PAYMENTS_TESTNET_AUDITOR_REGISTRY` | avec le jeton | aucun | Le registre d'auditeurs qui détient la clé de Cosmos Pay sous l'id 0 (C...) |
+| `ZK_PAYMENTS_TESTNET_VERIFIER` | avec le jeton | aucun | Le registre de vérificateurs UltraHonk avec lequel le jeton vérifie les preuves (C...) |
+| `ZK_PAYMENTS_TESTNET_AUDITOR_SECRET` | avec le jeton | aucun | Le scalaire d'auditeur `k` (64 caractères hex) : chaque montant confidentiel du jeton se déchiffre avec lui. Un secret aussi sensible que le secret de la passerelle ; jamais dans le dépôt |
+| `ZK_PAYMENTS_TESTNET_FEE_ACCOUNT` | avec le jeton | aucun | Le compte vers lequel la commission de 0,01 % est transférée (G...), enregistré sur le jeton |
+| `ZK_PAYMENTS_TESTNET_DEPLOYED_LEDGER` | avec le jeton | aucun | Le ledger où le jeton a été déployé, à partir duquel un portefeuille rejoue son solde |
+| `ZK_PAYMENTS_TESTNET_RPC_URL` | non | `https://soroban-testnet.stellar.org` | Le RPC Soroban par lequel les paiements ZK lisent la chaîne ; sa passphrase réseau est vérifiée avant usage |
+| `ZK_PAYMENTS_MAINNET_*` | non | aucun | Le même ensemble pour les clés `prod` (`_TOKEN`, `_AUDITOR_REGISTRY`, `_VERIFIER`, `_AUDITOR_SECRET`, `_FEE_ACCOUNT`, `_DEPLOYED_LEDGER`, `_RPC_URL`). Non défini : les paiements ZK sont désactivés sur mainnet. `_RPC_URL` n'y a pas de valeur par défaut et est requise avec l'ensemble |
 
 La variable historique `STELLAR_HORIZON_URL` est rejetée au démarrage — utilisez
 `STELLAR_HORIZON_URL_PUBLIC` / `STELLAR_HORIZON_URL_TESTNET` à la place.

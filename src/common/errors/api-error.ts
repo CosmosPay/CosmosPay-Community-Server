@@ -77,6 +77,32 @@ export enum ApiErrorCode {
    */
   TransactionAlreadySettled = 'transaction_already_settled',
 
+  // --- ZK payments (confidential token) --------------------------------------
+  /**
+   * The recipient of a ZK payment holds no confidential account on Cosmos
+   * Pay's token (or holds one under another auditor): a transfer to it would
+   * be refused on-chain, so the payment is refused before it exists.
+   */
+  RecipientNotRegistered = 'recipient_not_registered',
+  /**
+   * The payment transaction is not a confidential transfer, on Cosmos Pay's
+   * token, of exactly the payment's net amount to its recipient, made while
+   * the payment was open. Never says what the amount decrypted to: the route
+   * is public and the amount is the secret.
+   */
+  PaymentTransferMismatch = 'payment_transfer_mismatch',
+  /** {@link PaymentTransferMismatch}, for the commission transfer to the fee account. */
+  FeeTransferMismatch = 'fee_transfer_mismatch',
+  /** The two transfers of one ZK payment come from different accounts. */
+  PayerMismatch = 'payer_mismatch',
+  /**
+   * The RPC has no transaction with that hash: it has not closed yet, or it is
+   * older than the RPC keeps transactions for.
+   */
+  TransactionNotFound = 'transaction_not_found',
+  /** A transfer of a ZK payment closed after the payment expired. */
+  Expired = 'expired',
+
   // --- cross-chain swaps (NEAR Intents) --------------------------------------
   /**
    * The caller's API key reaches a network the provider does not run on. NEAR

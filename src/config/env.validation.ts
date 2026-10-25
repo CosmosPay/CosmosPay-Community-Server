@@ -30,6 +30,7 @@ import {
 } from '@/config/config.constants';
 import { parseEvmTokenFees } from '@/config/evm-token-fees';
 import { assertIdentityConfigConsistent } from '@/config/identity-env';
+import { assertZkPaymentsConfigConsistent } from '@/config/zk-payments-env';
 
 /**
  * Gateway secrets that are documentation, not secrets. `.env.example` used to
@@ -648,6 +649,9 @@ export function validateEnv(config: Record<string, unknown>) {
   }
 
   assertIdentityConfigConsistent(config);
+
+  // ZK payments are optional per network, but all-or-nothing within one.
+  assertZkPaymentsConfigConsistent(config);
 
   // Parsed here as well, so a malformed value fails the boot naming its
   // variable instead of surfacing from the configuration factory.

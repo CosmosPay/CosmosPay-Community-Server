@@ -67,3 +67,30 @@ process.env.WALLET_BACKUP_ENCRYPTION_KEY = Buffer.alloc(32, 9).toString(
   'base64',
 );
 process.env.WALLET_BACKUP_ENCRYPTION_PREVIOUS_KEYS = '';
+// ZK payments: a fixed testnet set and no mainnet, so the suites see the same
+// configuration everywhere. A developer's .env carries the real testnet
+// deployment (scripts/zk/deploy-testnet.ts writes it there), and dotenv never
+// overwrites a value already set, so these win. Mainnet is empty rather than
+// deleted for the same reason.
+process.env.ZK_PAYMENTS_TESTNET_RPC_URL = 'https://soroban-testnet.stellar.org';
+process.env.ZK_PAYMENTS_TESTNET_TOKEN =
+  'CAAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQC526';
+process.env.ZK_PAYMENTS_TESTNET_AUDITOR_REGISTRY =
+  'CABAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAFNSZ';
+process.env.ZK_PAYMENTS_TESTNET_VERIFIER =
+  'CABQGAYDAMBQGAYDAMBQGAYDAMBQGAYDAMBQGAYDAMBQGAYDAMBQGCK3';
+process.env.ZK_PAYMENTS_TESTNET_AUDITOR_SECRET = '0f'.repeat(32);
+process.env.ZK_PAYMENTS_TESTNET_FEE_ACCOUNT =
+  'GACQKBIFAUCQKBIFAUCQKBIFAUCQKBIFAUCQKBIFAUCQKBIFAUCQKG7N';
+process.env.ZK_PAYMENTS_TESTNET_DEPLOYED_LEDGER = '5387137';
+for (const suffix of [
+  'TOKEN',
+  'AUDITOR_REGISTRY',
+  'VERIFIER',
+  'AUDITOR_SECRET',
+  'FEE_ACCOUNT',
+  'DEPLOYED_LEDGER',
+  'RPC_URL',
+]) {
+  process.env[`ZK_PAYMENTS_MAINNET_${suffix}`] = '';
+}

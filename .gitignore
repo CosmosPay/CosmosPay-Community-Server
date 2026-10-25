@@ -48,6 +48,9 @@ dev-instances.json
 .env.test.local
 .env.production.local
 .env.local
+# Operator secrets `scripts/zk/deploy-testnet.ts --secrets-file` writes: the
+# auditor registry's admin and the fee account's keys. Never committed.
+.zk-secrets/
 
 # temp directory
 .temp

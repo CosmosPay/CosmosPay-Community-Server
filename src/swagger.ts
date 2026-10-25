@@ -273,8 +273,8 @@ const SHARED_ERROR_RESPONSES = {
 type SharedErrorResponse = keyof typeof SHARED_ERROR_RESPONSES;
 
 /**
- * Which statuses each provider can fail with. Horizon is reached through the
- * Stellar SDK, which this service wraps in a plain `503` — it has no timeout
+ * Which statuses each provider can fail with. Horizon (and the Soroban RPC) is
+ * reached through the Stellar SDK, which this service wraps in a plain `503`: it has no timeout
  * of its own to report and no body to pass through — while the HTTP clients
  * (BlindPay's, NEAR Intents', and the Solana and Monad JSON-RPC transport) distinguish
  * "refused" (502), "down" (503) and "timed out" (504).
@@ -290,6 +290,10 @@ const UPSTREAM_FAILURES: Record<
   'NEAR Intents': ['UpstreamError', 'UpstreamUnavailable', 'UpstreamTimeout'],
   Jupiter: ['UpstreamError', 'UpstreamUnavailable', 'UpstreamTimeout'],
   'Kuru Flow': ['UpstreamError', 'UpstreamUnavailable', 'UpstreamTimeout'],
+  // Reached through the Stellar SDK's `rpc.Server` (and the confidential token
+  // SDK's client), wrapped like Horizon: a refusal, an outage and a timeout
+  // all answer 503.
+  'Soroban RPC': ['UpstreamUnavailable'],
 };
 
 const RESPONSE_STATUS: Record<SharedErrorResponse, number> = {
