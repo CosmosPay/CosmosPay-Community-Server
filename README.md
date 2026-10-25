@@ -154,7 +154,7 @@ regenerated from the controllers and DTOs on every CI run
 | Wallet sign-in    | `/v1/wallet`             | Google / GitHub / email code, and the encrypted seed backup |
 | Assets            | `/v1/assets`             | Curated asset registry per network                        |
 | Public key        | `/v1/public-key`         | The shared public API key, served without a key (`@Public`) |
-| Analytics         | `/v1/summary`, `/v1/balances`, `/v1/logs` | Dashboard aggregates and logs            |
+| Analytics         | `/v1/summary`, `/v1/balances`, `/v1/logs` | Dashboard aggregates (payments, swaps, liquidity, webhooks) and logs |
 | Activity          | `/v1/activity`           | Client-reported events: ingest, feed, rollup               |
 | Plugins           | `/v1/plugins`            | Compiled-in extensions under a slug, installed per tenant |
 | Admin             | `/v1/admin`              | Cross-tenant reads/writes — platform console only, audited |
@@ -1758,6 +1758,30 @@ the service under `src/native-plugins/<slug>/`, switched on by the same
   `openapi:generate` turns them all on.
 
 ## Upgrading — breaking changes and deploy notes
+
+### Dashboard series: swaps, liquidity and webhooks beside payments
+
+- **New route `GET /v1/summary/series`** (`payments:read`; `period` is `day`, `week`,
+  `month` or `year`): the figures the dashboard's overview charts, in 30 days, 12 weeks,
+  12 months or 5 years of UTC buckets (weeks start on Monday, a quiet bucket is a zero),
+  with the window's totals and the window just before it, for growth. Payments carry
+  their settled volume and distinct payers; swaps of every kind are counted per bucket
+  and split by kind (`dex` for the Stellar DEX, `chain` for Jupiter and Kuru Flow,
+  `crossChain` for NEAR Intents); liquidity operations and webhook deliveries are counted
+  per window. It only aggregates in Postgres: no migration, no new variable, and no
+  existing response changed.
+- **Each figure is scoped like the key's own data.** Payments, swaps and liquidity
+  operations are the consumer's on the network its key targets (`prod` → `public`,
+  `dev` → `testnet`), so a sandbox key counts no Solana, Monad or cross-chain swap:
+  those run on mainnet only. Webhook deliveries are the consumer's on every endpoint,
+  because an endpoint belongs to no network. `GET /v1/swaps`,
+  `GET /v1/cross-chain-swaps` and `GET /v1/liquidity-pools/operations` do not filter by
+  network, so their totals can be larger than the series'.
+- **Succeeded, failed and in progress are one table per model** in
+  `src/analytics/analytics.constants.ts`: a failed or expired swap or operation is
+  failed, and so is a refunded cross-chain swap; anything not final is in progress. A
+  new `SwapStatus` or `CrossChainSwapStatus` value does not compile until it is mapped
+  there.
 
 ### Cross-chain swaps: every NEAR Intents network, and a nullable `depositUri`
 

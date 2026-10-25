@@ -9,8 +9,19 @@ import { page } from '@/common/pagination';
 import { resolveNetwork } from '@/common/stellar-network';
 import { PrismaService } from '@/prisma/prisma.service';
 import { Prisma, type PaymentIntentStatus } from '@generated/prisma/client';
-import { DAY_MS, type SeriesPeriod } from '@/analytics/analytics.constants';
-import { seriesWindow } from '@/analytics/series-window';
+import {
+  CHAIN_SWAP_OUTCOMES,
+  CROSS_CHAIN_SWAP_OUTCOMES,
+  DAY_MS,
+  LIQUIDITY_OPERATION_OUTCOMES,
+  SERIES_SWAP_KINDS,
+  SWAP_OUTCOMES,
+  type SeriesOutcome,
+  type SeriesPeriod,
+  type SeriesSwapKind,
+} from '@/analytics/analytics.constants';
+import { outcomeCase, statusIn } from '@/analytics/series-outcomes';
+import { fillBuckets, seriesWindow } from '@/analytics/series-window';
 import {
   isChain,
   MAX_TOKEN_DECIMALS,
@@ -49,8 +60,51 @@ const ASSET_LABEL_SQL = Prisma.raw(`
   ELSE "asset" END`);
 
 /**
- * Read-only aggregates derived from the consumer's existing payment intents and
- * webhook deliveries — no separate analytics store. Powers the dashboard's
+ * The table each kind of swap lives in, with the table of outcomes its statuses map to. A
+ * `Record` over `SERIES_SWAP_KINDS`, so a new kind does not compile until it names both.
+ */
+const SWAP_SOURCES: Record<
+  SeriesSwapKind,
+  { table: string; outcomes: Record<string, SeriesOutcome> }
+> = {
+  dex: { table: 'swap', outcomes: SWAP_OUTCOMES },
+  chain: { table: 'chain_swap', outcomes: CHAIN_SWAP_OUTCOMES },
+  crossChain: {
+    table: 'cross_chain_swap',
+    outcomes: CROSS_CHAIN_SWAP_OUTCOMES,
+  },
+};
+
+/**
+ * One row per swap the consumer made on `network` from `from` on, whichever table holds it:
+ * its `kind`, `createdAt` and `outcome`. Each branch is scoped as the payments are (consumer,
+ * network, window) and reached through its table's index that leads with `consumerId`. The kind
+ * and table names are the constants above, spliced in as SQL text; the rest is bound.
+ */
+function swapRowsSql(
+  consumerId: string,
+  network: string,
+  from: Date,
+): Prisma.Sql {
+  return Prisma.join(
+    SERIES_SWAP_KINDS.map((kind) => {
+      const { table, outcomes } = SWAP_SOURCES[kind];
+      return Prisma.sql`
+        SELECT ${Prisma.raw(`'${kind}'`)} AS "kind",
+               "createdAt",
+               ${outcomeCase(outcomes)} AS "outcome"
+        FROM ${Prisma.raw(`"${table}"`)}
+        WHERE "consumerId" = ${consumerId}
+          AND "network" = ${network}
+          AND "createdAt" >= ${from}`;
+    }),
+    ' UNION ALL ',
+  );
+}
+
+/**
+ * Read-only aggregates derived from the consumer's existing payment intents, swaps, liquidity
+ * operations and webhook deliveries, with no separate analytics store. Powers the dashboard's
  * Overview, Balances, Customers and Logs views.
  */
 @Injectable()
@@ -271,14 +325,26 @@ export class AnalyticsService {
     };
   }
 
-  // ── Balances (settled per asset) ────────────────────────────────────────────
+  // ── Series (the dashboard chart) ────────────────────────────────────────────
   /**
-   * The dashboard chart's series (`GET /v1/summary/series`): payments grouped by day, week,
-   * month or year (30, 12, 12, 5 buckets), each bucket's count, settled and failed counts and
-   * settled volume, pre-seeded so a quiet bucket is a zero; plus the window's totals (with its
-   * distinct payers) and the same figures for the window just before it, for growth. Two
-   * aggregations in Postgres, bounded by the window; no row is materialized. As in `summary`,
-   * volume adds every asset's amount (the dashboard labels it so).
+   * The dashboard chart's series (`GET /v1/summary/series`), grouped by day, week, month or year
+   * (30, 12, 12, 5 buckets), each bucket pre-seeded so a quiet one is a zero, with the window's
+   * totals and the same figures for the window just before it, for growth:
+   *
+   *   - payments: each bucket's count, settled and failed counts and settled volume; the
+   *     window's distinct payers. As in `summary`, volume adds every asset's amount (the
+   *     dashboard labels it so).
+   *   - swaps of every kind (Stellar DEX, Solana and Monad, cross-chain): each bucket's count,
+   *     succeeded and failed; the window's in-progress count and its split by kind.
+   *   - liquidity operations and webhook deliveries: the window's counts.
+   *
+   * Every figure is an aggregation in Postgres bounded by the window; no row is materialized.
+   * Payments, swaps and liquidity operations are the consumer's on the network its key targets
+   * (`resolveNetwork`), the scope the payments half has always had. Solana, Monad and
+   * cross-chain swaps are always written as `public`, so a sandbox key counts none of them.
+   * Webhook deliveries are the consumer's on every endpoint, as in `summary`: an endpoint
+   * belongs to no network. Which status is succeeded, failed or in progress is the
+   * `*_OUTCOMES` table of each model (`analytics.constants.ts`).
    */
   async series(consumer: GatewayConsumer, period: SeriesPeriod) {
     const consumerId = await this.resolveConsumerId(consumer);
@@ -286,8 +352,16 @@ export class AnalyticsService {
     const { buckets, since, previousSince } = seriesWindow(period, new Date());
     // `period` is one of SERIES_PERIODS (the DTO checks it), so it is safe as SQL text.
     const unit = Prisma.raw(`'${period}'`);
+    const swapRows = (from: Date) => swapRowsSql(consumerId, network, from);
 
-    const [bucketRows, windowRows] = await Promise.all([
+    const [
+      bucketRows,
+      windowRows,
+      swapBucketRows,
+      swapWindowRows,
+      liquidityRows,
+      webhookRows,
+    ] = await Promise.all([
       this.prisma.$queryRaw<
         {
           bucket: Date;
@@ -330,28 +404,64 @@ export class AnalyticsService {
           AND "createdAt" >= ${previousSince}
         GROUP BY 1
       `,
+      this.prisma.$queryRaw<
+        { bucket: Date; count: bigint; succeeded: bigint; failed: bigint }[]
+      >`
+        SELECT date_trunc(${unit}, "createdAt") AS bucket,
+               COUNT(*) AS count,
+               COUNT(*) FILTER (WHERE "outcome" = 'succeeded') AS succeeded,
+               COUNT(*) FILTER (WHERE "outcome" = 'failed') AS failed
+        FROM (${swapRows(since)}) AS swaps
+        GROUP BY 1
+      `,
+      this.prisma.$queryRaw<
+        {
+          current: boolean;
+          kind: SeriesSwapKind;
+          count: bigint;
+          succeeded: bigint;
+          failed: bigint;
+          in_progress: bigint;
+        }[]
+      >`
+        SELECT ("createdAt" >= ${since}) AS current,
+               "kind",
+               COUNT(*) AS count,
+               COUNT(*) FILTER (WHERE "outcome" = 'succeeded') AS succeeded,
+               COUNT(*) FILTER (WHERE "outcome" = 'failed') AS failed,
+               COUNT(*) FILTER (WHERE "outcome" = 'inProgress') AS in_progress
+        FROM (${swapRows(previousSince)}) AS swaps
+        GROUP BY 1, 2
+      `,
+      this.prisma.$queryRaw<
+        { current: boolean; count: bigint; succeeded: bigint; failed: bigint }[]
+      >`
+        SELECT ("createdAt" >= ${since}) AS current,
+               COUNT(*) AS count,
+               COUNT(*) FILTER (WHERE ${statusIn(LIQUIDITY_OPERATION_OUTCOMES, 'succeeded')}) AS succeeded,
+               COUNT(*) FILTER (WHERE ${statusIn(LIQUIDITY_OPERATION_OUTCOMES, 'failed')}) AS failed
+        FROM "liquidity_pool_operation"
+        WHERE "consumerId" = ${consumerId}
+          AND "network" = ${network}
+          AND "createdAt" >= ${previousSince}
+        GROUP BY 1
+      `,
+      // The deliveries `summary` counts, joined to the consumer's endpoints in Postgres rather
+      // than through a list of their ids, and bounded by the window.
+      this.prisma.$queryRaw<
+        { current: boolean; deliveries: bigint; failed: bigint }[]
+      >`
+        SELECT (d."createdAt" >= ${since}) AS current,
+               COUNT(*) AS deliveries,
+               COUNT(*) FILTER (WHERE d."status" = 'FAILED') AS failed
+        FROM "webhook_delivery" d
+        JOIN "webhook_endpoint" e ON e."id" = d."endpointId"
+        WHERE e."consumerId" = ${consumerId}
+          AND d."createdAt" >= ${previousSince}
+        GROUP BY 1
+      `,
     ]);
 
-    const key = (d: Date) => new Date(d).toISOString().slice(0, 10);
-    const seeded = buckets.map((start) => ({
-      start: key(start),
-      count: 0,
-      succeeded: 0,
-      failed: 0,
-      volume: '0',
-    }));
-    const index = new Map(seeded.map((b, i) => [b.start, i]));
-    for (const row of bucketRows) {
-      const i = index.get(key(row.bucket));
-      if (i === undefined) continue;
-      seeded[i] = {
-        start: seeded[i].start,
-        count: toCount(row.count),
-        succeeded: toCount(row.succeeded),
-        failed: toCount(row.failed),
-        volume: formatNumericAmount(row.volume),
-      };
-    }
     const window = (current: boolean) => {
       const row = windowRows.find((r) => r.current === current);
       return {
@@ -364,9 +474,56 @@ export class AnalyticsService {
     };
     const totals = window(true);
     const before = window(false);
+
+    // At most one row per (window, kind): summing them here adds a handful of counts, not rows.
+    const swapWindow = (current: boolean) => {
+      const rows = swapWindowRows.filter((r) => r.current === current);
+      const sum = (pick: (r: (typeof rows)[number]) => bigint) =>
+        rows.reduce((n, r) => n + toCount(pick(r)), 0);
+      const byKind = Object.fromEntries(
+        SERIES_SWAP_KINDS.map((kind) => [
+          kind,
+          toCount(rows.find((r) => r.kind === kind)?.count),
+        ]),
+      ) as Record<SeriesSwapKind, number>;
+      return {
+        count: sum((r) => r.count),
+        succeeded: sum((r) => r.succeeded),
+        failed: sum((r) => r.failed),
+        inProgress: sum((r) => r.in_progress),
+        byKind,
+      };
+    };
+    const swapTotals = swapWindow(true);
+    const swapsBefore = swapWindow(false);
+
+    const outcomes = (
+      row: { count: bigint; succeeded: bigint; failed: bigint } | undefined,
+    ) => ({
+      count: toCount(row?.count),
+      succeeded: toCount(row?.succeeded),
+      failed: toCount(row?.failed),
+    });
+    const deliveries = (
+      row: { deliveries: bigint; failed: bigint } | undefined,
+    ) => ({
+      deliveries: toCount(row?.deliveries),
+      failed: toCount(row?.failed),
+    });
+
     return {
       period,
-      buckets: seeded,
+      buckets: fillBuckets(
+        buckets,
+        bucketRows,
+        () => ({ count: 0, succeeded: 0, failed: 0, volume: '0' }),
+        (row) => ({
+          count: toCount(row.count),
+          succeeded: toCount(row.succeeded),
+          failed: toCount(row.failed),
+          volume: formatNumericAmount(row.volume),
+        }),
+      ),
       totals,
       previous: {
         count: before.count,
@@ -374,9 +531,32 @@ export class AnalyticsService {
         failed: before.failed,
         volume: before.volume,
       },
+      swaps: {
+        buckets: fillBuckets(
+          buckets,
+          swapBucketRows,
+          () => ({ count: 0, succeeded: 0, failed: 0 }),
+          outcomes,
+        ),
+        totals: swapTotals,
+        previous: {
+          count: swapsBefore.count,
+          succeeded: swapsBefore.succeeded,
+          failed: swapsBefore.failed,
+        },
+      },
+      liquidity: {
+        totals: outcomes(liquidityRows.find((r) => r.current)),
+        previous: outcomes(liquidityRows.find((r) => !r.current)),
+      },
+      webhooks: {
+        totals: deliveries(webhookRows.find((r) => r.current)),
+        previous: deliveries(webhookRows.find((r) => !r.current)),
+      },
     };
   }
 
+  // ── Balances (settled per asset) ────────────────────────────────────────────
   async balances(consumer: GatewayConsumer) {
     const consumerId = await this.resolveConsumerId(consumer);
     const network = this.network(consumer);

@@ -51,3 +51,27 @@ export function seriesWindow(period: SeriesPeriod, now: Date) {
     previousSince: shiftBuckets(period, first, -count),
   };
 }
+
+/** The `start` a bucket is reported under: its first day, `YYYY-MM-DD`. */
+export function bucketKey(at: Date): string {
+  return new Date(at).toISOString().slice(0, 10);
+}
+
+/**
+ * One entry per bucket of the window, oldest first: `fill` of the row Postgres grouped into it,
+ * or `empty()` when it grouped none, so a quiet bucket is a zero rather than a gap. A row that
+ * lands on no bucket is dropped; it cannot happen while both sides truncate alike.
+ */
+export function fillBuckets<R extends { bucket: Date }, T extends object>(
+  buckets: readonly Date[],
+  rows: readonly R[],
+  empty: () => T,
+  fill: (row: R) => T,
+): ({ start: string } & T)[] {
+  const byKey = new Map(rows.map((row) => [bucketKey(row.bucket), row]));
+  return buckets.map((at) => {
+    const start = bucketKey(at);
+    const row = byKey.get(start);
+    return { start, ...(row ? fill(row) : empty()) };
+  });
+}

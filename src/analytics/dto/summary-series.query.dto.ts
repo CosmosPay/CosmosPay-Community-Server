@@ -5,7 +5,7 @@ import {
   type SeriesPeriod,
 } from '@/analytics/analytics.constants';
 
-/** `GET /v1/summary/series?period=`: how to group the payments; a day by default. */
+/** `GET /v1/summary/series?period=`: how to group payments, swaps, liquidity and webhooks; a day by default. */
 export class SummarySeriesQueryDto {
   @ApiPropertyOptional({
     enum: Object.keys(SERIES_PERIODS),

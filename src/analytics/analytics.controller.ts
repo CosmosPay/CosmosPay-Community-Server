@@ -35,7 +35,7 @@ export class AnalyticsController {
   @RequirePermissions('payments:read')
   @ApiOperation({
     summary:
-      'Payments grouped by day, week, month or year, with the window before for growth',
+      'Payments, swaps, liquidity and webhooks grouped by day, week, month or year, with the window before for growth',
   })
   @ApiOkResponse({ type: AnalyticsSeriesEntity })
   series(

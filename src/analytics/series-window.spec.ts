@@ -1,5 +1,7 @@
 import {
+  bucketKey,
   bucketStart,
+  fillBuckets,
   seriesWindow,
   shiftBuckets,
 } from '@/analytics/series-window';
@@ -52,5 +54,33 @@ describe('series window', () => {
       '2025-01-01',
       '2026-01-01',
     ]);
+  });
+  it('reports a bucket by its first day, whatever time of day the row carries', () => {
+    expect(bucketKey(new Date('2026-10-19T00:00:00Z'))).toBe('2026-10-19');
+    expect(bucketKey(new Date('2026-10-19T23:59:59.999Z'))).toBe('2026-10-19');
+  });
+
+  it('fills the buckets that have rows and seeds a fresh zero in every other one', () => {
+    const { buckets } = seriesWindow('week', now);
+    const rows = [
+      { bucket: new Date('2026-10-19T00:00:00Z'), count: 3n },
+      { bucket: new Date('2026-08-03T00:00:00Z'), count: 1n },
+      // Outside the window: dropped, never appended.
+      { bucket: new Date('2026-07-27T00:00:00Z'), count: 9n },
+    ];
+
+    const filled = fillBuckets(
+      buckets,
+      rows,
+      () => ({ count: 0 }),
+      (row) => ({ count: Number(row.count) }),
+    );
+
+    expect(filled).toHaveLength(12);
+    expect(filled[0]).toEqual({ start: '2026-08-03', count: 1 });
+    expect(filled[11]).toEqual({ start: '2026-10-19', count: 3 });
+    expect(filled.slice(1, 11).every((b) => b.count === 0)).toBe(true);
+    // Each zero is its own object, so a caller mutating one cannot change another.
+    expect(filled[1]).not.toBe(filled[2]);
   });
 });

@@ -122,6 +122,119 @@ export class SeriesTotalsEntity extends SeriesWindowEntity {
   payers!: number;
 }
 
+export class SeriesOutcomeCountsEntity {
+  @ApiProperty({
+    description: 'Created in the bucket or window, any status.',
+    example: 42,
+  })
+  count!: number;
+  @ApiProperty({ example: 37 }) succeeded!: number;
+  @ApiProperty({
+    description:
+      'Given up on: failed or expired (and, for a cross-chain swap, refunded).',
+    example: 3,
+  })
+  failed!: number;
+}
+
+export class SeriesSwapBucketEntity extends SeriesOutcomeCountsEntity {
+  @ApiProperty({
+    description:
+      'The first day of the bucket (UTC; weeks start on Monday), the same as the payments bucket at that index.',
+    example: '2026-10-01',
+  })
+  start!: string;
+}
+
+export class SeriesSwapsByKindEntity {
+  @ApiProperty({ description: 'Stellar DEX swaps.', example: 30 })
+  dex!: number;
+  @ApiProperty({
+    description: 'Solana (Jupiter) and Monad (Kuru Flow) swaps. Mainnet only.',
+    example: 8,
+  })
+  chain!: number;
+  @ApiProperty({
+    description: 'Swaps between networks through NEAR Intents. Mainnet only.',
+    example: 4,
+  })
+  crossChain!: number;
+}
+
+export class SeriesSwapTotalsEntity extends SeriesOutcomeCountsEntity {
+  @ApiProperty({
+    description:
+      'Not final yet: unsigned, submitted, or a cross-chain swap awaiting or processing its deposit.',
+    example: 2,
+  })
+  inProgress!: number;
+  @ApiProperty({
+    type: SeriesSwapsByKindEntity,
+    description: 'The window’s swaps per kind, any status.',
+  })
+  byKind!: SeriesSwapsByKindEntity;
+}
+
+export class SeriesSwapsEntity {
+  @ApiProperty({
+    type: [SeriesSwapBucketEntity],
+    description:
+      'Swaps of every kind per bucket, on the same buckets as the payments, pre-seeded so a quiet bucket is a zero.',
+  })
+  buckets!: SeriesSwapBucketEntity[];
+  @ApiProperty({
+    type: SeriesSwapTotalsEntity,
+    description: 'The window the buckets cover.',
+  })
+  totals!: SeriesSwapTotalsEntity;
+  @ApiProperty({
+    type: SeriesOutcomeCountsEntity,
+    description: 'The window of the same length just before it, for growth.',
+  })
+  previous!: SeriesOutcomeCountsEntity;
+}
+
+export class SeriesLiquidityEntity {
+  @ApiProperty({
+    type: SeriesOutcomeCountsEntity,
+    description: 'Liquidity pool deposits and withdrawals in the window.',
+  })
+  totals!: SeriesOutcomeCountsEntity;
+  @ApiProperty({
+    type: SeriesOutcomeCountsEntity,
+    description: 'The window of the same length just before it, for growth.',
+  })
+  previous!: SeriesOutcomeCountsEntity;
+}
+
+export class SeriesWebhookCountsEntity {
+  @ApiProperty({
+    description: 'Deliveries created in the window, any status.',
+    example: 310,
+  })
+  deliveries!: number;
+  @ApiProperty({
+    description:
+      'Of those, the ones whose last attempt failed, as GET /v1/summary counts them (the sweeper may still redeliver one).',
+    example: 4,
+  })
+  failed!: number;
+}
+
+export class SeriesWebhooksEntity {
+  @ApiProperty({
+    type: SeriesWebhookCountsEntity,
+    description:
+      'Deliveries to every endpoint of the consumer in the window. Not scoped by network: an endpoint belongs to none.',
+  })
+  totals!: SeriesWebhookCountsEntity;
+  @ApiProperty({
+    type: SeriesWebhookCountsEntity,
+    description: 'The window of the same length just before it, for growth.',
+  })
+  previous!: SeriesWebhookCountsEntity;
+}
+
 export class AnalyticsSeriesEntity {
   @ApiProperty({ enum: ['day', 'week', 'month', 'year'], example: 'month' })
   period!: string;
@@ -141,6 +254,22 @@ export class AnalyticsSeriesEntity {
     description: 'The window of the same length just before it, for growth.',
   })
   previous!: SeriesWindowEntity;
+  @ApiProperty({
+    type: SeriesSwapsEntity,
+    description:
+      'Swaps of every kind (Stellar DEX, Solana and Monad, cross-chain) on the network the key targets: a sandbox key counts no Solana, Monad or cross-chain swap, which run on mainnet only.',
+  })
+  swaps!: SeriesSwapsEntity;
+  @ApiProperty({
+    type: SeriesLiquidityEntity,
+    description: 'Liquidity pool operations on the network the key targets.',
+  })
+  liquidity!: SeriesLiquidityEntity;
+  @ApiProperty({
+    type: SeriesWebhooksEntity,
+    description: 'Webhook deliveries to the consumer’s endpoints.',
+  })
+  webhooks!: SeriesWebhooksEntity;
 }
 
 export class AssetBalanceEntity {

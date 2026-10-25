@@ -156,7 +156,7 @@ jedem CI-Lauf aus den Controllern und DTOs neu erzeugt wird
 | Wallet-Anmeldung | `/v1/wallet` | Google / GitHub / E-Mail-Code, und das verschlüsselte Seed-Backup |
 | Assets            | `/v1/assets`             | Kuratiertes Asset-Register pro Netzwerk                   |
 | Öffentlicher Key  | `/v1/public-key`         | Der gemeinsame öffentliche API-Key, ohne Key ausgeliefert (`@Public`) |
-| Analytik          | `/v1/summary`, `/v1/balances`, `/v1/logs` | Dashboard-Aggregate und Logs             |
+| Analytik          | `/v1/summary`, `/v1/balances`, `/v1/logs` | Dashboard-Aggregate (Zahlungen, Swaps, Liquidität, Webhooks) und Logs |
 | Aktivität         | `/v1/activity`           | Vom Client gemeldete Events: Aufnahme, Feed, Zusammenfassung |
 | Plugins           | `/v1/plugins`            | Einkompilierte Erweiterungen unter einem Slug, pro Tenant installiert |
 | Admin             | `/v1/admin`              | Mandantenübergreifende Lese-/Schreibzugriffe — nur Plattform-Konsole, auditiert |
@@ -1849,6 +1849,34 @@ eingeschaltet werden.
   eingeschaltet oder nicht: `openapi:generate` schaltet alle ein.
 
 ## Upgrade — Breaking Changes und Deploy-Hinweise
+
+### Dashboard-Reihen: Swaps, Liquidität und Webhooks neben den Zahlungen
+
+- **Neue Route `GET /v1/summary/series`** (`payments:read`; `period` ist `day`,
+  `week`, `month` oder `year`): die Zahlen, die die Übersicht des Dashboards als
+  Diagramm zeigt, in 30 Tagen, 12 Wochen, 12 Monaten oder 5 Jahren an UTC-Buckets
+  (Wochen beginnen am Montag, ein Bucket ohne Aktivität ist eine Null), mit den Summen
+  des Zeitfensters und denen des unmittelbar davor liegenden, für das Wachstum.
+  Zahlungen tragen ihr abgewickeltes Volumen und ihre verschiedenen Zahlenden; Swaps
+  jeder Art werden pro Bucket gezählt und nach Art aufgeteilt (`dex` für die
+  Stellar-DEX, `chain` für Jupiter und Kuru Flow, `crossChain` für NEAR Intents);
+  Liquiditätsoperationen und Webhook-Zustellungen werden pro Zeitfenster gezählt. Es
+  aggregiert nur in Postgres: keine Migration, keine neue Variable, und keine
+  bestehende Antwort hat sich geändert.
+- **Jede Zahl hat den Geltungsbereich der eigenen Daten des Schlüssels.** Zahlungen,
+  Swaps und Liquiditätsoperationen sind die des Consumers in dem Netzwerk, auf das sein
+  Schlüssel zielt (`prod` → `public`, `dev` → `testnet`); ein Sandbox-Schlüssel
+  zählt also keinen Solana-, Monad- oder Cross-Chain-Swap, denn diese laufen nur im
+  Mainnet. Webhook-Zustellungen sind die des Consumers an allen seinen Endpoints, weil
+  ein Endpoint zu keinem Netzwerk gehört. `GET /v1/swaps`, `GET /v1/cross-chain-swaps`
+  und `GET /v1/liquidity-pools/operations` filtern nicht nach Netzwerk, ihre Summen
+  können also größer sein als die der Reihe.
+- **Erfolgreich, fehlgeschlagen und laufend sind eine Tabelle pro Modell** in
+  `src/analytics/analytics.constants.ts`: Ein fehlgeschlagener oder abgelaufener Swap
+  oder eine solche Operation zählt als fehlgeschlagen, ebenso ein erstatteter
+  Cross-Chain-Swap; alles, was nicht endgültig ist, läuft noch. Ein neuer Wert von
+  `SwapStatus` oder `CrossChainSwapStatus` kompiliert erst, wenn er dort zugeordnet
+  ist.
 
 ### Chain-übergreifende Swaps: jedes NEAR-Intents-Netzwerk und ein nullable `depositUri`
 

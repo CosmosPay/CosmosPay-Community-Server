@@ -154,7 +154,7 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | Wallet sign-in    | `/v1/wallet`             | Google / GitHub / ईमेल कोड, और एन्क्रिप्टेड seed बैकअप |
 | एसेट्स            | `/v1/assets`             | प्रति नेटवर्क चुनी हुई एसेट रजिस्ट्री                   |
 | पब्लिक key         | `/v1/public-key`         | साझा public API key, बिना key के दी जाती है (`@Public`) |
-| Analytics         | `/v1/summary`, `/v1/balances`, `/v1/logs` | डैशबोर्ड के aggregates और लॉग           |
+| Analytics         | `/v1/summary`, `/v1/balances`, `/v1/logs` | डैशबोर्ड के aggregates (payments, swaps, liquidity, webhooks) और लॉग |
 | एक्टिविटी         | `/v1/activity`           | client द्वारा रिपोर्ट किए गए events: ingest, feed, rollup |
 | Plugins           | `/v1/plugins`            | एक slug के तहत compile किए गए extensions, हर tenant के लिए install |
 | Admin             | `/v1/admin`              | Cross-tenant reads/writes — केवल प्लेटफ़ॉर्म कंसोल, audited |
@@ -1750,6 +1750,31 @@ seal होती हैं और कभी लौटाई नहीं जा
   `openapi:generate` सभी को चालू करता है।
 
 ## अपग्रेड — breaking changes और deploy नोट्स
+
+### Dashboard series: payments के साथ swaps, liquidity और webhooks
+
+- **नया route `GET /v1/summary/series`** (`payments:read`; `period` `day`, `week`,
+  `month` या `year` है): वे आँकड़े जिन्हें dashboard का overview chart करता है, UTC
+  buckets के 30 दिन, 12 हफ़्ते, 12 महीने या 5 साल (हफ़्ते सोमवार से शुरू होते हैं, बिना
+  गतिविधि वाला bucket शून्य होता है), window के totals और ठीक पहले वाली window के
+  totals के साथ, growth के लिए। Payments अपना settled volume और अलग-अलग payers साथ
+  लाते हैं; हर तरह के swaps प्रति bucket गिने जाते हैं और kind के अनुसार बाँटे जाते हैं
+  (Stellar DEX के लिए `dex`, Jupiter और Kuru Flow के लिए `chain`, NEAR Intents के
+  लिए `crossChain`); liquidity operations और webhook deliveries प्रति window गिने जाते
+  हैं। यह सिर्फ़ Postgres में aggregate करता है: कोई migration नहीं, कोई नया variable
+  नहीं, और कोई मौजूदा response नहीं बदला।
+- **हर आँकड़े का scope key के अपने data जैसा है।** Payments, swaps और liquidity
+  operations उस consumer के हैं, उस network पर जिसे उसकी key target करती है
+  (`prod` → `public`, `dev` → `testnet`), इसलिए sandbox key कोई Solana, Monad या
+  cross-chain swap नहीं गिनती: वे सिर्फ़ mainnet पर चलते हैं। Webhook deliveries
+  consumer के हर endpoint की होती हैं, क्योंकि कोई endpoint किसी network का नहीं होता।
+  `GET /v1/swaps`, `GET /v1/cross-chain-swaps` और `GET /v1/liquidity-pools/operations`
+  network के अनुसार filter नहीं करते, इसलिए उनके totals series से बड़े हो सकते हैं।
+- **Succeeded, failed और in progress हर model के लिए एक table हैं**
+  `src/analytics/analytics.constants.ts` में: failed या expired swap या operation
+  failed गिना जाता है, और refunded cross-chain swap भी; जो कुछ final नहीं है वह in
+  progress है। `SwapStatus` या `CrossChainSwapStatus` का नया value तब तक compile नहीं
+  होता जब तक उसे वहाँ map न किया जाए।
 
 ### क्रॉस-चेन swaps: NEAR Intents का हर network, और nullable `depositUri`
 

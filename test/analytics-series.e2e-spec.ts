@@ -10,7 +10,8 @@ import { AllExceptionsFilter } from '@/common/filters/all-exceptions.filter';
 import { PrismaService } from '@/prisma/prisma.service';
 
 /**
- * `GET /v1/summary/series`: the dashboard chart's payments grouped by period.
+ * `GET /v1/summary/series`: the dashboard chart's payments, swaps, liquidity operations and
+ * webhook deliveries grouped by period.
  *
  * The aggregation is the service spec's; this suite pins the wiring in front of it: the
  * gateway gate, the `payments:read` scope, the period the DTO accepts, and the shape that
@@ -108,11 +109,51 @@ describe('Summary series (e2e)', () => {
       failed: 0,
       volume: '0',
     });
+    // Swaps on the same buckets as the payments, so the dashboard charts them side by side.
+    expect(res.body.swaps.buckets).toHaveLength(12);
+    expect(
+      res.body.swaps.buckets.map((b: { start: string }) => b.start),
+    ).toEqual(res.body.buckets.map((b: { start: string }) => b.start));
+    expect(res.body.swaps.buckets[0]).toEqual({
+      start: res.body.buckets[0].start,
+      count: 0,
+      succeeded: 0,
+      failed: 0,
+    });
+    expect(res.body.swaps.totals).toEqual({
+      count: 0,
+      succeeded: 0,
+      failed: 0,
+      inProgress: 0,
+      byKind: { dex: 0, chain: 0, crossChain: 0 },
+    });
+    expect(res.body.swaps.previous).toEqual({
+      count: 0,
+      succeeded: 0,
+      failed: 0,
+    });
+    expect(res.body.liquidity).toEqual({
+      totals: { count: 0, succeeded: 0, failed: 0 },
+      previous: { count: 0, succeeded: 0, failed: 0 },
+    });
+    expect(res.body.webhooks).toEqual({
+      totals: { deliveries: 0, failed: 0 },
+      previous: { deliveries: 0, failed: 0 },
+    });
   });
 
   it('groups by day when no period is named', async () => {
     const res = await tenant('/v1/summary/series', 'payments:read').expect(200);
     expect(res.body.period).toBe('day');
     expect(res.body.buckets).toHaveLength(30);
+    expect(res.body.swaps.buckets).toHaveLength(30);
+  });
+
+  it('aggregates in Postgres and never fetches a row of any model it counts', async () => {
+    prismaMock.$queryRaw.mockClear();
+    await tenant('/v1/summary/series?period=week', 'payments:read').expect(200);
+    // Payments twice, swaps twice, liquidity and webhooks once each; the mock has no
+    // `findMany` on any of those models, so fetching rows would have been a 500.
+    expect(prismaMock.$queryRaw).toHaveBeenCalledTimes(6);
   });
 });

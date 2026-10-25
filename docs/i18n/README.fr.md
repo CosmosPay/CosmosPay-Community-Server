@@ -155,7 +155,7 @@ régénéré à partir des contrôleurs et des DTO à chaque exécution de la CI
 | Connexion du portefeuille | `/v1/wallet` | Google / GitHub / code par e-mail, et la sauvegarde chiffrée de la seed |
 | Actifs                 | `/v1/assets`             | Registre d'actifs sélectionnés, par réseau               |
 | Clé publique           | `/v1/public-key`         | La clé API publique partagée, servie sans clé (`@Public`) |
-| Analytique             | `/v1/summary`, `/v1/balances`, `/v1/logs` | Agrégats et journaux du tableau de bord  |
+| Analytique             | `/v1/summary`, `/v1/balances`, `/v1/logs` | Agrégats (paiements, swaps, liquidité, webhooks) et journaux du tableau de bord |
 | Activité               | `/v1/activity`           | Événements rapportés par les clients : ingestion, flux, agrégation |
 | Plugins                | `/v1/plugins`            | Extensions compilées sous un slug, installées par tenant |
 | Admin                  | `/v1/admin`              | Lectures/écritures inter-tenants — console de la plateforme uniquement, auditées |
@@ -1815,6 +1815,33 @@ plugins isolés.
   `openapi:generate` les active tous.
 
 ## Mise à niveau — changements incompatibles et notes de déploiement
+
+### Séries du tableau de bord : swaps, liquidité et webhooks à côté des paiements
+
+- **Nouvelle route `GET /v1/summary/series`** (`payments:read` ; `period` vaut `day`,
+  `week`, `month` ou `year`) : les chiffres que la vue d'ensemble du tableau de bord
+  met en graphique, en 30 jours, 12 semaines, 12 mois ou 5 ans de buckets en UTC (les
+  semaines commencent le lundi, un bucket sans activité vaut zéro), avec les totaux de
+  la fenêtre et ceux de la fenêtre qui la précède, pour la croissance. Les paiements
+  portent leur volume réglé et leurs payeurs distincts ; les swaps de tout type sont
+  comptés par bucket et ventilés par type (`dex` pour le DEX Stellar, `chain` pour
+  Jupiter et Kuru Flow, `crossChain` pour NEAR Intents) ; les opérations de liquidité
+  et les livraisons de webhooks sont comptées par fenêtre. Ce n'est qu'une agrégation
+  dans Postgres : pas de migration, pas de nouvelle variable, et aucune réponse
+  existante n'a changé.
+- **Chaque chiffre a la portée des données de la clé.** Les paiements, swaps et
+  opérations de liquidité sont ceux du consumer sur le réseau que vise sa clé
+  (`prod` → `public`, `dev` → `testnet`) : une clé de sandbox ne compte donc aucun
+  swap Solana, Monad ou inter-chaînes, qui ne tournent que sur mainnet. Les livraisons
+  de webhooks sont celles du consumer sur tous ses endpoints, car un endpoint
+  n'appartient à aucun réseau. `GET /v1/swaps`, `GET /v1/cross-chain-swaps` et
+  `GET /v1/liquidity-pools/operations` ne filtrent pas par réseau : leurs totaux
+  peuvent dépasser ceux de la série.
+- **Réussi, échoué et en cours forment une table par modèle** dans
+  `src/analytics/analytics.constants.ts` : un swap ou une opération en échec ou expiré
+  compte comme échoué, tout comme un swap inter-chaînes remboursé ; tout ce qui n'est
+  pas final est en cours. Une nouvelle valeur de `SwapStatus` ou `CrossChainSwapStatus`
+  ne compile pas tant qu'elle n'y est pas associée.
 
 ### Swaps inter-chaînes : tous les réseaux de NEAR Intents, et un `depositUri` nullable
 

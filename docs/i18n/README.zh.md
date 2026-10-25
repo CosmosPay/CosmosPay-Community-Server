@@ -126,7 +126,7 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | 钱包登录 | `/v1/wallet` | Google / GitHub / 邮件验证码，以及加密的助记词备份 |
 | 资产 | `/v1/assets` | 按网络划分的精选资产注册表 |
 | 公共 key | `/v1/public-key` | 共享的公共 API key，无需 key 即可获取（`@Public`） |
-| 分析 | `/v1/summary`, `/v1/balances`, `/v1/logs` | 仪表盘汇总与日志 |
+| 分析 | `/v1/summary`, `/v1/balances`, `/v1/logs` | 仪表盘汇总（支付、swap、流动性、webhook）与日志 |
 | 活动 | `/v1/activity` | 客户端上报的事件：接收、事件流、汇总 |
 | 插件 | `/v1/plugins` | 以 slug 命名的编译内置扩展，按 tenant 安装 |
 | 管理 | `/v1/admin` | 跨租户读写 — 仅限平台控制台，全程审计 |
@@ -1212,6 +1212,12 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
 - **OpenAPI 契约记录每个原生插件的路由**，无论是否开启：`openapi:generate` 会全部开启。
 
 ## 升级 — 破坏性变更与部署说明
+
+### 仪表盘序列：支付旁边的 swap、流动性与 webhook
+
+- **新路由 `GET /v1/summary/series`**（`payments:read`；`period` 为 `day`、`week`、`month` 或 `year`）：仪表盘概览所绘制的数据，按 UTC 分桶，覆盖 30 天、12 周、12 个月或 5 年（每周从周一开始，没有活动的桶为零），并附带该窗口的合计以及紧邻其前一个窗口的合计，用于计算增长。支付带有已结算金额和不同付款方数量；各类 swap 按桶计数并按类型拆分（`dex` 表示 Stellar DEX，`chain` 表示 Jupiter 和 Kuru Flow，`crossChain` 表示 NEAR Intents）；流动性操作和 webhook 投递按窗口计数。它只在 Postgres 中聚合：无迁移、无新变量，现有响应均未改变。
+- **每个数字的范围与该 key 自身的数据一致。** 支付、swap 和流动性操作是该 consumer 在其 key 所指向网络上的数据（`prod` → `public`，`dev` → `testnet`），因此 sandbox key 不会计入任何 Solana、Monad 或跨链 swap：它们只在主网运行。webhook 投递是该 consumer 所有 endpoint 上的投递，因为 endpoint 不属于任何网络。`GET /v1/swaps`、`GET /v1/cross-chain-swaps` 和 `GET /v1/liquidity-pools/operations` 不按网络过滤，因此它们的合计可能大于序列中的合计。
+- **成功、失败和进行中由每个模型的一张表定义**，位于 `src/analytics/analytics.constants.ts`：失败或过期的 swap 或操作计为失败，被退款的跨链 swap 也是如此；所有尚未终结的都算进行中。`SwapStatus` 或 `CrossChainSwapStatus` 的新值在那里完成映射之前无法通过编译。
 
 ### 跨链 swap：NEAR Intents 的每个网络，以及可为空的 `depositUri`
 

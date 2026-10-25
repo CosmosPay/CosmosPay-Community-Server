@@ -156,7 +156,7 @@ se regenera a partir de los controllers y DTOs en cada ejecución de CI
 | Inicio de sesión del wallet | `/v1/wallet` | Google / GitHub / código por email, y el respaldo cifrado de la semilla |
 | Activos               | `/v1/assets`             | Registro curado de activos por red                        |
 | Key pública           | `/v1/public-key`         | La API key pública compartida, servida sin key (`@Public`) |
-| Analítica             | `/v1/summary`, `/v1/balances`, `/v1/logs` | Agregados y logs del dashboard           |
+| Analítica             | `/v1/summary`, `/v1/balances`, `/v1/logs` | Agregados (pagos, swaps, liquidez, webhooks) y logs del dashboard |
 | Actividad             | `/v1/activity`           | Eventos reportados por los clientes: ingesta, feed, resumen |
 | Plugins               | `/v1/plugins`            | Extensiones compiladas bajo un slug, instaladas por tenant |
 | Administración        | `/v1/admin`              | Lecturas/escrituras entre tenants — solo consola de la plataforma, auditadas |
@@ -1824,6 +1824,32 @@ misma lista `PLUGINS_ENABLED` que los plugins aislados.
   activados o no: `openapi:generate` los activa todos.
 
 ## Actualización — cambios incompatibles y notas de despliegue
+
+### Series del dashboard: swaps, liquidez y webhooks junto a los pagos
+
+- **Nueva ruta `GET /v1/summary/series`** (`payments:read`; `period` es `day`, `week`,
+  `month` o `year`): las cifras que grafica el resumen del dashboard, en 30 días, 12
+  semanas, 12 meses o 5 años de buckets en UTC (las semanas empiezan el lunes, un bucket
+  sin actividad es un cero), con los totales de la ventana y los de la ventana
+  inmediatamente anterior, para el crecimiento. Los pagos llevan su volumen liquidado y
+  sus pagadores distintos; los swaps de todo tipo se cuentan por bucket y se dividen por
+  tipo (`dex` para el DEX de Stellar, `chain` para Jupiter y Kuru Flow, `crossChain`
+  para NEAR Intents); las operaciones de liquidez y las entregas de webhooks se cuentan
+  por ventana. Solo agrega en Postgres: sin migración, sin variable nueva, y ninguna
+  respuesta existente cambió.
+- **Cada cifra tiene el alcance de los propios datos de la key.** Pagos, swaps y
+  operaciones de liquidez son los del consumer en la red a la que apunta su key
+  (`prod` → `public`, `dev` → `testnet`), así que una key de sandbox no cuenta ningún
+  swap de Solana, Monad ni entre redes: esos corren solo en mainnet. Las entregas de
+  webhooks son las del consumer en todos sus endpoints, porque un endpoint no pertenece
+  a ninguna red. `GET /v1/swaps`, `GET /v1/cross-chain-swaps` y
+  `GET /v1/liquidity-pools/operations` no filtran por red, así que sus totales pueden
+  ser mayores que los de la serie.
+- **Exitoso, fallido y en curso son una tabla por modelo** en
+  `src/analytics/analytics.constants.ts`: un swap u operación fallido o expirado cuenta
+  como fallido, y también un swap entre redes reembolsado; todo lo que no es final está
+  en curso. Un valor nuevo de `SwapStatus` o `CrossChainSwapStatus` no compila hasta
+  que se mapea ahí.
 
 ### Swaps entre redes: todas las redes de NEAR Intents, y un `depositUri` nullable
 
