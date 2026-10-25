@@ -489,6 +489,11 @@ class EnvironmentVariables {
   @IsBooleanString()
   PLUGINS_ALLOW_UNSIGNED?: string;
 
+  /** Waive a commission with no recipient, locally only; refused in production below. */
+  @IsOptional()
+  @IsBooleanString()
+  SWAP_COMMISSION_DEV_WAIVER?: string;
+
   @IsOptional()
   @IsUrl(URL_OPTIONS)
   DEFINDEX_BASE_URL?: string;
@@ -584,6 +589,17 @@ export function validateEnv(config: Record<string, unknown>) {
   if (errors.length > 0) {
     throw new Error(
       `Invalid environment configuration:\n${formatValidationErrors(errors)}`,
+    );
+  }
+
+  if (
+    validated.NODE_ENV === 'production' &&
+    String(validated.SWAP_COMMISSION_DEV_WAIVER ?? '').toLowerCase() === 'true'
+  ) {
+    throw new Error(
+      'SWAP_COMMISSION_DEV_WAIVER=true is refused when NODE_ENV=production: it gives ' +
+        'swaps away with no commission whenever a fee recipient is missing. Set ' +
+        'NEAR_INTENTS_FEE_RECIPIENT, SOLANA_SWAP_FEE_WALLET and MONAD_SWAP_FEE_WALLET instead.',
     );
   }
 

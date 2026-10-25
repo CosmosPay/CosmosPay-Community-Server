@@ -96,6 +96,13 @@ export interface BlindpayInstanceConfig {
 
 export interface AppConfig {
   nodeEnv: string;
+  /**
+   * `SWAP_COMMISSION_DEV_WAIVER`: outside production, a plan commission whose recipient is
+   * not configured is waived (and logged) instead of answering 503 `misconfigured`, so a
+   * local service can price and build swaps on chains whose fee accounts only the operator
+   * holds. Refused at boot when NODE_ENV=production (env.validation.ts).
+   */
+  swapCommissionDevWaiver: boolean;
   /** When true, mounts /docs (Express middleware — not behind Nest guards). */
   swaggerEnabled: boolean;
   openapi: {
@@ -605,6 +612,9 @@ function signersHorizons(): Record<StellarNetwork, string> {
 
 export default (): AppConfig => ({
   nodeEnv: process.env.NODE_ENV ?? 'development',
+  swapCommissionDevWaiver:
+    (process.env.SWAP_COMMISSION_DEV_WAIVER ?? 'false').toLowerCase() ===
+    'true',
   swaggerEnabled: parseSwaggerEnabled(),
   openapi: {
     serverUrl: process.env.OPENAPI_SERVER_URL ?? '',

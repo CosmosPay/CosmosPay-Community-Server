@@ -305,6 +305,7 @@ Les chemins utilisent la forme OpenAPI `{param}`.
 | GET | `/v1/sep30/shares/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | DELETE | `/v1/sep30/shares/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | GET | `/v1/summary` | `payments:read` |  |
+| GET | `/v1/summary/series` | `payments:read` |  |
 | GET | `/v1/swaps` | `swaps:read` |  |
 | POST | `/v1/swaps` | `swaps:write` | ✓ |
 | POST | `/v1/swaps/quote` | `swaps:read` | ✓ |
@@ -2469,6 +2470,7 @@ Chaque variable lue depuis `process.env` dans `src/` est validée au démarrage 
 | `NEAR_INTENTS_BASE_URL` | non | `https://1click.chaindefuser.com` | API 1Click de NEAR Intents, pour les swaps inter-chaînes |
 | `NEAR_INTENTS_API_KEY` | recommandée | — | Clé partenaire 1Click (`X-API-Key`). Sans elle, 1Click ajoute ses propres frais de 0,2 % et garde la moitié de la commission |
 | `NEAR_INTENTS_FEE_RECIPIENT` | avec une commission de plan | — | Compte NEAR qui reçoit la commission inter-chaînes (`appFees`). Absent avec un taux de plan : `503 misconfigured` |
+| `SWAP_COMMISSION_DEV_WAIVER` | non | `false` | Hors production, renonce (en le journalisant) à une commission de plan dont le destinataire (`NEAR_INTENTS_FEE_RECIPIENT`, `SOLANA_SWAP_FEE_WALLET`, `MONAD_SWAP_FEE_WALLET`) n'est pas configuré, au lieu de répondre `503 misconfigured`. Pour un service local uniquement : le démarrage le refuse quand `NODE_ENV=production` |
 | `NEAR_INTENTS_TIMEOUT_MS` | non | `20000` | Budget d'un appel à 1Click (ms) |
 | `CROSS_CHAIN_SWAP_SLIPPAGE_BPS` | non | `100` | Slippage inter-chaînes par défaut (bps) ; sous le minimum, NEAR Intents rembourse |
 | `CROSS_CHAIN_SWAP_MAX_SLIPPAGE_BPS` | non | `500` | Le slippage maximal qu'un appelant peut demander |

@@ -6,11 +6,13 @@ import { RequirePermissions } from '@/common/decorators/require-permissions.deco
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import {
   AnalyticsBalancesEntity,
+  AnalyticsSeriesEntity,
   AnalyticsSummaryEntity,
   ApiLogListEntity,
   WebhookLogListEntity,
 } from '@/analytics/entities/analytics.entity';
 import { AnalyticsService } from '@/analytics/analytics.service';
+import { SummarySeriesQueryDto } from '@/analytics/dto/summary-series.query.dto';
 
 // Read-only dashboard aggregates. URI versioning => /v1/...
 @ApiTags('analytics')
@@ -27,6 +29,20 @@ export class AnalyticsController {
   @ApiOkResponse({ type: AnalyticsSummaryEntity })
   summary(@CurrentConsumer() consumer: GatewayConsumer) {
     return this.analytics.summary(consumer);
+  }
+
+  @Get('summary/series')
+  @RequirePermissions('payments:read')
+  @ApiOperation({
+    summary:
+      'Payments grouped by day, week, month or year, with the window before for growth',
+  })
+  @ApiOkResponse({ type: AnalyticsSeriesEntity })
+  series(
+    @CurrentConsumer() consumer: GatewayConsumer,
+    @Query() query: SummarySeriesQueryDto,
+  ) {
+    return this.analytics.series(consumer, query.period ?? 'day');
   }
 
   @Get('balances')

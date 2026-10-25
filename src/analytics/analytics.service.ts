@@ -9,7 +9,8 @@ import { page } from '@/common/pagination';
 import { resolveNetwork } from '@/common/stellar-network';
 import { PrismaService } from '@/prisma/prisma.service';
 import { Prisma, type PaymentIntentStatus } from '@generated/prisma/client';
-import { DAY_MS } from '@/analytics/analytics.constants';
+import { DAY_MS, type SeriesPeriod } from '@/analytics/analytics.constants';
+import { seriesWindow } from '@/analytics/series-window';
 import {
   isChain,
   MAX_TOKEN_DECIMALS,
@@ -271,6 +272,111 @@ export class AnalyticsService {
   }
 
   // ── Balances (settled per asset) ────────────────────────────────────────────
+  /**
+   * The dashboard chart's series (`GET /v1/summary/series`): payments grouped by day, week,
+   * month or year (30, 12, 12, 5 buckets), each bucket's count, settled and failed counts and
+   * settled volume, pre-seeded so a quiet bucket is a zero; plus the window's totals (with its
+   * distinct payers) and the same figures for the window just before it, for growth. Two
+   * aggregations in Postgres, bounded by the window; no row is materialized. As in `summary`,
+   * volume adds every asset's amount (the dashboard labels it so).
+   */
+  async series(consumer: GatewayConsumer, period: SeriesPeriod) {
+    const consumerId = await this.resolveConsumerId(consumer);
+    const network = this.network(consumer);
+    const { buckets, since, previousSince } = seriesWindow(period, new Date());
+    // `period` is one of SERIES_PERIODS (the DTO checks it), so it is safe as SQL text.
+    const unit = Prisma.raw(`'${period}'`);
+
+    const [bucketRows, windowRows] = await Promise.all([
+      this.prisma.$queryRaw<
+        {
+          bucket: Date;
+          count: bigint;
+          succeeded: bigint;
+          failed: bigint;
+          volume: string | null;
+        }[]
+      >`
+        SELECT date_trunc(${unit}, "createdAt") AS bucket,
+               COUNT(*) AS count,
+               COUNT(*) FILTER (WHERE "status" = 'SUCCEEDED') AS succeeded,
+               COUNT(*) FILTER (WHERE "status" IN ('FAILED', 'CANCELLED', 'EXPIRED')) AS failed,
+               SUM("amount"::numeric) FILTER (WHERE "status" = 'SUCCEEDED') AS volume
+        FROM "payment_intent"
+        WHERE "consumerId" = ${consumerId}
+          AND "network" = ${network}
+          AND "createdAt" >= ${since}
+        GROUP BY 1
+      `,
+      this.prisma.$queryRaw<
+        {
+          current: boolean;
+          count: bigint;
+          succeeded: bigint;
+          failed: bigint;
+          volume: string | null;
+          payers: bigint;
+        }[]
+      >`
+        SELECT ("createdAt" >= ${since}) AS current,
+               COUNT(*) AS count,
+               COUNT(*) FILTER (WHERE "status" = 'SUCCEEDED') AS succeeded,
+               COUNT(*) FILTER (WHERE "status" IN ('FAILED', 'CANCELLED', 'EXPIRED')) AS failed,
+               SUM("amount"::numeric) FILTER (WHERE "status" = 'SUCCEEDED') AS volume,
+               COUNT(DISTINCT "source") FILTER (WHERE "status" = 'SUCCEEDED') AS payers
+        FROM "payment_intent"
+        WHERE "consumerId" = ${consumerId}
+          AND "network" = ${network}
+          AND "createdAt" >= ${previousSince}
+        GROUP BY 1
+      `,
+    ]);
+
+    const key = (d: Date) => new Date(d).toISOString().slice(0, 10);
+    const seeded = buckets.map((start) => ({
+      start: key(start),
+      count: 0,
+      succeeded: 0,
+      failed: 0,
+      volume: '0',
+    }));
+    const index = new Map(seeded.map((b, i) => [b.start, i]));
+    for (const row of bucketRows) {
+      const i = index.get(key(row.bucket));
+      if (i === undefined) continue;
+      seeded[i] = {
+        start: seeded[i].start,
+        count: toCount(row.count),
+        succeeded: toCount(row.succeeded),
+        failed: toCount(row.failed),
+        volume: formatNumericAmount(row.volume),
+      };
+    }
+    const window = (current: boolean) => {
+      const row = windowRows.find((r) => r.current === current);
+      return {
+        count: toCount(row?.count),
+        succeeded: toCount(row?.succeeded),
+        failed: toCount(row?.failed),
+        volume: formatNumericAmount(row?.volume ?? null),
+        payers: toCount(row?.payers),
+      };
+    };
+    const totals = window(true);
+    const before = window(false);
+    return {
+      period,
+      buckets: seeded,
+      totals,
+      previous: {
+        count: before.count,
+        succeeded: before.succeeded,
+        failed: before.failed,
+        volume: before.volume,
+      },
+    };
+  }
+
   async balances(consumer: GatewayConsumer) {
     const consumerId = await this.resolveConsumerId(consumer);
     const network = this.network(consumer);

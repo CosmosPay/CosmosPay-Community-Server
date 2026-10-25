@@ -271,6 +271,7 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | GET | `/v1/sep30/shares/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | DELETE | `/v1/sep30/shares/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | GET | `/v1/summary` | `payments:read` |  |
+| GET | `/v1/summary/series` | `payments:read` |  |
 | GET | `/v1/swaps` | `swaps:read` |  |
 | POST | `/v1/swaps` | `swaps:write` | ✓ |
 | POST | `/v1/swaps/quote` | `swaps:read` | ✓ |
@@ -1648,6 +1649,7 @@ curl -H "X-Gateway-Secret: $APISIX_GATEWAY_SECRET" -H "X-Consumer-Username: ops"
 | `NEAR_INTENTS_BASE_URL` | 否 | `https://1click.chaindefuser.com` | NEAR Intents 的 1Click API，用于跨链 swap |
 | `NEAR_INTENTS_API_KEY` | 建议 | — | 1Click 合作伙伴 key（`X-API-Key`）。没有它时 1Click 加收自己的 0.2% 费用，并拿走一半佣金 |
 | `NEAR_INTENTS_FEE_RECIPIENT` | 有套餐佣金时 | — | 接收跨链佣金的 NEAR 账户（`appFees`）。有套餐费率却未设置：`503 misconfigured` |
+| `SWAP_COMMISSION_DEV_WAIVER` | 否 | `false` | 在非生产环境中，套餐佣金的接收方（`NEAR_INTENTS_FEE_RECIPIENT`, `SOLANA_SWAP_FEE_WALLET`, `MONAD_SWAP_FEE_WALLET`）未设置时免除该佣金（并记录日志），而不是返回 `503 misconfigured`。仅用于本地服务：`NODE_ENV=production` 时启动会拒绝 |
 | `NEAR_INTENTS_TIMEOUT_MS` | 否 | `20000` | 单次 1Click 调用的时间预算（毫秒） |
 | `CROSS_CHAIN_SWAP_SLIPPAGE_BPS` | 否 | `100` | 跨链默认滑点（bps）；低于最小值时 NEAR Intents 退款 |
 | `CROSS_CHAIN_SWAP_MAX_SLIPPAGE_BPS` | 否 | `500` | 调用方可请求的最大滑点 |

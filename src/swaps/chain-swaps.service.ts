@@ -11,7 +11,10 @@ import type { OtherChain } from '@/chains/chains.constants';
 import { formatUnits, parseUnits } from '@/chains/units';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
-import { resolvePlanCommissionBps } from '@/common/plan-commission';
+import {
+  commissionWithRecipient,
+  resolvePlanCommissionBps,
+} from '@/common/plan-commission';
 import { isUniqueViolation } from '@/common/prisma-errors';
 import { project } from '@/common/projection';
 import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
@@ -417,15 +420,15 @@ export class ChainSwapsService {
       dto.slippageBps,
       this.config.get('stellar', { infer: true }).swap,
     );
-    const feeBps = resolvePlanCommissionBps(this.config, consumer);
     const feeWallet = this.config.get(chain, { infer: true }).swapFeeWallet;
-    // A commission with nowhere to go is a misconfiguration, not a free swap.
-    if (feeBps > 0 && !feeWallet) {
-      throw ApiError.unavailable(
-        ApiErrorCode.Misconfigured,
-        `A swap commission applies to this plan but ${chain.toUpperCase()}_SWAP_FEE_WALLET is not set`,
-      );
-    }
+    // A commission with nowhere to go is a misconfiguration, not a free swap
+    // (waived only by SWAP_COMMISSION_DEV_WAIVER, outside production).
+    const feeBps = commissionWithRecipient(
+      this.config,
+      resolvePlanCommissionBps(this.config, consumer),
+      feeWallet,
+      `${chain.toUpperCase()}_SWAP_FEE_WALLET`,
+    );
     return {
       chain,
       request: {

@@ -86,6 +86,63 @@ export class AnalyticsSummaryEntity {
   recent!: RecentPaymentEntity[];
 }
 
+export class SeriesBucketEntity {
+  @ApiProperty({
+    description: 'The first day of the bucket (UTC; weeks start on Monday).',
+    example: '2026-10-01',
+  })
+  start!: string;
+  @ApiProperty({
+    description: 'Payments created in the bucket, any status.',
+    example: 31,
+  })
+  count!: number;
+  @ApiProperty({ example: 27 }) succeeded!: number;
+  @ApiProperty({ description: 'Failed, cancelled or expired.', example: 3 })
+  failed!: number;
+  @ApiProperty({
+    description: 'Settled volume, every asset added.',
+    example: '1842.5',
+  })
+  volume!: string;
+}
+
+export class SeriesWindowEntity {
+  @ApiProperty({ example: 284 }) count!: number;
+  @ApiProperty({ example: 251 }) succeeded!: number;
+  @ApiProperty({ example: 19 }) failed!: number;
+  @ApiProperty({ example: '17410.25' }) volume!: string;
+}
+
+export class SeriesTotalsEntity extends SeriesWindowEntity {
+  @ApiProperty({
+    description: 'Distinct paying accounts in the window.',
+    example: 96,
+  })
+  payers!: number;
+}
+
+export class AnalyticsSeriesEntity {
+  @ApiProperty({ enum: ['day', 'week', 'month', 'year'], example: 'month' })
+  period!: string;
+  @ApiProperty({
+    type: [SeriesBucketEntity],
+    description:
+      '30 days, 12 weeks, 12 months or 5 years, oldest first, pre-seeded so a quiet bucket is a zero.',
+  })
+  buckets!: SeriesBucketEntity[];
+  @ApiProperty({
+    type: SeriesTotalsEntity,
+    description: 'The window the buckets cover.',
+  })
+  totals!: SeriesTotalsEntity;
+  @ApiProperty({
+    type: SeriesWindowEntity,
+    description: 'The window of the same length just before it, for growth.',
+  })
+  previous!: SeriesWindowEntity;
+}
+
 export class AssetBalanceEntity {
   @ApiProperty({ enum: CHAINS, example: 'stellar' }) chain!: string;
   @ApiProperty({ example: 'XLM' }) asset!: string;

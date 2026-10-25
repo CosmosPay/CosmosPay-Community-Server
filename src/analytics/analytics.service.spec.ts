@@ -221,3 +221,132 @@ describe('AnalyticsService', () => {
     expect(result.data[0].pending).toBe('0.1');
   });
 });
+
+describe('AnalyticsService.series', () => {
+  afterEach(() => jest.useRealTimers());
+
+  function build(bucketRows: unknown[], windowRows: unknown[]) {
+    const queryRaw = jest
+      .fn()
+      .mockResolvedValueOnce(bucketRows)
+      .mockResolvedValueOnce(windowRows);
+    const config = { get: () => ({ network: 'testnet' }) };
+    const prisma = {
+      consumer: { upsert: jest.fn().mockResolvedValue({ id: 'c1' }) },
+      paymentIntent: { findMany: jest.fn() },
+      $queryRaw: queryRaw,
+    };
+    const service = new AnalyticsService(
+      prisma as never,
+      config as never,
+      new ConsumerResolverService(prisma as never),
+    );
+    return { service, queryRaw, prisma };
+  }
+
+  it('groups by the asked period in Postgres and seeds every bucket', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-10-22T15:30:00Z'));
+    const { service, queryRaw, prisma } = build(
+      [
+        {
+          bucket: new Date('2026-10-01T00:00:00Z'),
+          count: 5n,
+          succeeded: 4n,
+          failed: 1n,
+          volume: '120.5000000',
+        },
+      ],
+      [
+        {
+          current: true,
+          count: 5n,
+          succeeded: 4n,
+          failed: 1n,
+          volume: '120.5',
+          payers: 3n,
+        },
+        {
+          current: false,
+          count: 2n,
+          succeeded: 2n,
+          failed: 0n,
+          volume: '80',
+          payers: 2n,
+        },
+      ],
+    );
+
+    const result = await service.series(consumer, 'month');
+
+    expect(result.period).toBe('month');
+    expect(result.buckets).toHaveLength(12);
+    expect(result.buckets[0]).toEqual({
+      start: '2025-11-01',
+      count: 0,
+      succeeded: 0,
+      failed: 0,
+      volume: '0',
+    });
+    expect(result.buckets[11]).toEqual({
+      start: '2026-10-01',
+      count: 5,
+      succeeded: 4,
+      failed: 1,
+      volume: '120.5',
+    });
+    expect(result.totals).toEqual({
+      count: 5,
+      succeeded: 4,
+      failed: 1,
+      volume: '120.5',
+      payers: 3,
+    });
+    expect(result.previous).toEqual({
+      count: 2,
+      succeeded: 2,
+      failed: 0,
+      volume: '80',
+    });
+    // Two aggregations, no row fetched.
+    expect(queryRaw).toHaveBeenCalledTimes(2);
+    expect(prisma.paymentIntent.findMany).not.toHaveBeenCalled();
+    // A Prisma.raw fragment (the period) is spliced in as its text; a bound value is a `?`.
+    const [strings, ...values] = queryRaw.mock.calls[0] as [
+      string[],
+      ...unknown[],
+    ];
+    const sql = strings
+      .map((part, i) => {
+        if (i === strings.length - 1) return part;
+        const value = values[i];
+        return value instanceof Prisma.Sql ? part + value.sql : `${part}?`;
+      })
+      .join('')
+      .replace(/\s+/g, ' ');
+    expect(sql).toContain(`date_trunc('month', "createdAt")`);
+    expect(sql).toContain('GROUP BY 1');
+  });
+
+  it('answers zeros for a window with no payments', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-10-22T15:30:00Z'));
+    const { service } = build([], []);
+
+    const result = await service.series(consumer, 'year');
+
+    expect(result.buckets.map((b) => b.start)).toEqual([
+      '2022-01-01',
+      '2023-01-01',
+      '2024-01-01',
+      '2025-01-01',
+      '2026-01-01',
+    ]);
+    expect(result.totals).toEqual({
+      count: 0,
+      succeeded: 0,
+      failed: 0,
+      volume: '0',
+      payers: 0,
+    });
+    expect(result.previous.volume).toBe('0');
+  });
+});

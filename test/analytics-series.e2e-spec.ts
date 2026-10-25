@@ -1,0 +1,118 @@
+import {
+  INestApplication,
+  ValidationPipe,
+  VersioningType,
+} from '@nestjs/common';
+import { Test } from '@nestjs/testing';
+import request from 'supertest';
+import { AppModule } from '@/app.module';
+import { AllExceptionsFilter } from '@/common/filters/all-exceptions.filter';
+import { PrismaService } from '@/prisma/prisma.service';
+
+/**
+ * `GET /v1/summary/series`: the dashboard chart's payments grouped by period.
+ *
+ * The aggregation is the service spec's; this suite pins the wiring in front of it: the
+ * gateway gate, the `payments:read` scope, the period the DTO accepts, and the shape that
+ * comes back for a key that may read it.
+ */
+describe('Summary series (e2e)', () => {
+  let app: INestApplication;
+  const SECRET = 'topsecret-topsecret-topsecret-topsecret';
+
+  const prismaMock: any = {
+    onModuleInit: jest.fn(),
+    onModuleDestroy: jest.fn(),
+    $connect: jest.fn(),
+    $disconnect: jest.fn(),
+    consumer: { upsert: jest.fn().mockResolvedValue({ id: 'c1' }) },
+    requestLog: { create: jest.fn().mockResolvedValue({ id: 'rl_1' }) },
+    // Both aggregations come back empty: a window with no payments.
+    $queryRaw: jest.fn().mockResolvedValue([]),
+  };
+
+  beforeAll(async () => {
+    const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
+      .overrideProvider(PrismaService)
+      .useValue(prismaMock)
+      .compile();
+
+    app = moduleRef.createNestApplication();
+    app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
+    app.useGlobalPipes(
+      new ValidationPipe({
+        whitelist: true,
+        forbidNonWhitelisted: true,
+        transform: true,
+      }),
+    );
+    app.useGlobalFilters(new AllExceptionsFilter());
+    await app.init();
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  const get = (path: string) => request(app.getHttpServer()).get(path);
+  const tenant = (path: string, scopes: string) =>
+    get(path)
+      .set('x-gateway-secret', SECRET)
+      .set('x-consumer-username', 'cosmos_u1')
+      .set('x-consumer-permissions', scopes);
+
+  it('refuses a request that skipped the gateway (403)', async () => {
+    const res = await get('/v1/summary/series').expect(403);
+    expect(res.body.code).toBe('gateway_required');
+  });
+
+  it('refuses a gateway request with no consumer (401)', async () => {
+    const res = await get('/v1/summary/series')
+      .set('x-gateway-secret', SECRET)
+      .expect(401);
+    expect(res.body.code).toBe('no_authenticated_consumer');
+  });
+
+  it('refuses a key without payments:read (403)', async () => {
+    await tenant('/v1/summary/series', 'swaps:read').expect(403);
+  });
+
+  it('refuses a period it does not group by (400)', async () => {
+    await tenant('/v1/summary/series?period=hour', 'payments:read').expect(400);
+  });
+
+  it('answers the seeded buckets and totals to a key that may read payments', async () => {
+    const res = await tenant(
+      '/v1/summary/series?period=month',
+      'payments:read',
+    ).expect(200);
+    expect(res.body.period).toBe('month');
+    expect(res.body.buckets).toHaveLength(12);
+    expect(res.body.buckets[0]).toEqual({
+      start: expect.stringMatching(/^\d{4}-\d{2}-01$/),
+      count: 0,
+      succeeded: 0,
+      failed: 0,
+      volume: '0',
+    });
+    expect(res.body.totals).toEqual({
+      count: 0,
+      succeeded: 0,
+      failed: 0,
+      volume: '0',
+      payers: 0,
+    });
+    expect(res.body.previous).toEqual({
+      count: 0,
+      succeeded: 0,
+      failed: 0,
+      volume: '0',
+    });
+  });
+
+  it('groups by day when no period is named', async () => {
+    const res = await tenant('/v1/summary/series', 'payments:read').expect(200);
+    expect(res.body.period).toBe('day');
+    expect(res.body.buckets).toHaveLength(30);
+  });
+});

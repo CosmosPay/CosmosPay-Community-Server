@@ -307,6 +307,7 @@ Konsolen-Backend erreicht sie. Pfade verwenden die OpenAPI-Form `{param}`.
 | GET | `/v1/sep30/shares/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | DELETE | `/v1/sep30/shares/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | GET | `/v1/summary` | `payments:read` |  |
+| GET | `/v1/summary/series` | `payments:read` |  |
 | GET | `/v1/swaps` | `swaps:read` |  |
 | POST | `/v1/swaps` | `swaps:write` | ✓ |
 | POST | `/v1/swaps/quote` | `swaps:read` | ✓ |
@@ -2506,6 +2507,7 @@ passen Sie mindestens `DATABASE_URL` und `APISIX_GATEWAY_SECRET` an.
 | `NEAR_INTENTS_BASE_URL` | nein | `https://1click.chaindefuser.com` | 1Click-API von NEAR Intents, für chain-übergreifende Swaps |
 | `NEAR_INTENTS_API_KEY` | empfohlen | — | 1Click-Partner-Key (`X-API-Key`). Ohne ihn erhebt 1Click eine eigene Gebühr von 0,2 % und behält die Hälfte der Provision |
 | `NEAR_INTENTS_FEE_RECIPIENT` | bei Plan-Provision | — | NEAR-Konto, an das die chain-übergreifende Provision geht (`appFees`). Ungesetzt bei einem Plan-Satz: `503 misconfigured` |
+| `SWAP_COMMISSION_DEV_WAIVER` | nein | `false` | Außerhalb der Produktion wird eine Plan-Provision, deren Empfänger (`NEAR_INTENTS_FEE_RECIPIENT`, `SOLANA_SWAP_FEE_WALLET`, `MONAD_SWAP_FEE_WALLET`) nicht gesetzt ist, erlassen (und protokolliert), statt `503 misconfigured` zu antworten. Nur für einen lokalen Dienst: der Start lehnt es bei `NODE_ENV=production` ab |
 | `NEAR_INTENTS_TIMEOUT_MS` | nein | `20000` | Budget für einen 1Click-Aufruf (ms) |
 | `CROSS_CHAIN_SWAP_SLIPPAGE_BPS` | nein | `100` | Standard-Slippage chain-übergreifend (bps); unter dem Minimum erstattet NEAR Intents |
 | `CROSS_CHAIN_SWAP_MAX_SLIPPAGE_BPS` | nein | `500` | Die höchste Slippage, die ein Aufrufer verlangen darf |

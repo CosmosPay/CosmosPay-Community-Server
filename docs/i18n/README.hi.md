@@ -304,6 +304,7 @@ Paths OpenAPI के `{param}` रूप में लिखे गए हैं
 | GET | `/v1/sep30/shares/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | DELETE | `/v1/sep30/shares/{address}` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
 | GET | `/v1/summary` | `payments:read` |  |
+| GET | `/v1/summary/series` | `payments:read` |  |
 | GET | `/v1/swaps` | `swaps:read` |  |
 | POST | `/v1/swaps` | `swaps:write` | ✓ |
 | POST | `/v1/swaps/quote` | `swaps:read` | ✓ |
@@ -2366,6 +2367,7 @@ type दोबारा बनाए बिना enum value drop नहीं �
 | `NEAR_INTENTS_BASE_URL` | नहीं | `https://1click.chaindefuser.com` | NEAR Intents की 1Click API, क्रॉस-चेन swaps के लिए |
 | `NEAR_INTENTS_API_KEY` | अनुशंसित | — | 1Click partner key (`X-API-Key`)। इसके बिना 1Click अपनी 0.2% fee जोड़ता है और commission का आधा रख लेता है |
 | `NEAR_INTENTS_FEE_RECIPIENT` | plan commission होने पर | — | वह NEAR account जिसे क्रॉस-चेन commission मिलता है (`appFees`)। Plan दर के साथ unset: `503 misconfigured` |
+| `SWAP_COMMISSION_DEV_WAIVER` | नहीं | `false` | production के बाहर, जिस plan commission का recipient (`NEAR_INTENTS_FEE_RECIPIENT`, `SOLANA_SWAP_FEE_WALLET`, `MONAD_SWAP_FEE_WALLET`) set नहीं है, उसे `503 misconfigured` लौटाने के बजाय माफ़ करें (और log करें)। केवल local service के लिए: `NODE_ENV=production` होने पर boot इसे अस्वीकार करता है |
 | `NEAR_INTENTS_TIMEOUT_MS` | नहीं | `20000` | एक 1Click call का budget (ms) |
 | `CROSS_CHAIN_SWAP_SLIPPAGE_BPS` | नहीं | `100` | क्रॉस-चेन default slippage (bps); minimum से नीचे NEAR Intents refund करता है |
 | `CROSS_CHAIN_SWAP_MAX_SLIPPAGE_BPS` | नहीं | `500` | Caller जितनी अधिकतम slippage माँग सकता है |

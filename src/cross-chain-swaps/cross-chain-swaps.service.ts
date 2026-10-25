@@ -6,7 +6,10 @@ import type { Chain } from '@/chains/chains.constants';
 import { formatUnits, parseUnits } from '@/chains/units';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
-import { resolvePlanCommissionBps } from '@/common/plan-commission';
+import {
+  commissionWithRecipient,
+  resolvePlanCommissionBps,
+} from '@/common/plan-commission';
 import { isUniqueViolation } from '@/common/prisma-errors';
 import { project } from '@/common/projection';
 import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
@@ -518,15 +521,15 @@ export class CrossChainSwapsService {
     const baseUnits = this.baseUnits(dto.amount, origin);
     const nearCfg = this.config.get('nearIntents', { infer: true });
     const slippageBps = resolveSlippage(dto.slippageBps, nearCfg);
-    const feeBps = resolvePlanCommissionBps(this.config, consumer);
     // A commission with nowhere to be paid is a misconfiguration, not a free
-    // swap — fail loudly so the operator notices, as Stellar swaps do.
-    if (feeBps > 0 && !nearCfg.feeRecipient) {
-      throw ApiError.unavailable(
-        ApiErrorCode.Misconfigured,
-        'A swap commission applies to this plan but NEAR_INTENTS_FEE_RECIPIENT is not set',
-      );
-    }
+    // swap: it fails loudly so the operator notices, as Stellar swaps do
+    // (waived only by SWAP_COMMISSION_DEV_WAIVER, outside production).
+    const feeBps = commissionWithRecipient(
+      this.config,
+      resolvePlanCommissionBps(this.config, consumer),
+      nearCfg.feeRecipient,
+      'NEAR_INTENTS_FEE_RECIPIENT',
+    );
     const recipient = normalizeAddress(dto.destinationChain, dto.recipient);
     const refundTo = normalizeAddress(dto.originChain, dto.refundTo);
 
