@@ -394,6 +394,16 @@ paths:
               - stellar
               - solana
               - monad
+        - name: createdFrom
+          required: false
+          in: query
+          description: Only intents created at or after this instant (ISO 8601). Omit for
+            no lower bound. The dashboard uses it for its today / week / month /
+            year views of the list.
+          schema:
+            format: date-time
+            example: 2026-10-01T00:00:00.000Z
+            type: string
         - name: take
           required: false
           in: query

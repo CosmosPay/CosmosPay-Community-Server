@@ -543,6 +543,7 @@ export class PaymentIntentsService {
       consumer: { apisixUsername: consumer.username },
       ...(query.status ? { status: query.status } : {}),
       ...(query.chain ? { chain: query.chain } : {}),
+      ...(query.createdFrom ? { createdAt: { gte: query.createdFrom } } : {}),
     };
 
     // `Promise.all`, not `$transaction`: a snapshot-consistent page and count
