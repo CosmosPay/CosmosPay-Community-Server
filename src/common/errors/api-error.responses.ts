@@ -139,7 +139,8 @@ export const API_ERROR_CASES: Readonly<Record<ApiErrorCode, ApiErrorCase>> = {
   },
   [ApiErrorCode.InsufficientBalance]: {
     statuses: [400],
-    summary: 'The source account cannot cover the amount',
+    summary:
+      'The source account cannot cover the amount, or the XLM reserve the transaction needs',
     message:
       'Account GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ ' +
       'holds only 12.5000000 shares of this pool',
@@ -153,12 +154,14 @@ export const API_ERROR_CASES: Readonly<Record<ApiErrorCode, ApiErrorCase>> = {
   },
   [ApiErrorCode.TrustlineMissing]: {
     statuses: [400],
-    summary: 'The account must trust the asset before it can hold it',
+    summary:
+      'An account does not trust the asset, and this request cannot add the trustline for it',
     message:
-      'Destination GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ ' +
+      'Account GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ ' +
       'has no trustline for ' +
-      'USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5 — it ' +
-      'must trust the asset before it can receive the swap',
+      'USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5, so it ' +
+      'cannot receive the swap. Only that account can add the trustline, by ' +
+      'signing a transaction of its own: ask its owner to add it, then try again.',
     path: '/v1/swaps',
   },
   [ApiErrorCode.InvalidAmount]: {

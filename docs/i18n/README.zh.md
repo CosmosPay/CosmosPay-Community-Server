@@ -526,6 +526,7 @@ OPENAPI_SERVER_URL=https://gateway.example.com npm run openapi:generate
 **收银页设计。** 两个构建路由都接受可选的 `checkoutTheme`，即托管收银页（`https://payments.cosmospay.lat/<id>`）展示该意图所用的设计：`classic`（默认）、`split`、`ticket` 或 `card`（`src/payment-intents/payment-intents.constants.ts` 中的 `CHECKOUT_THEMES`）。其他任何值都会返回 `400 validation_failed`。`PATCH /v1/payment-intents/{id}` 可以在任何状态下修改它，包括终态，因为它不改变支付的任何内容。每个响应都会给出设计：未存储设计的意图——包括该字段出现之前创建的所有意图——返回 `classic`。它不属于重试时比较的条款，因此带着另一个 `checkoutTheme` 的重试会返回已存储的意图及其已存储的设计；要修改它，请使用 `PATCH`。
 
 **`POST /v1/payment-intents/tx`** — 付款方（`source`）已知，因此我们构建未签名的 `TransactionEnvelope` 和一个 `web+stellar:tx?xdr=...` URI。
+对于发行资产，`destination` 必须已经信任它：付款方签署这个信封，而目标方什么都不签，所以 trustline 无法放进去；构建步骤会返回 `400 trustline_missing`，而不是交给付款方一笔会在链上失败的付款。
 
 ```jsonc
 // request (source, destination, amount required)
@@ -733,7 +734,7 @@ quote → build XDR → customer signs in wallet → POST /submit → Stellar ex
 
 **滑点。** 报价的估算值减去 `slippageBps`（默认为 `STELLAR_SWAP_SLIPPAGE_BPS`，上限为 `STELLAR_SWAP_MAX_SLIPPAGE_BPS`）后，成为路径支付在链上的 `destMin`——因此 swap 宁可**回滚**，也不会交付少于调用方同意接受的数额。
 
-**Trustline。** 非原生的目标资产必须已被目标账户信任；构建步骤会检查这一点，否则返回明确的错误。（XLM 不需要 trustline。）
+**Trustline。** 非原生的目标资产需要接收它的账户上有一条 trustline，而添加它的 `changeTrust` 只能由该账户自己签名。当接收方就是 `source`（自兑换，默认情况）且尚未信任该资产时，构建步骤会把这个 `changeTrust` 放在最前面，位于佣金支付和 path payment 之前，因此一次签名既添加 trustline 又完成兑换；响应中的 `trustline` 给出该资产（未添加时为 `null`），以便钱包在用户签名前告知用户。一条 trustline 会再锁定 0.5 XLM 的基础储备：如果在兑换发送的 XLM 和网络费用之后，`source` 无法保持新的最低余额（赞助和挂单按网络的方式计算），构建步骤会返回 `400 insufficient_balance`，而不是返回一个会被网络拒绝的信封。其他任何 `destination` 在这里都不签名，因此不信任该资产的会被 `400 trustline_missing` 拒绝，消息会说明只有该账户才能添加 trustline。（XLM 不需要 trustline。）
 
 **`POST /v1/swaps/quote`** — 仅报价，不持久化任何内容（`swaps:read`）。
 
@@ -763,7 +764,7 @@ quote → build XDR → customer signs in wallet → POST /submit → Stellar ex
 
 ```jsonc
 // response → { id, status: "PENDING", network, sendAmount, feeAmount, swapAmount,
-//              destEstimated, destMin, path, xdr, uri: "web+stellar:tx?xdr=…", qr, txHash, … }
+//              destEstimated, destMin, path, trustline, xdr, uri: "web+stellar:tx?xdr=…", qr, txHash, … }
 ```
 
 **报价和构建同样有限流**，按消费者和客户端地址计算：**每分钟 60 次报价**和**每分钟 20 次构建**，各自独立于提交的额度。报价不持久化任何东西，却仍要花掉一次 strict-send 路径搜索——本服务向 Horizon 发出的最昂贵的调用——而那份按 IP 的预算由 swap、流动性池和支付意图共同分享，因此在循环里刷价格会同时拖慢这三者，对所有匿名调用方都是如此。
@@ -1295,6 +1296,13 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
 - **OpenAPI 契约记录每个原生插件的路由**，无论是否开启：`openapi:generate` 会全部开启。
 
 ## 升级 — 破坏性变更与部署说明
+
+### Swaps：交易会添加其 source 缺少的 trustline
+
+- **Stellar 上的 `POST /v1/swaps` 不再拒绝不信任所购资产的 `source`。** 当目标就是 `source`（默认情况）时，信封以该资产的 `changeTrust` 开头，位于佣金支付和 path payment 之前，一次签名同时涵盖两者。以前会返回 `400 trustline_missing`。没有该 trustline 的其他 `destination` 仍会被 `400 trustline_missing` 拒绝，消息现在会说明只有该账户才能添加它（跨链兑换的 Stellar `recipient` 同样如此）。
+- **新的响应字段 `trustline`**（`{ code, issuer }` 或 `null`），出现在创建、单条读取和 submit 返回的兑换上：交易为之添加 trustline 的资产。它从存储的信封中读取，因此本版本之前构建的兑换返回 `null`，幂等重放的回答与第一次调用完全相同。`GET /v1/swaps` 不包含它，与 `qr` 一样。
+- **新的拒绝 `400 insufficient_balance`**：当添加该 trustline 会使 `source` 在兑换发送的 XLM 和网络费用之后低于新的最低余额（再多一份 0.5 XLM 基础储备）时。流动性存入的余额检查现在也会像网络一样计入赞助和挂单占用的 XLM。
+- **`POST /v1/payment-intents/tx` 会拒绝其 `destination` 不信任的发行资产**，返回 `400 trustline_missing`（以前有文档，但从未执行），并为此从 Horizon 读取目标账户。无需迁移，也没有新变量。
 
 ### 隐私支付：一个新模块、一张新表和一个 webhook 事件
 

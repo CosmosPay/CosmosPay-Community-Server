@@ -737,6 +737,10 @@ returns the stored intent with its stored design; change it with `PATCH`.
 
 **`POST /v1/payment-intents/tx`** — the payer (`source`) is known, so we build
 the unsigned `TransactionEnvelope` and a `web+stellar:tx?xdr=...` URI.
+For an issued asset the `destination` must already trust it: the payer signs
+this envelope and the destination signs nothing, so the trustline cannot go into
+it, and the build answers `400 trustline_missing` rather than hand the payer a
+payment that would fail on-chain.
 
 ```jsonc
 // request (source, destination, amount required)
@@ -1067,9 +1071,19 @@ the gateway (and is itself disabled when no wallet is set).
 the path payment's on-chain `destMin` — so the swap **reverts** rather than
 delivering less than the caller agreed to accept.
 
-**Trustline.** A non-native destination asset must already be trusted by the
-destination account; the build step checks this and returns a clear error
-otherwise. (XLM needs no trustline.)
+**Trustline.** A non-native destination asset needs a trustline on the account
+that receives it, and only that account can sign the `changeTrust` that adds one.
+When the receiver is `source` (a self-swap, the default) and does not trust the
+asset yet, the build puts that `changeTrust` first, before the fee payment and the
+path payment, so one signature adds the trustline and makes the swap; the
+response's `trustline` names the asset (`null` when nothing is added), so a wallet
+can say so before its user signs. A trustline locks another 0.5 XLM base reserve:
+when the source could not keep its new minimum balance after the XLM the swap sends
+and the network fee (sponsorships and open offers counted as the network counts
+them), the build answers `400 insufficient_balance` rather than return an envelope
+the network would reject. Any other `destination` signs nothing here, so one that
+does not trust the asset is refused with `400 trustline_missing`, which says only
+that account can add it. (XLM needs no trustline.)
 
 **`POST /v1/swaps/quote`** — price only, nothing persisted (`swaps:read`).
 
@@ -1118,7 +1132,7 @@ shared public key, for as long as the attacker kept repeating it.
 
 ```jsonc
 // response → { id, status: "PENDING", network, sendAmount, feeAmount, swapAmount,
-//              destEstimated, destMin, path, xdr, uri: "web+stellar:tx?xdr=…", qr, txHash, … }
+//              destEstimated, destMin, path, trustline, xdr, uri: "web+stellar:tx?xdr=…", qr, txHash, … }
 ```
 
 **Quoting and building are rate limited too**, per consumer and client address:
@@ -1912,6 +1926,30 @@ the service under `src/native-plugins/<slug>/`, switched on by the same
   `openapi:generate` turns them all on.
 
 ## Upgrading — breaking changes and deploy notes
+
+### Swaps: the transaction adds the trustline its source lacks
+
+- **`POST /v1/swaps` on Stellar no longer refuses a `source` that does not trust
+  the asset it buys.** When the destination is the `source` (the default), the
+  envelope starts with a `changeTrust` for that asset, before the fee payment and
+  the path payment, and one signature covers both. It used to answer
+  `400 trustline_missing`. A different `destination` without the trustline is
+  still refused with `400 trustline_missing`, and the message now says only that
+  account can add it (the same for a cross-chain swap's Stellar `recipient`).
+- **New response field `trustline`** (`{ code, issuer }` or `null`) on the swap
+  that create, the single read and submit return: the asset the transaction adds
+  a trustline for. It is read from the stored envelope, so swaps built before this
+  release answer `null` and an idempotent replay answers exactly as the first call
+  did. `GET /v1/swaps` does not carry it, like `qr`.
+- **New refusal `400 insufficient_balance`** when adding that trustline would leave
+  the `source` below its new minimum balance (one more 0.5 XLM base reserve) after
+  the XLM the swap sends and the network fee. The balance check of a liquidity
+  deposit now also counts sponsorships and the XLM open offers hold, as the network
+  does.
+- **`POST /v1/payment-intents/tx` refuses an issued asset its `destination` does
+  not trust** with `400 trustline_missing` (documented before, never enforced),
+  reading the destination's account from Horizon to know. No migration and no new
+  variable.
 
 ### Private payments: a new module, a new table and one webhook event
 

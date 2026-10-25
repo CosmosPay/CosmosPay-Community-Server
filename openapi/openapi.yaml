@@ -110,21 +110,10 @@ paths:
                 type: integer
                 example: 42
         "400":
-          description: >-
-            `validation_failed` — The body, query or headers failed validation
-
-
-            `invalid_amount` — Not a Stellar amount, or not greater than zero
-
-
-            `invalid_memo` — The memo is not the type this route requires
-
-
-            `trustline_missing` — The account must trust the asset before it can
-            hold it
-
-
-            `insufficient_balance` — The source account cannot cover the amount
+          description: "`trustline_missing`: the destination does not trust the issued
+            asset being paid. The payer signs this transaction and the
+            destination signs nothing, so only the destination account can add
+            the trustline."
           content:
             application/json:
               schema:
@@ -160,20 +149,23 @@ paths:
                     path: /v1/payment-intents/pay
                     timestamp: 2026-09-01T12:00:00.000Z
                 trustline_missing:
-                  summary: trustline_missing — The account must trust the asset before it can hold
-                    it
+                  summary: trustline_missing — An account does not trust the asset, and this
+                    request cannot add the trustline for it
                   value:
                     statusCode: 400
                     code: trustline_missing
                     error: Bad Request
-                    message: Destination GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ
-                      has no trustline for
-                      USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5
-                      — it must trust the asset before it can receive the swap
+                    message: "Account GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ has
+                      no trustline for
+                      USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLL\
+                      FLA5, so it cannot receive the swap. Only that account can
+                      add the trustline, by signing a transaction of its own:
+                      ask its owner to add it, then try again."
                     path: /v1/swaps
                     timestamp: 2026-09-01T12:00:00.000Z
                 insufficient_balance:
-                  summary: insufficient_balance — The source account cannot cover the amount
+                  summary: insufficient_balance — The source account cannot cover the amount, or
+                    the XLM reserve the transaction needs
                   value:
                     statusCode: 400
                     code: insufficient_balance
@@ -1308,11 +1300,15 @@ paths:
                 type: integer
                 example: 42
         "400":
-          description: "Stellar: `trustline_missing`, `insufficient_balance`,
-            `no_path_found`. Solana / Monad: `network_unsupported` (a dev key),
-            `asset_unsupported`, `provider_error` (no route, or the aggregator
-            simulated a failure — usually a wallet that cannot cover the amount
-            plus fees)."
+          description: "Stellar: `trustline_missing` (the destination is another account
+            that does not trust the bought asset, and only it can add the
+            trustline; a source that receives the swap gets the trustline in the
+            same transaction instead), `insufficient_balance` (the source cannot
+            keep the 0.5 XLM reserve that trustline locks, after what the
+            transaction sends and its fee), `no_path_found`. Solana / Monad:
+            `network_unsupported` (a dev key), `asset_unsupported`,
+            `provider_error` (no route, or the aggregator simulated a failure —
+            usually a wallet that cannot cover the amount plus fees)."
           content:
             application/json:
               schema:
@@ -1358,20 +1354,23 @@ paths:
                     path: /v1/swaps/quote
                     timestamp: 2026-09-01T12:00:00.000Z
                 trustline_missing:
-                  summary: trustline_missing — The account must trust the asset before it can hold
-                    it
+                  summary: trustline_missing — An account does not trust the asset, and this
+                    request cannot add the trustline for it
                   value:
                     statusCode: 400
                     code: trustline_missing
                     error: Bad Request
-                    message: Destination GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ
-                      has no trustline for
-                      USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5
-                      — it must trust the asset before it can receive the swap
+                    message: "Account GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ has
+                      no trustline for
+                      USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLL\
+                      FLA5, so it cannot receive the swap. Only that account can
+                      add the trustline, by signing a transaction of its own:
+                      ask its owner to add it, then try again."
                     path: /v1/swaps
                     timestamp: 2026-09-01T12:00:00.000Z
                 insufficient_balance:
-                  summary: insufficient_balance — The source account cannot cover the amount
+                  summary: insufficient_balance — The source account cannot cover the amount, or
+                    the XLM reserve the transaction needs
                   value:
                     statusCode: 400
                     code: insufficient_balance
@@ -1962,10 +1961,10 @@ paths:
                 type: integer
                 example: 42
         "400":
-          description: "`network_unsupported` — a dev (testnet) key: NEAR Intents settles
-            on mainnet only. `trustline_missing` — a Stellar recipient does not
-            trust the destination asset. `provider_error` — NEAR Intents refused
-            the quote."
+          description: "`network_unsupported`: a dev (testnet) key, and NEAR Intents
+            settles on mainnet only. `trustline_missing`: a Stellar recipient
+            does not trust the destination asset, and only that account can add
+            the trustline. `provider_error`: NEAR Intents refused the quote."
           content:
             application/json:
               schema:
@@ -2024,16 +2023,18 @@ paths:
                     path: /v1/cross-chain-swaps
                     timestamp: 2026-09-01T12:00:00.000Z
                 trustline_missing:
-                  summary: trustline_missing — The account must trust the asset before it can hold
-                    it
+                  summary: trustline_missing — An account does not trust the asset, and this
+                    request cannot add the trustline for it
                   value:
                     statusCode: 400
                     code: trustline_missing
                     error: Bad Request
-                    message: Destination GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ
-                      has no trustline for
-                      USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5
-                      — it must trust the asset before it can receive the swap
+                    message: "Account GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ has
+                      no trustline for
+                      USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLL\
+                      FLA5, so it cannot receive the swap. Only that account can
+                      add the trustline, by signing a transaction of its own:
+                      ask its owner to add it, then try again."
                     path: /v1/swaps
                     timestamp: 2026-09-01T12:00:00.000Z
                 provider_error:
@@ -2352,11 +2353,12 @@ paths:
             `invalid_amount` — Not a Stellar amount, or not greater than zero
 
 
-            `trustline_missing` — The account must trust the asset before it can
-            hold it
+            `trustline_missing` — An account does not trust the asset, and this
+            request cannot add the trustline for it
 
 
-            `insufficient_balance` — The source account cannot cover the amount
+            `insufficient_balance` — The source account cannot cover the amount,
+            or the XLM reserve the transaction needs
           content:
             application/json:
               schema:
@@ -2383,20 +2385,23 @@ paths:
                     path: /v1/liquidity-pools/deposit
                     timestamp: 2026-09-01T12:00:00.000Z
                 trustline_missing:
-                  summary: trustline_missing — The account must trust the asset before it can hold
-                    it
+                  summary: trustline_missing — An account does not trust the asset, and this
+                    request cannot add the trustline for it
                   value:
                     statusCode: 400
                     code: trustline_missing
                     error: Bad Request
-                    message: Destination GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ
-                      has no trustline for
-                      USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5
-                      — it must trust the asset before it can receive the swap
+                    message: "Account GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ has
+                      no trustline for
+                      USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLL\
+                      FLA5, so it cannot receive the swap. Only that account can
+                      add the trustline, by signing a transaction of its own:
+                      ask its owner to add it, then try again."
                     path: /v1/swaps
                     timestamp: 2026-09-01T12:00:00.000Z
                 insufficient_balance:
-                  summary: insufficient_balance — The source account cannot cover the amount
+                  summary: insufficient_balance — The source account cannot cover the amount, or
+                    the XLM reserve the transaction needs
                   value:
                     statusCode: 400
                     code: insufficient_balance
@@ -2490,12 +2495,15 @@ paths:
                 type: integer
                 example: 42
         "400":
-          description: |-
+          description: >-
             `validation_failed` — The body, query or headers failed validation
+
 
             `invalid_amount` — Not a Stellar amount, or not greater than zero
 
-            `insufficient_balance` — The source account cannot cover the amount
+
+            `insufficient_balance` — The source account cannot cover the amount,
+            or the XLM reserve the transaction needs
           content:
             application/json:
               schema:
@@ -2522,7 +2530,8 @@ paths:
                     path: /v1/liquidity-pools/deposit
                     timestamp: 2026-09-01T12:00:00.000Z
                 insufficient_balance:
-                  summary: insufficient_balance — The source account cannot cover the amount
+                  summary: insufficient_balance — The source account cannot cover the amount, or
+                    the XLM reserve the transaction needs
                   value:
                     statusCode: 400
                     code: insufficient_balance
@@ -10514,6 +10523,18 @@ components:
         - status
         - txHash
         - swap
+    SwapTrustline:
+      type: object
+      properties:
+        code:
+          type: string
+          example: USDC
+        issuer:
+          type: string
+          example: GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5
+      required:
+        - code
+        - issuer
     SwapEntity:
       type: object
       properties:
@@ -10595,6 +10616,19 @@ components:
           example: Cosmos Swap Commission
           description: On-chain MEMO_TEXT label stamped when a commission is collected and
             no caller memo was supplied (null otherwise).
+        trustline:
+          nullable: true
+          example: null
+          description: "The bought asset, when the source receives it and does not trust
+            it yet: the transaction then starts with a `changeTrust` for it, so
+            the one signature adds the trustline and makes the swap. Adding it
+            locks another 0.5 XLM base reserve in the account, which a wallet
+            should tell its user before they sign. Null when no trustline is
+            added (XLM bought, the account already trusts the asset, or the
+            destination is another account). Read from the transaction itself."
+          type: object
+          allOf:
+            - $ref: "#/components/schemas/SwapTrustline"
         xdr:
           type: string
           description: Unsigned transaction envelope (base64 XDR) to sign.
@@ -10642,6 +10676,7 @@ components:
         - path
         - memo
         - commissionMemo
+        - trustline
         - xdr
         - uri
         - txHash
@@ -11059,7 +11094,10 @@ components:
         destination:
           type: string
           description: "Account credited the destination asset. Defaults to `source` (a
-            self-swap). Must already trust a non-native destination asset.
+            self-swap). On Stellar, when it is `source` and does not trust a
+            non-native destination asset yet, the transaction adds that
+            trustline first (see `trustline` on the response); any other account
+            must already trust the asset, because only it can add the trustline.
             Stellar only: on Solana and Monad the output always goes to
             `source`."
           example: GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ

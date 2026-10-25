@@ -749,6 +749,10 @@ intent armazenado com o design armazenado; para alterá-lo, use `PATCH`.
 
 **`POST /v1/payment-intents/tx`** — o pagador (`source`) é conhecido, então montamos
 o `TransactionEnvelope` não assinado e uma URI `web+stellar:tx?xdr=...`.
+Para um ativo emitido, o `destination` já precisa confiar nele: o pagador assina
+este envelope e o destino não assina nada, então a trustline não pode ir dentro
+dele, e a montagem responde `400 trustline_missing` em vez de entregar ao pagador um
+pagamento que falharia on-chain.
 
 ```jsonc
 // request (source, destination, amount required)
@@ -1084,9 +1088,19 @@ o gateway (e ele próprio fica desativado quando nenhuma carteira está definida
 `destMin` on-chain do path payment — então o swap **é revertido** em vez de entregar
 menos do que quem chama aceitou receber.
 
-**Trustline.** Um ativo de destino não nativo precisa já ter trustline na conta de
-destino; a etapa de montagem verifica isso e, caso contrário, retorna um erro claro.
-(XLM não precisa de trustline.)
+**Trustline.** Um ativo de destino não nativo precisa de uma trustline na conta que
+o recebe, e só essa conta pode assinar o `changeTrust` que a adiciona. Quando quem
+recebe é o `source` (um self-swap, o padrão) e ainda não confia no ativo, a montagem
+coloca esse `changeTrust` primeiro, antes do pagamento da comissão e do path
+payment, então uma só assinatura adiciona a trustline e faz o swap; o `trustline` da
+resposta nomeia o ativo (`null` quando nada é adicionado), para que uma carteira
+avise antes de o usuário assinar. Uma trustline trava mais uma reserva base de
+0.5 XLM: se o `source` não puder manter o novo saldo mínimo depois dos XLM que o swap
+envia e da taxa de rede (patrocínios e ofertas abertas contados como a rede os
+conta), a montagem responde `400 insufficient_balance` em vez de devolver um
+envelope que a rede rejeitaria. Qualquer outro `destination` não assina nada aqui,
+então um que não confia no ativo é recusado com `400 trustline_missing`, que diz que
+só essa conta pode adicioná-la. (XLM não precisa de trustline.)
 
 **`POST /v1/swaps/quote`** — apenas preço, nada é persistido (`swaps:read`).
 
@@ -1136,7 +1150,7 @@ repetisse.
 
 ```jsonc
 // response → { id, status: "PENDING", network, sendAmount, feeAmount, swapAmount,
-//              destEstimated, destMin, path, xdr, uri: "web+stellar:tx?xdr=…", qr, txHash, … }
+//              destEstimated, destMin, path, trustline, xdr, uri: "web+stellar:tx?xdr=…", qr, txHash, … }
 ```
 
 **Cotar e montar também têm limite**, por consumer e endereço do cliente: **60
@@ -1951,6 +1965,29 @@ serviço em `src/native-plugins/<slug>/`, ligados pela mesma lista
   `openapi:generate` liga todos.
 
 ## Atualização — mudanças incompatíveis e notas de deploy
+
+### Swaps: a transação adiciona a trustline que falta ao seu source
+
+- **`POST /v1/swaps` na Stellar não recusa mais um `source` que não confia no ativo
+  que compra.** Quando o destino é o `source` (o padrão), o envelope começa com um
+  `changeTrust` para esse ativo, antes do pagamento da comissão e do path payment,
+  e uma só assinatura cobre os dois. Antes respondia `400 trustline_missing`. Um
+  `destination` diferente sem a trustline continua recusado com
+  `400 trustline_missing`, e a mensagem agora diz que só essa conta pode
+  adicioná-la (o mesmo vale para o `recipient` Stellar de um swap cross-chain).
+- **Novo campo `trustline` na resposta** (`{ code, issuer }` ou `null`) no swap que
+  a criação, a leitura individual e o submit devolvem: o ativo para o qual a
+  transação adiciona uma trustline. É lido do envelope armazenado, então swaps
+  montados antes desta versão respondem `null` e um replay idempotente responde
+  exatamente como a primeira chamada. `GET /v1/swaps` não o traz, assim como `qr`.
+- **Nova recusa `400 insufficient_balance`** quando adicionar essa trustline
+  deixaria o `source` abaixo do novo saldo mínimo (mais uma reserva base de
+  0.5 XLM) depois dos XLM que o swap envia e da taxa de rede. A verificação de saldo
+  de um depósito de liquidez agora também conta patrocínios e os XLM que ofertas
+  abertas retêm, como a rede faz.
+- **`POST /v1/payment-intents/tx` recusa um ativo emitido em que o `destination`
+  não confia** com `400 trustline_missing` (documentado antes, nunca aplicado),
+  lendo a conta do destino na Horizon para saber. Sem migração e sem variável nova.
 
 ### Pagamentos privados: um módulo novo, uma tabela nova e um evento de webhook
 

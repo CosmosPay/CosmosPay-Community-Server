@@ -143,9 +143,10 @@ export class CrossChainSwapsController {
       ApiErrorCode.ProviderError,
     ],
     description:
-      '`network_unsupported` — a dev (testnet) key: NEAR Intents settles on ' +
-      'mainnet only. `trustline_missing` — a Stellar recipient does not trust ' +
-      'the destination asset. `provider_error` — NEAR Intents refused the quote.',
+      '`network_unsupported`: a dev (testnet) key, and NEAR Intents settles on ' +
+      'mainnet only. `trustline_missing`: a Stellar recipient does not trust ' +
+      'the destination asset, and only that account can add the trustline. ' +
+      '`provider_error`: NEAR Intents refused the quote.',
   })
   @ApiErrorResponse({
     status: 409,

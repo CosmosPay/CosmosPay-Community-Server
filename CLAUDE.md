@@ -254,11 +254,23 @@ table. These are the rules that did not hold on their own:
   - `process.env` is read only in `src/config/configuration.ts`.
 - **Look before writing a helper.** Grep `src/stellar/` and `src/common/` for a
   Stellar, pricing or tenancy helper first: `resolveAsset`,
-  `StellarAccountLoader` (including `assertCanAfford`), `resolveNetwork`,
+  `StellarAccountLoader` (including `assertCanAfford`, `assertCanReceive` and
+  `assertCanAddTrustline`), `resolveNetwork`,
   `resolvePlanCommissionBps`, `ConsumerResolverService`, `resolveMemoId`,
   `resolveSlippage` / `resolveIdempotencyKey`, the SEP-7 builders in
   `stellar/sep7.ts` and `SignedTransactionRelay` exist because private copies
   drifted apart.
+- **A missing trustline goes into the envelope only for the account that signs
+  it.** A `changeTrust` must be signed by its own account. When the source of a
+  Stellar transaction this service builds receives an issued asset it does not
+  trust yet (a self-swap), the build adds `changeTrust` as the first operation and
+  prices the extra 0.5 XLM reserve first (`assertCanAddTrustline`: subentries,
+  sponsorships and open offers, as the network counts them). Any other account
+  that lacks one (a swap's third-party `destination`, a `tx` intent's merchant, a
+  cross-chain `recipient`) is refused with `assertCanReceive`, whose message
+  says only that account can add it. A response that reports the added
+  trustline reads it from the stored XDR (`addedTrustline`), never from a
+  column, so a replay answers as the first call did.
 
 ## Chains and native plugins
 

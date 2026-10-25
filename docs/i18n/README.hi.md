@@ -736,6 +736,10 @@ design बताता है: बिना design के सहेजा गय
 
 **`POST /v1/payment-intents/tx`** — payer (`source`) ज्ञात है, इसलिए हम
 unsigned `TransactionEnvelope` और एक `web+stellar:tx?xdr=...` URI बनाते हैं।
+issued asset के लिए `destination` का उस पर पहले से trust होना चाहिए: इस envelope पर
+payer sign करता है और destination कुछ sign नहीं करता, इसलिए trustline इसमें नहीं
+जा सकती, और build payer को ऐसा payment देने के बजाय जो on-chain fail होगा,
+`400 trustline_missing` लौटाता है।
 
 ```jsonc
 // request (source, destination, amount required)
@@ -1064,9 +1068,19 @@ fallback है (और वॉलेट सेट न होने पर वह
 path payment का on-chain `destMin` बन जाता है — इसलिए caller ने जितना स्वीकार करना माना था उससे
 कम देने की बजाय swap **revert** हो जाता है।
 
-**Trustline।** non-native destination asset पर destination account का पहले से
-trust होना चाहिए; build चरण इसकी जाँच करता है और वरना एक स्पष्ट error
-लौटाता है। (XLM को trustline की ज़रूरत नहीं है।)
+**Trustline।** non-native destination asset के लिए उसे पाने वाले account पर
+trustline चाहिए, और उसे जोड़ने वाले `changeTrust` पर सिर्फ़ वही account sign कर
+सकता है। जब पाने वाला `source` हो (self-swap, default) और वह अभी asset पर trust न
+करता हो, तो build वह `changeTrust` सबसे पहले रखता है, fee payment और path payment
+से पहले, ताकि एक ही signature trustline भी जोड़े और swap भी करे; response का
+`trustline` asset का नाम बताता है (कुछ न जुड़े तो `null`), ताकि wallet user के sign
+करने से पहले उसे बता सके। एक trustline 0.5 XLM का एक और base reserve lock करती है:
+अगर swap के भेजे XLM और network fee के बाद `source` अपना नया minimum balance न रख
+पाए (sponsorships और open offers को वैसे ही गिनकर जैसे network गिनता है), तो build
+ऐसा envelope लौटाने के बजाय जिसे network reject कर दे, `400 insufficient_balance`
+लौटाता है। कोई दूसरा `destination` यहाँ कुछ sign नहीं करता, इसलिए अगर वह asset पर
+trust नहीं करता तो `400 trustline_missing` से मना किया जाता है, जो बताता है कि उसे
+सिर्फ़ वही account जोड़ सकता है। (XLM को trustline की ज़रूरत नहीं है।)
 
 **`POST /v1/swaps/quote`** — केवल कीमत, कुछ भी persist नहीं होता (`swaps:read`)।
 
@@ -1114,7 +1128,7 @@ number account ने अभी तक इस्तेमाल नहीं क
 
 ```jsonc
 // response → { id, status: "PENDING", network, sendAmount, feeAmount, swapAmount,
-//              destEstimated, destMin, path, xdr, uri: "web+stellar:tx?xdr=…", qr, txHash, … }
+//              destEstimated, destMin, path, trustline, xdr, uri: "web+stellar:tx?xdr=…", qr, txHash, … }
 ```
 
 **quote और build पर भी सीमा है**, प्रति consumer और client address: **प्रति मिनट 60
@@ -1902,6 +1916,29 @@ seal होती हैं और कभी लौटाई नहीं जा
   `openapi:generate` सभी को चालू करता है।
 
 ## अपग्रेड — breaking changes और deploy नोट्स
+
+### Swaps: transaction वह trustline जोड़ता है जो उसके source के पास नहीं है
+
+- **Stellar पर `POST /v1/swaps` अब उस `source` को मना नहीं करता जो खरीदे जा रहे
+  asset पर trust नहीं करता।** जब destination ही `source` हो (default), तो envelope
+  उस asset के `changeTrust` से शुरू होता है, fee payment और path payment से पहले,
+  और एक ही signature दोनों को cover करता है। पहले जवाब `400 trustline_missing`
+  था। बिना trustline वाला कोई दूसरा `destination` अब भी `400 trustline_missing` से
+  मना किया जाता है, और message अब बताता है कि उसे सिर्फ़ वही account जोड़ सकता है
+  (cross-chain swap के Stellar `recipient` के लिए भी यही)।
+- **नया response field `trustline`** (`{ code, issuer }` या `null`), उस swap पर जो
+  create, single read और submit लौटाते हैं: वह asset जिसके लिए transaction
+  trustline जोड़ता है। यह stored envelope से पढ़ा जाता है, इसलिए इस release से पहले
+  बने swaps `null` लौटाते हैं और idempotent replay ठीक पहली call जैसा जवाब देता है।
+  `GET /v1/swaps` इसे नहीं देता, `qr` की तरह।
+- **नया refusal `400 insufficient_balance`** जब वह trustline जोड़ने से swap के भेजे
+  XLM और network fee के बाद `source` अपने नए minimum balance (0.5 XLM का एक और base
+  reserve) से नीचे चला जाए। liquidity deposit की balance जाँच अब sponsorships और
+  open offers में रुके XLM को भी गिनती है, जैसे network गिनता है।
+- **`POST /v1/payment-intents/tx` उस issued asset को मना करता है जिस पर उसका
+  `destination` trust नहीं करता**, `400 trustline_missing` के साथ (पहले documented,
+  कभी लागू नहीं), और यह जानने के लिए Horizon से destination का account पढ़ता है। कोई
+  migration या नया variable नहीं।
 
 ### निजी भुगतान: एक नया module, एक नई table और एक webhook event
 

@@ -615,7 +615,8 @@ export class CrossChainSwapsService {
   /**
    * A Stellar recipient must already trust an issued asset, or NEAR Intents'
    * payout fails on-chain and the swap is refunded after the fact. Caught here,
-   * with the same loader and message Stellar swaps use.
+   * with the same loader and message Stellar swaps use for another account:
+   * the recipient signs nothing in this flow, so only it can add the trustline.
    */
   private async assertRecipientCanReceive(
     priced: PricedCrossChainSwap,
@@ -623,11 +624,11 @@ export class CrossChainSwapsService {
     const { destination, recipient } = priced;
     if (destination.chain !== 'stellar' || !destination.contract) return;
     const account = await this.accounts.load('public', recipient);
-    this.accounts.assertTrustline(
+    this.accounts.assertCanReceive(
       account.balances,
       resolveAsset(destination.symbol, destination.contract),
       recipient,
-      'it can receive the swap',
+      'the swap',
     );
   }
 

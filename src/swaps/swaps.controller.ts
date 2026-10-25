@@ -179,7 +179,12 @@ export class SwapsController {
       ApiErrorCode.ProviderError,
     ],
     description:
-      'Stellar: `trustline_missing`, `insufficient_balance`, `no_path_found`. ' +
+      'Stellar: `trustline_missing` (the destination is another account that ' +
+      'does not trust the bought asset, and only it can add the trustline; a ' +
+      'source that receives the swap gets the trustline in the same ' +
+      'transaction instead), `insufficient_balance` (the source cannot keep ' +
+      'the 0.5 XLM reserve that trustline locks, after what the transaction ' +
+      'sends and its fee), `no_path_found`. ' +
       'Solana / Monad: `network_unsupported` (a dev key), `asset_unsupported`, ' +
       '`provider_error` (no route, or the aggregator simulated a failure — ' +
       'usually a wallet that cannot cover the amount plus fees).',

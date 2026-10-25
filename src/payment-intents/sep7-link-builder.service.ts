@@ -1,6 +1,11 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { Memo, Operation, TransactionBuilder } from '@stellar/stellar-sdk';
+import {
+  type Horizon,
+  Memo,
+  Operation,
+  TransactionBuilder,
+} from '@stellar/stellar-sdk';
 import { AppConfig, StellarNetwork } from '@/config/configuration';
 import { StellarAccountLoader } from '@/stellar/account-loader.service';
 import { ResolvedAsset } from '@/stellar/asset';
@@ -56,9 +61,11 @@ export class Sep7LinkBuilder {
    * SEP-7 `tx`: the unsigned envelope for one payment from a known source, and
    * the URI carrying it.
    *
-   * The only method here that touches the network — the source is loaded for
-   * its sequence number — so the only one that can fail on it, with the
-   * loader's errors (400 for an unfunded source, 503 when Horizon is out).
+   * The only method here that touches the network (the source is loaded for
+   * its sequence number, and the destination of an issued asset for its
+   * trustlines), so the only one that can fail on it: with the loader's errors
+   * (400 for an unfunded account, 503 when Horizon is out), or
+   * `trustline_missing` from {@link assertDestinationCanReceive}.
    */
   async tx(
     network: StellarNetwork,
@@ -68,6 +75,7 @@ export class Sep7LinkBuilder {
       infer: true,
     });
     const account = await this.accounts.load(network, payment.source);
+    await this.assertDestinationCanReceive(network, payment, account);
     const xdr = new TransactionBuilder(account, {
       fee: baseFee,
       networkPassphrase: this.stellar.passphrase(network),
@@ -85,6 +93,32 @@ export class Sep7LinkBuilder {
       .toXDR();
 
     return { xdr, uri: sep7TxUri(xdr, payment) };
+  }
+
+  /**
+   * The merchant's `destination` must already trust an issued asset, or the
+   * payment fails on-chain with `op_no_trust` after the payer has signed it and
+   * paid the fee. The payer signs this envelope and the merchant signs nothing,
+   * so the trustline cannot go into it: only the merchant's own account can add
+   * it, and the refusal says so. Lumens need no trustline and skip the read.
+   */
+  private async assertDestinationCanReceive(
+    network: StellarNetwork,
+    payment: Sep7TxPayment,
+    source: Horizon.AccountResponse,
+  ): Promise<void> {
+    const { asset, destination } = payment;
+    if (asset.code === 'native' || !asset.issuer) return;
+    const receiver =
+      destination === payment.source
+        ? source
+        : await this.accounts.load(network, destination);
+    this.accounts.assertCanReceive(
+      receiver.balances,
+      asset,
+      destination,
+      'this payment',
+    );
   }
 
   /**

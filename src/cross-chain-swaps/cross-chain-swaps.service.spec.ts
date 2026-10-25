@@ -232,7 +232,7 @@ function setup(
   };
   const accounts = {
     load: jest.fn().mockResolvedValue({ balances: [] }),
-    assertTrustline: jest.fn(),
+    assertCanReceive: jest.fn(),
   };
   const service = new CrossChainSwapsService(
     config,
@@ -503,7 +503,7 @@ describe('CrossChainSwapsService', () => {
 
     it('checks a Stellar recipient trusts the asset it is about to receive', async () => {
       const { service, accounts } = setup();
-      accounts.assertTrustline.mockImplementation(() => {
+      accounts.assertCanReceive.mockImplementation(() => {
         throw ApiError.badRequest(ApiErrorCode.TrustlineMissing, 'no trust');
       });
       const err = await rejection(

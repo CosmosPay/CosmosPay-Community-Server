@@ -16,6 +16,7 @@ import { project } from '@/common/projection';
 import { PrismaService } from '@/prisma/prisma.service';
 import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
 import { StellarAccountLoader } from '@/stellar/account-loader.service';
+import type { BalanceEntry } from '@/stellar/account-loader.service';
 import { assetLabel, resolveAsset, ResolvedAsset } from '@/stellar/asset';
 import { resolveMemoId } from '@/stellar/memo';
 import { sep7Qr, sep7TxUri } from '@/stellar/sep7';
@@ -29,7 +30,11 @@ import {
   resolveSlippage,
 } from '@/stellar/stellar-operation-policy';
 import { StellarService } from '@/stellar/stellar.service';
-import { cannotHaveSettled } from '@/stellar/stored-envelope';
+import {
+  addedTrustline,
+  cannotHaveSettled,
+  type IssuedAsset,
+} from '@/stellar/stored-envelope';
 import type {
   Prisma,
   Swap,
@@ -105,6 +110,11 @@ export type SwapView = PublicSwap & {
   qr: string;
   /** The commission MEMO_TEXT label when a commission was collected, else null. */
   commissionMemo: string | null;
+  /**
+   * The destination asset when the envelope also adds the source's trustline
+   * for it (read from the stored XDR), else null.
+   */
+  trustline: IssuedAsset | null;
 };
 
 /**
@@ -145,7 +155,8 @@ interface PathRecord {
  * Stellar native swaps. Stellar has no swap primitive — asset exchange is a
  * `PathPaymentStrictSend` routed through the DEX/AMM. This service is
  * **non-custodial**: it quotes via Horizon, assembles the unsigned transaction
- * (an optional platform fee payment + the path payment), and relays the signed
+ * (the source's trustline for the bought asset when it lacks one, an optional
+ * platform fee payment, then the path payment), and relays the signed
  * transaction the customer hands back. Funds never pass through Cosmos Pay.
  */
 @Injectable()
@@ -247,19 +258,43 @@ export class SwapsService {
       account.sequenceNumber(),
     );
 
-    // The destination must already trust a non-native asset, or the path payment
-    // would fail on-chain. Catch it now with a clear message.
-    await this.assertDestinationCanReceive(network, destination, priced.dest, {
-      account,
-      address: dto.source,
-    });
+    // A non-native destination asset needs a trustline on the account that
+    // receives it, or the path payment fails on-chain. The source signs this
+    // transaction, so when it is the receiver the transaction adds the trustline
+    // itself; any other receiver has to add it on its own (see trustlineToAdd).
+    const trustline = await this.trustlineToAdd(
+      network,
+      destination,
+      priced.dest,
+      { account, address: dto.source },
+    );
+    const collectsFee = feeStroops > 0n && !!feeWallet;
+    if (trustline) {
+      // The trustline raises the source's minimum balance by a base reserve.
+      // Refuse now rather than build an envelope the network rejects with
+      // op_low_reserve after taking its fee.
+      const opCount = 1 + (collectsFee ? 1 : 0) + 1;
+      this.accounts.assertCanAddTrustline(account, account.balances, {
+        address: dto.source,
+        asset: trustline,
+        nativeSpent:
+          priced.send.code === 'native' ? toStroops(priced.sendAmount) : 0n,
+        txFee: BigInt(stellarCfg.baseFee) * BigInt(opCount),
+      });
+    }
 
     const builder = new TransactionBuilder(account, {
       fee: stellarCfg.baseFee,
       networkPassphrase: this.stellar.passphrase(network),
     });
+    // Operation 0, only when needed: the source trusts the asset it is about to
+    // receive. First, so the path payment after it can credit the new
+    // trustline; one signature covers both.
+    if (trustline) {
+      builder.addOperation(Operation.changeTrust({ asset: trustline.asset }));
+    }
     // Operation 1: collect the platform fee in the source asset (skipped at 0%).
-    if (feeStroops > 0n && feeWallet) {
+    if (collectsFee) {
       builder.addOperation(
         Operation.payment({
           destination: feeWallet,
@@ -807,34 +842,50 @@ export class SwapsService {
   }
 
   /**
-   * Ensures the destination can receive a non-native asset (has a trustline).
-   * Native XLM needs none. Reuses the already-loaded source account when the
-   * destination is the source (a self-swap).
+   * The trustline this swap's transaction has to add, or null when none is
+   * needed: the destination asset is native, or the receiver already trusts it
+   * (or issues it).
+   *
+   * Who lacks it decides what happens. A trustline is a `changeTrust` signed by
+   * its own account, and the source is the one account that signs this
+   * transaction: when it is also the receiver (a self-swap, the default), the
+   * trustline goes into the same envelope and one signature covers both. A
+   * different receiver signs nothing here, so it is refused with a message
+   * saying only that account can add the trustline. The source account already
+   * loaded is reused for a self-swap.
    */
-  private async assertDestinationCanReceive(
+  private async trustlineToAdd(
     network: StellarNetwork,
     destination: string,
     dest: ResolvedAsset,
-    source: { account: { balances: unknown[] }; address: string },
-  ): Promise<void> {
-    if (dest.code === 'native' || !dest.issuer) return;
-    const balances =
-      destination === source.address
-        ? source.account.balances
-        : (await this.accounts.load(network, destination)).balances;
-    const trusts = (balances as Array<Record<string, unknown>>).some(
-      (b) => b.asset_code === dest.code && b.asset_issuer === dest.issuer,
-    );
-    if (!trusts) {
-      throw ApiError.badRequest(
-        ApiErrorCode.TrustlineMissing,
-        `Destination ${destination} has no trustline for ${dest.code}:${dest.issuer} — ` +
-          'it must trust the asset before it can receive the swap',
-      );
+    source: { account: { balances: BalanceEntry[] }; address: string },
+  ): Promise<ResolvedAsset | null> {
+    if (dest.code === 'native' || !dest.issuer) return null;
+    if (destination === source.address) {
+      return this.accounts.hasTrustline(
+        source.account.balances,
+        dest,
+        destination,
+      )
+        ? null
+        : dest;
     }
+    const receiver = await this.accounts.load(network, destination);
+    this.accounts.assertCanReceive(
+      receiver.balances,
+      dest,
+      destination,
+      'the swap',
+    );
+    return null;
   }
 
-  /** A stored swap with its SEP-7 QR and commission label attached. */
+  /**
+   * A stored swap with its SEP-7 QR, commission label and added trustline
+   * attached. The trustline is read from the stored envelope, never from a
+   * column, so it always describes what the wallet is asked to sign, and a
+   * replayed swap answers exactly as it did when it was built.
+   */
   private async withQr(swap: Swap): Promise<SwapView> {
     return {
       ...project(swap, SWAP_PUBLIC_SELECT),
@@ -845,6 +896,10 @@ export class SwapsService {
         toStroops(swap.feeAmount) > 0n && !swap.memo
           ? SWAP_COMMISSION_MEMO
           : null,
+      trustline: addedTrustline(
+        swap.xdr,
+        this.stellar.passphrase(swap.network as StellarNetwork),
+      ),
     };
   }
 

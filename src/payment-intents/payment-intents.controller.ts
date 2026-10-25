@@ -98,7 +98,8 @@ export class PaymentIntentsController {
       'Create a SEP-7 `tx` intent (source known → unsigned XDR + tx URI + QR)',
   })
   @ApiCreatedResponse({ type: TxPaymentIntentEntity })
-  // Loads the payer's account from Horizon to build the envelope.
+  // Loads the payer's account from Horizon to build the envelope, and the
+  // destination's for an issued asset, to check it can receive it.
   @ApiUpstream('Horizon')
   @ApiErrorResponse({
     status: 400,
@@ -109,6 +110,10 @@ export class PaymentIntentsController {
       ApiErrorCode.TrustlineMissing,
       ApiErrorCode.InsufficientBalance,
     ],
+    description:
+      '`trustline_missing`: the destination does not trust the issued asset ' +
+      'being paid. The payer signs this transaction and the destination signs ' +
+      'nothing, so only the destination account can add the trustline.',
   })
   @MemoConflictResponse()
   createTx(
