@@ -333,6 +333,12 @@ Each of these was a real finding in this codebase, not a hypothetical:
   on-chain — carries `@RateLimit`.**
 - **A guard that refuses logs the refusal.** Interceptors run after guards, so
   the access log never sees a request a guard turned away.
+- **A plan commission with nowhere to be paid is a misconfiguration, not a free
+  swap.** `commissionWithRecipient` (`src/common/plan-commission.ts`) answers
+  `503 misconfigured` when `NEAR_INTENTS_FEE_RECIPIENT`, `SOLANA_SWAP_FEE_WALLET`
+  or `MONAD_SWAP_FEE_WALLET` is missing. `SWAP_COMMISSION_DEV_WAIVER=true` waives
+  (and logs) it for a local service only; `env.validation.ts` refuses it when
+  `NODE_ENV=production`, and that refusal must stay.
 
 ## Wallet sign-in, backups and the recovery servers
 
