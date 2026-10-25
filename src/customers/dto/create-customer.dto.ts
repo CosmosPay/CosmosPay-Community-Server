@@ -3,10 +3,10 @@ import {
   IsEmail,
   IsOptional,
   IsString,
-  Matches,
   MaxLength,
   MinLength,
 } from 'class-validator';
+import { IsAnyChainAddress } from '@/common/validators/is-any-chain-address.validator';
 
 export class CreateCustomerDto {
   @ApiProperty({ example: 'Acme Inc.' })
@@ -35,12 +35,14 @@ export class CreateCustomerDto {
 
   @ApiPropertyOptional({
     example: 'GCALNQQBXAPZ2WIRSDDBMSTAKCUH5SG6U76YBFLQLIXJTF7FE5AX7AOO',
-    description: 'Optional Stellar account to associate the customer with.',
+    description:
+      'Optional account to associate the customer with, on any chain: a Stellar account ' +
+      '(G..., checksum verified), a Solana address (base58, 32 bytes) or a Monad address ' +
+      '(0x + 40 hex, any case; stored EIP-55 checksummed). Payment intents whose payer ' +
+      '(`source`) is this account count toward the customer, whatever their chain.',
   })
   @IsOptional()
-  @Matches(/^G[A-Z2-7]{55}$/, {
-    message: 'account must be a valid Stellar public key',
-  })
+  @IsAnyChainAddress()
   account?: string;
 
   @ApiPropertyOptional({ example: 'cust_001' })

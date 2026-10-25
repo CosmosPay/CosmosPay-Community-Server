@@ -1825,6 +1825,19 @@ misma lista `PLUGINS_ENABLED` que los plugins aislados.
 
 ## Actualización — cambios incompatibles y notas de despliegue
 
+### Clientes: una cuenta en cualquier cadena, y estadísticas en la red de la key
+
+- **`account` en `POST /v1/customers` y `PATCH /v1/customers/{id}` acepta una dirección
+  de Solana o de Monad** además de una cuenta de Stellar, distinguidas por su forma. Una
+  dirección de Monad se guarda con checksum EIP-55, como las intenciones de pago registran
+  a un pagador de Monad. Una cuenta de Stellar ahora debe pasar su checksum StrKey: un
+  texto `G...` que solo lo parecía, y que el patrón anterior dejaba pasar, se rechaza con
+  `400`. Sin migración: las cuentas guardadas no cambian.
+- **`payments`, `succeeded` y `total` en `GET /v1/customers` cuentan solo la red a la
+  que apunta la key** (`prod` → `public`, `dev` → `testnet`), y encuentran al pagador
+  en cualquier cadena. Antes sumaban ambas redes, así que la lista de una key de sandbox
+  mostraba pagos de mainnet; las cifras pueden bajar para un consumer que cobra en las dos.
+
 ### Series del dashboard: swaps, liquidez y webhooks junto a los pagos
 
 - **Nueva ruta `GET /v1/summary/series`** (`payments:read`; `period` es `day`, `week`,

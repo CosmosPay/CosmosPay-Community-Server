@@ -1850,6 +1850,21 @@ eingeschaltet werden.
 
 ## Upgrade — Breaking Changes und Deploy-Hinweise
 
+### Kunden: ein Konto auf jeder Chain und Statistiken im Netzwerk des Schlüssels
+
+- **`account` bei `POST /v1/customers` und `PATCH /v1/customers/{id}` nimmt eine Solana-
+  oder Monad-Adresse** ebenso wie ein Stellar-Konto, unterschieden an ihrer Form. Eine
+  Monad-Adresse wird mit EIP-55-Prüfsumme gespeichert, so wie Zahlungsabsichten einen
+  Monad-Zahlenden festhalten. Ein Stellar-Konto muss jetzt seine StrKey-Prüfsumme
+  bestehen: eine `G...`-Zeichenkette, die nur so aussah und die das alte Muster
+  durchließ, wird mit `400` abgelehnt. Keine Migration: gespeicherte Konten bleiben
+  unverändert.
+- **`payments`, `succeeded` und `total` bei `GET /v1/customers` zählen nur das
+  Netzwerk, auf das der Schlüssel zielt** (`prod` → `public`, `dev` → `testnet`), und
+  finden den Zahlenden auf jeder Chain. Bisher addierten sie beide Netzwerke, sodass die
+  Liste eines Sandbox-Schlüssels Mainnet-Zahlungen zeigte; die Zahlen können für einen
+  Consumer sinken, der auf beiden bezahlt wird.
+
 ### Dashboard-Reihen: Swaps, Liquidität und Webhooks neben den Zahlungen
 
 - **Neue Route `GET /v1/summary/series`** (`payments:read`; `period` ist `day`,

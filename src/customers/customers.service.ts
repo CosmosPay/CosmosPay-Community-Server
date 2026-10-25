@@ -1,15 +1,22 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Prisma } from '@generated/prisma/client';
+import { normalizeAnyChainAddress } from '@/chains/chain-address';
 import { ApiError } from '@/common/errors/api-error';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import { formatNumericAmount } from '@/common/money';
+import { resolveNetwork } from '@/common/stellar-network';
+import { AppConfig } from '@/config/configuration';
 import { PrismaService } from '@/prisma/prisma.service';
 import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
 import { CreateCustomerDto } from '@/customers/dto/create-customer.dto';
 import { QueryCustomersDto } from '@/customers/dto/query-customers.dto';
 import { UpdateCustomerDto } from '@/customers/dto/update-customer.dto';
 
-/** On-chain activity attributed to a customer's Stellar account. */
+/**
+ * On-chain activity attributed to a customer's account: the payment intents, on any chain,
+ * whose payer (`source`) is that account, on the network the caller's key targets.
+ */
 interface CustomerPaymentStats {
   payments: number;
   succeeded: number;
@@ -41,6 +48,18 @@ export const CUSTOMER_PUBLIC_SELECT = {
   updatedAt: true,
 } as const satisfies Prisma.CustomerSelect;
 
+/**
+ * The spelling a customer's account is stored and matched under: its chain's own, so a Monad
+ * address is EIP-55 checksummed exactly as payment intents record a Monad payer, and the
+ * stats find it. `IsAnyChainAddress` already refused a shape no chain accepts; null clears
+ * the account and undefined leaves it as it is.
+ */
+function storedAccount<T extends string | null | undefined>(account: T) {
+  return typeof account === 'string'
+    ? (normalizeAnyChainAddress(account) ?? account)
+    : account;
+}
+
 @Injectable()
 export class CustomersService {
   private readonly logger = new Logger(CustomersService.name);
@@ -48,6 +67,7 @@ export class CustomersService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly consumers: ConsumerResolverService,
+    private readonly config: ConfigService<AppConfig, true>,
   ) {}
 
   private resolveConsumer(consumer: GatewayConsumer) {
@@ -63,7 +83,7 @@ export class CustomersService {
         alias: dto.alias ?? null,
         note: dto.note ?? null,
         email: dto.email ?? null,
-        account: dto.account ?? null,
+        account: storedAccount(dto.account) ?? null,
         reference: dto.reference ?? null,
       },
       select: CUSTOMER_PUBLIC_SELECT,
@@ -122,6 +142,7 @@ export class CustomersService {
 
     const stats = await this.paymentStats(
       local.id,
+      resolveNetwork(this.config, consumer),
       customers
         .map((c) => c.account)
         .filter((account): account is string => Boolean(account)),
@@ -155,9 +176,16 @@ export class CustomersService {
    * makes the money *more* accurate than the previous `Number(...)`
    * accumulation, which rounded in binary floating point. Values are
    * parameterized; the account list is bounded by the page size.
+   *
+   * Matched on `source` alone, never on `chain`: an account belongs to one
+   * chain by its shape, so its payments are found wherever they settled, and a
+   * Monad payer is recorded EIP-55 as the account is stored. Scoped to the
+   * network the caller's key targets, like every other payment figure, so a
+   * sandbox key's customers do not count mainnet payments, nor the reverse.
    */
   private async paymentStats(
     consumerId: string,
+    network: string,
     accounts: string[],
   ): Promise<Map<string, CustomerPaymentStats>> {
     if (accounts.length === 0) {
@@ -177,6 +205,7 @@ export class CustomersService {
              ) AS total
         FROM "payment_intent"
        WHERE "consumerId" = ${consumerId}
+         AND "network" = ${network}
          AND "source" IN (${Prisma.join(accounts)})
        GROUP BY "source"
     `;
@@ -212,7 +241,9 @@ export class CustomersService {
         ...(dto.alias !== undefined ? { alias: dto.alias } : {}),
         ...(dto.note !== undefined ? { note: dto.note } : {}),
         ...(dto.email !== undefined ? { email: dto.email } : {}),
-        ...(dto.account !== undefined ? { account: dto.account } : {}),
+        ...(dto.account !== undefined
+          ? { account: storedAccount(dto.account) }
+          : {}),
         ...(dto.reference !== undefined ? { reference: dto.reference } : {}),
       },
       select: CUSTOMER_PUBLIC_SELECT,

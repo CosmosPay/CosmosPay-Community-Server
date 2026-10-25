@@ -1751,6 +1751,20 @@ seal होती हैं और कभी लौटाई नहीं जा
 
 ## अपग्रेड — breaking changes और deploy नोट्स
 
+### Customers: किसी भी chain पर account, और key के network पर stats
+
+- **`POST /v1/customers` और `PATCH /v1/customers/{id}` पर `account` अब Solana या Monad
+  address भी लेता है**, Stellar account के साथ-साथ, और उन्हें उनके shape से पहचाना जाता है।
+  Monad address EIP-55 checksum के साथ store होता है, जैसे payment intents Monad payer को
+  दर्ज करते हैं। Stellar account को अब अपना StrKey checksum पास करना होगा: ऐसा `G...`
+  string जो सिर्फ़ उसके जैसा दिखता था, और जिसे पुराना pattern जाने देता था, `400` के साथ
+  अस्वीकार होता है। कोई migration नहीं: stored accounts नहीं बदलते।
+- **`GET /v1/customers` पर `payments`, `succeeded` और `total` सिर्फ़ उस network को गिनते
+  हैं जिसे key target करती है** (`prod` → `public`, `dev` → `testnet`), और payer को किसी
+  भी chain पर ढूँढते हैं। पहले वे दोनों networks जोड़ते थे, इसलिए sandbox key की list में
+  mainnet payments दिखते थे; जिस consumer को दोनों पर भुगतान मिलता है, उसके आँकड़े घट
+  सकते हैं।
+
 ### Dashboard series: payments के साथ swaps, liquidity और webhooks
 
 - **नया route `GET /v1/summary/series`** (`payments:read`; `period` `day`, `week`,

@@ -4,6 +4,9 @@ import {
   CustomersService,
 } from '@/customers/customers.service';
 
+// Mirrors the real config: a key with no environment falls back to this network.
+const config = { get: () => ({ network: 'testnet' }) };
+
 describe('CustomersService responses', () => {
   const consumer = { username: 'cosmos_u1', credentialId: 'cred_1' } as any;
   const stored = {
@@ -34,6 +37,7 @@ describe('CustomersService responses', () => {
     const service = new CustomersService(
       prisma as any,
       new ConsumerResolverService(prisma as never),
+      config as never,
     );
     return { service, prisma };
   }
@@ -86,6 +90,7 @@ describe('CustomersService.findAll', () => {
     const service = new CustomersService(
       prisma as any,
       new ConsumerResolverService(prisma as never),
+      config as never,
     );
     return { service, prisma, customers };
   }
@@ -191,6 +196,7 @@ describe('CustomersService.ensureForPayer', () => {
     const service = new CustomersService(
       prisma as any,
       new ConsumerResolverService(prisma as never),
+      config as never,
     );
     return { service, prisma };
   }
@@ -222,5 +228,114 @@ describe('CustomersService.ensureForPayer', () => {
     await service.ensureForPayer('c1', account);
 
     expect(prisma.customer.create).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * A customer's account may be on any chain the service settles. It is stored in its chain's
+ * spelling, so the stats find the payer a payment intent recorded, whatever its chain, on the
+ * network the caller's key targets.
+ */
+describe('CustomersService accounts on every chain', () => {
+  const STELLAR = 'GARMB7W3FCR3GKIM3FLWVJASC2PUZ4VHUJZTNJVWWKNTCJNKO6TBCT76';
+  const SOLANA = 'So11111111111111111111111111111111111111112';
+  const MONAD = '0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed';
+  const consumer = {
+    username: 'cosmos_u1',
+    credentialId: 'cred_1',
+    environment: 'prod',
+  } as any;
+
+  function build(customers: { id: string; account: string | null }[] = []) {
+    const prisma = {
+      consumer: { upsert: jest.fn().mockResolvedValue({ id: 'c1' }) },
+      customer: {
+        create: jest.fn().mockResolvedValue({ id: 'cus_1' }),
+        findFirst: jest.fn().mockResolvedValue({ id: 'cus_1' }),
+        update: jest.fn().mockResolvedValue({ id: 'cus_1' }),
+        findMany: jest.fn().mockResolvedValue(customers),
+        count: jest.fn().mockResolvedValue(customers.length),
+      },
+      $queryRaw: jest.fn().mockResolvedValue([]),
+    };
+    const service = new CustomersService(
+      prisma as any,
+      new ConsumerResolverService(prisma as never),
+      config as never,
+    );
+    return { service, prisma };
+  }
+
+  it.each([
+    ['Stellar', STELLAR, STELLAR],
+    ['Solana', SOLANA, SOLANA],
+    ['Monad (EIP-55, whatever case it came in)', MONAD.toLowerCase(), MONAD],
+  ])('stores a %s account in its chain’s spelling', async (_, sent, stored) => {
+    const { service, prisma } = build();
+
+    await service.create(consumer, { name: 'Ada', account: sent });
+    await service.update(consumer, 'cus_1', { account: sent });
+
+    expect(prisma.customer.create.mock.calls[0][0].data.account).toBe(stored);
+    expect(prisma.customer.update.mock.calls[0][0].data).toEqual({
+      account: stored,
+    });
+  });
+
+  it('clears the account on null and leaves it alone when the update omits it', async () => {
+    const { service, prisma } = build();
+
+    await service.update(consumer, 'cus_1', { account: null as never });
+    await service.update(consumer, 'cus_1', { note: 'vip' });
+
+    expect(prisma.customer.update.mock.calls[0][0].data).toEqual({
+      account: null,
+    });
+    expect(prisma.customer.update.mock.calls[1][0].data).toEqual({
+      note: 'vip',
+    });
+  });
+
+  it('matches payments on every chain by payer, never by chain, on the key’s network', async () => {
+    const { service, prisma } = build([
+      { id: 'cus_s', account: STELLAR },
+      { id: 'cus_o', account: SOLANA },
+      { id: 'cus_m', account: MONAD },
+    ]);
+    prisma.$queryRaw.mockResolvedValue([
+      { account: SOLANA, payments: 1n, succeeded: 1n, total: '0.25' },
+      { account: MONAD, payments: 2n, succeeded: 1n, total: '3.5' },
+    ]);
+
+    const result = await service.findAll(consumer, { take: 100, skip: 0 });
+
+    const [strings, ...values] = prisma.$queryRaw.mock.calls[0];
+    const sql = (strings as string[]).join('?');
+    expect(sql).toContain('"network" = ?');
+    expect(sql).toContain('"source" IN (?)');
+    expect(sql).not.toContain('"chain"');
+    expect(values[0]).toBe('c1');
+    expect(values[1]).toBe('public');
+    expect((values[2] as { values: unknown[] }).values).toEqual([
+      STELLAR,
+      SOLANA,
+      MONAD,
+    ]);
+    expect(result.data.map((c) => [c.id, c.payments, c.total])).toEqual([
+      ['cus_s', 0, '0'],
+      ['cus_o', 1, '0.25'],
+      ['cus_m', 2, '3.5'],
+    ]);
+  });
+
+  it('counts a sandbox key’s customers on testnet only', async () => {
+    const { service, prisma } = build([{ id: 'cus_s', account: STELLAR }]);
+
+    await service.findAll(
+      { ...consumer, environment: 'dev' },
+      { take: 100, skip: 0 },
+    );
+
+    expect(prisma.$queryRaw.mock.calls[0][2]).toBe('testnet');
   });
 });

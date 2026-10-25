@@ -266,6 +266,9 @@ table. These are the rules that did not hold on their own:
   does not compile until every table has its entry. A request that names no chain
   means Stellar, and must keep behaving byte for byte as it did: the Stellar
   signing challenges have no `chain:` line, alias resolution defaults to Stellar.
+  A field that names no chain but takes any (a customer's `account`) reads the
+  chain from the shape: `@IsAnyChainAddress()` to validate, `normalizeAnyChainAddress`
+  to store (EIP-55 on Monad, the spelling payment intents record a payer in).
 - **Solana and Monad are reached only through `SolanaRpcClient` / `EvmRpcClient`**,
   which check the node's genesis hash / `eth_chainId` before trusting it. Never
   call a node URL directly.

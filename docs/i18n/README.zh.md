@@ -1213,6 +1213,11 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
 
 ## 升级 — 破坏性变更与部署说明
 
+### 客户：任意链上的账户，以及按 key 所在网络统计
+
+- **`POST /v1/customers` 和 `PATCH /v1/customers/{id}` 中的 `account` 现在也接受 Solana 或 Monad 地址**，与 Stellar 账户并列，按地址形态区分。Monad 地址以 EIP-55 校验和形式存储，与支付意图记录 Monad 付款方的方式一致。Stellar 账户现在必须通过 StrKey 校验和：仅仅看起来像账户、旧规则会放行的 `G...` 字符串，现在以 `400` 拒绝。无迁移：已存储的账户不变。
+- **`GET /v1/customers` 中的 `payments`、`succeeded` 和 `total` 只统计该 key 所指向的网络**（`prod` → `public`，`dev` → `testnet`），并在任意链上匹配付款方。此前它们把两个网络相加，因此 sandbox key 的列表会显示主网付款；对在两个网络上都收款的 consumer，这些数字可能下降。
+
 ### 仪表盘序列：支付旁边的 swap、流动性与 webhook
 
 - **新路由 `GET /v1/summary/series`**（`payments:read`；`period` 为 `day`、`week`、`month` 或 `year`）：仪表盘概览所绘制的数据，按 UTC 分桶，覆盖 30 天、12 周、12 个月或 5 年（每周从周一开始，没有活动的桶为零），并附带该窗口的合计以及紧邻其前一个窗口的合计，用于计算增长。支付带有已结算金额和不同付款方数量；各类 swap 按桶计数并按类型拆分（`dex` 表示 Stellar DEX，`chain` 表示 Jupiter 和 Kuru Flow，`crossChain` 表示 NEAR Intents）；流动性操作和 webhook 投递按窗口计数。它只在 Postgres 中聚合：无迁移、无新变量，现有响应均未改变。

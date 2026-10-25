@@ -1816,6 +1816,21 @@ plugins isolés.
 
 ## Mise à niveau — changements incompatibles et notes de déploiement
 
+### Clients : un compte sur n'importe quelle chaîne, et des statistiques sur le réseau de la clé
+
+- **`account` sur `POST /v1/customers` et `PATCH /v1/customers/{id}` accepte une adresse
+  Solana ou Monad** en plus d'un compte Stellar, distinguées par leur forme. Une adresse
+  Monad est stockée avec la somme de contrôle EIP-55, comme les intentions de paiement
+  enregistrent un payeur Monad. Un compte Stellar doit désormais passer sa somme de
+  contrôle StrKey : une chaîne `G...` qui n'en avait que l'air, que l'ancien motif
+  laissait passer, est refusée avec `400`. Pas de migration : les comptes stockés ne
+  changent pas.
+- **`payments`, `succeeded` et `total` sur `GET /v1/customers` ne comptent que le réseau
+  que vise la clé** (`prod` → `public`, `dev` → `testnet`), et trouvent le payeur sur
+  n'importe quelle chaîne. Ils additionnaient les deux réseaux, si bien que la liste d'une
+  clé de sandbox montrait des paiements mainnet ; les chiffres peuvent baisser pour un
+  consumer payé sur les deux.
+
 ### Séries du tableau de bord : swaps, liquidité et webhooks à côté des paiements
 
 - **Nouvelle route `GET /v1/summary/series`** (`payments:read` ; `period` vaut `day`,

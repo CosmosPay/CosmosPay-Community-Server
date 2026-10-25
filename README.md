@@ -1759,6 +1759,19 @@ the service under `src/native-plugins/<slug>/`, switched on by the same
 
 ## Upgrading — breaking changes and deploy notes
 
+### Customers: an account on any chain, and stats on the key's network
+
+- **`account` on `POST /v1/customers` and `PATCH /v1/customers/{id}` takes a Solana or
+  Monad address** as well as a Stellar account, told apart by its shape. A Monad address is
+  stored EIP-55 checksummed, as payment intents record a Monad payer. A Stellar account
+  must now pass its StrKey checksum: a `G...` string that only looked like one, which the
+  old pattern let through, is refused with `400`. No migration: stored accounts are
+  unchanged.
+- **`payments`, `succeeded` and `total` on `GET /v1/customers` count only the network
+  the key targets** (`prod` → `public`, `dev` → `testnet`), and find the payer on any
+  chain. They used to add both networks, so a sandbox key's list showed mainnet payments;
+  the figures can drop for a consumer that is paid on both.
+
 ### Dashboard series: swaps, liquidity and webhooks beside payments
 
 - **New route `GET /v1/summary/series`** (`payments:read`; `period` is `day`, `week`,

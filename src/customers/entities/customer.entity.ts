@@ -23,8 +23,10 @@ export class CustomerEntity {
 
   @ApiPropertyOptional({
     nullable: true,
-    description: 'Stellar account associated with this customer, if any.',
-    example: 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+    description:
+      'The account associated with this customer, if any: a Stellar account (G...), a ' +
+      'Solana address or a Monad address, the last stored EIP-55 checksummed.',
+    example: 'GCALNQQBXAPZ2WIRSDDBMSTAKCUH5SG6U76YBFLQLIXJTF7FE5AX7AOO',
   })
   account!: string | null;
 
@@ -44,7 +46,9 @@ export class CustomerEntity {
 /** A customer plus the payment counters `findAll` aggregates in PostgreSQL. */
 export class CustomerWithStatsEntity extends CustomerEntity {
   @ApiProperty({
-    description: 'Payment intents attributed to this customer.',
+    description:
+      'Payment intents, on any chain, whose payer (`source`) is this customer’s account, ' +
+      'on the network the API key targets.',
     example: 12,
   })
   payments!: number;

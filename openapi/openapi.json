@@ -12957,7 +12957,7 @@
           "account": {
             "type": "string",
             "example": "GCALNQQBXAPZ2WIRSDDBMSTAKCUH5SG6U76YBFLQLIXJTF7FE5AX7AOO",
-            "description": "Optional Stellar account to associate the customer with."
+            "description": "Optional account to associate the customer with, on any chain: a Stellar account (G..., checksum verified), a Solana address (base58, 32 bytes) or a Monad address (0x + 40 hex, any case; stored EIP-55 checksummed). Payment intents whose payer (`source`) is this account count toward the customer, whatever their chain."
           },
           "reference": {
             "type": "string",
@@ -12992,8 +12992,8 @@
           "account": {
             "type": "object",
             "nullable": true,
-            "description": "Stellar account associated with this customer, if any.",
-            "example": "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+            "description": "The account associated with this customer, if any: a Stellar account (G...), a Solana address or a Monad address, the last stored EIP-55 checksummed.",
+            "example": "GCALNQQBXAPZ2WIRSDDBMSTAKCUH5SG6U76YBFLQLIXJTF7FE5AX7AOO"
           },
           "note": {
             "type": "object",
@@ -13047,8 +13047,8 @@
           "account": {
             "type": "object",
             "nullable": true,
-            "description": "Stellar account associated with this customer, if any.",
-            "example": "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+            "description": "The account associated with this customer, if any: a Stellar account (G...), a Solana address or a Monad address, the last stored EIP-55 checksummed.",
+            "example": "GCALNQQBXAPZ2WIRSDDBMSTAKCUH5SG6U76YBFLQLIXJTF7FE5AX7AOO"
           },
           "note": {
             "type": "object",
@@ -13072,7 +13072,7 @@
           },
           "payments": {
             "type": "number",
-            "description": "Payment intents attributed to this customer.",
+            "description": "Payment intents, on any chain, whose payer (`source`) is this customer’s account, on the network the API key targets.",
             "example": 12
           },
           "succeeded": {
@@ -13148,7 +13148,7 @@
           "account": {
             "type": "string",
             "example": "GCALNQQBXAPZ2WIRSDDBMSTAKCUH5SG6U76YBFLQLIXJTF7FE5AX7AOO",
-            "description": "Optional Stellar account to associate the customer with."
+            "description": "Optional account to associate the customer with, on any chain: a Stellar account (G..., checksum verified), a Solana address (base58, 32 bytes) or a Monad address (0x + 40 hex, any case; stored EIP-55 checksummed). Payment intents whose payer (`source`) is this account count toward the customer, whatever their chain."
           },
           "reference": {
             "type": "string",

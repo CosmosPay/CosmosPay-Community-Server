@@ -1,6 +1,6 @@
 import { StrKey } from '@stellar/stellar-sdk';
 import { keccak_256 } from '@noble/hashes/sha3.js';
-import type { Chain } from '@/chains/chains.constants';
+import { CHAINS, type Chain } from '@/chains/chains.constants';
 
 const BASE58_ALPHABET =
   '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
@@ -133,3 +133,37 @@ export function isAddressForChain(chain: Chain, address: string): boolean {
 export function normalizeAddress(chain: Chain, address: string): string {
   return CHAIN_ADDRESS_RULES[chain].normalize(address);
 }
+
+/**
+ * The chain an address belongs to, read from its shape alone, for a field that names no
+ * chain (a customer's `account`). The shapes do not overlap: a Stellar key is 56 base32
+ * characters starting with G, a Solana key is base58 for 32 bytes (at most 44 characters, and
+ * no `0`), a Monad address is 0x + 40 hex. Null when no rule accepts it, and also when more
+ * than one would, so a future chain whose shape collides is refused rather than guessed.
+ */
+export function chainOfAddress(address: string): Chain | null {
+  if (typeof address !== 'string') return null;
+  const matches = CHAINS.filter((chain) =>
+    CHAIN_ADDRESS_RULES[chain].isValid(address),
+  );
+  return matches.length === 1 ? matches[0] : null;
+}
+
+/**
+ * `address` in the one spelling its chain stores (EIP-55 on Monad), or null when it is no
+ * chain's address. See {@link chainOfAddress}.
+ */
+export function normalizeAnyChainAddress(address: string): string | null {
+  const chain = chainOfAddress(address);
+  return chain ? normalizeAddress(chain, address) : null;
+}
+
+/**
+ * Completes "`<property>` must be ..." for a field that takes an address on any chain, from
+ * each chain's own wording: "a valid Stellar account address (G...), a valid Solana address
+ * (base58, 32 bytes) or a valid Monad (EVM) address (0x + 40 hex)".
+ */
+const EXPECTED_PER_CHAIN = CHAINS.map(
+  (chain) => CHAIN_ADDRESS_RULES[chain].expected,
+);
+export const ANY_CHAIN_ADDRESS_EXPECTED = `${EXPECTED_PER_CHAIN.slice(0, -1).join(', ')} or ${EXPECTED_PER_CHAIN[EXPECTED_PER_CHAIN.length - 1]}`;
