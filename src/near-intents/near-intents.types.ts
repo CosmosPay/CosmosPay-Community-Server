@@ -12,11 +12,12 @@ export interface NearIntentsToken {
   /** 1Click's id, e.g. `nep141:sol.omft.near`. */
   assetId: string;
   decimals: number;
-  /** 1Click's chain name — see `NEAR_INTENTS_BLOCKCHAINS`. */
+  /** 1Click's chain name: see `CROSS_CHAIN_NETWORKS` (`blockchain`). */
   blockchain: string;
   symbol: string;
-  /** SPL mint, ERC-20 address or Stellar issuer; absent for a native coin. */
+  /** The token's contract on its chain; absent for a native coin. */
   contractAddress?: string;
+  /** Reference USD price; indicative, never used to price a swap. */
   price?: number;
 }
 

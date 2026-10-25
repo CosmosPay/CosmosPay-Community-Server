@@ -60,8 +60,8 @@ src/
                                   + Solana (Jupiter) and Monad (Kuru Flow): venues/, chain swaps, observer
   jupiter/                        Jupiter Swap API client (Solana aggregator)
   kuru/                           Kuru Flow API client (Monad aggregator)
-  cross-chain-swaps/              swaps between Stellar, Solana and Monad via NEAR Intents: quote,
-                                  deposit address + per-chain wallet link, status observer
+  cross-chain-swaps/              swaps across 35 networks via NEAR Intents (Stellar, Solana, Monad, EVM,
+                                  UTXO, ...): network registry, quote, deposit address + wallet link, observer
   near-intents/                   NEAR Intents 1Click client: tokens, quote, status, deposit submit
   liquidity-pools/                AMM deposit/withdraw, pool + position reads, cost basis + commission on gain
   observer/                       background reconciler: swaps + LP ops against Horizon, one adapter per table
@@ -114,7 +114,7 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | 支付意图          | `/v1/payment-intents`    | Stellar（SEP-7）、Solana（Solana Pay）和 Monad（EIP-681）上的 `pay` 意图、SEP-7 `tx`、校验、链上观察器 |
 | 支付链接          | `/v1/payment-links`      | 付款方所见的单个支付意图，供托管收银页使用——无需 API key（`@Public`） |
 | Swap | `/v1/swaps` | 路径支付报价、构建未签名 XDR、提交已签名交易 · Solana 经由 Jupiter，Monad 经由 Kuru Flow |
-| 跨链 swap | `/v1/cross-chain-swaps` | 通过 NEAR Intents 在 Stellar ⇄ Solana ⇄ Monad 之间：报价、充值地址、状态 |
+| 跨链 swap | `/v1/cross-chain-swaps` | 通过 NEAR Intents 在 35 个网络之间（Stellar、Solana、Monad、EVM 链、Bitcoin 与 UTXO 币等）：报价、充值地址、状态 |
 | 流动性池 | `/v1/liquidity-pools` | AMM 存入 / 取出、持仓、按收益收取佣金 |
 | Webhooks | `/v1/webhooks` | 端点 CRUD、密钥轮换、投递记录、重新投递 |
 | KYC | `/v1/kyc` | Receiver（KYC/KYB）、钱包、银行账户、文档上传 |
@@ -806,10 +806,21 @@ POST /v1/swaps/quote {chain} → POST /v1/swaps {chain, source} → wallet signs
 
 ## 跨链 swap（NEAR Intents）
 
-Stellar、Solana 与 Monad **之间**的 swap 由 [NEAR Intents](https://intents.near.org/)
-通过其 1Click API 结算。与上文的 Stellar swap 一样，它们是**非托管**的：付款方把输入发送到
-1Click 专为这一笔报价派生的充值地址，NEAR Intents 的求解器（solver）在另一条链上把输出付给
-收款方，或者退款给付款方。两条腿都不经过 Cosmos Pay。
+**跨链** swap 由 [NEAR Intents](https://intents.near.org/) 通过其 1Click API 结算，
+可在它所列出、且本服务能够校验的任意两个网络之间进行，目前共 35 个：Stellar、Solana 与
+Monad；EVM 链（Ethereum、Base、Arbitrum、Optimism、BNB Chain、Polygon、Avalanche、Gnosis、
+Berachain、Scroll、X Layer、Abstract、Plasma、Robinhood Chain、Hyperliquid）；UTXO 币
+（Bitcoin、Litecoin、Dogecoin、Bitcoin Cash、Dash、Zcash）；以及 XRP Ledger、Tron、TON、NEAR、
+Sui、Aptos、Movement、Starknet、Cardano、Aleo 和 Fogo。与上文的 Stellar swap 一样，它们是
+**非托管**的：付款方把输入发送到 1Click 专为这一笔报价派生的充值地址，NEAR Intents 的求解器
+（solver）在目标链上把输出付给收款方，或者退款给付款方。两条腿都不经过 Cosmos Pay。
+
+网络以其 id 命名：`stellar`、`solana` 和 `monad` 与本服务其他地方一致，其余网络使用 1Click
+自己的代码（`eth`、`base`、`btc`、`near` 等；注册表是
+`src/cross-chain-swaps/cross-chain-networks.ts`）。`GET /v1/cross-chain-swaps/assets` 列出每个
+代币的 `chain`、用于显示的 `chainName` 以及 `priceUsd`，即 NEAR Intents 的参考价格：仅供参考，
+用于在报价前显示估算值，每个金额仍然来自报价。1Click 还列出了 `qtc` 和 `adi`；它们不提供，
+因为其地址格式无法确认，而本服务无法校验的退款地址就是它无法承诺的退款。
 
 ```
 quote → create (deposit address + wallet link + QR) → payer sends the deposit
@@ -821,12 +832,23 @@ quote → create (deposit address + wallet link + QR) → payer sends the deposi
 | 交易对 | 结算方 | 原因 |
 | --- | --- | --- |
 | Stellar → Stellar | `/v1/swaps`（Stellar DEX） | 协议原生支持 swap；`/v1/cross-chain-swaps` 返回 `400` 并指向那里 |
-| Stellar ⇄ Solana ⇄ Monad | NEAR Intents | 需要一座桥，NEAR Intents 就是这座桥 |
+| 任意两个不同网络 | NEAR Intents | 需要一座桥，NEAR Intents 就是这座桥 |
 | Solana → Solana、Monad → Monad | 带 `chain` 的 `/v1/swaps`（Jupiter、Kuru Flow） | 各聚合器在本链所有流动性来源中路由以获得最佳汇率；`/v1/cross-chain-swaps` 返回 `400` 并指向那里 |
+| 任何其他网络内部（`eth` → `eth` 等） | NEAR Intents | 本服务在那里没有自己的交易场所 |
 
-本服务在每条链上自己完成的工作：对照 1Click 的代币列表（`GET /v1/cross-chain-swaps/assets`）
-解析资产，按各自的链校验每个地址，以该链的钱包标准——SEP-7 `pay`、Solana Pay、EIP-681——
-构建充值请求，在 Horizon 上检查 Stellar 收款方是否信任即将收到的资产，并把状态镜像到自己的表中。
+本服务在每个网络上自己完成的工作：对照 1Click 的代币列表（`GET /v1/cross-chain-swaps/assets`）
+解析资产，按各自的网络校验每个地址（`recipient` 按目标网络，`refundTo` 按源网络），在链有
+钱包链接标准的地方把充值请求构建为钱包链接（SEP-7 `pay`、Solana Pay、使用已核实链 id 的
+EIP-681、BIP-21 风格的 `bitcoin:`、`litecoin:`、`dogecoin:`、`bitcoincash:`、`dash:` 和
+`zcash:` 链接、`ton://transfer` 以及 CIP-13 `web+cardano:`），在 Horizon 上检查 Stellar
+收款方是否信任即将收到的资产，并把状态镜像到自己的表中。
+
+**有些充值没有链接。** XRP Ledger、Tron、NEAR、Sui、Aptos、Movement、Starknet、Aleo、Fogo、
+Robinhood Chain 和 Hyperliquid 没有本服务构建的钱包链接标准，TON 和 Cardano 的链接也只承载原生币。
+这些情况下 `depositUri` 为 `null`：付款方用该链的任意钱包把 `amountIn` 发送到 `depositAddress`，
+`qr` 编码的是该地址。在 Stellar 之外，本服务向 1Click 请求该 swap 专属的地址
+（`depositMode: SIMPLE`），不带 memo；如果 1Click 仍然签发了 memo，它会被保存并在
+`depositMemo` 中返回，必须附上，并且不会构建会丢失它的链接。
 
 **佣金。** 组织套餐的费率——与 Stellar swap 相同的可信 `X-Plan-Swap-Fee-Bps`，绝不是请求
 参数——作为一条 `appFees` 发送给 1Click，付给 `NEAR_INTENTS_FEE_RECIPIENT`（一个 NEAR 账户）。
@@ -863,7 +885,7 @@ NEAR Intents 从输入中扣除它，报价的输出已是扣除后的净额，�
 
 | 路由 | Scope | 用途 |
 | --- | --- | --- |
-| `GET /v1/cross-chain-swaps/assets` | `swaps:read` | NEAR Intents 可在 Stellar、Solana 和 Monad 上 swap 的代币 |
+| `GET /v1/cross-chain-swaps/assets` | `swaps:read` | NEAR Intents 可在本服务覆盖的每个网络上 swap 的代币，附带参考性的 USD 价格 |
 | `POST /v1/cross-chain-swaps/quote` | `swaps:read` | 试算报价：输出、最小值、佣金；不持久化任何内容 |
 | `POST /v1/cross-chain-swaps` | `swaps:write` | 正式报价：充值地址、memo、钱包链接和二维码；支持 `Idempotency-Key` |
 | `GET /v1/cross-chain-swaps` | `swaps:read` | 该 consumer 的跨链 swap |
@@ -1190,6 +1212,14 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
 - **OpenAPI 契约记录每个原生插件的路由**，无论是否开启：`openapi:generate` 会全部开启。
 
 ## 升级 — 破坏性变更与部署说明
+
+### 跨链 swap：NEAR Intents 的每个网络，以及可为空的 `depositUri`
+
+- **`originChain` 和 `destinationChain` 接受 35 个网络 id**：`stellar`、`solana` 和 `monad` 与之前相同，其余使用 1Click 的代码（`eth`、`base`、`arb`、`op`、`bsc`、`pol`、`avax`、`gnosis`、`bera`、`scroll`、`xlayer`、`abs`、`plasma`、`hood`、`hypercore`、`btc`、`ltc`、`doge`、`bch`、`dash`、`zec`、`xrp`、`tron`、`ton`、`near`、`sui`、`aptos`、`movement`、`starknet`、`cardano`、`aleo`、`fogo`）。现有请求和已存储的行不变；`recipient` 和 `refundTo` 按所指定的网络校验，每个跨链响应中的链枚举随之扩大。
+- **`depositUri` 可能为 `null`**：在没有钱包链接标准的网络上，跨链 swap 响应和 `CROSS_CHAIN_SWAP_*` webhook 中都是如此；此时 `qr` 编码 `depositAddress`。无条件打开 `depositUri` 的客户端必须处理 `null`。
+- **同一网络内的交易对现在在其他所有网络上都会报价**（`eth` → `eth`）。Stellar、Solana 和 Monad 仍返回 `400` 并指向 `/v1/swaps`。
+- **`GET /v1/cross-chain-swaps/assets` 列出所有网络的代币**，每个都有两个新字段：`chainName` 和 `priceUsd`（仅供参考，最多是几分钟前的数据，从不用于定价）。拒绝未知响应字段的客户端需要根据契约重新生成。
+- **迁移 `20261025120000_cross_chain_deposit_uri_nullable`** 去掉 `cross_chain_swap.depositUri` 的 `NOT NULL`；不改写任何数据。在新版本承接流量之前运行 `migrate deploy`：它会在该列写入 `null`。
 
 ### 支付意图：每个意图一个收银页设计
 

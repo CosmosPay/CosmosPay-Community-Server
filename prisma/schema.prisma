@@ -1031,9 +1031,11 @@ model CrossChainSwap {
   // service maps onto a coarser one.
   providerStatus String
 
-  // Origin leg: what the payer sends. `*Asset` is the symbol we answered with,
-  // `*AssetId` 1Click's id for it, `*Contract` the SPL mint / ERC-20 / Stellar
-  // issuer (null for the chain's native coin).
+  // Origin leg: what the payer sends. `*Chain` is a network id from
+  // `CROSS_CHAIN_NETWORK_IDS` (`stellar`, `solana`, `monad`, `eth`, `btc`, ...;
+  // TEXT, so a new network needs no migration). `*Asset` is the symbol we
+  // answered with, `*AssetId` 1Click's id for it, `*Contract` the token's
+  // contract on that network (null for the native coin).
   originChain         String
   originAsset         String
   originAssetId       String
@@ -1060,10 +1062,12 @@ model CrossChainSwap {
   refundTo  String // on originChain
 
   // Where, and with what memo, the payer sends `amountIn`; and the wallet link
-  // for it on the origin chain (SEP-7 pay, Solana Pay, EIP-681).
+  // for it on the origin chain (SEP-7 pay, Solana Pay, EIP-681, BIP-21 and its
+  // copies, TON, CIP-13). Null where the chain has no link standard this
+  // service builds: the payer pays the address (and memo) with any wallet.
   depositAddress String
   depositMemo    String?
-  depositUri     String
+  depositUri     String?
   // The payer's deposit transaction, when a caller reported it.
   depositTxHash  String?
 

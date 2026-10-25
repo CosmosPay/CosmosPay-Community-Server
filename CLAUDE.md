@@ -289,13 +289,28 @@ table. These are the rules that did not hold on their own:
   `chain-swaps.service.ts` (`OtherChain = Exclude<Chain, 'stellar'>`), so a new
   chain does not compile until it has a venue. A swap between chains is
   `/v1/cross-chain-swaps` on NEAR Intents (`src/near-intents/`), which refuses
-  every same-chain pair. All of them are always compiled in, not plugins.
-  Each aggregator only prices and builds: the wallet signs, and this service
-  checks the signed transaction is the one it built before broadcasting it
-  through its own RPC. Anything per chain is a `Record<Chain, …>`
+  a same-chain pair on Stellar, Solana and Monad (they have a venue above) and
+  allows it on every other network. All of them are always compiled in, not
+  plugins. Each aggregator only prices and builds: the wallet signs, and this
+  service checks the signed transaction is the one it built before broadcasting
+  it through its own RPC. Anything per chain is a `Record<Chain, …>`
   (`NEAR_INTENTS_BLOCKCHAINS`, `DEPOSIT_LINK_BUILDERS`, `CHAIN_SWAP_PROVIDERS`),
   deposit links use this service's own SEP-7 / Solana Pay / EIP-681 builders, and
   third-party HTTP goes through `requestUpstreamJson` (`src/common/upstream-http.ts`).
+- **Cross-chain swaps reach more networks than `Chain`.** Every network NEAR
+  Intents lists and this service can validate (35: the three chains, 15 EVM
+  networks, the UTXO coins, XRP Ledger, Tron, TON, NEAR, Sui, Aptos, Movement,
+  Starknet, Cardano, Aleo, Fogo) is one entry of `CROSS_CHAIN_NETWORKS`
+  (`src/cross-chain-swaps/cross-chain-networks.ts`), a
+  `Record<CrossChainNetworkId, …>` holding its address rule, transaction-id rule
+  and deposit-link builder (null where the chain has no wallet-link standard, so
+  `depositUri` is nullable). The three settled chains keep their ids and reuse
+  `CHAIN_ADDRESS_RULES` and `DEPOSIT_LINK_BUILDERS`; the others use 1Click's
+  `blockchain` code. An EIP-681 link names a chain id from
+  `CROSS_CHAIN_EVM_CHAIN_IDS` only after it was checked against chainlist and the
+  chain's own `eth_chainId`: a wrong id sends the deposit to another chain. A
+  1Click blockchain with no entry (`qtc`, `adi`) is never offered: an address this
+  service cannot validate is a refund it cannot promise.
 - **Monad deposit addresses are `CREATE2` addresses of
   `contracts/PaymentForwarder.sol`**, so every one of them depends on the exact
   bytecode in `src/evm/payment-forwarder.artifact.ts`. Regenerate it only with

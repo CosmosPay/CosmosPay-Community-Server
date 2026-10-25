@@ -57,7 +57,8 @@ export class CrossChainSwapsController {
   @RequirePermissions('swaps:read')
   @ApiOperation({
     summary:
-      'List the assets NEAR Intents can swap on Stellar, Solana and Monad',
+      'List the assets NEAR Intents can swap on every network this service ' +
+      'reaches, with an indicative USD price',
   })
   @ApiOkResponse({ type: CrossChainAssetListEntity })
   assets() {
@@ -117,7 +118,7 @@ export class CrossChainSwapsController {
   @RateLimit(CROSS_CHAIN_CREATE_RATE_LIMIT)
   @ApiOperation({
     summary:
-      'Create a cross-chain swap → NEAR Intents deposit address + wallet link (SEP-7 / Solana Pay / EIP-681) + QR',
+      'Create a cross-chain swap → NEAR Intents deposit address + wallet link where the origin chain has a standard (SEP-7 / Solana Pay / EIP-681 / BIP-21 / TON / CIP-13) + QR',
   })
   @ApiHeader({
     name: 'Idempotency-Key',

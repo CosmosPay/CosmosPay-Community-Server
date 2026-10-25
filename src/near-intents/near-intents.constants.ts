@@ -5,7 +5,8 @@ import type { Chain } from '@/chains/chains.constants';
  * `Record` over the chain union, so a chain added to `CHAINS` does not compile
  * until it says whether — and as what — NEAR Intents reaches it. Checked
  * against `GET /v0/tokens` (2026-09-30): Stellar lists XLM and USDC, Solana SOL
- * and SPL tokens, Monad MON, USDC and USDT0.
+ * and SPL tokens, Monad MON, USDC and USDT0. The other networks cross-chain
+ * swaps reach are named by 1Click's own code in `CROSS_CHAIN_NETWORKS`.
  */
 export const NEAR_INTENTS_BLOCKCHAINS: Record<Chain, string> = {
   stellar: 'stellar',
@@ -15,9 +16,11 @@ export const NEAR_INTENTS_BLOCKCHAINS: Record<Chain, string> = {
 
 /**
  * How long the 1Click token list is reused. It changes when NEAR Intents lists
- * a token, which is rare; its `price` field changes constantly, but nothing
- * here prices from it — every amount comes from a quote. Five minutes keeps a
- * quote from costing two upstream calls without pinning a delisting for long.
+ * a token, which is rare. Its `price` field changes constantly, but nothing
+ * here prices from it: every amount comes from a quote, and the asset list
+ * passes it on only as an indicative `priceUsd`, so a price up to this old is
+ * fine. Five minutes keeps a quote from costing two upstream calls without
+ * pinning a delisting for long.
  */
 export const NEAR_INTENTS_TOKENS_TTL_MS = 5 * 60 * 1000;
 

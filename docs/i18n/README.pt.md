@@ -87,8 +87,8 @@ src/
                                   + Solana (Jupiter) and Monad (Kuru Flow): venues/, chain swaps, observer
   jupiter/                        Jupiter Swap API client (Solana aggregator)
   kuru/                           Kuru Flow API client (Monad aggregator)
-  cross-chain-swaps/              swaps between Stellar, Solana and Monad via NEAR Intents: quote,
-                                  deposit address + per-chain wallet link, status observer
+  cross-chain-swaps/              swaps across 35 networks via NEAR Intents (Stellar, Solana, Monad, EVM,
+                                  UTXO, ...): network registry, quote, deposit address + wallet link, observer
   near-intents/                   NEAR Intents 1Click client: tokens, quote, status, deposit submit
   liquidity-pools/                AMM deposit/withdraw, pool + position reads, cost basis + commission on gain
   observer/                       background reconciler: swaps + LP ops against Horizon, one adapter per table
@@ -144,7 +144,7 @@ escopo. **Os schemas de requisição e resposta ficam no contrato OpenAPI gerado
 | Intenções de pagamento | `/v1/payment-intents`    | Intenções `pay` em Stellar (SEP-7), Solana (Solana Pay) e Monad (EIP-681), `tx` SEP-7, validação, observador on-chain |
 | Links de pagamento | `/v1/payment-links`      | Uma intenção de pagamento como quem paga a vê, para páginas de checkout hospedadas — sem API key (`@Public`) |
 | Swaps             | `/v1/swaps`              | Cotação de path payment, montagem do XDR não assinado, envio do assinado · Solana via Jupiter, Monad via Kuru Flow |
-| Swaps entre redes | `/v1/cross-chain-swaps` | Stellar ⇄ Solana ⇄ Monad pela NEAR Intents: cotação, endereço de depósito, status |
+| Swaps entre redes | `/v1/cross-chain-swaps` | Entre 35 redes pela NEAR Intents (Stellar, Solana, Monad, redes EVM, Bitcoin e as moedas UTXO, ...): cotação, endereço de depósito, status |
 | Liquidity pools   | `/v1/liquidity-pools`    | Depósito / saque em AMM, posições, comissão sobre o ganho |
 | Webhooks          | `/v1/webhooks`           | CRUD de endpoints, rotação de segredo, entregas, reentrega |
 | KYC               | `/v1/kyc`                | Receivers (KYC/KYB), carteiras, contas bancárias, upload de documentos |
@@ -1209,12 +1209,28 @@ POST /v1/swaps/quote {chain} → POST /v1/swaps {chain, source} → wallet signs
 
 ## Swaps entre redes (NEAR Intents)
 
-Os swaps **entre** Stellar, Solana e Monad são liquidados pela
-[NEAR Intents](https://intents.near.org/) através da sua API 1Click. Como os swaps
-da Stellar acima, eles são **não custodiais**: quem paga envia a entrada para um
-endereço de depósito que o 1Click deriva para aquela única cotação, e os solvers da
-NEAR Intents pagam a saída ao destinatário na outra rede, ou reembolsam quem pagou.
-Nenhuma das duas pernas passa pela Cosmos Pay.
+Os swaps **entre redes** são liquidados pela
+[NEAR Intents](https://intents.near.org/) através da sua API 1Click, entre quaisquer
+duas redes que ela lista e que este serviço consegue validar, 35 hoje: Stellar,
+Solana e Monad; as redes EVM (Ethereum, Base, Arbitrum, Optimism, BNB Chain, Polygon,
+Avalanche, Gnosis, Berachain, Scroll, X Layer, Abstract, Plasma, Robinhood Chain,
+Hyperliquid); as moedas UTXO (Bitcoin, Litecoin, Dogecoin, Bitcoin Cash, Dash,
+Zcash); e XRP Ledger, Tron, TON, NEAR, Sui, Aptos, Movement, Starknet, Cardano, Aleo
+e Fogo. Como os swaps da Stellar acima, eles são **não custodiais**: quem paga envia
+a entrada para um endereço de depósito que o 1Click deriva para aquela única
+cotação, e os solvers da NEAR Intents pagam a saída ao destinatário na rede de
+destino, ou reembolsam quem pagou. Nenhuma das duas pernas passa pela Cosmos Pay.
+
+Uma rede é nomeada pelo seu id: `stellar`, `solana` e `monad`, como no resto deste
+serviço, e o código do próprio 1Click para as demais (`eth`, `base`, `btc`, `near`,
+...; o registro é `src/cross-chain-swaps/cross-chain-networks.ts`).
+`GET /v1/cross-chain-swaps/assets` lista cada token com a sua `chain`, um
+`chainName` para exibição e `priceUsd`, o preço de referência da NEAR Intents:
+apenas indicativo, para mostrar uma estimativa antes de cotar, já que todo valor
+continua vindo de uma cotação. O 1Click também lista `qtc` e `adi`; eles não são
+oferecidos, porque os seus formatos de endereço não puderam ser confirmados, e um
+endereço de reembolso que este serviço não consegue validar é um reembolso que ele
+não pode prometer.
 
 ```
 quote → create (deposit address + wallet link + QR) → payer sends the deposit
@@ -1226,15 +1242,28 @@ quote → create (deposit address + wallet link + QR) → payer sends the deposi
 | Par | Liquidado por | Por quê |
 | --- | --- | --- |
 | Stellar → Stellar | `/v1/swaps` (DEX da Stellar) | O protocolo faz o swap nativamente; `/v1/cross-chain-swaps` responde `400` e aponta para lá |
-| Stellar ⇄ Solana ⇄ Monad | NEAR Intents | É preciso uma ponte, e a NEAR Intents é essa ponte |
+| Quaisquer duas redes diferentes | NEAR Intents | É preciso uma ponte, e a NEAR Intents é essa ponte |
 | Solana → Solana, Monad → Monad | `/v1/swaps` com `chain` (Jupiter, Kuru Flow) | Cada agregador percorre todas as fontes de liquidez da sua rede pela melhor taxa; `/v1/cross-chain-swaps` responde `400` e aponta para lá |
+| Dentro de qualquer outra rede (`eth` → `eth`, ...) | NEAR Intents | Este serviço não tem um venue próprio ali |
 
 O que este serviço faz por conta própria, em cada rede: resolve os ativos contra a
 lista de tokens do 1Click (`GET /v1/cross-chain-swaps/assets`), valida cada endereço
-contra a sua própria rede, monta a solicitação de depósito no padrão de carteira
-daquela rede — SEP-7 `pay`, Solana Pay, EIP-681 —, verifica no Horizon que um
-destinatário da Stellar confia no ativo que vai receber, e espelha o status na sua
-própria tabela.
+contra a sua própria rede (`recipient` na de destino, `refundTo` na de origem), monta
+a solicitação de depósito como link de carteira onde a rede tem um padrão (SEP-7
+`pay`, Solana Pay, EIP-681 com o id de chain verificado, os links no estilo BIP-21
+`bitcoin:`, `litecoin:`, `dogecoin:`, `bitcoincash:`, `dash:` e `zcash:`,
+`ton://transfer` e CIP-13 `web+cardano:`), verifica no Horizon que um destinatário da
+Stellar confia no ativo que vai receber, e espelha o status na sua própria tabela.
+
+**Alguns depósitos não têm link.** XRP Ledger, Tron, NEAR, Sui, Aptos, Movement,
+Starknet, Aleo, Fogo, Robinhood Chain e Hyperliquid não têm um padrão de link de
+carteira que este serviço monte, e os links de TON e Cardano levam apenas a moeda
+nativa. Ali `depositUri` é `null`: quem paga envia `amountIn` para `depositAddress` a
+partir de qualquer carteira daquela rede, e o `qr` codifica o endereço. Fora da
+Stellar este serviço pede ao 1Click um endereço próprio do swap
+(`depositMode: SIMPLE`), sem memo; se o 1Click algum dia emitir um mesmo assim, ele
+é guardado e devolvido em `depositMemo`, precisa ser anexado, e nenhum link que o
+perderia é montado.
 
 **Comissão.** A taxa do plano da organização — o mesmo `X-Plan-Swap-Fee-Bps`
 confiável dos swaps da Stellar, nunca um parâmetro da requisição — é enviada ao
@@ -1281,7 +1310,7 @@ consumidor e endereço de cliente (`429 rate_limited`).
 
 | Rota | Scope | Finalidade |
 | --- | --- | --- |
-| `GET /v1/cross-chain-swaps/assets` | `swaps:read` | Os tokens que a NEAR Intents pode trocar na Stellar, Solana e Monad |
+| `GET /v1/cross-chain-swaps/assets` | `swaps:read` | Os tokens que a NEAR Intents pode trocar em cada rede que este serviço alcança, com um preço indicativo em USD |
 | `POST /v1/cross-chain-swaps/quote` | `swaps:read` | Uma cotação a seco: saída, mínimo, comissão; não persiste nada |
 | `POST /v1/cross-chain-swaps` | `swaps:write` | Uma cotação ao vivo: endereço de depósito, memo, link de carteira e QR; aceita `Idempotency-Key` |
 | `GET /v1/cross-chain-swaps` | `swaps:read` | Os swaps entre redes do consumidor |
@@ -1760,6 +1789,31 @@ serviço em `src/native-plugins/<slug>/`, ligados pela mesma lista
   `openapi:generate` liga todos.
 
 ## Atualização — mudanças incompatíveis e notas de deploy
+
+### Swaps entre redes: todas as redes da NEAR Intents, e um `depositUri` nullable
+
+- **`originChain` e `destinationChain` aceitam 35 ids de rede**: `stellar`, `solana`
+  e `monad` como antes, e os códigos do 1Click para o resto (`eth`, `base`, `arb`,
+  `op`, `bsc`, `pol`, `avax`, `gnosis`, `bera`, `scroll`, `xlayer`, `abs`, `plasma`,
+  `hood`, `hypercore`, `btc`, `ltc`, `doge`, `bch`, `dash`, `zec`, `xrp`, `tron`,
+  `ton`, `near`, `sui`, `aptos`, `movement`, `starknet`, `cardano`, `aleo`, `fogo`).
+  Requisições existentes e linhas guardadas não mudam; `recipient` e `refundTo` são
+  validados contra a rede nomeada, e o enum de redes cresce em toda resposta de
+  swaps entre redes.
+- **`depositUri` pode ser `null`** nas respostas de swaps entre redes e nos webhooks
+  `CROSS_CHAIN_SWAP_*`, numa rede sem padrão de link de carteira; o `qr` então
+  codifica `depositAddress`. Um cliente que abre `depositUri` sem verificar precisa
+  tratar `null`.
+- **Um par dentro de uma mesma rede é cotado em todas as outras redes** (`eth` →
+  `eth`). Stellar, Solana e Monad continuam respondendo `400` e apontando para
+  `/v1/swaps`.
+- **`GET /v1/cross-chain-swaps/assets` lista os tokens de todas as redes**, cada um
+  com dois campos novos: `chainName` e `priceUsd` (apenas indicativo, com no máximo
+  alguns minutos, nunca usado para cotar). Um cliente que recusa campos de resposta
+  desconhecidos precisa ser regenerado a partir do contrato.
+- **A migração `20261025120000_cross_chain_deposit_uri_nullable`** remove o
+  `NOT NULL` de `cross_chain_swap.depositUri`; nada é reescrito. Rode
+  `migrate deploy` antes de o novo build receber tráfego: ele grava `null` ali.
 
 ### Intenções de pagamento: um design de checkout por intenção
 

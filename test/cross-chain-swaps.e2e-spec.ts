@@ -46,7 +46,15 @@ describe('Cross-chain swaps guards (e2e)', () => {
   const nearIntentsMock = {
     tokens: jest.fn().mockResolvedValue([
       { assetId: 'xlm', decimals: 7, blockchain: 'stellar', symbol: 'XLM' },
-      { assetId: 'btc', decimals: 8, blockchain: 'btc', symbol: 'BTC' },
+      {
+        assetId: 'btc',
+        decimals: 8,
+        blockchain: 'btc',
+        symbol: 'BTC',
+        price: 80484,
+      },
+      // A blockchain whose address format is not confirmed: never offered.
+      { assetId: 'qtc', decimals: 12, blockchain: 'qtc', symbol: 'QTC' },
     ]),
     quote: jest.fn(),
     status: jest.fn(),
@@ -157,17 +165,52 @@ describe('Cross-chain swaps guards (e2e)', () => {
       });
     }
 
-    it('lists only the assets on the chains this service knows', async () => {
+    it('lists the assets on every network it can validate, and only those', async () => {
       const res = await tenant(ASSETS, 'swaps:read').expect(200);
       expect(res.body.data).toEqual([
         {
           chain: 'stellar',
+          chainName: 'Stellar',
           symbol: 'XLM',
           assetId: 'xlm',
           decimals: 7,
           contract: null,
+          priceUsd: null,
+        },
+        {
+          chain: 'btc',
+          chainName: 'Bitcoin',
+          symbol: 'BTC',
+          assetId: 'btc',
+          decimals: 8,
+          contract: null,
+          priceUsd: 80484,
         },
       ]);
+    });
+
+    it('takes every network it reaches by id, and refuses one it does not (qtc)', async () => {
+      const body = {
+        originChain: 'btc',
+        originAsset: 'BTC',
+        destinationChain: 'eth',
+        destinationAsset: 'USDC',
+        amount: '0.01',
+        recipient: '0x76b4c56085ED136a8744D52bE956396624a730E8',
+        refundTo: 'bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4',
+      };
+      // Past validation: the asset lookup answers, not the DTO.
+      const reached = await tenant(QUOTE, 'swaps:read').send(body).expect(400);
+      expect(reached.body.code).toBe('asset_unsupported');
+
+      const refused = await tenant(QUOTE, 'swaps:read')
+        .send({ ...body, originChain: 'qtc' })
+        .expect(400);
+      expect(refused.body.code).toBe('validation_failed');
+      expect(refused.body.message.join(' ')).toMatch(
+        /originChain must be one of/,
+      );
+      expect(nearIntentsMock.quote).not.toHaveBeenCalled();
     });
 
     it('sends Stellar → Stellar to the native DEX without asking NEAR Intents', async () => {
@@ -202,6 +245,24 @@ describe('Cross-chain swaps guards (e2e)', () => {
       expect(res.body.code).toBe('validation_failed');
       expect(res.body.message.join(' ')).toMatch(/recipient.*monad/i);
       expect(res.body.message.join(' ')).toMatch(/refundTo.*solana/i);
+    });
+
+    it('validates addresses on the other networks too', async () => {
+      const res = await tenant(QUOTE, 'swaps:read')
+        .send({
+          originChain: 'btc',
+          originAsset: 'BTC',
+          destinationChain: 'near',
+          destinationAsset: 'wNEAR',
+          amount: '0.01',
+          // NEAR account ids are lowercase; an EVM address is not a Bitcoin one.
+          recipient: 'Alice.NEAR',
+          refundTo: '0x76b4c56085ED136a8744D52bE956396624a730E8',
+        })
+        .expect(400);
+      expect(res.body.code).toBe('validation_failed');
+      expect(res.body.message.join(' ')).toMatch(/recipient.*chain near/i);
+      expect(res.body.message.join(' ')).toMatch(/refundTo.*chain btc/i);
     });
 
     it('lists only its own swaps', async () => {

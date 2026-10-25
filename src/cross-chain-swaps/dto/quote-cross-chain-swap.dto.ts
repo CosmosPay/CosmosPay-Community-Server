@@ -9,37 +9,52 @@ import {
   Max,
   Min,
 } from 'class-validator';
-import { CHAINS, type Chain } from '@/chains/chains.constants';
-import { IsChainAddress } from '@/common/validators/is-chain-address.validator';
 import { IsDecimalAmount } from '@/common/validators/is-decimal-amount.validator';
+import {
+  CROSS_CHAIN_NETWORK_IDS,
+  type CrossChainNetworkId,
+} from '@/cross-chain-swaps/cross-chain-swaps.constants';
+import { IsCrossChainAddress } from '@/cross-chain-swaps/is-cross-chain-address.validator';
 
 /**
  * A cross-chain swap request: sell `amount` of `originAsset` on `originChain`,
  * receive `destinationAsset` on `destinationChain` at `recipient`. NEAR Intents
  * prices it; a failed swap refunds `refundTo` on the origin chain.
  *
- * Both legs on one chain is not a cross-chain swap: `POST /v1/swaps` settles it
- * on that chain's own venue (the Stellar DEX, Jupiter, Kuru Flow).
+ * Both legs on Stellar, Solana or Monad is refused: `POST /v1/swaps` settles it
+ * on that chain's own venue (the Stellar DEX, Jupiter, Kuru Flow). On every
+ * other network NEAR Intents may swap within the one chain.
  */
 export class QuoteCrossChainSwapDto {
-  @ApiProperty({ enum: CHAINS, example: 'stellar' })
-  @IsIn(CHAINS)
-  originChain!: Chain;
+  @ApiProperty({
+    enum: CROSS_CHAIN_NETWORK_IDS,
+    example: 'stellar',
+    description:
+      'The network the payer deposits on: a `chain` from ' +
+      'GET /v1/cross-chain-swaps/assets.',
+  })
+  @IsIn(CROSS_CHAIN_NETWORK_IDS)
+  originChain!: CrossChainNetworkId;
 
   @ApiProperty({
     description:
-      'The asset sold: the native ticker (XLM, SOL, MON), a symbol listed once ' +
-      'on the chain (USDC), a contract (SPL mint, ERC-20 address, Stellar ' +
-      'issuer) or Stellar CODE:ISSUER. See GET /v1/cross-chain-swaps/assets.',
+      'The asset sold: "native" or the native ticker (XLM, SOL, ETH, BTC), a ' +
+      'symbol listed once on the chain (USDC), a contract (SPL mint, ERC-20 ' +
+      'address, Stellar issuer, ...) or Stellar CODE:ISSUER. See ' +
+      'GET /v1/cross-chain-swaps/assets.',
     example: 'XLM',
   })
   @IsString()
   @Length(1, 128)
   originAsset!: string;
 
-  @ApiProperty({ enum: CHAINS, example: 'solana' })
-  @IsIn(CHAINS)
-  destinationChain!: Chain;
+  @ApiProperty({
+    enum: CROSS_CHAIN_NETWORK_IDS,
+    example: 'solana',
+    description: 'The network the recipient is paid on.',
+  })
+  @IsIn(CROSS_CHAIN_NETWORK_IDS)
+  destinationChain!: CrossChainNetworkId;
 
   @ApiProperty({
     description: 'The asset bought, spelled as for originAsset.',
@@ -62,7 +77,7 @@ export class QuoteCrossChainSwapDto {
     description: 'Who receives the output, on destinationChain.',
     example: '13QkxhNMrTPxoCkRdYdJ65tFuwXPhL5gLS2Z5Nr6gjRK',
   })
-  @IsChainAddress('destinationChain')
+  @IsCrossChainAddress('destinationChain')
   recipient!: string;
 
   @ApiProperty({
@@ -70,7 +85,7 @@ export class QuoteCrossChainSwapDto {
       'Where a failed or late deposit is refunded, on originChain — normally the paying wallet.',
     example: 'GCKFBEIYV2U22IO2BJ4KVJOIP7XPWQGQFKKWXR6DOSJBV7STMAQSMTGG',
   })
-  @IsChainAddress('originChain')
+  @IsCrossChainAddress('originChain')
   refundTo!: string;
 
   @ApiPropertyOptional({

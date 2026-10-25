@@ -1,80 +1,113 @@
-import {
-  CHAINS,
-  type Chain,
-  NATIVE_ASSET_CODES,
-} from '@/chains/chains.constants';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
-import { NEAR_INTENTS_BLOCKCHAINS } from '@/near-intents/near-intents.constants';
+import {
+  CROSS_CHAIN_NETWORKS,
+  networkByBlockchain,
+} from '@/cross-chain-swaps/cross-chain-networks';
+import type { CrossChainNetworkId } from '@/cross-chain-swaps/cross-chain-swaps.constants';
 import type { NearIntentsToken } from '@/near-intents/near-intents.types';
 
-/** A token NEAR Intents can swap, on one of our chains. */
+/** A token NEAR Intents can swap, on one of the networks this service reaches. */
 export interface CrossChainAsset {
-  chain: Chain;
-  /** The token's symbol as 1Click lists it (`XLM`, `USDC`, `SOL`, `MON`). */
+  /** The network id requests name it by (`stellar`, `solana`, `eth`, `btc`). */
+  chain: CrossChainNetworkId;
+  /** The network's display name (`Stellar`, `Ethereum`, `Bitcoin`). */
+  chainName: string;
+  /** The token's symbol as 1Click lists it (`XLM`, `USDC`, `SOL`, `BTC`). */
   symbol: string;
-  /** 1Click's id for it — what a quote names. */
+  /** 1Click's id for it: what a quote names. */
   assetId: string;
   decimals: number;
-  /** SPL mint, ERC-20 address or Stellar issuer; null for the native coin. */
+  /**
+   * The token's contract on its network (SPL mint, ERC-20 address, Stellar
+   * issuer, Sui coin type, TON jetton master…); null for the native coin.
+   */
   contract: string | null;
+  /**
+   * 1Click's reference price in USD, indicative only: it is cached for a few
+   * minutes and nothing here prices from it. Every amount comes from a quote.
+   * Null when 1Click lists none.
+   */
+  priceUsd: number | null;
 }
 
-/** The chain 1Click's `blockchain` names, when it is one of ours. */
-const CHAIN_BY_BLOCKCHAIN = new Map<string, Chain>(
-  CHAINS.map((chain) => [NEAR_INTENTS_BLOCKCHAINS[chain], chain]),
-);
-
 /**
- * The tokens NEAR Intents lists on Stellar, Solana and Monad — the rest of its
- * catalogue (Bitcoin, Ethereum, …) is reachable through 1Click but not through
- * this service, which can validate addresses and build payment links only on
- * the chains it knows.
+ * The tokens NEAR Intents lists on every network this service reaches
+ * (`CROSS_CHAIN_NETWORKS`). A token on a blockchain with no entry there is
+ * dropped: this service could not validate an address on it, nor say how a
+ * deposit on it is paid.
  */
 export function supportedAssets(tokens: NearIntentsToken[]): CrossChainAsset[] {
   const assets: CrossChainAsset[] = [];
   for (const token of tokens) {
-    const chain = CHAIN_BY_BLOCKCHAIN.get(token.blockchain);
-    if (!chain) continue;
+    const network = networkByBlockchain(token.blockchain);
+    if (!network) continue;
     assets.push({
-      chain,
+      chain: network.id,
+      chainName: network.name,
       symbol: token.symbol,
       assetId: token.assetId,
       decimals: token.decimals,
       contract: token.contractAddress || null,
+      priceUsd:
+        typeof token.price === 'number' && Number.isFinite(token.price)
+          ? token.price
+          : null,
     });
   }
   return assets;
 }
 
 /**
+ * The native coin among a network's assets: the token with no contract. When
+ * 1Click lists more than one (`BTC` and `BTC(OMNI)` on Bitcoin), the one
+ * carrying the network's own ticker; none when that does not settle it.
+ */
+function nativeCoin(
+  onChain: CrossChainAsset[],
+  nativeSymbol: string,
+): CrossChainAsset | undefined {
+  const natives = onChain.filter((a) => a.contract === null);
+  if (natives.length <= 1) return natives[0];
+  return natives.find(
+    (a) => a.symbol.toLowerCase() === nativeSymbol.toLowerCase(),
+  );
+}
+
+/**
  * The asset a request names on `chain`. Accepted spellings, in the order they
  * are tried:
  *
- *   - the native coin by its ticker (`XLM`, `SOL`, `MON`) or `native`;
+ *   - `native`, the network's ticker (`XLM`, `ETH`, `BTC`) or the native
+ *     token's own symbol, for the native coin;
  *   - Stellar's `CODE:ISSUER`;
- *   - a contract — SPL mint, ERC-20 address (any case), Stellar issuer;
- *   - a symbol, when exactly one token on that chain carries it.
+ *   - a contract (SPL mint, ERC-20 address, Stellar issuer…), in any case on a
+ *     network whose addresses are hex;
+ *   - a symbol, when exactly one token on that network carries it.
  *
  * A symbol two tokens share is refused rather than guessed: picking the wrong
  * `USDC` is a swap into a different asset.
  */
 export function resolveCrossChainAsset(
   tokens: NearIntentsToken[],
-  chain: Chain,
+  chain: CrossChainNetworkId,
   requested: string,
 ): CrossChainAsset {
+  const network = CROSS_CHAIN_NETWORKS[chain];
   const onChain = supportedAssets(tokens).filter((a) => a.chain === chain);
   const wanted = requested.trim();
   const lower = wanted.toLowerCase();
 
-  if (lower === 'native' || lower === NATIVE_ASSET_CODES[chain].toLowerCase()) {
-    const native = onChain.find(
-      (a) =>
-        a.contract === null &&
-        a.symbol.toUpperCase() === NATIVE_ASSET_CODES[chain],
-    );
+  const native = nativeCoin(onChain, network.nativeSymbol);
+  if (lower === 'native') {
     if (native) return native;
     throw unsupported(chain, wanted);
+  }
+  if (
+    native &&
+    (lower === network.nativeSymbol.toLowerCase() ||
+      lower === native.symbol.toLowerCase())
+  ) {
+    return native;
   }
 
   const [code, issuer] = wanted.split(':');
@@ -90,7 +123,7 @@ export function resolveCrossChainAsset(
   const byContract = onChain.find(
     (a) =>
       a.contract !== null &&
-      (chain === 'monad'
+      (network.address.caseInsensitive
         ? a.contract.toLowerCase() === lower
         : a.contract === wanted),
   );
@@ -108,7 +141,7 @@ export function resolveCrossChainAsset(
   throw unsupported(chain, wanted);
 }
 
-function unsupported(chain: Chain, asset: string): ApiError {
+function unsupported(chain: CrossChainNetworkId, asset: string): ApiError {
   return ApiError.badRequest(
     ApiErrorCode.AssetUnsupported,
     `NEAR Intents does not support asset "${asset}" on ${chain}. ` +

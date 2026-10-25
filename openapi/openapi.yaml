@@ -1767,7 +1767,8 @@ paths:
           $ref: "#/components/responses/UpstreamUnavailable"
         "504":
           $ref: "#/components/responses/UpstreamTimeout"
-      summary: List the assets NEAR Intents can swap on Stellar, Solana and Monad
+      summary: List the assets NEAR Intents can swap on every network this service
+        reaches, with an indicative USD price
       tags:
         - cross-chain-swaps
       x-cosmos-public-key: true
@@ -2105,7 +2106,8 @@ paths:
         "504":
           $ref: "#/components/responses/UpstreamTimeout"
       summary: Create a cross-chain swap → NEAR Intents deposit address + wallet link
-        (SEP-7 / Solana Pay / EIP-681) + QR
+        where the origin chain has a standard (SEP-7 / Solana Pay / EIP-681 /
+        BIP-21 / TON / CIP-13) + QR
       tags:
         - cross-chain-swaps
       x-cosmos-public-key: true
@@ -10442,7 +10444,45 @@ components:
             - stellar
             - solana
             - monad
+            - eth
+            - base
+            - arb
+            - op
+            - bsc
+            - pol
+            - avax
+            - gnosis
+            - bera
+            - scroll
+            - xlayer
+            - abs
+            - plasma
+            - hood
+            - hypercore
+            - btc
+            - ltc
+            - doge
+            - bch
+            - dash
+            - zec
+            - xrp
+            - tron
+            - ton
+            - near
+            - sui
+            - aptos
+            - movement
+            - starknet
+            - cardano
+            - aleo
+            - fogo
           example: stellar
+          description: The network id a request names it by (originChain /
+            destinationChain).
+        chainName:
+          type: string
+          example: Stellar
+          description: "The network, by name: for display."
         symbol:
           type: string
           example: USDC
@@ -10457,13 +10497,23 @@ components:
           type: object
           nullable: true
           example: GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN
-          description: SPL mint, ERC-20 address or Stellar issuer; null for the native coin.
+          description: The token on its network (SPL mint, ERC-20 address, Stellar issuer,
+            Sui coin type, TON jetton master, ...); null for the native coin.
+        priceUsd:
+          type: number
+          nullable: true
+          example: 0.999538
+          description: "NEAR Intents’ reference price in USD, indicative only: for showing
+            an estimate before a quote. It may be a few minutes old, and every
+            amount still comes from a quote. Null when NEAR Intents lists none."
       required:
         - chain
+        - chainName
         - symbol
         - assetId
         - decimals
         - contract
+        - priceUsd
     CrossChainAssetListEntity:
       type: object
       properties:
@@ -10482,13 +10532,47 @@ components:
             - stellar
             - solana
             - monad
+            - eth
+            - base
+            - arb
+            - op
+            - bsc
+            - pol
+            - avax
+            - gnosis
+            - bera
+            - scroll
+            - xlayer
+            - abs
+            - plasma
+            - hood
+            - hypercore
+            - btc
+            - ltc
+            - doge
+            - bch
+            - dash
+            - zec
+            - xrp
+            - tron
+            - ton
+            - near
+            - sui
+            - aptos
+            - movement
+            - starknet
+            - cardano
+            - aleo
+            - fogo
           example: stellar
+          description: "The network the payer deposits on: a `chain` from GET
+            /v1/cross-chain-swaps/assets."
         originAsset:
           type: string
-          description: "The asset sold: the native ticker (XLM, SOL, MON), a symbol listed
-            once on the chain (USDC), a contract (SPL mint, ERC-20 address,
-            Stellar issuer) or Stellar CODE:ISSUER. See GET
-            /v1/cross-chain-swaps/assets."
+          description: 'The asset sold: "native" or the native ticker (XLM, SOL, ETH,
+            BTC), a symbol listed once on the chain (USDC), a contract (SPL
+            mint, ERC-20 address, Stellar issuer, ...) or Stellar CODE:ISSUER.
+            See GET /v1/cross-chain-swaps/assets.'
           example: XLM
         destinationChain:
           type: string
@@ -10496,7 +10580,40 @@ components:
             - stellar
             - solana
             - monad
+            - eth
+            - base
+            - arb
+            - op
+            - bsc
+            - pol
+            - avax
+            - gnosis
+            - bera
+            - scroll
+            - xlayer
+            - abs
+            - plasma
+            - hood
+            - hypercore
+            - btc
+            - ltc
+            - doge
+            - bch
+            - dash
+            - zec
+            - xrp
+            - tron
+            - ton
+            - near
+            - sui
+            - aptos
+            - movement
+            - starknet
+            - cardano
+            - aleo
+            - fogo
           example: solana
+          description: The network the recipient is paid on.
         destinationAsset:
           type: string
           description: The asset bought, spelled as for originAsset.
@@ -10538,6 +10655,38 @@ components:
             - stellar
             - solana
             - monad
+            - eth
+            - base
+            - arb
+            - op
+            - bsc
+            - pol
+            - avax
+            - gnosis
+            - bera
+            - scroll
+            - xlayer
+            - abs
+            - plasma
+            - hood
+            - hypercore
+            - btc
+            - ltc
+            - doge
+            - bch
+            - dash
+            - zec
+            - xrp
+            - tron
+            - ton
+            - near
+            - sui
+            - aptos
+            - movement
+            - starknet
+            - cardano
+            - aleo
+            - fogo
           example: stellar
         asset:
           type: string
@@ -10575,6 +10724,38 @@ components:
             - stellar
             - solana
             - monad
+            - eth
+            - base
+            - arb
+            - op
+            - bsc
+            - pol
+            - avax
+            - gnosis
+            - bera
+            - scroll
+            - xlayer
+            - abs
+            - plasma
+            - hood
+            - hypercore
+            - btc
+            - ltc
+            - doge
+            - bch
+            - dash
+            - zec
+            - xrp
+            - tron
+            - ton
+            - near
+            - sui
+            - aptos
+            - movement
+            - starknet
+            - cardano
+            - aleo
+            - fogo
           example: stellar
         asset:
           type: string
@@ -10662,13 +10843,47 @@ components:
             - stellar
             - solana
             - monad
+            - eth
+            - base
+            - arb
+            - op
+            - bsc
+            - pol
+            - avax
+            - gnosis
+            - bera
+            - scroll
+            - xlayer
+            - abs
+            - plasma
+            - hood
+            - hypercore
+            - btc
+            - ltc
+            - doge
+            - bch
+            - dash
+            - zec
+            - xrp
+            - tron
+            - ton
+            - near
+            - sui
+            - aptos
+            - movement
+            - starknet
+            - cardano
+            - aleo
+            - fogo
           example: stellar
+          description: "The network the payer deposits on: a `chain` from GET
+            /v1/cross-chain-swaps/assets."
         originAsset:
           type: string
-          description: "The asset sold: the native ticker (XLM, SOL, MON), a symbol listed
-            once on the chain (USDC), a contract (SPL mint, ERC-20 address,
-            Stellar issuer) or Stellar CODE:ISSUER. See GET
-            /v1/cross-chain-swaps/assets."
+          description: 'The asset sold: "native" or the native ticker (XLM, SOL, ETH,
+            BTC), a symbol listed once on the chain (USDC), a contract (SPL
+            mint, ERC-20 address, Stellar issuer, ...) or Stellar CODE:ISSUER.
+            See GET /v1/cross-chain-swaps/assets.'
           example: XLM
         destinationChain:
           type: string
@@ -10676,7 +10891,40 @@ components:
             - stellar
             - solana
             - monad
+            - eth
+            - base
+            - arb
+            - op
+            - bsc
+            - pol
+            - avax
+            - gnosis
+            - bera
+            - scroll
+            - xlayer
+            - abs
+            - plasma
+            - hood
+            - hypercore
+            - btc
+            - ltc
+            - doge
+            - bch
+            - dash
+            - zec
+            - xrp
+            - tron
+            - ton
+            - near
+            - sui
+            - aptos
+            - movement
+            - starknet
+            - cardano
+            - aleo
+            - fogo
           example: solana
+          description: The network the recipient is paid on.
         destinationAsset:
           type: string
           description: The asset bought, spelled as for originAsset.
@@ -10757,6 +11005,38 @@ components:
             - stellar
             - solana
             - monad
+            - eth
+            - base
+            - arb
+            - op
+            - bsc
+            - pol
+            - avax
+            - gnosis
+            - bera
+            - scroll
+            - xlayer
+            - abs
+            - plasma
+            - hood
+            - hypercore
+            - btc
+            - ltc
+            - doge
+            - bch
+            - dash
+            - zec
+            - xrp
+            - tron
+            - ton
+            - near
+            - sui
+            - aptos
+            - movement
+            - starknet
+            - cardano
+            - aleo
+            - fogo
           example: stellar
         originAsset:
           type: string
@@ -10771,6 +11051,38 @@ components:
             - stellar
             - solana
             - monad
+            - eth
+            - base
+            - arb
+            - op
+            - bsc
+            - pol
+            - avax
+            - gnosis
+            - bera
+            - scroll
+            - xlayer
+            - abs
+            - plasma
+            - hood
+            - hypercore
+            - btc
+            - ltc
+            - doge
+            - bch
+            - dash
+            - zec
+            - xrp
+            - tron
+            - ton
+            - near
+            - sui
+            - aptos
+            - movement
+            - starknet
+            - cardano
+            - aleo
+            - fogo
           example: solana
         destinationAsset:
           type: string
@@ -10812,16 +11124,24 @@ components:
           type: object
           nullable: true
           example: "188866795"
-          description: "Stellar only, and required: attach it as a MEMO_TEXT or the
-            deposit is lost to the swap."
+          description: "Required whenever it is set: attach it to the deposit or the
+            deposit is lost to the swap. Always set on Stellar (a MEMO_TEXT); on
+            another chain only if NEAR Intents issues one."
         depositUri:
           type: string
+          nullable: true
           example: web+stellar:pay?destination=GDJ4…&amount=100&memo=188866795&memo_type=MEMO_TEXT
-          description: "The deposit as a wallet link on the origin chain: SEP-7 pay,
-            Solana Pay or EIP-681."
+          description: "The deposit as a wallet link on the origin chain, where the chain
+            has a wallet-link standard: SEP-7 pay, Solana Pay, EIP-681, BIP-21
+            style (bitcoin:, litecoin:, dogecoin:, bitcoincash:, dash:, zcash:),
+            ton:// transfer or CIP-13 web+cardano:. Null means: pay
+            depositAddress (and depositMemo, if set) with any wallet of that
+            chain."
         qr:
           type: string
           example: data:image/png;base64,iVBORw0KGgo…
+          description: "PNG data URL of a QR code: of depositUri when there is one, else
+            of depositAddress."
         depositTxHash:
           type: object
           nullable: true
@@ -10938,6 +11258,38 @@ components:
             - stellar
             - solana
             - monad
+            - eth
+            - base
+            - arb
+            - op
+            - bsc
+            - pol
+            - avax
+            - gnosis
+            - bera
+            - scroll
+            - xlayer
+            - abs
+            - plasma
+            - hood
+            - hypercore
+            - btc
+            - ltc
+            - doge
+            - bch
+            - dash
+            - zec
+            - xrp
+            - tron
+            - ton
+            - near
+            - sui
+            - aptos
+            - movement
+            - starknet
+            - cardano
+            - aleo
+            - fogo
           example: stellar
         originAsset:
           type: string
@@ -10952,6 +11304,38 @@ components:
             - stellar
             - solana
             - monad
+            - eth
+            - base
+            - arb
+            - op
+            - bsc
+            - pol
+            - avax
+            - gnosis
+            - bera
+            - scroll
+            - xlayer
+            - abs
+            - plasma
+            - hood
+            - hypercore
+            - btc
+            - ltc
+            - doge
+            - bch
+            - dash
+            - zec
+            - xrp
+            - tron
+            - ton
+            - near
+            - sui
+            - aptos
+            - movement
+            - starknet
+            - cardano
+            - aleo
+            - fogo
           example: solana
         destinationAsset:
           type: string
@@ -10993,13 +11377,19 @@ components:
           type: object
           nullable: true
           example: "188866795"
-          description: "Stellar only, and required: attach it as a MEMO_TEXT or the
-            deposit is lost to the swap."
+          description: "Required whenever it is set: attach it to the deposit or the
+            deposit is lost to the swap. Always set on Stellar (a MEMO_TEXT); on
+            another chain only if NEAR Intents issues one."
         depositUri:
           type: string
+          nullable: true
           example: web+stellar:pay?destination=GDJ4…&amount=100&memo=188866795&memo_type=MEMO_TEXT
-          description: "The deposit as a wallet link on the origin chain: SEP-7 pay,
-            Solana Pay or EIP-681."
+          description: "The deposit as a wallet link on the origin chain, where the chain
+            has a wallet-link standard: SEP-7 pay, Solana Pay, EIP-681, BIP-21
+            style (bitcoin:, litecoin:, dogecoin:, bitcoincash:, dash:, zcash:),
+            ton:// transfer or CIP-13 web+cardano:. Null means: pay
+            depositAddress (and depositMemo, if set) with any wallet of that
+            chain."
         depositTxHash:
           type: object
           nullable: true
@@ -11110,9 +11500,10 @@ components:
       properties:
         txHash:
           type: string
-          description: "The transaction that paid the deposit address, on the origin
-            chain: a Stellar hash (64 hex), a Solana signature (base58) or a
-            Monad hash (0x + 64 hex)."
+          description: "The transaction that paid the deposit address, in the origin
+            chain's own spelling: a 64-hex hash on Stellar and the UTXO chains,
+            0x + 64 hex on EVM networks, a base58 signature on Solana. A 400
+            names the shape the origin chain expects."
           example: 5f0e8a1d3c7b9e2f4a6c8d0b1e3f5a7c9d2b4e6f8a0c1d3e5f7a9b2c4d6e8f0a
       required:
         - txHash
