@@ -16,13 +16,13 @@ import { ZK_PAYMENT_PUBLIC_READ_RATE_LIMIT } from '@/zk-payments/zk-payments.con
 import { withGatewayAuth } from './gateway-auth';
 
 /**
- * ZK payments through the real pipes, guards and filters: the merchant's
+ * Private payments through the real pipes, guards and filters: the merchant's
  * `/v1/zk-payments` behind the gateway, and the payer's keyless
  * `/v1/zk-checkout`. Prisma is an in-memory table and the confidential token
  * SDK adapter is replaced, so no RPC is called (`scripts/zk/e2e-testnet.ts` is
  * the real-chain check). The testnet set comes from `test/setup-env.ts`.
  */
-describe('ZK payments (e2e)', () => {
+describe('Private payments (e2e)', () => {
   let app: INestApplication;
 
   const TOKEN = 'CAAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQC526';
@@ -326,7 +326,7 @@ describe('ZK payments (e2e)', () => {
         .expect(404);
       expect(res.body).toMatchObject({
         code: 'not_found',
-        message: 'ZK payment cmzk-never not found',
+        message: 'Private payment cmzk-never not found',
       });
     });
 

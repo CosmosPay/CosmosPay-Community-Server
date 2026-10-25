@@ -337,7 +337,7 @@ export interface AppConfig {
     ttlSeconds: number;
   };
   /**
-   * ZK payments, per network tier. Null where `ZK_PAYMENTS_<NETWORK>_TOKEN` is
+   * Private payments, per network tier. Null where `ZK_PAYMENTS_<NETWORK>_TOKEN` is
    * unset: the feature is off on that network and its routes answer
    * `network_unsupported`. Mainnet stays null until an operator deploys there.
    */
@@ -646,7 +646,7 @@ function signersHorizons(): Record<StellarNetwork, string> {
 }
 
 /**
- * One network's ZK payments set, or null when its token is unset. Completeness
+ * One network's private payments set, or null when its token is unset. Completeness
  * and shape were checked at boot (`zk-payments-env.ts`), so this only reads.
  */
 function zkNetwork(network: StellarNetwork): ZkNetworkConfig | null {

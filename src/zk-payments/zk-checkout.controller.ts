@@ -34,7 +34,7 @@ import {
 
 const ID_PARAM = {
   name: 'id',
-  description: 'The ZK payment id (a cuid), as the merchant shared it.',
+  description: 'The private payment id (a cuid), as the merchant shared it.',
   example: 'cmh4x2k9a0001l70g8v5q3z2w',
 };
 
@@ -50,12 +50,12 @@ const NOT_FOUND = ApiErrorResponse({
   status: 404,
   codes: [ApiErrorCode.NotFound],
   description:
-    'No ZK payment has this id. The same answer the owner gets from ' +
+    'No private payment has this id. The same answer the owner gets from ' +
     '`GET /v1/zk-payments/{id}` for one that never existed.',
   examples: {
     [ApiErrorCode.NotFound]: {
-      summary: 'No ZK payment has this id',
-      message: 'ZK payment cmh4x2k9a0001l70g8v5q3z2w not found',
+      summary: 'No private payment has this id',
+      message: 'Private payment cmh4x2k9a0001l70g8v5q3z2w not found',
       path: '/v1/zk-checkout/cmh4x2k9a0001l70g8v5q3z2w',
     },
   },
@@ -63,16 +63,16 @@ const NOT_FOUND = ApiErrorResponse({
 
 const NETWORK_UNSUPPORTED_EXAMPLE = {
   [ApiErrorCode.NetworkUnsupported]: {
-    summary: "The payment's network no longer runs ZK payments here",
+    summary: "The payment's network no longer runs private payments here",
     message:
-      'ZK payments are not available on public yet. They run on testnet only ' +
+      'Private payments are not available on public yet. They run on testnet only ' +
       'for now: use a dev API key.',
     path: '/v1/zk-checkout/cmh4x2k9a0001l70g8v5q3z2w',
   },
 };
 
 /**
- * `/v1/zk-checkout`: the payer's half of ZK payments, with no API key.
+ * `/v1/zk-checkout`: the payer's half of private payments, with no API key.
  *
  * Its own prefix, apart from `/v1/zk-payments`, because the gateway serves a
  * keyless read as a prefix route, which only works when nothing under the
@@ -92,13 +92,13 @@ export class ZkCheckoutController {
   @RateLimit(ZK_PAYMENT_PUBLIC_READ_RATE_LIMIT)
   @ApiOperation({
     summary:
-      "A network's ZK payments setup, keyless: token, registries, auditor id, commission, fee account",
+      "A network's private payments setup, keyless: token, registries, auditor id, commission, fee account",
     description:
       'The same shape as `GET /v1/zk-payments/config`, built by the same code, ' +
       "for a page with no API key: the merchant's confidential-account page " +
       '(register, balance, withdraw) and the checkout read the contracts they ' +
       'prove against here. Everything in it is public on-chain data. ' +
-      '`enabled` is false, and the rest null, on a network where ZK payments ' +
+      '`enabled` is false, and the rest null, on a network where private payments ' +
       'do not run yet (mainnet today).',
   })
   @ApiOkResponse({ type: ZkPaymentsConfigEntity })
@@ -111,7 +111,7 @@ export class ZkCheckoutController {
   @RateLimit(ZK_PAYMENT_PUBLIC_READ_RATE_LIMIT)
   @Header('Cache-Control', 'no-store')
   @ApiOperation({
-    summary: 'Read a ZK payment as its payer sees it (no API key)',
+    summary: 'Read a private payment as its payer sees it (no API key)',
     description:
       'For a checkout: the gross amount, the net and the commission, the ' +
       'merchant and the fee account to transfer to, the token and the RPC to ' +
@@ -142,7 +142,7 @@ export class ZkCheckoutController {
   @Header('Cache-Control', 'no-store')
   @ApiOperation({
     summary:
-      'Confirm a ZK payment with its two confidential transfers, verified on-chain (no API key)',
+      'Confirm a private payment with its two confidential transfers, verified on-chain (no API key)',
     description:
       'Reads both transactions back through the Soroban RPC and settles the ' +
       'payment only when: both succeeded and each is a single ' +
@@ -152,7 +152,7 @@ export class ZkCheckoutController {
       'the fee transfer to the fee account; and each decrypts with the ' +
       "auditor key, on both auditor channels and against the transfer's " +
       'commitment, to exactly `netAmount` / `feeAmount`. Neither transaction ' +
-      'may have settled another ZK payment.\n\n' +
+      'may have settled another private payment.\n\n' +
       'Idempotent: the same hashes on a settled payment answer it again. A ' +
       'refusal leaves the payment PENDING, and never says what an amount ' +
       'decrypted to.',
@@ -194,7 +194,8 @@ export class ZkCheckoutController {
       },
       [ApiErrorCode.InvalidStateTransition]: {
         summary: 'Already settled, by other transactions',
-        message: 'This ZK payment is already settled, by other transactions.',
+        message:
+          'This private payment is already settled, by other transactions.',
         path: '/v1/zk-checkout/cmh4x2k9a0001l70g8v5q3z2w/confirm',
       },
     },
@@ -204,13 +205,13 @@ export class ZkCheckoutController {
     codes: [ApiErrorCode.TransactionAlreadySettled],
     description:
       '`transaction_already_settled`: one of the transactions already ' +
-      'settled another ZK payment, of any merchant. One transaction settles ' +
+      'settled another private payment, of any merchant. One transaction settles ' +
       'at most one payment.',
     examples: {
       [ApiErrorCode.TransactionAlreadySettled]: {
-        summary: 'A transaction already settled another ZK payment',
+        summary: 'A transaction already settled another private payment',
         message:
-          'One of these transactions already settled another ZK payment. One ' +
+          'One of these transactions already settled another private payment. One ' +
           'transaction settles at most one payment.',
         path: '/v1/zk-checkout/cmh4x2k9a0001l70g8v5q3z2w/confirm',
       },

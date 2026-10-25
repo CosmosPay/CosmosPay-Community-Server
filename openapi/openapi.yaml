@@ -8531,8 +8531,8 @@ paths:
     get:
       description: What a dashboard needs to set a merchant up on the confidential
         token (register, read the balance, withdraw). `enabled` is false on a
-        network where ZK payments do not run yet (mainnet today). The same shape
-        as the keyless `GET /v1/zk-checkout/config?network=`.
+        network where private payments do not run yet (mainnet today). The same
+        shape as the keyless `GET /v1/zk-checkout/config?network=`.
       operationId: ZkPaymentsController_getConfig_v1
       parameters: []
       responses:
@@ -8548,18 +8548,20 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "500":
           $ref: "#/components/responses/InternalError"
-      summary: "The ZK payments setup of the API key's network: token, registries,
-        auditor id, commission, fee account"
+      summary: "The private payments setup of the API key's network: token,
+        registries, auditor id, commission, fee account"
       tags:
         - zk-payments
   /v1/zk-payments:
     post:
-      description: Prices the payment (`amount` = `netAmount` + `feeAmount`, the fee
-        rounded up and at least one stroop) and checks on-chain that the
-        recipient holds a confidential account on the token under auditor 0. The
-        payer then makes two confidential transfers (net to the merchant, fee to
-        the fee account) and confirms them at `POST
-        /v1/zk-checkout/{id}/confirm`.
+      description: "A private payment hides its amount on-chain: it is paid with
+        confidential transfers on Cosmos Pay's confidential token, proven with
+        zero-knowledge proofs (hence `zk` in the paths). Prices the payment
+        (`amount` = `netAmount` + `feeAmount`, the fee rounded up and at least
+        one stroop) and checks on-chain that the recipient holds a confidential
+        account on the token under auditor 0. The payer then makes two
+        confidential transfers (net to the merchant, fee to the fee account) and
+        confirms them at `POST /v1/zk-checkout/{id}/confirm`."
       operationId: ZkPaymentsController_create_v1
       parameters:
         - name: Idempotency-Key
@@ -8605,8 +8607,8 @@ paths:
           description: "`invalid_amount`: after the commission the merchant would receive
             nothing. `recipient_not_registered`: the recipient has no
             confidential account on the token under auditor 0.
-            `network_unsupported`: ZK payments do not run on this network yet
-            (mainnet today; use a dev key)."
+            `network_unsupported`: private payments do not run on this network
+            yet (mainnet today; use a dev key)."
           content:
             application/json:
               schema:
@@ -8647,14 +8649,14 @@ paths:
                     path: /v1/zk-payments
                     timestamp: 2026-09-01T12:00:00.000Z
                 network_unsupported:
-                  summary: network_unsupported — ZK payments do not run on this network yet
+                  summary: network_unsupported — Private payments do not run on this network yet
                     (mainnet today)
                   value:
                     statusCode: 400
                     code: network_unsupported
                     error: Bad Request
-                    message: "ZK payments are not available on public yet. They run on testnet only
-                      for now: use a dev API key."
+                    message: "Private payments are not available on public yet. They run on testnet
+                      only for now: use a dev API key."
                     path: /v1/zk-payments
                     timestamp: 2026-09-01T12:00:00.000Z
         "401":
@@ -8677,9 +8679,9 @@ paths:
                     statusCode: 409
                     code: idempotency_conflict
                     error: Conflict
-                    message: A ZK payment with this idempotency key already exists for a different
-                      request. Retry with the original request unchanged, or use
-                      a new key.
+                    message: A private payment with this idempotency key already exists for a
+                      different request. Retry with the original request
+                      unchanged, or use a new key.
                     path: /v1/zk-payments
                     timestamp: 2026-09-01T12:00:00.000Z
                 operation_in_flight:
@@ -8698,8 +8700,8 @@ paths:
           $ref: "#/components/responses/InternalError"
         "503":
           $ref: "#/components/responses/UpstreamUnavailable"
-      summary: "Create a ZK payment: a confidential payment to a merchant registered
-        on the token, minus the 0.01% commission"
+      summary: "Create a private payment: a confidential payment to a merchant
+        registered on the token, minus the 0.01% commission"
       tags:
         - zk-payments
       x-cosmos-rate-limit:
@@ -8752,7 +8754,7 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "500":
           $ref: "#/components/responses/InternalError"
-      summary: List the consumer's ZK payments
+      summary: List the consumer's private payments
       tags:
         - zk-payments
   /v1/zk-payments/{id}:
@@ -8781,7 +8783,7 @@ paths:
           $ref: "#/components/responses/NotFound"
         "500":
           $ref: "#/components/responses/InternalError"
-      summary: Get a ZK payment by id
+      summary: Get a private payment by id
       tags:
         - zk-payments
   /v1/zk-checkout/config:
@@ -8790,8 +8792,8 @@ paths:
         code, for a page with no API key: the merchant's confidential-account
         page (register, balance, withdraw) and the checkout read the contracts
         they prove against here. Everything in it is public on-chain data.
-        `enabled` is false, and the rest null, on a network where ZK payments do
-        not run yet (mainnet today)."
+        `enabled` is false, and the rest null, on a network where private
+        payments do not run yet (mainnet today)."
       operationId: ZkCheckoutController_config_v1
       parameters:
         - name: network
@@ -8834,8 +8836,8 @@ paths:
           $ref: "#/components/responses/RateLimited"
         "500":
           $ref: "#/components/responses/InternalError"
-      summary: "A network's ZK payments setup, keyless: token, registries, auditor id,
-        commission, fee account"
+      summary: "A network's private payments setup, keyless: token, registries,
+        auditor id, commission, fee account"
       tags:
         - zk-checkout
       x-cosmos-public: true
@@ -8859,7 +8861,7 @@ paths:
         - name: id
           required: true
           in: path
-          description: The ZK payment id (a cuid), as the merchant shared it.
+          description: The private payment id (a cuid), as the merchant shared it.
           schema:
             example: cmh4x2k9a0001l70g8v5q3z2w
             type: string
@@ -8900,38 +8902,38 @@ paths:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
               examples:
                 network_unsupported:
-                  summary: network_unsupported — The payment's network no longer runs ZK payments
-                    here
+                  summary: network_unsupported — The payment's network no longer runs private
+                    payments here
                   value:
                     statusCode: 400
                     code: network_unsupported
                     error: Bad Request
-                    message: "ZK payments are not available on public yet. They run on testnet only
-                      for now: use a dev API key."
+                    message: "Private payments are not available on public yet. They run on testnet
+                      only for now: use a dev API key."
                     path: /v1/zk-checkout/cmh4x2k9a0001l70g8v5q3z2w
                     timestamp: 2026-09-01T12:00:00.000Z
         "404":
-          description: No ZK payment has this id. The same answer the owner gets from `GET
-            /v1/zk-payments/{id}` for one that never existed.
+          description: No private payment has this id. The same answer the owner gets from
+            `GET /v1/zk-payments/{id}` for one that never existed.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
               examples:
                 not_found:
-                  summary: not_found — No ZK payment has this id
+                  summary: not_found — No private payment has this id
                   value:
                     statusCode: 404
                     code: not_found
                     error: Not Found
-                    message: ZK payment cmh4x2k9a0001l70g8v5q3z2w not found
+                    message: Private payment cmh4x2k9a0001l70g8v5q3z2w not found
                     path: /v1/zk-checkout/cmh4x2k9a0001l70g8v5q3z2w
                     timestamp: 2026-09-01T12:00:00.000Z
         "429":
           $ref: "#/components/responses/RateLimited"
         "500":
           $ref: "#/components/responses/InternalError"
-      summary: Read a ZK payment as its payer sees it (no API key)
+      summary: Read a private payment as its payer sees it (no API key)
       tags:
         - zk-checkout
       x-cosmos-public: true
@@ -8951,7 +8953,7 @@ paths:
         transfer to the fee account; and each decrypts with the auditor key, on
         both auditor channels and against the transfer's commitment, to exactly
         `netAmount` / `feeAmount`. Neither transaction may have settled another
-        ZK payment.
+        private payment.
 
 
         Idempotent: the same hashes on a settled payment answer it again. A
@@ -8962,7 +8964,7 @@ paths:
         - name: id
           required: true
           in: path
-          description: The ZK payment id (a cuid), as the merchant shared it.
+          description: The private payment id (a cuid), as the merchant shared it.
           schema:
             example: cmh4x2k9a0001l70g8v5q3z2w
             type: string
@@ -9057,9 +9059,9 @@ paths:
                     statusCode: 400
                     code: payment_transfer_mismatch
                     error: Bad Request
-                    message: "The payment transaction does not settle this ZK payment: it is not a
-                      confidential transfer of the payment's net amount to its
-                      recipient."
+                    message: "The payment transaction does not settle this private payment: it is
+                      not a confidential transfer of the payment's net amount to
+                      its recipient."
                     path: /v1/zk-checkout/cmh4x2k9a0001l70g8v5q3z2w/confirm
                     timestamp: 2026-09-01T12:00:00.000Z
                 fee_transfer_mismatch:
@@ -9069,7 +9071,7 @@ paths:
                     statusCode: 400
                     code: fee_transfer_mismatch
                     error: Bad Request
-                    message: "The fee transaction does not settle this ZK payment: it is not a
+                    message: "The fee transaction does not settle this private payment: it is not a
                       confidential transfer of the commission to the fee
                       account."
                     path: /v1/zk-checkout/cmh4x2k9a0001l70g8v5q3z2w/confirm
@@ -9086,13 +9088,14 @@ paths:
                     path: /v1/zk-checkout/cmh4x2k9a0001l70g8v5q3z2w/confirm
                     timestamp: 2026-09-01T12:00:00.000Z
                 expired:
-                  summary: expired — A transfer of the ZK payment closed after the payment expired
+                  summary: expired — A transfer of the private payment closed after the payment
+                    expired
                   value:
                     statusCode: 400
                     code: expired
                     error: Bad Request
                     message: The payment transaction closed at 2026-10-25T14:05:12.000Z, after this
-                      ZK payment expired at 2026-10-25T14:00:00.000Z.
+                      Private payment expired at 2026-10-25T14:00:00.000Z.
                     path: /v1/zk-checkout/cmh4x2k9a0001l70g8v5q3z2w/confirm
                     timestamp: 2026-09-01T12:00:00.000Z
                 invalid_state_transition:
@@ -9101,54 +9104,54 @@ paths:
                     statusCode: 400
                     code: invalid_state_transition
                     error: Bad Request
-                    message: This ZK payment is already settled, by other transactions.
+                    message: This private payment is already settled, by other transactions.
                     path: /v1/zk-checkout/cmh4x2k9a0001l70g8v5q3z2w/confirm
                     timestamp: 2026-09-01T12:00:00.000Z
                 network_unsupported:
-                  summary: network_unsupported — The payment's network no longer runs ZK payments
-                    here
+                  summary: network_unsupported — The payment's network no longer runs private
+                    payments here
                   value:
                     statusCode: 400
                     code: network_unsupported
                     error: Bad Request
-                    message: "ZK payments are not available on public yet. They run on testnet only
-                      for now: use a dev API key."
+                    message: "Private payments are not available on public yet. They run on testnet
+                      only for now: use a dev API key."
                     path: /v1/zk-checkout/cmh4x2k9a0001l70g8v5q3z2w
                     timestamp: 2026-09-01T12:00:00.000Z
         "404":
-          description: No ZK payment has this id. The same answer the owner gets from `GET
-            /v1/zk-payments/{id}` for one that never existed.
+          description: No private payment has this id. The same answer the owner gets from
+            `GET /v1/zk-payments/{id}` for one that never existed.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
               examples:
                 not_found:
-                  summary: not_found — No ZK payment has this id
+                  summary: not_found — No private payment has this id
                   value:
                     statusCode: 404
                     code: not_found
                     error: Not Found
-                    message: ZK payment cmh4x2k9a0001l70g8v5q3z2w not found
+                    message: Private payment cmh4x2k9a0001l70g8v5q3z2w not found
                     path: /v1/zk-checkout/cmh4x2k9a0001l70g8v5q3z2w
                     timestamp: 2026-09-01T12:00:00.000Z
         "409":
           description: "`transaction_already_settled`: one of the transactions already
-            settled another ZK payment, of any merchant. One transaction settles
-            at most one payment."
+            settled another private payment, of any merchant. One transaction
+            settles at most one payment."
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ApiErrorBodyEntity"
               examples:
                 transaction_already_settled:
-                  summary: transaction_already_settled — A transaction already settled another ZK
-                    payment
+                  summary: transaction_already_settled — A transaction already settled another
+                    private payment
                   value:
                     statusCode: 409
                     code: transaction_already_settled
                     error: Conflict
-                    message: One of these transactions already settled another ZK payment. One
+                    message: One of these transactions already settled another private payment. One
                       transaction settles at most one payment.
                     path: /v1/zk-checkout/cmh4x2k9a0001l70g8v5q3z2w/confirm
                     timestamp: 2026-09-01T12:00:00.000Z
@@ -9158,7 +9161,7 @@ paths:
           $ref: "#/components/responses/InternalError"
         "503":
           $ref: "#/components/responses/UpstreamUnavailable"
-      summary: Confirm a ZK payment with its two confidential transfers, verified
+      summary: Confirm a private payment with its two confidential transfers, verified
         on-chain (no API key)
       tags:
         - zk-checkout
@@ -17095,9 +17098,9 @@ components:
         enabled:
           type: boolean
           example: true
-          description: Whether ZK payments run on this network. False until the operator
-            deploys the token there (mainnet today); every other field but
-            `network`, `networkPassphrase`, `auditorId` and `feeBps` is then
+          description: Whether private payments run on this network. False until the
+            operator deploys the token there (mainnet today); every other field
+            but `network`, `networkPassphrase`, `auditorId` and `feeBps` is then
             null.
         network:
           type: string

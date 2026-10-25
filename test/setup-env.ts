@@ -67,7 +67,7 @@ process.env.WALLET_BACKUP_ENCRYPTION_KEY = Buffer.alloc(32, 9).toString(
   'base64',
 );
 process.env.WALLET_BACKUP_ENCRYPTION_PREVIOUS_KEYS = '';
-// ZK payments: a fixed testnet set and no mainnet, so the suites see the same
+// Private payments (ZK payments): a fixed testnet set and no mainnet, so the suites see the same
 // configuration everywhere. A developer's .env carries the real testnet
 // deployment (scripts/zk/deploy-testnet.ts writes it there), and dotenv never
 // overwrites a value already set, so these win. Mainnet is empty rather than

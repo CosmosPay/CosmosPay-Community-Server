@@ -33,7 +33,7 @@ import {
 } from '@/zk-payments/zk-payments.constants';
 
 /**
- * The columns a ZK payment leaves this service with, for its owner: every
+ * The columns a private payment leaves this service with, for its owner: every
  * field `ZkPaymentEntity` documents. An allowlist, so `consumerId` never
  * leaves, including on a create replay under the shared public key.
  */
@@ -77,7 +77,7 @@ interface ZkPaymentTerms {
 }
 
 /**
- * ZK payments as their owner (the merchant's API key) sees them: the network's
+ * Private payments as their owner (the merchant's API key) sees them: the network's
  * setup, the idempotent create, and the reads. Settlement is the anonymous
  * checkout's, in `ZkCheckoutService`.
  */
@@ -99,7 +99,7 @@ export class ZkPaymentsService {
   }
 
   /**
-   * Creates a ZK payment on the caller's network. The recipient must already
+   * Creates a private payment on the caller's network. The recipient must already
    * hold a confidential account on the token under auditor 0: a transfer to
    * anyone else would be refused on-chain, after the payer had spent a proof.
    *
@@ -182,7 +182,7 @@ export class ZkPaymentsService {
     }
 
     this.logger.log(
-      `Created ZK payment ${row.id}: ${split.amount} XLM (net ${split.netAmount}, ` +
+      `Created private payment ${row.id}: ${split.amount} XLM (net ${split.netAmount}, ` +
         `fee ${split.feeAmount}) -> ${dto.recipient} ` +
         `(consumer=${consumer.username}, network=${network})`,
     );
@@ -225,7 +225,7 @@ export class ZkPaymentsService {
       where: { id, consumer: { apisixUsername: consumer.username } },
       select: ZK_PAYMENT_PUBLIC_SELECT,
     });
-    if (!row) throw ApiError.notFound(`ZK payment ${id} not found`);
+    if (!row) throw ApiError.notFound(`Private payment ${id} not found`);
     return toZkPaymentView(row, new Date());
   }
 
@@ -262,7 +262,7 @@ export class ZkPaymentsService {
       // may be another caller's.
       throw ApiError.conflict(
         ApiErrorCode.IdempotencyConflict,
-        'A ZK payment with this idempotency key already exists for a ' +
+        'A private payment with this idempotency key already exists for a ' +
           'different request. Retry with the original request unchanged, or ' +
           'use a new key.',
       );

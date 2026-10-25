@@ -1,11 +1,11 @@
 /**
- * Tuning knobs and protocol facts for ZK payments: confidential transfers on
+ * Tuning knobs and protocol facts for private payments: confidential transfers on
  * the OpenZeppelin Confidential Token (`stellar-confidential` 0.8.0) that
  * Cosmos Pay operates, with the amount hidden on-chain.
  */
 
 /**
- * Cosmos Pay's commission on every ZK payment, in basis points: 1 bps, 0.01%.
+ * Cosmos Pay's commission on every private payment, in basis points: 1 bps, 0.01%.
  *
  * A constant, not an environment variable: it is the price of the product, the
  * same on every deployment, and a commission an operator could set to 0 by

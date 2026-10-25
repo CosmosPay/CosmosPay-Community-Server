@@ -19,7 +19,7 @@ import {
 } from '@/zk-payments/zk-payments.constants';
 
 /**
- * Which networks ZK payments run on, and with what: the one place the module
+ * Which networks private payments run on, and with what: the one place the module
  * reads `zkPayments` from the configuration.
  */
 @Injectable()
@@ -32,7 +32,7 @@ export class ZkNetworksService {
   }
 
   /**
-   * The network's setup, or `400 network_unsupported` when ZK payments do not
+   * The network's setup, or `400 network_unsupported` when private payments do not
    * run there (mainnet, until an operator deploys it).
    */
   require(network: StellarNetwork): ZkNetworkConfig {
@@ -40,7 +40,7 @@ export class ZkNetworksService {
     if (!zk) {
       throw ApiError.badRequest(
         ApiErrorCode.NetworkUnsupported,
-        `ZK payments are not available on ${network} yet. They run on ` +
+        `Private payments are not available on ${network} yet. They run on ` +
           'testnet only for now: use a dev API key.',
       );
     }

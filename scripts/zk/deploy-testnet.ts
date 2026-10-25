@@ -31,7 +31,7 @@ import { DEFAULT_ZK_PAYMENTS_RPC } from '@/config/config.constants';
 import { zkPaymentsEnvName } from '@/config/zk-payments-env';
 
 /**
- * Deploys Cosmos Pay's ZK payments setup on Stellar TESTNET, and prints (or
+ * Deploys Cosmos Pay's private payments setup on Stellar TESTNET, and prints (or
  * writes) the `ZK_PAYMENTS_TESTNET_*` variables the server reads.
  *
  *   npm run zk:deploy-testnet
@@ -423,11 +423,13 @@ function upsertEnv(path: string, values: Record<string, string>): void {
     const at = lines.findIndex((line) => line.startsWith(`${name}=`));
     if (at >= 0) lines[at] = `${name}=${value}`;
     else {
-      if (!lines.some((line) => line.startsWith('# ZK payments (testnet)'))) {
+      if (
+        !lines.some((line) => line.startsWith('# Private payments (testnet)'))
+      ) {
         if (lines.length && lines[lines.length - 1] === '') lines.pop();
         lines.push(
           '',
-          '# ZK payments (testnet), written by scripts/zk/deploy-testnet.ts',
+          '# Private payments (testnet), written by scripts/zk/deploy-testnet.ts',
         );
       }
       lines.push(`${name}=${value}`);

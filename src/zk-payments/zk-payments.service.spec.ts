@@ -164,7 +164,7 @@ describe('ZkPaymentsService', () => {
       expect(data.expiresAt.getTime()).toBeLessThan(before + 6 * 60_000);
     });
 
-    it('refuses a network ZK payments do not run on, before anything else', async () => {
+    it('refuses a network private payments do not run on, before anything else', async () => {
       const { service, sdk, prisma } = setup();
       expect(
         await codeOf(

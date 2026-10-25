@@ -8,7 +8,7 @@ import {
   ZK_TX_CREATED_AT_SKEW_MS,
 } from '@/zk-payments/zk-payments.constants';
 
-/** What a ZK payment requires of its two transfers. */
+/** What a private payment requires of its two transfers. */
 export interface ZkSettlementTerms {
   /** The confidential token both transfers must be made on (C...). */
   token: string;
@@ -64,7 +64,7 @@ function legTarget(
 }
 
 /**
- * Decides whether two transactions settle a ZK payment, from what the chain
+ * Decides whether two transactions settle a private payment, from what the chain
  * says they did (`ConfidentialSdk.readTransaction`). Throws the `ApiError` the
  * confirm route answers with; returns the payer and the settlement time.
  *
@@ -144,7 +144,7 @@ function theTransfer(
   const mismatch = (why: string) =>
     ApiError.badRequest(
       MISMATCH[leg],
-      `The ${LEG_LABEL[leg]} transaction does not settle this ZK payment: ` +
+      `The ${LEG_LABEL[leg]} transaction does not settle this private payment: ` +
         `it is not ${legTarget(terms, leg).what}${why ? ` (${why})` : ''}.`,
     );
 
@@ -171,7 +171,7 @@ function assertWindow(terms: ZkSettlementTerms, leg: Leg, closedAt: Date) {
   if (closedAt.getTime() < floor) {
     throw ApiError.badRequest(
       MISMATCH[leg],
-      `The ${LEG_LABEL[leg]} transaction does not settle this ZK payment: it ` +
+      `The ${LEG_LABEL[leg]} transaction does not settle this private payment: it ` +
         `closed at ${closedAt.toISOString()}, before this payment was created.`,
     );
   }
@@ -179,7 +179,7 @@ function assertWindow(terms: ZkSettlementTerms, leg: Leg, closedAt: Date) {
     throw ApiError.badRequest(
       ApiErrorCode.Expired,
       `The ${LEG_LABEL[leg]} transaction closed at ${closedAt.toISOString()}, ` +
-        `after this ZK payment expired at ${terms.expiresAt.toISOString()}.`,
+        `after this private payment expired at ${terms.expiresAt.toISOString()}.`,
     );
   }
 }
@@ -194,7 +194,7 @@ function assertPays(
   const mismatch = (why: string) =>
     ApiError.badRequest(
       MISMATCH[leg],
-      `The ${LEG_LABEL[leg]} transaction does not settle this ZK payment: ` +
+      `The ${LEG_LABEL[leg]} transaction does not settle this private payment: ` +
         `it is not ${target.what} (${why}).`,
     );
   if (transfer.to !== target.to) {

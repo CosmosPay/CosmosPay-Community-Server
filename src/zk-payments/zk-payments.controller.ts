@@ -28,16 +28,16 @@ import { ZkPaymentsService } from '@/zk-payments/zk-payments.service';
 /** The example `network_unsupported` a ZK route really sends. */
 export const ZK_NETWORK_UNSUPPORTED_EXAMPLE = {
   [ApiErrorCode.NetworkUnsupported]: {
-    summary: 'ZK payments do not run on this network yet (mainnet today)',
+    summary: 'Private payments do not run on this network yet (mainnet today)',
     message:
-      'ZK payments are not available on public yet. They run on testnet only ' +
+      'Private payments are not available on public yet. They run on testnet only ' +
       'for now: use a dev API key.',
     path: '/v1/zk-payments',
   },
 };
 
 /**
- * `/v1/zk-payments`: ZK payments as the merchant's API key sees them. The
+ * `/v1/zk-payments`: private payments as the merchant's API key sees them. The
  * payer's half (read a payment, confirm it) is keyless, under
  * `/v1/zk-checkout`, so the gateway can serve that whole prefix without a key.
  */
@@ -50,11 +50,11 @@ export class ZkPaymentsController {
   @RequirePermissions('payments:read')
   @ApiOperation({
     summary:
-      "The ZK payments setup of the API key's network: token, registries, auditor id, commission, fee account",
+      "The private payments setup of the API key's network: token, registries, auditor id, commission, fee account",
     description:
       'What a dashboard needs to set a merchant up on the confidential token ' +
       '(register, read the balance, withdraw). `enabled` is false on a ' +
-      'network where ZK payments do not run yet (mainnet today). The same ' +
+      'network where private payments do not run yet (mainnet today). The same ' +
       'shape as the keyless `GET /v1/zk-checkout/config?network=`.',
   })
   @ApiOkResponse({ type: ZkPaymentsConfigEntity })
@@ -69,8 +69,11 @@ export class ZkPaymentsController {
   @RateLimit(ZK_PAYMENT_CREATE_RATE_LIMIT)
   @ApiOperation({
     summary:
-      'Create a ZK payment: a confidential payment to a merchant registered on the token, minus the 0.01% commission',
+      'Create a private payment: a confidential payment to a merchant registered on the token, minus the 0.01% commission',
     description:
+      'A private payment hides its amount on-chain: it is paid with ' +
+      "confidential transfers on Cosmos Pay's confidential token, proven with " +
+      'zero-knowledge proofs (hence `zk` in the paths). ' +
       'Prices the payment (`amount` = `netAmount` + `feeAmount`, the fee ' +
       'rounded up and at least one stroop) and checks on-chain that the ' +
       'recipient holds a confidential account on the token under auditor 0. ' +
@@ -102,7 +105,7 @@ export class ZkPaymentsController {
       '`invalid_amount`: after the commission the merchant would receive ' +
       'nothing. `recipient_not_registered`: the recipient has no ' +
       'confidential account on the token under auditor 0. ' +
-      '`network_unsupported`: ZK payments do not run on this network yet ' +
+      '`network_unsupported`: private payments do not run on this network yet ' +
       '(mainnet today; use a dev key).',
     examples: {
       ...ZK_NETWORK_UNSUPPORTED_EXAMPLE,
@@ -125,7 +128,7 @@ export class ZkPaymentsController {
     examples: {
       [ApiErrorCode.IdempotencyConflict]: {
         message:
-          'A ZK payment with this idempotency key already exists for a ' +
+          'A private payment with this idempotency key already exists for a ' +
           'different request. Retry with the original request unchanged, or ' +
           'use a new key.',
         path: '/v1/zk-payments',
@@ -154,7 +157,7 @@ export class ZkPaymentsController {
 
   @Get()
   @RequirePermissions('payments:read')
-  @ApiOperation({ summary: "List the consumer's ZK payments" })
+  @ApiOperation({ summary: "List the consumer's private payments" })
   @ApiOkResponse({ type: ZkPaymentListEntity })
   findAll(
     @CurrentConsumer() consumer: GatewayConsumer,
@@ -165,7 +168,7 @@ export class ZkPaymentsController {
 
   @Get(':id')
   @RequirePermissions('payments:read')
-  @ApiOperation({ summary: 'Get a ZK payment by id' })
+  @ApiOperation({ summary: 'Get a private payment by id' })
   @ApiOkResponse({ type: ZkPaymentEntity })
   findOne(
     @CurrentConsumer() consumer: GatewayConsumer,

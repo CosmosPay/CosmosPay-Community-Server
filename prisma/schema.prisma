@@ -179,7 +179,7 @@ enum WebhookEventType {
   CROSS_CHAIN_SWAP_FAILED
   CROSS_CHAIN_SWAP_EXPIRED
 
-  // A ZK payment settled: both confidential transfers verified on-chain
+  // A private payment settled: both confidential transfers verified on-chain
   // (appended by `20261025180000_zk_payments`).
   ZK_PAYMENT_SUCCEEDED
 }
@@ -1935,7 +1935,7 @@ model PluginRecord {
   @@map("plugin_record")
 }
 
-// A ZK payment's lifecycle. PENDING until both confidential transfers are
+// A private payment's lifecycle. PENDING until both confidential transfers are
 // verified on-chain. EXPIRED is never stored today: a PENDING payment past
 // `expiresAt` READS as EXPIRED, and stays confirmable, because transfers that
 // closed before `expiresAt` paid it even when the payer confirms late.
@@ -1977,7 +1977,7 @@ model ZkPayment {
   payer      String?
 
   // The two transactions that settled it, lowercase hex. Unique across the
-  // table: one transaction settles one ZK payment, of any consumer.
+  // table: one transaction settles one private payment, of any consumer.
   paymentTxHash String? @unique
   feeTxHash     String? @unique
 

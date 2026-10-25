@@ -29,7 +29,7 @@ export const DEFAULT_SOLANA_RPC: Record<StellarNetwork, string> = {
 };
 
 /**
- * The Soroban RPC ZK payments read the confidential token through, per network
+ * The Soroban RPC private payments (ZK payments) read the confidential token through, per network
  * tier, when `ZK_PAYMENTS_<NETWORK>_RPC_URL` is unset. SDF runs a public one on
  * testnet only; mainnet has no default, so a mainnet deployment must name a
  * provider's endpoint (`zk-payments-env.ts` refuses to boot without one).

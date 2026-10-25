@@ -3,7 +3,7 @@ import type { StellarNetwork } from '@/config/configuration';
 import { DEFAULT_ZK_PAYMENTS_RPC } from '@/config/config.constants';
 
 /**
- * The environment of ZK payments, one set of variables per network tier.
+ * The environment of private payments, one set of variables per network tier.
  *
  * `testnet` reads `ZK_PAYMENTS_TESTNET_*` and `public` reads
  * `ZK_PAYMENTS_MAINNET_*`. A network with no `_TOKEN` has the feature off: the
@@ -55,7 +55,7 @@ function read(env: Env, name: string): string {
 }
 
 /**
- * Refuses to boot with a half-configured ZK payments network, or one whose
+ * Refuses to boot with a half-configured private payments network, or one whose
  * values cannot be what they claim to be. Reads the RAW environment, like
  * `identity-env.ts`: the rule is about how the variables relate to each other.
  */
@@ -83,7 +83,7 @@ function assertNetwork(env: Env, network: StellarNetwork): void {
   const missing = required.filter((field) => value(field) === '');
   if (missing.length > 0) {
     throw new Error(
-      `ZK payments on ${network} are half-configured: ${missing
+      `Private payments on ${network} are half-configured: ${missing
         .map(name)
         .join(', ')} ${missing.length === 1 ? 'is' : 'are'} missing while ` +
         `${present.map(name).join(', ')} ${present.length === 1 ? 'is' : 'are'} set. ` +
@@ -118,7 +118,7 @@ function assertNetwork(env: Env, network: StellarNetwork): void {
   const rpcUrl = value('rpcUrl') || DEFAULT_ZK_PAYMENTS_RPC[network];
   if (!rpcUrl) {
     throw new Error(
-      `${name('rpcUrl')} is required to serve ZK payments on ${network}: ` +
+      `${name('rpcUrl')} is required to serve private payments on ${network}: ` +
         'there is no public default Soroban RPC for this network.',
     );
   }

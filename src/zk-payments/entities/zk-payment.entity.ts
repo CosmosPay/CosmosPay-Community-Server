@@ -39,7 +39,7 @@ export class ZkPaymentsConfigEntity {
   @ApiProperty({
     example: true,
     description:
-      'Whether ZK payments run on this network. False until the operator ' +
+      'Whether private payments run on this network. False until the operator ' +
       'deploys the token there (mainnet today); every other field but ' +
       '`network`, `networkPassphrase`, `auditorId` and `feeBps` is then null.',
   })
@@ -101,7 +101,7 @@ export class ZkPaymentsConfigEntity {
   feeAccount!: string | null;
 }
 
-/** A ZK payment as its owner reads it. */
+/** A private payment as its owner reads it. */
 export class ZkPaymentEntity {
   @ApiProperty({ example: 'cmh4x2k9a0001l70g8v5q3z2w' })
   id!: string;
@@ -205,7 +205,7 @@ export class ZkPaymentListEntity {
 }
 
 /**
- * A ZK payment as its payer's checkout reads it: what to pay, to whom, on which
+ * A private payment as its payer's checkout reads it: what to pay, to whom, on which
  * contracts. Never the owner's data: no consumer, no idempotency key, no
  * transaction hashes.
  */

@@ -55,7 +55,7 @@ type ZkCheckoutRow = Prisma.ZkPaymentGetPayload<{
 }>;
 
 /**
- * The anonymous half of ZK payments, behind the keyless `/v1/zk-checkout`
+ * The anonymous half of private payments, behind the keyless `/v1/zk-checkout`
  * prefix: the network setup a wallet proves against, a payment as its payer
  * sees it, and the confirm that settles it after reading both transfers back
  * from the chain.
@@ -92,7 +92,7 @@ export class ZkCheckoutService {
    * (`verifyZkSettlement` has the rules and their order).
    *
    * Idempotent: confirming a settled payment with the hashes it settled with
-   * answers it again. A transaction that settled another ZK payment, of any
+   * answers it again. A transaction that settled another private payment, of any
    * consumer, is refused before the chain is asked anything.
    */
   async confirm(
@@ -165,7 +165,7 @@ export class ZkCheckoutService {
     }
 
     this.logger.log(
-      `Settled ZK payment ${row.id} on ${row.network}: payer=${settlement.payer} ` +
+      `Settled private payment ${row.id} on ${row.network}: payer=${settlement.payer} ` +
         `payment=${paymentTxHash} fee=${feeTxHash}`,
     );
     await this.notifySettled(row.id);
@@ -181,7 +181,7 @@ export class ZkCheckoutService {
       where: { id },
       select: ZK_CHECKOUT_SELECT,
     });
-    if (!row) throw ApiError.notFound(`ZK payment ${id} not found`);
+    if (!row) throw ApiError.notFound(`Private payment ${id} not found`);
     return row;
   }
 
@@ -193,14 +193,14 @@ export class ZkCheckoutService {
   private networkOf(row: ZkCheckoutRow): ZkNetworkConfig {
     if (!isStellarNetwork(row.network)) {
       throw new Error(
-        `ZK payment ${row.id} is on unknown network ${row.network}`,
+        `Private payment ${row.id} is on unknown network ${row.network}`,
       );
     }
     const zk = this.networks.require(row.network);
     if (zk.token !== row.tokenContract) {
       throw ApiError.badRequest(
         ApiErrorCode.NetworkUnsupported,
-        `This ZK payment was made on token ${row.tokenContract}, which this ` +
+        `This private payment was made on token ${row.tokenContract}, which this ` +
           `deployment no longer serves on ${row.network}.`,
       );
     }
@@ -232,7 +232,7 @@ export class ZkCheckoutService {
     }
     throw ApiError.badRequest(
       ApiErrorCode.InvalidStateTransition,
-      'This ZK payment is already settled, by other transactions.',
+      'This private payment is already settled, by other transactions.',
     );
   }
 
@@ -257,7 +257,7 @@ export class ZkCheckoutService {
     );
   }
 
-  /** Neither hash may have settled another ZK payment, in either role. */
+  /** Neither hash may have settled another private payment, in either role. */
   private async assertUnused(
     id: string,
     paymentTxHash: string,
@@ -303,7 +303,7 @@ export class ZkCheckoutService {
 function alreadySettled(): ApiError {
   return ApiError.conflict(
     ApiErrorCode.TransactionAlreadySettled,
-    'One of these transactions already settled another ZK payment. One ' +
+    'One of these transactions already settled another private payment. One ' +
       'transaction settles at most one payment.',
   );
 }

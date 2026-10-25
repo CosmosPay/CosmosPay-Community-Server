@@ -423,7 +423,7 @@ export class ConfidentialSdk {
           );
           throw ApiError.unavailable(
             ApiErrorCode.Misconfigured,
-            'The Soroban RPC configured for ZK payments serves another network.',
+            'The Soroban RPC configured for private payments serves another network.',
           );
         }
       })();

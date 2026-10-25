@@ -77,9 +77,9 @@ export enum ApiErrorCode {
    */
   TransactionAlreadySettled = 'transaction_already_settled',
 
-  // --- ZK payments (confidential token) --------------------------------------
+  // --- Private payments (confidential token) --------------------------------------
   /**
-   * The recipient of a ZK payment holds no confidential account on Cosmos
+   * The recipient of a private payment holds no confidential account on Cosmos
    * Pay's token (or holds one under another auditor): a transfer to it would
    * be refused on-chain, so the payment is refused before it exists.
    */
@@ -93,14 +93,14 @@ export enum ApiErrorCode {
   PaymentTransferMismatch = 'payment_transfer_mismatch',
   /** {@link PaymentTransferMismatch}, for the commission transfer to the fee account. */
   FeeTransferMismatch = 'fee_transfer_mismatch',
-  /** The two transfers of one ZK payment come from different accounts. */
+  /** The two transfers of one private payment come from different accounts. */
   PayerMismatch = 'payer_mismatch',
   /**
    * The RPC has no transaction with that hash: it has not closed yet, or it is
    * older than the RPC keeps transactions for.
    */
   TransactionNotFound = 'transaction_not_found',
-  /** A transfer of a ZK payment closed after the payment expired. */
+  /** A transfer of a private payment closed after the payment expired. */
   Expired = 'expired',
 
   // --- cross-chain swaps (NEAR Intents) --------------------------------------

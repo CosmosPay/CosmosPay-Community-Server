@@ -215,7 +215,7 @@ export const API_ERROR_CASES: Readonly<Record<ApiErrorCode, ApiErrorCase>> = {
     message: 'The payment provider rejected the request.',
     path: '/v1/onramp/quotes',
   },
-  // --- ZK payments ---------------------------------------------------------
+  // --- Private payments ---------------------------------------------------------
   [ApiErrorCode.RecipientNotRegistered]: {
     statuses: [400],
     summary:
@@ -231,7 +231,7 @@ export const API_ERROR_CASES: Readonly<Record<ApiErrorCode, ApiErrorCase>> = {
     summary:
       "The payment transaction does not pay this payment's net amount to its recipient",
     message:
-      'The payment transaction does not settle this ZK payment: it is not a ' +
+      'The payment transaction does not settle this private payment: it is not a ' +
       "confidential transfer of the payment's net amount to its recipient.",
     path: '/v1/zk-checkout/cmh4x2k9a0001l70g8v5q3z2w/confirm',
   },
@@ -240,7 +240,7 @@ export const API_ERROR_CASES: Readonly<Record<ApiErrorCode, ApiErrorCase>> = {
     summary:
       "The fee transaction does not pay this payment's commission to the fee account",
     message:
-      'The fee transaction does not settle this ZK payment: it is not a ' +
+      'The fee transaction does not settle this private payment: it is not a ' +
       'confidential transfer of the commission to the fee account.',
     path: '/v1/zk-checkout/cmh4x2k9a0001l70g8v5q3z2w/confirm',
   },
@@ -264,10 +264,11 @@ export const API_ERROR_CASES: Readonly<Record<ApiErrorCode, ApiErrorCase>> = {
   },
   [ApiErrorCode.Expired]: {
     statuses: [400],
-    summary: 'A transfer of the ZK payment closed after the payment expired',
+    summary:
+      'A transfer of the private payment closed after the payment expired',
     message:
       'The payment transaction closed at 2026-10-25T14:05:12.000Z, after this ' +
-      'ZK payment expired at 2026-10-25T14:00:00.000Z.',
+      'Private payment expired at 2026-10-25T14:00:00.000Z.',
     path: '/v1/zk-checkout/cmh4x2k9a0001l70g8v5q3z2w/confirm',
   },
   [ApiErrorCode.ProviderUnavailable]: {

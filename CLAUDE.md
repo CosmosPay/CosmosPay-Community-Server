@@ -17,8 +17,8 @@ Conventions for this repo. They are enforced by `npm run lint`, which CI gates o
 | `npm run db:migrate` | `prisma migrate dev`. A schema change ships its migration: CI applies every migration to a real Postgres and runs `prisma migrate diff --exit-code` against `schema.prisma` |
 | `npm run backups:reencrypt` | re-seals stored wallet backups under the current `WALLET_BACKUP_ENCRYPTION_KEY` — run it after turning the seal on and after every rotation, then drop the old key from `WALLET_BACKUP_ENCRYPTION_PREVIOUS_KEYS` (`-- --dry-run` only counts) |
 | `npm run plugins -- <cmd>` | third-party plugin folders: `new`, `check`, `sign`, `verify`, `keygen`, `publish`, `install` (`scripts/plugins.ts`) |
-| `npm run zk:deploy-testnet` | deploys the ZK payments token, auditor registry and fee account on TESTNET (Friendbot, no real funds). `-- --env-file .env --secrets-file .zk-secrets/testnet.json` writes the values instead of printing secrets; run again it only verifies; `-- --redeploy` strands every payment on the old token |
-| `npm run zk:e2e-testnet` | the real-chain check of ZK payments on testnet: registers, proves, transfers and confirms through the module's own services. Slow (UltraHonk proofs in Node), needs the deployed set in `.env` |
+| `npm run zk:deploy-testnet` | deploys the private payments token, auditor registry and fee account on TESTNET (Friendbot, no real funds). `-- --env-file .env --secrets-file .zk-secrets/testnet.json` writes the values instead of printing secrets; run again it only verifies; `-- --redeploy` strands every payment on the old token |
+| `npm run zk:e2e-testnet` | the real-chain check of private payments on testnet: registers, proves, transfers and confirms through the module's own services. Slow (UltraHonk proofs in Node), needs the deployed set in `.env` |
 
 ## Imports: always use the path aliases, never relative paths
 
@@ -410,7 +410,14 @@ that breaks two boundaries.
   in the wallet's `tests/unit/signIn.test.ts` / `tests/unit/recovery.test.ts`.
   Change one side and no sign-in or setup can finish.
 
-## ZK payments: Cosmos Pay's confidential token, and how confirm decides
+## Private payments (`zk-payments`): Cosmos Pay's confidential token, and how confirm decides
+
+**Private payments wherever a person reads, ZK only in identifiers.** Merchants and
+payers do not know what "ZK" means, so Swagger summaries and descriptions, error
+messages and the seven READMEs say "private payment" ("pago privado", ...). `zk`/`ZK`
+stays in what code and operators read: the routes (`/v1/zk-payments`,
+`/v1/zk-checkout`), `ZK_PAYMENTS_*`, the `zk_payment` table, the error codes and
+`ZK_PAYMENT_SUCCEEDED`. Never rename those for wording: they are a contract.
 
 `src/zk-payments/` serves payments whose amount is hidden on-chain, on Cosmos Pay's
 OWN instance of OpenZeppelin's Confidential Token (`stellar-confidential` 0.8.0),
@@ -449,7 +456,7 @@ route goes under `/v1/zk-checkout` and a keyed one never does.
 order). The route is public and decrypts whatever hashes it is given with the
 auditor key, so the ORDER of the checks is security, not style:
 
-1. neither hash settled another ZK payment (DB, before any RPC call; `409`);
+1. neither hash settled another private payment (DB, before any RPC call; `409`);
 2. both transactions exist and succeeded;
 3. each is ONE operation calling `confidential_transfer` on the payment's token, with
    exactly one `transfer` event from that contract;

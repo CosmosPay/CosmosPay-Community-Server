@@ -25,7 +25,7 @@ import { ZkPaymentsService } from '@/zk-payments/zk-payments.service';
 import { ZK_PAYMENT_AUDITOR_ID } from '@/zk-payments/zk-payments.constants';
 
 /**
- * The real-chain check of ZK payments, on Stellar TESTNET, against the token
+ * The real-chain check of private payments, on Stellar TESTNET, against the token
  * `scripts/zk/deploy-testnet.ts` deployed (the `ZK_PAYMENTS_TESTNET_*` set in
  * `.env`, or `ENV_FILE`).
  *
@@ -34,7 +34,7 @@ import { ZK_PAYMENT_AUDITOR_ID } from '@/zk-payments/zk-payments.constants';
  * With Friendbot throwaway accounts (no real funds), it:
  *
  *   1. registers a merchant and a payer on the token (register proofs in Node);
- *   2. creates the ZK payment through `ZkPaymentsService.create`, which checks
+ *   2. creates the private payment through `ZkPaymentsService.create`, which checks
  *      on-chain that the merchant is registered, plus one with a slightly
  *      different amount (the wrong-amount case), and checks that a recipient
  *      with no confidential account is refused;
@@ -101,7 +101,7 @@ async function main(): Promise<void> {
   const zk = config.get('zkPayments', { infer: true }).testnet;
   if (!zk) {
     throw new Error(
-      'ZK payments are not configured on testnet: run npm run zk:deploy-testnet first.',
+      'Private payments are not configured on testnet: run npm run zk:deploy-testnet first.',
     );
   }
   log(`token        ${zk.token}`);
@@ -335,7 +335,7 @@ async function main(): Promise<void> {
     );
     log(`  merchant receiving = ${merchantState.receiving.v} stroops (net)`);
 
-    log('\nZK payments e2e on testnet: PASSED');
+    log('\nprivate payments e2e on testnet: PASSED');
     log(`  payment tx ${paymentTxHash}`);
     log(`  fee tx     ${feeTxHash}`);
   } finally {
@@ -467,7 +467,7 @@ class InMemoryPrisma {
       select?: Record<string, unknown>;
     }) => {
       const row = this.payments.find((p) => p.id === args.where.id);
-      if (!row) throw new Error(`No ZK payment ${args.where.id}`);
+      if (!row) throw new Error(`No private payment ${args.where.id}`);
       return Promise.resolve(this.pick(row, args.select));
     },
     findFirst: (args: {
@@ -571,7 +571,7 @@ class RecordingWebhooks {
 
 main().catch((err: unknown) => {
   process.stderr.write(
-    `\nZK payments e2e on testnet FAILED: ${
+    `\nprivate payments e2e on testnet FAILED: ${
       err instanceof Error ? (err.stack ?? err.message) : String(err)
     }\n`,
   );

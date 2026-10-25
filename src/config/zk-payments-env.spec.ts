@@ -22,7 +22,7 @@ const mainnetSet = (over: Record<string, string> = {}) =>
   );
 
 describe('assertZkPaymentsConfigConsistent', () => {
-  it('boots with no ZK payments configured at all', () => {
+  it('boots with no private payments configured at all', () => {
     expect(() => assertZkPaymentsConfigConsistent({})).not.toThrow();
   });
 

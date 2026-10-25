@@ -63,7 +63,7 @@ src/
   cross-chain-swaps/              swaps across 35 networks via NEAR Intents (Stellar, Solana, Monad, EVM,
                                   UTXO, ...): network registry, quote, deposit address + wallet link, observer
   near-intents/                   NEAR Intents 1Click client: tokens, quote, status, deposit submit
-  zk-payments/                    ZK payments: confidential transfers on Cosmos Pay's token, verified on-chain;
+  zk-payments/                    private payments: confidential transfers on Cosmos Pay's token, verified on-chain;
                                   the confidential token SDK is loaded only by confidential-sdk.ts
   liquidity-pools/                AMM deposit/withdraw, pool + position reads, cost basis + commission on gain
   observer/                       background reconciler: swaps + LP ops against Horizon, one adapter per table
@@ -96,7 +96,7 @@ test/                             e2e suites: gateway gate, admin + alias consol
                                   payment intents, swaps, liquidity pools, KYC, webhooks
 plugins/                          THE plugins folder: one <slug>/ per plugin (plugin.json, index.ts, signature.json)
 scripts/                          OpenAPI generator, README check, operator scripts,
-                                  zk/: deploy and check the ZK payments token on testnet
+                                  zk/: deploy and check the private payments token on testnet
 contracts/                        PaymentForwarder.sol — Monad deposit addresses (npm run contracts:compile)
 deploy/authentik/                 Authentik blueprint: the wallet sign-in and sign-up
 docs/i18n/                        this README in es, pt, de, fr, hi, zh
@@ -118,8 +118,8 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | 支付链接          | `/v1/payment-links`      | 付款方所见的单个支付意图，供托管收银页使用——无需 API key（`@Public`） |
 | Swap | `/v1/swaps` | 路径支付报价、构建未签名 XDR、提交已签名交易 · Solana 经由 Jupiter，Monad 经由 Kuru Flow |
 | 跨链 swap | `/v1/cross-chain-swaps` | 通过 NEAR Intents 在 35 个网络之间（Stellar、Solana、Monad、EVM 链、Bitcoin 与 UTXO 币等）：报价、充值地址、状态 |
-| ZK 支付 | `/v1/zk-payments` | 基于 Cosmos Pay 保密代币的保密支付（金额在链上隐藏，0.01% 佣金），目前仅限测试网 |
-| ZK 收银 | `/v1/zk-checkout` | ZK 支付中付款方的那一半：读取、确认，以及网络配置（`@Public`） |
+| 私密支付 | `/v1/zk-payments` | 基于 Cosmos Pay 保密代币的保密支付（金额在链上隐藏，0.01% 佣金），目前仅限测试网 |
+| 私密收银 | `/v1/zk-checkout` | 私密支付中付款方的那一半：读取、确认，以及网络配置（`@Public`） |
 | 流动性池 | `/v1/liquidity-pools` | AMM 存入 / 取出、持仓、按收益收取佣金 |
 | Webhooks | `/v1/webhooks` | 端点 CRUD、密钥轮换、投递记录、重新投递 |
 | KYC | `/v1/kyc` | Receiver（KYC/KYB）、钱包、银行账户、文档上传 |
@@ -903,9 +903,11 @@ NEAR Intents 从输入中扣除它，报价的输出已是扣除后的净额，�
 | `GET /v1/cross-chain-swaps` | `swaps:read` | 该 consumer 的跨链 swap |
 | `GET /v1/cross-chain-swaps/{id}` | `swaps:read` | 单笔 swap，即观察器最后一次看到的状态 |
 | `POST /v1/cross-chain-swaps/{id}/deposit` | `swaps:write` | 上报充值交易，让 NEAR Intents 无需等待其索引器即可开始 |
-## ZK 支付（Stellar 上的保密金额）
+## 私密支付（Stellar 上的保密金额）
 
-**ZK 支付**是金额在链上隐藏的支付。它在 Cosmos Pay 自己部署的 OpenZeppelin Confidential Token 实例（`stellar-confidential` 0.8.0）上进行：余额是 Pedersen 承诺，每笔转账都携带一个由该代币在链上验证的 UltraHonk 证明，金额则加密后发送给收款方和审计方。该代币的审计方注册表（auditor registry）由 Cosmos Pay 部署，因此其上每个账户的审计方密钥（id 0）都由 Cosmos Pay 持有，它能读取在那里进行的每笔转账的金额。其他观察账本的人都读不到。
+**私密支付**是金额在链上隐藏的支付。它在 Cosmos Pay 自己部署的 OpenZeppelin Confidential Token 实例（`stellar-confidential` 0.8.0）上进行：余额是 Pedersen 承诺，每笔转账都携带一个由该代币在链上验证的 UltraHonk 证明，金额则加密后发送给收款方和审计方。该代币的审计方注册表（auditor registry）由 Cosmos Pay 部署，因此其上每个账户的审计方密钥（id 0）都由 Cosmos Pay 持有，它能读取在那里进行的每笔转账的金额。其他观察账本的人都读不到。
+
+**为什么代码里写的是 ZK。** 所有面向人阅读的内容都称其为私密支付。路由、变量、数据表和错误码则称其为 ZK 支付（`/v1/zk-payments`、`/v1/zk-checkout`、`ZK_PAYMENTS_*`、`zk_payment`、`ZK_PAYMENT_SUCCEEDED`），得名于让金额保持私密的零知识证明（zero-knowledge proofs）。
 
 **目前仅限测试网。** 该代币包装的是原生 XLM。在运营方于主网部署并设置 `ZK_PAYMENTS_MAINNET_*` 之前，主网保持关闭：在此之前，`prod` key 的 `GET /v1/zk-payments/config` 返回 `enabled: false`，创建请求返回 `400 network_unsupported`。
 
@@ -927,7 +929,7 @@ payer:    GET  /v1/zk-checkout/{id}
 
 **confirm 校验什么，按此顺序。** `POST /v1/zk-checkout/{id}/confirm` 通过 Soroban RPC 读回两笔交易，并且只有在以下条件全部满足时才结算该支付：
 
-1. 两个哈希都没有结算过其他 ZK 支付，无论属于哪个商户（在向链查询任何内容之前先在数据库中检查；`409 transaction_already_settled`）；
+1. 两个哈希都没有结算过其他 私密支付，无论属于哪个商户（在向链查询任何内容之前先在数据库中检查；`409 transaction_already_settled`）；
 2. 两笔交易都存在（`transaction_not_found`）且执行成功（`transaction_rejected`）；
 3. 每笔交易都是对该支付所用代币的单个 `confidential_transfer` 调用，并带有一个 `transfer` 事件；
 4. 两笔交易所在账本的关闭时间都落在该支付开放期间：不早于其创建时间减去一分钟的时钟偏差，也不晚于 `expiresAt`（`expired`）；
@@ -960,13 +962,13 @@ npm run zk:e2e-testnet
 
 **测试网会被重置**，每隔几个月一次，其上的合约也随之消失：重置之后请重新运行部署。它复用的验证器是 demo 的；如果那个验证器不存在了，部署会一直失败，直到存在一个带有 v0.8.0 密钥的验证器、并在脚本中写明它为止。
 
-### ZK 支付路由
+### 私密支付路由
 
 | 路由 | Scope | 用途 |
 | --- | --- | --- |
 | `GET /v1/zk-payments/config` | `payments:read` | 该 key 所在网络的配置：代币、注册表、审计方 id、佣金、手续费账户 |
 | `POST /v1/zk-payments` | `payments:write` | 向已注册的商户创建一笔支付；支持 `Idempotency-Key` |
-| `GET /v1/zk-payments` | `payments:read` | 该 consumer 的 ZK 支付，按当前读取到的状态过滤 |
+| `GET /v1/zk-payments` | `payments:read` | 该 consumer 的 私密支付，按当前读取到的状态过滤 |
 | `GET /v1/zk-payments/{id}` | `payments:read` | 单笔支付，即其所有者看到的样子 |
 | `GET /v1/zk-checkout/config` | 无，`@Public()` | 同样的配置，针对 `?network=testnet` 或 `public`，供没有 key 的页面使用 |
 | `GET /v1/zk-checkout/{id}` | 无，`@Public()` | 付款方看到的支付：转多少、转给谁、在哪些合约上 |
@@ -1294,13 +1296,13 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
 
 ## 升级 — 破坏性变更与部署说明
 
-### ZK 支付：一个新模块、一张新表和一个 webhook 事件
+### 私密支付：一个新模块、一张新表和一个 webhook 事件
 
-- **新路由**位于 `/v1/zk-payments`（`payments:read` / `payments:write`）和无 key 的 `/v1/zk-checkout`（`@Public()`）下：基于 Cosmos Pay 保密代币的保密支付，目前仅限测试网。它们的作用见 [ZK 支付](#zk-支付stellar-上的保密金额)。现有响应均未改变。
+- **新路由**位于 `/v1/zk-payments`（`payments:read` / `payments:write`）和无 key 的 `/v1/zk-checkout`（`@Public()`）下：基于 Cosmos Pay 保密代币的保密支付，目前仅限测试网。它们的作用见 [私密支付](#私密支付stellar-上的保密金额)。现有响应均未改变。
 - **迁移 `20261025180000_zk_payments`** 创建 `zk_payment` 表和 `ZkPaymentStatus` 枚举，并向 `WebhookEventType` 追加 `ZK_PAYMENT_SUCCEEDED`；不改写任何数据。在新版本承接流量之前运行 `migrate deploy`。
 - **新 webhook 事件 `ZK_PAYMENT_SUCCEEDED`**，与其他结算事件一样持久。订阅了全部事件的端点会收到它；带有显式事件列表的端点，在把该事件加入列表之前不会收到。
 - **新变量**，均为可选：`ZK_PAYMENTS_TESTNET_*` 这组变量为 `dev` key 开启该功能（`npm run zk:deploy-testnet` 会写入它），启动时会拒绝只配置了一半的变量组。`ZK_PAYMENTS_MAINNET_*` 已存在，保持未设置。
-- **新依赖** `stellar-confidential-token-sdk`，固定在其 GitHub 仓库的某个 commit 上（它不在 npm 上）；`npm ci` 通过其 `prepare` 脚本构建它的 `dist/`。服务器延迟加载它，在第一个 ZK 请求时才加载。
+- **新依赖** `stellar-confidential-token-sdk`，固定在其 GitHub 仓库的某个 commit 上（它不在 npm 上）；`npm ci` 通过其 `prepare` 脚本构建它的 `dist/`。服务器延迟加载它，在第一个私密支付请求时才加载。
 - **部署步骤：** 把 `/v1/zk-checkout/*` 加入 APISIX 的无 key 路由，为 `GET` 和 `POST` 配置 CORS，并暴露 `Retry-After` 和 `ratelimit-*`，与 `/v1/payment-links/*` 相同。
 
 ### 客户：任意链上的账户，以及按 key 所在网络统计
@@ -1836,14 +1838,14 @@ curl -H "X-Gateway-Secret: $APISIX_GATEWAY_SECRET" -H "X-Consumer-Username: ops"
 | `WALLET_RECOVERY_SPONSOR_HORIZON_URL` | 否 | `STELLAR_NETWORK` 的 Horizon | 赞助的恢复设置读取账户所用的 Horizon |
 | `RATE_LIMIT_ENABLED` | 否 | `true` | 对花费 XLM 的路由按地址设置上限。事故开关 |
 | `RATE_LIMIT_PRUNE_INTERVAL_MS` | 否 | `600000` | 计数器窗口清理间隔（ms，最小 1000） |
-| `ZK_PAYMENTS_TESTNET_TOKEN` | 在测试网上启用 ZK 支付时 | 无 | Cosmos Pay 在测试网上的保密代币（C...）。设置它即为 `dev` key 开启 ZK 支付；设置后，该组中除 `_RPC_URL` 之外的其他变量在启动时都是必需的 |
+| `ZK_PAYMENTS_TESTNET_TOKEN` | 在测试网上启用 私密支付时 | 无 | Cosmos Pay 在测试网上的保密代币（C...）。设置它即为 `dev` key 开启 私密支付；设置后，该组中除 `_RPC_URL` 之外的其他变量在启动时都是必需的 |
 | `ZK_PAYMENTS_TESTNET_AUDITOR_REGISTRY` | 与代币一起 | 无 | 在 id 0 下持有 Cosmos Pay 密钥的审计方注册表（C...） |
 | `ZK_PAYMENTS_TESTNET_VERIFIER` | 与代币一起 | 无 | 代币用来校验证明的 UltraHonk 验证器注册表（C...） |
 | `ZK_PAYMENTS_TESTNET_AUDITOR_SECRET` | 与代币一起 | 无 | 审计方标量 `k`（64 个 hex 字符）：代币上的每个保密金额都能用它解密。其敏感程度与网关密钥相当；绝不能放进仓库 |
 | `ZK_PAYMENTS_TESTNET_FEE_ACCOUNT` | 与代币一起 | 无 | 0.01% 佣金转入的账户（G...），已在代币上注册 |
 | `ZK_PAYMENTS_TESTNET_DEPLOYED_LEDGER` | 与代币一起 | 无 | 代币部署时所在的账本，钱包从这里开始重放其余额 |
-| `ZK_PAYMENTS_TESTNET_RPC_URL` | 否 | `https://soroban-testnet.stellar.org` | ZK 支付读取链上数据所用的 Soroban RPC；使用前会检查其网络 passphrase |
-| `ZK_PAYMENTS_MAINNET_*` | 否 | 无 | 供 `prod` key 使用的同一组变量（`_TOKEN`、`_AUDITOR_REGISTRY`、`_VERIFIER`、`_AUDITOR_SECRET`、`_FEE_ACCOUNT`、`_DEPLOYED_LEDGER`、`_RPC_URL`）。未设置时，主网上的 ZK 支付处于关闭状态。`_RPC_URL` 在主网上没有默认值，随该组变量一起为必需 |
+| `ZK_PAYMENTS_TESTNET_RPC_URL` | 否 | `https://soroban-testnet.stellar.org` | 私密支付读取链上数据所用的 Soroban RPC；使用前会检查其网络 passphrase |
+| `ZK_PAYMENTS_MAINNET_*` | 否 | 无 | 供 `prod` key 使用的同一组变量（`_TOKEN`、`_AUDITOR_REGISTRY`、`_VERIFIER`、`_AUDITOR_SECRET`、`_FEE_ACCOUNT`、`_DEPLOYED_LEDGER`、`_RPC_URL`）。未设置时，主网上的 私密支付处于关闭状态。`_RPC_URL` 在主网上没有默认值，随该组变量一起为必需 |
 
 旧版的 `STELLAR_HORIZON_URL` 会在启动时被拒绝——请改用 `STELLAR_HORIZON_URL_PUBLIC` / `STELLAR_HORIZON_URL_TESTNET`。
 

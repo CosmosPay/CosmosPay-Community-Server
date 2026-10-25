@@ -650,7 +650,7 @@ export function validateEnv(config: Record<string, unknown>) {
 
   assertIdentityConfigConsistent(config);
 
-  // ZK payments are optional per network, but all-or-nothing within one.
+  // Private payments (ZK payments) are optional per network, but all-or-nothing within one.
   assertZkPaymentsConfigConsistent(config);
 
   // Parsed here as well, so a malformed value fails the boot naming its
