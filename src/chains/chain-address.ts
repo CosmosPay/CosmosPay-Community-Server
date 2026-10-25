@@ -8,11 +8,22 @@ const BASE58_ALPHABET =
 const EVM_ADDRESS_RE = /^0x[a-fA-F0-9]{40}$/;
 
 /**
- * Decodes Bitcoin-alphabet base58 — Solana's encoding for keys, signatures and
- * hashes. Returns null for any character outside the alphabet.
+ * The longest base58 string decoded: a 64-byte Solana signature is at most 88 characters.
+ * Decoding is quadratic in the length (one BigInt multiply per character), so a longer
+ * input is refused before any work, whatever field it arrived in.
+ */
+const MAX_BASE58_LENGTH = 128;
+
+/**
+ * Decodes Bitcoin-alphabet base58 (Solana's encoding for keys, signatures and hashes).
+ * Returns null for any character outside the alphabet, or past MAX_BASE58_LENGTH.
  */
 export function decodeBase58(value: string): Uint8Array | null {
-  if (typeof value !== 'string' || value.length === 0) {
+  if (
+    typeof value !== 'string' ||
+    value.length === 0 ||
+    value.length > MAX_BASE58_LENGTH
+  ) {
     return null;
   }
 
@@ -64,6 +75,9 @@ export function encodeBase58(bytes: Uint8Array): string {
 
 /** A Solana address: base58 that decodes to exactly 32 bytes. */
 export function isSolanaAddress(value: string): boolean {
+  // 32 bytes are 32 to 44 base58 characters; anything else is not one, so skip the decode.
+  if (typeof value !== 'string' || value.length < 32 || value.length > 44)
+    return false;
   return decodeBase58(value)?.length === 32;
 }
 
@@ -142,7 +156,8 @@ export function normalizeAddress(chain: Chain, address: string): string {
  * than one would, so a future chain whose shape collides is refused rather than guessed.
  */
 export function chainOfAddress(address: string): Chain | null {
-  if (typeof address !== 'string') return null;
+  // No accepted address is longer than a Stellar key (56 characters).
+  if (typeof address !== 'string' || address.length > 64) return null;
   const matches = CHAINS.filter((chain) =>
     CHAIN_ADDRESS_RULES[chain].isValid(address),
   );

@@ -31,6 +31,9 @@ describe('base58', () => {
   it('refuses characters outside the alphabet', () => {
     expect(decodeBase58('0OIl')).toBeNull();
     expect(decodeBase58('')).toBeNull();
+    // Past 128 characters (a 64-byte signature is at most 88) nothing is decoded.
+    expect(decodeBase58('2'.repeat(129))).toBeNull();
+    expect(decodeBase58('2'.repeat(88))).not.toBeNull();
   });
 
   it('spells a Stellar key’s raw bytes as the Solana address of the same key', () => {
@@ -84,6 +87,7 @@ describe('CHAIN_ADDRESS_RULES', () => {
 describe('an address on any chain', () => {
   it('reads the chain from the shape, the three shapes never overlapping', () => {
     expect(chainOfAddress(STELLAR)).toBe('stellar');
+    expect(chainOfAddress('G'.repeat(65))).toBeNull();
     expect(chainOfAddress(SOLANA)).toBe('solana');
     expect(chainOfAddress(MONAD)).toBe('monad');
     expect(chainOfAddress(MONAD.toLowerCase())).toBe('monad');

@@ -61,6 +61,8 @@ describe('CreateCustomerDto.account', () => {
     ['an EVM address one hex short', MONAD.slice(0, -1)],
     ['a Bitcoin address', 'bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq'],
     ['an empty string', ''],
+    // Longer than any address: refused before any decoding (base58 is quadratic to decode).
+    ['a 100 000-character string', '1'.repeat(100_000)],
     ['a number', 42],
   ])('refuses %s, naming the three accepted shapes', async (_, account) => {
     expect(
