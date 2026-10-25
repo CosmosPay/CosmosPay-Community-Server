@@ -8,7 +8,7 @@ export const CurrentAdmin = createParamDecorator(
     const request = ctx.switchToHttp().getRequest<Request>();
     if (!request.adminPrincipal) {
       throw new Error(
-        'CurrentAdmin used without AdminGuard — adminPrincipal missing',
+        'CurrentAdmin used without AdminGuard: adminPrincipal missing',
       );
     }
     return request.adminPrincipal;

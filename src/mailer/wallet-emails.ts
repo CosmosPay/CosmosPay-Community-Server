@@ -84,11 +84,11 @@ export function renderLoginCodeEmail(v: {
     heading('Your wallet sign-in code') +
     lead(
       `Hi ${name}, use the code below to sign in to the <b>CosmosPay&nbsp;Wallet</b>. ` +
-        "If you didn't try to sign in, you can safely ignore this email — nobody gets in without the code.",
+        "If you didn't try to sign in, you can safely ignore this email: nobody gets in without the code.",
     ) +
     codeBox(v.code) +
     footnote(
-      `This code expires in ${v.minutes}&nbsp;minutes and can be used once. Never share it — ` +
+      `This code expires in ${v.minutes}&nbsp;minutes and can be used once. Never share it: ` +
         'anyone with this code could sign in to your wallet account.',
     ) +
     CARD_CLOSE;
@@ -100,9 +100,9 @@ export function renderLoginCodeEmail(v: {
     `    ${v.code}`,
     '',
     `This code expires in ${v.minutes} minutes and can be used once. If you didn't try to sign in,`,
-    'ignore this email — nobody gets in without the code.',
+    'ignore this email: nobody gets in without the code.',
     '',
-    '— CosmosPay',
+    'CosmosPay',
   ].join('\n');
   return { subject: 'Your CosmosPay wallet sign-in code', html, text };
 }
@@ -137,7 +137,7 @@ export function renderAliasRecoveryEmail(v: {
     footnote(
       `This token expires in ${v.minutes}&nbsp;minutes and can be used once. <b>If you did not ` +
         'ask to recover this alias, ignore this email and do not share the token</b> with ' +
-        'anyone — whoever uses it takes the payments sent to this name.',
+        'anyone. Whoever uses it takes the payments sent to this name.',
     ) +
     CARD_CLOSE;
   const text = [
@@ -149,10 +149,10 @@ export function renderAliasRecoveryEmail(v: {
     `    ${v.token}`,
     '',
     `It expires in ${v.minutes} minutes and can be used once. If you did not ask to recover`,
-    'this alias, ignore this email and do not share the token with anyone — whoever uses it',
+    'this alias, ignore this email and do not share the token with anyone. Whoever uses it',
     'takes the payments sent to this name.',
     '',
-    '— CosmosPay',
+    'CosmosPay',
   ].join('\n');
   return { subject: 'Recover your CosmosPay payment alias', html, text };
 }
@@ -180,12 +180,12 @@ export function renderRecoveryCodeEmail(v: {
       'Someone asked to <b>recover a Cosmos wallet</b> registered to this email address. ' +
         `This code is from <b>recovery server&nbsp;${server}</b>. Recovery uses two independent ` +
         'servers and each one sends its own code, so you will receive a second email with a ' +
-        'different code — the wallet needs both.',
+        'different code. The wallet needs both.',
     ) +
     codeBox(v.code) +
     footnote(
       `This code expires in ${v.minutes}&nbsp;minutes and can be used once. <b>If you did not ask ` +
-        'to recover a wallet, ignore this email and do not share the code</b> with anyone — ' +
+        'to recover a wallet, ignore this email and do not share the code</b> with anyone, ' +
         'including anyone claiming to be CosmosPay.',
     ) +
     CARD_CLOSE;
@@ -202,9 +202,9 @@ export function renderRecoveryCodeEmail(v: {
     '',
     `This code expires in ${v.minutes} minutes and can be used once.`,
     'If you did not ask to recover a wallet, ignore this email and do not share the code',
-    'with anyone — including anyone claiming to be CosmosPay.',
+    'with anyone, including anyone claiming to be CosmosPay.',
     '',
-    '— CosmosPay',
+    'CosmosPay',
   ].join('\n');
   return {
     subject: `Your CosmosPay wallet recovery code (server ${server})`,

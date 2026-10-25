@@ -20,7 +20,7 @@ import {
  */
 export class CreateTxPaymentIntentDto {
   @ApiProperty({
-    description: "Payer's Stellar account — the transaction source.",
+    description: "Payer's Stellar account: the transaction source.",
     example: 'GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ',
   })
   @IsStellarAddress()

@@ -95,7 +95,7 @@ describe('API error documentation', () => {
         },
       );
       expect(examples.provider_unavailable).toEqual({
-        summary: 'provider_unavailable — an indicator is down',
+        summary: 'provider_unavailable: an indicator is down',
         value: {
           statusCode: 503,
           code: 'provider_unavailable',
@@ -151,7 +151,7 @@ describe('API error documentation', () => {
 
   it('builds a description a reader can act on', () => {
     expect(apiErrorDescription([ApiErrorCode.RateLimited])).toBe(
-      `\`rate_limited\` — ${API_ERROR_CASES[ApiErrorCode.RateLimited].summary}`,
+      `\`rate_limited\`: ${API_ERROR_CASES[ApiErrorCode.RateLimited].summary}`,
     );
   });
 

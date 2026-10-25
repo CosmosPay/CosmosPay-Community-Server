@@ -48,7 +48,7 @@ export class CreatePayPaymentIntentDto {
     description:
       'Amount the destination should receive, in the asset’s own units (XLM, ' +
       'SOL, MON, or the token). Omit to let the user enter it (e.g. ' +
-      'donations) — not on Monad, where the amount is part of how the payment ' +
+      'donations), but not on Monad, where the amount is part of how the payment ' +
       'is recognised. At most 7 decimals on Stellar; elsewhere, at most the ' +
       'asset’s own decimals.',
     example: '120.1234567',

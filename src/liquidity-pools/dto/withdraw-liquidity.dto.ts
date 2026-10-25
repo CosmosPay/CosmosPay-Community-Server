@@ -18,7 +18,7 @@ import { IsStellarAddress } from '@/common/validators/is-stellar-address.validat
 export class WithdrawLiquidityDto {
   @ApiProperty({
     description:
-      'Account holding the pool shares (and signing) — the tx source.',
+      'Account holding the pool shares (and signing): the tx source.',
     example: 'GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ',
   })
   @IsStellarAddress()

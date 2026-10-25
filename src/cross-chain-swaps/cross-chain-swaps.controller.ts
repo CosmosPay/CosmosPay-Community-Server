@@ -89,15 +89,15 @@ export class CrossChainSwapsController {
       ApiErrorCode.ProviderError,
     ],
     description:
-      '`provider_error` — NEAR Intents refused the quote (an amount below its ' +
+      '`provider_error`: NEAR Intents refused the quote (an amount below its ' +
       'minimum, a route it cannot fill); `message` carries its reason.',
   })
   @ApiErrorResponse({
     status: 503,
     codes: [ApiErrorCode.ProviderUnavailable, ApiErrorCode.Misconfigured],
     description:
-      '`provider_unavailable` — NEAR Intents is down or rate limiting this ' +
-      'service; retry. `misconfigured` — the plan charges a commission and ' +
+      '`provider_unavailable`: NEAR Intents is down or rate limiting this ' +
+      'service; retry. `misconfigured`: the plan charges a commission and ' +
       'NEAR_INTENTS_FEE_RECIPIENT is not set, or NEAR Intents rejected ' +
       'NEAR_INTENTS_API_KEY.',
   })
@@ -158,8 +158,8 @@ export class CrossChainSwapsController {
     status: 503,
     codes: [ApiErrorCode.ProviderUnavailable, ApiErrorCode.Misconfigured],
     description:
-      '`provider_unavailable` — NEAR Intents is down or rate limiting this ' +
-      'service; retry. `misconfigured` — the plan charges a commission and ' +
+      '`provider_unavailable`: NEAR Intents is down or rate limiting this ' +
+      'service; retry. `misconfigured`: the plan charges a commission and ' +
       'NEAR_INTENTS_FEE_RECIPIENT is not set, or NEAR Intents rejected ' +
       'NEAR_INTENTS_API_KEY.',
   })
@@ -223,9 +223,9 @@ export class CrossChainSwapsController {
       ApiErrorCode.ProviderError,
     ],
     description:
-      '`validation_failed` — txHash is not a transaction id of the origin ' +
-      'chain. `invalid_state_transition` — the swap already SUCCEEDED, was ' +
-      'REFUNDED or FAILED. `provider_error` — NEAR Intents refused the hash.',
+      '`validation_failed`: txHash is not a transaction id of the origin ' +
+      'chain. `invalid_state_transition`: the swap already SUCCEEDED, was ' +
+      'REFUNDED or FAILED. `provider_error`: NEAR Intents refused the hash.',
   })
   submitDeposit(
     @CurrentConsumer() consumer: GatewayConsumer,

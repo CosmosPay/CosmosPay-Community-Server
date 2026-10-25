@@ -82,7 +82,7 @@ export class QuoteCrossChainSwapDto {
 
   @ApiProperty({
     description:
-      'Where a failed or late deposit is refunded, on originChain — normally the paying wallet.',
+      'Where a failed or late deposit is refunded, on originChain: normally the paying wallet.',
     example: 'GCKFBEIYV2U22IO2BJ4KVJOIP7XPWQGQFKKWXR6DOSJBV7STMAQSMTGG',
   })
   @IsCrossChainAddress('originChain')

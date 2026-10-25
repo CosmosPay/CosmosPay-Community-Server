@@ -34,7 +34,7 @@ export class PaymentIntentEntity {
     example: 'testnet',
     description:
       'Network tier, on every chain: `public` (mainnet) or `testnet` (Stellar ' +
-      'testnet, Solana devnet, Monad testnet) — the one the API key is for.',
+      'testnet, Solana devnet, Monad testnet), the one the API key is for.',
   })
   network!: string;
 
@@ -173,7 +173,7 @@ export class TxPaymentIntentEntity {
     example: 'testnet',
     description:
       'Network tier, on every chain: `public` (mainnet) or `testnet` (Stellar ' +
-      'testnet, Solana devnet, Monad testnet) — the one the API key is for.',
+      'testnet, Solana devnet, Monad testnet), the one the API key is for.',
   })
   network!: string;
 
@@ -286,7 +286,7 @@ export class PayPaymentIntentEntity {
     example: 'testnet',
     description:
       'Network tier, on every chain: `public` (mainnet) or `testnet` (Stellar ' +
-      'testnet, Solana devnet, Monad testnet) — the one the API key is for.',
+      'testnet, Solana devnet, Monad testnet), the one the API key is for.',
   })
   network!: string;
 

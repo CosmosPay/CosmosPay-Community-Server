@@ -15,7 +15,7 @@ export class CustomerEntity {
   @ApiProperty({ example: 'Ada Lovelace' })
   name!: string;
 
-  @ApiPropertyOptional({ nullable: true, example: 'Acme — billing' })
+  @ApiPropertyOptional({ nullable: true, example: 'Acme (billing)' })
   alias!: string | null;
 
   @ApiPropertyOptional({ nullable: true, example: 'ada@example.com' })
@@ -68,7 +68,7 @@ export class CustomerListEntity {
   data!: CustomerWithStatsEntity[];
 
   @ApiProperty({
-    description: 'Total matching rows — not the page length.',
+    description: 'Total matching rows, not the page length.',
     example: 137,
   })
   total!: number;

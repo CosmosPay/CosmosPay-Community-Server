@@ -73,7 +73,7 @@ export class PaymentLinksController {
     status: 404,
     codes: [ApiErrorCode.NotFound],
     description:
-      'No payment intent has this id — it never existed or it was deleted. ' +
+      'No payment intent has this id: it never existed or it was deleted. ' +
       'The two are the same answer, and the same one ' +
       '`GET /v1/payment-intents/{id}` gives its owner.',
     examples: {

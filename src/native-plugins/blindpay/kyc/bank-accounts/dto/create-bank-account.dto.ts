@@ -21,7 +21,7 @@ export class CreateBankAccountDto {
   @IsIn(BLINDPAY_RAILS)
   type!: BlindpayRail;
 
-  @ApiProperty({ example: 'Acme payouts — USD' })
+  @ApiProperty({ example: 'Acme payouts (USD)' })
   @IsString()
   name!: string;
 

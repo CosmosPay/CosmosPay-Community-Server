@@ -69,7 +69,7 @@ export class PublicPaymentLinkEntity {
   @ApiProperty({
     example: 'GCALNQQBXAPZ2WIRSDDBMSTAKCUH5SG6U76YBFLQLIXJTF7FE5AX7AOO',
     description:
-      'The address the payer sends to — always the one inside `uri`. ' +
+      'The address the payer sends to, always the one inside `uri`. ' +
       'Stellar and Solana: the merchant’s account. Monad with a relayer: the ' +
       'intent’s own deposit address, which forwards the payment to the ' +
       'merchant less `networkFee`.',
@@ -123,7 +123,7 @@ export class PublicPaymentLinkEntity {
     description:
       'The payment link, exactly as the wallet opens it: SEP-7 on Stellar, ' +
       'Solana Pay on Solana, EIP-681 on Monad. It is the same link the ' +
-      'merchant handed out, so it carries what the wallet needs — a SEP-7 ' +
+      'merchant handed out, so it carries what the wallet needs: a SEP-7 ' +
       '`callback` the merchant set and, for a `TX` intent, the unsigned ' +
       'envelope.',
   })

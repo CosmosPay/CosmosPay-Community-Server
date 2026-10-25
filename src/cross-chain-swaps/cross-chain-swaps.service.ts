@@ -234,7 +234,7 @@ export class CrossChainSwapsService {
     if (resolveNetwork(this.config, consumer) !== 'public') {
       throw ApiError.badRequest(
         ApiErrorCode.NetworkUnsupported,
-        'Cross-chain swaps run on mainnet only — NEAR Intents has no test ' +
+        'Cross-chain swaps run on mainnet only: NEAR Intents has no test ' +
           'network. Use a prod API key.',
       );
     }

@@ -29,7 +29,7 @@ export class ApiErrorBodyEntity {
 
   @ApiProperty({
     description:
-      'Stable machine-readable code. Branch on this, never on the message — ' +
+      'Stable machine-readable code. Branch on this, never on the message: ' +
       'messages are human-facing and may be reworded; codes are never renamed ' +
       'once published. Each response documents the subset it can return.',
     enum: ApiErrorCode,

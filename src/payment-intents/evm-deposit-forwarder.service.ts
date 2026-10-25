@@ -126,7 +126,7 @@ export class EvmDepositForwarderService extends ScheduledJob {
         }
       } catch (err) {
         this.logger.error(
-          `Deposit ${row.address} (intent ${row.intentId ?? '—'}): ${
+          `Deposit ${row.address} (intent ${row.intentId ?? 'none'}): ${
             err instanceof Error ? err.message : String(err)
           }`,
         );

@@ -44,7 +44,7 @@ export function resolvePlanCommissionBps(
       ApiErrorCode.Misconfigured,
       `The gateway did not forward the plan swap fee header (${header}), so ` +
         'the organization commission rate is unknown. Refusing to price at ' +
-        'the configured default — fix the APISIX consumer plugin that ' +
+        'the configured default. Fix the APISIX consumer plugin that ' +
         'injects it.',
     );
   }

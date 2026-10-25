@@ -306,7 +306,7 @@ export class ApiLogListEntity {
   @ApiProperty({ type: [ApiLogEntity] }) data!: ApiLogEntity[];
 
   @ApiProperty({
-    description: 'Total matching rows — not the page length.',
+    description: 'Total matching rows, not the page length.',
     example: 41203,
   })
   total!: number;
@@ -345,7 +345,7 @@ export class WebhookLogListEntity {
   @ApiProperty({ type: [WebhookLogEntity] }) data!: WebhookLogEntity[];
 
   @ApiProperty({
-    description: 'Total matching rows — not the page length.',
+    description: 'Total matching rows, not the page length.',
     example: 1204,
   })
   total!: number;

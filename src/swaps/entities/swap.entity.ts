@@ -76,7 +76,7 @@ export class SwapDestinationQuote {
   @ApiProperty({
     example: '24.68595',
     description:
-      'On-chain minimum (destMin) after slippage — swap reverts below it.',
+      'On-chain minimum (destMin) after slippage: swap reverts below it.',
   })
   minimum!: string;
 

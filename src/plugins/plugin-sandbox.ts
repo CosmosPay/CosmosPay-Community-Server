@@ -192,7 +192,7 @@ const BOOTSTRAP = `
     for (const key of Object.keys(exported)) {
       if (!(key in shape)) {
         throw new Error('index.ts exports unknown field(s): ' + key +
-          ' — name, version, capabilities and the rest belong in plugin.json');
+          '. Name, version, capabilities and the rest belong in plugin.json');
       }
       const group = exported[key];
       if (!group || typeof group !== 'object') throw new Error(key + ' must be an object');

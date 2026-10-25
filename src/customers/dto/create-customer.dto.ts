@@ -15,7 +15,7 @@ export class CreateCustomerDto {
   @MaxLength(120)
   name!: string;
 
-  @ApiPropertyOptional({ example: 'Acme — billing' })
+  @ApiPropertyOptional({ example: 'Acme (billing)' })
   @IsOptional()
   @IsString()
   @MaxLength(120)

@@ -125,8 +125,8 @@ export class StellarAccountLoader {
     if (this.hasTrustline(balances, asset)) return;
     throw ApiError.badRequest(
       ApiErrorCode.TrustlineMissing,
-      `Account ${address} has no trustline for ${asset.code}:${asset.issuer} — ` +
-        `it must trust the asset before ${context}`,
+      `Account ${address} has no trustline for ${asset.code}:${asset.issuer}. ` +
+        `It must trust the asset before ${context}`,
     );
   }
 

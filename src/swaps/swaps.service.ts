@@ -393,7 +393,7 @@ export class SwapsService {
       throw ApiError.conflict(
         ApiErrorCode.IdempotencyConflict,
         'A swap with this transaction hash already exists for this network. ' +
-          'Two creates rebuilt the same Stellar sequence/XDR — use an ' +
+          'Two creates rebuilt the same Stellar sequence/XDR. Use an ' +
           'Idempotency-Key on retries, or wait for the prior swap to settle/expire.',
       );
     }

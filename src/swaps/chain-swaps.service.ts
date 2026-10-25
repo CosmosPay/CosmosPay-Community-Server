@@ -391,7 +391,7 @@ export class ChainSwapsService {
     if (resolveNetwork(this.config, consumer) !== 'public') {
       throw ApiError.badRequest(
         ApiErrorCode.NetworkUnsupported,
-        `Swaps on ${chain} run on mainnet only — ${
+        `Swaps on ${chain} run on mainnet only: ${
           CHAIN_SWAP_PROVIDERS[chain] === 'jupiter' ? 'Jupiter' : 'Kuru Flow'
         } has no test network. Use a prod API key.`,
       );

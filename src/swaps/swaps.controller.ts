@@ -114,16 +114,16 @@ export class SwapsController {
       ApiErrorCode.ProviderError,
     ],
     description:
-      '`network_unsupported` — `chain: solana | monad` with a dev (testnet) ' +
-      'key: Jupiter and Kuru Flow run on mainnet only. `asset_unsupported` — ' +
-      'not an SPL mint / ERC-20 on that chain. `provider_error` — the ' +
+      '`network_unsupported`: `chain: solana | monad` with a dev (testnet) ' +
+      'key: Jupiter and Kuru Flow run on mainnet only. `asset_unsupported`: ' +
+      'not an SPL mint / ERC-20 on that chain. `provider_error`: the ' +
       'aggregator found no route or refused the amount.',
   })
   @ApiErrorResponse({
     status: 503,
     codes: [ApiErrorCode.ProviderUnavailable, ApiErrorCode.Misconfigured],
     description:
-      '`misconfigured` — the plan charges a commission and the chain has no ' +
+      '`misconfigured`: the plan charges a commission and the chain has no ' +
       'fee wallet configured (STELLAR_SWAP_FEE_WALLET, SOLANA_SWAP_FEE_WALLET, ' +
       'MONAD_SWAP_FEE_WALLET).',
   })
@@ -186,24 +186,24 @@ export class SwapsController {
       'the 0.5 XLM reserve that trustline locks, after what the transaction ' +
       'sends and its fee), `no_path_found`. ' +
       'Solana / Monad: `network_unsupported` (a dev key), `asset_unsupported`, ' +
-      '`provider_error` (no route, or the aggregator simulated a failure — ' +
+      '`provider_error` (no route, or the aggregator simulated a failure, ' +
       'usually a wallet that cannot cover the amount plus fees).',
   })
   @ApiErrorResponse({
     status: 409,
     codes: [ApiErrorCode.IdempotencyConflict, ApiErrorCode.OperationInFlight],
     description:
-      '`idempotency_conflict` — this Idempotency-Key was already used for a ' +
+      '`idempotency_conflict`: this Idempotency-Key was already used for a ' +
       'different request, or an identical swap was already built without a key ' +
       '(retry with an Idempotency-Key, or wait for the prior swap to settle or ' +
-      'expire). `operation_in_flight` — STELLAR_SWAP_SINGLE_INFLIGHT is on and ' +
+      'expire). `operation_in_flight`: STELLAR_SWAP_SINGLE_INFLIGHT is on and ' +
       'this source account already has a PENDING swap.',
   })
   @ApiErrorResponse({
     status: 503,
     codes: [ApiErrorCode.ProviderUnavailable, ApiErrorCode.Misconfigured],
     description:
-      '`misconfigured` — the plan charges a commission and the chain has no ' +
+      '`misconfigured`: the plan charges a commission and the chain has no ' +
       'fee wallet (or, on Solana, the fee wallet has no token account for the ' +
       'output mint yet).',
   })
@@ -288,11 +288,11 @@ export class SwapsController {
       ApiErrorCode.TransactionRejected,
     ],
     description:
-      '`validation_failed` — `signedXdr` (Stellar) / `signedTransaction` ' +
+      '`validation_failed`: `signedXdr` (Stellar) / `signedTransaction` ' +
       '(Solana, Monad) is not a transaction, is not the one built for this ' +
-      'swap, or carries no signature of its source. `transaction_rejected` — ' +
+      'swap, or carries no signature of its source. `transaction_rejected`: ' +
       'the Solana or Monad node refused the broadcast; the swap stays PENDING. ' +
-      '`invalid_state_transition` — the swap can no longer be submitted: it is ' +
+      '`invalid_state_transition`: the swap can no longer be submitted: it is ' +
       "EXPIRED, its transaction's validity window has passed, or it was already " +
       'resubmitted the maximum number of times after a rejection. Build a new ' +
       'swap.',

@@ -34,7 +34,7 @@ export class ApproveReceiverDto {
   @ApiPropertyOptional({
     example: 3,
     description:
-      "The receiver's `dossierVersion` as you read it. A 409 `kyc_state_invalid` if the KYC data changed since — re-read, review again, approve that version. Omitted approves whatever is stored now.",
+      "The receiver's `dossierVersion` as you read it. A 409 `kyc_state_invalid` if the KYC data changed since: re-read, review again, approve that version. Omitted approves whatever is stored now.",
   })
   @IsOptional()
   @Type(() => Number)

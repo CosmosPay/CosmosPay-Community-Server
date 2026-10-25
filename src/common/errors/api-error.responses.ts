@@ -83,7 +83,7 @@ export const API_ERROR_CASES: Readonly<Record<ApiErrorCode, ApiErrorCase>> = {
   // --- resources -----------------------------------------------------------
   [ApiErrorCode.NotFound]: {
     statuses: [404],
-    summary: 'No such resource — or it belongs to another consumer',
+    summary: 'No such resource, or it belongs to another consumer',
     message: 'Payment intent pi_7Yc3Qn0Kx2 not found',
     path: '/v1/payment-intents/pi_7Yc3Qn0Kx2',
   },
@@ -117,7 +117,7 @@ export const API_ERROR_CASES: Readonly<Record<ApiErrorCode, ApiErrorCase>> = {
     summary: 'A conflicting operation is still settling',
     message:
       'A withdrawal from this pool is already in flight for this account. ' +
-      'Wait for it to settle or expire before starting another — the ' +
+      'Wait for it to settle or expire before starting another: the ' +
       'commission on a withdrawal depends on the position it leaves behind.',
     path: '/v1/liquidity-pools/withdraw',
   },
@@ -181,7 +181,7 @@ export const API_ERROR_CASES: Readonly<Record<ApiErrorCode, ApiErrorCase>> = {
     summary:
       'Cross-chain swaps settle on mainnet only; a dev key cannot open one',
     message:
-      'Cross-chain swaps run on mainnet only — NEAR Intents has no test network. Use a prod API key.',
+      'Cross-chain swaps run on mainnet only: NEAR Intents has no test network. Use a prod API key.',
     path: '/v1/cross-chain-swaps',
   },
   [ApiErrorCode.AssetUnsupported]: {
@@ -296,7 +296,7 @@ export const API_ERROR_CASES: Readonly<Record<ApiErrorCode, ApiErrorCase>> = {
   // --- KYC ------------------------------------------------------------------
   [ApiErrorCode.KycStateInvalid]: {
     statuses: [409],
-    summary: 'An illegal KYC state transition — not a duplicate request',
+    summary: 'An illegal KYC state transition, not a duplicate request',
     message: "Cannot move receiver from 'approved' to 'pending'",
     path: '/v1/kyc/receivers/rc_4Kd9Wp1Lm3',
   },
@@ -310,7 +310,7 @@ export const API_ERROR_CASES: Readonly<Record<ApiErrorCode, ApiErrorCase>> = {
   },
   [ApiErrorCode.AccountDisabled]: {
     statuses: [403],
-    summary: 'An operator disabled this fiat account — not a key problem',
+    summary: 'An operator disabled this fiat account, not a key problem',
     message:
       'This fiat account is disabled. Re-enable it to use onramp/offramp.',
     path: '/v1/onramp/quotes',
@@ -337,7 +337,7 @@ export const API_ERROR_CASES: Readonly<Record<ApiErrorCode, ApiErrorCase>> = {
   // --- aliases ---------------------------------------------------------------
   [ApiErrorCode.AliasTaken]: {
     statuses: [409],
-    summary: 'The handle is already claimed — first claim wins',
+    summary: 'The handle is already claimed: first claim wins',
     message: 'The alias "alice" is already claimed.',
     path: '/v1/aliases',
   },
@@ -488,7 +488,7 @@ export const API_ERROR_CASES: Readonly<Record<ApiErrorCode, ApiErrorCase>> = {
   [ApiErrorCode.PluginFailed]: {
     statuses: [502, 504],
     summary:
-      'The plugin failed or timed out — the detail is logged, never returned',
+      'The plugin failed or timed out (the detail is logged, never returned)',
     message: 'Plugin example failed while handling add-note.',
     path: '/v1/plugins/example/commands/add-note',
   },
@@ -496,14 +496,14 @@ export const API_ERROR_CASES: Readonly<Record<ApiErrorCode, ApiErrorCase>> = {
   // --- service --------------------------------------------------------------
   [ApiErrorCode.Misconfigured]: {
     statuses: [503],
-    summary: 'A server-side configuration error — retrying will not help',
+    summary: 'A server-side configuration error: retrying will not help',
     message:
       'BlindPay (prod) is not configured: set BLINDPAY_INSTANCE_ID_PROD.',
     path: '/v1/onramp/quotes',
   },
   [ApiErrorCode.Internal]: {
     statuses: [500],
-    summary: 'Unexpected server error — the detail is logged, never returned',
+    summary: 'Unexpected server error (the detail is logged, never returned)',
     message: 'Internal server error',
     path: '/v1/swaps',
   },
@@ -535,7 +535,7 @@ export const RATE_LIMITED_RESPONSE_HEADERS: HeadersObject = {
   [RATE_LIMIT_HEADER.retryAfter]: {
     description:
       'Seconds to wait before retrying. The only one a browser or a naive ' +
-      'retry loop honours — prefer it.',
+      'retry loop honours: prefer it.',
     schema: { type: 'integer', example: 42 },
   },
   ...RATE_LIMIT_RESPONSE_HEADERS,
@@ -594,7 +594,7 @@ export function apiErrorExamples(
   for (const code of codes) {
     const override = overrides[code];
     examples[code] = {
-      summary: `${code} — ${override?.summary ?? API_ERROR_CASES[code].summary}`,
+      summary: `${code}: ${override?.summary ?? API_ERROR_CASES[code].summary}`,
       value: {
         ...apiErrorExample(code, status),
         ...pickExampleFields(override),
@@ -634,7 +634,7 @@ export function apiErrorContent(
  */
 export function apiErrorDescription(codes: readonly ApiErrorCode[]): string {
   return codes
-    .map((code) => `\`${code}\` — ${API_ERROR_CASES[code].summary}`)
+    .map((code) => `\`${code}\`: ${API_ERROR_CASES[code].summary}`)
     .join('\n\n');
 }
 

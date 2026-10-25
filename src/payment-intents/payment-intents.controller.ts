@@ -255,7 +255,7 @@ export class PaymentIntentsController {
     status: 409,
     codes: [ApiErrorCode.OperationInFlight],
     description:
-      '`operation_in_flight`: the status changed under this delete — the ' +
+      '`operation_in_flight`: the status changed under this delete. The ' +
       'intent may have just been paid. Re-read it before retrying.',
   })
   remove(

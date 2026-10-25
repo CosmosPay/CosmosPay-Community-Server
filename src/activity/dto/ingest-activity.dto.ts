@@ -85,7 +85,7 @@ export class ActivityEventDto {
 
   @ApiPropertyOptional({
     description:
-      'Human-readable detail. Truncated rather than rejected when long — a ' +
+      'Human-readable detail. Truncated rather than rejected when long: a ' +
       'telemetry call must not fail on the size of an error string.',
     example: 'op_no_trust',
   })

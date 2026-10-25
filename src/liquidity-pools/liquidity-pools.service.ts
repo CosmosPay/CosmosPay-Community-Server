@@ -264,7 +264,7 @@ export class LiquidityPoolsService {
     } else if (rawAmountA === undefined || rawAmountB === undefined) {
       throw ApiError.badRequest(
         ApiErrorCode.ValidationFailed,
-        'This pool has no reserves yet — provide both amounts; the deposit sets the initial price',
+        'This pool has no reserves yet. Provide both amounts; the deposit sets the initial price',
       );
     }
     if (amountA <= 0n || amountB <= 0n) {
@@ -749,8 +749,8 @@ export class LiquidityPoolsService {
       throw ApiError.conflict(
         ApiErrorCode.IdempotencyConflict,
         'A liquidity pool operation with this transaction hash already exists ' +
-          'for this network. Two creates rebuilt the same Stellar sequence/XDR ' +
-          '— use an Idempotency-Key on retries, or wait for the prior operation ' +
+          'for this network. Two creates rebuilt the same Stellar sequence/XDR. ' +
+          'Use an Idempotency-Key on retries, or wait for the prior operation ' +
           'to settle/expire.',
       );
     }
@@ -933,7 +933,7 @@ export class LiquidityPoolsService {
     throw ApiError.conflict(
       ApiErrorCode.OperationInFlight,
       'A withdrawal from this pool is already in flight for this account. ' +
-        'Wait for it to settle or expire before starting another — the ' +
+        'Wait for it to settle or expire before starting another: the ' +
         'commission on a withdrawal depends on the position it leaves behind.',
     );
   }

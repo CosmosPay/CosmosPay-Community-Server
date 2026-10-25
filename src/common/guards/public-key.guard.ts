@@ -83,7 +83,7 @@ export class PublicKeyGuard implements CanActivate {
     throw ApiError.forbidden(
       ApiErrorCode.InsufficientScope,
       'This endpoint is not available to the shared public API key. Create a ' +
-        'CosmosPay account to get your own key — which also lowers your swap ' +
+        'CosmosPay account to get your own key, which also lowers your swap ' +
         'commission below the public rate.',
     );
   }

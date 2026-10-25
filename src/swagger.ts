@@ -45,20 +45,20 @@ import type { AppConfig } from '@/config/configuration';
  */
 export function buildSwaggerConfig(openapi: AppConfig['openapi']) {
   const builder = new DocumentBuilder()
-    .setTitle('Cosmos Pay — Payments API')
+    .setTitle('Cosmos Pay Payments API')
     .setDescription(
       'Payments microservice (Stellar payment intents, swaps, liquidity ' +
         'pools, fiat on/offramp). Paths already include the version ' +
         '(`/v1/...`).\n\n' +
         '**Two ways to call it, and the spec documents both.** Through the ' +
-        'APISIX gateway — the deployment integrators use — you send your API ' +
+        'APISIX gateway (the deployment integrators use), you send your API ' +
         'key as `Authorization: Bearer <key>`; the gateway validates it, ' +
         'strips it, and injects `X-Gateway-Secret` and `X-Consumer-Username` ' +
         'for this service. Against this service directly (local development, ' +
         'no gateway in front) you send those two headers yourself. Pick the ' +
         'matching server and security scheme below.\n\n' +
         '**Every failure returns the same envelope** (`ApiErrorBodyEntity`), ' +
-        'and `code` is the part to branch on — `message` is prose and may be ' +
+        'and `code` is the part to branch on: `message` is prose and may be ' +
         'reworded. Each operation documents only the statuses it can really ' +
         'return: `429` appears where a budget is declared (the budget itself ' +
         'is published as `x-cosmos-rate-limit`), `502`/`503`/`504` where the ' +
@@ -73,7 +73,7 @@ export function buildSwaggerConfig(openapi: AppConfig['openapi']) {
         description:
           'Your Cosmos Pay API key, for calls that go through the APISIX ' +
           'gateway. The gateway converts it to the `apikey` header, ' +
-          'authenticates the consumer, and removes it before proxying — this ' +
+          'authenticates the consumer, and removes it before proxying: this ' +
           'service never sees it.',
       },
       'api-key',
@@ -135,7 +135,7 @@ export function buildSwaggerConfig(openapi: AppConfig['openapi']) {
   // `openapi:check`.
   builder.addServer(
     'http://localhost:{port}',
-    'This service directly — send the two APISIX headers yourself',
+    'This service directly: send the two APISIX headers yourself',
     { port: { default: '3000' } },
   );
 
@@ -171,7 +171,7 @@ export function buildSwaggerConfig(openapi: AppConfig['openapi']) {
 const TAG_DESCRIPTIONS: Record<string, string> = {
   'payment-intents': 'Request a Stellar payment, then watch it settle.',
   'payment-links':
-    'A payment link as its payer sees it, read without an API key — for hosted checkout pages.',
+    'A payment link as its payer sees it, read without an API key (for hosted checkout pages).',
   swaps: 'Path payments between assets: quote, build, submit.',
   'cross-chain-swaps':
     'Swaps between Stellar, Solana and Monad, settled by NEAR Intents.',
@@ -202,7 +202,7 @@ const SHARED_ERROR_RESPONSES = {
     description:
       'The body, query or path failed validation. `message` is an array of ' +
       'the individual failures.\n\nRoutes that reject a *valid* request for a ' +
-      'reason of their own — an amount, a memo, a state — document the code ' +
+      'reason of their own (an amount, a memo, a state) document the code ' +
       'for it on their own 400.',
   }),
   Unauthorized: apiErrorResponse(401, [ApiErrorCode.NoAuthenticatedConsumer]),
@@ -211,16 +211,16 @@ const SHARED_ERROR_RESPONSES = {
     [ApiErrorCode.InsufficientScope, ApiErrorCode.GatewayRequired],
     {
       description:
-        '`insufficient_scope` — the API key does not hold the scope this ' +
+        '`insufficient_scope`: the API key does not hold the scope this ' +
         'route requires. The shared public API key also gets this on every ' +
         'route that is not marked `x-cosmos-public-key`, with a message ' +
         'saying so; more scopes will not help, the key is the wrong one.\n\n' +
-        '`gateway_required` — the request did not arrive through APISIX.',
+        '`gateway_required`: the request did not arrive through APISIX.',
     },
   ),
   NotFound: apiErrorResponse(404, [ApiErrorCode.NotFound], {
     description:
-      'No such resource — or it exists and belongs to another consumer. The ' +
+      'No such resource, or it exists and belongs to another consumer. The ' +
       'two are deliberately the same answer: "exists but not yours" is an ' +
       'ownership oracle.',
   }),
@@ -236,7 +236,7 @@ const SHARED_ERROR_RESPONSES = {
   InternalError: apiErrorResponse(500, [ApiErrorCode.Internal], {
     description:
       'Unexpected server error. The detail is logged server-side and never ' +
-      'returned — there is nothing in the body to branch on beyond the code.',
+      'returned: there is nothing in the body to branch on beyond the code.',
   }),
   UpstreamError: apiErrorResponse(
     502,
@@ -254,9 +254,9 @@ const SHARED_ERROR_RESPONSES = {
     [ApiErrorCode.ProviderUnavailable, ApiErrorCode.Misconfigured],
     {
       description:
-        '`provider_unavailable` — the provider in `x-cosmos-upstream` is ' +
+        '`provider_unavailable`: the provider in `x-cosmos-upstream` is ' +
         'down or unreachable; the message names it. Retry.\n\n' +
-        '`misconfigured` — this deployment is missing configuration the ' +
+        '`misconfigured`: this deployment is missing configuration the ' +
         'route needs (a provider instance, a fee wallet, the plan header the ' +
         'gateway must forward). Retrying will not help; it is an operator ' +
         'problem.',
@@ -265,7 +265,7 @@ const SHARED_ERROR_RESPONSES = {
   UpstreamTimeout: apiErrorResponse(504, [ApiErrorCode.ProviderUnavailable], {
     description:
       'The provider in `x-cosmos-upstream` did not answer in time. Whether ' +
-      'it acted on the request is unknown — retry with the same ' +
+      'it acted on the request is unknown. Retry with the same ' +
       '`Idempotency-Key`, never with a fresh one.',
   }),
 } satisfies Record<string, ResponseObject>;
@@ -477,7 +477,7 @@ export function findOpenApiIssues(document: OpenAPIObject): string[] {
     const where = `${method.toUpperCase()} ${path}`;
 
     if (!operation.summary) {
-      issues.push(`${where}: no summary — add @ApiOperation({ summary }).`);
+      issues.push(`${where}: no summary. Add @ApiOperation({ summary }).`);
     }
 
     const rateLimited = Boolean(operation[RATE_LIMIT_EXTENSION_KEY]?.length);
@@ -485,7 +485,7 @@ export function findOpenApiIssues(document: OpenAPIObject): string[] {
 
     if (responses['429'] && !rateLimited) {
       issues.push(
-        `${where}: documents 429 but declares no @RateLimit — nothing can spend a budget it does not have.`,
+        `${where}: documents 429 but declares no @RateLimit. Nothing can spend a budget it does not have.`,
       );
     }
     if (rateLimited && !responses['429']) {
@@ -503,7 +503,7 @@ export function findOpenApiIssues(document: OpenAPIObject): string[] {
       const body = response.content?.['application/json'];
       if (!body) {
         issues.push(
-          `${where} ${status}: no application/json body — every failure returns the error envelope.`,
+          `${where} ${status}: no application/json body. Every failure returns the error envelope.`,
         );
         continue;
       }
@@ -518,7 +518,7 @@ export function findOpenApiIssues(document: OpenAPIObject): string[] {
       }
       if (!body.examples && !body.example) {
         issues.push(
-          `${where} ${status}: no example — use @ApiErrorResponse so the body shown is one this route can return.`,
+          `${where} ${status}: no example. Use @ApiErrorResponse so the body shown is one this route can return.`,
         );
       }
     }

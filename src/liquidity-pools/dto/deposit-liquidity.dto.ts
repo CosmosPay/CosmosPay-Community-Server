@@ -18,7 +18,7 @@ import { IsStellarAddress } from '@/common/validators/is-stellar-address.validat
  */
 export class DepositLiquidityDto {
   @ApiProperty({
-    description: 'Account funding (and signing) the deposit — the tx source.',
+    description: 'Account funding (and signing) the deposit: the tx source.',
     example: 'GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ',
   })
   @IsStellarAddress()

@@ -106,13 +106,13 @@ export class ReceiversController {
     status: 403,
     codes: [ApiErrorCode.KycReviewRequired, ApiErrorCode.InsufficientScope],
     description:
-      '`kyc_review_required` — the API key is not elevated (admin role). A key may submit KYC data or approve it, not both.',
+      '`kyc_review_required`: the API key is not elevated (admin role). A key may submit KYC data or approve it, not both.',
   })
   @ApiErrorResponse({
     status: 409,
     codes: [ApiErrorCode.KycStateInvalid],
     description:
-      "`kyc_state_invalid` — the receiver is not in 'pending_review', or the KYC data changed after you read it (`expected_version` names a version that is no longer current). Re-read the receiver, review it again, and approve that version.",
+      "`kyc_state_invalid`: the receiver is not in 'pending_review', or the KYC data changed after you read it (`expected_version` names a version that is no longer current). Re-read the receiver, review it again, and approve that version.",
   })
   approve(
     @CurrentConsumer() consumer: GatewayConsumer,
@@ -172,7 +172,7 @@ export class ReceiversController {
     status: 409,
     codes: [ApiErrorCode.KycStateInvalid],
     description:
-      "`kyc_state_invalid` — an invalid KYC status transition (e.g. the receiver is not in 'pending_user').",
+      "`kyc_state_invalid`: an invalid KYC status transition (e.g. the receiver is not in 'pending_user').",
   })
   enable(
     @CurrentConsumer() consumer: GatewayConsumer,

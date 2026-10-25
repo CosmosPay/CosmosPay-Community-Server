@@ -12,7 +12,7 @@ import { QuoteSwapDto } from '@/swaps/dto/quote-swap.dto';
 export class CreateSwapDto extends QuoteSwapDto {
   @ApiProperty({
     description:
-      'Account paying for (and signing) the swap — the tx source — on `chain`.',
+      'Account paying for (and signing) the swap (the tx source) on `chain`.',
     example: 'GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ',
   })
   @IsChainAddress('chain')
