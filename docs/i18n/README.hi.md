@@ -1389,10 +1389,11 @@ client address (`429 rate_limited`)।
 | Monad payment links (`POST /v1/payment-intents/pay`, `chain: monad`) | केवल deposit addresses (`MONAD_RELAYER_PRIVATE_KEY`; इनके बिना `merchant_fee_unsupported`) और `amount` के साथ: address एक `contracts/PaymentSplitForwarder.sol` है (फ़ीस का wallet और राशि constructor के दो और arguments हैं, इसलिए address उनसे बँधा है), जिसका constructor relayer को उसकी फ़ीस, फिर मर्चेंट फ़ीस, फिर मर्चेंट को भुगतान करता है। Link deposit माँगता है: राशि, और भुगतानकर्ता फ़ीस चुकाए तो फ़ीस भी |
 | Solana पर swaps (`POST /v1/swaps`, `chain: solana`) | Jupiter हर swap पर एक ही integrator फ़ीस देता है और plan कमीशन उसे लेता है, इसलिए फ़ीस का transfer (source से, source asset में: SOL के लिए System Program transfer, वरना wallet का token खाता बनाकर TransferChecked) Jupiter के अपने v0 transaction में जोड़ा जाता है: उसकी lookup tables जो खाते लोड करती हैं वे दोबारा इस्तेमाल होते हैं, सारे indexes फिर से लिखे जाते हैं, compute limit बढ़ती है और route अधिकतम 40 खातों के साथ माँगा जाता है ताकि वह एक packet में आए। SOL फ़ीस पहले से मौजूद खाते में जाती है |
 | निजी भुगतान (`POST /v1/zk-payments`) | payer से `wallet` को XLM में एक तीसरा confidential transfer, ताकि फ़ीस भी भुगतान जितनी ही निजी रहे। `wallet` के पास Cosmos Pay के token पर auditor 0 के तहत confidential account होना चाहिए (वरना `400 recipient_not_registered`), और वह न recipient हो न fee account। 0.01% कमीशन `amount` का हिस्सा ही रहता है, और row का `amount` वह कुल राशि है जो payer चुकाता है। Confirm तीसरा hash `merchantFeeTxHash` के रूप में लेता है और उस transfer को बाकी दो की तरह जाँचता है |
+| Liquidity (`POST /v1/liquidity-pools/deposit` और `/withdraw`) | Deposit या withdrawal दो assets ले जाता है, इसलिए फ़ीस हर एक का `bps` है (नीचे की ओर गोल), जो उसी transaction में हर asset के लिए एक payment से `wallet` को दी जाती है, deposit के बाद, या withdrawal और उसके plan कमीशन के बाद; `fixed` अस्वीकार होता है (`400 validation_failed`)। Deposit पर `recipient` उसे राशियों से काटता है (pool में कम जाता है) और `payer` उसे ऊपर से जोड़ता है। Withdrawal पर वह withdrawal की दी गई राशि से, उसकी गारंटीड न्यूनतम राशियों के हिस्से के रूप में निकलती है, `paidBy` चाहे जो हो। `wallet` मौजूद होनी चाहिए और दोनों assets पर trustline होनी चाहिए। Record का `amount` / `asset` asset A का हिस्सा है, और `amountB` / `assetB` asset B का |
 | Monad पर swaps | अभी नहीं: Kuru Flow हर swap पर एक ही referrer फ़ीस देता है और plan कमीशन उसे लेता है (`400 merchant_fee_unsupported`) |
 
-USDT0 और liquidity यह फ़ील्ड तब लेंगे जब हर एक के पास भुगतान को on-chain बाँटने का तरीका
-होगा; तब तक उनके रूट इसे अज्ञात फ़ील्ड मानकर अस्वीकार करते हैं (`400 validation_failed`)।
+USDT0 यह फ़ील्ड तब लेगा जब उसके पास transfer को on-chain बाँटने का तरीका होगा; तब तक
+उसके रूट इसे अज्ञात फ़ील्ड मानकर अस्वीकार करते हैं (`400 validation_failed`)।
 
 ## Stellar से USDT0 (LayerZero)
 
@@ -2133,6 +2134,10 @@ seal होती हैं और कभी लौटाई नहीं जा
   `merchantFeeTxHash` जोड़ता है।
 - **शून्य तक गोल होने वाली मर्चेंट फ़ीस अस्वीकार होती है**, हर operation पर
   (`400 invalid_amount`); Stellar पर पहले वह शून्य का payment बनाती थी।
+- **Liquidity operations भी `merchantFee` लेते हैं** (`POST /v1/liquidity-pools/deposit` और
+  `/withdraw`): हर asset का `bps`, उसी transaction में हर asset के लिए एक payment; `fixed`
+  अस्वीकार होता है। Responses और webhooks में `merchantFee` जुड़ता है, जिसके `amountB` /
+  `assetB` asset B का हिस्सा हैं।
 
 ### Lists key के network का पालन करती हैं; dashboard reads cache होते हैं
 

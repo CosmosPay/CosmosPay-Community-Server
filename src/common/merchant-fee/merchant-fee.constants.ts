@@ -29,3 +29,6 @@ export const DEFAULT_MERCHANT_FEE_PAYER: MerchantFeePayer = 'recipient';
 
 /** The longest wallet a request may name (a NEAR account id is 64; EVM 42). */
 export const MERCHANT_FEE_WALLET_MAX_LENGTH = 128;
+
+/** Basis points in a whole: the percentage part is `amount × bps / 10,000`. */
+export const MERCHANT_FEE_BPS_DENOMINATOR = 10_000n;

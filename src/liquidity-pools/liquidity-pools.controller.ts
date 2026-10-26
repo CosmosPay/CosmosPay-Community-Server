@@ -141,6 +141,8 @@ export class LiquidityPoolsController {
       ApiErrorCode.ValidationFailed,
       ApiErrorCode.InvalidAmount,
       ApiErrorCode.InsufficientBalance,
+      // A merchant fee's wallet that cannot receive one of the reserves.
+      ApiErrorCode.TrustlineMissing,
     ],
   })
   @ApiErrorResponse({

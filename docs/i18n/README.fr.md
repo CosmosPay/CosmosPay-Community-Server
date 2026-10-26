@@ -1432,11 +1432,11 @@ désigne. Ils s'ajoutent à la commission du plan que Cosmos Pay prélève, qui 
 | Liens de paiement Monad (`POST /v1/payment-intents/pay`, `chain: monad`) | Seulement avec des adresses de dépôt (`MONAD_RELAYER_PRIVATE_KEY` ; sans elles `merchant_fee_unsupported`) et un `amount` : l'adresse est un `contracts/PaymentSplitForwarder.sol` (le wallet et le montant des frais sont deux arguments de plus du constructeur, l'adresse s'y engage donc), dont le constructeur paie au relayer ses frais, puis les frais du marchand, puis le marchand. Le lien demande le dépôt : le montant, plus les frais quand le payeur les paie |
 | Swaps sur Solana (`POST /v1/swaps`, `chain: solana`) | Jupiter ne paie qu'un frais d'intégrateur par swap et la commission du plan l'utilise : le transfert des frais (depuis la source, dans l'actif source : un transfert du System Program pour du SOL, sinon un TransferChecked après création du compte de jetons du wallet) est ajouté à la propre transaction v0 de Jupiter : les comptes que chargent ses tables d'adresses sont réutilisés, tous les index réécrits, sa limite de calcul relevée et la route demandée avec au plus 40 comptes pour tenir dans un paquet. Des frais en SOL vont à un compte qui existe déjà |
 | Paiements privés (`POST /v1/zk-payments`) | Un troisième transfert confidentiel, en XLM, du payeur vers `wallet` : les frais restent aussi privés que le paiement. `wallet` doit détenir un compte confidentiel sur le jeton de Cosmos Pay sous l'auditeur 0 (sinon `400 recipient_not_registered`) et n'être ni le destinataire ni le compte de commissions. La commission de 0,01 % reste une part de `amount`, et l'`amount` de la ligne est ce que le payeur paie au total. Le confirm prend le troisième hash en `merchantFeeTxHash` et vérifie ce transfert comme les deux autres |
+| Liquidité (`POST /v1/liquidity-pools/deposit` et `/withdraw`) | Un dépôt ou un retrait déplace deux actifs : les frais valent `bps` de CHACUN (arrondi à l'inférieur), payés à `wallet` par un paiement par actif dans la même transaction, après le dépôt, ou après le retrait et sa commission du plan ; `fixed` est refusé (`400 validation_failed`). Sur un dépôt, `recipient` les retire des montants (moins entre dans le pool) et `payer` les ajoute en plus. Sur un retrait ils sortent de ce que le retrait verse, en part de ses minimums garantis, quel que soit `paidBy`. `wallet` doit exister et avoir une trustline pour les deux actifs. `amount` / `asset` de l'enregistrement sont la jambe de l'actif A, `amountB` / `assetB` celle de l'actif B |
 | Swaps sur Monad | Pas encore : Kuru Flow ne paie qu'un frais de parrainage par swap et la commission du plan l'utilise (`400 merchant_fee_unsupported`) |
 
-USDT0 et la liquidité prennent le champ à mesure que chacun gagne un moyen de partager
-le paiement on-chain ; d'ici là leurs routes le refusent comme champ inconnu
-(`400 validation_failed`).
+USDT0 prendra le champ quand il aura un moyen de partager le transfert on-chain ; d'ici
+là ses routes le refusent comme champ inconnu (`400 validation_failed`).
 
 ## USDT0 depuis Stellar (LayerZero)
 
@@ -2217,6 +2217,10 @@ plugins isolés.
   nullable et unique.
 - **Des frais du marchand qui s'arrondissent à rien sont refusés** sur toute opération
   (`400 invalid_amount`) ; sur Stellar ils construisaient auparavant un paiement de zéro.
+- **Les opérations de liquidité acceptent `merchantFee`** (`POST /v1/liquidity-pools/deposit`
+  et `/withdraw`) : `bps` de chaque actif, un paiement par actif dans la même transaction ;
+  `fixed` est refusé. Les réponses et les webhooks gagnent `merchantFee`, dont `amountB` /
+  `assetB` sont la jambe de l'actif B.
 
 ### Les listes suivent le réseau de la clé ; les lectures du dashboard sont mises en cache
 

@@ -1412,11 +1412,11 @@ que ela indica. É separada da comissão do plano que a Cosmos Pay cobra, que n�
 | Links de pagamento em Monad (`POST /v1/payment-intents/pay`, `chain: monad`) | Só com endereços de depósito (`MONAD_RELAYER_PRIVATE_KEY`; sem eles `merchant_fee_unsupported`) e com `amount`: o endereço é um `contracts/PaymentSplitForwarder.sol` (a wallet e o valor da taxa são mais dois argumentos do construtor, então o endereço se compromete com eles), cujo construtor paga ao relayer a sua taxa, depois a taxa do comerciante e depois o comerciante. O link pede o depósito: o valor, mais a taxa quando o pagador a paga |
 | Swaps na Solana (`POST /v1/swaps`, `chain: solana`) | O Jupiter paga uma única taxa de integrador por swap e a comissão do plano a usa, então a transferência da taxa (a partir da conta de origem, no ativo de origem: uma transferência do System Program para SOL, senão um TransferChecked depois de criar a conta de token da wallet) é acrescentada à própria transação v0 do Jupiter: as contas que as suas tabelas de endereços carregam são reaproveitadas, todos os índices reescritos, o seu limite de computação elevado e a rota pedida com no máximo 40 contas para continuar cabendo num pacote. Uma taxa em SOL vai para uma conta que já existe |
 | Pagamentos privados (`POST /v1/zk-payments`) | Uma terceira transferência confidencial, em XLM, do pagador para `wallet`, então a taxa fica tão privada quanto o pagamento. `wallet` precisa ter uma conta confidencial no token da Cosmos Pay sob o auditor 0 (senão, `400 recipient_not_registered`) e não ser nem o destinatário nem a conta de comissões. A comissão de 0,01% continua sendo uma parte de `amount`, e o `amount` da linha é o que o pagador paga no total. O confirm recebe o terceiro hash como `merchantFeeTxHash` e verifica essa transferência como as outras duas |
+| Liquidez (`POST /v1/liquidity-pools/deposit` e `/withdraw`) | Um depósito ou um saque move dois ativos, então a taxa é `bps` de CADA um (arredondado para baixo), paga a `wallet` com um pagamento por ativo na mesma transação, depois do depósito, ou depois do saque e da sua comissão do plano; `fixed` é recusado (`400 validation_failed`). Num depósito, `recipient` a desconta dos valores (entra menos no pool) e `payer` a soma por cima. Num saque ela sai do que o saque paga, como parte dos seus mínimos garantidos, seja qual for o `paidBy`. `wallet` precisa existir e ter trustline dos dois ativos. O `amount` / `asset` do registro são a perna do ativo A, e `amountB` / `assetB` a do ativo B |
 | Swaps em Monad | Ainda não: a Kuru Flow paga uma única taxa de indicação por swap e a comissão do plano a usa (`400 merchant_fee_unsupported`) |
 
-USDT0 e liquidez recebem o campo à medida que cada um ganha uma forma de dividir o
-pagamento on-chain; até lá as suas rotas o recusam como campo desconhecido
-(`400 validation_failed`).
+USDT0 receberá o campo quando ganhar uma forma de dividir a transferência on-chain; até
+lá as suas rotas o recusam como campo desconhecido (`400 validation_failed`).
 
 ## USDT0 a partir da Stellar (LayerZero)
 
@@ -2190,6 +2190,10 @@ serviço em `src/native-plugins/<slug>/`, ligados pela mesma lista
   `zk_payment` um `merchantFeeTxHash` anulável e único.
 - **Uma taxa do comerciante que arredonda para nada é recusada** em toda operação
   (`400 invalid_amount`); na Stellar ela montava antes um pagamento de zero.
+- **Operações de liquidez aceitam `merchantFee`** (`POST /v1/liquidity-pools/deposit` e
+  `/withdraw`): `bps` de cada ativo, um pagamento por ativo na mesma transação; `fixed` é
+  recusado. Respostas e webhooks ganham `merchantFee`, cujos `amountB` / `assetB` são a
+  perna do ativo B.
 
 ### As listas seguem a rede da chave; as leituras do dashboard ficam em cache
 

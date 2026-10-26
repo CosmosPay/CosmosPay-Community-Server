@@ -959,10 +959,11 @@ NEAR Intents 从输入中扣除它，报价的输出已是扣除后的净额，�
 | Monad 支付链接（`POST /v1/payment-intents/pay`，`chain: monad`） | 仅在启用存款地址（`MONAD_RELAYER_PRIVATE_KEY`；否则返回 `merchant_fee_unsupported`）且有 `amount` 时：地址为 `contracts/PaymentSplitForwarder.sol`（手续费的钱包和金额是构造函数的另外两个参数，因此地址承诺了它们），其构造函数先付 relayer 费用，再付商户手续费，最后付商户。链接要求的存款为金额，付款方支付手续费时再加上手续费 |
 | Solana 兑换（`POST /v1/swaps`，`chain: solana`） | Jupiter 每笔兑换只支付一个集成方费用，已被套餐佣金使用，因此手续费转账（从源账户、以源资产支付：SOL 用 System Program 转账，否则先创建钱包的代币账户再 TransferChecked）被追加到 Jupiter 自己的 v0 交易中：复用其地址查找表已加载的账户，重写所有索引，提高其计算单元上限，并以最多 40 个账户请求路由，使其仍能放入一个数据包。SOL 手续费须转入已存在的账户 |
 | 隐私支付（`POST /v1/zk-payments`） | 付款方以 XLM 向 `wallet` 进行第三笔保密转账，使该费用与付款本身一样保密。`wallet` 必须在 Cosmos Pay 的代币上持有审计方 0 下的保密账户（否则返回 `400 recipient_not_registered`），且不能是收款方或手续费账户。0.01% 的佣金仍按 `amount` 计算，记录中的 `amount` 是付款方支付的总额。confirm 以 `merchantFeeTxHash` 接收第三个哈希，并像另外两笔一样校验该转账 |
+| 流动性（`POST /v1/liquidity-pools/deposit` 与 `/withdraw`） | 存入或取出会移动两种资产，因此费用为每种资产的 `bps`（向下取整），在同一笔交易中按每种资产各一笔付款支付给 `wallet`，位于存入操作之后，或位于取出操作及其套餐佣金之后；`fixed` 会被拒绝（`400 validation_failed`）。存入时，`recipient` 从金额中扣除（进入池子的更少），`payer` 在其之上加收。取出时，无论 `paidBy` 为何，费用都从取出所得中按其保证的最低金额的比例扣除。`wallet` 必须存在并对两种资产都有 trustline。记录中的 `amount` / `asset` 是资产 A 的部分，`amountB` / `assetB` 是资产 B 的部分 |
 | Monad 上的兑换 | 暂不支持：Kuru Flow 每笔兑换只支付一个推荐费用，已被套餐佣金使用（`400 merchant_fee_unsupported`） |
 
-USDT0 和流动性会在各自具备链上拆分付款的方式后加入该字段；在此之前，它们的路由会将其作为未知
-字段拒绝（`400 validation_failed`）。
+USDT0 会在具备链上拆分转账的方式后加入该字段；在此之前，它的路由会将其作为未知字段拒绝
+（`400 validation_failed`）。
 
 ## 从 Stellar 发送 USDT0（LayerZero）
 
@@ -1434,6 +1435,9 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
   唯一的 `merchantFeeTxHash`。
 - **取整为零的商户手续费会被拒绝**，适用于所有操作（`400 invalid_amount`）；此前在 Stellar 上会构建
   一笔金额为零的付款。
+- **流动性操作也接受 `merchantFee`**（`POST /v1/liquidity-pools/deposit` 与 `/withdraw`）：按每种
+  资产的 `bps` 收取，在同一笔交易中每种资产各一笔付款；`fixed` 会被拒绝。响应和 webhook 新增
+  `merchantFee`，其中 `amountB` / `assetB` 是资产 B 的部分。
 
 ### 列表遵循密钥的网络；仪表盘读取会被缓存
 

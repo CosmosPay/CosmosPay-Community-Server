@@ -3721,7 +3721,7 @@
             }
           },
           "400": {
-            "description": "`validation_failed`: The body, query or headers failed validation\n\n`invalid_amount`: Not a Stellar amount, or not greater than zero\n\n`insufficient_balance`: The source account cannot cover the amount, or the XLM reserve the transaction needs",
+            "description": "`validation_failed`: The body, query or headers failed validation\n\n`invalid_amount`: Not a Stellar amount, or not greater than zero\n\n`insufficient_balance`: The source account cannot cover the amount, or the XLM reserve the transaction needs\n\n`trustline_missing`: An account does not trust the asset, and this request cannot add the trustline for it",
             "content": {
               "application/json": {
                 "schema": {
@@ -3761,6 +3761,17 @@
                       "error": "Bad Request",
                       "message": "Account GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ holds only 12.5000000 shares of this pool",
                       "path": "/v1/liquidity-pools/withdraw",
+                      "timestamp": "2026-09-01T12:00:00.000Z"
+                    }
+                  },
+                  "trustline_missing": {
+                    "summary": "trustline_missing: An account does not trust the asset, and this request cannot add the trustline for it",
+                    "value": {
+                      "statusCode": 400,
+                      "code": "trustline_missing",
+                      "error": "Bad Request",
+                      "message": "Account GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ has no trustline for USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5, so it cannot receive the swap. Only that account can add the trustline, by signing a transaction of its own: ask its owner to add it, then try again.",
+                      "path": "/v1/swaps",
                       "timestamp": "2026-09-01T12:00:00.000Z"
                     }
                   }
@@ -18434,11 +18445,78 @@
             "type": "string",
             "description": "Optional idempotency key. Prefer the `Idempotency-Key` request header; when both are set, the header wins. A retry with the same key and the same request returns the existing operation instead of building another transaction; the same key with a different request is 409 `idempotency_conflict`.",
             "example": "lp-deposit-2026-08-23-001"
+          },
+          "merchantFee": {
+            "description": "Your own fee on this deposit: `bps` of EACH asset it moves, paid to `wallet` (a Stellar account that can receive both assets) by one payment per asset in the same transaction, beside the plan commission. `fixed` is refused here: the operation moves two assets. `paidBy: recipient` takes it from the amounts (less enters the pool); `payer` adds it on top (the full amounts enter the pool).",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MerchantFeeDto"
+              }
+            ]
           }
         },
         "required": [
           "source",
           "maxAmountA"
+        ]
+      },
+      "LiquidityMerchantFeeEntity": {
+        "type": "object",
+        "properties": {
+          "bps": {
+            "type": "number",
+            "description": "The percentage part, in basis points.",
+            "example": 150
+          },
+          "fixed": {
+            "type": "string",
+            "description": "The fixed part, in `asset`.",
+            "example": "0.25"
+          },
+          "amount": {
+            "type": "string",
+            "description": "The fee charged: the percentage of `amount` plus the fixed part.",
+            "example": "1.75"
+          },
+          "asset": {
+            "type": "string",
+            "description": "The asset the fee is paid in.",
+            "example": "XLM"
+          },
+          "wallet": {
+            "type": "string",
+            "description": "Where the fee is paid.",
+            "example": "GBDHAQXQQ75WVBUZ2IX3O7ME7JOKJUOUPUXRNDCORUJODWQCTVUEQ62R"
+          },
+          "paidBy": {
+            "type": "string",
+            "enum": [
+              "recipient",
+              "payer"
+            ],
+            "description": "`recipient`: deducted from the amount. `payer`: added on top of it.",
+            "example": "recipient"
+          },
+          "amountB": {
+            "type": "string",
+            "description": "The fee charged on asset B, in asset B.",
+            "example": "0.05"
+          },
+          "assetB": {
+            "type": "string",
+            "description": "Asset B (`native` for XLM).",
+            "example": "USDC"
+          }
+        },
+        "required": [
+          "bps",
+          "fixed",
+          "amount",
+          "asset",
+          "wallet",
+          "paidBy",
+          "amountB",
+          "assetB"
         ]
       },
       "LiquidityOperationEntity": {
@@ -18562,6 +18640,16 @@
             "example": "GBFEE...WALLET",
             "description": "Commission collector account (null when the fee is disabled)."
           },
+          "merchantFee": {
+            "nullable": true,
+            "description": "The merchant fee the request named: `bps` of each asset, `amount` in asset A and `amountB` in asset B, paid to `wallet` in this transaction; null without one.",
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/LiquidityMerchantFeeEntity"
+              }
+            ]
+          },
           "commissionMemo": {
             "type": "object",
             "nullable": true,
@@ -18623,6 +18711,7 @@
           "feeAmountA",
           "feeAmountB",
           "feeWallet",
+          "merchantFee",
           "commissionMemo",
           "xdr",
           "uri",
@@ -18665,6 +18754,14 @@
             "type": "string",
             "description": "Optional idempotency key. Prefer the `Idempotency-Key` request header; when both are set, the header wins. A retry with the same key and the same request returns the existing operation instead of building another transaction; the same key with a different request is 409 `idempotency_conflict`.",
             "example": "lp-withdraw-2026-08-23-001"
+          },
+          "merchantFee": {
+            "description": "Your own fee on this withdrawal: `bps` of EACH asset it moves, paid to `wallet` (a Stellar account that can receive both assets) by one payment per asset in the same transaction, beside the plan commission. `fixed` is refused here: the operation moves two assets. The fee comes out of what the withdrawal pays, on its guaranteed minimums, whichever `paidBy` names: the account is payer and receiver.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MerchantFeeDto"
+              }
+            ]
           }
         },
         "required": [
@@ -18886,6 +18983,16 @@
             "example": "GBFEE...WALLET",
             "description": "Commission collector account (null when the fee is disabled)."
           },
+          "merchantFee": {
+            "nullable": true,
+            "description": "The merchant fee the request named: `bps` of each asset, `amount` in asset A and `amountB` in asset B, paid to `wallet` in this transaction; null without one.",
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/LiquidityMerchantFeeEntity"
+              }
+            ]
+          },
           "xdr": {
             "type": "string",
             "description": "Unsigned transaction envelope (base64 XDR) to sign.",
@@ -18937,6 +19044,7 @@
           "feeAmountA",
           "feeAmountB",
           "feeWallet",
+          "merchantFee",
           "xdr",
           "uri",
           "txHash",

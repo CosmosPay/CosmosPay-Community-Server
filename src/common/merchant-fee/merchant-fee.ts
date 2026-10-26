@@ -3,6 +3,7 @@ import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import {
   DEFAULT_MERCHANT_FEE_PAYER,
   MAX_MERCHANT_FEE_BPS,
+  MERCHANT_FEE_BPS_DENOMINATOR,
   MERCHANT_FEE_PAYERS,
   type MerchantFeePayer,
 } from '@/common/merchant-fee/merchant-fee.constants';
@@ -114,7 +115,8 @@ export function splitMerchantFee(
   terms: MerchantFeeTerms | null,
 ): MerchantFeeSplit {
   if (!terms) return { fee: 0n, net: amount, total: amount };
-  const fee = (amount * BigInt(terms.bps)) / 10_000n + terms.fixed;
+  const fee =
+    (amount * BigInt(terms.bps)) / MERCHANT_FEE_BPS_DENOMINATOR + terms.fixed;
   return terms.paidBy === 'payer'
     ? { fee, net: amount, total: amount + fee }
     : { fee, net: amount - fee, total: amount };

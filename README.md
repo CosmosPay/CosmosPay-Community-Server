@@ -1391,10 +1391,11 @@ It is apart from the plan commission Cosmos Pay charges, which does not change.
 | Monad payment links (`POST /v1/payment-intents/pay`, `chain: monad`) | Only with deposit addresses (`MONAD_RELAYER_PRIVATE_KEY`; without them `merchant_fee_unsupported`) and an `amount`: the address is a `contracts/PaymentSplitForwarder.sol` (the fee's wallet and amount are two more constructor arguments, so the address commits to them), whose constructor pays the relayer its fee, then the merchant fee, then the merchant. The link asks for the deposit: the amount, plus the fee when the payer pays it |
 | Swaps on Solana (`POST /v1/swaps`, `chain: solana`) | Jupiter pays one integrator fee per swap and the plan commission takes it, so the fee's transfer (out of the source, in the source asset: a System transfer for SOL, else a TransferChecked after creating the wallet's token account) is appended to Jupiter's own v0 transaction: the accounts its lookup tables load are reused, every index rewritten, its compute limit raised, and the route asked with at most 40 accounts so it still fits one packet. A SOL fee goes to an account that already exists |
 | Private payments (`POST /v1/zk-payments`) | A third confidential transfer, in XLM, from the payer to `wallet`, so the fee stays as private as the payment. `wallet` must hold a confidential account on Cosmos Pay's token under auditor 0 (`400 recipient_not_registered` otherwise) and be neither the recipient nor the fee account. The 0.01% commission stays a share of `amount`, and the row's `amount` is what the payer pays in total. Confirm takes the third hash as `merchantFeeTxHash` and checks that transfer like the other two |
+| Liquidity (`POST /v1/liquidity-pools/deposit` and `/withdraw`) | A deposit or withdrawal moves two assets, so the fee is `bps` of EACH (rounded down), paid to `wallet` by one payment per asset in the same transaction, after the deposit, or after the withdrawal and its plan commission; `fixed` is refused (`400 validation_failed`). On a deposit, `recipient` takes it from the amounts (less enters the pool) and `payer` adds it on top. On a withdrawal it comes out of what the withdrawal pays, as a share of its guaranteed minimums, whichever `paidBy` names. `wallet` must exist and trust both assets. The record's `amount` / `asset` are asset A's leg, and `amountB` / `assetB` asset B's |
 | Swaps on Monad | Not yet: Kuru Flow pays one referrer fee per swap and the plan commission takes it (`400 merchant_fee_unsupported`) |
 
-USDT0 and liquidity take the field as each gains a way to split the payment on-chain;
-until then their routes refuse it as an unknown field (`400 validation_failed`).
+USDT0 takes the field once it gains a way to split the transfer on-chain; until then its
+routes refuse it as an unknown field (`400 validation_failed`).
 
 ## USDT0 from Stellar (LayerZero)
 
@@ -2141,6 +2142,10 @@ the service under `src/native-plugins/<slug>/`, switched on by the same
   to `zk_payment`.
 - **A merchant fee that rounds to nothing is refused** on every operation
   (`400 invalid_amount`), where a Stellar one used to build a payment of zero.
+- **Liquidity operations take `merchantFee`** (`POST /v1/liquidity-pools/deposit` and
+  `/withdraw`): `bps` of each asset, one payment per asset in the same transaction;
+  `fixed` is refused. Responses and webhooks gain `merchantFee`, whose `amountB` /
+  `assetB` are asset B's leg.
 
 ### Lists follow the key's network; dashboard reads are cached
 
