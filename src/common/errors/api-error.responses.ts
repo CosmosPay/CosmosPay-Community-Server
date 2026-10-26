@@ -191,6 +191,13 @@ export const API_ERROR_CASES: Readonly<Record<ApiErrorCode, ApiErrorCase>> = {
       'NEAR Intents does not support asset "yXLM" on stellar. GET /v1/cross-chain-swaps/assets lists the ones it does.',
     path: '/v1/cross-chain-swaps/quote',
   },
+  [ApiErrorCode.MerchantFeeUnsupported]: {
+    statuses: [400],
+    summary: 'This operation cannot pay a merchant fee yet',
+    message:
+      'A merchant fee is not available on solana swaps yet: Jupiter takes one integrator fee per swap and the plan commission uses it.',
+    path: '/v1/swaps',
+  },
   [ApiErrorCode.TransactionRejected]: {
     statuses: [400],
     summary: 'The submitted transaction does not do what the route needs',

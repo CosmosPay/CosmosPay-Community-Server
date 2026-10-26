@@ -1,6 +1,7 @@
 import { ApiProperty, OmitType } from '@nestjs/swagger';
 import { SwapStatus } from '@generated/prisma/client';
 import { ApiPublicTokenProperty } from '@/common/decorators/api-record-token.decorator';
+import { MerchantFeeEntity } from '@/common/merchant-fee/merchant-fee.entity';
 
 /** One asset hop on the chosen path (empty array = direct order-book swap). */
 export class SwapPathHop {
@@ -119,6 +120,16 @@ export class SwapQuoteEntity {
   })
   swap!: SwapAssetAmount;
 
+  @ApiProperty({
+    type: MerchantFeeEntity,
+    nullable: true,
+    required: false,
+    description:
+      'The merchant fee the request named, in the source asset; null without ' +
+      'one. With `paidBy: payer` the source sends `source.amount` plus it.',
+  })
+  merchantFee?: MerchantFeeEntity | null;
+
   @ApiProperty({ type: SwapDestinationQuote })
   destination!: SwapDestinationQuote;
 
@@ -181,6 +192,15 @@ export class SwapEntity {
     description: 'Amount routed through the DEX/AMM.',
   })
   swapAmount!: string;
+
+  @ApiProperty({
+    type: MerchantFeeEntity,
+    nullable: true,
+    description:
+      'The merchant fee this swap pays, by its own payment in the same ' +
+      'transaction; null when the request named none.',
+  })
+  merchantFee!: MerchantFeeEntity | null;
 
   @ApiProperty({ example: 'USDC' })
   destAsset!: string;

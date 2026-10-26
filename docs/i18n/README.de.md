@@ -1424,6 +1424,38 @@ Client-Adresse (`429 rate_limited`).
 | `GET /v1/cross-chain-swaps` | `swaps:read` | Die chain-übergreifenden Swaps des Consumers |
 | `GET /v1/cross-chain-swaps/{id}` | `swaps:read` | Ein Swap, wie der Observer ihn zuletzt gesehen hat (auch der gemeinsame öffentliche Key darf ihn lesen, mit dem `X-Record-Token` des Swaps) |
 | `POST /v1/cross-chain-swaps/{id}/deposit` | `swaps:write` | Die Einzahlungstransaktion melden, damit NEAR Intents startet, ohne auf seinen Indexer zu warten |
+## Händlergebühr (Ihre eigene Gebühr auf jede Operation)
+
+Eine Organisation, die diese Schienen über diese API an andere Unternehmen weiterverkauft,
+kann ihren eigenen Kunden auf jede Operation eine Gebühr berechnen, on-chain an eine von
+ihr genannte Wallet gezahlt. Sie kommt zur Plan-Provision von Cosmos Pay hinzu, die sich
+nicht ändert.
+
+```json
+"merchantFee": { "bps": 150, "fixed": "0.25", "wallet": "G...", "paidBy": "recipient" }
+```
+
+- **`bps` und `fixed`:** die Gebühr ist `amount × bps / 10.000`, abgerundet, plus `fixed`
+  (im Asset der Operation, mit höchstens dessen Dezimalstellen). `bps` geht bis 1.000
+  (10 %); mindestens einer der beiden Werte muss über null liegen.
+- **`paidBy`:** `recipient` (Standard) zieht die Gebühr von `amount` ab; `payer` schlägt
+  sie auf, der Zahler sendet also `amount` plus die Gebühr.
+- **`wallet`:** wohin die Gebühr gezahlt wird, auf der Chain, über die sie läuft.
+- **Was die Zeile speichert:** `merchantFee` (`bps`, `fixed`, der berechnete `amount`,
+  `asset`, `wallet`, `paidBy`) bei jedem Lesen und Webhook, null ohne Gebühr. Eine
+  Wiederholung mit demselben `Idempotency-Key` muss dieselbe Gebühr nennen, sonst ist es
+  `409 idempotency_conflict`, wie bei einem anderen Ziel.
+
+| Operation | Wie die Gebühr gezahlt wird |
+| --- | --- |
+| Swaps auf Stellar (`POST /v1/swaps`) | Mit einem eigenen `payment` im Quell-Asset, in der Transaktion des Swaps, nach der Plan-Provision. `wallet` ist ein Stellar-Konto mit der Trustline des Quell-Assets (sonst abgelehnt, bevor etwas gebaut wird) |
+| Swaps zwischen Chains (`POST /v1/cross-chain-swaps`) | Eine zweite App-Fee von NEAR Intents. `wallet` ist eine NEAR-Account-ID, gutgeschrieben in NEAR Intents. App-Fees sind ganze Basispunkte der Einzahlung, also wird die Gebühr zu den Basispunkten, die sie ausmacht, abgerundet; eine Gebühr unter einem Basispunkt wird abgelehnt. Mit `payer` ist auch die Plan-Provision ein Anteil der größeren Einzahlung |
+| Swaps auf Solana und Monad | Noch nicht: Jupiter und Kuru Flow zahlen eine einzige Integrator-Gebühr pro Swap, und die Plan-Provision nutzt sie (`400 merchant_fee_unsupported`) |
+
+Zahlungslinks, private Zahlungen, USDT0 und Liquidität erhalten das Feld, sobald jedes
+einen Weg hat, die Zahlung on-chain aufzuteilen; bis dahin lehnen ihre Routen es als
+unbekanntes Feld ab (`400 validation_failed`).
+
 ## USDT0 von Stellar (LayerZero)
 
 [USDT0](https://docs.usdt0.to) ist Tethers Omnichain-USDT. Auf Stellar ist es das
@@ -2164,6 +2196,19 @@ eingeschaltet werden.
   eingeschaltet oder nicht: `openapi:generate` schaltet alle ein.
 
 ## Upgrade — Breaking Changes und Deploy-Hinweise
+
+### Händlergebühr: `merchantFee` auf Swaps und eine optionale Spalte in sieben Tabellen
+
+- **Neu, additiv:** `merchantFee` auf `POST /v1/swaps` (Stellar), `/v1/swaps/quote`,
+  `POST /v1/cross-chain-swaps` und dessen Quote; siehe **Händlergebühr**. Antworten
+  erhalten ein `merchantFee`, das null sein kann (Quotes neben `fee`). Eine Anfrage ohne
+  Gebühr baut genau das, was sie vorher baute.
+- **Migration `20261026150000_merchant_fee`:** eine optionale JSONB-Spalte `merchantFee`
+  in `payment_intent`, `swap`, `chain_swap`, `cross_chain_swap`,
+  `liquidity_pool_operation`, `zk_payment` und `usdt0_transfer`. Kein Backfill:
+  bestehende Zeilen lesen sich ohne Gebühr.
+- **Neuer Fehlercode `merchant_fee_unsupported`** (400): eine Händlergebühr auf einem
+  Solana- oder Monad-Swap.
 
 ### Listen folgen dem Netzwerk des Schlüssels; Dashboard-Abfragen werden gecacht
 

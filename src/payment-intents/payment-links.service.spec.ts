@@ -70,6 +70,7 @@ function fullRow(overrides: Partial<PaymentIntent> = {}): PaymentIntent {
   return {
     id: 'cmh4x2k9a0001l70g8v5q3z2w',
     consumerId: 'consumer_secret_id',
+    merchantFee: null,
     kind: 'PAY',
     chain: 'stellar',
     source: PAYER,

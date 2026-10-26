@@ -1357,6 +1357,37 @@ client address (`429 rate_limited`).
 | `GET /v1/cross-chain-swaps` | `swaps:read` | The consumer's cross-chain swaps |
 | `GET /v1/cross-chain-swaps/{id}` | `swaps:read` | One swap, as the observer last saw it (the shared public key too, with the swap's `X-Record-Token`) |
 | `POST /v1/cross-chain-swaps/{id}/deposit` | `swaps:write` | Report the deposit transaction so NEAR Intents starts without waiting for its indexer |
+## Merchant fee (your own fee on each operation)
+
+An organization that resells these rails to other businesses through this API can
+charge its own customers a fee on each operation, paid on-chain to a wallet it names.
+It is apart from the plan commission Cosmos Pay charges, which does not change.
+
+```json
+"merchantFee": { "bps": 150, "fixed": "0.25", "wallet": "G...", "paidBy": "recipient" }
+```
+
+- **`bps` and `fixed`:** the fee is `amount × bps / 10,000`, rounded down, plus `fixed`
+  (in the operation's asset, with at most its decimals). `bps` goes up to 1,000 (10%);
+  at least one of the two must be above zero.
+- **`paidBy`:** `recipient` (the default) takes the fee out of `amount`; `payer` adds it
+  on top, so the payer sends `amount` plus the fee.
+- **`wallet`:** where the fee is paid, on the chain it travels on.
+- **What the row keeps:** `merchantFee` (`bps`, `fixed`, the `amount` charged, `asset`,
+  `wallet`, `paidBy`) on every read and webhook, null without one. An `Idempotency-Key`
+  replay must name the same fee, or it is `409 idempotency_conflict`, as a different
+  destination is.
+
+| Operation | How the fee is paid |
+| --- | --- |
+| Stellar swaps (`POST /v1/swaps`) | Its own `payment` in the source asset, in the swap's transaction, after the plan commission. `wallet` is a Stellar account that holds the source asset's trustline (otherwise refused before anything is built) |
+| Cross-chain swaps (`POST /v1/cross-chain-swaps`) | A second NEAR Intents app fee. `wallet` is a NEAR account id, credited inside NEAR Intents. App fees are whole basis points of the deposit, so the fee becomes the basis points it amounts to, rounded down; a fee under one basis point is refused. With `payer`, the plan commission is a share of the larger deposit too |
+| Swaps on Solana and Monad | Not yet: Jupiter and Kuru Flow pay one integrator fee per swap and the plan commission takes it (`400 merchant_fee_unsupported`) |
+
+Payment links, private payments, USDT0 and liquidity take the field as each gains a
+way to split the payment on-chain; until then their routes refuse it as an unknown
+field (`400 validation_failed`).
+
 ## USDT0 from Stellar (LayerZero)
 
 [USDT0](https://docs.usdt0.to) is Tether's omnichain USDT. On Stellar it is the
@@ -2050,6 +2081,19 @@ the service under `src/native-plugins/<slug>/`, switched on by the same
   `openapi:generate` turns them all on.
 
 ## Upgrading — breaking changes and deploy notes
+
+### Merchant fee: `merchantFee` on swaps, and a nullable column on seven tables
+
+- **New, additive:** `merchantFee` on `POST /v1/swaps` (Stellar), `/v1/swaps/quote`,
+  `POST /v1/cross-chain-swaps` and its quote; see **Merchant fee**. Responses gain a
+  nullable `merchantFee` (quotes, beside `fee`). A request without one builds exactly
+  what it built before.
+- **Migration `20261026150000_merchant_fee`:** a nullable `merchantFee` JSONB column on
+  `payment_intent`, `swap`, `chain_swap`, `cross_chain_swap`,
+  `liquidity_pool_operation`, `zk_payment` and `usdt0_transfer`. No backfill: existing
+  rows read as no fee.
+- **New error code `merchant_fee_unsupported`** (400): a merchant fee on a Solana or
+  Monad swap.
 
 ### Lists follow the key's network; dashboard reads are cached
 

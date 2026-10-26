@@ -1398,6 +1398,37 @@ consommateur et adresse client (`429 rate_limited`).
 | `GET /v1/cross-chain-swaps` | `swaps:read` | Les swaps inter-chaînes du consommateur |
 | `GET /v1/cross-chain-swaps/{id}` | `swaps:read` | Un swap, tel que l'observateur l'a vu en dernier (la clé publique partagée peut aussi le lire, avec le `X-Record-Token` du swap) |
 | `POST /v1/cross-chain-swaps/{id}/deposit` | `swaps:write` | Signaler la transaction de dépôt pour que NEAR Intents démarre sans attendre son indexeur |
+## Frais du marchand (vos propres frais sur chaque opération)
+
+Une organisation qui revend ces rails à d'autres entreprises via cette API peut facturer
+à ses propres clients des frais sur chaque opération, payés on-chain à un wallet qu'elle
+désigne. Ils s'ajoutent à la commission du plan que Cosmos Pay prélève, qui ne change pas.
+
+```json
+"merchantFee": { "bps": 150, "fixed": "0.25", "wallet": "G...", "paidBy": "recipient" }
+```
+
+- **`bps` et `fixed` :** les frais valent `amount × bps / 10 000`, arrondi à l'inférieur,
+  plus `fixed` (dans l'actif de l'opération, avec au plus ses décimales). `bps` va
+  jusqu'à 1 000 (10 %) ; au moins l'un des deux doit être supérieur à zéro.
+- **`paidBy` :** `recipient` (par défaut) retire les frais de `amount` ; `payer` les
+  ajoute par-dessus, le payeur envoie donc `amount` plus les frais.
+- **`wallet` :** où les frais sont payés, sur la chaîne qu'ils empruntent.
+- **Ce que garde la ligne :** `merchantFee` (`bps`, `fixed`, le `amount` prélevé, `asset`,
+  `wallet`, `paidBy`) à chaque lecture et webhook, null sans frais. Une relance avec le
+  même `Idempotency-Key` doit indiquer les mêmes frais, sinon c'est `409
+  idempotency_conflict`, comme pour une autre destination.
+
+| Opération | Comment les frais sont payés |
+| --- | --- |
+| Swaps sur Stellar (`POST /v1/swaps`) | Par leur propre `payment` dans l'actif source, dans la transaction du swap, après la commission du plan. `wallet` est un compte Stellar qui détient la trustline de l'actif source (sinon refusé avant toute construction) |
+| Swaps entre chaînes (`POST /v1/cross-chain-swaps`) | Une deuxième app fee de NEAR Intents. `wallet` est un identifiant de compte NEAR, crédité dans NEAR Intents. Les app fees sont des points de base entiers du dépôt : les frais deviennent les points de base qu'ils représentent, arrondis à l'inférieur ; des frais inférieurs à un point de base sont refusés. Avec `payer`, la commission du plan porte aussi sur le dépôt plus grand |
+| Swaps sur Solana et Monad | Pas encore : Jupiter et Kuru Flow paient un seul frais d'intégrateur par swap et la commission du plan l'utilise (`400 merchant_fee_unsupported`) |
+
+Les liens de paiement, les paiements privés, USDT0 et la liquidité prennent le champ à
+mesure que chacun gagne un moyen de partager le paiement on-chain ; d'ici là leurs routes
+le refusent comme champ inconnu (`400 validation_failed`).
+
 ## USDT0 depuis Stellar (LayerZero)
 
 [USDT0](https://docs.usdt0.to) est l'USDT omnichaîne de Tether. Sur Stellar, c'est
@@ -2122,6 +2153,19 @@ plugins isolés.
   `openapi:generate` les active tous.
 
 ## Mise à niveau — changements incompatibles et notes de déploiement
+
+### Frais du marchand : `merchantFee` sur les swaps, et une colonne facultative sur sept tables
+
+- **Nouveau, additif :** `merchantFee` sur `POST /v1/swaps` (Stellar), `/v1/swaps/quote`,
+  `POST /v1/cross-chain-swaps` et sa cotation ; voir **Frais du marchand**. Les réponses
+  gagnent un `merchantFee` qui peut être null (les cotations, à côté de `fee`). Une
+  requête sans frais construit exactement ce qu'elle construisait.
+- **Migration `20261026150000_merchant_fee` :** une colonne JSONB `merchantFee` facultative
+  sur `payment_intent`, `swap`, `chain_swap`, `cross_chain_swap`,
+  `liquidity_pool_operation`, `zk_payment` et `usdt0_transfer`. Pas de backfill : les
+  lignes existantes se lisent sans frais.
+- **Nouveau code d'erreur `merchant_fee_unsupported`** (400) : des frais du marchand sur un
+  swap Solana ou Monad.
 
 ### Les listes suivent le réseau de la clé ; les lectures du dashboard sont mises en cache
 

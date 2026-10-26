@@ -114,6 +114,15 @@ export enum ApiErrorCode {
   /** The asset is not one NEAR Intents can swap on the chain the request names. */
   AssetUnsupported = 'asset_unsupported',
 
+  // --- merchant fee -----------------------------------------------------------
+  /**
+   * The request names a merchant fee on an operation that cannot pay one yet:
+   * the chain or venue has no way to split the payment in the transaction this
+   * service builds. Refused before anything is built, so nobody signs an
+   * operation that would silently drop the merchant's fee.
+   */
+  MerchantFeeUnsupported = 'merchant_fee_unsupported',
+
   // --- provider / upstream --------------------------------------------------
   ProviderError = 'provider_error',
   ProviderUnavailable = 'provider_unavailable',

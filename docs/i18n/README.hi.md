@@ -1355,6 +1355,37 @@ client address (`429 rate_limited`)।
 | `GET /v1/cross-chain-swaps` | `swaps:read` | Consumer के क्रॉस-चेन swaps |
 | `GET /v1/cross-chain-swaps/{id}` | `swaps:read` | एक swap, जैसा observer ने उसे आख़िरी बार देखा (साझा public key भी, swap के `X-Record-Token` के साथ) |
 | `POST /v1/cross-chain-swaps/{id}/deposit` | `swaps:write` | Deposit transaction की सूचना दें ताकि NEAR Intents अपने indexer का इंतज़ार किए बिना शुरू करे |
+## मर्चेंट फ़ीस (हर ऑपरेशन पर आपकी अपनी फ़ीस)
+
+जो संगठन इस API के ज़रिए ये रेल्स दूसरे व्यवसायों को बेचता है, वह हर ऑपरेशन पर अपने
+ग्राहकों से एक फ़ीस ले सकता है, जो on-chain उसकी बताई wallet में जाती है। यह Cosmos Pay
+के plan कमीशन से अलग है, जो नहीं बदलता।
+
+```json
+"merchantFee": { "bps": 150, "fixed": "0.25", "wallet": "G...", "paidBy": "recipient" }
+```
+
+- **`bps` और `fixed`:** फ़ीस `amount × bps / 10,000` है, नीचे की ओर गोल, और उसमें
+  `fixed` जुड़ता है (ऑपरेशन के asset में, उसके दशमलव तक)। `bps` अधिकतम 1,000 (10%) है;
+  दोनों में से कम से कम एक शून्य से ऊपर होना चाहिए।
+- **`paidBy`:** `recipient` (डिफ़ॉल्ट) फ़ीस `amount` से काटता है; `payer` उसे ऊपर से
+  जोड़ता है, यानी भुगतानकर्ता `amount` और फ़ीस दोनों भेजता है।
+- **`wallet`:** फ़ीस कहाँ जाती है, उस chain पर जिससे वह जाती है।
+- **पंक्ति क्या रखती है:** `merchantFee` (`bps`, `fixed`, लिया गया `amount`, `asset`,
+  `wallet`, `paidBy`) हर रीड और webhook में, फ़ीस न हो तो null। उसी `Idempotency-Key`
+  वाला दोबारा भेजा गया अनुरोध वही फ़ीस बताए, वरना `409 idempotency_conflict` है, जैसे
+  अलग destination पर।
+
+| ऑपरेशन | फ़ीस कैसे दी जाती है |
+| --- | --- |
+| Stellar swaps (`POST /v1/swaps`) | स्वैप के transaction में source asset का अपना `payment`, plan कमीशन के बाद। `wallet` एक Stellar खाता है जिसके पास source asset की trustline है (वरना कुछ बनाने से पहले ही अस्वीकार) |
+| Cross-chain swaps (`POST /v1/cross-chain-swaps`) | NEAR Intents की दूसरी app fee। `wallet` एक NEAR account id है, जिसे NEAR Intents के भीतर क्रेडिट मिलता है। App fees डिपॉज़िट के पूरे basis points होती हैं, इसलिए फ़ीस उतने basis points बनती है, नीचे की ओर गोल; एक basis point से कम फ़ीस अस्वीकार है। `payer` के साथ plan कमीशन भी बड़े डिपॉज़िट का हिस्सा होता है |
+| Solana और Monad पर swaps | अभी नहीं: Jupiter और Kuru Flow हर swap पर एक ही integrator फ़ीस देते हैं और plan कमीशन उसे लेता है (`400 merchant_fee_unsupported`) |
+
+Payment links, निजी भुगतान, USDT0 और liquidity यह फ़ील्ड तब लेंगे जब हर एक के पास भुगतान
+को on-chain बाँटने का तरीका होगा; तब तक उनके रूट इसे अज्ञात फ़ील्ड मानकर अस्वीकार करते हैं
+(`400 validation_failed`)।
+
 ## Stellar से USDT0 (LayerZero)
 
 [USDT0](https://docs.usdt0.to) Tether का omnichain USDT है। Stellar पर यह classic asset
@@ -2043,6 +2074,19 @@ seal होती हैं और कभी लौटाई नहीं जा
   `openapi:generate` सभी को चालू करता है।
 
 ## अपग्रेड — breaking changes और deploy नोट्स
+
+### मर्चेंट फ़ीस: swaps पर `merchantFee` और सात टेबलों में एक वैकल्पिक कॉलम
+
+- **नया, additive:** `POST /v1/swaps` (Stellar), `/v1/swaps/quote`,
+  `POST /v1/cross-chain-swaps` और उसके quote पर `merchantFee`; देखें **मर्चेंट फ़ीस**।
+  जवाबों में एक `merchantFee` जुड़ता है जो null हो सकता है (quotes में `fee` के पास)। बिना
+  फ़ीस का अनुरोध ठीक वही बनाता है जो पहले बनाता था।
+- **Migration `20261026150000_merchant_fee`:** `payment_intent`, `swap`, `chain_swap`,
+  `cross_chain_swap`, `liquidity_pool_operation`, `zk_payment` और `usdt0_transfer` में
+  एक वैकल्पिक JSONB कॉलम `merchantFee`। कोई backfill नहीं: मौजूदा पंक्तियाँ बिना फ़ीस पढ़ी
+  जाती हैं।
+- **नया error code `merchant_fee_unsupported`** (400): Solana या Monad swap पर मर्चेंट
+  फ़ीस।
 
 ### Lists key के network का पालन करती हैं; dashboard reads cache होते हैं
 

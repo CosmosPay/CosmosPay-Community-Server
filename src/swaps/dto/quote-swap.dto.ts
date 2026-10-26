@@ -1,7 +1,16 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsIn, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
+import {
+  IsIn,
+  IsInt,
+  IsOptional,
+  IsString,
+  Max,
+  Min,
+  ValidateNested,
+} from 'class-validator';
 import { CHAINS, type Chain } from '@/chains/chains.constants';
+import { MerchantFeeDto } from '@/common/merchant-fee/merchant-fee.dto';
 import { IsDecimalAmount } from '@/common/validators/is-decimal-amount.validator';
 import { IsStellarAddress } from '@/common/validators/is-stellar-address.validator';
 import { IsSwapAsset } from '@/common/validators/is-swap-asset.validator';
@@ -89,4 +98,19 @@ export class QuoteSwapDto {
   @Min(0)
   @Max(10000)
   slippageBps?: number;
+
+  @ApiPropertyOptional({
+    type: MerchantFeeDto,
+    description:
+      'Stellar only for now: your own fee on this swap, paid in the source ' +
+      'asset to `wallet` (a Stellar account that can receive it) by its own ' +
+      'payment in the same transaction, beside the plan commission. ' +
+      '`paidBy: recipient` takes it from `amount` (the swap routes less); ' +
+      '`payer` adds it on top (the source sends `amount` plus the fee). ' +
+      'Solana and Monad answer `merchant_fee_unsupported`.',
+  })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => MerchantFeeDto)
+  merchantFee?: MerchantFeeDto;
 }

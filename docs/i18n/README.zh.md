@@ -928,6 +928,33 @@ NEAR Intents 从输入中扣除它，报价的输出已是扣除后的净额，�
 | `GET /v1/cross-chain-swaps` | `swaps:read` | 该 consumer 的跨链 swap |
 | `GET /v1/cross-chain-swaps/{id}` | `swaps:read` | 单笔 swap，即观察器最后一次看到的状态（共享公共 key 也可以读取，但需携带该 swap 的 `X-Record-Token`） |
 | `POST /v1/cross-chain-swaps/{id}/deposit` | `swaps:write` | 上报充值交易，让 NEAR Intents 无需等待其索引器即可开始 |
+## 商户手续费（你在每笔操作上的自有费用）
+
+通过本 API 向其他企业转售这些通道的组织，可以在每笔操作上向自己的客户收取一笔费用，
+链上支付到它指定的钱包。它与 Cosmos Pay 收取的套餐佣金分开，后者不变。
+
+```json
+"merchantFee": { "bps": 150, "fixed": "0.25", "wallet": "G...", "paidBy": "recipient" }
+```
+
+- **`bps` 与 `fixed`：** 费用为 `amount × bps / 10,000`（向下取整）加上 `fixed`
+  （以操作的资产计，最多为其小数位数）。`bps` 最高 1,000（10%）；两者至少一个大于零。
+- **`paidBy`：** `recipient`（默认）从 `amount` 中扣除费用；`payer` 在其之上加收，
+  付款方发送 `amount` 加上费用。
+- **`wallet`：** 费用支付到哪里，在费用所走的链上。
+- **记录保存的内容：** 每次读取和 webhook 都带 `merchantFee`（`bps`、`fixed`、收取的
+  `amount`、`asset`、`wallet`、`paidBy`），没有则为 null。使用相同 `Idempotency-Key`
+  的重试必须指定相同的费用，否则返回 `409 idempotency_conflict`，与目标不同时一样。
+
+| 操作 | 费用如何支付 |
+| --- | --- |
+| Stellar 兑换（`POST /v1/swaps`） | 在兑换交易中以源资产单独一笔 `payment` 支付，位于套餐佣金之后。`wallet` 是持有源资产 trustline 的 Stellar 账户（否则在构建任何东西之前拒绝） |
+| 跨链兑换（`POST /v1/cross-chain-swaps`） | NEAR Intents 的第二个 app fee。`wallet` 是 NEAR 账户 id，在 NEAR Intents 内入账。App fee 是存入金额的整数基点，因此费用换算成其对应的基点并向下取整；不足一个基点的费用会被拒绝。使用 `payer` 时，套餐佣金也按更大的存入金额计算 |
+| Solana 与 Monad 上的兑换 | 暂不支持：Jupiter 和 Kuru Flow 每笔兑换只支付一个集成方费用，已被套餐佣金使用（`400 merchant_fee_unsupported`） |
+
+支付链接、隐私支付、USDT0 和流动性会在各自具备链上拆分付款的方式后加入该字段；在此之前，
+它们的路由会将其作为未知字段拒绝（`400 validation_failed`）。
+
 ## 从 Stellar 发送 USDT0（LayerZero）
 
 [USDT0](https://docs.usdt0.to) 是 Tether 的全链 USDT。在 Stellar 上，它是经典资产 `USDT0:GATISXX6BZ6NC7IKQBY37CJD4SOZL3CYZJWXEDG6JVIY4WBS6KXJHN6Q`，背后是 LayerZero 的 OFT 合约（`CBOWOLFSDM5PZXNFIVDMP5NZ7U2GSIHED6H6R446QOHF266XINKUMMF6`），而 OFT 的用途就是把它发送到其他网络：`send` 在 Stellar 上销毁 USDT0，由 LayerZero 交付。在 Ethereum 上到账的是**原生 USDT**（那里的对端是 Tether 的 OFT adapter，它解锁真实的 USDT）；在其余 20 条路由上到账的是 USDT0。每条路由都接收 EVM 收款地址。`/v1/usdt0` **从 Stellar** 发送：持有者签署一笔 Soroban 交易（用 Freighter，或通过 SEP-7 链接），与 swap 一样，本服务是非托管的。它通过模拟向 OFT 报价、构建交易、检查签名后的副本正是这笔交易、转发它，并在 LayerZero Scan 上跟踪该消息。
@@ -1358,6 +1385,16 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
 - **OpenAPI 契约记录每个原生插件的路由**，无论是否开启：`openapi:generate` 会全部开启。
 
 ## 升级 — 破坏性变更与部署说明
+
+### 商户手续费：兑换上的 `merchantFee`，以及七张表上的可空列
+
+- **新增，向后兼容：** `POST /v1/swaps`（Stellar）、`/v1/swaps/quote`、
+  `POST /v1/cross-chain-swaps` 及其报价上的 `merchantFee`；见 **商户手续费**。响应新增
+  可为 null 的 `merchantFee`（报价中位于 `fee` 旁）。不带费用的请求构建的内容与之前完全相同。
+- **迁移 `20261026150000_merchant_fee`：** 在 `payment_intent`、`swap`、`chain_swap`、
+  `cross_chain_swap`、`liquidity_pool_operation`、`zk_payment` 和 `usdt0_transfer` 上新增
+  可空的 JSONB 列 `merchantFee`。不回填：现有记录读作无费用。
+- **新错误码 `merchant_fee_unsupported`**（400）：在 Solana 或 Monad 兑换上设置商户手续费。
 
 ### 列表遵循密钥的网络；仪表盘读取会被缓存
 

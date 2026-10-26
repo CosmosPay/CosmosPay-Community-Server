@@ -58,6 +58,7 @@ function row(overrides: Partial<Usdt0Transfer> = {}): Usdt0Transfer {
   return {
     id: 'u0_1',
     consumerId: 'consumer_1',
+    merchantFee: null,
     network: 'public',
     status: 'PENDING',
     source: 'GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ',

@@ -385,6 +385,12 @@ model PaymentIntent {
   // Lifetime: an unpaid intent past this instant is auto-finalized to EXPIRED by
   // the observer. Set at creation from the configured TTL.
   expiresAt DateTime?
+  // The merchant fee this operation charged, when its request named one: what an
+  // organization charges its own customers through this API, paid on-chain to a
+  // wallet it names (`src/common/merchant-fee/`): { bps, fixed, amount, asset,
+  // wallet, paidBy }. Separate from the plan commission columns.
+  merchantFee Json?
+
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -920,6 +926,12 @@ model Swap {
   // without recreating the type) buys nothing.
   lastCheckedAt  DateTime?
   notFoundStreak Int       @default(0)
+  // The merchant fee this operation charged, when its request named one: what an
+  // organization charges its own customers through this API, paid on-chain to a
+  // wallet it names (`src/common/merchant-fee/`): { bps, fixed, amount, asset,
+  // wallet, paidBy }. Separate from the plan commission columns.
+  merchantFee Json?
+
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -993,6 +1005,12 @@ model ChainSwap {
   // price) and submit refuses it.
   expiresAt      DateTime
   lastCheckedAt  DateTime?
+  // The merchant fee this operation charged, when its request named one: what an
+  // organization charges its own customers through this API, paid on-chain to a
+  // wallet it names (`src/common/merchant-fee/`): { bps, fixed, amount, asset,
+  // wallet, paidBy }. Separate from the plan commission columns.
+  merchantFee Json?
+
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1094,6 +1112,12 @@ model CrossChainSwap {
   // When the deposit address stops accepting a deposit (1Click's deadline).
   expiresAt      DateTime
   lastCheckedAt  DateTime?
+  // The merchant fee this operation charged, when its request named one: what an
+  // organization charges its own customers through this API, paid on-chain to a
+  // wallet it names (`src/common/merchant-fee/`): { bps, fixed, amount, asset,
+  // wallet, paidBy }. Separate from the plan commission columns.
+  merchantFee Json?
+
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1193,6 +1217,12 @@ model LiquidityPoolOperation {
   // declared because schema.prisma has to describe the database it points at.
   lastCheckedAt  DateTime?
   notFoundStreak Int       @default(0)
+  // The merchant fee this operation charged, when its request named one: what an
+  // organization charges its own customers through this API, paid on-chain to a
+  // wallet it names (`src/common/merchant-fee/`): { bps, fixed, amount, asset,
+  // wallet, paidBy }. Separate from the plan commission columns.
+  merchantFee Json?
+
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1990,6 +2020,12 @@ model ZkPayment {
   status    ZkPaymentStatus @default(PENDING)
   expiresAt DateTime
   settledAt DateTime?
+  // The merchant fee this operation charged, when its request named one: what an
+  // organization charges its own customers through this API, paid on-chain to a
+  // wallet it names (`src/common/merchant-fee/`): { bps, fixed, amount, asset,
+  // wallet, paidBy }. Separate from the plan commission columns.
+  merchantFee Json?
+
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -2075,6 +2111,12 @@ model Usdt0Transfer {
   // The last time a read asked the ledger or LayerZero Scan; reads are throttled on it.
   lastCheckedAt  DateTime?
   submittedAt    DateTime?
+  // The merchant fee this operation charged, when its request named one: what an
+  // organization charges its own customers through this API, paid on-chain to a
+  // wallet it names (`src/common/merchant-fee/`): { bps, fixed, amount, asset,
+  // wallet, paidBy }. Separate from the plan commission columns.
+  merchantFee Json?
+
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

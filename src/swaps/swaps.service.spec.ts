@@ -1518,3 +1518,123 @@ describe('SwapsService.create adds the trustline the source lacks', () => {
     expect(read.trustline).toEqual({ code: 'USDC', issuer: DEST_ISSUER });
   });
 });
+
+describe('SwapsService merchant fee', () => {
+  const MERCHANT = Keypair.random().publicKey();
+
+  function make() {
+    const prisma = createPrisma();
+    const stellar = makeStellar();
+    const service = new SwapsService(
+      makeConfig(),
+      prisma,
+      makeEmitter(prisma, { emit: jest.fn() } as any),
+      stellar as any,
+      new ConsumerResolverService(prisma as never),
+      new StellarAccountLoader(stellar as never),
+      new SignedTransactionRelay(stellar as never),
+      recordTokens,
+    );
+    return { service, prisma };
+  }
+
+  const opsOf = (xdr: string) =>
+    (TransactionBuilder.fromXDR(xdr, Networks.TESTNET) as Transaction)
+      .operations;
+
+  // 1.5% of 10 XLM is 0.15, plus 0.1 fixed: 0.25 to the merchant.
+  const merchantFee = { bps: 150, fixed: '0.1', wallet: MERCHANT };
+
+  it('pays the merchant by its own payment, deducted from the amount by default', async () => {
+    const { service, prisma } = make();
+
+    const view = await service.create(consumer, { ...createDto, merchantFee });
+
+    const ops = opsOf(view.xdr);
+    expect(ops.map((op) => op.type)).toEqual([
+      'payment',
+      'payment',
+      'pathPaymentStrictSend',
+    ]);
+    // The plan commission and the merchant fee stay apart on-chain.
+    expect((ops[0] as Operation.Payment).destination).toBe(FEE_WALLET);
+    expect((ops[0] as Operation.Payment).amount).toBe('0.0500000');
+    expect((ops[1] as Operation.Payment).destination).toBe(MERCHANT);
+    expect((ops[1] as Operation.Payment).amount).toBe('0.2500000');
+    expect((ops[1] as Operation.Payment).asset.isNative()).toBe(true);
+    // 10 − 0.05 plan − 0.25 merchant.
+    expect((ops[2] as Operation.PathPaymentStrictSend).sendAmount).toBe(
+      '9.7000000',
+    );
+    const record = {
+      bps: 150,
+      fixed: '0.1',
+      amount: '0.25',
+      asset: 'native',
+      wallet: MERCHANT,
+      paidBy: 'recipient',
+    };
+    expect(view.merchantFee).toEqual(record);
+    expect(prisma.swap.create.mock.calls[0][0].data.merchantFee).toEqual(
+      record,
+    );
+  });
+
+  it('sends the fee on top when the payer pays it, routing the whole amount less the plan fee', async () => {
+    const { service } = make();
+
+    const view = await service.create(consumer, {
+      ...createDto,
+      merchantFee: { ...merchantFee, paidBy: 'payer' },
+    });
+
+    const ops = opsOf(view.xdr);
+    expect((ops[1] as Operation.Payment).amount).toBe('0.2500000');
+    expect((ops[2] as Operation.PathPaymentStrictSend).sendAmount).toBe(
+      '9.9500000',
+    );
+    expect(view.merchantFee?.paidBy).toBe('payer');
+  });
+
+  it('quotes the fee without building anything', async () => {
+    const { service, prisma } = make();
+
+    const quote = await service.quote(consumer, { ...createDto, merchantFee });
+
+    expect(quote.merchantFee).toMatchObject({
+      amount: '0.25',
+      wallet: MERCHANT,
+    });
+    expect(quote.swap.amount).toBe('9.7');
+    expect(prisma.swap.create).not.toHaveBeenCalled();
+  });
+
+  it('builds no merchant payment and stores no fee when the request names none', async () => {
+    const { service } = make();
+
+    const view = await service.create(consumer, createDto);
+
+    expect(opsOf(view.xdr).map((op) => op.type)).toEqual([
+      'payment',
+      'pathPaymentStrictSend',
+    ]);
+    expect(view.merchantFee).toBeNull();
+  });
+
+  it('refuses a fee paid to the source itself and one that eats the whole amount', async () => {
+    const { service } = make();
+
+    await expect(
+      service.create(consumer, {
+        ...createDto,
+        merchantFee: { ...merchantFee, wallet: SOURCE },
+      }),
+    ).rejects.toMatchObject({ code: ApiErrorCode.ValidationFailed });
+    await expect(
+      service.quote(consumer, {
+        ...createDto,
+        merchantFee: { fixed: '10', wallet: MERCHANT },
+      }),
+    ).rejects.toMatchObject({ code: ApiErrorCode.InvalidAmount });
+  });
+});

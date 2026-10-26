@@ -46,6 +46,18 @@ import { SolanaSwapVenue } from '@/swaps/venues/solana-swap.venue';
 import { WebhookTerminalEmitter } from '@/webhooks/webhook-terminal-emitter.service';
 
 /**
+ * Why a merchant fee cannot ride on a swap on this chain yet: each aggregator
+ * pays ONE integrator fee per swap, and the plan commission already takes it.
+ * The fee will be paid here once the transaction carries a payment of its own.
+ */
+const MERCHANT_FEE_UNSUPPORTED: Record<OtherChain, string> = {
+  solana:
+    'Jupiter takes one integrator fee per swap and the plan commission uses it',
+  monad:
+    'Kuru Flow takes one referrer fee per swap and the plan commission uses it',
+};
+
+/**
  * The columns a Solana or Monad swap may leave this service with. The row also
  * carries `consumerId`, the aggregator's raw quote and the observer's
  * bookkeeping; none of it is the caller's.
@@ -449,6 +461,12 @@ export class ChainSwapsService {
       );
     }
     this.refuseStellarOnlyFields(chain, dto);
+    if (dto.merchantFee) {
+      throw ApiError.badRequest(
+        ApiErrorCode.MerchantFeeUnsupported,
+        `A merchant fee is not available on ${chain} swaps yet: ${MERCHANT_FEE_UNSUPPORTED[chain]}.`,
+      );
+    }
     if (!sourceAssetCode) {
       throw ApiError.badRequest(
         ApiErrorCode.ValidationFailed,

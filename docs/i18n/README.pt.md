@@ -1378,6 +1378,37 @@ consumidor e endereço de cliente (`429 rate_limited`).
 | `GET /v1/cross-chain-swaps` | `swaps:read` | Os swaps entre redes do consumidor |
 | `GET /v1/cross-chain-swaps/{id}` | `swaps:read` | Um swap, como o observador o viu por último (a chave pública compartilhada também, com o `X-Record-Token` do swap) |
 | `POST /v1/cross-chain-swaps/{id}/deposit` | `swaps:write` | Informar a transação de depósito para que a NEAR Intents comece sem esperar o seu indexador |
+## Taxa do comerciante (a sua própria taxa em cada operação)
+
+Uma organização que revende estes trilhos a outras empresas por meio desta API pode
+cobrar dos seus próprios clientes uma taxa em cada operação, paga on-chain a uma wallet
+que ela indica. É separada da comissão do plano que a Cosmos Pay cobra, que não muda.
+
+```json
+"merchantFee": { "bps": 150, "fixed": "0.25", "wallet": "G...", "paidBy": "recipient" }
+```
+
+- **`bps` e `fixed`:** a taxa é `amount × bps / 10.000`, arredondada para baixo, mais
+  `fixed` (no ativo da operação, com no máximo as suas casas decimais). `bps` vai até
+  1.000 (10%); pelo menos um dos dois deve ser maior que zero.
+- **`paidBy`:** `recipient` (o padrão) desconta a taxa de `amount`; `payer` a soma por
+  cima, então o pagador envia `amount` mais a taxa.
+- **`wallet`:** onde a taxa é paga, na cadeia por onde ela viaja.
+- **O que a linha guarda:** `merchantFee` (`bps`, `fixed`, o `amount` cobrado, `asset`,
+  `wallet`, `paidBy`) em cada leitura e webhook, null quando não há. Uma repetição com o
+  mesmo `Idempotency-Key` deve indicar a mesma taxa, ou é `409 idempotency_conflict`,
+  como um destino diferente.
+
+| Operação | Como a taxa é paga |
+| --- | --- |
+| Swaps na Stellar (`POST /v1/swaps`) | Com o seu próprio `payment` no ativo de origem, na transação do swap, depois da comissão do plano. `wallet` é uma conta Stellar com a trustline do ativo de origem (caso contrário é recusada antes de construir qualquer coisa) |
+| Swaps entre cadeias (`POST /v1/cross-chain-swaps`) | Uma segunda app fee da NEAR Intents. `wallet` é um id de conta NEAR, creditada dentro da NEAR Intents. As app fees são pontos-base inteiros do depósito, então a taxa vira os pontos-base que representa, arredondados para baixo; uma taxa abaixo de um ponto-base é recusada. Com `payer`, a comissão do plano também é uma parte do depósito maior |
+| Swaps em Solana e Monad | Ainda não: Jupiter e Kuru Flow pagam uma única taxa de integrador por swap e a comissão do plano a usa (`400 merchant_fee_unsupported`) |
+
+Links de pagamento, pagamentos privados, USDT0 e liquidez recebem o campo à medida que
+cada um ganha uma forma de dividir o pagamento on-chain; até lá as suas rotas o recusam
+como campo desconhecido (`400 validation_failed`).
+
 ## USDT0 a partir da Stellar (LayerZero)
 
 [USDT0](https://docs.usdt0.to) é o USDT omnichain da Tether. Na Stellar ele é o
@@ -2094,6 +2125,19 @@ serviço em `src/native-plugins/<slug>/`, ligados pela mesma lista
   `openapi:generate` liga todos.
 
 ## Atualização — mudanças incompatíveis e notas de deploy
+
+### Taxa do comerciante: `merchantFee` nos swaps e uma coluna opcional em sete tabelas
+
+- **Novo, aditivo:** `merchantFee` em `POST /v1/swaps` (Stellar), `/v1/swaps/quote`,
+  `POST /v1/cross-chain-swaps` e a sua cotação; veja **Taxa do comerciante**. As respostas
+  ganham um `merchantFee` que pode ser null (as cotações, ao lado de `fee`). Um pedido
+  sem taxa constrói exatamente o mesmo que antes.
+- **Migração `20261026150000_merchant_fee`:** uma coluna JSONB `merchantFee` opcional em
+  `payment_intent`, `swap`, `chain_swap`, `cross_chain_swap`,
+  `liquidity_pool_operation`, `zk_payment` e `usdt0_transfer`. Sem backfill: as linhas
+  existentes são lidas sem taxa.
+- **Novo código de erro `merchant_fee_unsupported`** (400): uma taxa do comerciante num
+  swap em Solana ou Monad.
 
 ### As listas seguem a rede da chave; as leituras do dashboard ficam em cache
 

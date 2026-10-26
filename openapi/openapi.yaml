@@ -11379,6 +11379,43 @@ components:
         - status
         - txHash
         - swap
+    MerchantFeeEntity:
+      type: object
+      properties:
+        bps:
+          type: number
+          description: The percentage part, in basis points.
+          example: 150
+        fixed:
+          type: string
+          description: The fixed part, in `asset`.
+          example: "0.25"
+        amount:
+          type: string
+          description: "The fee charged: the percentage of `amount` plus the fixed part."
+          example: "1.75"
+        asset:
+          type: string
+          description: The asset the fee is paid in.
+          example: XLM
+        wallet:
+          type: string
+          description: Where the fee is paid.
+          example: GBDHAQXQQ75WVBUZ2IX3O7ME7JOKJUOUPUXRNDCORUJODWQCTVUEQ62R
+        paidBy:
+          type: string
+          enum:
+            - recipient
+            - payer
+          description: "`recipient`: deducted from the amount. `payer`: added on top of it."
+          example: recipient
+      required:
+        - bps
+        - fixed
+        - amount
+        - asset
+        - wallet
+        - paidBy
     SwapTrustline:
       type: object
       properties:
@@ -11436,6 +11473,13 @@ components:
           type: string
           example: "99.5"
           description: Amount routed through the DEX/AMM.
+        merchantFee:
+          nullable: true
+          description: The merchant fee this swap pays, by its own payment in the same
+            transaction; null when the request named none.
+          type: object
+          allOf:
+            - $ref: "#/components/schemas/MerchantFeeEntity"
         destAsset:
           type: string
           example: USDC
@@ -11535,6 +11579,7 @@ components:
         - feeAmount
         - feeBps
         - swapAmount
+        - merchantFee
         - destAsset
         - destAssetIssuer
         - destEstimated
@@ -11596,6 +11641,13 @@ components:
           type: string
           example: "99.5"
           description: Amount routed through the DEX/AMM.
+        merchantFee:
+          nullable: true
+          description: The merchant fee this swap pays, by its own payment in the same
+            transaction; null when the request named none.
+          type: object
+          allOf:
+            - $ref: "#/components/schemas/MerchantFeeEntity"
         destAsset:
           type: string
           example: USDC
@@ -11684,6 +11736,7 @@ components:
         - feeAmount
         - feeBps
         - swapAmount
+        - merchantFee
         - destAsset
         - destAssetIssuer
         - destEstimated
@@ -11745,6 +11798,13 @@ components:
           type: string
           example: "99.5"
           description: Amount routed through the DEX/AMM.
+        merchantFee:
+          nullable: true
+          description: The merchant fee this swap pays, by its own payment in the same
+            transaction; null when the request named none.
+          type: object
+          allOf:
+            - $ref: "#/components/schemas/MerchantFeeEntity"
         destAsset:
           type: string
           example: USDC
@@ -11811,6 +11871,7 @@ components:
         - feeAmount
         - feeBps
         - swapAmount
+        - merchantFee
         - destAsset
         - destAssetIssuer
         - destEstimated
@@ -11887,6 +11948,40 @@ components:
         - submitted
         - status
         - swap
+    MerchantFeeDto:
+      type: object
+      properties:
+        bps:
+          type: number
+          description: The percentage part, in basis points (150 = 1.5%), at most 1000
+            (10%). Taken from `amount`, rounded down.
+          example: 150
+          minimum: 0
+          maximum: 1000
+        fixed:
+          type: string
+          description: The fixed part, in the operation's asset (a swap's source asset),
+            as a decimal with at most that asset's decimals. Added to the
+            percentage part.
+          example: "0.25"
+        wallet:
+          type: string
+          description: "Where the fee is paid: an account on the chain the fee travels on
+            (a Stellar G... account for a Stellar swap; a NEAR account for a
+            swap between chains, which NEAR Intents pays as an app fee)."
+          example: GBDHAQXQQ75WVBUZ2IX3O7ME7JOKJUOUPUXRNDCORUJODWQCTVUEQ62R
+          maxLength: 128
+        paidBy:
+          type: string
+          enum:
+            - recipient
+            - payer
+          default: recipient
+          description: "`recipient`: deducted from `amount` (the receiver gets less, a
+            swap routes less). `payer`: added on top (the payer sends `amount`
+            plus the fee)."
+      required:
+        - wallet
     QuoteSwapDto:
       type: object
       properties:
@@ -11931,6 +12026,15 @@ components:
             on-chain minimum received. Defaults to the service setting; capped
             by it.
           example: 50
+        merchantFee:
+          description: "Stellar only for now: your own fee on this swap, paid in the
+            source asset to `wallet` (a Stellar account that can receive it) by
+            its own payment in the same transaction, beside the plan commission.
+            `paidBy: recipient` takes it from `amount` (the swap routes less);
+            `payer` adds it on top (the source sends `amount` plus the fee).
+            Solana and Monad answer `merchant_fee_unsupported`."
+          allOf:
+            - $ref: "#/components/schemas/MerchantFeeDto"
       required:
         - amount
         - destAssetCode
@@ -12044,6 +12148,14 @@ components:
           description: Net amount routed (input − fee).
           allOf:
             - $ref: "#/components/schemas/SwapAssetAmount"
+        merchantFee:
+          nullable: true
+          description: "The merchant fee the request named, in the source asset; null
+            without one. With `paidBy: payer` the source sends `source.amount`
+            plus it."
+          type: object
+          allOf:
+            - $ref: "#/components/schemas/MerchantFeeEntity"
         destination:
           $ref: "#/components/schemas/SwapDestinationQuote"
         path:
@@ -12102,6 +12214,15 @@ components:
             on-chain minimum received. Defaults to the service setting; capped
             by it.
           example: 50
+        merchantFee:
+          description: "Stellar only for now: your own fee on this swap, paid in the
+            source asset to `wallet` (a Stellar account that can receive it) by
+            its own payment in the same transaction, beside the plan commission.
+            `paidBy: recipient` takes it from `amount` (the swap routes less);
+            `payer` adds it on top (the source sends `amount` plus the fee).
+            Solana and Monad answer `merchant_fee_unsupported`."
+          allOf:
+            - $ref: "#/components/schemas/MerchantFeeDto"
         source:
           type: string
           description: Account paying for (and signing) the swap (the tx source) on `chain`.
@@ -12350,6 +12471,16 @@ components:
             minimum, NEAR Intents refunds instead of filling. Defaults to the
             service setting; capped by it.
           example: 100
+        merchantFee:
+          description: "Your own fee on this swap, which NEAR Intents pays as a second app
+            fee to `wallet`: a NEAR account id (named, e.g. merchant.near, or
+            64-hex implicit), credited inside NEAR Intents. App fees are whole
+            basis points of the deposit, so the fee is turned into the basis
+            points it amounts to, rounded down. `paidBy: recipient` takes it
+            from `amount` (the deposit stays `amount`); `payer` adds it to the
+            deposit."
+          allOf:
+            - $ref: "#/components/schemas/MerchantFeeDto"
       required:
         - originChain
         - originAsset
@@ -12532,6 +12663,13 @@ components:
           $ref: "#/components/schemas/CrossChainQuoteDestination"
         fee:
           $ref: "#/components/schemas/CrossChainFeeEntity"
+        merchantFee:
+          nullable: true
+          description: The merchant fee NEAR Intents will pay, in the origin asset; null
+            without one.
+          type: object
+          allOf:
+            - $ref: "#/components/schemas/MerchantFeeEntity"
         slippageBps:
           type: number
           example: 100
@@ -12544,6 +12682,7 @@ components:
         - origin
         - destination
         - fee
+        - merchantFee
         - slippageBps
         - timeEstimateSeconds
     CreateCrossChainSwapDto:
@@ -12661,6 +12800,16 @@ components:
             minimum, NEAR Intents refunds instead of filling. Defaults to the
             service setting; capped by it.
           example: 100
+        merchantFee:
+          description: "Your own fee on this swap, which NEAR Intents pays as a second app
+            fee to `wallet`: a NEAR account id (named, e.g. merchant.near, or
+            64-hex implicit), credited inside NEAR Intents. App fees are whole
+            basis points of the deposit, so the fee is turned into the basis
+            points it amounts to, rounded down. `paidBy: recipient` takes it
+            from `amount` (the deposit stays `amount`); `payer` adds it to the
+            deposit."
+          allOf:
+            - $ref: "#/components/schemas/MerchantFeeDto"
         idempotencyKey:
           type: string
           description: Idempotency key. The Idempotency-Key header takes precedence over
@@ -12813,6 +12962,13 @@ components:
         feeAmount:
           type: string
           example: "0.5"
+        merchantFee:
+          nullable: true
+          description: The merchant fee NEAR Intents pays as an app fee; null when the
+            request named none.
+          type: object
+          allOf:
+            - $ref: "#/components/schemas/MerchantFeeEntity"
         amountOutEstimated:
           type: string
           example: "22.189466"
@@ -12929,6 +13085,7 @@ components:
         - amountIn
         - feeBps
         - feeAmount
+        - merchantFee
         - amountOutEstimated
         - amountOutMin
         - slippageBps
@@ -13077,6 +13234,13 @@ components:
         feeAmount:
           type: string
           example: "0.5"
+        merchantFee:
+          nullable: true
+          description: The merchant fee NEAR Intents pays as an app fee; null when the
+            request named none.
+          type: object
+          allOf:
+            - $ref: "#/components/schemas/MerchantFeeEntity"
         amountOutEstimated:
           type: string
           example: "22.189466"
@@ -13177,6 +13341,7 @@ components:
         - amountIn
         - feeBps
         - feeAmount
+        - merchantFee
         - amountOutEstimated
         - amountOutMin
         - slippageBps
@@ -13345,6 +13510,13 @@ components:
         feeAmount:
           type: string
           example: "0.5"
+        merchantFee:
+          nullable: true
+          description: The merchant fee NEAR Intents pays as an app fee; null when the
+            request named none.
+          type: object
+          allOf:
+            - $ref: "#/components/schemas/MerchantFeeEntity"
         amountOutEstimated:
           type: string
           example: "22.189466"
@@ -13450,6 +13622,7 @@ components:
         - amountIn
         - feeBps
         - feeAmount
+        - merchantFee
         - amountOutEstimated
         - amountOutMin
         - slippageBps
@@ -20001,6 +20174,7 @@ components:
             - expired
             - network_unsupported
             - asset_unsupported
+            - merchant_fee_unsupported
             - provider_error
             - provider_unavailable
             - quote_not_found
