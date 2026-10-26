@@ -7,6 +7,9 @@ import {
   TransactionBuilder,
 } from '@stellar/stellar-sdk';
 import type { PaymentIntent } from '@generated/prisma/client';
+import { decodeBase58, encodeBase58 } from '@/chains/chain-address';
+import { SolanaPayTransactionBuilder } from '@/payment-intents/solana-pay-transaction.builder';
+import { parseSolanaTransaction } from '@/solana/solana-transaction';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import {
   PAYMENT_LINK_SELECT,
@@ -258,6 +261,8 @@ describe('PaymentLinksService.findPublic', () => {
     const service = new PaymentLinksService(
       { paymentIntent: { findUnique } } as never,
       links,
+      {} as never,
+      {} as never,
     );
     return { service, findUnique };
   }
@@ -359,6 +364,8 @@ describe('PaymentLinksService.payerTransaction (a Stellar link with a merchant f
         paymentIntent: { findUnique: jest.fn().mockResolvedValue(row) },
       } as never,
       links,
+      {} as never,
+      {} as never,
     );
   }
 
@@ -405,5 +412,112 @@ describe('PaymentLinksService.payerTransaction (a Stellar link with a merchant f
       .payerTransaction('cmh4x2k9a0001l70g8v5q3z2w', PAYER)
       .catch((e: unknown) => e);
     expect((err as ApiError).code).toBe(ApiErrorCode.InvalidStateTransition);
+  });
+});
+
+describe('PaymentLinksService Solana Pay (a Solana link with a merchant fee)', () => {
+  const k = (n: number) => encodeBase58(new Uint8Array(32).fill(n));
+  const MERCHANT_SOL = k(2);
+  const FEE_SOL = k(3);
+  const REFERENCE = k(4);
+  const PAYER_SOL = k(1);
+  const solanaRow = (over: Record<string, unknown> = {}) =>
+    fullRow({
+      chain: 'solana',
+      destination: MERCHANT_SOL,
+      chainReference: REFERENCE,
+      amount: '1.5',
+      asset: 'native',
+      assetIssuer: null,
+      assetDecimals: null,
+      memo: '42',
+      merchantFee: {
+        bps: 0,
+        fixed: '0.05',
+        amount: '0.05',
+        asset: 'native',
+        wallet: FEE_SOL,
+        paidBy: 'recipient',
+      },
+      ...over,
+    });
+  const rpc = {
+    getLatestBlockhash: jest.fn().mockResolvedValue(k(9)),
+    getAccountOwner: jest.fn(),
+  };
+  const config = {
+    get: () => ({ checkoutUrl: 'https://payments.example' }),
+  } as never;
+  function make(row: PaymentIntent | null) {
+    return new PaymentLinksService(
+      {
+        paymentIntent: { findUnique: jest.fn().mockResolvedValue(row) },
+      } as never,
+      new Sep7LinkBuilder({} as never, {} as never, {} as never),
+      new SolanaPayTransactionBuilder(rpc as never),
+      config,
+    );
+  }
+
+  it('answers the label and icon a wallet shows', async () => {
+    await expect(
+      make(solanaRow()).solanaPayInfo('cmh4x2k9a0001l70g8v5q3z2w'),
+    ).resolves.toEqual({
+      label: 'Cosmos Pay',
+      icon: 'https://payments.example/android-chrome-512x512.png',
+    });
+  });
+
+  it('builds the memo, the merchant leg carrying the reference, and the fee', async () => {
+    const answer = await make(solanaRow()).solanaPayTransaction(
+      'cmh4x2k9a0001l70g8v5q3z2w',
+      PAYER_SOL,
+    );
+
+    const tx = parseSolanaTransaction(
+      Buffer.from(answer.transaction, 'base64'),
+    );
+    expect(tx.signers).toEqual([PAYER_SOL]);
+    const bytes = Buffer.from(tx.message);
+    const has = (key: string) =>
+      bytes.includes(Buffer.from(decodeBase58(key)!));
+    for (const key of [MERCHANT_SOL, FEE_SOL, REFERENCE, k(9)]) {
+      expect(has(key)).toBe(true);
+    }
+    // 1.5 SOL less a 0.05 fee: 1.45 SOL (1,450,000,000 lamports) to the
+    // merchant, 50,000,000 to the fee wallet, as System Transfer data.
+    const lamports = (n: bigint) => {
+      const b = Buffer.alloc(12);
+      b.writeUInt32LE(2, 0);
+      b.writeBigUInt64LE(n, 4);
+      return b;
+    };
+    expect(bytes.includes(lamports(1_450_000_000n))).toBe(true);
+    expect(bytes.includes(lamports(50_000_000n))).toBe(true);
+    expect(answer.message).toBe('Order #24');
+  });
+
+  it('refuses a link that is not a transaction request, one no longer open, and a bad account', async () => {
+    const codeOf = (p: Promise<unknown>) =>
+      p.then(() => null).catch((e: ApiError) => e.code);
+    expect(
+      await codeOf(make(fullRow()).solanaPayInfo('cmh4x2k9a0001l70g8v5q3z2w')),
+    ).toBe(ApiErrorCode.ValidationFailed);
+    expect(
+      await codeOf(
+        make(solanaRow({ status: 'EXPIRED' })).solanaPayTransaction(
+          'cmh4x2k9a0001l70g8v5q3z2w',
+          PAYER_SOL,
+        ),
+      ),
+    ).toBe(ApiErrorCode.InvalidStateTransition);
+    expect(
+      await codeOf(
+        make(solanaRow()).solanaPayTransaction(
+          'cmh4x2k9a0001l70g8v5q3z2w',
+          'GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ',
+        ),
+      ),
+    ).toBe(ApiErrorCode.ValidationFailed);
   });
 });

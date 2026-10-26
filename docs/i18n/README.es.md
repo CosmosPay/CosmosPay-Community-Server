@@ -288,6 +288,8 @@ consola llega a ella. Las rutas usan la forma `{param}` de OpenAPI.
 | POST | `/v1/payment-intents/{id}/validate` | `payments:write` |  |
 | GET | `/v1/payment-links/{id}` | ninguno — `@Public()`, presupuesto por dirección de cliente |  |
 | POST | `/v1/payment-links/{id}/transaction` | ninguno: `@Public()`, presupuesto por dirección de cliente |  |
+| GET | `/v1/payment-links/{id}/solana-pay` | ninguno: `@Public()`, presupuesto por dirección de cliente |  |
+| POST | `/v1/payment-links/{id}/solana-pay` | ninguno: `@Public()`, presupuesto por dirección de cliente |  |
 | GET | `/v1/plugins` | `plugins:read` |  |
 | GET | `/v1/plugins/{slug}` | `plugins:read` |  |
 | PUT | `/v1/plugins/{slug}/installation` | `plugins:write` |  |
@@ -1439,11 +1441,12 @@ cambia.
 | Swaps en Stellar (`POST /v1/swaps`) | Con su propio `payment` en el activo de origen, en la transacción del swap, después de la comisión del plan. `wallet` es una cuenta de Stellar que tiene la trustline del activo de origen (si no, se rechaza antes de construir nada) |
 | Enlaces de pago en Stellar (`POST /v1/payment-intents/tx` y `/pay`) | Un segundo `payment` en el mismo envelope, a `wallet`, después del del comercio. El envelope de un intent `tx` lleva los dos. Un enlace `pay` no puede (SEP-7 `pay` paga a una sola cuenta) y necesita un `amount`: su `uri` es el checkout alojado (`PAYMENT_LINK_CHECKOUT_URL/<id>`), el enlace público dice `payerAccountRequired: true` y `POST /v1/payment-links/{id}/transaction` arma el envelope del pagador a partir de su cuenta. El intent solo se liquida con una transacción que paga los dos tramos con su memo |
 | Swaps entre cadenas (`POST /v1/cross-chain-swaps`) | Una segunda app fee de NEAR Intents. `wallet` es un id de cuenta de NEAR, acreditada dentro de NEAR Intents. Las app fees son puntos básicos enteros del depósito, así que la comisión se convierte en los puntos básicos que representa, redondeados hacia abajo; una comisión menor a un punto básico se rechaza. Con `payer`, la comisión del plan también es una parte del depósito mayor |
+| Enlaces de pago en Solana (`POST /v1/payment-intents/pay`, `chain: solana`) | Un transfer request de Solana Pay nombra un solo destinatario, así que ese enlace (con `amount`) es un **transaction request** de Solana Pay: `uri` es `solana:<PAYMENT_LINK_API_URL>/v1/payment-links/{id}/solana-pay`, y la wallet le envía por POST la cuenta del pagador para obtener la transacción: el memo, la transferencia al comercio con la referencia del enlace y la de la comisión (las cuentas de token se crean si faltan, a cargo del pagador). Una comisión en SOL va a una cuenta que ya existe. El observer la encuentra por la referencia y solo liquida con los dos tramos |
 | Swaps en Solana y Monad | Todavía no: Jupiter y Kuru Flow pagan una sola comisión de integrador por swap y la usa la comisión del plan (`400 merchant_fee_unsupported`) |
 
-Los enlaces de pago en Solana y Monad responden `merchant_fee_unsupported`. Los pagos
-privados, USDT0 y la liquidez suman el campo a medida que cada uno tenga una forma de
-dividir el pago on-chain; hasta entonces sus rutas lo rechazan como campo desconocido
+Los enlaces de pago en Monad responden `merchant_fee_unsupported`. Los pagos privados,
+USDT0 y la liquidez suman el campo a medida que cada uno tenga una forma de dividir el pago
+on-chain; hasta entonces sus rutas lo rechazan como campo desconocido
 (`400 validation_failed`).
 
 ## USDT0 desde Stellar (LayerZero)
@@ -2188,6 +2191,11 @@ misma lista `PLUGINS_ENABLED` que los plugins aislados.
   `POST` con `Content-Type`), o el checkout no puede armarlo.
 - **Nueva variable `PAYMENT_LINK_CHECKOUT_URL`** (por defecto
   `https://payments.cosmospay.lat`): adónde apunta el `uri` de esos enlaces.
+- **Los enlaces de pago en Solana aceptan `merchantFee`** (con `amount`): el enlace es un
+  transaction request de Solana Pay en las nuevas rutas sin clave `GET` / `POST
+  /v1/payment-links/{id}/solana-pay` (`@Public()`, presupuesto por dirección), que sirve la
+  ruta sin clave de payment-links del gateway. **Nueva variable `PAYMENT_LINK_API_URL`**
+  (por defecto `WALLET_AUTH_PUBLIC_BASE_URL`).
 
 ### Los listados siguen la red de la clave; las lecturas del dashboard se cachean
 
@@ -3078,6 +3086,7 @@ Cada variable leída de `process.env` en `src/` se valida en el arranque mediant
 | `OBSERVER_BATCH_SIZE` | no | `50` | Máximo de intenciones/swaps por ciclo del observador |
 | `PAYMENT_INTENT_TTL_SECONDS` | no | `3600` | Vida de una intención impaga antes de pasar a `EXPIRED` |
 | `PAYMENT_LINK_CHECKOUT_URL` | no | `https://payments.cosmospay.lat` | El checkout alojado que abre un enlace de pago de Stellar con comisión del comercio (`<url>/<id>`) |
+| `PAYMENT_LINK_API_URL` | no | `WALLET_AUTH_PUBLIC_BASE_URL` | La URL pública del gateway para esta API, que un enlace de pago de Solana con comisión del comercio nombra como transaction request de Solana Pay; sin ella ese enlace responde `503 misconfigured` |
 | `WEBHOOK_TIMEOUT_MS` | no | `5000` | Fallback heredado del timeout de webhooks (ms) |
 | `WEBHOOK_CONNECT_TIMEOUT_MS` | no | `3000` | Presupuesto de conexión de los webhooks salientes (ms) |
 | `WEBHOOK_READ_TIMEOUT_MS` | no | `5000` | Presupuesto de lectura de los webhooks salientes (ms) |

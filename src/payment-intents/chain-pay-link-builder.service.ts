@@ -80,6 +80,27 @@ export class ChainPayLinkBuilder {
     return builders[chain]();
   }
 
+  /**
+   * A Solana merchant fee in SOL must go to an account that exists: a transfer
+   * that would create one needs the rent-exempt minimum and fails below it, so
+   * a small fee to a new wallet would fail every payment. A token fee needs
+   * nothing (the payment creates the wallet's token account).
+   */
+  async assertFeeWalletCanReceive(
+    chain: OtherChain,
+    network: StellarNetwork,
+    wallet: string,
+    assetIssuer: string | null,
+  ): Promise<void> {
+    if (chain !== 'solana' || assetIssuer) return;
+    if ((await this.solana.getAccountOwner(network, wallet)) === null) {
+      throw ApiError.badRequest(
+        ApiErrorCode.ValidationFailed,
+        'merchantFee.wallet does not exist on this network yet: a SOL fee goes to an existing account. Fund it first.',
+      );
+    }
+  }
+
   /** The destination and token, in the spelling this chain stores them in. */
   normalize(
     chain: OtherChain,

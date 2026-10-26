@@ -136,6 +136,23 @@ export class SolanaRpcClient {
     }
   }
 
+  /**
+   * The cluster's latest blockhash, which a transaction built here names so a
+   * wallet can sign it as is (it may still replace it, as Solana Pay allows).
+   */
+  async getLatestBlockhash(network: StellarNetwork): Promise<string> {
+    try {
+      const answer = await this.call<{ value: { blockhash: string } }>(
+        network,
+        'getLatestBlockhash',
+        [{ commitment: SOLANA_COMMITMENT }],
+      );
+      return answer.value.blockhash;
+    } catch (err) {
+      throw rpcFault(err, 'getLatestBlockhash');
+    }
+  }
+
   /** Newest-first signatures of transactions that touched `address`. */
   async getSignaturesForAddress(
     network: StellarNetwork,

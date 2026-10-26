@@ -135,14 +135,15 @@ export class CreatePayPaymentIntentDto {
   @ApiPropertyOptional({
     type: MerchantFeeDto,
     description:
-      'Stellar only for now, and only with an `amount`: your own fee on this ' +
-      'payment, paid in its asset to `wallet` (a Stellar account that can ' +
-      'receive the asset, not `destination`). A SEP-7 `pay` link pays one ' +
-      'account, so such a link asks for its payer first: `uri` is the hosted ' +
-      'checkout, and `POST /v1/payment-links/{id}/transaction` builds the ' +
-      "payer's envelope with both payments. `paidBy: recipient` takes the " +
-      'fee from `amount`; `payer` adds it on top. Solana and Monad answer ' +
-      '`merchant_fee_unsupported`.',
+      'Only with an `amount`: your own fee on this payment, paid in its asset ' +
+      'to `wallet` (an account on the link\x27s chain, not `destination`). ' +
+      '`paidBy: recipient` takes the fee from `amount`; `payer` adds it on ' +
+      'top. Stellar: a SEP-7 `pay` link pays one account, so `uri` is the ' +
+      'hosted checkout, which asks for the payer and has ' +
+      '`POST /v1/payment-links/{id}/transaction` build the envelope with ' +
+      'both payments. Solana: `uri` is a Solana Pay transaction request ' +
+      '(`/v1/payment-links/{id}/solana-pay`); a SOL fee goes to an existing ' +
+      'account. Monad answers `merchant_fee_unsupported`.',
   })
   @IsOptional()
   @ValidateNested()

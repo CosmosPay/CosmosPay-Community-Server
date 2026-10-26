@@ -289,6 +289,45 @@ describe('Payment links (e2e)', () => {
     // Refused before the handler ran: nothing was read.
     expect(prismaMock.paymentIntent.findUnique).toHaveBeenCalledTimes(1);
   });
+  describe('the Solana Pay transaction request (/v1/payment-links/{id}/solana-pay)', () => {
+    it('is reachable with no key and refuses a link that is not one', async () => {
+      const read = await request(http())
+        .get('/v1/payment-links/cmh4x2k9a0001l70g8v5q3z2w/solana-pay')
+        .expect(400);
+      expect(read.body.message).toBe(
+        'This payment link is not a Solana Pay transaction request: open its uri',
+      );
+      expect(read.headers['cache-control']).toBe('no-store');
+      expect(prismaMock.consumer.upsert).not.toHaveBeenCalled();
+
+      const unknown = await request(http())
+        .post('/v1/payment-links/cmh4x2k9a0009l70gneverwas/solana-pay')
+        .send({ account: '7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU' })
+        .expect(404);
+      expect(unknown.body.code).toBe('not_found');
+      const keys = prismaMock.$queryRaw.mock.calls.map(
+        ([, key]: [unknown, string]) => key,
+      );
+      expect(
+        keys.some((key: string) => /^payment-links:read:anonymous:/.test(key)),
+      ).toBe(true);
+      expect(
+        keys.some((key: string) =>
+          /^payment-links:transaction:anonymous:/.test(key),
+        ),
+      ).toBe(true);
+    });
+
+    it('refuses an account that is not a Solana address before reading the link', async () => {
+      const res = await request(http())
+        .post('/v1/payment-links/cmh4x2k9a0001l70g8v5q3z2w/solana-pay')
+        .send({ account: 'not-an-account' })
+        .expect(400);
+      expect(res.body.code).toBe('validation_failed');
+      expect(prismaMock.paymentIntent.findUnique).not.toHaveBeenCalled();
+    });
+  });
+
   describe('POST /v1/payment-links/{id}/transaction', () => {
     const PAYER = 'GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ';
 

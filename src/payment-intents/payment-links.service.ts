@@ -1,16 +1,27 @@
 import { Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import type { Prisma } from '@generated/prisma/client';
+import { CHAIN_ADDRESS_RULES } from '@/chains/chain-address';
 import { isChain } from '@/chains/chains.constants';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { readMerchantFeeRecord } from '@/common/merchant-fee/merchant-fee';
-import type { StellarNetwork } from '@/config/configuration';
+import type { AppConfig, StellarNetwork } from '@/config/configuration';
+import type {
+  SolanaPayInfoEntity,
+  SolanaPayTransactionEntity,
+} from '@/payment-intents/entities/solana-pay.entity';
+import { SolanaPayTransactionBuilder } from '@/payment-intents/solana-pay-transaction.builder';
 import type { PayerTransactionEntity } from '@/payment-intents/entities/payer-transaction.entity';
 import { paymentLegs } from '@/payment-intents/payment-legs';
 import { resolveAsset } from '@/stellar/asset';
 import { STELLAR_DECIMALS } from '@/stellar/stellar.constants';
 import { PrismaService } from '@/prisma/prisma.service';
 import type { PublicPaymentLinkEntity } from '@/payment-intents/entities/public-payment-link.entity';
-import { effectiveCheckoutTheme } from '@/payment-intents/payment-intents.constants';
+import {
+  effectiveCheckoutTheme,
+  SOLANA_PAY_ICON_PATH,
+  SOLANA_PAY_LABEL,
+} from '@/payment-intents/payment-intents.constants';
 import { PAY_TO } from '@/payment-intents/pay-to';
 import { Sep7LinkBuilder } from '@/payment-intents/sep7-link-builder.service';
 
@@ -34,6 +45,9 @@ export const PAYMENT_LINK_SELECT = {
   amount: true,
   asset: true,
   assetIssuer: true,
+  // Never answered (toPublicPaymentLink leaves it out): the Solana Pay
+  // transaction is built in the token's own units.
+  assetDecimals: true,
   memo: true,
   msg: true,
   uri: true,
@@ -122,6 +136,8 @@ export class PaymentLinksService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly links: Sep7LinkBuilder,
+    private readonly solanaPay: SolanaPayTransactionBuilder,
+    private readonly config: ConfigService<AppConfig, true>,
   ) {}
 
   /**
@@ -191,5 +207,62 @@ export class PaymentLinksService {
       fee: legs.fee,
     });
     return { xdr, uri, qr: await this.links.qr(uri) };
+  }
+
+  /**
+   * The GET of a Solana Pay transaction request: who asks (a label) and an
+   * icon, for the wallet to show before it asks for the transaction.
+   */
+  async solanaPayInfo(id: string): Promise<SolanaPayInfoEntity> {
+    await this.solanaPayRow(id);
+    const { checkoutUrl } = this.config.get('paymentIntents', { infer: true });
+    return {
+      label: SOLANA_PAY_LABEL,
+      icon: `${checkoutUrl}${SOLANA_PAY_ICON_PATH}`,
+    };
+  }
+
+  /**
+   * The POST of a Solana Pay transaction request: the unsigned transaction
+   * `account` signs, with the merchant's transfer, the fee's and the memo.
+   * Persists nothing: the observer finds the payment by the link's reference.
+   */
+  async solanaPayTransaction(
+    id: string,
+    account: string,
+  ): Promise<SolanaPayTransactionEntity> {
+    if (!CHAIN_ADDRESS_RULES.solana.isValid(account)) {
+      throw ApiError.badRequest(
+        ApiErrorCode.ValidationFailed,
+        `account must be ${CHAIN_ADDRESS_RULES.solana.expected}`,
+      );
+    }
+    const row = await this.solanaPayRow(id);
+    if (row.status !== 'PENDING') {
+      throw ApiError.badRequest(
+        ApiErrorCode.InvalidStateTransition,
+        `Payment intent ${id} is ${row.status}: it can no longer be paid`,
+      );
+    }
+    const transaction = await this.solanaPay.build(row, account);
+    return { transaction, ...(row.msg ? { message: row.msg } : {}) };
+  }
+
+  /** A Solana link with a merchant fee: the only links that are transaction requests. */
+  private async solanaPayRow(id: string): Promise<PaymentLinkRow> {
+    const row = await this.prisma.paymentIntent.findUnique({
+      where: { id },
+      select: PAYMENT_LINK_SELECT,
+    });
+    if (!row) {
+      throw ApiError.notFound(`Payment intent ${id} not found`);
+    }
+    if (row.chain !== 'solana' || !readMerchantFeeRecord(row.merchantFee)) {
+      throw ApiError.badRequest(
+        ApiErrorCode.ValidationFailed,
+        'This payment link is not a Solana Pay transaction request: open its uri',
+      );
+    }
+    return row;
   }
 }

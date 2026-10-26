@@ -374,6 +374,13 @@ export interface AppConfig {
      * `<checkoutUrl>/<id>`, where the page asks for the payer's account.
      */
     checkoutUrl: string;
+    /**
+     * The gateway's public URL for this API (e.g. https://api.cosmospay.lat/cosmos-api),
+     * which a Solana link with a merchant fee names as its Solana Pay transaction
+     * request: the wallet asks it for the transaction with both transfers.
+     * `PAYMENT_LINK_API_URL`, else `WALLET_AUTH_PUBLIC_BASE_URL` (the same gateway).
+     */
+    apiUrl: string;
   };
   /**
    * Private payments, per network tier. Null where `ZK_PAYMENTS_<NETWORK>_TOKEN` is
@@ -966,6 +973,11 @@ export default (): AppConfig => ({
     checkoutUrl: (
       process.env.PAYMENT_LINK_CHECKOUT_URL?.trim() ||
       DEFAULT_PAYMENT_LINK_CHECKOUT_URL
+    ).replace(/\/+$/, ''),
+    apiUrl: (
+      process.env.PAYMENT_LINK_API_URL?.trim() ||
+      process.env.WALLET_AUTH_PUBLIC_BASE_URL?.trim() ||
+      ''
     ).replace(/\/+$/, ''),
   },
   zkPayments: {

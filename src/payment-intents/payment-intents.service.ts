@@ -67,8 +67,10 @@ import {
   type Chain,
   DEFAULT_CHAIN,
   isChain,
+  NATIVE_DECIMALS,
   type OtherChain,
 } from '@/chains/chains.constants';
+import { parseUnits } from '@/chains/units';
 
 /** Who triggered a status change — stored on the audit row. */
 export type PaymentIntentTransitionActor =
@@ -507,10 +509,26 @@ export class PaymentIntentsService {
         `callback is a SEP-7 field and is not supported on ${chain}.`,
       );
     }
-    if (dto.merchantFee) {
+    if (dto.merchantFee && chain !== 'solana') {
       throw ApiError.badRequest(
         ApiErrorCode.MerchantFeeUnsupported,
         `A merchant fee is not available on ${chain} payment links yet: their link pays one account.`,
+      );
+    }
+    if (dto.merchantFee && dto.amount === undefined) {
+      throw ApiError.badRequest(
+        ApiErrorCode.ValidationFailed,
+        'A merchant fee needs an amount: an open-amount link has nothing to take it from',
+      );
+    }
+    if (
+      dto.merchantFee &&
+      !this.config.get('paymentIntents', { infer: true }).apiUrl
+    ) {
+      throw ApiError.unavailable(
+        ApiErrorCode.Misconfigured,
+        'A Solana payment link with a merchant fee is a Solana Pay transaction request, ' +
+          'which names the gateway: PAYMENT_LINK_API_URL is not set.',
       );
     }
     const network = this.resolveNetwork(consumer);
@@ -531,7 +549,18 @@ export class PaymentIntentsService {
     };
 
     const existing = await this.findByMemo(localConsumer.id, memo);
-    if (existing) return this.replayOf(existing, terms);
+    if (existing) {
+      // The fee's fixed part is read in the stored asset's decimals.
+      return this.replayOf(
+        existing,
+        terms,
+        resolveMerchantFee(
+          dto.merchantFee,
+          existing.assetDecimals ?? NATIVE_DECIMALS[chain],
+          CHAIN_ADDRESS_RULES[chain],
+        ),
+      );
+    }
 
     const link = await this.chainLinks.build(chain, {
       network,
@@ -543,14 +572,29 @@ export class PaymentIntentsService {
       msg: dto.msg,
     });
 
-    const intent = await this.persist({
+    // A Solana link with a merchant fee is a Solana Pay transaction request:
+    // the wallet asks the gateway for the transaction with both transfers
+    // (`/v1/payment-links/{id}/solana-pay`), so its link names the intent id.
+    const merchant = dto.merchantFee
+      ? this.chainMerchantFee(chain, dto, link, normalized.destination)
+      : null;
+    if (merchant) {
+      await this.chainLinks.assertFeeWalletCanReceive(
+        chain,
+        network,
+        merchant.terms.wallet,
+        link.assetIssuer,
+      );
+    }
+    let intent = await this.persist({
       ...terms,
       consumerId: localConsumer.id,
       memo,
       status: 'PENDING',
       xdr: null,
-      uri: link.uri,
+      uri: merchant ? '' : link.uri,
       checkoutTheme: dto.checkoutTheme ?? null,
+      ...merchantFeeColumn(merchant?.record),
       assetDecimals: link.assetDecimals,
       chainReference: link.chainReference,
       chainCursor: link.chainCursor,
@@ -579,7 +623,14 @@ export class PaymentIntentsService {
       return this.replayOf(
         await this.findByMemo(localConsumer.id, memo),
         terms,
+        merchant?.terms,
       );
+    }
+    if (merchant) {
+      intent = await this.prisma.paymentIntent.update({
+        where: { id: intent.id },
+        data: { uri: this.solanaPayLink(intent.id) },
+      });
     }
 
     this.logger.log(
@@ -628,6 +679,43 @@ export class PaymentIntentsService {
       // `net` is `amount` itself when the payer pays the fee on top.
       destinationAmount: fromStroops(split.net),
     };
+  }
+
+  /**
+   * A Solana or Monad intent's merchant fee, checked against the asset the link
+   * resolved: its decimals, the chain's address rule, a wallet other than the
+   * destination, and something left for the destination.
+   */
+  private chainMerchantFee(
+    chain: OtherChain,
+    dto: CreatePayPaymentIntentDto,
+    link: { asset: string; assetDecimals: number | null },
+    destination: string,
+  ): { terms: MerchantFeeTerms; record: MerchantFeeRecord } {
+    const decimals = link.assetDecimals ?? NATIVE_DECIMALS[chain];
+    const terms = resolveMerchantFee(
+      dto.merchantFee,
+      decimals,
+      CHAIN_ADDRESS_RULES[chain],
+    )!;
+    if (terms.wallet === destination) {
+      throw ApiError.badRequest(
+        ApiErrorCode.ValidationFailed,
+        "merchantFee.wallet must be another account than the payment's own",
+      );
+    }
+    const split = splitMerchantFee(parseUnits(dto.amount!, decimals), terms);
+    assertMerchantFeeCovered(split);
+    return {
+      terms,
+      record: merchantFeeRecord(terms, split.fee, decimals, link.asset),
+    };
+  }
+
+  /** A Solana Pay transaction request for intent `id`, on the gateway. */
+  private solanaPayLink(id: string): string {
+    const { apiUrl } = this.config.get('paymentIntents', { infer: true });
+    return `solana:${encodeURIComponent(`${apiUrl}/v1/payment-links/${id}/solana-pay`)}`;
   }
 
   /** The hosted checkout of intent `id`: where a link with a merchant fee sends its payer. */

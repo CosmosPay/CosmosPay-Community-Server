@@ -41,3 +41,13 @@ export const ASSOCIATED_TOKEN_PROGRAM_ID =
  * the same transaction), so it is the mint a quote names for SOL.
  */
 export const WRAPPED_SOL_MINT = 'So11111111111111111111111111111111111111112';
+
+/** The System Program: native SOL transfers and account creation. */
+export const SYSTEM_PROGRAM_ID = '11111111111111111111111111111111';
+
+/**
+ * SPL Memo (v2): records text on-chain. A Solana Pay transfer carries the
+ * intent's memo with it, as a wallet does for a transfer request.
+ */
+export const SPL_MEMO_PROGRAM_ID =
+  'MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr';

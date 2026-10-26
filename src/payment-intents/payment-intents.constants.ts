@@ -178,6 +178,14 @@ export const PAYMENT_LINK_READ_RATE_LIMIT = {
  * asset) and builds an envelope. A payer builds one, maybe again after a
  * timeout lapses; twenty a minute is a checkout retrying many times over.
  */
+/**
+ * What a wallet shows for a Solana Pay transaction request (its GET): who asks
+ * for the payment, and an icon (an absolute https image, served by the hosted
+ * checkout's site on every domain).
+ */
+export const SOLANA_PAY_LABEL = 'Cosmos Pay';
+export const SOLANA_PAY_ICON_PATH = '/android-chrome-512x512.png';
+
 export const PAYMENT_LINK_TRANSACTION_RATE_LIMIT = {
   name: 'payment-links:transaction',
   limit: 20,

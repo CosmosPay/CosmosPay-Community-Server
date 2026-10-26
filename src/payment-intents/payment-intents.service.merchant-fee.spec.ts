@@ -73,8 +73,29 @@ describe('PaymentIntentsService merchant fee', () => {
         timeoutSeconds: 300,
         ttlSeconds: 3600,
         checkoutUrl: 'https://payments.example',
+        apiUrl: 'https://api.example/cosmos-api',
       }),
     } as never;
+    // A Solana link: the asset resolves as SOL, the reference is fixed.
+    const chainLinks = {
+      normalize: (_chain: string, dto: { destination: string }) => ({
+        destination: dto.destination,
+        asset: 'native',
+        assetIssuer: null,
+      }),
+      build: jest.fn(async (_chain: string, req: { destination: string }) => ({
+        destination: req.destination,
+        asset: 'native',
+        assetIssuer: null,
+        assetDecimals: null,
+        uri: `solana:${req.destination}?reference=REF`,
+        chainReference: 'REF',
+        chainCursor: null,
+        networkFee: null,
+        deposit: null,
+      })),
+      assertFeeWalletCanReceive: jest.fn(),
+    };
     const service = new PaymentIntentsService(
       config,
       prisma,
@@ -87,9 +108,9 @@ describe('PaymentIntentsService merchant fee', () => {
       ),
       new ConsumerResolverService(prisma),
       { ensureForPayer: jest.fn() } as never,
-      {} as never,
+      chainLinks as never,
     );
-    return { service, prisma, accounts };
+    return { service, prisma, accounts, chainLinks };
   }
 
   const record = (paidBy: 'recipient' | 'payer') => ({
@@ -205,8 +226,8 @@ describe('PaymentIntentsService merchant fee', () => {
       (
         await errorOf(
           service.createPay(consumer, {
-            chain: 'solana',
-            destination: '7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU',
+            chain: 'monad',
+            destination: '0x8ba1f109551bD432803012645Ac136ddd64DBA72',
             amount: '20',
             memo: '12',
             merchantFee,
@@ -262,5 +283,43 @@ describe('PaymentIntentsService merchant fee', () => {
       }),
     );
     expect(other?.code).toBe(ApiErrorCode.IdempotencyConflict);
+  });
+
+  it('makes a Solana link with a fee a Solana Pay transaction request on the gateway', async () => {
+    const SOL_DEST = '7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU';
+    const SOL_FEE = 'GsbwXfJraMomNxBcjYLcG3mxkBUiyWXAB32fGbSMQRdW';
+    const { service, prisma, chainLinks } = build(null);
+
+    const view = await service.createPay(consumer, {
+      chain: 'solana',
+      destination: SOL_DEST,
+      amount: '2',
+      memo: '14',
+      merchantFee: { bps: 250, wallet: SOL_FEE },
+    });
+
+    expect(view.uri).toBe(
+      'solana:' +
+        encodeURIComponent(
+          'https://api.example/cosmos-api/v1/payment-links/pi_new/solana-pay',
+        ),
+    );
+    // 2.5% of 2 SOL, in SOL.
+    expect(
+      prisma.paymentIntent.create.mock.calls[0][0].data.merchantFee,
+    ).toEqual({
+      bps: 250,
+      fixed: '0',
+      amount: '0.05',
+      asset: 'native',
+      wallet: SOL_FEE,
+      paidBy: 'recipient',
+    });
+    expect(chainLinks.assertFeeWalletCanReceive).toHaveBeenCalledWith(
+      'solana',
+      'testnet',
+      SOL_FEE,
+      null,
+    );
   });
 });

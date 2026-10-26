@@ -1060,6 +1060,217 @@ paths:
       x-cosmos-upstream:
         - Horizon
       security: []
+  /v1/payment-links/{id}/solana-pay:
+    get:
+      description: A Solana payment link with a merchant fee is a Solana Pay
+        transaction request (`solana:<this URL>`), because a transfer request
+        names one recipient. A wallet reads this first, then POSTs the payer’s
+        account.
+      operationId: PaymentLinksController_solanaPayInfo_v1
+      parameters:
+        - name: id
+          required: true
+          in: path
+          description: The payment intent id.
+          schema:
+            example: cmh4x2k9a0001l70g8v5q3z2w
+            type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SolanaPayInfoEntity"
+          headers:
+            ratelimit-limit:
+              description: Requests allowed in the current window.
+              schema:
+                type: integer
+                example: 30
+            ratelimit-remaining:
+              description: Requests left in the current window.
+              schema:
+                type: integer
+                example: 0
+            ratelimit-reset:
+              description: Seconds until the window resets.
+              schema:
+                type: integer
+                example: 42
+        "400":
+          description: "`validation_failed`: the link is not a Solana Pay transaction
+            request (only a Solana link with a merchant fee is), or `account` is
+            not a Solana address. `invalid_state_transition`: the link is no
+            longer open."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+              examples:
+                validation_failed:
+                  summary: "validation_failed: Not a transaction request"
+                  value:
+                    statusCode: 400
+                    code: validation_failed
+                    error: Bad Request
+                    message: "This payment link is not a Solana Pay transaction request: open its
+                      uri"
+                    path: /v1/payment-links/cmh4x2k9a0001l70g8v5q3z2w/solana-pay
+                    timestamp: 2026-09-01T12:00:00.000Z
+                invalid_state_transition:
+                  summary: "invalid_state_transition: The link is no longer open"
+                  value:
+                    statusCode: 400
+                    code: invalid_state_transition
+                    error: Bad Request
+                    message: "Payment intent cmh4x2k9a0001l70g8v5q3z2w is EXPIRED: it can no longer
+                      be paid"
+                    path: /v1/payment-links/cmh4x2k9a0001l70g8v5q3z2w/solana-pay
+                    timestamp: 2026-09-01T12:00:00.000Z
+        "404":
+          description: No payment intent has this id.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+              examples:
+                not_found:
+                  summary: "not_found: No payment intent has this id"
+                  value:
+                    statusCode: 404
+                    code: not_found
+                    error: Not Found
+                    message: Payment intent cmh4x2k9a0001l70g8v5q3z2w not found
+                    path: /v1/payment-links/cmh4x2k9a0001l70g8v5q3z2w/solana-pay
+                    timestamp: 2026-09-01T12:00:00.000Z
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+      summary: "Solana Pay transaction request, GET: the label and icon a wallet shows
+        (no API key)"
+      tags:
+        - payment-links
+      x-cosmos-public: true
+      x-cosmos-rate-limit:
+        - name: payment-links:read
+          limit: 60
+          windowMs: 60000
+      security: []
+    post:
+      description: Given the payer’s `account`, the unsigned transaction (base64) with
+        the link’s memo, the transfer to the merchant carrying the link’s
+        reference, and the merchant fee’s transfer to its wallet (creating their
+        token accounts first when missing, paid by the payer). The link settles
+        from the ledger, found by its reference; nothing is stored. Only for an
+        open link.
+      operationId: PaymentLinksController_solanaPayTransaction_v1
+      parameters:
+        - name: id
+          required: true
+          in: path
+          description: The payment intent id.
+          schema:
+            example: cmh4x2k9a0001l70g8v5q3z2w
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SolanaPayAccountDto"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SolanaPayTransactionEntity"
+          headers:
+            ratelimit-limit:
+              description: Requests allowed in the current window.
+              schema:
+                type: integer
+                example: 30
+            ratelimit-remaining:
+              description: Requests left in the current window.
+              schema:
+                type: integer
+                example: 0
+            ratelimit-reset:
+              description: Seconds until the window resets.
+              schema:
+                type: integer
+                example: 42
+        "400":
+          description: "`validation_failed`: the link is not a Solana Pay transaction
+            request (only a Solana link with a merchant fee is), or `account` is
+            not a Solana address. `invalid_state_transition`: the link is no
+            longer open."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+              examples:
+                validation_failed:
+                  summary: "validation_failed: Not a transaction request"
+                  value:
+                    statusCode: 400
+                    code: validation_failed
+                    error: Bad Request
+                    message: "This payment link is not a Solana Pay transaction request: open its
+                      uri"
+                    path: /v1/payment-links/cmh4x2k9a0001l70g8v5q3z2w/solana-pay
+                    timestamp: 2026-09-01T12:00:00.000Z
+                invalid_state_transition:
+                  summary: "invalid_state_transition: The link is no longer open"
+                  value:
+                    statusCode: 400
+                    code: invalid_state_transition
+                    error: Bad Request
+                    message: "Payment intent cmh4x2k9a0001l70g8v5q3z2w is EXPIRED: it can no longer
+                      be paid"
+                    path: /v1/payment-links/cmh4x2k9a0001l70g8v5q3z2w/solana-pay
+                    timestamp: 2026-09-01T12:00:00.000Z
+        "404":
+          description: No payment intent has this id.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+              examples:
+                not_found:
+                  summary: "not_found: No payment intent has this id"
+                  value:
+                    statusCode: 404
+                    code: not_found
+                    error: Not Found
+                    message: Payment intent cmh4x2k9a0001l70g8v5q3z2w not found
+                    path: /v1/payment-links/cmh4x2k9a0001l70g8v5q3z2w/solana-pay
+                    timestamp: 2026-09-01T12:00:00.000Z
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "502":
+          $ref: "#/components/responses/UpstreamError"
+        "503":
+          $ref: "#/components/responses/UpstreamUnavailable"
+        "504":
+          $ref: "#/components/responses/UpstreamTimeout"
+      summary: "Solana Pay transaction request, POST: the transaction the payer signs
+        (no API key)"
+      tags:
+        - payment-links
+      x-cosmos-public: true
+      x-cosmos-rate-limit:
+        - name: payment-links:transaction
+          limit: 20
+          windowMs: 60000
+      x-cosmos-upstream:
+        - Solana
+      security: []
   /v1/customers:
     post:
       operationId: CustomersController_create_v1
@@ -10475,14 +10686,15 @@ components:
             same memo returns the stored intent with its stored design."
           example: ticket
         merchantFee:
-          description: "Stellar only for now, and only with an `amount`: your own fee on
-            this payment, paid in its asset to `wallet` (a Stellar account that
-            can receive the asset, not `destination`). A SEP-7 `pay` link pays
-            one account, so such a link asks for its payer first: `uri` is the
-            hosted checkout, and `POST /v1/payment-links/{id}/transaction`
-            builds the payer's envelope with both payments. `paidBy: recipient`
-            takes the fee from `amount`; `payer` adds it on top. Solana and
-            Monad answer `merchant_fee_unsupported`."
+          description: "Only with an `amount`: your own fee on this payment, paid in its
+            asset to `wallet` (an account on the link's chain, not
+            `destination`). `paidBy: recipient` takes the fee from `amount`;
+            `payer` adds it on top. Stellar: a SEP-7 `pay` link pays one
+            account, so `uri` is the hosted checkout, which asks for the payer
+            and has `POST /v1/payment-links/{id}/transaction` build the envelope
+            with both payments. Solana: `uri` is a Solana Pay transaction
+            request (`/v1/payment-links/{id}/solana-pay`); a SOL fee goes to an
+            existing account. Monad answers `merchant_fee_unsupported`."
           allOf:
             - $ref: "#/components/schemas/MerchantFeeDto"
       required:
@@ -11149,6 +11361,44 @@ components:
         - xdr
         - uri
         - qr
+    SolanaPayInfoEntity:
+      type: object
+      properties:
+        label:
+          type: string
+          example: Cosmos Pay
+          description: Who requests the payment.
+        icon:
+          type: string
+          example: https://payments.cosmospay.lat/android-chrome-512x512.png
+          description: An absolute https URL of an image the wallet shows.
+      required:
+        - label
+        - icon
+    SolanaPayAccountDto:
+      type: object
+      properties:
+        account:
+          type: string
+          description: The payer’s account (base58), which pays the fee and signs.
+          example: 7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU
+      required:
+        - account
+    SolanaPayTransactionEntity:
+      type: object
+      properties:
+        transaction:
+          type: string
+          description: "The unsigned transaction (base64 wire bytes): the payment to the
+            merchant, carrying the link’s reference, the merchant fee to its
+            wallet, and the link’s memo. Fee payer: the account that asked."
+          example: AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA...
+        message:
+          type: string
+          description: The link’s message, for the wallet to show.
+          example: "Order #24"
+      required:
+        - transaction
     CreateCustomerDto:
       type: object
       properties:

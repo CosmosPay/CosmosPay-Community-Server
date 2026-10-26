@@ -20,6 +20,11 @@ import { Public } from '@/common/decorators/public.decorator';
 import { RateLimit } from '@/common/decorators/rate-limit.decorator';
 import { ApiErrorCode } from '@/common/errors/api-error';
 import { PayerTransactionDto } from '@/payment-intents/dto/payer-transaction.dto';
+import { SolanaPayAccountDto } from '@/payment-intents/dto/solana-pay-account.dto';
+import {
+  SolanaPayInfoEntity,
+  SolanaPayTransactionEntity,
+} from '@/payment-intents/entities/solana-pay.entity';
 import { PayerTransactionEntity } from '@/payment-intents/entities/payer-transaction.entity';
 import { PublicPaymentLinkEntity } from '@/payment-intents/entities/public-payment-link.entity';
 import {
@@ -173,5 +178,125 @@ export class PaymentLinksController {
     @Body() dto: PayerTransactionDto,
   ): Promise<PayerTransactionEntity> {
     return this.paymentLinks.payerTransaction(id, dto.account);
+  }
+
+  @Get(':id/solana-pay')
+  @Public()
+  @RateLimit(PAYMENT_LINK_READ_RATE_LIMIT)
+  @Header('Cache-Control', 'no-store')
+  @ApiOperation({
+    summary:
+      'Solana Pay transaction request, GET: the label and icon a wallet shows (no API key)',
+    description:
+      'A Solana payment link with a merchant fee is a Solana Pay transaction ' +
+      'request (`solana:<this URL>`), because a transfer request names one ' +
+      'recipient. A wallet reads this first, then POSTs the payer’s account.',
+  })
+  @ApiParam({
+    name: 'id',
+    description: 'The payment intent id.',
+    example: 'cmh4x2k9a0001l70g8v5q3z2w',
+  })
+  @ApiOkResponse({ type: SolanaPayInfoEntity })
+  @ApiErrorResponse({
+    status: 400,
+    codes: [ApiErrorCode.ValidationFailed, ApiErrorCode.InvalidStateTransition],
+    description:
+      '`validation_failed`: the link is not a Solana Pay transaction request ' +
+      '(only a Solana link with a merchant fee is), or `account` is not a ' +
+      'Solana address. `invalid_state_transition`: the link is no longer open.',
+    examples: {
+      [ApiErrorCode.ValidationFailed]: {
+        summary: 'Not a transaction request',
+        message:
+          'This payment link is not a Solana Pay transaction request: open its uri',
+        path: '/v1/payment-links/cmh4x2k9a0001l70g8v5q3z2w/solana-pay',
+      },
+      [ApiErrorCode.InvalidStateTransition]: {
+        summary: 'The link is no longer open',
+        message:
+          'Payment intent cmh4x2k9a0001l70g8v5q3z2w is EXPIRED: it can no longer be paid',
+        path: '/v1/payment-links/cmh4x2k9a0001l70g8v5q3z2w/solana-pay',
+      },
+    },
+  })
+  @ApiErrorResponse({
+    status: 404,
+    codes: [ApiErrorCode.NotFound],
+    description: 'No payment intent has this id.',
+    examples: {
+      [ApiErrorCode.NotFound]: {
+        summary: 'No payment intent has this id',
+        message: 'Payment intent cmh4x2k9a0001l70g8v5q3z2w not found',
+        path: '/v1/payment-links/cmh4x2k9a0001l70g8v5q3z2w/solana-pay',
+      },
+    },
+  })
+  solanaPayInfo(@Param('id') id: string): Promise<SolanaPayInfoEntity> {
+    return this.paymentLinks.solanaPayInfo(id);
+  }
+
+  @Post(':id/solana-pay')
+  @Public()
+  @RateLimit(PAYMENT_LINK_TRANSACTION_RATE_LIMIT)
+  @HttpCode(HttpStatus.OK)
+  @Header('Cache-Control', 'no-store')
+  @ApiOperation({
+    summary:
+      'Solana Pay transaction request, POST: the transaction the payer signs (no API key)',
+    description:
+      'Given the payer’s `account`, the unsigned transaction (base64) with ' +
+      'the link’s memo, the transfer to the merchant carrying the link’s ' +
+      'reference, and the merchant fee’s transfer to its wallet (creating ' +
+      'their token accounts first when missing, paid by the payer). The link ' +
+      'settles from the ledger, found by its reference; nothing is stored. ' +
+      'Only for an open link.',
+  })
+  @ApiParam({
+    name: 'id',
+    description: 'The payment intent id.',
+    example: 'cmh4x2k9a0001l70g8v5q3z2w',
+  })
+  @ApiOkResponse({ type: SolanaPayTransactionEntity })
+  @ApiUpstream('Solana')
+  @ApiErrorResponse({
+    status: 400,
+    codes: [ApiErrorCode.ValidationFailed, ApiErrorCode.InvalidStateTransition],
+    description:
+      '`validation_failed`: the link is not a Solana Pay transaction request ' +
+      '(only a Solana link with a merchant fee is), or `account` is not a ' +
+      'Solana address. `invalid_state_transition`: the link is no longer open.',
+    examples: {
+      [ApiErrorCode.ValidationFailed]: {
+        summary: 'Not a transaction request',
+        message:
+          'This payment link is not a Solana Pay transaction request: open its uri',
+        path: '/v1/payment-links/cmh4x2k9a0001l70g8v5q3z2w/solana-pay',
+      },
+      [ApiErrorCode.InvalidStateTransition]: {
+        summary: 'The link is no longer open',
+        message:
+          'Payment intent cmh4x2k9a0001l70g8v5q3z2w is EXPIRED: it can no longer be paid',
+        path: '/v1/payment-links/cmh4x2k9a0001l70g8v5q3z2w/solana-pay',
+      },
+    },
+  })
+  @ApiErrorResponse({
+    status: 404,
+    codes: [ApiErrorCode.NotFound],
+    description: 'No payment intent has this id.',
+    examples: {
+      [ApiErrorCode.NotFound]: {
+        summary: 'No payment intent has this id',
+        message: 'Payment intent cmh4x2k9a0001l70g8v5q3z2w not found',
+        path: '/v1/payment-links/cmh4x2k9a0001l70g8v5q3z2w/solana-pay',
+      },
+    },
+  })
+  solanaPayTransaction(
+    @Param('id') id: string,
+    @Body() dto: SolanaPayAccountDto,
+  ): Promise<SolanaPayTransactionEntity> {
+    return this.paymentLinks.solanaPayTransaction(id, dto.account);
   }
 }
