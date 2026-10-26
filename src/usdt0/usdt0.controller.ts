@@ -198,7 +198,9 @@ export class Usdt0Controller {
     codes: [ApiErrorCode.ProviderUnavailable, ApiErrorCode.Misconfigured],
     description:
       '`provider_unavailable`: the Soroban RPC did not answer; retry. ' +
-      '`misconfigured`: STELLAR_RPC_URL_MAINNET serves another network.',
+      '`misconfigured`: STELLAR_RPC_URL_MAINNET serves another network, or ' +
+      'USDT0_FEE_WRAPPER is set with a plan commission and no ' +
+      'STELLAR_SWAP_FEE_WALLET.',
     examples: usdt0Examples('/v1/usdt0/quote', [
       ApiErrorCode.ProviderUnavailable,
       ApiErrorCode.Misconfigured,
@@ -262,7 +264,7 @@ export class Usdt0Controller {
     ],
     description:
       '`merchant_fee_unsupported`: a `merchantFee` and no merchant fee ' +
-      'wrapper configured (USDT0_MERCHANT_FEE_WRAPPER). ' +
+      'wrapper configured (USDT0_FEE_WRAPPER). ' +
       '`network_unsupported`: a dev (testnet) key; USDT0 is on Stellar ' +
       'mainnet only. `validation_failed`: the source account does not exist, ' +
       'or the recipient has a bad EIP-55 checksum. `trustline_missing`: the ' +
@@ -291,7 +293,7 @@ export class Usdt0Controller {
         [ApiErrorCode.ProviderError]:
           'The USDT0 contract refused the transfer: HostError: Error(Contract, #2001)',
         [ApiErrorCode.MerchantFeeUnsupported]:
-          'A merchant fee is not available on USDT0 transfers on this deployment: a Soroban transaction carries one operation, so the fee needs the merchant fee wrapper (USDT0_MERCHANT_FEE_WRAPPER), which is not configured.',
+          'A merchant fee is not available on USDT0 transfers on this deployment: a Soroban transaction carries one operation, so the fee needs the fee wrapper (USDT0_FEE_WRAPPER), which is not configured.',
       },
     ),
   })
@@ -328,8 +330,9 @@ export class Usdt0Controller {
     description:
       '`provider_unavailable`: Horizon or the Soroban RPC did not answer; ' +
       'retry. `misconfigured`: STELLAR_RPC_URL_MAINNET serves another ' +
-      'network, or USDT0_MERCHANT_FEE_WRAPPER is not the reviewed wrapper ' +
-      "bound to USDT0's OFT and token.",
+      'network, or USDT0_FEE_WRAPPER is not the reviewed wrapper ' +
+      "bound to USDT0's OFT and token, or the plan commission has no " +
+      'STELLAR_SWAP_FEE_WALLET, or one that does not trust USDT0.',
     examples: usdt0Examples('/v1/usdt0/transfers', [
       ApiErrorCode.ProviderUnavailable,
       ApiErrorCode.Misconfigured,

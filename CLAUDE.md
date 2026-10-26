@@ -606,14 +606,17 @@ refreshes it (ledger first, then LayerZero Scan), throttled per row by `lastChec
   `send`'s return value) and `/messages/tx/{hash}` (64 lowercase hex, no `0x`) only
   when it is not. A 404 is "not yet". Delivery took 1,612 to 1,661 s on every route
   on 2026-10-25.
-- **No commission** on this route yet: one operation per Soroban transaction leaves
-  no room for a fee payment. It is the product owner's decision.
-- **A merchant fee goes through `contracts/soroban/merchant-fee-oft`**
-  (`USDT0_MERCHANT_FEE_WRAPPER`): the operation calls the wrapper's `send`, which
-  transfers the fee in USDT0 and calls the OFT's `send` with the same arguments, all
-  under the holder's one source-account authorization (checked on testnet: one entry,
-  the token transfer and the OFT's send as sub-invocations). The wrapper's wasm is
-  committed and pinned (`USDT0_MERCHANT_FEE_WRAPPER_WASM_SHA256`, its spec reads the
+- **Fees go through `contracts/soroban/usdt0-fee-wrapper`** (`USDT0_FEE_WRAPPER`): one
+  operation per Soroban transaction leaves no room for a payment of its own, so the
+  operation calls the wrapper's `send`, which transfers each fee in its list (the plan
+  commission, then a merchant fee) in USDT0 and calls the OFT's `send` with the same
+  arguments, all under the holder's one source-account authorization (checked on
+  testnet: one entry, each token transfer and the OFT's send as sub-invocations).
+- **The plan commission rides only through the wrapper**: without `USDT0_FEE_WRAPPER` a
+  transfer charges none (product owner, 2026-10-26). With it, a plan rate and no
+  `STELLAR_SWAP_FEE_WALLET` is `503 misconfigured` (`commissionWithRecipient`), and a
+  commission wallet that does not trust USDT0 is too. The wrapper's wasm is
+  committed and pinned (`USDT0_FEE_WRAPPER_WASM_SHA256`, its spec reads the
   file); the service checks the deployed wasm and the OFT and token it is bound to
   before handing a holder the transaction. `cargo test` in the crate runs its tests;
   rebuilding it is a new wasm, a new hash and a new deployment.

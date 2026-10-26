@@ -1,9 +1,9 @@
 [package]
-name = "merchant-fee-oft"
+name = "usdt0-fee-wrapper"
 version = "0.1.0"
 edition = "2021"
 publish = false
-description = "Pays a merchant fee and sends USDT0 through LayerZero's OFT in one Soroban invocation"
+description = "Pays the fees on a USDT0 transfer and sends it through LayerZero's OFT in one Soroban invocation"
 
 [lib]
 crate-type = ["cdylib", "rlib"]

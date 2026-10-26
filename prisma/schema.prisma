@@ -2093,6 +2093,13 @@ model Usdt0Transfer {
   nativeFeeLimit String
   networkFee     String
 
+  // Cosmos Pay's plan commission, in USDT0: paid to `feeWallet` by the fee
+  // wrapper in the same transaction, out of `amount`. 0 / null when the
+  // deployment has no wrapper (`USDT0_FEE_WRAPPER`) or the plan charges none.
+  feeBps    Int     @default(0)
+  feeAmount String  @default("0")
+  feeWallet String?
+
   // The unsigned transaction, its SEP-7 link, and its hash: lowercase hex,
   // unique, and checked against the signed copy before anything is relayed.
   xdr    String

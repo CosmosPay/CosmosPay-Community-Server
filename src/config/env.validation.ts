@@ -145,9 +145,9 @@ class EnvironmentVariables {
 
   @IsOptional()
   @Matches(/^C[A-Z2-7]{55}$/, {
-    message: 'USDT0_MERCHANT_FEE_WRAPPER must be a Soroban contract id (C...)',
+    message: 'USDT0_FEE_WRAPPER must be a Soroban contract id (C...)',
   })
-  USDT0_MERCHANT_FEE_WRAPPER?: string;
+  USDT0_FEE_WRAPPER?: string;
 
   @IsOptional()
   @IsString()

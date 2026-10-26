@@ -16,6 +16,10 @@ import {
   splitMerchantFee,
 } from '@/common/merchant-fee/merchant-fee';
 import type { MerchantFeeDto } from '@/common/merchant-fee/merchant-fee.dto';
+import {
+  commissionWithRecipient,
+  resolvePlanCommissionBps,
+} from '@/common/plan-commission';
 import { isUniqueViolation } from '@/common/prisma-errors';
 import { project } from '@/common/projection';
 import { PublicRecordTokens } from '@/common/public-record-token';
@@ -29,7 +33,7 @@ import { sep7Qr, sep7TxUri } from '@/stellar/sep7';
 import { SorobanRpcClient } from '@/stellar/soroban-rpc.client';
 import { resolveIdempotencyKey } from '@/stellar/stellar-operation-policy';
 import { STELLAR_DECIMALS } from '@/stellar/stellar.constants';
-import { fromStroops, toStroops } from '@/swaps/swap-math';
+import { computeFee, fromStroops, toStroops } from '@/swaps/swap-math';
 import { CreateUsdt0TransferDto } from '@/usdt0/dto/create-usdt0-transfer.dto';
 import { QuoteUsdt0Dto } from '@/usdt0/dto/quote-usdt0.dto';
 import { QueryUsdt0TransfersDto } from '@/usdt0/dto/query-usdt0-transfers.dto';
@@ -44,7 +48,7 @@ import {
   resultCodes,
   verifySignedEnvelope,
 } from '@/usdt0/usdt0-ledger';
-import { Usdt0OftClient } from '@/usdt0/usdt0-oft.client';
+import { type Usdt0FeeLegs, Usdt0OftClient } from '@/usdt0/usdt0-oft.client';
 import { type OftQuote, withFeeBuffer, withoutDust } from '@/usdt0/usdt0-oft';
 import { Usdt0TransferTracker } from '@/usdt0/usdt0-transfer-tracker.service';
 import {
@@ -53,7 +57,7 @@ import {
   USDT0_ASSET_CODE,
   USDT0_CHAIN_IDS,
   USDT0_ISSUER,
-  USDT0_MERCHANT_FEE_WRAPPER_WASM_SHA256,
+  USDT0_FEE_WRAPPER_WASM_SHA256,
   USDT0_OFT,
   USDT0_QUOTE_RECIPIENT,
   USDT0_QUOTE_SOURCE,
@@ -88,6 +92,9 @@ export const USDT0_TRANSFER_PUBLIC_SELECT = {
   destinationTxHash: true,
   scanStatus: true,
   failureReason: true,
+  feeBps: true,
+  feeAmount: true,
+  feeWallet: true,
   merchantFee: true,
   idempotencyKey: true,
   expiresAt: true,
@@ -137,6 +144,19 @@ interface PricedMerchantFee {
   terms: MerchantFeeTerms;
   /** USDT0 stroops paid to the fee's wallet. */
   fee: bigint;
+}
+
+/** What a transfer pays besides LayerZero, and what the OFT is left to carry. */
+interface PricedUsdt0Fees {
+  /** Cosmos Pay's plan rate; 0 without a fee wrapper or a plan rate. */
+  feeBps: number;
+  /** The plan commission, in USDT0 stroops, out of `amount`. */
+  commission: bigint;
+  /** Where the commission goes (`STELLAR_SWAP_FEE_WALLET`); null without one. */
+  feeWallet: string | null;
+  merchant: PricedMerchantFee | null;
+  /** `amount` less every fee taken from it: what is offered to the OFT. */
+  routedLd: bigint;
 }
 
 /** Statuses whose transaction reached the network, so its hash means something. */
@@ -216,12 +236,14 @@ export class Usdt0Service {
     this.assertMainnet(consumer);
     const route = USDT0_ROUTES[dto.to];
     const amountLd = this.amountLd(dto.amount);
+    const fees = this.priceFees(consumer, null, amountLd, dto.source ?? null);
+    this.sendable(fees.routedLd);
     const { oft, fee } = await this.oft.quote(
       dto.source ?? USDT0_QUOTE_SOURCE,
       {
         dstEid: route.eid,
         recipient: USDT0_QUOTE_RECIPIENT,
-        amountLd,
+        amountLd: fees.routedLd,
       },
     );
     this.assertWithinLimits(oft);
@@ -230,9 +252,11 @@ export class Usdt0Service {
       eid: route.eid,
       receives: route.receives,
       amount: fromStroops(amountLd),
+      feeBps: fees.feeBps,
+      feeAmount: fromStroops(fees.commission),
       amountSent: fromStroops(oft.amountSentLd),
       amountReceived: fromStroops(oft.amountReceivedLd),
-      dust: fromStroops(amountLd - oft.amountSentLd),
+      dust: fromStroops(fees.routedLd - oft.amountSentLd),
       nativeFee: fromStroops(fee.nativeFee),
       nativeFeeLimit: fromStroops(withFeeBuffer(fee.nativeFee)),
       minAmount: fromStroops(oft.minAmountLd),
@@ -292,29 +316,25 @@ export class Usdt0Service {
 
     const route = USDT0_ROUTES[dto.to];
     const amountLd = this.amountLd(dto.amount);
-    // A merchant fee comes out of `amount` (less is sent) or rides on top.
-    const merchant = this.priceMerchantFee(merchantTerms, amountLd);
-    const routedLd =
-      merchant?.terms.paidBy === 'recipient'
-        ? amountLd - merchant.fee
-        : amountLd;
-    const amountSentLd = this.sendable(routedLd);
+    // The plan commission comes out of `amount`; a merchant fee too (less is
+    // sent) or on top of it.
+    const fees = this.priceFees(consumer, merchantTerms, amountLd, dto.source);
+    const { merchant } = fees;
+    const amountSentLd = this.sendable(fees.routedLd);
 
     // Horizon first: it answers the cheap refusals before the RPC is asked.
     const account = await this.accounts.load('public', dto.source);
     assertHoldsUsdt0(
       account.balances,
       dto.source,
-      amountSentLd + (merchant?.fee ?? 0n),
+      amountSentLd + fees.commission + (merchant?.fee ?? 0n),
     );
-    const wrapper = merchant
-      ? await this.merchantFeeWrapper(merchant.terms, dto.source)
-      : null;
+    const legs = await this.feeLegs(fees, dto.source);
 
     const { oft, fee } = await this.oft.quote(dto.source, {
       dstEid: route.eid,
       recipient: terms.recipient,
-      amountLd: routedLd,
+      amountLd: fees.routedLd,
     });
     this.assertWithinLimits(oft);
     const nativeFeeLimit = withFeeBuffer(fee.nativeFee);
@@ -332,9 +352,7 @@ export class Usdt0Service {
       },
       { nativeFee: nativeFeeLimit, zroFee: 0n },
       { baseFee: stellar.baseFee, timeoutSeconds: stellar.timeoutSeconds },
-      merchant && wrapper
-        ? { wrapper, wallet: merchant.terms.wallet, amount: merchant.fee }
-        : null,
+      legs,
     );
     const networkFee = BigInt(tx.fee);
     assertCanPayXlm(account, account.balances, {
@@ -360,6 +378,9 @@ export class Usdt0Service {
       nativeFee: fromStroops(fee.nativeFee),
       nativeFeeLimit: fromStroops(nativeFeeLimit),
       networkFee: fromStroops(networkFee),
+      feeBps: fees.feeBps,
+      feeAmount: fromStroops(fees.commission),
+      feeWallet: fees.feeWallet,
       ...(merchant
         ? {
             merchantFee: {
@@ -569,19 +590,121 @@ export class Usdt0Service {
 
   /** What the OFT carries of `routedLd`: refused when that is dust only. */
   private sendable(routedLd: bigint): bigint {
-    const sent = withoutDust(routedLd);
+    const sent = routedLd > 0n ? withoutDust(routedLd) : 0n;
     if (sent <= 0n) {
       throw ApiError.badRequest(
         ApiErrorCode.InvalidAmount,
-        'amount is too small to send anything once the merchant fee is paid',
+        'amount is too small to send anything once the fees are paid',
       );
     }
     return sent;
   }
 
   /**
+   * The fees on `amountLd`. Cosmos Pay's plan commission rides only through
+   * the fee wrapper, a Soroban transaction having one operation: without one
+   * configured a transfer carries none (product owner, 2026-10-26). With one, a
+   * plan rate and no `STELLAR_SWAP_FEE_WALLET` is a misconfiguration, as on
+   * every swap (`commissionWithRecipient`). The fee wallet sending its own
+   * USDT0 pays itself nothing.
+   */
+  private priceFees(
+    consumer: GatewayConsumer,
+    merchantTerms: MerchantFeeTerms | null,
+    amountLd: bigint,
+    source: string | null,
+  ): PricedUsdt0Fees {
+    const wrapper = this.wrapperAddress();
+    const wallet = wrapper
+      ? this.config.get('stellar', { infer: true }).swap.feeWallet
+      : '';
+    const feeBps =
+      wrapper && source !== wallet
+        ? commissionWithRecipient(
+            this.config,
+            resolvePlanCommissionBps(this.config, consumer),
+            wallet,
+            'STELLAR_SWAP_FEE_WALLET',
+          )
+        : 0;
+    const commission = feeBps > 0 ? computeFee(amountLd, feeBps) : 0n;
+    const merchant = this.priceMerchantFee(merchantTerms, amountLd);
+    return {
+      feeBps,
+      commission,
+      feeWallet: commission > 0n ? wallet : null,
+      merchant,
+      routedLd:
+        amountLd -
+        commission -
+        (merchant?.terms.paidBy === 'recipient' ? merchant.fee : 0n),
+    };
+  }
+
+  /**
+   * The wrapper and the fees it pays, or null when there are none (the OFT is
+   * called directly). Each wallet must take USDT0 first: the merchant's is the
+   * request's (400), the commission's the operator's (503).
+   */
+  private async feeLegs(
+    fees: PricedUsdt0Fees,
+    source: string,
+  ): Promise<Usdt0FeeLegs | null> {
+    const legs: { wallet: string; amount: bigint }[] = [];
+    if (fees.commission > 0n && fees.feeWallet) {
+      legs.push({ wallet: fees.feeWallet, amount: fees.commission });
+    }
+    if (fees.merchant) {
+      legs.push({
+        wallet: fees.merchant.terms.wallet,
+        amount: fees.merchant.fee,
+      });
+    }
+    if (legs.length === 0) return null;
+    const wrapper = this.wrapperAddress()!;
+    await Promise.all([
+      this.verifiedWrapper(wrapper),
+      fees.merchant
+        ? this.assertMerchantWallet(fees.merchant.terms, source)
+        : null,
+      fees.commission > 0n && fees.feeWallet
+        ? this.assertCommissionWallet(fees.feeWallet)
+        : null,
+    ]);
+    return { wrapper, fees: legs };
+  }
+
+  /** The commission's wallet takes USDT0, or the deployment is misconfigured. */
+  private async assertCommissionWallet(wallet: string): Promise<void> {
+    try {
+      const account = await this.accounts.load('public', wallet);
+      this.accounts.assertCanReceive(
+        account.balances,
+        resolveAsset(USDT0_ASSET_CODE, USDT0_ISSUER),
+        wallet,
+        'the commission',
+      );
+    } catch (err) {
+      if (
+        err instanceof ApiError &&
+        err.code === ApiErrorCode.ProviderUnavailable
+      ) {
+        throw err;
+      }
+      this.logger.error(
+        `STELLAR_SWAP_FEE_WALLET ${wallet} cannot receive USDT0: ${String(err)}`,
+      );
+      throw ApiError.unavailable(
+        ApiErrorCode.Misconfigured,
+        'The USDT0 commission is paid to STELLAR_SWAP_FEE_WALLET, which does ' +
+          'not exist or does not trust USDT0 yet.',
+      );
+    }
+  }
+
+  /**
    * The request's merchant fee, or null without one. A Soroban transaction
-   * carries one operation, so the fee needs the wrapper: without one
+   * carries one operation, so the fee needs the fee wrapper: without one
    * configured the request is refused before anything is read.
    */
   private merchantFeeTerms(
@@ -597,8 +720,7 @@ export class Usdt0Service {
         ApiErrorCode.MerchantFeeUnsupported,
         'A merchant fee is not available on USDT0 transfers on this ' +
           'deployment: a Soroban transaction carries one operation, so the fee ' +
-          'needs the merchant fee wrapper (USDT0_MERCHANT_FEE_WRAPPER), which ' +
-          'is not configured.',
+          'needs the fee wrapper (USDT0_FEE_WRAPPER), which is not configured.',
       );
     }
     return terms;
@@ -616,41 +738,35 @@ export class Usdt0Service {
   }
 
   private wrapperAddress(): string | null {
-    return this.config.get('stellar', { infer: true }).usdt0MerchantFeeWrapper;
+    return this.config.get('stellar', { infer: true }).usdt0FeeWrapper;
   }
 
-  /**
-   * The wrapper a transfer with a merchant fee invokes, once the fee's wallet
-   * can take USDT0 and the wrapper is the reviewed one: its wasm hashes to
-   * {@link USDT0_MERCHANT_FEE_WRAPPER_WASM_SHA256} and it is bound to USDT0's
-   * OFT and token. The holder signs a call to it, so anything else is refused
-   * (503) rather than handed out.
-   */
-  private async merchantFeeWrapper(
+  /** The merchant fee's wallet: another account than the source, taking USDT0. */
+  private async assertMerchantWallet(
     terms: MerchantFeeTerms,
     source: string,
-  ): Promise<string> {
+  ): Promise<void> {
     if (terms.wallet === source) {
       throw ApiError.badRequest(
         ApiErrorCode.ValidationFailed,
         'merchantFee.wallet must be another account than source',
       );
     }
-    const wrapper = this.wrapperAddress()!;
-    const [receiver] = await Promise.all([
-      this.accounts.load('public', terms.wallet),
-      this.verifiedWrapper(wrapper),
-    ]);
+    const receiver = await this.accounts.load('public', terms.wallet);
     this.accounts.assertCanReceive(
       receiver.balances,
       resolveAsset(USDT0_ASSET_CODE, USDT0_ISSUER),
       terms.wallet,
       'the merchant fee',
     );
-    return wrapper;
   }
 
-  /** The wrapper's check, made once per configured address. */
+  /**
+   * The wrapper's check, made once per configured address: its wasm hashes to
+   * {@link USDT0_FEE_WRAPPER_WASM_SHA256} and it is bound to USDT0's OFT and
+   * token. The holder signs a call to it, so anything else is refused (503)
+   * rather than handed out.
+   */
   private wrapperCheck: { address: string; check: Promise<void> } | null = null;
 
   private verifiedWrapper(address: string): Promise<void> {
@@ -659,18 +775,18 @@ export class Usdt0Service {
         const wasm = await this.rpc.contractWasm(address);
         const sha256 = createHash('sha256').update(wasm).digest('hex');
         const binding =
-          sha256 === USDT0_MERCHANT_FEE_WRAPPER_WASM_SHA256
+          sha256 === USDT0_FEE_WRAPPER_WASM_SHA256
             ? await this.oft.wrapperBinding(address)
             : null;
         if (binding?.oft !== USDT0_OFT || binding.token !== USDT0_SAC) {
           this.logger.error(
-            `USDT0_MERCHANT_FEE_WRAPPER ${address} is not the reviewed wrapper ` +
+            `USDT0_FEE_WRAPPER ${address} is not the reviewed wrapper ` +
               `bound to USDT0 (wasm ${sha256})`,
           );
           throw ApiError.unavailable(
             ApiErrorCode.Misconfigured,
-            `USDT0_MERCHANT_FEE_WRAPPER (${address}) is not the merchant fee ` +
-              "wrapper built from contracts/soroban/merchant-fee-oft, bound to USDT0's OFT and token.",
+            `USDT0_FEE_WRAPPER (${address}) is not the fee wrapper built ` +
+              "from contracts/soroban/usdt0-fee-wrapper, bound to USDT0's OFT and token.",
           );
         }
       })();
@@ -850,9 +966,11 @@ export class Usdt0Service {
   private listItem(row: PublicUsdt0Transfer): Usdt0TransferListItem {
     const onNetwork = ON_NETWORK.has(row.status);
     const merchantFee = readMerchantFeeRecord(row.merchantFee);
-    // A fee the recipient pays came out of `amount` before the dust did.
+    // The commission, and a merchant fee the recipient pays, came out of
+    // `amount` before the dust did.
     const routed =
       toStroops(row.amount) -
+      toStroops(row.feeAmount) -
       (merchantFee?.paidBy === 'recipient'
         ? toStroops(merchantFee.amount)
         : 0n);

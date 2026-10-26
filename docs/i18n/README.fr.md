@@ -1434,11 +1434,11 @@ désigne. Ils s'ajoutent à la commission du plan que Cosmos Pay prélève, qui 
 | Paiements privés (`POST /v1/zk-payments`) | Un troisième transfert confidentiel, en XLM, du payeur vers `wallet` : les frais restent aussi privés que le paiement. `wallet` doit détenir un compte confidentiel sur le jeton de Cosmos Pay sous l'auditeur 0 (sinon `400 recipient_not_registered`) et n'être ni le destinataire ni le compte de commissions. La commission de 0,01 % reste une part de `amount`, et l'`amount` de la ligne est ce que le payeur paie au total. Le confirm prend le troisième hash en `merchantFeeTxHash` et vérifie ce transfert comme les deux autres |
 | Liquidité (`POST /v1/liquidity-pools/deposit` et `/withdraw`) | Un dépôt ou un retrait déplace deux actifs : les frais valent `bps` de CHACUN (arrondi à l'inférieur), payés à `wallet` par un paiement par actif dans la même transaction, après le dépôt, ou après le retrait et sa commission du plan ; `fixed` est refusé (`400 validation_failed`). Sur un dépôt, `recipient` les retire des montants (moins entre dans le pool) et `payer` les ajoute en plus. Sur un retrait ils sortent de ce que le retrait verse, en part de ses minimums garantis, quel que soit `paidBy`. `wallet` doit exister et avoir une trustline pour les deux actifs. `amount` / `asset` de l'enregistrement sont la jambe de l'actif A, `amountB` / `assetB` celle de l'actif B |
 | Swaps sur Monad (`POST /v1/swaps`, `chain: monad`) | Kuru Flow ne paie qu'un frais de parrainage par swap et la commission du plan l'utilise : un swap avec des frais du marchand passe donc par `contracts/MerchantFeeSwapRouter.sol`, que l'opérateur déploie une fois pour le router de Kuru et nomme dans `KURU_MERCHANT_FEE_ROUTER` : Kuru cote pour le router, le wallet lui envoie (MON) ou lui approuve (ERC-20) l'entrée plus les frais, et dans cette seule transaction le router paie les frais, exécute le calldata de Kuru, transfère la sortie et rembourse ce que Kuru n'a pas pris, en revenant en arrière sous le minimum de Kuru. Le code déployé est comparé à l'artefact avant de donner l'adresse à un wallet. Sans la variable, `400 merchant_fee_unsupported` |
-| Transferts USDT0 (`POST /v1/usdt0/transfers`) | Une transaction Soroban porte une seule opération : l'opération d'un tel transfert est donc `contracts/soroban/merchant-fee-oft` (`USDT0_MERCHANT_FEE_WRAPPER`) au lieu de l'OFT : sous l'unique autorisation du détenteur, il transfère les frais en USDT0 vers `wallet` (qui doit avoir une trustline USDT0), puis appelle le `send` de l'OFT avec les mêmes arguments et renvoie son reçu. `recipient` retire les frais de `amount` (moins est envoyé), `payer` les ajoute en plus. Le wasm déployé, et l'OFT et le jeton auxquels il est lié, sont vérifiés avant de remettre la transaction au détenteur. Sans la variable, `400 merchant_fee_unsupported` |
+| Transferts USDT0 (`POST /v1/usdt0/transfers`) | Une transaction Soroban porte une seule opération : l'opération d'un tel transfert est donc `contracts/soroban/usdt0-fee-wrapper` (`USDT0_FEE_WRAPPER`) au lieu de l'OFT : sous l'unique autorisation du détenteur, il transfère les frais en USDT0 vers `wallet` (qui doit avoir une trustline USDT0), puis appelle le `send` de l'OFT avec les mêmes arguments et renvoie son reçu. `recipient` retire les frais de `amount` (moins est envoyé), `payer` les ajoute en plus. Le wasm déployé, et l'OFT et le jeton auxquels il est lié, sont vérifiés avant de remettre la transaction au détenteur. Sans la variable, `400 merchant_fee_unsupported` |
 
 Toutes les opérations ci-dessus acceptent le champ. Là où ce déploiement n'a pas
 configuré le contrat dont une opération a besoin (`KURU_MERCHANT_FEE_ROUTER`,
-`USDT0_MERCHANT_FEE_WRAPPER`), elle répond `400 merchant_fee_unsupported`.
+`USDT0_FEE_WRAPPER`), elle répond `400 merchant_fee_unsupported`.
 
 ## USDT0 depuis Stellar (LayerZero)
 
@@ -1508,17 +1508,19 @@ vérificateurs de LayerZero attendent les confirmations de Stellar.
 à environ 7 000 caractères, plus que ce que contient un QR code, donc `qr` vaut
 généralement `null` : signez avec un portefeuille connecté ou via le lien `uri`.
 
-**Pas de commission Cosmos Pay, pour l'instant.** Une transaction Soroban porte une
-seule opération, donc aucun paiement de commission ne peut accompagner `send` comme sur
-un swap path-payment, et le taux du plan n'est pas prélevé sur cette route. En prélever
-un relève de la décision du product owner.
+**Commission : le taux du plan, via le wrapper de frais.** Une transaction Soroban porte
+une seule opération : la commission passe donc par le même contrat que les frais du
+marchand (`USDT0_FEE_WRAPPER`, ci-dessous) : `feeBps` de `amount`, arrondi à l'inférieur,
+payé en USDT0 à `STELLAR_SWAP_FEE_WALLET` (qui doit avoir une trustline USDT0, sinon
+`503 misconfigured`), et le reste est envoyé. Sans wrapper configuré, un transfert ne
+porte aucune commission (`feeBps: 0`), par décision du product owner (2026-10-26).
 
 **Les frais du marchand passent par un contrat.** Avec `merchantFee` (voir **Frais du
-marchand**) l'opération est le `send` du wrapper (`USDT0_MERCHANT_FEE_WRAPPER`) : il transfère
+marchand**) l'opération est le `send` du wrapper (`USDT0_FEE_WRAPPER`) : il transfère
 les frais en USDT0 vers le wallet des frais et appelle le `send` de l'OFT avec les mêmes
 arguments, sous l'unique autorisation du détenteur, et renvoie le reçu de l'OFT : le
 transfert est suivi par le même guid. Il se déploie une fois, sans propriétaire :
-`stellar contract deploy --wasm contracts/soroban/merchant-fee-oft/merchant_fee_oft.wasm --network mainnet -- --oft CBOWOLFSDM5PZXNFIVDMP5NZ7U2GSIHED6H6R446QOHF266XINKUMMF6 --token CBSJZEIO5C7KC2SF3MKSNXXJSW5G3VTNBX4ATMKUI3B2MR4JKM4R26YF`.
+`stellar contract deploy --wasm contracts/soroban/usdt0-fee-wrapper/usdt0_fee_wrapper.wasm --network mainnet -- --oft CBOWOLFSDM5PZXNFIVDMP5NZ7U2GSIHED6H6R446QOHF266XINKUMMF6 --token CBSJZEIO5C7KC2SF3MKSNXXJSW5G3VTNBX4ATMKUI3B2MR4JKM4R26YF`.
 
 **Le RPC.** Tout passe par le RPC Soroban du mainnet Stellar, `STELLAR_RPC_URL_MAINNET`
 (par défaut le point d'accès public de Gateway.fm, qui est limité en débit : en
@@ -2237,11 +2239,17 @@ plugins isolés.
   depuis n'importe quel compte (le contrat n'a pas de propriétaire), et définir la
   variable. Le wallet d'un tel swap approuve le router, pas Kuru. Sans elle, les swaps
   Monad répondent toujours `merchant_fee_unsupported`.
-- **Les transferts USDT0 acceptent `merchantFee`** dès que `USDT0_MERCHANT_FEE_WRAPPER`
-  nomme un `contracts/soroban/merchant-fee-oft` déployé (wasm commité à côté du crate,
-  épinglé par `USDT0_MERCHANT_FEE_WRAPPER_WASM_SHA256`). **Étape de déploiement :** la
+- **Les transferts USDT0 acceptent `merchantFee`** dès que `USDT0_FEE_WRAPPER`
+  nomme un `contracts/soroban/usdt0-fee-wrapper` déployé (wasm commité à côté du crate,
+  épinglé par `USDT0_FEE_WRAPPER_WASM_SHA256`). **Étape de déploiement :** la
   commande `stellar contract deploy` de la section USDT0, puis définir la variable. Les
   réponses gagnent `merchantFee`. Sans elle, `merchant_fee_unsupported`.
+- **Les transferts USDT0 prélèvent la commission du plan** via le wrapper de frais
+  (`USDT0_FEE_WRAPPER`, dont le `send` prend une liste de frais) : `feeBps` de `amount`
+  vers `STELLAR_SWAP_FEE_WALLET`, qui doit avoir une trustline USDT0. La migration
+  `20261026230000_usdt0_commission` ajoute `feeBps`, `feeAmount` et `feeWallet` à
+  `usdt0_transfer` ; les transferts et les cotations les renvoient. Sans wrapper, aucune
+  commission, comme avant.
 
 ### Les listes suivent le réseau de la clé ; les lectures du dashboard sont mises en cache
 
@@ -3113,7 +3121,7 @@ Chaque variable lue depuis `process.env` dans `src/` est validée au démarrage 
 | `STELLAR_HORIZON_URL_PUBLIC` | non | `https://horizon.stellar.org` | URL de base d'Horizon sur le mainnet |
 | `STELLAR_HORIZON_URL_TESTNET` | non | `https://horizon-testnet.stellar.org` | URL de base d'Horizon sur le testnet |
 | `STELLAR_RPC_URL_MAINNET` | non | `https://soroban-rpc.mainnet.stellar.gateway.fm` | RPC Soroban du mainnet Stellar, pour les transferts USDT0 (passphrase vérifiée avant usage). Le point d'accès public est limité en débit : en production, utilisez celui d'un fournisseur |
-| `USDT0_MERCHANT_FEE_WRAPPER` | pour les frais du marchand sur USDT0 | — | Un `contracts/soroban/merchant-fee-oft` déployé et lié à l'OFT et au jeton USDT0. Sans elle, un transfert USDT0 avec des frais du marchand répond `merchant_fee_unsupported` ; un contrat qui n'exécute pas le wasm épinglé, ou lié à autre chose, répond `503 misconfigured` |
+| `USDT0_FEE_WRAPPER` | pour les frais du marchand sur USDT0 | — | Un `contracts/soroban/usdt0-fee-wrapper` déployé et lié à l'OFT et au jeton USDT0. Sans elle, un transfert USDT0 avec des frais du marchand répond `merchant_fee_unsupported` ; un contrat qui n'exécute pas le wasm épinglé, ou lié à autre chose, répond `503 misconfigured`. Il porte aussi la commission du plan ; sans elle, les transferts USDT0 n'en prélèvent aucune. |
 | `SOLANA_RPC_URL_MAINNET` | non | `https://api.mainnet-beta.solana.com` | RPC Solana pour les clés `prod` (mainnet-beta ; le genesis hash est vérifié avant usage). Le point d'accès public est limité en débit : en production, utilisez celui d'un fournisseur |
 | `SOLANA_RPC_URL_DEVNET` | non | `https://api.devnet.solana.com` | RPC Solana pour les clés `dev` (devnet) |
 | `SOLANA_RPC_TIMEOUT_MS` | non | `10000` | Budget d'un appel RPC Solana (ms) |

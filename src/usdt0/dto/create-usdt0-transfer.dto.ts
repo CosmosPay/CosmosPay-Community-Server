@@ -77,7 +77,7 @@ export class CreateUsdt0TransferDto {
     description:
       'Your own fee on this transfer, in USDT0, paid to `wallet` (a Stellar ' +
       'account that trusts USDT0) in the same transaction: the operation is ' +
-      'then the merchant fee wrapper (`USDT0_MERCHANT_FEE_WRAPPER`), which ' +
+      'then the fee wrapper (`USDT0_FEE_WRAPPER`), which ' +
       "pays the fee and calls the OFT's `send` under the holder's one " +
       'authorization. `paidBy: recipient` takes it from `amount` (less is ' +
       'sent); `payer` adds it on top. Without a configured wrapper, ' +

@@ -24,12 +24,12 @@ import {
 } from '@/usdt0/usdt0-oft';
 import { USDT0_OFT, USDT0_QUOTE_SOURCE } from '@/usdt0/usdt0.constants';
 
-/** A merchant fee the wrapper pays before the OFT's `send`, in USDT0 stroops. */
-export interface Usdt0MerchantFeeLeg {
+/** The fees the wrapper pays before the OFT's `send`, in USDT0 stroops. */
+export interface Usdt0FeeLegs {
   /** The verified wrapper contract (C...). */
   wrapper: string;
-  wallet: string;
-  amount: bigint;
+  /** Each fee and its wallet: the plan commission, then a merchant fee. */
+  fees: { wallet: string; amount: bigint }[];
 }
 
 /** The longest contract error relayed to a caller; the event log after it is cut. */
@@ -96,7 +96,7 @@ export class Usdt0OftClient {
     param: SendParamInput,
     fee: MessagingFee,
     opts: { baseFee: string; timeoutSeconds: number },
-    merchantFee: Usdt0MerchantFeeLeg | null = null,
+    fees: Usdt0FeeLegs | null = null,
   ): Promise<Transaction> {
     const from = account.accountId();
     const send = [
@@ -104,14 +104,27 @@ export class Usdt0OftClient {
       messagingFeeScVal(fee),
       new Address(from).toScVal(),
     ];
-    // With a merchant fee the operation is the wrapper's `send`, which pays
-    // the fee and calls the OFT's with the same arguments.
-    const call = merchantFee
-      ? new Contract(merchantFee.wrapper).call(
+    // With fees the operation is the wrapper's `send`, which pays each one
+    // (a `Fee { amount, wallet }` struct, keys sorted as the host requires)
+    // and calls the OFT's with the same arguments.
+    const call = fees
+      ? new Contract(fees.wrapper).call(
           'send',
           new Address(from).toScVal(),
-          new Address(merchantFee.wallet).toScVal(),
-          nativeToScVal(merchantFee.amount, { type: 'i128' }),
+          xdr.ScVal.scvVec(
+            fees.fees.map((f) =>
+              xdr.ScVal.scvMap([
+                new xdr.ScMapEntry({
+                  key: xdr.ScVal.scvSymbol('amount'),
+                  val: nativeToScVal(f.amount, { type: 'i128' }),
+                }),
+                new xdr.ScMapEntry({
+                  key: xdr.ScVal.scvSymbol('wallet'),
+                  val: new Address(f.wallet).toScVal(),
+                }),
+              ]),
+            ),
+          ),
           ...send,
         )
       : new Contract(USDT0_OFT).call(
@@ -154,7 +167,7 @@ export class Usdt0OftClient {
     return rpc.assembleTransaction(tx, sim).build();
   }
 
-  /** The OFT and the token a merchant fee wrapper was built with. */
+  /** The OFT and the token a fee wrapper was built with. */
   async wrapperBinding(
     wrapper: string,
   ): Promise<{ oft: string | null; token: string | null }> {

@@ -96,6 +96,23 @@ export class Usdt0QuoteEntity {
   amount!: string;
 
   @ApiProperty({
+    example: 50,
+    description:
+      "Cosmos Pay's plan commission rate, in basis points. 0 when the " +
+      'deployment has no fee wrapper (USDT0_FEE_WRAPPER): a Soroban ' +
+      'transaction has one operation, and only the wrapper can carry a fee.',
+  })
+  feeBps!: number;
+
+  @ApiProperty({
+    example: '0.0625',
+    description:
+      'The commission in USDT0, out of `amount`: `amount × feeBps / 10,000`, ' +
+      'rounded down.',
+  })
+  feeAmount!: string;
+
+  @ApiProperty({
     example: '12.5',
     description:
       'What the OFT takes from the account: `amount` without its dust.',
@@ -238,6 +255,32 @@ export class Usdt0TransferEntity {
   networkFee!: string;
 
   @ApiProperty({
+    example: 50,
+    description:
+      "Cosmos Pay's plan commission rate, in basis points. 0 when the " +
+      'deployment has no fee wrapper (USDT0_FEE_WRAPPER): a Soroban ' +
+      'transaction has one operation, and only the wrapper can carry a fee.',
+  })
+  feeBps!: number;
+
+  @ApiProperty({
+    example: '0.0625',
+    description:
+      'The commission in USDT0, out of `amount`: `amount × feeBps / 10,000`, ' +
+      'rounded down.',
+  })
+  feeAmount!: string;
+
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    example: 'GBFEEWALLETEXAMPLE7XKXBOL5CH6OFGYUMVJZH7H7OZQXK6U2RG3UEZW34',
+    description:
+      'Where the commission went (STELLAR_SWAP_FEE_WALLET); null without one.',
+  })
+  feeWallet!: string | null;
+
+  @ApiProperty({
     description: 'The unsigned transaction (base64 XDR) to sign.',
     example: 'AAAAAgAAAABx…(base64 XDR)…AAAAAAAAAAA=',
   })
@@ -321,7 +364,7 @@ export class Usdt0TransferEntity {
     nullable: true,
     description:
       'The merchant fee the request named, in USDT0, paid to its wallet in ' +
-      'this transaction by the merchant fee wrapper; null without one.',
+      'this transaction by the fee wrapper; null without one.',
   })
   merchantFee!: MerchantFeeEntity | null;
 

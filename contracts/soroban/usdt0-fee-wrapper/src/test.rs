@@ -1,11 +1,11 @@
 extern crate std;
 
-use crate::{MerchantFeeOft, MerchantFeeOftClient};
+use crate::{Fee, Usdt0FeeWrapper, Usdt0FeeWrapperClient};
 use soroban_sdk::{
     contract, contractimpl, contracttype,
     testutils::{Address as _, AuthorizedFunction, AuthorizedInvocation},
     token::{StellarAssetClient, TokenClient},
-    Address, Env, IntoVal, Symbol, Val,
+    vec, Address, Env, IntoVal, Symbol, Val, Vec,
 };
 
 /// The OFT's `send` arguments, as LayerZero's contract shapes them (the
@@ -72,10 +72,11 @@ impl MockOft {
 struct Setup {
     env: Env,
     holder: Address,
-    fee_wallet: Address,
+    commission: Address,
+    merchant: Address,
     token: Address,
     oft: Address,
-    wrapper: MerchantFeeOftClient<'static>,
+    wrapper: Usdt0FeeWrapperClient<'static>,
 }
 
 fn setup() -> Setup {
@@ -84,15 +85,17 @@ fn setup() -> Setup {
     let issuer = Address::generate(&env);
     let token = env.register_stellar_asset_contract_v2(issuer).address();
     let holder = Address::generate(&env);
-    let fee_wallet = Address::generate(&env);
+    let commission = Address::generate(&env);
+    let merchant = Address::generate(&env);
     StellarAssetClient::new(&env, &token).mint(&holder, &1_000_0000000);
     let oft = env.register(MockOft, (token.clone(),));
-    let wrapper_id = env.register(MerchantFeeOft, (oft.clone(), token.clone()));
-    let wrapper = MerchantFeeOftClient::new(&env, &wrapper_id);
+    let wrapper_id = env.register(Usdt0FeeWrapper, (oft.clone(), token.clone()));
+    let wrapper = Usdt0FeeWrapperClient::new(&env, &wrapper_id);
     Setup {
         env,
         holder,
-        fee_wallet,
+        commission,
+        merchant,
         token,
         oft,
         wrapper,
@@ -114,18 +117,21 @@ fn params(env: &Env, amount: i128) -> (Val, Val) {
     )
 }
 
+fn fee(wallet: &Address, amount: i128) -> Fee {
+    Fee {
+        wallet: wallet.clone(),
+        amount,
+    }
+}
+
 #[test]
-fn pays_the_fee_then_sends_and_answers_the_oft_receipt() {
+fn pays_each_fee_then_sends_and_answers_the_oft_receipt() {
     let s = setup();
-    let (send_param, fee) = params(&s.env, 100_0000000);
-    let answer = s.wrapper.send(
-        &s.holder,
-        &s.fee_wallet,
-        &2_5000000,
-        &send_param,
-        &fee,
-        &s.holder,
-    );
+    let (send_param, messaging) = params(&s.env, 100_0000000);
+    let fees = vec![&s.env, fee(&s.commission, 5000000), fee(&s.merchant, 2_5000000)];
+    let answer = s
+        .wrapper
+        .send(&s.holder, &fees, &send_param, &messaging, &s.holder);
     let receipt: Receipt = soroban_sdk::FromVal::from_val(&s.env, &answer);
     assert_eq!(
         receipt,
@@ -135,23 +141,24 @@ fn pays_the_fee_then_sends_and_answers_the_oft_receipt() {
         }
     );
     let balances = TokenClient::new(&s.env, &s.token);
-    assert_eq!(balances.balance(&s.fee_wallet), 2_5000000);
+    assert_eq!(balances.balance(&s.commission), 5000000);
+    assert_eq!(balances.balance(&s.merchant), 2_5000000);
     assert_eq!(balances.balance(&s.oft), 100_0000000);
-    assert_eq!(balances.balance(&s.holder), 1_000_0000000 - 102_5000000);
+    assert_eq!(balances.balance(&s.holder), 1_000_0000000 - 103_0000000);
     assert_eq!(balances.balance(&s.wrapper.address), 0);
 }
 
 #[test]
-fn one_authorization_of_the_holder_covers_the_fee_and_the_send() {
+fn one_authorization_of_the_holder_covers_every_fee_and_the_send() {
     let s = setup();
-    let (send_param, fee) = params(&s.env, 10_0000000);
-    s.wrapper.send(&s.holder, &s.fee_wallet, &1_0000000, &send_param, &fee, &s.holder);
+    let (send_param, messaging) = params(&s.env, 10_0000000);
+    let fees = vec![&s.env, fee(&s.commission, 1000000), fee(&s.merchant, 1000000)];
+    s.wrapper
+        .send(&s.holder, &fees, &send_param, &messaging, &s.holder);
     let auths = s.env.auths();
     assert_eq!(auths.len(), 1);
     let (who, invocation) = &auths[0];
     assert_eq!(who, &s.holder);
-    // The root is the wrapper's send; the token transfer and the OFT's send
-    // (with its own transfer) hang under it.
     let AuthorizedInvocation {
         function,
         sub_invocations,
@@ -174,30 +181,46 @@ fn one_authorization_of_the_holder_covers_the_fee_and_the_send() {
         names,
         std::vec![
             (s.token.clone(), Symbol::new(&s.env, "transfer")),
+            (s.token.clone(), Symbol::new(&s.env, "transfer")),
             (s.oft.clone(), Symbol::new(&s.env, "send")),
         ]
     );
 }
 
 #[test]
-fn a_zero_fee_only_sends() {
+fn no_fees_or_a_zero_fee_only_sends() {
     let s = setup();
-    let (send_param, fee) = params(&s.env, 10_0000000);
-    s.wrapper.send(&s.holder, &s.fee_wallet, &0, &send_param, &fee, &s.holder);
-    assert_eq!(TokenClient::new(&s.env, &s.token).balance(&s.fee_wallet), 0);
+    let (send_param, messaging) = params(&s.env, 10_0000000);
+    s.wrapper
+        .send(&s.holder, &Vec::new(&s.env), &send_param, &messaging, &s.holder);
+    // A zero fee pays nothing, even to the holder.
+    let zero = vec![&s.env, fee(&s.holder, 0)];
+    s.wrapper
+        .send(&s.holder, &zero, &send_param, &messaging, &s.holder);
+    assert_eq!(TokenClient::new(&s.env, &s.token).balance(&s.oft), 20_0000000);
 }
 
 #[test]
-fn refuses_a_negative_fee_and_a_fee_to_the_holder() {
+fn refuses_a_negative_fee_a_fee_to_the_holder_and_too_many_fees() {
     let s = setup();
-    let (send_param, fee) = params(&s.env, 10_0000000);
+    let (send_param, messaging) = params(&s.env, 10_0000000);
+    let negative = vec![&s.env, fee(&s.commission, -1)];
     assert!(s
         .wrapper
-        .try_send(&s.holder, &s.fee_wallet, &-1, &send_param, &fee, &s.holder)
+        .try_send(&s.holder, &negative, &send_param, &messaging, &s.holder)
         .is_err());
+    let to_self = vec![&s.env, fee(&s.holder, 1)];
     assert!(s
         .wrapper
-        .try_send(&s.holder, &s.holder, &1, &send_param, &fee, &s.holder)
+        .try_send(&s.holder, &to_self, &send_param, &messaging, &s.holder)
+        .is_err());
+    let mut many = Vec::new(&s.env);
+    for _ in 0..5 {
+        many.push_back(fee(&s.commission, 1));
+    }
+    assert!(s
+        .wrapper
+        .try_send(&s.holder, &many, &send_param, &messaging, &s.holder)
         .is_err());
 }
 
@@ -217,14 +240,15 @@ fn needs_the_holders_authorization() {
     env.mock_all_auths();
     StellarAssetClient::new(&env, &token).mint(&holder, &1_0000000);
     let oft = env.register(MockOft, (token.clone(),));
-    let wrapper = MerchantFeeOftClient::new(
+    let wrapper = Usdt0FeeWrapperClient::new(
         &env,
-        &env.register(MerchantFeeOft, (oft.clone(), token.clone())),
+        &env.register(Usdt0FeeWrapper, (oft.clone(), token.clone())),
     );
     // No authorization mocked from here on: the holder signed nothing.
     env.set_auths(&[]);
-    let (send_param, fee) = params(&env, 1);
+    let (send_param, messaging) = params(&env, 1);
+    let fees = vec![&env, fee(&Address::generate(&env), 1)];
     assert!(wrapper
-        .try_send(&holder, &Address::generate(&env), &1, &send_param, &fee, &holder)
+        .try_send(&holder, &fees, &send_param, &messaging, &holder)
         .is_err());
 }

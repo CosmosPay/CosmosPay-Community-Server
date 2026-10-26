@@ -81,6 +81,10 @@ describe('Public record tokens (e2e)', () => {
       network: 'public',
       amount: '10',
       amountSent: '10',
+      // The commission columns default to no commission.
+      feeBps: 0,
+      feeAmount: '0',
+      feeWallet: null,
       uri: 'web+stellar:tx?xdr=AAAA',
       txHash: 'cd'.repeat(32),
       guid: `0x${'ef'.repeat(32)}`,

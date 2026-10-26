@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { USDT0_MERCHANT_FEE_WRAPPER_WASM_SHA256 } from '@/usdt0/usdt0.constants';
+import { USDT0_FEE_WRAPPER_WASM_SHA256 } from '@/usdt0/usdt0.constants';
 
 const CRATE = join(
   __dirname,
@@ -9,14 +9,14 @@ const CRATE = join(
   '..',
   'contracts',
   'soroban',
-  'merchant-fee-oft',
+  'usdt0-fee-wrapper',
 );
 
-describe('the USDT0 merchant fee wrapper', () => {
+describe('the USDT0 fee wrapper', () => {
   it('pins the hash of the committed wasm, the one a deployment must run', () => {
-    const wasm = readFileSync(join(CRATE, 'merchant_fee_oft.wasm'));
+    const wasm = readFileSync(join(CRATE, 'usdt0_fee_wrapper.wasm'));
     expect(createHash('sha256').update(wasm).digest('hex')).toBe(
-      USDT0_MERCHANT_FEE_WRAPPER_WASM_SHA256,
+      USDT0_FEE_WRAPPER_WASM_SHA256,
     );
   });
 

@@ -961,10 +961,10 @@ NEAR Intents 从输入中扣除它，报价的输出已是扣除后的净额，�
 | 隐私支付（`POST /v1/zk-payments`） | 付款方以 XLM 向 `wallet` 进行第三笔保密转账，使该费用与付款本身一样保密。`wallet` 必须在 Cosmos Pay 的代币上持有审计方 0 下的保密账户（否则返回 `400 recipient_not_registered`），且不能是收款方或手续费账户。0.01% 的佣金仍按 `amount` 计算，记录中的 `amount` 是付款方支付的总额。confirm 以 `merchantFeeTxHash` 接收第三个哈希，并像另外两笔一样校验该转账 |
 | 流动性（`POST /v1/liquidity-pools/deposit` 与 `/withdraw`） | 存入或取出会移动两种资产，因此费用为每种资产的 `bps`（向下取整），在同一笔交易中按每种资产各一笔付款支付给 `wallet`，位于存入操作之后，或位于取出操作及其套餐佣金之后；`fixed` 会被拒绝（`400 validation_failed`）。存入时，`recipient` 从金额中扣除（进入池子的更少），`payer` 在其之上加收。取出时，无论 `paidBy` 为何，费用都从取出所得中按其保证的最低金额的比例扣除。`wallet` 必须存在并对两种资产都有 trustline。记录中的 `amount` / `asset` 是资产 A 的部分，`amountB` / `assetB` 是资产 B 的部分 |
 | Monad 上的兑换（`POST /v1/swaps`，`chain: monad`） | Kuru Flow 每笔兑换只支付一个推荐费用，已被套餐佣金使用，因此带商户手续费的兑换会经过 `contracts/MerchantFeeSwapRouter.sol`：由运营方针对 Kuru 的 router 部署一次，并在 `KURU_MERCHANT_FEE_ROUTER` 中指定。Kuru 以该 router 为用户报价，钱包向其发送（MON）或授权（ERC-20）输入加手续费，router 在同一笔交易中支付手续费、执行 Kuru 的 calldata、转出输出并退还 Kuru 未用完的部分，低于 Kuru 的最低值时回滚。在把地址交给钱包之前，会将已部署的代码与 artifact 比对。未设置该变量时返回 `400 merchant_fee_unsupported` |
-| USDT0 转账（`POST /v1/usdt0/transfers`） | 一笔 Soroban 交易只承载一个操作，因此此类转账的操作是 `contracts/soroban/merchant-fee-oft`（`USDT0_MERCHANT_FEE_WRAPPER`）而不是 OFT：在持有人的同一授权下，它先以 USDT0 将手续费转给 `wallet`（必须对 USDT0 有 trustline），再以相同参数调用 OFT 的 `send` 并返回其回执。`recipient` 从 `amount` 中扣除手续费（发送更少），`payer` 在其之上加收。在把交易交给持有人之前，会校验已部署的 wasm 及其绑定的 OFT 和代币。未设置该变量时返回 `400 merchant_fee_unsupported` |
+| USDT0 转账（`POST /v1/usdt0/transfers`） | 一笔 Soroban 交易只承载一个操作，因此此类转账的操作是 `contracts/soroban/usdt0-fee-wrapper`（`USDT0_FEE_WRAPPER`）而不是 OFT：在持有人的同一授权下，它先以 USDT0 将手续费转给 `wallet`（必须对 USDT0 有 trustline），再以相同参数调用 OFT 的 `send` 并返回其回执。`recipient` 从 `amount` 中扣除手续费（发送更少），`payer` 在其之上加收。在把交易交给持有人之前，会校验已部署的 wasm 及其绑定的 OFT 和代币。未设置该变量时返回 `400 merchant_fee_unsupported` |
 
 以上每项操作都接受该字段。若本部署未配置某项操作所需的合约（`KURU_MERCHANT_FEE_ROUTER`、
-`USDT0_MERCHANT_FEE_WRAPPER`），该操作返回 `400 merchant_fee_unsupported`。
+`USDT0_FEE_WRAPPER`），该操作返回 `400 merchant_fee_unsupported`。
 
 ## 从 Stellar 发送 USDT0（LayerZero）
 
@@ -987,9 +987,9 @@ routes → quote → create (unsigned XDR + SEP-7 link) → the holder signs
 
 **通常没有二维码。** Soroban 交易的账本 footprint 使其 XDR 约有 7,000 个字符，超出二维码的容量，因此 `qr` 通常为 `null`：请用已连接的钱包或通过 `uri` 链接签名。
 
-**暂不收取 Cosmos Pay 佣金。** 一笔 Soroban 交易只承载一个操作，因此手续费支付无法像 path-payment swap 那样随 `send` 一起执行，本路由不收取套餐费率。是否收取由产品负责人决定。
+**佣金：套餐费率，通过手续费 wrapper 收取。** 一笔 Soroban 交易只承载一个操作，因此佣金与商户手续费经过同一个合约（`USDT0_FEE_WRAPPER`，见下文）：按 `amount` 的 `feeBps` 计算并向下取整，以 USDT0 支付给 `STELLAR_SWAP_FEE_WALLET`（必须对 USDT0 有 trustline，否则 `503 misconfigured`），其余部分发送。未配置 wrapper 时，转账不收取佣金（`feeBps: 0`），这是产品负责人的决定（2026-10-26）。
 
-**商户手续费通过合约收取。** 使用 `merchantFee`（见 **商户手续费**）时，操作是 wrapper 的 `send`（`USDT0_MERCHANT_FEE_WRAPPER`）：它在持有人的同一授权下，以 USDT0 将手续费转给手续费钱包，并以相同参数调用 OFT 的 `send`，然后返回 OFT 的回执，因此转账仍按同一个 guid 跟踪。只需部署一次，没有所有者：`stellar contract deploy --wasm contracts/soroban/merchant-fee-oft/merchant_fee_oft.wasm --network mainnet -- --oft CBOWOLFSDM5PZXNFIVDMP5NZ7U2GSIHED6H6R446QOHF266XINKUMMF6 --token CBSJZEIO5C7KC2SF3MKSNXXJSW5G3VTNBX4ATMKUI3B2MR4JKM4R26YF`。
+**商户手续费通过合约收取。** 使用 `merchantFee`（见 **商户手续费**）时，操作是 wrapper 的 `send`（`USDT0_FEE_WRAPPER`）：它在持有人的同一授权下，以 USDT0 将手续费转给手续费钱包，并以相同参数调用 OFT 的 `send`，然后返回 OFT 的回执，因此转账仍按同一个 guid 跟踪。只需部署一次，没有所有者：`stellar contract deploy --wasm contracts/soroban/usdt0-fee-wrapper/usdt0_fee_wrapper.wasm --network mainnet -- --oft CBOWOLFSDM5PZXNFIVDMP5NZ7U2GSIHED6H6R446QOHF266XINKUMMF6 --token CBSJZEIO5C7KC2SF3MKSNXXJSW5G3VTNBX4ATMKUI3B2MR4JKM4R26YF`。
 
 **RPC。** 所有调用都经过 Stellar 主网的 Soroban RPC，即 `STELLAR_RPC_URL_MAINNET`（默认是 Gateway.fm 的公共端点，有速率限制：生产环境请设置服务商的端点）。使用前会校验其 passphrase，连到其他网络的节点会返回 `503 misconfigured`。
 
@@ -1446,11 +1446,15 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
   **部署步骤：**从任意账户部署 artifact 的字节码，其后跟上 Kuru Flow router 地址（32 字节字），
   合约没有所有者；然后设置该变量。此类兑换的钱包授权的是 router 而不是 Kuru。未设置时，Monad
   兑换仍返回 `merchant_fee_unsupported`。
-- **USDT0 转账也接受 `merchantFee`**：前提是 `USDT0_MERCHANT_FEE_WRAPPER` 指向已部署的
-  `contracts/soroban/merchant-fee-oft`（wasm 与 crate 一起提交，由
-  `USDT0_MERCHANT_FEE_WRAPPER_WASM_SHA256` 固定）。**部署步骤：**执行 USDT0 一节中的
+- **USDT0 转账也接受 `merchantFee`**：前提是 `USDT0_FEE_WRAPPER` 指向已部署的
+  `contracts/soroban/usdt0-fee-wrapper`（wasm 与 crate 一起提交，由
+  `USDT0_FEE_WRAPPER_WASM_SHA256` 固定）。**部署步骤：**执行 USDT0 一节中的
   `stellar contract deploy` 命令，然后设置该变量。响应新增 `merchantFee`。未设置时返回
   `merchant_fee_unsupported`。
+- **USDT0 转账收取套餐佣金**：通过手续费 wrapper（`USDT0_FEE_WRAPPER`，其 `send` 接收手续费列表），
+  按 `amount` 的 `feeBps` 支付给 `STELLAR_SWAP_FEE_WALLET`（必须对 USDT0 有 trustline）。迁移
+  `20261026230000_usdt0_commission` 为 `usdt0_transfer` 添加 `feeBps`、`feeAmount` 与 `feeWallet`；
+  转账与报价都会返回它们。未配置 wrapper 时，与以前一样不收取佣金。
 
 ### 列表遵循密钥的网络；仪表盘读取会被缓存
 
@@ -1961,7 +1965,7 @@ curl -H "X-Gateway-Secret: $APISIX_GATEWAY_SECRET" -H "X-Consumer-Username: ops"
 | `STELLAR_HORIZON_URL_PUBLIC` | 否 | `https://horizon.stellar.org` | 主网 Horizon 基础 URL |
 | `STELLAR_HORIZON_URL_TESTNET` | 否 | `https://horizon-testnet.stellar.org` | 测试网 Horizon 基础 URL |
 | `STELLAR_RPC_URL_MAINNET` | 否 | `https://soroban-rpc.mainnet.stellar.gateway.fm` | USDT0 转账使用的 Stellar 主网 Soroban RPC（使用前校验 passphrase）。公共端点有速率限制：生产环境请使用服务商的端点 |
-| `USDT0_MERCHANT_FEE_WRAPPER` | USDT0 上的商户手续费需要 | — | 已部署并绑定到 USDT0 的 OFT 与代币的 `contracts/soroban/merchant-fee-oft`。未设置时，带商户手续费的 USDT0 转账返回 `merchant_fee_unsupported`；未运行固定 wasm 或绑定到其他合约的地址返回 `503 misconfigured` |
+| `USDT0_FEE_WRAPPER` | USDT0 上的商户手续费需要 | — | 已部署并绑定到 USDT0 的 OFT 与代币的 `contracts/soroban/usdt0-fee-wrapper`。未设置时，带商户手续费的 USDT0 转账返回 `merchant_fee_unsupported`；未运行固定 wasm 或绑定到其他合约的地址返回 `503 misconfigured`。它也承载套餐佣金；未设置时 USDT0 转账不收取佣金。 |
 | `SOLANA_RPC_URL_MAINNET` | 否 | `https://api.mainnet-beta.solana.com` | `prod` 密钥使用的 Solana RPC（mainnet-beta；使用前校验 genesis hash）。公共端点有速率限制：生产环境请使用服务商的端点 |
 | `SOLANA_RPC_URL_DEVNET` | 否 | `https://api.devnet.solana.com` | `dev` 密钥使用的 Solana RPC（devnet） |
 | `SOLANA_RPC_TIMEOUT_MS` | 否 | `10000` | 单次 Solana RPC 调用的时间预算（毫秒） |

@@ -72,3 +72,6 @@ prisma/*.db
 
 # Soroban contract builds (the reviewed wasm is committed beside its crate).
 contracts/soroban/**/target/
+
+# Locally generated swap commission wallets (keys); never committed.
+.fee-wallets/
