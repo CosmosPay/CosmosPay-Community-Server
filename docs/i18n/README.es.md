@@ -287,6 +287,7 @@ consola llega a ella. Las rutas usan la forma `{param}` de OpenAPI.
 | GET | `/v1/payment-intents/{id}/transitions` | `payments:read` |  |
 | POST | `/v1/payment-intents/{id}/validate` | `payments:write` |  |
 | GET | `/v1/payment-links/{id}` | ninguno — `@Public()`, presupuesto por dirección de cliente |  |
+| POST | `/v1/payment-links/{id}/transaction` | ninguno: `@Public()`, presupuesto por dirección de cliente |  |
 | GET | `/v1/plugins` | `plugins:read` |  |
 | GET | `/v1/plugins/{slug}` | `plugins:read` |  |
 | PUT | `/v1/plugins/{slug}/installation` | `plugins:write` |  |
@@ -1436,12 +1437,14 @@ cambia.
 | Operación | Cómo se paga la comisión |
 | --- | --- |
 | Swaps en Stellar (`POST /v1/swaps`) | Con su propio `payment` en el activo de origen, en la transacción del swap, después de la comisión del plan. `wallet` es una cuenta de Stellar que tiene la trustline del activo de origen (si no, se rechaza antes de construir nada) |
+| Enlaces de pago en Stellar (`POST /v1/payment-intents/tx` y `/pay`) | Un segundo `payment` en el mismo envelope, a `wallet`, después del del comercio. El envelope de un intent `tx` lleva los dos. Un enlace `pay` no puede (SEP-7 `pay` paga a una sola cuenta) y necesita un `amount`: su `uri` es el checkout alojado (`PAYMENT_LINK_CHECKOUT_URL/<id>`), el enlace público dice `payerAccountRequired: true` y `POST /v1/payment-links/{id}/transaction` arma el envelope del pagador a partir de su cuenta. El intent solo se liquida con una transacción que paga los dos tramos con su memo |
 | Swaps entre cadenas (`POST /v1/cross-chain-swaps`) | Una segunda app fee de NEAR Intents. `wallet` es un id de cuenta de NEAR, acreditada dentro de NEAR Intents. Las app fees son puntos básicos enteros del depósito, así que la comisión se convierte en los puntos básicos que representa, redondeados hacia abajo; una comisión menor a un punto básico se rechaza. Con `payer`, la comisión del plan también es una parte del depósito mayor |
 | Swaps en Solana y Monad | Todavía no: Jupiter y Kuru Flow pagan una sola comisión de integrador por swap y la usa la comisión del plan (`400 merchant_fee_unsupported`) |
 
-Los enlaces de pago, los pagos privados, USDT0 y la liquidez suman el campo a medida que
-cada uno tenga una forma de dividir el pago on-chain; hasta entonces sus rutas lo rechazan
-como campo desconocido (`400 validation_failed`).
+Los enlaces de pago en Solana y Monad responden `merchant_fee_unsupported`. Los pagos
+privados, USDT0 y la liquidez suman el campo a medida que cada uno tenga una forma de
+dividir el pago on-chain; hasta entonces sus rutas lo rechazan como campo desconocido
+(`400 validation_failed`).
 
 ## USDT0 desde Stellar (LayerZero)
 
@@ -2175,6 +2178,16 @@ misma lista `PLUGINS_ENABLED` que los plugins aislados.
   existentes se leen sin comisión.
 - **Nuevo código de error `merchant_fee_unsupported`** (400): una comisión del comercio
   en un swap de Solana o Monad.
+- **Los enlaces de pago en Stellar también aceptan `merchantFee`** (`POST
+  /v1/payment-intents/tx` y `/pay`; un enlace `pay` necesita un `amount`). Los enlaces de
+  Solana y Monad responden `merchant_fee_unsupported`. Las respuestas y el enlace público
+  suman `merchantFee`; el enlace público también `payerAccountRequired`.
+- **Nueva ruta `POST /v1/payment-links/{id}/transaction`** (`@Public()`): el envelope que
+  firma el pagador de un enlace de Stellar con comisión. **Paso de despliegue:** la ruta
+  sin clave de APISIX para `/v1/payment-links/*` debe permitir `POST` (y su plugin CORS,
+  `POST` con `Content-Type`), o el checkout no puede armarlo.
+- **Nueva variable `PAYMENT_LINK_CHECKOUT_URL`** (por defecto
+  `https://payments.cosmospay.lat`): adónde apunta el `uri` de esos enlaces.
 
 ### Los listados siguen la red de la clave; las lecturas del dashboard se cachean
 
@@ -3064,6 +3077,7 @@ Cada variable leída de `process.env` en `src/` se valida en el arranque mediant
 | `OBSERVER_INTERVAL_MS` | no | `15000` | Intervalo de sondeo del observador (ms, mín. 1000) |
 | `OBSERVER_BATCH_SIZE` | no | `50` | Máximo de intenciones/swaps por ciclo del observador |
 | `PAYMENT_INTENT_TTL_SECONDS` | no | `3600` | Vida de una intención impaga antes de pasar a `EXPIRED` |
+| `PAYMENT_LINK_CHECKOUT_URL` | no | `https://payments.cosmospay.lat` | El checkout alojado que abre un enlace de pago de Stellar con comisión del comercio (`<url>/<id>`) |
 | `WEBHOOK_TIMEOUT_MS` | no | `5000` | Fallback heredado del timeout de webhooks (ms) |
 | `WEBHOOK_CONNECT_TIMEOUT_MS` | no | `3000` | Presupuesto de conexión de los webhooks salientes (ms) |
 | `WEBHOOK_READ_TIMEOUT_MS` | no | `5000` | Presupuesto de lectura de los webhooks salientes (ms) |

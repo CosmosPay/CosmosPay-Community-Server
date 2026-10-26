@@ -284,6 +284,7 @@ Paths OpenAPI के `{param}` रूप में लिखे गए हैं
 | GET | `/v1/payment-intents/{id}/transitions` | `payments:read` |  |
 | POST | `/v1/payment-intents/{id}/validate` | `payments:write` |  |
 | GET | `/v1/payment-links/{id}` | कोई नहीं — `@Public()`, हर client address का अपना budget |  |
+| POST | `/v1/payment-links/{id}/transaction` | कोई नहीं: `@Public()`, हर client address का अपना budget |  |
 | GET | `/v1/plugins` | `plugins:read` |  |
 | GET | `/v1/plugins/{slug}` | `plugins:read` |  |
 | PUT | `/v1/plugins/{slug}/installation` | `plugins:write` |  |
@@ -1379,12 +1380,13 @@ client address (`429 rate_limited`)।
 | ऑपरेशन | फ़ीस कैसे दी जाती है |
 | --- | --- |
 | Stellar swaps (`POST /v1/swaps`) | स्वैप के transaction में source asset का अपना `payment`, plan कमीशन के बाद। `wallet` एक Stellar खाता है जिसके पास source asset की trustline है (वरना कुछ बनाने से पहले ही अस्वीकार) |
+| Stellar payment links (`POST /v1/payment-intents/tx` और `/pay`) | उसी envelope में `wallet` को दूसरा `payment`, मर्चेंट वाले के बाद। `tx` intent का envelope दोनों रखता है। `pay` link ऐसा नहीं कर सकता (SEP-7 `pay` एक ही खाते को भुगतान करता है) और उसे `amount` चाहिए: उसका `uri` hosted checkout है (`PAYMENT_LINK_CHECKOUT_URL/<id>`), सार्वजनिक link `payerAccountRequired: true` बताता है, और `POST /v1/payment-links/{id}/transaction` भुगतानकर्ता के खाते से उसका envelope बनाता है। Intent तभी settle होता है जब transaction अपने memo के साथ दोनों हिस्से चुकाए |
 | Cross-chain swaps (`POST /v1/cross-chain-swaps`) | NEAR Intents की दूसरी app fee। `wallet` एक NEAR account id है, जिसे NEAR Intents के भीतर क्रेडिट मिलता है। App fees डिपॉज़िट के पूरे basis points होती हैं, इसलिए फ़ीस उतने basis points बनती है, नीचे की ओर गोल; एक basis point से कम फ़ीस अस्वीकार है। `payer` के साथ plan कमीशन भी बड़े डिपॉज़िट का हिस्सा होता है |
 | Solana और Monad पर swaps | अभी नहीं: Jupiter और Kuru Flow हर swap पर एक ही integrator फ़ीस देते हैं और plan कमीशन उसे लेता है (`400 merchant_fee_unsupported`) |
 
-Payment links, निजी भुगतान, USDT0 और liquidity यह फ़ील्ड तब लेंगे जब हर एक के पास भुगतान
-को on-chain बाँटने का तरीका होगा; तब तक उनके रूट इसे अज्ञात फ़ील्ड मानकर अस्वीकार करते हैं
-(`400 validation_failed`)।
+Solana और Monad पर payment links `merchant_fee_unsupported` लौटाते हैं। निजी भुगतान,
+USDT0 और liquidity यह फ़ील्ड तब लेंगे जब हर एक के पास भुगतान को on-chain बाँटने का तरीका
+होगा; तब तक उनके रूट इसे अज्ञात फ़ील्ड मानकर अस्वीकार करते हैं (`400 validation_failed`)।
 
 ## Stellar से USDT0 (LayerZero)
 
@@ -2087,6 +2089,16 @@ seal होती हैं और कभी लौटाई नहीं जा
   जाती हैं।
 - **नया error code `merchant_fee_unsupported`** (400): Solana या Monad swap पर मर्चेंट
   फ़ीस।
+- **Stellar payment links भी `merchantFee` लेते हैं** (`POST /v1/payment-intents/tx` और
+  `/pay`; `pay` link को `amount` चाहिए)। Solana और Monad links
+  `merchant_fee_unsupported` लौटाते हैं। जवाबों और सार्वजनिक link में `merchantFee`
+  जुड़ता है; सार्वजनिक link में `payerAccountRequired` भी।
+- **नया रूट `POST /v1/payment-links/{id}/transaction`** (`@Public()`): फ़ीस वाले Stellar
+  link का भुगतानकर्ता जिस envelope पर हस्ताक्षर करता है। **Deploy step:**
+  `/v1/payment-links/*` के लिए APISIX का keyless रूट `POST` की अनुमति दे (और उसका CORS
+  plugin `Content-Type` के साथ `POST`), वरना checkout इसे नहीं बना सकता।
+- **नया variable `PAYMENT_LINK_CHECKOUT_URL`** (डिफ़ॉल्ट
+  `https://payments.cosmospay.lat`): ऐसे links का `uri` कहाँ जाता है।
 
 ### Lists key के network का पालन करती हैं; dashboard reads cache होते हैं
 
@@ -2943,6 +2955,7 @@ type दोबारा बनाए बिना enum value drop नहीं �
 | `OBSERVER_INTERVAL_MS` | नहीं | `15000` | Observer poll interval (ms, न्यूनतम 1000) |
 | `OBSERVER_BATCH_SIZE` | नहीं | `50` | प्रति observer tick अधिकतम intents/swaps |
 | `PAYMENT_INTENT_TTL_SECONDS` | नहीं | `3600` | `EXPIRED` होने से पहले बिना भुगतान वाले intent की आयु |
+| `PAYMENT_LINK_CHECKOUT_URL` | नहीं | `https://payments.cosmospay.lat` | मर्चेंट फ़ीस वाला Stellar payment link जो hosted checkout खोलता है (`<url>/<id>`) |
 | `WEBHOOK_TIMEOUT_MS` | नहीं | `5000` | पुराना webhook timeout fallback (ms) |
 | `WEBHOOK_CONNECT_TIMEOUT_MS` | नहीं | `3000` | outbound webhook का connect budget (ms) |
 | `WEBHOOK_READ_TIMEOUT_MS` | नहीं | `5000` | outbound webhook का read budget (ms) |

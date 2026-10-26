@@ -8,6 +8,13 @@ import type { StellarNetwork } from '@/config/configuration';
  */
 export const DEFAULT_ENV_FILE = '.env';
 
+/**
+ * The hosted checkout a Stellar payment link with a merchant fee opens
+ * (`PAYMENT_LINK_CHECKOUT_URL`): the payments site of the developer platform.
+ */
+export const DEFAULT_PAYMENT_LINK_CHECKOUT_URL =
+  'https://payments.cosmospay.lat';
+
 export const DEFAULT_SWAP_FEE_BPS = 50;
 export const DEFAULT_SWAP_SLIPPAGE_BPS = 50;
 export const DEFAULT_SWAP_MAX_SLIPPAGE_BPS = 500;

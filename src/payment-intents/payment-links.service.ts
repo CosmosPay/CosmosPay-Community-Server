@@ -1,7 +1,13 @@
 import { Injectable } from '@nestjs/common';
 import type { Prisma } from '@generated/prisma/client';
 import { isChain } from '@/chains/chains.constants';
-import { ApiError } from '@/common/errors/api-error';
+import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
+import { readMerchantFeeRecord } from '@/common/merchant-fee/merchant-fee';
+import type { StellarNetwork } from '@/config/configuration';
+import type { PayerTransactionEntity } from '@/payment-intents/entities/payer-transaction.entity';
+import { paymentLegs } from '@/payment-intents/payment-legs';
+import { resolveAsset } from '@/stellar/asset';
+import { STELLAR_DECIMALS } from '@/stellar/stellar.constants';
 import { PrismaService } from '@/prisma/prisma.service';
 import type { PublicPaymentLinkEntity } from '@/payment-intents/entities/public-payment-link.entity';
 import { effectiveCheckoutTheme } from '@/payment-intents/payment-intents.constants';
@@ -33,6 +39,7 @@ export const PAYMENT_LINK_SELECT = {
   uri: true,
   txHash: true,
   networkFee: true,
+  merchantFee: true,
   expiresAt: true,
   createdAt: true,
   checkoutTheme: true,
@@ -42,6 +49,21 @@ export const PAYMENT_LINK_SELECT = {
 export type PaymentLinkRow = Prisma.PaymentIntentGetPayload<{
   select: typeof PAYMENT_LINK_SELECT;
 }>;
+
+/**
+ * Whether `row` cannot be one wallet link and builds its envelope for its
+ * payer instead: a Stellar PAY link with a merchant fee (SEP-7 `pay` pays one
+ * account; the fee is a second payment).
+ */
+export function payerAccountRequired(
+  row: Pick<PaymentLinkRow, 'chain' | 'kind' | 'merchantFee'>,
+): boolean {
+  return (
+    row.chain === 'stellar' &&
+    row.kind === 'PAY' &&
+    readMerchantFeeRecord(row.merchantFee) !== null
+  );
+}
 
 /**
  * What a payer may see of an intent, field by field.
@@ -78,6 +100,8 @@ export function toPublicPaymentLink(
     qr,
     txHash: row.txHash,
     networkFee: row.networkFee,
+    merchantFee: readMerchantFeeRecord(row.merchantFee),
+    payerAccountRequired: payerAccountRequired(row),
     expiresAt: row.expiresAt ? row.expiresAt.toISOString() : null,
     createdAt: row.createdAt.toISOString(),
     checkoutTheme: effectiveCheckoutTheme(row.checkoutTheme),
@@ -119,5 +143,53 @@ export class PaymentLinksService {
     // The same derivation the owner's reads use: QR of the stored URI, never
     // stored itself.
     return toPublicPaymentLink(row, await this.links.qr(row.uri));
+  }
+
+  /**
+   * The envelope the payer of a Stellar link with a merchant fee signs: the
+   * payment to the merchant and the fee's, with the link's MEMO_ID, built on
+   * `account`'s sequence number. Persists nothing: the verifier reads the
+   * ledger, so any envelope that pays both legs with the memo settles the
+   * link, and building another one (a lapsed timeout) costs nothing but a
+   * Horizon read.
+   *
+   * Only for a link that needs it ({@link payerAccountRequired}) and is still
+   * open: any other link has its own wallet link in `uri`, and a settled,
+   * failed, cancelled or expired one is history.
+   */
+  async payerTransaction(
+    id: string,
+    account: string,
+  ): Promise<PayerTransactionEntity> {
+    const row = await this.prisma.paymentIntent.findUnique({
+      where: { id },
+      select: PAYMENT_LINK_SELECT,
+    });
+    if (!row) {
+      throw ApiError.notFound(`Payment intent ${id} not found`);
+    }
+    if (!payerAccountRequired(row)) {
+      throw ApiError.badRequest(
+        ApiErrorCode.ValidationFailed,
+        'This payment link pays its destination directly: open its uri',
+      );
+    }
+    if (row.status !== 'PENDING') {
+      throw ApiError.badRequest(
+        ApiErrorCode.InvalidStateTransition,
+        `Payment intent ${id} is ${row.status}: it can no longer be paid`,
+      );
+    }
+    const legs = paymentLegs(row, STELLAR_DECIMALS);
+    const { xdr, uri } = await this.links.tx(row.network as StellarNetwork, {
+      source: account,
+      destination: row.destination,
+      amount: legs.destinationAmount!,
+      asset: resolveAsset(row.asset, row.assetIssuer ?? undefined),
+      memo: row.memo,
+      msg: row.msg ?? undefined,
+      fee: legs.fee,
+    });
+    return { xdr, uri, qr: await this.links.qr(uri) };
   }
 }

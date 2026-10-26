@@ -173,6 +173,18 @@ export const PAYMENT_LINK_READ_RATE_LIMIT = {
 };
 
 /**
+ * `POST /v1/payment-links/{id}/transaction`, per client address: each call
+ * reads the payer's account from Horizon (and the merchant's, for an issued
+ * asset) and builds an envelope. A payer builds one, maybe again after a
+ * timeout lapses; twenty a minute is a checkout retrying many times over.
+ */
+export const PAYMENT_LINK_TRANSACTION_RATE_LIMIT = {
+  name: 'payment-links:transaction',
+  limit: 20,
+  windowMs: 60 * 1000,
+};
+
+/**
  * The most older intents a settlement asks the chain about before it claims a
  * transaction (`settlement-rivals.ts`): rivals of other consumers that the same
  * payment may also pay, and that therefore outrank the intent being settled.

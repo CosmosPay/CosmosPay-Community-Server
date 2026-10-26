@@ -1,5 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { CHAINS, type Chain } from '@/chains/chains.constants';
+import { MerchantFeeEntity } from '@/common/merchant-fee/merchant-fee.entity';
 import {
   CHECKOUT_THEMES,
   type CheckoutTheme,
@@ -152,6 +153,26 @@ export class PublicPaymentLinkEntity {
       'relayer’s fee for forwarding a Monad deposit. Null when nothing is.',
   })
   networkFee!: string | null;
+
+  @ApiProperty({
+    type: MerchantFeeEntity,
+    nullable: true,
+    description:
+      'A fee the merchant charges on this payment, paid to its own wallet in ' +
+      'the same transaction; show it to the payer. With `paidBy: payer` the ' +
+      'payer sends `amount` plus it. Null when there is none.',
+  })
+  merchantFee!: MerchantFeeEntity | null;
+
+  @ApiProperty({
+    example: false,
+    description:
+      'True when the payment cannot be one link (a Stellar link with a ' +
+      'merchant fee: SEP-7 `pay` pays one account). Ask the payer for their ' +
+      'account, then `POST /v1/payment-links/{id}/transaction` builds the ' +
+      'envelope to sign; `uri` is the hosted checkout then, not a wallet link.',
+  })
+  payerAccountRequired!: boolean;
 
   @ApiProperty({
     type: String,

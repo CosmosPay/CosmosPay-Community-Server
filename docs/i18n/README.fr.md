@@ -285,6 +285,7 @@ Les chemins utilisent la forme OpenAPI `{param}`.
 | GET | `/v1/payment-intents/{id}/transitions` | `payments:read` |  |
 | POST | `/v1/payment-intents/{id}/validate` | `payments:write` |  |
 | GET | `/v1/payment-links/{id}` | aucun — `@Public()`, budget par adresse client |  |
+| POST | `/v1/payment-links/{id}/transaction` | aucun : `@Public()`, budget par adresse client |  |
 | GET | `/v1/plugins` | `plugins:read` |  |
 | GET | `/v1/plugins/{slug}` | `plugins:read` |  |
 | PUT | `/v1/plugins/{slug}/installation` | `plugins:write` |  |
@@ -1422,12 +1423,14 @@ désigne. Ils s'ajoutent à la commission du plan que Cosmos Pay prélève, qui 
 | Opération | Comment les frais sont payés |
 | --- | --- |
 | Swaps sur Stellar (`POST /v1/swaps`) | Par leur propre `payment` dans l'actif source, dans la transaction du swap, après la commission du plan. `wallet` est un compte Stellar qui détient la trustline de l'actif source (sinon refusé avant toute construction) |
+| Liens de paiement Stellar (`POST /v1/payment-intents/tx` et `/pay`) | Un second `payment` dans la même enveloppe, vers `wallet`, après celui du marchand. L'enveloppe d'un intent `tx` porte les deux. Un lien `pay` ne le peut pas (SEP-7 `pay` paie un seul compte) et exige un `amount` : son `uri` est le checkout hébergé (`PAYMENT_LINK_CHECKOUT_URL/<id>`), le lien public indique `payerAccountRequired: true` et `POST /v1/payment-links/{id}/transaction` construit l'enveloppe du payeur à partir de son compte. L'intent n'est réglé que par une transaction qui paie les deux parts avec son memo |
 | Swaps entre chaînes (`POST /v1/cross-chain-swaps`) | Une deuxième app fee de NEAR Intents. `wallet` est un identifiant de compte NEAR, crédité dans NEAR Intents. Les app fees sont des points de base entiers du dépôt : les frais deviennent les points de base qu'ils représentent, arrondis à l'inférieur ; des frais inférieurs à un point de base sont refusés. Avec `payer`, la commission du plan porte aussi sur le dépôt plus grand |
 | Swaps sur Solana et Monad | Pas encore : Jupiter et Kuru Flow paient un seul frais d'intégrateur par swap et la commission du plan l'utilise (`400 merchant_fee_unsupported`) |
 
-Les liens de paiement, les paiements privés, USDT0 et la liquidité prennent le champ à
-mesure que chacun gagne un moyen de partager le paiement on-chain ; d'ici là leurs routes
-le refusent comme champ inconnu (`400 validation_failed`).
+Les liens de paiement sur Solana et Monad répondent `merchant_fee_unsupported`. Les
+paiements privés, USDT0 et la liquidité prennent le champ à mesure que chacun gagne un
+moyen de partager le paiement on-chain ; d'ici là leurs routes le refusent comme champ
+inconnu (`400 validation_failed`).
 
 ## USDT0 depuis Stellar (LayerZero)
 
@@ -2166,6 +2169,16 @@ plugins isolés.
   lignes existantes se lisent sans frais.
 - **Nouveau code d'erreur `merchant_fee_unsupported`** (400) : des frais du marchand sur un
   swap Solana ou Monad.
+- **Les liens de paiement Stellar acceptent aussi `merchantFee`** (`POST
+  /v1/payment-intents/tx` et `/pay` ; un lien `pay` exige un `amount`). Les liens Solana et
+  Monad répondent `merchant_fee_unsupported`. Les réponses et le lien public gagnent
+  `merchantFee` ; le lien public aussi `payerAccountRequired`.
+- **Nouvelle route `POST /v1/payment-links/{id}/transaction`** (`@Public()`) : l'enveloppe
+  que signe le payeur d'un lien Stellar avec frais. **Étape de déploiement :** la route
+  sans clé d'APISIX pour `/v1/payment-links/*` doit autoriser `POST` (et son plugin CORS,
+  `POST` avec `Content-Type`), sinon le checkout ne peut pas la construire.
+- **Nouvelle variable `PAYMENT_LINK_CHECKOUT_URL`** (par défaut
+  `https://payments.cosmospay.lat`) : où pointe l'`uri` de ces liens.
 
 ### Les listes suivent le réseau de la clé ; les lectures du dashboard sont mises en cache
 
@@ -3075,6 +3088,7 @@ Chaque variable lue depuis `process.env` dans `src/` est validée au démarrage 
 | `OBSERVER_INTERVAL_MS` | non | `15000` | Intervalle de polling de l'observateur (ms, min 1000) |
 | `OBSERVER_BATCH_SIZE` | non | `50` | Nombre max d'intentions/swaps par cycle de l'observateur |
 | `PAYMENT_INTENT_TTL_SECONDS` | non | `3600` | Durée de vie d'une intention impayée avant `EXPIRED` |
+| `PAYMENT_LINK_CHECKOUT_URL` | non | `https://payments.cosmospay.lat` | Le checkout hébergé qu'ouvre un lien de paiement Stellar avec frais du marchand (`<url>/<id>`) |
 | `WEBHOOK_TIMEOUT_MS` | non | `5000` | Timeout historique de repli des webhooks (ms) |
 | `WEBHOOK_CONNECT_TIMEOUT_MS` | non | `3000` | Budget de connexion des webhooks sortants (ms) |
 | `WEBHOOK_READ_TIMEOUT_MS` | non | `5000` | Budget de lecture des webhooks sortants (ms) |

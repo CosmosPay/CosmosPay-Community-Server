@@ -251,6 +251,7 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | GET | `/v1/payment-intents/{id}/transitions` | `payments:read` |  |
 | POST | `/v1/payment-intents/{id}/validate` | `payments:write` |  |
 | GET | `/v1/payment-links/{id}` | 无 — `@Public()`，按客户端地址计预算 |  |
+| POST | `/v1/payment-links/{id}/transaction` | 无：`@Public()`，按客户端地址计预算 |  |
 | GET | `/v1/plugins` | `plugins:read` |  |
 | GET | `/v1/plugins/{slug}` | `plugins:read` |  |
 | PUT | `/v1/plugins/{slug}/installation` | `plugins:write` |  |
@@ -949,11 +950,13 @@ NEAR Intents 从输入中扣除它，报价的输出已是扣除后的净额，�
 | 操作 | 费用如何支付 |
 | --- | --- |
 | Stellar 兑换（`POST /v1/swaps`） | 在兑换交易中以源资产单独一笔 `payment` 支付，位于套餐佣金之后。`wallet` 是持有源资产 trustline 的 Stellar 账户（否则在构建任何东西之前拒绝） |
+| Stellar 支付链接（`POST /v1/payment-intents/tx` 与 `/pay`） | 在同一个 envelope 中，在商户那笔之后，向 `wallet` 的第二笔 `payment`。`tx` intent 的 envelope 同时包含两笔。`pay` 链接做不到（SEP-7 `pay` 只付给一个账户）并且需要 `amount`：其 `uri` 为托管收银台（`PAYMENT_LINK_CHECKOUT_URL/<id>`），公开链接显示 `payerAccountRequired: true`，`POST /v1/payment-links/{id}/transaction` 根据付款方账户构建其 envelope。只有用其 memo 同时支付两部分的交易才会结算该 intent |
 | 跨链兑换（`POST /v1/cross-chain-swaps`） | NEAR Intents 的第二个 app fee。`wallet` 是 NEAR 账户 id，在 NEAR Intents 内入账。App fee 是存入金额的整数基点，因此费用换算成其对应的基点并向下取整；不足一个基点的费用会被拒绝。使用 `payer` 时，套餐佣金也按更大的存入金额计算 |
 | Solana 与 Monad 上的兑换 | 暂不支持：Jupiter 和 Kuru Flow 每笔兑换只支付一个集成方费用，已被套餐佣金使用（`400 merchant_fee_unsupported`） |
 
-支付链接、隐私支付、USDT0 和流动性会在各自具备链上拆分付款的方式后加入该字段；在此之前，
-它们的路由会将其作为未知字段拒绝（`400 validation_failed`）。
+Solana 和 Monad 上的支付链接返回 `merchant_fee_unsupported`。隐私支付、USDT0 和流动性会在
+各自具备链上拆分付款的方式后加入该字段；在此之前，它们的路由会将其作为未知字段拒绝
+（`400 validation_failed`）。
 
 ## 从 Stellar 发送 USDT0（LayerZero）
 
@@ -1395,6 +1398,15 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
   `cross_chain_swap`、`liquidity_pool_operation`、`zk_payment` 和 `usdt0_transfer` 上新增
   可空的 JSONB 列 `merchantFee`。不回填：现有记录读作无费用。
 - **新错误码 `merchant_fee_unsupported`**（400）：在 Solana 或 Monad 兑换上设置商户手续费。
+- **Stellar 支付链接也接受 `merchantFee`**（`POST /v1/payment-intents/tx` 与 `/pay`；
+  `pay` 链接需要 `amount`）。Solana 与 Monad 链接返回 `merchant_fee_unsupported`。响应与
+  公开链接新增 `merchantFee`；公开链接还新增 `payerAccountRequired`。
+- **新路由 `POST /v1/payment-links/{id}/transaction`**（`@Public()`）：带手续费的 Stellar
+  链接的付款方所签名的 envelope。**部署步骤：** APISIX 为 `/v1/payment-links/*` 配置的
+  免密钥路由必须允许 `POST`（其 CORS 插件需允许带 `Content-Type` 的 `POST`），否则收银台
+  无法构建它。
+- **新变量 `PAYMENT_LINK_CHECKOUT_URL`**（默认 `https://payments.cosmospay.lat`）：这类
+  链接的 `uri` 指向的地址。
 
 ### 列表遵循密钥的网络；仪表盘读取会被缓存
 
@@ -1943,6 +1955,7 @@ curl -H "X-Gateway-Secret: $APISIX_GATEWAY_SECRET" -H "X-Consumer-Username: ops"
 | `OBSERVER_INTERVAL_MS` | 否 | `15000` | 观察器轮询间隔（ms，最小 1000） |
 | `OBSERVER_BATCH_SIZE` | 否 | `50` | 每个观察器周期处理的意图/swap 上限 |
 | `PAYMENT_INTENT_TTL_SECONDS` | 否 | `3600` | 未支付意图变为 `EXPIRED` 之前的存活时间 |
+| `PAYMENT_LINK_CHECKOUT_URL` | 否 | `https://payments.cosmospay.lat` | 带商户手续费的 Stellar 支付链接所打开的托管收银台（`<url>/<id>`） |
 | `WEBHOOK_TIMEOUT_MS` | 否 | `5000` | 旧版 webhook 超时回退值（ms） |
 | `WEBHOOK_CONNECT_TIMEOUT_MS` | 否 | `3000` | 出站 webhook 连接时间预算（ms） |
 | `WEBHOOK_READ_TIMEOUT_MS` | 否 | `5000` | 出站 webhook 读取时间预算（ms） |

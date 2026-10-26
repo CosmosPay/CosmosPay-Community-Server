@@ -1,11 +1,14 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { Type } from 'class-transformer';
 import {
   IsIn,
   IsOptional,
   IsString,
   Matches,
   MaxLength,
+  ValidateNested,
 } from 'class-validator';
+import { MerchantFeeDto } from '@/common/merchant-fee/merchant-fee.dto';
 import { CHAINS, type Chain } from '@/chains/chains.constants';
 import { IsChainAddress } from '@/common/validators/is-chain-address.validator';
 import { IsDecimalAmount } from '@/common/validators/is-decimal-amount.validator';
@@ -128,4 +131,21 @@ export class CreatePayPaymentIntentDto {
   @IsOptional()
   @IsIn(CHECKOUT_THEMES)
   checkoutTheme?: CheckoutTheme;
+
+  @ApiPropertyOptional({
+    type: MerchantFeeDto,
+    description:
+      'Stellar only for now, and only with an `amount`: your own fee on this ' +
+      'payment, paid in its asset to `wallet` (a Stellar account that can ' +
+      'receive the asset, not `destination`). A SEP-7 `pay` link pays one ' +
+      'account, so such a link asks for its payer first: `uri` is the hosted ' +
+      'checkout, and `POST /v1/payment-links/{id}/transaction` builds the ' +
+      "payer's envelope with both payments. `paidBy: recipient` takes the " +
+      'fee from `amount`; `payer` adds it on top. Solana and Monad answer ' +
+      '`merchant_fee_unsupported`.',
+  })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => MerchantFeeDto)
+  merchantFee?: MerchantFeeDto;
 }

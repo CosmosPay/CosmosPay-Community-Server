@@ -14,6 +14,7 @@ import {
   DEFAULT_MONAD_RPC,
   DEFAULT_NEAR_INTENTS_BASE_URL,
   DEFAULT_NEAR_INTENTS_TIMEOUT_MS,
+  DEFAULT_PAYMENT_LINK_CHECKOUT_URL,
   DEFAULT_RATE_LIMIT_PRUNE_INTERVAL_MS,
   DEFAULT_RECOVERY_SWEEP_INTERVAL_MS,
   DEFAULT_RECOVERY_TIMEOUT_MS,
@@ -367,6 +368,12 @@ export interface AppConfig {
   paymentIntents: {
     // Lifetime of a payment intent; unpaid intents past this are marked EXPIRED.
     ttlSeconds: number;
+    /**
+     * The hosted checkout's origin. A Stellar payment link with a merchant fee
+     * cannot be one SEP-7 `pay` link (that pays one account), so its `uri` is
+     * `<checkoutUrl>/<id>`, where the page asks for the payer's account.
+     */
+    checkoutUrl: string;
   };
   /**
    * Private payments, per network tier. Null where `ZK_PAYMENTS_<NETWORK>_TOKEN` is
@@ -956,6 +963,10 @@ export default (): AppConfig => ({
   },
   paymentIntents: {
     ttlSeconds: parseInt(process.env.PAYMENT_INTENT_TTL_SECONDS ?? '3600', 10),
+    checkoutUrl: (
+      process.env.PAYMENT_LINK_CHECKOUT_URL?.trim() ||
+      DEFAULT_PAYMENT_LINK_CHECKOUT_URL
+    ).replace(/\/+$/, ''),
   },
   zkPayments: {
     testnet: zkNetwork('testnet'),

@@ -284,6 +284,7 @@ Paths use the OpenAPI `{param}` form.
 | GET | `/v1/payment-intents/{id}/transitions` | `payments:read` |  |
 | POST | `/v1/payment-intents/{id}/validate` | `payments:write` |  |
 | GET | `/v1/payment-links/{id}` | none — `@Public()`, budgeted per client address |  |
+| POST | `/v1/payment-links/{id}/transaction` | none: `@Public()`, budgeted per client address |  |
 | GET | `/v1/plugins` | `plugins:read` |  |
 | GET | `/v1/plugins/{slug}` | `plugins:read` |  |
 | PUT | `/v1/plugins/{slug}/installation` | `plugins:write` |  |
@@ -1381,12 +1382,13 @@ It is apart from the plan commission Cosmos Pay charges, which does not change.
 | Operation | How the fee is paid |
 | --- | --- |
 | Stellar swaps (`POST /v1/swaps`) | Its own `payment` in the source asset, in the swap's transaction, after the plan commission. `wallet` is a Stellar account that holds the source asset's trustline (otherwise refused before anything is built) |
+| Stellar payment links (`POST /v1/payment-intents/tx` and `/pay`) | A second `payment` in the same envelope, to `wallet`, after the merchant's. A `tx` intent's envelope carries both. A `pay` link cannot (SEP-7 `pay` pays one account) and needs an `amount`: its `uri` is the hosted checkout (`PAYMENT_LINK_CHECKOUT_URL/<id>`), the public link reads `payerAccountRequired: true`, and `POST /v1/payment-links/{id}/transaction` builds the payer's envelope from their account. The intent settles only on a transaction that pays both legs with its memo |
 | Cross-chain swaps (`POST /v1/cross-chain-swaps`) | A second NEAR Intents app fee. `wallet` is a NEAR account id, credited inside NEAR Intents. App fees are whole basis points of the deposit, so the fee becomes the basis points it amounts to, rounded down; a fee under one basis point is refused. With `payer`, the plan commission is a share of the larger deposit too |
 | Swaps on Solana and Monad | Not yet: Jupiter and Kuru Flow pay one integrator fee per swap and the plan commission takes it (`400 merchant_fee_unsupported`) |
 
-Payment links, private payments, USDT0 and liquidity take the field as each gains a
-way to split the payment on-chain; until then their routes refuse it as an unknown
-field (`400 validation_failed`).
+Payment links on Solana and Monad answer `merchant_fee_unsupported`. Private payments,
+USDT0 and liquidity take the field as each gains a way to split the payment on-chain;
+until then their routes refuse it as an unknown field (`400 validation_failed`).
 
 ## USDT0 from Stellar (LayerZero)
 
@@ -2094,6 +2096,16 @@ the service under `src/native-plugins/<slug>/`, switched on by the same
   rows read as no fee.
 - **New error code `merchant_fee_unsupported`** (400): a merchant fee on a Solana or
   Monad swap.
+- **Stellar payment links take `merchantFee` too** (`POST /v1/payment-intents/tx` and
+  `/pay`; a `pay` link needs an `amount`). Solana and Monad links answer
+  `merchant_fee_unsupported`. Responses and the public link gain `merchantFee`; the
+  public link also `payerAccountRequired`.
+- **New route `POST /v1/payment-links/{id}/transaction`** (`@Public()`): the envelope
+  the payer of a Stellar link with a merchant fee signs. **Deploy step:** APISIX's
+  keyless route for `/v1/payment-links/*` must allow `POST` (and its CORS plugin
+  `POST` with `Content-Type`), or the checkout cannot build it.
+- **New variable `PAYMENT_LINK_CHECKOUT_URL`** (default
+  `https://payments.cosmospay.lat`): where such a link's `uri` points.
 
 ### Lists follow the key's network; dashboard reads are cached
 
@@ -2958,6 +2970,7 @@ at least `DATABASE_URL` and `APISIX_GATEWAY_SECRET`.
 | `OBSERVER_INTERVAL_MS` | no | `15000` | Observer poll interval (ms, min 1000) |
 | `OBSERVER_BATCH_SIZE` | no | `50` | Max intents/swaps per observer tick |
 | `PAYMENT_INTENT_TTL_SECONDS` | no | `3600` | Unpaid intent lifetime before `EXPIRED` |
+| `PAYMENT_LINK_CHECKOUT_URL` | no | `https://payments.cosmospay.lat` | The hosted checkout a Stellar payment link with a merchant fee opens (`<url>/<id>`) |
 | `WEBHOOK_TIMEOUT_MS` | no | `5000` | Legacy webhook timeout fallback (ms) |
 | `WEBHOOK_CONNECT_TIMEOUT_MS` | no | `3000` | Outbound webhook connect budget (ms) |
 | `WEBHOOK_READ_TIMEOUT_MS` | no | `5000` | Outbound webhook read budget (ms) |

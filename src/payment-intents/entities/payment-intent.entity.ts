@@ -1,5 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { CHAINS } from '@/chains/chains.constants';
+import { MerchantFeeEntity } from '@/common/merchant-fee/merchant-fee.entity';
 import {
   CHECKOUT_THEMES,
   type CheckoutTheme,
@@ -90,6 +91,15 @@ export class PaymentIntentEntity {
       'relayer’s fee for forwarding a Monad deposit. Null when nothing is.',
   })
   networkFee!: string | null;
+
+  @ApiProperty({
+    type: MerchantFeeEntity,
+    nullable: true,
+    description:
+      'Your merchant fee on this payment, paid to its wallet in the same ' +
+      'transaction; null when the request named none.',
+  })
+  merchantFee!: MerchantFeeEntity | null;
 
   @ApiProperty({ nullable: true, example: null, description: 'SEP-7 msg.' })
   msg!: string | null;
@@ -218,6 +228,15 @@ export class TxPaymentIntentEntity {
   })
   networkFee!: string | null;
 
+  @ApiProperty({
+    type: MerchantFeeEntity,
+    nullable: true,
+    description:
+      'Your merchant fee on this payment, paid to its wallet in the same ' +
+      'transaction; null when the request named none.',
+  })
+  merchantFee!: MerchantFeeEntity | null;
+
   @ApiProperty({ nullable: true, example: 'Order #24' })
   msg!: string | null;
 
@@ -332,6 +351,15 @@ export class PayPaymentIntentEntity {
       'relayer’s fee for forwarding a Monad deposit. Null when nothing is.',
   })
   networkFee!: string | null;
+
+  @ApiProperty({
+    type: MerchantFeeEntity,
+    nullable: true,
+    description:
+      'Your merchant fee on this payment, paid to its wallet in the same ' +
+      'transaction; null when the request named none.',
+  })
+  merchantFee!: MerchantFeeEntity | null;
 
   @ApiProperty({ nullable: true, example: 'pay me with lumens' })
   msg!: string | null;

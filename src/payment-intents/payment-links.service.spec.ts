@@ -1,3 +1,11 @@
+import {
+  Account,
+  Keypair,
+  Networks,
+  Operation,
+  Transaction,
+  TransactionBuilder,
+} from '@stellar/stellar-sdk';
 import type { PaymentIntent } from '@generated/prisma/client';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import {
@@ -30,6 +38,8 @@ const CONTRACT_FIELDS = [
   'qr',
   'txHash',
   'networkFee',
+  'merchantFee',
+  'payerAccountRequired',
   'expiresAt',
   'createdAt',
   'checkoutTheme',
@@ -122,6 +132,8 @@ describe('toPublicPaymentLink', () => {
       qr: 'data:image/png;base64,QR',
       txHash: null,
       networkFee: null,
+      merchantFee: null,
+      payerAccountRequired: false,
       expiresAt: '2026-10-24T13:34:56.000Z',
       createdAt: '2026-10-24T12:34:56.000Z',
       checkoutTheme: 'classic',
@@ -311,5 +323,87 @@ describe('PaymentLinksService.findPublic', () => {
     expect((publicError as ApiError).getResponse()).toEqual(
       (ownerError as ApiError).getResponse(),
     );
+  });
+});
+
+describe('PaymentLinksService.payerTransaction (a Stellar link with a merchant fee)', () => {
+  const PAYER = Keypair.random().publicKey();
+  const FEE_WALLET = Keypair.random().publicKey();
+  const merchantFee = {
+    bps: 150,
+    fixed: '0.1',
+    amount: '0.4825',
+    asset: 'native',
+    wallet: FEE_WALLET,
+    paidBy: 'recipient',
+  };
+  const accounts = {
+    load: jest.fn(async (_network: string, address: string) =>
+      Object.assign(new Account(address, '41'), {
+        balances: [{ asset_type: 'native', balance: '100' }],
+      }),
+    ),
+    assertCanReceive: jest.fn(),
+  };
+  const links = new Sep7LinkBuilder(
+    {
+      get: () => ({ baseFee: '100', timeoutSeconds: 300 }),
+    } as never,
+    { passphrase: () => Networks.PUBLIC } as never,
+    accounts as never,
+  );
+
+  function make(row: PaymentIntent | null) {
+    return new PaymentLinksService(
+      {
+        paymentIntent: { findUnique: jest.fn().mockResolvedValue(row) },
+      } as never,
+      links,
+    );
+  }
+
+  it('says a fee link needs its payer, and shows the fee', () => {
+    const link = toPublicPaymentLink(fullRow({ merchantFee }), 'qr');
+    expect(link.payerAccountRequired).toBe(true);
+    expect(link.merchantFee).toEqual(merchantFee);
+  });
+
+  it('builds both payments, with the link memo, on the payer account', async () => {
+    const service = make(fullRow({ merchantFee }));
+
+    const built = await service.payerTransaction(
+      'cmh4x2k9a0001l70g8v5q3z2w',
+      PAYER,
+    );
+
+    const tx = TransactionBuilder.fromXDR(
+      built.xdr,
+      Networks.PUBLIC,
+    ) as Transaction;
+    expect(tx.source).toBe(PAYER);
+    expect(tx.memo.type).toBe('id');
+    expect(String(tx.memo.value)).toBe('4127759120438726917');
+    const [merchant, fee] = tx.operations as Operation.Payment[];
+    // 25.5 less the 0.4825 fee the recipient pays.
+    expect(merchant.destination).toBe(MERCHANT);
+    expect(merchant.amount).toBe('25.0175000');
+    expect(fee.destination).toBe(FEE_WALLET);
+    expect(fee.amount).toBe('0.4825000');
+    expect(built.uri).toMatch(/^web\+stellar:tx\?xdr=/);
+    expect(built.qr).toMatch(/^data:image\/png;base64,/);
+  });
+
+  it('refuses a link that pays its destination directly', async () => {
+    const err = await make(fullRow())
+      .payerTransaction('cmh4x2k9a0001l70g8v5q3z2w', PAYER)
+      .catch((e: unknown) => e);
+    expect((err as ApiError).code).toBe(ApiErrorCode.ValidationFailed);
+  });
+
+  it('refuses a link that is no longer open', async () => {
+    const err = await make(fullRow({ merchantFee, status: 'EXPIRED' }))
+      .payerTransaction('cmh4x2k9a0001l70g8v5q3z2w', PAYER)
+      .catch((e: unknown) => e);
+    expect((err as ApiError).code).toBe(ApiErrorCode.InvalidStateTransition);
   });
 });
