@@ -646,6 +646,26 @@ describe('LiquidityPoolsService responses carry only the public projection', () 
       expect.objectContaining({ select: LIQUIDITY_OPERATION_PUBLIC_SELECT }),
     );
   });
+
+  it('lists only the operations of the network the key targets, in the page and the total', async () => {
+    const { service, prisma } = build();
+    prisma.liquidityPoolOperation.count = jest.fn().mockResolvedValue(0);
+
+    await service.findAllOperations(consumer, { take: 20, skip: 0 });
+    await service.findAllOperations(
+      { ...consumer, environment: 'prod' },
+      { take: 20, skip: 0 },
+    );
+
+    const pages = prisma.liquidityPoolOperation.findMany.mock.calls
+      .map(([arg]: [{ where?: { network?: string } }]) => arg?.where?.network)
+      .filter(Boolean);
+    const totals = prisma.liquidityPoolOperation.count.mock.calls.map(
+      ([arg]: [{ where: { network: string } }]) => arg.where.network,
+    );
+    expect(pages).toEqual(['testnet', 'public']);
+    expect(totals).toEqual(pages);
+  });
 });
 
 describe('LiquidityPoolsService.submit vs observer (issue #32 race)', () => {

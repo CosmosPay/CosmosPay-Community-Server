@@ -36,6 +36,15 @@ describe('Payment intents CRUD (e2e)', () => {
   /** One local consumer row per gateway username, as the resolver upserts it. */
   const consumerIdOf = (username: string) => `c_${username}`;
 
+  /** The list's own filters as Postgres applies them: the consumer and the network. */
+  const listed = (where: any = {}) =>
+    [...store.values()].filter(
+      (row) =>
+        (!where.network || row.network === where.network) &&
+        (!where.consumer?.apisixUsername ||
+          row.consumerId === consumerIdOf(where.consumer.apisixUsername)),
+    );
+
   const prismaMock: any = {
     onModuleInit: jest.fn(),
     onModuleDestroy: jest.fn(),
@@ -97,9 +106,11 @@ describe('Payment intents CRUD (e2e)', () => {
         return Promise.resolve(row);
       }),
       findMany: jest.fn((args: any) =>
-        Promise.resolve(rivalsOf(store.values(), args) ?? [...store.values()]),
+        Promise.resolve(rivalsOf(store.values(), args) ?? listed(args?.where)),
       ),
-      count: jest.fn(() => Promise.resolve(store.size)),
+      count: jest.fn((args: any) =>
+        Promise.resolve(listed(args?.where).length),
+      ),
       // Scoped like the real query: another consumer's row is not found.
       findFirst: jest.fn(({ where }: any) => {
         const row = store.get(where.id);
@@ -376,6 +387,37 @@ describe('Payment intents CRUD (e2e)', () => {
     const res = await gw(request(http()).get(route)).expect(200);
     expect(res.body.total).toBeGreaterThanOrEqual(1);
     expect(Array.isArray(res.body.data)).toBe(true);
+  });
+
+  it('lists only the intents of the network the key targets, the total included', async () => {
+    const asNetworks = gwAs('cosmos_networks');
+    await asNetworks(
+      request(http())
+        .post(payRoute)
+        .set('x-consumer-env', 'dev')
+        .send({ destination, amount: '1', memo: '515151' }),
+    ).expect(201);
+    await asNetworks(
+      request(http())
+        .post(payRoute)
+        .set('x-consumer-env', 'prod')
+        .send({ destination, amount: '2', memo: '525252' }),
+    ).expect(201);
+
+    const prod = await asNetworks(
+      request(http()).get(route).set('x-consumer-env', 'prod'),
+    ).expect(200);
+    const dev = await asNetworks(
+      request(http()).get(route).set('x-consumer-env', 'dev'),
+    ).expect(200);
+
+    // A production key never lists a test-network intent, nor a sandbox key a mainnet one.
+    expect(prod.body.data.map((i: any) => i.network)).toEqual(['public']);
+    expect(prod.body.data[0].amount).toBe('2');
+    expect(prod.body.total).toBe(1);
+    expect(dev.body.data.map((i: any) => i.network)).toEqual(['testnet']);
+    expect(dev.body.data[0].amount).toBe('1');
+    expect(dev.body.total).toBe(1);
   });
 
   it('gets one by id (200)', async () => {

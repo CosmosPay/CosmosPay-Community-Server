@@ -354,6 +354,10 @@ export class Usdt0Service {
   }> {
     const where = {
       consumer: { apisixUsername: consumer.username },
+      // Only the network this key targets (`resolveNetwork`): a production key never lists a
+      // test-network row, nor a sandbox key a mainnet one.
+      // USDT0 is mainnet only (always `public`), so a sandbox key lists none.
+      network: resolveNetwork(this.config, consumer),
       ...(query.status ? { status: query.status } : {}),
     };
     // `Promise.all`, not `$transaction`: see `@/common/pagination` for why.

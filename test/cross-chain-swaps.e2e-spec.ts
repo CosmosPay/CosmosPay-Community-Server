@@ -272,7 +272,11 @@ describe('Cross-chain swaps guards (e2e)', () => {
       expect(res.body).toMatchObject({ data: [], total: 0 });
       expect(prismaMock.crossChainSwap.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: { consumer: { apisixUsername: 'cosmos_u1' } },
+          // The key's network: no environment header falls back to STELLAR_NETWORK.
+          where: {
+            consumer: { apisixUsername: 'cosmos_u1' },
+            network: 'testnet',
+          },
         }),
       );
     });

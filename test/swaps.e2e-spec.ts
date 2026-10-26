@@ -195,7 +195,11 @@ describe('Swaps guards (e2e)', () => {
       expect(res.body).toMatchObject({ data: [], total: 0 });
       expect(prismaMock.swap.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: { consumer: { apisixUsername: 'cosmos_u1' } },
+          // The key's network: no environment header falls back to STELLAR_NETWORK.
+          where: {
+            consumer: { apisixUsername: 'cosmos_u1' },
+            network: 'testnet',
+          },
         }),
       );
     });
@@ -311,7 +315,12 @@ describe('Swaps guards (e2e)', () => {
       await tenant(['get', '/v1/swaps?chain=solana'], 'swaps:read').expect(200);
       expect(prismaMock.chainSwap.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: { chain: 'solana', consumer: { apisixUsername: 'cosmos_u1' } },
+          // Solana swaps are mainnet only: a testnet key's list matches none.
+          where: {
+            chain: 'solana',
+            consumer: { apisixUsername: 'cosmos_u1' },
+            network: 'testnet',
+          },
         }),
       );
       expect(prismaMock.swap.findMany).not.toHaveBeenCalled();

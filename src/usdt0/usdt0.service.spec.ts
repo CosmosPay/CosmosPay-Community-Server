@@ -923,6 +923,17 @@ describe('Usdt0Service reads', () => {
     ).toBe(0);
   });
 
+  it('lists nothing to a sandbox key: USDT0 transfers are mainnet only', async () => {
+    const { service } = setup();
+    await service.create(prod, DTO);
+
+    const sandbox = await service.findAll(
+      { ...prod, environment: 'dev' },
+      { take: 20, skip: 0 },
+    );
+    expect(sandbox).toMatchObject({ total: 0, data: [] });
+  });
+
   it('refreshes a PENDING transfer from the ledger when it is read', async () => {
     const { service, rpc: client } = setup();
     const view = await service.create(prod, DTO);

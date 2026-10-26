@@ -198,7 +198,11 @@ describe('USDT0 guards (e2e)', () => {
       expect(res.body).toMatchObject({ data: [], total: 0 });
       expect(prismaMock.usdt0Transfer.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: { consumer: { apisixUsername: 'cosmos_u1' } },
+          // The key's network (prod: mainnet, where USDT0 lives).
+          where: {
+            consumer: { apisixUsername: 'cosmos_u1' },
+            network: 'public',
+          },
         }),
       );
     });

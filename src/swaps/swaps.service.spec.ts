@@ -449,6 +449,26 @@ describe('SwapsService responses carry only the public projection', () => {
       expect.objectContaining({ select: SWAP_PUBLIC_SELECT }),
     );
   });
+
+  it('lists only the swaps of the network the key targets, in the page and the total', async () => {
+    const { service, prisma } = build();
+    prisma.swap.count = jest.fn().mockResolvedValue(0);
+
+    await service.findAll(consumer, { take: 20, skip: 0 });
+    await service.findAll(
+      { ...consumer, environment: 'prod' },
+      { take: 20, skip: 0 },
+    );
+
+    const pages = prisma.swap.findMany.mock.calls.map(
+      ([arg]: [{ where: { network: string } }]) => arg.where.network,
+    );
+    const totals = prisma.swap.count.mock.calls.map(
+      ([arg]: [{ where: { network: string } }]) => arg.where.network,
+    );
+    expect(pages).toEqual(['testnet', 'public']);
+    expect(totals).toEqual(pages);
+  });
 });
 
 describe('SwapsService.submit vs observer (issue #29 double terminal event)', () => {

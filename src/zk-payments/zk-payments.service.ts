@@ -197,6 +197,9 @@ export class ZkPaymentsService {
     const now = new Date();
     const where: Prisma.ZkPaymentWhereInput = {
       consumer: { apisixUsername: consumer.username },
+      // Only the network this key targets (`resolveNetwork`): a production key never lists a
+      // test-network row, nor a sandbox key a mainnet one.
+      network: resolveNetwork(this.config, consumer),
       ...(query.status ? zkStatusFilter(query.status, now) : {}),
     };
     const [rows, total] = await Promise.all([

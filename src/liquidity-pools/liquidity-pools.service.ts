@@ -611,6 +611,9 @@ export class LiquidityPoolsService {
   }> {
     const where = {
       consumer: { apisixUsername: consumer.username },
+      // Only the network this key targets (`resolveNetwork`): a production key never lists a
+      // test-network row, nor a sandbox key a mainnet one.
+      network: this.resolveNetwork(consumer),
       ...(query.kind ? { kind: query.kind } : {}),
       ...(query.status ? { status: query.status } : {}),
     };

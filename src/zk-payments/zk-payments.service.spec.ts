@@ -319,6 +319,9 @@ describe('ZkPaymentsService', () => {
       >;
       expect(where.consumer).toEqual({ apisixUsername: 'cosmos_merchant' });
       expect(where.OR).toBeDefined();
+      // Only the key's own network: a production key never lists a testnet payment.
+      expect(where.network).toBe('testnet');
+      expect(prisma.zkPayment.count.mock.calls[0][0].where).toEqual(where);
     });
 
     it("is a 404 for a payment that is not the consumer's", async () => {

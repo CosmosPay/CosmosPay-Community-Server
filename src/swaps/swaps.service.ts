@@ -563,6 +563,9 @@ export class SwapsService {
   }> {
     const where = {
       consumer: { apisixUsername: consumer.username },
+      // Only the network this key targets (`resolveNetwork`): a production key never lists a
+      // test-network row, nor a sandbox key a mainnet one.
+      network: this.resolveNetwork(consumer),
       ...(query.status ? { status: query.status } : {}),
     };
     // `Promise.all`, not `$transaction` — see `@/common/pagination` for why.
