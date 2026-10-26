@@ -964,10 +964,10 @@ where: { id, consumer: { apisixUsername: consumer.username } }
 | --- | --- |
 | `POST /v1/swaps/quote` | Horizon से path की कीमत निकालता है; यह request का शुद्ध function है |
 | `POST /v1/swaps` | एक unsigned envelope बनाता है जिसे caller sign करता है |
-| `POST /v1/swaps/:id/submit` | caller द्वारा signed envelope broadcast करता है: swap के बारे में कुछ भी, यहाँ तक कि उसकी status भी, तब तक नहीं बताया जाता जब तक body उसी swap का envelope न हो जिस पर signature हो, और swap का `X-Record-Token` न भेजा जाए; rate limited |
+| `POST /v1/swaps/:id/submit` | caller द्वारा signed envelope broadcast करता है: swap के बारे में कुछ भी, यहाँ तक कि उसकी status भी, तब तक नहीं बताया जाता जब तक body उसी swap का envelope न हो जिस पर signature हो; गलत `X-Record-Token` अस्वीकार होता है, और token न हो तो अभी के लिए अब भी स्वीकार होता है (नीचे देखें); rate limited |
 | `GET /v1/cross-chain-swaps/assets` \| `POST /v1/cross-chain-swaps/quote` | NEAR Intents की token list और एक dry quote; request के शुद्ध functions |
 | `POST /v1/cross-chain-swaps` | Caller के अपने funds के लिए एक deposit address; दोहराया गया `Idempotency-Key` तभी जवाब पाता है जब request मेल खाए |
-| `POST /v1/cross-chain-swaps/:id/deposit` | NEAR Intents को एक transaction दिखाता है जिसे वह खुद on-chain verify करता है; swap का `X-Record-Token` चाहिए; rate limited |
+| `POST /v1/cross-chain-swaps/:id/deposit` | NEAR Intents को एक transaction दिखाता है जिसे वह खुद on-chain verify करता है; गलत `X-Record-Token` अस्वीकार होता है, और token न हो तो अभी के लिए अब भी स्वीकार होता है (नीचे देखें); rate limited |
 | `GET /v1/swaps/:id` \| `GET /v1/cross-chain-swaps/:id` | एक swap, उसकी id **और** उसके record token (`X-Record-Token`, नीचे देखें) दोनों से, ताकि बिना account के बना swap अपनी status पर नज़र रख सके; अब भी consumer तक सीमित |
 | `GET /v1/usdt0/routes` \| `POST /v1/usdt0/quote` | Route catalogue और एक simulated quote; request के शुद्ध functions |
 | `POST /v1/usdt0/transfers` | एक unsigned transaction बनाता है जिसे caller sign करता है; दोहराया गया `Idempotency-Key` तभी जवाब पाता है जब request मेल खाए |
@@ -995,16 +995,19 @@ fetch कर सकता है, इसलिए किसी record की id 
 (`POST /v1/swaps`, `POST /v1/cross-chain-swaps`, `POST /v1/usdt0/transfers`)
 `publicToken` लौटाता है: `base64url(HMAC-SHA256(key, "<kind>:<id>"))`, हर table के लिए
 एक kind, एक ऐसी key के तहत जो `APISIX_GATEWAY_SECRET` से HKDF द्वारा derive की जाती है
-(label `public-record-token v1`)। उसी एक record के reads और actions
-(`GET /v1/swaps/{id}`, `GET /v1/cross-chain-swaps/{id}`, `GET /v1/usdt0/transfers/{id}`,
-`POST /v1/swaps/{id}/submit`, `POST /v1/cross-chain-swaps/{id}/deposit`,
-`POST /v1/usdt0/transfers/{id}/submit`) को यह `X-Record-Token` header में चाहिए, जिसकी
-तुलना constant time में की जाती है; token न हो या गलत हो, तो table पढ़े जाने से पहले
-वही `404` मिलता है जो ऐसे record पर मिलता है जो मौजूद नहीं है। Token derive किया जाता
-है, store नहीं: दोहराया गया create वही token लौटाता है, और `APISIX_GATEWAY_SECRET`
-rotate करने से अब तक दिया गया हर token अमान्य हो जाता है। Private keys को न कभी token
-मिलता है, न कभी उसकी ज़रूरत होती है। Public page यह header भेजता है, इसलिए gateway के
-CORS `allow_headers` में `X-Record-Token` होना चाहिए।
+(label `public-record-token v1`)। उस record के routes यह token `X-Record-Token` header
+में लेते हैं, जिसकी तुलना constant time में की जाती है, और गलत token पर table पढ़े जाने
+से पहले वही `404` मिलता है जो ऐसे record पर मिलता है जो मौजूद नहीं है:
+
+| रूट, public key के साथ | Token न हो तो |
+| --- | --- |
+| `GET /v1/swaps/{id}`, `GET /v1/cross-chain-swaps/{id}`, `GET /v1/usdt0/transfers/{id}`, `POST /v1/usdt0/transfers/{id}/submit` | अस्वीकार (`404`): ये routes नए हैं, किसी ने इन्हें बिना token के call नहीं किया |
+| `POST /v1/swaps/{id}/submit`, `POST /v1/cross-chain-swaps/{id}/deposit` | अभी के लिए अब भी स्वीकार, और route तथा record id के नाम के साथ deprecation के रूप में log किया जाता है, क्योंकि वॉलेट इन्हें पहले से public key के साथ call करता है। Swap submit अब भी तब तक कुछ नहीं बताता जब तक body उस swap का signed envelope न हो। `PUBLIC_RECORD_TOKEN_REQUIRED_ON_LEGACY=true` यहाँ भी token को ज़रूरी बना देता है |
+
+Token derive किया जाता है, store नहीं: दोहराया गया create वही token लौटाता है, और
+`APISIX_GATEWAY_SECRET` rotate करने से अब तक दिया गया हर token अमान्य हो जाता है। Private
+keys को न कभी token मिलता है, न कभी उसकी ज़रूरत होती है। Public page यह header भेजता है,
+इसलिए gateway के CORS `allow_headers` में `X-Record-Token` होना चाहिए।
 
 **Telemetry की अनुमति है** ताकि बिना account वाले वॉलेट की crash reports भी पहुँचें।
 इस key पर आने वाले events anonymous होते हैं (एक साझा consumer), इसलिए वॉलेट भेजने से
@@ -2049,13 +2052,16 @@ seal होती हैं और कभी लौटाई नहीं जा
   बदला।
 - **`GET /v1/swaps/{id}` और `GET /v1/cross-chain-swaps/{id}` अब साझा public key को,
   record token के साथ, स्वीकार करते हैं**, ताकि बिना account के बना swap अपनी status पर
-  नज़र रख सके। उस key पर create अब `publicToken` लौटाता है, और उस key पर record के reads
-  और actions (ये दोनों reads, `GET /v1/usdt0/transfers/{id}`, `POST /v1/swaps/{id}/submit`,
-  `POST /v1/cross-chain-swaps/{id}/deposit` और `POST /v1/usdt0/transfers/{id}/submit`)
-  को यह `X-Record-Token` में चाहिए, वरना वे `404` लौटाते हैं। **Public key पर चलने वाले
-  wallets के लिए breaking:** swap submit और क्रॉस-चेन deposit पहले सिर्फ़ id से काम करते
-  थे और अब उन्हें header भी चाहिए। Private keys पर कोई असर नहीं है, और `GET /v1/swaps`
-  और `GET /v1/cross-chain-swaps` public key के लिए बंद रहते हैं। Deploy step: gateway के
+  नज़र रख सके। उस key पर create अब `publicToken` लौटाता है; ये दोनों reads,
+  `GET /v1/usdt0/transfers/{id}` और `POST /v1/usdt0/transfers/{id}/submit` को यह
+  `X-Record-Token` में चाहिए (वरना वे `404` लौटाते हैं)। **Breaking नहीं:**
+  `POST /v1/swaps/{id}/submit` और `POST /v1/cross-chain-swaps/{id}/deposit`, जिन्हें
+  wallet पहले से public key के साथ call करता है, गलत token अस्वीकार करते हैं लेकिन token न
+  हो तो अब भी स्वीकार करते हैं, और उसे deprecation के रूप में log करते हैं। Wallets को
+  create response से `X-Record-Token` भेजना शुरू करना चाहिए; जब वे ऐसा करने लगें, तो
+  `PUBLIC_RECORD_TOKEN_REQUIRED_ON_LEGACY=true` सेट करें, और तब इन दोनों routes को भी यह
+  चाहिए होगा। Private keys पर कोई असर नहीं है, और `GET /v1/swaps` और
+  `GET /v1/cross-chain-swaps` public key के लिए बंद रहते हैं। Deploy step: gateway के
   CORS `allow_headers` में `X-Record-Token` जोड़ें।
 - **Migration `20261025210000_usdt0_transfers`** `usdt0_transfer` table और
   `Usdt0TransferStatus` enum बनाता है; कुछ भी दोबारा नहीं लिखा जाता। नए build के traffic
@@ -2791,6 +2797,7 @@ type दोबारा बनाए बिना enum value drop नहीं �
 | `APISIX_PUBLIC_CONSUMER` | नहीं | — | साझा public consumer का username (ऊपर देखें)। जहाँ भी public key प्रकाशित हो, इसे सेट करें |
 | `PUBLIC_API_KEY_DEV` | नहीं | — | Testnet की साझा public key, `GET /v1/public-key?env=dev` द्वारा दी जाती है। सेट न हो तो `503 misconfigured` |
 | `PUBLIC_API_KEY_PROD` | नहीं | — | Mainnet के लिए वही (`env=prod`) |
+| `PUBLIC_RECORD_TOKEN_REQUIRED_ON_LEGACY` | नहीं | `false` | साझा public key के साथ, `POST /v1/swaps/{id}/submit` और `POST /v1/cross-chain-swaps/{id}/deposit` पर भी `X-Record-Token` ज़रूरी करता है (गलत token हर हाल में अस्वीकार होता है)। जब वॉलेट create response से token भेजने लगे, तब इसे चालू करें |
 | `APISIX_ADMIN_URL` | admin key के साथ | — | APISIX Admin API का base, जैसे `http://apisix:9180/apisix/admin`। केवल wallet खातों की keys जारी करने के लिए |
 | `APISIX_ADMIN_KEY` | wallet sign-in के लिए | — | APISIX admin key। पूरे gateway पर लागू — देखें [कोई भी request developer platform पर निर्भर नहीं है](#कोई-भी-request-developer-platform-पर-निर्भर-नहीं-है)। Recovery server पर अस्वीकार |
 | `APISIX_ADMIN_TIMEOUT_MS` | नहीं | `10000` | एक Admin API कॉल का बजट (ms) |

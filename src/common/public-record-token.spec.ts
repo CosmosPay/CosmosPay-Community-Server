@@ -1,4 +1,5 @@
 import { createHmac, hkdfSync } from 'node:crypto';
+import { Logger } from '@nestjs/common';
 import type { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import {
   PublicRecordTokens,
@@ -6,7 +7,10 @@ import {
   recordTokenKey,
   recordTokenMatches,
 } from '@/common/public-record-token';
-import { PUBLIC_RECORD_KINDS } from '@/common/public-record-token.constants';
+import {
+  LEGACY_RECORD_TOKEN_ROUTES,
+  PUBLIC_RECORD_KINDS,
+} from '@/common/public-record-token.constants';
 
 const SECRET = 'spec-gateway-secret-spec-gateway-secret';
 const ID = 'cm1x2y3z4a5b6c7d8e9f0g1h2';
@@ -122,5 +126,89 @@ describe('PublicRecordTokens', () => {
     expect(tokens.admits(byRole, 'swap', ID, token)).toBe(false);
     expect(tokens.admits(byRole, 'usdt0-transfer', 'other', token)).toBe(false);
     expect(tokens.admits(real, 'usdt0-transfer', ID, undefined)).toBe(true);
+  });
+});
+
+describe('PublicRecordTokens on the legacy routes (swap submit, cross-chain deposit)', () => {
+  const ROUTE = LEGACY_RECORD_TOKEN_ROUTES.crossChainDeposit;
+  const withSwitch = (requiredOnLegacy: boolean) =>
+    new PublicRecordTokens({
+      get: (key: string) =>
+        key === 'publicRecordTokens'
+          ? { requiredOnLegacy }
+          : { publicConsumer: 'cosmos_public', gatewaySecret: SECRET },
+    } as never);
+  const shared = consumer({ username: 'cosmos_wallet', role: 'public' });
+  const real = consumer();
+  const token = recordToken(recordTokenKey(SECRET), 'cross-chain-swap', ID);
+
+  afterEach(() => jest.restoreAllMocks());
+
+  it('still admits a missing token while the switch is off, and never a wrong one', () => {
+    const tokens = withSwitch(false);
+    expect(
+      tokens.admits(shared, 'cross-chain-swap', ID, undefined, ROUTE),
+    ).toBe(true);
+    expect(tokens.admits(shared, 'cross-chain-swap', ID, '', ROUTE)).toBe(true);
+    expect(tokens.admits(shared, 'cross-chain-swap', ID, token, ROUTE)).toBe(
+      true,
+    );
+    expect(
+      tokens.admits(shared, 'cross-chain-swap', ID, 'x'.repeat(43), ROUTE),
+    ).toBe(false);
+    expect(
+      tokens.admits(
+        shared,
+        'cross-chain-swap',
+        ID,
+        recordToken(recordTokenKey(SECRET), 'swap', ID),
+        ROUTE,
+      ),
+    ).toBe(false);
+    // Off a legacy route, a missing token is refused as before.
+    expect(tokens.admits(shared, 'cross-chain-swap', ID, undefined)).toBe(
+      false,
+    );
+  });
+
+  it('refuses a missing token there too once PUBLIC_RECORD_TOKEN_REQUIRED_ON_LEGACY is on', () => {
+    const tokens = withSwitch(true);
+    expect(
+      tokens.admits(shared, 'cross-chain-swap', ID, undefined, ROUTE),
+    ).toBe(false);
+    expect(tokens.admits(shared, 'cross-chain-swap', ID, token, ROUTE)).toBe(
+      true,
+    );
+    expect(tokens.admits(real, 'cross-chain-swap', ID, undefined, ROUTE)).toBe(
+      true,
+    );
+  });
+
+  it('logs a structured deprecation warning for a missing token, naming the route and the record and no secret', () => {
+    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation();
+    const tokens = withSwitch(false);
+
+    tokens.noteLegacyAccess(shared, 'cross-chain-swap', ID, undefined, ROUTE);
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    const [entry] = warn.mock.calls[0] as [Record<string, unknown>];
+    expect(entry).toMatchObject({
+      event: 'public_record_token_missing',
+      deprecated: true,
+      route: 'POST /v1/cross-chain-swaps/{id}/deposit',
+      recordKind: 'cross-chain-swap',
+      recordId: ID,
+    });
+    const logged = JSON.stringify(warn.mock.calls);
+    expect(logged).not.toContain(token);
+    expect(logged).not.toContain(SECRET);
+  });
+
+  it('says nothing when the token was sent, or for a real key', () => {
+    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation();
+    const tokens = withSwitch(false);
+    tokens.noteLegacyAccess(shared, 'cross-chain-swap', ID, token, ROUTE);
+    tokens.noteLegacyAccess(real, 'cross-chain-swap', ID, undefined, ROUTE);
+    expect(warn).not.toHaveBeenCalled();
   });
 });

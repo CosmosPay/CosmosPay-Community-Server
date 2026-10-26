@@ -232,8 +232,10 @@ export class CrossChainSwapsController {
   // 1Click at a transaction it verifies on-chain itself.
   @AllowPublicKey()
   @RequirePermissions('swaps:write')
-  // With the shared public key, the swap's record token as well.
-  @ApiRecordTokenHeader()
+  // With the shared public key, the swap's record token: a wrong one is a
+  // 404, a missing one is still accepted on this legacy route (logged) until
+  // PUBLIC_RECORD_TOKEN_REQUIRED_ON_LEGACY is on.
+  @ApiRecordTokenHeader('legacy')
   @RateLimit(CROSS_CHAIN_DEPOSIT_RATE_LIMIT)
   // Advances an existing swap; nothing new comes into existence.
   @HttpCode(HttpStatus.OK)

@@ -967,10 +967,10 @@ Reachable with the public key today:
 | --- | --- |
 | `POST /v1/swaps/quote` | Prices a path from Horizon; a pure function of the request |
 | `POST /v1/swaps` | Builds an unsigned envelope the caller signs |
-| `POST /v1/swaps/:id/submit` | Broadcasts a caller-signed envelope: nothing about the swap, not even its status, is answered until the body is that swap's envelope carrying a signature, and the swap's `X-Record-Token` is sent; rate limited |
+| `POST /v1/swaps/:id/submit` | Broadcasts a caller-signed envelope: nothing about the swap, not even its status, is answered until the body is that swap's envelope carrying a signature; a wrong `X-Record-Token` is refused, a missing one is still accepted for now (see below); rate limited |
 | `GET /v1/cross-chain-swaps/assets` \| `POST /v1/cross-chain-swaps/quote` | NEAR Intents' token list and a dry quote; pure functions of the request |
 | `POST /v1/cross-chain-swaps` | A deposit address for the caller's own funds; a replayed `Idempotency-Key` is answered only when the request matches |
-| `POST /v1/cross-chain-swaps/:id/deposit` | Points NEAR Intents at a transaction it verifies on-chain itself; needs the swap's `X-Record-Token`; rate limited |
+| `POST /v1/cross-chain-swaps/:id/deposit` | Points NEAR Intents at a transaction it verifies on-chain itself; a wrong `X-Record-Token` is refused, a missing one is still accepted for now (see below); rate limited |
 | `GET /v1/swaps/:id` \| `GET /v1/cross-chain-swaps/:id` | One swap by its id AND its record token (`X-Record-Token`, see below), so a swap made without an account can follow its own status; still scoped to the consumer |
 | `GET /v1/usdt0/routes` \| `POST /v1/usdt0/quote` | The route catalogue and a simulated quote; pure functions of the request |
 | `POST /v1/usdt0/transfers` | Builds an unsigned transaction the caller signs; a replayed `Idempotency-Key` is answered only when the request matches |
@@ -997,15 +997,18 @@ can fetch it, so a record id is not a secret, and scoping by consumer does not k
 one visitor out of another's swap. So a create on this key (`POST /v1/swaps`,
 `POST /v1/cross-chain-swaps`, `POST /v1/usdt0/transfers`) answers `publicToken`:
 `base64url(HMAC-SHA256(key, "<kind>:<id>"))`, one kind per table, under a key derived
-with HKDF from `APISIX_GATEWAY_SECRET` (label `public-record-token v1`). The reads and
-actions of that one record (`GET /v1/swaps/{id}`, `GET /v1/cross-chain-swaps/{id}`,
-`GET /v1/usdt0/transfers/{id}`, `POST /v1/swaps/{id}/submit`,
-`POST /v1/cross-chain-swaps/{id}/deposit`, `POST /v1/usdt0/transfers/{id}/submit`)
-need it in the `X-Record-Token` header, compared in constant time; a missing or wrong
-token answers the same `404` as a record that does not exist, before the table is
-read. The token is derived, not stored: a replayed create answers the same one, and
-rotating `APISIX_GATEWAY_SECRET` invalidates every token handed out. Real keys never
-get one and never need one. A public page sends the header, so the gateway's CORS
+with HKDF from `APISIX_GATEWAY_SECRET` (label `public-record-token v1`). That record's
+routes take it in the `X-Record-Token` header, compared in constant time, and a wrong
+token answers the same `404` as a record that does not exist, before the table is read:
+
+| Route, with the public key | A missing token |
+| --- | --- |
+| `GET /v1/swaps/{id}`, `GET /v1/cross-chain-swaps/{id}`, `GET /v1/usdt0/transfers/{id}`, `POST /v1/usdt0/transfers/{id}/submit` | Refused (`404`): these routes are new, nobody called them without a token |
+| `POST /v1/swaps/{id}/submit`, `POST /v1/cross-chain-swaps/{id}/deposit` | Still accepted for now, and logged as a deprecation naming the route and the record id, because the wallet already calls them with the public key. Swap submit still answers nothing until the body is the swap's signed envelope. `PUBLIC_RECORD_TOKEN_REQUIRED_ON_LEGACY=true` makes the token required here too |
+
+The token is derived, not stored: a replayed create answers the same one, and rotating
+`APISIX_GATEWAY_SECRET` invalidates every token handed out. Real keys never get one
+and never need one. A public page sends the header, so the gateway's CORS
 `allow_headers` must list `X-Record-Token`.
 
 **Telemetry is allowed** so crash reports from wallets without an account still
@@ -2056,14 +2059,16 @@ the service under `src/native-plugins/<slug>/`, switched on by the same
   changed.
 - **`GET /v1/swaps/{id}` and `GET /v1/cross-chain-swaps/{id}` now admit the shared
   public key, with a record token**, so a swap made without an account can follow its
-  own status. A create on that key now answers `publicToken`, and on that key the
-  record's reads and actions (these two reads, `GET /v1/usdt0/transfers/{id}`,
-  `POST /v1/swaps/{id}/submit`, `POST /v1/cross-chain-swaps/{id}/deposit` and
-  `POST /v1/usdt0/transfers/{id}/submit`) need it in `X-Record-Token`, or answer `404`.
-  **Breaking for wallets on the public key:** swap submit and cross-chain deposit used
-  to work with the id alone and now need the header too. Real keys are unaffected, and
-  `GET /v1/swaps` and `GET /v1/cross-chain-swaps` stay closed to the public key. Deploy
-  step: add `X-Record-Token` to the gateway's CORS `allow_headers`.
+  own status. A create on that key now answers `publicToken`; the two reads,
+  `GET /v1/usdt0/transfers/{id}` and `POST /v1/usdt0/transfers/{id}/submit` need it in
+  `X-Record-Token` (or answer `404`). **Not breaking:** `POST /v1/swaps/{id}/submit`
+  and `POST /v1/cross-chain-swaps/{id}/deposit`, which the wallet already calls with
+  the public key, refuse a wrong token but still accept a missing one, logged as a
+  deprecation. Wallets should start sending `X-Record-Token` from the create response;
+  once they do, set `PUBLIC_RECORD_TOKEN_REQUIRED_ON_LEGACY=true` and those two routes
+  require it too. Real keys are unaffected, and `GET /v1/swaps` and
+  `GET /v1/cross-chain-swaps` stay closed to the public key. Deploy step: add
+  `X-Record-Token` to the gateway's CORS `allow_headers`.
 - **Migration `20261025210000_usdt0_transfers`** creates the `usdt0_transfer` table and
   the `Usdt0TransferStatus` enum; nothing is rewritten. Run `migrate deploy` before the
   new build serves traffic.
@@ -2808,6 +2813,7 @@ at least `DATABASE_URL` and `APISIX_GATEWAY_SECRET`.
 | `APISIX_PUBLIC_CONSUMER` | no | — | Username of the shared public consumer (see above). Set it wherever a public key is published |
 | `PUBLIC_API_KEY_DEV` | no | — | The shared public key for testnet, served by `GET /v1/public-key?env=dev`. Unset answers `503 misconfigured` |
 | `PUBLIC_API_KEY_PROD` | no | — | The same for mainnet (`env=prod`) |
+| `PUBLIC_RECORD_TOKEN_REQUIRED_ON_LEGACY` | no | `false` | With the shared public key, require `X-Record-Token` on `POST /v1/swaps/{id}/submit` and `POST /v1/cross-chain-swaps/{id}/deposit` too (a wrong token is refused either way). Turn it on once the wallet sends the token from the create response |
 | `APISIX_ADMIN_URL` | with the admin key | — | APISIX Admin API base, e.g. `http://apisix:9180/apisix/admin`. Used only to mint wallet accounts' keys |
 | `APISIX_ADMIN_KEY` | for the wallet sign-in | — | APISIX admin key. Gateway-wide — see [No request depends on the developer platform](#no-request-depends-on-the-developer-platform). Refused on a recovery server |
 | `APISIX_ADMIN_TIMEOUT_MS` | no | `10000` | Budget for one Admin API call (ms) |

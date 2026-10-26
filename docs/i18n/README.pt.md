@@ -982,10 +982,10 @@ Acessível com a chave pública hoje:
 | --- | --- |
 | `POST /v1/swaps/quote` | Precifica um caminho a partir do Horizon; uma função pura da requisição |
 | `POST /v1/swaps` | Monta um envelope não assinado que quem chama assina |
-| `POST /v1/swaps/:id/submit` | Transmite um envelope assinado por quem chama: nada sobre o swap, nem mesmo seu status, é respondido até que o corpo seja o envelope daquele swap trazendo uma assinatura e o `X-Record-Token` do swap seja enviado; com limite de taxa |
+| `POST /v1/swaps/:id/submit` | Transmite um envelope assinado por quem chama: nada sobre o swap, nem mesmo seu status, é respondido até que o corpo seja o envelope daquele swap trazendo uma assinatura; um `X-Record-Token` errado é recusado, e um ausente ainda é aceito por enquanto (veja abaixo); com limite de taxa |
 | `GET /v1/cross-chain-swaps/assets` \| `POST /v1/cross-chain-swaps/quote` | A lista de tokens da NEAR Intents e uma cotação a seco; funções puras da requisição |
 | `POST /v1/cross-chain-swaps` | Um endereço de depósito para os fundos de quem chama; um `Idempotency-Key` repetido só é respondido se a requisição coincidir |
-| `POST /v1/cross-chain-swaps/:id/deposit` | Aponta à NEAR Intents uma transação que ela mesma verifica on-chain; exige o `X-Record-Token` do swap; com limite de taxa |
+| `POST /v1/cross-chain-swaps/:id/deposit` | Aponta à NEAR Intents uma transação que ela mesma verifica on-chain; um `X-Record-Token` errado é recusado, e um ausente ainda é aceito por enquanto (veja abaixo); com limite de taxa |
 | `GET /v1/swaps/:id` \| `GET /v1/cross-chain-swaps/:id` | Um swap pelo seu id E pelo seu token de registro (`X-Record-Token`, veja abaixo), para que um swap feito sem conta possa acompanhar o próprio status; continua vinculado ao consumer |
 | `GET /v1/usdt0/routes` \| `POST /v1/usdt0/quote` | O catálogo de rotas e uma cotação simulada; funções puras da requisição |
 | `POST /v1/usdt0/transfers` | Monta uma transação não assinada que quem chama assina; um `Idempotency-Key` repetido só é respondido se a requisição coincidir |
@@ -1013,16 +1013,19 @@ consumer não deixa um visitante fora do swap de outro. Por isso, um create com 
 chave (`POST /v1/swaps`, `POST /v1/cross-chain-swaps`, `POST /v1/usdt0/transfers`)
 responde `publicToken`: `base64url(HMAC-SHA256(key, "<kind>:<id>"))`, um tipo por
 tabela, sob uma chave derivada com HKDF de `APISIX_GATEWAY_SECRET` (rótulo
-`public-record-token v1`). As leituras e ações desse registro (`GET /v1/swaps/{id}`,
-`GET /v1/cross-chain-swaps/{id}`, `GET /v1/usdt0/transfers/{id}`,
-`POST /v1/swaps/{id}/submit`, `POST /v1/cross-chain-swaps/{id}/deposit`,
-`POST /v1/usdt0/transfers/{id}/submit`) o exigem no header `X-Record-Token`,
-comparado em tempo constante; um token ausente ou errado responde o mesmo `404` de um
-registro que não existe, antes de a tabela ser lida. O token é derivado, não
-armazenado: um create repetido responde o mesmo, e rotacionar `APISIX_GATEWAY_SECRET`
-invalida todo token já entregue. Chaves reais nunca recebem um nem precisam de um.
-Uma página pública envia o header, então o `allow_headers` do CORS do gateway precisa
-listar `X-Record-Token`.
+`public-record-token v1`). As rotas desse registro o recebem no header
+`X-Record-Token`, comparado em tempo constante, e um token errado responde o mesmo
+`404` de um registro que não existe, antes de a tabela ser lida:
+
+| Rota, com a chave pública | Um token ausente |
+| --- | --- |
+| `GET /v1/swaps/{id}`, `GET /v1/cross-chain-swaps/{id}`, `GET /v1/usdt0/transfers/{id}`, `POST /v1/usdt0/transfers/{id}/submit` | Recusado (`404`): essas rotas são novas, ninguém as chamou sem token |
+| `POST /v1/swaps/{id}/submit`, `POST /v1/cross-chain-swaps/{id}/deposit` | Ainda aceito por enquanto, com um aviso de uso obsoleto no log que nomeia a rota e o id do registro, porque a carteira já as chama com a chave pública. O submit de swaps continua sem responder nada até que o corpo seja o envelope assinado do swap. `PUBLIC_RECORD_TOKEN_REQUIRED_ON_LEGACY=true` torna o token obrigatório aqui também |
+
+O token é derivado, não armazenado: um create repetido responde o mesmo, e rotacionar
+`APISIX_GATEWAY_SECRET` invalida todo token já entregue. Chaves reais nunca recebem um
+nem precisam de um. Uma página pública envia o header, então o `allow_headers` do CORS
+do gateway precisa listar `X-Record-Token`.
 
 **A telemetria é permitida** para que os relatórios de crash de carteiras sem conta
 continuem chegando. Os eventos desta chave são anônimos (um único consumer
@@ -2101,12 +2104,15 @@ serviço em `src/native-plugins/<slug>/`, ligados pela mesma lista
 - **`GET /v1/swaps/{id}` e `GET /v1/cross-chain-swaps/{id}` agora admitem a chave
   pública compartilhada, com um token de registro**, para que um swap feito sem conta
   possa acompanhar o próprio status. Um create com essa chave agora responde
-  `publicToken`, e com essa chave as leituras e ações do registro (essas duas leituras,
-  `GET /v1/usdt0/transfers/{id}`, `POST /v1/swaps/{id}/submit`,
-  `POST /v1/cross-chain-swaps/{id}/deposit` e `POST /v1/usdt0/transfers/{id}/submit`)
-  o exigem em `X-Record-Token`, ou respondem `404`. **Incompatível para carteiras na
-  chave pública:** o submit de swaps e o depósito entre redes funcionavam só com o id
-  e agora também exigem o header. Chaves reais não são afetadas, e `GET /v1/swaps` e
+  `publicToken`; as duas leituras, `GET /v1/usdt0/transfers/{id}` e
+  `POST /v1/usdt0/transfers/{id}/submit` o exigem em `X-Record-Token` (ou respondem
+  `404`). **Não é uma mudança incompatível:** `POST /v1/swaps/{id}/submit` e
+  `POST /v1/cross-chain-swaps/{id}/deposit`, que a carteira já chama com a chave
+  pública, recusam um token errado mas ainda aceitam um ausente, com um aviso de uso
+  obsoleto no log. As carteiras devem começar a enviar `X-Record-Token` com o token da
+  resposta do create; quando o fizerem, defina
+  `PUBLIC_RECORD_TOKEN_REQUIRED_ON_LEGACY=true` e essas duas rotas também passam a
+  exigi-lo. Chaves reais não são afetadas, e `GET /v1/swaps` e
   `GET /v1/cross-chain-swaps` continuam fechadas para a chave pública. Passo de
   deploy: adicione `X-Record-Token` ao `allow_headers` do CORS do gateway.
 - **A migração `20261025210000_usdt0_transfers`** cria a tabela `usdt0_transfer` e o
@@ -2865,6 +2871,7 @@ Toda variável lida de `process.env` em `src/` é validada no boot por
 | `APISIX_PUBLIC_CONSUMER` | não | — | Username do consumer público compartilhado (veja acima). Defina-o onde quer que uma chave pública seja publicada |
 | `PUBLIC_API_KEY_DEV` | não | — | A chave pública compartilhada da testnet, servida por `GET /v1/public-key?env=dev`. Sem definir responde `503 misconfigured` |
 | `PUBLIC_API_KEY_PROD` | não | — | O mesmo para a mainnet (`env=prod`) |
+| `PUBLIC_RECORD_TOKEN_REQUIRED_ON_LEGACY` | não | `false` | Com a chave pública compartilhada, exige `X-Record-Token` também em `POST /v1/swaps/{id}/submit` e `POST /v1/cross-chain-swaps/{id}/deposit` (um token errado é recusado de qualquer forma). Ative-a quando a carteira enviar o token da resposta do create |
 | `APISIX_ADMIN_URL` | com a admin key | — | Base da Admin API do APISIX, ex. `http://apisix:9180/apisix/admin`. Usada só para emitir as chaves das contas de wallet |
 | `APISIX_ADMIN_KEY` | para o login da wallet | — | Admin key do APISIX. Vale para todo o gateway — veja [Nenhuma requisição depende da plataforma de desenvolvedores](#nenhuma-requisição-depende-da-plataforma-de-desenvolvedores). Recusada num servidor de recuperação |
 | `APISIX_ADMIN_TIMEOUT_MS` | não | `10000` | Orçamento de uma chamada à Admin API (ms) |

@@ -992,10 +992,10 @@ Accessibles avec la clé publique aujourd'hui :
 | --- | --- |
 | `POST /v1/swaps/quote` | Calcule le prix d'un chemin depuis Horizon ; une fonction pure de la requête |
 | `POST /v1/swaps` | Construit une enveloppe non signée que l'appelant signe |
-| `POST /v1/swaps/:id/submit` | Diffuse une enveloppe signée par l'appelant : rien sur le swap, pas même son statut, n'est répondu tant que le corps n'est pas l'enveloppe de ce swap porteuse d'une signature et que le `X-Record-Token` du swap n'est pas envoyé ; limité en débit |
+| `POST /v1/swaps/:id/submit` | Diffuse une enveloppe signée par l'appelant : rien sur le swap, pas même son statut, n'est répondu tant que le corps n'est pas l'enveloppe de ce swap porteuse d'une signature ; un `X-Record-Token` erroné est refusé, un jeton absent est encore accepté pour l'instant (voir ci-dessous) ; limité en débit |
 | `GET /v1/cross-chain-swaps/assets` \| `POST /v1/cross-chain-swaps/quote` | La liste de jetons de NEAR Intents et une cotation à blanc ; des fonctions pures de la requête |
 | `POST /v1/cross-chain-swaps` | Une adresse de dépôt pour les propres fonds de l'appelant ; un `Idempotency-Key` rejoué n'est répondu que si la requête correspond |
-| `POST /v1/cross-chain-swaps/:id/deposit` | Indique à NEAR Intents une transaction qu'il vérifie lui-même on-chain ; exige le `X-Record-Token` du swap ; limité en débit |
+| `POST /v1/cross-chain-swaps/:id/deposit` | Indique à NEAR Intents une transaction qu'il vérifie lui-même on-chain ; un `X-Record-Token` erroné est refusé, un jeton absent est encore accepté pour l'instant (voir ci-dessous) ; limité en débit |
 | `GET /v1/swaps/:id` \| `GET /v1/cross-chain-swaps/:id` | Un swap par son id ET son jeton d'enregistrement (`X-Record-Token`, voir ci-dessous), pour qu'un swap fait sans compte puisse suivre son propre statut ; toujours restreint au consumer |
 | `GET /v1/usdt0/routes` \| `POST /v1/usdt0/quote` | Le catalogue des routes et une cotation simulée ; des fonctions pures de la requête |
 | `POST /v1/usdt0/transfers` | Construit une transaction non signée que l'appelant signe ; un `Idempotency-Key` rejoué n'est répondu que si la requête correspond |
@@ -1024,13 +1024,16 @@ autre. Une création sur cette clé (`POST /v1/swaps`, `POST /v1/cross-chain-swa
 `POST /v1/usdt0/transfers`) répond donc `publicToken` :
 `base64url(HMAC-SHA256(key, "<kind>:<id>"))`, un type (`<kind>`) par table, sous une clé
 dérivée par HKDF de `APISIX_GATEWAY_SECRET` (libellé `public-record-token v1`). Les
-lectures et actions de cet enregistrement précis (`GET /v1/swaps/{id}`,
-`GET /v1/cross-chain-swaps/{id}`, `GET /v1/usdt0/transfers/{id}`,
-`POST /v1/swaps/{id}/submit`, `POST /v1/cross-chain-swaps/{id}/deposit`,
-`POST /v1/usdt0/transfers/{id}/submit`) l'exigent dans l'en-tête `X-Record-Token`,
-comparé en temps constant ; un jeton absent ou erroné répond le même `404` qu'un
-enregistrement qui n'existe pas, avant même que la table ne soit lue. Le jeton est
-dérivé, pas stocké : une création rejouée répond le même, et faire tourner
+routes de cet enregistrement le reçoivent dans l'en-tête `X-Record-Token`, comparé en
+temps constant, et un jeton erroné répond le même `404` qu'un enregistrement qui
+n'existe pas, avant même que la table ne soit lue :
+
+| Route, avec la clé publique | Un jeton absent |
+| --- | --- |
+| `GET /v1/swaps/{id}`, `GET /v1/cross-chain-swaps/{id}`, `GET /v1/usdt0/transfers/{id}`, `POST /v1/usdt0/transfers/{id}/submit` | Refusé (`404`) : ces routes sont nouvelles, personne ne les a appelées sans jeton |
+| `POST /v1/swaps/{id}/submit`, `POST /v1/cross-chain-swaps/{id}/deposit` | Encore accepté pour l'instant, et journalisé avec un avertissement de dépréciation qui nomme la route et l'id de l'enregistrement, parce que le wallet les appelle déjà avec la clé publique. Le submit de swap ne répond toujours rien tant que le corps n'est pas l'enveloppe signée du swap. `PUBLIC_RECORD_TOKEN_REQUIRED_ON_LEGACY=true` rend le jeton obligatoire ici aussi |
+
+Le jeton est dérivé, pas stocké : une création rejouée répond le même, et faire tourner
 `APISIX_GATEWAY_SECRET` invalide tous les jetons déjà remis. Les vraies clés n'en
 reçoivent jamais et n'en ont jamais besoin. Une page publique envoie l'en-tête, donc les
 `allow_headers` du CORS de la passerelle doivent inclure `X-Record-Token`.
@@ -2129,12 +2132,14 @@ plugins isolés.
 - **`GET /v1/swaps/{id}` et `GET /v1/cross-chain-swaps/{id}` admettent désormais la
   clé publique partagée, avec un jeton d'enregistrement**, pour qu'un swap fait sans
   compte puisse suivre son propre statut. Une création sur cette clé répond désormais
-  `publicToken`, et sur cette clé les lectures et actions de l'enregistrement (ces deux
-  lectures, `GET /v1/usdt0/transfers/{id}`, `POST /v1/swaps/{id}/submit`,
-  `POST /v1/cross-chain-swaps/{id}/deposit` et `POST /v1/usdt0/transfers/{id}/submit`)
-  l'exigent dans `X-Record-Token`, sinon elles répondent `404`. **Changement
-  incompatible pour les wallets sur la clé publique :** le submit de swap et le deposit
-  inter-chaînes fonctionnaient avec le seul id et exigent désormais aussi l'en-tête. Les
+  `publicToken` ; ces deux lectures ainsi que `GET /v1/usdt0/transfers/{id}` et
+  `POST /v1/usdt0/transfers/{id}/submit` l'exigent dans `X-Record-Token` (sinon elles
+  répondent `404`). **Pas de changement incompatible :** `POST /v1/swaps/{id}/submit`
+  et `POST /v1/cross-chain-swaps/{id}/deposit`, que le wallet appelle déjà avec la clé
+  publique, refusent un jeton erroné mais acceptent encore un jeton absent, journalisé
+  avec un avertissement de dépréciation. Les wallets devraient commencer à envoyer
+  `X-Record-Token`, tiré de la réponse de création ; une fois que c'est fait, définissez
+  `PUBLIC_RECORD_TOKEN_REQUIRED_ON_LEGACY=true` et ces deux routes l'exigent aussi. Les
   vraies clés ne sont pas concernées, et `GET /v1/swaps` et `GET /v1/cross-chain-swaps`
   restent fermés à la clé publique. Étape de déploiement : ajoutez `X-Record-Token` aux
   `allow_headers` du CORS de la passerelle.
@@ -2921,6 +2926,7 @@ Chaque variable lue depuis `process.env` dans `src/` est validée au démarrage 
 | `APISIX_PUBLIC_CONSUMER` | non | — | Nom d'utilisateur du consumer public partagé (voir ci-dessus). Définissez-la partout où une clé publique est publiée |
 | `PUBLIC_API_KEY_DEV` | non | — | La clé publique partagée du testnet, servie par `GET /v1/public-key?env=dev`. Non définie : `503 misconfigured` |
 | `PUBLIC_API_KEY_PROD` | non | — | Idem pour le mainnet (`env=prod`) |
+| `PUBLIC_RECORD_TOKEN_REQUIRED_ON_LEGACY` | non | `false` | Avec la clé publique partagée, exige `X-Record-Token` aussi sur `POST /v1/swaps/{id}/submit` et `POST /v1/cross-chain-swaps/{id}/deposit` (un jeton erroné est refusé dans tous les cas). Activez-la une fois que le wallet envoie le jeton tiré de la réponse de création |
 | `APISIX_ADMIN_URL` | avec la clé admin | — | Base de l'Admin API d'APISIX, p. ex. `http://apisix:9180/apisix/admin`. Sert uniquement à émettre les clés des comptes wallet |
 | `APISIX_ADMIN_KEY` | pour la connexion du wallet | — | Clé admin d'APISIX. Vaut pour toute la passerelle — voir [Aucune requête ne dépend de la plateforme développeur](#aucune-requête-ne-dépend-de-la-plateforme-développeur). Refusée sur un serveur de récupération |
 | `APISIX_ADMIN_TIMEOUT_MS` | non | `10000` | Budget d'un appel à l'Admin API (ms) |

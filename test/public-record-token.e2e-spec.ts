@@ -1,4 +1,4 @@
-import { ValidationPipe, VersioningType } from '@nestjs/common';
+import { Logger, ValidationPipe, VersioningType } from '@nestjs/common';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
@@ -8,6 +8,7 @@ import { recordToken, recordTokenKey } from '@/common/public-record-token';
 import type { PublicRecordKind } from '@/common/public-record-token.constants';
 import { NearIntentsClient } from '@/near-intents/near-intents.client';
 import { PrismaService } from '@/prisma/prisma.service';
+import { SignedTransactionRelay } from '@/stellar/signed-transaction-relay.service';
 import { SorobanRpcClient } from '@/stellar/soroban-rpc.client';
 import { LayerZeroScanClient } from '@/usdt0/layerzero-scan.client';
 
@@ -20,6 +21,11 @@ import { LayerZeroScanClient } from '@/usdt0/layerzero-scan.client';
  * record then need it in `X-Record-Token`, and a missing or wrong one is the
  * same 404 as a record that does not exist, decided before the table is read.
  * A real key is unaffected.
+ *
+ * Swap submit and cross-chain deposit predate the tokens and the wallet calls
+ * them with the public key, so there a missing token is still accepted (and
+ * logged as deprecated) until PUBLIC_RECORD_TOKEN_REQUIRED_ON_LEGACY is on; a
+ * wrong token is refused there too.
  */
 describe('Public record tokens (e2e)', () => {
   let app: NestExpressApplication;
@@ -60,8 +66,11 @@ describe('Public record tokens (e2e)', () => {
     crossChainSwap: {
       id: CROSS_ID,
       status: 'AWAITING_DEPOSIT',
+      originChain: 'btc',
       depositAddress: 'bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4',
+      depositMemo: null,
       depositUri: null,
+      expiresAt: new Date(Date.now() + 60 * 60 * 1000),
       createdAt: NOW,
       updatedAt: NOW,
     },
@@ -106,6 +115,8 @@ describe('Public record tokens (e2e)', () => {
     crossChainSwap: {
       ...table(ROWS.crossChainSwap),
       findUnique: jest.fn().mockResolvedValue(null),
+      update: jest.fn().mockResolvedValue({}),
+      updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       create: jest.fn(({ data }: { data: Record<string, unknown> }) =>
         Promise.resolve({
           id: 'cm1crosscreated0000000001',
@@ -142,10 +153,25 @@ describe('Public record tokens (e2e)', () => {
       }),
     ),
     status: jest.fn(),
-    submitDeposit: jest.fn(),
+    // 1Click does not know the address yet: the swap stays as it is.
+    submitDeposit: jest.fn().mockResolvedValue(null),
   };
 
-  beforeAll(async () => {
+  /**
+   * The relay is the swap submit's own defence (the signed envelope must be
+   * the swap's); it has its own spec, and here it only answers, so a 200 means
+   * the record-token check let the request through.
+   */
+  const relayMock = {
+    submit: jest.fn().mockResolvedValue({
+      submitted: true,
+      status: 'SUCCEEDED',
+      txHash: 'ab'.repeat(32),
+      view: { id: SWAP_ID },
+    }),
+  };
+
+  async function buildApp(): Promise<NestExpressApplication> {
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
       .overrideProvider(PrismaService)
       .useValue(prismaMock)
@@ -155,20 +181,27 @@ describe('Public record tokens (e2e)', () => {
       .useValue({ passphrase: 'unused' })
       .overrideProvider(LayerZeroScanClient)
       .useValue({})
+      .overrideProvider(SignedTransactionRelay)
+      .useValue(relayMock)
       .compile();
 
-    app = moduleRef.createNestApplication<NestExpressApplication>();
-    app.set('trust proxy', 1);
-    app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
-    app.useGlobalFilters(new AllExceptionsFilter());
-    app.useGlobalPipes(
+    const built = moduleRef.createNestApplication<NestExpressApplication>();
+    built.set('trust proxy', 1);
+    built.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
+    built.useGlobalFilters(new AllExceptionsFilter());
+    built.useGlobalPipes(
       new ValidationPipe({
         whitelist: true,
         forbidNonWhitelisted: true,
         transform: true,
       }),
     );
-    await app.init();
+    await built.init();
+    return built;
+  }
+
+  beforeAll(async () => {
+    app = await buildApp();
   });
 
   afterAll(async () => {
@@ -300,25 +333,133 @@ describe('Public record tokens (e2e)', () => {
     expect(prismaMock.swap.findFirst).not.toHaveBeenCalled();
   });
 
-  it.each([
-    [`/v1/swaps/${SWAP_ID}/submit`, { signedXdr: 'AAAA' }],
-    [`/v1/cross-chain-swaps/${CROSS_ID}/deposit`, { txHash: 'ab'.repeat(32) }],
-    [`/v1/usdt0/transfers/${USDT0_ID}/submit`, { signedXdr: 'AAAA' }],
-  ])(
-    'refuses POST %s on the shared public key without the token (404)',
-    async (path, body) => {
-      const res = await request(app.getHttpServer())
-        .post(path)
-        .set(PUBLIC_KEY)
-        .set('x-forwarded-for', '192.0.2.44')
-        .send(body)
-        .expect(404);
-      expect(res.body.code).toBe('not_found');
-      expect(prismaMock.swap.findFirst).not.toHaveBeenCalled();
-      expect(prismaMock.crossChainSwap.findFirst).not.toHaveBeenCalled();
-      expect(prismaMock.usdt0Transfer.findFirst).not.toHaveBeenCalled();
+  it('refuses POST /v1/usdt0/transfers/{id}/submit on the shared public key without the token (404): it is new, so it requires it', async () => {
+    const res = await request(app.getHttpServer())
+      .post(`/v1/usdt0/transfers/${USDT0_ID}/submit`)
+      .set(PUBLIC_KEY)
+      .set('x-forwarded-for', '192.0.2.44')
+      .send({ signedXdr: 'AAAA' })
+      .expect(404);
+    expect(res.body.code).toBe('not_found');
+    expect(prismaMock.usdt0Transfer.findFirst).not.toHaveBeenCalled();
+  });
+
+  type Legacy = {
+    route: string;
+    path: string;
+    body: Record<string, string>;
+    kind: PublicRecordKind;
+    id: string;
+    model: { findFirst: jest.Mock };
+  };
+  const LEGACY: Legacy[] = [
+    {
+      route: 'POST /v1/swaps/{id}/submit',
+      path: `/v1/swaps/${SWAP_ID}/submit`,
+      body: { signedXdr: 'AAAA' },
+      kind: 'swap',
+      id: SWAP_ID,
+      model: prismaMock.swap,
     },
-  );
+    {
+      route: 'POST /v1/cross-chain-swaps/{id}/deposit',
+      path: `/v1/cross-chain-swaps/${CROSS_ID}/deposit`,
+      body: { txHash: 'ab'.repeat(32) },
+      kind: 'cross-chain-swap',
+      id: CROSS_ID,
+      model: prismaMock.crossChainSwap,
+    },
+  ];
+  const deprecations = (warn: jest.SpyInstance) =>
+    warn.mock.calls
+      .map(([entry]) => entry as Record<string, unknown>)
+      .filter((entry) => entry?.event === 'public_record_token_missing');
+
+  describe.each(LEGACY)('the legacy route $route', (legacy) => {
+    let address = 10;
+    const post = (token?: string) => {
+      address += 1;
+      const call = request(app.getHttpServer())
+        .post(legacy.path)
+        .set(PUBLIC_KEY)
+        .set('x-forwarded-for', `198.51.100.${address}`);
+      if (token !== undefined) call.set('X-Record-Token', token);
+      return call.send(legacy.body);
+    };
+
+    afterEach(() => jest.restoreAllMocks());
+
+    it('still answers the shared public key without a token, and logs a deprecation naming the route and the record', async () => {
+      const warn = jest.spyOn(Logger.prototype, 'warn');
+      await post().expect(200);
+      expect(legacy.model.findFirst).toHaveBeenCalledWith({
+        where: {
+          id: legacy.id,
+          consumer: { apisixUsername: 'cosmos_wallet' },
+        },
+      });
+      expect(deprecations(warn)).toEqual([
+        expect.objectContaining({
+          deprecated: true,
+          route: legacy.route,
+          recordKind: legacy.kind,
+          recordId: legacy.id,
+        }),
+      ]);
+    });
+
+    it('answers the record’s own token without a deprecation', async () => {
+      const warn = jest.spyOn(Logger.prototype, 'warn');
+      await post(tokenOf(legacy.kind, legacy.id)).expect(200);
+      expect(deprecations(warn)).toEqual([]);
+    });
+
+    it('refuses a wrong token with the 404 of a missing record, before the table is read', async () => {
+      const res = await post(
+        tokenOf(legacy.kind, 'cm1someotherrecord0000001'),
+      ).expect(404);
+      expect(res.body.code).toBe('not_found');
+      expect(legacy.model.findFirst).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('with PUBLIC_RECORD_TOKEN_REQUIRED_ON_LEGACY=true', () => {
+    let strict: NestExpressApplication;
+
+    beforeAll(async () => {
+      process.env.PUBLIC_RECORD_TOKEN_REQUIRED_ON_LEGACY = 'true';
+      strict = await buildApp();
+    });
+
+    afterAll(async () => {
+      delete process.env.PUBLIC_RECORD_TOKEN_REQUIRED_ON_LEGACY;
+      await strict.close();
+    });
+
+    it.each(LEGACY)(
+      'refuses $route on the shared public key without the token (404)',
+      async (legacy) => {
+        const res = await request(strict.getHttpServer())
+          .post(legacy.path)
+          .set(PUBLIC_KEY)
+          .set('x-forwarded-for', '203.0.113.200')
+          .send(legacy.body)
+          .expect(404);
+        expect(res.body.code).toBe('not_found');
+        expect(legacy.model.findFirst).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each(LEGACY)('still answers $route with the token', async (legacy) => {
+      await request(strict.getHttpServer())
+        .post(legacy.path)
+        .set(PUBLIC_KEY)
+        .set('X-Record-Token', tokenOf(legacy.kind, legacy.id))
+        .set('x-forwarded-for', '203.0.113.201')
+        .send(legacy.body)
+        .expect(200);
+    });
+  });
 
   describe('creating a record', () => {
     const body = {

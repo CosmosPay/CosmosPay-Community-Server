@@ -356,13 +356,18 @@ Each of these was a real finding in this codebase, not a hypothetical:
   make of what it wrote are ONE row by its id AND its record token
   (`PublicRecordTokens`, `src/common/public-record-token.ts`): the create answers
   `publicToken` = `base64url(HMAC-SHA256(HKDF(APISIX_GATEWAY_SECRET,
-  "public-record-token v1"), "<kind>:<id>"))`, and the row's reads and actions take it
-  in `X-Record-Token` (`GET /v1/swaps/{id}`, `/v1/cross-chain-swaps/{id}`,
-  `/v1/usdt0/transfers/{id}`, their submit / deposit). A missing or wrong token is the
-  404 of a missing row, checked in constant time before the table is read; real keys
-  are untouched. A new public-key create whose row can be read back issues a token
-  (`attach`) and its by-id routes check it (`admits`), with a new kind in
-  `PUBLIC_RECORD_KINDS`. A list never takes the public key.
+  "public-record-token v1"), "<kind>:<id>"))`, and the row's routes take it in
+  `X-Record-Token`. A wrong token is the 404 of a missing row everywhere, checked in
+  constant time before the table is read; a missing one is that 404 too on
+  `GET /v1/swaps/{id}`, `/v1/cross-chain-swaps/{id}`, `/v1/usdt0/transfers/{id}` and
+  the USDT0 submit. The two routes the wallet called with the public key before
+  tokens existed (`LEGACY_RECORD_TOKEN_ROUTES`: swap submit, cross-chain deposit)
+  still accept a missing token, logged as a deprecation (`noteLegacyAccess`), until
+  `PUBLIC_RECORD_TOKEN_REQUIRED_ON_LEGACY=true`; flip it once the wallet sends the
+  token, and never add a route to that list. Real keys are untouched. A new
+  public-key create whose row can be read back issues a token (`attach`) and its
+  by-id routes check it (`admits`), with a new kind in `PUBLIC_RECORD_KINDS`. A list
+  never takes the public key.
 - **A `@Public()` route has no consumer.** It is served without key-auth, so
   `ApisixGuard` drops whatever `X-Consumer-Username` the client sent. Never read
   `@CurrentConsumer()` there.

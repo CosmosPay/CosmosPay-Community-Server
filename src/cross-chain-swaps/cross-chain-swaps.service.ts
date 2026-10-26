@@ -12,6 +12,10 @@ import {
 import { isUniqueViolation } from '@/common/prisma-errors';
 import { project } from '@/common/projection';
 import { PublicRecordTokens } from '@/common/public-record-token';
+import {
+  LEGACY_RECORD_TOKEN_ROUTES,
+  type LegacyRecordTokenRoute,
+} from '@/common/public-record-token.constants';
 import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
 import { resolveNetwork } from '@/common/stellar-network';
 import type { AppConfig } from '@/config/configuration';
@@ -399,7 +403,14 @@ export class CrossChainSwapsService {
     txHash: string,
     recordToken?: string,
   ): Promise<CrossChainSwapView> {
-    const swap = await this.findOwned(consumer, id, recordToken);
+    // A legacy route: the public key may still leave the token out (see
+    // `PublicRecordTokens`).
+    const swap = await this.findOwned(
+      consumer,
+      id,
+      recordToken,
+      LEGACY_RECORD_TOKEN_ROUTES.crossChainDeposit,
+    );
     const network =
       CROSS_CHAIN_NETWORKS[swap.originChain as CrossChainNetworkId];
     if (!network.txId.isValid(txHash)) {
@@ -738,15 +749,23 @@ export class CrossChainSwapsService {
   /**
    * A miss on someone else's swap is a 404, never a 403. The shared public key
    * also needs the swap's record token; a missing or wrong one is the same
-   * 404, decided before the table is read.
+   * 404, decided before the table is read. On a legacy route (`legacyRoute`,
+   * the deposit) a missing token is still admitted for now, and logged.
    */
   private async findOwned(
     consumer: GatewayConsumer,
     id: string,
     recordToken?: string,
+    legacyRoute?: LegacyRecordTokenRoute,
   ): Promise<CrossChainSwap> {
     if (
-      !this.recordTokens.admits(consumer, 'cross-chain-swap', id, recordToken)
+      !this.recordTokens.admits(
+        consumer,
+        'cross-chain-swap',
+        id,
+        recordToken,
+        legacyRoute,
+      )
     ) {
       throw ApiError.notFound(`Cross-chain swap ${id} not found`);
     }
@@ -754,6 +773,15 @@ export class CrossChainSwapsService {
       where: { id, consumer: { apisixUsername: consumer.username } },
     });
     if (!swap) throw ApiError.notFound(`Cross-chain swap ${id} not found`);
+    if (legacyRoute) {
+      this.recordTokens.noteLegacyAccess(
+        consumer,
+        'cross-chain-swap',
+        id,
+        recordToken,
+        legacyRoute,
+      );
+    }
     return swap;
   }
 

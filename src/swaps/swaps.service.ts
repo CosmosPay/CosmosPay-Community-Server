@@ -14,6 +14,10 @@ import { isUniqueViolation } from '@/common/prisma-errors';
 import { resolveNetwork } from '@/common/stellar-network';
 import { project } from '@/common/projection';
 import { PublicRecordTokens } from '@/common/public-record-token';
+import {
+  LEGACY_RECORD_TOKEN_ROUTES,
+  type LegacyRecordTokenRoute,
+} from '@/common/public-record-token.constants';
 import { PrismaService } from '@/prisma/prisma.service';
 import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
 import { StellarAccountLoader } from '@/stellar/account-loader.service';
@@ -607,7 +611,14 @@ export class SwapsService {
     signedXdr: string,
     recordToken?: string,
   ): Promise<SwapSubmitOutcome> {
-    const swap = await this.findOwned(consumer, id, recordToken);
+    // A legacy route: the public key may still leave the token out (see
+    // `PublicRecordTokens`); the relay's envelope check is the defence then.
+    const swap = await this.findOwned(
+      consumer,
+      id,
+      recordToken,
+      LEGACY_RECORD_TOKEN_ROUTES.swapSubmit,
+    );
     const { view, ...outcome } = await this.relay.submit(
       swap,
       consumer.username,
@@ -859,14 +870,18 @@ export class SwapsService {
   /**
    * The caller's swap, or 404. The shared public key also needs the swap's
    * record token, checked before the table is read: a missing or wrong token
-   * is the same 404, so an id alone confirms nothing.
+   * is the same 404, so an id alone confirms nothing. On a legacy route
+   * (`legacyRoute`) a missing token is still admitted for now, and logged.
    */
   private async findOwned(
     consumer: GatewayConsumer,
     id: string,
     recordToken?: string,
+    legacyRoute?: LegacyRecordTokenRoute,
   ): Promise<Swap> {
-    if (!this.recordTokens.admits(consumer, 'swap', id, recordToken)) {
+    if (
+      !this.recordTokens.admits(consumer, 'swap', id, recordToken, legacyRoute)
+    ) {
       throw ApiError.notFound(`Swap ${id} not found`);
     }
     const swap = await this.prisma.swap.findFirst({
@@ -874,6 +889,15 @@ export class SwapsService {
     });
     if (!swap) {
       throw ApiError.notFound(`Swap ${id} not found`);
+    }
+    if (legacyRoute) {
+      this.recordTokens.noteLegacyAccess(
+        consumer,
+        'swap',
+        id,
+        recordToken,
+        legacyRoute,
+      );
     }
     return swap;
   }

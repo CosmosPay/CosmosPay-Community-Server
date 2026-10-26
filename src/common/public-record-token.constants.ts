@@ -36,3 +36,18 @@ export const PUBLIC_RECORD_KINDS = [
   'usdt0-transfer',
 ] as const;
 export type PublicRecordKind = (typeof PUBLIC_RECORD_KINDS)[number];
+
+/**
+ * The routes the wallet called with the shared public key BEFORE record tokens
+ * existed. With that key they still accept a request with no `X-Record-Token`,
+ * logged as deprecated, so an older wallet keeps working, until
+ * `PUBLIC_RECORD_TOKEN_REQUIRED_ON_LEGACY` turns the token on there too. A wrong
+ * token is refused on them either way. Every other route that takes a record
+ * token requires it.
+ */
+export const LEGACY_RECORD_TOKEN_ROUTES = {
+  swapSubmit: 'POST /v1/swaps/{id}/submit',
+  crossChainDeposit: 'POST /v1/cross-chain-swaps/{id}/deposit',
+} as const;
+export type LegacyRecordTokenRoute =
+  (typeof LEGACY_RECORD_TOKEN_ROUTES)[keyof typeof LEGACY_RECORD_TOKEN_ROUTES];

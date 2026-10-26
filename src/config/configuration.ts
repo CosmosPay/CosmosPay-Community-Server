@@ -192,6 +192,20 @@ export interface AppConfig {
    */
   publicKeys: { dev: string; prod: string };
   /**
+   * Per-record read tokens of what the shared public key creates
+   * (`PublicRecordTokens`).
+   */
+  publicRecordTokens: {
+    /**
+     * `PUBLIC_RECORD_TOKEN_REQUIRED_ON_LEGACY`: whether the two routes the
+     * wallet called with the public key before record tokens existed
+     * (`POST /v1/swaps/{id}/submit`, `POST /v1/cross-chain-swaps/{id}/deposit`)
+     * also refuse a request with no `X-Record-Token`. Off until the wallet
+     * sends the token; a wrong token is refused either way.
+     */
+    requiredOnLegacy: boolean;
+  };
+  /**
    * This service's own sender: Resend when `resendApiKey` is set, otherwise SMTP.
    * No `from`, or neither transport, disables every email door.
    */
@@ -737,6 +751,12 @@ export default (): AppConfig => ({
   publicKeys: {
     dev: process.env.PUBLIC_API_KEY_DEV?.trim() ?? '',
     prod: process.env.PUBLIC_API_KEY_PROD?.trim() ?? '',
+  },
+  publicRecordTokens: {
+    requiredOnLegacy:
+      (
+        process.env.PUBLIC_RECORD_TOKEN_REQUIRED_ON_LEGACY ?? 'false'
+      ).toLowerCase() === 'true',
   },
   mail: {
     resendApiKey: process.env.MAIL_RESEND_API_KEY?.trim() ?? '',

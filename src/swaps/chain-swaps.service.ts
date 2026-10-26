@@ -18,6 +18,7 @@ import {
 import { isUniqueViolation } from '@/common/prisma-errors';
 import { project } from '@/common/projection';
 import { PublicRecordTokens } from '@/common/public-record-token';
+import type { LegacyRecordTokenRoute } from '@/common/public-record-token.constants';
 import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
 import { resolveNetwork } from '@/common/stellar-network';
 import type { AppConfig } from '@/config/configuration';
@@ -291,19 +292,40 @@ export class ChainSwapsService {
    * `/v1/swaps/{id}` routes then fall through to the Stellar table, whose 404
    * is the one a miss has always answered. The shared public key also needs
    * the swap's record token (`recordToken`, from `X-Record-Token`); without the
-   * right one this is a miss too, decided before the table is read.
+   * right one this is a miss too, decided before the table is read. On a
+   * legacy route (`legacyRoute`, the submit) a missing token is still
+   * admitted for now, and logged once the swap is found.
    */
   async findOwned(
     consumer: GatewayConsumer,
     id: string,
     recordToken?: string,
+    legacyRoute?: LegacyRecordTokenRoute,
   ): Promise<ChainSwap | null> {
-    if (!this.recordTokens.admits(consumer, 'chain-swap', id, recordToken)) {
+    if (
+      !this.recordTokens.admits(
+        consumer,
+        'chain-swap',
+        id,
+        recordToken,
+        legacyRoute,
+      )
+    ) {
       return null;
     }
-    return this.prisma.chainSwap.findFirst({
+    const swap = await this.prisma.chainSwap.findFirst({
       where: { id, consumer: { apisixUsername: consumer.username } },
     });
+    if (swap && legacyRoute) {
+      this.recordTokens.noteLegacyAccess(
+        consumer,
+        'chain-swap',
+        id,
+        recordToken,
+        legacyRoute,
+      );
+    }
+    return swap;
   }
 
   present(swap: ChainSwap): PublicChainSwap {

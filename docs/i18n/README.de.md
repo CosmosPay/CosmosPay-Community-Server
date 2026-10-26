@@ -1009,10 +1009,10 @@ Heute mit dem öffentlichen Key erreichbar:
 | --- | --- |
 | `POST /v1/swaps/quote` | Bepreist einen Pfad über Horizon; eine reine Funktion der Anfrage |
 | `POST /v1/swaps` | Baut einen unsignierten Envelope, den der Aufrufer signiert |
-| `POST /v1/swaps/:id/submit` | Sendet einen vom Aufrufer signierten Envelope: Nichts zum Swap, nicht einmal sein Status, wird beantwortet, bevor der Body der Envelope dieses Swaps mit einer Signatur ist und das `X-Record-Token` des Swaps mitgesendet wird; rate-limitiert |
+| `POST /v1/swaps/:id/submit` | Sendet einen vom Aufrufer signierten Envelope: Nichts zum Swap, nicht einmal sein Status, wird beantwortet, bevor der Body der Envelope dieses Swaps mit einer Signatur ist; ein falsches `X-Record-Token` wird abgewiesen, ein fehlendes vorerst noch akzeptiert (siehe unten); rate-limitiert |
 | `GET /v1/cross-chain-swaps/assets` \| `POST /v1/cross-chain-swaps/quote` | Die Token-Liste von NEAR Intents und ein Trocken-Quote; reine Funktionen des Requests |
 | `POST /v1/cross-chain-swaps` | Eine Einzahlungsadresse für das eigene Geld des Aufrufers; ein wiederholter `Idempotency-Key` wird nur beantwortet, wenn der Request übereinstimmt |
-| `POST /v1/cross-chain-swaps/:id/deposit` | Verweist NEAR Intents auf eine Transaktion, die es selbst on-chain prüft; braucht das `X-Record-Token` des Swaps; rate-limitiert |
+| `POST /v1/cross-chain-swaps/:id/deposit` | Verweist NEAR Intents auf eine Transaktion, die es selbst on-chain prüft; ein falsches `X-Record-Token` wird abgewiesen, ein fehlendes vorerst noch akzeptiert (siehe unten); rate-limitiert |
 | `GET /v1/swaps/:id` \| `GET /v1/cross-chain-swaps/:id` | Ein Swap über seine ID UND sein Datensatz-Token (`X-Record-Token`, siehe unten), damit ein ohne Konto erstellter Swap seinen eigenen Status verfolgen kann; weiterhin auf den Consumer eingegrenzt |
 | `GET /v1/usdt0/routes` \| `POST /v1/usdt0/quote` | Der Routenkatalog und ein simuliertes Quote; reine Funktionen des Requests |
 | `POST /v1/usdt0/transfers` | Baut eine unsignierte Transaktion, die der Aufrufer signiert; ein wiederholter `Idempotency-Key` wird nur beantwortet, wenn der Request übereinstimmt |
@@ -1042,15 +1042,19 @@ Deshalb antwortet ein Create mit diesem Key (`POST /v1/swaps`,
 `POST /v1/cross-chain-swaps`, `POST /v1/usdt0/transfers`) mit `publicToken`:
 `base64url(HMAC-SHA256(key, "<kind>:<id>"))`, eine Art (`<kind>`) pro Tabelle, unter
 einem Schlüssel, der mit HKDF aus `APISIX_GATEWAY_SECRET` abgeleitet wird (Label
-`public-record-token v1`). Die Lesezugriffe und Aktionen dieses einen Datensatzes
-(`GET /v1/swaps/{id}`, `GET /v1/cross-chain-swaps/{id}`,
-`GET /v1/usdt0/transfers/{id}`, `POST /v1/swaps/{id}/submit`,
-`POST /v1/cross-chain-swaps/{id}/deposit`, `POST /v1/usdt0/transfers/{id}/submit`)
-brauchen es im Header `X-Record-Token`, in konstanter Zeit verglichen; ein fehlendes
-oder falsches Token ergibt dasselbe `404` wie ein Datensatz, der nicht existiert, noch
-bevor die Tabelle gelesen wird. Das Token wird abgeleitet, nicht gespeichert: Ein
-wiederholtes Create antwortet mit demselben, und `APISIX_GATEWAY_SECRET` zu rotieren
-macht jedes ausgegebene Token ungültig. Echte Keys erhalten nie eines und brauchen nie
+`public-record-token v1`). Die Routen dieses Datensatzes nehmen es im Header
+`X-Record-Token` entgegen, in konstanter Zeit verglichen, und ein falsches Token ergibt
+dasselbe `404` wie ein Datensatz, der nicht existiert, noch bevor die Tabelle gelesen
+wird:
+
+| Route, mit dem öffentlichen Key | Ein fehlendes Token |
+| --- | --- |
+| `GET /v1/swaps/{id}`, `GET /v1/cross-chain-swaps/{id}`, `GET /v1/usdt0/transfers/{id}`, `POST /v1/usdt0/transfers/{id}/submit` | Abgewiesen (`404`): Diese Routen sind neu, niemand hat sie ohne Token aufgerufen |
+| `POST /v1/swaps/{id}/submit`, `POST /v1/cross-chain-swaps/{id}/deposit` | Vorerst noch akzeptiert und mit einer Deprecation-Warnung protokolliert, die die Route und die ID des Datensatzes nennt, weil die Wallet sie bereits mit dem öffentlichen Key aufruft. Swap-Submit beantwortet weiterhin nichts, bevor der Body der signierte Envelope des Swaps ist. `PUBLIC_RECORD_TOKEN_REQUIRED_ON_LEGACY=true` macht das Token auch hier zur Pflicht |
+
+Das Token wird abgeleitet, nicht gespeichert: Ein wiederholtes Create antwortet mit
+demselben, und `APISIX_GATEWAY_SECRET` zu rotieren macht jedes ausgegebene Token
+ungültig. Echte Keys erhalten nie eines und brauchen nie
 eines. Eine öffentliche Seite sendet den Header, daher muss `allow_headers` im CORS des
 Gateways `X-Record-Token` enthalten.
 
@@ -2170,15 +2174,18 @@ eingeschaltet werden.
 - **`GET /v1/swaps/{id}` und `GET /v1/cross-chain-swaps/{id}` lassen jetzt den
   gemeinsamen öffentlichen Key zu, mit einem Datensatz-Token**, damit ein ohne Konto
   erstellter Swap seinen eigenen Status verfolgen kann. Ein Create mit diesem Key
-  antwortet jetzt mit `publicToken`, und mit diesem Key brauchen die Lesezugriffe und
-  Aktionen des Datensatzes (diese beiden Lesezugriffe, `GET /v1/usdt0/transfers/{id}`,
-  `POST /v1/swaps/{id}/submit`, `POST /v1/cross-chain-swaps/{id}/deposit` und
-  `POST /v1/usdt0/transfers/{id}/submit`) es in `X-Record-Token`, sonst antworten sie
-  mit `404`. **Breaking Change für Wallets mit dem öffentlichen Key:** Swap-Submit und
-  chain-übergreifender Deposit funktionierten bisher allein mit der ID und brauchen
-  jetzt zusätzlich den Header. Echte Keys sind nicht betroffen, und `GET /v1/swaps` und
-  `GET /v1/cross-chain-swaps` bleiben für den öffentlichen Key gesperrt. Deploy-Schritt:
-  Fügen Sie `X-Record-Token` zu `allow_headers` im CORS des Gateways hinzu.
+  antwortet jetzt mit `publicToken`; diese beiden Lesezugriffe sowie
+  `GET /v1/usdt0/transfers/{id}` und `POST /v1/usdt0/transfers/{id}/submit` brauchen es
+  in `X-Record-Token` (sonst antworten sie mit `404`). **Kein Breaking Change:**
+  `POST /v1/swaps/{id}/submit` und `POST /v1/cross-chain-swaps/{id}/deposit`, die die
+  Wallet bereits mit dem öffentlichen Key aufruft, weisen ein falsches Token ab,
+  akzeptieren ein fehlendes aber weiterhin, mit einer Deprecation-Warnung protokolliert.
+  Wallets sollten beginnen, `X-Record-Token` aus der Antwort des Creates mitzusenden;
+  sobald sie das tun, setzen Sie `PUBLIC_RECORD_TOKEN_REQUIRED_ON_LEGACY=true`, und diese
+  beiden Routen verlangen es ebenfalls. Echte Keys sind nicht betroffen, und
+  `GET /v1/swaps` und `GET /v1/cross-chain-swaps` bleiben für den öffentlichen Key
+  gesperrt. Deploy-Schritt: Fügen Sie `X-Record-Token` zu `allow_headers` im CORS des
+  Gateways hinzu.
 - **Die Migration `20261025210000_usdt0_transfers`** legt die Tabelle `usdt0_transfer`
   und die Enum `Usdt0TransferStatus` an; nichts wird umgeschrieben. Führen Sie
   `migrate deploy` aus, bevor der neue Build Traffic bedient.
@@ -2964,6 +2971,7 @@ passen Sie mindestens `DATABASE_URL` und `APISIX_GATEWAY_SECRET` an.
 | `APISIX_PUBLIC_CONSUMER` | nein | — | Benutzername des gemeinsamen öffentlichen Consumers (siehe oben). Setzen Sie ihn überall, wo ein öffentlicher Key veröffentlicht wird |
 | `PUBLIC_API_KEY_DEV` | nein | — | Der gemeinsame öffentliche Key für das Testnet, ausgeliefert von `GET /v1/public-key?env=dev`. Nicht gesetzt: `503 misconfigured` |
 | `PUBLIC_API_KEY_PROD` | nein | — | Dasselbe für das Mainnet (`env=prod`) |
+| `PUBLIC_RECORD_TOKEN_REQUIRED_ON_LEGACY` | nein | `false` | Verlangt mit dem gemeinsamen öffentlichen Key `X-Record-Token` auch bei `POST /v1/swaps/{id}/submit` und `POST /v1/cross-chain-swaps/{id}/deposit` (ein falsches Token wird in jedem Fall abgewiesen). Aktivieren Sie sie, sobald die Wallet das Token aus der Antwort des Creates sendet |
 | `APISIX_ADMIN_URL` | mit dem Admin-Key | — | Basis der APISIX-Admin-API, z. B. `http://apisix:9180/apisix/admin`. Nur zum Ausstellen der Keys von Wallet-Konten |
 | `APISIX_ADMIN_KEY` | für die Wallet-Anmeldung | — | APISIX-Admin-Key. Gilt für das ganze Gateway — siehe [Keine Anfrage hängt von der Entwicklerplattform ab](#keine-anfrage-hängt-von-der-entwicklerplattform-ab). Auf einem Wiederherstellungsserver abgelehnt |
 | `APISIX_ADMIN_TIMEOUT_MS` | nein | `10000` | Budget für einen Admin-API-Aufruf (ms) |

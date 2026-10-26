@@ -686,10 +686,10 @@ where: { id, consumer: { apisixUsername: consumer.username } }
 | --- | --- |
 | `POST /v1/swaps/quote` | 通过 Horizon 为路径定价；结果完全由请求决定 |
 | `POST /v1/swaps` | 构建一个由调用方签名的未签名信封 |
-| `POST /v1/swaps/:id/submit` | 广播调用方签名的信封：在请求体确实是该 swap 的信封并携带签名、且请求发送了该 swap 的 `X-Record-Token` 之前，关于这笔 swap 的任何信息，包括它的状态，都不会被回答；带有速率限制 |
+| `POST /v1/swaps/:id/submit` | 广播调用方签名的信封：在请求体确实是该 swap 的信封并携带签名之前，关于这笔 swap 的任何信息，包括它的状态，都不会被回答；错误的 `X-Record-Token` 会被拒绝，缺失的暂时仍被接受（见下文）；带有速率限制 |
 | `GET /v1/cross-chain-swaps/assets` \| `POST /v1/cross-chain-swaps/quote` | NEAR Intents 的代币列表与试算报价；是请求的纯函数 |
 | `POST /v1/cross-chain-swaps` | 为调用方自己的资金生成充值地址；重放的 `Idempotency-Key` 仅在请求一致时才会得到响应 |
-| `POST /v1/cross-chain-swaps/:id/deposit` | 告诉 NEAR Intents 一笔由它自己在链上验证的交易；需要该 swap 的 `X-Record-Token`；带有速率限制 |
+| `POST /v1/cross-chain-swaps/:id/deposit` | 告诉 NEAR Intents 一笔由它自己在链上验证的交易；错误的 `X-Record-Token` 会被拒绝，缺失的暂时仍被接受（见下文）；带有速率限制 |
 | `GET /v1/swaps/:id` \| `GET /v1/cross-chain-swaps/:id` | 同时凭 id **和**记录 token（`X-Record-Token`，见下文）读取单笔 swap，让没有账户发起的 swap 能跟踪自己的状态；仍限定在该消费者范围内 |
 | `GET /v1/usdt0/routes` \| `POST /v1/usdt0/quote` | 路由目录与模拟报价；是请求的纯函数 |
 | `POST /v1/usdt0/transfers` | 构建一笔由调用方签名的未签名交易；重放的 `Idempotency-Key` 仅在请求一致时才会得到响应 |
@@ -705,7 +705,14 @@ where: { id, consumer: { apisixUsername: consumer.username } }
 
 被拒绝的路由：`GET /v1/swaps`、`GET /v1/cross-chain-swaps`、`GET /v1/usdt0/transfers`、`GET /v1/liquidity-pools/operations{,/:id}`、`GET /v1/activity/events`、`GET /v1/activity/summary`、所有支付意图读取、所有别名所有者路由（认领、列出、添加或移除地址、释放、恢复），以及 `/v1/kyc`、`/v1/onramp`、`/v1/offramp` 和 `/v1/webhooks` 下的所有路由。没有账户的钱包改为从 Horizon 读取自己的历史记录，并凭拿到的 id 和记录 token 跟踪单笔 swap 或转账。
 
-**记录 token。** 这个 key 是所有匿名访问者共用的一个消费者，而且任何人都能获取它，因此记录的 id 不是秘密，按消费者限定范围也无法把一个访问者挡在另一个访问者的 swap 之外。所以，在这个 key 上的创建（`POST /v1/swaps`、`POST /v1/cross-chain-swaps`、`POST /v1/usdt0/transfers`）会返回 `publicToken`：`base64url(HMAC-SHA256(key, "<kind>:<id>"))`，每张表一个 kind，所用的 key 由 HKDF 从 `APISIX_GATEWAY_SECRET` 派生（标签 `public-record-token v1`）。这一条记录的读取和操作（`GET /v1/swaps/{id}`、`GET /v1/cross-chain-swaps/{id}`、`GET /v1/usdt0/transfers/{id}`、`POST /v1/swaps/{id}/submit`、`POST /v1/cross-chain-swaps/{id}/deposit`、`POST /v1/usdt0/transfers/{id}/submit`）需要在 `X-Record-Token` 请求头中携带它，并以恒定时间比较；缺失或错误的 token 会在读取表之前返回与不存在的记录相同的 `404`。token 是派生的，不做存储：重放的创建返回同一个 token，而轮换 `APISIX_GATEWAY_SECRET` 会让已发出的所有 token 失效。私有 key 从不获得 token，也从不需要它。公开页面会发送这个请求头，因此网关 CORS 的 `allow_headers` 必须列出 `X-Record-Token`。
+**记录 token。** 这个 key 是所有匿名访问者共用的一个消费者，而且任何人都能获取它，因此记录的 id 不是秘密，按消费者限定范围也无法把一个访问者挡在另一个访问者的 swap 之外。所以，在这个 key 上的创建（`POST /v1/swaps`、`POST /v1/cross-chain-swaps`、`POST /v1/usdt0/transfers`）会返回 `publicToken`：`base64url(HMAC-SHA256(key, "<kind>:<id>"))`，每张表一个 kind，所用的 key 由 HKDF 从 `APISIX_GATEWAY_SECRET` 派生（标签 `public-record-token v1`）。这一条记录的路由在 `X-Record-Token` 请求头中接收它，并以恒定时间比较，而错误的 token 会在读取表之前返回与不存在的记录相同的 `404`：
+
+| 路由（使用公共 key） | 缺失 token 时 |
+| --- | --- |
+| `GET /v1/swaps/{id}`, `GET /v1/cross-chain-swaps/{id}`, `GET /v1/usdt0/transfers/{id}`, `POST /v1/usdt0/transfers/{id}/submit` | 拒绝（`404`）：这些路由是新的，没有人在不带 token 的情况下调用过它们 |
+| `POST /v1/swaps/{id}/submit`, `POST /v1/cross-chain-swaps/{id}/deposit` | 暂时仍被接受，并记录一条注明路由和记录 id 的弃用日志，因为钱包已经在用公共 key 调用它们。在请求体是该 swap 的已签名信封之前，swap submit 仍然不回答任何内容。`PUBLIC_RECORD_TOKEN_REQUIRED_ON_LEGACY=true` 让这里也必须携带 token |
+
+token 是派生的，不做存储：重放的创建返回同一个 token，而轮换 `APISIX_GATEWAY_SECRET` 会让已发出的所有 token 失效。私有 key 从不获得 token，也从不需要它。公开页面会发送这个请求头，因此网关 CORS 的 `allow_headers` 必须列出 `X-Record-Token`。
 
 **允许遥测**，这样来自没有账户的钱包的崩溃报告仍然能够送达。通过这个 key 到达的事件是匿名的（一个共享消费者），因此钱包在发送之前会去除地址、目标、金额和 txHash。
 
@@ -1355,7 +1362,7 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
 ### USDT0 转账，以及对单笔 swap 的公开读取
 
 - **`/v1/usdt0` 下的新路由**（`swaps:read` / `swaps:write`）：通过 LayerZero 的 OFT 把 USDT0 从 Stellar 发送到 21 个 EVM 网络，仅限主网。它们的作用见 [从 Stellar 发送 USDT0](#从-stellar-发送-usdt0layerzero)。现有响应均未改变。
-- **`GET /v1/swaps/{id}` 和 `GET /v1/cross-chain-swaps/{id}` 现在接受携带记录 token 的共享公共 key**，让没有账户发起的 swap 能跟踪自己的状态。在该 key 上，创建现在会返回 `publicToken`，而该记录的读取和操作（这两个读取、`GET /v1/usdt0/transfers/{id}`、`POST /v1/swaps/{id}/submit`、`POST /v1/cross-chain-swaps/{id}/deposit` 和 `POST /v1/usdt0/transfers/{id}/submit`）都需要在 `X-Record-Token` 中携带它，否则返回 `404`。**对使用公共 key 的钱包是破坏性变更：** swap submit 和跨链 deposit 过去仅凭 id 即可工作，现在也需要这个请求头。私有 key 不受影响，`GET /v1/swaps` 和 `GET /v1/cross-chain-swaps` 仍对公共 key 关闭。部署步骤：把 `X-Record-Token` 加入网关 CORS 的 `allow_headers`。
+- **`GET /v1/swaps/{id}` 和 `GET /v1/cross-chain-swaps/{id}` 现在接受携带记录 token 的共享公共 key**，让没有账户发起的 swap 能跟踪自己的状态。在该 key 上，创建现在会返回 `publicToken`；这两个读取、`GET /v1/usdt0/transfers/{id}` 和 `POST /v1/usdt0/transfers/{id}/submit` 需要在 `X-Record-Token` 中携带它（否则返回 `404`）。**非破坏性变更：** 钱包已经在用公共 key 调用 `POST /v1/swaps/{id}/submit` 和 `POST /v1/cross-chain-swaps/{id}/deposit`，它们会拒绝错误的 token，但仍接受缺失的 token，并记录为弃用。钱包应开始发送创建响应中的 `X-Record-Token`；钱包这样做之后，设置 `PUBLIC_RECORD_TOKEN_REQUIRED_ON_LEGACY=true`，这两个路由也会要求携带它。私有 key 不受影响，`GET /v1/swaps` 和 `GET /v1/cross-chain-swaps` 仍对公共 key 关闭。部署步骤：把 `X-Record-Token` 加入网关 CORS 的 `allow_headers`。
 - **迁移 `20261025210000_usdt0_transfers`** 创建 `usdt0_transfer` 表和 `Usdt0TransferStatus` 枚举；不改写任何数据。在新版本承接流量之前运行 `migrate deploy`。
 - **新变量 `STELLAR_RPC_URL_MAINNET`**，可选：Stellar 主网的 Soroban RPC。未设置时，服务使用 Gateway.fm 的公共端点，它有速率限制；生产环境请设置服务商的端点。
 - **`GET /v1/summary/series` 把 USDT0 转账计为 swap**，类型为新增的 `usdt0`（计入 `swaps.totals.byKind` 和每一个 swap 数字），并且现在也为流动性操作和 webhook 投递返回 `buckets`；见下方关于序列的说明。USDT0 转账目前仍不发出 webhook 事件。
@@ -1816,6 +1823,7 @@ curl -H "X-Gateway-Secret: $APISIX_GATEWAY_SECRET" -H "X-Consumer-Username: ops"
 | `APISIX_PUBLIC_CONSUMER` | 否 | — | 共享公共消费者的用户名（见上文）。凡是发布了公共 key 的地方都要设置 |
 | `PUBLIC_API_KEY_DEV` | 否 | — | 测试网的共享公共 key，由 `GET /v1/public-key?env=dev` 提供。未设置时返回 `503 misconfigured` |
 | `PUBLIC_API_KEY_PROD` | 否 | — | 主网同上（`env=prod`） |
+| `PUBLIC_RECORD_TOKEN_REQUIRED_ON_LEGACY` | 否 | `false` | 使用共享公共 key 时，`POST /v1/swaps/{id}/submit` 和 `POST /v1/cross-chain-swaps/{id}/deposit` 也必须携带 `X-Record-Token`（无论是否开启，错误的 token 都会被拒绝）。等钱包发送创建响应中的 token 之后再开启它 |
 | `APISIX_ADMIN_URL` | 与 admin key 一起 | — | APISIX Admin API 的基础地址，如 `http://apisix:9180/apisix/admin`。仅用于签发钱包账户的 key |
 | `APISIX_ADMIN_KEY` | 钱包登录需要 | — | APISIX admin key。作用于整个网关——见[没有任何请求依赖开发者平台](#没有任何请求依赖开发者平台)。在恢复服务器上会被拒绝 |
 | `APISIX_ADMIN_TIMEOUT_MS` | 否 | `10000` | 一次 Admin API 调用的时间预算（ms） |

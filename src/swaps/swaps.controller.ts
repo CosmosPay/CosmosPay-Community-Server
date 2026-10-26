@@ -30,7 +30,10 @@ import { RateLimit } from '@/common/decorators/rate-limit.decorator';
 import { RequirePermissions } from '@/common/decorators/require-permissions.decorator';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
-import { RECORD_TOKEN_HEADER } from '@/common/public-record-token.constants';
+import {
+  LEGACY_RECORD_TOKEN_ROUTES,
+  RECORD_TOKEN_HEADER,
+} from '@/common/public-record-token.constants';
 import { headerValue } from '@/common/request-header';
 import { ChainSwapsService } from '@/swaps/chain-swaps.service';
 import { CreateSwapDto } from '@/swaps/dto/create-swap.dto';
@@ -290,8 +293,11 @@ export class SwapsController {
   // resubmit cap and expiry check bound how often that can happen per swap.
   @AllowPublicKey()
   @RequirePermissions('swaps:write')
-  // With the shared public key, the swap's record token as well.
-  @ApiRecordTokenHeader()
+  // With the shared public key, the swap's record token: a wrong one is a
+  // 404, a missing one is still accepted on this legacy route (logged) until
+  // PUBLIC_RECORD_TOKEN_REQUIRED_ON_LEGACY is on. The envelope check below is
+  // what keeps someone else's submit out meanwhile.
+  @ApiRecordTokenHeader('legacy')
   // A rejected broadcast costs a submission and possibly a webhook that no
   // error response refunds, and under the shared public key the client address
   // is the only thing telling anonymous callers apart.
@@ -338,7 +344,12 @@ export class SwapsController {
     @Req() req: Request,
   ) {
     const token = headerValue(req, RECORD_TOKEN_HEADER);
-    const chainSwap = await this.chainSwaps.findOwned(consumer, id, token);
+    const chainSwap = await this.chainSwaps.findOwned(
+      consumer,
+      id,
+      token,
+      LEGACY_RECORD_TOKEN_ROUTES.swapSubmit,
+    );
     if (chainSwap) {
       return this.chainSwaps.submit(consumer, chainSwap, dto.signedTransaction);
     }

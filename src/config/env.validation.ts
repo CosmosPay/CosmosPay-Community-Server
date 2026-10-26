@@ -503,6 +503,14 @@ class EnvironmentVariables {
   @IsBooleanString()
   SWAP_COMMISSION_DEV_WAIVER?: string;
 
+  /**
+   * Require `X-Record-Token` from the shared public key on swap submit and
+   * cross-chain deposit too. Off by default: the wallet does not send it yet.
+   */
+  @IsOptional()
+  @IsBooleanString()
+  PUBLIC_RECORD_TOKEN_REQUIRED_ON_LEGACY?: string;
+
   @IsOptional()
   @IsUrl(URL_OPTIONS)
   DEFINDEX_BASE_URL?: string;

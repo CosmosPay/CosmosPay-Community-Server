@@ -3,6 +3,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import {
+  type LegacyRecordTokenRoute,
   type PublicRecordKind,
   RECORD_TOKEN_KEY_LABEL,
   RECORD_TOKEN_KEY_SALT,
@@ -74,6 +75,14 @@ export function recordTokenMatches(
  * an old record.
  *
  * Real consumers are untouched: they never get a token and never need one.
+ *
+ * Two routes predate the tokens (`LEGACY_RECORD_TOKEN_ROUTES`: swap submit and
+ * cross-chain deposit, which the wallet already calls with the public key).
+ * There a wrong token is refused as everywhere, but a MISSING one is still
+ * admitted, and logged as deprecated by {@link noteLegacyAccess}, until
+ * `PUBLIC_RECORD_TOKEN_REQUIRED_ON_LEGACY` is on. Swap submit keeps its own
+ * defence meanwhile: nothing about the swap is answered until the body is the
+ * swap's signed transaction.
  */
 @Injectable()
 export class PublicRecordTokens {
@@ -106,21 +115,55 @@ export class PublicRecordTokens {
   /**
    * Whether this caller may reach the record: always for a real consumer
    * (its reads stay scoped by consumer, as before); for the shared public key,
-   * only with the record's token. A refusal is logged without the token.
+   * only with the record's token. On a legacy route (`legacyRoute`) a missing
+   * token is still admitted while `PUBLIC_RECORD_TOKEN_REQUIRED_ON_LEGACY` is
+   * off; a wrong one never is. A refusal is logged without the token.
    */
   admits(
     consumer: GatewayConsumer,
     kind: PublicRecordKind,
     id: string,
     presented: string | undefined,
+    legacyRoute?: LegacyRecordTokenRoute,
   ): boolean {
     if (!this.isSharedPublicKey(consumer)) return true;
-    if (recordTokenMatches(this.secretKey(), kind, id, presented)) return true;
+    if (!presented) {
+      if (legacyRoute && !this.requiredOnLegacy()) return true;
+    } else if (recordTokenMatches(this.secretKey(), kind, id, presented)) {
+      return true;
+    }
     this.logger.warn(
-      `Refused a ${kind} read by the shared public key: ` +
+      `Refused a ${kind} by the shared public key: ` +
         `${presented ? 'wrong' : 'no'} X-Record-Token (id=${id})`,
     );
     return false;
+  }
+
+  /**
+   * Logs, as a structured deprecation warning, that the shared public key
+   * reached a record on a legacy route without its token. Called once the
+   * record was found, so it names a real record; it never logs the token, and
+   * says nothing for a real consumer or a request that sent one.
+   */
+  noteLegacyAccess(
+    consumer: GatewayConsumer,
+    kind: PublicRecordKind,
+    id: string,
+    presented: string | undefined,
+    route: LegacyRecordTokenRoute,
+  ): void {
+    if (presented || !this.isSharedPublicKey(consumer)) return;
+    this.logger.warn({
+      event: 'public_record_token_missing',
+      deprecated: true,
+      route,
+      recordKind: kind,
+      recordId: id,
+      message:
+        'The shared public key reached this record without X-Record-Token. ' +
+        'Send the publicToken its create answered: the token becomes required ' +
+        'here once PUBLIC_RECORD_TOKEN_REQUIRED_ON_LEGACY is on.',
+    });
   }
 
   /** `record` with its `publicToken` when the caller is the shared public key. */
@@ -131,6 +174,14 @@ export class PublicRecordTokens {
   ): T & { publicToken?: string } {
     const publicToken = this.issueFor(consumer, kind, record.id);
     return publicToken ? { ...record, publicToken } : record;
+  }
+
+  /** `PUBLIC_RECORD_TOKEN_REQUIRED_ON_LEGACY`, read per call so a spec can vary it. */
+  private requiredOnLegacy(): boolean {
+    return (
+      this.config.get('publicRecordTokens', { infer: true })
+        ?.requiredOnLegacy === true
+    );
   }
 
   private secretKey(): Buffer {
