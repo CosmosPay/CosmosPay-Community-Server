@@ -163,3 +163,11 @@ export const DEFAULT_KURU_BASE_URL = 'https://ws.kuru.io';
  * under a second when healthy.
  */
 export const DEFAULT_SWAP_AGGREGATOR_TIMEOUT_MS = 15_000;
+
+/**
+ * How long the dashboard's analytics reads (`/v1/summary`, `/v1/summary/series`, `/v1/balances`)
+ * reuse an answer per consumer and network. The dashboard asks for the same figures from every
+ * view, tab and poll; ten seconds collapses those into one computation while a new payment still
+ * shows up in the next poll. 0 turns the cache off.
+ */
+export const DEFAULT_ANALYTICS_CACHE_TTL_MS = 10_000;

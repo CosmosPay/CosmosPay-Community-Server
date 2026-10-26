@@ -2165,6 +2165,28 @@ eingeschaltet werden.
 
 ## Upgrade — Breaking Changes und Deploy-Hinweise
 
+### Listen folgen dem Netzwerk des Schlüssels; Dashboard-Abfragen werden gecacht
+
+- **Jede Liste ist auf das Netzwerk beschränkt, auf das der Schlüssel zielt** (eine
+  Korrektur im Verhalten der API): `GET /v1/payment-intents`, `/v1/swaps` (auch mit
+  `?chain=`), `/v1/cross-chain-swaps`, `/v1/usdt0/transfers`, `/v1/liquidity-pools/operations`
+  und `/v1/zk-payments` liefern nur die Zeilen des Netzwerks des Schlüssels, in der Seite und
+  in `total`, wie es `/v1/summary` immer getan hat. Ein Produktionsschlüssel sieht keine
+  Payment Intents des Testnetzes mehr (das Dashboard unter Produktion listete sie), und ein
+  Sandbox-Schlüssel keine des Mainnets. Swaps auf Solana und Monad, Cross-Chain-Swaps und
+  USDT0-Transfers gibt es nur im Mainnet, ein Sandbox-Schlüssel listet also keine. Das Lesen
+  einer Zeile über ihre ID bleibt unverändert.
+- **`/v1/summary`, `/v1/summary/series` und `/v1/balances` werden pro Consumer und Netzwerk
+  für `ANALYTICS_CACHE_TTL_MS` wiederverwendet** (standardmäßig 10 s; `0` schaltet es ab), und
+  gleiche Aufrufe, die zusammen eintreffen, teilen sich eine Berechnung. Eine Kennzahl kann
+  einer neuen Zahlung bis zu dieser Zeit hinterherhinken, und jede Replica hat ihren eigenen
+  Cache. Die Logs werden nicht gecacht.
+- **Die Token-Liste von NEAR Intents wird beim Start geladen und im Hintergrund erneuert**:
+  nach ihrer TTL von fünf Minuten wird die vorhandene Liste (bis zu einer Stunde) ausgeliefert,
+  während ein einziger Abruf sie ersetzt. Die USD-Werte und die Cross-Chain-Asset-Liste warten
+  also nicht mehr alle fünf Minuten etwa 0,8 s auf 1Click. `NEAR_INTENTS_TOKENS_PREFETCH=false`
+  überspringt den Abruf beim Start. Keine Migration.
+
 ### Dashboard: abgewickeltes Volumen in USD
 
 - **`GET /v1/summary` und `GET /v1/summary/series` bewerten das abgewickelte Volumen in
@@ -3032,6 +3054,7 @@ passen Sie mindestens `DATABASE_URL` und `APISIX_GATEWAY_SECRET` an.
 | `NEAR_INTENTS_FEE_RECIPIENT` | bei Plan-Provision | — | NEAR-Konto, an das die chain-übergreifende Provision geht (`appFees`). Ungesetzt bei einem Plan-Satz: `503 misconfigured` |
 | `SWAP_COMMISSION_DEV_WAIVER` | nein | `false` | Außerhalb der Produktion wird eine Plan-Provision, deren Empfänger (`NEAR_INTENTS_FEE_RECIPIENT`, `SOLANA_SWAP_FEE_WALLET`, `MONAD_SWAP_FEE_WALLET`) nicht gesetzt ist, erlassen (und protokolliert), statt `503 misconfigured` zu antworten. Nur für einen lokalen Dienst: der Start lehnt es bei `NODE_ENV=production` ab |
 | `NEAR_INTENTS_TIMEOUT_MS` | nein | `20000` | Budget für einen 1Click-Aufruf (ms) |
+| `NEAR_INTENTS_TOKENS_PREFETCH` | nein | `true` | Die Token-Liste von 1Click beim Start laden; danach wird sie im Hintergrund erneuert, während die vorhandene ausgeliefert wird. `false` überlässt den ersten Abruf dem ersten Aufrufer |
 | `CROSS_CHAIN_SWAP_SLIPPAGE_BPS` | nein | `100` | Standard-Slippage chain-übergreifend (bps); unter dem Minimum erstattet NEAR Intents |
 | `CROSS_CHAIN_SWAP_MAX_SLIPPAGE_BPS` | nein | `500` | Die höchste Slippage, die ein Aufrufer verlangen darf |
 | `CROSS_CHAIN_SWAP_DEADLINE_SECONDS` | nein | `1800` | Wie lange eine Einzahlungsadresse die Einzahlung annimmt; spätere werden erstattet |
@@ -3043,6 +3066,7 @@ passen Sie mindestens `DATABASE_URL` und `APISIX_GATEWAY_SECRET` an.
 | `KURU_BASE_URL` | nein | `https://ws.kuru.io` | Kuru-Flow-API (Monad) |
 | `KURU_API_KEY` | für Produktion | — | Kuru-Flow-API-Key (`X-API-Key`). Ohne ihn bekommt jede Adresse ein Token mit einer Anfrage pro Sekunde |
 | `KURU_TIMEOUT_MS` | nein | `15000` | Budget für einen Kuru-Flow-Aufruf (ms) |
+| `ANALYTICS_CACHE_TTL_MS` | nein | `10000` | Wie lange `/v1/summary`, `/v1/summary/series` und `/v1/balances` eine Antwort pro Consumer und Netzwerk wiederverwenden (ms), pro Replica. `0` schaltet es ab |
 | `OBSERVER_ENABLED` | nein | `true` | `true` / `false` — On-Chain-Reconciler |
 | `OBSERVER_INTERVAL_MS` | nein | `15000` | Abfrageintervall des Observers (ms, mind. 1000) |
 | `OBSERVER_BATCH_SIZE` | nein | `50` | Max. Intents/Swaps pro Observer-Tick |

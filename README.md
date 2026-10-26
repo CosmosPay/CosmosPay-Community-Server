@@ -2051,6 +2051,26 @@ the service under `src/native-plugins/<slug>/`, switched on by the same
 
 ## Upgrading — breaking changes and deploy notes
 
+### Lists follow the key's network; dashboard reads are cached
+
+- **Every list is scoped to the network the key targets** (an API behaviour fix):
+  `GET /v1/payment-intents`, `/v1/swaps` (with `?chain=` too), `/v1/cross-chain-swaps`,
+  `/v1/usdt0/transfers`, `/v1/liquidity-pools/operations` and `/v1/zk-payments` answer only
+  the rows of the key's network, in the page and in `total`, as `/v1/summary` always did. A
+  production key no longer sees test-network payment intents (the dashboard on Production
+  listed them), nor a sandbox key mainnet ones. Solana and Monad swaps, cross-chain swaps
+  and USDT0 transfers are mainnet only, so a sandbox key lists none. Reading one row by its
+  id is unchanged.
+- **`/v1/summary`, `/v1/summary/series` and `/v1/balances` are reused per consumer and
+  network for `ANALYTICS_CACHE_TTL_MS`** (10 s by default; `0` turns it off), and identical
+  calls that arrive together share one computation. A figure can lag a new payment by up to
+  that long, and each replica keeps its own cache. The logs are not cached.
+- **NEAR Intents' token list is fetched at boot and refreshed in the background**: past its
+  five-minute TTL the list on hand is served (for up to an hour) while one fetch replaces it,
+  so the USD figures and the cross-chain asset list no longer wait about 0.8 s for 1Click
+  every five minutes. `NEAR_INTENTS_TOKENS_PREFETCH=false` skips the boot fetch. No
+  migration.
+
 ### Dashboard: settled volume in USD
 
 - **`GET /v1/summary` and `GET /v1/summary/series` value the settled volume in USD.**
@@ -2872,6 +2892,7 @@ at least `DATABASE_URL` and `APISIX_GATEWAY_SECRET`.
 | `NEAR_INTENTS_FEE_RECIPIENT` | with a plan commission | — | NEAR account the cross-chain commission is paid to (`appFees`). Unset with a plan rate: `503 misconfigured` |
 | `SWAP_COMMISSION_DEV_WAIVER` | no | `false` | Outside production, waive (and log) a plan commission whose recipient (`NEAR_INTENTS_FEE_RECIPIENT`, `SOLANA_SWAP_FEE_WALLET`, `MONAD_SWAP_FEE_WALLET`) is not set, instead of answering `503 misconfigured`. For a local service only: the boot refuses it when `NODE_ENV=production` |
 | `NEAR_INTENTS_TIMEOUT_MS` | no | `20000` | Budget for one 1Click call (ms) |
+| `NEAR_INTENTS_TOKENS_PREFETCH` | no | `true` | Fetch 1Click's token list at boot; later it is refreshed in the background while the one on hand is served. `false` leaves the first fetch to the first caller |
 | `CROSS_CHAIN_SWAP_SLIPPAGE_BPS` | no | `100` | Default cross-chain slippage (bps); below the minimum NEAR Intents refunds |
 | `CROSS_CHAIN_SWAP_MAX_SLIPPAGE_BPS` | no | `500` | Most slippage a caller may ask for |
 | `CROSS_CHAIN_SWAP_DEADLINE_SECONDS` | no | `1800` | How long a deposit address accepts the deposit; later ones are refunded |
@@ -2883,6 +2904,7 @@ at least `DATABASE_URL` and `APISIX_GATEWAY_SECRET`.
 | `KURU_BASE_URL` | no | `https://ws.kuru.io` | Kuru Flow API (Monad) |
 | `KURU_API_KEY` | for production | — | Kuru Flow API key (`X-API-Key`). Without it every address gets a token limited to one request a second |
 | `KURU_TIMEOUT_MS` | no | `15000` | Budget for one Kuru Flow call (ms) |
+| `ANALYTICS_CACHE_TTL_MS` | no | `10000` | How long `/v1/summary`, `/v1/summary/series` and `/v1/balances` reuse an answer per consumer and network (ms), per replica. `0` turns it off |
 | `OBSERVER_ENABLED` | no | `true` | `true` / `false` — on-chain reconciler |
 | `OBSERVER_INTERVAL_MS` | no | `15000` | Observer poll interval (ms, min 1000) |
 | `OBSERVER_BATCH_SIZE` | no | `50` | Max intents/swaps per observer tick |

@@ -2131,6 +2131,28 @@ misma lista `PLUGINS_ENABLED` que los plugins aislados.
 
 ## Actualización — cambios incompatibles y notas de despliegue
 
+### Los listados siguen la red de la clave; las lecturas del dashboard se cachean
+
+- **Cada listado se limita a la red a la que apunta la clave** (una corrección de
+  comportamiento de la API): `GET /v1/payment-intents`, `/v1/swaps` (también con `?chain=`),
+  `/v1/cross-chain-swaps`, `/v1/usdt0/transfers`, `/v1/liquidity-pools/operations` y
+  `/v1/zk-payments` responden solo las filas de la red de la clave, en la página y en
+  `total`, como siempre hizo `/v1/summary`. Una clave de producción ya no ve payment intents
+  de la red de pruebas (el dashboard en Producción los listaba), ni una clave sandbox los de
+  mainnet. Los swaps de Solana y Monad, los swaps cross-chain y las transferencias USDT0 son
+  solo de mainnet, así que una clave sandbox no lista ninguno. Leer una fila por su id no
+  cambia.
+- **`/v1/summary`, `/v1/summary/series` y `/v1/balances` se reutilizan por consumidor y red
+  durante `ANALYTICS_CACHE_TTL_MS`** (10 s por defecto; `0` lo desactiva), y las llamadas
+  idénticas que llegan juntas comparten un solo cálculo. Una cifra puede tardar hasta ese
+  tiempo en reflejar un pago nuevo, y cada réplica tiene su propia caché. Los logs no se
+  cachean.
+- **La lista de tokens de NEAR Intents se descarga al arrancar y se renueva en segundo
+  plano**: pasado su TTL de cinco minutos se sirve la lista que hay (hasta una hora) mientras
+  una sola descarga la reemplaza, así que las cifras en USD y la lista de activos cross-chain
+  ya no esperan unos 0,8 s a 1Click cada cinco minutos. `NEAR_INTENTS_TOKENS_PREFETCH=false`
+  omite la descarga al arrancar. Sin migración.
+
 ### Panel: volumen liquidado en USD
 
 - **`GET /v1/summary` y `GET /v1/summary/series` valoran el volumen liquidado en USD.**
@@ -2975,6 +2997,7 @@ Cada variable leída de `process.env` en `src/` se valida en el arranque mediant
 | `NEAR_INTENTS_FEE_RECIPIENT` | con comisión de plan | — | Cuenta de NEAR que recibe la comisión entre redes (`appFees`). Sin configurar y con tarifa de plan: `503 misconfigured` |
 | `SWAP_COMMISSION_DEV_WAIVER` | no | `false` | Fuera de producción, renuncia (y lo registra) a una comisión de plan cuyo destinatario (`NEAR_INTENTS_FEE_RECIPIENT`, `SOLANA_SWAP_FEE_WALLET`, `MONAD_SWAP_FEE_WALLET`) no está configurado, en lugar de responder `503 misconfigured`. Solo para un servicio local: el arranque lo rechaza cuando `NODE_ENV=production` |
 | `NEAR_INTENTS_TIMEOUT_MS` | no | `20000` | Presupuesto de una llamada a 1Click (ms) |
+| `NEAR_INTENTS_TOKENS_PREFETCH` | no | `true` | Descargar la lista de tokens de 1Click al arrancar; después se renueva en segundo plano mientras se sirve la que hay. `false` deja la primera descarga al primer llamador |
 | `CROSS_CHAIN_SWAP_SLIPPAGE_BPS` | no | `100` | Slippage por defecto entre redes (bps); por debajo del mínimo NEAR Intents reembolsa |
 | `CROSS_CHAIN_SWAP_MAX_SLIPPAGE_BPS` | no | `500` | El máximo slippage que puede pedir quien llama |
 | `CROSS_CHAIN_SWAP_DEADLINE_SECONDS` | no | `1800` | Cuánto tiempo acepta el depósito una dirección de depósito; los posteriores se reembolsan |
@@ -2986,6 +3009,7 @@ Cada variable leída de `process.env` en `src/` se valida en el arranque mediant
 | `KURU_BASE_URL` | no | `https://ws.kuru.io` | API de Kuru Flow (Monad) |
 | `KURU_API_KEY` | para producción | — | Clave de API de Kuru Flow (`X-API-Key`). Sin ella cada dirección recibe un token limitado a una solicitud por segundo |
 | `KURU_TIMEOUT_MS` | no | `15000` | Presupuesto de una llamada a Kuru Flow (ms) |
+| `ANALYTICS_CACHE_TTL_MS` | no | `10000` | Cuánto tiempo `/v1/summary`, `/v1/summary/series` y `/v1/balances` reutilizan una respuesta por consumidor y red (ms), en cada réplica. `0` lo desactiva |
 | `OBSERVER_ENABLED` | no | `true` | `true` / `false` — reconciliador on-chain |
 | `OBSERVER_INTERVAL_MS` | no | `15000` | Intervalo de sondeo del observador (ms, mín. 1000) |
 | `OBSERVER_BATCH_SIZE` | no | `50` | Máximo de intenciones/swaps por ciclo del observador |

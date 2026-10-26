@@ -2044,6 +2044,26 @@ seal होती हैं और कभी लौटाई नहीं जा
 
 ## अपग्रेड — breaking changes और deploy नोट्स
 
+### Lists key के network का पालन करती हैं; dashboard reads cache होते हैं
+
+- **हर list उसी network तक सीमित है जिसे key target करती है** (API व्यवहार का सुधार):
+  `GET /v1/payment-intents`, `/v1/swaps` (`?chain=` के साथ भी), `/v1/cross-chain-swaps`,
+  `/v1/usdt0/transfers`, `/v1/liquidity-pools/operations` और `/v1/zk-payments` केवल key के
+  network की rows लौटाते हैं, page में भी और `total` में भी, जैसा `/v1/summary` हमेशा करता
+  था। Production key अब test network के payment intents नहीं देखती (Production पर dashboard
+  उन्हें list करता था), और sandbox key mainnet वाले नहीं। Solana और Monad swaps,
+  cross-chain swaps और USDT0 transfers केवल mainnet पर होते हैं, इसलिए sandbox key कोई
+  list नहीं करती। किसी row को उसकी id से पढ़ना नहीं बदला।
+- **`/v1/summary`, `/v1/summary/series` और `/v1/balances` हर consumer और network के लिए
+  `ANALYTICS_CACHE_TTL_MS` तक दोबारा इस्तेमाल होते हैं** (default 10 s; `0` इसे बंद करता है),
+  और एक साथ आने वाली एक जैसी calls एक ही गणना साझा करती हैं। कोई आंकड़ा नए payment को इतने
+  समय तक देर से दिखा सकता है, और हर replica का अपना cache होता है। Logs cache नहीं होते।
+- **NEAR Intents की token list boot पर fetch होती है और background में refresh होती है**:
+  पाँच मिनट के TTL के बाद मौजूदा list (एक घंटे तक) दी जाती है जबकि एक fetch उसे बदलता है,
+  इसलिए USD आंकड़े और cross-chain asset list अब हर पाँच मिनट में लगभग 0.8 s 1Click का
+  इंतज़ार नहीं करते। `NEAR_INTENTS_TOKENS_PREFETCH=false` boot fetch छोड़ देता है। कोई
+  migration नहीं।
+
 ### डैशबोर्ड: USD में settled volume
 
 - **`GET /v1/summary` और `GET /v1/summary/series` settled volume को USD में आंकते हैं।**
@@ -2857,6 +2877,7 @@ type दोबारा बनाए बिना enum value drop नहीं �
 | `NEAR_INTENTS_FEE_RECIPIENT` | plan commission होने पर | — | वह NEAR account जिसे क्रॉस-चेन commission मिलता है (`appFees`)। Plan दर के साथ unset: `503 misconfigured` |
 | `SWAP_COMMISSION_DEV_WAIVER` | नहीं | `false` | production के बाहर, जिस plan commission का recipient (`NEAR_INTENTS_FEE_RECIPIENT`, `SOLANA_SWAP_FEE_WALLET`, `MONAD_SWAP_FEE_WALLET`) set नहीं है, उसे `503 misconfigured` लौटाने के बजाय माफ़ करें (और log करें)। केवल local service के लिए: `NODE_ENV=production` होने पर boot इसे अस्वीकार करता है |
 | `NEAR_INTENTS_TIMEOUT_MS` | नहीं | `20000` | एक 1Click call का budget (ms) |
+| `NEAR_INTENTS_TOKENS_PREFETCH` | नहीं | `true` | Boot पर 1Click की token list fetch करें; बाद में वह background में refresh होती है जबकि मौजूदा list दी जाती है। `false` पहला fetch पहले caller पर छोड़ता है |
 | `CROSS_CHAIN_SWAP_SLIPPAGE_BPS` | नहीं | `100` | क्रॉस-चेन default slippage (bps); minimum से नीचे NEAR Intents refund करता है |
 | `CROSS_CHAIN_SWAP_MAX_SLIPPAGE_BPS` | नहीं | `500` | Caller जितनी अधिकतम slippage माँग सकता है |
 | `CROSS_CHAIN_SWAP_DEADLINE_SECONDS` | नहीं | `1800` | Deposit address कितनी देर deposit स्वीकार करता है; बाद वाले refund होते हैं |
@@ -2868,6 +2889,7 @@ type दोबारा बनाए बिना enum value drop नहीं �
 | `KURU_BASE_URL` | नहीं | `https://ws.kuru.io` | Kuru Flow API (Monad) |
 | `KURU_API_KEY` | production के लिए | — | Kuru Flow API key (`X-API-Key`)। इसके बिना हर address को प्रति सेकंड एक request तक सीमित token मिलता है |
 | `KURU_TIMEOUT_MS` | नहीं | `15000` | एक Kuru Flow call का budget (ms) |
+| `ANALYTICS_CACHE_TTL_MS` | नहीं | `10000` | `/v1/summary`, `/v1/summary/series` और `/v1/balances` हर consumer और network के लिए एक जवाब कितने समय तक दोबारा इस्तेमाल करते हैं (ms), हर replica में। `0` इसे बंद करता है |
 | `OBSERVER_ENABLED` | नहीं | `true` | `true` / `false` — on-chain reconciler |
 | `OBSERVER_INTERVAL_MS` | नहीं | `15000` | Observer poll interval (ms, न्यूनतम 1000) |
 | `OBSERVER_BATCH_SIZE` | नहीं | `50` | प्रति observer tick अधिकतम intents/swaps |

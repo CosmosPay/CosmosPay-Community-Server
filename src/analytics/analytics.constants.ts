@@ -11,12 +11,21 @@ export const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
  * How long the summary and the series wait for NEAR Intents' token list, which prices the
- * settled volume in USD. The list is cached for minutes, so this is paid only when the cache is
- * cold; past it the figures answer without USD values (null) rather than holding the dashboard
- * for the client's full 20 s timeout. The fetch itself goes on and fills the cache for the next
- * read.
+ * settled volume in USD. The list is fetched at boot and then refreshed in the background while
+ * the one on hand is served (`NearIntentsClient.tokens`), so this is paid only when there is no
+ * list at all (1Click unreachable since boot); past it the figures answer without USD values
+ * (null) rather than holding the dashboard for the client's full 20 s timeout. The fetch itself
+ * goes on and fills the cache for the next read.
  */
 export const USD_PRICES_WAIT_MS = 2_500;
+
+/**
+ * Distinct (consumer, network, figure) answers the analytics cache holds at once; the least
+ * recently read goes first. A summary or a series is a few kilobytes, so the cap bounds the
+ * memory at a few megabytes whatever the number of tenants. The time an answer is reused is
+ * `ANALYTICS_CACHE_TTL_MS` (config).
+ */
+export const ANALYTICS_CACHE_MAX_ENTRIES = 1_000;
 
 /**
  * The periods the dashboard's chart groups payments, swaps, liquidity operations and webhook

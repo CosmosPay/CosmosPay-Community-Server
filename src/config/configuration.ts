@@ -1,4 +1,5 @@
 import {
+  DEFAULT_ANALYTICS_CACHE_TTL_MS,
   DEFAULT_DEFINDEX_BASE_URL,
   DEFAULT_DEFINDEX_TIMEOUT_MS,
   DEFAULT_ENV_FILE,
@@ -326,6 +327,16 @@ export interface AppConfig {
     slippageBps: number;
     maxSlippageBps: number;
     deadlineSeconds: number;
+    /**
+     * Fetch the token list at boot, so the first request that needs it (the dashboard's USD
+     * figures, the asset list) does not wait for 1Click. Off in the e2e suites.
+     */
+    prefetchTokens: boolean;
+  };
+  /** The dashboard's analytics reads. */
+  analytics: {
+    /** How long an answer is reused per consumer and network; 0 turns the cache off. */
+    cacheTtlMs: number;
   };
   observer: {
     enabled: boolean;
@@ -883,6 +894,16 @@ export default (): AppConfig => ({
     deadlineSeconds: parseInt(
       process.env.CROSS_CHAIN_SWAP_DEADLINE_SECONDS ??
         String(DEFAULT_CROSS_CHAIN_DEADLINE_SECONDS),
+      10,
+    ),
+    prefetchTokens:
+      (process.env.NEAR_INTENTS_TOKENS_PREFETCH ?? 'true').toLowerCase() !==
+      'false',
+  },
+  analytics: {
+    cacheTtlMs: parseInt(
+      process.env.ANALYTICS_CACHE_TTL_MS ??
+        String(DEFAULT_ANALYTICS_CACHE_TTL_MS),
       10,
     ),
   },

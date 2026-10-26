@@ -2123,6 +2123,28 @@ plugins isolés.
 
 ## Mise à niveau — changements incompatibles et notes de déploiement
 
+### Les listes suivent le réseau de la clé ; les lectures du dashboard sont mises en cache
+
+- **Chaque liste se limite au réseau visé par la clé** (une correction du comportement de
+  l'API) : `GET /v1/payment-intents`, `/v1/swaps` (aussi avec `?chain=`),
+  `/v1/cross-chain-swaps`, `/v1/usdt0/transfers`, `/v1/liquidity-pools/operations` et
+  `/v1/zk-payments` ne renvoient que les lignes du réseau de la clé, dans la page et dans
+  `total`, comme l'a toujours fait `/v1/summary`. Une clé de production ne voit plus les
+  payment intents du réseau de test (le dashboard en Production les listait), ni une clé
+  sandbox ceux du mainnet. Les swaps Solana et Monad, les swaps cross-chain et les transferts
+  USDT0 n'existent que sur le mainnet : une clé sandbox n'en liste aucun. La lecture d'une
+  ligne par son id ne change pas.
+- **`/v1/summary`, `/v1/summary/series` et `/v1/balances` sont réutilisés par consommateur et
+  par réseau pendant `ANALYTICS_CACHE_TTL_MS`** (10 s par défaut ; `0` le désactive), et les
+  appels identiques qui arrivent ensemble partagent un seul calcul. Un chiffre peut refléter
+  un nouveau paiement jusqu'à ce délai plus tard, et chaque réplique garde son propre cache.
+  Les logs ne sont pas mis en cache.
+- **La liste des tokens de NEAR Intents est récupérée au démarrage et renouvelée en
+  arrière-plan** : passé son TTL de cinq minutes, la liste disponible est servie (jusqu'à une
+  heure) pendant qu'un seul appel la remplace ; les montants en USD et la liste des actifs
+  cross-chain n'attendent donc plus environ 0,8 s 1Click toutes les cinq minutes.
+  `NEAR_INTENTS_TOKENS_PREFETCH=false` saute l'appel au démarrage. Aucune migration.
+
 ### Tableau de bord : volume réglé en USD
 
 - **`GET /v1/summary` et `GET /v1/summary/series` valorisent le volume réglé en USD.**
@@ -2986,6 +3008,7 @@ Chaque variable lue depuis `process.env` dans `src/` est validée au démarrage 
 | `NEAR_INTENTS_FEE_RECIPIENT` | avec une commission de plan | — | Compte NEAR qui reçoit la commission inter-chaînes (`appFees`). Absent avec un taux de plan : `503 misconfigured` |
 | `SWAP_COMMISSION_DEV_WAIVER` | non | `false` | Hors production, renonce (en le journalisant) à une commission de plan dont le destinataire (`NEAR_INTENTS_FEE_RECIPIENT`, `SOLANA_SWAP_FEE_WALLET`, `MONAD_SWAP_FEE_WALLET`) n'est pas configuré, au lieu de répondre `503 misconfigured`. Pour un service local uniquement : le démarrage le refuse quand `NODE_ENV=production` |
 | `NEAR_INTENTS_TIMEOUT_MS` | non | `20000` | Budget d'un appel à 1Click (ms) |
+| `NEAR_INTENTS_TOKENS_PREFETCH` | non | `true` | Récupérer la liste des tokens de 1Click au démarrage ; ensuite elle est renouvelée en arrière-plan pendant que la liste disponible est servie. `false` laisse le premier appel au premier appelant |
 | `CROSS_CHAIN_SWAP_SLIPPAGE_BPS` | non | `100` | Slippage inter-chaînes par défaut (bps) ; sous le minimum, NEAR Intents rembourse |
 | `CROSS_CHAIN_SWAP_MAX_SLIPPAGE_BPS` | non | `500` | Le slippage maximal qu'un appelant peut demander |
 | `CROSS_CHAIN_SWAP_DEADLINE_SECONDS` | non | `1800` | Durée pendant laquelle une adresse de dépôt accepte le dépôt ; les suivants sont remboursés |
@@ -2997,6 +3020,7 @@ Chaque variable lue depuis `process.env` dans `src/` est validée au démarrage 
 | `KURU_BASE_URL` | non | `https://ws.kuru.io` | API Kuru Flow (Monad) |
 | `KURU_API_KEY` | pour la production | — | Clé API Kuru Flow (`X-API-Key`). Sans elle, chaque adresse reçoit un jeton limité à une requête par seconde |
 | `KURU_TIMEOUT_MS` | non | `15000` | Budget d'un appel à Kuru Flow (ms) |
+| `ANALYTICS_CACHE_TTL_MS` | non | `10000` | Durée pendant laquelle `/v1/summary`, `/v1/summary/series` et `/v1/balances` réutilisent une réponse par consommateur et par réseau (ms), par réplique. `0` le désactive |
 | `OBSERVER_ENABLED` | non | `true` | `true` / `false` — réconciliateur on-chain |
 | `OBSERVER_INTERVAL_MS` | non | `15000` | Intervalle de polling de l'observateur (ms, min 1000) |
 | `OBSERVER_BATCH_SIZE` | non | `50` | Nombre max d'intentions/swaps par cycle de l'observateur |

@@ -292,6 +292,18 @@ class EnvironmentVariables {
   @Min(1)
   NEAR_INTENTS_TIMEOUT_MS?: number;
 
+  /** "false" skips fetching 1Click's token list at boot (the e2e suites do). */
+  @IsOptional()
+  @IsBooleanString()
+  NEAR_INTENTS_TOKENS_PREFETCH?: string;
+
+  /** How long the dashboard's analytics answers are reused, in ms. 0 turns the cache off. */
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(300000)
+  ANALYTICS_CACHE_TTL_MS?: number;
+
   @IsOptional()
   @IsInt()
   @Min(0)

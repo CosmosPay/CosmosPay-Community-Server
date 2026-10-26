@@ -4,12 +4,14 @@ import { AppConfig } from '@/config/configuration';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import { formatNumericAmount, toCount } from '@/common/money';
 import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
+import { ReadThroughCache } from '@/common/read-through-cache';
 import { PaginationQueryDto } from '@/common/dto/pagination.query.dto';
 import { page } from '@/common/pagination';
 import { resolveNetwork } from '@/common/stellar-network';
 import { PrismaService } from '@/prisma/prisma.service';
 import { Prisma, type PaymentIntentStatus } from '@generated/prisma/client';
 import {
+  ANALYTICS_CACHE_MAX_ENTRIES,
   CHAIN_SWAP_OUTCOMES,
   CROSS_CHAIN_SWAP_OUTCOMES,
   DAY_MS,
@@ -165,20 +167,46 @@ function swapRowsSql(
  * Read-only aggregates derived from the consumer's existing payment intents, swaps, liquidity
  * operations and webhook deliveries, with no separate analytics store. Powers the dashboard's
  * Overview, Balances, Customers and Logs views.
+ *
+ * The summary, the series and the balances are reused per consumer and network for
+ * `ANALYTICS_CACHE_TTL_MS` (10 s by default): the dashboard asks every view, tab and poll for
+ * the same figures, and concurrent identical calls share one computation. So a figure can lag a
+ * new payment by up to that long, and each replica keeps its own cache. The logs are never
+ * cached: they are pages a person is reading.
  */
 @Injectable()
 export class AnalyticsService {
+  /** Answers by consumer, network and figure: the consumer first, so none is served another's. */
+  private readonly answers: ReadThroughCache<unknown>;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly config: ConfigService<AppConfig, true>,
     private readonly consumers: ConsumerResolverService,
     private readonly usd: UsdPricesService,
-  ) {}
+  ) {
+    this.answers = new ReadThroughCache(
+      this.config.get('analytics', { infer: true }).cacheTtlMs,
+      ANALYTICS_CACHE_MAX_ENTRIES,
+    );
+  }
 
-  /** Mirror the APISIX consumer locally (and return null if it has no records yet). */
-  private async resolveConsumerId(consumer: GatewayConsumer): Promise<string> {
-    const local = await this.consumers.resolve(consumer);
-    return local.id;
+  /** The local consumer's id, from the resolver's short cache (no upsert per read). */
+  private resolveConsumerId(consumer: GatewayConsumer): Promise<string> {
+    return this.consumers.resolveId(consumer);
+  }
+
+  /** `load`'s answer for this consumer, network and figure, reused while it is fresh. */
+  private cached<T>(
+    consumerId: string,
+    network: string,
+    figure: string,
+    load: () => Promise<T>,
+  ): Promise<T> {
+    return this.answers.get(
+      `${consumerId}|${network}|${figure}`,
+      load,
+    ) as Promise<T>;
   }
 
   /**
@@ -200,7 +228,12 @@ export class AnalyticsService {
   async summary(consumer: GatewayConsumer) {
     const consumerId = await this.resolveConsumerId(consumer);
     const network = this.network(consumer);
+    return this.cached(consumerId, network, 'summary', () =>
+      this.computeSummary(consumerId, network),
+    );
+  }
 
+  private async computeSummary(consumerId: string, network: string) {
     // This used to `findMany` every intent for (consumer, network) — no `take`,
     // no date bound — and then reduce the array five separate times in JS. Node
     // is single-threaded, so one merchant with a year of history blocked every
@@ -222,6 +255,9 @@ export class AnalyticsService {
       succeededRecent,
       settledRows,
       pricer,
+      endpoints,
+      deliveries,
+      failedDeliveries,
     ] = await Promise.all([
       this.prisma.paymentIntent.groupBy({
         by: ['status'],
@@ -288,6 +324,15 @@ export class AnalyticsService {
       )}`,
       // Never throws: without NEAR Intents' prices the USD fields are null.
       this.usd.pricer(network),
+      // Webhook health, counted through the endpoint relation in the same round trip as the
+      // rest (it used to read the endpoints first, then count their deliveries).
+      this.prisma.webhookEndpoint.count({ where: { consumerId } }),
+      this.prisma.webhookDelivery.count({
+        where: { endpoint: { consumerId } },
+      }),
+      this.prisma.webhookDelivery.count({
+        where: { endpoint: { consumerId }, status: 'FAILED' },
+      }),
     ]);
 
     const byStatus: Record<string, number> = {};
@@ -346,25 +391,6 @@ export class AnalyticsService {
       series[idx].volume = formatNumericAmount(row.volume);
     }
 
-    // Webhook health.
-    const endpoints = await this.prisma.webhookEndpoint.findMany({
-      where: { consumerId },
-      select: { id: true },
-    });
-    const endpointIds = endpoints.map((e) => e.id);
-    const [deliveries, failedDeliveries] = await Promise.all([
-      endpointIds.length
-        ? this.prisma.webhookDelivery.count({
-            where: { endpointId: { in: endpointIds } },
-          })
-        : Promise.resolve(0),
-      endpointIds.length
-        ? this.prisma.webhookDelivery.count({
-            where: { endpointId: { in: endpointIds }, status: 'FAILED' },
-          })
-        : Promise.resolve(0),
-    ]);
-
     const distinctPayers = toCount(payerRows[0]?.payers);
 
     return {
@@ -382,7 +408,7 @@ export class AnalyticsService {
       volumeUsd: formatUsd(settledValue.usd),
       unpriced: settledValue.unpriced,
       webhooks: {
-        endpoints: endpoints.length,
+        endpoints,
         deliveries,
         failedDeliveries,
       },
@@ -442,6 +468,16 @@ export class AnalyticsService {
   async series(consumer: GatewayConsumer, period: SeriesPeriod) {
     const consumerId = await this.resolveConsumerId(consumer);
     const network = this.network(consumer);
+    return this.cached(consumerId, network, `series:${period}`, () =>
+      this.computeSeries(consumerId, network, period),
+    );
+  }
+
+  private async computeSeries(
+    consumerId: string,
+    network: string,
+    period: SeriesPeriod,
+  ) {
     const { buckets, since, previousSince } = seriesWindow(period, new Date());
     // `period` is one of SERIES_PERIODS (the DTO checks it), so it is safe as SQL text.
     const unit = Prisma.raw(`'${period}'`);
@@ -735,6 +771,12 @@ export class AnalyticsService {
   async balances(consumer: GatewayConsumer) {
     const consumerId = await this.resolveConsumerId(consumer);
     const network = this.network(consumer);
+    return this.cached(consumerId, network, 'balances', () =>
+      this.computeBalances(consumerId, network),
+    );
+  }
+
+  private async computeBalances(consumerId: string, network: string) {
     // Same treatment as summary(): one grouped aggregation instead of loading
     // every intent for the consumer and reducing it in JS. `FILTER (WHERE …)`
     // gives the settled and in-flight sums in a single pass over the index.
@@ -808,33 +850,30 @@ export class AnalyticsService {
   // ── Webhook delivery logs (across all the consumer's endpoints) ──────────────
   async webhookLogs(consumer: GatewayConsumer, query: PaginationQueryDto) {
     const consumerId = await this.resolveConsumerId(consumer);
-    const endpoints = await this.prisma.webhookEndpoint.findMany({
-      where: { consumerId },
-      select: { id: true, url: true },
-    });
-    if (!endpoints.length) return page([], 0, query);
-
-    const urlById = new Map(endpoints.map((e) => [e.id, e.url]));
-    const deliveries = await this.prisma.webhookDelivery.findMany({
-      where: { endpointId: { in: endpoints.map((e) => e.id) } },
-      orderBy: { createdAt: 'desc' },
-      take: query.take,
-      skip: query.skip,
-      // The body never leaves PostgreSQL. WebhooksService.listDeliveries omits
-      // it for this exact reason, and this route reads the same rows under the
-      // same `webhooks:read` scope. Relying on the projection below to drop it
-      // would mean one spread operator re-opens the leak.
-      omit: { payload: true },
-    });
-
-    const total = await this.prisma.webhookDelivery.count({
-      where: { endpointId: { in: endpoints.map((e) => e.id) } },
-    });
+    // The consumer's deliveries through the endpoint relation, the page and its count in one
+    // round trip (it used to read the endpoints, then the page, then the count, one after the
+    // other).
+    const where = { endpoint: { consumerId } };
+    const [deliveries, total] = await Promise.all([
+      this.prisma.webhookDelivery.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        take: query.take,
+        skip: query.skip,
+        // The body never leaves PostgreSQL. WebhooksService.listDeliveries omits
+        // it for this exact reason, and this route reads the same rows under the
+        // same `webhooks:read` scope. Relying on the projection below to drop it
+        // would mean one spread operator re-opens the leak.
+        omit: { payload: true },
+        include: { endpoint: { select: { url: true } } },
+      }),
+      this.prisma.webhookDelivery.count({ where }),
+    ]);
 
     const data = deliveries.map((d) => ({
       id: d.id,
       endpointId: d.endpointId,
-      url: urlById.get(d.endpointId) ?? null,
+      url: d.endpoint?.url ?? null,
       eventType: d.eventType,
       eventId: d.eventId,
       attempts: d.attempts,

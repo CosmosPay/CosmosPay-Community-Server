@@ -1359,6 +1359,21 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
 
 ## 升级 — 破坏性变更与部署说明
 
+### 列表遵循密钥的网络；仪表盘读取会被缓存
+
+- **每个列表都限定在密钥所指向的网络**（API 行为修复）：`GET /v1/payment-intents`、
+  `/v1/swaps`（带 `?chain=` 时也是）、`/v1/cross-chain-swaps`、`/v1/usdt0/transfers`、
+  `/v1/liquidity-pools/operations` 和 `/v1/zk-payments` 只返回该密钥网络的行，分页与
+  `total` 都是如此，与 `/v1/summary` 一直以来的做法一致。生产密钥不再看到测试网的 payment
+  intents（仪表盘在生产环境下曾列出它们），沙盒密钥也看不到主网的。Solana 和 Monad 兑换、
+  跨链兑换和 USDT0 转账只在主网上，因此沙盒密钥不会列出任何一条。按 id 读取单行不变。
+- **`/v1/summary`、`/v1/summary/series` 和 `/v1/balances` 按消费者和网络在
+  `ANALYTICS_CACHE_TTL_MS` 内复用**（默认 10 秒；`0` 关闭），同时到达的相同调用共享一次计算。
+  某个数字最多会滞后新付款这么长时间，且每个副本各有自己的缓存。日志不缓存。
+- **NEAR Intents 的代币列表在启动时获取，并在后台刷新**：超过五分钟的 TTL 后，仍会提供现有
+  列表（最多一小时），同时由一次获取替换它，因此 USD 数字和跨链资产列表不再每五分钟等待
+  1Click 约 0.8 秒。`NEAR_INTENTS_TOKENS_PREFETCH=false` 跳过启动时的获取。无需迁移。
+
 ### 仪表盘：以 USD 计的已结算交易额
 
 - **`GET /v1/summary` 和 `GET /v1/summary/series` 以 USD 计算已结算交易额。**`volume` 仍然把每种资产的金额相加；在它旁边，`/v1/summary` 在每一行 `volume` 上返回 `amountUsd`，另外返回 `volumeUsd` 和 `unpriced`；序列在每个支付桶上返回 `volumeUsd`，并在 `totals` 和 `previous` 上返回 `volumeUsd` 和 `unpriced`。仅为新增：没有字段被修改或移除。
@@ -1870,6 +1885,7 @@ curl -H "X-Gateway-Secret: $APISIX_GATEWAY_SECRET" -H "X-Consumer-Username: ops"
 | `NEAR_INTENTS_FEE_RECIPIENT` | 有套餐佣金时 | — | 接收跨链佣金的 NEAR 账户（`appFees`）。有套餐费率却未设置：`503 misconfigured` |
 | `SWAP_COMMISSION_DEV_WAIVER` | 否 | `false` | 在非生产环境中，套餐佣金的接收方（`NEAR_INTENTS_FEE_RECIPIENT`, `SOLANA_SWAP_FEE_WALLET`, `MONAD_SWAP_FEE_WALLET`）未设置时免除该佣金（并记录日志），而不是返回 `503 misconfigured`。仅用于本地服务：`NODE_ENV=production` 时启动会拒绝 |
 | `NEAR_INTENTS_TIMEOUT_MS` | 否 | `20000` | 单次 1Click 调用的时间预算（毫秒） |
+| `NEAR_INTENTS_TOKENS_PREFETCH` | 否 | `true` | 启动时获取 1Click 的代币列表；之后在后台刷新，同时提供现有列表。`false` 把第一次获取留给第一个调用方 |
 | `CROSS_CHAIN_SWAP_SLIPPAGE_BPS` | 否 | `100` | 跨链默认滑点（bps）；低于最小值时 NEAR Intents 退款 |
 | `CROSS_CHAIN_SWAP_MAX_SLIPPAGE_BPS` | 否 | `500` | 调用方可请求的最大滑点 |
 | `CROSS_CHAIN_SWAP_DEADLINE_SECONDS` | 否 | `1800` | 充值地址接受充值的时长；之后的充值会被退款 |
@@ -1881,6 +1897,7 @@ curl -H "X-Gateway-Secret: $APISIX_GATEWAY_SECRET" -H "X-Consumer-Username: ops"
 | `KURU_BASE_URL` | 否 | `https://ws.kuru.io` | Kuru Flow API（Monad） |
 | `KURU_API_KEY` | 生产环境需要 | — | Kuru Flow API key（`X-API-Key`）。没有它时每个地址只能拿到限速每秒一次请求的 token |
 | `KURU_TIMEOUT_MS` | 否 | `15000` | 单次 Kuru Flow 调用的时间预算（毫秒） |
+| `ANALYTICS_CACHE_TTL_MS` | 否 | `10000` | `/v1/summary`、`/v1/summary/series` 和 `/v1/balances` 按消费者和网络复用一个响应的时长（毫秒），每个副本独立。`0` 关闭 |
 | `OBSERVER_ENABLED` | 否 | `true` | `true` / `false` — 链上对账器 |
 | `OBSERVER_INTERVAL_MS` | 否 | `15000` | 观察器轮询间隔（ms，最小 1000） |
 | `OBSERVER_BATCH_SIZE` | 否 | `50` | 每个观察器周期处理的意图/swap 上限 |

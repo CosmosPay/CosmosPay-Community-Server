@@ -2095,6 +2095,27 @@ serviço em `src/native-plugins/<slug>/`, ligados pela mesma lista
 
 ## Atualização — mudanças incompatíveis e notas de deploy
 
+### As listas seguem a rede da chave; as leituras do dashboard ficam em cache
+
+- **Cada lista se limita à rede para a qual a chave aponta** (uma correção de
+  comportamento da API): `GET /v1/payment-intents`, `/v1/swaps` (também com `?chain=`),
+  `/v1/cross-chain-swaps`, `/v1/usdt0/transfers`, `/v1/liquidity-pools/operations` e
+  `/v1/zk-payments` respondem só as linhas da rede da chave, na página e em `total`, como
+  `/v1/summary` sempre fez. Uma chave de produção não vê mais payment intents da rede de
+  testes (o dashboard em Produção os listava), nem uma chave sandbox os da mainnet. Os swaps
+  de Solana e Monad, os swaps cross-chain e as transferências USDT0 são só da mainnet, então
+  uma chave sandbox não lista nenhum. Ler uma linha pelo seu id não muda.
+- **`/v1/summary`, `/v1/summary/series` e `/v1/balances` são reaproveitados por consumidor e
+  rede durante `ANALYTICS_CACHE_TTL_MS`** (10 s por padrão; `0` desliga), e chamadas idênticas
+  que chegam juntas compartilham um só cálculo. Um número pode levar até esse tempo para
+  refletir um pagamento novo, e cada réplica tem o seu próprio cache. Os logs não ficam em
+  cache.
+- **A lista de tokens da NEAR Intents é buscada na inicialização e renovada em segundo
+  plano**: passado o TTL de cinco minutos, a lista que existe é servida (por até uma hora)
+  enquanto uma única busca a substitui, então os valores em USD e a lista de ativos
+  cross-chain não esperam mais cerca de 0,8 s pelo 1Click a cada cinco minutos.
+  `NEAR_INTENTS_TOKENS_PREFETCH=false` pula a busca na inicialização. Sem migração.
+
 ### Painel: volume liquidado em USD
 
 - **`GET /v1/summary` e `GET /v1/summary/series` valorizam o volume liquidado em USD.**
@@ -2931,6 +2952,7 @@ Toda variável lida de `process.env` em `src/` é validada no boot por
 | `NEAR_INTENTS_FEE_RECIPIENT` | com comissão de plano | — | Conta NEAR que recebe a comissão entre redes (`appFees`). Sem configurar e com taxa de plano: `503 misconfigured` |
 | `SWAP_COMMISSION_DEV_WAIVER` | não | `false` | Fora de produção, dispensa (e registra) uma comissão de plano cujo destinatário (`NEAR_INTENTS_FEE_RECIPIENT`, `SOLANA_SWAP_FEE_WALLET`, `MONAD_SWAP_FEE_WALLET`) não está configurado, em vez de responder `503 misconfigured`. Só para um serviço local: a inicialização o recusa quando `NODE_ENV=production` |
 | `NEAR_INTENTS_TIMEOUT_MS` | não | `20000` | Orçamento de uma chamada ao 1Click (ms) |
+| `NEAR_INTENTS_TOKENS_PREFETCH` | não | `true` | Buscar a lista de tokens do 1Click na inicialização; depois ela é renovada em segundo plano enquanto a existente é servida. `false` deixa a primeira busca para o primeiro chamador |
 | `CROSS_CHAIN_SWAP_SLIPPAGE_BPS` | não | `100` | Slippage padrão entre redes (bps); abaixo do mínimo a NEAR Intents reembolsa |
 | `CROSS_CHAIN_SWAP_MAX_SLIPPAGE_BPS` | não | `500` | O maior slippage que quem chama pode pedir |
 | `CROSS_CHAIN_SWAP_DEADLINE_SECONDS` | não | `1800` | Por quanto tempo um endereço de depósito aceita o depósito; os posteriores são reembolsados |
@@ -2942,6 +2964,7 @@ Toda variável lida de `process.env` em `src/` é validada no boot por
 | `KURU_BASE_URL` | não | `https://ws.kuru.io` | API do Kuru Flow (Monad) |
 | `KURU_API_KEY` | para produção | — | Chave de API do Kuru Flow (`X-API-Key`). Sem ela cada endereço recebe um token limitado a uma requisição por segundo |
 | `KURU_TIMEOUT_MS` | não | `15000` | Orçamento de uma chamada ao Kuru Flow (ms) |
+| `ANALYTICS_CACHE_TTL_MS` | não | `10000` | Por quanto tempo `/v1/summary`, `/v1/summary/series` e `/v1/balances` reaproveitam uma resposta por consumidor e rede (ms), em cada réplica. `0` desliga |
 | `OBSERVER_ENABLED` | não | `true` | `true` / `false` — reconciliador on-chain |
 | `OBSERVER_INTERVAL_MS` | não | `15000` | Intervalo de polling do observer (ms, mín. 1000) |
 | `OBSERVER_BATCH_SIZE` | não | `50` | Máximo de intents/swaps por ciclo do observer |

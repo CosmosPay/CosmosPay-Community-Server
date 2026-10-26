@@ -73,14 +73,16 @@ describe('AnalyticsService', () => {
   function build(
     queryResults: unknown[][],
     tokens: NearIntentsToken[] | null = null,
+    cacheTtlMs = 0,
   ) {
     // An aggregation a test does not set answers no rows.
     const queryRaw = jest.fn().mockResolvedValue([]);
     for (const result of queryResults) queryRaw.mockResolvedValueOnce(result);
 
     const findMany = jest.fn().mockResolvedValue([]);
-    // Mirrors the real config: no environment header falls back to this.
-    const config = { get: () => ({ network: 'testnet' }) };
+    // Mirrors the real config: no environment header falls back to this. The analytics cache
+    // is off unless a test turns it on.
+    const config = { get: () => ({ network: 'testnet', cacheTtlMs }) };
     const prisma = {
       consumer: {
         upsert: jest.fn().mockResolvedValue({ id: 'c1' }),
@@ -92,7 +94,10 @@ describe('AnalyticsService', () => {
         ]),
         findMany,
       },
-      webhookEndpoint: { findMany: jest.fn().mockResolvedValue([]) },
+      webhookEndpoint: {
+        findMany: jest.fn().mockResolvedValue([]),
+        count: jest.fn().mockResolvedValue(0),
+      },
       webhookDelivery: { count: jest.fn().mockResolvedValue(0) },
       $queryRaw: queryRaw,
     };
@@ -304,6 +309,86 @@ describe('AnalyticsService', () => {
     expect(result.totals.all).toBe(10);
   });
 
+  it('counts webhook health through the endpoint relation, with the other queries', async () => {
+    const { service, prisma } = build([[], [], [{ payers: 0n }]]);
+    prisma.webhookEndpoint.count.mockResolvedValue(2);
+    prisma.webhookDelivery.count
+      .mockResolvedValueOnce(9)
+      .mockResolvedValueOnce(1);
+
+    const result = await service.summary(consumer);
+
+    expect(result.webhooks).toEqual({
+      endpoints: 2,
+      deliveries: 9,
+      failedDeliveries: 1,
+    });
+    // No list of endpoint ids read first: one round trip with the rest.
+    expect(prisma.webhookEndpoint.findMany).not.toHaveBeenCalled();
+    expect(prisma.webhookDelivery.count.mock.calls).toEqual([
+      [{ where: { endpoint: { consumerId: 'c1' } } }],
+      [{ where: { endpoint: { consumerId: 'c1' }, status: 'FAILED' } }],
+    ]);
+  });
+
+  it('reuses an answer per consumer and network while it is fresh, and shares one in flight', async () => {
+    const { service, prisma } = build([[], [], [{ payers: 0n }]], null, 10_000);
+
+    const [a, b] = await Promise.all([
+      service.summary(consumer),
+      service.summary(consumer),
+    ]);
+    const c = await service.summary(consumer);
+
+    expect(b).toBe(a);
+    expect(c).toBe(a);
+    // Computed once: one grouped count, one upsert to learn the consumer's id.
+    expect(prisma.paymentIntent.groupBy).toHaveBeenCalledTimes(1);
+    expect(prisma.consumer.upsert).toHaveBeenCalledTimes(1);
+  });
+
+  it('never serves one consumer, or one network, the answer of another', async () => {
+    const { service, prisma } = build([], null, 10_000);
+    prisma.consumer.upsert.mockImplementation(
+      ({ where }: { where: { apisixUsername: string } }) =>
+        Promise.resolve({ id: `local_${where.apisixUsername}` }),
+    );
+
+    await service.summary(consumer);
+    await service.summary({ ...consumer, username: 'cosmos_u2' });
+    await service.summary({ ...consumer, environment: 'dev' });
+
+    // Three keys, three computations: u1 on public, u2 on public, u1 on testnet.
+    expect(prisma.paymentIntent.groupBy).toHaveBeenCalledTimes(3);
+    expect(
+      prisma.paymentIntent.groupBy.mock.calls.map(
+        ([arg]: [{ where: { consumerId: string; network: string } }]) =>
+          arg.where,
+      ),
+    ).toEqual([
+      { consumerId: 'local_cosmos_u1', network: 'public' },
+      { consumerId: 'local_cosmos_u2', network: 'public' },
+      { consumerId: 'local_cosmos_u1', network: 'testnet' },
+    ]);
+  });
+
+  it('computes again once the answer is older than the ttl', async () => {
+    jest.useFakeTimers({ now: new Date('2026-10-26T12:00:00Z') });
+    try {
+      const { service, prisma } = build([], null, 10_000);
+      await service.balances(consumer);
+      jest.setSystemTime(new Date('2026-10-26T12:00:09.999Z'));
+      await service.balances(consumer);
+      expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
+
+      jest.setSystemTime(new Date('2026-10-26T12:00:10Z'));
+      await service.balances(consumer);
+      expect(prisma.$queryRaw).toHaveBeenCalledTimes(2);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   it('balances separates settled from pending and tolerates a null sum', async () => {
     const { service } = build([
       [
@@ -395,7 +480,7 @@ describe('AnalyticsService.series', () => {
   ) {
     const queryRaw = jest.fn();
     for (const key of ORDER) queryRaw.mockResolvedValueOnce(results[key] ?? []);
-    const config = { get: () => ({ network: 'testnet' }) };
+    const config = { get: () => ({ network: 'testnet', cacheTtlMs: 0 }) };
     // Every model the series counts, so a row fetch on any of them is caught.
     const rowFetch = () => ({ findMany: jest.fn(), count: jest.fn() });
     const prisma = {

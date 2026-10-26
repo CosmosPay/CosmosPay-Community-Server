@@ -25,6 +25,15 @@ export const NEAR_INTENTS_BLOCKCHAINS: Record<Chain, string> = {
 export const NEAR_INTENTS_TOKENS_TTL_MS = 5 * 60 * 1000;
 
 /**
+ * How long a token list past its TTL is still served while a fresh one is fetched in the
+ * background. The fetch takes most of a second (about 0.8 s measured), and a caller used to
+ * pay it every five minutes: the dashboard's USD figures and the asset list now read the list
+ * they have and never wait for a refresh. Past this age (1Click unreachable for an hour) the
+ * list is no longer trusted and a caller waits for a fresh one, failing as it always did.
+ */
+export const NEAR_INTENTS_TOKENS_STALE_MS = 60 * 60 * 1000;
+
+/**
  * `referral` on every quote: 1Click's distribution-channel label, so NEAR
  * Intents' own reporting attributes the volume to Cosmos Pay. Lowercase, as
  * their docs ask.

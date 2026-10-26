@@ -380,6 +380,8 @@ Each of these was a real finding in this codebase, not a hypothetical:
   row carries `raw` provider payloads and internal ids.
 - **Every tenant query filters by the calling consumer**, and a miss on someone
   else's row is a 404, not a 403: "exists but not yours" is an ownership oracle.
+  **Every list also filters by the key's network** (`resolveNetwork`): a production key
+  listed test-network payment intents until every `findAll` carried it.
 - **A route whose cost an error cannot refund — XLM spent, an account created
   on-chain — carries `@RateLimit`.**
 - **A guard that refuses logs the refusal.** Interceptors run after guards, so
@@ -602,7 +604,18 @@ refreshes it (ledger first, then LayerZero Scan), throttled per row by `lastChec
   A mainnet token is matched only by its contract (on Stellar its code and issuer), never by
   its name; a test-network one takes its mainnet namesake's price, and none when two listed
   tokens share the symbol. Prices never fail a summary: the service waits
-  `USD_PRICES_WAIT_MS` and answers null, which is why every USD field is nullable.
+  `USD_PRICES_WAIT_MS` and answers null, which is why every USD field is nullable. That wait
+  is paid only with no list at all: `NearIntentsClient.tokens` fetches the list at boot
+  (`NEAR_INTENTS_TOKENS_PREFETCH`) and, past its TTL, serves the one on hand while a single
+  background fetch replaces it (stale-while-revalidate, up to `NEAR_INTENTS_TOKENS_STALE_MS`).
+- **The summary, the series and the balances are cached in the process** (`ReadThroughCache`,
+  `src/common/read-through-cache.ts`): reused per consumer, network and figure for
+  `ANALYTICS_CACHE_TTL_MS` (10 s; `0` off, as `test/setup-env.ts` sets it), concurrent identical
+  calls sharing one computation, at most `ANALYTICS_CACHE_MAX_ENTRIES` keys. The key starts with
+  the local consumer id, so no tenant is served another's figures; a figure lags a new payment by
+  up to the TTL and each replica has its own cache. The consumer's id comes from
+  `ConsumerResolverService.resolveId` (cached a minute per username and credential) instead of an
+  upsert per read. The logs are pages a person reads: never cached.
 - **`GET /v1/summary/series` covers payments, every kind of swap (USDT0 transfers are the
   `usdt0` kind), liquidity operations and webhook deliveries**, each with `buckets` on the
   buckets of `seriesWindow` (UTC, weeks from Monday, the same as Postgres' `date_trunc`),
@@ -610,8 +623,8 @@ refreshes it (ledger first, then LayerZero Scan), throttled per row by `lastChec
   window before. Payments, swaps and liquidity are scoped by consumer AND `resolveNetwork`;
   `chain_swap`, `cross_chain_swap` and `usdt0_transfer` rows are always `public`, so a
   sandbox key counts none. Webhook deliveries are scoped by consumer only: an endpoint has
-  no network. The list routes of those modules do not filter by network, so their totals
-  can be larger.
+  no network. The list routes of those modules are scoped the same way (consumer and
+  `resolveNetwork`), so a production key never lists a test-network row.
 - **Succeeded / failed / in progress is a table per model** (`SWAP_OUTCOMES`,
   `CHAIN_SWAP_OUTCOMES`, `CROSS_CHAIN_SWAP_OUTCOMES`, `USDT0_TRANSFER_OUTCOMES`,
   `LIQUIDITY_OPERATION_OUTCOMES` in `analytics.constants.ts`), turned into SQL by
