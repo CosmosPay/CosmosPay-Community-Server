@@ -722,7 +722,7 @@ export class SwapsService {
     // (paid by the payer): `net` is what is left of `amount` to route.
     const merchant = this.merchantFeeTerms(dto);
     const split = splitMerchantFee(sendStroops, merchant);
-    assertMerchantFeeCovered(split);
+    assertMerchantFeeCovered(split, merchant);
     const swapStroops = split.net - feeStroops;
     if (swapStroops <= 0n) {
       throw ApiError.badRequest(

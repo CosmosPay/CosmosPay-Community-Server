@@ -195,7 +195,7 @@ export const API_ERROR_CASES: Readonly<Record<ApiErrorCode, ApiErrorCase>> = {
     statuses: [400],
     summary: 'This operation cannot pay a merchant fee yet',
     message:
-      'A merchant fee is not available on solana swaps yet: Jupiter takes one integrator fee per swap and the plan commission uses it.',
+      'A merchant fee is not available on monad swaps yet: Kuru Flow takes one referrer fee per swap and the plan commission uses it.',
     path: '/v1/swaps',
   },
   [ApiErrorCode.TransactionRejected]: {
@@ -252,6 +252,15 @@ export const API_ERROR_CASES: Readonly<Record<ApiErrorCode, ApiErrorCase>> = {
     message:
       'The fee transaction does not settle this private payment: it is not a ' +
       'confidential transfer of the commission to the fee account.',
+    path: '/v1/zk-checkout/cmh4x2k9a0001l70g8v5q3z2w/confirm',
+  },
+  [ApiErrorCode.MerchantFeeTransferMismatch]: {
+    statuses: [400],
+    summary:
+      "The merchant fee transaction does not pay this payment's merchant fee to its wallet",
+    message:
+      'The merchant fee transaction does not settle this private payment: it is ' +
+      "not a confidential transfer of the merchant fee to the fee's wallet.",
     path: '/v1/zk-checkout/cmh4x2k9a0001l70g8v5q3z2w/confirm',
   },
   [ApiErrorCode.PayerMismatch]: {

@@ -505,6 +505,12 @@ auditor key, so the ORDER of the checks is security, not style:
    `netAmount` / `feeAmount`, the sender channel agrees (`channelsAgree`), and
    `commit(amount, r_transfer)` equals the `C_transfer` of the invocation.
 
+A payment with a merchant fee has a third leg: `merchantFeeTxHash`, a transfer of
+`merchantFee.amount` to `merchantFee.wallet` (registered on the token, like the
+recipient, checked at create). It runs through every step beside the other two, each
+step over all legs before the next; confirm refuses the hash on a payment without a
+merchant fee, and its absence on one with it, before reading the database or the chain.
+
 Steps 4 and 5 before 7 are what keep confirm from being an amount oracle on someone
 else's transfer (a payment created after it closed fails on time; a stranger's
 transfer fails on payer). No message may ever contain a decrypted amount. A refusal

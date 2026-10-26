@@ -8978,7 +8978,9 @@ paths:
         one stroop) and checks on-chain that the recipient holds a confidential
         account on the token under auditor 0. The payer then makes two
         confidential transfers (net to the merchant, fee to the fee account) and
-        confirms them at `POST /v1/zk-checkout/{id}/confirm`."
+        confirms them at `POST /v1/zk-checkout/{id}/confirm`. With a
+        `merchantFee`, a third transfer pays it to its wallet, which must hold a
+        confidential account on the token too."
       operationId: ZkPaymentsController_create_v1
       parameters:
         - name: Idempotency-Key
@@ -9021,11 +9023,12 @@ paths:
                 type: integer
                 example: 42
         "400":
-          description: "`invalid_amount`: after the commission the merchant would receive
-            nothing. `recipient_not_registered`: the recipient has no
-            confidential account on the token under auditor 0.
-            `network_unsupported`: private payments do not run on this network
-            yet (mainnet today; use a dev key)."
+          description: "`invalid_amount`: after the commission (and the merchant fee) the
+            merchant would receive nothing, or the merchant fee rounds to
+            nothing. `recipient_not_registered`: the recipient, or the merchant
+            fee's wallet, has no confidential account on the token under auditor
+            0. `network_unsupported`: private payments do not run on this
+            network yet (mainnet today; use a dev key)."
           content:
             application/json:
               schema:
@@ -9376,6 +9379,12 @@ paths:
         Idempotent: the same hashes on a settled payment answer it again. A
         refusal leaves the payment PENDING, and never says what an amount
         decrypted to.
+
+
+        A payment with a `merchantFee` has a third transfer, of
+        `merchantFee.amount` to `merchantFee.wallet`: send its hash as
+        `merchantFeeTxHash` (required for such a payment, refused for any
+        other). It is checked like the other two, in the same order.
       operationId: ZkCheckoutController_confirm_v1
       parameters:
         - name: id
@@ -9423,12 +9432,14 @@ paths:
           description: "`transaction_not_found`: the RPC has no such transaction yet
             (retry in a few seconds) or no longer. `transaction_rejected`: it
             failed on-chain. `payment_transfer_mismatch` /
-            `fee_transfer_mismatch`: that transaction is not the confidential
-            transfer this payment needs (wrong token, shape, recipient, amount,
-            or it closed before the payment existed). `payer_mismatch`: the two
-            transfers come from different accounts. `expired`: a transfer closed
-            after `expiresAt`. `invalid_state_transition`: already settled by
-            other transactions."
+            `fee_transfer_mismatch` / `merchant_fee_transfer_mismatch`: that
+            transaction is not the confidential transfer this payment needs
+            (wrong token, shape, recipient, amount, or it closed before the
+            payment existed). `payer_mismatch`: the transfers come from
+            different accounts. `expired`: a transfer closed after `expiresAt`.
+            `invalid_state_transition`: already settled by other transactions.
+            `validation_failed` also answers a `merchantFeeTxHash` missing on a
+            payment with a merchant fee, or sent for one without."
           content:
             application/json:
               schema:
@@ -9491,6 +9502,18 @@ paths:
                     message: "The fee transaction does not settle this private payment: it is not a
                       confidential transfer of the commission to the fee
                       account."
+                    path: /v1/zk-checkout/cmh4x2k9a0001l70g8v5q3z2w/confirm
+                    timestamp: 2026-09-01T12:00:00.000Z
+                merchant_fee_transfer_mismatch:
+                  summary: "merchant_fee_transfer_mismatch: The merchant fee transaction does not
+                    pay this payment's merchant fee to its wallet"
+                  value:
+                    statusCode: 400
+                    code: merchant_fee_transfer_mismatch
+                    error: Bad Request
+                    message: "The merchant fee transaction does not settle this private payment: it
+                      is not a confidential transfer of the merchant fee to the
+                      fee's wallet."
                     path: /v1/zk-checkout/cmh4x2k9a0001l70g8v5q3z2w/confirm
                     timestamp: 2026-09-01T12:00:00.000Z
                 payer_mismatch:
@@ -9578,7 +9601,7 @@ paths:
           $ref: "#/components/responses/InternalError"
         "503":
           $ref: "#/components/responses/UpstreamUnavailable"
-      summary: Confirm a private payment with its two confidential transfers, verified
+      summary: Confirm a private payment with its confidential transfers, verified
         on-chain (no API key)
       tags:
         - zk-checkout
@@ -19429,6 +19452,17 @@ components:
             precedence over this field. One is generated when neither is sent.
           example: order-24
           maxLength: 255
+        merchantFee:
+          description: "Your own fee on this payment, in XLM, paid privately like the
+            rest: a third confidential transfer from the payer to `wallet`,
+            which must already hold a confidential account on Cosmos Pay's token
+            (under auditor id 0) and be neither the recipient nor the fee
+            account. `paidBy: recipient` takes it from `amount` (the merchant
+            receives less); `payer` adds it on top (the payer pays `amount` plus
+            the fee). The 0.01% commission is a share of `amount` either way.
+            Confirm then takes `merchantFeeTxHash` too."
+          allOf:
+            - $ref: "#/components/schemas/MerchantFeeDto"
       required:
         - amount
         - recipient
@@ -19461,11 +19495,13 @@ components:
         amount:
           type: string
           example: "25.5"
-          description: What the payer pays in total, in XLM.
+          description: "What the payer pays in total, in XLM: `netAmount + feeAmount`,
+            plus `merchantFee.amount` when there is one."
         netAmount:
           type: string
           example: "25.49745"
-          description: "What the merchant receives: `amount - feeAmount`."
+          description: "What the merchant receives: `amount - feeAmount`, less
+            `merchantFee.amount` when there is one."
         feeAmount:
           type: string
           example: "0.00255"
@@ -19494,6 +19530,18 @@ components:
           type: string
           nullable: true
           example: null
+        merchantFee:
+          nullable: true
+          description: The merchant fee the request named, paid by a third confidential
+            transfer to its wallet; null without one.
+          type: object
+          allOf:
+            - $ref: "#/components/schemas/MerchantFeeEntity"
+        merchantFeeTxHash:
+          type: string
+          nullable: true
+          example: null
+          description: The merchant fee's transaction, once settled.
         description:
           type: string
           nullable: true
@@ -19533,6 +19581,8 @@ components:
         - payer
         - paymentTxHash
         - feeTxHash
+        - merchantFee
+        - merchantFeeTxHash
         - description
         - idempotencyKey
         - expiresAt
@@ -19593,6 +19643,13 @@ components:
           type: string
           example: GDUYXOQZFVPDVIVBTJNUCGYQEC3XSI2LQOQ3SJWJJ6ZY4JLCJZZFGTNQ
           description: Transfer `feeAmount` here, from the same account.
+        merchantFee:
+          nullable: true
+          description: "When not null, a third transfer: `merchantFee.amount` to
+            `merchantFee.wallet`, from the same account."
+          type: object
+          allOf:
+            - $ref: "#/components/schemas/MerchantFeeEntity"
         description:
           type: string
           nullable: true
@@ -19629,6 +19686,7 @@ components:
         - feeBps
         - recipient
         - feeAccount
+        - merchantFee
         - description
         - expiresAt
         - network
@@ -19649,6 +19707,13 @@ components:
           description: The transaction of the confidential transfer that paid the fee
             account the payment's `feeAmount` (64 hex), from the same account.
           example: 5f0e8a1d3c7b9e2f4a6c8d0b1e3f5a7c9d2b4e6f8a0c1d3e5f7a9b2c4d6e8f0a
+        merchantFeeTxHash:
+          type: string
+          description: "Only for a payment with a merchant fee, and then required: the
+            transaction of the confidential transfer that paid
+            `merchantFee.wallet` the payment's `merchantFee.amount` (64 hex),
+            from the same account."
+          example: 9c2e4a6b8d0f1e3c5a7b9d2f4e6a8c0b1d3f5e7a9c2b4d6f8e0a1c3e5b7d9f2a
       required:
         - paymentTxHash
         - feeTxHash
@@ -20647,6 +20712,7 @@ components:
             - recipient_not_registered
             - payment_transfer_mismatch
             - fee_transfer_mismatch
+            - merchant_fee_transfer_mismatch
             - payer_mismatch
             - transaction_not_found
             - expired

@@ -584,7 +584,7 @@ export class CrossChainSwapsService {
     // deposited on top of it (paid by the payer): `total` is the deposit.
     const merchant = this.merchantFeeTerms(dto, origin);
     const split = splitMerchantFee(amountUnits, merchant);
-    assertMerchantFeeCovered(split);
+    assertMerchantFeeCovered(split, merchant);
     const baseUnits = split.total;
     const merchantBps = this.merchantAppFeeBps(split, merchant);
     const nearCfg = this.config.get('nearIntents', { infer: true });

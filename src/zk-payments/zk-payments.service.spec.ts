@@ -11,6 +11,7 @@ import { ZkPaymentsService } from '@/zk-payments/zk-payments.service';
 const TOKEN = 'CAAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQC526';
 const MERCHANT = 'GACAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAJJHP';
 const FEE_ACCOUNT = 'GACQKBIFAUCQKBIFAUCQKBIFAUCQKBIFAUCQKBIFAUCQKBIFAUCQKG7N';
+const FEE_WALLET = 'GADQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQOZPI';
 
 const ZK: ZkNetworkConfig = {
   rpcUrl: 'https://soroban-testnet.stellar.org',
@@ -268,6 +269,131 @@ describe('ZkPaymentsService', () => {
           }),
         ),
       ).toBe(ApiErrorCode.IdempotencyConflict);
+    });
+
+    describe('with a merchant fee', () => {
+      // 1.5% plus 0.25 XLM of 100 XLM: 1.75 XLM.
+      const merchantFee = {
+        bps: 150,
+        fixed: '0.25',
+        wallet: FEE_WALLET,
+        paidBy: 'payer' as const,
+      };
+
+      it("stores it, prices the payer's total and checks the wallet on-chain", async () => {
+        const { service, prisma, sdk } = setup();
+        const payment = await service.create(devKey, {
+          amount: '100',
+          recipient: MERCHANT,
+          merchantFee,
+        });
+        expect(sdk.account).toHaveBeenCalledWith(ZK, MERCHANT);
+        expect(sdk.account).toHaveBeenCalledWith(ZK, FEE_WALLET);
+        const data = prisma.zkPayment.create.mock.calls[0][0].data;
+        expect(data).toMatchObject({
+          amount: '101.75',
+          netAmount: '99.99',
+          feeAmount: '0.01',
+          merchantFee: {
+            bps: 150,
+            fixed: '0.25',
+            amount: '1.75',
+            asset: 'XLM',
+            wallet: FEE_WALLET,
+            paidBy: 'payer',
+          },
+        });
+        expect(payment.merchantFee).toMatchObject({ amount: '1.75' });
+      });
+
+      it('takes it from the amount when the recipient pays it', async () => {
+        const { service, prisma } = setup();
+        await service.create(devKey, {
+          amount: '100',
+          recipient: MERCHANT,
+          merchantFee: { ...merchantFee, paidBy: 'recipient' },
+        });
+        expect(prisma.zkPayment.create.mock.calls[0][0].data).toMatchObject({
+          amount: '100',
+          netAmount: '98.24',
+          feeAmount: '0.01',
+        });
+      });
+
+      it.each([
+        ['the recipient', MERCHANT],
+        ["Cosmos Pay's fee account", FEE_ACCOUNT],
+      ])('refuses %s as its wallet', async (_label, wallet) => {
+        const { service, prisma } = setup();
+        expect(
+          await codeOf(
+            service.create(devKey, {
+              amount: '100',
+              recipient: MERCHANT,
+              merchantFee: { ...merchantFee, wallet },
+            }),
+          ),
+        ).toBe(ApiErrorCode.ValidationFailed);
+        expect(prisma.zkPayment.create).not.toHaveBeenCalled();
+      });
+
+      it('refuses a wallet the token does not know, before storing anything', async () => {
+        const { service, prisma, sdk } = setup();
+        sdk.account.mockImplementation((_zk: unknown, address: string) =>
+          Promise.resolve(
+            address === FEE_WALLET
+              ? { registered: false, auditorId: null }
+              : { registered: true, auditorId: 0 },
+          ),
+        );
+        expect(
+          await codeOf(
+            service.create(devKey, {
+              amount: '100',
+              recipient: MERCHANT,
+              merchantFee,
+            }),
+          ),
+        ).toBe(ApiErrorCode.RecipientNotRegistered);
+        expect(prisma.zkPayment.create).not.toHaveBeenCalled();
+      });
+
+      it('refuses a fee that rounds to nothing', async () => {
+        const { service } = setup();
+        expect(
+          await codeOf(
+            service.create(devKey, {
+              amount: '0.0001',
+              recipient: MERCHANT,
+              merchantFee: { bps: 1, wallet: FEE_WALLET },
+            }),
+          ),
+        ).toBe(ApiErrorCode.InvalidAmount);
+      });
+
+      it('answers 409 when the stored payment had no merchant fee', async () => {
+        const { service, prisma } = setup();
+        prisma.zkPayment.findUnique.mockResolvedValue({
+          id: 'zkp_stored',
+          status: 'PENDING',
+          network: 'testnet',
+          amount: '100',
+          recipient: MERCHANT,
+          description: null,
+          merchantFee: null,
+          expiresAt: new Date(Date.now() + 60_000),
+        });
+        expect(
+          await codeOf(
+            service.create(devKey, {
+              amount: '100',
+              recipient: MERCHANT,
+              idempotencyKey: 'order-24',
+              merchantFee: { ...merchantFee, paidBy: 'recipient' },
+            }),
+          ),
+        ).toBe(ApiErrorCode.IdempotencyConflict);
+      });
     });
 
     it('holds the loser of a create race to the same replay rule', async () => {

@@ -14,6 +14,7 @@ const MERCHANT = 'GACAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAJJHP';
 const FEE_ACCOUNT = 'GACQKBIFAUCQKBIFAUCQKBIFAUCQKBIFAUCQKBIFAUCQKBIFAUCQKG7N';
 const PAYER = 'GADAMBQGAYDAMBQGAYDAMBQGAYDAMBQGAYDAMBQGAYDAMBQGAYDANWXK';
 const STRANGER = 'GCALNQQBXAPZ2WIRSDDBMSTAKCUH5SG6U76YBFLQLIXJTF7FE5AX7AOO';
+const FEE_WALLET = 'GADQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQOZPI';
 
 const CREATED = new Date('2026-10-25T14:00:00.000Z');
 const EXPIRES = new Date('2026-10-25T15:00:00.000Z');
@@ -26,6 +27,7 @@ const terms: ZkSettlementTerms = {
   feeAccount: FEE_ACCOUNT,
   netStroops: 249_975_000n,
   feeStroops: 25_000n,
+  merchantFee: null,
   createdAt: CREATED,
   expiresAt: EXPIRES,
 };
@@ -303,6 +305,94 @@ describe('verifyZkSettlement', () => {
     });
   });
 
+  describe('with a merchant fee', () => {
+    const withFee: ZkSettlementTerms = {
+      ...terms,
+      merchantFee: { wallet: FEE_WALLET, stroops: 1_250_000n },
+    };
+    const goodMerchantFee = (
+      over: Partial<Extract<ZkTransactionRead, { status: 'success' }>> = {},
+      t: Partial<ZkAuditedTransfer> = {},
+    ) =>
+      read(
+        { txHash: 'c'.repeat(64), ...over },
+        transfer({ to: FEE_WALLET, amount: 1_250_000n, ...t }),
+      );
+
+    it('settles three transfers from one payer, at the latest close time', () => {
+      const last = new Date('2026-10-25T14:07:00Z');
+      expect(
+        verifyZkSettlement(
+          withFee,
+          goodPayment(),
+          goodFee(),
+          goodMerchantFee({ closedAt: last }),
+        ),
+      ).toEqual({ payer: PAYER, settledAt: last });
+    });
+
+    it.each([
+      ['another wallet', { to: STRANGER }],
+      ['another amount', { amount: 1_249_999n }],
+      [
+        'an amount the commitment does not open to',
+        { commitmentMatches: false },
+      ],
+      ['channels that disagree', { channelsAgree: false }],
+    ])('refuses a merchant fee transfer to %s', (_label, t) => {
+      expect(
+        codeOf(() =>
+          verifyZkSettlement(
+            withFee,
+            goodPayment(),
+            goodFee(),
+            goodMerchantFee({}, t),
+          ),
+        ),
+      ).toBe(ApiErrorCode.MerchantFeeTransferMismatch);
+    });
+
+    it('refuses a merchant fee transfer that closed after the payment expired', () => {
+      expect(
+        codeOf(() =>
+          verifyZkSettlement(
+            withFee,
+            goodPayment(),
+            goodFee(),
+            goodMerchantFee({ closedAt: new Date(EXPIRES.getTime() + 1) }),
+          ),
+        ),
+      ).toBe(ApiErrorCode.Expired);
+    });
+
+    it('refuses a merchant fee transaction that is not one confidential transfer on our token', () => {
+      expect(
+        codeOf(() =>
+          verifyZkSettlement(
+            withFee,
+            goodPayment(),
+            goodFee(),
+            goodMerchantFee({
+              invocation: {
+                contract: OTHER_TOKEN,
+                function: 'confidential_transfer',
+              },
+            }),
+          ),
+        ),
+      ).toBe(ApiErrorCode.MerchantFeeTransferMismatch);
+    });
+
+    it('never runs with the legs and the terms out of step', () => {
+      expect(() =>
+        verifyZkSettlement(withFee, goodPayment(), goodFee()),
+      ).toThrow(/go together/);
+      expect(() =>
+        verifyZkSettlement(terms, goodPayment(), goodFee(), goodMerchantFee()),
+      ).toThrow(/go together/);
+    });
+  });
+
   describe('the order is what keeps confirm from being an amount oracle', () => {
     it('refuses a payment created after the transfer on time, before comparing amounts', () => {
       // A transfer of the right amount closed before this payment existed: the
@@ -320,6 +410,29 @@ describe('verifyZkSettlement', () => {
       );
       expect(right).toBe(wrong);
       expect(right).toContain('before this payment was created');
+    });
+
+    it('refuses a stranger-paid merchant fee transfer on the payer before comparing amounts', () => {
+      const withFee: ZkSettlementTerms = {
+        ...terms,
+        merchantFee: { wallet: FEE_WALLET, stroops: 1_250_000n },
+      };
+      // The right amount and a wrong one answer alike: the payer refuses first.
+      for (const amount of [1_250_000n, 1n]) {
+        expect(
+          codeOf(() =>
+            verifyZkSettlement(
+              withFee,
+              goodPayment(),
+              goodFee(),
+              read(
+                { txHash: 'c'.repeat(64) },
+                transfer({ from: STRANGER, to: FEE_WALLET, amount }),
+              ),
+            ),
+          ),
+        ).toBe(ApiErrorCode.PayerMismatch);
+      }
     });
 
     it('refuses a stranger-paid transfer on the payer before comparing amounts', () => {

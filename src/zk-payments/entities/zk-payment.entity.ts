@@ -1,5 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { ZkPaymentStatus } from '@generated/prisma/client';
+import { MerchantFeeEntity } from '@/common/merchant-fee/merchant-fee.entity';
 
 const TOKEN = 'CBQU5SGVPPYI5MVBVV5GYTYNHENHBY7J44WYYVDPTZ5UNK6JDEY232QX';
 const RECIPIENT = 'GCALNQQBXAPZ2WIRSDDBMSTAKCUH5SG6U76YBFLQLIXJTF7FE5AX7AOO';
@@ -126,13 +127,17 @@ export class ZkPaymentEntity {
 
   @ApiProperty({
     example: '25.5',
-    description: 'What the payer pays in total, in XLM.',
+    description:
+      'What the payer pays in total, in XLM: `netAmount + feeAmount`, plus ' +
+      '`merchantFee.amount` when there is one.',
   })
   amount!: string;
 
   @ApiProperty({
     example: '25.49745',
-    description: 'What the merchant receives: `amount - feeAmount`.',
+    description:
+      'What the merchant receives: `amount - feeAmount`, less ' +
+      '`merchantFee.amount` when there is one.',
   })
   netAmount!: string;
 
@@ -165,6 +170,23 @@ export class ZkPaymentEntity {
 
   @ApiProperty({ type: String, nullable: true, example: null })
   feeTxHash!: string | null;
+
+  @ApiProperty({
+    type: MerchantFeeEntity,
+    nullable: true,
+    description:
+      'The merchant fee the request named, paid by a third confidential ' +
+      'transfer to its wallet; null without one.',
+  })
+  merchantFee!: MerchantFeeEntity | null;
+
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    example: null,
+    description: "The merchant fee's transaction, once settled.",
+  })
+  merchantFeeTxHash!: string | null;
 
   @ApiProperty({ type: String, nullable: true, example: 'Order #24' })
   description!: string | null;
@@ -239,6 +261,15 @@ export class PublicZkPaymentEntity {
     description: 'Transfer `feeAmount` here, from the same account.',
   })
   feeAccount!: string;
+
+  @ApiProperty({
+    type: MerchantFeeEntity,
+    nullable: true,
+    description:
+      'When not null, a third transfer: `merchantFee.amount` to ' +
+      '`merchantFee.wallet`, from the same account.',
+  })
+  merchantFee!: MerchantFeeEntity | null;
 
   @ApiProperty({ type: String, nullable: true, example: 'Order #24' })
   description!: string | null;

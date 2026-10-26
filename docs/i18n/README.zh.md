@@ -941,7 +941,8 @@ NEAR Intents 从输入中扣除它，报价的输出已是扣除后的净额，�
 ```
 
 - **`bps` 与 `fixed`：** 费用为 `amount × bps / 10,000`（向下取整）加上 `fixed`
-  （以操作的资产计，最多为其小数位数）。`bps` 最高 1,000（10%）；两者至少一个大于零。
+  （以操作的资产计，最多为其小数位数）。`bps` 最高 1,000（10%）；两者至少一个大于零。按金额计算后
+  取整为零的费用会被拒绝（`400 invalid_amount`）。
 - **`paidBy`：** `recipient`（默认）从 `amount` 中扣除费用；`payer` 在其之上加收，
   付款方发送 `amount` 加上费用。
 - **`wallet`：** 费用支付到哪里，在费用所走的链上。
@@ -957,10 +958,11 @@ NEAR Intents 从输入中扣除它，报价的输出已是扣除后的净额，�
 | Solana 支付链接（`POST /v1/payment-intents/pay`，`chain: solana`） | Solana Pay 的 transfer request 只指定一个收款方，因此这类链接（需有 `amount`）是 Solana Pay **transaction request**：`uri` 为 `solana:<PAYMENT_LINK_API_URL>/v1/payment-links/{id}/solana-pay`，钱包向其 POST 付款方账户以获取交易：memo、携带链接 reference 的商户转账，以及手续费转账（缺少的代币账户会创建，由付款方支付）。SOL 手续费须转入已存在的账户。observer 通过 reference 找到它，且只有两部分都支付才会结算 |
 | Monad 支付链接（`POST /v1/payment-intents/pay`，`chain: monad`） | 仅在启用存款地址（`MONAD_RELAYER_PRIVATE_KEY`；否则返回 `merchant_fee_unsupported`）且有 `amount` 时：地址为 `contracts/PaymentSplitForwarder.sol`（手续费的钱包和金额是构造函数的另外两个参数，因此地址承诺了它们），其构造函数先付 relayer 费用，再付商户手续费，最后付商户。链接要求的存款为金额，付款方支付手续费时再加上手续费 |
 | Solana 兑换（`POST /v1/swaps`，`chain: solana`） | Jupiter 每笔兑换只支付一个集成方费用，已被套餐佣金使用，因此手续费转账（从源账户、以源资产支付：SOL 用 System Program 转账，否则先创建钱包的代币账户再 TransferChecked）被追加到 Jupiter 自己的 v0 交易中：复用其地址查找表已加载的账户，重写所有索引，提高其计算单元上限，并以最多 40 个账户请求路由，使其仍能放入一个数据包。SOL 手续费须转入已存在的账户 |
+| 隐私支付（`POST /v1/zk-payments`） | 付款方以 XLM 向 `wallet` 进行第三笔保密转账，使该费用与付款本身一样保密。`wallet` 必须在 Cosmos Pay 的代币上持有审计方 0 下的保密账户（否则返回 `400 recipient_not_registered`），且不能是收款方或手续费账户。0.01% 的佣金仍按 `amount` 计算，记录中的 `amount` 是付款方支付的总额。confirm 以 `merchantFeeTxHash` 接收第三个哈希，并像另外两笔一样校验该转账 |
 | Monad 上的兑换 | 暂不支持：Kuru Flow 每笔兑换只支付一个推荐费用，已被套餐佣金使用（`400 merchant_fee_unsupported`） |
 
-隐私支付、USDT0 和流动性会在各自具备链上拆分付款的方式后加入该字段；在此之前，它们的路由会
-将其作为未知字段拒绝（`400 validation_failed`）。
+USDT0 和流动性会在各自具备链上拆分付款的方式后加入该字段；在此之前，它们的路由会将其作为未知
+字段拒绝（`400 validation_failed`）。
 
 ## 从 Stellar 发送 USDT0（LayerZero）
 
@@ -1036,6 +1038,8 @@ payer:    GET  /v1/zk-checkout/{id}
 
 第 3、6、7 步针对相应的那一笔转账返回 `payment_transfer_mismatch` 或 `fee_transfer_mismatch`。被拒绝时支付保持 `PENDING`；用某笔支付结算时所用的同一组哈希再次 confirm，会再次得到同样的答复。
 
+**带商户手续费时**（创建时传 `merchantFee`，见 **商户手续费**），付款方进行第三笔转账，将 `merchantFee.amount` 转给 `merchantFee.wallet`，confirm 以 `merchantFeeTxHash` 接收其哈希：此类支付必须提供，其他支付则拒绝。它与另外两笔一起按相同顺序经过每一步；不符时返回 `merchant_fee_transfer_mismatch`。
+
 **confirm 不是金额预言机（oracle）。** 它是公开的，会解密交给它的任何内容，因此它从不透露某个金额解密后是多少，并且最后才比较金额：在某笔转账关闭之后才创建的支付，会因时间窗口而拒绝该转账；用自己账户发起的手续费转账，也无法为别人的支付转账作担保。修改它时请保持这个顺序。
 
 **状态。** 确认之前为 `PENDING`，之后为 `SUCCEEDED`。不会存储 `EXPIRED`：超过 `expiresAt` 的 `PENDING` 支付在每个响应和列表过滤中都读作 `EXPIRED`，并且仍然可以被确认，因为在 `expiresAt` 之前关闭的转账已经支付了它。`expiresInMinutes` 默认为 60，最多七天。
@@ -1055,7 +1059,7 @@ npm run zk:e2e-testnet
 
 `scripts/zk/deploy-testnet.ts` 不需要 Rust 构建，也不需要真实资金：它使用一个由 Friendbot 注资的一次性部署账户，从测试网上保密代币演示（demo）的审计方注册表和 vanilla 代币实例读取它们的 wasm 哈希；部署一个新的审计方注册表（admin 和 manager 均为该部署账户），在 id 0 下登记 Cosmos Pay 的密钥 `K_aud = k·H`；部署一个基于原生 XLM、使用该 demo 验证器的新 vanilla 代币（验证器已注册其 v0.8.0 验证密钥，且验证是公开的）；检查 `addr_f` 奇偶性（parity）；并用在 Node 中生成的注册证明把手续费账户注册到该代币上。带 `--env-file` 时，它把 `ZK_PAYMENTS_TESTNET_*` 这组变量写入该文件；带 `--secrets-file` 时，把运营方的密钥（注册表 admin，以及手续费账户的私钥和保密支出标量，用于提取已收取的手续费）写入那个文件；两者都不带时则全部打印出来。服务器不需要运营方的任何密钥。再次运行时，它会在链上校验已配置的这组合约，而不是重新部署；`--redeploy` 会部署一套全新的合约，旧代币上进行过的每笔支付都会因此被搁浅。
 
-`scripts/zk/e2e-testnet.ts` 是真实链上的检查。它使用 Friendbot 账户注册一个商户和一个付款方，通过该模块自己的 service 创建支付，存入、合并，完成两笔转账，并通过该模块自己的 confirm 进行确认：错误的金额被拒绝，正确的金额完成结算，且哈希无法被复用。
+`scripts/zk/e2e-testnet.ts` 是真实链上的检查。它使用 Friendbot 账户注册一个商户和一个付款方，通过该模块自己的 service 创建支付，存入、合并，完成两笔转账，并通过该模块自己的 confirm 进行确认：错误的金额被拒绝，正确的金额完成结算，且哈希无法被复用。随后它支付一笔带商户手续费的支付：第三笔转账转入第三个已注册账户，confirm 只有在三个哈希齐全时才结算。
 
 **测试网会被重置**，每隔几个月一次，其上的合约也随之消失：重置之后请重新运行部署。它复用的验证器是 demo 的；如果那个验证器不存在了，部署会一直失败，直到存在一个带有 v0.8.0 密钥的验证器、并在脚本中写明它为止。
 
@@ -1069,7 +1073,7 @@ npm run zk:e2e-testnet
 | `GET /v1/zk-payments/{id}` | `payments:read` | 单笔支付，即其所有者看到的样子 |
 | `GET /v1/zk-checkout/config` | 无，`@Public()` | 同样的配置，针对 `?network=testnet` 或 `public`，供没有 key 的页面使用 |
 | `GET /v1/zk-checkout/{id}` | 无，`@Public()` | 付款方看到的支付：转多少、转给谁、在哪些合约上 |
-| `POST /v1/zk-checkout/{id}/confirm` | 无，`@Public()` | 用两笔转账结算它，并在链上校验 |
+| `POST /v1/zk-checkout/{id}/confirm` | 无，`@Public()` | 用两笔转账（带商户手续费时为三笔）结算它，并在链上校验 |
 
 ## 别名 — 可认领的支付标识
 
@@ -1423,6 +1427,13 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
 - **Solana 兑换也接受 `merchantFee`**：手续费转账被追加到 Jupiter 的交易中
   （`src/solana/solana-message.ts` 读取并重写 v0 交易；地址查找表通过 Solana RPC 读取）。Monad
   兑换仍返回 `merchant_fee_unsupported`。
+- **隐私支付也接受 `merchantFee`**：向手续费钱包进行第三笔保密转账。
+  `POST /v1/zk-checkout/{id}/confirm` 接收 `merchantFeeTxHash`（仅当支付带商户手续费时必填）；新增
+  错误码 `merchant_fee_transfer_mismatch`；响应新增 `merchantFee`，所有者视图另有
+  `merchantFeeTxHash`。迁移 `20261026210000_zk_payment_merchant_fee_tx` 为 `zk_payment` 添加可空且
+  唯一的 `merchantFeeTxHash`。
+- **取整为零的商户手续费会被拒绝**，适用于所有操作（`400 invalid_amount`）；此前在 Stellar 上会构建
+  一笔金额为零的付款。
 
 ### 列表遵循密钥的网络；仪表盘读取会被缓存
 

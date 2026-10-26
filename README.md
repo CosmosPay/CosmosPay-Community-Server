@@ -1372,7 +1372,8 @@ It is apart from the plan commission Cosmos Pay charges, which does not change.
 
 - **`bps` and `fixed`:** the fee is `amount × bps / 10,000`, rounded down, plus `fixed`
   (in the operation's asset, with at most its decimals). `bps` goes up to 1,000 (10%);
-  at least one of the two must be above zero.
+  at least one of the two must be above zero. A fee that rounds to nothing on the
+  amount is refused (`400 invalid_amount`).
 - **`paidBy`:** `recipient` (the default) takes the fee out of `amount`; `payer` adds it
   on top, so the payer sends `amount` plus the fee.
 - **`wallet`:** where the fee is paid, on the chain it travels on.
@@ -1389,11 +1390,11 @@ It is apart from the plan commission Cosmos Pay charges, which does not change.
 | Solana payment links (`POST /v1/payment-intents/pay`, `chain: solana`) | A Solana Pay transfer request names one recipient, so such a link (with an `amount`) is a Solana Pay **transaction request**: `uri` is `solana:<PAYMENT_LINK_API_URL>/v1/payment-links/{id}/solana-pay`, and the wallet POSTs the payer's account there for the transaction: the memo, the merchant's transfer carrying the link's reference, and the fee's transfer (token accounts created when missing, paid by the payer). A SOL fee goes to an account that already exists. The observer finds it by the reference and settles only on both legs |
 | Monad payment links (`POST /v1/payment-intents/pay`, `chain: monad`) | Only with deposit addresses (`MONAD_RELAYER_PRIVATE_KEY`; without them `merchant_fee_unsupported`) and an `amount`: the address is a `contracts/PaymentSplitForwarder.sol` (the fee's wallet and amount are two more constructor arguments, so the address commits to them), whose constructor pays the relayer its fee, then the merchant fee, then the merchant. The link asks for the deposit: the amount, plus the fee when the payer pays it |
 | Swaps on Solana (`POST /v1/swaps`, `chain: solana`) | Jupiter pays one integrator fee per swap and the plan commission takes it, so the fee's transfer (out of the source, in the source asset: a System transfer for SOL, else a TransferChecked after creating the wallet's token account) is appended to Jupiter's own v0 transaction: the accounts its lookup tables load are reused, every index rewritten, its compute limit raised, and the route asked with at most 40 accounts so it still fits one packet. A SOL fee goes to an account that already exists |
+| Private payments (`POST /v1/zk-payments`) | A third confidential transfer, in XLM, from the payer to `wallet`, so the fee stays as private as the payment. `wallet` must hold a confidential account on Cosmos Pay's token under auditor 0 (`400 recipient_not_registered` otherwise) and be neither the recipient nor the fee account. The 0.01% commission stays a share of `amount`, and the row's `amount` is what the payer pays in total. Confirm takes the third hash as `merchantFeeTxHash` and checks that transfer like the other two |
 | Swaps on Monad | Not yet: Kuru Flow pays one referrer fee per swap and the plan commission takes it (`400 merchant_fee_unsupported`) |
 
-Private payments, USDT0 and liquidity take the field as each gains a way to split the
-payment on-chain; until then their routes refuse it as an unknown field
-(`400 validation_failed`).
+USDT0 and liquidity take the field as each gains a way to split the payment on-chain;
+until then their routes refuse it as an unknown field (`400 validation_failed`).
 
 ## USDT0 from Stellar (LayerZero)
 
@@ -1559,6 +1560,12 @@ Steps 3, 6 and 7 answer `payment_transfer_mismatch` or `fee_transfer_mismatch`, 
 the leg concerned. A refusal leaves the payment `PENDING`; a confirm with the hashes a
 payment already settled with answers it again.
 
+**With a merchant fee** (`merchantFee` on the create; see **Merchant fee**) the payer
+makes a third transfer, of `merchantFee.amount` to `merchantFee.wallet`, and confirm
+takes its hash as `merchantFeeTxHash`: required for such a payment, refused for any
+other. It goes through every step beside the other two, in the same order; a mismatch
+answers `merchant_fee_transfer_mismatch`.
+
 **Confirm is not an amount oracle.** It is public and decrypts what it is given, so
 it never says what an amount decrypted to, and it compares amounts last: a payment
 created after a transfer closed refuses that transfer on the time window, and a fee
@@ -1608,7 +1615,8 @@ every payment made on the old token.
 registers a merchant and a payer, creates payments through the module's own service,
 deposits, merges, makes both transfers, and confirms through the module's own
 confirm: a wrong amount is refused, the right one settles, and the hashes cannot be
-reused.
+reused. It then pays one with a merchant fee: the third transfer goes to a third
+registered account, and confirm settles it only with all three hashes.
 
 **Testnet is reset** every few months, and its contracts with it: run the deploy
 again after a reset. The verifier it reuses is the demo's; if that one is gone, the
@@ -1624,7 +1632,7 @@ deploy fails until a verifier with the v0.8.0 keys exists and the script names i
 | `GET /v1/zk-payments/{id}` | `payments:read` | One payment, as its owner sees it |
 | `GET /v1/zk-checkout/config` | none, `@Public()` | The same setup for `?network=testnet` or `public`, for a page with no key |
 | `GET /v1/zk-checkout/{id}` | none, `@Public()` | A payment as its payer sees it: what to transfer, to whom, on which contracts |
-| `POST /v1/zk-checkout/{id}/confirm` | none, `@Public()` | Settle it with the two transfers, verified on-chain |
+| `POST /v1/zk-checkout/{id}/confirm` | none, `@Public()` | Settle it with the two transfers (three with a merchant fee), verified on-chain |
 
 ## Aliases — claimable payment handles
 
@@ -2125,6 +2133,14 @@ the service under `src/native-plugins/<slug>/`, switched on by the same
   transaction (`src/solana/solana-message.ts` reads and rewrites a v0 transaction; the
   lookup tables are read through the Solana RPC). Monad swaps still answer
   `merchant_fee_unsupported`.
+- **Private payments take `merchantFee`**: a third confidential transfer to the fee's
+  wallet. `POST /v1/zk-checkout/{id}/confirm` takes `merchantFeeTxHash` (required exactly
+  when the payment has a merchant fee); new error code `merchant_fee_transfer_mismatch`;
+  responses gain `merchantFee`, and the owner's view `merchantFeeTxHash`. Migration
+  `20261026210000_zk_payment_merchant_fee_tx` adds a nullable, unique `merchantFeeTxHash`
+  to `zk_payment`.
+- **A merchant fee that rounds to nothing is refused** on every operation
+  (`400 invalid_amount`), where a Stellar one used to build a payment of zero.
 
 ### Lists follow the key's network; dashboard reads are cached
 

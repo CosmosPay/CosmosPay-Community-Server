@@ -1440,7 +1440,8 @@ nicht ändert.
 
 - **`bps` und `fixed`:** die Gebühr ist `amount × bps / 10.000`, abgerundet, plus `fixed`
   (im Asset der Operation, mit höchstens dessen Dezimalstellen). `bps` geht bis 1.000
-  (10 %); mindestens einer der beiden Werte muss über null liegen.
+  (10 %); mindestens einer der beiden Werte muss über null liegen. Eine Gebühr, die auf
+  den Betrag gerundet nichts ergibt, wird abgelehnt (`400 invalid_amount`).
 - **`paidBy`:** `recipient` (Standard) zieht die Gebühr von `amount` ab; `payer` schlägt
   sie auf, der Zahler sendet also `amount` plus die Gebühr.
 - **`wallet`:** wohin die Gebühr gezahlt wird, auf der Chain, über die sie läuft.
@@ -1457,10 +1458,11 @@ nicht ändert.
 | Zahlungslinks auf Solana (`POST /v1/payment-intents/pay`, `chain: solana`) | Ein Solana-Pay-Transfer-Request nennt nur einen Empfänger, also ist ein solcher Link (mit `amount`) ein Solana-Pay-**Transaction-Request**: `uri` ist `solana:<PAYMENT_LINK_API_URL>/v1/payment-links/{id}/solana-pay`, und die Wallet sendet dort per POST das Konto des Zahlers und erhält die Transaktion: das Memo, die Überweisung an den Händler mit der Referenz des Links und die der Gebühr (Token-Konten werden bei Bedarf angelegt, vom Zahler bezahlt). Eine SOL-Gebühr geht an ein bereits existierendes Konto. Der Observer findet sie über die Referenz und begleicht nur mit beiden Anteilen |
 | Zahlungslinks auf Monad (`POST /v1/payment-intents/pay`, `chain: monad`) | Nur mit Einzahlungsadressen (`MONAD_RELAYER_PRIVATE_KEY`; ohne sie `merchant_fee_unsupported`) und mit `amount`: die Adresse ist ein `contracts/PaymentSplitForwarder.sol` (Wallet und Betrag der Gebühr sind zwei weitere Konstruktorargumente, die Adresse bindet sich also an sie), dessen Konstruktor dem Relayer seine Gebühr zahlt, dann die Händlergebühr, dann den Händler. Der Link verlangt die Einzahlung: den Betrag, plus die Gebühr, wenn der Zahler sie zahlt |
 | Swaps auf Solana (`POST /v1/swaps`, `chain: solana`) | Jupiter zahlt nur eine Integrator-Gebühr pro Swap, und die Plan-Provision nutzt sie, also wird die Überweisung der Gebühr (vom Quellkonto, im Quell-Asset: eine System-Program-Überweisung für SOL, sonst ein TransferChecked nach Anlegen des Token-Kontos der Wallet) an Jupiters eigene v0-Transaktion angehängt: die Konten, die ihre Lookup-Tabellen laden, werden wiederverwendet, alle Indizes neu geschrieben, ihr Compute-Limit erhöht und die Route mit höchstens 40 Konten angefragt, damit sie in ein Paket passt. Eine SOL-Gebühr geht an ein bereits existierendes Konto |
+| Private Zahlungen (`POST /v1/zk-payments`) | Ein dritter vertraulicher Transfer, in XLM, vom Zahlenden an `wallet`, sodass die Gebühr so privat bleibt wie die Zahlung. `wallet` muss ein vertrauliches Konto auf dem Token von Cosmos Pay unter Auditor 0 haben (sonst `400 recipient_not_registered`) und darf weder der Empfänger noch das Gebührenkonto sein. Die Provision von 0,01 % bleibt ein Anteil von `amount`, und `amount` in der Zeile ist, was der Zahlende insgesamt zahlt. Confirm nimmt den dritten Hash als `merchantFeeTxHash` und prüft diesen Transfer wie die anderen beiden |
 | Swaps auf Monad | Noch nicht: Kuru Flow zahlt eine einzige Referrer-Gebühr pro Swap, und die Plan-Provision nutzt sie (`400 merchant_fee_unsupported`) |
 
-Private Zahlungen, USDT0 und Liquidität erhalten das Feld, sobald jedes einen Weg hat, die
-Zahlung on-chain aufzuteilen; bis dahin lehnen ihre Routen es als unbekanntes Feld ab
+USDT0 und Liquidität erhalten das Feld, sobald jedes einen Weg hat, die Zahlung
+on-chain aufzuteilen; bis dahin lehnen ihre Routen es als unbekanntes Feld ab
 (`400 validation_failed`).
 
 ## USDT0 von Stellar (LayerZero)
@@ -1636,6 +1638,12 @@ Schritte 3, 6 und 7 antworten mit `payment_transfer_mismatch` oder
 auf `PENDING`; ein Confirm mit den Hashes, mit denen eine Zahlung bereits abgewickelt
 wurde, liefert diese Zahlung erneut.
 
+**Mit Händlergebühr** (`merchantFee` beim Erstellen; siehe **Händlergebühr**) macht der
+Zahlende einen dritten Transfer, `merchantFee.amount` an `merchantFee.wallet`, und
+Confirm nimmt dessen Hash als `merchantFeeTxHash`: Pflicht für eine solche Zahlung,
+abgelehnt für jede andere. Er durchläuft jeden Schritt neben den anderen beiden, in
+derselben Reihenfolge; eine Abweichung antwortet mit `merchant_fee_transfer_mismatch`.
+
 **Confirm ist kein Betrags-Orakel.** Es ist öffentlich und entschlüsselt, was es
 bekommt, daher verrät es nie, zu welchem Betrag etwas entschlüsselt wurde, und es
 vergleicht Beträge zuletzt: Eine Zahlung, die erst nach dem Abschluss eines Transfers
@@ -1691,7 +1699,8 @@ Friendbot-Konten registriert es einen Händler und einen Zahlenden, erstellt Zah
 über den eigenen Service des Moduls, zahlt ein, führt den Merge aus, macht beide
 Transfers und bestätigt über das eigene Confirm des Moduls: Ein falscher Betrag wird
 abgelehnt, der richtige wickelt die Zahlung ab, und die Hashes lassen sich nicht
-wiederverwenden.
+wiederverwenden. Danach bezahlt es eine mit Händlergebühr: Der dritte Transfer geht an
+ein drittes registriertes Konto, und Confirm wickelt sie nur mit allen drei Hashes ab.
 
 **Testnet wird zurückgesetzt**, alle paar Monate, und seine Contracts mit ihm: Führe
 das Deployment nach einem Reset erneut aus. Der wiederverwendete Verifier ist der der
@@ -1708,7 +1717,7 @@ v0.8.0-Schlüsseln existiert und das Skript ihn nennt.
 | `GET /v1/zk-payments/{id}` | `payments:read` | Eine Zahlung, wie ihr Eigentümer sie sieht |
 | `GET /v1/zk-checkout/config` | keiner, `@Public()` | Dieselbe Konfiguration für `?network=testnet` oder `public`, für eine Seite ohne Key |
 | `GET /v1/zk-checkout/{id}` | keiner, `@Public()` | Eine Zahlung, wie ihr Zahlender sie sieht: was zu transferieren ist, an wen, auf welchen Contracts |
-| `POST /v1/zk-checkout/{id}/confirm` | keiner, `@Public()` | Sie mit den beiden Transfers abwickeln, on-chain verifiziert |
+| `POST /v1/zk-checkout/{id}/confirm` | keiner, `@Public()` | Sie mit den beiden Transfers (drei mit Händlergebühr) abwickeln, on-chain verifiziert |
 
 ## Aliase — beanspruchbare Zahlungs-Handles
 
@@ -2241,6 +2250,15 @@ eingeschaltet werden.
   Transaktion angehängt (`src/solana/solana-message.ts` liest und schreibt eine v0-Transaktion;
   die Lookup-Tabellen werden über den Solana-RPC gelesen). Swaps auf Monad antworten weiter
   `merchant_fee_unsupported`.
+- **Private Zahlungen nehmen `merchantFee`**: ein dritter vertraulicher Transfer an die
+  Wallet der Gebühr. `POST /v1/zk-checkout/{id}/confirm` nimmt `merchantFeeTxHash`
+  (Pflicht genau dann, wenn die Zahlung eine Händlergebühr hat); neuer Fehlercode
+  `merchant_fee_transfer_mismatch`; Antworten erhalten `merchantFee`, die Sicht des
+  Eigentümers auch `merchantFeeTxHash`. Die Migration
+  `20261026210000_zk_payment_merchant_fee_tx` ergänzt `zk_payment` um ein nullbares,
+  eindeutiges `merchantFeeTxHash`.
+- **Eine Händlergebühr, die auf nichts abgerundet wird, wird abgelehnt**, bei jeder
+  Operation (`400 invalid_amount`); auf Stellar baute sie vorher eine Zahlung von null.
 
 ### Listen folgen dem Netzwerk des Schlüssels; Dashboard-Abfragen werden gecacht
 

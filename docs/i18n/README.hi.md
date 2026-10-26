@@ -1370,7 +1370,8 @@ client address (`429 rate_limited`)।
 
 - **`bps` और `fixed`:** फ़ीस `amount × bps / 10,000` है, नीचे की ओर गोल, और उसमें
   `fixed` जुड़ता है (ऑपरेशन के asset में, उसके दशमलव तक)। `bps` अधिकतम 1,000 (10%) है;
-  दोनों में से कम से कम एक शून्य से ऊपर होना चाहिए।
+  दोनों में से कम से कम एक शून्य से ऊपर होना चाहिए। जो फ़ीस राशि पर गोल होकर शून्य रह जाए,
+  वह अस्वीकार होती है (`400 invalid_amount`)।
 - **`paidBy`:** `recipient` (डिफ़ॉल्ट) फ़ीस `amount` से काटता है; `payer` उसे ऊपर से
   जोड़ता है, यानी भुगतानकर्ता `amount` और फ़ीस दोनों भेजता है।
 - **`wallet`:** फ़ीस कहाँ जाती है, उस chain पर जिससे वह जाती है।
@@ -1387,11 +1388,11 @@ client address (`429 rate_limited`)।
 | Solana payment links (`POST /v1/payment-intents/pay`, `chain: solana`) | Solana Pay transfer request एक ही प्राप्तकर्ता बताता है, इसलिए ऐसा link (`amount` के साथ) Solana Pay **transaction request** है: `uri` `solana:<PAYMENT_LINK_API_URL>/v1/payment-links/{id}/solana-pay` है, और wallet वहाँ भुगतानकर्ता का खाता POST करके transaction लेता है: memo, link के reference वाला मर्चेंट का transfer और फ़ीस का transfer (token खाते न हों तो बनते हैं, खर्च भुगतानकर्ता का)। SOL फ़ीस पहले से मौजूद खाते में जाती है। Observer उसे reference से ढूँढता है और दोनों हिस्सों पर ही settle करता है |
 | Monad payment links (`POST /v1/payment-intents/pay`, `chain: monad`) | केवल deposit addresses (`MONAD_RELAYER_PRIVATE_KEY`; इनके बिना `merchant_fee_unsupported`) और `amount` के साथ: address एक `contracts/PaymentSplitForwarder.sol` है (फ़ीस का wallet और राशि constructor के दो और arguments हैं, इसलिए address उनसे बँधा है), जिसका constructor relayer को उसकी फ़ीस, फिर मर्चेंट फ़ीस, फिर मर्चेंट को भुगतान करता है। Link deposit माँगता है: राशि, और भुगतानकर्ता फ़ीस चुकाए तो फ़ीस भी |
 | Solana पर swaps (`POST /v1/swaps`, `chain: solana`) | Jupiter हर swap पर एक ही integrator फ़ीस देता है और plan कमीशन उसे लेता है, इसलिए फ़ीस का transfer (source से, source asset में: SOL के लिए System Program transfer, वरना wallet का token खाता बनाकर TransferChecked) Jupiter के अपने v0 transaction में जोड़ा जाता है: उसकी lookup tables जो खाते लोड करती हैं वे दोबारा इस्तेमाल होते हैं, सारे indexes फिर से लिखे जाते हैं, compute limit बढ़ती है और route अधिकतम 40 खातों के साथ माँगा जाता है ताकि वह एक packet में आए। SOL फ़ीस पहले से मौजूद खाते में जाती है |
+| निजी भुगतान (`POST /v1/zk-payments`) | payer से `wallet` को XLM में एक तीसरा confidential transfer, ताकि फ़ीस भी भुगतान जितनी ही निजी रहे। `wallet` के पास Cosmos Pay के token पर auditor 0 के तहत confidential account होना चाहिए (वरना `400 recipient_not_registered`), और वह न recipient हो न fee account। 0.01% कमीशन `amount` का हिस्सा ही रहता है, और row का `amount` वह कुल राशि है जो payer चुकाता है। Confirm तीसरा hash `merchantFeeTxHash` के रूप में लेता है और उस transfer को बाकी दो की तरह जाँचता है |
 | Monad पर swaps | अभी नहीं: Kuru Flow हर swap पर एक ही referrer फ़ीस देता है और plan कमीशन उसे लेता है (`400 merchant_fee_unsupported`) |
 
-निजी भुगतान, USDT0 और liquidity यह फ़ील्ड तब लेंगे जब हर एक के पास भुगतान को on-chain बाँटने
-का तरीका होगा; तब तक उनके रूट इसे अज्ञात फ़ील्ड मानकर अस्वीकार करते हैं
-(`400 validation_failed`)।
+USDT0 और liquidity यह फ़ील्ड तब लेंगे जब हर एक के पास भुगतान को on-chain बाँटने का तरीका
+होगा; तब तक उनके रूट इसे अज्ञात फ़ील्ड मानकर अस्वीकार करते हैं (`400 validation_failed`)।
 
 ## Stellar से USDT0 (LayerZero)
 
@@ -1557,6 +1558,12 @@ Steps 3, 6 और 7 संबंधित हिस्से के लिए `p
 hashes से कोई payment पहले ही settle हो चुका है, उन्हीं के साथ confirm करने पर वही जवाब फिर
 से मिलता है।
 
+**मर्चेंट फ़ीस के साथ** (create पर `merchantFee`; देखें **मर्चेंट फ़ीस**) payer एक तीसरा
+transfer करता है, `merchantFee.wallet` को `merchantFee.amount`, और confirm उसका hash
+`merchantFeeTxHash` के रूप में लेता है: ऐसे payment के लिए ज़रूरी, किसी और के लिए अस्वीकार।
+यह बाकी दो के साथ हर step से उसी क्रम में गुज़रता है; mismatch पर
+`merchant_fee_transfer_mismatch` मिलता है।
+
 **Confirm कोई amount oracle नहीं है।** यह public है और जो कुछ दिया जाए उसे decrypt करता है,
 इसलिए यह कभी नहीं बताता कि कोई राशि decrypt होकर क्या बनी, और राशियों की तुलना सबसे आख़िर
 में करता है: किसी transfer के close होने के बाद बना payment उस transfer को time window पर
@@ -1605,7 +1612,9 @@ confidential spending scalar, जिनसे जमा हुई fees withdraw 
 `scripts/zk/e2e-testnet.ts` असली chain वाली जाँच है। Friendbot accounts के साथ यह एक
 merchant और एक payer register करता है, module की अपनी service से payments बनाता है, deposit
 और merge करता है, दोनों transfers करता है, और module के अपने confirm से confirm करता है:
-ग़लत राशि अस्वीकार होती है, सही राशि settle होती है, और hashes दोबारा इस्तेमाल नहीं हो सकते।
+ग़लत राशि अस्वीकार होती है, सही राशि settle होती है, और hashes दोबारा इस्तेमाल नहीं हो सकते। फिर यह मर्चेंट फ़ीस वाला एक payment चुकाता है:
+तीसरा transfer एक तीसरे registered account को जाता है, और confirm उसे तीनों hashes के साथ ही
+settle करता है।
 
 **Testnet reset होता है** हर कुछ महीनों में, और उसके साथ उसके contracts भी: reset के बाद
 deploy फिर से चलाएँ। यह जिस verifier को दोबारा इस्तेमाल करता है, वह demo का है; अगर वह न
@@ -1622,7 +1631,7 @@ deploy फिर से चलाएँ। यह जिस verifier को द�
 | `GET /v1/zk-payments/{id}` | `payments:read` | एक payment, जैसा उसका owner उसे देखता है |
 | `GET /v1/zk-checkout/config` | कोई नहीं, `@Public()` | वही setup, `?network=testnet` या `public` के लिए, बिना key वाले page के लिए |
 | `GET /v1/zk-checkout/{id}` | कोई नहीं, `@Public()` | एक payment, जैसा payer उसे देखता है: क्या transfer करना है, किसे, किन contracts पर |
-| `POST /v1/zk-checkout/{id}/confirm` | कोई नहीं, `@Public()` | दोनों transfers से उसे settle करें, on-chain verify करके |
+| `POST /v1/zk-checkout/{id}/confirm` | कोई नहीं, `@Public()` | दोनों transfers (मर्चेंट फ़ीस के साथ तीन) से उसे settle करें, on-chain verify करके |
 
 ## Aliases — क्लेम किए जा सकने वाले पेमेंट हैंडल
 
@@ -2116,6 +2125,14 @@ seal होती हैं और कभी लौटाई नहीं जा
 - **Solana swaps भी `merchantFee` लेते हैं**: फ़ीस का transfer Jupiter के transaction में जोड़ा
   जाता है (`src/solana/solana-message.ts` v0 transaction पढ़ता और फिर से लिखता है; lookup
   tables Solana RPC से पढ़ी जाती हैं)। Monad swaps अब भी `merchant_fee_unsupported` लौटाते हैं।
+- **निजी भुगतान भी `merchantFee` लेते हैं**: फ़ीस की wallet को एक तीसरा confidential transfer।
+  `POST /v1/zk-checkout/{id}/confirm` `merchantFeeTxHash` लेता है (ठीक तब ज़रूरी जब payment पर
+  मर्चेंट फ़ीस हो); नया error code `merchant_fee_transfer_mismatch`; responses में `merchantFee`
+  जुड़ता है, और owner के view में `merchantFeeTxHash` भी। Migration
+  `20261026210000_zk_payment_merchant_fee_tx` `zk_payment` में nullable, unique
+  `merchantFeeTxHash` जोड़ता है।
+- **शून्य तक गोल होने वाली मर्चेंट फ़ीस अस्वीकार होती है**, हर operation पर
+  (`400 invalid_amount`); Stellar पर पहले वह शून्य का payment बनाती थी।
 
 ### Lists key के network का पालन करती हैं; dashboard reads cache होते हैं
 

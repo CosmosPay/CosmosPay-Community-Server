@@ -1393,7 +1393,8 @@ que ela indica. É separada da comissão do plano que a Cosmos Pay cobra, que n�
 
 - **`bps` e `fixed`:** a taxa é `amount × bps / 10.000`, arredondada para baixo, mais
   `fixed` (no ativo da operação, com no máximo as suas casas decimais). `bps` vai até
-  1.000 (10%); pelo menos um dos dois deve ser maior que zero.
+  1.000 (10%); pelo menos um dos dois deve ser maior que zero. Uma taxa que arredonda
+  para nada sobre o valor é recusada (`400 invalid_amount`).
 - **`paidBy`:** `recipient` (o padrão) desconta a taxa de `amount`; `payer` a soma por
   cima, então o pagador envia `amount` mais a taxa.
 - **`wallet`:** onde a taxa é paga, na cadeia por onde ela viaja.
@@ -1410,10 +1411,11 @@ que ela indica. É separada da comissão do plano que a Cosmos Pay cobra, que n�
 | Links de pagamento na Solana (`POST /v1/payment-intents/pay`, `chain: solana`) | Um transfer request do Solana Pay nomeia um único destinatário, então esse link (com `amount`) é um **transaction request** do Solana Pay: `uri` é `solana:<PAYMENT_LINK_API_URL>/v1/payment-links/{id}/solana-pay`, e a wallet envia ali por POST a conta do pagador para obter a transação: o memo, a transferência ao comerciante com a referência do link e a da taxa (as contas de token são criadas se faltarem, pagas pelo pagador). Uma taxa em SOL vai para uma conta que já existe. O observer a encontra pela referência e só liquida com as duas partes |
 | Links de pagamento em Monad (`POST /v1/payment-intents/pay`, `chain: monad`) | Só com endereços de depósito (`MONAD_RELAYER_PRIVATE_KEY`; sem eles `merchant_fee_unsupported`) e com `amount`: o endereço é um `contracts/PaymentSplitForwarder.sol` (a wallet e o valor da taxa são mais dois argumentos do construtor, então o endereço se compromete com eles), cujo construtor paga ao relayer a sua taxa, depois a taxa do comerciante e depois o comerciante. O link pede o depósito: o valor, mais a taxa quando o pagador a paga |
 | Swaps na Solana (`POST /v1/swaps`, `chain: solana`) | O Jupiter paga uma única taxa de integrador por swap e a comissão do plano a usa, então a transferência da taxa (a partir da conta de origem, no ativo de origem: uma transferência do System Program para SOL, senão um TransferChecked depois de criar a conta de token da wallet) é acrescentada à própria transação v0 do Jupiter: as contas que as suas tabelas de endereços carregam são reaproveitadas, todos os índices reescritos, o seu limite de computação elevado e a rota pedida com no máximo 40 contas para continuar cabendo num pacote. Uma taxa em SOL vai para uma conta que já existe |
+| Pagamentos privados (`POST /v1/zk-payments`) | Uma terceira transferência confidencial, em XLM, do pagador para `wallet`, então a taxa fica tão privada quanto o pagamento. `wallet` precisa ter uma conta confidencial no token da Cosmos Pay sob o auditor 0 (senão, `400 recipient_not_registered`) e não ser nem o destinatário nem a conta de comissões. A comissão de 0,01% continua sendo uma parte de `amount`, e o `amount` da linha é o que o pagador paga no total. O confirm recebe o terceiro hash como `merchantFeeTxHash` e verifica essa transferência como as outras duas |
 | Swaps em Monad | Ainda não: a Kuru Flow paga uma única taxa de indicação por swap e a comissão do plano a usa (`400 merchant_fee_unsupported`) |
 
-Pagamentos privados, USDT0 e liquidez recebem o campo à medida que cada um ganha uma forma
-de dividir o pagamento on-chain; até lá as suas rotas o recusam como campo desconhecido
+USDT0 e liquidez recebem o campo à medida que cada um ganha uma forma de dividir o
+pagamento on-chain; até lá as suas rotas o recusam como campo desconhecido
 (`400 validation_failed`).
 
 ## USDT0 a partir da Stellar (LayerZero)
@@ -1586,6 +1588,13 @@ conforme a perna em questão. Uma recusa deixa o pagamento em `PENDING`; um conf
 com os mesmos hashes com que um pagamento já foi liquidado devolve esse pagamento
 de novo.
 
+**Com taxa do comerciante** (`merchantFee` na criação; veja **Taxa do comerciante**) o
+pagador faz uma terceira transferência, de `merchantFee.amount` para
+`merchantFee.wallet`, e o confirm recebe o seu hash como `merchantFeeTxHash`:
+obrigatório para esse pagamento, recusado para qualquer outro. Ela passa por cada passo
+ao lado das outras duas, na mesma ordem; uma divergência responde
+`merchant_fee_transfer_mismatch`.
+
 **O confirm não é um oráculo de valores.** Ele é público e decifra o que recebe,
 então nunca diz para qual valor algo foi decifrado, e compara os valores por
 último: um pagamento criado depois que uma transferência fechou recusa essa
@@ -1640,7 +1649,9 @@ pagamentos feitos no token antigo.
 ele registra um comerciante e um pagador, cria pagamentos pelo próprio service do
 módulo, deposita, faz o merge, faz as duas transferências e confirma pelo próprio
 confirm do módulo: um valor errado é recusado, o certo é liquidado, e os hashes não
-podem ser reutilizados.
+podem ser reutilizados. Depois paga um com taxa do comerciante: a terceira
+transferência vai para uma terceira conta registrada, e o confirm só o liquida com os
+três hashes.
 
 **A testnet é resetada** a cada poucos meses, e os seus contratos junto: rode o
 deploy de novo depois de um reset. O verificador que ele reutiliza é o da demo; se
@@ -1657,7 +1668,7 @@ script apontá-lo.
 | `GET /v1/zk-payments/{id}` | `payments:read` | Um pagamento, como o seu dono o vê |
 | `GET /v1/zk-checkout/config` | nenhum, `@Public()` | A mesma configuração para `?network=testnet` ou `public`, para uma página sem chave |
 | `GET /v1/zk-checkout/{id}` | nenhum, `@Public()` | Um pagamento como quem paga o vê: o que transferir, para quem, em quais contratos |
-| `POST /v1/zk-checkout/{id}/confirm` | nenhum, `@Public()` | Liquidá-lo com as duas transferências, verificadas on-chain |
+| `POST /v1/zk-checkout/{id}/confirm` | nenhum, `@Public()` | Liquidá-lo com as duas transferências (três com taxa do comerciante), verificadas on-chain |
 
 ## Aliases — handles de pagamento reivindicáveis
 
@@ -2171,6 +2182,14 @@ serviço em `src/native-plugins/<slug>/`, ligados pela mesma lista
   transação do Jupiter (`src/solana/solana-message.ts` lê e reescreve uma transação v0; as
   tabelas de endereços são lidas pelo RPC da Solana). Swaps em Monad continuam respondendo
   `merchant_fee_unsupported`.
+- **Pagamentos privados aceitam `merchantFee`**: uma terceira transferência confidencial
+  para a wallet da taxa. `POST /v1/zk-checkout/{id}/confirm` recebe `merchantFeeTxHash`
+  (obrigatório exatamente quando o pagamento tem taxa do comerciante); novo código de erro
+  `merchant_fee_transfer_mismatch`; as respostas ganham `merchantFee`, e a visão do dono
+  `merchantFeeTxHash`. A migração `20261026210000_zk_payment_merchant_fee_tx` adiciona a
+  `zk_payment` um `merchantFeeTxHash` anulável e único.
+- **Uma taxa do comerciante que arredonda para nada é recusada** em toda operação
+  (`400 invalid_amount`); na Stellar ela montava antes um pagamento de zero.
 
 ### As listas seguem a rede da chave; as leituras do dashboard ficam em cache
 

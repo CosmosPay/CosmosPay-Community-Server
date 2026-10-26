@@ -110,13 +110,28 @@ describe('splitMerchantFee', () => {
 
   it('refuses a deducted fee that leaves nothing to go on', () => {
     expect(
-      codeOf(() => assertMerchantFeeCovered(splitMerchantFee(20n, terms))),
+      codeOf(() =>
+        assertMerchantFeeCovered(splitMerchantFee(20n, terms), terms),
+      ),
     ).toBe('invalid_amount');
     // The same fee on top always leaves the amount.
+    const onTop = { ...terms, paidBy: 'payer' as const };
     expect(() =>
-      assertMerchantFeeCovered(
-        splitMerchantFee(20n, { ...terms, paidBy: 'payer' }),
+      assertMerchantFeeCovered(splitMerchantFee(20n, onTop), onTop),
+    ).not.toThrow();
+  });
+
+  it('refuses a fee the request named that rounds to nothing', () => {
+    // 1.5% of 50 base units is 0.75, rounded down to 0, and no fixed part.
+    const percent = { ...terms, fixed: 0n };
+    expect(
+      codeOf(() =>
+        assertMerchantFeeCovered(splitMerchantFee(50n, percent), percent),
       ),
+    ).toBe('invalid_amount');
+    // No fee at all is not a fee of zero.
+    expect(() =>
+      assertMerchantFeeCovered(splitMerchantFee(50n, null), null),
     ).not.toThrow();
   });
 });

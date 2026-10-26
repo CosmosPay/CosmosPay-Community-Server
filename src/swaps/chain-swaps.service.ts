@@ -525,7 +525,7 @@ export class ChainSwapsService {
       );
     }
     const split = splitMerchantFee(amount, merchant);
-    assertMerchantFeeCovered(split);
+    assertMerchantFeeCovered(split, merchant);
     const slippageBps = resolveSlippage(
       dto.slippageBps,
       this.config.get('stellar', { infer: true }).swap,

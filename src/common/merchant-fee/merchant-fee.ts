@@ -121,11 +121,24 @@ export function splitMerchantFee(
 }
 
 /**
- * Refuses a split that leaves nothing to go on: a deducted fee as large as the
- * amount. Said before anything is built, so the payer is never asked to sign
- * a payment that would hand everything to the fee.
+ * Refuses a split that leaves nothing to go on (a deducted fee as large as the
+ * amount) and a fee the request named that charges nothing (a percentage that
+ * rounds to zero on a small amount): a payment of zero is malformed on Stellar
+ * and an empty transfer anywhere else. Said before anything is built, so the
+ * payer is never asked to sign a payment that would hand everything to the fee.
  */
-export function assertMerchantFeeCovered(split: MerchantFeeSplit): void {
+export function assertMerchantFeeCovered(
+  split: MerchantFeeSplit,
+  terms: MerchantFeeTerms | null,
+): void {
+  // No fee asked: nothing of the amount goes to one, whatever the amount.
+  if (!terms) return;
+  if (split.fee <= 0n) {
+    throw ApiError.badRequest(
+      ApiErrorCode.InvalidAmount,
+      'amount is too small for the merchant fee to charge anything',
+    );
+  }
   if (split.net <= 0n) {
     throw ApiError.badRequest(
       ApiErrorCode.InvalidAmount,

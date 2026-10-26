@@ -145,7 +145,7 @@ export class ChainPayLinkBuilder {
       parseUnits(request.amount, asset.decimals),
       terms,
     );
-    assertMerchantFeeCovered(split);
+    assertMerchantFeeCovered(split, terms);
     if (
       chain === 'solana' &&
       !asset.issuer &&

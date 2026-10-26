@@ -93,6 +93,8 @@ export enum ApiErrorCode {
   PaymentTransferMismatch = 'payment_transfer_mismatch',
   /** {@link PaymentTransferMismatch}, for the commission transfer to the fee account. */
   FeeTransferMismatch = 'fee_transfer_mismatch',
+  /** {@link PaymentTransferMismatch}, for the merchant fee's transfer to its wallet. */
+  MerchantFeeTransferMismatch = 'merchant_fee_transfer_mismatch',
   /** The two transfers of one private payment come from different accounts. */
   PayerMismatch = 'payer_mismatch',
   /**

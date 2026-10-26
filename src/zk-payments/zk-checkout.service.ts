@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import type { Prisma } from '@generated/prisma/client';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
+import { readMerchantFeeRecord } from '@/common/merchant-fee/merchant-fee';
 import { isUniqueViolation } from '@/common/prisma-errors';
 import { project } from '@/common/projection';
 import type { StellarNetwork, ZkNetworkConfig } from '@/config/configuration';
@@ -45,10 +46,19 @@ const ZK_CHECKOUT_SELECT = {
   feeAccount: true,
   paymentTxHash: true,
   feeTxHash: true,
+  merchantFee: true,
+  merchantFeeTxHash: true,
   description: true,
   expiresAt: true,
   createdAt: true,
 } as const satisfies Prisma.ZkPaymentSelect;
+
+/** The transactions a confirm names, lowercase: the third one only with a merchant fee. */
+interface ZkConfirmHashes {
+  paymentTxHash: string;
+  feeTxHash: string;
+  merchantFeeTxHash: string | null;
+}
 
 type ZkCheckoutRow = Prisma.ZkPaymentGetPayload<{
   select: typeof ZK_CHECKOUT_SELECT;
@@ -87,9 +97,9 @@ export class ZkCheckoutService {
   }
 
   /**
-   * Settles the payment `id` with the two transfers the payer made, after
-   * reading both back from the chain and decrypting them with the auditor key
-   * (`verifyZkSettlement` has the rules and their order).
+   * Settles the payment `id` with the transfers the payer made (two, three
+   * with a merchant fee), after reading each back from the chain and decrypting
+   * it with the auditor key (`verifyZkSettlement` has the rules and their order).
    *
    * Idempotent: confirming a settled payment with the hashes it settled with
    * answers it again. A transaction that settled another private payment, of any
@@ -99,29 +109,60 @@ export class ZkCheckoutService {
     id: string,
     dto: ConfirmZkPaymentDto,
   ): Promise<PublicZkPaymentEntity> {
-    const paymentTxHash = dto.paymentTxHash.toLowerCase();
-    const feeTxHash = dto.feeTxHash.toLowerCase();
-    if (paymentTxHash === feeTxHash) {
+    const hashes: ZkConfirmHashes = {
+      paymentTxHash: dto.paymentTxHash.toLowerCase(),
+      feeTxHash: dto.feeTxHash.toLowerCase(),
+      merchantFeeTxHash: dto.merchantFeeTxHash?.toLowerCase() ?? null,
+    };
+    const named = [
+      hashes.paymentTxHash,
+      hashes.feeTxHash,
+      ...(hashes.merchantFeeTxHash ? [hashes.merchantFeeTxHash] : []),
+    ];
+    if (new Set(named).size !== named.length) {
       throw ApiError.badRequest(
         ApiErrorCode.ValidationFailed,
-        'paymentTxHash and feeTxHash must be two different transactions.',
+        hashes.merchantFeeTxHash
+          ? 'paymentTxHash, feeTxHash and merchantFeeTxHash must be three different transactions.'
+          : 'paymentTxHash and feeTxHash must be two different transactions.',
       );
     }
 
     const row = await this.load(id);
     const zk = this.networkOf(row);
+    const merchantFee = readMerchantFeeRecord(row.merchantFee);
+    if (merchantFee && !hashes.merchantFeeTxHash) {
+      throw ApiError.badRequest(
+        ApiErrorCode.ValidationFailed,
+        'This private payment has a merchant fee: send merchantFeeTxHash, the ' +
+          'transfer of merchantFee.amount to merchantFee.wallet.',
+      );
+    }
+    if (!merchantFee && hashes.merchantFeeTxHash) {
+      throw ApiError.badRequest(
+        ApiErrorCode.ValidationFailed,
+        'This private payment has no merchant fee: send no merchantFeeTxHash.',
+      );
+    }
 
     if (row.status === 'SUCCEEDED') {
-      return await this.replaySettled(row, zk, paymentTxHash, feeTxHash);
+      return await this.replaySettled(row, zk, hashes);
     }
 
     // Before any chain read: a transaction already spent on another payment
     // gets no further, so this route never decrypts it again for anyone.
-    await this.assertUnused(row.id, paymentTxHash, feeTxHash);
+    await this.assertUnused(row.id, named);
 
-    const [payment, fee] = await Promise.all([
-      this.sdk.readTransaction(zk, zk.auditorSecret, paymentTxHash),
-      this.sdk.readTransaction(zk, zk.auditorSecret, feeTxHash),
+    const [payment, fee, merchantFeeRead] = await Promise.all([
+      this.sdk.readTransaction(zk, zk.auditorSecret, hashes.paymentTxHash),
+      this.sdk.readTransaction(zk, zk.auditorSecret, hashes.feeTxHash),
+      hashes.merchantFeeTxHash
+        ? this.sdk.readTransaction(
+            zk,
+            zk.auditorSecret,
+            hashes.merchantFeeTxHash,
+          )
+        : null,
     ]);
     const settlement = verifyZkSettlement(
       {
@@ -131,11 +172,18 @@ export class ZkCheckoutService {
         feeAccount: row.feeAccount,
         netStroops: toStroops(row.netAmount),
         feeStroops: toStroops(row.feeAmount),
+        merchantFee: merchantFee
+          ? {
+              wallet: merchantFee.wallet,
+              stroops: toStroops(merchantFee.amount),
+            }
+          : null,
         createdAt: row.createdAt,
         expiresAt: row.expiresAt,
       },
       payment,
       fee,
+      merchantFeeRead,
     );
 
     let claimed: number;
@@ -145,8 +193,7 @@ export class ZkCheckoutService {
         data: {
           status: 'SUCCEEDED',
           payer: settlement.payer,
-          paymentTxHash,
-          feeTxHash,
+          ...hashes,
           settledAt: settlement.settledAt,
         },
       }));
@@ -156,21 +203,19 @@ export class ZkCheckoutService {
     }
     if (claimed === 0) {
       // Someone else settled it between the read and the write.
-      return this.replaySettled(
-        await this.load(id),
-        zk,
-        paymentTxHash,
-        feeTxHash,
-      );
+      return this.replaySettled(await this.load(id), zk, hashes);
     }
 
     this.logger.log(
       `Settled private payment ${row.id} on ${row.network}: payer=${settlement.payer} ` +
-        `payment=${paymentTxHash} fee=${feeTxHash}`,
+        `payment=${hashes.paymentTxHash} fee=${hashes.feeTxHash}` +
+        (hashes.merchantFeeTxHash
+          ? ` merchantFee=${hashes.merchantFeeTxHash}`
+          : ''),
     );
     await this.notifySettled(row.id);
     return this.toPublic(
-      { ...row, status: 'SUCCEEDED', paymentTxHash, feeTxHash },
+      { ...row, status: 'SUCCEEDED', ...hashes },
       zk,
       new Date(),
     );
@@ -219,13 +264,13 @@ export class ZkCheckoutService {
   private async replaySettled(
     row: ZkCheckoutRow,
     zk: ZkNetworkConfig,
-    paymentTxHash: string,
-    feeTxHash: string,
+    hashes: ZkConfirmHashes,
   ): Promise<PublicZkPaymentEntity> {
     if (
       row.status === 'SUCCEEDED' &&
-      row.paymentTxHash === paymentTxHash &&
-      row.feeTxHash === feeTxHash
+      row.paymentTxHash === hashes.paymentTxHash &&
+      row.feeTxHash === hashes.feeTxHash &&
+      row.merchantFeeTxHash === hashes.merchantFeeTxHash
     ) {
       await this.notifySettled(row.id);
       return this.toPublic(row, zk, new Date());
@@ -257,17 +302,16 @@ export class ZkCheckoutService {
     );
   }
 
-  /** Neither hash may have settled another private payment, in either role. */
-  private async assertUnused(
-    id: string,
-    paymentTxHash: string,
-    feeTxHash: string,
-  ): Promise<void> {
-    const hashes = [paymentTxHash, feeTxHash];
+  /** No hash may have settled another private payment, in any role. */
+  private async assertUnused(id: string, hashes: string[]): Promise<void> {
     const used = await this.prisma.zkPayment.findFirst({
       where: {
         id: { not: id },
-        OR: [{ paymentTxHash: { in: hashes } }, { feeTxHash: { in: hashes } }],
+        OR: [
+          { paymentTxHash: { in: hashes } },
+          { feeTxHash: { in: hashes } },
+          { merchantFeeTxHash: { in: hashes } },
+        ],
       },
       select: { id: true },
     });
@@ -289,6 +333,7 @@ export class ZkCheckoutService {
       feeBps: row.feeBps,
       recipient: row.recipient,
       feeAccount: row.feeAccount,
+      merchantFee: readMerchantFeeRecord(row.merchantFee),
       description: row.description,
       expiresAt: row.expiresAt,
       network: row.network,

@@ -30,8 +30,10 @@ describe('Private payments (e2e)', () => {
   const FEE_ACCOUNT =
     'GACQKBIFAUCQKBIFAUCQKBIFAUCQKBIFAUCQKBIFAUCQKBIFAUCQKG7N';
   const PAYER = 'GADAMBQGAYDAMBQGAYDAMBQGAYDAMBQGAYDAMBQGAYDAMBQGAYDANWXK';
+  const FEE_WALLET = 'GADQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQOZPI';
   const PAYMENT_TX = 'a'.repeat(64);
   const FEE_TX = 'b'.repeat(64);
+  const MERCHANT_FEE_TX = 'c'.repeat(64);
 
   const rows: Record<string, unknown>[] = [];
   const rateLimitCounters = new Map<string, number>();
@@ -70,6 +72,8 @@ describe('Private payments (e2e)', () => {
           payer: null,
           paymentTxHash: null,
           feeTxHash: null,
+          merchantFee: null,
+          merchantFeeTxHash: null,
           settledAt: null,
           createdAt: new Date(Date.now() - 60_000),
           updatedAt: new Date(),
@@ -254,6 +258,44 @@ describe('Private payments (e2e)', () => {
       ).expect(200);
       expect(list.body).toMatchObject({ total: 1, take: 20, skip: 0 });
     });
+
+    it('creates a payment with a merchant fee, its nested body through the pipe', async () => {
+      const bad = await merchant(request(http()).post('/v1/zk-payments'))
+        .send({
+          amount: '25',
+          recipient: MERCHANT,
+          merchantFee: { bps: 100, wallet: FEE_WALLET, paidBy: 'nobody' },
+        })
+        .expect(400);
+      expect(bad.body.code).toBe('validation_failed');
+
+      const res = await merchant(request(http()).post('/v1/zk-payments'))
+        .set('idempotency-key', 'order-25')
+        .send({
+          amount: '25',
+          recipient: MERCHANT,
+          merchantFee: { bps: 100, wallet: FEE_WALLET },
+        })
+        .expect(201);
+      // 1% of 25 to the wallet, out of the merchant's share.
+      expect(res.body).toMatchObject({
+        amount: '25',
+        netAmount: '24.7475',
+        feeAmount: '0.0025',
+        merchantFee: {
+          bps: 100,
+          amount: '0.25',
+          asset: 'XLM',
+          wallet: FEE_WALLET,
+          paidBy: 'recipient',
+        },
+        merchantFeeTxHash: null,
+      });
+      expect(sdkMock.account).toHaveBeenCalledWith(
+        expect.anything(),
+        FEE_WALLET,
+      );
+    });
   });
 
   describe('/v1/zk-checkout (no API key)', () => {
@@ -384,6 +426,50 @@ describe('Private payments (e2e)', () => {
         paymentTxHash: PAYMENT_TX,
         feeTxHash: FEE_TX,
       });
+    });
+
+    it('settles a payment with a merchant fee only on its three transfers', async () => {
+      const row = rows.find((r) => r.merchantFee)!;
+      const id = row.id as string;
+      const view = await request(http())
+        .get(`/v1/zk-checkout/${id}`)
+        .expect(200);
+      expect(view.body.merchantFee).toMatchObject({
+        amount: '0.25',
+        wallet: FEE_WALLET,
+      });
+
+      sdkMock.readTransaction.mockClear();
+      const missing = await request(http())
+        .post(`/v1/zk-checkout/${id}/confirm`)
+        .send({ paymentTxHash: PAYMENT_TX, feeTxHash: FEE_TX })
+        .expect(400);
+      expect(missing.body.code).toBe('validation_failed');
+      expect(sdkMock.readTransaction).not.toHaveBeenCalled();
+
+      sdkMock.readTransaction.mockImplementation(
+        (_t: unknown, _s: string, hash: string) =>
+          Promise.resolve(
+            hash === PAYMENT_TX
+              ? success(PAYMENT_TX, MERCHANT, 247_475_000n)
+              : hash === FEE_TX
+                ? success(FEE_TX, FEE_ACCOUNT, 25_000n)
+                : success(MERCHANT_FEE_TX, FEE_WALLET, 2_500_000n),
+          ),
+      );
+      // The mock answers no earlier use of these hashes: their uniqueness is
+      // the database's, pinned in the unit spec.
+      const res = await request(http())
+        .post(`/v1/zk-checkout/${id}/confirm`)
+        .send({
+          paymentTxHash: PAYMENT_TX,
+          feeTxHash: FEE_TX,
+          merchantFeeTxHash: MERCHANT_FEE_TX,
+        })
+        .expect(200);
+      expect(res.body.status).toBe('SUCCEEDED');
+      expect(sdkMock.readTransaction).toHaveBeenCalledTimes(3);
+      expect(row).toMatchObject({ merchantFeeTxHash: MERCHANT_FEE_TX });
     });
 
     it('drops a consumer the client names on the keyless routes', async () => {

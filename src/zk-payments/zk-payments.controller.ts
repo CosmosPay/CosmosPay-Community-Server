@@ -79,7 +79,9 @@ export class ZkPaymentsController {
       'recipient holds a confidential account on the token under auditor 0. ' +
       'The payer then makes two confidential transfers (net to the merchant, ' +
       'fee to the fee account) and confirms them at ' +
-      '`POST /v1/zk-checkout/{id}/confirm`.',
+      '`POST /v1/zk-checkout/{id}/confirm`. With a `merchantFee`, a third ' +
+      'transfer pays it to its wallet, which must hold a confidential account ' +
+      'on the token too.',
   })
   @ApiHeader({
     name: 'Idempotency-Key',
@@ -102,9 +104,10 @@ export class ZkPaymentsController {
       ApiErrorCode.NetworkUnsupported,
     ],
     description:
-      '`invalid_amount`: after the commission the merchant would receive ' +
-      'nothing. `recipient_not_registered`: the recipient has no ' +
-      'confidential account on the token under auditor 0. ' +
+      '`invalid_amount`: after the commission (and the merchant fee) the ' +
+      'merchant would receive nothing, or the merchant fee rounds to nothing. ' +
+      "`recipient_not_registered`: the recipient, or the merchant fee's " +
+      'wallet, has no confidential account on the token under auditor 0. ' +
       '`network_unsupported`: private payments do not run on this network yet ' +
       '(mainnet today; use a dev key).',
     examples: {

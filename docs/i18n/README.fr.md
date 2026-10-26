@@ -1413,7 +1413,8 @@ désigne. Ils s'ajoutent à la commission du plan que Cosmos Pay prélève, qui 
 
 - **`bps` et `fixed` :** les frais valent `amount × bps / 10 000`, arrondi à l'inférieur,
   plus `fixed` (dans l'actif de l'opération, avec au plus ses décimales). `bps` va
-  jusqu'à 1 000 (10 %) ; au moins l'un des deux doit être supérieur à zéro.
+  jusqu'à 1 000 (10 %) ; au moins l'un des deux doit être supérieur à zéro. Des frais qui
+  s'arrondissent à rien sur le montant sont refusés (`400 invalid_amount`).
 - **`paidBy` :** `recipient` (par défaut) retire les frais de `amount` ; `payer` les
   ajoute par-dessus, le payeur envoie donc `amount` plus les frais.
 - **`wallet` :** où les frais sont payés, sur la chaîne qu'ils empruntent.
@@ -1430,11 +1431,12 @@ désigne. Ils s'ajoutent à la commission du plan que Cosmos Pay prélève, qui 
 | Liens de paiement Solana (`POST /v1/payment-intents/pay`, `chain: solana`) | Un transfer request Solana Pay ne nomme qu'un destinataire : un tel lien (avec `amount`) est donc un **transaction request** Solana Pay : `uri` vaut `solana:<PAYMENT_LINK_API_URL>/v1/payment-links/{id}/solana-pay`, et le wallet y envoie en POST le compte du payeur pour obtenir la transaction : le memo, le transfert au marchand portant la référence du lien et celui des frais (comptes de jetons créés s'ils manquent, payés par le payeur). Des frais en SOL vont à un compte qui existe déjà. L'observer la trouve par la référence et ne règle qu'avec les deux parts |
 | Liens de paiement Monad (`POST /v1/payment-intents/pay`, `chain: monad`) | Seulement avec des adresses de dépôt (`MONAD_RELAYER_PRIVATE_KEY` ; sans elles `merchant_fee_unsupported`) et un `amount` : l'adresse est un `contracts/PaymentSplitForwarder.sol` (le wallet et le montant des frais sont deux arguments de plus du constructeur, l'adresse s'y engage donc), dont le constructeur paie au relayer ses frais, puis les frais du marchand, puis le marchand. Le lien demande le dépôt : le montant, plus les frais quand le payeur les paie |
 | Swaps sur Solana (`POST /v1/swaps`, `chain: solana`) | Jupiter ne paie qu'un frais d'intégrateur par swap et la commission du plan l'utilise : le transfert des frais (depuis la source, dans l'actif source : un transfert du System Program pour du SOL, sinon un TransferChecked après création du compte de jetons du wallet) est ajouté à la propre transaction v0 de Jupiter : les comptes que chargent ses tables d'adresses sont réutilisés, tous les index réécrits, sa limite de calcul relevée et la route demandée avec au plus 40 comptes pour tenir dans un paquet. Des frais en SOL vont à un compte qui existe déjà |
+| Paiements privés (`POST /v1/zk-payments`) | Un troisième transfert confidentiel, en XLM, du payeur vers `wallet` : les frais restent aussi privés que le paiement. `wallet` doit détenir un compte confidentiel sur le jeton de Cosmos Pay sous l'auditeur 0 (sinon `400 recipient_not_registered`) et n'être ni le destinataire ni le compte de commissions. La commission de 0,01 % reste une part de `amount`, et l'`amount` de la ligne est ce que le payeur paie au total. Le confirm prend le troisième hash en `merchantFeeTxHash` et vérifie ce transfert comme les deux autres |
 | Swaps sur Monad | Pas encore : Kuru Flow ne paie qu'un frais de parrainage par swap et la commission du plan l'utilise (`400 merchant_fee_unsupported`) |
 
-Les paiements privés, USDT0 et la liquidité prennent le champ à mesure que chacun gagne un
-moyen de partager le paiement on-chain ; d'ici là leurs routes le refusent comme champ
-inconnu (`400 validation_failed`).
+USDT0 et la liquidité prennent le champ à mesure que chacun gagne un moyen de partager
+le paiement on-chain ; d'ici là leurs routes le refusent comme champ inconnu
+(`400 validation_failed`).
 
 ## USDT0 depuis Stellar (LayerZero)
 
@@ -1606,6 +1608,12 @@ Les étapes 3, 6 et 7 répondent `payment_transfer_mismatch` ou `fee_transfer_mi
 selon la jambe concernée. Un refus laisse le paiement en `PENDING` ; un confirm avec
 les hashs qui ont déjà réglé un paiement renvoie de nouveau ce paiement.
 
+**Avec des frais du marchand** (`merchantFee` à la création ; voir **Frais du marchand**)
+le payeur fait un troisième transfert, de `merchantFee.amount` vers
+`merchantFee.wallet`, et le confirm prend son hash en `merchantFeeTxHash` : obligatoire
+pour un tel paiement, refusé pour tout autre. Il passe par chaque étape à côté des deux
+autres, dans le même ordre ; un écart répond `merchant_fee_transfer_mismatch`.
+
 **Confirm n'est pas un oracle de montants.** Il est public et déchiffre ce qu'on lui
 donne : il ne dit donc jamais en quoi un montant s'est déchiffré, et il compare les
 montants en dernier. Un paiement créé après la clôture d'un transfert refuse ce
@@ -1659,7 +1667,9 @@ neuf, ce qui laisse orphelins tous les paiements faits sur l'ancien jeton.
 Friendbot, il enregistre un marchand et un payeur, crée des paiements via le service
 propre au module, effectue le dépôt et la fusion, fait les deux transferts, et confirme
 via le confirm propre au module : un montant erroné est refusé, le bon règle le
-paiement, et les hashs ne peuvent pas être réutilisés.
+paiement, et les hashs ne peuvent pas être réutilisés. Il paie ensuite un paiement avec
+des frais du marchand : le troisième transfert va à un troisième compte enregistré, et le
+confirm ne le règle qu'avec les trois hashs.
 
 **Le testnet est réinitialisé** tous les quelques mois, et ses contrats avec lui :
 relancez le déploiement après une réinitialisation. Le vérificateur qu'il réutilise
@@ -1676,7 +1686,7 @@ vérificateur avec les clés v0.8.0 existe et que le script le désigne.
 | `GET /v1/zk-payments/{id}` | `payments:read` | Un paiement, tel que son propriétaire le voit |
 | `GET /v1/zk-checkout/config` | aucun, `@Public()` | La même configuration pour `?network=testnet` ou `public`, pour une page sans clé |
 | `GET /v1/zk-checkout/{id}` | aucun, `@Public()` | Un paiement tel que son payeur le voit : quoi transférer, à qui, sur quels contrats |
-| `POST /v1/zk-checkout/{id}/confirm` | aucun, `@Public()` | Le régler avec les deux transferts, vérifiés on-chain |
+| `POST /v1/zk-checkout/{id}/confirm` | aucun, `@Public()` | Le régler avec les deux transferts (trois avec des frais du marchand), vérifiés on-chain |
 
 ## Alias — identifiants de paiement revendicables
 
@@ -2198,6 +2208,15 @@ plugins isolés.
   transaction de Jupiter (`src/solana/solana-message.ts` lit et réécrit une transaction v0 ;
   les tables d'adresses sont lues via le RPC Solana). Les swaps Monad répondent toujours
   `merchant_fee_unsupported`.
+- **Les paiements privés acceptent `merchantFee`** : un troisième transfert confidentiel
+  vers le wallet des frais. `POST /v1/zk-checkout/{id}/confirm` prend `merchantFeeTxHash`
+  (obligatoire exactement quand le paiement a des frais du marchand) ; nouveau code
+  d'erreur `merchant_fee_transfer_mismatch` ; les réponses gagnent `merchantFee`, et la vue
+  du propriétaire `merchantFeeTxHash`. La migration
+  `20261026210000_zk_payment_merchant_fee_tx` ajoute à `zk_payment` un `merchantFeeTxHash`
+  nullable et unique.
+- **Des frais du marchand qui s'arrondissent à rien sont refusés** sur toute opération
+  (`400 invalid_amount`) ; sur Stellar ils construisaient auparavant un paiement de zéro.
 
 ### Les listes suivent le réseau de la clé ; les lectures du dashboard sont mises en cache
 

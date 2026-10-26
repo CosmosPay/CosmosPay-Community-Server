@@ -384,13 +384,12 @@ model PaymentIntent {
 
   // Lifetime: an unpaid intent past this instant is auto-finalized to EXPIRED by
   // the observer. Set at creation from the configured TTL.
-  expiresAt DateTime?
+  expiresAt   DateTime?
   // The merchant fee this operation charged, when its request named one: what an
   // organization charges its own customers through this API, paid on-chain to a
   // wallet it names (`src/common/merchant-fee/`): { bps, fixed, amount, asset,
   // wallet, paidBy }. Separate from the plan commission columns.
   merchantFee Json?
-
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -700,7 +699,7 @@ model Payin {
   receiverId String?
   receiver   BlindpayReceiver? @relation(fields: [receiverId], references: [id], onDelete: SetNull)
 
-  environment    String  @default("prod") // BlindPay instance, see BlindpayReceiver
+  environment    String    @default("prod") // BlindPay instance, see BlindpayReceiver
   /// `pi_...`. Null only while the row is `pending_provider`: it is written
   /// BEFORE the provider call, so a payin BlindPay created is never one we
   /// have no row for. Tenant reads leave such rows out.
@@ -747,7 +746,7 @@ model Payout {
   receiverId String?
   receiver   BlindpayReceiver? @relation(fields: [receiverId], references: [id], onDelete: SetNull)
 
-  environment         String  @default("prod") // BlindPay instance, see BlindpayReceiver
+  environment         String    @default("prod") // BlindPay instance, see BlindpayReceiver
   /// `pa_...`. Null only while `pending_provider` — see Payin.blindpayId.
   blindpayId          String?
   quoteId             String?
@@ -935,8 +934,7 @@ model Swap {
   // organization charges its own customers through this API, paid on-chain to a
   // wallet it names (`src/common/merchant-fee/`): { bps, fixed, amount, asset,
   // wallet, paidBy }. Separate from the plan commission columns.
-  merchantFee Json?
-
+  merchantFee    Json?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1014,8 +1012,7 @@ model ChainSwap {
   // organization charges its own customers through this API, paid on-chain to a
   // wallet it names (`src/common/merchant-fee/`): { bps, fixed, amount, asset,
   // wallet, paidBy }. Separate from the plan commission columns.
-  merchantFee Json?
-
+  merchantFee    Json?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1121,8 +1118,7 @@ model CrossChainSwap {
   // organization charges its own customers through this API, paid on-chain to a
   // wallet it names (`src/common/merchant-fee/`): { bps, fixed, amount, asset,
   // wallet, paidBy }. Separate from the plan commission columns.
-  merchantFee Json?
-
+  merchantFee    Json?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1226,8 +1222,7 @@ model LiquidityPoolOperation {
   // organization charges its own customers through this API, paid on-chain to a
   // wallet it names (`src/common/merchant-fee/`): { bps, fixed, amount, asset,
   // wallet, paidBy }. Separate from the plan commission columns.
-  merchantFee Json?
-
+  merchantFee    Json?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -2014,23 +2009,25 @@ model ZkPayment {
 
   // The two transactions that settled it, lowercase hex. Unique across the
   // table: one transaction settles one private payment, of any consumer.
-  paymentTxHash String? @unique
-  feeTxHash     String? @unique
+  paymentTxHash     String? @unique
+  feeTxHash         String? @unique
+  // The third transfer, to the merchant fee's wallet, when the payment has a
+  // merchant fee. Unique for the same reason as the two above.
+  merchantFeeTxHash String? @unique
 
-  description String?
+  description    String?
   // Per consumer: a retry with the same key returns the same payment. Minted
   // (`zkp_…`) when the request names none.
   idempotencyKey String
 
-  status    ZkPaymentStatus @default(PENDING)
-  expiresAt DateTime
-  settledAt DateTime?
+  status      ZkPaymentStatus @default(PENDING)
+  expiresAt   DateTime
+  settledAt   DateTime?
   // The merchant fee this operation charged, when its request named one: what an
   // organization charges its own customers through this API, paid on-chain to a
   // wallet it names (`src/common/merchant-fee/`): { bps, fixed, amount, asset,
   // wallet, paidBy }. Separate from the plan commission columns.
   merchantFee Json?
-
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -2120,8 +2117,7 @@ model Usdt0Transfer {
   // organization charges its own customers through this API, paid on-chain to a
   // wallet it names (`src/common/merchant-fee/`): { bps, fixed, amount, asset,
   // wallet, paidBy }. Separate from the plan commission columns.
-  merchantFee Json?
-
+  merchantFee    Json?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

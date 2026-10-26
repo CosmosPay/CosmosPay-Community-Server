@@ -656,7 +656,7 @@ export class PaymentIntentsService {
       );
     }
     const split = splitMerchantFee(toStroops(amount), terms);
-    assertMerchantFeeCovered(split);
+    assertMerchantFeeCovered(split, terms);
     const record = merchantFeeRecord(
       terms,
       split.fee,

@@ -142,7 +142,7 @@ export class ZkCheckoutController {
   @Header('Cache-Control', 'no-store')
   @ApiOperation({
     summary:
-      'Confirm a private payment with its two confidential transfers, verified on-chain (no API key)',
+      'Confirm a private payment with its confidential transfers, verified on-chain (no API key)',
     description:
       'Reads both transactions back through the Soroban RPC and settles the ' +
       'payment only when: both succeeded and each is a single ' +
@@ -155,7 +155,11 @@ export class ZkCheckoutController {
       'may have settled another private payment.\n\n' +
       'Idempotent: the same hashes on a settled payment answer it again. A ' +
       'refusal leaves the payment PENDING, and never says what an amount ' +
-      'decrypted to.',
+      'decrypted to.\n\n' +
+      'A payment with a `merchantFee` has a third transfer, of ' +
+      '`merchantFee.amount` to `merchantFee.wallet`: send its hash as ' +
+      '`merchantFeeTxHash` (required for such a payment, refused for any ' +
+      'other). It is checked like the other two, in the same order.',
   })
   @ApiParam(ID_PARAM)
   @ApiOkResponse({ type: PublicZkPaymentEntity, headers: NO_STORE_HEADER })
@@ -169,6 +173,7 @@ export class ZkCheckoutController {
       ApiErrorCode.TransactionRejected,
       ApiErrorCode.PaymentTransferMismatch,
       ApiErrorCode.FeeTransferMismatch,
+      ApiErrorCode.MerchantFeeTransferMismatch,
       ApiErrorCode.PayerMismatch,
       ApiErrorCode.Expired,
       ApiErrorCode.InvalidStateTransition,
@@ -177,12 +182,15 @@ export class ZkCheckoutController {
     description:
       '`transaction_not_found`: the RPC has no such transaction yet (retry ' +
       'in a few seconds) or no longer. `transaction_rejected`: it failed ' +
-      'on-chain. `payment_transfer_mismatch` / `fee_transfer_mismatch`: that ' +
-      'transaction is not the confidential transfer this payment needs (wrong ' +
-      'token, shape, recipient, amount, or it closed before the payment ' +
-      'existed). `payer_mismatch`: the two transfers come from different ' +
-      'accounts. `expired`: a transfer closed after `expiresAt`. ' +
-      '`invalid_state_transition`: already settled by other transactions.',
+      'on-chain. `payment_transfer_mismatch` / `fee_transfer_mismatch` / ' +
+      '`merchant_fee_transfer_mismatch`: that transaction is not the ' +
+      'confidential transfer this payment needs (wrong token, shape, ' +
+      'recipient, amount, or it closed before the payment existed). ' +
+      '`payer_mismatch`: the transfers come from different accounts. ' +
+      '`expired`: a transfer closed after `expiresAt`. ' +
+      '`invalid_state_transition`: already settled by other transactions. ' +
+      '`validation_failed` also answers a `merchantFeeTxHash` missing on a ' +
+      'payment with a merchant fee, or sent for one without.',
     examples: {
       ...NETWORK_UNSUPPORTED_EXAMPLE,
       [ApiErrorCode.TransactionRejected]: {
