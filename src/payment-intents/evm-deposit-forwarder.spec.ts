@@ -221,3 +221,61 @@ describe('EvmDepositForwarderService — confirming', () => {
     expect(prisma.evmDepositAddress.update).not.toHaveBeenCalled();
   });
 });
+
+describe('EvmDepositForwarderService — a deposit with a merchant fee', () => {
+  const FEE_WALLET = '0x8ba1f109551bD432803012645Ac136ddd64DBA72';
+  const MERCHANT_FEE = 5n * 10n ** 16n;
+  const SPLIT_INIT = forwarderInitCode({
+    destination: DEST,
+    token: null,
+    relayer: RELAYER,
+    fee: FEE,
+    merchantFee: { wallet: FEE_WALLET, amount: MERCHANT_FEE },
+  });
+  const SPLIT_ADDRESS = depositAddress(SALT, SPLIT_INIT);
+  const splitRow = (paidBy: string, over: Record<string, unknown> = {}) =>
+    row({
+      address: SPLIT_ADDRESS,
+      feeWallet: FEE_WALLET,
+      merchantFee: MERCHANT_FEE.toString(),
+      intent: intent({
+        merchantFee: {
+          bps: 500,
+          fixed: '0',
+          amount: '0.05',
+          asset: 'native',
+          wallet: FEE_WALLET,
+          paidBy,
+        },
+      }),
+      ...over,
+    });
+
+  it('deploys the split contract it was minted from', async () => {
+    const { service, relayer } = make({ balance: ONE });
+    await service.forwardIfFunded(splitRow('recipient'));
+    const [, , call] = relayer.send.mock.calls[0];
+    expect(call.to).toBe(DETERMINISTIC_DEPLOYER);
+    expect(call.data.endsWith(SPLIT_INIT.slice(2))).toBe(true);
+  });
+
+  it('waits for the fee on top when the payer pays it', async () => {
+    const short = make({ balance: ONE });
+    await short.service.forwardIfFunded(splitRow('payer'));
+    expect(short.relayer.send).not.toHaveBeenCalled();
+
+    const covered = make({ balance: ONE + MERCHANT_FEE });
+    await covered.service.forwardIfFunded(splitRow('payer'));
+    expect(covered.relayer.send).toHaveBeenCalledTimes(1);
+  });
+
+  it('never deploys for a balance both fees would swallow, even once lapsed', async () => {
+    const { service, relayer } = make({ balance: FEE + MERCHANT_FEE });
+    await service.forwardIfFunded(
+      splitRow('recipient', {
+        intent: intent({ expiresAt: new Date(Date.now() - 1000) }),
+      }),
+    );
+    expect(relayer.send).not.toHaveBeenCalled();
+  });
+});

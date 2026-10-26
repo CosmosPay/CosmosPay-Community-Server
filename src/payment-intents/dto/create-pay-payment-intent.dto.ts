@@ -143,7 +143,9 @@ export class CreatePayPaymentIntentDto {
       '`POST /v1/payment-links/{id}/transaction` build the envelope with ' +
       'both payments. Solana: `uri` is a Solana Pay transaction request ' +
       '(`/v1/payment-links/{id}/solana-pay`); a SOL fee goes to an existing ' +
-      'account. Monad answers `merchant_fee_unsupported`.',
+      'account. Monad: needs deposit addresses (`merchant_fee_unsupported` ' +
+      'without them); the deposit address pays the fee (PaymentSplitForwarder) ' +
+      'and the link asks for the amount, plus the fee when the payer pays it.',
   })
   @IsOptional()
   @ValidateNested()

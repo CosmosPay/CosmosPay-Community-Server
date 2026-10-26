@@ -28,6 +28,7 @@ import {
   flushTokenCalldata,
   forwarderInitCode,
 } from '@/evm/payment-forwarder';
+import { readMerchantFeeRecord } from '@/common/merchant-fee/merchant-fee';
 import { PaymentIntentsService } from '@/payment-intents/payment-intents.service';
 import { PrismaService } from '@/prisma/prisma.service';
 
@@ -148,10 +149,12 @@ export class EvmDepositForwarderService extends ScheduledJob {
     if (balance === 0n) return;
 
     const fee = BigInt(row.fee);
+    const merchantFee = row.merchantFee ? BigInt(row.merchantFee) : 0n;
     const deployed = await this.rpc.hasCode(this.chain, network, row.address);
-    // Before deployment the fee comes out of the balance, so a balance that
-    // does not exceed it would forward nothing to the merchant. Wait for more.
-    if (!deployed && balance <= fee) return;
+    // Before deployment the fees come out of the balance (the relayer's, and a
+    // merchant fee), so a balance that does not exceed them would forward
+    // nothing to the merchant. Wait for more.
+    if (!deployed && balance <= fee + merchantFee) return;
 
     if (row.status === 'AWAITING' && !this.shouldForward(row, balance)) return;
 
@@ -162,11 +165,17 @@ export class EvmDepositForwarderService extends ScheduledJob {
         data: row.token ? flushTokenCalldata(row.token) : FLUSH_CALLDATA,
       };
     } else {
+      // The contract the address was minted from: a PaymentSplitForwarder when
+      // the row carries a merchant fee, else a PaymentForwarder.
       const initCode = forwarderInitCode({
         destination: row.destination,
         token: row.token,
         relayer: row.relayer,
         fee,
+        merchantFee:
+          row.feeWallet && row.merchantFee
+            ? { wallet: row.feeWallet, amount: merchantFee }
+            : null,
       });
       // Deploying anything else would create a contract at SOME address and
       // leave the money where it is. The only way the two disagree is a
@@ -287,11 +296,19 @@ export class EvmDepositForwarderService extends ScheduledJob {
   }
 }
 
-/** The intent's amount in base units, or null for an open amount. */
+/**
+ * What the intent's payer deposits, in base units, or null for an open amount:
+ * the amount, plus a merchant fee the payer pays on top (the forwarder pays the
+ * fee out of the deposit).
+ */
 function expectedAmount(intent: PaymentIntent): bigint | null {
   if (intent.amount === null) return null;
   const decimals = intent.assetIssuer
     ? (intent.assetDecimals ?? NATIVE_DECIMALS.monad)
     : NATIVE_DECIMALS.monad;
-  return parseUnits(intent.amount, decimals);
+  const amount = parseUnits(intent.amount, decimals);
+  const fee = readMerchantFeeRecord(intent.merchantFee);
+  return fee?.paidBy === 'payer'
+    ? amount + parseUnits(fee.amount, decimals)
+    : amount;
 }

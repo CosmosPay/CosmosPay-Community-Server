@@ -83,18 +83,42 @@ describe('PaymentIntentsService merchant fee', () => {
         asset: 'native',
         assetIssuer: null,
       }),
-      build: jest.fn(async (_chain: string, req: { destination: string }) => ({
-        destination: req.destination,
-        asset: 'native',
-        assetIssuer: null,
-        assetDecimals: null,
-        uri: `solana:${req.destination}?reference=REF`,
-        chainReference: 'REF',
-        chainCursor: null,
-        networkFee: null,
-        deposit: null,
-      })),
-      assertFeeWalletCanReceive: jest.fn(),
+      // The builder resolves the fee (chain-pay-link-builder.service.spec):
+      // here it answers the record it would have made.
+      build: jest.fn(
+        async (
+          _chain: string,
+          req: { destination: string; merchantFee?: { wallet: string } },
+        ) => ({
+          destination: req.destination,
+          asset: 'native',
+          assetIssuer: null,
+          assetDecimals: null,
+          uri: `solana:${req.destination}?reference=REF`,
+          chainReference: 'REF',
+          chainCursor: null,
+          networkFee: null,
+          deposit: null,
+          merchantFee: req.merchantFee
+            ? {
+                terms: {
+                  bps: 250,
+                  fixed: 0n,
+                  wallet: req.merchantFee.wallet,
+                  paidBy: 'recipient',
+                },
+                record: {
+                  bps: 250,
+                  fixed: '0',
+                  amount: '0.05',
+                  asset: 'native',
+                  wallet: req.merchantFee.wallet,
+                  paidBy: 'recipient',
+                },
+              }
+            : null,
+        }),
+      ),
     };
     const service = new PaymentIntentsService(
       config,
@@ -196,7 +220,7 @@ describe('PaymentIntentsService merchant fee', () => {
     expect(view.merchantFee).toEqual(record('recipient'));
   });
 
-  it('refuses a fee on an open-amount link, a fee wallet that is the destination and other chains', async () => {
+  it('refuses a fee on an open-amount link and a fee wallet that is the destination', async () => {
     const { service } = build(null, null);
 
     expect(
@@ -222,19 +246,6 @@ describe('PaymentIntentsService merchant fee', () => {
         )
       )?.code,
     ).toBe(ApiErrorCode.ValidationFailed);
-    expect(
-      (
-        await errorOf(
-          service.createPay(consumer, {
-            chain: 'monad',
-            destination: '0x8ba1f109551bD432803012645Ac136ddd64DBA72',
-            amount: '20',
-            memo: '12',
-            merchantFee,
-          }),
-        )
-      )?.code,
-    ).toBe(ApiErrorCode.MerchantFeeUnsupported);
   });
 
   it('answers a retry with the same fee, and refuses one with another', async () => {
@@ -315,11 +326,10 @@ describe('PaymentIntentsService merchant fee', () => {
       wallet: SOL_FEE,
       paidBy: 'recipient',
     });
-    expect(chainLinks.assertFeeWalletCanReceive).toHaveBeenCalledWith(
-      'solana',
-      'testnet',
-      SOL_FEE,
-      null,
-    );
+    // The request's fee went to the builder, which resolves it against the asset.
+    expect(chainLinks.build.mock.calls[0][1].merchantFee).toEqual({
+      bps: 250,
+      wallet: SOL_FEE,
+    });
   });
 });

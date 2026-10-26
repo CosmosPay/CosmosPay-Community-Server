@@ -1,3 +1,4 @@
+import { readMerchantFeeRecord } from '@/common/merchant-fee/merchant-fee';
 import { Injectable } from '@nestjs/common';
 import type { PaymentIntent } from '@generated/prisma/client';
 import { toChecksumAddress } from '@/chains/chain-address';
@@ -183,7 +184,11 @@ export class EvmVerifierService implements PaymentVerifier {
     };
   }
 
-  /** The intent's amount in the asset's base units, or null when it has none. */
+  /**
+   * What the payer sends, in the asset's base units, or null when the intent
+   * fixed none: its amount, plus a merchant fee the payer pays on top (only a
+   * deposit-address intent has one; its forwarder pays the fee out).
+   */
   private expected(intent: PaymentIntent): bigint | null {
     if (intent.amount == null) return null;
     const decimals = intent.assetIssuer
@@ -191,7 +196,11 @@ export class EvmVerifierService implements PaymentVerifier {
       : NATIVE_DECIMALS.monad;
     if (decimals == null) return null;
     try {
-      return parseUnits(intent.amount, decimals);
+      const amount = parseUnits(intent.amount, decimals);
+      const fee = readMerchantFeeRecord(intent.merchantFee);
+      return fee?.paidBy === 'payer'
+        ? amount + parseUnits(fee.amount, decimals)
+        : amount;
     } catch {
       return null;
     }

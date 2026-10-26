@@ -70,7 +70,6 @@ import {
   NATIVE_DECIMALS,
   type OtherChain,
 } from '@/chains/chains.constants';
-import { parseUnits } from '@/chains/units';
 
 /** Who triggered a status change — stored on the audit row. */
 export type PaymentIntentTransitionActor =
@@ -509,12 +508,6 @@ export class PaymentIntentsService {
         `callback is a SEP-7 field and is not supported on ${chain}.`,
       );
     }
-    if (dto.merchantFee && chain !== 'solana') {
-      throw ApiError.badRequest(
-        ApiErrorCode.MerchantFeeUnsupported,
-        `A merchant fee is not available on ${chain} payment links yet: their link pays one account.`,
-      );
-    }
     if (dto.merchantFee && dto.amount === undefined) {
       throw ApiError.badRequest(
         ApiErrorCode.ValidationFailed,
@@ -522,6 +515,7 @@ export class PaymentIntentsService {
       );
     }
     if (
+      chain === 'solana' &&
       dto.merchantFee &&
       !this.config.get('paymentIntents', { infer: true }).apiUrl
     ) {
@@ -570,29 +564,22 @@ export class PaymentIntentsService {
       assetIssuer: dto.assetIssuer,
       memo,
       msg: dto.msg,
+      merchantFee: dto.merchantFee,
     });
 
     // A Solana link with a merchant fee is a Solana Pay transaction request:
     // the wallet asks the gateway for the transaction with both transfers
     // (`/v1/payment-links/{id}/solana-pay`), so its link names the intent id.
-    const merchant = dto.merchantFee
-      ? this.chainMerchantFee(chain, dto, link, normalized.destination)
-      : null;
-    if (merchant) {
-      await this.chainLinks.assertFeeWalletCanReceive(
-        chain,
-        network,
-        merchant.terms.wallet,
-        link.assetIssuer,
-      );
-    }
+    // On Monad the deposit address pays the fee (PaymentSplitForwarder).
+    const merchant = link.merchantFee ?? null;
+    const transactionRequest = chain === 'solana' && merchant !== null;
     let intent = await this.persist({
       ...terms,
       consumerId: localConsumer.id,
       memo,
       status: 'PENDING',
       xdr: null,
-      uri: merchant ? '' : link.uri,
+      uri: transactionRequest ? '' : link.uri,
       checkoutTheme: dto.checkoutTheme ?? null,
       ...merchantFeeColumn(merchant?.record),
       assetDecimals: link.assetDecimals,
@@ -614,6 +601,9 @@ export class PaymentIntentsService {
                 token: link.deposit.token,
                 relayer: link.deposit.relayer,
                 fee: link.deposit.fee.toString(),
+                feeWallet: link.deposit.merchantFee?.wallet ?? null,
+                merchantFee:
+                  link.deposit.merchantFee?.amount.toString() ?? null,
               },
             },
           }
@@ -626,7 +616,7 @@ export class PaymentIntentsService {
         merchant?.terms,
       );
     }
-    if (merchant) {
+    if (transactionRequest) {
       intent = await this.prisma.paymentIntent.update({
         where: { id: intent.id },
         data: { uri: this.solanaPayLink(intent.id) },
@@ -678,37 +668,6 @@ export class PaymentIntentsService {
       record,
       // `net` is `amount` itself when the payer pays the fee on top.
       destinationAmount: fromStroops(split.net),
-    };
-  }
-
-  /**
-   * A Solana or Monad intent's merchant fee, checked against the asset the link
-   * resolved: its decimals, the chain's address rule, a wallet other than the
-   * destination, and something left for the destination.
-   */
-  private chainMerchantFee(
-    chain: OtherChain,
-    dto: CreatePayPaymentIntentDto,
-    link: { asset: string; assetDecimals: number | null },
-    destination: string,
-  ): { terms: MerchantFeeTerms; record: MerchantFeeRecord } {
-    const decimals = link.assetDecimals ?? NATIVE_DECIMALS[chain];
-    const terms = resolveMerchantFee(
-      dto.merchantFee,
-      decimals,
-      CHAIN_ADDRESS_RULES[chain],
-    )!;
-    if (terms.wallet === destination) {
-      throw ApiError.badRequest(
-        ApiErrorCode.ValidationFailed,
-        "merchantFee.wallet must be another account than the payment's own",
-      );
-    }
-    const split = splitMerchantFee(parseUnits(dto.amount!, decimals), terms);
-    assertMerchantFeeCovered(split);
-    return {
-      terms,
-      record: merchantFeeRecord(terms, split.fee, decimals, link.asset),
     };
   }
 

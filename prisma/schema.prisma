@@ -456,6 +456,11 @@ model EvmDepositAddress {
   token       String? // ERC-20 contract; null for native MON
   relayer     String
   fee         String // base units (wei or token units)
+  // The organization's merchant fee, when the intent has one: the address is then a
+  // PaymentSplitForwarder's, built with these two more constructor arguments, and is
+  // only ever rebuilt from that contract. Null: a PaymentForwarder, as before.
+  feeWallet   String?
+  merchantFee String? // base units
 
   status EvmDepositStatus @default(AWAITING)
 

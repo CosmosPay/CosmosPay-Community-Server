@@ -1428,12 +1428,12 @@ désigne. Ils s'ajoutent à la commission du plan que Cosmos Pay prélève, qui 
 | Liens de paiement Stellar (`POST /v1/payment-intents/tx` et `/pay`) | Un second `payment` dans la même enveloppe, vers `wallet`, après celui du marchand. L'enveloppe d'un intent `tx` porte les deux. Un lien `pay` ne le peut pas (SEP-7 `pay` paie un seul compte) et exige un `amount` : son `uri` est le checkout hébergé (`PAYMENT_LINK_CHECKOUT_URL/<id>`), le lien public indique `payerAccountRequired: true` et `POST /v1/payment-links/{id}/transaction` construit l'enveloppe du payeur à partir de son compte. L'intent n'est réglé que par une transaction qui paie les deux parts avec son memo |
 | Swaps entre chaînes (`POST /v1/cross-chain-swaps`) | Une deuxième app fee de NEAR Intents. `wallet` est un identifiant de compte NEAR, crédité dans NEAR Intents. Les app fees sont des points de base entiers du dépôt : les frais deviennent les points de base qu'ils représentent, arrondis à l'inférieur ; des frais inférieurs à un point de base sont refusés. Avec `payer`, la commission du plan porte aussi sur le dépôt plus grand |
 | Liens de paiement Solana (`POST /v1/payment-intents/pay`, `chain: solana`) | Un transfer request Solana Pay ne nomme qu'un destinataire : un tel lien (avec `amount`) est donc un **transaction request** Solana Pay : `uri` vaut `solana:<PAYMENT_LINK_API_URL>/v1/payment-links/{id}/solana-pay`, et le wallet y envoie en POST le compte du payeur pour obtenir la transaction : le memo, le transfert au marchand portant la référence du lien et celui des frais (comptes de jetons créés s'ils manquent, payés par le payeur). Des frais en SOL vont à un compte qui existe déjà. L'observer la trouve par la référence et ne règle qu'avec les deux parts |
+| Liens de paiement Monad (`POST /v1/payment-intents/pay`, `chain: monad`) | Seulement avec des adresses de dépôt (`MONAD_RELAYER_PRIVATE_KEY` ; sans elles `merchant_fee_unsupported`) et un `amount` : l'adresse est un `contracts/PaymentSplitForwarder.sol` (le wallet et le montant des frais sont deux arguments de plus du constructeur, l'adresse s'y engage donc), dont le constructeur paie au relayer ses frais, puis les frais du marchand, puis le marchand. Le lien demande le dépôt : le montant, plus les frais quand le payeur les paie |
 | Swaps sur Solana et Monad | Pas encore : Jupiter et Kuru Flow paient un seul frais d'intégrateur par swap et la commission du plan l'utilise (`400 merchant_fee_unsupported`) |
 
-Les liens de paiement sur Monad répondent `merchant_fee_unsupported`. Les paiements
-privés, USDT0 et la liquidité prennent le champ à mesure que chacun gagne un moyen de
-partager le paiement on-chain ; d'ici là leurs routes le refusent comme champ inconnu
-(`400 validation_failed`).
+Les paiements privés, USDT0 et la liquidité prennent le champ à mesure que chacun gagne un
+moyen de partager le paiement on-chain ; d'ici là leurs routes le refusent comme champ
+inconnu (`400 validation_failed`).
 
 ## USDT0 depuis Stellar (LayerZero)
 
@@ -2187,6 +2187,12 @@ plugins isolés.
   /v1/payment-links/{id}/solana-pay` (`@Public()`, budget par adresse), servies par la route
   sans clé payment-links du gateway. **Nouvelle variable `PAYMENT_LINK_API_URL`** (par
   défaut `WALLET_AUTH_PUBLIC_BASE_URL`).
+- **Les liens de paiement Monad acceptent `merchantFee`** avec des adresses de dépôt : un
+  nouveau contrat, `contracts/PaymentSplitForwarder.sol` (artefact
+  `src/evm/payment-split-forwarder.artifact.ts`, compilé par `npm run contracts:compile` à
+  côté du PaymentForwarder, inchangé). La migration
+  `20261026190000_evm_deposit_merchant_fee` ajoute `feeWallet` et `merchantFee` à
+  `evm_deposit_address` (null sur toute adresse existante, qui reste un PaymentForwarder).
 
 ### Les listes suivent le réseau de la clé ; les lectures du dashboard sont mises en cache
 

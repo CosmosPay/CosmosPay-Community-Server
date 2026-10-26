@@ -1442,12 +1442,12 @@ cambia.
 | Enlaces de pago en Stellar (`POST /v1/payment-intents/tx` y `/pay`) | Un segundo `payment` en el mismo envelope, a `wallet`, después del del comercio. El envelope de un intent `tx` lleva los dos. Un enlace `pay` no puede (SEP-7 `pay` paga a una sola cuenta) y necesita un `amount`: su `uri` es el checkout alojado (`PAYMENT_LINK_CHECKOUT_URL/<id>`), el enlace público dice `payerAccountRequired: true` y `POST /v1/payment-links/{id}/transaction` arma el envelope del pagador a partir de su cuenta. El intent solo se liquida con una transacción que paga los dos tramos con su memo |
 | Swaps entre cadenas (`POST /v1/cross-chain-swaps`) | Una segunda app fee de NEAR Intents. `wallet` es un id de cuenta de NEAR, acreditada dentro de NEAR Intents. Las app fees son puntos básicos enteros del depósito, así que la comisión se convierte en los puntos básicos que representa, redondeados hacia abajo; una comisión menor a un punto básico se rechaza. Con `payer`, la comisión del plan también es una parte del depósito mayor |
 | Enlaces de pago en Solana (`POST /v1/payment-intents/pay`, `chain: solana`) | Un transfer request de Solana Pay nombra un solo destinatario, así que ese enlace (con `amount`) es un **transaction request** de Solana Pay: `uri` es `solana:<PAYMENT_LINK_API_URL>/v1/payment-links/{id}/solana-pay`, y la wallet le envía por POST la cuenta del pagador para obtener la transacción: el memo, la transferencia al comercio con la referencia del enlace y la de la comisión (las cuentas de token se crean si faltan, a cargo del pagador). Una comisión en SOL va a una cuenta que ya existe. El observer la encuentra por la referencia y solo liquida con los dos tramos |
+| Enlaces de pago en Monad (`POST /v1/payment-intents/pay`, `chain: monad`) | Solo con direcciones de depósito (`MONAD_RELAYER_PRIVATE_KEY`; sin ellas `merchant_fee_unsupported`) y con `amount`: la dirección es un `contracts/PaymentSplitForwarder.sol` (la wallet y el monto de la comisión son dos argumentos más del constructor, así que la dirección se compromete con ellos), cuyo constructor paga al relayer su fee, después la comisión del comercio y después al comercio. El enlace pide el depósito: el monto, más la comisión cuando la paga el pagador |
 | Swaps en Solana y Monad | Todavía no: Jupiter y Kuru Flow pagan una sola comisión de integrador por swap y la usa la comisión del plan (`400 merchant_fee_unsupported`) |
 
-Los enlaces de pago en Monad responden `merchant_fee_unsupported`. Los pagos privados,
-USDT0 y la liquidez suman el campo a medida que cada uno tenga una forma de dividir el pago
-on-chain; hasta entonces sus rutas lo rechazan como campo desconocido
-(`400 validation_failed`).
+Los pagos privados, USDT0 y la liquidez suman el campo a medida que cada uno tenga una
+forma de dividir el pago on-chain; hasta entonces sus rutas lo rechazan como campo
+desconocido (`400 validation_failed`).
 
 ## USDT0 desde Stellar (LayerZero)
 
@@ -2196,6 +2196,13 @@ misma lista `PLUGINS_ENABLED` que los plugins aislados.
   /v1/payment-links/{id}/solana-pay` (`@Public()`, presupuesto por dirección), que sirve la
   ruta sin clave de payment-links del gateway. **Nueva variable `PAYMENT_LINK_API_URL`**
   (por defecto `WALLET_AUTH_PUBLIC_BASE_URL`).
+- **Los enlaces de pago en Monad aceptan `merchantFee`** con direcciones de depósito: un
+  contrato nuevo, `contracts/PaymentSplitForwarder.sol` (artefacto
+  `src/evm/payment-split-forwarder.artifact.ts`, compilado por `npm run contracts:compile`
+  junto al PaymentForwarder, que no cambia). La migración
+  `20261026190000_evm_deposit_merchant_fee` suma `feeWallet` y `merchantFee` a
+  `evm_deposit_address` (null en toda dirección existente, que sigue siendo un
+  PaymentForwarder).
 
 ### Los listados siguen la red de la clave; las lecturas del dashboard se cachean
 

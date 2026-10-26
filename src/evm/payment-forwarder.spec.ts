@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { PAYMENT_FORWARDER_ARTIFACT } from '@/evm/payment-forwarder.artifact';
+import { PAYMENT_SPLIT_FORWARDER_ARTIFACT } from '@/evm/payment-split-forwarder.artifact';
 import {
   create2Address,
   deployCalldata,
@@ -88,14 +89,56 @@ describe('deposit addresses', () => {
   });
 });
 
-describe('PaymentForwarder artifact', () => {
+describe('deposit addresses with a merchant fee (PaymentSplitForwarder)', () => {
+  const FEE = {
+    wallet: '0x8ba1f109551bD432803012645Ac136ddd64DBA72',
+    amount: 25n * 10n ** 15n,
+  };
+
+  it('are built from the split contract, with the fee wallet and amount appended', () => {
+    const init = forwarderInitCode({ ...TERMS, merchantFee: FEE });
+    expect(init.startsWith(PAYMENT_SPLIT_FORWARDER_ARTIFACT.bytecode)).toBe(
+      true,
+    );
+    expect(init.length - PAYMENT_SPLIT_FORWARDER_ARTIFACT.bytecode.length).toBe(
+      6 * 64,
+    );
+    expect(init.endsWith(FEE.amount.toString(16).padStart(64, '0'))).toBe(true);
+  });
+
+  it('commit to the fee too, and never to the address of the same terms without it', () => {
+    const base = depositAddress(SALT, forwarderInitCode(TERMS));
+    const split = depositAddress(
+      SALT,
+      forwarderInitCode({ ...TERMS, merchantFee: FEE }),
+    );
+    expect(split).not.toBe(base);
+    for (const fee of [
+      { ...FEE, wallet: TERMS.relayer },
+      { ...FEE, amount: FEE.amount + 1n },
+    ]) {
+      expect(
+        depositAddress(SALT, forwarderInitCode({ ...TERMS, merchantFee: fee })),
+      ).not.toBe(split);
+    }
+    // No fee (or null) is the original contract, byte for byte.
+    expect(forwarderInitCode({ ...TERMS, merchantFee: null })).toBe(
+      forwarderInitCode(TERMS),
+    );
+  });
+});
+
+describe.each([
+  ['PaymentForwarder', PAYMENT_FORWARDER_ARTIFACT],
+  ['PaymentSplitForwarder', PAYMENT_SPLIT_FORWARDER_ARTIFACT],
+] as const)('%s artifact', (name, artifact) => {
   it('is the committed source, compiled with the recorded settings', () => {
     const source = readFileSync(
-      join(__dirname, '..', '..', 'contracts', 'PaymentForwarder.sol'),
+      join(__dirname, '..', '..', 'contracts', `${name}.sol`),
       'utf8',
     );
     expect(createHash('sha256').update(source).digest('hex')).toBe(
-      PAYMENT_FORWARDER_ARTIFACT.sourceSha256,
+      artifact.sourceSha256,
     );
     // solc-js ships no types; its surface here is two functions.
     // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -103,18 +146,18 @@ describe('PaymentForwarder artifact', () => {
       version(): string;
       compile(input: string): string;
     };
-    expect(solc.version()).toBe(PAYMENT_FORWARDER_ARTIFACT.compiler);
+    expect(solc.version()).toBe(artifact.compiler);
     const out = JSON.parse(
       solc.compile(
         JSON.stringify({
           language: 'Solidity',
-          sources: { 'PaymentForwarder.sol': { content: source } },
-          settings: PAYMENT_FORWARDER_ARTIFACT.settings,
+          sources: { [`${name}.sol`]: { content: source } },
+          settings: artifact.settings,
         }),
       ),
     );
-    expect(
-      `0x${out.contracts['PaymentForwarder.sol'].PaymentForwarder.evm.bytecode.object}`,
-    ).toBe(PAYMENT_FORWARDER_ARTIFACT.bytecode);
+    expect(`0x${out.contracts[`${name}.sol`][name].evm.bytecode.object}`).toBe(
+      artifact.bytecode,
+    );
   }, 120_000);
 });

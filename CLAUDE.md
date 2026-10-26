@@ -332,8 +332,13 @@ table. These are the rules that did not hold on their own:
   1Click blockchain with no entry (`qtc`, `adi`) is never offered: an address this
   service cannot validate is a refund it cannot promise.
 - **Monad deposit addresses are `CREATE2` addresses of
-  `contracts/PaymentForwarder.sol`**, so every one of them depends on the exact
-  bytecode in `src/evm/payment-forwarder.artifact.ts`. Regenerate it only with
+  `contracts/PaymentForwarder.sol`**, or, for an intent with a merchant fee, of
+  `contracts/PaymentSplitForwarder.sol` (two more constructor arguments: the
+  fee's wallet and amount; the row's `feeWallet` / `merchantFee` say which), so
+  every one of them depends on the exact bytecode in its artifact
+  (`src/evm/payment-forwarder.artifact.ts`, `payment-split-forwarder.artifact.ts`).
+  A changed contract is a NEW contract with an artifact of its own, never a
+  recompile of one whose addresses may hold money. Regenerate it only with
   `npm run contracts:compile` (the spec fails if source and artifact disagree),
   and never while a deposit address built from the old bytecode may still hold
   or receive money: the forwarder rebuilds each address from the CURRENT

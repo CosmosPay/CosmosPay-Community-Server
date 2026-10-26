@@ -1385,11 +1385,12 @@ client address (`429 rate_limited`)।
 | Stellar payment links (`POST /v1/payment-intents/tx` और `/pay`) | उसी envelope में `wallet` को दूसरा `payment`, मर्चेंट वाले के बाद। `tx` intent का envelope दोनों रखता है। `pay` link ऐसा नहीं कर सकता (SEP-7 `pay` एक ही खाते को भुगतान करता है) और उसे `amount` चाहिए: उसका `uri` hosted checkout है (`PAYMENT_LINK_CHECKOUT_URL/<id>`), सार्वजनिक link `payerAccountRequired: true` बताता है, और `POST /v1/payment-links/{id}/transaction` भुगतानकर्ता के खाते से उसका envelope बनाता है। Intent तभी settle होता है जब transaction अपने memo के साथ दोनों हिस्से चुकाए |
 | Cross-chain swaps (`POST /v1/cross-chain-swaps`) | NEAR Intents की दूसरी app fee। `wallet` एक NEAR account id है, जिसे NEAR Intents के भीतर क्रेडिट मिलता है। App fees डिपॉज़िट के पूरे basis points होती हैं, इसलिए फ़ीस उतने basis points बनती है, नीचे की ओर गोल; एक basis point से कम फ़ीस अस्वीकार है। `payer` के साथ plan कमीशन भी बड़े डिपॉज़िट का हिस्सा होता है |
 | Solana payment links (`POST /v1/payment-intents/pay`, `chain: solana`) | Solana Pay transfer request एक ही प्राप्तकर्ता बताता है, इसलिए ऐसा link (`amount` के साथ) Solana Pay **transaction request** है: `uri` `solana:<PAYMENT_LINK_API_URL>/v1/payment-links/{id}/solana-pay` है, और wallet वहाँ भुगतानकर्ता का खाता POST करके transaction लेता है: memo, link के reference वाला मर्चेंट का transfer और फ़ीस का transfer (token खाते न हों तो बनते हैं, खर्च भुगतानकर्ता का)। SOL फ़ीस पहले से मौजूद खाते में जाती है। Observer उसे reference से ढूँढता है और दोनों हिस्सों पर ही settle करता है |
+| Monad payment links (`POST /v1/payment-intents/pay`, `chain: monad`) | केवल deposit addresses (`MONAD_RELAYER_PRIVATE_KEY`; इनके बिना `merchant_fee_unsupported`) और `amount` के साथ: address एक `contracts/PaymentSplitForwarder.sol` है (फ़ीस का wallet और राशि constructor के दो और arguments हैं, इसलिए address उनसे बँधा है), जिसका constructor relayer को उसकी फ़ीस, फिर मर्चेंट फ़ीस, फिर मर्चेंट को भुगतान करता है। Link deposit माँगता है: राशि, और भुगतानकर्ता फ़ीस चुकाए तो फ़ीस भी |
 | Solana और Monad पर swaps | अभी नहीं: Jupiter और Kuru Flow हर swap पर एक ही integrator फ़ीस देते हैं और plan कमीशन उसे लेता है (`400 merchant_fee_unsupported`) |
 
-Monad पर payment links `merchant_fee_unsupported` लौटाते हैं। निजी भुगतान, USDT0 और
-liquidity यह फ़ील्ड तब लेंगे जब हर एक के पास भुगतान को on-chain बाँटने का तरीका होगा; तब तक
-उनके रूट इसे अज्ञात फ़ील्ड मानकर अस्वीकार करते हैं (`400 validation_failed`)।
+निजी भुगतान, USDT0 और liquidity यह फ़ील्ड तब लेंगे जब हर एक के पास भुगतान को on-chain बाँटने
+का तरीका होगा; तब तक उनके रूट इसे अज्ञात फ़ील्ड मानकर अस्वीकार करते हैं
+(`400 validation_failed`)।
 
 ## Stellar से USDT0 (LayerZero)
 
@@ -2106,6 +2107,11 @@ seal होती हैं और कभी लौटाई नहीं जा
   `GET` / `POST /v1/payment-links/{id}/solana-pay` (`@Public()`, हर address का budget) पर
   Solana Pay transaction request है, जिसे gateway का keyless payment-links रूट परोसता है।
   **नया variable `PAYMENT_LINK_API_URL`** (डिफ़ॉल्ट `WALLET_AUTH_PUBLIC_BASE_URL`)।
+- **Monad payment links भी `merchantFee` लेते हैं** deposit addresses के साथ: नया contract
+  `contracts/PaymentSplitForwarder.sol` (artifact `src/evm/payment-split-forwarder.artifact.ts`,
+  `npm run contracts:compile` से, बिना बदले PaymentForwarder के साथ)। Migration
+  `20261026190000_evm_deposit_merchant_fee` `evm_deposit_address` में `feeWallet` और
+  `merchantFee` जोड़ता है (हर मौजूदा address पर null, जो PaymentForwarder ही रहता है)।
 
 ### Lists key के network का पालन करती हैं; dashboard reads cache होते हैं
 

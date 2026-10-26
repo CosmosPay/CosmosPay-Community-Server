@@ -955,11 +955,11 @@ NEAR Intents 从输入中扣除它，报价的输出已是扣除后的净额，�
 | Stellar 支付链接（`POST /v1/payment-intents/tx` 与 `/pay`） | 在同一个 envelope 中，在商户那笔之后，向 `wallet` 的第二笔 `payment`。`tx` intent 的 envelope 同时包含两笔。`pay` 链接做不到（SEP-7 `pay` 只付给一个账户）并且需要 `amount`：其 `uri` 为托管收银台（`PAYMENT_LINK_CHECKOUT_URL/<id>`），公开链接显示 `payerAccountRequired: true`，`POST /v1/payment-links/{id}/transaction` 根据付款方账户构建其 envelope。只有用其 memo 同时支付两部分的交易才会结算该 intent |
 | 跨链兑换（`POST /v1/cross-chain-swaps`） | NEAR Intents 的第二个 app fee。`wallet` 是 NEAR 账户 id，在 NEAR Intents 内入账。App fee 是存入金额的整数基点，因此费用换算成其对应的基点并向下取整；不足一个基点的费用会被拒绝。使用 `payer` 时，套餐佣金也按更大的存入金额计算 |
 | Solana 支付链接（`POST /v1/payment-intents/pay`，`chain: solana`） | Solana Pay 的 transfer request 只指定一个收款方，因此这类链接（需有 `amount`）是 Solana Pay **transaction request**：`uri` 为 `solana:<PAYMENT_LINK_API_URL>/v1/payment-links/{id}/solana-pay`，钱包向其 POST 付款方账户以获取交易：memo、携带链接 reference 的商户转账，以及手续费转账（缺少的代币账户会创建，由付款方支付）。SOL 手续费须转入已存在的账户。observer 通过 reference 找到它，且只有两部分都支付才会结算 |
+| Monad 支付链接（`POST /v1/payment-intents/pay`，`chain: monad`） | 仅在启用存款地址（`MONAD_RELAYER_PRIVATE_KEY`；否则返回 `merchant_fee_unsupported`）且有 `amount` 时：地址为 `contracts/PaymentSplitForwarder.sol`（手续费的钱包和金额是构造函数的另外两个参数，因此地址承诺了它们），其构造函数先付 relayer 费用，再付商户手续费，最后付商户。链接要求的存款为金额，付款方支付手续费时再加上手续费 |
 | Solana 与 Monad 上的兑换 | 暂不支持：Jupiter 和 Kuru Flow 每笔兑换只支付一个集成方费用，已被套餐佣金使用（`400 merchant_fee_unsupported`） |
 
-Monad 上的支付链接返回 `merchant_fee_unsupported`。隐私支付、USDT0 和流动性会在各自具备链上
-拆分付款的方式后加入该字段；在此之前，它们的路由会将其作为未知字段拒绝
-（`400 validation_failed`）。
+隐私支付、USDT0 和流动性会在各自具备链上拆分付款的方式后加入该字段；在此之前，它们的路由会
+将其作为未知字段拒绝（`400 validation_failed`）。
 
 ## 从 Stellar 发送 USDT0（LayerZero）
 
@@ -1414,6 +1414,11 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
   `POST /v1/payment-links/{id}/solana-pay`（`@Public()`，按地址计预算）上的 Solana Pay
   transaction request，由网关的免密钥 payment-links 路由提供。**新变量
   `PAYMENT_LINK_API_URL`**（默认 `WALLET_AUTH_PUBLIC_BASE_URL`）。
+- **Monad 支付链接也接受 `merchantFee`**（需启用存款地址）：新合约
+  `contracts/PaymentSplitForwarder.sol`（产物 `src/evm/payment-split-forwarder.artifact.ts`，由
+  `npm run contracts:compile` 与未改动的 PaymentForwarder 一起编译）。迁移
+  `20261026190000_evm_deposit_merchant_fee` 为 `evm_deposit_address` 新增 `feeWallet` 和
+  `merchantFee`（现有地址均为 null，仍是 PaymentForwarder）。
 
 ### 列表遵循密钥的网络；仪表盘读取会被缓存
 
