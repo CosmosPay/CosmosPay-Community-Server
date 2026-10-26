@@ -16,6 +16,7 @@ import {
   LIQUIDITY_OPERATION_OUTCOMES,
   SERIES_SWAP_KINDS,
   SWAP_OUTCOMES,
+  USDT0_TRANSFER_OUTCOMES,
   type SeriesOutcome,
   type SeriesPeriod,
   type SeriesSwapKind,
@@ -73,6 +74,7 @@ const SWAP_SOURCES: Record<
     table: 'cross_chain_swap',
     outcomes: CROSS_CHAIN_SWAP_OUTCOMES,
   },
+  usdt0: { table: 'usdt0_transfer', outcomes: USDT0_TRANSFER_OUTCOMES },
 };
 
 /**
@@ -334,14 +336,17 @@ export class AnalyticsService {
    *   - payments: each bucket's count, settled and failed counts and settled volume; the
    *     window's distinct payers. As in `summary`, volume adds every asset's amount (the
    *     dashboard labels it so).
-   *   - swaps of every kind (Stellar DEX, Solana and Monad, cross-chain): each bucket's count,
-   *     succeeded and failed; the window's in-progress count and its split by kind.
-   *   - liquidity operations and webhook deliveries: the window's counts.
+   *   - swaps of every kind (Stellar DEX, Solana and Monad, cross-chain, USDT0 sent through
+   *     LayerZero): each bucket's count, succeeded and failed; the window's in-progress count
+   *     and its split by kind.
+   *   - liquidity operations: each bucket's count, succeeded and failed.
+   *   - webhook deliveries: each bucket's deliveries and failed ones.
    *
    * Every figure is an aggregation in Postgres bounded by the window; no row is materialized.
    * Payments, swaps and liquidity operations are the consumer's on the network its key targets
-   * (`resolveNetwork`), the scope the payments half has always had. Solana, Monad and
-   * cross-chain swaps are always written as `public`, so a sandbox key counts none of them.
+   * (`resolveNetwork`), the scope the payments half has always had. Solana, Monad, cross-chain
+   * swaps and USDT0 transfers are always written as `public`, so a sandbox key counts none of
+   * them.
    * Webhook deliveries are the consumer's on every endpoint, as in `summary`: an endpoint
    * belongs to no network. Which status is succeeded, failed or in progress is the
    * `*_OUTCOMES` table of each model (`analytics.constants.ts`).
@@ -361,6 +366,8 @@ export class AnalyticsService {
       swapWindowRows,
       liquidityRows,
       webhookRows,
+      liquidityBucketRows,
+      webhookBucketRows,
     ] = await Promise.all([
       this.prisma.$queryRaw<
         {
@@ -460,6 +467,33 @@ export class AnalyticsService {
           AND d."createdAt" >= ${previousSince}
         GROUP BY 1
       `,
+      // The same liquidity operations, per bucket of the window.
+      this.prisma.$queryRaw<
+        { bucket: Date; count: bigint; succeeded: bigint; failed: bigint }[]
+      >`
+        SELECT date_trunc(${unit}, "createdAt") AS bucket,
+               COUNT(*) AS count,
+               COUNT(*) FILTER (WHERE ${statusIn(LIQUIDITY_OPERATION_OUTCOMES, 'succeeded')}) AS succeeded,
+               COUNT(*) FILTER (WHERE ${statusIn(LIQUIDITY_OPERATION_OUTCOMES, 'failed')}) AS failed
+        FROM "liquidity_pool_operation"
+        WHERE "consumerId" = ${consumerId}
+          AND "network" = ${network}
+          AND "createdAt" >= ${since}
+        GROUP BY 1
+      `,
+      // The same deliveries, per bucket of the window.
+      this.prisma.$queryRaw<
+        { bucket: Date; deliveries: bigint; failed: bigint }[]
+      >`
+        SELECT date_trunc(${unit}, d."createdAt") AS bucket,
+               COUNT(*) AS deliveries,
+               COUNT(*) FILTER (WHERE d."status" = 'FAILED') AS failed
+        FROM "webhook_delivery" d
+        JOIN "webhook_endpoint" e ON e."id" = d."endpointId"
+        WHERE e."consumerId" = ${consumerId}
+          AND d."createdAt" >= ${since}
+        GROUP BY 1
+      `,
     ]);
 
     const window = (current: boolean) => {
@@ -546,10 +580,22 @@ export class AnalyticsService {
         },
       },
       liquidity: {
+        buckets: fillBuckets(
+          buckets,
+          liquidityBucketRows,
+          () => ({ count: 0, succeeded: 0, failed: 0 }),
+          outcomes,
+        ),
         totals: outcomes(liquidityRows.find((r) => r.current)),
         previous: outcomes(liquidityRows.find((r) => !r.current)),
       },
       webhooks: {
+        buckets: fillBuckets(
+          buckets,
+          webhookBucketRows,
+          () => ({ deliveries: 0, failed: 0 }),
+          deliveries,
+        ),
         totals: deliveries(webhookRows.find((r) => r.current)),
         previous: deliveries(webhookRows.find((r) => !r.current)),
       },

@@ -2048,8 +2048,10 @@ the service under `src/native-plugins/<slug>/`, switched on by the same
 - **New variable `STELLAR_RPC_URL_MAINNET`**, optional: Stellar mainnet's Soroban RPC.
   Unset, the service uses Gateway.fm's public endpoint, which is rate limited; set a
   provider's in production.
-- **Not yet:** USDT0 transfers emit no webhook event and are not counted in
-  `GET /v1/summary/series`.
+- **`GET /v1/summary/series` counts USDT0 transfers as swaps** of a new kind, `usdt0`
+  (in `swaps.totals.byKind` and in every swap figure), and answers `buckets` for
+  liquidity operations and webhook deliveries as well; see the series note below.
+  USDT0 transfers emit no webhook event yet.
 
 ### Swaps: the transaction adds the trustline its source lacks
 
@@ -2119,21 +2121,24 @@ the service under `src/native-plugins/<slug>/`, switched on by the same
   with the window's totals and the window just before it, for growth. Payments carry
   their settled volume and distinct payers; swaps of every kind are counted per bucket
   and split by kind (`dex` for the Stellar DEX, `chain` for Jupiter and Kuru Flow,
-  `crossChain` for NEAR Intents); liquidity operations and webhook deliveries are counted
-  per window. It only aggregates in Postgres: no migration, no new variable, and no
-  existing response changed.
+  `crossChain` for NEAR Intents, `usdt0` for USDT0 sent from Stellar through
+  LayerZero); liquidity operations (`liquidity.buckets`: `count`, `succeeded`, `failed`)
+  and webhook deliveries (`webhooks.buckets`: `deliveries`, `failed`) are counted per
+  bucket too, on the same buckets, besides their window totals. It only aggregates in
+  Postgres: no migration, no new variable, and no existing response changed.
 - **Each figure is scoped like the key's own data.** Payments, swaps and liquidity
   operations are the consumer's on the network its key targets (`prod` → `public`,
-  `dev` → `testnet`), so a sandbox key counts no Solana, Monad or cross-chain swap:
-  those run on mainnet only. Webhook deliveries are the consumer's on every endpoint,
+  `dev` → `testnet`), so a sandbox key counts no Solana, Monad or cross-chain swap and
+  no USDT0 transfer: those run on mainnet only. Webhook deliveries are the consumer's on every endpoint,
   because an endpoint belongs to no network. `GET /v1/swaps`,
   `GET /v1/cross-chain-swaps` and `GET /v1/liquidity-pools/operations` do not filter by
   network, so their totals can be larger than the series'.
 - **Succeeded, failed and in progress are one table per model** in
   `src/analytics/analytics.constants.ts`: a failed or expired swap or operation is
-  failed, and so is a refunded cross-chain swap; anything not final is in progress. A
-  new `SwapStatus` or `CrossChainSwapStatus` value does not compile until it is mapped
-  there.
+  failed, and so is a refunded cross-chain swap; a delivered USDT0 transfer is
+  succeeded; anything not final is in progress. A new `SwapStatus`,
+  `CrossChainSwapStatus` or `Usdt0TransferStatus` value does not compile until it is
+  mapped there.
 
 ### Cross-chain swaps: every NEAR Intents network, and a nullable `depositUri`
 

@@ -159,12 +159,18 @@ export class SeriesSwapsByKindEntity {
     example: 4,
   })
   crossChain!: number;
+  @ApiProperty({
+    description:
+      'USDT0 sent from Stellar to an EVM network through LayerZero (`/v1/usdt0`). Mainnet only.',
+    example: 2,
+  })
+  usdt0!: number;
 }
 
 export class SeriesSwapTotalsEntity extends SeriesOutcomeCountsEntity {
   @ApiProperty({
     description:
-      'Not final yet: unsigned, submitted, or a cross-chain swap awaiting or processing its deposit.',
+      'Not final yet: unsigned, submitted (a USDT0 transfer LayerZero is still delivering included), or a cross-chain swap awaiting or processing its deposit.',
     example: 2,
   })
   inProgress!: number;
@@ -194,7 +200,22 @@ export class SeriesSwapsEntity {
   previous!: SeriesOutcomeCountsEntity;
 }
 
+export class SeriesLiquidityBucketEntity extends SeriesOutcomeCountsEntity {
+  @ApiProperty({
+    description:
+      'The first day of the bucket (UTC; weeks start on Monday), the same as the payments bucket at that index.',
+    example: '2026-10-01',
+  })
+  start!: string;
+}
+
 export class SeriesLiquidityEntity {
+  @ApiProperty({
+    type: [SeriesLiquidityBucketEntity],
+    description:
+      'Liquidity pool deposits and withdrawals per bucket, on the same buckets as the payments, pre-seeded so a quiet bucket is a zero.',
+  })
+  buckets!: SeriesLiquidityBucketEntity[];
   @ApiProperty({
     type: SeriesOutcomeCountsEntity,
     description: 'Liquidity pool deposits and withdrawals in the window.',
@@ -221,7 +242,33 @@ export class SeriesWebhookCountsEntity {
   failed!: number;
 }
 
+export class SeriesWebhookBucketEntity {
+  @ApiProperty({
+    description:
+      'The first day of the bucket (UTC; weeks start on Monday), the same as the payments bucket at that index.',
+    example: '2026-10-01',
+  })
+  start!: string;
+  @ApiProperty({
+    description: 'Deliveries created in the bucket, any status.',
+    example: 26,
+  })
+  deliveries!: number;
+  @ApiProperty({
+    description:
+      'Of those, the ones whose last attempt failed, as GET /v1/summary counts them.',
+    example: 1,
+  })
+  failed!: number;
+}
+
 export class SeriesWebhooksEntity {
+  @ApiProperty({
+    type: [SeriesWebhookBucketEntity],
+    description:
+      'Deliveries per bucket, on the same buckets as the payments, pre-seeded so a quiet bucket is a zero.',
+  })
+  buckets!: SeriesWebhookBucketEntity[];
   @ApiProperty({
     type: SeriesWebhookCountsEntity,
     description:
@@ -257,7 +304,7 @@ export class AnalyticsSeriesEntity {
   @ApiProperty({
     type: SeriesSwapsEntity,
     description:
-      'Swaps of every kind (Stellar DEX, Solana and Monad, cross-chain) on the network the key targets: a sandbox key counts no Solana, Monad or cross-chain swap, which run on mainnet only.',
+      'Swaps of every kind (Stellar DEX, Solana and Monad, cross-chain, USDT0 sent through LayerZero) on the network the key targets: a sandbox key counts no Solana, Monad, cross-chain swap or USDT0 transfer, which run on mainnet only.',
   })
   swaps!: SeriesSwapsEntity;
   @ApiProperty({

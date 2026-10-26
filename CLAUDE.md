@@ -583,18 +583,21 @@ refreshes it (ledger first, then LayerZero Scan), throttled per row by `lastChec
   `SUM(...) FILTER (WHERE ...)`, bounded by the consumer's index and a date window.
   `summary` once loaded every payment intent and reduced it in Node, and one merchant's
   history blocked every other request. A spec asserts no `findMany` runs.
-- **`GET /v1/summary/series` covers payments, every kind of swap, liquidity operations and
-  webhook deliveries** on the buckets of `seriesWindow` (UTC, weeks from Monday, the same as
-  Postgres' `date_trunc`), pre-seeded by `fillBuckets` so a quiet bucket is a zero.
-  Payments, swaps and liquidity are scoped by consumer AND `resolveNetwork`; `chain_swap`
-  and `cross_chain_swap` rows are always `public`, so a sandbox key counts none. Webhook
-  deliveries are scoped by consumer only: an endpoint has no network. The list routes of
-  those modules do not filter by network, so their totals can be larger.
+- **`GET /v1/summary/series` covers payments, every kind of swap (USDT0 transfers are the
+  `usdt0` kind), liquidity operations and webhook deliveries**, each with `buckets` on the
+  buckets of `seriesWindow` (UTC, weeks from Monday, the same as Postgres' `date_trunc`),
+  pre-seeded by `fillBuckets` so a quiet bucket is a zero, plus the window's totals and the
+  window before. Payments, swaps and liquidity are scoped by consumer AND `resolveNetwork`;
+  `chain_swap`, `cross_chain_swap` and `usdt0_transfer` rows are always `public`, so a
+  sandbox key counts none. Webhook deliveries are scoped by consumer only: an endpoint has
+  no network. The list routes of those modules do not filter by network, so their totals
+  can be larger.
 - **Succeeded / failed / in progress is a table per model** (`SWAP_OUTCOMES`,
-  `CHAIN_SWAP_OUTCOMES`, `CROSS_CHAIN_SWAP_OUTCOMES`, `LIQUIDITY_OPERATION_OUTCOMES` in
-  `analytics.constants.ts`), turned into SQL by `series-outcomes.ts`. Never guess from a
-  status name: a new `SwapStatus` or `CrossChainSwapStatus` value fails `tsc` until it is
-  mapped, and `series-outcomes.spec.ts` pins each decision. A new swap table is one entry
+  `CHAIN_SWAP_OUTCOMES`, `CROSS_CHAIN_SWAP_OUTCOMES`, `USDT0_TRANSFER_OUTCOMES`,
+  `LIQUIDITY_OPERATION_OUTCOMES` in `analytics.constants.ts`), turned into SQL by
+  `series-outcomes.ts`. Never guess from a status name: a new `SwapStatus`,
+  `CrossChainSwapStatus` or `Usdt0TransferStatus` value fails `tsc` until it is mapped, and
+  `series-outcomes.spec.ts` pins each decision. A new swap table is one entry
   in `SWAP_SOURCES` (`analytics.service.ts`) and one kind in `SERIES_SWAP_KINDS`.
 
 ## The OpenAPI contract ships with the route — review Swagger every time

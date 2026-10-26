@@ -2158,8 +2158,10 @@ eingeschaltet werden.
 - **Neue Variable `STELLAR_RPC_URL_MAINNET`**, optional: der Soroban-RPC des
   Stellar-Mainnets. Ohne sie nutzt der Dienst den öffentlichen Endpunkt von
   Gateway.fm, der ratenbegrenzt ist; setzen Sie in Produktion den eines Anbieters.
-- **Noch nicht:** USDT0-Transfers senden kein Webhook-Event und werden in
-  `GET /v1/summary/series` nicht gezählt.
+- **`GET /v1/summary/series` zählt USDT0-Transfers als Swaps** einer neuen Art,
+  `usdt0` (in `swaps.totals.byKind` und in jeder Swap-Zahl), und liefert `buckets` jetzt
+  auch für Liquiditätsoperationen und Webhook-Zustellungen; siehe den Hinweis zur Reihe
+  weiter unten. USDT0-Transfers senden noch kein Webhook-Event.
 
 ### Swaps: Die Transaktion legt die Trustline an, die ihrer Source fehlt
 
@@ -2236,24 +2238,28 @@ eingeschaltet werden.
   des Zeitfensters und denen des unmittelbar davor liegenden, für das Wachstum.
   Zahlungen tragen ihr abgewickeltes Volumen und ihre verschiedenen Zahlenden; Swaps
   jeder Art werden pro Bucket gezählt und nach Art aufgeteilt (`dex` für die
-  Stellar-DEX, `chain` für Jupiter und Kuru Flow, `crossChain` für NEAR Intents);
-  Liquiditätsoperationen und Webhook-Zustellungen werden pro Zeitfenster gezählt. Es
+  Stellar-DEX, `chain` für Jupiter und Kuru Flow, `crossChain` für NEAR Intents,
+  `usdt0` für USDT0, das von Stellar über LayerZero gesendet wird);
+  Liquiditätsoperationen (`liquidity.buckets`: `count`, `succeeded`, `failed`) und
+  Webhook-Zustellungen (`webhooks.buckets`: `deliveries`, `failed`) werden ebenfalls pro
+  Bucket gezählt, auf denselben Buckets, zusätzlich zu ihren Summen des Zeitfensters. Es
   aggregiert nur in Postgres: keine Migration, keine neue Variable, und keine
   bestehende Antwort hat sich geändert.
 - **Jede Zahl hat den Geltungsbereich der eigenen Daten des Schlüssels.** Zahlungen,
   Swaps und Liquiditätsoperationen sind die des Consumers in dem Netzwerk, auf das sein
   Schlüssel zielt (`prod` → `public`, `dev` → `testnet`); ein Sandbox-Schlüssel
-  zählt also keinen Solana-, Monad- oder Cross-Chain-Swap, denn diese laufen nur im
-  Mainnet. Webhook-Zustellungen sind die des Consumers an allen seinen Endpoints, weil
+  zählt also keinen Solana-, Monad- oder Cross-Chain-Swap und keinen USDT0-Transfer,
+  denn diese laufen nur im Mainnet. Webhook-Zustellungen sind die des Consumers an allen seinen Endpoints, weil
   ein Endpoint zu keinem Netzwerk gehört. `GET /v1/swaps`, `GET /v1/cross-chain-swaps`
   und `GET /v1/liquidity-pools/operations` filtern nicht nach Netzwerk, ihre Summen
   können also größer sein als die der Reihe.
 - **Erfolgreich, fehlgeschlagen und laufend sind eine Tabelle pro Modell** in
   `src/analytics/analytics.constants.ts`: Ein fehlgeschlagener oder abgelaufener Swap
   oder eine solche Operation zählt als fehlgeschlagen, ebenso ein erstatteter
-  Cross-Chain-Swap; alles, was nicht endgültig ist, läuft noch. Ein neuer Wert von
-  `SwapStatus` oder `CrossChainSwapStatus` kompiliert erst, wenn er dort zugeordnet
-  ist.
+  Cross-Chain-Swap; ein zugestellter USDT0-Transfer zählt als erfolgreich; alles, was
+  nicht endgültig ist, läuft noch. Ein neuer Wert von `SwapStatus`,
+  `CrossChainSwapStatus` oder `Usdt0TransferStatus` kompiliert erst, wenn er dort
+  zugeordnet ist.
 
 ### Chain-übergreifende Swaps: jedes NEAR-Intents-Netzwerk und ein nullable `depositUri`
 

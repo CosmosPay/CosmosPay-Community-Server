@@ -2119,8 +2119,11 @@ plugins isolés.
   mainnet Stellar. Non définie, le service utilise le point d'accès public de
   Gateway.fm, qui est limité en débit ; en production, définissez celui d'un
   fournisseur.
-- **Pas encore :** les transferts USDT0 n'émettent aucun événement webhook et ne sont
-  pas comptés dans `GET /v1/summary/series`.
+- **`GET /v1/summary/series` compte les transferts USDT0 comme des swaps** d'un
+  nouveau type, `usdt0` (dans `swaps.totals.byKind` et dans chaque chiffre des swaps),
+  et répond aussi des `buckets` pour les opérations de liquidité et les livraisons de
+  webhooks ; voir la note sur la série plus bas. Les transferts USDT0 n'émettent encore
+  aucun événement webhook.
 
 ### Swaps : la transaction ajoute la trustline qui manque à sa source
 
@@ -2197,23 +2200,27 @@ plugins isolés.
   la fenêtre et ceux de la fenêtre qui la précède, pour la croissance. Les paiements
   portent leur volume réglé et leurs payeurs distincts ; les swaps de tout type sont
   comptés par bucket et ventilés par type (`dex` pour le DEX Stellar, `chain` pour
-  Jupiter et Kuru Flow, `crossChain` pour NEAR Intents) ; les opérations de liquidité
-  et les livraisons de webhooks sont comptées par fenêtre. Ce n'est qu'une agrégation
-  dans Postgres : pas de migration, pas de nouvelle variable, et aucune réponse
-  existante n'a changé.
+  Jupiter et Kuru Flow, `crossChain` pour NEAR Intents, `usdt0` pour l'USDT0 envoyé
+  depuis Stellar via LayerZero) ; les opérations de liquidité (`liquidity.buckets` :
+  `count`, `succeeded`, `failed`) et les livraisons de webhooks (`webhooks.buckets` :
+  `deliveries`, `failed`) sont elles aussi comptées par bucket, sur les mêmes buckets,
+  en plus de leurs totaux de la fenêtre. Ce n'est qu'une agrégation dans Postgres : pas
+  de migration, pas de nouvelle variable, et aucune réponse existante n'a changé.
 - **Chaque chiffre a la portée des données de la clé.** Les paiements, swaps et
   opérations de liquidité sont ceux du consumer sur le réseau que vise sa clé
   (`prod` → `public`, `dev` → `testnet`) : une clé de sandbox ne compte donc aucun
-  swap Solana, Monad ou inter-chaînes, qui ne tournent que sur mainnet. Les livraisons
+  swap Solana, Monad ou inter-chaînes ni aucun transfert USDT0, qui ne tournent que sur
+  mainnet. Les livraisons
   de webhooks sont celles du consumer sur tous ses endpoints, car un endpoint
   n'appartient à aucun réseau. `GET /v1/swaps`, `GET /v1/cross-chain-swaps` et
   `GET /v1/liquidity-pools/operations` ne filtrent pas par réseau : leurs totaux
   peuvent dépasser ceux de la série.
 - **Réussi, échoué et en cours forment une table par modèle** dans
   `src/analytics/analytics.constants.ts` : un swap ou une opération en échec ou expiré
-  compte comme échoué, tout comme un swap inter-chaînes remboursé ; tout ce qui n'est
-  pas final est en cours. Une nouvelle valeur de `SwapStatus` ou `CrossChainSwapStatus`
-  ne compile pas tant qu'elle n'y est pas associée.
+  compte comme échoué, tout comme un swap inter-chaînes remboursé ; un transfert USDT0
+  livré compte comme réussi ; tout ce qui n'est pas final est en cours. Une nouvelle
+  valeur de `SwapStatus`, `CrossChainSwapStatus` ou `Usdt0TransferStatus` ne compile
+  pas tant qu'elle n'y est pas associée.
 
 ### Swaps inter-chaînes : tous les réseaux de NEAR Intents, et un `depositUri` nullable
 

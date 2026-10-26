@@ -1356,7 +1356,7 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
 - **`GET /v1/swaps/{id}` 和 `GET /v1/cross-chain-swaps/{id}` 现在接受共享公共 key**，让没有账户发起的 swap 能跟踪自己的状态。读取仍限定在该消费者范围内，因此这个 key 只能读到用它发起的 swap，而 id（一个 cuid）本身就是访问权限，与支付链接相同。`GET /v1/swaps` 和 `GET /v1/cross-chain-swaps` 仍对它关闭。
 - **迁移 `20261025210000_usdt0_transfers`** 创建 `usdt0_transfer` 表和 `Usdt0TransferStatus` 枚举；不改写任何数据。在新版本承接流量之前运行 `migrate deploy`。
 - **新变量 `STELLAR_RPC_URL_MAINNET`**，可选：Stellar 主网的 Soroban RPC。未设置时，服务使用 Gateway.fm 的公共端点，它有速率限制；生产环境请设置服务商的端点。
-- **尚未支持：** USDT0 转账不发出 webhook 事件，也不计入 `GET /v1/summary/series`。
+- **`GET /v1/summary/series` 把 USDT0 转账计为 swap**，类型为新增的 `usdt0`（计入 `swaps.totals.byKind` 和每一个 swap 数字），并且现在也为流动性操作和 webhook 投递返回 `buckets`；见下方关于序列的说明。USDT0 转账目前仍不发出 webhook 事件。
 
 ### Swaps：交易会添加其 source 缺少的 trustline
 
@@ -1381,9 +1381,9 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
 
 ### 仪表盘序列：支付旁边的 swap、流动性与 webhook
 
-- **新路由 `GET /v1/summary/series`**（`payments:read`；`period` 为 `day`、`week`、`month` 或 `year`）：仪表盘概览所绘制的数据，按 UTC 分桶，覆盖 30 天、12 周、12 个月或 5 年（每周从周一开始，没有活动的桶为零），并附带该窗口的合计以及紧邻其前一个窗口的合计，用于计算增长。支付带有已结算金额和不同付款方数量；各类 swap 按桶计数并按类型拆分（`dex` 表示 Stellar DEX，`chain` 表示 Jupiter 和 Kuru Flow，`crossChain` 表示 NEAR Intents）；流动性操作和 webhook 投递按窗口计数。它只在 Postgres 中聚合：无迁移、无新变量，现有响应均未改变。
-- **每个数字的范围与该 key 自身的数据一致。** 支付、swap 和流动性操作是该 consumer 在其 key 所指向网络上的数据（`prod` → `public`，`dev` → `testnet`），因此 sandbox key 不会计入任何 Solana、Monad 或跨链 swap：它们只在主网运行。webhook 投递是该 consumer 所有 endpoint 上的投递，因为 endpoint 不属于任何网络。`GET /v1/swaps`、`GET /v1/cross-chain-swaps` 和 `GET /v1/liquidity-pools/operations` 不按网络过滤，因此它们的合计可能大于序列中的合计。
-- **成功、失败和进行中由每个模型的一张表定义**，位于 `src/analytics/analytics.constants.ts`：失败或过期的 swap 或操作计为失败，被退款的跨链 swap 也是如此；所有尚未终结的都算进行中。`SwapStatus` 或 `CrossChainSwapStatus` 的新值在那里完成映射之前无法通过编译。
+- **新路由 `GET /v1/summary/series`**（`payments:read`；`period` 为 `day`、`week`、`month` 或 `year`）：仪表盘概览所绘制的数据，按 UTC 分桶，覆盖 30 天、12 周、12 个月或 5 年（每周从周一开始，没有活动的桶为零），并附带该窗口的合计以及紧邻其前一个窗口的合计，用于计算增长。支付带有已结算金额和不同付款方数量；各类 swap 按桶计数并按类型拆分（`dex` 表示 Stellar DEX，`chain` 表示 Jupiter 和 Kuru Flow，`crossChain` 表示 NEAR Intents，`usdt0` 表示经由 LayerZero 从 Stellar 发送的 USDT0）；流动性操作（`liquidity.buckets`：`count`、`succeeded`、`failed`）和 webhook 投递（`webhooks.buckets`：`deliveries`、`failed`）同样按桶计数，使用相同的桶，此外还有各自的窗口合计。它只在 Postgres 中聚合：无迁移、无新变量，现有响应均未改变。
+- **每个数字的范围与该 key 自身的数据一致。** 支付、swap 和流动性操作是该 consumer 在其 key 所指向网络上的数据（`prod` → `public`，`dev` → `testnet`），因此 sandbox key 不会计入任何 Solana、Monad 或跨链 swap，也不会计入任何 USDT0 转账：它们只在主网运行。webhook 投递是该 consumer 所有 endpoint 上的投递，因为 endpoint 不属于任何网络。`GET /v1/swaps`、`GET /v1/cross-chain-swaps` 和 `GET /v1/liquidity-pools/operations` 不按网络过滤，因此它们的合计可能大于序列中的合计。
+- **成功、失败和进行中由每个模型的一张表定义**，位于 `src/analytics/analytics.constants.ts`：失败或过期的 swap 或操作计为失败，被退款的跨链 swap 也是如此；已送达的 USDT0 转账计为成功；所有尚未终结的都算进行中。`SwapStatus`、`CrossChainSwapStatus` 或 `Usdt0TransferStatus` 的新值在那里完成映射之前无法通过编译。
 
 ### 跨链 swap：NEAR Intents 的每个网络，以及可为空的 `depositUri`
 

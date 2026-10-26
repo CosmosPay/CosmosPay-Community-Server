@@ -1,6 +1,7 @@
 import type {
   CrossChainSwapStatus,
   SwapStatus,
+  Usdt0TransferStatus,
 } from '@generated/prisma/client';
 
 /** Tuning knobs for the read-only analytics aggregates. */
@@ -83,6 +84,24 @@ export const CROSS_CHAIN_SWAP_OUTCOMES: Record<
 };
 
 /**
+ * USDT0 sent from Stellar through LayerZero's OFT (`usdt0_transfer`), counted as a swap of kind
+ * `usdt0`. PENDING is built and unsigned, SUBMITTED is on the Stellar ledger while LayerZero
+ * delivers it (about 27 minutes): both still move. DELIVERED credited the recipient on the
+ * destination network. FAILED is a Stellar transaction that failed or a message LayerZero gave
+ * up on; EXPIRED never reached the ledger before its time bounds closed: both failures.
+ */
+export const USDT0_TRANSFER_OUTCOMES: Record<
+  Usdt0TransferStatus,
+  SeriesOutcome
+> = {
+  PENDING: 'inProgress',
+  SUBMITTED: 'inProgress',
+  DELIVERED: 'succeeded',
+  FAILED: 'failed',
+  EXPIRED: 'failed',
+};
+
+/**
  * Stellar AMM deposits and withdrawals (`liquidity_pool_operation`), which reuse `SwapStatus`
  * with the swap's lifecycle (`lp-operation-transitions.ts`): PENDING and SUBMITTED still move,
  * SUCCEEDED liquidated on-chain, FAILED and EXPIRED did not.
@@ -97,8 +116,14 @@ export const LIQUIDITY_OPERATION_OUTCOMES: Record<SwapStatus, SeriesOutcome> = {
 
 /**
  * The kinds the swaps half of the series splits its totals into, one per table: `dex` is the
- * Stellar DEX (`swap`), `chain` a same-chain swap on Solana or Monad (`chain_swap`), and
- * `crossChain` a swap between networks through NEAR Intents (`cross_chain_swap`).
+ * Stellar DEX (`swap`), `chain` a same-chain swap on Solana or Monad (`chain_swap`),
+ * `crossChain` a swap between networks through NEAR Intents (`cross_chain_swap`), and `usdt0`
+ * USDT0 sent from Stellar to an EVM network through LayerZero (`usdt0_transfer`).
  */
-export const SERIES_SWAP_KINDS = ['dex', 'chain', 'crossChain'] as const;
+export const SERIES_SWAP_KINDS = [
+  'dex',
+  'chain',
+  'crossChain',
+  'usdt0',
+] as const;
 export type SeriesSwapKind = (typeof SERIES_SWAP_KINDS)[number];

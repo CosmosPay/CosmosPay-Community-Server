@@ -225,7 +225,7 @@ describe('AnalyticsService', () => {
 describe('AnalyticsService.series', () => {
   afterEach(() => jest.useRealTimers());
 
-  /** What each of the six aggregations answers, in the order the service issues them. */
+  /** What each of the eight aggregations answers, in the order the service issues them. */
   type Results = Partial<
     Record<
       | 'buckets'
@@ -233,7 +233,9 @@ describe('AnalyticsService.series', () => {
       | 'swapBuckets'
       | 'swapWindows'
       | 'liquidity'
-      | 'webhooks',
+      | 'webhooks'
+      | 'liquidityBuckets'
+      | 'webhookBuckets',
       unknown[]
     >
   >;
@@ -244,6 +246,8 @@ describe('AnalyticsService.series', () => {
     'swapWindows',
     'liquidity',
     'webhooks',
+    'liquidityBuckets',
+    'webhookBuckets',
   ] as const;
 
   function build(results: Results = {}) {
@@ -258,6 +262,7 @@ describe('AnalyticsService.series', () => {
       swap: rowFetch(),
       chainSwap: rowFetch(),
       crossChainSwap: rowFetch(),
+      usdt0Transfer: rowFetch(),
       liquidityPoolOperation: rowFetch(),
       webhookEndpoint: rowFetch(),
       webhookDelivery: rowFetch(),
@@ -353,13 +358,15 @@ describe('AnalyticsService.series', () => {
       failed: 0,
       volume: '80',
     });
-    // Six aggregations (payments twice, swaps twice, liquidity, webhooks), no row fetched.
-    expect(queryRaw).toHaveBeenCalledTimes(6);
+    // Eight aggregations (payments, swaps, liquidity and webhooks, each per bucket and per
+    // window), no row fetched.
+    expect(queryRaw).toHaveBeenCalledTimes(8);
     for (const model of [
       prisma.paymentIntent,
       prisma.swap,
       prisma.chainSwap,
       prisma.crossChainSwap,
+      prisma.usdt0Transfer,
       prisma.liquidityPoolOperation,
       prisma.webhookEndpoint,
       prisma.webhookDelivery,
@@ -400,6 +407,14 @@ describe('AnalyticsService.series', () => {
           failed: 1n,
           in_progress: 0n,
         },
+        {
+          current: true,
+          kind: 'usdt0',
+          count: 2n,
+          succeeded: 1n,
+          failed: 0n,
+          in_progress: 1n,
+        },
         // No cross-chain swap in the window: no row, and a zero in byKind.
         {
           current: false,
@@ -430,12 +445,17 @@ describe('AnalyticsService.series', () => {
       failed: 1,
     });
     expect(result.swaps.totals).toEqual({
-      count: 4,
-      succeeded: 2,
+      count: 6,
+      succeeded: 3,
       failed: 1,
-      inProgress: 1,
-      byKind: { dex: 3, chain: 1, crossChain: 0 },
+      inProgress: 2,
+      byKind: { dex: 3, chain: 1, crossChain: 0, usdt0: 2 },
     });
+    // The kinds add up to the window's count, and so do the outcomes.
+    const { byKind, count, succeeded, failed, inProgress } =
+      result.swaps.totals;
+    expect(Object.values(byKind).reduce((a, b) => a + b, 0)).toBe(count);
+    expect(succeeded + failed + inProgress).toBe(count);
     expect(result.swaps.previous).toEqual({
       count: 2,
       succeeded: 1,
@@ -443,7 +463,7 @@ describe('AnalyticsService.series', () => {
     });
   });
 
-  it('reads the three swap tables in one union, each scoped to the consumer and the key’s network', async () => {
+  it('reads the four swap tables in one union, each scoped to the consumer and the key’s network', async () => {
     jest.useFakeTimers().setSystemTime(NOW);
     const { service, queryRaw } = build();
 
@@ -454,10 +474,12 @@ describe('AnalyticsService.series', () => {
     expect(buckets.sql).toContain(`FROM "swap"`);
     expect(buckets.sql).toContain(`FROM "chain_swap"`);
     expect(buckets.sql).toContain(`FROM "cross_chain_swap"`);
-    expect(buckets.sql.match(/UNION ALL/g)).toHaveLength(2);
-    expect(buckets.sql.match(/"network" = \$\d+/g)).toHaveLength(3);
+    expect(buckets.sql).toContain(`FROM "usdt0_transfer"`);
+    expect(buckets.sql.match(/UNION ALL/g)).toHaveLength(3);
+    expect(buckets.sql.match(/"network" = \$\d+/g)).toHaveLength(4);
     // Every branch binds the consumer, the prod key's network and the window's start.
     expect(buckets.values).toEqual([
+      ...['c1', 'public', SINCE],
       ...['c1', 'public', SINCE],
       ...['c1', 'public', SINCE],
       ...['c1', 'public', SINCE],
@@ -472,6 +494,11 @@ describe('AnalyticsService.series', () => {
         `WHEN "status" IN ('FAILED', 'EXPIRED') THEN 'failed' ` +
         `WHEN "status" IN ('PENDING', 'SUBMITTED') THEN 'inProgress' END`,
     );
+    expect(buckets.sql).toContain(
+      `SELECT 'usdt0' AS "kind", "createdAt", CASE WHEN "status" IN ('DELIVERED') THEN 'succeeded' ` +
+        `WHEN "status" IN ('FAILED', 'EXPIRED') THEN 'failed' ` +
+        `WHEN "status" IN ('PENDING', 'SUBMITTED') THEN 'inProgress' END AS "outcome" FROM "usdt0_transfer"`,
+    );
 
     // The window totals read both windows, split by kind.
     const windows = queryOf(queryRaw, 3);
@@ -484,21 +511,28 @@ describe('AnalyticsService.series', () => {
       ...['c1', 'public', PREVIOUS_SINCE],
       ...['c1', 'public', PREVIOUS_SINCE],
       ...['c1', 'public', PREVIOUS_SINCE],
+      ...['c1', 'public', PREVIOUS_SINCE],
     ]);
   });
 
-  it('scopes a sandbox key to testnet, where no Solana, Monad or cross-chain swap is written', async () => {
+  it('scopes a sandbox key to testnet, where no Solana, Monad, cross-chain swap or USDT0 transfer is written', async () => {
     jest.useFakeTimers().setSystemTime(NOW);
     const sandbox = { ...consumer, environment: 'dev' } as GatewayConsumer;
     const { service, queryRaw } = build();
 
     await service.series(sandbox, 'month');
 
-    for (const nth of [0, 1, 2, 3, 4]) {
+    for (const nth of [0, 1, 2, 3, 4, 6]) {
       const { values } = queryOf(queryRaw, nth);
       expect(values).toContain('testnet');
       expect(values).not.toContain('public');
     }
+    // The USDT0 branch, like every other, asks for the sandbox's network, where no transfer is
+    // ever written (they are all `public`): a sandbox key counts none.
+    const swaps = queryOf(queryRaw, 2);
+    const usdt0Branch = swaps.sql.slice(swaps.sql.indexOf(`'usdt0' AS "kind"`));
+    const placeholder = /"network" = \$(\d+)/.exec(usdt0Branch)![1];
+    expect(swaps.values[Number(placeholder) - 1]).toBe('testnet');
   });
 
   it('counts liquidity operations and webhook deliveries in the window and the one before', async () => {
@@ -513,11 +547,11 @@ describe('AnalyticsService.series', () => {
 
     const result = await service.series(consumer, 'month');
 
-    expect(result.liquidity).toEqual({
+    expect(result.liquidity).toMatchObject({
       totals: { count: 3, succeeded: 1, failed: 2 },
       previous: { count: 1, succeeded: 1, failed: 0 },
     });
-    expect(result.webhooks).toEqual({
+    expect(result.webhooks).toMatchObject({
       totals: { deliveries: 10, failed: 2 },
       previous: { deliveries: 0, failed: 0 },
     });
@@ -542,6 +576,73 @@ describe('AnalyticsService.series', () => {
     );
     expect(webhooks.sql).not.toContain('"network"');
     expect(webhooks.values).toEqual([SINCE, 'c1', PREVIOUS_SINCE]);
+  });
+
+  it('counts liquidity operations and webhook deliveries per bucket, a quiet bucket being a zero', async () => {
+    jest.useFakeTimers().setSystemTime(NOW);
+    const { service, queryRaw } = build({
+      liquidityBuckets: [
+        {
+          bucket: new Date('2026-09-01T00:00:00Z'),
+          count: 3n,
+          succeeded: 1n,
+          failed: 2n,
+        },
+      ],
+      webhookBuckets: [
+        {
+          bucket: new Date('2026-10-01T00:00:00Z'),
+          deliveries: 10n,
+          failed: 2n,
+        },
+      ],
+    });
+
+    const result = await service.series(consumer, 'month');
+
+    const starts = result.buckets.map((b) => b.start);
+    expect(result.liquidity.buckets.map((b) => b.start)).toEqual(starts);
+    expect(result.webhooks.buckets.map((b) => b.start)).toEqual(starts);
+    expect(result.liquidity.buckets[0]).toEqual({
+      start: '2025-11-01',
+      count: 0,
+      succeeded: 0,
+      failed: 0,
+    });
+    expect(result.liquidity.buckets[10]).toEqual({
+      start: '2026-09-01',
+      count: 3,
+      succeeded: 1,
+      failed: 2,
+    });
+    expect(result.webhooks.buckets[10]).toEqual({
+      start: '2026-09-01',
+      deliveries: 0,
+      failed: 0,
+    });
+    expect(result.webhooks.buckets[11]).toEqual({
+      start: '2026-10-01',
+      deliveries: 10,
+      failed: 2,
+    });
+
+    // Liquidity per bucket: the window only, scoped as the window totals are.
+    const liquidity = queryOf(queryRaw, 6);
+    expect(liquidity.sql).toContain(`date_trunc('month', "createdAt")`);
+    expect(liquidity.sql).toContain(`FROM "liquidity_pool_operation"`);
+    expect(liquidity.sql).toContain(
+      `COUNT(*) FILTER (WHERE "status" IN ('FAILED', 'EXPIRED')) AS failed`,
+    );
+    expect(liquidity.values).toEqual(['c1', 'public', SINCE]);
+
+    // Deliveries per bucket: the same join as the totals, with no network.
+    const webhooks = queryOf(queryRaw, 7);
+    expect(webhooks.sql).toContain(`date_trunc('month', d."createdAt")`);
+    expect(webhooks.sql).toContain(
+      `JOIN "webhook_endpoint" e ON e."id" = d."endpointId"`,
+    );
+    expect(webhooks.sql).not.toContain('"network"');
+    expect(webhooks.values).toEqual(['c1', SINCE]);
   });
 
   it('answers zeros for a window with no activity', async () => {
@@ -577,15 +678,26 @@ describe('AnalyticsService.series', () => {
         succeeded: 0,
         failed: 0,
         inProgress: 0,
-        byKind: { dex: 0, chain: 0, crossChain: 0 },
+        byKind: { dex: 0, chain: 0, crossChain: 0, usdt0: 0 },
       },
       previous: { count: 0, succeeded: 0, failed: 0 },
     });
     expect(result.liquidity).toEqual({
+      buckets: result.buckets.map((b) => ({
+        start: b.start,
+        count: 0,
+        succeeded: 0,
+        failed: 0,
+      })),
       totals: { count: 0, succeeded: 0, failed: 0 },
       previous: { count: 0, succeeded: 0, failed: 0 },
     });
     expect(result.webhooks).toEqual({
+      buckets: result.buckets.map((b) => ({
+        start: b.start,
+        deliveries: 0,
+        failed: 0,
+      })),
       totals: { deliveries: 0, failed: 0 },
       previous: { deliveries: 0, failed: 0 },
     });

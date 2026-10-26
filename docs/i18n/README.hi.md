@@ -2039,8 +2039,10 @@ seal होती हैं और कभी लौटाई नहीं जा
 - **नया variable `STELLAR_RPC_URL_MAINNET`**, वैकल्पिक: Stellar mainnet का Soroban RPC।
   Unset होने पर service Gateway.fm का public endpoint इस्तेमाल करती है, जो rate limited
   है; production में किसी प्रदाता का endpoint सेट करें।
-- **अभी नहीं:** USDT0 transfers कोई webhook event emit नहीं करते और
-  `GET /v1/summary/series` में नहीं गिने जाते।
+- **`GET /v1/summary/series` USDT0 transfers को swaps की तरह गिनता है**, एक नए kind
+  `usdt0` के रूप में (`swaps.totals.byKind` में और हर swap आँकड़े में), और अब liquidity
+  operations और webhook deliveries के लिए भी `buckets` देता है; नीचे series वाला नोट
+  देखें। USDT0 transfers अभी कोई webhook event emit नहीं करते।
 
 ### Swaps: transaction वह trustline जोड़ता है जो उसके source के पास नहीं है
 
@@ -2111,21 +2113,25 @@ seal होती हैं और कभी लौटाई नहीं जा
   totals के साथ, growth के लिए। Payments अपना settled volume और अलग-अलग payers साथ
   लाते हैं; हर तरह के swaps प्रति bucket गिने जाते हैं और kind के अनुसार बाँटे जाते हैं
   (Stellar DEX के लिए `dex`, Jupiter और Kuru Flow के लिए `chain`, NEAR Intents के
-  लिए `crossChain`); liquidity operations और webhook deliveries प्रति window गिने जाते
-  हैं। यह सिर्फ़ Postgres में aggregate करता है: कोई migration नहीं, कोई नया variable
-  नहीं, और कोई मौजूदा response नहीं बदला।
+  लिए `crossChain`, LayerZero के ज़रिए Stellar से भेजे गए USDT0 के लिए `usdt0`);
+  liquidity operations (`liquidity.buckets`: `count`, `succeeded`, `failed`) और
+  webhook deliveries (`webhooks.buckets`: `deliveries`, `failed`) भी प्रति bucket गिने
+  जाते हैं, उन्हीं buckets पर, अपनी window के totals के अलावा। यह सिर्फ़ Postgres में
+  aggregate करता है: कोई migration नहीं, कोई नया variable नहीं, और कोई मौजूदा
+  response नहीं बदला।
 - **हर आँकड़े का scope key के अपने data जैसा है।** Payments, swaps और liquidity
   operations उस consumer के हैं, उस network पर जिसे उसकी key target करती है
   (`prod` → `public`, `dev` → `testnet`), इसलिए sandbox key कोई Solana, Monad या
-  cross-chain swap नहीं गिनती: वे सिर्फ़ mainnet पर चलते हैं। Webhook deliveries
+  cross-chain swap और कोई USDT0 transfer नहीं गिनती: वे सिर्फ़ mainnet पर चलते हैं। Webhook deliveries
   consumer के हर endpoint की होती हैं, क्योंकि कोई endpoint किसी network का नहीं होता।
   `GET /v1/swaps`, `GET /v1/cross-chain-swaps` और `GET /v1/liquidity-pools/operations`
   network के अनुसार filter नहीं करते, इसलिए उनके totals series से बड़े हो सकते हैं।
 - **Succeeded, failed और in progress हर model के लिए एक table हैं**
   `src/analytics/analytics.constants.ts` में: failed या expired swap या operation
-  failed गिना जाता है, और refunded cross-chain swap भी; जो कुछ final नहीं है वह in
-  progress है। `SwapStatus` या `CrossChainSwapStatus` का नया value तब तक compile नहीं
-  होता जब तक उसे वहाँ map न किया जाए।
+  failed गिना जाता है, और refunded cross-chain swap भी; delivered USDT0 transfer
+  succeeded गिना जाता है; जो कुछ final नहीं है वह in progress है। `SwapStatus`,
+  `CrossChainSwapStatus` या `Usdt0TransferStatus` का नया value तब तक compile नहीं होता
+  जब तक उसे वहाँ map न किया जाए।
 
 ### क्रॉस-चेन swaps: NEAR Intents का हर network, और nullable `depositUri`
 

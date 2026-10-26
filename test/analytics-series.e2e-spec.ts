@@ -7,11 +7,12 @@ import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { AppModule } from '@/app.module';
 import { AllExceptionsFilter } from '@/common/filters/all-exceptions.filter';
+import { Prisma } from '@generated/prisma/client';
 import { PrismaService } from '@/prisma/prisma.service';
 
 /**
- * `GET /v1/summary/series`: the dashboard chart's payments, swaps, liquidity operations and
- * webhook deliveries grouped by period.
+ * `GET /v1/summary/series`: the dashboard chart's payments, swaps (USDT0 transfers included),
+ * liquidity operations and webhook deliveries grouped by period, each on the same buckets.
  *
  * The aggregation is the service spec's; this suite pins the wiring in front of it: the
  * gateway gate, the `payments:read` scope, the period the DTO accepts, and the shape that
@@ -125,21 +126,53 @@ describe('Summary series (e2e)', () => {
       succeeded: 0,
       failed: 0,
       inProgress: 0,
-      byKind: { dex: 0, chain: 0, crossChain: 0 },
+      byKind: { dex: 0, chain: 0, crossChain: 0, usdt0: 0 },
     });
     expect(res.body.swaps.previous).toEqual({
       count: 0,
       succeeded: 0,
       failed: 0,
     });
+    // Liquidity and webhooks per bucket too, each quiet bucket a zero.
+    const starts = res.body.buckets.map((b: { start: string }) => b.start);
     expect(res.body.liquidity).toEqual({
+      buckets: starts.map((start: string) => ({
+        start,
+        count: 0,
+        succeeded: 0,
+        failed: 0,
+      })),
       totals: { count: 0, succeeded: 0, failed: 0 },
       previous: { count: 0, succeeded: 0, failed: 0 },
     });
     expect(res.body.webhooks).toEqual({
+      buckets: starts.map((start: string) => ({
+        start,
+        deliveries: 0,
+        failed: 0,
+      })),
       totals: { deliveries: 0, failed: 0 },
       previous: { deliveries: 0, failed: 0 },
     });
+  });
+
+  it('asks a sandbox key for testnet rows only, so it counts no USDT0 transfer', async () => {
+    prismaMock.$queryRaw.mockClear();
+    const res = await tenant('/v1/summary/series?period=month', 'payments:read')
+      .set('x-consumer-env', 'dev')
+      .expect(200);
+    expect(res.body.swaps.totals.byKind.usdt0).toBe(0);
+    const swapQueries = (
+      prismaMock.$queryRaw.mock.calls as [string[], ...unknown[]][]
+    )
+      .map(([strings, ...values]) => new Prisma.Sql(strings, values))
+      .filter((query) => query.text.includes('"usdt0_transfer"'));
+    // The swap buckets and the swap windows both read the USDT0 table.
+    expect(swapQueries).toHaveLength(2);
+    for (const query of swapQueries) {
+      expect(query.values).toContain('testnet');
+      expect(query.values).not.toContain('public');
+    }
   });
 
   it('groups by day when no period is named', async () => {
@@ -147,13 +180,15 @@ describe('Summary series (e2e)', () => {
     expect(res.body.period).toBe('day');
     expect(res.body.buckets).toHaveLength(30);
     expect(res.body.swaps.buckets).toHaveLength(30);
+    expect(res.body.liquidity.buckets).toHaveLength(30);
+    expect(res.body.webhooks.buckets).toHaveLength(30);
   });
 
   it('aggregates in Postgres and never fetches a row of any model it counts', async () => {
     prismaMock.$queryRaw.mockClear();
     await tenant('/v1/summary/series?period=week', 'payments:read').expect(200);
-    // Payments twice, swaps twice, liquidity and webhooks once each; the mock has no
-    // `findMany` on any of those models, so fetching rows would have been a 500.
-    expect(prismaMock.$queryRaw).toHaveBeenCalledTimes(6);
+    // Payments, swaps, liquidity and webhooks, each per bucket and per window; the mock has
+    // no `findMany` on any of those models, so fetching rows would have been a 500.
+    expect(prismaMock.$queryRaw).toHaveBeenCalledTimes(8);
   });
 });

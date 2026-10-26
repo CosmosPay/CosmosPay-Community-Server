@@ -1,9 +1,14 @@
-import { CrossChainSwapStatus, SwapStatus } from '@generated/prisma/client';
+import {
+  CrossChainSwapStatus,
+  SwapStatus,
+  Usdt0TransferStatus,
+} from '@generated/prisma/client';
 import {
   CHAIN_SWAP_OUTCOMES,
   CROSS_CHAIN_SWAP_OUTCOMES,
   LIQUIDITY_OPERATION_OUTCOMES,
   SWAP_OUTCOMES,
+  USDT0_TRANSFER_OUTCOMES,
   type SeriesOutcome,
 } from '@/analytics/analytics.constants';
 import {
@@ -56,6 +61,23 @@ describe('series outcomes', () => {
       'DEPOSIT_DETECTED',
       'INCOMPLETE_DEPOSIT',
       'PROCESSING',
+    ]);
+  });
+
+  it('maps every Usdt0TransferStatus: delivered, given up on, or still on its way', () => {
+    expect(Object.keys(USDT0_TRANSFER_OUTCOMES).sort()).toEqual(
+      Object.values(Usdt0TransferStatus).sort(),
+    );
+    expect(statusesFor(USDT0_TRANSFER_OUTCOMES, 'succeeded')).toEqual([
+      'DELIVERED',
+    ]);
+    expect(statusesFor(USDT0_TRANSFER_OUTCOMES, 'failed')).toEqual([
+      'FAILED',
+      'EXPIRED',
+    ]);
+    expect(statusesFor(USDT0_TRANSFER_OUTCOMES, 'inProgress')).toEqual([
+      'PENDING',
+      'SUBMITTED',
     ]);
   });
 
