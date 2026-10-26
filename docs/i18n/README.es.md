@@ -1447,7 +1447,7 @@ cambia.
 | Swaps en Solana (`POST /v1/swaps`, `chain: solana`) | Jupiter paga una sola comisión de integrador por swap y la usa la comisión del plan, así que la transferencia de la comisión (desde la cuenta de origen, en el activo de origen: una transferencia del System Program para SOL, si no un TransferChecked después de crear la cuenta de token de la wallet) se agrega a la propia transacción v0 de Jupiter: se reusan las cuentas que cargan sus tablas de direcciones, se reescriben todos los índices, se sube su límite de cómputo y la ruta se pide con a lo sumo 40 cuentas para que siga entrando en un paquete. Una comisión en SOL va a una cuenta que ya existe |
 | Pagos privados (`POST /v1/zk-payments`) | Una tercera transferencia confidencial, en XLM, del pagador a `wallet`, así la comisión queda tan privada como el pago. `wallet` debe tener una cuenta confidencial en el token de Cosmos Pay bajo el auditor 0 (si no, `400 recipient_not_registered`) y no ser ni el destinatario ni la cuenta de comisiones. La comisión del 0,01 % sigue siendo una parte de `amount`, y el `amount` de la fila es lo que el pagador paga en total. El confirm recibe el tercer hash como `merchantFeeTxHash` y verifica esa transferencia como las otras dos |
 | Liquidez (`POST /v1/liquidity-pools/deposit` y `/withdraw`) | Un depósito o un retiro mueve dos activos, así que la comisión es `bps` de CADA uno (redondeado hacia abajo), pagada a `wallet` con un pago por activo en la misma transacción, después del depósito, o después del retiro y su comisión del plan; `fixed` se rechaza (`400 validation_failed`). En un depósito, `recipient` la descuenta de los montos (entra menos al pool) y `payer` la suma por encima. En un retiro sale de lo que el retiro paga, como parte de sus mínimos garantizados, diga lo que diga `paidBy`. `wallet` debe existir y tener trustline de ambos activos. El `amount` / `asset` del registro son la pata del activo A, y `amountB` / `assetB` la del activo B |
-| Swaps en Monad | Todavía no: Kuru Flow paga una sola comisión de referido por swap y la usa la comisión del plan (`400 merchant_fee_unsupported`) |
+| Swaps en Monad (`POST /v1/swaps`, `chain: monad`) | Kuru Flow paga una sola comisión de referido por swap y la usa la comisión del plan, así que un swap con comisión del comercio pasa por `contracts/MerchantFeeSwapRouter.sol`, que el operador despliega una vez para el router de Kuru y nombra en `KURU_MERCHANT_FEE_ROUTER`: Kuru cotiza para el router, la wallet le envía (MON) o le aprueba (ERC-20) la entrada más la comisión, y en esa única transacción el router paga la comisión, ejecuta el calldata de Kuru, reenvía la salida y devuelve lo que Kuru no usó, y revierte por debajo del mínimo de Kuru. El código desplegado se compara con el artefacto antes de darle la dirección a una wallet. Sin la variable, `400 merchant_fee_unsupported` |
 
 USDT0 sumará el campo cuando tenga una forma de dividir la transferencia on-chain; hasta
 entonces sus rutas lo rechazan como campo desconocido (`400 validation_failed`).
@@ -2230,6 +2230,13 @@ misma lista `PLUGINS_ENABLED` que los plugins aislados.
   y `/withdraw`): `bps` de cada activo, un pago por activo en la misma transacción; `fixed`
   se rechaza. Las respuestas y los webhooks suman `merchantFee`, cuyos `amountB` /
   `assetB` son la pata del activo B.
+- **Los swaps en Monad aceptan `merchantFee`** cuando `KURU_MERCHANT_FEE_ROUTER` nombra un
+  `contracts/MerchantFeeSwapRouter.sol` desplegado (artefacto
+  `src/evm/merchant-fee-swap-router.artifact.ts`). **Paso de despliegue:** desplegar el
+  bytecode del artefacto seguido de la dirección del router de Kuru Flow como palabra de
+  32 bytes, desde cualquier cuenta (el contrato no tiene dueño), y fijar la variable. La
+  wallet de ese swap aprueba al router, no a Kuru. Sin ella, los swaps en Monad siguen
+  respondiendo `merchant_fee_unsupported`.
 
 ### Los listados siguen la red de la clave; las lecturas del dashboard se cachean
 
@@ -3114,6 +3121,7 @@ Cada variable leída de `process.env` en `src/` se valida en el arranque mediant
 | `KURU_BASE_URL` | no | `https://ws.kuru.io` | API de Kuru Flow (Monad) |
 | `KURU_API_KEY` | para producción | — | Clave de API de Kuru Flow (`X-API-Key`). Sin ella cada dirección recibe un token limitado a una solicitud por segundo |
 | `KURU_TIMEOUT_MS` | no | `15000` | Presupuesto de una llamada a Kuru Flow (ms) |
+| `KURU_MERCHANT_FEE_ROUTER` | para comisiones del comercio en Monad | — | Un `contracts/MerchantFeeSwapRouter.sol` desplegado para el router de Kuru Flow. Sin ella, un swap en Monad con comisión del comercio responde `merchant_fee_unsupported`; una dirección cuyo código no es el del artefacto responde `503 misconfigured` |
 | `ANALYTICS_CACHE_TTL_MS` | no | `10000` | Cuánto tiempo `/v1/summary`, `/v1/summary/series` y `/v1/balances` reutilizan una respuesta por consumidor y red (ms), en cada réplica. `0` lo desactiva |
 | `OBSERVER_ENABLED` | no | `true` | `true` / `false` — reconciliador on-chain |
 | `OBSERVER_INTERVAL_MS` | no | `15000` | Intervalo de sondeo del observador (ms, mín. 1000) |

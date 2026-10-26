@@ -195,7 +195,7 @@ export const API_ERROR_CASES: Readonly<Record<ApiErrorCode, ApiErrorCase>> = {
     statuses: [400],
     summary: 'This operation cannot pay a merchant fee yet',
     message:
-      'A merchant fee is not available on monad swaps yet: Kuru Flow takes one referrer fee per swap and the plan commission uses it.',
+      'A merchant fee is not available on monad swaps on this deployment: Kuru Flow takes one referrer fee per swap and the plan commission uses it, and no merchant fee router is configured (KURU_MERCHANT_FEE_ROUTER).',
     path: '/v1/swaps',
   },
   [ApiErrorCode.TransactionRejected]: {

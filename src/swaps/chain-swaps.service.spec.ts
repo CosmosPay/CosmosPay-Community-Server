@@ -114,6 +114,7 @@ function setup(feeWallet = 'FeeWa11et1111111111111111111111111111111111') {
   const { rows, prisma } = fakePrisma();
   const webhooks = { emit: jest.fn().mockResolvedValue(true) };
   const solana = {
+    merchantFeeUnsupported: () => null,
     resolveAsset: jest.fn(async (a: string) =>
       a === 'SOL'
         ? { asset: 'native', decimals: 9 }
@@ -147,7 +148,10 @@ function setup(feeWallet = 'FeeWa11et1111111111111111111111111111111111') {
       resolve: jest.fn().mockResolvedValue({ id: 'consumer_1' }),
     } as unknown as ConsumerResolverService,
     solana as unknown as SolanaSwapVenue,
-    {} as unknown as MonadSwapVenue,
+    {
+      merchantFeeUnsupported: () =>
+        'no merchant fee router is configured (KURU_MERCHANT_FEE_ROUTER)',
+    } as unknown as MonadSwapVenue,
     recordTokens,
   );
   return { service, rows, webhooks, solana, prisma, config };

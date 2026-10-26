@@ -236,6 +236,12 @@ class EnvironmentVariables {
   KURU_TIMEOUT_MS?: number;
 
   @IsOptional()
+  @Matches(/^0x[0-9a-fA-F]{40}$/, {
+    message: 'KURU_MERCHANT_FEE_ROUTER must be an EVM address (0x + 40 hex)',
+  })
+  KURU_MERCHANT_FEE_ROUTER?: string;
+
+  @IsOptional()
   @IsInt()
   @Min(1)
   STELLAR_TX_TIMEOUT?: number;

@@ -108,7 +108,10 @@ export class QuoteSwapDto {
       "transfer appended to Jupiter's transaction (a SOL fee goes to an " +
       'existing account). `paidBy: recipient` takes it from `amount` (the swap ' +
       'routes less); `payer` adds it on top (the source sends `amount` plus ' +
-      'the fee). Monad answers `merchant_fee_unsupported`.',
+      'the fee). Monad: through the merchant fee router ' +
+      '(`KURU_MERCHANT_FEE_ROUTER`), which the wallet sends or approves the ' +
+      'input plus the fee; without one configured, ' +
+      '`merchant_fee_unsupported`.',
   })
   @IsOptional()
   @ValidateNested()

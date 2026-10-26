@@ -960,7 +960,7 @@ NEAR Intents 从输入中扣除它，报价的输出已是扣除后的净额，�
 | Solana 兑换（`POST /v1/swaps`，`chain: solana`） | Jupiter 每笔兑换只支付一个集成方费用，已被套餐佣金使用，因此手续费转账（从源账户、以源资产支付：SOL 用 System Program 转账，否则先创建钱包的代币账户再 TransferChecked）被追加到 Jupiter 自己的 v0 交易中：复用其地址查找表已加载的账户，重写所有索引，提高其计算单元上限，并以最多 40 个账户请求路由，使其仍能放入一个数据包。SOL 手续费须转入已存在的账户 |
 | 隐私支付（`POST /v1/zk-payments`） | 付款方以 XLM 向 `wallet` 进行第三笔保密转账，使该费用与付款本身一样保密。`wallet` 必须在 Cosmos Pay 的代币上持有审计方 0 下的保密账户（否则返回 `400 recipient_not_registered`），且不能是收款方或手续费账户。0.01% 的佣金仍按 `amount` 计算，记录中的 `amount` 是付款方支付的总额。confirm 以 `merchantFeeTxHash` 接收第三个哈希，并像另外两笔一样校验该转账 |
 | 流动性（`POST /v1/liquidity-pools/deposit` 与 `/withdraw`） | 存入或取出会移动两种资产，因此费用为每种资产的 `bps`（向下取整），在同一笔交易中按每种资产各一笔付款支付给 `wallet`，位于存入操作之后，或位于取出操作及其套餐佣金之后；`fixed` 会被拒绝（`400 validation_failed`）。存入时，`recipient` 从金额中扣除（进入池子的更少），`payer` 在其之上加收。取出时，无论 `paidBy` 为何，费用都从取出所得中按其保证的最低金额的比例扣除。`wallet` 必须存在并对两种资产都有 trustline。记录中的 `amount` / `asset` 是资产 A 的部分，`amountB` / `assetB` 是资产 B 的部分 |
-| Monad 上的兑换 | 暂不支持：Kuru Flow 每笔兑换只支付一个推荐费用，已被套餐佣金使用（`400 merchant_fee_unsupported`） |
+| Monad 上的兑换（`POST /v1/swaps`，`chain: monad`） | Kuru Flow 每笔兑换只支付一个推荐费用，已被套餐佣金使用，因此带商户手续费的兑换会经过 `contracts/MerchantFeeSwapRouter.sol`：由运营方针对 Kuru 的 router 部署一次，并在 `KURU_MERCHANT_FEE_ROUTER` 中指定。Kuru 以该 router 为用户报价，钱包向其发送（MON）或授权（ERC-20）输入加手续费，router 在同一笔交易中支付手续费、执行 Kuru 的 calldata、转出输出并退还 Kuru 未用完的部分，低于 Kuru 的最低值时回滚。在把地址交给钱包之前，会将已部署的代码与 artifact 比对。未设置该变量时返回 `400 merchant_fee_unsupported` |
 
 USDT0 会在具备链上拆分转账的方式后加入该字段；在此之前，它的路由会将其作为未知字段拒绝
 （`400 validation_failed`）。
@@ -1438,6 +1438,11 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
 - **流动性操作也接受 `merchantFee`**（`POST /v1/liquidity-pools/deposit` 与 `/withdraw`）：按每种
   资产的 `bps` 收取，在同一笔交易中每种资产各一笔付款；`fixed` 会被拒绝。响应和 webhook 新增
   `merchantFee`，其中 `amountB` / `assetB` 是资产 B 的部分。
+- **Monad 兑换也接受 `merchantFee`**：前提是 `KURU_MERCHANT_FEE_ROUTER` 指向已部署的
+  `contracts/MerchantFeeSwapRouter.sol`（artifact `src/evm/merchant-fee-swap-router.artifact.ts`）。
+  **部署步骤：**从任意账户部署 artifact 的字节码，其后跟上 Kuru Flow router 地址（32 字节字），
+  合约没有所有者；然后设置该变量。此类兑换的钱包授权的是 router 而不是 Kuru。未设置时，Monad
+  兑换仍返回 `merchant_fee_unsupported`。
 
 ### 列表遵循密钥的网络；仪表盘读取会被缓存
 
@@ -1981,6 +1986,7 @@ curl -H "X-Gateway-Secret: $APISIX_GATEWAY_SECRET" -H "X-Consumer-Username: ops"
 | `KURU_BASE_URL` | 否 | `https://ws.kuru.io` | Kuru Flow API（Monad） |
 | `KURU_API_KEY` | 生产环境需要 | — | Kuru Flow API key（`X-API-Key`）。没有它时每个地址只能拿到限速每秒一次请求的 token |
 | `KURU_TIMEOUT_MS` | 否 | `15000` | 单次 Kuru Flow 调用的时间预算（毫秒） |
+| `KURU_MERCHANT_FEE_ROUTER` | Monad 上的商户手续费需要 | — | 针对 Kuru Flow router 部署的 `contracts/MerchantFeeSwapRouter.sol`。未设置时，带商户手续费的 Monad 兑换返回 `merchant_fee_unsupported`；代码与 artifact 不一致的地址返回 `503 misconfigured` |
 | `ANALYTICS_CACHE_TTL_MS` | 否 | `10000` | `/v1/summary`、`/v1/summary/series` 和 `/v1/balances` 按消费者和网络复用一个响应的时长（毫秒），每个副本独立。`0` 关闭 |
 | `OBSERVER_ENABLED` | 否 | `true` | `true` / `false` — 链上对账器 |
 | `OBSERVER_INTERVAL_MS` | 否 | `15000` | 观察器轮询间隔（ms，最小 1000） |

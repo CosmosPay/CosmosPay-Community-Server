@@ -1,4 +1,5 @@
 import { ed25519 } from '@noble/curves/ed25519.js';
+import type { ConfigService } from '@nestjs/config';
 import type { ChainSwap } from '@generated/prisma/client';
 import { encodeBase58 } from '@/chains/chain-address';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
@@ -292,7 +293,10 @@ describe('MonadSwapVenue', () => {
       k,
     ).raw;
 
-  function venue(rpc: Record<string, jest.Mock> = {}) {
+  function venue(
+    rpc: Record<string, jest.Mock> = {},
+    merchantFeeRouter: string | null = null,
+  ) {
     const kuru = {
       quote: jest.fn().mockResolvedValue({
         output: '284466',
@@ -304,11 +308,15 @@ describe('MonadSwapVenue', () => {
         },
       }),
     };
+    const config = {
+      get: () => ({ kuru: { merchantFeeRouter } }),
+    } as unknown as ConfigService<never, true>;
     return {
       kuru,
       venue: new MonadSwapVenue(
         kuru as unknown as KuruClient,
         rpc as unknown as EvmRpcClient,
+        config,
       ),
     };
   }
@@ -387,5 +395,116 @@ describe('MonadSwapVenue', () => {
     await expect(v.settlement('0xh')).resolves.toBeNull();
     await expect(v.settlement('0xh')).resolves.toBe('SUCCEEDED');
     await expect(v.settlement('0xh')).resolves.toBe('FAILED');
+  });
+
+  describe('with a merchant fee', () => {
+    const FEE_ROUTER = '0x813eff013aec419c94b1c337db7317683f446d5a';
+    const FEE_WALLET = '0x62ee1b8d1efdf8f73c78db87b888406b194e266a';
+    const RUNTIME = '0x6080604052deadbeef';
+    /** An RPC whose router answers Kuru's router and the artifact's code. */
+    function routerRpc(over: Record<string, jest.Mock> = {}) {
+      return {
+        ethCall: jest.fn(
+          async (_c: string, _n: string, call: { to?: string }) =>
+            call.to
+              ? `0x${ROUTER.slice(2).toLowerCase().padStart(64, '0')}`
+              : RUNTIME,
+        ),
+        getCode: jest.fn().mockResolvedValue(RUNTIME),
+        erc20Allowance: jest.fn().mockResolvedValue(0n),
+        ...over,
+      };
+    }
+    const request = (send: string) => ({
+      source,
+      send: { asset: send, decimals: send === 'native' ? 18 : 6 },
+      dest: { asset: send === 'native' ? USDC : 'native', decimals: 6 },
+      amount: 1_000_000n,
+      slippageBps: 50,
+      feeBps: 0,
+      feeWallet: null,
+      merchantFee: { wallet: FEE_WALLET, amount: 20_000n },
+    });
+
+    it('is unsupported without a configured router', () => {
+      expect(venue().venue.merchantFeeUnsupported()).toMatch(
+        /KURU_MERCHANT_FEE_ROUTER/,
+      );
+      expect(venue({}, FEE_ROUTER).venue.merchantFeeUnsupported()).toBeNull();
+    });
+
+    it("sends native MON and the fee to the router, which carries Kuru's calldata", async () => {
+      const { venue: v, kuru } = venue(routerRpc(), FEE_ROUTER);
+      kuru.quote.mockResolvedValue({
+        output: '284466',
+        minOut: '283044',
+        transaction: { to: ROUTER, calldata: 'CE1E7030', value: '1000000' },
+      });
+      const out = await v.build(request('native'));
+      // Quoted for the router: Kuru takes the input from it and pays it.
+      expect(kuru.quote.mock.calls[0][0].userAddress.toLowerCase()).toBe(
+        FEE_ROUTER,
+      );
+      const tx = out.transaction as { to: string; data: string; value: string };
+      expect(tx.to.toLowerCase()).toBe(FEE_ROUTER);
+      expect(tx.value).toBe('1020000');
+      expect(tx.data.startsWith('0x6f3c6281')).toBe(true);
+      const words = tx.data.slice(10).match(/.{64}/g)!;
+      expect(BigInt(`0x${words[1]}`)).toBe(1_000_000n); // amountIn
+      expect(BigInt(`0x${words[3]}`)).toBe(283_044n); // minOut
+      expect(`0x${words[4].slice(24)}`).toBe(FEE_WALLET);
+      expect(BigInt(`0x${words[5]}`)).toBe(20_000n); // fee
+      expect(`0x${words[6].slice(24)}`).toBe(source.toLowerCase());
+      expect(BigInt(`0x${words[8]}`)).toBe(4n); // calldata length
+      expect(words[9].startsWith('ce1e7030')).toBe(true);
+      expect(out.approval).toBeNull();
+    });
+
+    it('asks for an approval of the input plus the fee, to the router', async () => {
+      const rpc = routerRpc();
+      const { venue: v } = venue(rpc, FEE_ROUTER);
+      const out = await v.build(request(USDC));
+      expect(rpc.erc20Allowance.mock.calls[0][4].toLowerCase()).toBe(
+        FEE_ROUTER,
+      );
+      // 1,020,000 = 0x0f9060
+      expect(out.approval).toMatchObject({
+        to: USDC,
+        data: expect.stringMatching(/^0x095ea7b3.+0f9060$/),
+      });
+      expect((out.transaction as { value: string }).value).toBe('0');
+    });
+
+    it("checks the router once, and refuses one whose code is not the artifact's", async () => {
+      const rpc = routerRpc();
+      const { venue: v } = venue(rpc, FEE_ROUTER);
+      await v.build(request(USDC));
+      await v.build(request(USDC));
+      expect(rpc.getCode).toHaveBeenCalledTimes(1);
+
+      const forged = venue(
+        routerRpc({ getCode: jest.fn().mockResolvedValue('0x60806040') }),
+        FEE_ROUTER,
+      );
+      const err = await forged.venue
+        .build(request(USDC))
+        .catch((e: unknown) => e);
+      expect((err as ApiError).code).toBe(ApiErrorCode.Misconfigured);
+    });
+
+    it("refuses a quote that routes through another aggregator than the router's", async () => {
+      const { venue: v, kuru } = venue(routerRpc(), FEE_ROUTER);
+      kuru.quote.mockResolvedValue({
+        output: '1',
+        minOut: '1',
+        transaction: {
+          to: '0x1111111111111111111111111111111111111111',
+          calldata: '00',
+          value: '0',
+        },
+      });
+      const err = await v.build(request(USDC)).catch((e: unknown) => e);
+      expect((err as ApiError).code).toBe(ApiErrorCode.Misconfigured);
+    });
   });
 });

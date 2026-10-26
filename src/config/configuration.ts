@@ -305,7 +305,17 @@ export interface AppConfig {
    */
   swapAggregators: {
     jupiter: { baseUrl: string; apiKey: string; timeoutMs: number };
-    kuru: { baseUrl: string; apiKey: string; timeoutMs: number };
+    kuru: {
+      baseUrl: string;
+      apiKey: string;
+      timeoutMs: number;
+      /**
+       * A deployed `contracts/MerchantFeeSwapRouter.sol` for Kuru Flow's
+       * router, through which a Monad swap pays a merchant fee; null without
+       * one, and Monad swaps then refuse a merchant fee.
+       */
+      merchantFeeRouter: string | null;
+    };
   };
   /**
    * Cross-chain swaps, settled by NEAR Intents' 1Click API. Mainnet only:
@@ -882,6 +892,7 @@ export default (): AppConfig => ({
           String(DEFAULT_SWAP_AGGREGATOR_TIMEOUT_MS),
         10,
       ),
+      merchantFeeRouter: process.env.KURU_MERCHANT_FEE_ROUTER?.trim() || null,
     },
   },
   nearIntents: {

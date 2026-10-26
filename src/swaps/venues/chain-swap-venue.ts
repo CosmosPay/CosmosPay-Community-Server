@@ -56,6 +56,11 @@ export type VenueSettlement = 'SUCCEEDED' | 'FAILED' | null;
 export interface ChainSwapVenue {
   /** `sourceAssetCode` / `destAssetCode` as the request spelled it. */
   resolveAsset(asset: string): Promise<VenueAsset>;
+  /**
+   * Why this venue cannot pay a merchant fee on this deployment, or null when
+   * it can. Asked before anything is priced.
+   */
+  merchantFeeUnsupported(): string | null;
   quote(request: VenueRequest): Promise<VenueQuote>;
   build(request: VenueRequest & { source: string }): Promise<VenueBuild>;
   /**

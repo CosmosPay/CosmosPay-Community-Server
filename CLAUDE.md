@@ -331,6 +331,15 @@ table. These are the rules that did not hold on their own:
   chain's own `eth_chainId`: a wrong id sends the deposit to another chain. A
   1Click blockchain with no entry (`qtc`, `adi`) is never offered: an address this
   service cannot validate is a refund it cannot promise.
+- **Monad swaps with a merchant fee go through `contracts/MerchantFeeSwapRouter.sol`**
+  (`KURU_MERCHANT_FEE_ROUTER`), one deployment per Kuru Flow router, with no owner. It
+  is not a deposit address: wallets approve it and send it value, so the venue checks
+  the deployed code against the artifact (`eth_getCode` must equal the runtime a
+  creation `eth_call` of `routerInitCode(aggregator())` answers) before handing the
+  address out, and refuses a Kuru quote routed through another aggregator. The router
+  calls nothing but its immutable `aggregator` and the two tokens, pulls only from
+  the caller and leaves no allowance; keep all three when changing it, and a changed
+  router is a new deployment the operator points the variable at.
 - **Monad deposit addresses are `CREATE2` addresses of
   `contracts/PaymentForwarder.sol`**, or, for an intent with a merchant fee, of
   `contracts/PaymentSplitForwarder.sol` (two more constructor arguments: the

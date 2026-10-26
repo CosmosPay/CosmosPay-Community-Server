@@ -1902,7 +1902,7 @@
             }
           },
           "400": {
-            "description": "`network_unsupported`: `chain: solana | monad` with a dev (testnet) key: Jupiter and Kuru Flow run on mainnet only. `asset_unsupported`: not an SPL mint / ERC-20 on that chain. `provider_error`: the aggregator found no route or refused the amount.",
+            "description": "`network_unsupported`: `chain: solana | monad` with a dev (testnet) key: Jupiter and Kuru Flow run on mainnet only. `asset_unsupported`: not an SPL mint / ERC-20 on that chain. `provider_error`: the aggregator found no route or refused the amount. `merchant_fee_unsupported`: a `merchantFee` on a Monad swap where no merchant fee router is configured (KURU_MERCHANT_FEE_ROUTER).",
             "content": {
               "application/json": {
                 "schema": {
@@ -1988,6 +1988,17 @@
                       "path": "/v1/onramp/quotes",
                       "timestamp": "2026-09-01T12:00:00.000Z"
                     }
+                  },
+                  "merchant_fee_unsupported": {
+                    "summary": "merchant_fee_unsupported: This operation cannot pay a merchant fee yet",
+                    "value": {
+                      "statusCode": 400,
+                      "code": "merchant_fee_unsupported",
+                      "error": "Bad Request",
+                      "message": "A merchant fee is not available on monad swaps on this deployment: Kuru Flow takes one referrer fee per swap and the plan commission uses it, and no merchant fee router is configured (KURU_MERCHANT_FEE_ROUTER).",
+                      "path": "/v1/swaps",
+                      "timestamp": "2026-09-01T12:00:00.000Z"
+                    }
                   }
                 }
               }
@@ -2009,7 +2020,7 @@
             "$ref": "#/components/responses/UpstreamError"
           },
           "503": {
-            "description": "`misconfigured`: the plan charges a commission and the chain has no fee wallet configured (STELLAR_SWAP_FEE_WALLET, SOLANA_SWAP_FEE_WALLET, MONAD_SWAP_FEE_WALLET).",
+            "description": "`misconfigured`: the plan charges a commission and the chain has no fee wallet configured (STELLAR_SWAP_FEE_WALLET, SOLANA_SWAP_FEE_WALLET, MONAD_SWAP_FEE_WALLET), or KURU_MERCHANT_FEE_ROUTER is not a MerchantFeeSwapRouter.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2134,7 +2145,7 @@
             }
           },
           "400": {
-            "description": "Stellar: `trustline_missing` (the destination is another account that does not trust the bought asset, and only it can add the trustline; a source that receives the swap gets the trustline in the same transaction instead), `insufficient_balance` (the source cannot keep the 0.5 XLM reserve that trustline locks, after what the transaction sends and its fee), `no_path_found`. Solana / Monad: `network_unsupported` (a dev key), `asset_unsupported`, `provider_error` (no route, or the aggregator simulated a failure, usually a wallet that cannot cover the amount plus fees).",
+            "description": "Stellar: `trustline_missing` (the destination is another account that does not trust the bought asset, and only it can add the trustline; a source that receives the swap gets the trustline in the same transaction instead), `insufficient_balance` (the source cannot keep the 0.5 XLM reserve that trustline locks, after what the transaction sends and its fee), `no_path_found`. Solana / Monad: `network_unsupported` (a dev key), `asset_unsupported`, `provider_error` (no route, or the aggregator simulated a failure, usually a wallet that cannot cover the amount plus fees). Monad: `merchant_fee_unsupported` (a `merchantFee` and no merchant fee router configured, KURU_MERCHANT_FEE_ROUTER).",
             "content": {
               "application/json": {
                 "schema": {
@@ -2242,6 +2253,17 @@
                       "path": "/v1/onramp/quotes",
                       "timestamp": "2026-09-01T12:00:00.000Z"
                     }
+                  },
+                  "merchant_fee_unsupported": {
+                    "summary": "merchant_fee_unsupported: This operation cannot pay a merchant fee yet",
+                    "value": {
+                      "statusCode": 400,
+                      "code": "merchant_fee_unsupported",
+                      "error": "Bad Request",
+                      "message": "A merchant fee is not available on monad swaps on this deployment: Kuru Flow takes one referrer fee per swap and the plan commission uses it, and no merchant fee router is configured (KURU_MERCHANT_FEE_ROUTER).",
+                      "path": "/v1/swaps",
+                      "timestamp": "2026-09-01T12:00:00.000Z"
+                    }
                   }
                 }
               }
@@ -2297,7 +2319,7 @@
             "$ref": "#/components/responses/UpstreamError"
           },
           "503": {
-            "description": "`misconfigured`: the plan charges a commission and the chain has no fee wallet (or, on Solana, the fee wallet has no token account for the output mint yet).",
+            "description": "`misconfigured`: the plan charges a commission and the chain has no fee wallet (or, on Solana, the fee wallet has no token account for the output mint yet), or, for a Monad swap with a merchant fee, KURU_MERCHANT_FEE_ROUTER is not a MerchantFeeSwapRouter or Kuru Flow routes through another aggregator than the one it was deployed for.",
             "content": {
               "application/json": {
                 "schema": {
@@ -16553,7 +16575,7 @@
             "example": 50
           },
           "merchantFee": {
-            "description": "Your own fee on this swap, paid in the source asset to `wallet` out of the source wallet, in the same transaction, beside the plan commission. Stellar: its own payment (the wallet must trust the asset). Solana: a transfer appended to Jupiter's transaction (a SOL fee goes to an existing account). `paidBy: recipient` takes it from `amount` (the swap routes less); `payer` adds it on top (the source sends `amount` plus the fee). Monad answers `merchant_fee_unsupported`.",
+            "description": "Your own fee on this swap, paid in the source asset to `wallet` out of the source wallet, in the same transaction, beside the plan commission. Stellar: its own payment (the wallet must trust the asset). Solana: a transfer appended to Jupiter's transaction (a SOL fee goes to an existing account). `paidBy: recipient` takes it from `amount` (the swap routes less); `payer` adds it on top (the source sends `amount` plus the fee). Monad: through the merchant fee router (`KURU_MERCHANT_FEE_ROUTER`), which the wallet sends or approves the input plus the fee; without one configured, `merchant_fee_unsupported`.",
             "allOf": [
               {
                 "$ref": "#/components/schemas/MerchantFeeDto"
@@ -16785,7 +16807,7 @@
             "example": 50
           },
           "merchantFee": {
-            "description": "Your own fee on this swap, paid in the source asset to `wallet` out of the source wallet, in the same transaction, beside the plan commission. Stellar: its own payment (the wallet must trust the asset). Solana: a transfer appended to Jupiter's transaction (a SOL fee goes to an existing account). `paidBy: recipient` takes it from `amount` (the swap routes less); `payer` adds it on top (the source sends `amount` plus the fee). Monad answers `merchant_fee_unsupported`.",
+            "description": "Your own fee on this swap, paid in the source asset to `wallet` out of the source wallet, in the same transaction, beside the plan commission. Stellar: its own payment (the wallet must trust the asset). Solana: a transfer appended to Jupiter's transaction (a SOL fee goes to an existing account). `paidBy: recipient` takes it from `amount` (the swap routes less); `payer` adds it on top (the source sends `amount` plus the fee). Monad: through the merchant fee router (`KURU_MERCHANT_FEE_ROUTER`), which the wallet sends or approves the input plus the fee; without one configured, `merchant_fee_unsupported`.",
             "allOf": [
               {
                 "$ref": "#/components/schemas/MerchantFeeDto"

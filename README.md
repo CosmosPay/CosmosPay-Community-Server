@@ -1392,7 +1392,7 @@ It is apart from the plan commission Cosmos Pay charges, which does not change.
 | Swaps on Solana (`POST /v1/swaps`, `chain: solana`) | Jupiter pays one integrator fee per swap and the plan commission takes it, so the fee's transfer (out of the source, in the source asset: a System transfer for SOL, else a TransferChecked after creating the wallet's token account) is appended to Jupiter's own v0 transaction: the accounts its lookup tables load are reused, every index rewritten, its compute limit raised, and the route asked with at most 40 accounts so it still fits one packet. A SOL fee goes to an account that already exists |
 | Private payments (`POST /v1/zk-payments`) | A third confidential transfer, in XLM, from the payer to `wallet`, so the fee stays as private as the payment. `wallet` must hold a confidential account on Cosmos Pay's token under auditor 0 (`400 recipient_not_registered` otherwise) and be neither the recipient nor the fee account. The 0.01% commission stays a share of `amount`, and the row's `amount` is what the payer pays in total. Confirm takes the third hash as `merchantFeeTxHash` and checks that transfer like the other two |
 | Liquidity (`POST /v1/liquidity-pools/deposit` and `/withdraw`) | A deposit or withdrawal moves two assets, so the fee is `bps` of EACH (rounded down), paid to `wallet` by one payment per asset in the same transaction, after the deposit, or after the withdrawal and its plan commission; `fixed` is refused (`400 validation_failed`). On a deposit, `recipient` takes it from the amounts (less enters the pool) and `payer` adds it on top. On a withdrawal it comes out of what the withdrawal pays, as a share of its guaranteed minimums, whichever `paidBy` names. `wallet` must exist and trust both assets. The record's `amount` / `asset` are asset A's leg, and `amountB` / `assetB` asset B's |
-| Swaps on Monad | Not yet: Kuru Flow pays one referrer fee per swap and the plan commission takes it (`400 merchant_fee_unsupported`) |
+| Swaps on Monad (`POST /v1/swaps`, `chain: monad`) | Kuru Flow pays one referrer fee per swap and the plan commission takes it, so a swap with a merchant fee goes through `contracts/MerchantFeeSwapRouter.sol`, deployed once by the operator for Kuru's router and named in `KURU_MERCHANT_FEE_ROUTER`: Kuru quotes for the router, the wallet sends (MON) or approves (ERC-20) the input plus the fee to it, and in that one transaction it pays the fee, runs Kuru's calldata, forwards the output and refunds what Kuru left, reverting below Kuru's minimum. The deployed code is checked against the artifact before a wallet is handed the address. Without the variable, `400 merchant_fee_unsupported` |
 
 USDT0 takes the field once it gains a way to split the transfer on-chain; until then its
 routes refuse it as an unknown field (`400 validation_failed`).
@@ -2146,6 +2146,12 @@ the service under `src/native-plugins/<slug>/`, switched on by the same
   `/withdraw`): `bps` of each asset, one payment per asset in the same transaction;
   `fixed` is refused. Responses and webhooks gain `merchantFee`, whose `amountB` /
   `assetB` are asset B's leg.
+- **Monad swaps take `merchantFee`** once `KURU_MERCHANT_FEE_ROUTER` names a deployed
+  `contracts/MerchantFeeSwapRouter.sol` (artifact `src/evm/merchant-fee-swap-router.artifact.ts`).
+  **Deploy step:** deploy the artifact's bytecode followed by Kuru Flow's router address as
+  a 32-byte word, from any account (the contract has no owner), and set the variable. Such
+  a swap's wallet approves the router, not Kuru. Without it, Monad swaps still answer
+  `merchant_fee_unsupported`.
 
 ### Lists follow the key's network; dashboard reads are cached
 
@@ -3005,6 +3011,7 @@ at least `DATABASE_URL` and `APISIX_GATEWAY_SECRET`.
 | `KURU_BASE_URL` | no | `https://ws.kuru.io` | Kuru Flow API (Monad) |
 | `KURU_API_KEY` | for production | — | Kuru Flow API key (`X-API-Key`). Without it every address gets a token limited to one request a second |
 | `KURU_TIMEOUT_MS` | no | `15000` | Budget for one Kuru Flow call (ms) |
+| `KURU_MERCHANT_FEE_ROUTER` | for merchant fees on Monad | — | A deployed `contracts/MerchantFeeSwapRouter.sol` for Kuru Flow's router. Without it a Monad swap with a merchant fee answers `merchant_fee_unsupported`; an address whose code is not the artifact's answers `503 misconfigured` |
 | `ANALYTICS_CACHE_TTL_MS` | no | `10000` | How long `/v1/summary`, `/v1/summary/series` and `/v1/balances` reuse an answer per consumer and network (ms), per replica. `0` turns it off |
 | `OBSERVER_ENABLED` | no | `true` | `true` / `false` — on-chain reconciler |
 | `OBSERVER_INTERVAL_MS` | no | `15000` | Observer poll interval (ms, min 1000) |

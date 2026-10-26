@@ -66,6 +66,11 @@ export class SolanaSwapVenue implements ChainSwapVenue {
     private readonly rpc: SolanaRpcClient,
   ) {}
 
+  /** The fee's transfer is appended to Jupiter's own transaction. */
+  merchantFeeUnsupported(): string | null {
+    return null;
+  }
+
   async resolveAsset(asset: string): Promise<VenueAsset> {
     const lower = asset.toLowerCase();
     if (lower === 'native' || lower === 'sol') {
