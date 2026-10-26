@@ -1373,6 +1373,10 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
 - **NEAR Intents 的代币列表在启动时获取，并在后台刷新**：超过五分钟的 TTL 后，仍会提供现有
   列表（最多一小时），同时由一次获取替换它，因此 USD 数字和跨链资产列表不再每五分钟等待
   1Click 约 0.8 秒。`NEAR_INTENTS_TOKENS_PREFETCH=false` 跳过启动时的获取。无需迁移。
+- **`GET /v1/summary/series` 新增 `zkPayments` 部分**：每个区间的隐私支付（`count`、
+  `succeeded`、`expired`、`volume`、`volumeUsd`）以及两个窗口的数据（另含 `fees` 和
+  `feesUsd`），与其他部分一样只统计密钥所属网络。金额以 XLM 计，按 XLM 价格估值；`expired`
+  统计已过期限的待支付记录，与所有读取方式一致。仅为新增：没有字段被修改或移除。无需迁移。
 
 ### 仪表盘：以 USD 计的已结算交易额
 

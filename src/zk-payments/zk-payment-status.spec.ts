@@ -1,5 +1,6 @@
 import {
   effectiveZkStatus,
+  zkExpiredSql,
   zkStatusFilter,
 } from '@/zk-payments/zk-payment-status';
 
@@ -50,5 +51,15 @@ describe('zkStatusFilter', () => {
 
   it('matches SUCCEEDED as stored', () => {
     expect(zkStatusFilter('SUCCEEDED', NOW)).toEqual({ status: 'SUCCEEDED' });
+  });
+});
+
+describe('zkExpiredSql', () => {
+  it('is the EXPIRED filter in SQL: stored, or PENDING with a deadline at or before now', () => {
+    const sql = zkExpiredSql(NOW);
+    expect(sql.text.replace(/\s+/g, ' ')).toBe(
+      `("status" = 'EXPIRED' OR ("status" = 'PENDING' AND "expiresAt" <= $1))`,
+    );
+    expect(sql.values).toEqual([NOW]);
   });
 });

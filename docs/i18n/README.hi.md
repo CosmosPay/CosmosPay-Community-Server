@@ -2063,6 +2063,11 @@ seal होती हैं और कभी लौटाई नहीं जा
   इसलिए USD आंकड़े और cross-chain asset list अब हर पाँच मिनट में लगभग 0.8 s 1Click का
   इंतज़ार नहीं करते। `NEAR_INTENTS_TOKENS_PREFETCH=false` boot fetch छोड़ देता है। कोई
   migration नहीं।
+- **`GET /v1/summary/series` अब एक `zkPayments` हिस्सा लौटाता है**: हर अंतराल में निजी भुगतान
+  (`count`, `succeeded`, `expired`, `volume`, `volumeUsd`) और दोनों विंडो में (साथ में
+  `fees` और `feesUsd`), बाकी हर हिस्से की तरह key के नेटवर्क पर। राशियाँ XLM में हैं और XLM के
+  मूल्य पर आँकी जाती हैं; `expired` समय-सीमा पार कर चुके लंबित भुगतान को गिनता है, जैसे उनका हर
+  पठन करता है। केवल जोड़: कोई फ़ील्ड बदला या हटाया नहीं गया। कोई माइग्रेशन नहीं।
 
 ### डैशबोर्ड: USD में settled volume
 

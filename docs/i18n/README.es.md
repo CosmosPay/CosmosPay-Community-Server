@@ -2152,6 +2152,11 @@ misma lista `PLUGINS_ENABLED` que los plugins aislados.
   una sola descarga la reemplaza, así que las cifras en USD y la lista de activos cross-chain
   ya no esperan unos 0,8 s a 1Click cada cinco minutos. `NEAR_INTENTS_TOKENS_PREFETCH=false`
   omite la descarga al arrancar. Sin migración.
+- **`GET /v1/summary/series` responde una parte `zkPayments`**: los pagos privados por
+  intervalo (`count`, `succeeded`, `expired`, `volume`, `volumeUsd`) y en ambas ventanas
+  (también con `fees` y `feesUsd`), en la red de la clave como cada otra parte. Los importes
+  son XLM, valuados al precio de XLM; `expired` cuenta un pago pendiente pasado su plazo, como
+  lo hace cada lectura de ellos. Aditivo: ningún campo cambió ni se fue. Sin migración.
 
 ### Panel: volumen liquidado en USD
 

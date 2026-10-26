@@ -338,6 +338,110 @@ export class SeriesWebhooksEntity {
   previous!: SeriesWebhookCountsEntity;
 }
 
+export class SeriesPrivatePaymentBucketEntity {
+  @ApiProperty({
+    description:
+      'The first day of the bucket (UTC; weeks start on Monday), the same as the payments bucket at that index.',
+    example: '2026-10-01',
+  })
+  start!: string;
+  @ApiProperty({
+    description: 'Private payments created in the bucket, any status.',
+    example: 12,
+  })
+  count!: number;
+  @ApiProperty({
+    description: 'Settled: both transfers confirmed.',
+    example: 9,
+  })
+  succeeded!: number;
+  @ApiProperty({
+    description:
+      'Past their deadline without settling (a pending payment reads as expired once its deadline passes).',
+    example: 2,
+  })
+  expired!: number;
+  @ApiProperty({
+    description:
+      'Settled amount in XLM, what the payers paid (the commission included).',
+    example: '450.5',
+  })
+  volume!: string;
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    description:
+      "The bucket's settled amount in USD with two decimals, valued at XLM's current reference price on NEAR Intents (an indicative figure at today's price). " +
+      "Null only when there is something settled and NEAR Intents' prices could not be read.",
+    example: '112.63',
+  })
+  volumeUsd!: string | null;
+}
+
+export class SeriesPrivatePaymentWindowEntity {
+  @ApiProperty({
+    description: 'Private payments created in the window, any status.',
+    example: 48,
+  })
+  count!: number;
+  @ApiProperty({ example: 41 }) succeeded!: number;
+  @ApiProperty({
+    description:
+      'Past their deadline without settling (a pending payment reads as expired once its deadline passes).',
+    example: 5,
+  })
+  expired!: number;
+  @ApiProperty({
+    description:
+      'Settled amount in XLM, what the payers paid (the commission included).',
+    example: '2140.25',
+  })
+  volume!: string;
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    description:
+      "The window's settled amount in USD with two decimals, valued at XLM's current reference price on NEAR Intents (an indicative figure at today's price). " +
+      "Null only when there is something settled and NEAR Intents' prices could not be read.",
+    example: '535.06',
+  })
+  volumeUsd!: string | null;
+  @ApiProperty({
+    description:
+      'Commission the settled payments paid to Cosmos Pay, in XLM (0.01% of each).',
+    example: '0.214025',
+  })
+  fees!: string;
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    description:
+      "The window's commission in USD with two decimals, valued at XLM's current reference price on NEAR Intents (an indicative figure at today's price). " +
+      "Null only when there is something settled and NEAR Intents' prices could not be read.",
+    example: '0.05',
+  })
+  feesUsd!: string | null;
+}
+
+export class SeriesPrivatePaymentsEntity {
+  @ApiProperty({
+    type: [SeriesPrivatePaymentBucketEntity],
+    description:
+      'Private payments per bucket, on the same buckets as the payments, pre-seeded so a quiet bucket is a zero.',
+  })
+  buckets!: SeriesPrivatePaymentBucketEntity[];
+  @ApiProperty({
+    type: SeriesPrivatePaymentWindowEntity,
+    description: 'The window the buckets cover.',
+  })
+  totals!: SeriesPrivatePaymentWindowEntity;
+  @ApiProperty({
+    type: SeriesPrivatePaymentWindowEntity,
+    description: 'The window of the same length just before it, for growth.',
+  })
+  previous!: SeriesPrivatePaymentWindowEntity;
+}
+
 export class AnalyticsSeriesEntity {
   @ApiProperty({ enum: ['day', 'week', 'month', 'year'], example: 'month' })
   period!: string;
@@ -373,6 +477,12 @@ export class AnalyticsSeriesEntity {
     description: 'Webhook deliveries to the consumer’s endpoints.',
   })
   webhooks!: SeriesWebhooksEntity;
+  @ApiProperty({
+    type: SeriesPrivatePaymentsEntity,
+    description:
+      'Private payments (amounts hidden on-chain, /v1/zk-payments) on the network the key targets. They run on testnet only for now, so a production key counts none.',
+  })
+  zkPayments!: SeriesPrivatePaymentsEntity;
 }
 
 export class AssetBalanceEntity {

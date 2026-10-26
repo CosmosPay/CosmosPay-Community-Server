@@ -1,4 +1,4 @@
-import type { Prisma, ZkPaymentStatus } from '@generated/prisma/client';
+import { Prisma, type ZkPaymentStatus } from '@generated/prisma/client';
 
 /**
  * The status a private payment READS as at `now`.
@@ -39,4 +39,13 @@ export function zkStatusFilter(
     case 'SUCCEEDED':
       return { status: 'SUCCEEDED' };
   }
+}
+
+/**
+ * The rows of `zk_payment` READING as EXPIRED at `now`, as a SQL condition for the
+ * aggregates that count them in Postgres (the dashboard's series): the same rule as
+ * {@link effectiveZkStatus} and {@link zkStatusFilter}, so a count and a list agree.
+ */
+export function zkExpiredSql(now: Date): Prisma.Sql {
+  return Prisma.sql`("status" = 'EXPIRED' OR ("status" = 'PENDING' AND "expiresAt" <= ${now}))`;
 }

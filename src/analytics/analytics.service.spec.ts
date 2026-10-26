@@ -447,7 +447,7 @@ describe('AnalyticsService', () => {
 describe('AnalyticsService.series', () => {
   afterEach(() => jest.useRealTimers());
 
-  /** What each of the nine aggregations answers, in the order the service issues them. */
+  /** What each of the eleven aggregations answers, in the order the service issues them. */
   type Results = Partial<
     Record<
       | 'buckets'
@@ -458,7 +458,9 @@ describe('AnalyticsService.series', () => {
       | 'webhooks'
       | 'liquidityBuckets'
       | 'webhookBuckets'
-      | 'settled',
+      | 'settled'
+      | 'zkBuckets'
+      | 'zkWindows',
       unknown[]
     >
   >;
@@ -472,6 +474,8 @@ describe('AnalyticsService.series', () => {
     'liquidityBuckets',
     'webhookBuckets',
     'settled',
+    'zkBuckets',
+    'zkWindows',
   ] as const;
 
   function build(
@@ -493,6 +497,7 @@ describe('AnalyticsService.series', () => {
       liquidityPoolOperation: rowFetch(),
       webhookEndpoint: rowFetch(),
       webhookDelivery: rowFetch(),
+      zkPayment: rowFetch(),
       $queryRaw: queryRaw,
     };
     const service = new AnalyticsService(
@@ -593,9 +598,10 @@ describe('AnalyticsService.series', () => {
       volumeUsd: '0.00',
       unpriced: 0,
     });
-    // Nine aggregations (payments, swaps, liquidity and webhooks, each per bucket and per
-    // window, and the settled payments per asset for their USD value), no row fetched.
-    expect(queryRaw).toHaveBeenCalledTimes(9);
+    // Eleven aggregations (payments, swaps, liquidity, webhooks and private payments, each per
+    // bucket and per window, and the settled payments per asset for their USD value), no row
+    // fetched.
+    expect(queryRaw).toHaveBeenCalledTimes(11);
     for (const model of [
       prisma.paymentIntent,
       prisma.swap,
@@ -605,6 +611,7 @@ describe('AnalyticsService.series', () => {
       prisma.liquidityPoolOperation,
       prisma.webhookEndpoint,
       prisma.webhookDelivery,
+      prisma.zkPayment,
     ]) {
       expect(model.findMany).not.toHaveBeenCalled();
       expect(model.count).not.toHaveBeenCalled();
@@ -757,7 +764,7 @@ describe('AnalyticsService.series', () => {
 
     await service.series(sandbox, 'month');
 
-    for (const nth of [0, 1, 2, 3, 4, 6]) {
+    for (const nth of [0, 1, 2, 3, 4, 6, 9, 10]) {
       const { values } = queryOf(queryRaw, nth);
       expect(values).toContain('testnet');
       expect(values).not.toContain('public');
@@ -939,6 +946,159 @@ describe('AnalyticsService.series', () => {
       })),
       totals: { deliveries: 0, failed: 0 },
       previous: { deliveries: 0, failed: 0 },
+    });
+    const quietZk = {
+      count: 0,
+      succeeded: 0,
+      expired: 0,
+      volume: '0',
+      volumeUsd: '0.00',
+      fees: '0',
+      feesUsd: '0.00',
+    };
+    expect(result.zkPayments).toEqual({
+      buckets: result.buckets.map((b) => ({
+        start: b.start,
+        count: 0,
+        succeeded: 0,
+        expired: 0,
+        volume: '0',
+        volumeUsd: '0.00',
+      })),
+      totals: quietZk,
+      previous: quietZk,
+    });
+  });
+
+  it('counts private payments per bucket and window, valued at XLM’s price', async () => {
+    jest.useFakeTimers().setSystemTime(NOW);
+    const { service, queryRaw } = build(
+      {
+        zkBuckets: [
+          {
+            bucket: new Date('2026-10-01T00:00:00Z'),
+            count: 5n,
+            succeeded: 3n,
+            expired: 1n,
+            volume: '120.0000000',
+          },
+        ],
+        zkWindows: [
+          {
+            current: true,
+            count: 5n,
+            succeeded: 3n,
+            expired: 1n,
+            volume: '120',
+            fees: '0.012',
+          },
+          {
+            current: false,
+            count: 2n,
+            succeeded: 0n,
+            expired: 2n,
+            volume: null,
+            fees: null,
+          },
+        ],
+      },
+      TOKENS,
+    );
+
+    const result = await service.series(consumer, 'month');
+
+    // The private payments use the payments' buckets; XLM at 0.25.
+    expect(result.zkPayments.buckets).toHaveLength(12);
+    expect(result.zkPayments.buckets[11]).toEqual({
+      start: '2026-10-01',
+      count: 5,
+      succeeded: 3,
+      expired: 1,
+      volume: '120',
+      volumeUsd: '30.00',
+    });
+    expect(result.zkPayments.buckets[0]).toEqual({
+      start: '2025-11-01',
+      count: 0,
+      succeeded: 0,
+      expired: 0,
+      volume: '0',
+      volumeUsd: '0.00',
+    });
+    expect(result.zkPayments.totals).toEqual({
+      count: 5,
+      succeeded: 3,
+      expired: 1,
+      volume: '120',
+      volumeUsd: '30.00',
+      fees: '0.012',
+      feesUsd: '0.00',
+    });
+    expect(result.zkPayments.previous).toEqual({
+      count: 2,
+      succeeded: 0,
+      expired: 2,
+      volume: '0',
+      volumeUsd: '0.00',
+      fees: '0',
+      feesUsd: '0.00',
+    });
+
+    // Per bucket of the window, and both windows from the one before, on the key's network.
+    const buckets = queryOf(queryRaw, 9);
+    expect(buckets.sql).toContain('FROM "zk_payment"');
+    expect(buckets.sql).toContain(`date_trunc('month', "createdAt") AS bucket`);
+    expect(buckets.values.slice(-3)).toEqual(['c1', 'public', SINCE]);
+    const windows = queryOf(queryRaw, 10);
+    expect(windows.sql).toContain('SUM("feeAmount"::numeric)');
+    expect(windows.values.slice(-3)).toEqual(['c1', 'public', PREVIOUS_SINCE]);
+    // Expired is derived as every read of them derives it: a pending payment past its deadline.
+    for (const query of [buckets, windows]) {
+      expect(query.sql).toContain(
+        `"status" = 'EXPIRED' OR ("status" = 'PENDING' AND "expiresAt" <= $`,
+      );
+      expect(query.values).toContainEqual(NOW);
+    }
+  });
+
+  it('answers the private payments without USD values when NEAR Intents’ prices cannot be read', async () => {
+    jest.useFakeTimers().setSystemTime(NOW);
+    const { service } = build({
+      zkBuckets: [
+        {
+          bucket: new Date('2026-10-01T00:00:00Z'),
+          count: 1n,
+          succeeded: 1n,
+          expired: 0n,
+          volume: '10',
+        },
+      ],
+      zkWindows: [
+        {
+          current: true,
+          count: 1n,
+          succeeded: 1n,
+          expired: 0n,
+          volume: '10',
+          fees: '0.001',
+        },
+      ],
+    });
+
+    const result = await service.series(consumer, 'month');
+
+    // Something settled and no price to value it: null, never a zero that looks like data.
+    expect(result.zkPayments.buckets[11].volumeUsd).toBeNull();
+    expect(result.zkPayments.buckets[10].volumeUsd).toBe('0.00');
+    expect(result.zkPayments.totals).toMatchObject({
+      volume: '10',
+      volumeUsd: null,
+      fees: '0.001',
+      feesUsd: null,
+    });
+    expect(result.zkPayments.previous).toMatchObject({
+      volumeUsd: '0.00',
+      feesUsd: '0.00',
     });
   });
 

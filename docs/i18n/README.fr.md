@@ -2144,6 +2144,12 @@ plugins isolés.
   heure) pendant qu'un seul appel la remplace ; les montants en USD et la liste des actifs
   cross-chain n'attendent donc plus environ 0,8 s 1Click toutes les cinq minutes.
   `NEAR_INTENTS_TOKENS_PREFETCH=false` saute l'appel au démarrage. Aucune migration.
+- **`GET /v1/summary/series` répond une partie `zkPayments`** : les paiements privés par
+  intervalle (`count`, `succeeded`, `expired`, `volume`, `volumeUsd`) et dans les deux
+  fenêtres (avec aussi `fees` et `feesUsd`), sur le réseau de la clé comme toute autre partie.
+  Les montants sont en XLM, valorisés au prix du XLM ; `expired` compte un paiement en attente
+  passé son échéance, comme toute lecture de ceux-ci. Additif : aucun champ modifié ni retiré.
+  Aucune migration.
 
 ### Tableau de bord : volume réglé en USD
 

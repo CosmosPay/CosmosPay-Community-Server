@@ -13,7 +13,8 @@ import { NearIntentsClient } from '@/near-intents/near-intents.client';
 
 /**
  * `GET /v1/summary/series`: the dashboard chart's payments, swaps (USDT0 transfers included),
- * liquidity operations and webhook deliveries grouped by period, each on the same buckets.
+ * liquidity operations, webhook deliveries and private payments grouped by period, each on the
+ * same buckets.
  *
  * The aggregation is the service spec's; this suite pins the wiring in front of it: the
  * gateway gate, the `payments:read` scope, the period the DTO accepts, and the shape that
@@ -175,6 +176,53 @@ describe('Summary series (e2e)', () => {
       totals: { deliveries: 0, failed: 0 },
       previous: { deliveries: 0, failed: 0 },
     });
+    // Private payments too, their USD figures zero dollars with nothing settled.
+    const quietZk = {
+      count: 0,
+      succeeded: 0,
+      expired: 0,
+      volume: '0',
+      volumeUsd: '0.00',
+      fees: '0',
+      feesUsd: '0.00',
+    };
+    expect(res.body.zkPayments).toEqual({
+      buckets: starts.map((start: string) => ({
+        start,
+        count: 0,
+        succeeded: 0,
+        expired: 0,
+        volume: '0',
+        volumeUsd: '0.00',
+      })),
+      totals: quietZk,
+      previous: quietZk,
+    });
+  });
+
+  /** The private-payment aggregations the last request sent, with their bound values. */
+  const zkQueries = () =>
+    (prismaMock.$queryRaw.mock.calls as [string[], ...unknown[]][])
+      .map(([strings, ...values]) => new Prisma.Sql(strings, values))
+      .filter((query) => query.text.includes('"zk_payment"'));
+
+  it('counts a production key no test-network private payment, and a sandbox key no mainnet one', async () => {
+    for (const [env, own, other] of [
+      ['prod', 'public', 'testnet'],
+      ['dev', 'testnet', 'public'],
+    ]) {
+      prismaMock.$queryRaw.mockClear();
+      await tenant('/v1/summary/series?period=month', 'payments:read')
+        .set('x-consumer-env', env)
+        .expect(200);
+      const queries = zkQueries();
+      // Per bucket and per window, both on the key's network only.
+      expect(queries).toHaveLength(2);
+      for (const query of queries) {
+        expect(query.values).toContain(own);
+        expect(query.values).not.toContain(other);
+      }
+    }
   });
 
   it('asks a sandbox key for testnet rows only, so it counts no USDT0 transfer', async () => {
@@ -203,15 +251,16 @@ describe('Summary series (e2e)', () => {
     expect(res.body.swaps.buckets).toHaveLength(30);
     expect(res.body.liquidity.buckets).toHaveLength(30);
     expect(res.body.webhooks.buckets).toHaveLength(30);
+    expect(res.body.zkPayments.buckets).toHaveLength(30);
   });
 
   it('aggregates in Postgres and never fetches a row of any model it counts', async () => {
     prismaMock.$queryRaw.mockClear();
     await tenant('/v1/summary/series?period=week', 'payments:read').expect(200);
-    // Payments, swaps, liquidity and webhooks, each per bucket and per window, and the settled
-    // payments per asset for their USD value; the mock has no `findMany` on any of those
-    // models, so fetching rows would have been a 500.
-    expect(prismaMock.$queryRaw).toHaveBeenCalledTimes(9);
+    // Payments, swaps, liquidity, webhooks and private payments, each per bucket and per window,
+    // and the settled payments per asset for their USD value; the mock has no `findMany` on any
+    // of those models, so fetching rows would have been a 500.
+    expect(prismaMock.$queryRaw).toHaveBeenCalledTimes(11);
   });
 
   /** Answers `rows` to the settled-payments-per-asset query and no rows to every other. */
@@ -251,6 +300,61 @@ describe('Summary series (e2e)', () => {
       expect(res.body.totals).toMatchObject({
         volumeUsd: '10.00',
         unpriced: 0,
+      });
+    } finally {
+      prismaMock.$queryRaw.mockReset().mockResolvedValue([]);
+    }
+  });
+
+  it('values the private payments settled this window at XLM’s price', async () => {
+    prismaMock.$queryRaw.mockImplementation(
+      (strings: string[], ...values: unknown[]) => {
+        const text = new Prisma.Sql(strings, values).text;
+        if (!text.includes('"zk_payment"')) return Promise.resolve([]);
+        return Promise.resolve(
+          text.includes('AS current')
+            ? [
+                {
+                  current: true,
+                  count: 3n,
+                  succeeded: 2n,
+                  expired: 1n,
+                  volume: '40',
+                  fees: '0.004',
+                },
+              ]
+            : [
+                {
+                  bucket: thisMonth(),
+                  count: 3n,
+                  succeeded: 2n,
+                  expired: 1n,
+                  volume: '40',
+                },
+              ],
+        );
+      },
+    );
+    try {
+      const res = await tenant(
+        '/v1/summary/series?period=month',
+        'payments:read',
+      ).expect(200);
+      expect(res.body.zkPayments.buckets[11]).toMatchObject({
+        count: 3,
+        succeeded: 2,
+        expired: 1,
+        volume: '40',
+        volumeUsd: '10.00',
+      });
+      expect(res.body.zkPayments.totals).toEqual({
+        count: 3,
+        succeeded: 2,
+        expired: 1,
+        volume: '40',
+        volumeUsd: '10.00',
+        fees: '0.004',
+        feesUsd: '0.00',
       });
     } finally {
       prismaMock.$queryRaw.mockReset().mockResolvedValue([]);

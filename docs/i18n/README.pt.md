@@ -2115,6 +2115,11 @@ serviço em `src/native-plugins/<slug>/`, ligados pela mesma lista
   enquanto uma única busca a substitui, então os valores em USD e a lista de ativos
   cross-chain não esperam mais cerca de 0,8 s pelo 1Click a cada cinco minutos.
   `NEAR_INTENTS_TOKENS_PREFETCH=false` pula a busca na inicialização. Sem migração.
+- **`GET /v1/summary/series` responde uma parte `zkPayments`**: os pagamentos privados por
+  intervalo (`count`, `succeeded`, `expired`, `volume`, `volumeUsd`) e nas duas janelas
+  (também com `fees` e `feesUsd`), na rede da chave como todas as outras partes. Os valores
+  são XLM, avaliados ao preço do XLM; `expired` conta um pagamento pendente após o prazo, como
+  toda leitura deles faz. Aditivo: nenhum campo mudou nem saiu. Sem migração.
 
 ### Painel: volume liquidado em USD
 

@@ -30,6 +30,7 @@ import {
   seriesWindow,
 } from '@/analytics/series-window';
 import { formatUsd, valueRows, type SettledRow } from '@/analytics/usd-prices';
+import { zkExpiredSql } from '@/zk-payments/zk-payment-status';
 import { UsdPricesService } from '@/analytics/usd-prices.service';
 import {
   isChain,
@@ -455,9 +456,13 @@ export class AnalyticsService {
    *     and its split by kind.
    *   - liquidity operations: each bucket's count, succeeded and failed.
    *   - webhook deliveries: each bucket's deliveries and failed ones.
+   *   - private payments (`zk_payment`): each bucket's count, succeeded, expired and settled
+   *     volume, the window's commissions too; amounts are XLM (the confidential token wraps it),
+   *     valued at XLM's price. EXPIRED is derived as every read of them derives it
+   *     (`zkExpiredSql`): a PENDING payment past `expiresAt`.
    *
    * Every figure is an aggregation in Postgres bounded by the window; no row is materialized.
-   * Payments, swaps and liquidity operations are the consumer's on the network its key targets
+   * Payments, swaps, liquidity operations and private payments are the consumer's on the network its key targets
    * (`resolveNetwork`), the scope the payments half has always had. Solana, Monad, cross-chain
    * swaps and USDT0 transfers are always written as `public`, so a sandbox key counts none of
    * them.
@@ -478,7 +483,8 @@ export class AnalyticsService {
     network: string,
     period: SeriesPeriod,
   ) {
-    const { buckets, since, previousSince } = seriesWindow(period, new Date());
+    const now = new Date();
+    const { buckets, since, previousSince } = seriesWindow(period, now);
     // `period` is one of SERIES_PERIODS (the DTO checks it), so it is safe as SQL text.
     const unit = Prisma.raw(`'${period}'`);
     const swapRows = (from: Date) => swapRowsSql(consumerId, network, from);
@@ -493,6 +499,8 @@ export class AnalyticsService {
       liquidityBucketRows,
       webhookBucketRows,
       settledRows,
+      zkBucketRows,
+      zkWindowRows,
       pricer,
     ] = await Promise.all([
       this.prisma.$queryRaw<
@@ -627,6 +635,51 @@ export class AnalyticsService {
         previousSince,
         unit,
       )}`,
+      // Private payments per bucket of the window: created, settled, expired, and the settled
+      // amounts (XLM).
+      this.prisma.$queryRaw<
+        {
+          bucket: Date;
+          count: bigint;
+          succeeded: bigint;
+          expired: bigint;
+          volume: string | null;
+        }[]
+      >`
+        SELECT date_trunc(${unit}, "createdAt") AS bucket,
+               COUNT(*) AS count,
+               COUNT(*) FILTER (WHERE "status" = 'SUCCEEDED') AS succeeded,
+               COUNT(*) FILTER (WHERE ${zkExpiredSql(now)}) AS expired,
+               SUM("amount"::numeric) FILTER (WHERE "status" = 'SUCCEEDED') AS volume
+        FROM "zk_payment"
+        WHERE "consumerId" = ${consumerId}
+          AND "network" = ${network}
+          AND "createdAt" >= ${since}
+        GROUP BY 1
+      `,
+      // The same in both windows, with the commissions the settled ones paid.
+      this.prisma.$queryRaw<
+        {
+          current: boolean;
+          count: bigint;
+          succeeded: bigint;
+          expired: bigint;
+          volume: string | null;
+          fees: string | null;
+        }[]
+      >`
+        SELECT ("createdAt" >= ${since}) AS current,
+               COUNT(*) AS count,
+               COUNT(*) FILTER (WHERE "status" = 'SUCCEEDED') AS succeeded,
+               COUNT(*) FILTER (WHERE ${zkExpiredSql(now)}) AS expired,
+               SUM("amount"::numeric) FILTER (WHERE "status" = 'SUCCEEDED') AS volume,
+               SUM("feeAmount"::numeric) FILTER (WHERE "status" = 'SUCCEEDED') AS fees
+        FROM "zk_payment"
+        WHERE "consumerId" = ${consumerId}
+          AND "network" = ${network}
+          AND "createdAt" >= ${previousSince}
+        GROUP BY 1
+      `,
       // Never throws: without NEAR Intents' prices the USD fields are null.
       this.usd.pricer(network),
     ]);
@@ -699,6 +752,39 @@ export class AnalyticsService {
       failed: toCount(row?.failed),
     });
 
+    // Private payments are XLM (the confidential token wraps it): their USD value is the settled
+    // amount at XLM's price. Nothing settled is zero dollars; something settled with no price to
+    // value it is null, as for the payments.
+    const xlmUsd = (amount: unknown, settled: number): string | null => {
+      if (settled === 0) return formatUsd(0);
+      const value = valueRows(
+        [
+          {
+            chain: 'stellar',
+            asset: NATIVE_ASSET_CODES.stellar,
+            issuer: null,
+            amount,
+            count: settled,
+          },
+        ],
+        pricer,
+      );
+      return value.priced > 0 ? formatUsd(value.usd) : null;
+    };
+    const zkWindow = (current: boolean) => {
+      const row = zkWindowRows.find((r) => r.current === current);
+      const succeeded = toCount(row?.succeeded);
+      return {
+        count: toCount(row?.count),
+        succeeded,
+        expired: toCount(row?.expired),
+        volume: formatNumericAmount(row?.volume ?? null),
+        volumeUsd: xlmUsd(row?.volume ?? null, succeeded),
+        fees: formatNumericAmount(row?.fees ?? null),
+        feesUsd: xlmUsd(row?.fees ?? null, succeeded),
+      };
+    };
+
     return {
       period,
       buckets: fillBuckets(
@@ -763,6 +849,31 @@ export class AnalyticsService {
         ),
         totals: deliveries(webhookRows.find((r) => r.current)),
         previous: deliveries(webhookRows.find((r) => !r.current)),
+      },
+      zkPayments: {
+        buckets: fillBuckets(
+          buckets,
+          zkBucketRows,
+          () => ({
+            count: 0,
+            succeeded: 0,
+            expired: 0,
+            volume: '0',
+            volumeUsd: formatUsd(0),
+          }),
+          (row) => {
+            const succeeded = toCount(row.succeeded);
+            return {
+              count: toCount(row.count),
+              succeeded,
+              expired: toCount(row.expired),
+              volume: formatNumericAmount(row.volume),
+              volumeUsd: xlmUsd(row.volume, succeeded),
+            };
+          },
+        ),
+        totals: zkWindow(true),
+        previous: zkWindow(false),
       },
     };
   }

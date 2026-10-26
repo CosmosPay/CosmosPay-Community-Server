@@ -617,12 +617,14 @@ refreshes it (ledger first, then LayerZero Scan), throttled per row by `lastChec
   `ConsumerResolverService.resolveId` (cached a minute per username and credential) instead of an
   upsert per read. The logs are pages a person reads: never cached.
 - **`GET /v1/summary/series` covers payments, every kind of swap (USDT0 transfers are the
-  `usdt0` kind), liquidity operations and webhook deliveries**, each with `buckets` on the
-  buckets of `seriesWindow` (UTC, weeks from Monday, the same as Postgres' `date_trunc`),
-  pre-seeded by `fillBuckets` so a quiet bucket is a zero, plus the window's totals and the
-  window before. Payments, swaps and liquidity are scoped by consumer AND `resolveNetwork`;
-  `chain_swap`, `cross_chain_swap` and `usdt0_transfer` rows are always `public`, so a
-  sandbox key counts none. Webhook deliveries are scoped by consumer only: an endpoint has
+  `usdt0` kind), liquidity operations, webhook deliveries and private payments**, each with
+  `buckets` on the buckets of `seriesWindow` (UTC, weeks from Monday, the same as Postgres'
+  `date_trunc`), pre-seeded by `fillBuckets` so a quiet bucket is a zero, plus the window's
+  totals and the window before. Private payments are the `zkPayments` part (XLM, valued at XLM's
+  price; their `expired` is derived with `zkExpiredSql`, the SQL twin of `effectiveZkStatus`,
+  since nothing stores EXPIRED). Payments, swaps, liquidity and private payments are scoped by
+  consumer AND `resolveNetwork`; `chain_swap`, `cross_chain_swap` and `usdt0_transfer` rows are
+  always `public`, so a sandbox key counts none. Webhook deliveries are scoped by consumer only: an endpoint has
   no network. The list routes of those modules are scoped the same way (consumer and
   `resolveNetwork`), so a production key never lists a test-network row.
 - **Succeeded / failed / in progress is a table per model** (`SWAP_OUTCOMES`,

@@ -2186,6 +2186,11 @@ eingeschaltet werden.
   während ein einziger Abruf sie ersetzt. Die USD-Werte und die Cross-Chain-Asset-Liste warten
   also nicht mehr alle fünf Minuten etwa 0,8 s auf 1Click. `NEAR_INTENTS_TOKENS_PREFETCH=false`
   überspringt den Abruf beim Start. Keine Migration.
+- **`GET /v1/summary/series` liefert einen Teil `zkPayments`**: private Zahlungen pro
+  Intervall (`count`, `succeeded`, `expired`, `volume`, `volumeUsd`) und in beiden Fenstern
+  (zusätzlich mit `fees` und `feesUsd`), im Netz des Schlüssels wie jeder andere Teil. Beträge
+  sind XLM, bewertet zum XLM-Preis; `expired` zählt eine ausstehende Zahlung nach ihrer Frist,
+  wie jedes Lesen von ihnen. Additiv: kein Feld geändert oder entfernt. Keine Migration.
 
 ### Dashboard: abgewickeltes Volumen in USD
 

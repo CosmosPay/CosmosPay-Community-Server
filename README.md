@@ -2070,6 +2070,11 @@ the service under `src/native-plugins/<slug>/`, switched on by the same
   so the USD figures and the cross-chain asset list no longer wait about 0.8 s for 1Click
   every five minutes. `NEAR_INTENTS_TOKENS_PREFETCH=false` skips the boot fetch. No
   migration.
+- **`GET /v1/summary/series` answers a `zkPayments` part**: private payments per bucket
+  (`count`, `succeeded`, `expired`, `volume`, `volumeUsd`) and in both windows (with
+  `fees` and `feesUsd` as well), on the key's network like every other part. Amounts are
+  XLM, valued at XLM's price; `expired` counts a pending payment past its deadline, as every
+  read of them does. Additive: no field changed or left. No migration.
 
 ### Dashboard: settled volume in USD
 
