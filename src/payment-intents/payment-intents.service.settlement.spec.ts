@@ -1,3 +1,4 @@
+import { Prisma } from '@generated/prisma/client';
 import { HttpStatus } from '@nestjs/common';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
@@ -110,6 +111,8 @@ describe('PaymentIntentsService: one transaction settles one intent', () => {
         typeof cond === 'object' &&
         !(cond instanceof Date)
       ) {
+        // Prisma's JSON "is not SQL NULL" (a merchant fee is set).
+        if ('not' in cond && cond.not === Prisma.DbNull) return value != null;
         if ('not' in cond) return value !== cond.not;
         if ('notIn' in cond) return !cond.notIn.includes(value);
         if ('in' in cond) return cond.in.includes(value);
@@ -508,6 +511,44 @@ describe('PaymentIntentsService: one transaction settles one intent', () => {
 
       expect(rows.get('pi_b')!.status).toBe('SUCCEEDED');
       expect(verify).not.toHaveBeenCalled();
+    });
+
+    describe('with a merchant fee', () => {
+      // 25.5 with a 0.5 fee the recipient pays: the destination receives 25.
+      const fee = {
+        bps: 0,
+        fixed: '0.5',
+        amount: '0.5',
+        asset: 'native',
+        wallet: 'GFEE',
+        paidBy: 'recipient',
+      };
+
+      it('an older intent with a fee outranks a newer copy without one, for its leg', async () => {
+        rows.set('pi_a', { ...rows.get('pi_a')!, merchantFee: fee } as Row);
+        rows.set('pi_b', { ...rows.get('pi_b')!, amount: '25' });
+
+        const err = await errorOf(
+          service.markSucceeded('pi_b', 'cosmos_b', HASH),
+        );
+
+        expect(err!.code).toBe(ApiErrorCode.TransactionAlreadySettled);
+        expect(verify).toHaveBeenCalledWith(
+          expect.objectContaining({ id: 'pi_a' }),
+          HASH,
+        );
+      });
+
+      it('an older plain intent for the leg outranks a newer one with a fee', async () => {
+        rows.set('pi_a', { ...rows.get('pi_a')!, amount: '25' });
+        rows.set('pi_b', { ...rows.get('pi_b')!, merchantFee: fee } as Row);
+
+        const err = await errorOf(
+          service.markSucceeded('pi_b', 'cosmos_b', HASH),
+        );
+
+        expect(err!.code).toBe(ApiErrorCode.TransactionAlreadySettled);
+      });
     });
 
     it('matches an older rival for the same amount in another spelling', async () => {
