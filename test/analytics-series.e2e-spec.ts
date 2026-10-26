@@ -9,6 +9,7 @@ import { AppModule } from '@/app.module';
 import { AllExceptionsFilter } from '@/common/filters/all-exceptions.filter';
 import { Prisma } from '@generated/prisma/client';
 import { PrismaService } from '@/prisma/prisma.service';
+import { NearIntentsClient } from '@/near-intents/near-intents.client';
 
 /**
  * `GET /v1/summary/series`: the dashboard chart's payments, swaps (USDT0 transfers included),
@@ -16,7 +17,8 @@ import { PrismaService } from '@/prisma/prisma.service';
  *
  * The aggregation is the service spec's; this suite pins the wiring in front of it: the
  * gateway gate, the `payments:read` scope, the period the DTO accepts, and the shape that
- * comes back for a key that may read it.
+ * comes back for a key that may read it, its settled volume in USD included (NEAR Intents' token
+ * list is stubbed: a test never calls 1Click).
  */
 describe('Summary series (e2e)', () => {
   let app: INestApplication;
@@ -32,11 +34,25 @@ describe('Summary series (e2e)', () => {
     // Both aggregations come back empty: a window with no payments.
     $queryRaw: jest.fn().mockResolvedValue([]),
   };
+  // The token list that prices the USD figures: XLM at 0.25.
+  const nearIntentsMock = {
+    tokens: jest.fn().mockResolvedValue([
+      {
+        assetId: 'nep245:xlm',
+        blockchain: 'stellar',
+        symbol: 'XLM',
+        decimals: 7,
+        price: 0.25,
+      },
+    ]),
+  };
 
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
       .overrideProvider(PrismaService)
       .useValue(prismaMock)
+      .overrideProvider(NearIntentsClient)
+      .useValue(nearIntentsMock)
       .compile();
 
     app = moduleRef.createNestApplication();
@@ -96,6 +112,7 @@ describe('Summary series (e2e)', () => {
       succeeded: 0,
       failed: 0,
       volume: '0',
+      volumeUsd: '0.00',
     });
     expect(res.body.totals).toEqual({
       count: 0,
@@ -103,12 +120,16 @@ describe('Summary series (e2e)', () => {
       failed: 0,
       volume: '0',
       payers: 0,
+      volumeUsd: '0.00',
+      unpriced: 0,
     });
     expect(res.body.previous).toEqual({
       count: 0,
       succeeded: 0,
       failed: 0,
       volume: '0',
+      volumeUsd: '0.00',
+      unpriced: 0,
     });
     // Swaps on the same buckets as the payments, so the dashboard charts them side by side.
     expect(res.body.swaps.buckets).toHaveLength(12);
@@ -187,8 +208,79 @@ describe('Summary series (e2e)', () => {
   it('aggregates in Postgres and never fetches a row of any model it counts', async () => {
     prismaMock.$queryRaw.mockClear();
     await tenant('/v1/summary/series?period=week', 'payments:read').expect(200);
-    // Payments, swaps, liquidity and webhooks, each per bucket and per window; the mock has
-    // no `findMany` on any of those models, so fetching rows would have been a 500.
-    expect(prismaMock.$queryRaw).toHaveBeenCalledTimes(8);
+    // Payments, swaps, liquidity and webhooks, each per bucket and per window, and the settled
+    // payments per asset for their USD value; the mock has no `findMany` on any of those
+    // models, so fetching rows would have been a 500.
+    expect(prismaMock.$queryRaw).toHaveBeenCalledTimes(9);
+  });
+
+  /** Answers `rows` to the settled-payments-per-asset query and no rows to every other. */
+  const settledRows = (rows: unknown[]) =>
+    prismaMock.$queryRaw.mockImplementation(
+      (strings: string[], ...values: unknown[]) =>
+        Promise.resolve(
+          new Prisma.Sql(strings, values).text.includes(
+            '"assetIssuer" AS issuer',
+          )
+            ? rows
+            : [],
+        ),
+    );
+  const thisMonth = () => {
+    const now = new Date();
+    return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+  };
+
+  it('values the settled volume in USD at NEAR Intents’ price', async () => {
+    settledRows([
+      {
+        bucket: thisMonth(),
+        chain: 'stellar',
+        asset: 'XLM',
+        issuer: null,
+        amount: '40',
+        count: 2n,
+      },
+    ]);
+    try {
+      const res = await tenant(
+        '/v1/summary/series?period=month',
+        'payments:read',
+      ).expect(200);
+      expect(res.body.buckets[11].volumeUsd).toBe('10.00');
+      expect(res.body.totals).toMatchObject({
+        volumeUsd: '10.00',
+        unpriced: 0,
+      });
+    } finally {
+      prismaMock.$queryRaw.mockReset().mockResolvedValue([]);
+    }
+  });
+
+  it('still answers, without USD values, when NEAR Intents cannot be reached', async () => {
+    settledRows([
+      {
+        bucket: thisMonth(),
+        chain: 'stellar',
+        asset: 'XLM',
+        issuer: null,
+        amount: '40',
+        count: 2n,
+      },
+    ]);
+    nearIntentsMock.tokens.mockRejectedValueOnce(
+      new Error('NEAR Intents is unavailable'),
+    );
+    try {
+      const res = await tenant(
+        '/v1/summary/series?period=month',
+        'payments:read',
+      ).expect(200);
+      expect(res.body.buckets[11].volumeUsd).toBeNull();
+      expect(res.body.buckets[10].volumeUsd).toBe('0.00');
+      expect(res.body.totals).toMatchObject({ volumeUsd: null, unpriced: 2 });
+    } finally {
+      prismaMock.$queryRaw.mockReset().mockResolvedValue([]);
+    }
   });
 });

@@ -10,6 +10,15 @@ import type {
 export const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
+ * How long the summary and the series wait for NEAR Intents' token list, which prices the
+ * settled volume in USD. The list is cached for minutes, so this is paid only when the cache is
+ * cold; past it the figures answer without USD values (null) rather than holding the dashboard
+ * for the client's full 20 s timeout. The fetch itself goes on and fills the cache for the next
+ * read.
+ */
+export const USD_PRICES_WAIT_MS = 2_500;
+
+/**
  * The periods the dashboard's chart groups payments, swaps, liquidity operations and webhook
  * deliveries by, and how many buckets of each it shows (`GET /v1/summary/series`): 30 days,
  * 12 weeks, 12 months, 5 years.

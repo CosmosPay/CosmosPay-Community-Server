@@ -2044,6 +2044,25 @@ seal होती हैं और कभी लौटाई नहीं जा
 
 ## अपग्रेड — breaking changes और deploy नोट्स
 
+### डैशबोर्ड: USD में settled volume
+
+- **`GET /v1/summary` और `GET /v1/summary/series` settled volume को USD में आंकते हैं।**
+  `volume` पहले की तरह हर asset की राशि जोड़ता है; उसके साथ `/v1/summary` हर `volume`
+  पंक्ति पर `amountUsd` और साथ में `volumeUsd` व `unpriced` लौटाता है, और series हर
+  payments bucket पर `volumeUsd` तथा `totals` और `previous` पर `volumeUsd` व
+  `unpriced` लौटाती है। यह केवल जोड़ है: कोई field बदला या हटाया नहीं गया।
+- **हर asset को NEAR Intents के मौजूदा reference price पर आंका जाता है** (उसकी token
+  list, वही जो `GET /v1/cross-chain-swaps/assets` पढ़ता है, कुछ मिनट cache में): आज के
+  भाव पर एक अनुमानित आंकड़ा, हर भुगतान के दिन का भाव नहीं। mainnet token का भाव केवल उसके
+  contract से तय होता है (Stellar पर उसका code और issuer), इसलिए जो token NEAR Intents
+  list नहीं करता वह `unpriced` में गिना जाता है; sandbox भुगतान को उसके mainnet हमनाम
+  की तरह आंका जाता है (testnet XLM, XLM के भाव पर)।
+- **कीमतें डैशबोर्ड को कभी विफल नहीं करतीं।** अगर NEAR Intents की list 2.5 s
+  (`USD_PRICES_WAIT_MS`) में नहीं पढ़ी जा सके, तो USD fields null होते हैं (बिना गतिविधि
+  वाला bucket `"0.00"` ही रहता है) और बाकी सब पहले की तरह जवाब देता है। कोई migration
+  नहीं, कोई नया variable नहीं; जो deployment `NEAR_INTENTS_BASE_URL` पर बाहर जाने वाली
+  calls रोकता है, उसे USD fields null मिलते हैं।
+
 ### USDT0 transfers, और एक swap का public read
 
 - **`/v1/usdt0` के तहत नए routes** (`swaps:read` / `swaps:write`): LayerZero के OFT के

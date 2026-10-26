@@ -2131,6 +2131,25 @@ misma lista `PLUGINS_ENABLED` que los plugins aislados.
 
 ## Actualización — cambios incompatibles y notas de despliegue
 
+### Panel: volumen liquidado en USD
+
+- **`GET /v1/summary` y `GET /v1/summary/series` valoran el volumen liquidado en USD.**
+  `volume` sigue sumando el monto de cada activo; a su lado `/v1/summary` responde
+  `amountUsd` en cada fila de `volume` más `volumeUsd` y `unpriced`, y la serie responde
+  `volumeUsd` en cada bucket de pagos y `volumeUsd` y `unpriced` en `totals` y
+  `previous`. Es aditivo: ningún campo cambió ni desapareció.
+- **Cada activo se valora al precio de referencia actual de NEAR Intents** (su lista de
+  tokens, la misma que lee `GET /v1/cross-chain-swaps/assets`, en caché durante minutos):
+  una cifra orientativa al precio de hoy, no al del día de cada pago. Un token de mainnet
+  se valora solo por su contrato (en Stellar, su código y su emisor), así que un token que
+  NEAR Intents no lista cuenta en `unpriced`; un pago del sandbox se valora como su
+  homónimo de mainnet (el XLM de testnet al precio del XLM).
+- **Los precios nunca hacen fallar el panel.** Si la lista de NEAR Intents no se puede
+  leer en 2,5 s (`USD_PRICES_WAIT_MS`), los campos en USD son null (un bucket sin
+  actividad sigue en `"0.00"`) y todo lo demás responde como antes. Sin migración ni
+  variable nueva; un despliegue que bloquea las llamadas salientes a
+  `NEAR_INTENTS_BASE_URL` recibe los campos en USD en null.
+
 ### Transferencias de USDT0, y lecturas públicas de un swap
 
 - **Rutas nuevas bajo `/v1/usdt0`** (`swaps:read` / `swaps:write`): USDT0 enviado

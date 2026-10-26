@@ -2123,6 +2123,25 @@ plugins isolés.
 
 ## Mise à niveau — changements incompatibles et notes de déploiement
 
+### Tableau de bord : volume réglé en USD
+
+- **`GET /v1/summary` et `GET /v1/summary/series` valorisent le volume réglé en USD.**
+  `volume` additionne toujours le montant de chaque actif ; à côté, `/v1/summary` renvoie
+  `amountUsd` sur chaque ligne de `volume` ainsi que `volumeUsd` et `unpriced`, et la
+  série renvoie `volumeUsd` sur chaque bucket de paiements et `volumeUsd` et `unpriced`
+  dans `totals` et `previous`. Additif : aucun champ n'a changé ni disparu.
+- **Chaque actif est valorisé au prix de référence actuel de NEAR Intents** (sa liste de
+  tokens, celle que lit `GET /v1/cross-chain-swaps/assets`, en cache quelques minutes) :
+  un chiffre indicatif au prix du jour, pas à celui du jour de chaque paiement. Un token
+  mainnet n'est valorisé que par son contrat (sur Stellar, son code et son émetteur), donc
+  un token que NEAR Intents ne liste pas compte dans `unpriced` ; un paiement du sandbox
+  est valorisé comme son homonyme mainnet (le XLM du testnet au prix du XLM).
+- **Les prix ne font jamais échouer le tableau de bord.** Si la liste de NEAR Intents ne
+  peut pas être lue en 2,5 s (`USD_PRICES_WAIT_MS`), les champs en USD valent null (un
+  bucket sans activité reste à `"0.00"`) et tout le reste répond comme avant. Pas de
+  migration ni de nouvelle variable ; un déploiement qui bloque les appels sortants vers
+  `NEAR_INTENTS_BASE_URL` reçoit des champs USD à null.
+
 ### Transferts USDT0, et lectures publiques d'un swap
 
 - **Nouvelles routes sous `/v1/usdt0`** (`swaps:read` / `swaps:write`) : de l'USDT0

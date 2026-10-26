@@ -42,6 +42,19 @@ export class AssetVolumeEntity {
   amount!: string;
 
   @ApiProperty({ example: 42 }) count!: number;
+
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    description:
+      "`amount` in USD with two decimals, valued at NEAR Intents' current reference price for each asset (its token list, cached for a few minutes): an indicative figure at today's price, not the price on the day each payment settled. A mainnet token is priced by its contract (on " +
+      'Stellar its code and issuer), so a token NEAR Intents does not list has no price; a ' +
+      'test-network token takes the price of its mainnet namesake. When the code comes from ' +
+      'several issuers, only the priced ones are added. Null when none is priced, or when the ' +
+      'prices could not be read.',
+    example: '10418.42',
+  })
+  amountUsd!: string | null;
 }
 
 export class SeriesPointEntity {
@@ -71,6 +84,24 @@ export class RecentPaymentEntity {
 export class AnalyticsSummaryEntity {
   @ApiProperty({ type: SummaryTotalsEntity }) totals!: SummaryTotalsEntity;
   @ApiProperty({ type: [AssetVolumeEntity] }) volume!: AssetVolumeEntity[];
+
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    description:
+      "Every settled payment in USD with two decimals, valued at NEAR Intents' current reference price for each asset (its token list, cached for a few minutes): an indicative figure at today's price, not the price on the day each payment settled. Payments in an asset with no " +
+      'price are left out and counted in `unpriced`. Null only when there were settled ' +
+      "payments and NEAR Intents' prices could not be read; `0.00` when nothing settled.",
+    example: '12843.17',
+  })
+  volumeUsd!: string | null;
+
+  @ApiProperty({
+    description:
+      "Settled payments `volumeUsd` leaves out: their asset has no USD price (all of them when NEAR Intents' prices could not be read).",
+    example: 0,
+  })
+  unpriced!: number;
   @ApiProperty({ type: WebhookHealthEntity }) webhooks!: WebhookHealthEntity;
 
   @ApiProperty({ description: 'Distinct paying accounts.', example: 58 })
@@ -105,6 +136,16 @@ export class SeriesBucketEntity {
     example: '1842.5',
   })
   volume!: string;
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    description:
+      "The bucket's settled payments in USD with two decimals, valued at NEAR Intents' current reference price for each asset (its token list, cached for a few minutes): an indicative figure at today's price, not the price on the day each payment settled. Payments in an asset " +
+      "with no price add nothing (the window's `unpriced` counts them). Null only when the " +
+      "bucket has settled payments and NEAR Intents' prices could not be read.",
+    example: '1790.36',
+  })
+  volumeUsd!: string | null;
 }
 
 export class SeriesWindowEntity {
@@ -112,6 +153,21 @@ export class SeriesWindowEntity {
   @ApiProperty({ example: 251 }) succeeded!: number;
   @ApiProperty({ example: 19 }) failed!: number;
   @ApiProperty({ example: '17410.25' }) volume!: string;
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    description:
+      "The window's settled payments in USD with two decimals, valued at NEAR Intents' current reference price for each asset (its token list, cached for a few minutes): an indicative figure at today's price, not the price on the day each payment settled. Null only when the " +
+      "window has settled payments and NEAR Intents' prices could not be read.",
+    example: '16982.04',
+  })
+  volumeUsd!: string | null;
+  @ApiProperty({
+    description:
+      "Settled payments of the window `volumeUsd` leaves out: their asset has no USD price (all of them when NEAR Intents' prices could not be read).",
+    example: 0,
+  })
+  unpriced!: number;
 }
 
 export class SeriesTotalsEntity extends SeriesWindowEntity {

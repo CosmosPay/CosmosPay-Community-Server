@@ -22,7 +22,13 @@ import {
   type SeriesSwapKind,
 } from '@/analytics/analytics.constants';
 import { outcomeCase, statusIn } from '@/analytics/series-outcomes';
-import { fillBuckets, seriesWindow } from '@/analytics/series-window';
+import {
+  bucketKey,
+  fillBuckets,
+  seriesWindow,
+} from '@/analytics/series-window';
+import { formatUsd, valueRows, type SettledRow } from '@/analytics/usd-prices';
+import { UsdPricesService } from '@/analytics/usd-prices.service';
 import {
   isChain,
   MAX_TOKEN_DECIMALS,
@@ -59,6 +65,57 @@ const ASSET_LABEL_SQL = Prisma.raw(`
       ELSE '${NATIVE_ASSET_CODES.stellar}'
     END
   ELSE "asset" END`);
+
+/**
+ * The consumer's settled payments on `network` per chain, asset AND issuer, for their USD value:
+ * a code alone does not say which token it is (anyone can issue a USDC on Stellar). With `unit`
+ * (the series) each row also carries its bucket, `date_trunc` of that unit; without, `bucket`
+ * is null. The unit is one of SERIES_PERIODS, spliced in as SQL text by the caller.
+ */
+function settledAssetsSql(
+  consumerId: string,
+  network: string,
+  from: Date | null,
+  unit: Prisma.Sql | null,
+): Prisma.Sql {
+  const bucket = unit
+    ? Prisma.sql`date_trunc(${unit}, "createdAt")`
+    : Prisma.raw('NULL::timestamp');
+  const window = from ? Prisma.sql`AND "createdAt" >= ${from}` : Prisma.empty;
+  return Prisma.sql`
+    SELECT ${bucket} AS bucket,
+           "chain",
+           ${ASSET_LABEL_SQL} AS asset,
+           "assetIssuer" AS issuer,
+           SUM("amount"::numeric) AS amount,
+           COUNT(*) AS count
+    FROM "payment_intent"
+    WHERE "consumerId" = ${consumerId}
+      AND "network" = ${network}
+      AND "status" = 'SUCCEEDED'
+      ${window}
+    GROUP BY 1, 2, 3, 4`;
+}
+
+/** A row of `settledAssetsSql` as the driver returns it. */
+interface SettledAssetSqlRow {
+  bucket: Date | null;
+  chain: string;
+  asset: string;
+  issuer: string | null;
+  amount: string | null;
+  count: bigint;
+}
+
+function settledRow(row: SettledAssetSqlRow): SettledRow {
+  return {
+    chain: row.chain,
+    asset: row.asset,
+    issuer: row.issuer,
+    amount: row.amount,
+    count: toCount(row.count),
+  };
+}
 
 /**
  * The table each kind of swap lives in, with the table of outcomes its statuses map to. A
@@ -115,6 +172,7 @@ export class AnalyticsService {
     private readonly prisma: PrismaService,
     private readonly config: ConfigService<AppConfig, true>,
     private readonly consumers: ConsumerResolverService,
+    private readonly usd: UsdPricesService,
   ) {}
 
   /** Mirror the APISIX consumer locally (and return null if it has no records yet). */
@@ -156,21 +214,28 @@ export class AnalyticsService {
     // cast that `_sum` cannot express.
     const since = new Date(Date.now() - 29 * DAY_MS);
 
-    const [statusRows, volumeRows, seriesRows, payerRows, succeededRecent] =
-      await Promise.all([
-        this.prisma.paymentIntent.groupBy({
-          by: ['status'],
-          where: { consumerId, network },
-          _count: { _all: true },
-        }),
-        this.prisma.$queryRaw<
-          {
-            chain: string;
-            asset: string;
-            amount: string | null;
-            count: bigint;
-          }[]
-        >`
+    const [
+      statusRows,
+      volumeRows,
+      seriesRows,
+      payerRows,
+      succeededRecent,
+      settledRows,
+      pricer,
+    ] = await Promise.all([
+      this.prisma.paymentIntent.groupBy({
+        by: ['status'],
+        where: { consumerId, network },
+        _count: { _all: true },
+      }),
+      this.prisma.$queryRaw<
+        {
+          chain: string;
+          asset: string;
+          amount: string | null;
+          count: bigint;
+        }[]
+      >`
           SELECT "chain",
                  ${ASSET_LABEL_SQL} AS asset,
                  SUM("amount"::numeric) AS amount,
@@ -181,9 +246,9 @@ export class AnalyticsService {
             AND "status" = 'SUCCEEDED'
           GROUP BY 1, 2
         `,
-        this.prisma.$queryRaw<
-          { day: Date; count: bigint; volume: string | null }[]
-        >`
+      this.prisma.$queryRaw<
+        { day: Date; count: bigint; volume: string | null }[]
+      >`
           SELECT date_trunc('day', "createdAt") AS day,
                  COUNT(*)                       AS count,
                  SUM("amount"::numeric) FILTER (WHERE "status" = 'SUCCEEDED') AS volume
@@ -193,29 +258,37 @@ export class AnalyticsService {
             AND "createdAt" >= ${since}
           GROUP BY 1
         `,
-        this.prisma.$queryRaw<{ payers: bigint }[]>`
+      this.prisma.$queryRaw<{ payers: bigint }[]>`
           SELECT COUNT(DISTINCT "source") AS payers
           FROM "payment_intent"
           WHERE "consumerId" = ${consumerId}
             AND "network" = ${network}
             AND "source" IS NOT NULL
         `,
-        this.prisma.paymentIntent.findMany({
-          where: { consumerId, network, status: 'SUCCEEDED' },
-          select: {
-            id: true,
-            kind: true,
-            status: true,
-            amount: true,
-            asset: true,
-            chain: true,
-            destination: true,
-            createdAt: true,
-          },
-          orderBy: { createdAt: 'desc' },
-          take: 6,
-        }),
-      ]);
+      this.prisma.paymentIntent.findMany({
+        where: { consumerId, network, status: 'SUCCEEDED' },
+        select: {
+          id: true,
+          kind: true,
+          status: true,
+          amount: true,
+          asset: true,
+          chain: true,
+          destination: true,
+          createdAt: true,
+        },
+        orderBy: { createdAt: 'desc' },
+        take: 6,
+      }),
+      this.prisma.$queryRaw<SettledAssetSqlRow[]>`${settledAssetsSql(
+        consumerId,
+        network,
+        null,
+        null,
+      )}`,
+      // Never throws: without NEAR Intents' prices the USD fields are null.
+      this.usd.pricer(network),
+    ]);
 
     const byStatus: Record<string, number> = {};
     for (const row of statusRows) byStatus[row.status] = row._count._all;
@@ -232,12 +305,24 @@ export class AnalyticsService {
     // back through Number and adding in float64 — exactly what
     // `formatNumericAmount` exists to avoid, since a seven-decimal Stellar
     // amount does not survive the round trip.
-    const volume = volumeRows.map((row) => ({
-      chain: row.chain,
-      asset: row.asset,
-      amount: formatNumericAmount(row.amount, placesFor(row.chain)),
-      count: toCount(row.count),
-    }));
+    //
+    // Each row's USD value adds its issuers' priced amounts (one code from two issuers is two
+    // tokens); `unpriced` counts the settled payments no price covers.
+    const settled = settledRows.map(settledRow);
+    const volume = volumeRows.map((row) => {
+      const value = valueRows(
+        settled.filter((s) => s.chain === row.chain && s.asset === row.asset),
+        pricer,
+      );
+      return {
+        chain: row.chain,
+        asset: row.asset,
+        amount: formatNumericAmount(row.amount, placesFor(row.chain)),
+        count: toCount(row.count),
+        amountUsd: value.priced > 0 ? formatUsd(value.usd) : null,
+      };
+    });
+    const settledValue = valueRows(settled, pricer);
 
     // 30-day daily series (count + settled volume) for the sparklines. The
     // buckets are pre-seeded so a day with no activity still renders as a zero
@@ -294,6 +379,8 @@ export class AnalyticsService {
         successRate,
       },
       volume,
+      volumeUsd: formatUsd(settledValue.usd),
+      unpriced: settledValue.unpriced,
       webhooks: {
         endpoints: endpoints.length,
         deliveries,
@@ -334,8 +421,9 @@ export class AnalyticsService {
    * totals and the same figures for the window just before it, for growth:
    *
    *   - payments: each bucket's count, settled and failed counts and settled volume; the
-   *     window's distinct payers. As in `summary`, volume adds every asset's amount (the
-   *     dashboard labels it so).
+   *     window's distinct payers. As in `summary`, `volume` adds every asset's amount, and
+   *     `volumeUsd` values each asset at NEAR Intents' current price (`usd-prices.ts`), the
+   *     window's `unpriced` counting the payments in an asset it lists no price for.
    *   - swaps of every kind (Stellar DEX, Solana and Monad, cross-chain, USDT0 sent through
    *     LayerZero): each bucket's count, succeeded and failed; the window's in-progress count
    *     and its split by kind.
@@ -368,6 +456,8 @@ export class AnalyticsService {
       webhookRows,
       liquidityBucketRows,
       webhookBucketRows,
+      settledRows,
+      pricer,
     ] = await Promise.all([
       this.prisma.$queryRaw<
         {
@@ -494,6 +584,15 @@ export class AnalyticsService {
           AND d."createdAt" >= ${since}
         GROUP BY 1
       `,
+      // The settled payments of both windows per bucket and asset, for their USD value.
+      this.prisma.$queryRaw<SettledAssetSqlRow[]>`${settledAssetsSql(
+        consumerId,
+        network,
+        previousSince,
+        unit,
+      )}`,
+      // Never throws: without NEAR Intents' prices the USD fields are null.
+      this.usd.pricer(network),
     ]);
 
     const window = (current: boolean) => {
@@ -508,6 +607,25 @@ export class AnalyticsService {
     };
     const totals = window(true);
     const before = window(false);
+
+    // The USD side: each bucket's settled assets and both windows' (a bucket of the window
+    // before starts before `since`: `date_trunc` puts both on the same boundaries).
+    const settledByBucket = new Map<string, SettledRow[]>();
+    const settledNow: SettledRow[] = [];
+    const settledBefore: SettledRow[] = [];
+    for (const row of settledRows) {
+      if (!row.bucket) continue;
+      const item = settledRow(row);
+      if (new Date(row.bucket).getTime() < since.getTime()) {
+        settledBefore.push(item);
+        continue;
+      }
+      settledNow.push(item);
+      const key = bucketKey(row.bucket);
+      settledByBucket.set(key, [...(settledByBucket.get(key) ?? []), item]);
+    }
+    const nowUsd = valueRows(settledNow, pricer);
+    const beforeUsd = valueRows(settledBefore, pricer);
 
     // At most one row per (window, kind): summing them here adds a handful of counts, not rows.
     const swapWindow = (current: boolean) => {
@@ -557,13 +675,24 @@ export class AnalyticsService {
           failed: toCount(row.failed),
           volume: formatNumericAmount(row.volume),
         }),
-      ),
-      totals,
+      ).map((bucket) => ({
+        ...bucket,
+        volumeUsd: formatUsd(
+          valueRows(settledByBucket.get(bucket.start) ?? [], pricer).usd,
+        ),
+      })),
+      totals: {
+        ...totals,
+        volumeUsd: formatUsd(nowUsd.usd),
+        unpriced: nowUsd.unpriced,
+      },
       previous: {
         count: before.count,
         succeeded: before.succeeded,
         failed: before.failed,
         volume: before.volume,
+        volumeUsd: formatUsd(beforeUsd.usd),
+        unpriced: beforeUsd.unpriced,
       },
       swaps: {
         buckets: fillBuckets(

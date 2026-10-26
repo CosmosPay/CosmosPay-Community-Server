@@ -1,6 +1,9 @@
 import { Prisma } from '@generated/prisma/client';
 import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
 import { AnalyticsService } from '@/analytics/analytics.service';
+import { usdPricer } from '@/analytics/usd-prices';
+import type { UsdPricesService } from '@/analytics/usd-prices.service';
+import type { NearIntentsToken } from '@/near-intents/near-intents.types';
 import type { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 
 const consumer = {
@@ -13,6 +16,34 @@ const consumer = {
   plan: null,
   planSwapFeeBps: null,
 } as GatewayConsumer;
+
+const STELLAR_USDC_ISSUER =
+  'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN';
+/** NEAR Intents' token list as the price service reads it: XLM at 0.25, USDC at 1. */
+const TOKENS: NearIntentsToken[] = [
+  {
+    assetId: 'nep245:xlm',
+    blockchain: 'stellar',
+    symbol: 'XLM',
+    decimals: 7,
+    price: 0.25,
+  },
+  {
+    assetId: 'nep245:usdc',
+    blockchain: 'stellar',
+    symbol: 'USDC',
+    decimals: 7,
+    contractAddress: STELLAR_USDC_ISSUER,
+    price: 1,
+  },
+];
+/** The price service, answering a pricer over `tokens`, or null (NEAR Intents unreachable). */
+const prices = (tokens: NearIntentsToken[] | null) =>
+  ({
+    pricer: jest.fn((network: string) =>
+      Promise.resolve(tokens ? usdPricer(tokens, network) : null),
+    ),
+  }) as unknown as UsdPricesService;
 
 /**
  * `summary` and `balances` used to load every payment intent for the consumer
@@ -39,8 +70,12 @@ describe('AnalyticsService', () => {
       .replace(/\s+/g, ' ');
   };
 
-  function build(queryResults: unknown[][]) {
-    const queryRaw = jest.fn();
+  function build(
+    queryResults: unknown[][],
+    tokens: NearIntentsToken[] | null = null,
+  ) {
+    // An aggregation a test does not set answers no rows.
+    const queryRaw = jest.fn().mockResolvedValue([]);
     for (const result of queryResults) queryRaw.mockResolvedValueOnce(result);
 
     const findMany = jest.fn().mockResolvedValue([]);
@@ -66,6 +101,7 @@ describe('AnalyticsService', () => {
         prisma as never,
         config as never,
         new ConsumerResolverService(prisma as never),
+        prices(tokens),
       ),
       prisma,
       findMany,
@@ -112,7 +148,7 @@ describe('AnalyticsService', () => {
     const result = await service.summary(consumer);
 
     expect(result.volume).toEqual([
-      { asset: 'USDC', amount: '90071992547409.91', count: 3 },
+      { asset: 'USDC', amount: '90071992547409.91', count: 3, amountUsd: null },
     ]);
   });
 
@@ -143,7 +179,13 @@ describe('AnalyticsService', () => {
     const result = await service.summary(consumer);
 
     expect(result.volume).toEqual([
-      { chain: 'stellar', asset: 'XLM', amount: '0', count: 0 },
+      {
+        chain: 'stellar',
+        asset: 'XLM',
+        amount: '0',
+        count: 0,
+        amountUsd: null,
+      },
     ]);
   });
 
@@ -165,6 +207,101 @@ describe('AnalyticsService', () => {
     expect(today).toEqual({ date: key, count: 5, volume: '12.5' });
     // Every other bucket stays an explicit zero rather than a gap.
     expect(result.series.filter((s) => s.count === 0)).toHaveLength(29);
+  });
+
+  it('values the settled volume in USD per asset and in total, issuer by issuer', async () => {
+    const { service, prisma } = build(
+      [
+        [
+          { chain: 'stellar', asset: 'XLM', amount: '100.0000000', count: 3n },
+          { chain: 'stellar', asset: 'USDC', amount: '75', count: 3n },
+        ],
+        [],
+        [{ payers: 2n }],
+        // per issuer: one USDC is Circle's, the other an issuer NEAR Intents does not list
+        [
+          {
+            bucket: null,
+            chain: 'stellar',
+            asset: 'XLM',
+            issuer: null,
+            amount: '100.0000000',
+            count: 3n,
+          },
+          {
+            bucket: null,
+            chain: 'stellar',
+            asset: 'USDC',
+            issuer: STELLAR_USDC_ISSUER,
+            amount: '50',
+            count: 2n,
+          },
+          {
+            bucket: null,
+            chain: 'stellar',
+            asset: 'USDC',
+            issuer: 'GUNLISTED',
+            amount: '25',
+            count: 1n,
+          },
+        ],
+      ],
+      TOKENS,
+    );
+
+    const result = await service.summary(consumer);
+
+    expect(result.volume).toEqual([
+      {
+        chain: 'stellar',
+        asset: 'XLM',
+        amount: '100',
+        count: 3,
+        amountUsd: '25.00',
+      },
+      // Only Circle's 50 is priced; the row keeps its exact 75.
+      {
+        chain: 'stellar',
+        asset: 'USDC',
+        amount: '75',
+        count: 3,
+        amountUsd: '50.00',
+      },
+    ]);
+    expect(result.volumeUsd).toBe('75.00');
+    expect(result.unpriced).toBe(1);
+    // Priced from the issuer, which the volume rows do not group by.
+    const sql = sqlOf(prisma.$queryRaw, 3);
+    expect(sql).toContain('"assetIssuer" AS issuer');
+    expect(sql).toContain(`AND "status" = 'SUCCEEDED'`);
+    expect(sql).toContain('GROUP BY 1, 2, 3, 4');
+  });
+
+  it('answers without USD values when NEAR Intents’ prices cannot be read', async () => {
+    const { service } = build([
+      [{ chain: 'stellar', asset: 'XLM', amount: '10', count: 2n }],
+      [],
+      [{ payers: 1n }],
+      [
+        {
+          bucket: null,
+          chain: 'stellar',
+          asset: 'XLM',
+          issuer: null,
+          amount: '10',
+          count: 2n,
+        },
+      ],
+    ]);
+
+    const result = await service.summary(consumer);
+
+    expect(result.volume[0].amountUsd).toBeNull();
+    expect(result.volumeUsd).toBeNull();
+    expect(result.unpriced).toBe(2);
+    // Everything else as before.
+    expect(result.volume[0].amount).toBe('10');
+    expect(result.totals.all).toBe(10);
   });
 
   it('balances separates settled from pending and tolerates a null sum', async () => {
@@ -225,7 +362,7 @@ describe('AnalyticsService', () => {
 describe('AnalyticsService.series', () => {
   afterEach(() => jest.useRealTimers());
 
-  /** What each of the eight aggregations answers, in the order the service issues them. */
+  /** What each of the nine aggregations answers, in the order the service issues them. */
   type Results = Partial<
     Record<
       | 'buckets'
@@ -235,7 +372,8 @@ describe('AnalyticsService.series', () => {
       | 'liquidity'
       | 'webhooks'
       | 'liquidityBuckets'
-      | 'webhookBuckets',
+      | 'webhookBuckets'
+      | 'settled',
       unknown[]
     >
   >;
@@ -248,9 +386,13 @@ describe('AnalyticsService.series', () => {
     'webhooks',
     'liquidityBuckets',
     'webhookBuckets',
+    'settled',
   ] as const;
 
-  function build(results: Results = {}) {
+  function build(
+    results: Results = {},
+    tokens: NearIntentsToken[] | null = null,
+  ) {
     const queryRaw = jest.fn();
     for (const key of ORDER) queryRaw.mockResolvedValueOnce(results[key] ?? []);
     const config = { get: () => ({ network: 'testnet' }) };
@@ -272,6 +414,7 @@ describe('AnalyticsService.series', () => {
       prisma as never,
       config as never,
       new ConsumerResolverService(prisma as never),
+      prices(tokens),
     );
     return { service, queryRaw, prisma };
   }
@@ -331,12 +474,14 @@ describe('AnalyticsService.series', () => {
 
     expect(result.period).toBe('month');
     expect(result.buckets).toHaveLength(12);
+    // Nothing settled in the mocked USD rows: zero dollars, whatever the volume says.
     expect(result.buckets[0]).toEqual({
       start: '2025-11-01',
       count: 0,
       succeeded: 0,
       failed: 0,
       volume: '0',
+      volumeUsd: '0.00',
     });
     expect(result.buckets[11]).toEqual({
       start: '2026-10-01',
@@ -344,6 +489,7 @@ describe('AnalyticsService.series', () => {
       succeeded: 4,
       failed: 1,
       volume: '120.5',
+      volumeUsd: '0.00',
     });
     expect(result.totals).toEqual({
       count: 5,
@@ -351,16 +497,20 @@ describe('AnalyticsService.series', () => {
       failed: 1,
       volume: '120.5',
       payers: 3,
+      volumeUsd: '0.00',
+      unpriced: 0,
     });
     expect(result.previous).toEqual({
       count: 2,
       succeeded: 2,
       failed: 0,
       volume: '80',
+      volumeUsd: '0.00',
+      unpriced: 0,
     });
-    // Eight aggregations (payments, swaps, liquidity and webhooks, each per bucket and per
-    // window), no row fetched.
-    expect(queryRaw).toHaveBeenCalledTimes(8);
+    // Nine aggregations (payments, swaps, liquidity and webhooks, each per bucket and per
+    // window, and the settled payments per asset for their USD value), no row fetched.
+    expect(queryRaw).toHaveBeenCalledTimes(9);
     for (const model of [
       prisma.paymentIntent,
       prisma.swap,
@@ -664,8 +814,12 @@ describe('AnalyticsService.series', () => {
       failed: 0,
       volume: '0',
       payers: 0,
+      volumeUsd: '0.00',
+      unpriced: 0,
     });
     expect(result.previous.volume).toBe('0');
+    expect(result.previous.volumeUsd).toBe('0.00');
+    expect(result.buckets.every((b) => b.volumeUsd === '0.00')).toBe(true);
     expect(result.swaps).toEqual({
       buckets: result.buckets.map((b) => ({
         start: b.start,
@@ -701,5 +855,90 @@ describe('AnalyticsService.series', () => {
       totals: { deliveries: 0, failed: 0 },
       previous: { deliveries: 0, failed: 0 },
     });
+  });
+
+  it('values each bucket and both windows in USD, counting what no price covers', async () => {
+    jest.useFakeTimers().setSystemTime(NOW);
+    const { service, queryRaw } = build(
+      {
+        settled: [
+          // this window: October (XLM and Circle's USDC) and November 2025 (an unlisted token)
+          {
+            bucket: new Date('2026-10-01T00:00:00Z'),
+            chain: 'stellar',
+            asset: 'XLM',
+            issuer: null,
+            amount: '40',
+            count: 2n,
+          },
+          {
+            bucket: new Date('2026-10-01T00:00:00Z'),
+            chain: 'stellar',
+            asset: 'USDC',
+            issuer: STELLAR_USDC_ISSUER,
+            amount: '12.5',
+            count: 1n,
+          },
+          {
+            bucket: new Date('2025-11-01T00:00:00Z'),
+            chain: 'stellar',
+            asset: 'AQUA',
+            issuer: 'GUNLISTED',
+            amount: '900',
+            count: 3n,
+          },
+          // the window before
+          {
+            bucket: new Date('2025-06-01T00:00:00Z'),
+            chain: 'stellar',
+            asset: 'USDC',
+            issuer: STELLAR_USDC_ISSUER,
+            amount: '8',
+            count: 1n,
+          },
+        ],
+      },
+      TOKENS,
+    );
+
+    const result = await service.series(consumer, 'month');
+
+    expect(result.buckets[11].volumeUsd).toBe('22.50');
+    // A bucket of unpriced payments is worth zero dollars; its payments are counted.
+    expect(result.buckets[0].volumeUsd).toBe('0.00');
+    expect(result.buckets[5].volumeUsd).toBe('0.00');
+    expect(result.totals).toMatchObject({ volumeUsd: '22.50', unpriced: 3 });
+    expect(result.previous).toMatchObject({ volumeUsd: '8.00', unpriced: 0 });
+    // Settled payments only, of both windows, per bucket, asset and issuer.
+    const settled = queryOf(queryRaw, 8);
+    expect(settled.sql).toContain(`date_trunc('month', "createdAt") AS bucket`);
+    expect(settled.sql).toContain('"assetIssuer" AS issuer');
+    expect(settled.sql).toContain(`AND "status" = 'SUCCEEDED'`);
+    expect(settled.sql).toContain('GROUP BY 1, 2, 3, 4');
+    expect(settled.values).toEqual(['c1', 'public', PREVIOUS_SINCE]);
+  });
+
+  it('answers the series without USD values when NEAR Intents’ prices cannot be read', async () => {
+    jest.useFakeTimers().setSystemTime(NOW);
+    const { service } = build({
+      settled: [
+        {
+          bucket: new Date('2026-10-01T00:00:00Z'),
+          chain: 'stellar',
+          asset: 'XLM',
+          issuer: null,
+          amount: '40',
+          count: 2n,
+        },
+      ],
+    });
+
+    const result = await service.series(consumer, 'month');
+
+    // Only the bucket that had something to value has no value; a quiet one is still zero.
+    expect(result.buckets[11].volumeUsd).toBeNull();
+    expect(result.buckets[10].volumeUsd).toBe('0.00');
+    expect(result.totals).toMatchObject({ volumeUsd: null, unpriced: 2 });
+    expect(result.previous).toMatchObject({ volumeUsd: '0.00', unpriced: 0 });
   });
 });

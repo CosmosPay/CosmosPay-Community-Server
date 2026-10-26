@@ -2165,6 +2165,26 @@ eingeschaltet werden.
 
 ## Upgrade — Breaking Changes und Deploy-Hinweise
 
+### Dashboard: abgewickeltes Volumen in USD
+
+- **`GET /v1/summary` und `GET /v1/summary/series` bewerten das abgewickelte Volumen in
+  USD.** `volume` addiert weiterhin die Beträge aller Assets; daneben liefert
+  `/v1/summary` `amountUsd` in jeder `volume`-Zeile sowie `volumeUsd` und `unpriced`,
+  und die Serie liefert `volumeUsd` in jedem Zahlungs-Bucket sowie `volumeUsd` und
+  `unpriced` in `totals` und `previous`. Rein additiv: kein Feld wurde geändert oder
+  entfernt.
+- **Jedes Asset wird zum aktuellen Referenzpreis von NEAR Intents bewertet** (deren
+  Token-Liste, dieselbe, die `GET /v1/cross-chain-swaps/assets` liest, einige Minuten
+  zwischengespeichert): ein Richtwert zum heutigen Preis, nicht zum Preis am Tag jeder
+  Zahlung. Ein Mainnet-Token wird nur über seinen Contract bewertet (auf Stellar Code und
+  Issuer), ein Token, den NEAR Intents nicht listet, zählt daher in `unpriced`; eine
+  Sandbox-Zahlung wird wie ihr Mainnet-Namensvetter bewertet (Testnet-XLM zum XLM-Preis).
+- **Preise lassen das Dashboard nie scheitern.** Lässt sich die Liste von NEAR Intents
+  nicht innerhalb von 2,5 s lesen (`USD_PRICES_WAIT_MS`), sind die USD-Felder null (ein
+  ruhiger Bucket bleibt `"0.00"`) und alles andere antwortet wie bisher. Keine Migration,
+  keine neue Variable; ein Deployment, das ausgehende Aufrufe an `NEAR_INTENTS_BASE_URL`
+  blockiert, erhält null in den USD-Feldern.
+
 ### USDT0-Transfers und öffentliche Lesezugriffe auf einen Swap
 
 - **Neue Routen unter `/v1/usdt0`** (`swaps:read` / `swaps:write`): USDT0, von

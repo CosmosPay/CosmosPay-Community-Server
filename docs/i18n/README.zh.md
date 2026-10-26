@@ -1359,6 +1359,12 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
 
 ## 升级 — 破坏性变更与部署说明
 
+### 仪表盘：以 USD 计的已结算交易额
+
+- **`GET /v1/summary` 和 `GET /v1/summary/series` 以 USD 计算已结算交易额。**`volume` 仍然把每种资产的金额相加；在它旁边，`/v1/summary` 在每一行 `volume` 上返回 `amountUsd`，另外返回 `volumeUsd` 和 `unpriced`；序列在每个支付桶上返回 `volumeUsd`，并在 `totals` 和 `previous` 上返回 `volumeUsd` 和 `unpriced`。仅为新增：没有字段被修改或移除。
+- **每种资产按 NEAR Intents 当前的参考价格估值**（其代币列表，即 `GET /v1/cross-chain-swaps/assets` 读取的那份，缓存数分钟）：按今天价格得出的参考数字，而不是每笔支付当天的价格。主网代币只按其合约定价（在 Stellar 上为代码和发行方），因此 NEAR Intents 未列出的代币计入 `unpriced`；沙盒支付按其主网同名资产估值（测试网 XLM 按 XLM 的价格）。
+- **价格永远不会让仪表盘失败。** 如果在 2.5 秒（`USD_PRICES_WAIT_MS`）内无法读取 NEAR Intents 的列表，USD 字段为 null（没有活动的桶仍为 `"0.00"`），其余部分照常返回。无迁移，无新变量；阻止对 `NEAR_INTENTS_BASE_URL` 发起出站调用的部署会得到为 null 的 USD 字段。
+
 ### USDT0 转账，以及对单笔 swap 的公开读取
 
 - **`/v1/usdt0` 下的新路由**（`swaps:read` / `swaps:write`）：通过 LayerZero 的 OFT 把 USDT0 从 Stellar 发送到 21 个 EVM 网络，仅限主网。它们的作用见 [从 Stellar 发送 USDT0](#从-stellar-发送-usdt0layerzero)。现有响应均未改变。

@@ -596,6 +596,13 @@ refreshes it (ledger first, then LayerZero Scan), throttled per row by `lastChec
   `SUM(...) FILTER (WHERE ...)`, bounded by the consumer's index and a date window.
   `summary` once loaded every payment intent and reduced it in Node, and one merchant's
   history blocked every other request. A spec asserts no `findMany` runs.
+- **USD figures are the one thing priced in TypeScript** (`usd-prices.ts`, `UsdPricesService`).
+  The settled payments are still summed in SQL, per chain, asset AND issuer
+  (`settledAssetsSql`); each row is then multiplied by NEAR Intents' cached reference price.
+  A mainnet token is matched only by its contract (on Stellar its code and issuer), never by
+  its name; a test-network one takes its mainnet namesake's price, and none when two listed
+  tokens share the symbol. Prices never fail a summary: the service waits
+  `USD_PRICES_WAIT_MS` and answers null, which is why every USD field is nullable.
 - **`GET /v1/summary/series` covers payments, every kind of swap (USDT0 transfers are the
   `usdt0` kind), liquidity operations and webhook deliveries**, each with `buckets` on the
   buckets of `seriesWindow` (UTC, weeks from Monday, the same as Postgres' `date_trunc`),

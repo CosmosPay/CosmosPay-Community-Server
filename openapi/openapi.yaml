@@ -3468,6 +3468,9 @@ paths:
           windowMs: 600000
   /v1/summary:
     get:
+      description: The settled volume per asset, and every asset valued in USD at NEAR
+        Intents' current reference price (`volumeUsd`, indicative). Without
+        those prices the USD fields are null and the rest answers as usual.
       operationId: AnalyticsController_summary_v1
       parameters: []
       responses:
@@ -3488,6 +3491,10 @@ paths:
         - analytics
   /v1/summary/series:
     get:
+      description: Payments carry their settled volume in USD too (`volumeUsd`), each
+        asset valued at NEAR Intents' current reference price (indicative).
+        Without those prices the USD fields are null and the rest answers as
+        usual.
       operationId: AnalyticsController_series_v1
       parameters:
         - name: period
@@ -14651,11 +14658,25 @@ components:
         count:
           type: number
           example: 42
+        amountUsd:
+          type: string
+          nullable: true
+          description: "`amount` in USD with two decimals, valued at NEAR Intents' current
+            reference price for each asset (its token list, cached for a few
+            minutes): an indicative figure at today's price, not the price on
+            the day each payment settled. A mainnet token is priced by its
+            contract (on Stellar its code and issuer), so a token NEAR Intents
+            does not list has no price; a test-network token takes the price of
+            its mainnet namesake. When the code comes from several issuers, only
+            the priced ones are added. Null when none is priced, or when the
+            prices could not be read."
+          example: "10418.42"
       required:
         - chain
         - asset
         - amount
         - count
+        - amountUsd
     WebhookHealthEntity:
       type: object
       properties:
@@ -14738,6 +14759,22 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/AssetVolumeEntity"
+        volumeUsd:
+          type: string
+          nullable: true
+          description: "Every settled payment in USD with two decimals, valued at NEAR
+            Intents' current reference price for each asset (its token list,
+            cached for a few minutes): an indicative figure at today's price,
+            not the price on the day each payment settled. Payments in an asset
+            with no price are left out and counted in `unpriced`. Null only when
+            there were settled payments and NEAR Intents' prices could not be
+            read; `0.00` when nothing settled."
+          example: "12843.17"
+        unpriced:
+          type: number
+          description: "Settled payments `volumeUsd` leaves out: their asset has no USD
+            price (all of them when NEAR Intents' prices could not be read)."
+          example: 0
         webhooks:
           $ref: "#/components/schemas/WebhookHealthEntity"
         customers:
@@ -14756,6 +14793,8 @@ components:
       required:
         - totals
         - volume
+        - volumeUsd
+        - unpriced
         - webhooks
         - customers
         - series
@@ -14782,12 +14821,24 @@ components:
           type: string
           description: Settled volume, every asset added.
           example: "1842.5"
+        volumeUsd:
+          type: string
+          nullable: true
+          description: "The bucket's settled payments in USD with two decimals, valued at
+            NEAR Intents' current reference price for each asset (its token
+            list, cached for a few minutes): an indicative figure at today's
+            price, not the price on the day each payment settled. Payments in an
+            asset with no price add nothing (the window's `unpriced` counts
+            them). Null only when the bucket has settled payments and NEAR
+            Intents' prices could not be read."
+          example: "1790.36"
       required:
         - start
         - count
         - succeeded
         - failed
         - volume
+        - volumeUsd
     SeriesTotalsEntity:
       type: object
       properties:
@@ -14803,6 +14854,22 @@ components:
         volume:
           type: string
           example: "17410.25"
+        volumeUsd:
+          type: string
+          nullable: true
+          description: "The window's settled payments in USD with two decimals, valued at
+            NEAR Intents' current reference price for each asset (its token
+            list, cached for a few minutes): an indicative figure at today's
+            price, not the price on the day each payment settled. Null only when
+            the window has settled payments and NEAR Intents' prices could not
+            be read."
+          example: "16982.04"
+        unpriced:
+          type: number
+          description: "Settled payments of the window `volumeUsd` leaves out: their asset
+            has no USD price (all of them when NEAR Intents' prices could not be
+            read)."
+          example: 0
         payers:
           type: number
           description: Distinct paying accounts in the window.
@@ -14812,6 +14879,8 @@ components:
         - succeeded
         - failed
         - volume
+        - volumeUsd
+        - unpriced
         - payers
     SeriesWindowEntity:
       type: object
@@ -14828,11 +14897,29 @@ components:
         volume:
           type: string
           example: "17410.25"
+        volumeUsd:
+          type: string
+          nullable: true
+          description: "The window's settled payments in USD with two decimals, valued at
+            NEAR Intents' current reference price for each asset (its token
+            list, cached for a few minutes): an indicative figure at today's
+            price, not the price on the day each payment settled. Null only when
+            the window has settled payments and NEAR Intents' prices could not
+            be read."
+          example: "16982.04"
+        unpriced:
+          type: number
+          description: "Settled payments of the window `volumeUsd` leaves out: their asset
+            has no USD price (all of them when NEAR Intents' prices could not be
+            read)."
+          example: 0
       required:
         - count
         - succeeded
         - failed
         - volume
+        - volumeUsd
+        - unpriced
     SeriesSwapBucketEntity:
       type: object
       properties:

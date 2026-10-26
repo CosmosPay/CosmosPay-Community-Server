@@ -2051,6 +2051,24 @@ the service under `src/native-plugins/<slug>/`, switched on by the same
 
 ## Upgrading — breaking changes and deploy notes
 
+### Dashboard: settled volume in USD
+
+- **`GET /v1/summary` and `GET /v1/summary/series` value the settled volume in USD.**
+  `volume` still adds every asset's amount; beside it `/v1/summary` answers `amountUsd`
+  on each `volume` row plus `volumeUsd` and `unpriced`, and the series answers
+  `volumeUsd` on each payments bucket and `volumeUsd` and `unpriced` on `totals` and
+  `previous`. Additive: no field changed or left.
+- **Each asset is valued at NEAR Intents' current reference price** (its token list, the
+  one `GET /v1/cross-chain-swaps/assets` reads, cached for minutes): an indicative figure
+  at today's price, not the price on the day of each payment. A mainnet token is priced
+  only by its contract (on Stellar its code and issuer), so a token NEAR Intents does not
+  list counts in `unpriced` instead; a sandbox payment is valued as its mainnet namesake
+  (testnet XLM at XLM's price).
+- **Prices never fail the dashboard.** When NEAR Intents' list cannot be read within
+  2.5 s (`USD_PRICES_WAIT_MS`), the USD fields are null (a quiet bucket stays `"0.00"`)
+  and everything else answers as before. No migration, no new variable; a deployment that
+  blocks outbound calls to `NEAR_INTENTS_BASE_URL` gets null USD fields.
+
 ### USDT0 transfers, and public reads of one swap
 
 - **New routes under `/v1/usdt0`** (`swaps:read` / `swaps:write`): USDT0 sent from
