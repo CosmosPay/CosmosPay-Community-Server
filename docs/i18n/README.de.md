@@ -1421,7 +1421,7 @@ Client-Adresse (`429 rate_limited`).
 
 | Route | Scope | Zweck |
 | --- | --- | --- |
-| `GET /v1/cross-chain-swaps/assets` | `swaps:read` | Die Token, die NEAR Intents auf jedem Netzwerk swappen kann, das dieser Dienst erreicht, mit einem indikativen USD-Preis |
+| `GET /v1/cross-chain-swaps/assets` | `swaps:read` | Die Token, die NEAR Intents auf jedem Netzwerk swappen kann, das dieser Dienst erreicht, mit einem indikativen USD-Preis. Nur handelbare: ein Token, das es als deprecated markiert oder ohne Preis listet (für solche gibt es keinen Quote), fehlt, und ein deprecated Token wird als `asset_unsupported` abgelehnt |
 | `POST /v1/cross-chain-swaps/quote` | `swaps:read` | Ein Trocken-Quote: Output, Minimum, Provision; speichert nichts |
 | `POST /v1/cross-chain-swaps` | `swaps:write` | Ein Live-Quote: Einzahlungsadresse, Memo, Wallet-Link und QR; unterstützt `Idempotency-Key` |
 | `GET /v1/cross-chain-swaps` | `swaps:read` | Die chain-übergreifenden Swaps des Consumers |

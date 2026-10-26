@@ -3,7 +3,10 @@ import {
   CROSS_CHAIN_NETWORKS,
   networkByBlockchain,
 } from '@/cross-chain-swaps/cross-chain-networks';
-import type { CrossChainNetworkId } from '@/cross-chain-swaps/cross-chain-swaps.constants';
+import {
+  type CrossChainNetworkId,
+  DEPRECATED_TOKEN_RE,
+} from '@/cross-chain-swaps/cross-chain-swaps.constants';
 import type { NearIntentsToken } from '@/near-intents/near-intents.types';
 
 /** A token NEAR Intents can swap, on one of the networks this service reaches. */
@@ -57,6 +60,25 @@ export function supportedAssets(tokens: NearIntentsToken[]): CrossChainAsset[] {
   return assets;
 }
 
+/** Whether 1Click tags the token as one it is retiring. */
+export function isDeprecatedToken(symbol: string): boolean {
+  return DEPRECATED_TOKEN_RE.test(symbol.trim());
+}
+
+/**
+ * The assets a swap can be offered in: the supported ones 1Click still trades.
+ * Two kinds are left out of the list. A token tagged deprecated. And a token
+ * 1Click lists with no price: it answers every quote for those with "No
+ * liquidity available" or "Quote temporarily unavailable". That was checked
+ * on 2026-10-26, on all eight it listed that way.
+ */
+export function tradableAssets(tokens: NearIntentsToken[]): CrossChainAsset[] {
+  return supportedAssets(tokens).filter(
+    (a) =>
+      a.priceUsd !== null && a.priceUsd > 0 && !isDeprecatedToken(a.symbol),
+  );
+}
+
 /**
  * The native coin among a network's assets: the token with no contract. When
  * 1Click lists more than one (`BTC` and `BTC(OMNI)` on Bitcoin), the one
@@ -93,7 +115,11 @@ export function resolveCrossChainAsset(
   requested: string,
 ): CrossChainAsset {
   const network = CROSS_CHAIN_NETWORKS[chain];
-  const onChain = supportedAssets(tokens).filter((a) => a.chain === chain);
+  // A token 1Click is retiring is refused like one it does not list. One with
+  // no price is still resolved: 1Click's own refusal says why it cannot quote.
+  const onChain = supportedAssets(tokens).filter(
+    (a) => a.chain === chain && !isDeprecatedToken(a.symbol),
+  );
   const wanted = requested.trim();
   const lower = wanted.toLowerCase();
 

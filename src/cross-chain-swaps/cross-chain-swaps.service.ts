@@ -32,7 +32,7 @@ import type { AppConfig } from '@/config/configuration';
 import {
   type CrossChainAsset,
   resolveCrossChainAsset,
-  supportedAssets,
+  tradableAssets,
 } from '@/cross-chain-swaps/cross-chain-assets';
 import {
   CROSS_CHAIN_STATUS_EVENTS,
@@ -196,7 +196,7 @@ export class CrossChainSwapsService {
   // ── Assets ────────────────────────────────────────────────────────────────
   /** What NEAR Intents can swap on every network this service reaches. */
   async assets(): Promise<{ data: CrossChainAsset[] }> {
-    return { data: supportedAssets(await this.nearIntents.tokens()) };
+    return { data: tradableAssets(await this.nearIntents.tokens()) };
   }
 
   // ── Quote ─────────────────────────────────────────────────────────────────

@@ -1395,7 +1395,7 @@ consommateur et adresse client (`429 rate_limited`).
 
 | Route | Scope | Rôle |
 | --- | --- | --- |
-| `GET /v1/cross-chain-swaps/assets` | `swaps:read` | Les jetons que NEAR Intents peut échanger sur chaque réseau que ce service atteint, avec un prix USD indicatif |
+| `GET /v1/cross-chain-swaps/assets` | `swaps:read` | Les jetons que NEAR Intents peut échanger sur chaque réseau que ce service atteint, avec un prix USD indicatif. Seulement ceux qui s'échangent : un jeton qu'il marque deprecated, ou liste sans prix (il n'en cote aucun), est écarté, et un jeton deprecated est refusé en `asset_unsupported` |
 | `POST /v1/cross-chain-swaps/quote` | `swaps:read` | Une cotation à blanc : sortie, minimum, commission ; ne persiste rien |
 | `POST /v1/cross-chain-swaps` | `swaps:write` | Une cotation réelle : adresse de dépôt, mémo, lien de portefeuille et QR ; `Idempotency-Key` accepté |
 | `GET /v1/cross-chain-swaps` | `swaps:read` | Les swaps inter-chaînes du consommateur |

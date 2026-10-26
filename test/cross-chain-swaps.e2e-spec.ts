@@ -47,7 +47,24 @@ describe('Cross-chain swaps guards (e2e)', () => {
 
   const nearIntentsMock = {
     tokens: jest.fn().mockResolvedValue([
-      { assetId: 'xlm', decimals: 7, blockchain: 'stellar', symbol: 'XLM' },
+      {
+        assetId: 'xlm',
+        decimals: 7,
+        blockchain: 'stellar',
+        symbol: 'XLM',
+        price: 0.2257,
+      },
+      // Listed with no price: 1Click quotes nothing for it, so it is not offered.
+      { assetId: 'gnear', decimals: 24, blockchain: 'near', symbol: 'GNEAR' },
+      // Tagged as retiring: not offered either.
+      {
+        assetId: 'usdt0-old',
+        decimals: 6,
+        blockchain: 'eth',
+        symbol: 'USDT0(DEPRECATED)',
+        contractAddress: '0x0000000000000000000000000000000000000def',
+        price: 1,
+      },
       {
         assetId: 'btc',
         decimals: 8,
@@ -167,7 +184,7 @@ describe('Cross-chain swaps guards (e2e)', () => {
       });
     }
 
-    it('lists the assets on every network it can validate, and only those', async () => {
+    it('lists the assets it can trade on every network it can validate, and only those', async () => {
       const res = await tenant(ASSETS, 'swaps:read').expect(200);
       expect(res.body.data).toEqual([
         {
@@ -177,7 +194,7 @@ describe('Cross-chain swaps guards (e2e)', () => {
           assetId: 'xlm',
           decimals: 7,
           contract: null,
-          priceUsd: null,
+          priceUsd: 0.2257,
         },
         {
           chain: 'btc',

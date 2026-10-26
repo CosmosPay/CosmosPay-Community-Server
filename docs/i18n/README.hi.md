@@ -1352,7 +1352,7 @@ client address (`429 rate_limited`)।
 
 | Route | Scope | उद्देश्य |
 | --- | --- | --- |
-| `GET /v1/cross-chain-swaps/assets` | `swaps:read` | वे tokens जिन्हें NEAR Intents हर उस network पर swap कर सकता है जहाँ यह service पहुँचती है, एक indicative USD price के साथ |
+| `GET /v1/cross-chain-swaps/assets` | `swaps:read` | वे tokens जिन्हें NEAR Intents हर उस network पर swap कर सकता है जहाँ यह service पहुँचती है, एक indicative USD price के साथ। केवल tradable tokens: जिसे वह deprecated बताता है, या बिना price के list करता है (ऐसे किसी का quote नहीं देता), वह शामिल नहीं होता, और deprecated token `asset_unsupported` से अस्वीकार होता है |
 | `POST /v1/cross-chain-swaps/quote` | `swaps:read` | एक dry quote: आउटपुट, minimum, commission; कुछ भी persist नहीं करता |
 | `POST /v1/cross-chain-swaps` | `swaps:write` | एक live quote: deposit address, memo, wallet link और QR; `Idempotency-Key` समर्थित |
 | `GET /v1/cross-chain-swaps` | `swaps:read` | Consumer के क्रॉस-चेन swaps |

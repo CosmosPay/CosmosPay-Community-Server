@@ -1408,7 +1408,7 @@ consumidor y dirección de cliente (`429 rate_limited`).
 
 | Ruta | Scope | Propósito |
 | --- | --- | --- |
-| `GET /v1/cross-chain-swaps/assets` | `swaps:read` | Los tokens que NEAR Intents puede intercambiar en cada red que alcanza este servicio, con un precio indicativo en USD |
+| `GET /v1/cross-chain-swaps/assets` | `swaps:read` | Los tokens que NEAR Intents puede intercambiar en cada red que alcanza este servicio, con un precio indicativo en USD. Solo los operables: un token que marca como deprecated, o que lista sin precio (no cotiza ninguno de esos), queda afuera, y uno deprecated se rechaza como `asset_unsupported` |
 | `POST /v1/cross-chain-swaps/quote` | `swaps:read` | Una cotización en seco: salida, mínimo, comisión; no persiste nada |
 | `POST /v1/cross-chain-swaps` | `swaps:write` | Una cotización en vivo: dirección de depósito, memo, enlace de billetera y QR; admite `Idempotency-Key` |
 | `GET /v1/cross-chain-swaps` | `swaps:read` | Los swaps entre redes del consumidor |

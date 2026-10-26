@@ -925,7 +925,7 @@ NEAR Intents 从输入中扣除它，报价的输出已是扣除后的净额，�
 
 | 路由 | Scope | 用途 |
 | --- | --- | --- |
-| `GET /v1/cross-chain-swaps/assets` | `swaps:read` | NEAR Intents 可在本服务覆盖的每个网络上 swap 的代币，附带参考性的 USD 价格 |
+| `GET /v1/cross-chain-swaps/assets` | `swaps:read` | NEAR Intents 可在本服务覆盖的每个网络上 swap 的代币，附带参考性的 USD 价格。仅列出可交易的代币：被标记为 deprecated 或没有价格（这类代币它都不报价）的代币不会列出，deprecated 代币会以 `asset_unsupported` 拒绝 |
 | `POST /v1/cross-chain-swaps/quote` | `swaps:read` | 试算报价：输出、最小值、佣金；不持久化任何内容 |
 | `POST /v1/cross-chain-swaps` | `swaps:write` | 正式报价：充值地址、memo、钱包链接和二维码；支持 `Idempotency-Key` |
 | `GET /v1/cross-chain-swaps` | `swaps:read` | 该 consumer 的跨链 swap |
