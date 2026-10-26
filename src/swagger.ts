@@ -175,6 +175,8 @@ const TAG_DESCRIPTIONS: Record<string, string> = {
   swaps: 'Path payments between assets: quote, build, submit.',
   'cross-chain-swaps':
     'Swaps between Stellar, Solana and Monad, settled by NEAR Intents.',
+  usdt0:
+    'USDT0 from Stellar to EVM networks through LayerZero (native USDT on Ethereum), mainnet only.',
   'liquidity-pools': 'Non-custodial AMM deposits and withdrawals.',
   aliases: 'Claimable payment handles, resolved to Stellar addresses.',
   customers: 'End users a payment intent can be attributed to.',

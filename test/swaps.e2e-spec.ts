@@ -16,7 +16,8 @@ import { SWAP_SUBMIT_RATE_LIMIT } from '@/swaps/swaps.constants';
  * `swaps:read` — the same scope that lists swap history — so scopes cannot keep
  * one anonymous wallet out of every other anonymous wallet's swaps. Only
  * `@AllowPublicKey()` does, and a route that loses it, or a read that gains it,
- * fails here.
+ * fails here. The one read it admits is a single swap by its id, still scoped
+ * to the public consumer: the id is the capability, as for a payment link.
  *
  * The submit route is also rate limited, because a rejected broadcast costs a
  * Horizon submission and a webhook an error cannot refund — and under the
@@ -90,6 +91,7 @@ describe('Swaps guards (e2e)', () => {
     prismaMock.swap.findMany.mockClear();
     prismaMock.swap.findFirst.mockClear();
     prismaMock.chainSwap.findMany.mockClear();
+    prismaMock.chainSwap.findFirst.mockClear();
     counters.clear();
   });
 
@@ -217,16 +219,31 @@ describe('Swaps guards (e2e)', () => {
         });
       }
 
-      for (const route of [LIST, GET_ONE]) {
-        it(`is refused ${label(route)} before any swap is read (403)`, async () => {
-          const res = await publicKey(route, identity).expect(403);
+      it(`is refused ${label(LIST)} before any swap is read (403)`, async () => {
+        const res = await publicKey(LIST, identity).expect(403);
 
-          expect(res.body.code).toBe('insufficient_scope');
-          expect(res.body.message).toMatch(/shared public API key/);
-          expect(prismaMock.swap.findMany).not.toHaveBeenCalled();
-          expect(prismaMock.swap.findFirst).not.toHaveBeenCalled();
-        });
-      }
+        expect(res.body.code).toBe('insufficient_scope');
+        expect(res.body.message).toMatch(/shared public API key/);
+        expect(prismaMock.swap.findMany).not.toHaveBeenCalled();
+        expect(prismaMock.swap.findFirst).not.toHaveBeenCalled();
+      });
+
+      // A public swap follows its own status: one row by its id, still
+      // scoped to the public consumer.
+      it(`reaches ${label(GET_ONE)}, scoped to the public consumer (404 otherwise)`, async () => {
+        const res = await publicKey(GET_ONE, identity).expect(404);
+
+        expect(res.body.code).toBe('not_found');
+        const scoped = {
+          where: {
+            id: SWAP_ID,
+            consumer: { apisixUsername: identity['x-consumer-username'] },
+          },
+        };
+        expect(prismaMock.chainSwap.findFirst).toHaveBeenCalledWith(scoped);
+        expect(prismaMock.swap.findFirst).toHaveBeenCalledWith(scoped);
+        expect(prismaMock.swap.findMany).not.toHaveBeenCalled();
+      });
     },
   );
 

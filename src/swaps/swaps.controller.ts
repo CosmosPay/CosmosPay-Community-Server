@@ -237,8 +237,20 @@ export class SwapsController {
   }
 
   @Get(':id')
+  // A public swap follows its own status. Still scoped to the consumer, so
+  // the shared public key reads only swaps made with it, and among those only
+  // the one whose id it holds: the cuid is the capability, as for a payment
+  // link. The list stays closed to that key.
+  @AllowPublicKey()
   @RequirePermissions('swaps:read')
-  @ApiOperation({ summary: 'Get a swap by id, on any chain' })
+  @ApiOperation({
+    summary: 'Get a swap by id, on any chain',
+    description:
+      'The shared public key may call it, so a swap made without an account ' +
+      'can follow its own status: the read is still scoped to the consumer, so ' +
+      'that key reaches only swaps made with it, and the swap id (a cuid) is ' +
+      'the capability. Listing swaps stays closed to the public key.',
+  })
   @ApiOkResponse({ schema: eitherOf(SwapEntity, ChainSwapEntity) })
   async findOne(
     @CurrentConsumer() consumer: GatewayConsumer,

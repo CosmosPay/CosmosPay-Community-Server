@@ -39,6 +39,17 @@ export const DEFAULT_ZK_PAYMENTS_RPC: Record<StellarNetwork, string> = {
   testnet: 'https://soroban-testnet.stellar.org',
 };
 
+/**
+ * The Soroban RPC for Stellar mainnet, used when `STELLAR_RPC_URL_MAINNET` is
+ * unset. SDF runs no public mainnet RPC; this is Gateway.fm's public endpoint,
+ * one of the two that answered USDT0's OFT simulations on 2026-10-25 (the other
+ * is `https://mainnet.sorobanrpc.com`). It is rate limited and comes with no
+ * service level: fine for a trial, but production should set a provider's
+ * endpoint. Every call checks the node's passphrase before trusting it.
+ */
+export const DEFAULT_STELLAR_RPC_MAINNET =
+  'https://soroban-rpc.mainnet.stellar.gateway.fm';
+
 /** Monad's public RPC endpoints, per network tier (mainnet, testnet). */
 export const DEFAULT_MONAD_RPC: Record<StellarNetwork, string> = {
   public: 'https://rpc.monad.xyz',

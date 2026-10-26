@@ -14,8 +14,9 @@ import { PrismaService } from '@/prisma/prisma.service';
  * refused by validation, so no case needs the network.
  *
  * As for /v1/swaps, the case that matters is the shared public key: the routes
- * an anonymous wallet needs (assets, quote, create, deposit) admit it, and the
- * two that read history back refuse it — one consumer is every anonymous user.
+ * an anonymous wallet needs (assets, quote, create, deposit, and reading the
+ * one swap it holds the id of) admit it, and the list refuses it: one consumer
+ * is every anonymous user.
  */
 describe('Cross-chain swaps guards (e2e)', () => {
   let app: NestExpressApplication;
@@ -296,14 +297,23 @@ describe('Cross-chain swaps guards (e2e)', () => {
       await publicKey(ASSETS).expect(200);
     });
 
-    for (const route of [LIST, GET_ONE]) {
-      it(`is refused ${label(route)} before any swap is read (403)`, async () => {
-        const res = await publicKey(route).expect(403);
-        expect(res.body.code).toBe('insufficient_scope');
-        expect(prismaMock.crossChainSwap.findMany).not.toHaveBeenCalled();
-        expect(prismaMock.crossChainSwap.findFirst).not.toHaveBeenCalled();
+    it(`is refused ${label(LIST)} before any swap is read (403)`, async () => {
+      const res = await publicKey(LIST).expect(403);
+      expect(res.body.code).toBe('insufficient_scope');
+      expect(prismaMock.crossChainSwap.findMany).not.toHaveBeenCalled();
+      expect(prismaMock.crossChainSwap.findFirst).not.toHaveBeenCalled();
+    });
+
+    // A public swap follows its own status: one row by its id, still scoped
+    // to the public consumer.
+    it(`reaches ${label(GET_ONE)}, scoped to the public consumer (404 otherwise)`, async () => {
+      const res = await publicKey(GET_ONE).expect(404);
+      expect(res.body.code).toBe('not_found');
+      expect(prismaMock.crossChainSwap.findFirst).toHaveBeenCalledWith({
+        where: { id: SWAP_ID, consumer: { apisixUsername: 'cosmos_wallet' } },
       });
-    }
+      expect(prismaMock.crossChainSwap.findMany).not.toHaveBeenCalled();
+    });
   });
 
   describe(`the rate limit on ${label(DEPOSIT)}`, () => {

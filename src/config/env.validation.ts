@@ -135,6 +135,14 @@ class EnvironmentVariables {
   @IsUrl(URL_OPTIONS)
   STELLAR_HORIZON_URL_TESTNET?: string;
 
+  /**
+   * Stellar mainnet's Soroban RPC, for USDT0 transfers. Unset uses Gateway.fm's
+   * public endpoint, which is rate limited: production names a provider's.
+   */
+  @IsOptional()
+  @IsUrl(URL_OPTIONS)
+  STELLAR_RPC_URL_MAINNET?: string;
+
   @IsOptional()
   @IsString()
   STELLAR_BASE_FEE?: string;

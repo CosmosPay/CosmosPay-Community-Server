@@ -34,6 +34,7 @@ model Consumer {
   crossChainSwaps  CrossChainSwap[]
   liquidityOps     LiquidityPoolOperation[]
   zkPayments       ZkPayment[]
+  usdt0Transfers   Usdt0Transfer[]
 
   // BlindPay (onramp/offramp/KYC) resources mirrored from the provider.
   blindpayReceivers BlindpayReceiver[]
@@ -2000,4 +2001,86 @@ model ZkPayment {
   @@index([consumerId, network, createdAt])
   @@index([status, createdAt])
   @@map("zk_payment")
+}
+
+// ---------------------------------------------------------------------------
+// USDT0 sent FROM Stellar to an EVM network through LayerZero's OFT (Tether's
+// omnichain USDT). Non-custodial like the swaps: this service quotes the OFT by
+// simulation, builds the one Soroban transaction (`send` on the OFT contract),
+// and relays the copy the holder signed. The OFT burns the USDT0 on Stellar and
+// LayerZero delivers it: on Ethereum as native USDT (Tether's OFT adapter
+// unlocks it), elsewhere as USDT0. Mainnet only: USDT0 has no Stellar testnet.
+// ---------------------------------------------------------------------------
+enum Usdt0TransferStatus {
+  PENDING // built, waiting for the source's signature
+  SUBMITTED // on the Stellar ledger; LayerZero is delivering it
+  DELIVERED // credited to the recipient on the destination network
+  FAILED // the Stellar transaction failed, or LayerZero gave up on the message
+  EXPIRED // never reached the ledger before its time bounds closed
+}
+
+model Usdt0Transfer {
+  id         String   @id @default(cuid())
+  consumerId String
+  consumer   Consumer @relation(fields: [consumerId], references: [id], onDelete: Cascade)
+
+  // Always 'public': USDT0 exists on Stellar mainnet only. A column so filters
+  // and analytics read the same vocabulary as every other table.
+  network String
+  status  Usdt0TransferStatus @default(PENDING)
+
+  // The Stellar account that holds the USDT0, signs and pays the fees (G...).
+  source    String
+  // The route: this service's id for the destination network (`eth`, `arb`,
+  // ...; `USDT0_ROUTES`), its LayerZero endpoint id, and what arrives there
+  // (`USDT` on Ethereum, `USDT0` elsewhere).
+  to        String
+  eid       Int
+  receives  String
+  // The EVM address credited on the destination network, EIP-55.
+  recipient String
+
+  // Decimal strings, 7 places. `amount` is what the caller asked to send;
+  // `amountSent` is what the OFT takes after dropping the dust its 6 shared
+  // decimals cannot carry (the dust stays in the account); `amountReceived` is
+  // what arrives, and the transaction's on-chain floor (`min_amount_ld`).
+  amount         String
+  amountSent     String
+  amountReceived String
+  // In XLM. `nativeFee` is LayerZero's quoted fee; `nativeFeeLimit` is what the
+  // transaction offers to pay (the quote plus a buffer, the excess refunded to
+  // the source in the same transaction); `networkFee` is the Stellar fee
+  // (inclusion plus Soroban resources).
+  nativeFee      String
+  nativeFeeLimit String
+  networkFee     String
+
+  // The unsigned transaction, its SEP-7 link, and its hash: lowercase hex,
+  // unique, and checked against the signed copy before anything is relayed.
+  xdr    String
+  uri    String
+  txHash String @unique
+
+  // LayerZero's message id (0x + 64 hex), read from `send`'s return value or
+  // from LayerZero Scan; the destination transaction once delivered; Scan's own
+  // status word, verbatim; and why a FAILED transfer failed.
+  guid              String?
+  destinationTxHash String?
+  scanStatus        String?
+  failureReason     String?
+
+  idempotencyKey String?
+  // When the transaction's time bounds close: past it, it can never land.
+  expiresAt      DateTime
+  // The last time a read asked the ledger or LayerZero Scan; reads are throttled on it.
+  lastCheckedAt  DateTime?
+  submittedAt    DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([consumerId, idempotencyKey])
+  // Listing endpoint: filter by consumer, order createdAt desc.
+  @@index([consumerId, createdAt])
+  @@map("usdt0_transfer")
 }

@@ -49,7 +49,8 @@ src/
     errors/api-error.ts           ApiError + machine-readable ApiErrorCode
     services/advisory-lock...     cluster-wide lock for the background timers
   stellar/                        per-network Horizon servers (bounded timeout), account loader,
-                                  SEP-7 links, signed-envelope relay, settlement repository
+                                  SEP-7 links, signed-envelope relay, settlement repository,
+                                  mainnet Soroban RPC client (passphrase-checked)
   payment-intents/                payment intents on Stellar, Solana and Monad: controller, service, DTOs,
                                   per-chain link builders and verifiers, the observer — emits events
                                   + GET /v1/payment-links/{id}: the payer's view, read with no API key
@@ -63,6 +64,8 @@ src/
   cross-chain-swaps/              swaps across 35 networks via NEAR Intents (Stellar, Solana, Monad, EVM,
                                   UTXO, ...): network registry, quote, deposit address + wallet link, observer
   near-intents/                   NEAR Intents 1Click client: tokens, quote, status, deposit submit
+  usdt0/                          USDT0 from Stellar to EVM networks through LayerZero's OFT: routes, quote,
+                                  build + relay the Soroban `send`, status from the ledger and LayerZero Scan
   zk-payments/                    private payments: confidential transfers on Cosmos Pay's token, verified on-chain;
                                   the confidential token SDK is loaded only by confidential-sdk.ts
   liquidity-pools/                AMM deposit/withdraw, pool + position reads, cost basis + commission on gain
@@ -90,7 +93,7 @@ prisma/schema.prisma              Consumer, PaymentIntent, Swap, ChainSwap, Cros
                                   BlindpayWebhookEvent, Payin, Payout, RequestLog,
                                   ActivityEvent,
                                   AdminAuditLog, Alias, AliasAddress,
-                                  AliasChallenge, AliasRecovery, ZkPayment
+                                  AliasChallenge, AliasRecovery, ZkPayment, Usdt0Transfer
                                   PluginInstallation, PluginRecord
 test/                             e2e suites: gateway gate, admin + alias console gates,
                                   payment intents, swaps, liquidity pools, KYC, webhooks
@@ -118,6 +121,7 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | 支付链接          | `/v1/payment-links`      | 付款方所见的单个支付意图，供托管收银页使用——无需 API key（`@Public`） |
 | Swap | `/v1/swaps` | 路径支付报价、构建未签名 XDR、提交已签名交易 · Solana 经由 Jupiter，Monad 经由 Kuru Flow |
 | 跨链 swap | `/v1/cross-chain-swaps` | 通过 NEAR Intents 在 35 个网络之间（Stellar、Solana、Monad、EVM 链、Bitcoin 与 UTXO 币等）：报价、充值地址、状态 |
+| USDT0 | `/v1/usdt0` | 通过 LayerZero 把 USDT0 从 Stellar 发送到 21 个 EVM 网络（在 Ethereum 上到账为原生 USDT），仅限主网：报价、构建、提交、状态 |
 | 隐私支付 | `/v1/zk-payments` | 基于 Cosmos Pay 保密代币的保密支付（金额在链上隐藏，0.01% 佣金），目前仅限测试网 |
 | 隐私收银 | `/v1/zk-checkout` | 隐私支付中付款方的那一半：读取、确认，以及网络配置（`@Public`） |
 | 流动性池 | `/v1/liquidity-pools` | AMM 存入 / 取出、持仓、按收益收取佣金 |
@@ -180,7 +184,7 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | POST | `/v1/cross-chain-swaps` | `swaps:write` | ✓ |
 | GET | `/v1/cross-chain-swaps/assets` | `swaps:read` | ✓ |
 | POST | `/v1/cross-chain-swaps/quote` | `swaps:read` | ✓ |
-| GET | `/v1/cross-chain-swaps/{id}` | `swaps:read` |  |
+| GET | `/v1/cross-chain-swaps/{id}` | `swaps:read` | ✓ |
 | POST | `/v1/cross-chain-swaps/{id}/deposit` | `swaps:write` | ✓ |
 | GET | `/v1/customers` | `customers:read` |  |
 | POST | `/v1/customers` | `customers:write` |  |
@@ -280,8 +284,14 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | GET | `/v1/swaps` | `swaps:read` |  |
 | POST | `/v1/swaps` | `swaps:write` | ✓ |
 | POST | `/v1/swaps/quote` | `swaps:read` | ✓ |
-| GET | `/v1/swaps/{id}` | `swaps:read` |  |
+| GET | `/v1/swaps/{id}` | `swaps:read` | ✓ |
 | POST | `/v1/swaps/{id}/submit` | `swaps:write` | ✓ |
+| GET | `/v1/usdt0/routes` | `swaps:read` | ✓ |
+| POST | `/v1/usdt0/quote` | `swaps:read` | ✓ |
+| GET | `/v1/usdt0/transfers` | `swaps:read` |  |
+| POST | `/v1/usdt0/transfers` | `swaps:write` | ✓ |
+| GET | `/v1/usdt0/transfers/{id}` | `swaps:read` | ✓ |
+| POST | `/v1/usdt0/transfers/{id}/submit` | `swaps:write` | ✓ |
 | GET | `/v1/wallet/auth/providers` | `payments:read` | ✓ |
 | POST | `/v1/wallet/auth/oauth/authorize` | `payments:write` | ✓ |
 | GET | `/v1/wallet/auth/oauth/callback/{provider}` | none — `@Public()`, a browser redirect |  |
@@ -680,6 +690,11 @@ where: { id, consumer: { apisixUsername: consumer.username } }
 | `GET /v1/cross-chain-swaps/assets` \| `POST /v1/cross-chain-swaps/quote` | NEAR Intents 的代币列表与试算报价；是请求的纯函数 |
 | `POST /v1/cross-chain-swaps` | 为调用方自己的资金生成充值地址；重放的 `Idempotency-Key` 仅在请求一致时才会得到响应 |
 | `POST /v1/cross-chain-swaps/:id/deposit` | 告诉 NEAR Intents 一笔由它自己在链上验证的交易；带有速率限制 |
+| `GET /v1/swaps/:id` \| `GET /v1/cross-chain-swaps/:id` | 按 id 读取单笔 swap，让没有账户发起的 swap 能跟踪自己的状态。仍限定在该消费者范围内，因此这个 key 只能读到用它发起的 swap，而 id（一个 cuid）本身就是访问权限，与支付链接相同 |
+| `GET /v1/usdt0/routes` \| `POST /v1/usdt0/quote` | 路由目录与模拟报价；是请求的纯函数 |
+| `POST /v1/usdt0/transfers` | 构建一笔由调用方签名的未签名交易；重放的 `Idempotency-Key` 仅在请求一致时才会得到响应 |
+| `POST /v1/usdt0/transfers/:id/submit` | 广播调用方签名的交易，前提是先确认它属于该笔转账并携带签名；带有速率限制 |
+| `GET /v1/usdt0/transfers/:id` | 按 id 读取单笔转账，限定在该消费者范围内，与 swap 相同 |
 | `POST /v1/liquidity-pools/deposit` \| `withdraw` | 构建未签名信封 |
 | `POST /v1/liquidity-pools/operations/:id/submit` | 广播调用方签名的信封，遵循与 swap submit 相同的检查；带有速率限制 |
 | `GET /v1/liquidity-pools` \| `/:poolId` \| `/positions` | 从 Horizon 读取的公开链上数据 |
@@ -688,7 +703,7 @@ where: { id, consumer: { apisixUsername: consumer.username } }
 | `GET /v1/assets` | 公开的资产目录 |
 | `GET /v1/aliases/resolve/:name` \| `availability/:name` \| `by-address/:address` | 解析标识的付款方正是这个 key 所服务的匿名调用方；答案完全由请求决定，且从不包含所有者的邮箱 |
 
-被拒绝的路由：`GET /v1/swaps`、`GET /v1/swaps/:id`、`GET /v1/cross-chain-swaps`、`GET /v1/cross-chain-swaps/:id`、`GET /v1/liquidity-pools/operations{,/:id}`、`GET /v1/activity/events`、`GET /v1/activity/summary`、所有支付意图读取、所有别名所有者路由（认领、列出、添加或移除地址、释放、恢复），以及 `/v1/kyc`、`/v1/onramp`、`/v1/offramp` 和 `/v1/webhooks` 下的所有路由。没有账户的钱包改为从 Horizon 读取自己的历史记录。
+被拒绝的路由：`GET /v1/swaps`、`GET /v1/cross-chain-swaps`、`GET /v1/usdt0/transfers`、`GET /v1/liquidity-pools/operations{,/:id}`、`GET /v1/activity/events`、`GET /v1/activity/summary`、所有支付意图读取、所有别名所有者路由（认领、列出、添加或移除地址、释放、恢复），以及 `/v1/kyc`、`/v1/onramp`、`/v1/offramp` 和 `/v1/webhooks` 下的所有路由。没有账户的钱包改为从 Horizon 读取自己的历史记录，并凭拿到的 id 跟踪单笔 swap 或转账。
 
 **允许遥测**，这样来自没有账户的钱包的崩溃报告仍然能够送达。通过这个 key 到达的事件是匿名的（一个共享消费者），因此钱包在发送之前会去除地址、目标、金额和 txHash。
 
@@ -902,8 +917,46 @@ NEAR Intents 从输入中扣除它，报价的输出已是扣除后的净额，�
 | `POST /v1/cross-chain-swaps/quote` | `swaps:read` | 试算报价：输出、最小值、佣金；不持久化任何内容 |
 | `POST /v1/cross-chain-swaps` | `swaps:write` | 正式报价：充值地址、memo、钱包链接和二维码；支持 `Idempotency-Key` |
 | `GET /v1/cross-chain-swaps` | `swaps:read` | 该 consumer 的跨链 swap |
-| `GET /v1/cross-chain-swaps/{id}` | `swaps:read` | 单笔 swap，即观察器最后一次看到的状态 |
+| `GET /v1/cross-chain-swaps/{id}` | `swaps:read` | 单笔 swap，即观察器最后一次看到的状态（共享公共 key 也可以读取） |
 | `POST /v1/cross-chain-swaps/{id}/deposit` | `swaps:write` | 上报充值交易，让 NEAR Intents 无需等待其索引器即可开始 |
+## 从 Stellar 发送 USDT0（LayerZero）
+
+[USDT0](https://docs.usdt0.to) 是 Tether 的全链 USDT。在 Stellar 上，它是经典资产 `USDT0:GATISXX6BZ6NC7IKQBY37CJD4SOZL3CYZJWXEDG6JVIY4WBS6KXJHN6Q`，背后是 LayerZero 的 OFT 合约（`CBOWOLFSDM5PZXNFIVDMP5NZ7U2GSIHED6H6R446QOHF266XINKUMMF6`），而 OFT 的用途就是把它发送到其他网络：`send` 在 Stellar 上销毁 USDT0，由 LayerZero 交付。在 Ethereum 上到账的是**原生 USDT**（那里的对端是 Tether 的 OFT adapter，它解锁真实的 USDT）；在其余 20 条路由上到账的是 USDT0。每条路由都接收 EVM 收款地址。`/v1/usdt0` **从 Stellar** 发送：持有者签署一笔 Soroban 交易（用 Freighter，或通过 SEP-7 链接），与 swap 一样，本服务是非托管的。它通过模拟向 OFT 报价、构建交易、检查签名后的副本正是这笔交易、转发它，并在 LayerZero Scan 上跟踪该消息。
+
+```
+routes → quote → create (unsigned XDR + SEP-7 link) → the holder signs
+       → POST /submit (or the wallet broadcasts it) → GET /{id} → SUBMITTED → DELIVERED / FAILED
+```
+
+**仅限主网。** Stellar 测试网上没有 USDT0。`dev` key 读取 `GET /v1/usdt0/routes` 得到 `available: false` 且没有路由，报价、构建和提交都返回 `400 network_unsupported`。
+
+**两笔费用，都以 XLM 计，都由持有者支付。** LayerZero 的消息费（`nativeFee`：2026-10-25 时到 Ethereum 约 3.5 XLM，到其他网络 0.13 至 0.5 XLM；随 LayerZero 的价格源变动）和 Stellar 网络费（`networkFee`：约 1.45 XLM 的 Soroban 资源费，其中一部分由网络退还）。交易向 LayerZero 提供 `nativeFeeLimit`，即报价加 20%：交易在构建几分钟后才上链，低于当时费用的出价会在链上失败，且仍要支付网络费。端点收取实际费用，并在同一笔交易中把余额退还给持有者（已在主网上通过模拟验证），因此这份缓冲不花钱，但账户必须持有它。
+
+**粉尘。** 该资产有 7 位小数，OFT 承载 6 位，因此 `amount` 的第 7 位小数无法跨链。它就是 `dust`，留在账户中：`amountSent` 是 OFT 实际取走的数额。低于 0.000001 USDT0 的金额全是粉尘，以 `400 invalid_amount` 拒绝。`amountReceived` 也是链上下限：交易宁可失败，也不会少交付。
+
+**在构建任何内容之前拒绝**（`400`）：源账户不存在（`validation_failed`）、不信任 USDT0（`trustline_missing`）、持有的 USDT0 少于转账所需，或持有的 XLM 不足以同时覆盖最低余额、挂单、费用上限和网络费（`insufficient_balance`，并说明需要补充多少 XLM）；收款方不是 EVM 地址或 EIP-55 校验和错误（`validation_failed`）；金额超出 OFT 的限额（`invalid_amount`）。OFT 自身拒绝的情况返回 `400 provider_error`，并附带其合约错误。
+
+**状态。** `PENDING`（已构建）→ `SUBMITTED`（已上 Stellar 账本；LayerZero 正在交付，`guid` 是其消息 id）→ `DELIVERED`（附 `destinationTxHash`）或 `FAILED`（附 `failureReason`）。`EXPIRED` 表示交易在 `expiresAt`（`STELLAR_TX_TIMEOUT`）之前始终没有上账本。没有后台观察器：`GET /v1/usdt0/transfers/{id}` 会从 Stellar 账本（钱包可能自己广播 SEP-7 链接，而从不调用 submit）和 LayerZero Scan 的公开 API（`scan.layerzero-api.com`，优先按 guid 查询）刷新 `PENDING` 或 `SUBMITTED` 的转账，每笔转账每 15 秒最多一次，任一方不可用时就用已存储的行回答。`scanStatus` 是 Scan 自己的状态词：`PAYLOAD_STORED` 和 `BLOCKED` 保持为 `SUBMITTED`，因为任何人都可以在目标网络上清除它们。每条路由的交付都需要约 27 分钟（Scan 在 2026-10-25 列出的 45 笔来自 Stellar 的转账耗时 1,612 至 1,661 秒），因为 LayerZero 的验证者要等待 Stellar 的确认。
+
+**通常没有二维码。** Soroban 交易的账本 footprint 使其 XDR 约有 7,000 个字符，超出二维码的容量，因此 `qr` 通常为 `null`：请用已连接的钱包或通过 `uri` 链接签名。
+
+**暂不收取 Cosmos Pay 佣金。** 一笔 Soroban 交易只承载一个操作，因此手续费支付无法像 path-payment swap 那样随 `send` 一起执行，本路由不收取套餐费率。是否收取由产品负责人决定。
+
+**RPC。** 所有调用都经过 Stellar 主网的 Soroban RPC，即 `STELLAR_RPC_URL_MAINNET`（默认是 Gateway.fm 的公共端点，有速率限制：生产环境请设置服务商的端点）。使用前会校验其 passphrase，连到其他网络的节点会返回 `503 misconfigured`。
+
+**限制。** Quote：每分钟 60 次；create 与 submit：各 20 次，按 consumer 和客户端地址计（`429 rate_limited`）。共享公共 key 可以调用除列表之外的所有路由。
+
+### USDT0 路由
+
+| 路由 | Scope | 用途 |
+| --- | --- | --- |
+| `GET /v1/usdt0/routes` | `swaps:read` | USDT0 可从 Stellar 到达的网络、每个网络上到账的内容、代币与 OFT |
+| `POST /v1/usdt0/quote` | `swaps:read` | 通过模拟得出到账数额、粉尘、LayerZero 的费用与所提供的上限；不持久化任何内容 |
+| `POST /v1/usdt0/transfers` | `swaps:write` | 未签名的 `send` 交易（XDR 与 SEP-7 链接）；支持 `Idempotency-Key` |
+| `GET /v1/usdt0/transfers` | `swaps:read` | 该 consumer 的转账（共享公共 key 不可调用） |
+| `GET /v1/usdt0/transfers/{id}` | `swaps:read` | 单笔转账，从账本和 LayerZero Scan 刷新 |
+| `POST /v1/usdt0/transfers/{id}/submit` | `swaps:write` | 转发已签名交易并等待上账本：`SUBMITTED`，附 guid |
+
 ## 隐私支付（Stellar 上的保密金额）
 
 **隐私支付**是金额在链上隐藏的支付。它在 Cosmos Pay 自己部署的 OpenZeppelin Confidential Token 实例（`stellar-confidential` 0.8.0）上进行：余额是 Pedersen 承诺，每笔转账都携带一个由该代币在链上验证的 UltraHonk 证明，金额则加密后发送给收款方和审计方。该代币的审计方注册表（auditor registry）由 Cosmos Pay 部署，因此其上每个账户的审计方密钥（id 0）都由 Cosmos Pay 持有，它能读取在那里进行的每笔转账的金额。其他观察账本的人都读不到。
@@ -1296,6 +1349,14 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
 - **OpenAPI 契约记录每个原生插件的路由**，无论是否开启：`openapi:generate` 会全部开启。
 
 ## 升级 — 破坏性变更与部署说明
+
+### USDT0 转账，以及对单笔 swap 的公开读取
+
+- **`/v1/usdt0` 下的新路由**（`swaps:read` / `swaps:write`）：通过 LayerZero 的 OFT 把 USDT0 从 Stellar 发送到 21 个 EVM 网络，仅限主网。它们的作用见 [从 Stellar 发送 USDT0](#从-stellar-发送-usdt0layerzero)。现有响应均未改变。
+- **`GET /v1/swaps/{id}` 和 `GET /v1/cross-chain-swaps/{id}` 现在接受共享公共 key**，让没有账户发起的 swap 能跟踪自己的状态。读取仍限定在该消费者范围内，因此这个 key 只能读到用它发起的 swap，而 id（一个 cuid）本身就是访问权限，与支付链接相同。`GET /v1/swaps` 和 `GET /v1/cross-chain-swaps` 仍对它关闭。
+- **迁移 `20261025210000_usdt0_transfers`** 创建 `usdt0_transfer` 表和 `Usdt0TransferStatus` 枚举；不改写任何数据。在新版本承接流量之前运行 `migrate deploy`。
+- **新变量 `STELLAR_RPC_URL_MAINNET`**，可选：Stellar 主网的 Soroban RPC。未设置时，服务使用 Gateway.fm 的公共端点，它有速率限制；生产环境请设置服务商的端点。
+- **尚未支持：** USDT0 转账不发出 webhook 事件，也不计入 `GET /v1/summary/series`。
 
 ### Swaps：交易会添加其 source 缺少的 trustline
 
@@ -1771,6 +1832,7 @@ curl -H "X-Gateway-Secret: $APISIX_GATEWAY_SECRET" -H "X-Consumer-Username: ops"
 | `STELLAR_NETWORK` | 否 | `testnet` | 回退使用的 Stellar 网络（`public` / `testnet`） |
 | `STELLAR_HORIZON_URL_PUBLIC` | 否 | `https://horizon.stellar.org` | 主网 Horizon 基础 URL |
 | `STELLAR_HORIZON_URL_TESTNET` | 否 | `https://horizon-testnet.stellar.org` | 测试网 Horizon 基础 URL |
+| `STELLAR_RPC_URL_MAINNET` | 否 | `https://soroban-rpc.mainnet.stellar.gateway.fm` | USDT0 转账使用的 Stellar 主网 Soroban RPC（使用前校验 passphrase）。公共端点有速率限制：生产环境请使用服务商的端点 |
 | `SOLANA_RPC_URL_MAINNET` | 否 | `https://api.mainnet-beta.solana.com` | `prod` 密钥使用的 Solana RPC（mainnet-beta；使用前校验 genesis hash）。公共端点有速率限制：生产环境请使用服务商的端点 |
 | `SOLANA_RPC_URL_DEVNET` | 否 | `https://api.devnet.solana.com` | `dev` 密钥使用的 Solana RPC（devnet） |
 | `SOLANA_RPC_TIMEOUT_MS` | 否 | `10000` | 单次 Solana RPC 调用的时间预算（毫秒） |

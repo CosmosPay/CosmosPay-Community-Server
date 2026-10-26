@@ -285,7 +285,10 @@ table. These are the rules that did not hold on their own:
   to store (EIP-55 on Monad, the spelling payment intents record a payer in).
 - **Solana and Monad are reached only through `SolanaRpcClient` / `EvmRpcClient`**,
   which check the node's genesis hash / `eth_chainId` before trusting it. Never
-  call a node URL directly.
+  call a node URL directly. Stellar mainnet's Soroban RPC is the same rule:
+  `SorobanRpcClient` (`src/stellar/soroban-rpc.client.ts`, `STELLAR_RPC_URL_MAINNET`)
+  checks the passphrase first (private payments keep their own per-tier RPC in
+  `ConfidentialSdk`).
 - **Integrations that are not the chain itself are native plugins** under
   `src/native-plugins/<slug>/` (BlindPay, DeFindex), switched on by
   `PLUGINS_ENABLED`. The core never imports one — lint enforces it — and a plugin
@@ -348,7 +351,10 @@ Each of these was a real finding in this codebase, not a hypothetical:
   keyed by consumer — a memo, an `Idempotency-Key`, an in-flight guard, a list — is
   shared by all of them. A replay that returns a stored row checks first that the
   request matches it (otherwise `409 idempotency_conflict`), and a new route is
-  unreachable with that key until it carries `@AllowPublicKey()`.
+  unreachable with that key until it carries `@AllowPublicKey()`. The only reads
+  that key may make of what it wrote are ONE row by its unguessable id (a cuid),
+  still filtered by consumer: `GET /v1/swaps/{id}`, `/v1/cross-chain-swaps/{id}`,
+  `/v1/usdt0/transfers/{id}`. A list never takes it.
 - **A `@Public()` route has no consumer.** It is served without key-auth, so
   `ApisixGuard` drops whatever `X-Consumer-Username` the client sent. Never read
   `@CurrentConsumer()` there.
@@ -526,11 +532,47 @@ Gotchas hit while building it:
 - **The Soroban RPC is checked before it is trusted**: its `getNetwork` passphrase must
   be the configured one (`ConfidentialSdk.assertNetwork`), like the Solana genesis
   check. It is documented as the `Soroban RPC` upstream (503 only, like Horizon).
-- **`ZkPaymentsModule` is registered LAST in `AppModule`.** The spec lists paths in
-  module order, and registering it mid-list moved other modules' paths and turned an
-  additive change into a 400-line spec diff.
+- **`ZkPaymentsModule` is registered at the end of `AppModule`** (only `Usdt0Module`,
+  added later for the same reason, comes after it). The spec lists paths in module
+  order, and registering it mid-list moved other modules' paths and turned an
+  additive change into a 400-line spec diff. A new module goes last.
 - **`test/setup-env.ts` pins a fixture ZK set**: the developer `.env` carries the real
   testnet one, and dotenv never overwrites a set value.
+
+## USDT0 (`src/usdt0/`): LayerZero's OFT from Stellar, and what was verified on mainnet
+
+`/v1/usdt0` sends Tether's USDT0 from Stellar to EVM networks: the holder signs ONE
+Soroban transaction, `send` on the OFT (`CBOWOLFS...`), which burns it and LayerZero
+delivers it (native USDT on Ethereum, USDT0 elsewhere). Mainnet only; a dev key gets
+`available: false` on the routes and `network_unsupported` elsewhere. Every address,
+endpoint id and route in `usdt0.constants.ts` was read from mainnet by simulation
+(`peer(eid)` set for exactly the 21 routes). No observer: a read of one transfer
+refreshes it (ledger first, then LayerZero Scan), throttled per row by `lastCheckedAt`.
+
+- **Pure where it can be:** `usdt0-oft.ts` (ScVal codec, dust, fee buffer),
+  `usdt0-ledger.ts` (envelope check, result codes, ledger outcome), `usdt0-scan.ts`
+  (Scan status table), `usdt0-funds.ts` (USDT0 and XLM refusals). The RPC is
+  `SorobanRpcClient`, Scan is `LayerZeroScanClient`; specs mock both.
+- **A struct is an `ScMap` with its keys sorted**, or the host refuses it; `to` is 12
+  zero bytes + the 20-byte EVM address. `functionName` of an invocation is an
+  `XdrString` in v17: read it with `String(...)`.
+- **The SAC has 7 decimals, the OFT shares 6**: the 7th is dust left in the account.
+  The transaction sends the dust-free amount with `min_amount_ld` = `quote_oft`'s
+  `amount_received_ld`.
+- **`native_fee` gets a 20% buffer** (`USDT0_NATIVE_FEE_BUFFER_BPS`): the endpoint
+  refunds the excess to `refund_address` (the source) in the same transaction, which a
+  mainnet simulation showed. The balance check prices the whole limit plus the
+  network fee (about 1.45 XLM of Soroban resources) and the reserve.
+- **Simulation needs no existing account and no sequence** (`new Account(g, '0')`).
+  Only source-account auth entries are accepted from the `send` simulation.
+- **The XDR is about 7,000 characters**, too big for a QR: `qr` is null then.
+- **LayerZero Scan indexes a Stellar message by guid first** and fills in the source
+  hash minutes later, so ask `/messages/guid/{guid}` when the guid is known (it is
+  `send`'s return value) and `/messages/tx/{hash}` (64 lowercase hex, no `0x`) only
+  when it is not. A 404 is "not yet". Delivery took 1,612 to 1,661 s on every route
+  on 2026-10-25.
+- **No commission** on this route yet: one operation per Soroban transaction leaves
+  no room for a fee payment. It is the product owner's decision.
 
 ## Dashboard analytics read other modules' tables, in Postgres
 

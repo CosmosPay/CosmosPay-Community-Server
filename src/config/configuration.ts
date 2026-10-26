@@ -17,6 +17,7 @@ import {
   DEFAULT_RECOVERY_SWEEP_INTERVAL_MS,
   DEFAULT_RECOVERY_TIMEOUT_MS,
   DEFAULT_SOLANA_RPC,
+  DEFAULT_STELLAR_RPC_MAINNET,
   DEFAULT_SWAP_AGGREGATOR_TIMEOUT_MS,
   DEFAULT_WALLET_AUTH_SWEEP_INTERVAL_MS,
   DEFAULT_WALLET_AUTH_TIMEOUT_MS,
@@ -218,6 +219,12 @@ export interface AppConfig {
     // (e.g. local dev without the gateway). Otherwise the key type decides.
     network: StellarNetwork;
     horizon: Record<StellarNetwork, string>;
+    /**
+     * Stellar mainnet's Soroban RPC (`STELLAR_RPC_URL_MAINNET`): where USDT0
+     * transfers simulate, assemble and submit their contract call. Mainnet
+     * only, because USDT0 exists on mainnet only.
+     */
+    mainnetRpcUrl: string;
     baseFee: string;
     timeoutSeconds: number;
     swap: {
@@ -759,6 +766,10 @@ export default (): AppConfig => ({
   stellar: {
     network: stellarNetwork(),
     horizon: operatorHorizon(),
+    mainnetRpcUrl: trimSlash(
+      process.env.STELLAR_RPC_URL_MAINNET?.trim() ||
+        DEFAULT_STELLAR_RPC_MAINNET,
+    ),
     baseFee: process.env.STELLAR_BASE_FEE ?? '100',
     timeoutSeconds: parseInt(process.env.STELLAR_TX_TIMEOUT ?? '300', 10),
     swap: {

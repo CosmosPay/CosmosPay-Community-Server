@@ -76,7 +76,8 @@ src/
     errors/api-error.ts           ApiError + machine-readable ApiErrorCode
     services/advisory-lock...     cluster-wide lock for the background timers
   stellar/                        per-network Horizon servers (bounded timeout), account loader,
-                                  SEP-7 links, signed-envelope relay, settlement repository
+                                  SEP-7 links, signed-envelope relay, settlement repository,
+                                  mainnet Soroban RPC client (passphrase-checked)
   payment-intents/                payment intents on Stellar, Solana and Monad: controller, service, DTOs,
                                   per-chain link builders and verifiers, the observer — emits events
                                   + GET /v1/payment-links/{id}: the payer's view, read with no API key
@@ -90,6 +91,8 @@ src/
   cross-chain-swaps/              swaps across 35 networks via NEAR Intents (Stellar, Solana, Monad, EVM,
                                   UTXO, ...): network registry, quote, deposit address + wallet link, observer
   near-intents/                   NEAR Intents 1Click client: tokens, quote, status, deposit submit
+  usdt0/                          USDT0 from Stellar to EVM networks through LayerZero's OFT: routes, quote,
+                                  build + relay the Soroban `send`, status from the ledger and LayerZero Scan
   zk-payments/                    private payments: confidential transfers on Cosmos Pay's token, verified on-chain;
                                   the confidential token SDK is loaded only by confidential-sdk.ts
   liquidity-pools/                AMM deposit/withdraw, pool + position reads, cost basis + commission on gain
@@ -117,7 +120,7 @@ prisma/schema.prisma              Consumer, PaymentIntent, Swap, ChainSwap, Cros
                                   BlindpayWebhookEvent, Payin, Payout, RequestLog,
                                   ActivityEvent,
                                   AdminAuditLog, Alias, AliasAddress,
-                                  AliasChallenge, AliasRecovery, ZkPayment
+                                  AliasChallenge, AliasRecovery, ZkPayment, Usdt0Transfer
                                   PluginInstallation, PluginRecord
 test/                             e2e suites: gateway gate, admin + alias console gates,
                                   payment intents, swaps, liquidity pools, KYC, webhooks
@@ -148,6 +151,7 @@ se regenera a partir de los controllers y DTOs en cada ejecución de CI
 | Enlaces de pago       | `/v1/payment-links`      | Una intención de pago tal como la ve quien paga, para páginas de checkout alojadas — sin API key (`@Public`) |
 | Swaps                 | `/v1/swaps`              | Cotización de path payment, construcción del XDR sin firmar, envío del firmado · Solana vía Jupiter, Monad vía Kuru Flow |
 | Swaps entre redes | `/v1/cross-chain-swaps` | Entre 35 redes a través de NEAR Intents (Stellar, Solana, Monad, redes EVM, Bitcoin y las monedas UTXO, ...): cotización, dirección de depósito, estado |
+| USDT0                 | `/v1/usdt0`              | USDT0 desde Stellar a 21 redes EVM a través de LayerZero (USDT nativo en Ethereum), solo mainnet: cotización, construcción, envío, estado |
 | Pagos privados        | `/v1/zk-payments`        | Pagos confidenciales sobre el token confidencial de Cosmos Pay (monto oculto on-chain, comisión del 0,01 %), por ahora solo en testnet |
 | Checkout privado      | `/v1/zk-checkout`        | La mitad de un pago privado que le toca a quien paga: leerlo, confirmarlo, la configuración de la red (`@Public`) |
 | Pools de liquidez     | `/v1/liquidity-pools`    | Depósito / retiro en AMM, posiciones, comisión sobre la ganancia |
@@ -216,7 +220,7 @@ consola llega a ella. Las rutas usan la forma `{param}` de OpenAPI.
 | POST | `/v1/cross-chain-swaps` | `swaps:write` | ✓ |
 | GET | `/v1/cross-chain-swaps/assets` | `swaps:read` | ✓ |
 | POST | `/v1/cross-chain-swaps/quote` | `swaps:read` | ✓ |
-| GET | `/v1/cross-chain-swaps/{id}` | `swaps:read` |  |
+| GET | `/v1/cross-chain-swaps/{id}` | `swaps:read` | ✓ |
 | POST | `/v1/cross-chain-swaps/{id}/deposit` | `swaps:write` | ✓ |
 | GET | `/v1/customers` | `customers:read` |  |
 | POST | `/v1/customers` | `customers:write` |  |
@@ -316,8 +320,14 @@ consola llega a ella. Las rutas usan la forma `{param}` de OpenAPI.
 | GET | `/v1/swaps` | `swaps:read` |  |
 | POST | `/v1/swaps` | `swaps:write` | ✓ |
 | POST | `/v1/swaps/quote` | `swaps:read` | ✓ |
-| GET | `/v1/swaps/{id}` | `swaps:read` |  |
+| GET | `/v1/swaps/{id}` | `swaps:read` | ✓ |
 | POST | `/v1/swaps/{id}/submit` | `swaps:write` | ✓ |
+| GET | `/v1/usdt0/routes` | `swaps:read` | ✓ |
+| POST | `/v1/usdt0/quote` | `swaps:read` | ✓ |
+| GET | `/v1/usdt0/transfers` | `swaps:read` |  |
+| POST | `/v1/usdt0/transfers` | `swaps:write` | ✓ |
+| GET | `/v1/usdt0/transfers/{id}` | `swaps:read` | ✓ |
+| POST | `/v1/usdt0/transfers/{id}/submit` | `swaps:write` | ✓ |
 | GET | `/v1/wallet/auth/providers` | `payments:read` | ✓ |
 | POST | `/v1/wallet/auth/oauth/authorize` | `payments:write` | ✓ |
 | GET | `/v1/wallet/auth/oauth/callback/{provider}` | none — `@Public()`, a browser redirect |  |
@@ -995,6 +1005,11 @@ Accesible hoy con la key pública:
 | `GET /v1/cross-chain-swaps/assets` \| `POST /v1/cross-chain-swaps/quote` | La lista de tokens de NEAR Intents y una cotización en seco; funciones puras de la solicitud |
 | `POST /v1/cross-chain-swaps` | Una dirección de depósito para los fondos de quien llama; un `Idempotency-Key` repetido solo se responde si la solicitud coincide |
 | `POST /v1/cross-chain-swaps/:id/deposit` | Indica a NEAR Intents una transacción que él mismo verifica on-chain; con límite de tasa |
+| `GET /v1/swaps/:id` \| `GET /v1/cross-chain-swaps/:id` | Un swap por su id, para que un swap hecho sin cuenta pueda seguir su propio estado. Sigue limitado al consumidor, así que la key solo alcanza los swaps hechos con ella, y el id (un cuid) es la capacidad, como en un enlace de pago |
+| `GET /v1/usdt0/routes` \| `POST /v1/usdt0/quote` | El catálogo de rutas y una cotización simulada; funciones puras de la solicitud |
+| `POST /v1/usdt0/transfers` | Construye una transacción sin firmar que firma quien llama; un `Idempotency-Key` repetido solo se responde si la solicitud coincide |
+| `POST /v1/usdt0/transfers/:id/submit` | Transmite una transacción firmada por quien llama, después de comprobar que es la de esa transferencia y que lleva una firma; con límite de tasa |
+| `GET /v1/usdt0/transfers/:id` | Una transferencia por su id, limitada al consumidor, como en un swap |
 | `POST /v1/liquidity-pools/deposit` \| `withdraw` | Construyen envelopes sin firmar |
 | `POST /v1/liquidity-pools/operations/:id/submit` | Transmite un envelope firmado por quien llama, bajo las mismas verificaciones que el submit de swaps; con límite de tasa |
 | `GET /v1/liquidity-pools` \| `/:poolId` \| `/positions` | Datos públicos on-chain leídos desde Horizon |
@@ -1003,12 +1018,13 @@ Accesible hoy con la key pública:
 | `GET /v1/assets` | El catálogo público de activos |
 | `GET /v1/aliases/resolve/:name` \| `availability/:name` \| `by-address/:address` | Un pagador que resuelve un identificador es precisamente el llamante anónimo para el que existe esta key; la respuesta es una función pura de la solicitud y nunca incluye el buzón del propietario |
 
-Rechazadas: `GET /v1/swaps`, `GET /v1/swaps/:id`, `GET /v1/cross-chain-swaps`, `GET /v1/cross-chain-swaps/:id`,
+Rechazadas: `GET /v1/swaps`, `GET /v1/cross-chain-swaps`, `GET /v1/usdt0/transfers`,
 `GET /v1/liquidity-pools/operations{,/:id}`, `GET /v1/activity/events`,
 `GET /v1/activity/summary`, toda lectura de intenciones de pago, toda ruta de
 propietario de alias (reclamar, listar, agregar o quitar una dirección, liberar,
 recuperar), y todo lo que está bajo `/v1/kyc`, `/v1/onramp`, `/v1/offramp` y
-`/v1/webhooks`. Una wallet sin cuenta lee su historial desde Horizon.
+`/v1/webhooks`. Una wallet sin cuenta lee su historial desde Horizon, y sigue un
+swap o una transferencia por el id que se le entregó.
 
 **La telemetría está permitida** para que sigan llegando los reportes de fallos de las
 wallets sin cuenta. Los eventos que llegan con esta key son anónimos (un único
@@ -1372,8 +1388,101 @@ consumidor y dirección de cliente (`429 rate_limited`).
 | `POST /v1/cross-chain-swaps/quote` | `swaps:read` | Una cotización en seco: salida, mínimo, comisión; no persiste nada |
 | `POST /v1/cross-chain-swaps` | `swaps:write` | Una cotización en vivo: dirección de depósito, memo, enlace de billetera y QR; admite `Idempotency-Key` |
 | `GET /v1/cross-chain-swaps` | `swaps:read` | Los swaps entre redes del consumidor |
-| `GET /v1/cross-chain-swaps/{id}` | `swaps:read` | Un swap, tal como lo vio el observador por última vez |
+| `GET /v1/cross-chain-swaps/{id}` | `swaps:read` | Un swap, tal como lo vio el observador por última vez (la key pública compartida también puede leerlo) |
 | `POST /v1/cross-chain-swaps/{id}/deposit` | `swaps:write` | Informar la transacción de depósito para que NEAR Intents empiece sin esperar a su indexador |
+## USDT0 desde Stellar (LayerZero)
+
+[USDT0](https://docs.usdt0.to) es el USDT omnichain de Tether. En Stellar es el
+activo clásico `USDT0:GATISXX6BZ6NC7IKQBY37CJD4SOZL3CYZJWXEDG6JVIY4WBS6KXJHN6Q` detrás
+del contrato OFT de LayerZero (`CBOWOLFSDM5PZXNFIVDMP5NZ7U2GSIHED6H6R446QOHF266XINKUMMF6`),
+y el OFT existe para enviarlo a otras redes: `send` quema el USDT0 en Stellar y
+LayerZero lo entrega. En Ethereum llega como **USDT nativo** (allí la contraparte es
+el adaptador OFT de Tether, que desbloquea USDT real); en las otras 20 rutas llega
+como USDT0. Toda ruta pide un destinatario EVM. `/v1/usdt0` lo envía **desde
+Stellar**: el titular firma una transacción de Soroban (con Freighter, o a través del
+enlace SEP-7), y este servicio es no custodio, como en los swaps. Cotiza el OFT por
+simulación, construye la transacción, comprueba que la copia firmada sea esa
+transacción, la retransmite y sigue el mensaje en LayerZero Scan.
+
+```
+routes → quote → create (unsigned XDR + SEP-7 link) → the holder signs
+       → POST /submit (or the wallet broadcasts it) → GET /{id} → SUBMITTED → DELIVERED / FAILED
+```
+
+**Solo mainnet.** USDT0 no existe en la testnet de Stellar. Una clave `dev` lee
+`GET /v1/usdt0/routes` como `available: false`, sin rutas, y recibe
+`400 network_unsupported` en la cotización, la construcción y el submit.
+
+**Dos comisiones, ambas en XLM, ambas a cargo del titular.** La comisión de
+mensajería de LayerZero (`nativeFee`: unos 3.5 XLM hacia Ethereum y de 0.13 a 0.5 XLM
+hacia las demás el 2026-10-25; sigue los feeds de precios de LayerZero) y la comisión
+de red de Stellar (`networkFee`: unos 1.45 XLM de recursos de Soroban, de los que la
+red reembolsa una parte). La transacción le ofrece a LayerZero `nativeFeeLimit`, la
+cotización más un 20 %: llega al ledger minutos después de construirse, y una oferta
+por debajo de la comisión de ese momento falla on-chain y aun así cuesta la comisión
+de red. El endpoint cobra la comisión real y le devuelve el resto al titular en la
+misma transacción (comprobado por simulación en mainnet), así que el margen no cuesta
+nada, pero la cuenta tiene que tenerlo.
+
+**Polvo.** El activo tiene 7 decimales y el OFT transporta 6, así que el séptimo
+decimal de `amount` no puede viajar. Es `dust`, y se queda en la cuenta: `amountSent`
+es lo que toma el OFT. Menos de 0.000001 USDT0 es todo polvo y se rechaza con
+`400 invalid_amount`. `amountReceived` es además el piso on-chain: la transacción
+falla antes que entregar menos.
+
+**Rechazos antes de construir nada** (`400`): una cuenta de origen que no existe
+(`validation_failed`), que no confía en USDT0 (`trustline_missing`), que tiene menos
+USDT0 del que toma la transferencia, o que tiene muy poco XLM para cubrir a la vez su
+saldo mínimo, sus ofertas abiertas, el límite de comisión y la comisión de red
+(`insufficient_balance`, que indica cuántos XLM agregar); un destinatario que no es
+una dirección EVM o que trae un checksum EIP-55 incorrecto (`validation_failed`); un
+monto fuera de los límites del OFT (`invalid_amount`). Lo que rechaza el propio OFT
+es `400 provider_error`, con su error de contrato.
+
+**Estados.** `PENDING` (construida) → `SUBMITTED` (en el ledger de Stellar; LayerZero
+la está entregando, y `guid` es el id de su mensaje) → `DELIVERED` (con
+`destinationTxHash`) o `FAILED` (con `failureReason`). `EXPIRED` significa que la
+transacción nunca llegó al ledger antes de `expiresAt` (`STELLAR_TX_TIMEOUT`). No hay
+observador en segundo plano: `GET /v1/usdt0/transfers/{id}` actualiza una
+transferencia `PENDING` o `SUBMITTED` desde el ledger de Stellar (una wallet puede
+transmitir el enlace SEP-7 por su cuenta y nunca llamar a submit) y desde la API
+pública de LayerZero Scan (`scan.layerzero-api.com`, primero por guid), como mucho
+una vez cada 15 segundos por transferencia, y responde desde la fila cuando alguno de
+los dos no está disponible. `scanStatus` es la palabra propia de Scan:
+`PAYLOAD_STORED` y `BLOCKED` se quedan en `SUBMITTED`, porque cualquiera puede
+destrabarlos en la red de destino. La entrega tarda unos 27 minutos en cada ruta (las
+45 transferencias desde Stellar que Scan listó el 2026-10-25 tardaron de 1612 a 1661
+segundos), porque los verificadores de LayerZero esperan confirmaciones de Stellar.
+
+**Sin QR, por lo general.** La huella en el ledger de una transacción de Soroban hace
+que su XDR tenga unos 7000 caracteres, más de lo que cabe en un código QR, así que
+`qr` suele ser `null`: firma con una wallet conectada o a través del enlace `uri`.
+
+**Sin comisión de Cosmos Pay, por ahora.** Una transacción de Soroban lleva una sola
+operación, así que ningún pago de comisión puede ir junto con `send` como en un swap
+de path payment, y la tarifa del plan no se cobra en esta ruta. Cobrarla es decisión
+del responsable de producto.
+
+**El RPC.** Todo pasa por el RPC de Soroban de mainnet de Stellar,
+`STELLAR_RPC_URL_MAINNET` (por defecto, el endpoint público de Gateway.fm, que tiene
+límite de tasa: en producción configura el de un proveedor). Su passphrase se
+comprueba antes de usarlo, y un nodo de otra red responde `503 misconfigured`.
+
+**Límites.** Quote: 60 llamadas por minuto; create y submit: 20 cada una, por
+consumidor y dirección de cliente (`429 rate_limited`). La key pública compartida
+puede llamar a todas las rutas excepto al listado.
+
+### Rutas de USDT0
+
+| Ruta | Scope | Propósito |
+| --- | --- | --- |
+| `GET /v1/usdt0/routes` | `swaps:read` | Las redes a las que llega USDT0 desde Stellar, qué llega a cada una, el token y el OFT |
+| `POST /v1/usdt0/quote` | `swaps:read` | Qué llega, el polvo, la comisión de LayerZero y el límite ofrecido, por simulación; no persiste nada |
+| `POST /v1/usdt0/transfers` | `swaps:write` | La transacción `send` sin firmar (XDR y enlace SEP-7); admite `Idempotency-Key` |
+| `GET /v1/usdt0/transfers` | `swaps:read` | Las transferencias del consumidor (no con la key pública compartida) |
+| `GET /v1/usdt0/transfers/{id}` | `swaps:read` | Una transferencia, actualizada desde el ledger y LayerZero Scan |
+| `POST /v1/usdt0/transfers/{id}/submit` | `swaps:write` | Retransmitir la transacción firmada y esperar al ledger: `SUBMITTED`, con el guid |
+
 ## Pagos privados (montos confidenciales en Stellar)
 
 Un **pago privado** es un pago cuyo monto queda oculto on-chain. Se hace sobre la
@@ -1999,6 +2108,26 @@ misma lista `PLUGINS_ENABLED` que los plugins aislados.
   activados o no: `openapi:generate` los activa todos.
 
 ## Actualización — cambios incompatibles y notas de despliegue
+
+### Transferencias de USDT0, y lecturas públicas de un swap
+
+- **Rutas nuevas bajo `/v1/usdt0`** (`swaps:read` / `swaps:write`): USDT0 enviado
+  desde Stellar a 21 redes EVM a través del OFT de LayerZero, solo mainnet. Qué hacen
+  está en [USDT0 desde Stellar](#usdt0-desde-stellar-layerzero). Ninguna respuesta
+  existente cambió.
+- **`GET /v1/swaps/{id}` y `GET /v1/cross-chain-swaps/{id}` ahora admiten la key
+  pública compartida**, para que un swap hecho sin cuenta pueda seguir su propio
+  estado. La lectura sigue limitada al consumidor, así que esa key solo alcanza los
+  swaps hechos con ella, y el id (un cuid) es la capacidad, como en un enlace de pago.
+  `GET /v1/swaps` y `GET /v1/cross-chain-swaps` le siguen cerradas.
+- **La migración `20261025210000_usdt0_transfers`** crea la tabla `usdt0_transfer` y
+  el enum `Usdt0TransferStatus`; no se reescribe nada. Ejecuta `migrate deploy` antes
+  de que el build nuevo sirva tráfico.
+- **Variable nueva `STELLAR_RPC_URL_MAINNET`**, opcional: el RPC de Soroban de mainnet
+  de Stellar. Sin definir, el servicio usa el endpoint público de Gateway.fm, que tiene
+  límite de tasa; en producción configura el de un proveedor.
+- **Todavía no:** las transferencias de USDT0 no emiten ningún evento de webhook y no
+  se cuentan en `GET /v1/summary/series`.
 
 ### Swaps: la transacción agrega la trustline que le falta a su source
 
@@ -2765,6 +2894,7 @@ Cada variable leída de `process.env` en `src/` se valida en el arranque mediant
 | `STELLAR_NETWORK` | no | `testnet` | Red de Stellar de fallback (`public` / `testnet`) |
 | `STELLAR_HORIZON_URL_PUBLIC` | no | `https://horizon.stellar.org` | URL base de Horizon para mainnet |
 | `STELLAR_HORIZON_URL_TESTNET` | no | `https://horizon-testnet.stellar.org` | URL base de Horizon para testnet |
+| `STELLAR_RPC_URL_MAINNET` | no | `https://soroban-rpc.mainnet.stellar.gateway.fm` | El RPC de Soroban de mainnet de Stellar, para las transferencias de USDT0 (su passphrase se comprueba antes de usarlo). El endpoint público tiene límites de tasa: en producción use el de un proveedor |
 | `SOLANA_RPC_URL_MAINNET` | no | `https://api.mainnet-beta.solana.com` | RPC de Solana para claves `prod` (mainnet-beta; el genesis hash se comprueba antes de usarlo). El endpoint público tiene límites de tasa: en producción use el de un proveedor |
 | `SOLANA_RPC_URL_DEVNET` | no | `https://api.devnet.solana.com` | RPC de Solana para claves `dev` (devnet) |
 | `SOLANA_RPC_TIMEOUT_MS` | no | `10000` | Presupuesto de una llamada RPC a Solana (ms) |

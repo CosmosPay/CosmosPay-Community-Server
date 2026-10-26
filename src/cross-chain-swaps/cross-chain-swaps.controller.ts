@@ -189,9 +189,19 @@ export class CrossChainSwapsController {
   }
 
   @Get(':id')
-  // Reads this service's own mirror; the observer keeps it current.
+  // Reads this service's own mirror; the observer keeps it current. A public
+  // swap follows its own status: still scoped to the consumer, and the cuid is
+  // the capability, as for a payment link. The list stays closed.
+  @AllowPublicKey()
   @RequirePermissions('swaps:read')
-  @ApiOperation({ summary: 'Get a cross-chain swap by id' })
+  @ApiOperation({
+    summary: 'Get a cross-chain swap by id',
+    description:
+      'The shared public key may call it, so a swap made without an account ' +
+      'can follow its own status: the read is still scoped to the consumer, so ' +
+      'that key reaches only swaps made with it, and the swap id (a cuid) is ' +
+      'the capability. Listing swaps stays closed to the public key.',
+  })
   @ApiOkResponse({ type: CrossChainSwapEntity })
   findOne(
     @CurrentConsumer() consumer: GatewayConsumer,
