@@ -1,5 +1,6 @@
 import { ApiProperty, OmitType } from '@nestjs/swagger';
 import { SwapStatus } from '@generated/prisma/client';
+import { ApiPublicTokenProperty } from '@/common/decorators/api-record-token.decorator';
 
 /** One asset hop on the chosen path (empty array = direct order-book swap). */
 export class SwapPathHop {
@@ -271,6 +272,12 @@ export class SwapEntity {
   updatedAt!: Date;
 }
 
+/** What `POST /v1/swaps` answers for a Stellar swap: the swap, and its read token. */
+export class SwapCreatedEntity extends SwapEntity {
+  @ApiPublicTokenProperty()
+  publicToken?: string;
+}
+
 /**
  * A swap as `GET /v1/swaps` lists it: the stored row. The QR, the commission
  * label and the added trustline are derived by the single read, not rendered
@@ -449,6 +456,12 @@ export class ChainSwapEntity {
 
   @ApiProperty()
   updatedAt!: Date;
+}
+
+/** What `POST /v1/swaps` answers for a Solana or Monad swap, with its read token. */
+export class ChainSwapCreatedEntity extends ChainSwapEntity {
+  @ApiPublicTokenProperty()
+  publicToken?: string;
 }
 
 export class ChainSwapListEntity {

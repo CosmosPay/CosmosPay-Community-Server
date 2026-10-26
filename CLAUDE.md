@@ -351,10 +351,18 @@ Each of these was a real finding in this codebase, not a hypothetical:
   keyed by consumer — a memo, an `Idempotency-Key`, an in-flight guard, a list — is
   shared by all of them. A replay that returns a stored row checks first that the
   request matches it (otherwise `409 idempotency_conflict`), and a new route is
-  unreachable with that key until it carries `@AllowPublicKey()`. The only reads
-  that key may make of what it wrote are ONE row by its unguessable id (a cuid),
-  still filtered by consumer: `GET /v1/swaps/{id}`, `/v1/cross-chain-swaps/{id}`,
-  `/v1/usdt0/transfers/{id}`. A list never takes it.
+  unreachable with that key until it carries `@AllowPublicKey()`. Anyone can fetch
+  that key (`GET /v1/public-key`), so an id is not a secret: the only reads it may
+  make of what it wrote are ONE row by its id AND its record token
+  (`PublicRecordTokens`, `src/common/public-record-token.ts`): the create answers
+  `publicToken` = `base64url(HMAC-SHA256(HKDF(APISIX_GATEWAY_SECRET,
+  "public-record-token v1"), "<kind>:<id>"))`, and the row's reads and actions take it
+  in `X-Record-Token` (`GET /v1/swaps/{id}`, `/v1/cross-chain-swaps/{id}`,
+  `/v1/usdt0/transfers/{id}`, their submit / deposit). A missing or wrong token is the
+  404 of a missing row, checked in constant time before the table is read; real keys
+  are untouched. A new public-key create whose row can be read back issues a token
+  (`attach`) and its by-id routes check it (`admits`), with a new kind in
+  `PUBLIC_RECORD_KINDS`. A list never takes the public key.
 - **A `@Public()` route has no consumer.** It is served without key-auth, so
   `ApisixGuard` drops whatever `X-Consumer-Username` the client sent. Never read
   `@CurrentConsumer()` there.

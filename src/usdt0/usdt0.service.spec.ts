@@ -1,4 +1,5 @@
 import { ConfigService } from '@nestjs/config';
+import { PublicRecordTokens } from '@/common/public-record-token';
 import {
   Account,
   Address,
@@ -322,6 +323,12 @@ function setup(account = horizonAccount()) {
     rpcAsClient,
     oft,
     tracker,
+    new PublicRecordTokens({
+      get: () => ({
+        publicConsumer: 'cosmos_public',
+        gatewaySecret: 'spec-gateway-secret-spec-gateway-secret',
+      }),
+    } as never),
   );
   return { service, rows, rpc: rpcClient, calls, scan, accounts };
 }
@@ -669,7 +676,9 @@ describe('Usdt0Service.submit', () => {
       .setTimeout(300)
       .build();
     other.sign(holder);
-    const r = await refusal(service.submit(prod, view.id, other.toXDR()));
+    const r = await refusal(
+      service.submit(prod, view.id, other.toXDR(), view.publicToken),
+    );
     expect(r).toMatchObject({
       code: 'validation_failed',
       message: 'The signed transaction does not match this transfer',
@@ -679,14 +688,21 @@ describe('Usdt0Service.submit', () => {
 
   it('refuses the unsigned envelope', async () => {
     const { service, view, rpc: client } = await built();
-    const r = await refusal(service.submit(prod, view.id, view.xdr));
+    const r = await refusal(
+      service.submit(prod, view.id, view.xdr, view.publicToken),
+    );
     expect(r.message).toMatch(/carries no signatures/);
     expect(client.send).not.toHaveBeenCalled();
   });
 
   it('relays the signed transaction and stores the hash and the guid from send', async () => {
     const { service, view, rpc: client, rows } = await built();
-    const outcome = await service.submit(prod, view.id, signed(view.xdr));
+    const outcome = await service.submit(
+      prod,
+      view.id,
+      signed(view.xdr),
+      view.publicToken,
+    );
     expect(client.send).toHaveBeenCalledTimes(1);
     expect(outcome).toMatchObject({
       submitted: true,
@@ -707,7 +723,12 @@ describe('Usdt0Service.submit', () => {
     client.getTransaction.mockResolvedValue({
       status: rpc.Api.GetTransactionStatus.NOT_FOUND,
     } as never);
-    const outcome = await service.submit(prod, view.id, signed(view.xdr));
+    const outcome = await service.submit(
+      prod,
+      view.id,
+      signed(view.xdr),
+      view.publicToken,
+    );
     expect(outcome).toMatchObject({
       submitted: true,
       status: 'SUBMITTED',
@@ -731,7 +752,12 @@ describe('Usdt0Service.submit', () => {
         ext: xdr.TransactionResultExt.v0(),
       }),
     } as never);
-    const outcome = await service.submit(prod, view.id, signed(view.xdr));
+    const outcome = await service.submit(
+      prod,
+      view.id,
+      signed(view.xdr),
+      view.publicToken,
+    );
     expect(outcome).toMatchObject({ submitted: false, status: 'FAILED' });
     expect(outcome.reason).toContain('tx_failed, invoke_host_function_trapped');
   });
@@ -754,6 +780,7 @@ describe('Usdt0Service.submit', () => {
       prod,
       view.id,
       signed(view.xdr, Keypair.random()),
+      view.publicToken,
     );
     expect(outcome).toMatchObject({ submitted: false, status: 'PENDING' });
     expect(outcome.reason).toContain('(tx_bad_auth)');
@@ -763,7 +790,12 @@ describe('Usdt0Service.submit', () => {
   it('settles a refused broadcast the ledger already has (the wallet sent it itself)', async () => {
     const { service, view, rpc: client } = await built();
     client.send.mockResolvedValueOnce({ status: 'ERROR', hash: 'x' } as never);
-    const outcome = await service.submit(prod, view.id, signed(view.xdr));
+    const outcome = await service.submit(
+      prod,
+      view.id,
+      signed(view.xdr),
+      view.publicToken,
+    );
     expect(outcome).toMatchObject({
       submitted: true,
       status: 'SUBMITTED',
@@ -773,9 +805,14 @@ describe('Usdt0Service.submit', () => {
 
   it('answers a SUBMITTED transfer again without broadcasting', async () => {
     const { service, view, rpc: client } = await built();
-    await service.submit(prod, view.id, signed(view.xdr));
+    await service.submit(prod, view.id, signed(view.xdr), view.publicToken);
     client.send.mockClear();
-    const again = await service.submit(prod, view.id, signed(view.xdr));
+    const again = await service.submit(
+      prod,
+      view.id,
+      signed(view.xdr),
+      view.publicToken,
+    );
     expect(again).toMatchObject({ submitted: true, status: 'SUBMITTED' });
     expect(client.send).not.toHaveBeenCalled();
   });
@@ -783,7 +820,9 @@ describe('Usdt0Service.submit', () => {
   it('refuses an EXPIRED transfer', async () => {
     const { service, view, rows } = await built();
     rows[0].status = 'EXPIRED';
-    const r = await refusal(service.submit(prod, view.id, signed(view.xdr)));
+    const r = await refusal(
+      service.submit(prod, view.id, signed(view.xdr), view.publicToken),
+    );
     expect(r.code).toBe('invalid_state_transition');
   });
 
@@ -800,6 +839,62 @@ describe('Usdt0Service.submit', () => {
       ),
     );
     expect(r).toMatchObject({ code: 'not_found', status: 404 });
+  });
+});
+
+// ── The shared public key's record token ───────────────────────────────────
+
+describe('Usdt0Service record tokens (the shared public key)', () => {
+  const realKey: GatewayConsumer = {
+    ...prod,
+    username: 'cosmos_u1',
+    role: 'user',
+  };
+
+  it('answers publicToken on create to the shared public key, the same on a replay, and none to a real key', async () => {
+    const { service } = setup();
+    const first = await service.create(prod, DTO, 'key-1');
+    expect(first.publicToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    const replay = await service.create(prod, DTO, 'key-1');
+    expect(replay.publicToken).toBe(first.publicToken);
+
+    const other = setup();
+    const own = await other.service.create(realKey, DTO);
+    expect(own).not.toHaveProperty('publicToken');
+  });
+
+  it('reads and submits only with the transfer’s own token, and answers a missing or wrong one with the 404 of a missing transfer', async () => {
+    const { service, rpc: client } = setup();
+    const view = await service.create(prod, DTO);
+    const notFound = `USDT0 transfer ${view.id} not found`;
+
+    for (const token of [undefined, '', 'x'.repeat(43), view.id]) {
+      const read = await refusal(service.findOne(prod, view.id, token));
+      expect(read).toMatchObject({
+        status: 404,
+        code: 'not_found',
+        message: notFound,
+      });
+      const submit = await refusal(
+        service.submit(prod, view.id, signed(view.xdr), token),
+      );
+      expect(submit).toMatchObject({ status: 404, message: notFound });
+    }
+    expect(client.send).not.toHaveBeenCalled();
+
+    await expect(
+      service.findOne(prod, view.id, view.publicToken),
+    ).resolves.toMatchObject({ id: view.id });
+  });
+
+  it('leaves a real key as it was: no token asked', async () => {
+    const { service, rows } = setup();
+    const view = await service.create(realKey, DTO);
+    // The in-memory table files every row under the public consumer.
+    rows[0].consumer = { apisixUsername: realKey.username };
+    await expect(service.findOne(realKey, view.id)).resolves.toMatchObject({
+      id: view.id,
+    });
   });
 });
 
@@ -831,7 +926,7 @@ describe('Usdt0Service reads', () => {
   it('refreshes a PENDING transfer from the ledger when it is read', async () => {
     const { service, rpc: client } = setup();
     const view = await service.create(prod, DTO);
-    const read = await service.findOne(prod, view.id);
+    const read = await service.findOne(prod, view.id, view.publicToken);
     expect(client.getTransaction).toHaveBeenCalledTimes(1);
     expect(read).toMatchObject({ status: 'SUBMITTED', guid: GUID });
   });

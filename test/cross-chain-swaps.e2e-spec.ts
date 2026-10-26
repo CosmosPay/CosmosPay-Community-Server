@@ -4,6 +4,7 @@ import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { AppModule } from '@/app.module';
 import { AllExceptionsFilter } from '@/common/filters/all-exceptions.filter';
+import { recordToken, recordTokenKey } from '@/common/public-record-token';
 import { CROSS_CHAIN_DEPOSIT_RATE_LIMIT } from '@/cross-chain-swaps/cross-chain-swaps.constants';
 import { NearIntentsClient } from '@/near-intents/near-intents.client';
 import { PrismaService } from '@/prisma/prisma.service';
@@ -306,13 +307,24 @@ describe('Cross-chain swaps guards (e2e)', () => {
 
     // A public swap follows its own status: one row by its id, still scoped
     // to the public consumer.
-    it(`reaches ${label(GET_ONE)}, scoped to the public consumer (404 otherwise)`, async () => {
-      const res = await publicKey(GET_ONE).expect(404);
+    it(`reaches ${label(GET_ONE)} with the swap's record token, scoped to the public consumer`, async () => {
+      const res = await publicKey(GET_ONE)
+        .set(
+          'X-Record-Token',
+          recordToken(recordTokenKey(SECRET), 'cross-chain-swap', SWAP_ID),
+        )
+        .expect(404);
       expect(res.body.code).toBe('not_found');
       expect(prismaMock.crossChainSwap.findFirst).toHaveBeenCalledWith({
         where: { id: SWAP_ID, consumer: { apisixUsername: 'cosmos_wallet' } },
       });
       expect(prismaMock.crossChainSwap.findMany).not.toHaveBeenCalled();
+    });
+
+    it(`refuses ${label(GET_ONE)} without the record token, before any swap is read (404)`, async () => {
+      const res = await publicKey(GET_ONE).expect(404);
+      expect(res.body.code).toBe('not_found');
+      expect(prismaMock.crossChainSwap.findFirst).not.toHaveBeenCalled();
     });
   });
 

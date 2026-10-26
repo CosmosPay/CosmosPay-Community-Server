@@ -1,5 +1,6 @@
 import { Global, Module } from '@nestjs/common';
 import { AdvisoryLockService } from '@/common/services/advisory-lock.service';
+import { PublicRecordTokens } from '@/common/public-record-token';
 import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
 import { RateLimitPruneService } from '@/common/services/rate-limit-prune.service';
 import { RateLimitService } from '@/common/services/rate-limit.service';
@@ -25,7 +26,15 @@ import { RequestLogRetentionService } from '@/common/services/request-log-retent
     // AppModule, which is why the service is exported.
     RateLimitService,
     RateLimitPruneService,
+    // Per-record read tokens for what the shared public key creates: swaps,
+    // cross-chain swaps and USDT0 transfers issue and check them.
+    PublicRecordTokens,
   ],
-  exports: [AdvisoryLockService, ConsumerResolverService, RateLimitService],
+  exports: [
+    AdvisoryLockService,
+    ConsumerResolverService,
+    RateLimitService,
+    PublicRecordTokens,
+  ],
 })
 export class CommonModule {}

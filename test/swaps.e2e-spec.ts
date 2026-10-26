@@ -4,6 +4,7 @@ import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { AppModule } from '@/app.module';
 import { AllExceptionsFilter } from '@/common/filters/all-exceptions.filter';
+import { recordToken, recordTokenKey } from '@/common/public-record-token';
 import { PrismaService } from '@/prisma/prisma.service';
 import { SWAP_SUBMIT_RATE_LIMIT } from '@/swaps/swaps.constants';
 
@@ -228,21 +229,35 @@ describe('Swaps guards (e2e)', () => {
         expect(prismaMock.swap.findFirst).not.toHaveBeenCalled();
       });
 
-      // A public swap follows its own status: one row by its id, still
-      // scoped to the public consumer.
-      it(`reaches ${label(GET_ONE)}, scoped to the public consumer (404 otherwise)`, async () => {
-        const res = await publicKey(GET_ONE, identity).expect(404);
+      // A public swap follows its own status: one row by its id, with the
+      // swap's record token, still scoped to the public consumer.
+      it(`reaches ${label(GET_ONE)} with the swap's record token, scoped to the public consumer`, async () => {
+        const res = await publicKey(GET_ONE, identity)
+          .set(
+            'X-Record-Token',
+            recordToken(recordTokenKey(SECRET), 'swap', SWAP_ID),
+          )
+          .expect(404);
 
         expect(res.body.code).toBe('not_found');
-        const scoped = {
+        expect(prismaMock.swap.findFirst).toHaveBeenCalledWith({
           where: {
             id: SWAP_ID,
             consumer: { apisixUsername: identity['x-consumer-username'] },
           },
-        };
-        expect(prismaMock.chainSwap.findFirst).toHaveBeenCalledWith(scoped);
-        expect(prismaMock.swap.findFirst).toHaveBeenCalledWith(scoped);
+        });
+        // A Stellar swap's token is no Solana or Monad swap's: that table is
+        // not even read.
+        expect(prismaMock.chainSwap.findFirst).not.toHaveBeenCalled();
         expect(prismaMock.swap.findMany).not.toHaveBeenCalled();
+      });
+
+      it(`refuses ${label(GET_ONE)} without the record token, before any swap is read (404)`, async () => {
+        const res = await publicKey(GET_ONE, identity).expect(404);
+
+        expect(res.body.code).toBe('not_found');
+        expect(prismaMock.chainSwap.findFirst).not.toHaveBeenCalled();
+        expect(prismaMock.swap.findFirst).not.toHaveBeenCalled();
       });
     },
   );

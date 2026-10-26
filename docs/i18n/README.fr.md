@@ -992,15 +992,15 @@ Accessibles avec la clé publique aujourd'hui :
 | --- | --- |
 | `POST /v1/swaps/quote` | Calcule le prix d'un chemin depuis Horizon ; une fonction pure de la requête |
 | `POST /v1/swaps` | Construit une enveloppe non signée que l'appelant signe |
-| `POST /v1/swaps/:id/submit` | Diffuse une enveloppe signée par l'appelant — rien sur le swap, pas même son statut, n'est répondu tant que le corps n'est pas l'enveloppe de ce swap porteuse d'une signature ; limité en débit |
+| `POST /v1/swaps/:id/submit` | Diffuse une enveloppe signée par l'appelant : rien sur le swap, pas même son statut, n'est répondu tant que le corps n'est pas l'enveloppe de ce swap porteuse d'une signature et que le `X-Record-Token` du swap n'est pas envoyé ; limité en débit |
 | `GET /v1/cross-chain-swaps/assets` \| `POST /v1/cross-chain-swaps/quote` | La liste de jetons de NEAR Intents et une cotation à blanc ; des fonctions pures de la requête |
 | `POST /v1/cross-chain-swaps` | Une adresse de dépôt pour les propres fonds de l'appelant ; un `Idempotency-Key` rejoué n'est répondu que si la requête correspond |
-| `POST /v1/cross-chain-swaps/:id/deposit` | Indique à NEAR Intents une transaction qu'il vérifie lui-même on-chain ; limité en débit |
-| `GET /v1/swaps/:id` \| `GET /v1/cross-chain-swaps/:id` | Un swap par son id, pour qu'un swap fait sans compte puisse suivre son propre statut. Toujours restreint au consumer, donc la clé n'atteint que les swaps faits avec elle, et l'id (un cuid) est la capacité, comme pour un lien de paiement |
+| `POST /v1/cross-chain-swaps/:id/deposit` | Indique à NEAR Intents une transaction qu'il vérifie lui-même on-chain ; exige le `X-Record-Token` du swap ; limité en débit |
+| `GET /v1/swaps/:id` \| `GET /v1/cross-chain-swaps/:id` | Un swap par son id ET son jeton d'enregistrement (`X-Record-Token`, voir ci-dessous), pour qu'un swap fait sans compte puisse suivre son propre statut ; toujours restreint au consumer |
 | `GET /v1/usdt0/routes` \| `POST /v1/usdt0/quote` | Le catalogue des routes et une cotation simulée ; des fonctions pures de la requête |
 | `POST /v1/usdt0/transfers` | Construit une transaction non signée que l'appelant signe ; un `Idempotency-Key` rejoué n'est répondu que si la requête correspond |
-| `POST /v1/usdt0/transfers/:id/submit` | Diffuse une transaction signée par l'appelant, après avoir vérifié qu'elle est celle de ce transfert et qu'elle porte une signature ; limité en débit |
-| `GET /v1/usdt0/transfers/:id` | Un transfert par son id, restreint au consumer, comme pour un swap |
+| `POST /v1/usdt0/transfers/:id/submit` | Diffuse une transaction signée par l'appelant, après avoir vérifié qu'elle est celle de ce transfert et qu'elle porte une signature ; exige le `X-Record-Token` du transfert ; limité en débit |
+| `GET /v1/usdt0/transfers/:id` | Un transfert par son id et son jeton d'enregistrement, comme pour un swap |
 | `POST /v1/liquidity-pools/deposit` \| `withdraw` | Construisent des enveloppes non signées |
 | `POST /v1/liquidity-pools/operations/:id/submit` | Diffuse une enveloppe signée par l'appelant, sous les mêmes contrôles que le submit de swap ; limité en débit |
 | `GET /v1/liquidity-pools` \| `/:poolId` \| `/positions` | Données on-chain publiques lues depuis Horizon |
@@ -1015,7 +1015,25 @@ Refusées : `GET /v1/swaps`, `GET /v1/cross-chain-swaps`, `GET /v1/usdt0/transfe
 de propriétaire d'alias (revendiquer, lister, ajouter ou retirer une adresse, libérer,
 récupérer), et tout ce qui se trouve sous `/v1/kyc`, `/v1/onramp`, `/v1/offramp` et
 `/v1/webhooks`. Un wallet sans compte lit plutôt son historique depuis Horizon, et suit
-un swap ou un transfert par l'id qu'on lui a remis.
+un swap ou un transfert par l'id et le jeton d'enregistrement qu'on lui a remis.
+
+**Jetons d'enregistrement.** Cette clé est un seul consumer pour tous les visiteurs
+anonymes et n'importe qui peut la récupérer, donc l'id d'un enregistrement n'est pas un
+secret, et la restriction au consumer n'empêche pas un visiteur d'atteindre le swap d'un
+autre. Une création sur cette clé (`POST /v1/swaps`, `POST /v1/cross-chain-swaps`,
+`POST /v1/usdt0/transfers`) répond donc `publicToken` :
+`base64url(HMAC-SHA256(key, "<kind>:<id>"))`, un type (`<kind>`) par table, sous une clé
+dérivée par HKDF de `APISIX_GATEWAY_SECRET` (libellé `public-record-token v1`). Les
+lectures et actions de cet enregistrement précis (`GET /v1/swaps/{id}`,
+`GET /v1/cross-chain-swaps/{id}`, `GET /v1/usdt0/transfers/{id}`,
+`POST /v1/swaps/{id}/submit`, `POST /v1/cross-chain-swaps/{id}/deposit`,
+`POST /v1/usdt0/transfers/{id}/submit`) l'exigent dans l'en-tête `X-Record-Token`,
+comparé en temps constant ; un jeton absent ou erroné répond le même `404` qu'un
+enregistrement qui n'existe pas, avant même que la table ne soit lue. Le jeton est
+dérivé, pas stocké : une création rejouée répond le même, et faire tourner
+`APISIX_GATEWAY_SECRET` invalide tous les jetons déjà remis. Les vraies clés n'en
+reçoivent jamais et n'en ont jamais besoin. Une page publique envoie l'en-tête, donc les
+`allow_headers` du CORS de la passerelle doivent inclure `X-Record-Token`.
 
 **La télémétrie est autorisée** pour que les rapports de plantage des wallets sans compte
 arrivent quand même. Les événements reçus avec cette clé sont anonymes (un seul consumer
@@ -1375,7 +1393,7 @@ consommateur et adresse client (`429 rate_limited`).
 | `POST /v1/cross-chain-swaps/quote` | `swaps:read` | Une cotation à blanc : sortie, minimum, commission ; ne persiste rien |
 | `POST /v1/cross-chain-swaps` | `swaps:write` | Une cotation réelle : adresse de dépôt, mémo, lien de portefeuille et QR ; `Idempotency-Key` accepté |
 | `GET /v1/cross-chain-swaps` | `swaps:read` | Les swaps inter-chaînes du consommateur |
-| `GET /v1/cross-chain-swaps/{id}` | `swaps:read` | Un swap, tel que l'observateur l'a vu en dernier (la clé publique partagée peut aussi le lire) |
+| `GET /v1/cross-chain-swaps/{id}` | `swaps:read` | Un swap, tel que l'observateur l'a vu en dernier (la clé publique partagée peut aussi le lire, avec le `X-Record-Token` du swap) |
 | `POST /v1/cross-chain-swaps/{id}/deposit` | `swaps:write` | Signaler la transaction de dépôt pour que NEAR Intents démarre sans attendre son indexeur |
 ## USDT0 depuis Stellar (LayerZero)
 
@@ -1457,7 +1475,8 @@ et un nœud d'un autre réseau répond `503 misconfigured`.
 
 **Limites.** Quote : 60 appels par minute ; create et submit : 20 chacun, par
 consommateur et adresse client (`429 rate_limited`). La clé publique partagée peut
-appeler toutes les routes sauf la liste.
+appeler toutes les routes sauf la liste ; lire ou soumettre un transfert précis exige le
+`publicToken` que sa création a répondu, envoyé comme `X-Record-Token`.
 
 ### Routes USDT0
 
@@ -2108,10 +2127,17 @@ plugins isolés.
   Ce qu'elles font est décrit dans [USDT0 depuis Stellar](#usdt0-depuis-stellar-layerzero).
   Aucune réponse existante n'a changé.
 - **`GET /v1/swaps/{id}` et `GET /v1/cross-chain-swaps/{id}` admettent désormais la
-  clé publique partagée**, pour qu'un swap fait sans compte puisse suivre son propre
-  statut. La lecture reste restreinte au consumer, donc cette clé n'atteint que les
-  swaps faits avec elle, et l'id (un cuid) est la capacité, comme pour un lien de
-  paiement. `GET /v1/swaps` et `GET /v1/cross-chain-swaps` lui restent fermés.
+  clé publique partagée, avec un jeton d'enregistrement**, pour qu'un swap fait sans
+  compte puisse suivre son propre statut. Une création sur cette clé répond désormais
+  `publicToken`, et sur cette clé les lectures et actions de l'enregistrement (ces deux
+  lectures, `GET /v1/usdt0/transfers/{id}`, `POST /v1/swaps/{id}/submit`,
+  `POST /v1/cross-chain-swaps/{id}/deposit` et `POST /v1/usdt0/transfers/{id}/submit`)
+  l'exigent dans `X-Record-Token`, sinon elles répondent `404`. **Changement
+  incompatible pour les wallets sur la clé publique :** le submit de swap et le deposit
+  inter-chaînes fonctionnaient avec le seul id et exigent désormais aussi l'en-tête. Les
+  vraies clés ne sont pas concernées, et `GET /v1/swaps` et `GET /v1/cross-chain-swaps`
+  restent fermés à la clé publique. Étape de déploiement : ajoutez `X-Record-Token` aux
+  `allow_headers` du CORS de la passerelle.
 - **La migration `20261025210000_usdt0_transfers`** crée la table `usdt0_transfer` et
   l'enum `Usdt0TransferStatus` ; rien n'est réécrit. Lancez `migrate deploy` avant que
   le nouveau build ne serve du trafic.

@@ -24,11 +24,13 @@ import { type Chain, DEFAULT_CHAIN } from '@/chains/chains.constants';
 import { CurrentConsumer } from '@/common/decorators/current-consumer.decorator';
 import { AllowPublicKey } from '@/common/decorators/allow-public-key.decorator';
 import { ApiErrorResponse } from '@/common/decorators/api-error-response.decorator';
+import { ApiRecordTokenHeader } from '@/common/decorators/api-record-token.decorator';
 import { ApiUpstream } from '@/common/decorators/api-upstream.decorator';
 import { RateLimit } from '@/common/decorators/rate-limit.decorator';
 import { RequirePermissions } from '@/common/decorators/require-permissions.decorator';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
+import { RECORD_TOKEN_HEADER } from '@/common/public-record-token.constants';
 import { headerValue } from '@/common/request-header';
 import { ChainSwapsService } from '@/swaps/chain-swaps.service';
 import { CreateSwapDto } from '@/swaps/dto/create-swap.dto';
@@ -36,9 +38,11 @@ import { QuerySwapsDto } from '@/swaps/dto/query-swaps.dto';
 import { QuoteSwapDto } from '@/swaps/dto/quote-swap.dto';
 import { SubmitSwapDto } from '@/swaps/dto/submit-swap.dto';
 import {
+  ChainSwapCreatedEntity,
   ChainSwapEntity,
   ChainSwapListEntity,
   ChainSwapSubmitResultEntity,
+  SwapCreatedEntity,
   SwapEntity,
   SwapListEntity,
   SwapQuoteEntity,
@@ -68,9 +72,11 @@ const isStellar = (chain: Chain | undefined): chain is 'stellar' | undefined =>
 // /v1/cross-chain-swaps.
 @ApiTags('swaps')
 @ApiExtraModels(
+  ChainSwapCreatedEntity,
   ChainSwapEntity,
   ChainSwapListEntity,
   ChainSwapSubmitResultEntity,
+  SwapCreatedEntity,
   SwapEntity,
   SwapListEntity,
   SwapSubmitResultEntity,
@@ -162,8 +168,10 @@ export class SwapsController {
   })
   @ApiCreatedResponse({
     description:
-      'A Stellar swap (no `chain`, or `stellar`), or a Solana / Monad swap.',
-    schema: eitherOf(SwapEntity, ChainSwapEntity),
+      'A Stellar swap (no `chain`, or `stellar`), or a Solana / Monad swap. ' +
+      'With the shared public key it carries `publicToken`: send it as ' +
+      '`X-Record-Token` to read the swap or submit it.',
+    schema: eitherOf(SwapCreatedEntity, ChainSwapCreatedEntity),
   })
   @ApiErrorResponse({
     status: 400,
@@ -237,31 +245,35 @@ export class SwapsController {
   }
 
   @Get(':id')
-  // A public swap follows its own status. Still scoped to the consumer, so
-  // the shared public key reads only swaps made with it, and among those only
-  // the one whose id it holds: the cuid is the capability, as for a payment
-  // link. The list stays closed to that key.
+  // A public swap follows its own status. The shared public key is every
+  // anonymous caller and an id is not a secret, so that key also needs the
+  // swap's record token (`X-Record-Token`, handed out by create); without it
+  // the answer is the 404 of a missing swap. The list stays closed to it.
   @AllowPublicKey()
   @RequirePermissions('swaps:read')
+  @ApiRecordTokenHeader()
   @ApiOperation({
     summary: 'Get a swap by id, on any chain',
     description:
       'The shared public key may call it, so a swap made without an account ' +
-      'can follow its own status: the read is still scoped to the consumer, so ' +
-      'that key reaches only swaps made with it, and the swap id (a cuid) is ' +
-      'the capability. Listing swaps stays closed to the public key.',
+      'can follow its own status, but only with the swap’s `publicToken` in ' +
+      '`X-Record-Token`: without it, or with another swap’s, the answer is ' +
+      '404. Every other key reads its own swaps as before. Listing swaps ' +
+      'stays closed to the public key.',
   })
   @ApiOkResponse({ schema: eitherOf(SwapEntity, ChainSwapEntity) })
   async findOne(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Param('id') id: string,
+    @Req() req: Request,
   ) {
+    const token = headerValue(req, RECORD_TOKEN_HEADER);
     // Ids are unique across both tables. A miss in the Solana/Monad table
     // falls through to Stellar's, whose 404 is the one a miss always answered.
-    const chainSwap = await this.chainSwaps.findOwned(consumer, id);
+    const chainSwap = await this.chainSwaps.findOwned(consumer, id, token);
     return chainSwap
       ? this.chainSwaps.present(chainSwap)
-      : this.swaps.findOne(consumer, id);
+      : this.swaps.findOne(consumer, id, token);
   }
 
   @Post(':id/submit')
@@ -278,6 +290,8 @@ export class SwapsController {
   // resubmit cap and expiry check bound how often that can happen per swap.
   @AllowPublicKey()
   @RequirePermissions('swaps:write')
+  // With the shared public key, the swap's record token as well.
+  @ApiRecordTokenHeader()
   // A rejected broadcast costs a submission and possibly a webhook that no
   // error response refunds, and under the shared public key the client address
   // is the only thing telling anonymous callers apart.
@@ -321,8 +335,10 @@ export class SwapsController {
     @CurrentConsumer() consumer: GatewayConsumer,
     @Param('id') id: string,
     @Body() dto: SubmitSwapDto,
+    @Req() req: Request,
   ) {
-    const chainSwap = await this.chainSwaps.findOwned(consumer, id);
+    const token = headerValue(req, RECORD_TOKEN_HEADER);
+    const chainSwap = await this.chainSwaps.findOwned(consumer, id, token);
     if (chainSwap) {
       return this.chainSwaps.submit(consumer, chainSwap, dto.signedTransaction);
     }
@@ -334,6 +350,6 @@ export class SwapsController {
         'signedXdr is required for a Stellar swap',
       );
     }
-    return this.swaps.submit(consumer, id, dto.signedXdr);
+    return this.swaps.submit(consumer, id, dto.signedXdr, token);
   }
 }

@@ -32,12 +32,12 @@ export const ALLOW_PUBLIC_KEY_EXTENSION_KEY = 'x-cosmos-public-key';
  * Put it only on handlers whose response is a pure function of the request —
  * a quote, a built envelope, a public catalog, on-chain pool data. Never on one
  * that reads back what this consumer previously wrote, with one deliberate
- * exception: reading ONE row by its unguessable id (a cuid), so an anonymous
- * caller can follow what it just created (`GET /v1/swaps/{id}`,
- * `/v1/cross-chain-swaps/{id}`, `/v1/usdt0/transfers/{id}`). The id is the
- * capability, as for a payment link, and the read stays scoped to the
- * consumer. A list never qualifies: it hands every anonymous caller everyone's
- * rows.
+ * exception: ONE row by its id AND its record token, so an anonymous caller
+ * can follow what it just created (`GET /v1/swaps/{id}`,
+ * `/v1/cross-chain-swaps/{id}`, `/v1/usdt0/transfers/{id}`). An id alone is
+ * not enough, because anyone can fetch this key: the create answers
+ * `publicToken` and the read checks `X-Record-Token` (`PublicRecordTokens`).
+ * A list never qualifies: it hands every anonymous caller everyone's rows.
  *
  *   @Post('quote')
  *   @AllowPublicKey()

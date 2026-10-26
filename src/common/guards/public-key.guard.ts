@@ -11,6 +11,7 @@ import { AppConfig } from '@/config/configuration';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { ALLOW_PUBLIC_KEY } from '@/common/decorators/allow-public-key.decorator';
 import { IS_PUBLIC_KEY } from '@/common/decorators/public.decorator';
+import { isSharedPublicKey } from '@/common/shared-public-key';
 
 /**
  * Confines the shared public API key to the handlers that explicitly admit it.
@@ -65,7 +66,7 @@ export class PublicKeyGuard implements CanActivate {
 
     const request = context.switchToHttp().getRequest<Request>();
     const consumer = request.gatewayConsumer;
-    if (!consumer || !this.isPublicConsumer(consumer.username, consumer.role)) {
+    if (!consumer || !isSharedPublicKey(consumer, this.publicConsumer)) {
       return true;
     }
 
@@ -86,10 +87,5 @@ export class PublicKeyGuard implements CanActivate {
         'CosmosPay account to get your own key, which also lowers your swap ' +
         'commission below the public rate.',
     );
-  }
-
-  private isPublicConsumer(username: string, role: string | null): boolean {
-    if (role === 'public') return true;
-    return !!this.publicConsumer && username === this.publicConsumer;
   }
 }

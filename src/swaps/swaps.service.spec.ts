@@ -1,4 +1,5 @@
 import { StellarAccountLoader } from '@/stellar/account-loader.service';
+import { PublicRecordTokens } from '@/common/public-record-token';
 import { SignedTransactionRelay } from '@/stellar/signed-transaction-relay.service';
 import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
 import { HttpStatus } from '@nestjs/common';
@@ -22,6 +23,14 @@ import {
 } from '@/webhooks/webhook-events';
 import { WebhookTerminalEmitter } from '@/webhooks/webhook-terminal-emitter.service';
 import { SWAP_PUBLIC_SELECT, SwapsService } from '@/swaps/swaps.service';
+
+/** Record tokens as the app wires them; no consumer here is the shared public key. */
+const recordTokens = new PublicRecordTokens({
+  get: () => ({
+    publicConsumer: 'cosmos_public',
+    gatewaySecret: 'spec-gateway-secret-spec-gateway-secret',
+  }),
+} as never);
 
 jest.mock('qrcode', () => ({
   __esModule: true,
@@ -394,6 +403,7 @@ describe('SwapsService responses carry only the public projection', () => {
       new ConsumerResolverService(prisma as never),
       new StellarAccountLoader(stellar as never),
       new SignedTransactionRelay(stellar as never),
+      recordTokens,
     );
     return { service, prisma };
   }
@@ -462,6 +472,7 @@ describe('SwapsService.submit vs observer (issue #29 double terminal event)', ()
       new ConsumerResolverService(prisma as never),
       new StellarAccountLoader(stellar as never),
       new SignedTransactionRelay(stellar as never),
+      recordTokens,
     );
     observer = new SettlementObserverService(
       config,
@@ -819,6 +830,7 @@ describe('SwapsService.create idempotency (issue #17)', () => {
       new ConsumerResolverService(prisma as never),
       new StellarAccountLoader(stellar as never),
       new SignedTransactionRelay(stellar as never),
+      recordTokens,
     );
     jest.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000);
   });
@@ -986,6 +998,7 @@ describe('SwapsService.create idempotency (issue #17)', () => {
       new ConsumerResolverService(prisma as never),
       new StellarAccountLoader(stellar as never),
       new SignedTransactionRelay(stellar as never),
+      recordTokens,
     );
   }
 
@@ -1067,6 +1080,7 @@ describe('SettlementObserverService duplicate txHash (issue #17)', () => {
       new ConsumerResolverService(prisma as never),
       new StellarAccountLoader(stellar as never),
       new SignedTransactionRelay(stellar as never),
+      recordTokens,
     );
     observer = new SettlementObserverService(
       config,
@@ -1148,6 +1162,7 @@ describe('SwapsService platform commission fail-closed (X-Plan-Swap-Fee-Bps)', (
       new ConsumerResolverService(prisma as never),
       new StellarAccountLoader(stellar as never),
       new SignedTransactionRelay(stellar as never),
+      recordTokens,
     );
   }
 
@@ -1222,6 +1237,7 @@ describe('SwapsService.create adds the trustline the source lacks', () => {
       new ConsumerResolverService(prisma as never),
       new StellarAccountLoader(stellar as never),
       new SignedTransactionRelay(stellar as never),
+      recordTokens,
     );
     return { service, prisma, stellar };
   }

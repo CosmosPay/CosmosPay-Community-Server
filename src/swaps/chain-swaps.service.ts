@@ -17,6 +17,7 @@ import {
 } from '@/common/plan-commission';
 import { isUniqueViolation } from '@/common/prisma-errors';
 import { project } from '@/common/projection';
+import { PublicRecordTokens } from '@/common/public-record-token';
 import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
 import { resolveNetwork } from '@/common/stellar-network';
 import type { AppConfig } from '@/config/configuration';
@@ -128,6 +129,7 @@ export class ChainSwapsService {
     private readonly consumers: ConsumerResolverService,
     solana: SolanaSwapVenue,
     monad: MonadSwapVenue,
+    private readonly recordTokens: PublicRecordTokens,
   ) {
     this.venues = { solana, monad };
   }
@@ -175,8 +177,23 @@ export class ChainSwapsService {
    * second build); with a different request, 409 — and the conflict says
    * nothing about the stored swap, because on the shared public key whoever
    * reuses a key may not be who created it.
+   *
+   * On the shared public key the answer carries `publicToken`, the swap's read
+   * token (`PublicRecordTokens`), the same on a replay.
    */
   async create(
+    consumer: GatewayConsumer,
+    dto: CreateSwapDto,
+    headerIdempotencyKey?: string,
+  ): Promise<PublicChainSwap & { publicToken?: string }> {
+    return this.recordTokens.attach(
+      consumer,
+      'chain-swap',
+      await this.build(consumer, dto, headerIdempotencyKey),
+    );
+  }
+
+  private async build(
     consumer: GatewayConsumer,
     dto: CreateSwapDto,
     headerIdempotencyKey?: string,
@@ -272,9 +289,18 @@ export class ChainSwapsService {
   /**
    * The caller's Solana or Monad swap by id, or null when it has none — the
    * `/v1/swaps/{id}` routes then fall through to the Stellar table, whose 404
-   * is the one a miss has always answered.
+   * is the one a miss has always answered. The shared public key also needs
+   * the swap's record token (`recordToken`, from `X-Record-Token`); without the
+   * right one this is a miss too, decided before the table is read.
    */
-  findOwned(consumer: GatewayConsumer, id: string): Promise<ChainSwap | null> {
+  async findOwned(
+    consumer: GatewayConsumer,
+    id: string,
+    recordToken?: string,
+  ): Promise<ChainSwap | null> {
+    if (!this.recordTokens.admits(consumer, 'chain-swap', id, recordToken)) {
+      return null;
+    }
     return this.prisma.chainSwap.findFirst({
       where: { id, consumer: { apisixUsername: consumer.username } },
     });

@@ -686,15 +686,15 @@ where: { id, consumer: { apisixUsername: consumer.username } }
 | --- | --- |
 | `POST /v1/swaps/quote` | 通过 Horizon 为路径定价；结果完全由请求决定 |
 | `POST /v1/swaps` | 构建一个由调用方签名的未签名信封 |
-| `POST /v1/swaps/:id/submit` | 广播调用方签名的信封——在请求体确实是该 swap 的信封、并携带签名之前，关于这笔 swap 的任何信息，包括它的状态，都不会被回答；带有速率限制 |
+| `POST /v1/swaps/:id/submit` | 广播调用方签名的信封：在请求体确实是该 swap 的信封并携带签名、且请求发送了该 swap 的 `X-Record-Token` 之前，关于这笔 swap 的任何信息，包括它的状态，都不会被回答；带有速率限制 |
 | `GET /v1/cross-chain-swaps/assets` \| `POST /v1/cross-chain-swaps/quote` | NEAR Intents 的代币列表与试算报价；是请求的纯函数 |
 | `POST /v1/cross-chain-swaps` | 为调用方自己的资金生成充值地址；重放的 `Idempotency-Key` 仅在请求一致时才会得到响应 |
-| `POST /v1/cross-chain-swaps/:id/deposit` | 告诉 NEAR Intents 一笔由它自己在链上验证的交易；带有速率限制 |
-| `GET /v1/swaps/:id` \| `GET /v1/cross-chain-swaps/:id` | 按 id 读取单笔 swap，让没有账户发起的 swap 能跟踪自己的状态。仍限定在该消费者范围内，因此这个 key 只能读到用它发起的 swap，而 id（一个 cuid）本身就是访问权限，与支付链接相同 |
+| `POST /v1/cross-chain-swaps/:id/deposit` | 告诉 NEAR Intents 一笔由它自己在链上验证的交易；需要该 swap 的 `X-Record-Token`；带有速率限制 |
+| `GET /v1/swaps/:id` \| `GET /v1/cross-chain-swaps/:id` | 同时凭 id **和**记录 token（`X-Record-Token`，见下文）读取单笔 swap，让没有账户发起的 swap 能跟踪自己的状态；仍限定在该消费者范围内 |
 | `GET /v1/usdt0/routes` \| `POST /v1/usdt0/quote` | 路由目录与模拟报价；是请求的纯函数 |
 | `POST /v1/usdt0/transfers` | 构建一笔由调用方签名的未签名交易；重放的 `Idempotency-Key` 仅在请求一致时才会得到响应 |
-| `POST /v1/usdt0/transfers/:id/submit` | 广播调用方签名的交易，前提是先确认它属于该笔转账并携带签名；带有速率限制 |
-| `GET /v1/usdt0/transfers/:id` | 按 id 读取单笔转账，限定在该消费者范围内，与 swap 相同 |
+| `POST /v1/usdt0/transfers/:id/submit` | 广播调用方签名的交易，前提是先确认它属于该笔转账并携带签名；需要该笔转账的 `X-Record-Token`；带有速率限制 |
+| `GET /v1/usdt0/transfers/:id` | 凭 id 和记录 token 读取单笔转账，与 swap 相同 |
 | `POST /v1/liquidity-pools/deposit` \| `withdraw` | 构建未签名信封 |
 | `POST /v1/liquidity-pools/operations/:id/submit` | 广播调用方签名的信封，遵循与 swap submit 相同的检查；带有速率限制 |
 | `GET /v1/liquidity-pools` \| `/:poolId` \| `/positions` | 从 Horizon 读取的公开链上数据 |
@@ -703,7 +703,9 @@ where: { id, consumer: { apisixUsername: consumer.username } }
 | `GET /v1/assets` | 公开的资产目录 |
 | `GET /v1/aliases/resolve/:name` \| `availability/:name` \| `by-address/:address` | 解析标识的付款方正是这个 key 所服务的匿名调用方；答案完全由请求决定，且从不包含所有者的邮箱 |
 
-被拒绝的路由：`GET /v1/swaps`、`GET /v1/cross-chain-swaps`、`GET /v1/usdt0/transfers`、`GET /v1/liquidity-pools/operations{,/:id}`、`GET /v1/activity/events`、`GET /v1/activity/summary`、所有支付意图读取、所有别名所有者路由（认领、列出、添加或移除地址、释放、恢复），以及 `/v1/kyc`、`/v1/onramp`、`/v1/offramp` 和 `/v1/webhooks` 下的所有路由。没有账户的钱包改为从 Horizon 读取自己的历史记录，并凭拿到的 id 跟踪单笔 swap 或转账。
+被拒绝的路由：`GET /v1/swaps`、`GET /v1/cross-chain-swaps`、`GET /v1/usdt0/transfers`、`GET /v1/liquidity-pools/operations{,/:id}`、`GET /v1/activity/events`、`GET /v1/activity/summary`、所有支付意图读取、所有别名所有者路由（认领、列出、添加或移除地址、释放、恢复），以及 `/v1/kyc`、`/v1/onramp`、`/v1/offramp` 和 `/v1/webhooks` 下的所有路由。没有账户的钱包改为从 Horizon 读取自己的历史记录，并凭拿到的 id 和记录 token 跟踪单笔 swap 或转账。
+
+**记录 token。** 这个 key 是所有匿名访问者共用的一个消费者，而且任何人都能获取它，因此记录的 id 不是秘密，按消费者限定范围也无法把一个访问者挡在另一个访问者的 swap 之外。所以，在这个 key 上的创建（`POST /v1/swaps`、`POST /v1/cross-chain-swaps`、`POST /v1/usdt0/transfers`）会返回 `publicToken`：`base64url(HMAC-SHA256(key, "<kind>:<id>"))`，每张表一个 kind，所用的 key 由 HKDF 从 `APISIX_GATEWAY_SECRET` 派生（标签 `public-record-token v1`）。这一条记录的读取和操作（`GET /v1/swaps/{id}`、`GET /v1/cross-chain-swaps/{id}`、`GET /v1/usdt0/transfers/{id}`、`POST /v1/swaps/{id}/submit`、`POST /v1/cross-chain-swaps/{id}/deposit`、`POST /v1/usdt0/transfers/{id}/submit`）需要在 `X-Record-Token` 请求头中携带它，并以恒定时间比较；缺失或错误的 token 会在读取表之前返回与不存在的记录相同的 `404`。token 是派生的，不做存储：重放的创建返回同一个 token，而轮换 `APISIX_GATEWAY_SECRET` 会让已发出的所有 token 失效。私有 key 从不获得 token，也从不需要它。公开页面会发送这个请求头，因此网关 CORS 的 `allow_headers` 必须列出 `X-Record-Token`。
 
 **允许遥测**，这样来自没有账户的钱包的崩溃报告仍然能够送达。通过这个 key 到达的事件是匿名的（一个共享消费者），因此钱包在发送之前会去除地址、目标、金额和 txHash。
 
@@ -917,7 +919,7 @@ NEAR Intents 从输入中扣除它，报价的输出已是扣除后的净额，�
 | `POST /v1/cross-chain-swaps/quote` | `swaps:read` | 试算报价：输出、最小值、佣金；不持久化任何内容 |
 | `POST /v1/cross-chain-swaps` | `swaps:write` | 正式报价：充值地址、memo、钱包链接和二维码；支持 `Idempotency-Key` |
 | `GET /v1/cross-chain-swaps` | `swaps:read` | 该 consumer 的跨链 swap |
-| `GET /v1/cross-chain-swaps/{id}` | `swaps:read` | 单笔 swap，即观察器最后一次看到的状态（共享公共 key 也可以读取） |
+| `GET /v1/cross-chain-swaps/{id}` | `swaps:read` | 单笔 swap，即观察器最后一次看到的状态（共享公共 key 也可以读取，但需携带该 swap 的 `X-Record-Token`） |
 | `POST /v1/cross-chain-swaps/{id}/deposit` | `swaps:write` | 上报充值交易，让 NEAR Intents 无需等待其索引器即可开始 |
 ## 从 Stellar 发送 USDT0（LayerZero）
 
@@ -944,7 +946,7 @@ routes → quote → create (unsigned XDR + SEP-7 link) → the holder signs
 
 **RPC。** 所有调用都经过 Stellar 主网的 Soroban RPC，即 `STELLAR_RPC_URL_MAINNET`（默认是 Gateway.fm 的公共端点，有速率限制：生产环境请设置服务商的端点）。使用前会校验其 passphrase，连到其他网络的节点会返回 `503 misconfigured`。
 
-**限制。** Quote：每分钟 60 次；create 与 submit：各 20 次，按 consumer 和客户端地址计（`429 rate_limited`）。共享公共 key 可以调用除列表之外的所有路由。
+**限制。** Quote：每分钟 60 次；create 与 submit：各 20 次，按 consumer 和客户端地址计（`429 rate_limited`）。共享公共 key 可以调用除列表之外的所有路由；读取或提交单笔转账需要其创建时返回的 `publicToken`，以 `X-Record-Token` 发送。
 
 ### USDT0 路由
 
@@ -1353,7 +1355,7 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
 ### USDT0 转账，以及对单笔 swap 的公开读取
 
 - **`/v1/usdt0` 下的新路由**（`swaps:read` / `swaps:write`）：通过 LayerZero 的 OFT 把 USDT0 从 Stellar 发送到 21 个 EVM 网络，仅限主网。它们的作用见 [从 Stellar 发送 USDT0](#从-stellar-发送-usdt0layerzero)。现有响应均未改变。
-- **`GET /v1/swaps/{id}` 和 `GET /v1/cross-chain-swaps/{id}` 现在接受共享公共 key**，让没有账户发起的 swap 能跟踪自己的状态。读取仍限定在该消费者范围内，因此这个 key 只能读到用它发起的 swap，而 id（一个 cuid）本身就是访问权限，与支付链接相同。`GET /v1/swaps` 和 `GET /v1/cross-chain-swaps` 仍对它关闭。
+- **`GET /v1/swaps/{id}` 和 `GET /v1/cross-chain-swaps/{id}` 现在接受携带记录 token 的共享公共 key**，让没有账户发起的 swap 能跟踪自己的状态。在该 key 上，创建现在会返回 `publicToken`，而该记录的读取和操作（这两个读取、`GET /v1/usdt0/transfers/{id}`、`POST /v1/swaps/{id}/submit`、`POST /v1/cross-chain-swaps/{id}/deposit` 和 `POST /v1/usdt0/transfers/{id}/submit`）都需要在 `X-Record-Token` 中携带它，否则返回 `404`。**对使用公共 key 的钱包是破坏性变更：** swap submit 和跨链 deposit 过去仅凭 id 即可工作，现在也需要这个请求头。私有 key 不受影响，`GET /v1/swaps` 和 `GET /v1/cross-chain-swaps` 仍对公共 key 关闭。部署步骤：把 `X-Record-Token` 加入网关 CORS 的 `allow_headers`。
 - **迁移 `20261025210000_usdt0_transfers`** 创建 `usdt0_transfer` 表和 `Usdt0TransferStatus` 枚举；不改写任何数据。在新版本承接流量之前运行 `migrate deploy`。
 - **新变量 `STELLAR_RPC_URL_MAINNET`**，可选：Stellar 主网的 Soroban RPC。未设置时，服务使用 Gateway.fm 的公共端点，它有速率限制；生产环境请设置服务商的端点。
 - **`GET /v1/summary/series` 把 USDT0 转账计为 swap**，类型为新增的 `usdt0`（计入 `swaps.totals.byKind` 和每一个 swap 数字），并且现在也为流动性操作和 webhook 投递返回 `buckets`；见下方关于序列的说明。USDT0 转账目前仍不发出 webhook 事件。

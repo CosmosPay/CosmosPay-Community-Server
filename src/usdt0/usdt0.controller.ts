@@ -19,12 +19,14 @@ import {
 import type { Request } from 'express';
 import { AllowPublicKey } from '@/common/decorators/allow-public-key.decorator';
 import { ApiErrorResponse } from '@/common/decorators/api-error-response.decorator';
+import { ApiRecordTokenHeader } from '@/common/decorators/api-record-token.decorator';
 import { ApiUpstream } from '@/common/decorators/api-upstream.decorator';
 import { CurrentConsumer } from '@/common/decorators/current-consumer.decorator';
 import { RateLimit } from '@/common/decorators/rate-limit.decorator';
 import { RequirePermissions } from '@/common/decorators/require-permissions.decorator';
 import { ApiErrorCode } from '@/common/errors/api-error';
 import type { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
+import { RECORD_TOKEN_HEADER } from '@/common/public-record-token.constants';
 import { headerValue } from '@/common/request-header';
 import { CreateUsdt0TransferDto } from '@/usdt0/dto/create-usdt0-transfer.dto';
 import { QueryUsdt0TransfersDto } from '@/usdt0/dto/query-usdt0-transfers.dto';
@@ -34,6 +36,7 @@ import {
   Usdt0QuoteEntity,
   Usdt0RoutesEntity,
   Usdt0SubmitResultEntity,
+  Usdt0TransferCreatedEntity,
   Usdt0TransferEntity,
   Usdt0TransferListEntity,
 } from '@/usdt0/entities/usdt0.entity';
@@ -240,7 +243,12 @@ export class Usdt0Controller {
       'body.idempotencyKey.',
     example: 'usdt0-retry-2026-10-25-001',
   })
-  @ApiCreatedResponse({ type: Usdt0TransferEntity })
+  @ApiCreatedResponse({
+    type: Usdt0TransferCreatedEntity,
+    description:
+      'The transfer. With the shared public key it carries `publicToken`: ' +
+      'send it as `X-Record-Token` to read the transfer or submit it.',
+  })
   @ApiErrorResponse({
     status: 400,
     codes: [
@@ -352,9 +360,11 @@ export class Usdt0Controller {
   @Get('transfers/:id')
   // Refreshes a PENDING or SUBMITTED transfer from the ledger and LayerZero
   // Scan, throttled per transfer. A failure there is not the caller's: the
-  // read answers from the row, so no upstream status is documented.
+  // read answers from the row, so no upstream status is documented. The
+  // shared public key also needs the transfer's record token.
   @AllowPublicKey()
   @RequirePermissions('swaps:read')
+  @ApiRecordTokenHeader()
   @ApiOperation({
     summary:
       'Get a USDT0 transfer by id, refreshed from the Stellar ledger and LayerZero Scan',
@@ -364,16 +374,22 @@ export class Usdt0Controller {
       'once every 15 seconds per transfer, and moves it to SUBMITTED, ' +
       'DELIVERED (with `destinationTxHash`), FAILED or EXPIRED. Delivery takes ' +
       'about 27 minutes on every route: LayerZero’s verifiers wait for Stellar ' +
-      'confirmations. The shared ' +
-      'public key may call it: the transfer is still scoped to the consumer, ' +
-      'and its id is the capability.',
+      'confirmations. The shared public key may call it, but only with the ' +
+      'transfer’s `publicToken` in `X-Record-Token`: without it, or with ' +
+      'another transfer’s, the answer is 404. Every other key reads its own ' +
+      'transfers as before.',
   })
   @ApiOkResponse({ type: Usdt0TransferEntity })
   findOne(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Param('id') id: string,
+    @Req() req: Request,
   ) {
-    return this.usdt0.findOne(consumer, id);
+    return this.usdt0.findOne(
+      consumer,
+      id,
+      headerValue(req, RECORD_TOKEN_HEADER),
+    );
   }
 
   @Post('transfers/:id/submit')
@@ -381,9 +397,11 @@ export class Usdt0Controller {
   @ApiUpstream('Soroban RPC')
   // Nothing about the transfer is answered until the body is its transaction,
   // signed; reaching another anonymous caller's transfer takes its id and the
-  // transaction only its creator was handed.
+  // transaction only its creator was handed, and the shared public key also
+  // needs the transfer's record token.
   @AllowPublicKey()
   @RequirePermissions('swaps:write')
+  @ApiRecordTokenHeader()
   @RateLimit(USDT0_SUBMIT_RATE_LIMIT)
   // Advances an existing transfer; nothing new comes into existence.
   @HttpCode(HttpStatus.OK)
@@ -440,7 +458,13 @@ export class Usdt0Controller {
     @CurrentConsumer() consumer: GatewayConsumer,
     @Param('id') id: string,
     @Body() dto: SubmitUsdt0TransferDto,
+    @Req() req: Request,
   ) {
-    return this.usdt0.submit(consumer, id, dto.signedXdr);
+    return this.usdt0.submit(
+      consumer,
+      id,
+      dto.signedXdr,
+      headerValue(req, RECORD_TOKEN_HEADER),
+    );
   }
 }

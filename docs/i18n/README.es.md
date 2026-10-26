@@ -1001,15 +1001,15 @@ Accesible hoy con la key pública:
 | --- | --- |
 | `POST /v1/swaps/quote` | Cotiza un camino desde Horizon; es una función pura de la solicitud |
 | `POST /v1/swaps` | Construye un envelope sin firmar que firma quien llama |
-| `POST /v1/swaps/:id/submit` | Transmite un envelope firmado por quien llama — no se responde nada sobre el swap, ni siquiera su estado, hasta que el cuerpo sea el envelope de ese swap con al menos una firma; con límite de tasa |
+| `POST /v1/swaps/:id/submit` | Transmite un envelope firmado por quien llama: no se responde nada sobre el swap, ni siquiera su estado, hasta que el cuerpo sea el envelope de ese swap con al menos una firma y se envíe el `X-Record-Token` del swap; con límite de tasa |
 | `GET /v1/cross-chain-swaps/assets` \| `POST /v1/cross-chain-swaps/quote` | La lista de tokens de NEAR Intents y una cotización en seco; funciones puras de la solicitud |
 | `POST /v1/cross-chain-swaps` | Una dirección de depósito para los fondos de quien llama; un `Idempotency-Key` repetido solo se responde si la solicitud coincide |
-| `POST /v1/cross-chain-swaps/:id/deposit` | Indica a NEAR Intents una transacción que él mismo verifica on-chain; con límite de tasa |
-| `GET /v1/swaps/:id` \| `GET /v1/cross-chain-swaps/:id` | Un swap por su id, para que un swap hecho sin cuenta pueda seguir su propio estado. Sigue limitado al consumidor, así que la key solo alcanza los swaps hechos con ella, y el id (un cuid) es la capacidad, como en un enlace de pago |
+| `POST /v1/cross-chain-swaps/:id/deposit` | Indica a NEAR Intents una transacción que él mismo verifica on-chain; requiere el `X-Record-Token` del swap; con límite de tasa |
+| `GET /v1/swaps/:id` \| `GET /v1/cross-chain-swaps/:id` | Un swap por su id Y su token de registro (`X-Record-Token`, ver más abajo), para que un swap hecho sin cuenta pueda seguir su propio estado; sigue limitado al consumidor |
 | `GET /v1/usdt0/routes` \| `POST /v1/usdt0/quote` | El catálogo de rutas y una cotización simulada; funciones puras de la solicitud |
 | `POST /v1/usdt0/transfers` | Construye una transacción sin firmar que firma quien llama; un `Idempotency-Key` repetido solo se responde si la solicitud coincide |
-| `POST /v1/usdt0/transfers/:id/submit` | Transmite una transacción firmada por quien llama, después de comprobar que es la de esa transferencia y que lleva una firma; con límite de tasa |
-| `GET /v1/usdt0/transfers/:id` | Una transferencia por su id, limitada al consumidor, como en un swap |
+| `POST /v1/usdt0/transfers/:id/submit` | Transmite una transacción firmada por quien llama, después de comprobar que es la de esa transferencia y que lleva una firma; requiere el `X-Record-Token` de la transferencia; con límite de tasa |
+| `GET /v1/usdt0/transfers/:id` | Una transferencia por su id y su token de registro, como en un swap |
 | `POST /v1/liquidity-pools/deposit` \| `withdraw` | Construyen envelopes sin firmar |
 | `POST /v1/liquidity-pools/operations/:id/submit` | Transmite un envelope firmado por quien llama, bajo las mismas verificaciones que el submit de swaps; con límite de tasa |
 | `GET /v1/liquidity-pools` \| `/:poolId` \| `/positions` | Datos públicos on-chain leídos desde Horizon |
@@ -1024,7 +1024,25 @@ Rechazadas: `GET /v1/swaps`, `GET /v1/cross-chain-swaps`, `GET /v1/usdt0/transfe
 propietario de alias (reclamar, listar, agregar o quitar una dirección, liberar,
 recuperar), y todo lo que está bajo `/v1/kyc`, `/v1/onramp`, `/v1/offramp` y
 `/v1/webhooks`. Una wallet sin cuenta lee su historial desde Horizon, y sigue un
-swap o una transferencia por el id que se le entregó.
+swap o una transferencia por el id y el token de registro que se le entregaron.
+
+**Tokens de registro.** Esta key es un único consumidor para todos los visitantes
+anónimos y cualquiera puede obtenerla, así que el id de un registro no es un secreto,
+y limitar al consumidor no deja a un visitante fuera del swap de otro. Por eso, un
+create con esta key (`POST /v1/swaps`, `POST /v1/cross-chain-swaps`,
+`POST /v1/usdt0/transfers`) responde `publicToken`:
+`base64url(HMAC-SHA256(key, "<kind>:<id>"))`, un tipo por tabla, con una clave
+derivada con HKDF de `APISIX_GATEWAY_SECRET` (etiqueta `public-record-token v1`). Las
+lecturas y acciones de ese registro (`GET /v1/swaps/{id}`,
+`GET /v1/cross-chain-swaps/{id}`, `GET /v1/usdt0/transfers/{id}`,
+`POST /v1/swaps/{id}/submit`, `POST /v1/cross-chain-swaps/{id}/deposit`,
+`POST /v1/usdt0/transfers/{id}/submit`) lo requieren en el header `X-Record-Token`,
+comparado en tiempo constante; un token ausente o incorrecto responde el mismo `404`
+que un registro que no existe, antes de leer la tabla. El token se deriva, no se
+almacena: un create repetido responde el mismo, y rotar `APISIX_GATEWAY_SECRET`
+invalida todos los tokens entregados. Las keys reales nunca reciben uno ni lo
+necesitan. Una página pública envía el header, así que `allow_headers` del CORS del
+gateway debe incluir `X-Record-Token`.
 
 **La telemetría está permitida** para que sigan llegando los reportes de fallos de las
 wallets sin cuenta. Los eventos que llegan con esta key son anónimos (un único
@@ -1388,7 +1406,7 @@ consumidor y dirección de cliente (`429 rate_limited`).
 | `POST /v1/cross-chain-swaps/quote` | `swaps:read` | Una cotización en seco: salida, mínimo, comisión; no persiste nada |
 | `POST /v1/cross-chain-swaps` | `swaps:write` | Una cotización en vivo: dirección de depósito, memo, enlace de billetera y QR; admite `Idempotency-Key` |
 | `GET /v1/cross-chain-swaps` | `swaps:read` | Los swaps entre redes del consumidor |
-| `GET /v1/cross-chain-swaps/{id}` | `swaps:read` | Un swap, tal como lo vio el observador por última vez (la key pública compartida también puede leerlo) |
+| `GET /v1/cross-chain-swaps/{id}` | `swaps:read` | Un swap, tal como lo vio el observador por última vez (la key pública compartida también, con el `X-Record-Token` del swap) |
 | `POST /v1/cross-chain-swaps/{id}/deposit` | `swaps:write` | Informar la transacción de depósito para que NEAR Intents empiece sin esperar a su indexador |
 ## USDT0 desde Stellar (LayerZero)
 
@@ -1470,7 +1488,8 @@ comprueba antes de usarlo, y un nodo de otra red responde `503 misconfigured`.
 
 **Límites.** Quote: 60 llamadas por minuto; create y submit: 20 cada una, por
 consumidor y dirección de cliente (`429 rate_limited`). La key pública compartida
-puede llamar a todas las rutas excepto al listado.
+puede llamar a todas las rutas excepto al listado; leer o transmitir una transferencia
+requiere el `publicToken` que respondió su create, enviado como `X-Record-Token`.
 
 ### Rutas de USDT0
 
@@ -2116,10 +2135,16 @@ misma lista `PLUGINS_ENABLED` que los plugins aislados.
   está en [USDT0 desde Stellar](#usdt0-desde-stellar-layerzero). Ninguna respuesta
   existente cambió.
 - **`GET /v1/swaps/{id}` y `GET /v1/cross-chain-swaps/{id}` ahora admiten la key
-  pública compartida**, para que un swap hecho sin cuenta pueda seguir su propio
-  estado. La lectura sigue limitada al consumidor, así que esa key solo alcanza los
-  swaps hechos con ella, y el id (un cuid) es la capacidad, como en un enlace de pago.
-  `GET /v1/swaps` y `GET /v1/cross-chain-swaps` le siguen cerradas.
+  pública compartida, con un token de registro**, para que un swap hecho sin cuenta
+  pueda seguir su propio estado. Un create con esa key ahora responde `publicToken`, y
+  con esa key las lecturas y acciones del registro (estas dos lecturas,
+  `GET /v1/usdt0/transfers/{id}`, `POST /v1/swaps/{id}/submit`,
+  `POST /v1/cross-chain-swaps/{id}/deposit` y `POST /v1/usdt0/transfers/{id}/submit`)
+  lo requieren en `X-Record-Token`, o responden `404`. **Incompatible para las wallets
+  con la key pública:** el submit de swaps y el depósito entre redes funcionaban solo
+  con el id y ahora también requieren el header. Las keys reales no se ven afectadas,
+  y `GET /v1/swaps` y `GET /v1/cross-chain-swaps` siguen cerradas a la key pública.
+  Paso de despliegue: agrega `X-Record-Token` a `allow_headers` del CORS del gateway.
 - **La migración `20261025210000_usdt0_transfers`** crea la tabla `usdt0_transfer` y
   el enum `Usdt0TransferStatus`; no se reescribe nada. Ejecuta `migrate deploy` antes
   de que el build nuevo sirva tráfico.

@@ -4,6 +4,7 @@ import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { AppModule } from '@/app.module';
 import { AllExceptionsFilter } from '@/common/filters/all-exceptions.filter';
+import { recordToken, recordTokenKey } from '@/common/public-record-token';
 import { PrismaService } from '@/prisma/prisma.service';
 import { SorobanRpcClient } from '@/stellar/soroban-rpc.client';
 import { LayerZeroScanClient } from '@/usdt0/layerzero-scan.client';
@@ -250,8 +251,13 @@ describe('USDT0 guards (e2e)', () => {
       await publicKey(ROUTES).expect(200);
     });
 
-    it(`reaches ${label(GET_ONE)}, scoped to the public consumer (404 otherwise)`, async () => {
-      const res = await publicKey(GET_ONE).expect(404);
+    it(`reaches ${label(GET_ONE)} with the transfer's record token, scoped to the public consumer`, async () => {
+      const res = await publicKey(GET_ONE)
+        .set(
+          'X-Record-Token',
+          recordToken(recordTokenKey(SECRET), 'usdt0-transfer', TRANSFER_ID),
+        )
+        .expect(404);
       expect(res.body.code).toBe('not_found');
       expect(prismaMock.usdt0Transfer.findFirst).toHaveBeenCalledWith({
         where: {
@@ -259,6 +265,12 @@ describe('USDT0 guards (e2e)', () => {
           consumer: { apisixUsername: 'cosmos_wallet' },
         },
       });
+    });
+
+    it(`refuses ${label(GET_ONE)} without the record token, before any transfer is read (404)`, async () => {
+      const res = await publicKey(GET_ONE).expect(404);
+      expect(res.body.code).toBe('not_found');
+      expect(prismaMock.usdt0Transfer.findFirst).not.toHaveBeenCalled();
     });
 
     it(`is refused ${label(LIST)} before any transfer is read (403)`, async () => {

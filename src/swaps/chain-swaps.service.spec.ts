@@ -1,4 +1,5 @@
 import { ConfigService } from '@nestjs/config';
+import { PublicRecordTokens } from '@/common/public-record-token';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import type { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import type { AdvisoryLockService } from '@/common/services/advisory-lock.service';
@@ -10,6 +11,14 @@ import type { CreateSwapDto } from '@/swaps/dto/create-swap.dto';
 import type { MonadSwapVenue } from '@/swaps/venues/monad-swap.venue';
 import type { SolanaSwapVenue } from '@/swaps/venues/solana-swap.venue';
 import type { WebhookTerminalEmitter } from '@/webhooks/webhook-terminal-emitter.service';
+
+/** Record tokens as the app wires them; no consumer here is the shared public key. */
+const recordTokens = new PublicRecordTokens({
+  get: () => ({
+    publicConsumer: 'cosmos_public',
+    gatewaySecret: 'spec-gateway-secret-spec-gateway-secret',
+  }),
+} as never);
 
 const SOURCE = '13QkxhNMrTPxoCkRdYdJ65tFuwXPhL5gLS2Z5Nr6gjRK';
 const USDC = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
@@ -139,6 +148,7 @@ function setup(feeWallet = 'FeeWa11et1111111111111111111111111111111111') {
     } as unknown as ConsumerResolverService,
     solana as unknown as SolanaSwapVenue,
     {} as unknown as MonadSwapVenue,
+    recordTokens,
   );
   return { service, rows, webhooks, solana, prisma, config };
 }

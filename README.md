@@ -967,15 +967,15 @@ Reachable with the public key today:
 | --- | --- |
 | `POST /v1/swaps/quote` | Prices a path from Horizon; a pure function of the request |
 | `POST /v1/swaps` | Builds an unsigned envelope the caller signs |
-| `POST /v1/swaps/:id/submit` | Broadcasts a caller-signed envelope — nothing about the swap, not even its status, is answered until the body is that swap's envelope carrying a signature; rate limited |
+| `POST /v1/swaps/:id/submit` | Broadcasts a caller-signed envelope: nothing about the swap, not even its status, is answered until the body is that swap's envelope carrying a signature, and the swap's `X-Record-Token` is sent; rate limited |
 | `GET /v1/cross-chain-swaps/assets` \| `POST /v1/cross-chain-swaps/quote` | NEAR Intents' token list and a dry quote; pure functions of the request |
 | `POST /v1/cross-chain-swaps` | A deposit address for the caller's own funds; a replayed `Idempotency-Key` is answered only when the request matches |
-| `POST /v1/cross-chain-swaps/:id/deposit` | Points NEAR Intents at a transaction it verifies on-chain itself; rate limited |
-| `GET /v1/swaps/:id` \| `GET /v1/cross-chain-swaps/:id` | One swap by its id, so a swap made without an account can follow its own status. Still scoped to the consumer, so the key reaches only swaps made with it, and the id (a cuid) is the capability, as for a payment link |
+| `POST /v1/cross-chain-swaps/:id/deposit` | Points NEAR Intents at a transaction it verifies on-chain itself; needs the swap's `X-Record-Token`; rate limited |
+| `GET /v1/swaps/:id` \| `GET /v1/cross-chain-swaps/:id` | One swap by its id AND its record token (`X-Record-Token`, see below), so a swap made without an account can follow its own status; still scoped to the consumer |
 | `GET /v1/usdt0/routes` \| `POST /v1/usdt0/quote` | The route catalogue and a simulated quote; pure functions of the request |
 | `POST /v1/usdt0/transfers` | Builds an unsigned transaction the caller signs; a replayed `Idempotency-Key` is answered only when the request matches |
-| `POST /v1/usdt0/transfers/:id/submit` | Broadcasts a caller-signed transaction, after checking it is that transfer's and carries a signature; rate limited |
-| `GET /v1/usdt0/transfers/:id` | One transfer by its id, scoped to the consumer, as for a swap |
+| `POST /v1/usdt0/transfers/:id/submit` | Broadcasts a caller-signed transaction, after checking it is that transfer's and carries a signature; needs the transfer's `X-Record-Token`; rate limited |
+| `GET /v1/usdt0/transfers/:id` | One transfer by its id and its record token, as for a swap |
 | `POST /v1/liquidity-pools/deposit` \| `withdraw` | Build unsigned envelopes |
 | `POST /v1/liquidity-pools/operations/:id/submit` | Broadcasts a caller-signed envelope, under the same checks as swap submit; rate limited |
 | `GET /v1/liquidity-pools` \| `/:poolId` \| `/positions` | Public on-chain data read from Horizon |
@@ -990,7 +990,23 @@ Refused: `GET /v1/swaps`, `GET /v1/cross-chain-swaps`, `GET /v1/usdt0/transfers`
 (claim, list, add or remove an address, release, recovery), and everything under
 `/v1/kyc`, `/v1/onramp`, `/v1/offramp` and `/v1/webhooks`. A wallet without an
 account reads its history from Horizon instead, and follows one swap or transfer
-by the id it was handed.
+by the id and the record token it was handed.
+
+**Record tokens.** This key is one consumer for every anonymous visitor and anyone
+can fetch it, so a record id is not a secret, and scoping by consumer does not keep
+one visitor out of another's swap. So a create on this key (`POST /v1/swaps`,
+`POST /v1/cross-chain-swaps`, `POST /v1/usdt0/transfers`) answers `publicToken`:
+`base64url(HMAC-SHA256(key, "<kind>:<id>"))`, one kind per table, under a key derived
+with HKDF from `APISIX_GATEWAY_SECRET` (label `public-record-token v1`). The reads and
+actions of that one record (`GET /v1/swaps/{id}`, `GET /v1/cross-chain-swaps/{id}`,
+`GET /v1/usdt0/transfers/{id}`, `POST /v1/swaps/{id}/submit`,
+`POST /v1/cross-chain-swaps/{id}/deposit`, `POST /v1/usdt0/transfers/{id}/submit`)
+need it in the `X-Record-Token` header, compared in constant time; a missing or wrong
+token answers the same `404` as a record that does not exist, before the table is
+read. The token is derived, not stored: a replayed create answers the same one, and
+rotating `APISIX_GATEWAY_SECRET` invalidates every token handed out. Real keys never
+get one and never need one. A public page sends the header, so the gateway's CORS
+`allow_headers` must list `X-Record-Token`.
 
 **Telemetry is allowed** so crash reports from wallets without an account still
 arrive. Events on this key are anonymous (one shared consumer), so the wallet
@@ -1336,7 +1352,7 @@ client address (`429 rate_limited`).
 | `POST /v1/cross-chain-swaps/quote` | `swaps:read` | A dry quote: output, minimum, commission; persists nothing |
 | `POST /v1/cross-chain-swaps` | `swaps:write` | A live quote: deposit address, memo, wallet link and QR; `Idempotency-Key` supported |
 | `GET /v1/cross-chain-swaps` | `swaps:read` | The consumer's cross-chain swaps |
-| `GET /v1/cross-chain-swaps/{id}` | `swaps:read` | One swap, as the observer last saw it (the shared public key may read it too) |
+| `GET /v1/cross-chain-swaps/{id}` | `swaps:read` | One swap, as the observer last saw it (the shared public key too, with the swap's `X-Record-Token`) |
 | `POST /v1/cross-chain-swaps/{id}/deposit` | `swaps:write` | Report the deposit transaction so NEAR Intents starts without waiting for its indexer |
 ## USDT0 from Stellar (LayerZero)
 
@@ -1413,7 +1429,8 @@ node on another network answers `503 misconfigured`.
 
 **Limits.** Quote: 60 calls a minute; create and submit: 20 each, per consumer and
 client address (`429 rate_limited`). The shared public key may call every route except
-the list.
+the list; reading or submitting one transfer takes the `publicToken` its create
+answered, sent as `X-Record-Token`.
 
 ### USDT0 routes
 
@@ -2038,10 +2055,15 @@ the service under `src/native-plugins/<slug>/`, switched on by the same
   under [USDT0 from Stellar](#usdt0-from-stellar-layerzero). No existing response
   changed.
 - **`GET /v1/swaps/{id}` and `GET /v1/cross-chain-swaps/{id}` now admit the shared
-  public key**, so a swap made without an account can follow its own status. The read
-  stays scoped to the consumer, so that key reaches only swaps made with it, and the id
-  (a cuid) is the capability, as for a payment link. `GET /v1/swaps` and
-  `GET /v1/cross-chain-swaps` stay closed to it.
+  public key, with a record token**, so a swap made without an account can follow its
+  own status. A create on that key now answers `publicToken`, and on that key the
+  record's reads and actions (these two reads, `GET /v1/usdt0/transfers/{id}`,
+  `POST /v1/swaps/{id}/submit`, `POST /v1/cross-chain-swaps/{id}/deposit` and
+  `POST /v1/usdt0/transfers/{id}/submit`) need it in `X-Record-Token`, or answer `404`.
+  **Breaking for wallets on the public key:** swap submit and cross-chain deposit used
+  to work with the id alone and now need the header too. Real keys are unaffected, and
+  `GET /v1/swaps` and `GET /v1/cross-chain-swaps` stay closed to the public key. Deploy
+  step: add `X-Record-Token` to the gateway's CORS `allow_headers`.
 - **Migration `20261025210000_usdt0_transfers`** creates the `usdt0_transfer` table and
   the `Usdt0TransferStatus` enum; nothing is rewritten. Run `migrate deploy` before the
   new build serves traffic.

@@ -964,15 +964,15 @@ where: { id, consumer: { apisixUsername: consumer.username } }
 | --- | --- |
 | `POST /v1/swaps/quote` | Horizon से path की कीमत निकालता है; यह request का शुद्ध function है |
 | `POST /v1/swaps` | एक unsigned envelope बनाता है जिसे caller sign करता है |
-| `POST /v1/swaps/:id/submit` | caller द्वारा signed envelope broadcast करता है — swap के बारे में कुछ भी, यहाँ तक कि उसकी status भी, तब तक नहीं बताया जाता जब तक body उसी swap का envelope न हो जिस पर signature हो; rate limited |
+| `POST /v1/swaps/:id/submit` | caller द्वारा signed envelope broadcast करता है: swap के बारे में कुछ भी, यहाँ तक कि उसकी status भी, तब तक नहीं बताया जाता जब तक body उसी swap का envelope न हो जिस पर signature हो, और swap का `X-Record-Token` न भेजा जाए; rate limited |
 | `GET /v1/cross-chain-swaps/assets` \| `POST /v1/cross-chain-swaps/quote` | NEAR Intents की token list और एक dry quote; request के शुद्ध functions |
 | `POST /v1/cross-chain-swaps` | Caller के अपने funds के लिए एक deposit address; दोहराया गया `Idempotency-Key` तभी जवाब पाता है जब request मेल खाए |
-| `POST /v1/cross-chain-swaps/:id/deposit` | NEAR Intents को एक transaction दिखाता है जिसे वह खुद on-chain verify करता है; rate limited |
-| `GET /v1/swaps/:id` \| `GET /v1/cross-chain-swaps/:id` | अपनी id से एक swap, ताकि बिना account के बना swap अपनी status पर नज़र रख सके। यह अब भी consumer तक सीमित है, इसलिए key सिर्फ़ उन्हीं swaps तक पहुँचती है जो उससे बने, और id (एक cuid) ही capability है, जैसे payment link के लिए |
+| `POST /v1/cross-chain-swaps/:id/deposit` | NEAR Intents को एक transaction दिखाता है जिसे वह खुद on-chain verify करता है; swap का `X-Record-Token` चाहिए; rate limited |
+| `GET /v1/swaps/:id` \| `GET /v1/cross-chain-swaps/:id` | एक swap, उसकी id **और** उसके record token (`X-Record-Token`, नीचे देखें) दोनों से, ताकि बिना account के बना swap अपनी status पर नज़र रख सके; अब भी consumer तक सीमित |
 | `GET /v1/usdt0/routes` \| `POST /v1/usdt0/quote` | Route catalogue और एक simulated quote; request के शुद्ध functions |
 | `POST /v1/usdt0/transfers` | एक unsigned transaction बनाता है जिसे caller sign करता है; दोहराया गया `Idempotency-Key` तभी जवाब पाता है जब request मेल खाए |
-| `POST /v1/usdt0/transfers/:id/submit` | caller द्वारा signed transaction broadcast करता है, यह जाँचने के बाद कि वह उसी transfer का है और उस पर signature है; rate limited |
-| `GET /v1/usdt0/transfers/:id` | अपनी id से एक transfer, consumer तक सीमित, जैसे swap के लिए |
+| `POST /v1/usdt0/transfers/:id/submit` | caller द्वारा signed transaction broadcast करता है, यह जाँचने के बाद कि वह उसी transfer का है और उस पर signature है; transfer का `X-Record-Token` चाहिए; rate limited |
+| `GET /v1/usdt0/transfers/:id` | एक transfer, उसकी id और उसके record token से, जैसे swap के लिए |
 | `POST /v1/liquidity-pools/deposit` \| `withdraw` | unsigned envelopes बनाते हैं |
 | `POST /v1/liquidity-pools/operations/:id/submit` | caller द्वारा signed envelope broadcast करता है, swap submit जैसी ही जाँच के तहत; rate limited |
 | `GET /v1/liquidity-pools` \| `/:poolId` \| `/positions` | Horizon से पढ़ा गया सार्वजनिक on-chain डेटा |
@@ -986,8 +986,25 @@ where: { id, consumer: { apisixUsername: consumer.username } }
 `GET /v1/activity/summary`, हर payment-intent read, alias मालिक का हर रूट
 (claim, list, पता जोड़ना या हटाना, release, recovery), और
 `/v1/kyc`, `/v1/onramp`, `/v1/offramp` और `/v1/webhooks` के अंतर्गत सब कुछ। बिना
-account वाला वॉलेट अपना इतिहास इसके बजाय Horizon से पढ़ता है, और जो id उसे दी गई
-थी उससे एक swap या transfer का पीछा करता है।
+account वाला वॉलेट अपना इतिहास इसके बजाय Horizon से पढ़ता है, और जो id और record
+token उसे दिए गए थे उनसे एक swap या transfer का पीछा करता है।
+
+**Record tokens।** यह key हर anonymous visitor के लिए एक ही consumer है और कोई भी इसे
+fetch कर सकता है, इसलिए किसी record की id secret नहीं है, और consumer के आधार पर सीमित
+करना एक visitor को दूसरे के swap से बाहर नहीं रखता। इसलिए इस key पर create
+(`POST /v1/swaps`, `POST /v1/cross-chain-swaps`, `POST /v1/usdt0/transfers`)
+`publicToken` लौटाता है: `base64url(HMAC-SHA256(key, "<kind>:<id>"))`, हर table के लिए
+एक kind, एक ऐसी key के तहत जो `APISIX_GATEWAY_SECRET` से HKDF द्वारा derive की जाती है
+(label `public-record-token v1`)। उसी एक record के reads और actions
+(`GET /v1/swaps/{id}`, `GET /v1/cross-chain-swaps/{id}`, `GET /v1/usdt0/transfers/{id}`,
+`POST /v1/swaps/{id}/submit`, `POST /v1/cross-chain-swaps/{id}/deposit`,
+`POST /v1/usdt0/transfers/{id}/submit`) को यह `X-Record-Token` header में चाहिए, जिसकी
+तुलना constant time में की जाती है; token न हो या गलत हो, तो table पढ़े जाने से पहले
+वही `404` मिलता है जो ऐसे record पर मिलता है जो मौजूद नहीं है। Token derive किया जाता
+है, store नहीं: दोहराया गया create वही token लौटाता है, और `APISIX_GATEWAY_SECRET`
+rotate करने से अब तक दिया गया हर token अमान्य हो जाता है। Private keys को न कभी token
+मिलता है, न कभी उसकी ज़रूरत होती है। Public page यह header भेजता है, इसलिए gateway के
+CORS `allow_headers` में `X-Record-Token` होना चाहिए।
 
 **Telemetry की अनुमति है** ताकि बिना account वाले वॉलेट की crash reports भी पहुँचें।
 इस key पर आने वाले events anonymous होते हैं (एक साझा consumer), इसलिए वॉलेट भेजने से
@@ -1333,7 +1350,7 @@ client address (`429 rate_limited`)।
 | `POST /v1/cross-chain-swaps/quote` | `swaps:read` | एक dry quote: आउटपुट, minimum, commission; कुछ भी persist नहीं करता |
 | `POST /v1/cross-chain-swaps` | `swaps:write` | एक live quote: deposit address, memo, wallet link और QR; `Idempotency-Key` समर्थित |
 | `GET /v1/cross-chain-swaps` | `swaps:read` | Consumer के क्रॉस-चेन swaps |
-| `GET /v1/cross-chain-swaps/{id}` | `swaps:read` | एक swap, जैसा observer ने उसे आख़िरी बार देखा (साझा public key भी इसे पढ़ सकती है) |
+| `GET /v1/cross-chain-swaps/{id}` | `swaps:read` | एक swap, जैसा observer ने उसे आख़िरी बार देखा (साझा public key भी, swap के `X-Record-Token` के साथ) |
 | `POST /v1/cross-chain-swaps/{id}/deposit` | `swaps:write` | Deposit transaction की सूचना दें ताकि NEAR Intents अपने indexer का इंतज़ार किए बिना शुरू करे |
 ## Stellar से USDT0 (LayerZero)
 
@@ -1411,7 +1428,9 @@ characters का बना देता है, जो एक QR code में
 network का node `503 misconfigured` लौटाता है।
 
 **Limits.** Quote: प्रति मिनट 60 calls; create और submit: 20-20, प्रति consumer और client
-address (`429 rate_limited`)। साझा public key list को छोड़कर हर route call कर सकती है।
+address (`429 rate_limited`)। साझा public key list को छोड़कर हर route call कर सकती है;
+किसी एक transfer को पढ़ने या submit करने के लिए वह `publicToken` चाहिए जो उसके create ने
+लौटाया था, `X-Record-Token` के रूप में भेजा गया।
 
 ### USDT0 रूट्स
 
@@ -2028,11 +2047,16 @@ seal होती हैं और कभी लौटाई नहीं जा
   ज़रिए Stellar से 21 EVM networks तक भेजा गया USDT0, सिर्फ़ mainnet। ये क्या करते हैं,
   यह [Stellar से USDT0](#stellar-से-usdt0-layerzero) में है। कोई मौजूदा response नहीं
   बदला।
-- **`GET /v1/swaps/{id}` और `GET /v1/cross-chain-swaps/{id}` अब साझा public key को
-  स्वीकार करते हैं**, ताकि बिना account के बना swap अपनी status पर नज़र रख सके। Read
-  consumer तक सीमित रहता है, इसलिए वह key सिर्फ़ उन्हीं swaps तक पहुँचती है जो उससे बने,
-  और id (एक cuid) ही capability है, जैसे payment link के लिए। `GET /v1/swaps` और
-  `GET /v1/cross-chain-swaps` उसके लिए बंद रहते हैं।
+- **`GET /v1/swaps/{id}` और `GET /v1/cross-chain-swaps/{id}` अब साझा public key को,
+  record token के साथ, स्वीकार करते हैं**, ताकि बिना account के बना swap अपनी status पर
+  नज़र रख सके। उस key पर create अब `publicToken` लौटाता है, और उस key पर record के reads
+  और actions (ये दोनों reads, `GET /v1/usdt0/transfers/{id}`, `POST /v1/swaps/{id}/submit`,
+  `POST /v1/cross-chain-swaps/{id}/deposit` और `POST /v1/usdt0/transfers/{id}/submit`)
+  को यह `X-Record-Token` में चाहिए, वरना वे `404` लौटाते हैं। **Public key पर चलने वाले
+  wallets के लिए breaking:** swap submit और क्रॉस-चेन deposit पहले सिर्फ़ id से काम करते
+  थे और अब उन्हें header भी चाहिए। Private keys पर कोई असर नहीं है, और `GET /v1/swaps`
+  और `GET /v1/cross-chain-swaps` public key के लिए बंद रहते हैं। Deploy step: gateway के
+  CORS `allow_headers` में `X-Record-Token` जोड़ें।
 - **Migration `20261025210000_usdt0_transfers`** `usdt0_transfer` table और
   `Usdt0TransferStatus` enum बनाता है; कुछ भी दोबारा नहीं लिखा जाता। नए build के traffic
   serve करने से पहले `migrate deploy` चलाएँ।

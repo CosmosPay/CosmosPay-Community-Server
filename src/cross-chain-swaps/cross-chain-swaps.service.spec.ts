@@ -1,4 +1,5 @@
 import { ConfigService } from '@nestjs/config';
+import { PublicRecordTokens } from '@/common/public-record-token';
 import { Keypair } from '@stellar/stellar-sdk';
 import QRCode from 'qrcode';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
@@ -13,6 +14,14 @@ import type {
 import type { PrismaService } from '@/prisma/prisma.service';
 import type { StellarAccountLoader } from '@/stellar/account-loader.service';
 import type { WebhookTerminalEmitter } from '@/webhooks/webhook-terminal-emitter.service';
+
+/** Record tokens as the app wires them; no consumer here is the shared public key. */
+const recordTokens = new PublicRecordTokens({
+  get: () => ({
+    publicConsumer: 'cosmos_public',
+    gatewaySecret: 'spec-gateway-secret-spec-gateway-secret',
+  }),
+} as never);
 
 jest.mock('qrcode', () => ({
   __esModule: true,
@@ -241,6 +250,7 @@ function setup(
     consumers as unknown as ConsumerResolverService,
     nearIntents as unknown as NearIntentsClient,
     accounts as unknown as StellarAccountLoader,
+    recordTokens,
   );
   return { service, rows, webhooks, nearIntents, accounts };
 }

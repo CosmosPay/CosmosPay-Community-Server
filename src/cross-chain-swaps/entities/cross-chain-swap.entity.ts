@@ -1,4 +1,5 @@
 import { ApiProperty, OmitType } from '@nestjs/swagger';
+import { ApiPublicTokenProperty } from '@/common/decorators/api-record-token.decorator';
 import { CrossChainSwapStatus } from '@generated/prisma/client';
 import {
   CROSS_CHAIN_NETWORK_IDS,
@@ -303,6 +304,12 @@ export class CrossChainSwapEntity {
 }
 
 /** A swap as the list returns it — without the derived QR. */
+/** What `POST /v1/cross-chain-swaps` answers: the swap, and its read token. */
+export class CrossChainSwapCreatedEntity extends CrossChainSwapEntity {
+  @ApiPublicTokenProperty()
+  publicToken?: string;
+}
+
 export class CrossChainSwapListItem extends OmitType(CrossChainSwapEntity, [
   'qr',
 ] as const) {}

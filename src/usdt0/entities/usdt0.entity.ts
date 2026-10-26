@@ -1,6 +1,7 @@
 import { ApiProperty, OmitType } from '@nestjs/swagger';
 import { Usdt0TransferStatus } from '@generated/prisma/client';
 import { USDT0_CHAIN_IDS } from '@/usdt0/usdt0.constants';
+import { ApiPublicTokenProperty } from '@/common/decorators/api-record-token.decorator';
 
 /** USDT0 on Stellar: the classic asset and its Stellar Asset Contract. */
 export class Usdt0TokenEntity {
@@ -342,6 +343,12 @@ export class Usdt0TransferEntity {
 
   @ApiProperty({ example: '2026-10-25T12:00:00.000Z' })
   updatedAt!: Date;
+}
+
+/** What `POST /v1/usdt0/transfers` answers: the transfer, and its read token. */
+export class Usdt0TransferCreatedEntity extends Usdt0TransferEntity {
+  @ApiPublicTokenProperty()
+  publicToken?: string;
 }
 
 /**

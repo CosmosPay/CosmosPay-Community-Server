@@ -13,6 +13,7 @@ import { resolvePlanCommissionBps } from '@/common/plan-commission';
 import { isUniqueViolation } from '@/common/prisma-errors';
 import { resolveNetwork } from '@/common/stellar-network';
 import { project } from '@/common/projection';
+import { PublicRecordTokens } from '@/common/public-record-token';
 import { PrismaService } from '@/prisma/prisma.service';
 import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
 import { StellarAccountLoader } from '@/stellar/account-loader.service';
@@ -171,6 +172,7 @@ export class SwapsService {
     private readonly consumers: ConsumerResolverService,
     private readonly accounts: StellarAccountLoader,
     private readonly relay: SignedTransactionRelay,
+    private readonly recordTokens: PublicRecordTokens,
   ) {}
 
   // ── Quote ───────────────────────────────────────────────────────────────────
@@ -204,8 +206,24 @@ export class SwapsService {
    * non-expired PENDING swap for the same `(consumer, source, network)` with 409
    * — but only one that may already have settled; see
    * {@link assertNoInflightSwap}.
+   *
+   * On the shared public key the answer carries `publicToken`, the swap's
+   * read token (`PublicRecordTokens`): derived from its id, so a replay answers
+   * the same one.
    */
   async create(
+    consumer: GatewayConsumer,
+    dto: CreateSwapDto,
+    headerIdempotencyKey?: string,
+  ): Promise<SwapView & { publicToken?: string }> {
+    return this.recordTokens.attach(
+      consumer,
+      'swap',
+      await this.build(consumer, dto, headerIdempotencyKey),
+    );
+  }
+
+  private async build(
     consumer: GatewayConsumer,
     dto: CreateSwapDto,
     headerIdempotencyKey?: string,
@@ -558,8 +576,17 @@ export class SwapsService {
   }
 
   // ── Read (one) ──────────────────────────────────────────────────────────────
-  async findOne(consumer: GatewayConsumer, id: string): Promise<SwapView> {
-    const swap = await this.findOwned(consumer, id);
+  /**
+   * One swap. On the shared public key it takes the swap's `X-Record-Token`
+   * (`recordToken`); without the right one it is the 404 of a swap that does
+   * not exist.
+   */
+  async findOne(
+    consumer: GatewayConsumer,
+    id: string,
+    recordToken?: string,
+  ): Promise<SwapView> {
+    const swap = await this.findOwned(consumer, id, recordToken);
     return this.withQr(swap);
   }
 
@@ -578,8 +605,9 @@ export class SwapsService {
     consumer: GatewayConsumer,
     id: string,
     signedXdr: string,
+    recordToken?: string,
   ): Promise<SwapSubmitOutcome> {
-    const swap = await this.findOwned(consumer, id);
+    const swap = await this.findOwned(consumer, id, recordToken);
     const { view, ...outcome } = await this.relay.submit(
       swap,
       consumer.username,
@@ -828,10 +856,19 @@ export class SwapsService {
     );
   }
 
+  /**
+   * The caller's swap, or 404. The shared public key also needs the swap's
+   * record token, checked before the table is read: a missing or wrong token
+   * is the same 404, so an id alone confirms nothing.
+   */
   private async findOwned(
     consumer: GatewayConsumer,
     id: string,
+    recordToken?: string,
   ): Promise<Swap> {
+    if (!this.recordTokens.admits(consumer, 'swap', id, recordToken)) {
+      throw ApiError.notFound(`Swap ${id} not found`);
+    }
     const swap = await this.prisma.swap.findFirst({
       where: { id, consumer: { apisixUsername: consumer.username } },
     });

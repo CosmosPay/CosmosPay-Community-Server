@@ -6,6 +6,7 @@ import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import type { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import { isUniqueViolation } from '@/common/prisma-errors';
 import { project } from '@/common/projection';
+import { PublicRecordTokens } from '@/common/public-record-token';
 import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
 import { resolveNetwork } from '@/common/stellar-network';
 import type { AppConfig } from '@/config/configuration';
@@ -152,6 +153,7 @@ export class Usdt0Service {
     private readonly rpc: SorobanRpcClient,
     private readonly oft: Usdt0OftClient,
     private readonly tracker: Usdt0TransferTracker,
+    private readonly recordTokens: PublicRecordTokens,
   ) {}
 
   // ── Routes ────────────────────────────────────────────────────────────────
@@ -222,8 +224,23 @@ export class Usdt0Service {
    * stored transfer unchanged; with a different request it is a 409. On the
    * shared public key every anonymous wallet is one consumer, so the stored
    * transfer is answered only when the request matches (see {@link replay}).
+   *
+   * On the shared public key the answer also carries `publicToken`, the
+   * transfer's read token (`PublicRecordTokens`), the same on a replay.
    */
   async create(
+    consumer: GatewayConsumer,
+    dto: CreateUsdt0TransferDto,
+    headerIdempotencyKey?: string,
+  ): Promise<Usdt0TransferView & { publicToken?: string }> {
+    return this.recordTokens.attach(
+      consumer,
+      'usdt0-transfer',
+      await this.build(consumer, dto, headerIdempotencyKey),
+    );
+  }
+
+  private async build(
     consumer: GatewayConsumer,
     dto: CreateUsdt0TransferDto,
     headerIdempotencyKey?: string,
@@ -365,8 +382,9 @@ export class Usdt0Service {
   async findOne(
     consumer: GatewayConsumer,
     id: string,
+    recordToken?: string,
   ): Promise<Usdt0TransferView> {
-    const row = await this.findOwned(consumer, id);
+    const row = await this.findOwned(consumer, id, recordToken);
     return this.present(await this.tracker.refresh(row));
   }
 
@@ -389,9 +407,10 @@ export class Usdt0Service {
     consumer: GatewayConsumer,
     id: string,
     signedXdr: string,
+    recordToken?: string,
   ): Promise<Usdt0SubmitOutcome> {
     this.assertMainnet(consumer);
-    const row = await this.findOwned(consumer, id);
+    const row = await this.findOwned(consumer, id, recordToken);
     const tx = verifySignedEnvelope(signedXdr, {
       txHash: row.txHash,
       passphrase: this.rpc.passphrase,
@@ -625,11 +644,21 @@ export class Usdt0Service {
     };
   }
 
-  /** A miss on someone else's transfer is a 404, never a 403. */
+  /**
+   * A miss on someone else's transfer is a 404, never a 403. The shared public
+   * key also needs the transfer's record token; a missing or wrong one is the
+   * same 404, decided before the table is read.
+   */
   private async findOwned(
     consumer: GatewayConsumer,
     id: string,
+    recordToken?: string,
   ): Promise<Usdt0Transfer> {
+    if (
+      !this.recordTokens.admits(consumer, 'usdt0-transfer', id, recordToken)
+    ) {
+      throw ApiError.notFound(`USDT0 transfer ${id} not found`);
+    }
     const row = await this.prisma.usdt0Transfer.findFirst({
       where: { id, consumer: { apisixUsername: consumer.username } },
     });

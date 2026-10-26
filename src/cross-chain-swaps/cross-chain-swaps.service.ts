@@ -11,6 +11,7 @@ import {
 } from '@/common/plan-commission';
 import { isUniqueViolation } from '@/common/prisma-errors';
 import { project } from '@/common/projection';
+import { PublicRecordTokens } from '@/common/public-record-token';
 import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
 import { resolveNetwork } from '@/common/stellar-network';
 import type { AppConfig } from '@/config/configuration';
@@ -166,6 +167,7 @@ export class CrossChainSwapsService {
     private readonly consumers: ConsumerResolverService,
     private readonly nearIntents: NearIntentsClient,
     private readonly accounts: StellarAccountLoader,
+    private readonly recordTokens: PublicRecordTokens,
   ) {}
 
   // ── Assets ────────────────────────────────────────────────────────────────
@@ -225,8 +227,23 @@ export class CrossChainSwapsService {
    * request it is a 409. The key is scoped to the consumer, and on the shared
    * public key every anonymous wallet is the same consumer, so a replay is only
    * answered when the request matches — see {@link replay}.
+   *
+   * On the shared public key the answer also carries `publicToken`, the
+   * swap's read token (`PublicRecordTokens`), the same on a replay.
    */
   async create(
+    consumer: GatewayConsumer,
+    dto: CreateCrossChainSwapDto,
+    headerIdempotencyKey?: string,
+  ): Promise<CrossChainSwapView & { publicToken?: string }> {
+    return this.recordTokens.attach(
+      consumer,
+      'cross-chain-swap',
+      await this.build(consumer, dto, headerIdempotencyKey),
+    );
+  }
+
+  private async build(
     consumer: GatewayConsumer,
     dto: CreateCrossChainSwapDto,
     headerIdempotencyKey?: string,
@@ -357,11 +374,13 @@ export class CrossChainSwapsService {
     return { data, total, take: query.take, skip: query.skip };
   }
 
+  /** One swap; the shared public key also needs its record token. */
   async findOne(
     consumer: GatewayConsumer,
     id: string,
+    recordToken?: string,
   ): Promise<CrossChainSwapView> {
-    return this.present(await this.findOwned(consumer, id));
+    return this.present(await this.findOwned(consumer, id, recordToken));
   }
 
   // ── Deposit ───────────────────────────────────────────────────────────────
@@ -378,8 +397,9 @@ export class CrossChainSwapsService {
     consumer: GatewayConsumer,
     id: string,
     txHash: string,
+    recordToken?: string,
   ): Promise<CrossChainSwapView> {
-    const swap = await this.findOwned(consumer, id);
+    const swap = await this.findOwned(consumer, id, recordToken);
     const network =
       CROSS_CHAIN_NETWORKS[swap.originChain as CrossChainNetworkId];
     if (!network.txId.isValid(txHash)) {
@@ -715,11 +735,21 @@ export class CrossChainSwapsService {
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────
-  /** A miss on someone else's swap is a 404, never a 403. */
+  /**
+   * A miss on someone else's swap is a 404, never a 403. The shared public key
+   * also needs the swap's record token; a missing or wrong one is the same
+   * 404, decided before the table is read.
+   */
   private async findOwned(
     consumer: GatewayConsumer,
     id: string,
+    recordToken?: string,
   ): Promise<CrossChainSwap> {
+    if (
+      !this.recordTokens.admits(consumer, 'cross-chain-swap', id, recordToken)
+    ) {
+      throw ApiError.notFound(`Cross-chain swap ${id} not found`);
+    }
     const swap = await this.prisma.crossChainSwap.findFirst({
       where: { id, consumer: { apisixUsername: consumer.username } },
     });
