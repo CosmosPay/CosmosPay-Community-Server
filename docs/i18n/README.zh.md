@@ -956,7 +956,8 @@ NEAR Intents 从输入中扣除它，报价的输出已是扣除后的净额，�
 | 跨链兑换（`POST /v1/cross-chain-swaps`） | NEAR Intents 的第二个 app fee。`wallet` 是 NEAR 账户 id，在 NEAR Intents 内入账。App fee 是存入金额的整数基点，因此费用换算成其对应的基点并向下取整；不足一个基点的费用会被拒绝。使用 `payer` 时，套餐佣金也按更大的存入金额计算 |
 | Solana 支付链接（`POST /v1/payment-intents/pay`，`chain: solana`） | Solana Pay 的 transfer request 只指定一个收款方，因此这类链接（需有 `amount`）是 Solana Pay **transaction request**：`uri` 为 `solana:<PAYMENT_LINK_API_URL>/v1/payment-links/{id}/solana-pay`，钱包向其 POST 付款方账户以获取交易：memo、携带链接 reference 的商户转账，以及手续费转账（缺少的代币账户会创建，由付款方支付）。SOL 手续费须转入已存在的账户。observer 通过 reference 找到它，且只有两部分都支付才会结算 |
 | Monad 支付链接（`POST /v1/payment-intents/pay`，`chain: monad`） | 仅在启用存款地址（`MONAD_RELAYER_PRIVATE_KEY`；否则返回 `merchant_fee_unsupported`）且有 `amount` 时：地址为 `contracts/PaymentSplitForwarder.sol`（手续费的钱包和金额是构造函数的另外两个参数，因此地址承诺了它们），其构造函数先付 relayer 费用，再付商户手续费，最后付商户。链接要求的存款为金额，付款方支付手续费时再加上手续费 |
-| Solana 与 Monad 上的兑换 | 暂不支持：Jupiter 和 Kuru Flow 每笔兑换只支付一个集成方费用，已被套餐佣金使用（`400 merchant_fee_unsupported`） |
+| Solana 兑换（`POST /v1/swaps`，`chain: solana`） | Jupiter 每笔兑换只支付一个集成方费用，已被套餐佣金使用，因此手续费转账（从源账户、以源资产支付：SOL 用 System Program 转账，否则先创建钱包的代币账户再 TransferChecked）被追加到 Jupiter 自己的 v0 交易中：复用其地址查找表已加载的账户，重写所有索引，提高其计算单元上限，并以最多 40 个账户请求路由，使其仍能放入一个数据包。SOL 手续费须转入已存在的账户 |
+| Monad 上的兑换 | 暂不支持：Kuru Flow 每笔兑换只支付一个推荐费用，已被套餐佣金使用（`400 merchant_fee_unsupported`） |
 
 隐私支付、USDT0 和流动性会在各自具备链上拆分付款的方式后加入该字段；在此之前，它们的路由会
 将其作为未知字段拒绝（`400 validation_failed`）。
@@ -1419,6 +1420,9 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
   `npm run contracts:compile` 与未改动的 PaymentForwarder 一起编译）。迁移
   `20261026190000_evm_deposit_merchant_fee` 为 `evm_deposit_address` 新增 `feeWallet` 和
   `merchantFee`（现有地址均为 null，仍是 PaymentForwarder）。
+- **Solana 兑换也接受 `merchantFee`**：手续费转账被追加到 Jupiter 的交易中
+  （`src/solana/solana-message.ts` 读取并重写 v0 交易；地址查找表通过 Solana RPC 读取）。Monad
+  兑换仍返回 `merchant_fee_unsupported`。
 
 ### 列表遵循密钥的网络；仪表盘读取会被缓存
 

@@ -1456,7 +1456,8 @@ nicht ändert.
 | Swaps zwischen Chains (`POST /v1/cross-chain-swaps`) | Eine zweite App-Fee von NEAR Intents. `wallet` ist eine NEAR-Account-ID, gutgeschrieben in NEAR Intents. App-Fees sind ganze Basispunkte der Einzahlung, also wird die Gebühr zu den Basispunkten, die sie ausmacht, abgerundet; eine Gebühr unter einem Basispunkt wird abgelehnt. Mit `payer` ist auch die Plan-Provision ein Anteil der größeren Einzahlung |
 | Zahlungslinks auf Solana (`POST /v1/payment-intents/pay`, `chain: solana`) | Ein Solana-Pay-Transfer-Request nennt nur einen Empfänger, also ist ein solcher Link (mit `amount`) ein Solana-Pay-**Transaction-Request**: `uri` ist `solana:<PAYMENT_LINK_API_URL>/v1/payment-links/{id}/solana-pay`, und die Wallet sendet dort per POST das Konto des Zahlers und erhält die Transaktion: das Memo, die Überweisung an den Händler mit der Referenz des Links und die der Gebühr (Token-Konten werden bei Bedarf angelegt, vom Zahler bezahlt). Eine SOL-Gebühr geht an ein bereits existierendes Konto. Der Observer findet sie über die Referenz und begleicht nur mit beiden Anteilen |
 | Zahlungslinks auf Monad (`POST /v1/payment-intents/pay`, `chain: monad`) | Nur mit Einzahlungsadressen (`MONAD_RELAYER_PRIVATE_KEY`; ohne sie `merchant_fee_unsupported`) und mit `amount`: die Adresse ist ein `contracts/PaymentSplitForwarder.sol` (Wallet und Betrag der Gebühr sind zwei weitere Konstruktorargumente, die Adresse bindet sich also an sie), dessen Konstruktor dem Relayer seine Gebühr zahlt, dann die Händlergebühr, dann den Händler. Der Link verlangt die Einzahlung: den Betrag, plus die Gebühr, wenn der Zahler sie zahlt |
-| Swaps auf Solana und Monad | Noch nicht: Jupiter und Kuru Flow zahlen eine einzige Integrator-Gebühr pro Swap, und die Plan-Provision nutzt sie (`400 merchant_fee_unsupported`) |
+| Swaps auf Solana (`POST /v1/swaps`, `chain: solana`) | Jupiter zahlt nur eine Integrator-Gebühr pro Swap, und die Plan-Provision nutzt sie, also wird die Überweisung der Gebühr (vom Quellkonto, im Quell-Asset: eine System-Program-Überweisung für SOL, sonst ein TransferChecked nach Anlegen des Token-Kontos der Wallet) an Jupiters eigene v0-Transaktion angehängt: die Konten, die ihre Lookup-Tabellen laden, werden wiederverwendet, alle Indizes neu geschrieben, ihr Compute-Limit erhöht und die Route mit höchstens 40 Konten angefragt, damit sie in ein Paket passt. Eine SOL-Gebühr geht an ein bereits existierendes Konto |
+| Swaps auf Monad | Noch nicht: Kuru Flow zahlt eine einzige Referrer-Gebühr pro Swap, und die Plan-Provision nutzt sie (`400 merchant_fee_unsupported`) |
 
 Private Zahlungen, USDT0 und Liquidität erhalten das Feld, sobald jedes einen Weg hat, die
 Zahlung on-chain aufzuteilen; bis dahin lehnen ihre Routen es als unbekanntes Feld ab
@@ -2236,6 +2237,10 @@ eingeschaltet werden.
   unveränderten PaymentForwarder kompiliert). Die Migration
   `20261026190000_evm_deposit_merchant_fee` ergänzt `feeWallet` und `merchantFee` in
   `evm_deposit_address` (null bei jeder bestehenden Adresse, die ein PaymentForwarder bleibt).
+- **Swaps auf Solana nehmen `merchantFee`**: die Überweisung der Gebühr wird an Jupiters
+  Transaktion angehängt (`src/solana/solana-message.ts` liest und schreibt eine v0-Transaktion;
+  die Lookup-Tabellen werden über den Solana-RPC gelesen). Swaps auf Monad antworten weiter
+  `merchant_fee_unsupported`.
 
 ### Listen folgen dem Netzwerk des Schlüssels; Dashboard-Abfragen werden gecacht
 

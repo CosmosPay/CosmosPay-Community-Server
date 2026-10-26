@@ -7,6 +7,11 @@ import { addressOfSecretKey, signEip1559 } from '@/evm/evm-transaction';
 import type { JupiterClient } from '@/jupiter/jupiter.client';
 import type { KuruClient } from '@/kuru/kuru.client';
 import { associatedTokenAddress } from '@/solana/associated-token-account';
+import {
+  decodeTransaction,
+  encodeTransaction,
+  messageAccounts,
+} from '@/solana/solana-message';
 import type { SolanaRpcClient } from '@/solana/solana-rpc.client';
 import { MonadSwapVenue } from '@/swaps/venues/monad-swap.venue';
 import { SolanaSwapVenue } from '@/swaps/venues/solana-swap.venue';
@@ -151,6 +156,96 @@ describe('SolanaSwapVenue', () => {
       encoding: 'base64',
       data: 'AAAA',
       lastValidBlockHeight: 7,
+    });
+  });
+
+  describe('with a merchant fee', () => {
+    const FEE_WALLET = encodeBase58(new Uint8Array(32).fill(21));
+    const TABLE = encodeBase58(new Uint8Array(32).fill(50));
+    const k = (n: number) => encodeBase58(new Uint8Array(32).fill(n));
+    // Jupiter's v0 transaction: the payer, a static writable, the swap program,
+    // a lookup table lending one writable account.
+    const jupiterTx = Buffer.from(
+      encodeTransaction({
+        signatures: [new Uint8Array(64)],
+        message: {
+          version: 0,
+          header: [1, 0, 1],
+          staticKeys: [source, k(2), k(40)],
+          recentBlockhash: k(9),
+          instructions: [
+            {
+              programIdIndex: 2,
+              accounts: [0, 1, 3],
+              data: Uint8Array.from([1]),
+            },
+          ],
+          lookups: [{ account: TABLE, writable: [0], readonly: [] }],
+        },
+      }),
+    ).toString('base64');
+
+    function feeVenue(owners: Record<string, string | null>) {
+      const { venue: v, jupiter } = venue({
+        getAccountOwner: jest.fn(async (_n: string, a: string) =>
+          a in owners
+            ? owners[a]
+            : 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA',
+        ),
+        getAddressLookupTable: jest.fn().mockResolvedValue([k(60)]),
+      });
+      jupiter.swapTransaction.mockResolvedValue({
+        swapTransaction: jupiterTx,
+        lastValidBlockHeight: 7,
+      });
+      return { v, jupiter };
+    }
+
+    it("appends the fee transfer to Jupiter's transaction and narrows the route", async () => {
+      const { v, jupiter } = feeVenue({
+        [FEE_WALLET]: '11111111111111111111111111111111',
+      });
+
+      const built = await v.build({
+        ...REQUEST,
+        feeBps: 0,
+        feeWallet: null,
+        merchantFee: { wallet: FEE_WALLET, amount: 1_500_000n },
+      });
+
+      expect(jupiter.quote.mock.calls[0][0].maxAccounts).toBe(40);
+      const tx = decodeTransaction(
+        Buffer.from((built.transaction as { data: string }).data, 'base64'),
+      );
+      const tables = new Map([[TABLE, [k(60)]]]);
+      const accounts = messageAccounts(tx.message, tables);
+      const last = tx.message.instructions[tx.message.instructions.length - 1];
+      // A System transfer: source to the fee wallet, 1.5m lamports.
+      expect(accounts[last.programIdIndex].pubkey).toBe(
+        '11111111111111111111111111111111',
+      );
+      expect(last.accounts.map((i) => accounts[i].pubkey)).toEqual([
+        source,
+        FEE_WALLET,
+      ]);
+      expect(Buffer.from(last.data).readBigUInt64LE(4)).toBe(1_500_000n);
+      // Jupiter's own instruction still names the same accounts.
+      expect(
+        tx.message.instructions[0].accounts.map((i) => accounts[i].pubkey),
+      ).toEqual([source, k(2), k(60)]);
+    });
+
+    it('refuses a SOL fee to an account that does not exist yet', async () => {
+      const { v } = feeVenue({ [FEE_WALLET]: null });
+      const err = await rejection(
+        v.build({
+          ...REQUEST,
+          feeBps: 0,
+          feeWallet: null,
+          merchantFee: { wallet: FEE_WALLET, amount: 1n },
+        }),
+      );
+      expect(err.code).toBe(ApiErrorCode.ValidationFailed);
     });
   });
 

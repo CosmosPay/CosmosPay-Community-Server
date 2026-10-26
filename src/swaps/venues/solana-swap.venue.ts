@@ -5,7 +5,20 @@ import { NATIVE_DECIMALS } from '@/chains/chains.constants';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { JupiterClient, type JupiterQuote } from '@/jupiter/jupiter.client';
 import { associatedTokenAddress } from '@/solana/associated-token-account';
+import {
+  appendInstructions,
+  type CompiledMessage,
+  decodeTransaction,
+  encodeTransaction,
+  raiseComputeUnitLimit,
+} from '@/solana/solana-message';
 import { SolanaRpcClient } from '@/solana/solana-rpc.client';
+import {
+  createAssociatedTokenAccountIdempotent,
+  type SolanaInstruction,
+  systemTransfer,
+  tokenTransferChecked,
+} from '@/solana/solana-transaction-builder';
 import {
   hasValidSignatures,
   type ParsedSolanaTransaction,
@@ -13,6 +26,10 @@ import {
   transactionId,
 } from '@/solana/solana-transaction';
 import {
+  COMPUTE_BUDGET_PROGRAM_ID,
+  JUPITER_MAX_ACCOUNTS_WITH_MERCHANT_FEE,
+  MERCHANT_FEE_COMPUTE_UNITS,
+  SOLANA_TRANSACTION_MAX_BYTES,
   SPL_TOKEN_PROGRAM_IDS,
   WRAPPED_SOL_MINT,
 } from '@/solana/solana.constants';
@@ -35,6 +52,12 @@ const NETWORK = 'public' as const;
  * into `SOLANA_SWAP_FEE_WALLET`'s associated token account for the output mint.
  * That account must already exist: Jupiter does not create it, and a
  * transaction naming a missing one fails on-chain after the payer signed.
+ *
+ * A merchant fee rides in the same transaction: Jupiter pays one integrator fee
+ * and the commission takes it, so the fee's transfer (out of the source, in the
+ * source asset) is appended to Jupiter's own v0 transaction, reusing the
+ * accounts its lookup tables already load and raising its compute limit
+ * (`solana-message.ts`). The wallet signs that one transaction.
  */
 @Injectable()
 export class SolanaSwapVenue implements ChainSwapVenue {
@@ -73,11 +96,14 @@ export class SolanaSwapVenue implements ChainSwapVenue {
       userPublicKey: request.source,
       feeAccount,
     });
+    const data = request.merchantFee
+      ? await this.withMerchantFee(built.swapTransaction, request)
+      : built.swapTransaction;
     return {
       ...this.toVenueQuote(quote, request),
       transaction: {
         encoding: 'base64',
-        data: built.swapTransaction,
+        data,
         lastValidBlockHeight: built.lastValidBlockHeight,
       },
       approval: null,
@@ -131,7 +157,119 @@ export class SolanaSwapVenue implements ChainSwapVenue {
       amount: request.amount.toString(),
       slippageBps: request.slippageBps,
       platformFeeBps: request.feeBps,
+      ...(request.merchantFee
+        ? { maxAccounts: JUPITER_MAX_ACCOUNTS_WITH_MERCHANT_FEE }
+        : {}),
     });
+  }
+
+  /**
+   * Jupiter's transaction with the merchant fee's transfer appended: a
+   * System transfer for SOL, else the fee wallet's token account (created if
+   * missing, paid by the source) and a TransferChecked out of the source's.
+   * Refused, before anyone signs, when the result cannot be one valid
+   * transaction (an account it would have to promote, a packet too large).
+   */
+  private async withMerchantFee(
+    base64: string,
+    request: VenueRequest & { source: string },
+  ): Promise<string> {
+    const fee = request.merchantFee!;
+    const tx = decodeTransaction(
+      Uint8Array.from(Buffer.from(base64, 'base64')),
+    );
+    const tables = await this.lookupTables(tx.message);
+    const instructions = await this.merchantFeeInstructions(
+      request.source,
+      request.send,
+      fee,
+    );
+    let message: CompiledMessage;
+    try {
+      message = raiseComputeUnitLimit(
+        appendInstructions(tx.message, instructions, tables),
+        MERCHANT_FEE_COMPUTE_UNITS,
+        COMPUTE_BUDGET_PROGRAM_ID,
+      );
+    } catch (err) {
+      throw ApiError.badGateway(
+        ApiErrorCode.ProviderError,
+        `Jupiter's route cannot carry the merchant fee (${
+          err instanceof Error ? err.message : String(err)
+        }). Retry: a new quote may take another route.`,
+      );
+    }
+    const bytes = encodeTransaction({ signatures: tx.signatures, message });
+    if (bytes.length > SOLANA_TRANSACTION_MAX_BYTES) {
+      throw ApiError.badGateway(
+        ApiErrorCode.ProviderError,
+        "With the merchant fee, Jupiter's route no longer fits one Solana transaction. Retry: a new quote may take a shorter route.",
+      );
+    }
+    return Buffer.from(bytes).toString('base64');
+  }
+
+  /** The lookup tables a v0 transaction loads accounts from, by address. */
+  private async lookupTables(
+    message: CompiledMessage,
+  ): Promise<Map<string, string[]>> {
+    const tables = new Map<string, string[]>();
+    for (const { account } of message.lookups) {
+      const table = await this.rpc.getAddressLookupTable(NETWORK, account);
+      if (!table) {
+        throw ApiError.badGateway(
+          ApiErrorCode.ProviderError,
+          `Jupiter's transaction names a lookup table that does not exist (${account})`,
+        );
+      }
+      tables.set(account, table);
+    }
+    return tables;
+  }
+
+  /** The merchant fee's transfer out of `source`, in the swap's source asset. */
+  private async merchantFeeInstructions(
+    source: string,
+    send: VenueAsset,
+    fee: { wallet: string; amount: bigint },
+  ): Promise<SolanaInstruction[]> {
+    if (send.asset === 'native') {
+      // A smaller transfer to an account that does not exist fails on rent.
+      if ((await this.rpc.getAccountOwner(NETWORK, fee.wallet)) === null) {
+        throw ApiError.badRequest(
+          ApiErrorCode.ValidationFailed,
+          'merchantFee.wallet does not exist on Solana yet: a SOL fee goes to an existing account. Fund it first.',
+        );
+      }
+      return [systemTransfer(source, fee.wallet, fee.amount)];
+    }
+    const program = await this.rpc.getAccountOwner(NETWORK, send.asset);
+    if (!program || !SPL_TOKEN_PROGRAM_IDS.includes(program)) {
+      throw ApiError.badRequest(
+        ApiErrorCode.AssetUnsupported,
+        `${send.asset} is not an SPL mint on Solana`,
+      );
+    }
+    const from = associatedTokenAddress(source, send.asset, program);
+    const to = associatedTokenAddress(fee.wallet, send.asset, program);
+    return [
+      createAssociatedTokenAccountIdempotent({
+        payer: source,
+        account: to,
+        owner: fee.wallet,
+        mint: send.asset,
+        tokenProgram: program,
+      }),
+      tokenTransferChecked({
+        tokenProgram: program,
+        source: from,
+        mint: send.asset,
+        destination: to,
+        owner: source,
+        amount: fee.amount,
+        decimals: send.decimals,
+      }),
+    ];
   }
 
   private toVenueQuote(quote: JupiterQuote, request: VenueRequest): VenueQuote {

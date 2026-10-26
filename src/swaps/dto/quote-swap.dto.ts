@@ -102,12 +102,13 @@ export class QuoteSwapDto {
   @ApiPropertyOptional({
     type: MerchantFeeDto,
     description:
-      'Stellar only for now: your own fee on this swap, paid in the source ' +
-      'asset to `wallet` (a Stellar account that can receive it) by its own ' +
-      'payment in the same transaction, beside the plan commission. ' +
-      '`paidBy: recipient` takes it from `amount` (the swap routes less); ' +
-      '`payer` adds it on top (the source sends `amount` plus the fee). ' +
-      'Solana and Monad answer `merchant_fee_unsupported`.',
+      'Your own fee on this swap, paid in the source asset to `wallet` out of ' +
+      'the source wallet, in the same transaction, beside the plan commission. ' +
+      'Stellar: its own payment (the wallet must trust the asset). Solana: a ' +
+      "transfer appended to Jupiter's transaction (a SOL fee goes to an " +
+      'existing account). `paidBy: recipient` takes it from `amount` (the swap ' +
+      'routes less); `payer` adds it on top (the source sends `amount` plus ' +
+      'the fee). Monad answers `merchant_fee_unsupported`.',
   })
   @IsOptional()
   @ValidateNested()

@@ -19,6 +19,12 @@ export interface VenueRequest {
   feeBps: number;
   /** Where the commission is paid; null when `feeBps` is zero. */
   feeWallet: string | null;
+  /**
+   * The organization's merchant fee, in the SOURCE asset's base units, paid
+   * out of the source wallet in the swap's own transaction; `amount` above is
+   * what is routed. Null without one.
+   */
+  merchantFee?: { wallet: string; amount: bigint } | null;
 }
 
 /** A priced swap, in base units of the output asset. */

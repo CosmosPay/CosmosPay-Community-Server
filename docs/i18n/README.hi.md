@@ -1386,7 +1386,8 @@ client address (`429 rate_limited`)।
 | Cross-chain swaps (`POST /v1/cross-chain-swaps`) | NEAR Intents की दूसरी app fee। `wallet` एक NEAR account id है, जिसे NEAR Intents के भीतर क्रेडिट मिलता है। App fees डिपॉज़िट के पूरे basis points होती हैं, इसलिए फ़ीस उतने basis points बनती है, नीचे की ओर गोल; एक basis point से कम फ़ीस अस्वीकार है। `payer` के साथ plan कमीशन भी बड़े डिपॉज़िट का हिस्सा होता है |
 | Solana payment links (`POST /v1/payment-intents/pay`, `chain: solana`) | Solana Pay transfer request एक ही प्राप्तकर्ता बताता है, इसलिए ऐसा link (`amount` के साथ) Solana Pay **transaction request** है: `uri` `solana:<PAYMENT_LINK_API_URL>/v1/payment-links/{id}/solana-pay` है, और wallet वहाँ भुगतानकर्ता का खाता POST करके transaction लेता है: memo, link के reference वाला मर्चेंट का transfer और फ़ीस का transfer (token खाते न हों तो बनते हैं, खर्च भुगतानकर्ता का)। SOL फ़ीस पहले से मौजूद खाते में जाती है। Observer उसे reference से ढूँढता है और दोनों हिस्सों पर ही settle करता है |
 | Monad payment links (`POST /v1/payment-intents/pay`, `chain: monad`) | केवल deposit addresses (`MONAD_RELAYER_PRIVATE_KEY`; इनके बिना `merchant_fee_unsupported`) और `amount` के साथ: address एक `contracts/PaymentSplitForwarder.sol` है (फ़ीस का wallet और राशि constructor के दो और arguments हैं, इसलिए address उनसे बँधा है), जिसका constructor relayer को उसकी फ़ीस, फिर मर्चेंट फ़ीस, फिर मर्चेंट को भुगतान करता है। Link deposit माँगता है: राशि, और भुगतानकर्ता फ़ीस चुकाए तो फ़ीस भी |
-| Solana और Monad पर swaps | अभी नहीं: Jupiter और Kuru Flow हर swap पर एक ही integrator फ़ीस देते हैं और plan कमीशन उसे लेता है (`400 merchant_fee_unsupported`) |
+| Solana पर swaps (`POST /v1/swaps`, `chain: solana`) | Jupiter हर swap पर एक ही integrator फ़ीस देता है और plan कमीशन उसे लेता है, इसलिए फ़ीस का transfer (source से, source asset में: SOL के लिए System Program transfer, वरना wallet का token खाता बनाकर TransferChecked) Jupiter के अपने v0 transaction में जोड़ा जाता है: उसकी lookup tables जो खाते लोड करती हैं वे दोबारा इस्तेमाल होते हैं, सारे indexes फिर से लिखे जाते हैं, compute limit बढ़ती है और route अधिकतम 40 खातों के साथ माँगा जाता है ताकि वह एक packet में आए। SOL फ़ीस पहले से मौजूद खाते में जाती है |
+| Monad पर swaps | अभी नहीं: Kuru Flow हर swap पर एक ही referrer फ़ीस देता है और plan कमीशन उसे लेता है (`400 merchant_fee_unsupported`) |
 
 निजी भुगतान, USDT0 और liquidity यह फ़ील्ड तब लेंगे जब हर एक के पास भुगतान को on-chain बाँटने
 का तरीका होगा; तब तक उनके रूट इसे अज्ञात फ़ील्ड मानकर अस्वीकार करते हैं
@@ -2112,6 +2113,9 @@ seal होती हैं और कभी लौटाई नहीं जा
   `npm run contracts:compile` से, बिना बदले PaymentForwarder के साथ)। Migration
   `20261026190000_evm_deposit_merchant_fee` `evm_deposit_address` में `feeWallet` और
   `merchantFee` जोड़ता है (हर मौजूदा address पर null, जो PaymentForwarder ही रहता है)।
+- **Solana swaps भी `merchantFee` लेते हैं**: फ़ीस का transfer Jupiter के transaction में जोड़ा
+  जाता है (`src/solana/solana-message.ts` v0 transaction पढ़ता और फिर से लिखता है; lookup
+  tables Solana RPC से पढ़ी जाती हैं)। Monad swaps अब भी `merchant_fee_unsupported` लौटाते हैं।
 
 ### Lists key के network का पालन करती हैं; dashboard reads cache होते हैं
 

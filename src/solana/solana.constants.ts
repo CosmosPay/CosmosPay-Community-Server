@@ -51,3 +51,31 @@ export const SYSTEM_PROGRAM_ID = '11111111111111111111111111111111';
  */
 export const SPL_MEMO_PROGRAM_ID =
   'MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr';
+
+/** The Compute Budget program: a transaction's compute limit and priority fee. */
+export const COMPUTE_BUDGET_PROGRAM_ID =
+  'ComputeBudget111111111111111111111111111111';
+
+/**
+ * Where an address lookup table's addresses start in its account data: the
+ * table's metadata (deactivation slot, last extended slot and its start index,
+ * the authority option, padding) is 56 bytes.
+ */
+export const LOOKUP_TABLE_META_BYTES = 56;
+
+/** The largest serialized transaction a Solana node accepts (one packet). */
+export const SOLANA_TRANSACTION_MAX_BYTES = 1232;
+
+/**
+ * Compute units added to an aggregator's limit for a merchant fee appended to
+ * its transaction: an idempotent token-account creation (about 25k when it
+ * creates) and a TransferChecked (about 6k), or a System transfer, with room.
+ */
+export const MERCHANT_FEE_COMPUTE_UNITS = 50_000;
+
+/**
+ * The most accounts a Jupiter route may use when a merchant fee is appended:
+ * Jupiter's default of 64 can fill a transaction, and the fee's transfer adds a
+ * few accounts and bytes of its own.
+ */
+export const JUPITER_MAX_ACCOUNTS_WITH_MERCHANT_FEE = 40;
