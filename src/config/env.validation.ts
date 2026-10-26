@@ -144,6 +144,12 @@ class EnvironmentVariables {
   STELLAR_RPC_URL_MAINNET?: string;
 
   @IsOptional()
+  @Matches(/^C[A-Z2-7]{55}$/, {
+    message: 'USDT0_MERCHANT_FEE_WRAPPER must be a Soroban contract id (C...)',
+  })
+  USDT0_MERCHANT_FEE_WRAPPER?: string;
+
+  @IsOptional()
   @IsString()
   STELLAR_BASE_FEE?: string;
 

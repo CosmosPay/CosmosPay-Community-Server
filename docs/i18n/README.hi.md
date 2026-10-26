@@ -1391,9 +1391,11 @@ client address (`429 rate_limited`)।
 | निजी भुगतान (`POST /v1/zk-payments`) | payer से `wallet` को XLM में एक तीसरा confidential transfer, ताकि फ़ीस भी भुगतान जितनी ही निजी रहे। `wallet` के पास Cosmos Pay के token पर auditor 0 के तहत confidential account होना चाहिए (वरना `400 recipient_not_registered`), और वह न recipient हो न fee account। 0.01% कमीशन `amount` का हिस्सा ही रहता है, और row का `amount` वह कुल राशि है जो payer चुकाता है। Confirm तीसरा hash `merchantFeeTxHash` के रूप में लेता है और उस transfer को बाकी दो की तरह जाँचता है |
 | Liquidity (`POST /v1/liquidity-pools/deposit` और `/withdraw`) | Deposit या withdrawal दो assets ले जाता है, इसलिए फ़ीस हर एक का `bps` है (नीचे की ओर गोल), जो उसी transaction में हर asset के लिए एक payment से `wallet` को दी जाती है, deposit के बाद, या withdrawal और उसके plan कमीशन के बाद; `fixed` अस्वीकार होता है (`400 validation_failed`)। Deposit पर `recipient` उसे राशियों से काटता है (pool में कम जाता है) और `payer` उसे ऊपर से जोड़ता है। Withdrawal पर वह withdrawal की दी गई राशि से, उसकी गारंटीड न्यूनतम राशियों के हिस्से के रूप में निकलती है, `paidBy` चाहे जो हो। `wallet` मौजूद होनी चाहिए और दोनों assets पर trustline होनी चाहिए। Record का `amount` / `asset` asset A का हिस्सा है, और `amountB` / `assetB` asset B का |
 | Monad पर swaps (`POST /v1/swaps`, `chain: monad`) | Kuru Flow हर swap पर एक ही referrer फ़ीस देता है और plan कमीशन उसे लेता है, इसलिए मर्चेंट फ़ीस वाला swap `contracts/MerchantFeeSwapRouter.sol` से होकर जाता है, जिसे operator Kuru के router के लिए एक बार deploy करता है और `KURU_MERCHANT_FEE_ROUTER` में नाम देता है: Kuru router के लिए quote करता है, wallet उसे input और फ़ीस भेजती (MON) या approve करती (ERC-20) है, और उसी एक transaction में router फ़ीस चुकाता है, Kuru का calldata चलाता है, output आगे भेजता है और Kuru का बचा हुआ लौटाता है; Kuru के minimum से कम पर revert होता है। Wallet को address देने से पहले deployed code की artifact से तुलना होती है। Variable के बिना `400 merchant_fee_unsupported` |
+| USDT0 transfers (`POST /v1/usdt0/transfers`) | एक Soroban transaction में एक ही operation होता है, इसलिए ऐसे transfer का operation OFT की जगह `contracts/soroban/merchant-fee-oft` (`USDT0_MERCHANT_FEE_WRAPPER`) होता है: holder के एक ही authorization के तहत वह फ़ीस USDT0 में `wallet` को transfer करता है (जिसकी USDT0 पर trustline होनी चाहिए), फिर उन्हीं arguments के साथ OFT का `send` call करता है और उसकी receipt लौटाता है। `recipient` फ़ीस `amount` से काटता है (कम भेजा जाता है), `payer` उसे ऊपर से जोड़ता है। Holder को transaction देने से पहले deployed wasm और वह OFT व token जाँचे जाते हैं जिनसे वह बँधा है। Variable के बिना `400 merchant_fee_unsupported` |
 
-USDT0 यह फ़ील्ड तब लेगा जब उसके पास transfer को on-chain बाँटने का तरीका होगा; तब तक
-उसके रूट इसे अज्ञात फ़ील्ड मानकर अस्वीकार करते हैं (`400 validation_failed`)।
+ऊपर का हर operation यह फ़ील्ड लेता है। जहाँ इस deployment ने किसी operation के लिए ज़रूरी
+contract configure नहीं किया (`KURU_MERCHANT_FEE_ROUTER`, `USDT0_MERCHANT_FEE_WRAPPER`), वहाँ वह
+`400 merchant_fee_unsupported` लौटाता है।
 
 ## Stellar से USDT0 (LayerZero)
 
@@ -1464,6 +1466,13 @@ characters का बना देता है, जो एक QR code में
 होता है, इसलिए path-payment swap की तरह कोई fee payment `send` के साथ नहीं जा सकता, और
 इस route पर plan की दर नहीं ली जाती। Commission लेना है या नहीं, यह product owner का
 फ़ैसला है।
+
+**मर्चेंट फ़ीस एक contract से होकर जाती है।** `merchantFee` के साथ (देखें **मर्चेंट फ़ीस**) operation
+wrapper का `send` होता है (`USDT0_MERCHANT_FEE_WRAPPER`): वह फ़ीस USDT0 में फ़ीस की wallet को
+transfer करता है और उन्हीं arguments के साथ OFT का `send` call करता है, holder के एक ही
+authorization के तहत, और OFT की receipt लौटाता है, ताकि transfer उसी guid से track हो। इसे एक
+बार deploy करें, बिना owner के:
+`stellar contract deploy --wasm contracts/soroban/merchant-fee-oft/merchant_fee_oft.wasm --network mainnet -- --oft CBOWOLFSDM5PZXNFIVDMP5NZ7U2GSIHED6H6R446QOHF266XINKUMMF6 --token CBSJZEIO5C7KC2SF3MKSNXXJSW5G3VTNBX4ATMKUI3B2MR4JKM4R26YF`।
 
 **RPC.** सब कुछ Stellar mainnet के Soroban RPC, `STELLAR_RPC_URL_MAINNET`, से होकर जाता
 है (default रूप से Gateway.fm का public endpoint, जो rate limited है: production में किसी
@@ -2144,6 +2153,11 @@ seal होती हैं और कभी लौटाई नहीं जा
   उसके बाद Kuru Flow के router का address 32-byte word के रूप में, किसी भी account से deploy
   करें (contract का कोई owner नहीं है), और variable set करें। ऐसे swap की wallet router को
   approve करती है, Kuru को नहीं। इसके बिना Monad swaps अब भी `merchant_fee_unsupported` लौटाते हैं।
+- **USDT0 transfers भी `merchantFee` लेते हैं**, जब `USDT0_MERCHANT_FEE_WRAPPER` किसी deployed
+  `contracts/soroban/merchant-fee-oft` का नाम देता है (wasm crate के बगल में committed, जिसे
+  `USDT0_MERCHANT_FEE_WRAPPER_WASM_SHA256` pin करता है)। **Deploy step:** USDT0 section का
+  `stellar contract deploy` command, फिर variable set करें। Responses में `merchantFee` जुड़ता है।
+  इसके बिना `merchant_fee_unsupported`।
 
 ### Lists key के network का पालन करती हैं; dashboard reads cache होते हैं
 
@@ -2962,6 +2976,7 @@ type दोबारा बनाए बिना enum value drop नहीं �
 | `STELLAR_HORIZON_URL_PUBLIC` | नहीं | `https://horizon.stellar.org` | Mainnet Horizon का base URL |
 | `STELLAR_HORIZON_URL_TESTNET` | नहीं | `https://horizon-testnet.stellar.org` | Testnet Horizon का base URL |
 | `STELLAR_RPC_URL_MAINNET` | नहीं | `https://soroban-rpc.mainnet.stellar.gateway.fm` | USDT0 transfers के लिए Stellar mainnet का Soroban RPC (उपयोग से पहले passphrase जाँचा जाता है)। सार्वजनिक endpoint rate limited है: production में किसी प्रदाता का उपयोग करें |
+| `USDT0_MERCHANT_FEE_WRAPPER` | USDT0 पर मर्चेंट फ़ीस के लिए | — | USDT0 के OFT और token से बँधा deployed `contracts/soroban/merchant-fee-oft`। इसके बिना मर्चेंट फ़ीस वाला USDT0 transfer `merchant_fee_unsupported` लौटाता है; जो contract pinned wasm नहीं चलाता या किसी और से बँधा है, वह `503 misconfigured` लौटाता है |
 | `SOLANA_RPC_URL_MAINNET` | नहीं | `https://api.mainnet-beta.solana.com` | `prod` कुंजियों के लिए Solana RPC (mainnet-beta; उपयोग से पहले genesis hash जाँचा जाता है)। सार्वजनिक endpoint rate-limited है: production में किसी प्रदाता का उपयोग करें |
 | `SOLANA_RPC_URL_DEVNET` | नहीं | `https://api.devnet.solana.com` | `dev` कुंजियों के लिए Solana RPC (devnet) |
 | `SOLANA_RPC_TIMEOUT_MS` | नहीं | `10000` | एक Solana RPC कॉल का बजट (ms) |

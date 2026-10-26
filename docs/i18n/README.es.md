@@ -1448,9 +1448,11 @@ cambia.
 | Pagos privados (`POST /v1/zk-payments`) | Una tercera transferencia confidencial, en XLM, del pagador a `wallet`, así la comisión queda tan privada como el pago. `wallet` debe tener una cuenta confidencial en el token de Cosmos Pay bajo el auditor 0 (si no, `400 recipient_not_registered`) y no ser ni el destinatario ni la cuenta de comisiones. La comisión del 0,01 % sigue siendo una parte de `amount`, y el `amount` de la fila es lo que el pagador paga en total. El confirm recibe el tercer hash como `merchantFeeTxHash` y verifica esa transferencia como las otras dos |
 | Liquidez (`POST /v1/liquidity-pools/deposit` y `/withdraw`) | Un depósito o un retiro mueve dos activos, así que la comisión es `bps` de CADA uno (redondeado hacia abajo), pagada a `wallet` con un pago por activo en la misma transacción, después del depósito, o después del retiro y su comisión del plan; `fixed` se rechaza (`400 validation_failed`). En un depósito, `recipient` la descuenta de los montos (entra menos al pool) y `payer` la suma por encima. En un retiro sale de lo que el retiro paga, como parte de sus mínimos garantizados, diga lo que diga `paidBy`. `wallet` debe existir y tener trustline de ambos activos. El `amount` / `asset` del registro son la pata del activo A, y `amountB` / `assetB` la del activo B |
 | Swaps en Monad (`POST /v1/swaps`, `chain: monad`) | Kuru Flow paga una sola comisión de referido por swap y la usa la comisión del plan, así que un swap con comisión del comercio pasa por `contracts/MerchantFeeSwapRouter.sol`, que el operador despliega una vez para el router de Kuru y nombra en `KURU_MERCHANT_FEE_ROUTER`: Kuru cotiza para el router, la wallet le envía (MON) o le aprueba (ERC-20) la entrada más la comisión, y en esa única transacción el router paga la comisión, ejecuta el calldata de Kuru, reenvía la salida y devuelve lo que Kuru no usó, y revierte por debajo del mínimo de Kuru. El código desplegado se compara con el artefacto antes de darle la dirección a una wallet. Sin la variable, `400 merchant_fee_unsupported` |
+| Transferencias USDT0 (`POST /v1/usdt0/transfers`) | Una transacción de Soroban lleva una sola operación, así que la operación de esa transferencia es `contracts/soroban/merchant-fee-oft` (`USDT0_MERCHANT_FEE_WRAPPER`) en lugar del OFT: bajo la única autorización del titular transfiere la comisión en USDT0 a `wallet` (que debe tener trustline de USDT0), luego llama al `send` del OFT con los mismos argumentos y devuelve su recibo. `recipient` descuenta la comisión de `amount` (se envía menos), `payer` la suma por encima. El wasm desplegado y el OFT y el token a los que está ligado se verifican antes de darle la transacción al titular. Sin la variable, `400 merchant_fee_unsupported` |
 
-USDT0 sumará el campo cuando tenga una forma de dividir la transferencia on-chain; hasta
-entonces sus rutas lo rechazan como campo desconocido (`400 validation_failed`).
+Todas las operaciones de arriba aceptan el campo. Donde este despliegue no configuró el
+contrato que una operación necesita (`KURU_MERCHANT_FEE_ROUTER`,
+`USDT0_MERCHANT_FEE_WRAPPER`), responde `400 merchant_fee_unsupported`.
 
 ## USDT0 desde Stellar (LayerZero)
 
@@ -1524,6 +1526,13 @@ que su XDR tenga unos 7000 caracteres, más de lo que cabe en un código QR, as�
 operación, así que ningún pago de comisión puede ir junto con `send` como en un swap
 de path payment, y la tarifa del plan no se cobra en esta ruta. Cobrarla es decisión
 del responsable de producto.
+
+**La comisión del comercio pasa por un contrato.** Con `merchantFee` (ver **Comisión del
+comercio**) la operación es el `send` del wrapper (`USDT0_MERCHANT_FEE_WRAPPER`): transfiere
+la comisión en USDT0 a la wallet de la comisión y llama al `send` del OFT con los mismos
+argumentos, bajo la única autorización del titular, y devuelve el recibo del OFT, así la
+transferencia se sigue por el mismo guid. Se despliega una vez, sin dueño:
+`stellar contract deploy --wasm contracts/soroban/merchant-fee-oft/merchant_fee_oft.wasm --network mainnet -- --oft CBOWOLFSDM5PZXNFIVDMP5NZ7U2GSIHED6H6R446QOHF266XINKUMMF6 --token CBSJZEIO5C7KC2SF3MKSNXXJSW5G3VTNBX4ATMKUI3B2MR4JKM4R26YF`.
 
 **El RPC.** Todo pasa por el RPC de Soroban de mainnet de Stellar,
 `STELLAR_RPC_URL_MAINNET` (por defecto, el endpoint público de Gateway.fm, que tiene
@@ -2237,6 +2246,11 @@ misma lista `PLUGINS_ENABLED` que los plugins aislados.
   32 bytes, desde cualquier cuenta (el contrato no tiene dueño), y fijar la variable. La
   wallet de ese swap aprueba al router, no a Kuru. Sin ella, los swaps en Monad siguen
   respondiendo `merchant_fee_unsupported`.
+- **Las transferencias USDT0 aceptan `merchantFee`** cuando `USDT0_MERCHANT_FEE_WRAPPER`
+  nombra un `contracts/soroban/merchant-fee-oft` desplegado (wasm commiteado junto al crate,
+  fijado por `USDT0_MERCHANT_FEE_WRAPPER_WASM_SHA256`). **Paso de despliegue:** el comando
+  `stellar contract deploy` de la sección de USDT0, y después fijar la variable. Las
+  respuestas suman `merchantFee`. Sin ella, `merchant_fee_unsupported`.
 
 ### Los listados siguen la red de la clave; las lecturas del dashboard se cachean
 
@@ -3088,6 +3102,7 @@ Cada variable leída de `process.env` en `src/` se valida en el arranque mediant
 | `STELLAR_HORIZON_URL_PUBLIC` | no | `https://horizon.stellar.org` | URL base de Horizon para mainnet |
 | `STELLAR_HORIZON_URL_TESTNET` | no | `https://horizon-testnet.stellar.org` | URL base de Horizon para testnet |
 | `STELLAR_RPC_URL_MAINNET` | no | `https://soroban-rpc.mainnet.stellar.gateway.fm` | El RPC de Soroban de mainnet de Stellar, para las transferencias de USDT0 (su passphrase se comprueba antes de usarlo). El endpoint público tiene límites de tasa: en producción use el de un proveedor |
+| `USDT0_MERCHANT_FEE_WRAPPER` | para comisiones del comercio en USDT0 | — | Un `contracts/soroban/merchant-fee-oft` desplegado y ligado al OFT y al token de USDT0. Sin ella, una transferencia USDT0 con comisión del comercio responde `merchant_fee_unsupported`; un contrato que no ejecuta el wasm fijado, o ligado a otra cosa, responde `503 misconfigured` |
 | `SOLANA_RPC_URL_MAINNET` | no | `https://api.mainnet-beta.solana.com` | RPC de Solana para claves `prod` (mainnet-beta; el genesis hash se comprueba antes de usarlo). El endpoint público tiene límites de tasa: en producción use el de un proveedor |
 | `SOLANA_RPC_URL_DEVNET` | no | `https://api.devnet.solana.com` | RPC de Solana para claves `dev` (devnet) |
 | `SOLANA_RPC_TIMEOUT_MS` | no | `10000` | Presupuesto de una llamada RPC a Solana (ms) |

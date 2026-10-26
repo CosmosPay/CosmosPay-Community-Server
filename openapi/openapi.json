@@ -13425,7 +13425,7 @@
             }
           },
           "400": {
-            "description": "`network_unsupported`: a dev (testnet) key; USDT0 is on Stellar mainnet only. `validation_failed`: the source account does not exist, or the recipient has a bad EIP-55 checksum. `trustline_missing`: the source does not trust USDT0. `insufficient_balance`: it holds less USDT0 than the transfer takes, or too little XLM for LayerZero’s fee limit, the network fee and its reserve (the message says how much XLM to add). `invalid_amount`: all dust, or outside the OFT’s limits. `provider_error`: the OFT refused the transfer; `message` carries its contract error.",
+            "description": "`merchant_fee_unsupported`: a `merchantFee` and no merchant fee wrapper configured (USDT0_MERCHANT_FEE_WRAPPER). `network_unsupported`: a dev (testnet) key; USDT0 is on Stellar mainnet only. `validation_failed`: the source account does not exist, or the recipient has a bad EIP-55 checksum. `trustline_missing`: the source does not trust USDT0. `insufficient_balance`: it holds less USDT0 than the transfer takes, or too little XLM for LayerZero’s fee limit, the network fee and its reserve (the message says how much XLM to add). `invalid_amount`: all dust, or outside the OFT’s limits. `provider_error`: the OFT refused the transfer; `message` carries its contract error. With a merchant fee, `trustline_missing` also answers a fee wallet that does not trust USDT0, and `insufficient_balance` counts the fee the holder pays on top.",
             "content": {
               "application/json": {
                 "schema": {
@@ -13497,6 +13497,17 @@
                       "path": "/v1/usdt0/transfers",
                       "timestamp": "2026-09-01T12:00:00.000Z"
                     }
+                  },
+                  "merchant_fee_unsupported": {
+                    "summary": "merchant_fee_unsupported: This operation cannot pay a merchant fee yet",
+                    "value": {
+                      "statusCode": 400,
+                      "code": "merchant_fee_unsupported",
+                      "error": "Bad Request",
+                      "message": "A merchant fee is not available on USDT0 transfers on this deployment: a Soroban transaction carries one operation, so the fee needs the merchant fee wrapper (USDT0_MERCHANT_FEE_WRAPPER), which is not configured.",
+                      "path": "/v1/usdt0/transfers",
+                      "timestamp": "2026-09-01T12:00:00.000Z"
+                    }
                   }
                 }
               }
@@ -13561,7 +13572,7 @@
             }
           },
           "503": {
-            "description": "`provider_unavailable`: Horizon or the Soroban RPC did not answer; retry. `misconfigured`: STELLAR_RPC_URL_MAINNET serves another network.",
+            "description": "`provider_unavailable`: Horizon or the Soroban RPC did not answer; retry. `misconfigured`: STELLAR_RPC_URL_MAINNET serves another network, or USDT0_MERCHANT_FEE_WRAPPER is not the reviewed wrapper bound to USDT0's OFT and token.",
             "content": {
               "application/json": {
                 "schema": {
@@ -25789,6 +25800,14 @@
             "type": "string",
             "example": "usdt0-retry-2026-10-25-001",
             "description": "Optional idempotency key. Prefer the `Idempotency-Key` request header; when both are set, the header wins. A retry with the same key and the same request returns the stored transfer; the same key with a different request is 409 `idempotency_conflict`."
+          },
+          "merchantFee": {
+            "description": "Your own fee on this transfer, in USDT0, paid to `wallet` (a Stellar account that trusts USDT0) in the same transaction: the operation is then the merchant fee wrapper (`USDT0_MERCHANT_FEE_WRAPPER`), which pays the fee and calls the OFT's `send` under the holder's one authorization. `paidBy: recipient` takes it from `amount` (less is sent); `payer` adds it on top. Without a configured wrapper, `merchant_fee_unsupported`.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MerchantFeeDto"
+              }
+            ]
           }
         },
         "required": [
@@ -25957,6 +25976,16 @@
             "example": null,
             "description": "Why a FAILED transfer failed."
           },
+          "merchantFee": {
+            "nullable": true,
+            "description": "The merchant fee the request named, in USDT0, paid to its wallet in this transaction by the merchant fee wrapper; null without one.",
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MerchantFeeEntity"
+              }
+            ]
+          },
           "idempotencyKey": {
             "type": "string",
             "nullable": true,
@@ -26017,6 +26046,7 @@
           "scanStatus",
           "scanUrl",
           "failureReason",
+          "merchantFee",
           "idempotencyKey",
           "expiresAt",
           "submittedAt",
@@ -26177,6 +26207,16 @@
             "example": null,
             "description": "Why a FAILED transfer failed."
           },
+          "merchantFee": {
+            "nullable": true,
+            "description": "The merchant fee the request named, in USDT0, paid to its wallet in this transaction by the merchant fee wrapper; null without one.",
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MerchantFeeEntity"
+              }
+            ]
+          },
           "idempotencyKey": {
             "type": "string",
             "nullable": true,
@@ -26231,6 +26271,7 @@
           "scanStatus",
           "scanUrl",
           "failureReason",
+          "merchantFee",
           "idempotencyKey",
           "expiresAt",
           "submittedAt",
@@ -26426,6 +26467,16 @@
             "example": null,
             "description": "Why a FAILED transfer failed."
           },
+          "merchantFee": {
+            "nullable": true,
+            "description": "The merchant fee the request named, in USDT0, paid to its wallet in this transaction by the merchant fee wrapper; null without one.",
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MerchantFeeEntity"
+              }
+            ]
+          },
           "idempotencyKey": {
             "type": "string",
             "nullable": true,
@@ -26481,6 +26532,7 @@
           "scanStatus",
           "scanUrl",
           "failureReason",
+          "merchantFee",
           "idempotencyKey",
           "expiresAt",
           "submittedAt",

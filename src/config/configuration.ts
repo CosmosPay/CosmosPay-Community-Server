@@ -241,6 +241,12 @@ export interface AppConfig {
      * only, because USDT0 exists on mainnet only.
      */
     mainnetRpcUrl: string;
+    /**
+     * A deployed `contracts/soroban/merchant-fee-oft` (C...) bound to USDT0's
+     * OFT and token: a USDT0 transfer with a merchant fee invokes it instead of
+     * the OFT. Null without one, and USDT0 transfers then refuse a merchant fee.
+     */
+    usdt0MerchantFeeWrapper: string | null;
     baseFee: string;
     timeoutSeconds: number;
     swap: {
@@ -825,6 +831,8 @@ export default (): AppConfig => ({
       process.env.STELLAR_RPC_URL_MAINNET?.trim() ||
         DEFAULT_STELLAR_RPC_MAINNET,
     ),
+    usdt0MerchantFeeWrapper:
+      process.env.USDT0_MERCHANT_FEE_WRAPPER?.trim() || null,
     baseFee: process.env.STELLAR_BASE_FEE ?? '100',
     timeoutSeconds: parseInt(process.env.STELLAR_TX_TIMEOUT ?? '300', 10),
     swap: {

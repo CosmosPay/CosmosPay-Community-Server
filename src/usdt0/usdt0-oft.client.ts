@@ -4,6 +4,7 @@ import {
   Address,
   BASE_FEE,
   Contract,
+  nativeToScVal,
   rpc,
   TimeoutInfinite,
   type Transaction,
@@ -21,7 +22,15 @@ import {
   sendParamScVal,
   type SendParamInput,
 } from '@/usdt0/usdt0-oft';
-import { USDT0_OFT } from '@/usdt0/usdt0.constants';
+import { USDT0_OFT, USDT0_QUOTE_SOURCE } from '@/usdt0/usdt0.constants';
+
+/** A merchant fee the wrapper pays before the OFT's `send`, in USDT0 stroops. */
+export interface Usdt0MerchantFeeLeg {
+  /** The verified wrapper contract (C...). */
+  wrapper: string;
+  wallet: string;
+  amount: bigint;
+}
 
 /** The longest contract error relayed to a caller; the event log after it is cut. */
 const MAX_CONTRACT_ERROR_LENGTH = 200;
@@ -87,21 +96,34 @@ export class Usdt0OftClient {
     param: SendParamInput,
     fee: MessagingFee,
     opts: { baseFee: string; timeoutSeconds: number },
+    merchantFee: Usdt0MerchantFeeLeg | null = null,
   ): Promise<Transaction> {
     const from = account.accountId();
+    const send = [
+      sendParamScVal(param),
+      messagingFeeScVal(fee),
+      new Address(from).toScVal(),
+    ];
+    // With a merchant fee the operation is the wrapper's `send`, which pays
+    // the fee and calls the OFT's with the same arguments.
+    const call = merchantFee
+      ? new Contract(merchantFee.wrapper).call(
+          'send',
+          new Address(from).toScVal(),
+          new Address(merchantFee.wallet).toScVal(),
+          nativeToScVal(merchantFee.amount, { type: 'i128' }),
+          ...send,
+        )
+      : new Contract(USDT0_OFT).call(
+          'send',
+          new Address(from).toScVal(),
+          ...send,
+        );
     const tx = new TransactionBuilder(account, {
       fee: opts.baseFee,
       networkPassphrase: this.rpc.passphrase,
     })
-      .addOperation(
-        new Contract(USDT0_OFT).call(
-          'send',
-          new Address(from).toScVal(),
-          sendParamScVal(param),
-          messagingFeeScVal(fee),
-          new Address(from).toScVal(),
-        ),
-      )
+      .addOperation(call)
       .setTimeout(opts.timeoutSeconds)
       .build();
 
@@ -132,6 +154,27 @@ export class Usdt0OftClient {
     return rpc.assembleTransaction(tx, sim).build();
   }
 
+  /** The OFT and the token a merchant fee wrapper was built with. */
+  async wrapperBinding(
+    wrapper: string,
+  ): Promise<{ oft: string | null; token: string | null }> {
+    const read = async (method: 'oft' | 'token') => {
+      const retval = await this.simulateRead(
+        USDT0_QUOTE_SOURCE,
+        method,
+        [],
+        wrapper,
+      );
+      try {
+        return Address.fromScVal(retval).toString();
+      } catch {
+        return null;
+      }
+    };
+    const [oft, token] = await Promise.all([read('oft'), read('token')]);
+    return { oft, token };
+  }
+
   /**
    * Simulates a read-only call and returns its value. Any account, existing or
    * not, can be the source: a simulation checks no sequence number and no
@@ -141,12 +184,13 @@ export class Usdt0OftClient {
     from: string,
     method: string,
     args: xdr.ScVal[],
+    contract: string = USDT0_OFT,
   ): Promise<xdr.ScVal> {
     const tx = new TransactionBuilder(new Account(from, '0'), {
       fee: BASE_FEE,
       networkPassphrase: this.rpc.passphrase,
     })
-      .addOperation(new Contract(USDT0_OFT).call(method, ...args))
+      .addOperation(new Contract(contract).call(method, ...args))
       .setTimeout(TimeoutInfinite)
       .build();
     const sim = await this.rpc.simulate(tx);

@@ -193,6 +193,27 @@ describe('USDT0 guards (e2e)', () => {
       expect(rpcMock.simulate).not.toHaveBeenCalled();
     });
 
+    it('validates a nested merchantFee, and refuses one with no wrapper configured before the RPC', async () => {
+      const body = {
+        source: 'GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ',
+        to: 'eth',
+        recipient: '0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed',
+        amount: '10',
+      };
+      const wallet = 'GCALNQQBXAPZ2WIRSDDBMSTAKCUH5SG6U76YBFLQLIXJTF7FE5AX7AOO';
+      const bad = await tenant(CREATE, 'swaps:write')
+        .send({ ...body, merchantFee: { bps: 100, wallet, paidBy: 'nobody' } })
+        .expect(400);
+      expect(bad.body.code).toBe('validation_failed');
+      expect(JSON.stringify(bad.body)).toContain('paidBy');
+
+      const unsupported = await tenant(CREATE, 'swaps:write')
+        .send({ ...body, merchantFee: { bps: 100, wallet } })
+        .expect(400);
+      expect(unsupported.body.code).toBe('merchant_fee_unsupported');
+      expect(rpcMock.simulate).not.toHaveBeenCalled();
+    });
+
     it('lists only its own transfers', async () => {
       const res = await tenant(LIST, 'swaps:read').expect(200);
       expect(res.body).toMatchObject({ data: [], total: 0 });

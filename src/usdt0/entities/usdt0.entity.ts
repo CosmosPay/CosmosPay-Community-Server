@@ -1,5 +1,6 @@
 import { ApiProperty, OmitType } from '@nestjs/swagger';
 import { Usdt0TransferStatus } from '@generated/prisma/client';
+import { MerchantFeeEntity } from '@/common/merchant-fee/merchant-fee.entity';
 import { USDT0_CHAIN_IDS } from '@/usdt0/usdt0.constants';
 import { ApiPublicTokenProperty } from '@/common/decorators/api-record-token.decorator';
 
@@ -314,6 +315,15 @@ export class Usdt0TransferEntity {
     description: 'Why a FAILED transfer failed.',
   })
   failureReason!: string | null;
+
+  @ApiProperty({
+    type: MerchantFeeEntity,
+    nullable: true,
+    description:
+      'The merchant fee the request named, in USDT0, paid to its wallet in ' +
+      'this transaction by the merchant fee wrapper; null without one.',
+  })
+  merchantFee!: MerchantFeeEntity | null;
 
   @ApiProperty({
     nullable: true,

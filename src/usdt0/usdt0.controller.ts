@@ -258,8 +258,11 @@ export class Usdt0Controller {
       ApiErrorCode.InsufficientBalance,
       ApiErrorCode.NetworkUnsupported,
       ApiErrorCode.ProviderError,
+      ApiErrorCode.MerchantFeeUnsupported,
     ],
     description:
+      '`merchant_fee_unsupported`: a `merchantFee` and no merchant fee ' +
+      'wrapper configured (USDT0_MERCHANT_FEE_WRAPPER). ' +
       '`network_unsupported`: a dev (testnet) key; USDT0 is on Stellar ' +
       'mainnet only. `validation_failed`: the source account does not exist, ' +
       'or the recipient has a bad EIP-55 checksum. `trustline_missing`: the ' +
@@ -268,7 +271,9 @@ export class Usdt0Controller {
       'limit, the network fee and its reserve (the message says how much XLM ' +
       'to add). `invalid_amount`: all dust, or outside the OFT’s limits. ' +
       '`provider_error`: the OFT refused the transfer; `message` carries its ' +
-      'contract error.',
+      'contract error. With a merchant fee, `trustline_missing` also answers ' +
+      'a fee wallet that does not trust USDT0, and `insufficient_balance` ' +
+      'counts the fee the holder pays on top.',
     examples: usdt0Examples(
       '/v1/usdt0/transfers',
       [
@@ -278,12 +283,15 @@ export class Usdt0Controller {
         ApiErrorCode.InsufficientBalance,
         ApiErrorCode.NetworkUnsupported,
         ApiErrorCode.ProviderError,
+        ApiErrorCode.MerchantFeeUnsupported,
       ],
       {
         [ApiErrorCode.ValidationFailed]:
           'recipient has an invalid EIP-55 checksum: check the address, or send it in lowercase',
         [ApiErrorCode.ProviderError]:
           'The USDT0 contract refused the transfer: HostError: Error(Contract, #2001)',
+        [ApiErrorCode.MerchantFeeUnsupported]:
+          'A merchant fee is not available on USDT0 transfers on this deployment: a Soroban transaction carries one operation, so the fee needs the merchant fee wrapper (USDT0_MERCHANT_FEE_WRAPPER), which is not configured.',
       },
     ),
   })
@@ -319,7 +327,9 @@ export class Usdt0Controller {
     codes: [ApiErrorCode.ProviderUnavailable, ApiErrorCode.Misconfigured],
     description:
       '`provider_unavailable`: Horizon or the Soroban RPC did not answer; ' +
-      'retry. `misconfigured`: STELLAR_RPC_URL_MAINNET serves another network.',
+      'retry. `misconfigured`: STELLAR_RPC_URL_MAINNET serves another ' +
+      'network, or USDT0_MERCHANT_FEE_WRAPPER is not the reviewed wrapper ' +
+      "bound to USDT0's OFT and token.",
     examples: usdt0Examples('/v1/usdt0/transfers', [
       ApiErrorCode.ProviderUnavailable,
       ApiErrorCode.Misconfigured,

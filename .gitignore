@@ -69,3 +69,6 @@ prisma/*.db
 .claude/council-cache
 # A plugin signing key never belongs in any repository.
 *.pem
+
+# Soroban contract builds (the reviewed wasm is committed beside its crate).
+contracts/soroban/**/target/

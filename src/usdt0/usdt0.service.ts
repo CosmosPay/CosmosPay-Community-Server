@@ -1,9 +1,21 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { Prisma, Usdt0Transfer } from '@generated/prisma/client';
-import { toChecksumAddress } from '@/chains/chain-address';
+import { createHash } from 'node:crypto';
+import { CHAIN_ADDRESS_RULES, toChecksumAddress } from '@/chains/chain-address';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import type { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
+import {
+  assertMerchantFeeCovered,
+  merchantFeeRecord,
+  type MerchantFeeRecord,
+  type MerchantFeeTerms,
+  readMerchantFeeRecord,
+  resolveMerchantFee,
+  sameMerchantFee,
+  splitMerchantFee,
+} from '@/common/merchant-fee/merchant-fee';
+import type { MerchantFeeDto } from '@/common/merchant-fee/merchant-fee.dto';
 import { isUniqueViolation } from '@/common/prisma-errors';
 import { project } from '@/common/projection';
 import { PublicRecordTokens } from '@/common/public-record-token';
@@ -12,9 +24,11 @@ import { resolveNetwork } from '@/common/stellar-network';
 import type { AppConfig } from '@/config/configuration';
 import { PrismaService } from '@/prisma/prisma.service';
 import { StellarAccountLoader } from '@/stellar/account-loader.service';
+import { resolveAsset } from '@/stellar/asset';
 import { sep7Qr, sep7TxUri } from '@/stellar/sep7';
 import { SorobanRpcClient } from '@/stellar/soroban-rpc.client';
 import { resolveIdempotencyKey } from '@/stellar/stellar-operation-policy';
+import { STELLAR_DECIMALS } from '@/stellar/stellar.constants';
 import { fromStroops, toStroops } from '@/swaps/swap-math';
 import { CreateUsdt0TransferDto } from '@/usdt0/dto/create-usdt0-transfer.dto';
 import { QuoteUsdt0Dto } from '@/usdt0/dto/quote-usdt0.dto';
@@ -39,6 +53,7 @@ import {
   USDT0_ASSET_CODE,
   USDT0_CHAIN_IDS,
   USDT0_ISSUER,
+  USDT0_MERCHANT_FEE_WRAPPER_WASM_SHA256,
   USDT0_OFT,
   USDT0_QUOTE_RECIPIENT,
   USDT0_QUOTE_SOURCE,
@@ -73,6 +88,7 @@ export const USDT0_TRANSFER_PUBLIC_SELECT = {
   destinationTxHash: true,
   scanStatus: true,
   failureReason: true,
+  merchantFee: true,
   idempotencyKey: true,
   expiresAt: true,
   submittedAt: true,
@@ -85,9 +101,13 @@ type PublicUsdt0Transfer = Prisma.Usdt0TransferGetPayload<{
 }>;
 
 /** A transfer as the list returns it: the public row plus its derived fields. */
-export type Usdt0TransferListItem = Omit<PublicUsdt0Transfer, 'txHash'> & {
+export type Usdt0TransferListItem = Omit<
+  PublicUsdt0Transfer,
+  'txHash' | 'merchantFee'
+> & {
   /** Null until the transaction reached the network. */
   txHash: string | null;
+  merchantFee: MerchantFeeRecord | null;
   dust: string;
   scanUrl: string | null;
 };
@@ -110,6 +130,13 @@ interface Usdt0RequestTerms {
   to: string;
   recipient: string;
   amount: string;
+}
+
+/** A merchant fee priced for one transfer: the terms, the fee and what is sent. */
+interface PricedMerchantFee {
+  terms: MerchantFeeTerms;
+  /** USDT0 stroops paid to the fee's wallet. */
+  fee: bigint;
 }
 
 /** Statuses whose transaction reached the network, so its hash means something. */
@@ -247,6 +274,7 @@ export class Usdt0Service {
   ): Promise<Usdt0TransferView> {
     this.assertMainnet(consumer);
     const terms = this.requestTerms(dto);
+    const merchantTerms = this.merchantFeeTerms(dto.merchantFee);
     const local = await this.consumers.resolve(consumer);
     const idempotencyKey = resolveIdempotencyKey(
       headerIdempotencyKey,
@@ -257,21 +285,36 @@ export class Usdt0Service {
         local.id,
         idempotencyKey,
       );
-      if (existing) return this.replay(existing, terms, consumer);
+      if (existing) {
+        return this.replay(existing, terms, merchantTerms, consumer);
+      }
     }
 
     const route = USDT0_ROUTES[dto.to];
     const amountLd = this.amountLd(dto.amount);
-    const amountSentLd = withoutDust(amountLd);
+    // A merchant fee comes out of `amount` (less is sent) or rides on top.
+    const merchant = this.priceMerchantFee(merchantTerms, amountLd);
+    const routedLd =
+      merchant?.terms.paidBy === 'recipient'
+        ? amountLd - merchant.fee
+        : amountLd;
+    const amountSentLd = this.sendable(routedLd);
 
     // Horizon first: it answers the cheap refusals before the RPC is asked.
     const account = await this.accounts.load('public', dto.source);
-    assertHoldsUsdt0(account.balances, dto.source, amountSentLd);
+    assertHoldsUsdt0(
+      account.balances,
+      dto.source,
+      amountSentLd + (merchant?.fee ?? 0n),
+    );
+    const wrapper = merchant
+      ? await this.merchantFeeWrapper(merchant.terms, dto.source)
+      : null;
 
     const { oft, fee } = await this.oft.quote(dto.source, {
       dstEid: route.eid,
       recipient: terms.recipient,
-      amountLd,
+      amountLd: routedLd,
     });
     this.assertWithinLimits(oft);
     const nativeFeeLimit = withFeeBuffer(fee.nativeFee);
@@ -289,6 +332,9 @@ export class Usdt0Service {
       },
       { nativeFee: nativeFeeLimit, zroFee: 0n },
       { baseFee: stellar.baseFee, timeoutSeconds: stellar.timeoutSeconds },
+      merchant && wrapper
+        ? { wrapper, wallet: merchant.terms.wallet, amount: merchant.fee }
+        : null,
     );
     const networkFee = BigInt(tx.fee);
     assertCanPayXlm(account, account.balances, {
@@ -314,6 +360,18 @@ export class Usdt0Service {
       nativeFee: fromStroops(fee.nativeFee),
       nativeFeeLimit: fromStroops(nativeFeeLimit),
       networkFee: fromStroops(networkFee),
+      ...(merchant
+        ? {
+            merchantFee: {
+              ...merchantFeeRecord(
+                merchant.terms,
+                merchant.fee,
+                STELLAR_DECIMALS,
+                USDT0_ASSET_CODE,
+              ),
+            },
+          }
+        : {}),
       xdr,
       uri: sep7TxUri(xdr),
       txHash: Buffer.from(tx.hash()).toString('hex'),
@@ -327,7 +385,7 @@ export class Usdt0Service {
     if (!transfer) {
       // Another request with the same key won the insert.
       const raced = await this.findByIdempotencyKey(local.id, idempotencyKey!);
-      if (raced) return this.replay(raced, terms, consumer);
+      if (raced) return this.replay(raced, terms, merchantTerms, consumer);
       throw ApiError.conflict(
         ApiErrorCode.IdempotencyConflict,
         'A USDT0 transfer with this Idempotency-Key already exists.',
@@ -509,6 +567,122 @@ export class Usdt0Service {
     return stroops;
   }
 
+  /** What the OFT carries of `routedLd`: refused when that is dust only. */
+  private sendable(routedLd: bigint): bigint {
+    const sent = withoutDust(routedLd);
+    if (sent <= 0n) {
+      throw ApiError.badRequest(
+        ApiErrorCode.InvalidAmount,
+        'amount is too small to send anything once the merchant fee is paid',
+      );
+    }
+    return sent;
+  }
+
+  /**
+   * The request's merchant fee, or null without one. A Soroban transaction
+   * carries one operation, so the fee needs the wrapper: without one
+   * configured the request is refused before anything is read.
+   */
+  private merchantFeeTerms(
+    dto: MerchantFeeDto | undefined,
+  ): MerchantFeeTerms | null {
+    const terms = resolveMerchantFee(
+      dto,
+      STELLAR_DECIMALS,
+      CHAIN_ADDRESS_RULES.stellar,
+    );
+    if (terms && !this.wrapperAddress()) {
+      throw ApiError.badRequest(
+        ApiErrorCode.MerchantFeeUnsupported,
+        'A merchant fee is not available on USDT0 transfers on this ' +
+          'deployment: a Soroban transaction carries one operation, so the fee ' +
+          'needs the merchant fee wrapper (USDT0_MERCHANT_FEE_WRAPPER), which ' +
+          'is not configured.',
+      );
+    }
+    return terms;
+  }
+
+  /** The merchant fee on `amountLd`, or null without one. */
+  private priceMerchantFee(
+    terms: MerchantFeeTerms | null,
+    amountLd: bigint,
+  ): PricedMerchantFee | null {
+    if (!terms) return null;
+    const split = splitMerchantFee(amountLd, terms);
+    assertMerchantFeeCovered(split, terms);
+    return { terms, fee: split.fee };
+  }
+
+  private wrapperAddress(): string | null {
+    return this.config.get('stellar', { infer: true }).usdt0MerchantFeeWrapper;
+  }
+
+  /**
+   * The wrapper a transfer with a merchant fee invokes, once the fee's wallet
+   * can take USDT0 and the wrapper is the reviewed one: its wasm hashes to
+   * {@link USDT0_MERCHANT_FEE_WRAPPER_WASM_SHA256} and it is bound to USDT0's
+   * OFT and token. The holder signs a call to it, so anything else is refused
+   * (503) rather than handed out.
+   */
+  private async merchantFeeWrapper(
+    terms: MerchantFeeTerms,
+    source: string,
+  ): Promise<string> {
+    if (terms.wallet === source) {
+      throw ApiError.badRequest(
+        ApiErrorCode.ValidationFailed,
+        'merchantFee.wallet must be another account than source',
+      );
+    }
+    const wrapper = this.wrapperAddress()!;
+    const [receiver] = await Promise.all([
+      this.accounts.load('public', terms.wallet),
+      this.verifiedWrapper(wrapper),
+    ]);
+    this.accounts.assertCanReceive(
+      receiver.balances,
+      resolveAsset(USDT0_ASSET_CODE, USDT0_ISSUER),
+      terms.wallet,
+      'the merchant fee',
+    );
+    return wrapper;
+  }
+
+  /** The wrapper's check, made once per configured address. */
+  private wrapperCheck: { address: string; check: Promise<void> } | null = null;
+
+  private verifiedWrapper(address: string): Promise<void> {
+    if (this.wrapperCheck?.address !== address) {
+      const check = (async () => {
+        const wasm = await this.rpc.contractWasm(address);
+        const sha256 = createHash('sha256').update(wasm).digest('hex');
+        const binding =
+          sha256 === USDT0_MERCHANT_FEE_WRAPPER_WASM_SHA256
+            ? await this.oft.wrapperBinding(address)
+            : null;
+        if (binding?.oft !== USDT0_OFT || binding.token !== USDT0_SAC) {
+          this.logger.error(
+            `USDT0_MERCHANT_FEE_WRAPPER ${address} is not the reviewed wrapper ` +
+              `bound to USDT0 (wasm ${sha256})`,
+          );
+          throw ApiError.unavailable(
+            ApiErrorCode.Misconfigured,
+            `USDT0_MERCHANT_FEE_WRAPPER (${address}) is not the merchant fee ` +
+              "wrapper built from contracts/soroban/merchant-fee-oft, bound to USDT0's OFT and token.",
+          );
+        }
+      })();
+      this.wrapperCheck = { address, check };
+      // A failed check (an RPC hiccup included) is asked again next time.
+      check.catch(() => {
+        if (this.wrapperCheck?.check === check) this.wrapperCheck = null;
+      });
+    }
+    return this.wrapperCheck.check;
+  }
+
   /** The OFT's own limits, and an amount that arrives as something. */
   private assertWithinLimits(oft: OftQuote): void {
     if (oft.amountSentLd < oft.minAmountLd) {
@@ -568,11 +742,13 @@ export class Usdt0Service {
   private async replay(
     existing: Usdt0Transfer,
     terms: Usdt0RequestTerms,
+    merchant: MerchantFeeTerms | null,
     consumer: GatewayConsumer,
   ): Promise<Usdt0TransferView> {
-    const same = (Object.keys(terms) as (keyof Usdt0RequestTerms)[]).every(
-      (key) => existing[key] === terms[key],
-    );
+    const same =
+      (Object.keys(terms) as (keyof Usdt0RequestTerms)[]).every(
+        (key) => existing[key] === terms[key],
+      ) && sameMerchantFee(existing.merchantFee, merchant, STELLAR_DECIMALS);
     if (!same) {
       this.logger.warn(
         'Idempotency-Key reused for a different USDT0 transfer request ' +
@@ -673,10 +849,18 @@ export class Usdt0Service {
   /** The public projection with what is derived from it. */
   private listItem(row: PublicUsdt0Transfer): Usdt0TransferListItem {
     const onNetwork = ON_NETWORK.has(row.status);
+    const merchantFee = readMerchantFeeRecord(row.merchantFee);
+    // A fee the recipient pays came out of `amount` before the dust did.
+    const routed =
+      toStroops(row.amount) -
+      (merchantFee?.paidBy === 'recipient'
+        ? toStroops(merchantFee.amount)
+        : 0n);
     return {
       ...row,
+      merchantFee,
       txHash: onNetwork ? row.txHash : null,
-      dust: fromStroops(toStroops(row.amount) - toStroops(row.amountSent)),
+      dust: fromStroops(routed - toStroops(row.amountSent)),
       // Scan knows a message only once the transaction landed successfully.
       scanUrl:
         row.status === 'SUBMITTED' ||
