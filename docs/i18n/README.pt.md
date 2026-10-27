@@ -1499,7 +1499,7 @@ comerciante**) a operação é o `send` do wrapper (`USDT0_FEE_WRAPPER`): ele tr
 a taxa em USDT0 para a wallet da taxa e chama o `send` do OFT com os mesmos argumentos,
 sob a única autorização do titular, e devolve o recibo do OFT, então a transferência é
 acompanhada pelo mesmo guid. Implanta-se uma vez, sem dono:
-`stellar contract deploy --wasm contracts/soroban/usdt0-fee-wrapper/usdt0_fee_wrapper.wasm --network mainnet -- --oft CBOWOLFSDM5PZXNFIVDMP5NZ7U2GSIHED6H6R446QOHF266XINKUMMF6 --token CBSJZEIO5C7KC2SF3MKSNXXJSW5G3VTNBX4ATMKUI3B2MR4JKM4R26YF`.
+`USDT0_OFT=CBOWOLFSDM5PZXNFIVDMP5NZ7U2GSIHED6H6R446QOHF266XINKUMMF6 USDT0_SAC=CBSJZEIO5C7KC2SF3MKSNXXJSW5G3VTNBX4ATMKUI3B2MR4JKM4R26YF; stellar contract deploy --wasm contracts/soroban/usdt0-fee-wrapper/usdt0_fee_wrapper.wasm --network mainnet -- --oft "$USDT0_OFT" --token "$USDT0_SAC"`.
 
 **O RPC.** Tudo passa pelo RPC do Soroban da mainnet da Stellar,
 `STELLAR_RPC_URL_MAINNET` (por padrão o endpoint público da Gateway.fm, que tem

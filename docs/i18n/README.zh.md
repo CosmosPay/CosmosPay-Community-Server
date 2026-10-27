@@ -989,7 +989,7 @@ routes → quote → create (unsigned XDR + SEP-7 link) → the holder signs
 
 **佣金：套餐费率，通过手续费 wrapper 收取。** 一笔 Soroban 交易只承载一个操作，因此佣金与商户手续费经过同一个合约（`USDT0_FEE_WRAPPER`，见下文）：按 `amount` 的 `feeBps` 计算并向下取整，以 USDT0 支付给 `STELLAR_SWAP_FEE_WALLET`（必须对 USDT0 有 trustline，否则 `503 misconfigured`），其余部分发送。未配置 wrapper 时，转账不收取佣金（`feeBps: 0`），这是产品负责人的决定（2026-10-26）。
 
-**商户手续费通过合约收取。** 使用 `merchantFee`（见 **商户手续费**）时，操作是 wrapper 的 `send`（`USDT0_FEE_WRAPPER`）：它在持有人的同一授权下，以 USDT0 将手续费转给手续费钱包，并以相同参数调用 OFT 的 `send`，然后返回 OFT 的回执，因此转账仍按同一个 guid 跟踪。只需部署一次，没有所有者：`stellar contract deploy --wasm contracts/soroban/usdt0-fee-wrapper/usdt0_fee_wrapper.wasm --network mainnet -- --oft CBOWOLFSDM5PZXNFIVDMP5NZ7U2GSIHED6H6R446QOHF266XINKUMMF6 --token CBSJZEIO5C7KC2SF3MKSNXXJSW5G3VTNBX4ATMKUI3B2MR4JKM4R26YF`。
+**商户手续费通过合约收取。** 使用 `merchantFee`（见 **商户手续费**）时，操作是 wrapper 的 `send`（`USDT0_FEE_WRAPPER`）：它在持有人的同一授权下，以 USDT0 将手续费转给手续费钱包，并以相同参数调用 OFT 的 `send`，然后返回 OFT 的回执，因此转账仍按同一个 guid 跟踪。只需部署一次，没有所有者：`USDT0_OFT=CBOWOLFSDM5PZXNFIVDMP5NZ7U2GSIHED6H6R446QOHF266XINKUMMF6 USDT0_SAC=CBSJZEIO5C7KC2SF3MKSNXXJSW5G3VTNBX4ATMKUI3B2MR4JKM4R26YF; stellar contract deploy --wasm contracts/soroban/usdt0-fee-wrapper/usdt0_fee_wrapper.wasm --network mainnet -- --oft "$USDT0_OFT" --token "$USDT0_SAC"`。
 
 **RPC。** 所有调用都经过 Stellar 主网的 Soroban RPC，即 `STELLAR_RPC_URL_MAINNET`（默认是 Gateway.fm 的公共端点，有速率限制：生产环境请设置服务商的端点）。使用前会校验其 passphrase，连到其他网络的节点会返回 `503 misconfigured`。
 

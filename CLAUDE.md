@@ -612,6 +612,10 @@ refreshes it (ledger first, then LayerZero Scan), throttled per row by `lastChec
   commission, then a merchant fee) in USDT0 and calls the OFT's `send` with the same
   arguments, all under the holder's one source-account authorization (checked on
   testnet: one entry, each token transfer and the OFT's send as sub-invocations).
+- **A command in the docs never writes a value right after a secret-named flag.** The wrapper's
+  constructor takes `--token` (USDT0's SAC id, public), and `--token C...` in the README was a
+  GitGuardian "Generic CLI Secret" incident (a false positive, 2026-10-27). Set such values in a
+  shell variable with a neutral name first (`USDT0_SAC=...;` then `--token "$USDT0_SAC"`).
 - **The plan commission rides only through the wrapper**: without `USDT0_FEE_WRAPPER` a
   transfer charges none (product owner, 2026-10-26). With it, a plan rate and no
   `STELLAR_SWAP_FEE_WALLET` is `503 misconfigured` (`commissionWithRecipient`), and a
