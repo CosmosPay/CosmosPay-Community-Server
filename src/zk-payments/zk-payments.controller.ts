@@ -69,7 +69,7 @@ export class ZkPaymentsController {
   @RateLimit(ZK_PAYMENT_CREATE_RATE_LIMIT)
   @ApiOperation({
     summary:
-      'Create a private payment: a confidential payment to a merchant registered on the token, minus the 0.01% commission',
+      'Create a private payment: a confidential payment to a merchant registered on the token, minus the 0.18% commission',
     description:
       'A private payment hides its amount on-chain: it is paid with ' +
       "confidential transfers on Cosmos Pay's confidential token, proven with " +
@@ -115,7 +115,7 @@ export class ZkPaymentsController {
       [ApiErrorCode.InvalidAmount]: {
         summary: 'The merchant would receive nothing after the commission',
         message:
-          'The amount is too small: after the 0.01% commission (at least one ' +
+          'The amount is too small: after the 0.18% commission (at least one ' +
           'stroop) the merchant would receive nothing.',
         path: '/v1/zk-payments',
       },

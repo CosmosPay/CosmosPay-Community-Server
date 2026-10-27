@@ -5,7 +5,7 @@
  */
 
 /**
- * Cosmos Pay's commission on every private payment, in basis points: 1 bps, 0.01%.
+ * Cosmos Pay's commission on every private payment, in basis points: 18 bps, 0.18%.
  *
  * A constant, not an environment variable: it is the price of the product, the
  * same on every deployment, and a commission an operator could set to 0 by
@@ -14,11 +14,11 @@
  * the network's fee account as a second confidential transfer
  * (`zk-payment-fee.ts` has the rounding).
  */
-export const ZK_PAYMENT_FEE_BPS = 1;
+export const ZK_PAYMENT_FEE_BPS = 18;
 
 /**
- * The smallest fee, in stroops. A fee of 1 bps rounds to zero below 10,000
- * stroops (0.001 XLM), and a confidential transfer of zero would still cost the
+ * The smallest fee, in stroops. A fee of 18 bps comes to less than one stroop
+ * below 556 stroops (0.0000556 XLM), and a confidential transfer of zero would still cost the
  * payer a proof and a transaction while paying nothing. One stroop keeps every
  * payment paying something, and keeps the fee transfer a real transfer.
  */

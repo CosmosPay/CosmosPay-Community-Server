@@ -173,7 +173,7 @@ describe('ZkCheckoutService', () => {
         verifier: ZK.verifier,
         auditorRegistry: ZK.auditorRegistry,
         auditorId: 0,
-        feeBps: 1,
+        feeBps: 18,
         feeAccount: FEE_ACCOUNT,
       });
       expect(JSON.stringify(config)).not.toContain(ZK.auditorSecret);
@@ -190,7 +190,7 @@ describe('ZkCheckoutService', () => {
         verifier: null,
         auditorRegistry: null,
         auditorId: 0,
-        feeBps: 1,
+        feeBps: 18,
         feeAccount: null,
       });
     });

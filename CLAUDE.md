@@ -475,7 +475,7 @@ stays in what code and operators read: the routes (`/v1/zk-payments`,
 
 `src/zk-payments/` serves payments whose amount is hidden on-chain, on Cosmos Pay's
 OWN instance of OpenZeppelin's Confidential Token (`stellar-confidential` 0.8.0),
-for a 0.01% commission (`ZK_PAYMENT_FEE_BPS = 1`, a constant: the price of the
+for a 0.18% commission (`ZK_PAYMENT_FEE_BPS = 18`, a constant: the price of the
 product, never an env var). Testnet only; mainnet is off until `ZK_PAYMENTS_MAINNET_*`
 is set.
 

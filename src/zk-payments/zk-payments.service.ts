@@ -145,9 +145,9 @@ export class ZkPaymentsService {
       throw ApiError.badRequest(
         ApiErrorCode.InvalidAmount,
         merchant
-          ? 'The amount is too small: after the 0.01% commission (at least ' +
+          ? 'The amount is too small: after the 0.18% commission (at least ' +
               'one stroop) and the merchant fee the merchant would receive nothing.'
-          : 'The amount is too small: after the 0.01% commission (at least one ' +
+          : 'The amount is too small: after the 0.18% commission (at least one ' +
               'stroop) the merchant would receive nothing.',
       );
     }

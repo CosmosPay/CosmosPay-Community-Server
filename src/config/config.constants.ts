@@ -15,7 +15,7 @@ export const DEFAULT_ENV_FILE = '.env';
 export const DEFAULT_PAYMENT_LINK_CHECKOUT_URL =
   'https://payments.cosmospay.lat';
 
-export const DEFAULT_SWAP_FEE_BPS = 50;
+export const DEFAULT_SWAP_FEE_BPS = 65;
 export const DEFAULT_SWAP_SLIPPAGE_BPS = 50;
 export const DEFAULT_SWAP_MAX_SLIPPAGE_BPS = 500;
 

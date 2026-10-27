@@ -24,7 +24,7 @@ export class CreateZkPaymentDto {
   @ApiProperty({
     description:
       'What the payer pays in total, in XLM (up to 7 decimal places). The ' +
-      'merchant receives it minus the 0.01% commission (`netAmount`); the ' +
+      'merchant receives it minus the 0.18% commission (`netAmount`); the ' +
       'commission (`feeAmount`, rounded up, at least one stroop) goes to ' +
       "Cosmos Pay's fee account. An amount whose net would be zero is refused.",
     example: '25.5',
@@ -94,7 +94,7 @@ export class CreateZkPaymentDto {
       'auditor id 0) and be neither the recipient nor the fee account. ' +
       '`paidBy: recipient` takes it from `amount` (the merchant receives ' +
       'less); `payer` adds it on top (the payer pays `amount` plus the fee). ' +
-      'The 0.01% commission is a share of `amount` either way. Confirm then ' +
+      'The 0.18% commission is a share of `amount` either way. Confirm then ' +
       'takes `merchantFeeTxHash` too.',
   })
   @IsOptional()

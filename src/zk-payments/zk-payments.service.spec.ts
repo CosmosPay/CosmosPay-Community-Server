@@ -104,7 +104,7 @@ describe('ZkPaymentsService', () => {
         network: 'testnet',
         token: { contractId: TOKEN, symbol: 'XLM', decimals: 7 },
         auditorId: 0,
-        feeBps: 1,
+        feeBps: 18,
         feeAccount: FEE_ACCOUNT,
       });
       expect(service.getConfig(prodKey)).toMatchObject({
@@ -131,9 +131,9 @@ describe('ZkPaymentsService', () => {
         network: 'testnet',
         tokenContract: TOKEN,
         amount: '25.5',
-        netAmount: '25.49745',
-        feeAmount: '0.00255',
-        feeBps: 1,
+        netAmount: '25.4541',
+        feeAmount: '0.0459',
+        feeBps: 18,
         recipient: MERCHANT,
         feeAccount: FEE_ACCOUNT,
         description: 'Order #24',
@@ -292,8 +292,8 @@ describe('ZkPaymentsService', () => {
         const data = prisma.zkPayment.create.mock.calls[0][0].data;
         expect(data).toMatchObject({
           amount: '101.75',
-          netAmount: '99.99',
-          feeAmount: '0.01',
+          netAmount: '99.82',
+          feeAmount: '0.18',
           merchantFee: {
             bps: 150,
             fixed: '0.25',
@@ -315,8 +315,8 @@ describe('ZkPaymentsService', () => {
         });
         expect(prisma.zkPayment.create.mock.calls[0][0].data).toMatchObject({
           amount: '100',
-          netAmount: '98.24',
-          feeAmount: '0.01',
+          netAmount: '98.07',
+          feeAmount: '0.18',
         });
       });
 

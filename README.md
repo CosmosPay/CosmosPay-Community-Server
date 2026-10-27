@@ -150,7 +150,7 @@ regenerated from the controllers and DTOs on every CI run
 | Swaps             | `/v1/swaps`              | Path-payment quote, build unsigned XDR, submit signed · Solana via Jupiter, Monad via Kuru Flow |
 | Cross-chain swaps | `/v1/cross-chain-swaps` | Across 35 networks through NEAR Intents (Stellar, Solana, Monad, EVM chains, Bitcoin and the UTXO coins, ...): quote, deposit address, status |
 | USDT0             | `/v1/usdt0`              | USDT0 from Stellar to 21 EVM networks through LayerZero (native USDT on Ethereum), mainnet only: quote, build, submit, status |
-| Private payments  | `/v1/zk-payments`        | Confidential payments on Cosmos Pay's confidential token (amount hidden on-chain, 0.01% commission), testnet only for now |
+| Private payments  | `/v1/zk-payments`        | Confidential payments on Cosmos Pay's confidential token (amount hidden on-chain, 0.18% commission), testnet only for now |
 | Private checkout  | `/v1/zk-checkout`        | The payer's half of a private payment: read it, confirm it, the network setup (`@Public`) |
 | Liquidity pools   | `/v1/liquidity-pools`    | AMM deposit / withdraw, positions, commission on gain     |
 | Webhooks          | `/v1/webhooks`           | Endpoint CRUD, secret rotation, deliveries, redelivery    |
@@ -946,8 +946,8 @@ minted the same way on every chain (see
 
 The open-source wallet ships one API key that everybody shares, so anyone can
 swap, add liquidity or create a pay link without registering. Those calls pay the
-`community` plan's commission (50 bps, the highest rate); registering gets a
-lower one. The gateway injects the rate exactly as it does for a private key
+`community` plan's commission (65 bps, the highest rate, the same as Starter's); a
+paid plan gets a lower one. The gateway injects the rate exactly as it does for a private key
 (see `resolvePlanCommissionBps`).
 
 The difference is tenancy. Every anonymous caller arrives as the same APISIX
@@ -1056,7 +1056,7 @@ usual.
 **Wallet keys.** A finished sign-in gets a `dev` and a `prod` key under the
 consumer `cosmos_wallet_<accountId>`, with the scopes, labels and consumer
 forwarder the platform used to bake (plan `community`, swap commission
-`WALLET_KEY_SWAP_FEE_BPS`, default 50 bps). Every boot re-bakes the wallet consumers still carrying another
+`WALLET_KEY_SWAP_FEE_BPS`, default 65 bps). Every boot re-bakes the wallet consumers still carrying another
 rate, so a change to `WALLET_KEY_SWAP_FEE_BPS` reaches every account at once
 instead of on its next sign-in. A second sign-in returns the keys the
 account already has instead of minting another pair. `organizationId` in the
@@ -1392,7 +1392,7 @@ It is apart from the plan commission Cosmos Pay charges, which does not change.
 | Solana payment links (`POST /v1/payment-intents/pay`, `chain: solana`) | A Solana Pay transfer request names one recipient, so such a link (with an `amount`) is a Solana Pay **transaction request**: `uri` is `solana:<PAYMENT_LINK_API_URL>/v1/payment-links/{id}/solana-pay`, and the wallet POSTs the payer's account there for the transaction: the memo, the merchant's transfer carrying the link's reference, and the fee's transfer (token accounts created when missing, paid by the payer). A SOL fee goes to an account that already exists. The observer finds it by the reference and settles only on both legs |
 | Monad payment links (`POST /v1/payment-intents/pay`, `chain: monad`) | Only with deposit addresses (`MONAD_RELAYER_PRIVATE_KEY`; without them `merchant_fee_unsupported`) and an `amount`: the address is a `contracts/PaymentSplitForwarder.sol` (the fee's wallet and amount are two more constructor arguments, so the address commits to them), whose constructor pays the relayer its fee, then the merchant fee, then the merchant. The link asks for the deposit: the amount, plus the fee when the payer pays it |
 | Swaps on Solana (`POST /v1/swaps`, `chain: solana`) | Jupiter pays one integrator fee per swap and the plan commission takes it, so the fee's transfer (out of the source, in the source asset: a System transfer for SOL, else a TransferChecked after creating the wallet's token account) is appended to Jupiter's own v0 transaction: the accounts its lookup tables load are reused, every index rewritten, its compute limit raised, and the route asked with at most 40 accounts so it still fits one packet. A SOL fee goes to an account that already exists |
-| Private payments (`POST /v1/zk-payments`) | A third confidential transfer, in XLM, from the payer to `wallet`, so the fee stays as private as the payment. `wallet` must hold a confidential account on Cosmos Pay's token under auditor 0 (`400 recipient_not_registered` otherwise) and be neither the recipient nor the fee account. The 0.01% commission stays a share of `amount`, and the row's `amount` is what the payer pays in total. Confirm takes the third hash as `merchantFeeTxHash` and checks that transfer like the other two |
+| Private payments (`POST /v1/zk-payments`) | A third confidential transfer, in XLM, from the payer to `wallet`, so the fee stays as private as the payment. `wallet` must hold a confidential account on Cosmos Pay's token under auditor 0 (`400 recipient_not_registered` otherwise) and be neither the recipient nor the fee account. The 0.18% commission stays a share of `amount`, and the row's `amount` is what the payer pays in total. Confirm takes the third hash as `merchantFeeTxHash` and checks that transfer like the other two |
 | Liquidity (`POST /v1/liquidity-pools/deposit` and `/withdraw`) | A deposit or withdrawal moves two assets, so the fee is `bps` of EACH (rounded down), paid to `wallet` by one payment per asset in the same transaction, after the deposit, or after the withdrawal and its plan commission; `fixed` is refused (`400 validation_failed`). On a deposit, `recipient` takes it from the amounts (less enters the pool) and `payer` adds it on top. On a withdrawal it comes out of what the withdrawal pays, as a share of its guaranteed minimums, whichever `paidBy` names. `wallet` must exist and trust both assets. The record's `amount` / `asset` are asset A's leg, and `amountB` / `assetB` asset B's |
 | Swaps on Monad (`POST /v1/swaps`, `chain: monad`) | Kuru Flow pays one referrer fee per swap and the plan commission takes it, so a swap with a merchant fee goes through `contracts/MerchantFeeSwapRouter.sol`, deployed once by the operator for Kuru's router and named in `KURU_MERCHANT_FEE_ROUTER`: Kuru quotes for the router, the wallet sends (MON) or approves (ERC-20) the input plus the fee to it, and in that one transaction it pays the fee, runs Kuru's calldata, forwards the output and refunds what Kuru left, reverting below Kuru's minimum. The deployed code is checked against the artifact before a wallet is handed the address. Without the variable, `400 merchant_fee_unsupported` |
 | USDT0 transfers (`POST /v1/usdt0/transfers`) | A Soroban transaction carries one operation, so such a transfer's operation is `contracts/soroban/usdt0-fee-wrapper` (`USDT0_FEE_WRAPPER`) instead of the OFT: under the holder's one authorization it transfers the fee in USDT0 to `wallet` (which must trust USDT0), then calls the OFT's `send` with the same arguments and answers its receipt. `recipient` takes the fee from `amount` (less is sent), `payer` adds it on top. The deployed wasm and the OFT and token it is bound to are checked before a holder is handed the transaction. Without the variable, `400 merchant_fee_unsupported` |
@@ -1520,7 +1520,7 @@ operator deploys there and sets `ZK_PAYMENTS_MAINNET_*`: until then a `prod` key
 `GET /v1/zk-payments/config` answers `enabled: false`, and a create answers
 `400 network_unsupported`.
 
-**Commission: 0.01% (1 bps) per payment**, `ZK_PAYMENT_FEE_BPS` in
+**Commission: 0.18% (18 bps) per payment**, `ZK_PAYMENT_FEE_BPS` in
 `src/zk-payments/zk-payments.constants.ts`, the same on every deployment. On a
 payment of `amount`, `feeAmount = ceil(amount_in_stroops * 1 / 10000)` stroops, at
 least one, and `netAmount = amount - feeAmount`: the merchant receives the net,
@@ -3009,7 +3009,7 @@ at least `DATABASE_URL` and `APISIX_GATEWAY_SECRET`.
 | `APISIX_ADMIN_URL` | with the admin key | — | APISIX Admin API base, e.g. `http://apisix:9180/apisix/admin`. Used only to mint wallet accounts' keys |
 | `APISIX_ADMIN_KEY` | for the wallet sign-in | — | APISIX admin key. Gateway-wide — see [No request depends on the developer platform](#no-request-depends-on-the-developer-platform). Refused on a recovery server |
 | `APISIX_ADMIN_TIMEOUT_MS` | no | `10000` | Budget for one Admin API call (ms) |
-| `WALLET_KEY_SWAP_FEE_BPS` | no | `50` | Swap commission baked into wallet accounts' keys (the `community` plan's rate) |
+| `WALLET_KEY_SWAP_FEE_BPS` | no | `65` | Swap commission baked into wallet accounts' keys (the `community` plan's rate) |
 | `MAIL_RESEND_API_KEY` | for the email door | — | Resend API key this service sends sign-in and recovery codes with |
 | `MAIL_FROM` | with the Resend / SMTP key | — | Verified sender, e.g. `Cosmos Pay <no-reply@example.com>` |
 | `MAIL_SMTP_HOST` | no | — | SMTP server, used when `MAIL_RESEND_API_KEY` is unset |
@@ -3038,7 +3038,7 @@ at least `DATABASE_URL` and `APISIX_GATEWAY_SECRET`.
 | `STELLAR_BASE_FEE` | no | `100` | Stellar base fee (stroops) for tx builds |
 | `STELLAR_TX_TIMEOUT` | no | `300` | Transaction timeout (seconds) |
 | `STELLAR_SWAP_FEE_WALLET` | when fee > 0 | — | Platform G... account for swap fees |
-| `STELLAR_SWAP_FEE_BPS` | no | `50` | Swap fee in basis points |
+| `STELLAR_SWAP_FEE_BPS` | no | `65` | Swap fee in basis points |
 | `STELLAR_SWAP_SLIPPAGE_BPS` | no | `50` | Default swap slippage tolerance (bps) |
 | `STELLAR_SWAP_MAX_SLIPPAGE_BPS` | no | `500` | Hard cap on caller slippage (bps) |
 | `STELLAR_SWAP_SINGLE_INFLIGHT` | no | `false` | When `true`, 409 if a non-expired PENDING swap already exists for the same source |
@@ -3110,7 +3110,7 @@ at least `DATABASE_URL` and `APISIX_GATEWAY_SECRET`.
 | `ZK_PAYMENTS_TESTNET_AUDITOR_REGISTRY` | with the token | none | The auditor registry holding Cosmos Pay's key under id 0 (C...) |
 | `ZK_PAYMENTS_TESTNET_VERIFIER` | with the token | none | The UltraHonk verifier registry the token checks proofs with (C...) |
 | `ZK_PAYMENTS_TESTNET_AUDITOR_SECRET` | with the token | none | The auditor scalar `k` (64 hex): every confidential amount on the token decrypts under it. A secret of the gateway secret's weight; never in the repository |
-| `ZK_PAYMENTS_TESTNET_FEE_ACCOUNT` | with the token | none | The account the 0.01% commission is transferred to (G...), registered on the token |
+| `ZK_PAYMENTS_TESTNET_FEE_ACCOUNT` | with the token | none | The account the 0.18% commission is transferred to (G...), registered on the token |
 | `ZK_PAYMENTS_TESTNET_DEPLOYED_LEDGER` | with the token | none | The ledger the token was deployed at, where a wallet replays its balance from |
 | `ZK_PAYMENTS_TESTNET_RPC_URL` | no | `https://soroban-testnet.stellar.org` | The Soroban RPC private payments read the chain through; its network passphrase is checked before use |
 | `ZK_PAYMENTS_MAINNET_*` | no | none | The same set for `prod` keys (`_TOKEN`, `_AUDITOR_REGISTRY`, `_VERIFIER`, `_AUDITOR_SECRET`, `_FEE_ACCOUNT`, `_DEPLOYED_LEDGER`, `_RPC_URL`). Unset: private payments are off on mainnet. `_RPC_URL` has no default there and is required with the set |

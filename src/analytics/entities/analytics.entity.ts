@@ -408,7 +408,7 @@ export class SeriesPrivatePaymentWindowEntity {
   volumeUsd!: string | null;
   @ApiProperty({
     description:
-      'Commission the settled payments paid to Cosmos Pay, in XLM (0.01% of each).',
+      'Commission the settled payments paid to Cosmos Pay, in XLM (0.18% of each).',
     example: '0.214025',
   })
   fees!: string;

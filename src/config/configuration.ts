@@ -836,7 +836,7 @@ export default (): AppConfig => ({
     timeoutSeconds: parseInt(process.env.STELLAR_TX_TIMEOUT ?? '300', 10),
     swap: {
       feeWallet: process.env.STELLAR_SWAP_FEE_WALLET ?? '',
-      feeBps: parseInt(process.env.STELLAR_SWAP_FEE_BPS ?? '50', 10),
+      feeBps: parseInt(process.env.STELLAR_SWAP_FEE_BPS ?? '65', 10),
       slippageBps: parseInt(process.env.STELLAR_SWAP_SLIPPAGE_BPS ?? '50', 10),
       maxSlippageBps: parseInt(
         process.env.STELLAR_SWAP_MAX_SLIPPAGE_BPS ?? '500',

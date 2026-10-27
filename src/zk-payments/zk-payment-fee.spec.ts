@@ -36,28 +36,29 @@ describe('splitZkPayment', () => {
     const split = splitZkPayment('100', ZK_PAYMENT_FEE_BPS);
     expect(split).toEqual({
       amountStroops: 1_000_000_000n,
-      feeStroops: 100_000n,
-      netStroops: 999_900_000n,
+      feeStroops: 1_800_000n,
+      netStroops: 998_200_000n,
       merchantFeeStroops: 0n,
       amount: '100',
-      feeAmount: '0.01',
-      netAmount: '99.99',
+      feeAmount: '0.18',
+      netAmount: '99.82',
     });
   });
 
   it('formats every figure as a trimmed decimal string', () => {
     const split = splitZkPayment('25.5000000', ZK_PAYMENT_FEE_BPS)!;
-    // 255,000,000 stroops -> fee 25,500 stroops.
+    // 255,000,000 stroops -> fee 459,000 stroops.
     expect(split.amount).toBe('25.5');
-    expect(split.feeAmount).toBe('0.00255');
-    expect(split.netAmount).toBe('25.49745');
+    expect(split.feeAmount).toBe('0.0459');
+    expect(split.netAmount).toBe('25.4541');
     expect(split.netStroops + split.feeStroops).toBe(split.amountStroops);
   });
 
   it('applies the one-stroop floor to small amounts', () => {
-    const split = splitZkPayment('0.0001', ZK_PAYMENT_FEE_BPS)!;
+    // 500 stroops at 18 bps is 0.9 of a stroop.
+    const split = splitZkPayment('0.00005', ZK_PAYMENT_FEE_BPS)!;
     expect(split.feeStroops).toBe(1n);
-    expect(split.netAmount).toBe('0.0000999');
+    expect(split.netAmount).toBe('0.0000499');
   });
 
   it('refuses an amount whose net would be zero or less', () => {
@@ -84,11 +85,11 @@ describe('splitZkPayment', () => {
 
     it('takes it from the amount when the recipient pays it', () => {
       const split = splitZkPayment('100', ZK_PAYMENT_FEE_BPS, fee)!;
-      // 1.5 + 0.25 = 1.75 XLM; the commission stays 0.01% of 100.
+      // 1.5 + 0.25 = 1.75 XLM; the commission stays 0.18% of 100.
       expect(split.merchantFeeStroops).toBe(17_500_000n);
       expect(split.amount).toBe('100');
-      expect(split.feeAmount).toBe('0.01');
-      expect(split.netAmount).toBe('98.24');
+      expect(split.feeAmount).toBe('0.18');
+      expect(split.netAmount).toBe('98.07');
       expect(
         split.netStroops + split.feeStroops + split.merchantFeeStroops,
       ).toBe(split.amountStroops);
@@ -100,7 +101,7 @@ describe('splitZkPayment', () => {
         paidBy: 'payer',
       })!;
       expect(split.amount).toBe('101.75');
-      expect(split.netAmount).toBe('99.99');
+      expect(split.netAmount).toBe('99.82');
       expect(
         split.netStroops + split.feeStroops + split.merchantFeeStroops,
       ).toBe(split.amountStroops);
@@ -132,7 +133,7 @@ describe('splitZkPayment', () => {
     });
 
     it('is null when the commission takes what the merchant fee left', () => {
-      // 0.25 XLM + 1 stroop: the fee leaves one stroop, the commission takes it.
+      // 0.25 XLM + 1 stroop: the fee leaves one stroop, the commission takes more.
       expect(
         splitZkPayment('0.2500001', ZK_PAYMENT_FEE_BPS, { ...fee, bps: 0 }),
       ).toBeNull();

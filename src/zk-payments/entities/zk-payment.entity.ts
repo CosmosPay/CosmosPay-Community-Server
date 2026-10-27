@@ -90,7 +90,7 @@ export class ZkPaymentsConfigEntity {
   })
   auditorId!: number;
 
-  @ApiProperty({ example: 1, description: 'The commission: 1 bps = 0.01%.' })
+  @ApiProperty({ example: 18, description: 'The commission: 18 bps = 0.18%.' })
   feeBps!: number;
 
   @ApiProperty({

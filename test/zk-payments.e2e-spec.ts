@@ -197,7 +197,7 @@ describe('Private payments (e2e)', () => {
         network: 'testnet',
         token: { contractId: TOKEN, symbol: 'XLM', decimals: 7 },
         auditorId: 0,
-        feeBps: 1,
+        feeBps: 18,
         feeAccount: FEE_ACCOUNT,
       });
     });
@@ -234,7 +234,7 @@ describe('Private payments (e2e)', () => {
       expect(res.body.code).toBe('recipient_not_registered');
     });
 
-    it('creates a payment, priced at 0.01%', async () => {
+    it('creates a payment, priced at 0.18%', async () => {
       const res = await merchant(request(http()).post('/v1/zk-payments'))
         .set('idempotency-key', 'order-24')
         .send({ amount: '25', recipient: MERCHANT, description: 'Order #24' })
@@ -244,9 +244,9 @@ describe('Private payments (e2e)', () => {
         network: 'testnet',
         tokenContract: TOKEN,
         amount: '25',
-        netAmount: '24.9975',
-        feeAmount: '0.0025',
-        feeBps: 1,
+        netAmount: '24.955',
+        feeAmount: '0.045',
+        feeBps: 18,
         recipient: MERCHANT,
         feeAccount: FEE_ACCOUNT,
         idempotencyKey: 'order-24',
@@ -280,8 +280,8 @@ describe('Private payments (e2e)', () => {
       // 1% of 25 to the wallet, out of the merchant's share.
       expect(res.body).toMatchObject({
         amount: '25',
-        netAmount: '24.7475',
-        feeAmount: '0.0025',
+        netAmount: '24.705',
+        feeAmount: '0.045',
         merchantFee: {
           bps: 100,
           amount: '0.25',
@@ -318,7 +318,7 @@ describe('Private payments (e2e)', () => {
         rpcUrl: null,
         feeAccount: null,
         auditorId: 0,
-        feeBps: 1,
+        feeBps: 18,
       });
     });
 
@@ -338,8 +338,8 @@ describe('Private payments (e2e)', () => {
         id,
         status: 'PENDING',
         amount: '25',
-        netAmount: '24.9975',
-        feeAmount: '0.0025',
+        netAmount: '24.955',
+        feeAmount: '0.045',
         recipient: MERCHANT,
         feeAccount: FEE_ACCOUNT,
         network: 'testnet',

@@ -9236,7 +9236,7 @@ paths:
                     statusCode: 400
                     code: invalid_amount
                     error: Bad Request
-                    message: "The amount is too small: after the 0.01% commission (at least one
+                    message: "The amount is too small: after the 0.18% commission (at least one
                       stroop) the merchant would receive nothing."
                     path: /v1/zk-payments
                     timestamp: 2026-09-01T12:00:00.000Z
@@ -9305,7 +9305,7 @@ paths:
         "503":
           $ref: "#/components/responses/UpstreamUnavailable"
       summary: "Create a private payment: a confidential payment to a merchant
-        registered on the token, minus the 0.01% commission"
+        registered on the token, minus the 0.18% commission"
       tags:
         - zk-payments
       x-cosmos-rate-limit:
@@ -16274,7 +16274,7 @@ components:
           example: "535.06"
         fees:
           type: string
-          description: Commission the settled payments paid to Cosmos Pay, in XLM (0.01%
+          description: Commission the settled payments paid to Cosmos Pay, in XLM (0.18%
             of each).
           example: "0.214025"
         feesUsd:
@@ -19779,8 +19779,8 @@ components:
           description: The auditor id every account on the token registers under.
         feeBps:
           type: number
-          example: 1
-          description: "The commission: 1 bps = 0.01%."
+          example: 18
+          description: "The commission: 18 bps = 0.18%."
         feeAccount:
           type: string
           nullable: true
@@ -19803,7 +19803,7 @@ components:
         amount:
           type: string
           description: What the payer pays in total, in XLM (up to 7 decimal places). The
-            merchant receives it minus the 0.01% commission (`netAmount`); the
+            merchant receives it minus the 0.18% commission (`netAmount`); the
             commission (`feeAmount`, rounded up, at least one stroop) goes to
             Cosmos Pay's fee account. An amount whose net would be zero is
             refused.
@@ -19843,7 +19843,7 @@ components:
             (under auditor id 0) and be neither the recipient nor the fee
             account. `paidBy: recipient` takes it from `amount` (the merchant
             receives less); `payer` adds it on top (the payer pays `amount` plus
-            the fee). The 0.01% commission is a share of `amount` either way.
+            the fee). The 0.18% commission is a share of `amount` either way.
             Confirm then takes `merchantFeeTxHash` too."
           allOf:
             - $ref: "#/components/schemas/MerchantFeeDto"

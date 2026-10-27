@@ -152,7 +152,7 @@ escopo. **Os schemas de requisição e resposta ficam no contrato OpenAPI gerado
 | Swaps             | `/v1/swaps`              | Cotação de path payment, montagem do XDR não assinado, envio do assinado · Solana via Jupiter, Monad via Kuru Flow |
 | Swaps entre redes | `/v1/cross-chain-swaps` | Entre 35 redes pela NEAR Intents (Stellar, Solana, Monad, redes EVM, Bitcoin e as moedas UTXO, ...): cotação, endereço de depósito, status |
 | USDT0             | `/v1/usdt0`              | USDT0 da Stellar para 21 redes EVM pela LayerZero (USDT nativo na Ethereum), somente mainnet: cotação, montagem, envio, status |
-| Pagamentos privados | `/v1/zk-payments`        | Pagamentos confidenciais no token confidencial da Cosmos Pay (valor oculto on-chain, comissão de 0,01 %), por enquanto somente na testnet |
+| Pagamentos privados | `/v1/zk-payments`        | Pagamentos confidenciais no token confidencial da Cosmos Pay (valor oculto on-chain, comissão de 0,18 %), por enquanto somente na testnet |
 | Checkout privado  | `/v1/zk-checkout`        | A metade de um pagamento privado que cabe a quem paga: lê-lo, confirmá-lo, a configuração da rede (`@Public`) |
 | Liquidity pools   | `/v1/liquidity-pools`    | Depósito / saque em AMM, posições, comissão sobre o ganho |
 | Webhooks          | `/v1/webhooks`           | CRUD de endpoints, rotação de segredo, entregas, reentrega |
@@ -961,8 +961,8 @@ conta são emitidas do mesmo jeito em todas as chains (veja
 
 A carteira open source distribui uma API key que todo mundo compartilha, para que
 qualquer pessoa possa fazer swap, adicionar liquidez ou criar um link de pagamento
-sem se cadastrar. Essas chamadas pagam a comissão do plano `community` (50 bps, a
-taxa mais alta); o cadastro dá acesso a uma menor. O gateway injeta a taxa
+sem se cadastrar. Essas chamadas pagam a comissão do plano `community` (65 bps, a
+taxa mais alta, a mesma do Starter); um plano pago dá acesso a uma menor. O gateway injeta a taxa
 exatamente como faz para uma chave privada (veja `resolvePlanCommissionBps`).
 
 A diferença está no isolamento entre tenants. Todo chamador anônimo chega como o
@@ -1073,7 +1073,7 @@ swaps normalmente.
 **Chaves de wallet.** Um login concluído recebe uma chave `dev` e uma `prod` sob o
 consumer `cosmos_wallet_<accountId>`, com os scopes, labels e o forwarder de consumer
 que a plataforma gerava (plano `community`, comissão de swap
-`WALLET_KEY_SWAP_FEE_BPS`, 50 bps por padrão). Cada inicialização gera de novo os consumers de wallet que
+`WALLET_KEY_SWAP_FEE_BPS`, 65 bps por padrão). Cada inicialização gera de novo os consumers de wallet que
 ainda carregam outra taxa, então uma mudança de `WALLET_KEY_SWAP_FEE_BPS` chega a
 todas as contas de uma vez, e não só no próximo login. Um segundo login devolve as chaves
 que a conta já tem em vez de emitir outro par. `organizationId` na resposta é o id
@@ -1413,7 +1413,7 @@ que ela indica. É separada da comissão do plano que a Cosmos Pay cobra, que n�
 | Links de pagamento na Solana (`POST /v1/payment-intents/pay`, `chain: solana`) | Um transfer request do Solana Pay nomeia um único destinatário, então esse link (com `amount`) é um **transaction request** do Solana Pay: `uri` é `solana:<PAYMENT_LINK_API_URL>/v1/payment-links/{id}/solana-pay`, e a wallet envia ali por POST a conta do pagador para obter a transação: o memo, a transferência ao comerciante com a referência do link e a da taxa (as contas de token são criadas se faltarem, pagas pelo pagador). Uma taxa em SOL vai para uma conta que já existe. O observer a encontra pela referência e só liquida com as duas partes |
 | Links de pagamento em Monad (`POST /v1/payment-intents/pay`, `chain: monad`) | Só com endereços de depósito (`MONAD_RELAYER_PRIVATE_KEY`; sem eles `merchant_fee_unsupported`) e com `amount`: o endereço é um `contracts/PaymentSplitForwarder.sol` (a wallet e o valor da taxa são mais dois argumentos do construtor, então o endereço se compromete com eles), cujo construtor paga ao relayer a sua taxa, depois a taxa do comerciante e depois o comerciante. O link pede o depósito: o valor, mais a taxa quando o pagador a paga |
 | Swaps na Solana (`POST /v1/swaps`, `chain: solana`) | O Jupiter paga uma única taxa de integrador por swap e a comissão do plano a usa, então a transferência da taxa (a partir da conta de origem, no ativo de origem: uma transferência do System Program para SOL, senão um TransferChecked depois de criar a conta de token da wallet) é acrescentada à própria transação v0 do Jupiter: as contas que as suas tabelas de endereços carregam são reaproveitadas, todos os índices reescritos, o seu limite de computação elevado e a rota pedida com no máximo 40 contas para continuar cabendo num pacote. Uma taxa em SOL vai para uma conta que já existe |
-| Pagamentos privados (`POST /v1/zk-payments`) | Uma terceira transferência confidencial, em XLM, do pagador para `wallet`, então a taxa fica tão privada quanto o pagamento. `wallet` precisa ter uma conta confidencial no token da Cosmos Pay sob o auditor 0 (senão, `400 recipient_not_registered`) e não ser nem o destinatário nem a conta de comissões. A comissão de 0,01% continua sendo uma parte de `amount`, e o `amount` da linha é o que o pagador paga no total. O confirm recebe o terceiro hash como `merchantFeeTxHash` e verifica essa transferência como as outras duas |
+| Pagamentos privados (`POST /v1/zk-payments`) | Uma terceira transferência confidencial, em XLM, do pagador para `wallet`, então a taxa fica tão privada quanto o pagamento. `wallet` precisa ter uma conta confidencial no token da Cosmos Pay sob o auditor 0 (senão, `400 recipient_not_registered`) e não ser nem o destinatário nem a conta de comissões. A comissão de 0,18% continua sendo uma parte de `amount`, e o `amount` da linha é o que o pagador paga no total. O confirm recebe o terceiro hash como `merchantFeeTxHash` e verifica essa transferência como as outras duas |
 | Liquidez (`POST /v1/liquidity-pools/deposit` e `/withdraw`) | Um depósito ou um saque move dois ativos, então a taxa é `bps` de CADA um (arredondado para baixo), paga a `wallet` com um pagamento por ativo na mesma transação, depois do depósito, ou depois do saque e da sua comissão do plano; `fixed` é recusado (`400 validation_failed`). Num depósito, `recipient` a desconta dos valores (entra menos no pool) e `payer` a soma por cima. Num saque ela sai do que o saque paga, como parte dos seus mínimos garantidos, seja qual for o `paidBy`. `wallet` precisa existir e ter trustline dos dois ativos. O `amount` / `asset` do registro são a perna do ativo A, e `amountB` / `assetB` a do ativo B |
 | Swaps em Monad (`POST /v1/swaps`, `chain: monad`) | A Kuru Flow paga uma única taxa de indicação por swap e a comissão do plano a usa, então um swap com taxa do comerciante passa por `contracts/MerchantFeeSwapRouter.sol`, que o operador implanta uma vez para o router da Kuru e nomeia em `KURU_MERCHANT_FEE_ROUTER`: a Kuru cota para o router, a wallet envia (MON) ou aprova (ERC-20) a ele a entrada mais a taxa, e nessa única transação o router paga a taxa, executa o calldata da Kuru, repassa a saída e devolve o que a Kuru não usou, revertendo abaixo do mínimo da Kuru. O código implantado é comparado com o artefato antes de a wallet receber o endereço. Sem a variável, `400 merchant_fee_unsupported` |
 | Transferências USDT0 (`POST /v1/usdt0/transfers`) | Uma transação Soroban carrega uma única operação, então a operação dessa transferência é `contracts/soroban/usdt0-fee-wrapper` (`USDT0_FEE_WRAPPER`) em vez do OFT: sob a única autorização do titular ele transfere a taxa em USDT0 para `wallet` (que precisa ter trustline de USDT0), depois chama o `send` do OFT com os mesmos argumentos e devolve o seu recibo. `recipient` desconta a taxa de `amount` (envia-se menos), `payer` a soma por cima. O wasm implantado e o OFT e o token aos quais está ligado são verificados antes de o titular receber a transação. Sem a variável, `400 merchant_fee_unsupported` |
@@ -1542,7 +1542,7 @@ desligada até um operador fazer o deploy lá e configurar `ZK_PAYMENTS_MAINNET_
 até lá, `GET /v1/zk-payments/config` com uma chave `prod` responde
 `enabled: false`, e um create responde `400 network_unsupported`.
 
-**Comissão: 0,01 % (1 bps) por pagamento**, `ZK_PAYMENT_FEE_BPS` em
+**Comissão: 0,18 % (18 bps) por pagamento**, `ZK_PAYMENT_FEE_BPS` em
 `src/zk-payments/zk-payments.constants.ts`, a mesma em todo deploy. Num pagamento
 de `amount`, `feeAmount = ceil(amount_in_stroops * 1 / 10000)` stroops, no mínimo
 um, e `netAmount = amount - feeAmount`: o comerciante recebe o líquido, a Cosmos
@@ -3073,7 +3073,7 @@ Toda variável lida de `process.env` em `src/` é validada no boot por
 | `APISIX_ADMIN_URL` | com a admin key | — | Base da Admin API do APISIX, ex. `http://apisix:9180/apisix/admin`. Usada só para emitir as chaves das contas de wallet |
 | `APISIX_ADMIN_KEY` | para o login da wallet | — | Admin key do APISIX. Vale para todo o gateway — veja [Nenhuma requisição depende da plataforma de desenvolvedores](#nenhuma-requisição-depende-da-plataforma-de-desenvolvedores). Recusada num servidor de recuperação |
 | `APISIX_ADMIN_TIMEOUT_MS` | não | `10000` | Orçamento de uma chamada à Admin API (ms) |
-| `WALLET_KEY_SWAP_FEE_BPS` | não | `50` | Comissão de swap embutida nas chaves das contas de wallet (a taxa do plano `community`) |
+| `WALLET_KEY_SWAP_FEE_BPS` | não | `65` | Comissão de swap embutida nas chaves das contas de wallet (a taxa do plano `community`) |
 | `MAIL_RESEND_API_KEY` | para a porta de email | — | API key do Resend com a qual este serviço envia os códigos de login e de recuperação |
 | `MAIL_FROM` | com a chave do Resend / SMTP | — | Remetente verificado, ex. `Cosmos Pay <no-reply@example.com>` |
 | `MAIL_SMTP_HOST` | não | — | Servidor SMTP, usado quando `MAIL_RESEND_API_KEY` não está definida |
@@ -3102,7 +3102,7 @@ Toda variável lida de `process.env` em `src/` é validada no boot por
 | `STELLAR_BASE_FEE` | não | `100` | Taxa base da Stellar (stroops) para montagem de tx |
 | `STELLAR_TX_TIMEOUT` | não | `300` | Timeout da transação (segundos) |
 | `STELLAR_SWAP_FEE_WALLET` | quando fee > 0 | — | Conta G... da plataforma para as taxas de swap |
-| `STELLAR_SWAP_FEE_BPS` | não | `50` | Taxa de swap em basis points |
+| `STELLAR_SWAP_FEE_BPS` | não | `65` | Taxa de swap em basis points |
 | `STELLAR_SWAP_SLIPPAGE_BPS` | não | `50` | Tolerância de slippage padrão do swap (bps) |
 | `STELLAR_SWAP_MAX_SLIPPAGE_BPS` | não | `500` | Limite rígido para o slippage de quem chama (bps) |
 | `STELLAR_SWAP_SINGLE_INFLIGHT` | não | `false` | Quando `true`, 409 se já existir um swap PENDING não expirado para a mesma origem |
@@ -3174,7 +3174,7 @@ Toda variável lida de `process.env` em `src/` é validada no boot por
 | `ZK_PAYMENTS_TESTNET_AUDITOR_REGISTRY` | com o token | nenhum | O registro de auditores que guarda a chave da Cosmos Pay sob o id 0 (C...) |
 | `ZK_PAYMENTS_TESTNET_VERIFIER` | com o token | nenhum | O registro de verificadores UltraHonk com que o token confere as provas (C...) |
 | `ZK_PAYMENTS_TESTNET_AUDITOR_SECRET` | com o token | nenhum | O escalar `k` do auditor (64 hex): todo valor confidencial do token é decifrado com ele. Um segredo do mesmo peso que o segredo do gateway; nunca no repositório |
-| `ZK_PAYMENTS_TESTNET_FEE_ACCOUNT` | com o token | nenhum | A conta para a qual a comissão de 0,01 % é transferida (G...), registrada no token |
+| `ZK_PAYMENTS_TESTNET_FEE_ACCOUNT` | com o token | nenhum | A conta para a qual a comissão de 0,18 % é transferida (G...), registrada no token |
 | `ZK_PAYMENTS_TESTNET_DEPLOYED_LEDGER` | com o token | nenhum | O ledger em que foi feito o deploy do token, a partir do qual uma wallet reconstrói o seu saldo |
 | `ZK_PAYMENTS_TESTNET_RPC_URL` | não | `https://soroban-testnet.stellar.org` | O RPC do Soroban pelo qual os pagamentos privados leem a chain; a sua network passphrase é verificada antes do uso |
 | `ZK_PAYMENTS_MAINNET_*` | não | nenhum | O mesmo conjunto para as chaves `prod` (`_TOKEN`, `_AUDITOR_REGISTRY`, `_VERIFIER`, `_AUDITOR_SECRET`, `_FEE_ACCOUNT`, `_DEPLOYED_LEDGER`, `_RPC_URL`). Sem valor: os pagamentos privados ficam desligados na mainnet. `_RPC_URL` não tem padrão ali e é obrigatória com o conjunto |
