@@ -1,5 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { CHAINS, type Chain } from '@/chains/chains.constants';
+import { MerchantFeeEntity } from '@/common/merchant-fee/merchant-fee.entity';
 import {
   CHECKOUT_THEMES,
   type CheckoutTheme,
@@ -69,7 +70,7 @@ export class PublicPaymentLinkEntity {
   @ApiProperty({
     example: 'GCALNQQBXAPZ2WIRSDDBMSTAKCUH5SG6U76YBFLQLIXJTF7FE5AX7AOO',
     description:
-      'The address the payer sends to — always the one inside `uri`. ' +
+      'The address the payer sends to, always the one inside `uri`. ' +
       'Stellar and Solana: the merchant’s account. Monad with a relayer: the ' +
       'intent’s own deposit address, which forwards the payment to the ' +
       'merchant less `networkFee`.',
@@ -123,7 +124,7 @@ export class PublicPaymentLinkEntity {
     description:
       'The payment link, exactly as the wallet opens it: SEP-7 on Stellar, ' +
       'Solana Pay on Solana, EIP-681 on Monad. It is the same link the ' +
-      'merchant handed out, so it carries what the wallet needs — a SEP-7 ' +
+      'merchant handed out, so it carries what the wallet needs: a SEP-7 ' +
       '`callback` the merchant set and, for a `TX` intent, the unsigned ' +
       'envelope.',
   })
@@ -152,6 +153,26 @@ export class PublicPaymentLinkEntity {
       'relayer’s fee for forwarding a Monad deposit. Null when nothing is.',
   })
   networkFee!: string | null;
+
+  @ApiProperty({
+    type: MerchantFeeEntity,
+    nullable: true,
+    description:
+      'A fee the merchant charges on this payment, paid to its own wallet in ' +
+      'the same transaction; show it to the payer. With `paidBy: payer` the ' +
+      'payer sends `amount` plus it. Null when there is none.',
+  })
+  merchantFee!: MerchantFeeEntity | null;
+
+  @ApiProperty({
+    example: false,
+    description:
+      'True when the payment cannot be one link (a Stellar link with a ' +
+      'merchant fee: SEP-7 `pay` pays one account). Ask the payer for their ' +
+      'account, then `POST /v1/payment-links/{id}/transaction` builds the ' +
+      'envelope to sign; `uri` is the hosted checkout then, not a wallet link.',
+  })
+  payerAccountRequired!: boolean;
 
   @ApiProperty({
     type: String,

@@ -30,7 +30,7 @@ export class SubmitSwapDto {
 
   @ApiPropertyOptional({
     description:
-      'Solana and Monad swaps: the signed transaction — Solana: base64 wire ' +
+      'Solana and Monad swaps: the signed transaction. Solana: base64 wire ' +
       'bytes of the VersionedTransaction; Monad: the 0x-hex raw EIP-1559 ' +
       'transaction (the eth_sendRawTransaction input).',
     example: '0x02f8b1818f…',

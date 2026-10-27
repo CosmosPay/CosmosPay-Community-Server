@@ -74,7 +74,7 @@ export class HealthController {
       },
     },
     description:
-      'An indicator is down — today that means Postgres did not answer the ' +
+      'An indicator is down: today that means Postgres did not answer the ' +
       'ping. Which one, and why, is logged; the body says only that the ' +
       'service is not ready, because this route is served without ' +
       'credentials and the indicator report names internal hosts.',

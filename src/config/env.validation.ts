@@ -30,6 +30,7 @@ import {
 } from '@/config/config.constants';
 import { parseEvmTokenFees } from '@/config/evm-token-fees';
 import { assertIdentityConfigConsistent } from '@/config/identity-env';
+import { assertZkPaymentsConfigConsistent } from '@/config/zk-payments-env';
 
 /**
  * Gateway secrets that are documentation, not secrets. `.env.example` used to
@@ -134,6 +135,20 @@ class EnvironmentVariables {
   @IsUrl(URL_OPTIONS)
   STELLAR_HORIZON_URL_TESTNET?: string;
 
+  /**
+   * Stellar mainnet's Soroban RPC, for USDT0 transfers. Unset uses Gateway.fm's
+   * public endpoint, which is rate limited: production names a provider's.
+   */
+  @IsOptional()
+  @IsUrl(URL_OPTIONS)
+  STELLAR_RPC_URL_MAINNET?: string;
+
+  @IsOptional()
+  @Matches(/^C[A-Z2-7]{55}$/, {
+    message: 'USDT0_FEE_WRAPPER must be a Soroban contract id (C...)',
+  })
+  USDT0_FEE_WRAPPER?: string;
+
   @IsOptional()
   @IsString()
   STELLAR_BASE_FEE?: string;
@@ -227,6 +242,12 @@ class EnvironmentVariables {
   KURU_TIMEOUT_MS?: number;
 
   @IsOptional()
+  @Matches(/^0x[0-9a-fA-F]{40}$/, {
+    message: 'KURU_MERCHANT_FEE_ROUTER must be an EVM address (0x + 40 hex)',
+  })
+  KURU_MERCHANT_FEE_ROUTER?: string;
+
+  @IsOptional()
   @IsInt()
   @Min(1)
   STELLAR_TX_TIMEOUT?: number;
@@ -282,6 +303,18 @@ class EnvironmentVariables {
   @IsInt()
   @Min(1)
   NEAR_INTENTS_TIMEOUT_MS?: number;
+
+  /** "false" skips fetching 1Click's token list at boot (the e2e suites do). */
+  @IsOptional()
+  @IsBooleanString()
+  NEAR_INTENTS_TOKENS_PREFETCH?: string;
+
+  /** How long the dashboard's analytics answers are reused, in ms. 0 turns the cache off. */
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(300000)
+  ANALYTICS_CACHE_TTL_MS?: number;
 
   @IsOptional()
   @IsInt()
@@ -489,6 +522,19 @@ class EnvironmentVariables {
   @IsBooleanString()
   PLUGINS_ALLOW_UNSIGNED?: string;
 
+  /** Waive a commission with no recipient, locally only; refused in production below. */
+  @IsOptional()
+  @IsBooleanString()
+  SWAP_COMMISSION_DEV_WAIVER?: string;
+
+  /**
+   * Require `X-Record-Token` from the shared public key on swap submit and
+   * cross-chain deposit too. Off by default: the wallet does not send it yet.
+   */
+  @IsOptional()
+  @IsBooleanString()
+  PUBLIC_RECORD_TOKEN_REQUIRED_ON_LEGACY?: string;
+
   @IsOptional()
   @IsUrl(URL_OPTIONS)
   DEFINDEX_BASE_URL?: string;
@@ -587,6 +633,17 @@ export function validateEnv(config: Record<string, unknown>) {
     );
   }
 
+  if (
+    validated.NODE_ENV === 'production' &&
+    String(validated.SWAP_COMMISSION_DEV_WAIVER ?? '').toLowerCase() === 'true'
+  ) {
+    throw new Error(
+      'SWAP_COMMISSION_DEV_WAIVER=true is refused when NODE_ENV=production: it gives ' +
+        'swaps away with no commission whenever a fee recipient is missing. Set ' +
+        'NEAR_INTENTS_FEE_RECIPIENT, SOLANA_SWAP_FEE_WALLET and MONAD_SWAP_FEE_WALLET instead.',
+    );
+  }
+
   if (!validated.APISIX_GATEWAY_SECRET) {
     throw new Error(
       'APISIX_GATEWAY_SECRET is required: the service only trusts requests that ' +
@@ -632,6 +689,9 @@ export function validateEnv(config: Record<string, unknown>) {
   }
 
   assertIdentityConfigConsistent(config);
+
+  // Private payments (ZK payments) are optional per network, but all-or-nothing within one.
+  assertZkPaymentsConfigConsistent(config);
 
   // Parsed here as well, so a malformed value fails the boot naming its
   // variable instead of surfacing from the configuration factory.

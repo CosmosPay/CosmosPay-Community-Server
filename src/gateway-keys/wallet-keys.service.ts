@@ -130,7 +130,7 @@ export class WalletKeysService implements OnApplicationBootstrap {
       }
     }
     this.logger.log(
-      `wallet keys: swap fee ${fee} bps — ${rebaked} consumer(s) re-baked, ${current} already current`,
+      `wallet keys: swap fee ${fee} bps, ${rebaked} consumer(s) re-baked, ${current} already current`,
     );
     return { rebaked, current };
   }

@@ -55,6 +55,8 @@ export class JupiterClient {
     amount: string;
     slippageBps: number;
     platformFeeBps: number;
+    /** Caps the route's accounts, to leave room in the transaction. */
+    maxAccounts?: number;
   }): Promise<JupiterQuote> {
     const query = new URLSearchParams({
       inputMint: params.inputMint,
@@ -65,6 +67,9 @@ export class JupiterClient {
     });
     if (params.platformFeeBps > 0) {
       query.set('platformFeeBps', String(params.platformFeeBps));
+    }
+    if (params.maxAccounts !== undefined) {
+      query.set('maxAccounts', String(params.maxAccounts));
     }
     return this.request<JupiterQuote>('GET', `/quote?${query.toString()}`);
   }

@@ -1,5 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { CHAINS } from '@/chains/chains.constants';
+import { MerchantFeeEntity } from '@/common/merchant-fee/merchant-fee.entity';
 import {
   CHECKOUT_THEMES,
   type CheckoutTheme,
@@ -34,7 +35,7 @@ export class PaymentIntentEntity {
     example: 'testnet',
     description:
       'Network tier, on every chain: `public` (mainnet) or `testnet` (Stellar ' +
-      'testnet, Solana devnet, Monad testnet) — the one the API key is for.',
+      'testnet, Solana devnet, Monad testnet), the one the API key is for.',
   })
   network!: string;
 
@@ -91,6 +92,15 @@ export class PaymentIntentEntity {
   })
   networkFee!: string | null;
 
+  @ApiProperty({
+    type: MerchantFeeEntity,
+    nullable: true,
+    description:
+      'Your merchant fee on this payment, paid to its wallet in the same ' +
+      'transaction; null when the request named none.',
+  })
+  merchantFee!: MerchantFeeEntity | null;
+
   @ApiProperty({ nullable: true, example: null, description: 'SEP-7 msg.' })
   msg!: string | null;
 
@@ -144,6 +154,42 @@ export class PaymentIntentEntity {
   })
   expiresAt!: Date | null;
 
+  @ApiProperty({
+    nullable: true,
+    description:
+      'When the hosted checkout page (payments.cosmospay.lat/{id}) last read ' +
+      'the intent while it was open: the page polls while a payer has it ' +
+      'open, so a value from the last 30 seconds means someone is on the ' +
+      'payment page now. Updated at most every 10 seconds; null until a page ' +
+      'opened it.',
+    example: '2026-06-21T12:35:10.000Z',
+  })
+  checkoutSeenAt!: Date | null;
+
+  @ApiProperty({
+    nullable: true,
+    description:
+      'When the payer last opened a wallet from the hosted checkout (its wallet link, the web wallet, the extension or Freighter), as the page reports it. Informational: the status changes only on the chain.',
+    example: null,
+  })
+  checkoutWalletAt!: Date | null;
+
+  @ApiProperty({
+    nullable: true,
+    description:
+      'When the wallet last came back without paying (it declined, or the page was shown again first), as the page reports it; cleared when a wallet opens again.',
+    example: null,
+  })
+  checkoutWalletClosedAt!: Date | null;
+
+  @ApiProperty({
+    nullable: true,
+    description:
+      'When the hosted checkout saw the wallet send the payment, as the page reports it: a payment on its way, before the chain confirms it.',
+    example: null,
+  })
+  checkoutSentAt!: Date | null;
+
   @ApiProperty({ example: '2026-06-21T12:34:56.000Z' })
   createdAt!: Date;
 
@@ -173,7 +219,7 @@ export class TxPaymentIntentEntity {
     example: 'testnet',
     description:
       'Network tier, on every chain: `public` (mainnet) or `testnet` (Stellar ' +
-      'testnet, Solana devnet, Monad testnet) — the one the API key is for.',
+      'testnet, Solana devnet, Monad testnet), the one the API key is for.',
   })
   network!: string;
 
@@ -218,6 +264,15 @@ export class TxPaymentIntentEntity {
   })
   networkFee!: string | null;
 
+  @ApiProperty({
+    type: MerchantFeeEntity,
+    nullable: true,
+    description:
+      'Your merchant fee on this payment, paid to its wallet in the same ' +
+      'transaction; null when the request named none.',
+  })
+  merchantFee!: MerchantFeeEntity | null;
+
   @ApiProperty({ nullable: true, example: 'Order #24' })
   msg!: string | null;
 
@@ -257,6 +312,38 @@ export class TxPaymentIntentEntity {
   })
   expiresAt!: Date | null;
 
+  @ApiProperty({
+    nullable: true,
+    description:
+      'When the hosted checkout page last read the intent: null at creation.',
+    example: null,
+  })
+  checkoutSeenAt!: Date | null;
+
+  @ApiProperty({
+    nullable: true,
+    description:
+      'When the payer last opened a wallet from the hosted checkout (its wallet link, the web wallet, the extension or Freighter), as the page reports it. Informational: the status changes only on the chain.',
+    example: null,
+  })
+  checkoutWalletAt!: Date | null;
+
+  @ApiProperty({
+    nullable: true,
+    description:
+      'When the wallet last came back without paying (it declined, or the page was shown again first), as the page reports it; cleared when a wallet opens again.',
+    example: null,
+  })
+  checkoutWalletClosedAt!: Date | null;
+
+  @ApiProperty({
+    nullable: true,
+    description:
+      'When the hosted checkout saw the wallet send the payment, as the page reports it: a payment on its way, before the chain confirms it.',
+    example: null,
+  })
+  checkoutSentAt!: Date | null;
+
   @ApiProperty({ example: '2026-06-21T12:34:56.000Z' })
   createdAt!: Date;
 
@@ -286,7 +373,7 @@ export class PayPaymentIntentEntity {
     example: 'testnet',
     description:
       'Network tier, on every chain: `public` (mainnet) or `testnet` (Stellar ' +
-      'testnet, Solana devnet, Monad testnet) — the one the API key is for.',
+      'testnet, Solana devnet, Monad testnet), the one the API key is for.',
   })
   network!: string;
 
@@ -333,6 +420,15 @@ export class PayPaymentIntentEntity {
   })
   networkFee!: string | null;
 
+  @ApiProperty({
+    type: MerchantFeeEntity,
+    nullable: true,
+    description:
+      'Your merchant fee on this payment, paid to its wallet in the same ' +
+      'transaction; null when the request named none.',
+  })
+  merchantFee!: MerchantFeeEntity | null;
+
   @ApiProperty({ nullable: true, example: 'pay me with lumens' })
   msg!: string | null;
 
@@ -375,6 +471,38 @@ export class PayPaymentIntentEntity {
     example: '2026-06-21T13:34:56.000Z',
   })
   expiresAt!: Date | null;
+
+  @ApiProperty({
+    nullable: true,
+    description:
+      'When the hosted checkout page last read the intent: null at creation.',
+    example: null,
+  })
+  checkoutSeenAt!: Date | null;
+
+  @ApiProperty({
+    nullable: true,
+    description:
+      'When the payer last opened a wallet from the hosted checkout (its wallet link, the web wallet, the extension or Freighter), as the page reports it. Informational: the status changes only on the chain.',
+    example: null,
+  })
+  checkoutWalletAt!: Date | null;
+
+  @ApiProperty({
+    nullable: true,
+    description:
+      'When the wallet last came back without paying (it declined, or the page was shown again first), as the page reports it; cleared when a wallet opens again.',
+    example: null,
+  })
+  checkoutWalletClosedAt!: Date | null;
+
+  @ApiProperty({
+    nullable: true,
+    description:
+      'When the hosted checkout saw the wallet send the payment, as the page reports it: a payment on its way, before the chain confirms it.',
+    example: null,
+  })
+  checkoutSentAt!: Date | null;
 
   @ApiProperty({ example: '2026-06-21T12:34:56.000Z' })
   createdAt!: Date;

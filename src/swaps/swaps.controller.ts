@@ -24,11 +24,16 @@ import { type Chain, DEFAULT_CHAIN } from '@/chains/chains.constants';
 import { CurrentConsumer } from '@/common/decorators/current-consumer.decorator';
 import { AllowPublicKey } from '@/common/decorators/allow-public-key.decorator';
 import { ApiErrorResponse } from '@/common/decorators/api-error-response.decorator';
+import { ApiRecordTokenHeader } from '@/common/decorators/api-record-token.decorator';
 import { ApiUpstream } from '@/common/decorators/api-upstream.decorator';
 import { RateLimit } from '@/common/decorators/rate-limit.decorator';
 import { RequirePermissions } from '@/common/decorators/require-permissions.decorator';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
+import {
+  LEGACY_RECORD_TOKEN_ROUTES,
+  RECORD_TOKEN_HEADER,
+} from '@/common/public-record-token.constants';
 import { headerValue } from '@/common/request-header';
 import { ChainSwapsService } from '@/swaps/chain-swaps.service';
 import { CreateSwapDto } from '@/swaps/dto/create-swap.dto';
@@ -36,9 +41,11 @@ import { QuerySwapsDto } from '@/swaps/dto/query-swaps.dto';
 import { QuoteSwapDto } from '@/swaps/dto/quote-swap.dto';
 import { SubmitSwapDto } from '@/swaps/dto/submit-swap.dto';
 import {
+  ChainSwapCreatedEntity,
   ChainSwapEntity,
   ChainSwapListEntity,
   ChainSwapSubmitResultEntity,
+  SwapCreatedEntity,
   SwapEntity,
   SwapListEntity,
   SwapQuoteEntity,
@@ -68,9 +75,11 @@ const isStellar = (chain: Chain | undefined): chain is 'stellar' | undefined =>
 // /v1/cross-chain-swaps.
 @ApiTags('swaps')
 @ApiExtraModels(
+  ChainSwapCreatedEntity,
   ChainSwapEntity,
   ChainSwapListEntity,
   ChainSwapSubmitResultEntity,
+  SwapCreatedEntity,
   SwapEntity,
   SwapListEntity,
   SwapSubmitResultEntity,
@@ -112,20 +121,24 @@ export class SwapsController {
       ApiErrorCode.AssetUnsupported,
       ApiErrorCode.NetworkUnsupported,
       ApiErrorCode.ProviderError,
+      ApiErrorCode.MerchantFeeUnsupported,
     ],
     description:
-      '`network_unsupported` — `chain: solana | monad` with a dev (testnet) ' +
-      'key: Jupiter and Kuru Flow run on mainnet only. `asset_unsupported` — ' +
-      'not an SPL mint / ERC-20 on that chain. `provider_error` — the ' +
-      'aggregator found no route or refused the amount.',
+      '`network_unsupported`: `chain: solana | monad` with a dev (testnet) ' +
+      'key: Jupiter and Kuru Flow run on mainnet only. `asset_unsupported`: ' +
+      'not an SPL mint / ERC-20 on that chain. `provider_error`: the ' +
+      'aggregator found no route or refused the amount. ' +
+      '`merchant_fee_unsupported`: a `merchantFee` on a Monad swap where no ' +
+      'merchant fee router is configured (KURU_MERCHANT_FEE_ROUTER).',
   })
   @ApiErrorResponse({
     status: 503,
     codes: [ApiErrorCode.ProviderUnavailable, ApiErrorCode.Misconfigured],
     description:
-      '`misconfigured` — the plan charges a commission and the chain has no ' +
+      '`misconfigured`: the plan charges a commission and the chain has no ' +
       'fee wallet configured (STELLAR_SWAP_FEE_WALLET, SOLANA_SWAP_FEE_WALLET, ' +
-      'MONAD_SWAP_FEE_WALLET).',
+      'MONAD_SWAP_FEE_WALLET), or KURU_MERCHANT_FEE_ROUTER is not a ' +
+      'MerchantFeeSwapRouter.',
   })
   quote(
     @CurrentConsumer() consumer: GatewayConsumer,
@@ -162,8 +175,10 @@ export class SwapsController {
   })
   @ApiCreatedResponse({
     description:
-      'A Stellar swap (no `chain`, or `stellar`), or a Solana / Monad swap.',
-    schema: eitherOf(SwapEntity, ChainSwapEntity),
+      'A Stellar swap (no `chain`, or `stellar`), or a Solana / Monad swap. ' +
+      'With the shared public key it carries `publicToken`: send it as ' +
+      '`X-Record-Token` to read the swap or submit it.',
+    schema: eitherOf(SwapCreatedEntity, ChainSwapCreatedEntity),
   })
   @ApiErrorResponse({
     status: 400,
@@ -177,30 +192,40 @@ export class SwapsController {
       ApiErrorCode.AssetUnsupported,
       ApiErrorCode.NetworkUnsupported,
       ApiErrorCode.ProviderError,
+      ApiErrorCode.MerchantFeeUnsupported,
     ],
     description:
-      'Stellar: `trustline_missing`, `insufficient_balance`, `no_path_found`. ' +
+      'Stellar: `trustline_missing` (the destination is another account that ' +
+      'does not trust the bought asset, and only it can add the trustline; a ' +
+      'source that receives the swap gets the trustline in the same ' +
+      'transaction instead), `insufficient_balance` (the source cannot keep ' +
+      'the 0.5 XLM reserve that trustline locks, after what the transaction ' +
+      'sends and its fee), `no_path_found`. ' +
       'Solana / Monad: `network_unsupported` (a dev key), `asset_unsupported`, ' +
-      '`provider_error` (no route, or the aggregator simulated a failure — ' +
-      'usually a wallet that cannot cover the amount plus fees).',
+      '`provider_error` (no route, or the aggregator simulated a failure, ' +
+      'usually a wallet that cannot cover the amount plus fees). ' +
+      'Monad: `merchant_fee_unsupported` (a `merchantFee` and no merchant ' +
+      'fee router configured, KURU_MERCHANT_FEE_ROUTER).',
   })
   @ApiErrorResponse({
     status: 409,
     codes: [ApiErrorCode.IdempotencyConflict, ApiErrorCode.OperationInFlight],
     description:
-      '`idempotency_conflict` — this Idempotency-Key was already used for a ' +
+      '`idempotency_conflict`: this Idempotency-Key was already used for a ' +
       'different request, or an identical swap was already built without a key ' +
       '(retry with an Idempotency-Key, or wait for the prior swap to settle or ' +
-      'expire). `operation_in_flight` — STELLAR_SWAP_SINGLE_INFLIGHT is on and ' +
+      'expire). `operation_in_flight`: STELLAR_SWAP_SINGLE_INFLIGHT is on and ' +
       'this source account already has a PENDING swap.',
   })
   @ApiErrorResponse({
     status: 503,
     codes: [ApiErrorCode.ProviderUnavailable, ApiErrorCode.Misconfigured],
     description:
-      '`misconfigured` — the plan charges a commission and the chain has no ' +
+      '`misconfigured`: the plan charges a commission and the chain has no ' +
       'fee wallet (or, on Solana, the fee wallet has no token account for the ' +
-      'output mint yet).',
+      'output mint yet), or, for a Monad swap with a merchant fee, ' +
+      'KURU_MERCHANT_FEE_ROUTER is not a MerchantFeeSwapRouter or Kuru Flow ' +
+      'routes through another aggregator than the one it was deployed for.',
   })
   create(
     @CurrentConsumer() consumer: GatewayConsumer,
@@ -232,19 +257,35 @@ export class SwapsController {
   }
 
   @Get(':id')
+  // A public swap follows its own status. The shared public key is every
+  // anonymous caller and an id is not a secret, so that key also needs the
+  // swap's record token (`X-Record-Token`, handed out by create); without it
+  // the answer is the 404 of a missing swap. The list stays closed to it.
+  @AllowPublicKey()
   @RequirePermissions('swaps:read')
-  @ApiOperation({ summary: 'Get a swap by id, on any chain' })
+  @ApiRecordTokenHeader()
+  @ApiOperation({
+    summary: 'Get a swap by id, on any chain',
+    description:
+      'The shared public key may call it, so a swap made without an account ' +
+      'can follow its own status, but only with the swap’s `publicToken` in ' +
+      '`X-Record-Token`: without it, or with another swap’s, the answer is ' +
+      '404. Every other key reads its own swaps as before. Listing swaps ' +
+      'stays closed to the public key.',
+  })
   @ApiOkResponse({ schema: eitherOf(SwapEntity, ChainSwapEntity) })
   async findOne(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Param('id') id: string,
+    @Req() req: Request,
   ) {
+    const token = headerValue(req, RECORD_TOKEN_HEADER);
     // Ids are unique across both tables. A miss in the Solana/Monad table
     // falls through to Stellar's, whose 404 is the one a miss always answered.
-    const chainSwap = await this.chainSwaps.findOwned(consumer, id);
+    const chainSwap = await this.chainSwaps.findOwned(consumer, id, token);
     return chainSwap
       ? this.chainSwaps.present(chainSwap)
-      : this.swaps.findOne(consumer, id);
+      : this.swaps.findOne(consumer, id, token);
   }
 
   @Post(':id/submit')
@@ -261,6 +302,11 @@ export class SwapsController {
   // resubmit cap and expiry check bound how often that can happen per swap.
   @AllowPublicKey()
   @RequirePermissions('swaps:write')
+  // With the shared public key, the swap's record token: a wrong one is a
+  // 404, a missing one is still accepted on this legacy route (logged) until
+  // PUBLIC_RECORD_TOKEN_REQUIRED_ON_LEGACY is on. The envelope check below is
+  // what keeps someone else's submit out meanwhile.
+  @ApiRecordTokenHeader('legacy')
   // A rejected broadcast costs a submission and possibly a webhook that no
   // error response refunds, and under the shared public key the client address
   // is the only thing telling anonymous callers apart.
@@ -283,11 +329,11 @@ export class SwapsController {
       ApiErrorCode.TransactionRejected,
     ],
     description:
-      '`validation_failed` — `signedXdr` (Stellar) / `signedTransaction` ' +
+      '`validation_failed`: `signedXdr` (Stellar) / `signedTransaction` ' +
       '(Solana, Monad) is not a transaction, is not the one built for this ' +
-      'swap, or carries no signature of its source. `transaction_rejected` — ' +
+      'swap, or carries no signature of its source. `transaction_rejected`: ' +
       'the Solana or Monad node refused the broadcast; the swap stays PENDING. ' +
-      '`invalid_state_transition` — the swap can no longer be submitted: it is ' +
+      '`invalid_state_transition`: the swap can no longer be submitted, because it is ' +
       "EXPIRED, its transaction's validity window has passed, or it was already " +
       'resubmitted the maximum number of times after a rejection. Build a new ' +
       'swap.',
@@ -304,8 +350,15 @@ export class SwapsController {
     @CurrentConsumer() consumer: GatewayConsumer,
     @Param('id') id: string,
     @Body() dto: SubmitSwapDto,
+    @Req() req: Request,
   ) {
-    const chainSwap = await this.chainSwaps.findOwned(consumer, id);
+    const token = headerValue(req, RECORD_TOKEN_HEADER);
+    const chainSwap = await this.chainSwaps.findOwned(
+      consumer,
+      id,
+      token,
+      LEGACY_RECORD_TOKEN_ROUTES.swapSubmit,
+    );
     if (chainSwap) {
       return this.chainSwaps.submit(consumer, chainSwap, dto.signedTransaction);
     }
@@ -317,6 +370,6 @@ export class SwapsController {
         'signedXdr is required for a Stellar swap',
       );
     }
-    return this.swaps.submit(consumer, id, dto.signedXdr);
+    return this.swaps.submit(consumer, id, dto.signedXdr, token);
   }
 }

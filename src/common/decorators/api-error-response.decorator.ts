@@ -62,7 +62,7 @@ export const ApiErrorResponse = (options: ApiErrorResponseOptions) => {
     // to prevent, so it fails at import time rather than shipping in the spec.
     if (!API_ERROR_CASES[code].statuses.includes(options.status)) {
       throw new Error(
-        `${code} is never returned with ${options.status} — it arrives with ` +
+        `${code} is never returned with ${options.status}: it arrives with ` +
           `${API_ERROR_CASES[code].statuses.join(', ')}. Fix the status, or ` +
           `add it to API_ERROR_CASES.`,
       );

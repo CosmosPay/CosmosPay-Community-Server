@@ -1,6 +1,11 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { Memo, Operation, TransactionBuilder } from '@stellar/stellar-sdk';
+import {
+  type Horizon,
+  Memo,
+  Operation,
+  TransactionBuilder,
+} from '@stellar/stellar-sdk';
 import { AppConfig, StellarNetwork } from '@/config/configuration';
 import { StellarAccountLoader } from '@/stellar/account-loader.service';
 import { ResolvedAsset } from '@/stellar/asset';
@@ -19,7 +24,10 @@ interface Sep7Payment {
 
 export interface Sep7TxPayment extends Sep7Payment {
   source: string;
+  /** What `destination` receives (the merchant's leg). */
   amount: string;
+  /** A merchant fee: a second payment, in the same asset, to its wallet. */
+  fee?: { wallet: string; amount: string } | null;
 }
 
 export interface Sep7PayPayment extends Sep7Payment {
@@ -56,9 +64,11 @@ export class Sep7LinkBuilder {
    * SEP-7 `tx`: the unsigned envelope for one payment from a known source, and
    * the URI carrying it.
    *
-   * The only method here that touches the network — the source is loaded for
-   * its sequence number — so the only one that can fail on it, with the
-   * loader's errors (400 for an unfunded source, 503 when Horizon is out).
+   * The only method here that touches the network (the source is loaded for
+   * its sequence number, and the destination of an issued asset for its
+   * trustlines), so the only one that can fail on it: with the loader's errors
+   * (400 for an unfunded account, 503 when Horizon is out), or
+   * `trustline_missing` from {@link assertDestinationCanReceive}.
    */
   async tx(
     network: StellarNetwork,
@@ -68,23 +78,80 @@ export class Sep7LinkBuilder {
       infer: true,
     });
     const account = await this.accounts.load(network, payment.source);
-    const xdr = new TransactionBuilder(account, {
+    await this.assertDestinationCanReceive(network, payment, account);
+    const builder = new TransactionBuilder(account, {
       fee: baseFee,
       networkPassphrase: this.stellar.passphrase(network),
-    })
-      .addOperation(
+    }).addOperation(
+      Operation.payment({
+        destination: payment.destination,
+        amount: payment.amount,
+        asset: payment.asset.asset,
+      }),
+    );
+    // The merchant fee: its own payment, after the merchant's, so the two legs
+    // stay apart on-chain and the verifier can hold the intent to both.
+    if (payment.fee) {
+      builder.addOperation(
         Operation.payment({
-          destination: payment.destination,
-          amount: payment.amount,
+          destination: payment.fee.wallet,
+          amount: payment.fee.amount,
           asset: payment.asset.asset,
         }),
-      )
+      );
+    }
+    const xdr = builder
       .addMemo(Memo.id(payment.memo))
       .setTimeout(timeoutSeconds)
       .build()
       .toXDR();
 
     return { xdr, uri: sep7TxUri(xdr, payment) };
+  }
+
+  /**
+   * The merchant's `destination` must already trust an issued asset, or the
+   * payment fails on-chain with `op_no_trust` after the payer has signed it and
+   * paid the fee. The payer signs this envelope and the merchant signs nothing,
+   * so the trustline cannot go into it: only the merchant's own account can add
+   * it, and the refusal says so. Lumens need no trustline and skip the read.
+   */
+  private async assertDestinationCanReceive(
+    network: StellarNetwork,
+    payment: Sep7TxPayment,
+    source: Horizon.AccountResponse,
+  ): Promise<void> {
+    const { asset, destination } = payment;
+    if (asset.code === 'native' || !asset.issuer) return;
+    const receiver =
+      destination === payment.source
+        ? source
+        : await this.accounts.load(network, destination);
+    this.accounts.assertCanReceive(
+      receiver.balances,
+      asset,
+      destination,
+      'this payment',
+    );
+  }
+
+  /**
+   * A merchant fee's wallet must exist and, for an issued asset, trust it, or
+   * the fee payment fails on-chain and takes the merchant's with it. Checked
+   * when the intent is created, before any payer is asked to sign.
+   */
+  async assertWalletCanReceive(
+    network: StellarNetwork,
+    asset: ResolvedAsset,
+    wallet: string,
+  ): Promise<void> {
+    const receiver = await this.accounts.load(network, wallet);
+    this.accounts.assertCanReceive(
+      receiver.balances,
+      asset,
+      wallet,
+      'the merchant fee',
+    );
   }
 
   /**

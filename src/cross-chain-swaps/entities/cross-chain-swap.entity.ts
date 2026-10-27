@@ -1,11 +1,27 @@
 import { ApiProperty, OmitType } from '@nestjs/swagger';
+import { ApiPublicTokenProperty } from '@/common/decorators/api-record-token.decorator';
+import { MerchantFeeEntity } from '@/common/merchant-fee/merchant-fee.entity';
 import { CrossChainSwapStatus } from '@generated/prisma/client';
-import { CHAINS, type Chain } from '@/chains/chains.constants';
+import {
+  CROSS_CHAIN_NETWORK_IDS,
+  type CrossChainNetworkId,
+} from '@/cross-chain-swaps/cross-chain-swaps.constants';
 
-/** A token NEAR Intents can swap on one of our chains. */
+/** A token NEAR Intents can swap on one of the networks this service reaches. */
 export class CrossChainAssetEntity {
-  @ApiProperty({ enum: CHAINS, example: 'stellar' })
-  chain!: Chain;
+  @ApiProperty({
+    enum: CROSS_CHAIN_NETWORK_IDS,
+    example: 'stellar',
+    description:
+      'The network id a request names it by (originChain / destinationChain).',
+  })
+  chain!: CrossChainNetworkId;
+
+  @ApiProperty({
+    example: 'Stellar',
+    description: 'The network, by name: for display.',
+  })
+  chainName!: string;
 
   @ApiProperty({ example: 'USDC' })
   symbol!: string;
@@ -24,9 +40,21 @@ export class CrossChainAssetEntity {
     nullable: true,
     example: 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN',
     description:
-      'SPL mint, ERC-20 address or Stellar issuer; null for the native coin.',
+      'The token on its network (SPL mint, ERC-20 address, Stellar issuer, ' +
+      'Sui coin type, TON jetton master, ...); null for the native coin.',
   })
   contract!: string | null;
+
+  @ApiProperty({
+    type: Number,
+    nullable: true,
+    example: 0.999538,
+    description:
+      'NEAR Intents’ reference price in USD, indicative only: for showing an ' +
+      'estimate before a quote. It may be a few minutes old, and every amount ' +
+      'still comes from a quote. Null when NEAR Intents lists none.',
+  })
+  priceUsd!: number | null;
 }
 
 export class CrossChainAssetListEntity {
@@ -36,8 +64,8 @@ export class CrossChainAssetListEntity {
 
 /** One leg of a quote. */
 export class CrossChainQuoteLeg {
-  @ApiProperty({ enum: CHAINS, example: 'stellar' })
-  chain!: Chain;
+  @ApiProperty({ enum: CROSS_CHAIN_NETWORK_IDS, example: 'stellar' })
+  chain!: CrossChainNetworkId;
 
   @ApiProperty({ example: 'XLM' })
   asset!: string;
@@ -104,6 +132,14 @@ export class CrossChainQuoteEntity {
   @ApiProperty({ type: CrossChainFeeEntity })
   fee!: CrossChainFeeEntity;
 
+  @ApiProperty({
+    type: MerchantFeeEntity,
+    nullable: true,
+    description:
+      'The merchant fee NEAR Intents will pay, in the origin asset; null without one.',
+  })
+  merchantFee!: MerchantFeeEntity | null;
+
   @ApiProperty({ example: 100 })
   slippageBps!: number;
 
@@ -140,7 +176,7 @@ export class CrossChainSwapEntity {
   @ApiProperty({ example: 'public' })
   network!: string;
 
-  @ApiProperty({ enum: CHAINS, example: 'stellar' })
+  @ApiProperty({ enum: CROSS_CHAIN_NETWORK_IDS, example: 'stellar' })
   originChain!: string;
 
   @ApiProperty({ example: 'XLM' })
@@ -149,7 +185,7 @@ export class CrossChainSwapEntity {
   @ApiProperty({ nullable: true, example: null })
   originContract!: string | null;
 
-  @ApiProperty({ enum: CHAINS, example: 'solana' })
+  @ApiProperty({ enum: CROSS_CHAIN_NETWORK_IDS, example: 'solana' })
   destinationChain!: string;
 
   @ApiProperty({ example: 'USDC' })
@@ -169,6 +205,14 @@ export class CrossChainSwapEntity {
 
   @ApiProperty({ example: '0.5' })
   feeAmount!: string;
+
+  @ApiProperty({
+    type: MerchantFeeEntity,
+    nullable: true,
+    description:
+      'The merchant fee NEAR Intents pays as an app fee; null when the request named none.',
+  })
+  merchantFee!: MerchantFeeEntity | null;
 
   @ApiProperty({ example: '22.189466' })
   amountOutEstimated!: string;
@@ -197,19 +241,32 @@ export class CrossChainSwapEntity {
     nullable: true,
     example: '188866795',
     description:
-      'Stellar only, and required: attach it as a MEMO_TEXT or the deposit is lost to the swap.',
+      'Required whenever it is set: attach it to the deposit or the deposit is ' +
+      'lost to the swap. Always set on Stellar (a MEMO_TEXT); on another chain ' +
+      'only if NEAR Intents issues one.',
   })
   depositMemo!: string | null;
 
   @ApiProperty({
+    type: String,
+    nullable: true,
     example:
       'web+stellar:pay?destination=GDJ4…&amount=100&memo=188866795&memo_type=MEMO_TEXT',
     description:
-      'The deposit as a wallet link on the origin chain: SEP-7 pay, Solana Pay or EIP-681.',
+      'The deposit as a wallet link on the origin chain, where the chain has a ' +
+      'wallet-link standard: SEP-7 pay, Solana Pay, EIP-681, BIP-21 style ' +
+      '(bitcoin:, litecoin:, dogecoin:, bitcoincash:, dash:, zcash:), ton:// ' +
+      'transfer or CIP-13 web+cardano:. Null means: pay depositAddress (and ' +
+      'depositMemo, if set) with any wallet of that chain.',
   })
-  depositUri!: string;
+  depositUri!: string | null;
 
-  @ApiProperty({ example: 'data:image/png;base64,iVBORw0KGgo…' })
+  @ApiProperty({
+    example: 'data:image/png;base64,iVBORw0KGgo…',
+    description:
+      'PNG data URL of a QR code: of depositUri when there is one, else of ' +
+      'depositAddress.',
+  })
   qr!: string;
 
   @ApiProperty({ nullable: true, example: null })
@@ -264,6 +321,12 @@ export class CrossChainSwapEntity {
 }
 
 /** A swap as the list returns it — without the derived QR. */
+/** What `POST /v1/cross-chain-swaps` answers: the swap, and its read token. */
+export class CrossChainSwapCreatedEntity extends CrossChainSwapEntity {
+  @ApiPublicTokenProperty()
+  publicToken?: string;
+}
+
 export class CrossChainSwapListItem extends OmitType(CrossChainSwapEntity, [
   'qr',
 ] as const) {}

@@ -1,6 +1,6 @@
 import { StrKey } from '@stellar/stellar-sdk';
 import { keccak_256 } from '@noble/hashes/sha3.js';
-import type { Chain } from '@/chains/chains.constants';
+import { CHAINS, type Chain } from '@/chains/chains.constants';
 
 const BASE58_ALPHABET =
   '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
@@ -8,11 +8,22 @@ const BASE58_ALPHABET =
 const EVM_ADDRESS_RE = /^0x[a-fA-F0-9]{40}$/;
 
 /**
- * Decodes Bitcoin-alphabet base58 — Solana's encoding for keys, signatures and
- * hashes. Returns null for any character outside the alphabet.
+ * The longest base58 string decoded: a 64-byte Solana signature is at most 88 characters.
+ * Decoding is quadratic in the length (one BigInt multiply per character), so a longer
+ * input is refused before any work, whatever field it arrived in.
+ */
+const MAX_BASE58_LENGTH = 128;
+
+/**
+ * Decodes Bitcoin-alphabet base58 (Solana's encoding for keys, signatures and hashes).
+ * Returns null for any character outside the alphabet, or past MAX_BASE58_LENGTH.
  */
 export function decodeBase58(value: string): Uint8Array | null {
-  if (typeof value !== 'string' || value.length === 0) {
+  if (
+    typeof value !== 'string' ||
+    value.length === 0 ||
+    value.length > MAX_BASE58_LENGTH
+  ) {
     return null;
   }
 
@@ -64,6 +75,9 @@ export function encodeBase58(bytes: Uint8Array): string {
 
 /** A Solana address: base58 that decodes to exactly 32 bytes. */
 export function isSolanaAddress(value: string): boolean {
+  // 32 bytes are 32 to 44 base58 characters; anything else is not one, so skip the decode.
+  if (typeof value !== 'string' || value.length < 32 || value.length > 44)
+    return false;
   return decodeBase58(value)?.length === 32;
 }
 
@@ -133,3 +147,38 @@ export function isAddressForChain(chain: Chain, address: string): boolean {
 export function normalizeAddress(chain: Chain, address: string): string {
   return CHAIN_ADDRESS_RULES[chain].normalize(address);
 }
+
+/**
+ * The chain an address belongs to, read from its shape alone, for a field that names no
+ * chain (a customer's `account`). The shapes do not overlap: a Stellar key is 56 base32
+ * characters starting with G, a Solana key is base58 for 32 bytes (at most 44 characters, and
+ * no `0`), a Monad address is 0x + 40 hex. Null when no rule accepts it, and also when more
+ * than one would, so a future chain whose shape collides is refused rather than guessed.
+ */
+export function chainOfAddress(address: string): Chain | null {
+  // No accepted address is longer than a Stellar key (56 characters).
+  if (typeof address !== 'string' || address.length > 64) return null;
+  const matches = CHAINS.filter((chain) =>
+    CHAIN_ADDRESS_RULES[chain].isValid(address),
+  );
+  return matches.length === 1 ? matches[0] : null;
+}
+
+/**
+ * `address` in the one spelling its chain stores (EIP-55 on Monad), or null when it is no
+ * chain's address. See {@link chainOfAddress}.
+ */
+export function normalizeAnyChainAddress(address: string): string | null {
+  const chain = chainOfAddress(address);
+  return chain ? normalizeAddress(chain, address) : null;
+}
+
+/**
+ * Completes "`<property>` must be ..." for a field that takes an address on any chain, from
+ * each chain's own wording: "a valid Stellar account address (G...), a valid Solana address
+ * (base58, 32 bytes) or a valid Monad (EVM) address (0x + 40 hex)".
+ */
+const EXPECTED_PER_CHAIN = CHAINS.map(
+  (chain) => CHAIN_ADDRESS_RULES[chain].expected,
+);
+export const ANY_CHAIN_ADDRESS_EXPECTED = `${EXPECTED_PER_CHAIN.slice(0, -1).join(', ')} or ${EXPECTED_PER_CHAIN[EXPECTED_PER_CHAIN.length - 1]}`;

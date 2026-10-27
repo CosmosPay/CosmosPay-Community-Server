@@ -19,7 +19,7 @@ export class AliasAddressEntity {
 export class AliasEntity {
   @ApiProperty() id!: string;
   @ApiProperty({
-    description: 'Normalized handle — the form uniqueness is decided on.',
+    description: 'Normalized handle: the form uniqueness is decided on.',
   })
   name!: string;
   @ApiProperty({ description: 'As the claimant typed it. Display only.' })
@@ -50,9 +50,9 @@ export class AliasChallengeEntity {
   nonce!: string;
   @ApiProperty({
     description:
-      'The EXACT string to sign — digested first on Stellar, signed as text on ' +
+      'The EXACT string to sign: digested first on Stellar, signed as text on ' +
       'Solana and Monad. Returned rather than described so a client never ' +
-      'rebuilds it from prose — a client that assembles the fields itself is ' +
+      'rebuilds it from prose. A client that assembles the fields itself is ' +
       'one field-order change away from producing signatures nothing accepts.',
   })
   message!: string;
@@ -101,7 +101,7 @@ export class AliasRecoveryStartedEntity {
     example: true,
     description:
       'Always true, whether or not anything matched. The token, when there is ' +
-      'one, is emailed to the mailbox on record — never returned here.',
+      'one, is emailed to the mailbox on record, never returned here.',
   })
   accepted!: boolean;
 }

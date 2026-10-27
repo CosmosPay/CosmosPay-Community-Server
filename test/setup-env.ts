@@ -7,6 +7,9 @@ process.env.APISIX_GATEWAY_SECRET = 'topsecret-topsecret-topsecret-topsecret';
 process.env.APISIX_PUBLIC_CONSUMER = 'cosmos_public';
 process.env.DATABASE_URL = 'postgresql://x:x@localhost:5432/x';
 process.env.NODE_ENV = 'test';
+// The network a key with no environment header targets. CI has no .env and gets this default;
+// pinned so a developer's .env cannot change which rows a suite's lists expect.
+process.env.STELLAR_NETWORK = 'testnet';
 process.env.STELLAR_SWAP_FEE_WALLET =
   'GARMB7W3FCR3GKIM3FLWVJASC2PUZ4VHUJZTNJVWWKNTCJNKO6TBCT76';
 // Keep the on-chain observer off during tests (no Horizon polling).
@@ -15,6 +18,10 @@ process.env.OBSERVER_ENABLED = 'false';
 process.env.WEBHOOK_SWEEP_ENABLED = 'false';
 // Keep request-log prune off during tests (no background deleteMany).
 process.env.REQUEST_LOG_RETENTION_DAYS = '0';
+// No 1Click call at boot: a suite that mocks fetch would see the prefetch take its answer.
+process.env.NEAR_INTENTS_TOKENS_PREFETCH = 'false';
+// No analytics cache: the suites call the same figure several times with different rows.
+process.env.ANALYTICS_CACHE_TTL_MS = '0';
 // ConfigModule still runs dotenv against the repo's .env, and dotenv does not
 // overwrite values already in process.env — so a developer whose .env carries a
 // real BLINDPAY_API_KEY would otherwise trip env validation ("BLINDPAY_
@@ -67,3 +74,30 @@ process.env.WALLET_BACKUP_ENCRYPTION_KEY = Buffer.alloc(32, 9).toString(
   'base64',
 );
 process.env.WALLET_BACKUP_ENCRYPTION_PREVIOUS_KEYS = '';
+// Private payments (ZK payments): a fixed testnet set and no mainnet, so the suites see the same
+// configuration everywhere. A developer's .env carries the real testnet
+// deployment (scripts/zk/deploy-testnet.ts writes it there), and dotenv never
+// overwrites a value already set, so these win. Mainnet is empty rather than
+// deleted for the same reason.
+process.env.ZK_PAYMENTS_TESTNET_RPC_URL = 'https://soroban-testnet.stellar.org';
+process.env.ZK_PAYMENTS_TESTNET_TOKEN =
+  'CAAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQC526';
+process.env.ZK_PAYMENTS_TESTNET_AUDITOR_REGISTRY =
+  'CABAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAFNSZ';
+process.env.ZK_PAYMENTS_TESTNET_VERIFIER =
+  'CABQGAYDAMBQGAYDAMBQGAYDAMBQGAYDAMBQGAYDAMBQGAYDAMBQGCK3';
+process.env.ZK_PAYMENTS_TESTNET_AUDITOR_SECRET = '0f'.repeat(32);
+process.env.ZK_PAYMENTS_TESTNET_FEE_ACCOUNT =
+  'GACQKBIFAUCQKBIFAUCQKBIFAUCQKBIFAUCQKBIFAUCQKBIFAUCQKG7N';
+process.env.ZK_PAYMENTS_TESTNET_DEPLOYED_LEDGER = '5387137';
+for (const suffix of [
+  'TOKEN',
+  'AUDITOR_REGISTRY',
+  'VERIFIER',
+  'AUDITOR_SECRET',
+  'FEE_ACCOUNT',
+  'DEPLOYED_LEDGER',
+  'RPC_URL',
+]) {
+  process.env[`ZK_PAYMENTS_MAINNET_${suffix}`] = '';
+}

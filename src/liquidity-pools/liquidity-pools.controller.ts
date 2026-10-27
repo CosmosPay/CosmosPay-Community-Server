@@ -94,7 +94,7 @@ export class LiquidityPoolsController {
     status: 409,
     codes: [ApiErrorCode.IdempotencyConflict],
     description:
-      '`idempotency_conflict` — this Idempotency-Key was already used for a ' +
+      '`idempotency_conflict`: this Idempotency-Key was already used for a ' +
       'different request, or an identical deposit was already built without a ' +
       'key (retry with an Idempotency-Key, or wait for the prior operation to ' +
       'settle or expire).',
@@ -141,15 +141,17 @@ export class LiquidityPoolsController {
       ApiErrorCode.ValidationFailed,
       ApiErrorCode.InvalidAmount,
       ApiErrorCode.InsufficientBalance,
+      // A merchant fee's wallet that cannot receive one of the reserves.
+      ApiErrorCode.TrustlineMissing,
     ],
   })
   @ApiErrorResponse({
     status: 409,
     codes: [ApiErrorCode.IdempotencyConflict, ApiErrorCode.OperationInFlight],
     description:
-      '`idempotency_conflict` — this Idempotency-Key was already used for a ' +
+      '`idempotency_conflict`: this Idempotency-Key was already used for a ' +
       'different request, or an identical withdrawal was already built without ' +
-      'a key. `operation_in_flight` — a withdrawal from this pool is already in ' +
+      'a key. `operation_in_flight`: a withdrawal from this pool is already in ' +
       'flight for this account; wait for it to settle or expire.',
   })
   withdraw(
@@ -232,9 +234,9 @@ export class LiquidityPoolsController {
     status: 400,
     codes: [ApiErrorCode.ValidationFailed, ApiErrorCode.InvalidStateTransition],
     description:
-      '`validation_failed` — `signedXdr` is not a transaction envelope, is not ' +
+      '`validation_failed`: `signedXdr` is not a transaction envelope, is not ' +
       'the envelope built for this operation, or carries no signatures. ' +
-      '`invalid_state_transition` — the operation can no longer be submitted: ' +
+      '`invalid_state_transition`: the operation can no longer be submitted, because ' +
       "it is EXPIRED, its transaction's time bounds have passed, or it was " +
       'already resubmitted the maximum number of times after a rejection. Build ' +
       'a new deposit or withdrawal.',

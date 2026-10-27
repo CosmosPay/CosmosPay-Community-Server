@@ -79,6 +79,83 @@ describe('NearIntentsClient', () => {
     expect(calls).toBe(2);
   });
 
+  it('serves a list past its ttl at once and refreshes it once in the background', async () => {
+    jest.useFakeTimers({ now: new Date('2026-10-26T12:00:00Z') });
+    let calls = 0;
+    mockFetch(() => {
+      calls += 1;
+      return answer(200, [{ symbol: calls === 1 ? 'OLD' : 'NEW' }]);
+    });
+    const client = makeClient();
+    await client.tokens();
+
+    // Six minutes on: past the five-minute ttl, inside the hour it may still be served.
+    jest.setSystemTime(new Date('2026-10-26T12:06:00Z'));
+    const [a, b] = await Promise.all([client.tokens(), client.tokens()]);
+    expect(a).toEqual([{ symbol: 'OLD' }]);
+    expect(b).toEqual([{ symbol: 'OLD' }]);
+    // One refresh for both callers, and the next caller reads its answer.
+    await jest.advanceTimersByTimeAsync(0);
+    expect(calls).toBe(2);
+    await expect(client.tokens()).resolves.toEqual([{ symbol: 'NEW' }]);
+    expect(calls).toBe(2);
+    jest.useRealTimers();
+  });
+
+  it('keeps the list it has when a background refresh fails', async () => {
+    jest.useFakeTimers({ now: new Date('2026-10-26T12:00:00Z') });
+    let calls = 0;
+    mockFetch(() => {
+      calls += 1;
+      return calls === 1 ? answer(200, [{ symbol: 'XLM' }]) : answer(502, {});
+    });
+    const client = makeClient();
+    await client.tokens();
+
+    jest.setSystemTime(new Date('2026-10-26T12:10:00Z'));
+    await expect(client.tokens()).resolves.toEqual([{ symbol: 'XLM' }]);
+    await jest.advanceTimersByTimeAsync(0);
+    await expect(client.tokens()).resolves.toEqual([{ symbol: 'XLM' }]);
+    jest.useRealTimers();
+  });
+
+  it('waits for a fresh list once the one it has is over an hour old', async () => {
+    jest.useFakeTimers({ now: new Date('2026-10-26T12:00:00Z') });
+    let calls = 0;
+    mockFetch(() => {
+      calls += 1;
+      return calls === 1 ? answer(200, [{ symbol: 'XLM' }]) : answer(502, {});
+    });
+    const client = makeClient();
+    await client.tokens();
+
+    jest.setSystemTime(new Date('2026-10-26T13:00:00Z'));
+    await expect(client.tokens()).rejects.toBeInstanceOf(ApiError);
+    jest.useRealTimers();
+  });
+
+  it('fetches the list at boot when asked to, and a failure there does not stop the boot', async () => {
+    const fetch = mockFetch(() => answer(502, {}));
+    makeClient({ prefetchTokens: false }).onApplicationBootstrap();
+    expect(fetch).not.toHaveBeenCalled();
+
+    expect(() =>
+      makeClient({ prefetchTokens: true }).onApplicationBootstrap(),
+    ).not.toThrow();
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch.mock.calls[0][0]).toBe('https://1click.example/v0/tokens');
+    // The rejected prefetch is handled: let it settle without an unhandled rejection.
+    await new Promise((resolve) => setImmediate(resolve));
+  });
+
+  it('a prefetched list serves the first caller with no request of its own', async () => {
+    const fetch = mockFetch(() => answer(200, [{ symbol: 'XLM' }]));
+    const client = makeClient({ prefetchTokens: true });
+    client.onApplicationBootstrap();
+    await expect(client.tokens()).resolves.toEqual([{ symbol: 'XLM' }]);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
   it('relays a 400 as provider_error with 1Click’s own reason', async () => {
     mockFetch(() =>
       answer(400, {

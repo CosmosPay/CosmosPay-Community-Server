@@ -1,4 +1,15 @@
+import {
+  Account,
+  Keypair,
+  Networks,
+  Operation,
+  Transaction,
+  TransactionBuilder,
+} from '@stellar/stellar-sdk';
 import type { PaymentIntent } from '@generated/prisma/client';
+import { decodeBase58, encodeBase58 } from '@/chains/chain-address';
+import { SolanaPayTransactionBuilder } from '@/payment-intents/solana-pay-transaction.builder';
+import { parseSolanaTransaction } from '@/solana/solana-transaction';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import {
   PAYMENT_LINK_SELECT,
@@ -30,6 +41,8 @@ const CONTRACT_FIELDS = [
   'qr',
   'txHash',
   'networkFee',
+  'merchantFee',
+  'payerAccountRequired',
   'expiresAt',
   'createdAt',
   'checkoutTheme',
@@ -52,6 +65,10 @@ const FORBIDDEN_FIELDS = [
   'evmDeposit',
   'horizonCursor',
   'updatedAt',
+  'checkoutSeenAt',
+  'checkoutWalletAt',
+  'checkoutWalletClosedAt',
+  'checkoutSentAt',
 ];
 
 const MERCHANT = 'GCALNQQBXAPZ2WIRSDDBMSTAKCUH5SG6U76YBFLQLIXJTF7FE5AX7AOO';
@@ -70,6 +87,7 @@ function fullRow(overrides: Partial<PaymentIntent> = {}): PaymentIntent {
   return {
     id: 'cmh4x2k9a0001l70g8v5q3z2w',
     consumerId: 'consumer_secret_id',
+    merchantFee: null,
     kind: 'PAY',
     chain: 'stellar',
     source: PAYER,
@@ -94,6 +112,10 @@ function fullRow(overrides: Partial<PaymentIntent> = {}): PaymentIntent {
     reference: 'merchant-order-24',
     checkoutTheme: null,
     expiresAt: EXPIRES,
+    checkoutSeenAt: null,
+    checkoutWalletAt: null,
+    checkoutWalletClosedAt: null,
+    checkoutSentAt: null,
     createdAt: CREATED,
     updatedAt: new Date('2026-10-24T12:40:00.000Z'),
     ...overrides,
@@ -121,6 +143,8 @@ describe('toPublicPaymentLink', () => {
       qr: 'data:image/png;base64,QR',
       txHash: null,
       networkFee: null,
+      merchantFee: null,
+      payerAccountRequired: false,
       expiresAt: '2026-10-24T13:34:56.000Z',
       createdAt: '2026-10-24T12:34:56.000Z',
       checkoutTheme: 'classic',
@@ -242,12 +266,40 @@ describe('PaymentLinksService.findPublic', () => {
 
   function make(row: PaymentIntent | null) {
     const findUnique = jest.fn().mockResolvedValue(row);
+    const executeRaw = jest.fn().mockResolvedValue(1);
     const service = new PaymentLinksService(
-      { paymentIntent: { findUnique } } as never,
+      { paymentIntent: { findUnique }, $executeRaw: executeRaw } as never,
       links,
+      {} as never,
+      {} as never,
     );
-    return { service, findUnique };
+    return { service, findUnique, executeRaw };
   }
+
+  it('notes an open link as seen, so the owner sees a payer on the page', async () => {
+    const { service, executeRaw } = make(fullRow({ status: 'PENDING' }));
+    await service.findPublic('cmh4x2k9a0001l70g8v5q3z2w');
+    expect(executeRaw).toHaveBeenCalledTimes(1);
+    // The SQL itself keeps it to open intents and to once per window.
+    const sql = (executeRaw.mock.calls[0][0] as string[]).join('?');
+    expect(sql).toContain('"checkoutSeenAt" = ?');
+    expect(sql).toContain("'PENDING', 'SUBMITTED'");
+    expect(sql).toContain('"checkoutSeenAt" <');
+  });
+
+  it('leaves a settled link alone: nobody pays it any more', async () => {
+    const { service, executeRaw } = make(fullRow({ status: 'SUCCEEDED' }));
+    await service.findPublic('cmh4x2k9a0001l70g8v5q3z2w');
+    expect(executeRaw).not.toHaveBeenCalled();
+  });
+
+  it('answers the payer even when noting the read fails', async () => {
+    const { service, executeRaw } = make(fullRow({ status: 'PENDING' }));
+    executeRaw.mockRejectedValue(new Error('database down'));
+    await expect(
+      service.findPublic('cmh4x2k9a0001l70g8v5q3z2w'),
+    ).resolves.toHaveProperty('status');
+  });
 
   it('loads only the columns the public view is built from', async () => {
     const { service, findUnique } = make(fullRow());
@@ -309,6 +361,249 @@ describe('PaymentLinksService.findPublic', () => {
     expect((publicError as ApiError).code).toBe(ApiErrorCode.NotFound);
     expect((publicError as ApiError).getResponse()).toEqual(
       (ownerError as ApiError).getResponse(),
+    );
+  });
+});
+
+describe('PaymentLinksService.payerTransaction (a Stellar link with a merchant fee)', () => {
+  const PAYER = Keypair.random().publicKey();
+  const FEE_WALLET = Keypair.random().publicKey();
+  const merchantFee = {
+    bps: 150,
+    fixed: '0.1',
+    amount: '0.4825',
+    asset: 'native',
+    wallet: FEE_WALLET,
+    paidBy: 'recipient',
+  };
+  const accounts = {
+    load: jest.fn(async (_network: string, address: string) =>
+      Object.assign(new Account(address, '41'), {
+        balances: [{ asset_type: 'native', balance: '100' }],
+      }),
+    ),
+    assertCanReceive: jest.fn(),
+  };
+  const links = new Sep7LinkBuilder(
+    {
+      get: () => ({ baseFee: '100', timeoutSeconds: 300 }),
+    } as never,
+    { passphrase: () => Networks.PUBLIC } as never,
+    accounts as never,
+  );
+
+  function make(row: PaymentIntent | null) {
+    return new PaymentLinksService(
+      {
+        paymentIntent: { findUnique: jest.fn().mockResolvedValue(row) },
+      } as never,
+      links,
+      {} as never,
+      {} as never,
+    );
+  }
+
+  it('says a fee link needs its payer, and shows the fee', () => {
+    const link = toPublicPaymentLink(fullRow({ merchantFee }), 'qr');
+    expect(link.payerAccountRequired).toBe(true);
+    expect(link.merchantFee).toEqual(merchantFee);
+  });
+
+  it('builds both payments, with the link memo, on the payer account', async () => {
+    const service = make(fullRow({ merchantFee }));
+
+    const built = await service.payerTransaction(
+      'cmh4x2k9a0001l70g8v5q3z2w',
+      PAYER,
+    );
+
+    const tx = TransactionBuilder.fromXDR(
+      built.xdr,
+      Networks.PUBLIC,
+    ) as Transaction;
+    expect(tx.source).toBe(PAYER);
+    expect(tx.memo.type).toBe('id');
+    expect(String(tx.memo.value)).toBe('4127759120438726917');
+    const [merchant, fee] = tx.operations as Operation.Payment[];
+    // 25.5 less the 0.4825 fee the recipient pays.
+    expect(merchant.destination).toBe(MERCHANT);
+    expect(merchant.amount).toBe('25.0175000');
+    expect(fee.destination).toBe(FEE_WALLET);
+    expect(fee.amount).toBe('0.4825000');
+    expect(built.uri).toMatch(/^web\+stellar:tx\?xdr=/);
+    expect(built.qr).toMatch(/^data:image\/png;base64,/);
+  });
+
+  it('refuses a link that pays its destination directly', async () => {
+    const err = await make(fullRow())
+      .payerTransaction('cmh4x2k9a0001l70g8v5q3z2w', PAYER)
+      .catch((e: unknown) => e);
+    expect((err as ApiError).code).toBe(ApiErrorCode.ValidationFailed);
+  });
+
+  it('refuses a link that is no longer open', async () => {
+    const err = await make(fullRow({ merchantFee, status: 'EXPIRED' }))
+      .payerTransaction('cmh4x2k9a0001l70g8v5q3z2w', PAYER)
+      .catch((e: unknown) => e);
+    expect((err as ApiError).code).toBe(ApiErrorCode.InvalidStateTransition);
+  });
+});
+
+describe('PaymentLinksService Solana Pay (a Solana link with a merchant fee)', () => {
+  const k = (n: number) => encodeBase58(new Uint8Array(32).fill(n));
+  const MERCHANT_SOL = k(2);
+  const FEE_SOL = k(3);
+  const REFERENCE = k(4);
+  const PAYER_SOL = k(1);
+  const solanaRow = (over: Record<string, unknown> = {}) =>
+    fullRow({
+      chain: 'solana',
+      destination: MERCHANT_SOL,
+      chainReference: REFERENCE,
+      amount: '1.5',
+      asset: 'native',
+      assetIssuer: null,
+      assetDecimals: null,
+      memo: '42',
+      merchantFee: {
+        bps: 0,
+        fixed: '0.05',
+        amount: '0.05',
+        asset: 'native',
+        wallet: FEE_SOL,
+        paidBy: 'recipient',
+      },
+      ...over,
+    });
+  const rpc = {
+    getLatestBlockhash: jest.fn().mockResolvedValue(k(9)),
+    getAccountOwner: jest.fn(),
+  };
+  const config = {
+    get: () => ({ checkoutUrl: 'https://payments.example' }),
+  } as never;
+  function make(row: PaymentIntent | null) {
+    return new PaymentLinksService(
+      {
+        paymentIntent: { findUnique: jest.fn().mockResolvedValue(row) },
+      } as never,
+      new Sep7LinkBuilder({} as never, {} as never, {} as never),
+      new SolanaPayTransactionBuilder(rpc as never),
+      config,
+    );
+  }
+
+  it('answers the label and icon a wallet shows', async () => {
+    await expect(
+      make(solanaRow()).solanaPayInfo('cmh4x2k9a0001l70g8v5q3z2w'),
+    ).resolves.toEqual({
+      label: 'Cosmos Pay',
+      icon: 'https://payments.example/android-chrome-512x512.png',
+    });
+  });
+
+  it('builds the memo, the merchant leg carrying the reference, and the fee', async () => {
+    const answer = await make(solanaRow()).solanaPayTransaction(
+      'cmh4x2k9a0001l70g8v5q3z2w',
+      PAYER_SOL,
+    );
+
+    const tx = parseSolanaTransaction(
+      Buffer.from(answer.transaction, 'base64'),
+    );
+    expect(tx.signers).toEqual([PAYER_SOL]);
+    const bytes = Buffer.from(tx.message);
+    const has = (key: string) =>
+      bytes.includes(Buffer.from(decodeBase58(key)!));
+    for (const key of [MERCHANT_SOL, FEE_SOL, REFERENCE, k(9)]) {
+      expect(has(key)).toBe(true);
+    }
+    // 1.5 SOL less a 0.05 fee: 1.45 SOL (1,450,000,000 lamports) to the
+    // merchant, 50,000,000 to the fee wallet, as System Transfer data.
+    const lamports = (n: bigint) => {
+      const b = Buffer.alloc(12);
+      b.writeUInt32LE(2, 0);
+      b.writeBigUInt64LE(n, 4);
+      return b;
+    };
+    expect(bytes.includes(lamports(1_450_000_000n))).toBe(true);
+    expect(bytes.includes(lamports(50_000_000n))).toBe(true);
+    expect(answer.message).toBe('Order #24');
+  });
+
+  it('refuses a link that is not a transaction request, one no longer open, and a bad account', async () => {
+    const codeOf = (p: Promise<unknown>) =>
+      p.then(() => null).catch((e: ApiError) => e.code);
+    expect(
+      await codeOf(make(fullRow()).solanaPayInfo('cmh4x2k9a0001l70g8v5q3z2w')),
+    ).toBe(ApiErrorCode.ValidationFailed);
+    expect(
+      await codeOf(
+        make(solanaRow({ status: 'EXPIRED' })).solanaPayTransaction(
+          'cmh4x2k9a0001l70g8v5q3z2w',
+          PAYER_SOL,
+        ),
+      ),
+    ).toBe(ApiErrorCode.InvalidStateTransition);
+    expect(
+      await codeOf(
+        make(solanaRow()).solanaPayTransaction(
+          'cmh4x2k9a0001l70g8v5q3z2w',
+          'GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ',
+        ),
+      ),
+    ).toBe(ApiErrorCode.ValidationFailed);
+  });
+});
+
+describe('PaymentLinksService.recordEvent', () => {
+  const links = new Sep7LinkBuilder({} as never, {} as never, {} as never);
+  const ID = 'cmh4x2k9a0001l70g8v5q3z2w';
+
+  function make(changed: number, exists = true) {
+    const executeRaw = jest.fn().mockResolvedValue(changed);
+    const findUnique = jest.fn().mockResolvedValue(exists ? { id: ID } : null);
+    const service = new PaymentLinksService(
+      { paymentIntent: { findUnique }, $executeRaw: executeRaw } as never,
+      links,
+      {} as never,
+      {} as never,
+    );
+    const sql = () => (executeRaw.mock.calls[0][0] as string[]).join('?');
+    return { service, executeRaw, findUnique, sql };
+  }
+
+  it('notes a wallet opened on a pending link, clearing an earlier came-back', async () => {
+    const { service, sql } = make(1);
+    await service.recordEvent(ID, 'walletOpened');
+    expect(sql()).toContain('"checkoutWalletAt" = ?');
+    expect(sql()).toContain('"checkoutWalletClosedAt" = NULL');
+    expect(sql()).toContain(`"status" = 'PENDING'`);
+  });
+
+  it('notes a wallet back without paying only after one opened', async () => {
+    const { service, sql } = make(1);
+    await service.recordEvent(ID, 'walletClosed');
+    expect(sql()).toContain('"checkoutWalletClosedAt" = ?');
+    expect(sql()).toContain('"checkoutWalletAt" IS NOT NULL');
+  });
+
+  it('notes the payment sent', async () => {
+    const { service, sql } = make(1);
+    await service.recordEvent(ID, 'sent');
+    expect(sql()).toContain('"checkoutSentAt" = ?');
+  });
+
+  it('ignores a link that is no longer pending, and answers an unknown id as the read does', async () => {
+    const settled = make(0, true);
+    await expect(
+      settled.service.recordEvent(ID, 'sent'),
+    ).resolves.toBeUndefined();
+    const unknown = make(0, false);
+    await expect(unknown.service.recordEvent(ID, 'sent')).rejects.toMatchObject(
+      {
+        code: 'not_found',
+      },
     );
   });
 });

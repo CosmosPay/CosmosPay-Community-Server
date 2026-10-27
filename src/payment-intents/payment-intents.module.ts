@@ -12,6 +12,7 @@ import { PaymentLinksController } from '@/payment-intents/payment-links.controll
 import { PaymentLinksService } from '@/payment-intents/payment-links.service';
 import { PaymentVerifiers } from '@/payment-intents/payment-verifiers';
 import { Sep7LinkBuilder } from '@/payment-intents/sep7-link-builder.service';
+import { SolanaPayTransactionBuilder } from '@/payment-intents/solana-pay-transaction.builder';
 import { SolanaVerifierService } from '@/payment-intents/solana-verifier.service';
 import { StellarVerifierService } from '@/payment-intents/stellar-verifier.service';
 import { SolanaModule } from '@/solana/solana.module';
@@ -30,6 +31,7 @@ import { SolanaModule } from '@/solana/solana.module';
     ChainPayLinkBuilder,
     StellarVerifierService,
     SolanaVerifierService,
+    SolanaPayTransactionBuilder,
     EvmVerifierService,
     PaymentVerifiers,
     PaymentIntentObserverService,

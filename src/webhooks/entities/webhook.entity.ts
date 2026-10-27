@@ -43,7 +43,7 @@ export class WebhookEndpointEntity {
 /** Endpoint WITH the signing secret — returned only on create / rotate. */
 export class WebhookEndpointWithSecretEntity extends WebhookEndpointEntity {
   @ApiProperty({
-    description: 'HMAC signing secret — shown once. Store it securely.',
+    description: 'HMAC signing secret, shown once. Store it securely.',
     example: 'whsec_3f9a1c…',
   })
   secret!: string;

@@ -11,7 +11,7 @@ export class BankAccountEntity {
   @ApiPropertyOptional({ example: 'ach' })
   rail!: string | null;
 
-  @ApiPropertyOptional({ example: 'Acme payouts — USD' })
+  @ApiPropertyOptional({ example: 'Acme payouts (USD)' })
   name!: string | null;
 
   @ApiPropertyOptional({ example: 'US' })

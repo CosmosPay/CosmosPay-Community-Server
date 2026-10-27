@@ -1,28 +1,49 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { CrossChainSwap, Prisma } from '@generated/prisma/client';
-import { normalizeAddress } from '@/chains/chain-address';
-import type { Chain } from '@/chains/chains.constants';
+import { type Chain, isChain } from '@/chains/chains.constants';
 import { formatUnits, parseUnits } from '@/chains/units';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
-import { resolvePlanCommissionBps } from '@/common/plan-commission';
+import {
+  commissionWithRecipient,
+  resolvePlanCommissionBps,
+} from '@/common/plan-commission';
+import {
+  assertMerchantFeeCovered,
+  type MerchantFeeRecord,
+  type MerchantFeeTerms,
+  merchantFeeRecord,
+  readMerchantFeeRecord,
+  resolveMerchantFee,
+  sameMerchantFee,
+  splitMerchantFee,
+} from '@/common/merchant-fee/merchant-fee';
 import { isUniqueViolation } from '@/common/prisma-errors';
 import { project } from '@/common/projection';
+import { PublicRecordTokens } from '@/common/public-record-token';
+import {
+  LEGACY_RECORD_TOKEN_ROUTES,
+  type LegacyRecordTokenRoute,
+} from '@/common/public-record-token.constants';
 import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
 import { resolveNetwork } from '@/common/stellar-network';
 import type { AppConfig } from '@/config/configuration';
 import {
   type CrossChainAsset,
   resolveCrossChainAsset,
-  supportedAssets,
+  tradableAssets,
 } from '@/cross-chain-swaps/cross-chain-assets';
 import {
   CROSS_CHAIN_STATUS_EVENTS,
   isTerminal,
   nextStatus,
 } from '@/cross-chain-swaps/cross-chain-swap-transitions';
-import { depositLink } from '@/cross-chain-swaps/deposit-request';
+import {
+  CROSS_CHAIN_NETWORKS,
+  depositLink,
+} from '@/cross-chain-swaps/cross-chain-networks';
+import type { CrossChainNetworkId } from '@/cross-chain-swaps/cross-chain-swaps.constants';
 import { CreateCrossChainSwapDto } from '@/cross-chain-swaps/dto/create-cross-chain-swap.dto';
 import { QueryCrossChainSwapsDto } from '@/cross-chain-swaps/dto/query-cross-chain-swaps.dto';
 import { QuoteCrossChainSwapDto } from '@/cross-chain-swaps/dto/quote-cross-chain-swap.dto';
@@ -34,11 +55,6 @@ import type {
   NearIntentsQuoteResponse,
   NearIntentsStatusResponse,
 } from '@/near-intents/near-intents.types';
-import {
-  EVM_TX_ID_RE,
-  SOLANA_TX_ID_RE,
-  TX_HASH_RE,
-} from '@/payment-intents/payment-intents.constants';
 import { PrismaService } from '@/prisma/prisma.service';
 import { StellarAccountLoader } from '@/stellar/account-loader.service';
 import { resolveAsset } from '@/stellar/asset';
@@ -69,6 +85,7 @@ export const CROSS_CHAIN_SWAP_PUBLIC_SELECT = {
   amountIn: true,
   feeBps: true,
   feeAmount: true,
+  merchantFee: true,
   amountOutEstimated: true,
   amountOutMin: true,
   slippageBps: true,
@@ -95,21 +112,25 @@ export type PublicCrossChainSwap = Prisma.CrossChainSwapGetPayload<{
   select: typeof CROSS_CHAIN_SWAP_PUBLIC_SELECT;
 }>;
 
-/** A public swap plus the QR of its deposit link. */
-export type CrossChainSwapView = PublicCrossChainSwap & { qr: string };
+/**
+ * A public swap plus its QR: of the deposit link when there is one, else of
+ * the deposit address (a memo, if any, is in `depositMemo`). Its merchant fee
+ * is the stored record read back (null without one).
+ */
+export type CrossChainSwapView = Omit<PublicCrossChainSwap, 'merchantFee'> & {
+  merchantFee: MerchantFeeRecord | null;
+  qr: string;
+};
 
-/** Where `/v1/swaps` settles a same-chain swap, named in the refusal. */
+/**
+ * Where `/v1/swaps` settles a same-chain swap, named in the refusal. Only these
+ * three chains have a venue of their own here; on every other network NEAR
+ * Intents may swap within the one chain.
+ */
 const SAME_CHAIN_VENUES: Record<Chain, string> = {
   stellar: 'the Stellar DEX',
   solana: 'Jupiter',
   monad: 'Kuru Flow',
-};
-
-/** How each origin chain spells a transaction id. */
-const DEPOSIT_TX_ID_RE: Record<Chain, RegExp> = {
-  stellar: TX_HASH_RE,
-  solana: SOLANA_TX_ID_RE,
-  monad: EVM_TX_ID_RE,
 };
 
 /** A swap priced by 1Click — everything quote and create both need. */
@@ -119,6 +140,8 @@ interface PricedCrossChainSwap {
   amountIn: string;
   feeBps: number;
   feeAmount: string;
+  /** The merchant fee the request named, as NEAR Intents will pay it; null without one. */
+  merchantFee: { terms: MerchantFeeTerms; record: MerchantFeeRecord } | null;
   slippageBps: number;
   recipient: string;
   refundTo: string;
@@ -136,10 +159,13 @@ interface CrossChainRequestTerms {
   recipient: string;
   refundTo: string;
   slippageBps: number;
+  /** Compared with {@link sameMerchantFee}: the stored row keeps its record. */
+  merchantFee: MerchantFeeTerms | null;
 }
 
 /**
- * Cross-chain swaps between Stellar, Solana and Monad, settled by NEAR Intents.
+ * Cross-chain swaps between every network NEAR Intents reaches and this service
+ * can validate (`CROSS_CHAIN_NETWORKS`), settled by NEAR Intents.
  *
  * Non-custodial, and one step removed from the chain: this service resolves
  * the assets, prices the swap through 1Click with the plan commission as an
@@ -149,9 +175,9 @@ interface CrossChainRequestTerms {
  * leg passes through Cosmos Pay. What happens after the deposit is mirrored by
  * {@link CrossChainSwapObserverService}, which asks 1Click and moves the row.
  *
- * A same-chain pair is refused here: `/v1/swaps` settles it on the chain's own
- * venue — the Stellar DEX, Jupiter on Solana, Kuru Flow on Monad — with no
- * bridge in between.
+ * A same-chain pair on Stellar, Solana or Monad is refused here: `/v1/swaps`
+ * settles it on the chain's own venue (the Stellar DEX, Jupiter on Solana, Kuru
+ * Flow on Monad) with no bridge in between.
  */
 @Injectable()
 export class CrossChainSwapsService {
@@ -164,12 +190,13 @@ export class CrossChainSwapsService {
     private readonly consumers: ConsumerResolverService,
     private readonly nearIntents: NearIntentsClient,
     private readonly accounts: StellarAccountLoader,
+    private readonly recordTokens: PublicRecordTokens,
   ) {}
 
   // ── Assets ────────────────────────────────────────────────────────────────
-  /** What NEAR Intents can swap on Stellar, Solana and Monad. */
+  /** What NEAR Intents can swap on every network this service reaches. */
   async assets(): Promise<{ data: CrossChainAsset[] }> {
-    return { data: supportedAssets(await this.nearIntents.tokens()) };
+    return { data: tradableAssets(await this.nearIntents.tokens()) };
   }
 
   // ── Quote ─────────────────────────────────────────────────────────────────
@@ -208,6 +235,7 @@ export class CrossChainSwapsService {
         amount: priced.feeAmount,
         asset: priced.origin.symbol,
       },
+      merchantFee: priced.merchantFee?.record ?? null,
       slippageBps: priced.slippageBps,
       timeEstimateSeconds: quote.timeEstimate,
     };
@@ -223,8 +251,23 @@ export class CrossChainSwapsService {
    * request it is a 409. The key is scoped to the consumer, and on the shared
    * public key every anonymous wallet is the same consumer, so a replay is only
    * answered when the request matches — see {@link replay}.
+   *
+   * On the shared public key the answer also carries `publicToken`, the
+   * swap's read token (`PublicRecordTokens`), the same on a replay.
    */
   async create(
+    consumer: GatewayConsumer,
+    dto: CreateCrossChainSwapDto,
+    headerIdempotencyKey?: string,
+  ): Promise<CrossChainSwapView & { publicToken?: string }> {
+    return this.recordTokens.attach(
+      consumer,
+      'cross-chain-swap',
+      await this.build(consumer, dto, headerIdempotencyKey),
+    );
+  }
+
+  private async build(
     consumer: GatewayConsumer,
     dto: CreateCrossChainSwapDto,
     headerIdempotencyKey?: string,
@@ -232,7 +275,7 @@ export class CrossChainSwapsService {
     if (resolveNetwork(this.config, consumer) !== 'public') {
       throw ApiError.badRequest(
         ApiErrorCode.NetworkUnsupported,
-        'Cross-chain swaps run on mainnet only — NEAR Intents has no test ' +
+        'Cross-chain swaps run on mainnet only: NEAR Intents has no test ' +
           'network. Use a prod API key.',
       );
     }
@@ -291,6 +334,12 @@ export class CrossChainSwapsService {
       amountIn: priced.amountIn,
       feeBps: priced.feeBps,
       feeAmount: priced.feeAmount,
+      ...(priced.merchantFee
+        ? {
+            merchantFee: priced.merchantFee
+              .record as unknown as Prisma.InputJsonValue,
+          }
+        : {}),
       amountOutEstimated: quote.amountOutFormatted,
       amountOutMin: this.minimumOut(priced),
       slippageBps: priced.slippageBps,
@@ -339,6 +388,10 @@ export class CrossChainSwapsService {
   }> {
     const where = {
       consumer: { apisixUsername: consumer.username },
+      // Only the network this key targets (`resolveNetwork`): a production key never lists a
+      // test-network row, nor a sandbox key a mainnet one.
+      // These swaps are mainnet only (always `public`), so a sandbox key lists none.
+      network: resolveNetwork(this.config, consumer),
       ...(query.status ? { status: query.status } : {}),
     };
     // `Promise.all`, not `$transaction` — see `@/common/pagination` for why.
@@ -355,11 +408,13 @@ export class CrossChainSwapsService {
     return { data, total, take: query.take, skip: query.skip };
   }
 
+  /** One swap; the shared public key also needs its record token. */
   async findOne(
     consumer: GatewayConsumer,
     id: string,
+    recordToken?: string,
   ): Promise<CrossChainSwapView> {
-    return this.present(await this.findOwned(consumer, id));
+    return this.present(await this.findOwned(consumer, id, recordToken));
   }
 
   // ── Deposit ───────────────────────────────────────────────────────────────
@@ -376,13 +431,22 @@ export class CrossChainSwapsService {
     consumer: GatewayConsumer,
     id: string,
     txHash: string,
+    recordToken?: string,
   ): Promise<CrossChainSwapView> {
-    const swap = await this.findOwned(consumer, id);
-    const chain = swap.originChain as Chain;
-    if (!DEPOSIT_TX_ID_RE[chain].test(txHash)) {
+    // A legacy route: the public key may still leave the token out (see
+    // `PublicRecordTokens`).
+    const swap = await this.findOwned(
+      consumer,
+      id,
+      recordToken,
+      LEGACY_RECORD_TOKEN_ROUTES.crossChainDeposit,
+    );
+    const network =
+      CROSS_CHAIN_NETWORKS[swap.originChain as CrossChainNetworkId];
+    if (!network.txId.isValid(txHash)) {
       throw ApiError.badRequest(
         ApiErrorCode.ValidationFailed,
-        `txHash is not a ${chain} transaction id`,
+        `txHash is not a ${network.id} transaction id: expected ${network.txId.expected}`,
       );
     }
     if (isTerminal(swap.status)) {
@@ -391,9 +455,9 @@ export class CrossChainSwapsService {
         `Cross-chain swap ${swap.id} is already ${swap.status}`,
       );
     }
-    // Stellar and Solana ids are case-sensitive or case-free by encoding;
-    // hex is stored lowercase, as everywhere else in this service.
-    const hash = chain === 'solana' ? txHash : txHash.toLowerCase();
+    // Hex is stored lowercase, as everywhere else in this service; base58 and
+    // base64 ids are case-sensitive and kept as written.
+    const hash = network.txId.normalize(txHash);
     const status = await this.nearIntents.submitDeposit({
       txHash: hash,
       depositAddress: swap.depositAddress,
@@ -490,7 +554,7 @@ export class CrossChainSwapsService {
     dto: QuoteCrossChainSwapDto,
     live: boolean,
   ): Promise<PricedCrossChainSwap> {
-    if (dto.originChain === dto.destinationChain) {
+    if (dto.originChain === dto.destinationChain && isChain(dto.originChain)) {
       throw ApiError.badRequest(
         ApiErrorCode.ValidationFailed,
         `${dto.originChain} → ${dto.originChain} is a same-chain swap: use ` +
@@ -515,20 +579,30 @@ export class CrossChainSwapsService {
       );
     }
 
-    const baseUnits = this.baseUnits(dto.amount, origin);
+    const amountUnits = this.baseUnits(dto.amount, origin);
+    // The merchant fee comes out of `amount` (paid by the recipient) or is
+    // deposited on top of it (paid by the payer): `total` is the deposit.
+    const merchant = this.merchantFeeTerms(dto, origin);
+    const split = splitMerchantFee(amountUnits, merchant);
+    assertMerchantFeeCovered(split, merchant);
+    const baseUnits = split.total;
+    const merchantBps = this.merchantAppFeeBps(split, merchant);
     const nearCfg = this.config.get('nearIntents', { infer: true });
     const slippageBps = resolveSlippage(dto.slippageBps, nearCfg);
-    const feeBps = resolvePlanCommissionBps(this.config, consumer);
     // A commission with nowhere to be paid is a misconfiguration, not a free
-    // swap — fail loudly so the operator notices, as Stellar swaps do.
-    if (feeBps > 0 && !nearCfg.feeRecipient) {
-      throw ApiError.unavailable(
-        ApiErrorCode.Misconfigured,
-        'A swap commission applies to this plan but NEAR_INTENTS_FEE_RECIPIENT is not set',
-      );
-    }
-    const recipient = normalizeAddress(dto.destinationChain, dto.recipient);
-    const refundTo = normalizeAddress(dto.originChain, dto.refundTo);
+    // swap: it fails loudly so the operator notices, as Stellar swaps do
+    // (waived only by SWAP_COMMISSION_DEV_WAIVER, outside production).
+    const feeBps = commissionWithRecipient(
+      this.config,
+      resolvePlanCommissionBps(this.config, consumer),
+      nearCfg.feeRecipient,
+      'NEAR_INTENTS_FEE_RECIPIENT',
+    );
+    const recipient = this.normalizedAddress(
+      dto.destinationChain,
+      dto.recipient,
+    );
+    const refundTo = this.normalizedAddress(dto.originChain, dto.refundTo);
 
     const request: NearIntentsQuoteRequest = {
       dry: !live,
@@ -548,8 +622,17 @@ export class CrossChainSwapsService {
         Date.now() + nearCfg.deadlineSeconds * 1000,
       ).toISOString(),
       referral: NEAR_INTENTS_REFERRAL,
-      ...(feeBps > 0
-        ? { appFees: [{ recipient: nearCfg.feeRecipient, fee: feeBps }] }
+      ...(feeBps > 0 || merchant
+        ? {
+            appFees: [
+              ...(feeBps > 0
+                ? [{ recipient: nearCfg.feeRecipient, fee: feeBps }]
+                : []),
+              ...(merchant
+                ? [{ recipient: merchant.wallet, fee: merchantBps }]
+                : []),
+            ],
+          }
         : {}),
     };
     const response = await this.nearIntents.quote(request);
@@ -563,12 +646,68 @@ export class CrossChainSwapsService {
         (baseUnits * BigInt(feeBps)) / 10_000n,
         origin.decimals,
       ),
+      merchantFee: merchant
+        ? {
+            terms: merchant,
+            // What NEAR Intents will take: the whole basis points of the deposit.
+            record: merchantFeeRecord(
+              merchant,
+              (baseUnits * BigInt(merchantBps)) / 10_000n,
+              origin.decimals,
+              origin.symbol,
+            ),
+          }
+        : null,
       slippageBps,
       recipient,
       refundTo,
       request,
       response,
     };
+  }
+
+  /** The one spelling of `address` on `chain`, stored and sent to 1Click. */
+  private normalizedAddress(
+    chain: CrossChainNetworkId,
+    address: string,
+  ): string {
+    return CROSS_CHAIN_NETWORKS[chain].address.normalize(address);
+  }
+
+  /**
+   * The request's merchant fee: the fixed part in the origin asset, the wallet
+   * a NEAR account id (NEAR Intents credits app fees to an account inside it).
+   */
+  private merchantFeeTerms(
+    dto: QuoteCrossChainSwapDto,
+    origin: CrossChainAsset,
+  ): MerchantFeeTerms | null {
+    return resolveMerchantFee(
+      dto.merchantFee,
+      origin.decimals,
+      CROSS_CHAIN_NETWORKS.near.address,
+    );
+  }
+
+  /**
+   * The merchant fee as NEAR Intents takes it: whole basis points of the
+   * deposit, rounded down so the payer is never charged above what the
+   * request states. A fee under one basis point cannot be paid and is refused
+   * rather than quietly dropped.
+   */
+  private merchantAppFeeBps(
+    split: { fee: bigint; total: bigint },
+    merchant: MerchantFeeTerms | null,
+  ): number {
+    if (!merchant) return 0;
+    const bps = Number((split.fee * 10_000n) / split.total);
+    if (bps === 0) {
+      throw ApiError.badRequest(
+        ApiErrorCode.InvalidAmount,
+        'The merchant fee is under one basis point of the deposit, the least NEAR Intents can pay',
+      );
+    }
+    return bps;
   }
 
   /** `amount` in the origin asset's base units; a 400 when it cannot be one. */
@@ -601,7 +740,8 @@ export class CrossChainSwapsService {
   /**
    * A Stellar recipient must already trust an issued asset, or NEAR Intents'
    * payout fails on-chain and the swap is refunded after the fact. Caught here,
-   * with the same loader and message Stellar swaps use.
+   * with the same loader and message Stellar swaps use for another account:
+   * the recipient signs nothing in this flow, so only it can add the trustline.
    */
   private async assertRecipientCanReceive(
     priced: PricedCrossChainSwap,
@@ -609,11 +749,11 @@ export class CrossChainSwapsService {
     const { destination, recipient } = priced;
     if (destination.chain !== 'stellar' || !destination.contract) return;
     const account = await this.accounts.load('public', recipient);
-    this.accounts.assertTrustline(
+    this.accounts.assertCanReceive(
       account.balances,
       resolveAsset(destination.symbol, destination.contract),
       recipient,
-      'it can receive the swap',
+      'the swap',
     );
   }
 
@@ -638,15 +778,19 @@ export class CrossChainSwapsService {
       destinationChain: destination.chain,
       destinationAssetId: destination.assetId,
       amountIn: formatUnits(
-        this.baseUnits(dto.amount, origin),
+        splitMerchantFee(
+          this.baseUnits(dto.amount, origin),
+          this.merchantFeeTerms(dto, origin),
+        ).total,
         origin.decimals,
       ),
-      recipient: normalizeAddress(dto.destinationChain, dto.recipient),
-      refundTo: normalizeAddress(dto.originChain, dto.refundTo),
+      recipient: this.normalizedAddress(dto.destinationChain, dto.recipient),
+      refundTo: this.normalizedAddress(dto.originChain, dto.refundTo),
       slippageBps: resolveSlippage(
         dto.slippageBps,
         this.config.get('nearIntents', { infer: true }),
       ),
+      merchantFee: this.merchantFeeTerms(dto, origin),
     };
   }
 
@@ -661,9 +805,16 @@ export class CrossChainSwapsService {
     terms: CrossChainRequestTerms,
     consumer: GatewayConsumer,
   ): Promise<CrossChainSwapView> {
-    const same = (Object.keys(terms) as (keyof CrossChainRequestTerms)[]).every(
-      (key) => existing[key] === terms[key],
-    );
+    const { merchantFee, ...plain } = terms;
+    const same =
+      (Object.keys(plain) as (keyof typeof plain)[]).every(
+        (key) => existing[key] === plain[key],
+      ) &&
+      sameMerchantFee(
+        existing.merchantFee,
+        merchantFee,
+        existing.originDecimals,
+      );
     if (!same) {
       this.logger.warn(
         `Idempotency-Key reused for a different cross-chain swap request ` +
@@ -700,22 +851,50 @@ export class CrossChainSwapsService {
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────
-  /** A miss on someone else's swap is a 404, never a 403. */
+  /**
+   * A miss on someone else's swap is a 404, never a 403. The shared public key
+   * also needs the swap's record token; a missing or wrong one is the same
+   * 404, decided before the table is read. On a legacy route (`legacyRoute`,
+   * the deposit) a missing token is still admitted for now, and logged.
+   */
   private async findOwned(
     consumer: GatewayConsumer,
     id: string,
+    recordToken?: string,
+    legacyRoute?: LegacyRecordTokenRoute,
   ): Promise<CrossChainSwap> {
+    if (
+      !this.recordTokens.admits(
+        consumer,
+        'cross-chain-swap',
+        id,
+        recordToken,
+        legacyRoute,
+      )
+    ) {
+      throw ApiError.notFound(`Cross-chain swap ${id} not found`);
+    }
     const swap = await this.prisma.crossChainSwap.findFirst({
       where: { id, consumer: { apisixUsername: consumer.username } },
     });
     if (!swap) throw ApiError.notFound(`Cross-chain swap ${id} not found`);
+    if (legacyRoute) {
+      this.recordTokens.noteLegacyAccess(
+        consumer,
+        'cross-chain-swap',
+        id,
+        recordToken,
+        legacyRoute,
+      );
+    }
     return swap;
   }
 
   private async present(swap: CrossChainSwap): Promise<CrossChainSwapView> {
     return {
       ...project(swap, CROSS_CHAIN_SWAP_PUBLIC_SELECT),
-      qr: await sep7Qr(swap.depositUri),
+      merchantFee: readMerchantFeeRecord(swap.merchantFee),
+      qr: await sep7Qr(swap.depositUri ?? swap.depositAddress),
     };
   }
 

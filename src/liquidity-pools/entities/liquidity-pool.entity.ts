@@ -1,5 +1,21 @@
 import { ApiProperty, ApiPropertyOptional, OmitType } from '@nestjs/swagger';
 import { LiquidityOperationKind, SwapStatus } from '@generated/prisma/client';
+import { MerchantFeeEntity } from '@/common/merchant-fee/merchant-fee.entity';
+
+/** A liquidity operation's merchant fee: `amount` / `asset` are asset A's leg. */
+export class LiquidityMerchantFeeEntity extends MerchantFeeEntity {
+  @ApiProperty({
+    description: 'The fee charged on asset B, in asset B.',
+    example: '0.05',
+  })
+  amountB!: string;
+
+  @ApiProperty({
+    description: 'Asset B (`native` for XLM).',
+    example: 'USDC',
+  })
+  assetB!: string;
+}
 
 /** One side of a pool: an asset and how much of it the pool (or holder) has. */
 export class LiquidityPoolReserve {
@@ -220,6 +236,16 @@ export class LiquidityOperationEntity {
       'Commission collector account (null when the fee is disabled).',
   })
   feeWallet!: string | null;
+
+  @ApiProperty({
+    type: LiquidityMerchantFeeEntity,
+    nullable: true,
+    description:
+      'The merchant fee the request named: `bps` of each asset, `amount` in ' +
+      'asset A and `amountB` in asset B, paid to `wallet` in this ' +
+      'transaction; null without one.',
+  })
+  merchantFee!: LiquidityMerchantFeeEntity | null;
 
   @ApiProperty({
     nullable: true,

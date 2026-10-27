@@ -1,7 +1,16 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsIn, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
+import {
+  IsIn,
+  IsInt,
+  IsOptional,
+  IsString,
+  Max,
+  Min,
+  ValidateNested,
+} from 'class-validator';
 import { CHAINS, type Chain } from '@/chains/chains.constants';
+import { MerchantFeeDto } from '@/common/merchant-fee/merchant-fee.dto';
 import { IsDecimalAmount } from '@/common/validators/is-decimal-amount.validator';
 import { IsStellarAddress } from '@/common/validators/is-stellar-address.validator';
 import { IsSwapAsset } from '@/common/validators/is-swap-asset.validator';
@@ -89,4 +98,23 @@ export class QuoteSwapDto {
   @Min(0)
   @Max(10000)
   slippageBps?: number;
+
+  @ApiPropertyOptional({
+    type: MerchantFeeDto,
+    description:
+      'Your own fee on this swap, paid in the source asset to `wallet` out of ' +
+      'the source wallet, in the same transaction, beside the plan commission. ' +
+      'Stellar: its own payment (the wallet must trust the asset). Solana: a ' +
+      "transfer appended to Jupiter's transaction (a SOL fee goes to an " +
+      'existing account). `paidBy: recipient` takes it from `amount` (the swap ' +
+      'routes less); `payer` adds it on top (the source sends `amount` plus ' +
+      'the fee). Monad: through the merchant fee router ' +
+      '(`KURU_MERCHANT_FEE_ROUTER`), which the wallet sends or approves the ' +
+      'input plus the fee; without one configured, ' +
+      '`merchant_fee_unsupported`.',
+  })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => MerchantFeeDto)
+  merchantFee?: MerchantFeeDto;
 }

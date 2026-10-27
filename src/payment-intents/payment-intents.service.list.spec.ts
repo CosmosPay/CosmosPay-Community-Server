@@ -31,13 +31,44 @@ function build() {
 }
 
 describe('PaymentIntentsService.findAll', () => {
-  it('keeps to the calling consumer and filters nothing else by default', async () => {
+  it('keeps to the calling consumer and its network, and filters nothing else by default', async () => {
     const { service, prisma } = build();
     await service.findAll(consumer, { take: 20, skip: 0 });
 
     const where = prisma.paymentIntent.findMany.mock.calls[0][0].where;
-    expect(where).toEqual({ consumer: { apisixUsername: 'cosmos_u1' } });
+    expect(where).toEqual({
+      consumer: { apisixUsername: 'cosmos_u1' },
+      network: 'testnet',
+    });
     expect(prisma.paymentIntent.count.mock.calls[0][0].where).toEqual(where);
+  });
+
+  it('never lists a test-network intent to a production key, nor a mainnet one to a sandbox key', async () => {
+    const { service, prisma } = build();
+    await service.findAll(
+      { username: 'cosmos_u1', environment: 'prod' } as never,
+      {
+        take: 20,
+        skip: 0,
+      },
+    );
+    await service.findAll(
+      { username: 'cosmos_u1', environment: 'dev' } as never,
+      {
+        take: 20,
+        skip: 0,
+      },
+    );
+
+    const networks = prisma.paymentIntent.findMany.mock.calls.map(
+      ([arg]: [{ where: { network: string } }]) => arg.where.network,
+    );
+    const counted = prisma.paymentIntent.count.mock.calls.map(
+      ([arg]: [{ where: { network: string } }]) => arg.where.network,
+    );
+    expect(networks).toEqual(['public', 'testnet']);
+    // The total counts the same rows the page lists.
+    expect(counted).toEqual(networks);
   });
 
   it('lists only intents created at or after createdFrom, in the page and in the total', async () => {
@@ -53,6 +84,7 @@ describe('PaymentIntentsService.findAll', () => {
     const where = prisma.paymentIntent.findMany.mock.calls[0][0].where;
     expect(where).toEqual({
       consumer: { apisixUsername: 'cosmos_u1' },
+      network: 'testnet',
       status: 'SUCCEEDED',
       createdAt: { gte: from },
     });

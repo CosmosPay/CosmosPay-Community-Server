@@ -839,7 +839,7 @@ export class AliasesService {
     });
 
     this.logger.warn(
-      `Alias "${alias.name}" recovered to ${address} (${chain} ${dto.network}) — previous addresses dropped`,
+      `Alias "${alias.name}" recovered to ${address} (${chain} ${dto.network}). Previous addresses dropped`,
     );
     return this.ownedView(updated);
   }

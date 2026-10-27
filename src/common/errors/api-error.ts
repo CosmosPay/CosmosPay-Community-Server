@@ -77,6 +77,34 @@ export enum ApiErrorCode {
    */
   TransactionAlreadySettled = 'transaction_already_settled',
 
+  // --- Private payments (confidential token) --------------------------------------
+  /**
+   * The recipient of a private payment holds no confidential account on Cosmos
+   * Pay's token (or holds one under another auditor): a transfer to it would
+   * be refused on-chain, so the payment is refused before it exists.
+   */
+  RecipientNotRegistered = 'recipient_not_registered',
+  /**
+   * The payment transaction is not a confidential transfer, on Cosmos Pay's
+   * token, of exactly the payment's net amount to its recipient, made while
+   * the payment was open. Never says what the amount decrypted to: the route
+   * is public and the amount is the secret.
+   */
+  PaymentTransferMismatch = 'payment_transfer_mismatch',
+  /** {@link PaymentTransferMismatch}, for the commission transfer to the fee account. */
+  FeeTransferMismatch = 'fee_transfer_mismatch',
+  /** {@link PaymentTransferMismatch}, for the merchant fee's transfer to its wallet. */
+  MerchantFeeTransferMismatch = 'merchant_fee_transfer_mismatch',
+  /** The two transfers of one private payment come from different accounts. */
+  PayerMismatch = 'payer_mismatch',
+  /**
+   * The RPC has no transaction with that hash: it has not closed yet, or it is
+   * older than the RPC keeps transactions for.
+   */
+  TransactionNotFound = 'transaction_not_found',
+  /** A transfer of a private payment closed after the payment expired. */
+  Expired = 'expired',
+
   // --- cross-chain swaps (NEAR Intents) --------------------------------------
   /**
    * The caller's API key reaches a network the provider does not run on. NEAR
@@ -87,6 +115,15 @@ export enum ApiErrorCode {
   NetworkUnsupported = 'network_unsupported',
   /** The asset is not one NEAR Intents can swap on the chain the request names. */
   AssetUnsupported = 'asset_unsupported',
+
+  // --- merchant fee -----------------------------------------------------------
+  /**
+   * The request names a merchant fee on an operation that cannot pay one yet:
+   * the chain or venue has no way to split the payment in the transaction this
+   * service builds. Refused before anything is built, so nobody signs an
+   * operation that would silently drop the merchant's fee.
+   */
+  MerchantFeeUnsupported = 'merchant_fee_unsupported',
 
   // --- provider / upstream --------------------------------------------------
   ProviderError = 'provider_error',
@@ -116,6 +153,13 @@ export enum ApiErrorCode {
    * integrators off to investigate an upstream that was perfectly healthy.
    */
   RateLimited = 'rate_limited',
+
+  // --- customers -------------------------------------------------------------
+  /**
+   * Another customer of the same merchant already holds that wallet: a wallet belongs to one
+   * customer, so a payment's payer counts toward exactly one.
+   */
+  CustomerWalletTaken = 'customer_wallet_taken',
 
   // --- aliases ---------------------------------------------------------------
   /** The handle is already claimed. First claim wins; there is no queue. */

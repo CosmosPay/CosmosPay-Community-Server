@@ -173,7 +173,7 @@ export class AliasesController {
     status: 409,
     codes: [ApiErrorCode.AliasTaken],
     description:
-      '`alias_taken` — someone claimed the handle first. There is no queue ' +
+      '`alias_taken`: someone claimed the handle first. There is no queue ' +
       'and no reservation: pick another name.',
   })
   claim(
@@ -228,7 +228,7 @@ export class AliasesController {
     status: 400,
     codes: [ApiErrorCode.AliasAddressConflict],
     description:
-      '`alias_address_conflict` — an alias must keep at least one address. ' +
+      '`alias_address_conflict`: an alias must keep at least one address. ' +
       'Release the alias instead.',
   })
   removeAddress(
@@ -267,7 +267,7 @@ export class AliasesController {
     summary: 'Start email recovery: the token is emailed to the owner',
     description:
       'Always `{ accepted: true }`, whether or not the alias exists and the mailbox ' +
-      'matched — a handle is public and the mailbox behind it is not. When both ' +
+      'matched: a handle is public and the mailbox behind it is not. When both ' +
       'match, the token is emailed to the mailbox on record (at most once a minute ' +
       'per alias); it never appears in the response.',
   })
@@ -289,7 +289,7 @@ export class AliasesController {
     summary: 'Finish recovery: take ownership with a new address',
     description:
       'Needs the emailed token AND a signature from the new key. Every previous ' +
-      'address is dropped — recovery exists because the old keys are gone, and ' +
+      'address is dropped: recovery exists because the old keys are gone, and ' +
       'leaving them resolvable would keep whoever holds them receiving payments.',
   })
   @ApiOkResponse({ type: OwnedAliasEntity })

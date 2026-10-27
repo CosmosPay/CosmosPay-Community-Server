@@ -1,11 +1,14 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { Type } from 'class-transformer';
 import {
   IsIn,
   IsOptional,
   IsString,
   Matches,
   MaxLength,
+  ValidateNested,
 } from 'class-validator';
+import { MerchantFeeDto } from '@/common/merchant-fee/merchant-fee.dto';
 import { CHAINS, type Chain } from '@/chains/chains.constants';
 import { IsChainAddress } from '@/common/validators/is-chain-address.validator';
 import { IsDecimalAmount } from '@/common/validators/is-decimal-amount.validator';
@@ -48,7 +51,7 @@ export class CreatePayPaymentIntentDto {
     description:
       'Amount the destination should receive, in the asset’s own units (XLM, ' +
       'SOL, MON, or the token). Omit to let the user enter it (e.g. ' +
-      'donations) — not on Monad, where the amount is part of how the payment ' +
+      'donations), but not on Monad, where the amount is part of how the payment ' +
       'is recognised. At most 7 decimals on Stellar; elsewhere, at most the ' +
       'asset’s own decimals.',
     example: '120.1234567',
@@ -128,4 +131,24 @@ export class CreatePayPaymentIntentDto {
   @IsOptional()
   @IsIn(CHECKOUT_THEMES)
   checkoutTheme?: CheckoutTheme;
+
+  @ApiPropertyOptional({
+    type: MerchantFeeDto,
+    description:
+      'Only with an `amount`: your own fee on this payment, paid in its asset ' +
+      'to `wallet` (an account on the link\x27s chain, not `destination`). ' +
+      '`paidBy: recipient` takes the fee from `amount`; `payer` adds it on ' +
+      'top. Stellar: a SEP-7 `pay` link pays one account, so `uri` is the ' +
+      'hosted checkout, which asks for the payer and has ' +
+      '`POST /v1/payment-links/{id}/transaction` build the envelope with ' +
+      'both payments. Solana: `uri` is a Solana Pay transaction request ' +
+      '(`/v1/payment-links/{id}/solana-pay`); a SOL fee goes to an existing ' +
+      'account. Monad: needs deposit addresses (`merchant_fee_unsupported` ' +
+      'without them); the deposit address pays the fee (PaymentSplitForwarder) ' +
+      'and the link asks for the amount, plus the fee when the payer pays it.',
+  })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => MerchantFeeDto)
+  merchantFee?: MerchantFeeDto;
 }

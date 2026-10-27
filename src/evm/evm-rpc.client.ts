@@ -218,6 +218,30 @@ export class EvmRpcClient {
     return code !== '0x' && code !== '';
   }
 
+  /** The runtime code at `address`, `0x` for none. */
+  getCode(
+    chain: EvmChain,
+    network: StellarNetwork,
+    address: string,
+  ): Promise<string> {
+    return this.call<string>(chain, network, 'eth_getCode', [
+      address,
+      'latest',
+    ]);
+  }
+
+  /**
+   * A read-only `eth_call`. Without `to` it runs `data` as init code and
+   * answers the runtime code that creation would leave.
+   */
+  ethCall(
+    chain: EvmChain,
+    network: StellarNetwork,
+    call: { to?: string; data: string },
+  ): Promise<string> {
+    return this.call<string>(chain, network, 'eth_call', [call, 'latest']);
+  }
+
   /** An ERC-20 balance, in the token's base units; zero when it does not answer. */
   async erc20BalanceOf(
     chain: EvmChain,

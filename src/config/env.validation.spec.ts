@@ -345,4 +345,22 @@ describe('validateEnv', () => {
       ).toThrow(/STELLAR_SWAP_SLIPPAGE_BPS/i);
     });
   });
+
+  describe('SWAP_COMMISSION_DEV_WAIVER', () => {
+    it('is accepted outside production', () => {
+      expect(() =>
+        validateEnv(validEnv({ SWAP_COMMISSION_DEV_WAIVER: 'true' })),
+      ).not.toThrow();
+    });
+
+    it('is refused when NODE_ENV=production: it would give swaps away', () => {
+      expectEnvError(
+        validEnv({
+          NODE_ENV: 'production',
+          SWAP_COMMISSION_DEV_WAIVER: 'true',
+        }),
+        'SWAP_COMMISSION_DEV_WAIVER',
+      );
+    });
+  });
 });
