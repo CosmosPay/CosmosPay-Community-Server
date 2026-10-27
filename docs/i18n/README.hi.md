@@ -287,6 +287,7 @@ Paths OpenAPI के `{param}` रूप में लिखे गए हैं
 | POST | `/v1/payment-intents/{id}/validate` | `payments:write` |  |
 | GET | `/v1/payment-links/{id}` | कोई नहीं — `@Public()`, हर client address का अपना budget |  |
 | POST | `/v1/payment-links/{id}/transaction` | कोई नहीं: `@Public()`, हर client address का अपना budget |  |
+| POST | `/v1/payment-links/{id}/events` | कोई नहीं: `@Public()`, हर client address का अपना budget |  |
 | GET | `/v1/payment-links/{id}/solana-pay` | कोई नहीं: `@Public()`, हर client address का अपना budget |  |
 | POST | `/v1/payment-links/{id}/solana-pay` | कोई नहीं: `@Public()`, हर client address का अपना budget |  |
 | GET | `/v1/plugins` | `plugins:read` |  |
@@ -2115,6 +2116,11 @@ seal होती हैं और कभी लौटाई नहीं जा
 - **`GET /v1/summary/series` swaps का मूल्य बताता है:** `swaps.buckets[].volumeUsd`,
   `swaps.totals.volumeUsd` (`unpriced` के साथ) और `swaps.previous.volumeUsd`, यानी पूरे हुए swaps ने
   NEAR Intents के मौजूदा prices पर USD में क्या बेचा।
+- **Hosted checkout payer के wallet की जानकारी देता है:** `POST /v1/payment-links/{id}/events`
+  (`@Public()`, हर client address का budget) `walletOpened`, `walletClosed` या `sent` लेता है, और
+  intents इन्हें `checkoutWalletAt`, `checkoutWalletClosedAt` और `checkoutSentAt` के रूप में लौटाते हैं।
+  सिर्फ़ जानकारी के लिए: status अब भी chain के अनुसार बदलता है। Migration
+  `20261027190000_payment_checkout_events` तीन वैकल्पिक columns जोड़ता है।
 
 ### Customers: एक account की जगह कई chains पर wallets
 

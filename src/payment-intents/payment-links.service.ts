@@ -24,6 +24,7 @@ import {
 } from '@/payment-intents/payment-intents.constants';
 import { PAY_TO } from '@/payment-intents/pay-to';
 import { Sep7LinkBuilder } from '@/payment-intents/sep7-link-builder.service';
+import type { CheckoutEvent } from '@/payment-intents/payment-intents.constants';
 
 /**
  * The columns the public read loads: what a payer is shown, plus `destination`
@@ -171,6 +172,40 @@ export class PaymentLinksService {
     // The same derivation the owner's reads use: QR of the stored URI, never
     // stored itself.
     return toPublicPaymentLink(row, await this.links.qr(row.uri));
+  }
+
+  /**
+   * What the payer did with a wallet from the hosted checkout, noted on an open
+   * intent: a wallet opened (which clears an earlier "came back"), a wallet back
+   * without paying (only after one opened), the payment sent. Informational only:
+   * the status changes on what the chain says, so a page reporting what never
+   * happened changes nothing but what the owner reads. Anything else is ignored,
+   * and an unknown id answers as the read does.
+   */
+  async recordEvent(id: string, event: CheckoutEvent): Promise<void> {
+    const now = new Date();
+    const changed =
+      event === 'walletOpened'
+        ? await this.prisma.$executeRaw`
+            UPDATE "payment_intent"
+               SET "checkoutWalletAt" = ${now}, "checkoutWalletClosedAt" = NULL
+             WHERE "id" = ${id} AND "status" = 'PENDING'`
+        : event === 'walletClosed'
+          ? await this.prisma.$executeRaw`
+              UPDATE "payment_intent"
+                 SET "checkoutWalletClosedAt" = ${now}
+               WHERE "id" = ${id} AND "status" = 'PENDING'
+                 AND "checkoutWalletAt" IS NOT NULL`
+          : await this.prisma.$executeRaw`
+              UPDATE "payment_intent"
+                 SET "checkoutSentAt" = ${now}
+               WHERE "id" = ${id} AND "status" = 'PENDING'`;
+    if (changed > 0) return;
+    const exists = await this.prisma.paymentIntent.findUnique({
+      where: { id },
+      select: { id: true },
+    });
+    if (!exists) throw ApiError.notFound(`Payment intent ${id} not found`);
   }
 
   /**

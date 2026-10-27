@@ -66,6 +66,9 @@ const FORBIDDEN_FIELDS = [
   'horizonCursor',
   'updatedAt',
   'checkoutSeenAt',
+  'checkoutWalletAt',
+  'checkoutWalletClosedAt',
+  'checkoutSentAt',
 ];
 
 const MERCHANT = 'GCALNQQBXAPZ2WIRSDDBMSTAKCUH5SG6U76YBFLQLIXJTF7FE5AX7AOO';
@@ -110,6 +113,9 @@ function fullRow(overrides: Partial<PaymentIntent> = {}): PaymentIntent {
     checkoutTheme: null,
     expiresAt: EXPIRES,
     checkoutSeenAt: null,
+    checkoutWalletAt: null,
+    checkoutWalletClosedAt: null,
+    checkoutSentAt: null,
     createdAt: CREATED,
     updatedAt: new Date('2026-10-24T12:40:00.000Z'),
     ...overrides,
@@ -547,5 +553,57 @@ describe('PaymentLinksService Solana Pay (a Solana link with a merchant fee)', (
         ),
       ),
     ).toBe(ApiErrorCode.ValidationFailed);
+  });
+});
+
+describe('PaymentLinksService.recordEvent', () => {
+  const links = new Sep7LinkBuilder({} as never, {} as never, {} as never);
+  const ID = 'cmh4x2k9a0001l70g8v5q3z2w';
+
+  function make(changed: number, exists = true) {
+    const executeRaw = jest.fn().mockResolvedValue(changed);
+    const findUnique = jest.fn().mockResolvedValue(exists ? { id: ID } : null);
+    const service = new PaymentLinksService(
+      { paymentIntent: { findUnique }, $executeRaw: executeRaw } as never,
+      links,
+      {} as never,
+      {} as never,
+    );
+    const sql = () => (executeRaw.mock.calls[0][0] as string[]).join('?');
+    return { service, executeRaw, findUnique, sql };
+  }
+
+  it('notes a wallet opened on a pending link, clearing an earlier came-back', async () => {
+    const { service, sql } = make(1);
+    await service.recordEvent(ID, 'walletOpened');
+    expect(sql()).toContain('"checkoutWalletAt" = ?');
+    expect(sql()).toContain('"checkoutWalletClosedAt" = NULL');
+    expect(sql()).toContain(`"status" = 'PENDING'`);
+  });
+
+  it('notes a wallet back without paying only after one opened', async () => {
+    const { service, sql } = make(1);
+    await service.recordEvent(ID, 'walletClosed');
+    expect(sql()).toContain('"checkoutWalletClosedAt" = ?');
+    expect(sql()).toContain('"checkoutWalletAt" IS NOT NULL');
+  });
+
+  it('notes the payment sent', async () => {
+    const { service, sql } = make(1);
+    await service.recordEvent(ID, 'sent');
+    expect(sql()).toContain('"checkoutSentAt" = ?');
+  });
+
+  it('ignores a link that is no longer pending, and answers an unknown id as the read does', async () => {
+    const settled = make(0, true);
+    await expect(
+      settled.service.recordEvent(ID, 'sent'),
+    ).resolves.toBeUndefined();
+    const unknown = make(0, false);
+    await expect(unknown.service.recordEvent(ID, 'sent')).rejects.toMatchObject(
+      {
+        code: 'not_found',
+      },
+    );
   });
 });

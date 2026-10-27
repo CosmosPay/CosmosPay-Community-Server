@@ -287,6 +287,7 @@ Paths use the OpenAPI `{param}` form.
 | POST | `/v1/payment-intents/{id}/validate` | `payments:write` |  |
 | GET | `/v1/payment-links/{id}` | none — `@Public()`, budgeted per client address |  |
 | POST | `/v1/payment-links/{id}/transaction` | none: `@Public()`, budgeted per client address |  |
+| POST | `/v1/payment-links/{id}/events` | none: `@Public()`, budgeted per client address |  |
 | GET | `/v1/payment-links/{id}/solana-pay` | none: `@Public()`, budgeted per client address |  |
 | POST | `/v1/payment-links/{id}/solana-pay` | none: `@Public()`, budgeted per client address |  |
 | GET | `/v1/plugins` | `plugins:read` |  |
@@ -2123,6 +2124,11 @@ the service under `src/native-plugins/<slug>/`, switched on by the same
 - **`GET /v1/summary/series` values the swaps:** `swaps.buckets[].volumeUsd`,
   `swaps.totals.volumeUsd` (with `unpriced`) and `swaps.previous.volumeUsd`, what the
   completed swaps sold in USD at NEAR Intents' current prices.
+- **The hosted checkout reports the payer's wallet:** `POST /v1/payment-links/{id}/events`
+  (`@Public()`, budgeted per client address) takes `walletOpened`, `walletClosed` or `sent`, and
+  intents answer them as `checkoutWalletAt`, `checkoutWalletClosedAt` and `checkoutSentAt`.
+  Informational only: the status still changes on the chain. Migration
+  `20261027190000_payment_checkout_events` adds the three nullable columns.
 
 ### Customers: wallets on several chains instead of one account
 

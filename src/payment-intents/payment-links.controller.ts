@@ -9,6 +9,7 @@ import {
   Post,
 } from '@nestjs/common';
 import {
+  ApiNoContentResponse,
   ApiOkResponse,
   ApiOperation,
   ApiParam,
@@ -19,6 +20,7 @@ import { ApiUpstream } from '@/common/decorators/api-upstream.decorator';
 import { Public } from '@/common/decorators/public.decorator';
 import { RateLimit } from '@/common/decorators/rate-limit.decorator';
 import { ApiErrorCode } from '@/common/errors/api-error';
+import { CheckoutEventDto } from '@/payment-intents/dto/checkout-event.dto';
 import { PayerTransactionDto } from '@/payment-intents/dto/payer-transaction.dto';
 import { SolanaPayAccountDto } from '@/payment-intents/dto/solana-pay-account.dto';
 import {
@@ -28,6 +30,7 @@ import {
 import { PayerTransactionEntity } from '@/payment-intents/entities/payer-transaction.entity';
 import { PublicPaymentLinkEntity } from '@/payment-intents/entities/public-payment-link.entity';
 import {
+  PAYMENT_LINK_EVENT_RATE_LIMIT,
   PAYMENT_LINK_READ_RATE_LIMIT,
   PAYMENT_LINK_TRANSACTION_RATE_LIMIT,
 } from '@/payment-intents/payment-intents.constants';
@@ -178,6 +181,63 @@ export class PaymentLinksController {
     @Body() dto: PayerTransactionDto,
   ): Promise<PayerTransactionEntity> {
     return this.paymentLinks.payerTransaction(id, dto.account);
+  }
+
+  @Post(':id/events')
+  @Public()
+  @RateLimit(PAYMENT_LINK_EVENT_RATE_LIMIT)
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @Header('Cache-Control', 'no-store')
+  @ApiOperation({
+    summary:
+      'Report what the payer did with a wallet from the hosted checkout (no API key)',
+    description:
+      'The hosted checkout tells what the payer did with a wallet while the ' +
+      'link is pending: `walletOpened` (the wallet link, the web wallet, the ' +
+      'extension or Freighter was opened), `walletClosed` (the wallet came back ' +
+      'without paying) and `sent` (the page saw the wallet send the payment). ' +
+      'The owner reads them as `checkoutWalletAt`, `checkoutWalletClosedAt` and ' +
+      '`checkoutSentAt` on the intent, to follow a payment that is not on-chain ' +
+      'yet.\n\n' +
+      '**Informational only:** the status changes on what the chain says, never ' +
+      'on these. An event for a link that is no longer pending is ignored. ' +
+      'Budgeted per client address.',
+  })
+  @ApiParam({
+    name: 'id',
+    description: 'The payment intent id, as in the link.',
+    example: 'cmh4x2k9a0001l70g8v5q3z2w',
+  })
+  @ApiNoContentResponse({
+    description: 'Noted (or ignored: the link is not pending).',
+  })
+  @ApiErrorResponse({
+    status: 400,
+    codes: [ApiErrorCode.ValidationFailed],
+    description: '`event` is not one of the three.',
+    examples: {
+      [ApiErrorCode.ValidationFailed]: {
+        summary: 'An unknown event',
+        message:
+          'event must be one of the following values: walletOpened, walletClosed, sent',
+        path: '/v1/payment-links/cmh4x2k9a0001l70g8v5q3z2w/events',
+      },
+    },
+  })
+  @ApiErrorResponse({
+    status: 404,
+    codes: [ApiErrorCode.NotFound],
+    description: 'No payment intent has this id.',
+    examples: {
+      [ApiErrorCode.NotFound]: {
+        summary: 'No payment intent has this id',
+        message: 'Payment intent cmh4x2k9a0001l70g8v5q3z2w not found',
+        path: '/v1/payment-links/cmh4x2k9a0001l70g8v5q3z2w/events',
+      },
+    },
+  })
+  event(@Param('id') id: string, @Body() dto: CheckoutEventDto): Promise<void> {
+    return this.paymentLinks.recordEvent(id, dto.event);
   }
 
   @Get(':id/solana-pay')

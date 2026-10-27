@@ -411,6 +411,14 @@ model PaymentIntent {
   // most every PAYMENT_LINK_SEEN_EVERY_MS, by raw SQL so updatedAt stays the last
   // change of the intent itself. Null until a page opened it.
   checkoutSeenAt DateTime?
+  // What the payer did with a wallet from the hosted checkout, as the page reports
+  // it (POST /v1/payment-links/{id}/events), while the intent was pending: when a
+  // wallet was last opened, when it came back without paying (cleared by the next
+  // opening), and when the page saw the wallet send the payment. Informational: the
+  // status still changes only on what the chain says.
+  checkoutWalletAt       DateTime?
+  checkoutWalletClosedAt DateTime?
+  checkoutSentAt         DateTime?
   // The merchant fee this operation charged, when its request named one: what an
   // organization charges its own customers through this API, paid on-chain to a
   // wallet it names (`src/common/merchant-fee/`): { bps, fixed, amount, asset,

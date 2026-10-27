@@ -1060,6 +1060,102 @@ paths:
       x-cosmos-upstream:
         - Horizon
       security: []
+  /v1/payment-links/{id}/events:
+    post:
+      description: >-
+        The hosted checkout tells what the payer did with a wallet while the
+        link is pending: `walletOpened` (the wallet link, the web wallet, the
+        extension or Freighter was opened), `walletClosed` (the wallet came back
+        without paying) and `sent` (the page saw the wallet send the payment).
+        The owner reads them as `checkoutWalletAt`, `checkoutWalletClosedAt` and
+        `checkoutSentAt` on the intent, to follow a payment that is not on-chain
+        yet.
+
+
+        **Informational only:** the status changes on what the chain says, never
+        on these. An event for a link that is no longer pending is ignored.
+        Budgeted per client address.
+      operationId: PaymentLinksController_event_v1
+      parameters:
+        - name: id
+          required: true
+          in: path
+          description: The payment intent id, as in the link.
+          schema:
+            example: cmh4x2k9a0001l70g8v5q3z2w
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CheckoutEventDto"
+      responses:
+        "204":
+          description: "Noted (or ignored: the link is not pending)."
+          headers:
+            ratelimit-limit:
+              description: Requests allowed in the current window.
+              schema:
+                type: integer
+                example: 30
+            ratelimit-remaining:
+              description: Requests left in the current window.
+              schema:
+                type: integer
+                example: 0
+            ratelimit-reset:
+              description: Seconds until the window resets.
+              schema:
+                type: integer
+                example: 42
+        "400":
+          description: "`event` is not one of the three."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+              examples:
+                validation_failed:
+                  summary: "validation_failed: An unknown event"
+                  value:
+                    statusCode: 400
+                    code: validation_failed
+                    error: Bad Request
+                    message: "event must be one of the following values: walletOpened, walletClosed,
+                      sent"
+                    path: /v1/payment-links/cmh4x2k9a0001l70g8v5q3z2w/events
+                    timestamp: 2026-09-01T12:00:00.000Z
+        "404":
+          description: No payment intent has this id.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorBodyEntity"
+              examples:
+                not_found:
+                  summary: "not_found: No payment intent has this id"
+                  value:
+                    statusCode: 404
+                    code: not_found
+                    error: Not Found
+                    message: Payment intent cmh4x2k9a0001l70g8v5q3z2w not found
+                    path: /v1/payment-links/cmh4x2k9a0001l70g8v5q3z2w/events
+                    timestamp: 2026-09-01T12:00:00.000Z
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+      summary: Report what the payer did with a wallet from the hosted checkout (no
+        API key)
+      tags:
+        - payment-links
+      x-cosmos-public: true
+      x-cosmos-rate-limit:
+        - name: payment-links:events
+          limit: 30
+          windowMs: 60000
+      security: []
   /v1/payment-links/{id}/solana-pay:
     get:
       description: A Solana payment link with a merchant fee is a Solana Pay
@@ -10820,6 +10916,28 @@ components:
           description: "When the hosted checkout page last read the intent: null at
             creation."
           example: null
+        checkoutWalletAt:
+          type: object
+          nullable: true
+          description: "When the payer last opened a wallet from the hosted checkout (its
+            wallet link, the web wallet, the extension or Freighter), as the
+            page reports it. Informational: the status changes only on the
+            chain."
+          example: null
+        checkoutWalletClosedAt:
+          type: object
+          nullable: true
+          description: When the wallet last came back without paying (it declined, or the
+            page was shown again first), as the page reports it; cleared when a
+            wallet opens again.
+          example: null
+        checkoutSentAt:
+          type: object
+          nullable: true
+          description: "When the hosted checkout saw the wallet send the payment, as the
+            page reports it: a payment on its way, before the chain confirms
+            it."
+          example: null
         createdAt:
           format: date-time
           type: string
@@ -10853,6 +10971,9 @@ components:
         - checkoutTheme
         - expiresAt
         - checkoutSeenAt
+        - checkoutWalletAt
+        - checkoutWalletClosedAt
+        - checkoutSentAt
         - createdAt
         - updatedAt
     CreatePayPaymentIntentDto:
@@ -11063,6 +11184,28 @@ components:
           description: "When the hosted checkout page last read the intent: null at
             creation."
           example: null
+        checkoutWalletAt:
+          type: object
+          nullable: true
+          description: "When the payer last opened a wallet from the hosted checkout (its
+            wallet link, the web wallet, the extension or Freighter), as the
+            page reports it. Informational: the status changes only on the
+            chain."
+          example: null
+        checkoutWalletClosedAt:
+          type: object
+          nullable: true
+          description: When the wallet last came back without paying (it declined, or the
+            page was shown again first), as the page reports it; cleared when a
+            wallet opens again.
+          example: null
+        checkoutSentAt:
+          type: object
+          nullable: true
+          description: "When the hosted checkout saw the wallet send the payment, as the
+            page reports it: a payment on its way, before the chain confirms
+            it."
+          example: null
         createdAt:
           format: date-time
           type: string
@@ -11096,6 +11239,9 @@ components:
         - checkoutTheme
         - expiresAt
         - checkoutSeenAt
+        - checkoutWalletAt
+        - checkoutWalletClosedAt
+        - checkoutSentAt
         - createdAt
         - updatedAt
     PaymentIntentEntity:
@@ -11236,6 +11382,28 @@ components:
             payment page now. Updated at most every 10 seconds; null until a
             page opened it."
           example: 2026-06-21T12:35:10.000Z
+        checkoutWalletAt:
+          type: object
+          nullable: true
+          description: "When the payer last opened a wallet from the hosted checkout (its
+            wallet link, the web wallet, the extension or Freighter), as the
+            page reports it. Informational: the status changes only on the
+            chain."
+          example: null
+        checkoutWalletClosedAt:
+          type: object
+          nullable: true
+          description: When the wallet last came back without paying (it declined, or the
+            page was shown again first), as the page reports it; cleared when a
+            wallet opens again.
+          example: null
+        checkoutSentAt:
+          type: object
+          nullable: true
+          description: "When the hosted checkout saw the wallet send the payment, as the
+            page reports it: a payment on its way, before the chain confirms
+            it."
+          example: null
         createdAt:
           format: date-time
           type: string
@@ -11269,6 +11437,9 @@ components:
         - checkoutTheme
         - expiresAt
         - checkoutSeenAt
+        - checkoutWalletAt
+        - checkoutWalletClosedAt
+        - checkoutSentAt
         - createdAt
         - updatedAt
     PaymentIntentListEntity:
@@ -11616,6 +11787,23 @@ components:
         - xdr
         - uri
         - qr
+    CheckoutEventDto:
+      type: object
+      properties:
+        event:
+          type: string
+          enum:
+            - walletOpened
+            - walletClosed
+            - sent
+          description: "`walletOpened`: the payer opened a wallet from the page (the
+            wallet link, the web wallet, the extension, Freighter).
+            `walletClosed`: the wallet came back without paying (it declined, or
+            the page was shown again first). `sent`: the page saw the wallet
+            send the payment."
+          example: walletOpened
+      required:
+        - event
     SolanaPayInfoEntity:
       type: object
       properties:

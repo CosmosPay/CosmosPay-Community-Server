@@ -288,6 +288,7 @@ Les chemins utilisent la forme OpenAPI `{param}`.
 | POST | `/v1/payment-intents/{id}/validate` | `payments:write` |  |
 | GET | `/v1/payment-links/{id}` | aucun — `@Public()`, budget par adresse client |  |
 | POST | `/v1/payment-links/{id}/transaction` | aucun : `@Public()`, budget par adresse client |  |
+| POST | `/v1/payment-links/{id}/events` | aucun : `@Public()`, budget par adresse client |  |
 | GET | `/v1/payment-links/{id}/solana-pay` | aucun : `@Public()`, budget par adresse client |  |
 | POST | `/v1/payment-links/{id}/solana-pay` | aucun : `@Public()`, budget par adresse client |  |
 | GET | `/v1/plugins` | `plugins:read` |  |
@@ -2196,6 +2197,11 @@ plugins isolés.
 - **`GET /v1/summary/series` valorise les swaps :** `swaps.buckets[].volumeUsd`,
   `swaps.totals.volumeUsd` (avec `unpriced`) et `swaps.previous.volumeUsd`, ce que les swaps
   terminés ont vendu en USD aux prix actuels de NEAR Intents.
+- **Le checkout hébergé signale le portefeuille du payeur :** `POST /v1/payment-links/{id}/events`
+  (`@Public()`, budget par adresse client) reçoit `walletOpened`, `walletClosed` ou `sent`, et les
+  intents les renvoient comme `checkoutWalletAt`, `checkoutWalletClosedAt` et `checkoutSentAt`.
+  Purement informatif : le statut change toujours selon la blockchain. La migration
+  `20261027190000_payment_checkout_events` ajoute les trois colonnes facultatives.
 
 ### Clients : des wallets sur plusieurs chaînes au lieu d'un compte
 

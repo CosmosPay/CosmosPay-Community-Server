@@ -254,6 +254,7 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | POST | `/v1/payment-intents/{id}/validate` | `payments:write` |  |
 | GET | `/v1/payment-links/{id}` | 无 — `@Public()`，按客户端地址计预算 |  |
 | POST | `/v1/payment-links/{id}/transaction` | 无：`@Public()`，按客户端地址计预算 |  |
+| POST | `/v1/payment-links/{id}/events` | 无：`@Public()`，按客户端地址计预算 |  |
 | GET | `/v1/payment-links/{id}/solana-pay` | 无：`@Public()`，按客户端地址计预算 |  |
 | POST | `/v1/payment-links/{id}/solana-pay` | 无：`@Public()`，按客户端地址计预算 |  |
 | GET | `/v1/plugins` | `plugins:read` |  |
@@ -1413,6 +1414,10 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
 - **`GET /v1/summary/series` 计算兑换的价值：** `swaps.buckets[].volumeUsd`、
   `swaps.totals.volumeUsd`（含 `unpriced`）和 `swaps.previous.volumeUsd`，即已完成兑换按 NEAR Intents
   当前价格以 USD 计算的卖出金额。
+- **托管结账页上报付款方的钱包操作：** `POST /v1/payment-links/{id}/events`
+  （`@Public()`，按客户端地址计预算）接收 `walletOpened`、`walletClosed` 或 `sent`，
+  支付意图以 `checkoutWalletAt`、`checkoutWalletClosedAt` 和 `checkoutSentAt` 返回。
+  仅供参考：状态仍以链上为准。迁移 `20261027190000_payment_checkout_events` 新增三个可为空的列。
 
 ### 客户：用多条链上的钱包取代单一账户
 
