@@ -129,6 +129,7 @@ export const PAYMENT_INTENT_PUBLIC_SELECT = {
   checkoutTheme: true,
   merchantFee: true,
   expiresAt: true,
+  checkoutSeenAt: true,
   createdAt: true,
   updatedAt: true,
 } as const satisfies Prisma.PaymentIntentSelect;

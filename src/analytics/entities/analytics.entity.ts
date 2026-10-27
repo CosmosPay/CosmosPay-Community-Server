@@ -47,7 +47,7 @@ export class AssetVolumeEntity {
     type: String,
     nullable: true,
     description:
-      "`amount` in USD with two decimals, valued at NEAR Intents' current reference price for each asset (its token list, cached for a few minutes): an indicative figure at today's price, not the price on the day each payment settled. A mainnet token is priced by its contract (on " +
+      "`amount` in USD with two decimals, valued at NEAR Intents’ current reference price for each asset (its token list, cached for a few minutes): an indicative figure at today's price, not the price on the day each payment settled. A mainnet token is priced by its contract (on " +
       'Stellar its code and issuer), so a token NEAR Intents does not list has no price; a ' +
       'test-network token takes the price of its mainnet namesake. When the code comes from ' +
       'several issuers, only the priced ones are added. Null when none is priced, or when the ' +
@@ -89,7 +89,7 @@ export class AnalyticsSummaryEntity {
     type: String,
     nullable: true,
     description:
-      "Every settled payment in USD with two decimals, valued at NEAR Intents' current reference price for each asset (its token list, cached for a few minutes): an indicative figure at today's price, not the price on the day each payment settled. Payments in an asset with no " +
+      "Every settled payment in USD with two decimals, valued at NEAR Intents’ current reference price for each asset (its token list, cached for a few minutes): an indicative figure at today's price, not the price on the day each payment settled. Payments in an asset with no " +
       'price are left out and counted in `unpriced`. Null only when there were settled ' +
       "payments and NEAR Intents' prices could not be read; `0.00` when nothing settled.",
     example: '12843.17',
@@ -140,7 +140,7 @@ export class SeriesBucketEntity {
     type: String,
     nullable: true,
     description:
-      "The bucket's settled payments in USD with two decimals, valued at NEAR Intents' current reference price for each asset (its token list, cached for a few minutes): an indicative figure at today's price, not the price on the day each payment settled. Payments in an asset " +
+      "The bucket's settled payments in USD with two decimals, valued at NEAR Intents’ current reference price for each asset (its token list, cached for a few minutes): an indicative figure at today's price, not the price on the day each payment settled. Payments in an asset " +
       "with no price add nothing (the window's `unpriced` counts them). Null only when the " +
       "bucket has settled payments and NEAR Intents' prices could not be read.",
     example: '1790.36',
@@ -157,7 +157,7 @@ export class SeriesWindowEntity {
     type: String,
     nullable: true,
     description:
-      "The window's settled payments in USD with two decimals, valued at NEAR Intents' current reference price for each asset (its token list, cached for a few minutes): an indicative figure at today's price, not the price on the day each payment settled. Null only when the " +
+      "The window's settled payments in USD with two decimals, valued at NEAR Intents’ current reference price for each asset (its token list, cached for a few minutes): an indicative figure at today's price, not the price on the day each payment settled. Null only when the " +
       "window has settled payments and NEAR Intents' prices could not be read.",
     example: '16982.04',
   })
@@ -200,6 +200,14 @@ export class SeriesSwapBucketEntity extends SeriesOutcomeCountsEntity {
     example: '2026-10-01',
   })
   start!: string;
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    description:
+      "The bucket’s settled swap volume in USD, two decimals: what the completed swaps sold, each asset at NEAR Intents' current price. Null when no price could be read; an asset with no price counts as zero.",
+    example: '1250.40',
+  })
+  volumeUsd!: string | null;
 }
 
 export class SeriesSwapsByKindEntity {
@@ -235,6 +243,31 @@ export class SeriesSwapTotalsEntity extends SeriesOutcomeCountsEntity {
     description: 'The window’s swaps per kind, any status.',
   })
   byKind!: SeriesSwapsByKindEntity;
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    description:
+      "The window’s settled swap volume in USD, two decimals: what the completed swaps sold, each asset at NEAR Intents' current price. Null when no price could be read; an asset with no price counts as zero.",
+    example: '1250.40',
+  })
+  volumeUsd!: string | null;
+  @ApiProperty({
+    description:
+      'Completed swaps whose sold asset has no USD price (a network or token NEAR Intents does not list), left out of volumeUsd.',
+    example: 0,
+  })
+  unpriced!: number;
+}
+
+export class SeriesSwapPreviousEntity extends SeriesOutcomeCountsEntity {
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    description:
+      "The window before’s settled swap volume in USD, two decimals: what the completed swaps sold, each asset at NEAR Intents' current price. Null when no price could be read; an asset with no price counts as zero.",
+    example: '1250.40',
+  })
+  volumeUsd!: string | null;
 }
 
 export class SeriesSwapsEntity {
@@ -250,10 +283,10 @@ export class SeriesSwapsEntity {
   })
   totals!: SeriesSwapTotalsEntity;
   @ApiProperty({
-    type: SeriesOutcomeCountsEntity,
+    type: SeriesSwapPreviousEntity,
     description: 'The window of the same length just before it, for growth.',
   })
-  previous!: SeriesOutcomeCountsEntity;
+  previous!: SeriesSwapPreviousEntity;
 }
 
 export class SeriesLiquidityBucketEntity extends SeriesOutcomeCountsEntity {

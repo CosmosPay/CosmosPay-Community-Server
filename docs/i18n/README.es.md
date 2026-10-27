@@ -2194,6 +2194,19 @@ misma lista `PLUGINS_ENABLED` que los plugins aislados.
 
 ## Actualización — cambios incompatibles y notas de despliegue
 
+### Pagos: cuándo vio el checkout un enlace; volumen liquidado de los swaps en USD
+
+- **Migración `20261027180000_payment_checkout_seen`:** una columna `checkoutSeenAt` opcional en
+  `payment_intent`; no se reescribe nada. Ejecuta `migrate deploy` antes de servir la nueva versión.
+- **Los payment intents responden `checkoutSeenAt`:** cuándo leyó el checkout alojado el intent por
+  última vez mientras estaba abierto (pendiente o enviado). La página consulta
+  `GET /v1/payment-links/{id}` mientras un pagador la tiene abierta, así que un valor de los últimos
+  30 segundos indica que alguien está en la página de pago. Se escribe como mucho cada 10 segundos,
+  sin tocar `updatedAt`.
+- **`GET /v1/summary/series` valora los swaps:** `swaps.buckets[].volumeUsd`,
+  `swaps.totals.volumeUsd` (con `unpriced`) y `swaps.previous.volumeUsd`, lo que vendieron los
+  swaps completados en USD a los precios actuales de NEAR Intents.
+
 ### Clientes: wallets en varias cadenas en lugar de una cuenta
 
 - **Un cliente tiene wallets** (`wallets`: `chain`, `address`, `label`), las que necesite

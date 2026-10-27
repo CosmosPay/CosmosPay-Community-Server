@@ -2112,6 +2112,18 @@ the service under `src/native-plugins/<slug>/`, switched on by the same
 
 ## Upgrading — breaking changes and deploy notes
 
+### Payments: when the checkout last saw a link; swaps' settled volume in USD
+
+- **Migration `20261027180000_payment_checkout_seen`:** a nullable `checkoutSeenAt` column on
+  `payment_intent`; nothing is rewritten. Run `migrate deploy` before the new build serves.
+- **Payment intents answer `checkoutSeenAt`:** when the hosted checkout last read the intent
+  while it was open (pending or submitted). The page polls `GET /v1/payment-links/{id}` while
+  a payer has it open, so a value from the last 30 seconds means someone is on the payment
+  page now. Written at most every 10 seconds, without touching `updatedAt`.
+- **`GET /v1/summary/series` values the swaps:** `swaps.buckets[].volumeUsd`,
+  `swaps.totals.volumeUsd` (with `unpriced`) and `swaps.previous.volumeUsd`, what the
+  completed swaps sold in USD at NEAR Intents' current prices.
+
 ### Customers: wallets on several chains instead of one account
 
 - **A customer holds wallets** (`wallets`: `chain`, `address`, `label`), as many as it

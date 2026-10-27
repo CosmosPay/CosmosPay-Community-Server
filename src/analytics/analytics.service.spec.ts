@@ -447,7 +447,7 @@ describe('AnalyticsService', () => {
 describe('AnalyticsService.series', () => {
   afterEach(() => jest.useRealTimers());
 
-  /** What each of the eleven aggregations answers, in the order the service issues them. */
+  /** What each of the twelve aggregations answers, in the order the service issues them. */
   type Results = Partial<
     Record<
       | 'buckets'
@@ -459,6 +459,7 @@ describe('AnalyticsService.series', () => {
       | 'liquidityBuckets'
       | 'webhookBuckets'
       | 'settled'
+      | 'swapSettled'
       | 'zkBuckets'
       | 'zkWindows',
       unknown[]
@@ -474,6 +475,7 @@ describe('AnalyticsService.series', () => {
     'liquidityBuckets',
     'webhookBuckets',
     'settled',
+    'swapSettled',
     'zkBuckets',
     'zkWindows',
   ] as const;
@@ -601,7 +603,7 @@ describe('AnalyticsService.series', () => {
     // Eleven aggregations (payments, swaps, liquidity, webhooks and private payments, each per
     // bucket and per window, and the settled payments per asset for their USD value), no row
     // fetched.
-    expect(queryRaw).toHaveBeenCalledTimes(11);
+    expect(queryRaw).toHaveBeenCalledTimes(12);
     for (const model of [
       prisma.paymentIntent,
       prisma.swap,
@@ -674,17 +676,20 @@ describe('AnalyticsService.series', () => {
     expect(result.swaps.buckets.map((b) => b.start)).toEqual(
       result.buckets.map((b) => b.start),
     );
+    // No completed swap valued in this test: zero dollars per bucket.
     expect(result.swaps.buckets[0]).toEqual({
       start: '2025-11-01',
       count: 0,
       succeeded: 0,
       failed: 0,
+      volumeUsd: '0.00',
     });
     expect(result.swaps.buckets[11]).toEqual({
       start: '2026-10-01',
       count: 4,
       succeeded: 2,
       failed: 1,
+      volumeUsd: '0.00',
     });
     expect(result.swaps.totals).toEqual({
       count: 6,
@@ -692,6 +697,8 @@ describe('AnalyticsService.series', () => {
       failed: 1,
       inProgress: 2,
       byKind: { dex: 3, chain: 1, crossChain: 0, usdt0: 2 },
+      volumeUsd: '0.00',
+      unpriced: 0,
     });
     // The kinds add up to the window's count, and so do the outcomes.
     const { byKind, count, succeeded, failed, inProgress } =
@@ -702,6 +709,7 @@ describe('AnalyticsService.series', () => {
       count: 2,
       succeeded: 1,
       failed: 1,
+      volumeUsd: '0.00',
     });
   });
 
@@ -739,7 +747,15 @@ describe('AnalyticsService.series', () => {
     expect(buckets.sql).toContain(
       `SELECT 'usdt0' AS "kind", "createdAt", CASE WHEN "status" IN ('DELIVERED') THEN 'succeeded' ` +
         `WHEN "status" IN ('FAILED', 'EXPIRED') THEN 'failed' ` +
-        `WHEN "status" IN ('PENDING', 'SUBMITTED') THEN 'inProgress' END AS "outcome" FROM "usdt0_transfer"`,
+        `WHEN "status" IN ('PENDING', 'SUBMITTED') THEN 'inProgress' END AS "outcome", ` +
+        `'stellar' AS "chain", 'USDT' AS "asset", NULL::text AS "issuer", "amount" AS "amount" FROM "usdt0_transfer"`,
+    );
+    // Each kind names the side it sold, as the USD pricer reads an asset.
+    expect(buckets.sql).toContain(
+      `'stellar' AS "chain", "sendAsset" AS "asset", "sendAssetIssuer" AS "issuer", "sendAmount" AS "amount" FROM "swap"`,
+    );
+    expect(buckets.sql).toContain(
+      `"originChain" AS "chain", "originAsset" AS "asset", NULL::text AS "issuer", "amountIn" AS "amount" FROM "cross_chain_swap"`,
     );
 
     // The window totals read both windows, split by kind.
@@ -918,6 +934,7 @@ describe('AnalyticsService.series', () => {
         count: 0,
         succeeded: 0,
         failed: 0,
+        volumeUsd: '0.00',
       })),
       totals: {
         count: 0,
@@ -925,8 +942,10 @@ describe('AnalyticsService.series', () => {
         failed: 0,
         inProgress: 0,
         byKind: { dex: 0, chain: 0, crossChain: 0, usdt0: 0 },
+        volumeUsd: '0.00',
+        unpriced: 0,
       },
-      previous: { count: 0, succeeded: 0, failed: 0 },
+      previous: { count: 0, succeeded: 0, failed: 0, volumeUsd: '0.00' },
     });
     expect(result.liquidity).toEqual({
       buckets: result.buckets.map((b) => ({
@@ -1045,11 +1064,11 @@ describe('AnalyticsService.series', () => {
     });
 
     // Per bucket of the window, and both windows from the one before, on the key's network.
-    const buckets = queryOf(queryRaw, 9);
+    const buckets = queryOf(queryRaw, 10);
     expect(buckets.sql).toContain('FROM "zk_payment"');
     expect(buckets.sql).toContain(`date_trunc('month', "createdAt") AS bucket`);
     expect(buckets.values.slice(-3)).toEqual(['c1', 'public', SINCE]);
-    const windows = queryOf(queryRaw, 10);
+    const windows = queryOf(queryRaw, 11);
     expect(windows.sql).toContain('SUM("feeAmount"::numeric)');
     expect(windows.values.slice(-3)).toEqual(['c1', 'public', PREVIOUS_SINCE]);
     // Expired is derived as every read of them derives it: a pending payment past its deadline.
@@ -1161,6 +1180,59 @@ describe('AnalyticsService.series', () => {
     expect(settled.sql).toContain(`AND "status" = 'SUCCEEDED'`);
     expect(settled.sql).toContain('GROUP BY 1, 2, 3, 4');
     expect(settled.values).toEqual(['c1', 'public', PREVIOUS_SINCE]);
+  });
+
+  it('values what the completed swaps sold, per bucket and window, counting what no price covers', async () => {
+    jest.useFakeTimers().setSystemTime(NOW);
+    const { service, queryRaw } = build(
+      {
+        swapSettled: [
+          // this window: October, XLM sold on the DEX and a cross-chain swap from Ethereum
+          {
+            bucket: new Date('2026-10-01T00:00:00Z'),
+            chain: 'stellar',
+            asset: 'native',
+            issuer: null,
+            amount: '40',
+            count: 2n,
+          },
+          {
+            bucket: new Date('2026-10-01T00:00:00Z'),
+            chain: 'eth',
+            asset: 'ETH',
+            issuer: null,
+            amount: '1',
+            count: 1n,
+          },
+          // the window before
+          {
+            bucket: new Date('2025-06-01T00:00:00Z'),
+            chain: 'stellar',
+            asset: 'USDC',
+            issuer: STELLAR_USDC_ISSUER,
+            amount: '8',
+            count: 1n,
+          },
+        ],
+      },
+      TOKENS,
+    );
+
+    const result = await service.series(consumer, 'month');
+
+    // 40 XLM at the price the payments test reads (22.50 - 12.50 for 40 XLM).
+    expect(result.swaps.buckets[11].volumeUsd).toBe('10.00');
+    expect(result.swaps.buckets[10].volumeUsd).toBe('0.00');
+    // A network this service does not price is left out and counted.
+    expect(result.swaps.totals).toMatchObject({
+      volumeUsd: '10.00',
+      unpriced: 1,
+    });
+    expect(result.swaps.previous).toMatchObject({ volumeUsd: '8.00' });
+    // Completed swaps only, of both windows, per bucket and sold asset.
+    const settled = queryOf(queryRaw, 9);
+    expect(settled.sql).toContain(`WHERE "outcome" = 'succeeded'`);
+    expect(settled.sql).toContain('GROUP BY 1, 2, 3, 4');
   });
 
   it('answers the series without USD values when NEAR Intents’ prices cannot be read', async () => {

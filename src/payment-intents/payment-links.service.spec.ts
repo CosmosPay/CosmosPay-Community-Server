@@ -65,6 +65,7 @@ const FORBIDDEN_FIELDS = [
   'evmDeposit',
   'horizonCursor',
   'updatedAt',
+  'checkoutSeenAt',
 ];
 
 const MERCHANT = 'GCALNQQBXAPZ2WIRSDDBMSTAKCUH5SG6U76YBFLQLIXJTF7FE5AX7AOO';
@@ -108,6 +109,7 @@ function fullRow(overrides: Partial<PaymentIntent> = {}): PaymentIntent {
     reference: 'merchant-order-24',
     checkoutTheme: null,
     expiresAt: EXPIRES,
+    checkoutSeenAt: null,
     createdAt: CREATED,
     updatedAt: new Date('2026-10-24T12:40:00.000Z'),
     ...overrides,
@@ -258,14 +260,40 @@ describe('PaymentLinksService.findPublic', () => {
 
   function make(row: PaymentIntent | null) {
     const findUnique = jest.fn().mockResolvedValue(row);
+    const executeRaw = jest.fn().mockResolvedValue(1);
     const service = new PaymentLinksService(
-      { paymentIntent: { findUnique } } as never,
+      { paymentIntent: { findUnique }, $executeRaw: executeRaw } as never,
       links,
       {} as never,
       {} as never,
     );
-    return { service, findUnique };
+    return { service, findUnique, executeRaw };
   }
+
+  it('notes an open link as seen, so the owner sees a payer on the page', async () => {
+    const { service, executeRaw } = make(fullRow({ status: 'PENDING' }));
+    await service.findPublic('cmh4x2k9a0001l70g8v5q3z2w');
+    expect(executeRaw).toHaveBeenCalledTimes(1);
+    // The SQL itself keeps it to open intents and to once per window.
+    const sql = (executeRaw.mock.calls[0][0] as string[]).join('?');
+    expect(sql).toContain('"checkoutSeenAt" = NOW()');
+    expect(sql).toContain("'PENDING', 'SUBMITTED'");
+    expect(sql).toContain('"checkoutSeenAt" <');
+  });
+
+  it('leaves a settled link alone: nobody pays it any more', async () => {
+    const { service, executeRaw } = make(fullRow({ status: 'SUCCEEDED' }));
+    await service.findPublic('cmh4x2k9a0001l70g8v5q3z2w');
+    expect(executeRaw).not.toHaveBeenCalled();
+  });
+
+  it('answers the payer even when noting the read fails', async () => {
+    const { service, executeRaw } = make(fullRow({ status: 'PENDING' }));
+    executeRaw.mockRejectedValue(new Error('database down'));
+    await expect(
+      service.findPublic('cmh4x2k9a0001l70g8v5q3z2w'),
+    ).resolves.toHaveProperty('status');
+  });
 
   it('loads only the columns the public view is built from', async () => {
     const { service, findUnique } = make(fullRow());

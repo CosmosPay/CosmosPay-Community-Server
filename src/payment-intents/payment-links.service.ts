@@ -34,6 +34,13 @@ import { Sep7LinkBuilder } from '@/payment-intents/sep7-link-builder.service';
  * first half of keeping them out of this response; {@link toPublicPaymentLink}
  * is the second.
  */
+/**
+ * How often a read of an open link writes `checkoutSeenAt`: the hosted page polls
+ * every few seconds, and "seen in the last half minute" is all the owner reads
+ * from it.
+ */
+export const PAYMENT_LINK_SEEN_EVERY_MS = 10_000;
+
 export const PAYMENT_LINK_SELECT = {
   id: true,
   kind: true,
@@ -156,9 +163,30 @@ export class PaymentLinksService {
     if (!row) {
       throw ApiError.notFound(`Payment intent ${id} not found`);
     }
+    // The page polls this while a payer has it open: note it, so the owner sees
+    // someone on the payment page. Never in the way of the answer.
+    if (row.status === 'PENDING' || row.status === 'SUBMITTED') {
+      void this.markSeen(id).catch(() => undefined);
+    }
     // The same derivation the owner's reads use: QR of the stored URI, never
     // stored itself.
     return toPublicPaymentLink(row, await this.links.qr(row.uri));
+  }
+
+  /**
+   * `checkoutSeenAt` = now for an open intent, at most every
+   * {@link PAYMENT_LINK_SEEN_EVERY_MS} (a page polls every few seconds). Raw SQL so
+   * `updatedAt` keeps meaning the last change of the intent itself.
+   */
+  private async markSeen(id: string): Promise<void> {
+    const before = new Date(Date.now() - PAYMENT_LINK_SEEN_EVERY_MS);
+    await this.prisma.$executeRaw`
+      UPDATE "payment_intent"
+         SET "checkoutSeenAt" = NOW()
+       WHERE "id" = ${id}
+         AND "status" IN ('PENDING', 'SUBMITTED')
+         AND ("checkoutSeenAt" IS NULL OR "checkoutSeenAt" < ${before})
+    `;
   }
 
   /**

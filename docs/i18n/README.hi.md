@@ -2104,6 +2104,18 @@ seal होती हैं और कभी लौटाई नहीं जा
 
 ## अपग्रेड — breaking changes और deploy नोट्स
 
+### Payments: checkout ने link कब देखा; swaps का settled volume USD में
+
+- **Migration `20261027180000_payment_checkout_seen`:** `payment_intent` पर एक वैकल्पिक
+  `checkoutSeenAt` column; कुछ भी दोबारा नहीं लिखा जाता। नई build serve करने से पहले `migrate deploy` चलाएँ।
+- **Payment intents `checkoutSeenAt` लौटाते हैं:** hosted checkout ने intent को खुला रहते हुए
+  (pending या submitted) आख़िरी बार कब पढ़ा। जब तक payer page खुला रखता है, page
+  `GET /v1/payment-links/{id}` poll करता है, इसलिए पिछले 30 seconds का value मतलब कोई अभी payment
+  page पर है। ज़्यादा से ज़्यादा हर 10 seconds में लिखा जाता है, `updatedAt` को छुए बिना।
+- **`GET /v1/summary/series` swaps का मूल्य बताता है:** `swaps.buckets[].volumeUsd`,
+  `swaps.totals.volumeUsd` (`unpriced` के साथ) और `swaps.previous.volumeUsd`, यानी पूरे हुए swaps ने
+  NEAR Intents के मौजूदा prices पर USD में क्या बेचा।
+
 ### Customers: एक account की जगह कई chains पर wallets
 
 - **एक customer के पास wallets होते हैं** (`wallets`: `chain`, `address`, `label`), ज़रूरत के

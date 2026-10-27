@@ -2157,6 +2157,19 @@ serviço em `src/native-plugins/<slug>/`, ligados pela mesma lista
 
 ## Atualização — mudanças incompatíveis e notas de deploy
 
+### Pagamentos: quando o checkout viu um link; volume liquidado dos swaps em USD
+
+- **Migração `20261027180000_payment_checkout_seen`:** uma coluna `checkoutSeenAt` opcional em
+  `payment_intent`; nada é reescrito. Execute `migrate deploy` antes de servir a nova versão.
+- **Os payment intents respondem `checkoutSeenAt`:** quando o checkout hospedado leu o intent pela
+  última vez enquanto estava aberto (pendente ou enviado). A página consulta
+  `GET /v1/payment-links/{id}` enquanto um pagador a mantém aberta, então um valor dos últimos 30
+  segundos indica que alguém está na página de pagamento. Gravado no máximo a cada 10 segundos, sem
+  mexer em `updatedAt`.
+- **`GET /v1/summary/series` valoriza os swaps:** `swaps.buckets[].volumeUsd`,
+  `swaps.totals.volumeUsd` (com `unpriced`) e `swaps.previous.volumeUsd`, o que os swaps
+  concluídos venderam em USD aos preços atuais da NEAR Intents.
+
 ### Clientes: wallets em várias chains em vez de uma conta
 
 - **Um cliente tem wallets** (`wallets`: `chain`, `address`, `label`), quantas precisar até

@@ -154,6 +154,18 @@ export class PaymentIntentEntity {
   })
   expiresAt!: Date | null;
 
+  @ApiProperty({
+    nullable: true,
+    description:
+      'When the hosted checkout page (payments.cosmospay.lat/{id}) last read ' +
+      'the intent while it was open: the page polls while a payer has it ' +
+      'open, so a value from the last 30 seconds means someone is on the ' +
+      'payment page now. Updated at most every 10 seconds; null until a page ' +
+      'opened it.',
+    example: '2026-06-21T12:35:10.000Z',
+  })
+  checkoutSeenAt!: Date | null;
+
   @ApiProperty({ example: '2026-06-21T12:34:56.000Z' })
   createdAt!: Date;
 
@@ -275,6 +287,14 @@ export class TxPaymentIntentEntity {
     example: '2026-06-21T13:34:56.000Z',
   })
   expiresAt!: Date | null;
+
+  @ApiProperty({
+    nullable: true,
+    description:
+      'When the hosted checkout page last read the intent: null at creation.',
+    example: null,
+  })
+  checkoutSeenAt!: Date | null;
 
   @ApiProperty({ example: '2026-06-21T12:34:56.000Z' })
   createdAt!: Date;
@@ -403,6 +423,14 @@ export class PayPaymentIntentEntity {
     example: '2026-06-21T13:34:56.000Z',
   })
   expiresAt!: Date | null;
+
+  @ApiProperty({
+    nullable: true,
+    description:
+      'When the hosted checkout page last read the intent: null at creation.',
+    example: null,
+  })
+  checkoutSeenAt!: Date | null;
 
   @ApiProperty({ example: '2026-06-21T12:34:56.000Z' })
   createdAt!: Date;

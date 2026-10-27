@@ -2226,6 +2226,19 @@ eingeschaltet werden.
 
 ## Upgrade — Breaking Changes und Deploy-Hinweise
 
+### Zahlungen: wann der Checkout einen Link gesehen hat; abgerechnetes Swap-Volumen in USD
+
+- **Migration `20261027180000_payment_checkout_seen`:** eine optionale Spalte `checkoutSeenAt` in
+  `payment_intent`; nichts wird umgeschrieben. Führen Sie `migrate deploy` aus, bevor die neue Version ausliefert.
+- **Payment Intents liefern `checkoutSeenAt`:** wann der gehostete Checkout den Intent zuletzt
+  gelesen hat, solange er offen war (ausstehend oder eingereicht). Die Seite fragt
+  `GET /v1/payment-links/{id}` ab, solange ein Zahler sie geöffnet hat: Ein Wert aus den letzten
+  30 Sekunden heißt, dass gerade jemand auf der Zahlungsseite ist. Höchstens alle 10 Sekunden
+  geschrieben, ohne `updatedAt` zu ändern.
+- **`GET /v1/summary/series` bewertet die Swaps:** `swaps.buckets[].volumeUsd`,
+  `swaps.totals.volumeUsd` (mit `unpriced`) und `swaps.previous.volumeUsd`, was die
+  abgeschlossenen Swaps verkauft haben, in USD zu den aktuellen Preisen von NEAR Intents.
+
 ### Kunden: Wallets auf mehreren Chains statt eines Kontos
 
 - **Ein Kunde hat Wallets** (`wallets`: `chain`, `address`, `label`), so viele wie nötig bis

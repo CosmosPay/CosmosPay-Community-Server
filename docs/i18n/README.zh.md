@@ -1403,6 +1403,17 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
 
 ## 升级 — 破坏性变更与部署说明
 
+### 支付：结账页何时看到链接；兑换的已结算金额（USD）
+
+- **迁移 `20261027180000_payment_checkout_seen`：** 在 `payment_intent` 上新增可为空的
+  `checkoutSeenAt` 列；不改写任何数据。新版本上线前请运行 `migrate deploy`。
+- **支付意图返回 `checkoutSeenAt`：** 托管结账页在意图仍开放（待处理或已提交）时最后一次读取它的时间。
+  付款方打开页面期间，页面会轮询 `GET /v1/payment-links/{id}`，因此最近 30 秒内的值表示有人正在支付页面上。
+  最多每 10 秒写入一次，且不会改动 `updatedAt`。
+- **`GET /v1/summary/series` 计算兑换的价值：** `swaps.buckets[].volumeUsd`、
+  `swaps.totals.volumeUsd`（含 `unpriced`）和 `swaps.previous.volumeUsd`，即已完成兑换按 NEAR Intents
+  当前价格以 USD 计算的卖出金额。
+
 ### 客户：用多条链上的钱包取代单一账户
 
 - **一个客户拥有钱包**（`wallets`：`chain`、`address`、`label`），按需最多 20 个，位于 Stellar、Solana 或 Monad。`POST /v1/customers` 接受 `wallets`；新路由 `POST /v1/customers/{id}/wallets` 和 `DELETE /v1/customers/{id}/wallets/{walletId}` 用于添加和移除钱包。一个钱包只属于商户的一个客户：若该钱包已属于另一个客户，返回 `409 customer_wallet_taken`（新错误码）。

@@ -405,6 +405,12 @@ model PaymentIntent {
   // Lifetime: an unpaid intent past this instant is auto-finalized to EXPIRED by
   // the observer. Set at creation from the configured TTL.
   expiresAt   DateTime?
+  // When the hosted checkout last read this intent while it was open (pending or
+  // submitted): the page polls GET /v1/payment-links/{id} while a payer has it
+  // open, so a recent value means someone is on the payment page now. Written at
+  // most every PAYMENT_LINK_SEEN_EVERY_MS, by raw SQL so updatedAt stays the last
+  // change of the intent itself. Null until a page opened it.
+  checkoutSeenAt DateTime?
   // The merchant fee this operation charged, when its request named one: what an
   // organization charges its own customers through this API, paid on-chain to a
   // wallet it names (`src/common/merchant-fee/`): { bps, fixed, amount, asset,
