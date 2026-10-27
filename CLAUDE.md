@@ -7,8 +7,9 @@ Conventions for this repo. They are enforced by `npm run lint`, which CI gates o
 | Command | What it does, and the trap in it |
 | --- | --- |
 | `npm run dev` | `prisma migrate deploy`, then `nest start --watch` — one instance on `.env` |
-| `npm run dev:local` | several instances from ONE `.env`, overrides in `dev-instances.json` (git-ignored, created from `dev-instances.example.json` on first run — keep it, it holds the recovery servers' keys). Default profile is `api` + `replica`; `-- recovery` runs `api` + `recovery-a` + `recovery-b`, `-- all` all four (`scripts/dev-local.mts`) |
-| `npm test` | jest under `node --experimental-vm-modules`. **Never `npx jest`:** without the flag most suites fail to load at `@stellar/stellar-sdk`'s ESM dependencies, which looks like real breakage and is not |
+| `npm run dev:local` | several instances from ONE `.env`, overrides in `dev-instances.json` (git-ignored, created from `dev-instances.example.json` on first run — keep it, it holds the recovery servers' keys). Default profile is `api` + `replica`; `-- recovery` runs `api` + `recovery-a` + `recovery-b`, `-- all` all four (`scripts/dev-local.mts`). One run per checkout: it restarts its instances itself after each compile without errors (not `node --watch`, whose watcher kept a core busy per instance), its build and instances end with it however it ends, and a new run first ends an earlier one and anything of this checkout it left running |
+| `npm run dev:local:stop` | ends a `dev:local` of this checkout and everything it started (on Windows ending a process leaves its children running); `-- --dry-run` only lists them |
+| `npm test` | jest under `node --experimental-vm-modules`. **Never `npx jest`:** without the flag most suites fail to load at `@stellar/stellar-sdk`'s ESM dependencies, which looks like real breakage and is not. Jest runs on half the cores (`maxWorkers: "50%"`, here and in `test/jest-e2e.json`): one worker per core but one held the machine at 100% |
 | `npm run test:e2e` | the suites in `test/` (`test/jest-e2e.json`), which `npm test` never sees |
 | `npm run lint` | eslint over `src`, `scripts`, `test` and `plugins`, zero warnings |
 | `npm run openapi:generate` | regenerates `openapi/openapi.json` + `.yaml`. A new or changed controller means running it and committing the spec — `openapi:check` fails CI on any diff |

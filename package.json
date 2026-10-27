@@ -15,6 +15,7 @@
     "dev": "prisma migrate deploy && nest start --watch --exec \"node --no-node-snapshot\"",
     "start": "nest start --exec \"node --no-node-snapshot\"",
     "dev:local": "node --no-node-snapshot --disable-warning=ExperimentalWarning --experimental-strip-types scripts/dev-local.mts",
+    "dev:local:stop": "node --no-node-snapshot --disable-warning=ExperimentalWarning --experimental-strip-types scripts/dev-local.mts --stop",
     "start:dev": "nest start --watch --exec \"node --no-node-snapshot\"",
     "start:debug": "nest start --debug --watch --exec \"node --no-node-snapshot\"",
     "start:prod": "node --no-node-snapshot dist/src/main",
@@ -135,6 +136,7 @@
       "**/*.(t|j)s"
     ],
     "coverageDirectory": "../coverage",
-    "testEnvironment": "node"
+    "testEnvironment": "node",
+    "maxWorkers": "50%"
   }
 }
