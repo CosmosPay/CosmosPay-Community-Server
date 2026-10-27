@@ -224,6 +224,8 @@ Paths use the OpenAPI `{param}` form.
 | GET | `/v1/customers/{id}` | `customers:read` |  |
 | PATCH | `/v1/customers/{id}` | `customers:write` |  |
 | DELETE | `/v1/customers/{id}` | `customers:write` |  |
+| POST | `/v1/customers/{id}/wallets` | `customers:write` |  |
+| DELETE | `/v1/customers/{id}/wallets/{walletId}` | `customers:write` |  |
 | GET | `/v1/health/liveness` | none — `@Public()` |  |
 | GET | `/v1/health/readiness` | none — `@Public()` |  |
 | GET | `/v1/kyc/bank-details` | `kyc:read` |  |
@@ -2109,6 +2111,28 @@ the service under `src/native-plugins/<slug>/`, switched on by the same
   `openapi:generate` turns them all on.
 
 ## Upgrading — breaking changes and deploy notes
+
+### Customers: wallets on several chains instead of one account
+
+- **A customer holds wallets** (`wallets`: `chain`, `address`, `label`), as many as it
+  needs up to 20, on Stellar, Solana or Monad. `POST /v1/customers` takes `wallets`; the new
+  routes `POST /v1/customers/{id}/wallets` and `DELETE /v1/customers/{id}/wallets/{walletId}`
+  add and remove one. A wallet belongs to one customer of a merchant: one another customer
+  already holds answers `409 customer_wallet_taken` (a new error code).
+- **`account` is deprecated, not removed.** Responses keep it as the first wallet's address
+  (null without wallets). On create it adds a wallet; on `PATCH` an address replaces the
+  first wallet (or adds one) and null removes it, as it edited the one account before.
+  `PATCH` does not take `wallets`.
+- **`payments`, `succeeded` and `total` add up every wallet** of a customer, each on its
+  own chain and the key's network.
+- **Migration `20261027120000_customer_wallets`:** a `customer_wallet` table; every stored
+  `account` becomes its customer's first wallet, on the chain its shape names, then the
+  `account` column is dropped. When two customers of one merchant held the same account,
+  the older keeps it; an account that could not move is appended to the customer's `note`
+  as `Previous account: ...`.
+- **A settled payment's payer is matched by wallet and chain:** a payer already among a
+  customer's wallets is not added again; a new one becomes an automatic customer with that
+  wallet.
 
 ### Merchant fee: `merchantFee` on swaps, and a nullable column on seven tables
 

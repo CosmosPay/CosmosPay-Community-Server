@@ -154,6 +154,13 @@ export enum ApiErrorCode {
    */
   RateLimited = 'rate_limited',
 
+  // --- customers -------------------------------------------------------------
+  /**
+   * Another customer of the same merchant already holds that wallet: a wallet belongs to one
+   * customer, so a payment's payer counts toward exactly one.
+   */
+  CustomerWalletTaken = 'customer_wallet_taken',
+
   // --- aliases ---------------------------------------------------------------
   /** The handle is already claimed. First claim wins; there is no queue. */
   AliasTaken = 'alias_taken',

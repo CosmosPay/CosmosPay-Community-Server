@@ -80,3 +80,77 @@ describe('CreateCustomerDto.account', () => {
     );
   });
 });
+
+/**
+ * `wallets` names each wallet's chain, and the address must be that chain's: a customer holds
+ * any number of them, up to the cap, each with an optional label.
+ */
+describe('CreateCustomerDto.wallets', () => {
+  async function walletErrors(body: Record<string, unknown>) {
+    const found = await validate(
+      plainToInstance(CreateCustomerDto, { name: 'Ada', ...body }),
+    );
+    const flat = (errs: typeof found): string[] =>
+      errs.flatMap((e) => [
+        ...Object.values(e.constraints ?? {}),
+        ...flat(e.children ?? []),
+      ]);
+    return flat(found.filter((e) => e.property === 'wallets'));
+  }
+
+  it('accepts wallets on every chain, with or without a label', async () => {
+    expect(
+      await walletErrors({
+        wallets: [
+          { chain: 'stellar', address: STELLAR, label: 'Freighter' },
+          { chain: 'solana', address: SOLANA },
+          { chain: 'monad', address: MONAD.toLowerCase() },
+        ],
+      }),
+    ).toEqual([]);
+  });
+
+  it('refuses an address of another chain than the one named', async () => {
+    expect(
+      await walletErrors({ wallets: [{ chain: 'solana', address: STELLAR }] }),
+    ).toEqual([
+      'address must be a valid Solana address (base58, 32 bytes) for chain solana',
+    ]);
+  });
+
+  it('refuses a chain payments do not settle on', async () => {
+    const errors = await walletErrors({
+      wallets: [{ chain: 'eth', address: MONAD }],
+    });
+    expect(errors).toContain(
+      'chain must be one of the following values: stellar, solana, monad',
+    );
+  });
+
+  it('refuses more than 20 wallets and a label longer than 60 characters', async () => {
+    const many = Array.from({ length: 21 }, () => ({
+      chain: 'stellar',
+      address: STELLAR,
+    }));
+    expect(await walletErrors({ wallets: many })).toContain(
+      'wallets must contain no more than 20 elements',
+    );
+    expect(
+      await walletErrors({
+        wallets: [
+          { chain: 'stellar', address: STELLAR, label: 'x'.repeat(61) },
+        ],
+      }),
+    ).toEqual(['label must be shorter than or equal to 60 characters']);
+  });
+
+  it('is not part of an update: wallets have their own routes', async () => {
+    const found = await validate(
+      plainToInstance(UpdateCustomerDto, {
+        wallets: [{ chain: 'stellar', address: STELLAR }],
+      }),
+      { whitelist: true, forbidNonWhitelisted: true },
+    );
+    expect(found.map((e) => e.property)).toEqual(['wallets']);
+  });
+});

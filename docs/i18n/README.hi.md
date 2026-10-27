@@ -224,6 +224,8 @@ Paths OpenAPI के `{param}` रूप में लिखे गए हैं
 | GET | `/v1/customers/{id}` | `customers:read` |  |
 | PATCH | `/v1/customers/{id}` | `customers:write` |  |
 | DELETE | `/v1/customers/{id}` | `customers:write` |  |
+| POST | `/v1/customers/{id}/wallets` | `customers:write` |  |
+| DELETE | `/v1/customers/{id}/wallets/{walletId}` | `customers:write` |  |
 | GET | `/v1/health/liveness` | कोई नहीं — `@Public()` |  |
 | GET | `/v1/health/readiness` | कोई नहीं — `@Public()` |  |
 | GET | `/v1/kyc/bank-details` | `kyc:read` |  |
@@ -2101,6 +2103,28 @@ seal होती हैं और कभी लौटाई नहीं जा
   `openapi:generate` सभी को चालू करता है।
 
 ## अपग्रेड — breaking changes और deploy नोट्स
+
+### Customers: एक account की जगह कई chains पर wallets
+
+- **एक customer के पास wallets होते हैं** (`wallets`: `chain`, `address`, `label`), ज़रूरत के
+  हिसाब से 20 तक, Stellar, Solana या Monad पर। `POST /v1/customers` `wallets` लेता है; नए routes
+  `POST /v1/customers/{id}/wallets` और `DELETE /v1/customers/{id}/wallets/{walletId}` एक wallet
+  जोड़ते और हटाते हैं। एक wallet किसी merchant के एक ही customer का होता है: जो wallet किसी दूसरे
+  customer के पास पहले से है, उस पर `409 customer_wallet_taken` (नया error code) मिलता है।
+- **`account` deprecated है, हटाया नहीं गया।** Responses में यह पहले wallet का address रहता है
+  (wallets न हों तो null)। Create पर यह एक wallet जोड़ता है; `PATCH` पर एक address पहले wallet को
+  बदल देता है (या एक जोड़ता है) और null उसे हटा देता है, जैसे पहले यह अकेले account को edit करता था।
+  `PATCH` `wallets` नहीं लेता।
+- **`payments`, `succeeded` और `total` एक customer के सभी wallets को जोड़ते हैं**, हर wallet अपनी
+  chain पर और key के network पर।
+- **Migration `20261027120000_customer_wallets`:** एक `customer_wallet` table; हर stored
+  `account` अपने customer का पहला wallet बन जाता है, उस chain पर जिसे उसका shape बताता है, फिर
+  `account` column हटा दिया जाता है। अगर किसी merchant के दो customers के पास एक ही account था,
+  तो पुराना customer उसे रखता है; जो account move नहीं हो सका, वह customer के `note` में
+  `Previous account: ...` के रूप में जोड़ दिया जाता है।
+- **Settled payment का payer wallet और chain से match होता है:** जो payer पहले से किसी customer के
+  wallets में है, उसे दोबारा नहीं जोड़ा जाता; नया payer उस wallet के साथ एक automatic customer बन
+  जाता है।
 
 ### मर्चेंट फ़ीस: swaps पर `merchantFee` और सात टेबलों में एक वैकल्पिक कॉलम
 

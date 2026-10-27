@@ -387,6 +387,13 @@ export const API_ERROR_CASES: Readonly<Record<ApiErrorCode, ApiErrorCase>> = {
     message: 'The recovery token is unknown, expired or already used.',
     path: '/v1/aliases/alice/recovery/complete',
   },
+  [ApiErrorCode.CustomerWalletTaken]: {
+    statuses: [409],
+    summary: 'Another of your customers already holds that wallet',
+    message:
+      'The wallet GCALNQQBXAPZ2WIRSDDBMSTAKCUH5SG6U76YBFLQLIXJTF7FE5AX7AOO (stellar) already belongs to customer clz9xcust00002.',
+    path: '/v1/customers/clz9xcust00001/wallets',
+  },
   [ApiErrorCode.AliasAddressConflict]: {
     statuses: [400],
     summary: 'The address is already on the alias, or the alias is at its cap',

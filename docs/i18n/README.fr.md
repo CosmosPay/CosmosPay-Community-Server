@@ -225,6 +225,8 @@ Les chemins utilisent la forme OpenAPI `{param}`.
 | GET | `/v1/customers/{id}` | `customers:read` |  |
 | PATCH | `/v1/customers/{id}` | `customers:write` |  |
 | DELETE | `/v1/customers/{id}` | `customers:write` |  |
+| POST | `/v1/customers/{id}/wallets` | `customers:write` |  |
+| DELETE | `/v1/customers/{id}/wallets/{walletId}` | `customers:write` |  |
 | GET | `/v1/health/liveness` | aucun — `@Public()` |  |
 | GET | `/v1/health/readiness` | aucun — `@Public()` |  |
 | GET | `/v1/kyc/bank-details` | `kyc:read` |  |
@@ -2181,6 +2183,29 @@ plugins isolés.
   `openapi:generate` les active tous.
 
 ## Mise à niveau — changements incompatibles et notes de déploiement
+
+### Clients : des wallets sur plusieurs chaînes au lieu d'un compte
+
+- **Un client détient des wallets** (`wallets` : `chain`, `address`, `label`), autant qu'il
+  en faut jusqu'à 20, sur Stellar, Solana ou Monad. `POST /v1/customers` accepte `wallets` ;
+  les nouvelles routes `POST /v1/customers/{id}/wallets` et
+  `DELETE /v1/customers/{id}/wallets/{walletId}` en ajoutent et en retirent un. Un wallet
+  appartient à un seul client d'un marchand : un wallet qu'un autre client détient déjà répond
+  `409 customer_wallet_taken` (un nouveau code d'erreur).
+- **`account` est obsolète, pas supprimé.** Les réponses le gardent comme l'adresse du premier
+  wallet (null sans wallet). À la création il ajoute un wallet ; sur `PATCH` une adresse
+  remplace le premier wallet (ou en ajoute un) et null le retire, comme il modifiait l'unique
+  compte auparavant. `PATCH` n'accepte pas `wallets`.
+- **`payments`, `succeeded` et `total` additionnent tous les wallets** d'un client, chacun sur
+  sa chaîne et le réseau de la clé.
+- **Migration `20261027120000_customer_wallets` :** une table `customer_wallet` ; chaque
+  `account` stocké devient le premier wallet de son client, sur la chaîne que sa forme indique,
+  puis la colonne `account` est supprimée. Si deux clients d'un marchand avaient le même
+  compte, le plus ancien le garde ; un compte qui n'a pas pu être déplacé est ajouté à la
+  `note` du client sous la forme `Previous account: ...`.
+- **Le payeur d'un paiement réglé est retrouvé par wallet et par chaîne :** un payeur déjà parmi
+  les wallets d'un client n'est pas ajouté de nouveau ; un nouveau devient un client automatique
+  avec ce wallet.
 
 ### Frais du marchand : `merchantFee` sur les swaps, et une colonne facultative sur sept tables
 

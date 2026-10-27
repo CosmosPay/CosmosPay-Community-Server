@@ -68,16 +68,36 @@ model Customer {
   // A friendly display alias the merchant can assign (e.g. "Acme — billing").
   alias     String?
   email     String?
-  // Optional Stellar account to associate the customer with on-chain activity.
-  account   String?
   note      String? // free-form merchant note
   reference String? // merchant reference / external id
+  // The customer's wallets, on any chain payments settle on (customer_wallet).
+  wallets   CustomerWallet[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([consumerId])
   @@map("customer")
+}
+
+// A wallet of a customer: one customer has any number of them, on Stellar, Solana or Monad.
+// A wallet belongs to one customer of a merchant (unique per consumer, chain and address), so
+// a payment's payer counts toward exactly one customer. `consumerId` repeats the customer's
+// for that constraint and for the payer lookup on settlement.
+model CustomerWallet {
+  id         String   @id @default(cuid())
+  consumerId String
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  chain      String
+  // In its chain's stored spelling (EIP-55 on Monad), as payment intents record a payer.
+  address    String
+  label      String?
+  createdAt  DateTime @default(now())
+
+  @@unique([consumerId, chain, address])
+  @@index([customerId])
+  @@map("customer_wallet")
 }
 
 // Append-only access log of API requests reaching the service (written by the

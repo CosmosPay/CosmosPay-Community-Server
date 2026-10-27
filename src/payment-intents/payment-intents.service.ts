@@ -1068,9 +1068,9 @@ export class PaymentIntentsService {
    */
   private recordPayer(intent: PaymentIntent, payer?: string): void {
     const account = payer ?? intent.source;
-    if (!account) return;
+    if (!account || !isChain(intent.chain)) return;
     void this.customers
-      .ensureForPayer(intent.consumerId, account)
+      .ensureForPayer(intent.consumerId, intent.chain, account)
       .catch((err) =>
         this.logger.warn(
           `Could not auto-create customer for intent ${intent.id}: ${String(err)}`,

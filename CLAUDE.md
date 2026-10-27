@@ -283,6 +283,12 @@ table. These are the rules that did not hold on their own:
   A field that names no chain but takes any (a customer's `account`) reads the
   chain from the shape: `@IsAnyChainAddress()` to validate, `normalizeAnyChainAddress`
   to store (EIP-55 on Monad, the spelling payment intents record a payer in).
+- **A customer holds wallets** (`customer_wallet`, product owner 2026-10-27: one customer pays from
+  several wallets on different chains). A wallet belongs to one customer of a merchant: the
+  unique index is `(consumerId, chain, address)`, so a payment's payer counts toward exactly one
+  customer and the payer recorded on settlement (`ensureForPayer`) is looked up by chain and
+  address. `account` is the deprecated first wallet: answered from `wallets`, and on `PATCH` it
+  edits that wallet only. Wallets change through their own routes, never through `PATCH`.
 - **Solana and Monad are reached only through `SolanaRpcClient` / `EvmRpcClient`**,
   which check the node's genesis hash / `eth_chainId` before trusting it. Never
   call a node URL directly. Stellar mainnet's Soroban RPC is the same rule:

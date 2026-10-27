@@ -227,6 +227,8 @@ Konsolen-Backend erreicht sie. Pfade verwenden die OpenAPI-Form `{param}`.
 | GET | `/v1/customers/{id}` | `customers:read` |  |
 | PATCH | `/v1/customers/{id}` | `customers:write` |  |
 | DELETE | `/v1/customers/{id}` | `customers:write` |  |
+| POST | `/v1/customers/{id}/wallets` | `customers:write` |  |
+| DELETE | `/v1/customers/{id}/wallets/{walletId}` | `customers:write` |  |
 | GET | `/v1/health/liveness` | keiner — `@Public()` |  |
 | GET | `/v1/health/readiness` | keiner — `@Public()` |  |
 | GET | `/v1/kyc/bank-details` | `kyc:read` |  |
@@ -2223,6 +2225,29 @@ eingeschaltet werden.
   eingeschaltet oder nicht: `openapi:generate` schaltet alle ein.
 
 ## Upgrade — Breaking Changes und Deploy-Hinweise
+
+### Kunden: Wallets auf mehreren Chains statt eines Kontos
+
+- **Ein Kunde hat Wallets** (`wallets`: `chain`, `address`, `label`), so viele wie nötig bis
+  20, auf Stellar, Solana oder Monad. `POST /v1/customers` nimmt `wallets` an; die neuen Routen
+  `POST /v1/customers/{id}/wallets` und `DELETE /v1/customers/{id}/wallets/{walletId}` fügen
+  eine hinzu oder entfernen sie. Eine Wallet gehört zu genau einem Kunden eines Händlers: eine,
+  die bereits ein anderer Kunde hat, antwortet mit `409 customer_wallet_taken` (ein neuer
+  Fehlercode).
+- **`account` ist veraltet, nicht entfernt.** Antworten behalten es als Adresse der ersten
+  Wallet (null ohne Wallets). Beim Anlegen fügt es eine Wallet hinzu; bei `PATCH` ersetzt eine
+  Adresse die erste Wallet (oder fügt eine hinzu) und null entfernt sie, so wie es zuvor das
+  einzige Konto bearbeitete. `PATCH` nimmt `wallets` nicht an.
+- **`payments`, `succeeded` und `total` summieren alle Wallets** eines Kunden, jede auf ihrer
+  Chain und im Netzwerk des Schlüssels.
+- **Migration `20261027120000_customer_wallets`:** eine Tabelle `customer_wallet`; jedes
+  gespeicherte `account` wird zur ersten Wallet seines Kunden, auf der Chain, die seine Form
+  angibt, danach wird die Spalte `account` gelöscht. Hatten zwei Kunden eines Händlers
+  dasselbe Konto, behält es der ältere; ein Konto, das nicht übertragen werden konnte, wird als
+  `Previous account: ...` an die `note` des Kunden angehängt.
+- **Der Zahler einer abgewickelten Zahlung wird über Wallet und Chain gefunden:** ein Zahler, der
+  schon unter den Wallets eines Kunden ist, wird nicht erneut angelegt; ein neuer wird ein
+  automatischer Kunde mit dieser Wallet.
 
 ### Händlergebühr: `merchantFee` auf Swaps und eine optionale Spalte in sieben Tabellen
 

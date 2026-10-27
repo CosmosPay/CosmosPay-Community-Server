@@ -227,6 +227,8 @@ console chega até ela. Os caminhos usam a forma `{param}` do OpenAPI.
 | GET | `/v1/customers/{id}` | `customers:read` |  |
 | PATCH | `/v1/customers/{id}` | `customers:write` |  |
 | DELETE | `/v1/customers/{id}` | `customers:write` |  |
+| POST | `/v1/customers/{id}/wallets` | `customers:write` |  |
+| DELETE | `/v1/customers/{id}/wallets/{walletId}` | `customers:write` |  |
 | GET | `/v1/health/liveness` | nenhum — `@Public()` |  |
 | GET | `/v1/health/readiness` | nenhum — `@Public()` |  |
 | GET | `/v1/kyc/bank-details` | `kyc:read` |  |
@@ -2154,6 +2156,28 @@ serviço em `src/native-plugins/<slug>/`, ligados pela mesma lista
   `openapi:generate` liga todos.
 
 ## Atualização — mudanças incompatíveis e notas de deploy
+
+### Clientes: wallets em várias chains em vez de uma conta
+
+- **Um cliente tem wallets** (`wallets`: `chain`, `address`, `label`), quantas precisar até
+  20, na Stellar, Solana ou Monad. `POST /v1/customers` aceita `wallets`; as novas rotas
+  `POST /v1/customers/{id}/wallets` e `DELETE /v1/customers/{id}/wallets/{walletId}` adicionam e
+  removem uma. Uma wallet pertence a um único cliente de um comerciante: uma que outro cliente
+  já tem responde `409 customer_wallet_taken` (um novo código de erro).
+- **`account` fica obsoleto, não é removido.** As respostas o mantêm como o endereço da
+  primeira wallet (null sem wallets). Na criação ele adiciona uma wallet; no `PATCH` um
+  endereço substitui a primeira wallet (ou adiciona uma) e null a remove, como editava a única
+  conta antes. O `PATCH` não aceita `wallets`.
+- **`payments`, `succeeded` e `total` somam todas as wallets** de um cliente, cada uma na sua
+  chain e na rede da key.
+- **Migração `20261027120000_customer_wallets`:** uma tabela `customer_wallet`; cada `account`
+  armazenada vira a primeira wallet do seu cliente, na chain que o seu formato indica, e depois
+  a coluna `account` é removida. Se dois clientes de um comerciante tinham a mesma conta, o
+  mais antigo fica com ela; uma conta que não pôde ser movida é acrescentada à `note` do
+  cliente como `Previous account: ...`.
+- **O pagador de um pagamento liquidado é buscado por wallet e chain:** um pagador que já está
+  entre as wallets de um cliente não é adicionado de novo; um novo vira um cliente automático
+  com essa wallet.
 
 ### Taxa do comerciante: `merchantFee` nos swaps e uma coluna opcional em sete tabelas
 

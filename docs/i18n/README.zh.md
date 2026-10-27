@@ -191,6 +191,8 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | GET | `/v1/customers/{id}` | `customers:read` |  |
 | PATCH | `/v1/customers/{id}` | `customers:write` |  |
 | DELETE | `/v1/customers/{id}` | `customers:write` |  |
+| POST | `/v1/customers/{id}/wallets` | `customers:write` |  |
+| DELETE | `/v1/customers/{id}/wallets/{walletId}` | `customers:write` |  |
 | GET | `/v1/health/liveness` | 无 — `@Public()` |  |
 | GET | `/v1/health/readiness` | 无 — `@Public()` |  |
 | GET | `/v1/kyc/bank-details` | `kyc:read` |  |
@@ -1400,6 +1402,14 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
 - **OpenAPI 契约记录每个原生插件的路由**，无论是否开启：`openapi:generate` 会全部开启。
 
 ## 升级 — 破坏性变更与部署说明
+
+### 客户：用多条链上的钱包取代单一账户
+
+- **一个客户拥有钱包**（`wallets`：`chain`、`address`、`label`），按需最多 20 个，位于 Stellar、Solana 或 Monad。`POST /v1/customers` 接受 `wallets`；新路由 `POST /v1/customers/{id}/wallets` 和 `DELETE /v1/customers/{id}/wallets/{walletId}` 用于添加和移除钱包。一个钱包只属于商户的一个客户：若该钱包已属于另一个客户，返回 `409 customer_wallet_taken`（新错误码）。
+- **`account` 已弃用，但未移除。** 响应中它保留为第一个钱包的地址（没有钱包时为 null）。创建时它会添加一个钱包；在 `PATCH` 中，地址会替换第一个钱包（或添加一个），null 则移除它，与以前编辑唯一账户的方式相同。`PATCH` 不接受 `wallets`。
+- **`payments`、`succeeded` 和 `total` 汇总客户的所有钱包**，每个钱包按其所在链和 key 的网络统计。
+- **迁移 `20261027120000_customer_wallets`：** 新增 `customer_wallet` 表；每个已存储的 `account` 成为其客户的第一个钱包，链由地址格式判断，随后删除 `account` 列。若同一商户的两个客户拥有相同账户，由较早创建的客户保留；无法迁移的账户会以 `Previous account: ...` 的形式追加到客户的 `note` 中。
+- **已结算付款的付款人按钱包和链匹配：** 已在某个客户钱包中的付款人不会被重复添加；新的付款人会成为带有该钱包的自动客户。
 
 ### 商户手续费：兑换上的 `merchantFee`，以及七张表上的可空列
 
