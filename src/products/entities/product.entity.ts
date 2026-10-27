@@ -4,7 +4,7 @@ export class ProductEntity {
   @ApiProperty({ example: 'clx9z8a1b0000abcd1234efgh' })
   id!: string;
 
-  @ApiProperty({ example: 'Pro plan — monthly' })
+  @ApiProperty({ example: 'Pro plan (monthly)' })
   name!: string;
 
   @ApiProperty({ nullable: true, example: 'Full access, billed every month.' })

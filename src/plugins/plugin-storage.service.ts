@@ -186,7 +186,7 @@ function serializeValue(value: PluginJson): Prisma.InputJsonValue {
   }
   if (text === undefined || value === null) {
     throw new PluginError(
-      'Storage value must be JSON and not null — delete the key instead',
+      'Storage value must be JSON and not null. Delete the key instead',
     );
   }
   if (Buffer.byteLength(text) > PLUGIN_MAX_VALUE_BYTES) {

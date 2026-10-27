@@ -1,4 +1,5 @@
 import { Keypair } from '@stellar/stellar-sdk';
+import { merchantFeeRecord } from '@/common/merchant-fee/merchant-fee';
 import { SwapRequestTerms, swapMatchesRequest } from '@/swaps/swap-idempotency';
 
 const VICTIM = Keypair.random().publicKey();
@@ -17,7 +18,19 @@ function terms(overrides: Partial<SwapRequestTerms> = {}): SwapRequestTerms {
     destAssetIssuer: ISSUER,
     slippageBps: 50,
     memo: null,
+    merchantFee: null,
     ...overrides,
+  };
+}
+
+/** A stored row's terms: the merchant fee as its record. */
+function stored(overrides: Partial<SwapRequestTerms> = {}) {
+  const t = terms(overrides);
+  return {
+    ...t,
+    merchantFee: t.merchantFee
+      ? merchantFeeRecord(t.merchantFee, 1n, 7, t.sendAsset)
+      : null,
   };
 }
 
@@ -61,5 +74,40 @@ describe('swapMatchesRequest', () => {
     expect(
       swapMatchesRequest(terms(), terms({ sendAmount: '1000000000000' })),
     ).toBe(false);
+  });
+
+  it('matches a merchant fee only with the same terms, as the destination', () => {
+    // The fee pays a wallet the caller names: a replay that names another
+    // wallet (or drops or adds the fee) is another swap to sign.
+    const fee = {
+      bps: 150,
+      fixed: 0n,
+      wallet: ATTACKER,
+      paidBy: 'recipient' as const,
+    };
+    expect(
+      swapMatchesRequest(
+        stored({ merchantFee: fee }),
+        terms({ merchantFee: fee }),
+      ),
+    ).toBe(true);
+    expect(
+      swapMatchesRequest(
+        stored({ merchantFee: fee }),
+        terms({ merchantFee: { ...fee, wallet: VICTIM } }),
+      ),
+    ).toBe(false);
+    expect(
+      swapMatchesRequest(
+        stored({ merchantFee: fee }),
+        terms({ merchantFee: { ...fee, paidBy: 'payer' } }),
+      ),
+    ).toBe(false);
+    expect(swapMatchesRequest(stored({ merchantFee: fee }), terms())).toBe(
+      false,
+    );
+    expect(swapMatchesRequest(stored(), terms({ merchantFee: fee }))).toBe(
+      false,
+    );
   });
 });

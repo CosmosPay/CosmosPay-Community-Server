@@ -6,14 +6,28 @@ import type {
   SwapStatus,
   WebhookEventType,
 } from '@generated/prisma/client';
-import { normalizeAddress } from '@/chains/chain-address';
+import { CHAIN_ADDRESS_RULES, normalizeAddress } from '@/chains/chain-address';
+import {
+  assertMerchantFeeCovered,
+  type MerchantFeeRecord,
+  type MerchantFeeTerms,
+  merchantFeeRecord,
+  resolveMerchantFee,
+  sameMerchantFee,
+  splitMerchantFee,
+} from '@/common/merchant-fee/merchant-fee';
 import type { OtherChain } from '@/chains/chains.constants';
 import { formatUnits, parseUnits } from '@/chains/units';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
-import { resolvePlanCommissionBps } from '@/common/plan-commission';
+import {
+  commissionWithRecipient,
+  resolvePlanCommissionBps,
+} from '@/common/plan-commission';
 import { isUniqueViolation } from '@/common/prisma-errors';
 import { project } from '@/common/projection';
+import { PublicRecordTokens } from '@/common/public-record-token';
+import type { LegacyRecordTokenRoute } from '@/common/public-record-token.constants';
 import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
 import { resolveNetwork } from '@/common/stellar-network';
 import type { AppConfig } from '@/config/configuration';
@@ -59,6 +73,7 @@ export const CHAIN_SWAP_PUBLIC_SELECT = {
   destMin: true,
   feeBps: true,
   feeAmount: true,
+  merchantFee: true,
   slippageBps: true,
   path: true,
   transaction: true,
@@ -85,6 +100,10 @@ export interface ChainSwapSubmitOutcome {
 /** A priced request, before or after building. */
 interface Priced {
   chain: OtherChain;
+  /** The gross amount the request named (`request.amount` is what is routed). */
+  amount: bigint;
+  /** The merchant fee, in the source asset; null without one. */
+  merchantFee: { terms: MerchantFeeTerms; record: MerchantFeeRecord } | null;
   request: VenueRequest;
 }
 
@@ -125,6 +144,7 @@ export class ChainSwapsService {
     private readonly consumers: ConsumerResolverService,
     solana: SolanaSwapVenue,
     monad: MonadSwapVenue,
+    private readonly recordTokens: PublicRecordTokens,
   ) {
     this.venues = { solana, monad };
   }
@@ -138,7 +158,8 @@ export class ChainSwapsService {
     const priced = await this.price(consumer, dto, dto.sourceAssetCode);
     const quote = await this.venues[priced.chain].quote(priced.request);
     const { send, dest } = priced.request;
-    const sendAmount = formatUnits(priced.request.amount, send.decimals);
+    const sendAmount = formatUnits(priced.amount, send.decimals);
+    const routed = formatUnits(priced.request.amount, send.decimals);
     return {
       network: 'public',
       chain: priced.chain,
@@ -152,8 +173,10 @@ export class ChainSwapsService {
         wallet: priced.request.feeWallet,
         label: SWAP_COMMISSION_MEMO,
       },
-      // The whole input is routed: the commission comes out of the output.
-      swap: { asset: send.asset, issuer: null, amount: sendAmount },
+      // The input is routed (less a merchant fee the recipient pays): the
+      // commission comes out of the output.
+      swap: { asset: send.asset, issuer: null, amount: routed },
+      merchantFee: priced.merchantFee?.record ?? null,
       destination: {
         asset: dest.asset,
         issuer: null,
@@ -172,8 +195,23 @@ export class ChainSwapsService {
    * second build); with a different request, 409 — and the conflict says
    * nothing about the stored swap, because on the shared public key whoever
    * reuses a key may not be who created it.
+   *
+   * On the shared public key the answer carries `publicToken`, the swap's read
+   * token (`PublicRecordTokens`), the same on a replay.
    */
   async create(
+    consumer: GatewayConsumer,
+    dto: CreateSwapDto,
+    headerIdempotencyKey?: string,
+  ): Promise<PublicChainSwap & { publicToken?: string }> {
+    return this.recordTokens.attach(
+      consumer,
+      'chain-swap',
+      await this.build(consumer, dto, headerIdempotencyKey),
+    );
+  }
+
+  private async build(
     consumer: GatewayConsumer,
     dto: CreateSwapDto,
     headerIdempotencyKey?: string,
@@ -188,7 +226,7 @@ export class ChainSwapsService {
 
     if (idempotencyKey) {
       const existing = await this.findByKey(local.id, idempotencyKey);
-      if (existing) return this.replay(existing, terms, consumer);
+      if (existing) return this.replay(existing, terms, consumer, priced);
     }
 
     const { chain } = priced;
@@ -210,6 +248,12 @@ export class ChainSwapsService {
       destMin: formatUnits(built.destMin, request.dest.decimals),
       feeBps: request.feeBps,
       feeAmount: formatUnits(built.feeAmount, request.dest.decimals),
+      ...(priced.merchantFee
+        ? {
+            merchantFee: priced.merchantFee
+              .record as unknown as Prisma.InputJsonValue,
+          }
+        : {}),
       slippageBps: request.slippageBps,
       path: built.path as unknown as Prisma.InputJsonValue,
       transaction: built.transaction as Prisma.InputJsonValue,
@@ -222,7 +266,7 @@ export class ChainSwapsService {
 
     if (!row) {
       const raced = await this.findByKey(local.id, idempotencyKey!);
-      if (raced) return this.replay(raced, terms, consumer);
+      if (raced) return this.replay(raced, terms, consumer, priced);
       throw ApiError.conflict(
         ApiErrorCode.IdempotencyConflict,
         'A swap with this Idempotency-Key already exists.',
@@ -250,6 +294,10 @@ export class ChainSwapsService {
     const where = {
       chain,
       consumer: { apisixUsername: consumer.username },
+      // Only the network this key targets (`resolveNetwork`): a production key never lists a
+      // test-network row, nor a sandbox key a mainnet one.
+      // These swaps are mainnet only (always `public`), so a sandbox key lists none.
+      network: resolveNetwork(this.config, consumer),
       ...(query.status ? { status: query.status } : {}),
     };
     // `Promise.all`, not `$transaction` — see `@/common/pagination` for why.
@@ -269,12 +317,42 @@ export class ChainSwapsService {
   /**
    * The caller's Solana or Monad swap by id, or null when it has none — the
    * `/v1/swaps/{id}` routes then fall through to the Stellar table, whose 404
-   * is the one a miss has always answered.
+   * is the one a miss has always answered. The shared public key also needs
+   * the swap's record token (`recordToken`, from `X-Record-Token`); without the
+   * right one this is a miss too, decided before the table is read. On a
+   * legacy route (`legacyRoute`, the submit) a missing token is still
+   * admitted for now, and logged once the swap is found.
    */
-  findOwned(consumer: GatewayConsumer, id: string): Promise<ChainSwap | null> {
-    return this.prisma.chainSwap.findFirst({
+  async findOwned(
+    consumer: GatewayConsumer,
+    id: string,
+    recordToken?: string,
+    legacyRoute?: LegacyRecordTokenRoute,
+  ): Promise<ChainSwap | null> {
+    if (
+      !this.recordTokens.admits(
+        consumer,
+        'chain-swap',
+        id,
+        recordToken,
+        legacyRoute,
+      )
+    ) {
+      return null;
+    }
+    const swap = await this.prisma.chainSwap.findFirst({
       where: { id, consumer: { apisixUsername: consumer.username } },
     });
+    if (swap && legacyRoute) {
+      this.recordTokens.noteLegacyAccess(
+        consumer,
+        'chain-swap',
+        id,
+        recordToken,
+        legacyRoute,
+      );
+    }
+    return swap;
   }
 
   present(swap: ChainSwap): PublicChainSwap {
@@ -388,12 +466,21 @@ export class ChainSwapsService {
     if (resolveNetwork(this.config, consumer) !== 'public') {
       throw ApiError.badRequest(
         ApiErrorCode.NetworkUnsupported,
-        `Swaps on ${chain} run on mainnet only — ${
+        `Swaps on ${chain} run on mainnet only: ${
           CHAIN_SWAP_PROVIDERS[chain] === 'jupiter' ? 'Jupiter' : 'Kuru Flow'
         } has no test network. Use a prod API key.`,
       );
     }
     this.refuseStellarOnlyFields(chain, dto);
+    const unsupported = dto.merchantFee
+      ? this.venues[chain].merchantFeeUnsupported()
+      : null;
+    if (unsupported) {
+      throw ApiError.badRequest(
+        ApiErrorCode.MerchantFeeUnsupported,
+        `A merchant fee is not available on ${chain} swaps on this deployment: ${unsupported}.`,
+      );
+    }
     if (!sourceAssetCode) {
       throw ApiError.badRequest(
         ApiErrorCode.ValidationFailed,
@@ -413,30 +500,64 @@ export class ChainSwapsService {
       );
     }
     const amount = this.baseUnits(dto.amount, send);
+    // The merchant fee is paid in the source asset, out of the source wallet:
+    // taken from `amount` (the swap routes less) or sent beside it.
+    const merchant = resolveMerchantFee(
+      dto.merchantFee,
+      send.decimals,
+      CHAIN_ADDRESS_RULES[chain],
+    );
+    if (
+      merchant &&
+      dto.source &&
+      normalizeAddress(chain, dto.source) === merchant.wallet
+    ) {
+      throw ApiError.badRequest(
+        ApiErrorCode.ValidationFailed,
+        'merchantFee.wallet must be another account than source',
+      );
+    }
+    const split = splitMerchantFee(amount, merchant);
+    assertMerchantFeeCovered(split, merchant);
     const slippageBps = resolveSlippage(
       dto.slippageBps,
       this.config.get('stellar', { infer: true }).swap,
     );
-    const feeBps = resolvePlanCommissionBps(this.config, consumer);
     const feeWallet = this.config.get(chain, { infer: true }).swapFeeWallet;
-    // A commission with nowhere to go is a misconfiguration, not a free swap.
-    if (feeBps > 0 && !feeWallet) {
-      throw ApiError.unavailable(
-        ApiErrorCode.Misconfigured,
-        `A swap commission applies to this plan but ${chain.toUpperCase()}_SWAP_FEE_WALLET is not set`,
-      );
-    }
+    // A commission with nowhere to go is a misconfiguration, not a free swap
+    // (waived only by SWAP_COMMISSION_DEV_WAIVER, outside production).
+    const feeBps = commissionWithRecipient(
+      this.config,
+      resolvePlanCommissionBps(this.config, consumer),
+      feeWallet,
+      `${chain.toUpperCase()}_SWAP_FEE_WALLET`,
+    );
     return {
       chain,
+      amount,
+      merchantFee: merchant
+        ? {
+            terms: merchant,
+            record: merchantFeeRecord(
+              merchant,
+              split.fee,
+              send.decimals,
+              send.asset,
+            ),
+          }
+        : null,
       request: {
         // A quote names no wallet; building always does.
         source: dto.source ? normalizeAddress(chain, dto.source) : null,
         send,
         dest,
-        amount,
+        amount: split.net,
         slippageBps,
         feeBps,
         feeWallet: feeBps > 0 ? feeWallet : null,
+        merchantFee: merchant
+          ? { wallet: merchant.wallet, amount: split.fee }
+          : null,
       },
     };
   }
@@ -492,12 +613,12 @@ export class ChainSwapsService {
   }
 
   // ── Idempotency ───────────────────────────────────────────────────────────
-  private termsOf({ chain, request }: Priced): ChainSwapTerms {
+  private termsOf({ chain, amount, request }: Priced): ChainSwapTerms {
     return {
       chain,
       source: request.source ?? '',
       sendAsset: request.send.asset,
-      sendAmount: formatUnits(request.amount, request.send.decimals),
+      sendAmount: formatUnits(amount, request.send.decimals),
       destAsset: request.dest.asset,
       slippageBps: request.slippageBps,
     };
@@ -507,10 +628,19 @@ export class ChainSwapsService {
     existing: ChainSwap,
     terms: ChainSwapTerms,
     consumer: GatewayConsumer,
+    priced: Priced,
   ): PublicChainSwap {
-    const same = (Object.keys(terms) as (keyof ChainSwapTerms)[]).every(
-      (key) => existing[key] === terms[key],
-    );
+    // The merchant fee is compared like the source: it pays a wallet the
+    // caller names.
+    const same =
+      (Object.keys(terms) as (keyof ChainSwapTerms)[]).every(
+        (key) => existing[key] === terms[key],
+      ) &&
+      sameMerchantFee(
+        existing.merchantFee,
+        priced.merchantFee?.terms ?? null,
+        priced.request.send.decimals,
+      );
     if (!same) {
       this.logger.warn(
         `Idempotency-Key reused for a different swap request ` +

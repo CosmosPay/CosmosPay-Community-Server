@@ -10,6 +10,13 @@ export interface GatewayCredential {
   labels: Record<string, string>;
 }
 
+/** One wallet consumer as the Admin API lists it — only the fields read here. */
+export interface WalletConsumer {
+  username: string;
+  forwarder: string | null;
+  labels: Record<string, string>;
+}
+
 /**
  * The APISIX Admin API, narrowed to what wallet provisioning needs.
  *
@@ -46,6 +53,35 @@ export class ApisixAdminClient {
     return (
       body?.value?.plugins?.['serverless-pre-function']?.functions?.[0] ?? null
     );
+  }
+
+  /**
+   * Every wallet consumer on the gateway. The Admin API lists them all; any
+   * outside `WALLET_CONSUMER_PREFIX` is dropped here, so a caller never sees a
+   * developer's consumer.
+   */
+  async listWalletConsumers(): Promise<WalletConsumer[]> {
+    const body = (await this.request('GET', '/consumers')) as {
+      list?: Array<{
+        value?: {
+          username?: string;
+          labels?: Record<string, string>;
+          plugins?: { 'serverless-pre-function'?: { functions?: string[] } };
+        };
+      }>;
+    } | null;
+    return (body?.list ?? []).flatMap((item) => {
+      const v = item?.value;
+      if (!v?.username?.startsWith(WALLET_CONSUMER_PREFIX)) return [];
+      return [
+        {
+          username: v.username,
+          forwarder:
+            v.plugins?.['serverless-pre-function']?.functions?.[0] ?? null,
+          labels: v.labels ?? {},
+        },
+      ];
+    });
   }
 
   /** Create or replace the consumer with exactly this plugin set and these labels. */

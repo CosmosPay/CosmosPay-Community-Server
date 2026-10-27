@@ -163,10 +163,10 @@ export class WalletAuthController {
   @ApiOperation({
     summary: 'Where the provider returns the browser after consent',
     description:
-      'Not called by your code — the person’s browser lands here. Public by ' +
+      'Not called by your code: the person’s browser lands here. Public by ' +
       'necessity: a navigation carries no API key and no gateway consumer. It ' +
-      'renders a page — or, when the handshake was opened with a `returnTo`, ' +
-      'redirects to it with the `state` — and nothing else; the identity is ' +
+      'renders a page (or, when the handshake was opened with a `returnTo`, ' +
+      'redirects to it with the `state`) and nothing else; the identity is ' +
       'collected by the device that holds the PKCE verifier. Register ' +
       '`{WALLET_AUTH_PUBLIC_BASE_URL}/v1/wallet/auth/oauth/callback/{provider}` ' +
       'with each provider.',
@@ -309,7 +309,7 @@ export class WalletAuthController {
   @ApiOperation({
     summary: 'Attach the proven identity to the account this device signs for',
     description:
-      'Send the session token as `X-Wallet-Session: {sessionToken}` — the ' +
+      'Send the session token as `X-Wallet-Session: {sessionToken}`. The ' +
       'gateway strips `Authorization`. The signature covers ' +
       'exactly:\n\n' +
       '```\n' +
@@ -375,7 +375,7 @@ export class WalletBackupController {
     summary: 'Replace the sealed box stored for an account',
     description:
       'What `changePassword` on the device sends. No session: the signature is ' +
-      'the credential, and it covers the SHA-256 of the box — so one signature ' +
+      'the credential, and it covers the SHA-256 of the box, so one signature ' +
       'stores exactly one box and cannot be replayed to store another. The ' +
       'bytes are:\n\n' +
       '```\n' +
@@ -424,7 +424,7 @@ export class WalletBackupController {
   @ApiOperation({
     summary: "Sponsor the reserve of an account's two recovery signers",
     description:
-      'Send the session token as `X-Wallet-Session: {sessionToken}` — the ' +
+      'Send the session token as `X-Wallet-Session: {sessionToken}`. The ' +
       'gateway strips `Authorization`. The signature covers ' +
       'exactly:\n\n' +
       '```\n' +

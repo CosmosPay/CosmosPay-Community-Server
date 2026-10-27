@@ -15,6 +15,7 @@ describe('PaymentIntentsService.transition (guards + audit)', () => {
     id: 'pi_1',
     consumerId: 'c1',
     kind: 'TX',
+    chain: 'stellar',
     source: 'GSRC',
     destination: 'GDEST',
     amount: '25.5',
@@ -29,6 +30,7 @@ describe('PaymentIntentsService.transition (guards + audit)', () => {
     uri: 'web+stellar:tx?xdr=xdr',
     txHash: null as string | null,
     reference: null,
+    checkoutTheme: null as string | null,
     expiresAt: new Date(Date.now() + 60_000),
     createdAt: new Date(),
     updatedAt: new Date(),
@@ -411,7 +413,11 @@ describe('PaymentIntentsService.transition (guards + audit)', () => {
     it('hands the on-chain payer to CustomersService and never writes the customer table', async () => {
       await settle('GPAYER');
 
-      expect(customers.ensureForPayer).toHaveBeenCalledWith('c1', 'GPAYER');
+      expect(customers.ensureForPayer).toHaveBeenCalledWith(
+        'c1',
+        'stellar',
+        'GPAYER',
+      );
       expect(prisma.customer.findFirst).not.toHaveBeenCalled();
       expect(prisma.customer.create).not.toHaveBeenCalled();
     });
@@ -419,7 +425,11 @@ describe('PaymentIntentsService.transition (guards + audit)', () => {
     it("falls back to the intent's own source when no payer was observed", async () => {
       await settle();
 
-      expect(customers.ensureForPayer).toHaveBeenCalledWith('c1', 'GSRC');
+      expect(customers.ensureForPayer).toHaveBeenCalledWith(
+        'c1',
+        'stellar',
+        'GSRC',
+      );
     });
 
     it('records nobody when neither a payer nor a source is known', async () => {
@@ -531,6 +541,116 @@ describe('PaymentIntentsService.transition (guards + audit)', () => {
 
       expect(err!.getStatus()).toBe(HttpStatus.CONFLICT);
       expect(err!.code).toBe(ApiErrorCode.OperationInFlight);
+    });
+  });
+
+  /**
+   * The checkout design is the merchant's, like `reference`: it proves nothing
+   * about the payment, so a PATCH sets it in any status, with or without a
+   * status change, and every answer names a design — never the stored null.
+   */
+  describe('the checkout design', () => {
+    const consumer = {
+      username: 'cosmos_u1',
+      credentialId: 'cred_1',
+      environment: 'dev',
+      role: 'user',
+      permissions: ['payments:write'],
+      organizationId: null,
+      plan: null,
+      planSwapFeeBps: null,
+    } as never;
+
+    it.each([
+      'PENDING',
+      'SUBMITTED',
+      'SUCCEEDED',
+      'FAILED',
+      'CANCELLED',
+      'EXPIRED',
+    ])(
+      'is changed on a %s intent, leaving its status and history alone',
+      async (status) => {
+        row.status = status;
+
+        const res = await service.update(consumer, row.id, {
+          checkoutTheme: 'ticket',
+        });
+
+        expect(prisma.paymentIntent.update).toHaveBeenCalledWith({
+          where: { id: 'pi_1' },
+          data: { checkoutTheme: 'ticket' },
+        });
+        expect(res.checkoutTheme).toBe('ticket');
+        expect(res.status).toBe(status);
+        expect(auditCreates).toEqual([]);
+      },
+    );
+
+    it('is changed alongside a status change', async () => {
+      const res = await service.update(consumer, row.id, {
+        status: 'CANCELLED',
+        checkoutTheme: 'split',
+      });
+
+      expect(res.status).toBe('CANCELLED');
+      expect(res.checkoutTheme).toBe('split');
+      expect(auditCreates).toHaveLength(1);
+    });
+
+    it('is written with a reported txHash, in the same guarded write', async () => {
+      const res = await service.update(consumer, row.id, {
+        txHash: 'c'.repeat(64),
+        checkoutTheme: 'card',
+      });
+
+      expect(prisma.paymentIntent.updateMany).toHaveBeenCalledWith({
+        where: { id: 'pi_1', status: 'PENDING' },
+        data: { txHash: 'c'.repeat(64), checkoutTheme: 'card' },
+      });
+      expect(res.checkoutTheme).toBe('card');
+    });
+
+    it('is left as it was by a PATCH that does not name it', async () => {
+      row.checkoutTheme = 'ticket';
+
+      const res = await service.update(consumer, row.id, {
+        reference: 'order_9',
+      });
+
+      expect(prisma.paymentIntent.update).toHaveBeenCalledWith({
+        where: { id: 'pi_1' },
+        data: { reference: 'order_9' },
+      });
+      expect(res.checkoutTheme).toBe('ticket');
+    });
+
+    it('reads as classic on an intent stored with none', async () => {
+      expect(row.checkoutTheme).toBeNull();
+      const res = await service.findOne(consumer, row.id);
+      expect(res.checkoutTheme).toBe('classic');
+    });
+
+    it("answers another consumer's intent as not found, and writes nothing", async () => {
+      // As the real query does: the id AND the caller's own consumer.
+      prisma.paymentIntent.findFirst.mockImplementationOnce(
+        async ({ where }: any) =>
+          where.id === row.id && where.consumer?.apisixUsername === 'cosmos_u1'
+            ? { ...row }
+            : null,
+      );
+
+      const err = await service
+        .update({ username: 'cosmos_other' } as never, row.id, {
+          checkoutTheme: 'card',
+        })
+        .then(() => null)
+        .catch((e: unknown) => e as ApiError);
+
+      expect(err!.getStatus()).toBe(HttpStatus.NOT_FOUND);
+      expect(err!.code).toBe(ApiErrorCode.NotFound);
+      expect(prisma.paymentIntent.update).not.toHaveBeenCalled();
+      expect(row.checkoutTheme).toBeNull();
     });
   });
 });

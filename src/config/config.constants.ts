@@ -8,7 +8,14 @@ import type { StellarNetwork } from '@/config/configuration';
  */
 export const DEFAULT_ENV_FILE = '.env';
 
-export const DEFAULT_SWAP_FEE_BPS = 50;
+/**
+ * The hosted checkout a Stellar payment link with a merchant fee opens
+ * (`PAYMENT_LINK_CHECKOUT_URL`): the payments site of the developer platform.
+ */
+export const DEFAULT_PAYMENT_LINK_CHECKOUT_URL =
+  'https://payments.cosmospay.lat';
+
+export const DEFAULT_SWAP_FEE_BPS = 65;
 export const DEFAULT_SWAP_SLIPPAGE_BPS = 50;
 export const DEFAULT_SWAP_MAX_SLIPPAGE_BPS = 500;
 
@@ -27,6 +34,28 @@ export const DEFAULT_SOLANA_RPC: Record<StellarNetwork, string> = {
   public: 'https://api.mainnet-beta.solana.com',
   testnet: 'https://api.devnet.solana.com',
 };
+
+/**
+ * The Soroban RPC private payments (ZK payments) read the confidential token through, per network
+ * tier, when `ZK_PAYMENTS_<NETWORK>_RPC_URL` is unset. SDF runs a public one on
+ * testnet only; mainnet has no default, so a mainnet deployment must name a
+ * provider's endpoint (`zk-payments-env.ts` refuses to boot without one).
+ */
+export const DEFAULT_ZK_PAYMENTS_RPC: Record<StellarNetwork, string> = {
+  public: '',
+  testnet: 'https://soroban-testnet.stellar.org',
+};
+
+/**
+ * The Soroban RPC for Stellar mainnet, used when `STELLAR_RPC_URL_MAINNET` is
+ * unset. SDF runs no public mainnet RPC; this is Gateway.fm's public endpoint,
+ * one of the two that answered USDT0's OFT simulations on 2026-10-25 (the other
+ * is `https://mainnet.sorobanrpc.com`). It is rate limited and comes with no
+ * service level: fine for a trial, but production should set a provider's
+ * endpoint. Every call checks the node's passphrase before trusting it.
+ */
+export const DEFAULT_STELLAR_RPC_MAINNET =
+  'https://soroban-rpc.mainnet.stellar.gateway.fm';
 
 /** Monad's public RPC endpoints, per network tier (mainnet, testnet). */
 export const DEFAULT_MONAD_RPC: Record<StellarNetwork, string> = {
@@ -141,3 +170,11 @@ export const DEFAULT_KURU_BASE_URL = 'https://ws.kuru.io';
  * under a second when healthy.
  */
 export const DEFAULT_SWAP_AGGREGATOR_TIMEOUT_MS = 15_000;
+
+/**
+ * How long the dashboard's analytics reads (`/v1/summary`, `/v1/summary/series`, `/v1/balances`)
+ * reuse an answer per consumer and network. The dashboard asks for the same figures from every
+ * view, tab and poll; ten seconds collapses those into one computation while a new payment still
+ * shows up in the next poll. 0 turns the cache off.
+ */
+export const DEFAULT_ANALYTICS_CACHE_TTL_MS = 10_000;

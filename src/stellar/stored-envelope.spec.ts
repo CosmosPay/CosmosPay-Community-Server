@@ -3,11 +3,18 @@ import {
   Asset,
   BASE_FEE,
   Keypair,
+  LiquidityPoolAsset,
+  LiquidityPoolFeeV18,
   Networks,
   Operation,
   TransactionBuilder,
+  xdr,
 } from '@stellar/stellar-sdk';
-import { cannotHaveSettled, storedEnvelope } from '@/stellar/stored-envelope';
+import {
+  addedTrustline,
+  cannotHaveSettled,
+  storedEnvelope,
+} from '@/stellar/stored-envelope';
 
 const PASSPHRASE = Networks.TESTNET;
 const SIGNER = Keypair.random();
@@ -91,5 +98,80 @@ describe('cannotHaveSettled', () => {
     expect(cannotHaveSettled(envelopeAt(big).toXDR(), PASSPHRASE, next)).toBe(
       false,
     );
+  });
+});
+
+describe('addedTrustline', () => {
+  const ISSUER = Keypair.random().publicKey();
+  const USDC = new Asset('USDC', ISSUER);
+
+  /** An unsigned envelope from SIGNER carrying `ops`. */
+  function envelopeOf(...ops: xdr.Operation[]): string {
+    const builder = new TransactionBuilder(
+      new Account(SIGNER.publicKey(), '7'),
+      { fee: BASE_FEE, networkPassphrase: PASSPHRASE },
+    );
+    for (const op of ops) builder.addOperation(op);
+    return builder.setTimeout(300).build().toXDR();
+  }
+
+  const pathPayment = () =>
+    Operation.pathPaymentStrictSend({
+      sendAsset: Asset.native(),
+      sendAmount: '10',
+      destination: SIGNER.publicKey(),
+      destAsset: USDC,
+      destMin: '1',
+      path: [],
+    });
+
+  it("names the asset of the source's own changeTrust", () => {
+    const envelope = envelopeOf(
+      Operation.changeTrust({ asset: USDC }),
+      pathPayment(),
+    );
+
+    expect(addedTrustline(envelope, PASSPHRASE)).toEqual({
+      code: 'USDC',
+      issuer: ISSUER,
+    });
+  });
+
+  it('is null for an envelope that adds no trustline', () => {
+    expect(addedTrustline(envelopeOf(pathPayment()), PASSPHRASE)).toBeNull();
+  });
+
+  it('ignores a pool-share trustline, a removal, and one another account adds', () => {
+    const pool = new LiquidityPoolAsset(
+      Asset.native(),
+      USDC,
+      LiquidityPoolFeeV18,
+    );
+    const envelope = envelopeOf(
+      Operation.changeTrust({ asset: pool }),
+      Operation.changeTrust({ asset: USDC, limit: '0' }),
+      Operation.changeTrust({
+        asset: USDC,
+        source: Keypair.random().publicKey(),
+      }),
+      pathPayment(),
+    );
+
+    expect(addedTrustline(envelope, PASSPHRASE)).toBeNull();
+  });
+
+  it('counts a changeTrust whose operation source is the transaction source', () => {
+    const envelope = envelopeOf(
+      Operation.changeTrust({ asset: USDC, source: SIGNER.publicKey() }),
+    );
+
+    expect(addedTrustline(envelope, PASSPHRASE)).toEqual({
+      code: 'USDC',
+      issuer: ISSUER,
+    });
+  });
+
+  it('is null for bytes that do not parse', () => {
+    expect(addedTrustline('not-an-envelope', PASSPHRASE)).toBeNull();
   });
 });

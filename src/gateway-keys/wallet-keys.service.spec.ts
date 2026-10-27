@@ -12,6 +12,7 @@ function makeService(configured = true) {
   const admin = {
     configured,
     listCredentials: jest.fn().mockResolvedValue([]),
+    listWalletConsumers: jest.fn().mockResolvedValue([]),
     getConsumerForwarder: jest.fn().mockResolvedValue(null),
     putConsumer: jest.fn().mockResolvedValue(undefined),
     putCredential: jest.fn().mockResolvedValue(undefined),
@@ -139,5 +140,90 @@ describe('WalletKeysService', () => {
     await expect(
       service.provision({ accountId: 'acc1', email: 'ada@example.com' }),
     ).rejects.toMatchObject({ code: ApiErrorCode.Misconfigured });
+  });
+
+  describe('rebakeSwapFees', () => {
+    const LABELS = { source: 'community-server', wallet_account: 'acc1' };
+
+    /** The body `provision` bakes for acc1's two keys at the current rate (150). */
+    async function currentBody(): Promise<string> {
+      const { service, admin } = makeService();
+      admin.listCredentials.mockResolvedValue([
+        { id: 'a', key: DEV_KEY, labels: { env: 'dev' } },
+        { id: 'b', key: PROD_KEY, labels: { env: 'prod' } },
+      ]);
+      await service.provision({ accountId: 'acc1', email: 'ada@example.com' });
+      return bakedForwarder(admin);
+    }
+
+    /* Until this ran, a rate change reached an account only on its next sign-in. */
+    it('re-bakes a consumer still on an old rate to exactly what a sign-in would bake', async () => {
+      const body = await currentBody();
+      const stale = body.replaceAll('"f":150', '"f":50');
+      expect(stale).not.toBe(body);
+      const { service, admin } = makeService();
+      admin.listWalletConsumers.mockResolvedValue([
+        { username: 'cosmos_wallet_acc1', forwarder: stale, labels: LABELS },
+      ]);
+
+      await expect(service.rebakeSwapFees()).resolves.toEqual({
+        rebaked: 1,
+        current: 0,
+      });
+
+      expect(admin.putConsumer).toHaveBeenCalledTimes(1);
+      expect(admin.putConsumer.mock.calls[0][0]).toBe('cosmos_wallet_acc1');
+      expect(bakedForwarder(admin)).toBe(body);
+      expect(admin.putConsumer.mock.calls[0][2]).toEqual(LABELS);
+      expect(admin.putCredential).not.toHaveBeenCalled();
+    });
+
+    it('leaves current consumers and bodies it did not write alone', async () => {
+      const body = await currentBody();
+      const { service, admin } = makeService();
+      admin.listWalletConsumers.mockResolvedValue([
+        { username: 'cosmos_wallet_acc1', forwarder: body, labels: LABELS },
+        { username: 'cosmos_wallet_acc2', forwarder: null, labels: {} },
+        {
+          username: 'cosmos_wallet_acc3',
+          forwarder: 'return function() end',
+          labels: {},
+        },
+      ]);
+
+      await expect(service.rebakeSwapFees()).resolves.toEqual({
+        rebaked: 0,
+        current: 1,
+      });
+      expect(admin.putConsumer).not.toHaveBeenCalled();
+    });
+
+    it('keeps going past a consumer whose write fails', async () => {
+      const stale = (await currentBody()).replaceAll('"f":150', '"f":50');
+      const { service, admin } = makeService();
+      admin.listWalletConsumers.mockResolvedValue([
+        { username: 'cosmos_wallet_acc1', forwarder: stale, labels: LABELS },
+        { username: 'cosmos_wallet_acc2', forwarder: stale, labels: LABELS },
+      ]);
+      admin.putConsumer.mockRejectedValueOnce(new Error('500'));
+
+      await expect(service.rebakeSwapFees()).resolves.toEqual({
+        rebaked: 1,
+        current: 0,
+      });
+      expect(admin.putConsumer).toHaveBeenCalledTimes(2);
+    });
+
+    it('runs at boot only where the admin API is set, and never fails the boot', async () => {
+      const off = makeService(false);
+      off.service.onApplicationBootstrap();
+      expect(off.admin.listWalletConsumers).not.toHaveBeenCalled();
+
+      const on = makeService();
+      on.admin.listWalletConsumers.mockRejectedValue(new Error('ECONNREFUSED'));
+      expect(() => on.service.onApplicationBootstrap()).not.toThrow();
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(on.admin.listWalletConsumers).toHaveBeenCalledTimes(1);
+    });
   });
 });

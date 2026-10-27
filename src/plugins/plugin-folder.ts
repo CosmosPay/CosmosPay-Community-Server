@@ -120,7 +120,7 @@ function loadPlugin(
     );
   } else {
     throw new Error(
-      `${PLUGIN_SIGNATURE_FILE} is missing — sign it (npm run plugins -- sign), ` +
+      `${PLUGIN_SIGNATURE_FILE} is missing. Sign it (npm run plugins -- sign), ` +
         'or set PLUGINS_ALLOW_UNSIGNED=true while developing it locally',
     );
   }
@@ -147,7 +147,7 @@ export function readPluginFolder(
   const dir = join(root, slug);
   if (!existsSync(dir)) {
     throw new Error(
-      `${dir} does not exist — create it (npm run plugins -- new ${slug}) or install it (npm run plugins -- install ${slug})`,
+      `${dir} does not exist. Create it (npm run plugins -- new ${slug}) or install it (npm run plugins -- install ${slug})`,
     );
   }
   const manifestText = readBounded(

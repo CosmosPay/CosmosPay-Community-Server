@@ -13,6 +13,7 @@ import {
 import { AppConfig, StellarNetwork } from '@/config/configuration';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
+import type { MerchantFeeTerms } from '@/common/merchant-fee/merchant-fee';
 import { resolvePlanCommissionBps } from '@/common/plan-commission';
 import { isUniqueViolation } from '@/common/prisma-errors';
 import { resolveNetwork } from '@/common/stellar-network';
@@ -20,7 +21,7 @@ import { PrismaService } from '@/prisma/prisma.service';
 import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
 import { StellarAccountLoader } from '@/stellar/account-loader.service';
 import type { BalanceEntry } from '@/stellar/account-loader.service';
-import { assetLabel, resolveAsset } from '@/stellar/asset';
+import { assetLabel, resolveAsset, type ResolvedAsset } from '@/stellar/asset';
 import { applyMemo, resolveMemoId } from '@/stellar/memo';
 import { sep7Qr, sep7TxUri } from '@/stellar/sep7';
 import { SettlementRepository } from '@/stellar/settlement.repository';
@@ -67,6 +68,13 @@ import {
   reserveOf,
 } from '@/liquidity-pools/liquidity-pool-reader.service';
 import { LpCostBasisService } from '@/liquidity-pools/lp-cost-basis.service';
+import {
+  type LiquidityMerchantFeeRecord,
+  liquidityMerchantFee,
+  liquidityMerchantFeeRecord,
+  readLiquidityMerchantFee,
+  resolveLiquidityMerchantFee,
+} from '@/liquidity-pools/lp-merchant-fee';
 import { LIQUIDITY_COMMISSION_MEMO } from '@/liquidity-pools/liquidity-pools.constants';
 
 /**
@@ -100,6 +108,7 @@ export const LIQUIDITY_OPERATION_PUBLIC_SELECT = {
   feeAmountA: true,
   feeAmountB: true,
   feeWallet: true,
+  merchantFee: true,
   xdr: true,
   uri: true,
   txHash: true,
@@ -108,10 +117,13 @@ export const LIQUIDITY_OPERATION_PUBLIC_SELECT = {
   updatedAt: true,
 } as const satisfies Prisma.LiquidityPoolOperationSelect;
 
-/** An operation as the list returns it. */
-export type PublicLiquidityOperation = Prisma.LiquidityPoolOperationGetPayload<{
-  select: typeof LIQUIDITY_OPERATION_PUBLIC_SELECT;
-}>;
+/** An operation as the list returns it: the merchant fee read back as its record. */
+export type PublicLiquidityOperation = Omit<
+  Prisma.LiquidityPoolOperationGetPayload<{
+    select: typeof LIQUIDITY_OPERATION_PUBLIC_SELECT;
+  }>,
+  'merchantFee'
+> & { merchantFee: LiquidityMerchantFeeRecord | null };
 
 /** A public operation plus its derived QR — what single-operation responses return. */
 export type LiquidityOperationView = PublicLiquidityOperation & {
@@ -189,6 +201,7 @@ export class LiquidityPoolsService {
       headerIdempotencyKey,
       dto.idempotencyKey,
     );
+    const merchant = resolveLiquidityMerchantFee(dto.merchantFee);
 
     // Canonical order: the protocol requires assetA < assetB. Reorder the pair
     // (and its amounts) if the caller passed them the other way around. This
@@ -235,6 +248,7 @@ export class LiquidityPoolsService {
       amountB: rawAmountB ?? null,
       slippageBps,
       memo,
+      merchantFee: merchant,
     };
 
     // Fast path: same key and same request → same operation (no Horizon
@@ -264,7 +278,7 @@ export class LiquidityPoolsService {
     } else if (rawAmountA === undefined || rawAmountB === undefined) {
       throw ApiError.badRequest(
         ApiErrorCode.ValidationFailed,
-        'This pool has no reserves yet — provide both amounts; the deposit sets the initial price',
+        'This pool has no reserves yet. Provide both amounts; the deposit sets the initial price',
       );
     }
     if (amountA <= 0n || amountB <= 0n) {
@@ -275,7 +289,16 @@ export class LiquidityPoolsService {
     }
 
     // Deposits carry NO commission — the plan fee is charged only on the *gain*
-    // at withdraw time, never on the principal. The full amounts enter the pool.
+    // at withdraw time, never on the principal. A merchant fee is the caller's
+    // own: a share of each amount, out of it (`recipient`: less enters the pool)
+    // or on top of it (`payer`: the full amounts enter the pool).
+    const merchantFees = merchant
+      ? liquidityMerchantFee(merchant, amountA, amountB)
+      : { feeA: 0n, feeB: 0n };
+    if (merchant?.paidBy === 'recipient') {
+      amountA -= merchantFees.feeA;
+      amountB -= merchantFees.feeB;
+    }
 
     // Price bounds around the pool price (or the deposit's own ratio when the
     // pool is empty). The deposit fails on-chain if the price drifts outside.
@@ -303,18 +326,30 @@ export class LiquidityPoolsService {
     );
 
     const stellarCfg = this.config.get('stellar', { infer: true });
+    const merchantLegs = merchant
+      ? [
+          { asset: a, amount: merchantFees.feeA },
+          { asset: b, amount: merchantFees.feeB },
+        ].filter((leg) => leg.amount > 0n)
+      : [];
+    await this.assertMerchantWalletCanReceive(
+      network,
+      merchant,
+      dto.source,
+      merchantLegs,
+    );
 
-    // Pre-flight: the account must hold the full amount of each asset and keep
-    // its XLM minimum reserve (incl. the new pool-share trustline) plus the tx
-    // fee. Fail here with a clear 400 rather than let the network reject the
-    // signed tx with op_underfunded.
-    const opCount = (hasPoolTrust ? 0 : 1) + 1;
+    // Pre-flight: the account must hold the full amount of each asset (the
+    // deposit and any merchant fee) and keep its XLM minimum reserve (incl. the
+    // new pool-share trustline) plus the tx fee. Fail here with a clear 400
+    // rather than let the network reject the signed tx with op_underfunded.
+    const opCount = (hasPoolTrust ? 0 : 1) + 1 + merchantLegs.length;
     this.accounts.assertCanAfford(
       account,
       balances,
       [
-        { asset: a, required: amountA },
-        { asset: b, required: amountB },
+        { asset: a, required: amountA + merchantFees.feeA },
+        { asset: b, required: amountB + merchantFees.feeB },
       ],
       !hasPoolTrust,
       BigInt(stellarCfg.baseFee) * BigInt(opCount),
@@ -338,6 +373,8 @@ export class LiquidityPoolsService {
         maxPrice: bounds.maxPrice,
       }),
     );
+    // Operation 3, per asset with a fee: the caller's merchant fee.
+    this.addMerchantFeePayments(builder, merchant, merchantLegs);
     if (memo) builder.addMemo(Memo.id(memo));
 
     const tx = builder.setTimeout(stellarCfg.timeoutSeconds).build();
@@ -364,6 +401,9 @@ export class LiquidityPoolsService {
       feeAmountA: '0',
       feeAmountB: '0',
       feeWallet: null,
+      merchantFee: merchant
+        ? liquidityMerchantFeeRecord(merchant, merchantFees, a.code, b.code)
+        : null,
       tx,
       timeoutSeconds: stellarCfg.timeoutSeconds,
       request,
@@ -404,6 +444,7 @@ export class LiquidityPoolsService {
       dto.idempotencyKey,
     );
 
+    const merchant = resolveLiquidityMerchantFee(dto.merchantFee);
     const request: LiquidityRequestTerms = {
       kind: 'WITHDRAW',
       network,
@@ -412,6 +453,7 @@ export class LiquidityPoolsService {
       shares: dto.shares,
       slippageBps,
       memo,
+      merchantFee: merchant,
     };
 
     // Fast path: same key and same request → same operation (no Horizon
@@ -515,12 +557,31 @@ export class LiquidityPoolsService {
       );
     }
 
+    // A merchant fee is a share of what the withdrawal is guaranteed to pay
+    // (the slippage minimums), so it never exceeds its rate of what arrives.
+    const merchantFees = merchant
+      ? liquidityMerchantFee(merchant, minA, minB)
+      : { feeA: 0n, feeB: 0n };
+    const merchantLegs = merchant
+      ? [
+          { asset: this.reserveAsset(resA), amount: merchantFees.feeA },
+          { asset: this.reserveAsset(resB), amount: merchantFees.feeB },
+        ].filter((leg) => leg.amount > 0n)
+      : [];
+    await this.assertMerchantWalletCanReceive(
+      network,
+      merchant,
+      dto.source,
+      merchantLegs,
+    );
+
     const stellarCfg = this.config.get('stellar', { infer: true });
 
     // Pre-flight: the withdraw itself funds the fee payments (they come out of
     // the just-received reserves), so we only need the account to keep its XLM
     // minimum reserve plus the tx fee. Clear 400 instead of an on-chain reject.
-    const opCount = 1 + (feeA > 0n ? 1 : 0) + (feeB > 0n ? 1 : 0);
+    const opCount =
+      1 + (feeA > 0n ? 1 : 0) + (feeB > 0n ? 1 : 0) + merchantLegs.length;
     this.accounts.assertCanAfford(
       account,
       account.balances,
@@ -559,6 +620,8 @@ export class LiquidityPoolsService {
         }),
       );
     }
+    // Then the caller's merchant fee, out of the same reserves.
+    this.addMerchantFeePayments(builder, merchant, merchantLegs);
     applyMemo(
       builder,
       memo,
@@ -588,6 +651,14 @@ export class LiquidityPoolsService {
       feeAmountA: fromStroops(feeA),
       feeAmountB: fromStroops(feeB),
       feeWallet: feeA + feeB > 0n ? feeWallet : null,
+      merchantFee: merchant
+        ? liquidityMerchantFeeRecord(
+            merchant,
+            merchantFees,
+            resA.asset,
+            resB.asset,
+          )
+        : null,
       tx,
       timeoutSeconds: stellarCfg.timeoutSeconds,
       request,
@@ -611,6 +682,9 @@ export class LiquidityPoolsService {
   }> {
     const where = {
       consumer: { apisixUsername: consumer.username },
+      // Only the network this key targets (`resolveNetwork`): a production key never lists a
+      // test-network row, nor a sandbox key a mainnet one.
+      network: this.resolveNetwork(consumer),
       ...(query.kind ? { kind: query.kind } : {}),
       ...(query.status ? { status: query.status } : {}),
     };
@@ -624,7 +698,15 @@ export class LiquidityPoolsService {
       }),
       this.prisma.liquidityPoolOperation.count({ where }),
     ]);
-    return { data, total, take: query.take, skip: query.skip };
+    return {
+      data: data.map((row) => ({
+        ...row,
+        merchantFee: readLiquidityMerchantFee(row.merchantFee),
+      })),
+      total,
+      take: query.take,
+      skip: query.skip,
+    };
   }
 
   async findOneOperation(
@@ -719,19 +801,21 @@ export class LiquidityPoolsService {
       feeAmountA: string;
       feeAmountB: string;
       feeWallet: string | null;
+      merchantFee: LiquidityMerchantFeeRecord | null;
       tx: ReturnType<TransactionBuilder['build']>;
       timeoutSeconds: number;
       /** What the caller asked for — a same-key race winner is vetted against it. */
       request: LiquidityRequestTerms;
     },
   ): Promise<LiquidityOperationView> {
-    const { tx, timeoutSeconds, request, ...data } = input;
+    const { tx, timeoutSeconds, request, merchantFee, ...data } = input;
     const xdr = tx.toXDR();
     let op: LiquidityPoolOperation;
     try {
       op = await this.prisma.liquidityPoolOperation.create({
         data: {
           ...data,
+          ...(merchantFee ? { merchantFee: { ...merchantFee } } : {}),
           status: 'PENDING',
           xdr,
           uri: sep7TxUri(xdr),
@@ -749,8 +833,8 @@ export class LiquidityPoolsService {
       throw ApiError.conflict(
         ApiErrorCode.IdempotencyConflict,
         'A liquidity pool operation with this transaction hash already exists ' +
-          'for this network. Two creates rebuilt the same Stellar sequence/XDR ' +
-          '— use an Idempotency-Key on retries, or wait for the prior operation ' +
+          'for this network. Two creates rebuilt the same Stellar sequence/XDR. ' +
+          'Use an Idempotency-Key on retries, or wait for the prior operation ' +
           'to settle/expire.',
       );
     }
@@ -933,7 +1017,7 @@ export class LiquidityPoolsService {
     throw ApiError.conflict(
       ApiErrorCode.OperationInFlight,
       'A withdrawal from this pool is already in flight for this account. ' +
-        'Wait for it to settle or expire before starting another — the ' +
+        'Wait for it to settle or expire before starting another: the ' +
         'commission on a withdrawal depends on the position it leaves behind.',
     );
   }
@@ -1076,6 +1160,11 @@ export class LiquidityPoolsService {
     return r.issuer ? new Asset(r.asset, r.issuer) : Asset.native();
   }
 
+  /** A reserve as the resolved asset an account check and a payment take. */
+  private reserveAsset(r: LiquidityPoolReserve): ResolvedAsset {
+    return { code: r.asset, issuer: r.issuer, asset: this.assetFromReserve(r) };
+  }
+
   private async findOwned(
     consumer: GatewayConsumer,
     id: string,
@@ -1095,10 +1184,59 @@ export class LiquidityPoolsService {
   ): Promise<LiquidityOperationView> {
     return {
       ...project(op, LIQUIDITY_OPERATION_PUBLIC_SELECT),
+      merchantFee: readLiquidityMerchantFee(op.merchantFee),
       qr: await sep7Qr(op.uri),
       // A collected commission (feeWallet set) is labelled with the memo text.
       commissionMemo: op.feeWallet ? LIQUIDITY_COMMISSION_MEMO : null,
     };
+  }
+
+  /**
+   * The merchant fee's wallet must be another account than the source, exist,
+   * and be able to receive every asset it is paid in, or the fee payment fails
+   * on-chain and takes the deposit or withdrawal with it. Checked before
+   * anything is built.
+   */
+  private async assertMerchantWalletCanReceive(
+    network: StellarNetwork,
+    merchant: MerchantFeeTerms | null,
+    source: string,
+    legs: { asset: ResolvedAsset }[],
+  ): Promise<void> {
+    if (!merchant) return;
+    if (merchant.wallet === source) {
+      throw ApiError.badRequest(
+        ApiErrorCode.ValidationFailed,
+        'merchantFee.wallet must be another account than source',
+      );
+    }
+    const receiver = await this.accounts.load(network, merchant.wallet);
+    for (const { asset } of legs) {
+      this.accounts.assertCanReceive(
+        receiver.balances,
+        asset,
+        merchant.wallet,
+        'the merchant fee',
+      );
+    }
+  }
+
+  /** One payment per asset the merchant fee charges, to its wallet. */
+  private addMerchantFeePayments(
+    builder: TransactionBuilder,
+    merchant: MerchantFeeTerms | null,
+    legs: { asset: ResolvedAsset; amount: bigint }[],
+  ): void {
+    if (!merchant) return;
+    for (const leg of legs) {
+      builder.addOperation(
+        Operation.payment({
+          destination: merchant.wallet,
+          asset: leg.asset.asset,
+          amount: fromStroops(leg.amount),
+        }),
+      );
+    }
   }
 
   private emit(

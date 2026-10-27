@@ -4,6 +4,8 @@ import { StellarService } from '@/stellar/stellar.service';
 import { toStroops } from '@/swaps/swap-math';
 import type { PaymentIntent } from '@generated/prisma/client';
 import type { StellarNetwork } from '@/config/configuration';
+import { paymentLegs } from '@/payment-intents/payment-legs';
+import { STELLAR_DECIMALS } from '@/stellar/stellar.constants';
 import {
   PAYMENT_SCAN_MAX_PAGES,
   PAYMENT_SCAN_PAGE_SIZE,
@@ -20,7 +22,8 @@ export type { VerificationResult } from '@/payment-intents/payment-verifier';
  * Confirms that an on-chain Stellar transaction actually fulfills a payment
  * intent: it must be successful, closed no earlier than the intent was created,
  * contain a payment to the intent's destination in the intent's asset for the
- * exact amount, and the transaction memo must match. Each intent carries its own
+ * exact amount (less a merchant fee the recipient pays), with a merchant fee
+ * also its payment to the fee wallet, and the transaction memo must match. Each intent carries its own
  * `network` (derived from the API key type), so all Horizon calls target that
  * network. Used both by the manual `validate` endpoint and the permanent
  * observer, so the rule lives in one place.
@@ -88,6 +91,12 @@ export class StellarVerifierService implements PaymentVerifier {
         valid: false,
         reason:
           'No native payment in this transaction matches the destination/amount',
+      };
+    }
+    if (!this.paysMerchantFee(intent, payments.records)) {
+      return {
+        valid: false,
+        reason: 'The transaction does not pay the merchant fee',
       };
     }
 
@@ -161,6 +170,18 @@ export class StellarVerifierService implements PaymentVerifier {
         if (!this.memoMatches(intent, tx.memo_type, tx.memo).ok) {
           continue;
         }
+        // A merchant fee is another operation of the same transaction: read
+        // them all, only for an intent that has one.
+        if (
+          this.legsOf(intent).fee &&
+          !this.paysMerchantFee(
+            intent,
+            (await server.payments().forTransaction(op.transaction_hash).call())
+              .records,
+          )
+        ) {
+          continue;
+        }
         const payer = (op as Horizon.ServerApi.PaymentOperationRecord).from;
         return { valid: true, txHash: op.transaction_hash, payer };
       }
@@ -230,12 +251,53 @@ export class StellarVerifierService implements PaymentVerifier {
       return false;
     }
 
-    // Exact amount only when the intent fixed one.
-    if (intent.amount != null && !this.amountMatches(intent.amount, p.amount)) {
+    // Exact amount only when the intent fixed one: the merchant's leg, which
+    // is less than `amount` when the recipient pays a merchant fee.
+    const expected = this.legsOf(intent).destinationAmount;
+    if (expected != null && !this.amountMatches(expected, p.amount)) {
       return false;
     }
 
     return true;
+  }
+
+  /**
+   * The intent's legs, or none worth matching when its stored amounts do not
+   * parse: one corrupt row must not stop the observer's sweep.
+   */
+  private legsOf(intent: PaymentIntent): ReturnType<typeof paymentLegs> {
+    try {
+      return paymentLegs(intent, STELLAR_DECIMALS);
+    } catch (err) {
+      this.logger.warn(
+        `Payment legs of intent ${intent.id} unreadable: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      return { destinationAmount: '-1', fee: null };
+    }
+  }
+
+  /**
+   * With a merchant fee, the transaction must also pay it: a payment to the fee
+   * wallet, in the intent's asset, for exactly the fee. Without one, true.
+   */
+  private paysMerchantFee(
+    intent: PaymentIntent,
+    operations: Horizon.ServerApi.OperationRecord[],
+  ): boolean {
+    const { fee } = this.legsOf(intent);
+    if (!fee) return true;
+    return operations.some(
+      (op) =>
+        op.type === Horizon.HorizonApi.OperationResponseType.payment &&
+        op.to === fee.wallet &&
+        (intent.asset === 'native'
+          ? op.asset_type === 'native'
+          : op.asset_code === intent.asset &&
+            op.asset_issuer === intent.assetIssuer) &&
+        this.amountMatches(fee.amount, op.amount),
+    );
   }
 
   /**

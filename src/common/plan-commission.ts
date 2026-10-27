@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { AppConfig } from '@/config/configuration';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
@@ -43,10 +44,38 @@ export function resolvePlanCommissionBps(
       ApiErrorCode.Misconfigured,
       `The gateway did not forward the plan swap fee header (${header}), so ` +
         'the organization commission rate is unknown. Refusing to price at ' +
-        'the configured default — fix the APISIX consumer plugin that ' +
+        'the configured default. Fix the APISIX consumer plugin that ' +
         'injects it.',
     );
   }
   const swap = config.get('stellar', { infer: true }).swap;
   return swap.feeWallet ? swap.feeBps : 0;
+}
+
+/**
+ * The commission to charge, once it is known where it goes. A commission with no recipient
+ * configured (`variable` names the missing setting) is a misconfiguration, not a free swap:
+ * `misconfigured` (503), so the operator notices. The one exception is
+ * `SWAP_COMMISSION_DEV_WAIVER=true`, which the service refuses to boot with in production
+ * (env.validation.ts): there the commission is waived and the waiver logged, so a local
+ * service can price and build swaps on chains whose fee accounts only the operator holds.
+ */
+export function commissionWithRecipient(
+  config: ConfigService<AppConfig, true>,
+  feeBps: number,
+  recipient: string,
+  variable: string,
+): number {
+  if (feeBps === 0 || recipient) return feeBps;
+  if (config.get('swapCommissionDevWaiver', { infer: true })) {
+    Logger.warn(
+      `${variable} is not set: the ${feeBps} bps commission is waived (SWAP_COMMISSION_DEV_WAIVER)`,
+      'SwapCommission',
+    );
+    return 0;
+  }
+  throw ApiError.unavailable(
+    ApiErrorCode.Misconfigured,
+    `A swap commission applies to this plan but ${variable} is not set`,
+  );
 }

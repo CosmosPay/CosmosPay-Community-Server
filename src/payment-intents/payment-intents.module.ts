@@ -8,8 +8,11 @@ import { EvmVerifierService } from '@/payment-intents/evm-verifier.service';
 import { PaymentIntentObserverService } from '@/payment-intents/payment-intent-observer.service';
 import { PaymentIntentsController } from '@/payment-intents/payment-intents.controller';
 import { PaymentIntentsService } from '@/payment-intents/payment-intents.service';
+import { PaymentLinksController } from '@/payment-intents/payment-links.controller';
+import { PaymentLinksService } from '@/payment-intents/payment-links.service';
 import { PaymentVerifiers } from '@/payment-intents/payment-verifiers';
 import { Sep7LinkBuilder } from '@/payment-intents/sep7-link-builder.service';
+import { SolanaPayTransactionBuilder } from '@/payment-intents/solana-pay-transaction.builder';
 import { SolanaVerifierService } from '@/payment-intents/solana-verifier.service';
 import { StellarVerifierService } from '@/payment-intents/stellar-verifier.service';
 import { SolanaModule } from '@/solana/solana.module';
@@ -19,13 +22,16 @@ import { SolanaModule } from '@/solana/solana.module';
   // customers module's to write. The dependency runs one way only. Solana and
   // Monad are reached through their RPC clients, never a URL of our own.
   imports: [CustomersModule, SolanaModule, EvmModule],
-  controllers: [PaymentIntentsController],
+  // The owner's routes, and the anonymous read a hosted checkout page polls.
+  controllers: [PaymentIntentsController, PaymentLinksController],
   providers: [
     PaymentIntentsService,
+    PaymentLinksService,
     Sep7LinkBuilder,
     ChainPayLinkBuilder,
     StellarVerifierService,
     SolanaVerifierService,
+    SolanaPayTransactionBuilder,
     EvmVerifierService,
     PaymentVerifiers,
     PaymentIntentObserverService,

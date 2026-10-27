@@ -98,7 +98,8 @@ export class PaymentIntentsController {
       'Create a SEP-7 `tx` intent (source known → unsigned XDR + tx URI + QR)',
   })
   @ApiCreatedResponse({ type: TxPaymentIntentEntity })
-  // Loads the payer's account from Horizon to build the envelope.
+  // Loads the payer's account from Horizon to build the envelope, and the
+  // destination's for an issued asset, to check it can receive it.
   @ApiUpstream('Horizon')
   @ApiErrorResponse({
     status: 400,
@@ -109,6 +110,10 @@ export class PaymentIntentsController {
       ApiErrorCode.TrustlineMissing,
       ApiErrorCode.InsufficientBalance,
     ],
+    description:
+      '`trustline_missing`: the destination does not trust the issued asset ' +
+      'being paid. The payer signs this transaction and the destination signs ' +
+      'nothing, so only the destination account can add the trustline.',
   })
   @MemoConflictResponse()
   createTx(
@@ -215,7 +220,8 @@ export class PaymentIntentsController {
   @Patch(':id')
   @RequirePermissions('payments:write')
   @ApiOperation({
-    summary: 'Update a payment intent (status / txHash / reference)',
+    summary:
+      'Update a payment intent (status / txHash / reference / checkoutTheme)',
   })
   @ApiOkResponse({ type: PaymentIntentEntity })
   // Setting `txHash` verifies it against the chain before it is stored.
@@ -249,7 +255,7 @@ export class PaymentIntentsController {
     status: 409,
     codes: [ApiErrorCode.OperationInFlight],
     description:
-      '`operation_in_flight`: the status changed under this delete — the ' +
+      '`operation_in_flight`: the status changed under this delete. The ' +
       'intent may have just been paid. Re-read it before retrying.',
   })
   remove(

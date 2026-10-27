@@ -145,6 +145,39 @@ describe('Liquidity pools guards (e2e)', () => {
       .set(identity)
       .set('x-consumer-permissions', 'swaps:read,swaps:write');
 
+  describe('the merchant fee', () => {
+    const ACCOUNT = 'GCALNQQBXAPZ2WIRSDDBMSTAKCUH5SG6U76YBFLQLIXJTF7FE5AX7AOO';
+    it.each([
+      [
+        DEPOSIT,
+        {
+          source: ACCOUNT,
+          assetBCode: 'USDC',
+          assetBIssuer: ACCOUNT,
+          maxAmountA: '1',
+        },
+      ],
+      [WITHDRAW, { source: ACCOUNT, poolId: 'dd'.repeat(32), shares: '1' }],
+    ] as const)(
+      '%s validates the nested merchantFee through the pipe',
+      async ([, path], body) => {
+        const res = await request(app.getHttpServer())
+          .post(path)
+          .set('x-gateway-secret', SECRET)
+          .set('x-consumer-username', 'cosmos_u1')
+          .set('x-consumer-permissions', 'liquidity:write')
+          .send({
+            ...body,
+            merchantFee: { bps: 100, wallet: ACCOUNT, paidBy: 'nobody' },
+          })
+          .expect(400);
+        expect(res.body.code).toBe('validation_failed');
+        // The nested rule answered, not "property merchantFee should not exist".
+        expect(JSON.stringify(res.body)).toContain('paidBy');
+      },
+    );
+  });
+
   describe('the gateway gate', () => {
     for (const route of ALL) {
       it(`${label(route)} refuses a request that skipped the gateway (403)`, async () => {
@@ -196,7 +229,11 @@ describe('Liquidity pools guards (e2e)', () => {
         expect(res.body).toMatchObject({ data: [], total: 0 });
         expect(prismaMock.liquidityPoolOperation.findMany).toHaveBeenCalledWith(
           expect.objectContaining({
-            where: { consumer: { apisixUsername: 'cosmos_u1' } },
+            // The key's network: no environment header falls back to STELLAR_NETWORK.
+            where: {
+              consumer: { apisixUsername: 'cosmos_u1' },
+              network: 'testnet',
+            },
           }),
         );
       },

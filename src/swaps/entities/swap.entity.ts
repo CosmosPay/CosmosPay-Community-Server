@@ -1,5 +1,7 @@
 import { ApiProperty, OmitType } from '@nestjs/swagger';
 import { SwapStatus } from '@generated/prisma/client';
+import { ApiPublicTokenProperty } from '@/common/decorators/api-record-token.decorator';
+import { MerchantFeeEntity } from '@/common/merchant-fee/merchant-fee.entity';
 
 /** One asset hop on the chosen path (empty array = direct order-book swap). */
 export class SwapPathHop {
@@ -76,7 +78,7 @@ export class SwapDestinationQuote {
   @ApiProperty({
     example: '24.68595',
     description:
-      'On-chain minimum (destMin) after slippage — swap reverts below it.',
+      'On-chain minimum (destMin) after slippage: swap reverts below it.',
   })
   minimum!: string;
 
@@ -118,6 +120,16 @@ export class SwapQuoteEntity {
   })
   swap!: SwapAssetAmount;
 
+  @ApiProperty({
+    type: MerchantFeeEntity,
+    nullable: true,
+    required: false,
+    description:
+      'The merchant fee the request named, in the source asset; null without ' +
+      'one. With `paidBy: payer` the source sends `source.amount` plus it.',
+  })
+  merchantFee?: MerchantFeeEntity | null;
+
   @ApiProperty({ type: SwapDestinationQuote })
   destination!: SwapDestinationQuote;
 
@@ -126,6 +138,17 @@ export class SwapQuoteEntity {
     description: 'Intermediate hops (may be empty).',
   })
   path!: SwapPathHop[];
+}
+
+/** The asset a swap's transaction adds the source's trustline for. */
+export class SwapTrustline {
+  @ApiProperty({ example: 'USDC' })
+  code!: string;
+
+  @ApiProperty({
+    example: 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5',
+  })
+  issuer!: string;
 }
 
 /** A persisted swap (the `swap` table row) plus its derived QR. */
@@ -170,6 +193,15 @@ export class SwapEntity {
   })
   swapAmount!: string;
 
+  @ApiProperty({
+    type: MerchantFeeEntity,
+    nullable: true,
+    description:
+      'The merchant fee this swap pays, by its own payment in the same ' +
+      'transaction; null when the request named none.',
+  })
+  merchantFee!: MerchantFeeEntity | null;
+
   @ApiProperty({ example: 'USDC' })
   destAsset!: string;
 
@@ -213,6 +245,21 @@ export class SwapEntity {
   commissionMemo!: string | null;
 
   @ApiProperty({
+    type: SwapTrustline,
+    nullable: true,
+    example: null,
+    description:
+      'The bought asset, when the source receives it and does not trust it yet: ' +
+      'the transaction then starts with a `changeTrust` for it, so the one ' +
+      'signature adds the trustline and makes the swap. Adding it locks another ' +
+      '0.5 XLM base reserve in the account, which a wallet should tell its user ' +
+      'before they sign. Null when no trustline is added (XLM bought, the ' +
+      'account already trusts the asset, or the destination is another account). ' +
+      'Read from the transaction itself.',
+  })
+  trustline!: SwapTrustline | null;
+
+  @ApiProperty({
     description: 'Unsigned transaction envelope (base64 XDR) to sign.',
     example: 'AAAAAgAAAABx…(base64 XDR)…AAAAAAAAAAA=',
   })
@@ -245,15 +292,22 @@ export class SwapEntity {
   updatedAt!: Date;
 }
 
+/** What `POST /v1/swaps` answers for a Stellar swap: the swap, and its read token. */
+export class SwapCreatedEntity extends SwapEntity {
+  @ApiPublicTokenProperty()
+  publicToken?: string;
+}
+
 /**
- * A swap as `GET /v1/swaps` lists it: the stored row. The QR and the commission
- * label are derived by the single read, not rendered for every row of a page —
- * fetch the swap for them. Declaring list items as {@link SwapEntity} made
- * generated clients type two fields the list never sent.
+ * A swap as `GET /v1/swaps` lists it: the stored row. The QR, the commission
+ * label and the added trustline are derived by the single read, not rendered
+ * for every row of a page: fetch the swap for them. Declaring list items as
+ * {@link SwapEntity} made generated clients type fields the list never sent.
  */
 export class SwapListItemEntity extends OmitType(SwapEntity, [
   'qr',
   'commissionMemo',
+  'trustline',
 ] as const) {}
 
 export class SwapListEntity {
@@ -422,6 +476,12 @@ export class ChainSwapEntity {
 
   @ApiProperty()
   updatedAt!: Date;
+}
+
+/** What `POST /v1/swaps` answers for a Solana or Monad swap, with its read token. */
+export class ChainSwapCreatedEntity extends ChainSwapEntity {
+  @ApiPublicTokenProperty()
+  publicToken?: string;
 }
 
 export class ChainSwapListEntity {

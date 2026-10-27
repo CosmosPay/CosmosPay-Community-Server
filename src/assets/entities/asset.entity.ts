@@ -46,7 +46,7 @@ export class AssetEntity {
   @ApiProperty({
     example: 'circle.com',
     description:
-      "The issuer's on-chain home_domain, or empty when it publishes none — " +
+      "The issuer's on-chain home_domain, or empty when it publishes none, " +
       'which is the case for USDT0 and every testnet issuer. Never a domain ' +
       'attributed by a third party: rendered next to a token, that reads as the ' +
       "issuer's own claim.",
@@ -57,7 +57,7 @@ export class AssetEntity {
     example: true,
     description:
       'Whether the issuing account was checked against the named organization. ' +
-      'A claim about identity, not about quality — render unverified rows ' +
+      'A claim about identity, not about quality: render unverified rows ' +
       'differently rather than hiding them.',
   })
   verified!: boolean;

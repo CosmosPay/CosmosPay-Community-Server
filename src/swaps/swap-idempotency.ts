@@ -1,3 +1,8 @@
+import {
+  type MerchantFeeTerms,
+  sameMerchantFee,
+} from '@/common/merchant-fee/merchant-fee';
+import { STELLAR_DECIMALS } from '@/stellar/stellar.constants';
 import { sameAmount } from '@/swaps/swap-math';
 
 /**
@@ -7,9 +12,11 @@ import { sameAmount } from '@/swaps/swap-math';
  * slippage defaulted from config, the network taken from the API key.
  *
  * What is deliberately absent: the quote (`destEstimated`, `destMin`, `path`)
- * and the fee. Those are derived from Horizon and from the organization's plan
- * at build time, not chosen by the caller, so a retry a minute later would
+ * and the plan fee. Those are derived from Horizon and from the organization's
+ * plan at build time, not chosen by the caller, so a retry a minute later would
  * legitimately differ on them and must still be recognised as the same request.
+ * The merchant fee IS the caller's choice, and it pays a wallet the caller
+ * names, so it is compared like the destination.
  */
 export interface SwapRequestTerms {
   network: string;
@@ -22,7 +29,13 @@ export interface SwapRequestTerms {
   destAssetIssuer: string | null;
   slippageBps: number;
   memo: string | null;
+  merchantFee: MerchantFeeTerms | null;
 }
+
+/** A stored swap as {@link swapMatchesRequest} reads it: its merchant fee is the stored record. */
+export type StoredSwapTerms = Omit<SwapRequestTerms, 'merchantFee'> & {
+  merchantFee: unknown;
+};
 
 /**
  * Whether a stored swap is the one this request would have built — the check
@@ -36,7 +49,7 @@ export interface SwapRequestTerms {
  * every field that changes the signed transaction turns that into a 409.
  */
 export function swapMatchesRequest(
-  stored: SwapRequestTerms,
+  stored: StoredSwapTerms,
   request: SwapRequestTerms,
 ): boolean {
   return (
@@ -49,6 +62,7 @@ export function swapMatchesRequest(
     stored.destAssetIssuer === request.destAssetIssuer &&
     stored.slippageBps === request.slippageBps &&
     stored.memo === request.memo &&
-    sameAmount(stored.sendAmount, request.sendAmount)
+    sameAmount(stored.sendAmount, request.sendAmount) &&
+    sameMerchantFee(stored.merchantFee, request.merchantFee, STELLAR_DECIMALS)
   );
 }

@@ -475,3 +475,111 @@ describe('StellarVerifierService.findMatchingPayment', () => {
     );
   });
 });
+
+describe('StellarVerifierService with a merchant fee', () => {
+  // 25.5 with a 0.5 fee the recipient pays: 25 to the merchant, 0.5 to the fee wallet.
+  const intent: any = {
+    id: 'pi_fee',
+    network: 'testnet',
+    destination: 'GDEST',
+    amount: '25.5',
+    asset: 'native',
+    assetIssuer: null,
+    memo: '123456789',
+    createdAt: CREATED_AT,
+    merchantFee: {
+      bps: 0,
+      fixed: '0.5',
+      amount: '0.5',
+      asset: 'native',
+      wallet: 'GFEE',
+      paidBy: 'recipient',
+    },
+  };
+
+  function mockHash(records: any[]) {
+    jest.spyOn(Horizon.Server.prototype, 'transactions').mockReturnValue({
+      transaction: () => ({
+        call: async () => ({
+          successful: true,
+          memo_type: 'id',
+          memo: '123456789',
+          created_at: closedAt(30_000),
+        }),
+      }),
+    } as any);
+    jest.spyOn(Horizon.Server.prototype, 'payments').mockReturnValue({
+      forTransaction: () => ({ call: async () => ({ records }) }),
+    } as any);
+  }
+
+  afterEach(() => jest.restoreAllMocks());
+
+  it('settles on a transaction that pays the merchant its leg and the fee wallet the fee', async () => {
+    mockHash([nativeTo('GDEST', '25.0000000'), nativeTo('GFEE', '0.5000000')]);
+    const res = await make().verifyByHash(intent, 'a'.repeat(64));
+    expect(res.valid).toBe(true);
+  });
+
+  it('does not settle on the merchant leg alone: the fee is part of the payment', async () => {
+    mockHash([nativeTo('GDEST', '25')]);
+    const res = await make().verifyByHash(intent, 'a'.repeat(64));
+    expect(res).toMatchObject({
+      valid: false,
+      reason: 'The transaction does not pay the merchant fee',
+    });
+  });
+
+  it('does not settle on the whole amount to the merchant, nor on a short fee', async () => {
+    mockHash([nativeTo('GDEST', '25.5'), nativeTo('GFEE', '0.5')]);
+    expect((await make().verifyByHash(intent, 'a'.repeat(64))).valid).toBe(
+      false,
+    );
+    mockHash([nativeTo('GDEST', '25'), nativeTo('GFEE', '0.4999999')]);
+    expect((await make().verifyByHash(intent, 'a'.repeat(64))).valid).toBe(
+      false,
+    );
+  });
+
+  it('expects the whole amount at the merchant when the payer pays the fee on top', async () => {
+    const payer = {
+      ...intent,
+      merchantFee: { ...intent.merchantFee, paidBy: 'payer' },
+    };
+    mockHash([nativeTo('GDEST', '25.5'), nativeTo('GFEE', '0.5')]);
+    expect((await make().verifyByHash(payer, 'a'.repeat(64))).valid).toBe(true);
+  });
+
+  it('reads the whole transaction during a scan before settling on a fee link', async () => {
+    const candidate = {
+      ...nativeTo('GDEST', '25'),
+      from: 'GPAYER',
+      transaction_hash: 'h_fee',
+      created_at: closedAt(5_000),
+      transaction: jest.fn(async () => ({
+        successful: true,
+        memo_type: 'id',
+        memo: '123456789',
+      })),
+    };
+    const forTransaction = jest.fn(() => ({
+      call: async () => ({
+        records: [nativeTo('GDEST', '25'), nativeTo('GFEE', '0.5')],
+      }),
+    }));
+    const builder: any = {
+      forAccount: jest.fn(() => builder),
+      join: jest.fn(() => builder),
+      order: jest.fn(() => builder),
+      limit: jest.fn(() => builder),
+      call: jest.fn(async () => ({ records: [candidate], next: jest.fn() })),
+      forTransaction,
+    };
+    jest.spyOn(Horizon.Server.prototype, 'payments').mockReturnValue(builder);
+
+    const res = await make().findMatchingPayment(intent);
+
+    expect(res).toEqual({ valid: true, txHash: 'h_fee', payer: 'GPAYER' });
+    expect(forTransaction).toHaveBeenCalledWith('h_fee');
+  });
+});

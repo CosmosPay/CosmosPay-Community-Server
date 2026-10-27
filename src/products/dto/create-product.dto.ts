@@ -10,7 +10,7 @@ import {
 } from 'class-validator';
 
 export class CreateProductDto {
-  @ApiProperty({ example: 'Pro plan — monthly' })
+  @ApiProperty({ example: 'Pro plan (monthly)' })
   @IsString()
   @MinLength(1)
   @MaxLength(120)

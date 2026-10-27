@@ -1,4 +1,5 @@
 import { ConfigService } from '@nestjs/config';
+import { PublicRecordTokens } from '@/common/public-record-token';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import type { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import type { AdvisoryLockService } from '@/common/services/advisory-lock.service';
@@ -10,6 +11,14 @@ import type { CreateSwapDto } from '@/swaps/dto/create-swap.dto';
 import type { MonadSwapVenue } from '@/swaps/venues/monad-swap.venue';
 import type { SolanaSwapVenue } from '@/swaps/venues/solana-swap.venue';
 import type { WebhookTerminalEmitter } from '@/webhooks/webhook-terminal-emitter.service';
+
+/** Record tokens as the app wires them; no consumer here is the shared public key. */
+const recordTokens = new PublicRecordTokens({
+  get: () => ({
+    publicConsumer: 'cosmos_public',
+    gatewaySecret: 'spec-gateway-secret-spec-gateway-secret',
+  }),
+} as never);
 
 const SOURCE = '13QkxhNMrTPxoCkRdYdJ65tFuwXPhL5gLS2Z5Nr6gjRK';
 const USDC = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
@@ -105,6 +114,7 @@ function setup(feeWallet = 'FeeWa11et1111111111111111111111111111111111') {
   const { rows, prisma } = fakePrisma();
   const webhooks = { emit: jest.fn().mockResolvedValue(true) };
   const solana = {
+    merchantFeeUnsupported: () => null,
     resolveAsset: jest.fn(async (a: string) =>
       a === 'SOL'
         ? { asset: 'native', decimals: 9 }
@@ -138,7 +148,11 @@ function setup(feeWallet = 'FeeWa11et1111111111111111111111111111111111') {
       resolve: jest.fn().mockResolvedValue({ id: 'consumer_1' }),
     } as unknown as ConsumerResolverService,
     solana as unknown as SolanaSwapVenue,
-    {} as unknown as MonadSwapVenue,
+    {
+      merchantFeeUnsupported: () =>
+        'no merchant fee router is configured (KURU_MERCHANT_FEE_ROUTER)',
+    } as unknown as MonadSwapVenue,
+    recordTokens,
   );
   return { service, rows, webhooks, solana, prisma, config };
 }
@@ -353,5 +367,77 @@ describe('ChainSwapsService', () => {
       await observer(ctx, [{ ...ctx.rows[0] }]).tick();
       expect(ctx.rows[0].status).toBe('EXPIRED');
     });
+  });
+});
+
+describe('ChainSwapsService merchant fee', () => {
+  const FEE_WALLET = '2ojv9BAiHUrvsm9gxDe7fJSzbNZSJcxZvf8dqmWGHG8S';
+
+  it('routes the amount less a fee the recipient pays, and hands the venue the fee', async () => {
+    const { service, solana, rows } = setup();
+    // 2% of 0.1 SOL: 0.002 SOL to the fee wallet, 0.098 routed.
+    await service.create(consumer, {
+      ...DTO,
+      merchantFee: { bps: 200, wallet: FEE_WALLET },
+    });
+
+    const request = solana.build.mock.calls[0][0];
+    expect(request.amount).toBe(98_000_000n);
+    expect(request.merchantFee).toEqual({
+      wallet: FEE_WALLET,
+      amount: 2_000_000n,
+    });
+    expect(rows[0].sendAmount).toBe('0.1');
+    expect(rows[0].merchantFee).toEqual({
+      bps: 200,
+      fixed: '0',
+      amount: '0.002',
+      asset: 'native',
+      wallet: FEE_WALLET,
+      paidBy: 'recipient',
+    });
+  });
+
+  it('quotes the fee beside the routed amount', async () => {
+    const { service } = setup();
+    const quote = await service.quote(consumer, {
+      ...DTO,
+      merchantFee: { bps: 200, wallet: FEE_WALLET, paidBy: 'payer' },
+    });
+    // On top: the whole amount is routed.
+    expect(quote.swap.amount).toBe('0.1');
+    expect(quote.merchantFee).toMatchObject({
+      amount: '0.002',
+      paidBy: 'payer',
+    });
+  });
+
+  it('refuses a replay with another fee, and a fee on Monad', async () => {
+    const { service } = setup();
+    await service.create(
+      consumer,
+      { ...DTO, merchantFee: { bps: 200, wallet: FEE_WALLET } },
+      'k-fee',
+    );
+    const other = await rejection(
+      service.create(
+        consumer,
+        { ...DTO, merchantFee: { bps: 300, wallet: FEE_WALLET } },
+        'k-fee',
+      ),
+    );
+    expect(other.code).toBe(ApiErrorCode.IdempotencyConflict);
+
+    const monad = await rejection(
+      service.quote(consumer, {
+        ...DTO,
+        chain: 'monad',
+        merchantFee: {
+          bps: 200,
+          wallet: '0x8ba1f109551bD432803012645Ac136ddd64DBA72',
+        },
+      }),
+    );
+    expect(monad.code).toBe(ApiErrorCode.MerchantFeeUnsupported);
   });
 });

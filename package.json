@@ -15,6 +15,7 @@
     "dev": "prisma migrate deploy && nest start --watch --exec \"node --no-node-snapshot\"",
     "start": "nest start --exec \"node --no-node-snapshot\"",
     "dev:local": "node --no-node-snapshot --disable-warning=ExperimentalWarning --experimental-strip-types scripts/dev-local.mts",
+    "dev:local:stop": "node --no-node-snapshot --disable-warning=ExperimentalWarning --experimental-strip-types scripts/dev-local.mts --stop",
     "start:dev": "nest start --watch --exec \"node --no-node-snapshot\"",
     "start:debug": "nest start --debug --watch --exec \"node --no-node-snapshot\"",
     "start:prod": "node --no-node-snapshot dist/src/main",
@@ -37,62 +38,65 @@
     "plugins": "node --no-node-snapshot -r ts-node/register/transpile-only -r tsconfig-paths/register scripts/plugins.ts",
     "assets:verify": "ts-node -r tsconfig-paths/register --transpile-only scripts/verify-assets.ts",
     "import:platform-wallet-data": "ts-node -r tsconfig-paths/register --transpile-only scripts/import-platform-wallet-data.ts",
-    "contracts:compile": "ts-node -r tsconfig-paths/register --transpile-only scripts/compile-contracts.ts && prettier --write src/evm/payment-forwarder.artifact.ts"
+    "contracts:compile": "ts-node -r tsconfig-paths/register --transpile-only scripts/compile-contracts.ts && prettier --write src/evm/payment-forwarder.artifact.ts src/evm/payment-split-forwarder.artifact.ts src/evm/merchant-fee-swap-router.artifact.ts",
+    "zk:deploy-testnet": "ts-node -r tsconfig-paths/register --transpile-only scripts/zk/deploy-testnet.ts",
+    "zk:e2e-testnet": "ts-node -r tsconfig-paths/register --transpile-only scripts/zk/e2e-testnet.ts"
   },
   "dependencies": {
     "@defindex/sdk": "^0.3.0",
-    "@nestjs/common": "^12.1.2",
+    "@nestjs/common": "^12.2.0",
     "@nestjs/config": "^12.0.1",
-    "@nestjs/core": "^12.1.2",
+    "@nestjs/core": "^12.2.0",
     "@nestjs/event-emitter": "^12.0.1",
-    "@nestjs/platform-express": "^12.1.2",
+    "@nestjs/platform-express": "^12.2.0",
     "@nestjs/swagger": "^12.0.2",
     "@nestjs/terminus": "^12.1.0",
     "@noble/curves": "^2.4.0",
     "@noble/hashes": "^2.4.0",
-    "@prisma/adapter-pg": "^7.10.0",
-    "@prisma/client": "^7.10.0",
+    "@prisma/adapter-pg": "^7.10.1",
+    "@prisma/client": "^7.10.1",
     "@stellar/stellar-sdk": "^17.2.1",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.15.1",
-    "dotenv": "^18.0.5",
+    "dotenv": "^18.0.8",
     "eventemitter2": "^6.4.9",
     "helmet": "^8.3.0",
     "isolated-vm": "^7.0.1",
-    "nodemailer": "^10.0.14",
+    "nodemailer": "^10.1.7",
     "pg": "^8.23.1",
     "qrcode": "^1.5.4",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2",
+    "stellar-confidential-token-sdk": "github:brozorec/stellar-confidential-token-sdk#aad17069714713bcb36fa376d0f2a87743e8e2a7",
     "typescript": "^6.0.3"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@nestjs/cli": "^12.0.8",
-    "@nestjs/schematics": "^12.0.6",
-    "@nestjs/testing": "^12.1.2",
+    "@nestjs/cli": "^12.0.10",
+    "@nestjs/schematics": "^12.0.10",
+    "@nestjs/testing": "^12.2.0",
     "@types/express": "^5.0.6",
     "@types/jest": "^30.0.0",
-    "@types/node": "^26.6.3",
+    "@types/node": "^26.6.5",
     "@types/nodemailer": "^8.0.2",
     "@types/pg": "^8.23.1",
     "@types/qrcode": "^1.5.6",
     "@types/supertest": "^7.2.1",
-    "eslint": "^10.11.0",
+    "eslint": "^10.13.0",
     "eslint-config-prettier": "^10.1.8",
-    "eslint-plugin-prettier": "^5.5.6",
+    "eslint-plugin-prettier": "^5.5.7",
     "globals": "^17.13.0",
     "jest": "^30.5.2",
-    "prettier": "^3.9.9",
-    "prisma": "^7.10.0",
+    "prettier": "^3.9.10",
+    "prisma": "^7.10.1",
     "solc": "0.8.37",
     "source-map-support": "^0.5.21",
-    "supertest": "^7.3.0",
-    "ts-jest": "^29.4.14",
+    "supertest": "^7.3.1",
+    "ts-jest": "^29.4.15",
     "ts-loader": "^9.6.2",
     "ts-node": "^10.9.2",
     "tsconfig-paths": "^4.2.0",
-    "typescript-eslint": "^8.71.0",
+    "typescript-eslint": "^8.72.0",
     "yaml": "^2.9.1"
   },
   "overrides": {
@@ -104,7 +108,8 @@
     "browserslist": "^4.28.7",
     "solc": {
       "tmp": "0.2.7"
-    }
+    },
+    "toml": "5.0.1"
   },
   "jest": {
     "moduleFileExtensions": [
@@ -132,6 +137,7 @@
       "**/*.(t|j)s"
     ],
     "coverageDirectory": "../coverage",
-    "testEnvironment": "node"
+    "testEnvironment": "node",
+    "maxWorkers": "50%"
   }
 }

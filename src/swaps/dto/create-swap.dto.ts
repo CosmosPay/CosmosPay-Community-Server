@@ -12,7 +12,7 @@ import { QuoteSwapDto } from '@/swaps/dto/quote-swap.dto';
 export class CreateSwapDto extends QuoteSwapDto {
   @ApiProperty({
     description:
-      'Account paying for (and signing) the swap — the tx source — on `chain`.',
+      'Account paying for (and signing) the swap (the tx source) on `chain`.',
     example: 'GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ',
   })
   @IsChainAddress('chain')
@@ -21,7 +21,10 @@ export class CreateSwapDto extends QuoteSwapDto {
   @ApiPropertyOptional({
     description:
       'Account credited the destination asset. Defaults to `source` ' +
-      '(a self-swap). Must already trust a non-native destination asset. ' +
+      '(a self-swap). On Stellar, when it is `source` and does not trust a ' +
+      'non-native destination asset yet, the transaction adds that trustline ' +
+      'first (see `trustline` on the response); any other account must already ' +
+      'trust the asset, because only it can add the trustline. ' +
       'Stellar only: on Solana and Monad the output always goes to `source`.',
     example: 'GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ',
   })

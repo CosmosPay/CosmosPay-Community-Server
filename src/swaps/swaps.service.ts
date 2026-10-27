@@ -7,15 +7,31 @@ import {
   TransactionBuilder,
 } from '@stellar/stellar-sdk';
 import { AppConfig, StellarNetwork } from '@/config/configuration';
+import { CHAIN_ADDRESS_RULES } from '@/chains/chain-address';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
+import {
+  assertMerchantFeeCovered,
+  type MerchantFeeRecord,
+  type MerchantFeeTerms,
+  merchantFeeRecord,
+  readMerchantFeeRecord,
+  resolveMerchantFee,
+  splitMerchantFee,
+} from '@/common/merchant-fee/merchant-fee';
 import { resolvePlanCommissionBps } from '@/common/plan-commission';
 import { isUniqueViolation } from '@/common/prisma-errors';
 import { resolveNetwork } from '@/common/stellar-network';
 import { project } from '@/common/projection';
+import { PublicRecordTokens } from '@/common/public-record-token';
+import {
+  LEGACY_RECORD_TOKEN_ROUTES,
+  type LegacyRecordTokenRoute,
+} from '@/common/public-record-token.constants';
 import { PrismaService } from '@/prisma/prisma.service';
 import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
 import { StellarAccountLoader } from '@/stellar/account-loader.service';
+import type { BalanceEntry } from '@/stellar/account-loader.service';
 import { assetLabel, resolveAsset, ResolvedAsset } from '@/stellar/asset';
 import { resolveMemoId } from '@/stellar/memo';
 import { sep7Qr, sep7TxUri } from '@/stellar/sep7';
@@ -29,7 +45,12 @@ import {
   resolveSlippage,
 } from '@/stellar/stellar-operation-policy';
 import { StellarService } from '@/stellar/stellar.service';
-import { cannotHaveSettled } from '@/stellar/stored-envelope';
+import { STELLAR_DECIMALS } from '@/stellar/stellar.constants';
+import {
+  addedTrustline,
+  cannotHaveSettled,
+  type IssuedAsset,
+} from '@/stellar/stored-envelope';
 import type {
   Prisma,
   Swap,
@@ -79,6 +100,7 @@ export const SWAP_PUBLIC_SELECT = {
   feeAmount: true,
   feeBps: true,
   swapAmount: true,
+  merchantFee: true,
   destAsset: true,
   destAssetIssuer: true,
   destEstimated: true,
@@ -100,11 +122,20 @@ export type PublicSwap = Prisma.SwapGetPayload<{
   select: typeof SWAP_PUBLIC_SELECT;
 }>;
 
-/** A public swap plus its derived QR — the shape single-swap responses return. */
-export type SwapView = PublicSwap & {
+/**
+ * A public swap plus its derived QR — the shape single-swap responses return.
+ * Its merchant fee is the stored record read back (null without one).
+ */
+export type SwapView = Omit<PublicSwap, 'merchantFee'> & {
+  merchantFee: MerchantFeeRecord | null;
   qr: string;
   /** The commission MEMO_TEXT label when a commission was collected, else null. */
   commissionMemo: string | null;
+  /**
+   * The destination asset when the envelope also adds the source's trustline
+   * for it (read from the stored XDR), else null.
+   */
+  trustline: IssuedAsset | null;
 };
 
 /**
@@ -129,7 +160,9 @@ interface PricedSwap {
   slippageBps: number;
   sendAmount: string; // gross input
   feeAmount: string; // taken from the source asset
-  swapAmount: string; // routed (input − fee)
+  swapAmount: string; // routed (input − fees)
+  /** The merchant fee the request named, with the amount it charges; null without one. */
+  merchantFee: { terms: MerchantFeeTerms; record: MerchantFeeRecord } | null;
   estimated: string; // quoted destination amount
   destMin: string; // slippage-protected minimum
   path: SwapPathHop[];
@@ -145,7 +178,8 @@ interface PathRecord {
  * Stellar native swaps. Stellar has no swap primitive — asset exchange is a
  * `PathPaymentStrictSend` routed through the DEX/AMM. This service is
  * **non-custodial**: it quotes via Horizon, assembles the unsigned transaction
- * (an optional platform fee payment + the path payment), and relays the signed
+ * (the source's trustline for the bought asset when it lacks one, an optional
+ * platform fee payment, then the path payment), and relays the signed
  * transaction the customer hands back. Funds never pass through Cosmos Pay.
  */
 @Injectable()
@@ -160,6 +194,7 @@ export class SwapsService {
     private readonly consumers: ConsumerResolverService,
     private readonly accounts: StellarAccountLoader,
     private readonly relay: SignedTransactionRelay,
+    private readonly recordTokens: PublicRecordTokens,
   ) {}
 
   // ── Quote ───────────────────────────────────────────────────────────────────
@@ -193,8 +228,24 @@ export class SwapsService {
    * non-expired PENDING swap for the same `(consumer, source, network)` with 409
    * — but only one that may already have settled; see
    * {@link assertNoInflightSwap}.
+   *
+   * On the shared public key the answer carries `publicToken`, the swap's
+   * read token (`PublicRecordTokens`): derived from its id, so a replay answers
+   * the same one.
    */
   async create(
+    consumer: GatewayConsumer,
+    dto: CreateSwapDto,
+    headerIdempotencyKey?: string,
+  ): Promise<SwapView & { publicToken?: string }> {
+    return this.recordTokens.attach(
+      consumer,
+      'swap',
+      await this.build(consumer, dto, headerIdempotencyKey),
+    );
+  }
+
+  private async build(
     consumer: GatewayConsumer,
     dto: CreateSwapDto,
     headerIdempotencyKey?: string,
@@ -247,19 +298,50 @@ export class SwapsService {
       account.sequenceNumber(),
     );
 
-    // The destination must already trust a non-native asset, or the path payment
-    // would fail on-chain. Catch it now with a clear message.
-    await this.assertDestinationCanReceive(network, destination, priced.dest, {
-      account,
-      address: dto.source,
-    });
+    // A non-native destination asset needs a trustline on the account that
+    // receives it, or the path payment fails on-chain. The source signs this
+    // transaction, so when it is the receiver the transaction adds the trustline
+    // itself; any other receiver has to add it on its own (see trustlineToAdd).
+    const trustline = await this.trustlineToAdd(
+      network,
+      destination,
+      priced.dest,
+      { account, address: dto.source },
+    );
+    await this.assertMerchantWalletCanReceive(network, priced, dto.source);
+    const collectsFee = feeStroops > 0n && !!feeWallet;
+    if (trustline) {
+      // The trustline raises the source's minimum balance by a base reserve.
+      // Refuse now rather than build an envelope the network rejects with
+      // op_low_reserve after taking its fee.
+      const opCount =
+        1 + (collectsFee ? 1 : 0) + (priced.merchantFee ? 1 : 0) + 1;
+      this.accounts.assertCanAddTrustline(account, account.balances, {
+        address: dto.source,
+        asset: trustline,
+        nativeSpent:
+          priced.send.code === 'native'
+            ? toStroops(priced.sendAmount) +
+              (priced.merchantFee?.terms.paidBy === 'payer'
+                ? toStroops(priced.merchantFee.record.amount)
+                : 0n)
+            : 0n,
+        txFee: BigInt(stellarCfg.baseFee) * BigInt(opCount),
+      });
+    }
 
     const builder = new TransactionBuilder(account, {
       fee: stellarCfg.baseFee,
       networkPassphrase: this.stellar.passphrase(network),
     });
+    // Operation 0, only when needed: the source trusts the asset it is about to
+    // receive. First, so the path payment after it can credit the new
+    // trustline; one signature covers both.
+    if (trustline) {
+      builder.addOperation(Operation.changeTrust({ asset: trustline.asset }));
+    }
     // Operation 1: collect the platform fee in the source asset (skipped at 0%).
-    if (feeStroops > 0n && feeWallet) {
+    if (collectsFee) {
       builder.addOperation(
         Operation.payment({
           destination: feeWallet,
@@ -268,7 +350,19 @@ export class SwapsService {
         }),
       );
     }
-    // Operation 2: the swap itself — send the net amount, receive ≥ destMin.
+    // Operation 2, when the request named one: the merchant's own fee, in the
+    // source asset, to the wallet it named. Its own payment, so the plan
+    // commission and the merchant fee stay apart on-chain.
+    if (priced.merchantFee) {
+      builder.addOperation(
+        Operation.payment({
+          destination: priced.merchantFee.terms.wallet,
+          asset: priced.send.asset,
+          amount: priced.merchantFee.record.amount,
+        }),
+      );
+    }
+    // Operation 3: the swap itself — send the net amount, receive ≥ destMin.
     builder.addOperation(
       Operation.pathPaymentStrictSend({
         sendAsset: priced.send.asset,
@@ -303,6 +397,12 @@ export class SwapsService {
       feeAmount: priced.feeAmount,
       feeBps: priced.feeBps,
       swapAmount: priced.swapAmount,
+      ...(priced.merchantFee
+        ? {
+            merchantFee: priced.merchantFee
+              .record as unknown as Prisma.InputJsonValue,
+          }
+        : {}),
       destAsset: priced.dest.code,
       destAssetIssuer: priced.dest.issuer,
       destEstimated: priced.estimated,
@@ -358,7 +458,7 @@ export class SwapsService {
       throw ApiError.conflict(
         ApiErrorCode.IdempotencyConflict,
         'A swap with this transaction hash already exists for this network. ' +
-          'Two creates rebuilt the same Stellar sequence/XDR — use an ' +
+          'Two creates rebuilt the same Stellar sequence/XDR. Use an ' +
           'Idempotency-Key on retries, or wait for the prior swap to settle/expire.',
       );
     }
@@ -391,7 +491,17 @@ export class SwapsService {
         this.config.get('stellar', { infer: true }).swap,
       ),
       memo,
+      merchantFee: this.merchantFeeTerms(dto),
     };
+  }
+
+  /** The request's merchant fee, in stroops, checked against Stellar's address rule. */
+  private merchantFeeTerms(dto: QuoteSwapDto): MerchantFeeTerms | null {
+    return resolveMerchantFee(
+      dto.merchantFee,
+      STELLAR_DECIMALS,
+      CHAIN_ADDRESS_RULES.stellar,
+    );
   }
 
   /**
@@ -506,6 +616,9 @@ export class SwapsService {
   }> {
     const where = {
       consumer: { apisixUsername: consumer.username },
+      // Only the network this key targets (`resolveNetwork`): a production key never lists a
+      // test-network row, nor a sandbox key a mainnet one.
+      network: this.resolveNetwork(consumer),
       ...(query.status ? { status: query.status } : {}),
     };
     // `Promise.all`, not `$transaction` — see `@/common/pagination` for why.
@@ -523,8 +636,17 @@ export class SwapsService {
   }
 
   // ── Read (one) ──────────────────────────────────────────────────────────────
-  async findOne(consumer: GatewayConsumer, id: string): Promise<SwapView> {
-    const swap = await this.findOwned(consumer, id);
+  /**
+   * One swap. On the shared public key it takes the swap's `X-Record-Token`
+   * (`recordToken`); without the right one it is the 404 of a swap that does
+   * not exist.
+   */
+  async findOne(
+    consumer: GatewayConsumer,
+    id: string,
+    recordToken?: string,
+  ): Promise<SwapView> {
+    const swap = await this.findOwned(consumer, id, recordToken);
     return this.withQr(swap);
   }
 
@@ -543,8 +665,16 @@ export class SwapsService {
     consumer: GatewayConsumer,
     id: string,
     signedXdr: string,
+    recordToken?: string,
   ): Promise<SwapSubmitOutcome> {
-    const swap = await this.findOwned(consumer, id);
+    // A legacy route: the public key may still leave the token out (see
+    // `PublicRecordTokens`); the relay's envelope check is the defence then.
+    const swap = await this.findOwned(
+      consumer,
+      id,
+      recordToken,
+      LEGACY_RECORD_TOKEN_ROUTES.swapSubmit,
+    );
     const { view, ...outcome } = await this.relay.submit(
       swap,
       consumer.username,
@@ -587,7 +717,13 @@ export class SwapsService {
     );
     const sendStroops = toStroops(dto.amount);
     const feeStroops = computeFee(sendStroops, feeBps);
-    const swapStroops = sendStroops - feeStroops;
+    // The plan commission is a share of `amount` as before. The merchant fee
+    // comes out of `amount` too (paid by the recipient) or is sent on top of it
+    // (paid by the payer): `net` is what is left of `amount` to route.
+    const merchant = this.merchantFeeTerms(dto);
+    const split = splitMerchantFee(sendStroops, merchant);
+    assertMerchantFeeCovered(split, merchant);
+    const swapStroops = split.net - feeStroops;
     if (swapStroops <= 0n) {
       throw ApiError.badRequest(
         ApiErrorCode.InvalidAmount,
@@ -608,6 +744,17 @@ export class SwapsService {
       sendAmount: fromStroops(sendStroops),
       feeAmount: fromStroops(feeStroops),
       swapAmount,
+      merchantFee: merchant
+        ? {
+            terms: merchant,
+            record: merchantFeeRecord(
+              merchant,
+              split.fee,
+              STELLAR_DECIMALS,
+              send.code,
+            ),
+          }
+        : null,
       estimated: fromStroops(estStroops),
       destMin: fromStroops(destMinStroops),
       path: best.path.map((p) =>
@@ -673,6 +820,7 @@ export class SwapsService {
         label: SWAP_COMMISSION_MEMO,
       },
       swap: sideOf(priced.send, priced.swapAmount),
+      merchantFee: priced.merchantFee?.record ?? null,
       destination: {
         asset: priced.dest.code,
         issuer: priced.dest.issuer,
@@ -787,57 +935,124 @@ export class SwapsService {
     return this.config.get('stellar', { infer: true }).swap.feeWallet;
   }
 
+  /**
+   * The merchant's wallet must exist and hold the source asset's trustline,
+   * or the fee payment fails on-chain and takes the swap with it. Refused here
+   * with the loader's own message: only that account can fix it. A fee paid to
+   * the source itself is no fee, and is refused as a mistake in the request.
+   */
+  private async assertMerchantWalletCanReceive(
+    network: StellarNetwork,
+    priced: PricedSwap,
+    source: string,
+  ): Promise<void> {
+    if (!priced.merchantFee) return;
+    const { wallet } = priced.merchantFee.terms;
+    if (wallet === source) {
+      throw ApiError.badRequest(
+        ApiErrorCode.ValidationFailed,
+        'merchantFee.wallet must be another account than source',
+      );
+    }
+    const receiver = await this.accounts.load(network, wallet);
+    this.accounts.assertCanReceive(
+      receiver.balances,
+      priced.send,
+      wallet,
+      'the merchant fee',
+    );
+  }
+
   private pathToAssets(path: SwapPathHop[]): Asset[] {
     return path.map((h) =>
       h.issuer ? new Asset(h.code, h.issuer) : Asset.native(),
     );
   }
 
+  /**
+   * The caller's swap, or 404. The shared public key also needs the swap's
+   * record token, checked before the table is read: a missing or wrong token
+   * is the same 404, so an id alone confirms nothing. On a legacy route
+   * (`legacyRoute`) a missing token is still admitted for now, and logged.
+   */
   private async findOwned(
     consumer: GatewayConsumer,
     id: string,
+    recordToken?: string,
+    legacyRoute?: LegacyRecordTokenRoute,
   ): Promise<Swap> {
+    if (
+      !this.recordTokens.admits(consumer, 'swap', id, recordToken, legacyRoute)
+    ) {
+      throw ApiError.notFound(`Swap ${id} not found`);
+    }
     const swap = await this.prisma.swap.findFirst({
       where: { id, consumer: { apisixUsername: consumer.username } },
     });
     if (!swap) {
       throw ApiError.notFound(`Swap ${id} not found`);
     }
+    if (legacyRoute) {
+      this.recordTokens.noteLegacyAccess(
+        consumer,
+        'swap',
+        id,
+        recordToken,
+        legacyRoute,
+      );
+    }
     return swap;
   }
 
   /**
-   * Ensures the destination can receive a non-native asset (has a trustline).
-   * Native XLM needs none. Reuses the already-loaded source account when the
-   * destination is the source (a self-swap).
+   * The trustline this swap's transaction has to add, or null when none is
+   * needed: the destination asset is native, or the receiver already trusts it
+   * (or issues it).
+   *
+   * Who lacks it decides what happens. A trustline is a `changeTrust` signed by
+   * its own account, and the source is the one account that signs this
+   * transaction: when it is also the receiver (a self-swap, the default), the
+   * trustline goes into the same envelope and one signature covers both. A
+   * different receiver signs nothing here, so it is refused with a message
+   * saying only that account can add the trustline. The source account already
+   * loaded is reused for a self-swap.
    */
-  private async assertDestinationCanReceive(
+  private async trustlineToAdd(
     network: StellarNetwork,
     destination: string,
     dest: ResolvedAsset,
-    source: { account: { balances: unknown[] }; address: string },
-  ): Promise<void> {
-    if (dest.code === 'native' || !dest.issuer) return;
-    const balances =
-      destination === source.address
-        ? source.account.balances
-        : (await this.accounts.load(network, destination)).balances;
-    const trusts = (balances as Array<Record<string, unknown>>).some(
-      (b) => b.asset_code === dest.code && b.asset_issuer === dest.issuer,
-    );
-    if (!trusts) {
-      throw ApiError.badRequest(
-        ApiErrorCode.TrustlineMissing,
-        `Destination ${destination} has no trustline for ${dest.code}:${dest.issuer} — ` +
-          'it must trust the asset before it can receive the swap',
-      );
+    source: { account: { balances: BalanceEntry[] }; address: string },
+  ): Promise<ResolvedAsset | null> {
+    if (dest.code === 'native' || !dest.issuer) return null;
+    if (destination === source.address) {
+      return this.accounts.hasTrustline(
+        source.account.balances,
+        dest,
+        destination,
+      )
+        ? null
+        : dest;
     }
+    const receiver = await this.accounts.load(network, destination);
+    this.accounts.assertCanReceive(
+      receiver.balances,
+      dest,
+      destination,
+      'the swap',
+    );
+    return null;
   }
 
-  /** A stored swap with its SEP-7 QR and commission label attached. */
+  /**
+   * A stored swap with its SEP-7 QR, commission label and added trustline
+   * attached. The trustline is read from the stored envelope, never from a
+   * column, so it always describes what the wallet is asked to sign, and a
+   * replayed swap answers exactly as it did when it was built.
+   */
   private async withQr(swap: Swap): Promise<SwapView> {
     return {
       ...project(swap, SWAP_PUBLIC_SELECT),
+      merchantFee: readMerchantFeeRecord(swap.merchantFee),
       qr: await sep7Qr(swap.uri),
       // A collected commission (feeAmount > 0) with no caller memo is labelled
       // on-chain with the commission memo text.
@@ -845,6 +1060,10 @@ export class SwapsService {
         toStroops(swap.feeAmount) > 0n && !swap.memo
           ? SWAP_COMMISSION_MEMO
           : null,
+      trustline: addedTrustline(
+        swap.xdr,
+        this.stellar.passphrase(swap.network as StellarNetwork),
+      ),
     };
   }
 

@@ -7,8 +7,9 @@ Conventions for this repo. They are enforced by `npm run lint`, which CI gates o
 | Command | What it does, and the trap in it |
 | --- | --- |
 | `npm run dev` | `prisma migrate deploy`, then `nest start --watch` — one instance on `.env` |
-| `npm run dev:local` | several instances from ONE `.env`, overrides in `dev-instances.json` (git-ignored, created from `dev-instances.example.json` on first run — keep it, it holds the recovery servers' keys). Default profile is `api` + `replica`; `-- recovery` runs `api` + `recovery-a` + `recovery-b`, `-- all` all four (`scripts/dev-local.mts`) |
-| `npm test` | jest under `node --experimental-vm-modules`. **Never `npx jest`:** without the flag most suites fail to load at `@stellar/stellar-sdk`'s ESM dependencies, which looks like real breakage and is not |
+| `npm run dev:local` | several instances from ONE `.env`, overrides in `dev-instances.json` (git-ignored, created from `dev-instances.example.json` on first run — keep it, it holds the recovery servers' keys). Default profile is `api` + `replica`; `-- recovery` runs `api` + `recovery-a` + `recovery-b`, `-- all` all four (`scripts/dev-local.mts`). One run per checkout: it restarts its instances itself after each compile without errors (not `node --watch`, whose watcher kept a core busy per instance), its build and instances end with it however it ends, and a new run first ends an earlier one and anything of this checkout it left running |
+| `npm run dev:local:stop` | ends a `dev:local` of this checkout and everything it started (on Windows ending a process leaves its children running); `-- --dry-run` only lists them |
+| `npm test` | jest under `node --experimental-vm-modules`. **Never `npx jest`:** without the flag most suites fail to load at `@stellar/stellar-sdk`'s ESM dependencies, which looks like real breakage and is not. Jest runs on half the cores (`maxWorkers: "50%"`, here and in `test/jest-e2e.json`): one worker per core but one held the machine at 100% |
 | `npm run test:e2e` | the suites in `test/` (`test/jest-e2e.json`), which `npm test` never sees |
 | `npm run lint` | eslint over `src`, `scripts`, `test` and `plugins`, zero warnings |
 | `npm run openapi:generate` | regenerates `openapi/openapi.json` + `.yaml`. A new or changed controller means running it and committing the spec — `openapi:check` fails CI on any diff |
@@ -17,6 +18,8 @@ Conventions for this repo. They are enforced by `npm run lint`, which CI gates o
 | `npm run db:migrate` | `prisma migrate dev`. A schema change ships its migration: CI applies every migration to a real Postgres and runs `prisma migrate diff --exit-code` against `schema.prisma` |
 | `npm run backups:reencrypt` | re-seals stored wallet backups under the current `WALLET_BACKUP_ENCRYPTION_KEY` — run it after turning the seal on and after every rotation, then drop the old key from `WALLET_BACKUP_ENCRYPTION_PREVIOUS_KEYS` (`-- --dry-run` only counts) |
 | `npm run plugins -- <cmd>` | third-party plugin folders: `new`, `check`, `sign`, `verify`, `keygen`, `publish`, `install` (`scripts/plugins.ts`) |
+| `npm run zk:deploy-testnet` | deploys the private payments token, auditor registry and fee account on TESTNET (Friendbot, no real funds). `-- --env-file .env --secrets-file .zk-secrets/testnet.json` writes the values instead of printing secrets; run again it only verifies; `-- --redeploy` strands every payment on the old token |
+| `npm run zk:e2e-testnet` | the real-chain check of private payments on testnet: registers, proves, transfers and confirms through the module's own services. Slow (UltraHonk proofs in Node), needs the deployed set in `.env` |
 
 ## Imports: always use the path aliases, never relative paths
 
@@ -252,11 +255,23 @@ table. These are the rules that did not hold on their own:
   - `process.env` is read only in `src/config/configuration.ts`.
 - **Look before writing a helper.** Grep `src/stellar/` and `src/common/` for a
   Stellar, pricing or tenancy helper first: `resolveAsset`,
-  `StellarAccountLoader` (including `assertCanAfford`), `resolveNetwork`,
+  `StellarAccountLoader` (including `assertCanAfford`, `assertCanReceive` and
+  `assertCanAddTrustline`), `resolveNetwork`,
   `resolvePlanCommissionBps`, `ConsumerResolverService`, `resolveMemoId`,
   `resolveSlippage` / `resolveIdempotencyKey`, the SEP-7 builders in
   `stellar/sep7.ts` and `SignedTransactionRelay` exist because private copies
   drifted apart.
+- **A missing trustline goes into the envelope only for the account that signs
+  it.** A `changeTrust` must be signed by its own account. When the source of a
+  Stellar transaction this service builds receives an issued asset it does not
+  trust yet (a self-swap), the build adds `changeTrust` as the first operation and
+  prices the extra 0.5 XLM reserve first (`assertCanAddTrustline`: subentries,
+  sponsorships and open offers, as the network counts them). Any other account
+  that lacks one (a swap's third-party `destination`, a `tx` intent's merchant, a
+  cross-chain `recipient`) is refused with `assertCanReceive`, whose message
+  says only that account can add it. A response that reports the added
+  trustline reads it from the stored XDR (`addedTrustline`), never from a
+  column, so a replay answers as the first call did.
 
 ## Chains and native plugins
 
@@ -266,9 +281,21 @@ table. These are the rules that did not hold on their own:
   does not compile until every table has its entry. A request that names no chain
   means Stellar, and must keep behaving byte for byte as it did: the Stellar
   signing challenges have no `chain:` line, alias resolution defaults to Stellar.
+  A field that names no chain but takes any (a customer's `account`) reads the
+  chain from the shape: `@IsAnyChainAddress()` to validate, `normalizeAnyChainAddress`
+  to store (EIP-55 on Monad, the spelling payment intents record a payer in).
+- **A customer holds wallets** (`customer_wallet`, product owner 2026-10-27: one customer pays from
+  several wallets on different chains). A wallet belongs to one customer of a merchant: the
+  unique index is `(consumerId, chain, address)`, so a payment's payer counts toward exactly one
+  customer and the payer recorded on settlement (`ensureForPayer`) is looked up by chain and
+  address. `account` is the deprecated first wallet: answered from `wallets`, and on `PATCH` it
+  edits that wallet only. Wallets change through their own routes, never through `PATCH`.
 - **Solana and Monad are reached only through `SolanaRpcClient` / `EvmRpcClient`**,
   which check the node's genesis hash / `eth_chainId` before trusting it. Never
-  call a node URL directly.
+  call a node URL directly. Stellar mainnet's Soroban RPC is the same rule:
+  `SorobanRpcClient` (`src/stellar/soroban-rpc.client.ts`, `STELLAR_RPC_URL_MAINNET`)
+  checks the passphrase first (private payments keep their own per-tier RPC in
+  `ConfidentialSdk`).
 - **Integrations that are not the chain itself are native plugins** under
   `src/native-plugins/<slug>/` (BlindPay, DeFindex), switched on by
   `PLUGINS_ENABLED`. The core never imports one — lint enforces it — and a plugin
@@ -289,16 +316,45 @@ table. These are the rules that did not hold on their own:
   `chain-swaps.service.ts` (`OtherChain = Exclude<Chain, 'stellar'>`), so a new
   chain does not compile until it has a venue. A swap between chains is
   `/v1/cross-chain-swaps` on NEAR Intents (`src/near-intents/`), which refuses
-  every same-chain pair. All of them are always compiled in, not plugins.
-  Each aggregator only prices and builds: the wallet signs, and this service
-  checks the signed transaction is the one it built before broadcasting it
-  through its own RPC. Anything per chain is a `Record<Chain, …>`
+  a same-chain pair on Stellar, Solana and Monad (they have a venue above) and
+  allows it on every other network. All of them are always compiled in, not
+  plugins. Each aggregator only prices and builds: the wallet signs, and this
+  service checks the signed transaction is the one it built before broadcasting
+  it through its own RPC. Anything per chain is a `Record<Chain, …>`
   (`NEAR_INTENTS_BLOCKCHAINS`, `DEPOSIT_LINK_BUILDERS`, `CHAIN_SWAP_PROVIDERS`),
   deposit links use this service's own SEP-7 / Solana Pay / EIP-681 builders, and
   third-party HTTP goes through `requestUpstreamJson` (`src/common/upstream-http.ts`).
+- **Cross-chain swaps reach more networks than `Chain`.** Every network NEAR
+  Intents lists and this service can validate (35: the three chains, 15 EVM
+  networks, the UTXO coins, XRP Ledger, Tron, TON, NEAR, Sui, Aptos, Movement,
+  Starknet, Cardano, Aleo, Fogo) is one entry of `CROSS_CHAIN_NETWORKS`
+  (`src/cross-chain-swaps/cross-chain-networks.ts`), a
+  `Record<CrossChainNetworkId, …>` holding its address rule, transaction-id rule
+  and deposit-link builder (null where the chain has no wallet-link standard, so
+  `depositUri` is nullable). The three settled chains keep their ids and reuse
+  `CHAIN_ADDRESS_RULES` and `DEPOSIT_LINK_BUILDERS`; the others use 1Click's
+  `blockchain` code. An EIP-681 link names a chain id from
+  `CROSS_CHAIN_EVM_CHAIN_IDS` only after it was checked against chainlist and the
+  chain's own `eth_chainId`: a wrong id sends the deposit to another chain. A
+  1Click blockchain with no entry (`qtc`, `adi`) is never offered: an address this
+  service cannot validate is a refund it cannot promise.
+- **Monad swaps with a merchant fee go through `contracts/MerchantFeeSwapRouter.sol`**
+  (`KURU_MERCHANT_FEE_ROUTER`), one deployment per Kuru Flow router, with no owner. It
+  is not a deposit address: wallets approve it and send it value, so the venue checks
+  the deployed code against the artifact (`eth_getCode` must equal the runtime a
+  creation `eth_call` of `routerInitCode(aggregator())` answers) before handing the
+  address out, and refuses a Kuru quote routed through another aggregator. The router
+  calls nothing but its immutable `aggregator` and the two tokens, pulls only from
+  the caller and leaves no allowance; keep all three when changing it, and a changed
+  router is a new deployment the operator points the variable at.
 - **Monad deposit addresses are `CREATE2` addresses of
-  `contracts/PaymentForwarder.sol`**, so every one of them depends on the exact
-  bytecode in `src/evm/payment-forwarder.artifact.ts`. Regenerate it only with
+  `contracts/PaymentForwarder.sol`**, or, for an intent with a merchant fee, of
+  `contracts/PaymentSplitForwarder.sol` (two more constructor arguments: the
+  fee's wallet and amount; the row's `feeWallet` / `merchantFee` say which), so
+  every one of them depends on the exact bytecode in its artifact
+  (`src/evm/payment-forwarder.artifact.ts`, `payment-split-forwarder.artifact.ts`).
+  A changed contract is a NEW contract with an artifact of its own, never a
+  recompile of one whose addresses may hold money. Regenerate it only with
   `npm run contracts:compile` (the spec fails if source and artifact disagree),
   and never while a deposit address built from the old bytecode may still hold
   or receive money: the forwarder rebuilds each address from the CURRENT
@@ -316,7 +372,23 @@ Each of these was a real finding in this codebase, not a hypothetical:
   keyed by consumer — a memo, an `Idempotency-Key`, an in-flight guard, a list — is
   shared by all of them. A replay that returns a stored row checks first that the
   request matches it (otherwise `409 idempotency_conflict`), and a new route is
-  unreachable with that key until it carries `@AllowPublicKey()`.
+  unreachable with that key until it carries `@AllowPublicKey()`. Anyone can fetch
+  that key (`GET /v1/public-key`), so an id is not a secret: the only reads it may
+  make of what it wrote are ONE row by its id AND its record token
+  (`PublicRecordTokens`, `src/common/public-record-token.ts`): the create answers
+  `publicToken` = `base64url(HMAC-SHA256(HKDF(APISIX_GATEWAY_SECRET,
+  "public-record-token v1"), "<kind>:<id>"))`, and the row's routes take it in
+  `X-Record-Token`. A wrong token is the 404 of a missing row everywhere, checked in
+  constant time before the table is read; a missing one is that 404 too on
+  `GET /v1/swaps/{id}`, `/v1/cross-chain-swaps/{id}`, `/v1/usdt0/transfers/{id}` and
+  the USDT0 submit. The two routes the wallet called with the public key before
+  tokens existed (`LEGACY_RECORD_TOKEN_ROUTES`: swap submit, cross-chain deposit)
+  still accept a missing token, logged as a deprecation (`noteLegacyAccess`), until
+  `PUBLIC_RECORD_TOKEN_REQUIRED_ON_LEGACY=true`; flip it once the wallet sends the
+  token, and never add a route to that list. Real keys are untouched. A new
+  public-key create whose row can be read back issues a token (`attach`) and its
+  by-id routes check it (`admits`), with a new kind in `PUBLIC_RECORD_KINDS`. A list
+  never takes the public key.
 - **A `@Public()` route has no consumer.** It is served without key-auth, so
   `ApisixGuard` drops whatever `X-Consumer-Username` the client sent. Never read
   `@CurrentConsumer()` there.
@@ -329,10 +401,18 @@ Each of these was a real finding in this codebase, not a hypothetical:
   row carries `raw` provider payloads and internal ids.
 - **Every tenant query filters by the calling consumer**, and a miss on someone
   else's row is a 404, not a 403: "exists but not yours" is an ownership oracle.
+  **Every list also filters by the key's network** (`resolveNetwork`): a production key
+  listed test-network payment intents until every `findAll` carried it.
 - **A route whose cost an error cannot refund — XLM spent, an account created
   on-chain — carries `@RateLimit`.**
 - **A guard that refuses logs the refusal.** Interceptors run after guards, so
   the access log never sees a request a guard turned away.
+- **A plan commission with nowhere to be paid is a misconfiguration, not a free
+  swap.** `commissionWithRecipient` (`src/common/plan-commission.ts`) answers
+  `503 misconfigured` when `NEAR_INTENTS_FEE_RECIPIENT`, `SOLANA_SWAP_FEE_WALLET`
+  or `MONAD_SWAP_FEE_WALLET` is missing. `SWAP_COMMISSION_DEV_WAIVER=true` waives
+  (and logs) it for a local service only; `env.validation.ts` refuses it when
+  `NODE_ENV=production`, and that refusal must stay.
 
 ## Wallet sign-in, backups and the recovery servers
 
@@ -383,6 +463,220 @@ that breaks two boundaries.
   contract**, pinned as literals in `src/wallet-auth/wallet-auth-core.spec.ts` and
   in the wallet's `tests/unit/signIn.test.ts` / `tests/unit/recovery.test.ts`.
   Change one side and no sign-in or setup can finish.
+
+## Private payments (`zk-payments`): Cosmos Pay's confidential token, and how confirm decides
+
+**Private payments wherever a person reads, ZK only in identifiers.** Merchants and
+payers do not know what "ZK" means, so Swagger summaries and descriptions, error
+messages and the seven READMEs say "private payment" ("pago privado", ...). `zk`/`ZK`
+stays in what code and operators read: the routes (`/v1/zk-payments`,
+`/v1/zk-checkout`), `ZK_PAYMENTS_*`, the `zk_payment` table, the error codes and
+`ZK_PAYMENT_SUCCEEDED`. Never rename those for wording: they are a contract.
+
+`src/zk-payments/` serves payments whose amount is hidden on-chain, on Cosmos Pay's
+OWN instance of OpenZeppelin's Confidential Token (`stellar-confidential` 0.8.0),
+for a 0.18% commission (`ZK_PAYMENT_FEE_BPS = 18`, a constant: the price of the
+product, never an env var). Testnet only; mainnet is off until `ZK_PAYMENTS_MAINNET_*`
+is set.
+
+**The model.** `scripts/zk/deploy-testnet.ts` deploys, from wasm already on testnet
+(read from the demo's instances, no Rust build), a NEW auditor registry whose key id 0
+is `K_aud = k·H` for a scalar only Cosmos Pay holds, and a NEW vanilla token over
+native XLM that points at it and at the demo's verifier (`CAN45PFA…`, its v0.8.0 VKs
+registered). So every account on our token is under OUR auditor key, and the server
+can read every amount. A fee account is registered on the token by the same script
+(a register proof generated in Node). Run again, the script verifies the configured
+set on-chain and stops; `--redeploy` strands every payment on the old token.
+`scripts/zk/e2e-testnet.ts` is the real-chain check (Friendbot accounts, proofs in
+Node, the module's own services over an in-memory Prisma).
+
+**The environment.** One set per tier, `ZK_PAYMENTS_TESTNET_*` and
+`ZK_PAYMENTS_MAINNET_*` (`TOKEN`, `AUDITOR_REGISTRY`, `VERIFIER`, `AUDITOR_SECRET`,
+`FEE_ACCOUNT`, `DEPLOYED_LEDGER`, `RPC_URL`). A set is all or nothing:
+`src/config/zk-payments-env.ts` refuses half of one at boot, and the boot never needs
+any of it. `ZkNetworksService` is the module's one reader of `zkPayments`, and its
+`configFor(network)` is the ONE builder behind both `GET /v1/zk-payments/config` and
+the keyless `GET /v1/zk-checkout/config`: never build that shape twice. The auditor
+secret is in no response, no log and no tracked file; the deployer's and the fee
+account's keys are operator secrets the server never needs (`.zk-secrets/`, git-ignored).
+
+**Two prefixes, on purpose.** The merchant's routes are `/v1/zk-payments` (API key);
+the payer's are `/v1/zk-checkout` (`@Public()`, per-address budgets, `Cache-Control:
+no-store`, no CORS headers written here). APISIX serves a keyless read as a PREFIX
+route, which works only when nothing under the prefix needs a key, so a new keyless
+route goes under `/v1/zk-checkout` and a keyed one never does.
+
+**How confirm decides** (`zk-payment-verification.ts`, pure, and its spec pins the
+order). The route is public and decrypts whatever hashes it is given with the
+auditor key, so the ORDER of the checks is security, not style:
+
+1. neither hash settled another private payment (DB, before any RPC call; `409`);
+2. both transactions exist and succeeded;
+3. each is ONE operation calling `confidential_transfer` on the payment's token, with
+   exactly one `transfer` event from that contract;
+4. both closed inside `[createdAt - 60 s, expiresAt]` (ledger close time);
+5. both come from the same payer;
+6. the right recipients (merchant, fee account);
+7. only then the amounts: the recipient-auditor channel decrypts to exactly
+   `netAmount` / `feeAmount`, the sender channel agrees (`channelsAgree`), and
+   `commit(amount, r_transfer)` equals the `C_transfer` of the invocation.
+
+A payment with a merchant fee has a third leg: `merchantFeeTxHash`, a transfer of
+`merchantFee.amount` to `merchantFee.wallet` (registered on the token, like the
+recipient, checked at create). It runs through every step beside the other two, each
+step over all legs before the next; confirm refuses the hash on a payment without a
+merchant fee, and its absence on one with it, before reading the database or the chain.
+
+Steps 4 and 5 before 7 are what keep confirm from being an amount oracle on someone
+else's transfer (a payment created after it closed fails on time; a stranger's
+transfer fails on payer). No message may ever contain a decrypted amount. A refusal
+leaves the row `PENDING`; settling is a compare-and-swap on `PENDING`, and the hashes
+are `@unique` across the table. A same-hash replay on a settled row emits
+`ZK_PAYMENT_SUCCEEDED` again on purpose: the emitter's dedup claim absorbs it, and it
+is what heals a settle that died between the compare-and-swap and the emit. `EXPIRED` is never stored: a `PENDING` row past
+`expiresAt` READS as `EXPIRED` (`zk-payment-status.ts`, list filter included) and can
+still settle with transfers that closed in time.
+
+**The SDK boundary.** `stellar-confidential-token-sdk` is pinned to a GitHub commit
+and imported ONLY by `src/zk-payments/confidential-sdk.ts`, which hands the rest of
+the module plain data (strings, bigints, dates). Every spec mocks `ConfidentialSdk`;
+jest cannot load the SDK's ESM graph. Proving (`bb.js`) is for `scripts/zk/` only.
+
+Gotchas hit while building it:
+
+- **The SDK is ESM-only and this build is CommonJS**, where TypeScript turns
+  `import()` into `require()`, which the SDK's `exports` map (no `require` condition)
+  refuses. The adapter imports through `new Function('url', 'return import(url)')`.
+  And such an `import()` resolves a BARE specifier against the process's cwd, not the
+  module: it worked from the repo root and failed elsewhere. So `sdkEntryUrl` finds
+  the package on `require.resolve.paths` and imports its `exports` target as a
+  `file://` URL. Keep both halves.
+- **The SDK nests its own `@stellar/stellar-sdk` v14**; this repo has v17. Never pass
+  an `xdr` object, `Transaction` or `Contract` across the boundary: the classes are
+  different. The deploy script builds and submits with v17 itself and lets the SDK
+  submit only its own operations.
+- **v17's XDR is a new object model**: union arms and struct fields are properties
+  (`func.invokeContract.args`), not methods (`.contractData()` throws). Prefer
+  `scValToNative` / `humanizeEvents`, `Address.fromScAddress`, and
+  `getContractWasmByContractId` + SHA-256 for a contract's wasm hash.
+- **`C_transfer` is not in the `transfer` event.** It travels only in the invocation's
+  `data` argument (`ScVal` XDR bytes of `{ payload: { c_transfer, … }, proof }`), so
+  the adapter reads it from the envelope (a fee bump's inner transaction included).
+- **The SDK does not export its RPC event parser**, so the adapter feeds
+  `buildConfidentialEvent` an accessor over `humanizeEvents` output: the field mapping
+  stays the SDK's.
+- **The RPC keeps transactions about seven days** on SDF's testnet RPC
+  (`ledgerRetentionWindow` 120960); past it, confirm is `transaction_not_found`.
+  `expiresInMinutes` is capped at seven days for that reason.
+- **Testnet is reset** every few months, and the demo's verifier with it: redeploy
+  after a reset. The registry's manager (the throwaway deployer) can `rotate_key` id
+  0; if it ever does, every confirm fails until `_AUDITOR_SECRET` follows.
+- **The Soroban RPC is checked before it is trusted**: its `getNetwork` passphrase must
+  be the configured one (`ConfidentialSdk.assertNetwork`), like the Solana genesis
+  check. It is documented as the `Soroban RPC` upstream (503 only, like Horizon).
+- **`ZkPaymentsModule` is registered at the end of `AppModule`** (only `Usdt0Module`,
+  added later for the same reason, comes after it). The spec lists paths in module
+  order, and registering it mid-list moved other modules' paths and turned an
+  additive change into a 400-line spec diff. A new module goes last.
+- **`test/setup-env.ts` pins a fixture ZK set**: the developer `.env` carries the real
+  testnet one, and dotenv never overwrites a set value.
+
+## USDT0 (`src/usdt0/`): LayerZero's OFT from Stellar, and what was verified on mainnet
+
+`/v1/usdt0` sends Tether's USDT0 from Stellar to EVM networks: the holder signs ONE
+Soroban transaction, `send` on the OFT (`CBOWOLFS...`), which burns it and LayerZero
+delivers it (native USDT on Ethereum, USDT0 elsewhere). Mainnet only; a dev key gets
+`available: false` on the routes and `network_unsupported` elsewhere. Every address,
+endpoint id and route in `usdt0.constants.ts` was read from mainnet by simulation
+(`peer(eid)` set for exactly the 21 routes). No observer: a read of one transfer
+refreshes it (ledger first, then LayerZero Scan), throttled per row by `lastCheckedAt`.
+
+- **Pure where it can be:** `usdt0-oft.ts` (ScVal codec, dust, fee buffer),
+  `usdt0-ledger.ts` (envelope check, result codes, ledger outcome), `usdt0-scan.ts`
+  (Scan status table), `usdt0-funds.ts` (USDT0 and XLM refusals). The RPC is
+  `SorobanRpcClient`, Scan is `LayerZeroScanClient`; specs mock both.
+- **A struct is an `ScMap` with its keys sorted**, or the host refuses it; `to` is 12
+  zero bytes + the 20-byte EVM address. `functionName` of an invocation is an
+  `XdrString` in v17: read it with `String(...)`.
+- **The SAC has 7 decimals, the OFT shares 6**: the 7th is dust left in the account.
+  The transaction sends the dust-free amount with `min_amount_ld` = `quote_oft`'s
+  `amount_received_ld`.
+- **`native_fee` gets a 20% buffer** (`USDT0_NATIVE_FEE_BUFFER_BPS`): the endpoint
+  refunds the excess to `refund_address` (the source) in the same transaction, which a
+  mainnet simulation showed. The balance check prices the whole limit plus the
+  network fee (about 1.45 XLM of Soroban resources) and the reserve.
+- **Simulation needs no existing account and no sequence** (`new Account(g, '0')`).
+  Only source-account auth entries are accepted from the `send` simulation.
+- **The XDR is about 7,000 characters**, too big for a QR: `qr` is null then.
+- **LayerZero Scan indexes a Stellar message by guid first** and fills in the source
+  hash minutes later, so ask `/messages/guid/{guid}` when the guid is known (it is
+  `send`'s return value) and `/messages/tx/{hash}` (64 lowercase hex, no `0x`) only
+  when it is not. A 404 is "not yet". Delivery took 1,612 to 1,661 s on every route
+  on 2026-10-25.
+- **Fees go through `contracts/soroban/usdt0-fee-wrapper`** (`USDT0_FEE_WRAPPER`): one
+  operation per Soroban transaction leaves no room for a payment of its own, so the
+  operation calls the wrapper's `send`, which transfers each fee in its list (the plan
+  commission, then a merchant fee) in USDT0 and calls the OFT's `send` with the same
+  arguments, all under the holder's one source-account authorization (checked on
+  testnet: one entry, each token transfer and the OFT's send as sub-invocations).
+- **A command in the docs never writes a value right after a secret-named flag.** The wrapper's
+  constructor takes `--token` (USDT0's SAC id, public), and `--token C...` in the README was a
+  GitGuardian "Generic CLI Secret" incident (a false positive, 2026-10-27). Set such values in a
+  shell variable with a neutral name first (`USDT0_SAC=...;` then `--token "$USDT0_SAC"`).
+- **The plan commission rides only through the wrapper**: without `USDT0_FEE_WRAPPER` a
+  transfer charges none (product owner, 2026-10-26). With it, a plan rate and no
+  `STELLAR_SWAP_FEE_WALLET` is `503 misconfigured` (`commissionWithRecipient`), and a
+  commission wallet that does not trust USDT0 is too. The wrapper's wasm is
+  committed and pinned (`USDT0_FEE_WRAPPER_WASM_SHA256`, its spec reads the
+  file); the service checks the deployed wasm and the OFT and token it is bound to
+  before handing a holder the transaction. `cargo test` in the crate runs its tests;
+  rebuilding it is a new wasm, a new hash and a new deployment.
+
+## Dashboard analytics read other modules' tables, in Postgres
+
+`src/analytics/` serves the dashboard (`GET /v1/summary`, `/v1/summary/series`,
+`/v1/balances`, the logs). It only reads, and it reads tables other modules own.
+
+- **Aggregate in SQL, never in JS.** Every figure is a `$queryRaw` with `COUNT(*)` /
+  `SUM(...) FILTER (WHERE ...)`, bounded by the consumer's index and a date window.
+  `summary` once loaded every payment intent and reduced it in Node, and one merchant's
+  history blocked every other request. A spec asserts no `findMany` runs.
+- **USD figures are the one thing priced in TypeScript** (`usd-prices.ts`, `UsdPricesService`).
+  The settled payments are still summed in SQL, per chain, asset AND issuer
+  (`settledAssetsSql`); each row is then multiplied by NEAR Intents' cached reference price.
+  A mainnet token is matched only by its contract (on Stellar its code and issuer), never by
+  its name; a test-network one takes its mainnet namesake's price, and none when two listed
+  tokens share the symbol. Prices never fail a summary: the service waits
+  `USD_PRICES_WAIT_MS` and answers null, which is why every USD field is nullable. That wait
+  is paid only with no list at all: `NearIntentsClient.tokens` fetches the list at boot
+  (`NEAR_INTENTS_TOKENS_PREFETCH`) and, past its TTL, serves the one on hand while a single
+  background fetch replaces it (stale-while-revalidate, up to `NEAR_INTENTS_TOKENS_STALE_MS`).
+- **The summary, the series and the balances are cached in the process** (`ReadThroughCache`,
+  `src/common/read-through-cache.ts`): reused per consumer, network and figure for
+  `ANALYTICS_CACHE_TTL_MS` (10 s; `0` off, as `test/setup-env.ts` sets it), concurrent identical
+  calls sharing one computation, at most `ANALYTICS_CACHE_MAX_ENTRIES` keys. The key starts with
+  the local consumer id, so no tenant is served another's figures; a figure lags a new payment by
+  up to the TTL and each replica has its own cache. The consumer's id comes from
+  `ConsumerResolverService.resolveId` (cached a minute per username and credential) instead of an
+  upsert per read. The logs are pages a person reads: never cached.
+- **`GET /v1/summary/series` covers payments, every kind of swap (USDT0 transfers are the
+  `usdt0` kind), liquidity operations, webhook deliveries and private payments**, each with
+  `buckets` on the buckets of `seriesWindow` (UTC, weeks from Monday, the same as Postgres'
+  `date_trunc`), pre-seeded by `fillBuckets` so a quiet bucket is a zero, plus the window's
+  totals and the window before. Private payments are the `zkPayments` part (XLM, valued at XLM's
+  price; their `expired` is derived with `zkExpiredSql`, the SQL twin of `effectiveZkStatus`,
+  since nothing stores EXPIRED). Payments, swaps, liquidity and private payments are scoped by
+  consumer AND `resolveNetwork`; `chain_swap`, `cross_chain_swap` and `usdt0_transfer` rows are
+  always `public`, so a sandbox key counts none. Webhook deliveries are scoped by consumer only: an endpoint has
+  no network. The list routes of those modules are scoped the same way (consumer and
+  `resolveNetwork`), so a production key never lists a test-network row.
+- **Succeeded / failed / in progress is a table per model** (`SWAP_OUTCOMES`,
+  `CHAIN_SWAP_OUTCOMES`, `CROSS_CHAIN_SWAP_OUTCOMES`, `USDT0_TRANSFER_OUTCOMES`,
+  `LIQUIDITY_OPERATION_OUTCOMES` in `analytics.constants.ts`), turned into SQL by
+  `series-outcomes.ts`. Never guess from a status name: a new `SwapStatus`,
+  `CrossChainSwapStatus` or `Usdt0TransferStatus` value fails `tsc` until it is mapped, and
+  `series-outcomes.spec.ts` pins each decision. A new swap table is one entry
+  in `SWAP_SOURCES` (`analytics.service.ts`) and one kind in `SERIES_SWAP_KINDS`.
 
 ## The OpenAPI contract ships with the route — review Swagger every time
 

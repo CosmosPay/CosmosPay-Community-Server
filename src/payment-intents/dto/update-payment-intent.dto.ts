@@ -2,19 +2,25 @@ import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
 import {
   IsEnum,
+  IsIn,
   IsOptional,
   IsString,
   Matches,
   MaxLength,
 } from 'class-validator';
 import { PaymentIntentStatus } from '@generated/prisma/client';
-import { ANY_TX_ID_RE } from '@/payment-intents/payment-intents.constants';
+import {
+  ANY_TX_ID_RE,
+  CHECKOUT_THEMES,
+  type CheckoutTheme,
+} from '@/payment-intents/payment-intents.constants';
 import { lowercaseHexTxId } from '@/payment-intents/dto/validate-payment-intent.dto';
 
 /**
  * Advances the lifecycle of a stored payment intent (e.g. once the customer
  * submits the signed transaction). All fields optional so callers can patch
- * just the status, or attach the resulting transaction id.
+ * just the status, attach the resulting transaction id, or change the
+ * merchant's own `reference` and checkout design.
  */
 export class UpdatePaymentIntentDto {
   @ApiPropertyOptional({ enum: PaymentIntentStatus })
@@ -54,4 +60,16 @@ export class UpdatePaymentIntentDto {
   @IsString()
   @MaxLength(255)
   reference?: string;
+
+  @ApiPropertyOptional({
+    enum: CHECKOUT_THEMES,
+    description:
+      'Design of the hosted checkout page (`https://payments.cosmospay.lat/<id>`). ' +
+      'Accepted in any status, final ones included, alone or with the other ' +
+      'fields: it changes nothing about the payment.',
+    example: 'split',
+  })
+  @IsOptional()
+  @IsIn(CHECKOUT_THEMES)
+  checkoutTheme?: CheckoutTheme;
 }

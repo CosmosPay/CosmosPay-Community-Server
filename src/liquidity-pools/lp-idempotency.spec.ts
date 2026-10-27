@@ -10,6 +10,25 @@ const SOURCE = Keypair.random().publicKey();
 const OTHER = Keypair.random().publicKey();
 const ISSUER = Keypair.random().publicKey();
 const POOL_ID = 'dd'.repeat(32);
+const FEE_WALLET = Keypair.random().publicKey();
+/** 1% of each asset, out of the deposit. */
+const FEE_TERMS = {
+  bps: 100,
+  fixed: 0n,
+  wallet: FEE_WALLET,
+  paidBy: 'recipient' as const,
+};
+/** What a deposit of 1000 native + 100 USDC with {@link FEE_TERMS} stores. */
+const FEE_RECORD = {
+  bps: 100,
+  fixed: '0',
+  amount: '10',
+  asset: 'native',
+  amountB: '1',
+  assetB: 'USDC',
+  wallet: FEE_WALLET,
+  paidBy: 'recipient',
+};
 
 function storedDeposit(
   overrides: Partial<StoredLiquidityTerms> = {},
@@ -28,6 +47,7 @@ function storedDeposit(
     shares: null,
     slippageBps: 50,
     memo: null,
+    merchantFee: null,
     ...overrides,
   };
 }
@@ -60,6 +80,7 @@ function deposit(
     amountB: '100',
     slippageBps: 50,
     memo: null,
+    merchantFee: null,
     ...overrides,
   };
 }
@@ -75,6 +96,7 @@ function withdraw(
     shares: '50',
     slippageBps: 50,
     memo: null,
+    merchantFee: null,
     ...overrides,
   };
 }
@@ -156,6 +178,64 @@ describe('liquidityOperationMatchesRequest', () => {
         liquidityOperationMatchesRequest(
           storedDeposit(),
           deposit({ amountA: '5', amountB: null }),
+        ),
+      ).toBe(false);
+    });
+  });
+
+  describe('with a merchant fee', () => {
+    it('compares a deducted fee against the amounts the caller asked for, not the caps', () => {
+      // The caps are 990 / 99: the fee came out of 1000 / 100.
+      const stored = storedDeposit({
+        amountA: '990',
+        amountB: '99',
+        merchantFee: FEE_RECORD,
+      });
+      expect(
+        liquidityOperationMatchesRequest(
+          stored,
+          deposit({ merchantFee: FEE_TERMS }),
+        ),
+      ).toBe(true);
+      expect(
+        liquidityOperationMatchesRequest(
+          stored,
+          deposit({ amountA: '990', merchantFee: FEE_TERMS }),
+        ),
+      ).toBe(false);
+    });
+
+    it('compares a fee paid on top against the caps themselves', () => {
+      const onTop = { ...FEE_TERMS, paidBy: 'payer' as const };
+      expect(
+        liquidityOperationMatchesRequest(
+          storedDeposit({
+            merchantFee: { ...FEE_RECORD, paidBy: 'payer' },
+          }),
+          deposit({ merchantFee: onTop }),
+        ),
+      ).toBe(true);
+    });
+
+    it('never matches a request with another fee, or none', () => {
+      const stored = storedWithdraw({ merchantFee: FEE_RECORD });
+      expect(
+        liquidityOperationMatchesRequest(
+          stored,
+          withdraw({ merchantFee: FEE_TERMS }),
+        ),
+      ).toBe(true);
+      expect(liquidityOperationMatchesRequest(stored, withdraw())).toBe(false);
+      expect(
+        liquidityOperationMatchesRequest(
+          stored,
+          withdraw({ merchantFee: { ...FEE_TERMS, bps: 200 } }),
+        ),
+      ).toBe(false);
+      expect(
+        liquidityOperationMatchesRequest(
+          storedWithdraw(),
+          withdraw({ merchantFee: FEE_TERMS }),
         ),
       ).toBe(false);
     });

@@ -70,7 +70,7 @@ export function validatePluginDefinition(
   for (const host of definition.egress ?? []) {
     if (!PLUGIN_EGRESS_HOST_RE.test(host)) {
       errors.push(
-        `${at}: egress host "${host}" must be a lowercase DNS name — no scheme, port, IP or wildcard`,
+        `${at}: egress host "${host}" must be a lowercase DNS name (no scheme, port, IP or wildcard)`,
       );
     }
   }

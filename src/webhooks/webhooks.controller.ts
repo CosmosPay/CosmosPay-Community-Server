@@ -49,7 +49,7 @@ export class WebhooksController {
   @RequirePermissions('webhooks:write')
   @ApiOperation({
     summary:
-      'Register a webhook endpoint (returns the signing secret — shown once)',
+      'Register a webhook endpoint (returns the signing secret, shown once)',
   })
   @ApiCreatedResponse({ type: WebhookEndpointWithSecretEntity })
   create(
@@ -154,7 +154,7 @@ export class WebhooksController {
     status: 409,
     codes: [ApiErrorCode.PayloadExpired],
     description:
-      '`payload_expired` — the delivery is past its retention window. The ' +
+      '`payload_expired`: the delivery is past its retention window. The ' +
       'event body was cleared, so there is nothing left to re-send; the ' +
       'delivery row itself stays as an audit record.',
   })

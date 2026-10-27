@@ -4,6 +4,7 @@ import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { AppModule } from '@/app.module';
 import { AllExceptionsFilter } from '@/common/filters/all-exceptions.filter';
+import { recordToken, recordTokenKey } from '@/common/public-record-token';
 import { CROSS_CHAIN_DEPOSIT_RATE_LIMIT } from '@/cross-chain-swaps/cross-chain-swaps.constants';
 import { NearIntentsClient } from '@/near-intents/near-intents.client';
 import { PrismaService } from '@/prisma/prisma.service';
@@ -14,8 +15,9 @@ import { PrismaService } from '@/prisma/prisma.service';
  * refused by validation, so no case needs the network.
  *
  * As for /v1/swaps, the case that matters is the shared public key: the routes
- * an anonymous wallet needs (assets, quote, create, deposit) admit it, and the
- * two that read history back refuse it — one consumer is every anonymous user.
+ * an anonymous wallet needs (assets, quote, create, deposit, and reading the
+ * one swap it holds the id of) admit it, and the list refuses it: one consumer
+ * is every anonymous user.
  */
 describe('Cross-chain swaps guards (e2e)', () => {
   let app: NestExpressApplication;
@@ -45,8 +47,33 @@ describe('Cross-chain swaps guards (e2e)', () => {
 
   const nearIntentsMock = {
     tokens: jest.fn().mockResolvedValue([
-      { assetId: 'xlm', decimals: 7, blockchain: 'stellar', symbol: 'XLM' },
-      { assetId: 'btc', decimals: 8, blockchain: 'btc', symbol: 'BTC' },
+      {
+        assetId: 'xlm',
+        decimals: 7,
+        blockchain: 'stellar',
+        symbol: 'XLM',
+        price: 0.2257,
+      },
+      // Listed with no price: 1Click quotes nothing for it, so it is not offered.
+      { assetId: 'gnear', decimals: 24, blockchain: 'near', symbol: 'GNEAR' },
+      // Tagged as retiring: not offered either.
+      {
+        assetId: 'usdt0-old',
+        decimals: 6,
+        blockchain: 'eth',
+        symbol: 'USDT0(DEPRECATED)',
+        contractAddress: '0x0000000000000000000000000000000000000def',
+        price: 1,
+      },
+      {
+        assetId: 'btc',
+        decimals: 8,
+        blockchain: 'btc',
+        symbol: 'BTC',
+        price: 80484,
+      },
+      // A blockchain whose address format is not confirmed: never offered.
+      { assetId: 'qtc', decimals: 12, blockchain: 'qtc', symbol: 'QTC' },
     ]),
     quote: jest.fn(),
     status: jest.fn(),
@@ -157,17 +184,52 @@ describe('Cross-chain swaps guards (e2e)', () => {
       });
     }
 
-    it('lists only the assets on the chains this service knows', async () => {
+    it('lists the assets it can trade on every network it can validate, and only those', async () => {
       const res = await tenant(ASSETS, 'swaps:read').expect(200);
       expect(res.body.data).toEqual([
         {
           chain: 'stellar',
+          chainName: 'Stellar',
           symbol: 'XLM',
           assetId: 'xlm',
           decimals: 7,
           contract: null,
+          priceUsd: 0.2257,
+        },
+        {
+          chain: 'btc',
+          chainName: 'Bitcoin',
+          symbol: 'BTC',
+          assetId: 'btc',
+          decimals: 8,
+          contract: null,
+          priceUsd: 80484,
         },
       ]);
+    });
+
+    it('takes every network it reaches by id, and refuses one it does not (qtc)', async () => {
+      const body = {
+        originChain: 'btc',
+        originAsset: 'BTC',
+        destinationChain: 'eth',
+        destinationAsset: 'USDC',
+        amount: '0.01',
+        recipient: '0x76b4c56085ED136a8744D52bE956396624a730E8',
+        refundTo: 'bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4',
+      };
+      // Past validation: the asset lookup answers, not the DTO.
+      const reached = await tenant(QUOTE, 'swaps:read').send(body).expect(400);
+      expect(reached.body.code).toBe('asset_unsupported');
+
+      const refused = await tenant(QUOTE, 'swaps:read')
+        .send({ ...body, originChain: 'qtc' })
+        .expect(400);
+      expect(refused.body.code).toBe('validation_failed');
+      expect(refused.body.message.join(' ')).toMatch(
+        /originChain must be one of/,
+      );
+      expect(nearIntentsMock.quote).not.toHaveBeenCalled();
     });
 
     it('sends Stellar → Stellar to the native DEX without asking NEAR Intents', async () => {
@@ -204,12 +266,34 @@ describe('Cross-chain swaps guards (e2e)', () => {
       expect(res.body.message.join(' ')).toMatch(/refundTo.*solana/i);
     });
 
+    it('validates addresses on the other networks too', async () => {
+      const res = await tenant(QUOTE, 'swaps:read')
+        .send({
+          originChain: 'btc',
+          originAsset: 'BTC',
+          destinationChain: 'near',
+          destinationAsset: 'wNEAR',
+          amount: '0.01',
+          // NEAR account ids are lowercase; an EVM address is not a Bitcoin one.
+          recipient: 'Alice.NEAR',
+          refundTo: '0x76b4c56085ED136a8744D52bE956396624a730E8',
+        })
+        .expect(400);
+      expect(res.body.code).toBe('validation_failed');
+      expect(res.body.message.join(' ')).toMatch(/recipient.*chain near/i);
+      expect(res.body.message.join(' ')).toMatch(/refundTo.*chain btc/i);
+    });
+
     it('lists only its own swaps', async () => {
       const res = await tenant(LIST, 'swaps:read').expect(200);
       expect(res.body).toMatchObject({ data: [], total: 0 });
       expect(prismaMock.crossChainSwap.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: { consumer: { apisixUsername: 'cosmos_u1' } },
+          // The key's network: no environment header falls back to STELLAR_NETWORK.
+          where: {
+            consumer: { apisixUsername: 'cosmos_u1' },
+            network: 'testnet',
+          },
         }),
       );
     });
@@ -235,14 +319,34 @@ describe('Cross-chain swaps guards (e2e)', () => {
       await publicKey(ASSETS).expect(200);
     });
 
-    for (const route of [LIST, GET_ONE]) {
-      it(`is refused ${label(route)} before any swap is read (403)`, async () => {
-        const res = await publicKey(route).expect(403);
-        expect(res.body.code).toBe('insufficient_scope');
-        expect(prismaMock.crossChainSwap.findMany).not.toHaveBeenCalled();
-        expect(prismaMock.crossChainSwap.findFirst).not.toHaveBeenCalled();
+    it(`is refused ${label(LIST)} before any swap is read (403)`, async () => {
+      const res = await publicKey(LIST).expect(403);
+      expect(res.body.code).toBe('insufficient_scope');
+      expect(prismaMock.crossChainSwap.findMany).not.toHaveBeenCalled();
+      expect(prismaMock.crossChainSwap.findFirst).not.toHaveBeenCalled();
+    });
+
+    // A public swap follows its own status: one row by its id, still scoped
+    // to the public consumer.
+    it(`reaches ${label(GET_ONE)} with the swap's record token, scoped to the public consumer`, async () => {
+      const res = await publicKey(GET_ONE)
+        .set(
+          'X-Record-Token',
+          recordToken(recordTokenKey(SECRET), 'cross-chain-swap', SWAP_ID),
+        )
+        .expect(404);
+      expect(res.body.code).toBe('not_found');
+      expect(prismaMock.crossChainSwap.findFirst).toHaveBeenCalledWith({
+        where: { id: SWAP_ID, consumer: { apisixUsername: 'cosmos_wallet' } },
       });
-    }
+      expect(prismaMock.crossChainSwap.findMany).not.toHaveBeenCalled();
+    });
+
+    it(`refuses ${label(GET_ONE)} without the record token, before any swap is read (404)`, async () => {
+      const res = await publicKey(GET_ONE).expect(404);
+      expect(res.body.code).toBe('not_found');
+      expect(prismaMock.crossChainSwap.findFirst).not.toHaveBeenCalled();
+    });
   });
 
   describe(`the rate limit on ${label(DEPOSIT)}`, () => {

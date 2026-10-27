@@ -1,8 +1,19 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { AppConfig, StellarNetwork } from '@/config/configuration';
+import { CHAIN_ADDRESS_RULES } from '@/chains/chain-address';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
+import {
+  assertMerchantFeeCovered,
+  type MerchantFeeRecord,
+  type MerchantFeeTerms,
+  merchantFeeRecord,
+  readMerchantFeeRecord,
+  resolveMerchantFee,
+  sameMerchantFee,
+  splitMerchantFee,
+} from '@/common/merchant-fee/merchant-fee';
 import {
   isUniqueViolation,
   uniqueViolationColumns,
@@ -12,7 +23,9 @@ import { resolveNetwork } from '@/common/stellar-network';
 import { PrismaService } from '@/prisma/prisma.service';
 import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
 import { CustomersService } from '@/customers/customers.service';
-import { assetLabel, resolveAsset } from '@/stellar/asset';
+import { assetLabel, resolveAsset, type ResolvedAsset } from '@/stellar/asset';
+import { STELLAR_DECIMALS } from '@/stellar/stellar.constants';
+import { fromStroops, toStroops } from '@/swaps/swap-math';
 import { resolveOrMintMemoId } from '@/stellar/memo';
 import type {
   PaymentIntent,
@@ -40,6 +53,10 @@ import {
 import { Sep7LinkBuilder } from '@/payment-intents/sep7-link-builder.service';
 import { ChainPayLinkBuilder } from '@/payment-intents/chain-pay-link-builder.service';
 import { PaymentVerifiers } from '@/payment-intents/payment-verifiers';
+import {
+  type CheckoutTheme,
+  effectiveCheckoutTheme,
+} from '@/payment-intents/payment-intents.constants';
 import { settlementRivalsQuery } from '@/payment-intents/settlement-rivals';
 import {
   expectedTxId,
@@ -50,6 +67,7 @@ import {
   type Chain,
   DEFAULT_CHAIN,
   isChain,
+  NATIVE_DECIMALS,
   type OtherChain,
 } from '@/chains/chains.constants';
 
@@ -108,15 +126,39 @@ export const PAYMENT_INTENT_PUBLIC_SELECT = {
   uri: true,
   txHash: true,
   reference: true,
+  checkoutTheme: true,
+  merchantFee: true,
   expiresAt: true,
+  checkoutSeenAt: true,
+  checkoutWalletAt: true,
+  checkoutWalletClosedAt: true,
+  checkoutSentAt: true,
   createdAt: true,
   updatedAt: true,
 } as const satisfies Prisma.PaymentIntentSelect;
 
-/** An intent as the list returns it. */
-export type PublicPaymentIntent = Prisma.PaymentIntentGetPayload<{
+/** An intent's columns as {@link PAYMENT_INTENT_PUBLIC_SELECT} reads them. */
+type PublicPaymentIntentRow = Prisma.PaymentIntentGetPayload<{
   select: typeof PAYMENT_INTENT_PUBLIC_SELECT;
 }>;
+
+/**
+ * An intent as the list returns it: the public columns, with `checkoutTheme`
+ * read as the design the page shows rather than the null stored for "none",
+ * and `merchantFee` as the stored record read back (null without one).
+ */
+export type PublicPaymentIntent = Omit<
+  PublicPaymentIntentRow,
+  'checkoutTheme' | 'merchantFee'
+> & { checkoutTheme: CheckoutTheme; merchantFee: MerchantFeeRecord | null };
+
+/** A Stellar intent's merchant fee: the request's terms and the legs they split `amount` into. */
+interface StellarMerchantFee {
+  terms: MerchantFeeTerms;
+  record: MerchantFeeRecord;
+  /** What `destination` receives. */
+  destinationAmount: string;
+}
 
 /** A public intent plus its derived QR code — what single-intent responses return. */
 export type PaymentIntentView = PublicPaymentIntent & { qr: string };
@@ -209,7 +251,7 @@ export class PaymentIntentsService {
   /** QR is derived from the stored SEP-7 URI rather than persisted. */
   private async withQr(intent: PaymentIntent): Promise<PaymentIntentView> {
     return {
-      ...project(intent, PAYMENT_INTENT_PUBLIC_SELECT),
+      ...toPublicPaymentIntent(project(intent, PAYMENT_INTENT_PUBLIC_SELECT)),
       qr: await this.links.qr(intent.uri),
     };
   }
@@ -235,6 +277,7 @@ export class PaymentIntentsService {
   private replayOf(
     stored: PaymentIntent | null,
     terms: PaymentIntentTerms,
+    merchant: MerchantFeeTerms | null = null,
   ): Promise<PaymentIntentView> {
     if (!stored) {
       throw ApiError.conflict(
@@ -243,7 +286,16 @@ export class PaymentIntentsService {
           'being created. Retry the request.',
       );
     }
-    if (!isSameIntentRequest(stored, terms)) {
+    // The merchant fee is compared like the destination: it pays a wallet the
+    // caller names. Decimals are the intent's own (Stellar's when it has none).
+    if (
+      !isSameIntentRequest(stored, terms) ||
+      !sameMerchantFee(
+        stored.merchantFee,
+        merchant,
+        stored.assetDecimals ?? STELLAR_DECIMALS,
+      )
+    ) {
       // Names nothing about the stored intent. Under the shared public key it
       // may be another caller's, and saying which term differed would let a
       // caller recover that intent one field at a time.
@@ -285,20 +337,34 @@ export class PaymentIntentsService {
       msg: dto.msg ?? null,
       callback: dto.callback ?? null,
     };
+    const merchant = this.stellarMerchantFee(dto, asset, dto.amount, [
+      dto.destination,
+      dto.source,
+    ]);
 
     // Idempotency: a retry on the same (consumer, memo) returns the original
     // intent before any Horizon round trip — but only for the same payment.
     const existing = await this.findByMemo(localConsumer.id, memo);
-    if (existing) return this.replayOf(existing, terms);
+    if (existing) return this.replayOf(existing, terms, merchant?.terms);
 
+    if (merchant) {
+      await this.links.assertWalletCanReceive(
+        network,
+        asset,
+        merchant.terms.wallet,
+      );
+    }
     const { xdr, uri } = await this.links.tx(network, {
       source: dto.source,
       destination: dto.destination,
-      amount: dto.amount,
+      amount: merchant?.destinationAmount ?? dto.amount,
       asset,
       memo,
       msg: dto.msg,
       callback: dto.callback,
+      fee: merchant
+        ? { wallet: merchant.terms.wallet, amount: merchant.record.amount }
+        : null,
     });
 
     const intent = await this.persist({
@@ -308,11 +374,16 @@ export class PaymentIntentsService {
       status: 'PENDING',
       xdr,
       uri,
+      // Beside the terms, not among them: a retry is not compared on the
+      // design (see `isSameIntentRequest`).
+      checkoutTheme: dto.checkoutTheme ?? null,
+      ...merchantFeeColumn(merchant?.record),
     });
     if (!intent) {
       return this.replayOf(
         await this.findByMemo(localConsumer.id, memo),
         terms,
+        merchant?.terms,
       );
     }
 
@@ -354,32 +425,64 @@ export class PaymentIntentsService {
       msg: dto.msg ?? null,
       callback: dto.callback ?? null,
     };
+    if (dto.merchantFee && dto.amount === undefined) {
+      throw ApiError.badRequest(
+        ApiErrorCode.ValidationFailed,
+        'A merchant fee needs an amount: an open-amount link has nothing to take it from',
+      );
+    }
+    const merchant =
+      dto.amount === undefined
+        ? null
+        : this.stellarMerchantFee(dto, asset, dto.amount, [dto.destination]);
 
     const existing = await this.findByMemo(localConsumer.id, memo);
-    if (existing) return this.replayOf(existing, terms);
+    if (existing) return this.replayOf(existing, terms, merchant?.terms);
 
-    const uri = this.links.pay({
-      destination: dto.destination,
-      amount: dto.amount,
-      asset,
-      memo,
-      msg: dto.msg,
-      callback: dto.callback,
-    });
+    if (merchant) {
+      await this.links.assertWalletCanReceive(
+        network,
+        asset,
+        merchant.terms.wallet,
+      );
+    }
+    // A SEP-7 `pay` link pays one account, so a link with a merchant fee has no
+    // link of its own: its `uri` becomes the hosted checkout once the id
+    // exists, and the page builds the payer's envelope with both payments
+    // (`POST /v1/payment-links/{id}/transaction`).
+    const uri = merchant
+      ? ''
+      : this.links.pay({
+          destination: dto.destination,
+          amount: dto.amount,
+          asset,
+          memo,
+          msg: dto.msg,
+          callback: dto.callback,
+        });
 
-    const intent = await this.persist({
+    let intent = await this.persist({
       ...terms,
       consumerId: localConsumer.id,
       memo,
       status: 'PENDING',
       xdr: null,
       uri,
+      checkoutTheme: dto.checkoutTheme ?? null,
+      ...merchantFeeColumn(merchant?.record),
     });
     if (!intent) {
       return this.replayOf(
         await this.findByMemo(localConsumer.id, memo),
         terms,
+        merchant?.terms,
       );
+    }
+    if (merchant) {
+      intent = await this.prisma.paymentIntent.update({
+        where: { id: intent.id },
+        data: { uri: this.checkoutLink(intent.id) },
+      });
     }
 
     this.logger.log(
@@ -409,6 +512,23 @@ export class PaymentIntentsService {
         `callback is a SEP-7 field and is not supported on ${chain}.`,
       );
     }
+    if (dto.merchantFee && dto.amount === undefined) {
+      throw ApiError.badRequest(
+        ApiErrorCode.ValidationFailed,
+        'A merchant fee needs an amount: an open-amount link has nothing to take it from',
+      );
+    }
+    if (
+      chain === 'solana' &&
+      dto.merchantFee &&
+      !this.config.get('paymentIntents', { infer: true }).apiUrl
+    ) {
+      throw ApiError.unavailable(
+        ApiErrorCode.Misconfigured,
+        'A Solana payment link with a merchant fee is a Solana Pay transaction request, ' +
+          'which names the gateway: PAYMENT_LINK_API_URL is not set.',
+      );
+    }
     const network = this.resolveNetwork(consumer);
     const localConsumer = await this.resolveConsumer(consumer);
     const memo = resolveOrMintMemoId(dto.memo);
@@ -427,7 +547,18 @@ export class PaymentIntentsService {
     };
 
     const existing = await this.findByMemo(localConsumer.id, memo);
-    if (existing) return this.replayOf(existing, terms);
+    if (existing) {
+      // The fee's fixed part is read in the stored asset's decimals.
+      return this.replayOf(
+        existing,
+        terms,
+        resolveMerchantFee(
+          dto.merchantFee,
+          existing.assetDecimals ?? NATIVE_DECIMALS[chain],
+          CHAIN_ADDRESS_RULES[chain],
+        ),
+      );
+    }
 
     const link = await this.chainLinks.build(chain, {
       network,
@@ -437,15 +568,24 @@ export class PaymentIntentsService {
       assetIssuer: dto.assetIssuer,
       memo,
       msg: dto.msg,
+      merchantFee: dto.merchantFee,
     });
 
-    const intent = await this.persist({
+    // A Solana link with a merchant fee is a Solana Pay transaction request:
+    // the wallet asks the gateway for the transaction with both transfers
+    // (`/v1/payment-links/{id}/solana-pay`), so its link names the intent id.
+    // On Monad the deposit address pays the fee (PaymentSplitForwarder).
+    const merchant = link.merchantFee ?? null;
+    const transactionRequest = chain === 'solana' && merchant !== null;
+    let intent = await this.persist({
       ...terms,
       consumerId: localConsumer.id,
       memo,
       status: 'PENDING',
       xdr: null,
-      uri: link.uri,
+      uri: transactionRequest ? '' : link.uri,
+      checkoutTheme: dto.checkoutTheme ?? null,
+      ...merchantFeeColumn(merchant?.record),
       assetDecimals: link.assetDecimals,
       chainReference: link.chainReference,
       chainCursor: link.chainCursor,
@@ -465,6 +605,9 @@ export class PaymentIntentsService {
                 token: link.deposit.token,
                 relayer: link.deposit.relayer,
                 fee: link.deposit.fee.toString(),
+                feeWallet: link.deposit.merchantFee?.wallet ?? null,
+                merchantFee:
+                  link.deposit.merchantFee?.amount.toString() ?? null,
               },
             },
           }
@@ -474,7 +617,14 @@ export class PaymentIntentsService {
       return this.replayOf(
         await this.findByMemo(localConsumer.id, memo),
         terms,
+        merchant?.terms,
       );
+    }
+    if (transactionRequest) {
+      intent = await this.prisma.paymentIntent.update({
+        where: { id: intent.id },
+        data: { uri: this.solanaPayLink(intent.id) },
+      });
     }
 
     this.logger.log(
@@ -484,6 +634,56 @@ export class PaymentIntentsService {
     );
     await this.emit(consumer.username, 'PAYMENT_INTENT_CREATED', intent);
     return this.withQr(intent);
+  }
+
+  /**
+   * A Stellar intent's merchant fee, checked: the wallet a Stellar account that
+   * is none of `others` (the destination, a `tx` intent's source), and the fee
+   * leaving something for the destination. Null when the request names none.
+   */
+  private stellarMerchantFee(
+    dto: CreatePayPaymentIntentDto | CreateTxPaymentIntentDto,
+    asset: ResolvedAsset,
+    amount: string,
+    others: string[],
+  ): StellarMerchantFee | null {
+    const terms = resolveMerchantFee(
+      dto.merchantFee,
+      STELLAR_DECIMALS,
+      CHAIN_ADDRESS_RULES.stellar,
+    );
+    if (!terms) return null;
+    if (others.includes(terms.wallet)) {
+      throw ApiError.badRequest(
+        ApiErrorCode.ValidationFailed,
+        "merchantFee.wallet must be another account than the payment's own",
+      );
+    }
+    const split = splitMerchantFee(toStroops(amount), terms);
+    assertMerchantFeeCovered(split, terms);
+    const record = merchantFeeRecord(
+      terms,
+      split.fee,
+      STELLAR_DECIMALS,
+      asset.code,
+    );
+    return {
+      terms,
+      record,
+      // `net` is `amount` itself when the payer pays the fee on top.
+      destinationAmount: fromStroops(split.net),
+    };
+  }
+
+  /** A Solana Pay transaction request for intent `id`, on the gateway. */
+  private solanaPayLink(id: string): string {
+    const { apiUrl } = this.config.get('paymentIntents', { infer: true });
+    return `solana:${encodeURIComponent(`${apiUrl}/v1/payment-links/${id}/solana-pay`)}`;
+  }
+
+  /** The hosted checkout of intent `id`: where a link with a merchant fee sends its payer. */
+  private checkoutLink(id: string): string {
+    return `${this.config.get('paymentIntents', { infer: true }).checkoutUrl}/${id}`;
   }
 
   /**
@@ -522,15 +722,19 @@ export class PaymentIntentsService {
   }> {
     const where = {
       consumer: { apisixUsername: consumer.username },
+      // Only the network this key targets (`resolveNetwork`): a production key never lists a
+      // test-network row, nor a sandbox key a mainnet one.
+      network: this.resolveNetwork(consumer),
       ...(query.status ? { status: query.status } : {}),
       ...(query.chain ? { chain: query.chain } : {}),
+      ...(query.createdFrom ? { createdAt: { gte: query.createdFrom } } : {}),
     };
 
     // `Promise.all`, not `$transaction`: a snapshot-consistent page and count
     // buys nothing here (the client sees a moving list either way), while the
     // transaction costs four serial round trips — BEGIN, page, count, COMMIT —
     // instead of two issued in parallel.
-    const [data, total] = await Promise.all([
+    const [rows, total] = await Promise.all([
       this.prisma.paymentIntent.findMany({
         where,
         take: query.take,
@@ -541,7 +745,12 @@ export class PaymentIntentsService {
       this.prisma.paymentIntent.count({ where }),
     ]);
 
-    return { data, total, take: query.take, skip: query.skip };
+    return {
+      data: rows.map(toPublicPaymentIntent),
+      total,
+      take: query.take,
+      skip: query.skip,
+    };
   }
 
   // ── READ (one) ──────────────────────────────────────────────────────────────
@@ -600,10 +809,11 @@ export class PaymentIntentsService {
         txHash: dto.txHash,
       });
       // Non-status fields can still be patched alongside a status change.
-      if (dto.reference !== undefined && dto.reference !== updated.reference) {
+      const fields = merchantFieldsOf(dto);
+      if (fields) {
         const patched = await this.prisma.paymentIntent.update({
           where: { id },
-          data: { reference: dto.reference },
+          data: fields,
         });
         return this.withQr(patched);
       }
@@ -612,14 +822,10 @@ export class PaymentIntentsService {
 
     const updated =
       dto.txHash !== undefined
-        ? await this.patchTxHash(id, dto.txHash, dto.reference)
+        ? await this.patchTxHash(id, dto.txHash, merchantFieldsOf(dto))
         : await this.prisma.paymentIntent.update({
             where: { id },
-            data: {
-              ...(dto.reference !== undefined
-                ? { reference: dto.reference }
-                : {}),
-            },
+            data: merchantFieldsOf(dto) ?? {},
           });
 
     this.logger.log(
@@ -631,8 +837,8 @@ export class PaymentIntentsService {
   }
 
   /**
-   * Records a reported `txHash` (and any `reference` sent with it) without a
-   * status change. Only a PENDING or SUBMITTED intent accepts a new hash.
+   * Records a reported `txHash` (and any merchant fields sent with it) without
+   * a status change. Only a PENDING or SUBMITTED intent accepts a new hash.
    *
    * This branch had no status check, so a terminal intent's hash could be
    * rewritten: a SUCCEEDED row's `txHash` — the transaction its settlement was
@@ -646,12 +852,9 @@ export class PaymentIntentsService {
   private async patchTxHash(
     id: string,
     txHash: string,
-    reference: string | undefined,
+    fields: MerchantFields | null,
   ): Promise<PaymentIntent> {
-    const data = {
-      txHash,
-      ...(reference !== undefined ? { reference } : {}),
-    };
+    const data = { txHash, ...fields };
     const current = await this.prisma.paymentIntent.findUnique({
       where: { id },
       select: { status: true, txHash: true },
@@ -745,11 +948,12 @@ export class PaymentIntentsService {
       );
     }
 
-    // `reference` may be patched alongside the settlement.
-    if (dto.reference !== undefined) {
+    // The merchant's fields may be patched alongside the settlement.
+    const fields = merchantFieldsOf(dto);
+    if (fields) {
       const patched = await this.prisma.paymentIntent.update({
         where: { id },
-        data: { reference: dto.reference },
+        data: fields,
       });
       return this.withQr(patched);
     }
@@ -868,9 +1072,9 @@ export class PaymentIntentsService {
    */
   private recordPayer(intent: PaymentIntent, payer?: string): void {
     const account = payer ?? intent.source;
-    if (!account) return;
+    if (!account || !isChain(intent.chain)) return;
     void this.customers
-      .ensureForPayer(intent.consumerId, account)
+      .ensureForPayer(intent.consumerId, intent.chain, account)
       .catch((err) =>
         this.logger.warn(
           `Could not auto-create customer for intent ${intent.id}: ${String(err)}`,
@@ -1171,6 +1375,48 @@ export class PaymentIntentsService {
     }
     return chainOf(owned.chain);
   }
+}
+
+/**
+ * What a public row stores, resolved into what the owner is answered. It
+ * spreads, so it takes only a row already cut to
+ * {@link PAYMENT_INTENT_PUBLIC_SELECT} — never a full one.
+ */
+function toPublicPaymentIntent(
+  row: PublicPaymentIntentRow,
+): PublicPaymentIntent {
+  return {
+    ...row,
+    checkoutTheme: effectiveCheckoutTheme(row.checkoutTheme),
+    merchantFee: readMerchantFeeRecord(row.merchantFee),
+  };
+}
+
+/** The `merchantFee` column of a new intent: its record, or nothing (null). */
+function merchantFeeColumn(record: MerchantFeeRecord | undefined): {
+  merchantFee?: Prisma.InputJsonValue;
+} {
+  return record
+    ? { merchantFee: record as unknown as Prisma.InputJsonValue }
+    : {};
+}
+
+/** The columns a PATCH writes that are the merchant's, not the payment's. */
+type MerchantFields = { reference?: string; checkoutTheme?: CheckoutTheme };
+
+/**
+ * The merchant's own fields a PATCH sent — its `reference` and the checkout
+ * page's design — or null when it sent neither. They prove nothing about the
+ * payment, so they are written in any status, with or without a status change.
+ */
+function merchantFieldsOf(dto: UpdatePaymentIntentDto): MerchantFields | null {
+  const fields: MerchantFields = {
+    ...(dto.reference !== undefined ? { reference: dto.reference } : {}),
+    ...(dto.checkoutTheme !== undefined
+      ? { checkoutTheme: dto.checkoutTheme }
+      : {}),
+  };
+  return Object.keys(fields).length > 0 ? fields : null;
 }
 
 /**

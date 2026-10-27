@@ -45,6 +45,10 @@ export type PaymentIntentTerms = Pick<
  * Solana are two different payments, and a replay must not hand back one for
  * the other.
  *
+ * `checkoutTheme` is not a term. It is not in the `uri`, moves no money, and
+ * PATCH may change it after creation, so comparing it would turn a retry into a
+ * conflict with its own intent. A retry gets the intent with its stored design.
+ *
  * Amounts are compared as exact decimals, so "2" and "2.0000000" are the same
  * request on every chain.
  */
