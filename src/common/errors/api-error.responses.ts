@@ -191,6 +191,13 @@ export const API_ERROR_CASES: Readonly<Record<ApiErrorCode, ApiErrorCase>> = {
       'NEAR Intents does not support asset "yXLM" on stellar. GET /v1/cross-chain-swaps/assets lists the ones it does.',
     path: '/v1/cross-chain-swaps/quote',
   },
+  [ApiErrorCode.MerchantFeeUnsupported]: {
+    statuses: [400],
+    summary: 'This operation cannot pay a merchant fee yet',
+    message:
+      'A merchant fee is not available on monad swaps on this deployment: Kuru Flow takes one referrer fee per swap and the plan commission uses it, and no merchant fee router is configured (KURU_MERCHANT_FEE_ROUTER).',
+    path: '/v1/swaps',
+  },
   [ApiErrorCode.TransactionRejected]: {
     statuses: [400],
     summary: 'The submitted transaction does not do what the route needs',
@@ -245,6 +252,15 @@ export const API_ERROR_CASES: Readonly<Record<ApiErrorCode, ApiErrorCase>> = {
     message:
       'The fee transaction does not settle this private payment: it is not a ' +
       'confidential transfer of the commission to the fee account.',
+    path: '/v1/zk-checkout/cmh4x2k9a0001l70g8v5q3z2w/confirm',
+  },
+  [ApiErrorCode.MerchantFeeTransferMismatch]: {
+    statuses: [400],
+    summary:
+      "The merchant fee transaction does not pay this payment's merchant fee to its wallet",
+    message:
+      'The merchant fee transaction does not settle this private payment: it is ' +
+      "not a confidential transfer of the merchant fee to the fee's wallet.",
     path: '/v1/zk-checkout/cmh4x2k9a0001l70g8v5q3z2w/confirm',
   },
   [ApiErrorCode.PayerMismatch]: {
@@ -370,6 +386,13 @@ export const API_ERROR_CASES: Readonly<Record<ApiErrorCode, ApiErrorCase>> = {
     summary: 'The recovery token is unknown, expired or already spent',
     message: 'The recovery token is unknown, expired or already used.',
     path: '/v1/aliases/alice/recovery/complete',
+  },
+  [ApiErrorCode.CustomerWalletTaken]: {
+    statuses: [409],
+    summary: 'Another of your customers already holds that wallet',
+    message:
+      'The wallet GCALNQQBXAPZ2WIRSDDBMSTAKCUH5SG6U76YBFLQLIXJTF7FE5AX7AOO (stellar) already belongs to customer clz9xcust00002.',
+    path: '/v1/customers/clz9xcust00001/wallets',
   },
   [ApiErrorCode.AliasAddressConflict]: {
     statuses: [400],

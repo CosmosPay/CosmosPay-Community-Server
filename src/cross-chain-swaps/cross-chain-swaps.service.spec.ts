@@ -693,3 +693,102 @@ describe('CrossChainSwapsService', () => {
     });
   });
 });
+
+describe('CrossChainSwapsService merchant fee', () => {
+  const NEAR_MERCHANT = 'merchant.near';
+  // 1.5% of 100 XLM plus 0.25: 1.75 XLM.
+  const merchantFee = { bps: 150, fixed: '0.25', wallet: NEAR_MERCHANT };
+
+  it('asks NEAR Intents to pay it as a second app fee, deducted from the deposit by default', async () => {
+    const { service, nearIntents } = setup();
+
+    const quote = await service.quote(prodConsumer, {
+      ...BASE_DTO,
+      merchantFee,
+    });
+
+    const request = nearIntents.quote.mock.calls[0][0];
+    // The deposit stays `amount`; 1.75 of 100 is 175 basis points.
+    expect(request.amount).toBe('1000000000');
+    expect(request.appFees).toEqual([
+      { recipient: 'cosmospay.near', fee: 50 },
+      { recipient: NEAR_MERCHANT, fee: 175 },
+    ]);
+    expect(quote.merchantFee).toEqual({
+      bps: 150,
+      fixed: '0.25',
+      amount: '1.75',
+      asset: 'XLM',
+      wallet: NEAR_MERCHANT,
+      paidBy: 'recipient',
+    });
+  });
+
+  it('adds it to the deposit when the payer pays it, in the whole basis points it amounts to', async () => {
+    const { service, nearIntents } = setup();
+
+    const swap = await service.create(prodConsumer, {
+      ...BASE_DTO,
+      merchantFee: { ...merchantFee, paidBy: 'payer' },
+    });
+
+    const request = nearIntents.quote.mock.calls[0][0];
+    // 101.75 deposited; 1.75 of it is 171.99 basis points, paid as 171 (never above).
+    expect(request.amount).toBe('1017500000');
+    expect(request.appFees?.[1]).toEqual({
+      recipient: NEAR_MERCHANT,
+      fee: 171,
+    });
+    expect(swap.amountIn).toBe('101.75');
+    expect(swap.merchantFee).toMatchObject({
+      amount: '1.739925',
+      paidBy: 'payer',
+    });
+  });
+
+  it('refuses a wallet NEAR Intents cannot credit and a fee under one basis point', async () => {
+    const { service } = setup();
+
+    const wrongWallet = await rejection(
+      service.quote(prodConsumer, {
+        ...BASE_DTO,
+        merchantFee: { bps: 100, wallet: STELLAR_PAYER },
+      }),
+    );
+    expect(wrongWallet.code).toBe(ApiErrorCode.ValidationFailed);
+
+    const tooSmall = await rejection(
+      service.quote(prodConsumer, {
+        ...BASE_DTO,
+        merchantFee: { fixed: '0.0001', wallet: NEAR_MERCHANT },
+      }),
+    );
+    expect(tooSmall.code).toBe(ApiErrorCode.InvalidAmount);
+  });
+
+  it('replays only the same merchant fee under the same key', async () => {
+    const { service } = setup();
+    const key = 'ccs-merchant-1';
+
+    const first = await service.create(
+      prodConsumer,
+      { ...BASE_DTO, merchantFee },
+      key,
+    );
+    const again = await service.create(
+      prodConsumer,
+      { ...BASE_DTO, merchantFee },
+      key,
+    );
+    expect(again.id).toBe(first.id);
+
+    const other = await rejection(
+      service.create(
+        prodConsumer,
+        { ...BASE_DTO, merchantFee: { ...merchantFee, wallet: 'other.near' } },
+        key,
+      ),
+    );
+    expect(other.code).toBe(ApiErrorCode.IdempotencyConflict);
+  });
+});

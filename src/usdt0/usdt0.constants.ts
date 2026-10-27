@@ -200,3 +200,16 @@ export const USDT0_SUBMIT_RATE_LIMIT = {
   limit: 20,
   windowMs: 60 * 1000,
 };
+
+/**
+ * SHA-256 of `contracts/soroban/usdt0-fee-wrapper/usdt0_fee_wrapper.wasm`, the
+ * wrapper a USDT0 transfer with a merchant fee invokes: it pays the fee in
+ * USDT0, then calls the OFT's `send` and answers its receipt, all under the
+ * holder's one authorization. The configured contract
+ * (`USDT0_FEE_WRAPPER`) must run this code and be bound to
+ * {@link USDT0_OFT} and {@link USDT0_SAC} before a holder is handed a
+ * transaction calling it. A changed wrapper is a new wasm, a new hash and a new
+ * deployment.
+ */
+export const USDT0_FEE_WRAPPER_WASM_SHA256 =
+  '7d74088883fa010a4d22274971c1b03f4254de2268bc7ce6fdd7e3add9ae7877';

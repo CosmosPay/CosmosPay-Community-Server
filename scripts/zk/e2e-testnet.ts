@@ -44,7 +44,12 @@ import { ZK_PAYMENT_AUDITOR_ID } from '@/zk-payments/zk-payments.constants';
  *      is refused (`payment_transfer_mismatch`), the right one SUCCEEDS, a
  *      second confirm answers the same, and reusing the hashes on the other
  *      payment is `409 transaction_already_settled`;
- *   5. checks the merchant's receiving balance decrypts to the net amount.
+ *   5. checks the merchant's receiving balance decrypts to the net amount;
+ *   6. pays one with a merchant fee (paid by the payer): a third account is
+ *      refused as the fee's wallet until it registers, the third transfer goes
+ *      to it, confirm refuses the request without its hash and with the fee
+ *      hashes swapped, then SUCCEEDS, and the wallet's receiving balance
+ *      decrypts to the merchant fee.
  *
  * The services are the module's own, wired by hand: the real
  * `ConfidentialSdk` and configuration, an in-memory stand-in for the two
@@ -56,6 +61,8 @@ const PASSPHRASE: string = Networks.TESTNET;
 const GROSS = '25';
 /** Created before the transfers, so only its amount disqualifies it. */
 const WRONG_GROSS = '25.0001';
+/** 1% plus 0.1 XLM of {@link GROSS}, on top: 0.35 XLM to the fee's wallet. */
+const MERCHANT_FEE = { bps: 100, fixed: '0.1', paidBy: 'payer' as const };
 
 const consumer: GatewayConsumer = {
   username: 'cosmos_zk_e2e',
@@ -155,11 +162,11 @@ async function main(): Promise<void> {
     const merchantKeys = sdk.deriveKeys(sdk.randomScalar(), addrF);
     const payerKeys = sdk.deriveKeys(sdk.randomScalar(), addrF);
 
-    log('\n[register] merchant and payer, under auditor 0');
-    for (const [who, kp, keys] of [
-      ['merchant', merchant, merchantKeys],
-      ['payer', payer, payerKeys],
-    ] as const) {
+    const register = async (
+      who: string,
+      kp: Keypair,
+      keys: ReturnType<ConfidentialSdkModule['deriveKeys']>,
+    ) => {
       const witness = sdk.buildRegisterWitness(keys, kp.publicKey());
       const { proof } = await registerProver.prove(witness.inputs);
       const r = await sdk.submitRegister(
@@ -171,7 +178,11 @@ async function main(): Promise<void> {
         proof,
       );
       log(`  ${who} registered: tx ${r.hash}`);
-    }
+    };
+
+    log('\n[register] merchant and payer, under auditor 0');
+    await register('merchant', merchant, merchantKeys);
+    await register('payer', payer, payerKeys);
 
     log('\n[create] through ZkPaymentsService.create');
     await expectApiError(
@@ -335,9 +346,124 @@ async function main(): Promise<void> {
     );
     log(`  merchant receiving = ${merchantState.receiving.v} stroops (net)`);
 
+    log("\n[merchant fee] a third confidential transfer, to the fee's wallet");
+    const feeWallet = await freshAccount(server, 'fee wallet');
+    const feeWalletKeys = sdk.deriveKeys(sdk.randomScalar(), addrF);
+    const withFeeRequest = {
+      amount: GROSS,
+      recipient: merchant.publicKey(),
+      description: 'ZK e2e with a merchant fee',
+      merchantFee: { ...MERCHANT_FEE, wallet: feeWallet.publicKey() },
+    };
+    await expectApiError(
+      () => payments.create(consumer, withFeeRequest),
+      ApiErrorCode.RecipientNotRegistered,
+      'a merchant fee wallet with no confidential account',
+    );
+    await register('fee wallet', feeWallet, feeWalletKeys);
+    const withFee = await payments.create(consumer, withFeeRequest);
+    assert(
+      withFee.merchantFee?.amount === '0.35' && withFee.amount === '25.35',
+      `the payer pays 25.35 with a 0.35 merchant fee, got ${withFee.amount} / ${withFee.merchantFee?.amount}`,
+    );
+    log(
+      `  payment ${withFee.id}: amount ${withFee.amount}, net ${withFee.netAmount}, ` +
+        `fee ${withFee.feeAmount}, merchant fee ${withFee.merchantFee.amount}`,
+    );
+    const feeView = await checkout.findPublic(withFee.id);
+    assert(feeView.merchantFee, 'the checkout names the merchant fee');
+    const deposit2 = await sdk.submitDeposit(
+      client,
+      payerSigner,
+      payer.publicKey(),
+      payer.publicKey(),
+      toStroops(feeView.amount),
+    );
+    log(`  deposit ${feeView.amount} XLM: tx ${deposit2.hash}`);
+    const merge2 = await sdk.submitMerge(
+      client,
+      payerSigner,
+      payer.publicKey(),
+    );
+    log(`  merge: tx ${merge2.hash}`);
+    const pay = (to: string, amount: string) =>
+      transfer(
+        sdk,
+        client,
+        transferProver,
+        payerEngine,
+        payerKeys,
+        payerSigner,
+        payer.publicKey(),
+        to,
+        toStroops(amount),
+        kAud,
+      );
+    const payment2 = await pay(feeView.recipient, feeView.netAmount);
+    log(`  payment transfer (net ${feeView.netAmount}): tx ${payment2}`);
+    const fee2 = await pay(feeView.feeAccount, feeView.feeAmount);
+    log(`  fee transfer (fee ${feeView.feeAmount}): tx ${fee2}`);
+    const merchantFee2 = await pay(
+      feeView.merchantFee.wallet,
+      feeView.merchantFee.amount,
+    );
+    log(
+      `  merchant fee transfer (${feeView.merchantFee.amount}): tx ${merchantFee2}`,
+    );
+
+    await expectApiError(
+      () =>
+        checkout.confirm(withFee.id, {
+          paymentTxHash: payment2,
+          feeTxHash: fee2,
+        }),
+      ApiErrorCode.ValidationFailed,
+      'a confirm without the merchant fee transaction',
+    );
+    await expectApiError(
+      () =>
+        checkout.confirm(withFee.id, {
+          paymentTxHash: payment2,
+          feeTxHash: merchantFee2,
+          merchantFeeTxHash: fee2,
+        }),
+      ApiErrorCode.FeeTransferMismatch,
+      'the fee and merchant fee hashes swapped',
+    );
+    const settledWithFee = await checkout.confirm(withFee.id, {
+      paymentTxHash: payment2,
+      feeTxHash: fee2,
+      merchantFeeTxHash: merchantFee2,
+    });
+    assert(
+      settledWithFee.status === 'SUCCEEDED',
+      'the payment with a merchant fee is SUCCEEDED',
+    );
+    const ownerWithFee = await payments.findOne(consumer, withFee.id);
+    assert(
+      ownerWithFee.merchantFeeTxHash === merchantFee2,
+      'merchantFeeTxHash is recorded',
+    );
+    const feeWalletState = await new sdk.StateEngine({
+      client,
+      store: new sdk.MemoryStore(),
+      keys: feeWalletKeys,
+      address: feeWallet.publicKey(),
+      fromLedger: startLedger,
+    }).sync();
+    const merchantFeeStroops = toStroops(feeView.merchantFee.amount);
+    assert(
+      feeWalletState.receiving.v === merchantFeeStroops,
+      `fee wallet receiving v=${feeWalletState.receiving.v}, want ${merchantFeeStroops}`,
+    );
+    log(
+      `  SUCCEEDED; fee wallet receiving = ${feeWalletState.receiving.v} stroops (the merchant fee)`,
+    );
+
     log('\nprivate payments e2e on testnet: PASSED');
     log(`  payment tx ${paymentTxHash}`);
     log(`  fee tx     ${feeTxHash}`);
+    log(`  merchant fee tx ${merchantFee2}`);
   } finally {
     await Promise.all([registerProver.destroy(), transferProver.destroy()]);
   }
@@ -433,6 +559,8 @@ class InMemoryPrisma {
         payer: null,
         paymentTxHash: null,
         feeTxHash: null,
+        merchantFee: null,
+        merchantFeeTxHash: null,
         settledAt: null,
         description: null,
         createdAt: now,
@@ -543,7 +671,9 @@ class InMemoryPrisma {
         (candidate.paymentTxHash != null &&
           other.paymentTxHash === candidate.paymentTxHash) ||
         (candidate.feeTxHash != null &&
-          other.feeTxHash === candidate.feeTxHash);
+          other.feeTxHash === candidate.feeTxHash) ||
+        (candidate.merchantFeeTxHash != null &&
+          other.merchantFeeTxHash === candidate.merchantFeeTxHash);
       if (clash) throw new UniqueViolation('unique constraint');
     }
   }

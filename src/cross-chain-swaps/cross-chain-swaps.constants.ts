@@ -217,3 +217,10 @@ export const TON_TX_ID_RE = /^[0-9a-fA-F]{64}$|^[A-Za-z0-9+/_-]{43}=?$/;
 export const STARKNET_TX_ID_RE = /^0x[0-9a-fA-F]{1,64}$/;
 /** An Aleo transaction id (`at1` + 58 bech32m characters). */
 export const ALEO_TX_ID_RE = /^at1[02-9ac-hj-np-z]{58}$/;
+
+/**
+ * 1Click's tag on a token it is retiring (`USDT0(DEPRECATED)`,
+ * `XPL_(DEPRECATED)` on Plasma). Such a token is neither listed nor accepted:
+ * a swap into it delivers an asset on its way out.
+ */
+export const DEPRECATED_TOKEN_RE = /_?\(DEPRECATED\)$/i;

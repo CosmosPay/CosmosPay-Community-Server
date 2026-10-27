@@ -22,6 +22,8 @@ export interface EvmDepositTerms {
   relayer: string;
   /** The relayer's fee, in the asset's base units. */
   fee: bigint;
+  /** The merchant fee the address pays in its constructor (a PaymentSplitForwarder); null without one. */
+  merchantFee: { wallet: string; amount: bigint } | null;
 }
 
 /**
@@ -55,6 +57,7 @@ export class EvmDepositAddressFactory {
     network: StellarNetwork,
     destination: string,
     token: { address: string; decimals: number } | null,
+    merchantFee: { wallet: string; amount: bigint } | null = null,
   ): Promise<EvmDepositTerms> {
     const fee = token
       ? this.tokenFee(chain, token)
@@ -69,6 +72,7 @@ export class EvmDepositAddressFactory {
       token: token?.address ?? null,
       relayer,
       fee,
+      merchantFee,
     };
     return {
       ...terms,

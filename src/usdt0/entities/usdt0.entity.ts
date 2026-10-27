@@ -1,5 +1,6 @@
 import { ApiProperty, OmitType } from '@nestjs/swagger';
 import { Usdt0TransferStatus } from '@generated/prisma/client';
+import { MerchantFeeEntity } from '@/common/merchant-fee/merchant-fee.entity';
 import { USDT0_CHAIN_IDS } from '@/usdt0/usdt0.constants';
 import { ApiPublicTokenProperty } from '@/common/decorators/api-record-token.decorator';
 
@@ -93,6 +94,23 @@ export class Usdt0QuoteEntity {
 
   @ApiProperty({ example: '12.5000001', description: 'The amount asked for.' })
   amount!: string;
+
+  @ApiProperty({
+    example: 50,
+    description:
+      "Cosmos Pay's plan commission rate, in basis points. 0 when the " +
+      'deployment has no fee wrapper (USDT0_FEE_WRAPPER): a Soroban ' +
+      'transaction has one operation, and only the wrapper can carry a fee.',
+  })
+  feeBps!: number;
+
+  @ApiProperty({
+    example: '0.0625',
+    description:
+      'The commission in USDT0, out of `amount`: `amount × feeBps / 10,000`, ' +
+      'rounded down.',
+  })
+  feeAmount!: string;
 
   @ApiProperty({
     example: '12.5',
@@ -237,6 +255,32 @@ export class Usdt0TransferEntity {
   networkFee!: string;
 
   @ApiProperty({
+    example: 50,
+    description:
+      "Cosmos Pay's plan commission rate, in basis points. 0 when the " +
+      'deployment has no fee wrapper (USDT0_FEE_WRAPPER): a Soroban ' +
+      'transaction has one operation, and only the wrapper can carry a fee.',
+  })
+  feeBps!: number;
+
+  @ApiProperty({
+    example: '0.0625',
+    description:
+      'The commission in USDT0, out of `amount`: `amount × feeBps / 10,000`, ' +
+      'rounded down.',
+  })
+  feeAmount!: string;
+
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    example: 'GBFEEWALLETEXAMPLE7XKXBOL5CH6OFGYUMVJZH7H7OZQXK6U2RG3UEZW34',
+    description:
+      'Where the commission went (STELLAR_SWAP_FEE_WALLET); null without one.',
+  })
+  feeWallet!: string | null;
+
+  @ApiProperty({
     description: 'The unsigned transaction (base64 XDR) to sign.',
     example: 'AAAAAgAAAABx…(base64 XDR)…AAAAAAAAAAA=',
   })
@@ -314,6 +358,15 @@ export class Usdt0TransferEntity {
     description: 'Why a FAILED transfer failed.',
   })
   failureReason!: string | null;
+
+  @ApiProperty({
+    type: MerchantFeeEntity,
+    nullable: true,
+    description:
+      'The merchant fee the request named, in USDT0, paid to its wallet in ' +
+      'this transaction by the fee wrapper; null without one.',
+  })
+  merchantFee!: MerchantFeeEntity | null;
 
   @ApiProperty({
     nullable: true,

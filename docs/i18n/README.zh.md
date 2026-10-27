@@ -122,7 +122,7 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | Swap | `/v1/swaps` | 路径支付报价、构建未签名 XDR、提交已签名交易 · Solana 经由 Jupiter，Monad 经由 Kuru Flow |
 | 跨链 swap | `/v1/cross-chain-swaps` | 通过 NEAR Intents 在 35 个网络之间（Stellar、Solana、Monad、EVM 链、Bitcoin 与 UTXO 币等）：报价、充值地址、状态 |
 | USDT0 | `/v1/usdt0` | 通过 LayerZero 把 USDT0 从 Stellar 发送到 21 个 EVM 网络（在 Ethereum 上到账为原生 USDT），仅限主网：报价、构建、提交、状态 |
-| 隐私支付 | `/v1/zk-payments` | 基于 Cosmos Pay 保密代币的保密支付（金额在链上隐藏，0.01% 佣金），目前仅限测试网 |
+| 隐私支付 | `/v1/zk-payments` | 基于 Cosmos Pay 保密代币的保密支付（金额在链上隐藏，0.18% 佣金），目前仅限测试网 |
 | 隐私收银 | `/v1/zk-checkout` | 隐私支付中付款方的那一半：读取、确认，以及网络配置（`@Public`） |
 | 流动性池 | `/v1/liquidity-pools` | AMM 存入 / 取出、持仓、按收益收取佣金 |
 | Webhooks | `/v1/webhooks` | 端点 CRUD、密钥轮换、投递记录、重新投递 |
@@ -191,6 +191,8 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | GET | `/v1/customers/{id}` | `customers:read` |  |
 | PATCH | `/v1/customers/{id}` | `customers:write` |  |
 | DELETE | `/v1/customers/{id}` | `customers:write` |  |
+| POST | `/v1/customers/{id}/wallets` | `customers:write` |  |
+| DELETE | `/v1/customers/{id}/wallets/{walletId}` | `customers:write` |  |
 | GET | `/v1/health/liveness` | 无 — `@Public()` |  |
 | GET | `/v1/health/readiness` | 无 — `@Public()` |  |
 | GET | `/v1/kyc/bank-details` | `kyc:read` |  |
@@ -251,6 +253,10 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | GET | `/v1/payment-intents/{id}/transitions` | `payments:read` |  |
 | POST | `/v1/payment-intents/{id}/validate` | `payments:write` |  |
 | GET | `/v1/payment-links/{id}` | 无 — `@Public()`，按客户端地址计预算 |  |
+| POST | `/v1/payment-links/{id}/transaction` | 无：`@Public()`，按客户端地址计预算 |  |
+| POST | `/v1/payment-links/{id}/events` | 无：`@Public()`，按客户端地址计预算 |  |
+| GET | `/v1/payment-links/{id}/solana-pay` | 无：`@Public()`，按客户端地址计预算 |  |
+| POST | `/v1/payment-links/{id}/solana-pay` | 无：`@Public()`，按客户端地址计预算 |  |
 | GET | `/v1/plugins` | `plugins:read` |  |
 | GET | `/v1/plugins/{slug}` | `plugins:read` |  |
 | PUT | `/v1/plugins/{slug}/installation` | `plugins:write` |  |
@@ -667,7 +673,7 @@ EIP-55 写法保存。恢复设置（`POST /v1/wallet/recovery/setup`）仍仅�
 
 ## 共享公共 API key
 
-开源钱包内置了一个所有人共用的 API key，因此任何人无需注册即可进行 swap、添加流动性或创建支付链接。这些调用需要支付 `community` 套餐的佣金（50 bps，最高的费率）；注册后可以获得更低的费率。网关注入费率的方式与私有 key 完全相同（见 `resolvePlanCommissionBps`）。
+开源钱包内置了一个所有人共用的 API key，因此任何人无需注册即可进行 swap、添加流动性或创建支付链接。这些调用需要支付 `community` 套餐的佣金（65 bps，最高的费率，与 Starter 相同）；付费套餐可以获得更低的费率。网关注入费率的方式与私有 key 完全相同（见 `resolvePlanCommissionBps`）。
 
 区别在于租户隔离。每个匿名调用方都以同一个 APISIX 消费者的身份到达，而读取端点按消费者过滤行：
 
@@ -734,7 +740,7 @@ guard 通过**以下任一**信号识别公共消费者：转发的角色（`X-C
 
 平台仍在做的都是它自己的事：开发者的 key、仪表盘，以及由它调用的 `/v1/admin`——从不反向调用。平台宕机时，没人能创建开发者 key 或打开仪表盘；钱包照常登录、付款和兑换。
 
-**钱包 key。** 完成登录后，会在消费者 `cosmos_wallet_<accountId>` 下获得一个 `dev` key 和一个 `prod` key，带有平台以前生成的 scope、label 和消费者 forwarder（套餐 `community`，兑换佣金 `WALLET_KEY_SWAP_FEE_BPS`，默认 50 bps）。每次启动都会重新生成仍带有其他费率的钱包消费者，因此 `WALLET_KEY_SWAP_FEE_BPS` 的变更会立即作用于所有账户，而不必等到下次登录。第二次登录会返回账户已有的 key，而不是再签发一对。响应中的 `organizationId` 就是账户 id。
+**钱包 key。** 完成登录后，会在消费者 `cosmos_wallet_<accountId>` 下获得一个 `dev` key 和一个 `prod` key，带有平台以前生成的 scope、label 和消费者 forwarder（套餐 `community`，兑换佣金 `WALLET_KEY_SWAP_FEE_BPS`，默认 65 bps）。每次启动都会重新生成仍带有其他费率的钱包消费者，因此 `WALLET_KEY_SWAP_FEE_BPS` 的变更会立即作用于所有账户，而不必等到下次登录。第二次登录会返回账户已有的 key，而不是再签发一对。响应中的 `organizationId` 就是账户 id。
 
 **admin key 是安全上的代价。** APISIX 没有比 admin key 更窄的授权，而 admin key 能改写所有路由。这里的客户端只写入 `cosmos_wallet_` 下的消费者，并在构造请求前拒绝任何其他名称，但这是本代码的承诺，不是 APISIX 的：请像对待 `APISIX_GATEWAY_SECRET` 一样对待 `APISIX_ADMIN_KEY`，只让本服务的 pod 通过网络访问 admin API 而不开放其他任何东西，并且绝不在恢复服务器上设置它（启动会拒绝）。
 
@@ -922,12 +928,47 @@ NEAR Intents 从输入中扣除它，报价的输出已是扣除后的净额，�
 
 | 路由 | Scope | 用途 |
 | --- | --- | --- |
-| `GET /v1/cross-chain-swaps/assets` | `swaps:read` | NEAR Intents 可在本服务覆盖的每个网络上 swap 的代币，附带参考性的 USD 价格 |
+| `GET /v1/cross-chain-swaps/assets` | `swaps:read` | NEAR Intents 可在本服务覆盖的每个网络上 swap 的代币，附带参考性的 USD 价格。仅列出可交易的代币：被标记为 deprecated 或没有价格（这类代币它都不报价）的代币不会列出，deprecated 代币会以 `asset_unsupported` 拒绝 |
 | `POST /v1/cross-chain-swaps/quote` | `swaps:read` | 试算报价：输出、最小值、佣金；不持久化任何内容 |
 | `POST /v1/cross-chain-swaps` | `swaps:write` | 正式报价：充值地址、memo、钱包链接和二维码；支持 `Idempotency-Key` |
 | `GET /v1/cross-chain-swaps` | `swaps:read` | 该 consumer 的跨链 swap |
 | `GET /v1/cross-chain-swaps/{id}` | `swaps:read` | 单笔 swap，即观察器最后一次看到的状态（共享公共 key 也可以读取，但需携带该 swap 的 `X-Record-Token`） |
 | `POST /v1/cross-chain-swaps/{id}/deposit` | `swaps:write` | 上报充值交易，让 NEAR Intents 无需等待其索引器即可开始 |
+## 商户手续费（你在每笔操作上的自有费用）
+
+通过本 API 向其他企业转售这些通道的组织，可以在每笔操作上向自己的客户收取一笔费用，
+链上支付到它指定的钱包。它与 Cosmos Pay 收取的套餐佣金分开，后者不变。
+
+```json
+"merchantFee": { "bps": 150, "fixed": "0.25", "wallet": "G...", "paidBy": "recipient" }
+```
+
+- **`bps` 与 `fixed`：** 费用为 `amount × bps / 10,000`（向下取整）加上 `fixed`
+  （以操作的资产计，最多为其小数位数）。`bps` 最高 1,000（10%）；两者至少一个大于零。按金额计算后
+  取整为零的费用会被拒绝（`400 invalid_amount`）。
+- **`paidBy`：** `recipient`（默认）从 `amount` 中扣除费用；`payer` 在其之上加收，
+  付款方发送 `amount` 加上费用。
+- **`wallet`：** 费用支付到哪里，在费用所走的链上。
+- **记录保存的内容：** 每次读取和 webhook 都带 `merchantFee`（`bps`、`fixed`、收取的
+  `amount`、`asset`、`wallet`、`paidBy`），没有则为 null。使用相同 `Idempotency-Key`
+  的重试必须指定相同的费用，否则返回 `409 idempotency_conflict`，与目标不同时一样。
+
+| 操作 | 费用如何支付 |
+| --- | --- |
+| Stellar 兑换（`POST /v1/swaps`） | 在兑换交易中以源资产单独一笔 `payment` 支付，位于套餐佣金之后。`wallet` 是持有源资产 trustline 的 Stellar 账户（否则在构建任何东西之前拒绝） |
+| Stellar 支付链接（`POST /v1/payment-intents/tx` 与 `/pay`） | 在同一个 envelope 中，在商户那笔之后，向 `wallet` 的第二笔 `payment`。`tx` intent 的 envelope 同时包含两笔。`pay` 链接做不到（SEP-7 `pay` 只付给一个账户）并且需要 `amount`：其 `uri` 为托管收银台（`PAYMENT_LINK_CHECKOUT_URL/<id>`），公开链接显示 `payerAccountRequired: true`，`POST /v1/payment-links/{id}/transaction` 根据付款方账户构建其 envelope。只有用其 memo 同时支付两部分的交易才会结算该 intent |
+| 跨链兑换（`POST /v1/cross-chain-swaps`） | NEAR Intents 的第二个 app fee。`wallet` 是 NEAR 账户 id，在 NEAR Intents 内入账。App fee 是存入金额的整数基点，因此费用换算成其对应的基点并向下取整；不足一个基点的费用会被拒绝。使用 `payer` 时，套餐佣金也按更大的存入金额计算 |
+| Solana 支付链接（`POST /v1/payment-intents/pay`，`chain: solana`） | Solana Pay 的 transfer request 只指定一个收款方，因此这类链接（需有 `amount`）是 Solana Pay **transaction request**：`uri` 为 `solana:<PAYMENT_LINK_API_URL>/v1/payment-links/{id}/solana-pay`，钱包向其 POST 付款方账户以获取交易：memo、携带链接 reference 的商户转账，以及手续费转账（缺少的代币账户会创建，由付款方支付）。SOL 手续费须转入已存在的账户。observer 通过 reference 找到它，且只有两部分都支付才会结算 |
+| Monad 支付链接（`POST /v1/payment-intents/pay`，`chain: monad`） | 仅在启用存款地址（`MONAD_RELAYER_PRIVATE_KEY`；否则返回 `merchant_fee_unsupported`）且有 `amount` 时：地址为 `contracts/PaymentSplitForwarder.sol`（手续费的钱包和金额是构造函数的另外两个参数，因此地址承诺了它们），其构造函数先付 relayer 费用，再付商户手续费，最后付商户。链接要求的存款为金额，付款方支付手续费时再加上手续费 |
+| Solana 兑换（`POST /v1/swaps`，`chain: solana`） | Jupiter 每笔兑换只支付一个集成方费用，已被套餐佣金使用，因此手续费转账（从源账户、以源资产支付：SOL 用 System Program 转账，否则先创建钱包的代币账户再 TransferChecked）被追加到 Jupiter 自己的 v0 交易中：复用其地址查找表已加载的账户，重写所有索引，提高其计算单元上限，并以最多 40 个账户请求路由，使其仍能放入一个数据包。SOL 手续费须转入已存在的账户 |
+| 隐私支付（`POST /v1/zk-payments`） | 付款方以 XLM 向 `wallet` 进行第三笔保密转账，使该费用与付款本身一样保密。`wallet` 必须在 Cosmos Pay 的代币上持有审计方 0 下的保密账户（否则返回 `400 recipient_not_registered`），且不能是收款方或手续费账户。0.18% 的佣金仍按 `amount` 计算，记录中的 `amount` 是付款方支付的总额。confirm 以 `merchantFeeTxHash` 接收第三个哈希，并像另外两笔一样校验该转账 |
+| 流动性（`POST /v1/liquidity-pools/deposit` 与 `/withdraw`） | 存入或取出会移动两种资产，因此费用为每种资产的 `bps`（向下取整），在同一笔交易中按每种资产各一笔付款支付给 `wallet`，位于存入操作之后，或位于取出操作及其套餐佣金之后；`fixed` 会被拒绝（`400 validation_failed`）。存入时，`recipient` 从金额中扣除（进入池子的更少），`payer` 在其之上加收。取出时，无论 `paidBy` 为何，费用都从取出所得中按其保证的最低金额的比例扣除。`wallet` 必须存在并对两种资产都有 trustline。记录中的 `amount` / `asset` 是资产 A 的部分，`amountB` / `assetB` 是资产 B 的部分 |
+| Monad 上的兑换（`POST /v1/swaps`，`chain: monad`） | Kuru Flow 每笔兑换只支付一个推荐费用，已被套餐佣金使用，因此带商户手续费的兑换会经过 `contracts/MerchantFeeSwapRouter.sol`：由运营方针对 Kuru 的 router 部署一次，并在 `KURU_MERCHANT_FEE_ROUTER` 中指定。Kuru 以该 router 为用户报价，钱包向其发送（MON）或授权（ERC-20）输入加手续费，router 在同一笔交易中支付手续费、执行 Kuru 的 calldata、转出输出并退还 Kuru 未用完的部分，低于 Kuru 的最低值时回滚。在把地址交给钱包之前，会将已部署的代码与 artifact 比对。未设置该变量时返回 `400 merchant_fee_unsupported` |
+| USDT0 转账（`POST /v1/usdt0/transfers`） | 一笔 Soroban 交易只承载一个操作，因此此类转账的操作是 `contracts/soroban/usdt0-fee-wrapper`（`USDT0_FEE_WRAPPER`）而不是 OFT：在持有人的同一授权下，它先以 USDT0 将手续费转给 `wallet`（必须对 USDT0 有 trustline），再以相同参数调用 OFT 的 `send` 并返回其回执。`recipient` 从 `amount` 中扣除手续费（发送更少），`payer` 在其之上加收。在把交易交给持有人之前，会校验已部署的 wasm 及其绑定的 OFT 和代币。未设置该变量时返回 `400 merchant_fee_unsupported` |
+
+以上每项操作都接受该字段。若本部署未配置某项操作所需的合约（`KURU_MERCHANT_FEE_ROUTER`、
+`USDT0_FEE_WRAPPER`），该操作返回 `400 merchant_fee_unsupported`。
+
 ## 从 Stellar 发送 USDT0（LayerZero）
 
 [USDT0](https://docs.usdt0.to) 是 Tether 的全链 USDT。在 Stellar 上，它是经典资产 `USDT0:GATISXX6BZ6NC7IKQBY37CJD4SOZL3CYZJWXEDG6JVIY4WBS6KXJHN6Q`，背后是 LayerZero 的 OFT 合约（`CBOWOLFSDM5PZXNFIVDMP5NZ7U2GSIHED6H6R446QOHF266XINKUMMF6`），而 OFT 的用途就是把它发送到其他网络：`send` 在 Stellar 上销毁 USDT0，由 LayerZero 交付。在 Ethereum 上到账的是**原生 USDT**（那里的对端是 Tether 的 OFT adapter，它解锁真实的 USDT）；在其余 20 条路由上到账的是 USDT0。每条路由都接收 EVM 收款地址。`/v1/usdt0` **从 Stellar** 发送：持有者签署一笔 Soroban 交易（用 Freighter，或通过 SEP-7 链接），与 swap 一样，本服务是非托管的。它通过模拟向 OFT 报价、构建交易、检查签名后的副本正是这笔交易、转发它，并在 LayerZero Scan 上跟踪该消息。
@@ -949,7 +990,9 @@ routes → quote → create (unsigned XDR + SEP-7 link) → the holder signs
 
 **通常没有二维码。** Soroban 交易的账本 footprint 使其 XDR 约有 7,000 个字符，超出二维码的容量，因此 `qr` 通常为 `null`：请用已连接的钱包或通过 `uri` 链接签名。
 
-**暂不收取 Cosmos Pay 佣金。** 一笔 Soroban 交易只承载一个操作，因此手续费支付无法像 path-payment swap 那样随 `send` 一起执行，本路由不收取套餐费率。是否收取由产品负责人决定。
+**佣金：套餐费率，通过手续费 wrapper 收取。** 一笔 Soroban 交易只承载一个操作，因此佣金与商户手续费经过同一个合约（`USDT0_FEE_WRAPPER`，见下文）：按 `amount` 的 `feeBps` 计算并向下取整，以 USDT0 支付给 `STELLAR_SWAP_FEE_WALLET`（必须对 USDT0 有 trustline，否则 `503 misconfigured`），其余部分发送。未配置 wrapper 时，转账不收取佣金（`feeBps: 0`），这是产品负责人的决定（2026-10-26）。
+
+**商户手续费通过合约收取。** 使用 `merchantFee`（见 **商户手续费**）时，操作是 wrapper 的 `send`（`USDT0_FEE_WRAPPER`）：它在持有人的同一授权下，以 USDT0 将手续费转给手续费钱包，并以相同参数调用 OFT 的 `send`，然后返回 OFT 的回执，因此转账仍按同一个 guid 跟踪。只需部署一次，没有所有者：`USDT0_OFT=CBOWOLFSDM5PZXNFIVDMP5NZ7U2GSIHED6H6R446QOHF266XINKUMMF6 USDT0_SAC=CBSJZEIO5C7KC2SF3MKSNXXJSW5G3VTNBX4ATMKUI3B2MR4JKM4R26YF; stellar contract deploy --wasm contracts/soroban/usdt0-fee-wrapper/usdt0_fee_wrapper.wasm --network mainnet -- --oft "$USDT0_OFT" --token "$USDT0_SAC"`。
 
 **RPC。** 所有调用都经过 Stellar 主网的 Soroban RPC，即 `STELLAR_RPC_URL_MAINNET`（默认是 Gateway.fm 的公共端点，有速率限制：生产环境请设置服务商的端点）。使用前会校验其 passphrase，连到其他网络的节点会返回 `503 misconfigured`。
 
@@ -974,7 +1017,7 @@ routes → quote → create (unsigned XDR + SEP-7 link) → the holder signs
 
 **目前仅限测试网。** 该代币包装的是原生 XLM。在运营方于主网部署并设置 `ZK_PAYMENTS_MAINNET_*` 之前，主网保持关闭：在此之前，`prod` key 的 `GET /v1/zk-payments/config` 返回 `enabled: false`，创建请求返回 `400 network_unsupported`。
 
-**佣金：每笔支付 0.01%（1 bps）**，即 `src/zk-payments/zk-payments.constants.ts` 中的 `ZK_PAYMENT_FEE_BPS`，在每个部署上都相同。对金额为 `amount` 的支付，`feeAmount = ceil(amount_in_stroops * 1 / 10000)` stroops，至少为 1，且 `netAmount = amount - feeAmount`：商户收到净额，Cosmos Pay 收取手续费，付款方总共支付 `amount`。净额为零的金额会被拒绝（`400 invalid_amount`）。
+**佣金：每笔支付 0.18%（18 bps）**，即 `src/zk-payments/zk-payments.constants.ts` 中的 `ZK_PAYMENT_FEE_BPS`，在每个部署上都相同。对金额为 `amount` 的支付，`feeAmount = ceil(amount_in_stroops * 1 / 10000)` stroops，至少为 1，且 `netAmount = amount - feeAmount`：商户收到净额，Cosmos Pay 收取手续费，付款方总共支付 `amount`。净额为零的金额会被拒绝（`400 invalid_amount`）。
 
 ```
 merchant: POST /v1/zk-payments (recipient registered on the token)
@@ -1002,6 +1045,8 @@ payer:    GET  /v1/zk-checkout/{id}
 
 第 3、6、7 步针对相应的那一笔转账返回 `payment_transfer_mismatch` 或 `fee_transfer_mismatch`。被拒绝时支付保持 `PENDING`；用某笔支付结算时所用的同一组哈希再次 confirm，会再次得到同样的答复。
 
+**带商户手续费时**（创建时传 `merchantFee`，见 **商户手续费**），付款方进行第三笔转账，将 `merchantFee.amount` 转给 `merchantFee.wallet`，confirm 以 `merchantFeeTxHash` 接收其哈希：此类支付必须提供，其他支付则拒绝。它与另外两笔一起按相同顺序经过每一步；不符时返回 `merchant_fee_transfer_mismatch`。
+
 **confirm 不是金额预言机（oracle）。** 它是公开的，会解密交给它的任何内容，因此它从不透露某个金额解密后是多少，并且最后才比较金额：在某笔转账关闭之后才创建的支付，会因时间窗口而拒绝该转账；用自己账户发起的手续费转账，也无法为别人的支付转账作担保。修改它时请保持这个顺序。
 
 **状态。** 确认之前为 `PENDING`，之后为 `SUCCEEDED`。不会存储 `EXPIRED`：超过 `expiresAt` 的 `PENDING` 支付在每个响应和列表过滤中都读作 `EXPIRED`，并且仍然可以被确认，因为在 `expiresAt` 之前关闭的转账已经支付了它。`expiresInMinutes` 默认为 60，最多七天。
@@ -1021,7 +1066,7 @@ npm run zk:e2e-testnet
 
 `scripts/zk/deploy-testnet.ts` 不需要 Rust 构建，也不需要真实资金：它使用一个由 Friendbot 注资的一次性部署账户，从测试网上保密代币演示（demo）的审计方注册表和 vanilla 代币实例读取它们的 wasm 哈希；部署一个新的审计方注册表（admin 和 manager 均为该部署账户），在 id 0 下登记 Cosmos Pay 的密钥 `K_aud = k·H`；部署一个基于原生 XLM、使用该 demo 验证器的新 vanilla 代币（验证器已注册其 v0.8.0 验证密钥，且验证是公开的）；检查 `addr_f` 奇偶性（parity）；并用在 Node 中生成的注册证明把手续费账户注册到该代币上。带 `--env-file` 时，它把 `ZK_PAYMENTS_TESTNET_*` 这组变量写入该文件；带 `--secrets-file` 时，把运营方的密钥（注册表 admin，以及手续费账户的私钥和保密支出标量，用于提取已收取的手续费）写入那个文件；两者都不带时则全部打印出来。服务器不需要运营方的任何密钥。再次运行时，它会在链上校验已配置的这组合约，而不是重新部署；`--redeploy` 会部署一套全新的合约，旧代币上进行过的每笔支付都会因此被搁浅。
 
-`scripts/zk/e2e-testnet.ts` 是真实链上的检查。它使用 Friendbot 账户注册一个商户和一个付款方，通过该模块自己的 service 创建支付，存入、合并，完成两笔转账，并通过该模块自己的 confirm 进行确认：错误的金额被拒绝，正确的金额完成结算，且哈希无法被复用。
+`scripts/zk/e2e-testnet.ts` 是真实链上的检查。它使用 Friendbot 账户注册一个商户和一个付款方，通过该模块自己的 service 创建支付，存入、合并，完成两笔转账，并通过该模块自己的 confirm 进行确认：错误的金额被拒绝，正确的金额完成结算，且哈希无法被复用。随后它支付一笔带商户手续费的支付：第三笔转账转入第三个已注册账户，confirm 只有在三个哈希齐全时才结算。
 
 **测试网会被重置**，每隔几个月一次，其上的合约也随之消失：重置之后请重新运行部署。它复用的验证器是 demo 的；如果那个验证器不存在了，部署会一直失败，直到存在一个带有 v0.8.0 密钥的验证器、并在脚本中写明它为止。
 
@@ -1035,7 +1080,7 @@ npm run zk:e2e-testnet
 | `GET /v1/zk-payments/{id}` | `payments:read` | 单笔支付，即其所有者看到的样子 |
 | `GET /v1/zk-checkout/config` | 无，`@Public()` | 同样的配置，针对 `?network=testnet` 或 `public`，供没有 key 的页面使用 |
 | `GET /v1/zk-checkout/{id}` | 无，`@Public()` | 付款方看到的支付：转多少、转给谁、在哪些合约上 |
-| `POST /v1/zk-checkout/{id}/confirm` | 无，`@Public()` | 用两笔转账结算它，并在链上校验 |
+| `POST /v1/zk-checkout/{id}/confirm` | 无，`@Public()` | 用两笔转账（带商户手续费时为三笔）结算它，并在链上校验 |
 
 ## 别名 — 可认领的支付标识
 
@@ -1358,6 +1403,84 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
 - **OpenAPI 契约记录每个原生插件的路由**，无论是否开启：`openapi:generate` 会全部开启。
 
 ## 升级 — 破坏性变更与部署说明
+
+### 支付：结账页何时看到链接；兑换的已结算金额（USD）
+
+- **迁移 `20261027180000_payment_checkout_seen`：** 在 `payment_intent` 上新增可为空的
+  `checkoutSeenAt` 列；不改写任何数据。新版本上线前请运行 `migrate deploy`。
+- **支付意图返回 `checkoutSeenAt`：** 托管结账页在意图仍开放（待处理或已提交）时最后一次读取它的时间。
+  付款方打开页面期间，页面会轮询 `GET /v1/payment-links/{id}`，因此最近 30 秒内的值表示有人正在支付页面上。
+  最多每 10 秒写入一次，且不会改动 `updatedAt`。
+- **`GET /v1/summary/series` 计算兑换的价值：** `swaps.buckets[].volumeUsd`、
+  `swaps.totals.volumeUsd`（含 `unpriced`）和 `swaps.previous.volumeUsd`，即已完成兑换按 NEAR Intents
+  当前价格以 USD 计算的卖出金额。
+- **托管结账页上报付款方的钱包操作：** `POST /v1/payment-links/{id}/events`
+  （`@Public()`，按客户端地址计预算）接收 `walletOpened`、`walletClosed` 或 `sent`，
+  支付意图以 `checkoutWalletAt`、`checkoutWalletClosedAt` 和 `checkoutSentAt` 返回。
+  仅供参考：状态仍以链上为准。迁移 `20261027190000_payment_checkout_events` 新增三个可为空的列。
+
+### 客户：用多条链上的钱包取代单一账户
+
+- **一个客户拥有钱包**（`wallets`：`chain`、`address`、`label`），按需最多 20 个，位于 Stellar、Solana 或 Monad。`POST /v1/customers` 接受 `wallets`；新路由 `POST /v1/customers/{id}/wallets` 和 `DELETE /v1/customers/{id}/wallets/{walletId}` 用于添加和移除钱包。一个钱包只属于商户的一个客户：若该钱包已属于另一个客户，返回 `409 customer_wallet_taken`（新错误码）。
+- **`account` 已弃用，但未移除。** 响应中它保留为第一个钱包的地址（没有钱包时为 null）。创建时它会添加一个钱包；在 `PATCH` 中，地址会替换第一个钱包（或添加一个），null 则移除它，与以前编辑唯一账户的方式相同。`PATCH` 不接受 `wallets`。
+- **`payments`、`succeeded` 和 `total` 汇总客户的所有钱包**，每个钱包按其所在链和 key 的网络统计。
+- **迁移 `20261027120000_customer_wallets`：** 新增 `customer_wallet` 表；每个已存储的 `account` 成为其客户的第一个钱包，链由地址格式判断，随后删除 `account` 列。若同一商户的两个客户拥有相同账户，由较早创建的客户保留；无法迁移的账户会以 `Previous account: ...` 的形式追加到客户的 `note` 中。
+- **已结算付款的付款人按钱包和链匹配：** 已在某个客户钱包中的付款人不会被重复添加；新的付款人会成为带有该钱包的自动客户。
+
+### 商户手续费：兑换上的 `merchantFee`，以及七张表上的可空列
+
+- **新增，向后兼容：** `POST /v1/swaps`（Stellar）、`/v1/swaps/quote`、
+  `POST /v1/cross-chain-swaps` 及其报价上的 `merchantFee`；见 **商户手续费**。响应新增
+  可为 null 的 `merchantFee`（报价中位于 `fee` 旁）。不带费用的请求构建的内容与之前完全相同。
+- **迁移 `20261026150000_merchant_fee`：** 在 `payment_intent`、`swap`、`chain_swap`、
+  `cross_chain_swap`、`liquidity_pool_operation`、`zk_payment` 和 `usdt0_transfer` 上新增
+  可空的 JSONB 列 `merchantFee`。不回填：现有记录读作无费用。
+- **新错误码 `merchant_fee_unsupported`**（400）：在 Solana 或 Monad 兑换上设置商户手续费。
+- **Stellar 支付链接也接受 `merchantFee`**（`POST /v1/payment-intents/tx` 与 `/pay`；
+  `pay` 链接需要 `amount`）。Solana 与 Monad 链接返回 `merchant_fee_unsupported`。响应与
+  公开链接新增 `merchantFee`；公开链接还新增 `payerAccountRequired`。
+- **新路由 `POST /v1/payment-links/{id}/transaction`**（`@Public()`）：带手续费的 Stellar
+  链接的付款方所签名的 envelope。**部署步骤：** APISIX 为 `/v1/payment-links/*` 配置的
+  免密钥路由必须允许 `POST`（其 CORS 插件需允许带 `Content-Type` 的 `POST`），否则收银台
+  无法构建它。
+- **新变量 `PAYMENT_LINK_CHECKOUT_URL`**（默认 `https://payments.cosmospay.lat`）：这类
+  链接的 `uri` 指向的地址。
+- **Solana 支付链接也接受 `merchantFee`**（需有 `amount`）：链接是位于新的免密钥路由 `GET` /
+  `POST /v1/payment-links/{id}/solana-pay`（`@Public()`，按地址计预算）上的 Solana Pay
+  transaction request，由网关的免密钥 payment-links 路由提供。**新变量
+  `PAYMENT_LINK_API_URL`**（默认 `WALLET_AUTH_PUBLIC_BASE_URL`）。
+- **Monad 支付链接也接受 `merchantFee`**（需启用存款地址）：新合约
+  `contracts/PaymentSplitForwarder.sol`（产物 `src/evm/payment-split-forwarder.artifact.ts`，由
+  `npm run contracts:compile` 与未改动的 PaymentForwarder 一起编译）。迁移
+  `20261026190000_evm_deposit_merchant_fee` 为 `evm_deposit_address` 新增 `feeWallet` 和
+  `merchantFee`（现有地址均为 null，仍是 PaymentForwarder）。
+- **Solana 兑换也接受 `merchantFee`**：手续费转账被追加到 Jupiter 的交易中
+  （`src/solana/solana-message.ts` 读取并重写 v0 交易；地址查找表通过 Solana RPC 读取）。Monad
+  兑换仍返回 `merchant_fee_unsupported`。
+- **隐私支付也接受 `merchantFee`**：向手续费钱包进行第三笔保密转账。
+  `POST /v1/zk-checkout/{id}/confirm` 接收 `merchantFeeTxHash`（仅当支付带商户手续费时必填）；新增
+  错误码 `merchant_fee_transfer_mismatch`；响应新增 `merchantFee`，所有者视图另有
+  `merchantFeeTxHash`。迁移 `20261026210000_zk_payment_merchant_fee_tx` 为 `zk_payment` 添加可空且
+  唯一的 `merchantFeeTxHash`。
+- **取整为零的商户手续费会被拒绝**，适用于所有操作（`400 invalid_amount`）；此前在 Stellar 上会构建
+  一笔金额为零的付款。
+- **流动性操作也接受 `merchantFee`**（`POST /v1/liquidity-pools/deposit` 与 `/withdraw`）：按每种
+  资产的 `bps` 收取，在同一笔交易中每种资产各一笔付款；`fixed` 会被拒绝。响应和 webhook 新增
+  `merchantFee`，其中 `amountB` / `assetB` 是资产 B 的部分。
+- **Monad 兑换也接受 `merchantFee`**：前提是 `KURU_MERCHANT_FEE_ROUTER` 指向已部署的
+  `contracts/MerchantFeeSwapRouter.sol`（artifact `src/evm/merchant-fee-swap-router.artifact.ts`）。
+  **部署步骤：**从任意账户部署 artifact 的字节码，其后跟上 Kuru Flow router 地址（32 字节字），
+  合约没有所有者；然后设置该变量。此类兑换的钱包授权的是 router 而不是 Kuru。未设置时，Monad
+  兑换仍返回 `merchant_fee_unsupported`。
+- **USDT0 转账也接受 `merchantFee`**：前提是 `USDT0_FEE_WRAPPER` 指向已部署的
+  `contracts/soroban/usdt0-fee-wrapper`（wasm 与 crate 一起提交，由
+  `USDT0_FEE_WRAPPER_WASM_SHA256` 固定）。**部署步骤：**执行 USDT0 一节中的
+  `stellar contract deploy` 命令，然后设置该变量。响应新增 `merchantFee`。未设置时返回
+  `merchant_fee_unsupported`。
+- **USDT0 转账收取套餐佣金**：通过手续费 wrapper（`USDT0_FEE_WRAPPER`，其 `send` 接收手续费列表），
+  按 `amount` 的 `feeBps` 支付给 `STELLAR_SWAP_FEE_WALLET`（必须对 USDT0 有 trustline）。迁移
+  `20261026230000_usdt0_commission` 为 `usdt0_transfer` 添加 `feeBps`、`feeAmount` 与 `feeWallet`；
+  转账与报价都会返回它们。未配置 wrapper 时，与以前一样不收取佣金。
 
 ### 列表遵循密钥的网络；仪表盘读取会被缓存
 
@@ -1852,7 +1975,7 @@ curl -H "X-Gateway-Secret: $APISIX_GATEWAY_SECRET" -H "X-Consumer-Username: ops"
 | `APISIX_ADMIN_URL` | 与 admin key 一起 | — | APISIX Admin API 的基础地址，如 `http://apisix:9180/apisix/admin`。仅用于签发钱包账户的 key |
 | `APISIX_ADMIN_KEY` | 钱包登录需要 | — | APISIX admin key。作用于整个网关——见[没有任何请求依赖开发者平台](#没有任何请求依赖开发者平台)。在恢复服务器上会被拒绝 |
 | `APISIX_ADMIN_TIMEOUT_MS` | 否 | `10000` | 一次 Admin API 调用的时间预算（ms） |
-| `WALLET_KEY_SWAP_FEE_BPS` | 否 | `50` | 写入钱包账户 key 的兑换佣金（`community` 套餐的费率） |
+| `WALLET_KEY_SWAP_FEE_BPS` | 否 | `65` | 写入钱包账户 key 的兑换佣金（`community` 套餐的费率） |
 | `MAIL_RESEND_API_KEY` | 邮件入口需要 | — | 本服务发送登录与恢复验证码所用的 Resend API key |
 | `MAIL_FROM` | 与 Resend / SMTP key 一起 | — | 已验证的发件人，如 `Cosmos Pay <no-reply@example.com>` |
 | `MAIL_SMTP_HOST` | 否 | — | SMTP 服务器，在未设置 `MAIL_RESEND_API_KEY` 时使用 |
@@ -1868,6 +1991,7 @@ curl -H "X-Gateway-Secret: $APISIX_GATEWAY_SECRET" -H "X-Consumer-Username: ops"
 | `STELLAR_HORIZON_URL_PUBLIC` | 否 | `https://horizon.stellar.org` | 主网 Horizon 基础 URL |
 | `STELLAR_HORIZON_URL_TESTNET` | 否 | `https://horizon-testnet.stellar.org` | 测试网 Horizon 基础 URL |
 | `STELLAR_RPC_URL_MAINNET` | 否 | `https://soroban-rpc.mainnet.stellar.gateway.fm` | USDT0 转账使用的 Stellar 主网 Soroban RPC（使用前校验 passphrase）。公共端点有速率限制：生产环境请使用服务商的端点 |
+| `USDT0_FEE_WRAPPER` | USDT0 上的商户手续费需要 | — | 已部署并绑定到 USDT0 的 OFT 与代币的 `contracts/soroban/usdt0-fee-wrapper`。未设置时，带商户手续费的 USDT0 转账返回 `merchant_fee_unsupported`；未运行固定 wasm 或绑定到其他合约的地址返回 `503 misconfigured`。它也承载套餐佣金；未设置时 USDT0 转账不收取佣金。 |
 | `SOLANA_RPC_URL_MAINNET` | 否 | `https://api.mainnet-beta.solana.com` | `prod` 密钥使用的 Solana RPC（mainnet-beta；使用前校验 genesis hash）。公共端点有速率限制：生产环境请使用服务商的端点 |
 | `SOLANA_RPC_URL_DEVNET` | 否 | `https://api.devnet.solana.com` | `dev` 密钥使用的 Solana RPC（devnet） |
 | `SOLANA_RPC_TIMEOUT_MS` | 否 | `10000` | 单次 Solana RPC 调用的时间预算（毫秒） |
@@ -1880,7 +2004,7 @@ curl -H "X-Gateway-Secret: $APISIX_GATEWAY_SECRET" -H "X-Consumer-Username: ops"
 | `STELLAR_BASE_FEE` | 否 | `100` | 构建交易时使用的 Stellar 基础手续费（stroops） |
 | `STELLAR_TX_TIMEOUT` | 否 | `300` | 交易超时（秒） |
 | `STELLAR_SWAP_FEE_WALLET` | 手续费 > 0 时 | — | 收取 swap 手续费的平台 G... 账户 |
-| `STELLAR_SWAP_FEE_BPS` | 否 | `50` | swap 手续费，单位为基点 |
+| `STELLAR_SWAP_FEE_BPS` | 否 | `65` | swap 手续费，单位为基点 |
 | `STELLAR_SWAP_SLIPPAGE_BPS` | 否 | `50` | 默认 swap 滑点容忍度（bps） |
 | `STELLAR_SWAP_MAX_SLIPPAGE_BPS` | 否 | `500` | 调用方滑点的硬上限（bps） |
 | `STELLAR_SWAP_SINGLE_INFLIGHT` | 否 | `false` | 为 `true` 时，如果同一 source 已存在未过期的 PENDING swap，则返回 409 |
@@ -1901,11 +2025,14 @@ curl -H "X-Gateway-Secret: $APISIX_GATEWAY_SECRET" -H "X-Consumer-Username: ops"
 | `KURU_BASE_URL` | 否 | `https://ws.kuru.io` | Kuru Flow API（Monad） |
 | `KURU_API_KEY` | 生产环境需要 | — | Kuru Flow API key（`X-API-Key`）。没有它时每个地址只能拿到限速每秒一次请求的 token |
 | `KURU_TIMEOUT_MS` | 否 | `15000` | 单次 Kuru Flow 调用的时间预算（毫秒） |
+| `KURU_MERCHANT_FEE_ROUTER` | Monad 上的商户手续费需要 | — | 针对 Kuru Flow router 部署的 `contracts/MerchantFeeSwapRouter.sol`。未设置时，带商户手续费的 Monad 兑换返回 `merchant_fee_unsupported`；代码与 artifact 不一致的地址返回 `503 misconfigured` |
 | `ANALYTICS_CACHE_TTL_MS` | 否 | `10000` | `/v1/summary`、`/v1/summary/series` 和 `/v1/balances` 按消费者和网络复用一个响应的时长（毫秒），每个副本独立。`0` 关闭 |
 | `OBSERVER_ENABLED` | 否 | `true` | `true` / `false` — 链上对账器 |
 | `OBSERVER_INTERVAL_MS` | 否 | `15000` | 观察器轮询间隔（ms，最小 1000） |
 | `OBSERVER_BATCH_SIZE` | 否 | `50` | 每个观察器周期处理的意图/swap 上限 |
 | `PAYMENT_INTENT_TTL_SECONDS` | 否 | `3600` | 未支付意图变为 `EXPIRED` 之前的存活时间 |
+| `PAYMENT_LINK_CHECKOUT_URL` | 否 | `https://payments.cosmospay.lat` | 带商户手续费的 Stellar 支付链接所打开的托管收银台（`<url>/<id>`） |
+| `PAYMENT_LINK_API_URL` | 否 | `WALLET_AUTH_PUBLIC_BASE_URL` | 本 API 在网关上的公开 URL，带商户手续费的 Solana 支付链接将其作为 Solana Pay transaction request；未设置时此类链接返回 `503 misconfigured` |
 | `WEBHOOK_TIMEOUT_MS` | 否 | `5000` | 旧版 webhook 超时回退值（ms） |
 | `WEBHOOK_CONNECT_TIMEOUT_MS` | 否 | `3000` | 出站 webhook 连接时间预算（ms） |
 | `WEBHOOK_READ_TIMEOUT_MS` | 否 | `5000` | 出站 webhook 读取时间预算（ms） |
@@ -1949,7 +2076,7 @@ curl -H "X-Gateway-Secret: $APISIX_GATEWAY_SECRET" -H "X-Consumer-Username: ops"
 | `ZK_PAYMENTS_TESTNET_AUDITOR_REGISTRY` | 与代币一起 | 无 | 在 id 0 下持有 Cosmos Pay 密钥的审计方注册表（C...） |
 | `ZK_PAYMENTS_TESTNET_VERIFIER` | 与代币一起 | 无 | 代币用来校验证明的 UltraHonk 验证器注册表（C...） |
 | `ZK_PAYMENTS_TESTNET_AUDITOR_SECRET` | 与代币一起 | 无 | 审计方标量 `k`（64 个 hex 字符）：代币上的每个保密金额都能用它解密。其敏感程度与网关密钥相当；绝不能放进仓库 |
-| `ZK_PAYMENTS_TESTNET_FEE_ACCOUNT` | 与代币一起 | 无 | 0.01% 佣金转入的账户（G...），已在代币上注册 |
+| `ZK_PAYMENTS_TESTNET_FEE_ACCOUNT` | 与代币一起 | 无 | 0.18% 佣金转入的账户（G...），已在代币上注册 |
 | `ZK_PAYMENTS_TESTNET_DEPLOYED_LEDGER` | 与代币一起 | 无 | 代币部署时所在的账本，钱包从这里开始重放其余额 |
 | `ZK_PAYMENTS_TESTNET_RPC_URL` | 否 | `https://soroban-testnet.stellar.org` | 隐私支付读取链上数据所用的 Soroban RPC；使用前会检查其网络 passphrase |
 | `ZK_PAYMENTS_MAINNET_*` | 否 | 无 | 供 `prod` key 使用的同一组变量（`_TOKEN`、`_AUDITOR_REGISTRY`、`_VERIFIER`、`_AUDITOR_SECRET`、`_FEE_ACCOUNT`、`_DEPLOYED_LEDGER`、`_RPC_URL`）。未设置时，主网上的隐私支付处于关闭状态。`_RPC_URL` 在主网上没有默认值，随该组变量一起为必需 |

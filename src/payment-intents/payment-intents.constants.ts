@@ -173,6 +173,45 @@ export const PAYMENT_LINK_READ_RATE_LIMIT = {
 };
 
 /**
+ * `POST /v1/payment-links/{id}/transaction`, per client address: each call
+ * reads the payer's account from Horizon (and the merchant's, for an issued
+ * asset) and builds an envelope. A payer builds one, maybe again after a
+ * timeout lapses; twenty a minute is a checkout retrying many times over.
+ */
+/**
+ * What a wallet shows for a Solana Pay transaction request (its GET): who asks
+ * for the payment, and an icon (an absolute https image, served by the hosted
+ * checkout's site on every domain).
+ */
+export const SOLANA_PAY_LABEL = 'Cosmos Pay';
+export const SOLANA_PAY_ICON_PATH = '/android-chrome-512x512.png';
+
+/**
+ * `POST /v1/payment-links/{id}/events`, per client address: a checkout reports a
+ * handful of wallet events per payment (opened, closed, sent); thirty a minute is a
+ * payer opening their wallet again and again.
+ */
+export const PAYMENT_LINK_EVENT_RATE_LIMIT = {
+  name: 'payment-links:events',
+  limit: 30,
+  windowMs: 60 * 1000,
+};
+
+/** What the hosted checkout reports about the payer's wallet. */
+export const CHECKOUT_EVENTS = [
+  'walletOpened',
+  'walletClosed',
+  'sent',
+] as const;
+export type CheckoutEvent = (typeof CHECKOUT_EVENTS)[number];
+
+export const PAYMENT_LINK_TRANSACTION_RATE_LIMIT = {
+  name: 'payment-links:transaction',
+  limit: 20,
+  windowMs: 60 * 1000,
+};
+
+/**
  * The most older intents a settlement asks the chain about before it claims a
  * transaction (`settlement-rivals.ts`): rivals of other consumers that the same
  * payment may also pay, and that therefore outrank the intent being settled.

@@ -85,7 +85,7 @@ import { NativePluginsModule } from '@/native-plugins/native-plugins.module';
     // PLUGINS_ENABLED names them. The core never imports them directly.
     NativePluginsModule,
     // Confidential payments on Cosmos Pay's own confidential token (amount
-    // hidden on-chain, 0.01% commission). Off on a network until its
+    // hidden on-chain, 0.18% commission). Off on a network until its
     // ZK_PAYMENTS_<NETWORK>_* set is configured.
     ZkPaymentsModule,
     // USDT0 from Stellar to EVM networks through LayerZero's OFT (Tether's

@@ -69,7 +69,7 @@ export class ZkPaymentsController {
   @RateLimit(ZK_PAYMENT_CREATE_RATE_LIMIT)
   @ApiOperation({
     summary:
-      'Create a private payment: a confidential payment to a merchant registered on the token, minus the 0.01% commission',
+      'Create a private payment: a confidential payment to a merchant registered on the token, minus the 0.18% commission',
     description:
       'A private payment hides its amount on-chain: it is paid with ' +
       "confidential transfers on Cosmos Pay's confidential token, proven with " +
@@ -79,7 +79,9 @@ export class ZkPaymentsController {
       'recipient holds a confidential account on the token under auditor 0. ' +
       'The payer then makes two confidential transfers (net to the merchant, ' +
       'fee to the fee account) and confirms them at ' +
-      '`POST /v1/zk-checkout/{id}/confirm`.',
+      '`POST /v1/zk-checkout/{id}/confirm`. With a `merchantFee`, a third ' +
+      'transfer pays it to its wallet, which must hold a confidential account ' +
+      'on the token too.',
   })
   @ApiHeader({
     name: 'Idempotency-Key',
@@ -102,9 +104,10 @@ export class ZkPaymentsController {
       ApiErrorCode.NetworkUnsupported,
     ],
     description:
-      '`invalid_amount`: after the commission the merchant would receive ' +
-      'nothing. `recipient_not_registered`: the recipient has no ' +
-      'confidential account on the token under auditor 0. ' +
+      '`invalid_amount`: after the commission (and the merchant fee) the ' +
+      'merchant would receive nothing, or the merchant fee rounds to nothing. ' +
+      "`recipient_not_registered`: the recipient, or the merchant fee's " +
+      'wallet, has no confidential account on the token under auditor 0. ' +
       '`network_unsupported`: private payments do not run on this network yet ' +
       '(mainnet today; use a dev key).',
     examples: {
@@ -112,7 +115,7 @@ export class ZkPaymentsController {
       [ApiErrorCode.InvalidAmount]: {
         summary: 'The merchant would receive nothing after the commission',
         message:
-          'The amount is too small: after the 0.01% commission (at least one ' +
+          'The amount is too small: after the 0.18% commission (at least one ' +
           'stroop) the merchant would receive nothing.',
         path: '/v1/zk-payments',
       },

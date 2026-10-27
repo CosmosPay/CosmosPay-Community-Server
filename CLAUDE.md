@@ -7,8 +7,9 @@ Conventions for this repo. They are enforced by `npm run lint`, which CI gates o
 | Command | What it does, and the trap in it |
 | --- | --- |
 | `npm run dev` | `prisma migrate deploy`, then `nest start --watch` — one instance on `.env` |
-| `npm run dev:local` | several instances from ONE `.env`, overrides in `dev-instances.json` (git-ignored, created from `dev-instances.example.json` on first run — keep it, it holds the recovery servers' keys). Default profile is `api` + `replica`; `-- recovery` runs `api` + `recovery-a` + `recovery-b`, `-- all` all four (`scripts/dev-local.mts`) |
-| `npm test` | jest under `node --experimental-vm-modules`. **Never `npx jest`:** without the flag most suites fail to load at `@stellar/stellar-sdk`'s ESM dependencies, which looks like real breakage and is not |
+| `npm run dev:local` | several instances from ONE `.env`, overrides in `dev-instances.json` (git-ignored, created from `dev-instances.example.json` on first run — keep it, it holds the recovery servers' keys). Default profile is `api` + `replica`; `-- recovery` runs `api` + `recovery-a` + `recovery-b`, `-- all` all four (`scripts/dev-local.mts`). One run per checkout: it restarts its instances itself after each compile without errors (not `node --watch`, whose watcher kept a core busy per instance), its build and instances end with it however it ends, and a new run first ends an earlier one and anything of this checkout it left running |
+| `npm run dev:local:stop` | ends a `dev:local` of this checkout and everything it started (on Windows ending a process leaves its children running); `-- --dry-run` only lists them |
+| `npm test` | jest under `node --experimental-vm-modules`. **Never `npx jest`:** without the flag most suites fail to load at `@stellar/stellar-sdk`'s ESM dependencies, which looks like real breakage and is not. Jest runs on half the cores (`maxWorkers: "50%"`, here and in `test/jest-e2e.json`): one worker per core but one held the machine at 100% |
 | `npm run test:e2e` | the suites in `test/` (`test/jest-e2e.json`), which `npm test` never sees |
 | `npm run lint` | eslint over `src`, `scripts`, `test` and `plugins`, zero warnings |
 | `npm run openapi:generate` | regenerates `openapi/openapi.json` + `.yaml`. A new or changed controller means running it and committing the spec — `openapi:check` fails CI on any diff |
@@ -283,6 +284,12 @@ table. These are the rules that did not hold on their own:
   A field that names no chain but takes any (a customer's `account`) reads the
   chain from the shape: `@IsAnyChainAddress()` to validate, `normalizeAnyChainAddress`
   to store (EIP-55 on Monad, the spelling payment intents record a payer in).
+- **A customer holds wallets** (`customer_wallet`, product owner 2026-10-27: one customer pays from
+  several wallets on different chains). A wallet belongs to one customer of a merchant: the
+  unique index is `(consumerId, chain, address)`, so a payment's payer counts toward exactly one
+  customer and the payer recorded on settlement (`ensureForPayer`) is looked up by chain and
+  address. `account` is the deprecated first wallet: answered from `wallets`, and on `PATCH` it
+  edits that wallet only. Wallets change through their own routes, never through `PATCH`.
 - **Solana and Monad are reached only through `SolanaRpcClient` / `EvmRpcClient`**,
   which check the node's genesis hash / `eth_chainId` before trusting it. Never
   call a node URL directly. Stellar mainnet's Soroban RPC is the same rule:
@@ -331,9 +338,23 @@ table. These are the rules that did not hold on their own:
   chain's own `eth_chainId`: a wrong id sends the deposit to another chain. A
   1Click blockchain with no entry (`qtc`, `adi`) is never offered: an address this
   service cannot validate is a refund it cannot promise.
+- **Monad swaps with a merchant fee go through `contracts/MerchantFeeSwapRouter.sol`**
+  (`KURU_MERCHANT_FEE_ROUTER`), one deployment per Kuru Flow router, with no owner. It
+  is not a deposit address: wallets approve it and send it value, so the venue checks
+  the deployed code against the artifact (`eth_getCode` must equal the runtime a
+  creation `eth_call` of `routerInitCode(aggregator())` answers) before handing the
+  address out, and refuses a Kuru quote routed through another aggregator. The router
+  calls nothing but its immutable `aggregator` and the two tokens, pulls only from
+  the caller and leaves no allowance; keep all three when changing it, and a changed
+  router is a new deployment the operator points the variable at.
 - **Monad deposit addresses are `CREATE2` addresses of
-  `contracts/PaymentForwarder.sol`**, so every one of them depends on the exact
-  bytecode in `src/evm/payment-forwarder.artifact.ts`. Regenerate it only with
+  `contracts/PaymentForwarder.sol`**, or, for an intent with a merchant fee, of
+  `contracts/PaymentSplitForwarder.sol` (two more constructor arguments: the
+  fee's wallet and amount; the row's `feeWallet` / `merchantFee` say which), so
+  every one of them depends on the exact bytecode in its artifact
+  (`src/evm/payment-forwarder.artifact.ts`, `payment-split-forwarder.artifact.ts`).
+  A changed contract is a NEW contract with an artifact of its own, never a
+  recompile of one whose addresses may hold money. Regenerate it only with
   `npm run contracts:compile` (the spec fails if source and artifact disagree),
   and never while a deposit address built from the old bytecode may still hold
   or receive money: the forwarder rebuilds each address from the CURRENT
@@ -454,7 +475,7 @@ stays in what code and operators read: the routes (`/v1/zk-payments`,
 
 `src/zk-payments/` serves payments whose amount is hidden on-chain, on Cosmos Pay's
 OWN instance of OpenZeppelin's Confidential Token (`stellar-confidential` 0.8.0),
-for a 0.01% commission (`ZK_PAYMENT_FEE_BPS = 1`, a constant: the price of the
+for a 0.18% commission (`ZK_PAYMENT_FEE_BPS = 18`, a constant: the price of the
 product, never an env var). Testnet only; mainnet is off until `ZK_PAYMENTS_MAINNET_*`
 is set.
 
@@ -499,6 +520,12 @@ auditor key, so the ORDER of the checks is security, not style:
 7. only then the amounts: the recipient-auditor channel decrypts to exactly
    `netAmount` / `feeAmount`, the sender channel agrees (`channelsAgree`), and
    `commit(amount, r_transfer)` equals the `C_transfer` of the invocation.
+
+A payment with a merchant fee has a third leg: `merchantFeeTxHash`, a transfer of
+`merchantFee.amount` to `merchantFee.wallet` (registered on the token, like the
+recipient, checked at create). It runs through every step beside the other two, each
+step over all legs before the next; confirm refuses the hash on a payment without a
+merchant fee, and its absence on one with it, before reading the database or the chain.
 
 Steps 4 and 5 before 7 are what keep confirm from being an amount oracle on someone
 else's transfer (a payment created after it closed fails on time; a stranger's
@@ -586,8 +613,24 @@ refreshes it (ledger first, then LayerZero Scan), throttled per row by `lastChec
   `send`'s return value) and `/messages/tx/{hash}` (64 lowercase hex, no `0x`) only
   when it is not. A 404 is "not yet". Delivery took 1,612 to 1,661 s on every route
   on 2026-10-25.
-- **No commission** on this route yet: one operation per Soroban transaction leaves
-  no room for a fee payment. It is the product owner's decision.
+- **Fees go through `contracts/soroban/usdt0-fee-wrapper`** (`USDT0_FEE_WRAPPER`): one
+  operation per Soroban transaction leaves no room for a payment of its own, so the
+  operation calls the wrapper's `send`, which transfers each fee in its list (the plan
+  commission, then a merchant fee) in USDT0 and calls the OFT's `send` with the same
+  arguments, all under the holder's one source-account authorization (checked on
+  testnet: one entry, each token transfer and the OFT's send as sub-invocations).
+- **A command in the docs never writes a value right after a secret-named flag.** The wrapper's
+  constructor takes `--token` (USDT0's SAC id, public), and `--token C...` in the README was a
+  GitGuardian "Generic CLI Secret" incident (a false positive, 2026-10-27). Set such values in a
+  shell variable with a neutral name first (`USDT0_SAC=...;` then `--token "$USDT0_SAC"`).
+- **The plan commission rides only through the wrapper**: without `USDT0_FEE_WRAPPER` a
+  transfer charges none (product owner, 2026-10-26). With it, a plan rate and no
+  `STELLAR_SWAP_FEE_WALLET` is `503 misconfigured` (`commissionWithRecipient`), and a
+  commission wallet that does not trust USDT0 is too. The wrapper's wasm is
+  committed and pinned (`USDT0_FEE_WRAPPER_WASM_SHA256`, its spec reads the
+  file); the service checks the deployed wasm and the OFT and token it is bound to
+  before handing a holder the transaction. `cargo test` in the crate runs its tests;
+  rebuilding it is a new wasm, a new hash and a new deployment.
 
 ## Dashboard analytics read other modules' tables, in Postgres
 

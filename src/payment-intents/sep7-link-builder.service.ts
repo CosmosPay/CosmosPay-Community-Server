@@ -24,7 +24,10 @@ interface Sep7Payment {
 
 export interface Sep7TxPayment extends Sep7Payment {
   source: string;
+  /** What `destination` receives (the merchant's leg). */
   amount: string;
+  /** A merchant fee: a second payment, in the same asset, to its wallet. */
+  fee?: { wallet: string; amount: string } | null;
 }
 
 export interface Sep7PayPayment extends Sep7Payment {
@@ -76,17 +79,28 @@ export class Sep7LinkBuilder {
     });
     const account = await this.accounts.load(network, payment.source);
     await this.assertDestinationCanReceive(network, payment, account);
-    const xdr = new TransactionBuilder(account, {
+    const builder = new TransactionBuilder(account, {
       fee: baseFee,
       networkPassphrase: this.stellar.passphrase(network),
-    })
-      .addOperation(
+    }).addOperation(
+      Operation.payment({
+        destination: payment.destination,
+        amount: payment.amount,
+        asset: payment.asset.asset,
+      }),
+    );
+    // The merchant fee: its own payment, after the merchant's, so the two legs
+    // stay apart on-chain and the verifier can hold the intent to both.
+    if (payment.fee) {
+      builder.addOperation(
         Operation.payment({
-          destination: payment.destination,
-          amount: payment.amount,
+          destination: payment.fee.wallet,
+          amount: payment.fee.amount,
           asset: payment.asset.asset,
         }),
-      )
+      );
+    }
+    const xdr = builder
       .addMemo(Memo.id(payment.memo))
       .setTimeout(timeoutSeconds)
       .build()
@@ -118,6 +132,25 @@ export class Sep7LinkBuilder {
       asset,
       destination,
       'this payment',
+    );
+  }
+
+  /**
+   * A merchant fee's wallet must exist and, for an issued asset, trust it, or
+   * the fee payment fails on-chain and takes the merchant's with it. Checked
+   * when the intent is created, before any payer is asked to sign.
+   */
+  async assertWalletCanReceive(
+    network: StellarNetwork,
+    asset: ResolvedAsset,
+    wallet: string,
+  ): Promise<void> {
+    const receiver = await this.accounts.load(network, wallet);
+    this.accounts.assertCanReceive(
+      receiver.balances,
+      asset,
+      wallet,
+      'the merchant fee',
     );
   }
 

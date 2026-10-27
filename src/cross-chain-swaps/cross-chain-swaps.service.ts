@@ -9,6 +9,16 @@ import {
   commissionWithRecipient,
   resolvePlanCommissionBps,
 } from '@/common/plan-commission';
+import {
+  assertMerchantFeeCovered,
+  type MerchantFeeRecord,
+  type MerchantFeeTerms,
+  merchantFeeRecord,
+  readMerchantFeeRecord,
+  resolveMerchantFee,
+  sameMerchantFee,
+  splitMerchantFee,
+} from '@/common/merchant-fee/merchant-fee';
 import { isUniqueViolation } from '@/common/prisma-errors';
 import { project } from '@/common/projection';
 import { PublicRecordTokens } from '@/common/public-record-token';
@@ -22,7 +32,7 @@ import type { AppConfig } from '@/config/configuration';
 import {
   type CrossChainAsset,
   resolveCrossChainAsset,
-  supportedAssets,
+  tradableAssets,
 } from '@/cross-chain-swaps/cross-chain-assets';
 import {
   CROSS_CHAIN_STATUS_EVENTS,
@@ -75,6 +85,7 @@ export const CROSS_CHAIN_SWAP_PUBLIC_SELECT = {
   amountIn: true,
   feeBps: true,
   feeAmount: true,
+  merchantFee: true,
   amountOutEstimated: true,
   amountOutMin: true,
   slippageBps: true,
@@ -103,9 +114,13 @@ export type PublicCrossChainSwap = Prisma.CrossChainSwapGetPayload<{
 
 /**
  * A public swap plus its QR: of the deposit link when there is one, else of
- * the deposit address (a memo, if any, is in `depositMemo`).
+ * the deposit address (a memo, if any, is in `depositMemo`). Its merchant fee
+ * is the stored record read back (null without one).
  */
-export type CrossChainSwapView = PublicCrossChainSwap & { qr: string };
+export type CrossChainSwapView = Omit<PublicCrossChainSwap, 'merchantFee'> & {
+  merchantFee: MerchantFeeRecord | null;
+  qr: string;
+};
 
 /**
  * Where `/v1/swaps` settles a same-chain swap, named in the refusal. Only these
@@ -125,6 +140,8 @@ interface PricedCrossChainSwap {
   amountIn: string;
   feeBps: number;
   feeAmount: string;
+  /** The merchant fee the request named, as NEAR Intents will pay it; null without one. */
+  merchantFee: { terms: MerchantFeeTerms; record: MerchantFeeRecord } | null;
   slippageBps: number;
   recipient: string;
   refundTo: string;
@@ -142,6 +159,8 @@ interface CrossChainRequestTerms {
   recipient: string;
   refundTo: string;
   slippageBps: number;
+  /** Compared with {@link sameMerchantFee}: the stored row keeps its record. */
+  merchantFee: MerchantFeeTerms | null;
 }
 
 /**
@@ -177,7 +196,7 @@ export class CrossChainSwapsService {
   // ── Assets ────────────────────────────────────────────────────────────────
   /** What NEAR Intents can swap on every network this service reaches. */
   async assets(): Promise<{ data: CrossChainAsset[] }> {
-    return { data: supportedAssets(await this.nearIntents.tokens()) };
+    return { data: tradableAssets(await this.nearIntents.tokens()) };
   }
 
   // ── Quote ─────────────────────────────────────────────────────────────────
@@ -216,6 +235,7 @@ export class CrossChainSwapsService {
         amount: priced.feeAmount,
         asset: priced.origin.symbol,
       },
+      merchantFee: priced.merchantFee?.record ?? null,
       slippageBps: priced.slippageBps,
       timeEstimateSeconds: quote.timeEstimate,
     };
@@ -314,6 +334,12 @@ export class CrossChainSwapsService {
       amountIn: priced.amountIn,
       feeBps: priced.feeBps,
       feeAmount: priced.feeAmount,
+      ...(priced.merchantFee
+        ? {
+            merchantFee: priced.merchantFee
+              .record as unknown as Prisma.InputJsonValue,
+          }
+        : {}),
       amountOutEstimated: quote.amountOutFormatted,
       amountOutMin: this.minimumOut(priced),
       slippageBps: priced.slippageBps,
@@ -553,7 +579,14 @@ export class CrossChainSwapsService {
       );
     }
 
-    const baseUnits = this.baseUnits(dto.amount, origin);
+    const amountUnits = this.baseUnits(dto.amount, origin);
+    // The merchant fee comes out of `amount` (paid by the recipient) or is
+    // deposited on top of it (paid by the payer): `total` is the deposit.
+    const merchant = this.merchantFeeTerms(dto, origin);
+    const split = splitMerchantFee(amountUnits, merchant);
+    assertMerchantFeeCovered(split, merchant);
+    const baseUnits = split.total;
+    const merchantBps = this.merchantAppFeeBps(split, merchant);
     const nearCfg = this.config.get('nearIntents', { infer: true });
     const slippageBps = resolveSlippage(dto.slippageBps, nearCfg);
     // A commission with nowhere to be paid is a misconfiguration, not a free
@@ -589,8 +622,17 @@ export class CrossChainSwapsService {
         Date.now() + nearCfg.deadlineSeconds * 1000,
       ).toISOString(),
       referral: NEAR_INTENTS_REFERRAL,
-      ...(feeBps > 0
-        ? { appFees: [{ recipient: nearCfg.feeRecipient, fee: feeBps }] }
+      ...(feeBps > 0 || merchant
+        ? {
+            appFees: [
+              ...(feeBps > 0
+                ? [{ recipient: nearCfg.feeRecipient, fee: feeBps }]
+                : []),
+              ...(merchant
+                ? [{ recipient: merchant.wallet, fee: merchantBps }]
+                : []),
+            ],
+          }
         : {}),
     };
     const response = await this.nearIntents.quote(request);
@@ -604,6 +646,18 @@ export class CrossChainSwapsService {
         (baseUnits * BigInt(feeBps)) / 10_000n,
         origin.decimals,
       ),
+      merchantFee: merchant
+        ? {
+            terms: merchant,
+            // What NEAR Intents will take: the whole basis points of the deposit.
+            record: merchantFeeRecord(
+              merchant,
+              (baseUnits * BigInt(merchantBps)) / 10_000n,
+              origin.decimals,
+              origin.symbol,
+            ),
+          }
+        : null,
       slippageBps,
       recipient,
       refundTo,
@@ -618,6 +672,42 @@ export class CrossChainSwapsService {
     address: string,
   ): string {
     return CROSS_CHAIN_NETWORKS[chain].address.normalize(address);
+  }
+
+  /**
+   * The request's merchant fee: the fixed part in the origin asset, the wallet
+   * a NEAR account id (NEAR Intents credits app fees to an account inside it).
+   */
+  private merchantFeeTerms(
+    dto: QuoteCrossChainSwapDto,
+    origin: CrossChainAsset,
+  ): MerchantFeeTerms | null {
+    return resolveMerchantFee(
+      dto.merchantFee,
+      origin.decimals,
+      CROSS_CHAIN_NETWORKS.near.address,
+    );
+  }
+
+  /**
+   * The merchant fee as NEAR Intents takes it: whole basis points of the
+   * deposit, rounded down so the payer is never charged above what the
+   * request states. A fee under one basis point cannot be paid and is refused
+   * rather than quietly dropped.
+   */
+  private merchantAppFeeBps(
+    split: { fee: bigint; total: bigint },
+    merchant: MerchantFeeTerms | null,
+  ): number {
+    if (!merchant) return 0;
+    const bps = Number((split.fee * 10_000n) / split.total);
+    if (bps === 0) {
+      throw ApiError.badRequest(
+        ApiErrorCode.InvalidAmount,
+        'The merchant fee is under one basis point of the deposit, the least NEAR Intents can pay',
+      );
+    }
+    return bps;
   }
 
   /** `amount` in the origin asset's base units; a 400 when it cannot be one. */
@@ -688,7 +778,10 @@ export class CrossChainSwapsService {
       destinationChain: destination.chain,
       destinationAssetId: destination.assetId,
       amountIn: formatUnits(
-        this.baseUnits(dto.amount, origin),
+        splitMerchantFee(
+          this.baseUnits(dto.amount, origin),
+          this.merchantFeeTerms(dto, origin),
+        ).total,
         origin.decimals,
       ),
       recipient: this.normalizedAddress(dto.destinationChain, dto.recipient),
@@ -697,6 +790,7 @@ export class CrossChainSwapsService {
         dto.slippageBps,
         this.config.get('nearIntents', { infer: true }),
       ),
+      merchantFee: this.merchantFeeTerms(dto, origin),
     };
   }
 
@@ -711,9 +805,16 @@ export class CrossChainSwapsService {
     terms: CrossChainRequestTerms,
     consumer: GatewayConsumer,
   ): Promise<CrossChainSwapView> {
-    const same = (Object.keys(terms) as (keyof CrossChainRequestTerms)[]).every(
-      (key) => existing[key] === terms[key],
-    );
+    const { merchantFee, ...plain } = terms;
+    const same =
+      (Object.keys(plain) as (keyof typeof plain)[]).every(
+        (key) => existing[key] === plain[key],
+      ) &&
+      sameMerchantFee(
+        existing.merchantFee,
+        merchantFee,
+        existing.originDecimals,
+      );
     if (!same) {
       this.logger.warn(
         `Idempotency-Key reused for a different cross-chain swap request ` +
@@ -792,6 +893,7 @@ export class CrossChainSwapsService {
   private async present(swap: CrossChainSwap): Promise<CrossChainSwapView> {
     return {
       ...project(swap, CROSS_CHAIN_SWAP_PUBLIC_SELECT),
+      merchantFee: readMerchantFeeRecord(swap.merchantFee),
       qr: await sep7Qr(swap.depositUri ?? swap.depositAddress),
     };
   }

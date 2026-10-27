@@ -144,6 +144,12 @@ class EnvironmentVariables {
   STELLAR_RPC_URL_MAINNET?: string;
 
   @IsOptional()
+  @Matches(/^C[A-Z2-7]{55}$/, {
+    message: 'USDT0_FEE_WRAPPER must be a Soroban contract id (C...)',
+  })
+  USDT0_FEE_WRAPPER?: string;
+
+  @IsOptional()
   @IsString()
   STELLAR_BASE_FEE?: string;
 
@@ -234,6 +240,12 @@ class EnvironmentVariables {
   @IsInt()
   @Min(1)
   KURU_TIMEOUT_MS?: number;
+
+  @IsOptional()
+  @Matches(/^0x[0-9a-fA-F]{40}$/, {
+    message: 'KURU_MERCHANT_FEE_ROUTER must be an EVM address (0x + 40 hex)',
+  })
+  KURU_MERCHANT_FEE_ROUTER?: string;
 
   @IsOptional()
   @IsInt()

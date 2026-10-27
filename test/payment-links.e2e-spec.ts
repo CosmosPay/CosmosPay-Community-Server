@@ -7,7 +7,10 @@ import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { AppModule } from '@/app.module';
 import { AllExceptionsFilter } from '@/common/filters/all-exceptions.filter';
-import { PAYMENT_LINK_READ_RATE_LIMIT } from '@/payment-intents/payment-intents.constants';
+import {
+  PAYMENT_LINK_READ_RATE_LIMIT,
+  PAYMENT_LINK_TRANSACTION_RATE_LIMIT,
+} from '@/payment-intents/payment-intents.constants';
 import { PrismaService } from '@/prisma/prisma.service';
 
 /**
@@ -172,6 +175,8 @@ describe('Payment links (e2e)', () => {
       qr: expect.stringMatching(/^data:image\/png;base64,/),
       txHash: null,
       networkFee: null,
+      merchantFee: null,
+      payerAccountRequired: false,
       expiresAt: '2026-10-24T13:34:56.000Z',
       createdAt: '2026-10-24T12:34:56.000Z',
       checkoutTheme: 'classic',
@@ -283,5 +288,87 @@ describe('Payment links (e2e)', () => {
     expect(res.headers['ratelimit-remaining']).toBe('0');
     // Refused before the handler ran: nothing was read.
     expect(prismaMock.paymentIntent.findUnique).toHaveBeenCalledTimes(1);
+  });
+  describe('the Solana Pay transaction request (/v1/payment-links/{id}/solana-pay)', () => {
+    it('is reachable with no key and refuses a link that is not one', async () => {
+      const read = await request(http())
+        .get('/v1/payment-links/cmh4x2k9a0001l70g8v5q3z2w/solana-pay')
+        .expect(400);
+      expect(read.body.message).toBe(
+        'This payment link is not a Solana Pay transaction request: open its uri',
+      );
+      expect(read.headers['cache-control']).toBe('no-store');
+      expect(prismaMock.consumer.upsert).not.toHaveBeenCalled();
+
+      const unknown = await request(http())
+        .post('/v1/payment-links/cmh4x2k9a0009l70gneverwas/solana-pay')
+        .send({ account: '7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU' })
+        .expect(404);
+      expect(unknown.body.code).toBe('not_found');
+      const keys = prismaMock.$queryRaw.mock.calls.map(
+        ([, key]: [unknown, string]) => key,
+      );
+      expect(
+        keys.some((key: string) => /^payment-links:read:anonymous:/.test(key)),
+      ).toBe(true);
+      expect(
+        keys.some((key: string) =>
+          /^payment-links:transaction:anonymous:/.test(key),
+        ),
+      ).toBe(true);
+    });
+
+    it('refuses an account that is not a Solana address before reading the link', async () => {
+      const res = await request(http())
+        .post('/v1/payment-links/cmh4x2k9a0001l70g8v5q3z2w/solana-pay')
+        .send({ account: 'not-an-account' })
+        .expect(400);
+      expect(res.body.code).toBe('validation_failed');
+      expect(prismaMock.paymentIntent.findUnique).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('POST /v1/payment-links/{id}/transaction', () => {
+    const PAYER = 'GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ';
+
+    it('is reachable with no key, on its own per-address budget', async () => {
+      const res = await request(http())
+        .post('/v1/payment-links/cmh4x2k9a0009l70gneverwas/transaction')
+        .set('x-consumer-username', 'cosmos_u1')
+        .send({ account: PAYER })
+        .expect(404);
+
+      expect(res.body.code).toBe('not_found');
+      expect(res.headers['cache-control']).toBe('no-store');
+      expect(res.headers['ratelimit-limit']).toBe(
+        String(PAYMENT_LINK_TRANSACTION_RATE_LIMIT.limit),
+      );
+      expect(prismaMock.consumer.upsert).not.toHaveBeenCalled();
+      const [[, key]] = prismaMock.$queryRaw.mock.calls as [unknown, string][];
+      expect(key).toMatch(/^payment-links:transaction:anonymous:/);
+    });
+
+    it('refuses a link that pays its destination directly, before any network read', async () => {
+      const res = await request(http())
+        .post('/v1/payment-links/cmh4x2k9a0001l70g8v5q3z2w/transaction')
+        .send({ account: PAYER })
+        .expect(400);
+
+      expect(res.body).toMatchObject({
+        code: 'validation_failed',
+        message:
+          'This payment link pays its destination directly: open its uri',
+      });
+    });
+
+    it('refuses an account that is not a Stellar account', async () => {
+      const res = await request(http())
+        .post('/v1/payment-links/cmh4x2k9a0001l70g8v5q3z2w/transaction')
+        .send({ account: '0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed' })
+        .expect(400);
+
+      expect(res.body.code).toBe('validation_failed');
+      expect(prismaMock.paymentIntent.findUnique).not.toHaveBeenCalled();
+    });
   });
 });

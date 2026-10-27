@@ -62,6 +62,10 @@ export class CrossChainSwapsController {
     summary:
       'List the assets NEAR Intents can swap on every network this service ' +
       'reaches, with an indicative USD price',
+    description:
+      'Only what NEAR Intents still trades. A token it tags deprecated is left ' +
+      'out, and so is one it lists with no price, because it answers no quote ' +
+      'for such a token.',
   })
   @ApiOkResponse({ type: CrossChainAssetListEntity })
   assets() {

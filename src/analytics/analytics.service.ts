@@ -126,15 +126,39 @@ function settledRow(row: SettledAssetSqlRow): SettledRow {
  */
 const SWAP_SOURCES: Record<
   SeriesSwapKind,
-  { table: string; outcomes: Record<string, SeriesOutcome> }
+  {
+    table: string;
+    outcomes: Record<string, SeriesOutcome>;
+    /**
+     * The side the swap sold, as the USD pricer reads an asset: its chain, code, issuer (the
+     * Stellar issuer, the SPL mint or the ERC-20 contract; null for a coin) and amount. SQL
+     * over the table's own columns, constants of ours.
+     */
+    sold: string;
+  }
 > = {
-  dex: { table: 'swap', outcomes: SWAP_OUTCOMES },
-  chain: { table: 'chain_swap', outcomes: CHAIN_SWAP_OUTCOMES },
+  dex: {
+    table: 'swap',
+    outcomes: SWAP_OUTCOMES,
+    sold: `'stellar' AS "chain", "sendAsset" AS "asset", "sendAssetIssuer" AS "issuer", "sendAmount" AS "amount"`,
+  },
+  chain: {
+    table: 'chain_swap',
+    outcomes: CHAIN_SWAP_OUTCOMES,
+    // An SPL mint or ERC-20 address is the token itself: the issuer the pricer matches.
+    sold: `"chain" AS "chain", CASE WHEN "sendAsset" = 'native' THEN 'native' ELSE '' END AS "asset", CASE WHEN "sendAsset" = 'native' THEN NULL ELSE "sendAsset" END AS "issuer", "sendAmount" AS "amount"`,
+  },
   crossChain: {
     table: 'cross_chain_swap',
     outcomes: CROSS_CHAIN_SWAP_OUTCOMES,
+    // A symbol on its origin network; one this service does not price stays unpriced.
+    sold: `"originChain" AS "chain", "originAsset" AS "asset", NULL::text AS "issuer", "amountIn" AS "amount"`,
   },
-  usdt0: { table: 'usdt0_transfer', outcomes: USDT0_TRANSFER_OUTCOMES },
+  usdt0: {
+    table: 'usdt0_transfer',
+    outcomes: USDT0_TRANSFER_OUTCOMES,
+    sold: `'stellar' AS "chain", 'USDT' AS "asset", NULL::text AS "issuer", "amount" AS "amount"`,
+  },
 };
 
 /**
@@ -150,11 +174,12 @@ function swapRowsSql(
 ): Prisma.Sql {
   return Prisma.join(
     SERIES_SWAP_KINDS.map((kind) => {
-      const { table, outcomes } = SWAP_SOURCES[kind];
+      const { table, outcomes, sold } = SWAP_SOURCES[kind];
       return Prisma.sql`
         SELECT ${Prisma.raw(`'${kind}'`)} AS "kind",
                "createdAt",
-               ${outcomeCase(outcomes)} AS "outcome"
+               ${outcomeCase(outcomes)} AS "outcome",
+               ${Prisma.raw(sold)}
         FROM ${Prisma.raw(`"${table}"`)}
         WHERE "consumerId" = ${consumerId}
           AND "network" = ${network}
@@ -499,6 +524,7 @@ export class AnalyticsService {
       liquidityBucketRows,
       webhookBucketRows,
       settledRows,
+      swapSettledRows,
       zkBucketRows,
       zkWindowRows,
       pricer,
@@ -635,6 +661,16 @@ export class AnalyticsService {
         previousSince,
         unit,
       )}`,
+      // The completed swaps of both windows per bucket and sold asset, for their USD value.
+      this.prisma.$queryRaw<SettledAssetSqlRow[]>`
+        SELECT date_trunc(${unit}, "createdAt") AS bucket,
+               "chain", "asset", "issuer",
+               SUM("amount"::numeric) AS amount,
+               COUNT(*) AS count
+        FROM (${swapRows(previousSince)}) AS swaps
+        WHERE "outcome" = 'succeeded'
+        GROUP BY 1, 2, 3, 4
+      `,
       // Private payments per bucket of the window: created, settled, expired, and the settled
       // amounts (XLM).
       this.prisma.$queryRaw<
@@ -715,6 +751,24 @@ export class AnalyticsService {
     }
     const nowUsd = valueRows(settledNow, pricer);
     const beforeUsd = valueRows(settledBefore, pricer);
+
+    // The same for the completed swaps: what they sold, in USD.
+    const swapByBucket = new Map<string, SettledRow[]>();
+    const swapNow: SettledRow[] = [];
+    const swapBefore: SettledRow[] = [];
+    for (const row of swapSettledRows) {
+      if (!row.bucket) continue;
+      const item = settledRow(row);
+      if (new Date(row.bucket).getTime() < since.getTime()) {
+        swapBefore.push(item);
+        continue;
+      }
+      swapNow.push(item);
+      const key = bucketKey(row.bucket);
+      swapByBucket.set(key, [...(swapByBucket.get(key) ?? []), item]);
+    }
+    const swapNowUsd = valueRows(swapNow, pricer);
+    const swapBeforeUsd = valueRows(swapBefore, pricer);
 
     // At most one row per (window, kind): summing them here adds a handful of counts, not rows.
     const swapWindow = (current: boolean) => {
@@ -822,12 +876,22 @@ export class AnalyticsService {
           swapBucketRows,
           () => ({ count: 0, succeeded: 0, failed: 0 }),
           outcomes,
-        ),
-        totals: swapTotals,
+        ).map((bucket) => ({
+          ...bucket,
+          volumeUsd: formatUsd(
+            valueRows(swapByBucket.get(bucket.start) ?? [], pricer).usd,
+          ),
+        })),
+        totals: {
+          ...swapTotals,
+          volumeUsd: formatUsd(swapNowUsd.usd),
+          unpriced: swapNowUsd.unpriced,
+        },
         previous: {
           count: swapsBefore.count,
           succeeded: swapsBefore.succeeded,
           failed: swapsBefore.failed,
+          volumeUsd: formatUsd(swapBeforeUsd.usd),
         },
       },
       liquidity: {

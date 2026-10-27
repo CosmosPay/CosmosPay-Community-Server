@@ -8,7 +8,9 @@ import {
   Length,
   Max,
   Min,
+  ValidateNested,
 } from 'class-validator';
+import { MerchantFeeDto } from '@/common/merchant-fee/merchant-fee.dto';
 import { IsDecimalAmount } from '@/common/validators/is-decimal-amount.validator';
 import {
   CROSS_CHAIN_NETWORK_IDS,
@@ -101,4 +103,19 @@ export class QuoteCrossChainSwapDto {
   @Min(0)
   @Max(10000)
   slippageBps?: number;
+
+  @ApiPropertyOptional({
+    type: MerchantFeeDto,
+    description:
+      'Your own fee on this swap, which NEAR Intents pays as a second app fee ' +
+      'to `wallet`: a NEAR account id (named, e.g. merchant.near, or 64-hex ' +
+      'implicit), credited inside NEAR Intents. App fees are whole basis ' +
+      'points of the deposit, so the fee is turned into the basis points it ' +
+      'amounts to, rounded down. `paidBy: recipient` takes it from `amount` ' +
+      '(the deposit stays `amount`); `payer` adds it to the deposit.',
+  })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => MerchantFeeDto)
+  merchantFee?: MerchantFeeDto;
 }

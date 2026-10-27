@@ -2,6 +2,7 @@ import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import {
   resolveCrossChainAsset,
   supportedAssets,
+  tradableAssets,
 } from '@/cross-chain-swaps/cross-chain-assets';
 import type { NearIntentsToken } from '@/near-intents/near-intents.types';
 
@@ -179,6 +180,65 @@ describe('supportedAssets', () => {
     expect(price('XLM')).toBe(0.2257);
     expect(price('MON')).toBeNull();
     expect(price('NAN')).toBeNull();
+  });
+});
+
+describe('tradableAssets', () => {
+  const RETIRING = [
+    {
+      assetId: 'nep141:xpl-old.near',
+      decimals: 18,
+      blockchain: 'eth',
+      symbol: 'XPL_(DEPRECATED)',
+      contractAddress: '0x0000000000000000000000000000000000000abc',
+      price: 0.07,
+    },
+    {
+      assetId: 'nep141:usdt0-old.near',
+      decimals: 6,
+      blockchain: 'eth',
+      symbol: 'USDT0(DEPRECATED)',
+      contractAddress: '0x0000000000000000000000000000000000000def',
+      price: 1,
+    },
+  ];
+
+  it('lists only what 1Click still trades: priced, and not tagged deprecated', () => {
+    const symbols = tradableAssets([...TOKENS, ...RETIRING]).map(
+      (a) => a.symbol,
+    );
+    // Priced in the fixture.
+    expect(symbols).toEqual(
+      expect.arrayContaining(['XLM', 'USDC', 'ETH', 'BTC', 'BTC(OMNI)']),
+    );
+    // No price (1Click quotes none of these), or retiring.
+    for (const gone of ['SOL', 'MON', 'GRAM', 'wNEAR', 'XPL_(DEPRECATED)']) {
+      expect(symbols).not.toContain(gone);
+    }
+    expect(symbols).not.toContain('USDT0(DEPRECATED)');
+    expect(
+      tradableAssets([...TOKENS, ...RETIRING]).every(
+        (a) => a.priceUsd !== null && a.priceUsd > 0,
+      ),
+    ).toBe(true);
+  });
+
+  it('refuses a deprecated token by name or contract, and still resolves a priceless one', () => {
+    const tokens = [...TOKENS, ...RETIRING];
+    expect(
+      codeOf(() => resolveCrossChainAsset(tokens, 'eth', 'XPL_(DEPRECATED)')),
+    ).toBe(ApiErrorCode.AssetUnsupported);
+    expect(
+      codeOf(() =>
+        resolveCrossChainAsset(
+          tokens,
+          'eth',
+          '0x0000000000000000000000000000000000000def',
+        ),
+      ),
+    ).toBe(ApiErrorCode.AssetUnsupported);
+    // 1Click's own refusal says why a priceless token cannot be quoted.
+    expect(resolveCrossChainAsset(tokens, 'solana', 'SOL').symbol).toBe('SOL');
   });
 });
 

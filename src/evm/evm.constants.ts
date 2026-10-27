@@ -97,3 +97,13 @@ export const ERC20_ALLOWANCE_SELECTOR = '0xdd62ed3e';
 
 /** `approve(address,uint256)` — the call a wallet sends before an ERC-20 swap. */
 export const ERC20_APPROVE_SELECTOR = '0x095ea7b3';
+
+/**
+ * `swap(address,uint256,address,uint256,address,uint256,address,bytes)` on
+ * `contracts/MerchantFeeSwapRouter.sol`: a Monad swap that also pays a
+ * merchant fee.
+ */
+export const MERCHANT_FEE_ROUTER_SWAP_SELECTOR = '0x6f3c6281';
+
+/** `aggregator()` on the merchant fee swap router: the contract it calls. */
+export const MERCHANT_FEE_ROUTER_AGGREGATOR_SELECTOR = '0x245a7bfc';

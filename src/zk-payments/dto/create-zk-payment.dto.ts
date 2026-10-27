@@ -8,7 +8,9 @@ import {
   MaxLength,
   Min,
   MinLength,
+  ValidateNested,
 } from 'class-validator';
+import { MerchantFeeDto } from '@/common/merchant-fee/merchant-fee.dto';
 import { IsDecimalAmount } from '@/common/validators/is-decimal-amount.validator';
 import { IsStellarAddress } from '@/common/validators/is-stellar-address.validator';
 import {
@@ -22,7 +24,7 @@ export class CreateZkPaymentDto {
   @ApiProperty({
     description:
       'What the payer pays in total, in XLM (up to 7 decimal places). The ' +
-      'merchant receives it minus the 0.01% commission (`netAmount`); the ' +
+      'merchant receives it minus the 0.18% commission (`netAmount`); the ' +
       'commission (`feeAmount`, rounded up, at least one stroop) goes to ' +
       "Cosmos Pay's fee account. An amount whose net would be zero is refused.",
     example: '25.5',
@@ -82,4 +84,21 @@ export class CreateZkPaymentDto {
   @MinLength(1)
   @MaxLength(ZK_PAYMENT_IDEMPOTENCY_KEY_MAX_LENGTH)
   idempotencyKey?: string;
+
+  @ApiPropertyOptional({
+    type: MerchantFeeDto,
+    description:
+      'Your own fee on this payment, in XLM, paid privately like the rest: a ' +
+      'third confidential transfer from the payer to `wallet`, which must ' +
+      "already hold a confidential account on Cosmos Pay's token (under " +
+      'auditor id 0) and be neither the recipient nor the fee account. ' +
+      '`paidBy: recipient` takes it from `amount` (the merchant receives ' +
+      'less); `payer` adds it on top (the payer pays `amount` plus the fee). ' +
+      'The 0.18% commission is a share of `amount` either way. Confirm then ' +
+      'takes `merchantFeeTxHash` too.',
+  })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => MerchantFeeDto)
+  merchantFee?: MerchantFeeDto;
 }

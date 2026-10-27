@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { ConfigService } from '@nestjs/config';
 import { PublicRecordTokens } from '@/common/public-record-token';
 import {
@@ -18,7 +20,7 @@ import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import type { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import type { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
 import type { PrismaService } from '@/prisma/prisma.service';
-import type { StellarAccountLoader } from '@/stellar/account-loader.service';
+import { StellarAccountLoader } from '@/stellar/account-loader.service';
 import type { SorobanRpcClient } from '@/stellar/soroban-rpc.client';
 import type { LayerZeroScanClient } from '@/usdt0/layerzero-scan.client';
 import { Usdt0OftClient } from '@/usdt0/usdt0-oft.client';
@@ -28,7 +30,22 @@ import {
   USDT0_CHAIN_IDS,
   USDT0_ISSUER,
   USDT0_OFT,
+  USDT0_SAC,
 } from '@/usdt0/usdt0.constants';
+
+/** The reviewed wrapper's wasm, as a deployed one must hash. */
+const WRAPPER_WASM = readFileSync(
+  join(
+    __dirname,
+    '..',
+    '..',
+    'contracts',
+    'soroban',
+    'usdt0-fee-wrapper',
+    'usdt0_fee_wrapper.wasm',
+  ),
+);
+const WRAPPER = 'CDJJJCCFTRSE4QJAXE7XLVK6MU5QVLO4GUYSYFE3QQ3ZUT3I3QAADQDJ';
 
 jest.mock('qrcode', () => ({
   __esModule: true,
@@ -175,6 +192,20 @@ function fakeRpc() {
           },
         };
       }
+      // The fee wrapper's views: the OFT and the token it is bound to.
+      if (call.name === 'oft' || call.name === 'token') {
+        return {
+          ...base,
+          transactionData: new SorobanDataBuilder(),
+          minResourceFee: '0',
+          result: {
+            auth: [],
+            retval: new Address(
+              call.name === 'oft' ? USDT0_OFT : USDT0_SAC,
+            ).toScVal(),
+          },
+        };
+      }
       return {
         ...base,
         transactionData: new SorobanDataBuilder().setResourceFee(RESOURCE_FEE),
@@ -182,6 +213,7 @@ function fakeRpc() {
         result: { auth: [sourceAuth()], retval: sendRetval() },
       };
     }),
+    contractWasm: jest.fn(async () => Uint8Array.from(WRAPPER_WASM)),
     send: jest.fn(async (tx: Transaction) => ({
       status: 'PENDING',
       hash: Buffer.from(tx.hash()).toString('hex'),
@@ -289,9 +321,18 @@ function horizonAccount(opts: { usdt0?: string | null; xlm?: string } = {}) {
   });
 }
 
-function setup(account = horizonAccount()) {
+function setup(
+  account = horizonAccount(),
+  opts: { wrapper?: string | null; feeWallet?: string } = {},
+) {
   const cfg: Record<string, unknown> = {
-    stellar: { network: 'testnet', baseFee: '100', timeoutSeconds: 300 },
+    stellar: {
+      network: 'testnet',
+      baseFee: '100',
+      timeoutSeconds: 300,
+      usdt0FeeWrapper: opts.wrapper ?? null,
+      swap: { feeWallet: opts.feeWallet ?? '', feeBps: 50 },
+    },
   };
   const config = { get: (key: string) => cfg[key] } as unknown as ConfigService<
     any,
@@ -303,7 +344,9 @@ function setup(account = horizonAccount()) {
     byGuid: jest.fn().mockResolvedValue(null),
     byTransaction: jest.fn().mockResolvedValue(null),
   };
-  const accounts = { load: jest.fn().mockResolvedValue(account) };
+  // The real loader's checks over a Horizon that answers `account`.
+  const accounts = new StellarAccountLoader({} as never);
+  jest.spyOn(accounts, 'load').mockResolvedValue(account as never);
   const consumers = {
     resolve: jest.fn().mockResolvedValue({ id: 'consumer_public' }),
   };
@@ -319,7 +362,7 @@ function setup(account = horizonAccount()) {
     config,
     prisma,
     consumers as unknown as ConsumerResolverService,
-    accounts as unknown as StellarAccountLoader,
+    accounts,
     rpcAsClient,
     oft,
     tracker,
@@ -330,7 +373,14 @@ function setup(account = horizonAccount()) {
       }),
     } as never),
   );
-  return { service, rows, rpc: rpcClient, calls, scan, accounts };
+  return {
+    service,
+    rows,
+    rpc: rpcClient,
+    calls,
+    scan,
+    accounts: accounts as unknown as { load: jest.Mock },
+  };
 }
 
 const DTO = {
@@ -411,6 +461,9 @@ describe('Usdt0Service.quote', () => {
       eid: 30110,
       receives: 'USDT0',
       amount: '10.0000001',
+      // No fee wrapper here: no commission.
+      feeBps: 0,
+      feeAmount: '0',
       amountSent: '10',
       amountReceived: '10',
       dust: '0.0000001',
@@ -940,5 +993,174 @@ describe('Usdt0Service reads', () => {
     const read = await service.findOne(prod, view.id, view.publicToken);
     expect(client.getTransaction).toHaveBeenCalledTimes(1);
     expect(read).toMatchObject({ status: 'SUBMITTED', guid: GUID });
+  });
+});
+
+describe('Usdt0Service fees through the wrapper', () => {
+  const FEE_WALLET = Keypair.random().publicKey();
+  const COMMISSION = Keypair.random().publicKey();
+  const withWrapper = (account = horizonAccount()) =>
+    setup(account, { wrapper: WRAPPER, feeWallet: COMMISSION });
+  const fee = (over: Record<string, unknown> = {}) => ({
+    ...DTO,
+    merchantFee: { fixed: '0.5', wallet: FEE_WALLET, ...over },
+  });
+  const sent = (view: { xdr: string }) =>
+    callOf(
+      TransactionBuilder.fromXDR(view.xdr, Networks.PUBLIC) as Transaction,
+    );
+
+  it('refuses a merchant fee without a configured wrapper, before anything is read', async () => {
+    const { service, calls, accounts } = setup();
+    const refused = await refusal(service.create(prod, fee()));
+    expect(refused.code).toBe(ApiErrorCode.MerchantFeeUnsupported);
+    expect(refused.message).toMatch(/USDT0_FEE_WRAPPER/);
+    expect(calls).toHaveLength(0);
+    expect(accounts.load).not.toHaveBeenCalled();
+  });
+
+  it('charges no commission and calls the OFT itself without a wrapper', async () => {
+    const { service, rows } = setup();
+    const view = await service.create(prod, DTO);
+    expect(sent(view).contract).toBe(USDT0_OFT);
+    expect(rows[0]).toMatchObject({
+      feeBps: 0,
+      feeAmount: '0',
+      feeWallet: null,
+    });
+  });
+
+  it('charges the plan commission through the wrapper, out of the amount', async () => {
+    const { service, rows } = withWrapper();
+    const view = await service.create(prod, DTO);
+    const call = sent(view);
+    expect(call.contract).toBe(WRAPPER);
+    const [from, fees, param] = call.args as [string, any[], any];
+    expect(from).toBe(SOURCE);
+    // 50 bps of 12.5000001, rounded down: 0.0625.
+    expect(fees).toEqual([{ amount: 625_000n, wallet: COMMISSION }]);
+    // 12.4375001 is routed, 12.4375 sent.
+    expect(param).toMatchObject({ amount_ld: 124_375_000n });
+    expect(rows[0]).toMatchObject({
+      feeBps: 50,
+      feeAmount: '0.0625',
+      feeWallet: COMMISSION,
+      amountSent: '12.4375',
+    });
+    expect(view).toMatchObject({
+      feeBps: 50,
+      feeAmount: '0.0625',
+      dust: '0.0000001',
+    });
+  });
+
+  it("pays the commission, then the merchant fee, then calls the OFT's send with its own arguments", async () => {
+    const { service, rows } = withWrapper();
+    const view = await service.create(prod, fee());
+    const [from, fees, param, messagingFee, refund] = sent(view).args as [
+      string,
+      any[],
+      any,
+      any,
+      string,
+    ];
+    expect([from, refund]).toEqual([SOURCE, SOURCE]);
+    expect(fees).toEqual([
+      { amount: 625_000n, wallet: COMMISSION },
+      { amount: 5_000_000n, wallet: FEE_WALLET },
+    ]);
+    // Both came out of 12.5000001: 11.9375001 is routed, 11.9375 sent.
+    expect(param).toMatchObject({ amount_ld: 119_375_000n });
+    expect(messagingFee).toEqual({ native_fee: 42_474_009n, zro_fee: 0n });
+    expect(rows[0]).toMatchObject({
+      amount: '12.5000001',
+      amountSent: '11.9375',
+      feeAmount: '0.0625',
+      merchantFee: {
+        bps: 0,
+        fixed: '0.5',
+        amount: '0.5',
+        asset: 'USDT0',
+        wallet: FEE_WALLET,
+        paidBy: 'recipient',
+      },
+    });
+    expect(view.dust).toBe('0.0000001');
+    expect(view.merchantFee).toMatchObject({ amount: '0.5' });
+  });
+
+  it('quotes the commission when a wrapper is configured', async () => {
+    const { service } = withWrapper();
+    await expect(
+      service.quote(prod, { to: 'arb', amount: '10.0000001' }),
+    ).resolves.toMatchObject({
+      feeBps: 50,
+      feeAmount: '0.05',
+      amountSent: '9.95',
+      dust: '0.0000001',
+    });
+  });
+
+  it('is misconfigured (503) with a wrapper and a plan rate but no STELLAR_SWAP_FEE_WALLET', async () => {
+    const { service } = setup(horizonAccount(), { wrapper: WRAPPER });
+    const refused = await refusal(service.create(prod, DTO));
+    expect(refused.code).toBe(ApiErrorCode.Misconfigured);
+    expect(refused.status).toBe(503);
+  });
+
+  it('is misconfigured (503) when the commission wallet does not trust USDT0', async () => {
+    const { service, accounts } = withWrapper();
+    accounts.load.mockImplementation(async (_n: string, address: string) =>
+      address === COMMISSION
+        ? horizonAccount({ usdt0: null })
+        : horizonAccount(),
+    );
+    const refused = await refusal(service.create(prod, DTO));
+    expect(refused.code).toBe(ApiErrorCode.Misconfigured);
+    expect(refused.message).toMatch(/STELLAR_SWAP_FEE_WALLET/);
+  });
+
+  it('needs the holder to hold what is sent plus the commission and a fee paid on top', async () => {
+    const { service } = withWrapper(horizonAccount({ usdt0: '12.9' }));
+    const refused = await refusal(
+      service.create(prod, fee({ paidBy: 'payer' })),
+    );
+    expect(refused.code).toBe(ApiErrorCode.InsufficientBalance);
+  });
+
+  it('refuses a merchant fee wallet that does not trust USDT0', async () => {
+    const { service, accounts } = withWrapper();
+    accounts.load.mockImplementation(async (_n: string, address: string) =>
+      address === FEE_WALLET
+        ? horizonAccount({ usdt0: null })
+        : horizonAccount(),
+    );
+    const refused = await refusal(service.create(prod, fee()));
+    expect(refused.code).toBe(ApiErrorCode.TrustlineMissing);
+  });
+
+  it('refuses a wrapper that does not run the reviewed wasm, and checks a good one once', async () => {
+    const forged = withWrapper();
+    forged.rpc.contractWasm.mockResolvedValue(Uint8Array.from([0, 97, 115]));
+    const refused = await refusal(forged.service.create(prod, fee()));
+    expect(refused.code).toBe(ApiErrorCode.Misconfigured);
+    expect(refused.status).toBe(503);
+
+    const good = withWrapper();
+    await good.service.create(prod, fee());
+    await good.service.create(prod, { ...fee(), amount: '10' });
+    expect(good.rpc.contractWasm).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses the same key with another merchant fee (409)', async () => {
+    const { service } = withWrapper();
+    await service.create(prod, { ...fee(), idempotencyKey: 'k1' });
+    const refused = await refusal(
+      service.create(prod, {
+        ...fee({ fixed: '0.6' }),
+        idempotencyKey: 'k1',
+      }),
+    );
+    expect(refused.code).toBe(ApiErrorCode.IdempotencyConflict);
   });
 });

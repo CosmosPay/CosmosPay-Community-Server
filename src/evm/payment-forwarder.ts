@@ -2,6 +2,7 @@ import { keccak_256 } from '@noble/hashes/sha3.js';
 import { toChecksumAddress } from '@/chains/chain-address';
 import { DETERMINISTIC_DEPLOYER } from '@/evm/evm.constants';
 import { PAYMENT_FORWARDER_ARTIFACT } from '@/evm/payment-forwarder.artifact';
+import { PAYMENT_SPLIT_FORWARDER_ARTIFACT } from '@/evm/payment-split-forwarder.artifact';
 import { bytesToHex, concat, hexToBytes } from '@/evm/rlp';
 
 /** What a deposit address commits to. Change any field and the address changes. */
@@ -14,6 +15,12 @@ export interface ForwarderTerms {
   relayer: string;
   /** The relayer's fee, in the asset's base units. */
   fee: bigint;
+  /**
+   * The organization's merchant fee, when the intent has one: its wallet and
+   * amount (base units). Present, the address is a PaymentSplitForwarder's,
+   * which pays it in its constructor; absent, a PaymentForwarder's, as before.
+   */
+  merchantFee?: { wallet: string; amount: bigint } | null;
 }
 
 const ZERO_ADDRESS = `0x${'0'.repeat(40)}`;
@@ -22,14 +29,26 @@ function word(hex: string): string {
   return hex.replace(/^0x/, '').toLowerCase().padStart(64, '0');
 }
 
-/** The forwarder's creation code with its constructor arguments appended. */
+/**
+ * The forwarder's creation code with its constructor arguments appended: a
+ * PaymentForwarder's (four words), or with a merchant fee a
+ * PaymentSplitForwarder's (six: the fee's wallet and amount after them). An
+ * address minted from one contract is only ever rebuilt from the same one.
+ */
 export function forwarderInitCode(terms: ForwarderTerms): string {
-  return (
-    PAYMENT_FORWARDER_ARTIFACT.bytecode +
+  const common =
     word(terms.destination) +
     word(terms.token ?? ZERO_ADDRESS) +
     word(terms.relayer) +
-    word(terms.fee.toString(16))
+    word(terms.fee.toString(16));
+  if (!terms.merchantFee) {
+    return PAYMENT_FORWARDER_ARTIFACT.bytecode + common;
+  }
+  return (
+    PAYMENT_SPLIT_FORWARDER_ARTIFACT.bytecode +
+    common +
+    word(terms.merchantFee.wallet) +
+    word(terms.merchantFee.amount.toString(16))
   );
 }
 

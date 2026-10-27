@@ -1,11 +1,14 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { Type } from 'class-transformer';
 import {
   IsIn,
   IsOptional,
   IsString,
   Matches,
   MaxLength,
+  ValidateNested,
 } from 'class-validator';
+import { MerchantFeeDto } from '@/common/merchant-fee/merchant-fee.dto';
 import { IsStellarAddress } from '@/common/validators/is-stellar-address.validator';
 import {
   CHECKOUT_THEMES,
@@ -107,4 +110,19 @@ export class CreateTxPaymentIntentDto {
   @IsOptional()
   @IsIn(CHECKOUT_THEMES)
   checkoutTheme?: CheckoutTheme;
+
+  @ApiPropertyOptional({
+    type: MerchantFeeDto,
+    description:
+      'Your own fee on this payment, paid in its asset to `wallet` (a Stellar ' +
+      'account that can receive the asset, not `source` or `destination`) by ' +
+      'a second payment in the same envelope. `paidBy: recipient` takes it ' +
+      'from `amount` (the destination receives `amount` less the fee); ' +
+      '`payer` adds it on top. The intent settles only on a transaction that ' +
+      'pays both.',
+  })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => MerchantFeeDto)
+  merchantFee?: MerchantFeeDto;
 }

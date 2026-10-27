@@ -263,3 +263,121 @@ describe('ChainPayLinkBuilder — monad with deposit addresses', () => {
     ).toBe(ApiErrorCode.InvalidAmount);
   });
 });
+
+describe('ChainPayLinkBuilder — merchant fee', () => {
+  const EVM_FEE = '0x8ba1f109551bD432803012645Ac136ddd64DBA72';
+  const SOL_FEE = 'GsbwXfJraMomNxBcjYLcG3mxkBUiyWXAB32fGbSMQRdW';
+  const DEPOSIT = '0xC830d264C14ebDB31cdEa0Fb6f83C5b0D8EEc52F';
+  const depositsWith = (fee: bigint) => ({
+    isEnabled: () => true,
+    mint: jest.fn(
+      async (
+        _chain: string,
+        _network: string,
+        destination: string,
+        token: { address: string } | null,
+        merchantFee: { wallet: string; amount: bigint } | null,
+      ) => ({
+        address: DEPOSIT,
+        salt: `0x${'11'.repeat(32)}`,
+        destination,
+        token: token?.address ?? null,
+        relayer: '0xfB6916095ca1df60bB79Ce92cE3Ea74c37c5d359',
+        fee,
+        merchantFee,
+      }),
+    ),
+  });
+
+  it('resolves a Solana fee in the asset and leaves the link to the service', async () => {
+    const { builder, solana } = make();
+    (solana as { getAccountOwner?: jest.Mock }).getAccountOwner = jest
+      .fn()
+      .mockResolvedValue('11111111111111111111111111111111');
+    const link = await builder.build('solana', {
+      network: 'testnet',
+      destination: SOL_DEST,
+      amount: '2',
+      memo: '42',
+      merchantFee: { bps: 100, fixed: '0.01', wallet: SOL_FEE },
+    });
+    // A transfer request names one recipient: no link of its own.
+    expect(link.uri).toBe('');
+    expect(link.merchantFee?.record).toEqual({
+      bps: 100,
+      fixed: '0.01',
+      amount: '0.03',
+      asset: 'native',
+      wallet: SOL_FEE,
+      paidBy: 'recipient',
+    });
+  });
+
+  it('refuses a SOL fee to an account that does not exist yet', async () => {
+    const { builder, solana } = make();
+    (solana as { getAccountOwner?: jest.Mock }).getAccountOwner = jest
+      .fn()
+      .mockResolvedValue(null);
+    expect(
+      await codeOf(
+        builder.build('solana', {
+          network: 'testnet',
+          destination: SOL_DEST,
+          amount: '2',
+          memo: '42',
+          merchantFee: { bps: 100, wallet: SOL_FEE },
+        }),
+      ),
+    ).toBe(ApiErrorCode.ValidationFailed);
+  });
+
+  it('has a Monad deposit address pay the fee, the payer depositing it on top when they pay it', async () => {
+    const d = depositsWith(2n * 10n ** 16n);
+    const { builder } = make({ deposits: d });
+    const link = await builder.build('monad', {
+      network: 'public',
+      destination: EVM_DEST,
+      amount: '1',
+      memo: '42',
+      merchantFee: { bps: 500, wallet: EVM_FEE, paidBy: 'payer' },
+    });
+    // 1 MON plus 5%: the payer deposits 1.05; the forwarder pays the fee out.
+    expect(link.uri).toBe(`ethereum:${DEPOSIT}@143?value=1050000000000000000`);
+    expect(d.mint.mock.calls[0][4]).toEqual({
+      wallet: EVM_FEE,
+      amount: 5n * 10n ** 16n,
+    });
+    expect(link.merchantFee?.record).toMatchObject({
+      amount: '0.05',
+      paidBy: 'payer',
+    });
+  });
+
+  it('refuses a Monad fee without deposit addresses, and fees that leave the merchant nothing', async () => {
+    expect(
+      await codeOf(
+        make().builder.build('monad', {
+          network: 'public',
+          destination: EVM_DEST,
+          amount: '1',
+          memo: '42',
+          merchantFee: { bps: 100, wallet: EVM_FEE },
+        }),
+      ),
+    ).toBe(ApiErrorCode.MerchantFeeUnsupported);
+    expect(
+      await codeOf(
+        make({ deposits: depositsWith(6n * 10n ** 17n) }).builder.build(
+          'monad',
+          {
+            network: 'public',
+            destination: EVM_DEST,
+            amount: '1',
+            memo: '42',
+            merchantFee: { bps: 1000, fixed: '0.3', wallet: EVM_FEE },
+          },
+        ),
+      ),
+    ).toBe(ApiErrorCode.InvalidAmount);
+  });
+});

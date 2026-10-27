@@ -8,7 +8,7 @@ import {
   ZK_TX_CREATED_AT_SKEW_MS,
 } from '@/zk-payments/zk-payments.constants';
 
-/** What a private payment requires of its two transfers. */
+/** What a private payment requires of its transfers (two, or three with a merchant fee). */
 export interface ZkSettlementTerms {
   /** The confidential token both transfers must be made on (C...). */
   token: string;
@@ -21,63 +21,83 @@ export interface ZkSettlementTerms {
   netStroops: bigint;
   /** What the fee account must receive, in stroops. */
   feeStroops: bigint;
+  /** The merchant fee's transfer: its wallet and amount in stroops; null without one. */
+  merchantFee: { wallet: string; stroops: bigint } | null;
   createdAt: Date;
   expiresAt: Date;
 }
 
 /** A settlement the chain backs. */
 export interface ZkSettlement {
-  /** The account both transfers came from. */
+  /** The account every transfer came from. */
   payer: string;
-  /** The later of the two close times: when the payment was complete. */
+  /** The latest of the close times: when the payment was complete. */
   settledAt: Date;
 }
 
-type Leg = 'payment' | 'fee';
+type Leg = 'payment' | 'fee' | 'merchantFee';
 
 const MISMATCH: Record<Leg, ApiErrorCode> = {
   payment: ApiErrorCode.PaymentTransferMismatch,
   fee: ApiErrorCode.FeeTransferMismatch,
+  merchantFee: ApiErrorCode.MerchantFeeTransferMismatch,
 };
 
 const LEG_LABEL: Record<Leg, string> = {
   payment: 'payment',
   fee: 'fee',
+  merchantFee: 'merchant fee',
 };
 
 /** What each leg must pay: the recipient and the exact amount in stroops. */
-function legTarget(
-  terms: ZkSettlementTerms,
-  leg: Leg,
-): { to: string; stroops: bigint; what: string } {
-  return leg === 'payment'
-    ? {
-        to: terms.recipient,
-        stroops: terms.netStroops,
-        what: "a confidential transfer of the payment's net amount to its recipient",
-      }
-    : {
-        to: terms.feeAccount,
-        stroops: terms.feeStroops,
-        what: 'a confidential transfer of the commission to the fee account',
-      };
+const LEG_TARGETS: Record<
+  Leg,
+  (terms: ZkSettlementTerms) => { to: string; stroops: bigint; what: string }
+> = {
+  payment: (terms) => ({
+    to: terms.recipient,
+    stroops: terms.netStroops,
+    what: "a confidential transfer of the payment's net amount to its recipient",
+  }),
+  fee: (terms) => ({
+    to: terms.feeAccount,
+    stroops: terms.feeStroops,
+    what: 'a confidential transfer of the commission to the fee account',
+  }),
+  merchantFee: (terms) => {
+    if (!terms.merchantFee) {
+      throw new Error('a merchant fee leg needs a merchant fee in the terms');
+    }
+    return {
+      to: terms.merchantFee.wallet,
+      stroops: terms.merchantFee.stroops,
+      what: "a confidential transfer of the merchant fee to the fee's wallet",
+    };
+  },
+};
+
+function legTarget(terms: ZkSettlementTerms, leg: Leg) {
+  return LEG_TARGETS[leg](terms);
 }
 
 /**
- * Decides whether two transactions settle a private payment, from what the chain
- * says they did (`ConfidentialSdk.readTransaction`). Throws the `ApiError` the
- * confirm route answers with; returns the payer and the settlement time.
+ * Decides whether the transactions settle a private payment, from what the chain
+ * says they did (`ConfidentialSdk.readTransaction`): the payment and the fee,
+ * plus the merchant fee's when the payment has one (`terms.merchantFee`). Throws
+ * the `ApiError` the confirm route answers with; returns the payer and the
+ * settlement time.
  *
  * The ORDER of the checks is part of the security, because the route is
  * public and decrypts what it is given with the auditor key, and the amount is
- * the one thing a confidential transfer hides:
+ * the one thing a confidential transfer hides. Each step runs over every leg
+ * before the next one starts:
  *
- *  1. both transactions exist and succeeded;
+ *  1. every transaction exists and succeeded;
  *  2. each is one operation calling `confidential_transfer` on OUR token, with
  *     exactly one `transfer` event;
  *  3. each closed while this payment was open: not before it was created (less
  *     a minute of clock skew), not after it expired;
- *  4. both come from the same payer;
+ *  4. all come from the same payer;
  *  5. each goes to the right recipient;
  *  6. and only then, each decrypts, under both auditor channels and against
  *     the commitment, to exactly the amount it must pay.
@@ -85,39 +105,60 @@ function legTarget(
  * Steps 3 and 4 come before any amount is compared so that this cannot be used
  * as an oracle on someone else's transfer: a payment created after a transfer
  * closed refuses it at step 3, and a fee transfer of one's own cannot vouch for
- * a stranger's payment transfer at step 4. No message ever says what an amount
- * decrypted to, only that it is not the one required.
+ * a stranger's payment or merchant fee transfer at step 4. No message ever says
+ * what an amount decrypted to, only that it is not the one required.
+ *
+ * @throws Error when `merchantFee` is given without a merchant fee in the
+ *   terms, or the other way round: the caller decides which legs there are.
  */
 export function verifyZkSettlement(
   terms: ZkSettlementTerms,
   payment: ZkTransactionRead,
   fee: ZkTransactionRead,
+  merchantFee: ZkTransactionRead | null = null,
 ): ZkSettlement {
-  // 1 + 2: both legs exist, succeeded and have the right shape.
-  const paid = theTransfer(terms, 'payment', payment);
-  const charged = theTransfer(terms, 'fee', fee);
+  if ((terms.merchantFee === null) !== (merchantFee === null)) {
+    throw new Error(
+      'the merchant fee transaction and the merchant fee terms go together',
+    );
+  }
+  const reads: [Leg, ZkTransactionRead][] = [
+    ['payment', payment],
+    ['fee', fee],
+  ];
+  if (merchantFee) reads.push(['merchantFee', merchantFee]);
 
-  // 3: both happened while the payment was open.
-  assertWindow(terms, 'payment', paid.closedAt);
-  assertWindow(terms, 'fee', charged.closedAt);
+  // 1 + 2: every leg exists, succeeded and has the right shape.
+  const legs = reads.map(([leg, read]) => ({
+    leg,
+    ...theTransfer(terms, leg, read),
+  }));
+
+  // 3: all of them happened while the payment was open.
+  for (const { leg, closedAt } of legs) assertWindow(terms, leg, closedAt);
 
   // 4: one payer.
-  if (paid.transfer.from !== charged.transfer.from) {
+  const payer = legs[0].transfer.from;
+  if (legs.some(({ transfer }) => transfer.from !== payer)) {
     throw ApiError.badRequest(
       ApiErrorCode.PayerMismatch,
-      'The payment and fee transfers must come from the same account; they ' +
-        'come from two different ones.',
+      legs.length === 2
+        ? 'The payment and fee transfers must come from the same account; ' +
+            'they come from two different ones.'
+        : 'The payment, fee and merchant fee transfers must all come from ' +
+            'the same account; they do not.',
     );
   }
 
   // 5 + 6: right recipient, then the right amount.
-  assertPays(terms, 'payment', paid.transfer);
-  assertPays(terms, 'fee', charged.transfer);
+  for (const { leg, transfer } of legs) assertPays(terms, leg, transfer);
 
   return {
-    payer: paid.transfer.from,
-    settledAt:
-      paid.closedAt > charged.closedAt ? paid.closedAt : charged.closedAt,
+    payer,
+    settledAt: legs.reduce(
+      (latest, { closedAt }) => (closedAt > latest ? closedAt : latest),
+      legs[0].closedAt,
+    ),
   };
 }
 

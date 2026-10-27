@@ -150,7 +150,7 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | Swaps             | `/v1/swaps`              | Path-payment quote, unsigned XDR बनाना, signed XDR submit करना · Solana: Jupiter, Monad: Kuru Flow |
 | क्रॉस-चेन swaps | `/v1/cross-chain-swaps` | NEAR Intents के ज़रिए 35 networks के बीच (Stellar, Solana, Monad, EVM chains, Bitcoin और UTXO coins, ...): quote, deposit address, status |
 | USDT0             | `/v1/usdt0`              | LayerZero के ज़रिए Stellar से 21 EVM networks तक USDT0 (Ethereum पर native USDT), सिर्फ़ mainnet: quote, build, submit, status |
-| निजी भुगतान       | `/v1/zk-payments`        | Cosmos Pay के confidential token पर confidential payments (राशि on-chain छिपी रहती है, 0.01% commission), फ़िलहाल सिर्फ़ testnet |
+| निजी भुगतान       | `/v1/zk-payments`        | Cosmos Pay के confidential token पर confidential payments (राशि on-chain छिपी रहती है, 0.18% commission), फ़िलहाल सिर्फ़ testnet |
 | निजी checkout     | `/v1/zk-checkout`        | निजी भुगतान में payer का हिस्सा: उसे पढ़ना, confirm करना, network setup (`@Public`) |
 | Liquidity pools   | `/v1/liquidity-pools`    | AMM deposit / withdraw, positions, लाभ पर कमीशन        |
 | Webhooks          | `/v1/webhooks`           | Endpoint CRUD, secret rotation, deliveries, redelivery    |
@@ -224,6 +224,8 @@ Paths OpenAPI के `{param}` रूप में लिखे गए हैं
 | GET | `/v1/customers/{id}` | `customers:read` |  |
 | PATCH | `/v1/customers/{id}` | `customers:write` |  |
 | DELETE | `/v1/customers/{id}` | `customers:write` |  |
+| POST | `/v1/customers/{id}/wallets` | `customers:write` |  |
+| DELETE | `/v1/customers/{id}/wallets/{walletId}` | `customers:write` |  |
 | GET | `/v1/health/liveness` | कोई नहीं — `@Public()` |  |
 | GET | `/v1/health/readiness` | कोई नहीं — `@Public()` |  |
 | GET | `/v1/kyc/bank-details` | `kyc:read` |  |
@@ -284,6 +286,10 @@ Paths OpenAPI के `{param}` रूप में लिखे गए हैं
 | GET | `/v1/payment-intents/{id}/transitions` | `payments:read` |  |
 | POST | `/v1/payment-intents/{id}/validate` | `payments:write` |  |
 | GET | `/v1/payment-links/{id}` | कोई नहीं — `@Public()`, हर client address का अपना budget |  |
+| POST | `/v1/payment-links/{id}/transaction` | कोई नहीं: `@Public()`, हर client address का अपना budget |  |
+| POST | `/v1/payment-links/{id}/events` | कोई नहीं: `@Public()`, हर client address का अपना budget |  |
+| GET | `/v1/payment-links/{id}/solana-pay` | कोई नहीं: `@Public()`, हर client address का अपना budget |  |
+| POST | `/v1/payment-links/{id}/solana-pay` | कोई नहीं: `@Public()`, हर client address का अपना budget |  |
 | GET | `/v1/plugins` | `plugins:read` |  |
 | GET | `/v1/plugins/{slug}` | `plugins:read` |  |
 | PUT | `/v1/plugins/{slug}/installation` | `plugins:write` |  |
@@ -938,7 +944,7 @@ keys हर chain पर एक ही तरह जारी होती ह�
 
 open-source वॉलेट एक ऐसी API key के साथ आता है जो सब साझा करते हैं, ताकि कोई भी
 रजिस्टर किए बिना swap कर सके, liquidity जोड़ सके या pay link बना सके। इन कॉल पर
-`community` plan का कमीशन लगता है (50 bps, सबसे ऊँची दर); रजिस्टर करने पर कम दर
+`community` plan का कमीशन लगता है (65 bps, सबसे ऊँची दर, Starter जितनी); paid plan पर कम दर
 मिलती है। gateway यह दर ठीक उसी तरह inject करता है जैसे private key के लिए करता है
 (देखें `resolvePlanCommissionBps`)।
 
@@ -1049,7 +1055,7 @@ swap करते हैं।
 **Wallet keys.** पूरा हुआ sign-in consumer `cosmos_wallet_<accountId>` के तहत एक
 `dev` और एक `prod` key पाता है, उन्हीं scopes, labels और consumer forwarder के साथ
 जो पहले platform बनाता था (plan `community`, swap commission
-`WALLET_KEY_SWAP_FEE_BPS`, डिफ़ॉल्ट 50 bps)। हर boot उन wallet consumers को फिर से बनाता है जिनमें अभी भी
+`WALLET_KEY_SWAP_FEE_BPS`, डिफ़ॉल्ट 65 bps)। हर boot उन wallet consumers को फिर से बनाता है जिनमें अभी भी
 कोई और दर है, इसलिए `WALLET_KEY_SWAP_FEE_BPS` का बदलाव अगले sign-in का इंतज़ार किए
 बिना हर खाते तक तुरंत पहुँचता है। दूसरा sign-in नई जोड़ी जारी करने के
 बजाय खाते के पास पहले से मौजूद keys लौटाता है। Response में `organizationId` खाते का
@@ -1349,12 +1355,51 @@ client address (`429 rate_limited`)।
 
 | Route | Scope | उद्देश्य |
 | --- | --- | --- |
-| `GET /v1/cross-chain-swaps/assets` | `swaps:read` | वे tokens जिन्हें NEAR Intents हर उस network पर swap कर सकता है जहाँ यह service पहुँचती है, एक indicative USD price के साथ |
+| `GET /v1/cross-chain-swaps/assets` | `swaps:read` | वे tokens जिन्हें NEAR Intents हर उस network पर swap कर सकता है जहाँ यह service पहुँचती है, एक indicative USD price के साथ। केवल tradable tokens: जिसे वह deprecated बताता है, या बिना price के list करता है (ऐसे किसी का quote नहीं देता), वह शामिल नहीं होता, और deprecated token `asset_unsupported` से अस्वीकार होता है |
 | `POST /v1/cross-chain-swaps/quote` | `swaps:read` | एक dry quote: आउटपुट, minimum, commission; कुछ भी persist नहीं करता |
 | `POST /v1/cross-chain-swaps` | `swaps:write` | एक live quote: deposit address, memo, wallet link और QR; `Idempotency-Key` समर्थित |
 | `GET /v1/cross-chain-swaps` | `swaps:read` | Consumer के क्रॉस-चेन swaps |
 | `GET /v1/cross-chain-swaps/{id}` | `swaps:read` | एक swap, जैसा observer ने उसे आख़िरी बार देखा (साझा public key भी, swap के `X-Record-Token` के साथ) |
 | `POST /v1/cross-chain-swaps/{id}/deposit` | `swaps:write` | Deposit transaction की सूचना दें ताकि NEAR Intents अपने indexer का इंतज़ार किए बिना शुरू करे |
+## मर्चेंट फ़ीस (हर ऑपरेशन पर आपकी अपनी फ़ीस)
+
+जो संगठन इस API के ज़रिए ये रेल्स दूसरे व्यवसायों को बेचता है, वह हर ऑपरेशन पर अपने
+ग्राहकों से एक फ़ीस ले सकता है, जो on-chain उसकी बताई wallet में जाती है। यह Cosmos Pay
+के plan कमीशन से अलग है, जो नहीं बदलता।
+
+```json
+"merchantFee": { "bps": 150, "fixed": "0.25", "wallet": "G...", "paidBy": "recipient" }
+```
+
+- **`bps` और `fixed`:** फ़ीस `amount × bps / 10,000` है, नीचे की ओर गोल, और उसमें
+  `fixed` जुड़ता है (ऑपरेशन के asset में, उसके दशमलव तक)। `bps` अधिकतम 1,000 (10%) है;
+  दोनों में से कम से कम एक शून्य से ऊपर होना चाहिए। जो फ़ीस राशि पर गोल होकर शून्य रह जाए,
+  वह अस्वीकार होती है (`400 invalid_amount`)।
+- **`paidBy`:** `recipient` (डिफ़ॉल्ट) फ़ीस `amount` से काटता है; `payer` उसे ऊपर से
+  जोड़ता है, यानी भुगतानकर्ता `amount` और फ़ीस दोनों भेजता है।
+- **`wallet`:** फ़ीस कहाँ जाती है, उस chain पर जिससे वह जाती है।
+- **पंक्ति क्या रखती है:** `merchantFee` (`bps`, `fixed`, लिया गया `amount`, `asset`,
+  `wallet`, `paidBy`) हर रीड और webhook में, फ़ीस न हो तो null। उसी `Idempotency-Key`
+  वाला दोबारा भेजा गया अनुरोध वही फ़ीस बताए, वरना `409 idempotency_conflict` है, जैसे
+  अलग destination पर।
+
+| ऑपरेशन | फ़ीस कैसे दी जाती है |
+| --- | --- |
+| Stellar swaps (`POST /v1/swaps`) | स्वैप के transaction में source asset का अपना `payment`, plan कमीशन के बाद। `wallet` एक Stellar खाता है जिसके पास source asset की trustline है (वरना कुछ बनाने से पहले ही अस्वीकार) |
+| Stellar payment links (`POST /v1/payment-intents/tx` और `/pay`) | उसी envelope में `wallet` को दूसरा `payment`, मर्चेंट वाले के बाद। `tx` intent का envelope दोनों रखता है। `pay` link ऐसा नहीं कर सकता (SEP-7 `pay` एक ही खाते को भुगतान करता है) और उसे `amount` चाहिए: उसका `uri` hosted checkout है (`PAYMENT_LINK_CHECKOUT_URL/<id>`), सार्वजनिक link `payerAccountRequired: true` बताता है, और `POST /v1/payment-links/{id}/transaction` भुगतानकर्ता के खाते से उसका envelope बनाता है। Intent तभी settle होता है जब transaction अपने memo के साथ दोनों हिस्से चुकाए |
+| Cross-chain swaps (`POST /v1/cross-chain-swaps`) | NEAR Intents की दूसरी app fee। `wallet` एक NEAR account id है, जिसे NEAR Intents के भीतर क्रेडिट मिलता है। App fees डिपॉज़िट के पूरे basis points होती हैं, इसलिए फ़ीस उतने basis points बनती है, नीचे की ओर गोल; एक basis point से कम फ़ीस अस्वीकार है। `payer` के साथ plan कमीशन भी बड़े डिपॉज़िट का हिस्सा होता है |
+| Solana payment links (`POST /v1/payment-intents/pay`, `chain: solana`) | Solana Pay transfer request एक ही प्राप्तकर्ता बताता है, इसलिए ऐसा link (`amount` के साथ) Solana Pay **transaction request** है: `uri` `solana:<PAYMENT_LINK_API_URL>/v1/payment-links/{id}/solana-pay` है, और wallet वहाँ भुगतानकर्ता का खाता POST करके transaction लेता है: memo, link के reference वाला मर्चेंट का transfer और फ़ीस का transfer (token खाते न हों तो बनते हैं, खर्च भुगतानकर्ता का)। SOL फ़ीस पहले से मौजूद खाते में जाती है। Observer उसे reference से ढूँढता है और दोनों हिस्सों पर ही settle करता है |
+| Monad payment links (`POST /v1/payment-intents/pay`, `chain: monad`) | केवल deposit addresses (`MONAD_RELAYER_PRIVATE_KEY`; इनके बिना `merchant_fee_unsupported`) और `amount` के साथ: address एक `contracts/PaymentSplitForwarder.sol` है (फ़ीस का wallet और राशि constructor के दो और arguments हैं, इसलिए address उनसे बँधा है), जिसका constructor relayer को उसकी फ़ीस, फिर मर्चेंट फ़ीस, फिर मर्चेंट को भुगतान करता है। Link deposit माँगता है: राशि, और भुगतानकर्ता फ़ीस चुकाए तो फ़ीस भी |
+| Solana पर swaps (`POST /v1/swaps`, `chain: solana`) | Jupiter हर swap पर एक ही integrator फ़ीस देता है और plan कमीशन उसे लेता है, इसलिए फ़ीस का transfer (source से, source asset में: SOL के लिए System Program transfer, वरना wallet का token खाता बनाकर TransferChecked) Jupiter के अपने v0 transaction में जोड़ा जाता है: उसकी lookup tables जो खाते लोड करती हैं वे दोबारा इस्तेमाल होते हैं, सारे indexes फिर से लिखे जाते हैं, compute limit बढ़ती है और route अधिकतम 40 खातों के साथ माँगा जाता है ताकि वह एक packet में आए। SOL फ़ीस पहले से मौजूद खाते में जाती है |
+| निजी भुगतान (`POST /v1/zk-payments`) | payer से `wallet` को XLM में एक तीसरा confidential transfer, ताकि फ़ीस भी भुगतान जितनी ही निजी रहे। `wallet` के पास Cosmos Pay के token पर auditor 0 के तहत confidential account होना चाहिए (वरना `400 recipient_not_registered`), और वह न recipient हो न fee account। 0.18% कमीशन `amount` का हिस्सा ही रहता है, और row का `amount` वह कुल राशि है जो payer चुकाता है। Confirm तीसरा hash `merchantFeeTxHash` के रूप में लेता है और उस transfer को बाकी दो की तरह जाँचता है |
+| Liquidity (`POST /v1/liquidity-pools/deposit` और `/withdraw`) | Deposit या withdrawal दो assets ले जाता है, इसलिए फ़ीस हर एक का `bps` है (नीचे की ओर गोल), जो उसी transaction में हर asset के लिए एक payment से `wallet` को दी जाती है, deposit के बाद, या withdrawal और उसके plan कमीशन के बाद; `fixed` अस्वीकार होता है (`400 validation_failed`)। Deposit पर `recipient` उसे राशियों से काटता है (pool में कम जाता है) और `payer` उसे ऊपर से जोड़ता है। Withdrawal पर वह withdrawal की दी गई राशि से, उसकी गारंटीड न्यूनतम राशियों के हिस्से के रूप में निकलती है, `paidBy` चाहे जो हो। `wallet` मौजूद होनी चाहिए और दोनों assets पर trustline होनी चाहिए। Record का `amount` / `asset` asset A का हिस्सा है, और `amountB` / `assetB` asset B का |
+| Monad पर swaps (`POST /v1/swaps`, `chain: monad`) | Kuru Flow हर swap पर एक ही referrer फ़ीस देता है और plan कमीशन उसे लेता है, इसलिए मर्चेंट फ़ीस वाला swap `contracts/MerchantFeeSwapRouter.sol` से होकर जाता है, जिसे operator Kuru के router के लिए एक बार deploy करता है और `KURU_MERCHANT_FEE_ROUTER` में नाम देता है: Kuru router के लिए quote करता है, wallet उसे input और फ़ीस भेजती (MON) या approve करती (ERC-20) है, और उसी एक transaction में router फ़ीस चुकाता है, Kuru का calldata चलाता है, output आगे भेजता है और Kuru का बचा हुआ लौटाता है; Kuru के minimum से कम पर revert होता है। Wallet को address देने से पहले deployed code की artifact से तुलना होती है। Variable के बिना `400 merchant_fee_unsupported` |
+| USDT0 transfers (`POST /v1/usdt0/transfers`) | एक Soroban transaction में एक ही operation होता है, इसलिए ऐसे transfer का operation OFT की जगह `contracts/soroban/usdt0-fee-wrapper` (`USDT0_FEE_WRAPPER`) होता है: holder के एक ही authorization के तहत वह फ़ीस USDT0 में `wallet` को transfer करता है (जिसकी USDT0 पर trustline होनी चाहिए), फिर उन्हीं arguments के साथ OFT का `send` call करता है और उसकी receipt लौटाता है। `recipient` फ़ीस `amount` से काटता है (कम भेजा जाता है), `payer` उसे ऊपर से जोड़ता है। Holder को transaction देने से पहले deployed wasm और वह OFT व token जाँचे जाते हैं जिनसे वह बँधा है। Variable के बिना `400 merchant_fee_unsupported` |
+
+ऊपर का हर operation यह फ़ील्ड लेता है। जहाँ इस deployment ने किसी operation के लिए ज़रूरी
+contract configure नहीं किया (`KURU_MERCHANT_FEE_ROUTER`, `USDT0_FEE_WRAPPER`), वहाँ वह
+`400 merchant_fee_unsupported` लौटाता है।
+
 ## Stellar से USDT0 (LayerZero)
 
 [USDT0](https://docs.usdt0.to) Tether का omnichain USDT है। Stellar पर यह classic asset
@@ -1420,10 +1465,18 @@ verifiers Stellar confirmations का इंतज़ार करते है
 characters का बना देता है, जो एक QR code में समाने से ज़्यादा है, इसलिए `qr` आमतौर पर
 `null` होता है: किसी connected wallet से या `uri` link के ज़रिए sign करें।
 
-**फ़िलहाल कोई Cosmos Pay commission नहीं।** एक Soroban transaction में एक ही operation
-होता है, इसलिए path-payment swap की तरह कोई fee payment `send` के साथ नहीं जा सकता, और
-इस route पर plan की दर नहीं ली जाती। Commission लेना है या नहीं, यह product owner का
-फ़ैसला है।
+**Commission: plan की दर, fee wrapper के ज़रिए।** एक Soroban transaction में एक ही operation
+होता है, इसलिए commission उसी contract से होकर जाता है जिससे मर्चेंट फ़ीस (`USDT0_FEE_WRAPPER`,
+नीचे): `amount` का `feeBps`, नीचे की ओर गोल, USDT0 में `STELLAR_SWAP_FEE_WALLET` को (जिस पर
+USDT0 trustline होनी चाहिए, वरना `503 misconfigured`), और बाकी भेजा जाता है। Wrapper configure न
+होने पर transfer पर कोई commission नहीं लगता (`feeBps: 0`), product owner के फ़ैसले से (2026-10-26)।
+
+**मर्चेंट फ़ीस एक contract से होकर जाती है।** `merchantFee` के साथ (देखें **मर्चेंट फ़ीस**) operation
+wrapper का `send` होता है (`USDT0_FEE_WRAPPER`): वह फ़ीस USDT0 में फ़ीस की wallet को
+transfer करता है और उन्हीं arguments के साथ OFT का `send` call करता है, holder के एक ही
+authorization के तहत, और OFT की receipt लौटाता है, ताकि transfer उसी guid से track हो। इसे एक
+बार deploy करें, बिना owner के:
+`USDT0_OFT=CBOWOLFSDM5PZXNFIVDMP5NZ7U2GSIHED6H6R446QOHF266XINKUMMF6 USDT0_SAC=CBSJZEIO5C7KC2SF3MKSNXXJSW5G3VTNBX4ATMKUI3B2MR4JKM4R26YF; stellar contract deploy --wasm contracts/soroban/usdt0-fee-wrapper/usdt0_fee_wrapper.wasm --network mainnet -- --oft "$USDT0_OFT" --token "$USDT0_SAC"`।
 
 **RPC.** सब कुछ Stellar mainnet के Soroban RPC, `STELLAR_RPC_URL_MAINNET`, से होकर जाता
 है (default रूप से Gateway.fm का public endpoint, जो rate limited है: production में किसी
@@ -1463,7 +1516,7 @@ token की auditor registry Cosmos Pay deploy करता है, इसल�
 `GET /v1/zk-payments/config` `enabled: false` लौटाता है, और create
 `400 network_unsupported` लौटाता है।
 
-**Commission: हर payment पर 0.01% (1 bps)**, यानी
+**Commission: हर payment पर 0.18% (18 bps)**, यानी
 `src/zk-payments/zk-payments.constants.ts` में `ZK_PAYMENT_FEE_BPS`, हर deployment पर एक
 जैसा। `amount` वाले payment पर `feeAmount = ceil(amount_in_stroops * 1 / 10000)` stroops
 होता है, कम से कम एक, और `netAmount = amount - feeAmount`: merchant को net मिलता है,
@@ -1519,6 +1572,12 @@ Steps 3, 6 और 7 संबंधित हिस्से के लिए `p
 hashes से कोई payment पहले ही settle हो चुका है, उन्हीं के साथ confirm करने पर वही जवाब फिर
 से मिलता है।
 
+**मर्चेंट फ़ीस के साथ** (create पर `merchantFee`; देखें **मर्चेंट फ़ीस**) payer एक तीसरा
+transfer करता है, `merchantFee.wallet` को `merchantFee.amount`, और confirm उसका hash
+`merchantFeeTxHash` के रूप में लेता है: ऐसे payment के लिए ज़रूरी, किसी और के लिए अस्वीकार।
+यह बाकी दो के साथ हर step से उसी क्रम में गुज़रता है; mismatch पर
+`merchant_fee_transfer_mismatch` मिलता है।
+
 **Confirm कोई amount oracle नहीं है।** यह public है और जो कुछ दिया जाए उसे decrypt करता है,
 इसलिए यह कभी नहीं बताता कि कोई राशि decrypt होकर क्या बनी, और राशियों की तुलना सबसे आख़िर
 में करता है: किसी transfer के close होने के बाद बना payment उस transfer को time window पर
@@ -1567,7 +1626,9 @@ confidential spending scalar, जिनसे जमा हुई fees withdraw 
 `scripts/zk/e2e-testnet.ts` असली chain वाली जाँच है। Friendbot accounts के साथ यह एक
 merchant और एक payer register करता है, module की अपनी service से payments बनाता है, deposit
 और merge करता है, दोनों transfers करता है, और module के अपने confirm से confirm करता है:
-ग़लत राशि अस्वीकार होती है, सही राशि settle होती है, और hashes दोबारा इस्तेमाल नहीं हो सकते।
+ग़लत राशि अस्वीकार होती है, सही राशि settle होती है, और hashes दोबारा इस्तेमाल नहीं हो सकते। फिर यह मर्चेंट फ़ीस वाला एक payment चुकाता है:
+तीसरा transfer एक तीसरे registered account को जाता है, और confirm उसे तीनों hashes के साथ ही
+settle करता है।
 
 **Testnet reset होता है** हर कुछ महीनों में, और उसके साथ उसके contracts भी: reset के बाद
 deploy फिर से चलाएँ। यह जिस verifier को दोबारा इस्तेमाल करता है, वह demo का है; अगर वह न
@@ -1584,7 +1645,7 @@ deploy फिर से चलाएँ। यह जिस verifier को द�
 | `GET /v1/zk-payments/{id}` | `payments:read` | एक payment, जैसा उसका owner उसे देखता है |
 | `GET /v1/zk-checkout/config` | कोई नहीं, `@Public()` | वही setup, `?network=testnet` या `public` के लिए, बिना key वाले page के लिए |
 | `GET /v1/zk-checkout/{id}` | कोई नहीं, `@Public()` | एक payment, जैसा payer उसे देखता है: क्या transfer करना है, किसे, किन contracts पर |
-| `POST /v1/zk-checkout/{id}/confirm` | कोई नहीं, `@Public()` | दोनों transfers से उसे settle करें, on-chain verify करके |
+| `POST /v1/zk-checkout/{id}/confirm` | कोई नहीं, `@Public()` | दोनों transfers (मर्चेंट फ़ीस के साथ तीन) से उसे settle करें, on-chain verify करके |
 
 ## Aliases — क्लेम किए जा सकने वाले पेमेंट हैंडल
 
@@ -2043,6 +2104,108 @@ seal होती हैं और कभी लौटाई नहीं जा
   `openapi:generate` सभी को चालू करता है।
 
 ## अपग्रेड — breaking changes और deploy नोट्स
+
+### Payments: checkout ने link कब देखा; swaps का settled volume USD में
+
+- **Migration `20261027180000_payment_checkout_seen`:** `payment_intent` पर एक वैकल्पिक
+  `checkoutSeenAt` column; कुछ भी दोबारा नहीं लिखा जाता। नई build serve करने से पहले `migrate deploy` चलाएँ।
+- **Payment intents `checkoutSeenAt` लौटाते हैं:** hosted checkout ने intent को खुला रहते हुए
+  (pending या submitted) आख़िरी बार कब पढ़ा। जब तक payer page खुला रखता है, page
+  `GET /v1/payment-links/{id}` poll करता है, इसलिए पिछले 30 seconds का value मतलब कोई अभी payment
+  page पर है। ज़्यादा से ज़्यादा हर 10 seconds में लिखा जाता है, `updatedAt` को छुए बिना।
+- **`GET /v1/summary/series` swaps का मूल्य बताता है:** `swaps.buckets[].volumeUsd`,
+  `swaps.totals.volumeUsd` (`unpriced` के साथ) और `swaps.previous.volumeUsd`, यानी पूरे हुए swaps ने
+  NEAR Intents के मौजूदा prices पर USD में क्या बेचा।
+- **Hosted checkout payer के wallet की जानकारी देता है:** `POST /v1/payment-links/{id}/events`
+  (`@Public()`, हर client address का budget) `walletOpened`, `walletClosed` या `sent` लेता है, और
+  intents इन्हें `checkoutWalletAt`, `checkoutWalletClosedAt` और `checkoutSentAt` के रूप में लौटाते हैं।
+  सिर्फ़ जानकारी के लिए: status अब भी chain के अनुसार बदलता है। Migration
+  `20261027190000_payment_checkout_events` तीन वैकल्पिक columns जोड़ता है।
+
+### Customers: एक account की जगह कई chains पर wallets
+
+- **एक customer के पास wallets होते हैं** (`wallets`: `chain`, `address`, `label`), ज़रूरत के
+  हिसाब से 20 तक, Stellar, Solana या Monad पर। `POST /v1/customers` `wallets` लेता है; नए routes
+  `POST /v1/customers/{id}/wallets` और `DELETE /v1/customers/{id}/wallets/{walletId}` एक wallet
+  जोड़ते और हटाते हैं। एक wallet किसी merchant के एक ही customer का होता है: जो wallet किसी दूसरे
+  customer के पास पहले से है, उस पर `409 customer_wallet_taken` (नया error code) मिलता है।
+- **`account` deprecated है, हटाया नहीं गया।** Responses में यह पहले wallet का address रहता है
+  (wallets न हों तो null)। Create पर यह एक wallet जोड़ता है; `PATCH` पर एक address पहले wallet को
+  बदल देता है (या एक जोड़ता है) और null उसे हटा देता है, जैसे पहले यह अकेले account को edit करता था।
+  `PATCH` `wallets` नहीं लेता।
+- **`payments`, `succeeded` और `total` एक customer के सभी wallets को जोड़ते हैं**, हर wallet अपनी
+  chain पर और key के network पर।
+- **Migration `20261027120000_customer_wallets`:** एक `customer_wallet` table; हर stored
+  `account` अपने customer का पहला wallet बन जाता है, उस chain पर जिसे उसका shape बताता है, फिर
+  `account` column हटा दिया जाता है। अगर किसी merchant के दो customers के पास एक ही account था,
+  तो पुराना customer उसे रखता है; जो account move नहीं हो सका, वह customer के `note` में
+  `Previous account: ...` के रूप में जोड़ दिया जाता है।
+- **Settled payment का payer wallet और chain से match होता है:** जो payer पहले से किसी customer के
+  wallets में है, उसे दोबारा नहीं जोड़ा जाता; नया payer उस wallet के साथ एक automatic customer बन
+  जाता है।
+
+### मर्चेंट फ़ीस: swaps पर `merchantFee` और सात टेबलों में एक वैकल्पिक कॉलम
+
+- **नया, additive:** `POST /v1/swaps` (Stellar), `/v1/swaps/quote`,
+  `POST /v1/cross-chain-swaps` और उसके quote पर `merchantFee`; देखें **मर्चेंट फ़ीस**।
+  जवाबों में एक `merchantFee` जुड़ता है जो null हो सकता है (quotes में `fee` के पास)। बिना
+  फ़ीस का अनुरोध ठीक वही बनाता है जो पहले बनाता था।
+- **Migration `20261026150000_merchant_fee`:** `payment_intent`, `swap`, `chain_swap`,
+  `cross_chain_swap`, `liquidity_pool_operation`, `zk_payment` और `usdt0_transfer` में
+  एक वैकल्पिक JSONB कॉलम `merchantFee`। कोई backfill नहीं: मौजूदा पंक्तियाँ बिना फ़ीस पढ़ी
+  जाती हैं।
+- **नया error code `merchant_fee_unsupported`** (400): Solana या Monad swap पर मर्चेंट
+  फ़ीस।
+- **Stellar payment links भी `merchantFee` लेते हैं** (`POST /v1/payment-intents/tx` और
+  `/pay`; `pay` link को `amount` चाहिए)। Solana और Monad links
+  `merchant_fee_unsupported` लौटाते हैं। जवाबों और सार्वजनिक link में `merchantFee`
+  जुड़ता है; सार्वजनिक link में `payerAccountRequired` भी।
+- **नया रूट `POST /v1/payment-links/{id}/transaction`** (`@Public()`): फ़ीस वाले Stellar
+  link का भुगतानकर्ता जिस envelope पर हस्ताक्षर करता है। **Deploy step:**
+  `/v1/payment-links/*` के लिए APISIX का keyless रूट `POST` की अनुमति दे (और उसका CORS
+  plugin `Content-Type` के साथ `POST`), वरना checkout इसे नहीं बना सकता।
+- **नया variable `PAYMENT_LINK_CHECKOUT_URL`** (डिफ़ॉल्ट
+  `https://payments.cosmospay.lat`): ऐसे links का `uri` कहाँ जाता है।
+- **Solana payment links भी `merchantFee` लेते हैं** (`amount` के साथ): link नए keyless रूट
+  `GET` / `POST /v1/payment-links/{id}/solana-pay` (`@Public()`, हर address का budget) पर
+  Solana Pay transaction request है, जिसे gateway का keyless payment-links रूट परोसता है।
+  **नया variable `PAYMENT_LINK_API_URL`** (डिफ़ॉल्ट `WALLET_AUTH_PUBLIC_BASE_URL`)।
+- **Monad payment links भी `merchantFee` लेते हैं** deposit addresses के साथ: नया contract
+  `contracts/PaymentSplitForwarder.sol` (artifact `src/evm/payment-split-forwarder.artifact.ts`,
+  `npm run contracts:compile` से, बिना बदले PaymentForwarder के साथ)। Migration
+  `20261026190000_evm_deposit_merchant_fee` `evm_deposit_address` में `feeWallet` और
+  `merchantFee` जोड़ता है (हर मौजूदा address पर null, जो PaymentForwarder ही रहता है)।
+- **Solana swaps भी `merchantFee` लेते हैं**: फ़ीस का transfer Jupiter के transaction में जोड़ा
+  जाता है (`src/solana/solana-message.ts` v0 transaction पढ़ता और फिर से लिखता है; lookup
+  tables Solana RPC से पढ़ी जाती हैं)। Monad swaps अब भी `merchant_fee_unsupported` लौटाते हैं।
+- **निजी भुगतान भी `merchantFee` लेते हैं**: फ़ीस की wallet को एक तीसरा confidential transfer।
+  `POST /v1/zk-checkout/{id}/confirm` `merchantFeeTxHash` लेता है (ठीक तब ज़रूरी जब payment पर
+  मर्चेंट फ़ीस हो); नया error code `merchant_fee_transfer_mismatch`; responses में `merchantFee`
+  जुड़ता है, और owner के view में `merchantFeeTxHash` भी। Migration
+  `20261026210000_zk_payment_merchant_fee_tx` `zk_payment` में nullable, unique
+  `merchantFeeTxHash` जोड़ता है।
+- **शून्य तक गोल होने वाली मर्चेंट फ़ीस अस्वीकार होती है**, हर operation पर
+  (`400 invalid_amount`); Stellar पर पहले वह शून्य का payment बनाती थी।
+- **Liquidity operations भी `merchantFee` लेते हैं** (`POST /v1/liquidity-pools/deposit` और
+  `/withdraw`): हर asset का `bps`, उसी transaction में हर asset के लिए एक payment; `fixed`
+  अस्वीकार होता है। Responses और webhooks में `merchantFee` जुड़ता है, जिसके `amountB` /
+  `assetB` asset B का हिस्सा हैं।
+- **Monad swaps भी `merchantFee` लेते हैं**, जब `KURU_MERCHANT_FEE_ROUTER` किसी deployed
+  `contracts/MerchantFeeSwapRouter.sol` का नाम देता है (artifact
+  `src/evm/merchant-fee-swap-router.artifact.ts`)। **Deploy step:** artifact का bytecode और
+  उसके बाद Kuru Flow के router का address 32-byte word के रूप में, किसी भी account से deploy
+  करें (contract का कोई owner नहीं है), और variable set करें। ऐसे swap की wallet router को
+  approve करती है, Kuru को नहीं। इसके बिना Monad swaps अब भी `merchant_fee_unsupported` लौटाते हैं।
+- **USDT0 transfers भी `merchantFee` लेते हैं**, जब `USDT0_FEE_WRAPPER` किसी deployed
+  `contracts/soroban/usdt0-fee-wrapper` का नाम देता है (wasm crate के बगल में committed, जिसे
+  `USDT0_FEE_WRAPPER_WASM_SHA256` pin करता है)। **Deploy step:** USDT0 section का
+  `stellar contract deploy` command, फिर variable set करें। Responses में `merchantFee` जुड़ता है।
+  इसके बिना `merchant_fee_unsupported`।
+- **USDT0 transfers पर plan commission लगता है**, fee wrapper के ज़रिए (`USDT0_FEE_WRAPPER`,
+  जिसका `send` fees की list लेता है): `amount` का `feeBps`, `STELLAR_SWAP_FEE_WALLET` को, जिस पर
+  USDT0 trustline होनी चाहिए। Migration `20261026230000_usdt0_commission` `usdt0_transfer` में
+  `feeBps`, `feeAmount` और `feeWallet` जोड़ता है; transfers और quotes इन्हें लौटाते हैं। Wrapper के
+  बिना, पहले की तरह कोई commission नहीं।
 
 ### Lists key के network का पालन करती हैं; dashboard reads cache होते हैं
 
@@ -2845,7 +3008,7 @@ type दोबारा बनाए बिना enum value drop नहीं �
 | `APISIX_ADMIN_URL` | admin key के साथ | — | APISIX Admin API का base, जैसे `http://apisix:9180/apisix/admin`। केवल wallet खातों की keys जारी करने के लिए |
 | `APISIX_ADMIN_KEY` | wallet sign-in के लिए | — | APISIX admin key। पूरे gateway पर लागू — देखें [कोई भी request developer platform पर निर्भर नहीं है](#कोई-भी-request-developer-platform-पर-निर्भर-नहीं-है)। Recovery server पर अस्वीकार |
 | `APISIX_ADMIN_TIMEOUT_MS` | नहीं | `10000` | एक Admin API कॉल का बजट (ms) |
-| `WALLET_KEY_SWAP_FEE_BPS` | नहीं | `50` | Wallet खातों की keys में शामिल swap commission (`community` plan की दर) |
+| `WALLET_KEY_SWAP_FEE_BPS` | नहीं | `65` | Wallet खातों की keys में शामिल swap commission (`community` plan की दर) |
 | `MAIL_RESEND_API_KEY` | email door के लिए | — | Resend API key जिससे यह सर्विस sign-in और recovery codes भेजती है |
 | `MAIL_FROM` | Resend / SMTP key के साथ | — | Verified sender, जैसे `Cosmos Pay <no-reply@example.com>` |
 | `MAIL_SMTP_HOST` | नहीं | — | SMTP server, जब `MAIL_RESEND_API_KEY` सेट न हो तब उपयोग होता है |
@@ -2861,6 +3024,7 @@ type दोबारा बनाए बिना enum value drop नहीं �
 | `STELLAR_HORIZON_URL_PUBLIC` | नहीं | `https://horizon.stellar.org` | Mainnet Horizon का base URL |
 | `STELLAR_HORIZON_URL_TESTNET` | नहीं | `https://horizon-testnet.stellar.org` | Testnet Horizon का base URL |
 | `STELLAR_RPC_URL_MAINNET` | नहीं | `https://soroban-rpc.mainnet.stellar.gateway.fm` | USDT0 transfers के लिए Stellar mainnet का Soroban RPC (उपयोग से पहले passphrase जाँचा जाता है)। सार्वजनिक endpoint rate limited है: production में किसी प्रदाता का उपयोग करें |
+| `USDT0_FEE_WRAPPER` | USDT0 पर मर्चेंट फ़ीस के लिए | — | USDT0 के OFT और token से बँधा deployed `contracts/soroban/usdt0-fee-wrapper`। इसके बिना मर्चेंट फ़ीस वाला USDT0 transfer `merchant_fee_unsupported` लौटाता है; जो contract pinned wasm नहीं चलाता या किसी और से बँधा है, वह `503 misconfigured` लौटाता है। यह plan commission भी ले जाता है; इसके बिना USDT0 transfers पर कोई commission नहीं लगता। |
 | `SOLANA_RPC_URL_MAINNET` | नहीं | `https://api.mainnet-beta.solana.com` | `prod` कुंजियों के लिए Solana RPC (mainnet-beta; उपयोग से पहले genesis hash जाँचा जाता है)। सार्वजनिक endpoint rate-limited है: production में किसी प्रदाता का उपयोग करें |
 | `SOLANA_RPC_URL_DEVNET` | नहीं | `https://api.devnet.solana.com` | `dev` कुंजियों के लिए Solana RPC (devnet) |
 | `SOLANA_RPC_TIMEOUT_MS` | नहीं | `10000` | एक Solana RPC कॉल का बजट (ms) |
@@ -2873,7 +3037,7 @@ type दोबारा बनाए बिना enum value drop नहीं �
 | `STELLAR_BASE_FEE` | नहीं | `100` | tx builds के लिए Stellar base fee (stroops) |
 | `STELLAR_TX_TIMEOUT` | नहीं | `300` | ट्रांज़ैक्शन timeout (सेकंड) |
 | `STELLAR_SWAP_FEE_WALLET` | जब fee > 0 हो | — | swap fees के लिए प्लेटफ़ॉर्म का G... account |
-| `STELLAR_SWAP_FEE_BPS` | नहीं | `50` | basis points में swap fee |
+| `STELLAR_SWAP_FEE_BPS` | नहीं | `65` | basis points में swap fee |
 | `STELLAR_SWAP_SLIPPAGE_BPS` | नहीं | `50` | swap slippage की डिफ़ॉल्ट सहनशीलता (bps) |
 | `STELLAR_SWAP_MAX_SLIPPAGE_BPS` | नहीं | `500` | caller के slippage की सख्त ऊपरी सीमा (bps) |
 | `STELLAR_SWAP_SINGLE_INFLIGHT` | नहीं | `false` | `true` होने पर, उसी source के लिए non-expired PENDING swap पहले से हो तो 409 |
@@ -2894,11 +3058,14 @@ type दोबारा बनाए बिना enum value drop नहीं �
 | `KURU_BASE_URL` | नहीं | `https://ws.kuru.io` | Kuru Flow API (Monad) |
 | `KURU_API_KEY` | production के लिए | — | Kuru Flow API key (`X-API-Key`)। इसके बिना हर address को प्रति सेकंड एक request तक सीमित token मिलता है |
 | `KURU_TIMEOUT_MS` | नहीं | `15000` | एक Kuru Flow call का budget (ms) |
+| `KURU_MERCHANT_FEE_ROUTER` | Monad पर मर्चेंट फ़ीस के लिए | — | Kuru Flow के router के लिए deployed `contracts/MerchantFeeSwapRouter.sol`। इसके बिना मर्चेंट फ़ीस वाला Monad swap `merchant_fee_unsupported` लौटाता है; जिस address का code artifact वाला नहीं है, वह `503 misconfigured` लौटाता है |
 | `ANALYTICS_CACHE_TTL_MS` | नहीं | `10000` | `/v1/summary`, `/v1/summary/series` और `/v1/balances` हर consumer और network के लिए एक जवाब कितने समय तक दोबारा इस्तेमाल करते हैं (ms), हर replica में। `0` इसे बंद करता है |
 | `OBSERVER_ENABLED` | नहीं | `true` | `true` / `false` — on-chain reconciler |
 | `OBSERVER_INTERVAL_MS` | नहीं | `15000` | Observer poll interval (ms, न्यूनतम 1000) |
 | `OBSERVER_BATCH_SIZE` | नहीं | `50` | प्रति observer tick अधिकतम intents/swaps |
 | `PAYMENT_INTENT_TTL_SECONDS` | नहीं | `3600` | `EXPIRED` होने से पहले बिना भुगतान वाले intent की आयु |
+| `PAYMENT_LINK_CHECKOUT_URL` | नहीं | `https://payments.cosmospay.lat` | मर्चेंट फ़ीस वाला Stellar payment link जो hosted checkout खोलता है (`<url>/<id>`) |
+| `PAYMENT_LINK_API_URL` | नहीं | `WALLET_AUTH_PUBLIC_BASE_URL` | इस API का gateway पर सार्वजनिक URL, जिसे मर्चेंट फ़ीस वाला Solana payment link अपने Solana Pay transaction request के रूप में बताता है; इसके बिना ऐसा link `503 misconfigured` लौटाता है |
 | `WEBHOOK_TIMEOUT_MS` | नहीं | `5000` | पुराना webhook timeout fallback (ms) |
 | `WEBHOOK_CONNECT_TIMEOUT_MS` | नहीं | `3000` | outbound webhook का connect budget (ms) |
 | `WEBHOOK_READ_TIMEOUT_MS` | नहीं | `5000` | outbound webhook का read budget (ms) |
@@ -2942,7 +3109,7 @@ type दोबारा बनाए बिना enum value drop नहीं �
 | `ZK_PAYMENTS_TESTNET_AUDITOR_REGISTRY` | token के साथ | कोई नहीं | वह auditor registry जिसमें id 0 के तहत Cosmos Pay की key है (C...) |
 | `ZK_PAYMENTS_TESTNET_VERIFIER` | token के साथ | कोई नहीं | वह UltraHonk verifier registry जिससे token proofs जाँचता है (C...) |
 | `ZK_PAYMENTS_TESTNET_AUDITOR_SECRET` | token के साथ | कोई नहीं | Auditor scalar `k` (64 hex): token पर हर confidential राशि इसी से decrypt होती है। Gateway secret जितना ही संवेदनशील secret; repository में कभी नहीं |
-| `ZK_PAYMENTS_TESTNET_FEE_ACCOUNT` | token के साथ | कोई नहीं | वह account जिसमें 0.01% commission transfer होता है (G...), token पर registered |
+| `ZK_PAYMENTS_TESTNET_FEE_ACCOUNT` | token के साथ | कोई नहीं | वह account जिसमें 0.18% commission transfer होता है (G...), token पर registered |
 | `ZK_PAYMENTS_TESTNET_DEPLOYED_LEDGER` | token के साथ | कोई नहीं | वह ledger जिस पर token deploy हुआ, जहाँ से wallet अपना balance replay करता है |
 | `ZK_PAYMENTS_TESTNET_RPC_URL` | नहीं | `https://soroban-testnet.stellar.org` | वह Soroban RPC जिससे निजी भुगतान chain पढ़ते हैं; उपयोग से पहले उसका network passphrase जाँचा जाता है |
 | `ZK_PAYMENTS_MAINNET_*` | नहीं | कोई नहीं | `prod` keys के लिए वही set (`_TOKEN`, `_AUDITOR_REGISTRY`, `_VERIFIER`, `_AUDITOR_SECRET`, `_FEE_ACCOUNT`, `_DEPLOYED_LEDGER`, `_RPC_URL`)। Unset होने पर mainnet पर निजी भुगतान बंद रहते हैं। वहाँ `_RPC_URL` का कोई default नहीं है और set के साथ ज़रूरी है |

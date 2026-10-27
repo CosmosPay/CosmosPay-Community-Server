@@ -15,6 +15,7 @@ import {
   tallyBy,
 } from '@/admin/admin-list';
 import { PrismaService } from '@/prisma/prisma.service';
+import { CUSTOMER_WALLET_PUBLIC_SELECT } from '@/customers/customers.service';
 
 function num(amount: string | null): number {
   if (!amount) return 0;
@@ -267,7 +268,13 @@ export class AdminService {
         take: take(opts.take),
         skip: skip(opts.skip),
         orderBy: { createdAt: 'desc' },
-        include: consumerSelect,
+        include: {
+          ...consumerSelect,
+          wallets: {
+            select: CUSTOMER_WALLET_PUBLIC_SELECT,
+            orderBy: { createdAt: 'asc' },
+          },
+        },
       }),
       this.prisma.customer.count({ where }),
     ]);

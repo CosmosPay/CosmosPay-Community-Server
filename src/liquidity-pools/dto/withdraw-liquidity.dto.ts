@@ -7,7 +7,9 @@ import {
   Matches,
   Max,
   Min,
+  ValidateNested,
 } from 'class-validator';
+import { MerchantFeeDto } from '@/common/merchant-fee/merchant-fee.dto';
 import { IsStellarAddress } from '@/common/validators/is-stellar-address.validator';
 
 /**
@@ -80,4 +82,20 @@ export class WithdrawLiquidityDto {
   @IsString()
   @Matches(/\S/, { message: 'idempotencyKey must not be blank' })
   idempotencyKey?: string;
+
+  @ApiPropertyOptional({
+    type: MerchantFeeDto,
+    description:
+      'Your own fee on this withdrawal: `bps` of EACH asset it moves, paid to ' +
+      '`wallet` (a Stellar account that can receive both assets) by one ' +
+      'payment per asset in the same transaction, beside the plan commission. ' +
+      '`fixed` is refused here: the operation moves two assets. ' +
+      'The fee comes out of what the withdrawal pays, on its guaranteed ' +
+      'minimums, whichever `paidBy` names: the account is payer and ' +
+      'receiver.',
+  })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => MerchantFeeDto)
+  merchantFee?: MerchantFeeDto;
 }

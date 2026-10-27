@@ -1,0 +1,26 @@
+[package]
+name = "usdt0-fee-wrapper"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Pays the fees on a USDT0 transfer and sends it through LayerZero's OFT in one Soroban invocation"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+doctest = false
+
+[dependencies]
+soroban-sdk = "=23.5.3"
+
+[dev-dependencies]
+soroban-sdk = { version = "=23.5.3", features = ["testutils"] }
+
+[profile.release]
+opt-level = "z"
+overflow-checks = true
+debug = 0
+strip = "symbols"
+debug-assertions = false
+panic = "abort"
+codegen-units = 1
+lto = true

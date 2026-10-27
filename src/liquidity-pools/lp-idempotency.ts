@@ -1,5 +1,11 @@
 import type { LiquidityPoolOperation } from '@generated/prisma/client';
-import { sameAmount } from '@/swaps/swap-math';
+import {
+  type MerchantFeeTerms,
+  sameMerchantFee,
+} from '@/common/merchant-fee/merchant-fee';
+import { readLiquidityMerchantFee } from '@/liquidity-pools/lp-merchant-fee';
+import { STELLAR_DECIMALS } from '@/stellar/stellar.constants';
+import { fromStroops, sameAmount, toStroops } from '@/swaps/swap-math';
 
 /**
  * The parts of a deposit request that decide what gets signed, resolved the way
@@ -23,6 +29,7 @@ export interface DepositRequestTerms {
   amountB: string | null;
   slippageBps: number;
   memo: string | null;
+  merchantFee: MerchantFeeTerms | null;
 }
 
 /**
@@ -39,6 +46,7 @@ export interface WithdrawRequestTerms {
   shares: string;
   slippageBps: number;
   memo: string | null;
+  merchantFee: MerchantFeeTerms | null;
 }
 
 export type LiquidityRequestTerms = DepositRequestTerms | WithdrawRequestTerms;
@@ -68,6 +76,7 @@ export type StoredLiquidityTerms = Pick<
   | 'amountB'
   | 'shares'
   | 'slippageBps'
+  | 'merchantFee'
 > & { memo: string | null | undefined };
 
 /**
@@ -99,19 +108,33 @@ export function liquidityOperationMatchesRequest(
     stored.source !== request.source ||
     stored.poolId !== request.poolId ||
     stored.slippageBps !== request.slippageBps ||
-    stored.memo !== request.memo
+    stored.memo !== request.memo ||
+    !sameMerchantFee(stored.merchantFee, request.merchantFee, STELLAR_DECIMALS)
   ) {
     return false;
   }
   if (request.kind === 'WITHDRAW') {
     return stored.shares !== null && sameAmount(stored.shares, request.shares);
   }
+  // The stored amounts are the deposit's caps. A merchant fee the recipient
+  // pays came out of the request's amounts, so the request asked for the cap
+  // plus that side's fee.
+  const deducted =
+    request.merchantFee?.paidBy === 'recipient'
+      ? readLiquidityMerchantFee(stored.merchantFee)
+      : null;
+  const asked = (cap: string, fee: string | undefined) =>
+    deducted && fee !== undefined
+      ? fromStroops(toStroops(cap) + toStroops(fee))
+      : cap;
   return (
     stored.assetA === request.assetA &&
     stored.assetAIssuer === request.assetAIssuer &&
     stored.assetB === request.assetB &&
     stored.assetBIssuer === request.assetBIssuer &&
-    (request.amountA === null || sameAmount(stored.amountA, request.amountA)) &&
-    (request.amountB === null || sameAmount(stored.amountB, request.amountB))
+    (request.amountA === null ||
+      sameAmount(asked(stored.amountA, deducted?.amount), request.amountA)) &&
+    (request.amountB === null ||
+      sameAmount(asked(stored.amountB, deducted?.amountB), request.amountB))
   );
 }

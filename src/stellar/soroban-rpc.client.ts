@@ -48,6 +48,13 @@ export class SorobanRpcClient {
     return this.call('getTransaction', (server) => server.getTransaction(hash));
   }
 
+  /** The wasm a deployed contract runs. */
+  contractWasm(contractId: string): Promise<Uint8Array> {
+    return this.call('getContractWasmByContractId', (server) =>
+      server.getContractWasmByContractId(contractId),
+    );
+  }
+
   private async call<T>(
     what: string,
     run: (server: rpc.Server) => Promise<T>,

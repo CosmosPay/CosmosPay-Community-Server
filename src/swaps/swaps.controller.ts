@@ -121,12 +121,15 @@ export class SwapsController {
       ApiErrorCode.AssetUnsupported,
       ApiErrorCode.NetworkUnsupported,
       ApiErrorCode.ProviderError,
+      ApiErrorCode.MerchantFeeUnsupported,
     ],
     description:
       '`network_unsupported`: `chain: solana | monad` with a dev (testnet) ' +
       'key: Jupiter and Kuru Flow run on mainnet only. `asset_unsupported`: ' +
       'not an SPL mint / ERC-20 on that chain. `provider_error`: the ' +
-      'aggregator found no route or refused the amount.',
+      'aggregator found no route or refused the amount. ' +
+      '`merchant_fee_unsupported`: a `merchantFee` on a Monad swap where no ' +
+      'merchant fee router is configured (KURU_MERCHANT_FEE_ROUTER).',
   })
   @ApiErrorResponse({
     status: 503,
@@ -134,7 +137,8 @@ export class SwapsController {
     description:
       '`misconfigured`: the plan charges a commission and the chain has no ' +
       'fee wallet configured (STELLAR_SWAP_FEE_WALLET, SOLANA_SWAP_FEE_WALLET, ' +
-      'MONAD_SWAP_FEE_WALLET).',
+      'MONAD_SWAP_FEE_WALLET), or KURU_MERCHANT_FEE_ROUTER is not a ' +
+      'MerchantFeeSwapRouter.',
   })
   quote(
     @CurrentConsumer() consumer: GatewayConsumer,
@@ -188,6 +192,7 @@ export class SwapsController {
       ApiErrorCode.AssetUnsupported,
       ApiErrorCode.NetworkUnsupported,
       ApiErrorCode.ProviderError,
+      ApiErrorCode.MerchantFeeUnsupported,
     ],
     description:
       'Stellar: `trustline_missing` (the destination is another account that ' +
@@ -198,7 +203,9 @@ export class SwapsController {
       'sends and its fee), `no_path_found`. ' +
       'Solana / Monad: `network_unsupported` (a dev key), `asset_unsupported`, ' +
       '`provider_error` (no route, or the aggregator simulated a failure, ' +
-      'usually a wallet that cannot cover the amount plus fees).',
+      'usually a wallet that cannot cover the amount plus fees). ' +
+      'Monad: `merchant_fee_unsupported` (a `merchantFee` and no merchant ' +
+      'fee router configured, KURU_MERCHANT_FEE_ROUTER).',
   })
   @ApiErrorResponse({
     status: 409,
@@ -216,7 +223,9 @@ export class SwapsController {
     description:
       '`misconfigured`: the plan charges a commission and the chain has no ' +
       'fee wallet (or, on Solana, the fee wallet has no token account for the ' +
-      'output mint yet).',
+      'output mint yet), or, for a Monad swap with a merchant fee, ' +
+      'KURU_MERCHANT_FEE_ROUTER is not a MerchantFeeSwapRouter or Kuru Flow ' +
+      'routes through another aggregator than the one it was deployed for.',
   })
   create(
     @CurrentConsumer() consumer: GatewayConsumer,

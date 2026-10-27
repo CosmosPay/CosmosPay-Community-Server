@@ -93,6 +93,8 @@ export enum ApiErrorCode {
   PaymentTransferMismatch = 'payment_transfer_mismatch',
   /** {@link PaymentTransferMismatch}, for the commission transfer to the fee account. */
   FeeTransferMismatch = 'fee_transfer_mismatch',
+  /** {@link PaymentTransferMismatch}, for the merchant fee's transfer to its wallet. */
+  MerchantFeeTransferMismatch = 'merchant_fee_transfer_mismatch',
   /** The two transfers of one private payment come from different accounts. */
   PayerMismatch = 'payer_mismatch',
   /**
@@ -113,6 +115,15 @@ export enum ApiErrorCode {
   NetworkUnsupported = 'network_unsupported',
   /** The asset is not one NEAR Intents can swap on the chain the request names. */
   AssetUnsupported = 'asset_unsupported',
+
+  // --- merchant fee -----------------------------------------------------------
+  /**
+   * The request names a merchant fee on an operation that cannot pay one yet:
+   * the chain or venue has no way to split the payment in the transaction this
+   * service builds. Refused before anything is built, so nobody signs an
+   * operation that would silently drop the merchant's fee.
+   */
+  MerchantFeeUnsupported = 'merchant_fee_unsupported',
 
   // --- provider / upstream --------------------------------------------------
   ProviderError = 'provider_error',
@@ -142,6 +153,13 @@ export enum ApiErrorCode {
    * integrators off to investigate an upstream that was perfectly healthy.
    */
   RateLimited = 'rate_limited',
+
+  // --- customers -------------------------------------------------------------
+  /**
+   * Another customer of the same merchant already holds that wallet: a wallet belongs to one
+   * customer, so a payment's payer counts toward exactly one.
+   */
+  CustomerWalletTaken = 'customer_wallet_taken',
 
   // --- aliases ---------------------------------------------------------------
   /** The handle is already claimed. First claim wins; there is no queue. */

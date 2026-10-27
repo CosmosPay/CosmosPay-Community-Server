@@ -2,16 +2,25 @@ import { randomBytes } from 'node:crypto';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { Prisma, ZkPayment } from '@generated/prisma/client';
+import { CHAIN_ADDRESS_RULES } from '@/chains/chain-address';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import type { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
+import {
+  merchantFeeRecord,
+  type MerchantFeeTerms,
+  readMerchantFeeRecord,
+  resolveMerchantFee,
+  sameMerchantFee,
+} from '@/common/merchant-fee/merchant-fee';
 import { page, type Page } from '@/common/pagination';
 import { isUniqueViolation } from '@/common/prisma-errors';
 import { project } from '@/common/projection';
 import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
 import { resolveNetwork } from '@/common/stellar-network';
-import type { AppConfig } from '@/config/configuration';
+import type { AppConfig, ZkNetworkConfig } from '@/config/configuration';
 import { PrismaService } from '@/prisma/prisma.service';
 import { resolveIdempotencyKey } from '@/stellar/stellar-operation-policy';
+import { STELLAR_DECIMALS } from '@/stellar/stellar.constants';
 import { ConfidentialSdk } from '@/zk-payments/confidential-sdk';
 import type { CreateZkPaymentDto } from '@/zk-payments/dto/create-zk-payment.dto';
 import type { QueryZkPaymentsDto } from '@/zk-payments/dto/query-zk-payments.dto';
@@ -51,6 +60,8 @@ export const ZK_PAYMENT_PUBLIC_SELECT = {
   payer: true,
   paymentTxHash: true,
   feeTxHash: true,
+  merchantFee: true,
+  merchantFeeTxHash: true,
   description: true,
   idempotencyKey: true,
   expiresAt: true,
@@ -63,9 +74,13 @@ type ZkPaymentRow = Prisma.ZkPaymentGetPayload<{
   select: typeof ZK_PAYMENT_PUBLIC_SELECT;
 }>;
 
-/** A row as its owner reads it: the status as it reads now. */
+/** A row as its owner reads it: the status as it reads now, the merchant fee read back. */
 export function toZkPaymentView(row: ZkPaymentRow, now: Date): ZkPaymentEntity {
-  return { ...row, status: effectiveZkStatus(row, now) };
+  return {
+    ...row,
+    status: effectiveZkStatus(row, now),
+    merchantFee: readMerchantFeeRecord(row.merchantFee),
+  };
 }
 
 /** What a create is compared on when its idempotency key is already taken. */
@@ -74,7 +89,11 @@ interface ZkPaymentTerms {
   amount: string;
   recipient: string;
   description: string | null;
+  merchantFee: MerchantFeeTerms | null;
 }
+
+/** The asset a private payment and its merchant fee are paid in. */
+const ZK_PAYMENT_ASSET = 'XLM';
 
 /**
  * Private payments as their owner (the merchant's API key) sees them: the network's
@@ -116,18 +135,35 @@ export class ZkPaymentsService {
     const network = resolveNetwork(this.config, consumer);
     const zk = this.networks.require(network);
 
-    const split = splitZkPayment(dto.amount, ZK_PAYMENT_FEE_BPS);
+    const merchant = resolveMerchantFee(
+      dto.merchantFee,
+      STELLAR_DECIMALS,
+      CHAIN_ADDRESS_RULES.stellar,
+    );
+    const split = splitZkPayment(dto.amount, ZK_PAYMENT_FEE_BPS, merchant);
     if (!split) {
       throw ApiError.badRequest(
         ApiErrorCode.InvalidAmount,
-        'The amount is too small: after the 0.01% commission (at least one ' +
-          'stroop) the merchant would receive nothing.',
+        merchant
+          ? 'The amount is too small: after the 0.18% commission (at least ' +
+              'one stroop) and the merchant fee the merchant would receive nothing.'
+          : 'The amount is too small: after the 0.18% commission (at least one ' +
+              'stroop) the merchant would receive nothing.',
       );
     }
     if (dto.recipient === zk.feeAccount) {
       throw ApiError.badRequest(
         ApiErrorCode.ValidationFailed,
         "recipient cannot be Cosmos Pay's fee account.",
+      );
+    }
+    if (
+      merchant &&
+      (merchant.wallet === dto.recipient || merchant.wallet === zk.feeAccount)
+    ) {
+      throw ApiError.badRequest(
+        ApiErrorCode.ValidationFailed,
+        "merchantFee.wallet must be another account than the recipient and Cosmos Pay's fee account.",
       );
     }
 
@@ -140,19 +176,18 @@ export class ZkPaymentsService {
       amount: split.amount,
       recipient: dto.recipient,
       description: dto.description ?? null,
+      merchantFee: merchant,
     };
 
     const existing = await this.findByKey(local.id, idempotencyKey);
     if (existing) return this.replay(existing, terms);
 
-    const account = await this.sdk.account(zk, dto.recipient);
-    if (!account.registered || account.auditorId !== ZK_PAYMENT_AUDITOR_ID) {
-      throw ApiError.badRequest(
-        ApiErrorCode.RecipientNotRegistered,
-        `The recipient ${dto.recipient} is not registered on Cosmos Pay's ` +
-          'confidential token. Register it with the wallet first, under ' +
-          `auditor id ${ZK_PAYMENT_AUDITOR_ID}.`,
-      );
+    await this.assertRegistered(zk, dto.recipient, 'recipient');
+    // A confidential transfer to an account the token does not know is refused
+    // on-chain, after the payer spent a proof on it: the merchant fee's wallet
+    // is held to the recipient's rule.
+    if (merchant) {
+      await this.assertRegistered(zk, merchant.wallet, 'merchantFee.wallet');
     }
 
     const minutes =
@@ -170,6 +205,18 @@ export class ZkPaymentsService {
           feeBps: ZK_PAYMENT_FEE_BPS,
           recipient: dto.recipient,
           feeAccount: zk.feeAccount,
+          ...(merchant
+            ? {
+                merchantFee: {
+                  ...merchantFeeRecord(
+                    merchant,
+                    split.merchantFeeStroops,
+                    STELLAR_DECIMALS,
+                    ZK_PAYMENT_ASSET,
+                  ),
+                },
+              }
+            : {}),
           description: dto.description ?? null,
           idempotencyKey,
           expiresAt: new Date(Date.now() + minutes * 60_000),
@@ -183,8 +230,9 @@ export class ZkPaymentsService {
 
     this.logger.log(
       `Created private payment ${row.id}: ${split.amount} XLM (net ${split.netAmount}, ` +
-        `fee ${split.feeAmount}) -> ${dto.recipient} ` +
-        `(consumer=${consumer.username}, network=${network})`,
+        `fee ${split.feeAmount}` +
+        (merchant ? `, merchant fee to ${merchant.wallet}` : '') +
+        `) -> ${dto.recipient} (consumer=${consumer.username}, network=${network})`,
     );
     return toZkPaymentView(project(row, ZK_PAYMENT_PUBLIC_SELECT), new Date());
   }
@@ -232,6 +280,27 @@ export class ZkPaymentsService {
     return toZkPaymentView(row, new Date());
   }
 
+  /**
+   * `address` holds a confidential account on the token under auditor 0, or the
+   * request is refused before anything is stored: `field` names it.
+   */
+  private async assertRegistered(
+    zk: ZkNetworkConfig,
+    address: string,
+    field: 'recipient' | 'merchantFee.wallet',
+  ): Promise<void> {
+    const account = await this.sdk.account(zk, address);
+    if (!account.registered || account.auditorId !== ZK_PAYMENT_AUDITOR_ID) {
+      throw ApiError.badRequest(
+        ApiErrorCode.RecipientNotRegistered,
+        `The ${field === 'recipient' ? 'recipient' : "merchant fee's wallet"} ` +
+          `${address} is not registered on Cosmos Pay's ` +
+          'confidential token. Register it with the wallet first, under ' +
+          `auditor id ${ZK_PAYMENT_AUDITOR_ID}.`,
+      );
+    }
+  }
+
   private findByKey(consumerId: string, idempotencyKey: string) {
     return this.prisma.zkPayment.findUnique({
       where: { consumerId_idempotencyKey: { consumerId, idempotencyKey } },
@@ -259,7 +328,8 @@ export class ZkPaymentsService {
       stored.network === terms.network &&
       stored.amount === terms.amount &&
       stored.recipient === terms.recipient &&
-      stored.description === terms.description;
+      stored.description === terms.description &&
+      sameMerchantFee(stored.merchantFee, terms.merchantFee, STELLAR_DECIMALS);
     if (!same) {
       // Names nothing about the stored payment: under the shared public key it
       // may be another caller's.

@@ -1,5 +1,13 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsIn, IsOptional, IsString, Matches } from 'class-validator';
+import { Type } from 'class-transformer';
+import {
+  IsIn,
+  IsOptional,
+  IsString,
+  Matches,
+  ValidateNested,
+} from 'class-validator';
+import { MerchantFeeDto } from '@/common/merchant-fee/merchant-fee.dto';
 import { IsDecimalAmount } from '@/common/validators/is-decimal-amount.validator';
 import { IsStellarAddress } from '@/common/validators/is-stellar-address.validator';
 import { USDT0_CHAIN_IDS, type Usdt0ChainId } from '@/usdt0/usdt0.constants';
@@ -63,4 +71,20 @@ export class CreateUsdt0TransferDto {
   @IsString()
   @Matches(/\S/, { message: 'idempotencyKey must not be blank' })
   idempotencyKey?: string;
+
+  @ApiPropertyOptional({
+    type: MerchantFeeDto,
+    description:
+      'Your own fee on this transfer, in USDT0, paid to `wallet` (a Stellar ' +
+      'account that trusts USDT0) in the same transaction: the operation is ' +
+      'then the fee wrapper (`USDT0_FEE_WRAPPER`), which ' +
+      "pays the fee and calls the OFT's `send` under the holder's one " +
+      'authorization. `paidBy: recipient` takes it from `amount` (less is ' +
+      'sent); `payer` adds it on top. Without a configured wrapper, ' +
+      '`merchant_fee_unsupported`.',
+  })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => MerchantFeeDto)
+  merchantFee?: MerchantFeeDto;
 }

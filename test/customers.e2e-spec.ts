@@ -10,10 +10,11 @@ import { AllExceptionsFilter } from '@/common/filters/all-exceptions.filter';
 import { PrismaService } from '@/prisma/prisma.service';
 
 /**
- * `POST` and `PATCH /v1/customers`: a customer's `account` is an address on any chain the
- * service settles. The rule is the DTO spec's and the spelling the service spec's; this suite
- * pins them through the real pipe: the scope gate, the three shapes admitted, the refusal an
- * integrator reads, and the EIP-55 spelling that reaches the database.
+ * `/v1/customers`: a customer holds wallets on any chain the service settles, and the deprecated
+ * `account` still names one. The rules are the DTO spec's and the spelling the service spec's;
+ * this suite pins them through the real pipe: the scope gate, the three shapes admitted, the
+ * refusal an integrator reads, the EIP-55 spelling that reaches the database, and the wallet
+ * routes' gates.
  */
 describe('Customers (e2e)', () => {
   let app: INestApplication;
@@ -32,10 +33,44 @@ describe('Customers (e2e)', () => {
     customer: {
       // Answers with what it was asked to store, as the database would.
       create: jest.fn(({ data }) =>
-        Promise.resolve({ id: 'cus_1', ...data, consumerId: undefined }),
+        Promise.resolve({
+          id: 'cus_1',
+          name: data.name,
+          wallets: data.wallets.create.map(
+            (w: { chain: string; address: string; label?: string | null }) => ({
+              id: 'w_1',
+              chain: w.chain,
+              address: w.address,
+              label: w.label ?? null,
+            }),
+          ),
+        }),
       ),
-      findFirst: jest.fn().mockResolvedValue({ id: 'cus_1' }),
-      update: jest.fn(({ data }) => Promise.resolve({ id: 'cus_1', ...data })),
+      // cus_1 is this consumer's, with one Stellar wallet; anything else is not.
+      findFirst: jest.fn(({ where }) =>
+        Promise.resolve(
+          where.id === 'cus_1'
+            ? {
+                id: 'cus_1',
+                wallets: [{ id: 'w_1', chain: 'stellar', address: STELLAR }],
+              }
+            : null,
+        ),
+      ),
+      update: jest.fn(() => Promise.resolve({ id: 'cus_1', wallets: [] })),
+    },
+    customerWallet: {
+      findFirst: jest.fn().mockResolvedValue(null),
+      create: jest.fn(({ data }) =>
+        Promise.resolve({
+          id: 'w_2',
+          chain: data.chain,
+          address: data.address,
+          label: data.label,
+        }),
+      ),
+      update: jest.fn().mockResolvedValue({}),
+      delete: jest.fn().mockResolvedValue({}),
     },
   };
 
@@ -65,9 +100,16 @@ describe('Customers (e2e)', () => {
   beforeEach(() => {
     prismaMock.customer.create.mockClear();
     prismaMock.customer.update.mockClear();
+    prismaMock.customerWallet.create.mockClear();
+    prismaMock.customerWallet.update.mockClear();
+    prismaMock.customerWallet.delete.mockClear();
   });
 
-  const tenant = (method: 'post' | 'patch', path: string, scopes: string) =>
+  const tenant = (
+    method: 'post' | 'patch' | 'delete',
+    path: string,
+    scopes: string,
+  ) =>
     request(app.getHttpServer())
       [method](path)
       .set('x-gateway-secret', SECRET)
@@ -91,9 +133,36 @@ describe('Customers (e2e)', () => {
       .expect(201);
 
     expect(res.body.account).toBe(stored);
-    expect(prismaMock.customer.create.mock.calls[0][0].data.account).toBe(
-      stored,
-    );
+    expect(res.body.wallets).toEqual([
+      expect.objectContaining({ address: stored }),
+    ]);
+    expect(
+      prismaMock.customer.create.mock.calls[0][0].data.wallets.create[0]
+        .address,
+    ).toBe(stored);
+  });
+
+  it('creates a customer with wallets on several chains', async () => {
+    const res = await tenant('post', '/v1/customers', 'customers:write')
+      .send({
+        name: 'Ada',
+        wallets: [
+          { chain: 'solana', address: SOLANA, label: 'Phantom' },
+          { chain: 'monad', address: MONAD.toLowerCase() },
+        ],
+      })
+      .expect(201);
+
+    expect(
+      res.body.wallets.map((w: { chain: string; address: string }) => [
+        w.chain,
+        w.address,
+      ]),
+    ).toEqual([
+      ['solana', SOLANA],
+      ['monad', MONAD],
+    ]);
+    expect(res.body.account).toBe(SOLANA);
   });
 
   it('refuses an address no chain accepts, naming the three shapes (400)', async () => {
@@ -108,14 +177,102 @@ describe('Customers (e2e)', () => {
     expect(prismaMock.customer.create).not.toHaveBeenCalled();
   });
 
-  it('normalizes the account on an update too', async () => {
-    const res = await tenant('patch', '/v1/customers/cus_1', 'customers:write')
+  it("refuses a wallet whose address is not its chain's (400)", async () => {
+    const res = await tenant('post', '/v1/customers', 'customers:write')
+      .send({ name: 'Ada', wallets: [{ chain: 'monad', address: SOLANA }] })
+      .expect(400);
+
+    expect(res.body.message).toEqual([
+      'wallets.0.address must be a valid Monad (EVM) address (0x + 40 hex) for chain monad',
+    ]);
+    expect(prismaMock.customer.create).not.toHaveBeenCalled();
+  });
+
+  it('normalizes the account on an update too: it replaces the first wallet', async () => {
+    await tenant('patch', '/v1/customers/cus_1', 'customers:write')
       .send({ account: MONAD.toLowerCase() })
       .expect(200);
 
-    expect(res.body.account).toBe(MONAD);
-    expect(prismaMock.customer.update.mock.calls[0][0].data).toEqual({
-      account: MONAD,
+    expect(prismaMock.customerWallet.update).toHaveBeenCalledWith({
+      where: { id: 'w_1' },
+      data: { chain: 'monad', address: MONAD },
+    });
+  });
+
+  it('refuses wallets on an update: they have their own routes (400)', async () => {
+    await tenant('patch', '/v1/customers/cus_1', 'customers:write')
+      .send({ wallets: [{ chain: 'stellar', address: STELLAR }] })
+      .expect(400);
+    expect(prismaMock.customer.update).not.toHaveBeenCalled();
+  });
+
+  describe('wallet routes', () => {
+    it('refuse a key without customers:write (403)', async () => {
+      await tenant('post', '/v1/customers/cus_1/wallets', 'customers:read')
+        .send({ chain: 'solana', address: SOLANA })
+        .expect(403);
+      await tenant(
+        'delete',
+        '/v1/customers/cus_1/wallets/w_1',
+        'customers:read',
+      ).expect(403);
+      expect(prismaMock.customerWallet.create).not.toHaveBeenCalled();
+      expect(prismaMock.customerWallet.delete).not.toHaveBeenCalled();
+    });
+
+    it("adds a wallet in its chain's spelling (201)", async () => {
+      const res = await tenant(
+        'post',
+        '/v1/customers/cus_1/wallets',
+        'customers:write',
+      )
+        .send({ chain: 'monad', address: MONAD.toLowerCase(), label: 'Rabby' })
+        .expect(201);
+
+      expect(res.body).toMatchObject({
+        chain: 'monad',
+        address: MONAD,
+        label: 'Rabby',
+      });
+    });
+
+    it('answers a customer of someone else, and a wallet not on the customer, as missing (404)', async () => {
+      await tenant('post', '/v1/customers/cus_other/wallets', 'customers:write')
+        .send({ chain: 'solana', address: SOLANA })
+        .expect(404);
+      await tenant(
+        'delete',
+        '/v1/customers/cus_1/wallets/w_9',
+        'customers:write',
+      ).expect(404);
+      expect(prismaMock.customerWallet.delete).not.toHaveBeenCalled();
+    });
+
+    it('refuses a wallet another customer holds (409 customer_wallet_taken)', async () => {
+      prismaMock.customerWallet.findFirst.mockResolvedValueOnce({
+        chain: 'solana',
+        address: SOLANA,
+        customerId: 'cus_2',
+      });
+
+      const res = await tenant(
+        'post',
+        '/v1/customers/cus_1/wallets',
+        'customers:write',
+      )
+        .send({ chain: 'solana', address: SOLANA })
+        .expect(409);
+
+      expect(res.body.code).toBe('customer_wallet_taken');
+    });
+
+    it('removes a wallet of the customer', async () => {
+      const res = await tenant(
+        'delete',
+        '/v1/customers/cus_1/wallets/w_1',
+        'customers:write',
+      ).expect(200);
+      expect(res.body).toEqual({ id: 'w_1', deleted: true });
     });
   });
 });

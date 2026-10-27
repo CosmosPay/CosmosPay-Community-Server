@@ -8,7 +8,7 @@ import { ZkPaymentsService } from '@/zk-payments/zk-payments.service';
 
 /**
  * Private payments: confidential payments on Cosmos Pay's token, amount hidden
- * on-chain, 0.01% commission. The merchant's routes under `/v1/zk-payments`,
+ * on-chain, 0.18% commission. The merchant's routes under `/v1/zk-payments`,
  * the payer's keyless ones under `/v1/zk-checkout`. The confidential token SDK
  * is reached only through {@link ConfidentialSdk}.
  *

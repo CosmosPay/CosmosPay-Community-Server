@@ -1,6 +1,10 @@
 import { randomBytes } from 'node:crypto';
 import { Injectable } from '@nestjs/common';
-import { encodeBase58, normalizeAddress } from '@/chains/chain-address';
+import {
+  CHAIN_ADDRESS_RULES,
+  encodeBase58,
+  normalizeAddress,
+} from '@/chains/chain-address';
 import {
   MAX_TOKEN_DECIMALS,
   NATIVE_ASSET_CODES,
@@ -9,6 +13,16 @@ import {
 } from '@/chains/chains.constants';
 import { decimalPlaces, parseUnits } from '@/chains/units';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
+import {
+  assertMerchantFeeCovered,
+  type MerchantFeeRecord,
+  type MerchantFeeSplit,
+  type MerchantFeeTerms,
+  merchantFeeRecord,
+  resolveMerchantFee,
+  splitMerchantFee,
+} from '@/common/merchant-fee/merchant-fee';
+import type { MerchantFeeDto } from '@/common/merchant-fee/merchant-fee.dto';
 import type { StellarNetwork } from '@/config/configuration';
 import { eip681Uri } from '@/evm/eip681';
 import { EvmRpcClient } from '@/evm/evm-rpc.client';
@@ -28,6 +42,8 @@ export interface ChainPayRequest {
   assetIssuer?: string;
   memo: string;
   msg?: string;
+  /** The organization's own fee, as the request named it; resolved here against the asset. */
+  merchantFee?: MerchantFeeDto;
 }
 
 /** The columns a Solana/Monad PAY intent is stored with. */
@@ -43,6 +59,19 @@ export interface ChainPayLink {
   networkFee: string | null;
   /** A Monad intent's deposit address and its terms, when the relayer is on. */
   deposit: EvmDepositTerms | null;
+  /**
+   * The merchant fee, resolved against the asset; null without one. On Solana
+   * the link is then a Solana Pay transaction request (`uri` is set by the
+   * service once the id exists); on Monad the deposit address pays it.
+   */
+  merchantFee: { terms: MerchantFeeTerms; record: MerchantFeeRecord } | null;
+}
+
+/** A resolved merchant fee and how it splits the amount. */
+interface ResolvedMerchantFee {
+  terms: MerchantFeeTerms;
+  record: MerchantFeeRecord;
+  split: MerchantFeeSplit;
 }
 
 /** The asset an intent settles in, resolved against the chain. */
@@ -80,6 +109,61 @@ export class ChainPayLinkBuilder {
     return builders[chain]();
   }
 
+  /**
+   * The request's merchant fee against the resolved asset: its decimals, the
+   * chain's address rule, a wallet other than the destination, an amount to
+   * take it from and something left for the destination. A Solana fee in SOL
+   * must go to an account that exists: a transfer that would create one needs
+   * the rent-exempt minimum and fails below it (a token fee needs nothing: the
+   * payment creates the wallet's token account).
+   */
+  private async merchantFee(
+    chain: OtherChain,
+    request: ChainPayRequest,
+    asset: ResolvedAsset,
+    destination: string,
+  ): Promise<ResolvedMerchantFee | null> {
+    if (!request.merchantFee) return null;
+    if (request.amount === undefined) {
+      throw ApiError.badRequest(
+        ApiErrorCode.ValidationFailed,
+        'A merchant fee needs an amount: an open-amount link has nothing to take it from',
+      );
+    }
+    const terms = resolveMerchantFee(
+      request.merchantFee,
+      asset.decimals,
+      CHAIN_ADDRESS_RULES[chain],
+    )!;
+    if (terms.wallet === destination) {
+      throw ApiError.badRequest(
+        ApiErrorCode.ValidationFailed,
+        "merchantFee.wallet must be another account than the payment's own",
+      );
+    }
+    const split = splitMerchantFee(
+      parseUnits(request.amount, asset.decimals),
+      terms,
+    );
+    assertMerchantFeeCovered(split, terms);
+    if (
+      chain === 'solana' &&
+      !asset.issuer &&
+      (await this.solana.getAccountOwner(request.network, terms.wallet)) ===
+        null
+    ) {
+      throw ApiError.badRequest(
+        ApiErrorCode.ValidationFailed,
+        'merchantFee.wallet does not exist on this network yet: a SOL fee goes to an existing account. Fund it first.',
+      );
+    }
+    return {
+      terms,
+      record: merchantFeeRecord(terms, split.fee, asset.decimals, asset.code),
+      split,
+    };
+  }
+
   /** The destination and token, in the spelling this chain stores them in. */
   normalize(
     chain: OtherChain,
@@ -101,18 +185,28 @@ export class ChainPayLinkBuilder {
       this.solana.getMintDecimals(request.network, mint),
     );
     checkAmount(request.amount, asset, false);
+    const merchant = await this.merchantFee(
+      'solana',
+      request,
+      asset,
+      request.destination,
+    );
     // A fresh key per intent, never derived from anything a caller chose:
     // the reference is how a payment is told apart from every other transfer
     // to the same destination, so it must be one nobody else can put there.
     const reference = encodeBase58(randomBytes(32));
-    const uri = solanaPayUri({
-      recipient: request.destination,
-      amount: request.amount,
-      splToken: asset.issuer ?? undefined,
-      reference,
-      message: request.msg,
-      memo: request.memo,
-    });
+    // With a merchant fee a transfer request (one recipient) cannot carry it:
+    // the service names the transaction request once the intent has an id.
+    const uri = merchant
+      ? ''
+      : solanaPayUri({
+          recipient: request.destination,
+          amount: request.amount,
+          splToken: asset.issuer ?? undefined,
+          reference,
+          message: request.msg,
+          memo: request.memo,
+        });
     return {
       destination: request.destination,
       asset: asset.code,
@@ -123,6 +217,10 @@ export class ChainPayLinkBuilder {
       chainCursor: null,
       networkFee: null,
       deposit: null,
+      merchantFee: merchant && {
+        terms: merchant.terms,
+        record: merchant.record,
+      },
     };
   }
 
@@ -138,6 +236,13 @@ export class ChainPayLinkBuilder {
       this.evm.erc20Decimals('monad', request.network, token),
     );
     const chainId = this.evm.chainId('monad', request.network);
+    if (request.merchantFee && !this.deposits.isEnabled('monad')) {
+      throw ApiError.badRequest(
+        ApiErrorCode.MerchantFeeUnsupported,
+        'A merchant fee on a Monad payment link needs deposit addresses (MONAD_RELAYER_PRIVATE_KEY): ' +
+          'a direct EIP-681 link pays one account.',
+      );
+    }
     return this.deposits.isEnabled('monad')
       ? this.monadDeposit(request, destination, asset, chainId)
       : this.monadDirect(request, destination, asset, chainId);
@@ -155,13 +260,35 @@ export class ChainPayLinkBuilder {
     asset: ResolvedAsset,
     chainId: number,
   ): Promise<ChainPayLink> {
-    const value = checkAmount(request.amount, asset, false);
+    const amount = checkAmount(request.amount, asset, false);
+    const merchant = await this.merchantFee(
+      'monad',
+      request,
+      asset,
+      destination,
+    );
+    // What the payer deposits: the amount, plus a merchant fee the payer pays
+    // on top. The forwarder pays the fee out of it, then the merchant.
+    const value = merchant ? merchant.split.total : amount;
     const deposit = await this.deposits.mint(
       'monad',
       request.network,
       destination,
       asset.issuer ? { address: asset.issuer, decimals: asset.decimals } : null,
+      merchant
+        ? { wallet: merchant.terms.wallet, amount: merchant.split.fee }
+        : null,
     );
+    if (
+      merchant &&
+      value !== null &&
+      value <= deposit.fee + merchant.split.fee
+    ) {
+      throw ApiError.badRequest(
+        ApiErrorCode.InvalidAmount,
+        'amount must be more than the network fee and the merchant fee together, which are deducted before the merchant is paid',
+      );
+    }
     if (value !== null && value <= deposit.fee) {
       throw ApiError.badRequest(
         ApiErrorCode.InvalidAmount,
@@ -189,6 +316,10 @@ export class ChainPayLinkBuilder {
           ? EvmDepositAddressFactory.displayFee(deposit.fee, asset.decimals)
           : null,
       deposit,
+      merchantFee: merchant && {
+        terms: merchant.terms,
+        record: merchant.record,
+      },
     };
   }
 
@@ -221,6 +352,7 @@ export class ChainPayLinkBuilder {
       chainCursor: head.toString(),
       networkFee: null,
       deposit: null,
+      merchantFee: null,
     };
   }
 

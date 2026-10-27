@@ -15,6 +15,7 @@ describe('PaymentIntentsService.transition (guards + audit)', () => {
     id: 'pi_1',
     consumerId: 'c1',
     kind: 'TX',
+    chain: 'stellar',
     source: 'GSRC',
     destination: 'GDEST',
     amount: '25.5',
@@ -412,7 +413,11 @@ describe('PaymentIntentsService.transition (guards + audit)', () => {
     it('hands the on-chain payer to CustomersService and never writes the customer table', async () => {
       await settle('GPAYER');
 
-      expect(customers.ensureForPayer).toHaveBeenCalledWith('c1', 'GPAYER');
+      expect(customers.ensureForPayer).toHaveBeenCalledWith(
+        'c1',
+        'stellar',
+        'GPAYER',
+      );
       expect(prisma.customer.findFirst).not.toHaveBeenCalled();
       expect(prisma.customer.create).not.toHaveBeenCalled();
     });
@@ -420,7 +425,11 @@ describe('PaymentIntentsService.transition (guards + audit)', () => {
     it("falls back to the intent's own source when no payer was observed", async () => {
       await settle();
 
-      expect(customers.ensureForPayer).toHaveBeenCalledWith('c1', 'GSRC');
+      expect(customers.ensureForPayer).toHaveBeenCalledWith(
+        'c1',
+        'stellar',
+        'GSRC',
+      );
     });
 
     it('records nobody when neither a payer nor a source is known', async () => {

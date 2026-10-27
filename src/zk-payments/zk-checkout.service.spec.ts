@@ -14,8 +14,10 @@ const TOKEN = 'CAAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQC526';
 const MERCHANT = 'GACAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAJJHP';
 const FEE_ACCOUNT = 'GACQKBIFAUCQKBIFAUCQKBIFAUCQKBIFAUCQKBIFAUCQKBIFAUCQKG7N';
 const PAYER = 'GADAMBQGAYDAMBQGAYDAMBQGAYDAMBQGAYDAMBQGAYDAMBQGAYDANWXK';
+const FEE_WALLET = 'GADQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQOZPI';
 const PAYMENT_TX = 'a'.repeat(64);
 const FEE_TX = 'b'.repeat(64);
+const MERCHANT_FEE_TX = 'c'.repeat(64);
 
 const ZK: ZkNetworkConfig = {
   rpcUrl: 'https://soroban-testnet.stellar.org',
@@ -51,6 +53,8 @@ function storedRow(over: Record<string, unknown> = {}) {
     payer: null,
     paymentTxHash: null,
     feeTxHash: null,
+    merchantFee: null,
+    merchantFeeTxHash: null,
     description: 'Order #24',
     expiresAt: EXPIRES,
     settledAt: null,
@@ -169,7 +173,7 @@ describe('ZkCheckoutService', () => {
         verifier: ZK.verifier,
         auditorRegistry: ZK.auditorRegistry,
         auditorId: 0,
-        feeBps: 1,
+        feeBps: 18,
         feeAccount: FEE_ACCOUNT,
       });
       expect(JSON.stringify(config)).not.toContain(ZK.auditorSecret);
@@ -186,7 +190,7 @@ describe('ZkCheckoutService', () => {
         verifier: null,
         auditorRegistry: null,
         auditorId: 0,
-        feeBps: 1,
+        feeBps: 18,
         feeAccount: null,
       });
     });
@@ -206,6 +210,7 @@ describe('ZkCheckoutService', () => {
           'feeBps',
           'recipient',
           'feeAccount',
+          'merchantFee',
           'description',
           'expiresAt',
           'network',
@@ -283,6 +288,7 @@ describe('ZkCheckoutService', () => {
           payer: PAYER,
           paymentTxHash: PAYMENT_TX,
           feeTxHash: FEE_TX,
+          merchantFeeTxHash: null,
           settledAt: PAID_AT,
         },
       });
@@ -333,6 +339,7 @@ describe('ZkCheckoutService', () => {
           OR: [
             { paymentTxHash: { in: [PAYMENT_TX, FEE_TX] } },
             { feeTxHash: { in: [PAYMENT_TX, FEE_TX] } },
+            { merchantFeeTxHash: { in: [PAYMENT_TX, FEE_TX] } },
           ],
         },
         select: { id: true },
@@ -445,6 +452,145 @@ describe('ZkCheckoutService', () => {
       expect(result.status).toBe('SUCCEEDED');
       // The loser re-emits; the emitter's dedup claim keeps it to one delivery.
       expect(webhooks.emit).toHaveBeenCalledTimes(1);
+    });
+
+    describe('with a merchant fee', () => {
+      // 25 XLM, the recipient pays 1.75 XLM to FEE_WALLET: net 23.2475.
+      const feeRow = (over: Record<string, unknown> = {}) =>
+        storedRow({
+          netAmount: '23.2475',
+          merchantFee: {
+            bps: 600,
+            fixed: '0.25',
+            amount: '1.75',
+            asset: 'XLM',
+            wallet: FEE_WALLET,
+            paidBy: 'recipient',
+          },
+          ...over,
+        });
+      const threeLegs =
+        (merchantFee = success(MERCHANT_FEE_TX, FEE_WALLET, 17_500_000n)) =>
+        (_t: unknown, _s: string, hash: string) =>
+          Promise.resolve(
+            hash === PAYMENT_TX
+              ? success(PAYMENT_TX, MERCHANT, 232_475_000n)
+              : hash === FEE_TX
+                ? success(FEE_TX, FEE_ACCOUNT, 25_000n)
+                : merchantFee,
+          );
+      const hashes = {
+        paymentTxHash: PAYMENT_TX,
+        feeTxHash: FEE_TX,
+        merchantFeeTxHash: MERCHANT_FEE_TX,
+      };
+
+      it('settles on three verified transfers and records the third', async () => {
+        const { service, prisma, sdk } = setup(feeRow());
+        sdk.readTransaction.mockImplementation(threeLegs());
+        const result = await service.confirm('zkp_1', hashes);
+        expect(result.status).toBe('SUCCEEDED');
+        expect(result.merchantFee).toMatchObject({
+          amount: '1.75',
+          wallet: FEE_WALLET,
+        });
+        expect(sdk.readTransaction).toHaveBeenCalledTimes(3);
+        expect(prisma.zkPayment.updateMany).toHaveBeenCalledWith({
+          where: { id: 'zkp_1', status: 'PENDING' },
+          data: {
+            status: 'SUCCEEDED',
+            payer: PAYER,
+            ...hashes,
+            settledAt: PAID_AT,
+          },
+        });
+      });
+
+      it('refuses a confirm without the merchant fee transaction, before asking the chain', async () => {
+        const { service, sdk } = setup(feeRow());
+        expect(
+          await codeOf(
+            service.confirm('zkp_1', {
+              paymentTxHash: PAYMENT_TX,
+              feeTxHash: FEE_TX,
+            }),
+          ),
+        ).toBe(ApiErrorCode.ValidationFailed);
+        expect(sdk.readTransaction).not.toHaveBeenCalled();
+      });
+
+      it('refuses a merchant fee transaction on a payment without a merchant fee', async () => {
+        const { service, sdk } = setup();
+        expect(await codeOf(service.confirm('zkp_1', hashes))).toBe(
+          ApiErrorCode.ValidationFailed,
+        );
+        expect(sdk.readTransaction).not.toHaveBeenCalled();
+      });
+
+      it('refuses one transaction named for two legs, before reading anything', async () => {
+        const { service, prisma } = setup(feeRow());
+        expect(
+          await codeOf(
+            service.confirm('zkp_1', {
+              ...hashes,
+              merchantFeeTxHash: FEE_TX.toUpperCase(),
+            }),
+          ),
+        ).toBe(ApiErrorCode.ValidationFailed);
+        expect(prisma.zkPayment.findUnique).not.toHaveBeenCalled();
+      });
+
+      it('looks for the merchant fee hash in every role among settled payments', async () => {
+        const { service, prisma, sdk } = setup(feeRow());
+        prisma.zkPayment.findFirst.mockResolvedValue({ id: 'zkp_other' });
+        expect(await codeOf(service.confirm('zkp_1', hashes))).toBe(
+          ApiErrorCode.TransactionAlreadySettled,
+        );
+        const all = [PAYMENT_TX, FEE_TX, MERCHANT_FEE_TX];
+        expect(prisma.zkPayment.findFirst).toHaveBeenCalledWith({
+          where: {
+            id: { not: 'zkp_1' },
+            OR: [
+              { paymentTxHash: { in: all } },
+              { feeTxHash: { in: all } },
+              { merchantFeeTxHash: { in: all } },
+            ],
+          },
+          select: { id: true },
+        });
+        expect(sdk.readTransaction).not.toHaveBeenCalled();
+      });
+
+      it('leaves the payment PENDING when the merchant fee transfer pays another amount', async () => {
+        const { service, prisma, sdk } = setup(feeRow());
+        sdk.readTransaction.mockImplementation(
+          threeLegs(success(MERCHANT_FEE_TX, FEE_WALLET, 1n)),
+        );
+        expect(await codeOf(service.confirm('zkp_1', hashes))).toBe(
+          ApiErrorCode.MerchantFeeTransferMismatch,
+        );
+        expect(prisma.zkPayment.updateMany).not.toHaveBeenCalled();
+      });
+
+      it('answers a settled payment again only for all three of its hashes', async () => {
+        const settled = feeRow({
+          status: 'SUCCEEDED',
+          ...hashes,
+        });
+        const { service, sdk } = setup(settled);
+        expect((await service.confirm('zkp_1', hashes)).status).toBe(
+          'SUCCEEDED',
+        );
+        expect(sdk.readTransaction).not.toHaveBeenCalled();
+        expect(
+          await codeOf(
+            setup(settled).service.confirm('zkp_1', {
+              ...hashes,
+              merchantFeeTxHash: 'd'.repeat(64),
+            }),
+          ),
+        ).toBe(ApiErrorCode.InvalidStateTransition);
+      });
     });
 
     it('answers 409 when the unique index catches a concurrent reuse', async () => {

@@ -14,6 +14,7 @@ import {
   DEFAULT_MONAD_RPC,
   DEFAULT_NEAR_INTENTS_BASE_URL,
   DEFAULT_NEAR_INTENTS_TIMEOUT_MS,
+  DEFAULT_PAYMENT_LINK_CHECKOUT_URL,
   DEFAULT_RATE_LIMIT_PRUNE_INTERVAL_MS,
   DEFAULT_RECOVERY_SWEEP_INTERVAL_MS,
   DEFAULT_RECOVERY_TIMEOUT_MS,
@@ -240,6 +241,12 @@ export interface AppConfig {
      * only, because USDT0 exists on mainnet only.
      */
     mainnetRpcUrl: string;
+    /**
+     * A deployed `contracts/soroban/usdt0-fee-wrapper` (C...) bound to USDT0's
+     * OFT and token: a USDT0 transfer with a merchant fee invokes it instead of
+     * the OFT. Null without one, and USDT0 transfers then refuse a merchant fee.
+     */
+    usdt0FeeWrapper: string | null;
     baseFee: string;
     timeoutSeconds: number;
     swap: {
@@ -304,7 +311,17 @@ export interface AppConfig {
    */
   swapAggregators: {
     jupiter: { baseUrl: string; apiKey: string; timeoutMs: number };
-    kuru: { baseUrl: string; apiKey: string; timeoutMs: number };
+    kuru: {
+      baseUrl: string;
+      apiKey: string;
+      timeoutMs: number;
+      /**
+       * A deployed `contracts/MerchantFeeSwapRouter.sol` for Kuru Flow's
+       * router, through which a Monad swap pays a merchant fee; null without
+       * one, and Monad swaps then refuse a merchant fee.
+       */
+      merchantFeeRouter: string | null;
+    };
   };
   /**
    * Cross-chain swaps, settled by NEAR Intents' 1Click API. Mainnet only:
@@ -367,6 +384,19 @@ export interface AppConfig {
   paymentIntents: {
     // Lifetime of a payment intent; unpaid intents past this are marked EXPIRED.
     ttlSeconds: number;
+    /**
+     * The hosted checkout's origin. A Stellar payment link with a merchant fee
+     * cannot be one SEP-7 `pay` link (that pays one account), so its `uri` is
+     * `<checkoutUrl>/<id>`, where the page asks for the payer's account.
+     */
+    checkoutUrl: string;
+    /**
+     * The gateway's public URL for this API (e.g. https://api.cosmospay.lat/cosmos-api),
+     * which a Solana link with a merchant fee names as its Solana Pay transaction
+     * request: the wallet asks it for the transaction with both transfers.
+     * `PAYMENT_LINK_API_URL`, else `WALLET_AUTH_PUBLIC_BASE_URL` (the same gateway).
+     */
+    apiUrl: string;
   };
   /**
    * Private payments, per network tier. Null where `ZK_PAYMENTS_<NETWORK>_TOKEN` is
@@ -801,11 +831,12 @@ export default (): AppConfig => ({
       process.env.STELLAR_RPC_URL_MAINNET?.trim() ||
         DEFAULT_STELLAR_RPC_MAINNET,
     ),
+    usdt0FeeWrapper: process.env.USDT0_FEE_WRAPPER?.trim() || null,
     baseFee: process.env.STELLAR_BASE_FEE ?? '100',
     timeoutSeconds: parseInt(process.env.STELLAR_TX_TIMEOUT ?? '300', 10),
     swap: {
       feeWallet: process.env.STELLAR_SWAP_FEE_WALLET ?? '',
-      feeBps: parseInt(process.env.STELLAR_SWAP_FEE_BPS ?? '50', 10),
+      feeBps: parseInt(process.env.STELLAR_SWAP_FEE_BPS ?? '65', 10),
       slippageBps: parseInt(process.env.STELLAR_SWAP_SLIPPAGE_BPS ?? '50', 10),
       maxSlippageBps: parseInt(
         process.env.STELLAR_SWAP_MAX_SLIPPAGE_BPS ?? '500',
@@ -868,6 +899,7 @@ export default (): AppConfig => ({
           String(DEFAULT_SWAP_AGGREGATOR_TIMEOUT_MS),
         10,
       ),
+      merchantFeeRouter: process.env.KURU_MERCHANT_FEE_ROUTER?.trim() || null,
     },
   },
   nearIntents: {
@@ -956,6 +988,15 @@ export default (): AppConfig => ({
   },
   paymentIntents: {
     ttlSeconds: parseInt(process.env.PAYMENT_INTENT_TTL_SECONDS ?? '3600', 10),
+    checkoutUrl: (
+      process.env.PAYMENT_LINK_CHECKOUT_URL?.trim() ||
+      DEFAULT_PAYMENT_LINK_CHECKOUT_URL
+    ).replace(/\/+$/, ''),
+    apiUrl: (
+      process.env.PAYMENT_LINK_API_URL?.trim() ||
+      process.env.WALLET_AUTH_PUBLIC_BASE_URL?.trim() ||
+      ''
+    ).replace(/\/+$/, ''),
   },
   zkPayments: {
     testnet: zkNetwork('testnet'),

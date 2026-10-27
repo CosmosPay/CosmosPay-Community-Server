@@ -1179,6 +1179,561 @@
         "security": []
       }
     },
+    "/v1/payment-links/{id}/transaction": {
+      "post": {
+        "description": "A SEP-7 `pay` link pays one account, so a Stellar payment link with a merchant fee (`payerAccountRequired` on the link) asks for its payer: given their account, this builds the unsigned envelope with both payments (to the merchant, and the fee to its wallet) and the link’s MEMO_ID, and its `web+stellar:tx` link and QR. The link settles on any transaction that pays both with the memo, so nothing is stored and a lapsed envelope is simply built again.\n\nOnly for an open link (`PENDING`). Budgeted per client address.",
+        "operationId": "PaymentLinksController_transaction_v1",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "The payment intent id, as in the link.",
+            "schema": {
+              "example": "cmh4x2k9a0001l70g8v5q3z2w",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PayerTransactionDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PayerTransactionEntity"
+                }
+              }
+            },
+            "headers": {
+              "ratelimit-limit": {
+                "description": "Requests allowed in the current window.",
+                "schema": {
+                  "type": "integer",
+                  "example": 30
+                }
+              },
+              "ratelimit-remaining": {
+                "description": "Requests left in the current window.",
+                "schema": {
+                  "type": "integer",
+                  "example": 0
+                }
+              },
+              "ratelimit-reset": {
+                "description": "Seconds until the window resets.",
+                "schema": {
+                  "type": "integer",
+                  "example": 42
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`validation_failed`: the link pays its destination directly (open its `uri`), or `account` is not a Stellar account. `invalid_state_transition`: the link is no longer open. `trustline_missing`: the merchant no longer trusts the asset.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                },
+                "examples": {
+                  "validation_failed": {
+                    "summary": "validation_failed: The link has its own wallet link",
+                    "value": {
+                      "statusCode": 400,
+                      "code": "validation_failed",
+                      "error": "Bad Request",
+                      "message": "This payment link pays its destination directly: open its uri",
+                      "path": "/v1/payment-links/cmh4x2k9a0001l70g8v5q3z2w/transaction",
+                      "timestamp": "2026-09-01T12:00:00.000Z"
+                    }
+                  },
+                  "invalid_state_transition": {
+                    "summary": "invalid_state_transition: The link is no longer open",
+                    "value": {
+                      "statusCode": 400,
+                      "code": "invalid_state_transition",
+                      "error": "Bad Request",
+                      "message": "Payment intent cmh4x2k9a0001l70g8v5q3z2w is EXPIRED: it can no longer be paid",
+                      "path": "/v1/payment-links/cmh4x2k9a0001l70g8v5q3z2w/transaction",
+                      "timestamp": "2026-09-01T12:00:00.000Z"
+                    }
+                  },
+                  "trustline_missing": {
+                    "summary": "trustline_missing: An account does not trust the asset, and this request cannot add the trustline for it",
+                    "value": {
+                      "statusCode": 400,
+                      "code": "trustline_missing",
+                      "error": "Bad Request",
+                      "message": "Account GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ has no trustline for USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5, so it cannot receive the swap. Only that account can add the trustline, by signing a transaction of its own: ask its owner to add it, then try again.",
+                      "path": "/v1/swaps",
+                      "timestamp": "2026-09-01T12:00:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No payment intent has this id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                },
+                "examples": {
+                  "not_found": {
+                    "summary": "not_found: No payment intent has this id",
+                    "value": {
+                      "statusCode": 404,
+                      "code": "not_found",
+                      "error": "Not Found",
+                      "message": "Payment intent cmh4x2k9a0001l70g8v5q3z2w not found",
+                      "path": "/v1/payment-links/cmh4x2k9a0001l70g8v5q3z2w/transaction",
+                      "timestamp": "2026-09-01T12:00:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/UpstreamUnavailable"
+          }
+        },
+        "summary": "Build the envelope a payer signs for a Stellar link with a merchant fee (no API key)",
+        "tags": [
+          "payment-links"
+        ],
+        "x-cosmos-public": true,
+        "x-cosmos-rate-limit": [
+          {
+            "name": "payment-links:transaction",
+            "limit": 20,
+            "windowMs": 60000
+          }
+        ],
+        "x-cosmos-upstream": [
+          "Horizon"
+        ],
+        "security": []
+      }
+    },
+    "/v1/payment-links/{id}/events": {
+      "post": {
+        "description": "The hosted checkout tells what the payer did with a wallet while the link is pending: `walletOpened` (the wallet link, the web wallet, the extension or Freighter was opened), `walletClosed` (the wallet came back without paying) and `sent` (the page saw the wallet send the payment). The owner reads them as `checkoutWalletAt`, `checkoutWalletClosedAt` and `checkoutSentAt` on the intent, to follow a payment that is not on-chain yet.\n\n**Informational only:** the status changes on what the chain says, never on these. An event for a link that is no longer pending is ignored. Budgeted per client address.",
+        "operationId": "PaymentLinksController_event_v1",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "The payment intent id, as in the link.",
+            "schema": {
+              "example": "cmh4x2k9a0001l70g8v5q3z2w",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CheckoutEventDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Noted (or ignored: the link is not pending).",
+            "headers": {
+              "ratelimit-limit": {
+                "description": "Requests allowed in the current window.",
+                "schema": {
+                  "type": "integer",
+                  "example": 30
+                }
+              },
+              "ratelimit-remaining": {
+                "description": "Requests left in the current window.",
+                "schema": {
+                  "type": "integer",
+                  "example": 0
+                }
+              },
+              "ratelimit-reset": {
+                "description": "Seconds until the window resets.",
+                "schema": {
+                  "type": "integer",
+                  "example": 42
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`event` is not one of the three.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                },
+                "examples": {
+                  "validation_failed": {
+                    "summary": "validation_failed: An unknown event",
+                    "value": {
+                      "statusCode": 400,
+                      "code": "validation_failed",
+                      "error": "Bad Request",
+                      "message": "event must be one of the following values: walletOpened, walletClosed, sent",
+                      "path": "/v1/payment-links/cmh4x2k9a0001l70g8v5q3z2w/events",
+                      "timestamp": "2026-09-01T12:00:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No payment intent has this id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                },
+                "examples": {
+                  "not_found": {
+                    "summary": "not_found: No payment intent has this id",
+                    "value": {
+                      "statusCode": 404,
+                      "code": "not_found",
+                      "error": "Not Found",
+                      "message": "Payment intent cmh4x2k9a0001l70g8v5q3z2w not found",
+                      "path": "/v1/payment-links/cmh4x2k9a0001l70g8v5q3z2w/events",
+                      "timestamp": "2026-09-01T12:00:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "summary": "Report what the payer did with a wallet from the hosted checkout (no API key)",
+        "tags": [
+          "payment-links"
+        ],
+        "x-cosmos-public": true,
+        "x-cosmos-rate-limit": [
+          {
+            "name": "payment-links:events",
+            "limit": 30,
+            "windowMs": 60000
+          }
+        ],
+        "security": []
+      }
+    },
+    "/v1/payment-links/{id}/solana-pay": {
+      "get": {
+        "description": "A Solana payment link with a merchant fee is a Solana Pay transaction request (`solana:<this URL>`), because a transfer request names one recipient. A wallet reads this first, then POSTs the payer’s account.",
+        "operationId": "PaymentLinksController_solanaPayInfo_v1",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "The payment intent id.",
+            "schema": {
+              "example": "cmh4x2k9a0001l70g8v5q3z2w",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SolanaPayInfoEntity"
+                }
+              }
+            },
+            "headers": {
+              "ratelimit-limit": {
+                "description": "Requests allowed in the current window.",
+                "schema": {
+                  "type": "integer",
+                  "example": 30
+                }
+              },
+              "ratelimit-remaining": {
+                "description": "Requests left in the current window.",
+                "schema": {
+                  "type": "integer",
+                  "example": 0
+                }
+              },
+              "ratelimit-reset": {
+                "description": "Seconds until the window resets.",
+                "schema": {
+                  "type": "integer",
+                  "example": 42
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`validation_failed`: the link is not a Solana Pay transaction request (only a Solana link with a merchant fee is), or `account` is not a Solana address. `invalid_state_transition`: the link is no longer open.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                },
+                "examples": {
+                  "validation_failed": {
+                    "summary": "validation_failed: Not a transaction request",
+                    "value": {
+                      "statusCode": 400,
+                      "code": "validation_failed",
+                      "error": "Bad Request",
+                      "message": "This payment link is not a Solana Pay transaction request: open its uri",
+                      "path": "/v1/payment-links/cmh4x2k9a0001l70g8v5q3z2w/solana-pay",
+                      "timestamp": "2026-09-01T12:00:00.000Z"
+                    }
+                  },
+                  "invalid_state_transition": {
+                    "summary": "invalid_state_transition: The link is no longer open",
+                    "value": {
+                      "statusCode": 400,
+                      "code": "invalid_state_transition",
+                      "error": "Bad Request",
+                      "message": "Payment intent cmh4x2k9a0001l70g8v5q3z2w is EXPIRED: it can no longer be paid",
+                      "path": "/v1/payment-links/cmh4x2k9a0001l70g8v5q3z2w/solana-pay",
+                      "timestamp": "2026-09-01T12:00:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No payment intent has this id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                },
+                "examples": {
+                  "not_found": {
+                    "summary": "not_found: No payment intent has this id",
+                    "value": {
+                      "statusCode": 404,
+                      "code": "not_found",
+                      "error": "Not Found",
+                      "message": "Payment intent cmh4x2k9a0001l70g8v5q3z2w not found",
+                      "path": "/v1/payment-links/cmh4x2k9a0001l70g8v5q3z2w/solana-pay",
+                      "timestamp": "2026-09-01T12:00:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "summary": "Solana Pay transaction request, GET: the label and icon a wallet shows (no API key)",
+        "tags": [
+          "payment-links"
+        ],
+        "x-cosmos-public": true,
+        "x-cosmos-rate-limit": [
+          {
+            "name": "payment-links:read",
+            "limit": 60,
+            "windowMs": 60000
+          }
+        ],
+        "security": []
+      },
+      "post": {
+        "description": "Given the payer’s `account`, the unsigned transaction (base64) with the link’s memo, the transfer to the merchant carrying the link’s reference, and the merchant fee’s transfer to its wallet (creating their token accounts first when missing, paid by the payer). The link settles from the ledger, found by its reference; nothing is stored. Only for an open link.",
+        "operationId": "PaymentLinksController_solanaPayTransaction_v1",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "The payment intent id.",
+            "schema": {
+              "example": "cmh4x2k9a0001l70g8v5q3z2w",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SolanaPayAccountDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SolanaPayTransactionEntity"
+                }
+              }
+            },
+            "headers": {
+              "ratelimit-limit": {
+                "description": "Requests allowed in the current window.",
+                "schema": {
+                  "type": "integer",
+                  "example": 30
+                }
+              },
+              "ratelimit-remaining": {
+                "description": "Requests left in the current window.",
+                "schema": {
+                  "type": "integer",
+                  "example": 0
+                }
+              },
+              "ratelimit-reset": {
+                "description": "Seconds until the window resets.",
+                "schema": {
+                  "type": "integer",
+                  "example": 42
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`validation_failed`: the link is not a Solana Pay transaction request (only a Solana link with a merchant fee is), or `account` is not a Solana address. `invalid_state_transition`: the link is no longer open.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                },
+                "examples": {
+                  "validation_failed": {
+                    "summary": "validation_failed: Not a transaction request",
+                    "value": {
+                      "statusCode": 400,
+                      "code": "validation_failed",
+                      "error": "Bad Request",
+                      "message": "This payment link is not a Solana Pay transaction request: open its uri",
+                      "path": "/v1/payment-links/cmh4x2k9a0001l70g8v5q3z2w/solana-pay",
+                      "timestamp": "2026-09-01T12:00:00.000Z"
+                    }
+                  },
+                  "invalid_state_transition": {
+                    "summary": "invalid_state_transition: The link is no longer open",
+                    "value": {
+                      "statusCode": 400,
+                      "code": "invalid_state_transition",
+                      "error": "Bad Request",
+                      "message": "Payment intent cmh4x2k9a0001l70g8v5q3z2w is EXPIRED: it can no longer be paid",
+                      "path": "/v1/payment-links/cmh4x2k9a0001l70g8v5q3z2w/solana-pay",
+                      "timestamp": "2026-09-01T12:00:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No payment intent has this id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                },
+                "examples": {
+                  "not_found": {
+                    "summary": "not_found: No payment intent has this id",
+                    "value": {
+                      "statusCode": 404,
+                      "code": "not_found",
+                      "error": "Not Found",
+                      "message": "Payment intent cmh4x2k9a0001l70g8v5q3z2w not found",
+                      "path": "/v1/payment-links/cmh4x2k9a0001l70g8v5q3z2w/solana-pay",
+                      "timestamp": "2026-09-01T12:00:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "502": {
+            "$ref": "#/components/responses/UpstreamError"
+          },
+          "503": {
+            "$ref": "#/components/responses/UpstreamUnavailable"
+          },
+          "504": {
+            "$ref": "#/components/responses/UpstreamTimeout"
+          }
+        },
+        "summary": "Solana Pay transaction request, POST: the transaction the payer signs (no API key)",
+        "tags": [
+          "payment-links"
+        ],
+        "x-cosmos-public": true,
+        "x-cosmos-rate-limit": [
+          {
+            "name": "payment-links:transaction",
+            "limit": 20,
+            "windowMs": 60000
+          }
+        ],
+        "x-cosmos-upstream": [
+          "Solana"
+        ],
+        "security": []
+      }
+    },
     "/v1/customers": {
       "post": {
         "operationId": "CustomersController_create_v1",
@@ -1212,6 +1767,29 @@
           },
           "403": {
             "$ref": "#/components/responses/Forbidden"
+          },
+          "409": {
+            "description": "`customer_wallet_taken`: Another of your customers already holds that wallet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                },
+                "examples": {
+                  "customer_wallet_taken": {
+                    "summary": "customer_wallet_taken: Another of your customers already holds that wallet",
+                    "value": {
+                      "statusCode": 409,
+                      "code": "customer_wallet_taken",
+                      "error": "Conflict",
+                      "message": "The wallet GCALNQQBXAPZ2WIRSDDBMSTAKCUH5SG6U76YBFLQLIXJTF7FE5AX7AOO (stellar) already belongs to customer clz9xcust00002.",
+                      "path": "/v1/customers/clz9xcust00001/wallets",
+                      "timestamp": "2026-09-01T12:00:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
           },
           "500": {
             "$ref": "#/components/responses/InternalError"
@@ -1365,6 +1943,29 @@
           "404": {
             "$ref": "#/components/responses/NotFound"
           },
+          "409": {
+            "description": "`customer_wallet_taken`: Another of your customers already holds that wallet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                },
+                "examples": {
+                  "customer_wallet_taken": {
+                    "summary": "customer_wallet_taken: Another of your customers already holds that wallet",
+                    "value": {
+                      "statusCode": 409,
+                      "code": "customer_wallet_taken",
+                      "error": "Conflict",
+                      "message": "The wallet GCALNQQBXAPZ2WIRSDDBMSTAKCUH5SG6U76YBFLQLIXJTF7FE5AX7AOO (stellar) already belongs to customer clz9xcust00002.",
+                      "path": "/v1/customers/clz9xcust00001/wallets",
+                      "timestamp": "2026-09-01T12:00:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
           "500": {
             "$ref": "#/components/responses/InternalError"
           }
@@ -1419,6 +2020,140 @@
         ]
       }
     },
+    "/v1/customers/{id}/wallets": {
+      "post": {
+        "description": "A customer holds any number of wallets (up to 20), on Stellar, Solana or Monad; payments paid from any of them count toward it. A wallet the customer already holds answers as it is.",
+        "operationId": "CustomersController_addWallet_v1",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CustomerWalletDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerWalletEntity"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "`customer_wallet_taken`: Another of your customers already holds that wallet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBodyEntity"
+                },
+                "examples": {
+                  "customer_wallet_taken": {
+                    "summary": "customer_wallet_taken: Another of your customers already holds that wallet",
+                    "value": {
+                      "statusCode": 409,
+                      "code": "customer_wallet_taken",
+                      "error": "Conflict",
+                      "message": "The wallet GCALNQQBXAPZ2WIRSDDBMSTAKCUH5SG6U76YBFLQLIXJTF7FE5AX7AOO (stellar) already belongs to customer clz9xcust00002.",
+                      "path": "/v1/customers/clz9xcust00001/wallets",
+                      "timestamp": "2026-09-01T12:00:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "summary": "Add a wallet to a customer",
+        "tags": [
+          "customers"
+        ]
+      }
+    },
+    "/v1/customers/{id}/wallets/{walletId}": {
+      "delete": {
+        "operationId": "CustomersController_removeWallet_v1",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "walletId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerWalletDeletedEntity"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "summary": "Remove a wallet from a customer",
+        "tags": [
+          "customers"
+        ]
+      }
+    },
     "/v1/swaps/quote": {
       "post": {
         "operationId": "SwapsController_quote_v1",
@@ -1468,7 +2203,7 @@
             }
           },
           "400": {
-            "description": "`network_unsupported`: `chain: solana | monad` with a dev (testnet) key: Jupiter and Kuru Flow run on mainnet only. `asset_unsupported`: not an SPL mint / ERC-20 on that chain. `provider_error`: the aggregator found no route or refused the amount.",
+            "description": "`network_unsupported`: `chain: solana | monad` with a dev (testnet) key: Jupiter and Kuru Flow run on mainnet only. `asset_unsupported`: not an SPL mint / ERC-20 on that chain. `provider_error`: the aggregator found no route or refused the amount. `merchant_fee_unsupported`: a `merchantFee` on a Monad swap where no merchant fee router is configured (KURU_MERCHANT_FEE_ROUTER).",
             "content": {
               "application/json": {
                 "schema": {
@@ -1554,6 +2289,17 @@
                       "path": "/v1/onramp/quotes",
                       "timestamp": "2026-09-01T12:00:00.000Z"
                     }
+                  },
+                  "merchant_fee_unsupported": {
+                    "summary": "merchant_fee_unsupported: This operation cannot pay a merchant fee yet",
+                    "value": {
+                      "statusCode": 400,
+                      "code": "merchant_fee_unsupported",
+                      "error": "Bad Request",
+                      "message": "A merchant fee is not available on monad swaps on this deployment: Kuru Flow takes one referrer fee per swap and the plan commission uses it, and no merchant fee router is configured (KURU_MERCHANT_FEE_ROUTER).",
+                      "path": "/v1/swaps",
+                      "timestamp": "2026-09-01T12:00:00.000Z"
+                    }
                   }
                 }
               }
@@ -1575,7 +2321,7 @@
             "$ref": "#/components/responses/UpstreamError"
           },
           "503": {
-            "description": "`misconfigured`: the plan charges a commission and the chain has no fee wallet configured (STELLAR_SWAP_FEE_WALLET, SOLANA_SWAP_FEE_WALLET, MONAD_SWAP_FEE_WALLET).",
+            "description": "`misconfigured`: the plan charges a commission and the chain has no fee wallet configured (STELLAR_SWAP_FEE_WALLET, SOLANA_SWAP_FEE_WALLET, MONAD_SWAP_FEE_WALLET), or KURU_MERCHANT_FEE_ROUTER is not a MerchantFeeSwapRouter.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1700,7 +2446,7 @@
             }
           },
           "400": {
-            "description": "Stellar: `trustline_missing` (the destination is another account that does not trust the bought asset, and only it can add the trustline; a source that receives the swap gets the trustline in the same transaction instead), `insufficient_balance` (the source cannot keep the 0.5 XLM reserve that trustline locks, after what the transaction sends and its fee), `no_path_found`. Solana / Monad: `network_unsupported` (a dev key), `asset_unsupported`, `provider_error` (no route, or the aggregator simulated a failure, usually a wallet that cannot cover the amount plus fees).",
+            "description": "Stellar: `trustline_missing` (the destination is another account that does not trust the bought asset, and only it can add the trustline; a source that receives the swap gets the trustline in the same transaction instead), `insufficient_balance` (the source cannot keep the 0.5 XLM reserve that trustline locks, after what the transaction sends and its fee), `no_path_found`. Solana / Monad: `network_unsupported` (a dev key), `asset_unsupported`, `provider_error` (no route, or the aggregator simulated a failure, usually a wallet that cannot cover the amount plus fees). Monad: `merchant_fee_unsupported` (a `merchantFee` and no merchant fee router configured, KURU_MERCHANT_FEE_ROUTER).",
             "content": {
               "application/json": {
                 "schema": {
@@ -1808,6 +2554,17 @@
                       "path": "/v1/onramp/quotes",
                       "timestamp": "2026-09-01T12:00:00.000Z"
                     }
+                  },
+                  "merchant_fee_unsupported": {
+                    "summary": "merchant_fee_unsupported: This operation cannot pay a merchant fee yet",
+                    "value": {
+                      "statusCode": 400,
+                      "code": "merchant_fee_unsupported",
+                      "error": "Bad Request",
+                      "message": "A merchant fee is not available on monad swaps on this deployment: Kuru Flow takes one referrer fee per swap and the plan commission uses it, and no merchant fee router is configured (KURU_MERCHANT_FEE_ROUTER).",
+                      "path": "/v1/swaps",
+                      "timestamp": "2026-09-01T12:00:00.000Z"
+                    }
                   }
                 }
               }
@@ -1863,7 +2620,7 @@
             "$ref": "#/components/responses/UpstreamError"
           },
           "503": {
-            "description": "`misconfigured`: the plan charges a commission and the chain has no fee wallet (or, on Solana, the fee wallet has no token account for the output mint yet).",
+            "description": "`misconfigured`: the plan charges a commission and the chain has no fee wallet (or, on Solana, the fee wallet has no token account for the output mint yet), or, for a Monad swap with a merchant fee, KURU_MERCHANT_FEE_ROUTER is not a MerchantFeeSwapRouter or Kuru Flow routes through another aggregator than the one it was deployed for.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2293,6 +3050,7 @@
     },
     "/v1/cross-chain-swaps/assets": {
       "get": {
+        "description": "Only what NEAR Intents still trades. A token it tags deprecated is left out, and so is one it lists with no price, because it answers no quote for such a token.",
         "operationId": "CrossChainSwapsController_assets_v1",
         "parameters": [],
         "responses": {
@@ -3287,7 +4045,7 @@
             }
           },
           "400": {
-            "description": "`validation_failed`: The body, query or headers failed validation\n\n`invalid_amount`: Not a Stellar amount, or not greater than zero\n\n`insufficient_balance`: The source account cannot cover the amount, or the XLM reserve the transaction needs",
+            "description": "`validation_failed`: The body, query or headers failed validation\n\n`invalid_amount`: Not a Stellar amount, or not greater than zero\n\n`insufficient_balance`: The source account cannot cover the amount, or the XLM reserve the transaction needs\n\n`trustline_missing`: An account does not trust the asset, and this request cannot add the trustline for it",
             "content": {
               "application/json": {
                 "schema": {
@@ -3327,6 +4085,17 @@
                       "error": "Bad Request",
                       "message": "Account GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ holds only 12.5000000 shares of this pool",
                       "path": "/v1/liquidity-pools/withdraw",
+                      "timestamp": "2026-09-01T12:00:00.000Z"
+                    }
+                  },
+                  "trustline_missing": {
+                    "summary": "trustline_missing: An account does not trust the asset, and this request cannot add the trustline for it",
+                    "value": {
+                      "statusCode": 400,
+                      "code": "trustline_missing",
+                      "error": "Bad Request",
+                      "message": "Account GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ has no trustline for USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5, so it cannot receive the swap. Only that account can add the trustline, by signing a transaction of its own: ask its owner to add it, then try again.",
+                      "path": "/v1/swaps",
                       "timestamp": "2026-09-01T12:00:00.000Z"
                     }
                   }
@@ -11916,7 +12685,7 @@
     },
     "/v1/zk-payments": {
       "post": {
-        "description": "A private payment hides its amount on-chain: it is paid with confidential transfers on Cosmos Pay's confidential token, proven with zero-knowledge proofs (hence `zk` in the paths). Prices the payment (`amount` = `netAmount` + `feeAmount`, the fee rounded up and at least one stroop) and checks on-chain that the recipient holds a confidential account on the token under auditor 0. The payer then makes two confidential transfers (net to the merchant, fee to the fee account) and confirms them at `POST /v1/zk-checkout/{id}/confirm`.",
+        "description": "A private payment hides its amount on-chain: it is paid with confidential transfers on Cosmos Pay's confidential token, proven with zero-knowledge proofs (hence `zk` in the paths). Prices the payment (`amount` = `netAmount` + `feeAmount`, the fee rounded up and at least one stroop) and checks on-chain that the recipient holds a confidential account on the token under auditor 0. The payer then makes two confidential transfers (net to the merchant, fee to the fee account) and confirms them at `POST /v1/zk-checkout/{id}/confirm`. With a `merchantFee`, a third transfer pays it to its wallet, which must hold a confidential account on the token too.",
         "operationId": "ZkPaymentsController_create_v1",
         "parameters": [
           {
@@ -11975,7 +12744,7 @@
             }
           },
           "400": {
-            "description": "`invalid_amount`: after the commission the merchant would receive nothing. `recipient_not_registered`: the recipient has no confidential account on the token under auditor 0. `network_unsupported`: private payments do not run on this network yet (mainnet today; use a dev key).",
+            "description": "`invalid_amount`: after the commission (and the merchant fee) the merchant would receive nothing, or the merchant fee rounds to nothing. `recipient_not_registered`: the recipient, or the merchant fee's wallet, has no confidential account on the token under auditor 0. `network_unsupported`: private payments do not run on this network yet (mainnet today; use a dev key).",
             "content": {
               "application/json": {
                 "schema": {
@@ -12002,7 +12771,7 @@
                       "statusCode": 400,
                       "code": "invalid_amount",
                       "error": "Bad Request",
-                      "message": "The amount is too small: after the 0.01% commission (at least one stroop) the merchant would receive nothing.",
+                      "message": "The amount is too small: after the 0.18% commission (at least one stroop) the merchant would receive nothing.",
                       "path": "/v1/zk-payments",
                       "timestamp": "2026-09-01T12:00:00.000Z"
                     }
@@ -12083,7 +12852,7 @@
             "$ref": "#/components/responses/UpstreamUnavailable"
           }
         },
-        "summary": "Create a private payment: a confidential payment to a merchant registered on the token, minus the 0.01% commission",
+        "summary": "Create a private payment: a confidential payment to a merchant registered on the token, minus the 0.18% commission",
         "tags": [
           "zk-payments"
         ],
@@ -12419,7 +13188,7 @@
     },
     "/v1/zk-checkout/{id}/confirm": {
       "post": {
-        "description": "Reads both transactions back through the Soroban RPC and settles the payment only when: both succeeded and each is a single `confidential_transfer` on the token; both closed while the payment was open (not before it was created, not after `expiresAt`); both come from the same payer; the payment transfer goes to the recipient and the fee transfer to the fee account; and each decrypts with the auditor key, on both auditor channels and against the transfer's commitment, to exactly `netAmount` / `feeAmount`. Neither transaction may have settled another private payment.\n\nIdempotent: the same hashes on a settled payment answer it again. A refusal leaves the payment PENDING, and never says what an amount decrypted to.",
+        "description": "Reads both transactions back through the Soroban RPC and settles the payment only when: both succeeded and each is a single `confidential_transfer` on the token; both closed while the payment was open (not before it was created, not after `expiresAt`); both come from the same payer; the payment transfer goes to the recipient and the fee transfer to the fee account; and each decrypts with the auditor key, on both auditor channels and against the transfer's commitment, to exactly `netAmount` / `feeAmount`. Neither transaction may have settled another private payment.\n\nIdempotent: the same hashes on a settled payment answer it again. A refusal leaves the payment PENDING, and never says what an amount decrypted to.\n\nA payment with a `merchantFee` has a third transfer, of `merchantFee.amount` to `merchantFee.wallet`: send its hash as `merchantFeeTxHash` (required for such a payment, refused for any other). It is checked like the other two, in the same order.",
         "operationId": "ZkCheckoutController_confirm_v1",
         "parameters": [
           {
@@ -12485,7 +13254,7 @@
             }
           },
           "400": {
-            "description": "`transaction_not_found`: the RPC has no such transaction yet (retry in a few seconds) or no longer. `transaction_rejected`: it failed on-chain. `payment_transfer_mismatch` / `fee_transfer_mismatch`: that transaction is not the confidential transfer this payment needs (wrong token, shape, recipient, amount, or it closed before the payment existed). `payer_mismatch`: the two transfers come from different accounts. `expired`: a transfer closed after `expiresAt`. `invalid_state_transition`: already settled by other transactions.",
+            "description": "`transaction_not_found`: the RPC has no such transaction yet (retry in a few seconds) or no longer. `transaction_rejected`: it failed on-chain. `payment_transfer_mismatch` / `fee_transfer_mismatch` / `merchant_fee_transfer_mismatch`: that transaction is not the confidential transfer this payment needs (wrong token, shape, recipient, amount, or it closed before the payment existed). `payer_mismatch`: the transfers come from different accounts. `expired`: a transfer closed after `expiresAt`. `invalid_state_transition`: already settled by other transactions. `validation_failed` also answers a `merchantFeeTxHash` missing on a payment with a merchant fee, or sent for one without.",
             "content": {
               "application/json": {
                 "schema": {
@@ -12546,6 +13315,17 @@
                       "code": "fee_transfer_mismatch",
                       "error": "Bad Request",
                       "message": "The fee transaction does not settle this private payment: it is not a confidential transfer of the commission to the fee account.",
+                      "path": "/v1/zk-checkout/cmh4x2k9a0001l70g8v5q3z2w/confirm",
+                      "timestamp": "2026-09-01T12:00:00.000Z"
+                    }
+                  },
+                  "merchant_fee_transfer_mismatch": {
+                    "summary": "merchant_fee_transfer_mismatch: The merchant fee transaction does not pay this payment's merchant fee to its wallet",
+                    "value": {
+                      "statusCode": 400,
+                      "code": "merchant_fee_transfer_mismatch",
+                      "error": "Bad Request",
+                      "message": "The merchant fee transaction does not settle this private payment: it is not a confidential transfer of the merchant fee to the fee's wallet.",
                       "path": "/v1/zk-checkout/cmh4x2k9a0001l70g8v5q3z2w/confirm",
                       "timestamp": "2026-09-01T12:00:00.000Z"
                     }
@@ -12654,7 +13434,7 @@
             "$ref": "#/components/responses/UpstreamUnavailable"
           }
         },
-        "summary": "Confirm a private payment with its two confidential transfers, verified on-chain (no API key)",
+        "summary": "Confirm a private payment with its confidential transfers, verified on-chain (no API key)",
         "tags": [
           "zk-checkout"
         ],
@@ -12835,7 +13615,7 @@
             }
           },
           "503": {
-            "description": "`provider_unavailable`: the Soroban RPC did not answer; retry. `misconfigured`: STELLAR_RPC_URL_MAINNET serves another network.",
+            "description": "`provider_unavailable`: the Soroban RPC did not answer; retry. `misconfigured`: STELLAR_RPC_URL_MAINNET serves another network, or USDT0_FEE_WRAPPER is set with a plan commission and no STELLAR_SWAP_FEE_WALLET.",
             "content": {
               "application/json": {
                 "schema": {
@@ -12947,7 +13727,7 @@
             }
           },
           "400": {
-            "description": "`network_unsupported`: a dev (testnet) key; USDT0 is on Stellar mainnet only. `validation_failed`: the source account does not exist, or the recipient has a bad EIP-55 checksum. `trustline_missing`: the source does not trust USDT0. `insufficient_balance`: it holds less USDT0 than the transfer takes, or too little XLM for LayerZero’s fee limit, the network fee and its reserve (the message says how much XLM to add). `invalid_amount`: all dust, or outside the OFT’s limits. `provider_error`: the OFT refused the transfer; `message` carries its contract error.",
+            "description": "`merchant_fee_unsupported`: a `merchantFee` and no merchant fee wrapper configured (USDT0_FEE_WRAPPER). `network_unsupported`: a dev (testnet) key; USDT0 is on Stellar mainnet only. `validation_failed`: the source account does not exist, or the recipient has a bad EIP-55 checksum. `trustline_missing`: the source does not trust USDT0. `insufficient_balance`: it holds less USDT0 than the transfer takes, or too little XLM for LayerZero’s fee limit, the network fee and its reserve (the message says how much XLM to add). `invalid_amount`: all dust, or outside the OFT’s limits. `provider_error`: the OFT refused the transfer; `message` carries its contract error. With a merchant fee, `trustline_missing` also answers a fee wallet that does not trust USDT0, and `insufficient_balance` counts the fee the holder pays on top.",
             "content": {
               "application/json": {
                 "schema": {
@@ -13019,6 +13799,17 @@
                       "path": "/v1/usdt0/transfers",
                       "timestamp": "2026-09-01T12:00:00.000Z"
                     }
+                  },
+                  "merchant_fee_unsupported": {
+                    "summary": "merchant_fee_unsupported: This operation cannot pay a merchant fee yet",
+                    "value": {
+                      "statusCode": 400,
+                      "code": "merchant_fee_unsupported",
+                      "error": "Bad Request",
+                      "message": "A merchant fee is not available on USDT0 transfers on this deployment: a Soroban transaction carries one operation, so the fee needs the fee wrapper (USDT0_FEE_WRAPPER), which is not configured.",
+                      "path": "/v1/usdt0/transfers",
+                      "timestamp": "2026-09-01T12:00:00.000Z"
+                    }
                   }
                 }
               }
@@ -13083,7 +13874,7 @@
             }
           },
           "503": {
-            "description": "`provider_unavailable`: Horizon or the Soroban RPC did not answer; retry. `misconfigured`: STELLAR_RPC_URL_MAINNET serves another network.",
+            "description": "`provider_unavailable`: Horizon or the Soroban RPC did not answer; retry. `misconfigured`: STELLAR_RPC_URL_MAINNET serves another network, or USDT0_FEE_WRAPPER is not the reviewed wrapper bound to USDT0's OFT and token, or the plan commission has no STELLAR_SWAP_FEE_WALLET, or one that does not trust USDT0.",
             "content": {
               "application/json": {
                 "schema": {
@@ -13557,6 +14348,41 @@
       }
     },
     "schemas": {
+      "MerchantFeeDto": {
+        "type": "object",
+        "properties": {
+          "bps": {
+            "type": "number",
+            "description": "The percentage part, in basis points (150 = 1.5%), at most 1000 (10%). Taken from `amount`, rounded down.",
+            "example": 150,
+            "minimum": 0,
+            "maximum": 1000
+          },
+          "fixed": {
+            "type": "string",
+            "description": "The fixed part, in the operation's asset (a swap's source asset), as a decimal with at most that asset's decimals. Added to the percentage part.",
+            "example": "0.25"
+          },
+          "wallet": {
+            "type": "string",
+            "description": "Where the fee is paid: an account on the chain the fee travels on (a Stellar G... account for a Stellar swap; a NEAR account for a swap between chains, which NEAR Intents pays as an app fee).",
+            "example": "GBDHAQXQQ75WVBUZ2IX3O7ME7JOKJUOUPUXRNDCORUJODWQCTVUEQ62R",
+            "maxLength": 128
+          },
+          "paidBy": {
+            "type": "string",
+            "enum": [
+              "recipient",
+              "payer"
+            ],
+            "default": "recipient",
+            "description": "`recipient`: deducted from `amount` (the receiver gets less, a swap routes less). `payer`: added on top (the payer sends `amount` plus the fee)."
+          }
+        },
+        "required": [
+          "wallet"
+        ]
+      },
       "CreateTxPaymentIntentDto": {
         "type": "object",
         "properties": {
@@ -13611,12 +14437,67 @@
             "default": "classic",
             "description": "Design of the hosted checkout page (`https://payments.cosmospay.lat/<id>`) for this intent. Omit for `classic`. Cosmetic: it is not part of the payment, so `PATCH /v1/payment-intents/{id}` can change it later, and a retry with the same memo returns the stored intent with its stored design.",
             "example": "ticket"
+          },
+          "merchantFee": {
+            "description": "Your own fee on this payment, paid in its asset to `wallet` (a Stellar account that can receive the asset, not `source` or `destination`) by a second payment in the same envelope. `paidBy: recipient` takes it from `amount` (the destination receives `amount` less the fee); `payer` adds it on top. The intent settles only on a transaction that pays both.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MerchantFeeDto"
+              }
+            ]
           }
         },
         "required": [
           "source",
           "destination",
           "amount"
+        ]
+      },
+      "MerchantFeeEntity": {
+        "type": "object",
+        "properties": {
+          "bps": {
+            "type": "number",
+            "description": "The percentage part, in basis points.",
+            "example": 150
+          },
+          "fixed": {
+            "type": "string",
+            "description": "The fixed part, in `asset`.",
+            "example": "0.25"
+          },
+          "amount": {
+            "type": "string",
+            "description": "The fee charged: the percentage of `amount` plus the fixed part.",
+            "example": "1.75"
+          },
+          "asset": {
+            "type": "string",
+            "description": "The asset the fee is paid in.",
+            "example": "XLM"
+          },
+          "wallet": {
+            "type": "string",
+            "description": "Where the fee is paid.",
+            "example": "GBDHAQXQQ75WVBUZ2IX3O7ME7JOKJUOUPUXRNDCORUJODWQCTVUEQ62R"
+          },
+          "paidBy": {
+            "type": "string",
+            "enum": [
+              "recipient",
+              "payer"
+            ],
+            "description": "`recipient`: deducted from the amount. `payer`: added on top of it.",
+            "example": "recipient"
+          }
+        },
+        "required": [
+          "bps",
+          "fixed",
+          "amount",
+          "asset",
+          "wallet",
+          "paidBy"
         ]
       },
       "TxPaymentIntentEntity": {
@@ -13699,6 +14580,16 @@
             "example": null,
             "description": "Deducted before the merchant is paid, in the asset’s units: the relayer’s fee for forwarding a Monad deposit. Null when nothing is."
           },
+          "merchantFee": {
+            "nullable": true,
+            "description": "Your merchant fee on this payment, paid to its wallet in the same transaction; null when the request named none.",
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MerchantFeeEntity"
+              }
+            ]
+          },
           "msg": {
             "type": "object",
             "nullable": true,
@@ -13749,6 +14640,30 @@
             "description": "When the intent expires if unpaid.",
             "example": "2026-06-21T13:34:56.000Z"
           },
+          "checkoutSeenAt": {
+            "type": "object",
+            "nullable": true,
+            "description": "When the hosted checkout page last read the intent: null at creation.",
+            "example": null
+          },
+          "checkoutWalletAt": {
+            "type": "object",
+            "nullable": true,
+            "description": "When the payer last opened a wallet from the hosted checkout (its wallet link, the web wallet, the extension or Freighter), as the page reports it. Informational: the status changes only on the chain.",
+            "example": null
+          },
+          "checkoutWalletClosedAt": {
+            "type": "object",
+            "nullable": true,
+            "description": "When the wallet last came back without paying (it declined, or the page was shown again first), as the page reports it; cleared when a wallet opens again.",
+            "example": null
+          },
+          "checkoutSentAt": {
+            "type": "object",
+            "nullable": true,
+            "description": "When the hosted checkout saw the wallet send the payment, as the page reports it: a payment on its way, before the chain confirms it.",
+            "example": null
+          },
           "createdAt": {
             "format": "date-time",
             "type": "string",
@@ -13774,6 +14689,7 @@
           "memo",
           "chainReference",
           "networkFee",
+          "merchantFee",
           "msg",
           "callback",
           "xdr",
@@ -13783,6 +14699,10 @@
           "reference",
           "checkoutTheme",
           "expiresAt",
+          "checkoutSeenAt",
+          "checkoutWalletAt",
+          "checkoutWalletClosedAt",
+          "checkoutSentAt",
           "createdAt",
           "updatedAt"
         ]
@@ -13846,6 +14766,14 @@
             "default": "classic",
             "description": "Design of the hosted checkout page (`https://payments.cosmospay.lat/<id>`) for this intent. Omit for `classic`. Cosmetic: it is not part of the payment, so `PATCH /v1/payment-intents/{id}` can change it later, and a retry with the same memo returns the stored intent with its stored design.",
             "example": "ticket"
+          },
+          "merchantFee": {
+            "description": "Only with an `amount`: your own fee on this payment, paid in its asset to `wallet` (an account on the link's chain, not `destination`). `paidBy: recipient` takes the fee from `amount`; `payer` adds it on top. Stellar: a SEP-7 `pay` link pays one account, so `uri` is the hosted checkout, which asks for the payer and has `POST /v1/payment-links/{id}/transaction` build the envelope with both payments. Solana: `uri` is a Solana Pay transaction request (`/v1/payment-links/{id}/solana-pay`); a SOL fee goes to an existing account. Monad: needs deposit addresses (`merchant_fee_unsupported` without them); the deposit address pays the fee (PaymentSplitForwarder) and the link asks for the amount, plus the fee when the payer pays it.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MerchantFeeDto"
+              }
+            ]
           }
         },
         "required": [
@@ -13935,6 +14863,16 @@
             "example": null,
             "description": "Deducted before the merchant is paid, in the asset’s units: the relayer’s fee for forwarding a Monad deposit. Null when nothing is."
           },
+          "merchantFee": {
+            "nullable": true,
+            "description": "Your merchant fee on this payment, paid to its wallet in the same transaction; null when the request named none.",
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MerchantFeeEntity"
+              }
+            ]
+          },
           "msg": {
             "type": "object",
             "nullable": true,
@@ -13986,6 +14924,30 @@
             "description": "When the intent expires if unpaid.",
             "example": "2026-06-21T13:34:56.000Z"
           },
+          "checkoutSeenAt": {
+            "type": "object",
+            "nullable": true,
+            "description": "When the hosted checkout page last read the intent: null at creation.",
+            "example": null
+          },
+          "checkoutWalletAt": {
+            "type": "object",
+            "nullable": true,
+            "description": "When the payer last opened a wallet from the hosted checkout (its wallet link, the web wallet, the extension or Freighter), as the page reports it. Informational: the status changes only on the chain.",
+            "example": null
+          },
+          "checkoutWalletClosedAt": {
+            "type": "object",
+            "nullable": true,
+            "description": "When the wallet last came back without paying (it declined, or the page was shown again first), as the page reports it; cleared when a wallet opens again.",
+            "example": null
+          },
+          "checkoutSentAt": {
+            "type": "object",
+            "nullable": true,
+            "description": "When the hosted checkout saw the wallet send the payment, as the page reports it: a payment on its way, before the chain confirms it.",
+            "example": null
+          },
           "createdAt": {
             "format": "date-time",
             "type": "string",
@@ -14011,6 +14973,7 @@
           "memo",
           "chainReference",
           "networkFee",
+          "merchantFee",
           "msg",
           "callback",
           "xdr",
@@ -14020,6 +14983,10 @@
           "reference",
           "checkoutTheme",
           "expiresAt",
+          "checkoutSeenAt",
+          "checkoutWalletAt",
+          "checkoutWalletClosedAt",
+          "checkoutSentAt",
           "createdAt",
           "updatedAt"
         ]
@@ -14109,6 +15076,16 @@
             "example": null,
             "description": "Deducted before the merchant is paid, in the asset’s units: the relayer’s fee for forwarding a Monad deposit. Null when nothing is."
           },
+          "merchantFee": {
+            "nullable": true,
+            "description": "Your merchant fee on this payment, paid to its wallet in the same transaction; null when the request named none.",
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MerchantFeeEntity"
+              }
+            ]
+          },
           "msg": {
             "type": "object",
             "nullable": true,
@@ -14164,6 +15141,30 @@
             "description": "When an unpaid intent expires. A payment verified later still settles it.",
             "example": "2026-06-21T13:34:56.000Z"
           },
+          "checkoutSeenAt": {
+            "type": "object",
+            "nullable": true,
+            "description": "When the hosted checkout page (payments.cosmospay.lat/{id}) last read the intent while it was open: the page polls while a payer has it open, so a value from the last 30 seconds means someone is on the payment page now. Updated at most every 10 seconds; null until a page opened it.",
+            "example": "2026-06-21T12:35:10.000Z"
+          },
+          "checkoutWalletAt": {
+            "type": "object",
+            "nullable": true,
+            "description": "When the payer last opened a wallet from the hosted checkout (its wallet link, the web wallet, the extension or Freighter), as the page reports it. Informational: the status changes only on the chain.",
+            "example": null
+          },
+          "checkoutWalletClosedAt": {
+            "type": "object",
+            "nullable": true,
+            "description": "When the wallet last came back without paying (it declined, or the page was shown again first), as the page reports it; cleared when a wallet opens again.",
+            "example": null
+          },
+          "checkoutSentAt": {
+            "type": "object",
+            "nullable": true,
+            "description": "When the hosted checkout saw the wallet send the payment, as the page reports it: a payment on its way, before the chain confirms it.",
+            "example": null
+          },
           "createdAt": {
             "format": "date-time",
             "type": "string",
@@ -14189,6 +15190,7 @@
           "memo",
           "chainReference",
           "networkFee",
+          "merchantFee",
           "msg",
           "callback",
           "xdr",
@@ -14198,6 +15200,10 @@
           "reference",
           "checkoutTheme",
           "expiresAt",
+          "checkoutSeenAt",
+          "checkoutWalletAt",
+          "checkoutWalletClosedAt",
+          "checkoutSentAt",
           "createdAt",
           "updatedAt"
         ]
@@ -14499,6 +15505,21 @@
             "example": null,
             "description": "Deducted before the merchant is paid, in the asset’s units: the relayer’s fee for forwarding a Monad deposit. Null when nothing is."
           },
+          "merchantFee": {
+            "nullable": true,
+            "description": "A fee the merchant charges on this payment, paid to its own wallet in the same transaction; show it to the payer. With `paidBy: payer` the payer sends `amount` plus it. Null when there is none.",
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MerchantFeeEntity"
+              }
+            ]
+          },
+          "payerAccountRequired": {
+            "type": "boolean",
+            "example": false,
+            "description": "True when the payment cannot be one link (a Stellar link with a merchant fee: SEP-7 `pay` pays one account). Ask the payer for their account, then `POST /v1/payment-links/{id}/transaction` builds the envelope to sign; `uri` is the hosted checkout then, not a wallet link."
+          },
           "expiresAt": {
             "type": "string",
             "nullable": true,
@@ -14539,9 +15560,146 @@
           "qr",
           "txHash",
           "networkFee",
+          "merchantFee",
+          "payerAccountRequired",
           "expiresAt",
           "createdAt",
           "checkoutTheme"
+        ]
+      },
+      "PayerTransactionDto": {
+        "type": "object",
+        "properties": {
+          "account": {
+            "type": "string",
+            "description": "The Stellar account that will pay and sign: the envelope is built on its sequence number, so it must exist on the link’s network.",
+            "example": "GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ"
+          }
+        },
+        "required": [
+          "account"
+        ]
+      },
+      "PayerTransactionEntity": {
+        "type": "object",
+        "properties": {
+          "xdr": {
+            "type": "string",
+            "description": "The unsigned transaction envelope (base64 XDR): two payments, to the merchant and to the fee wallet, with the link’s MEMO_ID.",
+            "example": "AAAAAgAAAAA..."
+          },
+          "uri": {
+            "type": "string",
+            "description": "The SEP-7 `web+stellar:tx` link a wallet opens to sign it.",
+            "example": "web+stellar:tx?xdr=AAAAAgAAAAA..."
+          },
+          "qr": {
+            "type": "string",
+            "description": "The QR of `uri`, as a PNG data URL.",
+            "example": "data:image/png;base64,iVBORw0KGgo..."
+          }
+        },
+        "required": [
+          "xdr",
+          "uri",
+          "qr"
+        ]
+      },
+      "CheckoutEventDto": {
+        "type": "object",
+        "properties": {
+          "event": {
+            "type": "string",
+            "enum": [
+              "walletOpened",
+              "walletClosed",
+              "sent"
+            ],
+            "description": "`walletOpened`: the payer opened a wallet from the page (the wallet link, the web wallet, the extension, Freighter). `walletClosed`: the wallet came back without paying (it declined, or the page was shown again first). `sent`: the page saw the wallet send the payment.",
+            "example": "walletOpened"
+          }
+        },
+        "required": [
+          "event"
+        ]
+      },
+      "SolanaPayInfoEntity": {
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string",
+            "example": "Cosmos Pay",
+            "description": "Who requests the payment."
+          },
+          "icon": {
+            "type": "string",
+            "example": "https://payments.cosmospay.lat/android-chrome-512x512.png",
+            "description": "An absolute https URL of an image the wallet shows."
+          }
+        },
+        "required": [
+          "label",
+          "icon"
+        ]
+      },
+      "SolanaPayAccountDto": {
+        "type": "object",
+        "properties": {
+          "account": {
+            "type": "string",
+            "description": "The payer’s account (base58), which pays the fee and signs.",
+            "example": "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU"
+          }
+        },
+        "required": [
+          "account"
+        ]
+      },
+      "SolanaPayTransactionEntity": {
+        "type": "object",
+        "properties": {
+          "transaction": {
+            "type": "string",
+            "description": "The unsigned transaction (base64 wire bytes): the payment to the merchant, carrying the link’s reference, the merchant fee to its wallet, and the link’s memo. Fee payer: the account that asked.",
+            "example": "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA..."
+          },
+          "message": {
+            "type": "string",
+            "description": "The link’s message, for the wallet to show.",
+            "example": "Order #24"
+          }
+        },
+        "required": [
+          "transaction"
+        ]
+      },
+      "CustomerWalletDto": {
+        "type": "object",
+        "properties": {
+          "chain": {
+            "type": "string",
+            "enum": [
+              "stellar",
+              "solana",
+              "monad"
+            ],
+            "example": "solana",
+            "description": "The chain the wallet is on."
+          },
+          "address": {
+            "type": "string",
+            "example": "7EcDhSYGxXyscszYEp35KHN8vvw3svAuLKTzXwCFLtV",
+            "description": "The address on that chain: a Stellar account (G..., checksum verified), a Solana address (base58, 32 bytes) or a Monad address (0x + 40 hex, any case; stored EIP-55 checksummed). Payment intents whose payer (`source`) is this address count toward the customer."
+          },
+          "label": {
+            "type": "string",
+            "example": "Phantom",
+            "description": "A name for the wallet, shown beside the address."
+          }
+        },
+        "required": [
+          "chain",
+          "address"
         ]
       },
       "CreateCustomerDto": {
@@ -14566,7 +15724,15 @@
           "account": {
             "type": "string",
             "example": "GCALNQQBXAPZ2WIRSDDBMSTAKCUH5SG6U76YBFLQLIXJTF7FE5AX7AOO",
-            "description": "Optional account to associate the customer with, on any chain: a Stellar account (G..., checksum verified), a Solana address (base58, 32 bytes) or a Monad address (0x + 40 hex, any case; stored EIP-55 checksummed). Payment intents whose payer (`source`) is this account count toward the customer, whatever their chain."
+            "deprecated": true,
+            "description": "Deprecated: use `wallets`. One wallet, its chain read from its shape: a Stellar account (G..., checksum verified), a Solana address (base58, 32 bytes) or a Monad address (0x + 40 hex, any case; stored EIP-55 checksummed). It is added to `wallets`."
+          },
+          "wallets": {
+            "description": "The customer's wallets, on any chain payments settle on, up to 20. Payment intents paid from any of them count toward the customer. A wallet belongs to one customer: one that another customer of yours already holds answers `409 customer_wallet_taken`.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CustomerWalletDto"
+            }
           },
           "reference": {
             "type": "string",
@@ -14575,6 +15741,45 @@
         },
         "required": [
           "name"
+        ]
+      },
+      "CustomerWalletEntity": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "cw4f0c2a9d1b7e83c5a6f9d2e1b0c3a7f8"
+          },
+          "chain": {
+            "type": "string",
+            "enum": [
+              "stellar",
+              "solana",
+              "monad"
+            ],
+            "example": "stellar"
+          },
+          "address": {
+            "type": "string",
+            "example": "GCALNQQBXAPZ2WIRSDDBMSTAKCUH5SG6U76YBFLQLIXJTF7FE5AX7AOO",
+            "description": "The address, in its chain's stored spelling (EIP-55 on Monad)."
+          },
+          "label": {
+            "type": "object",
+            "nullable": true,
+            "example": "Treasury"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string",
+            "example": "2026-06-21T12:34:56.000Z"
+          }
+        },
+        "required": [
+          "id",
+          "chain",
+          "address",
+          "createdAt"
         ]
       },
       "CustomerEntity": {
@@ -14598,10 +15803,18 @@
             "nullable": true,
             "example": "ada@example.com"
           },
+          "wallets": {
+            "description": "The customer's wallets, oldest first, on any chain payments settle on.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CustomerWalletEntity"
+            }
+          },
           "account": {
             "type": "object",
             "nullable": true,
-            "description": "The account associated with this customer, if any: a Stellar account (G...), a Solana address or a Monad address, the last stored EIP-55 checksummed.",
+            "deprecated": true,
+            "description": "Deprecated: read `wallets`. The first wallet's address, kept for clients written when a customer held one account; null without wallets.",
             "example": "GCALNQQBXAPZ2WIRSDDBMSTAKCUH5SG6U76YBFLQLIXJTF7FE5AX7AOO"
           },
           "note": {
@@ -14628,6 +15841,7 @@
         "required": [
           "id",
           "name",
+          "wallets",
           "createdAt",
           "updatedAt"
         ]
@@ -14653,10 +15867,18 @@
             "nullable": true,
             "example": "ada@example.com"
           },
+          "wallets": {
+            "description": "The customer's wallets, oldest first, on any chain payments settle on.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CustomerWalletEntity"
+            }
+          },
           "account": {
             "type": "object",
             "nullable": true,
-            "description": "The account associated with this customer, if any: a Stellar account (G...), a Solana address or a Monad address, the last stored EIP-55 checksummed.",
+            "deprecated": true,
+            "description": "Deprecated: read `wallets`. The first wallet's address, kept for clients written when a customer held one account; null without wallets.",
             "example": "GCALNQQBXAPZ2WIRSDDBMSTAKCUH5SG6U76YBFLQLIXJTF7FE5AX7AOO"
           },
           "note": {
@@ -14681,7 +15903,7 @@
           },
           "payments": {
             "type": "number",
-            "description": "Payment intents, on any chain, whose payer (`source`) is this customer’s account, on the network the API key targets.",
+            "description": "Payment intents whose payer (`source`) is one of this customer’s wallets, on that wallet's chain and the network the API key targets.",
             "example": 12
           },
           "succeeded": {
@@ -14698,6 +15920,7 @@
         "required": [
           "id",
           "name",
+          "wallets",
           "createdAt",
           "updatedAt",
           "payments",
@@ -14754,14 +15977,15 @@
             "type": "string",
             "example": "billing@acme.com"
           },
-          "account": {
-            "type": "string",
-            "example": "GCALNQQBXAPZ2WIRSDDBMSTAKCUH5SG6U76YBFLQLIXJTF7FE5AX7AOO",
-            "description": "Optional account to associate the customer with, on any chain: a Stellar account (G..., checksum verified), a Solana address (base58, 32 bytes) or a Monad address (0x + 40 hex, any case; stored EIP-55 checksummed). Payment intents whose payer (`source`) is this account count toward the customer, whatever their chain."
-          },
           "reference": {
             "type": "string",
             "example": "cust_001"
+          },
+          "account": {
+            "type": "object",
+            "nullable": true,
+            "deprecated": true,
+            "description": "Deprecated: manage wallets with `POST` and `DELETE /v1/customers/{id}/wallets`. The customer's first wallet: an address replaces it (or adds one), its chain read from its shape; null removes it."
           }
         }
       },
@@ -14771,6 +15995,23 @@
           "id": {
             "type": "string",
             "example": "clz9xcust00001"
+          },
+          "deleted": {
+            "type": "boolean",
+            "example": true
+          }
+        },
+        "required": [
+          "id",
+          "deleted"
+        ]
+      },
+      "CustomerWalletDeletedEntity": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "cw4f0c2a9d1b7e83c5a6f9d2e1b0c3a7f8"
           },
           "deleted": {
             "type": "boolean",
@@ -15249,6 +16490,16 @@
             "example": "99.5",
             "description": "Amount routed through the DEX/AMM."
           },
+          "merchantFee": {
+            "nullable": true,
+            "description": "The merchant fee this swap pays, by its own payment in the same transaction; null when the request named none.",
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MerchantFeeEntity"
+              }
+            ]
+          },
           "destAsset": {
             "type": "string",
             "example": "USDC"
@@ -15356,6 +16607,7 @@
           "feeAmount",
           "feeBps",
           "swapAmount",
+          "merchantFee",
           "destAsset",
           "destAssetIssuer",
           "destEstimated",
@@ -15430,6 +16682,16 @@
             "type": "string",
             "example": "99.5",
             "description": "Amount routed through the DEX/AMM."
+          },
+          "merchantFee": {
+            "nullable": true,
+            "description": "The merchant fee this swap pays, by its own payment in the same transaction; null when the request named none.",
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MerchantFeeEntity"
+              }
+            ]
           },
           "destAsset": {
             "type": "string",
@@ -15533,6 +16795,7 @@
           "feeAmount",
           "feeBps",
           "swapAmount",
+          "merchantFee",
           "destAsset",
           "destAssetIssuer",
           "destEstimated",
@@ -15607,6 +16870,16 @@
             "type": "string",
             "example": "99.5",
             "description": "Amount routed through the DEX/AMM."
+          },
+          "merchantFee": {
+            "nullable": true,
+            "description": "The merchant fee this swap pays, by its own payment in the same transaction; null when the request named none.",
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MerchantFeeEntity"
+              }
+            ]
           },
           "destAsset": {
             "type": "string",
@@ -15689,6 +16962,7 @@
           "feeAmount",
           "feeBps",
           "swapAmount",
+          "merchantFee",
           "destAsset",
           "destAssetIssuer",
           "destEstimated",
@@ -15826,6 +17100,14 @@
             "type": "number",
             "description": "Slippage tolerance in basis points (50 = 0.5%) used to derive the on-chain minimum received. Defaults to the service setting; capped by it.",
             "example": 50
+          },
+          "merchantFee": {
+            "description": "Your own fee on this swap, paid in the source asset to `wallet` out of the source wallet, in the same transaction, beside the plan commission. Stellar: its own payment (the wallet must trust the asset). Solana: a transfer appended to Jupiter's transaction (a SOL fee goes to an existing account). `paidBy: recipient` takes it from `amount` (the swap routes less); `payer` adds it on top (the source sends `amount` plus the fee). Monad: through the merchant fee router (`KURU_MERCHANT_FEE_ROUTER`), which the wallet sends or approves the input plus the fee; without one configured, `merchant_fee_unsupported`.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MerchantFeeDto"
+              }
+            ]
           }
         },
         "required": [
@@ -15978,6 +17260,16 @@
               }
             ]
           },
+          "merchantFee": {
+            "nullable": true,
+            "description": "The merchant fee the request named, in the source asset; null without one. With `paidBy: payer` the source sends `source.amount` plus it.",
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MerchantFeeEntity"
+              }
+            ]
+          },
           "destination": {
             "$ref": "#/components/schemas/SwapDestinationQuote"
           },
@@ -16040,6 +17332,14 @@
             "type": "number",
             "description": "Slippage tolerance in basis points (50 = 0.5%) used to derive the on-chain minimum received. Defaults to the service setting; capped by it.",
             "example": 50
+          },
+          "merchantFee": {
+            "description": "Your own fee on this swap, paid in the source asset to `wallet` out of the source wallet, in the same transaction, beside the plan commission. Stellar: its own payment (the wallet must trust the asset). Solana: a transfer appended to Jupiter's transaction (a SOL fee goes to an existing account). `paidBy: recipient` takes it from `amount` (the swap routes less); `payer` adds it on top (the source sends `amount` plus the fee). Monad: through the merchant fee router (`KURU_MERCHANT_FEE_ROUTER`), which the wallet sends or approves the input plus the fee; without one configured, `merchant_fee_unsupported`.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MerchantFeeDto"
+              }
+            ]
           },
           "source": {
             "type": "string",
@@ -16299,6 +17599,14 @@
             "type": "number",
             "description": "Slippage tolerance in basis points (100 = 1%). Below the resulting minimum, NEAR Intents refunds instead of filling. Defaults to the service setting; capped by it.",
             "example": 100
+          },
+          "merchantFee": {
+            "description": "Your own fee on this swap, which NEAR Intents pays as a second app fee to `wallet`: a NEAR account id (named, e.g. merchant.near, or 64-hex implicit), credited inside NEAR Intents. App fees are whole basis points of the deposit, so the fee is turned into the basis points it amounts to, rounded down. `paidBy: recipient` takes it from `amount` (the deposit stays `amount`); `payer` adds it to the deposit.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MerchantFeeDto"
+              }
+            ]
           }
         },
         "required": [
@@ -16514,6 +17822,16 @@
           "fee": {
             "$ref": "#/components/schemas/CrossChainFeeEntity"
           },
+          "merchantFee": {
+            "nullable": true,
+            "description": "The merchant fee NEAR Intents will pay, in the origin asset; null without one.",
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MerchantFeeEntity"
+              }
+            ]
+          },
           "slippageBps": {
             "type": "number",
             "example": 100
@@ -16529,6 +17847,7 @@
           "origin",
           "destination",
           "fee",
+          "merchantFee",
           "slippageBps",
           "timeEstimateSeconds"
         ]
@@ -16649,6 +17968,14 @@
             "type": "number",
             "description": "Slippage tolerance in basis points (100 = 1%). Below the resulting minimum, NEAR Intents refunds instead of filling. Defaults to the service setting; capped by it.",
             "example": 100
+          },
+          "merchantFee": {
+            "description": "Your own fee on this swap, which NEAR Intents pays as a second app fee to `wallet`: a NEAR account id (named, e.g. merchant.near, or 64-hex implicit), credited inside NEAR Intents. App fees are whole basis points of the deposit, so the fee is turned into the basis points it amounts to, rounded down. `paidBy: recipient` takes it from `amount` (the deposit stays `amount`); `payer` adds it to the deposit.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MerchantFeeDto"
+              }
+            ]
           },
           "idempotencyKey": {
             "type": "string",
@@ -16826,6 +18153,16 @@
             "type": "string",
             "example": "0.5"
           },
+          "merchantFee": {
+            "nullable": true,
+            "description": "The merchant fee NEAR Intents pays as an app fee; null when the request named none.",
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MerchantFeeEntity"
+              }
+            ]
+          },
           "amountOutEstimated": {
             "type": "string",
             "example": "22.189466"
@@ -16951,6 +18288,7 @@
           "amountIn",
           "feeBps",
           "feeAmount",
+          "merchantFee",
           "amountOutEstimated",
           "amountOutMin",
           "slippageBps",
@@ -17117,6 +18455,16 @@
             "type": "string",
             "example": "0.5"
           },
+          "merchantFee": {
+            "nullable": true,
+            "description": "The merchant fee NEAR Intents pays as an app fee; null when the request named none.",
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MerchantFeeEntity"
+              }
+            ]
+          },
           "amountOutEstimated": {
             "type": "string",
             "example": "22.189466"
@@ -17232,6 +18580,7 @@
           "amountIn",
           "feeBps",
           "feeAmount",
+          "merchantFee",
           "amountOutEstimated",
           "amountOutMin",
           "slippageBps",
@@ -17426,6 +18775,16 @@
             "type": "string",
             "example": "0.5"
           },
+          "merchantFee": {
+            "nullable": true,
+            "description": "The merchant fee NEAR Intents pays as an app fee; null when the request named none.",
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MerchantFeeEntity"
+              }
+            ]
+          },
           "amountOutEstimated": {
             "type": "string",
             "example": "22.189466"
@@ -17546,6 +18905,7 @@
           "amountIn",
           "feeBps",
           "feeAmount",
+          "merchantFee",
           "amountOutEstimated",
           "amountOutMin",
           "slippageBps",
@@ -17634,11 +18994,78 @@
             "type": "string",
             "description": "Optional idempotency key. Prefer the `Idempotency-Key` request header; when both are set, the header wins. A retry with the same key and the same request returns the existing operation instead of building another transaction; the same key with a different request is 409 `idempotency_conflict`.",
             "example": "lp-deposit-2026-08-23-001"
+          },
+          "merchantFee": {
+            "description": "Your own fee on this deposit: `bps` of EACH asset it moves, paid to `wallet` (a Stellar account that can receive both assets) by one payment per asset in the same transaction, beside the plan commission. `fixed` is refused here: the operation moves two assets. `paidBy: recipient` takes it from the amounts (less enters the pool); `payer` adds it on top (the full amounts enter the pool).",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MerchantFeeDto"
+              }
+            ]
           }
         },
         "required": [
           "source",
           "maxAmountA"
+        ]
+      },
+      "LiquidityMerchantFeeEntity": {
+        "type": "object",
+        "properties": {
+          "bps": {
+            "type": "number",
+            "description": "The percentage part, in basis points.",
+            "example": 150
+          },
+          "fixed": {
+            "type": "string",
+            "description": "The fixed part, in `asset`.",
+            "example": "0.25"
+          },
+          "amount": {
+            "type": "string",
+            "description": "The fee charged: the percentage of `amount` plus the fixed part.",
+            "example": "1.75"
+          },
+          "asset": {
+            "type": "string",
+            "description": "The asset the fee is paid in.",
+            "example": "XLM"
+          },
+          "wallet": {
+            "type": "string",
+            "description": "Where the fee is paid.",
+            "example": "GBDHAQXQQ75WVBUZ2IX3O7ME7JOKJUOUPUXRNDCORUJODWQCTVUEQ62R"
+          },
+          "paidBy": {
+            "type": "string",
+            "enum": [
+              "recipient",
+              "payer"
+            ],
+            "description": "`recipient`: deducted from the amount. `payer`: added on top of it.",
+            "example": "recipient"
+          },
+          "amountB": {
+            "type": "string",
+            "description": "The fee charged on asset B, in asset B.",
+            "example": "0.05"
+          },
+          "assetB": {
+            "type": "string",
+            "description": "Asset B (`native` for XLM).",
+            "example": "USDC"
+          }
+        },
+        "required": [
+          "bps",
+          "fixed",
+          "amount",
+          "asset",
+          "wallet",
+          "paidBy",
+          "amountB",
+          "assetB"
         ]
       },
       "LiquidityOperationEntity": {
@@ -17762,6 +19189,16 @@
             "example": "GBFEE...WALLET",
             "description": "Commission collector account (null when the fee is disabled)."
           },
+          "merchantFee": {
+            "nullable": true,
+            "description": "The merchant fee the request named: `bps` of each asset, `amount` in asset A and `amountB` in asset B, paid to `wallet` in this transaction; null without one.",
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/LiquidityMerchantFeeEntity"
+              }
+            ]
+          },
           "commissionMemo": {
             "type": "object",
             "nullable": true,
@@ -17823,6 +19260,7 @@
           "feeAmountA",
           "feeAmountB",
           "feeWallet",
+          "merchantFee",
           "commissionMemo",
           "xdr",
           "uri",
@@ -17865,6 +19303,14 @@
             "type": "string",
             "description": "Optional idempotency key. Prefer the `Idempotency-Key` request header; when both are set, the header wins. A retry with the same key and the same request returns the existing operation instead of building another transaction; the same key with a different request is 409 `idempotency_conflict`.",
             "example": "lp-withdraw-2026-08-23-001"
+          },
+          "merchantFee": {
+            "description": "Your own fee on this withdrawal: `bps` of EACH asset it moves, paid to `wallet` (a Stellar account that can receive both assets) by one payment per asset in the same transaction, beside the plan commission. `fixed` is refused here: the operation moves two assets. The fee comes out of what the withdrawal pays, on its guaranteed minimums, whichever `paidBy` names: the account is payer and receiver.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MerchantFeeDto"
+              }
+            ]
           }
         },
         "required": [
@@ -18086,6 +19532,16 @@
             "example": "GBFEE...WALLET",
             "description": "Commission collector account (null when the fee is disabled)."
           },
+          "merchantFee": {
+            "nullable": true,
+            "description": "The merchant fee the request named: `bps` of each asset, `amount` in asset A and `amountB` in asset B, paid to `wallet` in this transaction; null without one.",
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/LiquidityMerchantFeeEntity"
+              }
+            ]
+          },
           "xdr": {
             "type": "string",
             "description": "Unsigned transaction envelope (base64 XDR) to sign.",
@@ -18137,6 +19593,7 @@
           "feeAmountA",
           "feeAmountB",
           "feeWallet",
+          "merchantFee",
           "xdr",
           "uri",
           "txHash",
@@ -18999,7 +20456,7 @@
           "amountUsd": {
             "type": "string",
             "nullable": true,
-            "description": "`amount` in USD with two decimals, valued at NEAR Intents' current reference price for each asset (its token list, cached for a few minutes): an indicative figure at today's price, not the price on the day each payment settled. A mainnet token is priced by its contract (on Stellar its code and issuer), so a token NEAR Intents does not list has no price; a test-network token takes the price of its mainnet namesake. When the code comes from several issuers, only the priced ones are added. Null when none is priced, or when the prices could not be read.",
+            "description": "`amount` in USD with two decimals, valued at NEAR Intents’ current reference price for each asset (its token list, cached for a few minutes): an indicative figure at today's price, not the price on the day each payment settled. A mainnet token is priced by its contract (on Stellar its code and issuer), so a token NEAR Intents does not list has no price; a test-network token takes the price of its mainnet namesake. When the code comes from several issuers, only the priced ones are added. Null when none is priced, or when the prices could not be read.",
             "example": "10418.42"
           }
         },
@@ -19123,7 +20580,7 @@
           "volumeUsd": {
             "type": "string",
             "nullable": true,
-            "description": "Every settled payment in USD with two decimals, valued at NEAR Intents' current reference price for each asset (its token list, cached for a few minutes): an indicative figure at today's price, not the price on the day each payment settled. Payments in an asset with no price are left out and counted in `unpriced`. Null only when there were settled payments and NEAR Intents' prices could not be read; `0.00` when nothing settled.",
+            "description": "Every settled payment in USD with two decimals, valued at NEAR Intents’ current reference price for each asset (its token list, cached for a few minutes): an indicative figure at today's price, not the price on the day each payment settled. Payments in an asset with no price are left out and counted in `unpriced`. Null only when there were settled payments and NEAR Intents' prices could not be read; `0.00` when nothing settled.",
             "example": "12843.17"
           },
           "unpriced": {
@@ -19194,7 +20651,7 @@
           "volumeUsd": {
             "type": "string",
             "nullable": true,
-            "description": "The bucket's settled payments in USD with two decimals, valued at NEAR Intents' current reference price for each asset (its token list, cached for a few minutes): an indicative figure at today's price, not the price on the day each payment settled. Payments in an asset with no price add nothing (the window's `unpriced` counts them). Null only when the bucket has settled payments and NEAR Intents' prices could not be read.",
+            "description": "The bucket's settled payments in USD with two decimals, valued at NEAR Intents’ current reference price for each asset (its token list, cached for a few minutes): an indicative figure at today's price, not the price on the day each payment settled. Payments in an asset with no price add nothing (the window's `unpriced` counts them). Null only when the bucket has settled payments and NEAR Intents' prices could not be read.",
             "example": "1790.36"
           }
         },
@@ -19229,7 +20686,7 @@
           "volumeUsd": {
             "type": "string",
             "nullable": true,
-            "description": "The window's settled payments in USD with two decimals, valued at NEAR Intents' current reference price for each asset (its token list, cached for a few minutes): an indicative figure at today's price, not the price on the day each payment settled. Null only when the window has settled payments and NEAR Intents' prices could not be read.",
+            "description": "The window's settled payments in USD with two decimals, valued at NEAR Intents’ current reference price for each asset (its token list, cached for a few minutes): an indicative figure at today's price, not the price on the day each payment settled. Null only when the window has settled payments and NEAR Intents' prices could not be read.",
             "example": "16982.04"
           },
           "unpriced": {
@@ -19275,7 +20732,7 @@
           "volumeUsd": {
             "type": "string",
             "nullable": true,
-            "description": "The window's settled payments in USD with two decimals, valued at NEAR Intents' current reference price for each asset (its token list, cached for a few minutes): an indicative figure at today's price, not the price on the day each payment settled. Null only when the window has settled payments and NEAR Intents' prices could not be read.",
+            "description": "The window's settled payments in USD with two decimals, valued at NEAR Intents’ current reference price for each asset (its token list, cached for a few minutes): an indicative figure at today's price, not the price on the day each payment settled. Null only when the window has settled payments and NEAR Intents' prices could not be read.",
             "example": "16982.04"
           },
           "unpriced": {
@@ -19314,13 +20771,20 @@
             "type": "string",
             "description": "The first day of the bucket (UTC; weeks start on Monday), the same as the payments bucket at that index.",
             "example": "2026-10-01"
+          },
+          "volumeUsd": {
+            "type": "string",
+            "nullable": true,
+            "description": "The bucket’s settled swap volume in USD, two decimals: what the completed swaps sold, each asset at NEAR Intents' current price. Null when no price could be read; an asset with no price counts as zero.",
+            "example": "1250.40"
           }
         },
         "required": [
           "count",
           "succeeded",
           "failed",
-          "start"
+          "start",
+          "volumeUsd"
         ]
       },
       "SeriesSwapsByKindEntity": {
@@ -19383,6 +20847,17 @@
                 "$ref": "#/components/schemas/SeriesSwapsByKindEntity"
               }
             ]
+          },
+          "volumeUsd": {
+            "type": "string",
+            "nullable": true,
+            "description": "The window’s settled swap volume in USD, two decimals: what the completed swaps sold, each asset at NEAR Intents' current price. Null when no price could be read; an asset with no price counts as zero.",
+            "example": "1250.40"
+          },
+          "unpriced": {
+            "type": "number",
+            "description": "Completed swaps whose sold asset has no USD price (a network or token NEAR Intents does not list), left out of volumeUsd.",
+            "example": 0
           }
         },
         "required": [
@@ -19390,10 +20865,12 @@
           "succeeded",
           "failed",
           "inProgress",
-          "byKind"
+          "byKind",
+          "volumeUsd",
+          "unpriced"
         ]
       },
-      "SeriesOutcomeCountsEntity": {
+      "SeriesSwapPreviousEntity": {
         "type": "object",
         "properties": {
           "count": {
@@ -19409,12 +20886,19 @@
             "type": "number",
             "description": "Given up on: failed or expired (and, for a cross-chain swap, refunded).",
             "example": 3
+          },
+          "volumeUsd": {
+            "type": "string",
+            "nullable": true,
+            "description": "The window before’s settled swap volume in USD, two decimals: what the completed swaps sold, each asset at NEAR Intents' current price. Null when no price could be read; an asset with no price counts as zero.",
+            "example": "1250.40"
           }
         },
         "required": [
           "count",
           "succeeded",
-          "failed"
+          "failed",
+          "volumeUsd"
         ]
       },
       "SeriesSwapsEntity": {
@@ -19439,7 +20923,7 @@
             "description": "The window of the same length just before it, for growth.",
             "allOf": [
               {
-                "$ref": "#/components/schemas/SeriesOutcomeCountsEntity"
+                "$ref": "#/components/schemas/SeriesSwapPreviousEntity"
               }
             ]
           }
@@ -19478,6 +20962,30 @@
           "succeeded",
           "failed",
           "start"
+        ]
+      },
+      "SeriesOutcomeCountsEntity": {
+        "type": "object",
+        "properties": {
+          "count": {
+            "type": "number",
+            "description": "Created in the bucket or window, any status.",
+            "example": 42
+          },
+          "succeeded": {
+            "type": "number",
+            "example": 37
+          },
+          "failed": {
+            "type": "number",
+            "description": "Given up on: failed or expired (and, for a cross-chain swap, refunded).",
+            "example": 3
+          }
+        },
+        "required": [
+          "count",
+          "succeeded",
+          "failed"
         ]
       },
       "SeriesLiquidityEntity": {
@@ -19664,7 +21172,7 @@
           },
           "fees": {
             "type": "string",
-            "description": "Commission the settled payments paid to Cosmos Pay, in XLM (0.01% of each).",
+            "description": "Commission the settled payments paid to Cosmos Pay, in XLM (0.18% of each).",
             "example": "0.214025"
           },
           "feesUsd": {
@@ -24169,8 +25677,8 @@
           },
           "feeBps": {
             "type": "number",
-            "example": 1,
-            "description": "The commission: 1 bps = 0.01%."
+            "example": 18,
+            "description": "The commission: 18 bps = 0.18%."
           },
           "feeAccount": {
             "type": "string",
@@ -24197,7 +25705,7 @@
         "properties": {
           "amount": {
             "type": "string",
-            "description": "What the payer pays in total, in XLM (up to 7 decimal places). The merchant receives it minus the 0.01% commission (`netAmount`); the commission (`feeAmount`, rounded up, at least one stroop) goes to Cosmos Pay's fee account. An amount whose net would be zero is refused.",
+            "description": "What the payer pays in total, in XLM (up to 7 decimal places). The merchant receives it minus the 0.18% commission (`netAmount`); the commission (`feeAmount`, rounded up, at least one stroop) goes to Cosmos Pay's fee account. An amount whose net would be zero is refused.",
             "example": "25.5"
           },
           "recipient": {
@@ -24223,6 +25731,14 @@
             "description": "Idempotency key. A retry with the same key and the same request returns the existing payment; the same key with a different request is 409 idempotency_conflict. The Idempotency-Key header takes precedence over this field. One is generated when neither is sent.",
             "example": "order-24",
             "maxLength": 255
+          },
+          "merchantFee": {
+            "description": "Your own fee on this payment, in XLM, paid privately like the rest: a third confidential transfer from the payer to `wallet`, which must already hold a confidential account on Cosmos Pay's token (under auditor id 0) and be neither the recipient nor the fee account. `paidBy: recipient` takes it from `amount` (the merchant receives less); `payer` adds it on top (the payer pays `amount` plus the fee). The 0.18% commission is a share of `amount` either way. Confirm then takes `merchantFeeTxHash` too.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MerchantFeeDto"
+              }
+            ]
           }
         },
         "required": [
@@ -24263,12 +25779,12 @@
           "amount": {
             "type": "string",
             "example": "25.5",
-            "description": "What the payer pays in total, in XLM."
+            "description": "What the payer pays in total, in XLM: `netAmount + feeAmount`, plus `merchantFee.amount` when there is one."
           },
           "netAmount": {
             "type": "string",
             "example": "25.49745",
-            "description": "What the merchant receives: `amount - feeAmount`."
+            "description": "What the merchant receives: `amount - feeAmount`, less `merchantFee.amount` when there is one."
           },
           "feeAmount": {
             "type": "string",
@@ -24303,6 +25819,22 @@
             "type": "string",
             "nullable": true,
             "example": null
+          },
+          "merchantFee": {
+            "nullable": true,
+            "description": "The merchant fee the request named, paid by a third confidential transfer to its wallet; null without one.",
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MerchantFeeEntity"
+              }
+            ]
+          },
+          "merchantFeeTxHash": {
+            "type": "string",
+            "nullable": true,
+            "example": null,
+            "description": "The merchant fee's transaction, once settled."
           },
           "description": {
             "type": "string",
@@ -24350,6 +25882,8 @@
           "payer",
           "paymentTxHash",
           "feeTxHash",
+          "merchantFee",
+          "merchantFeeTxHash",
           "description",
           "idempotencyKey",
           "expiresAt",
@@ -24429,6 +25963,16 @@
             "example": "GDUYXOQZFVPDVIVBTJNUCGYQEC3XSI2LQOQ3SJWJJ6ZY4JLCJZZFGTNQ",
             "description": "Transfer `feeAmount` here, from the same account."
           },
+          "merchantFee": {
+            "nullable": true,
+            "description": "When not null, a third transfer: `merchantFee.amount` to `merchantFee.wallet`, from the same account.",
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MerchantFeeEntity"
+              }
+            ]
+          },
           "description": {
             "type": "string",
             "nullable": true,
@@ -24473,6 +26017,7 @@
           "feeBps",
           "recipient",
           "feeAccount",
+          "merchantFee",
           "description",
           "expiresAt",
           "network",
@@ -24494,6 +26039,11 @@
             "type": "string",
             "description": "The transaction of the confidential transfer that paid the fee account the payment's `feeAmount` (64 hex), from the same account.",
             "example": "5f0e8a1d3c7b9e2f4a6c8d0b1e3f5a7c9d2b4e6f8a0c1d3e5f7a9b2c4d6e8f0a"
+          },
+          "merchantFeeTxHash": {
+            "type": "string",
+            "description": "Only for a payment with a merchant fee, and then required: the transaction of the confidential transfer that paid `merchantFee.wallet` the payment's `merchantFee.amount` (64 hex), from the same account.",
+            "example": "9c2e4a6b8d0f1e3c5a7b9d2f4e6a8c0b1d3f5e7a9c2b4d6f8e0a1c3e5b7d9f2a"
           }
         },
         "required": [
@@ -24717,6 +26267,16 @@
             "example": "12.5000001",
             "description": "The amount asked for."
           },
+          "feeBps": {
+            "type": "number",
+            "example": 50,
+            "description": "Cosmos Pay's plan commission rate, in basis points. 0 when the deployment has no fee wrapper (USDT0_FEE_WRAPPER): a Soroban transaction has one operation, and only the wrapper can carry a fee."
+          },
+          "feeAmount": {
+            "type": "string",
+            "example": "0.0625",
+            "description": "The commission in USDT0, out of `amount`: `amount × feeBps / 10,000`, rounded down."
+          },
           "amountSent": {
             "type": "string",
             "example": "12.5",
@@ -24758,6 +26318,8 @@
           "eid",
           "receives",
           "amount",
+          "feeBps",
+          "feeAmount",
           "amountSent",
           "amountReceived",
           "dust",
@@ -24817,6 +26379,14 @@
             "type": "string",
             "example": "usdt0-retry-2026-10-25-001",
             "description": "Optional idempotency key. Prefer the `Idempotency-Key` request header; when both are set, the header wins. A retry with the same key and the same request returns the stored transfer; the same key with a different request is 409 `idempotency_conflict`."
+          },
+          "merchantFee": {
+            "description": "Your own fee on this transfer, in USDT0, paid to `wallet` (a Stellar account that trusts USDT0) in the same transaction: the operation is then the fee wrapper (`USDT0_FEE_WRAPPER`), which pays the fee and calls the OFT's `send` under the holder's one authorization. `paidBy: recipient` takes it from `amount` (less is sent); `payer` adds it on top. Without a configured wrapper, `merchant_fee_unsupported`.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MerchantFeeDto"
+              }
+            ]
           }
         },
         "required": [
@@ -24933,6 +26503,22 @@
             "example": "1.4468825",
             "description": "The Stellar network fee, in XLM: inclusion plus Soroban resources (part of it is refunded by the network)."
           },
+          "feeBps": {
+            "type": "number",
+            "example": 50,
+            "description": "Cosmos Pay's plan commission rate, in basis points. 0 when the deployment has no fee wrapper (USDT0_FEE_WRAPPER): a Soroban transaction has one operation, and only the wrapper can carry a fee."
+          },
+          "feeAmount": {
+            "type": "string",
+            "example": "0.0625",
+            "description": "The commission in USDT0, out of `amount`: `amount × feeBps / 10,000`, rounded down."
+          },
+          "feeWallet": {
+            "type": "string",
+            "nullable": true,
+            "example": "GBFEEWALLETEXAMPLE7XKXBOL5CH6OFGYUMVJZH7H7OZQXK6U2RG3UEZW34",
+            "description": "Where the commission went (STELLAR_SWAP_FEE_WALLET); null without one."
+          },
           "xdr": {
             "type": "string",
             "description": "The unsigned transaction (base64 XDR) to sign.",
@@ -24985,6 +26571,16 @@
             "example": null,
             "description": "Why a FAILED transfer failed."
           },
+          "merchantFee": {
+            "nullable": true,
+            "description": "The merchant fee the request named, in USDT0, paid to its wallet in this transaction by the fee wrapper; null without one.",
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MerchantFeeEntity"
+              }
+            ]
+          },
           "idempotencyKey": {
             "type": "string",
             "nullable": true,
@@ -25036,6 +26632,9 @@
           "nativeFee",
           "nativeFeeLimit",
           "networkFee",
+          "feeBps",
+          "feeAmount",
+          "feeWallet",
           "xdr",
           "uri",
           "qr",
@@ -25045,6 +26644,7 @@
           "scanStatus",
           "scanUrl",
           "failureReason",
+          "merchantFee",
           "idempotencyKey",
           "expiresAt",
           "submittedAt",
@@ -25159,6 +26759,22 @@
             "example": "1.4468825",
             "description": "The Stellar network fee, in XLM: inclusion plus Soroban resources (part of it is refunded by the network)."
           },
+          "feeBps": {
+            "type": "number",
+            "example": 50,
+            "description": "Cosmos Pay's plan commission rate, in basis points. 0 when the deployment has no fee wrapper (USDT0_FEE_WRAPPER): a Soroban transaction has one operation, and only the wrapper can carry a fee."
+          },
+          "feeAmount": {
+            "type": "string",
+            "example": "0.0625",
+            "description": "The commission in USDT0, out of `amount`: `amount × feeBps / 10,000`, rounded down."
+          },
+          "feeWallet": {
+            "type": "string",
+            "nullable": true,
+            "example": "GBFEEWALLETEXAMPLE7XKXBOL5CH6OFGYUMVJZH7H7OZQXK6U2RG3UEZW34",
+            "description": "Where the commission went (STELLAR_SWAP_FEE_WALLET); null without one."
+          },
           "xdr": {
             "type": "string",
             "description": "The unsigned transaction (base64 XDR) to sign.",
@@ -25204,6 +26820,16 @@
             "nullable": true,
             "example": null,
             "description": "Why a FAILED transfer failed."
+          },
+          "merchantFee": {
+            "nullable": true,
+            "description": "The merchant fee the request named, in USDT0, paid to its wallet in this transaction by the fee wrapper; null without one.",
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MerchantFeeEntity"
+              }
+            ]
           },
           "idempotencyKey": {
             "type": "string",
@@ -25251,6 +26877,9 @@
           "nativeFee",
           "nativeFeeLimit",
           "networkFee",
+          "feeBps",
+          "feeAmount",
+          "feeWallet",
           "xdr",
           "uri",
           "txHash",
@@ -25259,6 +26888,7 @@
           "scanStatus",
           "scanUrl",
           "failureReason",
+          "merchantFee",
           "idempotencyKey",
           "expiresAt",
           "submittedAt",
@@ -25402,6 +27032,22 @@
             "example": "1.4468825",
             "description": "The Stellar network fee, in XLM: inclusion plus Soroban resources (part of it is refunded by the network)."
           },
+          "feeBps": {
+            "type": "number",
+            "example": 50,
+            "description": "Cosmos Pay's plan commission rate, in basis points. 0 when the deployment has no fee wrapper (USDT0_FEE_WRAPPER): a Soroban transaction has one operation, and only the wrapper can carry a fee."
+          },
+          "feeAmount": {
+            "type": "string",
+            "example": "0.0625",
+            "description": "The commission in USDT0, out of `amount`: `amount × feeBps / 10,000`, rounded down."
+          },
+          "feeWallet": {
+            "type": "string",
+            "nullable": true,
+            "example": "GBFEEWALLETEXAMPLE7XKXBOL5CH6OFGYUMVJZH7H7OZQXK6U2RG3UEZW34",
+            "description": "Where the commission went (STELLAR_SWAP_FEE_WALLET); null without one."
+          },
           "xdr": {
             "type": "string",
             "description": "The unsigned transaction (base64 XDR) to sign.",
@@ -25454,6 +27100,16 @@
             "example": null,
             "description": "Why a FAILED transfer failed."
           },
+          "merchantFee": {
+            "nullable": true,
+            "description": "The merchant fee the request named, in USDT0, paid to its wallet in this transaction by the fee wrapper; null without one.",
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MerchantFeeEntity"
+              }
+            ]
+          },
           "idempotencyKey": {
             "type": "string",
             "nullable": true,
@@ -25500,6 +27156,9 @@
           "nativeFee",
           "nativeFeeLimit",
           "networkFee",
+          "feeBps",
+          "feeAmount",
+          "feeWallet",
           "xdr",
           "uri",
           "qr",
@@ -25509,6 +27168,7 @@
           "scanStatus",
           "scanUrl",
           "failureReason",
+          "merchantFee",
           "idempotencyKey",
           "expiresAt",
           "submittedAt",
@@ -25602,11 +27262,13 @@
               "recipient_not_registered",
               "payment_transfer_mismatch",
               "fee_transfer_mismatch",
+              "merchant_fee_transfer_mismatch",
               "payer_mismatch",
               "transaction_not_found",
               "expired",
               "network_unsupported",
               "asset_unsupported",
+              "merchant_fee_unsupported",
               "provider_error",
               "provider_unavailable",
               "quote_not_found",
@@ -25616,6 +27278,7 @@
               "account_disabled",
               "payload_expired",
               "rate_limited",
+              "customer_wallet_taken",
               "alias_taken",
               "alias_name_invalid",
               "alias_challenge_invalid",

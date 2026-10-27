@@ -1,5 +1,6 @@
 import { ApiProperty, OmitType } from '@nestjs/swagger';
 import { ApiPublicTokenProperty } from '@/common/decorators/api-record-token.decorator';
+import { MerchantFeeEntity } from '@/common/merchant-fee/merchant-fee.entity';
 import { CrossChainSwapStatus } from '@generated/prisma/client';
 import {
   CROSS_CHAIN_NETWORK_IDS,
@@ -131,6 +132,14 @@ export class CrossChainQuoteEntity {
   @ApiProperty({ type: CrossChainFeeEntity })
   fee!: CrossChainFeeEntity;
 
+  @ApiProperty({
+    type: MerchantFeeEntity,
+    nullable: true,
+    description:
+      'The merchant fee NEAR Intents will pay, in the origin asset; null without one.',
+  })
+  merchantFee!: MerchantFeeEntity | null;
+
   @ApiProperty({ example: 100 })
   slippageBps!: number;
 
@@ -196,6 +205,14 @@ export class CrossChainSwapEntity {
 
   @ApiProperty({ example: '0.5' })
   feeAmount!: string;
+
+  @ApiProperty({
+    type: MerchantFeeEntity,
+    nullable: true,
+    description:
+      'The merchant fee NEAR Intents pays as an app fee; null when the request named none.',
+  })
+  merchantFee!: MerchantFeeEntity | null;
 
   @ApiProperty({ example: '22.189466' })
   amountOutEstimated!: string;
