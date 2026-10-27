@@ -179,10 +179,13 @@ export class PaymentLinksService {
    * `updatedAt` keeps meaning the last change of the intent itself.
    */
   private async markSeen(id: string): Promise<void> {
-    const before = new Date(Date.now() - PAYMENT_LINK_SEEN_EVERY_MS);
+    // The time is bound from here, as Prisma writes every DateTime (UTC): `NOW()` would store
+    // the database session's local time in this zone-less column.
+    const now = new Date();
+    const before = new Date(now.getTime() - PAYMENT_LINK_SEEN_EVERY_MS);
     await this.prisma.$executeRaw`
       UPDATE "payment_intent"
-         SET "checkoutSeenAt" = NOW()
+         SET "checkoutSeenAt" = ${now}
        WHERE "id" = ${id}
          AND "status" IN ('PENDING', 'SUBMITTED')
          AND ("checkoutSeenAt" IS NULL OR "checkoutSeenAt" < ${before})

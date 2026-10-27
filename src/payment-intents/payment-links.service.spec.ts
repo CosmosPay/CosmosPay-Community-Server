@@ -276,7 +276,7 @@ describe('PaymentLinksService.findPublic', () => {
     expect(executeRaw).toHaveBeenCalledTimes(1);
     // The SQL itself keeps it to open intents and to once per window.
     const sql = (executeRaw.mock.calls[0][0] as string[]).join('?');
-    expect(sql).toContain('"checkoutSeenAt" = NOW()');
+    expect(sql).toContain('"checkoutSeenAt" = ?');
     expect(sql).toContain("'PENDING', 'SUBMITTED'");
     expect(sql).toContain('"checkoutSeenAt" <');
   });
