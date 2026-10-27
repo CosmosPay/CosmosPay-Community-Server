@@ -590,6 +590,112 @@ describe('LiquidityPoolsService — commission engine', () => {
       expect(op.feeAmountB).toBe('0.2');
     });
   });
+
+  describe('merchant fee', () => {
+    const MERCHANT_WALLET = Keypair.random().publicKey();
+    const deposit = {
+      source: SOURCE,
+      assetBCode: 'USDC',
+      assetBIssuer: USDC_ISSUER,
+      maxAmountA: '1000',
+      maxAmountB: '100',
+      slippageBps: 0,
+    };
+    /** The envelope's payments, as destination / asset code / amount. */
+    const payments = (xdr: string) =>
+      TransactionBuilder.fromXDR(xdr, Networks.TESTNET)
+        .operations.filter((o) => o.type === 'payment')
+        .map((p) => [p.destination, p.asset.getCode(), p.amount]);
+
+    it('takes a share of each amount out of a deposit, one payment per asset', async () => {
+      const op = await service.deposit(consumer, {
+        ...deposit,
+        merchantFee: { bps: 100, wallet: MERCHANT_WALLET },
+      });
+      // 1% of 1000 XLM and of 100 USDC came out: the pool gets the rest.
+      expect(op.amountA).toBe('990');
+      expect(op.amountB).toBe('99');
+      expect(op.merchantFee).toEqual({
+        bps: 100,
+        fixed: '0',
+        amount: '10',
+        asset: 'native',
+        amountB: '1',
+        assetB: 'USDC',
+        wallet: MERCHANT_WALLET,
+        paidBy: 'recipient',
+      });
+      expect(payments(op.xdr)).toEqual([
+        [MERCHANT_WALLET, 'XLM', '10.0000000'],
+        [MERCHANT_WALLET, 'USDC', '1.0000000'],
+      ]);
+    });
+
+    it('adds it on top of a deposit the payer pays it on', async () => {
+      const op = await service.deposit(consumer, {
+        ...deposit,
+        merchantFee: { bps: 100, wallet: MERCHANT_WALLET, paidBy: 'payer' },
+      });
+      expect(op.amountA).toBe('1000');
+      expect(op.amountB).toBe('100');
+      expect(payments(op.xdr)).toHaveLength(2);
+    });
+
+    it('takes it from a withdrawal, on its guaranteed minimums, after the plan commission', async () => {
+      prisma.rows.push(
+        depositRow({
+          status: 'SUCCEEDED',
+          sharesReceived: '100',
+          settledAmountA: '1000',
+          settledAmountB: '100',
+        }),
+      );
+      const op = await service.withdraw(consumer, {
+        source: SOURCE,
+        poolId: POOL_ID,
+        shares: '100',
+        slippageBps: 0,
+        merchantFee: { bps: 100, wallet: MERCHANT_WALLET },
+      });
+      // Full exit of 2000 / 200: 1% is 20 XLM and 2 USDC.
+      expect(op.merchantFee).toMatchObject({ amount: '20', amountB: '2' });
+      expect(payments(op.xdr)).toEqual([
+        [FEE_WALLET, 'XLM', '5.0000000'],
+        [FEE_WALLET, 'USDC', '0.5000000'],
+        [MERCHANT_WALLET, 'XLM', '20.0000000'],
+        [MERCHANT_WALLET, 'USDC', '2.0000000'],
+      ]);
+    });
+
+    it.each([
+      ['a fixed part', { bps: 100, fixed: '1', wallet: MERCHANT_WALLET }],
+      ['the source as its wallet', { bps: 100, wallet: SOURCE }],
+    ])('refuses %s before building anything', async (_label, merchantFee) => {
+      const err = await service
+        .deposit(consumer, { ...deposit, merchantFee })
+        .catch((e: unknown) => e);
+      expect((err as ApiError).code).toBe(ApiErrorCode.ValidationFailed);
+      expect(prisma.rows).toHaveLength(0);
+    });
+
+    it('refuses a wallet that cannot receive one of the assets', async () => {
+      stellar.loadAccount.mockImplementation(async (address: string) =>
+        mockHorizonAccount(
+          address === MERCHANT_WALLET
+            ? [{ asset_type: 'native', balance: '5' }]
+            : DEFAULT_BALANCES,
+        ),
+      );
+      const err = await service
+        .deposit(consumer, {
+          ...deposit,
+          merchantFee: { bps: 100, wallet: MERCHANT_WALLET },
+        })
+        .catch((e: unknown) => e);
+      expect((err as ApiError).code).toBe(ApiErrorCode.TrustlineMissing);
+      expect(prisma.rows).toHaveLength(0);
+    });
+  });
 });
 
 describe('LiquidityPoolsService responses carry only the public projection', () => {
@@ -645,6 +751,26 @@ describe('LiquidityPoolsService responses carry only the public projection', () 
     expect(prisma.liquidityPoolOperation.findMany).toHaveBeenCalledWith(
       expect.objectContaining({ select: LIQUIDITY_OPERATION_PUBLIC_SELECT }),
     );
+  });
+
+  it('lists only the operations of the network the key targets, in the page and the total', async () => {
+    const { service, prisma } = build();
+    prisma.liquidityPoolOperation.count = jest.fn().mockResolvedValue(0);
+
+    await service.findAllOperations(consumer, { take: 20, skip: 0 });
+    await service.findAllOperations(
+      { ...consumer, environment: 'prod' },
+      { take: 20, skip: 0 },
+    );
+
+    const pages = prisma.liquidityPoolOperation.findMany.mock.calls
+      .map(([arg]: [{ where?: { network?: string } }]) => arg?.where?.network)
+      .filter(Boolean);
+    const totals = prisma.liquidityPoolOperation.count.mock.calls.map(
+      ([arg]: [{ where: { network: string } }]) => arg.where.network,
+    );
+    expect(pages).toEqual(['testnet', 'public']);
+    expect(totals).toEqual(pages);
   });
 });
 

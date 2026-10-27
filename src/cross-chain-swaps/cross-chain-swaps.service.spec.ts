@@ -1,5 +1,7 @@
 import { ConfigService } from '@nestjs/config';
+import { PublicRecordTokens } from '@/common/public-record-token';
 import { Keypair } from '@stellar/stellar-sdk';
+import QRCode from 'qrcode';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import type { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import type { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
@@ -12,6 +14,14 @@ import type {
 import type { PrismaService } from '@/prisma/prisma.service';
 import type { StellarAccountLoader } from '@/stellar/account-loader.service';
 import type { WebhookTerminalEmitter } from '@/webhooks/webhook-terminal-emitter.service';
+
+/** Record tokens as the app wires them; no consumer here is the shared public key. */
+const recordTokens = new PublicRecordTokens({
+  get: () => ({
+    publicConsumer: 'cosmos_public',
+    gatewaySecret: 'spec-gateway-secret-spec-gateway-secret',
+  }),
+} as never);
 
 jest.mock('qrcode', () => ({
   __esModule: true,
@@ -42,7 +52,24 @@ const TOKENS: NearIntentsToken[] = [
     symbol: 'USDC',
     contractAddress: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
   },
+  { assetId: 'eth-id', decimals: 18, blockchain: 'eth', symbol: 'ETH' },
+  {
+    assetId: 'usdc-eth-id',
+    decimals: 6,
+    blockchain: 'eth',
+    symbol: 'USDC',
+    contractAddress: '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48',
+  },
+  { assetId: 'btc-id', decimals: 8, blockchain: 'btc', symbol: 'BTC' },
+  { assetId: 'trx-id', decimals: 6, blockchain: 'tron', symbol: 'TRX' },
 ];
+
+const EVM_WALLET = '0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed';
+const BTC_PAYER = 'bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4';
+const BTC_DEPOSIT =
+  'bc1p5d7rjq7g6rdk2yhzks9smlaqtedr4dekq08ge8ztwac72sfr9rusxg3297';
+const TRON_PAYER = 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t';
+const TRON_DEPOSIT = 'TLa2f6VPqDgRE67v1736s7bJ8Ray5wYjU7';
 
 const prodConsumer: GatewayConsumer = {
   username: 'cosmos_u1',
@@ -63,6 +90,16 @@ const BASE_DTO = {
   amount: '100',
   recipient: SOLANA_RECIPIENT,
   refundTo: STELLAR_PAYER,
+};
+
+const BTC_DTO = {
+  originChain: 'btc' as const,
+  originAsset: 'BTC',
+  destinationChain: 'solana' as const,
+  destinationAsset: 'USDC',
+  amount: '0.01',
+  recipient: SOLANA_RECIPIENT,
+  refundTo: BTC_PAYER,
 };
 
 function quoteResponse(request: NearIntentsQuoteRequest) {
@@ -204,7 +241,7 @@ function setup(
   };
   const accounts = {
     load: jest.fn().mockResolvedValue({ balances: [] }),
-    assertTrustline: jest.fn(),
+    assertCanReceive: jest.fn(),
   };
   const service = new CrossChainSwapsService(
     config,
@@ -213,8 +250,26 @@ function setup(
     consumers as unknown as ConsumerResolverService,
     nearIntents as unknown as NearIntentsClient,
     accounts as unknown as StellarAccountLoader,
+    recordTokens,
   );
   return { service, rows, webhooks, nearIntents, accounts };
+}
+
+/** Makes 1Click's live quotes issue `depositAddress`, with `memo` or none. */
+function depositAt(
+  nearIntents: ReturnType<typeof setup>['nearIntents'],
+  depositAddress: string,
+  memo?: string,
+) {
+  nearIntents.quote.mockImplementation(
+    async (request: NearIntentsQuoteRequest) => {
+      const response = quoteResponse(request);
+      return {
+        ...response,
+        quote: { ...response.quote, depositAddress, depositMemo: memo },
+      };
+    },
+  );
 }
 
 async function rejection(promise: Promise<unknown>): Promise<ApiError> {
@@ -272,7 +327,7 @@ describe('CrossChainSwapsService', () => {
     });
 
     it('sends Stellar → Stellar to the native DEX', async () => {
-      const { service } = setup();
+      const { service, nearIntents } = setup();
       const err = await rejection(
         service.quote(prodConsumer, {
           ...BASE_DTO,
@@ -282,7 +337,50 @@ describe('CrossChainSwapsService', () => {
         }),
       );
       expect(err.code).toBe(ApiErrorCode.ValidationFailed);
-      expect(err.message).toContain('/v1/swaps');
+      expect(err.message).toContain('POST /v1/swaps with chain "stellar"');
+      expect(err.message).toContain('the Stellar DEX');
+      expect(nearIntents.quote).not.toHaveBeenCalled();
+    });
+
+    it('quotes a same-chain pair on a network with no venue here (eth → eth) through NEAR Intents', async () => {
+      const { service, nearIntents } = setup();
+
+      await service.quote(prodConsumer, {
+        originChain: 'eth',
+        originAsset: 'native',
+        destinationChain: 'eth',
+        destinationAsset: 'USDC',
+        amount: '0.5',
+        recipient: EVM_WALLET.toLowerCase(),
+        refundTo: EVM_WALLET.toLowerCase(),
+      });
+
+      expect(nearIntents.quote.mock.calls[0][0]).toMatchObject({
+        depositMode: 'SIMPLE',
+        originAsset: 'eth-id',
+        destinationAsset: 'usdc-eth-id',
+        amount: '500000000000000000',
+        // EVM addresses are stored and sent EIP-55, as on Monad.
+        recipient: EVM_WALLET,
+        refundTo: EVM_WALLET,
+      });
+    });
+
+    it('still refuses the same asset on both legs', async () => {
+      const { service } = setup();
+      const err = await rejection(
+        service.quote(prodConsumer, {
+          originChain: 'eth',
+          originAsset: 'ETH',
+          destinationChain: 'eth',
+          destinationAsset: 'native',
+          amount: '1',
+          recipient: EVM_WALLET,
+          refundTo: EVM_WALLET,
+        }),
+      );
+      expect(err.code).toBe(ApiErrorCode.ValidationFailed);
+      expect(err.message).toContain('must differ');
     });
 
     it('sends Solana → Solana to Jupiter on /v1/swaps, without asking NEAR Intents', async () => {
@@ -352,9 +450,70 @@ describe('CrossChainSwapsService', () => {
       expect(nearIntents.quote).not.toHaveBeenCalled();
     });
 
+    it('refuses a dev key on every network, not only the three it settles on', async () => {
+      const { service, nearIntents } = setup();
+      const err = await rejection(
+        service.create({ ...prodConsumer, environment: 'dev' }, BTC_DTO),
+      );
+      expect(err.code).toBe(ApiErrorCode.NetworkUnsupported);
+      expect(nearIntents.quote).not.toHaveBeenCalled();
+    });
+
+    it('Bitcoin: a SIMPLE deposit with a bitcoin: link in decimal BTC, and its QR', async () => {
+      const { service, nearIntents } = setup();
+      depositAt(nearIntents, BTC_DEPOSIT);
+
+      const swap = await service.create(prodConsumer, {
+        ...BTC_DTO,
+        // An uppercase bech32 address is stored in its one lowercase spelling.
+        refundTo: BTC_PAYER.toUpperCase(),
+      });
+
+      expect(nearIntents.quote.mock.calls[0][0]).toMatchObject({
+        depositMode: 'SIMPLE',
+        originAsset: 'btc-id',
+        amount: '1000000',
+        refundTo: BTC_PAYER,
+      });
+      expect(swap.depositMemo).toBeNull();
+      expect(swap.depositUri).toBe(`bitcoin:${BTC_DEPOSIT}?amount=0.01`);
+      expect(QRCode.toDataURL).toHaveBeenLastCalledWith(swap.depositUri);
+    });
+
+    it('a chain with no wallet-link standard (Tron): stores no link and draws the QR of the address', async () => {
+      const { service, rows, nearIntents } = setup();
+      depositAt(nearIntents, TRON_DEPOSIT);
+
+      const swap = await service.create(prodConsumer, {
+        originChain: 'tron',
+        originAsset: 'TRX',
+        destinationChain: 'btc',
+        destinationAsset: 'BTC',
+        amount: '100',
+        recipient: BTC_PAYER,
+        refundTo: TRON_PAYER,
+      });
+
+      expect(rows[0].depositUri).toBeNull();
+      expect(swap.depositUri).toBeNull();
+      expect(swap.depositAddress).toBe(TRON_DEPOSIT);
+      expect(QRCode.toDataURL).toHaveBeenLastCalledWith(TRON_DEPOSIT);
+    });
+
+    it('keeps a memo 1Click issues off Stellar, and builds no link that would drop it', async () => {
+      const { service, rows, nearIntents } = setup();
+      depositAt(nearIntents, BTC_DEPOSIT, '777');
+
+      const swap = await service.create(prodConsumer, BTC_DTO);
+
+      expect(rows[0]).toMatchObject({ depositMemo: '777', depositUri: null });
+      expect(swap.depositMemo).toBe('777');
+      expect(QRCode.toDataURL).toHaveBeenLastCalledWith(BTC_DEPOSIT);
+    });
+
     it('checks a Stellar recipient trusts the asset it is about to receive', async () => {
       const { service, accounts } = setup();
-      accounts.assertTrustline.mockImplementation(() => {
+      accounts.assertCanReceive.mockImplementation(() => {
         throw ApiError.badRequest(ApiErrorCode.TrustlineMissing, 'no trust');
       });
       const err = await rejection(
@@ -473,6 +632,32 @@ describe('CrossChainSwapsService', () => {
       expect(nearIntents.submitDeposit).not.toHaveBeenCalled();
     });
 
+    it('checks the hash against the origin network, naming the shape it expects', async () => {
+      const { service, nearIntents } = setup();
+      depositAt(nearIntents, BTC_DEPOSIT);
+      const swap = await service.create(prodConsumer, BTC_DTO);
+
+      const err = await rejection(
+        service.submitDeposit(prodConsumer, swap.id, `0x${'ab'.repeat(32)}`),
+      );
+      expect(err.code).toBe(ApiErrorCode.ValidationFailed);
+      expect(err.message).toBe(
+        'txHash is not a btc transaction id: expected a transaction hash (64 hex)',
+      );
+      expect(nearIntents.submitDeposit).not.toHaveBeenCalled();
+
+      nearIntents.submitDeposit.mockResolvedValue({
+        correlationId: 'c',
+        status: 'KNOWN_DEPOSIT_TX',
+        updatedAt: '',
+      });
+      await service.submitDeposit(prodConsumer, swap.id, 'AB'.repeat(32));
+      expect(nearIntents.submitDeposit).toHaveBeenCalledWith({
+        txHash: 'ab'.repeat(32),
+        depositAddress: BTC_DEPOSIT,
+      });
+    });
+
     it('passes the hash and memo to 1Click and records its answer', async () => {
       const { service, nearIntents } = setup();
       const swap = await service.create(prodConsumer, BASE_DTO);
@@ -506,5 +691,104 @@ describe('CrossChainSwapsService', () => {
       );
       expect(err.getStatus()).toBe(404);
     });
+  });
+});
+
+describe('CrossChainSwapsService merchant fee', () => {
+  const NEAR_MERCHANT = 'merchant.near';
+  // 1.5% of 100 XLM plus 0.25: 1.75 XLM.
+  const merchantFee = { bps: 150, fixed: '0.25', wallet: NEAR_MERCHANT };
+
+  it('asks NEAR Intents to pay it as a second app fee, deducted from the deposit by default', async () => {
+    const { service, nearIntents } = setup();
+
+    const quote = await service.quote(prodConsumer, {
+      ...BASE_DTO,
+      merchantFee,
+    });
+
+    const request = nearIntents.quote.mock.calls[0][0];
+    // The deposit stays `amount`; 1.75 of 100 is 175 basis points.
+    expect(request.amount).toBe('1000000000');
+    expect(request.appFees).toEqual([
+      { recipient: 'cosmospay.near', fee: 50 },
+      { recipient: NEAR_MERCHANT, fee: 175 },
+    ]);
+    expect(quote.merchantFee).toEqual({
+      bps: 150,
+      fixed: '0.25',
+      amount: '1.75',
+      asset: 'XLM',
+      wallet: NEAR_MERCHANT,
+      paidBy: 'recipient',
+    });
+  });
+
+  it('adds it to the deposit when the payer pays it, in the whole basis points it amounts to', async () => {
+    const { service, nearIntents } = setup();
+
+    const swap = await service.create(prodConsumer, {
+      ...BASE_DTO,
+      merchantFee: { ...merchantFee, paidBy: 'payer' },
+    });
+
+    const request = nearIntents.quote.mock.calls[0][0];
+    // 101.75 deposited; 1.75 of it is 171.99 basis points, paid as 171 (never above).
+    expect(request.amount).toBe('1017500000');
+    expect(request.appFees?.[1]).toEqual({
+      recipient: NEAR_MERCHANT,
+      fee: 171,
+    });
+    expect(swap.amountIn).toBe('101.75');
+    expect(swap.merchantFee).toMatchObject({
+      amount: '1.739925',
+      paidBy: 'payer',
+    });
+  });
+
+  it('refuses a wallet NEAR Intents cannot credit and a fee under one basis point', async () => {
+    const { service } = setup();
+
+    const wrongWallet = await rejection(
+      service.quote(prodConsumer, {
+        ...BASE_DTO,
+        merchantFee: { bps: 100, wallet: STELLAR_PAYER },
+      }),
+    );
+    expect(wrongWallet.code).toBe(ApiErrorCode.ValidationFailed);
+
+    const tooSmall = await rejection(
+      service.quote(prodConsumer, {
+        ...BASE_DTO,
+        merchantFee: { fixed: '0.0001', wallet: NEAR_MERCHANT },
+      }),
+    );
+    expect(tooSmall.code).toBe(ApiErrorCode.InvalidAmount);
+  });
+
+  it('replays only the same merchant fee under the same key', async () => {
+    const { service } = setup();
+    const key = 'ccs-merchant-1';
+
+    const first = await service.create(
+      prodConsumer,
+      { ...BASE_DTO, merchantFee },
+      key,
+    );
+    const again = await service.create(
+      prodConsumer,
+      { ...BASE_DTO, merchantFee },
+      key,
+    );
+    expect(again.id).toBe(first.id);
+
+    const other = await rejection(
+      service.create(
+        prodConsumer,
+        { ...BASE_DTO, merchantFee: { ...merchantFee, wallet: 'other.near' } },
+        key,
+      ),
+    );
+    expect(other.code).toBe(ApiErrorCode.IdempotencyConflict);
   });
 });

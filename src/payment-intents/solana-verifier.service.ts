@@ -4,6 +4,7 @@ import { NATIVE_DECIMALS } from '@/chains/chains.constants';
 import { parseUnits } from '@/chains/units';
 import type { StellarNetwork } from '@/config/configuration';
 import { TX_CREATED_AT_SKEW_MS } from '@/payment-intents/payment-intents.constants';
+import { paymentLegs } from '@/payment-intents/payment-legs';
 import type {
   PaymentVerifier,
   VerificationResult,
@@ -23,7 +24,8 @@ import { SOLANA_REFERENCE_SIGNATURE_LIMIT } from '@/solana/solana.constants';
  *     other purpose never settles an intent;
  *   - it landed no earlier than the intent was created (clock skew aside);
  *   - the destination's balance of the intent's asset rose by exactly the
- *     amount — lamports for SOL, the token account's balance for an SPL mint,
+ *     amount (its leg: less a merchant fee the recipient pays), and with a
+ *     merchant fee the fee wallet's by exactly the fee — lamports for SOL, the token account's balance for an SPL mint,
  *     read from the transaction's own pre/post balances so no second call and
  *     no decimals guess is involved;
  *   - and it succeeded. A failed transaction is reported `failedOnChain` once
@@ -117,17 +119,27 @@ export class SolanaVerifierService implements PaymentVerifier {
       };
     }
 
-    const received = this.received(intent, tx);
+    const received = this.received(intent, tx, intent.destination);
     if (received === null || received <= 0n) {
       return {
         valid: false,
         reason: 'No transfer in this transaction pays the destination',
       };
     }
-    if (intent.amount != null && received !== this.expected(intent)) {
+    const legs = this.legs(intent);
+    if (intent.amount != null && received !== legs?.destination) {
       return {
         valid: false,
         reason: 'The transfer does not match the intent amount',
+      };
+    }
+    if (
+      legs?.fee &&
+      this.received(intent, tx, legs.fee.wallet) !== legs.fee.amount
+    ) {
+      return {
+        valid: false,
+        reason: 'The transaction does not pay the merchant fee',
       };
     }
 
@@ -135,34 +147,52 @@ export class SolanaVerifierService implements PaymentVerifier {
     return { valid: true, txHash: signature, payer };
   }
 
-  /** The intent's amount in base units, or null when it fixed none. */
-  private expected(intent: PaymentIntent): bigint | null {
+  /**
+   * What the destination must receive, and the merchant fee's wallet and
+   * amount, in base units; null when the intent fixed no amount or its stored
+   * amounts do not read (never a match then, never a throw in the sweep).
+   */
+  private legs(intent: PaymentIntent): {
+    destination: bigint;
+    fee: { wallet: string; amount: bigint } | null;
+  } | null {
     if (intent.amount == null) return null;
     const decimals =
       intent.asset === 'native'
         ? NATIVE_DECIMALS.solana
         : (intent.assetDecimals ?? NATIVE_DECIMALS.solana);
     try {
-      return parseUnits(intent.amount, decimals);
+      const legs = paymentLegs(intent, decimals);
+      return {
+        destination: parseUnits(legs.destinationAmount!, decimals),
+        fee: legs.fee
+          ? {
+              wallet: legs.fee.wallet,
+              amount: parseUnits(legs.fee.amount, decimals),
+            }
+          : null,
+      };
     } catch {
       return null;
     }
   }
 
   /**
-   * How much of the intent's asset the destination gained in `tx`, in base
-   * units — or null when the transaction's balances do not show it at all.
+   * How much of the intent's asset `owner` (the destination, or a fee wallet)
+   * gained in `tx`, in base units — or null when the transaction's balances do
+   * not show it at all.
    */
   private received(
     intent: PaymentIntent,
     tx: SolanaTransaction,
+    owner: string,
   ): bigint | null {
     const meta = tx.meta;
     if (!meta) return null;
     const keys = tx.transaction.message.accountKeys;
 
     if (intent.asset === 'native') {
-      const index = keys.findIndex((k) => k.pubkey === intent.destination);
+      const index = keys.findIndex((k) => k.pubkey === owner);
       if (index < 0) return null;
       return BigInt(meta.postBalances[index]) - BigInt(meta.preBalances[index]);
     }
@@ -172,7 +202,7 @@ export class SolanaVerifierService implements PaymentVerifier {
     // no pre-balance, which counts as zero.
     const owned = (balances: typeof meta.postTokenBalances) =>
       (balances ?? []).filter(
-        (b) => b.owner === intent.destination && b.mint === intent.assetIssuer,
+        (b) => b.owner === owner && b.mint === intent.assetIssuer,
       );
     const post = owned(meta.postTokenBalances);
     if (post.length === 0) return null;

@@ -143,6 +143,41 @@ describe('PaymentIntentsService on Solana and Monad', () => {
     expect(view).toMatchObject({ networkFee: '0.057375' });
   });
 
+  it.each(['solana', 'monad'] as const)(
+    'stores the checkout design a %s intent is created with',
+    async (chain) => {
+      const { service, prisma } = build();
+      const view = await service.createPay(consumer, {
+        chain,
+        destination: chain === 'monad' ? EVM_DEST : SOL_DEST,
+        amount: '1',
+        memo: '42',
+        checkoutTheme: 'card',
+      });
+
+      expect(prisma.paymentIntent.create.mock.calls[0][0].data).toMatchObject({
+        chain,
+        checkoutTheme: 'card',
+      });
+      expect(view.checkoutTheme).toBe('card');
+    },
+  );
+
+  it('stores no design when the create names none, and answers classic', async () => {
+    const { service, prisma } = build();
+    const view = await service.createPay(consumer, {
+      chain: 'solana',
+      destination: SOL_DEST,
+      amount: '1',
+      memo: '42',
+    });
+
+    expect(
+      prisma.paymentIntent.create.mock.calls[0][0].data.checkoutTheme,
+    ).toBeNull();
+    expect(view.checkoutTheme).toBe('classic');
+  });
+
   it('refuses a SEP-7 callback off Stellar', async () => {
     const { service } = build();
     const err = await service

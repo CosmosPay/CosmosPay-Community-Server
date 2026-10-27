@@ -30,8 +30,10 @@ function maxPlaces(args: ValidationArguments): number {
   const [chainProp] = args.constraints as [string];
   const value = (args.object as Record<string, unknown>)[chainProp];
   const chain = value === undefined || value === null ? DEFAULT_CHAIN : value;
-  // A chain the `chain` field itself rejects: the widest bound, so this field
-  // does not report a second error for the same mistake.
+  // Any other value: the widest bound. A chain the `chain` field itself
+  // rejects then gets no second error for the same mistake, and a cross-chain
+  // network beyond these three is checked against the asset's own decimals by
+  // the service once it has resolved it.
   return isChain(chain) ? AMOUNT_MAX_PLACES[chain] : MAX_TOKEN_DECIMALS;
 }
 

@@ -19,6 +19,12 @@ export interface VenueRequest {
   feeBps: number;
   /** Where the commission is paid; null when `feeBps` is zero. */
   feeWallet: string | null;
+  /**
+   * The organization's merchant fee, in the SOURCE asset's base units, paid
+   * out of the source wallet in the swap's own transaction; `amount` above is
+   * what is routed. Null without one.
+   */
+  merchantFee?: { wallet: string; amount: bigint } | null;
 }
 
 /** A priced swap, in base units of the output asset. */
@@ -50,6 +56,11 @@ export type VenueSettlement = 'SUCCEEDED' | 'FAILED' | null;
 export interface ChainSwapVenue {
   /** `sourceAssetCode` / `destAssetCode` as the request spelled it. */
   resolveAsset(asset: string): Promise<VenueAsset>;
+  /**
+   * Why this venue cannot pay a merchant fee on this deployment, or null when
+   * it can. Asked before anything is priced.
+   */
+  merchantFeeUnsupported(): string | null;
   quote(request: VenueRequest): Promise<VenueQuote>;
   build(request: VenueRequest & { source: string }): Promise<VenueBuild>;
   /**

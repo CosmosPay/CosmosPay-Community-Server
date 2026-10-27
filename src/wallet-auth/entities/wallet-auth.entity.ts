@@ -38,10 +38,10 @@ export class WalletAuthProvidersEntity {
       'https://auth.example.com/if/user/#/settings;{"page":"page-credentials"}',
     description:
       'The page of the person’s Cosmos Pay (Authentik) account where they add ' +
-      'or remove a second factor — a security key or passkey, an ' +
-      'authenticator app, recovery codes — to open in a browser. It goes ' +
+      'or remove a second factor (a security key or passkey, an ' +
+      'authenticator app, recovery codes), to open in a browser. It goes ' +
       'through the Authentik login first when there is no session. A second ' +
-      'factor is optional — the sign-in only offers one — so offer this as a ' +
+      'factor is optional (the sign-in only offers one), so offer this as a ' +
       'setting. Null when this deployment has no Authentik.',
   })
   mfaSettingsUrl!: string | null;
@@ -50,7 +50,7 @@ export class WalletAuthProvidersEntity {
 export class WalletOauthStartedEntity {
   @ApiProperty({
     description:
-      'The handshake handle. Public by construction — it travels in a URL bar. ' +
+      'The handshake handle. Public by construction: it travels in a URL bar. ' +
       'Knowing it buys polling, never redemption.',
   })
   state!: string;
@@ -74,7 +74,7 @@ export class WalletAuthStatusEntity {
   @ApiPropertyOptional({
     enum: ['denied', 'email_unverified', 'profile_invalid', 'failed'],
     description:
-      'Present only on `failed`. A token to map to a sentence — never prose, ' +
+      'Present only on `failed`. A token to map to a sentence, never prose, ' +
       'which cannot be translated on the device.',
   })
   error?: string;
@@ -100,7 +100,7 @@ class WalletBackupEntity {
   address!: string;
   @ApiProperty({
     description:
-      'Same as `address` — the field’s original name, kept for older wallets.',
+      'Same as `address` (the field’s original name, kept for older wallets).',
     deprecated: true,
   })
   stellarAddress!: string;
@@ -138,7 +138,7 @@ export class WalletAuthReadyEntity {
   @ApiProperty({
     type: [WalletBackupEntity],
     description:
-      'Every wallet this account keeps a backup of, newest first — one box per ' +
+      'Every wallet this account keeps a backup of, newest first: one box per ' +
       '(chain, address). A new device opens each with the password (or passkey) ' +
       'it was sealed under; a box sealed under another password stays closed.',
   })
@@ -156,7 +156,7 @@ export class WalletAuthReadyEntity {
     description:
       'Short-lived, sealed, and accepted by exactly one route: `/auth/finish`. ' +
       'It is the only credential that can create an account or put a backup ' +
-      'under one, so it is never refreshed — a person who takes longer signs ' +
+      'under one, so it is never refreshed: a person who takes longer signs ' +
       'in again.',
   })
   sessionToken!: string;
@@ -221,7 +221,7 @@ export class WalletSignInFinishedEntity {
     description:
       'Whether this call created the account or attached the identity to one ' +
       'that already existed. A different vocabulary from `ready.account`, ' +
-      'deliberately — they answer two different questions.',
+      'deliberately: they answer two different questions.',
   })
   account!: string;
   @ApiProperty() organizationId!: string;
@@ -239,7 +239,7 @@ export class WalletBackupUpdatedEntity {
   address!: string;
   @ApiProperty({
     description:
-      'Same as `address` — the field’s original name, kept for older wallets.',
+      'Same as `address` (the field’s original name, kept for older wallets).',
     deprecated: true,
   })
   stellarAddress!: string;

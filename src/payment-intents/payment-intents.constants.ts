@@ -1,4 +1,7 @@
-/** Tuning knobs for payment-intent verification and the on-chain observer. */
+/**
+ * Tuning knobs for payment-intent verification and the on-chain observer, and
+ * the designs a hosted checkout page may be shown in.
+ */
 
 /**
  * How many intents are checked against Horizon at once — by the reconcile pass,
@@ -142,6 +145,73 @@ export const PAYMENT_INTENT_BUILD_RATE_LIMIT = {
 };
 
 /**
+ * Budget for `GET /v1/payment-links/{id}`, the hosted checkout's anonymous read,
+ * per client address (an IPv6 caller per /64).
+ *
+ * The route is `@Public()`, so there is no consumer to key on: every caller is
+ * the same `anonymous` subject and the address is the whole budget. That is why
+ * this policy must stay `per: 'address'` (the default) — a `consumer` budget
+ * here would be ONE bucket for every payer on the internet.
+ *
+ * Sixty a minute is five checkout tabs' worth: a page polling every 5 s spends
+ * 12, so one payer can poll, reload a few times and open the link on a second
+ * device behind the same router, and a handful of payers behind one NAT (a
+ * shop's Wi-Fi) still fit. The fixed window lets a caller spend up to twice this
+ * across a boundary, which is still only two reads a second.
+ *
+ * What it bounds is guessing and scraping, not load — APISIX shapes traffic.
+ * Each request is a primary-key read and a QR render, and at this rate an
+ * address cannot get meaningfully closer to guessing an id (a cuid carries
+ * about 41 random bits besides its timestamp and counter). Raise it if a
+ * carrier-grade NAT puts many payers behind one IPv4 address; the client should
+ * honour `Retry-After` either way.
+ */
+export const PAYMENT_LINK_READ_RATE_LIMIT = {
+  name: 'payment-links:read',
+  limit: 60,
+  windowMs: 60 * 1000,
+};
+
+/**
+ * `POST /v1/payment-links/{id}/transaction`, per client address: each call
+ * reads the payer's account from Horizon (and the merchant's, for an issued
+ * asset) and builds an envelope. A payer builds one, maybe again after a
+ * timeout lapses; twenty a minute is a checkout retrying many times over.
+ */
+/**
+ * What a wallet shows for a Solana Pay transaction request (its GET): who asks
+ * for the payment, and an icon (an absolute https image, served by the hosted
+ * checkout's site on every domain).
+ */
+export const SOLANA_PAY_LABEL = 'Cosmos Pay';
+export const SOLANA_PAY_ICON_PATH = '/android-chrome-512x512.png';
+
+/**
+ * `POST /v1/payment-links/{id}/events`, per client address: a checkout reports a
+ * handful of wallet events per payment (opened, closed, sent); thirty a minute is a
+ * payer opening their wallet again and again.
+ */
+export const PAYMENT_LINK_EVENT_RATE_LIMIT = {
+  name: 'payment-links:events',
+  limit: 30,
+  windowMs: 60 * 1000,
+};
+
+/** What the hosted checkout reports about the payer's wallet. */
+export const CHECKOUT_EVENTS = [
+  'walletOpened',
+  'walletClosed',
+  'sent',
+] as const;
+export type CheckoutEvent = (typeof CHECKOUT_EVENTS)[number];
+
+export const PAYMENT_LINK_TRANSACTION_RATE_LIMIT = {
+  name: 'payment-links:transaction',
+  limit: 20,
+  windowMs: 60 * 1000,
+};
+
+/**
  * The most older intents a settlement asks the chain about before it claims a
  * transaction (`settlement-rivals.ts`): rivals of other consumers that the same
  * payment may also pay, and that therefore outrank the intent being settled.
@@ -158,3 +228,36 @@ export const PAYMENT_INTENT_BUILD_RATE_LIMIT = {
  * the same memo, destination, asset and amount (`SETTLEMENT_RIVAL_FILTERS`).
  */
 export const SETTLEMENT_RIVALS_MAX = 5;
+
+/**
+ * The prebuilt designs a payment intent's hosted checkout page
+ * (`https://payments.cosmospay.lat/<id>`) can be shown in. The merchant picks
+ * one per intent (`checkoutTheme` on create and on `PATCH`), and both the
+ * owner's reads and the public `GET /v1/payment-links/{id}` answer it, so the
+ * page renders the design without knowing who the merchant is.
+ *
+ * Stored as a plain string, like `chain`, so adding a design is an entry here
+ * and a page that can draw it — no migration. Removing one is safe too: a
+ * stored value no longer listed reads as {@link DEFAULT_CHECKOUT_THEME}.
+ */
+export const CHECKOUT_THEMES = ['classic', 'split', 'ticket', 'card'] as const;
+export type CheckoutTheme = (typeof CHECKOUT_THEMES)[number];
+
+/** The design an intent that names none is shown in (stored as null). */
+export const DEFAULT_CHECKOUT_THEME: CheckoutTheme = 'classic';
+
+export function isCheckoutTheme(value: unknown): value is CheckoutTheme {
+  return (
+    typeof value === 'string' &&
+    (CHECKOUT_THEMES as readonly string[]).includes(value)
+  );
+}
+
+/**
+ * The design a stored intent is shown in: its own, or the default when it
+ * names none (null) or one this release no longer draws. Every response says
+ * the design outright, so no client has to know what null means.
+ */
+export function effectiveCheckoutTheme(stored: string | null): CheckoutTheme {
+  return isCheckoutTheme(stored) ? stored : DEFAULT_CHECKOUT_THEME;
+}

@@ -48,6 +48,9 @@ dev-instances.json
 .env.test.local
 .env.production.local
 .env.local
+# Operator secrets `scripts/zk/deploy-testnet.ts --secrets-file` writes: the
+# auditor registry's admin and the fee account's keys. Never committed.
+.zk-secrets/
 
 # temp directory
 .temp
@@ -66,3 +69,9 @@ prisma/*.db
 .claude/council-cache
 # A plugin signing key never belongs in any repository.
 *.pem
+
+# Soroban contract builds (the reviewed wasm is committed beside its crate).
+contracts/soroban/**/target/
+
+# Locally generated swap commission wallets (keys); never committed.
+.fee-wallets/

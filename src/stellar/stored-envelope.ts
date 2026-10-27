@@ -1,8 +1,15 @@
 import {
+  Asset,
   FeeBumpTransaction,
   Transaction,
   TransactionBuilder,
 } from '@stellar/stellar-sdk';
+
+/** An issued asset by code and issuer, as a response names it. */
+export interface IssuedAsset {
+  code: string;
+  issuer: string;
+}
 
 /**
  * The unsigned envelope a stored `xdr` column holds, or `null` when it cannot
@@ -54,4 +61,31 @@ export function cannotHaveSettled(
   const envelope = storedEnvelope(xdr, passphrase);
   if (!envelope) return false;
   return BigInt(envelope.sequence) > BigInt(accountSequence);
+}
+
+/**
+ * The issued asset a stored envelope adds a trustline for on behalf of its own
+ * source, or null: the first `changeTrust` the source itself performs (no
+ * operation source, or the transaction's) whose line is an asset, not pool
+ * shares, and whose limit is not zero (a zero limit removes a trustline).
+ *
+ * Derived from the envelope rather than stored beside it, so what a response
+ * says is always about the bytes the wallet is asked to sign. Null for an
+ * envelope that cannot be read.
+ */
+export function addedTrustline(
+  xdr: string,
+  passphrase: string,
+): IssuedAsset | null {
+  const envelope = storedEnvelope(xdr, passphrase);
+  if (!envelope) return null;
+  for (const op of envelope.operations) {
+    if (op.type !== 'changeTrust') continue;
+    if (op.source !== undefined && op.source !== envelope.source) continue;
+    if (!(op.line instanceof Asset)) continue;
+    const issuer = op.line.getIssuer();
+    if (op.line.isNative() || !issuer || Number(op.limit) === 0) continue;
+    return { code: op.line.getCode(), issuer };
+  }
+  return null;
 }

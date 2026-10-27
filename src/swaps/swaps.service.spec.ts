@@ -1,8 +1,17 @@
 import { StellarAccountLoader } from '@/stellar/account-loader.service';
+import { PublicRecordTokens } from '@/common/public-record-token';
 import { SignedTransactionRelay } from '@/stellar/signed-transaction-relay.service';
 import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
 import { HttpStatus } from '@nestjs/common';
-import { Account, Keypair, TransactionBuilder } from '@stellar/stellar-sdk';
+import {
+  Account,
+  Asset,
+  Keypair,
+  Networks,
+  Operation,
+  Transaction,
+  TransactionBuilder,
+} from '@stellar/stellar-sdk';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { EventEmitter2 } from 'eventemitter2';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
@@ -14,6 +23,14 @@ import {
 } from '@/webhooks/webhook-events';
 import { WebhookTerminalEmitter } from '@/webhooks/webhook-terminal-emitter.service';
 import { SWAP_PUBLIC_SELECT, SwapsService } from '@/swaps/swaps.service';
+
+/** Record tokens as the app wires them; no consumer here is the shared public key. */
+const recordTokens = new PublicRecordTokens({
+  get: () => ({
+    publicConsumer: 'cosmos_public',
+    gatewaySecret: 'spec-gateway-secret-spec-gateway-secret',
+  }),
+} as never);
 
 jest.mock('qrcode', () => ({
   __esModule: true,
@@ -279,30 +296,46 @@ function makeConfig(
   } as any;
 }
 
-function makeStellar() {
+/** Lumens plus a USDC trustline: an account that can receive the swap as is. */
+const TRUSTING_BALANCES = [
+  { asset_type: 'native', balance: '10000' },
+  {
+    asset_type: 'credit_alphanum4',
+    asset_code: 'USDC',
+    asset_issuer: DEST_ISSUER,
+    balance: '0',
+  },
+];
+
+/**
+ * A fake Horizon. Every account it loads holds `TRUSTING_BALANCES` unless
+ * `accounts` names its own balances and account fields (subentries,
+ * sponsorships) for that address.
+ */
+function makeStellar(
+  accounts: Record<
+    string,
+    { balances: unknown[]; fields?: Record<string, number> }
+  > = {},
+) {
   const submitTransaction = jest.fn().mockResolvedValue({ hash: TX_HASH });
   const txCall = jest.fn().mockResolvedValue({ successful: true });
-  const balances = [
-    { asset_type: 'native', balance: '10000' },
-    {
-      asset_type: 'credit_alphanum4',
-      asset_code: 'USDC',
-      asset_issuer: DEST_ISSUER,
-      balance: '0',
-    },
-  ];
   const strictSendPaths = jest.fn().mockReturnValue({
     call: jest.fn().mockResolvedValue({
       records: [{ destination_amount: '9.5', path: [] }],
     }),
   });
-  const loadAccount = jest.fn().mockImplementation(async () => {
-    // Fresh Account each call so sequence stays at Horizon's view (N), not N+k
-    // after a prior TransactionBuilder mutation — needed for txHash-collision tests.
-    const account: any = new Account(SOURCE, '1');
-    account.balances = balances;
-    return account;
-  });
+  const loadAccount = jest
+    .fn()
+    .mockImplementation(async (address: string = SOURCE) => {
+      // Fresh Account each call so sequence stays at Horizon's view (N), not N+k
+      // after a prior TransactionBuilder mutation: the txHash-collision tests
+      // need that.
+      const account: any = new Account(address, '1');
+      Object.assign(account, accounts[address]?.fields ?? {});
+      account.balances = accounts[address]?.balances ?? TRUSTING_BALANCES;
+      return account;
+    });
   return {
     passphrase: jest.fn().mockReturnValue('Test SDF Network ; September 2015'),
     server: jest.fn().mockReturnValue({
@@ -370,6 +403,7 @@ describe('SwapsService responses carry only the public projection', () => {
       new ConsumerResolverService(prisma as never),
       new StellarAccountLoader(stellar as never),
       new SignedTransactionRelay(stellar as never),
+      recordTokens,
     );
     return { service, prisma };
   }
@@ -387,7 +421,12 @@ describe('SwapsService responses carry only the public projection', () => {
     const view = await service.findOne(consumer, 'swap_1');
 
     expect(Object.keys(view).sort()).toEqual(
-      [...Object.keys(SWAP_PUBLIC_SELECT), 'qr', 'commissionMemo'].sort(),
+      [
+        ...Object.keys(SWAP_PUBLIC_SELECT),
+        'qr',
+        'commissionMemo',
+        'trustline',
+      ].sort(),
     );
     for (const internal of [
       'consumerId',
@@ -409,6 +448,26 @@ describe('SwapsService responses carry only the public projection', () => {
     expect(prisma.swap.findMany).toHaveBeenCalledWith(
       expect.objectContaining({ select: SWAP_PUBLIC_SELECT }),
     );
+  });
+
+  it('lists only the swaps of the network the key targets, in the page and the total', async () => {
+    const { service, prisma } = build();
+    prisma.swap.count = jest.fn().mockResolvedValue(0);
+
+    await service.findAll(consumer, { take: 20, skip: 0 });
+    await service.findAll(
+      { ...consumer, environment: 'prod' },
+      { take: 20, skip: 0 },
+    );
+
+    const pages = prisma.swap.findMany.mock.calls.map(
+      ([arg]: [{ where: { network: string } }]) => arg.where.network,
+    );
+    const totals = prisma.swap.count.mock.calls.map(
+      ([arg]: [{ where: { network: string } }]) => arg.where.network,
+    );
+    expect(pages).toEqual(['testnet', 'public']);
+    expect(totals).toEqual(pages);
   });
 });
 
@@ -433,6 +492,7 @@ describe('SwapsService.submit vs observer (issue #29 double terminal event)', ()
       new ConsumerResolverService(prisma as never),
       new StellarAccountLoader(stellar as never),
       new SignedTransactionRelay(stellar as never),
+      recordTokens,
     );
     observer = new SettlementObserverService(
       config,
@@ -449,6 +509,8 @@ describe('SwapsService.submit vs observer (issue #29 double terminal event)', ()
     jest.spyOn(TransactionBuilder, 'fromXDR').mockReturnValue({
       hash: () => Buffer.from(TX_HASH, 'hex'),
       signatures: [{}],
+      // What the view reads the added trustline from: nothing to add here.
+      operations: [],
     } as any);
   });
 
@@ -788,6 +850,7 @@ describe('SwapsService.create idempotency (issue #17)', () => {
       new ConsumerResolverService(prisma as never),
       new StellarAccountLoader(stellar as never),
       new SignedTransactionRelay(stellar as never),
+      recordTokens,
     );
     jest.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000);
   });
@@ -955,6 +1018,7 @@ describe('SwapsService.create idempotency (issue #17)', () => {
       new ConsumerResolverService(prisma as never),
       new StellarAccountLoader(stellar as never),
       new SignedTransactionRelay(stellar as never),
+      recordTokens,
     );
   }
 
@@ -1036,6 +1100,7 @@ describe('SettlementObserverService duplicate txHash (issue #17)', () => {
       new ConsumerResolverService(prisma as never),
       new StellarAccountLoader(stellar as never),
       new SignedTransactionRelay(stellar as never),
+      recordTokens,
     );
     observer = new SettlementObserverService(
       config,
@@ -1117,6 +1182,7 @@ describe('SwapsService platform commission fail-closed (X-Plan-Swap-Fee-Bps)', (
       new ConsumerResolverService(prisma as never),
       new StellarAccountLoader(stellar as never),
       new SignedTransactionRelay(stellar as never),
+      recordTokens,
     );
   }
 
@@ -1163,5 +1229,412 @@ describe('SwapsService platform commission fail-closed (X-Plan-Swap-Fee-Bps)', (
     const service = make('development', { feeWallet: '', feeBps: 50 });
     const quote = await service.quote(noPlanRate, quoteDto);
     expect(quote.fee.bps).toBe(0);
+  });
+});
+
+describe('SwapsService.create adds the trustline the source lacks', () => {
+  const USDC = new Asset('USDC', DEST_ISSUER);
+  /** Fails the test when a refusal was expected and the call succeeded. */
+  const refused = (): never => {
+    throw new Error('expected the request to be refused');
+  };
+
+  /** Lumens only: an account that has never trusted USDC. */
+  const UNTRUSTING = [{ asset_type: 'native', balance: '10000' }];
+
+  function make(
+    accounts: Parameters<typeof makeStellar>[0] = {},
+    swapOverrides: Record<string, unknown> = {},
+  ) {
+    const prisma = createPrisma();
+    const stellar = makeStellar(accounts);
+    const events = { emit: jest.fn() } as any;
+    const service = new SwapsService(
+      makeConfig(swapOverrides),
+      prisma,
+      makeEmitter(prisma, events),
+      stellar as any,
+      new ConsumerResolverService(prisma as never),
+      new StellarAccountLoader(stellar as never),
+      new SignedTransactionRelay(stellar as never),
+      recordTokens,
+    );
+    return { service, prisma, stellar };
+  }
+
+  /** The operations of a built envelope, decoded the way a wallet reads them. */
+  function operationsOf(xdr: string) {
+    const tx = TransactionBuilder.fromXDR(xdr, Networks.TESTNET) as Transaction;
+    return { tx, ops: tx.operations };
+  }
+
+  it('puts a changeTrust for the bought asset first, before the fee and the path payment', async () => {
+    const { service } = make({ [SOURCE]: { balances: UNTRUSTING } });
+
+    const view = await service.create(consumer, createDto);
+
+    const { tx, ops } = operationsOf(view.xdr);
+    expect(ops.map((op) => op.type)).toEqual([
+      'changeTrust',
+      'payment',
+      'pathPaymentStrictSend',
+    ]);
+    const trust = ops[0] as Operation.ChangeTrust;
+    // The source's own operation: the one signature it already gives covers it.
+    expect(trust.source).toBeUndefined();
+    expect(tx.source).toBe(SOURCE);
+    expect((trust.line as Asset).equals(USDC)).toBe(true);
+    const fee = ops[1] as Operation.Payment;
+    expect(fee.destination).toBe(FEE_WALLET);
+    expect(fee.amount).toBe('0.0500000');
+    const swap = ops[2] as Operation.PathPaymentStrictSend;
+    expect(swap.destination).toBe(SOURCE);
+    expect(swap.destAsset.equals(USDC)).toBe(true);
+    expect(swap.sendAmount).toBe('9.9500000');
+    // The fee is per operation, so the trustline costs one base fee more.
+    expect(tx.fee).toBe('300');
+    expect(view.trustline).toEqual({ code: 'USDC', issuer: DEST_ISSUER });
+  });
+
+  it('adds it before the path payment when no commission is charged', async () => {
+    const { service } = make(
+      { [SOURCE]: { balances: UNTRUSTING } },
+      { feeWallet: '', feeBps: 0 },
+    );
+
+    const view = await service.create(
+      { ...consumer, planSwapFeeBps: 0 },
+      createDto,
+    );
+
+    expect(operationsOf(view.xdr).ops.map((op) => op.type)).toEqual([
+      'changeTrust',
+      'pathPaymentStrictSend',
+    ]);
+    expect(view.trustline).toEqual({ code: 'USDC', issuer: DEST_ISSUER });
+  });
+
+  it('adds nothing when the source already trusts the asset', async () => {
+    const { service } = make();
+
+    const view = await service.create(consumer, createDto);
+
+    const { tx, ops } = operationsOf(view.xdr);
+    expect(ops.map((op) => op.type)).toEqual([
+      'payment',
+      'pathPaymentStrictSend',
+    ]);
+    expect(tx.fee).toBe('200');
+    expect(view.trustline).toBeNull();
+  });
+
+  it('never adds a trustline when lumens are bought', async () => {
+    const { service } = make({ [SOURCE]: { balances: UNTRUSTING } });
+
+    const view = await service.create(consumer, {
+      source: SOURCE,
+      amount: '10',
+      sourceAssetCode: 'USDC',
+      sourceAssetIssuer: DEST_ISSUER,
+      destAssetCode: 'XLM',
+    });
+
+    const { ops } = operationsOf(view.xdr);
+    expect(ops.map((op) => op.type)).toEqual([
+      'payment',
+      'pathPaymentStrictSend',
+    ]);
+    expect(view.trustline).toBeNull();
+  });
+
+  it('adds nothing for an issuer buying back its own asset', async () => {
+    const { service } = make({ [DEST_ISSUER]: { balances: UNTRUSTING } });
+
+    const view = await service.create(consumer, {
+      ...createDto,
+      source: DEST_ISSUER,
+    });
+
+    expect(operationsOf(view.xdr).ops.map((op) => op.type)).not.toContain(
+      'changeTrust',
+    );
+    expect(view.trustline).toBeNull();
+  });
+
+  it('refuses a third-party destination that does not trust the asset, saying only it can add the trustline', async () => {
+    const stranger = Keypair.random().publicKey();
+    const { service, prisma, stellar } = make({
+      [stranger]: { balances: UNTRUSTING },
+    });
+
+    const err = await service
+      .create(consumer, { ...createDto, destination: stranger })
+      .then(refused, (e: unknown) => e as ApiError);
+
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.getStatus()).toBe(HttpStatus.BAD_REQUEST);
+    expect(err.code).toBe(ApiErrorCode.TrustlineMissing);
+    expect(err.message).toBe(
+      `Account ${stranger} has no trustline for USDC:${DEST_ISSUER}, so it ` +
+        'cannot receive the swap. Only that account can add the trustline, by ' +
+        'signing a transaction of its own: ask its owner to add it, then try again.',
+    );
+    expect(stellar.loadAccount).toHaveBeenCalledWith(stranger);
+    expect(prisma.swap.create).not.toHaveBeenCalled();
+  });
+
+  it('never adds a trustline for a third-party destination, even when the source lacks one', async () => {
+    const friend = Keypair.random().publicKey();
+    const { service } = make({ [SOURCE]: { balances: UNTRUSTING } });
+
+    const view = await service.create(consumer, {
+      ...createDto,
+      destination: friend,
+    });
+
+    const { ops } = operationsOf(view.xdr);
+    expect(ops.map((op) => op.type)).toEqual([
+      'payment',
+      'pathPaymentStrictSend',
+    ]);
+    expect((ops[1] as Operation.PathPaymentStrictSend).destination).toBe(
+      friend,
+    );
+    expect(view.trustline).toBeNull();
+  });
+
+  describe('the reserve the new trustline locks', () => {
+    // Three subentries, sponsoring one entry and sponsored for one: the
+    // minimum balance with the new trustline is (2 + 3 + 1 - 1 + 1) x 0.5 =
+    // 3 XLM. Open offers hold 1 XLM more, the swap sends 10 XLM and the fee is
+    // 3 operations x 100 stroops: 14.00003 XLM in all.
+    const fields = { subentry_count: 3, num_sponsoring: 1, num_sponsored: 1 };
+    function holding(lumens: string) {
+      return {
+        [SOURCE]: {
+          balances: [
+            {
+              asset_type: 'native',
+              balance: lumens,
+              selling_liabilities: '1',
+            },
+          ],
+          fields,
+        },
+      };
+    }
+
+    it('builds when the balance covers it to the stroop', async () => {
+      const { service } = make(holding('14.00003'));
+
+      const view = await service.create(consumer, createDto);
+
+      expect(view.trustline).toEqual({ code: 'USDC', issuer: DEST_ISSUER });
+    });
+
+    it('refuses a stroop short, naming what it needs, instead of building an envelope that fails on-chain', async () => {
+      const { service, prisma } = make(holding('14.0000299'));
+
+      const err = await service
+        .create(consumer, createDto)
+        .then(refused, (e: unknown) => e as ApiError);
+
+      expect(err).toBeInstanceOf(ApiError);
+      expect(err.getStatus()).toBe(HttpStatus.BAD_REQUEST);
+      expect(err.code).toBe(ApiErrorCode.InsufficientBalance);
+      expect(err.message).toBe(
+        `Account ${SOURCE} cannot pay for the USDC trustline this transaction ` +
+          'adds: a trustline locks another 0.5 XLM of its balance, so it needs ' +
+          '14.00003 XLM (its new minimum balance of 3 XLM, 1 XLM held by its ' +
+          'open offers, the 10 XLM it sends, the 0.00003 XLM network fee) but ' +
+          'holds 14.0000299 XLM. Add at least 0.0000001 XLM to it, then try again.',
+      );
+      expect(prisma.swap.create).not.toHaveBeenCalled();
+    });
+
+    it('does not count what the swap sends when it sells an issued asset', async () => {
+      // Selling USDC for EURC: no lumens leave the account, so 4.00003 XLM
+      // (reserve, offers, fee) is enough.
+      const eurcIssuer = Keypair.random().publicKey();
+      const { service } = make(holding('4.00003'));
+
+      const view = await service.create(consumer, {
+        source: SOURCE,
+        amount: '10',
+        sourceAssetCode: 'USDC',
+        sourceAssetIssuer: DEST_ISSUER,
+        destAssetCode: 'EURC',
+        destAssetIssuer: eurcIssuer,
+      });
+
+      expect(view.trustline).toEqual({ code: 'EURC', issuer: eurcIssuer });
+    });
+
+    it('is not checked when no trustline is added', async () => {
+      // Far below any reserve, but it already trusts USDC: nothing here
+      // changes how such a swap was built before.
+      const { service } = make({
+        [SOURCE]: {
+          balances: [
+            { asset_type: 'native', balance: '1' },
+            TRUSTING_BALANCES[1],
+          ],
+        },
+      });
+
+      await expect(service.create(consumer, createDto)).resolves.toMatchObject({
+        trustline: null,
+      });
+    });
+  });
+
+  it('replays the stored transaction unchanged, trustline included, after the account trusts the asset', async () => {
+    const horizon = { [SOURCE]: { balances: UNTRUSTING as unknown[] } };
+    const { service, prisma, stellar } = make(horizon);
+    const first = await service.create(consumer, createDto, 'trust-key');
+    // The wallet has since added the trustline some other way: a replay is
+    // still the swap that was built, and never reads the account again.
+    horizon[SOURCE].balances = TRUSTING_BALANCES;
+    stellar.loadAccount.mockClear();
+
+    const second = await service.create(consumer, createDto, 'trust-key');
+
+    expect(second.id).toBe(first.id);
+    expect(second.xdr).toBe(first.xdr);
+    expect(second.txHash).toBe(first.txHash);
+    expect(second.trustline).toEqual({ code: 'USDC', issuer: DEST_ISSUER });
+    expect(prisma.swap.create).toHaveBeenCalledTimes(1);
+    expect(stellar.loadAccount).not.toHaveBeenCalled();
+  });
+
+  it('reads the trustline back from the stored envelope on a single read', async () => {
+    const { service, prisma } = make({ [SOURCE]: { balances: UNTRUSTING } });
+    const created = await service.create(consumer, createDto);
+    // The fake keeps no relation; the read is scoped by the consumer's name.
+    prisma.rows[0].consumer = { apisixUsername: consumer.username };
+
+    const read = await service.findOne(consumer, created.id);
+
+    expect(read.trustline).toEqual({ code: 'USDC', issuer: DEST_ISSUER });
+  });
+});
+
+describe('SwapsService merchant fee', () => {
+  const MERCHANT = Keypair.random().publicKey();
+
+  function make() {
+    const prisma = createPrisma();
+    const stellar = makeStellar();
+    const service = new SwapsService(
+      makeConfig(),
+      prisma,
+      makeEmitter(prisma, { emit: jest.fn() } as any),
+      stellar as any,
+      new ConsumerResolverService(prisma as never),
+      new StellarAccountLoader(stellar as never),
+      new SignedTransactionRelay(stellar as never),
+      recordTokens,
+    );
+    return { service, prisma };
+  }
+
+  const opsOf = (xdr: string) =>
+    (TransactionBuilder.fromXDR(xdr, Networks.TESTNET) as Transaction)
+      .operations;
+
+  // 1.5% of 10 XLM is 0.15, plus 0.1 fixed: 0.25 to the merchant.
+  const merchantFee = { bps: 150, fixed: '0.1', wallet: MERCHANT };
+
+  it('pays the merchant by its own payment, deducted from the amount by default', async () => {
+    const { service, prisma } = make();
+
+    const view = await service.create(consumer, { ...createDto, merchantFee });
+
+    const ops = opsOf(view.xdr);
+    expect(ops.map((op) => op.type)).toEqual([
+      'payment',
+      'payment',
+      'pathPaymentStrictSend',
+    ]);
+    // The plan commission and the merchant fee stay apart on-chain.
+    expect((ops[0] as Operation.Payment).destination).toBe(FEE_WALLET);
+    expect((ops[0] as Operation.Payment).amount).toBe('0.0500000');
+    expect((ops[1] as Operation.Payment).destination).toBe(MERCHANT);
+    expect((ops[1] as Operation.Payment).amount).toBe('0.2500000');
+    expect((ops[1] as Operation.Payment).asset.isNative()).toBe(true);
+    // 10 − 0.05 plan − 0.25 merchant.
+    expect((ops[2] as Operation.PathPaymentStrictSend).sendAmount).toBe(
+      '9.7000000',
+    );
+    const record = {
+      bps: 150,
+      fixed: '0.1',
+      amount: '0.25',
+      asset: 'native',
+      wallet: MERCHANT,
+      paidBy: 'recipient',
+    };
+    expect(view.merchantFee).toEqual(record);
+    expect(prisma.swap.create.mock.calls[0][0].data.merchantFee).toEqual(
+      record,
+    );
+  });
+
+  it('sends the fee on top when the payer pays it, routing the whole amount less the plan fee', async () => {
+    const { service } = make();
+
+    const view = await service.create(consumer, {
+      ...createDto,
+      merchantFee: { ...merchantFee, paidBy: 'payer' },
+    });
+
+    const ops = opsOf(view.xdr);
+    expect((ops[1] as Operation.Payment).amount).toBe('0.2500000');
+    expect((ops[2] as Operation.PathPaymentStrictSend).sendAmount).toBe(
+      '9.9500000',
+    );
+    expect(view.merchantFee?.paidBy).toBe('payer');
+  });
+
+  it('quotes the fee without building anything', async () => {
+    const { service, prisma } = make();
+
+    const quote = await service.quote(consumer, { ...createDto, merchantFee });
+
+    expect(quote.merchantFee).toMatchObject({
+      amount: '0.25',
+      wallet: MERCHANT,
+    });
+    expect(quote.swap.amount).toBe('9.7');
+    expect(prisma.swap.create).not.toHaveBeenCalled();
+  });
+
+  it('builds no merchant payment and stores no fee when the request names none', async () => {
+    const { service } = make();
+
+    const view = await service.create(consumer, createDto);
+
+    expect(opsOf(view.xdr).map((op) => op.type)).toEqual([
+      'payment',
+      'pathPaymentStrictSend',
+    ]);
+    expect(view.merchantFee).toBeNull();
+  });
+
+  it('refuses a fee paid to the source itself and one that eats the whole amount', async () => {
+    const { service } = make();
+
+    await expect(
+      service.create(consumer, {
+        ...createDto,
+        merchantFee: { ...merchantFee, wallet: SOURCE },
+      }),
+    ).rejects.toMatchObject({ code: ApiErrorCode.ValidationFailed });
+    await expect(
+      service.quote(consumer, {
+        ...createDto,
+        merchantFee: { fixed: '10', wallet: MERCHANT },
+      }),
+    ).rejects.toMatchObject({ code: ApiErrorCode.InvalidAmount });
   });
 });

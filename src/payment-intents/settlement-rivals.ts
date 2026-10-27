@@ -1,5 +1,6 @@
-import type { PaymentIntent, Prisma } from '@generated/prisma/client';
+import { type PaymentIntent, Prisma } from '@generated/prisma/client';
 import type { Chain } from '@/chains/chains.constants';
+import { paymentLegs } from '@/payment-intents/payment-legs';
 import { SETTLEMENT_RIVALS_MAX } from '@/payment-intents/payment-intents.constants';
 import { STELLAR_DECIMALS } from '@/stellar/stellar.constants';
 import { fromStroops, toStroops } from '@/swaps/swap-math';
@@ -26,9 +27,16 @@ const NO_RIVALS: Prisma.PaymentIntentWhereInput = { id: { in: [] } };
  * payment let anyone fill it with junk intents at a merchant's address. Each
  * keeps what the verifier itself requires a rival to share with this intent:
  *
- * - Stellar: memo, destination, asset (code and issuer), and amount — the same
- *   number of stroops, which is what the verifier compares, or no amount at
- *   all, since an open-amount intent is paid by any amount. When THIS intent is
+ * - Stellar: memo, destination, asset (code and issuer), and amount: what the
+ *   destination receives, the same number of stroops, which is what the
+ *   verifier compares, or no amount at all, since an open-amount intent is paid
+ *   by any amount. With a merchant fee the destination receives its LEG, not
+ *   `amount` (less when the recipient pays the fee), so this intent's leg is
+ *   what an older plain intent must match; and an older intent with a fee is
+ *   asked about whatever its `amount`, since its own leg is not a column: the
+ *   memo, destination and asset bound those, and the verifier decides. Without
+ *   it a newer copy without a fee, for the leg, took the payment of an older
+ *   intent with one. When THIS intent is
  *   open, the amount it was paid is not known here, so rivals of any amount are
  *   asked about; the memo, destination and asset still bound them. A rival paid
  *   by a different operation of the same transaction (a batch to two
@@ -60,7 +68,7 @@ export const SETTLEMENT_RIVAL_FILTERS: Record<
     destination: intent.destination,
     asset: intent.asset,
     assetIssuer: intent.assetIssuer,
-    ...stellarAmount(intent.amount),
+    ...stellarAmount(destinationLeg(intent)),
   }),
   solana: (intent) =>
     intent.chainReference
@@ -86,8 +94,27 @@ export const SETTLEMENT_RIVAL_FILTERS: Record<
 function stellarAmount(amount: string | null): Prisma.PaymentIntentWhereInput {
   if (amount === null) return {};
   return {
-    OR: [{ amount: null }, { amount: { in: amountSpellings(amount) } }],
+    OR: [
+      { amount: null },
+      { amount: { in: amountSpellings(amount) } },
+      // An intent with a merchant fee: its `amount` is not what its destination
+      // receives, so the verifier is asked.
+      { merchantFee: { not: Prisma.DbNull } },
+    ],
   };
+}
+
+/**
+ * What this intent's destination receives: its merchant leg, or `amount`
+ * without a fee (or when the stored fee does not read; the verifier refuses
+ * that intent anyway).
+ */
+function destinationLeg(intent: PaymentIntent): string | null {
+  try {
+    return paymentLegs(intent, STELLAR_DECIMALS).destinationAmount;
+  } catch {
+    return intent.amount;
+  }
 }
 
 function amountSpellings(amount: string): string[] {

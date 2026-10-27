@@ -19,12 +19,14 @@ import {
 import type { Request } from 'express';
 import { AllowPublicKey } from '@/common/decorators/allow-public-key.decorator';
 import { ApiErrorResponse } from '@/common/decorators/api-error-response.decorator';
+import { ApiRecordTokenHeader } from '@/common/decorators/api-record-token.decorator';
 import { ApiUpstream } from '@/common/decorators/api-upstream.decorator';
 import { CurrentConsumer } from '@/common/decorators/current-consumer.decorator';
 import { RateLimit } from '@/common/decorators/rate-limit.decorator';
 import { RequirePermissions } from '@/common/decorators/require-permissions.decorator';
 import { ApiErrorCode } from '@/common/errors/api-error';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
+import { RECORD_TOKEN_HEADER } from '@/common/public-record-token.constants';
 import { headerValue } from '@/common/request-header';
 import {
   CROSS_CHAIN_CREATE_RATE_LIMIT,
@@ -39,6 +41,7 @@ import { SubmitDepositDto } from '@/cross-chain-swaps/dto/submit-deposit.dto';
 import {
   CrossChainAssetListEntity,
   CrossChainQuoteEntity,
+  CrossChainSwapCreatedEntity,
   CrossChainSwapEntity,
   CrossChainSwapListEntity,
 } from '@/cross-chain-swaps/entities/cross-chain-swap.entity';
@@ -57,7 +60,12 @@ export class CrossChainSwapsController {
   @RequirePermissions('swaps:read')
   @ApiOperation({
     summary:
-      'List the assets NEAR Intents can swap on Stellar, Solana and Monad',
+      'List the assets NEAR Intents can swap on every network this service ' +
+      'reaches, with an indicative USD price',
+    description:
+      'Only what NEAR Intents still trades. A token it tags deprecated is left ' +
+      'out, and so is one it lists with no price, because it answers no quote ' +
+      'for such a token.',
   })
   @ApiOkResponse({ type: CrossChainAssetListEntity })
   assets() {
@@ -88,15 +96,15 @@ export class CrossChainSwapsController {
       ApiErrorCode.ProviderError,
     ],
     description:
-      '`provider_error` — NEAR Intents refused the quote (an amount below its ' +
+      '`provider_error`: NEAR Intents refused the quote (an amount below its ' +
       'minimum, a route it cannot fill); `message` carries its reason.',
   })
   @ApiErrorResponse({
     status: 503,
     codes: [ApiErrorCode.ProviderUnavailable, ApiErrorCode.Misconfigured],
     description:
-      '`provider_unavailable` — NEAR Intents is down or rate limiting this ' +
-      'service; retry. `misconfigured` — the plan charges a commission and ' +
+      '`provider_unavailable`: NEAR Intents is down or rate limiting this ' +
+      'service; retry. `misconfigured`: the plan charges a commission and ' +
       'NEAR_INTENTS_FEE_RECIPIENT is not set, or NEAR Intents rejected ' +
       'NEAR_INTENTS_API_KEY.',
   })
@@ -117,7 +125,7 @@ export class CrossChainSwapsController {
   @RateLimit(CROSS_CHAIN_CREATE_RATE_LIMIT)
   @ApiOperation({
     summary:
-      'Create a cross-chain swap → NEAR Intents deposit address + wallet link (SEP-7 / Solana Pay / EIP-681) + QR',
+      'Create a cross-chain swap → NEAR Intents deposit address + wallet link where the origin chain has a standard (SEP-7 / Solana Pay / EIP-681 / BIP-21 / TON / CIP-13) + QR',
   })
   @ApiHeader({
     name: 'Idempotency-Key',
@@ -129,7 +137,12 @@ export class CrossChainSwapsController {
       'body.idempotencyKey.',
     example: 'xswap-retry-2026-10-02-001',
   })
-  @ApiCreatedResponse({ type: CrossChainSwapEntity })
+  @ApiCreatedResponse({
+    type: CrossChainSwapCreatedEntity,
+    description:
+      'The swap. With the shared public key it carries `publicToken`: send it ' +
+      'as `X-Record-Token` to read the swap or report its deposit.',
+  })
   @ApiErrorResponse({
     status: 400,
     codes: [
@@ -142,9 +155,10 @@ export class CrossChainSwapsController {
       ApiErrorCode.ProviderError,
     ],
     description:
-      '`network_unsupported` — a dev (testnet) key: NEAR Intents settles on ' +
-      'mainnet only. `trustline_missing` — a Stellar recipient does not trust ' +
-      'the destination asset. `provider_error` — NEAR Intents refused the quote.',
+      '`network_unsupported`: a dev (testnet) key, and NEAR Intents settles on ' +
+      'mainnet only. `trustline_missing`: a Stellar recipient does not trust ' +
+      'the destination asset, and only that account can add the trustline. ' +
+      '`provider_error`: NEAR Intents refused the quote.',
   })
   @ApiErrorResponse({
     status: 409,
@@ -156,8 +170,8 @@ export class CrossChainSwapsController {
     status: 503,
     codes: [ApiErrorCode.ProviderUnavailable, ApiErrorCode.Misconfigured],
     description:
-      '`provider_unavailable` — NEAR Intents is down or rate limiting this ' +
-      'service; retry. `misconfigured` — the plan charges a commission and ' +
+      '`provider_unavailable`: NEAR Intents is down or rate limiting this ' +
+      'service; retry. `misconfigured`: the plan charges a commission and ' +
       'NEAR_INTENTS_FEE_RECIPIENT is not set, or NEAR Intents rejected ' +
       'NEAR_INTENTS_API_KEY.',
   })
@@ -187,15 +201,32 @@ export class CrossChainSwapsController {
   }
 
   @Get(':id')
-  // Reads this service's own mirror; the observer keeps it current.
+  // Reads this service's own mirror; the observer keeps it current. A public
+  // swap follows its own status with its record token (`X-Record-Token`); the
+  // list stays closed to the public key.
+  @AllowPublicKey()
   @RequirePermissions('swaps:read')
-  @ApiOperation({ summary: 'Get a cross-chain swap by id' })
+  @ApiRecordTokenHeader()
+  @ApiOperation({
+    summary: 'Get a cross-chain swap by id',
+    description:
+      'The shared public key may call it, so a swap made without an account ' +
+      'can follow its own status, but only with the swap’s `publicToken` in ' +
+      '`X-Record-Token`: without it, or with another swap’s, the answer is ' +
+      '404. Every other key reads its own swaps as before. Listing swaps ' +
+      'stays closed to the public key.',
+  })
   @ApiOkResponse({ type: CrossChainSwapEntity })
   findOne(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Param('id') id: string,
+    @Req() req: Request,
   ) {
-    return this.swaps.findOne(consumer, id);
+    return this.swaps.findOne(
+      consumer,
+      id,
+      headerValue(req, RECORD_TOKEN_HEADER),
+    );
   }
 
   @Post(':id/deposit')
@@ -205,6 +236,10 @@ export class CrossChainSwapsController {
   // 1Click at a transaction it verifies on-chain itself.
   @AllowPublicKey()
   @RequirePermissions('swaps:write')
+  // With the shared public key, the swap's record token: a wrong one is a
+  // 404, a missing one is still accepted on this legacy route (logged) until
+  // PUBLIC_RECORD_TOKEN_REQUIRED_ON_LEGACY is on.
+  @ApiRecordTokenHeader('legacy')
   @RateLimit(CROSS_CHAIN_DEPOSIT_RATE_LIMIT)
   // Advances an existing swap; nothing new comes into existence.
   @HttpCode(HttpStatus.OK)
@@ -221,15 +256,21 @@ export class CrossChainSwapsController {
       ApiErrorCode.ProviderError,
     ],
     description:
-      '`validation_failed` — txHash is not a transaction id of the origin ' +
-      'chain. `invalid_state_transition` — the swap already SUCCEEDED, was ' +
-      'REFUNDED or FAILED. `provider_error` — NEAR Intents refused the hash.',
+      '`validation_failed`: txHash is not a transaction id of the origin ' +
+      'chain. `invalid_state_transition`: the swap already SUCCEEDED, was ' +
+      'REFUNDED or FAILED. `provider_error`: NEAR Intents refused the hash.',
   })
   submitDeposit(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Param('id') id: string,
     @Body() dto: SubmitDepositDto,
+    @Req() req: Request,
   ) {
-    return this.swaps.submitDeposit(consumer, id, dto.txHash);
+    return this.swaps.submitDeposit(
+      consumer,
+      id,
+      dto.txHash,
+      headerValue(req, RECORD_TOKEN_HEADER),
+    );
   }
 }

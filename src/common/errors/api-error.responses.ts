@@ -83,7 +83,7 @@ export const API_ERROR_CASES: Readonly<Record<ApiErrorCode, ApiErrorCase>> = {
   // --- resources -----------------------------------------------------------
   [ApiErrorCode.NotFound]: {
     statuses: [404],
-    summary: 'No such resource — or it belongs to another consumer',
+    summary: 'No such resource, or it belongs to another consumer',
     message: 'Payment intent pi_7Yc3Qn0Kx2 not found',
     path: '/v1/payment-intents/pi_7Yc3Qn0Kx2',
   },
@@ -117,7 +117,7 @@ export const API_ERROR_CASES: Readonly<Record<ApiErrorCode, ApiErrorCase>> = {
     summary: 'A conflicting operation is still settling',
     message:
       'A withdrawal from this pool is already in flight for this account. ' +
-      'Wait for it to settle or expire before starting another — the ' +
+      'Wait for it to settle or expire before starting another: the ' +
       'commission on a withdrawal depends on the position it leaves behind.',
     path: '/v1/liquidity-pools/withdraw',
   },
@@ -139,7 +139,8 @@ export const API_ERROR_CASES: Readonly<Record<ApiErrorCode, ApiErrorCase>> = {
   },
   [ApiErrorCode.InsufficientBalance]: {
     statuses: [400],
-    summary: 'The source account cannot cover the amount',
+    summary:
+      'The source account cannot cover the amount, or the XLM reserve the transaction needs',
     message:
       'Account GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ ' +
       'holds only 12.5000000 shares of this pool',
@@ -153,12 +154,14 @@ export const API_ERROR_CASES: Readonly<Record<ApiErrorCode, ApiErrorCase>> = {
   },
   [ApiErrorCode.TrustlineMissing]: {
     statuses: [400],
-    summary: 'The account must trust the asset before it can hold it',
+    summary:
+      'An account does not trust the asset, and this request cannot add the trustline for it',
     message:
-      'Destination GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ ' +
+      'Account GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ ' +
       'has no trustline for ' +
-      'USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5 — it ' +
-      'must trust the asset before it can receive the swap',
+      'USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5, so it ' +
+      'cannot receive the swap. Only that account can add the trustline, by ' +
+      'signing a transaction of its own: ask its owner to add it, then try again.',
     path: '/v1/swaps',
   },
   [ApiErrorCode.InvalidAmount]: {
@@ -178,7 +181,7 @@ export const API_ERROR_CASES: Readonly<Record<ApiErrorCode, ApiErrorCase>> = {
     summary:
       'Cross-chain swaps settle on mainnet only; a dev key cannot open one',
     message:
-      'Cross-chain swaps run on mainnet only — NEAR Intents has no test network. Use a prod API key.',
+      'Cross-chain swaps run on mainnet only: NEAR Intents has no test network. Use a prod API key.',
     path: '/v1/cross-chain-swaps',
   },
   [ApiErrorCode.AssetUnsupported]: {
@@ -187,6 +190,13 @@ export const API_ERROR_CASES: Readonly<Record<ApiErrorCode, ApiErrorCase>> = {
     message:
       'NEAR Intents does not support asset "yXLM" on stellar. GET /v1/cross-chain-swaps/assets lists the ones it does.',
     path: '/v1/cross-chain-swaps/quote',
+  },
+  [ApiErrorCode.MerchantFeeUnsupported]: {
+    statuses: [400],
+    summary: 'This operation cannot pay a merchant fee yet',
+    message:
+      'A merchant fee is not available on monad swaps on this deployment: Kuru Flow takes one referrer fee per swap and the plan commission uses it, and no merchant fee router is configured (KURU_MERCHANT_FEE_ROUTER).',
+    path: '/v1/swaps',
   },
   [ApiErrorCode.TransactionRejected]: {
     statuses: [400],
@@ -215,6 +225,71 @@ export const API_ERROR_CASES: Readonly<Record<ApiErrorCode, ApiErrorCase>> = {
     message: 'The payment provider rejected the request.',
     path: '/v1/onramp/quotes',
   },
+  // --- Private payments ---------------------------------------------------------
+  [ApiErrorCode.RecipientNotRegistered]: {
+    statuses: [400],
+    summary:
+      "The recipient holds no confidential account on Cosmos Pay's token under auditor 0",
+    message:
+      'The recipient GCALNQQBXAPZ2WIRSDDBMSTAKCUH5SG6U76YBFLQLIXJTF7FE5AX7AOO is not ' +
+      "registered on Cosmos Pay's confidential token. Register it with the " +
+      'wallet first, under auditor id 0.',
+    path: '/v1/zk-payments',
+  },
+  [ApiErrorCode.PaymentTransferMismatch]: {
+    statuses: [400],
+    summary:
+      "The payment transaction does not pay this payment's net amount to its recipient",
+    message:
+      'The payment transaction does not settle this private payment: it is not a ' +
+      "confidential transfer of the payment's net amount to its recipient.",
+    path: '/v1/zk-checkout/cmh4x2k9a0001l70g8v5q3z2w/confirm',
+  },
+  [ApiErrorCode.FeeTransferMismatch]: {
+    statuses: [400],
+    summary:
+      "The fee transaction does not pay this payment's commission to the fee account",
+    message:
+      'The fee transaction does not settle this private payment: it is not a ' +
+      'confidential transfer of the commission to the fee account.',
+    path: '/v1/zk-checkout/cmh4x2k9a0001l70g8v5q3z2w/confirm',
+  },
+  [ApiErrorCode.MerchantFeeTransferMismatch]: {
+    statuses: [400],
+    summary:
+      "The merchant fee transaction does not pay this payment's merchant fee to its wallet",
+    message:
+      'The merchant fee transaction does not settle this private payment: it is ' +
+      "not a confidential transfer of the merchant fee to the fee's wallet.",
+    path: '/v1/zk-checkout/cmh4x2k9a0001l70g8v5q3z2w/confirm',
+  },
+  [ApiErrorCode.PayerMismatch]: {
+    statuses: [400],
+    summary: 'The payment and fee transfers come from different accounts',
+    message:
+      'The payment and fee transfers must come from the same account; they ' +
+      'come from two different ones.',
+    path: '/v1/zk-checkout/cmh4x2k9a0001l70g8v5q3z2w/confirm',
+  },
+  [ApiErrorCode.TransactionNotFound]: {
+    statuses: [400],
+    summary:
+      'No such transaction on the network yet, or it is older than the RPC keeps',
+    message:
+      'Transaction 5f0e8a1d3c7b9e2f4a6c8d0b1e3f5a7c9d2b4e6f8a0c1d3e5f7a9b2c4d6e8f0a ' +
+      'was not found on testnet: it has not closed yet, or it is older than ' +
+      'the RPC keeps. Retry in a few seconds.',
+    path: '/v1/zk-checkout/cmh4x2k9a0001l70g8v5q3z2w/confirm',
+  },
+  [ApiErrorCode.Expired]: {
+    statuses: [400],
+    summary:
+      'A transfer of the private payment closed after the payment expired',
+    message:
+      'The payment transaction closed at 2026-10-25T14:05:12.000Z, after this ' +
+      'Private payment expired at 2026-10-25T14:00:00.000Z.',
+    path: '/v1/zk-checkout/cmh4x2k9a0001l70g8v5q3z2w/confirm',
+  },
   [ApiErrorCode.ProviderUnavailable]: {
     statuses: [503, 502, 504],
     summary: 'The upstream provider could not be reached, or timed out',
@@ -237,7 +312,7 @@ export const API_ERROR_CASES: Readonly<Record<ApiErrorCode, ApiErrorCase>> = {
   // --- KYC ------------------------------------------------------------------
   [ApiErrorCode.KycStateInvalid]: {
     statuses: [409],
-    summary: 'An illegal KYC state transition — not a duplicate request',
+    summary: 'An illegal KYC state transition, not a duplicate request',
     message: "Cannot move receiver from 'approved' to 'pending'",
     path: '/v1/kyc/receivers/rc_4Kd9Wp1Lm3',
   },
@@ -251,7 +326,7 @@ export const API_ERROR_CASES: Readonly<Record<ApiErrorCode, ApiErrorCase>> = {
   },
   [ApiErrorCode.AccountDisabled]: {
     statuses: [403],
-    summary: 'An operator disabled this fiat account — not a key problem',
+    summary: 'An operator disabled this fiat account, not a key problem',
     message:
       'This fiat account is disabled. Re-enable it to use onramp/offramp.',
     path: '/v1/onramp/quotes',
@@ -278,7 +353,7 @@ export const API_ERROR_CASES: Readonly<Record<ApiErrorCode, ApiErrorCase>> = {
   // --- aliases ---------------------------------------------------------------
   [ApiErrorCode.AliasTaken]: {
     statuses: [409],
-    summary: 'The handle is already claimed — first claim wins',
+    summary: 'The handle is already claimed: first claim wins',
     message: 'The alias "alice" is already claimed.',
     path: '/v1/aliases',
   },
@@ -311,6 +386,13 @@ export const API_ERROR_CASES: Readonly<Record<ApiErrorCode, ApiErrorCase>> = {
     summary: 'The recovery token is unknown, expired or already spent',
     message: 'The recovery token is unknown, expired or already used.',
     path: '/v1/aliases/alice/recovery/complete',
+  },
+  [ApiErrorCode.CustomerWalletTaken]: {
+    statuses: [409],
+    summary: 'Another of your customers already holds that wallet',
+    message:
+      'The wallet GCALNQQBXAPZ2WIRSDDBMSTAKCUH5SG6U76YBFLQLIXJTF7FE5AX7AOO (stellar) already belongs to customer clz9xcust00002.',
+    path: '/v1/customers/clz9xcust00001/wallets',
   },
   [ApiErrorCode.AliasAddressConflict]: {
     statuses: [400],
@@ -429,7 +511,7 @@ export const API_ERROR_CASES: Readonly<Record<ApiErrorCode, ApiErrorCase>> = {
   [ApiErrorCode.PluginFailed]: {
     statuses: [502, 504],
     summary:
-      'The plugin failed or timed out — the detail is logged, never returned',
+      'The plugin failed or timed out (the detail is logged, never returned)',
     message: 'Plugin example failed while handling add-note.',
     path: '/v1/plugins/example/commands/add-note',
   },
@@ -437,14 +519,14 @@ export const API_ERROR_CASES: Readonly<Record<ApiErrorCode, ApiErrorCase>> = {
   // --- service --------------------------------------------------------------
   [ApiErrorCode.Misconfigured]: {
     statuses: [503],
-    summary: 'A server-side configuration error — retrying will not help',
+    summary: 'A server-side configuration error: retrying will not help',
     message:
       'BlindPay (prod) is not configured: set BLINDPAY_INSTANCE_ID_PROD.',
     path: '/v1/onramp/quotes',
   },
   [ApiErrorCode.Internal]: {
     statuses: [500],
-    summary: 'Unexpected server error — the detail is logged, never returned',
+    summary: 'Unexpected server error (the detail is logged, never returned)',
     message: 'Internal server error',
     path: '/v1/swaps',
   },
@@ -476,7 +558,7 @@ export const RATE_LIMITED_RESPONSE_HEADERS: HeadersObject = {
   [RATE_LIMIT_HEADER.retryAfter]: {
     description:
       'Seconds to wait before retrying. The only one a browser or a naive ' +
-      'retry loop honours — prefer it.',
+      'retry loop honours: prefer it.',
     schema: { type: 'integer', example: 42 },
   },
   ...RATE_LIMIT_RESPONSE_HEADERS,
@@ -535,7 +617,7 @@ export function apiErrorExamples(
   for (const code of codes) {
     const override = overrides[code];
     examples[code] = {
-      summary: `${code} — ${override?.summary ?? API_ERROR_CASES[code].summary}`,
+      summary: `${code}: ${override?.summary ?? API_ERROR_CASES[code].summary}`,
       value: {
         ...apiErrorExample(code, status),
         ...pickExampleFields(override),
@@ -575,7 +657,7 @@ export function apiErrorContent(
  */
 export function apiErrorDescription(codes: readonly ApiErrorCode[]): string {
   return codes
-    .map((code) => `\`${code}\` — ${API_ERROR_CASES[code].summary}`)
+    .map((code) => `\`${code}\`: ${API_ERROR_CASES[code].summary}`)
     .join('\n\n');
 }
 

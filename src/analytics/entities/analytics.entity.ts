@@ -42,6 +42,19 @@ export class AssetVolumeEntity {
   amount!: string;
 
   @ApiProperty({ example: 42 }) count!: number;
+
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    description:
+      "`amount` in USD with two decimals, valued at NEAR Intents’ current reference price for each asset (its token list, cached for a few minutes): an indicative figure at today's price, not the price on the day each payment settled. A mainnet token is priced by its contract (on " +
+      'Stellar its code and issuer), so a token NEAR Intents does not list has no price; a ' +
+      'test-network token takes the price of its mainnet namesake. When the code comes from ' +
+      'several issuers, only the priced ones are added. Null when none is priced, or when the ' +
+      'prices could not be read.',
+    example: '10418.42',
+  })
+  amountUsd!: string | null;
 }
 
 export class SeriesPointEntity {
@@ -71,6 +84,24 @@ export class RecentPaymentEntity {
 export class AnalyticsSummaryEntity {
   @ApiProperty({ type: SummaryTotalsEntity }) totals!: SummaryTotalsEntity;
   @ApiProperty({ type: [AssetVolumeEntity] }) volume!: AssetVolumeEntity[];
+
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    description:
+      "Every settled payment in USD with two decimals, valued at NEAR Intents’ current reference price for each asset (its token list, cached for a few minutes): an indicative figure at today's price, not the price on the day each payment settled. Payments in an asset with no " +
+      'price are left out and counted in `unpriced`. Null only when there were settled ' +
+      "payments and NEAR Intents' prices could not be read; `0.00` when nothing settled.",
+    example: '12843.17',
+  })
+  volumeUsd!: string | null;
+
+  @ApiProperty({
+    description:
+      "Settled payments `volumeUsd` leaves out: their asset has no USD price (all of them when NEAR Intents' prices could not be read).",
+    example: 0,
+  })
+  unpriced!: number;
   @ApiProperty({ type: WebhookHealthEntity }) webhooks!: WebhookHealthEntity;
 
   @ApiProperty({ description: 'Distinct paying accounts.', example: 58 })
@@ -84,6 +115,407 @@ export class AnalyticsSummaryEntity {
 
   @ApiProperty({ type: [RecentPaymentEntity] })
   recent!: RecentPaymentEntity[];
+}
+
+export class SeriesBucketEntity {
+  @ApiProperty({
+    description: 'The first day of the bucket (UTC; weeks start on Monday).',
+    example: '2026-10-01',
+  })
+  start!: string;
+  @ApiProperty({
+    description: 'Payments created in the bucket, any status.',
+    example: 31,
+  })
+  count!: number;
+  @ApiProperty({ example: 27 }) succeeded!: number;
+  @ApiProperty({ description: 'Failed, cancelled or expired.', example: 3 })
+  failed!: number;
+  @ApiProperty({
+    description: 'Settled volume, every asset added.',
+    example: '1842.5',
+  })
+  volume!: string;
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    description:
+      "The bucket's settled payments in USD with two decimals, valued at NEAR Intents’ current reference price for each asset (its token list, cached for a few minutes): an indicative figure at today's price, not the price on the day each payment settled. Payments in an asset " +
+      "with no price add nothing (the window's `unpriced` counts them). Null only when the " +
+      "bucket has settled payments and NEAR Intents' prices could not be read.",
+    example: '1790.36',
+  })
+  volumeUsd!: string | null;
+}
+
+export class SeriesWindowEntity {
+  @ApiProperty({ example: 284 }) count!: number;
+  @ApiProperty({ example: 251 }) succeeded!: number;
+  @ApiProperty({ example: 19 }) failed!: number;
+  @ApiProperty({ example: '17410.25' }) volume!: string;
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    description:
+      "The window's settled payments in USD with two decimals, valued at NEAR Intents’ current reference price for each asset (its token list, cached for a few minutes): an indicative figure at today's price, not the price on the day each payment settled. Null only when the " +
+      "window has settled payments and NEAR Intents' prices could not be read.",
+    example: '16982.04',
+  })
+  volumeUsd!: string | null;
+  @ApiProperty({
+    description:
+      "Settled payments of the window `volumeUsd` leaves out: their asset has no USD price (all of them when NEAR Intents' prices could not be read).",
+    example: 0,
+  })
+  unpriced!: number;
+}
+
+export class SeriesTotalsEntity extends SeriesWindowEntity {
+  @ApiProperty({
+    description: 'Distinct paying accounts in the window.',
+    example: 96,
+  })
+  payers!: number;
+}
+
+export class SeriesOutcomeCountsEntity {
+  @ApiProperty({
+    description: 'Created in the bucket or window, any status.',
+    example: 42,
+  })
+  count!: number;
+  @ApiProperty({ example: 37 }) succeeded!: number;
+  @ApiProperty({
+    description:
+      'Given up on: failed or expired (and, for a cross-chain swap, refunded).',
+    example: 3,
+  })
+  failed!: number;
+}
+
+export class SeriesSwapBucketEntity extends SeriesOutcomeCountsEntity {
+  @ApiProperty({
+    description:
+      'The first day of the bucket (UTC; weeks start on Monday), the same as the payments bucket at that index.',
+    example: '2026-10-01',
+  })
+  start!: string;
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    description:
+      "The bucket’s settled swap volume in USD, two decimals: what the completed swaps sold, each asset at NEAR Intents' current price. Null when no price could be read; an asset with no price counts as zero.",
+    example: '1250.40',
+  })
+  volumeUsd!: string | null;
+}
+
+export class SeriesSwapsByKindEntity {
+  @ApiProperty({ description: 'Stellar DEX swaps.', example: 30 })
+  dex!: number;
+  @ApiProperty({
+    description: 'Solana (Jupiter) and Monad (Kuru Flow) swaps. Mainnet only.',
+    example: 8,
+  })
+  chain!: number;
+  @ApiProperty({
+    description: 'Swaps between networks through NEAR Intents. Mainnet only.',
+    example: 4,
+  })
+  crossChain!: number;
+  @ApiProperty({
+    description:
+      'USDT0 sent from Stellar to an EVM network through LayerZero (`/v1/usdt0`). Mainnet only.',
+    example: 2,
+  })
+  usdt0!: number;
+}
+
+export class SeriesSwapTotalsEntity extends SeriesOutcomeCountsEntity {
+  @ApiProperty({
+    description:
+      'Not final yet: unsigned, submitted (a USDT0 transfer LayerZero is still delivering included), or a cross-chain swap awaiting or processing its deposit.',
+    example: 2,
+  })
+  inProgress!: number;
+  @ApiProperty({
+    type: SeriesSwapsByKindEntity,
+    description: 'The window’s swaps per kind, any status.',
+  })
+  byKind!: SeriesSwapsByKindEntity;
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    description:
+      "The window’s settled swap volume in USD, two decimals: what the completed swaps sold, each asset at NEAR Intents' current price. Null when no price could be read; an asset with no price counts as zero.",
+    example: '1250.40',
+  })
+  volumeUsd!: string | null;
+  @ApiProperty({
+    description:
+      'Completed swaps whose sold asset has no USD price (a network or token NEAR Intents does not list), left out of volumeUsd.',
+    example: 0,
+  })
+  unpriced!: number;
+}
+
+export class SeriesSwapPreviousEntity extends SeriesOutcomeCountsEntity {
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    description:
+      "The window before’s settled swap volume in USD, two decimals: what the completed swaps sold, each asset at NEAR Intents' current price. Null when no price could be read; an asset with no price counts as zero.",
+    example: '1250.40',
+  })
+  volumeUsd!: string | null;
+}
+
+export class SeriesSwapsEntity {
+  @ApiProperty({
+    type: [SeriesSwapBucketEntity],
+    description:
+      'Swaps of every kind per bucket, on the same buckets as the payments, pre-seeded so a quiet bucket is a zero.',
+  })
+  buckets!: SeriesSwapBucketEntity[];
+  @ApiProperty({
+    type: SeriesSwapTotalsEntity,
+    description: 'The window the buckets cover.',
+  })
+  totals!: SeriesSwapTotalsEntity;
+  @ApiProperty({
+    type: SeriesSwapPreviousEntity,
+    description: 'The window of the same length just before it, for growth.',
+  })
+  previous!: SeriesSwapPreviousEntity;
+}
+
+export class SeriesLiquidityBucketEntity extends SeriesOutcomeCountsEntity {
+  @ApiProperty({
+    description:
+      'The first day of the bucket (UTC; weeks start on Monday), the same as the payments bucket at that index.',
+    example: '2026-10-01',
+  })
+  start!: string;
+}
+
+export class SeriesLiquidityEntity {
+  @ApiProperty({
+    type: [SeriesLiquidityBucketEntity],
+    description:
+      'Liquidity pool deposits and withdrawals per bucket, on the same buckets as the payments, pre-seeded so a quiet bucket is a zero.',
+  })
+  buckets!: SeriesLiquidityBucketEntity[];
+  @ApiProperty({
+    type: SeriesOutcomeCountsEntity,
+    description: 'Liquidity pool deposits and withdrawals in the window.',
+  })
+  totals!: SeriesOutcomeCountsEntity;
+  @ApiProperty({
+    type: SeriesOutcomeCountsEntity,
+    description: 'The window of the same length just before it, for growth.',
+  })
+  previous!: SeriesOutcomeCountsEntity;
+}
+
+export class SeriesWebhookCountsEntity {
+  @ApiProperty({
+    description: 'Deliveries created in the window, any status.',
+    example: 310,
+  })
+  deliveries!: number;
+  @ApiProperty({
+    description:
+      'Of those, the ones whose last attempt failed, as GET /v1/summary counts them (the sweeper may still redeliver one).',
+    example: 4,
+  })
+  failed!: number;
+}
+
+export class SeriesWebhookBucketEntity {
+  @ApiProperty({
+    description:
+      'The first day of the bucket (UTC; weeks start on Monday), the same as the payments bucket at that index.',
+    example: '2026-10-01',
+  })
+  start!: string;
+  @ApiProperty({
+    description: 'Deliveries created in the bucket, any status.',
+    example: 26,
+  })
+  deliveries!: number;
+  @ApiProperty({
+    description:
+      'Of those, the ones whose last attempt failed, as GET /v1/summary counts them.',
+    example: 1,
+  })
+  failed!: number;
+}
+
+export class SeriesWebhooksEntity {
+  @ApiProperty({
+    type: [SeriesWebhookBucketEntity],
+    description:
+      'Deliveries per bucket, on the same buckets as the payments, pre-seeded so a quiet bucket is a zero.',
+  })
+  buckets!: SeriesWebhookBucketEntity[];
+  @ApiProperty({
+    type: SeriesWebhookCountsEntity,
+    description:
+      'Deliveries to every endpoint of the consumer in the window. Not scoped by network: an endpoint belongs to none.',
+  })
+  totals!: SeriesWebhookCountsEntity;
+  @ApiProperty({
+    type: SeriesWebhookCountsEntity,
+    description: 'The window of the same length just before it, for growth.',
+  })
+  previous!: SeriesWebhookCountsEntity;
+}
+
+export class SeriesPrivatePaymentBucketEntity {
+  @ApiProperty({
+    description:
+      'The first day of the bucket (UTC; weeks start on Monday), the same as the payments bucket at that index.',
+    example: '2026-10-01',
+  })
+  start!: string;
+  @ApiProperty({
+    description: 'Private payments created in the bucket, any status.',
+    example: 12,
+  })
+  count!: number;
+  @ApiProperty({
+    description: 'Settled: both transfers confirmed.',
+    example: 9,
+  })
+  succeeded!: number;
+  @ApiProperty({
+    description:
+      'Past their deadline without settling (a pending payment reads as expired once its deadline passes).',
+    example: 2,
+  })
+  expired!: number;
+  @ApiProperty({
+    description:
+      'Settled amount in XLM, what the payers paid (the commission included).',
+    example: '450.5',
+  })
+  volume!: string;
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    description:
+      "The bucket's settled amount in USD with two decimals, valued at XLM's current reference price on NEAR Intents (an indicative figure at today's price). " +
+      "Null only when there is something settled and NEAR Intents' prices could not be read.",
+    example: '112.63',
+  })
+  volumeUsd!: string | null;
+}
+
+export class SeriesPrivatePaymentWindowEntity {
+  @ApiProperty({
+    description: 'Private payments created in the window, any status.',
+    example: 48,
+  })
+  count!: number;
+  @ApiProperty({ example: 41 }) succeeded!: number;
+  @ApiProperty({
+    description:
+      'Past their deadline without settling (a pending payment reads as expired once its deadline passes).',
+    example: 5,
+  })
+  expired!: number;
+  @ApiProperty({
+    description:
+      'Settled amount in XLM, what the payers paid (the commission included).',
+    example: '2140.25',
+  })
+  volume!: string;
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    description:
+      "The window's settled amount in USD with two decimals, valued at XLM's current reference price on NEAR Intents (an indicative figure at today's price). " +
+      "Null only when there is something settled and NEAR Intents' prices could not be read.",
+    example: '535.06',
+  })
+  volumeUsd!: string | null;
+  @ApiProperty({
+    description:
+      'Commission the settled payments paid to Cosmos Pay, in XLM (0.18% of each).',
+    example: '0.214025',
+  })
+  fees!: string;
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    description:
+      "The window's commission in USD with two decimals, valued at XLM's current reference price on NEAR Intents (an indicative figure at today's price). " +
+      "Null only when there is something settled and NEAR Intents' prices could not be read.",
+    example: '0.05',
+  })
+  feesUsd!: string | null;
+}
+
+export class SeriesPrivatePaymentsEntity {
+  @ApiProperty({
+    type: [SeriesPrivatePaymentBucketEntity],
+    description:
+      'Private payments per bucket, on the same buckets as the payments, pre-seeded so a quiet bucket is a zero.',
+  })
+  buckets!: SeriesPrivatePaymentBucketEntity[];
+  @ApiProperty({
+    type: SeriesPrivatePaymentWindowEntity,
+    description: 'The window the buckets cover.',
+  })
+  totals!: SeriesPrivatePaymentWindowEntity;
+  @ApiProperty({
+    type: SeriesPrivatePaymentWindowEntity,
+    description: 'The window of the same length just before it, for growth.',
+  })
+  previous!: SeriesPrivatePaymentWindowEntity;
+}
+
+export class AnalyticsSeriesEntity {
+  @ApiProperty({ enum: ['day', 'week', 'month', 'year'], example: 'month' })
+  period!: string;
+  @ApiProperty({
+    type: [SeriesBucketEntity],
+    description:
+      '30 days, 12 weeks, 12 months or 5 years, oldest first, pre-seeded so a quiet bucket is a zero.',
+  })
+  buckets!: SeriesBucketEntity[];
+  @ApiProperty({
+    type: SeriesTotalsEntity,
+    description: 'The window the buckets cover.',
+  })
+  totals!: SeriesTotalsEntity;
+  @ApiProperty({
+    type: SeriesWindowEntity,
+    description: 'The window of the same length just before it, for growth.',
+  })
+  previous!: SeriesWindowEntity;
+  @ApiProperty({
+    type: SeriesSwapsEntity,
+    description:
+      'Swaps of every kind (Stellar DEX, Solana and Monad, cross-chain, USDT0 sent through LayerZero) on the network the key targets: a sandbox key counts no Solana, Monad, cross-chain swap or USDT0 transfer, which run on mainnet only.',
+  })
+  swaps!: SeriesSwapsEntity;
+  @ApiProperty({
+    type: SeriesLiquidityEntity,
+    description: 'Liquidity pool operations on the network the key targets.',
+  })
+  liquidity!: SeriesLiquidityEntity;
+  @ApiProperty({
+    type: SeriesWebhooksEntity,
+    description: 'Webhook deliveries to the consumer’s endpoints.',
+  })
+  webhooks!: SeriesWebhooksEntity;
+  @ApiProperty({
+    type: SeriesPrivatePaymentsEntity,
+    description:
+      'Private payments (amounts hidden on-chain, /v1/zk-payments) on the network the key targets. They run on testnet only for now, so a production key counts none.',
+  })
+  zkPayments!: SeriesPrivatePaymentsEntity;
 }
 
 export class AssetBalanceEntity {
@@ -120,7 +552,7 @@ export class ApiLogListEntity {
   @ApiProperty({ type: [ApiLogEntity] }) data!: ApiLogEntity[];
 
   @ApiProperty({
-    description: 'Total matching rows — not the page length.',
+    description: 'Total matching rows, not the page length.',
     example: 41203,
   })
   total!: number;
@@ -159,7 +591,7 @@ export class WebhookLogListEntity {
   @ApiProperty({ type: [WebhookLogEntity] }) data!: WebhookLogEntity[];
 
   @ApiProperty({
-    description: 'Total matching rows — not the page length.',
+    description: 'Total matching rows, not the page length.',
     example: 1204,
   })
   total!: number;

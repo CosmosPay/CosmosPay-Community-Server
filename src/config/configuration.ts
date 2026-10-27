@@ -1,4 +1,5 @@
 import {
+  DEFAULT_ANALYTICS_CACHE_TTL_MS,
   DEFAULT_DEFINDEX_BASE_URL,
   DEFAULT_DEFINDEX_TIMEOUT_MS,
   DEFAULT_ENV_FILE,
@@ -13,16 +14,21 @@ import {
   DEFAULT_MONAD_RPC,
   DEFAULT_NEAR_INTENTS_BASE_URL,
   DEFAULT_NEAR_INTENTS_TIMEOUT_MS,
+  DEFAULT_PAYMENT_LINK_CHECKOUT_URL,
   DEFAULT_RATE_LIMIT_PRUNE_INTERVAL_MS,
   DEFAULT_RECOVERY_SWEEP_INTERVAL_MS,
   DEFAULT_RECOVERY_TIMEOUT_MS,
   DEFAULT_SOLANA_RPC,
+  DEFAULT_STELLAR_RPC_MAINNET,
   DEFAULT_SWAP_AGGREGATOR_TIMEOUT_MS,
   DEFAULT_WALLET_AUTH_SWEEP_INTERVAL_MS,
   DEFAULT_WALLET_AUTH_TIMEOUT_MS,
+  DEFAULT_ZK_PAYMENTS_RPC,
   NETWORK_PASSPHRASE,
   NETWORK_PASSPHRASE_PUBLIC,
 } from '@/config/config.constants';
+import { Asset } from '@stellar/stellar-sdk';
+import { zkPaymentsEnvName } from '@/config/zk-payments-env';
 import { parseReturnUrls } from '@/common/return-url';
 import {
   DEFAULT_APISIX_ADMIN_TIMEOUT_MS,
@@ -86,6 +92,32 @@ export type StellarNetwork = 'public' | 'testnet';
 /** The API-key environment a BlindPay instance serves (`dev` keys, `prod` keys). */
 export type BlindpayEnvironment = 'dev' | 'prod';
 
+/**
+ * Cosmos Pay's confidential token on one network tier: the contracts a ZK
+ * payment is made on, the auditor secret its amounts decrypt under, and the
+ * account the commission is paid to. Every field is the operator's
+ * (`ZK_PAYMENTS_<NETWORK>_*`), printed by `scripts/zk/deploy-testnet.ts`.
+ */
+export interface ZkNetworkConfig {
+  /** Soroban RPC every read goes through; its passphrase is checked first. */
+  rpcUrl: string;
+  networkPassphrase: string;
+  /** The vanilla confidential token wrapping native XLM (C...). */
+  token: string;
+  /** The auditor registry holding Cosmos Pay's key under auditor id 0 (C...). */
+  auditorRegistry: string;
+  /** The UltraHonk verifier registry the token checks proofs against (C...). */
+  verifier: string;
+  /** Native XLM's Stellar Asset Contract on this network: what the token wraps. */
+  underlying: string;
+  /** The auditor scalar `k` (K_aud = k·H), 64 hex characters. A secret. */
+  auditorSecret: string;
+  /** The account the commission is paid to, registered on the token (G...). */
+  feeAccount: string;
+  /** The ledger the token was deployed at: where a wallet's event replay starts. */
+  deployedAtLedger: number;
+}
+
 /** Credentials of one BlindPay platform instance. */
 export interface BlindpayInstanceConfig {
   apiKey: string;
@@ -96,6 +128,13 @@ export interface BlindpayInstanceConfig {
 
 export interface AppConfig {
   nodeEnv: string;
+  /**
+   * `SWAP_COMMISSION_DEV_WAIVER`: outside production, a plan commission whose recipient is
+   * not configured is waived (and logged) instead of answering 503 `misconfigured`, so a
+   * local service can price and build swaps on chains whose fee accounts only the operator
+   * holds. Refused at boot when NODE_ENV=production (env.validation.ts).
+   */
+  swapCommissionDevWaiver: boolean;
   /** When true, mounts /docs (Express middleware — not behind Nest guards). */
   swaggerEnabled: boolean;
   openapi: {
@@ -155,6 +194,20 @@ export interface AppConfig {
    */
   publicKeys: { dev: string; prod: string };
   /**
+   * Per-record read tokens of what the shared public key creates
+   * (`PublicRecordTokens`).
+   */
+  publicRecordTokens: {
+    /**
+     * `PUBLIC_RECORD_TOKEN_REQUIRED_ON_LEGACY`: whether the two routes the
+     * wallet called with the public key before record tokens existed
+     * (`POST /v1/swaps/{id}/submit`, `POST /v1/cross-chain-swaps/{id}/deposit`)
+     * also refuse a request with no `X-Record-Token`. Off until the wallet
+     * sends the token; a wrong token is refused either way.
+     */
+    requiredOnLegacy: boolean;
+  };
+  /**
    * This service's own sender: Resend when `resendApiKey` is set, otherwise SMTP.
    * No `from`, or neither transport, disables every email door.
    */
@@ -182,6 +235,18 @@ export interface AppConfig {
     // (e.g. local dev without the gateway). Otherwise the key type decides.
     network: StellarNetwork;
     horizon: Record<StellarNetwork, string>;
+    /**
+     * Stellar mainnet's Soroban RPC (`STELLAR_RPC_URL_MAINNET`): where USDT0
+     * transfers simulate, assemble and submit their contract call. Mainnet
+     * only, because USDT0 exists on mainnet only.
+     */
+    mainnetRpcUrl: string;
+    /**
+     * A deployed `contracts/soroban/usdt0-fee-wrapper` (C...) bound to USDT0's
+     * OFT and token: a USDT0 transfer with a merchant fee invokes it instead of
+     * the OFT. Null without one, and USDT0 transfers then refuse a merchant fee.
+     */
+    usdt0FeeWrapper: string | null;
     baseFee: string;
     timeoutSeconds: number;
     swap: {
@@ -246,7 +311,17 @@ export interface AppConfig {
    */
   swapAggregators: {
     jupiter: { baseUrl: string; apiKey: string; timeoutMs: number };
-    kuru: { baseUrl: string; apiKey: string; timeoutMs: number };
+    kuru: {
+      baseUrl: string;
+      apiKey: string;
+      timeoutMs: number;
+      /**
+       * A deployed `contracts/MerchantFeeSwapRouter.sol` for Kuru Flow's
+       * router, through which a Monad swap pays a merchant fee; null without
+       * one, and Monad swaps then refuse a merchant fee.
+       */
+      merchantFeeRouter: string | null;
+    };
   };
   /**
    * Cross-chain swaps, settled by NEAR Intents' 1Click API. Mainnet only:
@@ -269,6 +344,16 @@ export interface AppConfig {
     slippageBps: number;
     maxSlippageBps: number;
     deadlineSeconds: number;
+    /**
+     * Fetch the token list at boot, so the first request that needs it (the dashboard's USD
+     * figures, the asset list) does not wait for 1Click. Off in the e2e suites.
+     */
+    prefetchTokens: boolean;
+  };
+  /** The dashboard's analytics reads. */
+  analytics: {
+    /** How long an answer is reused per consumer and network; 0 turns the cache off. */
+    cacheTtlMs: number;
   };
   observer: {
     enabled: boolean;
@@ -299,7 +384,26 @@ export interface AppConfig {
   paymentIntents: {
     // Lifetime of a payment intent; unpaid intents past this are marked EXPIRED.
     ttlSeconds: number;
+    /**
+     * The hosted checkout's origin. A Stellar payment link with a merchant fee
+     * cannot be one SEP-7 `pay` link (that pays one account), so its `uri` is
+     * `<checkoutUrl>/<id>`, where the page asks for the payer's account.
+     */
+    checkoutUrl: string;
+    /**
+     * The gateway's public URL for this API (e.g. https://api.cosmospay.lat/cosmos-api),
+     * which a Solana link with a merchant fee names as its Solana Pay transaction
+     * request: the wallet asks it for the transaction with both transfers.
+     * `PAYMENT_LINK_API_URL`, else `WALLET_AUTH_PUBLIC_BASE_URL` (the same gateway).
+     */
+    apiUrl: string;
   };
+  /**
+   * Private payments, per network tier. Null where `ZK_PAYMENTS_<NETWORK>_TOKEN` is
+   * unset: the feature is off on that network and its routes answer
+   * `network_unsupported`. Mainnet stays null until an operator deploys there.
+   */
+  zkPayments: Record<StellarNetwork, ZkNetworkConfig | null>;
   webhooks: {
     // Overall AbortController budget ≈ connect + read (defense in depth).
     timeoutMs: number;
@@ -603,8 +707,34 @@ function signersHorizons(): Record<StellarNetwork, string> {
   };
 }
 
+/**
+ * One network's private payments set, or null when its token is unset. Completeness
+ * and shape were checked at boot (`zk-payments-env.ts`), so this only reads.
+ */
+function zkNetwork(network: StellarNetwork): ZkNetworkConfig | null {
+  const env = (field: Parameters<typeof zkPaymentsEnvName>[1]) =>
+    process.env[zkPaymentsEnvName(network, field)]?.trim() ?? '';
+  const token = env('token');
+  if (!token) return null;
+  const networkPassphrase = NETWORK_PASSPHRASE[network];
+  return {
+    rpcUrl: trimSlash(env('rpcUrl') || DEFAULT_ZK_PAYMENTS_RPC[network]),
+    networkPassphrase,
+    token,
+    auditorRegistry: env('auditorRegistry'),
+    verifier: env('verifier'),
+    underlying: Asset.native().contractId(networkPassphrase),
+    auditorSecret: env('auditorSecret').replace(/^0x/i, '').toLowerCase(),
+    feeAccount: env('feeAccount'),
+    deployedAtLedger: parseInt(env('deployedAtLedger'), 10),
+  };
+}
+
 export default (): AppConfig => ({
   nodeEnv: process.env.NODE_ENV ?? 'development',
+  swapCommissionDevWaiver:
+    (process.env.SWAP_COMMISSION_DEV_WAIVER ?? 'false').toLowerCase() ===
+    'true',
   swaggerEnabled: parseSwaggerEnabled(),
   openapi: {
     serverUrl: process.env.OPENAPI_SERVER_URL ?? '',
@@ -663,6 +793,12 @@ export default (): AppConfig => ({
     dev: process.env.PUBLIC_API_KEY_DEV?.trim() ?? '',
     prod: process.env.PUBLIC_API_KEY_PROD?.trim() ?? '',
   },
+  publicRecordTokens: {
+    requiredOnLegacy:
+      (
+        process.env.PUBLIC_RECORD_TOKEN_REQUIRED_ON_LEGACY ?? 'false'
+      ).toLowerCase() === 'true',
+  },
   mail: {
     resendApiKey: process.env.MAIL_RESEND_API_KEY?.trim() ?? '',
     smtp: {
@@ -691,11 +827,16 @@ export default (): AppConfig => ({
   stellar: {
     network: stellarNetwork(),
     horizon: operatorHorizon(),
+    mainnetRpcUrl: trimSlash(
+      process.env.STELLAR_RPC_URL_MAINNET?.trim() ||
+        DEFAULT_STELLAR_RPC_MAINNET,
+    ),
+    usdt0FeeWrapper: process.env.USDT0_FEE_WRAPPER?.trim() || null,
     baseFee: process.env.STELLAR_BASE_FEE ?? '100',
     timeoutSeconds: parseInt(process.env.STELLAR_TX_TIMEOUT ?? '300', 10),
     swap: {
       feeWallet: process.env.STELLAR_SWAP_FEE_WALLET ?? '',
-      feeBps: parseInt(process.env.STELLAR_SWAP_FEE_BPS ?? '50', 10),
+      feeBps: parseInt(process.env.STELLAR_SWAP_FEE_BPS ?? '65', 10),
       slippageBps: parseInt(process.env.STELLAR_SWAP_SLIPPAGE_BPS ?? '50', 10),
       maxSlippageBps: parseInt(
         process.env.STELLAR_SWAP_MAX_SLIPPAGE_BPS ?? '500',
@@ -758,6 +899,7 @@ export default (): AppConfig => ({
           String(DEFAULT_SWAP_AGGREGATOR_TIMEOUT_MS),
         10,
       ),
+      merchantFeeRouter: process.env.KURU_MERCHANT_FEE_ROUTER?.trim() || null,
     },
   },
   nearIntents: {
@@ -784,6 +926,16 @@ export default (): AppConfig => ({
     deadlineSeconds: parseInt(
       process.env.CROSS_CHAIN_SWAP_DEADLINE_SECONDS ??
         String(DEFAULT_CROSS_CHAIN_DEADLINE_SECONDS),
+      10,
+    ),
+    prefetchTokens:
+      (process.env.NEAR_INTENTS_TOKENS_PREFETCH ?? 'true').toLowerCase() !==
+      'false',
+  },
+  analytics: {
+    cacheTtlMs: parseInt(
+      process.env.ANALYTICS_CACHE_TTL_MS ??
+        String(DEFAULT_ANALYTICS_CACHE_TTL_MS),
       10,
     ),
   },
@@ -836,6 +988,19 @@ export default (): AppConfig => ({
   },
   paymentIntents: {
     ttlSeconds: parseInt(process.env.PAYMENT_INTENT_TTL_SECONDS ?? '3600', 10),
+    checkoutUrl: (
+      process.env.PAYMENT_LINK_CHECKOUT_URL?.trim() ||
+      DEFAULT_PAYMENT_LINK_CHECKOUT_URL
+    ).replace(/\/+$/, ''),
+    apiUrl: (
+      process.env.PAYMENT_LINK_API_URL?.trim() ||
+      process.env.WALLET_AUTH_PUBLIC_BASE_URL?.trim() ||
+      ''
+    ).replace(/\/+$/, ''),
+  },
+  zkPayments: {
+    testnet: zkNetwork('testnet'),
+    public: zkNetwork('public'),
   },
   webhooks: {
     // Legacy single timeout kept for callers that still read timeoutMs;

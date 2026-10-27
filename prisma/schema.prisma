@@ -33,6 +33,8 @@ model Consumer {
   chainSwaps       ChainSwap[]
   crossChainSwaps  CrossChainSwap[]
   liquidityOps     LiquidityPoolOperation[]
+  zkPayments       ZkPayment[]
+  usdt0Transfers   Usdt0Transfer[]
 
   // BlindPay (onramp/offramp/KYC) resources mirrored from the provider.
   blindpayReceivers BlindpayReceiver[]
@@ -66,16 +68,36 @@ model Customer {
   // A friendly display alias the merchant can assign (e.g. "Acme — billing").
   alias     String?
   email     String?
-  // Optional Stellar account to associate the customer with on-chain activity.
-  account   String?
   note      String? // free-form merchant note
   reference String? // merchant reference / external id
+  // The customer's wallets, on any chain payments settle on (customer_wallet).
+  wallets   CustomerWallet[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([consumerId])
   @@map("customer")
+}
+
+// A wallet of a customer: one customer has any number of them, on Stellar, Solana or Monad.
+// A wallet belongs to one customer of a merchant (unique per consumer, chain and address), so
+// a payment's payer counts toward exactly one customer. `consumerId` repeats the customer's
+// for that constraint and for the payer lookup on settlement.
+model CustomerWallet {
+  id         String   @id @default(cuid())
+  consumerId String
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  chain      String
+  // In its chain's stored spelling (EIP-55 on Monad), as payment intents record a payer.
+  address    String
+  label      String?
+  createdAt  DateTime @default(now())
+
+  @@unique([consumerId, chain, address])
+  @@index([customerId])
+  @@map("customer_wallet")
 }
 
 // Append-only access log of API requests reaching the service (written by the
@@ -177,6 +199,10 @@ enum WebhookEventType {
   CROSS_CHAIN_SWAP_REFUNDED
   CROSS_CHAIN_SWAP_FAILED
   CROSS_CHAIN_SWAP_EXPIRED
+
+  // A private payment settled: both confidential transfers verified on-chain
+  // (appended by `20261025180000_zk_payments`).
+  ZK_PAYMENT_SUCCEEDED
 }
 
 enum WebhookDeliveryStatus {
@@ -370,9 +396,34 @@ model PaymentIntent {
   txHash    String?
   reference String? // optional merchant reference
 
+  // The design the hosted checkout page (payments.cosmospay.lat/<id>) shows the
+  // intent in: one of `CHECKOUT_THEMES`. Null means 'classic'. A string like
+  // `chain`, not an enum, so a new design needs no migration; the API validates
+  // it on the way in.
+  checkoutTheme String?
+
   // Lifetime: an unpaid intent past this instant is auto-finalized to EXPIRED by
   // the observer. Set at creation from the configured TTL.
-  expiresAt DateTime?
+  expiresAt   DateTime?
+  // When the hosted checkout last read this intent while it was open (pending or
+  // submitted): the page polls GET /v1/payment-links/{id} while a payer has it
+  // open, so a recent value means someone is on the payment page now. Written at
+  // most every PAYMENT_LINK_SEEN_EVERY_MS, by raw SQL so updatedAt stays the last
+  // change of the intent itself. Null until a page opened it.
+  checkoutSeenAt DateTime?
+  // What the payer did with a wallet from the hosted checkout, as the page reports
+  // it (POST /v1/payment-links/{id}/events), while the intent was pending: when a
+  // wallet was last opened, when it came back without paying (cleared by the next
+  // opening), and when the page saw the wallet send the payment. Informational: the
+  // status still changes only on what the chain says.
+  checkoutWalletAt       DateTime?
+  checkoutWalletClosedAt DateTime?
+  checkoutSentAt         DateTime?
+  // The merchant fee this operation charged, when its request named one: what an
+  // organization charges its own customers through this API, paid on-chain to a
+  // wallet it names (`src/common/merchant-fee/`): { bps, fixed, amount, asset,
+  // wallet, paidBy }. Separate from the plan commission columns.
+  merchantFee Json?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -438,6 +489,11 @@ model EvmDepositAddress {
   token       String? // ERC-20 contract; null for native MON
   relayer     String
   fee         String // base units (wei or token units)
+  // The organization's merchant fee, when the intent has one: the address is then a
+  // PaymentSplitForwarder's, built with these two more constructor arguments, and is
+  // only ever rebuilt from that contract. Null: a PaymentForwarder, as before.
+  feeWallet   String?
+  merchantFee String? // base units
 
   status EvmDepositStatus @default(AWAITING)
 
@@ -677,7 +733,7 @@ model Payin {
   receiverId String?
   receiver   BlindpayReceiver? @relation(fields: [receiverId], references: [id], onDelete: SetNull)
 
-  environment    String  @default("prod") // BlindPay instance, see BlindpayReceiver
+  environment    String    @default("prod") // BlindPay instance, see BlindpayReceiver
   /// `pi_...`. Null only while the row is `pending_provider`: it is written
   /// BEFORE the provider call, so a payin BlindPay created is never one we
   /// have no row for. Tenant reads leave such rows out.
@@ -724,7 +780,7 @@ model Payout {
   receiverId String?
   receiver   BlindpayReceiver? @relation(fields: [receiverId], references: [id], onDelete: SetNull)
 
-  environment         String  @default("prod") // BlindPay instance, see BlindpayReceiver
+  environment         String    @default("prod") // BlindPay instance, see BlindpayReceiver
   /// `pa_...`. Null only while `pending_provider` — see Payin.blindpayId.
   blindpayId          String?
   quoteId             String?
@@ -908,6 +964,11 @@ model Swap {
   // without recreating the type) buys nothing.
   lastCheckedAt  DateTime?
   notFoundStreak Int       @default(0)
+  // The merchant fee this operation charged, when its request named one: what an
+  // organization charges its own customers through this API, paid on-chain to a
+  // wallet it names (`src/common/merchant-fee/`): { bps, fixed, amount, asset,
+  // wallet, paidBy }. Separate from the plan commission columns.
+  merchantFee    Json?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -981,6 +1042,11 @@ model ChainSwap {
   // price) and submit refuses it.
   expiresAt      DateTime
   lastCheckedAt  DateTime?
+  // The merchant fee this operation charged, when its request named one: what an
+  // organization charges its own customers through this API, paid on-chain to a
+  // wallet it names (`src/common/merchant-fee/`): { bps, fixed, amount, asset,
+  // wallet, paidBy }. Separate from the plan commission columns.
+  merchantFee    Json?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1025,9 +1091,11 @@ model CrossChainSwap {
   // service maps onto a coarser one.
   providerStatus String
 
-  // Origin leg: what the payer sends. `*Asset` is the symbol we answered with,
-  // `*AssetId` 1Click's id for it, `*Contract` the SPL mint / ERC-20 / Stellar
-  // issuer (null for the chain's native coin).
+  // Origin leg: what the payer sends. `*Chain` is a network id from
+  // `CROSS_CHAIN_NETWORK_IDS` (`stellar`, `solana`, `monad`, `eth`, `btc`, ...;
+  // TEXT, so a new network needs no migration). `*Asset` is the symbol we
+  // answered with, `*AssetId` 1Click's id for it, `*Contract` the token's
+  // contract on that network (null for the native coin).
   originChain         String
   originAsset         String
   originAssetId       String
@@ -1054,10 +1122,12 @@ model CrossChainSwap {
   refundTo  String // on originChain
 
   // Where, and with what memo, the payer sends `amountIn`; and the wallet link
-  // for it on the origin chain (SEP-7 pay, Solana Pay, EIP-681).
+  // for it on the origin chain (SEP-7 pay, Solana Pay, EIP-681, BIP-21 and its
+  // copies, TON, CIP-13). Null where the chain has no link standard this
+  // service builds: the payer pays the address (and memo) with any wallet.
   depositAddress String
   depositMemo    String?
-  depositUri     String
+  depositUri     String?
   // The payer's deposit transaction, when a caller reported it.
   depositTxHash  String?
 
@@ -1078,6 +1148,11 @@ model CrossChainSwap {
   // When the deposit address stops accepting a deposit (1Click's deadline).
   expiresAt      DateTime
   lastCheckedAt  DateTime?
+  // The merchant fee this operation charged, when its request named one: what an
+  // organization charges its own customers through this API, paid on-chain to a
+  // wallet it names (`src/common/merchant-fee/`): { bps, fixed, amount, asset,
+  // wallet, paidBy }. Separate from the plan commission columns.
+  merchantFee    Json?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1177,6 +1252,11 @@ model LiquidityPoolOperation {
   // declared because schema.prisma has to describe the database it points at.
   lastCheckedAt  DateTime?
   notFoundStreak Int       @default(0)
+  // The merchant fee this operation charged, when its request named one: what an
+  // organization charges its own customers through this API, paid on-chain to a
+  // wallet it names (`src/common/merchant-fee/`): { bps, fixed, amount, asset,
+  // wallet, paidBy }. Separate from the plan commission columns.
+  merchantFee    Json?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1918,4 +1998,173 @@ model PluginRecord {
 
   @@unique([installationId, collection, key])
   @@map("plugin_record")
+}
+
+// A private payment's lifecycle. PENDING until both confidential transfers are
+// verified on-chain. EXPIRED is never stored today: a PENDING payment past
+// `expiresAt` READS as EXPIRED, and stays confirmable, because transfers that
+// closed before `expiresAt` paid it even when the payer confirms late.
+enum ZkPaymentStatus {
+  PENDING
+  SUCCEEDED
+  EXPIRED
+}
+
+// A payment on Cosmos Pay's confidential token: the amount is hidden on-chain
+// (Pedersen commitments, UltraHonk proofs verified by the token). The payer
+// makes two confidential transfers, `netAmount` to `recipient` and `feeAmount`
+// to `feeAccount`, and `POST /v1/zk-checkout/{id}/confirm` decrypts both with
+// the auditor key before settling. Amounts are decimal strings in XLM (7
+// places), like every other amount column.
+model ZkPayment {
+  id         String   @id @default(cuid())
+  consumerId String
+  consumer   Consumer @relation(fields: [consumerId], references: [id], onDelete: Cascade)
+
+  // 'public' | 'testnet': the tier of the API key that created it.
+  network       String
+  // The confidential token the transfers must be made on (C...), as configured
+  // when the payment was created.
+  tokenContract String
+
+  // What the payer pays in total, what the merchant receives, and the
+  // commission: amount = netAmount + feeAmount.
+  amount    String
+  netAmount String
+  feeAmount String
+  // The commission rate it was priced at (1 = 0.01%).
+  feeBps    Int
+
+  // The merchant (G...), registered on the token, and Cosmos Pay's fee account.
+  recipient  String
+  feeAccount String
+  // The account both transfers came from; set when it settles.
+  payer      String?
+
+  // The two transactions that settled it, lowercase hex. Unique across the
+  // table: one transaction settles one private payment, of any consumer.
+  paymentTxHash     String? @unique
+  feeTxHash         String? @unique
+  // The third transfer, to the merchant fee's wallet, when the payment has a
+  // merchant fee. Unique for the same reason as the two above.
+  merchantFeeTxHash String? @unique
+
+  description    String?
+  // Per consumer: a retry with the same key returns the same payment. Minted
+  // (`zkp_…`) when the request names none.
+  idempotencyKey String
+
+  status      ZkPaymentStatus @default(PENDING)
+  expiresAt   DateTime
+  settledAt   DateTime?
+  // The merchant fee this operation charged, when its request named one: what an
+  // organization charges its own customers through this API, paid on-chain to a
+  // wallet it names (`src/common/merchant-fee/`): { bps, fixed, amount, asset,
+  // wallet, paidBy }. Separate from the plan commission columns.
+  merchantFee Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([consumerId, idempotencyKey])
+  @@index([consumerId])
+  // Listing endpoint: filter by consumer, order createdAt desc.
+  @@index([consumerId, createdAt])
+  @@index([consumerId, network, createdAt])
+  @@index([status, createdAt])
+  @@map("zk_payment")
+}
+
+// ---------------------------------------------------------------------------
+// USDT0 sent FROM Stellar to an EVM network through LayerZero's OFT (Tether's
+// omnichain USDT). Non-custodial like the swaps: this service quotes the OFT by
+// simulation, builds the one Soroban transaction (`send` on the OFT contract),
+// and relays the copy the holder signed. The OFT burns the USDT0 on Stellar and
+// LayerZero delivers it: on Ethereum as native USDT (Tether's OFT adapter
+// unlocks it), elsewhere as USDT0. Mainnet only: USDT0 has no Stellar testnet.
+// ---------------------------------------------------------------------------
+enum Usdt0TransferStatus {
+  PENDING // built, waiting for the source's signature
+  SUBMITTED // on the Stellar ledger; LayerZero is delivering it
+  DELIVERED // credited to the recipient on the destination network
+  FAILED // the Stellar transaction failed, or LayerZero gave up on the message
+  EXPIRED // never reached the ledger before its time bounds closed
+}
+
+model Usdt0Transfer {
+  id         String   @id @default(cuid())
+  consumerId String
+  consumer   Consumer @relation(fields: [consumerId], references: [id], onDelete: Cascade)
+
+  // Always 'public': USDT0 exists on Stellar mainnet only. A column so filters
+  // and analytics read the same vocabulary as every other table.
+  network String
+  status  Usdt0TransferStatus @default(PENDING)
+
+  // The Stellar account that holds the USDT0, signs and pays the fees (G...).
+  source    String
+  // The route: this service's id for the destination network (`eth`, `arb`,
+  // ...; `USDT0_ROUTES`), its LayerZero endpoint id, and what arrives there
+  // (`USDT` on Ethereum, `USDT0` elsewhere).
+  to        String
+  eid       Int
+  receives  String
+  // The EVM address credited on the destination network, EIP-55.
+  recipient String
+
+  // Decimal strings, 7 places. `amount` is what the caller asked to send;
+  // `amountSent` is what the OFT takes after dropping the dust its 6 shared
+  // decimals cannot carry (the dust stays in the account); `amountReceived` is
+  // what arrives, and the transaction's on-chain floor (`min_amount_ld`).
+  amount         String
+  amountSent     String
+  amountReceived String
+  // In XLM. `nativeFee` is LayerZero's quoted fee; `nativeFeeLimit` is what the
+  // transaction offers to pay (the quote plus a buffer, the excess refunded to
+  // the source in the same transaction); `networkFee` is the Stellar fee
+  // (inclusion plus Soroban resources).
+  nativeFee      String
+  nativeFeeLimit String
+  networkFee     String
+
+  // Cosmos Pay's plan commission, in USDT0: paid to `feeWallet` by the fee
+  // wrapper in the same transaction, out of `amount`. 0 / null when the
+  // deployment has no wrapper (`USDT0_FEE_WRAPPER`) or the plan charges none.
+  feeBps    Int     @default(0)
+  feeAmount String  @default("0")
+  feeWallet String?
+
+  // The unsigned transaction, its SEP-7 link, and its hash: lowercase hex,
+  // unique, and checked against the signed copy before anything is relayed.
+  xdr    String
+  uri    String
+  txHash String @unique
+
+  // LayerZero's message id (0x + 64 hex), read from `send`'s return value or
+  // from LayerZero Scan; the destination transaction once delivered; Scan's own
+  // status word, verbatim; and why a FAILED transfer failed.
+  guid              String?
+  destinationTxHash String?
+  scanStatus        String?
+  failureReason     String?
+
+  idempotencyKey String?
+  // When the transaction's time bounds close: past it, it can never land.
+  expiresAt      DateTime
+  // The last time a read asked the ledger or LayerZero Scan; reads are throttled on it.
+  lastCheckedAt  DateTime?
+  submittedAt    DateTime?
+  // The merchant fee this operation charged, when its request named one: what an
+  // organization charges its own customers through this API, paid on-chain to a
+  // wallet it names (`src/common/merchant-fee/`): { bps, fixed, amount, asset,
+  // wallet, paidBy }. Separate from the plan commission columns.
+  merchantFee    Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([consumerId, idempotencyKey])
+  // Listing endpoint: filter by consumer, order createdAt desc.
+  @@index([consumerId, createdAt])
+  @@map("usdt0_transfer")
 }

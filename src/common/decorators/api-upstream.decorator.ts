@@ -8,7 +8,8 @@ export type UpstreamProvider =
   | 'Monad'
   | 'NEAR Intents'
   | 'Jupiter'
-  | 'Kuru Flow';
+  | 'Kuru Flow'
+  | 'Soroban RPC';
 
 /**
  * Vendor extension the published spec carries, and `swagger.ts` reads back.

@@ -50,7 +50,7 @@ export class ActivityEventEntity {
   at!: Date;
 
   @ApiProperty({
-    description: 'When this service received it — later for a queued batch.',
+    description: 'When this service received it (later for a queued batch).',
     example: '2026-09-06T12:35:10.000Z',
   })
   receivedAt!: Date;
@@ -60,7 +60,7 @@ export class ActivityEventListEntity {
   @ApiProperty({ type: [ActivityEventEntity] }) data!: ActivityEventEntity[];
 
   @ApiProperty({
-    description: 'Total matching rows — not the page length.',
+    description: 'Total matching rows, not the page length.',
     example: 4120,
   })
   total!: number;
@@ -101,15 +101,14 @@ export class ActivitySummaryEntity {
   total!: number;
 
   @ApiProperty({
-    description:
-      'Distinct `sessionId`s in the window — app runs, not accounts.',
+    description: 'Distinct `sessionId`s in the window: app runs, not accounts.',
     example: 318,
   })
   sessions!: number;
 
   @ApiProperty({
     description:
-      'Distinct `distinctId`s in the window — installs, not accounts.',
+      'Distinct `distinctId`s in the window: installs, not accounts.',
     example: 96,
   })
   devices!: number;
@@ -137,7 +136,7 @@ export class ActivitySummaryEntity {
 
   @ApiProperty({
     type: [ActivityCountEntity],
-    description: 'Most frequent error messages — what to fix first.',
+    description: 'Most frequent error messages: what to fix first.',
   })
   topErrors!: ActivityCountEntity[];
 

@@ -7,7 +7,9 @@ import {
   Matches,
   Max,
   Min,
+  ValidateNested,
 } from 'class-validator';
+import { MerchantFeeDto } from '@/common/merchant-fee/merchant-fee.dto';
 import { IsStellarAddress } from '@/common/validators/is-stellar-address.validator';
 
 /**
@@ -18,7 +20,7 @@ import { IsStellarAddress } from '@/common/validators/is-stellar-address.validat
  */
 export class DepositLiquidityDto {
   @ApiProperty({
-    description: 'Account funding (and signing) the deposit — the tx source.',
+    description: 'Account funding (and signing) the deposit: the tx source.',
     example: 'GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ',
   })
   @IsStellarAddress()
@@ -125,4 +127,19 @@ export class DepositLiquidityDto {
   @IsString()
   @Matches(/\S/, { message: 'idempotencyKey must not be blank' })
   idempotencyKey?: string;
+
+  @ApiPropertyOptional({
+    type: MerchantFeeDto,
+    description:
+      'Your own fee on this deposit: `bps` of EACH asset it moves, paid to ' +
+      '`wallet` (a Stellar account that can receive both assets) by one ' +
+      'payment per asset in the same transaction, beside the plan commission. ' +
+      '`fixed` is refused here: the operation moves two assets. ' +
+      '`paidBy: recipient` takes it from the amounts (less enters the ' +
+      'pool); `payer` adds it on top (the full amounts enter the pool).',
+  })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => MerchantFeeDto)
+  merchantFee?: MerchantFeeDto;
 }

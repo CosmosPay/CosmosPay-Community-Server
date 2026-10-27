@@ -56,7 +56,7 @@ export class StartWalletOauthDto {
 
   @ApiProperty({
     description:
-      'base64url(SHA-256(verifier)) — RFC 7636 S256. Keep the verifier on the ' +
+      'base64url(SHA-256(verifier)), RFC 7636 S256. Keep the verifier on the ' +
       'device: it is what makes a `state` seen in a browser worthless to ' +
       'anyone else, and it is the only thing that can redeem this handshake.',
     example: 'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM',
@@ -80,7 +80,7 @@ export class StartWalletOauthDto {
 
   @ApiPropertyOptional({
     description:
-      'A native wallet’s own URL — a custom scheme, a universal/app link, or ' +
+      'A native wallet’s own URL: a custom scheme, a universal/app link, or ' +
       '`http://127.0.0.1:<port>/…` from a desktop app. When set, the callback ' +
       'answers `302` to it with `?state=…` (plus `&error=<reason>` on failure) ' +
       'instead of rendering a page, which is what closes the platform’s auth ' +
@@ -119,7 +119,7 @@ export class ClaimWalletOauthDto {
       '`recovery` when the proven identity is going to be presented to the ' +
       'SEP-30 recovery servers. It always routes through an emailed code, even ' +
       'for an email with no account, and only then does the answer carry the ' +
-      "provider's `idToken` — a provider proves who consented, not who opened the " +
+      "provider's `idToken`: a provider proves who consented, not who opened the " +
       'sign-in, and a recovery identity is worth a wallet.',
   })
   @IsOptional()
@@ -201,8 +201,8 @@ export class FinishWalletSignInDto {
 
   @ApiPropertyOptional({
     description:
-      'The Stellar account — the field’s original name, still accepted for ' +
-      'Stellar. New clients send `address`.',
+      'The Stellar account (the field’s original name, still accepted for ' +
+      'Stellar). New clients send `address`.',
     example: 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN',
     deprecated: true,
   })
@@ -231,7 +231,7 @@ export class FinishWalletSignInDto {
 
   @ApiPropertyOptional({
     description:
-      "The device's sealed seed box, to keep for the next device — one per " +
+      "The device's sealed seed box, to keep for the next device: one per " +
       '(chain, address), up to 20 per account. Opaque here: it is sealed under a ' +
       'key derived from a password this service never sees.',
   })
@@ -244,7 +244,7 @@ export class FinishWalletSignInDto {
     description:
       'Accepted for older wallets and ignored. Backups are kept per wallet: a box ' +
       'for another address is added beside the ones the account keeps, and a box ' +
-      'for the same wallet replaces its own — nothing is ever discarded to make room.',
+      'for the same wallet replaces its own. Nothing is ever discarded to make room.',
     default: false,
   })
   @IsOptional()
@@ -281,8 +281,8 @@ export class ReplaceWalletBackupDto {
 
   @ApiPropertyOptional({
     description:
-      'The Stellar account — the field’s original name, still accepted for ' +
-      'Stellar. New clients send `address`.',
+      'The Stellar account (the field’s original name, still accepted for ' +
+      'Stellar). New clients send `address`.',
     example: 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN',
     deprecated: true,
   })
@@ -306,7 +306,7 @@ export class ReplaceWalletBackupDto {
   @ApiProperty({
     description:
       'Signature over the backup challenge (encoded as for sign-in), which ' +
-      "covers the box's SHA-256 — so one signature stores exactly one box.",
+      "covers the box's SHA-256, so one signature stores exactly one box.",
   })
   @IsString()
   @MaxLength(WALLET_SIGNATURE_MAX_CHARS)

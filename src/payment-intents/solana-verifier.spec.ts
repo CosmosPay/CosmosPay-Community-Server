@@ -170,3 +170,84 @@ describe('SolanaVerifierService.findMatchingPayment', () => {
     expect((await verifier.findMatchingPayment(intent())).valid).toBe(false);
   });
 });
+
+describe('SolanaVerifierService with a merchant fee', () => {
+  const FEE_WALLET = 'FeeWa11et1111111111111111111111111111111111';
+  // 1.5 SOL with a 0.05 fee the recipient pays: 1.45 to DEST, 0.05 to the fee wallet.
+  const feeIntent = (paidBy = 'recipient') =>
+    intent({
+      merchantFee: {
+        bps: 0,
+        fixed: '0.05',
+        amount: '0.05',
+        asset: 'native',
+        wallet: FEE_WALLET,
+        paidBy,
+      },
+    });
+
+  /** PAYER pays DEST `toDest` and the fee wallet `toFee` lamports, with the reference. */
+  function split(toDest: number, toFee: number): SolanaTransaction {
+    const keys = [PAYER, DEST, FEE_WALLET, REF];
+    const credit: Record<string, number> = {
+      [DEST]: toDest,
+      [FEE_WALLET]: toFee,
+    };
+    return {
+      slot: 1,
+      blockTime: CREATED.getTime() / 1000 + 5,
+      meta: {
+        err: null,
+        preBalances: keys.map((key) => (key === PAYER ? 10_000_000_000 : 0)),
+        postBalances: keys.map((key) =>
+          key === PAYER ? 10_000_000_000 - toDest - toFee : (credit[key] ?? 0),
+        ),
+      },
+      transaction: {
+        signatures: ['sig'],
+        message: {
+          accountKeys: keys.map((pubkey) => ({
+            pubkey,
+            signer: pubkey === PAYER,
+            writable: pubkey !== REF,
+          })),
+        },
+      },
+    };
+  }
+
+  it('settles on the merchant leg and the fee together', async () => {
+    const { verifier } = make(split(1_450_000_000, 50_000_000));
+    await expect(
+      verifier.verifyByHash(feeIntent(), 'sig'),
+    ).resolves.toMatchObject({
+      valid: true,
+    });
+  });
+
+  it('does not settle on the merchant leg alone, nor on the whole amount without the fee', async () => {
+    expect(
+      (
+        await make(split(1_450_000_000, 0)).verifier.verifyByHash(
+          feeIntent(),
+          'sig',
+        )
+      ).valid,
+    ).toBe(false);
+    expect(
+      (
+        await make(split(1_500_000_000, 0)).verifier.verifyByHash(
+          feeIntent(),
+          'sig',
+        )
+      ).valid,
+    ).toBe(false);
+  });
+
+  it('expects the whole amount at the destination when the payer pays the fee on top', async () => {
+    const { verifier } = make(split(1_500_000_000, 50_000_000));
+    await expect(
+      verifier.verifyByHash(feeIntent('payer'), 'sig'),
+    ).resolves.toMatchObject({ valid: true });
+  });
+});

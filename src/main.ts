@@ -30,7 +30,7 @@ async function bootstrap(): Promise<void> {
   // handling: every one of those sites has its own try/catch.
   process.on('unhandledRejection', (reason) => {
     logger.error(
-      'Unhandled promise rejection — the process was kept alive',
+      'Unhandled promise rejection. The process was kept alive',
       reason instanceof Error ? reason.stack : String(reason),
     );
   });

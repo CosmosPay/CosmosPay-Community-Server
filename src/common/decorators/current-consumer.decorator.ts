@@ -24,7 +24,7 @@ export const CurrentConsumer = createParamDecorator(
       throw new ApiError(
         HttpStatus.INTERNAL_SERVER_ERROR,
         ApiErrorCode.Internal,
-        'No gateway consumer on request — was ApisixGuard applied?',
+        'No gateway consumer on request. Was ApisixGuard applied?',
       );
     }
 

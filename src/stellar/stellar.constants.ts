@@ -109,3 +109,12 @@ export const NOT_APPLIED_REJECTION_CODES: readonly string[] = [
   'tx_bad_auth_extra',
   'tx_insufficient_balance',
 ];
+
+/**
+ * How long one Soroban RPC call (a simulation, a submission, a transaction
+ * lookup) may take before it is a failure. The SDK's `rpc.Server` has no
+ * timeout of its own, and a request that hangs holds the caller's wallet
+ * screen open with it. A simulation of USDT0's `send` answers in well under a
+ * second on a healthy node.
+ */
+export const SOROBAN_RPC_TIMEOUT_MS = 15_000;

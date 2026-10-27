@@ -32,7 +32,7 @@ export class AssetsController {
     description:
       'The wallet ships a bundled copy of this list and prefers whichever of ' +
       'the two carries the higher `version`, so a client that cannot reach ' +
-      'this endpoint still resolves assets correctly — it just misses the ' +
+      'this endpoint still resolves assets correctly. It just misses the ' +
       'newest additions.',
   })
   @ApiOkResponse({ type: AssetListEntity })

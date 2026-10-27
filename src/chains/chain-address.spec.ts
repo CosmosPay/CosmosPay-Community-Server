@@ -1,10 +1,13 @@
 import { Keypair } from '@stellar/stellar-sdk';
 import {
+  ANY_CHAIN_ADDRESS_EXPECTED,
   CHAIN_ADDRESS_RULES,
+  chainOfAddress,
   decodeBase58,
   encodeBase58,
   isAddressForChain,
   normalizeAddress,
+  normalizeAnyChainAddress,
   toChecksumAddress,
 } from '@/chains/chain-address';
 import { CHAINS } from '@/chains/chains.constants';
@@ -28,6 +31,9 @@ describe('base58', () => {
   it('refuses characters outside the alphabet', () => {
     expect(decodeBase58('0OIl')).toBeNull();
     expect(decodeBase58('')).toBeNull();
+    // Past 128 characters (a 64-byte signature is at most 88) nothing is decoded.
+    expect(decodeBase58('2'.repeat(129))).toBeNull();
+    expect(decodeBase58('2'.repeat(88))).not.toBeNull();
   });
 
   it('spells a Stellar key’s raw bytes as the Solana address of the same key', () => {
@@ -74,5 +80,44 @@ describe('CHAIN_ADDRESS_RULES', () => {
 
   it('names what each chain expects', () => {
     expect(CHAIN_ADDRESS_RULES.monad.expected).toMatch(/0x/);
+  });
+});
+
+/** A field that names no chain (a customer's account): the shape decides the chain. */
+describe('an address on any chain', () => {
+  it('reads the chain from the shape, the three shapes never overlapping', () => {
+    expect(chainOfAddress(STELLAR)).toBe('stellar');
+    expect(chainOfAddress('G'.repeat(65))).toBeNull();
+    expect(chainOfAddress(SOLANA)).toBe('solana');
+    expect(chainOfAddress(MONAD)).toBe('monad');
+    expect(chainOfAddress(MONAD.toLowerCase())).toBe('monad');
+    // The same key spelled for Solana is a Solana address, not a Stellar one.
+    const kp = Keypair.random();
+    expect(chainOfAddress(kp.publicKey())).toBe('stellar');
+    expect(chainOfAddress(encodeBase58(kp.rawPublicKey()))).toBe('solana');
+  });
+
+  it.each([
+    ['a Stellar secret seed', Keypair.random().secret()],
+    ['base58 short of 32 bytes', '1111'],
+    ['an EVM address one hex short', MONAD.slice(0, -1)],
+    ['a Bitcoin address', 'bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq'],
+    ['an empty string', ''],
+  ])('is no chain for %s', (_, address) => {
+    expect(chainOfAddress(address)).toBeNull();
+    expect(normalizeAnyChainAddress(address)).toBeNull();
+  });
+
+  it('normalizes to the chain spelling: EIP-55 on Monad, as given elsewhere', () => {
+    expect(normalizeAnyChainAddress(MONAD.toLowerCase())).toBe(MONAD);
+    expect(normalizeAnyChainAddress(STELLAR)).toBe(STELLAR);
+    expect(normalizeAnyChainAddress(SOLANA)).toBe(SOLANA);
+  });
+
+  it('names every accepted shape in one message, in each chain’s own words', () => {
+    expect(ANY_CHAIN_ADDRESS_EXPECTED).toBe(
+      'a valid Stellar account address (G...), a valid Solana address (base58, 32 bytes) ' +
+        'or a valid Monad (EVM) address (0x + 40 hex)',
+    );
   });
 });

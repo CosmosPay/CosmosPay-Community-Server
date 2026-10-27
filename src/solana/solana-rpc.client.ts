@@ -10,7 +10,9 @@ import {
 } from '@/chains/json-rpc';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import type { AppConfig, StellarNetwork } from '@/config/configuration';
+import { encodeBase58 } from '@/chains/chain-address';
 import {
+  LOOKUP_TABLE_META_BYTES,
   SOLANA_COMMITMENT,
   SPL_TOKEN_PROGRAM_IDS,
 } from '@/solana/solana.constants';
@@ -134,6 +136,49 @@ export class SolanaRpcClient {
       if (err instanceof JsonRpcError && err.code === -32602) return null;
       throw rpcFault(err, 'getTransaction');
     }
+  }
+
+  /**
+   * The cluster's latest blockhash, which a transaction built here names so a
+   * wallet can sign it as is (it may still replace it, as Solana Pay allows).
+   */
+  async getLatestBlockhash(network: StellarNetwork): Promise<string> {
+    try {
+      const answer = await this.call<{ value: { blockhash: string } }>(
+        network,
+        'getLatestBlockhash',
+        [{ commitment: SOLANA_COMMITMENT }],
+      );
+      return answer.value.blockhash;
+    } catch (err) {
+      throw rpcFault(err, 'getLatestBlockhash');
+    }
+  }
+
+  /**
+   * An address lookup table's addresses, in index order, or null when there
+   * is no such account. A v0 transaction loads accounts by index from these.
+   */
+  async getAddressLookupTable(
+    network: StellarNetwork,
+    address: string,
+  ): Promise<string[] | null> {
+    let account: { value: { data: [string, string] } | null };
+    try {
+      account = await this.call(network, 'getAccountInfo', [
+        address,
+        { encoding: 'base64', commitment: SOLANA_COMMITMENT },
+      ]);
+    } catch (err) {
+      throw rpcFault(err, 'getAccountInfo');
+    }
+    if (!account.value) return null;
+    const data = Buffer.from(account.value.data[0], 'base64');
+    const keys: string[] = [];
+    for (let at = LOOKUP_TABLE_META_BYTES; at + 32 <= data.length; at += 32) {
+      keys.push(encodeBase58(data.subarray(at, at + 32)));
+    }
+    return keys;
   }
 
   /** Newest-first signatures of transactions that touched `address`. */
