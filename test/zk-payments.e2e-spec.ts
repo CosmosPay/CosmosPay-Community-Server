@@ -389,7 +389,7 @@ describe('Private payments (e2e)', () => {
           Promise.resolve(
             hash === PAYMENT_TX
               ? success(PAYMENT_TX, MERCHANT, 1n)
-              : success(FEE_TX, FEE_ACCOUNT, 25_000n),
+              : success(FEE_TX, FEE_ACCOUNT, 450_000n),
           ),
       );
       const res = await request(http())
@@ -406,8 +406,8 @@ describe('Private payments (e2e)', () => {
         (_t: unknown, _s: string, hash: string) =>
           Promise.resolve(
             hash === PAYMENT_TX
-              ? success(PAYMENT_TX, MERCHANT, 249_975_000n)
-              : success(FEE_TX, FEE_ACCOUNT, 25_000n),
+              ? success(PAYMENT_TX, MERCHANT, 249_550_000n)
+              : success(FEE_TX, FEE_ACCOUNT, 450_000n),
           ),
       );
       const res = await request(http())
@@ -451,9 +451,9 @@ describe('Private payments (e2e)', () => {
         (_t: unknown, _s: string, hash: string) =>
           Promise.resolve(
             hash === PAYMENT_TX
-              ? success(PAYMENT_TX, MERCHANT, 247_475_000n)
+              ? success(PAYMENT_TX, MERCHANT, 247_050_000n)
               : hash === FEE_TX
-                ? success(FEE_TX, FEE_ACCOUNT, 25_000n)
+                ? success(FEE_TX, FEE_ACCOUNT, 450_000n)
                 : success(MERCHANT_FEE_TX, FEE_WALLET, 2_500_000n),
           ),
       );

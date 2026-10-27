@@ -142,6 +142,7 @@ describe('Summary series (e2e)', () => {
       count: 0,
       succeeded: 0,
       failed: 0,
+      volumeUsd: '0.00',
     });
     expect(res.body.swaps.totals).toEqual({
       count: 0,
@@ -149,11 +150,14 @@ describe('Summary series (e2e)', () => {
       failed: 0,
       inProgress: 0,
       byKind: { dex: 0, chain: 0, crossChain: 0, usdt0: 0 },
+      volumeUsd: '0.00',
+      unpriced: 0,
     });
     expect(res.body.swaps.previous).toEqual({
       count: 0,
       succeeded: 0,
       failed: 0,
+      volumeUsd: '0.00',
     });
     // Liquidity and webhooks per bucket too, each quiet bucket a zero.
     const starts = res.body.buckets.map((b: { start: string }) => b.start);
@@ -236,8 +240,8 @@ describe('Summary series (e2e)', () => {
     )
       .map(([strings, ...values]) => new Prisma.Sql(strings, values))
       .filter((query) => query.text.includes('"usdt0_transfer"'));
-    // The swap buckets and the swap windows both read the USDT0 table.
-    expect(swapQueries).toHaveLength(2);
+    // The swap buckets, the swap windows and the settled swaps all read the USDT0 table.
+    expect(swapQueries).toHaveLength(3);
     for (const query of swapQueries) {
       expect(query.values).toContain('testnet');
       expect(query.values).not.toContain('public');
@@ -260,7 +264,7 @@ describe('Summary series (e2e)', () => {
     // Payments, swaps, liquidity, webhooks and private payments, each per bucket and per window,
     // and the settled payments per asset for their USD value; the mock has no `findMany` on any
     // of those models, so fetching rows would have been a 500.
-    expect(prismaMock.$queryRaw).toHaveBeenCalledTimes(11);
+    expect(prismaMock.$queryRaw).toHaveBeenCalledTimes(12);
   });
 
   /** Answers `rows` to the settled-payments-per-asset query and no rows to every other. */
