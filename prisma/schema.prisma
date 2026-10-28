@@ -1816,6 +1816,59 @@ enum WalletLoginCodeStatus {
   EXPIRED
 }
 
+/// Easy recovery: a five-minute mailbox that moves a wallet from an OLD device to
+/// a NEW one (`src/easy-recovery/`).
+///
+/// The new device opens it with its X25519 public key; the old device drops the
+/// wallet's secret here sealed to that key, plus the hash of a five-digit code it
+/// shows on its own screen; the new device collects the sealed secret with that
+/// code. This service never holds the receiving private key, so it can never open
+/// what it stores. Its job is the code check: five wrong codes delete the row.
+///
+/// Everything lives here, never in memory: the service runs as several replicas,
+/// and the attempt counter is only a bound if every replica counts on the same row.
+/// `timestamptz` rather than the `timestamp(3)` the older tables use, so a
+/// comparison against the database clock can never be shifted by a session time zone.
+model EasyRecoverySession {
+  /// 16 random bytes, base64url (22 characters), minted by this service. The QR
+  /// the new device shows carries it.
+  id String @id
+
+  /// base64url (no padding) of the new device's 32-byte X25519 public key. Never
+  /// returned by this service: the old device reads it from the QR.
+  receiverKey String
+
+  status EasyRecoveryStatus @default(OPEN)
+
+  /// The secret, sealed on the old device to `receiverKey`. Null until the offer,
+  /// and null again from the moment it is claimed.
+  ciphertext String?
+
+  /// SHA-256 hex of `{id}:{code}`. Null until the offer, wiped on the claim.
+  codeHash String?
+
+  /// Wrong codes so far. The row is deleted at `EASY_RECOVERY_MAX_ATTEMPTS`.
+  attempts Int @default(0)
+
+  /// Past it the session answers 404 and the sweeper deletes it — a claimed row
+  /// is kept until then only so the old device's poll can read `claimed`.
+  expiresAt DateTime @db.Timestamptz(3)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([expiresAt])
+  @@map("easy_recovery_session")
+}
+
+enum EasyRecoveryStatus {
+  /// Opened by the new device; nothing offered yet.
+  OPEN
+  /// The old device stored the sealed secret and the code hash. Only one offer
+  /// is ever accepted.
+  OFFERED
+  /// The right code collected the secret, which was wiped. Terminal.
+  CLAIMED
+}
+
 /// SEP-30 — an account one recovery server has agreed to help recover.
 ///
 /// Each of the two recovery deployments has its own database; `role` is kept on

@@ -1,4 +1,8 @@
-import { ApiProperty, getSchemaPath } from '@nestjs/swagger';
+import {
+  ApiProperty,
+  ApiPropertyOptional,
+  getSchemaPath,
+} from '@nestjs/swagger';
 import { ApiErrorCode } from '@/common/errors/api-error';
 
 /**
@@ -50,6 +54,18 @@ export class ApiErrorBodyEntity {
     example: ['amount must be a positive decimal string'],
   })
   message!: string | string[];
+
+  @ApiPropertyOptional({
+    description:
+      'Machine-readable facts about this failure, present only on the codes ' +
+      'whose example shows it — `easy_recovery_code_invalid` carries ' +
+      '`{ "attemptsLeft": 4 }`. Absent everywhere else.',
+    type: 'object',
+    additionalProperties: {
+      oneOf: [{ type: 'string' }, { type: 'number' }, { type: 'boolean' }],
+    },
+  })
+  details?: Record<string, string | number | boolean>;
 
   @ApiProperty({
     description: 'The path of the request that failed.',

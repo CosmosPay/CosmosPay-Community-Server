@@ -484,6 +484,23 @@ that breaks two boundaries.
   contract**, pinned as literals in `src/wallet-auth/wallet-auth-core.spec.ts` and
   in the wallet's `tests/unit/signIn.test.ts` / `tests/unit/recovery.test.ts`.
   Change one side and no sign-in or setup can finish.
+- **Easy recovery (`/v1/wallet/easy-recovery`, `src/easy-recovery/`) is a mailbox
+  this service cannot open.** It stores the wallet sealed on the old device to the
+  new device's X25519 key (a low-order key is refused, `isReceiverKey`) and SHA-256
+  of `{id}:{code}`. Its whole security role is the code: a phishing page that shows
+  its own QR holds the receiving key and lacks only the code on the victim's
+  screen. So the three rules are conditional writes, never a read then a write:
+  one offer (`OPEN → OFFERED`), five wrong codes (each counted by an `updateMany`
+  matching `attempts < EASY_RECOVERY_MAX_ATTEMPTS`, the right code accepted only
+  below it too, the fifth deleting the row: `410`), five minutes (every write
+  conditional on `expiresAt`, every read past it a 404). All of it in Postgres,
+  for the replicas; the status read selects no `receiverKey`, `ciphertext` or
+  `codeHash`. The service spec races guesses against an in-memory table with
+  per-statement atomicity; keep those tests passing when touching the claim.
+- **A wrong easy-recovery code is `422` with `details.attemptsLeft`**, the one
+  error carrying `details`. `AllExceptionsFilter` copies `details` only from an
+  `ApiError`, never from another exception's body: Terminus puts the database's
+  error under that key on the readiness probe.
 
 ## Private payments (`zk-payments`): Cosmos Pay's confidential token, and how confirm decides
 

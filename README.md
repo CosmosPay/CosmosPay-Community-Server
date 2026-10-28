@@ -101,6 +101,8 @@ src/
   aliases/                        claimable payment handles: signed claims, resolution, email recovery
   assets/                         curated asset registry: the (code, issuer) pairs vouched for, per network
   public-key/                     GET /v1/public-key: the shared public key, keyless
+  easy-recovery/                  moving a wallet between two devices: a five-minute mailbox for the wallet sealed
+                                  to the new device's key, released once to the code on the old device's screen
   mailer/                         this service's own sender (Resend): sign-in and recovery codes
   gateway-keys/                   mints wallet accounts' keys in APISIX (admin client, consumer forwarder)
   analytics/                      summary, balances, API logs, webhook logs
@@ -118,7 +120,8 @@ prisma/schema.prisma              Consumer, PaymentIntent, Swap, ChainSwap, Cros
                                   BlindpayWebhookEvent, Payin, Payout, RequestLog,
                                   ActivityEvent,
                                   AdminAuditLog, Alias, AliasAddress,
-                                  AliasChallenge, AliasRecovery, ZkPayment, Usdt0Transfer
+                                  AliasChallenge, AliasRecovery, ZkPayment, Usdt0Transfer,
+                                  EasyRecoverySession
                                   PluginInstallation, PluginRecord
 test/                             e2e suites: gateway gate, admin + alias console gates,
                                   payment intents, swaps, liquidity pools, KYC, webhooks
@@ -161,6 +164,7 @@ regenerated from the controllers and DTOs on every CI run
 | Customers         | `/v1/customers`          | Payer records derived from intents                        |
 | Aliases           | `/v1/aliases`            | Claimable payment handles: claim, resolve, recover        |
 | Wallet sign-in    | `/v1/wallet`             | Google / GitHub / email code, and the encrypted seed backup |
+| Easy recovery     | `/v1/wallet/easy-recovery` | Move a wallet between two devices through a five-minute mailbox this service cannot open |
 | Assets            | `/v1/assets`             | Curated asset registry per network                        |
 | Public key        | `/v1/public-key`         | The shared public API key, served without a key (`@Public`) |
 | Analytics         | `/v1/summary`, `/v1/balances`, `/v1/logs` | Dashboard aggregates (payments, swaps, liquidity, webhooks) and logs |
@@ -340,6 +344,10 @@ Paths use the OpenAPI `{param}` form.
 | POST | `/v1/wallet/auth/email/verify` | `payments:write` | ✓ |
 | POST | `/v1/wallet/auth/finish` | `payments:write` | ✓ |
 | PUT | `/v1/wallet/backup` | `payments:write` | ✓ |
+| POST | `/v1/wallet/easy-recovery/sessions` | `payments:write` | ✓ |
+| GET | `/v1/wallet/easy-recovery/sessions/{id}` | `payments:read` | ✓ |
+| POST | `/v1/wallet/easy-recovery/sessions/{id}/claim` | `payments:write` | ✓ |
+| POST | `/v1/wallet/easy-recovery/sessions/{id}/offer` | `payments:write` | ✓ |
 | POST | `/v1/wallet/recovery/setup` | `payments:write` | ✓ |
 | GET | `/v1/webhooks` | `webhooks:read` |  |
 | POST | `/v1/webhooks` | `webhooks:write` |  |
@@ -382,6 +390,11 @@ carries one example per `code` it can carry — the real message, with the match
 `statusCode` and `error` — so Swagger UI and a Postman import show the body you
 would really receive. **Codes are never renamed once published**; new ones may be
 added, so treat an unrecognised code as its HTTP status.
+
+A few codes also carry `details`, an object of machine-readable facts about that
+failure, between `message` and `path`; the code's example in the spec shows it.
+Today only `easy_recovery_code_invalid` does (`"details": { "attemptsLeft": 4 }`).
+Every other envelope has no `details` key.
 
 A few that are easy to confuse:
 
@@ -942,6 +955,57 @@ address is stored in its EIP-55 spelling. The recovery setup
 (`POST /v1/wallet/recovery/setup`) stays Stellar-only. The account's keys are
 minted the same way on every chain (see
 [No request depends on the developer platform](#no-request-depends-on-the-developer-platform)).
+
+### Easy recovery: moving a wallet between two devices
+
+`/v1/wallet/easy-recovery` moves a wallet from the device that holds it (the old
+one) to another (the new one), through a mailbox that lives five minutes and that
+this service cannot open:
+
+1. The new device generates an X25519 key pair, opens a session with
+   `POST /v1/wallet/easy-recovery/sessions` (`receiverKey`: the public key,
+   base64url) and shows a QR with the session `id` and that key, nothing else.
+2. The old device scans it, the person confirms and unlocks, and the wallet seals
+   its secret to that key (ECIES, on the device), picks a random five-digit code,
+   sends both with `POST …/sessions/{id}/offer` and shows the code.
+3. The person types the code on the new device, which calls
+   `POST …/sessions/{id}/claim`, receives the sealed secret and opens it locally.
+   Both devices poll `GET …/sessions/{id}` (`open` → `offered` → `claimed`).
+
+| Answer | When |
+| ------ | ---- |
+| `201` `{ id, expiresAt }` | The session is open, for five minutes |
+| `200` `{ status, expiresAt }` | A poll. Never the key, the sealed secret or the code |
+| `200` `{ status: "offered" }` | The first offer |
+| `200` `{ ciphertext }` | The right code, once |
+| `404 easy_recovery_not_found` | Unknown, expired, burned, or (on a claim) already claimed |
+| `409 easy_recovery_already_offered` | A second offer: the first one wins |
+| `409 easy_recovery_not_offered` | A claim before the offer: poll for `offered` first |
+| `422 easy_recovery_code_invalid` | A wrong code; `details.attemptsLeft` says how many remain |
+| `410 easy_recovery_burned` | The fifth wrong code: the session and the sealed secret are deleted |
+
+Why the shared public key may call it:
+
+- **This service cannot open what it stores.** It never holds the receiving
+  private key, and it refuses a `receiverKey` that is a low-order X25519 point,
+  whose shared secret anyone could compute. The old device must refuse one too.
+- **The code is what stops a phishing page.** A page that shows its own QR holds
+  the receiving key, so it could read the sealed secret; it still needs the code
+  on the victim's screen. Five wrong codes delete the session. Each wrong code is
+  counted by a conditional update in Postgres and the right one is accepted only
+  below the limit, so guesses sent in parallel get no more than five tries. Only
+  SHA-256 of `{id}:{code}` is stored, and the claim wipes it with the secret.
+- **One offer, five minutes.** The first offer wins, and every route answers 404
+  once the session is past `expiresAt`. A sweeper deletes expired rows on the
+  `WALLET_AUTH_SWEEP_*` schedule; a claimed session is kept until then only so the
+  old device's poll reads `claimed`.
+- **The session id is a handle, not a record token.** It is 128 random bits and
+  is never listed, and its read answers only the status. It appears in the paths
+  of the request logs; holding it buys five guesses at the code, never the secret.
+  Everything is in Postgres, so every replica counts on the same row.
+
+The per-route budgets (per client address) are in
+`src/easy-recovery/easy-recovery.constants.ts`.
 
 ## The shared public API key
 
@@ -2112,6 +2176,23 @@ the service under `src/native-plugins/<slug>/`, switched on by the same
   `openapi:generate` turns them all on.
 
 ## Upgrading — breaking changes and deploy notes
+
+### Easy recovery: a new module, a new table, and `details` on the error envelope
+
+- **New routes** under `/v1/wallet/easy-recovery` (`payments:read` /
+  `payments:write`, the shared public key allowed): moving a wallet between two
+  devices, described under
+  [Easy recovery](#easy-recovery-moving-a-wallet-between-two-devices). No existing
+  route changed, and the gateway's existing route already serves them.
+- **Migration `20261028200000_easy_recovery_sessions`** creates the
+  `easy_recovery_session` table and the `EasyRecoveryStatus` enum; nothing is
+  rewritten. Run `migrate deploy` before the new build serves.
+- **The error envelope may carry `details`**, only on the codes that document it
+  (today `easy_recovery_code_invalid`, with `attemptsLeft`). A new optional field:
+  every other error is unchanged.
+- **No new variables.** A new sweeper deletes expired sessions on the
+  `WALLET_AUTH_SWEEP_ENABLED` / `WALLET_AUTH_SWEEP_INTERVAL_MS` schedule, under
+  its own advisory lock (`881_015`).
 
 ### Payments: when the checkout last saw a link; swaps' settled volume in USD
 

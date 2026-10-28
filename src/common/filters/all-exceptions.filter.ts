@@ -10,8 +10,10 @@ import {
 import { Request, Response } from 'express';
 
 import {
+  ApiError,
   defaultCodeForStatus,
   type ApiErrorBody,
+  type ApiErrorDetails,
 } from '@/common/errors/api-error';
 
 /**
@@ -32,6 +34,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
     let message: string | string[] = 'Internal server error';
     let error = 'Internal Server Error';
     let code: string | undefined;
+    let details: ApiErrorDetails | undefined;
 
     if (exception instanceof HttpException) {
       status = exception.getStatus();
@@ -54,6 +57,10 @@ export class AllExceptionsFilter implements ExceptionFilter {
         // field is never missing from the envelope.
         if (typeof body.code === 'string') code = body.code;
       }
+      // Read from the ApiError itself, never from the body: Terminus' readiness
+      // report carries a `details` key of its own (the database's error among
+      // it), and copying whatever an exception's body names would publish it.
+      if (exception instanceof ApiError) details = exception.details;
     } else if (exception instanceof Error) {
       // Unexpected error: log full detail server-side, return generic to caller.
       this.logger.error(exception.message, exception.stack);
@@ -64,6 +71,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
       code: code ?? defaultCodeForStatus(status),
       error,
       message,
+      ...(details ? { details } : {}),
       path: request.url,
       timestamp: new Date().toISOString(),
     };
