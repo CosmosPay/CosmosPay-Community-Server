@@ -168,6 +168,7 @@ describe('WalletAuthService', () => {
       const { service } = makeService();
       expect(service.providers()).toEqual({
         providers: ['google'],
+        sources: [],
         email: true,
         mfaSettingsUrl: null,
       });
@@ -360,6 +361,20 @@ describe('WalletAuthService', () => {
       expect(status).toEqual({ status: 'authorized' });
     });
 
+    it('says a binding waits for the wallet, never what it is', async () => {
+      const { service, prisma } = makeService();
+      prisma.walletAuthHandshake.findUnique.mockResolvedValue({
+        status: WalletAuthHandshakeStatus.AUTHORIZED,
+        failure: null,
+        expiresAt: new Date(NOW + 60_000),
+        bindingHash: 'f'.repeat(64),
+      });
+      expect(await service.pollStatus('st')).toEqual({
+        status: 'authorized',
+        bound: true,
+      });
+    });
+
     it('reports a handshake past its deadline as expired', async () => {
       const { service, prisma } = makeService();
       prisma.walletAuthHandshake.findUnique.mockResolvedValue({
@@ -424,8 +439,12 @@ describe('WalletAuthService', () => {
 
       expect(prisma.walletAuthHandshake.updateMany).toHaveBeenCalledWith({
         where: { state: 'st', status: WalletAuthHandshakeStatus.AUTHORIZED },
-        // The ID token leaves the row in the same write that burns it.
-        data: { status: WalletAuthHandshakeStatus.REDEEMED, idToken: null },
+        // The ID token and the binding leave the row in the same write that burns it.
+        data: {
+          status: WalletAuthHandshakeStatus.REDEEMED,
+          idToken: null,
+          bindingHash: null,
+        },
       });
     });
 

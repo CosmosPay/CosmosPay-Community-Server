@@ -30,6 +30,7 @@ import {
 import { Asset } from '@stellar/stellar-sdk';
 import { zkPaymentsEnvName } from '@/config/zk-payments-env';
 import { parseReturnUrls } from '@/common/return-url';
+import { parseOidcSources, type OidcSource } from '@/wallet-auth/oidc-sources';
 import {
   DEFAULT_APISIX_ADMIN_TIMEOUT_MS,
   DEFAULT_WALLET_KEY_SWAP_FEE_BPS,
@@ -502,9 +503,15 @@ export interface AppConfig {
      * The operator's OpenID Connect provider — Authentik. The preferred door:
      * its ID token is verified against the provider's published keys, and the
      * provider (not this service) owns passwords, MFA and the Google/GitHub
-     * sources. Empty strings disable it.
+     * sources. Empty strings disable it. `sources` are the Authentik sources a
+     * wallet lists as buttons of their own (`WALLET_AUTH_OIDC_SOURCES`).
      */
-    oidc: { issuer: string; clientId: string; clientSecret: string };
+    oidc: {
+      issuer: string;
+      clientId: string;
+      clientSecret: string;
+      sources: OidcSource[];
+    };
     /**
      * The app URLs a provider callback may send the browser back to, for a
      * native wallet whose auth session (`ASWebAuthenticationSession`, a Custom
@@ -1105,6 +1112,8 @@ export default (): AppConfig => ({
       issuer: process.env.WALLET_AUTH_OIDC_ISSUER?.trim() ?? '',
       clientId: process.env.WALLET_AUTH_OIDC_CLIENT_ID?.trim() ?? '',
       clientSecret: process.env.WALLET_AUTH_OIDC_CLIENT_SECRET?.trim() ?? '',
+      // Each entry was checked at boot by `identity-env.ts`.
+      sources: parseOidcSources(process.env.WALLET_AUTH_OIDC_SOURCES),
     },
     // Each entry was checked at boot by `identity-env.ts`.
     returnUrls: parseReturnUrls(process.env.WALLET_AUTH_RETURN_URLS),

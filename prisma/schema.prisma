@@ -1714,6 +1714,14 @@ model WalletAuthHandshake {
   /// again at the callback. Null renders the page.
   returnTo String?
 
+  /// SHA-256 of a one-time value the callback sent ONLY to the browser that finished
+  /// an Authentik emailed sign-in, in the fragment of its redirect to the wallet's
+  /// return URL. The link proves the inbox; this proves the wallet redeeming the
+  /// handshake is in the browser that opened it — a stranger who started the
+  /// handshake and sent someone its URL never receives it. An existing account skips
+  /// the emailed code only with it. Null for every other sign-in.
+  bindingHash String?
+
   expiresAt DateTime
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

@@ -16,6 +16,14 @@ import type { RateLimitPolicy } from '@/common/decorators/rate-limit.decorator';
 export const HANDSHAKE_TTL_MS = 10 * 60 * 1000;
 
 /**
+ * The one script the callback page runs: close the window the wallet opened for the
+ * provider, so the person lands back on the wallet instead of on a page telling them to go
+ * there. It carries nothing — no identity, no state, no URL — and the page's CSP allows
+ * exactly these bytes by hash, nothing else.
+ */
+export const CALLBACK_CLOSE_SCRIPT = 'window.close();';
+
+/**
  * The oldest Authentik login a wallet sign-in accepts, in seconds.
  *
  * Sent as `max_age` and checked again against the ID token's `auth_time`, so a
@@ -47,6 +55,34 @@ export const RETURN_URL_MAX_CHARS = 512;
  */
 export const AUTHENTIK_MFA_SETTINGS_PATH =
   '/if/user/#/settings;{"page":"page-credentials"}';
+
+/**
+ * The Authentik flow that starts a wallet sign-in at ONE source (Google, GitHub…):
+ * `{prefix}{source slug}`, e.g. `wallet-source-google`. Its only stage is an
+ * identification stage with no user fields and that one source, which Authentik
+ * answers by sending the browser straight to the source.
+ * `deploy/authentik/wallet-sign-in.yaml` creates one per source.
+ */
+export const AUTHENTIK_SOURCE_FLOW_PREFIX = 'wallet-source-';
+
+/** An Authentik source slug as this service accepts one: lowercase, digits, dashes. */
+export const AUTHENTIK_SOURCE_SLUG = /^[a-z0-9][a-z0-9-]{0,49}$/;
+
+/** The longest label a source may carry on a wallet's button. */
+export const AUTHENTIK_SOURCE_LABEL_MAX = 40;
+
+/**
+ * The ID-token claim that says Authentik signed the person in through an emailed
+ * sign-in LINK — the wallet's `wallet-source-email` flow — opened in the browser that
+ * asked for it. Authentik's own `amr` cannot say so (it covers passwords, passkeys,
+ * smart cards and MFA), so `deploy/authentik/wallet-sign-in.yaml` records the login as
+ * `auth_method: email_link` and its email scope mapping turns that into this claim.
+ *
+ * That login proved the inbox the way this service's own emailed code does, so an
+ * existing account it signs in to is not sent the code as well. Only the literal
+ * `true` counts, read from a token this service verified.
+ */
+export const AUTHENTIK_INBOX_PROVEN_CLAIM = 'cosmos_inbox_proven';
 
 /**
  * How long an emailed code lives.

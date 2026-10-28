@@ -5566,7 +5566,11 @@ paths:
         provider proves who consented, not who opened the sign-in, and an
         existing account is where the backup worth stealing is. An Authentik
         email the provider has not confirmed also gets `verify_email`, account
-        or not, under the same per-address cooldown as `email/start`."
+        or not, under the same per-address cooldown as `email/start`. The
+        exception is a sign-in through Authentik’s emailed link (the `email`
+        source), whose ID token carries `cosmos_inbox_proven: true`: that login
+        already proved the inbox, so an existing account ends here too, with its
+        backups and the `idToken`."
       operationId: WalletAuthController_claimOauth_v1
       parameters: []
       requestBody:
@@ -17804,6 +17808,20 @@ components:
         - account
         - organizationId
         - keys
+    WalletAuthSourceEntity:
+      type: object
+      properties:
+        id:
+          type: string
+          example: google
+          description: Send as `source` on /oauth/authorize.
+        name:
+          type: string
+          example: Google
+          description: "The button’s label: the provider’s own name."
+      required:
+        - id
+        - name
     WalletAuthProvidersEntity:
       type: object
       properties:
@@ -17819,6 +17837,15 @@ components:
           type: array
           items:
             type: string
+        sources:
+          description: Authentik’s own sources (Google, GitHub…), each to show as a button
+            of its own that starts the Authentik sign-in at that source — with
+            these, a wallet need not show a generic Authentik button. Empty
+            without Authentik, or when the operator listed none
+            (WALLET_AUTH_OIDC_SOURCES).
+          type: array
+          items:
+            $ref: "#/components/schemas/WalletAuthSourceEntity"
         email:
           type: boolean
           description: Whether the email-code door works here. False when no console is
@@ -17835,6 +17862,7 @@ components:
             setting. Null when this deployment has no Authentik.
       required:
         - providers
+        - sources
         - email
         - mfaSettingsUrl
     StartWalletOauthDto:
@@ -17874,6 +17902,16 @@ components:
             the `state` travels: the handshake is still redeemed with the
             verifier."
           example: cosmoswallet://auth/done
+        source:
+          type: string
+          description: "Start at one of Authentik’s sources (Google, GitHub…) instead of
+            its login page: an `id` from `sources` on GET
+            /v1/wallet/auth/providers, with `provider: authentik`. The browser
+            goes straight to that provider and comes back through Authentik, so
+            the handshake and its ID token are the same as any Authentik
+            sign-in. Send it only to a deployment that listed it: an older one
+            refuses the unknown field."
+          example: google
       required:
         - provider
         - codeChallenge
@@ -17918,6 +17956,12 @@ components:
             - failed
           description: Present only on `failed`. A token to map to a sentence, never
             prose, which cannot be translated on the device.
+        bound:
+          type: boolean
+          description: "Present (true) only on `authorized`, after an Authentik emailed
+            sign-in whose callback sent the wallet’s return URL a device
+            binding: claim with it (`binding`), or the claim sends the inbox a
+            code. The value itself is never in this response."
       required:
         - status
     ClaimWalletOauthDto:
@@ -17941,7 +17985,17 @@ components:
             code, even for an email with no account, and only then does the
             answer carry the provider's `idToken`: a provider proves who
             consented, not who opened the sign-in, and a recovery identity is
-            worth a wallet."
+            worth a wallet. The one exception is an existing account signed in
+            through Authentik’s emailed link (`cosmos_inbox_proven: true` in its
+            ID token), which already proved the inbox."
+        binding:
+          type: string
+          description: "The device binding: the one-time value the callback put in the
+            fragment of its redirect to the wallet’s return URL, after an
+            Authentik emailed sign-in (the poll says `bound`). Only with it does
+            that sign-in skip the code for an existing account. Send it only
+            when the poll said `bound`: an older server refuses the unknown
+            field."
       required:
         - state
         - codeVerifier

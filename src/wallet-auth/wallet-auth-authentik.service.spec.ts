@@ -43,6 +43,10 @@ const OIDC = {
   issuer: 'https://auth.example.com/application/o/wallet/',
   clientId: 'wallet-client',
   clientSecret: 'wallet-client-secret',
+  sources: [
+    { slug: 'google', name: 'Google' },
+    { slug: 'github', name: 'GitHub' },
+  ],
 };
 const DISCOVERY = {
   issuer: OIDC.issuer,
@@ -157,7 +161,11 @@ describe('WalletAuthService — Authentik and the recovery identity', () => {
   });
   afterEach(() => jest.useRealTimers());
 
-  function authorized(idToken: string | null, emailVerified = true) {
+  function authorized(
+    idToken: string | null,
+    emailVerified = true,
+    bindingHash: string | null = null,
+  ) {
     return {
       state: 'st',
       provider: WalletAuthProvider.AUTHENTIK,
@@ -169,6 +177,7 @@ describe('WalletAuthService — Authentik and the recovery identity', () => {
       subject: 'ak-1',
       emailVerified,
       idToken,
+      bindingHash,
       expiresAt: new Date(NOW + 60_000),
     };
   }
@@ -188,10 +197,62 @@ describe('WalletAuthService — Authentik and the recovery identity', () => {
 
   it('does not offer Authentik without an issuer', () => {
     const { service } = makeService({
-      oidc: { issuer: '', clientId: 'x', clientSecret: 'y' },
+      oidc: {
+        issuer: '',
+        clientId: 'x',
+        clientSecret: 'y',
+        sources: OIDC.sources,
+      },
     });
     expect(service.providers().providers).not.toContain('authentik');
     expect(service.providers().mfaSettingsUrl).toBeNull();
+    // Its sources are reached through it: none without it.
+    expect(service.providers().sources).toEqual([]);
+  });
+
+  it('lists the Authentik sources as buttons of their own', () => {
+    const { service } = makeService();
+    expect(service.providers().sources).toEqual([
+      { id: 'google', name: 'Google' },
+      { id: 'github', name: 'GitHub' },
+    ]);
+  });
+
+  it('starts at a source through its own flow, returning to the authorization request', async () => {
+    const { service, prisma, oidc } = makeService();
+    oidc.discover.mockResolvedValue(DISCOVERY);
+    prisma.walletAuthHandshake.create.mockResolvedValue({});
+
+    const started = await service.startOauth({
+      provider: 'authentik',
+      source: 'google',
+      codeChallenge: 'c'.repeat(43),
+      codeChallengeMethod: 'S256',
+    });
+
+    const url = new URL(started.authorizationUrl);
+    expect(url.origin).toBe('https://auth.example.com');
+    expect(url.pathname).toBe('/if/flow/wallet-source-google/');
+    // `next` is the same authorization request a plain Authentik sign-in opens,
+    // on the issuer's origin, as a path Authentik will follow.
+    const next = new URL(url.searchParams.get('next') ?? '', url.origin);
+    expect(next.origin + next.pathname).toBe(DISCOVERY.authorizationEndpoint);
+    const stored = prisma.walletAuthHandshake.create.mock.calls[0][0].data;
+    expect(next.searchParams.get('nonce')).toBe(stored.nonce);
+    expect(next.searchParams.get('state')).toBe(started.state);
+  });
+
+  it('refuses a source Authentik was not configured with', async () => {
+    const { service, oidc } = makeService();
+    oidc.discover.mockResolvedValue(DISCOVERY);
+    await expect(
+      service.startOauth({
+        provider: 'authentik',
+        source: 'facebook',
+        codeChallenge: 'c'.repeat(43),
+        codeChallengeMethod: 'S256',
+      }),
+    ).rejects.toMatchObject({ status: 400 });
   });
 
   it('opens a sign-in with its own PKCE pair and a nonce, held server-side', async () => {
@@ -339,6 +400,88 @@ describe('WalletAuthService — Authentik and the recovery identity', () => {
     // The identity and the ID token stay on the row, for the verifier to claim.
     expect(outcome.redirectTo).not.toContain(EMAIL);
     expect(outcome.redirectTo).not.toContain('the.id.token');
+  });
+
+  /* The emailed link proves whose inbox; the binding proves the wallet claiming is in
+     the browser that opened it. It travels only in that browser's redirect. */
+  describe('the device binding', () => {
+    const RETURN = 'https://wallet.example/signed-in/';
+    const linkToken = [
+      Buffer.from('{"alg":"RS256"}').toString('base64url'),
+      Buffer.from(
+        JSON.stringify({ email: EMAIL, cosmos_inbox_proven: true }),
+      ).toString('base64url'),
+      'signature',
+    ].join('.');
+
+    function callback(returnTo: string | null, idToken: string) {
+      const { service, prisma, oidc } = makeService({ returnUrls: [RETURN] });
+      oidc.discover.mockResolvedValue(DISCOVERY);
+      prisma.walletAuthHandshake.findUnique.mockResolvedValue({
+        state: 'st',
+        provider: WalletAuthProvider.AUTHENTIK,
+        status: WalletAuthHandshakeStatus.PENDING,
+        providerVerifier: 'pv',
+        nonce: 'the-nonce',
+        expiresAt: new Date(NOW + 60_000),
+        returnTo,
+      });
+      prisma.walletAuthHandshake.updateMany.mockResolvedValue({ count: 1 });
+      global.fetch = jest
+        .fn()
+        .mockResolvedValue(answer({ access_token: 'at', id_token: idToken }));
+      oidc.verify.mockResolvedValue({
+        ok: true,
+        claims: {
+          email: EMAIL,
+          name: 'Ada',
+          picture: null,
+          sub: 'ak-1',
+          exp: 0,
+          iat: 0,
+          iss: OIDC.issuer,
+          authTime: 0,
+          emailVerified: true,
+        },
+      });
+      return {
+        prisma,
+        outcome: service.handleCallback('authentik', {
+          code: 'c',
+          state: 'st',
+        }),
+      };
+    }
+
+    it('sends the browser that finished an emailed sign-in a binding, keeping only its hash', async () => {
+      const { prisma, outcome } = callback(RETURN, linkToken);
+
+      const url = new URL((await outcome).redirectTo as string);
+      expect(url.search).toBe('?state=st');
+      const binding = new URLSearchParams(url.hash.slice(1)).get('binding');
+      expect(binding).toMatch(/^[A-Za-z0-9_-]{43}$/);
+      const data = prisma.walletAuthHandshake.updateMany.mock.calls[0][0].data;
+      expect(data.bindingHash).toBe(sha256Hex(binding as string));
+      expect(JSON.stringify(data)).not.toContain(binding);
+    });
+
+    it('issues none with no return URL to carry it', async () => {
+      const { prisma, outcome } = callback(null, linkToken);
+
+      expect((await outcome).redirectTo).toBeNull();
+      expect(
+        prisma.walletAuthHandshake.updateMany.mock.calls[0][0].data.bindingHash,
+      ).toBeNull();
+    });
+
+    it('issues none for a sign-in that is not the emailed link', async () => {
+      const { prisma, outcome } = callback(RETURN, 'the.id.token');
+
+      expect((await outcome).redirectTo).toBe(`${RETURN}?state=st`);
+      expect(
+        prisma.walletAuthHandshake.updateMany.mock.calls[0][0].data.bindingHash,
+      ).toBeNull();
+    });
   });
 
   /* Authentik signed for the address but never confirmed it. That is not a
@@ -496,6 +639,169 @@ describe('WalletAuthService — Authentik and the recovery identity', () => {
     expect(prisma.walletLoginCode.create.mock.calls[0][0].data.idToken).toBe(
       'the.id.token',
     );
+  });
+
+  /* Authentik's emailed sign-in link, opened in the browser that asked for it,
+     already proved the inbox; the blueprint's mapping says so in the ID token. */
+  describe("Authentik's emailed sign-in link", () => {
+    const token = (claims: Record<string, unknown>) =>
+      [
+        Buffer.from('{"alg":"RS256"}').toString('base64url'),
+        Buffer.from(JSON.stringify({ email: EMAIL, ...claims })).toString(
+          'base64url',
+        ),
+        'signature',
+      ].join('.');
+    // As the callback stores it: sealed at rest.
+    const sealed = (idToken: string) =>
+      sealJson({ idToken }, SESSION_SECRET, ID_TOKEN_PURPOSE);
+    const existing = {
+      id: 'acc_1',
+      backups: [
+        {
+          chain: 'stellar',
+          address: ADDRESS,
+          box: 'the-box',
+          updatedAt: new Date(NOW),
+        },
+      ],
+    };
+
+    const BINDING = 'the-binding-sent-to-the-browser-that-opened-the-link';
+
+    function claimWith(
+      idToken: string,
+      account: typeof existing | null,
+      purpose?: 'sign-in' | 'recovery',
+      emailVerified = true,
+      // What the callback issued, and what this claim presents.
+      binding: { issued: string | null; presented?: string } = {
+        issued: BINDING,
+        presented: BINDING,
+      },
+    ) {
+      const { service, prisma } = makeService();
+      prisma.walletAuthHandshake.findUnique.mockResolvedValue(
+        authorized(
+          sealed(idToken),
+          emailVerified,
+          binding.issued ? sha256Hex(binding.issued) : null,
+        ),
+      );
+      prisma.walletAuthHandshake.updateMany.mockResolvedValue({ count: 1 });
+      prisma.walletAccount.findUnique.mockResolvedValue(account);
+      prisma.walletLoginCode.create.mockResolvedValue({});
+      return {
+        prisma,
+        result: service.claimOauth({
+          state: 'st',
+          codeVerifier: verifier,
+          purpose,
+          binding: binding.presented,
+        }),
+      };
+    }
+
+    it('signs an EXISTING account in with no code, handing over its backups and the ID token', async () => {
+      const idToken = token({ cosmos_inbox_proven: true });
+      const { prisma, result } = claimWith(idToken, existing);
+
+      expect(await result).toMatchObject({
+        status: 'ready',
+        account: 'existing',
+        backup: { address: ADDRESS, box: 'the-box' },
+        idToken,
+      });
+      expect(prisma.walletLoginCode.create).not.toHaveBeenCalled();
+      // Still single-shot: the handshake was burned before anything went out.
+      expect(
+        prisma.walletAuthHandshake.updateMany.mock.calls[0][0].data,
+      ).toMatchObject({
+        status: WalletAuthHandshakeStatus.REDEEMED,
+        idToken: null,
+        bindingHash: null,
+      });
+    });
+
+    /* The relay this closes: a stranger opens a sign-in, sends someone its URL, and
+       they finish it in their own browser. The stranger's wallet holds the handshake
+       and its verifier, never the binding — so it gets the code, to an inbox it does
+       not read. */
+    it.each([
+      ['presents none', { issued: BINDING }],
+      ['presents another value', { issued: BINDING, presented: 'a-guess' }],
+      ['was never sent one', { issued: null, presented: BINDING }],
+    ])(
+      'sends an existing account the code when the claim %s',
+      async (
+        _label,
+        binding: { issued: string | null; presented?: string },
+      ) => {
+        const { prisma, result } = claimWith(
+          token({ cosmos_inbox_proven: true }),
+          existing,
+          'sign-in',
+          true,
+          binding,
+        );
+
+        const answered = await result;
+        expect(answered.status).toBe('verify_email');
+        expect(answered).not.toHaveProperty('sessionToken');
+        expect(answered).not.toHaveProperty('idToken');
+        expect(prisma.walletLoginCode.create).toHaveBeenCalledTimes(1);
+      },
+    );
+
+    it('does the same for a recovery, which is what opens the backup with no password', async () => {
+      const idToken = token({ cosmos_inbox_proven: true });
+      const { prisma, result } = claimWith(idToken, existing, 'recovery');
+
+      expect(await result).toMatchObject({ status: 'ready', idToken });
+      expect(prisma.walletLoginCode.create).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['no marker', {}],
+      ['false', { cosmos_inbox_proven: false }],
+      ['the string "true"', { cosmos_inbox_proven: 'true' }],
+      ['1', { cosmos_inbox_proven: 1 }],
+    ])(
+      'still sends an existing account the code with %s',
+      async (_label, claims) => {
+        const { prisma, result } = claimWith(token(claims), existing);
+
+        const answered = await result;
+        expect(answered.status).toBe('verify_email');
+        expect(answered).not.toHaveProperty('sessionToken');
+        expect(answered).not.toHaveProperty('idToken');
+        expect(prisma.walletLoginCode.create).toHaveBeenCalledTimes(1);
+      },
+    );
+
+    it('never takes the marker on an email the provider did not confirm', async () => {
+      const { prisma, result } = claimWith(
+        token({ cosmos_inbox_proven: true }),
+        existing,
+        'sign-in',
+        false,
+      );
+
+      expect((await result).status).toBe('verify_email');
+      expect(prisma.walletLoginCode.create).toHaveBeenCalledTimes(1);
+    });
+
+    it('leaves a NEW account as it was: ready, and no ID token', async () => {
+      const { prisma, result } = claimWith(
+        token({ cosmos_inbox_proven: true }),
+        null,
+      );
+
+      const answered = await result;
+      expect(answered).toMatchObject({ status: 'ready', account: 'new' });
+      expect(answered).not.toHaveProperty('idToken');
+      expect(prisma.walletLoginCode.create).not.toHaveBeenCalled();
+    });
   });
 
   it('releases the carried ID token once the code is answered, and clears it from the row', async () => {

@@ -95,6 +95,20 @@ describe('returnRedirectUrl', () => {
       returnRedirectUrl('http://127.0.0.1:53682/auth/done', 'st4te', 'denied'),
     ).toBe('http://127.0.0.1:53682/auth/done?state=st4te&error=denied');
   });
+
+  /* The browser keeps a fragment: no request line, log or Referer carries it. */
+  it('carries the device binding in the fragment, never the query', () => {
+    const url = new URL(
+      returnRedirectUrl(
+        'https://wallet.example/signed-in/',
+        'st4te',
+        'ok',
+        'b1nd',
+      ),
+    );
+    expect(url.search).toBe('?state=st4te');
+    expect(url.hash).toBe('#binding=b1nd');
+  });
 });
 
 describe('parseReturnUrls', () => {

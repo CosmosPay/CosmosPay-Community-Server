@@ -9,12 +9,14 @@ import type { Chain } from '@/chains/chains.constants';
 import { WalletAuthMethod, WalletAuthProvider } from '@generated/prisma/client';
 import { openJson, sealJson } from '@/common/sealed-box';
 import {
-  BACKUP_BOX_MAX_CHARS,
+  AUTHENTIK_INBOX_PROVEN_CLAIM,
+  AUTHENTIK_SOURCE_FLOW_PREFIX,
   BACKUP_ARGON2_MAX_MEMORY_KIB,
   BACKUP_ARGON2_MAX_PARALLELISM,
   BACKUP_ARGON2_MAX_PASSES,
   BACKUP_ARGON2_MIN_MEMORY_KIB,
   BACKUP_ARGON2_MIN_PASSES,
+  BACKUP_BOX_MAX_CHARS,
   BACKUP_MAX_ITERATIONS,
   BACKUP_MAX_SLOTS,
   BACKUP_MIN_ITERATIONS,
@@ -165,6 +167,31 @@ export function mfaSettingsUrl(issuer: string, path: string): string | null {
   }
 }
 
+/**
+ * Start an Authentik sign-in at one source (Google, GitHub…): that source's own flow,
+ * opened with the wallet's authorization request as `next`. Authentik sends the flow
+ * straight to the source; once the source has signed the person in (or enrolled them),
+ * Authentik returns to `next` — it keeps the flow's query in the session — and the
+ * authorization request completes as if the person had picked the source on Authentik's
+ * own login page. `next` is the request's path and query: Authentik refuses an off-site
+ * `next`, and the request lives on the issuer's origin. Null when it does not.
+ */
+export function sourceFlowUrl(
+  issuer: string,
+  source: string,
+  authorization: string,
+): string | null {
+  try {
+    const { origin } = new URL(issuer);
+    const target = new URL(authorization);
+    if (origin === 'null' || target.origin !== origin) return null;
+    const next = encodeURIComponent(`${target.pathname}${target.search}`);
+    return `${origin}/if/flow/${AUTHENTIK_SOURCE_FLOW_PREFIX}${source}/?next=${next}`;
+  } catch {
+    return null;
+  }
+}
+
 /** What an OpenID Connect authorization request carries beyond the basics. */
 export interface OidcAuthorization {
   /** From the provider's discovery document. */
@@ -223,6 +250,47 @@ export function authorizationUrl(
   if (provider === WalletAuthProvider.GOOGLE) q.set('prompt', 'select_account');
   if (provider === WalletAuthProvider.GITHUB) q.set('allow_signup', 'true');
   return `${ep.authorize}?${q.toString()}`;
+}
+
+/**
+ * Whether an Authentik ID token says its login proved the inbox: the
+ * `AUTHENTIK_INBOX_PROVEN_CLAIM` claim, literally `true` — not `"true"`, not `1`.
+ *
+ * This reads the payload WITHOUT checking the signature, so it must only ever be given
+ * a token this service already verified: the one the callback checked against
+ * Authentik's keys, issuer, audience, nonce and `max_age`, and sealed into the
+ * handshake row. Anything unreadable is `false`, which keeps the emailed code.
+ */
+export function authentikProvedInbox(verifiedIdToken: string | null): boolean {
+  const payload = verifiedIdToken?.split('.')[1];
+  if (!payload) return false;
+  try {
+    const claims: unknown = JSON.parse(
+      Buffer.from(payload, 'base64url').toString('utf8'),
+    );
+    return (
+      typeof claims === 'object' &&
+      claims !== null &&
+      (claims as Record<string, unknown>)[AUTHENTIK_INBOX_PROVEN_CLAIM] === true
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether a claim presents the device binding the callback issued (its SHA-256 is on
+ * the handshake). Constant-time, and `false` when either side is missing: no binding
+ * issued, or none presented, keeps the emailed code.
+ */
+export function bindingMatches(
+  presented: string | null | undefined,
+  storedHash: string | null | undefined,
+): boolean {
+  if (!presented || !storedHash) return false;
+  const got = Buffer.from(sha256Hex(presented), 'utf8');
+  const want = Buffer.from(storedHash, 'utf8');
+  return got.length === want.length && timingSafeEqual(got, want);
 }
 
 /* --------------------------------- tokens --------------------------------- */

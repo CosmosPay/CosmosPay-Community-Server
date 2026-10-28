@@ -44,6 +44,9 @@ import {
   PROVIDER_ENDPOINTS,
   PROVIDER_WIRE,
   authorizationUrl,
+  sourceFlowUrl,
+  authentikProvedInbox,
+  bindingMatches,
   backupMessage,
   callbackUrl,
   fallbackName,
@@ -138,6 +141,13 @@ export interface CallbackOutcome {
  *    consented reads the inbox; a stranger who sent them the link does not. That
  *    is also the only door to an existing backup, which is the thing worth
  *    stealing.
+ *  - Except when Authentik's own login WAS the inbox: its emailed sign-in link
+ *    (the `wallet-source-email` flow), opened in the browser that asked for it.
+ *    Its ID token then carries `AUTHENTIK_INBOX_PROVEN_CLAIM`, and the account is
+ *    signed in with no second email. What that link cannot tell apart, and the
+ *    code could: a stranger who sent someone the email flow's URL, and got them to
+ *    type their own address and open the link in that same browser, collects the
+ *    sign-in. The code would have had to be read out to them.
  *  - An email Authentik signed for but has NOT confirmed is treated the same
  *    way, new account or not: the code to that inbox is the confirmation the
  *    provider did not give, so the person is sent one instead of a dead end.
@@ -225,6 +235,7 @@ export class WalletAuthService {
    */
   providers(): {
     providers: string[];
+    sources: { id: string; name: string }[];
     email: boolean;
     mfaSettingsUrl: string | null;
   } {
@@ -238,8 +249,17 @@ export class WalletAuthService {
     )
       .filter((p) => this.credentials(p) !== null)
       .map((p) => PROVIDER_WIRE[p]);
+    const authentik = this.credentials(WalletAuthProvider.AUTHENTIK) !== null;
     return {
       providers: available,
+      // Authentik's own sources, each a button of its own that starts there
+      // (`source` on /oauth/authorize). Only through Authentik, so only with it.
+      sources: authentik
+        ? (this.settings.oidc.sources ?? []).map(({ slug, name }) => ({
+            id: slug,
+            name,
+          }))
+        : [],
       email: this.emailAvailable(),
       // Only with Authentik: the direct Google and GitHub doors have no second
       // factor of this service's choosing to manage.
@@ -278,6 +298,19 @@ export class WalletAuthService {
       throw ApiError.unavailable(
         ApiErrorCode.WalletProviderUnavailable,
         `${PROVIDER_WIRE[provider]} sign-in is not configured on this deployment.`,
+      );
+    }
+    // A source is one of Authentik's, as `providers()` listed them — never a slug
+    // taken on trust, which would open whatever flow its name points at.
+    const source = dto.source?.trim() || null;
+    if (
+      source &&
+      (provider !== WalletAuthProvider.AUTHENTIK ||
+        !(this.settings.oidc.sources ?? []).some((s) => s.slug === source))
+    ) {
+      throw ApiError.badRequest(
+        ApiErrorCode.WalletProviderUnavailable,
+        `Unknown sign-in source: ${source}`,
       );
     }
     const baseUrl = this.requireBaseUrl();
@@ -325,22 +358,29 @@ export class WalletAuthService {
       },
     });
 
-    return {
+    const request = authorizationUrl(provider, {
+      clientId: creds.clientId,
+      redirectUri: callbackUrl(baseUrl, provider),
       state,
-      authorizationUrl: authorizationUrl(provider, {
-        clientId: creds.clientId,
-        redirectUri: callbackUrl(baseUrl, provider),
-        state,
-        oidc: oidc
-          ? {
-              authorizationEndpoint: oidc.endpoint,
-              codeChallenge: oidc.challenge,
-              nonce: oidc.nonce,
-            }
-          : undefined,
-      }),
-      expiresAt,
-    };
+      oidc: oidc
+        ? {
+            authorizationEndpoint: oidc.endpoint,
+            codeChallenge: oidc.challenge,
+            nonce: oidc.nonce,
+          }
+        : undefined,
+    });
+    const url = source
+      ? sourceFlowUrl(this.settings.oidc.issuer, source, request)
+      : request;
+    if (!url) {
+      throw ApiError.unavailable(
+        ApiErrorCode.WalletProviderUnavailable,
+        'The Authentik issuer and its authorization endpoint are not on one origin, so a source cannot return to the request.',
+      );
+    }
+
+    return { state, authorizationUrl: url, expiresAt };
   }
 
   /**
@@ -363,10 +403,10 @@ export class WalletAuthService {
     const handshake = await this.prisma.walletAuthHandshake.findUnique({
       where: { state },
     });
-    const outcome = this.callbackOutcome(
+    const target = this.returnTarget(
       handshake?.provider === provider ? handshake.returnTo : null,
-      state,
     );
+    const outcome = this.callbackOutcome(target, state);
     // A handshake that is not PENDING has already been answered, and answering
     // it twice is how a second callback overwrites the first one's identity.
     if (
@@ -401,6 +441,19 @@ export class WalletAuthService {
       return outcome(identity.error);
     }
 
+    // Authentik's emailed link proves the inbox, not that the wallet holding this
+    // handshake is in this browser: anyone can open a handshake and send someone its
+    // URL. So that proof counts only with a value sent to THIS browser, through the
+    // wallet's own return URL, which the stranger's wallet never sees (`claimOauth`).
+    // No return URL, no value — and the emailed code, as before.
+    const binding =
+      target &&
+      provider === WalletAuthProvider.AUTHENTIK &&
+      identity.emailVerified &&
+      authentikProvedInbox(identity.idToken)
+        ? randomToken()
+        : null;
+
     // Conditional on PENDING, so two callbacks racing on one `state` cannot both
     // write an identity — the second one finds nothing to update.
     const written = await this.prisma.walletAuthHandshake.updateMany({
@@ -413,32 +466,38 @@ export class WalletAuthService {
         subject: identity.identity.subject,
         emailVerified: identity.emailVerified,
         idToken: identity.idToken ? this.sealIdToken(identity.idToken) : null,
+        bindingHash: binding ? sha256Hex(binding) : null,
         providerVerifier: null,
         nonce: null,
       },
     });
     if (written.count !== 1) return outcome('expired');
-    return outcome('ok');
+    return outcome('ok', binding ?? undefined);
   }
 
   /**
-   * Builds the callback's outcomes for one handshake. The return URL is checked
-   * against the allowlist again here, not only when the handshake was opened: an
-   * operator who removes an entry expects it to stop being redirected to now,
-   * not ten minutes from now.
+   * Where the callback may send the browser for this handshake, or null for the page.
+   * Checked against the allowlist again here, not only when the handshake was opened:
+   * an operator who removes an entry expects it to stop being redirected to now, not
+   * ten minutes from now.
    */
+  private returnTarget(returnTo: string | null): string | null {
+    return returnTo && isReturnUrlAllowed(returnTo, this.settings.returnUrls)
+      ? returnTo
+      : null;
+  }
+
+  /** Builds the callback's outcomes for one handshake (`returnTarget`). */
   private callbackOutcome(
-    returnTo: string | null,
+    target: string | null,
     state: string,
-  ): (reason: CallbackOutcome['reason']) => CallbackOutcome {
-    const target =
-      returnTo && isReturnUrlAllowed(returnTo, this.settings.returnUrls)
-        ? returnTo
-        : null;
-    return (reason) => ({
+  ): (reason: CallbackOutcome['reason'], binding?: string) => CallbackOutcome {
+    return (reason, binding) => ({
       ok: reason === 'ok',
       reason,
-      redirectTo: target ? returnRedirectUrl(target, state, reason) : null,
+      redirectTo: target
+        ? returnRedirectUrl(target, state, reason, binding)
+        : null,
     });
   }
 
@@ -463,7 +522,12 @@ export class WalletAuthService {
   async pollStatus(state: string) {
     const handshake = await this.prisma.walletAuthHandshake.findUnique({
       where: { state },
-      select: { status: true, failure: true, expiresAt: true },
+      select: {
+        status: true,
+        failure: true,
+        expiresAt: true,
+        bindingHash: true,
+      },
     });
     if (!handshake) return { status: 'expired' as const };
 
@@ -478,7 +542,12 @@ export class WalletAuthService {
       case WalletAuthHandshakeStatus.PENDING:
         return { status: 'pending' as const };
       case WalletAuthHandshakeStatus.AUTHORIZED:
-        return { status: 'authorized' as const };
+        // `bound`: the callback sent this browser's wallet a binding to claim with
+        // (`returnRedirectUrl`), so a wallet that has not read it yet waits for it.
+        // A fact about the handshake, never the value.
+        return handshake.bindingHash
+          ? { status: 'authorized' as const, bound: true }
+          : { status: 'authorized' as const };
       case WalletAuthHandshakeStatus.REDEEMED:
         return { status: 'redeemed' as const };
       case WalletAuthHandshakeStatus.FAILED:
@@ -495,7 +564,9 @@ export class WalletAuthService {
    * Redeem a handshake with the verifier the device kept.
    *
    * The fork that matters is at the end: a NEW email gets a session token here,
-   * and an email that already has an account gets a code in its inbox instead.
+   * and an email that already has an account gets a code in its inbox instead —
+   * unless Authentik's emailed sign-in link already proved that inbox, in the
+   * browser of the wallet redeeming it.
    */
   async claimOauth(dto: ClaimWalletOauthDto) {
     const handshake = await this.prisma.walletAuthHandshake.findUnique({
@@ -538,7 +609,11 @@ export class WalletAuthService {
     // redemptions cannot both succeed. The ID token leaves the row with it.
     const burned = await this.prisma.walletAuthHandshake.updateMany({
       where: { state: dto.state, status: WalletAuthHandshakeStatus.AUTHORIZED },
-      data: { status: WalletAuthHandshakeStatus.REDEEMED, idToken: null },
+      data: {
+        status: WalletAuthHandshakeStatus.REDEEMED,
+        idToken: null,
+        bindingHash: null,
+      },
     });
     if (burned.count !== 1) return { status: 'expired' as const };
 
@@ -556,6 +631,25 @@ export class WalletAuthService {
       where: { email },
       include: { backups: { orderBy: { updatedAt: 'desc' } } },
     });
+
+    // Authentik's emailed sign-in link already proved this inbox, opened in the
+    // browser that asked for it (AUTHENTIK_INBOX_PROVEN_CLAIM): our own code would
+    // prove the same thing again. So the existing account gets its session, its
+    // backups and the ID token now — one email, not two. The row holds a token only
+    // when it verified with a confirmed email, so nothing unverified reaches this.
+    // And only with the binding the callback sent to that browser (`handleCallback`):
+    // the link says whose inbox, the binding says this wallet is where it was opened.
+    // A wallet that started the sign-in elsewhere and had someone else finish it
+    // never has it, and gets the code — to an inbox it does not read.
+    const idToken = this.openIdToken(handshake.idToken);
+    if (
+      account &&
+      handshake.emailVerified &&
+      authentikProvedInbox(idToken) &&
+      bindingMatches(dto.binding, handshake.bindingHash)
+    ) {
+      return this.readyPayload(identity, account, idToken);
+    }
 
     // An existing account is where the backup worth stealing is, so the
     // provider's word is not enough for it. Neither is it for a RECOVERY: the
