@@ -18,6 +18,15 @@ updates:
       # One PR for all non-breaking updates to cut noise; majors stay separate.
       minor-and-patch:
         update-types: [minor, patch]
+    ignore:
+      # The Monad contracts' artifacts (src/evm/*.artifact.ts) record the exact solc
+      # that compiled them, and every CREATE2 deposit address depends on that
+      # bytecode. A newer solc makes the artifact spec fail (source and artifact
+      # disagree) and recompiling would be a NEW contract, not an update (see
+      # "Monad deposit addresses" in CLAUDE.md). solc moves only by hand, with
+      # `npm run contracts:compile`, when no address built from the old bytecode
+      # can still hold money.
+      - dependency-name: solc
 
   # Keep the GitHub Actions used by the workflows on their latest versions too.
   - package-ecosystem: github-actions
