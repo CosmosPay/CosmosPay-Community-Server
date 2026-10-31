@@ -8,6 +8,8 @@ import request from 'supertest';
 import { AppModule } from '@/app.module';
 import { AllExceptionsFilter } from '@/common/filters/all-exceptions.filter';
 import { PrismaService } from '@/prisma/prisma.service';
+import { CALLBACK_PAGE_CSP } from '@/wallet-auth/wallet-auth-page';
+import { CALLBACK_CLOSE_SCRIPT } from '@/wallet-auth/wallet-auth.constants';
 
 /**
  * What stands in front of the wallet sign-in routes.
@@ -158,8 +160,12 @@ describe('Wallet sign-in guards (e2e)', () => {
 
       expect(res.text).not.toContain('ada@example.com');
       expect(res.text).not.toContain('sessionToken');
-      // Inert: no script, no external asset.
-      expect(res.text).not.toMatch(/<script/i);
+      // Inert: the only script is the one that closes the window, the CSP allows
+      // exactly that script by hash, and nothing can be loaded from anywhere.
+      expect(res.text.match(/<script/gi)).toEqual(['<script']);
+      expect(res.text).toContain(`<script>${CALLBACK_CLOSE_SCRIPT}</script>`);
+      expect(res.headers['content-security-policy']).toBe(CALLBACK_PAGE_CSP);
+      expect(res.text).not.toMatch(/\b(src|href)=/i);
     });
 
     it('renders a page rather than an error, because the reader is a person', async () => {
