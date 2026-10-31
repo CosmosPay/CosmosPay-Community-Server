@@ -2,6 +2,73 @@
 
 All notable changes to the Cosmos Pay Community Server are documented here.
 Generated from [Conventional Commits](https://www.conventionalcommits.org) by [git-cliff](https://git-cliff.org).
+## [1.7.0] - 2026-10-27
+
+### Features
+- Public read of one payment intent for hosted checkout (33bf544)
+- Let merchants choose the hosted checkout design (04b5c9a)
+- Filter the list by creation date (b57e64a)
+- Add the summary series endpoint and a local swap commission waiver (a7e3ee1)
+- Reach every NEAR Intents network the service can validate (794848e)
+- Count swaps, liquidity and webhooks in the summary series (af1d230)
+- Accept an account on Stellar, Solana or Monad (44a404a)
+- Confidential payments on Cosmos Pay's own confidential token (41ea04c)
+- Add the missing trustline to the swap the source signs (2f3f2c9)
+- Send USDT0 from Stellar to EVM networks through LayerZero's OFT (0434ee2)
+- Per-bucket liquidity and webhooks, and USDT0 as a swap kind in the series (9bd7f72)
+- The settled volume in USD on the summary and the series (adf3323)
+- Private payments in the dashboard series (bf8c480)
+- An organization's own fee on Stellar and cross-chain swaps (ea2797a)
+- Stellar payment links, with the payer's envelope built on demand (590aafa)
+- Solana payment links, as a Solana Pay transaction request (1d074f5)
+- Monad payment links, paid by a new PaymentSplitForwarder (f79b906)
+- Merchant fee on Solana swaps (ddfd5b6)
+- Merchant fee on private payments (f79fdf1)
+- Merchant fee on deposits and withdrawals (4ddaed7)
+- Merchant fee on Monad swaps through MerchantFeeSwapRouter (b9a68ba)
+- Merchant fee on USDT0 transfers through a Soroban wrapper (1e1b2ed)
+- Charge the plan commission through the fee wrapper (7a6d46e)
+- A customer holds wallets on several chains (ed516bc)
+- Private payments at 0.18%, the community swap rate at 65 bps (207929e)
+- When the checkout last saw a payment link; swaps' settled volume in USD (b695dd6)
+- Hosted checkout reports the payer's wallet (18b4ef7)
+
+### Bug Fixes
+- Re-bake wallet consumers' swap fee at boot (4d49011)
+- Refuse oversized base58 and address input before decoding (601262c)
+- Per-record read tokens for what the shared public key creates (9cb4183)
+- Keep swap submit and cross-chain deposit working for older wallets (f262dc1)
+- Scope every list to the network the key targets (082cbef)
+- Rank settlement rivals on what the destination receives (ad2c783)
+- List only the assets NEAR Intents still trades (d1dc5a5)
+- Clear the production dependency audit (960af20)
+- Write checkoutSeenAt in UTC (8fb5b2d)
+
+### Miscellaneous
+- Drop the em dash from every message the server sends (cb4c2e8)
+- Keep local runs and tests off every core (04c21d1)
+
+### Performance
+- Cache the dashboard reads and keep NEAR Intents' token list warm (3de7fc0)
+
+### Documentation
+- Note that a missing commission recipient is never a free swap (1d122fd)
+- Call them private payments wherever a person reads (36cb9dc)
+- Use the dashboard's term for private payments (d28752c)
+- One colon per sentence in the submit routes' error notes (872a0df)
+- Pass the wrapper's contract ids through shell variables (c17bad3)
+
+### Testing
+- Follow the private payment rate and the swaps' settled volume (a0fd168)
+
+### Dependencies
+- Bump the minor-and-patch group (18 updates) (791f8f9)
+
+## [1.6.0] - 2026-10-07
+
+### Features
+- Wallet accounts pay the community plan's new 0.5% swap rate (c359841)
+
 ## [1.5.2] - 2026-10-07
 
 ### Features
