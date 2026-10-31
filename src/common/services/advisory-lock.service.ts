@@ -106,4 +106,5 @@ export enum AdvisoryLockKey {
   CrossChainSwapObserver = 881_012,
   ChainSwapObserver = 881_013,
   BlindpayReconciler = 881_014,
+  EasyRecoverySweeper = 881_015,
 }

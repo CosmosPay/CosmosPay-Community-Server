@@ -102,6 +102,8 @@ src/
   aliases/                        claimable payment handles: signed claims, resolution, email recovery
   assets/                         curated asset registry: the (code, issuer) pairs vouched for, per network
   public-key/                     GET /v1/public-key: the shared public key, keyless
+  easy-recovery/                  moving a wallet between two devices: a five-minute mailbox for the wallet sealed
+                                  to the new device's key, released once to the code on the old device's screen
   mailer/                         this service's own sender (Resend): sign-in and recovery codes
   gateway-keys/                   mints wallet accounts' keys in APISIX (admin client, consumer forwarder)
   analytics/                      summary, balances, API logs, webhook logs
@@ -119,7 +121,8 @@ prisma/schema.prisma              Consumer, PaymentIntent, Swap, ChainSwap, Cros
                                   BlindpayWebhookEvent, Payin, Payout, RequestLog,
                                   ActivityEvent,
                                   AdminAuditLog, Alias, AliasAddress,
-                                  AliasChallenge, AliasRecovery, ZkPayment, Usdt0Transfer
+                                  AliasChallenge, AliasRecovery, ZkPayment, Usdt0Transfer,
+                                  EasyRecoverySession
                                   PluginInstallation, PluginRecord
 test/                             e2e suites: gateway gate, admin + alias console gates,
                                   payment intents, swaps, liquidity pools, KYC, webhooks
@@ -162,6 +165,7 @@ régénéré à partir des contrôleurs et des DTO à chaque exécution de la CI
 | Clients                | `/v1/customers`          | Fiches payeurs dérivées des intentions                   |
 | Alias                  | `/v1/aliases`            | Identifiants de paiement revendicables : revendiquer, résoudre, récupérer |
 | Connexion du portefeuille | `/v1/wallet` | Google / GitHub / code par e-mail, et la sauvegarde chiffrée de la seed |
+| Récupération facile | `/v1/wallet/easy-recovery` | Déplacer un portefeuille entre deux appareils par une boîte aux lettres de cinq minutes que ce service ne peut pas ouvrir |
 | Actifs                 | `/v1/assets`             | Registre d'actifs sélectionnés, par réseau               |
 | Clé publique           | `/v1/public-key`         | La clé API publique partagée, servie sans clé (`@Public`) |
 | Analytique             | `/v1/summary`, `/v1/balances`, `/v1/logs` | Agrégats (paiements, swaps, liquidité, webhooks) et journaux du tableau de bord |
@@ -341,6 +345,10 @@ Les chemins utilisent la forme OpenAPI `{param}`.
 | POST | `/v1/wallet/auth/email/verify` | `payments:write` | ✓ |
 | POST | `/v1/wallet/auth/finish` | `payments:write` | ✓ |
 | PUT | `/v1/wallet/backup` | `payments:write` | ✓ |
+| POST | `/v1/wallet/easy-recovery/sessions` | `payments:write` | ✓ |
+| GET | `/v1/wallet/easy-recovery/sessions/{id}` | `payments:read` | ✓ |
+| POST | `/v1/wallet/easy-recovery/sessions/{id}/claim` | `payments:write` | ✓ |
+| POST | `/v1/wallet/easy-recovery/sessions/{id}/offer` | `payments:write` | ✓ |
 | POST | `/v1/wallet/recovery/setup` | `payments:write` | ✓ |
 | GET | `/v1/webhooks` | `webhooks:read` |  |
 | POST | `/v1/webhooks` | `webhooks:write` |  |
@@ -383,6 +391,12 @@ un exemple par `code` possible — le message réel, avec le `statusCode` et l'`
 correspondants — afin que Swagger UI et un import Postman affichent le corps que vous recevez
 vraiment. **Les codes ne sont jamais renommés une fois publiés** ; de nouveaux peuvent être
 ajoutés, traitez donc un code inconnu selon son statut HTTP.
+
+Quelques codes portent aussi `details`, un objet de faits lisibles par machine sur
+cet échec, entre `message` et `path` ; l’exemple du code dans la spec le montre.
+Aujourd’hui seul `easy_recovery_code_invalid` le porte
+(`"details": { "attemptsLeft": 4 }`). Aucune autre enveloppe n’a de clé
+`details`.
 
 Quelques-uns, faciles à confondre :
 
@@ -966,6 +980,62 @@ signatures high-s sont refusées). Une adresse Monad est enregistrée dans sa gr
 EIP-55. La mise en place de la récupération (`POST /v1/wallet/recovery/setup`) reste
 réservée à Stellar. Les clés du compte sont émises de la même façon sur chaque chaîne (voir
 [Aucune requête ne dépend de la plateforme développeur](#aucune-requête-ne-dépend-de-la-plateforme-développeur)).
+
+### Récupération facile : déplacer un portefeuille entre deux appareils
+
+`/v1/wallet/easy-recovery` déplace un portefeuille de l’appareil qui le détient
+(l’ancien) vers un autre (le nouveau), par une boîte aux lettres qui vit cinq
+minutes et que ce service ne peut pas ouvrir :
+
+1. Le nouvel appareil génère une paire de clés X25519, ouvre une session avec
+   `POST /v1/wallet/easy-recovery/sessions` (`receiverKey` : la clé publique, en
+   base64url) et affiche un QR avec l’`id` de la session et cette clé, rien
+   d’autre.
+2. L’ancien appareil le scanne, la personne confirme et déverrouille, et le
+   portefeuille scelle son secret pour cette clé (ECIES, sur l’appareil), choisit
+   un code aléatoire à cinq chiffres, envoie les deux avec
+   `POST …/sessions/{id}/offer` et affiche le code.
+3. La personne tape le code sur le nouvel appareil, qui appelle
+   `POST …/sessions/{id}/claim`, reçoit le secret scellé et l’ouvre localement.
+   Les deux appareils interrogent `GET …/sessions/{id}` (`open` → `offered` → `claimed`).
+
+| Réponse | Quand |
+| ------ | ---- |
+| `201` `{ id, expiresAt }` | La session est ouverte, pour cinq minutes |
+| `200` `{ status, expiresAt }` | Une interrogation. Jamais la clé, le secret scellé ni le code |
+| `200` `{ status: "offered" }` | La première offre |
+| `200` `{ ciphertext }` | Le bon code, une seule fois |
+| `404 easy_recovery_not_found` | Inconnue, expirée, brûlée ou (sur un claim) déjà récupérée |
+| `409 easy_recovery_already_offered` | Une seconde offre : la première l’emporte |
+| `409 easy_recovery_not_offered` | Un claim avant l’offre : interrogez d’abord jusqu’à `offered` |
+| `422 easy_recovery_code_invalid` | Un mauvais code ; `details.attemptsLeft` dit combien d’essais restent |
+| `410 easy_recovery_burned` | Le cinquième mauvais code : la session et le secret scellé sont supprimés |
+
+Pourquoi la clé API publique partagée peut l’appeler :
+
+- **Ce service ne peut pas ouvrir ce qu’il stocke.** Il ne détient jamais la clé
+  privée de réception, et il refuse un `receiverKey` qui est un point X25519
+  d’ordre faible, dont n’importe qui pourrait calculer le secret partagé. L’ancien
+  appareil doit le refuser aussi.
+- **Le code est ce qui arrête une page de phishing.** Une page qui affiche son
+  propre QR détient la clé de réception, elle pourrait donc lire le secret scellé ;
+  il lui faut encore le code affiché sur l’écran de la victime. Cinq mauvais codes
+  suppriment la session. Chaque mauvais code est compté par une mise à jour
+  conditionnelle dans Postgres et le bon n’est accepté que sous la limite, si bien
+  que des essais envoyés en parallèle n’obtiennent pas plus de cinq tentatives.
+  Seul le SHA-256 de `{id}:{code}` est stocké, et le claim l’efface avec le secret.
+- **Une offre, cinq minutes.** La première offre l’emporte, et chaque route répond
+  404 une fois `expiresAt` dépassé. Un sweeper supprime les lignes expirées au
+  rythme de `WALLET_AUTH_SWEEP_*` ; une session récupérée n’est conservée jusque-là
+  que pour que l’interrogation de l’ancien appareil lise `claimed`.
+- **L’id de session est une poignée, pas un record token.** Ce sont 128 bits
+  aléatoires, jamais listés, et sa lecture ne renvoie que le statut. Il apparaît
+  dans les chemins des journaux de requêtes ; le détenir donne cinq essais sur le
+  code, jamais le secret. Tout est dans Postgres, donc chaque réplique compte sur
+  la même ligne.
+
+Les budgets par route (par adresse client) sont dans
+`src/easy-recovery/easy-recovery.constants.ts`.
 
 ## La clé API publique partagée
 
@@ -2184,6 +2254,24 @@ plugins isolés.
   `openapi:generate` les active tous.
 
 ## Mise à niveau — changements incompatibles et notes de déploiement
+
+### Récupération facile : un nouveau module, une nouvelle table et `details` dans l’enveloppe d’erreur
+
+- **Nouvelles routes** sous `/v1/wallet/easy-recovery` (`payments:read` /
+  `payments:write`, la clé API publique partagée est admise) : déplacer un
+  portefeuille entre deux appareils, décrit dans
+  [Récupération facile](#récupération-facile--déplacer-un-portefeuille-entre-deux-appareils).
+  Aucune route existante n’a changé, et la route existante de la passerelle les
+  sert déjà.
+- **La migration `20261028200000_easy_recovery_sessions`** crée la table
+  `easy_recovery_session` et l’enum `EasyRecoveryStatus` ; rien n’est réécrit.
+  Lancez `migrate deploy` avant de servir la nouvelle version.
+- **L’enveloppe d’erreur peut porter `details`**, seulement sur les codes qui le
+  documentent (aujourd’hui `easy_recovery_code_invalid`, avec `attemptsLeft`). Un
+  nouveau champ optionnel : toutes les autres erreurs sont inchangées.
+- **Aucune nouvelle variable.** Un nouveau sweeper supprime les sessions expirées
+  au rythme de `WALLET_AUTH_SWEEP_ENABLED` / `WALLET_AUTH_SWEEP_INTERVAL_MS`, sous
+  son propre advisory lock (`881_015`).
 
 ### Paiements : quand le checkout a vu un lien ; volume réglé des swaps en USD
 

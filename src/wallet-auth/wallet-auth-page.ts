@@ -1,10 +1,12 @@
+import { createHash } from 'node:crypto';
+import { CALLBACK_CLOSE_SCRIPT } from '@/wallet-auth/wallet-auth.constants';
 import type { CallbackOutcome } from '@/wallet-auth/wallet-auth.service';
 
 /** Heading and body for each way a callback can end. */
 const COPY: Record<CallbackOutcome['reason'], [string, string]> = {
   ok: [
-    'You can go back to your wallet',
-    'Your wallet is finishing the sign-in now. You can close this window.',
+    'Back to your wallet',
+    'Your wallet is finishing the sign-in. This window closes by itself; if it stays open, close it.',
   ],
   expired: [
     'This window is already done',
@@ -29,13 +31,30 @@ const COPY: Record<CallbackOutcome['reason'], [string, string]> = {
 };
 
 /**
+ * The callback page's Content-Security-Policy. Helmet's default would block the page's
+ * one inline script; this allows that script by its hash and nothing else at all.
+ */
+export const CALLBACK_PAGE_CSP = [
+  "default-src 'none'",
+  "style-src 'unsafe-inline'",
+  `script-src 'sha256-${createHash('sha256').update(CALLBACK_CLOSE_SCRIPT).digest('base64')}'`,
+  "base-uri 'none'",
+  "form-action 'none'",
+  "frame-ancestors 'none'",
+].join('; ');
+
+/**
  * The page the person lands on when the provider returns their browser.
  *
  * It is the end of the browser's involvement. The wallet is already polling and
  * collects the identity over its own channel, by presenting the PKCE verifier
  * this browser never had.
  *
- * Deliberately inert: no identity, no token, no script, no external asset.
+ * Deliberately inert: no identity, no token, no external asset, and one script
+ * that only closes the window (`CALLBACK_CLOSE_SCRIPT`, allowed by hash in
+ * `CALLBACK_PAGE_CSP`). The wallet opened this window for the provider, so the
+ * browser lets that script close it, and the person is back on the wallet with
+ * nothing to click; the text stays as the fallback where a browser refuses.
  * Rendering anything a sign-in is worth into a page in a browser this service
  * does not control would undo the reason the poll flow exists at all.
  *
@@ -76,6 +95,7 @@ export function callbackPage(outcome: CallbackOutcome): string {
     <h1>${heading}</h1>
     <p>${body}</p>
   </main>
+  <script>${CALLBACK_CLOSE_SCRIPT}</script>
 </body>
 </html>`;
 }

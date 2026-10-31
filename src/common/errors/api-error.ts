@@ -231,6 +231,26 @@ export enum ApiErrorCode {
    */
   WalletRecoverySetupRefused = 'wallet_recovery_setup_refused',
 
+  // --- easy recovery (moving a wallet between two devices) ------------------
+  /**
+   * No session by that id, or one that expired, was claimed, or was burned by
+   * wrong codes. ONE code for all of them on the read: none changes what either
+   * device does next (start again), and a poll that told them apart would say
+   * more about a session than its status.
+   */
+  EasyRecoveryNotFound = 'easy_recovery_not_found',
+  /** The session already holds an offer. The first one wins; there is no replacing it. */
+  EasyRecoveryAlreadyOffered = 'easy_recovery_already_offered',
+  /** A claim arrived before the old device offered anything. Poll, then claim. */
+  EasyRecoveryNotOffered = 'easy_recovery_not_offered',
+  /**
+   * The code is not the one the old device shows. The envelope carries
+   * `details.attemptsLeft`: how many more wrong codes the session survives.
+   */
+  EasyRecoveryCodeInvalid = 'easy_recovery_code_invalid',
+  /** That wrong code was the last one allowed: the session and its secret are deleted. */
+  EasyRecoveryBurned = 'easy_recovery_burned',
+
   // --- plugins --------------------------------------------------------------
   /**
    * The consumer has not installed this plugin, or installed an older version
@@ -265,9 +285,21 @@ export interface ApiErrorBody {
   code: string;
   error: string;
   message: string | string[];
+  /**
+   * Machine-readable facts about THIS failure, present only on the codes that
+   * document one (e.g. `easy_recovery_code_invalid` → `{ attemptsLeft }`).
+   * Only an `ApiError` thrown with details puts it here: the filter never copies
+   * a `details` key out of any other exception's body.
+   */
+  details?: ApiErrorDetails;
   path: string;
   timestamp: string;
 }
+
+/** What `details` may hold: flat, JSON-safe values a client can branch on. */
+export type ApiErrorDetails = Readonly<
+  Record<string, string | number | boolean>
+>;
 
 /**
  * An `HttpException` that also carries a stable machine-readable `code`.
@@ -278,11 +310,14 @@ export interface ApiErrorBody {
  */
 export class ApiError extends HttpException {
   readonly code: ApiErrorCode;
+  /** Published as the envelope's `details`; see {@link ApiErrorBody.details}. */
+  readonly details?: ApiErrorDetails;
 
   constructor(
     status: HttpStatus,
     code: ApiErrorCode,
     message: string | string[],
+    details?: ApiErrorDetails,
   ) {
     // `error` must carry the HTTP reason phrase ("Conflict", "Not Found", …),
     // which is what Nest's own exceptions put there and what the documented
@@ -292,10 +327,17 @@ export class ApiError extends HttpException {
     // 409 or 404. `STATUS_CODES` is the same table Nest derives its phrases
     // from, so the two stay consistent for un-migrated throws.
     super(
-      { statusCode: status, code, error: reasonPhrase(status), message },
+      {
+        statusCode: status,
+        code,
+        error: reasonPhrase(status),
+        message,
+        ...(details ? { details } : {}),
+      },
       status,
     );
     this.code = code;
+    if (details) this.details = details;
   }
 
   static badRequest(code: ApiErrorCode, message: string | string[]): ApiError {
@@ -324,6 +366,24 @@ export class ApiError extends HttpException {
 
   static badGateway(code: ApiErrorCode, message: string): ApiError {
     return new ApiError(HttpStatus.BAD_GATEWAY, code, message);
+  }
+
+  static gone(code: ApiErrorCode, message: string): ApiError {
+    return new ApiError(HttpStatus.GONE, code, message);
+  }
+
+  /** A well-formed request this resource refuses on its merits, e.g. a wrong code. */
+  static unprocessable(
+    code: ApiErrorCode,
+    message: string,
+    details?: ApiErrorDetails,
+  ): ApiError {
+    return new ApiError(
+      HttpStatus.UNPROCESSABLE_ENTITY,
+      code,
+      message,
+      details,
+    );
   }
 }
 

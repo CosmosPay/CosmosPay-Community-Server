@@ -76,6 +76,8 @@ src/
   aliases/                        claimable payment handles: signed claims, resolution, email recovery
   assets/                         curated asset registry: the (code, issuer) pairs vouched for, per network
   public-key/                     GET /v1/public-key: the shared public key, keyless
+  easy-recovery/                  moving a wallet between two devices: a five-minute mailbox for the wallet sealed
+                                  to the new device's key, released once to the code on the old device's screen
   mailer/                         this service's own sender (Resend): sign-in and recovery codes
   gateway-keys/                   mints wallet accounts' keys in APISIX (admin client, consumer forwarder)
   analytics/                      summary, balances, API logs, webhook logs
@@ -93,7 +95,8 @@ prisma/schema.prisma              Consumer, PaymentIntent, Swap, ChainSwap, Cros
                                   BlindpayWebhookEvent, Payin, Payout, RequestLog,
                                   ActivityEvent,
                                   AdminAuditLog, Alias, AliasAddress,
-                                  AliasChallenge, AliasRecovery, ZkPayment, Usdt0Transfer
+                                  AliasChallenge, AliasRecovery, ZkPayment, Usdt0Transfer,
+                                  EasyRecoverySession
                                   PluginInstallation, PluginRecord
 test/                             e2e suites: gateway gate, admin + alias console gates,
                                   payment intents, swaps, liquidity pools, KYC, webhooks
@@ -133,6 +136,7 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | 客户 | `/v1/customers` | 由支付意图派生的付款方记录 |
 | 别名 | `/v1/aliases` | 可认领的支付标识：认领、解析、恢复 |
 | 钱包登录 | `/v1/wallet` | Google / GitHub / 邮件验证码，以及加密的助记词备份 |
+| 轻松恢复 | `/v1/wallet/easy-recovery` | 通过一个本服务无法打开、只存在五分钟的信箱，在两台设备之间迁移钱包 |
 | 资产 | `/v1/assets` | 按网络划分的精选资产注册表 |
 | 公共 key | `/v1/public-key` | 共享的公共 API key，无需 key 即可获取（`@Public`） |
 | 分析 | `/v1/summary`, `/v1/balances`, `/v1/logs` | 仪表盘汇总（支付、swap、流动性、webhook）与日志 |
@@ -307,6 +311,10 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | POST | `/v1/wallet/auth/email/verify` | `payments:write` | ✓ |
 | POST | `/v1/wallet/auth/finish` | `payments:write` | ✓ |
 | PUT | `/v1/wallet/backup` | `payments:write` | ✓ |
+| POST | `/v1/wallet/easy-recovery/sessions` | `payments:write` | ✓ |
+| GET | `/v1/wallet/easy-recovery/sessions/{id}` | `payments:read` | ✓ |
+| POST | `/v1/wallet/easy-recovery/sessions/{id}/claim` | `payments:write` | ✓ |
+| POST | `/v1/wallet/easy-recovery/sessions/{id}/offer` | `payments:write` | ✓ |
 | POST | `/v1/wallet/recovery/setup` | `payments:write` | ✓ |
 | GET | `/v1/webhooks` | `webhooks:read` |  |
 | POST | `/v1/webhooks` | `webhooks:write` |  |
@@ -341,6 +349,8 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 ```
 
 该响应结构及完整的 `code` 枚举以 `ApiErrorBodyEntity` 的形式发布在 OpenAPI 规范中（来源：`src/common/errors/api-error.ts` 中的 `ApiErrorCode`）。每个操作只记录它实际可能返回的状态码，每个状态码为其可能携带的每个 `code` 各提供一个示例——真实的消息，以及与之匹配的 `statusCode` 和 `error`——因此 Swagger UI 和 Postman 导入显示的就是你真正会收到的响应体。**错误码一经发布便永不重命名**；可能会新增错误码，因此请把无法识别的错误码按其 HTTP 状态码处理。
+
+少数错误码还会携带 `details`：一个关于该失败的机器可读信息对象，位于 `message` 与 `path` 之间；规范中该错误码的示例会展示它。目前只有 `easy_recovery_code_invalid` 携带它（`"details": { "attemptsLeft": 4 }`）。其他所有错误响应都没有 `details` 键。
 
 几个容易混淆的错误码：
 
@@ -670,6 +680,35 @@ Solana 或 Monad 账户签名的挑战在第一行之后多一行 `chain: <chain
 base58）；Monad 用 EIP-191 `personal_sign`（0x 十六进制；拒绝 high-s 签名）。Monad 地址以
 EIP-55 写法保存。恢复设置（`POST /v1/wallet/recovery/setup`）仍仅限 Stellar。账户的 key
 在每条链上都以同样的方式签发（见[没有任何请求依赖开发者平台](#没有任何请求依赖开发者平台)）。
+
+### 轻松恢复：在两台设备之间迁移钱包
+
+`/v1/wallet/easy-recovery` 把钱包从持有它的设备（旧设备）迁移到另一台设备（新设备），途经一个只存在五分钟、本服务无法打开的信箱：
+
+1. 新设备生成一个 X25519 密钥对，用 `POST /v1/wallet/easy-recovery/sessions`（`receiverKey`：公钥，base64url）打开一个会话，并显示一个只包含会话 `id` 和该公钥的二维码，别无其他。
+2. 旧设备扫描它，用户确认并解锁，钱包在设备上把秘密密封给该公钥（ECIES），随机选一个五位数验证码，用 `POST …/sessions/{id}/offer` 发送两者，并显示验证码。
+3. 用户在新设备上输入验证码，新设备调用 `POST …/sessions/{id}/claim`，取得密封的秘密并在本地打开。两台设备都轮询 `GET …/sessions/{id}`（`open` → `offered` → `claimed`）。
+
+| 响应 | 何时 |
+| ------ | ---- |
+| `201` `{ id, expiresAt }` | 会话已打开，有效五分钟 |
+| `200` `{ status, expiresAt }` | 一次轮询。从不返回公钥、密封的秘密或验证码 |
+| `200` `{ status: "offered" }` | 第一次 offer |
+| `200` `{ ciphertext }` | 正确的验证码，仅一次 |
+| `404 easy_recovery_not_found` | 未知、已过期、已作废，或（claim 时）已被领取 |
+| `409 easy_recovery_already_offered` | 第二次 offer：以第一次为准 |
+| `409 easy_recovery_not_offered` | 在 offer 之前 claim：请先轮询到 `offered` |
+| `422 easy_recovery_code_invalid` | 验证码错误；`details.attemptsLeft` 表示还剩几次机会 |
+| `410 easy_recovery_burned` | 第五次错误的验证码：会话和密封的秘密被删除 |
+
+为什么共享公共 API key 可以调用它：
+
+- **本服务无法打开它存储的内容。** 它从不持有接收方私钥，并拒绝属于低阶 X25519 点的 `receiverKey`——用这种点得到的共享秘密任何人都能算出。旧设备也必须拒绝这种公钥。
+- **验证码是阻止钓鱼页面的关键。** 显示自己二维码的页面持有接收方公钥对应的私钥，因此能读取密封的秘密；但它仍需要显示在受害者屏幕上的验证码。五次错误的验证码会删除会话。每次错误都由 Postgres 中的条件更新计数，而正确的验证码只在低于上限时才被接受，因此并行发送的猜测最多只有五次机会。只存储 `{id}:{code}` 的 SHA-256，claim 时它会与秘密一起被清除。
+- **一次 offer，五分钟。** 以第一次 offer 为准，超过 `expiresAt` 后所有路由都返回 404。一个 sweeper 按 `WALLET_AUTH_SWEEP_*` 的周期删除过期的行；已领取的会话保留到那时，只是为了让旧设备的轮询读到 `claimed`。
+- **会话 id 是一个句柄，而不是 record token。** 它是 128 个随机比特，从不被列出，读取它只返回状态。它会出现在请求日志的路径中；持有它只能换来五次猜验证码的机会，永远拿不到秘密。所有状态都在 Postgres 中，因此每个副本都在同一行上计数。
+
+每个路由的预算（按客户端地址）见 `src/easy-recovery/easy-recovery.constants.ts`。
 
 ## 共享公共 API key
 
@@ -1403,6 +1442,13 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
 - **OpenAPI 契约记录每个原生插件的路由**，无论是否开启：`openapi:generate` 会全部开启。
 
 ## 升级 — 破坏性变更与部署说明
+
+### 轻松恢复：新模块、新数据表，以及错误响应结构中的 `details`
+
+- **新路由**位于 `/v1/wallet/easy-recovery` 下（`payments:read` / `payments:write`，允许共享公共 key）：在两台设备之间迁移钱包，见[轻松恢复](#轻松恢复在两台设备之间迁移钱包)。现有路由均未改变，网关现有的路由已经能转发它们。
+- **迁移 `20261028200000_easy_recovery_sessions`** 创建 `easy_recovery_session` 表和 `EasyRecoveryStatus` 枚举；不改写任何数据。新版本上线前请运行 `migrate deploy`。
+- **错误响应结构可能携带 `details`**，仅限记录了它的错误码（目前是 `easy_recovery_code_invalid`，带 `attemptsLeft`）。这是一个新的可选字段：其他错误均不变。
+- **没有新变量。** 一个新的 sweeper 按 `WALLET_AUTH_SWEEP_ENABLED` / `WALLET_AUTH_SWEEP_INTERVAL_MS` 的周期删除过期会话，并使用自己的 advisory lock（`881_015`）。
 
 ### 支付：结账页何时看到链接；兑换的已结算金额（USD）
 

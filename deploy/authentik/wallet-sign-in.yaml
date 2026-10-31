@@ -22,6 +22,34 @@
 #      its form. The form itself — username, name, email, password — is kept
 #      exactly as it is, so signing up with a password still works.
 #
+# And it adds the flows the wallet's own buttons start at (`wallet-source-<slug>`,
+# section 5 below): one per Google / GitHub source, and `wallet-source-email` —
+# "Continue with email", a sign-in LINK by email, no password:
+#
+#   - It asks for the email only, and always answers "email sent": an address
+#     with no account goes on to `wallet-source-email-enrollment` (a Redirect
+#     stage that keeps the flow's context, the typed address included), which
+#     creates the account INACTIVE, username = the address, and lets the link
+#     activate it. Nobody is asked for a password.
+#   - The link only works in the browser that asked for it. Authentik resumes a
+#     flow in WHATEVER browser opens its emailed link and then follows the
+#     flow's `next` — the wallet's authorization request. Without this check,
+#     anyone could type someone's address and wait for them to click: their
+#     click would sign the stranger's wallet in. Opened elsewhere, the link
+#     stops at a deny stage and signs nobody in.
+#   - Whoever has a second factor is asked for it after the link (the same
+#     validation stage as the default flow; skipped for everyone else). An
+#     Authentik administrator's account is refused: it signs in with its
+#     password.
+#   - One email per address per minute, at most 10 a day; past that the page
+#     still says "sent" (Authentik's own resend limit applies to "send again").
+#   - The login is recorded as `auth_method: email_link` (with the address), and
+#     the wallet's email scope mapping, defined here too, turns that into
+#     `"cosmos_inbox_proven": true` in the ID token — Authentik's own `amr`
+#     covers only passwords, passkeys, smart cards and MFA. The community server
+#     trusts that claim, and only it, to skip its own emailed code for an
+#     existing account. It also sets `email_verified` on the account.
+#
 # Signing in with a password is not touched anywhere: the password stage stays
 # in the flow, and Authentik's own policy on it skips it only for someone who
 # already proved themselves with a passkey on the username screen.
@@ -53,8 +81,9 @@ metadata:
   labels:
     blueprints.goauthentik.io/description: >-
       Offers (never requires) a second factor after the password, fixes the
-      passkey button on the username screen, and adds Google / GitHub to the
-      sign-up page.
+      passkey button on the username screen, adds Google / GitHub to the
+      sign-up page, and adds the one-source flows the wallet's Google / GitHub
+      buttons start at, and the email-link sign-in its email button starts at.
 context:
   offer_label: Add a second factor to your account?
   offer_help: >-
@@ -69,6 +98,14 @@ context:
     <a class="pf-c-button pf-m-secondary pf-m-block" href="/source/oauth/login/github/">Sign up with GitHub</a>
     <br>
     Or create an account with your email and a password:
+  email_title: Continue with email
+  email_subject: Your Cosmos Wallet sign-in link
+  email_link_elsewhere: >-
+    This link was opened in a different browser from the one that asked for it,
+    so it signs nobody in. Open it in the browser where you entered your email,
+    or start again from your wallet.
+  email_admin_refused: >-
+    This account signs in with its password, not with an emailed link.
 entries:
   # --- the first version's checkbox, replaced by the choice below -------------
   # Deleting the stage and the policies removes their bindings with them.
@@ -258,3 +295,597 @@ entries:
         - !Find [authentik_stages_prompt.prompt, [name, invitation-enrollment-field-email-enrollment-with-invitation]]
         - !Find [authentik_stages_prompt.prompt, [name, invitation-enrollment-field-password-enrollment-with-invitation]]
         - !Find [authentik_stages_prompt.prompt, [name, invitation-enrollment-field-password-repeat-enrollment-with-invitation]]
+
+  # --- 5: the wallet's Google / GitHub buttons ----------------------------------
+  # One flow per source, `wallet-source-<slug>`: an identification stage with no
+  # user fields and that single source, which Authentik answers by redirecting
+  # straight to the source (no passwordless flow on it, or it would not). The
+  # community server opens this flow with the wallet's authorization request as
+  # `?next=`; Authentik keeps it in the session and returns there once the source
+  # has signed the person in, or enrolled them. List the sources the wallet shows
+  # in WALLET_AUTH_OIDC_SOURCES (`google:Google,github:GitHub,email:Email`): a
+  # source listed there without its flow here opens a page that does not exist.
+  # `email` is not an Authentik source but a flow of its own (section 6).
+
+  - model: authentik_stages_identification.identificationstage
+    id: source-google-stage
+    identifiers:
+      name: cosmos-wallet-source-google
+    attrs:
+      user_fields: []
+      passwordless_flow: null
+      sources:
+        - !Find [authentik_sources_oauth.oauthsource, [slug, google]]
+      show_source_labels: true
+
+  - model: authentik_flows.flow
+    id: source-google-flow
+    identifiers:
+      slug: wallet-source-google
+    attrs:
+      name: Cosmos Pay wallet - sign in with Google
+      title: Sign in with Google
+      designation: authentication
+      authentication: none
+
+  - model: authentik_flows.flowstagebinding
+    identifiers:
+      target: !KeyOf source-google-flow
+      stage: !KeyOf source-google-stage
+    attrs:
+      order: 10
+
+  - model: authentik_stages_identification.identificationstage
+    id: source-github-stage
+    identifiers:
+      name: cosmos-wallet-source-github
+    attrs:
+      user_fields: []
+      passwordless_flow: null
+      sources:
+        - !Find [authentik_sources_oauth.oauthsource, [slug, github]]
+      show_source_labels: true
+
+  - model: authentik_flows.flow
+    id: source-github-flow
+    identifiers:
+      slug: wallet-source-github
+    attrs:
+      name: Cosmos Pay wallet - sign in with GitHub
+      title: Sign in with GitHub
+      designation: authentication
+      authentication: none
+
+  - model: authentik_flows.flowstagebinding
+    identifiers:
+      target: !KeyOf source-github-flow
+      stage: !KeyOf source-github-stage
+    attrs:
+      order: 10
+
+  # --- 6: the wallet's email button: a sign-in link, no password ---------------
+  # `wallet-source-email`, listed as `email:Email` in WALLET_AUTH_OIDC_SOURCES.
+  # Every binding below is evaluated when its stage is reached, not when the flow
+  # is planned (the user is not known then), and a policy that writes to the
+  # flow plan does it through `context["flow_plan"]`, which Authentik hands to a
+  # policy evaluated at that point (authentik/flows/markers.py, the same pattern
+  # as its own default OOBE blueprint).
+
+  # Before the link is sent: tie it to this browser, and pace the emails.
+  - model: authentik_policies_expression.expressionpolicy
+    id: email-link-ask
+    identifiers:
+      name: cosmos-wallet-email-link-ask
+    attrs:
+      execution_logging: false
+      expression: |
+        # Once per run of the flow (a "send again" or the return through the
+        # link adds nothing):
+        #  - a random value goes into the flow plan, and with it into the token
+        #    the emailed link carries, and into THIS browser's session.
+        #    cosmos-wallet-email-link-proven compares the two when the link is
+        #    opened: Authentik resumes the flow in whatever browser opens it.
+        #  - one email per address per minute and at most 10 a day. Past that
+        #    the page still says the email was sent (Authentik skips the send
+        #    when "email_sent" is set), so it answers the same either way.
+        import secrets
+        import time
+        from hashlib import sha256
+        from django.core.cache import cache
+
+        plan = context["flow_plan"]
+        if "cosmos_email_link_browser" in plan.context:
+            return True
+        value = secrets.token_urlsafe(32)
+        plan.context["cosmos_email_link_browser"] = value
+        session = request.http_request.session
+        asked = list(session.get("cosmos/email-link-browser", []))[-9:]
+        asked.append(value)
+        session["cosmos/email-link-browser"] = asked
+
+        user = context.get("pending_user")
+        address = (getattr(user, "email", "") or "").strip().lower()
+        key = "cosmos/email-link-sent/" + sha256(address.encode()).hexdigest()
+        now = time.time()
+        sent = [t for t in cache.get(key, []) if now - t < 86400]
+        if (sent and now - sent[-1] < 60) or len(sent) >= 10:
+            plan.context["email_sent"] = True
+        else:
+            sent.append(now)
+            cache.set(key, sent, 86400)
+        return True
+
+  # After the link: was it opened where it was asked for? Bound NEGATED to the
+  # deny stage, so anything else ends the flow there.
+  - model: authentik_policies_expression.expressionpolicy
+    id: email-link-proven
+    identifiers:
+      name: cosmos-wallet-email-link-proven
+    attrs:
+      execution_logging: false
+      expression: !Format
+        - |
+          # True only when this run came back through the emailed link AND that
+          # link was asked for from this browser. A link opened anywhere else is
+          # the inbox owner clicking a link someone else may have requested:
+          # following it would complete THEIR authorization request. The token's
+          # own plan is read, not the live one: Authentik merges the browser's
+          # current plan into the restored one.
+          plan = context["flow_plan"]
+          plan.context.pop("cosmos_email_link_proven", None)
+          token = context.get("is_restored")
+          if token is None:
+              return False
+          try:
+              asked = token.plan.context.get("cosmos_email_link_browser")
+          except Exception:
+              return False
+          seen = request.http_request.session.get("cosmos/email-link-browser", [])
+          if not asked or asked not in seen:
+              return False
+          user = context.get("pending_user")
+          if user is None or user.pk is None:
+              return False
+          # The plan carries the user as it was when the address was typed; save
+          # it stale and a password or a deactivation made since is undone.
+          user.refresh_from_db()
+          if not user.email:
+              return False
+          if user.is_superuser:
+              plan.context["deny_message"] = "%s"
+              return False
+          plan.context["cosmos_email_link_proven"] = True
+          # For cosmos-wallet-email-mark-verified. Replaces whatever the
+          # enrollment wrote: its is_active=False must not be written again.
+          plan.context["prompt_data"] = {
+              "attributes.email_verified": True,
+              "attributes.cosmos_wallet_email_unconfirmed": False,
+          }
+          return True
+        - !Context email_admin_refused
+
+  # Right before the login: record HOW the person signed in. Authentik copies
+  # `auth_method` / `auth_method_args` from the plan into the login event
+  # (authentik/events/signals.py, on_user_logged_in), and the email scope
+  # mapping below reads that event back for the ID token.
+  - model: authentik_policies_expression.expressionpolicy
+    id: email-link-mark-login
+    identifiers:
+      name: cosmos-wallet-email-mark-login
+    attrs:
+      execution_logging: false
+      expression: |
+        # Set last, after the MFA validation, which writes its own auth_method.
+        # Its `auth_method_args` (the devices used) are kept, so the ID token's
+        # `amr` still says "mfa" when a factor was used.
+        plan = context["flow_plan"]
+        if plan.context.get("cosmos_email_link_proven") is not True:
+            return False
+        user = context.get("pending_user")
+        plan.context["auth_method"] = "email_link"
+        plan.context.setdefault("auth_method_args", {})["email_link"] = {
+            "email": user.email,
+        }
+        return True
+
+  - model: authentik_policies_expression.expressionpolicy
+    id: email-is-new
+    identifiers:
+      name: cosmos-wallet-email-is-new
+    attrs:
+      execution_logging: false
+      expression: |
+        # The address matched no account (the identification stage pretends one
+        # exists and hands over an unsaved user), or matched one the enrollment
+        # created whose link was never opened. Any other inactive account, one
+        # an admin deactivated, stays on this flow, and its login refuses it.
+        user = context.get("pending_user")
+        if user is None:
+            return False
+        if user.pk is None:
+            return True
+        return (
+            not user.is_active
+            and user.attributes.get("cosmos_wallet_email_unconfirmed") is True
+        )
+
+  - model: authentik_policies_expression.expressionpolicy
+    id: email-new-account
+    identifiers:
+      name: cosmos-wallet-email-new-account
+    attrs:
+      execution_logging: false
+      expression: |
+        # The account comes from the address typed on the first page, which the
+        # Redirect stage carried over: username and email are that address,
+        # lowercased; the name its local part. Inactive until the link comes
+        # back (the Email stage activates it) and marked unconfirmed, so a later
+        # attempt finishes this account instead of colliding with it.
+        import re
+
+        plan = context["flow_plan"]
+        user = context.get("pending_user")
+        typed = (
+            context.get("pending_user_identifier") or getattr(user, "email", "") or ""
+        ).strip().lower()
+        if len(typed) > 254 or not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", typed):
+            # No prompt data: the user write stage stops the flow.
+            plan.context.pop("prompt_data", None)
+            ak_message("Enter your email address.")
+            return True
+        plan.context["prompt_data"] = {
+            "username": typed,
+            "email": typed,
+            "name": typed.split("@")[0],
+            "is_active": False,
+            "type": "external",
+            "attributes.cosmos_wallet_email_unconfirmed": True,
+        }
+        return True
+
+  # --- stages both flows share --------------------------------------------------
+
+  - model: authentik_stages_deny.denystage
+    id: email-link-elsewhere-stage
+    identifiers:
+      name: cosmos-wallet-email-link-elsewhere
+    attrs:
+      deny_message: !Context email_link_elsewhere
+
+  - model: authentik_stages_user_write.userwritestage
+    id: email-mark-verified-stage
+    identifiers:
+      name: cosmos-wallet-email-mark-verified
+    attrs:
+      # Writes the prompt data cosmos-wallet-email-link-proven left: the email
+      # is verified (what the wallet's email scope mapping reports as
+      # `email_verified`), and the account is no longer unconfirmed.
+      user_creation_mode: never_create
+
+  - model: authentik_stages_user_login.userloginstage
+    id: email-login-stage
+    identifiers:
+      name: cosmos-wallet-email-login
+    attrs:
+      session_duration: seconds=0
+      remember_me_offset: seconds=0
+      terminate_other_sessions: false
+
+  # --- the enrollment: an address with no account ------------------------------
+  # Reached only through the Redirect stage below ("require_redirect"), which
+  # keeps the flow's context: the identification stage does not pass what was
+  # typed to its own `enrollment_flow` (that field only renders a "Sign up" link
+  # with the flow's query), so that field is left empty.
+
+  - model: authentik_flows.flow
+    id: email-enrollment-flow
+    identifiers:
+      slug: wallet-source-email-enrollment
+    attrs:
+      name: Cosmos Pay wallet - sign up with email
+      title: !Context email_title
+      designation: enrollment
+      authentication: require_redirect
+
+  - model: authentik_stages_user_write.userwritestage
+    id: email-create-account-stage
+    identifiers:
+      name: cosmos-wallet-email-create-account
+    attrs:
+      # The unsaved user the identification stage made up, or the unconfirmed
+      # account found instead; cosmos-wallet-email-new-account fills it in.
+      user_creation_mode: create_when_required
+      create_users_as_inactive: true
+      user_type: external
+
+  - model: authentik_stages_email.emailstage
+    id: email-confirm-link-stage
+    identifiers:
+      name: cosmos-wallet-email-confirm-link
+    attrs:
+      use_global_settings: true
+      # Authentik ships no "sign-in link" template; this one says "confirm your
+      # account", which is what the first link does. A template of your own
+      # (mounted under /templates) can replace it on both Email stages.
+      template: email/account_confirmation.html
+      subject: !Context email_subject
+      # Inside the wallet's 10-minute handshake.
+      token_expiry: minutes=10
+      activate_user_on_success: true
+
+  - model: authentik_flows.flowstagebinding
+    id: email-create-account-binding
+    identifiers:
+      target: !KeyOf email-enrollment-flow
+      stage: !KeyOf email-create-account-stage
+    attrs:
+      order: 10
+      evaluate_on_plan: false
+      re_evaluate_policies: true
+      policy_engine_mode: all
+
+  - model: authentik_policies.policybinding
+    identifiers:
+      target: !KeyOf email-create-account-binding
+      policy: !KeyOf email-new-account
+    attrs:
+      order: 0
+
+  - model: authentik_flows.flowstagebinding
+    id: email-confirm-link-binding
+    identifiers:
+      target: !KeyOf email-enrollment-flow
+      stage: !KeyOf email-confirm-link-stage
+    attrs:
+      order: 20
+      evaluate_on_plan: false
+      re_evaluate_policies: true
+      policy_engine_mode: all
+
+  - model: authentik_policies.policybinding
+    identifiers:
+      target: !KeyOf email-confirm-link-binding
+      policy: !KeyOf email-link-ask
+    attrs:
+      order: 0
+
+  - model: authentik_flows.flowstagebinding
+    id: email-enrollment-elsewhere-binding
+    identifiers:
+      target: !KeyOf email-enrollment-flow
+      stage: !KeyOf email-link-elsewhere-stage
+    attrs:
+      order: 30
+      evaluate_on_plan: false
+      re_evaluate_policies: true
+      policy_engine_mode: all
+
+  - model: authentik_policies.policybinding
+    identifiers:
+      target: !KeyOf email-enrollment-elsewhere-binding
+      policy: !KeyOf email-link-proven
+    attrs:
+      order: 0
+      negate: true
+
+  - model: authentik_flows.flowstagebinding
+    identifiers:
+      target: !KeyOf email-enrollment-flow
+      stage: !KeyOf email-mark-verified-stage
+    attrs:
+      order: 40
+      evaluate_on_plan: false
+      re_evaluate_policies: true
+      policy_engine_mode: all
+
+  - model: authentik_flows.flowstagebinding
+    id: email-enrollment-login-binding
+    identifiers:
+      target: !KeyOf email-enrollment-flow
+      stage: !KeyOf email-login-stage
+    attrs:
+      order: 50
+      evaluate_on_plan: false
+      re_evaluate_policies: true
+      policy_engine_mode: all
+
+  - model: authentik_policies.policybinding
+    identifiers:
+      target: !KeyOf email-enrollment-login-binding
+      policy: !KeyOf email-link-mark-login
+    attrs:
+      order: 0
+
+  # --- the sign-in -------------------------------------------------------------
+
+  - model: authentik_stages_identification.identificationstage
+    id: source-email-stage
+    identifiers:
+      name: cosmos-wallet-source-email
+    attrs:
+      user_fields: [email]
+      case_insensitive_matching: true
+      # An unknown address carries on as if it had an account (and is sent to
+      # the enrollment), and the page never shows the matched account: the
+      # answer is the same either way.
+      pretend_user_exists: true
+      show_matched_user: false
+      password_stage: null
+      captcha_stage: null
+      webauthn_stage: null
+      passwordless_flow: null
+      enrollment_flow: null
+      recovery_flow: null
+      sources: []
+      enable_remember_me: false
+
+  - model: authentik_stages_redirect.redirectstage
+    id: email-to-enrollment-stage
+    identifiers:
+      name: cosmos-wallet-email-to-enrollment
+    attrs:
+      mode: flow
+      target_flow: !KeyOf email-enrollment-flow
+      keep_context: true
+
+  - model: authentik_stages_email.emailstage
+    id: email-sign-in-link-stage
+    identifiers:
+      name: cosmos-wallet-email-sign-in-link
+    attrs:
+      use_global_settings: true
+      template: email/account_confirmation.html
+      subject: !Context email_subject
+      token_expiry: minutes=10
+      # Never: an account an admin deactivated stays deactivated.
+      activate_user_on_success: false
+
+  - model: authentik_flows.flow
+    id: source-email-flow
+    identifiers:
+      slug: wallet-source-email
+    attrs:
+      name: Cosmos Pay wallet - sign in with email
+      title: !Context email_title
+      designation: authentication
+      authentication: none
+
+  - model: authentik_flows.flowstagebinding
+    identifiers:
+      target: !KeyOf source-email-flow
+      stage: !KeyOf source-email-stage
+    attrs:
+      order: 10
+
+  - model: authentik_flows.flowstagebinding
+    id: email-to-enrollment-binding
+    identifiers:
+      target: !KeyOf source-email-flow
+      stage: !KeyOf email-to-enrollment-stage
+    attrs:
+      order: 20
+      evaluate_on_plan: false
+      re_evaluate_policies: true
+      policy_engine_mode: all
+
+  - model: authentik_policies.policybinding
+    identifiers:
+      target: !KeyOf email-to-enrollment-binding
+      policy: !KeyOf email-is-new
+    attrs:
+      order: 0
+
+  - model: authentik_flows.flowstagebinding
+    id: email-sign-in-link-binding
+    identifiers:
+      target: !KeyOf source-email-flow
+      stage: !KeyOf email-sign-in-link-stage
+    attrs:
+      order: 30
+      evaluate_on_plan: false
+      re_evaluate_policies: true
+      policy_engine_mode: all
+
+  - model: authentik_policies.policybinding
+    identifiers:
+      target: !KeyOf email-sign-in-link-binding
+      policy: !KeyOf email-link-ask
+    attrs:
+      order: 0
+
+  - model: authentik_flows.flowstagebinding
+    id: email-sign-in-elsewhere-binding
+    identifiers:
+      target: !KeyOf source-email-flow
+      stage: !KeyOf email-link-elsewhere-stage
+    attrs:
+      order: 40
+      evaluate_on_plan: false
+      re_evaluate_policies: true
+      policy_engine_mode: all
+
+  - model: authentik_policies.policybinding
+    identifiers:
+      target: !KeyOf email-sign-in-elsewhere-binding
+      policy: !KeyOf email-link-proven
+    attrs:
+      order: 0
+      negate: true
+
+  # A second factor, for whoever has one: the default flow's own validation
+  # stage, which section 1 sets to skip for everyone else.
+  - model: authentik_flows.flowstagebinding
+    identifiers:
+      target: !KeyOf source-email-flow
+      stage: !Find [authentik_stages_authenticator_validate.authenticatorvalidatestage, [name, default-authentication-mfa-validation]]
+    attrs:
+      order: 50
+      evaluate_on_plan: false
+      re_evaluate_policies: true
+      policy_engine_mode: all
+
+  - model: authentik_flows.flowstagebinding
+    identifiers:
+      target: !KeyOf source-email-flow
+      stage: !KeyOf email-mark-verified-stage
+    attrs:
+      order: 60
+      evaluate_on_plan: false
+      re_evaluate_policies: true
+      policy_engine_mode: all
+
+  - model: authentik_flows.flowstagebinding
+    id: email-sign-in-login-binding
+    identifiers:
+      target: !KeyOf source-email-flow
+      stage: !KeyOf email-login-stage
+    attrs:
+      order: 70
+      evaluate_on_plan: false
+      re_evaluate_policies: true
+      policy_engine_mode: all
+
+  - model: authentik_policies.policybinding
+    identifiers:
+      target: !KeyOf email-sign-in-login-binding
+      policy: !KeyOf email-link-mark-login
+    attrs:
+      order: 0
+
+  # --- the wallet's "email" scope: email_verified, and the inbox marker ---------
+  # Replaces Authentik's default "email" mapping ON THE WALLET'S PROVIDER (select
+  # it there in place of "authentik default OAuth Mapping: OpenID 'email'"):
+  # the default answers `email_verified: true` for every user. Only the wallet's
+  # provider should carry it; `cosmos_inbox_proven` means something only to the
+  # community server.
+  - model: authentik_providers_oauth2.scopemapping
+    identifiers:
+      name: "Cosmos Wallet: OpenID 'email' (verified only when proven)"
+    attrs:
+      scope_name: email
+      description: Email address, verified only when proven
+      expression: |
+        # `email_verified` only when an enrollment confirmed the address or the
+        # wallet's email link proved it (the `email_verified` attribute), never
+        # Authentik's blanket true.
+        claims = {
+            "email": request.user.email,
+            "email_verified": request.user.attributes.get("email_verified", False) is True,
+        }
+        # `cosmos_inbox_proven`: the session this token was issued from logged
+        # in through the wallet's emailed link (cosmos-wallet-email-mark-login),
+        # for this same address. A ScopeMapping is given the grant as `token`
+        # (authentik/providers/oauth2/views/userinfo.py, get_claims), and the
+        # grant's session holds its login event — the one Authentik's own `amr`
+        # is read from (authentik/providers/oauth2/id_token.py).
+        from authentik.events.signals import get_login_event
+
+        grant = request.context.get("token")
+        event = get_login_event(getattr(grant, "session", None))
+        if event is not None and event.context.get("auth_method") == "email_link":
+            args = event.context.get("auth_method_args") or {}
+            proven = (args.get("email_link") or {}).get("email") or ""
+            address = request.user.email or ""
+            if address and proven.lower() == address.lower():
+                claims["cosmos_inbox_proven"] = True
+        return claims
