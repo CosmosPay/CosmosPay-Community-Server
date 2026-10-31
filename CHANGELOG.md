@@ -2,6 +2,18 @@
 
 All notable changes to the Cosmos Pay Community Server are documented here.
 Generated from [Conventional Commits](https://www.conventionalcommits.org) by [git-cliff](https://git-cliff.org).
+## [1.8.0] - 2026-10-31
+
+### Features
+- Authentik sources, emailed sign-in link and device binding (20c2f3b)
+- Move a wallet between devices with a QR and a 5-digit code (d19e469)
+
+### Testing
+- The callback page's one script is the close script its CSP allows (7f66bdc)
+
+### Dependencies
+- Bump @nestjs/swagger to 12.0.5 and @stellar/stellar-sdk to 17.4.0; keep solc pinned (f1ed552)
+
 ## [1.7.0] - 2026-10-27
 
 ### Features
