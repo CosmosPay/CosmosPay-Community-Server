@@ -454,6 +454,27 @@ that breaks two boundaries.
   the provider's keys and accepted once per server, or its own emailed code. No
   secret is shared with the sign-in server: the HMAC identity this replaced was one
   leaked value from a recovery identity for every account.
+- **An existing account gets the sign-in server's emailed code unless Authentik's
+  emailed LINK already proved the inbox**, and the only evidence is the ID token's
+  `cosmos_inbox_proven` (`AUTHENTIK_INBOX_PROVEN_CLAIM`) being literally `true`
+  (`claimOauth`, `authentikProvedInbox`). `deploy/authentik/wallet-sign-in.yaml`
+  sets it: the `wallet-source-email` flow records the login as
+  `auth_method: email_link`, and the wallet's email scope mapping reads that back
+  from the login event. Never infer it from `amr` or `email_verified`. Keep the
+  blueprint's same-browser check (`cosmos-wallet-email-link-proven`): Authentik
+  resumes a flow in whatever browser opens the link, so without it anyone who types
+  an address collects the sign-in when its owner clicks. What it cannot stop is a
+  stranger who gets the owner to open the email flow URL THEY started, type their
+  own address and open the link in that browser — so the marker counts only with
+  the **device binding**: the callback sends a one-time value (only its hash,
+  `bindingHash`, is kept) in the FRAGMENT of its redirect to the handshake's
+  `returnTo`, the wallet's return page in the browser that opened the link; the
+  poll says `bound`, and `claimOauth` skips the code only for a claim presenting it
+  (`bindingMatches`). The stranger's wallet holds the handshake and the verifier,
+  never the binding, and gets the code. No `returnTo`, no binding, the code. Every
+  `WALLET_AUTH_RETURN_URLS` entry must therefore be a page of the operator's own
+  wallet that keeps the fragment to itself — one that leaks its URL (analytics, an
+  open redirect) hands the binding out.
 - **Sponsored setup runs only on the main deployment**
   (`POST /v1/wallet/recovery/setup`, `recovery-setup.ts`). On a recovered account
   (`sponsorableDeviceKey` returns a key that is not the account) the last
@@ -463,6 +484,23 @@ that breaks two boundaries.
   contract**, pinned as literals in `src/wallet-auth/wallet-auth-core.spec.ts` and
   in the wallet's `tests/unit/signIn.test.ts` / `tests/unit/recovery.test.ts`.
   Change one side and no sign-in or setup can finish.
+- **Easy recovery (`/v1/wallet/easy-recovery`, `src/easy-recovery/`) is a mailbox
+  this service cannot open.** It stores the wallet sealed on the old device to the
+  new device's X25519 key (a low-order key is refused, `isReceiverKey`) and SHA-256
+  of `{id}:{code}`. Its whole security role is the code: a phishing page that shows
+  its own QR holds the receiving key and lacks only the code on the victim's
+  screen. So the three rules are conditional writes, never a read then a write:
+  one offer (`OPEN → OFFERED`), five wrong codes (each counted by an `updateMany`
+  matching `attempts < EASY_RECOVERY_MAX_ATTEMPTS`, the right code accepted only
+  below it too, the fifth deleting the row: `410`), five minutes (every write
+  conditional on `expiresAt`, every read past it a 404). All of it in Postgres,
+  for the replicas; the status read selects no `receiverKey`, `ciphertext` or
+  `codeHash`. The service spec races guesses against an in-memory table with
+  per-statement atomicity; keep those tests passing when touching the claim.
+- **A wrong easy-recovery code is `422` with `details.attemptsLeft`**, the one
+  error carrying `details`. `AllExceptionsFilter` copies `details` only from an
+  `ApiError`, never from another exception's body: Terminus puts the database's
+  error under that key on the readiness probe.
 
 ## Private payments (`zk-payments`): Cosmos Pay's confidential token, and how confirm decides
 

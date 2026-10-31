@@ -19,6 +19,12 @@ import {
  * collected by the device presenting the PKCE verifier, so an app that hijacks the
  * scheme receives nothing it can redeem. The allowlist is what keeps this from
  * being an open redirect off the service's own domain.
+ *
+ * After an Authentik emailed sign-in it also carries the device binding, in the
+ * FRAGMENT: the browser keeps it, so it is in no request line, server log or
+ * Referer. It reaches only the wallet in the browser that opened the link — which is
+ * the point — so every entry on the allowlist must be a page of the operator's own
+ * wallet that reads it and keeps it to itself.
  */
 
 function parse(value: string): URL | null {
@@ -81,16 +87,19 @@ export function isReturnUrlAllowed(
  *
  * The reason is the same token the poll reports and the callback page maps to a
  * sentence — never prose. The wallet should still poll (or claim) for the answer:
- * this redirect only tells it the browser is done.
+ * this redirect only tells it the browser is done. `binding` (base64url) goes in the
+ * fragment as `#binding=<value>`.
  */
 export function returnRedirectUrl(
   returnTo: string,
   state: string,
   reason: string,
+  binding?: string,
 ): string {
   const url = new URL(returnTo);
   url.searchParams.set('state', state);
   if (reason !== 'ok') url.searchParams.set('error', reason);
+  if (binding) url.hash = `binding=${binding}`;
   return url.toString();
 }
 

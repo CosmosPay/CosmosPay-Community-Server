@@ -185,6 +185,51 @@ describe('AllExceptionsFilter', () => {
     });
   });
 
+  it('carries the details an ApiError was thrown with', () => {
+    const { filter, host, status, json } = build();
+
+    filter.catch(
+      ApiError.unprocessable(
+        ApiErrorCode.EasyRecoveryCodeInvalid,
+        'That code is not the one shown on the other device.',
+        { attemptsLeft: 3 },
+      ),
+      host,
+    );
+
+    expect(status).toHaveBeenCalledWith(HttpStatus.UNPROCESSABLE_ENTITY);
+    expect(body(json)).toEqual({
+      statusCode: 422,
+      code: 'easy_recovery_code_invalid',
+      error: 'Unprocessable Entity',
+      message: 'That code is not the one shown on the other device.',
+      details: { attemptsLeft: 3 },
+      path: '/v1/swaps',
+      timestamp: expect.any(String),
+    });
+  });
+
+  it('adds no details key to an ApiError thrown without any', () => {
+    const { filter, host, json } = build();
+    filter.catch(ApiError.notFound('gone'), host);
+    expect(body(json)).not.toHaveProperty('details');
+  });
+
+  it('never copies a details key out of any other exception’s body', () => {
+    // Terminus' readiness report has `details`, holding each indicator's
+    // result — the database's connection error among them.
+    const { filter, host, json } = build();
+    filter.catch(
+      new ServiceUnavailableException({
+        status: 'error',
+        details: { database: { status: 'down', message: 'db.internal:5432' } },
+      }),
+      host,
+    );
+    expect(body(json)).not.toHaveProperty('details');
+    expect(JSON.stringify(body(json))).not.toContain('db.internal');
+  });
+
   it('preserves class-validator message arrays', () => {
     const { filter, host, json } = build();
 

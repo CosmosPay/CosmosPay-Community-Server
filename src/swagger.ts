@@ -189,6 +189,8 @@ const TAG_DESCRIPTIONS: Record<string, string> = {
   activity: 'What a wallet or dashboard reports back about a session.',
   analytics: 'Aggregates over this consumer’s own traffic.',
   health: 'Liveness and readiness probes for the orchestrator.',
+  'wallet-easy-recovery':
+    'Move a wallet between two devices through a five-minute mailbox this service cannot open.',
 };
 
 /**

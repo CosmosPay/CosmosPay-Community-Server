@@ -40,7 +40,10 @@ import {
   WALLET_SESSION_HEADER,
 } from '@/wallet-auth/wallet-auth.constants';
 import { WalletAuthService } from '@/wallet-auth/wallet-auth.service';
-import { callbackPage } from '@/wallet-auth/wallet-auth-page';
+import {
+  CALLBACK_PAGE_CSP,
+  callbackPage,
+} from '@/wallet-auth/wallet-auth-page';
 import {
   ClaimWalletOauthDto,
   FinishWalletSignInDto,
@@ -215,7 +218,12 @@ export class WalletAuthController {
     }
     // Otherwise always 200 with a page. A status code is for the client that
     // made the request, and the client here is a person looking at a browser.
-    res.status(200).type('text/html').send(callbackPage(outcome));
+    // Its own CSP, replacing helmet's: the page's one script closes the window.
+    res
+      .status(200)
+      .setHeader('Content-Security-Policy', CALLBACK_PAGE_CSP)
+      .type('text/html')
+      .send(callbackPage(outcome));
   }
 
   @Get('oauth/session/:state')
@@ -247,7 +255,11 @@ export class WalletAuthController {
       'provider proves who consented, not who opened the sign-in, and an ' +
       'existing account is where the backup worth stealing is. An Authentik ' +
       'email the provider has not confirmed also gets `verify_email`, account ' +
-      'or not, under the same per-address cooldown as `email/start`.',
+      'or not, under the same per-address cooldown as `email/start`. The ' +
+      'exception is a sign-in through Authentik’s emailed link (the `email` ' +
+      'source), whose ID token carries `cosmos_inbox_proven: true`: that login ' +
+      'already proved the inbox, so an existing account ends here too, with its ' +
+      'backups and the `idToken`.',
   })
   @ApiOkResponse(oneOf(WalletAuthReadyEntity, WalletAuthVerifyEmailEntity))
   @ApiErrorResponse({

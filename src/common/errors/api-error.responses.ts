@@ -7,6 +7,7 @@ import {
   ApiErrorCode,
   reasonPhrase,
   type ApiErrorBody,
+  type ApiErrorDetails,
 } from '@/common/errors/api-error';
 import { API_ERROR_BODY_SCHEMA } from '@/common/errors/api-error.entity';
 import { RATE_LIMIT_HEADER } from '@/common/rate-limit.constants';
@@ -44,6 +45,11 @@ interface ApiErrorCase {
   message: string | string[];
   /** A path this code is really returned from — the envelope carries one. */
   path: string;
+  /**
+   * The envelope's `details`, for the few codes that carry them — what the throw
+   * site passes, filled in. Absent means the code never carries any.
+   */
+  details?: ApiErrorDetails;
 }
 
 /**
@@ -478,6 +484,44 @@ export const API_ERROR_CASES: Readonly<Record<ApiErrorCode, ApiErrorCase>> = {
     path: '/v1/wallet/auth/oauth/authorize',
   },
 
+  // --- easy recovery ---------------------------------------------------------
+  [ApiErrorCode.EasyRecoveryNotFound]: {
+    statuses: [404],
+    summary: 'No such session, or it expired, was claimed or was burned',
+    message:
+      'This recovery session does not exist or has expired. Start again on the new device.',
+    path: '/v1/wallet/easy-recovery/sessions/q2Z7rT0aV1bX9cD4eF6gHw',
+  },
+  [ApiErrorCode.EasyRecoveryAlreadyOffered]: {
+    statuses: [409],
+    summary: 'The session already holds an offer; the first one wins',
+    message:
+      'This recovery session already holds an offer. Start again on the new device.',
+    path: '/v1/wallet/easy-recovery/sessions/q2Z7rT0aV1bX9cD4eF6gHw/offer',
+  },
+  [ApiErrorCode.EasyRecoveryNotOffered]: {
+    statuses: [409],
+    summary: 'Nothing has been offered on the session yet',
+    message:
+      'Nothing has been offered on this session yet. Confirm on the other device first.',
+    path: '/v1/wallet/easy-recovery/sessions/q2Z7rT0aV1bX9cD4eF6gHw/claim',
+  },
+  [ApiErrorCode.EasyRecoveryCodeInvalid]: {
+    statuses: [422],
+    summary:
+      'Wrong code; `details.attemptsLeft` says how many more the session survives',
+    message: 'That code is not the one shown on the other device.',
+    path: '/v1/wallet/easy-recovery/sessions/q2Z7rT0aV1bX9cD4eF6gHw/claim',
+    details: { attemptsLeft: 4 },
+  },
+  [ApiErrorCode.EasyRecoveryBurned]: {
+    statuses: [410],
+    summary: 'That was the last wrong code allowed: the session was deleted',
+    message:
+      'Too many wrong codes: this recovery session was deleted. Start again on the new device.',
+    path: '/v1/wallet/easy-recovery/sessions/q2Z7rT0aV1bX9cD4eF6gHw/claim',
+  },
+
   // --- plugins --------------------------------------------------------------
   [ApiErrorCode.PluginNotInstalled]: {
     statuses: [409],
@@ -581,6 +625,8 @@ export function apiErrorExample(
     code,
     error: reasonPhrase(status),
     message: example.message,
+    // Where the filter puts it, so the example reads in the order a response does.
+    ...(example.details ? { details: example.details } : {}),
     path: example.path,
     timestamp: API_ERROR_EXAMPLE_TIMESTAMP,
   };

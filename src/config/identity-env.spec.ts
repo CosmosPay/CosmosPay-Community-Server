@@ -105,6 +105,21 @@ describe('assertIdentityConfigConsistent', () => {
     ).not.toThrow();
   });
 
+  it('lets a recovery server ignore the sign-in sources an env file shares', () => {
+    expect(() =>
+      assertIdentityConfigConsistent(
+        recoveryServer({ WALLET_AUTH_OIDC_SOURCES: 'google:Google' }),
+      ),
+    ).not.toThrow();
+    // On the sign-in itself, the sources still need Authentik.
+    expect(() =>
+      assertIdentityConfigConsistent({
+        APISIX_GATEWAY_SECRET: secret('g'),
+        WALLET_AUTH_OIDC_SOURCES: 'google:Google',
+      }),
+    ).toThrow(/WALLET_AUTH_OIDC_ISSUER/);
+  });
+
   it('refuses a recovery server with no way to prove an inbox', () => {
     expect(() =>
       assertIdentityConfigConsistent(
