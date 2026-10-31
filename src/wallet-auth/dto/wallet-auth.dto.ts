@@ -17,6 +17,7 @@ import { CHAINS, type Chain } from '@/chains/chains.constants';
 import type { StellarNetwork } from '@/config/configuration';
 import { IsChainAddress } from '@/common/validators/is-chain-address.validator';
 import {
+  AUTHENTIK_SOURCE_SLUG,
   BACKUP_BOX_MAX_CHARS,
   RETURN_URL_MAX_CHARS,
   WALLET_SIGNATURE_MAX_CHARS,
@@ -93,6 +94,24 @@ export class StartWalletOauthDto {
   @IsString()
   @MaxLength(RETURN_URL_MAX_CHARS)
   returnTo?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Start at one of Authentik’s sources (Google, GitHub…) instead of its ' +
+      'login page: an `id` from `sources` on GET /v1/wallet/auth/providers, ' +
+      'with `provider: authentik`. The browser goes straight to that provider ' +
+      'and comes back through Authentik, so the handshake and its ID token are ' +
+      'the same as any Authentik sign-in. Send it only to a deployment that ' +
+      'listed it: an older one refuses the unknown field.',
+    example: 'google',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(50)
+  @Matches(AUTHENTIK_SOURCE_SLUG, {
+    message: 'source must be an Authentik source slug',
+  })
+  source?: string;
 }
 
 export class ClaimWalletOauthDto {
@@ -120,11 +139,28 @@ export class ClaimWalletOauthDto {
       'SEP-30 recovery servers. It always routes through an emailed code, even ' +
       'for an email with no account, and only then does the answer carry the ' +
       "provider's `idToken`: a provider proves who consented, not who opened the " +
-      'sign-in, and a recovery identity is worth a wallet.',
+      'sign-in, and a recovery identity is worth a wallet. The one exception is ' +
+      'an existing account signed in through Authentik’s emailed link ' +
+      '(`cosmos_inbox_proven: true` in its ID token), which already proved the ' +
+      'inbox.',
   })
   @IsOptional()
   @IsIn(['sign-in', 'recovery'])
   purpose?: 'sign-in' | 'recovery';
+
+  @ApiPropertyOptional({
+    description:
+      'The device binding: the one-time value the callback put in the fragment ' +
+      'of its redirect to the wallet’s return URL, after an Authentik emailed ' +
+      'sign-in (the poll says `bound`). Only with it does that sign-in skip the ' +
+      'code for an existing account. Send it only when the poll said `bound`: an ' +
+      'older server refuses the unknown field.',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(128)
+  @Matches(BASE64URL, { message: 'binding must be base64url' })
+  binding?: string;
 }
 
 export class StartWalletEmailDto {

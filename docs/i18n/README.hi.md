@@ -101,6 +101,8 @@ src/
   aliases/                        claimable payment handles: signed claims, resolution, email recovery
   assets/                         curated asset registry: the (code, issuer) pairs vouched for, per network
   public-key/                     GET /v1/public-key: the shared public key, keyless
+  easy-recovery/                  moving a wallet between two devices: a five-minute mailbox for the wallet sealed
+                                  to the new device's key, released once to the code on the old device's screen
   mailer/                         this service's own sender (Resend): sign-in and recovery codes
   gateway-keys/                   mints wallet accounts' keys in APISIX (admin client, consumer forwarder)
   analytics/                      summary, balances, API logs, webhook logs
@@ -118,7 +120,8 @@ prisma/schema.prisma              Consumer, PaymentIntent, Swap, ChainSwap, Cros
                                   BlindpayWebhookEvent, Payin, Payout, RequestLog,
                                   ActivityEvent,
                                   AdminAuditLog, Alias, AliasAddress,
-                                  AliasChallenge, AliasRecovery, ZkPayment, Usdt0Transfer
+                                  AliasChallenge, AliasRecovery, ZkPayment, Usdt0Transfer,
+                                  EasyRecoverySession
                                   PluginInstallation, PluginRecord
 test/                             e2e suites: gateway gate, admin + alias console gates,
                                   payment intents, swaps, liquidity pools, KYC, webhooks
@@ -161,6 +164,7 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | कस्टमर्स          | `/v1/customers`          | intents से बने payer रिकॉर्ड                            |
 | Aliases           | `/v1/aliases`            | क्लेम किए जा सकने वाले पेमेंट हैंडल: claim, resolve, recover |
 | Wallet sign-in    | `/v1/wallet`             | Google / GitHub / ईमेल कोड, और एन्क्रिप्टेड seed बैकअप |
+| Easy recovery     | `/v1/wallet/easy-recovery` | पाँच मिनट के ऐसे mailbox के ज़रिए wallet को दो devices के बीच ले जाना जिसे यह service खोल नहीं सकती |
 | एसेट्स            | `/v1/assets`             | प्रति नेटवर्क चुनी हुई एसेट रजिस्ट्री                   |
 | पब्लिक key         | `/v1/public-key`         | साझा public API key, बिना key के दी जाती है (`@Public`) |
 | Analytics         | `/v1/summary`, `/v1/balances`, `/v1/logs` | डैशबोर्ड के aggregates (payments, swaps, liquidity, webhooks) और लॉग |
@@ -340,6 +344,10 @@ Paths OpenAPI के `{param}` रूप में लिखे गए हैं
 | POST | `/v1/wallet/auth/email/verify` | `payments:write` | ✓ |
 | POST | `/v1/wallet/auth/finish` | `payments:write` | ✓ |
 | PUT | `/v1/wallet/backup` | `payments:write` | ✓ |
+| POST | `/v1/wallet/easy-recovery/sessions` | `payments:write` | ✓ |
+| GET | `/v1/wallet/easy-recovery/sessions/{id}` | `payments:read` | ✓ |
+| POST | `/v1/wallet/easy-recovery/sessions/{id}/claim` | `payments:write` | ✓ |
+| POST | `/v1/wallet/easy-recovery/sessions/{id}/offer` | `payments:write` | ✓ |
 | POST | `/v1/wallet/recovery/setup` | `payments:write` | ✓ |
 | GET | `/v1/webhooks` | `webhooks:read` |  |
 | POST | `/v1/webhooks` | `webhooks:write` |  |
@@ -382,6 +390,12 @@ statuses दर्ज करता है जो वह सच में लौ�
 और Postman import वही body दिखाएँ जो आपको सच में मिलेगी। **एक बार प्रकाशित होने के बाद
 codes का नाम कभी नहीं बदला जाता**; नए codes जोड़े जा सकते हैं, इसलिए किसी अनजान code को
 उसके HTTP status के रूप में ही समझें।
+
+कुछ codes `details` भी लाते हैं: उस failure के बारे में machine-readable तथ्यों
+का एक object, `message` और `path` के बीच; spec में उस code का उदाहरण इसे दिखाता है।
+आज केवल `easy_recovery_code_invalid` इसे लाता है
+(`"details": { "attemptsLeft": 4 }`)। किसी और envelope में `details` key नहीं
+होती।
 
 कुछ codes जिनमें आसानी से भ्रम हो जाता है:
 
@@ -939,6 +953,60 @@ Monad पता अपनी EIP-55 वर्तनी में सहेजा
 (`POST /v1/wallet/recovery/setup`) केवल Stellar रहता है। खाते की
 keys हर chain पर एक ही तरह जारी होती हैं (देखें
 [कोई भी request developer platform पर निर्भर नहीं है](#कोई-भी-request-developer-platform-पर-निर्भर-नहीं-है))।
+
+### Easy recovery: दो devices के बीच wallet ले जाना
+
+`/v1/wallet/easy-recovery` एक wallet को उस device से जिस पर वह है (पुराना) दूसरे
+device (नया) पर ले जाता है, एक ऐसे mailbox के ज़रिए जो पाँच मिनट जीता है और जिसे
+यह service खोल नहीं सकती:
+
+1. नया device एक X25519 key pair बनाता है, `POST /v1/wallet/easy-recovery/sessions`
+   (`receiverKey`: public key, base64url) से session खोलता है और session के `id`
+   और उस key वाला QR दिखाता है, और कुछ नहीं।
+2. पुराना device उसे scan करता है, व्यक्ति पुष्टि करके unlock करता है, और wallet
+   अपना secret उस key के लिए seal करता है (ECIES, device पर), पाँच अंकों का एक
+   random code चुनता है, दोनों को `POST …/sessions/{id}/offer` से भेजता है और code
+   दिखाता है।
+3. व्यक्ति नए device पर code टाइप करता है, जो `POST …/sessions/{id}/claim` बुलाता
+   है, sealed secret पाता है और उसे वहीं खोलता है। दोनों devices
+   `GET …/sessions/{id}` poll करते हैं (`open` → `offered` → `claimed`)।
+
+| जवाब | कब |
+| ------ | ---- |
+| `201` `{ id, expiresAt }` | Session खुल गया, पाँच मिनट के लिए |
+| `200` `{ status, expiresAt }` | एक poll। कभी key, sealed secret या code नहीं |
+| `200` `{ status: "offered" }` | पहला offer |
+| `200` `{ ciphertext }` | सही code, केवल एक बार |
+| `404 easy_recovery_not_found` | अनजान, expired, burned, या (claim पर) पहले ही claimed |
+| `409 easy_recovery_already_offered` | दूसरा offer: पहला जीतता है |
+| `409 easy_recovery_not_offered` | Offer से पहले claim: पहले `offered` तक poll करें |
+| `422 easy_recovery_code_invalid` | गलत code; `details.attemptsLeft` बताता है कितनी कोशिशें बाकी हैं |
+| `410 easy_recovery_burned` | पाँचवाँ गलत code: session और sealed secret मिटा दिए जाते हैं |
+
+साझा public API key इसे क्यों बुला सकती है:
+
+- **यह service जो रखती है उसे खोल नहीं सकती।** इसके पास receiving private key
+  कभी नहीं होती, और यह ऐसी `receiverKey` अस्वीकार करती है जो low-order X25519
+  point हो, जिसका shared secret कोई भी निकाल सकता है। पुराने device को भी उसे
+  अस्वीकार करना चाहिए।
+- **Phishing page को code ही रोकता है।** जो page अपना QR दिखाता है उसके पास
+  receiving key होती है, इसलिए वह sealed secret पढ़ सकता है; फिर भी उसे पीड़ित की
+  screen पर दिखा code चाहिए। पाँच गलत codes session मिटा देते हैं। हर गलत code
+  Postgres में एक conditional update से गिना जाता है और सही code केवल limit से नीचे
+  स्वीकार होता है, इसलिए parallel भेजे गए अनुमानों को पाँच से ज़्यादा मौके नहीं
+  मिलते। केवल `{id}:{code}` का SHA-256 रखा जाता है, और claim उसे secret के साथ
+  मिटा देता है।
+- **एक offer, पाँच मिनट।** पहला offer जीतता है, और `expiresAt` के बाद हर route 404
+  देता है। एक sweeper expired rows को `WALLET_AUTH_SWEEP_*` के schedule पर मिटाता
+  है; claimed session तब तक केवल इसलिए रखा जाता है कि पुराने device का poll
+  `claimed` पढ़ सके।
+- **Session id एक handle है, record token नहीं।** यह 128 random bits है, कभी list
+  नहीं होता, और उसका read केवल status लौटाता है। यह request logs के paths में
+  दिखता है; इसे रखने से code के पाँच अनुमान मिलते हैं, secret कभी नहीं। सब कुछ
+  Postgres में है, इसलिए हर replica उसी row पर गिनती करता है।
+
+हर route के budgets (हर client address के लिए)
+`src/easy-recovery/easy-recovery.constants.ts` में हैं।
 
 ## साझा सार्वजनिक API key
 
@@ -2104,6 +2172,22 @@ seal होती हैं और कभी लौटाई नहीं जा
   `openapi:generate` सभी को चालू करता है।
 
 ## अपग्रेड — breaking changes और deploy नोट्स
+
+### Easy recovery: नया module, नई table, और error envelope में `details`
+
+- **नए routes** `/v1/wallet/easy-recovery` के नीचे (`payments:read` /
+  `payments:write`, साझा public key की अनुमति): दो devices के बीच wallet ले जाना,
+  [Easy recovery](#easy-recovery-दो-devices-के-बीच-wallet-ले-जाना) में वर्णित। कोई
+  मौजूदा route नहीं बदला, और gateway का मौजूदा route इन्हें पहले से serve करता है।
+- **Migration `20261028200000_easy_recovery_sessions`** `easy_recovery_session`
+  table और `EasyRecoveryStatus` enum बनाता है; कुछ भी दोबारा नहीं लिखा जाता। नई
+  build serve करने से पहले `migrate deploy` चलाएँ।
+- **Error envelope में `details` हो सकता है**, केवल उन codes पर जो इसे document
+  करते हैं (आज `easy_recovery_code_invalid`, `attemptsLeft` के साथ)। एक नया
+  optional field: बाकी सभी errors वैसे ही हैं।
+- **कोई नया variable नहीं।** एक नया sweeper expired sessions को
+  `WALLET_AUTH_SWEEP_ENABLED` / `WALLET_AUTH_SWEEP_INTERVAL_MS` के schedule पर,
+  अपने advisory lock (`881_015`) के तहत मिटाता है।
 
 ### Payments: checkout ने link कब देखा; swaps का settled volume USD में
 

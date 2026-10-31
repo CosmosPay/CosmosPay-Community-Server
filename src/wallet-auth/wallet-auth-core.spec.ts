@@ -1,7 +1,10 @@
 import { createHash } from 'node:crypto';
 import { WalletAuthMethod, WalletAuthProvider } from '@generated/prisma/client';
 import {
+  authentikProvedInbox,
   authorizationUrl,
+  bindingMatches,
+  sha256Hex,
   backupMessage,
   callbackUrl,
   finishMessage,
@@ -19,8 +22,10 @@ import {
   signedAtFresh,
   sixDigitCode,
   verifyWalletSignature,
+  sourceFlowUrl,
 } from '@/wallet-auth/wallet-auth-core';
 import {
+  AUTHENTIK_INBOX_PROVEN_CLAIM,
   BACKUP_MAX_ITERATIONS,
   BACKUP_MIN_ITERATIONS,
   BACKUP_ARGON2_MAX_MEMORY_KIB,
@@ -684,5 +689,83 @@ describe('mfaSettingsUrl', () => {
   it('offers nothing for an issuer that is not a URL', () => {
     expect(mfaSettingsUrl('', PATH)).toBeNull();
     expect(mfaSettingsUrl('not a url', PATH)).toBeNull();
+  });
+});
+
+describe('sourceFlowUrl', () => {
+  const ISSUER = 'https://auth.example.com/application/o/wallet/';
+  const REQUEST =
+    'https://auth.example.com/application/o/authorize/?client_id=w&state=s&nonce=n';
+
+  it('opens the source flow with the request as a same-origin next', () => {
+    const url = new URL(sourceFlowUrl(ISSUER, 'github', REQUEST) ?? '');
+    expect(url.origin).toBe('https://auth.example.com');
+    expect(url.pathname).toBe('/if/flow/wallet-source-github/');
+    expect(url.searchParams.get('next')).toBe(
+      '/application/o/authorize/?client_id=w&state=s&nonce=n',
+    );
+  });
+
+  it('refuses a request on another origin than the issuer', () => {
+    expect(
+      sourceFlowUrl(ISSUER, 'github', 'https://evil.example/authorize/?x=1'),
+    ).toBeNull();
+  });
+
+  it('refuses an issuer that is not a URL', () => {
+    expect(sourceFlowUrl('not a url', 'github', REQUEST)).toBeNull();
+  });
+});
+
+describe('authentikProvedInbox', () => {
+  /** A token's shape with this payload; the signature is not this function's job. */
+  const token = (claims: Record<string, unknown>) =>
+    [
+      Buffer.from('{"alg":"RS256"}').toString('base64url'),
+      Buffer.from(JSON.stringify(claims)).toString('base64url'),
+      'signature',
+    ].join('.');
+
+  it('names the claim the blueprint writes', () => {
+    expect(AUTHENTIK_INBOX_PROVEN_CLAIM).toBe('cosmos_inbox_proven');
+  });
+
+  it('is true only for the literal true', () => {
+    expect(authentikProvedInbox(token({ cosmos_inbox_proven: true }))).toBe(
+      true,
+    );
+    for (const value of [false, 'true', 1, null, {}, ['true']]) {
+      expect(authentikProvedInbox(token({ cosmos_inbox_proven: value }))).toBe(
+        false,
+      );
+    }
+  });
+
+  it('is false without the claim, and for anything that is not a token', () => {
+    expect(authentikProvedInbox(token({ email_verified: true }))).toBe(false);
+    expect(authentikProvedInbox(null)).toBe(false);
+    expect(authentikProvedInbox('')).toBe(false);
+    expect(authentikProvedInbox('not-a-token')).toBe(false);
+    expect(authentikProvedInbox('a.%%%.c')).toBe(false);
+    expect(
+      authentikProvedInbox(`a.${Buffer.from('true').toString('base64url')}.c`),
+    ).toBe(false);
+  });
+});
+
+describe('bindingMatches', () => {
+  const hash = sha256Hex('the-binding');
+
+  it('matches the value whose hash the handshake holds', () => {
+    expect(bindingMatches('the-binding', hash)).toBe(true);
+  });
+
+  it.each([
+    ['another value', 'not-the-binding', hash],
+    ['nothing presented', undefined, hash],
+    ['an empty value', '', hash],
+    ['no binding issued', 'the-binding', null],
+  ])('refuses %s', (_label, presented, stored) => {
+    expect(bindingMatches(presented, stored)).toBe(false);
   });
 });

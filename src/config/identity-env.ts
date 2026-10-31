@@ -2,6 +2,10 @@ import { StrKey } from '@stellar/stellar-sdk';
 import { isProviderUrl } from '@/common/oidc/oidc-core';
 import { parseReturnUrls, returnUrlProblem } from '@/common/return-url';
 import { parseAtRestKey } from '@/wallet-auth/backup-cipher';
+import {
+  oidcSourceProblem,
+  parseOidcSources,
+} from '@/wallet-auth/oidc-sources';
 
 /**
  * Boot-time rules for the wallet sign-in and the recovery servers.
@@ -213,6 +217,28 @@ export function assertIdentityConfigConsistent(env: Env): void {
     if (problem) {
       throw new Error(`WALLET_AUTH_RETURN_URLS entry "${entry}" ${problem}.`);
     }
+  }
+  // The same: a malformed entry is a button that opens a flow Authentik does not have.
+  const sources = parseOidcSources(read(env, 'WALLET_AUTH_OIDC_SOURCES'));
+  for (const source of sources) {
+    const problem = oidcSourceProblem(source);
+    if (problem) {
+      throw new Error(
+        `WALLET_AUTH_OIDC_SOURCES entry "${source.slug}" ${problem}.`,
+      );
+    }
+  }
+  // Not on a recovery server: it serves no wallet sign-in, so the list is inert there — and a
+  // deployment that shares one env file across its instances must not stop its recovery
+  // servers over a setting only the sign-in reads.
+  if (
+    sources.length &&
+    !read(env, 'WALLET_AUTH_OIDC_ISSUER') &&
+    !read(env, 'RECOVERY_ROLE')
+  ) {
+    throw new Error(
+      'WALLET_AUTH_OIDC_SOURCES lists Authentik sources, but WALLET_AUTH_OIDC_ISSUER is not set: the sources are reached through Authentik.',
+    );
   }
 
   requireNetworkList(env, 'WALLET_RECOVERY_SPONSOR_NETWORKS');

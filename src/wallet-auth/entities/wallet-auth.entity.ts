@@ -12,6 +12,20 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
  * information in them.
  */
 
+export class WalletAuthSourceEntity {
+  @ApiProperty({
+    example: 'google',
+    description: 'Send as `source` on /oauth/authorize.',
+  })
+  id!: string;
+
+  @ApiProperty({
+    example: 'Google',
+    description: 'The button’s label: the provider’s own name.',
+  })
+  name!: string;
+}
+
 export class WalletAuthProvidersEntity {
   @ApiProperty({
     type: [String],
@@ -23,6 +37,16 @@ export class WalletAuthProvidersEntity {
       'screen.',
   })
   providers!: string[];
+
+  @ApiProperty({
+    type: [WalletAuthSourceEntity],
+    description:
+      'Authentik’s own sources (Google, GitHub…), each to show as a button of ' +
+      'its own that starts the Authentik sign-in at that source — with these, ' +
+      'a wallet need not show a generic Authentik button. Empty without ' +
+      'Authentik, or when the operator listed none (WALLET_AUTH_OIDC_SOURCES).',
+  })
+  sources!: WalletAuthSourceEntity[];
 
   @ApiProperty({
     description:
@@ -78,6 +102,15 @@ export class WalletAuthStatusEntity {
       'which cannot be translated on the device.',
   })
   error?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Present (true) only on `authorized`, after an Authentik emailed sign-in ' +
+      'whose callback sent the wallet’s return URL a device binding: claim with ' +
+      'it (`binding`), or the claim sends the inbox a code. The value itself is ' +
+      'never in this response.',
+  })
+  bound?: boolean;
 }
 
 class WalletAuthIdentityEntity {

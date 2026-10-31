@@ -18,6 +18,7 @@ import { SwapsModule } from '@/swaps/swaps.module';
 import { CrossChainSwapsModule } from '@/cross-chain-swaps/cross-chain-swaps.module';
 import { ZkPaymentsModule } from '@/zk-payments/zk-payments.module';
 import { Usdt0Module } from '@/usdt0/usdt0.module';
+import { EasyRecoveryModule } from '@/easy-recovery/easy-recovery.module';
 import { AssetsModule } from '@/assets/assets.module';
 import { PublicKeyModule } from '@/public-key/public-key.module';
 import { LiquidityPoolsModule } from '@/liquidity-pools/liquidity-pools.module';
@@ -92,6 +93,10 @@ import { NativePluginsModule } from '@/native-plugins/native-plugins.module';
     // omnichain USDT), mainnet only. Registered after ZkPaymentsModule so the
     // spec's existing paths keep their order.
     Usdt0Module,
+    // Moving a wallet between two devices through a five-minute mailbox this
+    // service cannot open (/v1/wallet/easy-recovery). Last, so the spec's
+    // existing paths keep their order.
+    EasyRecoveryModule,
   ],
   providers: [
     // Persist a RequestLog row per request (powers the API logs view).

@@ -67,6 +67,24 @@ describe('API error documentation', () => {
         apiErrorExample(ApiErrorCode.Internal).timestamp,
       );
     });
+
+    it('shows details only on the codes that carry them, where the filter puts them', () => {
+      const invalid = apiErrorExample(ApiErrorCode.EasyRecoveryCodeInvalid);
+      expect(invalid.details).toEqual({ attemptsLeft: 4 });
+      // Same key order as a real envelope: message, details, path.
+      expect(Object.keys(invalid)).toEqual([
+        'statusCode',
+        'code',
+        'error',
+        'message',
+        'details',
+        'path',
+        'timestamp',
+      ]);
+      expect(apiErrorExample(ApiErrorCode.NotFound)).not.toHaveProperty(
+        'details',
+      );
+    });
   });
 
   describe('apiErrorExamples', () => {
