@@ -545,6 +545,16 @@ class EnvironmentVariables {
   DEFINDEX_TIMEOUT_MS?: number;
 
   /**
+   * The fee ceiling of a DeFindex build, in stroops. At least the minimum
+   * inclusion fee; at most 100 XLM, past which a "cap" stops meaning anything.
+   */
+  @IsOptional()
+  @IsInt()
+  @Min(100)
+  @Max(1_000_000_000)
+  DEFINDEX_MAX_FEE_STROOPS?: number;
+
+  /**
    * Per-consumer KYC redirect_url host allow-list (issue #33). Optional at boot —
    * missing/empty means every consumer fails closed until configured. Shape:
    * {"cosmos_acme":["acme.com","app.acme.com"]}

@@ -263,12 +263,12 @@ consola llega a ella. Las rutas usan la forma `{param}` de OpenAPI.
 | GET | `/v1/liquidity-pools/positions` | uno de `liquidity:read`, `swaps:read` | ✓ |
 | POST | `/v1/liquidity-pools/withdraw` | uno de `liquidity:write`, `swaps:write` | ✓ |
 | GET | `/v1/liquidity-pools/{poolId}` | uno de `liquidity:read`, `swaps:read` | ✓ |
-| GET | `/v1/defindex/vaults` | uno de `liquidity:read`, `swaps:read` | ✓ |
-| GET | `/v1/defindex/vaults/{vault}` | uno de `liquidity:read`, `swaps:read` | ✓ |
-| GET | `/v1/defindex/vaults/{vault}/balance` | uno de `liquidity:read`, `swaps:read` | ✓ |
-| POST | `/v1/defindex/vaults/{vault}/deposit` | uno de `liquidity:write`, `swaps:write` | ✓ |
-| POST | `/v1/defindex/vaults/{vault}/withdraw` | uno de `liquidity:write`, `swaps:write` | ✓ |
-| POST | `/v1/defindex/submit` | uno de `liquidity:write`, `swaps:write` | ✓ |
+| GET | `/v1/defindex/vaults` | uno de `liquidity:read`, `swaps:read` |  |
+| GET | `/v1/defindex/vaults/{vault}` | uno de `liquidity:read`, `swaps:read` |  |
+| GET | `/v1/defindex/vaults/{vault}/balance` | uno de `liquidity:read`, `swaps:read` |  |
+| POST | `/v1/defindex/vaults/{vault}/deposit` | uno de `liquidity:write`, `swaps:write` |  |
+| POST | `/v1/defindex/vaults/{vault}/withdraw` | uno de `liquidity:write`, `swaps:write` |  |
+| POST | `/v1/defindex/submit` | uno de `liquidity:write`, `swaps:write` |  |
 | GET | `/v1/logs` | `payments:read` |  |
 | GET | `/v1/logs/webhooks` | `webhooks:read` |  |
 | GET | `/v1/offramp/payouts` | `offramp:read` |  |
@@ -1104,7 +1104,7 @@ Rechazadas: `GET /v1/swaps`, `GET /v1/cross-chain-swaps`, `GET /v1/usdt0/transfe
 `GET /v1/liquidity-pools/operations{,/:id}`, `GET /v1/activity/events`,
 `GET /v1/activity/summary`, toda lectura de intenciones de pago, toda ruta de
 propietario de alias (reclamar, listar, agregar o quitar una dirección, liberar,
-recuperar), y todo lo que está bajo `/v1/kyc`, `/v1/onramp`, `/v1/offramp` y
+recuperar), y todo lo que está bajo `/v1/kyc`, `/v1/onramp`, `/v1/offramp`, `/v1/defindex` y
 `/v1/webhooks`. Una wallet sin cuenta lee su historial desde Horizon, y sigue un
 swap o una transferencia por el id y el token de registro que se le entregaron.
 
@@ -2268,8 +2268,57 @@ misma lista `PLUGINS_ENABLED` que los plugins aislados.
   aislado no puede tomar un slug nativo.
 - **El contrato OpenAPI documenta las rutas de todos los plugins nativos**, estén
   activados o no: `openapi:generate` los activa todos.
+- **El submit de DeFindex retransmite solo lo que entregaron sus propias
+  construcciones.** Al construir un depósito o un retiro se comprueba que el
+  envelope que devuelve DeFindex es exactamente la llamada pedida (origen `caller`,
+  una llamada al vault con los montos o las participaciones pedidas) y se registra
+  en `defindex_transaction` para el consumer y la red de la key, hasta que cierren
+  sus límites de tiempo (15 minutos como máximo). `POST /v1/defindex/submit` calcula
+  el hash del envelope firmado y lo retransmite solo si es una de esas filas; antes
+  retransmitía cualquier transacción firmada. Cada una se retransmite una vez: la
+  respuesta de DeFindex se guarda y se devuelve en cada envío posterior. Ninguna
+  ruta de DeFindex admite la key pública compartida: la pantalla Earn de la wallet
+  las llama con la key propia de la cuenta con sesión iniciada.
 
 ## Actualización — cambios incompatibles y notas de despliegue
+
+### DeFindex: el submit queda atado a las construcciones de este servicio y cerrado a la key pública
+
+- **La migración `20261101120000_defindex_transactions`** crea la tabla
+  `defindex_transaction` y los enums `DefindexTransactionStatus` y
+  `DefindexOperationKind`; no se reescribe nada. Ejecutá `migrate deploy` antes de
+  que el nuevo build atienda tráfico.
+- **`POST /v1/defindex/submit` retransmite solo una copia firmada de una
+  transacción que `POST /v1/defindex/vaults/{vault}/deposit` o `/withdraw`
+  construyó para el consumer de la misma API key, en su red, antes de que expire**
+  (sus límites de tiempo, 15 minutos como máximo). Cualquier otra cosa:
+  `404 not_found` (modificada después de construirla, construida para otra key o
+  red, o nunca construida acá), `400 invalid_state_transition` (expirada),
+  `400 validation_failed` (sin firma, un fee bump), `409 operation_in_flight` (la
+  misma transacción se está enviando). Enviar de nuevo la misma transacción
+  devuelve la primera respuesta sin llamar a DeFindex. Un cliente que firma el XDR
+  construido sin cambiarlo y lo envía con la misma key, como hace la wallet, no
+  necesita cambios.
+- **Una construcción se rechaza (`502 provider_error`, registrada en el log con el
+  motivo) salvo que el envelope de DeFindex sea la llamada pedida y nada más:** sin
+  memo y sin otra precondición que límites de tiempo que cierren dentro de 15
+  minutos, una comisión (incluida la de recursos de Soroban) dentro de
+  `DEFINDEX_MAX_FEE_STROOPS`, una sola operación, mínimos de depósito dentro del
+  `slippageBps` pedido, y una sola entrada de autorización, la de `caller`, para
+  exactamente esa llamada (bajo un depósito, solo el vault tomando como máximo los
+  montos pedidos de `caller`).
+- **La key pública compartida se rechaza en todas las rutas de `/v1/defindex`**
+  (`403 insufficient_scope`), y ya no llevan `x-cosmos-public-key`.
+- **Un monto demasiado grande es `400 validation_failed`, ya no
+  `502 provider_error`:** `amounts` y `shares` son strings enteros no mayores que
+  9007199254740991, el mayor que `@defindex/sdk` transporta con exactitud.
+- **Presupuestos nuevos:** las dos construcciones comparten `defindex:build` y el
+  submit tiene `defindex:submit`, 20 por minuto cada uno por consumer y dirección
+  del cliente (`429 rate_limited`). Sus fallas de DeFindex ahora están en el
+  contrato (`x-cosmos-upstream`: 502, 503).
+- **Variable nueva `DEFINDEX_MAX_FEE_STROOPS`** (por defecto `10000000`, 1 XLM, el
+  tope que la wallet ya aplica): lo máximo que una transacción de DeFindex puede
+  cobrarle a quien la firma.
 
 ### Recuperación fácil: un módulo nuevo, una tabla nueva y `details` en la estructura de error
 
@@ -3317,6 +3366,7 @@ Cada variable leída de `process.env` en `src/` se valida en el arranque mediant
 | `DEFINDEX_API_KEY` | no | — | Clave API de servidor de DeFindex. Las rutas existen solo con `defindex` en `PLUGINS_ENABLED`; sin la clave responden `503 misconfigured` |
 | `DEFINDEX_BASE_URL` | no | `https://api.defindex.io` | URL base de la API DeFindex |
 | `DEFINDEX_TIMEOUT_MS` | no | `30000` | Timeout HTTP de DeFindex (ms) |
+| `DEFINDEX_MAX_FEE_STROOPS` | no | `10000000` | Lo máximo que una transacción de DeFindex construida puede cobrarle a quien la firma, comisión de inclusión y de recursos de Soroban juntas (stroops); una construcción por encima se rechaza con `502 provider_error` |
 | `PLUGINS_ENABLED` | no | — | Slugs, separados por comas, de los plugins que sirve este despliegue: los aislados de `plugins/` y los nativos `blindpay` y `defindex`. Vacío no sirve ninguno; un plugin no listado nunca se carga |
 | `PLUGINS_SECRET` | cuando un plugin habilitado tiene ajustes secretos | — | Sella los ajustes secretos de las instalaciones de plugins (mínimo 32 caracteres). Cambiarlo deja ilegibles todos los secretos de plugins guardados |
 | `PLUGINS_TRUSTED_KEYS` | no | — | Firmantes cuyos plugins corren aquí además de soporte de Cosmos Pay: `<keyId>:<clave pública Ed25519 en base64url>` separados por comas. Un plugin firmado por otro, o modificado después de firmarse, detiene el arranque |

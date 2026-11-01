@@ -54,6 +54,11 @@ process.env.WALLET_AUTH_SESSION_SECRET =
 // through the real loader, signature check and registry. Pinned for the same
 // reason as the rest: a developer's .env may enable others, or none.
 process.env.PLUGINS_ENABLED = 'example,blindpay,defindex';
+// No DeFindex key: the guards suite asserts `503 misconfigured`, and a developer's
+// .env usually carries a real key, which would send the suites to DeFindex. The
+// binding suite replaces DefindexClient instead. Empty rather than deleted, for
+// the same dotenv reason as above.
+process.env.DEFINDEX_API_KEY = '';
 process.env.PLUGINS_TRUSTED_KEYS = '';
 process.env.PLUGINS_ALLOW_UNSIGNED = 'false';
 // The shared public key GET /v1/public-key serves. Dev only, so the suite can see

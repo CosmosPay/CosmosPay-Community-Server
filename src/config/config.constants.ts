@@ -130,6 +130,17 @@ export const DEFAULT_DEFINDEX_BASE_URL = 'https://api.defindex.io';
  */
 export const DEFAULT_DEFINDEX_TIMEOUT_MS = 30_000;
 
+/**
+ * The most a DeFindex transaction may charge its signer in fees, in stroops
+ * (1 XLM), when `DEFINDEX_MAX_FEE_STROOPS` is unset: the inclusion fee and the
+ * Soroban resource fee together. A deposit that invests through a Blend
+ * strategy simulated on mainnet at 0.32 to 0.45 XLM (2026-11-01), and 1 XLM is
+ * also the ceiling the wallet itself enforces before it signs one
+ * (`MAX_FEE_STROOPS` in its `defindexGuard.ts`), so a build above it is one no
+ * Cosmos wallet would sign anyway.
+ */
+export const DEFAULT_DEFINDEX_MAX_FEE_STROOPS = 10_000_000;
+
 /** The NEAR Intents 1Click API, used when `NEAR_INTENTS_BASE_URL` is unset. */
 export const DEFAULT_NEAR_INTENTS_BASE_URL = 'https://1click.chaindefuser.com';
 
