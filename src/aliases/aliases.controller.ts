@@ -78,7 +78,15 @@ export class AliasesController {
   @Get('resolve/:name')
   @AllowPublicKey()
   @RequirePermissions('payments:read')
-  @ApiOperation({ summary: 'Resolve an alias to its addresses' })
+  @ApiOperation({
+    summary: 'Resolve an alias to its addresses',
+    description:
+      'Answers the addresses of the alias on one chain (Stellar unless `chain` ' +
+      'names another), optionally narrowed to one `network`, primary first, ' +
+      'with `primaryAddress` as the default to pay (null when it has none ' +
+      'there). The name is matched trimmed and lowercased. An unknown or ' +
+      'suspended alias is a 404, and nothing about its owner is returned.',
+  })
   @ApiQuery({
     name: 'network',
     required: false,
@@ -104,7 +112,16 @@ export class AliasesController {
   @Get('availability/:name')
   @AllowPublicKey()
   @RequirePermissions('payments:read')
-  @ApiOperation({ summary: 'Is this handle claimable, and if not why not' })
+  @ApiOperation({
+    summary: 'Is this handle claimable, and if not why not',
+    description:
+      'Checks the trimmed, lowercased handle and answers `available`, with a ' +
+      '`reason` when it is not: `too_short` or `too_long` (3 to 32 ' +
+      'characters), `bad_characters` (a-z, 0-9 and underscores, starting and ' +
+      'ending with a letter or digit), `reserved`, `address_like` (it would ' +
+      'read as a Stellar address) or `taken`. It reserves nothing: a claim ' +
+      'can still lose the name with `409 alias_taken`.',
+  })
   @ApiOkResponse({ type: AliasAvailabilityEntity })
   availability(@Param('name') name: string) {
     return this.aliases.availability(name);
@@ -113,7 +130,15 @@ export class AliasesController {
   @Get('by-address/:address')
   @AllowPublicKey()
   @RequirePermissions('payments:read')
-  @ApiOperation({ summary: 'Which aliases point at this address' })
+  @ApiOperation({
+    summary: 'Which aliases point at this address',
+    description:
+      'The active aliases holding this address, oldest first, each with its ' +
+      '`chain`, `network` and whether the address is its primary there, as ' +
+      '`{ data }` (not paged). Without `chain` the chain is read off the ' +
+      "address's own shape, and a Monad address matches whatever its letter " +
+      'case. An address no chain accepts answers an empty `data`, not an error.',
+  })
   @ApiOkResponse({ type: AliasByAddressEntity })
   @ApiQuery({ name: 'network', required: false })
   @ApiQuery({
@@ -157,7 +182,19 @@ export class AliasesController {
 
   @Post()
   @RequirePermissions('payments:write')
-  @ApiOperation({ summary: 'Claim an alias with a signature' })
+  @ApiOperation({
+    summary: 'Claim an alias with a signature',
+    description:
+      'Takes the `nonce` of a `CLAIM` challenge from ' +
+      '`POST /v1/aliases/challenges` and the signature over its message: the ' +
+      "address, chain and network registered are the challenge's, never the " +
+      "body's, and that address becomes the alias's primary. A challenge is " +
+      'single-use and lives 5 minutes (`alias_challenge_invalid`); a signature ' +
+      'that does not verify is `alias_signature_invalid`. `email` is the ' +
+      'mailbox recovery goes to, a consumer holds at most 25 aliases ' +
+      '(`400 alias_address_conflict`) and the first claim of a name wins ' +
+      '(`409 alias_taken`).',
+  })
   @ApiCreatedResponse({ type: OwnedAliasEntity })
   @ApiErrorResponse({
     status: 400,
@@ -185,7 +222,14 @@ export class AliasesController {
 
   @Get()
   @RequirePermissions('payments:read')
-  @ApiOperation({ summary: "List the caller's aliases" })
+  @ApiOperation({
+    summary: "List the caller's aliases",
+    description:
+      'The aliases this consumer holds, newest first, each with its recovery ' +
+      '`email`, `status` and every address on every chain and network ' +
+      '(primary first). Paged with `take` (default and maximum 50) and ' +
+      '`skip`; answers `{ data, total, take, skip }`.',
+  })
   @ApiOkResponse({ type: AliasListEntity })
   list(
     @CurrentConsumer() consumer: GatewayConsumer,
@@ -222,7 +266,14 @@ export class AliasesController {
 
   @Delete(':name/addresses/:addressId')
   @RequirePermissions('payments:write')
-  @ApiOperation({ summary: 'Remove one address from the alias' })
+  @ApiOperation({
+    summary: 'Remove one address from the alias',
+    description:
+      'Deletes one address of an alias this consumer holds. When it was the ' +
+      'primary on its chain and network, the oldest remaining address there ' +
+      'becomes primary. The last address of the alias cannot be removed: ' +
+      'release the alias instead.',
+  })
   @ApiOkResponse({ type: AliasDeletedEntity })
   @ApiErrorResponse({
     status: 400,
@@ -241,7 +292,12 @@ export class AliasesController {
 
   @Delete(':name')
   @RequirePermissions('payments:write')
-  @ApiOperation({ summary: 'Release the alias back to the namespace' })
+  @ApiOperation({
+    summary: 'Release the alias back to the namespace',
+    description:
+      'Deletes an alias this consumer holds, with all its addresses, so anyone ' +
+      'can claim the name again. An alias held by another consumer is a 404.',
+  })
   @ApiOkResponse({ type: AliasDeletedEntity })
   release(
     @CurrentConsumer() consumer: GatewayConsumer,

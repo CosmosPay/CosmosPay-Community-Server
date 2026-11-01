@@ -282,7 +282,16 @@ export class WalletAuthController {
   // address the caller chose. A per-row cooldown backs it up, because the
   // budget's subject is a client address and the mailbox is somebody else's.
   @RateLimit(WALLET_AUTH_EMAIL_RATE_LIMIT)
-  @ApiOperation({ summary: 'Send a sign-in code to a mailbox' })
+  @ApiOperation({
+    summary: 'Send a sign-in code to a mailbox',
+    description:
+      'Emails a six-digit code to `email`, valid 15 minutes ' +
+      '(`expiresInSeconds`), and answers a `claimToken` naming that code; send ' +
+      'both to `POST /v1/wallet/auth/email/verify`. One mailbox gets at most one ' +
+      'code a minute and 10 in 24 hours, whoever asks: more is ' +
+      '`400 wallet_login_code_cooldown`. Only SHA-256 hashes of the code and ' +
+      'the claim token are stored.',
+  })
   @ApiOkResponse({ type: WalletEmailStartedEntity })
   @ApiErrorResponse({
     status: 400,

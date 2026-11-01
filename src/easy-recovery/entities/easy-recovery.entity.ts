@@ -28,7 +28,7 @@ export class EasyRecoverySessionStatusEntity {
     enum: Object.values(EASY_RECOVERY_WIRE_STATUS),
     description:
       '`open`: waiting for the old device. `offered`: the old device has ' +
-      'sent the sealed wallet and shows the code — the new device asks for ' +
+      'sent the sealed wallet and shows the code, which the new device asks for ' +
       'it. `claimed`: the new device collected it; the old device can stop.',
     example: 'offered',
   })

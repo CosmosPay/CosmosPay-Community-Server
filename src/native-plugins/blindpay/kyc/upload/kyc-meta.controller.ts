@@ -99,7 +99,14 @@ export class KycMetaController {
   @RateLimit(KYC_UPLOAD_RATE_LIMIT, BLINDPAY_CONSUMER_QUOTA_RATE_LIMIT)
   @UseInterceptors(FileInterceptor('file', KYC_UPLOAD_OPTIONS))
   @ApiConsumes('multipart/form-data')
-  @ApiOperation({ summary: 'Upload a KYC document; returns its file_url' })
+  @ApiOperation({
+    summary: 'Upload a KYC document; returns its file_url',
+    description:
+      'Multipart: one `file` part (JPEG, PNG, WebP, HEIC/HEIF or PDF, up to 10 MB, its bytes checked against the declared type) ' +
+      'and an optional `bucket` (`onboarding` by default, `avatar` or `limit_increase`). ' +
+      "BlindPay stores the file on the instance of the key's network and nothing is kept here; pass the returned `file_url` in the receiver's `*_file` fields. " +
+      'BlindPay keeps a stored file even when a later step fails, which is why the route is budgeted per address and per consumer.',
+  })
   // Declaring the failures below drops Nest's implicit 201, so the success
   // body has to be declared too or the route publishes no success at all.
   @ApiCreatedResponse({ type: KycUploadEntity })
@@ -154,6 +161,10 @@ export class KycMetaController {
   @RateLimit(KYC_TOS_RATE_LIMIT, BLINDPAY_CONSUMER_QUOTA_RATE_LIMIT)
   @ApiOperation({
     summary: 'Start ToS acceptance; returns the hosted URL (first KYC step)',
+    description:
+      "Asks BlindPay for a hosted terms-of-service page and returns its URL; after acceptance BlindPay redirects to `redirect_url` (https, on this consumer's allow-list) with a `tos_id` query parameter. " +
+      'With `receiver_id` (the BlindPay id of a receiver this consumer owns, otherwise 404) the terms are for that existing receiver. ' +
+      '`idempotency_key` is forwarded to BlindPay and generated when omitted; every call creates a record there, hence the budgets.',
   })
   @ApiCreatedResponse({ type: KycTermsOfServiceEntity })
   initiateTos(
@@ -165,14 +176,25 @@ export class KycMetaController {
 
   @Get('rails')
   @RequirePermissions('kyc:read')
-  @ApiOperation({ summary: 'List available bank rails' })
+  @ApiOperation({
+    summary: 'List available bank rails',
+    description:
+      "Relays BlindPay's catalog of bank rails on the instance of the key's network (production for a mainnet key, development otherwise). " +
+      "Nothing is stored; the body is BlindPay's answer as returned.",
+  })
   rails(@CurrentConsumer() consumer: GatewayConsumer) {
     return this.meta.listRails(consumer);
   }
 
   @Get('bank-details')
   @RequirePermissions('kyc:read')
-  @ApiOperation({ summary: 'Get the field schema required by a rail' })
+  @ApiOperation({
+    summary: 'Get the field schema required by a rail',
+    description:
+      "Relays BlindPay's field schema for the `rail` query parameter (required: 400 `validation_failed` without it), " +
+      'the fields `POST /v1/kyc/receivers/{receiverId}/bank-accounts` needs for that rail. ' +
+      "Answered as BlindPay returns it, from the instance of the key's network.",
+  })
   bankDetails(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Query('rail') rail?: string,

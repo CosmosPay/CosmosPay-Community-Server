@@ -714,14 +714,21 @@ to the gateway. Postman keeps one API key per request: if an import sets only
 probes are published with `security: []`.
 
 Every operation carries vendor extensions that say what it is:
-`x-cosmos-rate-limit` (its budgets — it can answer `429`), `x-cosmos-upstream`
-(the provider it calls — it can answer `502`/`503`/`504`), `x-cosmos-public` and
-`x-cosmos-public-key`.
+`x-cosmos-rate-limit` (its budgets: it can answer `429`), `x-cosmos-upstream`
+(the provider it calls: it can answer `502`/`503`/`504`), `x-cosmos-public`,
+`x-cosmos-public-key`, and `x-cosmos-scopes` / `x-cosmos-scopes-any` (the scopes
+its API key must hold, all of them / one of them, published by
+`@RequirePermissions` / `@RequireAnyPermission`). On every route that takes an API
+key, the description written in its `@ApiOperation` ends with a sentence generated
+from those scopes and `x-cosmos-public-key`, so the contract never names a scope the
+guard does not check.
 
 `npm run openapi:generate` refuses to write a spec in which an operation has no
-summary, a failure has no body or example, an example's `statusCode` disagrees
-with the status it documents, or a `429` sits on a route with no budget. Whenever
-you add or change a route, read its regenerated operation — see `CLAUDE.md`.
+summary or no description, a tag an operation uses has no description, any text
+contains an em dash (the developer platform mirrors this contract into its docs,
+which allow none), a failure has no body or example, an example's `statusCode`
+disagrees with the status it documents, or a `429` sits on a route with no budget.
+Whenever you add or change a route, read its regenerated operation (see `CLAUDE.md`).
 
 ### Creating intents — two SEP-7 operations, two endpoints
 

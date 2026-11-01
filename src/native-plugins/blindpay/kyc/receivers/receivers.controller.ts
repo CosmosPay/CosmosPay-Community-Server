@@ -51,7 +51,16 @@ export class ReceiversController {
   // Creates the receiver at BlindPay once its KYC data is approved.
   @ApiUpstream('BlindPay')
   @RequirePermissions('kyc:write')
-  @ApiOperation({ summary: 'Create a receiver (start KYC/KYB)' })
+  @ApiOperation({
+    summary: 'Create a receiver (start KYC/KYB)',
+    description:
+      'Stores the receiver here and sends nothing to BlindPay yet: it is created there only by ' +
+      "`POST /v1/kyc/receivers/{id}/enable`, after the review and the customer's acceptance of the terms. " +
+      'A body with KYC data (tax id, date of birth, documents, legal name, formation date or owners) starts in ' +
+      '`pending_review`, a bare registration in `inactive`. ' +
+      "The receiver belongs to the BlindPay instance of the key's network (production for a mainnet key, development otherwise), " +
+      'and the stored dossier is never returned.',
+  })
   @ApiCreatedResponse({ type: ReceiverEntity })
   create(
     @CurrentConsumer() consumer: GatewayConsumer,
@@ -62,7 +71,14 @@ export class ReceiversController {
 
   @Get()
   @RequirePermissions('kyc:read')
-  @ApiOperation({ summary: "List the consumer's receivers" })
+  @ApiOperation({
+    summary: "List the consumer's receivers",
+    description:
+      "Reads the local mirror only, newest first, on the BlindPay instance of the key's network. " +
+      'Paginated with `take` (default 100, max 100) and `skip`; answers `{ data, total, take, skip }`, ' +
+      'where `total` counts every matching receiver. ' +
+      'The stored KYC dossier (tax id, documents, owners) is never returned.',
+  })
   @ApiOkResponse({ type: ReceiverListEntity })
   findAll(
     @CurrentConsumer() consumer: GatewayConsumer,
@@ -77,6 +93,10 @@ export class ReceiversController {
   @RequirePermissions('kyc:read')
   @ApiOperation({
     summary: 'Get a receiver (refreshes KYC status from BlindPay)',
+    description:
+      'For a receiver that already exists at BlindPay, reads it there and updates the local mirror first, ' +
+      "so `kycStatus` is BlindPay's current one; when BlindPay cannot be reached, the stored row is answered instead of an error. " +
+      'A receiver not yet at BlindPay (`inactive`, `pending_review`, `pending_user`) is answered from the local row.',
   })
   @ApiOkResponse({ type: ReceiverEntity })
   findOne(
@@ -96,7 +116,13 @@ export class ReceiversController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary:
-      'Approve a pending-review receiver (admin-only review gate); sends the customer the terms link and returns it',
+      "Approve a receiver's KYC review and get its terms-of-service link",
+    description:
+      'The review gate before anything reaches BlindPay: only a key with the admin role may approve ' +
+      '(any other key gets 403 `kyc_review_required`), and only a `pending_review` receiver. ' +
+      "It requests BlindPay's hosted terms-of-service link for `redirect_url` (https, on this consumer's allow-list), " +
+      "moves the receiver to `pending_user` and returns the link with the receiver's email; nothing is emailed, the caller delivers it. " +
+      'Send `expected_version` (the `dossierVersion` you reviewed) so an edit made since is a 409 `kyc_state_invalid` instead of an approval of unreviewed data.',
   })
   @ApiOkResponse({
     description: 'Receiver approved; terms link returned',
@@ -131,8 +157,13 @@ export class ReceiversController {
   @ApiUpstream('BlindPay')
   @RequirePermissions('kyc:write')
   @ApiOperation({
-    summary:
-      "Request a terms-of-service link for a receiver ('code' returns the URL; 'email' sends it, max once/day)",
+    summary: 'Request a terms-of-service link for an approved receiver',
+    description:
+      'Only for a `pending_user` receiver (approved, terms not yet accepted); any other status is 400 `kyc_state_invalid`. ' +
+      "Requests a fresh hosted link from BlindPay for `redirect_url` (https, on this consumer's allow-list) and returns it with the receiver's email. " +
+      '`channel: email` sends nothing itself: it records the send, allowed once per 24 hours per receiver ' +
+      '(400 `validation_failed` inside that window, 409 `kyc_state_invalid` when two race), and the caller emails the returned link; ' +
+      '`channel: code` (the default) has no such limit.',
   })
   @ApiCreatedResponse({ type: ReceiverTosEntity })
   requestTos(
@@ -166,6 +197,11 @@ export class ReceiversController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Enable an inactive receiver with an accepted terms-of-service id',
+    description:
+      'Creates the receiver at BlindPay: replays the stored registration with the `tos_id` the customer got by accepting the terms, ' +
+      "then replaces the local placeholder id with BlindPay's and mirrors BlindPay's KYC status. " +
+      'Only a `pending_user` receiver whose current `dossierVersion` is the approved one; otherwise, or when another enable is running, 409 `kyc_state_invalid`. ' +
+      'A receiver already at BlindPay is not created again: it is refreshed from BlindPay and returned.',
   })
   @ApiOkResponse({ type: ReceiverEntity })
   @ApiErrorResponse({
@@ -187,6 +223,11 @@ export class ReceiversController {
   @ApiOperation({
     summary:
       'Enable or disable a fiat account (admin-only kill-switch for onramp/offramp)',
+    description:
+      'Sets `disabled` on the receiver. While disabled, onramp, offramp and adding wallets, bank accounts or virtual accounts ' +
+      'for it are refused with 403 `account_disabled`, whatever its KYC status. ' +
+      'Only a key with the admin role may call it (any other key gets 403 `insufficient_scope`), so a tenant cannot lift a switch an operator set. ' +
+      'Local only: nothing is sent to BlindPay.',
   })
   @ApiOkResponse({ type: ReceiverEntity })
   @ApiErrorResponse({
@@ -210,6 +251,11 @@ export class ReceiversController {
   @ApiOperation({
     summary:
       'Update a receiver (once it is at BlindPay, identity fields need an elevated key)',
+    description:
+      'Before the receiver exists at BlindPay, the patch is merged into the stored registration, any change bumps `dossierVersion`, ' +
+      'and editing a `pending_user` receiver (or adding KYC data to an `inactive` one) moves it to `pending_review`. ' +
+      'After that the patch is sent to BlindPay, and a key without the admin role may change only `external_id` and `image_url`. ' +
+      '`tos_id` is always ignored: the accepted terms cannot be changed.',
   })
   @ApiOkResponse({ type: ReceiverEntity })
   @ApiErrorResponse({
@@ -229,7 +275,12 @@ export class ReceiversController {
   @Delete(':id')
   @ApiUpstream('BlindPay')
   @RequirePermissions('kyc:write')
-  @ApiOperation({ summary: 'Delete a receiver' })
+  @ApiOperation({
+    summary: 'Delete a receiver',
+    description:
+      'Deletes the receiver at BlindPay when it was ever created there, then the local row, and records the deletion in the audit log. ' +
+      'A receiver that never reached BlindPay is deleted locally only.',
+  })
   @ApiOkResponse({ type: ReceiverDeletedEntity })
   remove(
     @CurrentConsumer() consumer: GatewayConsumer,

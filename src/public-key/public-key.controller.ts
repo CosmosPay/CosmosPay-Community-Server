@@ -30,7 +30,17 @@ export class PublicKeyController {
   @Get()
   @Public()
   @Header('Cache-Control', `public, max-age=${PUBLIC_KEY_MAX_AGE_S}`)
-  @ApiOperation({ summary: 'The shared public API key for an environment' })
+  @ApiOperation({
+    summary: 'The shared public API key for an environment',
+    description:
+      'Public: no API key, since a wallet without an account holds none ' +
+      'yet. `env=dev` (the default) returns the testnet key and `env=prod` ' +
+      'the mainnet one; that key reaches only the routes marked ' +
+      '`x-cosmos-public-key`. Cached for 5 minutes ' +
+      '(`Cache-Control: public, max-age=300`) so a rotation reaches wallets ' +
+      'quickly; `503 misconfigured` when this deployment publishes no key ' +
+      'for that environment.',
+  })
   @ApiOkResponse({ type: PublicKeyEntity })
   @ApiErrorResponse({
     status: 503,

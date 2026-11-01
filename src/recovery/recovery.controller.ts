@@ -120,7 +120,13 @@ export class Sep10Controller {
   @RateLimit(SEP10_CHALLENGE_RATE_LIMIT)
   @ApiOperation({
     summary: 'A challenge for an account',
-    description: 'Sequence 0: unsubmittable by construction.',
+    description:
+      'Public: no API key. Answers a SEP-10 challenge transaction for `account` ' +
+      '(a `G...` address) with the `network_passphrase` to sign it for; sign it ' +
+      'with the account and exchange it at `POST /v1/sep10/auth`. ' +
+      'Sequence 0: unsubmittable by construction. ' +
+      'Errors have the SEP body `{ "error": "..." }`; a deployment that is not ' +
+      'a recovery server answers 404.',
   })
   challenge(
     @Query() query: Sep10ChallengeQueryDto,
@@ -200,7 +206,13 @@ export class Sep30Controller {
   @RateLimit(RECOVERY_CODE_RATE_LIMIT)
   @ApiOperation({
     summary: 'Answer an emailed code',
-    description: 'Five wrong answers burn it.',
+    description:
+      'Public: no API key. Send the `claim_token` from ' +
+      '`POST /v1/sep30/identity/email/start` with the emailed `code`: the right ' +
+      "answer is `status: ready` with this server's identity token for that " +
+      'inbox, once; a wrong one is `invalid` with `attempts_left`, and an ' +
+      'unknown, used or lapsed claim is `expired`. ' +
+      'Five wrong answers burn it (`locked`).',
   })
   verifyEmail(
     @Body() body: RecoveryEmailVerifyDto,
@@ -217,6 +229,16 @@ export class Sep30Controller {
   @RateLimit(SEP30_READ_RATE_LIMIT)
   @ApiOperation({
     summary: 'Accounts this caller may recover (paged by `after`)',
+    description:
+      'A SEP-10 token lists its own account when it is registered here; this ' +
+      "server's identity token for an email lists every account naming that " +
+      'email. ' +
+      'It reads one ledger (the one the path names, e.g. ' +
+      '`/v1/sep30/testnet/accounts`, or the default) and answers up to 100 ' +
+      'accounts per page in address order as `{ accounts }`; pass the last ' +
+      'address as `after` for the next page. ' +
+      'Errors have the SEP body `{ "error": "..." }`: 401 without a valid token ' +
+      'from this server, 404 on a deployment that is not a recovery server.',
   })
   list(
     @Headers('authorization') authorization: string | undefined,
@@ -235,6 +257,14 @@ export class Sep30Controller {
   @RateLimit(SEP30_WRITE_RATE_LIMIT)
   @ApiOperation({
     summary: 'Register an account (SEP-10 token of that account)',
+    description:
+      'Stores who may recover `address` (1 to 3 identities, roles `owner`, ' +
+      '`sender` or `receiver`, each with 1 to 3 `email` auth methods) and ' +
+      "answers the account with `signers`: this server's key for it. Only a " +
+      'SEP-10 token of that same account may call it (403 otherwise), and an ' +
+      'account already registered here is a 409: change it with `PUT`. ' +
+      'Errors have the SEP body `{ "error": "..." }`: 401 without a valid token ' +
+      'from this server, 404 on a deployment that is not a recovery server.',
   })
   register(
     @Headers('authorization') authorization: string | undefined,
@@ -257,6 +287,13 @@ export class Sep30Controller {
   @ApiOperation({
     summary:
       'Replace who may recover an account (SEP-10 token of that account)',
+    description:
+      'Replaces the identities of `address`, never merging them with the old ' +
+      'ones, and registers the account if it is not here yet. Only a SEP-10 ' +
+      'token of that same account may call it (403 otherwise); it answers the ' +
+      'account as `POST` does. ' +
+      'Errors have the SEP body `{ "error": "..." }`: 401 without a valid token ' +
+      'from this server, 404 on a deployment that is not a recovery server.',
   })
   update(
     @Headers('authorization') authorization: string | undefined,
@@ -276,7 +313,16 @@ export class Sep30Controller {
   @ApiBearerAuth(SEP_TOKEN_SCHEME)
   @Public()
   @RateLimit(SEP30_READ_RATE_LIMIT)
-  @ApiOperation({ summary: 'Describe an account' })
+  @ApiOperation({
+    summary: 'Describe an account',
+    description:
+      "The account's identity roles, flagging the one the token authenticates " +
+      "as, and this server's signer key for it. Takes the account's SEP-10 " +
+      "token, or this server's identity token for an email registered on it; " +
+      'an account that is absent and one the token may not act on are the same ' +
+      '404. Errors have the SEP body `{ "error": "..." }`: 401 without a valid ' +
+      'token from this server, 404 on a deployment that is not a recovery server.',
+  })
   get(
     @Headers('authorization') authorization: string | undefined,
     @Param() params: Sep30AddressParamDto,
@@ -289,7 +335,15 @@ export class Sep30Controller {
   @ApiBearerAuth(SEP_TOKEN_SCHEME)
   @Public()
   @RateLimit(SEP30_WRITE_RATE_LIMIT)
-  @ApiOperation({ summary: 'Forget an account (SEP-10 token of that account)' })
+  @ApiOperation({
+    summary: 'Forget an account (SEP-10 token of that account)',
+    description:
+      'Deletes the registration and its identities and answers the account as ' +
+      'it was. Only a SEP-10 token of that same account may call it (403 ' +
+      'otherwise); an account not registered here is a 404. ' +
+      'Errors have the SEP body `{ "error": "..." }`: 401 without a valid token ' +
+      'from this server, 404 on a deployment that is not a recovery server.',
+  })
   remove(
     @Headers('authorization') authorization: string | undefined,
     @Param() params: Sep30AddressParamDto,
@@ -407,6 +461,12 @@ export class RecoverySharesController {
   @RateLimit(RECOVERY_SHARE_WRITE_RATE_LIMIT)
   @ApiOperation({
     summary: "Forget this server's half (SEP-10 token of that account)",
+    description:
+      "Deletes this server's half of the backup recovery key filed for " +
+      '`address` and answers `{ address }`. Only a SEP-10 token of that same ' +
+      'account may call it (403 otherwise); no half filed here is a 404. ' +
+      'Errors have the SEP body `{ "error": "..." }`: 401 without a valid token ' +
+      'from this server, 404 on a deployment that is not a recovery server.',
   })
   remove(
     @Headers('authorization') authorization: string | undefined,

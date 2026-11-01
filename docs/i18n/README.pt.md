@@ -728,11 +728,17 @@ probes de saúde são publicados com `security: []`.
 
 Cada operação traz extensões de fornecedor que dizem o que ela é:
 `x-cosmos-rate-limit` (seus orçamentos; pode responder `429`), `x-cosmos-upstream`
-(o provedor que chama; pode responder `502`/`503`/`504`), `x-cosmos-public` e
-`x-cosmos-public-key`.
+(o provedor que chama; pode responder `502`/`503`/`504`), `x-cosmos-public`,
+`x-cosmos-public-key`, e `x-cosmos-scopes` / `x-cosmos-scopes-any` (os scopes que sua
+API key precisa ter, todos / um deles, publicados por `@RequirePermissions` /
+`@RequireAnyPermission`). Em toda rota que recebe uma API key, a descrição escrita no
+seu `@ApiOperation` termina com uma frase gerada a partir desses scopes e de
+`x-cosmos-public-key`, então o contrato nunca nomeia um scope que o guard não verifica.
 
 `npm run openapi:generate` se recusa a escrever uma spec em que uma operação não tem
-summary, uma falha não tem corpo nem exemplo, o `statusCode` de um exemplo não bate
+summary ou não tem descrição, uma tag usada por uma operação não tem descrição, algum
+texto contém um travessão (em dash; a plataforma de desenvolvedores espelha este
+contrato na sua documentação, que não aceita nenhum), uma falha não tem corpo nem exemplo, o `statusCode` de um exemplo não bate
 com o status que documenta, ou um `429` aparece em uma rota sem orçamento. Sempre que
 adicionar ou alterar uma rota, revise a operação regenerada; veja `CLAUDE.md`.
 

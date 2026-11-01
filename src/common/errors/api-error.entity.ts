@@ -58,7 +58,7 @@ export class ApiErrorBodyEntity {
   @ApiPropertyOptional({
     description:
       'Machine-readable facts about this failure, present only on the codes ' +
-      'whose example shows it — `easy_recovery_code_invalid` carries ' +
+      'whose example shows it: `easy_recovery_code_invalid` carries ' +
       '`{ "attemptsLeft": 4 }`. Absent everywhere else.',
     type: 'object',
     additionalProperties: {

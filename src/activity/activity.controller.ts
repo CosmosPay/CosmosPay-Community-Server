@@ -97,6 +97,12 @@ export class ActivityController {
   @RequirePermissions('activity:read')
   @ApiOperation({
     summary: 'Counts, top event types, top errors and a daily series',
+    description:
+      'Rolls up the client events this consumer reported over the last ' +
+      '`days` days (default 7, at most 90), optionally for one `source`: the ' +
+      'total, distinct sessions and devices, counts per level, source and ' +
+      'category, and the 10 most frequent event types and error messages. ' +
+      '`series` has one entry per UTC day, zero on a quiet one.',
   })
   @ApiOkResponse({ type: ActivitySummaryEntity })
   summary(

@@ -73,7 +73,7 @@ export class EasyRecoveryController {
     summary: 'Open a session on the new device',
     description:
       'Send a fresh X25519 public key; keep its private half on the device. ' +
-      'Show a QR with the returned `id` and that key — nothing else, no ' +
+      'Show a QR with the returned `id` and that key: nothing else, no ' +
       'secret and no server URL. The session lives five minutes.',
   })
   @ApiCreatedResponse({ type: EasyRecoverySessionCreatedEntity })
@@ -146,7 +146,7 @@ export class EasyRecoveryController {
       'The right code answers the sealed wallet, once: the session reads ' +
       '`claimed` from then on and no longer holds it. A wrong code is a 422 ' +
       'with `details.attemptsLeft`; the fifth wrong code deletes the session ' +
-      'and answers 410. Before the old device offered, the answer is 409 — ' +
+      'and answers 410. Before the old device offered, the answer is 409: ' +
       'poll for `offered` first. A malformed code is a 400 and costs no attempt.',
   })
   @ApiParam(SESSION_ID_PARAM)

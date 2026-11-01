@@ -21,7 +21,17 @@ export class VirtualAccountsController {
   // The account number is issued by BlindPay.
   @ApiUpstream('BlindPay')
   @RequirePermissions('onramp:write')
-  @ApiOperation({ summary: 'Create a virtual account for a receiver' })
+  @ApiOperation({
+    summary: 'Create a virtual account for a receiver',
+    description:
+      "Opens a virtual account at BlindPay: a bank account in the receiver's " +
+      'name at `banking_partner` whose deposits are converted to `token` and ' +
+      'sent to `blockchain_wallet_id`, a Cosmos Pay wallet id. The account is ' +
+      'mirrored here and the mirrored row is the answer. A receiver or wallet ' +
+      "that is not yours on your key's BlindPay instance is a 404, and the " +
+      'answer is `403 account_disabled` when the receiver, or the receiver ' +
+      'that owns the wallet, has its fiat access disabled.',
+  })
   create(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Param('receiverId') receiverId: string,
@@ -32,7 +42,14 @@ export class VirtualAccountsController {
 
   @Get()
   @RequirePermissions('onramp:read')
-  @ApiOperation({ summary: "List a receiver's virtual accounts" })
+  @ApiOperation({
+    summary: "List a receiver's virtual accounts",
+    description:
+      "Reads this service's mirror only (no BlindPay call), newest first. The " +
+      "receiver must be yours on your key's BlindPay instance, or the answer " +
+      'is 404. Paginated with `take` (default 100, max 100) and `skip`; ' +
+      'answers `{ data, total, take, skip }`.',
+  })
   findAll(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Param('receiverId') receiverId: string,
