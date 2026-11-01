@@ -2,6 +2,11 @@
 
 All notable changes to the Cosmos Pay Community Server are documented here.
 Generated from [Conventional Commits](https://www.conventionalcommits.org) by [git-cliff](https://git-cliff.org).
+## [1.8.2] - 2026-11-01
+
+### Documentation
+- Describe every operation and say who may call it (80a735c)
+
 ## [1.8.1] - 2026-11-01
 
 ### Miscellaneous
