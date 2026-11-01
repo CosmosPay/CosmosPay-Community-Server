@@ -1,4 +1,4 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
   IsIn,
@@ -27,6 +27,10 @@ import {
  *     fresh `reference` key the payment is found by;
  *   - Monad: an EIP-681 URI (`ethereum:<payee>@143?value=...`).
  */
+@ApiSchema({
+  description:
+    'Request to create a `pay` intent: a payment link any wallet can pay on Stellar (SEP-7), Solana (Solana Pay) or Monad (EIP-681).',
+})
 export class CreatePayPaymentIntentDto {
   @ApiPropertyOptional({
     enum: CHAINS,

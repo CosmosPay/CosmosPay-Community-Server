@@ -1,4 +1,4 @@
-import { ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiPropertyOptional, ApiSchema } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
 import {
   IsEnum,
@@ -22,8 +22,16 @@ import { lowercaseHexTxId } from '@/payment-intents/dto/validate-payment-intent.
  * just the status, attach the resulting transaction id, or change the
  * merchant's own `reference` and checkout design.
  */
+@ApiSchema({
+  description: 'Changes to a payment intent: send only the fields that change.',
+})
 export class UpdatePaymentIntentDto {
-  @ApiPropertyOptional({ enum: PaymentIntentStatus })
+  @ApiPropertyOptional({
+    enum: PaymentIntentStatus,
+    description:
+      'The new status, following the transition graph. `SUCCEEDED` needs a ' +
+      '`txHash` and is checked on-chain like `validate`.',
+  })
   @IsOptional()
   @IsEnum(PaymentIntentStatus)
   status?: PaymentIntentStatus;

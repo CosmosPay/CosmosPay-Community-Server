@@ -1,4 +1,4 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger';
 import { IsOptional, IsString, IsUUID } from 'class-validator';
 import { IsRedirectUrl } from '@/common/validators/is-redirect-url.validator';
 
@@ -8,6 +8,10 @@ import { IsRedirectUrl } from '@/common/validators/is-redirect-url.validator';
  * a `tos_id` query param, which you pass to `POST /v1/kyc/receivers`. A receiver
  * cannot be created without a `tos_id`, so this is the first step of KYC.
  */
+@ApiSchema({
+  description:
+    "Starts BlindPay's hosted terms-of-service acceptance; the customer returns to `redirect_url` with a `tos_id`.",
+})
 export class InitiateTosDto {
   @ApiProperty({
     example: 'https://yourapp.com/kyc/return',

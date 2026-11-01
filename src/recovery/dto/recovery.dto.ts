@@ -1,4 +1,4 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
   ArrayMaxSize,
@@ -25,6 +25,10 @@ export class Sep10ChallengeQueryDto {
   account!: string;
 }
 
+@ApiSchema({
+  description:
+    'SEP-10: the signed challenge transaction, exchanged for a token of that account.',
+})
 export class Sep10TokenDto {
   @ApiProperty({ description: 'The challenge, signed by the account.' })
   @IsString()
@@ -32,23 +36,42 @@ export class Sep10TokenDto {
   transaction!: string;
 }
 
+@ApiSchema({
+  description: 'SEP-30: one way to prove an identity (an email address).',
+})
 export class AuthMethodDto {
-  @ApiProperty({ enum: AUTH_METHOD_TYPES })
+  @ApiProperty({
+    enum: AUTH_METHOD_TYPES,
+    description: 'The kind of auth method; `email` is the only one accepted.',
+  })
   @IsIn(AUTH_METHOD_TYPES)
   type!: string;
 
-  @ApiProperty({ example: 'person@example.com' })
+  @ApiProperty({
+    example: 'person@example.com',
+    description: 'The email address that proves this identity.',
+  })
   @IsEmail()
   @MaxLength(254)
   value!: string;
 }
 
+@ApiSchema({
+  description:
+    'SEP-30: one identity that may recover the account, with its role and auth methods.',
+})
 export class IdentityDto {
-  @ApiProperty({ enum: IDENTITY_ROLES })
+  @ApiProperty({
+    enum: IDENTITY_ROLES,
+    description: "The identity's role: `owner`, `sender` or `receiver`.",
+  })
   @IsIn(IDENTITY_ROLES)
   role!: string;
 
-  @ApiProperty({ type: [AuthMethodDto] })
+  @ApiProperty({
+    type: [AuthMethodDto],
+    description: 'How this identity proves itself.',
+  })
   @ValidateNested({ each: true })
   @Type(() => AuthMethodDto)
   @ArrayMinSize(1)
@@ -56,8 +79,14 @@ export class IdentityDto {
   auth_methods!: AuthMethodDto[];
 }
 
+@ApiSchema({
+  description: 'SEP-30: the identities that may recover an account.',
+})
 export class Sep30IdentitiesDto {
-  @ApiProperty({ type: [IdentityDto] })
+  @ApiProperty({
+    type: [IdentityDto],
+    description: "The account's identities.",
+  })
   @ValidateNested({ each: true })
   @Type(() => IdentityDto)
   @ArrayMinSize(1)
@@ -78,6 +107,10 @@ export class Sep30SignParamDto {
   signer!: string;
 }
 
+@ApiSchema({
+  description:
+    'SEP-30: a transaction for this server to co-sign for a recovered account.',
+})
 export class Sep30SignDto {
   @ApiProperty({ description: 'The transaction to co-sign, base64 XDR.' })
   @IsString()
@@ -94,6 +127,9 @@ export class Sep30ListQueryDto {
   after?: string;
 }
 
+@ApiSchema({
+  description: 'Proves an inbox to this recovery server with an OIDC ID token.',
+})
 export class RecoveryIdTokenDto {
   @ApiProperty({
     description:
@@ -105,21 +141,32 @@ export class RecoveryIdTokenDto {
   id_token!: string;
 }
 
+@ApiSchema({
+  description:
+    'Asks this recovery server to email a code that proves an inbox.',
+})
 export class RecoveryEmailStartDto {
-  @ApiProperty({ example: 'person@example.com' })
+  @ApiProperty({
+    example: 'person@example.com',
+    description: 'The inbox to prove.',
+  })
   @IsEmail()
   @MaxLength(254)
   email!: string;
 }
 
+@ApiSchema({ description: 'Answers the code this recovery server emailed.' })
 export class RecoveryEmailVerifyDto {
-  @ApiProperty()
+  @ApiProperty({
+    description:
+      'The `claim_token` from `POST /v1/sep30/identity/email/start` (base64url).',
+  })
   @IsString()
   @MaxLength(128)
   @Matches(BASE64URL, { message: 'claim_token must be base64url' })
   claim_token!: string;
 
-  @ApiProperty({ example: '123456' })
+  @ApiProperty({ example: '123456', description: 'The six digits emailed.' })
   @Matches(/^\d{6}$/, { message: 'code must be six digits' })
   code!: string;
 }
@@ -127,6 +174,10 @@ export class RecoveryEmailVerifyDto {
 /** Standard base64 — how the wallet encodes a half of a backup's recovery key. */
 const BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
 
+@ApiSchema({
+  description:
+    "This server's half of a wallet backup's recovery key, filed under the inbox that may take it back.",
+})
 export class RecoveryShareDto {
   @ApiProperty({
     description:

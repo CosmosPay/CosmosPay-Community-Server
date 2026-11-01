@@ -1,5 +1,5 @@
 import { applyDecorators } from '@nestjs/common';
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
   IsArray,
@@ -52,18 +52,26 @@ const IsIsoDateTime = () =>
 /**
  * Beneficial owner / controlling person for a business (KYB) receiver.
  */
+@ApiSchema({
+  description:
+    'A beneficial owner or controlling person of a business (KYB) receiver, stored with it and sent to BlindPay when the receiver is enabled.',
+})
 export class ReceiverOwnerDto {
-  @ApiPropertyOptional({ example: 'beneficial_owner' })
+  @ApiPropertyOptional({
+    example: 'beneficial_owner',
+    description:
+      "The person's role in the business, as a BlindPay code (for example `beneficial_owner`).",
+  })
   @IsOptional()
   @IsString()
   role?: string;
 
-  @ApiPropertyOptional({ example: 'Jane' })
+  @ApiPropertyOptional({ example: 'Jane', description: "Owner's first name." })
   @IsOptional()
   @IsString()
   first_name?: string;
 
-  @ApiPropertyOptional({ example: 'Doe' })
+  @ApiPropertyOptional({ example: 'Doe', description: "Owner's last name." })
   @IsOptional()
   @IsString()
   last_name?: string;
@@ -78,7 +86,10 @@ export class ReceiverOwnerDto {
   @IsIsoDateTime()
   date_of_birth?: string;
 
-  @ApiPropertyOptional({ example: '123-45-6789' })
+  @ApiPropertyOptional({
+    example: '123-45-6789',
+    description: "Owner's tax id.",
+  })
   @IsOptional()
   @IsString()
   tax_id?: string;
@@ -92,27 +103,39 @@ export class ReceiverOwnerDto {
   @IsCountryCode()
   country?: string;
 
-  @ApiPropertyOptional({ example: '123 Main St' })
+  @ApiPropertyOptional({
+    example: '123 Main St',
+    description: "First line of the owner's address.",
+  })
   @IsOptional()
   @IsString()
   address_line_1?: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ description: "Second line of the owner's address." })
   @IsOptional()
   @IsString()
   address_line_2?: string;
 
-  @ApiPropertyOptional({ example: 'New York' })
+  @ApiPropertyOptional({
+    example: 'New York',
+    description: "City of the owner's address.",
+  })
   @IsOptional()
   @IsString()
   city?: string;
 
-  @ApiPropertyOptional({ example: 'NY' })
+  @ApiPropertyOptional({
+    example: 'NY',
+    description: "State, province or region of the owner's address.",
+  })
   @IsOptional()
   @IsString()
   state_province_region?: string;
 
-  @ApiPropertyOptional({ example: '10001' })
+  @ApiPropertyOptional({
+    example: '10001',
+    description: "Postal code of the owner's address.",
+  })
   @IsOptional()
   @IsString()
   postal_code?: string;
@@ -129,7 +152,10 @@ export class ReceiverOwnerDto {
   @Max(100)
   ownership_percentage?: number;
 
-  @ApiPropertyOptional({ example: 'Director' })
+  @ApiPropertyOptional({
+    example: 'Director',
+    description: "Owner's title in the business (for example `Director`).",
+  })
   @IsOptional()
   @IsString()
   title?: string;
@@ -143,7 +169,11 @@ export class ReceiverOwnerDto {
   @IsCountryCode()
   id_doc_country?: string;
 
-  @ApiPropertyOptional({ example: 'PASSPORT' })
+  @ApiPropertyOptional({
+    example: 'PASSPORT',
+    description:
+      "Type of the owner's identity document (for example `PASSPORT`).",
+  })
   @IsOptional()
   @IsString()
   id_doc_type?: string;
@@ -153,12 +183,19 @@ export class ReceiverOwnerDto {
   @IsString()
   id_doc_front_file?: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({
+    description:
+      "Back of the owner's identity document: a `file_url` from `POST /v1/kyc/upload`.",
+  })
   @IsOptional()
   @IsString()
   id_doc_back_file?: string;
 
-  @ApiPropertyOptional({ example: 'UTILITY_BILL' })
+  @ApiPropertyOptional({
+    example: 'UTILITY_BILL',
+    description:
+      "Type of the owner's proof-of-address document (for example `UTILITY_BILL`).",
+  })
   @IsOptional()
   @IsString()
   proof_of_address_doc_type?: string;
@@ -180,16 +217,33 @@ export class ReceiverOwnerDto {
  * below covers individual standard/enhanced KYC and business KYB. Document fields
  * (`*_file`) take a `file_url` returned by `POST /v1/kyc/upload`.
  */
+@ApiSchema({
+  description:
+    'A receiver, the person (KYC) or business (KYB) behind onramp and offramp: stored here and created at BlindPay only on enable. With KYC data (`tax_id`, `date_of_birth`, `id_doc_front_file`, `selfie_file`, `legal_name`, `formation_date` or `owners`) it starts in `pending_review`, otherwise in `inactive`.',
+})
 export class CreateReceiverDto {
-  @ApiProperty({ enum: RECEIVER_TYPES, example: 'individual' })
+  @ApiProperty({
+    enum: RECEIVER_TYPES,
+    example: 'individual',
+    description:
+      '`individual` for a person (KYC) or `business` for a company (KYB).',
+  })
   @IsIn(RECEIVER_TYPES)
   type!: ReceiverType;
 
-  @ApiProperty({ enum: KYC_TYPES, example: 'standard' })
+  @ApiProperty({
+    enum: KYC_TYPES,
+    example: 'standard',
+    description:
+      'Depth of compliance verification: `light`, `standard` or `enhanced`.',
+  })
   @IsIn(KYC_TYPES)
   kyc_type!: KycType;
 
-  @ApiProperty({ example: 'jane@acme.com' })
+  @ApiProperty({
+    example: 'jane@acme.com',
+    description: "Receiver's email address, at most 160 characters.",
+  })
   @IsEmail()
   @MaxLength(160)
   email!: string;
@@ -203,12 +257,19 @@ export class CreateReceiverDto {
   country!: string;
 
   // --- Individual ---
-  @ApiPropertyOptional({ example: 'Jane' })
+  @ApiPropertyOptional({
+    example: 'Jane',
+    description:
+      'First name of an individual receiver; with `last_name` it forms the receiver `name`.',
+  })
   @IsOptional()
   @IsString()
   first_name?: string;
 
-  @ApiPropertyOptional({ example: 'Doe' })
+  @ApiPropertyOptional({
+    example: 'Doe',
+    description: 'Last name of an individual receiver.',
+  })
   @IsOptional()
   @IsString()
   last_name?: string;
@@ -223,12 +284,18 @@ export class CreateReceiverDto {
   @IsIsoDateTime()
   date_of_birth?: string;
 
-  @ApiPropertyOptional({ example: '123-45-6789' })
+  @ApiPropertyOptional({
+    example: '123-45-6789',
+    description: "Receiver's tax id.",
+  })
   @IsOptional()
   @IsString()
   tax_id?: string;
 
-  @ApiPropertyOptional({ example: 'Engineer' })
+  @ApiPropertyOptional({
+    example: 'Engineer',
+    description: 'Occupation of an individual receiver.',
+  })
   @IsOptional()
   @IsString()
   occupation?: string;
@@ -242,7 +309,10 @@ export class CreateReceiverDto {
   @IsCountryCode()
   id_doc_country?: string;
 
-  @ApiPropertyOptional({ example: 'PASSPORT' })
+  @ApiPropertyOptional({
+    example: 'PASSPORT',
+    description: 'Type of the identity document (for example `PASSPORT`).',
+  })
   @IsOptional()
   @IsString()
   id_doc_type?: string;
@@ -252,37 +322,59 @@ export class CreateReceiverDto {
   @IsString()
   id_doc_front_file?: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({
+    description:
+      'Back of the identity document: a `file_url` from `POST /v1/kyc/upload`.',
+  })
   @IsOptional()
   @IsString()
   id_doc_back_file?: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({
+    description:
+      'Selfie of the person: a `file_url` from `POST /v1/kyc/upload`.',
+  })
   @IsOptional()
   @IsString()
   selfie_file?: string;
 
-  @ApiPropertyOptional({ example: 'receiving_payments' })
+  @ApiPropertyOptional({
+    example: 'receiving_payments',
+    description:
+      'Purpose of the account, as a BlindPay code (for example `receiving_payments`).',
+  })
   @IsOptional()
   @IsString()
   account_purpose?: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({
+    description:
+      'Free-text account purpose, forwarded to BlindPay with `account_purpose`.',
+  })
   @IsOptional()
   @IsString()
   account_purpose_other?: string;
 
-  @ApiPropertyOptional({ example: 'employment' })
+  @ApiPropertyOptional({
+    example: 'employment',
+    description:
+      'Type of the source-of-funds document, as a BlindPay code (for example `employment`).',
+  })
   @IsOptional()
   @IsString()
   source_of_funds_doc_type?: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({
+    description:
+      'Source-of-funds document: a `file_url` from `POST /v1/kyc/upload`.',
+  })
   @IsOptional()
   @IsString()
   source_of_funds_doc_file?: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({
+    description: "Source of the receiver's wealth, forwarded to BlindPay.",
+  })
   @IsOptional()
   @IsString()
   source_of_wealth?: string;
@@ -295,54 +387,87 @@ export class CreateReceiverDto {
   @IsString()
   sole_proprietor_doc_type?: string;
 
-  @ApiPropertyOptional({ example: 'UTILITY_BILL' })
+  @ApiPropertyOptional({
+    example: 'UTILITY_BILL',
+    description:
+      'Type of the proof-of-address document (for example `UTILITY_BILL`).',
+  })
   @IsOptional()
   @IsString()
   proof_of_address_doc_type?: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({
+    description:
+      'Proof-of-address document: a `file_url` from `POST /v1/kyc/upload`.',
+  })
   @IsOptional()
   @IsString()
   proof_of_address_doc_file?: string;
 
-  @ApiPropertyOptional({ example: 'self' })
+  @ApiPropertyOptional({
+    example: 'self',
+    description:
+      'Relationship to the recipient, as a BlindPay code (for example `self`).',
+  })
   @IsOptional()
   @IsString()
   recipient_relationship?: string;
 
   // --- Enhanced KYC extras ---
-  @ApiPropertyOptional({ example: 'business_transactions' })
+  @ApiPropertyOptional({
+    example: 'business_transactions',
+    description:
+      "Purpose of the receiver's transactions, as a BlindPay code (for example `business_transactions`); an enhanced KYC field.",
+  })
   @IsOptional()
   @IsString()
   purpose_of_transactions?: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({
+    description:
+      'Free-text explanation of `purpose_of_transactions`; an enhanced KYC field.',
+  })
   @IsOptional()
   @IsString()
   purpose_of_transactions_explanation?: string;
 
   // --- Business (KYB) ---
-  @ApiPropertyOptional({ example: 'Acme Inc.' })
+  @ApiPropertyOptional({
+    example: 'Acme Inc.',
+    description:
+      "Legal name of a business receiver; it becomes the receiver's `name`.",
+  })
   @IsOptional()
   @IsString()
   legal_name?: string;
 
-  @ApiPropertyOptional({ example: 'Acme' })
+  @ApiPropertyOptional({
+    example: 'Acme',
+    description: 'Alternate name of a business receiver.',
+  })
   @IsOptional()
   @IsString()
   alternate_name?: string;
 
-  @ApiPropertyOptional({ example: 'cooperative' })
+  @ApiPropertyOptional({
+    example: 'cooperative',
+    description:
+      'Type of business, as a BlindPay code (for example `cooperative`).',
+  })
   @IsOptional()
   @IsString()
   business_type?: string;
 
-  @ApiPropertyOptional({ example: '541511' })
+  @ApiPropertyOptional({
+    example: '541511',
+    description:
+      'Industry code of a business receiver, such as the NAICS code `541511`.',
+  })
   @IsOptional()
   @IsString()
   business_industry?: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ description: 'What a business receiver does.' })
   @IsOptional()
   @IsString()
   business_description?: string;
@@ -357,12 +482,19 @@ export class CreateReceiverDto {
   @IsIsoDateTime()
   formation_date?: string;
 
-  @ApiPropertyOptional({ example: '1000000_4999999' })
+  @ApiPropertyOptional({
+    example: '1000000_4999999',
+    description:
+      'Estimated annual revenue band of a business receiver, as a BlindPay code (for example `1000000_4999999`).',
+  })
   @IsOptional()
   @IsString()
   estimated_annual_revenue?: string;
 
-  @ApiPropertyOptional({ example: false })
+  @ApiPropertyOptional({
+    example: false,
+    description: 'Whether a business receiver is publicly traded.',
+  })
   @IsOptional()
   @IsBoolean()
   publicly_traded?: boolean;
@@ -382,17 +514,27 @@ export class CreateReceiverDto {
   @MaxLength(RECEIVER_WEBSITE_MAX_LENGTH)
   website?: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({
+    description:
+      'Incorporation document of a business receiver: a `file_url` from `POST /v1/kyc/upload`.',
+  })
   @IsOptional()
   @IsString()
   incorporation_doc_file?: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({
+    description:
+      'Proof-of-ownership document of a business receiver: a `file_url` from `POST /v1/kyc/upload`.',
+  })
   @IsOptional()
   @IsString()
   proof_of_ownership_doc_file?: string;
 
-  @ApiPropertyOptional({ type: [ReceiverOwnerDto] })
+  @ApiPropertyOptional({
+    type: [ReceiverOwnerDto],
+    description:
+      'Beneficial owners and controlling persons of a business receiver.',
+  })
   @IsOptional()
   @IsArray()
   @ValidateNested({ each: true })
@@ -400,37 +542,56 @@ export class CreateReceiverDto {
   owners?: ReceiverOwnerDto[];
 
   // --- Shared address / contact / metadata ---
-  @ApiPropertyOptional({ example: '123 Main St' })
+  @ApiPropertyOptional({
+    example: '123 Main St',
+    description: "First line of the receiver's address.",
+  })
   @IsOptional()
   @IsString()
   address_line_1?: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({
+    description: "Second line of the receiver's address.",
+  })
   @IsOptional()
   @IsString()
   address_line_2?: string;
 
-  @ApiPropertyOptional({ example: 'New York' })
+  @ApiPropertyOptional({
+    example: 'New York',
+    description: "City of the receiver's address.",
+  })
   @IsOptional()
   @IsString()
   city?: string;
 
-  @ApiPropertyOptional({ example: 'NY' })
+  @ApiPropertyOptional({
+    example: 'NY',
+    description: "State, province or region of the receiver's address.",
+  })
   @IsOptional()
   @IsString()
   state_province_region?: string;
 
-  @ApiPropertyOptional({ example: '10001' })
+  @ApiPropertyOptional({
+    example: '10001',
+    description: "Postal code of the receiver's address.",
+  })
   @IsOptional()
   @IsString()
   postal_code?: string;
 
-  @ApiPropertyOptional({ example: '+12025550123' })
+  @ApiPropertyOptional({
+    example: '+12025550123',
+    description: "Receiver's phone number with its country code.",
+  })
   @IsOptional()
   @IsString()
   phone_number?: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({
+    description: "Receiver's IP address, forwarded to BlindPay.",
+  })
   @IsOptional()
   @IsString()
   ip_address?: string;
@@ -440,7 +601,10 @@ export class CreateReceiverDto {
   @IsString()
   external_id?: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({
+    description:
+      'URL of a display image for the receiver. With `external_id`, the only field a non-admin key may change once the receiver exists at BlindPay.',
+  })
   @IsOptional()
   @IsString()
   image_url?: string;

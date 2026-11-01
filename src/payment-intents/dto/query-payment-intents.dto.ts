@@ -13,7 +13,10 @@ import { PaymentIntentStatus } from '@generated/prisma/client';
 import { CHAINS, type Chain } from '@/chains/chains.constants';
 
 export class QueryPaymentIntentsDto {
-  @ApiPropertyOptional({ enum: PaymentIntentStatus })
+  @ApiPropertyOptional({
+    enum: PaymentIntentStatus,
+    description: 'Only intents in this status. Omit for every status.',
+  })
   @IsOptional()
   @IsEnum(PaymentIntentStatus)
   status?: PaymentIntentStatus;
@@ -39,7 +42,11 @@ export class QueryPaymentIntentsDto {
   @IsDate()
   createdFrom?: Date;
 
-  @ApiPropertyOptional({ default: 20, maximum: 100 })
+  @ApiPropertyOptional({
+    default: 20,
+    maximum: 100,
+    description: 'Page size: how many items to return (1 to 100).',
+  })
   @IsOptional()
   @Type(() => Number)
   @IsInt()
@@ -47,7 +54,10 @@ export class QueryPaymentIntentsDto {
   @Max(100)
   take: number = 20;
 
-  @ApiPropertyOptional({ default: 0 })
+  @ApiPropertyOptional({
+    default: 0,
+    description: 'How many items to skip before this page (offset).',
+  })
   @IsOptional()
   @Type(() => Number)
   @IsInt()

@@ -1,4 +1,4 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger';
 import {
   ArrayUnique,
   IsArray,
@@ -10,6 +10,10 @@ import {
 } from 'class-validator';
 import { WebhookEventType } from '@generated/prisma/client';
 
+@ApiSchema({
+  description:
+    'A webhook endpoint to register: an https URL that receives signed event notifications.',
+})
 export class CreateWebhookEndpointDto {
   @ApiProperty({
     description: 'HTTPS URL that will receive POSTed event notifications.',
@@ -22,7 +26,10 @@ export class CreateWebhookEndpointDto {
   })
   url!: string;
 
-  @ApiPropertyOptional({ example: 'Production payment events' })
+  @ApiPropertyOptional({
+    example: 'Production payment events',
+    description: 'Free-text label for the endpoint (at most 255 characters).',
+  })
   @IsOptional()
   @IsString()
   @MaxLength(255)

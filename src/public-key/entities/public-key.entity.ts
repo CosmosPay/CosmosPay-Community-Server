@@ -1,7 +1,15 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiSchema } from '@nestjs/swagger';
 
+@ApiSchema({
+  description:
+    'The shared public API key of one environment, for wallets without an account of their own.',
+})
 export class PublicKeyEntity {
-  @ApiProperty({ enum: ['dev', 'prod'], example: 'dev' })
+  @ApiProperty({
+    enum: ['dev', 'prod'],
+    example: 'dev',
+    description: '`dev` for the testnet key, `prod` for the mainnet one.',
+  })
   env!: 'dev' | 'prod';
 
   @ApiProperty({

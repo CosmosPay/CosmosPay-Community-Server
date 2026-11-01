@@ -1,10 +1,16 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiSchema } from '@nestjs/swagger';
 import { IsString, MaxLength, MinLength } from 'class-validator';
 
 /**
  * The transfer's transaction, signed. It must be the one the service built
  * (its hash is checked) and carry a signature before anything is relayed.
  */
+@ApiSchema({
+  description:
+    "A USDT0 transfer's transaction, signed, to relay to Stellar mainnet. It " +
+    'must be the transaction the service built (its hash is checked) and carry ' +
+    'a signature.',
+})
 export class SubmitUsdt0TransferDto {
   @ApiProperty({
     description: 'The signed transaction envelope (base64 XDR).',

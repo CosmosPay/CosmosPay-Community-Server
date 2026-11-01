@@ -1,4 +1,4 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
   ArrayMaxSize,
@@ -14,26 +14,42 @@ import { IsAnyChainAddress } from '@/common/validators/is-any-chain-address.vali
 import { MAX_CUSTOMER_WALLETS } from '@/customers/customers.constants';
 import { CustomerWalletDto } from '@/customers/dto/customer-wallet.dto';
 
+@ApiSchema({
+  description:
+    "A customer to create: a merchant-managed record whose wallets' payments count toward it.",
+})
 export class CreateCustomerDto {
-  @ApiProperty({ example: 'Acme Inc.' })
+  @ApiProperty({
+    example: 'Acme Inc.',
+    description: 'Customer name (1 to 120 characters).',
+  })
   @IsString()
   @MinLength(1)
   @MaxLength(120)
   name!: string;
 
-  @ApiPropertyOptional({ example: 'Acme (billing)' })
+  @ApiPropertyOptional({
+    example: 'Acme (billing)',
+    description: 'An alternative display name (at most 120 characters).',
+  })
   @IsOptional()
   @IsString()
   @MaxLength(120)
   alias?: string;
 
-  @ApiPropertyOptional({ example: 'VIP customer, net-30 terms.' })
+  @ApiPropertyOptional({
+    example: 'VIP customer, net-30 terms.',
+    description: 'Free-text note about the customer (at most 500 characters).',
+  })
   @IsOptional()
   @IsString()
   @MaxLength(500)
   note?: string;
 
-  @ApiPropertyOptional({ example: 'billing@acme.com' })
+  @ApiPropertyOptional({
+    example: 'billing@acme.com',
+    description: 'Contact email address (at most 160 characters).',
+  })
   @IsOptional()
   @IsEmail()
   @MaxLength(160)
@@ -66,7 +82,11 @@ export class CreateCustomerDto {
   @Type(() => CustomerWalletDto)
   wallets?: CustomerWalletDto[];
 
-  @ApiPropertyOptional({ example: 'cust_001' })
+  @ApiPropertyOptional({
+    example: 'cust_001',
+    description:
+      'Your own reference for the customer (at most 120 characters).',
+  })
   @IsOptional()
   @IsString()
   @MaxLength(120)

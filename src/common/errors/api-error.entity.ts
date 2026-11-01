@@ -1,6 +1,7 @@
 import {
   ApiProperty,
   ApiPropertyOptional,
+  ApiSchema,
   getSchemaPath,
 } from '@nestjs/swagger';
 import { ApiErrorCode } from '@/common/errors/api-error';
@@ -24,6 +25,11 @@ import { ApiErrorCode } from '@/common/errors/api-error';
  * compose a 409 `idempotency_conflict` — which is what every 401, 404 and 500
  * in the published spec then appeared to return.
  */
+@ApiSchema({
+  description:
+    'The body of every failed request. Branch on `code`, never on `message`; ' +
+    'each response lists the codes it can return.',
+})
 export class ApiErrorBodyEntity {
   @ApiProperty({
     description: 'Always the HTTP status of the response itself.',

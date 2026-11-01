@@ -1,4 +1,4 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
   ArrayMaxSize,
@@ -33,6 +33,10 @@ export const ACTIVITY_LEVELS = ['debug', 'info', 'warn', 'error'];
  * `source` are closed, because the dashboard filters on them and a typo there
  * would make an event invisible rather than merely unfamiliar.
  */
+@ApiSchema({
+  description:
+    'One client event to report. `type` and `category` are free-form names; `source` and `level` are closed lists.',
+})
 export class ActivityEventDto {
   @ApiProperty({
     description:
@@ -59,12 +63,20 @@ export class ActivityEventDto {
   @MaxLength(64)
   eventId?: string;
 
-  @ApiPropertyOptional({ enum: ACTIVITY_SOURCES, default: 'sdk' })
+  @ApiPropertyOptional({
+    enum: ACTIVITY_SOURCES,
+    default: 'sdk',
+    description: 'Which client reports the event.',
+  })
   @IsOptional()
   @IsIn(ACTIVITY_SOURCES)
   source?: string;
 
-  @ApiPropertyOptional({ enum: ACTIVITY_LEVELS, default: 'info' })
+  @ApiPropertyOptional({
+    enum: ACTIVITY_LEVELS,
+    default: 'info',
+    description: 'Severity of the event, from `debug` up to `error`.',
+  })
   @IsOptional()
   @IsIn(ACTIVITY_LEVELS)
   level?: string;
@@ -109,7 +121,10 @@ export class ActivityEventDto {
   @MaxLength(64)
   distinctId?: string;
 
-  @ApiPropertyOptional({ example: '1.5.0' })
+  @ApiPropertyOptional({
+    description: 'Version of the app reporting the event.',
+    example: '1.5.0',
+  })
   @IsOptional()
   @IsString()
   @MaxLength(40)
@@ -124,7 +139,10 @@ export class ActivityEventDto {
   @MaxLength(40)
   platform?: string;
 
-  @ApiPropertyOptional({ example: 'testnet' })
+  @ApiPropertyOptional({
+    description: 'Network the event happened on, when it had one.',
+    example: 'testnet',
+  })
   @IsOptional()
   @IsString()
   @MaxLength(40)
@@ -165,6 +183,9 @@ export class ActivityEventDto {
   occurredAt?: string;
 }
 
+@ApiSchema({
+  description: 'A batch of client events to record under the calling consumer.',
+})
 export class IngestActivityDto {
   @ApiProperty({
     type: [ActivityEventDto],

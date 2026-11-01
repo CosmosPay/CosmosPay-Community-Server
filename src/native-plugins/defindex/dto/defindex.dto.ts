@@ -12,7 +12,7 @@ import {
   MinLength,
   ValidateBy,
 } from 'class-validator';
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger';
 import { StrKey } from '@stellar/stellar-sdk';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import {
@@ -63,17 +63,25 @@ const IsStellarContract = () =>
   });
 
 export class DefindexVaultParamsDto {
-  @ApiProperty()
+  @ApiProperty({ description: "The vault's contract address (C...)." })
   @IsStellarContract()
   vault!: string;
 }
 
 export class DefindexBalanceQueryDto {
-  @ApiProperty()
+  @ApiProperty({
+    description:
+      'The Stellar account (G...) whose shares and their underlying value are read.',
+  })
   @IsStellarAddress()
   account!: string;
 }
 
+@ApiSchema({
+  description:
+    'Request to build an unsigned deposit into a DeFindex vault for `caller`, ' +
+    'to sign unchanged and send to `POST /v1/defindex/submit`.',
+})
 export class DefindexDepositDto {
   @ApiProperty({
     type: [String],
@@ -88,16 +96,30 @@ export class DefindexDepositDto {
   @IsDefindexAmount(true)
   amounts!: string[];
 
-  @ApiProperty()
+  @ApiProperty({
+    description:
+      'The Stellar account (G...) that deposits: the source of the built ' +
+      'transaction, and the account that signs it.',
+  })
   @IsStellarAddress()
   caller!: string;
 
-  @ApiPropertyOptional({ default: true })
+  @ApiPropertyOptional({
+    default: true,
+    description:
+      "Forwarded to DeFindex as the `invest` argument of the vault's `deposit` call.",
+  })
   @IsOptional()
   @IsBoolean()
   invest?: boolean;
 
-  @ApiPropertyOptional({ default: 100, minimum: 0, maximum: 10000 })
+  @ApiPropertyOptional({
+    default: 100,
+    minimum: 0,
+    maximum: 10000,
+    description:
+      "Slippage tolerance in basis points (100 = 1%): how far below `amounts` the deposit's minimum amounts may be.",
+  })
   @IsOptional()
   @IsInt()
   @Min(0)
@@ -105,6 +127,12 @@ export class DefindexDepositDto {
   slippageBps?: number;
 }
 
+@ApiSchema({
+  description:
+    'Request to build an unsigned withdrawal from a DeFindex vault that burns ' +
+    "`caller`'s shares for the vault's underlying assets, to sign unchanged and " +
+    'send to `POST /v1/defindex/submit`.',
+})
 export class DefindexWithdrawDto {
   @ApiProperty({
     example: '1000000',
@@ -113,11 +141,21 @@ export class DefindexWithdrawDto {
   @IsDefindexAmount()
   shares!: string;
 
-  @ApiProperty()
+  @ApiProperty({
+    description:
+      'The Stellar account (G...) whose shares are burned: the source of the ' +
+      'built transaction, and the account that signs it.',
+  })
   @IsStellarAddress()
   caller!: string;
 
-  @ApiPropertyOptional({ default: 100, minimum: 0, maximum: 10000 })
+  @ApiPropertyOptional({
+    default: 100,
+    minimum: 0,
+    maximum: 10000,
+    description:
+      "Slippage tolerance in basis points (100 = 1%), passed to DeFindex for the withdrawal's minimum outputs.",
+  })
   @IsOptional()
   @IsInt()
   @Min(0)
@@ -125,6 +163,11 @@ export class DefindexWithdrawDto {
   slippageBps?: number;
 }
 
+@ApiSchema({
+  description:
+    'A signed DeFindex transaction to relay: one that a deposit or withdraw ' +
+    'build on this service returned to the same API key.',
+})
 export class DefindexSubmitDto {
   @ApiProperty({
     description:

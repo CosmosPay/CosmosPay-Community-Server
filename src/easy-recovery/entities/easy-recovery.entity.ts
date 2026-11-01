@@ -1,4 +1,4 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiSchema } from '@nestjs/swagger';
 import { EASY_RECOVERY_WIRE_STATUS } from '@/easy-recovery/easy-recovery-core';
 
 /*
@@ -7,6 +7,10 @@ import { EASY_RECOVERY_WIRE_STATUS } from '@/easy-recovery/easy-recovery-core';
  * right code carries the ciphertext.
  */
 
+@ApiSchema({
+  description:
+    'A new easy-recovery session: its id, for the QR, and when it expires.',
+})
 export class EasyRecoverySessionCreatedEntity {
   @ApiProperty({
     description:
@@ -23,6 +27,9 @@ export class EasyRecoverySessionCreatedEntity {
   expiresAt!: string;
 }
 
+@ApiSchema({
+  description: 'Where an easy-recovery session stands, polled by both devices.',
+})
 export class EasyRecoverySessionStatusEntity {
   @ApiProperty({
     enum: Object.values(EASY_RECOVERY_WIRE_STATUS),
@@ -41,11 +48,18 @@ export class EasyRecoverySessionStatusEntity {
   expiresAt!: string;
 }
 
+@ApiSchema({
+  description:
+    "Confirmation that the old device's sealed wallet was stored for the session.",
+})
 export class EasyRecoveryOfferedEntity {
-  @ApiProperty({ enum: ['offered'] })
+  @ApiProperty({ enum: ['offered'], description: 'Always `offered`.' })
   status!: string;
 }
 
+@ApiSchema({
+  description: 'The sealed wallet, handed out once to the right code.',
+})
 export class EasyRecoveryClaimedEntity {
   @ApiProperty({
     description:
