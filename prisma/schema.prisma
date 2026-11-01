@@ -36,6 +36,9 @@ model Consumer {
   zkPayments       ZkPayment[]
   usdt0Transfers   Usdt0Transfer[]
 
+  // DeFindex vault transactions built for this consumer (native plugin `defindex`).
+  defindexTransactions DefindexTransaction[]
+
   // BlindPay (onramp/offramp/KYC) resources mirrored from the provider.
   blindpayReceivers BlindpayReceiver[]
   payins            Payin[]
@@ -2228,4 +2231,65 @@ model Usdt0Transfer {
   // Listing endpoint: filter by consumer, order createdAt desc.
   @@index([consumerId, createdAt])
   @@map("usdt0_transfer")
+}
+
+// ---------------------------------------------------------------------------
+// DeFindex vault transactions (native plugin `defindex`). DeFindex builds a
+// deposit or a share withdrawal; this service keeps what it handed out, and
+// `POST /v1/defindex/submit` relays a signed transaction only when it hashes to
+// one of these rows: built for the same consumer, on the same network, not yet
+// expired. Relayed once: DeFindex's answer is kept in `result`, and every later
+// submit of that transaction is answered from it without calling DeFindex.
+// ---------------------------------------------------------------------------
+enum DefindexTransactionStatus {
+  BUILT // handed out unsigned, waiting for the caller's signature
+  SUBMITTING // a submit claimed it and is waiting for DeFindex's answer
+  SUBMITTED // DeFindex answered; `result` is that answer, served to every replay
+}
+
+enum DefindexOperationKind {
+  DEPOSIT
+  WITHDRAW
+}
+
+model DefindexTransaction {
+  id         String   @id @default(cuid())
+  consumerId String
+  consumer   Consumer @relation(fields: [consumerId], references: [id], onDelete: Cascade)
+
+  // `public` or `testnet`, from the API key that built it (`resolveNetwork`). The
+  // hash already commits to the network passphrase; the column is what a submit
+  // filters by, so a key of the other network never reaches the row.
+  network String
+  kind    DefindexOperationKind
+  status  DefindexTransactionStatus @default(BUILT)
+
+  // The vault contract (C...) and the account that signs and pays (G...): the
+  // envelope's source, checked at build to be the request's `caller`.
+  vault  String
+  caller String
+
+  // The unsigned envelope DeFindex built, and its transaction hash under the
+  // network passphrase, lowercase hex. Signing does not change the hash, so a
+  // signed copy is this row exactly when it hashes to `txHash`.
+  xdr    String
+  txHash String
+
+  // When the transaction stops being submittable: its own `maxTime`, capped at
+  // `DEFINDEX_BUILD_TTL_MS` after the build.
+  expiresAt   DateTime
+  // When the submit holding SUBMITTING took it; a claim older than the DeFindex
+  // timeout plus `DEFINDEX_SUBMIT_LEASE_MARGIN_MS` is treated as abandoned.
+  claimedAt   DateTime?
+  submittedAt DateTime?
+  // DeFindex's answer to the submit (`txHash`, `success`, `ledger`, ...), verbatim.
+  result      Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // A submit looks the row up by consumer and hash. One consumer cannot hold the
+  // same transaction twice; two consumers building the same bytes each get a row.
+  @@unique([consumerId, txHash])
+  @@map("defindex_transaction")
 }

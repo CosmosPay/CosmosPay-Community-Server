@@ -1,127 +1,105 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import DefindexSDK, { SupportedNetworks } from '@defindex/sdk';
+import type { VaultTransactionResponse } from '@defindex/sdk';
 import { AppConfig } from '@/config/configuration';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import { resolveNetwork } from '@/common/stellar-network';
-import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
+import { DefindexClient } from '@/native-plugins/defindex/defindex.client';
+import { DEFINDEX_DEFAULT_SLIPPAGE_BPS } from '@/native-plugins/defindex/defindex.constants';
+import { DefindexTransactionsService } from '@/native-plugins/defindex/defindex-transactions.service';
 import {
   DefindexDepositDto,
-  DefindexSubmitDto,
   DefindexWithdrawDto,
   defindexAmount,
 } from '@/native-plugins/defindex/dto/defindex.dto';
 
+/**
+ * DeFindex vaults on the network of the caller's key: reads passed through,
+ * and builds whose envelope is recorded before it is handed out, so the
+ * submit relays only what was built here (`DefindexTransactionsService`).
+ */
 @Injectable()
 export class DefindexService {
-  constructor(private readonly config: ConfigService<AppConfig, true>) {}
-
-  private network(consumer: GatewayConsumer): SupportedNetworks {
-    return resolveNetwork(this.config, consumer) === 'public'
-      ? SupportedNetworks.MAINNET
-      : SupportedNetworks.TESTNET;
-  }
-
-  private sdk(): DefindexSDK {
-    const cfg = this.config.get('defindex', { infer: true });
-    if (!cfg.apiKey) {
-      throw ApiError.unavailable(
-        ApiErrorCode.Misconfigured,
-        'DeFindex is not configured',
-      );
-    }
-    return new DefindexSDK({
-      apiKey: cfg.apiKey,
-      baseUrl: cfg.baseUrl,
-      timeout: cfg.timeoutMs,
-    });
-  }
-
-  private async call<T>(work: () => Promise<T>): Promise<T> {
-    try {
-      return await work();
-    } catch (error) {
-      if (error instanceof ApiError) throw error;
-      throw ApiError.badGateway(
-        ApiErrorCode.ProviderError,
-        error instanceof Error ? error.message : 'DeFindex request failed',
-      );
-    }
-  }
+  constructor(
+    private readonly config: ConfigService<AppConfig, true>,
+    private readonly client: DefindexClient,
+    private readonly transactions: DefindexTransactionsService,
+  ) {}
 
   discover(consumer: GatewayConsumer) {
-    const sdk = this.sdk() as DefindexSDK & {
-      discoverVaults?: (network: SupportedNetworks) => Promise<unknown>;
-    };
-    if (typeof sdk.discoverVaults !== 'function') {
-      return this.direct('/vault/discover', consumer);
-    }
-    return this.call(() => sdk.discoverVaults!(this.network(consumer)));
+    return this.client.discoverVaults(resolveNetwork(this.config, consumer));
   }
 
   info(consumer: GatewayConsumer, vault: string) {
-    return this.call(() =>
-      this.sdk().getVaultInfo(vault, this.network(consumer)),
-    );
+    return this.client.vaultInfo(resolveNetwork(this.config, consumer), vault);
   }
 
   balance(consumer: GatewayConsumer, vault: string, account: string) {
-    return this.call(() =>
-      this.sdk().getVaultBalance(vault, account, this.network(consumer)),
+    return this.client.vaultBalance(
+      resolveNetwork(this.config, consumer),
+      vault,
+      account,
     );
   }
 
-  deposit(consumer: GatewayConsumer, vault: string, dto: DefindexDepositDto) {
-    return this.call(() =>
-      this.sdk().depositToVault(
-        vault,
-        {
-          caller: dto.caller,
-          amounts: dto.amounts.map(defindexAmount),
-          invest: dto.invest ?? true,
-          slippageBps: dto.slippageBps ?? 100,
-        },
-        this.network(consumer),
-      ),
-    );
-  }
-
-  withdraw(consumer: GatewayConsumer, vault: string, dto: DefindexWithdrawDto) {
-    return this.call(() =>
-      this.sdk().withdrawShares(
-        vault,
-        {
-          caller: dto.caller,
-          shares: defindexAmount(dto.shares),
-          slippageBps: dto.slippageBps ?? 100,
-        },
-        this.network(consumer),
-      ),
-    );
-  }
-
-  submit(consumer: GatewayConsumer, dto: DefindexSubmitDto) {
-    return this.call(() =>
-      this.sdk().sendTransaction(dto.xdr, this.network(consumer)),
-    );
-  }
-
-  private async direct(
-    path: string,
+  async deposit(
     consumer: GatewayConsumer,
-  ): Promise<unknown> {
-    const cfg = this.config.get('defindex', { infer: true });
-    return this.call(async () => {
-      const response = await fetch(
-        `${cfg.baseUrl}${path}?network=${this.network(consumer)}`,
-        {
-          headers: { Authorization: `Bearer ${cfg.apiKey}` },
-          signal: AbortSignal.timeout(cfg.timeoutMs),
-        },
-      );
-      if (!response.ok)
-        throw new Error(`DeFindex responded with ${response.status}`);
-      return (await response.json()) as unknown;
+    vault: string,
+    dto: DefindexDepositDto,
+  ): Promise<VaultTransactionResponse> {
+    const network = resolveNetwork(this.config, consumer);
+    // Converted before DeFindex is called: an amount the SDK's numbers cannot
+    // hold is the caller's 400, never a provider error.
+    const amounts = dto.amounts.map(defindexAmount);
+    const invest = dto.invest ?? true;
+    const slippageBps = dto.slippageBps ?? DEFINDEX_DEFAULT_SLIPPAGE_BPS;
+    const built = await this.client.deposit(network, vault, {
+      caller: dto.caller,
+      amounts,
+      invest,
+      slippageBps,
     });
+    await this.transactions.record(
+      consumer,
+      network,
+      {
+        kind: 'deposit',
+        vault,
+        caller: dto.caller,
+        amounts: dto.amounts.map((amount) => BigInt(amount)),
+        invest,
+        slippageBps,
+      },
+      built,
+    );
+    return built;
+  }
+
+  async withdraw(
+    consumer: GatewayConsumer,
+    vault: string,
+    dto: DefindexWithdrawDto,
+  ): Promise<VaultTransactionResponse> {
+    const network = resolveNetwork(this.config, consumer);
+    const shares = defindexAmount(dto.shares);
+    const slippageBps = dto.slippageBps ?? DEFINDEX_DEFAULT_SLIPPAGE_BPS;
+    const built = await this.client.withdrawShares(network, vault, {
+      caller: dto.caller,
+      shares,
+      slippageBps,
+    });
+    await this.transactions.record(
+      consumer,
+      network,
+      {
+        kind: 'withdraw',
+        vault,
+        caller: dto.caller,
+        shares: BigInt(dto.shares),
+        slippageBps,
+      },
+      built,
+    );
+    return built;
   }
 }

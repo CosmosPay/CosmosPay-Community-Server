@@ -6,17 +6,50 @@ import {
   IsInt,
   IsOptional,
   IsString,
-  Matches,
   Max,
+  MaxLength,
   Min,
+  MinLength,
   ValidateBy,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { StrKey } from '@stellar/stellar-sdk';
-import { DEFINDEX_MAX_AMOUNT } from '@/native-plugins/defindex/defindex.constants';
+import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
+import {
+  DEFINDEX_MAX_AMOUNT,
+  DEFINDEX_MAX_VAULT_ASSETS,
+} from '@/native-plugins/defindex/defindex.constants';
 import { IsStellarAddress } from '@/common/validators/is-stellar-address.validator';
 
 const UINT_RE = /^(0|[1-9]\d*)$/;
+
+/** Whether `value` is a decimal integer string DeFindex can take exactly. */
+function isDefindexAmount(value: unknown): boolean {
+  return (
+    typeof value === 'string' &&
+    UINT_RE.test(value) &&
+    BigInt(value) <= DEFINDEX_MAX_AMOUNT
+  );
+}
+
+/**
+ * An amount in the vault asset's minor units: a decimal integer no larger than
+ * {@link DEFINDEX_MAX_AMOUNT}. Checked by the validation pipe, so an oversized
+ * amount is a `400 validation_failed` and DeFindex is never called with it.
+ */
+const IsDefindexAmount = (each = false) =>
+  ValidateBy(
+    {
+      name: 'isDefindexAmount',
+      validator: {
+        validate: (value: unknown) => isDefindexAmount(value),
+        defaultMessage: (args) =>
+          `${args?.property ?? 'amount'} must ${each ? 'each ' : ''}be a ` +
+          `non-negative integer string no larger than ${DEFINDEX_MAX_AMOUNT}`,
+      },
+    },
+    { each },
+  );
 
 const IsStellarContract = () =>
   ValidateBy({
@@ -42,11 +75,17 @@ export class DefindexBalanceQueryDto {
 }
 
 export class DefindexDepositDto {
-  @ApiProperty({ type: [String], example: ['10000000'] })
+  @ApiProperty({
+    type: [String],
+    example: ['10000000'],
+    description:
+      "One per vault asset, in the asset's minor units: non-negative integer " +
+      `strings no larger than ${DEFINDEX_MAX_AMOUNT}.`,
+  })
   @IsArray()
   @ArrayMinSize(1)
-  @ArrayMaxSize(16)
-  @Matches(UINT_RE, { each: true })
+  @ArrayMaxSize(DEFINDEX_MAX_VAULT_ASSETS)
+  @IsDefindexAmount(true)
   amounts!: string[];
 
   @ApiProperty()
@@ -67,8 +106,11 @@ export class DefindexDepositDto {
 }
 
 export class DefindexWithdrawDto {
-  @ApiProperty({ example: '1000000' })
-  @Matches(UINT_RE)
+  @ApiProperty({
+    example: '1000000',
+    description: `Vault shares to burn: a non-negative integer string no larger than ${DEFINDEX_MAX_AMOUNT}.`,
+  })
+  @IsDefindexAmount()
   shares!: string;
 
   @ApiProperty()
@@ -84,21 +126,29 @@ export class DefindexWithdrawDto {
 }
 
 export class DefindexSubmitDto {
-  @ApiProperty()
+  @ApiProperty({
+    description:
+      'The transaction a DeFindex build on this service returned, signed by ' +
+      '`caller` (base64 envelope XDR).',
+  })
   @IsString()
+  @MinLength(1)
+  @MaxLength(100_000)
   xdr!: string;
 }
 
+/**
+ * The SDK's number for a validated amount string. The DTOs already refuse an
+ * amount past {@link DEFINDEX_MAX_AMOUNT}; this is the same rule at the call,
+ * as a 400 rather than a provider error, so a caller that skips the pipe still
+ * never reaches DeFindex with a rounded number.
+ */
 export function defindexAmount(value: string): number {
-  const amount = Number(value);
-  if (
-    !Number.isSafeInteger(amount) ||
-    amount < 0 ||
-    amount > DEFINDEX_MAX_AMOUNT
-  ) {
-    throw new Error(
-      'Amount exceeds the safe integer range accepted by the DeFindex SDK',
+  if (!isDefindexAmount(value)) {
+    throw ApiError.badRequest(
+      ApiErrorCode.InvalidAmount,
+      `Amount ${value} is not an integer DeFindex can take exactly (at most ${DEFINDEX_MAX_AMOUNT})`,
     );
   }
-  return amount;
+  return Number(value);
 }

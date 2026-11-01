@@ -263,12 +263,12 @@ Konsolen-Backend erreicht sie. Pfade verwenden die OpenAPI-Form `{param}`.
 | GET | `/v1/liquidity-pools/positions` | eines von `liquidity:read`, `swaps:read` | ✓ |
 | POST | `/v1/liquidity-pools/withdraw` | eines von `liquidity:write`, `swaps:write` | ✓ |
 | GET | `/v1/liquidity-pools/{poolId}` | eines von `liquidity:read`, `swaps:read` | ✓ |
-| GET | `/v1/defindex/vaults` | eines von `liquidity:read`, `swaps:read` | ✓ |
-| GET | `/v1/defindex/vaults/{vault}` | eines von `liquidity:read`, `swaps:read` | ✓ |
-| GET | `/v1/defindex/vaults/{vault}/balance` | eines von `liquidity:read`, `swaps:read` | ✓ |
-| POST | `/v1/defindex/vaults/{vault}/deposit` | eines von `liquidity:write`, `swaps:write` | ✓ |
-| POST | `/v1/defindex/vaults/{vault}/withdraw` | eines von `liquidity:write`, `swaps:write` | ✓ |
-| POST | `/v1/defindex/submit` | eines von `liquidity:write`, `swaps:write` | ✓ |
+| GET | `/v1/defindex/vaults` | eines von `liquidity:read`, `swaps:read` |  |
+| GET | `/v1/defindex/vaults/{vault}` | eines von `liquidity:read`, `swaps:read` |  |
+| GET | `/v1/defindex/vaults/{vault}/balance` | eines von `liquidity:read`, `swaps:read` |  |
+| POST | `/v1/defindex/vaults/{vault}/deposit` | eines von `liquidity:write`, `swaps:write` |  |
+| POST | `/v1/defindex/vaults/{vault}/withdraw` | eines von `liquidity:write`, `swaps:write` |  |
+| POST | `/v1/defindex/submit` | eines von `liquidity:write`, `swaps:write` |  |
 | GET | `/v1/logs` | `payments:read` |  |
 | GET | `/v1/logs/webhooks` | `webhooks:read` |  |
 | GET | `/v1/offramp/payouts` | `offramp:read` |  |
@@ -1116,7 +1116,7 @@ Abgewiesen: `GET /v1/swaps`, `GET /v1/cross-chain-swaps`, `GET /v1/usdt0/transfe
 `GET /v1/liquidity-pools/operations{,/:id}`, `GET /v1/activity/events`,
 `GET /v1/activity/summary`, jeder Lesezugriff auf Payment Intents, jede Inhaber-Route
 für Aliase (Beanspruchen, Auflisten, Hinzufügen oder Entfernen einer Adresse, Freigeben,
-Wiederherstellung) sowie alles unter `/v1/kyc`, `/v1/onramp`, `/v1/offramp` und
+Wiederherstellung) sowie alles unter `/v1/kyc`, `/v1/onramp`, `/v1/offramp`, `/v1/defindex` und
 `/v1/webhooks`. Eine Wallet ohne Konto liest ihre Historie stattdessen aus Horizon
 und verfolgt einen einzelnen Swap oder Transfer über die ID und das Datensatz-Token,
 die ihr übergeben wurden.
@@ -2304,8 +2304,58 @@ eingeschaltet werden.
   isoliertes Plugin darf keinen nativen Slug verwenden.
 - **Der OpenAPI-Vertrag dokumentiert die Routen jedes nativen Plugins**, ob
   eingeschaltet oder nicht: `openapi:generate` schaltet alle ein.
+- **Der Submit von DeFindex leitet nur weiter, was seine eigenen Builds
+  ausgegeben haben.** Ein Einzahlungs- oder Auszahlungs-Build prüft, dass der
+  Umschlag, den DeFindex zurückgibt, genau der angefragte Aufruf ist (Quelle
+  `caller`, ein Aufruf des Vaults mit den angefragten Beträgen oder Anteilen), und
+  speichert ihn in `defindex_transaction` für den Consumer und das Netzwerk des
+  Keys, bis seine Zeitgrenzen schließen (höchstens 15 Minuten).
+  `POST /v1/defindex/submit` hasht den signierten Umschlag und leitet ihn nur
+  weiter, wenn er eine dieser Zeilen ist; vorher leitete er jede signierte
+  Transaktion weiter. Jede wird einmal weitergeleitet: Die Antwort von DeFindex wird
+  gespeichert und jedem späteren Submit zurückgegeben. Keine DeFindex-Route lässt den
+  gemeinsamen öffentlichen Key zu: Der Earn-Bildschirm der Wallet ruft sie mit dem
+  eigenen Key des angemeldeten Kontos auf.
 
 ## Upgrade — Breaking Changes und Deploy-Hinweise
+
+### DeFindex: Submit an die Builds dieses Dienstes gebunden und für den öffentlichen Key gesperrt
+
+- **Migration `20261101120000_defindex_transactions`** legt die Tabelle
+  `defindex_transaction` und die Enums `DefindexTransactionStatus` und
+  `DefindexOperationKind` an; nichts wird umgeschrieben. Führe `migrate deploy`
+  aus, bevor der neue Build Traffic bedient.
+- **`POST /v1/defindex/submit` leitet nur eine signierte Kopie einer Transaktion
+  weiter, die `POST /v1/defindex/vaults/{vault}/deposit` oder `/withdraw` für den
+  Consumer desselben API-Keys in dessen Netzwerk gebaut hat, bevor sie abläuft**
+  (ihre Zeitgrenzen, höchstens 15 Minuten). Alles andere: `404 not_found` (nach dem
+  Build verändert, für einen anderen Key oder ein anderes Netzwerk gebaut oder nie
+  hier gebaut), `400 invalid_state_transition` (abgelaufen), `400 validation_failed`
+  (keine Signatur, ein Fee Bump), `409 operation_in_flight` (dieselbe Transaktion
+  wird gerade eingereicht). Dieselbe Transaktion erneut einzureichen liefert die
+  erste Antwort, ohne DeFindex aufzurufen. Ein Client, der das gebaute XDR
+  unverändert signiert und mit demselben Key einreicht, wie die Wallet es tut,
+  muss nichts ändern.
+- **Ein Build wird abgewiesen (`502 provider_error`, mit Grund geloggt), wenn der
+  Umschlag von DeFindex nicht genau der angefragte Aufruf ist und nichts darüber
+  hinaus:** kein Memo und keine Vorbedingung außer Zeitgrenzen, die innerhalb von 15
+  Minuten schließen, eine Gebühr (Soroban-Ressourcengebühr eingeschlossen) innerhalb
+  von `DEFINDEX_MAX_FEE_STROOPS`, eine Operation, Mindestbeträge der Einzahlung
+  innerhalb des angefragten `slippageBps` und genau ein Autorisierungseintrag, der
+  von `caller`, für genau diesen Aufruf (unter einer Einzahlung nur der Vault, der
+  höchstens die angefragten Beträge von `caller` abzieht).
+- **Der gemeinsame öffentliche Key wird auf jeder `/v1/defindex`-Route abgewiesen**
+  (`403 insufficient_scope`), und sie tragen kein `x-cosmos-public-key` mehr.
+- **Ein zu großer Betrag ist `400 validation_failed`, nicht mehr
+  `502 provider_error`:** `amounts` und `shares` sind Ganzzahl-Strings bis
+  höchstens 9007199254740991, dem größten Wert, den `@defindex/sdk` exakt trägt.
+- **Neue Budgets:** Die beiden Builds teilen sich `defindex:build`, der Submit hat
+  `defindex:submit`, jeweils 20 pro Minute pro Consumer und Client-Adresse
+  (`429 rate_limited`). Ihre DeFindex-Fehler stehen jetzt im Vertrag
+  (`x-cosmos-upstream`: 502, 503).
+- **Neue Variable `DEFINDEX_MAX_FEE_STROOPS`** (Standard `10000000`, 1 XLM, die
+  Obergrenze, die die Wallet bereits durchsetzt): das Höchste, was eine
+  DeFindex-Transaktion ihrem Unterzeichner berechnen darf.
 
 ### Einfache Wiederherstellung: ein neues Modul, eine neue Tabelle und `details` im Fehler-Umschlag
 
@@ -3377,6 +3427,7 @@ passen Sie mindestens `DATABASE_URL` und `APISIX_GATEWAY_SECRET` an.
 | `DEFINDEX_API_KEY` | nein | — | Server-API-Schlüssel von DeFindex. Die Routen existieren nur mit `defindex` in `PLUGINS_ENABLED`; ohne Schlüssel antworten sie mit `503 misconfigured` |
 | `DEFINDEX_BASE_URL` | nein | `https://api.defindex.io` | Basis-URL der DeFindex-API |
 | `DEFINDEX_TIMEOUT_MS` | nein | `30000` | DeFindex-HTTP-Timeout (ms) |
+| `DEFINDEX_MAX_FEE_STROOPS` | nein | `10000000` | Das Höchste, was eine gebaute DeFindex-Transaktion ihrem Unterzeichner berechnen darf, Inklusions- und Soroban-Ressourcengebühr zusammen (Stroops); ein Build darüber wird mit `502 provider_error` abgewiesen |
 | `PLUGINS_ENABLED` | nein | — | Kommagetrennte Slugs der Plugins, die dieses Deployment ausliefert: die isolierten in `plugins/` und die nativen `blindpay` und `defindex`. Leer liefert keines aus; ein nicht aufgeführtes Plugin wird nie geladen |
 | `PLUGINS_SECRET` | wenn ein aktiviertes Plugin geheime Einstellungen hat | — | Versiegelt die geheimen Einstellungen von Plugin-Installationen (mindestens 32 Zeichen). Eine Änderung macht alle gespeicherten Plugin-Geheimnisse unlesbar |
 | `PLUGINS_TRUSTED_KEYS` | nein | — | Signierer, deren Plugins hier neben dem Cosmos-Pay-Support laufen: kommagetrennt `<keyId>:<base64url Ed25519 Public Key>`. Ein von jemand anderem signiertes oder nach dem Signieren verändertes Plugin bricht den Start ab |

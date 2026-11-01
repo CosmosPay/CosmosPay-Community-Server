@@ -1,6 +1,7 @@
 import {
   DEFAULT_ANALYTICS_CACHE_TTL_MS,
   DEFAULT_DEFINDEX_BASE_URL,
+  DEFAULT_DEFINDEX_MAX_FEE_STROOPS,
   DEFAULT_DEFINDEX_TIMEOUT_MS,
   DEFAULT_ENV_FILE,
   DEFAULT_CHAIN_RPC_TIMEOUT_MS,
@@ -430,6 +431,12 @@ export interface AppConfig {
     apiKey: string;
     baseUrl: string;
     timeoutMs: number;
+    /**
+     * The most a built DeFindex transaction may charge its signer, inclusion
+     * fee and Soroban resource fee together, in stroops. A build above it is
+     * refused (`502 provider_error`) instead of recorded for the submit.
+     */
+    maxFeeStroops: number;
   };
   plugins: {
     /**
@@ -1075,6 +1082,11 @@ export default (): AppConfig => ({
     ).replace(/\/+$/, ''),
     timeoutMs: parseInt(
       process.env.DEFINDEX_TIMEOUT_MS ?? String(DEFAULT_DEFINDEX_TIMEOUT_MS),
+      10,
+    ),
+    maxFeeStroops: parseInt(
+      process.env.DEFINDEX_MAX_FEE_STROOPS ??
+        String(DEFAULT_DEFINDEX_MAX_FEE_STROOPS),
       10,
     ),
   },
