@@ -60,8 +60,7 @@ export class CrossChainSwapsController {
   @RequirePermissions('swaps:read')
   @ApiOperation({
     summary:
-      'List the assets NEAR Intents can swap on every network this service ' +
-      'reaches, with an indicative USD price',
+      'List the assets NEAR Intents can swap, with an indicative USD price',
     description:
       'Only what NEAR Intents still trades. A token it tags deprecated is left ' +
       'out, and so is one it lists with no price, because it answers no quote ' +
@@ -84,6 +83,16 @@ export class CrossChainSwapsController {
   @ApiOperation({
     summary:
       'Quote a cross-chain swap through NEAR Intents (price, commission, minimum); persists nothing',
+    description:
+      'A dry NEAR Intents quote for `amount` of `originAsset` on ' +
+      '`originChain` into `destinationAsset` on `destinationChain`: the ' +
+      'expected and minimum output, the plan commission (`fee`, in the ' +
+      'origin asset), any `merchantFee` (its wallet a NEAR account) and a ' +
+      "time estimate. Prices are mainnet's for every key, a `dev` key " +
+      'included. A pair on one chain among Stellar, Solana and Monad is ' +
+      '`validation_failed`: those go through `POST /v1/swaps`. ' +
+      '`slippageBps` defaults to 100 and is capped at 500, unless the ' +
+      'deployment configures other values.',
   })
   @ApiOkResponse({ type: CrossChainQuoteEntity })
   @ApiErrorResponse({
@@ -124,8 +133,18 @@ export class CrossChainSwapsController {
   @RequirePermissions('swaps:write')
   @RateLimit(CROSS_CHAIN_CREATE_RATE_LIMIT)
   @ApiOperation({
-    summary:
-      'Create a cross-chain swap → NEAR Intents deposit address + wallet link where the origin chain has a standard (SEP-7 / Solana Pay / EIP-681 / BIP-21 / TON / CIP-13) + QR',
+    summary: 'Create a cross-chain swap: a NEAR Intents deposit address to pay',
+    description:
+      'Asks NEAR Intents for a live quote with a deposit address for this ' +
+      'swap alone, stores it as `AWAITING_DEPOSIT` and emits ' +
+      '`CROSS_CHAIN_SWAP_CREATED`. The payer sends `amountIn` to ' +
+      '`depositAddress` (with `depositMemo` when set) before `expiresAt`; ' +
+      "`depositUri` is a wallet link in the origin chain's standard (SEP-7, " +
+      'Solana Pay, EIP-681, BIP-21, TON, CIP-13) with a QR, or null where ' +
+      'the chain has none. NEAR Intents pays `recipient` or refunds ' +
+      '`refundTo`, and a Stellar `recipient` must already trust the asset. ' +
+      'Mainnet only; an `Idempotency-Key` (header or body) makes a retry ' +
+      'return the same swap and address.',
   })
   @ApiHeader({
     name: 'Idempotency-Key',
@@ -191,7 +210,15 @@ export class CrossChainSwapsController {
 
   @Get()
   @RequirePermissions('swaps:read')
-  @ApiOperation({ summary: "List the consumer's cross-chain swaps" })
+  @ApiOperation({
+    summary: "List the consumer's cross-chain swaps",
+    description:
+      "Answered from this service's own table, which the observer keeps " +
+      'current from NEAR Intents: newest first, optionally filtered by ' +
+      '`status`. Paginated with `take` (default 20, max 100) and `skip`; ' +
+      'the answer is `{ data, total, take, skip }`. Cross-chain swaps run ' +
+      'on mainnet only, so a `dev` key lists none.',
+  })
   @ApiOkResponse({ type: CrossChainSwapListEntity })
   findAll(
     @CurrentConsumer() consumer: GatewayConsumer,
@@ -246,6 +273,15 @@ export class CrossChainSwapsController {
   @ApiOperation({
     summary:
       'Report the deposit transaction to NEAR Intents so the swap starts without waiting for its indexer',
+    description:
+      '`txHash` must have the shape of a transaction id on the origin ' +
+      'chain; NEAR Intents then reads that chain itself and credits only ' +
+      'what really arrived at `depositAddress`. The swap records ' +
+      '`depositTxHash`, moves to the status NEAR Intents reports and emits ' +
+      'the matching `CROSS_CHAIN_SWAP_*` event when that status changes. ' +
+      'Reporting is optional, since the observer follows the swap either ' +
+      "way; with the shared public key, send the swap's `publicToken` in " +
+      '`X-Record-Token`.',
   })
   @ApiOkResponse({ type: CrossChainSwapEntity })
   @ApiErrorResponse({

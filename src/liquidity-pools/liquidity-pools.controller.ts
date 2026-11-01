@@ -69,6 +69,18 @@ export class LiquidityPoolsController {
   @ApiOperation({
     summary:
       'Build a pool deposit → unsigned XDR + SEP-7 tx URI + QR for the wallet to sign',
+    description:
+      "Builds a `liquidityPoolDeposit` on the key's network for `source` to " +
+      'sign (preceded by the pool-share trustline when the account has none), ' +
+      'stores it as `PENDING` and emits `LIQUIDITY_CREATED`. Leave ' +
+      '`maxAmountB` out to match the pool’s current ratio (an empty pool ' +
+      'needs both amounts, which set its price); the price bounds bracket ' +
+      'the pool price by `slippageBps` (default 50, cap 500 unless ' +
+      'configured). Deposits pay no plan ' +
+      'commission; a `merchantFee` is paid from each asset, and `source` ' +
+      'must trust both assets and afford the amounts plus its reserve ' +
+      '(`trustline_missing`, `insufficient_balance`). An `Idempotency-Key` ' +
+      '(header or body) makes a retry return the same operation.',
   })
   @ApiHeader({
     name: 'Idempotency-Key',
@@ -123,6 +135,17 @@ export class LiquidityPoolsController {
   @ApiOperation({
     summary:
       'Build a pool withdrawal (burn shares) → unsigned XDR + SEP-7 tx URI + QR',
+    description:
+      "Builds a `liquidityPoolWithdraw` of `shares` from `poolId` on the key's " +
+      'network for `source` to sign, with minimum amounts of each reserve ' +
+      'set from the current reserves less `slippageBps`, stores it as ' +
+      '`PENDING` and emits `LIQUIDITY_CREATED`. The plan commission is ' +
+      'charged only on the gain over the cost basis of shares deposited ' +
+      'through this service, out of the withdrawn reserves; a `merchantFee` ' +
+      'is a share of the minimum amounts. A withdrawal from the same pool ' +
+      'that may already be on-chain blocks another one for that account ' +
+      '(`operation_in_flight`); an `Idempotency-Key` (header or body) makes ' +
+      'a retry return the same operation.',
   })
   @ApiHeader({
     name: 'Idempotency-Key',
@@ -175,6 +198,12 @@ export class LiquidityPoolsController {
   @RequireAnyPermission('liquidity:read', 'swaps:read')
   @ApiOperation({
     summary: "An account's pool share positions with redeemable amounts",
+    description:
+      "Reads `account`'s pool-share trustlines from Horizon on the key's " +
+      'network and, per pool, its shares, its share of the pool in basis ' +
+      'points, the reserves and what those shares redeem now. Ledger data, ' +
+      "not this consumer's rows: any account can be read, and nothing is " +
+      'stored.',
   })
   @ApiOkResponse({ type: LiquidityPositionListEntity })
   positions(
@@ -186,7 +215,15 @@ export class LiquidityPoolsController {
 
   @Get('operations')
   @RequireAnyPermission('liquidity:read', 'swaps:read')
-  @ApiOperation({ summary: "List the consumer's liquidity pool operations" })
+  @ApiOperation({
+    summary: "List the consumer's liquidity pool operations",
+    description:
+      'The deposits and withdrawals built through this service, newest ' +
+      'first, optionally filtered by `kind` and `status`. Paginated with ' +
+      '`take` (default 20, max 100) and `skip`; the answer is ' +
+      "`{ data, total, take, skip }`. Only operations on the key's network " +
+      'are listed (a `prod` key sees mainnet, a `dev` key testnet).',
+  })
   @ApiOkResponse({ type: LiquidityOperationListEntity })
   findAllOperations(
     @CurrentConsumer() consumer: GatewayConsumer,
@@ -197,7 +234,14 @@ export class LiquidityPoolsController {
 
   @Get('operations/:id')
   @RequireAnyPermission('liquidity:read', 'swaps:read')
-  @ApiOperation({ summary: 'Get a liquidity pool operation by id' })
+  @ApiOperation({
+    summary: 'Get a liquidity pool operation by id',
+    description:
+      'One deposit or withdrawal this consumer built: its unsigned XDR, ' +
+      'SEP-7 `uri` and QR, its status, and the commission and merchant fee ' +
+      "it carries. Answered from this service's own table, which submit and " +
+      'the settlement observer keep current.',
+  })
   @ApiOkResponse({ type: LiquidityOperationEntity })
   findOneOperation(
     @CurrentConsumer() consumer: GatewayConsumer,
@@ -228,6 +272,16 @@ export class LiquidityPoolsController {
   @ApiOperation({
     summary:
       'Relay the signed transaction to the network (hash-checked); finalizes status',
+    description:
+      "`signedXdr` must hash to the operation's stored transaction and carry " +
+      'a signature, checked before anything about the operation is answered. ' +
+      'It is broadcast through Horizon and the answer is `SUCCEEDED` or ' +
+      '`submitted: false` with the result codes (a `FAILED` operation can be ' +
+      'resubmitted up to 3 times while its envelope is valid); an ' +
+      'unreachable Horizon is a 503 that leaves it resubmittable. Emits ' +
+      '`LIQUIDITY_SUBMITTED`, then `LIQUIDITY_SUCCEEDED` or ' +
+      '`LIQUIDITY_FAILED`, and a settled deposit records the cost basis the ' +
+      'withdrawal commission is charged against.',
   })
   @ApiOkResponse({ type: LiquiditySubmitResultEntity })
   @ApiErrorResponse({
@@ -264,7 +318,17 @@ export class LiquidityPoolsController {
   // Public on-chain pool data from Horizon.
   @AllowPublicKey()
   @RequireAnyPermission('liquidity:read', 'swaps:read')
-  @ApiOperation({ summary: 'Browse on-chain liquidity pools (Horizon proxy)' })
+  @ApiOperation({
+    summary: 'Browse on-chain liquidity pools (Horizon proxy)',
+    description:
+      "Horizon's pool list on the key's network, in descending order, " +
+      'optionally narrowed to pools holding one or two assets ' +
+      '(`assetACode`/`assetAIssuer`, `assetBCode`/`assetBIssuer`) or to ' +
+      'those an `account` holds shares in. Paged by Horizon cursor, not ' +
+      '`take`/`skip`: `limit` per page (default 20, max 100), and the ' +
+      "answer's `cursor` fetches the next page (null when the page is not " +
+      'full). Nothing is stored.',
+  })
   @ApiOkResponse({ type: LiquidityPoolListEntity })
   listPools(
     @CurrentConsumer() consumer: GatewayConsumer,
@@ -278,7 +342,14 @@ export class LiquidityPoolsController {
   // Public on-chain pool data from Horizon.
   @AllowPublicKey()
   @RequireAnyPermission('liquidity:read', 'swaps:read')
-  @ApiOperation({ summary: 'Get a liquidity pool by id (Horizon proxy)' })
+  @ApiOperation({
+    summary: 'Get a liquidity pool by id (Horizon proxy)',
+    description:
+      "One pool read from Horizon on the key's network: its fee, trustline " +
+      'count, total shares and reserves. `poolId` is the 64-character ' +
+      'lowercase hex pool id; any other shape is `validation_failed`, and a ' +
+      'pool that does not exist on that network is a 404.',
+  })
   @ApiOkResponse({ type: LiquidityPoolEntity })
   getPool(
     @CurrentConsumer() consumer: GatewayConsumer,

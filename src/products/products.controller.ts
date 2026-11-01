@@ -35,7 +35,15 @@ export class ProductsController {
 
   @Post()
   @RequirePermissions('products:write')
-  @ApiOperation({ summary: 'Create a product' })
+  @ApiOperation({
+    summary: 'Create a product',
+    description:
+      'A catalog record: `name`, an optional decimal `amount` (up to 7 ' +
+      'decimals; omit for a customer-set price), `assetCode` (omitted, `XLM` ' +
+      'or `native` store `native`), `kind` (`one_time` by default, ' +
+      '`recurring` or `link`, informational) and `active` (default `true`). ' +
+      'Creating one builds no payment link or intent.',
+  })
   @ApiCreatedResponse({ type: ProductEntity })
   create(
     @CurrentConsumer() consumer: GatewayConsumer,
@@ -46,7 +54,12 @@ export class ProductsController {
 
   @Get()
   @RequirePermissions('products:read')
-  @ApiOperation({ summary: "List the consumer's products" })
+  @ApiOperation({
+    summary: "List the consumer's products",
+    description:
+      'Newest first, as `{ data, total, take, skip }` with `take` up to 100 ' +
+      '(default 100). Inactive products (`active: false`) are included.',
+  })
   @ApiOkResponse({ type: ProductListEntity })
   findAll(
     @CurrentConsumer() consumer: GatewayConsumer,
@@ -57,7 +70,10 @@ export class ProductsController {
 
   @Get(':id')
   @RequirePermissions('products:read')
-  @ApiOperation({ summary: 'Get a product by id' })
+  @ApiOperation({
+    summary: 'Get a product by id',
+    description: 'One of the consumer’s products, active or not.',
+  })
   @ApiOkResponse({ type: ProductEntity })
   findOne(
     @CurrentConsumer() consumer: GatewayConsumer,
@@ -68,7 +84,12 @@ export class ProductsController {
 
   @Patch(':id')
   @RequirePermissions('products:write')
-  @ApiOperation({ summary: 'Update a product' })
+  @ApiOperation({
+    summary: 'Update a product',
+    description:
+      'Changes only the fields sent; `assetCode` is normalized as on create. ' +
+      'Set `active: false` to retire a product and keep its record.',
+  })
   @ApiOkResponse({ type: ProductEntity })
   update(
     @CurrentConsumer() consumer: GatewayConsumer,
@@ -80,7 +101,12 @@ export class ProductsController {
 
   @Delete(':id')
   @RequirePermissions('products:write')
-  @ApiOperation({ summary: 'Delete a product' })
+  @ApiOperation({
+    summary: 'Delete a product',
+    description:
+      'Deletes the product for good. To keep its record, set `active: false` ' +
+      'with `PATCH` instead.',
+  })
   @ApiOkResponse({ type: ProductDeletedEntity })
   remove(
     @CurrentConsumer() consumer: GatewayConsumer,

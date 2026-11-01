@@ -40,7 +40,15 @@ export class CustomersController {
 
   @Post()
   @RequirePermissions('customers:write')
-  @ApiOperation({ summary: 'Create a customer' })
+  @ApiOperation({
+    summary: 'Create a customer',
+    description:
+      'A customer holds up to 20 `wallets` on Stellar, Solana or Monad (the ' +
+      'deprecated `account` counts as one of them), and a wallet named twice ' +
+      'counts once. Payments settled from any of them count toward ' +
+      'the customer. A wallet another of your customers already holds is ' +
+      '`409 customer_wallet_taken`.',
+  })
   @ApiCreatedResponse({ type: CustomerEntity })
   @ApiErrorResponse({ status: 409, codes: [ApiErrorCode.CustomerWalletTaken] })
   create(
@@ -54,6 +62,12 @@ export class CustomersController {
   @RequirePermissions('customers:read')
   @ApiOperation({
     summary: "List the consumer's customers (with payment stats)",
+    description:
+      'Newest first, as `{ data, total, take, skip }` with `take` up to 100 ' +
+      '(default 100). Each customer carries `payments`, `succeeded` and the ' +
+      'gross settled `total` (amounts added as numbers, whatever the asset) of ' +
+      "the payment intents paid from its wallets, on the key's network only. The payer of a settled payment whose " +
+      'wallet no customer holds is added automatically (`reference: auto`).',
   })
   @ApiOkResponse({ type: CustomerListEntity })
   findAll(
@@ -65,7 +79,12 @@ export class CustomersController {
 
   @Get(':id')
   @RequirePermissions('customers:read')
-  @ApiOperation({ summary: 'Get a customer by id' })
+  @ApiOperation({
+    summary: 'Get a customer by id',
+    description:
+      'The customer with its wallets, oldest first, and `account`, the ' +
+      "deprecated first wallet's address. Payment stats are on the list only.",
+  })
   @ApiOkResponse({ type: CustomerEntity })
   findOne(
     @CurrentConsumer() consumer: GatewayConsumer,
@@ -76,7 +95,15 @@ export class CustomersController {
 
   @Patch(':id')
   @RequirePermissions('customers:write')
-  @ApiOperation({ summary: 'Update a customer' })
+  @ApiOperation({
+    summary: 'Update a customer',
+    description:
+      'Changes only the fields sent (`name`, `alias`, `note`, `email`, ' +
+      '`reference`). The deprecated `account` edits the first wallet only: an ' +
+      'address replaces or adds it, `null` removes it; other wallets change ' +
+      'through `/v1/customers/{id}/wallets`. An address another of your ' +
+      'customers holds is `409 customer_wallet_taken`.',
+  })
   @ApiOkResponse({ type: CustomerEntity })
   @ApiErrorResponse({ status: 409, codes: [ApiErrorCode.CustomerWalletTaken] })
   update(
@@ -89,7 +116,13 @@ export class CustomersController {
 
   @Delete(':id')
   @RequirePermissions('customers:write')
-  @ApiOperation({ summary: 'Delete a customer' })
+  @ApiOperation({
+    summary: 'Delete a customer',
+    description:
+      'Deletes the customer and its wallets. Payment intents are kept; a later ' +
+      'settled payment from one of those wallets adds its payer back as an ' +
+      'automatic customer.',
+  })
   @ApiOkResponse({ type: CustomerDeletedEntity })
   remove(
     @CurrentConsumer() consumer: GatewayConsumer,
@@ -119,7 +152,13 @@ export class CustomersController {
 
   @Delete(':id/wallets/:walletId')
   @RequirePermissions('customers:write')
-  @ApiOperation({ summary: 'Remove a wallet from a customer' })
+  @ApiOperation({
+    summary: 'Remove a wallet from a customer',
+    description:
+      'Payments from that address stop counting toward this customer, and a ' +
+      'later settled payment from it adds it as a new automatic customer. A ' +
+      "`walletId` that is not one of this customer's wallets is 404.",
+  })
   @ApiOkResponse({ type: CustomerWalletDeletedEntity })
   removeWallet(
     @CurrentConsumer() consumer: GatewayConsumer,

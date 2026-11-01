@@ -714,14 +714,20 @@ gateway इस्तेमाल करती है। Postman हर request �
 health probes `security: []` के साथ प्रकाशित होते हैं।
 
 हर operation में vendor extensions होते हैं जो बताते हैं कि वह क्या है:
-`x-cosmos-rate-limit` (उसके budgets — वह `429` लौटा सकता है), `x-cosmos-upstream` (जिस
-provider को वह कॉल करता है — वह `502`/`503`/`504` लौटा सकता है), `x-cosmos-public` और
-`x-cosmos-public-key`।
+`x-cosmos-rate-limit` (उसके budgets: वह `429` लौटा सकता है), `x-cosmos-upstream` (जिस
+provider को वह कॉल करता है: वह `502`/`503`/`504` लौटा सकता है), `x-cosmos-public`,
+`x-cosmos-public-key`, और `x-cosmos-scopes` / `x-cosmos-scopes-any` (वे scopes जो उसकी API
+key के पास होने चाहिए, सभी / उनमें से एक, जिन्हें `@RequirePermissions` /
+`@RequireAnyPermission` प्रकाशित करते हैं)। API key लेने वाले हर route पर, उसके `@ApiOperation`
+में लिखा description एक ऐसे वाक्य पर खत्म होता है जो इन्हीं scopes और `x-cosmos-public-key` से बनता है, ताकि contract
+कभी ऐसा scope न बताए जिसे guard जाँचता ही नहीं।
 
 `npm run openapi:generate` ऐसा spec लिखने से मना कर देता है जिसमें किसी operation का summary
-न हो, किसी failure का body या उदाहरण न हो, किसी उदाहरण का `statusCode` उसके status से मेल न
+या description न हो, किसी operation के इस्तेमाल किए tag का description न हो, किसी text में
+em dash हो (developer platform इस contract को अपने docs में दोहराता है, जो एक भी स्वीकार नहीं
+करते), किसी failure का body या उदाहरण न हो, किसी उदाहरण का `statusCode` उसके status से मेल न
 खाए, या बिना budget वाले route पर `429` हो। जब भी कोई route जोड़ें या बदलें, उसका दोबारा बना
-operation पढ़ें — देखें `CLAUDE.md`।
+operation पढ़ें (देखें `CLAUDE.md`)।
 
 ### Intent बनाना — दो SEP-7 operations, दो endpoints
 

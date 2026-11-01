@@ -49,8 +49,7 @@ export class ZkPaymentsController {
   @Get('config')
   @RequirePermissions('payments:read')
   @ApiOperation({
-    summary:
-      "The private payments setup of the API key's network: token, registries, auditor id, commission, fee account",
+    summary: "The private payments setup of the API key's network",
     description:
       'What a dashboard needs to set a merchant up on the confidential token ' +
       '(register, read the balance, withdraw). `enabled` is false on a ' +
@@ -68,8 +67,7 @@ export class ZkPaymentsController {
   // every tenant shares.
   @RateLimit(ZK_PAYMENT_CREATE_RATE_LIMIT)
   @ApiOperation({
-    summary:
-      'Create a private payment: a confidential payment to a merchant registered on the token, minus the 0.18% commission',
+    summary: 'Create a private payment (0.18% commission)',
     description:
       'A private payment hides its amount on-chain: it is paid with ' +
       "confidential transfers on Cosmos Pay's confidential token, proven with " +
@@ -160,7 +158,16 @@ export class ZkPaymentsController {
 
   @Get()
   @RequirePermissions('payments:read')
-  @ApiOperation({ summary: "List the consumer's private payments" })
+  @ApiOperation({
+    summary: "List the consumer's private payments",
+    description:
+      'Newest first, optionally filtered by `status` as it reads now (a ' +
+      '`PENDING` payment past `expiresAt` reads, and filters, as ' +
+      '`EXPIRED`). Paginated with `take` (default 20, max 100) and `skip`; ' +
+      'the answer is `{ data, total, take, skip }`. Only payments on the ' +
+      "key's network are listed (a `prod` key sees mainnet, a `dev` key " +
+      'testnet).',
+  })
   @ApiOkResponse({ type: ZkPaymentListEntity })
   findAll(
     @CurrentConsumer() consumer: GatewayConsumer,
@@ -171,7 +178,16 @@ export class ZkPaymentsController {
 
   @Get(':id')
   @RequirePermissions('payments:read')
-  @ApiOperation({ summary: 'Get a private payment by id' })
+  @ApiOperation({
+    summary: 'Get a private payment by id',
+    description:
+      'One of your private payments: its amounts (`amount`, `netAmount`, ' +
+      '`feeAmount`), recipient, payer and the hashes of the transfers that ' +
+      'settled it. `status` reads as it is now: a `PENDING` payment past ' +
+      '`expiresAt` reads `EXPIRED`, and can still settle with transfers ' +
+      "that closed in time. The payer's view of it is the keyless " +
+      '`GET /v1/zk-checkout/{id}`.',
+  })
   @ApiOkResponse({ type: ZkPaymentEntity })
   findOne(
     @CurrentConsumer() consumer: GatewayConsumer,

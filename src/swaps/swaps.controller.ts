@@ -107,8 +107,17 @@ export class SwapsController {
   // defaults POST to 201, which is what the committed spec used to record.
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
-    summary:
-      'Quote a swap on one chain (Stellar DEX, Jupiter on Solana, Kuru Flow on Monad) + fee/slippage; persists nothing',
+    summary: 'Quote a swap on one chain; persists nothing',
+    description:
+      "Prices `amount` of the source asset on the chain's own venue: the " +
+      "Stellar DEX (a Horizon strict-send path search on the key's network) " +
+      'when `chain` is omitted or `stellar`, Jupiter for `solana` and Kuru ' +
+      'Flow for `monad`, both mainnet only. The answer carries the plan ' +
+      'commission (`fee`: taken from the source amount on Stellar, from the ' +
+      'output on Solana and Monad), any `merchantFee`, the estimated output ' +
+      'and the minimum after slippage. `slippageBps` defaults to 50 and a ' +
+      'value above the cap (500) is `slippage_exceeded`, unless the ' +
+      'deployment configures other values.',
   })
   @ApiOkResponse({ type: SwapQuoteEntity })
   @ApiErrorResponse({
@@ -160,8 +169,18 @@ export class SwapsController {
   // account's next sequence number until it expires.
   @RateLimit(SWAP_CREATE_RATE_LIMIT)
   @ApiOperation({
-    summary:
-      'Create a swap → the unsigned transaction to sign (Stellar XDR + SEP-7 + QR; Solana / Monad transaction)',
+    summary: 'Create a swap: the unsigned transaction to sign',
+    description:
+      'Prices the swap as the quote does, builds the transaction `source` ' +
+      'signs, stores it as `PENDING` and emits `SWAP_CREATED`. Stellar: the ' +
+      'XDR with a SEP-7 `uri` and QR, valid for the network timeout (300 s ' +
+      'by default); when the swap pays `source` itself (no `destination`, or ' +
+      'the same account) and it does not trust the bought asset yet, the ' +
+      'transaction adds that trustline first. Solana and Monad (mainnet only): the aggregator’s ' +
+      'transaction, valid for one minute on Solana and two on Monad, where ' +
+      'an ERC-20 sale may also carry an `approval` to send first. Send the ' +
+      'signed transaction to `POST /v1/swaps/{id}/submit`; an ' +
+      '`Idempotency-Key` (header or body) makes a retry return the same swap.',
   })
   @ApiHeader({
     name: 'Idempotency-Key',
@@ -242,7 +261,16 @@ export class SwapsController {
 
   @Get()
   @RequirePermissions('swaps:read')
-  @ApiOperation({ summary: "List the consumer's swaps on one chain" })
+  @ApiOperation({
+    summary: "List the consumer's swaps on one chain",
+    description:
+      'Stellar swaps when `chain` is omitted, otherwise those of the chain ' +
+      'named, newest first and optionally filtered by `status`. Paginated ' +
+      'with `take` (default 20, max 100) and `skip`; the answer is ' +
+      "`{ data, total, take, skip }`. Only swaps on the key's network are " +
+      'listed (a `prod` key sees mainnet, a `dev` key testnet), and Solana ' +
+      'and Monad swaps are mainnet only, so a `dev` key lists none of them.',
+  })
   @ApiOkResponse({
     description: 'Stellar swaps (no `chain`), or those of the chain named.',
     schema: eitherOf(SwapListEntity, ChainSwapListEntity),
@@ -317,6 +345,17 @@ export class SwapsController {
   @ApiOperation({
     summary:
       'Relay the signed swap transaction to its network (checked against the one built); finalizes status',
+    description:
+      '`signedXdr` (Stellar) or `signedTransaction` (Solana, Monad) must be ' +
+      "the transaction built for this swap and carry its source's signature, " +
+      'checked before anything about the swap is answered. Stellar: ' +
+      'broadcast through Horizon, the answer is `SUCCEEDED` or ' +
+      '`submitted: false` with the result codes (a `FAILED` swap can be ' +
+      'resubmitted up to 3 times while its envelope is valid). Solana and ' +
+      "Monad: broadcast through this service's RPC, the swap is `SUBMITTED` " +
+      'until the observer sees it settle. Emits `SWAP_SUBMITTED`, then ' +
+      '`SWAP_SUCCEEDED` or `SWAP_FAILED`; with the shared public key, send ' +
+      "the swap's `publicToken` in `X-Record-Token`.",
   })
   @ApiOkResponse({
     schema: eitherOf(SwapSubmitResultEntity, ChainSwapSubmitResultEntity),

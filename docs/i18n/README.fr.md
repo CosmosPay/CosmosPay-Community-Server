@@ -729,14 +729,21 @@ l'import ne configure que `X-Gateway-Secret`, ajoutez `X-Consumer-Username` comm
 collection. Les sondes de santé sont publiées avec `security: []`.
 
 Chaque opération porte des extensions fournisseur qui disent ce qu'elle est :
-`x-cosmos-rate-limit` (ses budgets — elle peut répondre `429`), `x-cosmos-upstream` (le
-fournisseur qu'elle appelle — elle peut répondre `502`/`503`/`504`), `x-cosmos-public` et
-`x-cosmos-public-key`.
+`x-cosmos-rate-limit` (ses budgets : elle peut répondre `429`), `x-cosmos-upstream` (le
+fournisseur qu'elle appelle : elle peut répondre `502`/`503`/`504`), `x-cosmos-public`,
+`x-cosmos-public-key`, et `x-cosmos-scopes` / `x-cosmos-scopes-any` (les scopes que sa clé
+d'API doit détenir, tous / l'un d'eux, publiés par `@RequirePermissions` /
+`@RequireAnyPermission`). Sur chaque route qui prend une clé d'API, la description écrite
+dans son `@ApiOperation` se termine par une phrase générée à partir de ces scopes et de
+`x-cosmos-public-key`, si bien que le contrat ne nomme jamais un scope que le guard ne
+vérifie pas.
 
 `npm run openapi:generate` refuse d'écrire une spécification dans laquelle une opération n'a
-pas de summary, un échec n'a ni corps ni exemple, le `statusCode` d'un exemple ne correspond
+pas de summary ou pas de description, un tag utilisé par une opération n'a pas de
+description, un texte contient un tiret cadratin (em dash ; la plateforme développeurs
+reproduit ce contrat dans sa documentation, qui n'en admet aucun), un échec n'a ni corps ni exemple, le `statusCode` d'un exemple ne correspond
 pas au statut qu'il documente, ou un `429` figure sur une route sans budget. Chaque fois que
-vous ajoutez ou modifiez une route, relisez son opération régénérée — voir `CLAUDE.md`.
+vous ajoutez ou modifiez une route, relisez son opération régénérée (voir `CLAUDE.md`).
 
 ### Créer des intentions — deux opérations SEP-7, deux endpoints
 

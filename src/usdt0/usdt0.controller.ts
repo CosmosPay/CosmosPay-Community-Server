@@ -146,8 +146,7 @@ export class Usdt0Controller {
   // Nothing is created: 200, not Nest's default 201 for a POST.
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
-    summary:
-      'Quote a USDT0 transfer from Stellar: what arrives, the dust, and LayerZero’s fee in XLM; persists nothing',
+    summary: 'Quote a USDT0 transfer from Stellar; persists nothing',
     description:
       'Simulates the OFT’s `quote_oft` and `quote_send` on Stellar mainnet. ' +
       'The OFT carries 6 decimals and the asset has 7, so the 7th is `dust` ' +
@@ -419,8 +418,7 @@ export class Usdt0Controller {
   // Advances an existing transfer; nothing new comes into existence.
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
-    summary:
-      'Relay the signed USDT0 transaction to Stellar mainnet (checked against the one built) and wait for the ledger',
+    summary: 'Relay the signed USDT0 transaction to Stellar mainnet',
     description:
       'The signed XDR must hash to the transfer’s transaction and carry a ' +
       'signature. Accepted and applied: SUBMITTED, with LayerZero’s `guid`. ' +

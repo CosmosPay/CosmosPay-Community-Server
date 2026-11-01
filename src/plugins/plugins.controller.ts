@@ -67,6 +67,13 @@ export class PluginsController {
   @ApiOperation({
     summary:
       'List the plugins this deployment serves, with this key’s installations',
+    description:
+      'Each plugin with its manifest (`capabilities`, `egress`, `config` ' +
+      'settings, `queries`, `commands`, `events`) and `installation`: this ' +
+      "consumer's installation of it, or null. An installation lists " +
+      '`pendingCapabilities` when the plugin was updated to ask for more than ' +
+      'was granted, and its actions are refused until it is installed again. ' +
+      'Answers `{ data }`, not paged.',
   })
   @ApiOkResponse({ type: PluginListEntity })
   list(@CurrentConsumer() consumer: GatewayConsumer) {
@@ -77,6 +84,12 @@ export class PluginsController {
   @RequirePermissions('plugins:read')
   @ApiOperation({
     summary: 'Describe a plugin: capabilities, egress, settings, actions',
+    description:
+      "One plugin's manifest and this consumer's `installation` of it (null " +
+      'when not installed). Read it before installing: ' +
+      '`PUT /v1/plugins/{slug}/installation` must grant exactly the ' +
+      '`capabilities` listed here. Secret settings are never returned; ' +
+      '`installation.secretsSet` names the ones that hold a value.',
   })
   @ApiParam(SLUG_PARAM)
   @ApiOkResponse({ type: PluginEntity })
@@ -92,6 +105,13 @@ export class PluginsController {
   @ApiOperation({
     summary:
       'Install a plugin (or re-consent / reconfigure it), granting its capabilities',
+    description:
+      'Installing is consent: `grantCapabilities` must list exactly the ' +
+      'capabilities the plugin declares, no more and no fewer ' +
+      '(`400 plugin_consent_mismatch`). `config` is checked against the ' +
+      "plugin's settings; secret settings are stored sealed and kept when not " +
+      'sent again. Call it again after an update leaves `pendingCapabilities`; ' +
+      'it answers the plugin with its new `installation`.',
   })
   @ApiParam(SLUG_PARAM)
   @ApiOkResponse({ type: PluginEntity })
@@ -117,6 +137,11 @@ export class PluginsController {
   @RequirePermissions('plugins:write')
   @ApiOperation({
     summary: 'Uninstall a plugin and delete every record it kept for this key',
+    description:
+      "Deletes this consumer's installation and, with it, everything the " +
+      'plugin stored for the consumer. It works even when the deployment no ' +
+      'longer serves the plugin; a plugin that is not installed is a 404. ' +
+      'Answers `{ slug, uninstalled: true }`.',
   })
   @ApiParam(SLUG_PARAM)
   @ApiOkResponse({ type: PluginUninstalledEntity })
@@ -131,7 +156,16 @@ export class PluginsController {
   @HttpCode(200)
   @RequirePermissions('plugins:read')
   @RateLimit(PLUGIN_ACTION_RATE_LIMIT)
-  @ApiOperation({ summary: 'Run a read-only plugin action' })
+  @ApiOperation({
+    summary: 'Run a read-only plugin action',
+    description:
+      "Runs one of the plugin's `queries` with `input` (JSON, at most 64 KiB) " +
+      'and answers its `output`; a query cannot write the plugin storage, ' +
+      'customers or products. The plugin must be installed with every ' +
+      'capability it now asks for (`409 plugin_not_installed`). A refusal by ' +
+      'the plugin is `400 plugin_rejected`, a failure `502 plugin_failed`, and ' +
+      'a run over 10 seconds `504 plugin_failed`.',
+  })
   @ApiParam(SLUG_PARAM)
   @ApiParam(ACTION_PARAM)
   @ApiOkResponse({ type: PluginActionResultEntity })
@@ -180,7 +214,18 @@ export class PluginsController {
   @HttpCode(200)
   @RequirePermissions('plugins:write')
   @RateLimit(PLUGIN_ACTION_RATE_LIMIT)
-  @ApiOperation({ summary: 'Run a plugin action that writes' })
+  @ApiOperation({
+    summary: 'Run a plugin action that writes',
+    description:
+      "Runs one of the plugin's `commands` with `input` (JSON, at most 64 KiB) " +
+      'and answers its `output`; a command may write its own storage and, as ' +
+      "far as the granted capabilities allow, this consumer's customers and " +
+      'products. It needs an installation with every capability the plugin ' +
+      'now asks for (`409 plugin_not_installed`), and storage is capped per ' +
+      'installation (`409 plugin_quota_exceeded`). A refusal by the plugin is ' +
+      '`400 plugin_rejected`, a failure `502 plugin_failed`, and a run over 10 ' +
+      'seconds `504 plugin_failed`.',
+  })
   @ApiParam(SLUG_PARAM)
   @ApiParam({ ...ACTION_PARAM, example: 'add-note' })
   @ApiOkResponse({ type: PluginActionResultEntity })

@@ -18,6 +18,10 @@ import {
   type UpstreamProvider,
 } from '@/common/decorators/api-upstream.decorator';
 import { PUBLIC_EXTENSION_KEY } from '@/common/decorators/public.decorator';
+import {
+  ANY_SCOPES_EXTENSION_KEY,
+  SCOPES_EXTENSION_KEY,
+} from '@/common/decorators/require-permissions.decorator';
 import { UNIFORM_ANSWER_EXTENSION_KEY } from '@/common/decorators/uniform-answer.decorator';
 import {
   RATE_LIMIT_EXTENSION_KEY,
@@ -63,9 +67,18 @@ export function buildSwaggerConfig(openapi: AppConfig['openapi']) {
         'return: `429` appears where a budget is declared (the budget itself ' +
         'is published as `x-cosmos-rate-limit`), `502`/`503`/`504` where the ' +
         'route calls a provider (`x-cosmos-upstream`), and neither `401` nor ' +
-        '`403` on the probes that need no credentials (`x-cosmos-public`).',
+        '`403` on the probes that need no credentials (`x-cosmos-public`).\n\n' +
+        '**Every operation says who may call it.** On a route that takes an ' +
+        'API key, the description ends with the scope the key must hold, also ' +
+        'published as `x-cosmos-scopes` (all of) and `x-cosmos-scopes-any` ' +
+        '(one of); a key with the `admin` role passes every scope check, and ' +
+        '`x-cosmos-public-key` marks the routes the shared public key may ' +
+        'call. A route that takes no API key (`x-cosmos-public`) says in its ' +
+        'description how it is called.',
     )
     .setVersion('1.0')
+    .setContact(API_CONTACT.name, API_CONTACT.url, API_CONTACT.email)
+    .setExternalDoc(API_DOCS.description, API_DOCS.url)
     .addBearerAuth(
       {
         type: 'http',
@@ -163,6 +176,19 @@ export function buildSwaggerConfig(openapi: AppConfig['openapi']) {
   return builder.build();
 }
 
+/** Who answers for this API, published as `info.contact`. */
+const API_CONTACT = {
+  name: 'Cosmos Pay',
+  url: 'https://dev.cosmospay.lat/docs',
+  email: 'organization@cosmospay.lat',
+} as const;
+
+/** The developer documentation, published as the document's `externalDocs`. */
+const API_DOCS = {
+  description: 'Cosmos Pay developer documentation',
+  url: 'https://dev.cosmospay.lat/docs',
+} as const;
+
 /**
  * One line per tag, so the sidebar in Swagger UI and the folder list in a
  * Postman import say what a group is for. `@ApiTags` alone publishes a bare
@@ -180,7 +206,7 @@ const TAG_DESCRIPTIONS: Record<string, string> = {
   'liquidity-pools': 'Non-custodial AMM deposits and withdrawals.',
   aliases: 'Claimable payment handles, resolved to Stellar addresses.',
   customers: 'End users a payment intent can be attributed to.',
-  products: 'Catalog items a payment intent can reference.',
+  products: 'The merchant’s product catalog.',
   assets: 'The asset registry this service prices and validates against.',
   kyc: 'Receivers, their documents, wallets and bank accounts (BlindPay).',
   onramp: 'Fiat in: quotes, payins and virtual accounts (BlindPay).',
@@ -191,6 +217,20 @@ const TAG_DESCRIPTIONS: Record<string, string> = {
   health: 'Liveness and readiness probes for the orchestrator.',
   'wallet-easy-recovery':
     'Move a wallet between two devices through a five-minute mailbox this service cannot open.',
+  'zk-payments':
+    'Private payments: payments on Stellar whose amount is hidden on-chain, created and read by the merchant.',
+  'zk-checkout':
+    'The payer’s half of a private payment, without an API key: read it, read the network’s setup, confirm the transfers that pay it.',
+  'public-key':
+    'The shared public API key, served without a key to wallets that have no account yet.',
+  'wallet-auth':
+    'The wallet’s sign-in (a provider or an emailed code) and the sealed seed backup stored for an account.',
+  recovery:
+    'SEP-1 discovery, SEP-10 web authentication and SEP-30 account recovery, served only by a recovery deployment.',
+  plugins:
+    'Extensions served under a slug: list them, install one for this key, and run its actions.',
+  DeFindex:
+    'DeFindex yield vaults on Stellar: discover vaults, read a balance, build a deposit or withdrawal, submit it.',
 };
 
 /**
@@ -325,6 +365,8 @@ interface CosmosOperation extends OperationObject {
   [RATE_LIMIT_EXTENSION_KEY]?: RateLimitPolicy[];
   [UPSTREAM_EXTENSION_KEY]?: UpstreamProvider[];
   [UNIFORM_ANSWER_EXTENSION_KEY]?: boolean;
+  [SCOPES_EXTENSION_KEY]?: string[];
+  [ANY_SCOPES_EXTENSION_KEY]?: string[];
 }
 
 const HTTP_METHODS = [
@@ -465,23 +507,115 @@ export function attachErrorResponses(document: OpenAPIObject): OpenAPIObject {
   return document;
 }
 
+/** `a`; `a` and `b`; `a`, `b` or `c`. */
+function scopeList(scopes: readonly string[], conjunction: 'and' | 'or') {
+  const quoted = scopes.map((scope) => `\`${scope}\``);
+  const last = quoted.pop();
+  return quoted.length ? `${quoted.join(', ')} ${conjunction} ${last}` : last;
+}
+
+/**
+ * The sentence that closes an API-key operation's description: the scopes the
+ * key must hold, as `PermissionsGuard` checks them, and whether the shared
+ * public key may call it. Null on a `@Public()` route, which takes no API key
+ * and says how it is called in its own description.
+ */
+export function accessSentence(operation: CosmosOperation): string | null {
+  if (operation[PUBLIC_EXTENSION_KEY]) return null;
+
+  const allOf = operation[SCOPES_EXTENSION_KEY] ?? [];
+  const anyOf = operation[ANY_SCOPES_EXTENSION_KEY] ?? [];
+  const required: string[] = [];
+  if (allOf.length) {
+    required.push(
+      `the ${scopeList(allOf, 'and')} ${allOf.length > 1 ? 'scopes' : 'scope'}`,
+    );
+  }
+  if (anyOf.length) required.push(`the ${scopeList(anyOf, 'or')} scope`);
+
+  const sentence = required.length
+    ? `Requires ${required.join(' and ')}.`
+    : 'Requires an API key, with no particular scope.';
+  return operation[ALLOW_PUBLIC_KEY_EXTENSION_KEY]
+    ? `${sentence} The shared public key may call it.`
+    : sentence;
+}
+
+/**
+ * Closes every described operation with who may call it ({@link accessSentence}).
+ *
+ * Written from the decorators the guards read rather than by hand in each
+ * description, so the contract cannot name a scope the route does not check, and
+ * a scope changed in code changes the sentence with it. An operation with no
+ * description is left without one, for `findOpenApiIssues` to report.
+ */
+export function describeAccess(document: OpenAPIObject): OpenAPIObject {
+  for (const { operation } of operationsOf(document)) {
+    const sentence = accessSentence(operation);
+    if (sentence && operation.description?.trim()) {
+      operation.description = `${operation.description}\n\n${sentence}`;
+    }
+  }
+  return document;
+}
+
+/**
+ * The product owner forbids the em dash in every text people read, and the
+ * developer platform mirrors this contract into its docs, which it checks for
+ * one. Exported for the spec.
+ */
+export const EM_DASH = String.fromCharCode(0x2014);
+
+/** The JSON pointer of every string in `value` that holds an em dash. */
+function emDashesIn(value: unknown, pointer = '#'): string[] {
+  if (typeof value === 'string') {
+    return value.includes(EM_DASH) ? [pointer] : [];
+  }
+  if (!value || typeof value !== 'object') return [];
+  return Object.entries(value).flatMap(([key, child]) => {
+    const segment = key.replaceAll('~', '~0').replaceAll('/', '~1');
+    const here = `${pointer}/${segment}`;
+    return [
+      ...(key.includes(EM_DASH) ? [here] : []),
+      ...emDashesIn(child, here),
+    ];
+  });
+}
+
 /**
  * Contract problems that should stop a release, not reach a client generator.
  *
  * `openapi:generate` fails on a non-empty result, so CI's `openapi:check` is
  * also the gate on these. Every rule here is a mistake this spec has actually
  * shipped: an operation with no summary, a failure documented with no body, an
- * example whose `statusCode` disagreed with the status it sat under, and a 429
- * on a route with no budget to spend.
+ * example whose `statusCode` disagreed with the status it sat under, a 429 on a
+ * route with no budget to spend, 112 of 164 operations with no description (an
+ * integrator, or an AI agent reading the contract, got a title and nothing
+ * else), tags published without a word on what they group, and em dashes the
+ * developer platform's docs refuse.
  */
 export function findOpenApiIssues(document: OpenAPIObject): string[] {
   const issues: string[] = [];
+  const describedTags = new Set(
+    (document.tags ?? [])
+      .filter((tag) => tag.description?.trim())
+      .map((tag) => tag.name),
+  );
+  const undescribedTags = new Set<string>();
 
   for (const { path, method, operation } of operationsOf(document)) {
     const where = `${method.toUpperCase()} ${path}`;
 
     if (!operation.summary) {
       issues.push(`${where}: no summary. Add @ApiOperation({ summary }).`);
+    }
+    if (!operation.description?.trim()) {
+      issues.push(
+        `${where}: no description. Add one to @ApiOperation({ summary, description }): what the route does, the behaviour a caller must know, its notable errors.`,
+      );
+    }
+    for (const tag of operation.tags ?? []) {
+      if (!describedTags.has(tag)) undescribedTags.add(tag);
     }
 
     const rateLimited = Boolean(operation[RATE_LIMIT_EXTENSION_KEY]?.length);
@@ -528,6 +662,18 @@ export function findOpenApiIssues(document: OpenAPIObject): string[] {
     }
   }
 
+  for (const tag of undescribedTags) {
+    issues.push(
+      `tag "${tag}": no description. Add it to TAG_DESCRIPTIONS in src/swagger.ts.`,
+    );
+  }
+
+  for (const pointer of emDashesIn(document)) {
+    issues.push(
+      `${pointer}: contains an em dash (U+2014). Use a colon, comma, full stop or parentheses.`,
+    );
+  }
+
   return issues;
 }
 
@@ -545,7 +691,7 @@ export function createOpenApiDocument(
     { extraModels: [ApiErrorBodyEntity] },
   );
 
-  return attachErrorResponses(document);
+  return describeAccess(attachErrorResponses(document));
 }
 
 /**

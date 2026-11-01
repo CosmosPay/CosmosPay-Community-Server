@@ -741,12 +741,20 @@ nur einen API-Key: Setzt der Import nur `X-Gateway-Secret`, fügen Sie
 `security: []` veröffentlicht.
 
 Jede Operation trägt Vendor-Extensions, die sagen, was sie ist: `x-cosmos-rate-limit`
-(ihre Budgets – sie kann `429` antworten), `x-cosmos-upstream` (der aufgerufene
-Anbieter – sie kann `502`/`503`/`504` antworten), `x-cosmos-public` und
-`x-cosmos-public-key`.
+(ihre Budgets: sie kann `429` antworten), `x-cosmos-upstream` (der aufgerufene
+Anbieter: sie kann `502`/`503`/`504` antworten), `x-cosmos-public`,
+`x-cosmos-public-key` sowie `x-cosmos-scopes` / `x-cosmos-scopes-any` (die Scopes, die
+ihr API-Key halten muss, alle / einen davon, veröffentlicht von `@RequirePermissions` /
+`@RequireAnyPermission`). Bei jeder Route, die einen API-Key nimmt, endet die in ihrer
+`@ApiOperation` geschriebene Beschreibung mit einem Satz, der aus diesen Scopes und
+`x-cosmos-public-key` erzeugt wird, damit der Vertrag nie einen Scope nennt, den der
+Guard nicht prüft.
 
 `npm run openapi:generate` verweigert das Schreiben einer Spezifikation, in der eine
-Operation keine Summary hat, ein Fehler weder Body noch Beispiel hat, der `statusCode`
+Operation keine Summary oder keine Beschreibung hat, ein von einer Operation benutzter
+Tag keine Beschreibung hat, ein Text einen Geviertstrich (em dash) enthält (die
+Developer Platform spiegelt diesen Vertrag in ihre Dokumentation, die keinen zulässt),
+ein Fehler weder Body noch Beispiel hat, der `statusCode`
 eines Beispiels nicht zum dokumentierten Status passt oder ein `429` an einer Route ohne
 Budget steht. Lesen Sie bei jeder neuen oder geänderten Route deren neu erzeugte
 Operation – siehe `CLAUDE.md`.
