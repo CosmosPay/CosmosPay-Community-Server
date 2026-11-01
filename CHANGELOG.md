@@ -2,6 +2,12 @@
 
 All notable changes to the Cosmos Pay Community Server are documented here.
 Generated from [Conventional Commits](https://www.conventionalcommits.org) by [git-cliff](https://git-cliff.org).
+## [1.8.3] - 2026-11-01
+
+### Bug Fixes
+- Relay only transactions this service built, close DeFindex to the public key (36cb2b3)
+- Refuse built envelopes that carry more than the requested call (29d45a6)
+
 ## [1.8.2] - 2026-11-01
 
 ### Documentation
