@@ -2,6 +2,11 @@
 
 All notable changes to the Cosmos Pay Community Server are documented here.
 Generated from [Conventional Commits](https://www.conventionalcommits.org) by [git-cliff](https://git-cliff.org).
+## [1.8.4] - 2026-11-01
+
+### Documentation
+- Describe what the API covers across Stellar, Solana and Monad (85d00e8)
+
 ## [1.8.3] - 2026-11-01
 
 ### Bug Fixes
