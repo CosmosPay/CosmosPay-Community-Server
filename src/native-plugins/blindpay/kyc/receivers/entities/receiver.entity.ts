@@ -1,4 +1,4 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger';
 
 /**
  * Cosmos Pay view of a BlindPay receiver. `id` is our local id; `blindpayId` is
@@ -9,17 +9,36 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
  * properties below. The stored `raw` KYC dossier (tax ids, dates of birth, document and
  * selfie urls, beneficial owners) has no property here and never reaches a response.
  */
+@ApiSchema({
+  description:
+    'A receiver as this service mirrors it; the submitted KYC dossier is never returned.',
+})
 export class ReceiverEntity {
-  @ApiProperty({ example: 'clz9xreceiver01' })
+  @ApiProperty({
+    example: 'clz9xreceiver01',
+    description:
+      'Cosmos Pay id of the receiver, the `{id}` or `{receiverId}` of the receiver routes.',
+  })
   id!: string;
 
-  @ApiProperty({ example: 're_000000000000' })
+  @ApiProperty({
+    example: 're_000000000000',
+    description:
+      "BlindPay's receiver id (`re_...`); a `local_` placeholder until the receiver is enabled.",
+  })
   blindpayId!: string;
 
-  @ApiProperty({ example: 'individual' })
+  @ApiProperty({
+    example: 'individual',
+    description: '`individual` (KYC) or `business` (KYB).',
+  })
   type!: string;
 
-  @ApiPropertyOptional({ example: 'standard' })
+  @ApiPropertyOptional({
+    example: 'standard',
+    description:
+      'Depth of compliance verification: `light`, `standard` or `enhanced`.',
+  })
   kycType!: string | null;
 
   @ApiPropertyOptional({
@@ -28,16 +47,29 @@ export class ReceiverEntity {
   })
   kycStatus!: string | null;
 
-  @ApiPropertyOptional({ example: 'jane@acme.com' })
+  @ApiPropertyOptional({
+    example: 'jane@acme.com',
+    description: "Receiver's email address.",
+  })
   email!: string | null;
 
-  @ApiPropertyOptional({ example: 'Jane Doe' })
+  @ApiPropertyOptional({
+    example: 'Jane Doe',
+    description:
+      "Display name: a business's legal name, otherwise the person's first and last name.",
+  })
   name!: string | null;
 
-  @ApiPropertyOptional({ example: 'US' })
+  @ApiPropertyOptional({
+    example: 'US',
+    description: "Receiver's country, an ISO 3166-1 alpha-2 code.",
+  })
   country!: string | null;
 
-  @ApiPropertyOptional({ example: 'cust_001' })
+  @ApiPropertyOptional({
+    example: 'cust_001',
+    description: 'Your own id for the receiver (`external_id`).',
+  })
   externalId!: string | null;
 
   @ApiProperty({
@@ -63,16 +95,29 @@ export class ReceiverEntity {
   })
   reviewedVersion!: number | null;
 
-  @ApiProperty({ example: '2026-06-28T12:00:00.000Z' })
+  @ApiProperty({
+    example: '2026-06-28T12:00:00.000Z',
+    description: 'When the receiver was created here (ISO 8601 date-time).',
+  })
   createdAt!: Date;
 
-  @ApiProperty({ example: '2026-06-28T12:00:00.000Z' })
+  @ApiProperty({
+    example: '2026-06-28T12:00:00.000Z',
+    description:
+      'When the receiver was last changed here (ISO 8601 date-time).',
+  })
   updatedAt!: Date;
 }
 
 /** One page of receivers — the envelope every list in this API returns. */
+@ApiSchema({
+  description: "One page of the consumer's receivers, newest first.",
+})
 export class ReceiverListEntity {
-  @ApiProperty({ type: [ReceiverEntity] })
+  @ApiProperty({
+    type: [ReceiverEntity],
+    description: 'The receivers on this page.',
+  })
   data!: ReceiverEntity[];
 
   @ApiProperty({
@@ -81,18 +126,30 @@ export class ReceiverListEntity {
   })
   total!: number;
 
-  @ApiProperty({ example: 100 })
+  @ApiProperty({
+    example: 100,
+    description:
+      'The page size applied, from the `take` query parameter (default 100).',
+  })
   take!: number;
 
-  @ApiProperty({ example: 0 })
+  @ApiProperty({
+    example: 0,
+    description:
+      'Rows skipped before this page, from the `skip` query parameter (default 0).',
+  })
   skip!: number;
 }
 
 /** What approving a receiver hands back: the terms link it just sent. */
+@ApiSchema({
+  description:
+    'The terms-of-service link an approval requested, for the caller to deliver to the customer.',
+})
 export class ReceiverApprovalEntity {
   @ApiProperty({
     description:
-      'The hosted terms-of-service link, also emailed to the customer.',
+      'The hosted terms-of-service link. This service emails nothing: deliver it to the customer.',
     example:
       'https://app.blindpay.com/e/terms-of-service?session_token=tos_example',
   })
@@ -100,7 +157,7 @@ export class ReceiverApprovalEntity {
 
   @ApiProperty({
     description:
-      'Where the link was emailed, or null when the receiver has none.',
+      "The receiver's email address, to deliver the link to, or null when the receiver has none.",
     example: 'customer@example.com',
     nullable: true,
     type: String,
@@ -109,20 +166,28 @@ export class ReceiverApprovalEntity {
 }
 
 /** A terms-of-service link, and how it reached the customer. */
+@ApiSchema({
+  description:
+    'A terms-of-service link for a `pending_user` receiver, and the channel it was requested for.',
+})
 export class ReceiverTosEntity extends ReceiverApprovalEntity {
   @ApiProperty({
     description:
-      "`code` returns the link to show yourself; `email` also sent it to the receiver's address.",
+      '`code`: the link to show yourself. `email`: the send was recorded (once per 24 hours per receiver); you email the link.',
     enum: ['code', 'email'],
     example: 'code',
   })
   channel!: 'code' | 'email';
 }
 
+@ApiSchema({ description: 'Confirms a receiver deletion.' })
 export class ReceiverDeletedEntity {
-  @ApiProperty({ example: 'clz9xreceiver01' })
+  @ApiProperty({
+    example: 'clz9xreceiver01',
+    description: 'The receiver id from the request path.',
+  })
   id!: string;
 
-  @ApiProperty({ example: true })
+  @ApiProperty({ example: true, description: 'Always true.' })
   deleted!: boolean;
 }

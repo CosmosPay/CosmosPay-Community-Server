@@ -1,5 +1,5 @@
 import { CHAINS } from '@/chains/chains.constants';
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger';
 
 /*
  * These shapes are a CONTRACT with the wallet, which asserts them field by field
@@ -12,6 +12,10 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
  * information in them.
  */
 
+@ApiSchema({
+  description:
+    'An Authentik source (e.g. Google, GitHub) a wallet can show as a sign-in button of its own.',
+})
 export class WalletAuthSourceEntity {
   @ApiProperty({
     example: 'google',
@@ -26,6 +30,9 @@ export class WalletAuthSourceEntity {
   name!: string;
 }
 
+@ApiSchema({
+  description: 'The sign-in methods this deployment offers to the wallet.',
+})
 export class WalletAuthProvidersEntity {
   @ApiProperty({
     type: [String],
@@ -71,6 +78,10 @@ export class WalletAuthProvidersEntity {
   mfaSettingsUrl!: string | null;
 }
 
+@ApiSchema({
+  description:
+    'A started OAuth sign-in handshake: the URL to open in a browser and the `state` handle to poll.',
+})
 export class WalletOauthStartedEntity {
   @ApiProperty({
     description:
@@ -82,9 +93,14 @@ export class WalletOauthStartedEntity {
   @ApiProperty({ description: 'Open this in a browser.' })
   authorizationUrl!: string;
 
-  @ApiProperty() expiresAt!: Date;
+  @ApiProperty({ description: 'When the handshake expires (ISO 8601).' })
+  expiresAt!: Date;
 }
 
+@ApiSchema({
+  description:
+    'The state of an OAuth sign-in handshake. The identity itself is never in this response.',
+})
 export class WalletAuthStatusEntity {
   @ApiProperty({
     enum: ['pending', 'authorized', 'redeemed', 'failed', 'expired'],
@@ -113,10 +129,28 @@ export class WalletAuthStatusEntity {
   bound?: boolean;
 }
 
+@ApiSchema({
+  description:
+    'The identity a wallet sign-in proved: the email address and how it was proven.',
+})
 class WalletAuthIdentityEntity {
-  @ApiProperty({ example: 'someone@example.com' }) email!: string;
-  @ApiPropertyOptional({ nullable: true }) name!: string | null;
-  @ApiPropertyOptional({ nullable: true }) avatar!: string | null;
+  @ApiProperty({
+    example: 'someone@example.com',
+    description: 'The proven email address.',
+  })
+  email!: string;
+  @ApiPropertyOptional({
+    nullable: true,
+    description:
+      'Display name from the identity provider; null when it gave none.',
+  })
+  name!: string | null;
+  @ApiPropertyOptional({
+    nullable: true,
+    description:
+      'Avatar image URL from the identity provider; null when it gave none.',
+  })
+  avatar!: string | null;
   @ApiProperty({
     enum: ['authentik', 'google', 'github', 'email'],
     description: 'How the email was proven.',
@@ -124,8 +158,17 @@ class WalletAuthIdentityEntity {
   method!: string;
 }
 
+@ApiSchema({
+  description:
+    'One sealed wallet backup an account keeps: one box per chain and address.',
+})
 class WalletBackupEntity {
-  @ApiProperty({ enum: CHAINS, example: 'stellar' }) chain!: string;
+  @ApiProperty({
+    enum: CHAINS,
+    example: 'stellar',
+    description: 'The chain of the backed-up account.',
+  })
+  chain!: string;
   @ApiProperty({
     description:
       'The account this box restores to, on `chain` (Stellar G…, Solana base58, Monad 0x…).',
@@ -146,7 +189,8 @@ class WalletBackupEntity {
   })
   box!: string;
 
-  @ApiProperty() updatedAt!: string;
+  @ApiProperty({ description: 'When the box was last written (ISO 8601).' })
+  updatedAt!: string;
 }
 
 /**
@@ -154,10 +198,18 @@ class WalletBackupEntity {
  *
  * Returned by `/oauth/claim` for a NEW email and by `/email/verify` for any.
  */
+@ApiSchema({
+  description:
+    'A proven email: its identity, the backups its account keeps and the session token that finishes the sign-in.',
+})
 export class WalletAuthReadyEntity {
-  @ApiProperty({ enum: ['ready'] }) status!: string;
+  @ApiProperty({ enum: ['ready'], description: 'Always `ready`.' })
+  status!: string;
 
-  @ApiProperty({ type: WalletAuthIdentityEntity })
+  @ApiProperty({
+    type: WalletAuthIdentityEntity,
+    description: 'The identity the sign-in proved.',
+  })
   identity!: WalletAuthIdentityEntity;
 
   @ApiProperty({
@@ -194,7 +246,11 @@ export class WalletAuthReadyEntity {
   })
   sessionToken!: string;
 
-  @ApiProperty({ example: 1800 }) expiresInSeconds!: number;
+  @ApiProperty({
+    example: 1800,
+    description: 'Lifetime of `sessionToken`, in seconds.',
+  })
+  expiresInSeconds!: number;
 
   @ApiPropertyOptional({
     description:
@@ -214,15 +270,31 @@ export class WalletAuthReadyEntity {
  * already exists is where the backup worth stealing is, so it gets a code in its
  * own inbox instead of a token.
  */
+@ApiSchema({
+  description:
+    'The email already has an account: a code was sent to its inbox, to be answered with `claimToken`.',
+})
 export class WalletAuthVerifyEmailEntity {
-  @ApiProperty({ enum: ['verify_email'] }) status!: string;
+  @ApiProperty({
+    enum: ['verify_email'],
+    description: 'Always `verify_email`.',
+  })
+  status!: string;
   @ApiProperty({ description: 'Send this back with the code.' })
   claimToken!: string;
-  @ApiProperty({ example: 900 }) expiresInSeconds!: number;
+  @ApiProperty({
+    example: 900,
+    description: 'Lifetime of the emailed code, in seconds.',
+  })
+  expiresInSeconds!: number;
   @ApiProperty({ description: 'The mailbox the code went to.' })
   email!: string;
 }
 
+@ApiSchema({
+  description:
+    'An emailed sign-in code was sent; answer it with this `claimToken`.',
+})
 export class WalletEmailStartedEntity {
   @ApiProperty({
     description:
@@ -232,23 +304,50 @@ export class WalletEmailStartedEntity {
   })
   claimToken!: string;
 
-  @ApiProperty({ example: 900 }) expiresInSeconds!: number;
+  @ApiProperty({
+    example: 900,
+    description: 'Lifetime of the emailed code, in seconds.',
+  })
+  expiresInSeconds!: number;
 }
 
 /** `status: 'invalid'` — a wrong code, with what is left before the row burns. */
+@ApiSchema({
+  description:
+    'A wrong code, with how many attempts are left before the code stops being accepted.',
+})
 export class WalletCodeInvalidEntity {
-  @ApiProperty({ enum: ['invalid'] }) status!: string;
-  @ApiProperty({ example: 4 }) attemptsLeft!: number;
+  @ApiProperty({ enum: ['invalid'], description: 'Always `invalid`.' })
+  status!: string;
+  @ApiProperty({ example: 4, description: 'Attempts left for this code.' })
+  attemptsLeft!: number;
 }
 
+@ApiSchema({
+  description:
+    'The gateway API keys of the signed-in account, one per environment.',
+})
 class WalletProvisionedKeysEntity {
-  @ApiPropertyOptional({ nullable: true }) dev!: string | null;
-  @ApiPropertyOptional({ nullable: true }) prod!: string | null;
+  @ApiPropertyOptional({
+    nullable: true,
+    description: "The account's `dev` (testnet) API key.",
+  })
+  dev!: string | null;
+  @ApiPropertyOptional({
+    nullable: true,
+    description: "The account's `prod` (mainnet) API key.",
+  })
+  prod!: string | null;
 }
 
 /** `status: 'ready'` — the account exists and holds its gateway credentials. */
+@ApiSchema({
+  description:
+    'A finished wallet sign-in: the account exists and holds its gateway API keys.',
+})
 export class WalletSignInFinishedEntity {
-  @ApiProperty({ enum: ['ready'] }) status!: string;
+  @ApiProperty({ enum: ['ready'], description: 'Always `ready`.' })
+  status!: string;
   @ApiProperty({
     enum: ['created', 'linked'],
     description:
@@ -257,14 +356,28 @@ export class WalletSignInFinishedEntity {
       'deliberately: they answer two different questions.',
   })
   account!: string;
-  @ApiProperty() organizationId!: string;
-  @ApiProperty({ type: WalletProvisionedKeysEntity })
+  @ApiProperty({
+    description: "Id of the account's organization, carried by its API keys.",
+  })
+  organizationId!: string;
+  @ApiProperty({
+    type: WalletProvisionedKeysEntity,
+    description: "The account's gateway API keys.",
+  })
   keys!: WalletProvisionedKeysEntity;
 }
 
+@ApiSchema({
+  description: 'Confirmation that a wallet backup box was replaced.',
+})
 export class WalletBackupUpdatedEntity {
-  @ApiProperty({ enum: ['ok'] }) status!: string;
-  @ApiProperty({ enum: CHAINS, example: 'stellar' }) chain!: string;
+  @ApiProperty({ enum: ['ok'], description: 'Always `ok`.' }) status!: string;
+  @ApiProperty({
+    enum: CHAINS,
+    example: 'stellar',
+    description: 'The chain of the account whose box was replaced.',
+  })
+  chain!: string;
   @ApiProperty({
     description:
       'The account whose box was replaced, on `chain` (Stellar G…, Solana base58, Monad 0x…).',
@@ -276,10 +389,15 @@ export class WalletBackupUpdatedEntity {
     deprecated: true,
   })
   stellarAddress!: string;
-  @ApiProperty() updatedAt!: Date;
+  @ApiProperty({ description: 'When the box was replaced (ISO 8601).' })
+  updatedAt!: Date;
 }
 
 /** `POST /v1/wallet/recovery/setup` — the sponsored setup, for the account to sign. */
+@ApiSchema({
+  description:
+    'The sponsored recovery setup transaction, signed by the sponsor, for the account to sign.',
+})
 export class WalletRecoverySetupEntity {
   @ApiProperty({
     description:
@@ -291,5 +409,8 @@ export class WalletRecoverySetupEntity {
   @ApiProperty({ description: 'The account paying the two signer reserves.' })
   sponsor!: string;
 
-  @ApiProperty() network_passphrase!: string;
+  @ApiProperty({
+    description: 'Passphrase of the Stellar network the transaction is for.',
+  })
+  network_passphrase!: string;
 }

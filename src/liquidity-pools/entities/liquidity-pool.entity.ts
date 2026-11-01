@@ -1,8 +1,18 @@
-import { ApiProperty, ApiPropertyOptional, OmitType } from '@nestjs/swagger';
+import {
+  ApiProperty,
+  ApiPropertyOptional,
+  ApiSchema,
+  OmitType,
+} from '@nestjs/swagger';
 import { LiquidityOperationKind, SwapStatus } from '@generated/prisma/client';
 import { MerchantFeeEntity } from '@/common/merchant-fee/merchant-fee.entity';
 
 /** A liquidity operation's merchant fee: `amount` / `asset` are asset A's leg. */
+@ApiSchema({
+  description:
+    'The merchant fee a liquidity operation charged: `bps` of each asset, with ' +
+    '`amount` and `asset` for asset A and `amountB` and `assetB` for asset B.',
+})
 export class LiquidityMerchantFeeEntity extends MerchantFeeEntity {
   @ApiProperty({
     description: 'The fee charged on asset B, in asset B.',
@@ -18,25 +28,48 @@ export class LiquidityMerchantFeeEntity extends MerchantFeeEntity {
 }
 
 /** One side of a pool: an asset and how much of it the pool (or holder) has. */
+@ApiSchema({
+  description:
+    'One side of a liquidity pool: an asset and how much of it the pool holds, ' +
+    'or a holder can redeem.',
+})
 export class LiquidityPoolReserve {
   @ApiProperty({ example: 'native', description: 'Asset code, or "native".' })
   asset!: string;
 
-  @ApiProperty({ nullable: true, example: null })
+  @ApiProperty({
+    nullable: true,
+    example: null,
+    description: "The asset's issuer account; null for native XLM.",
+  })
   issuer!: string | null;
 
-  @ApiProperty({ example: '82944.5873463' })
+  @ApiProperty({
+    example: '82944.5873463',
+    description:
+      "Amount of the asset, as a decimal string in the asset's units (up to 7 decimal places).",
+  })
   amount!: string;
 }
 
 /** An on-chain liquidity pool (proxied from Horizon; nothing persisted). */
+@ApiSchema({
+  description:
+    "An on-chain Stellar liquidity pool, read from Horizon on the API key's " +
+    'network. Nothing is persisted.',
+})
 export class LiquidityPoolEntity {
   @ApiProperty({
     example: 'dd7b1ab831c273310ddbec6f97870aa83c2fbd78ce22aded37ecbf4f3380fac7',
+    description: 'Stellar liquidity pool id (64-character lowercase hex).',
   })
   id!: string;
 
-  @ApiProperty({ example: 'testnet' })
+  @ApiProperty({
+    example: 'testnet',
+    description:
+      'The Stellar network the pool was read from, which follows the API key: `public` (mainnet) or `testnet`.',
+  })
   network!: string;
 
   @ApiProperty({ example: 30, description: 'Pool fee in basis points (0.3%).' })
@@ -45,7 +78,11 @@ export class LiquidityPoolEntity {
   @ApiProperty({ example: '123', description: 'Accounts holding pool shares.' })
   totalTrustlines!: string;
 
-  @ApiProperty({ example: '4462.7227546' })
+  @ApiProperty({
+    example: '4462.7227546',
+    description:
+      'Total pool shares outstanding, as a decimal string (up to 7 decimal places).',
+  })
   totalShares!: string;
 
   @ApiProperty({
@@ -55,8 +92,15 @@ export class LiquidityPoolEntity {
   reserves!: LiquidityPoolReserve[];
 }
 
+@ApiSchema({
+  description:
+    'A page of on-chain liquidity pools from Horizon, with the cursor for the next page.',
+})
 export class LiquidityPoolListEntity {
-  @ApiProperty({ type: [LiquidityPoolEntity] })
+  @ApiProperty({
+    type: [LiquidityPoolEntity],
+    description: "The pools on this page, in Horizon's descending order.",
+  })
   data!: LiquidityPoolEntity[];
 
   @ApiProperty({
@@ -68,16 +112,26 @@ export class LiquidityPoolListEntity {
 }
 
 /** An account's stake in one pool, with its proportionally redeemable amounts. */
+@ApiSchema({
+  description:
+    "An account's stake in one liquidity pool, with what its shares redeem " +
+    'at the current reserves.',
+})
 export class LiquidityPositionEntity {
   @ApiProperty({
     example: 'dd7b1ab831c273310ddbec6f97870aa83c2fbd78ce22aded37ecbf4f3380fac7',
+    description: 'Stellar liquidity pool id (64-character lowercase hex).',
   })
   poolId!: string;
 
   @ApiProperty({ example: '50.25', description: 'Pool shares held.' })
   shares!: string;
 
-  @ApiProperty({ example: '4462.7227546' })
+  @ApiProperty({
+    example: '4462.7227546',
+    description:
+      'Total pool shares outstanding, as a decimal string (up to 7 decimal places).',
+  })
   totalShares!: string;
 
   @ApiProperty({
@@ -86,7 +140,10 @@ export class LiquidityPositionEntity {
   })
   shareOfPoolBps!: number;
 
-  @ApiProperty({ type: [LiquidityPoolReserve] })
+  @ApiProperty({
+    type: [LiquidityPoolReserve],
+    description: "The pool's two reserves, in canonical order.",
+  })
   reserves!: LiquidityPoolReserve[];
 
   @ApiProperty({
@@ -97,55 +154,107 @@ export class LiquidityPositionEntity {
   redeemable!: LiquidityPoolReserve[];
 }
 
+@ApiSchema({
+  description:
+    "An account's liquidity pool share positions, read from Horizon on the API " +
+    "key's network. Nothing is persisted.",
+})
 export class LiquidityPositionListEntity {
   @ApiProperty({
     example: 'GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ',
+    description: 'The Stellar account whose positions are listed.',
   })
   account!: string;
 
-  @ApiProperty({ example: 'testnet' })
+  @ApiProperty({
+    example: 'testnet',
+    description:
+      'The Stellar network read, which follows the API key: `public` (mainnet) or `testnet`.',
+  })
   network!: string;
 
-  @ApiProperty({ type: [LiquidityPositionEntity] })
+  @ApiProperty({
+    type: [LiquidityPositionEntity],
+    description: 'One position per pool the account holds shares in.',
+  })
   data!: LiquidityPositionEntity[];
 }
 
 /** A persisted liquidity pool operation plus its derived QR. */
+@ApiSchema({
+  description:
+    'A liquidity pool deposit or withdrawal built by this service: the stored ' +
+    'operation with its unsigned transaction, SEP-7 link and QR.',
+})
 export class LiquidityOperationEntity {
-  @ApiProperty({ example: 'clx9z8a1b0000abcd1234efgh' })
+  @ApiProperty({
+    example: 'clx9z8a1b0000abcd1234efgh',
+    description: "The operation's id, used by the read and submit routes.",
+  })
   id!: string;
 
-  @ApiProperty({ enum: LiquidityOperationKind, example: 'DEPOSIT' })
+  @ApiProperty({
+    enum: LiquidityOperationKind,
+    example: 'DEPOSIT',
+    description:
+      '`DEPOSIT` adds both assets to the pool; `WITHDRAW` burns pool shares for both reserves.',
+  })
   kind!: LiquidityOperationKind;
 
-  @ApiProperty({ enum: SwapStatus, example: 'PENDING' })
+  @ApiProperty({
+    enum: SwapStatus,
+    example: 'PENDING',
+    description:
+      'PENDING (built, unsigned), SUBMITTED (a signed transaction was sent to ' +
+      'the network), SUCCEEDED (confirmed on the ledger), FAILED (rejected on ' +
+      'the network) or EXPIRED (time bounds elapsed before submission).',
+  })
   status!: SwapStatus;
 
-  @ApiProperty({ example: 'testnet' })
+  @ApiProperty({
+    example: 'testnet',
+    description:
+      'The Stellar network the operation targets, which follows the API key: `public` (mainnet) or `testnet`.',
+  })
   network!: string;
 
   @ApiProperty({
     example: 'GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ',
+    description:
+      'The Stellar account that funds and signs the operation: the transaction source.',
   })
   source!: string;
 
   @ApiProperty({
     example: 'dd7b1ab831c273310ddbec6f97870aa83c2fbd78ce22aded37ecbf4f3380fac7',
+    description: 'Stellar liquidity pool id (64-character lowercase hex).',
   })
   poolId!: string;
 
-  @ApiProperty({ example: 'native' })
+  @ApiProperty({
+    example: 'native',
+    description:
+      "Asset A's code (`native` for XLM). The pair is stored in the protocol's canonical order (A < B).",
+  })
   assetA!: string;
 
-  @ApiProperty({ nullable: true, example: null })
+  @ApiProperty({
+    nullable: true,
+    example: null,
+    description: "Asset A's issuer account; null for native XLM.",
+  })
   assetAIssuer!: string | null;
 
-  @ApiProperty({ example: 'USDC' })
+  @ApiProperty({
+    example: 'USDC',
+    description: "Asset B's code (`native` for XLM).",
+  })
   assetB!: string;
 
   @ApiProperty({
     nullable: true,
     example: 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTR6F3DSZL5A3W4G4M4N4A5U4QY3T6',
+    description: "Asset B's issuer account; null for native XLM.",
   })
   assetBIssuer!: string | null;
 
@@ -184,7 +293,11 @@ export class LiquidityOperationEntity {
   })
   maxPrice!: string | null;
 
-  @ApiProperty({ example: 50 })
+  @ApiProperty({
+    example: 50,
+    description:
+      'The slippage tolerance the operation was built with, in basis points (50 = 0.5%).',
+  })
   slippageBps!: number;
 
   @ApiPropertyOptional({
@@ -262,7 +375,10 @@ export class LiquidityOperationEntity {
   })
   xdr!: string;
 
-  @ApiProperty({ example: 'web+stellar:tx?xdr=AAAAAgAAAABx…' })
+  @ApiProperty({
+    example: 'web+stellar:tx?xdr=AAAAAgAAAABx…',
+    description: 'A SEP-7 `tx` URI carrying `xdr`, for a wallet to sign.',
+  })
   uri!: string;
 
   @ApiProperty({
@@ -271,16 +387,30 @@ export class LiquidityOperationEntity {
   })
   txHash!: string;
 
-  @ApiProperty({ example: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA…' })
+  @ApiProperty({
+    example: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA…',
+    description: 'A QR code of `uri`, as a PNG data URL.',
+  })
   qr!: string;
 
-  @ApiProperty({ nullable: true, example: '2026-07-04T12:39:56.000Z' })
+  @ApiProperty({
+    nullable: true,
+    example: '2026-07-04T12:39:56.000Z',
+    description:
+      "When the transaction's validity window closes (ISO 8601 date-time); after it the transaction can no longer settle.",
+  })
   expiresAt!: Date | null;
 
-  @ApiProperty({ example: '2026-07-04T12:34:56.000Z' })
+  @ApiProperty({
+    example: '2026-07-04T12:34:56.000Z',
+    description: 'When the operation was built (ISO 8601 date-time).',
+  })
   createdAt!: Date;
 
-  @ApiProperty({ example: '2026-07-04T12:34:56.000Z' })
+  @ApiProperty({
+    example: '2026-07-04T12:34:56.000Z',
+    description: 'When the operation was last updated (ISO 8601 date-time).',
+  })
   updatedAt!: Date;
 }
 
@@ -291,31 +421,63 @@ export class LiquidityOperationEntity {
  * as {@link LiquidityOperationEntity} made generated clients type two fields the
  * list never sent.
  */
+@ApiSchema({
+  description:
+    'A liquidity pool operation as the list returns it: every field but `qr` ' +
+    'and `commissionMemo`, which only the single read derives.',
+})
 export class LiquidityOperationListItemEntity extends OmitType(
   LiquidityOperationEntity,
   ['qr', 'commissionMemo'] as const,
 ) {}
 
+@ApiSchema({
+  description:
+    "A page of the consumer's liquidity pool operations on the API key's network, newest first.",
+})
 export class LiquidityOperationListEntity {
-  @ApiProperty({ type: [LiquidityOperationListItemEntity] })
+  @ApiProperty({
+    type: [LiquidityOperationListItemEntity],
+    description: 'The operations on this page, newest first.',
+  })
   data!: LiquidityOperationListItemEntity[];
 
-  @ApiProperty({ example: 1 })
+  @ApiProperty({
+    example: 1,
+    description: 'How many operations match the filters, across all pages.',
+  })
   total!: number;
 
-  @ApiProperty({ example: 20 })
+  @ApiProperty({ example: 20, description: 'The page size applied.' })
   take!: number;
 
-  @ApiProperty({ example: 0 })
+  @ApiProperty({
+    example: 0,
+    description: 'How many matching operations were skipped before this page.',
+  })
   skip!: number;
 }
 
 /** Result of `POST /v1/liquidity-pools/operations/:id/submit`. */
+@ApiSchema({
+  description:
+    'The result of relaying a signed liquidity pool transaction, with the ' +
+    'operation as it stands afterwards.',
+})
 export class LiquiditySubmitResultEntity {
-  @ApiProperty({ example: true })
+  @ApiProperty({
+    example: true,
+    description:
+      'True when the transaction was confirmed on the ledger (status ' +
+      'SUCCEEDED); false when this broadcast was rejected (see `reason`).',
+  })
   submitted!: boolean;
 
-  @ApiProperty({ enum: SwapStatus, example: 'SUCCEEDED' })
+  @ApiProperty({
+    enum: SwapStatus,
+    example: 'SUCCEEDED',
+    description: "The operation's status after this submission.",
+  })
   status!: SwapStatus;
 
   @ApiProperty({
@@ -347,6 +509,9 @@ export class LiquiditySubmitResultEntity {
   })
   resultCodes?: string[];
 
-  @ApiProperty({ type: LiquidityOperationEntity })
+  @ApiProperty({
+    type: LiquidityOperationEntity,
+    description: 'The operation after this submission.',
+  })
   operation!: LiquidityOperationEntity;
 }

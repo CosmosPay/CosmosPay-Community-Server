@@ -1,4 +1,4 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
   IsIn,
@@ -26,6 +26,11 @@ import { IsSwapAsset } from '@/common/validators/is-swap-asset.validator';
  * those two an asset is the native ticker, "native", or the mint / ERC-20 address,
  * and there is no issuer.
  */
+@ApiSchema({
+  description:
+    'A same-chain swap quote request: sell `amount` of the source asset for ' +
+    'the destination asset on one chain (Stellar when `chain` is omitted).',
+})
 export class QuoteSwapDto {
   @ApiPropertyOptional({
     enum: CHAINS,

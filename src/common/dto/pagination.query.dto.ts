@@ -12,7 +12,12 @@ import { IsInt, IsOptional, Max, Min } from 'class-validator';
  * default.
  */
 export class PaginationQueryDto {
-  @ApiPropertyOptional({ default: 20, maximum: 100, minimum: 1 })
+  @ApiPropertyOptional({
+    default: 20,
+    maximum: 100,
+    minimum: 1,
+    description: 'Page size: how many items to return (1 to 100).',
+  })
   @IsOptional()
   @Type(() => Number)
   @IsInt()
@@ -20,7 +25,11 @@ export class PaginationQueryDto {
   @Max(100)
   take: number = 20;
 
-  @ApiPropertyOptional({ default: 0, minimum: 0 })
+  @ApiPropertyOptional({
+    default: 0,
+    minimum: 0,
+    description: 'How many items to skip before this page (offset).',
+  })
   @IsOptional()
   @Type(() => Number)
   @IsInt()
@@ -36,7 +45,12 @@ export class PaginationQueryDto {
  * them whether there is more.
  */
 export class WidePaginationQueryDto extends PaginationQueryDto {
-  @ApiPropertyOptional({ default: 100, maximum: 100, minimum: 1 })
+  @ApiPropertyOptional({
+    default: 100,
+    maximum: 100,
+    minimum: 1,
+    description: 'Page size: how many items to return (1 to 100).',
+  })
   @IsOptional()
   @Type(() => Number)
   @IsInt()

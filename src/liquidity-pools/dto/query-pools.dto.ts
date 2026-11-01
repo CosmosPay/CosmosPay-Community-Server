@@ -57,7 +57,12 @@ export class QueryLiquidityPoolsDto {
   @IsString()
   cursor?: string;
 
-  @ApiPropertyOptional({ default: 20, maximum: 100 })
+  @ApiPropertyOptional({
+    default: 20,
+    maximum: 100,
+    description:
+      'How many pools to return per page (1 to 100). Page on with the `cursor` the answer returns.',
+  })
   @IsOptional()
   @Type(() => Number)
   @IsInt()

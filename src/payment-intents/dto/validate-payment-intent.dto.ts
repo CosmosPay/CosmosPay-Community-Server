@@ -1,4 +1,4 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiSchema } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
 import { IsString, Matches } from 'class-validator';
 import {
@@ -17,6 +17,10 @@ export const lowercaseHexTxId = ({ value }: { value: unknown }) =>
     ? value.toLowerCase()
     : value;
 
+@ApiSchema({
+  description:
+    'The transaction to check against a payment intent, which settles the intent when it pays it.',
+})
 export class ValidatePaymentIntentDto {
   @ApiProperty({
     description:

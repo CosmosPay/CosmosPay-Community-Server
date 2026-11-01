@@ -1,4 +1,4 @@
-import { ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiPropertyOptional, ApiSchema } from '@nestjs/swagger';
 import {
   IsOptional,
   IsString,
@@ -13,6 +13,12 @@ import {
  * (Stellar), its message bytes (Solana) or its call (Monad) is checked against
  * the stored swap before anything is broadcast.
  */
+@ApiSchema({
+  description:
+    'The signed swap transaction to relay: `signedXdr` for a Stellar swap, ' +
+    '`signedTransaction` for a Solana or Monad swap. It must be the ' +
+    'transaction built for this swap.',
+})
 export class SubmitSwapDto {
   @ApiPropertyOptional({
     description:

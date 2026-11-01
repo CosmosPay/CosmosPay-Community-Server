@@ -1,4 +1,4 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger';
 import { IsOptional, IsString, Matches } from 'class-validator';
 import { IsChainAddress } from '@/common/validators/is-chain-address.validator';
 import { QuoteSwapDto } from '@/swaps/dto/quote-swap.dto';
@@ -9,6 +9,11 @@ import { QuoteSwapDto } from '@/swaps/dto/quote-swap.dto';
  * the `PathPaymentStrictSend` — and return its XDR + SEP-7 `tx` URI + QR. The
  * customer signs in their wallet; the service never holds keys.
  */
+@ApiSchema({
+  description:
+    'A same-chain swap request: the quote fields plus the account that signs ' +
+    '(`source`). The answer is the unsigned transaction for that account to sign.',
+})
 export class CreateSwapDto extends QuoteSwapDto {
   @ApiProperty({
     description:

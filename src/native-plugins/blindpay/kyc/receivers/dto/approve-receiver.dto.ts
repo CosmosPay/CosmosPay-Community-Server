@@ -1,4 +1,4 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger';
 import { IsInt, IsOptional, Min } from 'class-validator';
 import { Type } from 'class-transformer';
 import { IsRedirectUrl } from '@/common/validators/is-redirect-url.validator';
@@ -9,6 +9,10 @@ import { IsRedirectUrl } from '@/common/validators/is-redirect-url.validator';
  * terms-of-service link and moves the receiver to `pending_user`. `redirect_url` is
  * where BlindPay returns the customer (with `?tos_id=...`) after they accept.
  */
+@ApiSchema({
+  description:
+    'Approval of a `pending_review` receiver: requests its terms-of-service link and moves it to `pending_user`.',
+})
 export class ApproveReceiverDto {
   @ApiProperty({
     example: 'https://dev.cosmospay.lat/kyc/return/org/dev/clz9xreceiver01',

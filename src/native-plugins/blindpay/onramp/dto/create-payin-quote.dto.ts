@@ -1,4 +1,4 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
   IsArray,
@@ -26,8 +26,16 @@ import { PayerRulesMatchPaymentMethod } from '@/native-plugins/blindpay/validato
  * the payer's identity + bank. Verified live: without these, the quote/payin is
  * rejected with `transfers_tax_id_required` / `pse_requires_...`.
  */
+@ApiSchema({
+  description:
+    "Payer details some payin methods require: `transfers` needs `transfers_allowed_tax_id`, `pse` needs the payer's name, document, email and bank.",
+})
 export class PayerRulesDto {
-  @ApiPropertyOptional({ type: [String] })
+  @ApiPropertyOptional({
+    type: [String],
+    description:
+      'Tax ids of the payers allowed to fund a `pix` payin, forwarded to BlindPay.',
+  })
   @IsOptional()
   @IsArray()
   @IsString({ each: true })
@@ -41,13 +49,20 @@ export class PayerRulesDto {
   @IsString()
   transfers_allowed_tax_id?: string;
 
-  @ApiPropertyOptional({ type: [String] })
+  @ApiPropertyOptional({
+    type: [String],
+    description:
+      'Tax ids of the payers allowed to fund a `pse` payin, forwarded to BlindPay.',
+  })
   @IsOptional()
   @IsArray()
   @IsString({ each: true })
   pse_allowed_tax_ids?: string[];
 
-  @ApiPropertyOptional({ example: 'Jane Doe' })
+  @ApiPropertyOptional({
+    example: 'Jane Doe',
+    description: "Payer's full name; required for `pse` (Colombia).",
+  })
   @IsOptional()
   @IsString()
   pse_full_name?: string;
@@ -57,22 +72,34 @@ export class PayerRulesDto {
   @IsIn(['CC', 'NIT'])
   pse_document_type?: 'CC' | 'NIT';
 
-  @ApiPropertyOptional({ example: '123456789' })
+  @ApiPropertyOptional({
+    example: '123456789',
+    description: "Payer's document number; required for `pse`.",
+  })
   @IsOptional()
   @IsString()
   pse_document_number?: string;
 
-  @ApiPropertyOptional({ example: 'jane@acme.com' })
+  @ApiPropertyOptional({
+    example: 'jane@acme.com',
+    description: "Payer's email address; required for `pse`.",
+  })
   @IsOptional()
   @IsString()
   pse_email?: string;
 
-  @ApiPropertyOptional({ example: '+573001234567' })
+  @ApiPropertyOptional({
+    example: '+573001234567',
+    description: "Payer's phone number with its country code (`pse`).",
+  })
   @IsOptional()
   @IsString()
   pse_phone?: string;
 
-  @ApiPropertyOptional({ example: '9' })
+  @ApiPropertyOptional({
+    example: '9',
+    description: "Code of the payer's bank; required for `pse`.",
+  })
   @IsOptional()
   @IsString()
   pse_bank_code?: string;
@@ -84,6 +111,10 @@ export class PayerRulesDto {
  * units (e.g. $123.45 -> 12345).
  */
 @PayerRulesMatchPaymentMethod()
+@ApiSchema({
+  description:
+    'A payin (fiat to stablecoin) to price for one of your wallets; the quote expires in about 5 minutes. Amounts are integers in minor units.',
+})
 export class CreatePayinQuoteDto {
   @ApiProperty({
     example: 'clz9xwallet001',
@@ -93,7 +124,12 @@ export class CreatePayinQuoteDto {
   @IsString()
   blockchain_wallet_id!: string;
 
-  @ApiProperty({ enum: CURRENCY_TYPES, example: 'sender' })
+  @ApiProperty({
+    enum: CURRENCY_TYPES,
+    example: 'sender',
+    description:
+      'Whether `request_amount` is what the sender sends (`sender`) or what the receiver receives (`receiver`).',
+  })
   @IsIn(CURRENCY_TYPES)
   currency_type!: CurrencyType;
 
@@ -106,7 +142,12 @@ export class CreatePayinQuoteDto {
   @IsIn(PAYIN_METHODS)
   payment_method!: PayinMethod;
 
-  @ApiProperty({ enum: BLINDPAY_TOKENS, example: 'USDC' })
+  @ApiProperty({
+    enum: BLINDPAY_TOKENS,
+    example: 'USDC',
+    description:
+      'Stablecoin the wallet receives; `USDB` is the test token of the development instance.',
+  })
   @IsIn(BLINDPAY_TOKENS)
   token!: BlindpayToken;
 
@@ -136,12 +177,17 @@ export class CreatePayinQuoteDto {
   @Type(() => PayerRulesDto)
   payer_rules?: PayerRulesDto;
 
-  @ApiPropertyOptional({ example: false })
+  @ApiPropertyOptional({
+    example: false,
+    description: "BlindPay's OTC flag, forwarded as sent.",
+  })
   @IsOptional()
   @IsBoolean()
   is_otc?: boolean;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({
+    description: 'BlindPay partner fee id, forwarded as sent.',
+  })
   @IsOptional()
   @IsString()
   partner_fee_id?: string;

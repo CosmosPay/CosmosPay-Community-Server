@@ -1,4 +1,4 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
   IsEmail,
@@ -40,6 +40,11 @@ function ChainField(): PropertyDecorator {
   };
 }
 
+@ApiSchema({
+  description:
+    'Request for a single-use challenge to sign: the handle, the address that ' +
+    'will sign, its network and what the signature is for.',
+})
 export class CreateAliasChallengeDto {
   @ApiProperty({
     example: 'emanuel250',
@@ -70,14 +75,30 @@ export class CreateAliasChallengeDto {
   @MaxLength(40)
   network!: string;
 
-  @ApiPropertyOptional({ enum: ALIAS_CLIENT_PURPOSES, default: 'CLAIM' })
+  @ApiPropertyOptional({
+    enum: ALIAS_CLIENT_PURPOSES,
+    default: 'CLAIM',
+    description:
+      'What the signature will be spent on: CLAIM (a new alias), ADD_ADDRESS ' +
+      '(another address on an alias) or RECOVER (finishing an email recovery). ' +
+      'Anything but CLAIM needs an existing alias.',
+  })
   @IsOptional()
   @IsIn(ALIAS_CLIENT_PURPOSES)
   purpose?: AliasChallengePurpose;
 }
 
+@ApiSchema({
+  description:
+    'Request to claim an alias with a signature over a CLAIM challenge. The ' +
+    "address, chain and network registered are the challenge's.",
+})
 export class ClaimAliasDto {
-  @ApiProperty({ example: 'emanuel250' })
+  @ApiProperty({
+    example: 'emanuel250',
+    description:
+      'The handle being claimed: the one the challenge was issued for.',
+  })
   @IsString()
   @MinLength(ALIAS_MIN_LENGTH)
   @MaxLength(ALIAS_MAX_LENGTH)
@@ -119,6 +140,11 @@ export class ClaimAliasDto {
   label?: string;
 }
 
+@ApiSchema({
+  description:
+    'Request to add another address to an alias the caller holds, with that ' +
+    "address's signature over an ADD_ADDRESS challenge.",
+})
 export class AddAliasAddressDto {
   @ChainField()
   chain?: Chain;
@@ -131,7 +157,11 @@ export class AddAliasAddressDto {
   @IsChainAddress('chain')
   address!: string;
 
-  @ApiProperty({ example: 'testnet' })
+  @ApiProperty({
+    example: 'testnet',
+    description:
+      "Network id the address is on (public | testnet | a custom id); it must be the challenge's.",
+  })
   @IsString()
   @MaxLength(40)
   network!: string;
@@ -151,7 +181,10 @@ export class AddAliasAddressDto {
   @MaxLength(200)
   signature!: string;
 
-  @ApiPropertyOptional({ example: 'cold wallet' })
+  @ApiPropertyOptional({
+    example: 'cold wallet',
+    description: 'Human label for this address.',
+  })
   @IsOptional()
   @IsString()
   @MaxLength(60)
@@ -168,6 +201,11 @@ export class AddAliasAddressDto {
   primary?: boolean;
 }
 
+@ApiSchema({
+  description:
+    "Request to start an alias's email recovery: when the mailbox matches, the " +
+    'token is emailed to it.',
+})
 export class StartAliasRecoveryDto {
   @ApiProperty({
     description:
@@ -181,6 +219,11 @@ export class StartAliasRecoveryDto {
   email!: string;
 }
 
+@ApiSchema({
+  description:
+    'Request to finish an email recovery: the emailed token and a signature ' +
+    'over a RECOVER challenge by the address that takes ownership.',
+})
 export class CompleteAliasRecoveryDto {
   @ApiProperty({ description: 'The token delivered by email.' })
   @IsString()
@@ -199,7 +242,11 @@ export class CompleteAliasRecoveryDto {
   @IsChainAddress('chain')
   address!: string;
 
-  @ApiProperty({ example: 'public' })
+  @ApiProperty({
+    example: 'public',
+    description:
+      "Network id the new address is on (public | testnet | a custom id); it must be the challenge's.",
+  })
   @IsString()
   @MaxLength(40)
   network!: string;
@@ -221,7 +268,10 @@ export class CompleteAliasRecoveryDto {
 }
 
 export class QueryAliasesDto {
-  @ApiPropertyOptional({ default: ALIAS_PAGE_SIZE })
+  @ApiPropertyOptional({
+    default: ALIAS_PAGE_SIZE,
+    description: `Page size: how many aliases to return, at most ${ALIAS_PAGE_SIZE}.`,
+  })
   @IsOptional()
   @Type(() => Number)
   @IsInt()
@@ -229,7 +279,10 @@ export class QueryAliasesDto {
   @Max(ALIAS_PAGE_SIZE)
   take: number = ALIAS_PAGE_SIZE;
 
-  @ApiPropertyOptional({ default: 0 })
+  @ApiPropertyOptional({
+    default: 0,
+    description: 'How many aliases to skip before this page.',
+  })
   @IsOptional()
   @Type(() => Number)
   @IsInt()

@@ -1,10 +1,14 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiSchema } from '@nestjs/swagger';
 
 /**
  * The envelope a payment link with a merchant fee asks its payer to sign: the
  * payment to the merchant and the fee's, with the link's MEMO_ID, built for
  * one payer's account.
  */
+@ApiSchema({
+  description:
+    'The unsigned Stellar envelope a payment link with a merchant fee asks its payer to sign, with its SEP-7 link and QR.',
+})
 export class PayerTransactionEntity {
   @ApiProperty({
     description:

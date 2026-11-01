@@ -1,7 +1,12 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger';
 import { IsOptional, Matches } from 'class-validator';
 import { ZK_TX_HASH_RE } from '@/zk-payments/zk-payments.constants';
 
+@ApiSchema({
+  description:
+    'The transactions of the confidential transfers that paid a private payment, ' +
+    'to verify on-chain and settle it with.',
+})
 export class ConfirmZkPaymentDto {
   @ApiProperty({
     description:

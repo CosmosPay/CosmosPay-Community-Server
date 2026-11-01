@@ -1,4 +1,4 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiSchema } from '@nestjs/swagger';
 import { IsString } from 'class-validator';
 
 /**
@@ -9,6 +9,10 @@ import { IsString } from 'class-validator';
  * destination network (the chain is fixed by the quote's wallet, not the route),
  * so unlike payouts there is no chain selector here.
  */
+@ApiSchema({
+  description:
+    'Executes a payin quote; the answer carries the instructions the payer follows to fund the payin.',
+})
 export class CreatePayinDto {
   @ApiProperty({
     example: 'qu_000000000000',

@@ -1,4 +1,4 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiSchema } from '@nestjs/swagger';
 import { IsString, MaxLength, MinLength } from 'class-validator';
 
 /**
@@ -6,6 +6,12 @@ import { IsString, MaxLength, MinLength } from 'class-validator';
  * the service can relay it. The signed XDR must be the one the service built
  * (its hash is verified against the stored operation before submission).
  */
+@ApiSchema({
+  description:
+    'The signed transaction of a liquidity pool operation, to relay to the ' +
+    'network. It must be the transaction the service built (its hash is ' +
+    'checked) and carry a signature.',
+})
 export class SubmitLiquidityDto {
   @ApiProperty({
     description: 'The signed transaction envelope (base64 XDR).',

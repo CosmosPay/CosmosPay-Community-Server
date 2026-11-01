@@ -1,4 +1,4 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger';
 import {
   ArrayMaxSize,
   ArrayMinSize,
@@ -50,8 +50,16 @@ const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/;
 /** base64url, which is what PKCE and every token here is encoded as. */
 const BASE64URL = /^[A-Za-z0-9_-]+$/;
 
+@ApiSchema({
+  description:
+    'Starts an OAuth (PKCE) wallet sign-in with an identity provider.',
+})
 export class StartWalletOauthDto {
-  @ApiProperty({ enum: WALLET_AUTH_PROVIDER_VALUES, example: 'google' })
+  @ApiProperty({
+    enum: WALLET_AUTH_PROVIDER_VALUES,
+    example: 'google',
+    description: 'The identity provider to sign in with.',
+  })
   @IsIn(WALLET_AUTH_PROVIDER_VALUES)
   provider!: string;
 
@@ -114,6 +122,10 @@ export class StartWalletOauthDto {
   source?: string;
 }
 
+@ApiSchema({
+  description:
+    'Redeems a finished OAuth sign-in handshake with its PKCE verifier.',
+})
 export class ClaimWalletOauthDto {
   @ApiProperty({ description: 'The handshake handle, from /oauth/authorize.' })
   @IsString()
@@ -163,13 +175,18 @@ export class ClaimWalletOauthDto {
   binding?: string;
 }
 
+@ApiSchema({ description: 'Starts a wallet sign-in by emailed code.' })
 export class StartWalletEmailDto {
-  @ApiProperty({ example: 'someone@example.com' })
+  @ApiProperty({
+    example: 'someone@example.com',
+    description: 'The email address to send the six-digit code to.',
+  })
   @IsEmail()
   @MaxLength(320)
   email!: string;
 }
 
+@ApiSchema({ description: 'Answers an emailed sign-in code.' })
 export class VerifyWalletEmailDto {
   @ApiProperty({
     description: 'The claim token returned by /auth/email/start.',
@@ -209,6 +226,10 @@ const STELLAR_LEDGERS: StellarNetwork[] = ['public', 'testnet'];
  * The session token is NOT in this body — it rides in `X-Wallet-Session`, a
  * header of its own because APISIX strips `Authorization` on the way here.
  */
+@ApiSchema({
+  description:
+    "Finishes a wallet sign-in: the wallet's signature over the sign-in challenge, and optionally its backup. The session token travels in `X-Wallet-Session`.",
+})
 export class FinishWalletSignInDto {
   // The ACCOUNT this identity is attached to. Not necessarily the key that
   // signs: a recovered Stellar account keeps its address and changes its signer.
@@ -249,7 +270,11 @@ export class FinishWalletSignInDto {
   })
   stellarAddress?: string;
 
-  @ApiProperty({ example: '2026-01-02T03:04:05Z' })
+  @ApiProperty({
+    example: '2026-01-02T03:04:05Z',
+    description:
+      "When the challenge was signed: an ISO 8601 instant in UTC (`Z`), at most millisecond precision; it must be close to the server's clock.",
+  })
   @IsString()
   @Matches(ISO_INSTANT, { message: 'signedAt must be an ISO instant in UTC' })
   signedAt!: string;
@@ -291,6 +316,10 @@ export class FinishWalletSignInDto {
   network?: StellarNetwork;
 }
 
+@ApiSchema({
+  description:
+    "Replaces the sealed backup box of one of the account's wallets, signed by that wallet.",
+})
 export class ReplaceWalletBackupDto {
   @ApiPropertyOptional({
     enum: CHAINS,
@@ -334,7 +363,11 @@ export class ReplaceWalletBackupDto {
   @MaxLength(BACKUP_BOX_MAX_CHARS)
   box!: string;
 
-  @ApiProperty({ example: '2026-01-02T03:04:05Z' })
+  @ApiProperty({
+    example: '2026-01-02T03:04:05Z',
+    description:
+      "When the challenge was signed: an ISO 8601 instant in UTC (`Z`), at most millisecond precision; it must be close to the server's clock.",
+  })
   @IsString()
   @Matches(ISO_INSTANT, { message: 'signedAt must be an ISO instant in UTC' })
   signedAt!: string;
@@ -356,9 +389,14 @@ export class ReplaceWalletBackupDto {
  * `POST /v1/wallet/recovery/setup` — the operator pays the reserve of an
  * account's two recovery signers. The session token rides in `Authorization`.
  */
+@ApiSchema({
+  description:
+    "Asks the operator to sponsor the reserve of an account's two recovery signers.",
+})
 export class SponsorRecoverySetupDto {
   @ApiProperty({
     example: 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN',
+    description: 'The Stellar account (G...) to set the recovery signers on.',
   })
   @IsString()
   @Matches(STELLAR_ADDRESS, {
@@ -380,7 +418,11 @@ export class SponsorRecoverySetupDto {
   })
   signers!: string[];
 
-  @ApiProperty({ example: '2026-01-02T03:04:05Z' })
+  @ApiProperty({
+    example: '2026-01-02T03:04:05Z',
+    description:
+      "When the challenge was signed: an ISO 8601 instant in UTC (`Z`), at most millisecond precision; it must be close to the server's clock.",
+  })
   @IsString()
   @Matches(ISO_INSTANT, { message: 'signedAt must be an ISO instant in UTC' })
   signedAt!: string;

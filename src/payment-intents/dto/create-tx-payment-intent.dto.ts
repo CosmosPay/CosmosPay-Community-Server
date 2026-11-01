@@ -1,4 +1,4 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
   IsIn,
@@ -21,6 +21,10 @@ import {
  * TransactionEnvelope (XDR) and a `web+stellar:tx?xdr=...` URI for the wallet to
  * sign. `source` and `amount` are required to assemble the payment operation.
  */
+@ApiSchema({
+  description:
+    'Request to create a Stellar SEP-7 `tx` intent: the payer (`source`) is known, so the service builds the unsigned transaction for it to sign.',
+})
 export class CreateTxPaymentIntentDto {
   @ApiProperty({
     description: "Payer's Stellar account: the transaction source.",

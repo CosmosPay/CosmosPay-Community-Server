@@ -1,4 +1,4 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
   IsIn,
@@ -24,6 +24,11 @@ import {
  * wallet's shape and the fixed part's decimals depend on the operation, so the
  * service checks them once it knows the chain and the asset.
  */
+@ApiSchema({
+  description:
+    'A merchant fee to charge on this operation: a percentage, a fixed amount or ' +
+    'both, paid on-chain to `wallet`. At least one of `bps` and `fixed` must be above zero.',
+})
 export class MerchantFeeDto {
   @ApiPropertyOptional({
     description:

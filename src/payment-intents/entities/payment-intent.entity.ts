@@ -1,4 +1,4 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiSchema } from '@nestjs/swagger';
 import { CHAINS } from '@/chains/chains.constants';
 import { MerchantFeeEntity } from '@/common/merchant-fee/merchant-fee.entity';
 import {
@@ -14,14 +14,31 @@ import {
  * Response shape for a payment intent. Annotated with examples so the generated
  * OpenAPI/Swagger shows a concrete sample response (not just an empty body).
  */
+@ApiSchema({
+  description:
+    'A payment intent: one expected payment to a merchant on Stellar, Solana or Monad, with its payment link and lifecycle status.',
+})
 export class PaymentIntentEntity {
-  @ApiProperty({ example: 'clx9z8a1b0000abcd1234efgh' })
+  @ApiProperty({
+    example: 'clx9z8a1b0000abcd1234efgh',
+    description: 'Payment intent id.',
+  })
   id!: string;
 
-  @ApiProperty({ enum: PaymentIntentKind, example: 'TX' })
+  @ApiProperty({
+    enum: PaymentIntentKind,
+    example: 'TX',
+    description:
+      '`TX`: an unsigned Stellar transaction built for a known payer. `PAY`: a payment link any wallet can pay.',
+  })
   kind!: PaymentIntentKind;
 
-  @ApiProperty({ enum: PaymentIntentStatus, example: 'PENDING' })
+  @ApiProperty({
+    enum: PaymentIntentStatus,
+    example: 'PENDING',
+    description:
+      'Lifecycle status. `SUCCEEDED`, `FAILED` and `CANCELLED` are final; an `EXPIRED` intent still settles on a payment verified later.',
+  })
   status!: PaymentIntentStatus;
 
   @ApiProperty({
@@ -46,10 +63,19 @@ export class PaymentIntentEntity {
   })
   source!: string | null;
 
-  @ApiProperty({ example: 'GASMERCHANT…56charpublickey' })
+  @ApiProperty({
+    example: 'GASMERCHANT…56charpublickey',
+    description:
+      "Payee account on the intent's chain (Stellar G..., Solana base58, Monad 0x...).",
+  })
   destination!: string;
 
-  @ApiProperty({ nullable: true, example: '25.5' })
+  @ApiProperty({
+    nullable: true,
+    example: '25.5',
+    description:
+      "Amount to pay, as a decimal string in the asset's units. Null for a `PAY` intent with an open amount.",
+  })
   amount!: string | null;
 
   @ApiProperty({
@@ -132,10 +158,20 @@ export class PaymentIntentEntity {
   })
   qr!: string;
 
-  @ApiProperty({ nullable: true, example: null })
+  @ApiProperty({
+    nullable: true,
+    example: null,
+    description:
+      "The transaction reported or verified for this intent, in its chain's own form (hex lowercase); null until there is one.",
+  })
   txHash!: string | null;
 
-  @ApiProperty({ nullable: true, example: null })
+  @ApiProperty({
+    nullable: true,
+    example: null,
+    description:
+      'Your own reference for the intent, set with `PATCH`; null until set.',
+  })
   reference!: string | null;
 
   @ApiProperty({
@@ -190,22 +226,44 @@ export class PaymentIntentEntity {
   })
   checkoutSentAt!: Date | null;
 
-  @ApiProperty({ example: '2026-06-21T12:34:56.000Z' })
+  @ApiProperty({
+    example: '2026-06-21T12:34:56.000Z',
+    description: 'When the intent was created (ISO 8601).',
+  })
   createdAt!: Date;
 
-  @ApiProperty({ example: '2026-06-21T12:34:56.000Z' })
+  @ApiProperty({
+    example: '2026-06-21T12:34:56.000Z',
+    description: 'When the intent itself last changed (ISO 8601).',
+  })
   updatedAt!: Date;
 }
 
 /** Creation response for a SEP-7 `tx` intent (always has source + xdr). */
+@ApiSchema({
+  description:
+    'A Stellar SEP-7 `tx` intent as created: the unsigned envelope for the known payer, its `web+stellar:tx` link and QR.',
+})
 export class TxPaymentIntentEntity {
-  @ApiProperty({ example: 'clx9z8a1b0000abcd1234efgh' })
+  @ApiProperty({
+    example: 'clx9z8a1b0000abcd1234efgh',
+    description: 'Payment intent id.',
+  })
   id!: string;
 
-  @ApiProperty({ enum: PaymentIntentKind, example: 'TX' })
+  @ApiProperty({
+    enum: PaymentIntentKind,
+    example: 'TX',
+    description: 'Always `TX` for this response.',
+  })
   kind!: PaymentIntentKind;
 
-  @ApiProperty({ enum: PaymentIntentStatus, example: 'PENDING' })
+  @ApiProperty({
+    enum: PaymentIntentStatus,
+    example: 'PENDING',
+    description:
+      'Lifecycle status. `SUCCEEDED`, `FAILED` and `CANCELLED` are final; an `EXPIRED` intent still settles on a payment verified later.',
+  })
   status!: PaymentIntentStatus;
 
   @ApiProperty({
@@ -225,21 +283,33 @@ export class TxPaymentIntentEntity {
 
   @ApiProperty({
     example: 'GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ',
+    description: "Payer's Stellar account: the transaction source.",
   })
   source!: string;
 
   @ApiProperty({
     example: 'GCALNQQBXAPZ2WIRSDDBMSTAKCUH5SG6U76YBFLQLIXJTF7FE5AX7AOO',
+    description: "Payee's Stellar account.",
   })
   destination!: string;
 
-  @ApiProperty({ example: '120.1234567' })
+  @ApiProperty({
+    example: '120.1234567',
+    description: 'Amount to pay, as a decimal string (at most 7 decimals).',
+  })
   amount!: string;
 
-  @ApiProperty({ example: 'native' })
+  @ApiProperty({
+    example: 'native',
+    description: 'Asset code, or `native` for XLM.',
+  })
   asset!: string;
 
-  @ApiProperty({ nullable: true, example: null })
+  @ApiProperty({
+    nullable: true,
+    example: null,
+    description: 'Issuer account of an issued asset; null for XLM.',
+  })
   assetIssuer!: string | null;
 
   @ApiProperty({ example: '123456789', description: 'Mandatory MEMO_ID.' })
@@ -273,10 +343,19 @@ export class TxPaymentIntentEntity {
   })
   merchantFee!: MerchantFeeEntity | null;
 
-  @ApiProperty({ nullable: true, example: 'Order #24' })
+  @ApiProperty({
+    nullable: true,
+    example: 'Order #24',
+    description: 'SEP-7 `msg` shown to the payer in their wallet.',
+  })
   msg!: string | null;
 
-  @ApiProperty({ nullable: true, example: null })
+  @ApiProperty({
+    nullable: true,
+    example: null,
+    description:
+      'SEP-7 `callback` where the wallet POSTs the signed XDR (e.g. `url:https://...`).',
+  })
   callback!: string | null;
 
   @ApiProperty({
@@ -285,16 +364,33 @@ export class TxPaymentIntentEntity {
   })
   xdr!: string;
 
-  @ApiProperty({ example: 'web+stellar:tx?xdr=AAAAAgAAAABx…' })
+  @ApiProperty({
+    example: 'web+stellar:tx?xdr=AAAAAgAAAABx…',
+    description:
+      'The SEP-7 `web+stellar:tx` link carrying the unsigned envelope.',
+  })
   uri!: string;
 
-  @ApiProperty({ example: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA…' })
+  @ApiProperty({
+    example: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA…',
+    description: 'QR code of `uri` (PNG data URL), derived on read.',
+  })
   qr!: string;
 
-  @ApiProperty({ nullable: true, example: null })
+  @ApiProperty({
+    nullable: true,
+    example: null,
+    description:
+      "The transaction reported or verified for this intent, in its chain's own form (hex lowercase); null until there is one.",
+  })
   txHash!: string | null;
 
-  @ApiProperty({ nullable: true, example: null })
+  @ApiProperty({
+    nullable: true,
+    example: null,
+    description:
+      'Your own reference for the intent, set with `PATCH`; null until set.',
+  })
   reference!: string | null;
 
   @ApiProperty({
@@ -344,22 +440,44 @@ export class TxPaymentIntentEntity {
   })
   checkoutSentAt!: Date | null;
 
-  @ApiProperty({ example: '2026-06-21T12:34:56.000Z' })
+  @ApiProperty({
+    example: '2026-06-21T12:34:56.000Z',
+    description: 'When the intent was created (ISO 8601).',
+  })
   createdAt!: Date;
 
-  @ApiProperty({ example: '2026-06-21T12:34:56.000Z' })
+  @ApiProperty({
+    example: '2026-06-21T12:34:56.000Z',
+    description: 'When the intent itself last changed (ISO 8601).',
+  })
   updatedAt!: Date;
 }
 
 /** Creation response for a SEP-7 `pay` intent (no source, no xdr). */
+@ApiSchema({
+  description:
+    'A `pay` intent as created: a payment link any wallet can pay (SEP-7 `pay` on Stellar, Solana Pay on Solana, EIP-681 on Monad) and its QR.',
+})
 export class PayPaymentIntentEntity {
-  @ApiProperty({ example: 'clx9z8a1b0000abcd1234efgh' })
+  @ApiProperty({
+    example: 'clx9z8a1b0000abcd1234efgh',
+    description: 'Payment intent id.',
+  })
   id!: string;
 
-  @ApiProperty({ enum: PaymentIntentKind, example: 'PAY' })
+  @ApiProperty({
+    enum: PaymentIntentKind,
+    example: 'PAY',
+    description: 'Always `PAY` for this response.',
+  })
   kind!: PaymentIntentKind;
 
-  @ApiProperty({ enum: PaymentIntentStatus, example: 'PENDING' })
+  @ApiProperty({
+    enum: PaymentIntentStatus,
+    example: 'PENDING',
+    description:
+      'Lifecycle status. `SUCCEEDED`, `FAILED` and `CANCELLED` are final; an `EXPIRED` intent still settles on a payment verified later.',
+  })
   status!: PaymentIntentStatus;
 
   @ApiProperty({
@@ -386,16 +504,32 @@ export class PayPaymentIntentEntity {
 
   @ApiProperty({
     example: 'GCALNQQBXAPZ2WIRSDDBMSTAKCUH5SG6U76YBFLQLIXJTF7FE5AX7AOO',
+    description:
+      "Payee account on the intent's chain (Stellar G..., Solana base58, Monad 0x...).",
   })
   destination!: string;
 
-  @ApiProperty({ nullable: true, example: '120.1234567' })
+  @ApiProperty({
+    nullable: true,
+    example: '120.1234567',
+    description:
+      "Amount to pay, as a decimal string in the asset's units. Null when the payer chooses it.",
+  })
   amount!: string | null;
 
-  @ApiProperty({ example: 'native' })
+  @ApiProperty({
+    example: 'native',
+    description:
+      "Asset code, or `native` for the chain's coin (XLM, SOL, MON).",
+  })
   asset!: string;
 
-  @ApiProperty({ nullable: true, example: null })
+  @ApiProperty({
+    nullable: true,
+    example: null,
+    description:
+      'Stellar: the issuer. Solana: the SPL mint. Monad: the ERC-20 contract. Null for the native coin.',
+  })
   assetIssuer!: string | null;
 
   @ApiProperty({ example: '123456789', description: 'Mandatory MEMO_ID.' })
@@ -429,10 +563,19 @@ export class PayPaymentIntentEntity {
   })
   merchantFee!: MerchantFeeEntity | null;
 
-  @ApiProperty({ nullable: true, example: 'pay me with lumens' })
+  @ApiProperty({
+    nullable: true,
+    example: 'pay me with lumens',
+    description:
+      'Message shown to the payer in their wallet: SEP-7 `msg` on Stellar, the Solana Pay `message` on Solana.',
+  })
   msg!: string | null;
 
-  @ApiProperty({ nullable: true, example: null })
+  @ApiProperty({
+    nullable: true,
+    example: null,
+    description: 'SEP-7 `callback` (e.g. `url:https://...`). Stellar only.',
+  })
   callback!: string | null;
 
   @ApiProperty({
@@ -445,16 +588,31 @@ export class PayPaymentIntentEntity {
   @ApiProperty({
     example:
       'web+stellar:pay?destination=GCALNQQBXAPZ2WIRSDDBMSTAKCUH5SG6U76YBFLQLIXJTF7FE5AX7AOO&amount=120.1234567',
+    description:
+      'The payment link: SEP-7 `web+stellar:pay` on Stellar, Solana Pay on Solana, EIP-681 on Monad. With a merchant fee it is the hosted checkout on Stellar and a Solana Pay transaction request on Solana.',
   })
   uri!: string;
 
-  @ApiProperty({ example: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA…' })
+  @ApiProperty({
+    example: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA…',
+    description: 'QR code of `uri` (PNG data URL), derived on read.',
+  })
   qr!: string;
 
-  @ApiProperty({ nullable: true, example: null })
+  @ApiProperty({
+    nullable: true,
+    example: null,
+    description:
+      "The transaction reported or verified for this intent, in its chain's own form (hex lowercase); null until there is one.",
+  })
   txHash!: string | null;
 
-  @ApiProperty({ nullable: true, example: null })
+  @ApiProperty({
+    nullable: true,
+    example: null,
+    description:
+      'Your own reference for the intent, set with `PATCH`; null until set.',
+  })
   reference!: string | null;
 
   @ApiProperty({
@@ -504,32 +662,62 @@ export class PayPaymentIntentEntity {
   })
   checkoutSentAt!: Date | null;
 
-  @ApiProperty({ example: '2026-06-21T12:34:56.000Z' })
+  @ApiProperty({
+    example: '2026-06-21T12:34:56.000Z',
+    description: 'When the intent was created (ISO 8601).',
+  })
   createdAt!: Date;
 
-  @ApiProperty({ example: '2026-06-21T12:34:56.000Z' })
+  @ApiProperty({
+    example: '2026-06-21T12:34:56.000Z',
+    description: 'When the intent itself last changed (ISO 8601).',
+  })
   updatedAt!: Date;
 }
 
+@ApiSchema({
+  description:
+    "One page of the consumer's payment intents on the key's network, newest first.",
+})
 export class PaymentIntentListEntity {
-  @ApiProperty({ type: [PaymentIntentEntity] })
+  @ApiProperty({
+    type: [PaymentIntentEntity],
+    description: 'The payment intents on this page, newest first.',
+  })
   data!: PaymentIntentEntity[];
 
-  @ApiProperty({ example: 1 })
+  @ApiProperty({
+    example: 1,
+    description: 'Number of intents matching the filters, across every page.',
+  })
   total!: number;
 
-  @ApiProperty({ example: 20 })
+  @ApiProperty({ example: 20, description: 'Page size applied (1 to 100).' })
   take!: number;
 
-  @ApiProperty({ example: 0 })
+  @ApiProperty({
+    example: 0,
+    description: 'Number of intents skipped before this page.',
+  })
   skip!: number;
 }
 
+@ApiSchema({
+  description: 'Result of checking a transaction against a payment intent.',
+})
 export class ValidationOutcomeEntity {
-  @ApiProperty({ example: true })
+  @ApiProperty({
+    example: true,
+    description:
+      'True when the intent is `SUCCEEDED`: this transaction paid it, or it was already paid.',
+  })
   valid!: boolean;
 
-  @ApiProperty({ enum: PaymentIntentStatus, example: 'SUCCEEDED' })
+  @ApiProperty({
+    enum: PaymentIntentStatus,
+    example: 'SUCCEEDED',
+    description: 'The intent status after the check.',
+  })
   status!: PaymentIntentStatus;
 
   @ApiProperty({
@@ -540,35 +728,59 @@ export class ValidationOutcomeEntity {
   })
   reason?: string;
 
-  @ApiProperty({ type: PaymentIntentEntity, required: false })
+  @ApiProperty({
+    type: PaymentIntentEntity,
+    required: false,
+    description:
+      'The intent after the check; omitted when the check changed nothing.',
+  })
   paymentIntent?: PaymentIntentEntity;
 }
 
+@ApiSchema({ description: 'Confirmation that a payment intent was deleted.' })
 export class DeletedEntity {
-  @ApiProperty({ example: 'clx9z8a1b0000abcd1234efgh' })
+  @ApiProperty({
+    example: 'clx9z8a1b0000abcd1234efgh',
+    description: 'Id of the deleted payment intent.',
+  })
   id!: string;
 
-  @ApiProperty({ example: true })
+  @ApiProperty({ example: true, description: 'Always true.' })
   deleted!: boolean;
 }
 
+@ApiSchema({
+  description: "One status change in a payment intent's audit trail.",
+})
 export class PaymentIntentTransitionEntity {
-  @ApiProperty({ example: 'clxtransition0001' })
+  @ApiProperty({ example: 'clxtransition0001', description: 'Transition id.' })
   id!: string;
 
-  @ApiProperty({ example: 'clx9z8a1b0000abcd1234efgh' })
+  @ApiProperty({
+    example: 'clx9z8a1b0000abcd1234efgh',
+    description: 'Id of the payment intent that changed.',
+  })
   intentId!: string;
 
-  @ApiProperty({ enum: PaymentIntentStatus, example: 'PENDING' })
+  @ApiProperty({
+    enum: PaymentIntentStatus,
+    example: 'PENDING',
+    description: 'Status before the change.',
+  })
   fromStatus!: PaymentIntentStatus;
 
-  @ApiProperty({ enum: PaymentIntentStatus, example: 'SUBMITTED' })
+  @ApiProperty({
+    enum: PaymentIntentStatus,
+    example: 'SUBMITTED',
+    description: 'Status after the change.',
+  })
   toStatus!: PaymentIntentStatus;
 
   @ApiProperty({
     required: false,
     nullable: true,
     example: '3389e9f0…',
+    description: 'The transaction the change carried, if any.',
   })
   txHash!: string | null;
 
@@ -578,15 +790,24 @@ export class PaymentIntentTransitionEntity {
   })
   actor!: string;
 
-  @ApiProperty({ required: false, nullable: true })
+  @ApiProperty({
+    required: false,
+    nullable: true,
+    description:
+      'Why the status changed (e.g. `on-chain payment confirmed`), when recorded.',
+  })
   reason!: string | null;
 
-  @ApiProperty()
+  @ApiProperty({ description: 'When the change happened (ISO 8601).' })
   createdAt!: Date;
 }
 
+@ApiSchema({ description: "A payment intent's status-transition history." })
 export class PaymentIntentTransitionListEntity {
-  @ApiProperty({ type: [PaymentIntentTransitionEntity] })
+  @ApiProperty({
+    type: [PaymentIntentTransitionEntity],
+    description: 'Every status change, oldest first.',
+  })
   // Returned as a bare array from the controller; Swagger documents the item shape.
   data!: PaymentIntentTransitionEntity[];
 }

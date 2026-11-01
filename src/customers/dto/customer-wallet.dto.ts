@@ -1,10 +1,14 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger';
 import { IsIn, IsOptional, IsString, MaxLength } from 'class-validator';
 import { CHAINS, type Chain } from '@/chains/chains.constants';
 import { IsChainAddress } from '@/common/validators/is-chain-address.validator';
 import { CUSTOMER_WALLET_LABEL_MAX } from '@/customers/customers.constants';
 
 /** One wallet of a customer: the chain it is on and its address there. */
+@ApiSchema({
+  description:
+    'One wallet of a customer: the chain it is on and its address there.',
+})
 export class CustomerWalletDto {
   @ApiProperty({
     enum: CHAINS,

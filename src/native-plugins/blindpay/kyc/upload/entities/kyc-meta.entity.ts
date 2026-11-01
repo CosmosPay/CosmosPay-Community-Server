@@ -1,6 +1,10 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiSchema } from '@nestjs/swagger';
 
 /** Where an uploaded KYC document now lives, for use in a receiver's fields. */
+@ApiSchema({
+  description:
+    "A KYC document stored at BlindPay, referenced by its URL in a receiver's `*_file` fields.",
+})
 export class KycUploadEntity {
   @ApiProperty({
     description:
@@ -11,6 +15,10 @@ export class KycUploadEntity {
 }
 
 /** The hosted page where the customer accepts the terms of service. */
+@ApiSchema({
+  description:
+    "The hosted page where the customer accepts BlindPay's terms of service.",
+})
 export class KycTermsOfServiceEntity {
   @ApiProperty({
     description:

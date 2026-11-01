@@ -1,4 +1,4 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
   IsIn,
@@ -27,6 +27,12 @@ import { IsCrossChainAddress } from '@/cross-chain-swaps/is-cross-chain-address.
  * on that chain's own venue (the Stellar DEX, Jupiter, Kuru Flow). On every
  * other network NEAR Intents may swap within the one chain.
  */
+@ApiSchema({
+  description:
+    'A cross-chain swap quote request: sell `amount` of `originAsset` on ' +
+    '`originChain` for `destinationAsset` on `destinationChain`, paid to ' +
+    '`recipient`. NEAR Intents prices it; a failed swap refunds `refundTo`.',
+})
 export class QuoteCrossChainSwapDto {
   @ApiProperty({
     enum: CROSS_CHAIN_NETWORK_IDS,

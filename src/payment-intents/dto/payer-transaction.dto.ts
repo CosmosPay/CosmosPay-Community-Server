@@ -1,7 +1,11 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiSchema } from '@nestjs/swagger';
 import { IsStellarAddress } from '@/common/validators/is-stellar-address.validator';
 
 /** The payer of a payment link that builds its envelope for its payer. */
+@ApiSchema({
+  description:
+    'The payer of a Stellar payment link with a merchant fee, for whom the service builds the envelope to sign.',
+})
 export class PayerTransactionDto {
   @ApiProperty({
     description:

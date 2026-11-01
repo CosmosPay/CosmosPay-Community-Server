@@ -1,4 +1,4 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger';
 import { IsIn, IsOptional } from 'class-validator';
 import { IsRedirectUrl } from '@/common/validators/is-redirect-url.validator';
 
@@ -9,12 +9,16 @@ import { IsRedirectUrl } from '@/common/validators/is-redirect-url.validator';
  * activate the account. `channel: email` delivers the link by email (rate limited to
  * once per day) instead of returning it to display.
  */
+@ApiSchema({
+  description:
+    'A request for a fresh terms-of-service link for a `pending_user` receiver.',
+})
 export class RequestTosDto {
   @ApiPropertyOptional({
     enum: ['code', 'email'],
     default: 'code',
     description:
-      "'code' returns the hosted ToS URL to display; 'email' sends it to the receiver (max once per day).",
+      "'code' returns the hosted ToS URL to display. 'email' records an email send, allowed once per 24 hours per receiver; it sends nothing itself, so you email the returned link.",
   })
   @IsOptional()
   @IsIn(['code', 'email'])

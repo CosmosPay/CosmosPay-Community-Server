@@ -1,10 +1,14 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiSchema } from '@nestjs/swagger';
 import {
   MERCHANT_FEE_PAYERS,
   type MerchantFeePayer,
 } from '@/common/merchant-fee/merchant-fee.constants';
 
 /** The merchant fee an operation charged, as its row records it. */
+@ApiSchema({
+  description:
+    'The merchant fee an operation charged, as its record stores it.',
+})
 export class MerchantFeeEntity {
   @ApiProperty({
     description: 'The percentage part, in basis points.',

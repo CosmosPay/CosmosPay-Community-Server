@@ -1,4 +1,4 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger';
 import {
   ArrayMaxSize,
   IsArray,
@@ -7,6 +7,10 @@ import {
   IsString,
 } from 'class-validator';
 
+@ApiSchema({
+  description:
+    'Request to install a plugin, or re-consent to or reconfigure it: consent to exactly its capabilities, and its settings.',
+})
 export class InstallPluginDto {
   @ApiProperty({
     description:
