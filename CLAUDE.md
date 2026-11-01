@@ -410,11 +410,14 @@ Each of these was a real finding in this codebase, not a hypothetical:
   their row's `txHash`. DeFindex has no row id in its submit, so
   `DefindexTransactionsService` finds the row BY that hash, filtered by consumer and
   the key's network (`defindex_transaction`, written by the build after
-  `verifyBuiltEnvelope` checked DeFindex built exactly the requested call): a miss is
-  `404`, an expired row `400`, and a row is relayed once, its stored answer serving
-  every replay. `POST /v1/defindex/submit` used to hand any signed XDR to DeFindex,
-  an open relay under the deployment's DeFindex key that the shared public key could
-  reach. Never broadcast an envelope no row vouches for, and keep `@AllowPublicKey()`
+  `checkBuiltEnvelope` showed DeFindex built exactly the requested call and nothing
+  more: no memo, time bounds within 15 minutes, a fee within
+  `DEFINDEX_MAX_FEE_STROOPS`, deposit minimums within `slippageBps`, one auth entry,
+  the caller's, rooted at that call, with only the vault's pull of the deposit under
+  it): a miss is `404`, an expired row `400`, and a row is relayed once, its stored
+  answer serving every replay. `POST /v1/defindex/submit` used to hand any signed
+  XDR to DeFindex, an open relay under the deployment's DeFindex key that the shared
+  public key could reach. Never broadcast an envelope no row vouches for, and keep `@AllowPublicKey()`
   off `/v1/defindex`: the wallet calls it with the account's own key.
 - **Input a provider SDK cannot carry is the caller's `400`, refused in the DTO.**
   `@defindex/sdk` takes amounts as JS numbers; an amount past

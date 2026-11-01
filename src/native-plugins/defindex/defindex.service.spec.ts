@@ -69,6 +69,7 @@ describe('DefindexService', () => {
         caller: CALLER,
         amounts: [10_000_000n, 9_007_199_254_740_991n],
         invest: true,
+        slippageBps: 100,
       },
       BUILT,
     );
@@ -91,7 +92,13 @@ describe('DefindexService', () => {
     expect(transactions.record).toHaveBeenCalledWith(
       prodKey,
       'public',
-      { kind: 'withdraw', vault: VAULT, caller: CALLER, shares: 5000n },
+      {
+        kind: 'withdraw',
+        vault: VAULT,
+        caller: CALLER,
+        shares: 5000n,
+        slippageBps: 50,
+      },
       BUILT,
     );
   });

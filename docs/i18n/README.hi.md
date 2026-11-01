@@ -2204,6 +2204,13 @@ seal होती हैं और कभी लौटाई नहीं जा
   है)। वही transaction दोबारा submit करने पर DeFindex को call किए बिना पहला जवाब
   मिलता है। जो client बने हुए XDR को बिना बदले sign करके उसी key से submit करता है,
   जैसा वॉलेट करता है, उसे कुछ नहीं बदलना।
+- **Build अस्वीकार होता है (`502 provider_error`, कारण के साथ log किया जाता है) जब तक
+  DeFindex का envelope ठीक माँगी गई call न हो और उससे ज़्यादा कुछ नहीं:** कोई memo
+  नहीं और time bounds के अलावा कोई precondition नहीं (15 मिनट के भीतर बंद होते हुए),
+  fee (Soroban resource fee सहित) `DEFINDEX_MAX_FEE_STROOPS` के भीतर, एक ही
+  operation, deposit के minimums माँगे गए `slippageBps` के भीतर, और एक ही
+  authorization entry, `caller` की, ठीक उसी call के लिए (deposit के नीचे केवल vault
+  का `caller` से अधिकतम माँगी गई राशियाँ लेना)।
 - **साझा public key हर `/v1/defindex` route पर अस्वीकार होती है**
   (`403 insufficient_scope`), और उन पर अब `x-cosmos-public-key` नहीं है।
 - **बहुत बड़ी राशि अब `400 validation_failed` है, `502 provider_error` नहीं:**
@@ -2213,7 +2220,9 @@ seal होती हैं और कभी लौटाई नहीं जा
   `defindex:submit` है, हर एक 20 प्रति मिनट प्रति consumer और client address
   (`429 rate_limited`)। उनकी DeFindex विफलताएँ अब contract में हैं
   (`x-cosmos-upstream`: 502, 503)।
-- **कोई नया variable नहीं।**
+- **नया variable `DEFINDEX_MAX_FEE_STROOPS`** (default `10000000`, 1 XLM, वही सीमा जो
+  वॉलेट पहले से लागू करता है): एक DeFindex transaction अपने signer से अधिकतम कितना
+  fee ले सकता है।
 
 ### Easy recovery: नया module, नई table, और error envelope में `details`
 
@@ -3220,6 +3229,7 @@ type दोबारा बनाए बिना enum value drop नहीं �
 | `DEFINDEX_API_KEY` | नहीं | — | DeFindex की सर्वर API कुंजी। routes केवल `PLUGINS_ENABLED` में `defindex` होने पर मौजूद हैं; कुंजी के बिना वे `503 misconfigured` लौटाते हैं |
 | `DEFINDEX_BASE_URL` | नहीं | `https://api.defindex.io` | DeFindex API base URL |
 | `DEFINDEX_TIMEOUT_MS` | नहीं | `30000` | DeFindex HTTP timeout (ms) |
+| `DEFINDEX_MAX_FEE_STROOPS` | नहीं | `10000000` | बना हुआ DeFindex transaction अपने signer से अधिकतम कितना ले सकता है, inclusion और Soroban resource fee मिलाकर (stroops); इससे ऊपर का build `502 provider_error` के साथ अस्वीकार होता है |
 | `PLUGINS_ENABLED` | नहीं | — | इस deployment द्वारा दिए जाने वाले plugins के slugs, अल्पविराम से अलग: `plugins/` के sandboxed plugins, और native `blindpay` व `defindex`। खाली होने पर कोई नहीं; जो plugin सूचीबद्ध नहीं है वह कभी load नहीं होता |
 | `PLUGINS_SECRET` | जब किसी enabled plugin में secret settings हों | — | Plugin installations की secret settings को seal करता है (कम से कम 32 अक्षर)। इसे बदलने पर सभी stored plugin secrets पढ़े नहीं जा सकते |
 | `PLUGINS_TRUSTED_KEYS` | नहीं | — | Cosmos Pay support के अलावा वे signers जिनके plugins यहाँ चलते हैं: comma से अलग `<keyId>:<base64url Ed25519 public key>`। किसी और का sign किया, या sign के बाद बदला गया plugin boot रोक देता है |

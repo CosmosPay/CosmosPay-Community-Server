@@ -12,14 +12,16 @@ import { AppConfig, StellarNetwork } from '@/config/configuration';
 import { DefindexClient } from '@/native-plugins/defindex/defindex.client';
 import {
   DEFINDEX_BUILD_TTL_MS,
+  DEFINDEX_CLOCK_SKEW_MS,
   DEFINDEX_SUBMIT_LEASE_MARGIN_MS,
 } from '@/native-plugins/defindex/defindex.constants';
 import {
+  builtEnvelopeRefused,
+  checkBuiltEnvelope,
   type ExpectedDefindexCall,
   signedEnvelope,
   submittableUntil,
   transactionHash,
-  verifyBuiltEnvelope,
 } from '@/native-plugins/defindex/defindex-envelope';
 import { PrismaService } from '@/prisma/prisma.service';
 import { StellarService } from '@/stellar/stellar.service';
@@ -77,8 +79,12 @@ export class DefindexTransactionsService {
 
   /**
    * Records the envelope DeFindex built for `expected`, after checking it is
-   * that call (`verifyBuiltEnvelope`). Building the same transaction twice
-   * keeps the first row: its bytes, and so its deadline, are the same.
+   * that call and nothing more (`checkBuiltEnvelope`: fee and resource fee
+   * within `DEFINDEX_MAX_FEE_STROOPS`, no memo, time bounds within
+   * {@link DEFINDEX_BUILD_TTL_MS}, one operation, the caller's authorization
+   * of exactly that call). A refusal is logged with its reason and answered
+   * `502 provider_error`. Building the same transaction twice keeps the first
+   * row: its bytes, and so its deadline, are the same.
    */
   async record(
     consumer: GatewayConsumer,
@@ -93,13 +99,28 @@ export class DefindexTransactionsService {
         `DeFindex returned no transaction to sign for the ${expected.kind}`,
       );
     }
-    const tx = verifyBuiltEnvelope(
+    const builtAt = new Date();
+    const check = checkBuiltEnvelope(
       envelope,
       this.stellar.passphrase(network),
       expected,
+      {
+        maxFeeStroops: BigInt(
+          this.config.get('defindex', { infer: true }).maxFeeStroops,
+        ),
+        maxValidityMs: DEFINDEX_BUILD_TTL_MS,
+        clockSkewMs: DEFINDEX_CLOCK_SKEW_MS,
+        now: builtAt,
+      },
     );
+    if (!check.ok) {
+      this.logger.error(
+        `Refused a DeFindex ${expected.kind} build for ${consumer.username} on ${network} (vault ${expected.vault}): ${check.reason}`,
+      );
+      throw builtEnvelopeRefused(expected.kind, check.reason);
+    }
+    const { tx } = check;
     const txHash = transactionHash(tx);
-    const builtAt = new Date();
     const local = await this.consumers.resolve(consumer);
 
     try {

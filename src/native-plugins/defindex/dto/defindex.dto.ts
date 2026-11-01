@@ -15,7 +15,10 @@ import {
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { StrKey } from '@stellar/stellar-sdk';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
-import { DEFINDEX_MAX_AMOUNT } from '@/native-plugins/defindex/defindex.constants';
+import {
+  DEFINDEX_MAX_AMOUNT,
+  DEFINDEX_MAX_VAULT_ASSETS,
+} from '@/native-plugins/defindex/defindex.constants';
 import { IsStellarAddress } from '@/common/validators/is-stellar-address.validator';
 
 const UINT_RE = /^(0|[1-9]\d*)$/;
@@ -81,7 +84,7 @@ export class DefindexDepositDto {
   })
   @IsArray()
   @ArrayMinSize(1)
-  @ArrayMaxSize(16)
+  @ArrayMaxSize(DEFINDEX_MAX_VAULT_ASSETS)
   @IsDefindexAmount(true)
   amounts!: string[];
 

@@ -13,6 +13,21 @@ import type { RateLimitPolicy } from '@/common/decorators/rate-limit.decorator';
  */
 export const DEFINDEX_MAX_AMOUNT = BigInt(Number.MAX_SAFE_INTEGER);
 
+/**
+ * The most assets one DeFindex vault call may carry: the length of a deposit's
+ * `amounts`, and of a withdrawal's minimum outputs. DeFindex vaults hold one to
+ * a few assets; this only bounds what a request (or DeFindex's answer) may name.
+ */
+export const DEFINDEX_MAX_VAULT_ASSETS = 16;
+
+/**
+ * The clock difference allowed between this service and whoever set a built
+ * envelope's time bounds (DeFindex): a `maxTime` up to this much past
+ * `DEFINDEX_BUILD_TTL_MS` from now, or a `minTime` up to this much in the
+ * future, is still accepted.
+ */
+export const DEFINDEX_CLOCK_SKEW_MS = 60 * 1000;
+
 /** `slippageBps` when the request names none: 1%, DeFindex's own default. */
 export const DEFINDEX_DEFAULT_SLIPPAGE_BPS = 100;
 

@@ -2210,6 +2210,13 @@ the service under `src/native-plugins/<slug>/`, switched on by the same
   the same transaction again answers the first answer without calling DeFindex. A
   client that signs the built XDR unchanged and submits it with the same key, as
   the wallet does, needs no change.
+- **A build is refused (`502 provider_error`, logged with the reason) unless
+  DeFindex's envelope is the requested call and nothing more:** no memo and no
+  precondition but time bounds closing within 15 minutes, a fee (Soroban resource fee
+  included) within `DEFINDEX_MAX_FEE_STROOPS`, one operation, deposit minimums within
+  the requested `slippageBps`, and one authorization entry, the caller's, for exactly
+  that call (under a deposit, only the vault pulling at most the requested amounts
+  from the caller).
 - **The shared public key is refused on every `/v1/defindex` route**
   (`403 insufficient_scope`), and they no longer carry `x-cosmos-public-key`.
 - **An oversized amount is `400 validation_failed`, no longer `502 provider_error`:**
@@ -2219,7 +2226,9 @@ the service under `src/native-plugins/<slug>/`, switched on by the same
   `defindex:submit`, 20 a minute each per consumer and client address
   (`429 rate_limited`). Their DeFindex failures are now in the contract
   (`x-cosmos-upstream`: 502, 503).
-- **No new variables.**
+- **New variable `DEFINDEX_MAX_FEE_STROOPS`** (default `10000000`, 1 XLM, the ceiling
+  the wallet already enforces): the most a DeFindex transaction may charge its
+  signer.
 
 ### Easy recovery: a new module, a new table, and `details` on the error envelope
 
@@ -3238,6 +3247,7 @@ at least `DATABASE_URL` and `APISIX_GATEWAY_SECRET`.
 | `DEFINDEX_API_KEY` | no | — | DeFindex server API key. The routes exist only with `defindex` in `PLUGINS_ENABLED`; without the key they answer `503 misconfigured` |
 | `DEFINDEX_BASE_URL` | no | `https://api.defindex.io` | DeFindex API base URL |
 | `DEFINDEX_TIMEOUT_MS` | no | `30000` | DeFindex HTTP timeout (ms) |
+| `DEFINDEX_MAX_FEE_STROOPS` | no | `10000000` | The most a built DeFindex transaction may charge its signer, inclusion and Soroban resource fee together (stroops); a build above it is refused with `502 provider_error` |
 | `PLUGINS_ENABLED` | no | — | Comma-separated plugin slugs this deployment serves: sandboxed ones in `plugins/`, and the native `blindpay` and `defindex`. Empty serves none; a plugin not listed is never loaded |
 | `PLUGINS_SECRET` | when an enabled plugin has secret settings | — | Seals the secret settings of plugin installations (at least 32 characters). Changing it makes every stored plugin secret unreadable |
 | `PLUGINS_TRUSTED_KEYS` | no | — | Signers whose plugins run here besides Cosmos Pay support: comma-separated `<keyId>:<base64url Ed25519 public key>`. A plugin signed by anyone else, or changed after signing, stops the boot |

@@ -1463,6 +1463,7 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
   bump）、`409 operation_in_flight`（同一笔交易正在提交中）。再次提交同一笔交易会返回
   第一次的回答，而不调用 DeFindex。像钱包那样不加改动地签名所构建的 XDR、并用同一个 key
   提交的客户端，无需任何改动。
+- **除非 DeFindex 的 envelope 正是所请求的调用且仅此而已，否则构建会被拒绝（`502 provider_error`，并在日志中记录原因）：** 没有 memo，除在 15 分钟内关闭的时间边界外没有其他前置条件，手续费（含 Soroban 资源费）不超过 `DEFINDEX_MAX_FEE_STROOPS`，只有一个操作，存款最小值在所请求的 `slippageBps` 范围内，并且只有一个授权条目，即 `caller` 恰好针对该调用的授权（存款下只允许 vault 从 `caller` 拉取不超过所请求的金额）。
 - **共享公共 key 在每个 `/v1/defindex` 路由上都被拒绝**（`403 insufficient_scope`），
   这些路由也不再带有 `x-cosmos-public-key`。
 - **过大的金额现在是 `400 validation_failed`，不再是 `502 provider_error`：**`amounts`
@@ -1471,7 +1472,7 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
 - **新的配额：** 两个构建共享 `defindex:build`，submit 使用 `defindex:submit`，每个都是
   每个 consumer 和客户端地址每分钟 20 次（`429 rate_limited`）。它们的 DeFindex 失败现已
   写入契约（`x-cosmos-upstream`：502、503）。
-- **没有新变量。**
+- **新变量 `DEFINDEX_MAX_FEE_STROOPS`**（默认 `10000000`，即 1 XLM，与钱包已执行的上限相同）：一笔 DeFindex 交易最多可向签名者收取的费用。
 
 ### 轻松恢复：新模块、新数据表，以及错误响应结构中的 `details`
 
@@ -2137,6 +2138,7 @@ curl -H "X-Gateway-Secret: $APISIX_GATEWAY_SECRET" -H "X-Consumer-Username: ops"
 | `DEFINDEX_API_KEY` | 否 | — | DeFindex 服务端 API 密钥。仅当 `PLUGINS_ENABLED` 包含 `defindex` 时路由才存在；没有密钥时返回 `503 misconfigured` |
 | `DEFINDEX_BASE_URL` | 否 | `https://api.defindex.io` | DeFindex API 基础 URL |
 | `DEFINDEX_TIMEOUT_MS` | 否 | `30000` | DeFindex HTTP 超时（ms） |
+| `DEFINDEX_MAX_FEE_STROOPS` | 否 | `10000000` | 构建出的 DeFindex 交易最多可向签名者收取的费用，包含费与 Soroban 资源费合计（stroops）；超过时构建以 `502 provider_error` 拒绝 |
 | `PLUGINS_ENABLED` | 否 | — | 本部署提供的插件 slug，逗号分隔：`plugins/` 中的沙箱插件，以及原生插件 `blindpay` 和 `defindex`。为空则不提供任何插件；未列出的插件永远不会被加载 |
 | `PLUGINS_SECRET` | 当已启用的插件有 secret 设置时 | — | 封存插件安装的 secret 设置（至少 32 个字符）。更改它会使所有已存储的插件 secret 无法读取 |
 | `PLUGINS_TRUSTED_KEYS` | 否 | — | 除 Cosmos Pay 支持团队之外，其插件可在此运行的签名者：逗号分隔的 `<keyId>:<base64url Ed25519 公钥>`。由其他人签名、或签名后被修改的插件会使启动失败 |

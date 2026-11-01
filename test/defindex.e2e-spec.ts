@@ -9,6 +9,7 @@ import {
   nativeToScVal,
   Networks,
   Operation,
+  SorobanDataBuilder,
   StrKey,
   type Transaction,
   TransactionBuilder,
@@ -137,30 +138,70 @@ const i128 = (n: bigint) => nativeToScVal(n, { type: 'i128' });
 const PASSPHRASES = { public: Networks.PUBLIC, testnet: Networks.TESTNET };
 let sequence = 100n;
 
-/** What DeFindex would build for a deposit: one `deposit` call on the vault. */
+const TOKEN = StrKey.encodeContract(Buffer.alloc(32, 9));
+
+const contractFn = (contract: string, fn: string, args: xdr.ScVal[]) =>
+  xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeContractFn(
+    new xdr.InvokeContractArgs({
+      contractAddress: new Address(contract).toScAddress(),
+      functionName: fn,
+      args,
+    }),
+  );
+
+/**
+ * What DeFindex would build for a single-asset deposit after simulating it:
+ * one `deposit` call with the slippage minimum, the caller's authorization of
+ * it with the vault's pull of the amount under it, and Soroban resources.
+ */
 function depositEnvelope(
   network: keyof typeof PASSPHRASES,
   vault: string,
   caller: string,
   amounts: number[],
   invest: boolean,
+  slippageBps: number,
+  resourceFee = 300_000,
 ): Transaction {
-  const desired = amounts.map((a) => i128(BigInt(a)));
+  const desired = amounts.map(BigInt);
+  const args = [
+    xdr.ScVal.scvVec(desired.map(i128)),
+    xdr.ScVal.scvVec(
+      desired.map((a) => i128((a * BigInt(10_000 - slippageBps)) / 10_000n)),
+    ),
+    new Address(caller).toScVal(),
+    xdr.ScVal.scvBool(invest),
+  ];
+  const auth = new xdr.SorobanAuthorizationEntry({
+    credentials: xdr.SorobanCredentials.sorobanCredentialsSourceAccount(),
+    rootInvocation: new xdr.SorobanAuthorizedInvocation({
+      function: contractFn(vault, 'deposit', args),
+      subInvocations: [
+        new xdr.SorobanAuthorizedInvocation({
+          function: contractFn(TOKEN, 'transfer', [
+            new Address(caller).toScVal(),
+            new Address(vault).toScVal(),
+            i128(desired[0]),
+          ]),
+          subInvocations: [],
+        }),
+      ],
+    }),
+  });
   return new TransactionBuilder(new Account(caller, String(sequence++)), {
-    fee: '100000',
+    fee: '100',
     networkPassphrase: PASSPHRASES[network],
   })
     .addOperation(
       Operation.invokeContractFunction({
         contract: vault,
         function: 'deposit',
-        args: [
-          xdr.ScVal.scvVec(desired),
-          xdr.ScVal.scvVec(desired),
-          new Address(caller).toScVal(),
-          xdr.ScVal.scvBool(invest),
-        ],
+        args,
+        auth: [auth],
       }),
+    )
+    .setSorobanData(
+      new SorobanDataBuilder().setResourceFee(resourceFee).build(),
     )
     .setTimeout(300)
     .build();
@@ -272,7 +313,12 @@ describe('DeFindex submit binding (e2e)', () => {
       (
         network: keyof typeof PASSPHRASES,
         vault: string,
-        params: { caller: string; amounts: number[]; invest: boolean },
+        params: {
+          caller: string;
+          amounts: number[];
+          invest: boolean;
+          slippageBps: number;
+        },
       ) =>
         Promise.resolve({
           xdr: depositEnvelope(
@@ -281,6 +327,7 @@ describe('DeFindex submit binding (e2e)', () => {
             params.caller,
             params.amounts,
             params.invest,
+            params.slippageBps,
           ).toXDR(),
           simulationResponse: {},
           functionName: 'deposit',
@@ -427,6 +474,33 @@ describe('DeFindex submit binding (e2e)', () => {
 
     expect(res.body.code).toBe('validation_failed');
     expect(clientMock.send).not.toHaveBeenCalled();
+  });
+
+  it('refuses a build DeFindex priced above the fee cap (502), recording nothing', async () => {
+    clientMock.deposit.mockResolvedValueOnce({
+      xdr: depositEnvelope(
+        'testnet',
+        VAULT,
+        CALLER,
+        [10_000_000],
+        true,
+        100,
+        20_000_000,
+      ).toXDR(),
+      simulationResponse: {},
+      functionName: 'deposit',
+      params: [],
+    });
+
+    const res = await asTenant(
+      request(http())
+        .post(DEPOSIT)
+        .send({ amounts: ['10000000'], caller: CALLER }),
+    ).expect(502);
+
+    expect(res.body.code).toBe('provider_error');
+    expect(res.body.message).toMatch(/exceeds 10000000 stroops/);
+    expect(rows).toHaveLength(0);
   });
 
   it('refuses an oversized amount as 400 before DeFindex is called', async () => {

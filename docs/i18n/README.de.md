@@ -2336,6 +2336,14 @@ eingeschaltet werden.
   erste Antwort, ohne DeFindex aufzurufen. Ein Client, der das gebaute XDR
   unverändert signiert und mit demselben Key einreicht, wie die Wallet es tut,
   muss nichts ändern.
+- **Ein Build wird abgewiesen (`502 provider_error`, mit Grund geloggt), wenn der
+  Umschlag von DeFindex nicht genau der angefragte Aufruf ist und nichts darüber
+  hinaus:** kein Memo und keine Vorbedingung außer Zeitgrenzen, die innerhalb von 15
+  Minuten schließen, eine Gebühr (Soroban-Ressourcengebühr eingeschlossen) innerhalb
+  von `DEFINDEX_MAX_FEE_STROOPS`, eine Operation, Mindestbeträge der Einzahlung
+  innerhalb des angefragten `slippageBps` und genau ein Autorisierungseintrag, der
+  von `caller`, für genau diesen Aufruf (unter einer Einzahlung nur der Vault, der
+  höchstens die angefragten Beträge von `caller` abzieht).
 - **Der gemeinsame öffentliche Key wird auf jeder `/v1/defindex`-Route abgewiesen**
   (`403 insufficient_scope`), und sie tragen kein `x-cosmos-public-key` mehr.
 - **Ein zu großer Betrag ist `400 validation_failed`, nicht mehr
@@ -2345,7 +2353,9 @@ eingeschaltet werden.
   `defindex:submit`, jeweils 20 pro Minute pro Consumer und Client-Adresse
   (`429 rate_limited`). Ihre DeFindex-Fehler stehen jetzt im Vertrag
   (`x-cosmos-upstream`: 502, 503).
-- **Keine neuen Variablen.**
+- **Neue Variable `DEFINDEX_MAX_FEE_STROOPS`** (Standard `10000000`, 1 XLM, die
+  Obergrenze, die die Wallet bereits durchsetzt): das Höchste, was eine
+  DeFindex-Transaktion ihrem Unterzeichner berechnen darf.
 
 ### Einfache Wiederherstellung: ein neues Modul, eine neue Tabelle und `details` im Fehler-Umschlag
 
@@ -3417,6 +3427,7 @@ passen Sie mindestens `DATABASE_URL` und `APISIX_GATEWAY_SECRET` an.
 | `DEFINDEX_API_KEY` | nein | — | Server-API-Schlüssel von DeFindex. Die Routen existieren nur mit `defindex` in `PLUGINS_ENABLED`; ohne Schlüssel antworten sie mit `503 misconfigured` |
 | `DEFINDEX_BASE_URL` | nein | `https://api.defindex.io` | Basis-URL der DeFindex-API |
 | `DEFINDEX_TIMEOUT_MS` | nein | `30000` | DeFindex-HTTP-Timeout (ms) |
+| `DEFINDEX_MAX_FEE_STROOPS` | nein | `10000000` | Das Höchste, was eine gebaute DeFindex-Transaktion ihrem Unterzeichner berechnen darf, Inklusions- und Soroban-Ressourcengebühr zusammen (Stroops); ein Build darüber wird mit `502 provider_error` abgewiesen |
 | `PLUGINS_ENABLED` | nein | — | Kommagetrennte Slugs der Plugins, die dieses Deployment ausliefert: die isolierten in `plugins/` und die nativen `blindpay` und `defindex`. Leer liefert keines aus; ein nicht aufgeführtes Plugin wird nie geladen |
 | `PLUGINS_SECRET` | wenn ein aktiviertes Plugin geheime Einstellungen hat | — | Versiegelt die geheimen Einstellungen von Plugin-Installationen (mindestens 32 Zeichen). Eine Änderung macht alle gespeicherten Plugin-Geheimnisse unlesbar |
 | `PLUGINS_TRUSTED_KEYS` | nein | — | Signierer, deren Plugins hier neben dem Cosmos-Pay-Support laufen: kommagetrennt `<keyId>:<base64url Ed25519 Public Key>`. Ein von jemand anderem signiertes oder nach dem Signieren verändertes Plugin bricht den Start ab |

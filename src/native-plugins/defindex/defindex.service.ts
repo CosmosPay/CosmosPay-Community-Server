@@ -52,11 +52,12 @@ export class DefindexService {
     // hold is the caller's 400, never a provider error.
     const amounts = dto.amounts.map(defindexAmount);
     const invest = dto.invest ?? true;
+    const slippageBps = dto.slippageBps ?? DEFINDEX_DEFAULT_SLIPPAGE_BPS;
     const built = await this.client.deposit(network, vault, {
       caller: dto.caller,
       amounts,
       invest,
-      slippageBps: dto.slippageBps ?? DEFINDEX_DEFAULT_SLIPPAGE_BPS,
+      slippageBps,
     });
     await this.transactions.record(
       consumer,
@@ -67,6 +68,7 @@ export class DefindexService {
         caller: dto.caller,
         amounts: dto.amounts.map((amount) => BigInt(amount)),
         invest,
+        slippageBps,
       },
       built,
     );
@@ -80,10 +82,11 @@ export class DefindexService {
   ): Promise<VaultTransactionResponse> {
     const network = resolveNetwork(this.config, consumer);
     const shares = defindexAmount(dto.shares);
+    const slippageBps = dto.slippageBps ?? DEFINDEX_DEFAULT_SLIPPAGE_BPS;
     const built = await this.client.withdrawShares(network, vault, {
       caller: dto.caller,
       shares,
-      slippageBps: dto.slippageBps ?? DEFINDEX_DEFAULT_SLIPPAGE_BPS,
+      slippageBps,
     });
     await this.transactions.record(
       consumer,
@@ -93,6 +96,7 @@ export class DefindexService {
         vault,
         caller: dto.caller,
         shares: BigInt(dto.shares),
+        slippageBps,
       },
       built,
     );

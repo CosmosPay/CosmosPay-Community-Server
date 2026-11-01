@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
   Account,
@@ -7,6 +8,7 @@ import {
   nativeToScVal,
   Networks,
   Operation,
+  SorobanDataBuilder,
   StrKey,
   type Transaction,
   TransactionBuilder,
@@ -27,30 +29,67 @@ import { StellarService } from '@/stellar/stellar.service';
 const holder = Keypair.random();
 const CALLER = holder.publicKey();
 const VAULT = StrKey.encodeContract(Buffer.alloc(32, 7));
+const TOKEN = StrKey.encodeContract(Buffer.alloc(32, 9));
 
 const i128 = (n: bigint) => nativeToScVal(n, { type: 'i128' });
 const vec = (values: bigint[]) => xdr.ScVal.scvVec(values.map(i128));
 
+const contractFn = (contract: string, fn: string, args: xdr.ScVal[]) =>
+  xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeContractFn(
+    new xdr.InvokeContractArgs({
+      contractAddress: new Address(contract).toScAddress(),
+      functionName: fn,
+      args,
+    }),
+  );
+
+/**
+ * A deposit as DeFindex hands one out after simulating it: a 1% minimum, the
+ * caller's authorization of the call with the vault's pull of the amount under
+ * it, and Soroban resources (the shape a mainnet simulation recorded).
+ */
 function depositTx(
   amount: bigint,
   passphrase: string = Networks.TESTNET,
   sequence = '41',
+  resourceFee = 300_000,
 ): Transaction {
+  const args = [
+    vec([amount]),
+    vec([(amount * 99n) / 100n]),
+    new Address(CALLER).toScVal(),
+    xdr.ScVal.scvBool(true),
+  ];
+  const auth = new xdr.SorobanAuthorizationEntry({
+    credentials: xdr.SorobanCredentials.sorobanCredentialsSourceAccount(),
+    rootInvocation: new xdr.SorobanAuthorizedInvocation({
+      function: contractFn(VAULT, 'deposit', args),
+      subInvocations: [
+        new xdr.SorobanAuthorizedInvocation({
+          function: contractFn(TOKEN, 'transfer', [
+            new Address(CALLER).toScVal(),
+            new Address(VAULT).toScVal(),
+            i128(amount),
+          ]),
+          subInvocations: [],
+        }),
+      ],
+    }),
+  });
   return new TransactionBuilder(new Account(CALLER, sequence), {
-    fee: '100000',
+    fee: '100',
     networkPassphrase: passphrase,
   })
     .addOperation(
       Operation.invokeContractFunction({
         contract: VAULT,
         function: 'deposit',
-        args: [
-          vec([amount]),
-          vec([amount]),
-          new Address(CALLER).toScVal(),
-          xdr.ScVal.scvBool(true),
-        ],
+        args,
+        auth: [auth],
       }),
+    )
+    .setSorobanData(
+      new SorobanDataBuilder().setResourceFee(resourceFee).build(),
     )
     .setTimeout(300)
     .build();
@@ -62,6 +101,7 @@ const expectedDeposit = (amount: bigint): ExpectedDefindexCall => ({
   caller: CALLER,
   amounts: [amount],
   invest: true,
+  slippageBps: 100,
 });
 
 const built = (tx: Transaction): VaultTransactionResponse => ({
@@ -211,7 +251,11 @@ function setup() {
   const send = jest.fn().mockResolvedValue(SEND_RESULT);
   const client = { send, timeoutMs: 30_000 } as unknown as DefindexClient;
   const config = {
-    get: jest.fn(() => ({ network: 'testnet' })),
+    get: jest.fn((key: string) =>
+      key === 'defindex'
+        ? { timeoutMs: 30_000, maxFeeStroops: 10_000_000 }
+        : { network: 'testnet' },
+    ),
   } as unknown as ConfigService;
   const service = new DefindexTransactionsService(
     prisma,
@@ -276,6 +320,35 @@ describe('DefindexTransactionsService', () => {
       expect(error.getStatus()).toBe(502);
       expect(error.code).toBe(ApiErrorCode.ProviderError);
       expect(rows).toHaveLength(0);
+    });
+
+    it('logs why and stores nothing when the fee is above the cap', async () => {
+      const { service, rows } = setup();
+      const logged = jest
+        .spyOn(Logger.prototype, 'error')
+        .mockImplementation(() => undefined);
+      const tx = depositTx(10_000_000n, Networks.TESTNET, '41', 12_000_000);
+
+      const error = await refusal(
+        service.record(
+          alice,
+          'testnet',
+          expectedDeposit(10_000_000n),
+          built(tx),
+        ),
+      );
+
+      expect(error.getStatus()).toBe(502);
+      expect(error.message).toMatch(
+        /its fee 12000100 exceeds 10000000 stroops/,
+      );
+      expect(logged).toHaveBeenCalledWith(
+        expect.stringContaining(
+          `Refused a DeFindex deposit build for cosmos_alice on testnet (vault ${VAULT}): its fee`,
+        ),
+      );
+      expect(rows).toHaveLength(0);
+      logged.mockRestore();
     });
 
     it('stores nothing when DeFindex returned no transaction', async () => {
