@@ -9,7 +9,8 @@ export type UpstreamProvider =
   | 'NEAR Intents'
   | 'Jupiter'
   | 'Kuru Flow'
-  | 'Soroban RPC';
+  | 'Soroban RPC'
+  | 'DeFindex';
 
 /**
  * Vendor extension the published spec carries, and `swagger.ts` reads back.

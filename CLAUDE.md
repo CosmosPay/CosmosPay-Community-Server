@@ -405,6 +405,21 @@ Each of these was a real finding in this codebase, not a hypothetical:
   listed test-network payment intents until every `findAll` carried it.
 - **A route whose cost an error cannot refund — XLM spent, an account created
   on-chain — carries `@RateLimit`.**
+- **A submit route relays only a transaction this service built, for the same
+  consumer.** Swaps, liquidity and USDT0 compare the signed envelope's hash with
+  their row's `txHash`. DeFindex has no row id in its submit, so
+  `DefindexTransactionsService` finds the row BY that hash, filtered by consumer and
+  the key's network (`defindex_transaction`, written by the build after
+  `verifyBuiltEnvelope` checked DeFindex built exactly the requested call): a miss is
+  `404`, an expired row `400`, and a row is relayed once, its stored answer serving
+  every replay. `POST /v1/defindex/submit` used to hand any signed XDR to DeFindex,
+  an open relay under the deployment's DeFindex key that the shared public key could
+  reach. Never broadcast an envelope no row vouches for, and keep `@AllowPublicKey()`
+  off `/v1/defindex`: the wallet calls it with the account's own key.
+- **Input a provider SDK cannot carry is the caller's `400`, refused in the DTO.**
+  `@defindex/sdk` takes amounts as JS numbers; an amount past
+  `Number.MAX_SAFE_INTEGER` was checked inside the provider call and answered
+  `502 provider_error`.
 - **A guard that refuses logs the refusal.** Interceptors run after guards, so
   the access log never sees a request a guard turned away.
 - **A plan commission with nowhere to be paid is a misconfiguration, not a free

@@ -227,12 +227,12 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | GET | `/v1/liquidity-pools/positions` | `liquidity:read`、`swaps:read` 之一 | ✓ |
 | POST | `/v1/liquidity-pools/withdraw` | `liquidity:write`、`swaps:write` 之一 | ✓ |
 | GET | `/v1/liquidity-pools/{poolId}` | `liquidity:read`、`swaps:read` 之一 | ✓ |
-| GET | `/v1/defindex/vaults` | `liquidity:read`、`swaps:read` 之一 | ✓ |
-| GET | `/v1/defindex/vaults/{vault}` | `liquidity:read`、`swaps:read` 之一 | ✓ |
-| GET | `/v1/defindex/vaults/{vault}/balance` | `liquidity:read`、`swaps:read` 之一 | ✓ |
-| POST | `/v1/defindex/vaults/{vault}/deposit` | `liquidity:write`、`swaps:write` 之一 | ✓ |
-| POST | `/v1/defindex/vaults/{vault}/withdraw` | `liquidity:write`、`swaps:write` 之一 | ✓ |
-| POST | `/v1/defindex/submit` | `liquidity:write`、`swaps:write` 之一 | ✓ |
+| GET | `/v1/defindex/vaults` | `liquidity:read`、`swaps:read` 之一 |  |
+| GET | `/v1/defindex/vaults/{vault}` | `liquidity:read`、`swaps:read` 之一 |  |
+| GET | `/v1/defindex/vaults/{vault}/balance` | `liquidity:read`、`swaps:read` 之一 |  |
+| POST | `/v1/defindex/vaults/{vault}/deposit` | `liquidity:write`、`swaps:write` 之一 |  |
+| POST | `/v1/defindex/vaults/{vault}/withdraw` | `liquidity:write`、`swaps:write` 之一 |  |
+| POST | `/v1/defindex/submit` | `liquidity:write`、`swaps:write` 之一 |  |
 | GET | `/v1/logs` | `payments:read` |  |
 | GET | `/v1/logs/webhooks` | `webhooks:read` |  |
 | GET | `/v1/offramp/payouts` | `offramp:read` |  |
@@ -748,7 +748,7 @@ where: { id, consumer: { apisixUsername: consumer.username } }
 | `GET /v1/assets` | 公开的资产目录 |
 | `GET /v1/aliases/resolve/:name` \| `availability/:name` \| `by-address/:address` | 解析标识的付款方正是这个 key 所服务的匿名调用方；答案完全由请求决定，且从不包含所有者的邮箱 |
 
-被拒绝的路由：`GET /v1/swaps`、`GET /v1/cross-chain-swaps`、`GET /v1/usdt0/transfers`、`GET /v1/liquidity-pools/operations{,/:id}`、`GET /v1/activity/events`、`GET /v1/activity/summary`、所有支付意图读取、所有别名所有者路由（认领、列出、添加或移除地址、释放、恢复），以及 `/v1/kyc`、`/v1/onramp`、`/v1/offramp` 和 `/v1/webhooks` 下的所有路由。没有账户的钱包改为从 Horizon 读取自己的历史记录，并凭拿到的 id 和记录 token 跟踪单笔 swap 或转账。
+被拒绝的路由：`GET /v1/swaps`、`GET /v1/cross-chain-swaps`、`GET /v1/usdt0/transfers`、`GET /v1/liquidity-pools/operations{,/:id}`、`GET /v1/activity/events`、`GET /v1/activity/summary`、所有支付意图读取、所有别名所有者路由（认领、列出、添加或移除地址、释放、恢复），以及 `/v1/kyc`、`/v1/onramp`、`/v1/offramp`、`/v1/defindex` 和 `/v1/webhooks` 下的所有路由。没有账户的钱包改为从 Horizon 读取自己的历史记录，并凭拿到的 id 和记录 token 跟踪单笔 swap 或转账。
 
 **记录 token。** 这个 key 是所有匿名访问者共用的一个消费者，而且任何人都能获取它，因此记录的 id 不是秘密，按消费者限定范围也无法把一个访问者挡在另一个访问者的 swap 之外。所以，在这个 key 上的创建（`POST /v1/swaps`、`POST /v1/cross-chain-swaps`、`POST /v1/usdt0/transfers`）会返回 `publicToken`：`base64url(HMAC-SHA256(key, "<kind>:<id>"))`，每张表一个 kind，所用的 key 由 HKDF 从 `APISIX_GATEWAY_SECRET` 派生（标签 `public-record-token v1`）。这一条记录的路由在 `X-Record-Token` 请求头中接收它，并以恒定时间比较，而错误的 token 会在读取表之前返回与不存在的记录相同的 `404`：
 
@@ -1440,8 +1440,38 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
   其路由保留各自的 scope（`kyc:*`、`onramp:*`、`offramp:*`、`liquidity:*`）。沙箱插件不能
   使用原生插件的 slug。
 - **OpenAPI 契约记录每个原生插件的路由**，无论是否开启：`openapi:generate` 会全部开启。
+- **DeFindex 的 submit 只转发它自己的构建交出去的交易。** 构建存款或取款时，会检查
+  DeFindex 返回的 envelope 正是所请求的调用（来源为 `caller`，对该 vault 的一次调用，
+  金额或份额与请求一致），并以该 key 的 consumer 和网络记录到 `defindex_transaction`，
+  直到其时间边界关闭（最长 15 分钟）。`POST /v1/defindex/submit` 计算已签名 envelope
+  的哈希，只有当它是这些记录之一时才转发；此前它会转发任何已签名的交易。每笔交易只转发
+  一次：DeFindex 的回答会被保存，并返回给之后对它的每一次提交。任何 DeFindex 路由都不接受
+  共享公共 key：钱包的 Earn 页面使用已登录账户自己的 key 调用它们。
 
 ## 升级 — 破坏性变更与部署说明
+
+### DeFindex：submit 绑定到本服务的构建，并对公共 key 关闭
+
+- **迁移 `20261101120000_defindex_transactions`** 创建 `defindex_transaction` 表以及
+  `DefindexTransactionStatus` 和 `DefindexOperationKind` 枚举；不改写任何已有数据。在新
+  构建开始提供服务之前运行 `migrate deploy`。
+- **`POST /v1/defindex/submit` 只转发这样一笔交易的已签名副本：由
+  `POST /v1/defindex/vaults/{vault}/deposit` 或 `/withdraw` 为同一个 API key 的
+  consumer、在其网络上构建，且尚未过期**（其时间边界，最长 15 分钟）。其他一切：
+  `404 not_found`（构建后被改动、为另一个 key 或网络构建，或从未在此构建）、
+  `400 invalid_state_transition`（已过期）、`400 validation_failed`（没有签名、fee
+  bump）、`409 operation_in_flight`（同一笔交易正在提交中）。再次提交同一笔交易会返回
+  第一次的回答，而不调用 DeFindex。像钱包那样不加改动地签名所构建的 XDR、并用同一个 key
+  提交的客户端，无需任何改动。
+- **共享公共 key 在每个 `/v1/defindex` 路由上都被拒绝**（`403 insufficient_scope`），
+  这些路由也不再带有 `x-cosmos-public-key`。
+- **过大的金额现在是 `400 validation_failed`，不再是 `502 provider_error`：**`amounts`
+  和 `shares` 是不大于 9007199254740991 的整数字符串，这是 `@defindex/sdk` 能精确传递的
+  最大值。
+- **新的配额：** 两个构建共享 `defindex:build`，submit 使用 `defindex:submit`，每个都是
+  每个 consumer 和客户端地址每分钟 20 次（`429 rate_limited`）。它们的 DeFindex 失败现已
+  写入契约（`x-cosmos-upstream`：502、503）。
+- **没有新变量。**
 
 ### 轻松恢复：新模块、新数据表，以及错误响应结构中的 `details`
 

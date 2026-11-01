@@ -260,12 +260,12 @@ Paths OpenAPI के `{param}` रूप में लिखे गए हैं
 | GET | `/v1/liquidity-pools/positions` | इनमें से कोई एक `liquidity:read`, `swaps:read` | ✓ |
 | POST | `/v1/liquidity-pools/withdraw` | इनमें से कोई एक `liquidity:write`, `swaps:write` | ✓ |
 | GET | `/v1/liquidity-pools/{poolId}` | इनमें से कोई एक `liquidity:read`, `swaps:read` | ✓ |
-| GET | `/v1/defindex/vaults` | इनमें से कोई एक `liquidity:read`, `swaps:read` | ✓ |
-| GET | `/v1/defindex/vaults/{vault}` | इनमें से कोई एक `liquidity:read`, `swaps:read` | ✓ |
-| GET | `/v1/defindex/vaults/{vault}/balance` | इनमें से कोई एक `liquidity:read`, `swaps:read` | ✓ |
-| POST | `/v1/defindex/vaults/{vault}/deposit` | इनमें से कोई एक `liquidity:write`, `swaps:write` | ✓ |
-| POST | `/v1/defindex/vaults/{vault}/withdraw` | इनमें से कोई एक `liquidity:write`, `swaps:write` | ✓ |
-| POST | `/v1/defindex/submit` | इनमें से कोई एक `liquidity:write`, `swaps:write` | ✓ |
+| GET | `/v1/defindex/vaults` | इनमें से कोई एक `liquidity:read`, `swaps:read` |  |
+| GET | `/v1/defindex/vaults/{vault}` | इनमें से कोई एक `liquidity:read`, `swaps:read` |  |
+| GET | `/v1/defindex/vaults/{vault}/balance` | इनमें से कोई एक `liquidity:read`, `swaps:read` |  |
+| POST | `/v1/defindex/vaults/{vault}/deposit` | इनमें से कोई एक `liquidity:write`, `swaps:write` |  |
+| POST | `/v1/defindex/vaults/{vault}/withdraw` | इनमें से कोई एक `liquidity:write`, `swaps:write` |  |
+| POST | `/v1/defindex/submit` | इनमें से कोई एक `liquidity:write`, `swaps:write` |  |
 | GET | `/v1/logs` | `payments:read` |  |
 | GET | `/v1/logs/webhooks` | `webhooks:read` |  |
 | GET | `/v1/offramp/payouts` | `offramp:read` |  |
@@ -1065,7 +1065,7 @@ where: { id, consumer: { apisixUsername: consumer.username } }
 `GET /v1/liquidity-pools/operations{,/:id}`, `GET /v1/activity/events`,
 `GET /v1/activity/summary`, हर payment-intent read, alias मालिक का हर रूट
 (claim, list, पता जोड़ना या हटाना, release, recovery), और
-`/v1/kyc`, `/v1/onramp`, `/v1/offramp` और `/v1/webhooks` के अंतर्गत सब कुछ। बिना
+`/v1/kyc`, `/v1/onramp`, `/v1/offramp`, `/v1/defindex` और `/v1/webhooks` के अंतर्गत सब कुछ। बिना
 account वाला वॉलेट अपना इतिहास इसके बजाय Horizon से पढ़ता है, और जो id और record
 token उसे दिए गए थे उनसे एक swap या transfer का पीछा करता है।
 
@@ -2176,8 +2176,44 @@ seal होती हैं और कभी लौटाई नहीं जा
   `onramp:*`, `offramp:*`, `liquidity:*`)। कोई sandboxed plugin native slug नहीं ले सकता।
 - **OpenAPI contract हर native plugin के routes का दस्तावेज़ रखता है**, चालू हो या नहीं:
   `openapi:generate` सभी को चालू करता है।
+- **DeFindex का submit केवल वही relay करता है जो उसके अपने builds ने दिया।**
+  Deposit या withdrawal का build जाँचता है कि DeFindex जो envelope लौटाता है वह ठीक
+  माँगी गई call है (source `caller`, vault पर एक call, माँगी गई राशियों या shares के
+  साथ), और उसे key के consumer और network के लिए `defindex_transaction` में दर्ज करता
+  है, जब तक उसकी time bounds बंद न हों (अधिकतम 15 मिनट)। `POST /v1/defindex/submit`
+  signed envelope का hash निकालता है और उसे केवल तभी relay करता है जब वह इन rows में
+  से एक हो; पहले यह कोई भी signed transaction relay कर देता था। हर transaction एक
+  ही बार relay होता है: DeFindex का जवाब सहेजा जाता है और उसके हर बाद के submit को
+  वही लौटाया जाता है। कोई भी DeFindex route साझा public key को स्वीकार नहीं करता:
+  वॉलेट की Earn स्क्रीन उन्हें signed-in account की अपनी key से call करती है।
 
 ## अपग्रेड — breaking changes और deploy नोट्स
+
+### DeFindex: submit इस service के builds से बँधा, और public key के लिए बंद
+
+- **Migration `20261101120000_defindex_transactions`** `defindex_transaction` table
+  और `DefindexTransactionStatus` तथा `DefindexOperationKind` enums बनाता है; कुछ भी
+  दोबारा नहीं लिखा जाता। नया build traffic लेने से पहले `migrate deploy` चलाएँ।
+- **`POST /v1/defindex/submit` केवल उस transaction की signed copy relay करता है
+  जिसे `POST /v1/defindex/vaults/{vault}/deposit` या `/withdraw` ने उसी API key के
+  consumer के लिए, उसके network पर बनाया हो, और उसके expire होने से पहले** (उसकी
+  time bounds, अधिकतम 15 मिनट)। बाकी सब कुछ: `404 not_found` (build के बाद बदला गया,
+  किसी दूसरी key या network के लिए बना, या यहाँ कभी नहीं बना),
+  `400 invalid_state_transition` (expired), `400 validation_failed` (कोई signature
+  नहीं, एक fee bump), `409 operation_in_flight` (वही transaction अभी submit हो रहा
+  है)। वही transaction दोबारा submit करने पर DeFindex को call किए बिना पहला जवाब
+  मिलता है। जो client बने हुए XDR को बिना बदले sign करके उसी key से submit करता है,
+  जैसा वॉलेट करता है, उसे कुछ नहीं बदलना।
+- **साझा public key हर `/v1/defindex` route पर अस्वीकार होती है**
+  (`403 insufficient_scope`), और उन पर अब `x-cosmos-public-key` नहीं है।
+- **बहुत बड़ी राशि अब `400 validation_failed` है, `502 provider_error` नहीं:**
+  `amounts` और `shares` integer strings हैं जो 9007199254740991 से बड़ी नहीं, वह
+  सबसे बड़ा मान जिसे `@defindex/sdk` बिल्कुल सही ढोता है।
+- **नए budgets:** दोनों builds `defindex:build` साझा करते हैं और submit का
+  `defindex:submit` है, हर एक 20 प्रति मिनट प्रति consumer और client address
+  (`429 rate_limited`)। उनकी DeFindex विफलताएँ अब contract में हैं
+  (`x-cosmos-upstream`: 502, 503)।
+- **कोई नया variable नहीं।**
 
 ### Easy recovery: नया module, नई table, और error envelope में `details`
 

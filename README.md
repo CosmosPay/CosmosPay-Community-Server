@@ -260,12 +260,12 @@ Paths use the OpenAPI `{param}` form.
 | GET | `/v1/liquidity-pools/positions` | one of `liquidity:read`, `swaps:read` | ✓ |
 | POST | `/v1/liquidity-pools/withdraw` | one of `liquidity:write`, `swaps:write` | ✓ |
 | GET | `/v1/liquidity-pools/{poolId}` | one of `liquidity:read`, `swaps:read` | ✓ |
-| GET | `/v1/defindex/vaults` | one of `liquidity:read`, `swaps:read` | ✓ |
-| GET | `/v1/defindex/vaults/{vault}` | one of `liquidity:read`, `swaps:read` | ✓ |
-| GET | `/v1/defindex/vaults/{vault}/balance` | one of `liquidity:read`, `swaps:read` | ✓ |
-| POST | `/v1/defindex/vaults/{vault}/deposit` | one of `liquidity:write`, `swaps:write` | ✓ |
-| POST | `/v1/defindex/vaults/{vault}/withdraw` | one of `liquidity:write`, `swaps:write` | ✓ |
-| POST | `/v1/defindex/submit` | one of `liquidity:write`, `swaps:write` | ✓ |
+| GET | `/v1/defindex/vaults` | one of `liquidity:read`, `swaps:read` |  |
+| GET | `/v1/defindex/vaults/{vault}` | one of `liquidity:read`, `swaps:read` |  |
+| GET | `/v1/defindex/vaults/{vault}/balance` | one of `liquidity:read`, `swaps:read` |  |
+| POST | `/v1/defindex/vaults/{vault}/deposit` | one of `liquidity:write`, `swaps:write` |  |
+| POST | `/v1/defindex/vaults/{vault}/withdraw` | one of `liquidity:write`, `swaps:write` |  |
+| POST | `/v1/defindex/submit` | one of `liquidity:write`, `swaps:write` |  |
 | GET | `/v1/logs` | `payments:read` |  |
 | GET | `/v1/logs/webhooks` | `webhooks:read` |  |
 | GET | `/v1/offramp/payouts` | `offramp:read` |  |
@@ -1065,7 +1065,7 @@ Refused: `GET /v1/swaps`, `GET /v1/cross-chain-swaps`, `GET /v1/usdt0/transfers`
 `GET /v1/liquidity-pools/operations{,/:id}`, `GET /v1/activity/events`,
 `GET /v1/activity/summary`, every payment-intent read, every alias owner route
 (claim, list, add or remove an address, release, recovery), and everything under
-`/v1/kyc`, `/v1/onramp`, `/v1/offramp` and `/v1/webhooks`. A wallet without an
+`/v1/kyc`, `/v1/onramp`, `/v1/offramp`, `/v1/defindex` and `/v1/webhooks`. A wallet without an
 account reads its history from Horizon instead, and follows one swap or transfer
 by the id and the record token it was handed.
 
@@ -2181,8 +2181,45 @@ the service under `src/native-plugins/<slug>/`, switched on by the same
   not take a native slug.
 - **The OpenAPI contract documents every native plugin's routes**, enabled or not:
   `openapi:generate` turns them all on.
+- **DeFindex's submit relays only what its own builds handed out.** A deposit or
+  withdrawal build checks that the envelope DeFindex returns is exactly the
+  requested call (source `caller`, one call to the vault with the requested amounts
+  or shares) and records it in `defindex_transaction` for the key's consumer and
+  network, until its time bounds close (15 minutes at most).
+  `POST /v1/defindex/submit` hashes the signed envelope and relays it only when it is
+  one of those rows; before, it relayed any signed transaction. Each one is relayed
+  once: DeFindex's answer is stored and returned to every later submit of it. No
+  DeFindex route admits the shared public key: the wallet's Earn screen calls them
+  with the signed-in account's own key.
 
 ## Upgrading — breaking changes and deploy notes
+
+### DeFindex: submit bound to this service's builds, and closed to the public key
+
+- **Migration `20261101120000_defindex_transactions`** creates the
+  `defindex_transaction` table and the `DefindexTransactionStatus` and
+  `DefindexOperationKind` enums; nothing is rewritten. Run `migrate deploy` before
+  the new build serves.
+- **`POST /v1/defindex/submit` relays only a signed copy of a transaction that
+  `POST /v1/defindex/vaults/{vault}/deposit` or `/withdraw` built for the same API
+  key's consumer, on its network, before it expires** (its time bounds, 15 minutes
+  at most). Anything else: `404 not_found` (changed after the build, built for
+  another key or network, or never built here), `400 invalid_state_transition`
+  (expired), `400 validation_failed` (no signature, a fee bump),
+  `409 operation_in_flight` (the same transaction is being submitted). Submitting
+  the same transaction again answers the first answer without calling DeFindex. A
+  client that signs the built XDR unchanged and submits it with the same key, as
+  the wallet does, needs no change.
+- **The shared public key is refused on every `/v1/defindex` route**
+  (`403 insufficient_scope`), and they no longer carry `x-cosmos-public-key`.
+- **An oversized amount is `400 validation_failed`, no longer `502 provider_error`:**
+  `amounts` and `shares` are integer strings no larger than 9007199254740991, the
+  largest `@defindex/sdk` carries exactly.
+- **New budgets:** the two builds share `defindex:build` and the submit has
+  `defindex:submit`, 20 a minute each per consumer and client address
+  (`429 rate_limited`). Their DeFindex failures are now in the contract
+  (`x-cosmos-upstream`: 502, 503).
+- **No new variables.**
 
 ### Easy recovery: a new module, a new table, and `details` on the error envelope
 

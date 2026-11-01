@@ -338,6 +338,10 @@ const UPSTREAM_FAILURES: Record<
   // SDK's client), wrapped like Horizon: a refusal, an outage and a timeout
   // all answer 503.
   'Soroban RPC': ['UpstreamUnavailable'],
+  // Reached through `@defindex/sdk` (axios), which rejects with DeFindex's body
+  // or axios' error and never says which: every failure is a 502
+  // `provider_error`, and a deployment without its API key a 503.
+  DeFindex: ['UpstreamError', 'UpstreamUnavailable'],
 };
 
 const RESPONSE_STATUS: Record<SharedErrorResponse, number> = {

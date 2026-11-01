@@ -263,12 +263,12 @@ console chega até ela. Os caminhos usam a forma `{param}` do OpenAPI.
 | GET | `/v1/liquidity-pools/positions` | um de `liquidity:read`, `swaps:read` | ✓ |
 | POST | `/v1/liquidity-pools/withdraw` | um de `liquidity:write`, `swaps:write` | ✓ |
 | GET | `/v1/liquidity-pools/{poolId}` | um de `liquidity:read`, `swaps:read` | ✓ |
-| GET | `/v1/defindex/vaults` | um de `liquidity:read`, `swaps:read` | ✓ |
-| GET | `/v1/defindex/vaults/{vault}` | um de `liquidity:read`, `swaps:read` | ✓ |
-| GET | `/v1/defindex/vaults/{vault}/balance` | um de `liquidity:read`, `swaps:read` | ✓ |
-| POST | `/v1/defindex/vaults/{vault}/deposit` | um de `liquidity:write`, `swaps:write` | ✓ |
-| POST | `/v1/defindex/vaults/{vault}/withdraw` | um de `liquidity:write`, `swaps:write` | ✓ |
-| POST | `/v1/defindex/submit` | um de `liquidity:write`, `swaps:write` | ✓ |
+| GET | `/v1/defindex/vaults` | um de `liquidity:read`, `swaps:read` |  |
+| GET | `/v1/defindex/vaults/{vault}` | um de `liquidity:read`, `swaps:read` |  |
+| GET | `/v1/defindex/vaults/{vault}/balance` | um de `liquidity:read`, `swaps:read` |  |
+| POST | `/v1/defindex/vaults/{vault}/deposit` | um de `liquidity:write`, `swaps:write` |  |
+| POST | `/v1/defindex/vaults/{vault}/withdraw` | um de `liquidity:write`, `swaps:write` |  |
+| POST | `/v1/defindex/submit` | um de `liquidity:write`, `swaps:write` |  |
 | GET | `/v1/logs` | `payments:read` |  |
 | GET | `/v1/logs/webhooks` | `webhooks:read` |  |
 | GET | `/v1/offramp/payouts` | `offramp:read` |  |
@@ -1083,7 +1083,7 @@ Recusadas: `GET /v1/swaps`, `GET /v1/cross-chain-swaps`, `GET /v1/usdt0/transfer
 `GET /v1/liquidity-pools/operations{,/:id}`, `GET /v1/activity/events`,
 `GET /v1/activity/summary`, toda leitura de payment intent, toda rota do dono de um
 alias (reivindicar, listar, adicionar ou remover um endereço, liberar, recuperar) e
-tudo sob `/v1/kyc`, `/v1/onramp`, `/v1/offramp` e `/v1/webhooks`. Uma carteira sem
+tudo sob `/v1/kyc`, `/v1/onramp`, `/v1/offramp`, `/v1/defindex` e `/v1/webhooks`. Uma carteira sem
 conta lê o seu histórico no Horizon, e acompanha um swap ou uma transferência pelo id
 e pelo token de registro que recebeu.
 
@@ -2229,8 +2229,46 @@ serviço em `src/native-plugins/<slug>/`, ligados pela mesma lista
   isolado não pode usar um slug nativo.
 - **O contrato OpenAPI documenta as rotas de todo plugin nativo**, ligado ou não:
   `openapi:generate` liga todos.
+- **O submit do DeFindex retransmite só o que as suas próprias construções
+  entregaram.** Ao construir um depósito ou um saque, verifica-se que o envelope que
+  o DeFindex devolve é exatamente a chamada pedida (origem `caller`, uma chamada ao
+  vault com os valores ou as cotas pedidas) e ele é registrado em
+  `defindex_transaction` para o consumer e a rede da key, até que os seus limites
+  de tempo fechem (15 minutos no máximo). `POST /v1/defindex/submit` calcula o hash
+  do envelope assinado e só o retransmite quando ele é uma dessas linhas; antes,
+  retransmitia qualquer transação assinada. Cada uma é retransmitida uma vez: a
+  resposta do DeFindex é guardada e devolvida a cada envio posterior. Nenhuma rota
+  do DeFindex admite a key pública compartilhada: a tela Earn da carteira as chama
+  com a key própria da conta com sessão iniciada.
 
 ## Atualização — mudanças incompatíveis e notas de deploy
+
+### DeFindex: o submit fica preso às construções deste serviço e fechado à key pública
+
+- **A migração `20261101120000_defindex_transactions`** cria a tabela
+  `defindex_transaction` e os enums `DefindexTransactionStatus` e
+  `DefindexOperationKind`; nada é reescrito. Rode `migrate deploy` antes de o novo
+  build atender.
+- **`POST /v1/defindex/submit` retransmite só uma cópia assinada de uma transação
+  que `POST /v1/defindex/vaults/{vault}/deposit` ou `/withdraw` construiu para o
+  consumer da mesma API key, na sua rede, antes de expirar** (os seus limites de
+  tempo, 15 minutos no máximo). Qualquer outra coisa: `404 not_found` (alterada
+  depois da construção, construída para outra key ou rede, ou nunca construída
+  aqui), `400 invalid_state_transition` (expirada), `400 validation_failed` (sem
+  assinatura, um fee bump), `409 operation_in_flight` (a mesma transação está sendo
+  enviada). Enviar de novo a mesma transação devolve a primeira resposta sem chamar
+  o DeFindex. Um cliente que assina o XDR construído sem alterá-lo e o envia com a
+  mesma key, como faz a carteira, não precisa mudar nada.
+- **A key pública compartilhada é recusada em todas as rotas de `/v1/defindex`**
+  (`403 insufficient_scope`), e elas não trazem mais `x-cosmos-public-key`.
+- **Um valor grande demais é `400 validation_failed`, não mais
+  `502 provider_error`:** `amounts` e `shares` são strings inteiras não maiores que
+  9007199254740991, o maior que o `@defindex/sdk` carrega com exatidão.
+- **Orçamentos novos:** as duas construções compartilham `defindex:build` e o
+  submit tem `defindex:submit`, 20 por minuto cada um por consumer e endereço do
+  cliente (`429 rate_limited`). As suas falhas do DeFindex agora estão no contrato
+  (`x-cosmos-upstream`: 502, 503).
+- **Nenhuma variável nova.**
 
 ### Recuperação fácil: um módulo novo, uma tabela nova e `details` no envelope de erro
 
