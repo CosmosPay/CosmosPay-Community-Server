@@ -51,9 +51,18 @@ export function buildSwaggerConfig(openapi: AppConfig['openapi']) {
   const builder = new DocumentBuilder()
     .setTitle('Cosmos Pay Payments API')
     .setDescription(
-      'Payments microservice (Stellar payment intents, swaps, liquidity ' +
-        'pools, fiat on/offramp). Paths already include the version ' +
-        '(`/v1/...`).\n\n' +
+      'Payments API for merchants and wallets. It covers: payment intents ' +
+        'on Stellar, Solana and Monad (with payment links, customers and a ' +
+        'product catalog); swaps (Stellar path payments, Solana via Jupiter, ' +
+        'Monad via Kuru Flow), cross-chain swaps across Stellar, Solana, ' +
+        'Monad and other networks through NEAR Intents, and USDT0 transfers ' +
+        'from Stellar to EVM networks through LayerZero; private payments ' +
+        'with a hidden amount on Stellar; Stellar liquidity pools and ' +
+        'DeFindex yield vaults; fiat on/offramp and KYC through BlindPay; ' +
+        'and webhooks that notify your server of payment events. ' +
+        'Liquidity pools, DeFindex, USDT0, private payments and the SEP-10 ' +
+        'and SEP-30 routes are Stellar only. Paths already include ' +
+        'the version (`/v1/...`).\n\n' +
         '**Two ways to call it, and the spec documents both.** Through the ' +
         'APISIX gateway (the deployment integrators use), you send your API ' +
         'key as `Authorization: Bearer <key>`; the gateway validates it, ' +
