@@ -12,7 +12,11 @@ import { IsInt, IsOptional, Max, Min } from 'class-validator';
  * there is more.
  */
 export class QueryProductsDto {
-  @ApiPropertyOptional({ default: 100, maximum: 100 })
+  @ApiPropertyOptional({
+    default: 100,
+    maximum: 100,
+    description: 'Page size: how many items to return (1 to 100).',
+  })
   @IsOptional()
   @Type(() => Number)
   @IsInt()
@@ -20,7 +24,10 @@ export class QueryProductsDto {
   @Max(100)
   take: number = 100;
 
-  @ApiPropertyOptional({ default: 0 })
+  @ApiPropertyOptional({
+    default: 0,
+    description: 'How many items to skip before this page (offset).',
+  })
   @IsOptional()
   @Type(() => Number)
   @IsInt()

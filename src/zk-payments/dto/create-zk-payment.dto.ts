@@ -1,4 +1,4 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
   IsInt,
@@ -20,6 +20,11 @@ import {
   ZK_PAYMENT_MAX_EXPIRES_IN_MINUTES,
 } from '@/zk-payments/zk-payments.constants';
 
+@ApiSchema({
+  description:
+    'Request to create a private payment: an amount in XLM that the payer pays ' +
+    'to `recipient` with confidential transfers, which hide it on-chain.',
+})
 export class CreateZkPaymentDto {
   @ApiProperty({
     description:

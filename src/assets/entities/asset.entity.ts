@@ -1,6 +1,10 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiSchema } from '@nestjs/swagger';
 
 /** Issuer powers a holder cannot undo once the trustline exists. */
+@ApiSchema({
+  description:
+    'Issuer powers over an asset that a holder cannot undo once the trustline exists.',
+})
 export class AssetIssuerFlagsEntity {
   @ApiProperty({
     example: true,
@@ -23,8 +27,16 @@ export class AssetIssuerFlagsEntity {
  * catalog deliberately carries two `EURC` rows from different issuers so that bug
  * shows up in development rather than in someone's balance.
  */
+@ApiSchema({
+  description:
+    "One catalogued Stellar asset with its issuer's identity. `code` and `issuer` together identify it; neither alone does.",
+})
 export class AssetEntity {
-  @ApiProperty({ example: 'USDT0' })
+  @ApiProperty({
+    example: 'USDT0',
+    description:
+      'Stellar asset code (1 to 12 alphanumeric characters); `XLM` for the native asset.',
+  })
   code!: string;
 
   @ApiProperty({
@@ -34,7 +46,10 @@ export class AssetEntity {
   })
   issuer!: string | null;
 
-  @ApiProperty({ example: 'USDT0' })
+  @ApiProperty({
+    example: 'USDT0',
+    description: 'Display name of the asset (e.g. `USD Coin`).',
+  })
   name!: string;
 
   @ApiProperty({
@@ -69,12 +84,23 @@ export class AssetEntity {
   })
   contract!: string | null;
 
-  @ApiProperty({ type: AssetIssuerFlagsEntity })
+  @ApiProperty({
+    type: AssetIssuerFlagsEntity,
+    description: "Issuer powers over the holder's trustline.",
+  })
   flags!: AssetIssuerFlagsEntity;
 }
 
+@ApiSchema({
+  description:
+    'The asset catalog of one Stellar network, with its registry version.',
+})
 export class AssetListEntity {
-  @ApiProperty({ example: 'public', enum: ['public', 'testnet'] })
+  @ApiProperty({
+    example: 'public',
+    enum: ['public', 'testnet'],
+    description: 'The Stellar network listed: `public` (mainnet) or `testnet`.',
+  })
   network!: string;
 
   @ApiProperty({
@@ -85,6 +111,9 @@ export class AssetListEntity {
   })
   version!: number;
 
-  @ApiProperty({ type: [AssetEntity] })
+  @ApiProperty({
+    type: [AssetEntity],
+    description: 'The catalogued assets of that network.',
+  })
   data!: AssetEntity[];
 }

@@ -1,4 +1,4 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
   IsInt,
@@ -18,6 +18,11 @@ import { IsStellarAddress } from '@/common/validators/is-stellar-address.validat
  * and remaps the amounts accordingly. Omit an asset code (or pass
  * "XLM"/"native") for native lumens; a non-native asset needs its issuer.
  */
+@ApiSchema({
+  description:
+    'A liquidity pool deposit request. The pair may be given in either order: ' +
+    "the service reorders it, and its amounts, into the protocol's canonical order.",
+})
 export class DepositLiquidityDto {
   @ApiProperty({
     description: 'Account funding (and signing) the deposit: the tx source.',

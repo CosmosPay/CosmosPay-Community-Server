@@ -1,4 +1,4 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger';
 import { IsIn, IsString } from 'class-validator';
 import {
   CHAIN_VARIANTS,
@@ -12,8 +12,16 @@ import { IsWalletAddressForChain } from '@/common/validators/is-wallet-address-f
  * the quote's `approve`; for Stellar/Solana, pass the `signed_transaction`
  * returned by the authorize step. The service never signs.
  */
+@ApiSchema({
+  description:
+    "Executes a payout quote. For `evm` the sender has already sent the quote's `approve`; for `stellar` and `solana` send the `signed_transaction` from the authorize step.",
+})
 export class CreatePayoutDto {
-  @ApiProperty({ example: 'qe_000000000000' })
+  @ApiProperty({
+    example: 'qe_000000000000',
+    description:
+      'Id of a payout quote from `POST /v1/offramp/quotes`; a quote is paid out at most once.',
+  })
   @IsString()
   quote_id!: string;
 
@@ -26,7 +34,12 @@ export class CreatePayoutDto {
   @IsWalletAddressForChain('chain')
   sender_wallet_address!: string;
 
-  @ApiProperty({ enum: CHAIN_VARIANTS, example: 'evm' })
+  @ApiProperty({
+    enum: CHAIN_VARIANTS,
+    example: 'evm',
+    description:
+      'Chain family the payout is sent from: `evm`, `stellar` or `solana`.',
+  })
   @IsIn(CHAIN_VARIANTS)
   chain!: ChainVariant;
 

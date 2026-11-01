@@ -1,6 +1,9 @@
-import { ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiPropertyOptional, ApiSchema } from '@nestjs/swagger';
 import { IsObject, IsOptional } from 'class-validator';
 
+@ApiSchema({
+  description: "Request to run one of a plugin's queries or commands.",
+})
 export class InvokePluginActionDto {
   @ApiPropertyOptional({
     description:

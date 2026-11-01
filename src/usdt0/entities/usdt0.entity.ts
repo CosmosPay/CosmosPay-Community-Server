@@ -1,16 +1,21 @@
-import { ApiProperty, OmitType } from '@nestjs/swagger';
+import { ApiProperty, ApiSchema, OmitType } from '@nestjs/swagger';
 import { Usdt0TransferStatus } from '@generated/prisma/client';
 import { MerchantFeeEntity } from '@/common/merchant-fee/merchant-fee.entity';
 import { USDT0_CHAIN_IDS } from '@/usdt0/usdt0.constants';
 import { ApiPublicTokenProperty } from '@/common/decorators/api-record-token.decorator';
 
 /** USDT0 on Stellar: the classic asset and its Stellar Asset Contract. */
+@ApiSchema({
+  description:
+    'USDT0 on Stellar: the classic asset (code and issuer) and its Stellar Asset Contract.',
+})
 export class Usdt0TokenEntity {
-  @ApiProperty({ example: 'USDT0' })
+  @ApiProperty({ example: 'USDT0', description: 'The Stellar asset code.' })
   code!: string;
 
   @ApiProperty({
     example: 'GATISXX6BZ6NC7IKQBY37CJD4SOZL3CYZJWXEDG6JVIY4WBS6KXJHN6Q',
+    description: "The asset's issuer account.",
   })
   issuer!: string;
 
@@ -22,6 +27,9 @@ export class Usdt0TokenEntity {
 }
 
 /** One network USDT0 can be sent to from Stellar. */
+@ApiSchema({
+  description: 'One destination network USDT0 can be sent to from Stellar.',
+})
 export class Usdt0RouteEntity {
   @ApiProperty({
     enum: USDT0_CHAIN_IDS,
@@ -30,7 +38,10 @@ export class Usdt0RouteEntity {
   })
   chain!: string;
 
-  @ApiProperty({ example: 'Ethereum' })
+  @ApiProperty({
+    example: 'Ethereum',
+    description: "The network's display name.",
+  })
   name!: string;
 
   @ApiProperty({ example: 30101, description: 'LayerZero endpoint id.' })
@@ -47,6 +58,11 @@ export class Usdt0RouteEntity {
 }
 
 /** Response of `GET /v1/usdt0/routes`. */
+@ApiSchema({
+  description:
+    'The networks USDT0 can be sent to from Stellar, with the token and the ' +
+    'LayerZero OFT contract a transfer uses.',
+})
 export class Usdt0RoutesEntity {
   @ApiProperty({
     example: 'public',
@@ -62,7 +78,11 @@ export class Usdt0RoutesEntity {
   })
   available!: boolean;
 
-  @ApiProperty({ type: Usdt0TokenEntity })
+  @ApiProperty({
+    type: Usdt0TokenEntity,
+    description:
+      'USDT0 on Stellar: its classic asset and Stellar Asset Contract.',
+  })
   token!: Usdt0TokenEntity;
 
   @ApiProperty({
@@ -77,19 +97,40 @@ export class Usdt0RoutesEntity {
   })
   eid!: number;
 
-  @ApiProperty({ type: [Usdt0RouteEntity] })
+  @ApiProperty({
+    type: [Usdt0RouteEntity],
+    description:
+      'The destination networks, Ethereum first and then by name. Empty for a dev (testnet) key.',
+  })
   routes!: Usdt0RouteEntity[];
 }
 
 /** Response of `POST /v1/usdt0/quote`: pricing only, nothing is persisted. */
+@ApiSchema({
+  description:
+    'The price of a USDT0 transfer from Stellar: what is sent and arrives, the ' +
+    "fees and the OFT's limits. Nothing is persisted.",
+})
 export class Usdt0QuoteEntity {
-  @ApiProperty({ enum: USDT0_CHAIN_IDS, example: 'eth' })
+  @ApiProperty({
+    enum: USDT0_CHAIN_IDS,
+    example: 'eth',
+    description: 'The destination network id, as requested.',
+  })
   to!: string;
 
-  @ApiProperty({ example: 30101 })
+  @ApiProperty({
+    example: 30101,
+    description: "The destination network's LayerZero endpoint id.",
+  })
   eid!: number;
 
-  @ApiProperty({ enum: ['USDT', 'USDT0'], example: 'USDT' })
+  @ApiProperty({
+    enum: ['USDT', 'USDT0'],
+    example: 'USDT',
+    description:
+      'What arrives: native `USDT` on Ethereum, `USDT0` everywhere else.',
+  })
   receives!: string;
 
   @ApiProperty({ example: '12.5000001', description: 'The amount asked for.' })
@@ -167,8 +208,16 @@ export class Usdt0QuoteEntity {
 }
 
 /** A USDT0 transfer from Stellar (the `usdt0_transfer` row) and its derived fields. */
+@ApiSchema({
+  description:
+    'A USDT0 transfer from Stellar to an EVM network: the stored transfer, its ' +
+    'unsigned Soroban transaction and how far LayerZero has delivered it.',
+})
 export class Usdt0TransferEntity {
-  @ApiProperty({ example: 'cm2u0t0transfer0000000001' })
+  @ApiProperty({
+    example: 'cm2u0t0transfer0000000001',
+    description: "The transfer's id, used by the read and submit routes.",
+  })
   id!: string;
 
   @ApiProperty({
@@ -189,16 +238,30 @@ export class Usdt0TransferEntity {
 
   @ApiProperty({
     example: 'GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ',
+    description:
+      'The Stellar account that holds the USDT0, signs the transaction and pays its fees in XLM.',
   })
   source!: string;
 
-  @ApiProperty({ enum: USDT0_CHAIN_IDS, example: 'eth' })
+  @ApiProperty({
+    enum: USDT0_CHAIN_IDS,
+    example: 'eth',
+    description: 'The destination network id (`GET /v1/usdt0/routes`).',
+  })
   to!: string;
 
-  @ApiProperty({ example: 30101 })
+  @ApiProperty({
+    example: 30101,
+    description: "The destination network's LayerZero endpoint id.",
+  })
   eid!: number;
 
-  @ApiProperty({ enum: ['USDT', 'USDT0'], example: 'USDT' })
+  @ApiProperty({
+    enum: ['USDT', 'USDT0'],
+    example: 'USDT',
+    description:
+      'What arrives: native `USDT` on Ethereum, `USDT0` everywhere else.',
+  })
   receives!: string;
 
   @ApiProperty({
@@ -391,14 +454,24 @@ export class Usdt0TransferEntity {
   })
   submittedAt!: Date | null;
 
-  @ApiProperty({ example: '2026-10-25T12:00:00.000Z' })
+  @ApiProperty({
+    example: '2026-10-25T12:00:00.000Z',
+    description: 'When the transfer was built (ISO 8601 date-time).',
+  })
   createdAt!: Date;
 
-  @ApiProperty({ example: '2026-10-25T12:00:00.000Z' })
+  @ApiProperty({
+    example: '2026-10-25T12:00:00.000Z',
+    description: 'When the transfer was last updated (ISO 8601 date-time).',
+  })
   updatedAt!: Date;
 }
 
 /** What `POST /v1/usdt0/transfers` answers: the transfer, and its read token. */
+@ApiSchema({
+  description:
+    'A newly built USDT0 transfer, plus its read token when the caller is the shared public key.',
+})
 export class Usdt0TransferCreatedEntity extends Usdt0TransferEntity {
   @ApiPublicTokenProperty()
   publicToken?: string;
@@ -408,25 +481,47 @@ export class Usdt0TransferCreatedEntity extends Usdt0TransferEntity {
  * A transfer as `GET /v1/usdt0/transfers` lists it: everything but the QR,
  * which the single read renders.
  */
+@ApiSchema({
+  description:
+    'A USDT0 transfer as the list returns it: every field but `qr`, which only the single read renders.',
+})
 export class Usdt0TransferListItemEntity extends OmitType(Usdt0TransferEntity, [
   'qr',
 ] as const) {}
 
+@ApiSchema({
+  description:
+    "A page of the consumer's USDT0 transfers, newest first, as last refreshed.",
+})
 export class Usdt0TransferListEntity {
-  @ApiProperty({ type: [Usdt0TransferListItemEntity] })
+  @ApiProperty({
+    type: [Usdt0TransferListItemEntity],
+    description: 'The transfers on this page, newest first.',
+  })
   data!: Usdt0TransferListItemEntity[];
 
-  @ApiProperty({ example: 1 })
+  @ApiProperty({
+    example: 1,
+    description: 'How many transfers match the filter, across all pages.',
+  })
   total!: number;
 
-  @ApiProperty({ example: 20 })
+  @ApiProperty({ example: 20, description: 'The page size applied.' })
   take!: number;
 
-  @ApiProperty({ example: 0 })
+  @ApiProperty({
+    example: 0,
+    description: 'How many matching transfers were skipped before this page.',
+  })
   skip!: number;
 }
 
 /** Result of `POST /v1/usdt0/transfers/{id}/submit`. */
+@ApiSchema({
+  description:
+    'The result of relaying a signed USDT0 transaction, with the transfer as ' +
+    'it stands afterwards.',
+})
 export class Usdt0SubmitResultEntity {
   @ApiProperty({
     example: true,
@@ -436,7 +531,11 @@ export class Usdt0SubmitResultEntity {
   })
   submitted!: boolean;
 
-  @ApiProperty({ enum: Usdt0TransferStatus, example: 'SUBMITTED' })
+  @ApiProperty({
+    enum: Usdt0TransferStatus,
+    example: 'SUBMITTED',
+    description: "The transfer's status after this submission.",
+  })
   status!: Usdt0TransferStatus;
 
   @ApiProperty({
@@ -457,6 +556,9 @@ export class Usdt0SubmitResultEntity {
   })
   reason?: string;
 
-  @ApiProperty({ type: Usdt0TransferEntity })
+  @ApiProperty({
+    type: Usdt0TransferEntity,
+    description: 'The transfer after this submission.',
+  })
   transfer!: Usdt0TransferEntity;
 }

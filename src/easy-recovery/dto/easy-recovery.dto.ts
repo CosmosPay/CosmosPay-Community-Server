@@ -1,4 +1,4 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiSchema } from '@nestjs/swagger';
 import {
   IsString,
   Matches,
@@ -38,6 +38,10 @@ function IsReceiverKey(options?: ValidationOptions) {
 }
 
 /** `POST /v1/wallet/easy-recovery/sessions` — the NEW device opens a session. */
+@ApiSchema({
+  description:
+    'Opens an easy-recovery session from the new device, with the key the wallet will be sealed to.',
+})
 export class CreateEasyRecoverySessionDto {
   @ApiProperty({
     description:
@@ -55,6 +59,10 @@ export class CreateEasyRecoverySessionDto {
 }
 
 /** `POST /v1/wallet/easy-recovery/sessions/{id}/offer` — the OLD device. */
+@ApiSchema({
+  description:
+    "The old device's offer: the wallet sealed to the session's key, and the code shown on its screen.",
+})
 export class OfferEasyRecoveryDto {
   @ApiProperty({
     description:
@@ -85,6 +93,10 @@ export class OfferEasyRecoveryDto {
 }
 
 /** `POST /v1/wallet/easy-recovery/sessions/{id}/claim` — the NEW device. */
+@ApiSchema({
+  description:
+    "The new device's claim of the sealed wallet, with the code read off the old device.",
+})
 export class ClaimEasyRecoveryDto {
   @ApiProperty({
     description:

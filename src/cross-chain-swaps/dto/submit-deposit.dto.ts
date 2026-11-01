@@ -1,6 +1,11 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiSchema } from '@nestjs/swagger';
 import { IsString, Length } from 'class-validator';
 
+@ApiSchema({
+  description:
+    "Reports the transaction that paid a cross-chain swap's deposit address, " +
+    'so NEAR Intents can start the swap without waiting for its indexer.',
+})
 export class SubmitDepositDto {
   @ApiProperty({
     description:

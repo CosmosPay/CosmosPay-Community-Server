@@ -1,4 +1,4 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiSchema } from '@nestjs/swagger';
 import { IsIn } from 'class-validator';
 import {
   CHECKOUT_EVENTS,
@@ -6,6 +6,10 @@ import {
 } from '@/payment-intents/payment-intents.constants';
 
 /** What the payer did with a wallet, as the hosted checkout saw it. */
+@ApiSchema({
+  description:
+    'What the payer did with a wallet, as the hosted checkout page reports it. Informational: the intent status changes only on the chain.',
+})
 export class CheckoutEventDto {
   @ApiProperty({
     enum: CHECKOUT_EVENTS,

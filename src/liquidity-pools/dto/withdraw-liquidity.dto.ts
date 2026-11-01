@@ -1,4 +1,4 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
   IsInt,
@@ -17,6 +17,12 @@ import { IsStellarAddress } from '@/common/validators/is-stellar-address.validat
  * proportional amounts of both reserves, protected by slippage-derived
  * on-chain minimums.
  */
+@ApiSchema({
+  description:
+    'A liquidity pool withdrawal request: burn `shares` pool shares for the ' +
+    'proportional amounts of both reserves, protected by slippage-derived ' +
+    'on-chain minimums.',
+})
 export class WithdrawLiquidityDto {
   @ApiProperty({
     description:

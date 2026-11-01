@@ -1,4 +1,4 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger';
 import {
   IsBoolean,
   IsIn,
@@ -21,6 +21,10 @@ import {
  * for EVM, carries a `contract` object the customer uses to sign the on-chain
  * `approve`. Amounts are integers in minor units.
  */
+@ApiSchema({
+  description:
+    'A payout (stablecoin to fiat) to price to one of your bank accounts; the quote expires in about 5 minutes. Amounts are integers in minor units.',
+})
 export class CreatePayoutQuoteDto {
   @ApiProperty({
     example: 'clz9xbank00001',
@@ -30,7 +34,12 @@ export class CreatePayoutQuoteDto {
   @IsString()
   bank_account_id!: string;
 
-  @ApiProperty({ enum: CURRENCY_TYPES, example: 'sender' })
+  @ApiProperty({
+    enum: CURRENCY_TYPES,
+    example: 'sender',
+    description:
+      'Whether `request_amount` is what the sender sends (`sender`) or what the receiver receives (`receiver`).',
+  })
   @IsIn(CURRENCY_TYPES)
   currency_type!: CurrencyType;
 
@@ -49,20 +58,33 @@ export class CreatePayoutQuoteDto {
   @Min(1)
   request_amount!: number;
 
-  @ApiProperty({ enum: BLINDPAY_NETWORKS, example: 'base' })
+  @ApiProperty({
+    enum: BLINDPAY_NETWORKS,
+    example: 'base',
+    description: 'BlindPay network the stablecoin is sent on.',
+  })
   @IsIn(BLINDPAY_NETWORKS)
   network!: BlindpayNetwork;
 
-  @ApiProperty({ enum: BLINDPAY_TOKENS, example: 'USDC' })
+  @ApiProperty({
+    enum: BLINDPAY_TOKENS,
+    example: 'USDC',
+    description:
+      'Stablecoin paid out; `USDB` is the test token of the development instance.',
+  })
   @IsIn(BLINDPAY_TOKENS)
   token!: BlindpayToken;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({
+    description: 'Free-text description of the payout, forwarded to BlindPay.',
+  })
   @IsOptional()
   @IsString()
   description?: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({
+    description: 'BlindPay partner fee id, forwarded as sent.',
+  })
   @IsOptional()
   @IsString()
   partner_fee_id?: string;

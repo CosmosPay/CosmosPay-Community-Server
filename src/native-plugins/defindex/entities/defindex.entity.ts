@@ -1,9 +1,15 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger';
 
 /**
  * What a DeFindex build answers: DeFindex's own response, passed through. Only
  * `xdr` matters to a caller; the rest is DeFindex's simulation, for display.
  */
+@ApiSchema({
+  description:
+    "An unsigned DeFindex vault transaction, DeFindex's answer passed through. " +
+    'Only `xdr` matters to a caller: sign it unchanged and submit it; the rest ' +
+    'is for display.',
+})
 export class DefindexBuildEntity {
   @ApiProperty({
     example: 'AAAAAgAAAAB…',
@@ -39,9 +45,15 @@ export class DefindexBuildEntity {
  * What a submit answers: DeFindex's own response for the broadcast, passed
  * through, and stored so a replay of the same transaction answers it again.
  */
+@ApiSchema({
+  description:
+    "DeFindex's answer for a relayed transaction, passed through and stored, so " +
+    'submitting the same transaction again answers it without calling DeFindex.',
+})
 export class DefindexSubmitResultEntity {
   @ApiProperty({
     example: '5f0e8a1d3c7b9e2f4a6c8d0b1e3f5a7c9d2b4e6f8a0c1d3e5f7a9b2c4d6e8f0a',
+    description: 'The transaction hash (64 hex).',
   })
   txHash!: string;
 
@@ -62,16 +74,29 @@ export class DefindexSubmitResultEntity {
   @ApiProperty({ example: 61234567, description: 'The ledger it closed in.' })
   ledger!: number;
 
-  @ApiPropertyOptional({ example: '2026-11-01T12:00:00Z' })
+  @ApiPropertyOptional({
+    example: '2026-11-01T12:00:00Z',
+    description:
+      'When the transaction was created, as DeFindex reports it (ISO 8601 date-time).',
+  })
   createdAt?: string;
 
-  @ApiPropertyOptional({ example: 61234570 })
+  @ApiPropertyOptional({
+    example: 61234570,
+    description: 'The latest ledger when DeFindex answered.',
+  })
   latestLedger?: number;
 
-  @ApiPropertyOptional({ example: '2026-11-01T12:00:15Z' })
+  @ApiPropertyOptional({
+    example: '2026-11-01T12:00:15Z',
+    description: 'When `latestLedger` closed, as DeFindex reports it.',
+  })
   latestLedgerCloseTime?: string;
 
-  @ApiPropertyOptional({ example: false })
+  @ApiPropertyOptional({
+    example: false,
+    description: 'Whether DeFindex reports it as a fee bump transaction.',
+  })
   feeBump?: boolean;
 
   @ApiPropertyOptional({ example: '104210', description: 'In stroops.' })

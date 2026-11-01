@@ -1,4 +1,4 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger';
 import { IsIn, IsOptional, IsString } from 'class-validator';
 import { IsDecimalAmount } from '@/common/validators/is-decimal-amount.validator';
 import { IsStellarAddress } from '@/common/validators/is-stellar-address.validator';
@@ -8,6 +8,11 @@ import { USDT0_CHAIN_IDS, type Usdt0ChainId } from '@/usdt0/usdt0.constants';
  * A USDT0 quote: how much USDT0 to send from Stellar, and to which network.
  * Persists nothing; the OFT is asked by simulation.
  */
+@ApiSchema({
+  description:
+    'A USDT0 quote request: how much USDT0 to send from Stellar, and to which ' +
+    'network. The OFT is asked by simulation; nothing is persisted.',
+})
 export class QuoteUsdt0Dto {
   @ApiProperty({
     enum: USDT0_CHAIN_IDS,

@@ -1,4 +1,4 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiSchema } from '@nestjs/swagger';
 
 /**
  * BlindPay's authorize answer for a Stellar/Solana payout, passed through, with
@@ -6,6 +6,10 @@ import { ApiProperty } from '@nestjs/swagger';
  * `transaction_hash` (it is the XDR to sign, not a hash); the other keys it sends
  * are returned as is.
  */
+@ApiSchema({
+  description:
+    "BlindPay's authorize answer for a Stellar or Solana payout, its own fields passed through, with the transaction to sign under `unsigned_transaction`.",
+})
 export class AuthorizedPayoutEntity {
   @ApiProperty({
     example: 'AAAAAgAAAAB…',

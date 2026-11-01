@@ -1,4 +1,9 @@
-import { ApiPropertyOptional, OmitType, PartialType } from '@nestjs/swagger';
+import {
+  ApiPropertyOptional,
+  ApiSchema,
+  OmitType,
+  PartialType,
+} from '@nestjs/swagger';
 import { IsOptional } from 'class-validator';
 import { IsAnyChainAddress } from '@/common/validators/is-any-chain-address.validator';
 import { CreateCustomerDto } from '@/customers/dto/create-customer.dto';
@@ -8,6 +13,10 @@ import { CreateCustomerDto } from '@/customers/dto/create-customer.dto';
  * /v1/customers/{id}/wallets`); `account` keeps the meaning it had when a customer held one
  * address, so a client written then still edits that address.
  */
+@ApiSchema({
+  description:
+    "Changes to a customer's own fields; only the fields sent change. Wallets change through `/v1/customers/{id}/wallets`.",
+})
 export class UpdateCustomerDto extends PartialType(
   OmitType(CreateCustomerDto, ['wallets', 'account'] as const),
 ) {

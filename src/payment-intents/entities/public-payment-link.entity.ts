@@ -1,4 +1,4 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiSchema } from '@nestjs/swagger';
 import { CHAINS, type Chain } from '@/chains/chains.constants';
 import { MerchantFeeEntity } from '@/common/merchant-fee/merchant-fee.entity';
 import {
@@ -27,6 +27,10 @@ import {
  * for any client generated from the contract, and this route's reader is a
  * frontend outside this repository.
  */
+@ApiSchema({
+  description:
+    "A payment intent as its payer may see it, read by id with no API key: only what a checkout page needs, never the merchant's private fields.",
+})
 export class PublicPaymentLinkEntity {
   @ApiProperty({
     example: 'cmh4x2k9a0001l70g8v5q3z2w',
@@ -45,7 +49,11 @@ export class PublicPaymentLinkEntity {
   })
   kind!: PaymentIntentKind;
 
-  @ApiProperty({ enum: CHAINS, example: 'stellar' })
+  @ApiProperty({
+    enum: CHAINS,
+    example: 'stellar',
+    description: 'Chain the payment settles on.',
+  })
   chain!: Chain;
 
   @ApiProperty({
@@ -185,7 +193,11 @@ export class PublicPaymentLinkEntity {
   })
   expiresAt!: string | null;
 
-  @ApiProperty({ format: 'date-time', example: '2026-10-24T12:34:56.000Z' })
+  @ApiProperty({
+    format: 'date-time',
+    example: '2026-10-24T12:34:56.000Z',
+    description: 'When the intent was created (ISO 8601).',
+  })
   createdAt!: string;
 
   @ApiProperty({

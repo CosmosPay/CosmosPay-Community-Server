@@ -1,11 +1,19 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger';
 
 /**
  * A BlindPay payout quote. Pass-through (not persisted). For EVM, `contract`
  * holds the ERC-20 `approve` the customer signs before creating the payout.
  */
+@ApiSchema({
+  description:
+    'A BlindPay payout quote, returned as BlindPay sent it; an EVM quote carries the `approve` to sign in `contract`.',
+})
 export class PayoutQuoteEntity {
-  @ApiProperty({ example: 'qe_000000000000' })
+  @ApiProperty({
+    example: 'qe_000000000000',
+    description:
+      'BlindPay quote id; pass it as `quote_id` to `POST /v1/offramp/payouts/authorize` and `POST /v1/offramp/payouts`.',
+  })
   id!: string;
 
   @ApiProperty({
@@ -14,7 +22,10 @@ export class PayoutQuoteEntity {
   })
   expires_at!: number;
 
-  @ApiPropertyOptional({ example: 10000 })
+  @ApiPropertyOptional({
+    example: 10000,
+    description: 'Amount of stablecoin the sender sends, in minor units.',
+  })
   sender_amount?: number;
 
   @ApiPropertyOptional({

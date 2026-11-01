@@ -24,7 +24,10 @@ import { ACTIVITY_SUMMARY_DEFAULT_DAYS } from '@/activity/activity.constants';
  * consumer — there is no filter here that can widen it.
  */
 export class QueryActivityDto extends WidePaginationQueryDto {
-  @ApiPropertyOptional({ enum: ACTIVITY_SOURCES })
+  @ApiPropertyOptional({
+    enum: ACTIVITY_SOURCES,
+    description: 'Only events reported by this client.',
+  })
   @IsOptional()
   @IsIn(ACTIVITY_SOURCES)
   source?: string;
@@ -38,7 +41,10 @@ export class QueryActivityDto extends WidePaginationQueryDto {
   @IsIn(ACTIVITY_LEVELS)
   level?: string;
 
-  @ApiPropertyOptional({ example: 'transaction' })
+  @ApiPropertyOptional({
+    example: 'transaction',
+    description: 'Only events of this category (exact match).',
+  })
   @IsOptional()
   @IsString()
   @MaxLength(40)
@@ -53,7 +59,10 @@ export class QueryActivityDto extends WidePaginationQueryDto {
   @MaxLength(80)
   type?: string;
 
-  @ApiPropertyOptional({ example: 'testnet' })
+  @ApiPropertyOptional({
+    example: 'testnet',
+    description: 'Only events reported on this network (exact match).',
+  })
   @IsOptional()
   @IsString()
   @MaxLength(40)
@@ -82,6 +91,7 @@ export class ActivitySummaryQueryDto {
     default: ACTIVITY_SUMMARY_DEFAULT_DAYS,
     minimum: 1,
     maximum: 90,
+    description: 'Days the rollup covers, today included.',
   })
   @IsOptional()
   @Type(() => Number)
@@ -90,7 +100,10 @@ export class ActivitySummaryQueryDto {
   @Max(90)
   days: number = ACTIVITY_SUMMARY_DEFAULT_DAYS;
 
-  @ApiPropertyOptional({ enum: ACTIVITY_SOURCES })
+  @ApiPropertyOptional({
+    enum: ACTIVITY_SOURCES,
+    description: 'Only events reported by this client.',
+  })
   @IsOptional()
   @IsIn(ACTIVITY_SOURCES)
   source?: string;

@@ -1,4 +1,4 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiSchema } from '@nestjs/swagger';
 import { IsString, MaxLength } from 'class-validator';
 
 /**
@@ -6,6 +6,10 @@ import { IsString, MaxLength } from 'class-validator';
  * sign and pay (Solana Pay spec). Its shape is checked by the service, which
  * answers the wallet in its own words.
  */
+@ApiSchema({
+  description:
+    'What a wallet POSTs to a Solana Pay transaction request: the account that will sign and pay.',
+})
 export class SolanaPayAccountDto {
   @ApiProperty({
     description: 'The payer’s account (base58), which pays the fee and signs.',

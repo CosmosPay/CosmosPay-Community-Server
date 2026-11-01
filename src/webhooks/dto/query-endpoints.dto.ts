@@ -9,7 +9,11 @@ import { IsInt, IsOptional, Max, Min } from 'class-validator';
  * `skip` has more pages to fetch.
  */
 export class QueryEndpointsDto {
-  @ApiPropertyOptional({ default: 100, maximum: 100 })
+  @ApiPropertyOptional({
+    default: 100,
+    maximum: 100,
+    description: 'Page size: how many items to return (1 to 100).',
+  })
   @IsOptional()
   @Type(() => Number)
   @IsInt()
@@ -17,7 +21,10 @@ export class QueryEndpointsDto {
   @Max(100)
   take: number = 100;
 
-  @ApiPropertyOptional({ default: 0 })
+  @ApiPropertyOptional({
+    default: 0,
+    description: 'How many items to skip before this page (offset).',
+  })
   @IsOptional()
   @Type(() => Number)
   @IsInt()

@@ -1,4 +1,4 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
   IsIn,
@@ -17,6 +17,12 @@ import { USDT0_CHAIN_IDS, type Usdt0ChainId } from '@/usdt0/usdt0.constants';
  * recipient and the amount. The service builds the one Soroban transaction the
  * holder signs (`send` on the OFT) and never holds a key.
  */
+@ApiSchema({
+  description:
+    'A USDT0 transfer from Stellar: the holder, the destination network, the ' +
+    'EVM recipient and the amount. The service builds the one Soroban ' +
+    'transaction the holder signs and never holds a key.',
+})
 export class CreateUsdt0TransferDto {
   @ApiProperty({
     example: 'GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ',

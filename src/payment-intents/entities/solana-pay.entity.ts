@@ -1,6 +1,10 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger';
 
 /** A Solana Pay transaction request's GET: what the wallet shows before asking. */
+@ApiSchema({
+  description:
+    'Answer to a Solana Pay transaction request GET: the label and icon the wallet shows before asking for the account.',
+})
 export class SolanaPayInfoEntity {
   @ApiProperty({
     example: 'Cosmos Pay',
@@ -16,6 +20,10 @@ export class SolanaPayInfoEntity {
 }
 
 /** A Solana Pay transaction request's POST: the transaction the wallet signs. */
+@ApiSchema({
+  description:
+    'Answer to a Solana Pay transaction request POST: the unsigned transaction the wallet signs.',
+})
 export class SolanaPayTransactionEntity {
   @ApiProperty({
     description:

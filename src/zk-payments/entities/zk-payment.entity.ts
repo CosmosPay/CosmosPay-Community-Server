@@ -1,4 +1,4 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiSchema } from '@nestjs/swagger';
 import { ZkPaymentStatus } from '@generated/prisma/client';
 import { MerchantFeeEntity } from '@/common/merchant-fee/merchant-fee.entity';
 
@@ -7,6 +7,11 @@ const RECIPIENT = 'GCALNQQBXAPZ2WIRSDDBMSTAKCUH5SG6U76YBFLQLIXJTF7FE5AX7AOO';
 const FEE_ACCOUNT = 'GDUYXOQZFVPDVIVBTJNUCGYQEC3XSI2LQOQ3SJWJJ6ZY4JLCJZZFGTNQ';
 
 /** Cosmos Pay's confidential token on one network: what a wallet needs to use it. */
+@ApiSchema({
+  description:
+    "Cosmos Pay's confidential token on one network, the token private " +
+    'payments are made on: what a wallet needs to use it.',
+})
 export class ZkTokenEntity {
   @ApiProperty({
     example: TOKEN,
@@ -17,7 +22,10 @@ export class ZkTokenEntity {
   @ApiProperty({ example: 'XLM', description: 'What it wraps: native XLM.' })
   symbol!: string;
 
-  @ApiProperty({ example: 7 })
+  @ApiProperty({
+    example: 7,
+    description: "Decimal places of the token's amounts (7, as for XLM).",
+  })
   decimals!: number;
 
   @ApiProperty({
@@ -36,6 +44,12 @@ export class ZkTokenEntity {
 }
 
 /** `GET /v1/zk-payments/config`: the caller's network, as the dashboard sets up. */
+@ApiSchema({
+  description:
+    "A network's private payments setup: the token, registries, auditor id, " +
+    'commission and fee account a wallet registers, proves and pays against. ' +
+    'Everything in it is public on-chain data or a public URL.',
+})
 export class ZkPaymentsConfigEntity {
   @ApiProperty({
     example: true,
@@ -61,10 +75,18 @@ export class ZkPaymentsConfigEntity {
   })
   rpcUrl!: string | null;
 
-  @ApiProperty({ example: 'Test SDF Network ; September 2015' })
+  @ApiProperty({
+    example: 'Test SDF Network ; September 2015',
+    description: 'The Stellar network passphrase of `network`.',
+  })
   networkPassphrase!: string;
 
-  @ApiProperty({ type: ZkTokenEntity, nullable: true })
+  @ApiProperty({
+    type: ZkTokenEntity,
+    nullable: true,
+    description:
+      "Cosmos Pay's confidential token on this network; null when `enabled` is false.",
+  })
   token!: ZkTokenEntity | null;
 
   @ApiProperty({
@@ -103,8 +125,16 @@ export class ZkPaymentsConfigEntity {
 }
 
 /** A private payment as its owner reads it. */
+@ApiSchema({
+  description:
+    "A private payment as its owner (the merchant's API key) reads it: the " +
+    'amounts, the accounts to pay, the status and the transactions that settled it.',
+})
 export class ZkPaymentEntity {
-  @ApiProperty({ example: 'cmh4x2k9a0001l70g8v5q3z2w' })
+  @ApiProperty({
+    example: 'cmh4x2k9a0001l70g8v5q3z2w',
+    description: 'The private payment id (a cuid).',
+  })
   id!: string;
 
   @ApiProperty({
@@ -116,7 +146,12 @@ export class ZkPaymentEntity {
   })
   status!: ZkPaymentStatus;
 
-  @ApiProperty({ enum: ['public', 'testnet'], example: 'testnet' })
+  @ApiProperty({
+    enum: ['public', 'testnet'],
+    example: 'testnet',
+    description:
+      'The network the payment is on, set by the API key that created it.',
+  })
   network!: string;
 
   @ApiProperty({
@@ -148,13 +183,21 @@ export class ZkPaymentEntity {
   })
   feeAmount!: string;
 
-  @ApiProperty({ example: 1 })
+  @ApiProperty({
+    example: 1,
+    description:
+      'The commission rate the payment was priced at, in basis points (1 = 0.01%).',
+  })
   feeBps!: number;
 
   @ApiProperty({ example: RECIPIENT, description: 'The merchant (G...).' })
   recipient!: string;
 
-  @ApiProperty({ example: FEE_ACCOUNT })
+  @ApiProperty({
+    example: FEE_ACCOUNT,
+    description:
+      "Cosmos Pay's account the commission (`feeAmount`) is paid to.",
+  })
   feeAccount!: string;
 
   @ApiProperty({
@@ -165,10 +208,24 @@ export class ZkPaymentEntity {
   })
   payer!: string | null;
 
-  @ApiProperty({ type: String, nullable: true, example: null })
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    example: null,
+    description:
+      'The transaction of the transfer that paid `netAmount` to the recipient ' +
+      '(64 lowercase hex), once settled.',
+  })
   paymentTxHash!: string | null;
 
-  @ApiProperty({ type: String, nullable: true, example: null })
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    example: null,
+    description:
+      'The transaction of the transfer that paid `feeAmount` to the fee account ' +
+      '(64 lowercase hex), once settled.',
+  })
   feeTxHash!: string | null;
 
   @ApiProperty({
@@ -188,13 +245,30 @@ export class ZkPaymentEntity {
   })
   merchantFeeTxHash!: string | null;
 
-  @ApiProperty({ type: String, nullable: true, example: 'Order #24' })
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    example: 'Order #24',
+    description:
+      'The description given at create, shown to the payer by the checkout; ' +
+      'null when none was given.',
+  })
   description!: string | null;
 
-  @ApiProperty({ example: 'order-24' })
+  @ApiProperty({
+    example: 'order-24',
+    description:
+      'The idempotency key of the create: the one sent (header first, then ' +
+      'body), or a generated `zkp_...` key when none was.',
+  })
   idempotencyKey!: string;
 
-  @ApiProperty({ example: '2026-10-25T15:00:00.000Z' })
+  @ApiProperty({
+    example: '2026-10-25T15:00:00.000Z',
+    description:
+      'When the payment stops being payable (ISO 8601 date-time). Every ' +
+      'transfer must close before it.',
+  })
   expiresAt!: Date;
 
   @ApiProperty({
@@ -205,24 +279,48 @@ export class ZkPaymentEntity {
   })
   settledAt!: Date | null;
 
-  @ApiProperty({ example: '2026-10-25T14:00:00.000Z' })
+  @ApiProperty({
+    example: '2026-10-25T14:00:00.000Z',
+    description:
+      'When the payment was created (ISO 8601 date-time). A transfer that ' +
+      'closed more than a minute before it cannot pay it.',
+  })
   createdAt!: Date;
 
-  @ApiProperty({ example: '2026-10-25T14:00:00.000Z' })
+  @ApiProperty({
+    example: '2026-10-25T14:00:00.000Z',
+    description: 'When the payment was last changed (ISO 8601 date-time).',
+  })
   updatedAt!: Date;
 }
 
+@ApiSchema({
+  description:
+    "One page of the API key's private payments on its network, newest first.",
+})
 export class ZkPaymentListEntity {
-  @ApiProperty({ type: [ZkPaymentEntity] })
+  @ApiProperty({
+    type: [ZkPaymentEntity],
+    description: 'The private payments on this page, newest first.',
+  })
   data!: ZkPaymentEntity[];
 
-  @ApiProperty({ example: 1 })
+  @ApiProperty({
+    example: 1,
+    description: 'How many private payments match the query, across all pages.',
+  })
   total!: number;
 
-  @ApiProperty({ example: 20 })
+  @ApiProperty({
+    example: 20,
+    description: 'The page size this page was read with.',
+  })
   take!: number;
 
-  @ApiProperty({ example: 0 })
+  @ApiProperty({
+    example: 0,
+    description: 'How many matching payments were skipped before this page.',
+  })
   skip!: number;
 }
 
@@ -231,23 +329,57 @@ export class ZkPaymentListEntity {
  * contracts. Never the owner's data: no consumer, no idempotency key, no
  * transaction hashes.
  */
+@ApiSchema({
+  description:
+    "A private payment as its payer's checkout reads it, with no API key: what " +
+    'to pay, to whom and on which contracts, and the live status to poll. ' +
+    'Never the owning merchant account, the idempotency key or the transaction hashes.',
+})
 export class PublicZkPaymentEntity {
-  @ApiProperty({ example: 'cmh4x2k9a0001l70g8v5q3z2w' })
+  @ApiProperty({
+    example: 'cmh4x2k9a0001l70g8v5q3z2w',
+    description: 'The private payment id (a cuid).',
+  })
   id!: string;
 
-  @ApiProperty({ enum: ZkPaymentStatus, example: 'PENDING' })
+  @ApiProperty({
+    enum: ZkPaymentStatus,
+    example: 'PENDING',
+    description:
+      'As it reads now: a PENDING payment past `expiresAt` reads EXPIRED, and ' +
+      'can still settle with transfers that closed before `expiresAt`.',
+  })
   status!: ZkPaymentStatus;
 
-  @ApiProperty({ example: '25.5' })
+  @ApiProperty({
+    example: '25.5',
+    description:
+      'What the payer pays in total, in XLM (decimal string): `netAmount + ' +
+      'feeAmount`, plus `merchantFee.amount` when there is one.',
+  })
   amount!: string;
 
-  @ApiProperty({ example: '25.49745' })
+  @ApiProperty({
+    example: '25.49745',
+    description:
+      'What the merchant receives, in XLM (decimal string): the amount of the ' +
+      'transfer to `recipient`.',
+  })
   netAmount!: string;
 
-  @ApiProperty({ example: '0.00255' })
+  @ApiProperty({
+    example: '0.00255',
+    description:
+      "Cosmos Pay's commission, in XLM (decimal string): the amount of the " +
+      'transfer to `feeAccount`.',
+  })
   feeAmount!: string;
 
-  @ApiProperty({ example: 1 })
+  @ApiProperty({
+    example: 1,
+    description:
+      'The commission rate the payment was priced at, in basis points (1 = 0.01%).',
+  })
   feeBps!: number;
 
   @ApiProperty({
@@ -271,22 +403,48 @@ export class PublicZkPaymentEntity {
   })
   merchantFee!: MerchantFeeEntity | null;
 
-  @ApiProperty({ type: String, nullable: true, example: 'Order #24' })
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    example: 'Order #24',
+    description:
+      "The merchant's description of the payment, to show the payer; null " +
+      'when none was given.',
+  })
   description!: string | null;
 
-  @ApiProperty({ example: '2026-10-25T15:00:00.000Z' })
+  @ApiProperty({
+    example: '2026-10-25T15:00:00.000Z',
+    description:
+      'When the payment stops being payable (ISO 8601 date-time). Every ' +
+      'transfer must close before it.',
+  })
   expiresAt!: Date;
 
-  @ApiProperty({ enum: ['public', 'testnet'], example: 'testnet' })
+  @ApiProperty({
+    enum: ['public', 'testnet'],
+    example: 'testnet',
+    description:
+      'The network the payment is on, and the transfers must be made on.',
+  })
   network!: string;
 
-  @ApiProperty({ example: 'https://soroban-testnet.stellar.org' })
+  @ApiProperty({
+    example: 'https://soroban-testnet.stellar.org',
+    description: 'The Soroban RPC to build and submit the transfers through.',
+  })
   rpcUrl!: string;
 
-  @ApiProperty({ example: 'Test SDF Network ; September 2015' })
+  @ApiProperty({
+    example: 'Test SDF Network ; September 2015',
+    description: 'The Stellar network passphrase of `network`.',
+  })
   networkPassphrase!: string;
 
-  @ApiProperty({ type: ZkTokenEntity })
+  @ApiProperty({
+    type: ZkTokenEntity,
+    description: 'The confidential token the transfers are made on.',
+  })
   token!: ZkTokenEntity;
 
   @ApiProperty({
