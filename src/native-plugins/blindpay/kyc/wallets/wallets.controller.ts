@@ -38,6 +38,10 @@ export class WalletsController {
   @RequirePermissions('kyc:read')
   @ApiOperation({
     summary: 'Get the message to sign for the secure wallet flow',
+    description:
+      'Fetches from BlindPay the message the customer signs in their own wallet to prove an EOA wallet is theirs. ' +
+      'Sign it, then register the wallet with `POST /v1/kyc/receivers/{receiverId}/wallets` and its `signature_tx_hash` instead of an `address`. ' +
+      'Nothing is stored.',
   })
   signMessage(
     @CurrentConsumer() consumer: GatewayConsumer,
@@ -49,7 +53,15 @@ export class WalletsController {
   @Post()
   @ApiUpstream('BlindPay')
   @RequirePermissions('kyc:write')
-  @ApiOperation({ summary: 'Register a blockchain wallet for a receiver' })
+  @ApiOperation({
+    summary: 'Register a blockchain wallet for a receiver',
+    description:
+      'Registers the wallet at BlindPay under the receiver and mirrors it locally. ' +
+      'Send `address` (account abstraction or the non-secure flow), or the `signature_tx_hash` of the message from ' +
+      '`GET /v1/kyc/receivers/{receiverId}/wallets/sign-message` (secure EOA flow). ' +
+      "`network` is one of BlindPay's: Stellar, Solana, Tron, Ethereum, Base, Arbitrum, Polygon or one of their test networks. " +
+      'A disabled receiver is refused with 403 `account_disabled`.',
+  })
   @ApiCreatedResponse({ type: WalletEntity })
   create(
     @CurrentConsumer() consumer: GatewayConsumer,
@@ -61,7 +73,12 @@ export class WalletsController {
 
   @Get()
   @RequirePermissions('kyc:read')
-  @ApiOperation({ summary: "List a receiver's wallets" })
+  @ApiOperation({
+    summary: "List a receiver's wallets",
+    description:
+      'Reads the local mirror, newest first; BlindPay is not called. ' +
+      'Paginated with `take` (default 100, max 100) and `skip`; answers `{ data, total, take, skip }`.',
+  })
   @ApiOkResponse({ type: WalletListEntity })
   findAll(
     @CurrentConsumer() consumer: GatewayConsumer,
@@ -74,7 +91,12 @@ export class WalletsController {
   @Delete(':id')
   @ApiUpstream('BlindPay')
   @RequirePermissions('kyc:write')
-  @ApiOperation({ summary: 'Delete a wallet' })
+  @ApiOperation({
+    summary: 'Delete a wallet',
+    description:
+      'Deletes the wallet at BlindPay, then its local row. ' +
+      'A wallet id this receiver does not have answers `deleted: true` without calling BlindPay, so repeating a delete succeeds.',
+  })
   @ApiOkResponse({ type: WalletDeletedEntity })
   remove(
     @CurrentConsumer() consumer: GatewayConsumer,

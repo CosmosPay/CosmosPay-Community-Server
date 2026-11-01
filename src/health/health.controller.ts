@@ -25,7 +25,13 @@ export class HealthController {
 
   @Get('liveness')
   @Public()
-  @ApiOperation({ summary: 'Liveness probe' })
+  @ApiOperation({
+    summary: 'Liveness probe',
+    description:
+      'Answers `{ "status": "ok" }` while the process is up, without ' +
+      'checking any dependency, the database included. Public: no API key, ' +
+      'for the orchestrator to probe directly.',
+  })
   @ApiOkResponse({
     description: 'The process is up. It says nothing about the database.',
     schema: {
@@ -48,7 +54,14 @@ export class HealthController {
   // dropped report. Documenting both here, with `swaggerDocumentation: false`,
   // is the only way the contract can match what a probe actually receives.
   @HealthCheck({ swaggerDocumentation: false, noCache: true })
-  @ApiOperation({ summary: 'Readiness probe (checks the database)' })
+  @ApiOperation({
+    summary: 'Readiness probe (checks the database)',
+    description:
+      'Pings Postgres: 200 with the indicator report when it answers, ' +
+      '`503 provider_unavailable` when it does not, with a body that names ' +
+      'no host or cause (those are only logged). Public: no API key, for ' +
+      'the orchestrator to probe directly.',
+  })
   @ApiOkResponse({
     description: 'Every indicator is up; the service can take traffic.',
     schema: {

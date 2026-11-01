@@ -537,9 +537,9 @@ OPENAPI_SERVER_URL=https://gateway.example.com npm run openapi:generate
 
 提交到仓库的规范是在未设置 `OPENAPI_SERVER_URL` 的情况下生成的，因此默认使用直连的请求头组合；设置该变量后生成，可得到默认走网关的集合。Postman 每个请求只保存一个 API key：如果导入后只配置了 `X-Gateway-Secret`，请把 `X-Consumer-Username` 添加为集合级请求头。健康探针以 `security: []` 发布。
 
-每个操作都带有说明其性质的厂商扩展：`x-cosmos-rate-limit`（其配额——可能返回 `429`）、`x-cosmos-upstream`（它调用的提供方——可能返回 `502`/`503`/`504`）、`x-cosmos-public` 和 `x-cosmos-public-key`。
+每个操作都带有说明其性质的厂商扩展：`x-cosmos-rate-limit`（其配额：可能返回 `429`）、`x-cosmos-upstream`（它调用的提供方：可能返回 `502`/`503`/`504`）、`x-cosmos-public`、`x-cosmos-public-key`，以及 `x-cosmos-scopes` / `x-cosmos-scopes-any`（其 API key 必须持有的 scope，全部 / 其中之一，由 `@RequirePermissions` / `@RequireAnyPermission` 发布）。在每个需要 API key 的路由上，写在其 `@ApiOperation` 中的 description 都以一句由这些 scope 和 `x-cosmos-public-key` 生成的话结尾，因此契约绝不会写出 guard 并不检查的 scope。
 
-`npm run openapi:generate` 会拒绝写出以下规范：某个操作没有 summary、某个失败响应没有响应体或示例、某个示例的 `statusCode` 与其所记录的状态码不一致，或没有配额的路由上出现了 `429`。每次新增或修改路由时，请阅读其重新生成的操作——参见 `CLAUDE.md`。
+`npm run openapi:generate` 会拒绝写出以下规范：某个操作没有 summary 或没有 description、某个操作使用的 tag 没有 description、任何文本含有破折号（em dash；开发者平台会把本契约同步到其文档中，而文档不允许出现任何破折号）、某个失败响应没有响应体或示例、某个示例的 `statusCode` 与其所记录的状态码不一致，或没有配额的路由上出现了 `429`。每次新增或修改路由时，请阅读其重新生成的操作（参见 `CLAUDE.md`）。
 
 ### 创建支付意图 — 两种 SEP-7 操作，两个端点
 

@@ -1,12 +1,21 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import type { OpenAPIObject } from '@nestjs/swagger';
 import { ALLOW_PUBLIC_KEY_EXTENSION_KEY } from '@/common/decorators/allow-public-key.decorator';
 import { UPSTREAM_EXTENSION_KEY } from '@/common/decorators/api-upstream.decorator';
 import { PUBLIC_EXTENSION_KEY } from '@/common/decorators/public.decorator';
 import { RATE_LIMIT_EXTENSION_KEY } from '@/common/decorators/rate-limit.decorator';
+import {
+  ANY_SCOPES_EXTENSION_KEY,
+  SCOPES_EXTENSION_KEY,
+} from '@/common/decorators/require-permissions.decorator';
 import { UNIFORM_ANSWER_EXTENSION_KEY } from '@/common/decorators/uniform-answer.decorator';
 import {
+  accessSentence,
   attachErrorResponses,
   buildSwaggerConfig,
+  describeAccess,
+  EM_DASH,
   findOpenApiIssues,
 } from '@/swagger';
 
@@ -26,6 +35,7 @@ function documentWith(
       ...paths[path],
       [method.toLowerCase()]: {
         summary: `test ${key}`,
+        description: `What ${key} does.`,
         responses: { '200': { description: '' } },
         ...operation,
       },
@@ -263,6 +273,62 @@ describe('findOpenApiIssues', () => {
     );
   });
 
+  it.each([
+    ['missing', undefined],
+    ['blank', '  '],
+  ])('catches an operation whose description is %s', (_, description) => {
+    const document = documentWith({ 'GET /v1/products': { description } });
+    expect(findOpenApiIssues(document)).toContainEqual(
+      expect.stringContaining('GET /v1/products: no description'),
+    );
+  });
+
+  it('catches a tag an operation uses that nobody described', () => {
+    const document = attachErrorResponses(
+      documentWith({
+        'GET /v1/products': { tags: ['products'] },
+        'GET /v1/plugins': { tags: ['plugins'] },
+        'GET /v1/plugins/{slug}': { tags: ['plugins'] },
+      }),
+    );
+    document.tags = [
+      { name: 'products', description: 'Catalog items.' },
+      { name: 'plugins' },
+    ];
+    // Once per tag, not once per operation.
+    expect(findOpenApiIssues(document)).toEqual([
+      expect.stringContaining('tag "plugins": no description'),
+    ]);
+  });
+
+  it('catches an em dash anywhere in the document, and says where', () => {
+    const document = attachErrorResponses(
+      documentWith({
+        'GET /v1/products': { description: `Lists products ${EM_DASH} all.` },
+      }),
+    );
+    document.info.description = `An API ${EM_DASH} for payments.`;
+    const issues = findOpenApiIssues(document);
+    expect(issues).toHaveLength(2);
+    expect(issues).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('#/info/description: contains an em dash'),
+        expect.stringContaining(
+          '#/paths/~1v1~1products/get/description: contains an em dash',
+        ),
+      ]),
+    );
+  });
+
+  it('finds nothing wrong with the committed contract', () => {
+    // `openapi:check` runs the same rules on a freshly generated document; this
+    // also catches a hand edit to the committed file.
+    const committed = JSON.parse(
+      readFileSync(join(__dirname, '..', 'openapi', 'openapi.json'), 'utf8'),
+    ) as OpenAPIObject;
+    expect(findOpenApiIssues(committed)).toEqual([]);
+  });
+
   it('catches a 429 on a route with no budget to spend', () => {
     const document = documentWith({
       'GET /v1/products': {
@@ -336,7 +402,90 @@ describe('findOpenApiIssues', () => {
   });
 });
 
+describe('describeAccess', () => {
+  const descriptionOf = (document: OpenAPIObject, path: string) =>
+    (document.paths[path] as Record<string, { description?: string }>).get
+      .description;
+
+  it('closes a description with the scopes the guard checks', () => {
+    const document = describeAccess(
+      documentWith({
+        'GET /v1/products': { [SCOPES_EXTENSION_KEY]: ['products:read'] },
+      }),
+    );
+    expect(descriptionOf(document, '/v1/products')).toBe(
+      'What GET /v1/products does.\n\nRequires the `products:read` scope.',
+    );
+  });
+
+  it('leaves an operation with no description for the check to report', () => {
+    const document = describeAccess(
+      documentWith({
+        'GET /v1/products': {
+          description: undefined,
+          [SCOPES_EXTENSION_KEY]: ['products:read'],
+        },
+      }),
+    );
+    expect(descriptionOf(document, '/v1/products')).toBeUndefined();
+    expect(findOpenApiIssues(document)).toContainEqual(
+      expect.stringContaining('no description'),
+    );
+  });
+
+  it('leaves a @Public() route to say how it is called itself', () => {
+    const document = describeAccess(
+      documentWith({
+        'GET /v1/health/liveness': { [PUBLIC_EXTENSION_KEY]: true },
+      }),
+    );
+    expect(descriptionOf(document, '/v1/health/liveness')).toBe(
+      'What GET /v1/health/liveness does.',
+    );
+  });
+});
+
+describe('accessSentence', () => {
+  it.each([
+    [
+      { [SCOPES_EXTENSION_KEY]: ['payments:read'] },
+      'Requires the `payments:read` scope.',
+    ],
+    [
+      { [SCOPES_EXTENSION_KEY]: ['payments:read', 'kyc:read'] },
+      'Requires the `payments:read` and `kyc:read` scopes.',
+    ],
+    [
+      { [ANY_SCOPES_EXTENSION_KEY]: ['liquidity:read', 'swaps:read'] },
+      'Requires the `liquidity:read` or `swaps:read` scope.',
+    ],
+    [
+      {
+        [SCOPES_EXTENSION_KEY]: ['swaps:write'],
+        [ALLOW_PUBLIC_KEY_EXTENSION_KEY]: true,
+      },
+      'Requires the `swaps:write` scope. The shared public key may call it.',
+    ],
+    [{}, 'Requires an API key, with no particular scope.'],
+    [{ [PUBLIC_EXTENSION_KEY]: true }, null],
+  ])('%j -> %s', (operation, sentence) => {
+    expect(accessSentence(operation as never)).toBe(sentence);
+  });
+});
+
 describe('buildSwaggerConfig', () => {
+  it('names who answers for the API and where its docs are', () => {
+    const config = buildSwaggerConfig({ serverUrl: '' });
+    expect(config.info.contact).toEqual({
+      name: 'Cosmos Pay',
+      url: 'https://dev.cosmospay.lat/docs',
+      email: 'organization@cosmospay.lat',
+    });
+    expect(config.externalDocs).toMatchObject({
+      url: 'https://dev.cosmospay.lat/docs',
+    });
+  });
+
   it('requires both APISIX headers together, not either one', () => {
     // Two separate requirements are an OR, so an imported collection set one
     // header and was refused by the gateway check it had not satisfied.

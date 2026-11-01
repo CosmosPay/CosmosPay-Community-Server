@@ -734,10 +734,20 @@ operation:
 - it has a `summary`, and every success status has a body (`@ApiOkResponse` /
   `@ApiCreatedResponse` with a `type`). Declaring any failure yourself drops
   Nest's implicit success response, so declare that too;
+- it has a `description` (1 to 4 sentences, read from the service, never from
+  the summary): what it does, the behaviour a caller must know (idempotency and
+  replays, pagination, network, chains, webhooks it emits) and its notable
+  errors. Never write the scope or "the shared public key may call it": the
+  generator appends that sentence from `@RequirePermissions` /
+  `@RequireAnyPermission` (`x-cosmos-scopes` / `x-cosmos-scopes-any`) and
+  `@AllowPublicKey`. A `@Public()` route gets no such sentence, so its
+  description says how it is called. No em dash anywhere in the spec: the
+  developer platform mirrors it into its docs and allows none;
 - the failures listed are the ones it can really return, and each example is
   one it would really send;
 - the extensions say what the route is: `x-cosmos-rate-limit`,
-  `x-cosmos-upstream`, `x-cosmos-public`, `x-cosmos-public-key`.
+  `x-cosmos-upstream`, `x-cosmos-public`, `x-cosmos-public-key`,
+  `x-cosmos-scopes`, `x-cosmos-scopes-any`.
 
 How failures get documented — use these, never a hand-written
 `@ApiResponse({ status: 4xx, ... })`:
@@ -760,10 +770,12 @@ How failures get documented — use these, never a hand-written
   noise this section exists to remove.
 - **Never document a status a route cannot return.** 409 is never attached
   centrally, because a conflict is always specific to what the route writes.
-- `npm run openapi:generate` refuses to write a spec with a missing summary, a
-  failure with no body or example, an example whose `statusCode` disagrees with
-  its status, or a 429 on a route with no budget (`findOpenApiIssues` in
-  `src/swagger.ts`). `openapi:check` runs it in CI. It cannot tell whether the
+- `npm run openapi:generate` refuses to write a spec with a missing summary or
+  description, a tag an operation uses that has no entry in `TAG_DESCRIPTIONS`,
+  an em dash in any text, a failure with no body or example, an example whose
+  `statusCode` disagrees with its status, or a 429 on a route with no budget
+  (`findOpenApiIssues` in `src/swagger.ts`; `swagger.spec.ts` also runs it on
+  the committed `openapi/openapi.json`). `openapi:check` runs it in CI. It cannot tell whether the
   codes you listed are the ones the service throws — reading the operation is
   part of review.
 

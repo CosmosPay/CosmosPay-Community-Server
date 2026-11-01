@@ -96,6 +96,16 @@ export class PaymentIntentsController {
   @ApiOperation({
     summary:
       'Create a SEP-7 `tx` intent (source known → unsigned XDR + tx URI + QR)',
+    description:
+      'Stellar only: builds the unsigned envelope paying `destination` from ' +
+      "`source` on the key's network (a `prod` key builds for mainnet, a `dev` " +
+      'key for testnet), plus a second payment to `merchantFee.wallet` when a ' +
+      'merchant fee is set, and answers its XDR, `web+stellar:tx` URI and QR. ' +
+      '`memo` (a numeric MEMO_ID, generated when omitted) is the idempotency ' +
+      'key: a retry with the same memo and terms returns the stored intent, ' +
+      'other terms are `409 idempotency_conflict`. The intent starts ' +
+      '`PENDING`, emits `PAYMENT_INTENT_CREATED`, and the on-chain observer ' +
+      'settles it when the payment lands.',
   })
   @ApiCreatedResponse({ type: TxPaymentIntentEntity })
   // Loads the payer's account from Horizon to build the envelope, and the
@@ -131,7 +141,19 @@ export class PaymentIntentsController {
   @RateLimit(PAYMENT_INTENT_BUILD_RATE_LIMIT)
   @ApiOperation({
     summary:
-      'Create a `pay` intent: a payment link + QR (SEP-7 on Stellar, Solana Pay on Solana, EIP-681 on Monad)',
+      'Create a `pay` intent: a payment link and QR on Stellar, Solana or Monad',
+    description:
+      'Answers a link any wallet can pay and its QR: SEP-7 `web+stellar:pay` ' +
+      'on Stellar (the default `chain`), Solana Pay on Solana, EIP-681 on ' +
+      "Monad, on the key's network (a `prod` key gets mainnet, a `dev` key the " +
+      'test networks). Omit `amount` for an open amount, except on Monad when ' +
+      'this deployment has no deposit addresses; with a `merchantFee`, `uri` ' +
+      'is the hosted checkout on Stellar and a Solana Pay transaction request ' +
+      'on Solana. `memo` (numeric, generated when omitted) is the idempotency ' +
+      'key: the same memo and terms return the stored intent, other terms are ' +
+      '`409 idempotency_conflict`. Emits `PAYMENT_INTENT_CREATED`; the ' +
+      'on-chain observer settles the intent when it finds the payment (a ' +
+      'native MON payment without a deposit address needs `validate`).',
   })
   @ApiCreatedResponse({ type: PayPaymentIntentEntity })
   // A Solana or Monad intent reads its token's decimals (and Monad's head
@@ -155,7 +177,14 @@ export class PaymentIntentsController {
 
   @Get()
   @RequirePermissions('payments:read')
-  @ApiOperation({ summary: "List the consumer's payment intents" })
+  @ApiOperation({
+    summary: "List the consumer's payment intents",
+    description:
+      'Newest first, as `{ data, total, take, skip }` with `take` up to 100 ' +
+      "(default 20). Only intents on the key's network (a `prod` key lists " +
+      'mainnet intents, a `dev` key test-network ones), narrowed by `status`, ' +
+      '`chain` and `createdFrom` when given.',
+  })
   @ApiOkResponse({ type: PaymentIntentListEntity })
   findAll(
     @CurrentConsumer() consumer: GatewayConsumer,
@@ -168,6 +197,11 @@ export class PaymentIntentsController {
   @RequirePermissions('payments:read')
   @ApiOperation({
     summary: 'List the status-transition history for a payment intent',
+    description:
+      "The intent's audit trail as an array, oldest first: every status " +
+      'change with `fromStatus`, `toStatus`, the `txHash` it carried, its ' +
+      '`reason` and the `actor` that made it (`api`, `validate`, `observer` ' +
+      'or `system`).',
   })
   @ApiOkResponse({ type: PaymentIntentTransitionEntity, isArray: true })
   listTransitions(
@@ -179,7 +213,14 @@ export class PaymentIntentsController {
 
   @Get(':id')
   @RequirePermissions('payments:read')
-  @ApiOperation({ summary: 'Get a payment intent by id' })
+  @ApiOperation({
+    summary: 'Get a payment intent by id',
+    description:
+      'One of the consumer’s intents, on any chain, with its QR rebuilt from ' +
+      '`uri`. `status` moves as the on-chain observer settles or expires the ' +
+      'intent, which the `PAYMENT_INTENT_*` webhooks also report, so polling ' +
+      'this route is optional.',
+  })
   @ApiOkResponse({ type: PaymentIntentEntity })
   findOne(
     @CurrentConsumer() consumer: GatewayConsumer,
@@ -194,8 +235,17 @@ export class PaymentIntentsController {
   // resource, so 200. Nest's POST default of 201 contradicted @ApiOkResponse.
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
-    summary:
-      'Validate a submitted tx against the intent (tx success + destination + amount + memo/reference); finalizes status and fires the event',
+    summary: 'Validate a transaction against the intent and settle it',
+    description:
+      "Looks `txHash` up on the intent's chain and checks it pays this intent " +
+      '(success, destination, asset, amount, memo or reference, age); a match ' +
+      'settles it `SUCCEEDED` and emits `PAYMENT_INTENT_SUCCEEDED`. This ' +
+      "intent's own payment that failed on-chain marks it `FAILED` " +
+      '(`PAYMENT_INTENT_FAILED`); any other mismatch answers `valid: false` ' +
+      'with a `reason` and leaves the status unchanged. An `EXPIRED` intent ' +
+      'still settles on a verified payment, a `SUCCEEDED` one answers as it ' +
+      'is without asking the chain, and one transaction settles at most one ' +
+      'intent of any consumer (the oldest it pays).',
   })
   @ApiOkResponse({ type: ValidationOutcomeEntity })
   // Reads the transaction back from the intent's chain.
@@ -222,6 +272,17 @@ export class PaymentIntentsController {
   @ApiOperation({
     summary:
       'Update a payment intent (status / txHash / reference / checkoutTheme)',
+    description:
+      'Send only what changes; `reference` and `checkoutTheme` are accepted ' +
+      'in any status. `status: SUCCEEDED` needs a `txHash` and goes through ' +
+      'the same on-chain check as `validate` (`400 transaction_rejected` when ' +
+      'the chain does not confirm it); other status changes follow the ' +
+      'transition graph (`SUCCEEDED`, `FAILED` and `CANCELLED` are final, ' +
+      '`EXPIRED` only settles on a verified payment), else ' +
+      '`400 invalid_state_transition`. A new `txHash` alone is accepted only ' +
+      'while `PENDING` or `SUBMITTED`. Emits `PAYMENT_INTENT_CANCELLED`, ' +
+      '`PAYMENT_INTENT_SUCCEEDED` or `PAYMENT_INTENT_FAILED` for those ' +
+      'statuses and `PAYMENT_INTENT_UPDATED` otherwise.',
   })
   @ApiOkResponse({ type: PaymentIntentEntity })
   // Setting `txHash` verifies it against the chain before it is stored.
@@ -245,7 +306,15 @@ export class PaymentIntentsController {
 
   @Delete(':id')
   @RequirePermissions('payments:write')
-  @ApiOperation({ summary: 'Delete a payment intent' })
+  @ApiOperation({
+    summary: 'Delete a payment intent',
+    description:
+      'Deletes an intent in any status but `SUCCEEDED` and emits ' +
+      '`PAYMENT_INTENT_DELETED`. A paid intent is a settled payment and ' +
+      'cannot be deleted (`400 invalid_state_transition`); an intent whose ' +
+      'status changes during the delete (it may have just been paid) is ' +
+      '`409 operation_in_flight`.',
+  })
   @ApiOkResponse({ type: DeletedEntity })
   @ApiErrorResponse({
     status: 400,

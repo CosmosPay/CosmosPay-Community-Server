@@ -36,7 +36,14 @@ export class BankAccountsController {
   // The account is created at BlindPay; the row here is the mirror.
   @ApiUpstream('BlindPay')
   @RequirePermissions('kyc:write')
-  @ApiOperation({ summary: 'Add a fiat bank account for a receiver' })
+  @ApiOperation({
+    summary: 'Add a fiat bank account for a receiver',
+    description:
+      'Creates the account at BlindPay under the receiver and mirrors it; offramp payouts settle to it. ' +
+      "`type` names the rail, and only that rail's fields are needed (`GET /v1/kyc/bank-details?rail=` lists them). " +
+      'The response carries identifiers only (`rail`, `name`, `country`), never the account numbers. ' +
+      'A disabled receiver is refused with 403 `account_disabled`.',
+  })
   @ApiCreatedResponse({ type: BankAccountEntity })
   create(
     @CurrentConsumer() consumer: GatewayConsumer,
@@ -48,7 +55,12 @@ export class BankAccountsController {
 
   @Get()
   @RequirePermissions('kyc:read')
-  @ApiOperation({ summary: "List a receiver's bank accounts" })
+  @ApiOperation({
+    summary: "List a receiver's bank accounts",
+    description:
+      'Reads the local mirror, newest first; BlindPay is not called, and account numbers are never returned. ' +
+      'Paginated with `take` (default 100, max 100) and `skip`; answers `{ data, total, take, skip }`.',
+  })
   @ApiOkResponse({ type: BankAccountListEntity })
   findAll(
     @CurrentConsumer() consumer: GatewayConsumer,
@@ -61,7 +73,12 @@ export class BankAccountsController {
   @Delete(':id')
   @ApiUpstream('BlindPay')
   @RequirePermissions('kyc:write')
-  @ApiOperation({ summary: 'Delete a bank account' })
+  @ApiOperation({
+    summary: 'Delete a bank account',
+    description:
+      'Deletes the account at BlindPay, then its local row. ' +
+      'An id this receiver does not have answers `deleted: true` without calling BlindPay, so repeating a delete succeeds.',
+  })
   @ApiOkResponse({ type: BankAccountDeletedEntity })
   remove(
     @CurrentConsumer() consumer: GatewayConsumer,

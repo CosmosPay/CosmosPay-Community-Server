@@ -738,12 +738,19 @@ header de la colección. Los probes de salud se publican con `security: []`.
 Cada operación lleva extensiones de proveedor que dicen qué es:
 `x-cosmos-rate-limit` (sus presupuestos; puede responder `429`),
 `x-cosmos-upstream` (el proveedor al que llama; puede responder
-`502`/`503`/`504`), `x-cosmos-public` y `x-cosmos-public-key`.
+`502`/`503`/`504`), `x-cosmos-public`, `x-cosmos-public-key`, y
+`x-cosmos-scopes` / `x-cosmos-scopes-any` (los scopes que debe tener su API key,
+todos / uno de ellos, publicados por `@RequirePermissions` /
+`@RequireAnyPermission`). En cada ruta que recibe una API key, la descripción escrita
+en su `@ApiOperation` termina con una oración generada a partir de esos scopes y de
+`x-cosmos-public-key`, así el contrato nunca nombra un scope que el guard no verifica.
 
 `npm run openapi:generate` se niega a escribir una especificación en la que una
-operación no tiene summary, un fallo no tiene cuerpo ni ejemplo, el `statusCode` de
-un ejemplo no coincide con el status que documenta, o aparece un `429` en una ruta
-sin presupuesto. Cada vez que se agrega o cambia una ruta, revisar su operación
+operación no tiene summary o no tiene descripción, un tag que usa una operación no
+tiene descripción, algún texto contiene una raya (em dash; la plataforma de
+desarrolladores replica este contrato en su documentación, que no admite ninguna),
+un fallo no tiene cuerpo ni ejemplo, el `statusCode` de un ejemplo no coincide con el
+status que documenta, o aparece un `429` en una ruta sin presupuesto. Cada vez que se agrega o cambia una ruta, revisar su operación
 regenerada; ver `CLAUDE.md`.
 
 ### Creación de intenciones — dos operaciones SEP-7, dos endpoints

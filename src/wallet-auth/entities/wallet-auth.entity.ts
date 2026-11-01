@@ -42,7 +42,7 @@ export class WalletAuthProvidersEntity {
     type: [WalletAuthSourceEntity],
     description:
       'Authentik’s own sources (Google, GitHub…), each to show as a button of ' +
-      'its own that starts the Authentik sign-in at that source — with these, ' +
+      'its own that starts the Authentik sign-in at that source. With these, ' +
       'a wallet need not show a generic Authentik button. Empty without ' +
       'Authentik, or when the operator listed none (WALLET_AUTH_OIDC_SOURCES).',
   })
