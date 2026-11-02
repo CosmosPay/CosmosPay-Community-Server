@@ -10,13 +10,22 @@ import { MerchantFeeEntity } from '@/common/merchant-fee/merchant-fee.entity';
     'issuer), or an SPL mint on Solana with a null issuer.',
 })
 export class SwapPathHop {
-  @ApiProperty({ example: 'yXLM', description: 'Asset code, or "native".' })
+  @ApiProperty({
+    example: 'yXLM',
+    description:
+      'The intermediate asset. Stellar: its code, or `native` for XLM. ' +
+      "Solana: the SPL mint address of a token on Jupiter's route (SOL " +
+      'appears as the wrapped SOL mint, never `native`). Monad routes report ' +
+      'no hops.',
+  })
   code!: string;
 
   @ApiProperty({
     nullable: true,
     example: 'GARDNV3Q7YGT4AKSDF25LT32YSCCW4EV22Y2TV3I2PU2MMXJTEDL5T55',
-    description: 'Issuer for a non-native hop (null for native).',
+    description:
+      'Issuer of a non-native Stellar hop; null for native XLM, and always ' +
+      'null on Solana.',
   })
   issuer!: string | null;
 }
@@ -28,7 +37,13 @@ export class SwapPathHop {
     'and the amount routed.',
 })
 export class SwapAssetAmount {
-  @ApiProperty({ example: 'native', description: 'Asset code, or "native".' })
+  @ApiProperty({
+    example: 'native',
+    description:
+      'The asset. Stellar: its code, or `native` for XLM. Solana: `native` ' +
+      'for SOL, or the SPL mint address. Monad: `native` for MON, or the ' +
+      'ERC-20 contract address (EIP-55 checksummed).',
+  })
   asset!: string;
 
   @ApiProperty({
@@ -184,7 +199,11 @@ export class SwapQuoteEntity {
 
   @ApiProperty({
     type: SwapAssetAmount,
-    description: 'Net amount routed (input − fee).',
+    description:
+      'The amount routed, in the source asset. Stellar: `source.amount` less ' +
+      'the plan commission (`fee.amount`) and less a merchant fee with ' +
+      '`paidBy: recipient`. Solana and Monad: `source.amount` less a merchant ' +
+      'fee with `paidBy: recipient`; the commission comes out of the output.',
   })
   swap!: SwapAssetAmount;
 

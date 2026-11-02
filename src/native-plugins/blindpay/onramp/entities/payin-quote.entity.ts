@@ -10,7 +10,7 @@ import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger';
 })
 export class PayinQuoteEntity {
   @ApiProperty({
-    example: 'pi_000000000000',
+    example: 'pq_000000000000',
     description:
       'BlindPay quote id; pass it as `payin_quote_id` to `POST /v1/onramp/payins`.',
   })
