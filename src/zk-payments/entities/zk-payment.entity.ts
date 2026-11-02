@@ -179,7 +179,9 @@ export class ZkPaymentEntity {
   @ApiProperty({
     example: '0.00255',
     description:
-      'The commission: `ceil(amount * feeBps / 10000)` in stroops, at least one.',
+      "Cosmos Pay's commission, in XLM (decimal string): `feeBps` of the " +
+      'amount the request named (`amount` less a merchant fee with `paidBy: ' +
+      'payer`), rounded up to the stroop (0.0000001 XLM) and at least one stroop.',
   })
   feeAmount!: string;
 

@@ -15,6 +15,7 @@ import {
   ApiConsumes,
   ApiCreatedResponse,
   ApiOperation,
+  ApiQuery,
   ApiTags,
 } from '@nestjs/swagger';
 import { ApiErrorResponse } from '@/common/decorators/api-error-response.decorator';
@@ -194,6 +195,14 @@ export class KycMetaController {
       "Relays BlindPay's field schema for the `rail` query parameter (required: 400 `validation_failed` without it), " +
       'the fields `POST /v1/kyc/receivers/{receiverId}/bank-accounts` needs for that rail. ' +
       "Answered as BlindPay returns it, from the instance of the key's network.",
+  })
+  @ApiQuery({
+    name: 'rail',
+    required: true,
+    example: 'ach',
+    description:
+      "The rail whose fields to list, as a bank account's `type` names it " +
+      '(`GET /v1/kyc/rails` lists the rails). Forwarded to BlindPay as given.',
   })
   bankDetails(
     @CurrentConsumer() consumer: GatewayConsumer,
