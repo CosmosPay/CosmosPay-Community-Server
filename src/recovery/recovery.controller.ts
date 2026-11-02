@@ -16,6 +16,7 @@ import {
 import {
   ApiBearerAuth,
   ApiOperation,
+  ApiQuery,
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
@@ -82,6 +83,16 @@ export class StellarTomlController {
       'WEB_AUTH_ENDPOINT and SIGNING_KEY (SEP-10), HOME_DOMAIN, and a ' +
       '[[RECOVERY_SERVERS]] entry with the SEP-30 ENDPOINT, the ROLE and the ' +
       'identity methods. 404 on a deployment that is not a recovery server.',
+  })
+  @ApiQuery({
+    name: 'network',
+    required: false,
+    example: 'testnet',
+    description:
+      'The ledger the file describes, `public` or `testnet`: its SEP-10 and ' +
+      'SEP-30 endpoints then carry that ledger as a path segment. Omit for ' +
+      'the deployment default. Any other value, or a ledger not in ' +
+      'RECOVERY_NETWORKS, is a 404.',
   })
   @ApiResponse({
     status: 200,

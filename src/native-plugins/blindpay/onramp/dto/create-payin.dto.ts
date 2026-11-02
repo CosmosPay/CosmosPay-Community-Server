@@ -15,7 +15,7 @@ import { IsString } from 'class-validator';
 })
 export class CreatePayinDto {
   @ApiProperty({
-    example: 'qu_000000000000',
+    example: 'pq_000000000000',
     description: 'The id returned by POST /v1/onramp/quotes.',
   })
   @IsString()

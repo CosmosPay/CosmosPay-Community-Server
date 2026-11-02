@@ -175,9 +175,30 @@ export class WalletAuthController {
       'with each provider.',
   })
   @ApiParam({ name: 'provider', enum: ['authentik', 'google', 'github'] })
-  @ApiQuery({ name: 'code', required: false })
-  @ApiQuery({ name: 'state', required: false })
-  @ApiQuery({ name: 'error', required: false })
+  @ApiQuery({
+    name: 'code',
+    required: false,
+    description:
+      'The authorization code the provider issued, which this service ' +
+      "exchanges with the provider for the person's identity. Missing, a " +
+      'pending handshake ends `denied`.',
+  })
+  @ApiQuery({
+    name: 'state',
+    required: false,
+    description:
+      "The handshake's `state`, as `POST /v1/wallet/auth/oauth/authorize` " +
+      'answered it. Missing, unknown, for another provider, no longer pending ' +
+      'or past its expiry: the callback reports `expired` and changes nothing.',
+  })
+  @ApiQuery({
+    name: 'error',
+    required: false,
+    description:
+      'Sent by the provider when the person declined or the authorization ' +
+      'failed. Any value ends a pending handshake `denied`, and no code is ' +
+      'exchanged.',
+  })
   @ApiResponse({
     status: 200,
     description:

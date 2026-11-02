@@ -282,14 +282,24 @@ export class LiquidityOperationEntity {
   @ApiProperty({
     nullable: true,
     example: '9.95',
-    description: 'DEPOSIT only.',
+    description:
+      "A DEPOSIT's lower price bound (its `liquidityPoolDeposit` minPrice), in " +
+      'asset A per unit of asset B, as a decimal string of up to 7 places: the ' +
+      'pool price when the operation was built (reserve A / reserve B, or ' +
+      '`amountA` / `amountB` for a pool with no reserves yet) less ' +
+      '`slippageBps`, rounded down. The deposit fails on-chain at a price ' +
+      'below it. Null on a WITHDRAW.',
   })
   minPrice!: string | null;
 
   @ApiProperty({
     nullable: true,
     example: '10.05',
-    description: 'DEPOSIT only.',
+    description:
+      "A DEPOSIT's upper price bound (its `liquidityPoolDeposit` maxPrice), in " +
+      'the same units as `minPrice`: the same pool price plus `slippageBps`, ' +
+      'rounded up. The deposit fails on-chain at a price above it. Null on a ' +
+      'WITHDRAW.',
   })
   maxPrice!: string | null;
 

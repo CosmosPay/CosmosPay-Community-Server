@@ -140,7 +140,13 @@ export class AliasesController {
       'case. An address no chain accepts answers an empty `data`, not an error.',
   })
   @ApiOkResponse({ type: AliasByAddressEntity })
-  @ApiQuery({ name: 'network', required: false })
+  @ApiQuery({
+    name: 'network',
+    required: false,
+    description:
+      'Limit to addresses registered on this network (public | testnet | a ' +
+      'custom id). Omit for every network.',
+  })
   @ApiQuery({
     name: 'chain',
     required: false,
