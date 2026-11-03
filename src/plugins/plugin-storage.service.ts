@@ -35,6 +35,15 @@ export class PluginStorageService {
       get: (collection, key) => this.get(installationId, collection, key),
       put: (collection, key, value) =>
         this.put(installationId, slug, collection, key, value),
+      compareAndSet: (collection, key, expected, value) =>
+        this.compareAndSet(
+          installationId,
+          slug,
+          collection,
+          key,
+          expected,
+          value,
+        ),
       delete: (collection, key) => this.delete(installationId, collection, key),
       list: (collection, options) =>
         this.list(installationId, collection, options),
@@ -81,10 +90,67 @@ export class PluginStorageService {
     });
     if (updated.count > 0) return;
 
+    if (await this.insert(installationId, slug, collection, key, json)) return;
+    // A concurrent put created it between the update and the insert.
+    await this.prisma.pluginRecord.update({ where, data: { value: json } });
+  }
+
+  /**
+   * One statement decides, so two callers racing on the same record cannot both
+   * win: the insert of an absent record is the table's unique index refusing the
+   * second one, and the replace is an `UPDATE … WHERE value = expected`, which
+   * Postgres re-checks on the row a concurrent update left (READ COMMITTED), so
+   * the loser matches nothing. Values compare as `jsonb`: key order and number
+   * spelling do not count, anything else does.
+   */
+  private async compareAndSet(
+    installationId: string,
+    slug: string,
+    collection: string,
+    key: string,
+    expected: PluginJson | null,
+    value: PluginJson,
+  ): Promise<boolean> {
+    assertCollection(collection);
+    assertKey(key);
+    const json = serializeValue(value);
+    if (expected === null || expected === undefined) {
+      return this.insert(installationId, slug, collection, key, json);
+    }
+    const { count } = await this.prisma.pluginRecord.updateMany({
+      where: {
+        installationId,
+        collection,
+        key,
+        value: { equals: serializeValue(expected) },
+      },
+      data: { value: json },
+    });
+    return count > 0;
+  }
+
+  /**
+   * Creates the record, or answers false when it already exists. The cap is
+   * checked first; a record that exists does not count against it.
+   */
+  private async insert(
+    installationId: string,
+    slug: string,
+    collection: string,
+    key: string,
+    json: Prisma.InputJsonValue,
+  ): Promise<boolean> {
     const count = await this.prisma.pluginRecord.count({
       where: { installationId },
     });
     if (count >= PLUGIN_MAX_RECORDS_PER_INSTALLATION) {
+      const existing = await this.prisma.pluginRecord.findUnique({
+        where: {
+          installationId_collection_key: { installationId, collection, key },
+        },
+        select: { key: true },
+      });
+      if (existing) return false;
       throw new PluginQuotaError(
         `Plugin ${slug} has reached its limit of ${PLUGIN_MAX_RECORDS_PER_INSTALLATION} records.`,
       );
@@ -93,10 +159,10 @@ export class PluginStorageService {
       await this.prisma.pluginRecord.create({
         data: { installationId, collection, key, value: json },
       });
+      return true;
     } catch (err) {
-      // A concurrent put created it between the update and the insert.
       if (!isUniqueViolation(err)) throw err;
-      await this.prisma.pluginRecord.update({ where, data: { value: json } });
+      return false;
     }
   }
 
@@ -123,6 +189,12 @@ export class PluginStorageService {
       assertKey(options.prefix);
     }
     if (options.after !== undefined) assertKey(options.after);
+    if (
+      options.take !== undefined &&
+      (typeof options.take !== 'number' || !Number.isFinite(options.take))
+    ) {
+      throw new PluginError('Storage list take must be a number');
+    }
     const take = Math.min(
       Math.max(Math.trunc(options.take ?? PLUGIN_MAX_PAGE_SIZE), 1),
       PLUGIN_MAX_PAGE_SIZE,

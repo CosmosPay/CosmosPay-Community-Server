@@ -16,6 +16,7 @@
  *
  *   - `ctx.storage` — the plugin's OWN records, scoped to one installation (one
  *     tenant). It cannot name another plugin's rows, or another tenant's.
+ *     `compareAndSet` writes atomically, for records two calls may race on.
  *   - `ctx.core`    — the core's customers, products and payment intents, through
  *     the core's own services: tenant-filtered, validated with the core's own
  *     DTOs, returned as public projections. No deletes, no raw rows.
@@ -164,6 +165,19 @@ export interface PluginStorage {
   get(collection: string, key: string): Promise<PluginJson | null>;
   /** Insert or replace. Fails with a quota error past the installation's cap. */
   put(collection: string, key: string, value: PluginJson): Promise<void>;
+  /**
+   * Writes `value` only if the stored value still equals `expected` (`null`:
+   * only if there is no record yet), in one atomic statement. True when it
+   * wrote. A read followed by `put` loses a concurrent writer's update without
+   * either caller knowing; this is how a plugin creates a record once or moves
+   * one through states without that race.
+   */
+  compareAndSet(
+    collection: string,
+    key: string,
+    expected: PluginJson | null,
+    value: PluginJson,
+  ): Promise<boolean>;
   /** True when a record was removed. */
   delete(collection: string, key: string): Promise<boolean>;
   /** Keys in ascending order; pass `nextCursor` back as `after` for the next page. */

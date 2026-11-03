@@ -13,6 +13,7 @@ import {
   PLUGIN_SIGNATURE_FILE,
   PLUGIN_SLUG_RE,
   PLUGIN_SOURCE_FILE,
+  PLUGIN_SOURCE_FORBIDDEN_CHARS_RE,
   PLUGIN_SOURCE_MAX_BYTES,
 } from '@/plugins/plugins.constants';
 import type {
@@ -37,6 +38,13 @@ export interface LoadPluginsOptions {
   /** `PLUGINS_ALLOW_UNSIGNED`: for writing a plugin locally. */
   allowUnsigned: boolean;
   nodeEnv: string;
+  /**
+   * `STELLAR_NETWORK`, the deployment's default network. `public` means real
+   * money, which refuses unsigned plugins as `NODE_ENV=production` does: a
+   * deployment can run with `NODE_ENV` unset or `development` and still be the
+   * one serving mainnet.
+   */
+  defaultNetwork: 'public' | 'testnet';
   /** Told about every unsigned plugin loaded, so it is never silent. */
   warn: (message: string) => void;
 }
@@ -68,10 +76,14 @@ const MANIFEST_KEYS = new Set([
  */
 export function loadPlugins(options: LoadPluginsOptions): PluginDefinition[] {
   if (options.slugs.length === 0) return [];
-  if (options.allowUnsigned && options.nodeEnv === 'production') {
+  if (
+    options.allowUnsigned &&
+    (options.nodeEnv === 'production' || options.defaultNetwork === 'public')
+  ) {
     throw new Error(
-      'PLUGINS_ALLOW_UNSIGNED=true is refused when NODE_ENV=production: an ' +
-        'unsigned plugin is code nobody vouched for, running with tenant data',
+      'PLUGINS_ALLOW_UNSIGNED=true is refused when NODE_ENV=production or ' +
+        'STELLAR_NETWORK=public: an unsigned plugin is code nobody vouched for, ' +
+        'running with tenant data',
     );
   }
 
@@ -158,6 +170,8 @@ export function readPluginFolder(
     join(dir, PLUGIN_SOURCE_FILE),
     PLUGIN_SOURCE_MAX_BYTES,
   );
+  assertReviewable(PLUGIN_MANIFEST_FILE, manifestText);
+  assertReviewable(PLUGIN_SOURCE_FILE, source);
   const manifest = parseManifest(manifestText);
   if (manifest.slug !== slug) {
     throw new Error(
@@ -165,6 +179,64 @@ export function readPluginFolder(
     );
   }
   return { files: { manifest: manifestText, source }, manifest };
+}
+
+/**
+ * Refuses a file whose text can read differently from how it runs: a
+ * bidirectional control (Trojan Source) or an invisible character anywhere
+ * but a leading byte-order mark. A signature says a person reviewed the file,
+ * so what they saw must be what loads. Exported for `npm run plugins -- install`,
+ * which checks what a registry served before writing it.
+ */
+export function assertReviewable(name: string, text: string): void {
+  const body = text.startsWith('\uFEFF') ? text.slice(1) : text;
+  const match = PLUGIN_SOURCE_FORBIDDEN_CHARS_RE.exec(body);
+  if (!match) return;
+  const before = body.slice(0, match.index);
+  const line = before.split('\n').length;
+  const code = match[0].codePointAt(0)!.toString(16).toUpperCase();
+  throw new Error(
+    `${name} line ${line} contains U+${code.padStart(4, '0')}, an invisible or ` +
+      'bidirectional control character: what a reviewer reads would not be what runs',
+  );
+}
+
+/**
+ * The first key an object of this JSON text lists twice, or null. `JSON.parse`
+ * keeps the LAST one silently, so a manifest with `"egress": []` near the top
+ * and `"egress": ["evil.example"]` further down reads as no network to a
+ * reviewer and loads with one. The text is valid JSON when this runs.
+ */
+export function duplicateJsonKey(text: string): string | null {
+  const objects: (Set<string> | null)[] = [];
+  let expectKey = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === '"') {
+      let end = i + 1;
+      while (text[end] !== '"') end += text[end] === '\\' ? 2 : 1;
+      const keys = objects[objects.length - 1];
+      if (keys && expectKey) {
+        const key = JSON.parse(text.slice(i, end + 1)) as string;
+        if (keys.has(key)) return key;
+        keys.add(key);
+        expectKey = false;
+      }
+      i = end;
+    } else if (ch === '{') {
+      objects.push(new Set());
+      expectKey = true;
+    } else if (ch === '[') {
+      objects.push(null);
+      expectKey = false;
+    } else if (ch === '}' || ch === ']') {
+      objects.pop();
+      expectKey = false;
+    } else if (ch === ',') {
+      expectKey = objects[objects.length - 1] instanceof Set;
+    }
+  }
+  return null;
 }
 
 function readBounded(path: string, maxBytes: number): string {
@@ -189,6 +261,13 @@ export function parseManifest(text: string): PluginManifest {
   }
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error(`${PLUGIN_MANIFEST_FILE} must be a JSON object`);
+  }
+  const twice = duplicateJsonKey(text);
+  if (twice !== null) {
+    throw new Error(
+      `${PLUGIN_MANIFEST_FILE} lists "${twice}" twice in one object: a reviewer ` +
+        'reads the first, the loader keeps the last',
+    );
   }
   const unknown = Object.keys(value).filter((k) => !MANIFEST_KEYS.has(k));
   if (unknown.length > 0) {

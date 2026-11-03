@@ -10,11 +10,13 @@ import {
 } from 'node:fs';
 import { join, resolve } from 'node:path';
 import {
+  assertReviewable,
   parseManifest,
   readPluginFolder,
   sandboxPluginSource,
 } from '@/plugins/plugin-folder';
 import { validatePluginDefinition } from '@/plugins/plugin-manifest';
+import { compareVersions } from '@/plugins/plugin-version';
 import {
   generateSigningKey,
   parseTrustedKeys,
@@ -47,7 +49,7 @@ import {
  *   npm run plugins -- verify my-plugin               is it signed by a key this deployment trusts?
  *   npm run plugins -- keygen --out k.pem --key-id my-registry
  *   npm run plugins -- publish my-plugin --registry-dir registry/
- *   npm run plugins -- install my-plugin[@1.0.0] [--registry https://…]
+ *   npm run plugins -- install my-plugin[@1.0.0] [--registry https://…] [--allow-downgrade]
  *
  * Every plugin lives in ONE folder, `plugins/` at the repository root. A plugin
  * is three readable files — plugin.json, index.ts, signature.json — and nothing
@@ -62,7 +64,8 @@ import {
  * The registry is not trusted: `install` verifies the signature (support's
  * keys, plus PLUGINS_TRUSTED_KEYS) before writing anything, and the server
  * verifies it again at every boot. A compromised host can withhold plugins,
- * not forge them.
+ * not forge them — and cannot roll one back either: replacing an installed
+ * plugin with an older version needs `--allow-downgrade`.
  *
  * Only `check` runs a plugin's code, and only inside a V8 isolate with no Node
  * in it (`plugin-sandbox.ts`). `sign` and `install` do not run it at all:
@@ -74,12 +77,17 @@ const ROOT = resolve(PLUGINS_FOLDER);
 
 type Flags = Record<string, string>;
 
+/** Flags that take no value: present means "true". */
+const BOOLEAN_FLAGS: ReadonlySet<string> = new Set(['allow-downgrade']);
+
 function parseArgs(argv: string[]): { positional: string[]; flags: Flags } {
   const positional: string[] = [];
   const flags: Flags = {};
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
-    if (arg.startsWith('--')) {
+    if (arg.startsWith('--') && BOOLEAN_FLAGS.has(arg.slice(2))) {
+      flags[arg.slice(2)] = 'true';
+    } else if (arg.startsWith('--')) {
       const value = argv[i + 1];
       if (value === undefined || value.startsWith('--')) {
         throw new Error(`${arg} needs a value`);
@@ -194,6 +202,14 @@ function check(positional: string[]): void {
       `${count(handlers.commands)} commands, ${count(handlers.events)} events; ` +
       `capabilities: ${manifest.capabilities.join(', ') || '(none)'}`,
   );
+  // What the loader will enforce, as it parsed it — the list to review against,
+  // whatever the file looks like.
+  console.log(`  egress: ${(manifest.egress ?? []).join(', ') || '(none)'}`);
+  const settings = Object.entries(manifest.config ?? {}).map(
+    ([name, field]) =>
+      `${name} (${field.type}${field.secret ? ', secret' : ''})`,
+  );
+  console.log(`  config: ${settings.join(', ') || '(none)'}`);
 }
 
 function sign(positional: string[], flags: Flags): void {
@@ -311,11 +327,28 @@ async function fetchText(url: URL, maxBytes: number): Promise<string> {
     signal: AbortSignal.timeout(PLUGIN_REGISTRY_TIMEOUT_MS),
   });
   if (!res.ok) throw new Error(`${url.href}: HTTP ${res.status}`);
-  const bytes = Buffer.from(await res.arrayBuffer());
-  if (bytes.length > maxBytes) {
-    throw new Error(`${url.href}: larger than ${maxBytes} bytes`);
+  // Counted as it streams in: a registry that answers with gigabytes is
+  // stopped at the cap, not buffered whole and measured after.
+  const tooLarge = () =>
+    new Error(`${url.href}: larger than ${maxBytes} bytes`);
+  if (Number(res.headers.get('content-length') ?? 0) > maxBytes) {
+    await res.body?.cancel();
+    throw tooLarge();
   }
-  return bytes.toString('utf8');
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  const reader = res.body?.getReader();
+  for (;;) {
+    const next = reader ? await reader.read() : { done: true as const };
+    if (next.done) break;
+    total += next.value.byteLength;
+    if (total > maxBytes) {
+      await reader?.cancel();
+      throw tooLarge();
+    }
+    chunks.push(next.value);
+  }
+  return Buffer.concat(chunks).toString('utf8');
 }
 
 async function install(positional: string[], flags: Flags): Promise<void> {
@@ -359,6 +392,8 @@ async function install(positional: string[], flags: Flags): Promise<void> {
   );
 
   // Everything is checked before a byte lands in plugins/.
+  assertReviewable(PLUGIN_MANIFEST_FILE, manifestText);
+  assertReviewable(PLUGIN_SOURCE_FILE, source);
   const manifest = parseManifest(manifestText);
   if (manifest.slug !== slug || manifest.version !== version) {
     throw new Error(`the registry served ${manifest.slug}@${manifest.version}`);
@@ -376,8 +411,23 @@ async function install(positional: string[], flags: Flags): Promise<void> {
   const errors = validatePluginDefinition(manifest);
   if (errors.length > 0) throw new Error(errors.join('\n'));
 
-  // Write beside the target and swap, so a crash never leaves half a plugin.
+  // A registry that serves an older signed version as `latest` is rolling a
+  // fix back without forging anything; replacing a newer install needs the
+  // operator to say so.
   const target = join(ROOT, slug);
+  const installed = installedVersion(slug);
+  if (
+    installed !== null &&
+    compareVersions(version, installed) < 0 &&
+    flags['allow-downgrade'] !== 'true'
+  ) {
+    throw new Error(
+      `${slug}@${installed} is installed and the registry served ${version}, ` +
+        'an older version. Pass --allow-downgrade to install it anyway',
+    );
+  }
+
+  // Write beside the target and swap, so a crash never leaves half a plugin.
   const staging = join(ROOT, `.${slug}.installing`);
   rmSync(staging, { recursive: true, force: true });
   mkdirSync(staging, { recursive: true });
@@ -394,6 +444,15 @@ async function install(positional: string[], flags: Flags): Promise<void> {
   console.log(
     `Serve it by adding "${slug}" to PLUGINS_ENABLED and restarting.`,
   );
+}
+
+/** The version in `plugins/<slug>/plugin.json`, or null when none is readable. */
+function installedVersion(slug: string): string | null {
+  try {
+    return readPluginFolder(ROOT, slug).manifest.version;
+  } catch {
+    return null;
+  }
 }
 
 async function main(): Promise<void> {

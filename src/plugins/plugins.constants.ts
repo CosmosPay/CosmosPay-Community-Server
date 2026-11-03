@@ -3,10 +3,10 @@ import type { RateLimitPolicy } from '@/common/decorators/rate-limit.decorator';
 /**
  * Limits the plugin runtime puts around every piece of plugin code.
  *
- * A plugin runs inside this process, so none of these is a sandbox: they bound
- * how much of the core a plugin can spend by accident — the database, the event
- * loop, a tenant's quota — and they turn a plugin that misbehaves into a failed
- * request instead of a degraded service.
+ * The isolate (`plugin-sandbox.ts`) keeps plugin code out of this process; these
+ * bound how much of the core a plugin can spend through the bridge it is given —
+ * the database, the event loop, the memory, a tenant's quota — and they turn a
+ * plugin that misbehaves into a failed request instead of a degraded service.
  */
 
 /**
@@ -79,6 +79,32 @@ export const PLUGIN_INVOCATION_TIMEOUT_MS = 10_000;
  */
 export const PLUGIN_MAX_CALLS_PER_INVOCATION = 200;
 
+/**
+ * Context calls one invocation may have in flight at once; the rest wait their
+ * turn. Without it, `Promise.all` over 200 `storage.put`s holds 200 database
+ * connections at once, which is every connection of the pool and then some: one
+ * plugin call would stall every request of every tenant.
+ */
+export const PLUGIN_MAX_CONCURRENT_CALLS_PER_INVOCATION = 4;
+
+/**
+ * Plugin invocations (actions and events) this process runs at once. Each one is
+ * a V8 isolate with up to {@link PLUGIN_ISOLATE_MEMORY_MB} of heap and a thread
+ * of the isolate pool, and the per-minute budget does not bound how many overlap:
+ * 120 slow calls a minute from each of many tenants are hundreds of isolates.
+ * 16 × 32 MB is the most plugin heap this process can hold.
+ */
+export const PLUGIN_MAX_CONCURRENT_INVOCATIONS = 16;
+
+/**
+ * Actions one consumer may have running at once, so one tenant cannot take every
+ * slot above. Past it the call is `429 rate_limited` with `Retry-After`.
+ */
+export const PLUGIN_MAX_CONCURRENT_INVOCATIONS_PER_CONSUMER = 4;
+
+/** `Retry-After`, in seconds, on a call refused for having too many in flight. */
+export const PLUGIN_BUSY_RETRY_AFTER_SECONDS = 1;
+
 /** Size of the JSON `input` an action accepts, serialized. */
 export const PLUGIN_MAX_INPUT_BYTES = 64 * 1024;
 
@@ -122,6 +148,12 @@ export const PLUGIN_HTTP_FORBIDDEN_HEADERS: ReadonlySet<string> = new Set([
   'trailer',
   'keep-alive',
 ]);
+
+/**
+ * A header name a plugin may send: RFC 9110's `token`, bounded. Anything else
+ * is the plugin's 400, not Node throwing from inside the request.
+ */
+export const PLUGIN_HTTP_HEADER_NAME_RE = /^[!#$%&'*+.^_`|~0-9A-Za-z-]{1,256}$/;
 
 /**
  * How much of a `PluginError` message reaches the caller. The message is the
@@ -249,6 +281,17 @@ export const PLUGIN_REGISTRY_INDEX_MAX_BYTES = 1024 * 1024;
 
 /** A `signature.json` is a few hundred bytes; anything this size is not one. */
 export const PLUGIN_SIGNATURE_MAX_BYTES = 64 * 1024;
+
+/**
+ * Characters a reviewed file may not contain: the bidirectional controls of
+ * "Trojan Source" (CVE-2021-42574), which make an editor show code in an order
+ * the compiler does not run it in, and the invisible zero-width ones, which
+ * make two identifiers that look the same differ. A signature is a statement
+ * about what a reviewer read; these make what they read differ from what runs.
+ * A byte-order mark is allowed only as the first character of the file.
+ */
+export const PLUGIN_SOURCE_FORBIDDEN_CHARS_RE =
+  /[\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF]/;
 
 /**
  * Heap cap for the isolate one invocation runs in. A plugin that needs more is

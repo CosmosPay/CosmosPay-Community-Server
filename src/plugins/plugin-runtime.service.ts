@@ -1,6 +1,7 @@
 import { HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import type { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
+import { PluginConcurrencyService } from '@/plugins/plugin-concurrency.service';
 import {
   PluginQuotaError,
   PluginTimeoutError,
@@ -100,6 +101,7 @@ export class PluginRuntimeService {
     private readonly storage: PluginStorageService,
     private readonly core: PluginCoreAccessService,
     private readonly http: PluginHttpClient,
+    private readonly concurrency: PluginConcurrencyService,
   ) {}
 
   async invoke(
@@ -174,12 +176,17 @@ export class PluginRuntimeService {
         plan: null,
         planSwapFeeBps: null,
       };
+      // An event waits for a slot rather than being refused: nobody is there
+      // to retry it, and the wait is bounded by the invocations ahead of it.
+      const release = await this.concurrency.enterEvent();
       try {
         await this.run(plugin, installation, consumer, `event ${type}`, (ctx) =>
           handler(ctx, event),
         );
       } catch {
         // Already logged by `run`; the next subscriber still gets the event.
+      } finally {
+        release();
       }
     }
   }
@@ -243,6 +250,7 @@ export class PluginRuntimeService {
         );
       };
       storage.put = refuse('write storage');
+      storage.compareAndSet = refuse('write storage');
       storage.delete = refuse('delete storage');
       core.customers.create = refuse('create a customer');
       core.customers.update = refuse('update a customer');
@@ -383,9 +391,16 @@ function truncate(message: string): string {
     : message;
 }
 
-/** One line, bounded: a plugin does not get to forge extra log entries. */
+/**
+ * One line, bounded, printable: a plugin does not get to forge extra log
+ * entries (a newline) or to drive the terminal of whoever tails the log (an
+ * escape sequence). Every C0/C1 control becomes a space.
+ */
 function logLine(message: unknown): string {
-  return String(message)
-    .replace(/[\r\n]+/g, ' ')
-    .slice(0, 1000);
+  return (
+    String(message)
+      // eslint-disable-next-line no-control-regex -- removing control characters is the point
+      .replace(/[\u0000-\u001F\u007F-\u009F]+/g, ' ')
+      .slice(0, 1000)
+  );
 }

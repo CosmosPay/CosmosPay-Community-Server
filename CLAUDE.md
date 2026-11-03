@@ -307,7 +307,21 @@ table. These are the rules that did not hold on their own:
   (scaffolded, checked, signed and installed with `npm run plugins`), run only in
   a V8 isolate with no Node in it (`src/plugins/plugin-sandbox.ts`). Their own
   lint block lets them import `@/plugins/sdk` and nothing else; the isolate, not
-  the lint rule, is the enforcement.
+  the lint rule, is the enforcement. Keep four properties when touching the
+  sandbox, each pinned by a spec in `plugin-folder.spec.ts`:
+  - an invocation never calls the isolate synchronously (compile, top level and
+    load go through the async APIs), so plugin code never holds the event loop;
+  - the bridge's transfer options are frozen null-prototype objects built before
+    plugin code runs: isolated-vm reads options through the prototype chain, and a
+    `reference` reaching the isolate is a host escape;
+  - an invocation has at most `PLUGIN_MAX_CONCURRENT_CALLS_PER_INVOCATION` calls in
+    flight, and the process `PLUGIN_MAX_CONCURRENT_INVOCATIONS` invocations
+    (`PluginConcurrencyService`), so one plugin cannot take the database pool or
+    the memory;
+  - what review reads is what loads: `plugin.json` with a key listed twice, or
+    either file with an invisible or bidirectional character, is refused.
+  A plugin that writes back a record it read uses `ctx.storage.compareAndSet`
+  (an `UPDATE … WHERE value = expected` on `jsonb`), never a read then `put`.
 - **Swap venues are the exception, by decision: they are core.** A same-chain
   swap is `/v1/swaps` on the chain's own venue — the Stellar DEX, Jupiter on
   Solana, Kuru Flow on Monad (`src/jupiter/`, `src/kuru/`). The Stellar DEX stays

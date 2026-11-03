@@ -3,9 +3,10 @@
 Every plugin lives here, one folder each. Nothing in this folder runs until its
 slug is listed in `PLUGINS_ENABLED`.
 
-These are the **sandboxed** plugins. BlindPay and DeFindex are *native* plugins —
-compiled in under `src/native-plugins/`, switched on by the same `PLUGINS_ENABLED`
-— and their slugs (`blindpay`, `defindex`) cannot be taken here.
+These are the **sandboxed** plugins. BlindPay, DeFindex and Trustless Work are
+*native* plugins — compiled in under `src/native-plugins/`, switched on by the same
+`PLUGINS_ENABLED` — and their slugs (`blindpay`, `defindex`, `trustless-work`)
+cannot be taken here.
 
 ```text
 plugins/
@@ -13,7 +14,13 @@ plugins/
     plugin.json      what the plugin is, and what it may touch
     index.ts         what it does — plain TypeScript, no build step
     signature.json   who vouches for the two files above
+  sub-rosa/          private RFQs on Sub Rosa sealed-proposal rounds (Stellar)
 ```
+
+| Plugin | What it does |
+| --- | --- |
+| `example` | Reference plugin: notes per payment intent. Uses every part of the SDK |
+| `sub-rosa` | Private requests for quotes: an RFQ bound to a Sub Rosa `ReceiptOnly` round, the client-verified result, and the payment intent that pays the chosen provider. Written by the Sub Rosa contributors, reviewed and hardened by support; its header comment says what it checks and what it takes on trust |
 
 ## Write your first plugin in five minutes
 
@@ -42,7 +49,7 @@ only from `@/plugins/sdk`. Your handlers get `ctx`:
 
 | | |
 | --- | --- |
-| `ctx.storage` | your plugin's own data, per tenant: `get`, `put`, `delete`, `list` |
+| `ctx.storage` | your plugin's own data, per tenant: `get`, `put`, `delete`, `list`, and `compareAndSet` for a record two calls may race on |
 | `ctx.core` | the tenant's customers, products, payment intents — what `capabilities` allows |
 | `ctx.http` | `request({ method, url, body })` to the hosts in `egress` |
 | `ctx.installation.config` | the tenant's settings |
@@ -51,6 +58,12 @@ only from `@/plugins/sdk`. Your handlers get `ctx`:
 Throw `PluginError('message')` to refuse a request; the caller sees your message.
 Queries may not write — put writes in `commands`. `example/` uses every one of these.
 
+A record you read, change and write back with `put` loses a concurrent caller's
+change without either of you knowing. When that matters (a state machine, a
+"create once"), write with `compareAndSet(collection, key, valueYouRead, next)`
+(or `null` for "only if absent") and refuse the call when it answers `false`;
+`sub-rosa/` does this for every write.
+
 ## Shipping it
 
 Open a pull request with your folder. Once it is reviewed, Cosmos Pay support signs it:
@@ -58,6 +71,11 @@ Open a pull request with your folder. Once it is reviewed, Cosmos Pay support si
 ```sh
 npm run plugins -- sign my-plugin --key <support key .pem> --key-id cosmos-support
 ```
+
+Review against what `check` prints (capabilities, `egress`, settings as the loader
+parsed them), not against how the file looks. The loader refuses a `plugin.json`
+that lists a key twice and any invisible or bidirectional control character in
+either file, so what a reviewer reads is what runs.
 
 A plugin signed by support is **preinstalled**: it loads on every deployment as soon
 as it is enabled. Plugins from elsewhere are installed from a registry with

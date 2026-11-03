@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
+  duplicateJsonKey,
   loadPlugins,
   parseManifest,
   sandboxPluginSource,
@@ -16,6 +17,7 @@ import {
   PluginTimeoutError,
   PluginViolationError,
 } from '@/plugins/plugin-errors';
+import { PLUGIN_MAX_CONCURRENT_CALLS_PER_INVOCATION } from '@/plugins/plugins.constants';
 import { PluginError } from '@/plugins/sdk';
 
 function manifest(slug: string, version = '1.0.0'): string {
@@ -80,6 +82,7 @@ describe('loadPlugins', () => {
       trustedKeys,
       allowUnsigned: false,
       nodeEnv: 'production',
+      defaultNetwork: 'testnet',
       warn: jest.fn(),
       ...extra,
     });
@@ -161,6 +164,50 @@ describe('loadPlugins', () => {
     ).toThrow(/refused when NODE_ENV=production/);
   });
 
+  it('refuses unsigned plugins on a deployment that serves mainnet, whatever NODE_ENV says', () => {
+    write('acme', {}, false);
+    expect(() =>
+      load(['acme'], {
+        allowUnsigned: true,
+        nodeEnv: 'development',
+        defaultNetwork: 'public',
+      }),
+    ).toThrow(/STELLAR_NETWORK=public/);
+  });
+
+  it('refuses a manifest that lists a key twice, before checking the signature', () => {
+    const twice =
+      '{"slug":"acme","name":"Acme","version":"1.0.0","description":"d",' +
+      '"author":"a","capabilities":[],"egress":[],"egress":["evil.example.com"]}';
+    write('acme', { manifest: twice });
+    expect(() => load(['acme'])).toThrow(/lists "egress" twice/);
+  });
+
+  it.each([
+    ['a right-to-left override in index.ts', 'index.ts', '\u202E'],
+    ['a zero-width space in index.ts', 'index.ts', '\u200B'],
+    ['a byte-order mark inside index.ts', 'index.ts', '\uFEFF'],
+  ])('refuses %s: what review reads must be what runs', (_l, file, char) => {
+    write('acme', { source: source(`// is admin${char} */`) });
+    expect(() => load(['acme'])).toThrow(
+      new RegExp(`${file.replace('.', '\\.')} line \\d+ contains U\\+`),
+    );
+  });
+
+  it('refuses an invisible character in plugin.json', () => {
+    write('acme', {
+      manifest: manifest('acme').replace('"Acme"', '"Ac\u200Dme"'),
+    });
+    expect(() => load(['acme'])).toThrow(
+      /plugin\.json line 1 contains U\+200D/,
+    );
+  });
+
+  it('accepts a byte-order mark at the very start of a file', () => {
+    write('acme', { source: `\uFEFF${source()}` });
+    expect(load(['acme'])).toHaveLength(1);
+  });
+
   it('refuses a slug that could leave the folder, and one that is not there', () => {
     expect(() => load(['../etc'])).toThrow(/slug must match/);
     expect(() => load(['ghost'])).toThrow(/npm run plugins -- new ghost/);
@@ -177,6 +224,21 @@ describe('parseManifest', () => {
   it('refuses a manifest that is not a JSON object', () => {
     expect(() => parseManifest('[1]')).toThrow(/must be a JSON object/);
     expect(() => parseManifest('{')).toThrow(/not valid JSON/);
+  });
+});
+
+describe('duplicateJsonKey', () => {
+  it.each([
+    ['{"a":1,"b":2}', null],
+    ['{"a":{"a":1},"b":[{"a":1},{"a":2}]}', null],
+    ['{"a":"\\"a\\"","b":"a"}', null],
+    ['{"a":1,"a":2}', 'a'],
+    ['{"o":{"x":1,"x":2}}', 'x'],
+    ['{"l":[{"k":1,"k":2}]}', 'k'],
+    // The same key spelled two ways is the same key to JSON.parse.
+    ['{"egress":[],"\\u0065gress":["x"]}', 'egress'],
+  ])('%s → %s', (text, expected) => {
+    expect(duplicateJsonKey(text)).toBe(expected);
   });
 });
 
@@ -199,6 +261,7 @@ describe('sandboxPluginSource — plugin code runs in an isolate', () => {
       storage: {
         get: record('storage.get'),
         put: record('storage.put'),
+        compareAndSet: record('storage.compareAndSet'),
         delete: record('storage.delete'),
         list: record('storage.list'),
       },
@@ -332,6 +395,96 @@ export default defineHandlers({ queries: { run: async (ctx: any, input: any) => 
     const { ctx, calls } = hostContext();
     await run(`await ctx.storage.put('c', 'k', 1); return null;`, '', ctx);
     expect(calls).toEqual(['storage.put']);
+  });
+
+  it('hands compareAndSet the expected value and the new one, and its answer back', async () => {
+    const seen: unknown[] = [];
+    const { ctx } = hostContext({
+      storage: {
+        compareAndSet: (...args: unknown[]) => {
+          seen.push(args);
+          return Promise.resolve(false);
+        },
+      },
+    });
+    const won = await run(
+      `return await ctx.storage.compareAndSet('c', 'k', { v: 1 }, { v: 2 });`,
+      '',
+      ctx,
+    );
+    expect(won).toBe(false);
+    expect(seen).toEqual([['c', 'k', { v: 1 }, { v: 2 }]]);
+  });
+
+  it('runs the top level on the isolate thread, never holding this event loop', async () => {
+    // 400 ms of synchronous work at the top level: inside the eval budget, so
+    // it loads, and it runs again on every invocation.
+    const handlers = sandboxPluginSource(
+      `import { defineHandlers } from '@/plugins/sdk';
+const until = Date.now() + 400;
+while (Date.now() < until) { /* spin */ }
+export default defineHandlers({ queries: { run: () => 1 } });
+`,
+      'index.ts',
+      { timeoutMs: 5_000, memoryMb: 16 },
+    );
+    let ticks = 0;
+    const ticker = setInterval(() => ticks++, 20);
+    try {
+      await expect(handlers.queries!.run(hostContext().ctx, {})).resolves.toBe(
+        1,
+      );
+    } finally {
+      clearInterval(ticker);
+    }
+    expect(ticks).toBeGreaterThan(5);
+  });
+
+  it('ignores transfer options a plugin plants on Object.prototype', async () => {
+    // isolated-vm reads its options through the prototype chain; had the
+    // bridge's options been ordinary objects, these would have reached them.
+    const { ctx } = hostContext({
+      storage: { get: () => Promise.resolve({ secret: 'v' }) },
+    });
+    const found = await run(
+      `
+      const proto: any = Object.prototype;
+      proto.reference = true;
+      proto.externalCopy = true;
+      const value: any = await ctx.storage.get('c', 'k');
+      return {
+        type: typeof value,
+        plain: Object.getPrototypeOf(value) === Object.prototype,
+        secret: value.secret,
+      };
+    `,
+      '',
+      ctx,
+    );
+    expect(found).toEqual({ type: 'object', plain: true, secret: 'v' });
+  });
+
+  it('lets one invocation have only a few context calls in flight at once', async () => {
+    let inFlight = 0;
+    let peak = 0;
+    const { ctx } = hostContext({
+      storage: {
+        get: async () => {
+          inFlight += 1;
+          peak = Math.max(peak, inFlight);
+          await new Promise((resolve) => setTimeout(resolve, 10));
+          inFlight -= 1;
+          return null;
+        },
+      },
+    });
+    await run(
+      `await Promise.all(Array.from({ length: 20 }, (_, i) => ctx.storage.get('c', 'k' + i)));
+       return null;`,
+      '',
+      ctx,
+    );
+    expect(peak).toBe(PLUGIN_MAX_CONCURRENT_CALLS_PER_INVOCATION);
   });
 
   it('refuses metadata in index.ts: that belongs in plugin.json', () => {

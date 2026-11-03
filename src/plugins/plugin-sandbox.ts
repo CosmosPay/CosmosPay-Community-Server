@@ -1,5 +1,6 @@
 import ivm from 'isolated-vm';
 import { ApiError } from '@/common/errors/api-error';
+import { ConcurrencyLimiter } from '@/plugins/concurrency-limiter';
 import {
   PluginQuotaError,
   PluginTimeoutError,
@@ -9,6 +10,7 @@ import {
   PLUGIN_EVAL_TIMEOUT_MS,
   PLUGIN_INVOCATION_TIMEOUT_MS,
   PLUGIN_ISOLATE_MEMORY_MB,
+  PLUGIN_MAX_CONCURRENT_CALLS_PER_INVOCATION,
   PLUGIN_SDK_IMPORTS,
 } from '@/plugins/plugins.constants';
 import {
@@ -43,7 +45,9 @@ import {
  *   - code written to escape finds nothing to escape to — there is no object
  *     of this process in the isolate to climb from;
  *   - a runaway loop is stopped: the isolate is disposed when the budget ends,
- *     which terminates it wherever it is, and it never held this event loop;
+ *     which terminates it wherever it is, and it never held this event loop —
+ *     an invocation compiles, loads and runs the plugin on the isolate's
+ *     thread, top level included, never with a synchronous call from here;
  *   - memory is bounded per invocation, and a plugin that exceeds it fails
  *     alone;
  *   - nothing survives an invocation: module-level state cannot carry one
@@ -91,6 +95,13 @@ const requireStringArray = ${requireStringArray.toString()};
  * entry points the host calls — load and dispatch. Plugin code that later
  * rewrites globals changes nothing the host relies on: the host holds
  * references to these functions, taken before the plugin ran.
+ *
+ * The options the bridge is called with are built here too, frozen and with no
+ * prototype. isolated-vm reads an option with an ordinary property lookup,
+ * which climbs the prototype chain, so a plugin that set
+ * `Object.prototype.reference = true` would otherwise be choosing how the
+ * host's answer crosses over — and a reference to a host object is the one
+ * thing that must never reach the isolate.
  */
 const BOOTSTRAP = `
 (function () {
@@ -99,6 +110,12 @@ const BOOTSTRAP = `
   delete globalThis.__cosmosBridge;
   const stringify = JSON.stringify;
   const parse = JSON.parse;
+  const freeze = Object.freeze;
+  const BRIDGE_OPTIONS = freeze({
+    __proto__: null,
+    arguments: freeze({ __proto__: null, copy: true }),
+    result: freeze({ __proto__: null, promise: true, copy: true }),
+  });
   ${SANDBOX_SDK}
   class PluginHostFailure extends Error {
     constructor(kind, message) {
@@ -107,7 +124,7 @@ const BOOTSTRAP = `
       this.kind = kind;
     }
   }
-  const SDK = Object.freeze({
+  const SDK = freeze({
     PluginError, PLUGIN_CAPABILITIES, PLUGIN_EVENT_TYPES,
     definePlugin, defineHandlers, requireString, optionalString, requireStringArray,
   });
@@ -115,17 +132,14 @@ const BOOTSTRAP = `
 
   function deepFreeze(value) {
     if (value && typeof value === 'object' && !Object.isFrozen(value)) {
-      Object.freeze(value);
+      freeze(value);
       for (const inner of Object.values(value)) deepFreeze(inner);
     }
     return value;
   }
 
   async function call(method, args) {
-    const raw = await bridge.apply(undefined, [method, stringify(args)], {
-      arguments: { copy: true },
-      result: { promise: true, copy: true },
-    });
+    const raw = await bridge.apply(undefined, [method, stringify(args)], BRIDGE_OPTIONS);
     const reply = parse(raw);
     if (reply.ok) return reply.value;
     if (reply.kind === 'rejected') throw new PluginError(reply.message);
@@ -142,6 +156,7 @@ const BOOTSTRAP = `
       installation: meta.installation,
       storage: {
         get: fn('storage.get'), put: fn('storage.put'),
+        compareAndSet: fn('storage.compareAndSet'),
         delete: fn('storage.delete'), list: fn('storage.list'),
       },
       core: {
@@ -160,9 +175,9 @@ const BOOTSTRAP = `
       http: {
         request: async (request) => {
           const r = await call('http.request', [request]);
-          return Object.freeze({
+          return freeze({
             status: r.status,
-            headers: Object.freeze(r.headers),
+            headers: freeze(r.headers),
             body: r.body,
             json() {
               try { return parse(r.body); }
@@ -252,6 +267,13 @@ const HOST_METHODS: Readonly<
   'storage.get': (ctx, a) => ctx.storage.get(str(a[0]), str(a[1])),
   'storage.put': (ctx, a) =>
     ctx.storage.put(str(a[0]), str(a[1]), a[2] as PluginJson),
+  'storage.compareAndSet': (ctx, a) =>
+    ctx.storage.compareAndSet(
+      str(a[0]),
+      str(a[1]),
+      (a[2] ?? null) as PluginJson | null,
+      a[3] as PluginJson,
+    ),
   'storage.delete': (ctx, a) => ctx.storage.delete(str(a[0]), str(a[1])),
   'storage.list': (ctx, a) =>
     ctx.storage.list(
@@ -292,6 +314,21 @@ const HOST_METHODS: Readonly<
   'log.error': (ctx, a) => ctx.log.error(String(a[0])),
 };
 
+/** One invocation, as the bridge sees it. */
+interface BridgeScope {
+  ctx: PluginContext;
+  /** Context calls this invocation may have in flight; the rest queue. */
+  calls: ConcurrencyLimiter;
+  /**
+   * The first failure that is not the plugin's to handle — a violation, or the
+   * core failing — sticks: the invocation fails even if the plugin catches it,
+   * so a plugin cannot probe what it was not granted in silence.
+   */
+  fatal: Error | null;
+  /** Set when the invocation ends; a call still queued then never runs. */
+  over: boolean;
+}
+
 /** A plugin's compiled code, run in a fresh isolate for every call. */
 export class PluginSandbox {
   constructor(
@@ -301,13 +338,33 @@ export class PluginSandbox {
   ) {}
 
   /**
-   * Loads the plugin once, to read what it exports. Synchronous and bounded:
-   * the top level runs under the eval budget, in an isolate disposed after.
+   * Loads the plugin once, to read what it exports. Runs at boot (and in
+   * `npm run plugins -- check`), so it is synchronous: the top level runs
+   * under the eval budget, in an isolate disposed after, with no context to
+   * reach.
    */
   describe(): PluginShape {
     const isolate = new ivm.Isolate({ memoryLimit: this.limits.memoryMb });
     try {
-      return JSON.parse(this.prepare(isolate, null).load()) as PluginShape;
+      const context = isolate.createContextSync();
+      const global = context.global;
+      global.setSync(
+        '__cosmosBridge',
+        new ivm.Reference((method: string, argsJson: string) =>
+          this.bridge(null, method, argsJson),
+        ),
+      );
+      isolate.compileScriptSync(BOOTSTRAP).runSync(context);
+      const loader = global.getSync('__cosmosLoad', { reference: true });
+      isolate
+        .compileScriptSync(this.wrapped(), { filename: this.fileName })
+        .runSync(context, { timeout: PLUGIN_EVAL_TIMEOUT_MS });
+      const factory = global.getSync('__cosmosModule', { reference: true });
+      const shape = loader.applySync(undefined, [factory.derefInto()], {
+        timeout: PLUGIN_EVAL_TIMEOUT_MS,
+        result: { copy: true },
+      }) as string;
+      return JSON.parse(shape) as PluginShape;
     } finally {
       isolate.dispose();
     }
@@ -339,45 +396,46 @@ export class PluginSandbox {
   }
 
   /**
-   * A fresh context with the bootstrap and the plugin's module in it.
-   * `load()` runs the module's top level (bounded) and returns its shape;
-   * `dispatch` is the bootstrap's entry point for one handler call.
+   * The plugin's CommonJS, wrapped in a function the loader calls with its own
+   * `require`. Defining it runs nothing yet.
    */
-  private prepare(
+  private wrapped(): string {
+    return `globalThis.__cosmosModule = function (module, exports, require) {\n${this.code}\n};`;
+  }
+
+  /**
+   * A fresh context with the bootstrap and the plugin's module loaded in it,
+   * and the bootstrap's dispatch entry point. Every step is asynchronous: the
+   * compile, the module's top level and the load run on the isolate's thread,
+   * so a plugin that spends its whole eval budget at the top level spends none
+   * of this event loop.
+   */
+  private async load(
     isolate: ivm.Isolate,
-    ctx: PluginContext | null,
-    onFatal?: (err: Error) => void,
-  ): { load: () => string; dispatch: ivm.Reference } {
-    const context = isolate.createContextSync();
+    scope: BridgeScope,
+  ): Promise<ivm.Reference> {
+    const context = await isolate.createContext();
     const global = context.global;
-    global.setSync(
+    await global.set(
       '__cosmosBridge',
       new ivm.Reference((method: string, argsJson: string) =>
-        this.bridge(ctx, method, argsJson, onFatal),
+        this.bridge(scope, method, argsJson),
       ),
     );
-    isolate.compileScriptSync(BOOTSTRAP).runSync(context);
+    await (await isolate.compileScript(BOOTSTRAP)).run(context);
     // Taken now, before any plugin code runs: whatever the plugin later does to
     // its globals, these references still point at the bootstrap's functions.
-    const loader = global.getSync('__cosmosLoad', { reference: true });
-    const dispatch = global.getSync('__cosmosDispatch', { reference: true });
-    // The plugin's CommonJS, wrapped in a function the loader calls with its
-    // own `require`. Defining it runs nothing yet.
-    isolate
-      .compileScriptSync(
-        `globalThis.__cosmosModule = function (module, exports, require) {\n${this.code}\n};`,
-        { filename: this.fileName },
-      )
-      .runSync(context, { timeout: PLUGIN_EVAL_TIMEOUT_MS });
-    const factory = global.getSync('__cosmosModule', { reference: true });
-    return {
-      load: () =>
-        loader.applySync(undefined, [factory.derefInto()], {
-          timeout: PLUGIN_EVAL_TIMEOUT_MS,
-          result: { copy: true },
-        }) as string,
-      dispatch,
-    };
+    const loader = await global.get('__cosmosLoad', { reference: true });
+    const dispatch = await global.get('__cosmosDispatch', { reference: true });
+    await (
+      await isolate.compileScript(this.wrapped(), { filename: this.fileName })
+    ).run(context, { timeout: PLUGIN_EVAL_TIMEOUT_MS });
+    const factory = await global.get('__cosmosModule', { reference: true });
+    await loader.apply(undefined, [factory.derefInto()], {
+      timeout: PLUGIN_EVAL_TIMEOUT_MS,
+      result: { copy: true },
+    });
+    return dispatch;
   }
 
   private async invoke(
@@ -387,26 +445,26 @@ export class PluginSandbox {
     payload: unknown,
   ): Promise<any> {
     const isolate = new ivm.Isolate({ memoryLimit: this.limits.memoryMb });
-    // The first failure that is not the plugin's to handle — a violation, or
-    // the core failing — sticks: the invocation fails even if the plugin
-    // catches it, so a plugin cannot probe what it was not granted in silence.
-    const state: { fatal: Error | null } = { fatal: null };
+    const scope: BridgeScope = {
+      ctx,
+      calls: new ConcurrencyLimiter(PLUGIN_MAX_CONCURRENT_CALLS_PER_INVOCATION),
+      fatal: null,
+      over: false,
+    };
     let timer: NodeJS.Timeout | undefined;
     try {
-      const { load, dispatch } = this.prepare(isolate, ctx, (err) => {
-        state.fatal ??= err;
-      });
-      load();
-
       const meta = JSON.stringify({
         plugin: ctx.plugin,
         installation: ctx.installation,
       });
-      const run = dispatch.apply(
-        undefined,
-        [kind, name, JSON.stringify(payload ?? null), meta],
-        { arguments: { copy: true }, result: { promise: true, copy: true } },
-      ) as Promise<string>;
+      const run = (async () => {
+        const dispatch = await this.load(isolate, scope);
+        return (await dispatch.apply(
+          undefined,
+          [kind, name, JSON.stringify(payload ?? null), meta],
+          { arguments: { copy: true }, result: { promise: true, copy: true } },
+        )) as string;
+      })();
       // Once the deadline wins, the isolate is disposed and `run` rejects with
       // nobody listening; that rejection is expected, not unhandled.
       run.catch(() => undefined);
@@ -429,7 +487,7 @@ export class PluginSandbox {
         message?: string;
       };
 
-      if (state.fatal) throw state.fatal;
+      if (scope.fatal) throw scope.fatal;
       if (reply.ok) return reply.value;
       const message = String(reply.message ?? '');
       switch (reply.kind) {
@@ -443,7 +501,7 @@ export class PluginSandbox {
           throw new Error(`Plugin ${ctx.plugin.slug} threw: ${message}`);
       }
     } catch (err) {
-      if (state.fatal) throw state.fatal;
+      if (scope.fatal) throw scope.fatal;
       if (
         err instanceof PluginError ||
         err instanceof PluginQuotaError ||
@@ -453,7 +511,8 @@ export class PluginSandbox {
       ) {
         throw err;
       }
-      // An isolate that ran out of memory, or any other engine failure.
+      // An isolate that ran out of memory, a top level over its eval budget,
+      // or any other engine failure.
       throw new Error(
         `Plugin ${ctx.plugin.slug} failed in its sandbox: ${
           err instanceof Error ? err.message : String(err)
@@ -461,6 +520,7 @@ export class PluginSandbox {
         { cause: err },
       );
     } finally {
+      scope.over = true;
       clearTimeout(timer);
       // Disposing terminates whatever is still running — a loop, a pending
       // await — and frees the heap. Nothing of this call outlives it.
@@ -470,25 +530,35 @@ export class PluginSandbox {
 
   /** One call across the bridge. Always answers JSON; never throws into the isolate. */
   private async bridge(
-    ctx: PluginContext | null,
+    scope: BridgeScope | null,
     method: string,
     argsJson: string,
-    onFatal?: (err: Error) => void,
   ): Promise<string> {
     const reply = (value: unknown) => JSON.stringify(value);
     const handler = Object.hasOwn(HOST_METHODS, method)
       ? HOST_METHODS[method]
       : undefined;
-    if (!ctx || !handler) {
+    if (!scope || !handler) {
       const err = new PluginViolationError(
         `Plugin called "${String(method).slice(0, 60)}", which is not a context method`,
       );
-      onFatal?.(err);
+      if (scope) scope.fatal ??= err;
       return reply({ ok: false, kind: 'violation', message: err.message });
     }
     try {
       const args: unknown = JSON.parse(argsJson);
-      const value = await handler(ctx, Array.isArray(args) ? args : []);
+      const value = await scope.calls.run(() => {
+        if (scope.over) {
+          return Promise.reject(
+            new PluginViolationError(
+              `Plugin ${scope.ctx.plugin.slug} used its context after the invocation ended`,
+            ),
+          );
+        }
+        return Promise.resolve(
+          handler(scope.ctx, Array.isArray(args) ? args : []),
+        );
+      });
       return reply({ ok: true, value: value === undefined ? null : value });
     } catch (err) {
       if (err instanceof PluginError) {
@@ -502,7 +572,7 @@ export class PluginSandbox {
         return reply({ ok: false, kind: 'rejected', message: err.message });
       }
       const fatal = err instanceof Error ? err : new Error(String(err));
-      onFatal?.(fatal);
+      scope.fatal ??= fatal;
       return reply({
         ok: false,
         kind: err instanceof PluginViolationError ? 'violation' : 'failed',
