@@ -15,6 +15,7 @@ import {
   PLUGIN_SOURCE_FILE,
   PLUGIN_SOURCE_FORBIDDEN_CHARS_RE,
   PLUGIN_SOURCE_MAX_BYTES,
+  PLUGINS_UNSIGNED_NODE_ENVS,
 } from '@/plugins/plugins.constants';
 import type {
   PluginDefinition,
@@ -37,7 +38,12 @@ export interface LoadPluginsOptions {
   trustedKeys: readonly TrustedPluginKey[];
   /** `PLUGINS_ALLOW_UNSIGNED`: for writing a plugin locally. */
   allowUnsigned: boolean;
-  nodeEnv: string;
+  /**
+   * `NODE_ENV` as the environment set it, or null when unset. Unsigned plugins
+   * need it to say development or test outright: an allowlist, because a
+   * deployment can serve mainnet with `NODE_ENV` unset or mistyped.
+   */
+  nodeEnv: string | null;
   /**
    * `STELLAR_NETWORK`, the deployment's default network. `public` means real
    * money, which refuses unsigned plugins as `NODE_ENV=production` does: a
@@ -78,12 +84,15 @@ export function loadPlugins(options: LoadPluginsOptions): PluginDefinition[] {
   if (options.slugs.length === 0) return [];
   if (
     options.allowUnsigned &&
-    (options.nodeEnv === 'production' || options.defaultNetwork === 'public')
+    !(
+      PLUGINS_UNSIGNED_NODE_ENVS.has(options.nodeEnv ?? '') &&
+      options.defaultNetwork !== 'public'
+    )
   ) {
     throw new Error(
-      'PLUGINS_ALLOW_UNSIGNED=true is refused when NODE_ENV=production or ' +
-        'STELLAR_NETWORK=public: an unsigned plugin is code nobody vouched for, ' +
-        'running with tenant data',
+      'PLUGINS_ALLOW_UNSIGNED=true needs NODE_ENV set to development or test, ' +
+        'and STELLAR_NETWORK other than public: an unsigned plugin is code ' +
+        'nobody vouched for, running with tenant data',
     );
   }
 

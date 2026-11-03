@@ -119,15 +119,16 @@ const HTTPS_URL_RE =
 
 /**
  * Text a person reads later, in a dashboard or an audit: no control
- * characters, no bidirectional overrides, no zero-width characters, so what
- * is shown is what was stored. A line break or a tab is allowed in the
+ * characters, no bidirectional overrides, no invisible (default-ignorable)
+ * characters, so what is shown is what was stored, and no unpaired surrogate,
+ * which the database cannot store. A line break or a tab is allowed in the
  * multi-line fields.
  */
 const SINGLE_LINE_FORBIDDEN_RE =
-  /[\p{Cc}\p{Default_Ignorable_Code_Point}\p{Bidi_Control}\u2028\u2029]/u;
+  /[\p{Cc}\p{Cs}\p{Default_Ignorable_Code_Point}\p{Bidi_Control}\u2028\u2029]/u;
 const MULTI_LINE_FORBIDDEN_RE =
   // eslint-disable-next-line no-control-regex -- the same, minus line breaks and tabs
-  /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\p{Default_Ignorable_Code_Point}\p{Bidi_Control}\u2028\u2029]/u;
+  /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\p{Cs}\p{Default_Ignorable_Code_Point}\p{Bidi_Control}\u2028\u2029]/u;
 
 interface SubRosaMapping {
   network: Network;

@@ -10,9 +10,16 @@ import {
   PLUGIN_EVAL_TIMEOUT_MS,
   PLUGIN_INVOCATION_TIMEOUT_MS,
   PLUGIN_ISOLATE_MEMORY_MB,
+  PLUGIN_MAX_CALL_ARGS_CHARS,
+  PLUGIN_MAX_CALLS_PER_INVOCATION,
   PLUGIN_MAX_CONCURRENT_CALLS_PER_INVOCATION,
+  PLUGIN_MAX_CONCURRENT_DB_CALLS,
+  PLUGIN_MAX_PENDING_CALL_CHARS,
+  PLUGIN_MAX_REPLY_CHARS,
+  PLUGIN_MAX_REPLY_MESSAGE_CHARS,
   PLUGIN_SDK_IMPORTS,
 } from '@/plugins/plugins.constants';
+import { oneLine } from '@/plugins/plugin-text';
 import {
   definePlugin,
   defineHandlers,
@@ -138,7 +145,19 @@ const BOOTSTRAP = `
     return value;
   }
 
+  // The host counts calls too and is the authority; this keeps a plugin that
+  // fires calls in a loop from making the host refuse thousands of them. One
+  // call past the budget still crosses, so the host sees the violation and
+  // fails the invocation; every call after it is refused here, in the isolate.
+  const MAX_CALLS = ${PLUGIN_MAX_CALLS_PER_INVOCATION};
+  let calls = 0;
+
   async function call(method, args) {
+    calls += 1;
+    if (calls > MAX_CALLS + 1) {
+      throw new PluginHostFailure('violation',
+        'more than ' + MAX_CALLS + ' context calls in one invocation');
+    }
     const raw = await bridge.apply(undefined, [method, stringify(args)], BRIDGE_OPTIONS);
     const reply = parse(raw);
     if (reply.ok) return reply.value;
@@ -222,6 +241,26 @@ const BOOTSTRAP = `
     return stringify(shape);
   };
 
+  // What crosses back to the host is bounded here, in the isolate: a string's
+  // length cannot be redefined, so a plugin cannot make the host copy and parse
+  // megabytes, whatever it returns or throws.
+  const toText = String;
+  const MAX_REPLY = ${PLUGIN_MAX_REPLY_CHARS};
+  const MAX_MESSAGE = ${PLUGIN_MAX_REPLY_MESSAGE_CHARS};
+  function answer(value) {
+    let text;
+    try { text = stringify(value); } catch { text = undefined; }
+    if (typeof text === 'string' && text.length <= MAX_REPLY) return text;
+    return stringify({ ok: false, kind: 'crash',
+      message: 'the answer is not JSON, or longer than ' + MAX_REPLY + ' characters' });
+  }
+  function message(value) {
+    let text;
+    try { text = toText(value); } catch { return 'the message could not be read'; }
+    return typeof text === 'string' && text.length <= MAX_MESSAGE ? text
+      : 'the message is longer than ' + MAX_MESSAGE + ' characters';
+  }
+
   globalThis.__cosmosDispatch = async function (kind, name, payloadJson, metaJson) {
     try {
       const group = kind === 'query' ? handlers.queries
@@ -229,18 +268,18 @@ const BOOTSTRAP = `
       const handler = group && Object.prototype.hasOwnProperty.call(group, name)
         ? group[name] : undefined;
       if (typeof handler !== 'function') {
-        return stringify({ ok: false, kind: 'crash', message: 'no ' + kind + ' ' + name });
+        return answer({ ok: false, kind: 'crash', message: 'no ' + kind + ' ' + name });
       }
       const output = await handler(context(parse(metaJson)), deepFreeze(parse(payloadJson)));
-      return stringify({ ok: true, value: output === undefined ? null : output });
+      return answer({ ok: true, value: output === undefined ? null : output });
     } catch (err) {
       if (err instanceof PluginError) {
-        return stringify({ ok: false, kind: 'rejected', message: String(err.message) });
+        return answer({ ok: false, kind: 'rejected', message: message(err.message) });
       }
       if (err instanceof PluginHostFailure) {
-        return stringify({ ok: false, kind: err.kind, message: String(err.message) });
+        return answer({ ok: false, kind: err.kind, message: message(err.message) });
       }
-      return stringify({ ok: false, kind: 'crash', message: String(err && err.message || err) });
+      return answer({ ok: false, kind: 'crash', message: message(err && err.message || err) });
     }
   };
 })();
@@ -327,6 +366,40 @@ interface BridgeScope {
   fatal: Error | null;
   /** Set when the invocation ends; a call still queued then never runs. */
   over: boolean;
+  /**
+   * Calls this invocation made, counted as they ARRIVE, before any is parsed
+   * or queued: the budget has to hold for calls the plugin never awaits.
+   */
+  entered: number;
+  /** Argument JSON, in characters, of the calls waiting for a slot. */
+  pendingChars: number;
+  /**
+   * The quota refusal the host raised in this invocation, if any. A plugin can
+   * build a failure of kind `quota` itself; only this message reaches a caller.
+   */
+  quota: string | null;
+  /** Ends the invocation now, by disposing its isolate. */
+  abort: () => void;
+}
+
+/**
+ * Storage and core calls of every invocation in the process, which each hold a
+ * database connection while they run (`PLUGIN_MAX_CONCURRENT_DB_CALLS`).
+ */
+const DB_CALLS = new ConcurrencyLimiter(PLUGIN_MAX_CONCURRENT_DB_CALLS);
+
+function usesDatabase(method: string): boolean {
+  return method.startsWith('storage.') || method.startsWith('core.');
+}
+
+/**
+ * Records the first failure that is not the plugin's to handle, and ends the
+ * invocation: it has failed whatever the plugin does next.
+ */
+function fail(scope: BridgeScope, err: Error): void {
+  if (scope.fatal) return;
+  scope.fatal = err;
+  scope.abort();
 }
 
 /** A plugin's compiled code, run in a fresh isolate for every call. */
@@ -450,6 +523,16 @@ export class PluginSandbox {
       calls: new ConcurrencyLimiter(PLUGIN_MAX_CONCURRENT_CALLS_PER_INVOCATION),
       fatal: null,
       over: false,
+      entered: 0,
+      pendingChars: 0,
+      quota: null,
+      // The invocation has failed already; stopping the isolate now is what
+      // keeps a plugin that catches the refusal from calling on until its
+      // deadline. Deferred: this runs inside a bridge call.
+      abort: () =>
+        setImmediate(() => {
+          if (!isolate.isDisposed) isolate.dispose();
+        }),
     };
     let timer: NodeJS.Timeout | undefined;
     try {
@@ -480,26 +563,37 @@ export class PluginSandbox {
         );
         timer.unref();
       });
-      const reply = JSON.parse(await Promise.race([run, deadline])) as {
+      const raw: unknown = await Promise.race([run, deadline]);
+      if (scope.fatal) throw scope.fatal;
+      // The bootstrap bounds the answer; this is the host not trusting that.
+      if (typeof raw !== 'string' || raw.length > PLUGIN_MAX_REPLY_CHARS) {
+        throw new Error(
+          `Plugin ${ctx.plugin.slug} answered with something other than bounded JSON`,
+        );
+      }
+      const reply = JSON.parse(raw) as {
         ok: boolean;
         value?: unknown;
         kind?: string;
-        message?: string;
+        message?: unknown;
       };
-
-      if (scope.fatal) throw scope.fatal;
       if (reply.ok) return reply.value;
-      const message = String(reply.message ?? '');
+      const message = (
+        typeof reply.message === 'string' ? reply.message : ''
+      ).slice(0, PLUGIN_MAX_REPLY_MESSAGE_CHARS);
       switch (reply.kind) {
         case 'rejected':
           throw new PluginError(message);
         case 'quota':
-          throw new PluginQuotaError(message);
+          // Only a quota the host raised: the plugin's own message is not one.
+          if (scope.quota !== null) throw new PluginQuotaError(scope.quota);
+          break;
         case 'violation':
-          throw new PluginViolationError(message);
-        default:
-          throw new Error(`Plugin ${ctx.plugin.slug} threw: ${message}`);
+          throw new PluginViolationError(oneLine(message, 500));
       }
+      throw new Error(
+        `Plugin ${ctx.plugin.slug} threw: ${oneLine(message, 500)}`,
+      );
     } catch (err) {
       if (scope.fatal) throw scope.fatal;
       if (
@@ -513,10 +607,13 @@ export class PluginSandbox {
       }
       // An isolate that ran out of memory, a top level over its eval budget,
       // or any other engine failure.
+      // The engine's message can carry the plugin's own text (a top level that
+      // threw), so it is made one bounded line like any other.
       throw new Error(
-        `Plugin ${ctx.plugin.slug} failed in its sandbox: ${
-          err instanceof Error ? err.message : String(err)
-        }`,
+        `Plugin ${ctx.plugin.slug} failed in its sandbox: ${oneLine(
+          err instanceof Error ? err.message : err,
+          500,
+        )}`,
         { cause: err },
       );
     } finally {
@@ -535,36 +632,81 @@ export class PluginSandbox {
     argsJson: string,
   ): Promise<string> {
     const reply = (value: unknown) => JSON.stringify(value);
+    const refuse = (err: PluginViolationError): string => {
+      if (scope) fail(scope, err);
+      return reply({ ok: false, kind: 'violation', message: err.message });
+    };
     const handler = Object.hasOwn(HOST_METHODS, method)
       ? HOST_METHODS[method]
       : undefined;
     if (!scope || !handler) {
-      const err = new PluginViolationError(
-        `Plugin called "${String(method).slice(0, 60)}", which is not a context method`,
+      return refuse(
+        new PluginViolationError(
+          `Plugin called "${oneLine(method, 60)}", which is not a context method`,
+        ),
       );
-      if (scope) scope.fatal ??= err;
-      return reply({ ok: false, kind: 'violation', message: err.message });
     }
+    const slug = scope.ctx.plugin.slug;
+    // Everything below up to the queue is O(1) and parses nothing: the cost of
+    // a call the plugin should not have made stays the cost of refusing it.
+    if (scope.fatal || scope.over) {
+      return refuse(
+        new PluginViolationError(
+          `Plugin ${slug} used its context after the invocation failed or ended`,
+        ),
+      );
+    }
+    scope.entered += 1;
+    if (scope.entered > PLUGIN_MAX_CALLS_PER_INVOCATION) {
+      return refuse(
+        new PluginViolationError(
+          `Plugin ${slug} made more than ${PLUGIN_MAX_CALLS_PER_INVOCATION} context calls in one invocation`,
+        ),
+      );
+    }
+    if (
+      typeof argsJson !== 'string' ||
+      argsJson.length > PLUGIN_MAX_CALL_ARGS_CHARS
+    ) {
+      return refuse(
+        new PluginViolationError(
+          `Plugin ${slug} sent more than ${PLUGIN_MAX_CALL_ARGS_CHARS} characters to one context call`,
+        ),
+      );
+    }
+    if (scope.pendingChars + argsJson.length > PLUGIN_MAX_PENDING_CALL_CHARS) {
+      return refuse(
+        new PluginViolationError(
+          `Plugin ${slug} queued more than ${PLUGIN_MAX_PENDING_CALL_CHARS} characters of context calls`,
+        ),
+      );
+    }
+    scope.pendingChars += argsJson.length;
+    let waiting = true;
     try {
-      const args: unknown = JSON.parse(argsJson);
       const value = await scope.calls.run(() => {
-        if (scope.over) {
+        scope.pendingChars -= argsJson.length;
+        waiting = false;
+        if (scope.fatal || scope.over) {
           return Promise.reject(
             new PluginViolationError(
-              `Plugin ${scope.ctx.plugin.slug} used its context after the invocation ended`,
+              `Plugin ${slug} used its context after the invocation failed or ended`,
             ),
           );
         }
-        return Promise.resolve(
-          handler(scope.ctx, Array.isArray(args) ? args : []),
-        );
+        const args: unknown = JSON.parse(argsJson);
+        const call = () =>
+          Promise.resolve(handler(scope.ctx, Array.isArray(args) ? args : []));
+        return usesDatabase(method) ? DB_CALLS.run(call) : call();
       });
       return reply({ ok: true, value: value === undefined ? null : value });
     } catch (err) {
+      if (waiting) scope.pendingChars -= argsJson.length;
       if (err instanceof PluginError) {
         return reply({ ok: false, kind: 'rejected', message: err.message });
       }
       if (err instanceof PluginQuotaError) {
+        scope.quota = err.message;
         return reply({ ok: false, kind: 'quota', message: err.message });
       }
       // A core service refusing the plugin's input is the plugin's to handle.
@@ -572,7 +714,7 @@ export class PluginSandbox {
         return reply({ ok: false, kind: 'rejected', message: err.message });
       }
       const fatal = err instanceof Error ? err : new Error(String(err));
-      scope.fatal ??= fatal;
+      fail(scope, fatal);
       return reply({
         ok: false,
         kind: err instanceof PluginViolationError ? 'violation' : 'failed',

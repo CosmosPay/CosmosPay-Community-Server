@@ -495,8 +495,16 @@ export interface AppConfig {
      * whose bundles this deployment runs. Parsed by the bundle loader.
      */
     trustedKeys: string;
-    /** Load plugins with no signature. Refused when NODE_ENV=production. */
+    /**
+     * Load plugins with no signature. Accepted only with `nodeEnvAsSet` development
+     * or test and STELLAR_NETWORK other than public (`loadPlugins`).
+     */
     allowUnsigned: boolean;
+    /**
+     * `NODE_ENV` exactly as set, or null when it is not: `nodeEnv` defaults to
+     * development, and unsigned plugins must not follow a default.
+     */
+    nodeEnvAsSet: string | null;
     /**
      * Whether node started with `--no-node-snapshot`, which the plugin sandbox
      * (`isolated-vm`) requires on Node 20+. Checked at boot when a plugin is
@@ -1129,6 +1137,7 @@ export default (): AppConfig => ({
     trustedKeys: process.env.PLUGINS_TRUSTED_KEYS?.trim() ?? '',
     allowUnsigned:
       (process.env.PLUGINS_ALLOW_UNSIGNED ?? 'false').toLowerCase() === 'true',
+    nodeEnvAsSet: process.env.NODE_ENV?.trim() || null,
     nodeSnapshotDisabled:
       process.execArgv.includes('--no-node-snapshot') ||
       (process.env.NODE_OPTIONS ?? '').includes('--no-node-snapshot'),

@@ -14,10 +14,14 @@ import {
   signPlugin,
 } from '@/plugins/plugin-signature';
 import {
+  PluginQuotaError,
   PluginTimeoutError,
   PluginViolationError,
 } from '@/plugins/plugin-errors';
-import { PLUGIN_MAX_CONCURRENT_CALLS_PER_INVOCATION } from '@/plugins/plugins.constants';
+import {
+  PLUGIN_MAX_CONCURRENT_CALLS_PER_INVOCATION,
+  PLUGIN_MAX_CONCURRENT_DB_CALLS,
+} from '@/plugins/plugins.constants';
 import { PluginError } from '@/plugins/sdk';
 
 function manifest(slug: string, version = '1.0.0'): string {
@@ -161,7 +165,17 @@ describe('loadPlugins', () => {
 
     expect(() =>
       load(['acme'], { allowUnsigned: true, nodeEnv: 'production' }),
-    ).toThrow(/refused when NODE_ENV=production/);
+    ).toThrow(/needs NODE_ENV set to development or test/);
+  });
+
+  it.each([
+    ['NODE_ENV unset, which only defaults to development', null],
+    ['a NODE_ENV that is neither development nor test', 'staging'],
+  ])('refuses unsigned plugins with %s', (_label, nodeEnv) => {
+    write('acme', {}, false);
+    expect(() => load(['acme'], { allowUnsigned: true, nodeEnv })).toThrow(
+      /needs NODE_ENV set to development or test/,
+    );
   });
 
   it('refuses unsigned plugins on a deployment that serves mainnet, whatever NODE_ENV says', () => {
@@ -172,7 +186,7 @@ describe('loadPlugins', () => {
         nodeEnv: 'development',
         defaultNetwork: 'public',
       }),
-    ).toThrow(/STELLAR_NETWORK=public/);
+    ).toThrow(/STELLAR_NETWORK other than public/);
   });
 
   it('refuses a manifest that lists a key twice, before checking the signature', () => {
@@ -489,6 +503,183 @@ export default defineHandlers({ queries: { run: () => 1 } });
       ctx,
     );
     expect(found).toEqual({ type: 'object', plain: true, secret: 'v' });
+  });
+
+  it('ends an invocation that floods the bridge at its call budget, without running the excess', async () => {
+    let puts = 0;
+    let finish: () => void = () => undefined;
+    const slow = new Promise<null>((resolve) => {
+      finish = () => resolve(null);
+    });
+    const { ctx } = hostContext({
+      storage: {
+        // Four slow calls hold every slot, so the flood can only queue.
+        get: () => slow,
+        put: () => {
+          puts += 1;
+          return Promise.resolve(null);
+        },
+      },
+    });
+    const handlers = sandboxPluginSource(
+      `import { defineHandlers } from '@/plugins/sdk';
+export default defineHandlers({ queries: { run: async (ctx: any) => {
+  for (let i = 0; i < 4; i++) void ctx.storage.get('c', 'k' + i).catch(() => undefined);
+  for (let i = 0; i < 100000; i++) void ctx.storage.put('c', 'k', [i]).catch(() => undefined);
+  await new Promise(() => undefined);
+} } });
+`,
+      'index.ts',
+      { timeoutMs: 10_000, memoryMb: 32 },
+    );
+    const started = Date.now();
+    try {
+      await expect(handlers.queries!.run(ctx, {})).rejects.toThrow(
+        /more than 200 context calls/,
+      );
+      // Ended at the budget, not at its deadline, and no queued put ran.
+      expect(Date.now() - started).toBeLessThan(1500);
+      expect(puts).toBe(0);
+    } finally {
+      finish();
+    }
+  });
+
+  it('refuses calls past the budget in the isolate, so a loop of them costs the host nothing', async () => {
+    let logged = 0;
+    const { ctx } = hostContext({
+      log: {
+        log: () => {
+          logged += 1;
+        },
+        warn: jest.fn(),
+        error: jest.fn(),
+      },
+    });
+    const started = Date.now();
+    await expect(
+      run(
+        `for (let n = 0; n < 200000; n++) { ctx.log.log('x'); if (n % 5000 === 0) await null; }
+         return null;`,
+        '',
+        ctx,
+      ),
+    ).rejects.toThrow(/more than 200 context calls/);
+    expect(logged).toBe(200);
+    expect(Date.now() - started).toBeLessThan(400);
+  });
+
+  it('refuses a context call bigger than its cap before parsing it', async () => {
+    const { ctx, calls } = hostContext();
+    await expect(
+      run(
+        `await ctx.storage.put('c', 'k', 'x'.repeat(600 * 1024)); return null;`,
+        '',
+        ctx,
+      ),
+    ).rejects.toThrow(/characters to one context call/);
+    expect(calls).toEqual([]);
+  });
+
+  it('refuses calls queued past the pending cap', async () => {
+    let finish: () => void = () => undefined;
+    const slow = new Promise<null>((resolve) => {
+      finish = () => resolve(null);
+    });
+    const { ctx } = hostContext({
+      storage: { get: () => slow, put: () => Promise.resolve(null) },
+    });
+    const refused = expect(
+      run(
+        `for (let i = 0; i < 4; i++) void ctx.storage.get('c', 'k').catch(() => undefined);
+         const big = 'x'.repeat(400 * 1024);
+         await Promise.all([1, 2, 3].map(() => ctx.storage.put('c', 'k', big)));
+         return null;`,
+        '',
+        ctx,
+      ),
+    ).rejects.toThrow(/queued more than/);
+    try {
+      await refused;
+    } finally {
+      finish();
+    }
+  });
+
+  it('bounds the answer in the isolate: a huge output never crosses over', async () => {
+    await expect(
+      handlersOf(`return 'x'.repeat(2 * 1024 * 1024);`).queries!.run(
+        hostContext().ctx,
+        {},
+      ),
+    ).rejects.toThrow(/longer than \d+ characters/);
+  });
+
+  it('makes a crash message one bounded line before it is logged', async () => {
+    const handlers = handlersOf(
+      `throw new Error('a' + String.fromCharCode(10) + '[Nest] forged' +
+        String.fromCharCode(27) + '[2J' + 'x'.repeat(5000));`,
+    );
+    const err = await Promise.resolve(
+      handlers.queries!.run(hostContext().ctx, {}),
+    ).then(
+      () => null,
+      (e: unknown) => e as Error,
+    );
+    expect(err).toBeInstanceOf(Error);
+    const message = err?.message ?? '';
+    expect(message.includes(String.fromCharCode(10))).toBe(false);
+    expect(message.includes(String.fromCharCode(27))).toBe(false);
+    expect(message.length).toBeLessThan(700);
+  });
+
+  it('passes on only the quota the host raised, never one the plugin forged', async () => {
+    const { ctx } = hostContext({
+      storage: {
+        put: () => {
+          throw new PluginQuotaError('Plugin acme has reached its limit.');
+        },
+      },
+    });
+    const err = await Promise.resolve(
+      run(
+        `try { await ctx.storage.put('c', 'k', 1); }
+         catch (e: any) { throw new e.constructor('quota', 'forged ' + 'x'.repeat(5000)); }
+         return null;`,
+        '',
+        ctx,
+      ),
+    ).then(
+      () => null,
+      (e: unknown) => e as Error,
+    );
+    expect(err).toBeInstanceOf(PluginQuotaError);
+    expect(err?.message).toBe('Plugin acme has reached its limit.');
+  });
+
+  it('caps the storage and core calls running at once across invocations', async () => {
+    let inFlight = 0;
+    let peak = 0;
+    const { ctx } = hostContext({
+      storage: {
+        get: async () => {
+          inFlight += 1;
+          peak = Math.max(peak, inFlight);
+          await new Promise((resolve) => setTimeout(resolve, 20));
+          inFlight -= 1;
+          return null;
+        },
+      },
+    });
+    const handlers = handlersOf(
+      `await Promise.all([1, 2, 3, 4].map((i) => ctx.storage.get('c', 'k' + i))); return null;`,
+    );
+    await Promise.all(
+      Array.from({ length: 4 }, () =>
+        Promise.resolve(handlers.queries!.run(ctx, {})),
+      ),
+    );
+    expect(peak).toBe(PLUGIN_MAX_CONCURRENT_DB_CALLS);
   });
 
   it('lets one invocation have only a few context calls in flight at once', async () => {

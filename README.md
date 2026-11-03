@@ -2265,9 +2265,10 @@ npm run plugins -- sign my-plugin --key support.pem --key-id cosmos-support
 `check` compiles the plugin, runs every validation the server runs at boot, and
 prints the capabilities, `egress` and settings as the loader parsed them: review
 against that list. `PLUGINS_ALLOW_UNSIGNED=true` lets it run unsigned while you
-work locally, and is refused when `NODE_ENV=production` or `STELLAR_NETWORK=public`
-(a deployment can serve mainnet with `NODE_ENV` unset). Open a pull request with
-the folder; once it is reviewed, support signs it and it ships preinstalled.
+work locally, and is accepted only with `NODE_ENV` set to `development` or `test`
+and `STELLAR_NETWORK` other than `public`: unset does not count, since a deployment
+can serve mainnet with `NODE_ENV` unset. Open a pull request with the folder; once
+it is reviewed, support signs it and it ships preinstalled.
 
 What a reviewer reads must be what runs, so two things are refused at boot, by
 `check`, `sign` and `install`: a `plugin.json` that lists a key twice in one object
@@ -2311,7 +2312,11 @@ What the runtime guarantees around every invocation:
   past either, the action is `429 rate_limited` with `Retry-After: 1`. An event
   waits for a slot instead, since nobody is there to retry it, but
   within its consumer's share: 2 running and 200 pending at most, past which it is
-  dropped and logged, so one tenant's burst queues behind itself.
+  dropped and logged, so one tenant's burst queues behind itself. Calls are
+  counted and size-checked as they arrive, before anything is parsed (512 KiB per
+  call, 1 MiB waiting per invocation), and the first call over a budget ends the
+  invocation at once. The storage and core calls of every plugin share at most 5
+  database connections, a quarter of the pool.
 - **Failures stay contained.** A `PluginError` is `400 plugin_rejected` with its
   message; anything else is `502 plugin_failed`, logged and never echoed. A plugin
   failing on an event disturbs neither the webhook of that event nor other plugins.
@@ -2435,8 +2440,9 @@ the service under `src/native-plugins/<slug>/`, switched on by the same
 - **Plugin actions can answer `429 rate_limited`** with `Retry-After: 1` when a
   consumer already has 4 running, or the process 16. The 429 was already documented
   on both routes (their per-minute budget).
-- **`PLUGINS_ALLOW_UNSIGNED=true` is also refused when `STELLAR_NETWORK=public`**,
-  not only under `NODE_ENV=production`.
+- **`PLUGINS_ALLOW_UNSIGNED=true` now needs `NODE_ENV` set to `development` or
+  `test`, and `STELLAR_NETWORK` other than `public`.** An unset `NODE_ENV` no
+  longer counts as development for it.
 - **The boot refuses a plugin whose `plugin.json` lists a key twice, or whose files
   hold an invisible or bidirectional control character.** Run
   `npm run plugins -- check <slug>` on every plugin you installed by hand before
@@ -3542,7 +3548,7 @@ at least `DATABASE_URL` and `APISIX_GATEWAY_SECRET`.
 | `PLUGINS_ENABLED` | no | — | Comma-separated plugin slugs this deployment serves: sandboxed ones in `plugins/`, and the native `blindpay`, `defindex` and `trustless-work`. Empty serves none; a plugin not listed is never loaded |
 | `PLUGINS_SECRET` | when an enabled plugin has secret settings | — | Seals the secret settings of plugin installations (at least 32 characters). Changing it makes every stored plugin secret unreadable |
 | `PLUGINS_TRUSTED_KEYS` | no | — | Signers whose plugins run here besides Cosmos Pay support: comma-separated `<keyId>:<base64url Ed25519 public key>`. A plugin signed by anyone else, or changed after signing, stops the boot |
-| `PLUGINS_ALLOW_UNSIGNED` | no | `false` | Run plugins with no `signature.json`, for writing one locally. Refused when `NODE_ENV=production` or `STELLAR_NETWORK=public` |
+| `PLUGINS_ALLOW_UNSIGNED` | no | `false` | Run plugins with no `signature.json`, for writing one locally. Accepted only with `NODE_ENV` set to `development` or `test` and `STELLAR_NETWORK` other than `public` |
 | `KYC_REDIRECT_URL_WHITELIST` | no | — | Per-consumer KYC redirect host allow-list |
 | `WALLET_AUTH_RETURN_URLS` | no | — | Comma-separated app URLs the wallet sign-in callback may redirect to (`returnTo` on `POST /v1/wallet/auth/oauth/authorize`): a custom scheme, a universal/app link, or `http://127.0.0.1/…` (any port). Exact match; an entry that is plain http off loopback, carries a query or uses `javascript:`/`data:`/`file:` is refused at boot. Unset, every callback renders the page and a `returnTo` is `400 wallet_return_url_not_allowed` |
 | `WALLET_AUTH_SIGNERS_HORIZON_URL` | no | `STELLAR_NETWORK`'s Horizon | Lists who may sign for an account, read when a recovered wallet signs with the key that replaced its master. Must be the ledger the wallets live on: another one answers 404 and the sign-in is `400 wallet_signature_invalid` |

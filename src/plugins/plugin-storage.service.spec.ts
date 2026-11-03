@@ -174,6 +174,32 @@ describe('PluginStorageService', () => {
     });
   });
 
+  it.each([
+    ['a NUL in a value', { note: `a${String.fromCharCode(0)}b` }],
+    ['a NUL in a key', { [`k${String.fromCharCode(0)}`]: 1 }],
+    ['an unpaired high surrogate', [String.fromCharCode(0xd800)]],
+    ['an unpaired low surrogate', `x${String.fromCharCode(0xdc00)}`],
+  ])(
+    'refuses %s as the plugin’s error, before Postgres fails on it',
+    async (_label, value) => {
+      const { prisma, storage } = build();
+      await expect(storage.put('tags', 'k', value)).rejects.toThrow(
+        /NUL character or an unpaired surrogate/,
+      );
+      await expect(
+        storage.compareAndSet('tags', 'k', null, value),
+      ).rejects.toBeInstanceOf(PluginError);
+      expect(prisma.pluginRecord.updateMany).not.toHaveBeenCalled();
+      expect(prisma.pluginRecord.create).not.toHaveBeenCalled();
+    },
+  );
+
+  it('stores a well-formed astral character', async () => {
+    const { prisma, storage } = build();
+    await storage.put('tags', 'k', { emoji: String.fromCodePoint(0x1f600) });
+    expect(prisma.pluginRecord.create).toHaveBeenCalled();
+  });
+
   it('refuses a page size that is not a number', async () => {
     const { prisma, storage } = build();
     await expect(

@@ -58,7 +58,7 @@ import { ProductsModule } from '@/products/products.module';
             ...parseTrustedKeys(plugins.trustedKeys),
           ],
           allowUnsigned: plugins.allowUnsigned,
-          nodeEnv: config.get('nodeEnv', { infer: true }),
+          nodeEnv: plugins.nodeEnvAsSet,
           defaultNetwork: config.get('stellar', { infer: true }).network,
           warn: (message) => logger.warn(message),
         });

@@ -417,6 +417,16 @@ async function install(positional: string[], flags: Flags): Promise<void> {
   const target = join(ROOT, slug);
   const installed = installedVersion(slug);
   if (
+    installed === null &&
+    existsSync(target) &&
+    flags['allow-downgrade'] !== 'true'
+  ) {
+    throw new Error(
+      `${target} exists but its version cannot be read, so this may be a ` +
+        'downgrade. Pass --allow-downgrade to replace it anyway',
+    );
+  }
+  if (
     installed !== null &&
     compareVersions(version, installed) < 0 &&
     flags['allow-downgrade'] !== 'true'

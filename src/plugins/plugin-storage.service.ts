@@ -266,5 +266,33 @@ function serializeValue(value: PluginJson): Prisma.InputJsonValue {
       `Storage value must be at most ${PLUGIN_MAX_VALUE_BYTES} bytes as JSON`,
     );
   }
-  return JSON.parse(text) as Prisma.InputJsonValue;
+  const parsed = JSON.parse(text) as Prisma.InputJsonValue;
+  if (!storableInJsonb(parsed)) {
+    throw new PluginError(
+      'Storage value must not hold a NUL character or an unpaired surrogate',
+    );
+  }
+  return parsed;
+}
+
+/**
+ * Postgres `jsonb` refuses a NUL character and an unpaired UTF-16 surrogate,
+ * in keys and values alike. Refused here as the plugin's 400, not left for
+ * the database to fail as a 502.
+ */
+/** A high surrogate with no low one after it, or a low one with no high one before. */
+const UNPAIRED_SURROGATE_RE =
+  /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
+function storableInJsonb(value: unknown): boolean {
+  if (typeof value === 'string') {
+    return !value.includes('\u0000') && !UNPAIRED_SURROGATE_RE.test(value);
+  }
+  if (Array.isArray(value)) return value.every(storableInJsonb);
+  if (value !== null && typeof value === 'object') {
+    return Object.entries(value).every(
+      ([key, inner]) => storableInJsonb(key) && storableInJsonb(inner),
+    );
+  }
+  return true;
 }

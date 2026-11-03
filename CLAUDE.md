@@ -307,15 +307,24 @@ table. These are the rules that did not hold on their own:
   (scaffolded, checked, signed and installed with `npm run plugins`), run only in
   a V8 isolate with no Node in it (`src/plugins/plugin-sandbox.ts`). Their own
   lint block lets them import `@/plugins/sdk` and nothing else; the isolate, not
-  the lint rule, is the enforcement. Keep four properties when touching the
+  the lint rule, is the enforcement. Keep these properties when touching the
   sandbox, each pinned by a spec in `plugin-folder.spec.ts`:
   - an invocation never calls the isolate synchronously (compile, top level and
     load go through the async APIs), so plugin code never holds the event loop;
   - the bridge's transfer options are frozen null-prototype objects built before
     plugin code runs: isolated-vm reads options through the prototype chain, and a
     `reference` reaching the isolate is a host escape;
+  - a context call is counted and size-checked when it ARRIVES, before it is
+    parsed or queued (`PLUGIN_MAX_CALLS_PER_INVOCATION`, `PLUGIN_MAX_CALL_ARGS_CHARS`,
+    `PLUGIN_MAX_PENDING_CALL_CHARS`), and the first failure that is not the
+    plugin's ends the invocation (`fail` disposes the isolate): calls the plugin
+    does not await queue on THIS heap, and an unbounded queue was a process OOM.
+    What crosses back is bounded in the isolate (`PLUGIN_MAX_REPLY_CHARS`), and
+    plugin-written text is `oneLine`d before it reaches a log or an error;
   - an invocation has at most `PLUGIN_MAX_CONCURRENT_CALLS_PER_INVOCATION` calls in
-    flight, and the process `PLUGIN_MAX_CONCURRENT_INVOCATIONS` invocations
+    flight, storage and core calls share `PLUGIN_MAX_CONCURRENT_DB_CALLS` (a
+    quarter of `POOL_MAX`) across the process, and the process runs
+    `PLUGIN_MAX_CONCURRENT_INVOCATIONS` invocations
     (`PluginConcurrencyService`), so one plugin cannot take the database pool or
     the memory. Every path that starts an invocation takes a share of its
     consumer's too: actions are refused past theirs, events wait within theirs

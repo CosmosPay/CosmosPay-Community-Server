@@ -1467,9 +1467,9 @@ npm run plugins -- sign my-plugin --key support.pem --key-id cosmos-support
 
 `check` 会编译插件，运行服务器启动时的所有校验，并按加载器解析的结果打印 capability、
 `egress` 和设置：请对照这份列表评审。`PLUGINS_ALLOW_UNSIGNED=true` 让你在本地开发时无需
-签名即可运行，在 `NODE_ENV=production` 或 `STELLAR_NETWORK=public` 时会被拒绝（部署可能在
-未设置 `NODE_ENV` 的情况下服务主网）。带着这个目录发起 pull request；评审通过后，由支持
-团队签名，它就会作为预装插件发布。
+签名即可运行，但只有在 `NODE_ENV` 设为 `development` 或 `test`、且 `STELLAR_NETWORK` 不是
+`public` 时才会被接受：未设置不算，因为部署可能在未设置 `NODE_ENV` 的情况下服务主网。带着
+这个目录发起 pull request；评审通过后，由支持团队签名，它就会作为预装插件发布。
 
 评审者读到的必须就是实际运行的内容，因此启动时以及 `check`、`sign` 和 `install` 都会拒绝
 两种情况：在同一个对象中把某个 key 列出两次的 `plugin.json`（`JSON.parse` 保留最后一个，
@@ -1508,6 +1508,9 @@ runtime 在每次调用前后保证：
   运行 4 个 action：超出任一上限，该 action 返回 `429 rate_limited` 并带 `Retry-After: 1`。
   事件则会等待空位，因为没有人会重试它，但只在其 consumer 的份额内：
   最多 2 个运行、200 个排队；超出则丢弃并记录日志，这样一个租户的突发只会排在自己后面。
+  上下文调用在到达时、解析任何内容之前就会被计数并检查大小（每个上下文调用 512 KiB，每次
+  调用排队等待的合计 1 MiB），第一个超出预算的上下文调用会立即结束这次调用。所有插件的
+  storage 和 core 调用合计最多占用 5 个数据库连接，即连接池的四分之一。
 - **故障被隔离。** `PluginError` 变为带其消息的 `400 plugin_rejected`；其他任何错误变为
   `502 plugin_failed`，记录日志且从不回显。插件处理事件失败不会影响该事件的 webhook，也不
   影响其他插件。
@@ -1607,8 +1610,8 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
   写入者的结果，而不是丢失自己的更新。`put` 保持不变。
 - **插件 action 可能返回 `429 rate_limited`**，并带 `Retry-After: 1`，条件是某个 consumer
   已有 4 个在运行，或整个进程已有 16 个。这两个路由此前已经记录了 429（其每分钟预算）。
-- **`PLUGINS_ALLOW_UNSIGNED=true` 在 `STELLAR_NETWORK=public` 时也会被拒绝**，而不仅是在
-  `NODE_ENV=production` 下。
+- **`PLUGINS_ALLOW_UNSIGNED=true` 现在要求 `NODE_ENV` 设为 `development` 或 `test`，且
+  `STELLAR_NETWORK` 不是 `public`。** 未设置的 `NODE_ENV` 不再被它视为开发环境。
 - **启动时会拒绝 `plugin.json` 中某个 key 出现两次、或文件中含有不可见字符或双向控制字符的
   插件。** 部署前，对每个手动安装的插件运行 `npm run plugins -- check <slug>`；本仓库中的
   插件都能通过。
@@ -2327,7 +2330,7 @@ curl -H "X-Gateway-Secret: $APISIX_GATEWAY_SECRET" -H "X-Consumer-Username: ops"
 | `PLUGINS_ENABLED` | 否 | — | 本部署提供的插件 slug，逗号分隔：`plugins/` 中的沙箱插件，以及原生插件 `blindpay`、`defindex` 和 `trustless-work`。为空则不提供任何插件；未列出的插件永远不会被加载 |
 | `PLUGINS_SECRET` | 当已启用的插件有 secret 设置时 | — | 封存插件安装的 secret 设置（至少 32 个字符）。更改它会使所有已存储的插件 secret 无法读取 |
 | `PLUGINS_TRUSTED_KEYS` | 否 | — | 除 Cosmos Pay 支持团队之外，其插件可在此运行的签名者：逗号分隔的 `<keyId>:<base64url Ed25519 公钥>`。由其他人签名、或签名后被修改的插件会使启动失败 |
-| `PLUGINS_ALLOW_UNSIGNED` | 否 | `false` | 运行没有 `signature.json` 的插件，用于在本地编写插件。`NODE_ENV=production` 或 `STELLAR_NETWORK=public` 时拒绝 |
+| `PLUGINS_ALLOW_UNSIGNED` | 否 | `false` | 运行没有 `signature.json` 的插件，用于在本地编写插件。仅在 `NODE_ENV` 设为 `development` 或 `test` 且 `STELLAR_NETWORK` 不是 `public` 时接受 |
 | `KYC_REDIRECT_URL_WHITELIST` | 否 | — | 按消费者划分的 KYC 重定向主机白名单 |
 | `WALLET_AUTH_RETURN_URLS` | 否 | — | 以逗号分隔的应用 URL，钱包登录回调可以重定向到这些地址（`POST /v1/wallet/auth/oauth/authorize` 的 `returnTo`）：自定义 scheme、universal/app link，或 `http://127.0.0.1/…`（任意端口）。精确匹配；回环地址之外的纯 http、带 query 或使用 `javascript:`/`data:`/`file:` 的条目在启动时被拒绝。未设置时，每个回调都渲染页面，`returnTo` 返回 `400 wallet_return_url_not_allowed` |
 | `WALLET_AUTH_SIGNERS_HORIZON_URL` | 否 | `STELLAR_NETWORK` 的 Horizon | 列出谁可以为账户签名；当已恢复的钱包用替换其主密钥的密钥签名时读取。必须是钱包所在的账本：其他账本返回 404，登录结果为 `400 wallet_signature_invalid` |

@@ -2258,9 +2258,10 @@ npm run plugins -- sign my-plugin --key support.pem --key-id cosmos-support
 `check` plugin को compile करता है, हर वह validation चलाता है जो server boot पर चलाता है,
 और capabilities, `egress` और settings को वैसे print करता है जैसे loader ने उन्हें parse
 किया: review उसी list के सामने करें। `PLUGINS_ALLOW_UNSIGNED=true` local काम के दौरान इसे
-बिना signature चलने देता है, और `NODE_ENV=production` या `STELLAR_NETWORK=public` में मना
-होता है (कोई deployment `NODE_ENV` set किए बिना भी mainnet serve कर सकता है)। Folder के साथ
-pull request खोलें; review के बाद support उसे sign करता है और वह preinstalled भेजा जाता है।
+बिना signature चलने देता है, और केवल तभी accept होता है जब `NODE_ENV` `development` या
+`test` पर set हो और `STELLAR_NETWORK` `public` न हो: unset गिना नहीं जाता, क्योंकि कोई
+deployment `NODE_ENV` set किए बिना भी mainnet serve कर सकता है। Folder के साथ pull request
+खोलें; review के बाद support उसे sign करता है और वह preinstalled भेजा जाता है।
 
 Reviewer जो पढ़ता है वही चलना चाहिए, इसलिए boot पर, और `check`, `sign` और `install` में,
 दो चीज़ें refuse होती हैं: ऐसा `plugin.json` जो एक ही object में कोई key दो बार list करे
@@ -2304,7 +2305,11 @@ Plugin के handlers को एक `PluginContext` मिलता है औ�
   भी सीमा के पार action `Retry-After: 1` के साथ `429 rate_limited` होता है। Event इसके
   बजाय slot का इंतज़ार करता है, क्योंकि उसे retry करने वाला कोई नहीं होता, लेकिन
   अपने consumer के हिस्से के भीतर: अधिकतम 2 चलते हुए और 200 pending; उसके बाद वह छोड़ दिया
-  जाता है और log होता है, ताकि एक tenant की बौछार अपने ही पीछे कतार में रहे।
+  जाता है और log होता है, ताकि एक tenant की बौछार अपने ही पीछे कतार में रहे। Calls आते ही,
+  कुछ भी parse होने से पहले, गिने जाते हैं और उनका size check होता है (प्रति call 512 KiB,
+  प्रति invocation 1 MiB इंतज़ार में), और किसी budget के पार जाने वाला पहला call invocation
+  को तुरंत खत्म कर देता है। सभी plugins के storage और core calls मिलकर अधिकतम 5 database
+  connections इस्तेमाल करते हैं, यानी pool का एक चौथाई।
 - **Failures सीमित रहते हैं.** `PluginError` उसके message के साथ `400 plugin_rejected`
   बनता है; बाकी सब `502 plugin_failed`, log होता है और कभी लौटाया नहीं जाता। किसी event
   पर fail होने वाला plugin न उस event के webhook को बिगाड़ता है, न दूसरे plugins को।
@@ -2427,8 +2432,9 @@ seal होती हैं और कभी लौटाई नहीं जा
 - **Plugin actions `429 rate_limited` लौटा सकते हैं**, `Retry-After: 1` के साथ, जब किसी
   consumer के पहले से 4 चल रहे हों, या process के 16। 429 दोनों routes पर पहले से
   documented था (उनका प्रति-मिनट budget)।
-- **`PLUGINS_ALLOW_UNSIGNED=true` अब `STELLAR_NETWORK=public` होने पर भी refuse होता है**,
-  केवल `NODE_ENV=production` में नहीं।
+- **`PLUGINS_ALLOW_UNSIGNED=true` के लिए अब `NODE_ENV` का `development` या `test` पर set
+  होना, और `STELLAR_NETWORK` का `public` न होना ज़रूरी है।** Unset `NODE_ENV` अब इसके लिए
+  development नहीं गिना जाता।
 - **Boot ऐसे plugin को refuse करता है जिसका `plugin.json` कोई key दो बार list करे, या
   जिसकी files में कोई invisible या bidirectional control character हो।** Deploy करने से
   पहले हाथ से install किए हर plugin पर `npm run plugins -- check <slug>` चलाएँ; इस
@@ -3521,7 +3527,7 @@ type दोबारा बनाए बिना enum value drop नहीं �
 | `PLUGINS_ENABLED` | नहीं | — | इस deployment द्वारा दिए जाने वाले plugins के slugs, अल्पविराम से अलग: `plugins/` के sandboxed plugins, और native `blindpay`, `defindex` व `trustless-work`। खाली होने पर कोई नहीं; जो plugin सूचीबद्ध नहीं है वह कभी load नहीं होता |
 | `PLUGINS_SECRET` | जब किसी enabled plugin में secret settings हों | — | Plugin installations की secret settings को seal करता है (कम से कम 32 अक्षर)। इसे बदलने पर सभी stored plugin secrets पढ़े नहीं जा सकते |
 | `PLUGINS_TRUSTED_KEYS` | नहीं | — | Cosmos Pay support के अलावा वे signers जिनके plugins यहाँ चलते हैं: comma से अलग `<keyId>:<base64url Ed25519 public key>`। किसी और का sign किया, या sign के बाद बदला गया plugin boot रोक देता है |
-| `PLUGINS_ALLOW_UNSIGNED` | नहीं | `false` | बिना `signature.json` के plugins चलाएँ, local में एक लिखने के लिए। `NODE_ENV=production` या `STELLAR_NETWORK=public` में मना |
+| `PLUGINS_ALLOW_UNSIGNED` | नहीं | `false` | बिना `signature.json` के plugins चलाएँ, local में एक लिखने के लिए। केवल तभी accept होता है जब `NODE_ENV` `development` या `test` पर set हो और `STELLAR_NETWORK` `public` न हो |
 | `KYC_REDIRECT_URL_WHITELIST` | नहीं | — | प्रति consumer KYC redirect hosts की allow-list |
 | `WALLET_AUTH_RETURN_URLS` | नहीं | — | ऐप के URL, कॉमा से अलग, जिन पर wallet साइन-इन का callback redirect कर सकता है (`POST /v1/wallet/auth/oauth/authorize` पर `returnTo`): एक custom scheme, एक universal/app link, या `http://127.0.0.1/…` (कोई भी port)। सटीक मिलान; loopback के बाहर plain http, query वाली, या `javascript:`/`data:`/`file:` वाली entry boot पर अस्वीकार होती है। सेट न होने पर हर callback पेज दिखाता है और `returnTo` पर `400 wallet_return_url_not_allowed` मिलता है |
 | `WALLET_AUTH_SIGNERS_HORIZON_URL` | नहीं | `STELLAR_NETWORK` का Horizon | बताता है कि किसी खाते के लिए कौन साइन कर सकता है; तब पढ़ा जाता है जब रिकवर किया गया wallet उस key से साइन करता है जिसने उसकी master की जगह ली। यह वही ledger होना चाहिए जिस पर wallets हैं: दूसरा 404 देता है और साइन-इन `400 wallet_signature_invalid` होता है |

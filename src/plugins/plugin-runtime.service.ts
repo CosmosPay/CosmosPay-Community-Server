@@ -18,6 +18,7 @@ import {
 } from '@/plugins/plugin-installations.service';
 import { PluginRegistryService } from '@/plugins/plugin-registry.service';
 import { PluginStorageService } from '@/plugins/plugin-storage.service';
+import { oneLine } from '@/plugins/plugin-text';
 import {
   PLUGIN_ERROR_MESSAGE_MAX,
   PLUGIN_INVOCATION_TIMEOUT_MS,
@@ -301,7 +302,10 @@ export class PluginRuntimeService {
       );
     }
     if (err instanceof PluginQuotaError) {
-      return ApiError.conflict(ApiErrorCode.PluginQuotaExceeded, err.message);
+      return ApiError.conflict(
+        ApiErrorCode.PluginQuotaExceeded,
+        truncate(err.message),
+      );
     }
     // A core service refused what the plugin asked of it — a 4xx the plugin's
     // caller can act on, since it is their input the plugin passed along.
@@ -324,7 +328,9 @@ export class PluginRuntimeService {
     } else {
       this.logger.error(
         `${where} threw: ${logLine(err instanceof Error ? err.message : String(err))}`,
-        err instanceof Error ? err.stack : undefined,
+        // One line too: a message a plugin wrote, or a provider echoed from its
+        // input, sits inside the stack.
+        err instanceof Error ? oneLine(err.stack ?? '', 4000) : undefined,
       );
     }
     return ApiError.badGateway(
@@ -398,16 +404,7 @@ function truncate(message: string): string {
     : message;
 }
 
-/**
- * One line, bounded, printable: a plugin does not get to forge extra log
- * entries (a newline) or to drive the terminal of whoever tails the log (an
- * escape sequence). Every C0/C1 control becomes a space.
- */
+/** One line, bounded, printable: see `oneLine`. */
 function logLine(message: unknown): string {
-  return (
-    String(message)
-      // eslint-disable-next-line no-control-regex -- removing control characters is the point
-      .replace(/[\u0000-\u001F\u007F-\u009F]+/g, ' ')
-      .slice(0, 1000)
-  );
+  return oneLine(message, 1000);
 }

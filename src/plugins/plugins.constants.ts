@@ -1,4 +1,5 @@
 import type { RateLimitPolicy } from '@/common/decorators/rate-limit.decorator';
+import { POOL_MAX } from '@/prisma/prisma.constants';
 
 /**
  * Limits the plugin runtime puts around every piece of plugin code.
@@ -88,6 +89,33 @@ export const PLUGIN_MAX_CALLS_PER_INVOCATION = 200;
 export const PLUGIN_MAX_CONCURRENT_CALLS_PER_INVOCATION = 4;
 
 /**
+ * Longest argument list one context call may send, as JSON characters. The
+ * largest a legitimate call needs is an HTTP body ({@link PLUGIN_HTTP_MAX_REQUEST_BYTES})
+ * with its headers. Checked before the JSON is parsed, so an oversized call
+ * costs this process nothing but the refusal.
+ */
+export const PLUGIN_MAX_CALL_ARGS_CHARS = 512 * 1024;
+
+/**
+ * Argument JSON one invocation may have waiting for a call slot, in
+ * characters. Calls the plugin does not await queue on this process's heap,
+ * not the isolate's: without a bound, a plugin that keeps its slots busy and
+ * fires calls in a loop grows the queue until the process runs out of memory.
+ */
+export const PLUGIN_MAX_PENDING_CALL_CHARS = 1024 * 1024;
+
+/**
+ * Storage and core calls running at once across every plugin invocation of the
+ * process. Each one holds a database connection, and 16 invocations × 4 calls
+ * would be more than the whole pool ({@link POOL_MAX}); plugins get a quarter
+ * of it, and the rest of the service keeps the other three.
+ */
+export const PLUGIN_MAX_CONCURRENT_DB_CALLS = Math.max(
+  1,
+  Math.floor(POOL_MAX / 4),
+);
+
+/**
  * Plugin invocations (actions and events) this process runs at once. Each one is
  * a V8 isolate with up to {@link PLUGIN_ISOLATE_MEMORY_MB} of heap and a thread
  * of the isolate pool, and the per-minute budget does not bound how many overlap:
@@ -126,6 +154,17 @@ export const PLUGIN_MAX_INPUT_BYTES = 64 * 1024;
 
 /** Size of the JSON an action may return, serialized. */
 export const PLUGIN_MAX_OUTPUT_BYTES = 256 * 1024;
+
+/**
+ * Longest answer an invocation may hand back across the bridge, in JSON
+ * characters: the output cap plus room for the envelope. The isolate refuses a
+ * bigger one itself, so a multi-megabyte answer is never copied into, or parsed
+ * on, this process.
+ */
+export const PLUGIN_MAX_REPLY_CHARS = PLUGIN_MAX_OUTPUT_BYTES + 4096;
+
+/** Longest plugin-written message the isolate hands back, in characters. */
+export const PLUGIN_MAX_REPLY_MESSAGE_CHARS = 1000;
 
 /** Size of one stored value, serialized. */
 export const PLUGIN_MAX_VALUE_BYTES = 16 * 1024;
@@ -294,6 +333,15 @@ export const PLUGIN_REGISTRY_TIMEOUT_MS = 30_000;
 
 /** `npm run plugins -- install`: the registry's `index.json`. */
 export const PLUGIN_REGISTRY_INDEX_MAX_BYTES = 1024 * 1024;
+
+/**
+ * The `NODE_ENV` values under which `PLUGINS_ALLOW_UNSIGNED=true` is accepted,
+ * set explicitly. Everything else, unset included, refuses it.
+ */
+export const PLUGINS_UNSIGNED_NODE_ENVS: ReadonlySet<string> = new Set([
+  'development',
+  'test',
+]);
 
 /** A `signature.json` is a few hundred bytes; anything this size is not one. */
 export const PLUGIN_SIGNATURE_MAX_BYTES = 64 * 1024;

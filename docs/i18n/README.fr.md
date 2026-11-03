@@ -2346,10 +2346,11 @@ npm run plugins -- sign my-plugin --key support.pem --key-id cosmos-support
 `check` compile le plugin, exécute toutes les validations que le serveur fait au
 démarrage, et affiche les capacités, `egress` et les réglages tels que le loader les a
 lus : relisez en vous appuyant sur cette liste. `PLUGINS_ALLOW_UNSIGNED=true` le laisse
-tourner sans signature pendant que vous travaillez en local, et est refusé quand
-`NODE_ENV=production` ou `STELLAR_NETWORK=public` (un déploiement peut servir le
-mainnet sans que `NODE_ENV` soit défini). Ouvrez une pull request avec le dossier ; une
-fois relu, le support le signe et il est livré préinstallé.
+tourner sans signature pendant que vous travaillez en local, et n'est accepté qu'avec
+`NODE_ENV` à `development` ou `test` et `STELLAR_NETWORK` différent de `public` : non
+défini ne compte pas, puisqu'un déploiement peut servir le mainnet sans que `NODE_ENV`
+soit défini. Ouvrez une pull request avec le dossier ; une fois relu, le support le
+signe et il est livré préinstallé.
 
 Ce qu'un relecteur lit doit être ce qui s'exécute ; deux choses sont donc refusées au
 démarrage, par `check`, `sign` et `install` : un `plugin.json` qui liste deux fois une
@@ -2396,7 +2397,12 @@ Ce que le runtime garantit autour de chaque invocation :
   `429 rate_limited` avec `Retry-After: 1`. Un événement attend plutôt qu'une place se
   libère, puisque personne n'est là pour le relancer,
   mais dans la part de son consumer : 2 en cours et 200 en attente au plus ; au-delà il est
-  écarté et journalisé, si bien que la rafale d'un tenant attend derrière elle-même.
+  écarté et journalisé, si bien que la rafale d'un tenant attend derrière elle-même. Les
+  appels sont comptés et leur taille vérifiée dès leur arrivée, avant que rien ne soit
+  analysé (512 Kio par appel, 1 Mio en attente par invocation), et le premier appel qui
+  dépasse un budget met fin à l'invocation sur-le-champ. Les appels au storage et au core
+  de tous les plugins se partagent au plus 5 connexions à la base de données, un quart du
+  pool.
 - **Les défaillances restent confinées.** Un `PluginError` donne `400 plugin_rejected`
   avec son message ; tout le reste donne `502 plugin_failed`, journalisé et jamais
   renvoyé. Un plugin qui échoue sur un événement ne perturbe ni le webhook de cet
@@ -2530,8 +2536,9 @@ plugins isolés.
 - **Les actions de plugin peuvent répondre `429 rate_limited`** avec `Retry-After: 1`
   quand un consumer en a déjà 4 en cours, ou le processus 16. Le 429 était déjà
   documenté sur les deux routes (leur budget par minute).
-- **`PLUGINS_ALLOW_UNSIGNED=true` est aussi refusé quand `STELLAR_NETWORK=public`**, pas
-  seulement sous `NODE_ENV=production`.
+- **`PLUGINS_ALLOW_UNSIGNED=true` exige désormais `NODE_ENV` à `development` ou `test`,
+  et `STELLAR_NETWORK` différent de `public`.** Un `NODE_ENV` non défini ne compte plus
+  comme développement pour lui.
 - **Le démarrage refuse un plugin dont le `plugin.json` liste deux fois une clé, ou dont
   les fichiers contiennent un caractère de contrôle bidirectionnel ou invisible.** Lancez
   `npm run plugins -- check <slug>` sur chaque plugin installé à la main avant de
@@ -3692,7 +3699,7 @@ Chaque variable lue depuis `process.env` dans `src/` est validée au démarrage 
 | `PLUGINS_ENABLED` | non | — | Slugs, séparés par des virgules, des plugins que ce déploiement sert : les plugins isolés de `plugins/` et les natifs `blindpay`, `defindex` et `trustless-work`. Vide n'en sert aucun ; un plugin non listé n'est jamais chargé |
 | `PLUGINS_SECRET` | quand un plugin activé a des réglages secrets | — | Scelle les réglages secrets des installations de plugins (au moins 32 caractères). Le changer rend illisibles tous les secrets de plugins stockés |
 | `PLUGINS_TRUSTED_KEYS` | non | — | Signataires dont les plugins s'exécutent ici en plus du support Cosmos Pay : `<keyId>:<clé publique Ed25519 en base64url>` séparés par des virgules. Un plugin signé par quelqu'un d'autre, ou modifié après signature, bloque le démarrage |
-| `PLUGINS_ALLOW_UNSIGNED` | non | `false` | Exécuter des plugins sans `signature.json`, pour en écrire un en local. Refusé quand `NODE_ENV=production` ou `STELLAR_NETWORK=public` |
+| `PLUGINS_ALLOW_UNSIGNED` | non | `false` | Exécuter des plugins sans `signature.json`, pour en écrire un en local. Accepté seulement avec `NODE_ENV` à `development` ou `test` et `STELLAR_NETWORK` différent de `public` |
 | `KYC_REDIRECT_URL_WHITELIST` | non | — | Liste d'autorisation, par consumer, des hôtes de redirection KYC |
 | `WALLET_AUTH_RETURN_URLS` | non | — | URL de l’application, séparées par des virgules, vers lesquelles le callback de connexion du wallet peut rediriger (`returnTo` sur `POST /v1/wallet/auth/oauth/authorize`) : un schéma propre, un universal/app link, ou `http://127.0.0.1/…` (n’importe quel port). Correspondance exacte ; une entrée en http simple hors loopback, avec une query ou en `javascript:`/`data:`/`file:` est refusée au démarrage. Non définie, chaque callback affiche la page et un `returnTo` est `400 wallet_return_url_not_allowed` |
 | `WALLET_AUTH_SIGNERS_HORIZON_URL` | non | le Horizon de `STELLAR_NETWORK` | Liste qui peut signer pour un compte ; lu quand un portefeuille récupéré signe avec la clé qui a remplacé sa clé maîtresse. Doit être le ledger des portefeuilles : un autre répond 404 et la connexion est `400 wallet_signature_invalid` |
