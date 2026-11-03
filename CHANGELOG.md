@@ -2,6 +2,17 @@
 
 All notable changes to the Cosmos Pay Community Server are documented here.
 Generated from [Conventional Commits](https://www.conventionalcommits.org) by [git-cliff](https://git-cliff.org).
+## [1.9.0] - 2026-11-03
+
+### Features
+- Protected payments on Trustless Work V1 (2d95d78)
+
+### Bug Fixes
+- Require the deploy pins on mainnet (da08589)
+
+### Refactor
+- Share the Soroban envelope checks between plugins (1d450f1)
+
 ## [1.8.6] - 2026-11-02
 
 ### Documentation
