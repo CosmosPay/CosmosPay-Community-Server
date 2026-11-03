@@ -2192,6 +2192,7 @@ plugins/
     plugin.json       what the plugin is, and what it may touch
     index.ts          what it does — plain TypeScript, no build step
     signature.json    who vouches for the two files above
+  sub-rosa/           (the same three files)
 ```
 
 `plugin.json` बताता है कि plugin क्या है और क्या छू सकता है — reviewer और tenant सबसे पहले यही पढ़ते हैं:
@@ -2230,8 +2231,20 @@ export default defineHandlers({
 });
 ```
 
-`example` preinstalled और disabled है: एक reference plugin जो एक query, एक command, एक
-event और एक tenant setting इस्तेमाल करता है। वहीं से शुरू करें।
+दो plugins preinstalled हैं, दोनों तब तक disabled जब तक `PLUGINS_ENABLED` उन्हें list न करे:
+
+| Slug | यह क्या करता है | Capabilities | Egress |
+| ---- | --------------- | ------------ | ------ |
+| `example` | Reference plugin: हर payment intent के लिए notes की एक timeline। यह एक query, एक command, एक event और एक tenant setting इस्तेमाल करता है। वहीं से शुरू करें | `payment_intents:read` | कोई नहीं |
+| `sub-rosa` | Quotes के लिए private requests (Sub Rosa, उसके contributors का, support द्वारा reviewed): एक RFQ को Stellar पर Sub Rosa के `ReceiptOnly` sealed-proposal round से बाँधता है, वह result दर्ज करता है जिसे merchant के client ने verify किया, और उस payment intent को link करता है जो चुने गए provider को भुगतान करता है | `payment_intents:read` | कोई नहीं |
+
+`sub-rosa` ledger नहीं पढ़ सकता, इसलिए जो खुद जाँच सकता है वह जाँचता है: `itemRef` को
+RFQ के canonical JSON के SHA-256 के रूप में फिर से निकाला जाता है, round उसके network के
+reviewed Sub Rosa contract पर होना चाहिए (code में pinned), result केवल commit deadline के
+बाद स्वीकार होता है, और linked payment intent Stellar पर, round के network पर, payable या
+paid होना चाहिए और चुने गए provider को भुगतान करना चाहिए। इसके writes compare-and-set हैं,
+इसलिए दो concurrent calls दोनों result दर्ज नहीं कर सकतीं। `plugins/sub-rosa/index.ts` में
+इसका header comment बताता है कि यह किन बातों पर बिना जाँचे भरोसा करता है।
 
 ### एक लिखना
 
@@ -2242,10 +2255,19 @@ PLUGINS_ENABLED=my-plugin PLUGINS_ALLOW_UNSIGNED=true npm run start:dev
 npm run plugins -- sign my-plugin --key support.pem --key-id cosmos-support
 ```
 
-`check` plugin को compile करता है और हर वह validation चलाता है जो server boot पर चलाता
-है। `PLUGINS_ALLOW_UNSIGNED=true` local काम के दौरान इसे बिना signature चलने देता है, और
-`NODE_ENV=production` में मना होता है। Folder के साथ pull request खोलें; review के बाद
-support उसे sign करता है और वह preinstalled भेजा जाता है।
+`check` plugin को compile करता है, हर वह validation चलाता है जो server boot पर चलाता है,
+और capabilities, `egress` और settings को वैसे print करता है जैसे loader ने उन्हें parse
+किया: review उसी list के सामने करें। `PLUGINS_ALLOW_UNSIGNED=true` local काम के दौरान इसे
+बिना signature चलने देता है, और केवल तभी accept होता है जब `NODE_ENV` `development` या
+`test` पर set हो और `STELLAR_NETWORK` `public` न हो: unset गिना नहीं जाता, क्योंकि कोई
+deployment `NODE_ENV` set किए बिना भी mainnet serve कर सकता है। Folder के साथ pull request
+खोलें; review के बाद support उसे sign करता है और वह preinstalled भेजा जाता है।
+
+Reviewer जो पढ़ता है वही चलना चाहिए, इसलिए boot पर, और `check`, `sign` और `install` में,
+दो चीज़ें refuse होती हैं: ऐसा `plugin.json` जो एक ही object में कोई key दो बार list करे
+(`JSON.parse` आखिरी वाली रखता है, पढ़ने वाला पहली देखता है), और दोनों में से किसी भी file
+में कहीं भी कोई bidirectional control या invisible character (Trojan Source); byte-order mark
+केवल file के पहले character के रूप में स्वीकार है।
 
 Sign करना कभी plugin का code नहीं चलाता — केवल `check` चलाता है, और CI उसे हर pull
 request पर चलाता है — इसलिए कोई pull request अपना code उस machine पर नहीं चलवा सकता
@@ -2258,7 +2280,7 @@ Plugin के handlers को एक `PluginContext` मिलता है औ�
 
 | `ctx.` | पहुँचता है | सीमा |
 | ------ | ---------- | ---- |
-| `storage` | plugin के अपने records (`plugin_record`), केवल इसी installation के | प्रति value 16 KiB, प्रति installation 10 000 records |
+| `storage` | plugin के अपने records (`plugin_record`), केवल इसी installation के: `get`, `put`, `delete`, `list`, और `compareAndSet`, जो तभी लिखता है जब stored value अब भी वही हो जो plugin ने पढ़ी थी (`null`: केवल तब जब मौजूद न हो), एक ही statement में | प्रति value 16 KiB, प्रति installation 10 000 records |
 | `core.customers`, `core.products` | list / get / create / update, core की अपनी services और DTOs के ज़रिए | दी गई capability (`customers:read`, `customers:write`, …); delete है ही नहीं |
 | `core.paymentIntents` | list / get, केवल पढ़ना | `payment_intents:read`; sign करने या पैसा हिलाने वाला कुछ नहीं |
 | `http` | port 443 पर HTTPS, `egress` के hosts तक | केवल public addresses (webhook के SSRF नियम), socket जाँचे गए address पर pinned, कोई redirect नहीं, 1 MiB responses |
@@ -2277,6 +2299,17 @@ Plugin के handlers को एक `PluginContext` मिलता है औ�
 - **Budgets.** प्रति invocation 10 s, 200 context calls, 64 KiB input, 256 KiB output।
   समय खत्म होने पर caller को `504 plugin_failed` मिलता है और context revoke हो जाता है,
   ताकि चलता छोड़ा गया काम बाद में write न कर सके।
+- **Concurrency.** एक invocation के अधिकतम 4 context calls एक साथ चल सकते हैं; बाकी अपनी
+  बारी का इंतज़ार करते हैं, ताकि storage पर `Promise.all` database pool पर कब्ज़ा न कर सके।
+  एक process एक साथ अधिकतम 16 invocations चलाता है, और एक consumer अधिकतम 4 actions: किसी
+  भी सीमा के पार action `Retry-After: 1` के साथ `429 rate_limited` होता है। Event इसके
+  बजाय slot का इंतज़ार करता है, क्योंकि उसे retry करने वाला कोई नहीं होता, लेकिन
+  अपने consumer के हिस्से के भीतर: अधिकतम 2 चलते हुए और 200 pending; उसके बाद वह छोड़ दिया
+  जाता है और log होता है, ताकि एक tenant की बौछार अपने ही पीछे कतार में रहे। Calls आते ही,
+  कुछ भी parse होने से पहले, गिने जाते हैं और उनका size check होता है (प्रति call 512 KiB,
+  प्रति invocation 1 MiB इंतज़ार में), और किसी budget के पार जाने वाला पहला call invocation
+  को तुरंत खत्म कर देता है। सभी plugins के storage और core calls मिलकर अधिकतम 5 database
+  connections इस्तेमाल करते हैं, यानी pool का एक चौथाई।
 - **Failures सीमित रहते हैं.** `PluginError` उसके message के साथ `400 plugin_rejected`
   बनता है; बाकी सब `502 plugin_failed`, log होता है और कभी लौटाया नहीं जाता। किसी event
   पर fail होने वाला plugin न उस event के webhook को बिगाड़ता है, न दूसरे plugins को।
@@ -2285,10 +2318,14 @@ Plugin के handlers को एक `PluginContext` मिलता है औ�
   न network, न file system, न timers — 32 MB heap और अपना thread। बाहर निकलने का इसका
   एकमात्र रास्ता एक bridge है जो ऊपर के context method names स्वीकार करता है, आने-जाने
   में JSON copies के साथ; इस process का कोई object कभी उस तक नहीं पहुँचता, इसलिए बचने के
-  लिए लिखे गए code को चढ़ने के लिए कुछ नहीं मिलता। Budget खत्म होने पर isolate dispose हो
-  जाता है, जो plugin को जहाँ भी हो रोक देता है — synchronous loop समेत — और memory में
-  रखा कुछ भी अगली call तक नहीं बचता, किसी दूसरे tenant की call तक भी नहीं। इसके अलावा
-  ESLint `plugins/**/*.ts` को केवल SDK import करने देता है।
+  लिए लिखे गए code को चढ़ने के लिए कुछ नहीं मिलता। Bridge के transfer options बिना
+  prototype वाले frozen objects हैं, इसलिए `Object.prototype` में लिखने वाला plugin यह नहीं
+  बदल सकता कि कोई जवाब किस तरह पार पहुँचता है। हर invocation plugin को, top level समेत,
+  isolate के thread पर compile, load और run करता है: plugin code कभी इस event loop को नहीं
+  रोकता। Budget खत्म होने पर isolate dispose हो जाता है, जो plugin को जहाँ भी हो रोक देता
+  है — synchronous loop समेत — और memory में रखा कुछ भी अगली call तक नहीं बचता, किसी दूसरे
+  tenant की call तक भी नहीं। इसके अलावा ESLint `plugins/**/*.ts` को केवल SDK import करने
+  देता है।
 
 ### Plugin की ज़िम्मेदारी कौन लेता है
 
@@ -2310,7 +2347,9 @@ npm run plugins -- install acme@1.0.0 --registry https://plugins.example.com
 ```
 
 Registry पर भरोसा नहीं किया जाता: `install` कुछ भी लिखने से पहले signature जाँचता है,
-और server हर boot पर फिर जाँचता है।
+और server हर boot पर फिर जाँचता है। यह हर file को stream होते समय size cap के साथ पढ़ता
+है, और किसी installed plugin को उससे पुराने version से (कोई registry किसी fix को वापस ले
+रही हो) तब तक नहीं बदलता जब तक `--allow-downgrade` न दिया जाए।
 
 ### Install करना सहमति है
 
@@ -2336,7 +2375,7 @@ seal होती हैं और कभी लौटाई नहीं जा
 
 कोई plugin route साझा public API key स्वीकार नहीं करता: plugin एक ही tenant के data पर
 काम करता है। दोनों action routes प्रति consumer प्रति मिनट 120 requests का budget साझा
-करते हैं।
+करते हैं, और किसी consumer के अधिकतम 4 actions (process में 16) एक साथ चलते हैं।
 
 ### Native plugins: BlindPay और DeFindex
 
@@ -2381,6 +2420,30 @@ seal होती हैं और कभी लौटाई नहीं जा
   plugins का अकेला route group हैं जो कोई API key नहीं लेता।
 
 ## अपग्रेड — breaking changes और deploy नोट्स
+
+### Plugins: Sub Rosa preinstalled, atomic storage writes और concurrency की सीमाएँ
+
+- **कोई migration नहीं, कोई नया variable नहीं।** `sub-rosa` `plugins/` में आता है, support
+  द्वारा signed और तब तक बंद जब तक `PLUGINS_ENABLED` उसे list न करे; फिर हर tenant उसे
+  `payment_intents:read` देकर install करता है।
+- **`ctx.storage.compareAndSet`** नया है: जो plugin कोई record पढ़कर वापस लिखता है, वह अब
+  अपना update खोने के बजाय किसी concurrent writer को overwrite करने से मना कर सकता है।
+  `put` नहीं बदला।
+- **Plugin actions `429 rate_limited` लौटा सकते हैं**, `Retry-After: 1` के साथ, जब किसी
+  consumer के पहले से 4 चल रहे हों, या process के 16। 429 दोनों routes पर पहले से
+  documented था (उनका प्रति-मिनट budget)।
+- **`PLUGINS_ALLOW_UNSIGNED=true` के लिए अब `NODE_ENV` का `development` या `test` पर set
+  होना, और `STELLAR_NETWORK` का `public` न होना ज़रूरी है।** Unset `NODE_ENV` अब इसके लिए
+  development नहीं गिना जाता।
+- **Boot ऐसे plugin को refuse करता है जिसका `plugin.json` कोई key दो बार list करे, या
+  जिसकी files में कोई invisible या bidirectional control character हो।** Deploy करने से
+  पहले हाथ से install किए हर plugin पर `npm run plugins -- check <slug>` चलाएँ; इस
+  repository वाले पास होते हैं।
+- **Support की signing key बदल दी गई है।** `PLUGIN_SUPPORT_KEYS` में एक नई
+  `cosmos-support` key है, और `example` व `sub-rosa` उसी से signed हैं। पुरानी key से
+  signed plugin boot रोक देता है, जब तक support उसे फिर से sign न करे।
+- **`npm run plugins -- install` downgrade refuse करता है** जब तक `--allow-downgrade` न
+  दिया जाए।
 
 ### सुरक्षित भुगतान: एक नया native plugin, दो tables और दस webhook events
 
@@ -3467,7 +3530,7 @@ type दोबारा बनाए बिना enum value drop नहीं �
 | `PLUGINS_ENABLED` | नहीं | — | इस deployment द्वारा दिए जाने वाले plugins के slugs, अल्पविराम से अलग: `plugins/` के sandboxed plugins, और native `blindpay`, `defindex` व `trustless-work`। खाली होने पर कोई नहीं; जो plugin सूचीबद्ध नहीं है वह कभी load नहीं होता |
 | `PLUGINS_SECRET` | जब किसी enabled plugin में secret settings हों | — | Plugin installations की secret settings को seal करता है (कम से कम 32 अक्षर)। इसे बदलने पर सभी stored plugin secrets पढ़े नहीं जा सकते |
 | `PLUGINS_TRUSTED_KEYS` | नहीं | — | Cosmos Pay support के अलावा वे signers जिनके plugins यहाँ चलते हैं: comma से अलग `<keyId>:<base64url Ed25519 public key>`। किसी और का sign किया, या sign के बाद बदला गया plugin boot रोक देता है |
-| `PLUGINS_ALLOW_UNSIGNED` | नहीं | `false` | बिना `signature.json` के plugins चलाएँ, local में एक लिखने के लिए। `NODE_ENV=production` में मना |
+| `PLUGINS_ALLOW_UNSIGNED` | नहीं | `false` | बिना `signature.json` के plugins चलाएँ, local में एक लिखने के लिए। केवल तभी accept होता है जब `NODE_ENV` `development` या `test` पर set हो और `STELLAR_NETWORK` `public` न हो |
 | `KYC_REDIRECT_URL_WHITELIST` | नहीं | — | प्रति consumer KYC redirect hosts की allow-list |
 | `WALLET_AUTH_RETURN_URLS` | नहीं | — | ऐप के URL, कॉमा से अलग, जिन पर wallet साइन-इन का callback redirect कर सकता है (`POST /v1/wallet/auth/oauth/authorize` पर `returnTo`): एक custom scheme, एक universal/app link, या `http://127.0.0.1/…` (कोई भी port)। सटीक मिलान; loopback के बाहर plain http, query वाली, या `javascript:`/`data:`/`file:` वाली entry boot पर अस्वीकार होती है। सेट न होने पर हर callback पेज दिखाता है और `returnTo` पर `400 wallet_return_url_not_allowed` मिलता है |
 | `WALLET_AUTH_SIGNERS_HORIZON_URL` | नहीं | `STELLAR_NETWORK` का Horizon | बताता है कि किसी खाते के लिए कौन साइन कर सकता है; तब पढ़ा जाता है जब रिकवर किया गया wallet उस key से साइन करता है जिसने उसकी master की जगह ली। यह वही ledger होना चाहिए जिस पर wallets हैं: दूसरा 404 देता है और साइन-इन `400 wallet_signature_invalid` होता है |

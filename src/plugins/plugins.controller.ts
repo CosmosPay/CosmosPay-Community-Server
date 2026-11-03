@@ -7,6 +7,7 @@ import {
   Param,
   Post,
   Put,
+  UseInterceptors,
 } from '@nestjs/common';
 import {
   ApiExtraModels,
@@ -23,6 +24,7 @@ import { ApiErrorCode } from '@/common/errors/api-error';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import { InstallPluginDto } from '@/plugins/dto/install-plugin.dto';
 import { InvokePluginActionDto } from '@/plugins/dto/invoke-plugin-action.dto';
+import { PluginConcurrencyInterceptor } from '@/plugins/plugin-concurrency.interceptor';
 import {
   PluginActionResultEntity,
   PluginConfigFieldEntity,
@@ -156,6 +158,7 @@ export class PluginsController {
   @HttpCode(200)
   @RequirePermissions('plugins:read')
   @RateLimit(PLUGIN_ACTION_RATE_LIMIT)
+  @UseInterceptors(PluginConcurrencyInterceptor)
   @ApiOperation({
     summary: 'Run a read-only plugin action',
     description:
@@ -214,6 +217,7 @@ export class PluginsController {
   @HttpCode(200)
   @RequirePermissions('plugins:write')
   @RateLimit(PLUGIN_ACTION_RATE_LIMIT)
+  @UseInterceptors(PluginConcurrencyInterceptor)
   @ApiOperation({
     summary: 'Run a plugin action that writes',
     description:

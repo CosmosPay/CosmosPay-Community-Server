@@ -2198,6 +2198,7 @@ plugins/
     plugin.json       what the plugin is, and what it may touch
     index.ts          what it does — plain TypeScript, no build step
     signature.json    who vouches for the two files above
+  sub-rosa/           (the same three files)
 ```
 
 `plugin.json` says what the plugin is and what it may touch — the file a reviewer and a tenant read first:
@@ -2236,8 +2237,21 @@ export default defineHandlers({
 });
 ```
 
-`example` is preinstalled and disabled: a reference plugin that uses a query, a
-command, an event and a tenant setting. Start there.
+Two plugins are preinstalled, both disabled until `PLUGINS_ENABLED` lists them:
+
+| Slug | What it does | Capabilities | Egress |
+| ---- | ------------ | ------------ | ------ |
+| `example` | Reference plugin: a timeline of notes per payment intent. It uses a query, a command, an event and a tenant setting. Start there | `payment_intents:read` | none |
+| `sub-rosa` | Private requests for quotes (Sub Rosa, by its contributors, reviewed by support): binds an RFQ to a Sub Rosa `ReceiptOnly` sealed-proposal round on Stellar, records the result the merchant's client verified, and links the payment intent that pays the chosen provider | `payment_intents:read` | none |
+
+`sub-rosa` cannot read the ledger, so it checks what it can itself: `itemRef` is
+recomputed as the SHA-256 of the RFQ's canonical JSON, the round must be on the
+reviewed Sub Rosa contract of its network (pinned in the code), a result is
+accepted only after the commit deadline, and the linked payment intent must be
+on Stellar, on the round's network, payable or paid, and pay the selected
+provider. Its writes are compare-and-set, so two concurrent calls cannot both
+record a result. Its header comment in `plugins/sub-rosa/index.ts` lists what it
+takes on trust.
 
 ### Writing one
 
@@ -2248,10 +2262,19 @@ PLUGINS_ENABLED=my-plugin PLUGINS_ALLOW_UNSIGNED=true npm run start:dev
 npm run plugins -- sign my-plugin --key support.pem --key-id cosmos-support
 ```
 
-`check` compiles the plugin and runs every validation the server runs at boot.
-`PLUGINS_ALLOW_UNSIGNED=true` lets it run unsigned while you work locally, and is
-refused when `NODE_ENV=production`. Open a pull request with the folder; once it is
-reviewed, support signs it and it ships preinstalled.
+`check` compiles the plugin, runs every validation the server runs at boot, and
+prints the capabilities, `egress` and settings as the loader parsed them: review
+against that list. `PLUGINS_ALLOW_UNSIGNED=true` lets it run unsigned while you
+work locally, and is accepted only with `NODE_ENV` set to `development` or `test`
+and `STELLAR_NETWORK` other than `public`: unset does not count, since a deployment
+can serve mainnet with `NODE_ENV` unset. Open a pull request with the folder; once
+it is reviewed, support signs it and it ships preinstalled.
+
+What a reviewer reads must be what runs, so two things are refused at boot, by
+`check`, `sign` and `install`: a `plugin.json` that lists a key twice in one object
+(`JSON.parse` keeps the last one, a reader sees the first), and a bidirectional
+control or invisible character anywhere in either file (Trojan Source); a
+byte-order mark is allowed only as a file's first character.
 
 Signing never runs the plugin's code — only `check` does, and CI runs it on every
 pull request — so a pull request cannot get its code executed on the machine that
@@ -2264,7 +2287,7 @@ provider, no `process.env`, no socket:
 
 | `ctx.` | Reaches | Bounded by |
 | ------ | ------- | ---------- |
-| `storage` | the plugin's own records (`plugin_record`), for this installation only | 16 KiB per value, 10 000 records per installation |
+| `storage` | the plugin's own records (`plugin_record`), for this installation only: `get`, `put`, `delete`, `list`, and `compareAndSet`, which writes only if the stored value still equals the one the plugin read (`null`: only if absent), in one statement | 16 KiB per value, 10 000 records per installation |
 | `core.customers`, `core.products` | list / get / create / update, through the core's own services and DTOs | the capability granted (`customers:read`, `customers:write`, …); there is no delete |
 | `core.paymentIntents` | list / get, read-only | `payment_intents:read`; nothing that signs or moves money |
 | `http` | HTTPS on port 443 to the hosts in `egress` | public addresses only (the webhook SSRF rules), socket pinned to the checked address, no redirects, 1 MiB responses |
@@ -2283,6 +2306,17 @@ What the runtime guarantees around every invocation:
 - **Budgets.** 10 s per invocation, 200 context calls, 64 KiB of input, 256 KiB of
   output. When time runs out the caller gets `504 plugin_failed` and the context is
   revoked, so work left running cannot write afterwards.
+- **Concurrency.** One invocation has at most 4 context calls in flight; the rest
+  wait their turn, so a `Promise.all` over storage cannot take the database pool.
+  A process runs at most 16 invocations at once, and a consumer at most 4 actions:
+  past either, the action is `429 rate_limited` with `Retry-After: 1`. An event
+  waits for a slot instead, since nobody is there to retry it, but
+  within its consumer's share: 2 running and 200 pending at most, past which it is
+  dropped and logged, so one tenant's burst queues behind itself. Calls are
+  counted and size-checked as they arrive, before anything is parsed (512 KiB per
+  call, 1 MiB waiting per invocation), and the first call over a budget ends the
+  invocation at once. The storage and core calls of every plugin share at most 5
+  database connections, a quarter of the pool.
 - **Failures stay contained.** A `PluginError` is `400 plugin_rejected` with its
   message; anything else is `502 plugin_failed`, logged and never echoed. A plugin
   failing on an event disturbs neither the webhook of that event nor other plugins.
@@ -2291,10 +2325,14 @@ What the runtime guarantees around every invocation:
   network, file system or timers — a 32 MB heap, and a thread of its own. Its only
   way out is a bridge that accepts the context method names above, with JSON copies
   in and out; no object of this process ever reaches it, so code written to escape
-  finds nothing to climb from. When the budget ends the isolate is disposed, which
-  stops the plugin wherever it is — a synchronous loop included — and nothing it
-  kept in memory survives into the next call, another tenant's included. ESLint
-  additionally lets `plugins/**/*.ts` import only the SDK.
+  finds nothing to climb from. The bridge's transfer options are frozen objects with
+  no prototype, so a plugin that writes to `Object.prototype` cannot change how an
+  answer crosses over. Each invocation compiles, loads and runs the plugin, top level
+  included, on the isolate's thread: plugin code never holds this event loop. When
+  the budget ends the isolate is disposed, which stops the plugin wherever it is — a
+  synchronous loop included — and nothing it kept in memory survives into the next
+  call, another tenant's included. ESLint additionally lets `plugins/**/*.ts` import
+  only the SDK.
 
 ### Who vouches for a plugin
 
@@ -2316,7 +2354,9 @@ npm run plugins -- install acme@1.0.0 --registry https://plugins.example.com
 ```
 
 The registry is not trusted: `install` verifies the signature before writing
-anything, and the server verifies it again at every boot.
+anything, and the server verifies it again at every boot. It reads each file with
+a size cap as it streams in, and refuses to replace an installed plugin with an
+older version (a registry rolling a fix back) unless given `--allow-downgrade`.
 
 ### Installing is consent
 
@@ -2341,7 +2381,8 @@ record the plugin kept for that tenant. Settings marked `secret` are sealed unde
 | POST | `/v1/plugins/{slug}/commands/{action}` | Run an action that writes (`plugins:write`) |
 
 No plugin route admits the shared public key: a plugin acts on one tenant's data.
-The two action routes share a budget of 120 requests per minute per consumer.
+The two action routes share a budget of 120 requests per minute per consumer, and
+at most 4 of a consumer's actions (16 in the process) run at once.
 
 ### Native plugins: BlindPay and DeFindex
 
@@ -2387,6 +2428,30 @@ the service under `src/native-plugins/<slug>/`, switched on by the same
   are the one native plugin route group that takes no API key.
 
 ## Upgrading — breaking changes and deploy notes
+
+### Plugins: Sub Rosa preinstalled, atomic storage writes and concurrency caps
+
+- **No migration, no new variable.** `sub-rosa` ships in `plugins/`, signed by
+  support and off until `PLUGINS_ENABLED` lists it; each tenant then installs it
+  granting `payment_intents:read`.
+- **`ctx.storage.compareAndSet`** is new: a plugin that reads a record and writes
+  it back can now refuse to overwrite a concurrent writer instead of losing its
+  update. `put` is unchanged.
+- **Plugin actions can answer `429 rate_limited`** with `Retry-After: 1` when a
+  consumer already has 4 running, or the process 16. The 429 was already documented
+  on both routes (their per-minute budget).
+- **`PLUGINS_ALLOW_UNSIGNED=true` now needs `NODE_ENV` set to `development` or
+  `test`, and `STELLAR_NETWORK` other than `public`.** An unset `NODE_ENV` no
+  longer counts as development for it.
+- **The boot refuses a plugin whose `plugin.json` lists a key twice, or whose files
+  hold an invisible or bidirectional control character.** Run
+  `npm run plugins -- check <slug>` on every plugin you installed by hand before
+  deploying; the ones in this repository pass.
+- **The support signing key was rotated.** `PLUGIN_SUPPORT_KEYS` holds a new
+  `cosmos-support` key, and `example` and `sub-rosa` are signed with it. A plugin
+  signed with the previous key stops the boot until support signs it again.
+- **`npm run plugins -- install` refuses a downgrade** unless given
+  `--allow-downgrade`.
 
 ### Protected payments: a new native plugin, two tables and ten webhook events
 
@@ -3486,7 +3551,7 @@ at least `DATABASE_URL` and `APISIX_GATEWAY_SECRET`.
 | `PLUGINS_ENABLED` | no | — | Comma-separated plugin slugs this deployment serves: sandboxed ones in `plugins/`, and the native `blindpay`, `defindex` and `trustless-work`. Empty serves none; a plugin not listed is never loaded |
 | `PLUGINS_SECRET` | when an enabled plugin has secret settings | — | Seals the secret settings of plugin installations (at least 32 characters). Changing it makes every stored plugin secret unreadable |
 | `PLUGINS_TRUSTED_KEYS` | no | — | Signers whose plugins run here besides Cosmos Pay support: comma-separated `<keyId>:<base64url Ed25519 public key>`. A plugin signed by anyone else, or changed after signing, stops the boot |
-| `PLUGINS_ALLOW_UNSIGNED` | no | `false` | Run plugins with no `signature.json`, for writing one locally. Refused when `NODE_ENV=production` |
+| `PLUGINS_ALLOW_UNSIGNED` | no | `false` | Run plugins with no `signature.json`, for writing one locally. Accepted only with `NODE_ENV` set to `development` or `test` and `STELLAR_NETWORK` other than `public` |
 | `KYC_REDIRECT_URL_WHITELIST` | no | — | Per-consumer KYC redirect host allow-list |
 | `WALLET_AUTH_RETURN_URLS` | no | — | Comma-separated app URLs the wallet sign-in callback may redirect to (`returnTo` on `POST /v1/wallet/auth/oauth/authorize`): a custom scheme, a universal/app link, or `http://127.0.0.1/…` (any port). Exact match; an entry that is plain http off loopback, carries a query or uses `javascript:`/`data:`/`file:` is refused at boot. Unset, every callback renders the page and a `returnTo` is `400 wallet_return_url_not_allowed` |
 | `WALLET_AUTH_SIGNERS_HORIZON_URL` | no | `STELLAR_NETWORK`'s Horizon | Lists who may sign for an account, read when a recovered wallet signs with the key that replaced its master. Must be the ledger the wallets live on: another one answers 404 and the sign-in is `400 wallet_signature_invalid` |

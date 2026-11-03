@@ -2330,6 +2330,7 @@ plugins/
     plugin.json       what the plugin is, and what it may touch
     index.ts          what it does — plain TypeScript, no build step
     signature.json    who vouches for the two files above
+  sub-rosa/           (the same three files)
 ```
 
 `plugin.json` sagt, was das Plugin ist und was es anfassen darf — die Datei, die ein Reviewer und ein Tenant zuerst lesen:
@@ -2368,8 +2369,21 @@ export default defineHandlers({
 });
 ```
 
-`example` ist vorinstalliert und deaktiviert: ein Referenz-Plugin, das eine Query, ein
-Command, ein Event und eine Tenant-Einstellung nutzt. Fang dort an.
+Zwei Plugins sind vorinstalliert, beide deaktiviert, bis `PLUGINS_ENABLED` sie aufführt:
+
+| Slug | Was es tut | Capabilities | Egress |
+| ---- | ---------- | ------------ | ------ |
+| `example` | Referenz-Plugin: eine Zeitleiste von Notizen pro Payment Intent. Es nutzt eine Query, ein Command, ein Event und eine Tenant-Einstellung. Fang dort an | `payment_intents:read` | keine |
+| `sub-rosa` | Private Angebotsanfragen (Sub Rosa, von seinen Mitwirkenden, vom Support geprüft): bindet eine RFQ an eine `ReceiptOnly`-Runde versiegelter Angebote von Sub Rosa auf Stellar, speichert das Ergebnis, das der Client des Händlers geprüft hat, und verknüpft den Payment Intent, der den gewählten Anbieter bezahlt | `payment_intents:read` | keine |
+
+`sub-rosa` kann das Ledger nicht lesen, also prüft es selbst, was es kann: `itemRef`
+wird als SHA-256 des kanonischen JSON der RFQ neu berechnet, die Runde muss auf dem
+geprüften Sub-Rosa-Contract ihres Netzwerks liegen (im Code festgelegt), ein Ergebnis
+wird erst nach der Commit-Frist angenommen, und der verknüpfte Payment Intent muss auf
+Stellar und im Netzwerk der Runde liegen, zahlbar oder bezahlt sein und den
+ausgewählten Anbieter bezahlen. Seine Schreibzugriffe sind Compare-and-Set, sodass
+nicht zwei gleichzeitige Aufrufe beide ein Ergebnis speichern können. Sein
+Kopfkommentar in `plugins/sub-rosa/index.ts` listet auf, was es ungeprüft übernimmt.
 
 ### Eines schreiben
 
@@ -2380,11 +2394,21 @@ PLUGINS_ENABLED=my-plugin PLUGINS_ALLOW_UNSIGNED=true npm run start:dev
 npm run plugins -- sign my-plugin --key support.pem --key-id cosmos-support
 ```
 
-`check` kompiliert das Plugin und führt jede Validierung aus, die der Server beim Start
-ausführt. `PLUGINS_ALLOW_UNSIGNED=true` lässt es unsigniert laufen, während du lokal
-arbeitest, und wird bei `NODE_ENV=production` abgelehnt. Öffne einen Pull Request mit
-dem Ordner; nach dem Review signiert der Support es, und es wird vorinstalliert
-ausgeliefert.
+`check` kompiliert das Plugin, führt jede Validierung aus, die der Server beim Start
+ausführt, und gibt die Capabilities, `egress` und die Einstellungen so aus, wie der
+Loader sie gelesen hat: Prüfe anhand dieser Liste. `PLUGINS_ALLOW_UNSIGNED=true` lässt
+es unsigniert laufen, während du lokal arbeitest, und wird nur akzeptiert, wenn
+`NODE_ENV` auf `development` oder `test` gesetzt ist und `STELLAR_NETWORK` nicht
+`public` ist: Nicht gesetzt zählt nicht, denn ein Deployment kann Mainnet auch ohne
+gesetztes `NODE_ENV` bedienen. Öffne einen Pull Request mit dem Ordner; nach dem
+Review signiert der Support es, und es wird vorinstalliert ausgeliefert.
+
+Was ein Reviewer liest, muss das sein, was läuft; deshalb lehnen der Start, `check`,
+`sign` und `install` zwei Dinge ab: eine `plugin.json`, die einen Schlüssel in einem
+Objekt zweimal aufführt (`JSON.parse` behält den letzten, ein Leser sieht den ersten),
+und ein bidirektionales Steuerzeichen oder unsichtbares Zeichen irgendwo in einer der
+beiden Dateien (Trojan Source); eine Byte-Order-Mark ist nur als erstes Zeichen einer
+Datei erlaubt.
 
 Signieren führt den Code des Plugins nie aus — nur `check` tut das, und die CI führt
 es bei jedem Pull Request aus —, also kann ein Pull Request seinen Code nicht auf dem
@@ -2398,7 +2422,7 @@ Prisma, keinen Nest-Provider, kein `process.env`, keinen Socket:
 
 | `ctx.` | Erreicht | Begrenzt durch |
 | ------ | -------- | -------------- |
-| `storage` | die eigenen Datensätze des Plugins (`plugin_record`), nur für diese Installation | 16 KiB pro Wert, 10 000 Datensätze pro Installation |
+| `storage` | die eigenen Datensätze des Plugins (`plugin_record`), nur für diese Installation: `get`, `put`, `delete`, `list` und `compareAndSet`, das nur schreibt, wenn der gespeicherte Wert noch dem entspricht, den das Plugin gelesen hat (`null`: nur wenn keiner existiert), in einer einzigen Anweisung | 16 KiB pro Wert, 10 000 Datensätze pro Installation |
 | `core.customers`, `core.products` | auflisten / lesen / anlegen / ändern, über die eigenen Services und DTOs des Core | die gewährte Capability (`customers:read`, `customers:write`, …); Löschen gibt es nicht |
 | `core.paymentIntents` | auflisten / lesen, nur lesend | `payment_intents:read`; nichts, was signiert oder Geld bewegt |
 | `http` | HTTPS auf Port 443 zu den Hosts in `egress` | nur öffentliche Adressen (die SSRF-Regeln der Webhooks), Socket an die geprüfte Adresse gebunden, keine Redirects, 1-MiB-Antworten |
@@ -2418,6 +2442,19 @@ Was die Runtime bei jedem Aufruf garantiert:
 - **Budgets.** 10 s pro Aufruf, 200 Kontext-Aufrufe, 64 KiB Eingabe, 256 KiB Ausgabe.
   Läuft die Zeit ab, erhält der Aufrufer `504 plugin_failed` und der Kontext wird
   widerrufen, sodass weiterlaufende Arbeit danach nicht mehr schreiben kann.
+- **Nebenläufigkeit.** Ein Aufruf hat höchstens 4 Kontext-Aufrufe gleichzeitig offen;
+  die übrigen warten, bis sie an der Reihe sind, sodass ein `Promise.all` über den
+  Storage nicht den Datenbank-Pool belegen kann. Ein Prozess führt höchstens 16 Aufrufe
+  gleichzeitig aus, ein Consumer höchstens 4 Aktionen: Darüber hinaus antwortet die
+  Aktion `429 rate_limited` mit `Retry-After: 1`. Ein Event wartet stattdessen auf einen
+  freien Platz, da niemand da ist, der es erneut versucht,
+  aber innerhalb des Anteils seines Consumers: höchstens 2 laufend und 200 wartend; darüber
+  hinaus wird es verworfen und geloggt, sodass der Ansturm eines Tenants hinter sich selbst wartet.
+  Kontext-Aufrufe werden beim Eintreffen gezählt und auf ihre Größe geprüft, bevor
+  irgendetwas geparst wird (512 KiB pro Kontext-Aufruf, 1 MiB wartend pro Aufruf), und der
+  erste Kontext-Aufruf, der ein Budget überschreitet, beendet den Aufruf sofort. Die
+  Storage- und Core-Aufrufe aller Plugins teilen sich höchstens 5 Datenbankverbindungen,
+  ein Viertel des Pools.
 - **Fehler bleiben eingegrenzt.** Ein `PluginError` wird zu `400 plugin_rejected` mit
   seiner Meldung; alles andere zu `502 plugin_failed`, geloggt und nie zurückgegeben.
   Ein Plugin, das bei einem Event scheitert, stört weder den Webhook dieses Events noch
@@ -2427,7 +2464,12 @@ Was die Runtime bei jedem Aufruf garantiert:
   Netzwerk, Dateisystem oder Timer —, einen Heap von 32 MB und einen eigenen Thread.
   Sein einziger Weg nach draußen ist eine Brücke, die die obigen Kontext-Methodennamen
   mit JSON-Kopien hin und zurück annimmt; kein Objekt dieses Prozesses erreicht ihn je,
-  also findet Code, der ausbrechen will, nichts zum Hochklettern. Endet das Budget,
+  also findet Code, der ausbrechen will, nichts zum Hochklettern. Die Transferoptionen
+  der Brücke sind eingefrorene Objekte ohne Prototyp, sodass ein Plugin, das in
+  `Object.prototype` schreibt, nicht ändern kann, wie eine Antwort hinübergelangt.
+  Jeder Aufruf kompiliert, lädt und führt das Plugin, die oberste Ebene eingeschlossen,
+  auf dem Thread des Isolates aus: Plugin-Code blockiert nie die Event-Loop dieses
+  Prozesses. Endet das Budget,
   wird der Isolate verworfen, was das Plugin stoppt, wo immer es ist — eine synchrone
   Schleife eingeschlossen —, und nichts, was es im Speicher hielt, überlebt bis zum
   nächsten Aufruf, auch nicht bis zu dem eines anderen Tenants. Zusätzlich erlaubt
@@ -2456,7 +2498,10 @@ npm run plugins -- install acme@1.0.0 --registry https://plugins.example.com
 ```
 
 Der Registry wird nicht vertraut: `install` prüft die Signatur, bevor etwas geschrieben
-wird, und der Server prüft sie bei jedem Start erneut.
+wird, und der Server prüft sie bei jedem Start erneut. `install` liest jede Datei mit
+einer Größenobergrenze, während sie eintrifft, und ersetzt ein installiertes Plugin
+nicht durch eine ältere Version (eine Registry, die einen Fix zurückrollt), sofern
+nicht `--allow-downgrade` angegeben ist.
 
 ### Installieren heißt zustimmen
 
@@ -2483,7 +2528,8 @@ zurückgegeben.
 
 Keine Plugin-Route lässt den gemeinsamen öffentlichen API-Key zu: Ein Plugin handelt
 auf den Daten genau eines Tenants. Die beiden Aktionsrouten teilen sich ein Budget von
-120 Anfragen pro Minute und Consumer.
+120 Anfragen pro Minute und Consumer, und höchstens 4 Aktionen eines Consumers (16 im
+Prozess) laufen gleichzeitig.
 
 ### Native Plugins: BlindPay und DeFindex
 
@@ -2534,6 +2580,31 @@ eingeschaltet werden.
   einzige Routengruppe eines nativen Plugins, die keinen API-Key verlangt.
 
 ## Upgrade — Breaking Changes und Deploy-Hinweise
+
+### Plugins: Sub Rosa vorinstalliert, atomare Storage-Schreibzugriffe und Nebenläufigkeitsgrenzen
+
+- **Keine Migration, keine neue Variable.** `sub-rosa` wird in `plugins/` ausgeliefert,
+  vom Support signiert und aus, bis `PLUGINS_ENABLED` es aufführt; danach installiert
+  jeder Tenant es und gewährt dabei `payment_intents:read`.
+- **`ctx.storage.compareAndSet`** ist neu: Ein Plugin, das einen Datensatz liest und
+  zurückschreibt, kann sich jetzt weigern, einen gleichzeitigen Schreiber zu
+  überschreiben, statt sein Update zu verlieren. `put` ist unverändert.
+- **Plugin-Aktionen können `429 rate_limited` antworten**, mit `Retry-After: 1`, wenn
+  ein Consumer bereits 4 laufen hat oder der Prozess 16. Der 429 war auf beiden Routen
+  bereits dokumentiert (ihr Budget pro Minute).
+- **`PLUGINS_ALLOW_UNSIGNED=true` braucht jetzt `NODE_ENV` auf `development` oder
+  `test` und `STELLAR_NETWORK` ungleich `public`.** Ein nicht gesetztes `NODE_ENV` zählt
+  dafür nicht mehr als Entwicklung.
+- **Der Start lehnt ein Plugin ab, dessen `plugin.json` einen Schlüssel zweimal aufführt
+  oder dessen Dateien ein unsichtbares oder bidirektionales Steuerzeichen enthalten.**
+  Führen Sie vor dem Deploy `npm run plugins -- check <slug>` für jedes von Hand
+  installierte Plugin aus; die in diesem Repository bestehen.
+- **Der Signaturschlüssel des Supports wurde rotiert.** `PLUGIN_SUPPORT_KEYS` enthält
+  einen neuen `cosmos-support`-Schlüssel, und `example` und `sub-rosa` sind damit
+  signiert. Ein mit dem vorherigen Schlüssel signiertes Plugin stoppt den Start, bis
+  der Support es neu signiert.
+- **`npm run plugins -- install` lehnt ein Downgrade ab**, sofern nicht
+  `--allow-downgrade` angegeben ist.
 
 ### Geschützte Zahlungen: ein neues natives Plugin, zwei Tabellen und zehn Webhook-Events
 
@@ -3692,7 +3763,7 @@ passen Sie mindestens `DATABASE_URL` und `APISIX_GATEWAY_SECRET` an.
 | `PLUGINS_ENABLED` | nein | — | Kommagetrennte Slugs der Plugins, die dieses Deployment ausliefert: die isolierten in `plugins/` und die nativen `blindpay`, `defindex` und `trustless-work`. Leer liefert keines aus; ein nicht aufgeführtes Plugin wird nie geladen |
 | `PLUGINS_SECRET` | wenn ein aktiviertes Plugin geheime Einstellungen hat | — | Versiegelt die geheimen Einstellungen von Plugin-Installationen (mindestens 32 Zeichen). Eine Änderung macht alle gespeicherten Plugin-Geheimnisse unlesbar |
 | `PLUGINS_TRUSTED_KEYS` | nein | — | Signierer, deren Plugins hier neben dem Cosmos-Pay-Support laufen: kommagetrennt `<keyId>:<base64url Ed25519 Public Key>`. Ein von jemand anderem signiertes oder nach dem Signieren verändertes Plugin bricht den Start ab |
-| `PLUGINS_ALLOW_UNSIGNED` | nein | `false` | Plugins ohne `signature.json` ausführen, um lokal eines zu schreiben. Abgelehnt bei `NODE_ENV=production` |
+| `PLUGINS_ALLOW_UNSIGNED` | nein | `false` | Plugins ohne `signature.json` ausführen, um lokal eines zu schreiben. Nur akzeptiert mit `NODE_ENV` auf `development` oder `test` und `STELLAR_NETWORK` ungleich `public` |
 | `KYC_REDIRECT_URL_WHITELIST` | nein | — | Allowlist der KYC-Redirect-Hosts pro Consumer |
 | `WALLET_AUTH_RETURN_URLS` | nein | — | Kommagetrennte App-URLs, auf die der Callback der Wallet-Anmeldung umleiten darf (`returnTo` bei `POST /v1/wallet/auth/oauth/authorize`): ein eigenes Schema, ein Universal/App Link oder `http://127.0.0.1/…` (beliebiger Port). Exakter Vergleich; ein Eintrag mit reinem http außerhalb von Loopback, mit Query oder mit `javascript:`/`data:`/`file:` wird beim Start abgelehnt. Ohne Wert rendert jeder Callback die Seite, und ein `returnTo` ist `400 wallet_return_url_not_allowed` |
 | `WALLET_AUTH_SIGNERS_HORIZON_URL` | nein | Horizon von `STELLAR_NETWORK` | Listet, wer für ein Konto signieren darf; gelesen, wenn eine wiederhergestellte Wallet mit dem Schlüssel signiert, der ihren Master ersetzt hat. Muss das Ledger der Wallets sein: ein anderes antwortet 404 und die Anmeldung ist `400 wallet_signature_invalid` |

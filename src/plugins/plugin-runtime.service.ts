@@ -1,6 +1,7 @@
 import { HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import type { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
+import { PluginConcurrencyService } from '@/plugins/plugin-concurrency.service';
 import {
   PluginQuotaError,
   PluginTimeoutError,
@@ -17,6 +18,7 @@ import {
 } from '@/plugins/plugin-installations.service';
 import { PluginRegistryService } from '@/plugins/plugin-registry.service';
 import { PluginStorageService } from '@/plugins/plugin-storage.service';
+import { oneLine } from '@/plugins/plugin-text';
 import {
   PLUGIN_ERROR_MESSAGE_MAX,
   PLUGIN_INVOCATION_TIMEOUT_MS,
@@ -100,6 +102,7 @@ export class PluginRuntimeService {
     private readonly storage: PluginStorageService,
     private readonly core: PluginCoreAccessService,
     private readonly http: PluginHttpClient,
+    private readonly concurrency: PluginConcurrencyService,
   ) {}
 
   async invoke(
@@ -174,12 +177,24 @@ export class PluginRuntimeService {
         plan: null,
         planSwapFeeBps: null,
       };
+      // An event waits for a slot rather than being refused: nobody is there
+      // to retry it. It waits within its consumer's own share, and a consumer
+      // with too many already pending has this one dropped.
+      const release = await this.concurrency.enterEvent(consumerUsername);
+      if (!release) {
+        this.logger.warn(
+          `Plugin ${plugin.slug} (event ${type}) dropped: ${consumerUsername} has too many event deliveries pending`,
+        );
+        continue;
+      }
       try {
         await this.run(plugin, installation, consumer, `event ${type}`, (ctx) =>
           handler(ctx, event),
         );
       } catch {
         // Already logged by `run`; the next subscriber still gets the event.
+      } finally {
+        release();
       }
     }
   }
@@ -243,6 +258,7 @@ export class PluginRuntimeService {
         );
       };
       storage.put = refuse('write storage');
+      storage.compareAndSet = refuse('write storage');
       storage.delete = refuse('delete storage');
       core.customers.create = refuse('create a customer');
       core.customers.update = refuse('update a customer');
@@ -286,7 +302,10 @@ export class PluginRuntimeService {
       );
     }
     if (err instanceof PluginQuotaError) {
-      return ApiError.conflict(ApiErrorCode.PluginQuotaExceeded, err.message);
+      return ApiError.conflict(
+        ApiErrorCode.PluginQuotaExceeded,
+        truncate(err.message),
+      );
     }
     // A core service refused what the plugin asked of it — a 4xx the plugin's
     // caller can act on, since it is their input the plugin passed along.
@@ -309,7 +328,9 @@ export class PluginRuntimeService {
     } else {
       this.logger.error(
         `${where} threw: ${logLine(err instanceof Error ? err.message : String(err))}`,
-        err instanceof Error ? err.stack : undefined,
+        // One line too: a message a plugin wrote, or a provider echoed from its
+        // input, sits inside the stack.
+        err instanceof Error ? oneLine(err.stack ?? '', 4000) : undefined,
       );
     }
     return ApiError.badGateway(
@@ -383,9 +404,7 @@ function truncate(message: string): string {
     : message;
 }
 
-/** One line, bounded: a plugin does not get to forge extra log entries. */
+/** One line, bounded, printable: see `oneLine`. */
 function logLine(message: unknown): string {
-  return String(message)
-    .replace(/[\r\n]+/g, ' ')
-    .slice(0, 1000);
+  return oneLine(message, 1000);
 }

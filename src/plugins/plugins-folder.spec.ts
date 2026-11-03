@@ -29,6 +29,7 @@ function loadShipped(slug: string): PluginDefinition {
     trustedKeys: supportKeys(),
     allowUnsigned: false,
     nodeEnv: 'production',
+    defaultNetwork: 'public',
     warn: jest.fn(),
   });
   return plugin;
@@ -67,6 +68,7 @@ describe('the example plugin', () => {
           records.set(`${c}/${k}`, v);
           return Promise.resolve();
         },
+        compareAndSet: () => Promise.resolve(false),
         delete: (c, k) => Promise.resolve(records.delete(`${c}/${k}`)),
         list: () => Promise.resolve({ items: [], nextCursor: null }),
       },

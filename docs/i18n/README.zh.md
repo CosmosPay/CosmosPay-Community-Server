@@ -1404,6 +1404,7 @@ plugins/
     plugin.json       what the plugin is, and what it may touch
     index.ts          what it does — plain TypeScript, no build step
     signature.json    who vouches for the two files above
+  sub-rosa/           (the same three files)
 ```
 
 `plugin.json` 说明插件是什么、可以访问什么——评审者和 tenant 最先阅读的文件：
@@ -1442,8 +1443,18 @@ export default defineHandlers({
 });
 ```
 
-`example` 已预装且处于禁用状态：一个使用了 query、command、事件和 tenant 设置的参考插件。
-从它开始。
+预装了两个插件，在 `PLUGINS_ENABLED` 列出它们之前都处于禁用状态：
+
+| Slug | 作用 | Capability | Egress |
+| ---- | ---- | ---------- | ------ |
+| `example` | 参考插件：为每个 payment intent 维护一条备注时间线。它使用了 query、command、事件和 tenant 设置。从它开始 | `payment_intents:read` | 无 |
+| `sub-rosa` | 私密询价（Sub Rosa，由其贡献者编写，经支持团队评审）：把一个 RFQ 绑定到 Stellar 上的一个 Sub Rosa `ReceiptOnly` 密封提案轮次，记录商户客户端已验证的结果，并关联向所选供应商付款的 payment intent | `payment_intents:read` | 无 |
+
+`sub-rosa` 无法读取账本，因此它检查自己能检查的内容：`itemRef` 会按 RFQ 规范 JSON 的
+SHA-256 重新计算；轮次必须位于其网络上经过评审的 Sub Rosa 合约（固定在代码中）；结果只有在
+commit 截止时间之后才被接受；关联的 payment intent 必须在 Stellar 上、位于该轮次的网络、
+处于可支付或已支付状态，并向选中的供应商付款。它的写入是 compare-and-set，因此两个并发调用
+不可能都记录结果。`plugins/sub-rosa/index.ts` 的头部注释列出了它不加验证而予以信任的内容。
 
 ### 编写插件
 
@@ -1454,9 +1465,16 @@ PLUGINS_ENABLED=my-plugin PLUGINS_ALLOW_UNSIGNED=true npm run start:dev
 npm run plugins -- sign my-plugin --key support.pem --key-id cosmos-support
 ```
 
-`check` 会编译插件，并运行服务器启动时的所有校验。`PLUGINS_ALLOW_UNSIGNED=true` 让你在
-本地开发时无需签名即可运行，`NODE_ENV=production` 时会被拒绝。带着这个目录发起 pull
-request；评审通过后，由支持团队签名，它就会作为预装插件发布。
+`check` 会编译插件，运行服务器启动时的所有校验，并按加载器解析的结果打印 capability、
+`egress` 和设置：请对照这份列表评审。`PLUGINS_ALLOW_UNSIGNED=true` 让你在本地开发时无需
+签名即可运行，但只有在 `NODE_ENV` 设为 `development` 或 `test`、且 `STELLAR_NETWORK` 不是
+`public` 时才会被接受：未设置不算，因为部署可能在未设置 `NODE_ENV` 的情况下服务主网。带着
+这个目录发起 pull request；评审通过后，由支持团队签名，它就会作为预装插件发布。
+
+评审者读到的必须就是实际运行的内容，因此启动时以及 `check`、`sign` 和 `install` 都会拒绝
+两种情况：在同一个对象中把某个 key 列出两次的 `plugin.json`（`JSON.parse` 保留最后一个，
+读者看到的是第一个），以及两个文件中任意位置出现的双向控制字符或不可见字符（Trojan
+Source）；字节顺序标记只允许作为文件的第一个字符出现。
 
 签名从不运行插件代码——只有 `check` 会运行，CI 会在每个 pull request 上运行它——因此
 pull request 无法让自己的代码在持有支持密钥的机器上执行。只签署已通过评审和 CI 的内容。
@@ -1468,7 +1486,7 @@ pull request 无法让自己的代码在持有支持密钥的机器上执行。�
 
 | `ctx.` | 可访问 | 限制 |
 | ------ | ------ | ---- |
-| `storage` | 插件自己的记录（`plugin_record`），仅限本次安装 | 每个值 16 KiB，每个安装 10 000 条记录 |
+| `storage` | 插件自己的记录（`plugin_record`），仅限本次安装：`get`、`put`、`delete`、`list`，以及 `compareAndSet`，它只在存储的值仍等于插件读取到的值时才写入（`null`：仅当记录不存在时），且在一条语句中完成 | 每个值 16 KiB，每个安装 10 000 条记录 |
 | `core.customers`, `core.products` | list / get / create / update，经由 core 自己的 service 和 DTO | 已授予的 capability（`customers:read`、`customers:write`……）；没有删除 |
 | `core.paymentIntents` | list / get，只读 | `payment_intents:read`；没有任何签名或转移资金的操作 |
 | `http` | 通过 443 端口的 HTTPS，访问 `egress` 中列出的 host | 仅公网地址（webhook 的 SSRF 规则），socket 固定到已校验的地址，不跟随重定向，响应上限 1 MiB |
@@ -1485,6 +1503,14 @@ runtime 在每次调用前后保证：
   core 写入都会被拒绝。
 - **预算。** 每次调用 10 s、200 次上下文调用、输入 64 KiB、输出 256 KiB。超时后调用方收到
   `504 plugin_failed`，上下文被撤销，仍在运行的工作之后无法再写入。
+- **并发。** 一次调用最多同时有 4 个上下文调用在进行；其余的排队等待，因此对 storage 的
+  `Promise.all` 无法占满数据库连接池。一个进程最多同时运行 16 次调用，一个 consumer 最多同时
+  运行 4 个 action：超出任一上限，该 action 返回 `429 rate_limited` 并带 `Retry-After: 1`。
+  事件则会等待空位，因为没有人会重试它，但只在其 consumer 的份额内：
+  最多 2 个运行、200 个排队；超出则丢弃并记录日志，这样一个租户的突发只会排在自己后面。
+  上下文调用在到达时、解析任何内容之前就会被计数并检查大小（每个上下文调用 512 KiB，每次
+  调用排队等待的合计 1 MiB），第一个超出预算的上下文调用会立即结束这次调用。所有插件的
+  storage 和 core 调用合计最多占用 5 个数据库连接，即连接池的四分之一。
 - **故障被隔离。** `PluginError` 变为带其消息的 `400 plugin_rejected`；其他任何错误变为
   `502 plugin_failed`，记录日志且从不回显。插件处理事件失败不会影响该事件的 webhook，也不
   影响其他插件。
@@ -1492,9 +1518,11 @@ runtime 在每次调用前后保证：
   （`isolated-vm`），其中没有任何 Node——没有 `process`、`require`、网络、文件系统或
   定时器——堆上限 32 MB，并有自己的线程。它唯一的出口是一个桥，只接受上面列出的上下文
   方法名，进出都是 JSON 副本；本进程的任何对象都不会到达它，因此专为逃逸编写的代码无处
-  可攀。预算用尽时 isolate 会被销毁，无论插件运行到哪里（包括同步循环）都会停止，它在内存
-  中保存的任何内容都不会留到下一次调用，包括其他 tenant 的调用。此外，ESLint 只允许
-  `plugins/**/*.ts` 导入 SDK。
+  可攀。桥的传输选项是没有原型的冻结对象，因此向 `Object.prototype` 写入的插件无法改变应答
+  跨越边界的方式。每次调用都在 isolate 的线程上编译、加载并运行插件（包括顶层代码）：插件
+  代码从不占用本进程的事件循环。预算用尽时 isolate 会被销毁，无论插件运行到哪里（包括同步
+  循环）都会停止，它在内存中保存的任何内容都不会留到下一次调用，包括其他 tenant 的调用。
+  此外，ESLint 只允许 `plugins/**/*.ts` 导入 SDK。
 
 ### 谁为插件担保
 
@@ -1513,7 +1541,9 @@ npm run plugins -- install acme@1.0.0 --registry https://plugins.example.com
 # then add "acme" to PLUGINS_ENABLED and restart
 ```
 
-registry 不被信任：`install` 在写入任何内容前验证签名，服务器在每次启动时再次验证。
+registry 不被信任：`install` 在写入任何内容前验证签名，服务器在每次启动时再次验证。它在
+每个文件流入时按大小上限读取，并拒绝用更旧的版本替换已安装的插件（即 registry 回滚了某个
+修复），除非指定 `--allow-downgrade`。
 
 ### 安装即授权
 
@@ -1536,7 +1566,8 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
 | POST | `/v1/plugins/{slug}/commands/{action}` | 运行会写入的 action (`plugins:write`) |
 
 没有任何插件路由接受共享公共 API key：插件只作用于单个 tenant 的数据。两个 action 路由
-共享每个 consumer 每分钟 120 次请求的预算。
+共享每个 consumer 每分钟 120 次请求的预算，并且一个 consumer 最多同时运行 4 个 action（整个
+进程最多 16 个）。
 
 ### 原生插件：BlindPay 与 DeFindex
 
@@ -1569,6 +1600,24 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
 - **受保护付款同样遵守 DeFindex 的规则**：Trustless Work 构建的每个 envelope 在被记录或签名之前都会经过检查，其 submit 只转发这些记录（见*受保护付款（Trustless Work）*）。其买家路由是原生插件中唯一不需要 API key 的路由组。
 
 ## 升级 — 破坏性变更与部署说明
+
+### 插件：预装 Sub Rosa、原子化的 storage 写入与并发上限
+
+- **无需迁移，没有新变量。** `sub-rosa` 随 `plugins/` 发布，由支持团队签名，在
+  `PLUGINS_ENABLED` 列出它之前处于关闭状态；之后每个 tenant 授予 `payment_intents:read`
+  来安装它。
+- **`ctx.storage.compareAndSet`** 是新增的：读取一条记录再写回的插件，现在可以拒绝覆盖并发
+  写入者的结果，而不是丢失自己的更新。`put` 保持不变。
+- **插件 action 可能返回 `429 rate_limited`**，并带 `Retry-After: 1`，条件是某个 consumer
+  已有 4 个在运行，或整个进程已有 16 个。这两个路由此前已经记录了 429（其每分钟预算）。
+- **`PLUGINS_ALLOW_UNSIGNED=true` 现在要求 `NODE_ENV` 设为 `development` 或 `test`，且
+  `STELLAR_NETWORK` 不是 `public`。** 未设置的 `NODE_ENV` 不再被它视为开发环境。
+- **启动时会拒绝 `plugin.json` 中某个 key 出现两次、或文件中含有不可见字符或双向控制字符的
+  插件。** 部署前，对每个手动安装的插件运行 `npm run plugins -- check <slug>`；本仓库中的
+  插件都能通过。
+- **支持团队的签名密钥已轮换。** `PLUGIN_SUPPORT_KEYS` 现在是一把新的 `cosmos-support`
+  密钥，`example` 和 `sub-rosa` 已用它重新签名。用旧密钥签名的插件会阻止启动，直到支持团队重新签名。
+- **`npm run plugins -- install` 会拒绝降级**，除非指定 `--allow-downgrade`。
 
 ### 受保护付款：一个新的原生插件、两张数据表和十个 webhook 事件
 
@@ -2283,7 +2332,7 @@ curl -H "X-Gateway-Secret: $APISIX_GATEWAY_SECRET" -H "X-Consumer-Username: ops"
 | `PLUGINS_ENABLED` | 否 | — | 本部署提供的插件 slug，逗号分隔：`plugins/` 中的沙箱插件，以及原生插件 `blindpay`、`defindex` 和 `trustless-work`。为空则不提供任何插件；未列出的插件永远不会被加载 |
 | `PLUGINS_SECRET` | 当已启用的插件有 secret 设置时 | — | 封存插件安装的 secret 设置（至少 32 个字符）。更改它会使所有已存储的插件 secret 无法读取 |
 | `PLUGINS_TRUSTED_KEYS` | 否 | — | 除 Cosmos Pay 支持团队之外，其插件可在此运行的签名者：逗号分隔的 `<keyId>:<base64url Ed25519 公钥>`。由其他人签名、或签名后被修改的插件会使启动失败 |
-| `PLUGINS_ALLOW_UNSIGNED` | 否 | `false` | 运行没有 `signature.json` 的插件，用于在本地编写插件。`NODE_ENV=production` 时拒绝 |
+| `PLUGINS_ALLOW_UNSIGNED` | 否 | `false` | 运行没有 `signature.json` 的插件，用于在本地编写插件。仅在 `NODE_ENV` 设为 `development` 或 `test` 且 `STELLAR_NETWORK` 不是 `public` 时接受 |
 | `KYC_REDIRECT_URL_WHITELIST` | 否 | — | 按消费者划分的 KYC 重定向主机白名单 |
 | `WALLET_AUTH_RETURN_URLS` | 否 | — | 以逗号分隔的应用 URL，钱包登录回调可以重定向到这些地址（`POST /v1/wallet/auth/oauth/authorize` 的 `returnTo`）：自定义 scheme、universal/app link，或 `http://127.0.0.1/…`（任意端口）。精确匹配；回环地址之外的纯 http、带 query 或使用 `javascript:`/`data:`/`file:` 的条目在启动时被拒绝。未设置时，每个回调都渲染页面，`returnTo` 返回 `400 wallet_return_url_not_allowed` |
 | `WALLET_AUTH_SIGNERS_HORIZON_URL` | 否 | `STELLAR_NETWORK` 的 Horizon | 列出谁可以为账户签名；当已恢复的钱包用替换其主密钥的密钥签名时读取。必须是钱包所在的账本：其他账本返回 404，登录结果为 `400 wallet_signature_invalid` |

@@ -4,6 +4,7 @@ import { request as httpsRequest } from 'node:https';
 import { PluginViolationError } from '@/plugins/plugin-errors';
 import {
   PLUGIN_HTTP_FORBIDDEN_HEADERS,
+  PLUGIN_HTTP_HEADER_NAME_RE,
   PLUGIN_HTTP_MAX_REQUEST_BYTES,
   PLUGIN_HTTP_MAX_RESPONSE_BYTES,
   PLUGIN_HTTP_METHODS,
@@ -111,6 +112,13 @@ export class PluginHttpClient {
 
     const headers: Record<string, string> = {};
     for (const [name, value] of Object.entries(request.headers ?? {})) {
+      // RFC 9110 `token`: anything else is refused here as the plugin's error,
+      // instead of Node throwing from inside the request as a 502.
+      if (!PLUGIN_HTTP_HEADER_NAME_RE.test(name)) {
+        throw new PluginError(
+          `http header name "${name.slice(0, 60)}" is not a valid token`,
+        );
+      }
       const lower = name.toLowerCase();
       if (PLUGIN_HTTP_FORBIDDEN_HEADERS.has(lower)) {
         throw new PluginError(`http header "${name}" is set by the runtime`);

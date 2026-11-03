@@ -70,4 +70,19 @@ describe('PluginHttpClient', () => {
       http.request({ method: 'GET', url, headers: { 'x-a': 'b\r\nx-b: c' } }),
     ).rejects.toBeInstanceOf(PluginError);
   });
+
+  it.each([['x a'], ['x:a'], [''], ['xé']])(
+    'refuses the header name %j as the plugin’s error, before sending',
+    async (name) => {
+      const { http, send } = build();
+      await expect(
+        http.request({
+          method: 'GET',
+          url: 'https://api.acme.example/',
+          headers: { [name]: 'v' },
+        }),
+      ).rejects.toThrow(/is not a valid token/);
+      expect(send).not.toHaveBeenCalled();
+    },
+  );
 });

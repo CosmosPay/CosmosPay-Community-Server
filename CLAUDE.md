@@ -307,7 +307,34 @@ table. These are the rules that did not hold on their own:
   (scaffolded, checked, signed and installed with `npm run plugins`), run only in
   a V8 isolate with no Node in it (`src/plugins/plugin-sandbox.ts`). Their own
   lint block lets them import `@/plugins/sdk` and nothing else; the isolate, not
-  the lint rule, is the enforcement.
+  the lint rule, is the enforcement. Keep these properties when touching the
+  sandbox, each pinned by a spec in `plugin-folder.spec.ts`:
+  - an invocation never calls the isolate synchronously (compile, top level and
+    load go through the async APIs), so plugin code never holds the event loop;
+  - the bridge's transfer options are frozen null-prototype objects built before
+    plugin code runs: isolated-vm reads options through the prototype chain, and a
+    `reference` reaching the isolate is a host escape;
+  - a context call is counted and size-checked when it ARRIVES, before it is
+    parsed or queued (`PLUGIN_MAX_CALLS_PER_INVOCATION`, `PLUGIN_MAX_CALL_ARGS_CHARS`,
+    `PLUGIN_MAX_PENDING_CALL_CHARS`), and the first failure that is not the
+    plugin's ends the invocation (`fail` disposes the isolate): calls the plugin
+    does not await queue on THIS heap, and an unbounded queue was a process OOM.
+    What crosses back is bounded in the isolate (`PLUGIN_MAX_REPLY_CHARS`), and
+    plugin-written text is `oneLine`d before it reaches a log or an error;
+  - an invocation has at most `PLUGIN_MAX_CONCURRENT_CALLS_PER_INVOCATION` calls in
+    flight, storage and core calls share `PLUGIN_MAX_CONCURRENT_DB_CALLS` (a
+    quarter of `POOL_MAX`) across the process, and the process runs
+    `PLUGIN_MAX_CONCURRENT_INVOCATIONS` invocations
+    (`PluginConcurrencyService`), so one plugin cannot take the database pool or
+    the memory. Every path that starts an invocation takes a share of its
+    consumer's too: actions are refused past theirs, events wait within theirs
+    (bounded queue), so one tenant's burst cannot fill the process;
+  - what review reads is what loads: `plugin.json` with a key listed twice, or
+    either file with a bidirectional, default-ignorable or control character, or
+    a line terminator an editor may not draw (U+2028, U+2029, a lone CR: they end
+    a `//` comment), is refused (`PLUGIN_SOURCE_FORBIDDEN_CHARS_RE`).
+  A plugin that writes back a record it read uses `ctx.storage.compareAndSet`
+  (an `UPDATE … WHERE value = expected` on `jsonb`), never a read then `put`.
 - **Swap venues are the exception, by decision: they are core.** A same-chain
   swap is `/v1/swaps` on the chain's own venue — the Stellar DEX, Jupiter on
   Solana, Kuru Flow on Monad (`src/jupiter/`, `src/kuru/`). The Stellar DEX stays

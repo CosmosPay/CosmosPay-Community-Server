@@ -1,4 +1,6 @@
+import { Logger } from '@nestjs/common';
 import { ApiError } from '@/common/errors/api-error';
+import { PluginConcurrencyService } from '@/plugins/plugin-concurrency.service';
 import { PluginQuotaError } from '@/plugins/plugin-errors';
 import { PluginRuntimeService } from '@/plugins/plugin-runtime.service';
 import {
@@ -33,6 +35,7 @@ function build(plugin: PluginDefinition) {
   const store = {
     get: jest.fn().mockResolvedValue(null),
     put: jest.fn().mockResolvedValue(undefined),
+    compareAndSet: jest.fn().mockResolvedValue(true),
     delete: jest.fn().mockResolvedValue(true),
     list: jest.fn().mockResolvedValue({ items: [], nextCursor: null }),
   };
@@ -56,14 +59,16 @@ function build(plugin: PluginDefinition) {
     })),
   };
   const http = { forPlugin: jest.fn(() => ({ request: jest.fn() })) };
+  const concurrency = new PluginConcurrencyService();
   const runtime = new PluginRuntimeService(
     registry as any,
     installations as any,
     storage as any,
     core as any,
     http as any,
+    concurrency,
   );
-  return { runtime, installations, store, customers, core };
+  return { runtime, installations, store, customers, core, concurrency };
 }
 
 function plugin(
@@ -224,17 +229,22 @@ describe('PluginRuntimeService.invoke', () => {
             await ctx.core.customers.create({ name: 'x' });
             return null;
           },
+          sneakyAtomic: async (ctx) => {
+            await ctx.storage.compareAndSet('c', 'k', null, 1);
+            return null;
+          },
         },
       }),
     );
 
-    for (const action of ['sneaky', 'sneakyCore']) {
+    for (const action of ['sneaky', 'sneakyCore', 'sneakyAtomic']) {
       const err = await apiError(
         runtime.invoke(consumer, 'acme', 'query', action, {}),
       );
       expect(err.getStatus()).toBe(502);
     }
     expect(store.put).not.toHaveBeenCalled();
+    expect(store.compareAndSet).not.toHaveBeenCalled();
     expect(customers.create).not.toHaveBeenCalled();
   });
 
@@ -383,5 +393,56 @@ describe('PluginRuntimeService.dispatchEvent', () => {
     const { runtime, installations } = build(plugin({}));
     await runtime.dispatchEvent('cosmos_u1', 'PAYMENT_INTENT_CREATED', {});
     expect(installations.resolveAll).not.toHaveBeenCalled();
+  });
+
+  it('holds a process slot while a subscriber runs, and gives it back when it fails', async () => {
+    let inFlightDuring = -1;
+    const { runtime, concurrency } = build(
+      plugin(
+        {
+          events: {
+            PAYMENT_INTENT_SUCCEEDED: () => {
+              inFlightDuring = concurrency.inFlight;
+              throw new Error('boom');
+            },
+          },
+        },
+        ['payment_intents:read'],
+      ),
+    );
+
+    await runtime.dispatchEvent('cosmos_u1', 'PAYMENT_INTENT_SUCCEEDED', {
+      id: 'pi_1',
+    });
+
+    expect(inFlightDuring).toBe(1);
+    expect(concurrency.inFlight).toBe(0);
+  });
+});
+
+describe('PluginRuntimeService log lines', () => {
+  it('turns every control character a plugin logs into a space', async () => {
+    const lines: string[] = [];
+    const { runtime } = build(
+      plugin({
+        queries: {
+          say: (ctx) => {
+            ctx.log.warn('a\nforged entry\u001b[2Jcleared\u0085end');
+            return null;
+          },
+        },
+      }),
+    );
+    const spy = jest
+      .spyOn(Logger.prototype, 'warn')
+      .mockImplementation((message: unknown) => {
+        lines.push(String(message));
+      });
+    try {
+      await runtime.invoke(consumer, 'acme', 'query', 'say', {});
+    } finally {
+      spy.mockRestore();
+    }
+    expect(lines).toEqual(['a forged entry [2Jcleared end']);
   });
 });

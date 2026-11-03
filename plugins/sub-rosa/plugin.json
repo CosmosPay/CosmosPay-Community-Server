@@ -1,0 +1,9 @@
+{
+  "slug": "sub-rosa",
+  "name": "Sub Rosa: private RFQs",
+  "version": "0.2.0",
+  "description": "Private requests for quotes: binds an RFQ to a Sub Rosa ReceiptOnly sealed-proposal round on Stellar, records the client-verified result and links the payment intent that pays the selected provider. Settlement stays in Cosmos Pay.",
+  "author": "Sub Rosa contributors (https://github.com/karagozemin/cosmospay-sub-rosa-plugin), reviewed by Cosmos Pay support",
+  "capabilities": ["payment_intents:read"],
+  "egress": []
+}
