@@ -2599,6 +2599,10 @@ eingeschaltet werden.
   oder dessen Dateien ein unsichtbares oder bidirektionales Steuerzeichen enthalten.**
   Führen Sie vor dem Deploy `npm run plugins -- check <slug>` für jedes von Hand
   installierte Plugin aus; die in diesem Repository bestehen.
+- **Der Signaturschlüssel des Supports wurde rotiert.** `PLUGIN_SUPPORT_KEYS` enthält
+  einen neuen `cosmos-support`-Schlüssel, und `example` und `sub-rosa` sind damit
+  signiert. Ein mit dem vorherigen Schlüssel signiertes Plugin stoppt den Start, bis
+  der Support es neu signiert.
 - **`npm run plugins -- install` lehnt ein Downgrade ab**, sofern nicht
   `--allow-downgrade` angegeben ist.
 

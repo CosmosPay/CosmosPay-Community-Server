@@ -1,0 +1,11 @@
+{
+  "format": "cosmos-plugin-signature/v2",
+  "slug": "sub-rosa",
+  "version": "0.2.0",
+  "files": {
+    "plugin.json": "c1d047f147d9f4e912983a3d7176bab171211279b2bb14e17de3713c3f9df8e1",
+    "index.ts": "8a233ade8ae0b271861aca3b1254b68863fa3cb5536bfe17dfa1f9b6e31b68b2"
+  },
+  "keyId": "cosmos-support",
+  "signature": "COCwlexZhmZJHrtRkPLEqUittmv_dh7RVBT8484OX6UR4H5BDzeUE8oUhE3LeCtSnL_vyAh4JGOplHW0ozrUCA"
+}

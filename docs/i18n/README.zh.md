@@ -1615,6 +1615,8 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
 - **启动时会拒绝 `plugin.json` 中某个 key 出现两次、或文件中含有不可见字符或双向控制字符的
   插件。** 部署前，对每个手动安装的插件运行 `npm run plugins -- check <slug>`；本仓库中的
   插件都能通过。
+- **支持团队的签名密钥已轮换。** `PLUGIN_SUPPORT_KEYS` 现在是一把新的 `cosmos-support`
+  密钥，`example` 和 `sub-rosa` 已用它重新签名。用旧密钥签名的插件会阻止启动，直到支持团队重新签名。
 - **`npm run plugins -- install` 会拒绝降级**，除非指定 `--allow-downgrade`。
 
 ### 受保护付款：一个新的原生插件、两张数据表和十个 webhook 事件

@@ -2543,6 +2543,10 @@ plugins isolés.
   les fichiers contiennent un caractère de contrôle bidirectionnel ou invisible.** Lancez
   `npm run plugins -- check <slug>` sur chaque plugin installé à la main avant de
   déployer ; ceux de ce dépôt passent.
+- **La clé de signature du support a été renouvelée.** `PLUGIN_SUPPORT_KEYS` contient
+  une nouvelle clé `cosmos-support`, et `example` et `sub-rosa` sont signés avec elle.
+  Un plugin signé avec la clé précédente arrête le démarrage jusqu'à ce que le support
+  le signe à nouveau.
 - **`npm run plugins -- install` refuse une rétrogradation** sauf si on lui passe
   `--allow-downgrade`.
 

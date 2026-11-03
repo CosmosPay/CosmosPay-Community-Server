@@ -2439,6 +2439,9 @@ seal होती हैं और कभी लौटाई नहीं जा
   जिसकी files में कोई invisible या bidirectional control character हो।** Deploy करने से
   पहले हाथ से install किए हर plugin पर `npm run plugins -- check <slug>` चलाएँ; इस
   repository वाले पास होते हैं।
+- **Support की signing key बदल दी गई है।** `PLUGIN_SUPPORT_KEYS` में एक नई
+  `cosmos-support` key है, और `example` व `sub-rosa` उसी से signed हैं। पुरानी key से
+  signed plugin boot रोक देता है, जब तक support उसे फिर से sign न करे।
 - **`npm run plugins -- install` downgrade refuse करता है** जब तक `--allow-downgrade` न
   दिया जाए।
 

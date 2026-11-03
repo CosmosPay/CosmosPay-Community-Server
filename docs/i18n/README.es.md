@@ -2547,6 +2547,9 @@ misma lista `PLUGINS_ENABLED` que los plugins aislados.
   archivos contienen un carácter de control invisible o bidireccional.** Ejecuta
   `npm run plugins -- check <slug>` en cada plugin que instalaste a mano antes de
   desplegar; los de este repositorio pasan.
+- **Se rotó la clave de firma de soporte.** `PLUGIN_SUPPORT_KEYS` tiene una clave
+  `cosmos-support` nueva, y `example` y `sub-rosa` están firmados con ella. Un plugin
+  firmado con la clave anterior detiene el arranque hasta que soporte lo vuelva a firmar.
 - **`npm run plugins -- install` rechaza instalar una versión anterior** salvo que
   reciba `--allow-downgrade`.
 

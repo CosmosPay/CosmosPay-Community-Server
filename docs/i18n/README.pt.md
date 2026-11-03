@@ -2511,6 +2511,9 @@ serviço em `src/native-plugins/<slug>/`, ligados pela mesma lista
   cujos arquivos contêm um caractere de controle invisível ou bidirecional.** Rode
   `npm run plugins -- check <slug>` em cada plugin que você instalou manualmente antes
   do deploy; os deste repositório passam.
+- **A chave de assinatura do suporte foi trocada.** `PLUGIN_SUPPORT_KEYS` tem uma
+  chave `cosmos-support` nova, e `example` e `sub-rosa` estão assinados com ela. Um
+  plugin assinado com a chave anterior impede o boot até o suporte assiná-lo de novo.
 - **`npm run plugins -- install` recusa instalar uma versão mais antiga** a menos que
   receba `--allow-downgrade`.
 

@@ -2447,6 +2447,9 @@ the service under `src/native-plugins/<slug>/`, switched on by the same
   hold an invisible or bidirectional control character.** Run
   `npm run plugins -- check <slug>` on every plugin you installed by hand before
   deploying; the ones in this repository pass.
+- **The support signing key was rotated.** `PLUGIN_SUPPORT_KEYS` holds a new
+  `cosmos-support` key, and `example` and `sub-rosa` are signed with it. A plugin
+  signed with the previous key stops the boot until support signs it again.
 - **`npm run plugins -- install` refuses a downgrade** unless given
   `--allow-downgrade`.
 

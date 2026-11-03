@@ -302,9 +302,13 @@ export const PLUGIN_KEY_ID_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
  *
  * The private half never enters a repository. Rotating it is: keygen, replace
  * the entry here, re-sign every plugin support ships — in one reviewed PR.
+ *
+ * Rotated 2026-11-03: nobody held the private half of the previous key
+ * (`WbPYsfv0…`), so it is no longer trusted; a key no one can account for is
+ * one someone else may hold.
  */
 export const PLUGIN_SUPPORT_KEYS: readonly string[] = [
-  'cosmos-support:WbPYsfv0GAnXAtPELNbzDZWjKbCjKZWnn8aZ6LF7_oo',
+  'cosmos-support:_d2fGLJr5X14x1cp_-iHuq7hUSqS3SLGRAKensE3ivQ',
 ];
 
 /** Longest `name`, `description` or `author` a manifest may carry. */
