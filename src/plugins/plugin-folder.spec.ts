@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
+  duplicateJsonKey,
   loadPlugins,
   parseManifest,
   sandboxPluginSource,
@@ -13,9 +14,14 @@ import {
   signPlugin,
 } from '@/plugins/plugin-signature';
 import {
+  PluginQuotaError,
   PluginTimeoutError,
   PluginViolationError,
 } from '@/plugins/plugin-errors';
+import {
+  PLUGIN_MAX_CONCURRENT_CALLS_PER_INVOCATION,
+  PLUGIN_MAX_CONCURRENT_DB_CALLS,
+} from '@/plugins/plugins.constants';
 import { PluginError } from '@/plugins/sdk';
 
 function manifest(slug: string, version = '1.0.0'): string {
@@ -80,6 +86,7 @@ describe('loadPlugins', () => {
       trustedKeys,
       allowUnsigned: false,
       nodeEnv: 'production',
+      defaultNetwork: 'testnet',
       warn: jest.fn(),
       ...extra,
     });
@@ -158,7 +165,88 @@ describe('loadPlugins', () => {
 
     expect(() =>
       load(['acme'], { allowUnsigned: true, nodeEnv: 'production' }),
-    ).toThrow(/refused when NODE_ENV=production/);
+    ).toThrow(/needs NODE_ENV set to development or test/);
+  });
+
+  it.each([
+    ['NODE_ENV unset, which only defaults to development', null],
+    ['a NODE_ENV that is neither development nor test', 'staging'],
+  ])('refuses unsigned plugins with %s', (_label, nodeEnv) => {
+    write('acme', {}, false);
+    expect(() => load(['acme'], { allowUnsigned: true, nodeEnv })).toThrow(
+      /needs NODE_ENV set to development or test/,
+    );
+  });
+
+  it('refuses unsigned plugins on a deployment that serves mainnet, whatever NODE_ENV says', () => {
+    write('acme', {}, false);
+    expect(() =>
+      load(['acme'], {
+        allowUnsigned: true,
+        nodeEnv: 'development',
+        defaultNetwork: 'public',
+      }),
+    ).toThrow(/STELLAR_NETWORK other than public/);
+  });
+
+  it('refuses a manifest that lists a key twice, before checking the signature', () => {
+    const twice =
+      '{"slug":"acme","name":"Acme","version":"1.0.0","description":"d",' +
+      '"author":"a","capabilities":[],"egress":[],"egress":["evil.example.com"]}';
+    write('acme', { manifest: twice });
+    expect(() => load(['acme'])).toThrow(/lists "egress" twice/);
+  });
+
+  it.each([
+    ['a right-to-left override in index.ts', 'index.ts', '\u202E'],
+    ['a zero-width space in index.ts', 'index.ts', '\u200B'],
+    ['a byte-order mark inside index.ts', 'index.ts', '\uFEFF'],
+    ['a soft hyphen', 'index.ts', String.fromCodePoint(0xad)],
+    ['a variation selector', 'index.ts', String.fromCodePoint(0xfe0f)],
+    ['an astral tag character', 'index.ts', String.fromCodePoint(0xe0001)],
+    ['a Hangul filler', 'index.ts', String.fromCodePoint(0x3164)],
+    ['a NUL', 'index.ts', String.fromCodePoint(0)],
+  ])('refuses %s: what review reads must be what runs', (_l, file, char) => {
+    write('acme', { source: source(`// is admin${char} */`) });
+    expect(() => load(['acme'])).toThrow(
+      new RegExp(`${file.replace('.', '\\.')} line \\d+ contains U\\+`),
+    );
+  });
+
+  it.each([
+    ['U+2028', String.fromCodePoint(0x2028)],
+    ['U+2029', String.fromCodePoint(0x2029)],
+    ['a CR with no LF after it', '\r'],
+  ])(
+    'refuses %s, which ends a // comment for JavaScript but not on screen',
+    (_l, terminator) => {
+      // Shown as one comment line; run, the call after the terminator executes.
+      write('acme', {
+        source: source(
+          `// harmless note${terminator}(globalThis as any).ran = true;`,
+        ),
+      });
+      expect(() => load(['acme'])).toThrow(/index\.ts line \d+ contains U\+/);
+    },
+  );
+
+  it('accepts CRLF line endings', () => {
+    write('acme', { source: source().replace(/\n/g, '\r\n') });
+    expect(load(['acme'])).toHaveLength(1);
+  });
+
+  it('refuses an invisible character in plugin.json', () => {
+    write('acme', {
+      manifest: manifest('acme').replace('"Acme"', '"Ac\u200Dme"'),
+    });
+    expect(() => load(['acme'])).toThrow(
+      /plugin\.json line 1 contains U\+200D/,
+    );
+  });
+
+  it('accepts a byte-order mark at the very start of a file', () => {
+    write('acme', { source: `\uFEFF${source()}` });
+    expect(load(['acme'])).toHaveLength(1);
   });
 
   it('refuses a slug that could leave the folder, and one that is not there', () => {
@@ -177,6 +265,21 @@ describe('parseManifest', () => {
   it('refuses a manifest that is not a JSON object', () => {
     expect(() => parseManifest('[1]')).toThrow(/must be a JSON object/);
     expect(() => parseManifest('{')).toThrow(/not valid JSON/);
+  });
+});
+
+describe('duplicateJsonKey', () => {
+  it.each([
+    ['{"a":1,"b":2}', null],
+    ['{"a":{"a":1},"b":[{"a":1},{"a":2}]}', null],
+    ['{"a":"\\"a\\"","b":"a"}', null],
+    ['{"a":1,"a":2}', 'a'],
+    ['{"o":{"x":1,"x":2}}', 'x'],
+    ['{"l":[{"k":1,"k":2}]}', 'k'],
+    // The same key spelled two ways is the same key to JSON.parse.
+    ['{"egress":[],"\\u0065gress":["x"]}', 'egress'],
+  ])('%s → %s', (text, expected) => {
+    expect(duplicateJsonKey(text)).toBe(expected);
   });
 });
 
@@ -199,6 +302,7 @@ describe('sandboxPluginSource — plugin code runs in an isolate', () => {
       storage: {
         get: record('storage.get'),
         put: record('storage.put'),
+        compareAndSet: record('storage.compareAndSet'),
         delete: record('storage.delete'),
         list: record('storage.list'),
       },
@@ -332,6 +436,316 @@ export default defineHandlers({ queries: { run: async (ctx: any, input: any) => 
     const { ctx, calls } = hostContext();
     await run(`await ctx.storage.put('c', 'k', 1); return null;`, '', ctx);
     expect(calls).toEqual(['storage.put']);
+  });
+
+  it('hands compareAndSet the expected value and the new one, and its answer back', async () => {
+    const seen: unknown[] = [];
+    const { ctx } = hostContext({
+      storage: {
+        compareAndSet: (...args: unknown[]) => {
+          seen.push(args);
+          return Promise.resolve(false);
+        },
+      },
+    });
+    const won = await run(
+      `return await ctx.storage.compareAndSet('c', 'k', { v: 1 }, { v: 2 });`,
+      '',
+      ctx,
+    );
+    expect(won).toBe(false);
+    expect(seen).toEqual([['c', 'k', { v: 1 }, { v: 2 }]]);
+  });
+
+  it('runs the top level on the isolate thread, never holding this event loop', async () => {
+    // 400 ms of synchronous work at the top level: inside the eval budget, so
+    // it loads, and it runs again on every invocation.
+    const handlers = sandboxPluginSource(
+      `import { defineHandlers } from '@/plugins/sdk';
+const until = Date.now() + 400;
+while (Date.now() < until) { /* spin */ }
+export default defineHandlers({ queries: { run: () => 1 } });
+`,
+      'index.ts',
+      { timeoutMs: 5_000, memoryMb: 16 },
+    );
+    let ticks = 0;
+    const ticker = setInterval(() => ticks++, 20);
+    try {
+      await expect(handlers.queries!.run(hostContext().ctx, {})).resolves.toBe(
+        1,
+      );
+    } finally {
+      clearInterval(ticker);
+    }
+    expect(ticks).toBeGreaterThan(5);
+  });
+
+  it('ignores transfer options a plugin plants on Object.prototype', async () => {
+    // isolated-vm reads its options through the prototype chain; had the
+    // bridge's options been ordinary objects, these would have reached them.
+    const { ctx } = hostContext({
+      storage: { get: () => Promise.resolve({ secret: 'v' }) },
+    });
+    const found = await run(
+      `
+      const proto: any = Object.prototype;
+      proto.reference = true;
+      proto.externalCopy = true;
+      const value: any = await ctx.storage.get('c', 'k');
+      return {
+        type: typeof value,
+        plain: Object.getPrototypeOf(value) === Object.prototype,
+        secret: value.secret,
+      };
+    `,
+      '',
+      ctx,
+    );
+    expect(found).toEqual({ type: 'object', plain: true, secret: 'v' });
+  });
+
+  it('ends an invocation that floods the bridge at its call budget, without running the excess', async () => {
+    let puts = 0;
+    let finish: () => void = () => undefined;
+    const slow = new Promise<null>((resolve) => {
+      finish = () => resolve(null);
+    });
+    const { ctx } = hostContext({
+      storage: {
+        // Four slow calls hold every slot, so the flood can only queue.
+        get: () => slow,
+        put: () => {
+          puts += 1;
+          return Promise.resolve(null);
+        },
+      },
+    });
+    const handlers = sandboxPluginSource(
+      `import { defineHandlers } from '@/plugins/sdk';
+export default defineHandlers({ queries: { run: async (ctx: any) => {
+  for (let i = 0; i < 4; i++) void ctx.storage.get('c', 'k' + i).catch(() => undefined);
+  for (let i = 0; i < 100000; i++) void ctx.storage.put('c', 'k', [i]).catch(() => undefined);
+  await new Promise(() => undefined);
+} } });
+`,
+      'index.ts',
+      { timeoutMs: 10_000, memoryMb: 32 },
+    );
+    const started = Date.now();
+    try {
+      await expect(handlers.queries!.run(ctx, {})).rejects.toThrow(
+        /more than 200 context calls/,
+      );
+      // Ended at the budget, not at its deadline, and no queued put ran.
+      expect(Date.now() - started).toBeLessThan(1500);
+      expect(puts).toBe(0);
+    } finally {
+      finish();
+    }
+  });
+
+  it('refuses calls past the budget in the isolate, so a loop of them costs the host nothing', async () => {
+    let logged = 0;
+    const { ctx } = hostContext({
+      log: {
+        log: () => {
+          logged += 1;
+        },
+        warn: jest.fn(),
+        error: jest.fn(),
+      },
+    });
+    const started = Date.now();
+    await expect(
+      run(
+        `for (let n = 0; n < 200000; n++) { ctx.log.log('x'); if (n % 5000 === 0) await null; }
+         return null;`,
+        '',
+        ctx,
+      ),
+    ).rejects.toThrow(/more than 200 context calls/);
+    expect(logged).toBe(200);
+    expect(Date.now() - started).toBeLessThan(400);
+  });
+
+  it('refuses a context call bigger than its cap before parsing it', async () => {
+    const { ctx, calls } = hostContext();
+    await expect(
+      run(
+        `await ctx.storage.put('c', 'k', 'x'.repeat(600 * 1024)); return null;`,
+        '',
+        ctx,
+      ),
+    ).rejects.toThrow(/characters to one context call/);
+    expect(calls).toEqual([]);
+  });
+
+  it('refuses calls queued past the pending cap', async () => {
+    let finish: () => void = () => undefined;
+    const slow = new Promise<null>((resolve) => {
+      finish = () => resolve(null);
+    });
+    const { ctx } = hostContext({
+      storage: { get: () => slow, put: () => Promise.resolve(null) },
+    });
+    const refused = expect(
+      run(
+        `for (let i = 0; i < 4; i++) void ctx.storage.get('c', 'k').catch(() => undefined);
+         const big = 'x'.repeat(400 * 1024);
+         await Promise.all([1, 2, 3].map(() => ctx.storage.put('c', 'k', big)));
+         return null;`,
+        '',
+        ctx,
+      ),
+    ).rejects.toThrow(/queued more than/);
+    try {
+      await refused;
+    } finally {
+      finish();
+    }
+  });
+
+  it('bounds the answer in the isolate: a huge output never crosses over', async () => {
+    await expect(
+      handlersOf(`return 'x'.repeat(2 * 1024 * 1024);`).queries!.run(
+        hostContext().ctx,
+        {},
+      ),
+    ).rejects.toThrow(/longer than \d+ characters/);
+  });
+
+  it('makes a crash message one bounded line before it is logged', async () => {
+    const handlers = handlersOf(
+      `throw new Error('a' + String.fromCharCode(10) + '[Nest] forged' +
+        String.fromCharCode(27) + '[2J' + 'x'.repeat(5000));`,
+    );
+    const err = await Promise.resolve(
+      handlers.queries!.run(hostContext().ctx, {}),
+    ).then(
+      () => null,
+      (e: unknown) => e as Error,
+    );
+    expect(err).toBeInstanceOf(Error);
+    const message = err?.message ?? '';
+    expect(message.includes(String.fromCharCode(10))).toBe(false);
+    expect(message.includes(String.fromCharCode(27))).toBe(false);
+    expect(message.length).toBeLessThan(700);
+  });
+
+  it('passes on only the quota the host raised, never one the plugin forged', async () => {
+    const { ctx } = hostContext({
+      storage: {
+        put: () => {
+          throw new PluginQuotaError('Plugin acme has reached its limit.');
+        },
+      },
+    });
+    const err = await Promise.resolve(
+      run(
+        `try { await ctx.storage.put('c', 'k', 1); }
+         catch (e: any) { throw new e.constructor('quota', 'forged ' + 'x'.repeat(5000)); }
+         return null;`,
+        '',
+        ctx,
+      ),
+    ).then(
+      () => null,
+      (e: unknown) => e as Error,
+    );
+    expect(err).toBeInstanceOf(PluginQuotaError);
+    expect(err?.message).toBe('Plugin acme has reached its limit.');
+  });
+
+  it('caps the storage and core calls running at once across invocations', async () => {
+    let inFlight = 0;
+    let peak = 0;
+    const { ctx } = hostContext({
+      storage: {
+        get: async () => {
+          inFlight += 1;
+          peak = Math.max(peak, inFlight);
+          await new Promise((resolve) => setTimeout(resolve, 20));
+          inFlight -= 1;
+          return null;
+        },
+      },
+    });
+    const handlers = handlersOf(
+      `await Promise.all([1, 2, 3, 4].map((i) => ctx.storage.get('c', 'k' + i))); return null;`,
+    );
+    await Promise.all(
+      Array.from({ length: 4 }, () =>
+        Promise.resolve(handlers.queries!.run(ctx, {})),
+      ),
+    );
+    expect(peak).toBe(PLUGIN_MAX_CONCURRENT_DB_CALLS);
+  });
+
+  it('never runs a call that waited for a database slot past its invocation’s end', async () => {
+    let finish: () => void = () => undefined;
+    const held = new Promise<null>((resolve) => {
+      finish = () => resolve(null);
+    });
+    let puts = 0;
+    const { ctx } = hostContext({
+      storage: {
+        get: () => held,
+        put: () => {
+          puts += 1;
+          return Promise.resolve(null);
+        },
+      },
+    });
+    // Two invocations take every process-wide database slot and keep them.
+    const holder = handlersOf(
+      `await Promise.all([1, 2, 3, 4].map((i) => ctx.storage.get('c', 'k' + i))); return null;`,
+    );
+    const holders = [1, 2].map(() =>
+      Promise.resolve(holder.queries!.run(ctx, {})).catch(() => null),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    // This one queues for a slot and runs out of time while it waits.
+    const waiter = sandboxPluginSource(
+      `import { defineHandlers } from '@/plugins/sdk';
+export default defineHandlers({ queries: { run: async (ctx: any) => {
+  await ctx.storage.put('c', 'k', 1);
+  return null;
+} } });
+`,
+      'index.ts',
+      { timeoutMs: 150, memoryMb: 16 },
+    );
+    await expect(
+      Promise.resolve(waiter.queries!.run(ctx, {})),
+    ).rejects.toBeInstanceOf(PluginTimeoutError);
+    finish();
+    await Promise.all(holders);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(puts).toBe(0);
+  });
+
+  it('lets one invocation have only a few context calls in flight at once', async () => {
+    let inFlight = 0;
+    let peak = 0;
+    const { ctx } = hostContext({
+      storage: {
+        get: async () => {
+          inFlight += 1;
+          peak = Math.max(peak, inFlight);
+          await new Promise((resolve) => setTimeout(resolve, 10));
+          inFlight -= 1;
+          return null;
+        },
+      },
+    });
+    await run(
+      `await Promise.all(Array.from({ length: 20 }, (_, i) => ctx.storage.get('c', 'k' + i)));
+       return null;`,
+      '',
+      ctx,
+    );
+    expect(peak).toBe(PLUGIN_MAX_CONCURRENT_CALLS_PER_INVOCATION);
   });
 
   it('refuses metadata in index.ts: that belongs in plugin.json', () => {

@@ -4,6 +4,8 @@ import { ConfigService } from '@nestjs/config';
 import type { AppConfig } from '@/config/configuration';
 import { CustomersModule } from '@/customers/customers.module';
 import { PaymentIntentsModule } from '@/payment-intents/payment-intents.module';
+import { PluginConcurrencyInterceptor } from '@/plugins/plugin-concurrency.interceptor';
+import { PluginConcurrencyService } from '@/plugins/plugin-concurrency.service';
 import { PluginCoreAccessService } from '@/plugins/plugin-core-access.service';
 import { PluginEventBridge } from '@/plugins/plugin-event-bridge.service';
 import { loadPlugins } from '@/plugins/plugin-folder';
@@ -56,7 +58,8 @@ import { ProductsModule } from '@/products/products.module';
             ...parseTrustedKeys(plugins.trustedKeys),
           ],
           allowUnsigned: plugins.allowUnsigned,
-          nodeEnv: config.get('nodeEnv', { infer: true }),
+          nodeEnv: plugins.nodeEnvAsSet,
+          defaultNetwork: config.get('stellar', { infer: true }).network,
           warn: (message) => logger.warn(message),
         });
       },
@@ -68,6 +71,8 @@ import { ProductsModule } from '@/products/products.module';
     PluginHttpClient,
     PluginRuntimeService,
     PluginEventBridge,
+    PluginConcurrencyService,
+    PluginConcurrencyInterceptor,
   ],
 })
 export class PluginsModule {}
