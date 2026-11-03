@@ -317,9 +317,13 @@ table. These are the rules that did not hold on their own:
   - an invocation has at most `PLUGIN_MAX_CONCURRENT_CALLS_PER_INVOCATION` calls in
     flight, and the process `PLUGIN_MAX_CONCURRENT_INVOCATIONS` invocations
     (`PluginConcurrencyService`), so one plugin cannot take the database pool or
-    the memory;
+    the memory. Every path that starts an invocation takes a share of its
+    consumer's too: actions are refused past theirs, events wait within theirs
+    (bounded queue), so one tenant's burst cannot fill the process;
   - what review reads is what loads: `plugin.json` with a key listed twice, or
-    either file with an invisible or bidirectional character, is refused.
+    either file with a bidirectional, default-ignorable or control character, or
+    a line terminator an editor may not draw (U+2028, U+2029, a lone CR: they end
+    a `//` comment), is refused (`PLUGIN_SOURCE_FORBIDDEN_CHARS_RE`).
   A plugin that writes back a record it read uses `ctx.storage.compareAndSet`
   (an `UPDATE … WHERE value = expected` on `jsonb`), never a read then `put`.
 - **Swap venues are the exception, by decision: they are core.** A same-chain

@@ -2302,7 +2302,9 @@ Plugin के handlers को एक `PluginContext` मिलता है औ�
   बारी का इंतज़ार करते हैं, ताकि storage पर `Promise.all` database pool पर कब्ज़ा न कर सके।
   एक process एक साथ अधिकतम 16 invocations चलाता है, और एक consumer अधिकतम 4 actions: किसी
   भी सीमा के पार action `Retry-After: 1` के साथ `429 rate_limited` होता है। Event इसके
-  बजाय slot का इंतज़ार करता है, क्योंकि उसे retry करने वाला कोई नहीं होता।
+  बजाय slot का इंतज़ार करता है, क्योंकि उसे retry करने वाला कोई नहीं होता, लेकिन
+  अपने consumer के हिस्से के भीतर: अधिकतम 2 चलते हुए और 200 pending; उसके बाद वह छोड़ दिया
+  जाता है और log होता है, ताकि एक tenant की बौछार अपने ही पीछे कतार में रहे।
 - **Failures सीमित रहते हैं.** `PluginError` उसके message के साथ `400 plugin_rejected`
   बनता है; बाकी सब `502 plugin_failed`, log होता है और कभी लौटाया नहीं जाता। किसी event
   पर fail होने वाला plugin न उस event के webhook को बिगाड़ता है, न दूसरे plugins को।

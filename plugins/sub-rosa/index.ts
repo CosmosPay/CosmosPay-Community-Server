@@ -124,11 +124,10 @@ const HTTPS_URL_RE =
  * multi-line fields.
  */
 const SINGLE_LINE_FORBIDDEN_RE =
-  // eslint-disable-next-line no-control-regex -- refusing control characters is the point
-  /[\u0000-\u001F\u007F-\u009F\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF]/;
+  /[\p{Cc}\p{Default_Ignorable_Code_Point}\p{Bidi_Control}\u2028\u2029]/u;
 const MULTI_LINE_FORBIDDEN_RE =
   // eslint-disable-next-line no-control-regex -- the same, minus line breaks and tabs
-  /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF]/;
+  /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\p{Default_Ignorable_Code_Point}\p{Bidi_Control}\u2028\u2029]/u;
 
 interface SubRosaMapping {
   network: Network;

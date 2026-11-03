@@ -187,11 +187,38 @@ describe('loadPlugins', () => {
     ['a right-to-left override in index.ts', 'index.ts', '\u202E'],
     ['a zero-width space in index.ts', 'index.ts', '\u200B'],
     ['a byte-order mark inside index.ts', 'index.ts', '\uFEFF'],
+    ['a soft hyphen', 'index.ts', String.fromCodePoint(0xad)],
+    ['a variation selector', 'index.ts', String.fromCodePoint(0xfe0f)],
+    ['an astral tag character', 'index.ts', String.fromCodePoint(0xe0001)],
+    ['a Hangul filler', 'index.ts', String.fromCodePoint(0x3164)],
+    ['a NUL', 'index.ts', String.fromCodePoint(0)],
   ])('refuses %s: what review reads must be what runs', (_l, file, char) => {
     write('acme', { source: source(`// is admin${char} */`) });
     expect(() => load(['acme'])).toThrow(
       new RegExp(`${file.replace('.', '\\.')} line \\d+ contains U\\+`),
     );
+  });
+
+  it.each([
+    ['U+2028', String.fromCodePoint(0x2028)],
+    ['U+2029', String.fromCodePoint(0x2029)],
+    ['a CR with no LF after it', '\r'],
+  ])(
+    'refuses %s, which ends a // comment for JavaScript but not on screen',
+    (_l, terminator) => {
+      // Shown as one comment line; run, the call after the terminator executes.
+      write('acme', {
+        source: source(
+          `// harmless note${terminator}(globalThis as any).ran = true;`,
+        ),
+      });
+      expect(() => load(['acme'])).toThrow(/index\.ts line \d+ contains U\+/);
+    },
+  );
+
+  it('accepts CRLF line endings', () => {
+    write('acme', { source: source().replace(/\n/g, '\r\n') });
+    expect(load(['acme'])).toHaveLength(1);
   });
 
   it('refuses an invisible character in plugin.json', () => {

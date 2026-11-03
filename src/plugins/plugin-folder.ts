@@ -196,8 +196,8 @@ export function assertReviewable(name: string, text: string): void {
   const line = before.split('\n').length;
   const code = match[0].codePointAt(0)!.toString(16).toUpperCase();
   throw new Error(
-    `${name} line ${line} contains U+${code.padStart(4, '0')}, an invisible or ` +
-      'bidirectional control character: what a reviewer reads would not be what runs',
+    `${name} line ${line} contains U+${code.padStart(4, '0')}, an invisible, control or ` +
+      'bidirectional character: what a reviewer reads would not be what runs',
   );
 }
 

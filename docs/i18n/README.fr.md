@@ -2394,7 +2394,9 @@ Ce que le runtime garantit autour de chaque invocation :
   de la base de données. Un processus exécute au plus 16 invocations à la fois, et un
   consumer au plus 4 actions : au-delà de l'une ou l'autre limite, l'action reçoit
   `429 rate_limited` avec `Retry-After: 1`. Un événement attend plutôt qu'une place se
-  libère, puisque personne n'est là pour le relancer.
+  libère, puisque personne n'est là pour le relancer,
+  mais dans la part de son consumer : 2 en cours et 200 en attente au plus ; au-delà il est
+  écarté et journalisé, si bien que la rafale d'un tenant attend derrière elle-même.
 - **Les défaillances restent confinées.** Un `PluginError` donne `400 plugin_rejected`
   avec son message ; tout le reste donne `502 plugin_failed`, journalisé et jamais
   renvoyé. Un plugin qui échoue sur un événement ne perturbe ni le webhook de cet

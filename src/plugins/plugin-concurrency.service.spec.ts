@@ -3,8 +3,10 @@ import { ApiError } from '@/common/errors/api-error';
 import { PluginConcurrencyInterceptor } from '@/plugins/plugin-concurrency.interceptor';
 import { PluginConcurrencyService } from '@/plugins/plugin-concurrency.service';
 import {
+  PLUGIN_MAX_CONCURRENT_EVENTS_PER_CONSUMER,
   PLUGIN_MAX_CONCURRENT_INVOCATIONS,
   PLUGIN_MAX_CONCURRENT_INVOCATIONS_PER_CONSUMER,
+  PLUGIN_MAX_PENDING_EVENTS_PER_CONSUMER,
 } from '@/plugins/plugins.constants';
 
 describe('PluginConcurrencyService', () => {
@@ -45,7 +47,7 @@ describe('PluginConcurrencyService', () => {
       (_, i) => concurrency.tryEnterAction(`c${i}`)!,
     );
     let entered = false;
-    const event = concurrency.enterEvent().then((release) => {
+    const event = concurrency.enterEvent('cosmos_u1').then((release) => {
       entered = true;
       return release;
     });
@@ -53,8 +55,44 @@ describe('PluginConcurrencyService', () => {
     expect(entered).toBe(false);
 
     releases[0]();
-    (await event)();
+    (await event)!();
     expect(entered).toBe(true);
+  });
+
+  it('runs a consumer’s events within its own share, leaving the process to others', async () => {
+    const concurrency = new PluginConcurrencyService();
+    const held = await Promise.all(
+      Array.from({ length: PLUGIN_MAX_CONCURRENT_EVENTS_PER_CONSUMER }, () =>
+        concurrency.enterEvent('burst'),
+      ),
+    );
+    let next = false;
+    const queued = concurrency.enterEvent('burst').then((release) => {
+      next = true;
+      return release;
+    });
+    await Promise.resolve();
+    // The burst waits behind itself; the process still has slots for others.
+    expect(next).toBe(false);
+    expect(concurrency.inFlight).toBe(
+      PLUGIN_MAX_CONCURRENT_EVENTS_PER_CONSUMER,
+    );
+    expect(concurrency.tryEnterAction('someone-else')).not.toBeNull();
+
+    held[0]!();
+    (await queued)!();
+    expect(next).toBe(true);
+  });
+
+  it('drops a consumer’s event once too many are pending', async () => {
+    const concurrency = new PluginConcurrencyService();
+    const pending = Array.from(
+      { length: PLUGIN_MAX_PENDING_EVENTS_PER_CONSUMER },
+      () => concurrency.enterEvent('burst'),
+    );
+    await expect(concurrency.enterEvent('burst')).resolves.toBeNull();
+    await expect(concurrency.enterEvent('other')).resolves.not.toBeNull();
+    void pending;
   });
 });
 

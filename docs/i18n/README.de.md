@@ -2446,7 +2446,9 @@ Was die Runtime bei jedem Aufruf garantiert:
   Storage nicht den Datenbank-Pool belegen kann. Ein Prozess führt höchstens 16 Aufrufe
   gleichzeitig aus, ein Consumer höchstens 4 Aktionen: Darüber hinaus antwortet die
   Aktion `429 rate_limited` mit `Retry-After: 1`. Ein Event wartet stattdessen auf einen
-  freien Platz, da niemand da ist, der es erneut versucht.
+  freien Platz, da niemand da ist, der es erneut versucht,
+  aber innerhalb des Anteils seines Consumers: höchstens 2 laufend und 200 wartend; darüber
+  hinaus wird es verworfen und geloggt, sodass der Ansturm eines Tenants hinter sich selbst wartet.
 - **Fehler bleiben eingegrenzt.** Ein `PluginError` wird zu `400 plugin_rejected` mit
   seiner Meldung; alles andere zu `502 plugin_failed`, geloggt und nie zurückgegeben.
   Ein Plugin, das bei einem Event scheitert, stört weder den Webhook dieses Events noch

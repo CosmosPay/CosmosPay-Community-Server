@@ -2309,7 +2309,9 @@ What the runtime guarantees around every invocation:
   wait their turn, so a `Promise.all` over storage cannot take the database pool.
   A process runs at most 16 invocations at once, and a consumer at most 4 actions:
   past either, the action is `429 rate_limited` with `Retry-After: 1`. An event
-  waits for a slot instead, since nobody is there to retry it.
+  waits for a slot instead, since nobody is there to retry it, but
+  within its consumer's share: 2 running and 200 pending at most, past which it is
+  dropped and logged, so one tenant's burst queues behind itself.
 - **Failures stay contained.** A `PluginError` is `400 plugin_rejected` with its
   message; anything else is `502 plugin_failed`, logged and never echoed. A plugin
   failing on an event disturbs neither the webhook of that event nor other plugins.

@@ -105,6 +105,22 @@ export const PLUGIN_MAX_CONCURRENT_INVOCATIONS_PER_CONSUMER = 4;
 /** `Retry-After`, in seconds, on a call refused for having too many in flight. */
 export const PLUGIN_BUSY_RETRY_AFTER_SECONDS = 1;
 
+/**
+ * Event deliveries one consumer may have running at once. Events wait for a
+ * process slot instead of being refused, so without a share of their own a
+ * tenant creating payment intents in a burst would fill every process slot with
+ * its deliveries and turn every other tenant's actions into 429s.
+ */
+export const PLUGIN_MAX_CONCURRENT_EVENTS_PER_CONSUMER = 2;
+
+/**
+ * Event deliveries one consumer may have waiting or running. Past it the next
+ * delivery is dropped and logged: an unbounded queue is memory the tenant
+ * controls, and an event delivery is already best effort (a plugin that fails
+ * on one is logged, never retried).
+ */
+export const PLUGIN_MAX_PENDING_EVENTS_PER_CONSUMER = 200;
+
 /** Size of the JSON `input` an action accepts, serialized. */
 export const PLUGIN_MAX_INPUT_BYTES = 64 * 1024;
 
@@ -283,15 +299,23 @@ export const PLUGIN_REGISTRY_INDEX_MAX_BYTES = 1024 * 1024;
 export const PLUGIN_SIGNATURE_MAX_BYTES = 64 * 1024;
 
 /**
- * Characters a reviewed file may not contain: the bidirectional controls of
- * "Trojan Source" (CVE-2021-42574), which make an editor show code in an order
- * the compiler does not run it in, and the invisible zero-width ones, which
- * make two identifiers that look the same differ. A signature is a statement
- * about what a reviewer read; these make what they read differ from what runs.
+ * Characters a reviewed file may not contain. A signature is a statement about
+ * what a reviewer read, and each of these makes what they read differ from
+ * what runs:
+ *   - bidirectional controls ("Trojan Source", CVE-2021-42574), which make an
+ *     editor show code in an order the compiler does not run it in;
+ *   - every default-ignorable code point (zero-width characters, the soft
+ *     hyphen, Hangul fillers, variation selectors, the astral tag characters),
+ *     which render as nothing and make two identical-looking names differ;
+ *   - line terminators an editor may not draw as one: U+2028, U+2029 and a CR
+ *     with no LF after it end a `//` comment for JavaScript, so code after one
+ *     runs while it reads as part of the comment;
+ *   - every other control character but tab, LF and CR.
  * A byte-order mark is allowed only as the first character of the file.
  */
 export const PLUGIN_SOURCE_FORBIDDEN_CHARS_RE =
-  /[\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF]/;
+  // eslint-disable-next-line no-control-regex -- refusing control characters is the point
+  /[\p{Default_Ignorable_Code_Point}\p{Bidi_Control}\u2028\u2029\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]|\r(?!\n)/u;
 
 /**
  * Heap cap for the isolate one invocation runs in. A plugin that needs more is

@@ -177,8 +177,15 @@ export class PluginRuntimeService {
         planSwapFeeBps: null,
       };
       // An event waits for a slot rather than being refused: nobody is there
-      // to retry it, and the wait is bounded by the invocations ahead of it.
-      const release = await this.concurrency.enterEvent();
+      // to retry it. It waits within its consumer's own share, and a consumer
+      // with too many already pending has this one dropped.
+      const release = await this.concurrency.enterEvent(consumerUsername);
+      if (!release) {
+        this.logger.warn(
+          `Plugin ${plugin.slug} (event ${type}) dropped: ${consumerUsername} has too many event deliveries pending`,
+        );
+        continue;
+      }
       try {
         await this.run(plugin, installation, consumer, `event ${type}`, (ctx) =>
           handler(ctx, event),

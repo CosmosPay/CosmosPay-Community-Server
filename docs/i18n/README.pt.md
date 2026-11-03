@@ -2365,7 +2365,9 @@ O que o runtime garante em cada invocação:
   do banco de dados. Um processo roda no máximo 16 invocações ao mesmo tempo, e um
   consumer no máximo 4 ações: passando de qualquer um dos dois limites, a ação é
   `429 rate_limited` com `Retry-After: 1`. Um evento, em vez disso, espera uma vaga,
-  porque não há ninguém para tentar de novo.
+  porque não há ninguém para tentar de novo, mas
+  dentro da cota do seu consumidor: no máximo 2 em execução e 200 pendentes; além disso
+  é descartado e registrado, e assim uma rajada de um tenant espera atrás de si mesma.
 - **Falhas ficam contidas.** Um `PluginError` vira `400 plugin_rejected` com a mensagem
   dele; qualquer outra coisa vira `502 plugin_failed`, registrada e nunca devolvida. Um
   plugin que falha num evento não afeta o webhook desse evento nem outros plugins.
