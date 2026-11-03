@@ -695,8 +695,18 @@ export class PluginSandbox {
           );
         }
         const args: unknown = JSON.parse(argsJson);
+        // Checked again when the call actually runs: a call that waited for a
+        // database slot must not run for an invocation that ended meanwhile.
         const call = () =>
-          Promise.resolve(handler(scope.ctx, Array.isArray(args) ? args : []));
+          scope.fatal || scope.over
+            ? Promise.reject(
+                new PluginViolationError(
+                  `Plugin ${slug} used its context after the invocation failed or ended`,
+                ),
+              )
+            : Promise.resolve(
+                handler(scope.ctx, Array.isArray(args) ? args : []),
+              );
         return usesDatabase(method) ? DB_CALLS.run(call) : call();
       });
       return reply({ ok: true, value: value === undefined ? null : value });

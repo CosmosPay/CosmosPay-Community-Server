@@ -682,6 +682,49 @@ export default defineHandlers({ queries: { run: async (ctx: any) => {
     expect(peak).toBe(PLUGIN_MAX_CONCURRENT_DB_CALLS);
   });
 
+  it('never runs a call that waited for a database slot past its invocation’s end', async () => {
+    let finish: () => void = () => undefined;
+    const held = new Promise<null>((resolve) => {
+      finish = () => resolve(null);
+    });
+    let puts = 0;
+    const { ctx } = hostContext({
+      storage: {
+        get: () => held,
+        put: () => {
+          puts += 1;
+          return Promise.resolve(null);
+        },
+      },
+    });
+    // Two invocations take every process-wide database slot and keep them.
+    const holder = handlersOf(
+      `await Promise.all([1, 2, 3, 4].map((i) => ctx.storage.get('c', 'k' + i))); return null;`,
+    );
+    const holders = [1, 2].map(() =>
+      Promise.resolve(holder.queries!.run(ctx, {})).catch(() => null),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    // This one queues for a slot and runs out of time while it waits.
+    const waiter = sandboxPluginSource(
+      `import { defineHandlers } from '@/plugins/sdk';
+export default defineHandlers({ queries: { run: async (ctx: any) => {
+  await ctx.storage.put('c', 'k', 1);
+  return null;
+} } });
+`,
+      'index.ts',
+      { timeoutMs: 150, memoryMb: 16 },
+    );
+    await expect(
+      Promise.resolve(waiter.queries!.run(ctx, {})),
+    ).rejects.toBeInstanceOf(PluginTimeoutError);
+    finish();
+    await Promise.all(holders);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(puts).toBe(0);
+  });
+
   it('lets one invocation have only a few context calls in flight at once', async () => {
     let inFlight = 0;
     let peak = 0;
