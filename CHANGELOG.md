@@ -2,6 +2,17 @@
 
 All notable changes to the Cosmos Pay Community Server are documented here.
 Generated from [Conventional Commits](https://www.conventionalcommits.org) by [git-cliff](https://git-cliff.org).
+## [1.10.0] - 2026-11-03
+
+### Features
+- Preinstall Sub Rosa and harden the plugin runtime (030d0f1)
+- Approve Sub Rosa 0.2.0; rotate the support signing key (198d159)
+
+### Bug Fixes
+- Wider review-text rule; a per-consumer share for events (e7334cf)
+- Bound the bridge on arrival; DB share; explicit dev env for unsigned (72cd03c)
+- Re-check the invocation when a queued database call runs (bf14a32)
+
 ## [1.9.0] - 2026-11-03
 
 ### Features
