@@ -25,7 +25,11 @@ export const PLUGIN_SLUG_RE = /^[a-z][a-z0-9-]{2,39}$/;
  * switched on by the same `PLUGINS_ENABLED` list as sandboxed plugins. A
  * sandboxed plugin may not take one of these slugs.
  */
-export const NATIVE_PLUGIN_SLUGS = ['blindpay', 'defindex'] as const;
+export const NATIVE_PLUGIN_SLUGS = [
+  'blindpay',
+  'defindex',
+  'trustless-work',
+] as const;
 export type NativePluginSlug = (typeof NATIVE_PLUGIN_SLUGS)[number];
 
 export function isNativePluginSlug(slug: string): slug is NativePluginSlug {

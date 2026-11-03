@@ -88,6 +88,8 @@ src/
   native-plugins/                 first-party plugins, imported only when PLUGINS_ENABLED names them:
     blindpay/                     BlindPay: client, Svix verify, sync + webhook, kyc/, onramp/, offramp/, admin/
     defindex/                     DeFindex vaults (Stellar)
+    trustless-work/               protected payments on Trustless Work (Stellar): client, envelope checks,
+                                  sync / expiry / deadline jobs, the keyless buyer routes, admin/
   health/                         liveness/readiness probes (@Public)
 prisma/schema.prisma              Consumer, PaymentIntent, Swap, ChainSwap, CrossChainSwap, LiquidityPoolOperation,
                                   WebhookEndpoint/Delivery/EmittedEvent, BlindpayReceiver,
@@ -98,6 +100,7 @@ prisma/schema.prisma              Consumer, PaymentIntent, Swap, ChainSwap, Cros
                                   AliasChallenge, AliasRecovery, ZkPayment, Usdt0Transfer,
                                   EasyRecoverySession
                                   PluginInstallation, PluginRecord
+                                  ProtectedPayment, ProtectedPaymentTransaction
 test/                             e2e suites: gateway gate, admin + alias console gates,
                                   payment intents, swaps, liquidity pools, KYC, webhooks
 plugins/                          THE plugins folder: one <slug>/ per plugin (plugin.json, index.ts, signature.json)
@@ -139,6 +142,8 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | 轻松恢复 | `/v1/wallet/easy-recovery` | 通过一个本服务无法打开、只存在五分钟的信箱，在两台设备之间迁移钱包 |
 | 资产 | `/v1/assets` | 按网络划分的精选资产注册表 |
 | 公共 key | `/v1/public-key` | 共享的公共 API key，无需 key 即可获取（`@Public`） |
+| 受保护付款 | `/v1/protected-payments` | 在交付之前由 Trustless Work 合约持有的付款（Stellar 上的 USDC，1.95%）：创建、发货、批准、放款、争议 |
+| 受保护付款链接 | `/v1/protected-payment-links` | 受保护付款中买家的那一侧：读取、注资、确认、放款、争议（`@Public`） |
 | 分析 | `/v1/summary`, `/v1/balances`, `/v1/logs` | 仪表盘汇总（支付、swap、流动性、webhook）与日志 |
 | 活动 | `/v1/activity` | 客户端上报的事件：接收、事件流、汇总 |
 | 插件 | `/v1/plugins` | 以 slug 命名的编译内置扩展，按 tenant 安装 |
@@ -163,6 +168,9 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | GET | `/v1/admin/payment-intents` | 平台控制台 |  |
 | GET | `/v1/admin/payouts` | 平台控制台 |  |
 | GET | `/v1/admin/products` | 平台控制台 |  |
+| GET | `/v1/admin/protected-payments` | 平台控制台 |  |
+| POST | `/v1/admin/protected-payments/{id}/resolve` | 平台控制台 |  |
+| POST | `/v1/admin/protected-payments/{id}/submit` | 平台控制台 |  |
 | GET | `/v1/admin/receivers` | 平台控制台 |  |
 | PATCH | `/v1/admin/receivers/{id}/access` | 平台控制台 |  |
 | POST | `/v1/admin/receivers/{id}/approve` | 平台控制台 |  |
@@ -272,6 +280,21 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | GET | `/v1/products/{id}` | `products:read` |  |
 | PATCH | `/v1/products/{id}` | `products:write` |  |
 | DELETE | `/v1/products/{id}` | `products:write` |  |
+| GET | `/v1/protected-payments` | `payments:read` |  |
+| POST | `/v1/protected-payments` | `payments:write` |  |
+| POST | `/v1/protected-payments/submit` | `payments:write` |  |
+| GET | `/v1/protected-payments/{id}` | `payments:read` |  |
+| POST | `/v1/protected-payments/{id}/approve` | `payments:write` |  |
+| POST | `/v1/protected-payments/{id}/cancel` | `payments:write` |  |
+| POST | `/v1/protected-payments/{id}/dispute` | `payments:write` |  |
+| POST | `/v1/protected-payments/{id}/release` | `payments:write` |  |
+| POST | `/v1/protected-payments/{id}/ship` | `payments:write` |  |
+| GET | `/v1/protected-payment-links/{id}` | 无：`@Public()`，按客户端地址计预算 |  |
+| POST | `/v1/protected-payment-links/{id}/approve` | 无：`@Public()`，按客户端地址计预算 |  |
+| POST | `/v1/protected-payment-links/{id}/dispute` | 无：`@Public()`，按客户端地址计预算 |  |
+| POST | `/v1/protected-payment-links/{id}/fund` | 无：`@Public()`，按客户端地址计预算 |  |
+| POST | `/v1/protected-payment-links/{id}/release` | 无：`@Public()`，按客户端地址计预算 |  |
+| POST | `/v1/protected-payment-links/{id}/submit` | 无：`@Public()`，按客户端地址计预算 |  |
 | GET | `/v1/public-key` | none — `@Public()` |  |
 | GET | `/.well-known/stellar.toml` | none — `@Public()`, SEP-1 discovery (recovery servers only) |  |
 | GET | `/v1/sep10/auth` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
@@ -438,7 +461,7 @@ platform 的 `COSMOS_API_URL`，用逗号分隔，然后在那里运行 `npm run
 
 每个集成方（APISIX 消费者）可以注册一个或多个 webhook 端点。当支付意图发生变化时，平台会触发一个领域事件；**分发器（dispatcher）**会将其扇出到该消费者所有已启用、且订阅了该事件类型的端点（订阅为空 = 全部），记录每次尝试以便追溯，并按线性退避进行重试（`WEBHOOK_*` 环境变量）。
 
-事件类型：`PAYMENT_INTENT_CREATED`、`PAYMENT_INTENT_UPDATED`、`PAYMENT_INTENT_SUCCEEDED`、`PAYMENT_INTENT_FAILED`、`PAYMENT_INTENT_CANCELLED`、`PAYMENT_INTENT_DELETED`、`SWAP_CREATED`、`SWAP_SUBMITTED`、`SWAP_SUCCEEDED`、`SWAP_FAILED`、`LIQUIDITY_CREATED`、`LIQUIDITY_SUBMITTED`、`LIQUIDITY_SUCCEEDED`、`LIQUIDITY_FAILED`、`CROSS_CHAIN_SWAP_CREATED`、`CROSS_CHAIN_SWAP_UPDATED`、`CROSS_CHAIN_SWAP_SUCCEEDED`、`CROSS_CHAIN_SWAP_REFUNDED`、`CROSS_CHAIN_SWAP_FAILED`、`CROSS_CHAIN_SWAP_EXPIRED`，以及来自 BlindPay 的 `RECEIVER_UPDATED`、`PAYIN_CREATED`、`PAYIN_UPDATED`、`PAYIN_COMPLETED`、`PAYOUT_CREATED`、`PAYOUT_UPDATED` 和 `PAYOUT_COMPLETED`，以及 `ZK_PAYMENT_SUCCEEDED`。权威列表是 `prisma/schema.prisma` 中的 `WebhookEventType` 枚举。
+事件类型：`PAYMENT_INTENT_CREATED`、`PAYMENT_INTENT_UPDATED`、`PAYMENT_INTENT_SUCCEEDED`、`PAYMENT_INTENT_FAILED`、`PAYMENT_INTENT_CANCELLED`、`PAYMENT_INTENT_DELETED`、`SWAP_CREATED`、`SWAP_SUBMITTED`、`SWAP_SUCCEEDED`、`SWAP_FAILED`、`LIQUIDITY_CREATED`、`LIQUIDITY_SUBMITTED`、`LIQUIDITY_SUCCEEDED`、`LIQUIDITY_FAILED`、`CROSS_CHAIN_SWAP_CREATED`、`CROSS_CHAIN_SWAP_UPDATED`、`CROSS_CHAIN_SWAP_SUCCEEDED`、`CROSS_CHAIN_SWAP_REFUNDED`、`CROSS_CHAIN_SWAP_FAILED`、`CROSS_CHAIN_SWAP_EXPIRED`，以及来自 BlindPay 的 `RECEIVER_UPDATED`、`PAYIN_CREATED`、`PAYIN_UPDATED`、`PAYIN_COMPLETED`、`PAYOUT_CREATED`、`PAYOUT_UPDATED` 和 `PAYOUT_COMPLETED`，以及 `ZK_PAYMENT_SUCCEEDED`，还有受保护付款的 `PROTECTED_PAYMENT_CREATED`、`PROTECTED_PAYMENT_FUNDED`、`PROTECTED_PAYMENT_SHIPPED`、`PROTECTED_PAYMENT_APPROVED`、`PROTECTED_PAYMENT_RELEASED`、`PROTECTED_PAYMENT_DISPUTED`、`PROTECTED_PAYMENT_RESOLVED`、`PROTECTED_PAYMENT_DEADLINE_PASSED`、`PROTECTED_PAYMENT_EXPIRED` 和 `PROTECTED_PAYMENT_CANCELLED`。权威列表是 `prisma/schema.prisma` 中的 `WebhookEventType` 枚举。
 
 **来自 BlindPay 的事件体。** `RECEIVER_UPDATED` / `PAYIN_*` / `PAYOUT_*` 只携带标识和状态——id、状态、金额、支付通道——绝不包含个人数据。服务商对象不会被转发，因为 receiver 的 payload 是一份完整的 KYC 档案，而订阅事件只需要 `webhooks:write`。请使用持有 `kyc:read` / `onramp:read` / `offramp:read` 的 key 通过 API 获取详细信息。字段白名单见 `src/native-plugins/blindpay/blindpay-event-redaction.ts`。
 
@@ -1267,6 +1290,101 @@ KYC_REDIRECT_URL_WHITELIST={"cosmos_acme":["acme.com","app.acme.com"]}
 
 它**默认拒绝（fail closed）**：没有条目的消费者完全无法使用重定向，带末尾点号或 IDN 形式的主机会被拒绝，而不是被规范化。每个接受 `redirect_url` 的路由都会检查它，包括管理员批准，后者使用的是该 receiver 所属消费者的白名单。被拒绝的协议或主机返回 `400`。
 
+## 受保护付款（Trustless Work）
+
+> **原生插件。** 本节的全部内容都是 `trustless-work` 插件（`src/native-plugins/trustless-work/`），仅当 `PLUGINS_ENABLED` 包含 `trustless-work` 时提供。仅限 Stellar，仅限 USDC（即资产注册表在该 key 所在网络上担保的发行方）。Trustless Work 把它的合约称为 escrow；本服务、其路由和 webhook 则称之为受保护付款。
+
+受保护付款会持有买家的钱，直到订单交付。商户创建它（`POST /v1/protected-payments`），并把它的 `checkoutUrl` 发给买家，即位于 `<payments origin>/protected/<id>` 的收银页。买家首次注资时，本服务会在 Stellar 上部署一个 [Trustless Work](https://www.trustlesswork.com) V1 单次放款（single-release）合约，由 Cosmos Pay 平台密钥签名并支付费用，然后把 USDC 存款交给买家签名。从那时起，资金只在链上流转：商户附上物流追踪证据，把订单标记为已发货；批准方确认交付；放款签名方把资金放给商户；任何一方也可以改为发起争议。本服务从不持有这笔钱，也从不代替任何一方签名：它通过 Trustless Work 的 API 构建每一笔交易，检查 envelope 恰好是所请求的调用，将其记录下来，并且只转发已记录交易的已签名副本。
+
+### 工作原理
+
+```
+CREATED --fund (the deploy)--> AWAITING_FUNDING --deposit--> FUNDED --ship--> SHIPPED
+        --approve--> APPROVED --release--> RELEASED
+FUNDED | SHIPPED | APPROVED --dispute--> DISPUTED --resolve--> RESOLVED
+CREATED | AWAITING_FUNDING --funding window passes--> EXPIRED
+CREATED | AWAITING_FUNDING --merchant cancels--> CANCELLED
+```
+
+- **买家在部署时绑定。** 商户可以在创建时指定 `buyerAddress`（在 B2B 中很常见）；否则，第一个注资的账户会被绑定。每笔付款只部署一次，并且只有在 Horizon 显示买家持有足额的 USDC、且商户已信任 USDC（trustline）之后才会部署。此后换成另一个买家会得到 `409 protected_payment_buyer_mismatch`。
+- **每个 envelope 在被记录或签名之前都会经过检查**（`trustless-work-envelope.ts`）：没有 memo，时间边界在 15 分钟以内，手续费不超过 `TRUSTLESS_WORK_MAX_FEE_STROOPS`，只有一次对该付款自身合约的调用且参数与所请求的完全一致，并且只有一个授权条目，即签名者的授权，其下不含任何内容（存款时，其下只允许买家向合约转入 USDC 的那一笔转账）。部署必须以完全符合预期的角色、金额、手续费、USDC 合约以及一个未批准的里程碑（milestone）来初始化合约；买家付款所进入的合约 id 由部署者和平台所签名的 salt 推导得出，绝不取自 Trustless Work 的答复。拒绝会记录到日志，并返回 `502 provider_error`。
+- **submit 只转发在此构建的交易**：针对该付款、其网络和调用方自己的地址，在其过期之前，且只转发一次：答复会被保存，之后的每次重放都返回它，与 DeFindex 相同。
+- **以链上状态为准。** Trustless Work 没有 webhook，因此一个同步任务（随 `OBSERVER_ENABLED` 开启，每 30 秒一次）通过 Trustless Work 读回未结束的合约（并在链上核对），把每笔付款推进到其合约所显示的状态；当 Trustless Work 答复 `SUCCESS` 时，submit 路由会乐观地推进它。每一步的 webhook 只发送一次，无论谁最先看到它；`PROTECTED_PAYMENT_RELEASED`、`_RESOLVED`、`_EXPIRED` 和 `_CANCELLED` 是持久的终态事件。
+- **买家的路由不需要 API key。** `/v1/protected-payment-links/{id}` 与 `/v1/payment-links/{id}` 一样是 `@Public()`：id（一个 uuid）本身就是访问凭证（capability），每个路由都按客户端地址计预算，返回的是买家视图（projection），绝不包含商户的账户或 `reference`。仅凭 id 能解锁的任何操作都不会转移资金：它构建的每个 envelope 都要由已绑定的买家签名，部署只发生一次，而平台为没有角色的买家发起的争议，需要买家对 `disputeChallenge` 的签名。
+
+### 放款模式
+
+| `releaseModel` | 批准交付 | 放出资金 | 说明 |
+| --- | --- | --- | --- |
+| `BUYER_RELEASES` | 买家 | 买家 | 货到付款：买家确认收货并放款（V1 中需要两次签名） |
+| `MERCHANT_RELEASES` | 商户 | 商户 | 商户在发货时批准并放款。买家在合约中没有角色，因此在买家对 `disputeChallenge` 签名后，由平台密钥为其发起争议 |
+| `BUYER_APPROVES_MERCHANT_RELEASES` | 买家 | 商户 | 买家确认收货，商户收款 |
+
+在所有模式中，商户都是服务提供方（service provider）和收款方（receiver），平台角色是 Cosmos Pay 的平台账户，争议裁决方则取决于截止时间策略。
+
+### 截止时间策略
+
+商户设置 `deliveryWindowHours`（1 到 2160）；交付截止时间等于注资时间加上这个时长。当截止时间已过，而付款仍处于已注资状态，且尚未放款、未发起争议、也未被裁决时：
+
+| `deadlinePolicy` | 争议裁决方 | 截止时间到达时 |
+| --- | --- | --- |
+| `MANUAL_REVIEW` | 运维地址（`TRUSTLESS_WORK_OPS_RESOLVER_*`），其密钥从不存放在本服务器上 | 设置 `deadlinePassedAt` 并发出 `PROTECTED_PAYMENT_DEADLINE_PASSED`；双方仍可批准、放款或发起争议，运维通过 `POST /v1/admin/protected-payments/{id}/resolve` 裁决争议，并在钱包中签名 |
+| `REFUND_BUYER` | 自动裁决密钥（`TRUSTLESS_WORK_RESOLVER_SECRET_*`） | 截止时间任务用平台密钥发起争议，然后用裁决密钥把全部余额裁决给买家 |
+| `RELEASE_MERCHANT` | 自动裁决密钥 | 同上，但把全部余额裁决给商户 |
+
+截止时间任务从不裁决由某一方发起的争议：由运维通过管理路由决定（对于自动策略的付款，服务器随后用裁决密钥签名）。裁决只会向该付款自己的买家和商户付款，两者合计等于合约的余额。当该网络没有裁决密钥时，自动策略在创建时会被拒绝（`503 misconfigured`）；没有运维地址时，`MANUAL_REVIEW` 同样会被拒绝。无人注资的付款在 `fundingWindowHours`（默认 72）之后过期，商户可以在此之前取消它。
+
+### 密钥及其风险
+
+| 变量（按网络，`_TESTNET` / `_MAINNET`） | 用途 | 泄露的后果 |
+| --- | --- | --- |
+| `TRUSTLESS_WORK_API_KEY_*` | Trustless Work 的 API key（`x-api-key`）；为空时，该网络上的每个受保护付款路由都返回 `503 misconfigured` | 有人会耗用本部署的 Trustless Work 配额（每分钟 50 次请求） |
+| `TRUSTLESS_WORK_PLATFORM_SECRET_*` | Cosmos Pay 的平台账户：为每次部署（并支付其 XLM）以及平台发起的争议签名，并接收平台手续费 | 其上的 XLM 和手续费；与裁决密钥一起泄露时，见下文 |
+| `TRUSTLESS_WORK_RESOLVER_SECRET_*` | `REFUND_BUYER` 和 `RELEASE_MERCHANT` 策略的自动裁决方 | 与平台密钥一起泄露时：每一笔已注资的自动策略付款 |
+| `TRUSTLESS_WORK_OPS_RESOLVER_*` | 只是一个地址：运维在钱包中为 `MANUAL_REVIEW` 的裁决签名 | 本服务器上没有任何东西 |
+
+- **平台密钥与裁决密钥同时泄露，可以掏空每一笔已注资的自动策略付款：** 平台发起争议，而合约允许裁决方向任意地址付款。代码只会裁决给该付款自己的买家和商户，但这只是代码层面的防护，而不是密钥层面的防护。`MANUAL_REVIEW` 付款不受影响：其裁决方的密钥不在服务器上。请把这两个密钥保存在机密存储（secret store）中，并在第一次测试网部署把 `TRUSTLESS_WORK_DEPLOYER_CONTRACT_*` 和 `TRUSTLESS_WORK_CONTRACT_WASM_HASH_*` 记录到日志之后，固定（pin）这两个值。在主网上这两个固定值都是必需的：缺少任何一个，插件都会拒绝启动。
+- **平台手续费会在一个热密钥上不断累积。** 每次放款和裁决时，合约都会把 Cosmos Pay 的份额付给平台账户：请定期把它归集到冷存储。该账户必须信任 USDC，否则每次放款和裁决都会失败。
+- 启动时会拒绝：API key 与平台密钥没有同时设置的网络、无法解析的密钥，以及在三个角色中身兼两个的同一账户（合约从不允许争议裁决方发起争议）。
+
+### 手续费
+
+一笔受保护付款的费用是 **1.95%**：Trustless Work 固定的 0.30%（硬编码在其合约中），加上 Cosmos Pay 的 `TRUSTLESS_WORK_PLATFORM_FEE_BPS`（默认 165，即 1.65%），后者由合约按每笔付款保存。合约在链上从其付出的款项中扣除这两项费用，各自向下取整：既从商户的放款中扣除，也从争议裁决的每一部分中扣除，因此**退款到达买家时同样已扣除 1.95%**。计算示例，一笔 100 USDC 的付款：
+
+| 步骤 | USDC |
+| --- | --- |
+| 买家存入 | 100 |
+| Trustless Work 的手续费（0.30%） | 0.30 |
+| Cosmos Pay 的手续费（1.65%） | 1.65 |
+| 放款时商户收到 | 98.05 |
+| 全额退款时买家收到 | 98.05 |
+| 按 60 / 40 裁决时付给买家 / 商户 | 58.83 / 39.22 |
+
+部署所需的 XLM 由平台承担；每一方支付自己所签交易的网络手续费。每个响应都在 `fees` 中显示费用拆分（`trustlessWorkBps`、`platformBps`、`totalBps`、`merchantReceives`）。
+
+### 受保护付款路由
+
+| 方法 | 路径 | 用途 |
+| ------ | ---- | ------- |
+| POST | `/v1/protected-payments` | 创建（尚无链上操作），支持 `Idempotency-Key` |
+| GET | `/v1/protected-payments` | 该 key 在其网络上的付款 |
+| GET | `/v1/protected-payments/{id}` | 单笔付款，附带 `checkoutUrl` 和 `fees` |
+| POST | `/v1/protected-payments/{id}/ship` | 构建附带物流追踪 `evidence` 的发货标记 |
+| POST | `/v1/protected-payments/{id}/approve` | 构建商户的批准（`MERCHANT_RELEASES`） |
+| POST | `/v1/protected-payments/{id}/release` | 构建商户的放款 |
+| POST | `/v1/protected-payments/{id}/dispute` | 构建商户的争议 |
+| POST | `/v1/protected-payments/{id}/cancel` | 取消一笔无人注资的付款 |
+| POST | `/v1/protected-payments/submit` | 转发在此构建、由商户签名的交易 |
+| GET | `/v1/protected-payment-links/{id}` | 买家视图，无需 API key |
+| POST | `/v1/protected-payment-links/{id}/fund` | 部署（首次调用）并构建买家的存款 |
+| POST | `/v1/protected-payment-links/{id}/approve` | 构建买家的交付确认 |
+| POST | `/v1/protected-payment-links/{id}/release` | 构建买家的放款（`BUYER_RELEASES`） |
+| POST | `/v1/protected-payment-links/{id}/dispute` | 买家的争议：交给买家签名，或由平台发起 |
+| POST | `/v1/protected-payment-links/{id}/submit` | 转发在此构建、由买家签名的交易 |
+| GET | `/v1/admin/protected-payments` | 平台控制台：所有 tenant 的受保护付款 |
+| POST | `/v1/admin/protected-payments/{id}/resolve` | 平台控制台：裁决一项争议 |
+| POST | `/v1/admin/protected-payments/{id}/submit` | 平台控制台：转发运维钱包签名的裁决 |
+
 ## 插件 — 以 slug 命名的扩展
 
 其他团队以**插件**的形式把自己的技术集成到本服务：`plugins/` 下的一个目录，在
@@ -1430,6 +1548,7 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
 | ---- | ---------- |
 | `blindpay` | KYC、入金、出金、BlindPay webhook、其 `/v1/admin` 路由（`receivers`、`payins`、`payouts`）以及管理概览中的 `fiat` 部分 |
 | `defindex` | `/v1/defindex`——Stellar 上的 DeFindex vaults |
+| `trustless-work` | `/v1/protected-payments`、无需 key 的 `/v1/protected-payment-links` 以及 `/v1/admin/protected-payments`：Stellar 上基于 Trustless Work 的受保护付款 |
 
 - **未列出即不存在。** `PLUGINS_ENABLED` 未列出的原生插件永远不会被实例化：其路由返回
   404，其任务从不启动，其变量也不会被校验。若其密钥已设置而 slug 未列出，启动时会发出警告。
@@ -1447,8 +1566,19 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
   的哈希，只有当它是这些记录之一时才转发；此前它会转发任何已签名的交易。每笔交易只转发
   一次：DeFindex 的回答会被保存，并返回给之后对它的每一次提交。任何 DeFindex 路由都不接受
   共享公共 key：钱包的 Earn 页面使用已登录账户自己的 key 调用它们。
+- **受保护付款同样遵守 DeFindex 的规则**：Trustless Work 构建的每个 envelope 在被记录或签名之前都会经过检查，其 submit 只转发这些记录（见*受保护付款（Trustless Work）*）。其买家路由是原生插件中唯一不需要 API key 的路由组。
 
 ## 升级 — 破坏性变更与部署说明
+
+### 受保护付款：一个新的原生插件、两张数据表和十个 webhook 事件
+
+- **迁移 `20261102120000_protected_payments`** 创建 `protected_payment` 和 `protected_payment_transaction` 表以及五个枚举，并向 `WebhookEventType` 追加十个值；不改写任何已有数据。在新构建开始提供服务之前运行 `migrate deploy`。
+- **启用之前处于关闭状态。** 把 `trustless-work` 加入 `PLUGINS_ENABLED`，并为某个网络至少设置 `TRUSTLESS_WORK_API_KEY_*` 和 `TRUSTLESS_WORK_PLATFORM_SECRET_*`；缺少它们时，其路由在该网络上返回 `503 misconfigured`。平台账户需要 XLM（它支付每一次部署）和 USDC trustline（它在每次放款时接收手续费）。
+- **APISIX 需要为买家一侧配置一条无 key 路由。** `/v1/protected-payment-links/*` 与 `/v1/payment-links/*` 一样是 `@Public()`：请把它作为不带 key-auth 的前缀路由提供，与需要 key 的 `/v1/protected-payments` 路由并列。开发者平台会在之后的版本中添加这条路由和收银页（`<payments origin>/protected/<id>`，origin 取自 `PAYMENT_LINK_CHECKOUT_URL`）。
+- **新的 webhook 事件：** `PROTECTED_PAYMENT_CREATED`、`PROTECTED_PAYMENT_FUNDED`、`PROTECTED_PAYMENT_SHIPPED`、`PROTECTED_PAYMENT_APPROVED`、`PROTECTED_PAYMENT_RELEASED`、`PROTECTED_PAYMENT_DISPUTED`、`PROTECTED_PAYMENT_RESOLVED`、`PROTECTED_PAYMENT_DEADLINE_PASSED`、`PROTECTED_PAYMENT_EXPIRED` 和 `PROTECTED_PAYMENT_CANCELLED`。订阅了所有事件的端点会收到它们；使用显式列表的端点在把它们加入列表之前不会收到。
+- **新的错误码** `protected_payment_buyer_mismatch`（409）和 `protected_payment_signature_invalid`（400）。
+- **新的配额：** `protected-payments:create`（每分钟 30 次）、`protected-payments:build` 和 `protected-payments:submit`（各每分钟 20 次），按 consumer 和客户端地址计；无 key 路由上按客户端地址计：`protected-payment-links:read`（60）、`protected-payment-links:build`（10）和 `protected-payment-links:submit`（20）。
+- **DeFindex 保持不变：** 其 envelope 检查移到了 `src/stellar/soroban-envelope.ts`，与本插件共用，规则和消息都相同。
 
 ### DeFindex：submit 绑定到本服务的构建，并对公共 key 关闭
 
@@ -2139,7 +2269,18 @@ curl -H "X-Gateway-Secret: $APISIX_GATEWAY_SECRET" -H "X-Consumer-Username: ops"
 | `DEFINDEX_BASE_URL` | 否 | `https://api.defindex.io` | DeFindex API 基础 URL |
 | `DEFINDEX_TIMEOUT_MS` | 否 | `30000` | DeFindex HTTP 超时（ms） |
 | `DEFINDEX_MAX_FEE_STROOPS` | 否 | `10000000` | 构建出的 DeFindex 交易最多可向签名者收取的费用，包含费与 Soroban 资源费合计（stroops）；超过时构建以 `502 provider_error` 拒绝 |
-| `PLUGINS_ENABLED` | 否 | — | 本部署提供的插件 slug，逗号分隔：`plugins/` 中的沙箱插件，以及原生插件 `blindpay` 和 `defindex`。为空则不提供任何插件；未列出的插件永远不会被加载 |
+| `TRUSTLESS_WORK_API_KEY_TESTNET` | 测试网上的受保护付款需要 | — | Trustless Work 的测试网 API key（供 `dev` key 使用）。仅当 `PLUGINS_ENABLED` 包含 `trustless-work` 时路由才存在；没有该 key 时，它们在测试网上返回 `503 misconfigured`。需要同时设置 `TRUSTLESS_WORK_PLATFORM_SECRET_TESTNET` |
+| `TRUSTLESS_WORK_BASE_URL_TESTNET` | 否 | `https://dev.api.trustlesswork.com` | 测试网的 Trustless Work V1 API |
+| `TRUSTLESS_WORK_PLATFORM_SECRET_TESTNET` | 与 API key 一起 | — | Cosmos Pay 的平台账户（S...）：为部署和平台发起的争议签名，支付其 XLM，并接收平台手续费。必须信任 USDC。这是热密钥：请归集其上的手续费 |
+| `TRUSTLESS_WORK_RESOLVER_SECRET_TESTNET` | `REFUND_BUYER` / `RELEASE_MERCHANT` 需要 | — | 自动争议裁决方（S...）。未设置时，这些策略在创建时返回 `503 misconfigured`。必须与平台密钥不同 |
+| `TRUSTLESS_WORK_OPS_RESOLVER_TESTNET` | `MANUAL_REVIEW` 需要 | — | 运维裁决方的地址（G...），在钱包中签名。未设置时，`MANUAL_REVIEW` 在创建时返回 `503 misconfigured`。必须与上述两个密钥都不同 |
+| `TRUSTLESS_WORK_DEPLOYER_CONTRACT_TESTNET` | 否 | — | 固定值（pin）：部署必须调用这个 Trustless Work 部署合约（C...）。未设置时，每次部署都会把它记录到日志 |
+| `TRUSTLESS_WORK_CONTRACT_WASM_HASH_TESTNET` | 否 | — | 固定值（pin）：部署必须安装这个合约 wasm（64 个 hex 字符）。未设置时，每次部署都会把它记录到日志 |
+| `TRUSTLESS_WORK_*_MAINNET` | 否 | — | 供 `prod` key 使用的同一组变量（`_API_KEY`、默认值为 `https://api.trustlesswork.com` 的 `_BASE_URL`、`_PLATFORM_SECRET`、`_RESOLVER_SECRET`、`_OPS_RESOLVER`、`_DEPLOYER_CONTRACT`、`_CONTRACT_WASM_HASH`） |
+| `TRUSTLESS_WORK_PLATFORM_FEE_BPS` | 否 | `165` | Cosmos Pay 对受保护付款收取的手续费，单位为基点；Trustless Work 另加其固定的 30（合计 1.95%）。修改后只对之后创建的付款生效 |
+| `TRUSTLESS_WORK_TIMEOUT_MS` | 否 | `30000` | 单次 Trustless Work 调用的时间预算（ms） |
+| `TRUSTLESS_WORK_MAX_FEE_STROOPS` | 否 | `20000000` | 一笔受保护付款交易最多可向签名者收取的费用，包含费与 Soroban 资源费合计（stroops）；超过时构建以 `502 provider_error` 拒绝。即 2 XLM，供部署使用 |
+| `PLUGINS_ENABLED` | 否 | — | 本部署提供的插件 slug，逗号分隔：`plugins/` 中的沙箱插件，以及原生插件 `blindpay`、`defindex` 和 `trustless-work`。为空则不提供任何插件；未列出的插件永远不会被加载 |
 | `PLUGINS_SECRET` | 当已启用的插件有 secret 设置时 | — | 封存插件安装的 secret 设置（至少 32 个字符）。更改它会使所有已存储的插件 secret 无法读取 |
 | `PLUGINS_TRUSTED_KEYS` | 否 | — | 除 Cosmos Pay 支持团队之外，其插件可在此运行的签名者：逗号分隔的 `<keyId>:<base64url Ed25519 公钥>`。由其他人签名、或签名后被修改的插件会使启动失败 |
 | `PLUGINS_ALLOW_UNSIGNED` | 否 | `false` | 运行没有 `signature.json` 的插件，用于在本地编写插件。`NODE_ENV=production` 时拒绝 |

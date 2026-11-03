@@ -107,4 +107,8 @@ export enum AdvisoryLockKey {
   ChainSwapObserver = 881_013,
   BlindpayReconciler = 881_014,
   EasyRecoverySweeper = 881_015,
+  // Protected payments (native plugin `trustless-work`).
+  ProtectedPaymentSync = 881_016,
+  ProtectedPaymentExpiry = 881_017,
+  ProtectedPaymentDeadline = 881_018,
 }

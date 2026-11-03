@@ -240,6 +240,10 @@ const TAG_DESCRIPTIONS: Record<string, string> = {
     'Extensions served under a slug: list them, install one for this key, and run its actions.',
   DeFindex:
     'DeFindex yield vaults on Stellar: discover vaults, read a balance, build a deposit or withdrawal, submit it.',
+  'Protected payments':
+    'Payments held until delivery: the buyer pays USDC into a Trustless Work contract and it is released to the merchant on the terms the merchant chose.',
+  'Protected payment links':
+    'The buyer’s side of a protected payment, without an API key: read it, fund it, confirm delivery, release or dispute it.',
 };
 
 /**
@@ -351,6 +355,9 @@ const UPSTREAM_FAILURES: Record<
   // or axios' error and never says which: every failure is a 502
   // `provider_error`, and a deployment without its API key a 503.
   DeFindex: ['UpstreamError', 'UpstreamUnavailable'],
+  // Reached through `requestUpstreamJson`: its 5xx (and a build that answers
+  // FAILED) is 502, a refused key or its rate limit 503, a timeout 504.
+  'Trustless Work': ['UpstreamError', 'UpstreamUnavailable', 'UpstreamTimeout'],
 };
 
 const RESPONSE_STATUS: Record<SharedErrorResponse, number> = {

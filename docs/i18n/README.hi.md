@@ -113,6 +113,8 @@ src/
   native-plugins/                 first-party plugins, imported only when PLUGINS_ENABLED names them:
     blindpay/                     BlindPay: client, Svix verify, sync + webhook, kyc/, onramp/, offramp/, admin/
     defindex/                     DeFindex vaults (Stellar)
+    trustless-work/               protected payments on Trustless Work (Stellar): client, envelope checks,
+                                  sync / expiry / deadline jobs, the keyless buyer routes, admin/
   health/                         liveness/readiness probes (@Public)
 prisma/schema.prisma              Consumer, PaymentIntent, Swap, ChainSwap, CrossChainSwap, LiquidityPoolOperation,
                                   WebhookEndpoint/Delivery/EmittedEvent, BlindpayReceiver,
@@ -123,6 +125,7 @@ prisma/schema.prisma              Consumer, PaymentIntent, Swap, ChainSwap, Cros
                                   AliasChallenge, AliasRecovery, ZkPayment, Usdt0Transfer,
                                   EasyRecoverySession
                                   PluginInstallation, PluginRecord
+                                  ProtectedPayment, ProtectedPaymentTransaction
 test/                             e2e suites: gateway gate, admin + alias console gates,
                                   payment intents, swaps, liquidity pools, KYC, webhooks
 plugins/                          THE plugins folder: one <slug>/ per plugin (plugin.json, index.ts, signature.json)
@@ -167,6 +170,8 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | Easy recovery     | `/v1/wallet/easy-recovery` | पाँच मिनट के ऐसे mailbox के ज़रिए wallet को दो devices के बीच ले जाना जिसे यह service खोल नहीं सकती |
 | एसेट्स            | `/v1/assets`             | प्रति नेटवर्क चुनी हुई एसेट रजिस्ट्री                   |
 | पब्लिक key         | `/v1/public-key`         | साझा public API key, बिना key के दी जाती है (`@Public`) |
+| सुरक्षित भुगतान   | `/v1/protected-payments` | Delivery तक Trustless Work contract में रोके गए payments (Stellar पर USDC, 1.95%): create, ship, approve, release, dispute |
+| सुरक्षित भुगतान links | `/v1/protected-payment-links` | सुरक्षित भुगतान में buyer का हिस्सा: उसे पढ़ना, fund करना, confirm करना, release करना, dispute करना (`@Public`) |
 | Analytics         | `/v1/summary`, `/v1/balances`, `/v1/logs` | डैशबोर्ड के aggregates (payments, swaps, liquidity, webhooks) और लॉग |
 | एक्टिविटी         | `/v1/activity`           | client द्वारा रिपोर्ट किए गए events: ingest, feed, rollup |
 | Plugins           | `/v1/plugins`            | एक slug के तहत compile किए गए extensions, हर tenant के लिए install |
@@ -196,6 +201,9 @@ Paths OpenAPI के `{param}` रूप में लिखे गए हैं
 | GET | `/v1/admin/payment-intents` | प्लेटफ़ॉर्म कंसोल |  |
 | GET | `/v1/admin/payouts` | प्लेटफ़ॉर्म कंसोल |  |
 | GET | `/v1/admin/products` | प्लेटफ़ॉर्म कंसोल |  |
+| GET | `/v1/admin/protected-payments` | प्लेटफ़ॉर्म कंसोल |  |
+| POST | `/v1/admin/protected-payments/{id}/resolve` | प्लेटफ़ॉर्म कंसोल |  |
+| POST | `/v1/admin/protected-payments/{id}/submit` | प्लेटफ़ॉर्म कंसोल |  |
 | GET | `/v1/admin/receivers` | प्लेटफ़ॉर्म कंसोल |  |
 | PATCH | `/v1/admin/receivers/{id}/access` | प्लेटफ़ॉर्म कंसोल |  |
 | POST | `/v1/admin/receivers/{id}/approve` | प्लेटफ़ॉर्म कंसोल |  |
@@ -305,6 +313,21 @@ Paths OpenAPI के `{param}` रूप में लिखे गए हैं
 | GET | `/v1/products/{id}` | `products:read` |  |
 | PATCH | `/v1/products/{id}` | `products:write` |  |
 | DELETE | `/v1/products/{id}` | `products:write` |  |
+| GET | `/v1/protected-payments` | `payments:read` |  |
+| POST | `/v1/protected-payments` | `payments:write` |  |
+| POST | `/v1/protected-payments/submit` | `payments:write` |  |
+| GET | `/v1/protected-payments/{id}` | `payments:read` |  |
+| POST | `/v1/protected-payments/{id}/approve` | `payments:write` |  |
+| POST | `/v1/protected-payments/{id}/cancel` | `payments:write` |  |
+| POST | `/v1/protected-payments/{id}/dispute` | `payments:write` |  |
+| POST | `/v1/protected-payments/{id}/release` | `payments:write` |  |
+| POST | `/v1/protected-payments/{id}/ship` | `payments:write` |  |
+| GET | `/v1/protected-payment-links/{id}` | कोई नहीं: `@Public()`, हर client address का अपना budget |  |
+| POST | `/v1/protected-payment-links/{id}/approve` | कोई नहीं: `@Public()`, हर client address का अपना budget |  |
+| POST | `/v1/protected-payment-links/{id}/dispute` | कोई नहीं: `@Public()`, हर client address का अपना budget |  |
+| POST | `/v1/protected-payment-links/{id}/fund` | कोई नहीं: `@Public()`, हर client address का अपना budget |  |
+| POST | `/v1/protected-payment-links/{id}/release` | कोई नहीं: `@Public()`, हर client address का अपना budget |  |
+| POST | `/v1/protected-payment-links/{id}/submit` | कोई नहीं: `@Public()`, हर client address का अपना budget |  |
 | GET | `/v1/public-key` | none — `@Public()` |  |
 | GET | `/.well-known/stellar.toml` | none — `@Public()`, SEP-1 discovery (recovery servers only) |  |
 | GET | `/v1/sep10/auth` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
@@ -561,7 +584,7 @@ Event types: `PAYMENT_INTENT_CREATED`, `PAYMENT_INTENT_UPDATED`,
 `SWAP_FAILED`, `LIQUIDITY_CREATED`, `LIQUIDITY_SUBMITTED`, `LIQUIDITY_SUCCEEDED`,
 `LIQUIDITY_FAILED`, `CROSS_CHAIN_SWAP_CREATED`, `CROSS_CHAIN_SWAP_UPDATED`, `CROSS_CHAIN_SWAP_SUCCEEDED`, `CROSS_CHAIN_SWAP_REFUNDED`, `CROSS_CHAIN_SWAP_FAILED`, `CROSS_CHAIN_SWAP_EXPIRED`, और साथ में BlindPay से आने वाले `RECEIVER_UPDATED`, `PAYIN_CREATED`,
 `PAYIN_UPDATED`, `PAYIN_COMPLETED`, `PAYOUT_CREATED`, `PAYOUT_UPDATED` और
-`PAYOUT_COMPLETED`, साथ ही `ZK_PAYMENT_SUCCEEDED`। आधिकारिक सूची `prisma/schema.prisma` में मौजूद
+`PAYOUT_COMPLETED`, साथ ही `ZK_PAYMENT_SUCCEEDED`, और सुरक्षित भुगतानों के `PROTECTED_PAYMENT_CREATED`, `PROTECTED_PAYMENT_FUNDED`, `PROTECTED_PAYMENT_SHIPPED`, `PROTECTED_PAYMENT_APPROVED`, `PROTECTED_PAYMENT_RELEASED`, `PROTECTED_PAYMENT_DISPUTED`, `PROTECTED_PAYMENT_RESOLVED`, `PROTECTED_PAYMENT_DEADLINE_PASSED`, `PROTECTED_PAYMENT_EXPIRED`, `PROTECTED_PAYMENT_CANCELLED`। आधिकारिक सूची `prisma/schema.prisma` में मौजूद
 `WebhookEventType` enum है।
 
 **BlindPay से आई bodies।** `RECEIVER_UPDATED` / `PAYIN_*` / `PAYOUT_*` में केवल पहचान
@@ -1983,6 +2006,171 @@ backslash को `/` पढ़ता है, जबकि कुछ दूसर
 `redirect_url` लेने वाला हर रूट इसकी जाँच करता है, admin approval सहित, जो receiver के
 अपने consumer की सूची इस्तेमाल करता है। अस्वीकार किया गया scheme या host `400` है।
 
+## सुरक्षित भुगतान (Trustless Work)
+
+> **एक native plugin.** इस अनुभाग की हर चीज़ `trustless-work` plugin
+> (`src/native-plugins/trustless-work/`) है, जो केवल तब दिया जाता है जब `PLUGINS_ENABLED`
+> में `trustless-work` हो। सिर्फ़ Stellar, सिर्फ़ USDC (वह issuer जिसकी key के network पर
+> asset registry पुष्टि करती है)। Trustless Work अपने contract को escrow कहता है; यह
+> service, इसके routes और इसके webhooks उसे सुरक्षित भुगतान कहते हैं।
+
+सुरक्षित भुगतान buyer का पैसा तब तक रोककर रखता है जब तक order deliver न हो जाए। Merchant
+उसे बनाता है (`POST /v1/protected-payments`) और buyer को उसका `checkoutUrl` भेजता है, यानी
+`<payments origin>/protected/<id>` पर hosted checkout। जब buyer पहली बार उसे fund करता है,
+तो यह service Stellar पर एक [Trustless Work](https://www.trustlesswork.com) V1
+single-release contract deploy करती है, जिसे Cosmos Pay की platform key sign करती है और
+जिसका खर्च भी वही उठाती है, और buyer को sign करने के लिए USDC deposit सौंपती है। उसके बाद
+पैसा केवल on-chain चलता है: merchant tracking evidence के साथ order को shipped चिह्नित करता
+है, approver delivery की पुष्टि करता है, release signer funds merchant को release करता है,
+और इसकी जगह कोई भी पक्ष dispute खोल सकता है। यह service पैसा कभी अपने पास नहीं रखती और
+किसी पक्ष की ओर से कभी sign नहीं करती: यह हर transaction Trustless Work के API से बनाती
+है, जाँचती है कि envelope ठीक माँगी गई call है, उसे दर्ज करती है, और केवल किसी दर्ज
+transaction की signed copy ही relay करती है।
+
+### यह कैसे काम करता है
+
+```
+CREATED --fund (the deploy)--> AWAITING_FUNDING --deposit--> FUNDED --ship--> SHIPPED
+        --approve--> APPROVED --release--> RELEASED
+FUNDED | SHIPPED | APPROVED --dispute--> DISPUTED --resolve--> RESOLVED
+CREATED | AWAITING_FUNDING --funding window passes--> EXPIRED
+CREATED | AWAITING_FUNDING --merchant cancels--> CANCELLED
+```
+
+- **Buyer deploy के समय बँध जाता है।** Merchant create पर `buyerAddress` दे सकता है (B2B
+  में आम); वरना fund करने वाला पहला account बँध जाता है। Deploy हर payment के लिए एक ही
+  बार होता है, और तभी जब Horizon दिखाए कि buyer के पास वह राशि USDC में है और merchant
+  USDC को trust करता है। उसके बाद किसी दूसरे buyer को
+  `409 protected_payment_buyer_mismatch` मिलता है।
+- **हर envelope दर्ज या sign होने से पहले जाँचा जाता है**
+  (`trustless-work-envelope.ts`): कोई memo नहीं, time bounds 15 मिनट के भीतर, fee
+  `TRUSTLESS_WORK_MAX_FEE_STROOPS` के भीतर, payment के अपने contract पर ठीक माँगे गए
+  arguments के साथ एक ही call, और एक ही authorization entry, signer की, जिसके नीचे कुछ
+  नहीं (deposit के नीचे केवल buyer से contract में USDC का transfer)। Deploy को contract
+  ठीक अपेक्षित roles, राशि, fee, USDC contract और एक unapproved milestone के साथ
+  initialize करना होगा, और जिस contract id में buyer भुगतान करता है वह deployer और
+  platform द्वारा sign किए गए salt से निकाला जाता है, Trustless Work के जवाब से कभी नहीं
+  लिया जाता। अस्वीकृति log होती है और उसका जवाब `502 provider_error` होता है।
+- **Submit केवल वही relay करता है जो यहाँ बना था**, उसी payment, उसके network और caller
+  के अपने address के लिए, उसके expire होने से पहले, और केवल एक बार: जवाब सहेजा जाता है
+  और हर replay वही लौटाता है, जैसा DeFindex के साथ होता है।
+- **Chain ही अंतिम प्रमाण है।** Trustless Work के webhooks नहीं हैं, इसलिए एक sync job
+  (`OBSERVER_ENABLED` के साथ चालू, हर 30 सेकंड) खुले contracts को Trustless Work के ज़रिए
+  वापस पढ़ता है, on-chain जाँचकर, और हर payment को उस state पर ले जाता है जो उसका contract
+  दिखाता है; जब Trustless Work `SUCCESS` जवाब देता है, तो submit routes उसे optimistically
+  आगे बढ़ा देते हैं। हर step अपना webhook एक ही बार emit करता है, चाहे उसे पहले कोई भी
+  देखे, और `PROTECTED_PAYMENT_RELEASED`, `_RESOLVED`, `_EXPIRED` और `_CANCELLED` durable
+  terminal events हैं।
+- **Buyer के routes कोई API key नहीं लेते।** `/v1/protected-payment-links/{id}`
+  `@Public()` है, `/v1/payment-links/{id}` की तरह: id (एक uuid) ही capability है, हर
+  route का हर client address के लिए अपना budget है, और जवाब buyer का projection है, कभी
+  merchant का account या `reference` नहीं। केवल id से खुलने वाली कोई भी चीज़ पैसा नहीं
+  हिलाती: उससे बना हर envelope बँधे हुए buyer के sign करने के लिए है, deploy एक ही बार
+  होता है, और जिस buyer की कोई role नहीं, उसके लिए platform जो dispute खोलता है उसके लिए
+  `disputeChallenge` पर buyer का signature ज़रूरी है।
+
+### Release मॉडल
+
+| `releaseModel` | Delivery approve करता है | Funds release करता है | नोट्स |
+| --- | --- | --- | --- |
+| `BUYER_RELEASES` | buyer | buyer | Cash on delivery: buyer माल मिलने की पुष्टि करता है और release करता है (V1 में दो signatures) |
+| `MERCHANT_RELEASES` | merchant | merchant | Merchant ship करते समय approve और release करता है। Contract में buyer की कोई role नहीं होती, इसलिए buyer के `disputeChallenge` sign करने पर platform key उसका dispute खोलती है |
+| `BUYER_APPROVES_MERCHANT_RELEASES` | buyer | merchant | Buyer माल मिलने की पुष्टि करता है, merchant राशि प्राप्त करता है |
+
+हर मॉडल में merchant ही service provider और receiver है, platform role Cosmos Pay का
+platform account है, और dispute resolver deadline policy के अनुसार तय होता है।
+
+### Deadline नीतियाँ
+
+Merchant `deliveryWindowHours` (1 से 2160) सेट करता है; delivery deadline funding का समय
+और उसमें जोड़ी गई यह window है। जब यह deadline किसी ऐसे payment पर बीत जाती है जो अभी भी
+funded है और जिसे release, dispute या resolve नहीं किया गया:
+
+| `deadlinePolicy` | Dispute resolver | Deadline पर |
+| --- | --- | --- |
+| `MANUAL_REVIEW` | ops address (`TRUSTLESS_WORK_OPS_RESOLVER_*`), जिसकी key कभी इस server पर नहीं होती | `deadlinePassedAt` सेट होता है और `PROTECTED_PAYMENT_DEADLINE_PASSED` emit होता है; पक्ष अब भी approve, release या dispute कर सकते हैं, और ops किसी dispute को `POST /v1/admin/protected-payments/{id}/resolve` से resolve करता है, उसे wallet में sign करके |
+| `REFUND_BUYER` | automatic resolver key (`TRUSTLESS_WORK_RESOLVER_SECRET_*`) | deadline job platform key से dispute खोलता है, फिर resolver key से पूरा balance buyer के पक्ष में resolve करता है |
+| `RELEASE_MERCHANT` | automatic resolver key | वही, पूरा balance merchant के पक्ष में resolve करते हुए |
+
+Deadline job कभी ऐसा dispute resolve नहीं करता जिसे किसी पक्ष ने खोला हो: उसका फ़ैसला ops
+admin route से करता है (auto-policy वाले payment पर server फिर resolver key से sign करता
+है)। Resolution हमेशा केवल payment के अपने buyer और merchant को भुगतान करता है, और उन
+हिस्सों का जोड़ contract के balance के बराबर होता है। Create पर auto policy अस्वीकार होती
+है (`503 misconfigured`) जब network के पास कोई resolver key न हो, और `MANUAL_REVIEW` तब जब
+उसके पास कोई ops address न हो। जिस payment को किसी ने fund नहीं किया वह
+`fundingWindowHours` (default 72) के बाद expire हो जाता है, और merchant उससे पहले उसे cancel
+कर सकता है।
+
+### Keys और उनका जोखिम
+
+| Variable (प्रति network, `_TESTNET` / `_MAINNET`) | यह क्या है | Leak होने पर |
+| --- | --- | --- |
+| `TRUSTLESS_WORK_API_KEY_*` | Trustless Work की API key (`x-api-key`); खाली होने पर उस network पर हर सुरक्षित भुगतान route `503 misconfigured` लौटाता है | कोई deployment का Trustless Work quota (प्रति मिनट 50 requests) खर्च कर देता है |
+| `TRUSTLESS_WORK_PLATFORM_SECRET_*` | Cosmos Pay का platform account: हर deploy को (उसका XLM चुकाते हुए) और platform द्वारा खोले गए disputes को sign करता है, और platform fee प्राप्त करता है | उसका XLM और उस पर जमा fees; resolver key के साथ मिलकर, नीचे देखें |
+| `TRUSTLESS_WORK_RESOLVER_SECRET_*` | `REFUND_BUYER` और `RELEASE_MERCHANT` policies का automatic resolver | Platform key के साथ मिलकर, हर funded auto-policy payment |
+| `TRUSTLESS_WORK_OPS_RESOLVER_*` | केवल एक address: ops `MANUAL_REVIEW` resolutions को wallet में sign करता है | इस server पर कुछ नहीं |
+
+- **Leak हुई platform और resolver keys की जोड़ी हर funded auto-policy payment को खाली कर
+  सकती है:** platform एक dispute खोलता है, और contract resolver को किसी भी address को
+  भुगतान करने देता है। Code हमेशा केवल payment के अपने buyer और merchant के पक्ष में
+  resolve करता है, लेकिन यह code की सुरक्षा है, key की नहीं। `MANUAL_REVIEW` payments
+  जोखिम में नहीं हैं: उनके resolver की key server पर नहीं है। दोनों keys को secret store
+  में रखें, और पहला testnet deploy जैसे ही `TRUSTLESS_WORK_DEPLOYER_CONTRACT_*` और
+  `TRUSTLESS_WORK_CONTRACT_WASM_HASH_*` को log करे, उन्हें pin कर दें। Mainnet पर दोनों pins ज़रूरी हैं: उनके बिना
+  plugin boot नहीं होता।
+- **Platform fee एक hot key पर जमा होती जाती है।** Contract हर release और resolution पर
+  Cosmos Pay का हिस्सा platform account को चुकाता है: उसे नियमित रूप से cold storage में
+  sweep करें। उस account का USDC को trust करना ज़रूरी है, वरना हर release और resolution
+  fail हो जाता है।
+- Boot अस्वीकार करता है: ऐसा network जिसकी API key और platform key एक साथ सेट न हों, ऐसा
+  secret जो parse न हो, और तीन roles में से दो में एक ही account (contract कभी dispute
+  resolver को dispute खोलने नहीं देता)।
+
+### फ़ीस
+
+सुरक्षित भुगतान की लागत **1.95%** है: Trustless Work की तय 0.30%, जो उसके contract में
+hard-coded है, और Cosmos Pay का `TRUSTLESS_WORK_PLATFORM_FEE_BPS` (default 165, यानी
+1.65%), जिसे contract हर payment के लिए store करता है। Contract दोनों को on-chain काटता है,
+हर एक को नीचे की ओर round करके, उस राशि से जो वह चुकाता है: merchant के release से और
+dispute resolution के हर हिस्से से, इसलिए **refund भी buyer तक 1.95% कटकर ही पहुँचता
+है**। उदाहरण, 100 USDC का एक payment:
+
+| चरण | USDC |
+| --- | --- |
+| Buyer जमा करता है | 100 |
+| Trustless Work की fee (0.30%) | 0.30 |
+| Cosmos Pay की fee (1.65%) | 1.65 |
+| Release पर merchant को मिलता है | 98.05 |
+| पूरा refund buyer तक पहुँचता है | 98.05 |
+| 60 / 40 का resolution buyer / merchant को चुकाता है | 58.83 / 39.22 |
+
+Deploy का XLM platform देता है; हर पक्ष उन transactions की network fee चुकाता है जिन्हें
+वह sign करता है। हर जवाब `fees` में बँटवारा दिखाता है (`trustlessWorkBps`, `platformBps`,
+`totalBps`, `merchantReceives`)।
+
+### सुरक्षित भुगतान रूट्स
+
+| Method | Path | उद्देश्य |
+| ------ | ---- | -------- |
+| POST | `/v1/protected-payments` | बनाएँ (अभी कोई chain action नहीं), `Idempotency-Key` के साथ |
+| GET | `/v1/protected-payments` | Key के network पर उसके payments |
+| GET | `/v1/protected-payments/{id}` | एक payment, `checkoutUrl` और `fees` के साथ |
+| POST | `/v1/protected-payments/{id}/ship` | Tracking `evidence` के साथ shipped mark build करें |
+| POST | `/v1/protected-payments/{id}/approve` | Merchant की approval build करें (`MERCHANT_RELEASES`) |
+| POST | `/v1/protected-payments/{id}/release` | Merchant का release build करें |
+| POST | `/v1/protected-payments/{id}/dispute` | Merchant का dispute build करें |
+| POST | `/v1/protected-payments/{id}/cancel` | ऐसा payment cancel करें जिसे किसी ने fund नहीं किया |
+| POST | `/v1/protected-payments/submit` | यहाँ बना, merchant द्वारा signed transaction relay करें |
+| GET | `/v1/protected-payment-links/{id}` | Buyer का view, बिना API key |
+| POST | `/v1/protected-payment-links/{id}/fund` | Deploy (पहली call) और buyer का deposit build करें |
+| POST | `/v1/protected-payment-links/{id}/approve` | Delivery की buyer की पुष्टि build करें |
+| POST | `/v1/protected-payment-links/{id}/release` | Buyer का release build करें (`BUYER_RELEASES`) |
+| POST | `/v1/protected-payment-links/{id}/dispute` | Buyer का dispute: sign करने के लिए, या platform द्वारा खोला गया |
+| POST | `/v1/protected-payment-links/{id}/submit` | यहाँ बना, buyer द्वारा signed transaction relay करें |
+| GET | `/v1/admin/protected-payments` | प्लेटफ़ॉर्म कंसोल: हर tenant के सुरक्षित भुगतान |
+| POST | `/v1/admin/protected-payments/{id}/resolve` | प्लेटफ़ॉर्म कंसोल: एक dispute resolve करें |
+| POST | `/v1/admin/protected-payments/{id}/submit` | प्लेटफ़ॉर्म कंसोल: ops wallet का resolution relay करें |
+
 ## Plugins — एक slug के तहत extensions
 
 दूसरी टीमें अपनी technology को इस service में एक **plugin** के रूप में जोड़ती हैं:
@@ -2162,6 +2350,7 @@ seal होती हैं और कभी लौटाई नहीं जा
 | ---- | ------------ |
 | `blindpay` | KYC, onramp, offramp, BlindPay webhook, उसके `/v1/admin` routes (`receivers`, `payins`, `payouts`) और admin summary का `fiat` अनुभाग |
 | `defindex` | `/v1/defindex` — Stellar पर DeFindex vaults |
+| `trustless-work` | `/v1/protected-payments`, बिना key वाले `/v1/protected-payment-links` और `/v1/admin/protected-payments`: Trustless Work (Stellar) पर सुरक्षित भुगतान |
 
 - **सूची में नहीं, तो मौजूद नहीं।** जिस native plugin का नाम `PLUGINS_ENABLED` में नहीं
   है वह कभी instantiate नहीं होता: उसके routes 404 लौटाते हैं, उसके jobs कभी शुरू नहीं
@@ -2186,8 +2375,42 @@ seal होती हैं और कभी लौटाई नहीं जा
   ही बार relay होता है: DeFindex का जवाब सहेजा जाता है और उसके हर बाद के submit को
   वही लौटाया जाता है। कोई भी DeFindex route साझा public key को स्वीकार नहीं करता:
   वॉलेट की Earn स्क्रीन उन्हें signed-in account की अपनी key से call करती है।
+- **सुरक्षित भुगतान भी DeFindex के नियम से बँधे हैं**: Trustless Work जो भी envelope
+  बनाता है वह दर्ज या sign होने से पहले जाँचा जाता है, और उनके submits केवल उन्हीं rows
+  को relay करते हैं (देखें *सुरक्षित भुगतान (Trustless Work)*)। उनके buyer routes native
+  plugins का अकेला route group हैं जो कोई API key नहीं लेता।
 
 ## अपग्रेड — breaking changes और deploy नोट्स
+
+### सुरक्षित भुगतान: एक नया native plugin, दो tables और दस webhook events
+
+- **Migration `20261102120000_protected_payments`** `protected_payment` और
+  `protected_payment_transaction` tables और पाँच enums बनाता है, और `WebhookEventType` में
+  दस values जोड़ता है; कुछ भी दोबारा नहीं लिखा जाता। नया build traffic serve करे, उससे
+  पहले `migrate deploy` चलाएँ।
+- **चालू करने तक बंद।** `PLUGINS_ENABLED` में `trustless-work` जोड़ें और किसी network के
+  लिए कम से कम `TRUSTLESS_WORK_API_KEY_*` और `TRUSTLESS_WORK_PLATFORM_SECRET_*` सेट करें;
+  इनके बिना उस network पर इसके routes `503 misconfigured` लौटाते हैं। Platform account को
+  XLM चाहिए (वह हर deploy का खर्च उठाता है) और एक USDC trustline (वह हर release पर fee
+  प्राप्त करता है)।
+- **APISIX को buyer वाले हिस्से के लिए एक keyless route चाहिए।** `/v1/protected-payment-links/*`
+  `@Public()` है, `/v1/payment-links/*` की तरह: इसे key-auth के बिना prefix route के रूप में
+  serve करें, key वाले `/v1/protected-payments` routes के साथ। Developer Platform वह route
+  और checkout page (`<payments origin>/protected/<id>`, origin `PAYMENT_LINK_CHECKOUT_URL`
+  से) बाद की किसी release में जोड़ता है।
+- **नए webhook events:** `PROTECTED_PAYMENT_CREATED`, `PROTECTED_PAYMENT_FUNDED`, `PROTECTED_PAYMENT_SHIPPED`, `PROTECTED_PAYMENT_APPROVED`, `PROTECTED_PAYMENT_RELEASED`, `PROTECTED_PAYMENT_DISPUTED`, `PROTECTED_PAYMENT_RESOLVED`, `PROTECTED_PAYMENT_DEADLINE_PASSED`, `PROTECTED_PAYMENT_EXPIRED`, `PROTECTED_PAYMENT_CANCELLED`। हर event को
+  subscribe करने वाले endpoints को ये मिलते हैं; explicit list वाले endpoint को तब तक नहीं,
+  जब तक वह इन्हें न जोड़े।
+- **नए error codes** `protected_payment_buyer_mismatch` (409) और
+  `protected_payment_signature_invalid` (400)।
+- **नए budgets:** `protected-payments:create` (प्रति मिनट 30),
+  `protected-payments:build` और `protected-payments:submit` (हर एक प्रति मिनट 20), प्रति
+  consumer और client address; बिना key वाले routes पर, प्रति client address,
+  `protected-payment-links:read` (60), `protected-payment-links:build` (10) और
+  `protected-payment-links:submit` (20)।
+- **DeFindex में कोई बदलाव नहीं:** उसकी envelope जाँचें
+  `src/stellar/soroban-envelope.ts` में चली गईं, जो इस plugin के साथ साझा है, उन्हीं
+  नियमों और messages के साथ।
 
 ### DeFindex: submit इस service के builds से बँधा, और public key के लिए बंद
 
@@ -3230,7 +3453,18 @@ type दोबारा बनाए बिना enum value drop नहीं �
 | `DEFINDEX_BASE_URL` | नहीं | `https://api.defindex.io` | DeFindex API base URL |
 | `DEFINDEX_TIMEOUT_MS` | नहीं | `30000` | DeFindex HTTP timeout (ms) |
 | `DEFINDEX_MAX_FEE_STROOPS` | नहीं | `10000000` | बना हुआ DeFindex transaction अपने signer से अधिकतम कितना ले सकता है, inclusion और Soroban resource fee मिलाकर (stroops); इससे ऊपर का build `502 provider_error` के साथ अस्वीकार होता है |
-| `PLUGINS_ENABLED` | नहीं | — | इस deployment द्वारा दिए जाने वाले plugins के slugs, अल्पविराम से अलग: `plugins/` के sandboxed plugins, और native `blindpay` व `defindex`। खाली होने पर कोई नहीं; जो plugin सूचीबद्ध नहीं है वह कभी load नहीं होता |
+| `TRUSTLESS_WORK_API_KEY_TESTNET` | testnet पर सुरक्षित भुगतान के लिए | — | testnet के लिए Trustless Work की API key (`dev` keys)। Routes केवल `PLUGINS_ENABLED` में `trustless-work` होने पर मौजूद हैं; key के बिना वे testnet पर `503 misconfigured` लौटाते हैं। `TRUSTLESS_WORK_PLATFORM_SECRET_TESTNET` भी ज़रूरी है |
+| `TRUSTLESS_WORK_BASE_URL_TESTNET` | नहीं | `https://dev.api.trustlesswork.com` | testnet के लिए Trustless Work की V1 API |
+| `TRUSTLESS_WORK_PLATFORM_SECRET_TESTNET` | API key के साथ | — | Cosmos Pay का platform account (S...): deploys और platform के disputes sign करता है, उनका XLM चुकाता है और platform fee प्राप्त करता है। USDC को trust करना ज़रूरी है। एक hot key: इसकी fees sweep करें |
+| `TRUSTLESS_WORK_RESOLVER_SECRET_TESTNET` | `REFUND_BUYER` / `RELEASE_MERCHANT` के लिए | — | Automatic dispute resolver (S...)। Unset होने पर ये policies create पर `503 misconfigured` लौटाती हैं। Platform key से अलग होनी चाहिए |
+| `TRUSTLESS_WORK_OPS_RESOLVER_TESTNET` | `MANUAL_REVIEW` के लिए | — | Ops resolver का address (G...), जिसके लिए wallet में sign किया जाता है। Unset होने पर `MANUAL_REVIEW` create पर `503 misconfigured` लौटाता है। दोनों keys से अलग होना चाहिए |
+| `TRUSTLESS_WORK_DEPLOYER_CONTRACT_TESTNET` | नहीं | — | Pin: deploy को यही Trustless Work deployer contract (C...) call करना होगा। Unset होने पर यह हर deploy पर log होता है |
+| `TRUSTLESS_WORK_CONTRACT_WASM_HASH_TESTNET` | नहीं | — | Pin: deploy को यही contract wasm (64 hex) install करना होगा। Unset होने पर यह हर deploy पर log होता है |
+| `TRUSTLESS_WORK_*_MAINNET` | नहीं | — | `prod` keys के लिए वही set (`_API_KEY`, `_BASE_URL` जिसका default `https://api.trustlesswork.com` है, `_PLATFORM_SECRET`, `_RESOLVER_SECRET`, `_OPS_RESOLVER`, `_DEPLOYER_CONTRACT`, `_CONTRACT_WASM_HASH`) |
+| `TRUSTLESS_WORK_PLATFORM_FEE_BPS` | नहीं | `165` | सुरक्षित भुगतान पर Cosmos Pay की fee, basis points में; Trustless Work अपनी तय 30 जोड़ता है (कुल 1.95%)। बदलाव के बाद बने payments पर लागू होती है |
+| `TRUSTLESS_WORK_TIMEOUT_MS` | नहीं | `30000` | एक Trustless Work call का budget (ms) |
+| `TRUSTLESS_WORK_MAX_FEE_STROOPS` | नहीं | `20000000` | सुरक्षित भुगतान का कोई transaction अपने signer से अधिकतम कितना ले सकता है, inclusion और Soroban resource fee मिलाकर (stroops); इससे ऊपर का build `502 provider_error` के साथ अस्वीकार होता है। 2 XLM, deploy के लिए |
+| `PLUGINS_ENABLED` | नहीं | — | इस deployment द्वारा दिए जाने वाले plugins के slugs, अल्पविराम से अलग: `plugins/` के sandboxed plugins, और native `blindpay`, `defindex` व `trustless-work`। खाली होने पर कोई नहीं; जो plugin सूचीबद्ध नहीं है वह कभी load नहीं होता |
 | `PLUGINS_SECRET` | जब किसी enabled plugin में secret settings हों | — | Plugin installations की secret settings को seal करता है (कम से कम 32 अक्षर)। इसे बदलने पर सभी stored plugin secrets पढ़े नहीं जा सकते |
 | `PLUGINS_TRUSTED_KEYS` | नहीं | — | Cosmos Pay support के अलावा वे signers जिनके plugins यहाँ चलते हैं: comma से अलग `<keyId>:<base64url Ed25519 public key>`। किसी और का sign किया, या sign के बाद बदला गया plugin boot रोक देता है |
 | `PLUGINS_ALLOW_UNSIGNED` | नहीं | `false` | बिना `signature.json` के plugins चलाएँ, local में एक लिखने के लिए। `NODE_ENV=production` में मना |
