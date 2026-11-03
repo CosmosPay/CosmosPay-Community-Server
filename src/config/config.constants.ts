@@ -141,6 +141,40 @@ export const DEFAULT_DEFINDEX_TIMEOUT_MS = 30_000;
  */
 export const DEFAULT_DEFINDEX_MAX_FEE_STROOPS = 10_000_000;
 
+/**
+ * Trustless Work's V1 API per network, used when `TRUSTLESS_WORK_BASE_URL_*` is
+ * unset. The keys differ per network too (each is generated at
+ * dapp.trustlesswork.com for one of them).
+ */
+export const DEFAULT_TRUSTLESS_WORK_BASE_URL: Record<StellarNetwork, string> = {
+  public: 'https://api.trustlesswork.com',
+  testnet: 'https://dev.api.trustlesswork.com',
+};
+
+/**
+ * Upstream budget for one Trustless Work call. A build simulates a Soroban
+ * transaction and `send-transaction` waits for the ledger, so it is slower than
+ * a plain read; DeFindex's budget, for the same kind of work.
+ */
+export const DEFAULT_TRUSTLESS_WORK_TIMEOUT_MS = 30_000;
+
+/**
+ * Cosmos Pay's share of a protected payment, in basis points, when
+ * `TRUSTLESS_WORK_PLATFORM_FEE_BPS` is unset: 1.65%. The product price is 1.95%
+ * in total, and Trustless Work's contract takes its fixed 0.30% on top of
+ * whatever platform fee the contract names (product owner, 2026-11-02).
+ */
+export const DEFAULT_TRUSTLESS_WORK_PLATFORM_FEE_BPS = 165;
+
+/**
+ * The most a built protected payment transaction may charge its signer, in stroops (2 XLM),
+ * when `TRUSTLESS_WORK_MAX_FEE_STROOPS` is unset: inclusion and Soroban resource
+ * fee together. Twice DeFindex's ceiling because one of the envelopes is a
+ * contract deploy, which pays for a new contract instance and its storage; the
+ * buyer's and merchant's calls cost a fraction of it.
+ */
+export const DEFAULT_TRUSTLESS_WORK_MAX_FEE_STROOPS = 20_000_000;
+
 /** The NEAR Intents 1Click API, used when `NEAR_INTENTS_BASE_URL` is unset. */
 export const DEFAULT_NEAR_INTENTS_BASE_URL = 'https://1click.chaindefuser.com';
 

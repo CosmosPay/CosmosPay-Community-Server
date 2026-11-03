@@ -115,6 +115,8 @@ src/
   native-plugins/                 first-party plugins, imported only when PLUGINS_ENABLED names them:
     blindpay/                     BlindPay: client, Svix verify, sync + webhook, kyc/, onramp/, offramp/, admin/
     defindex/                     DeFindex vaults (Stellar)
+    trustless-work/               protected payments on Trustless Work (Stellar): client, envelope checks,
+                                  sync / expiry / deadline jobs, the keyless buyer routes, admin/
   health/                         liveness/readiness probes (@Public)
 prisma/schema.prisma              Consumer, PaymentIntent, Swap, ChainSwap, CrossChainSwap, LiquidityPoolOperation,
                                   WebhookEndpoint/Delivery/EmittedEvent, BlindpayReceiver,
@@ -125,6 +127,7 @@ prisma/schema.prisma              Consumer, PaymentIntent, Swap, ChainSwap, Cros
                                   AliasChallenge, AliasRecovery, ZkPayment, Usdt0Transfer,
                                   EasyRecoverySession
                                   PluginInstallation, PluginRecord
+                                  ProtectedPayment, ProtectedPaymentTransaction
 test/                             e2e suites: gateway gate, admin + alias console gates,
                                   payment intents, swaps, liquidity pools, KYC, webhooks
 plugins/                          THE plugins folder: one <slug>/ per plugin (plugin.json, index.ts, signature.json)
@@ -169,6 +172,8 @@ escopo. **Os schemas de requisição e resposta ficam no contrato OpenAPI gerado
 | Recuperação fácil | `/v1/wallet/easy-recovery` | Mover uma carteira entre dois dispositivos por uma caixa de correio de cinco minutos que este serviço não consegue abrir |
 | Ativos            | `/v1/assets`             | Registro curado de ativos por rede                       |
 | Chave pública     | `/v1/public-key`         | A API key pública compartilhada, servida sem chave (`@Public`) |
+| Pagamentos protegidos | `/v1/protected-payments` | Pagamentos retidos em um contrato da Trustless Work até a entrega (USDC na Stellar, 1,95%): criar, marcar como enviado, aprovar, liberar, disputar |
+| Links de pagamento protegido | `/v1/protected-payment-links` | O lado do comprador de um pagamento protegido: ler, depositar, confirmar, liberar, disputar (`@Public`) |
 | Analytics         | `/v1/summary`, `/v1/balances`, `/v1/logs` | Agregados (pagamentos, swaps, liquidez, webhooks) e logs do dashboard |
 | Atividade         | `/v1/activity`           | Eventos reportados pelo cliente: ingestão, feed, consolidação |
 | Plugins           | `/v1/plugins`            | Extensões compiladas sob um slug, instaladas por tenant |
@@ -199,6 +204,9 @@ console chega até ela. Os caminhos usam a forma `{param}` do OpenAPI.
 | GET | `/v1/admin/payment-intents` | console da plataforma |  |
 | GET | `/v1/admin/payouts` | console da plataforma |  |
 | GET | `/v1/admin/products` | console da plataforma |  |
+| GET | `/v1/admin/protected-payments` | console da plataforma |  |
+| POST | `/v1/admin/protected-payments/{id}/resolve` | console da plataforma |  |
+| POST | `/v1/admin/protected-payments/{id}/submit` | console da plataforma |  |
 | GET | `/v1/admin/receivers` | console da plataforma |  |
 | PATCH | `/v1/admin/receivers/{id}/access` | console da plataforma |  |
 | POST | `/v1/admin/receivers/{id}/approve` | console da plataforma |  |
@@ -308,6 +316,21 @@ console chega até ela. Os caminhos usam a forma `{param}` do OpenAPI.
 | GET | `/v1/products/{id}` | `products:read` |  |
 | PATCH | `/v1/products/{id}` | `products:write` |  |
 | DELETE | `/v1/products/{id}` | `products:write` |  |
+| GET | `/v1/protected-payments` | `payments:read` |  |
+| POST | `/v1/protected-payments` | `payments:write` |  |
+| POST | `/v1/protected-payments/submit` | `payments:write` |  |
+| GET | `/v1/protected-payments/{id}` | `payments:read` |  |
+| POST | `/v1/protected-payments/{id}/approve` | `payments:write` |  |
+| POST | `/v1/protected-payments/{id}/cancel` | `payments:write` |  |
+| POST | `/v1/protected-payments/{id}/dispute` | `payments:write` |  |
+| POST | `/v1/protected-payments/{id}/release` | `payments:write` |  |
+| POST | `/v1/protected-payments/{id}/ship` | `payments:write` |  |
+| GET | `/v1/protected-payment-links/{id}` | nenhum: `@Public()`, orçamento por endereço de cliente |  |
+| POST | `/v1/protected-payment-links/{id}/approve` | nenhum: `@Public()`, orçamento por endereço de cliente |  |
+| POST | `/v1/protected-payment-links/{id}/dispute` | nenhum: `@Public()`, orçamento por endereço de cliente |  |
+| POST | `/v1/protected-payment-links/{id}/fund` | nenhum: `@Public()`, orçamento por endereço de cliente |  |
+| POST | `/v1/protected-payment-links/{id}/release` | nenhum: `@Public()`, orçamento por endereço de cliente |  |
+| POST | `/v1/protected-payment-links/{id}/submit` | nenhum: `@Public()`, orçamento por endereço de cliente |  |
 | GET | `/v1/public-key` | none — `@Public()` |  |
 | GET | `/.well-known/stellar.toml` | none — `@Public()`, SEP-1 discovery (recovery servers only) |  |
 | GET | `/v1/sep10/auth` | none — `@Public()`; SEP-10/SEP-30, recovery servers only |  |
@@ -568,7 +591,7 @@ Tipos de evento: `PAYMENT_INTENT_CREATED`, `PAYMENT_INTENT_UPDATED`,
 `SWAP_FAILED`, `LIQUIDITY_CREATED`, `LIQUIDITY_SUBMITTED`, `LIQUIDITY_SUCCEEDED`,
 `LIQUIDITY_FAILED`, `CROSS_CHAIN_SWAP_CREATED`, `CROSS_CHAIN_SWAP_UPDATED`, `CROSS_CHAIN_SWAP_SUCCEEDED`, `CROSS_CHAIN_SWAP_REFUNDED`, `CROSS_CHAIN_SWAP_FAILED`, `CROSS_CHAIN_SWAP_EXPIRED`, além dos originados no BlindPay `RECEIVER_UPDATED`,
 `PAYIN_CREATED`, `PAYIN_UPDATED`, `PAYIN_COMPLETED`, `PAYOUT_CREATED`,
-`PAYOUT_UPDATED` e `PAYOUT_COMPLETED`, e `ZK_PAYMENT_SUCCEEDED`. A lista oficial é o enum `WebhookEventType`
+`PAYOUT_UPDATED` e `PAYOUT_COMPLETED`, `ZK_PAYMENT_SUCCEEDED` e os dos pagamentos protegidos: `PROTECTED_PAYMENT_CREATED`, `PROTECTED_PAYMENT_FUNDED`, `PROTECTED_PAYMENT_SHIPPED`, `PROTECTED_PAYMENT_APPROVED`, `PROTECTED_PAYMENT_RELEASED`, `PROTECTED_PAYMENT_DISPUTED`, `PROTECTED_PAYMENT_RESOLVED`, `PROTECTED_PAYMENT_DEADLINE_PASSED`, `PROTECTED_PAYMENT_EXPIRED`, `PROTECTED_PAYMENT_CANCELLED`. A lista oficial é o enum `WebhookEventType`
 em `prisma/schema.prisma`.
 
 **Corpos originados no BlindPay.** `RECEIVER_UPDATED` / `PAYIN_*` / `PAYOUT_*`
@@ -2031,6 +2054,182 @@ um host com ponto final ou em forma IDN é recusado em vez de normalizado. Toda 
 que recebe uma `redirect_url` a verifica, incluindo a aprovação pelo admin, que usa a
 lista do próprio consumer do receiver. Um esquema ou host recusado resulta em `400`.
 
+## Pagamentos protegidos (Trustless Work)
+
+> **Um plugin nativo.** Tudo nesta seção é o plugin `trustless-work`
+> (`src/native-plugins/trustless-work/`), servido só quando `PLUGINS_ENABLED` lista
+> `trustless-work`. Somente Stellar, somente USDC (o emissor que o registro de
+> ativos endossa na rede da key). A Trustless Work chama o seu contrato de escrow;
+> este serviço, as suas rotas e os seus webhooks o chamam de pagamento protegido.
+
+Um pagamento protegido retém o dinheiro do comprador até o pedido ser entregue. O
+comerciante o cria (`POST /v1/protected-payments`) e envia ao comprador o seu
+`checkoutUrl`, o checkout hospedado em `<payments origin>/protected/<id>`. Na
+primeira vez que o comprador inicia o depósito, este serviço faz o deploy na Stellar
+de um contrato V1 de liberação única (single-release) da
+[Trustless Work](https://www.trustlesswork.com), assinado e pago pela chave da
+plataforma da Cosmos Pay, e entrega ao comprador o depósito em USDC para assinar. A
+partir daí o dinheiro só se move on-chain: o comerciante marca o pedido como
+enviado com evidência de rastreio, o aprovador confirma a entrega, quem assina a
+liberação libera os fundos para o comerciante, e qualquer uma das partes pode, em
+vez disso, abrir uma disputa. Este serviço nunca guarda o dinheiro e nunca assina
+por uma parte: ele constrói cada transação pela API da Trustless Work, verifica que
+o envelope é exatamente a chamada pedida, o registra e só retransmite uma cópia
+assinada de uma transação registrada.
+
+### Como funciona
+
+```
+CREATED --fund (the deploy)--> AWAITING_FUNDING --deposit--> FUNDED --ship--> SHIPPED
+        --approve--> APPROVED --release--> RELEASED
+FUNDED | SHIPPED | APPROVED --dispute--> DISPUTED --resolve--> RESOLVED
+CREATED | AWAITING_FUNDING --funding window passes--> EXPIRED
+CREATED | AWAITING_FUNDING --merchant cancels--> CANCELLED
+```
+
+- **O comprador fica vinculado no deploy.** O comerciante pode indicar
+  `buyerAddress` na criação (o típico em B2B); caso contrário, fica vinculada a
+  primeira conta que deposita. O deploy acontece uma vez por pagamento, e só depois
+  que o Horizon mostra que o comprador tem o valor em USDC e que o comerciante tem
+  trustline de USDC. Um comprador diferente depois disso recebe
+  `409 protected_payment_buyer_mismatch`.
+- **Todo envelope é verificado antes de ser registrado ou assinado**
+  (`trustless-work-envelope.ts`): sem memo, limites de tempo de até 15 minutos, uma
+  taxa dentro de `TRUSTLESS_WORK_MAX_FEE_STROOPS`, uma única chamada ao próprio
+  contrato do pagamento com exatamente os argumentos pedidos, e uma única entrada de
+  autorização, a de quem assina, sem nada abaixo dela (sob um depósito, só a
+  transferência de USDC do comprador para o contrato). Um deploy precisa inicializar
+  o contrato com exatamente os papéis, o valor, a taxa e o contrato de USDC
+  esperados e um único marco (milestone) não aprovado, e o id do contrato em que o
+  comprador paga é derivado do deployer e do salt que a plataforma assinou, nunca
+  tirado da resposta da Trustless Work. Uma recusa é registrada no log e respondida
+  com `502 provider_error`.
+- **Um submit só retransmite o que foi construído aqui**, para esse pagamento, a sua
+  rede e o próprio endereço de quem chama, antes de expirar, e uma única vez: a
+  resposta é guardada e todo reenvio a devolve, como no DeFindex.
+- **A chain é a fonte da verdade.** A Trustless Work não tem webhooks, então uma
+  tarefa de sincronização (ativa com `OBSERVER_ENABLED`, a cada 30 segundos) relê
+  os contratos abertos pela Trustless Work, conferidos on-chain, e leva cada
+  pagamento ao estado que o seu contrato mostra; as rotas de submit o movem de forma
+  otimista quando a Trustless Work responde `SUCCESS`. Cada passo emite o seu
+  webhook uma única vez, seja quem for que o veja primeiro, e
+  `PROTECTED_PAYMENT_RELEASED`, `_RESOLVED`, `_EXPIRED` e `_CANCELLED` são eventos
+  terminais duráveis.
+- **As rotas do comprador não exigem API key.** `/v1/protected-payment-links/{id}`
+  é `@Public()`, como `/v1/payment-links/{id}`: o id (um uuid) é a capacidade, toda
+  rota tem orçamento por endereço de cliente, e a resposta é a projeção do
+  comprador, nunca a conta do comerciante nem o seu `reference`. Nada que o id
+  sozinho desbloqueia move dinheiro: todo envelope que ele constrói é para o
+  comprador vinculado assinar, o deploy acontece uma vez, e uma disputa que a
+  plataforma abre por um comprador sem papel no contrato exige a assinatura do
+  comprador sobre `disputeChallenge`.
+
+### Modelos de liberação
+
+| `releaseModel` | Aprova a entrega | Libera os fundos | Notas |
+| --- | --- | --- | --- |
+| `BUYER_RELEASES` | comprador | comprador | Pagamento na entrega: o comprador confirma o recebimento e libera (duas assinaturas na V1) |
+| `MERCHANT_RELEASES` | comerciante | comerciante | O comerciante aprova e libera quando envia. O comprador não tem papel no contrato, então a chave da plataforma abre a disputa dele assim que o comprador assina `disputeChallenge` |
+| `BUYER_APPROVES_MERCHANT_RELEASES` | comprador | comerciante | O comprador confirma o recebimento, o comerciante recebe o dinheiro |
+
+Em todos os modelos, o comerciante é o prestador do serviço (service provider) e o
+recebedor (receiver), o papel de plataforma é a conta da plataforma da Cosmos Pay,
+e o resolvedor de disputas segue a política de prazo.
+
+### Políticas de prazo
+
+O comerciante define `deliveryWindowHours` (de 1 a 2160); o prazo de entrega é o
+momento do depósito mais essa janela. Quando ele vence num pagamento que ainda tem
+os fundos depositados e não foi liberado, disputado nem resolvido:
+
+| `deadlinePolicy` | Resolvedor de disputas | Ao vencer o prazo |
+| --- | --- | --- |
+| `MANUAL_REVIEW` | o endereço de ops (`TRUSTLESS_WORK_OPS_RESOLVER_*`), cuja chave nunca está neste servidor | `deadlinePassedAt` é definido e `PROTECTED_PAYMENT_DEADLINE_PASSED` é emitido; as partes ainda podem aprovar, liberar ou disputar, e a equipe de ops resolve uma disputa com `POST /v1/admin/protected-payments/{id}/resolve`, assinando-a numa carteira |
+| `REFUND_BUYER` | a chave do resolvedor automático (`TRUSTLESS_WORK_RESOLVER_SECRET_*`) | a tarefa de prazo abre uma disputa com a chave da plataforma e então resolve o saldo inteiro para o comprador com a chave do resolvedor |
+| `RELEASE_MERCHANT` | a chave do resolvedor automático | o mesmo, resolvendo o saldo inteiro para o comerciante |
+
+A tarefa de prazo nunca resolve uma disputa que uma parte abriu: a equipe de ops a
+decide pela rota de admin (num pagamento com política automática, o servidor então
+assina com a chave do resolvedor). Uma resolução só paga o próprio comprador e o
+próprio comerciante do pagamento, em partes que somam o saldo do contrato. Uma
+política automática é recusada na criação (`503 misconfigured`) quando a rede não
+tem chave de resolvedor, e `MANUAL_REVIEW` quando não tem endereço de ops. Um
+pagamento em que ninguém depositou expira depois de `fundingWindowHours` (padrão
+72), e o comerciante pode cancelá-lo antes disso.
+
+### Chaves e os seus riscos
+
+| Variável (por rede, `_TESTNET` / `_MAINNET`) | O que é | Se vazar |
+| --- | --- | --- |
+| `TRUSTLESS_WORK_API_KEY_*` | A API key da Trustless Work (`x-api-key`); vazia, toda rota de pagamento protegido nessa rede responde `503 misconfigured` | Alguém gasta a cota da Trustless Work do deploy (50 requisições por minuto) |
+| `TRUSTLESS_WORK_PLATFORM_SECRET_*` | A conta da plataforma da Cosmos Pay: assina todo deploy (e paga o seu XLM) e as disputas que a plataforma abre, e recebe a taxa da plataforma | O seu XLM e as taxas acumuladas nela; junto com a chave do resolvedor, veja abaixo |
+| `TRUSTLESS_WORK_RESOLVER_SECRET_*` | O resolvedor automático das políticas `REFUND_BUYER` e `RELEASE_MERCHANT` | Junto com a chave da plataforma, todo pagamento com fundos depositados e política automática |
+| `TRUSTLESS_WORK_OPS_RESOLVER_*` | Só um endereço: a equipe de ops assina as resoluções de `MANUAL_REVIEW` numa carteira | Nada neste servidor |
+
+- **Um par vazado de chave da plataforma e chave do resolvedor pode esvaziar todo
+  pagamento com fundos depositados e política automática:** a plataforma abre uma
+  disputa, e o contrato deixa o resolvedor pagar a qualquer endereço. O código só
+  resolve para o próprio comprador e o próprio comerciante do pagamento, mas essa é
+  uma proteção do código, não da chave. Os pagamentos `MANUAL_REVIEW` não ficam
+  expostos: a chave do seu resolvedor não está no servidor. Guarde as duas chaves
+  num cofre de segredos, e fixe `TRUSTLESS_WORK_DEPLOYER_CONTRACT_*` e
+  `TRUSTLESS_WORK_CONTRACT_WASM_HASH_*` assim que o primeiro deploy na testnet os
+  registrar no log. Na mainnet os dois valores são obrigatórios: sem eles o plugin
+  não inicia.
+- **A taxa da plataforma se acumula numa chave quente (hot key).** O contrato paga
+  a parte da Cosmos Pay à conta da plataforma em toda liberação e resolução:
+  transfira-a regularmente para armazenamento frio (cold storage). Essa conta
+  precisa ter trustline de USDC, ou toda liberação e resolução falha.
+- O boot recusa uma rede cuja API key e chave da plataforma não estejam definidas
+  juntas, um segredo que não pode ser interpretado, e uma mesma conta em dois dos
+  três papéis (o contrato nunca deixa um resolvedor de disputas abrir uma disputa).
+
+### Taxas
+
+Um pagamento protegido custa **1,95%**: a taxa fixa de 0,30% da Trustless Work,
+gravada no código do seu contrato, mais o `TRUSTLESS_WORK_PLATFORM_FEE_BPS` da
+Cosmos Pay (padrão 165, 1,65%), que o contrato guarda por pagamento. O contrato
+desconta as duas on-chain, cada uma arredondada para baixo, do que ele paga: da
+liberação ao comerciante e de cada parte de uma resolução de disputa, então **um
+reembolso também chega ao comprador descontado de 1,95%**. Exemplo prático, um
+pagamento de 100 USDC:
+
+| Passo | USDC |
+| --- | --- |
+| O comprador deposita | 100 |
+| Taxa da Trustless Work (0,30%) | 0,30 |
+| Taxa da Cosmos Pay (1,65%) | 1,65 |
+| O comerciante recebe na liberação | 98,05 |
+| Um reembolso total chega ao comprador | 98,05 |
+| Uma resolução 60 / 40 paga ao comprador / ao comerciante | 58,83 / 39,22 |
+
+O XLM do deploy é pago pela plataforma; cada parte paga a taxa de rede das
+transações que assina. Toda resposta mostra a divisão em `fees` (`trustlessWorkBps`,
+`platformBps`, `totalBps`, `merchantReceives`).
+
+### Rotas de pagamentos protegidos
+
+| Método | Caminho | Finalidade |
+| ------ | ------- | ---------- |
+| POST | `/v1/protected-payments` | Criar (ainda sem ação na chain), com `Idempotency-Key` |
+| GET | `/v1/protected-payments` | Os pagamentos da key na sua rede |
+| GET | `/v1/protected-payments/{id}` | Um pagamento, com `checkoutUrl` e `fees` |
+| POST | `/v1/protected-payments/{id}/ship` | Construir a marcação de enviado com a `evidence` de rastreio |
+| POST | `/v1/protected-payments/{id}/approve` | Construir a aprovação do comerciante (`MERCHANT_RELEASES`) |
+| POST | `/v1/protected-payments/{id}/release` | Construir a liberação do comerciante |
+| POST | `/v1/protected-payments/{id}/dispute` | Construir a disputa do comerciante |
+| POST | `/v1/protected-payments/{id}/cancel` | Cancelar um pagamento em que ninguém depositou |
+| POST | `/v1/protected-payments/submit` | Retransmitir uma transação assinada pelo comerciante e construída aqui |
+| GET | `/v1/protected-payment-links/{id}` | A visão do comprador, sem API key |
+| POST | `/v1/protected-payment-links/{id}/fund` | Deploy (primeira chamada) e construção do depósito do comprador |
+| POST | `/v1/protected-payment-links/{id}/approve` | Construir a confirmação de entrega do comprador |
+| POST | `/v1/protected-payment-links/{id}/release` | Construir a liberação do comprador (`BUYER_RELEASES`) |
+| POST | `/v1/protected-payment-links/{id}/dispute` | A disputa do comprador: para assinar, ou aberta pela plataforma |
+| POST | `/v1/protected-payment-links/{id}/submit` | Retransmitir uma transação assinada pelo comprador e construída aqui |
+| GET | `/v1/admin/protected-payments` | Console da plataforma: os pagamentos protegidos de todos os tenants |
+| POST | `/v1/admin/protected-payments/{id}/resolve` | Console da plataforma: resolver uma disputa |
+| POST | `/v1/admin/protected-payments/{id}/submit` | Console da plataforma: retransmitir a resolução da carteira de ops |
+
 ## Plugins — extensões sob um slug
 
 Outras equipes integram sua tecnologia a este serviço como um **plugin**: uma pasta em
@@ -2213,6 +2412,7 @@ serviço em `src/native-plugins/<slug>/`, ligados pela mesma lista
 | ---- | ----------- |
 | `blindpay` | KYC, onramp, offramp, o webhook da BlindPay, suas rotas de `/v1/admin` (`receivers`, `payins`, `payouts`) e a seção `fiat` do resumo de administração |
 | `defindex` | `/v1/defindex` — vaults da DeFindex na Stellar |
+| `trustless-work` | `/v1/protected-payments`, o `/v1/protected-payment-links` sem chave e `/v1/admin/protected-payments`: pagamentos protegidos na Trustless Work (Stellar) |
 
 - **Fora da lista, não existe.** Um plugin nativo que `PLUGINS_ENABLED` não nomeia
   nunca é instanciado: suas rotas respondem 404, suas tarefas nunca iniciam e suas
@@ -2240,8 +2440,44 @@ serviço em `src/native-plugins/<slug>/`, ligados pela mesma lista
   resposta do DeFindex é guardada e devolvida a cada envio posterior. Nenhuma rota
   do DeFindex admite a key pública compartilhada: a tela Earn da carteira as chama
   com a key própria da conta com sessão iniciada.
+- **Os pagamentos protegidos também seguem a regra do DeFindex**: todo envelope que
+  a Trustless Work constrói é verificado antes de ser registrado ou assinado, e os
+  seus submits só retransmitem essas linhas (veja
+  *Pagamentos protegidos (Trustless Work)*). As suas rotas do comprador são o único
+  grupo de rotas de plugin nativo que não exige API key.
 
 ## Atualização — mudanças incompatíveis e notas de deploy
+
+### Pagamentos protegidos: um plugin nativo novo, duas tabelas e dez eventos de webhook
+
+- **A migração `20261102120000_protected_payments`** cria as tabelas
+  `protected_payment` e `protected_payment_transaction` e cinco enums, e acrescenta
+  dez valores a `WebhookEventType`; nada é reescrito. Rode `migrate deploy` antes de
+  o novo build atender.
+- **Desligado até ser habilitado.** Adicione `trustless-work` a `PLUGINS_ENABLED` e
+  defina pelo menos `TRUSTLESS_WORK_API_KEY_*` e `TRUSTLESS_WORK_PLATFORM_SECRET_*`
+  para uma rede; sem elas, as suas rotas respondem `503 misconfigured` nessa rede. A
+  conta da plataforma precisa de XLM (ela paga todo deploy) e de uma trustline de
+  USDC (ela recebe a taxa em toda liberação).
+- **O APISIX precisa de uma rota sem chave para o lado do comprador.**
+  `/v1/protected-payment-links/*` é `@Public()`, como `/v1/payment-links/*`: sirva-a
+  como rota de prefixo sem key-auth, ao lado das rotas com chave de
+  `/v1/protected-payments`. A plataforma de desenvolvedores adiciona essa rota e a
+  página de checkout (`<payments origin>/protected/<id>`, com a origem de
+  `PAYMENT_LINK_CHECKOUT_URL`) numa versão posterior.
+- **Eventos de webhook novos:** `PROTECTED_PAYMENT_CREATED`, `PROTECTED_PAYMENT_FUNDED`, `PROTECTED_PAYMENT_SHIPPED`, `PROTECTED_PAYMENT_APPROVED`, `PROTECTED_PAYMENT_RELEASED`, `PROTECTED_PAYMENT_DISPUTED`, `PROTECTED_PAYMENT_RESOLVED`, `PROTECTED_PAYMENT_DEADLINE_PASSED`, `PROTECTED_PAYMENT_EXPIRED`, `PROTECTED_PAYMENT_CANCELLED`. Os endpoints
+  inscritos em todos os eventos os recebem; um com uma lista explícita não, até
+  adicioná-los.
+- **Códigos de erro novos** `protected_payment_buyer_mismatch` (409) e
+  `protected_payment_signature_invalid` (400).
+- **Orçamentos novos:** `protected-payments:create` (30 por minuto),
+  `protected-payments:build` e `protected-payments:submit` (20 por minuto cada um),
+  por consumer e endereço do cliente; nas rotas sem chave, por endereço do cliente,
+  `protected-payment-links:read` (60), `protected-payment-links:build` (10) e
+  `protected-payment-links:submit` (20).
+- **O DeFindex não muda:** as suas verificações de envelope foram para
+  `src/stellar/soroban-envelope.ts`, compartilhado com este plugin, com as mesmas
+  regras e mensagens.
 
 ### DeFindex: o submit fica preso às construções deste serviço e fechado à key pública
 
@@ -3317,7 +3553,18 @@ Toda variável lida de `process.env` em `src/` é validada no boot por
 | `DEFINDEX_BASE_URL` | não | `https://api.defindex.io` | URL base da API DeFindex |
 | `DEFINDEX_TIMEOUT_MS` | não | `30000` | Timeout HTTP DeFindex (ms) |
 | `DEFINDEX_MAX_FEE_STROOPS` | não | `10000000` | O máximo que uma transação do DeFindex construída pode cobrar de quem a assina, taxa de inclusão e de recursos do Soroban juntas (stroops); uma construção acima é recusada com `502 provider_error` |
-| `PLUGINS_ENABLED` | não | — | Slugs, separados por vírgula, dos plugins que este deploy serve: os isolados em `plugins/` e os nativos `blindpay` e `defindex`. Vazio não serve nenhum; um plugin não listado nunca é carregado |
+| `TRUSTLESS_WORK_API_KEY_TESTNET` | para pagamentos protegidos na testnet | — | A API key da Trustless Work para a testnet (keys `dev`). As rotas só existem com `trustless-work` em `PLUGINS_ENABLED`; sem a chave respondem `503 misconfigured` na testnet. Exige `TRUSTLESS_WORK_PLATFORM_SECRET_TESTNET` |
+| `TRUSTLESS_WORK_BASE_URL_TESTNET` | não | `https://dev.api.trustlesswork.com` | A API V1 da Trustless Work para a testnet |
+| `TRUSTLESS_WORK_PLATFORM_SECRET_TESTNET` | com a API key | — | A conta da plataforma da Cosmos Pay (S...): assina os deploys e as disputas da plataforma, paga o seu XLM e recebe a taxa da plataforma. Precisa ter trustline de USDC. Uma chave quente: transfira as taxas acumuladas para fora dela |
+| `TRUSTLESS_WORK_RESOLVER_SECRET_TESTNET` | para `REFUND_BUYER` / `RELEASE_MERCHANT` | — | O resolvedor automático de disputas (S...). Sem definir: essas políticas respondem `503 misconfigured` na criação. Precisa ser diferente da chave da plataforma |
+| `TRUSTLESS_WORK_OPS_RESOLVER_TESTNET` | para `MANUAL_REVIEW` | — | O endereço do resolvedor de ops (G...), cujas assinaturas são feitas numa carteira. Sem definir: `MANUAL_REVIEW` responde `503 misconfigured` na criação. Precisa ser diferente das duas chaves |
+| `TRUSTLESS_WORK_DEPLOYER_CONTRACT_TESTNET` | não | — | Fixação: um deploy precisa chamar este contrato deployer da Trustless Work (C...). Sem definir, ele é registrado no log a cada deploy |
+| `TRUSTLESS_WORK_CONTRACT_WASM_HASH_TESTNET` | não | — | Fixação: um deploy precisa instalar este wasm de contrato (64 hex). Sem definir, ele é registrado no log a cada deploy |
+| `TRUSTLESS_WORK_*_MAINNET` | não | — | O mesmo conjunto para as keys `prod` (`_API_KEY`, `_BASE_URL` com padrão `https://api.trustlesswork.com`, `_PLATFORM_SECRET`, `_RESOLVER_SECRET`, `_OPS_RESOLVER`, `_DEPLOYER_CONTRACT`, `_CONTRACT_WASM_HASH`) |
+| `TRUSTLESS_WORK_PLATFORM_FEE_BPS` | não | `165` | A taxa da Cosmos Pay sobre um pagamento protegido, em pontos-base; a Trustless Work soma os seus 30 fixos (1,95% no total). Vale para os pagamentos criados depois de uma mudança |
+| `TRUSTLESS_WORK_TIMEOUT_MS` | não | `30000` | Orçamento de uma chamada à Trustless Work (ms) |
+| `TRUSTLESS_WORK_MAX_FEE_STROOPS` | não | `20000000` | O máximo que uma transação de pagamento protegido pode cobrar de quem a assina, taxa de inclusão e de recursos do Soroban juntas (stroops); uma construção acima é recusada com `502 provider_error`. 2 XLM, para o deploy |
+| `PLUGINS_ENABLED` | não | — | Slugs, separados por vírgula, dos plugins que este deploy serve: os isolados em `plugins/` e os nativos `blindpay`, `defindex` e `trustless-work`. Vazio não serve nenhum; um plugin não listado nunca é carregado |
 | `PLUGINS_SECRET` | quando um plugin habilitado tem configurações secretas | — | Sela as configurações secretas das instalações de plugins (no mínimo 32 caracteres). Alterá-lo torna ilegíveis todos os segredos de plugins armazenados |
 | `PLUGINS_TRUSTED_KEYS` | não | — | Assinantes cujos plugins rodam aqui além do suporte da Cosmos Pay: `<keyId>:<chave pública Ed25519 em base64url>` separados por vírgula. Um plugin assinado por outro, ou alterado depois de assinado, interrompe a inicialização |
 | `PLUGINS_ALLOW_UNSIGNED` | não | `false` | Rodar plugins sem `signature.json`, para escrever um localmente. Recusado quando `NODE_ENV=production` |

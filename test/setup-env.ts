@@ -53,12 +53,27 @@ process.env.WALLET_AUTH_SESSION_SECRET =
 // Serve the example plugin preinstalled in plugins/, so the plugins suite goes
 // through the real loader, signature check and registry. Pinned for the same
 // reason as the rest: a developer's .env may enable others, or none.
-process.env.PLUGINS_ENABLED = 'example,blindpay,defindex';
+process.env.PLUGINS_ENABLED = 'example,blindpay,defindex,trustless-work';
 // No DeFindex key: the guards suite asserts `503 misconfigured`, and a developer's
 // .env usually carries a real key, which would send the suites to DeFindex. The
 // binding suite replaces DefindexClient instead. Empty rather than deleted, for
 // the same dotenv reason as above.
 process.env.DEFINDEX_API_KEY = '';
+// No Trustless Work keys either, for the same reasons: the guards suite asserts
+// `503 misconfigured`, and no suite may reach Trustless Work or sign with a key a
+// developer's .env holds. Every variable of both sets, empty rather than deleted.
+for (const network of ['TESTNET', 'MAINNET']) {
+  for (const name of [
+    'API_KEY',
+    'PLATFORM_SECRET',
+    'RESOLVER_SECRET',
+    'OPS_RESOLVER',
+    'DEPLOYER_CONTRACT',
+    'CONTRACT_WASM_HASH',
+  ]) {
+    process.env[`TRUSTLESS_WORK_${name}_${network}`] = '';
+  }
+}
 process.env.PLUGINS_TRUSTED_KEYS = '';
 process.env.PLUGINS_ALLOW_UNSIGNED = 'false';
 // The shared public key GET /v1/public-key serves. Dev only, so the suite can see
