@@ -2174,7 +2174,8 @@ pagamento em que ninguém depositou expira depois de `fundingWindowHours` (padr�
   expostos: a chave do seu resolvedor não está no servidor. Guarde as duas chaves
   num cofre de segredos, e fixe `TRUSTLESS_WORK_DEPLOYER_CONTRACT_*` e
   `TRUSTLESS_WORK_CONTRACT_WASM_HASH_*` assim que o primeiro deploy na testnet os
-  registrar no log.
+  registrar no log. Na mainnet os dois valores são obrigatórios: sem eles o plugin
+  não inicia.
 - **A taxa da plataforma se acumula numa chave quente (hot key).** O contrato paga
   a parte da Cosmos Pay à conta da plataforma em toda liberação e resolução:
   transfira-a regularmente para armazenamento frio (cold storage). Essa conta

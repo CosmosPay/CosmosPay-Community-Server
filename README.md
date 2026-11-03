@@ -2123,6 +2123,7 @@ when it has no ops address. A payment nobody funded expires after
   are not exposed: their resolver's key is not on the server. Keep both keys in a
   secret store, and pin `TRUSTLESS_WORK_DEPLOYER_CONTRACT_*` and
   `TRUSTLESS_WORK_CONTRACT_WASM_HASH_*` once the first testnet deploy logs them.
+  On mainnet both pins are required: the plugin refuses to boot without them.
 - **The platform fee piles up on a hot key.** The contract pays Cosmos Pay's share
   to the platform account on every release and resolution: sweep it to cold
   storage regularly. That account must trust USDC, or every release and resolution

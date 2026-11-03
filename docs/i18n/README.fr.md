@@ -2200,7 +2200,8 @@ d'adresse ops. Un paiement que personne n'a financé expire après
   exposés : la clé de leur arbitre n'est pas sur le serveur. Conservez les deux clés
   dans un gestionnaire de secrets, et épinglez `TRUSTLESS_WORK_DEPLOYER_CONTRACT_*` et
   `TRUSTLESS_WORK_CONTRACT_WASM_HASH_*` dès que le premier déploiement sur testnet les
-  journalise.
+  journalise. Sur le mainnet, les deux épinglages sont obligatoires : sans eux, le
+  plugin refuse de démarrer.
 - **Les frais de plateforme s'accumulent sur une clé chaude.** Le contrat verse la
   part de Cosmos Pay au compte de plateforme à chaque libération et à chaque
   résolution : transférez-la régulièrement vers un stockage à froid. Ce compte doit

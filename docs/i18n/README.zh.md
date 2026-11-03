@@ -1343,7 +1343,7 @@ CREATED | AWAITING_FUNDING --merchant cancels--> CANCELLED
 | `TRUSTLESS_WORK_RESOLVER_SECRET_*` | `REFUND_BUYER` 和 `RELEASE_MERCHANT` 策略的自动裁决方 | 与平台密钥一起泄露时：每一笔已注资的自动策略付款 |
 | `TRUSTLESS_WORK_OPS_RESOLVER_*` | 只是一个地址：运维在钱包中为 `MANUAL_REVIEW` 的裁决签名 | 本服务器上没有任何东西 |
 
-- **平台密钥与裁决密钥同时泄露，可以掏空每一笔已注资的自动策略付款：** 平台发起争议，而合约允许裁决方向任意地址付款。代码只会裁决给该付款自己的买家和商户，但这只是代码层面的防护，而不是密钥层面的防护。`MANUAL_REVIEW` 付款不受影响：其裁决方的密钥不在服务器上。请把这两个密钥保存在机密存储（secret store）中，并在第一次测试网部署把 `TRUSTLESS_WORK_DEPLOYER_CONTRACT_*` 和 `TRUSTLESS_WORK_CONTRACT_WASM_HASH_*` 记录到日志之后，固定（pin）这两个值。
+- **平台密钥与裁决密钥同时泄露，可以掏空每一笔已注资的自动策略付款：** 平台发起争议，而合约允许裁决方向任意地址付款。代码只会裁决给该付款自己的买家和商户，但这只是代码层面的防护，而不是密钥层面的防护。`MANUAL_REVIEW` 付款不受影响：其裁决方的密钥不在服务器上。请把这两个密钥保存在机密存储（secret store）中，并在第一次测试网部署把 `TRUSTLESS_WORK_DEPLOYER_CONTRACT_*` 和 `TRUSTLESS_WORK_CONTRACT_WASM_HASH_*` 记录到日志之后，固定（pin）这两个值。在主网上这两个固定值都是必需的：缺少任何一个，插件都会拒绝启动。
 - **平台手续费会在一个热密钥上不断累积。** 每次放款和裁决时，合约都会把 Cosmos Pay 的份额付给平台账户：请定期把它归集到冷存储。该账户必须信任 USDC，否则每次放款和裁决都会失败。
 - 启动时会拒绝：API key 与平台密钥没有同时设置的网络、无法解析的密钥，以及在三个角色中身兼两个的同一账户（合约从不允许争议裁决方发起争议）。
 

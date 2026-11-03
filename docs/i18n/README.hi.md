@@ -2116,7 +2116,8 @@ admin route से करता है (auto-policy वाले payment पर 
   resolve करता है, लेकिन यह code की सुरक्षा है, key की नहीं। `MANUAL_REVIEW` payments
   जोखिम में नहीं हैं: उनके resolver की key server पर नहीं है। दोनों keys को secret store
   में रखें, और पहला testnet deploy जैसे ही `TRUSTLESS_WORK_DEPLOYER_CONTRACT_*` और
-  `TRUSTLESS_WORK_CONTRACT_WASM_HASH_*` को log करे, उन्हें pin कर दें।
+  `TRUSTLESS_WORK_CONTRACT_WASM_HASH_*` को log करे, उन्हें pin कर दें। Mainnet पर दोनों pins ज़रूरी हैं: उनके बिना
+  plugin boot नहीं होता।
 - **Platform fee एक hot key पर जमा होती जाती है।** Contract हर release और resolution पर
   Cosmos Pay का हिस्सा platform account को चुकाता है: उसे नियमित रूप से cold storage में
   sweep करें। उस account का USDC को trust करना ज़रूरी है, वरना हर release और resolution

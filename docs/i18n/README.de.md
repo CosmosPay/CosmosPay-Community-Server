@@ -2250,7 +2250,8 @@ vorher stornieren.
   `MANUAL_REVIEW` sind nicht betroffen: Der Schlüssel ihres Resolvers liegt nicht auf
   dem Server. Bewahren Sie beide Schlüssel in einem Secret Store auf und pinnen Sie
   `TRUSTLESS_WORK_DEPLOYER_CONTRACT_*` und `TRUSTLESS_WORK_CONTRACT_WASM_HASH_*`,
-  sobald der erste Testnet-Deploy sie loggt.
+  sobald der erste Testnet-Deploy sie loggt. Im Mainnet sind beide Pins Pflicht:
+  Ohne sie startet das Plugin nicht.
 - **Die Plattformgebühr sammelt sich auf einem Hot Key.** Der Contract zahlt den
   Anteil von Cosmos Pay bei jeder Freigabe und jeder Entscheidung an das
   Plattformkonto: Übertragen Sie ihn regelmäßig in einen Cold Storage. Dieses Konto

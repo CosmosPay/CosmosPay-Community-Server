@@ -48,6 +48,33 @@ describe('assertTrustlessWorkConfigConsistent', () => {
     ).not.toThrow();
   });
 
+  it('requires both deploy pins on mainnet, and neither on testnet', () => {
+    const pins = {
+      deployerContract: StrKey.encodeContract(Buffer.alloc(32, 1)),
+      contractWasmHash: 'ab'.repeat(32),
+    };
+    const onMainnet = (
+      cfg: Partial<TrustlessWorkNetworkConfig>,
+    ): AppConfig['trustlessWork'] => ({
+      ...config({}),
+      networks: { testnet: empty, public: { ...empty, ...cfg } },
+    });
+    expect(() => assertTrustlessWorkConfigConsistent(onMainnet(whole))).toThrow(
+      /TRUSTLESS_WORK_DEPLOYER_CONTRACT_MAINNET and .* are required/,
+    );
+    expect(() =>
+      assertTrustlessWorkConfigConsistent(
+        onMainnet({ ...whole, deployerContract: pins.deployerContract }),
+      ),
+    ).toThrow(/are required/);
+    expect(() =>
+      assertTrustlessWorkConfigConsistent(onMainnet({ ...whole, ...pins })),
+    ).not.toThrow();
+    expect(() =>
+      assertTrustlessWorkConfigConsistent(config(whole)),
+    ).not.toThrow();
+  });
+
   it('refuses an API key without a platform key, and the other way round', () => {
     expect(() =>
       assertTrustlessWorkConfigConsistent(config({ apiKey: 'k' })),

@@ -97,6 +97,21 @@ function assertNetwork(
       `${name('CONTRACT_WASM_HASH')} must be the contract wasm hash, 64 hex characters.`,
     );
   }
+  // On mainnet the buyer pays real money into whatever the deploy created, and
+  // the fund check proves the contract's PROPERTIES, not its code. Unpinned, a
+  // compromised Trustless Work API could name its own deployer or wasm and the
+  // buyer would fund it, so both pins are required there.
+  if (
+    network === 'public' &&
+    cfg.apiKey !== '' &&
+    (cfg.deployerContract === '' || cfg.contractWasmHash === '')
+  ) {
+    throw new Error(
+      `${name('DEPLOYER_CONTRACT')} and ${name('CONTRACT_WASM_HASH')} are required ` +
+        `when ${name('API_KEY')} is set: on mainnet a protected payment is only ` +
+        'deployed from the pinned deployer with the pinned contract code.',
+    );
+  }
 
   const accounts: [string, string | null][] = [
     [name('PLATFORM_SECRET'), platform],

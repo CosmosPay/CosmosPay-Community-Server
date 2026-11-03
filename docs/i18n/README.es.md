@@ -2210,7 +2210,8 @@ defecto), y el comercio puede cancelarlo antes.
   su resolutor no está en el servidor. Guarda las dos claves en un almacén de
   secretos, y fija `TRUSTLESS_WORK_DEPLOYER_CONTRACT_*` y
   `TRUSTLESS_WORK_CONTRACT_WASM_HASH_*` en cuanto el primer despliegue en testnet los
-  registre en el log.
+  registre en el log. En mainnet ambos valores son obligatorios: sin ellos el plugin
+  no arranca.
 - **La comisión de la plataforma se acumula en una clave caliente.** El contrato paga
   la parte de Cosmos Pay a la cuenta de plataforma en cada liberación y resolución:
   transfiérela con regularidad a un almacenamiento en frío. Esa cuenta debe confiar en
