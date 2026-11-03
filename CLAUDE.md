@@ -297,7 +297,7 @@ table. These are the rules that did not hold on their own:
   checks the passphrase first (private payments keep their own per-tier RPC in
   `ConfidentialSdk`).
 - **Integrations that are not the chain itself are native plugins** under
-  `src/native-plugins/<slug>/` (BlindPay, DeFindex), switched on by
+  `src/native-plugins/<slug>/` (BlindPay, DeFindex, Trustless Work), switched on by
   `PLUGINS_ENABLED`. The core never imports one — lint enforces it — and a plugin
   never imports another. When the core needs a plugin's data, add an extension
   point in the core (see `AdminExtensions`) and have the plugin register into it.
@@ -419,6 +419,24 @@ Each of these was a real finding in this codebase, not a hypothetical:
   XDR to DeFindex, an open relay under the deployment's DeFindex key that the shared
   public key could reach. Never broadcast an envelope no row vouches for, and keep `@AllowPublicKey()`
   off `/v1/defindex`: the wallet calls it with the account's own key.
+- **A keyless route never lets an id alone sign or spend.** The protected payment
+  links (`/v1/protected-payment-links/{id}`, native plugin `trustless-work`) are
+  `@Public()` like `/v1/payment-links/{id}`: the row is loaded by its uuid alone (a
+  value that is not one is the 404 of a missing row, before the table is read), the
+  id is the capability, and the answer is the buyer's projection
+  (`PROTECTED_PAYMENT_LINK_SELECT`), never the merchant's consumer or `reference`.
+  What the id unlocks stays bounded: every envelope it builds is for the bound buyer
+  to sign; the deploy, which spends the platform's XLM, happens once per payment and
+  binds the buyer (another is `409`); and a dispute the PLATFORM key opens for a
+  buyer without an on-chain role (`MERCHANT_RELEASES`) needs the buyer's signature
+  over the challenge that names the payment, the network and an expiry
+  (`protected-payment-dispute-challenge.ts`, checked with `verifyMessageSignature`).
+  A new server-signed action reachable from a keyless route needs the same proof of
+  key. Whoever signs a resolution, it pays only the payment's own buyer and merchant
+  and adds up to the contract's balance (`resolveArgsRefusal`, a code guard: a leaked
+  platform + resolver key pair still drains every auto-policy payment), and the
+  contract id a buyer pays into is derived from the deploy the platform signed,
+  never read from Trustless Work's answer.
 - **Input a provider SDK cannot carry is the caller's `400`, refused in the DTO.**
   `@defindex/sdk` takes amounts as JS numbers; an amount past
   `Number.MAX_SAFE_INTEGER` was checked inside the provider call and answered

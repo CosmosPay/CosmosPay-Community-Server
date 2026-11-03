@@ -560,6 +560,22 @@ export const API_ERROR_CASES: Readonly<Record<ApiErrorCode, ApiErrorCase>> = {
     path: '/v1/plugins/example/commands/add-note',
   },
 
+  [ApiErrorCode.ProtectedPaymentBuyerMismatch]: {
+    statuses: [409],
+    summary: 'The protected payment is bound to another buyer',
+    message:
+      'This protected payment is bound to another buyer: only ' +
+      'GARMB7W3FCR3GKIM3FLWVJASC2PUZ4VHUJZTNJVWWKNTCJNKO6TBCT76 may fund it.',
+    path: '/v1/protected-payment-links/3f1c2b7e-8d4a-4c1e-9b2f-6a5d4c3b2a10/fund',
+  },
+  [ApiErrorCode.ProtectedPaymentSignatureInvalid]: {
+    statuses: [400],
+    summary: "The buyer's signed message does not verify, or it expired",
+    message:
+      "The signature does not verify against the payment's buyer address.",
+    path: '/v1/protected-payment-links/3f1c2b7e-8d4a-4c1e-9b2f-6a5d4c3b2a10/dispute',
+  },
+
   // --- service --------------------------------------------------------------
   [ApiErrorCode.Misconfigured]: {
     statuses: [503],

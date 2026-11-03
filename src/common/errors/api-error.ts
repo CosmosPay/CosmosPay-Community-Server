@@ -270,6 +270,20 @@ export enum ApiErrorCode {
    */
   PluginFailed = 'plugin_failed',
 
+  // --- protected payments (native plugin `trustless-work`) -----------------
+  /**
+   * The protected payment is bound to another buyer: the merchant named one at
+   * create, or the first fund call bound it. Only that address may fund, and the
+   * contract is deployed for it alone.
+   */
+  ProtectedPaymentBuyerMismatch = 'protected_payment_buyer_mismatch',
+  /**
+   * The buyer's signed message (what lets the platform open a dispute for a buyer
+   * without an on-chain role) does not verify against the buyer's address, or its
+   * expiry is past or too far ahead.
+   */
+  ProtectedPaymentSignatureInvalid = 'protected_payment_signature_invalid',
+
   // --- service --------------------------------------------------------------
   Misconfigured = 'misconfigured',
   Internal = 'internal_error',

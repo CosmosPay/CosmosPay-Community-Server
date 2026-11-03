@@ -554,6 +554,49 @@ class EnvironmentVariables {
   @Max(1_000_000_000)
   DEFINDEX_MAX_FEE_STROOPS?: number;
 
+  // --- Protected payments (native plugin `trustless-work`) ---
+  // The types only. How the per-network keys relate to each other (secrets that
+  // parse, three distinct accounts, a key with its platform account) is checked
+  // when the plugin boots (`assertTrustlessWorkConfigConsistent`), so a
+  // deployment that does not enable it is not held to variables it never reads.
+  @IsOptional()
+  @IsString()
+  TRUSTLESS_WORK_API_KEY_TESTNET?: string;
+
+  @IsOptional()
+  @IsString()
+  TRUSTLESS_WORK_API_KEY_MAINNET?: string;
+
+  @IsOptional()
+  @IsUrl(URL_OPTIONS)
+  TRUSTLESS_WORK_BASE_URL_TESTNET?: string;
+
+  @IsOptional()
+  @IsUrl(URL_OPTIONS)
+  TRUSTLESS_WORK_BASE_URL_MAINNET?: string;
+
+  /**
+   * Cosmos Pay's fee in basis points. The contract refuses more than 99%, and
+   * more than 100% together with Trustless Work's fixed 30.
+   */
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(9900)
+  TRUSTLESS_WORK_PLATFORM_FEE_BPS?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  TRUSTLESS_WORK_TIMEOUT_MS?: number;
+
+  /** The fee ceiling of a protected payment build, in stroops; same bounds as DeFindex's. */
+  @IsOptional()
+  @IsInt()
+  @Min(100)
+  @Max(1_000_000_000)
+  TRUSTLESS_WORK_MAX_FEE_STROOPS?: number;
+
   /**
    * Per-consumer KYC redirect_url host allow-list (issue #33). Optional at boot —
    * missing/empty means every consumer fails closed until configured. Shape:

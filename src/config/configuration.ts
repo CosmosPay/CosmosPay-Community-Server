@@ -22,6 +22,10 @@ import {
   DEFAULT_SOLANA_RPC,
   DEFAULT_STELLAR_RPC_MAINNET,
   DEFAULT_SWAP_AGGREGATOR_TIMEOUT_MS,
+  DEFAULT_TRUSTLESS_WORK_BASE_URL,
+  DEFAULT_TRUSTLESS_WORK_MAX_FEE_STROOPS,
+  DEFAULT_TRUSTLESS_WORK_PLATFORM_FEE_BPS,
+  DEFAULT_TRUSTLESS_WORK_TIMEOUT_MS,
   DEFAULT_WALLET_AUTH_SWEEP_INTERVAL_MS,
   DEFAULT_WALLET_AUTH_TIMEOUT_MS,
   DEFAULT_ZK_PAYMENTS_RPC,
@@ -90,6 +94,27 @@ export function envFilePath(env: NodeJS.ProcessEnv = process.env): string {
  * Consumed via Nest's ConfigService<AppConfig, true>.
  */
 export type StellarNetwork = 'public' | 'testnet';
+
+/**
+ * One network's Trustless Work settings (`TRUSTLESS_WORK_*_TESTNET` /
+ * `TRUSTLESS_WORK_*_MAINNET`). Every value is the operator's; the secrets are
+ * Stellar secret seeds (S...) and never leave this process.
+ */
+export interface TrustlessWorkNetworkConfig {
+  /** Trustless Work's `x-api-key` for this network. Empty: every protected payment route answers 503. */
+  apiKey: string;
+  baseUrl: string;
+  /** Cosmos Pay's platform account: signs deploys and platform disputes, receives the fee. */
+  platformSecret: string;
+  /** The automatic dispute resolver, for the REFUND_BUYER and RELEASE_MERCHANT policies. */
+  resolverSecret: string;
+  /** The ops resolver (G...) for MANUAL_REVIEW: its secret is never on this server. */
+  opsResolver: string;
+  /** When set, a deploy must call this Trustless Work deployer contract (C...). */
+  deployerContract: string;
+  /** When set, a deploy must install this contract wasm (64 hex). */
+  contractWasmHash: string;
+}
 
 /** The API-key environment a BlindPay instance serves (`dev` keys, `prod` keys). */
 export type BlindpayEnvironment = 'dev' | 'prod';
@@ -438,6 +463,15 @@ export interface AppConfig {
      */
     maxFeeStroops: number;
   };
+  /** The `trustless-work` native plugin: protected payments on Trustless Work V1. */
+  trustlessWork: {
+    networks: Record<StellarNetwork, TrustlessWorkNetworkConfig>;
+    /** Cosmos Pay's platform fee in basis points, on top of Trustless Work's fixed 30. */
+    platformFeeBps: number;
+    timeoutMs: number;
+    /** The most a built protected payment transaction may charge its signer, in stroops. */
+    maxFeeStroops: number;
+  };
   plugins: {
     /**
      * Slugs of the plugins in `plugins/` this deployment serves. A plugin that
@@ -725,6 +759,30 @@ function signersHorizons(): Record<StellarNetwork, string> {
  * One network's private payments set, or null when its token is unset. Completeness
  * and shape were checked at boot (`zk-payments-env.ts`), so this only reads.
  */
+/**
+ * One network's `TRUSTLESS_WORK_*_<suffix>` set: `_TESTNET` for testnet,
+ * `_MAINNET` for mainnet. Checked when the plugin boots
+ * (`assertTrustlessWorkConfigConsistent`), not here.
+ */
+function trustlessWorkNetwork(
+  suffix: 'TESTNET' | 'MAINNET',
+  network: StellarNetwork,
+): TrustlessWorkNetworkConfig {
+  const env = (name: string) =>
+    process.env[`TRUSTLESS_WORK_${name}_${suffix}`]?.trim() ?? '';
+  return {
+    apiKey: env('API_KEY'),
+    baseUrl: (
+      env('BASE_URL') || DEFAULT_TRUSTLESS_WORK_BASE_URL[network]
+    ).replace(/\/+$/, ''),
+    platformSecret: env('PLATFORM_SECRET'),
+    resolverSecret: env('RESOLVER_SECRET'),
+    opsResolver: env('OPS_RESOLVER'),
+    deployerContract: env('DEPLOYER_CONTRACT'),
+    contractWasmHash: env('CONTRACT_WASM_HASH').toLowerCase(),
+  };
+}
+
 function zkNetwork(network: StellarNetwork): ZkNetworkConfig | null {
   const env = (field: Parameters<typeof zkPaymentsEnvName>[1]) =>
     process.env[zkPaymentsEnvName(network, field)]?.trim() ?? '';
@@ -1087,6 +1145,27 @@ export default (): AppConfig => ({
     maxFeeStroops: parseInt(
       process.env.DEFINDEX_MAX_FEE_STROOPS ??
         String(DEFAULT_DEFINDEX_MAX_FEE_STROOPS),
+      10,
+    ),
+  },
+  trustlessWork: {
+    networks: {
+      testnet: trustlessWorkNetwork('TESTNET', 'testnet'),
+      public: trustlessWorkNetwork('MAINNET', 'public'),
+    },
+    platformFeeBps: parseInt(
+      process.env.TRUSTLESS_WORK_PLATFORM_FEE_BPS ??
+        String(DEFAULT_TRUSTLESS_WORK_PLATFORM_FEE_BPS),
+      10,
+    ),
+    timeoutMs: parseInt(
+      process.env.TRUSTLESS_WORK_TIMEOUT_MS ??
+        String(DEFAULT_TRUSTLESS_WORK_TIMEOUT_MS),
+      10,
+    ),
+    maxFeeStroops: parseInt(
+      process.env.TRUSTLESS_WORK_MAX_FEE_STROOPS ??
+        String(DEFAULT_TRUSTLESS_WORK_MAX_FEE_STROOPS),
       10,
     ),
   },

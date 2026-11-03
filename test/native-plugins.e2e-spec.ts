@@ -6,8 +6,8 @@ import request from 'supertest';
 /**
  * A deployment that does not list a native plugin in PLUGINS_ENABLED does not
  * have it: its routes are not registered at all (404, not 403 or 503), and its
- * section of the admin summary is absent. The other suites run with `blindpay`
- * and `defindex` enabled; this one boots the app without them.
+ * section of the admin summary is absent. The other suites run with `blindpay`,
+ * `defindex` and `trustless-work` enabled; this one boots the app without them.
  */
 describe('Native plugins switched off (e2e)', () => {
   let app: INestApplication;
@@ -53,7 +53,7 @@ describe('Native plugins switched off (e2e)', () => {
       .set('x-consumer-role', 'admin')
       .set(
         'x-consumer-permissions',
-        'onramp:read,onramp:write,offramp:read,kyc:read,liquidity:read',
+        'onramp:read,onramp:write,offramp:read,kyc:read,liquidity:read,payments:read,payments:write',
       );
 
   it.each([
@@ -62,6 +62,13 @@ describe('Native plugins switched off (e2e)', () => {
     ['GET', '/v1/kyc/receivers'],
     ['GET', '/v1/defindex/vaults'],
     ['POST', '/v1/blindpay/webhooks'],
+    ['GET', '/v1/protected-payments'],
+    ['POST', '/v1/protected-payments'],
+    ['GET', '/v1/protected-payment-links/3f1c2b7e-8d4a-4c1e-9b2f-6a5d4c3b2a10'],
+    [
+      'POST',
+      '/v1/protected-payment-links/3f1c2b7e-8d4a-4c1e-9b2f-6a5d4c3b2a10/fund',
+    ],
   ])('does not serve %s %s', async (method, path) => {
     const req =
       method === 'GET'

@@ -10,7 +10,8 @@ export type UpstreamProvider =
   | 'Jupiter'
   | 'Kuru Flow'
   | 'Soroban RPC'
-  | 'DeFindex';
+  | 'DeFindex'
+  | 'Trustless Work';
 
 /**
  * Vendor extension the published spec carries, and `swagger.ts` reads back.

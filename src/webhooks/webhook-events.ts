@@ -74,6 +74,13 @@ export const TERMINAL_WEBHOOK_EVENTS = [
   // Durability: a private payment settles once (a compare-and-swap on PENDING), and
   // the merchant was paid on-chain whatever happens to this pod.
   'ZK_PAYMENT_SUCCEEDED',
+  // Durability: a protected payment ends once (each step is a compare-and-swap
+  // on its own timestamp), and the submit routes and the sync job can both see
+  // the end, so the claim is also what makes them one notification.
+  'PROTECTED_PAYMENT_RELEASED',
+  'PROTECTED_PAYMENT_RESOLVED',
+  'PROTECTED_PAYMENT_EXPIRED',
+  'PROTECTED_PAYMENT_CANCELLED',
 ] as const satisfies readonly WebhookEventType[];
 
 export type TerminalWebhookEventType = (typeof TERMINAL_WEBHOOK_EVENTS)[number];

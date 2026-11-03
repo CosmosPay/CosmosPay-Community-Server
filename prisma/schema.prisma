@@ -39,6 +39,11 @@ model Consumer {
   // DeFindex vault transactions built for this consumer (native plugin `defindex`).
   defindexTransactions DefindexTransaction[]
 
+  // Protected payments this consumer created as the merchant, and the
+  // transactions built for them (native plugin `trustless-work`).
+  protectedPayments            ProtectedPayment[]
+  protectedPaymentTransactions ProtectedPaymentTransaction[]
+
   // BlindPay (onramp/offramp/KYC) resources mirrored from the provider.
   blindpayReceivers BlindpayReceiver[]
   payins            Payin[]
@@ -206,6 +211,20 @@ enum WebhookEventType {
   // A private payment settled: both confidential transfers verified on-chain
   // (appended by `20261025180000_zk_payments`).
   ZK_PAYMENT_SUCCEEDED
+
+  // Protected payments (native plugin `trustless-work`, appended by
+  // `20261102120000_protected_payments`). RELEASED, RESOLVED, EXPIRED and
+  // CANCELLED are terminal (`TERMINAL_WEBHOOK_EVENTS`).
+  PROTECTED_PAYMENT_CREATED
+  PROTECTED_PAYMENT_FUNDED
+  PROTECTED_PAYMENT_SHIPPED
+  PROTECTED_PAYMENT_APPROVED
+  PROTECTED_PAYMENT_RELEASED
+  PROTECTED_PAYMENT_DISPUTED
+  PROTECTED_PAYMENT_RESOLVED
+  PROTECTED_PAYMENT_DEADLINE_PASSED
+  PROTECTED_PAYMENT_EXPIRED
+  PROTECTED_PAYMENT_CANCELLED
 }
 
 enum WebhookDeliveryStatus {
@@ -2292,4 +2311,176 @@ model DefindexTransaction {
   // same transaction twice; two consumers building the same bytes each get a row.
   @@unique([consumerId, txHash])
   @@map("defindex_transaction")
+}
+
+// ---------------------------------------------------------------------------
+// Protected payments (native plugin `trustless-work`). A merchant creates one;
+// the buyer's first fund call deploys a Trustless Work single-release contract
+// on Stellar (Trustless Work calls it an escrow; the platform key signs the
+// deploy), and the buyer then signs the USDC deposit into it. The money moves
+// only on-chain: this table mirrors the contract (the sync job reads it back
+// through Trustless Work) and records who may do what next. `id` is also the
+// contract's `engagement_id`, and a uuid so a keyless payment link cannot be
+// guessed.
+// ---------------------------------------------------------------------------
+enum ProtectedPaymentStatus {
+  CREATED // created by the merchant; no contract yet
+  AWAITING_FUNDING // the contract is deployed; waiting for the buyer's deposit
+  FUNDED // the buyer's USDC is in the contract
+  SHIPPED // the merchant marked the milestone shipped, with evidence
+  APPROVED // the approver approved the milestone
+  RELEASED // the release signer released the funds to the merchant (terminal)
+  DISPUTED // a party (or the deadline job) opened a dispute
+  RESOLVED // the dispute resolver split the balance (terminal)
+  EXPIRED // not funded before `fundingExpiresAt` (terminal)
+  CANCELLED // cancelled by the merchant before funding (terminal)
+}
+
+// Who approves the milestone and who releases the funds (`protected-payment-roles.ts`).
+enum ProtectedPaymentReleaseModel {
+  BUYER_RELEASES
+  MERCHANT_RELEASES
+  BUYER_APPROVES_MERCHANT_RELEASES
+}
+
+// What happens when `deliveryDeadlineAt` passes on a funded protected payment.
+enum ProtectedPaymentDeadlinePolicy {
+  MANUAL_REVIEW
+  REFUND_BUYER
+  RELEASE_MERCHANT
+}
+
+enum ProtectedPaymentAction {
+  DEPLOY
+  FUND
+  SHIP
+  APPROVE
+  RELEASE
+  DISPUTE
+  RESOLVE
+}
+
+enum ProtectedPaymentTransactionStatus {
+  BUILT // checked and recorded, waiting for its signature
+  SUBMITTING // a submit claimed it and is waiting for Trustless Work's answer
+  SUBMITTED // Trustless Work answered; `result` is that answer, served to every replay
+}
+
+model ProtectedPayment {
+  id         String   @id @default(uuid())
+  consumerId String
+  consumer   Consumer @relation(fields: [consumerId], references: [id], onDelete: Cascade)
+
+  // `public` or `testnet`, from the merchant's API key (`resolveNetwork`).
+  network        String
+  status         ProtectedPaymentStatus         @default(CREATED)
+  releaseModel   ProtectedPaymentReleaseModel
+  deadlinePolicy ProtectedPaymentDeadlinePolicy
+
+  title       String
+  description String?
+  // The merchant's own order reference; never shown on the buyer's link.
+  reference   String?
+
+  // Decimal string, 7 places, in `asset` (USDC only, the issuer the asset
+  // registry vouches for on `network`).
+  amount      String
+  asset       String @default("USDC")
+  assetIssuer String
+
+  // The parties. `buyerAddress` is set by the merchant at create, or bound by
+  // the first fund call (the deploy); a different buyer later is refused.
+  merchantAddress        String
+  buyerAddress           String?
+  // Cosmos Pay's platform account, and the dispute resolver (the ops address or
+  // the automatic resolver key, by `deadlinePolicy`), as deployed.
+  platformAddress        String
+  disputeResolverAddress String?
+  // Cosmos Pay's fee in basis points, on top of Trustless Work's fixed 30.
+  platformFeeBps         Int
+
+  // The Trustless Work contract (C...), once deployed.
+  contractId     String? @unique
+  idempotencyKey String?
+
+  // The buyer must fund before this; `deliveryDeadlineAt` is `fundedAt` plus
+  // `deliveryWindowHours`, and `deadlinePassedAt` when the deadline job saw it pass.
+  fundingExpiresAt    DateTime
+  deliveryWindowHours Int
+  deliveryDeadlineAt  DateTime?
+  deadlinePassedAt    DateTime?
+
+  // What the merchant marked shipped with (a tracking number or URL).
+  evidence      String?
+  fundedAt      DateTime?
+  shippedAt     DateTime?
+  approvedAt    DateTime?
+  releasedAt    DateTime?
+  disputedAt    DateTime?
+  // BUYER, MERCHANT or DEADLINE; null when the chain showed a dispute nobody
+  // opened through this service.
+  disputedBy    String?
+  // Kept off-chain: Trustless Work V1 takes no reason.
+  disputeReason String?
+  resolvedAt    DateTime?
+  // How the balance was split: { buyer, merchant, decidedBy }, in USDC.
+  resolution    Json?
+  cancelledAt   DateTime?
+
+  // When a fund call took the deploy; a claim older than its lease is abandoned.
+  deployClaimedAt DateTime?
+  // When the sync job last read the contract through Trustless Work.
+  lastSyncedAt    DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  transactions ProtectedPaymentTransaction[]
+
+  @@unique([consumerId, idempotencyKey])
+  // Listing endpoint: one consumer's protected payments on one network, by status.
+  @@index([consumerId, network, status])
+  // The deadline job: funded protected payments past their delivery deadline.
+  @@index([status, deliveryDeadlineAt])
+  @@map("protected_payment")
+}
+
+// What this service built for a protected payment, like `defindex_transaction`:
+// a submit relays a signed transaction only when it hashes to one of these rows,
+// for the same protected payment and network, before it expires, once.
+model ProtectedPaymentTransaction {
+  id                 String           @id @default(cuid())
+  protectedPaymentId String
+  protectedPayment   ProtectedPayment @relation(fields: [protectedPaymentId], references: [id], onDelete: Cascade)
+  // The merchant's consumer, whoever signs.
+  consumerId         String
+  consumer           Consumer         @relation(fields: [consumerId], references: [id], onDelete: Cascade)
+
+  network String
+  action  ProtectedPaymentAction
+  status  ProtectedPaymentTransactionStatus @default(BUILT)
+  // The account that signs it (the envelope's source), checked at build.
+  signer  String
+
+  // The unsigned envelope Trustless Work built, and its hash under the network
+  // passphrase, lowercase hex (signing does not change it).
+  xdr     String
+  txHash  String
+  // What the build was for, applied when it lands: a dispute's reason and who
+  // opened it, a resolution's split, a deploy's derived contract id.
+  context Json?
+
+  // Its own `maxTime`, capped at `TRUSTLESS_WORK_BUILD_TTL_MS` after the build.
+  expiresAt   DateTime
+  claimedAt   DateTime?
+  submittedAt DateTime?
+  // Trustless Work's answer to `send-transaction` (`status`, `message`, ...), verbatim.
+  result      Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([consumerId, txHash])
+  @@index([protectedPaymentId, action])
+  @@map("protected_payment_transaction")
 }
