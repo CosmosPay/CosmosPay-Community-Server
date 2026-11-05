@@ -219,6 +219,8 @@ const TAG_DESCRIPTIONS: Record<string, string> = {
   assets: 'The asset registry this service prices and validates against.',
   kyc: 'Receivers, their documents, wallets and bank accounts (BlindPay).',
   onramp: 'Fiat in: quotes, payins and virtual accounts (BlindPay).',
+  'p2p-onramp':
+    'Stablecoins bought with local money from P2P sellers: the market, a firm quote, and sessions that open a hosted purchase delivered to the address you name.',
   offramp: 'Fiat out: quotes and payouts (BlindPay).',
   webhooks: 'Endpoints this service notifies, and their delivery history.',
   activity: 'What a wallet or dashboard reports back about a session.',
@@ -358,6 +360,13 @@ const UPSTREAM_FAILURES: Record<
   // Reached through `requestUpstreamJson`: its 5xx (and a build that answers
   // FAILED) is 502, a refused key or its rate limit 503, a timeout 504.
   'Trustless Work': ['UpstreamError', 'UpstreamUnavailable', 'UpstreamTimeout'],
+  // Reached through `requestUpstreamJson`: a 5xx is 502, a refused id or its
+  // rate limit 503, a timeout 504.
+  'P2P marketplace': [
+    'UpstreamError',
+    'UpstreamUnavailable',
+    'UpstreamTimeout',
+  ],
 };
 
 const RESPONSE_STATUS: Record<SharedErrorResponse, number> = {

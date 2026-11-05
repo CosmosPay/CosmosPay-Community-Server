@@ -39,6 +39,9 @@ model Consumer {
   // DeFindex vault transactions built for this consumer (native plugin `defindex`).
   defindexTransactions DefindexTransaction[]
 
+  // Purchases opened with local money on the P2P marketplace (native plugin `eldorado`).
+  onrampP2pSessions OnrampP2pSession[]
+
   // Protected payments this consumer created as the merchant, and the
   // transactions built for them (native plugin `trustless-work`).
   protectedPayments            ProtectedPayment[]
@@ -2311,6 +2314,47 @@ model DefindexTransaction {
   // same transaction twice; two consumers building the same bytes each get a row.
   @@unique([consumerId, txHash])
   @@map("defindex_transaction")
+}
+
+// ---------------------------------------------------------------------------
+// P2P on-ramp (native plugin `eldorado`). A session is one purchase this service
+// opened on El Dorado's widget for a consumer: the order it filled in and the URL
+// that takes it, with the recipient fixed. The money moves between the buyer and
+// a P2P seller on the marketplace, never through this service; the row is the
+// consumer's record of what was opened, matched to the marketplace's order by
+// `reference` (its `externalReferenceId`).
+model OnrampP2pSession {
+  id         String   @id @default(cuid())
+  consumerId String
+  consumer   Consumer @relation(fields: [consumerId], references: [id], onDelete: Cascade)
+
+  // `public` or `testnet`, from the API key that opened it (`resolveNetwork`):
+  // a `prod` key buys on mainnet, a `dev` key in the sandbox. Lists filter by it.
+  network String
+
+  // The order: local money (`currency`, `amount` as a decimal string) paid with
+  // `paymentMethod`, for `token` (`tokenAddress` on EIP-155 `chainId`), delivered
+  // to `address` (EIP-55).
+  currency      String
+  paymentMethod String
+  amount        String
+  token         String
+  tokenAddress  String
+  chainId       Int
+  address       String
+
+  // The market price's estimate when it was opened, a decimal string; the widget
+  // quotes the firm figure before payment.
+  estimatedAmountOut String
+
+  // `cp-<random UUID>`, carried as the widget's `externalReferenceId`.
+  reference String @unique
+  widgetUrl String
+
+  createdAt DateTime @default(now())
+
+  @@index([consumerId, network, createdAt])
+  @@map("onramp_p2p_session")
 }
 
 // ---------------------------------------------------------------------------

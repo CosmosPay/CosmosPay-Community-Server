@@ -88,6 +88,7 @@ src/
   native-plugins/                 first-party plugins, imported only when PLUGINS_ENABLED names them:
     blindpay/                     BlindPay: client, Svix verify, sync + webhook, kyc/, onramp/, offramp/, admin/
     defindex/                     DeFindex vaults (Stellar)
+    eldorado/                     P2P 入金：在 El Dorado 上用本地货币换稳定币（Arbitrum）
     trustless-work/               protected payments on Trustless Work (Stellar): client, envelope checks,
                                   sync / expiry / deadline jobs, the keyless buyer routes, admin/
   health/                         liveness/readiness probes (@Public)
@@ -101,6 +102,7 @@ prisma/schema.prisma              Consumer, PaymentIntent, Swap, ChainSwap, Cros
                                   EasyRecoverySession
                                   PluginInstallation, PluginRecord
                                   ProtectedPayment, ProtectedPaymentTransaction
+                                  OnrampP2pSession
 test/                             e2e suites: gateway gate, admin + alias console gates,
                                   payment intents, swaps, liquidity pools, KYC, webhooks
 plugins/                          THE plugins folder: one <slug>/ per plugin (plugin.json, index.ts, signature.json)
@@ -134,6 +136,7 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | Webhooks | `/v1/webhooks` | 端点 CRUD、密钥轮换、投递记录、重新投递 |
 | KYC | `/v1/kyc` | Receiver（KYC/KYB）、钱包、银行账户、文档上传 |
 | Onramp | `/v1/onramp` | Payin 报价、payin、虚拟账户 |
+| P2P 入金 | `/v1/onramp/p2p` | 通过 P2P 卖家用本地货币换取 Arbitrum 上的 USDC 或 USDT：市场、确定报价、购买会话 |
 | Offramp | `/v1/offramp` | Payout 报价、授权、payout（客户端签名） |
 | 商品 | `/v1/products` | 商户商品目录 |
 | 客户 | `/v1/customers` | 由支付意图派生的付款方记录 |
@@ -249,6 +252,11 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | GET | `/v1/offramp/payouts/{id}` | `offramp:read` |  |
 | POST | `/v1/offramp/payouts/{id}/documents` | `offramp:write` |  |
 | POST | `/v1/offramp/quotes` | `offramp:write` |  |
+| GET | `/v1/onramp/p2p/market` | `onramp:read` | ✓ |
+| POST | `/v1/onramp/p2p/quotes` | `onramp:write` |  |
+| GET | `/v1/onramp/p2p/sessions` | `onramp:read` |  |
+| POST | `/v1/onramp/p2p/sessions` | `onramp:write` |  |
+| GET | `/v1/onramp/p2p/sessions/{id}` | `onramp:read` |  |
 | GET | `/v1/onramp/payins` | `onramp:read` |  |
 | POST | `/v1/onramp/payins` | `onramp:write` |  |
 | GET | `/v1/onramp/payins/{id}` | `onramp:read` |  |
@@ -1385,6 +1393,41 @@ CREATED | AWAITING_FUNDING --merchant cancels--> CANCELLED
 | POST | `/v1/admin/protected-payments/{id}/resolve` | 平台控制台：裁决一项争议 |
 | POST | `/v1/admin/protected-payments/{id}/submit` | 平台控制台：转发运维钱包签名的裁决 |
 
+## P2P 入金（El Dorado）
+
+> **原生插件。** 本节的一切都是 `eldorado` 插件
+> （`src/native-plugins/eldorado/`），只有当 `PLUGINS_ENABLED` 列出 `eldorado` 时才提供。
+> 它的路由、错误和发布的合约都把 El Dorado 称为“P2P 市场”：
+> 客户不会知道 Cosmos Pay 构建在什么之上。
+
+买家用本地货币（阿根廷的银行转账、PIX、Nequi、Yape、Zelle 等）向
+[El Dorado](https://eldorado.io) P2P 市场上的卖家付款，并在 Arbitrum 上收到 USDC 或 USDT。
+本服务从不持有资金，也不签署任何东西：它读取市场、为订单报价并打开一个会话，即市场托管的 widget，
+订单已填好、收款地址已固定。买家在那里登录市场、验证身份并付款。
+
+| 方法 | 路径 | Scope | 用途 |
+| --- | --- | --- | --- |
+| GET | `/v1/onramp/p2p/market` | `onramp:read` | 货币、支付方式、买入价和最低额、链及其代币（共享公钥可以读取） |
+| POST | `/v1/onramp/p2p/quotes` | `onramp:write` | 含费用的确定报价；需要集成方 id |
+| GET | `/v1/onramp/p2p/sessions` | `onramp:read` | 该密钥所在网络上该 consumer 的会话 |
+| POST | `/v1/onramp/p2p/sessions` | `onramp:write` | 记录一笔订单并返回其 `widgetUrl` |
+| GET | `/v1/onramp/p2p/sessions/{id}` | `onramp:read` | 其中之一 |
+
+- **密钥的网络决定市场。** `prod` 密钥在主网购买（Arbitrum One 上的 USDC 或 USDT）；`dev`
+  密钥在沙盒中购买，那里唯一的资产是 Arbitrum Sepolia 上的测试 USDT，且订单只有在 El Dorado
+  开发版应用中有做市商广告时才能完成。
+- **收款地址是固定的。** widget URL 带有 `address`，widget 将其视为已连接的钱包，买家无法更改；
+  没有它，买家会连接任意钱包，稳定币就会到那里。该参数不在 El Dorado 的文档中（于 2026-11-05
+  从 widget 的代码中读到）：如果它失效，就停止打开会话。
+- **在标签页或窗口中打开 widget，不要用 iframe。** 它有自己的登录、使用摄像头的身份验证，
+  以及可能比弹窗持续更久的付款步骤。
+- **集成方 id 是可选的，确定报价除外。** `ELDORADO_CLIENT_ID` 和 `ELDORADO_REFERRAL_ID` 是
+  El Dorado 发给集成方的 id（api@eldorado.io）。没有它们，市场和会话照常工作，widget 在付款前
+  报价；有了它们，`POST /v1/onramp/p2p/quotes` 会应答，每个会话的 widget 都带上这些 id，
+  将订单归属于 Cosmos Pay。
+- **市场按网络缓存一分钟**（`ELDORADO_MARKET_TTL_MS`），没有价格、最低额或支付方式的货币会被
+  排除。会话的 `estimatedAmountOut` 是市场价格，向下取整。
+
 ## 插件 — 以 slug 命名的扩展
 
 其他团队以**插件**的形式把自己的技术集成到本服务：`plugins/` 下的一个目录，在
@@ -1579,6 +1622,7 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
 | ---- | ---------- |
 | `blindpay` | KYC、入金、出金、BlindPay webhook、其 `/v1/admin` 路由（`receivers`、`payins`、`payouts`）以及管理概览中的 `fiat` 部分 |
 | `defindex` | `/v1/defindex`——Stellar 上的 DeFindex vaults |
+| `eldorado` | `/v1/onramp/p2p`：在 El Dorado 的 P2P 市场用本地货币购买的稳定币（Arbitrum） |
 | `trustless-work` | `/v1/protected-payments`、无需 key 的 `/v1/protected-payment-links` 以及 `/v1/admin/protected-payments`：Stellar 上基于 Trustless Work 的受保护付款 |
 
 - **未列出即不存在。** `PLUGINS_ENABLED` 未列出的原生插件永远不会被实例化：其路由返回
@@ -1600,6 +1644,15 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
 - **受保护付款同样遵守 DeFindex 的规则**：Trustless Work 构建的每个 envelope 在被记录或签名之前都会经过检查，其 submit 只转发这些记录（见*受保护付款（Trustless Work）*）。其买家路由是原生插件中唯一不需要 API key 的路由组。
 
 ## 升级 — 破坏性变更与部署说明
+
+### P2P 入金：一个新的原生插件和一张表
+
+- **迁移 `20261105120000_onramp_p2p_sessions`** 创建 `onramp_p2p_session` 表；不改写任何内容。
+  在新构建提供服务前运行 `migrate deploy`。
+- **启用前保持关闭。** 将 `eldorado` 加入 `PLUGINS_ENABLED`。不需要任何变量；
+  `ELDORADO_CLIENT_ID` 和 `ELDORADO_REFERRAL_ID` 开启确定报价。
+- **新预算：** `onramp-p2p:quote`（每分钟 30 次）和 `onramp-p2p:session`（每分钟 20 次），
+  按 consumer 和客户端地址计。
 
 ### 插件：预装 Sub Rosa、原子化的 storage 写入与并发上限
 
@@ -2318,6 +2371,9 @@ curl -H "X-Gateway-Secret: $APISIX_GATEWAY_SECRET" -H "X-Consumer-Username: ops"
 | `DEFINDEX_BASE_URL` | 否 | `https://api.defindex.io` | DeFindex API 基础 URL |
 | `DEFINDEX_TIMEOUT_MS` | 否 | `30000` | DeFindex HTTP 超时（ms） |
 | `DEFINDEX_MAX_FEE_STROOPS` | 否 | `10000000` | 构建出的 DeFindex 交易最多可向签名者收取的费用，包含费与 Soroban 资源费合计（stroops）；超过时构建以 `502 provider_error` 拒绝 |
+| `ELDORADO_CLIENT_ID` | 否 | 无 | El Dorado 发给集成方的 ClientID。与 `ELDORADO_REFERRAL_ID` 一起开启 `POST /v1/onramp/p2p/quotes` 并为每个会话的订单做归属；两者缺一，该路由返回 `503 misconfigured` |
+| `ELDORADO_REFERRAL_ID` | 否 | 无 | 与 `ELDORADO_CLIENT_ID` 配套的 ReferralID |
+| `ELDORADO_TIMEOUT_MS` | 否 | `10000` | 对 P2P 市场单次调用的预算（ms） |
 | `TRUSTLESS_WORK_API_KEY_TESTNET` | 测试网上的受保护付款需要 | — | Trustless Work 的测试网 API key（供 `dev` key 使用）。仅当 `PLUGINS_ENABLED` 包含 `trustless-work` 时路由才存在；没有该 key 时，它们在测试网上返回 `503 misconfigured`。需要同时设置 `TRUSTLESS_WORK_PLATFORM_SECRET_TESTNET` |
 | `TRUSTLESS_WORK_BASE_URL_TESTNET` | 否 | `https://dev.api.trustlesswork.com` | 测试网的 Trustless Work V1 API |
 | `TRUSTLESS_WORK_PLATFORM_SECRET_TESTNET` | 与 API key 一起 | — | Cosmos Pay 的平台账户（S...）：为部署和平台发起的争议签名，支付其 XLM，并接收平台手续费。必须信任 USDC。这是热密钥：请归集其上的手续费 |
@@ -2329,7 +2385,7 @@ curl -H "X-Gateway-Secret: $APISIX_GATEWAY_SECRET" -H "X-Consumer-Username: ops"
 | `TRUSTLESS_WORK_PLATFORM_FEE_BPS` | 否 | `165` | Cosmos Pay 对受保护付款收取的手续费，单位为基点；Trustless Work 另加其固定的 30（合计 1.95%）。修改后只对之后创建的付款生效 |
 | `TRUSTLESS_WORK_TIMEOUT_MS` | 否 | `30000` | 单次 Trustless Work 调用的时间预算（ms） |
 | `TRUSTLESS_WORK_MAX_FEE_STROOPS` | 否 | `20000000` | 一笔受保护付款交易最多可向签名者收取的费用，包含费与 Soroban 资源费合计（stroops）；超过时构建以 `502 provider_error` 拒绝。即 2 XLM，供部署使用 |
-| `PLUGINS_ENABLED` | 否 | — | 本部署提供的插件 slug，逗号分隔：`plugins/` 中的沙箱插件，以及原生插件 `blindpay`、`defindex` 和 `trustless-work`。为空则不提供任何插件；未列出的插件永远不会被加载 |
+| `PLUGINS_ENABLED` | 否 | — | 本部署提供的插件 slug，逗号分隔：`plugins/` 中的沙箱插件，以及原生插件 `blindpay`、`defindex`、`eldorado` 和 `trustless-work`。为空则不提供任何插件；未列出的插件永远不会被加载 |
 | `PLUGINS_SECRET` | 当已启用的插件有 secret 设置时 | — | 封存插件安装的 secret 设置（至少 32 个字符）。更改它会使所有已存储的插件 secret 无法读取 |
 | `PLUGINS_TRUSTED_KEYS` | 否 | — | 除 Cosmos Pay 支持团队之外，其插件可在此运行的签名者：逗号分隔的 `<keyId>:<base64url Ed25519 公钥>`。由其他人签名、或签名后被修改的插件会使启动失败 |
 | `PLUGINS_ALLOW_UNSIGNED` | 否 | `false` | 运行没有 `signature.json` 的插件，用于在本地编写插件。仅在 `NODE_ENV` 设为 `development` 或 `test` 且 `STELLAR_NETWORK` 不是 `public` 时接受 |
