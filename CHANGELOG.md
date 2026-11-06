@@ -2,6 +2,14 @@
 
 All notable changes to the Cosmos Pay Community Server are documented here.
 Generated from [Conventional Commits](https://www.conventionalcommits.org) by [git-cliff](https://git-cliff.org).
+## [1.11.0] - 2026-11-06
+
+### Features
+- Buy stablecoins with local money through P2P sellers (585ae30)
+- Sell stablecoins for local money to P2P buyers (4b4a1af)
+- Trade every token on every chain the P2P marketplace lists (65cfed0)
+- Each network's main assets first in its token list (6c5047b)
+
 ## [1.10.0] - 2026-11-03
 
 ### Features
