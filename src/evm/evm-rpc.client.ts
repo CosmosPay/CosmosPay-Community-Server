@@ -26,6 +26,8 @@ export interface EvmTransaction {
   value: string;
   input: string;
   blockNumber: string | null;
+  /** Hex; present for typed (EIP-2718) and EIP-155 legacy transactions. */
+  chainId?: string | null;
 }
 
 /** The parts of `eth_getTransactionReceipt` this service reads. */

@@ -788,7 +788,8 @@ export class ChainSwapSubmitResultEntity {
   @ApiProperty({
     example: true,
     description:
-      'Always true: the node accepted the broadcast. A refusal is a 400 ' +
+      'Always true: the node accepted the broadcast, or (a Monad `txHash`) ' +
+      'the network has the transaction. A refusal is a 400 ' +
       '`transaction_rejected` instead.',
   })
   submitted!: boolean;

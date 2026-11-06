@@ -325,7 +325,9 @@ export class SwapsController {
   // built for it (its hash on Stellar, its message on Solana, its call on
   // Monad) and carries its source's signature, so reaching another anonymous
   // user's swap takes its id *and* its transaction, which only the caller that
-  // created it was handed. On Stellar whether that signature is valid is the
+  // created it was handed. A Monad `txHash` (the wallet broadcast it) is held
+  // to the same bar: the transaction it names is read from the chain and must
+  // be that call, sent by the source, before anything is answered. On Stellar whether that signature is valid is the
   // network's call: a bad one comes back as a FAILED `tx_bad_auth`, and the
   // resubmit cap and expiry check bound how often that can happen per swap.
   @AllowPublicKey()
@@ -353,7 +355,12 @@ export class SwapsController {
       '`submitted: false` with the result codes (a `FAILED` swap can be ' +
       'resubmitted up to 3 times while its envelope is valid). Solana and ' +
       "Monad: broadcast through this service's RPC, the swap is `SUBMITTED` " +
-      'until the observer sees it settle. Emits `SWAP_SUBMITTED`, then ' +
+      'until the observer sees it settle. A Monad wallet that sends the ' +
+      'transaction itself (eth_sendTransaction) submits its `txHash` ' +
+      'instead: the transaction is read from the network and checked the ' +
+      'same way, then recorded as `SUBMITTED`; not on the network yet is ' +
+      '`transaction_not_found`, retry in a few seconds, and the same hash ' +
+      'again answers the swap as it is. Emits `SWAP_SUBMITTED`, then ' +
       '`SWAP_SUCCEEDED` or `SWAP_FAILED`; with the shared public key, send ' +
       "the swap's `publicToken` in `X-Record-Token`.",
   })
@@ -366,16 +373,32 @@ export class SwapsController {
       ApiErrorCode.ValidationFailed,
       ApiErrorCode.InvalidStateTransition,
       ApiErrorCode.TransactionRejected,
+      ApiErrorCode.TransactionNotFound,
     ],
     description:
       '`validation_failed`: `signedXdr` (Stellar) / `signedTransaction` ' +
       '(Solana, Monad) is not a transaction, is not the one built for this ' +
-      'swap, or carries no signature of its source. `transaction_rejected`: ' +
-      'the Solana or Monad node refused the broadcast; the swap stays PENDING. ' +
-      '`invalid_state_transition`: the swap can no longer be submitted, because it is ' +
-      "EXPIRED, its transaction's validity window has passed, or it was already " +
-      'resubmitted the maximum number of times after a rejection. Build a new ' +
-      'swap.',
+      'swap, or carries no signature of its source; or `txHash` (Monad) ' +
+      'names another transaction (the message names the field: `to`, ' +
+      '`input`, `value`, `from` or `chainId`), the approval, or one recorded ' +
+      'on another swap; or the body sends a field the swap does not take. ' +
+      '`transaction_not_found`: the network does not have that `txHash` yet; ' +
+      'nothing was recorded, retry in a few seconds. ' +
+      '`transaction_rejected`: the Solana or Monad node refused the ' +
+      'broadcast; the swap stays PENDING. `invalid_state_transition`: the ' +
+      'swap can no longer be submitted, because it is EXPIRED, its ' +
+      "transaction's validity window has passed, it was already submitted " +
+      'with another `txHash`, or it was already resubmitted the maximum ' +
+      'number of times after a rejection. Build a new swap.',
+    examples: {
+      [ApiErrorCode.TransactionNotFound]: {
+        message:
+          'Transaction 0x8f3b6a1c2d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8 ' +
+          "is not on Monad yet: it has not reached this service's node. Retry " +
+          'in a few seconds; nothing was recorded.',
+        path: '/v1/swaps/cmh4x2k9a0001l70g8v5q3z2w/submit',
+      },
+    },
   })
   @ApiErrorResponse({
     status: 429,
@@ -399,14 +422,25 @@ export class SwapsController {
       LEGACY_RECORD_TOKEN_ROUTES.swapSubmit,
     );
     if (chainSwap) {
-      return this.chainSwaps.submit(consumer, chainSwap, dto.signedTransaction);
+      return this.chainSwaps.submit(
+        consumer,
+        chainSwap,
+        dto.signedTransaction,
+        dto.txHash,
+      );
     }
-    // The DTO requires signedXdr unless signedTransaction was sent, and a
-    // Stellar swap needs signedXdr either way. Said before looking it up.
+    // The DTO requires signedXdr unless signedTransaction or txHash was sent,
+    // and a Stellar swap needs signedXdr either way. Said before looking it up.
     if (dto.signedXdr === undefined) {
       throw ApiError.badRequest(
         ApiErrorCode.ValidationFailed,
         'signedXdr is required for a Stellar swap',
+      );
+    }
+    if (dto.txHash !== undefined) {
+      throw ApiError.badRequest(
+        ApiErrorCode.ValidationFailed,
+        'txHash is for a Monad swap; a Stellar swap takes signedXdr alone',
       );
     }
     return this.swaps.submit(consumer, id, dto.signedXdr, token);

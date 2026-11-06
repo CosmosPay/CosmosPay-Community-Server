@@ -70,6 +70,17 @@ export interface ChainSwapVenue {
    * is disclosed.
    */
   verify(swap: ChainSwap, signed: string): string;
+  /**
+   * For a wallet that sends the transaction itself and hands back only its
+   * hash (an EVM browser wallet's `eth_sendTransaction`): reads the
+   * transaction `txHash` names from the chain and checks it is the one built
+   * for `swap`, sent by its source on the swap's chain, and answers its id.
+   * Throws 400 `transaction_not_found` while the chain does not have it yet
+   * (retryable) and 400 `validation_failed`, naming the field, when it is
+   * another transaction. Answers nothing about the swap itself. Absent on a
+   * venue whose wallets hand over signed bytes (Solana).
+   */
+  verifySent?(swap: ChainSwap, txHash: string): Promise<string>;
   /** Broadcasts a verified transaction through this service's own RPC. */
   broadcast(signed: string): Promise<void>;
   /** SUCCEEDED / FAILED once the chain has the transaction, else null. */
