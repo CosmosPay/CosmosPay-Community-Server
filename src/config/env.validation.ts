@@ -554,6 +554,21 @@ class EnvironmentVariables {
   @Max(1_000_000_000)
   DEFINDEX_MAX_FEE_STROOPS?: number;
 
+  // --- Buying with local money, P2P (native plugin `eldorado`) ---
+  /** The integrator ids El Dorado issues; the firm quote needs both. */
+  @IsOptional()
+  @IsString()
+  ELDORADO_CLIENT_ID?: string;
+
+  @IsOptional()
+  @IsString()
+  ELDORADO_REFERRAL_ID?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  ELDORADO_TIMEOUT_MS?: number;
+
   // --- Protected payments (native plugin `trustless-work`) ---
   // The types only. How the per-network keys relate to each other (secrets that
   // parse, three distinct accounts, a key with its platform account) is checked

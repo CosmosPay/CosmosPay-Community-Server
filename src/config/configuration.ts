@@ -3,6 +3,7 @@ import {
   DEFAULT_DEFINDEX_BASE_URL,
   DEFAULT_DEFINDEX_MAX_FEE_STROOPS,
   DEFAULT_DEFINDEX_TIMEOUT_MS,
+  DEFAULT_ELDORADO_TIMEOUT_MS,
   DEFAULT_ENV_FILE,
   DEFAULT_CHAIN_RPC_TIMEOUT_MS,
   DEFAULT_CROSS_CHAIN_DEADLINE_SECONDS,
@@ -462,6 +463,17 @@ export interface AppConfig {
      * refused (`502 provider_error`) instead of recorded for the submit.
      */
     maxFeeStroops: number;
+  };
+  /**
+   * The `eldorado` native plugin: buying stablecoins with local money from P2P
+   * sellers, through El Dorado's widget. The ids are the ones El Dorado issues
+   * to an integrator; without them the market and the sessions still work, and
+   * only the firm quote answers `503 misconfigured`.
+   */
+  eldorado: {
+    clientId: string;
+    referralId: string;
+    timeoutMs: number;
   };
   /** The `trustless-work` native plugin: protected payments on Trustless Work V1. */
   trustlessWork: {
@@ -1154,6 +1166,14 @@ export default (): AppConfig => ({
     maxFeeStroops: parseInt(
       process.env.DEFINDEX_MAX_FEE_STROOPS ??
         String(DEFAULT_DEFINDEX_MAX_FEE_STROOPS),
+      10,
+    ),
+  },
+  eldorado: {
+    clientId: process.env.ELDORADO_CLIENT_ID?.trim() ?? '',
+    referralId: process.env.ELDORADO_REFERRAL_ID?.trim() ?? '',
+    timeoutMs: parseInt(
+      process.env.ELDORADO_TIMEOUT_MS ?? String(DEFAULT_ELDORADO_TIMEOUT_MS),
       10,
     ),
   },

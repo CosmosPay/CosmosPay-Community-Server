@@ -115,6 +115,7 @@ src/
   native-plugins/                 first-party plugins, imported only when PLUGINS_ENABLED names them:
     blindpay/                     BlindPay: client, Svix verify, sync + webhook, kyc/, onramp/, offramp/, admin/
     defindex/                     DeFindex vaults (Stellar)
+    eldorado/                     on-ramp y off-ramp P2P: moneda local y stablecoins en El Dorado (Arbitrum)
     trustless-work/               protected payments on Trustless Work (Stellar): client, envelope checks,
                                   sync / expiry / deadline jobs, the keyless buyer routes, admin/
   health/                         liveness/readiness probes (@Public)
@@ -128,6 +129,7 @@ prisma/schema.prisma              Consumer, PaymentIntent, Swap, ChainSwap, Cros
                                   EasyRecoverySession
                                   PluginInstallation, PluginRecord
                                   ProtectedPayment, ProtectedPaymentTransaction
+                                  OnrampP2pSession
 test/                             e2e suites: gateway gate, admin + alias console gates,
                                   payment intents, swaps, liquidity pools, KYC, webhooks
 plugins/                          THE plugins folder: one <slug>/ per plugin (plugin.json, index.ts, signature.json)
@@ -164,7 +166,9 @@ se regenera a partir de los controllers y DTOs en cada ejecución de CI
 | Webhooks              | `/v1/webhooks`           | CRUD de endpoints, rotación de secretos, entregas, reenvío |
 | KYC                   | `/v1/kyc`                | Receivers (KYC/KYB), wallets, cuentas bancarias, carga de documentos |
 | Onramp                | `/v1/onramp`             | Cotizaciones de payin, payins, cuentas virtuales          |
+| On-ramp P2P | `/v1/onramp/p2p` | Moneda local a cualquier token en las cadenas que lista el mercado, con vendedores P2P: mercado, tokens, cotización firme, sesiones de compra |
 | Offramp               | `/v1/offramp`            | Cotizaciones de payout, autorización, payouts (firmados por el cliente) |
+| Off-ramp P2P | `/v1/offramp/p2p` | Cualquier token listado a moneda local con compradores P2P: mercado, tokens, cotización firme, sesiones de venta |
 | Productos             | `/v1/products`           | Catálogo del comercio                                     |
 | Clientes              | `/v1/customers`          | Registros de pagadores derivados de las intenciones       |
 | Alias                 | `/v1/aliases`            | Identificadores de pago reclamables: reclamar, resolver, recuperar |
@@ -279,12 +283,24 @@ consola llega a ella. Las rutas usan la forma `{param}` de OpenAPI.
 | POST | `/v1/defindex/submit` | uno de `liquidity:write`, `swaps:write` |  |
 | GET | `/v1/logs` | `payments:read` |  |
 | GET | `/v1/logs/webhooks` | `webhooks:read` |  |
+| GET | `/v1/offramp/p2p/market` | `offramp:read` | ✓ |
+| POST | `/v1/offramp/p2p/quotes` | `offramp:write` |  |
+| GET | `/v1/offramp/p2p/sessions` | `offramp:read` |  |
+| POST | `/v1/offramp/p2p/sessions` | `offramp:write` |  |
+| GET | `/v1/offramp/p2p/sessions/{id}` | `offramp:read` |  |
+| GET | `/v1/offramp/p2p/tokens` | `offramp:read` | ✓ |
 | GET | `/v1/offramp/payouts` | `offramp:read` |  |
 | POST | `/v1/offramp/payouts` | `offramp:write` |  |
 | POST | `/v1/offramp/payouts/authorize` | `offramp:write` |  |
 | GET | `/v1/offramp/payouts/{id}` | `offramp:read` |  |
 | POST | `/v1/offramp/payouts/{id}/documents` | `offramp:write` |  |
 | POST | `/v1/offramp/quotes` | `offramp:write` |  |
+| GET | `/v1/onramp/p2p/market` | `onramp:read` | ✓ |
+| POST | `/v1/onramp/p2p/quotes` | `onramp:write` |  |
+| GET | `/v1/onramp/p2p/sessions` | `onramp:read` |  |
+| POST | `/v1/onramp/p2p/sessions` | `onramp:write` |  |
+| GET | `/v1/onramp/p2p/sessions/{id}` | `onramp:read` |  |
+| GET | `/v1/onramp/p2p/tokens` | `onramp:read` | ✓ |
 | GET | `/v1/onramp/payins` | `onramp:read` |  |
 | POST | `/v1/onramp/payins` | `onramp:write` |  |
 | GET | `/v1/onramp/payins/{id}` | `onramp:read` |  |
@@ -2266,6 +2282,39 @@ transacciones que firma. Cada respuesta muestra el reparto en `fees`
 | POST | `/v1/admin/protected-payments/{id}/resolve` | Consola de la plataforma: resolver una disputa |
 | POST | `/v1/admin/protected-payments/{id}/submit` | Consola de la plataforma: retransmitir la resolución firmada en la wallet de operaciones |
 
+## On-ramp y off-ramp P2P (El Dorado)
+
+> **Un plugin nativo.** Todo lo de esta sección es el plugin `eldorado`
+> (`src/native-plugins/eldorado/`), que solo se sirve cuando `PLUGINS_ENABLED` incluye `eldorado`.
+> Sus rutas, sus errores y el contrato publicado llaman a El Dorado "el mercado P2P":
+> los clientes no saben sobre qué está construido Cosmos Pay.
+
+Un comprador paga moneda local (una transferencia bancaria en Argentina, PIX, Nequi, Yape, Zelle y más) a un vendedor del mercado P2P de [El Dorado](https://eldorado.io) y recibe un token en cualquier cadena que liste el mercado (en mainnet, once el 2026-11-05: Arbitrum, Ethereum, Base, Optimism, Polygon, BNB Chain, Avalanche, Celo, World Chain, Unichain y Blast, con miles de tokens entre todas). El tramo P2P se liquida en una stablecoin en USD, y el widget la intercambia y la lleva por puente hasta el token pedido. Este servicio nunca tiene el dinero ni firma nada: lee el mercado, cotiza una orden y abre una sesión, que es el widget alojado del mercado con la orden completa y el destinatario fijo. El comprador inicia sesión en el mercado, verifica su identidad y paga ahí.
+
+| Método | Ruta | Scope | Para qué |
+| --- | --- | --- | --- |
+| GET | `/v1/onramp/p2p/market` | `onramp:read` | Monedas, métodos de pago, precio de compra y mínimo, las cadenas (cada una con su cantidad de tokens) y el token con el que empieza un formulario (la clave pública compartida puede leerlo) |
+| GET | `/v1/onramp/p2p/tokens` | `onramp:read` | Los tokens de una cadena, por páginas, los más operados primero, buscados por símbolo o dirección (la clave pública compartida puede leerlo) |
+| POST | `/v1/onramp/p2p/quotes` | `onramp:write` | Una cotización firme, con comisiones y el intercambio incluidos; necesita los ids de integrador |
+| GET | `/v1/onramp/p2p/sessions` | `onramp:read` | Las sesiones del consumer en la red de la clave |
+| POST | `/v1/onramp/p2p/sessions` | `onramp:write` | Registra una orden y responde su `widgetUrl` |
+| GET | `/v1/onramp/p2p/sessions/{id}` | `onramp:read` | Una de ellas |
+| GET | `/v1/offramp/p2p/market` | `offramp:read` | Monedas, métodos de pago, precio de venta y mínimo (en USD), las cadenas y el token con el que empieza un formulario (la clave pública compartida puede leerlo) |
+| GET | `/v1/offramp/p2p/tokens` | `offramp:read` | Las mismas listas de tokens, para una venta (la clave pública compartida puede leerlo) |
+| POST | `/v1/offramp/p2p/quotes` | `offramp:write` | Una cotización firme de una venta, con comisiones y el intercambio incluidos; necesita los ids de integrador |
+| GET | `/v1/offramp/p2p/sessions` | `offramp:read` | Las ventas del consumer en la red de la clave |
+| POST | `/v1/offramp/p2p/sessions` | `offramp:write` | Registra una venta y responde su `widgetUrl` |
+| GET | `/v1/offramp/p2p/sessions/{id}` | `offramp:read` | Una de ellas |
+
+- **Una orden nombra una cadena y un token por su dirección.** `chainId` es una de las `networks` del mercado y `token` una dirección de contrato de `GET .../tokens?chainId=` (la dirección cero es la moneda propia de la cadena; un símbolo puede repetirse en una cadena, una dirección no). El `amount` de una compra es moneda local, con dos decimales como máximo; el de una venta es el token, hasta sus decimales.
+- **Los precios están en stablecoins en USD.** El `price` de una moneda es moneda local por stablecoin en USD, y cada token trae `priceUsd`: el del mercado, o 1 para una stablecoin en USD que no tiene precio. `estimatedAmountOut` pasa por los dos y es null para un token sin precio en USD. El mínimo de una venta está en USD y aquí se controla solo donde el token tiene precio; el widget controla el resto antes de que se mueva nada.
+- **Vender es el mismo flujo al revés.** En `/v1/offramp/p2p` la persona vende un token por moneda local que le paga un comprador P2P con el método elegido. `address` es entonces la cuenta desde la que se envía y `estimatedAmountOut` la moneda local al precio del mercado. El widget de una venta no lleva `address`: con él, el widget daría la billetera por conectada sin nada con qué firmar la transferencia, así que el vendedor conecta ahí la billetera que tiene el token. Cada prefijo lista y lee solo su lado (`side` en cada sesión); una sesión del otro lado es el 404 de una que no existe.
+- **La red de la clave elige el mercado.** Una clave `prod` opera en mainnet; una `dev`, en el sandbox, cuya única cadena es Arbitrum Sepolia y cuyo único token es su USDT de prueba, y donde una orden se completa solo contra un anuncio de market maker en la app de desarrollo de El Dorado.
+- **El destinatario es fijo.** La URL del widget lleva `address`, que el widget toma como la wallet conectada y no deja cambiar al comprador; sin él, el comprador conectaría cualquier wallet y el token llegaría ahí. El parámetro no está en la documentación de El Dorado (se leyó del código del widget el 2026-11-05): si deja de funcionar, deja de abrir sesiones.
+- **Abre el widget en una pestaña o una ventana, no en un iframe.** Tiene su propio inicio de sesión, una verificación de identidad que usa la cámara y un paso de pago que puede durar más que un popup.
+- **Los ids de integrador son opcionales, salvo para la cotización firme.** `ELDORADO_CLIENT_ID` y `ELDORADO_REFERRAL_ID` son los que El Dorado entrega a un integrador (api@eldorado.io). Sin ellos funcionan el mercado y las sesiones, y el widget cotiza antes del pago; con ellos responden `POST /v1/onramp/p2p/quotes` y `POST /v1/offramp/p2p/quotes`, y el widget de cada sesión lleva los ids, que atribuyen la orden a Cosmos Pay.
+- **Qué se cachea.** El mercado (monedas, precios y la lista de cadenas), un minuto por red (`ELDORADO_MARKET_TTL_MS`); la lista de tokens de cada cadena, una hora (`ELDORADO_TOKENS_TTL_MS`; la de Ethereum pesa unos 1,2 MB). Una moneda sin precio, sin mínimo o sin método de pago queda fuera, y también una cadena cuya lista de tokens falla o llega vacía: se registra en el log y se vuelve a pedir en la próxima lectura, y el mercado es un 502 solo cuando fallan la lista de cadenas o todas las listas de tokens.
+
 ## Plugins — extensiones bajo un slug
 
 Otros equipos integran su tecnología en este servicio como un **plugin**: una carpeta
@@ -2494,6 +2543,7 @@ misma lista `PLUGINS_ENABLED` que los plugins aislados.
 | ---- | --------- |
 | `blindpay` | KYC, onramp, offramp, el webhook de BlindPay, sus rutas de `/v1/admin` (`receivers`, `payins`, `payouts`) y la sección `fiat` del resumen de administración |
 | `defindex` | `/v1/defindex`: vaults de DeFindex en Stellar |
+| `eldorado` | `/v1/onramp/p2p` y `/v1/offramp/p2p`: tokens en todas las cadenas que lista el mercado P2P de El Dorado, comprados y vendidos por moneda local |
 | `trustless-work` | `/v1/protected-payments`, `/v1/protected-payment-links` (sin key) y `/v1/admin/protected-payments`: pagos protegidos sobre Trustless Work (Stellar) |
 
 - **Si no está en la lista, no existe.** Un plugin nativo que `PLUGINS_ENABLED` no
@@ -2528,6 +2578,15 @@ misma lista `PLUGINS_ENABLED` que los plugins aislados.
   del comprador son el único grupo de rutas de un plugin nativo que no lleva API key.
 
 ## Actualización — cambios incompatibles y notas de despliegue
+
+### On-ramp y off-ramp P2P: un plugin nativo nuevo y una tabla
+
+- **La migración `20261105120000_p2p_ramp_sessions`** crea la tabla `p2p_ramp_session`; no
+  reescribe nada. Corre `migrate deploy` antes de que sirva el build nuevo.
+- **Apagado hasta habilitarlo.** Agrega `eldorado` a `PLUGINS_ENABLED`. No hace falta ninguna
+  variable; `ELDORADO_CLIENT_ID` y `ELDORADO_REFERRAL_ID` activan la cotización firme.
+- **Presupuestos nuevos:** `onramp-p2p:quote` y `offramp-p2p:quote` (30 por minuto cada uno), `onramp-p2p:session` y `offramp-p2p:session` (20 por
+  minuto), por consumer y dirección del cliente.
 
 ### Plugins: Sub Rosa preinstalado, escrituras atómicas en storage y límites de concurrencia
 
@@ -3669,6 +3728,9 @@ Cada variable leída de `process.env` en `src/` se valida en el arranque mediant
 | `DEFINDEX_BASE_URL` | no | `https://api.defindex.io` | URL base de la API DeFindex |
 | `DEFINDEX_TIMEOUT_MS` | no | `30000` | Timeout HTTP de DeFindex (ms) |
 | `DEFINDEX_MAX_FEE_STROOPS` | no | `10000000` | Lo máximo que una transacción de DeFindex construida puede cobrarle a quien la firma, comisión de inclusión y de recursos de Soroban juntas (stroops); una construcción por encima se rechaza con `502 provider_error` |
+| `ELDORADO_CLIENT_ID` | no | ninguno | El ClientID que El Dorado entrega a un integrador. Con `ELDORADO_REFERRAL_ID`, activa `POST /v1/onramp/p2p/quotes` y `POST /v1/offramp/p2p/quotes` y atribuye la orden de cada sesión; sin ambos, esas rutas responden `503 misconfigured` |
+| `ELDORADO_REFERRAL_ID` | no | ninguno | El ReferralID que acompaña a `ELDORADO_CLIENT_ID` |
+| `ELDORADO_TIMEOUT_MS` | no | `10000` | Presupuesto de una llamada al mercado P2P (ms) |
 | `TRUSTLESS_WORK_API_KEY_TESTNET` | para pagos protegidos en testnet | — | API key de Trustless Work para testnet (keys `dev`). Las rutas existen solo con `trustless-work` en `PLUGINS_ENABLED`; sin la key responden `503 misconfigured` en testnet. Requiere `TRUSTLESS_WORK_PLATFORM_SECRET_TESTNET` |
 | `TRUSTLESS_WORK_BASE_URL_TESTNET` | no | `https://dev.api.trustlesswork.com` | API V1 de Trustless Work para testnet |
 | `TRUSTLESS_WORK_PLATFORM_SECRET_TESTNET` | con la API key | — | La cuenta de plataforma de Cosmos Pay (S...): firma los despliegues y las disputas de la plataforma, paga su XLM y recibe la comisión de la plataforma. Debe confiar en USDC. Es una clave caliente: retira sus comisiones |
@@ -3680,7 +3742,7 @@ Cada variable leída de `process.env` en `src/` se valida en el arranque mediant
 | `TRUSTLESS_WORK_PLATFORM_FEE_BPS` | no | `165` | Comisión de Cosmos Pay sobre un pago protegido, en puntos básicos; Trustless Work suma sus 30 fijos (1,95 % en total). Se aplica a los pagos creados después de un cambio |
 | `TRUSTLESS_WORK_TIMEOUT_MS` | no | `30000` | Presupuesto de una llamada a Trustless Work (ms) |
 | `TRUSTLESS_WORK_MAX_FEE_STROOPS` | no | `20000000` | Lo máximo que una transacción de pago protegido puede cobrarle a quien la firma, comisión de inclusión y de recursos de Soroban juntas (stroops); una construcción por encima se rechaza con `502 provider_error`. 2 XLM, por el despliegue |
-| `PLUGINS_ENABLED` | no | — | Slugs, separados por comas, de los plugins que sirve este despliegue: los aislados de `plugins/` y los nativos `blindpay`, `defindex` y `trustless-work`. Vacío no sirve ninguno; un plugin no listado nunca se carga |
+| `PLUGINS_ENABLED` | no | — | Slugs, separados por comas, de los plugins que sirve este despliegue: los aislados de `plugins/` y los nativos `blindpay`, `defindex`, `eldorado` y `trustless-work`. Vacío no sirve ninguno; un plugin no listado nunca se carga |
 | `PLUGINS_SECRET` | cuando un plugin habilitado tiene ajustes secretos | — | Sella los ajustes secretos de las instalaciones de plugins (mínimo 32 caracteres). Cambiarlo deja ilegibles todos los secretos de plugins guardados |
 | `PLUGINS_TRUSTED_KEYS` | no | — | Firmantes cuyos plugins corren aquí además de soporte de Cosmos Pay: `<keyId>:<clave pública Ed25519 en base64url>` separados por comas. Un plugin firmado por otro, o modificado después de firmarse, detiene el arranque |
 | `PLUGINS_ALLOW_UNSIGNED` | no | `false` | Ejecutar plugins sin `signature.json`, para escribir uno en local. Solo se acepta con `NODE_ENV` en `development` o `test` y `STELLAR_NETWORK` distinto de `public` |
