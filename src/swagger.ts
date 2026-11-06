@@ -222,6 +222,8 @@ const TAG_DESCRIPTIONS: Record<string, string> = {
   'p2p-onramp':
     'Stablecoins bought with local money from P2P sellers: the market, a firm quote, and sessions that open a hosted purchase delivered to the address you name.',
   offramp: 'Fiat out: quotes and payouts (BlindPay).',
+  'p2p-offramp':
+    'Stablecoins sold for local money to P2P buyers: the market, a firm quote, and sessions that open a hosted sale paid with the method you choose.',
   webhooks: 'Endpoints this service notifies, and their delivery history.',
   activity: 'What a wallet or dashboard reports back about a session.',
   analytics: 'Aggregates over this consumer’s own traffic.',

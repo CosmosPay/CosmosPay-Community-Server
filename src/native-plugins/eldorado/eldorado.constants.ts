@@ -1,9 +1,10 @@
 import type { StellarNetwork } from '@/config/configuration';
 
 /**
- * El Dorado, the P2P marketplace behind `/v1/onramp/p2p`: people sell
- * stablecoins for local money (bank transfer, PIX, Nequi, Yape, Zelle...) and the
- * marketplace delivers them on Arbitrum. Read live on 2026-11-05 from its docs
+ * El Dorado, the P2P marketplace behind `/v1/onramp/p2p` and `/v1/offramp/p2p`:
+ * people trade stablecoins for local money (bank transfer, PIX, Nequi, Yape,
+ * Zelle...) with each other, and the marketplace settles the stablecoin on
+ * Arbitrum. Read live on 2026-11-05 from its docs
  * (https://api-testnet.eldorado.io/guides/quick-start, `/guides/widget`,
  * `/guides/sandbox`) and its public API.
  *
@@ -23,7 +24,7 @@ export interface EldoradoHost {
   chainId: number;
   /** That chain's name, as this API answers it. */
   chain: string;
-  /** The stablecoins a buy can deliver there. */
+  /** The stablecoins traded there: a purchase delivers one, a sale sends one. */
   tokens: readonly EldoradoToken[];
 }
 
@@ -36,7 +37,7 @@ export interface EldoradoToken {
 
 /**
  * The marketplace per Stellar network of the calling key (`resolveNetwork`): a
- * `prod` key buys on mainnet, a `dev` key in the sandbox. The sandbox supports
+ * `prod` key trades on mainnet, a `dev` key in the sandbox. The sandbox supports
  * only its own test USDT on Arbitrum Sepolia, 18 decimals; any other token or
  * chain fails the order there (its sandbox guide).
  */
@@ -78,8 +79,8 @@ export const ELDORADO_HOSTS: Record<StellarNetwork, EldoradoHost> = {
 
 /**
  * How long one network's market (currencies, payment methods, prices) is served
- * from memory. Prices move, but a minute is well inside the quote's own life,
- * and every dashboard form and wallet opening reads it.
+ * from memory, both sides together. Prices move, but a minute is well inside the
+ * quote's own life, and every dashboard form and wallet opening reads it.
  */
 export const ELDORADO_MARKET_TTL_MS = 60 * 1000;
 
@@ -89,7 +90,8 @@ export const ELDORADO_MARKET_TTL_MS = 60 * 1000;
  * Undocumented: found in the widget's bundle on 2026-11-05
  * (`useExternalWalletAddress`, validated there against /^0x[a-fA-F0-9]{40}$/).
  * Without it the buyer connects any wallet and the stablecoin lands there, so a
- * session is never built without it.
+ * purchase is never built without it. A sale never carries it: the seller has to
+ * connect the wallet that signs the transfer.
  */
 export const ELDORADO_ADDRESS_PARAM = 'address';
 
@@ -102,17 +104,27 @@ export const P2P_SESSION_REFERENCE_PREFIX = 'cp';
 /**
  * A firm quote spends a call on the integrator ids every tenant of this
  * deployment shares; a dashboard re-quoting as the amount changes stays well
- * under it, a pricing loop does not.
+ * under it, a pricing loop does not. Purchases and sales count apart.
  */
 export const P2P_QUOTE_RATE_LIMIT = {
   name: 'onramp-p2p:quote',
   limit: 30,
   windowMs: 60 * 1000,
 };
+export const P2P_SELL_QUOTE_RATE_LIMIT = {
+  name: 'offramp-p2p:quote',
+  limit: 30,
+  windowMs: 60 * 1000,
+};
 
-/** A session is a stored row per call: opening a purchase a few times a minute is plenty. */
+/** A session is a stored row per call: opening a purchase or a sale a few times a minute is plenty. */
 export const P2P_SESSION_RATE_LIMIT = {
   name: 'onramp-p2p:session',
+  limit: 20,
+  windowMs: 60 * 1000,
+};
+export const P2P_SELL_SESSION_RATE_LIMIT = {
+  name: 'offramp-p2p:session',
   limit: 20,
   windowMs: 60 * 1000,
 };

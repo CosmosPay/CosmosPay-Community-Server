@@ -15,7 +15,7 @@ import type { GatewayConsumer } from '@/common/interfaces/gateway-consumer.inter
 import {
   P2pOrderDto,
   P2pSessionParamsDto,
-} from '@/native-plugins/eldorado/dto/p2p-onramp.dto';
+} from '@/native-plugins/eldorado/dto/p2p-ramp.dto';
 import {
   P2P_QUOTE_RATE_LIMIT,
   P2P_SESSION_RATE_LIMIT,
@@ -25,14 +25,14 @@ import {
   P2pQuoteEntity,
   P2pSessionEntity,
   P2pSessionListEntity,
-} from '@/native-plugins/eldorado/entities/p2p-onramp.entity';
-import { P2pOnrampService } from '@/native-plugins/eldorado/p2p-onramp.service';
+} from '@/native-plugins/eldorado/entities/p2p-ramp.entity';
+import { P2pRampService } from '@/native-plugins/eldorado/p2p-ramp.service';
 
 // /v1/onramp/p2p: stablecoins bought with local money from P2P sellers.
 @ApiTags('p2p-onramp')
 @Controller({ path: 'onramp/p2p', version: '1' })
 export class P2pOnrampController {
-  constructor(private readonly p2p: P2pOnrampService) {}
+  constructor(private readonly p2p: P2pRampService) {}
 
   @Get('market')
   // Read from the marketplace when the cached copy is over a minute old.
@@ -51,7 +51,7 @@ export class P2pOnrampController {
   })
   @ApiOkResponse({ type: P2pMarketEntity })
   market(@CurrentConsumer() consumer: GatewayConsumer) {
-    return this.p2p.market(consumer);
+    return this.p2p.market(consumer, 'buy');
   }
 
   @Post('quotes')
@@ -71,7 +71,7 @@ export class P2pOnrampController {
     @CurrentConsumer() consumer: GatewayConsumer,
     @Body() dto: P2pOrderDto,
   ) {
-    return this.p2p.quote(consumer, dto);
+    return this.p2p.quote(consumer, 'buy', dto);
   }
 
   @Post('sessions')
@@ -93,7 +93,7 @@ export class P2pOnrampController {
     @CurrentConsumer() consumer: GatewayConsumer,
     @Body() dto: P2pOrderDto,
   ) {
-    return this.p2p.createSession(consumer, dto);
+    return this.p2p.createSession(consumer, 'buy', dto);
   }
 
   @Get('sessions')
@@ -101,7 +101,7 @@ export class P2pOnrampController {
   @ApiOperation({
     summary: 'List the purchases opened with local money',
     description:
-      "The sessions this key's consumer opened on the key's network, newest first, from this service's records (no " +
+      "The purchases this key's consumer opened on the key's network, newest first, from this service's records (no " +
       'call to the marketplace). Paginated with `take` (default 100, max 100) and `skip`; answers ' +
       '`{ data, total, take, skip }`, where `total` counts every matching session.',
   })
@@ -110,7 +110,7 @@ export class P2pOnrampController {
     @CurrentConsumer() consumer: GatewayConsumer,
     @Query() query: WidePaginationQueryDto,
   ) {
-    return this.p2p.findAll(consumer, query);
+    return this.p2p.findAll(consumer, 'buy', query);
   }
 
   @Get('sessions/:id')
@@ -118,14 +118,14 @@ export class P2pOnrampController {
   @ApiOperation({
     summary: 'Read a purchase opened with local money',
     description:
-      "One session of this key's consumer on the key's network, from this service's records, with its widget URL. " +
-      "Another consumer's session, or one opened on the other network, is the 404 of a missing one.",
+      "One purchase of this key's consumer on the key's network, from this service's records, with its widget URL. " +
+      "Another consumer's session, one opened on the other network, or a sale, is the 404 of a missing one.",
   })
   @ApiOkResponse({ type: P2pSessionEntity })
   findOne(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Param() params: P2pSessionParamsDto,
   ) {
-    return this.p2p.findOne(consumer, params.id);
+    return this.p2p.findOne(consumer, 'buy', params.id);
   }
 }

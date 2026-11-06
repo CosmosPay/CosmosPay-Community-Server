@@ -24,6 +24,13 @@ const METHODS = [
   { id: 'bank_tx_ar', name: 'Bank Transfer (ARS)', currency: 'ARS' },
   { id: 'app_pix_brl', name: 'PIX', currency: 'BRL' },
 ];
+const SELL = {
+  ARS: {
+    price: '1625.11',
+    limits: { in: { min: '5' }, out: { min: '8125.55' } },
+  },
+  BRL: { price: '4.88', limits: { in: { min: '5' } } },
+};
 const BUY = {
   ARS: {
     price: '1677.89',
@@ -97,25 +104,84 @@ describe('the P2P market', () => {
   });
 
   it('accepts an order that fits and says why one does not', () => {
-    expect(orderProblem(market, ORDER)).toBeNull();
-    expect(orderProblem(market, { ...ORDER, currency: 'BOB' })).toMatch(
+    expect(orderProblem(market, ORDER, 'buy')).toBeNull();
+    expect(orderProblem(market, { ...ORDER, currency: 'BOB' }, 'buy')).toMatch(
       /currency BOB cannot be bought/,
     );
     expect(
-      orderProblem(market, { ...ORDER, paymentMethod: 'app_pix_brl' }),
+      orderProblem(market, { ...ORDER, paymentMethod: 'app_pix_brl' }, 'buy'),
     ).toMatch(/does not pay in ARS/);
-    expect(orderProblem(market, { ...ORDER, token: 'DAI' })).toMatch(
+    expect(orderProblem(market, { ...ORDER, token: 'DAI' }, 'buy')).toMatch(
       /token DAI is not delivered/,
     );
-    expect(orderProblem(market, { ...ORDER, amount: '8000' })).toMatch(
+    expect(orderProblem(market, { ...ORDER, amount: '8000' }, 'buy')).toMatch(
       /below the minimum of 8389.45 ARS/,
     );
   });
 
   it('estimates down to the cent, never above what the price gives', () => {
     // 50000 / 1677.89 = 29.799...
-    expect(estimateAmountOut('50000', '1677.89')).toBe('29.79');
-    expect(estimateAmountOut('100', '6.003')).toBe('16.65');
+    expect(estimateAmountOut('50000', '1677.89', 'buy')).toBe('29.79');
+    expect(estimateAmountOut('100', '6.003', 'buy')).toBe('16.65');
+  });
+
+  describe('the sell side', () => {
+    const sell = buildMarket(ELDORADO_HOSTS.public, CURRENCIES, METHODS, SELL);
+    const SALE: P2pOrder = { ...ORDER, token: 'USDT', amount: '50' };
+
+    it('reads its own prices, with the minimum in the stablecoin', () => {
+      expect(sell.currencies.map((c) => c.id)).toEqual(['ARS', 'BRL']);
+      expect(sell.currencies[0]).toMatchObject({
+        price: '1625.11',
+        minAmount: '5',
+      });
+    });
+
+    it('offers nothing when the marketplace sends no sell side', () => {
+      expect(
+        buildMarket(ELDORADO_HOSTS.public, CURRENCIES, METHODS, undefined)
+          .currencies,
+      ).toEqual([]);
+    });
+
+    it('checks a sale in its own words, the minimum in the token', () => {
+      expect(orderProblem(sell, SALE, 'sell')).toBeNull();
+      expect(orderProblem(sell, { ...SALE, currency: 'BOB' }, 'sell')).toMatch(
+        /stablecoins cannot be sold for BOB/,
+      );
+      expect(
+        orderProblem(sell, { ...SALE, paymentMethod: 'app_pix_brl' }, 'sell'),
+      ).toMatch(/does not pay out ARS/);
+      expect(orderProblem(sell, { ...SALE, token: 'DAI' }, 'sell')).toMatch(
+        /token DAI cannot be sold on this network/,
+      );
+      expect(orderProblem(sell, { ...SALE, amount: '4.99' }, 'sell')).toBe(
+        'amount is below the minimum of 5 USDT',
+      );
+    });
+
+    it('estimates the local money a sale pays, down to the cent', () => {
+      // 50 * 1625.11 = 81255.5
+      expect(estimateAmountOut('50', '1625.11', 'sell')).toBe('81255.50');
+      // 0.57 * 1 lands a hair under 0.57 in floating point.
+      expect(estimateAmountOut('0.57', '1', 'sell')).toBe('0.57');
+      expect(estimateAmountOut('10.33', '4.88', 'sell')).toBe('50.41');
+    });
+
+    it('opens the widget as a SELL without fixing the wallet', () => {
+      const url = new URL(
+        widgetUrl(ELDORADO_HOSTS.public, SALE, 'cp-4', null, 'sell'),
+      );
+      expect(Object.fromEntries(url.searchParams)).toEqual({
+        operation: 'SELL',
+        token: '0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9',
+        chain: '42161',
+        currency: 'ARS',
+        paymentMethod: 'bank_tx_ar',
+        amount: '50',
+        externalReferenceId: 'cp-4',
+      });
+    });
   });
 
   it('references a session with letters, digits and hyphens only', () => {
@@ -123,7 +189,9 @@ describe('the P2P market', () => {
   });
 
   it('opens the widget with the recipient fixed and the order filled in', () => {
-    const url = new URL(widgetUrl(ELDORADO_HOSTS.public, ORDER, 'cp-1', null));
+    const url = new URL(
+      widgetUrl(ELDORADO_HOSTS.public, ORDER, 'cp-1', null, 'buy'),
+    );
     expect(url.origin + url.pathname).toBe(
       'https://widget.eldorado.io/exchange',
     );
@@ -141,10 +209,13 @@ describe('the P2P market', () => {
 
   it('carries the integrator ids when the deployment has them', () => {
     const url = new URL(
-      widgetUrl(ELDORADO_HOSTS.testnet, { ...ORDER, token: 'USDT' }, 'cp-2', {
-        clientId: 'c-1',
-        referralId: 'r-1',
-      }),
+      widgetUrl(
+        ELDORADO_HOSTS.testnet,
+        { ...ORDER, token: 'USDT' },
+        'cp-2',
+        { clientId: 'c-1', referralId: 'r-1' },
+        'buy',
+      ),
     );
     expect(url.origin).toBe('https://widget-testnet.eldorado.io');
     expect(url.searchParams.get('chain')).toBe('421614');
@@ -154,7 +225,7 @@ describe('the P2P market', () => {
 
   it('refuses to build a widget for a token the network does not deliver', () => {
     expect(() =>
-      widgetUrl(ELDORADO_HOSTS.testnet, ORDER, 'cp-3', null),
-    ).toThrow(/USDC is not delivered/);
+      widgetUrl(ELDORADO_HOSTS.testnet, ORDER, 'cp-3', null, 'buy'),
+    ).toThrow(/USDC is not traded/);
   });
 });

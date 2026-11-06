@@ -39,8 +39,9 @@ model Consumer {
   // DeFindex vault transactions built for this consumer (native plugin `defindex`).
   defindexTransactions DefindexTransaction[]
 
-  // Purchases opened with local money on the P2P marketplace (native plugin `eldorado`).
-  onrampP2pSessions OnrampP2pSession[]
+  // Purchases and sales of stablecoins for local money opened on the P2P
+  // marketplace (native plugin `eldorado`).
+  p2pRampSessions P2pRampSession[]
 
   // Protected payments this consumer created as the merchant, and the
   // transactions built for them (native plugin `trustless-work`).
@@ -2317,24 +2318,32 @@ model DefindexTransaction {
 }
 
 // ---------------------------------------------------------------------------
-// P2P on-ramp (native plugin `eldorado`). A session is one purchase this service
-// opened on El Dorado's widget for a consumer: the order it filled in and the URL
-// that takes it, with the recipient fixed. The money moves between the buyer and
-// a P2P seller on the marketplace, never through this service; the row is the
-// consumer's record of what was opened, matched to the marketplace's order by
-// `reference` (its `externalReferenceId`).
-model OnrampP2pSession {
+// P2P on-ramp and off-ramp (native plugin `eldorado`). A session is one order this
+// service opened on El Dorado's widget for a consumer: a purchase (`side` buy:
+// local money for a stablecoin, the recipient fixed) or a sale (`side` sell: a
+// stablecoin for local money), the order it filled in and the URL that takes it.
+// The money moves between the person and a P2P counterpart on the marketplace,
+// never through this service; the row is the consumer's record of what was
+// opened, matched to the marketplace's order by `reference` (its
+// `externalReferenceId`).
+model P2pRampSession {
   id         String   @id @default(cuid())
   consumerId String
   consumer   Consumer @relation(fields: [consumerId], references: [id], onDelete: Cascade)
 
   // `public` or `testnet`, from the API key that opened it (`resolveNetwork`):
-  // a `prod` key buys on mainnet, a `dev` key in the sandbox. Lists filter by it.
+  // a `prod` key trades on mainnet, a `dev` key in the sandbox. Lists filter by it.
   network String
 
-  // The order: local money (`currency`, `amount` as a decimal string) paid with
-  // `paymentMethod`, for `token` (`tokenAddress` on EIP-155 `chainId`), delivered
-  // to `address` (EIP-55).
+  // `buy` (opened through /v1/onramp/p2p) or `sell` (/v1/offramp/p2p). Each
+  // route lists and reads only its own side.
+  side String
+
+  // The order: `currency` paid (buy) or received (sell) through
+  // `paymentMethod`; `amount`, a decimal string, is what the order puts in
+  // (local money for a purchase, the stablecoin for a sale); `token`
+  // (`tokenAddress` on EIP-155 `chainId`); `address` (EIP-55) is where a
+  // purchase delivers, or the account a sale sends from.
   currency      String
   paymentMethod String
   amount        String
@@ -2343,8 +2352,9 @@ model OnrampP2pSession {
   chainId       Int
   address       String
 
-  // The market price's estimate when it was opened, a decimal string; the widget
-  // quotes the firm figure before payment.
+  // The market price's estimate when it was opened, a decimal string: the
+  // stablecoin a purchase delivers, or the local money a sale pays. The widget
+  // quotes the firm figure before anything moves.
   estimatedAmountOut String
 
   // `cp-<random UUID>`, carried as the widget's `externalReferenceId`.
@@ -2353,8 +2363,8 @@ model OnrampP2pSession {
 
   createdAt DateTime @default(now())
 
-  @@index([consumerId, network, createdAt])
-  @@map("onramp_p2p_session")
+  @@index([consumerId, network, side, createdAt])
+  @@map("p2p_ramp_session")
 }
 
 // ---------------------------------------------------------------------------

@@ -113,7 +113,7 @@ src/
   native-plugins/                 first-party plugins, imported only when PLUGINS_ENABLED names them:
     blindpay/                     BlindPay: client, Svix verify, sync + webhook, kyc/, onramp/, offramp/, admin/
     defindex/                     DeFindex vaults (Stellar)
-    eldorado/                     P2P on-ramp: local money to stablecoins on El Dorado (Arbitrum)
+    eldorado/                     P2P on-ramp and off-ramp: local money and stablecoins on El Dorado (Arbitrum)
     trustless-work/               protected payments on Trustless Work (Stellar): client, envelope checks,
                                   sync / expiry / deadline jobs, the keyless buyer routes, admin/
   health/                         liveness/readiness probes (@Public)
@@ -166,6 +166,7 @@ regenerated from the controllers and DTOs on every CI run
 | Onramp            | `/v1/onramp`             | Payin quotes, payins, virtual accounts                    |
 | P2P on-ramp | `/v1/onramp/p2p` | Local money to USDC or USDT on Arbitrum through P2P sellers: market, firm quote, purchase sessions |
 | Offramp           | `/v1/offramp`            | Payout quotes, authorize, payouts (client-signed)         |
+| P2P off-ramp | `/v1/offramp/p2p` | USDC or USDT on Arbitrum to local money through P2P buyers: market, firm quote, sale sessions |
 | Products          | `/v1/products`           | Merchant catalogue                                        |
 | Customers         | `/v1/customers`          | Payer records derived from intents                        |
 | Aliases           | `/v1/aliases`            | Claimable payment handles: claim, resolve, recover        |
@@ -279,6 +280,11 @@ Paths use the OpenAPI `{param}` form.
 | POST | `/v1/defindex/submit` | one of `liquidity:write`, `swaps:write` |  |
 | GET | `/v1/logs` | `payments:read` |  |
 | GET | `/v1/logs/webhooks` | `webhooks:read` |  |
+| GET | `/v1/offramp/p2p/market` | `offramp:read` | ✓ |
+| POST | `/v1/offramp/p2p/quotes` | `offramp:write` |  |
+| GET | `/v1/offramp/p2p/sessions` | `offramp:read` |  |
+| POST | `/v1/offramp/p2p/sessions` | `offramp:write` |  |
+| GET | `/v1/offramp/p2p/sessions/{id}` | `offramp:read` |  |
 | GET | `/v1/offramp/payouts` | `offramp:read` |  |
 | POST | `/v1/offramp/payouts` | `offramp:write` |  |
 | POST | `/v1/offramp/payouts/authorize` | `offramp:write` |  |
@@ -2185,7 +2191,7 @@ transactions it signs. Every answer shows the split in `fees` (`trustlessWorkBps
 | POST | `/v1/admin/protected-payments/{id}/resolve` | Platform console: resolve a dispute |
 | POST | `/v1/admin/protected-payments/{id}/submit` | Platform console: relay the ops wallet's resolution |
 
-## P2P on-ramp (El Dorado)
+## P2P on-ramp and off-ramp (El Dorado)
 
 > **A native plugin.** Everything in this section is the `eldorado` plugin
 > (`src/native-plugins/eldorado/`), served only when `PLUGINS_ENABLED` lists `eldorado`.
@@ -2206,7 +2212,13 @@ identity and pays there.
 | GET | `/v1/onramp/p2p/sessions` | `onramp:read` | The consumer's sessions on the key's network |
 | POST | `/v1/onramp/p2p/sessions` | `onramp:write` | Record an order and answer its `widgetUrl` |
 | GET | `/v1/onramp/p2p/sessions/{id}` | `onramp:read` | One of them |
+| GET | `/v1/offramp/p2p/market` | `offramp:read` | Currencies, payment methods, sell price and minimum (in the stablecoin), the chain and its tokens (the shared public key may read it) |
+| POST | `/v1/offramp/p2p/quotes` | `offramp:write` | A firm quote for a sale, fees included; needs the integrator ids |
+| GET | `/v1/offramp/p2p/sessions` | `offramp:read` | The consumer's sales on the key's network |
+| POST | `/v1/offramp/p2p/sessions` | `offramp:write` | Record a sale and answer its `widgetUrl` |
+| GET | `/v1/offramp/p2p/sessions/{id}` | `offramp:read` | One of them |
 
+- **Selling is the same flow the other way.** On `/v1/offramp/p2p` the person sells USDC or USDT on Arbitrum for local money a P2P buyer pays with the method chosen. `amount` is then the stablecoin sold (the minimum is in the token too), `address` the account it is sent from, and `estimatedAmountOut` the local money at the market price. A sale's widget does not carry `address`: with it the widget would count the wallet as connected with nothing to sign the transfer, so the seller connects the wallet that holds the stablecoin there. Each prefix lists and reads only its own side (`side` on every session); a session of the other side is the 404 of a missing one.
 - **The key's network picks the marketplace.** A `prod` key buys on mainnet (USDC or USDT on
   Arbitrum One); a `dev` key in the sandbox, where the only asset is its test USDT on Arbitrum
   Sepolia and an order completes only against a market maker ad on El Dorado's development app.
@@ -2219,7 +2231,7 @@ identity and pays there.
 - **The integrator ids are optional, except for the firm quote.** `ELDORADO_CLIENT_ID` and
   `ELDORADO_REFERRAL_ID` are what El Dorado issues to an integrator (api@eldorado.io). Without
   them the market and the sessions work and the widget quotes before payment; with them
-  `POST /v1/onramp/p2p/quotes` answers, and each session's widget carries the ids, which
+  `POST /v1/onramp/p2p/quotes` and `POST /v1/offramp/p2p/quotes` answer, and each session's widget carries the ids, which
   attribute the order to Cosmos Pay.
 - **The market is cached for a minute per network** (`ELDORADO_MARKET_TTL_MS`), and a currency
   without a price, a minimum or a payment method is left out. A session's `estimatedAmountOut`
@@ -2444,7 +2456,7 @@ the service under `src/native-plugins/<slug>/`, switched on by the same
 | ---- | -------------- |
 | `blindpay` | KYC, onramp, offramp, the BlindPay webhook, its `/v1/admin` routes (`receivers`, `payins`, `payouts`) and the `fiat` section of the admin summary |
 | `defindex` | `/v1/defindex` — DeFindex vaults on Stellar |
-| `eldorado` | `/v1/onramp/p2p`: stablecoins bought with local money on El Dorado's P2P marketplace (Arbitrum) |
+| `eldorado` | `/v1/onramp/p2p` and `/v1/offramp/p2p`: stablecoins bought and sold for local money on El Dorado's P2P marketplace (Arbitrum) |
 | `trustless-work` | `/v1/protected-payments`, the keyless `/v1/protected-payment-links` and `/v1/admin/protected-payments`: protected payments on Trustless Work (Stellar) |
 
 - **Not listed, not there.** A native plugin `PLUGINS_ENABLED` does not name is
@@ -2478,13 +2490,13 @@ the service under `src/native-plugins/<slug>/`, switched on by the same
 
 ## Upgrading — breaking changes and deploy notes
 
-### P2P on-ramp: a new native plugin and one table
+### P2P on-ramp and off-ramp: a new native plugin and one table
 
-- **Migration `20261105120000_onramp_p2p_sessions`** creates the `onramp_p2p_session` table;
+- **Migration `20261105120000_p2p_ramp_sessions`** creates the `p2p_ramp_session` table;
   nothing is rewritten. Run `migrate deploy` before the new build serves.
 - **Off until enabled.** Add `eldorado` to `PLUGINS_ENABLED`. No variable is required;
   `ELDORADO_CLIENT_ID` and `ELDORADO_REFERRAL_ID` turn on the firm quote.
-- **New budgets:** `onramp-p2p:quote` (30 a minute) and `onramp-p2p:session` (20 a minute),
+- **New budgets:** `onramp-p2p:quote` and `offramp-p2p:quote` (30 a minute each), `onramp-p2p:session` and `offramp-p2p:session` (20 a minute each),
   per consumer and client address.
 
 ### Plugins: Sub Rosa preinstalled, atomic storage writes and concurrency caps
@@ -3595,7 +3607,7 @@ at least `DATABASE_URL` and `APISIX_GATEWAY_SECRET`.
 | `DEFINDEX_BASE_URL` | no | `https://api.defindex.io` | DeFindex API base URL |
 | `DEFINDEX_TIMEOUT_MS` | no | `30000` | DeFindex HTTP timeout (ms) |
 | `DEFINDEX_MAX_FEE_STROOPS` | no | `10000000` | The most a built DeFindex transaction may charge its signer, inclusion and Soroban resource fee together (stroops); a build above it is refused with `502 provider_error` |
-| `ELDORADO_CLIENT_ID` | no | none | The ClientID El Dorado issues to an integrator. With `ELDORADO_REFERRAL_ID`, turns on `POST /v1/onramp/p2p/quotes` and attributes each session's order; without both, that route answers `503 misconfigured` |
+| `ELDORADO_CLIENT_ID` | no | none | The ClientID El Dorado issues to an integrator. With `ELDORADO_REFERRAL_ID`, turns on `POST /v1/onramp/p2p/quotes` and `POST /v1/offramp/p2p/quotes` and attributes each session's order; without both, those routes answer `503 misconfigured` |
 | `ELDORADO_REFERRAL_ID` | no | none | The ReferralID that goes with `ELDORADO_CLIENT_ID` |
 | `ELDORADO_TIMEOUT_MS` | no | `10000` | Budget for one call to the P2P marketplace (ms) |
 | `TRUSTLESS_WORK_API_KEY_TESTNET` | for protected payments on testnet | — | Trustless Work's API key for testnet (`dev` keys). The routes exist only with `trustless-work` in `PLUGINS_ENABLED`; without the key they answer `503 misconfigured` on testnet. Requires `TRUSTLESS_WORK_PLATFORM_SECRET_TESTNET` |

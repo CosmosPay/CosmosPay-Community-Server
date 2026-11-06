@@ -23,6 +23,7 @@ const SANDBOX: Record<string, unknown> = {
   },
   '/prices': {
     BUY: { ARS: { price: '990.86', limits: { in: { min: '4954.30' } } } },
+    SELL: { ARS: { price: '1000', limits: { in: { min: '5' } } } },
   },
 };
 
@@ -45,8 +46,20 @@ async function boot(prisma: unknown): Promise<INestApplication> {
   return app;
 }
 
-/** An ordinary dev key (the sandbox) with the on-ramp scopes. */
+/** An ordinary dev key (the sandbox) with the on-ramp and off-ramp scopes. */
 const asTenant = (r: request.Test) =>
+  r
+    .set('x-gateway-secret', SECRET)
+    .set('x-consumer-username', 'cosmos_alice')
+    .set('x-consumer-role', 'user')
+    .set('x-consumer-env', 'dev')
+    .set(
+      'x-consumer-permissions',
+      'onramp:read,onramp:write,offramp:read,offramp:write',
+    );
+
+/** A dev key with the on-ramp scopes only. */
+const asBuyerOnly = (r: request.Test) =>
   r
     .set('x-gateway-secret', SECRET)
     .set('x-consumer-username', 'cosmos_alice')
@@ -61,13 +74,17 @@ const asPublicKey = (r: request.Test) =>
     .set('x-consumer-username', 'cosmos_public')
     .set('x-consumer-role', 'public')
     .set('x-consumer-env', 'dev')
-    .set('x-consumer-permissions', 'onramp:read,onramp:write');
+    .set(
+      'x-consumer-permissions',
+      'onramp:read,onramp:write,offramp:read,offramp:write',
+    );
 
 /**
- * The wiring in front of /v1/onramp/p2p, against the real client with the
- * marketplace's HTTP answered here and no integrator ids configured.
+ * The wiring in front of /v1/onramp/p2p and /v1/offramp/p2p, against the real
+ * client with the marketplace's HTTP answered here and no integrator ids
+ * configured.
  */
-describe('P2P on-ramp (e2e)', () => {
+describe('P2P on-ramp and off-ramp (e2e)', () => {
   let app: INestApplication;
   let fetchSpy: jest.SpyInstance;
   const requested: string[] = [];
@@ -80,7 +97,7 @@ describe('P2P on-ramp (e2e)', () => {
     requestLog: { create: jest.fn().mockResolvedValue({ id: 'rl_1' }) },
     $queryRaw: jest.fn().mockResolvedValue([{ count: 1 }]),
     consumer: { upsert: jest.fn().mockResolvedValue({ id: 'c_alice' }) },
-    onrampP2pSession: {
+    p2pRampSession: {
       create: jest.fn(({ data }: { data: Record<string, unknown> }) =>
         Promise.resolve({ id: 'clz_s1', createdAt: new Date(0), ...data }),
       ),
@@ -171,7 +188,8 @@ describe('P2P on-ramp (e2e)', () => {
     const url = new URL(res.body.widgetUrl);
     expect(url.origin).toBe('https://widget-testnet.eldorado.io');
     expect(url.searchParams.get('address')).toBe(ADDRESS);
-    expect(prisma.onrampP2pSession.create).toHaveBeenCalledTimes(1);
+    expect(prisma.p2pRampSession.create).toHaveBeenCalledTimes(1);
+    expect(prisma.p2pRampSession.create.mock.calls[0][0].data.side).toBe('buy');
   });
 
   it('refuses an order the market does not take, and a recipient that is not an EVM account', async () => {
@@ -202,5 +220,93 @@ describe('P2P on-ramp (e2e)', () => {
     await asTenant(
       request(http()).get('/v1/onramp/p2p/sessions/clz_other'),
     ).expect(404);
+  });
+
+  describe('selling', () => {
+    const sale = { ...order, amount: '20' };
+
+    it('reads the sell side of the sandbox market', async () => {
+      const res = await asTenant(
+        request(http()).get('/v1/offramp/p2p/market'),
+      ).expect(200);
+
+      expect(res.body.chainId).toBe(421614);
+      expect(res.body.currencies).toEqual([
+        expect.objectContaining({ id: 'ARS', price: '1000', minAmount: '5' }),
+      ]);
+    });
+
+    it('needs the off-ramp scopes, and lets the public key only read the market', async () => {
+      const res = await asBuyerOnly(
+        request(http()).post('/v1/offramp/p2p/sessions').send(sale),
+      ).expect(403);
+      expect(res.body.code).toBe('insufficient_scope');
+
+      await asPublicKey(request(http()).get('/v1/offramp/p2p/market')).expect(
+        200,
+      );
+      const calls = [
+        () => request(http()).post('/v1/offramp/p2p/sessions').send(sale),
+        () => request(http()).post('/v1/offramp/p2p/quotes').send(sale),
+        () => request(http()).get('/v1/offramp/p2p/sessions'),
+        () => request(http()).get('/v1/offramp/p2p/sessions/clz_s1'),
+      ];
+      for (const call of calls) {
+        const denied = await asPublicKey(call()).expect(403);
+        expect(denied.body.code).toBe('insufficient_scope');
+      }
+    });
+
+    it('opens a sale as a SELL widget without fixing the wallet', async () => {
+      prisma.p2pRampSession.create.mockClear();
+      const res = await asTenant(
+        request(http()).post('/v1/offramp/p2p/sessions').send(sale),
+      ).expect(201);
+
+      expect(res.body).toMatchObject({
+        side: 'sell',
+        amount: '20',
+        token: 'USDT',
+        estimatedAmountOut: '20000.00',
+      });
+      const url = new URL(res.body.widgetUrl);
+      expect(url.searchParams.get('operation')).toBe('SELL');
+      expect(url.searchParams.get('address')).toBeNull();
+    });
+
+    it('refuses a sale below the minimum in the stablecoin', async () => {
+      const res = await asTenant(
+        request(http())
+          .post('/v1/offramp/p2p/sessions')
+          .send({ ...sale, amount: '4' }),
+      ).expect(400);
+
+      expect(res.body.code).toBe('validation_failed');
+      expect(res.body.message).toBe('amount is below the minimum of 5 USDT');
+    });
+
+    it('answers 503 for a firm quote while the integrator ids are not configured', async () => {
+      const res = await asTenant(
+        request(http()).post('/v1/offramp/p2p/quotes').send(sale),
+      ).expect(503);
+
+      expect(res.body.code).toBe('misconfigured');
+      expect(requested.some((u) => u.includes('/quote/sell'))).toBe(false);
+    });
+
+    it('lists only sales, and answers 404 for one that is not the caller’s', async () => {
+      prisma.p2pRampSession.findMany.mockClear();
+      await asTenant(request(http()).get('/v1/offramp/p2p/sessions')).expect(
+        200,
+      );
+      expect(prisma.p2pRampSession.findMany.mock.calls[0][0].where).toEqual(
+        expect.objectContaining({ side: 'sell', network: 'testnet' }),
+      );
+
+      const res = await asTenant(
+        request(http()).get('/v1/offramp/p2p/sessions/clz_other'),
+      ).expect(404);
+      expect(res.body.message).toBe('P2P off-ramp session not found');
+    });
   });
 });

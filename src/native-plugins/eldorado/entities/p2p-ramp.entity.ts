@@ -1,7 +1,8 @@
 import { ApiProperty, ApiSchema } from '@nestjs/swagger';
 
 @ApiSchema({
-  description: 'A stablecoin a P2P purchase can deliver on this network.',
+  description:
+    'A stablecoin traded on this network: one a purchase delivers, or one a sale sends.',
 })
 export class P2pTokenEntity {
   @ApiProperty({
@@ -20,7 +21,9 @@ export class P2pTokenEntity {
   decimals!: number;
 }
 
-@ApiSchema({ description: 'A way to pay local money in one currency.' })
+@ApiSchema({
+  description: 'A way to pay or receive local money in one currency.',
+})
 export class P2pPaymentMethodEntity {
   @ApiProperty({
     example: 'bank_tx_ar',
@@ -33,7 +36,8 @@ export class P2pPaymentMethodEntity {
 }
 
 @ApiSchema({
-  description: 'A local currency a buyer can pay with, and its buy price.',
+  description:
+    'A local currency the market trades on one side, with its price and minimum there.',
 })
 export class P2pCurrencyEntity {
   @ApiProperty({
@@ -48,30 +52,32 @@ export class P2pCurrencyEntity {
   @ApiProperty({
     example: '1677.89',
     description:
-      'Local money per stablecoin on the buy side, a decimal string. The firm price, fees included, is the quote.',
+      'Local money per stablecoin on this side of the market (what a buyer pays, or what a seller receives), a decimal string. The firm price, fees included, is the quote.',
   })
   price!: string;
 
   @ApiProperty({
     example: '8389.45',
-    description: 'Least local money one order takes, a decimal string.',
+    description:
+      'Least an order puts in, a decimal string: local money for a purchase, the stablecoin for a sale.',
   })
   minAmount!: string;
 
   @ApiProperty({
     type: [P2pPaymentMethodEntity],
-    description: 'How the buyer can pay in this currency.',
+    description: 'How the local money is paid (purchase) or received (sale).',
   })
   paymentMethods!: P2pPaymentMethodEntity[];
 }
 
 @ApiSchema({
-  description: 'What can be bought with local money on the key’s network.',
+  description:
+    'One side of the P2P market on the key’s network: what can be bought with local money (on-ramp) or sold for it (off-ramp).',
 })
 export class P2pMarketEntity {
   @ApiProperty({
     example: 42161,
-    description: 'EIP-155 id of the chain the stablecoin is delivered on.',
+    description: 'EIP-155 id of the chain the stablecoin moves on.',
   })
   chainId!: number;
 
@@ -83,14 +89,15 @@ export class P2pMarketEntity {
 
   @ApiProperty({
     type: [P2pTokenEntity],
-    description: 'The stablecoins a purchase can deliver.',
+    description:
+      'The stablecoins traded: a purchase delivers one, a sale sends one.',
   })
   tokens!: P2pTokenEntity[];
 
   @ApiProperty({
     type: [P2pCurrencyEntity],
     description:
-      'The currencies that can be bought right now: each with a price, a minimum and at least one payment method.',
+      'The currencies this side trades right now: each with a price, a minimum and at least one payment method.',
   })
   currencies!: P2pCurrencyEntity[];
 }
@@ -99,19 +106,20 @@ export class P2pMarketEntity {
 export class P2pQuoteFeeEntity {
   @ApiProperty({
     example: '0.90',
-    description: 'Fees in the stablecoin bought, a decimal string.',
+    description: 'Fees in the stablecoin, a decimal string.',
   })
   amountInToken!: string;
 
   @ApiProperty({
     example: '1329.06',
-    description: 'Fees in the local currency paid, a decimal string.',
+    description: 'Fees in the local currency, a decimal string.',
   })
   amountInFiat!: string;
 }
 
 @ApiSchema({
-  description: 'A firm price for buying a stablecoin with local money.',
+  description:
+    'A firm price for an order on the P2P marketplace: a purchase of a stablecoin with local money, or a sale of one for it.',
 })
 export class P2pQuoteEntity {
   @ApiProperty({
@@ -120,27 +128,32 @@ export class P2pQuoteEntity {
   })
   quoteId!: string;
 
-  @ApiProperty({ example: 'ARS', description: 'Local currency paid.' })
+  @ApiProperty({
+    example: 'ARS',
+    description: 'Local currency paid (purchase) or received (sale).',
+  })
   currency!: string;
 
-  @ApiProperty({ example: 'USDC', description: 'Stablecoin bought.' })
+  @ApiProperty({ example: 'USDC', description: 'Stablecoin bought or sold.' })
   token!: string;
 
   @ApiProperty({
     example: 42161,
-    description: 'EIP-155 id of the chain it is delivered on.',
+    description: 'EIP-155 id of the chain it moves on.',
   })
   chainId!: number;
 
   @ApiProperty({
     example: '54500',
-    description: 'Local money paid, a decimal string.',
+    description:
+      'What the order puts in, a decimal string: local money for a purchase, the stablecoin for a sale.',
   })
   amountIn!: string;
 
   @ApiProperty({
     example: '35.04',
-    description: 'Stablecoin delivered, fees taken, a decimal string.',
+    description:
+      'What it gives, fees taken, a decimal string: the stablecoin a purchase delivers, the local money a sale pays.',
   })
   amountOut!: string;
 
@@ -172,7 +185,7 @@ export class P2pQuoteEntity {
 
 @ApiSchema({
   description:
-    'A purchase opened on the P2P marketplace: the order filled in and the widget URL that takes it, with the recipient fixed.',
+    'An order opened on the P2P marketplace (a purchase, or a sale): the order filled in and the widget URL that takes it.',
 })
 export class P2pSessionEntity {
   @ApiProperty({
@@ -188,21 +201,33 @@ export class P2pSessionEntity {
   network!: string;
 
   @ApiProperty({
+    example: 'buy',
+    enum: ['buy', 'sell'],
+    description:
+      '`buy` for a purchase (`/v1/onramp/p2p`), `sell` for a sale (`/v1/offramp/p2p`).',
+  })
+  side!: string;
+
+  @ApiProperty({
     example: 'ARS',
-    description: 'Local currency the buyer pays.',
+    description: 'Local currency paid (purchase) or received (sale).',
   })
   currency!: string;
 
-  @ApiProperty({ example: 'bank_tx_ar', description: 'How the buyer pays.' })
+  @ApiProperty({
+    example: 'bank_tx_ar',
+    description: 'How the local money is paid (purchase) or received (sale).',
+  })
   paymentMethod!: string;
 
   @ApiProperty({
     example: '50000',
-    description: 'Local money the buyer pays, a decimal string.',
+    description:
+      'What the order puts in, a decimal string: local money for a purchase, the stablecoin for a sale.',
   })
   amount!: string;
 
-  @ApiProperty({ example: 'USDC', description: 'Stablecoin bought.' })
+  @ApiProperty({ example: 'USDC', description: 'Stablecoin bought or sold.' })
   token!: string;
 
   @ApiProperty({
@@ -213,21 +238,21 @@ export class P2pSessionEntity {
 
   @ApiProperty({
     example: 42161,
-    description: 'EIP-155 id of the chain it is delivered on.',
+    description: 'EIP-155 id of the chain it moves on.',
   })
   chainId!: number;
 
   @ApiProperty({
     example: '0x52908400098527886E0F7030069857D2E4169EE7',
     description:
-      'Where the stablecoin is delivered (EIP-55). The widget does not let the buyer change it.',
+      'EIP-55. A purchase: where the stablecoin is delivered, fixed in the widget so the buyer cannot change it. A sale: the account the order named as the one it is sent from; the seller connects that wallet in the widget.',
   })
   address!: string;
 
   @ApiProperty({
     example: '29.79',
     description:
-      'About what `amount` buys at the market price when the session was opened, rounded down; the widget quotes the firm figure before payment.',
+      'About what `amount` gives at the market price when the session was opened, rounded down: the stablecoin a purchase delivers, or the local money a sale pays. The widget quotes the firm figure before anything moves.',
   })
   estimatedAmountOut!: string;
 
@@ -241,7 +266,7 @@ export class P2pSessionEntity {
     example:
       'https://p2p-widget.example/exchange?operation=BUY&token=0xaf88d065e77c8cC2239327C5EDb3A432268e5831&chain=42161&currency=ARS&paymentMethod=bank_tx_ar&amount=50000&address=0x52908400098527886E0F7030069857D2E4169EE7&externalReferenceId=cp-clz9xp2p0001',
     description:
-      'Open it in a browser tab or window (not an iframe): the buyer signs in, verifies their identity and pays a P2P seller there.',
+      'Open it in a browser tab or window (not an iframe): the person signs in and verifies their identity there, then pays a P2P seller (purchase) or connects their wallet, sends the stablecoin and is paid by a P2P buyer (sale).',
   })
   widgetUrl!: string;
 
@@ -252,7 +277,9 @@ export class P2pSessionEntity {
   createdAt!: Date;
 }
 
-@ApiSchema({ description: 'A page of P2P purchase sessions, newest first.' })
+@ApiSchema({
+  description: 'A page of P2P sessions of one side, newest first.',
+})
 export class P2pSessionListEntity {
   @ApiProperty({
     type: [P2pSessionEntity],

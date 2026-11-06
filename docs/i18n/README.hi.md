@@ -113,7 +113,7 @@ src/
   native-plugins/                 first-party plugins, imported only when PLUGINS_ENABLED names them:
     blindpay/                     BlindPay: client, Svix verify, sync + webhook, kyc/, onramp/, offramp/, admin/
     defindex/                     DeFindex vaults (Stellar)
-    eldorado/                     P2P on-ramp: El Dorado पर स्थानीय मुद्रा से stablecoins (Arbitrum)
+    eldorado/                     P2P on-ramp और off-ramp: El Dorado पर स्थानीय मुद्रा और stablecoins (Arbitrum)
     trustless-work/               protected payments on Trustless Work (Stellar): client, envelope checks,
                                   sync / expiry / deadline jobs, the keyless buyer routes, admin/
   health/                         liveness/readiness probes (@Public)
@@ -166,6 +166,7 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | Onramp            | `/v1/onramp`             | Payin quotes, payins, virtual accounts                    |
 | P2P on-ramp | `/v1/onramp/p2p` | P2P sellers के ज़रिए स्थानीय मुद्रा से Arbitrum पर USDC या USDT: market, firm quote, purchase sessions |
 | Offramp           | `/v1/offramp`            | Payout quotes, authorize, payouts (client द्वारा signed) |
+| P2P off-ramp | `/v1/offramp/p2p` | P2P buyers के ज़रिए Arbitrum पर USDC या USDT से स्थानीय मुद्रा: market, firm quote, sale sessions |
 | प्रोडक्ट्स        | `/v1/products`           | मर्चेंट कैटलॉग                                           |
 | कस्टमर्स          | `/v1/customers`          | intents से बने payer रिकॉर्ड                            |
 | Aliases           | `/v1/aliases`            | क्लेम किए जा सकने वाले पेमेंट हैंडल: claim, resolve, recover |
@@ -279,6 +280,11 @@ Paths OpenAPI के `{param}` रूप में लिखे गए हैं
 | POST | `/v1/defindex/submit` | इनमें से कोई एक `liquidity:write`, `swaps:write` |  |
 | GET | `/v1/logs` | `payments:read` |  |
 | GET | `/v1/logs/webhooks` | `webhooks:read` |  |
+| GET | `/v1/offramp/p2p/market` | `offramp:read` | ✓ |
+| POST | `/v1/offramp/p2p/quotes` | `offramp:write` |  |
+| GET | `/v1/offramp/p2p/sessions` | `offramp:read` |  |
+| POST | `/v1/offramp/p2p/sessions` | `offramp:write` |  |
+| GET | `/v1/offramp/p2p/sessions/{id}` | `offramp:read` |  |
 | GET | `/v1/offramp/payouts` | `offramp:read` |  |
 | POST | `/v1/offramp/payouts` | `offramp:write` |  |
 | POST | `/v1/offramp/payouts/authorize` | `offramp:write` |  |
@@ -2179,7 +2185,7 @@ Deploy का XLM platform देता है; हर पक्ष उन trans
 | POST | `/v1/admin/protected-payments/{id}/resolve` | प्लेटफ़ॉर्म कंसोल: एक dispute resolve करें |
 | POST | `/v1/admin/protected-payments/{id}/submit` | प्लेटफ़ॉर्म कंसोल: ops wallet का resolution relay करें |
 
-## P2P on-ramp (El Dorado)
+## P2P on-ramp और off-ramp (El Dorado)
 
 > **एक native plugin.** इस सेक्शन में सब कुछ `eldorado` plugin है
 > (`src/native-plugins/eldorado/`), जो तभी serve होता है जब `PLUGINS_ENABLED` में `eldorado` हो।
@@ -2200,7 +2206,13 @@ order का quote बनाती है और एक session खोलती 
 | GET | `/v1/onramp/p2p/sessions` | `onramp:read` | key के network पर consumer के sessions |
 | POST | `/v1/onramp/p2p/sessions` | `onramp:write` | एक order record करता है और उसका `widgetUrl` लौटाता है |
 | GET | `/v1/onramp/p2p/sessions/{id}` | `onramp:read` | उनमें से एक |
+| GET | `/v1/offramp/p2p/market` | `offramp:read` | मुद्राएँ, payment methods, sell price और minimum (stablecoin में), chain और उसके tokens (shared public key इसे पढ़ सकती है) |
+| POST | `/v1/offramp/p2p/quotes` | `offramp:write` | किसी sale का fees सहित firm quote; integrator ids चाहिए |
+| GET | `/v1/offramp/p2p/sessions` | `offramp:read` | key के network पर consumer की sales |
+| POST | `/v1/offramp/p2p/sessions` | `offramp:write` | एक sale record करता है और उसका `widgetUrl` लौटाता है |
+| GET | `/v1/offramp/p2p/sessions/{id}` | `offramp:read` | उनमें से एक |
 
+- **बेचना वही flow उल्टी दिशा में है।** `/v1/offramp/p2p` पर व्यक्ति Arbitrum पर USDC या USDT बेचता है और बदले में स्थानीय मुद्रा पाता है, जिसे कोई P2P buyer चुने गए method से चुकाता है। तब `amount` बेचा गया stablecoin है (minimum भी token में है), `address` वह account है जहाँ से वह भेजा जाता है, और `estimatedAmountOut` market price पर स्थानीय मुद्रा। sale के widget में `address` नहीं होता: उसके साथ widget wallet को connected मान लेता और transfer sign करने के लिए उसके पास कुछ नहीं होता, इसलिए seller वहाँ वह wallet connect करता है जिसमें stablecoin है। हर prefix सिर्फ़ अपनी side को list करता और पढ़ता है (हर session में `side`); दूसरी side का session किसी न मौजूद session का 404 है।
 - **key का network marketplace चुनता है।** `prod` key mainnet पर खरीदती है (Arbitrum One पर USDC
   या USDT); `dev` key sandbox में, जहाँ केवल Arbitrum Sepolia पर उसका test USDT है और order तभी
   पूरा होता है जब El Dorado के development app पर market maker का ad हो।
@@ -2213,7 +2225,7 @@ order का quote बनाती है और एक session खोलती 
 - **integrator ids वैकल्पिक हैं, firm quote को छोड़कर।** `ELDORADO_CLIENT_ID` और
   `ELDORADO_REFERRAL_ID` वही हैं जो El Dorado integrator को देता है (api@eldorado.io)। इनके बिना
   market और sessions चलते हैं और widget भुगतान से पहले quote दिखाता है; इनके साथ
-  `POST /v1/onramp/p2p/quotes` जवाब देता है, और हर session के widget में ids होते हैं, जो order
+  `POST /v1/onramp/p2p/quotes` और `POST /v1/offramp/p2p/quotes` जवाब देते हैं, और हर session के widget में ids होते हैं, जो order
   को Cosmos Pay से जोड़ते हैं।
 - **market हर network पर एक मिनट cache होता है** (`ELDORADO_MARKET_TTL_MS`), और बिना price,
   minimum या payment method वाली मुद्रा छोड़ दी जाती है। session का `estimatedAmountOut` market
@@ -2437,7 +2449,7 @@ seal होती हैं और कभी लौटाई नहीं जा
 | ---- | ------------ |
 | `blindpay` | KYC, onramp, offramp, BlindPay webhook, उसके `/v1/admin` routes (`receivers`, `payins`, `payouts`) और admin summary का `fiat` अनुभाग |
 | `defindex` | `/v1/defindex` — Stellar पर DeFindex vaults |
-| `eldorado` | `/v1/onramp/p2p`: El Dorado के P2P marketplace पर स्थानीय मुद्रा से खरीदे गए stablecoins (Arbitrum) |
+| `eldorado` | `/v1/onramp/p2p` और `/v1/offramp/p2p`: El Dorado के P2P marketplace पर स्थानीय मुद्रा से खरीदे और उसके बदले बेचे गए stablecoins (Arbitrum) |
 | `trustless-work` | `/v1/protected-payments`, बिना key वाले `/v1/protected-payment-links` और `/v1/admin/protected-payments`: Trustless Work (Stellar) पर सुरक्षित भुगतान |
 
 - **सूची में नहीं, तो मौजूद नहीं।** जिस native plugin का नाम `PLUGINS_ENABLED` में नहीं
@@ -2470,13 +2482,13 @@ seal होती हैं और कभी लौटाई नहीं जा
 
 ## अपग्रेड — breaking changes और deploy नोट्स
 
-### P2P on-ramp: एक नया native plugin और एक table
+### P2P on-ramp और off-ramp: एक नया native plugin और एक table
 
-- **Migration `20261105120000_onramp_p2p_sessions`** `onramp_p2p_session` table बनाता है; कुछ
+- **Migration `20261105120000_p2p_ramp_sessions`** `p2p_ramp_session` table बनाता है; कुछ
   भी rewrite नहीं होता। नया build serve करने से पहले `migrate deploy` चलाएँ।
 - **enable होने तक बंद।** `PLUGINS_ENABLED` में `eldorado` जोड़ें। कोई variable ज़रूरी नहीं;
   `ELDORADO_CLIENT_ID` और `ELDORADO_REFERRAL_ID` firm quote चालू करते हैं।
-- **नए budgets:** `onramp-p2p:quote` (30 प्रति मिनट) और `onramp-p2p:session` (20 प्रति मिनट),
+- **नए budgets:** `onramp-p2p:quote` और `offramp-p2p:quote` (हर एक 30 प्रति मिनट), `onramp-p2p:session` और `offramp-p2p:session` (हर एक 20 प्रति मिनट),
   प्रति consumer और client address।
 
 ### Plugins: Sub Rosa preinstalled, atomic storage writes और concurrency की सीमाएँ
@@ -3574,7 +3586,7 @@ type दोबारा बनाए बिना enum value drop नहीं �
 | `DEFINDEX_BASE_URL` | नहीं | `https://api.defindex.io` | DeFindex API base URL |
 | `DEFINDEX_TIMEOUT_MS` | नहीं | `30000` | DeFindex HTTP timeout (ms) |
 | `DEFINDEX_MAX_FEE_STROOPS` | नहीं | `10000000` | बना हुआ DeFindex transaction अपने signer से अधिकतम कितना ले सकता है, inclusion और Soroban resource fee मिलाकर (stroops); इससे ऊपर का build `502 provider_error` के साथ अस्वीकार होता है |
-| `ELDORADO_CLIENT_ID` | नहीं | कोई नहीं | वह ClientID जो El Dorado किसी integrator को देता है। `ELDORADO_REFERRAL_ID` के साथ यह `POST /v1/onramp/p2p/quotes` चालू करता है और हर session का order जोड़ता है; दोनों के बिना वह route `503 misconfigured` लौटाता है |
+| `ELDORADO_CLIENT_ID` | नहीं | कोई नहीं | वह ClientID जो El Dorado किसी integrator को देता है। `ELDORADO_REFERRAL_ID` के साथ यह `POST /v1/onramp/p2p/quotes` और `POST /v1/offramp/p2p/quotes` चालू करता है और हर session का order जोड़ता है; दोनों के बिना वे routes `503 misconfigured` लौटाते हैं |
 | `ELDORADO_REFERRAL_ID` | नहीं | कोई नहीं | वह ReferralID जो `ELDORADO_CLIENT_ID` के साथ आता है |
 | `ELDORADO_TIMEOUT_MS` | नहीं | `10000` | P2P marketplace को एक call का budget (ms) |
 | `TRUSTLESS_WORK_API_KEY_TESTNET` | testnet पर सुरक्षित भुगतान के लिए | — | testnet के लिए Trustless Work की API key (`dev` keys)। Routes केवल `PLUGINS_ENABLED` में `trustless-work` होने पर मौजूद हैं; key के बिना वे testnet पर `503 misconfigured` लौटाते हैं। `TRUSTLESS_WORK_PLATFORM_SECRET_TESTNET` भी ज़रूरी है |

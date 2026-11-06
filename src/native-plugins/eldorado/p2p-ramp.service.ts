@@ -12,12 +12,14 @@ import type { AppConfig, StellarNetwork } from '@/config/configuration';
 import type { PaginationQueryDto } from '@/common/dto/pagination.query.dto';
 import {
   EldoradoClient,
-  type RawBuyQuote,
+  type RawQuote,
 } from '@/native-plugins/eldorado/eldorado.client';
 import {
   ELDORADO_HOSTS,
   ELDORADO_MARKET_TTL_MS,
   P2P_MARKETPLACE,
+  type EldoradoHost,
+  type EldoradoToken,
 } from '@/native-plugins/eldorado/eldorado.constants';
 import {
   buildMarket,
@@ -27,7 +29,9 @@ import {
   sessionReference,
   widgetUrl,
   type P2pMarket,
+  type P2pMarkets,
   type P2pOrder,
+  type P2pSide,
 } from '@/native-plugins/eldorado/p2p-market';
 import { PrismaService } from '@/prisma/prisma.service';
 
@@ -35,6 +39,7 @@ import { PrismaService } from '@/prisma/prisma.service';
 const P2P_SESSION_PUBLIC_SELECT = {
   id: true,
   network: true,
+  side: true,
   currency: true,
   paymentMethod: true,
   amount: true,
@@ -48,24 +53,31 @@ const P2P_SESSION_PUBLIC_SELECT = {
   createdAt: true,
 } as const;
 
-interface CachedMarket {
+/** The 404 of a session the caller cannot read, per side. */
+const SESSION_NOT_FOUND: Record<P2pSide, string> = {
+  buy: 'P2P on-ramp session not found',
+  sell: 'P2P off-ramp session not found',
+};
+
+interface CachedMarkets {
   at: number;
-  market: P2pMarket;
+  markets: P2pMarkets;
 }
 
 /**
- * Buying stablecoins with local money from P2P sellers (`/v1/onramp/p2p`).
+ * Trading stablecoins for local money with P2P counterparts: purchases
+ * (`/v1/onramp/p2p`, side `buy`) and sales (`/v1/offramp/p2p`, side `sell`).
  *
- * This service never holds the money: the buyer pays a seller on the
- * marketplace, which delivers the stablecoin to the address the session fixed.
- * What it owns is the market read (cached per network), the firm quote (with
- * the deployment's integrator ids) and the consumer's record of each purchase
- * it opened, with the widget URL that takes it.
+ * This service never holds the money: the person pays or is paid by a P2P
+ * counterpart on the marketplace, which moves the stablecoin. What it owns is
+ * the market read (both sides cached per network), the firm quote (with the
+ * deployment's integrator ids) and the consumer's record of each order it
+ * opened, with the widget URL that takes it.
  */
 @Injectable()
-export class P2pOnrampService {
-  private readonly markets = new Map<StellarNetwork, CachedMarket>();
-  private readonly inFlight = new Map<StellarNetwork, Promise<P2pMarket>>();
+export class P2pRampService {
+  private readonly markets = new Map<StellarNetwork, CachedMarkets>();
+  private readonly inFlight = new Map<StellarNetwork, Promise<P2pMarkets>>();
 
   constructor(
     private readonly config: ConfigService<AppConfig, true>,
@@ -74,51 +86,62 @@ export class P2pOnrampService {
     private readonly client: EldoradoClient,
   ) {}
 
-  /** The market on the key's network, at most {@link ELDORADO_MARKET_TTL_MS} old. */
-  market(consumer: GatewayConsumer): Promise<P2pMarket> {
-    return this.marketOn(resolveNetwork(this.config, consumer));
+  /** One side of the market on the key's network, at most {@link ELDORADO_MARKET_TTL_MS} old. */
+  async market(consumer: GatewayConsumer, side: P2pSide): Promise<P2pMarket> {
+    const markets = await this.marketsOn(resolveNetwork(this.config, consumer));
+    return markets[side];
   }
 
-  /** A firm quote for `order`, from the marketplace. Nothing is stored. */
-  async quote(consumer: GatewayConsumer, order: P2pOrder) {
+  /** A firm quote for `order` on `side`, from the marketplace. Nothing is stored. */
+  async quote(consumer: GatewayConsumer, side: P2pSide, order: P2pOrder) {
     const network = resolveNetwork(this.config, consumer);
-    const market = await this.marketOn(network);
-    this.assertOrder(market, order);
+    const market = (await this.marketsOn(network))[side];
+    this.assertOrder(market, order, side);
     const host = ELDORADO_HOSTS[network];
-    const token = host.tokens.find((t) => t.symbol === order.token)!;
+    const token = tokenOf(host, order);
+    const address = toChecksumAddress(order.address);
+    const common = {
+      token: token.address,
+      chainId: String(host.chainId),
+      fiatCurrencyId: order.currency,
+      paymentMethodId: order.paymentMethod,
+      amount: order.amount,
+      fixedAmountSide: 'IN' as const,
+    };
     const raw = await this.upstream(() =>
-      this.client.buyQuote(network, {
-        addressTo: toChecksumAddress(order.address),
-        token: token.address,
-        chainId: String(host.chainId),
-        fiatCurrencyId: order.currency,
-        paymentMethodId: order.paymentMethod,
-        amount: order.amount,
-        fixedAmountSide: 'IN',
-      }),
+      side === 'buy'
+        ? this.client.buyQuote(network, { ...common, addressTo: address })
+        : this.client.sellQuote(network, { ...common, addressFrom: address }),
     );
     return toQuote(raw, order, host.chainId);
   }
 
   /**
-   * Records a purchase and answers the widget URL that takes it, with
-   * `order.address` fixed as the recipient. The order is checked against the
-   * market first, so a session never opens a widget the marketplace refuses.
+   * Records an order on `side` and answers the widget URL that takes it. A
+   * purchase fixes `order.address` as the recipient there; a sale records it as
+   * the account the stablecoin comes from, and the seller connects that wallet
+   * in the widget. The order is checked against the market first, so a session
+   * never opens a widget the marketplace refuses.
    */
-  async createSession(consumer: GatewayConsumer, order: P2pOrder) {
+  async createSession(
+    consumer: GatewayConsumer,
+    side: P2pSide,
+    order: P2pOrder,
+  ) {
     const network = resolveNetwork(this.config, consumer);
-    const market = await this.marketOn(network);
-    this.assertOrder(market, order);
+    const market = (await this.marketsOn(network))[side];
+    this.assertOrder(market, order, side);
     const host = ELDORADO_HOSTS[network];
-    const token = host.tokens.find((t) => t.symbol === order.token)!;
+    const token = tokenOf(host, order);
     const currency = market.currencies.find((c) => c.id === order.currency)!;
     const address = toChecksumAddress(order.address);
     const reference = sessionReference(randomUUID());
     const local = await this.consumers.resolve(consumer);
-    return this.prisma.onrampP2pSession.create({
+    return this.prisma.p2pRampSession.create({
       data: {
         consumerId: local.id,
         network,
+        side,
         currency: currency.id,
         paymentMethod: order.paymentMethod,
         amount: order.amount,
@@ -126,74 +149,97 @@ export class P2pOnrampService {
         tokenAddress: token.address,
         chainId: host.chainId,
         address,
-        estimatedAmountOut: estimateAmountOut(order.amount, currency.price),
+        estimatedAmountOut: estimateAmountOut(
+          order.amount,
+          currency.price,
+          side,
+        ),
         reference,
         widgetUrl: widgetUrl(
           host,
           { ...order, address },
           reference,
           this.client.integratorIds(),
+          side,
         ),
       },
       select: P2P_SESSION_PUBLIC_SELECT,
     });
   }
 
-  /** The consumer's sessions on the key's network, newest first. */
-  async findAll(consumer: GatewayConsumer, query: PaginationQueryDto) {
+  /** The consumer's sessions of `side` on the key's network, newest first. */
+  async findAll(
+    consumer: GatewayConsumer,
+    side: P2pSide,
+    query: PaginationQueryDto,
+  ) {
     const consumerId = await this.consumers.resolveId(consumer);
     const where = {
       consumerId,
       network: resolveNetwork(this.config, consumer),
+      side,
     };
     const [data, total] = await Promise.all([
-      this.prisma.onrampP2pSession.findMany({
+      this.prisma.p2pRampSession.findMany({
         where,
         orderBy: { createdAt: 'desc' },
         take: query.take,
         skip: query.skip,
         select: P2P_SESSION_PUBLIC_SELECT,
       }),
-      this.prisma.onrampP2pSession.count({ where }),
+      this.prisma.p2pRampSession.count({ where }),
     ]);
     return page(data, total, query);
   }
 
-  /** One session of the consumer on the key's network; anyone else's is the 404 of a missing one. */
-  async findOne(consumer: GatewayConsumer, id: string) {
+  /**
+   * One session of the consumer on the key's network and `side`; anyone else's,
+   * or one of the other side, is the 404 of a missing one.
+   */
+  async findOne(consumer: GatewayConsumer, side: P2pSide, id: string) {
     const consumerId = await this.consumers.resolveId(consumer);
-    const row = await this.prisma.onrampP2pSession.findFirst({
-      where: { id, consumerId, network: resolveNetwork(this.config, consumer) },
+    const row = await this.prisma.p2pRampSession.findFirst({
+      where: {
+        id,
+        consumerId,
+        network: resolveNetwork(this.config, consumer),
+        side,
+      },
       select: P2P_SESSION_PUBLIC_SELECT,
     });
-    if (!row) throw ApiError.notFound('P2P on-ramp session not found');
+    if (!row) throw ApiError.notFound(SESSION_NOT_FOUND[side]);
     return row;
   }
 
-  private assertOrder(market: P2pMarket, order: P2pOrder): void {
-    const problem = orderProblem(market, order);
+  private assertOrder(market: P2pMarket, order: P2pOrder, side: P2pSide) {
+    const problem = orderProblem(market, order, side);
     if (problem)
       throw ApiError.badRequest(ApiErrorCode.ValidationFailed, problem);
   }
 
-  private marketOn(network: StellarNetwork): Promise<P2pMarket> {
+  private marketsOn(network: StellarNetwork): Promise<P2pMarkets> {
     const cached = this.markets.get(network);
     if (cached && Date.now() - cached.at < ELDORADO_MARKET_TTL_MS) {
-      return Promise.resolve(cached.market);
+      return Promise.resolve(cached.markets);
     }
     const running = this.inFlight.get(network);
     if (running) return running;
-    const read = this.readMarket(network)
-      .then((market) => {
-        this.markets.set(network, { at: Date.now(), market });
-        return market;
+    const read = this.readMarkets(network)
+      .then((markets) => {
+        this.markets.set(network, { at: Date.now(), markets });
+        return markets;
       })
       .finally(() => this.inFlight.delete(network));
     this.inFlight.set(network, read);
     return read;
   }
 
-  private async readMarket(network: StellarNetwork): Promise<P2pMarket> {
+  /**
+   * Both sides from one read of the three lists. A side `/prices` leaves out
+   * (or sends unreadable) offers nothing; with neither side, or without the
+   * currency and payment method lists, the answer is unusable: a 502.
+   */
+  private async readMarkets(network: StellarNetwork): Promise<P2pMarkets> {
     const [currencies, methods, prices] = await this.upstream(() =>
       Promise.all([
         this.client.currencies(network),
@@ -201,23 +247,25 @@ export class P2pOnrampService {
         this.client.prices(network),
       ]),
     );
+    const buy = priceSide(prices?.BUY);
+    const sell = priceSide(prices?.SELL);
     if (
       !Array.isArray(currencies?.currencies) ||
       !Array.isArray(methods?.paymentMethods) ||
-      !prices?.BUY ||
-      typeof prices.BUY !== 'object'
+      (!buy && !sell)
     ) {
       throw ApiError.badGateway(
         ApiErrorCode.ProviderError,
         `The ${P2P_MARKETPLACE} answered a market this service cannot read.`,
       );
     }
-    return buildMarket(
-      ELDORADO_HOSTS[network],
-      currencies.currencies,
-      methods.paymentMethods,
-      prices.BUY,
-    );
+    const host = ELDORADO_HOSTS[network];
+    const list = currencies.currencies;
+    const ways = methods.paymentMethods;
+    return {
+      buy: buildMarket(host, list, ways, buy),
+      sell: buildMarket(host, list, ways, sell),
+    };
   }
 
   /** A 404 from the marketplace is its fault here (every path is fixed): a 502. */
@@ -236,8 +284,18 @@ export class P2pOnrampService {
   }
 }
 
+/** A side of `/prices` when it is an object, else null. */
+function priceSide<T>(raw: T | undefined): T | null {
+  return raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : null;
+}
+
+/** The order's token on `host`; `orderProblem` has already checked it is listed. */
+function tokenOf(host: EldoradoHost, order: P2pOrder): EldoradoToken {
+  return host.tokens.find((t) => t.symbol === order.token)!;
+}
+
 /** The marketplace's quote as this API publishes it; one it cannot read is a 502. */
-function toQuote(raw: RawBuyQuote, order: P2pOrder, chainId: number) {
+function toQuote(raw: RawQuote, order: P2pOrder, chainId: number) {
   const amountIn = positiveDecimal(raw.amountIn);
   const amountOut = positiveDecimal(raw.amountOut);
   const minAmountOut = positiveDecimal(raw.minAmountOut);

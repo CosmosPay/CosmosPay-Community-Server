@@ -14,8 +14,8 @@ import type {
   RawPriceSide,
 } from '@/native-plugins/eldorado/p2p-market';
 
-/** What `/quote/buy` answers (the fields this API passes on). */
-export interface RawBuyQuote {
+/** What `/quote/buy` and `/quote/sell` answer (the fields this API passes on). */
+export interface RawQuote {
   quoteId?: unknown;
   amountIn?: unknown;
   amountOut?: unknown;
@@ -26,9 +26,8 @@ export interface RawBuyQuote {
   fee?: { amountInToken?: unknown; amountInFiat?: unknown } | null;
 }
 
-/** The body `/quote/buy` takes. */
-export interface BuyQuoteRequest {
-  addressTo: string;
+/** What both quote bodies share: the order, its token on `chainId`, the amount it puts in. */
+interface QuoteRequestBase {
   token: string;
   chainId: string;
   fiatCurrencyId: string;
@@ -37,14 +36,24 @@ export interface BuyQuoteRequest {
   fixedAmountSide: 'IN';
 }
 
+/** The body `/quote/buy` takes: `addressTo` receives the stablecoin. */
+export interface BuyQuoteRequest extends QuoteRequestBase {
+  addressTo: string;
+}
+
+/** The body `/quote/sell` takes: `addressFrom` sends the stablecoin. */
+export interface SellQuoteRequest extends QuoteRequestBase {
+  addressFrom: string;
+}
+
 /**
  * El Dorado's API, as this plugin uses it: the one place that builds its URLs,
  * holds the integrator ids and turns its failures into this service's errors
  * (through `requestUpstreamJson`, under the name {@link P2P_MARKETPLACE}).
  *
- * The market reads take no credentials. The buy quote requires the
+ * The market reads take no credentials. Both quotes require the
  * `X-Client-ID` and `X-Referral-ID` El Dorado issues to an integrator: without
- * them it is `503 misconfigured` before any call.
+ * them they are `503 misconfigured` before any call.
  */
 @Injectable()
 export class EldoradoClient {
@@ -62,15 +71,38 @@ export class EldoradoClient {
     return this.get(network, '/payment-methods');
   }
 
-  prices(network: StellarNetwork): Promise<{ BUY?: RawPriceSide }> {
+  prices(
+    network: StellarNetwork,
+  ): Promise<{ BUY?: RawPriceSide; SELL?: RawPriceSide }> {
     return this.get(network, '/prices');
   }
 
   /** A firm buy quote. Needs the integrator ids. */
-  buyQuote(
+  buyQuote(network: StellarNetwork, body: BuyQuoteRequest): Promise<RawQuote> {
+    return this.quote(network, '/quote/buy', body);
+  }
+
+  /** A firm sell quote. Needs the integrator ids. */
+  sellQuote(
     network: StellarNetwork,
-    body: BuyQuoteRequest,
-  ): Promise<RawBuyQuote> {
+    body: SellQuoteRequest,
+  ): Promise<RawQuote> {
+    return this.quote(network, '/quote/sell', body);
+  }
+
+  /** Both integrator ids, or null when either is missing. */
+  integratorIds(): IntegratorIds | null {
+    const cfg = this.config.get('eldorado', { infer: true });
+    return cfg.clientId && cfg.referralId
+      ? { clientId: cfg.clientId, referralId: cfg.referralId }
+      : null;
+  }
+
+  private quote(
+    network: StellarNetwork,
+    path: '/quote/buy' | '/quote/sell',
+    body: BuyQuoteRequest | SellQuoteRequest,
+  ): Promise<RawQuote> {
     const ids = this.integratorIds();
     if (!ids) {
       throw ApiError.unavailable(
@@ -78,12 +110,12 @@ export class EldoradoClient {
         'Firm P2P quotes are not available on this deployment: the P2P marketplace integrator ids are not configured.',
       );
     }
-    return requestUpstreamJson<RawBuyQuote>(
+    return requestUpstreamJson<RawQuote>(
       {
         provider: P2P_MARKETPLACE,
         keyEnv: 'ELDORADO_CLIENT_ID',
         method: 'POST',
-        url: `${ELDORADO_HOSTS[network].api}/quote/buy`,
+        url: `${ELDORADO_HOSTS[network].api}${path}`,
         headers: {
           'X-Client-ID': ids.clientId,
           'X-Referral-ID': ids.referralId,
@@ -93,14 +125,6 @@ export class EldoradoClient {
       },
       this.logger,
     );
-  }
-
-  /** Both integrator ids, or null when either is missing. */
-  integratorIds(): IntegratorIds | null {
-    const cfg = this.config.get('eldorado', { infer: true });
-    return cfg.clientId && cfg.referralId
-      ? { clientId: cfg.clientId, referralId: cfg.referralId }
-      : null;
   }
 
   private get timeoutMs(): number {
