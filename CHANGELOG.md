@@ -2,6 +2,12 @@
 
 All notable changes to the Cosmos Pay Community Server are documented here.
 Generated from [Conventional Commits](https://www.conventionalcommits.org) by [git-cliff](https://git-cliff.org).
+## [1.12.0] - 2026-11-06
+
+### Features
+- Each token's logo as the marketplace lists it (1f56bda)
+- Flag each network's main assets in the token list (ebb3568)
+
 ## [1.11.0] - 2026-11-06
 
 ### Features
