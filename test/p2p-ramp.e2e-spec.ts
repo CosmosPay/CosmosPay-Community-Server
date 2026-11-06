@@ -329,7 +329,7 @@ describe('P2P on-ramp and off-ramp (e2e)', () => {
       expect(res.body.defaultToken.address).toBe(USDT0);
     });
 
-    it('pages and searches a chain’s tokens, its main assets first, with no logo', async () => {
+    it('pages and searches a chain’s tokens, its main assets first, each with its listing’s logo', async () => {
       const res = await asTenantLive(
         request(http()).get('/v1/onramp/p2p/tokens?chainId=42161&take=2'),
       ).expect(200);
@@ -346,7 +346,11 @@ describe('P2P on-ramp and off-ramp (e2e)', () => {
         symbol: 'USDT0',
         decimals: 6,
         priceUsd: '1',
+        logoUrl: null,
       });
+      // The listing's logo, under its own name (never the raw `logo` field).
+      expect(res.body.data[0].logoUrl).toBe('https://example.invalid/eth.png');
+      expect(res.body.data[0]).not.toHaveProperty('logo');
 
       const found = await asTenantLive(
         request(http()).get('/v1/offramp/p2p/tokens?chainId=42161&q=ar'),

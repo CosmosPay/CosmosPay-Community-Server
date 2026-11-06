@@ -272,7 +272,7 @@ describe('P2pRampService', () => {
   });
 
   describe('tokens', () => {
-    it('pages one chain’s tokens, its main assets first, without logos', async () => {
+    it('pages one chain’s tokens, its main assets first, each with its listing’s logo', async () => {
       const { service } = setup();
 
       const page = await service.tokens(key('prod'), {
@@ -289,6 +289,7 @@ describe('P2pRampService', () => {
             symbol: 'ETH',
             decimals: 18,
             priceUsd: '2241.32',
+            logoUrl: 'https://example.invalid/eth.png',
           },
           {
             chainId: 42161,
@@ -296,6 +297,7 @@ describe('P2pRampService', () => {
             symbol: 'USDT0',
             decimals: 6,
             priceUsd: '1',
+            logoUrl: null,
           },
         ],
         total: 4,

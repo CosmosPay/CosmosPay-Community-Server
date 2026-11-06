@@ -64,6 +64,7 @@ export interface RawToken {
   decimals?: unknown;
   chainId?: unknown;
   priceUSD?: unknown;
+  logo?: unknown;
 }
 
 export interface P2pPaymentMethod {
@@ -91,6 +92,8 @@ export interface P2pToken {
   decimals: number;
   /** USD per token, a decimal string, or null when the marketplace has none. */
   priceUsd: string | null;
+  /** Its logo as the marketplace lists it (https), or null ({@link tokenLogoUrl}). */
+  logoUrl: string | null;
 }
 
 /** A chain the market trades on, with how many tokens it lists there. */
@@ -185,6 +188,30 @@ export function tokenUsdPrice(symbol: string, raw: unknown): string | null {
   );
 }
 
+/**
+ * Hosts whose images are never passed on: CoinGecko's and CoinMarketCap's terms do not let others
+ * reuse them (the developer platform's logo rule refuses them too).
+ */
+const BLOCKED_LOGO_HOSTS = /(^|\.)(coingecko\.com|coinmarketcap\.com)$/i;
+
+/**
+ * A token's logo as the marketplace lists it, for a picker to show where it has no artwork of its
+ * own (most of a chain's thousands of tokens): an https address of at most 512 characters on a
+ * host that allows reuse, else null. The image is the listing's, not checked by this service.
+ */
+export function tokenLogoUrl(raw: unknown): string | null {
+  if (typeof raw !== 'string' || raw.length > 512) return null;
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== 'https:' || BLOCKED_LOGO_HOSTS.test(url.hostname))
+    return null;
+  return url.toString();
+}
+
 /** Each network's main assets, lowercased once. */
 const MAIN_TOKENS = new Map<number, readonly string[]>(
   Object.entries(P2P_MAIN_TOKENS).map(([chainId, list]) => [
@@ -243,6 +270,7 @@ export function readTokens(raw: unknown, chainId: number): P2pToken[] {
       symbol: name,
       decimals,
       priceUsd: tokenUsdPrice(name, entry.priceUSD),
+      logoUrl: tokenLogoUrl(entry.logo),
     });
   }
   // A stable sort: ties keep the marketplace's order.

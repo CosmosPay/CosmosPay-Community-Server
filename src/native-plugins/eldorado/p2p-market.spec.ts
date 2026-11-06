@@ -14,6 +14,7 @@ import {
   readTokens,
   searchTokens,
   sessionReference,
+  tokenLogoUrl,
   tokenUsdPrice,
   widgetUrl,
   type P2pMarket,
@@ -203,9 +204,11 @@ describe('the P2P market', () => {
         symbol: 'USDC',
         decimals: 6,
         priceUsd: '1.0006651066',
+        logoUrl: null,
       });
-      // Never the logo, never a token without a valid address.
+      // The listing's logo as logoUrl (never the raw field), never a token without a valid address.
       expect(Object.keys(ARBITRUM[0])).not.toContain('logo');
+      expect(ARBITRUM[0].logoUrl).toBe('https://example.invalid/eth.png');
       expect(ARBITRUM.some((t) => t.symbol === 'BAD')).toBe(false);
     });
 
@@ -285,6 +288,29 @@ describe('the P2P market', () => {
         'NEW',
         'XOR',
       ]);
+    });
+
+    it('passes on an https logo, never CoinGecko’s, CoinMarketCap’s or a plain-http one', () => {
+      expect(tokenLogoUrl('https://static.debank.com/image/x/logo.png')).toBe(
+        'https://static.debank.com/image/x/logo.png',
+      );
+      expect(
+        tokenLogoUrl('https://assets.coingecko.com/coins/images/1/large/x.png'),
+      ).toBeNull();
+      expect(
+        tokenLogoUrl('https://coin-images.coingecko.com/x.png'),
+      ).toBeNull();
+      expect(
+        tokenLogoUrl(
+          'https://s2.coinmarketcap.com/static/img/coins/64x64/1.png',
+        ),
+      ).toBeNull();
+      expect(tokenLogoUrl('http://example.org/x.png')).toBeNull();
+      expect(tokenLogoUrl('javascript:alert(1)')).toBeNull();
+      expect(
+        tokenLogoUrl(`https://example.org/${'a'.repeat(600)}.png`),
+      ).toBeNull();
+      expect(tokenLogoUrl(42)).toBeNull();
     });
 
     it('prices a USD stablecoin the marketplace did not price at 1, nothing else', () => {
