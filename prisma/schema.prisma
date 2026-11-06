@@ -39,6 +39,10 @@ model Consumer {
   // DeFindex vault transactions built for this consumer (native plugin `defindex`).
   defindexTransactions DefindexTransaction[]
 
+  // Purchases and sales of stablecoins for local money opened on the P2P
+  // marketplace (native plugin `eldorado`).
+  p2pRampSessions P2pRampSession[]
+
   // Protected payments this consumer created as the merchant, and the
   // transactions built for them (native plugin `trustless-work`).
   protectedPayments            ProtectedPayment[]
@@ -2311,6 +2315,57 @@ model DefindexTransaction {
   // same transaction twice; two consumers building the same bytes each get a row.
   @@unique([consumerId, txHash])
   @@map("defindex_transaction")
+}
+
+// ---------------------------------------------------------------------------
+// P2P on-ramp and off-ramp (native plugin `eldorado`). A session is one order this
+// service opened on El Dorado's widget for a consumer: a purchase (`side` buy:
+// local money for a stablecoin, the recipient fixed) or a sale (`side` sell: a
+// stablecoin for local money), the order it filled in and the URL that takes it.
+// The money moves between the person and a P2P counterpart on the marketplace,
+// never through this service; the row is the consumer's record of what was
+// opened, matched to the marketplace's order by `reference` (its
+// `externalReferenceId`).
+model P2pRampSession {
+  id         String   @id @default(cuid())
+  consumerId String
+  consumer   Consumer @relation(fields: [consumerId], references: [id], onDelete: Cascade)
+
+  // `public` or `testnet`, from the API key that opened it (`resolveNetwork`):
+  // a `prod` key trades on mainnet, a `dev` key in the sandbox. Lists filter by it.
+  network String
+
+  // `buy` (opened through /v1/onramp/p2p) or `sell` (/v1/offramp/p2p). Each
+  // route lists and reads only its own side.
+  side String
+
+  // The order: `currency` paid (buy) or received (sell) through
+  // `paymentMethod`; `amount`, a decimal string, is what the order puts in
+  // (local money for a purchase, the token for a sale); `token` is its symbol,
+  // `tokenAddress` its contract on EIP-155 `chainId` (the zero address for the
+  // chain's own coin); `address` (EIP-55) is where a purchase delivers, or the
+  // account a sale sends from.
+  currency      String
+  paymentMethod String
+  amount        String
+  token         String
+  tokenAddress  String
+  chainId       Int
+  address       String
+
+  // The market price's estimate when it was opened, a decimal string: the
+  // token a purchase delivers, or the local money a sale pays. Null for a token
+  // with no USD price. The widget quotes the firm figure before anything moves.
+  estimatedAmountOut String?
+
+  // `cp-<random UUID>`, carried as the widget's `externalReferenceId`.
+  reference String @unique
+  widgetUrl String
+
+  createdAt DateTime @default(now())
+
+  @@index([consumerId, network, side, createdAt])
+  @@map("p2p_ramp_session")
 }
 
 // ---------------------------------------------------------------------------

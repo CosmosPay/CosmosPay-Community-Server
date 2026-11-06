@@ -53,7 +53,8 @@ process.env.WALLET_AUTH_SESSION_SECRET =
 // Serve the example plugin preinstalled in plugins/, so the plugins suite goes
 // through the real loader, signature check and registry. Pinned for the same
 // reason as the rest: a developer's .env may enable others, or none.
-process.env.PLUGINS_ENABLED = 'example,blindpay,defindex,trustless-work';
+process.env.PLUGINS_ENABLED =
+  'example,blindpay,defindex,eldorado,trustless-work';
 // No DeFindex key: the guards suite asserts `503 misconfigured`, and a developer's
 // .env usually carries a real key, which would send the suites to DeFindex. The
 // binding suite replaces DefindexClient instead. Empty rather than deleted, for

@@ -11,7 +11,10 @@ export type UpstreamProvider =
   | 'Kuru Flow'
   | 'Soroban RPC'
   | 'DeFindex'
-  | 'Trustless Work';
+  | 'Trustless Work'
+  // The `eldorado` plugin's marketplace, by what it is: the published contract
+  // never names the providers Cosmos Pay is built on.
+  | 'P2P marketplace';
 
 /**
  * Vendor extension the published spec carries, and `swagger.ts` reads back.

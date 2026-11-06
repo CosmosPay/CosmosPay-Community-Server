@@ -29,6 +29,7 @@ export const PLUGIN_SLUG_RE = /^[a-z][a-z0-9-]{2,39}$/;
 export const NATIVE_PLUGIN_SLUGS = [
   'blindpay',
   'defindex',
+  'eldorado',
   'trustless-work',
 ] as const;
 export type NativePluginSlug = (typeof NATIVE_PLUGIN_SLUGS)[number];

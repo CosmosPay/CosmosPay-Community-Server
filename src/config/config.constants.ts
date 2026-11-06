@@ -131,6 +131,13 @@ export const DEFAULT_DEFINDEX_BASE_URL = 'https://api.defindex.io';
 export const DEFAULT_DEFINDEX_TIMEOUT_MS = 30_000;
 
 /**
+ * Upstream budget for one call to the P2P marketplace (native plugin `eldorado`):
+ * its market reads and its buy quote are plain reads, and a slower answer is
+ * better cut than left hanging the dashboard's form.
+ */
+export const DEFAULT_ELDORADO_TIMEOUT_MS = 10_000;
+
+/**
  * The most a DeFindex transaction may charge its signer in fees, in stroops
  * (1 XLM), when `DEFINDEX_MAX_FEE_STROOPS` is unset: the inclusion fee and the
  * Soroban resource fee together. A deposit that invests through a Blend

@@ -89,7 +89,7 @@ export default tseslint.config(
       ],
     },
   },
-  ...['blindpay', 'defindex', 'trustless-work'].map((slug) => ({
+  ...['blindpay', 'defindex', 'eldorado', 'trustless-work'].map((slug) => ({
     // One native plugin may not import another: each can be disabled on its own.
     files: [`src/native-plugins/${slug}/**/*.ts`],
     rules: {

@@ -3,6 +3,7 @@ import { ConditionalModule, ConfigService } from '@nestjs/config';
 import { type AppConfig, nativePluginEnabled } from '@/config/configuration';
 import { BlindpayPluginModule } from '@/native-plugins/blindpay/blindpay-plugin.module';
 import { DefindexModule } from '@/native-plugins/defindex/defindex.module';
+import { EldoradoModule } from '@/native-plugins/eldorado/eldorado.module';
 import { TrustlessWorkModule } from '@/native-plugins/trustless-work/trustless-work.module';
 import {
   NATIVE_PLUGIN_SLUGS,
@@ -17,6 +18,7 @@ import {
 const NATIVE_PLUGIN_MODULES: Record<NativePluginSlug, Type<unknown>> = {
   blindpay: BlindpayPluginModule,
   defindex: DefindexModule,
+  eldorado: EldoradoModule,
   'trustless-work': TrustlessWorkModule,
 };
 
@@ -49,6 +51,7 @@ export class NativePluginsModule {
         blindpay.instances.prod.apiKey !== '' ||
         blindpay.instances.dev.apiKey !== '',
       defindex: config.get('defindex.apiKey', { infer: true }) !== '',
+      eldorado: config.get('eldorado.clientId', { infer: true }) !== '',
       'trustless-work': Object.values(
         config.get('trustlessWork.networks', { infer: true }),
       ).some((network) => network.apiKey !== ''),
