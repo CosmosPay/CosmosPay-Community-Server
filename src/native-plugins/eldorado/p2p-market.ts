@@ -94,6 +94,11 @@ export interface P2pToken {
   priceUsd: string | null;
   /** Its logo as the marketplace lists it (https), or null ({@link tokenLogoUrl}). */
   logoUrl: string | null;
+  /**
+   * Whether it is one of its network's main assets ({@link P2P_MAIN_TOKENS}, by address): a list
+   * reuses known symbols at other addresses, so only these may wear a known token's artwork.
+   */
+  main: boolean;
 }
 
 /** A chain the market trades on, with how many tokens it lists there. */
@@ -271,6 +276,7 @@ export function readTokens(raw: unknown, chainId: number): P2pToken[] {
       decimals,
       priceUsd: tokenUsdPrice(name, entry.priceUSD),
       logoUrl: tokenLogoUrl(entry.logo),
+      main: MAIN_TOKENS.get(chainId)?.includes(lower) ?? false,
     });
   }
   // A stable sort: ties keep the marketplace's order.

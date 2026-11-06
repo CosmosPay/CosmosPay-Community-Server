@@ -26309,6 +26309,13 @@ components:
             lists none (most tokens) or names CoinGecko or CoinMarketCap, whose
             images are not passed on. Not checked by this service: load it as
             any third-party image."
+        main:
+          type: boolean
+          example: true
+          description: Whether it is one of its network’s main assets, matched by address
+            (they come first). A chain’s list reuses known symbols at other
+            addresses (an "ARB" on BNB Chain that is not Arbitrum’s), so show a
+            known token’s own artwork only when this is true.
       description: "A token an order can name: one a purchase delivers, or one a sale
         sends, on its chain."
       required:
@@ -26318,6 +26325,7 @@ components:
         - decimals
         - priceUsd
         - logoUrl
+        - main
     P2pTokenListEntity:
       type: object
       properties:

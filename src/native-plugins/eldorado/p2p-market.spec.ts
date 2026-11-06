@@ -205,6 +205,7 @@ describe('the P2P market', () => {
         decimals: 6,
         priceUsd: '1.0006651066',
         logoUrl: null,
+        main: true,
       });
       // The listing's logo as logoUrl (never the raw field), never a token without a valid address.
       expect(Object.keys(ARBITRUM[0])).not.toContain('logo');
@@ -254,6 +255,14 @@ describe('the P2P market', () => {
           'RAIL:0x3333',
         ],
       );
+      // Only the real ARB is a main asset: the copy may not wear its artwork.
+      expect(tokens.map((t) => t.main)).toEqual([
+        true,
+        true,
+        false,
+        false,
+        false,
+      ]);
     });
 
     it('orders a network without its own main assets by symbol', () => {

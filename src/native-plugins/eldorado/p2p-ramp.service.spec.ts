@@ -290,6 +290,7 @@ describe('P2pRampService', () => {
             decimals: 18,
             priceUsd: '2241.32',
             logoUrl: 'https://example.invalid/eth.png',
+            main: true,
           },
           {
             chainId: 42161,
@@ -298,6 +299,7 @@ describe('P2pRampService', () => {
             decimals: 6,
             priceUsd: '1',
             logoUrl: null,
+            main: true,
           },
         ],
         total: 4,

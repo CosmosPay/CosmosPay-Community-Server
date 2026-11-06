@@ -70,6 +70,13 @@ export class P2pTokenEntity {
       'Its logo as the P2P marketplace lists it, an https address, for a picker to show where you have no artwork of your own; null when it lists none (most tokens) or names CoinGecko or CoinMarketCap, whose images are not passed on. Not checked by this service: load it as any third-party image.',
   })
   logoUrl!: string | null;
+
+  @ApiProperty({
+    example: true,
+    description:
+      'Whether it is one of its network’s main assets, matched by address (they come first). A chain’s list reuses known symbols at other addresses (an "ARB" on BNB Chain that is not Arbitrum’s), so show a known token’s own artwork only when this is true.',
+  })
+  main!: boolean;
 }
 
 @ApiSchema({ description: 'A chain the market trades on.' })

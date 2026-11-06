@@ -347,6 +347,7 @@ describe('P2P on-ramp and off-ramp (e2e)', () => {
         decimals: 6,
         priceUsd: '1',
         logoUrl: null,
+        main: true,
       });
       // The listing's logo, under its own name (never the raw `logo` field).
       expect(res.body.data[0].logoUrl).toBe('https://example.invalid/eth.png');
