@@ -136,9 +136,9 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | Webhooks | `/v1/webhooks` | 端点 CRUD、密钥轮换、投递记录、重新投递 |
 | KYC | `/v1/kyc` | Receiver（KYC/KYB）、钱包、银行账户、文档上传 |
 | Onramp | `/v1/onramp` | Payin 报价、payin、虚拟账户 |
-| P2P 入金 | `/v1/onramp/p2p` | 通过 P2P 卖家用本地货币换取 Arbitrum 上的 USDC 或 USDT：市场、确定报价、购买会话 |
+| P2P 入金 | `/v1/onramp/p2p` | 通过 P2P 卖家用本地货币换取市场所列各链上的任意代币：市场、代币、确定报价、购买会话 |
 | Offramp | `/v1/offramp` | Payout 报价、授权、payout（客户端签名） |
-| P2P 出金 | `/v1/offramp/p2p` | 通过 P2P 买家把 Arbitrum 上的 USDC 或 USDT 换成本地货币：市场、确定报价、出售会话 |
+| P2P 出金 | `/v1/offramp/p2p` | 通过 P2P 买家把任意所列代币换成本地货币：市场、代币、确定报价、出售会话 |
 | 商品 | `/v1/products` | 商户商品目录 |
 | 客户 | `/v1/customers` | 由支付意图派生的付款方记录 |
 | 别名 | `/v1/aliases` | 可认领的支付标识：认领、解析、恢复 |
@@ -252,6 +252,7 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | GET | `/v1/offramp/p2p/sessions` | `offramp:read` |  |
 | POST | `/v1/offramp/p2p/sessions` | `offramp:write` |  |
 | GET | `/v1/offramp/p2p/sessions/{id}` | `offramp:read` |  |
+| GET | `/v1/offramp/p2p/tokens` | `offramp:read` | ✓ |
 | GET | `/v1/offramp/payouts` | `offramp:read` |  |
 | POST | `/v1/offramp/payouts` | `offramp:write` |  |
 | POST | `/v1/offramp/payouts/authorize` | `offramp:write` |  |
@@ -263,6 +264,7 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | GET | `/v1/onramp/p2p/sessions` | `onramp:read` |  |
 | POST | `/v1/onramp/p2p/sessions` | `onramp:write` |  |
 | GET | `/v1/onramp/p2p/sessions/{id}` | `onramp:read` |  |
+| GET | `/v1/onramp/p2p/tokens` | `onramp:read` | ✓ |
 | GET | `/v1/onramp/payins` | `onramp:read` |  |
 | POST | `/v1/onramp/payins` | `onramp:write` |  |
 | GET | `/v1/onramp/payins/{id}` | `onramp:read` |  |
@@ -1406,39 +1408,31 @@ CREATED | AWAITING_FUNDING --merchant cancels--> CANCELLED
 > 它的路由、错误和发布的合约都把 El Dorado 称为“P2P 市场”：
 > 客户不会知道 Cosmos Pay 构建在什么之上。
 
-买家用本地货币（阿根廷的银行转账、PIX、Nequi、Yape、Zelle 等）向
-[El Dorado](https://eldorado.io) P2P 市场上的卖家付款，并在 Arbitrum 上收到 USDC 或 USDT。
-本服务从不持有资金，也不签署任何东西：它读取市场、为订单报价并打开一个会话，即市场托管的 widget，
-订单已填好、收款地址已固定。买家在那里登录市场、验证身份并付款。
+买家用本地货币（阿根廷的银行转账、PIX、Nequi、Yape、Zelle 等）向 [El Dorado](https://eldorado.io) P2P 市场上的卖家付款，并在市场列出的任意链上收到一个代币（2026-11-05 主网上有十一条：Arbitrum, Ethereum, Base, Optimism, Polygon, BNB Chain, Avalanche, Celo, World Chain, Unichain 和 Blast，合计数千个代币）。P2P 部分以美元稳定币结算，widget 再将其兑换并跨链到所要的代币。本服务从不持有资金，也不签署任何东西：它读取市场、为订单报价并打开一个会话，即市场托管的 widget，订单已填好、收款地址已固定。买家在那里登录市场、验证身份并付款。
 
 | 方法 | 路径 | Scope | 用途 |
 | --- | --- | --- | --- |
-| GET | `/v1/onramp/p2p/market` | `onramp:read` | 货币、支付方式、买入价和最低额、链及其代币（共享公钥可以读取） |
-| POST | `/v1/onramp/p2p/quotes` | `onramp:write` | 含费用的确定报价；需要集成方 id |
-| GET | `/v1/onramp/p2p/sessions` | `onramp:read` | 该密钥所在网络上该 consumer 的会话 |
-| POST | `/v1/onramp/p2p/sessions` | `onramp:write` | 记录一笔订单并返回其 `widgetUrl` |
-| GET | `/v1/onramp/p2p/sessions/{id}` | `onramp:read` | 其中之一 |
-| GET | `/v1/offramp/p2p/market` | `offramp:read` | 货币、支付方式、卖出价格和最低额（以稳定币计）、链及其代币（共享公钥可读取） |
-| POST | `/v1/offramp/p2p/quotes` | `offramp:write` | 出售的确定报价，含费用；需要集成方 id |
-| GET | `/v1/offramp/p2p/sessions` | `offramp:read` | consumer 在该密钥网络上的出售 |
+| GET | `/v1/onramp/p2p/market` | `onramp:read` | 货币、支付方式、买入价和最低额、各条链（及其代币数量）以及表单默认的代币（共享公钥可以读取） |
+| GET | `/v1/onramp/p2p/tokens` | `onramp:read` | 一条链的代币，分页返回，交易最多的在前，可按符号或地址搜索（共享公钥可以读取） |
+| POST | `/v1/onramp/p2p/quotes` | `onramp:write` | 含费用和兑换的确定报价；需要集成方 id |
+| GET | `/v1/onramp/p2p/sessions` | `onramp:read` | 该消费者在密钥网络上的会话 |
+| POST | `/v1/onramp/p2p/sessions` | `onramp:write` | 记录订单并返回其 `widgetUrl` |
+| GET | `/v1/onramp/p2p/sessions/{id}` | `onramp:read` | 其中一个 |
+| GET | `/v1/offramp/p2p/market` | `offramp:read` | 货币、支付方式、卖出价和最低额（美元）、各条链以及表单默认的代币（共享公钥可以读取） |
+| GET | `/v1/offramp/p2p/tokens` | `offramp:read` | 同样的代币列表，用于出售（共享公钥可以读取） |
+| POST | `/v1/offramp/p2p/quotes` | `offramp:write` | 出售的确定报价，含费用和兑换；需要集成方 id |
+| GET | `/v1/offramp/p2p/sessions` | `offramp:read` | 该消费者在密钥网络上的出售 |
 | POST | `/v1/offramp/p2p/sessions` | `offramp:write` | 记录一笔出售并返回其 `widgetUrl` |
-| GET | `/v1/offramp/p2p/sessions/{id}` | `offramp:read` | 其中之一 |
+| GET | `/v1/offramp/p2p/sessions/{id}` | `offramp:read` | 其中一个 |
 
-- **出售是同一流程反过来。** 在 `/v1/offramp/p2p` 上，用户卖出 Arbitrum 上的 USDC 或 USDT，换取 P2P 买家通过所选方式支付的本地货币。此时 `amount` 是卖出的稳定币（最低额也以该代币计），`address` 是发送它的账户，`estimatedAmountOut` 是按市场价格计算的本地货币。出售的 widget 不带 `address`：带上它，widget 会把钱包视为已连接，却没有可签署转账的东西，所以卖家在那里连接持有稳定币的钱包。每个前缀只列出和读取自己这一侧（每个会话都有 `side`）；另一侧的会话按不存在的会话返回 404。
-- **密钥的网络决定市场。** `prod` 密钥在主网购买（Arbitrum One 上的 USDC 或 USDT）；`dev`
-  密钥在沙盒中购买，那里唯一的资产是 Arbitrum Sepolia 上的测试 USDT，且订单只有在 El Dorado
-  开发版应用中有做市商广告时才能完成。
-- **收款地址是固定的。** widget URL 带有 `address`，widget 将其视为已连接的钱包，买家无法更改；
-  没有它，买家会连接任意钱包，稳定币就会到那里。该参数不在 El Dorado 的文档中（于 2026-11-05
-  从 widget 的代码中读到）：如果它失效，就停止打开会话。
-- **在标签页或窗口中打开 widget，不要用 iframe。** 它有自己的登录、使用摄像头的身份验证，
-  以及可能比弹窗持续更久的付款步骤。
-- **集成方 id 是可选的，确定报价除外。** `ELDORADO_CLIENT_ID` 和 `ELDORADO_REFERRAL_ID` 是
-  El Dorado 发给集成方的 id（api@eldorado.io）。没有它们，市场和会话照常工作，widget 在付款前
-  报价；有了它们，`POST /v1/onramp/p2p/quotes` 和 `POST /v1/offramp/p2p/quotes` 会应答，每个会话的 widget 都带上这些 id，
-  将订单归属于 Cosmos Pay。
-- **市场按网络缓存一分钟**（`ELDORADO_MARKET_TTL_MS`），没有价格、最低额或支付方式的货币会被
-  排除。会话的 `estimatedAmountOut` 是市场价格，向下取整。
+- **订单通过地址指定链和代币。** `chainId` 是市场 `networks` 之一，`token` 是来自 `GET .../tokens?chainId=` 的合约地址（零地址是该链的原生币；同一条链上符号可能重复，地址不会）。购买的 `amount` 是本地货币，最多两位小数；出售的 `amount` 是代币，最多到该代币的小数位。
+- **价格以美元稳定币计。** 货币的 `price` 是每个美元稳定币对应的本地货币，每个代币带有 `priceUsd`：市场给出的价格，或对没有价格的美元稳定币取 1。`estimatedAmountOut` 由两者算出，没有美元价格的代币为 null。出售的最低额以美元计，只有在代币有价格时才在这里检查；其余由 widget 在任何资金移动前检查。
+- **出售是同一流程反过来。** 在 `/v1/offramp/p2p` 上，用户卖出一个代币，换取 P2P 买家通过所选方式支付的本地货币。此时 `address` 是发送代币的账户，`estimatedAmountOut` 是按市价计的本地货币。出售的 widget 不带 `address`：带上它，widget 会把钱包视为已连接却没有任何东西来签署转账，所以卖家要在那里连接持有该代币的钱包。每个前缀只列出和读取自己这一侧（每个会话都有 `side`）；另一侧的会话就是不存在会话的 404。
+- **密钥的网络决定市场。** `prod` 密钥在主网交易；`dev` 密钥在沙盒中，那里唯一的链是 Arbitrum Sepolia，唯一的代币是其测试 USDT，订单只能对着 El Dorado 开发应用上的做市商广告完成。
+- **收款地址是固定的。** widget URL 带有 `address`，widget 将其视为已连接的钱包，买家无法更改；没有它，买家可以连接任意钱包，代币就会到那里。该参数不在 El Dorado 的文档中（2026-11-05 从 widget 代码中读到）：如果它失效，就停止打开会话。
+- **在标签页或窗口中打开 widget，不要用 iframe。** 它有自己的登录、使用摄像头的身份验证，以及可能比弹窗持续更久的付款步骤。
+- **集成方 id 是可选的，确定报价除外。** `ELDORADO_CLIENT_ID` 和 `ELDORADO_REFERRAL_ID` 是 El Dorado 发给集成方的（api@eldorado.io）。没有它们，市场和会话照常工作，widget 在付款前报价；有了它们，`POST /v1/onramp/p2p/quotes` 和 `POST /v1/offramp/p2p/quotes` 才会应答，每个会话的 widget 都带上这些 id，把订单归属到 Cosmos Pay。
+- **缓存什么。** 市场（货币、价格和链列表）按网络缓存一分钟（`ELDORADO_MARKET_TTL_MS`）；每条链的代币列表缓存一小时（`ELDORADO_TOKENS_TTL_MS`；Ethereum 的约 1.2 MB）。没有价格、最低额或支付方式的货币会被排除，代币列表读取失败或为空的链也会被排除：这会写入日志并在下次读取时重试，只有链列表或所有代币列表都失败时，市场才返回 502。
 
 ## 插件 — 以 slug 命名的扩展
 
@@ -1634,7 +1628,7 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
 | ---- | ---------- |
 | `blindpay` | KYC、入金、出金、BlindPay webhook、其 `/v1/admin` 路由（`receivers`、`payins`、`payouts`）以及管理概览中的 `fiat` 部分 |
 | `defindex` | `/v1/defindex`——Stellar 上的 DeFindex vaults |
-| `eldorado` | `/v1/onramp/p2p` 和 `/v1/offramp/p2p`：在 El Dorado 的 P2P 市场用本地货币买入和卖出的稳定币（Arbitrum） |
+| `eldorado` | `/v1/onramp/p2p` 和 `/v1/offramp/p2p`：El Dorado 的 P2P 市场所列每条链上的代币，用本地货币买入和卖出 |
 | `trustless-work` | `/v1/protected-payments`、无需 key 的 `/v1/protected-payment-links` 以及 `/v1/admin/protected-payments`：Stellar 上基于 Trustless Work 的受保护付款 |
 
 - **未列出即不存在。** `PLUGINS_ENABLED` 未列出的原生插件永远不会被实例化：其路由返回

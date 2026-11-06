@@ -2341,9 +2341,10 @@ model P2pRampSession {
 
   // The order: `currency` paid (buy) or received (sell) through
   // `paymentMethod`; `amount`, a decimal string, is what the order puts in
-  // (local money for a purchase, the stablecoin for a sale); `token`
-  // (`tokenAddress` on EIP-155 `chainId`); `address` (EIP-55) is where a
-  // purchase delivers, or the account a sale sends from.
+  // (local money for a purchase, the token for a sale); `token` is its symbol,
+  // `tokenAddress` its contract on EIP-155 `chainId` (the zero address for the
+  // chain's own coin); `address` (EIP-55) is where a purchase delivers, or the
+  // account a sale sends from.
   currency      String
   paymentMethod String
   amount        String
@@ -2353,9 +2354,9 @@ model P2pRampSession {
   address       String
 
   // The market price's estimate when it was opened, a decimal string: the
-  // stablecoin a purchase delivers, or the local money a sale pays. The widget
-  // quotes the firm figure before anything moves.
-  estimatedAmountOut String
+  // token a purchase delivers, or the local money a sale pays. Null for a token
+  // with no USD price. The widget quotes the firm figure before anything moves.
+  estimatedAmountOut String?
 
   // `cp-<random UUID>`, carried as the widget's `externalReferenceId`.
   reference String @unique

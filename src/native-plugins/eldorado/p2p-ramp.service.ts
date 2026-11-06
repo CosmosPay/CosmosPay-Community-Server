@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { toChecksumAddress } from '@/chains/chain-address';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
@@ -17,21 +17,28 @@ import {
 import {
   ELDORADO_HOSTS,
   ELDORADO_MARKET_TTL_MS,
+  ELDORADO_TOKENS_TTL_MS,
   P2P_MARKETPLACE,
-  type EldoradoHost,
-  type EldoradoToken,
 } from '@/native-plugins/eldorado/eldorado.constants';
 import {
-  buildMarket,
+  buildCurrencies,
+  buildNetworks,
+  chainProblem,
   estimateAmountOut,
+  findToken,
   orderProblem,
   positiveDecimal,
+  readChainIds,
+  readTokens,
+  searchTokens,
   sessionReference,
   widgetUrl,
+  type P2pCurrency,
   type P2pMarket,
-  type P2pMarkets,
+  type P2pNetwork,
   type P2pOrder,
   type P2pSide,
+  type P2pToken,
 } from '@/native-plugins/eldorado/p2p-market';
 import { PrismaService } from '@/prisma/prisma.service';
 
@@ -59,9 +66,33 @@ const SESSION_NOT_FOUND: Record<P2pSide, string> = {
   sell: 'P2P off-ramp session not found',
 };
 
-interface CachedMarkets {
+/** A tokens query once its fields have passed the DTO. */
+export interface P2pTokensQuery {
+  chainId: number;
+  q?: string;
+  take: number;
+  skip: number;
+}
+
+/**
+ * One network's market as read together: both sides' currencies, the networks
+ * whose token list loaded, and those lists (by chain id) for the orders and the
+ * tokens route of the same minute.
+ */
+interface NetworkMarket {
+  currencies: Record<P2pSide, P2pCurrency[]>;
+  networks: P2pNetwork[];
+  lists: ReadonlyMap<number, readonly P2pToken[]>;
+}
+
+interface CachedMarket {
   at: number;
-  markets: P2pMarkets;
+  market: NetworkMarket;
+}
+
+interface CachedTokens {
+  at: number;
+  tokens: P2pToken[];
 }
 
 /**
@@ -69,15 +100,19 @@ interface CachedMarkets {
  * (`/v1/onramp/p2p`, side `buy`) and sales (`/v1/offramp/p2p`, side `sell`).
  *
  * This service never holds the money: the person pays or is paid by a P2P
- * counterpart on the marketplace, which moves the stablecoin. What it owns is
- * the market read (both sides cached per network), the firm quote (with the
- * deployment's integrator ids) and the consumer's record of each order it
- * opened, with the widget URL that takes it.
+ * counterpart on the marketplace, which moves the token. What it owns is the
+ * market read (both sides and the chain list cached per network for a minute,
+ * each chain's token list for an hour), the firm quote (with the deployment's
+ * integrator ids) and the consumer's record of each order it opened, with the
+ * widget URL that takes it.
  */
 @Injectable()
 export class P2pRampService {
-  private readonly markets = new Map<StellarNetwork, CachedMarkets>();
-  private readonly inFlight = new Map<StellarNetwork, Promise<P2pMarkets>>();
+  private readonly logger = new Logger(P2pRampService.name);
+  private readonly markets = new Map<StellarNetwork, CachedMarket>();
+  private readonly inFlight = new Map<StellarNetwork, Promise<NetworkMarket>>();
+  private readonly tokenLists = new Map<string, CachedTokens>();
+  private readonly tokensInFlight = new Map<string, Promise<P2pToken[]>>();
 
   constructor(
     private readonly config: ConfigService<AppConfig, true>,
@@ -88,21 +123,42 @@ export class P2pRampService {
 
   /** One side of the market on the key's network, at most {@link ELDORADO_MARKET_TTL_MS} old. */
   async market(consumer: GatewayConsumer, side: P2pSide): Promise<P2pMarket> {
-    const markets = await this.marketsOn(resolveNetwork(this.config, consumer));
-    return markets[side];
+    const network = resolveNetwork(this.config, consumer);
+    return sideOf(await this.marketOn(network), side, network);
+  }
+
+  /**
+   * A page of one chain's tokens on the key's network, searched by `q` (a
+   * symbol fragment or an exact address), the priority tokens first. A chain the
+   * market does not offer right now is a 400.
+   */
+  async tokens(consumer: GatewayConsumer, query: P2pTokensQuery) {
+    const network = resolveNetwork(this.config, consumer);
+    const state = await this.marketOn(network);
+    const problem = chainProblem(sideOf(state, 'buy', network), query.chainId);
+    if (problem)
+      throw ApiError.badRequest(ApiErrorCode.ValidationFailed, problem);
+    const found = searchTokens(state.lists.get(query.chainId) ?? [], query.q);
+    return page(
+      found.slice(query.skip, query.skip + query.take),
+      found.length,
+      query,
+    );
   }
 
   /** A firm quote for `order` on `side`, from the marketplace. Nothing is stored. */
   async quote(consumer: GatewayConsumer, side: P2pSide, order: P2pOrder) {
     const network = resolveNetwork(this.config, consumer);
-    const market = (await this.marketsOn(network))[side];
-    this.assertOrder(market, order, side);
-    const host = ELDORADO_HOSTS[network];
-    const token = tokenOf(host, order);
+    const { token } = this.checkOrder(
+      await this.marketOn(network),
+      network,
+      order,
+      side,
+    );
     const address = toChecksumAddress(order.address);
     const common = {
       token: token.address,
-      chainId: String(host.chainId),
+      chainId: String(token.chainId),
       fiatCurrencyId: order.currency,
       paymentMethodId: order.paymentMethod,
       amount: order.amount,
@@ -113,7 +169,7 @@ export class P2pRampService {
         ? this.client.buyQuote(network, { ...common, addressTo: address })
         : this.client.sellQuote(network, { ...common, addressFrom: address }),
     );
-    return toQuote(raw, order, host.chainId);
+    return toQuote(raw, order, token);
   }
 
   /**
@@ -129,11 +185,12 @@ export class P2pRampService {
     order: P2pOrder,
   ) {
     const network = resolveNetwork(this.config, consumer);
-    const market = (await this.marketsOn(network))[side];
-    this.assertOrder(market, order, side);
-    const host = ELDORADO_HOSTS[network];
-    const token = tokenOf(host, order);
-    const currency = market.currencies.find((c) => c.id === order.currency)!;
+    const { currency, token } = this.checkOrder(
+      await this.marketOn(network),
+      network,
+      order,
+      side,
+    );
     const address = toChecksumAddress(order.address);
     const reference = sessionReference(randomUUID());
     const local = await this.consumers.resolve(consumer);
@@ -147,17 +204,19 @@ export class P2pRampService {
         amount: order.amount,
         token: token.symbol,
         tokenAddress: token.address,
-        chainId: host.chainId,
+        chainId: token.chainId,
         address,
         estimatedAmountOut: estimateAmountOut(
           order.amount,
           currency.price,
+          token.priceUsd,
           side,
         ),
         reference,
         widgetUrl: widgetUrl(
-          host,
+          ELDORADO_HOSTS[network],
           { ...order, address },
+          token,
           reference,
           this.client.integratorIds(),
           side,
@@ -211,23 +270,38 @@ export class P2pRampService {
     return row;
   }
 
-  private assertOrder(market: P2pMarket, order: P2pOrder, side: P2pSide) {
-    const problem = orderProblem(market, order, side);
+  /**
+   * The order's currency and token once the market takes it; a 400 with the
+   * reason otherwise, so a session never opens a widget the marketplace refuses.
+   */
+  private checkOrder(
+    state: NetworkMarket,
+    network: StellarNetwork,
+    order: P2pOrder,
+    side: P2pSide,
+  ): { currency: P2pCurrency; token: P2pToken } {
+    const market = sideOf(state, side, network);
+    const tokens = state.lists.get(order.chainId) ?? null;
+    const problem = orderProblem(market, tokens, order, side);
     if (problem)
       throw ApiError.badRequest(ApiErrorCode.ValidationFailed, problem);
+    return {
+      currency: market.currencies.find((c) => c.id === order.currency)!,
+      token: findToken(tokens!, order.token)!,
+    };
   }
 
-  private marketsOn(network: StellarNetwork): Promise<P2pMarkets> {
+  private marketOn(network: StellarNetwork): Promise<NetworkMarket> {
     const cached = this.markets.get(network);
     if (cached && Date.now() - cached.at < ELDORADO_MARKET_TTL_MS) {
-      return Promise.resolve(cached.markets);
+      return Promise.resolve(cached.market);
     }
     const running = this.inFlight.get(network);
     if (running) return running;
-    const read = this.readMarkets(network)
-      .then((markets) => {
-        this.markets.set(network, { at: Date.now(), markets });
-        return markets;
+    const read = this.readMarket(network)
+      .then((market) => {
+        this.markets.set(network, { at: Date.now(), market });
+        return market;
       })
       .finally(() => this.inFlight.delete(network));
     this.inFlight.set(network, read);
@@ -235,37 +309,111 @@ export class P2pRampService {
   }
 
   /**
-   * Both sides from one read of the three lists. A side `/prices` leaves out
-   * (or sends unreadable) offers nothing; with neither side, or without the
-   * currency and payment method lists, the answer is unusable: a 502.
+   * Both sides and the networks from one read. A side `/prices` leaves out (or
+   * sends unreadable) offers nothing; with neither side, without the currency
+   * and payment method lists, or without the chain list, the answer is
+   * unusable: a 502. A chain whose token list fails or is empty is left out of
+   * the networks (and asked again on the next read); only when every list does
+   * is the market a 502.
    */
-  private async readMarkets(network: StellarNetwork): Promise<P2pMarkets> {
-    const [currencies, methods, prices] = await this.upstream(() =>
+  private async readMarket(network: StellarNetwork): Promise<NetworkMarket> {
+    const [currencies, methods, prices, chains] = await this.upstream(() =>
       Promise.all([
         this.client.currencies(network),
         this.client.paymentMethods(network),
         this.client.prices(network),
+        this.client.chains(network),
       ]),
     );
     const buy = priceSide(prices?.BUY);
     const sell = priceSide(prices?.SELL);
+    const chainIds = readChainIds(chains?.chains);
     if (
       !Array.isArray(currencies?.currencies) ||
       !Array.isArray(methods?.paymentMethods) ||
-      (!buy && !sell)
+      (!buy && !sell) ||
+      chainIds.length === 0
     ) {
       throw ApiError.badGateway(
         ApiErrorCode.ProviderError,
         `The ${P2P_MARKETPLACE} answered a market this service cannot read.`,
       );
     }
-    const host = ELDORADO_HOSTS[network];
+    const lists = await this.tokenListsOn(network, chainIds);
     const list = currencies.currencies;
     const ways = methods.paymentMethods;
     return {
-      buy: buildMarket(host, list, ways, buy),
-      sell: buildMarket(host, list, ways, sell),
+      currencies: {
+        buy: buildCurrencies(list, ways, buy),
+        sell: buildCurrencies(list, ways, sell),
+      },
+      networks: buildNetworks(
+        lists,
+        ELDORADO_HOSTS[network].defaultToken.chainId,
+      ),
+      lists,
     };
+  }
+
+  /** Every chain's token list that loads with a token in it; a 502 when none does. */
+  private async tokenListsOn(
+    network: StellarNetwork,
+    chainIds: number[],
+  ): Promise<Map<number, P2pToken[]>> {
+    const read = await Promise.allSettled(
+      chainIds.map((chainId) => this.tokensOn(network, chainId)),
+    );
+    const lists = new Map<number, P2pToken[]>();
+    read.forEach((result, at) => {
+      const chainId = chainIds[at];
+      if (result.status === 'fulfilled' && result.value.length > 0) {
+        lists.set(chainId, result.value);
+        return;
+      }
+      const why =
+        result.status === 'rejected'
+          ? result.reason instanceof Error
+            ? result.reason.message
+            : String(result.reason)
+          : 'no token it can read';
+      this.logger.warn(
+        `The ${P2P_MARKETPLACE} token list of chain ${chainId} (${network}) is left out: ${why}`,
+      );
+    });
+    if (lists.size === 0) {
+      throw ApiError.badGateway(
+        ApiErrorCode.ProviderError,
+        `The ${P2P_MARKETPLACE} answered no token list this service can read.`,
+      );
+    }
+    return lists;
+  }
+
+  /**
+   * One chain's tokens, at most {@link ELDORADO_TOKENS_TTL_MS} old. Only a list
+   * with tokens is kept: a failure or an empty answer is asked again next time.
+   */
+  private tokensOn(
+    network: StellarNetwork,
+    chainId: number,
+  ): Promise<P2pToken[]> {
+    const key = `${network}:${chainId}`;
+    const cached = this.tokenLists.get(key);
+    if (cached && Date.now() - cached.at < ELDORADO_TOKENS_TTL_MS) {
+      return Promise.resolve(cached.tokens);
+    }
+    const running = this.tokensInFlight.get(key);
+    if (running) return running;
+    const read = this.upstream(() => this.client.tokens(network, chainId))
+      .then((answer) => {
+        const tokens = readTokens(answer?.tokens, chainId);
+        if (tokens.length > 0)
+          this.tokenLists.set(key, { at: Date.now(), tokens });
+        return tokens;
+      })
+      .finally(() => this.tokensInFlight.delete(key));
+    this.tokensInFlight.set(key, read);
+    return read;
   }
 
   /** A 404 from the marketplace is its fault here (every path is fixed): a 502. */
@@ -289,13 +437,21 @@ function priceSide<T>(raw: T | undefined): T | null {
   return raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : null;
 }
 
-/** The order's token on `host`; `orderProblem` has already checked it is listed. */
-function tokenOf(host: EldoradoHost, order: P2pOrder): EldoradoToken {
-  return host.tokens.find((t) => t.symbol === order.token)!;
+/** One side of a network's market, as `GET .../market` answers it. */
+function sideOf(
+  state: NetworkMarket,
+  side: P2pSide,
+  network: StellarNetwork,
+): P2pMarket {
+  return {
+    currencies: state.currencies[side],
+    networks: state.networks,
+    defaultToken: ELDORADO_HOSTS[network].defaultToken,
+  };
 }
 
 /** The marketplace's quote as this API publishes it; one it cannot read is a 502. */
-function toQuote(raw: RawQuote, order: P2pOrder, chainId: number) {
+function toQuote(raw: RawQuote, order: P2pOrder, token: P2pToken) {
   const amountIn = positiveDecimal(raw.amountIn);
   const amountOut = positiveDecimal(raw.amountOut);
   const minAmountOut = positiveDecimal(raw.minAmountOut);
@@ -327,8 +483,9 @@ function toQuote(raw: RawQuote, order: P2pOrder, chainId: number) {
   return {
     quoteId,
     currency: order.currency,
-    token: order.token,
-    chainId,
+    token: token.symbol,
+    tokenAddress: token.address,
+    chainId: token.chainId,
     amountIn,
     amountOut,
     minAmountOut,

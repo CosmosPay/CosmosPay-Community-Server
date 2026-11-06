@@ -165,9 +165,9 @@ régénéré à partir des contrôleurs et des DTO à chaque exécution de la CI
 | Webhooks               | `/v1/webhooks`           | CRUD des endpoints, rotation du secret, livraisons, relivraison |
 | KYC                    | `/v1/kyc`                | Receivers (KYC/KYB), wallets, comptes bancaires, envoi de documents |
 | Onramp                 | `/v1/onramp`             | Cotations de payin, payins, comptes virtuels             |
-| On-ramp P2P | `/v1/onramp/p2p` | Monnaie locale vers USDC ou USDT sur Arbitrum via des vendeurs P2P : marché, devis ferme, sessions d'achat |
+| On-ramp P2P | `/v1/onramp/p2p` | Monnaie locale vers n'importe quel token sur les chaînes que le marché liste, via des vendeurs P2P : marché, tokens, devis ferme, sessions d'achat |
 | Offramp                | `/v1/offramp`            | Cotations de payout, autorisation, payouts (signés par le client) |
-| Off-ramp P2P | `/v1/offramp/p2p` | USDC ou USDT sur Arbitrum vers monnaie locale via des acheteurs P2P : marché, devis ferme, sessions de vente |
+| Off-ramp P2P | `/v1/offramp/p2p` | N'importe quel token listé vers monnaie locale via des acheteurs P2P : marché, tokens, devis ferme, sessions de vente |
 | Produits               | `/v1/products`           | Catalogue marchand                                       |
 | Clients                | `/v1/customers`          | Fiches payeurs dérivées des intentions                   |
 | Alias                  | `/v1/aliases`            | Identifiants de paiement revendicables : revendiquer, résoudre, récupérer |
@@ -286,6 +286,7 @@ Les chemins utilisent la forme OpenAPI `{param}`.
 | GET | `/v1/offramp/p2p/sessions` | `offramp:read` |  |
 | POST | `/v1/offramp/p2p/sessions` | `offramp:write` |  |
 | GET | `/v1/offramp/p2p/sessions/{id}` | `offramp:read` |  |
+| GET | `/v1/offramp/p2p/tokens` | `offramp:read` | ✓ |
 | GET | `/v1/offramp/payouts` | `offramp:read` |  |
 | POST | `/v1/offramp/payouts` | `offramp:write` |  |
 | POST | `/v1/offramp/payouts/authorize` | `offramp:write` |  |
@@ -297,6 +298,7 @@ Les chemins utilisent la forme OpenAPI `{param}`.
 | GET | `/v1/onramp/p2p/sessions` | `onramp:read` |  |
 | POST | `/v1/onramp/p2p/sessions` | `onramp:write` |  |
 | GET | `/v1/onramp/p2p/sessions/{id}` | `onramp:read` |  |
+| GET | `/v1/onramp/p2p/tokens` | `onramp:read` | ✓ |
 | GET | `/v1/onramp/payins` | `onramp:read` |  |
 | POST | `/v1/onramp/payins` | `onramp:write` |  |
 | GET | `/v1/onramp/payins/{id}` | `onramp:read` |  |
@@ -2277,46 +2279,31 @@ de réseau des transactions qu'elle signe. Chaque réponse montre la répartitio
 > Ses routes, ses erreurs et le contrat publié appellent El Dorado « le marché P2P » :
 > les clients ne savent pas sur quoi Cosmos Pay est construit.
 
-Un acheteur paie en monnaie locale (un virement bancaire en Argentine, PIX, Nequi, Yape, Zelle et
-plus) un vendeur du marché P2P d'[El Dorado](https://eldorado.io) et reçoit des USDC ou des USDT
-sur Arbitrum. Ce service ne détient jamais l'argent et ne signe rien : il lit le marché, chiffre
-un ordre et ouvre une session, c'est-à-dire le widget hébergé du marché avec l'ordre rempli et
-le destinataire fixé. L'acheteur se connecte au marché, vérifie son identité et paie là-bas.
+Un acheteur paie en monnaie locale (un virement bancaire en Argentine, PIX, Nequi, Yape, Zelle et plus) un vendeur du marché P2P d'[El Dorado](https://eldorado.io) et reçoit un token sur n'importe quelle chaîne que le marché liste (sur le mainnet, onze le 2026-11-05 : Arbitrum, Ethereum, Base, Optimism, Polygon, BNB Chain, Avalanche, Celo, World Chain, Unichain et Blast, avec des milliers de tokens entre elles). La partie P2P se règle en stablecoin USD, et le widget l'échange et le fait passer par un pont jusqu'au token demandé. Ce service ne détient jamais l'argent et ne signe rien : il lit le marché, chiffre un ordre et ouvre une session, c'est-à-dire le widget hébergé du marché avec l'ordre rempli et le destinataire fixé. L'acheteur se connecte au marché, vérifie son identité et paie là-bas.
 
 | Méthode | Chemin | Scope | À quoi ça sert |
 | --- | --- | --- | --- |
-| GET | `/v1/onramp/p2p/market` | `onramp:read` | Monnaies, moyens de paiement, prix d'achat et minimum, la chaîne et ses tokens (la clé publique partagée peut le lire) |
-| POST | `/v1/onramp/p2p/quotes` | `onramp:write` | Un devis ferme, frais compris ; il faut les ids d'intégrateur |
+| GET | `/v1/onramp/p2p/market` | `onramp:read` | Monnaies, moyens de paiement, prix d'achat et minimum, les chaînes (chacune avec son nombre de tokens) et le token par lequel un formulaire commence (la clé publique partagée peut le lire) |
+| GET | `/v1/onramp/p2p/tokens` | `onramp:read` | Les tokens d'une chaîne, page par page, les plus échangés d'abord, recherchés par symbole ou adresse (la clé publique partagée peut le lire) |
+| POST | `/v1/onramp/p2p/quotes` | `onramp:write` | Un devis ferme, frais et échange compris ; il faut les ids d'intégrateur |
 | GET | `/v1/onramp/p2p/sessions` | `onramp:read` | Les sessions du consumer sur le réseau de la clé |
 | POST | `/v1/onramp/p2p/sessions` | `onramp:write` | Enregistre un ordre et répond son `widgetUrl` |
 | GET | `/v1/onramp/p2p/sessions/{id}` | `onramp:read` | L'une d'elles |
-| GET | `/v1/offramp/p2p/market` | `offramp:read` | Monnaies, moyens de paiement, prix de vente et minimum (dans le stablecoin), la chaîne et ses tokens (la clé publique partagée peut le lire) |
-| POST | `/v1/offramp/p2p/quotes` | `offramp:write` | Un devis ferme pour une vente, frais compris ; il faut les ids d'intégrateur |
+| GET | `/v1/offramp/p2p/market` | `offramp:read` | Monnaies, moyens de paiement, prix de vente et minimum (en USD), les chaînes et le token par lequel un formulaire commence (la clé publique partagée peut le lire) |
+| GET | `/v1/offramp/p2p/tokens` | `offramp:read` | Les mêmes listes de tokens, pour une vente (la clé publique partagée peut le lire) |
+| POST | `/v1/offramp/p2p/quotes` | `offramp:write` | Un devis ferme pour une vente, frais et échange compris ; il faut les ids d'intégrateur |
 | GET | `/v1/offramp/p2p/sessions` | `offramp:read` | Les ventes du consumer sur le réseau de la clé |
 | POST | `/v1/offramp/p2p/sessions` | `offramp:write` | Enregistre une vente et répond son `widgetUrl` |
 | GET | `/v1/offramp/p2p/sessions/{id}` | `offramp:read` | L'une d'elles |
 
-- **Vendre suit le même flux en sens inverse.** Sur `/v1/offramp/p2p` la personne vend des USDC ou des USDT sur Arbitrum contre de la monnaie locale qu'un acheteur P2P paie par le moyen choisi. `amount` est alors le stablecoin vendu (le minimum aussi est dans le token), `address` le compte d'où il part et `estimatedAmountOut` la monnaie locale au prix du marché. Le widget d'une vente ne porte pas `address` : avec lui, le widget tiendrait le portefeuille pour connecté sans rien pour signer le transfert, donc le vendeur y connecte le portefeuille qui détient le stablecoin. Chaque préfixe ne liste et ne lit que son côté (`side` sur chaque session) ; une session de l'autre côté est le 404 d'une session inexistante.
-- **Le réseau de la clé choisit le marché.** Une clé `prod` achète sur le mainnet (USDC ou USDT
-  sur Arbitrum One) ; une clé `dev` dans le sandbox, où le seul actif est son USDT de test sur
-  Arbitrum Sepolia et où un ordre ne se conclut que face à une annonce de market maker dans
-  l'app de développement d'El Dorado.
-- **Le destinataire est fixe.** L'URL du widget porte `address`, que le widget traite comme le
-  wallet connecté et que l'acheteur ne peut pas changer ; sans lui, l'acheteur connecterait
-  n'importe quel wallet et le stablecoin y arriverait. Le paramètre ne figure pas dans la
-  documentation d'El Dorado (il a été lu dans le code du widget le 2026-11-05) : s'il cesse de
-  fonctionner, arrêtez d'ouvrir des sessions.
-- **Ouvrez le widget dans un onglet ou une fenêtre, pas dans un iframe.** Il a sa propre
-  connexion, une vérification d'identité qui utilise la caméra et une étape de paiement qui peut
-  durer plus longtemps qu'un popup.
-- **Les ids d'intégrateur sont facultatifs, sauf pour le devis ferme.** `ELDORADO_CLIENT_ID` et
-  `ELDORADO_REFERRAL_ID` sont ceux qu'El Dorado remet à un intégrateur (api@eldorado.io). Sans
-  eux, le marché et les sessions fonctionnent et le widget chiffre avant le paiement ; avec eux,
-  `POST /v1/onramp/p2p/quotes` et `POST /v1/offramp/p2p/quotes` répondent, et le widget de chaque session porte les ids, qui
-  attribuent l'ordre à Cosmos Pay.
-- **Le marché est mis en cache une minute par réseau** (`ELDORADO_MARKET_TTL_MS`), et une monnaie
-  sans prix, sans minimum ou sans moyen de paiement est écartée. Le `estimatedAmountOut` d'une
-  session est le prix du marché, arrondi à l'inférieur.
+- **Un ordre nomme une chaîne et un token par son adresse.** `chainId` est l'un des `networks` du marché et `token` une adresse de contrat issue de `GET .../tokens?chainId=` (l'adresse zéro est la monnaie propre de la chaîne ; un symbole peut se répéter sur une chaîne, une adresse non). L'`amount` d'un achat est de la monnaie locale, deux décimales au plus ; celui d'une vente est le token, jusqu'à ses décimales.
+- **Les prix sont en stablecoins USD.** Le `price` d'une monnaie est la monnaie locale par stablecoin USD, et chaque token porte `priceUsd` : celui du marché, ou 1 pour un stablecoin USD qui n'a pas de prix. `estimatedAmountOut` passe par les deux et vaut null pour un token sans prix en USD. Le minimum d'une vente est en USD, contrôlé ici seulement quand le token a un prix ; le widget contrôle le reste avant que rien ne bouge.
+- **Vendre suit le même flux en sens inverse.** Sur `/v1/offramp/p2p` la personne vend un token contre de la monnaie locale qu'un acheteur P2P paie par le moyen choisi. `address` est alors le compte d'où il part, et `estimatedAmountOut` la monnaie locale au prix du marché. Le widget d'une vente ne porte pas `address` : avec lui, le widget compterait le portefeuille comme connecté sans rien pour signer le transfert, donc le vendeur y connecte le portefeuille qui détient le token. Chaque préfixe ne liste et ne lit que son côté (`side` sur chaque session) ; une session de l'autre côté est le 404 d'une session absente.
+- **Le réseau de la clé choisit le marché.** Une clé `prod` opère sur le mainnet ; une clé `dev` dans le sandbox, dont la seule chaîne est Arbitrum Sepolia et le seul token son USDT de test, et où un ordre ne s'exécute que face à une annonce de market maker sur l'app de développement d'El Dorado.
+- **Le destinataire est fixe.** L'URL du widget porte `address`, que le widget traite comme le portefeuille connecté et que l'acheteur ne peut pas changer ; sans lui, l'acheteur connecterait n'importe quel portefeuille et le token y arriverait. Le paramètre n'est pas dans la documentation d'El Dorado (il a été lu dans le code du widget le 2026-11-05) : s'il cesse de fonctionner, cessez d'ouvrir des sessions.
+- **Ouvrez le widget dans un onglet ou une fenêtre, pas dans un iframe.** Il a sa propre connexion, une vérification d'identité qui utilise la caméra et une étape de paiement qui peut durer plus qu'un popup.
+- **Les ids d'intégrateur sont facultatifs, sauf pour le devis ferme.** `ELDORADO_CLIENT_ID` et `ELDORADO_REFERRAL_ID` sont ce qu'El Dorado remet à un intégrateur (api@eldorado.io). Sans eux, le marché et les sessions fonctionnent et le widget chiffre avant le paiement ; avec eux, `POST /v1/onramp/p2p/quotes` et `POST /v1/offramp/p2p/quotes` répondent, et le widget de chaque session porte les ids, qui attribuent l'ordre à Cosmos Pay.
+- **Ce qui est mis en cache.** Le marché (monnaies, prix et liste des chaînes), une minute par réseau (`ELDORADO_MARKET_TTL_MS`) ; la liste de tokens de chaque chaîne, une heure (`ELDORADO_TOKENS_TTL_MS` ; celle d'Ethereum pèse environ 1,2 Mo). Une monnaie sans prix, sans minimum ou sans moyen de paiement est écartée, de même qu'une chaîne dont la liste de tokens échoue ou revient vide : c'est journalisé et redemandé à la lecture suivante, et le marché n'est un 502 que si la liste des chaînes ou toutes les listes de tokens échouent.
 
 ## Plugins — des extensions sous un slug
 
@@ -2551,7 +2538,7 @@ plugins isolés.
 | ---- | ------------- |
 | `blindpay` | KYC, onramp, offramp, le webhook BlindPay, ses routes `/v1/admin` (`receivers`, `payins`, `payouts`) et la section `fiat` du résumé d'administration |
 | `defindex` | `/v1/defindex` — les vaults DeFindex sur Stellar |
-| `eldorado` | `/v1/onramp/p2p` et `/v1/offramp/p2p` : stablecoins achetés et vendus contre de la monnaie locale sur le marché P2P d'El Dorado (Arbitrum) |
+| `eldorado` | `/v1/onramp/p2p` et `/v1/offramp/p2p` : tokens sur toutes les chaînes que liste le marché P2P d'El Dorado, achetés et vendus contre de la monnaie locale |
 | `trustless-work` | `/v1/protected-payments`, le `/v1/protected-payment-links` sans clé et `/v1/admin/protected-payments` : les paiements protégés sur Trustless Work (Stellar) |
 
 - **Non listé, absent.** Un plugin natif que `PLUGINS_ENABLED` ne nomme pas n'est

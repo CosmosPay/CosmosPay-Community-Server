@@ -15,6 +15,7 @@ import type { GatewayConsumer } from '@/common/interfaces/gateway-consumer.inter
 import {
   P2pOrderDto,
   P2pSessionParamsDto,
+  P2pTokensQueryDto,
 } from '@/native-plugins/eldorado/dto/p2p-ramp.dto';
 import {
   P2P_SELL_QUOTE_RATE_LIMIT,
@@ -25,10 +26,11 @@ import {
   P2pQuoteEntity,
   P2pSessionEntity,
   P2pSessionListEntity,
+  P2pTokenListEntity,
 } from '@/native-plugins/eldorado/entities/p2p-ramp.entity';
 import { P2pRampService } from '@/native-plugins/eldorado/p2p-ramp.service';
 
-// /v1/offramp/p2p: stablecoins sold for local money to P2P buyers.
+// /v1/offramp/p2p: tokens on any chain the market lists, sold for local money to P2P buyers.
 @ApiTags('p2p-offramp')
 @Controller({ path: 'offramp/p2p', version: '1' })
 export class P2pOfframpController {
@@ -42,16 +44,39 @@ export class P2pOfframpController {
   // wallets without an account may read it too.
   @AllowPublicKey()
   @ApiOperation({
-    summary: 'Read what stablecoins can be sold for in local money',
+    summary: 'Read what tokens can be sold for local money',
     description:
       "The currencies a seller can be paid in on the key's network (a `prod` key reads mainnet, a `dev` key the sandbox), " +
-      'each with its payment methods, sell price (local money per stablecoin) and minimum (in the stablecoin), plus the ' +
-      'chain and the stablecoins a sale takes. Read from the P2P marketplace and served from memory for up to a minute; ' +
-      'a currency without a price, a minimum or a payment method is left out.',
+      'each with its payment methods, sell price (local money per USD stablecoin) and minimum (in USD), plus the chains a ' +
+      'sale can send from (each with its token count) and the token a form starts from. Read from the P2P marketplace and ' +
+      'served from memory for up to a minute; a currency without a price, a minimum or a payment method is left out, and ' +
+      'so is a chain whose token list cannot be read right now.',
   })
   @ApiOkResponse({ type: P2pMarketEntity })
   market(@CurrentConsumer() consumer: GatewayConsumer) {
     return this.p2p.market(consumer, 'sell');
+  }
+
+  @Get('tokens')
+  // Each chain's list is read from the marketplace at most once an hour.
+  @ApiUpstream('P2P marketplace')
+  @RequirePermissions('offramp:read')
+  // Market data, the same for every caller, like the market itself.
+  @AllowPublicKey()
+  @ApiOperation({
+    summary: 'List the tokens a sale can send on one chain',
+    description:
+      'One chain of the market (`chainId`, one of its `networks`), a page at a time: each token with its contract address, ' +
+      'symbol, decimals and USD price. The stablecoins the P2P leg settles in come first, then the chain’s own coin and ' +
+      'the most held tokens, then the rest in the marketplace’s order. `q` searches by symbol fragment or exact address. ' +
+      'A chain the market does not offer right now is `400 validation_failed`.',
+  })
+  @ApiOkResponse({ type: P2pTokenListEntity })
+  tokens(
+    @CurrentConsumer() consumer: GatewayConsumer,
+    @Query() query: P2pTokensQueryDto,
+  ) {
+    return this.p2p.tokens(consumer, query);
   }
 
   @Post('quotes')
@@ -61,7 +86,7 @@ export class P2pOfframpController {
   @ApiOperation({
     summary: 'Get a firm price for a sale for local money',
     description:
-      'The P2P marketplace prices the sale of `amount` of the stablecoin sent from `address`: the local money paid with ' +
+      'The P2P marketplace prices the sale of `amount` of the token sent from `address` on `chainId`: the local money paid with ' +
       'fees taken, the least it can pay, the rate and the fees, valid until `expiresAt`. Nothing is stored. The order is ' +
       'checked against the market first (currency, payment method, token and minimum: `400 validation_failed` with the ' +
       'reason). A deployment without the marketplace integrator ids answers `503 misconfigured`; the market and the ' +
@@ -84,9 +109,9 @@ export class P2pOfframpController {
     summary: 'Open a sale for local money',
     description:
       'Records the order and answers `widgetUrl`, the hosted sale that takes it: open it in a browser tab or window, ' +
-      'where the seller signs in, verifies their identity, connects the wallet holding the stablecoin and sends it, and a ' +
+      'where the seller signs in, verifies their identity, connects the wallet holding the token and sends it, and a ' +
       'P2P buyer pays the local money with the chosen method. `address` is recorded as the account it is sent from; the ' +
-      'widget does not fix it. `estimatedAmountOut` is the local money at the market price, rounded down; the widget ' +
+      'widget does not fix it. `estimatedAmountOut` is the local money at the market price, rounded down (null for a token with no USD price); the widget ' +
       "quotes the firm figure first. The order is checked against the market (`400 validation_failed` with the reason), and opened on the key's network.",
   })
   @ApiCreatedResponse({ type: P2pSessionEntity })

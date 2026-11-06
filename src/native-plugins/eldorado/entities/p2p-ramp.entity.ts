@@ -2,23 +2,83 @@ import { ApiProperty, ApiSchema } from '@nestjs/swagger';
 
 @ApiSchema({
   description:
-    'A stablecoin traded on this network: one a purchase delivers, or one a sale sends.',
+    'The token a form starts from: the stablecoin the marketplace settles in, on its chain.',
 })
-export class P2pTokenEntity {
+export class P2pDefaultTokenEntity {
   @ApiProperty({
-    example: 'USDC',
-    description: 'Symbol, as orders name it in `token`.',
+    example: 42161,
+    description: 'EIP-155 id of its chain.',
   })
-  symbol!: string;
+  chainId!: number;
 
   @ApiProperty({
-    example: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831',
-    description: 'The token contract on `chain` (EIP-55).',
+    example: '0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9',
+    description:
+      'Its contract on `chainId` (EIP-55), as orders name it in `token`.',
   })
   address!: string;
 
+  @ApiProperty({ example: 'USDT0', description: 'Symbol.' })
+  symbol!: string;
+
   @ApiProperty({ example: 6, description: 'Decimals of the token contract.' })
   decimals!: number;
+}
+
+@ApiSchema({
+  description:
+    'A token an order can name: one a purchase delivers, or one a sale sends, on its chain.',
+})
+export class P2pTokenEntity {
+  @ApiProperty({
+    example: 42161,
+    description: 'EIP-155 id of its chain.',
+  })
+  chainId!: number;
+
+  @ApiProperty({
+    example: '0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9',
+    description:
+      'Its contract on `chainId` (EIP-55), as orders name it in `token`. The zero address is the chain’s own coin.',
+  })
+  address!: string;
+
+  @ApiProperty({
+    example: 'USDT0',
+    description: 'Symbol. Not unique on a chain: orders name the address.',
+  })
+  symbol!: string;
+
+  @ApiProperty({ example: 6, description: 'Decimals of the token contract.' })
+  decimals!: number;
+
+  @ApiProperty({
+    example: '0.9975',
+    type: String,
+    nullable: true,
+    description:
+      'USD per token, a decimal string: the marketplace’s price, or 1 for a USD stablecoin it has no price for; null otherwise. Estimates and a sale’s minimum need it.',
+  })
+  priceUsd!: string | null;
+}
+
+@ApiSchema({ description: 'A chain the market trades on.' })
+export class P2pNetworkEntity {
+  @ApiProperty({
+    example: 42161,
+    description: 'EIP-155 id, as orders name it in `chainId`.',
+  })
+  chainId!: number;
+
+  @ApiProperty({ example: 'Arbitrum', description: 'Display name.' })
+  name!: string;
+
+  @ApiProperty({
+    example: 2768,
+    description:
+      'How many tokens it lists: page through them with `GET .../tokens`.',
+  })
+  tokenCount!: number;
 }
 
 @ApiSchema({
@@ -52,14 +112,14 @@ export class P2pCurrencyEntity {
   @ApiProperty({
     example: '1677.89',
     description:
-      'Local money per stablecoin on this side of the market (what a buyer pays, or what a seller receives), a decimal string. The firm price, fees included, is the quote.',
+      'Local money per USD stablecoin on this side of the market (what a buyer pays, or what a seller receives), a decimal string. Another token is valued through its `priceUsd`; the firm price, fees and the swap included, is the quote.',
   })
   price!: string;
 
   @ApiProperty({
     example: '8389.45',
     description:
-      'Least an order puts in, a decimal string: local money for a purchase, the stablecoin for a sale.',
+      'Least an order puts in, a decimal string: local money for a purchase, USD worth of the token for a sale.',
   })
   minAmount!: string;
 
@@ -76,37 +136,62 @@ export class P2pCurrencyEntity {
 })
 export class P2pMarketEntity {
   @ApiProperty({
-    example: 42161,
-    description: 'EIP-155 id of the chain the stablecoin moves on.',
-  })
-  chainId!: number;
-
-  @ApiProperty({
-    example: 'arbitrum',
-    description: '`arbitrum` on mainnet, `arbitrum-sepolia` in the sandbox.',
-  })
-  chain!: string;
-
-  @ApiProperty({
-    type: [P2pTokenEntity],
-    description:
-      'The stablecoins traded: a purchase delivers one, a sale sends one.',
-  })
-  tokens!: P2pTokenEntity[];
-
-  @ApiProperty({
     type: [P2pCurrencyEntity],
     description:
       'The currencies this side trades right now: each with a price, a minimum and at least one payment method.',
   })
   currencies!: P2pCurrencyEntity[];
+
+  @ApiProperty({
+    type: [P2pNetworkEntity],
+    description:
+      'The chains an order can name, the default token’s first, then the longest token lists. A chain whose token list could not be read right now is left out.',
+  })
+  networks!: P2pNetworkEntity[];
+
+  @ApiProperty({
+    type: P2pDefaultTokenEntity,
+    description: 'The token a form starts from.',
+  })
+  defaultToken!: P2pDefaultTokenEntity;
+}
+
+@ApiSchema({
+  description: 'A page of one chain’s tokens, the most traded first.',
+})
+export class P2pTokenListEntity {
+  @ApiProperty({
+    type: [P2pTokenEntity],
+    description: 'The tokens on this page.',
+  })
+  data!: P2pTokenEntity[];
+
+  @ApiProperty({
+    description: 'Matching tokens, not the page length.',
+    example: 2768,
+  })
+  total!: number;
+
+  @ApiProperty({
+    example: 100,
+    description:
+      'The page size applied, from the `take` query parameter (default 100).',
+  })
+  take!: number;
+
+  @ApiProperty({
+    example: 0,
+    description:
+      'Tokens skipped before this page, from the `skip` query parameter (default 0).',
+  })
+  skip!: number;
 }
 
 @ApiSchema({ description: 'The fees inside a P2P quote.' })
 export class P2pQuoteFeeEntity {
   @ApiProperty({
     example: '0.90',
-    description: 'Fees in the stablecoin, a decimal string.',
+    description: 'Fees in the token, a decimal string.',
   })
   amountInToken!: string;
 
@@ -119,7 +204,7 @@ export class P2pQuoteFeeEntity {
 
 @ApiSchema({
   description:
-    'A firm price for an order on the P2P marketplace: a purchase of a stablecoin with local money, or a sale of one for it.',
+    'A firm price for an order on the P2P marketplace: a purchase of a token with local money, or a sale of one for it.',
 })
 export class P2pQuoteEntity {
   @ApiProperty({
@@ -134,8 +219,17 @@ export class P2pQuoteEntity {
   })
   currency!: string;
 
-  @ApiProperty({ example: 'USDC', description: 'Stablecoin bought or sold.' })
+  @ApiProperty({
+    example: 'USDT0',
+    description: 'Symbol of the token bought or sold.',
+  })
   token!: string;
+
+  @ApiProperty({
+    example: '0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9',
+    description: 'Its contract on `chainId` (EIP-55).',
+  })
+  tokenAddress!: string;
 
   @ApiProperty({
     example: 42161,
@@ -146,14 +240,14 @@ export class P2pQuoteEntity {
   @ApiProperty({
     example: '54500',
     description:
-      'What the order puts in, a decimal string: local money for a purchase, the stablecoin for a sale.',
+      'What the order puts in, a decimal string: local money for a purchase, the token for a sale.',
   })
   amountIn!: string;
 
   @ApiProperty({
     example: '35.04',
     description:
-      'What it gives, fees taken, a decimal string: the stablecoin a purchase delivers, the local money a sale pays.',
+      'What it gives, fees taken, a decimal string: the token a purchase delivers, the local money a sale pays.',
   })
   amountOut!: string;
 
@@ -166,7 +260,7 @@ export class P2pQuoteEntity {
 
   @ApiProperty({
     example: '1516.5',
-    description: 'Local money per stablecoin, a decimal string.',
+    description: 'Local money per token, a decimal string.',
   })
   exchangeRate!: string;
 
@@ -223,16 +317,20 @@ export class P2pSessionEntity {
   @ApiProperty({
     example: '50000',
     description:
-      'What the order puts in, a decimal string: local money for a purchase, the stablecoin for a sale.',
+      'What the order puts in, a decimal string: local money for a purchase, the token for a sale.',
   })
   amount!: string;
 
-  @ApiProperty({ example: 'USDC', description: 'Stablecoin bought or sold.' })
+  @ApiProperty({
+    example: 'USDT0',
+    description: 'Symbol of the token bought or sold.',
+  })
   token!: string;
 
   @ApiProperty({
-    example: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831',
-    description: 'Its contract on `chainId` (EIP-55).',
+    example: '0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9',
+    description:
+      'Its contract on `chainId` (EIP-55); the zero address is the chain’s own coin.',
   })
   tokenAddress!: string;
 
@@ -245,16 +343,18 @@ export class P2pSessionEntity {
   @ApiProperty({
     example: '0x52908400098527886E0F7030069857D2E4169EE7',
     description:
-      'EIP-55. A purchase: where the stablecoin is delivered, fixed in the widget so the buyer cannot change it. A sale: the account the order named as the one it is sent from; the seller connects that wallet in the widget.',
+      'EIP-55. A purchase: where the token is delivered, fixed in the widget so the buyer cannot change it. A sale: the account the order named as the one it is sent from; the seller connects that wallet in the widget.',
   })
   address!: string;
 
   @ApiProperty({
     example: '29.79',
+    type: String,
+    nullable: true,
     description:
-      'About what `amount` gives at the market price when the session was opened, rounded down: the stablecoin a purchase delivers, or the local money a sale pays. The widget quotes the firm figure before anything moves.',
+      'About what `amount` gives at the market price when the session was opened, rounded down: the token a purchase delivers, or the local money a sale pays. Null for a token with no USD price. The widget quotes the firm figure before anything moves.',
   })
-  estimatedAmountOut!: string;
+  estimatedAmountOut!: string | null;
 
   @ApiProperty({
     example: 'cp-clz9xp2p0001',
@@ -264,9 +364,9 @@ export class P2pSessionEntity {
 
   @ApiProperty({
     example:
-      'https://p2p-widget.example/exchange?operation=BUY&token=0xaf88d065e77c8cC2239327C5EDb3A432268e5831&chain=42161&currency=ARS&paymentMethod=bank_tx_ar&amount=50000&address=0x52908400098527886E0F7030069857D2E4169EE7&externalReferenceId=cp-clz9xp2p0001',
+      'https://p2p-widget.example/exchange?operation=BUY&token=0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9&chain=42161&currency=ARS&paymentMethod=bank_tx_ar&amount=50000&address=0x52908400098527886E0F7030069857D2E4169EE7&externalReferenceId=cp-clz9xp2p0001',
     description:
-      'Open it in a browser tab or window (not an iframe): the person signs in and verifies their identity there, then pays a P2P seller (purchase) or connects their wallet, sends the stablecoin and is paid by a P2P buyer (sale).',
+      'Open it in a browser tab or window (not an iframe): the person signs in and verifies their identity there, then pays a P2P seller (purchase) or connects their wallet, sends the token and is paid by a P2P buyer (sale).',
   })
   widgetUrl!: string;
 

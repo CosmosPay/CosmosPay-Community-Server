@@ -3,10 +3,13 @@ import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import type { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import { UpstreamNotFound } from '@/common/upstream-http';
 import type { EldoradoClient } from '@/native-plugins/eldorado/eldorado.client';
+import { NATIVE_TOKEN_ADDRESS } from '@/native-plugins/eldorado/eldorado.constants';
 import { P2pRampService } from '@/native-plugins/eldorado/p2p-ramp.service';
 
 const ADDRESS_LOWER = '0x52908400098527886e0f7030069857d2e4169ee7';
 const ADDRESS = '0x52908400098527886E0F7030069857D2E4169EE7';
+const USDT0 = '0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9';
+const SANDBOX_USDT = '0x25f5D414F85b7f4668ADe4E557ef234023208771';
 
 const key = (environment: 'prod' | 'dev'): GatewayConsumer => ({
   username: 'cosmos_u1',
@@ -22,9 +25,52 @@ const key = (environment: 'prod' | 'dev'): GatewayConsumer => ({
 const ORDER = {
   currency: 'ARS',
   paymentMethod: 'bank_tx_ar',
-  token: 'USDC',
+  chainId: 42161,
+  token: USDT0.toLowerCase(),
   amount: '50000',
   address: ADDRESS_LOWER,
+};
+const SALE = { ...ORDER, amount: '50' };
+
+/** Token lists per chain, in the marketplace's shape (trimmed copies of 2026-11-05's). */
+const TOKENS: Record<string, unknown> = {
+  '42161': {
+    tokens: [
+      {
+        address: NATIVE_TOKEN_ADDRESS,
+        symbol: 'ETH',
+        decimals: 18,
+        logo: 'https://example.invalid/eth.png',
+        priceUSD: '2241.32',
+      },
+      {
+        address: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831',
+        symbol: 'USDC',
+        decimals: 6,
+        priceUSD: '1',
+      },
+      { address: USDT0, symbol: 'USDT0', decimals: 6, priceUSD: '1' },
+      {
+        address: '0x912CE59144191C1204E64559FE8253a0e49E6548',
+        symbol: 'ARB',
+        decimals: 18,
+      },
+    ],
+  },
+  '137': {
+    tokens: [
+      {
+        address: NATIVE_TOKEN_ADDRESS,
+        symbol: 'POL',
+        decimals: 18,
+        priceUSD: '0.1',
+      },
+    ],
+  },
+  '81457': { tokens: [] },
+  '421614': {
+    tokens: [{ address: SANDBOX_USDT, symbol: 'USDT', decimals: 18 }],
+  },
 };
 
 function setup(ids: { clientId: string; referralId: string } | null = null) {
@@ -40,17 +86,25 @@ function setup(ids: { clientId: string; referralId: string } | null = null) {
       ],
     }),
     prices: jest.fn().mockResolvedValue({
-      BUY: { ARS: { price: '1677.89', limits: { in: { min: '8389.45' } } } },
+      BUY: { ARS: { price: '1600', limits: { in: { min: '8000' } } } },
       SELL: { ARS: { price: '1625.11', limits: { in: { min: '5' } } } },
     }),
+    chains: jest.fn((network: string) =>
+      Promise.resolve({
+        chains: network === 'public' ? ['137', '42161', '81457'] : ['421614'],
+      }),
+    ),
+    tokens: jest.fn((_network: string, chainId: number) =>
+      Promise.resolve(TOKENS[String(chainId)]),
+    ),
     buyQuote: jest.fn().mockResolvedValue({
       quoteId: 'q-1',
       amountIn: '50000',
-      amountOut: '29.10',
-      minAmountOut: '28.52',
-      exchangeRate: '1718.2',
+      amountOut: '30.50',
+      minAmountOut: '29.89',
+      exchangeRate: '1639.3',
       expiresAt: '2026-11-05T18:05:00.000Z',
-      fee: { amountInToken: '0.69', amountInFiat: '1185.6' },
+      fee: { amountInToken: '0.62', amountInFiat: '1016.4' },
     }),
     sellQuote: jest.fn().mockResolvedValue({
       quoteId: 'q-2',
@@ -89,8 +143,6 @@ function setup(ids: { clientId: string; referralId: string } | null = null) {
   return { service, client, prisma, consumers };
 }
 
-const SALE = { ...ORDER, token: 'USDT', amount: '50' };
-
 describe('P2pRampService', () => {
   it('reads the market on the key network and serves it from memory', async () => {
     const { service, client } = setup();
@@ -98,10 +150,72 @@ describe('P2pRampService', () => {
     const market = await service.market(key('prod'), 'buy');
     await service.market(key('prod'), 'buy');
 
-    expect(market.chainId).toBe(42161);
     expect(market.currencies.map((c) => c.id)).toEqual(['ARS']);
+    expect(market.defaultToken).toEqual({
+      chainId: 42161,
+      address: USDT0,
+      symbol: 'USDT0',
+      decimals: 6,
+    });
     expect(client.currencies).toHaveBeenCalledTimes(1);
     expect(client.currencies).toHaveBeenCalledWith('public');
+  });
+
+  it('offers every chain with tokens, the default first, and leaves an empty one out', async () => {
+    const { service } = setup();
+
+    const market = await service.market(key('prod'), 'buy');
+
+    expect(market.networks).toEqual([
+      { chainId: 42161, name: 'Arbitrum', tokenCount: 4 },
+      { chainId: 137, name: 'Polygon', tokenCount: 1 },
+    ]);
+  });
+
+  it('leaves out a chain whose token list fails, and asks for it again on the next read', async () => {
+    const { service, client } = setup();
+    client.tokens.mockImplementation((_network: string, chainId: number) =>
+      chainId === 137
+        ? Promise.reject(new Error('500 from the marketplace'))
+        : Promise.resolve(TOKENS[String(chainId)]),
+    );
+    jest.useFakeTimers({ now: Date.now() });
+
+    try {
+      const first = await service.market(key('prod'), 'buy');
+      expect(first.networks.map((n) => n.chainId)).toEqual([42161]);
+
+      // Past the market's minute, inside the token lists' hour.
+      jest.setSystemTime(Date.now() + 61_000);
+      client.tokens.mockImplementation((_network: string, chainId: number) =>
+        Promise.resolve(TOKENS[String(chainId)]),
+      );
+      const second = await service.market(key('prod'), 'buy');
+
+      expect(second.networks.map((n) => n.chainId)).toEqual([42161, 137]);
+      // Arbitrum's list was kept for the hour; Polygon's and Blast's were asked again.
+      const asked = client.tokens.mock.calls.map((c) => c[1]);
+      expect(asked.filter((id) => id === 42161)).toHaveLength(1);
+      expect(asked.filter((id) => id === 137)).toHaveLength(2);
+      expect(asked.filter((id) => id === 81457)).toHaveLength(2);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('answers a 502 when no token list can be read, or the chain list is empty', async () => {
+    const { service, client } = setup();
+    client.tokens.mockRejectedValue(new Error('down'));
+
+    await expect(service.market(key('prod'), 'buy')).rejects.toMatchObject({
+      code: ApiErrorCode.ProviderError,
+    });
+
+    const other = setup();
+    other.client.chains.mockResolvedValue({ chains: [] });
+    await expect(
+      other.service.market(key('prod'), 'buy'),
+    ).rejects.toMatchObject({ code: ApiErrorCode.ProviderError });
   });
 
   it('serves both sides from one read, each with its own prices', async () => {
@@ -110,7 +224,7 @@ describe('P2pRampService', () => {
     const buy = await service.market(key('prod'), 'buy');
     const sell = await service.market(key('prod'), 'sell');
 
-    expect(buy.currencies[0]).toMatchObject({ price: '1677.89' });
+    expect(buy.currencies[0]).toMatchObject({ price: '1600' });
     expect(sell.currencies[0]).toMatchObject({
       price: '1625.11',
       minAmount: '5',
@@ -121,7 +235,7 @@ describe('P2pRampService', () => {
   it('keeps buying when the marketplace sends no sell side', async () => {
     const { service, client } = setup();
     client.prices.mockResolvedValue({
-      BUY: { ARS: { price: '1677.89', limits: { in: { min: '8389.45' } } } },
+      BUY: { ARS: { price: '1600', limits: { in: { min: '8000' } } } },
     });
 
     expect((await service.market(key('prod'), 'buy')).currencies).toHaveLength(
@@ -136,17 +250,11 @@ describe('P2pRampService', () => {
     await service.market(key('prod'), 'buy');
     const sandbox = await service.market(key('dev'), 'buy');
 
-    expect(sandbox.chainId).toBe(421614);
+    expect(sandbox.networks).toEqual([
+      { chainId: 421614, name: 'Arbitrum Sepolia', tokenCount: 1 },
+    ]);
+    expect(sandbox.defaultToken.address).toBe(SANDBOX_USDT);
     expect(client.currencies).toHaveBeenNthCalledWith(2, 'testnet');
-  });
-
-  it('answers a 502 when the marketplace answers a market it cannot read', async () => {
-    const { service, client } = setup();
-    client.prices.mockResolvedValue({});
-
-    await expect(service.market(key('prod'), 'buy')).rejects.toMatchObject({
-      code: ApiErrorCode.ProviderError,
-    });
   });
 
   it('turns a 404 from the marketplace into a 502', async () => {
@@ -163,6 +271,71 @@ describe('P2pRampService', () => {
     expect((error as ApiError).getStatus()).toBe(502);
   });
 
+  describe('tokens', () => {
+    it('pages one chain’s tokens, the priority ones first, without logos', async () => {
+      const { service } = setup();
+
+      const page = await service.tokens(key('prod'), {
+        chainId: 42161,
+        take: 2,
+        skip: 0,
+      });
+
+      expect(page).toEqual({
+        data: [
+          {
+            chainId: 42161,
+            address: USDT0,
+            symbol: 'USDT0',
+            decimals: 6,
+            priceUsd: '1',
+          },
+          {
+            chainId: 42161,
+            address: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831',
+            symbol: 'USDC',
+            decimals: 6,
+            priceUsd: '1',
+          },
+        ],
+        total: 4,
+        take: 2,
+        skip: 0,
+      });
+    });
+
+    it('searches by symbol or address', async () => {
+      const { service } = setup();
+
+      const bySymbol = await service.tokens(key('prod'), {
+        chainId: 42161,
+        q: 'eth',
+        take: 100,
+        skip: 0,
+      });
+      const byAddress = await service.tokens(key('prod'), {
+        chainId: 42161,
+        q: NATIVE_TOKEN_ADDRESS,
+        take: 100,
+        skip: 0,
+      });
+
+      expect(bySymbol.data.map((t) => t.symbol)).toEqual(['ETH']);
+      expect(byAddress.data.map((t) => t.symbol)).toEqual(['ETH']);
+    });
+
+    it('refuses a chain the market does not offer, an empty one included', async () => {
+      const { service } = setup();
+
+      await expect(
+        service.tokens(key('prod'), { chainId: 81457, take: 100, skip: 0 }),
+      ).rejects.toMatchObject({
+        code: ApiErrorCode.ValidationFailed,
+        message: 'chainId 81457 is not offered (offered: 42161, 137)',
+      });
+    });
+  });
+
   it('opens a session with the recipient fixed, on the key network', async () => {
     const { service, prisma } = setup();
 
@@ -174,18 +347,46 @@ describe('P2pRampService', () => {
       network: 'public',
       side: 'buy',
       currency: 'ARS',
-      token: 'USDC',
-      tokenAddress: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831',
+      token: 'USDT0',
+      // Stored EIP-55, however the caller spelled it.
+      tokenAddress: USDT0,
       chainId: 42161,
-      // Stored and sent EIP-55, however the caller spelled it.
       address: ADDRESS,
-      estimatedAmountOut: '29.79',
+      // 50000 / 1600 / 1
+      estimatedAmountOut: '31.25',
     });
     expect(data.reference).toMatch(/^cp-[0-9a-f-]{36}$/);
     const url = new URL(session.widgetUrl);
     expect(url.searchParams.get('address')).toBe(ADDRESS);
+    expect(url.searchParams.get('token')).toBe(USDT0);
+    expect(url.searchParams.get('chain')).toBe('42161');
     expect(url.searchParams.get('externalReferenceId')).toBe(data.reference);
     expect(url.searchParams.get('clientId')).toBeNull();
+  });
+
+  it('buys a token on another chain, and stores no estimate for one with no USD price', async () => {
+    const { service, prisma } = setup();
+
+    await service.createSession(key('prod'), 'buy', {
+      ...ORDER,
+      chainId: 137,
+      token: NATIVE_TOKEN_ADDRESS,
+    });
+    await service.createSession(key('prod'), 'buy', {
+      ...ORDER,
+      token: '0x912ce59144191c1204e64559fe8253a0e49e6548',
+    });
+
+    const [pol, arb] = prisma.p2pRampSession.create.mock.calls.map(
+      (c) => c[0].data,
+    );
+    // 50000 / 1600 / 0.1
+    expect(pol).toMatchObject({
+      chainId: 137,
+      token: 'POL',
+      estimatedAmountOut: '312.50',
+    });
+    expect(arb).toMatchObject({ token: 'ARB', estimatedAmountOut: null });
   });
 
   it('puts the integrator ids in the widget when configured', async () => {
@@ -206,9 +407,9 @@ describe('P2pRampService', () => {
       side: 'sell',
       currency: 'ARS',
       amount: '50',
-      token: 'USDT',
+      token: 'USDT0',
       address: ADDRESS,
-      // 50 * 1625.11
+      // 50 * 1 * 1625.11
       estimatedAmountOut: '81255.50',
     });
     const url = new URL(session.widgetUrl);
@@ -216,14 +417,14 @@ describe('P2pRampService', () => {
     expect(url.searchParams.get('address')).toBeNull();
   });
 
-  it('refuses a sale below the minimum in the stablecoin', async () => {
+  it('refuses a sale under the minimum in USD', async () => {
     const { service, prisma } = setup();
 
     await expect(
       service.createSession(key('prod'), 'sell', { ...SALE, amount: '4' }),
     ).rejects.toMatchObject({
       code: ApiErrorCode.ValidationFailed,
-      message: 'amount is below the minimum of 5 USDT',
+      message: 'amount is below the minimum of 5 USD (about 5.00 USDT0)',
     });
     expect(prisma.p2pRampSession.create).not.toHaveBeenCalled();
   });
@@ -236,23 +437,31 @@ describe('P2pRampService', () => {
     ).rejects.toMatchObject({
       code: ApiErrorCode.ValidationFailed,
     });
-    // The sandbox delivers only its test USDT.
+    // An empty chain is not offered.
+    await expect(
+      service.createSession(key('prod'), 'buy', { ...ORDER, chainId: 81457 }),
+    ).rejects.toMatchObject({
+      code: ApiErrorCode.ValidationFailed,
+      message: 'chainId 81457 is not offered (offered: 42161, 137)',
+    });
+    // The sandbox lists only its test USDT on Arbitrum Sepolia.
     await expect(
       service.createSession(key('dev'), 'buy', ORDER),
     ).rejects.toMatchObject({
       code: ApiErrorCode.ValidationFailed,
+      message: 'chainId 42161 is not offered (offered: 421614)',
     });
     expect(prisma.p2pRampSession.create).not.toHaveBeenCalled();
   });
 
-  it('quotes through the marketplace with the token contract and the checksummed recipient', async () => {
+  it('quotes through the marketplace with the token contract, its chain and the checksummed recipient', async () => {
     const { service, client } = setup({ clientId: 'c-1', referralId: 'r-1' });
 
     const quote = await service.quote(key('prod'), 'buy', ORDER);
 
     expect(client.buyQuote).toHaveBeenCalledWith('public', {
       addressTo: ADDRESS,
-      token: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831',
+      token: USDT0,
       chainId: '42161',
       fiatCurrencyId: 'ARS',
       paymentMethodId: 'bank_tx_ar',
@@ -262,13 +471,14 @@ describe('P2pRampService', () => {
     expect(quote).toEqual({
       quoteId: 'q-1',
       currency: 'ARS',
-      token: 'USDC',
+      token: 'USDT0',
+      tokenAddress: USDT0,
       chainId: 42161,
       amountIn: '50000',
-      amountOut: '29.10',
-      minAmountOut: '28.52',
-      exchangeRate: '1718.2',
-      fee: { amountInToken: '0.69', amountInFiat: '1185.6' },
+      amountOut: '30.50',
+      minAmountOut: '29.89',
+      exchangeRate: '1639.3',
+      fee: { amountInToken: '0.62', amountInFiat: '1016.4' },
       expiresAt: '2026-11-05T18:05:00.000Z',
     });
   });
@@ -280,7 +490,7 @@ describe('P2pRampService', () => {
 
     expect(client.sellQuote).toHaveBeenCalledWith('public', {
       addressFrom: ADDRESS,
-      token: '0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9',
+      token: USDT0,
       chainId: '42161',
       fiatCurrencyId: 'ARS',
       paymentMethodId: 'bank_tx_ar',

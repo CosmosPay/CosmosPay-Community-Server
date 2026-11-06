@@ -12,6 +12,7 @@ import type {
   RawCurrency,
   RawPaymentMethod,
   RawPriceSide,
+  RawToken,
 } from '@/native-plugins/eldorado/p2p-market';
 
 /** What `/quote/buy` and `/quote/sell` answer (the fields this API passes on). */
@@ -26,7 +27,7 @@ export interface RawQuote {
   fee?: { amountInToken?: unknown; amountInFiat?: unknown } | null;
 }
 
-/** What both quote bodies share: the order, its token on `chainId`, the amount it puts in. */
+/** What both quote bodies share: the order, its token (by address) on `chainId`, the amount it puts in. */
 interface QuoteRequestBase {
   token: string;
   chainId: string;
@@ -51,9 +52,10 @@ export interface SellQuoteRequest extends QuoteRequestBase {
  * holds the integrator ids and turns its failures into this service's errors
  * (through `requestUpstreamJson`, under the name {@link P2P_MARKETPLACE}).
  *
- * The market reads take no credentials. Both quotes require the
- * `X-Client-ID` and `X-Referral-ID` El Dorado issues to an integrator: without
- * them they are `503 misconfigured` before any call.
+ * The market reads (the chain and token lists included) take no credentials.
+ * Both quotes require the
+ * `X-Client-ID` and `X-Referral-ID` El Dorado issues to an integrator:
+ * without them they are `503 misconfigured` before any call.
  */
 @Injectable()
 export class EldoradoClient {
@@ -75,6 +77,19 @@ export class EldoradoClient {
     network: StellarNetwork,
   ): Promise<{ BUY?: RawPriceSide; SELL?: RawPriceSide }> {
     return this.get(network, '/prices');
+  }
+
+  /** The chains the marketplace trades on, as EIP-155 ids (strings). */
+  chains(network: StellarNetwork): Promise<{ chains?: unknown }> {
+    return this.get(network, '/chains');
+  }
+
+  /** One chain's tokens: thousands on mainnet's larger chains (Ethereum's is about 1.2 MB). */
+  tokens(
+    network: StellarNetwork,
+    chainId: number,
+  ): Promise<{ tokens?: RawToken[] }> {
+    return this.get(network, `/chains/${chainId}/tokens`);
   }
 
   /** A firm buy quote. Needs the integrator ids. */

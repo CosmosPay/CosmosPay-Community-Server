@@ -1,22 +1,29 @@
+import { toChecksumAddress } from '@/chains/chain-address';
 import {
   ELDORADO_ADDRESS_PARAM,
+  ELDORADO_CHAIN_NAMES,
+  NATIVE_TOKEN_ADDRESS,
   P2P_SESSION_REFERENCE_PREFIX,
+  P2P_TOKEN_PRIORITY,
+  P2P_USD_STABLECOINS,
   type EldoradoHost,
   type EldoradoToken,
 } from '@/native-plugins/eldorado/eldorado.constants';
 
 /**
  * The marketplace's market, as this API publishes it, and the pure rules over
- * it: which currencies can be traded, whether an order fits, what it is about
- * worth, and the widget URL that takes it. No Nest and no I/O, so a spec calls
- * them on recorded answers.
+ * it: which currencies can be traded, on which chains and tokens, whether an
+ * order fits, what it is about worth, and the widget URL that takes it. No Nest
+ * and no I/O, so a spec calls them on recorded answers.
  *
- * Two sides share every rule: `buy` (`/v1/onramp/p2p`, local money in, the
- * stablecoin out) and `sell` (`/v1/offramp/p2p`, the stablecoin in, local money
- * out). An order's `amount` is always what it puts in.
+ * Two sides share every rule: `buy` (`/v1/onramp/p2p`, local money in, a token
+ * out) and `sell` (`/v1/offramp/p2p`, a token in, local money out). An order's
+ * `amount` is always what it puts in. The P2P leg is priced in USD stablecoins
+ * (`/prices`); any other token is reached through the widget's swap, valued here
+ * at the marketplace's USD price for it.
  */
 
-/** Which way an order goes: a purchase of the stablecoin, or a sale of it. */
+/** Which way an order goes: a purchase of a token, or a sale of one. */
 export type P2pSide = 'buy' | 'sell';
 
 /** The `/prices` side each order side reads. */
@@ -40,14 +47,23 @@ export interface RawCurrency {
 }
 
 /**
- * One side of `/prices` (`BUY` or `SELL`), keyed by currency id. `limits.in.min`
- * is in what an order of that side puts in: local money on `BUY`, the stablecoin
- * on `SELL`.
+ * One side of `/prices` (`BUY` or `SELL`), keyed by currency id. `price` is
+ * local money per USD stablecoin; `limits.in.min` is in what an order of that
+ * side puts in: local money on `BUY`, USD stablecoin on `SELL`.
  */
 export type RawPriceSide = Record<
   string,
   { price?: unknown; limits?: { in?: { min?: unknown } } } | undefined
 >;
+
+/** A token as `/chains/{chainId}/tokens` lists it. Every field is checked before use. */
+export interface RawToken {
+  address?: unknown;
+  symbol?: unknown;
+  decimals?: unknown;
+  chainId?: unknown;
+  priceUSD?: unknown;
+}
 
 export interface P2pPaymentMethod {
   id: string;
@@ -58,22 +74,36 @@ export interface P2pCurrency {
   id: string;
   /** English name, else the id. */
   name: string;
-  /** Local money per stablecoin on this side (what a buyer pays, what a seller gets), a decimal string. */
+  /** Local money per USD stablecoin on this side (what a buyer pays, what a seller gets), a decimal string. */
   price: string;
-  /** Least one order puts in, a decimal string: local money to buy, the stablecoin to sell. */
+  /** Least one order puts in, a decimal string: local money to buy, USD to sell. */
   minAmount: string;
   paymentMethods: P2pPaymentMethod[];
 }
 
-export interface P2pMarket {
+/** A token an order can name, as this API publishes it. */
+export interface P2pToken {
   chainId: number;
-  chain: string;
-  tokens: readonly EldoradoToken[];
-  currencies: P2pCurrency[];
+  /** EIP-55; the zero address is the chain's own coin. */
+  address: string;
+  symbol: string;
+  decimals: number;
+  /** USD per token, a decimal string, or null when the marketplace has none. */
+  priceUsd: string | null;
 }
 
-/** Both sides of one network's market, read together. */
-export type P2pMarkets = Record<P2pSide, P2pMarket>;
+/** A chain the market trades on, with how many tokens it lists there. */
+export interface P2pNetwork {
+  chainId: number;
+  name: string;
+  tokenCount: number;
+}
+
+export interface P2pMarket {
+  currencies: P2pCurrency[];
+  networks: P2pNetwork[];
+  defaultToken: EldoradoToken;
+}
 
 /** A positive decimal (the marketplace sends strings), or null. */
 export function positiveDecimal(raw: unknown): string | null {
@@ -94,12 +124,11 @@ export function positiveDecimal(raw: unknown): string | null {
  * and no method). `prices` is that side of `/prices`; a side the marketplace did
  * not send (or sent unreadable) offers nothing.
  */
-export function buildMarket(
-  host: EldoradoHost,
+export function buildCurrencies(
   currencies: RawCurrency[],
   methods: RawPaymentMethod[],
   prices: RawPriceSide | null | undefined,
-): P2pMarket {
+): P2pCurrency[] {
   const out: P2pCurrency[] = [];
   const side = prices && typeof prices === 'object' ? prices : {};
   for (const currency of currencies) {
@@ -123,12 +152,132 @@ export function buildMarket(
       paymentMethods,
     });
   }
-  return {
-    chainId: host.chainId,
-    chain: host.chain,
-    tokens: host.tokens,
-    currencies: out,
-  };
+  return out;
+}
+
+/** The chain ids `/chains` lists (strings there), as numbers; anything else is dropped. */
+export function readChainIds(raw: unknown): number[] {
+  if (!Array.isArray(raw)) return [];
+  const ids: number[] = [];
+  for (const entry of raw as unknown[]) {
+    const text: unknown = typeof entry === 'number' ? String(entry) : entry;
+    if (typeof text !== 'string' || !/^[1-9]\d{0,15}$/.test(text)) continue;
+    const id = Number(text);
+    if (Number.isSafeInteger(id) && !ids.includes(id)) ids.push(id);
+  }
+  return ids;
+}
+
+/** A chain's name: {@link ELDORADO_CHAIN_NAMES}, else `Chain <id>`. */
+export function chainName(chainId: number): string {
+  return ELDORADO_CHAIN_NAMES[chainId] ?? `Chain ${chainId}`;
+}
+
+/**
+ * A USD price for a token: the marketplace's `priceUSD`, else 1 for a USD
+ * stablecoin ({@link P2P_USD_STABLECOINS}: the sandbox's test USDT has none),
+ * else null.
+ */
+export function tokenUsdPrice(symbol: string, raw: unknown): string | null {
+  return (
+    positiveDecimal(raw) ?? (P2P_USD_STABLECOINS.includes(symbol) ? '1' : null)
+  );
+}
+
+/** Where a token sorts in {@link P2P_TOKEN_PRIORITY}; past its end when absent. */
+function priorityOf(token: P2pToken): number {
+  const key = token.address === NATIVE_TOKEN_ADDRESS ? 'native' : token.symbol;
+  const at = P2P_TOKEN_PRIORITY.indexOf(key);
+  return at < 0 ? P2P_TOKEN_PRIORITY.length : at;
+}
+
+/**
+ * One chain's token list, read and ordered: entries with an EVM address, a
+ * symbol and integer decimals (0 to 36), EIP-55, each address once, the
+ * {@link P2P_TOKEN_PRIORITY} ones first and the rest in the marketplace's order.
+ */
+export function readTokens(raw: unknown, chainId: number): P2pToken[] {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<string>();
+  const tokens: P2pToken[] = [];
+  for (const entry of raw as RawToken[]) {
+    if (!entry || typeof entry !== 'object') continue;
+    const { address, symbol, decimals } = entry;
+    if (typeof address !== 'string' || !/^0x[a-fA-F0-9]{40}$/.test(address))
+      continue;
+    if (typeof symbol !== 'string' || !symbol.trim() || symbol.length > 64)
+      continue;
+    if (
+      typeof decimals !== 'number' ||
+      !Number.isInteger(decimals) ||
+      decimals < 0 ||
+      decimals > 36
+    )
+      continue;
+    const lower = address.toLowerCase();
+    if (seen.has(lower)) continue;
+    seen.add(lower);
+    const name = symbol.trim();
+    tokens.push({
+      chainId,
+      address: toChecksumAddress(lower),
+      symbol: name,
+      decimals,
+      priceUsd: tokenUsdPrice(name, entry.priceUSD),
+    });
+  }
+  // A stable sort: ties keep the marketplace's order.
+  return tokens
+    .map((token, at) => ({ token, at, rank: priorityOf(token) }))
+    .sort((a, b) => a.rank - b.rank || a.at - b.at)
+    .map((x) => x.token);
+}
+
+/**
+ * The networks a market offers: the chains whose token list loaded with at
+ * least one token, the default chain first, then the longest lists.
+ */
+export function buildNetworks(
+  lists: ReadonlyMap<number, readonly P2pToken[]>,
+  defaultChainId: number,
+): P2pNetwork[] {
+  return [...lists.entries()]
+    .filter(([, tokens]) => tokens.length > 0)
+    .map(([chainId, tokens]) => ({
+      chainId,
+      name: chainName(chainId),
+      tokenCount: tokens.length,
+    }))
+    .sort(
+      (a, b) =>
+        Number(b.chainId === defaultChainId) -
+          Number(a.chainId === defaultChainId) || b.tokenCount - a.tokenCount,
+    );
+}
+
+/**
+ * The tokens `q` names: an exact address (any case), else every token whose
+ * symbol contains it (any case). An empty query is the whole list.
+ */
+export function searchTokens(
+  tokens: readonly P2pToken[],
+  q: string | undefined,
+): readonly P2pToken[] {
+  const query = (q ?? '').trim().toLowerCase();
+  if (!query) return tokens;
+  if (/^0x[a-f0-9]{40}$/.test(query)) {
+    return tokens.filter((t) => t.address.toLowerCase() === query);
+  }
+  return tokens.filter((t) => t.symbol.toLowerCase().includes(query));
+}
+
+/** The token `address` names in a chain's list (any case), or null. */
+export function findToken(
+  tokens: readonly P2pToken[],
+  address: string,
+): P2pToken | null {
+  const lower = address.toLowerCase();
+  return tokens.find((t) => t.address.toLowerCase() === lower) ?? null;
 }
 
 /** What an order asks for, once its fields have passed the DTO. */
@@ -137,16 +286,49 @@ export interface P2pOrder {
   currency: string;
   /** How that local money is paid (buy) or received (sell). */
   paymentMethod: string;
+  /** EIP-155 id of the chain the token is on. */
+  chainId: number;
+  /** The token's contract on `chainId`; the zero address for the chain's own coin. */
   token: string;
-  /** What the order puts in, a decimal string: local money to buy, the stablecoin to sell. */
+  /** What the order puts in, a decimal string: local money to buy, the token to sell. */
   amount: string;
   /** The 0x account a purchase delivers to, or the one a sale sends from. */
   address: string;
 }
 
-/** Why `order` cannot be traded on `market` on `side`, or null when it can. */
+/** How many decimals a decimal string carries. */
+function decimalsOf(amount: string): number {
+  const dot = amount.indexOf('.');
+  return dot < 0 ? 0 : amount.length - dot - 1;
+}
+
+/**
+ * Rounds `value` DOWN for an estimate (it never promises more than the price
+ * gives): to the cent for local money and for a token amount of 1 or more, to
+ * six decimals below 1. The nudge keeps a product the float lands a hair under
+ * (0.57 * 100) on its cent.
+ */
+function floorEstimate(value: number, localMoney: boolean): string {
+  const places = localMoney || value >= 1 ? 2 : 6;
+  const scale = 10 ** places;
+  return (Math.floor(value * scale + 1e-9) / scale).toFixed(places);
+}
+
+/** Rounds a token amount UP the same way, for the "about N" of a minimum. */
+function ceilTokenAmount(value: number): string {
+  const places = value >= 1 ? 2 : 6;
+  const scale = 10 ** places;
+  return (Math.ceil(value * scale - 1e-9) / scale).toFixed(places);
+}
+
+/**
+ * Why `order` cannot be traded on `market` on `side`, or null when it can.
+ * `tokens` is the token list of `order.chainId`, or null when the market does
+ * not offer that chain.
+ */
 export function orderProblem(
   market: P2pMarket,
+  tokens: readonly P2pToken[] | null,
   order: P2pOrder,
   side: P2pSide,
 ): string | null {
@@ -157,42 +339,70 @@ export function orderProblem(
       market.currencies.map((c) => c.id).join(', ') || 'none right now';
     return buying
       ? `currency ${order.currency} cannot be bought (offered: ${offered})`
-      : `stablecoins cannot be sold for ${order.currency} (offered: ${offered})`;
+      : `tokens cannot be sold for ${order.currency} (offered: ${offered})`;
   }
   if (!currency.paymentMethods.some((m) => m.id === order.paymentMethod)) {
     const offered = currency.paymentMethods.map((m) => m.id).join(', ');
     return `paymentMethod ${order.paymentMethod} does not ${buying ? 'pay in' : 'pay out'} ${currency.id} (offered: ${offered})`;
   }
-  if (!market.tokens.some((t) => t.symbol === order.token)) {
-    const offered = market.tokens.map((t) => t.symbol).join(', ');
-    return buying
-      ? `token ${order.token} is not delivered on this network (offered: ${offered})`
-      : `token ${order.token} cannot be sold on this network (offered: ${offered})`;
+  const unoffered = chainProblem(market, order.chainId);
+  if (unoffered) return unoffered;
+  const token = tokens ? findToken(tokens, order.token) : null;
+  if (!token) {
+    return `token ${order.token} is not offered on chain ${order.chainId}; list them with GET /v1/${buying ? 'onramp' : 'offramp'}/p2p/tokens?chainId=${order.chainId}`;
   }
-  if (Number(order.amount) < Number(currency.minAmount)) {
-    return `amount is below the minimum of ${currency.minAmount} ${buying ? currency.id : order.token}`;
+  if (buying && decimalsOf(order.amount) > 2) {
+    return 'amount is local money: at most two decimals';
+  }
+  if (!buying && decimalsOf(order.amount) > token.decimals) {
+    return `amount has more decimals than ${token.symbol} (${token.decimals})`;
+  }
+  if (buying && Number(order.amount) < Number(currency.minAmount)) {
+    return `amount is below the minimum of ${currency.minAmount} ${currency.id}`;
+  }
+  // A sale's minimum is in USD: checked only where the token has a USD price
+  // (the widget checks the rest before anything moves).
+  if (
+    !buying &&
+    token.priceUsd !== null &&
+    Number(order.amount) * Number(token.priceUsd) < Number(currency.minAmount)
+  ) {
+    const about = ceilTokenAmount(
+      Number(currency.minAmount) / Number(token.priceUsd),
+    );
+    return `amount is below the minimum of ${currency.minAmount} USD (about ${about} ${token.symbol})`;
   }
   return null;
 }
 
+/** Why `chainId` is not one of the market's networks, or null when it is. */
+export function chainProblem(
+  market: P2pMarket,
+  chainId: number,
+): string | null {
+  if (market.networks.some((n) => n.chainId === chainId)) return null;
+  const offered =
+    market.networks.map((n) => n.chainId).join(', ') || 'none right now';
+  return `chainId ${chainId} is not offered (offered: ${offered})`;
+}
+
 /**
- * About what `amount` gives at the market price, rounded DOWN to the cent: the
- * stablecoin a purchase delivers (`amount / price`) or the local money a sale
- * pays (`amount * price`). An estimate never promises more than the price
- * gives; the widget shows the firm figure, fees included, before anything moves.
+ * About what `amount` gives at the market price, rounded DOWN: the tokens a
+ * purchase delivers (`amount / price / priceUsd`) or the local money a sale
+ * pays (`amount * priceUsd * price`). Null when the token has no USD price. The
+ * widget shows the firm figure, fees and the swap included, before anything moves.
  */
 export function estimateAmountOut(
   amount: string,
   price: string,
+  priceUsd: string | null,
   side: P2pSide,
-): string {
-  const exact =
-    side === 'buy'
-      ? Number(amount) / Number(price)
-      : Number(amount) * Number(price);
-  // The nudge keeps a product the float lands a hair under (0.57 * 100) on its cent.
-  const out = Math.floor(exact * 100 + 1e-9) / 100;
-  return out.toFixed(2);
+): string | null {
+  if (priceUsd === null) return null;
+  const usd = Number(priceUsd);
+  return side === 'buy'
+    ? floorEstimate(Number(amount) / Number(price) / usd, false)
+    : floorEstimate(Number(amount) * usd * Number(price), true);
 }
 
 /** The `externalReferenceId` a session's widget carries: letters, digits and hyphens. */
@@ -207,28 +417,26 @@ export interface IntegratorIds {
 }
 
 /**
- * The widget URL that opens `order` on `side`, with the session's reference.
- * A purchase fixes `order.address` as the recipient
+ * The widget URL that opens `order` on `side` for `token` (on its chain), with
+ * the session's reference. A purchase fixes `order.address` as the recipient
  * ({@link ELDORADO_ADDRESS_PARAM}). A sale does not: with that parameter the
  * widget counts the wallet as connected and has nothing to sign the transfer
- * with, so the seller connects the wallet that holds the stablecoin there. The
+ * with, so the seller connects the wallet that holds the token there. The
  * integrator ids ride along when configured, which is what attributes the order.
  */
 export function widgetUrl(
   host: EldoradoHost,
   order: P2pOrder,
+  token: P2pToken,
   reference: string,
   ids: IntegratorIds | null,
   side: P2pSide,
 ): string {
-  const token = host.tokens.find((t) => t.symbol === order.token);
-  if (!token)
-    throw new Error(`token ${order.token} is not traded on ${host.chain}`);
   const url = new URL('/exchange', host.widget);
   const q = url.searchParams;
   q.set('operation', P2P_PRICE_SIDE[side]);
   q.set('token', token.address);
-  q.set('chain', String(host.chainId));
+  q.set('chain', String(token.chainId));
   q.set('currency', order.currency);
   q.set('paymentMethod', order.paymentMethod);
   q.set('amount', order.amount);

@@ -16,7 +16,7 @@ CREATE TABLE "p2p_ramp_session" (
     "tokenAddress" TEXT NOT NULL,
     "chainId" INTEGER NOT NULL,
     "address" TEXT NOT NULL,
-    "estimatedAmountOut" TEXT NOT NULL,
+    "estimatedAmountOut" TEXT,
     "reference" TEXT NOT NULL,
     "widgetUrl" TEXT NOT NULL,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
