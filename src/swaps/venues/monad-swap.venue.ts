@@ -267,6 +267,64 @@ export class MonadSwapVenue implements ChainSwapVenue {
     return tx.hash.toLowerCase();
   }
 
+  /**
+   * The transaction the wallet sent itself (`eth_sendTransaction` answers only
+   * its hash), read from this service's Monad RPC, whose chain id the client
+   * checks on its first read. It must be the call `verify` checks for: the
+   * built router, calldata and value, on chain 143, sent from the source. A
+   * mismatch names the field and never the value expected, so a caller
+   * holding only the swap id learns nothing of the call built for it.
+   */
+  async verifySent(swap: ChainSwap, txHash: string): Promise<string> {
+    const hash = txHash.toLowerCase();
+    const tx = await this.rpc.getTransaction('monad', NETWORK, hash);
+    if (!tx) {
+      throw ApiError.badRequest(
+        ApiErrorCode.TransactionNotFound,
+        `Transaction ${hash} is not on Monad yet: it has not reached this ` +
+          "service's node. Retry in a few seconds; nothing was recorded.",
+      );
+    }
+    const built = swap.transaction as unknown as MonadCall;
+    const approval = swap.approval as unknown as MonadCall | null;
+    if (
+      approval &&
+      tx.to?.toLowerCase() === approval.to.toLowerCase() &&
+      tx.input.toLowerCase() === approval.data.toLowerCase()
+    ) {
+      throw invalid(
+        'txHash names the approval transaction: send the hash of the swap ' +
+          'transaction, which the wallet sends after the approval',
+      );
+    }
+    if (tx.chainId && BigInt(tx.chainId) !== BigInt(built.chainId)) {
+      throw invalid(
+        `txHash names a transaction whose chainId is not Monad's (${built.chainId})`,
+      );
+    }
+    if (tx.to?.toLowerCase() !== built.to.toLowerCase()) {
+      throw invalid(
+        'txHash names a transaction whose `to` is not the contract built for this swap',
+      );
+    }
+    if (tx.input.toLowerCase() !== built.data.toLowerCase()) {
+      throw invalid(
+        'txHash names a transaction whose `input` is not the calldata built for this swap',
+      );
+    }
+    if (BigInt(tx.value) !== BigInt(built.value)) {
+      throw invalid(
+        'txHash names a transaction whose `value` is not the one built for this swap',
+      );
+    }
+    if (tx.from.toLowerCase() !== swap.source.toLowerCase()) {
+      throw invalid(
+        'txHash names a transaction whose `from` is not the swap source',
+      );
+    }
+    return hash;
+  }
+
   async broadcast(signed: string): Promise<void> {
     await this.rpc.sendRawTransaction('monad', NETWORK, signed);
   }

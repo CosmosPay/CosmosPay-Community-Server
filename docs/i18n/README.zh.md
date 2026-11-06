@@ -770,7 +770,7 @@ where: { id, consumer: { apisixUsername: consumer.username } }
 | --- | --- |
 | `POST /v1/swaps/quote` | 通过 Horizon 为路径定价；结果完全由请求决定 |
 | `POST /v1/swaps` | 构建一个由调用方签名的未签名信封 |
-| `POST /v1/swaps/:id/submit` | 广播调用方签名的信封：在请求体确实是该 swap 的信封并携带签名之前，关于这笔 swap 的任何信息，包括它的状态，都不会被回答；错误的 `X-Record-Token` 会被拒绝，缺失的暂时仍被接受（见下文）；带有速率限制 |
+| `POST /v1/swaps/:id/submit` | 广播调用方签名的信封：在请求体确实是该 swap 的信封并携带签名之前，关于这笔 swap 的任何信息，包括它的状态，都不会被回答（Monad 的 `txHash`：直到它指向的交易从链上读取后确认是该 swap 的调用且由其 source 发出）；错误的 `X-Record-Token` 会被拒绝，缺失的暂时仍被接受（见下文）；带有速率限制 |
 | `GET /v1/cross-chain-swaps/assets` \| `POST /v1/cross-chain-swaps/quote` | NEAR Intents 的代币列表与试算报价；是请求的纯函数 |
 | `POST /v1/cross-chain-swaps` | 为调用方自己的资金生成充值地址；重放的 `Idempotency-Key` 仅在请求一致时才会得到响应 |
 | `POST /v1/cross-chain-swaps/:id/deposit` | 告诉 NEAR Intents 一笔由它自己在链上验证的交易；错误的 `X-Record-Token` 会被拒绝，缺失的暂时仍被接受（见下文）；带有速率限制 |
@@ -901,7 +901,7 @@ quote → build XDR → customer signs in wallet → POST /submit → Stellar ex
 
 ```
 POST /v1/swaps/quote {chain} → POST /v1/swaps {chain, source} → wallet signs `transaction`
-  → POST /v1/swaps/{id}/submit {signedTransaction} → observer → SUCCEEDED / FAILED
+  → POST /v1/swaps/{id}/submit {signedTransaction | txHash} → observer → SUCCEEDED / FAILED
 ```
 
 - **资产**是原生代币代号（`SOL`、`MON`）、`native`，或 SPL mint / ERC-20 地址。发行方、
@@ -915,6 +915,14 @@ POST /v1/swaps/quote {chain} → POST /v1/swaps {chain, source} → wallet signs
   `400 transaction_rejected`，swap 保持 `PENDING`；只有观察器读取到的链上结果才会让它变为
   `SUCCEEDED` 或 `FAILED`。未提交或未上链的 swap 会变为 `EXPIRED`。Webhook 仍是相同的
   `SWAP_*` 事件。
+- **`txHash`（仅 Monad）**用于自己发送交易、只返回哈希的钱包（浏览器 EVM 钱包的
+  `eth_sendTransaction`）：submit 接收哈希而不是 `signedTransaction`，从本服务自己的
+  Monad RPC 读取该交易，检查它是同一个调用（`to`、`input`、`value`、链 143）且由
+  `source` 发出，然后记录为 `SUBMITTED`，不广播任何内容。节点尚未收到时返回
+  `400 transaction_not_found`：不记录任何内容，几秒后重试。再次提交同一哈希会按
+  swap 当前状态回答；已记录在另一笔 swap 上的哈希会被拒绝。两分钟有效期不适用：
+  交易已经在网络上。`approval` 由钱包先发送，从不在这里提交。Solana 仍使用
+  `signedTransaction`，因为它的钱包只签名不发送。
 - **佣金：**与 Stellar 一样按套餐费率，但由聚合器从**输出**中扣除。Jupiter 把
   `platformFeeBps` 付到 `SOLANA_SWAP_FEE_WALLET` 针对输出 mint 的代币账户，该账户必须已存在
   ——缺失时返回 `503 misconfigured`，并指明需要创建的账户。Kuru Flow 把 `referrerFeeBps`
