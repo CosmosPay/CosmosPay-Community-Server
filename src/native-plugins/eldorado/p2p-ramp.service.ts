@@ -129,7 +129,7 @@ export class P2pRampService {
 
   /**
    * A page of one chain's tokens on the key's network, searched by `q` (a
-   * symbol fragment or an exact address), the priority tokens first. A chain the
+   * symbol fragment or an exact address), the network's main assets first. A chain the
    * market does not offer right now is a 400.
    */
   async tokens(consumer: GatewayConsumer, query: P2pTokensQuery) {

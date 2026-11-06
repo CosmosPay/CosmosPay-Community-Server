@@ -4,6 +4,7 @@ import {
   ELDORADO_CHAIN_NAMES,
   NATIVE_TOKEN_ADDRESS,
   P2P_SESSION_REFERENCE_PREFIX,
+  P2P_MAIN_TOKENS,
   P2P_TOKEN_PRIORITY,
   P2P_USD_STABLECOINS,
   type EldoradoHost,
@@ -184,8 +185,25 @@ export function tokenUsdPrice(symbol: string, raw: unknown): string | null {
   );
 }
 
-/** Where a token sorts in {@link P2P_TOKEN_PRIORITY}; past its end when absent. */
+/** Each network's main assets, lowercased once. */
+const MAIN_TOKENS = new Map<number, readonly string[]>(
+  Object.entries(P2P_MAIN_TOKENS).map(([chainId, list]) => [
+    Number(chainId),
+    list.map((address) => address.toLowerCase()),
+  ]),
+);
+
+/**
+ * Where a token sorts: its place among its network's main assets
+ * ({@link P2P_MAIN_TOKENS}, by address), or for a network without that list its
+ * place in {@link P2P_TOKEN_PRIORITY} (by symbol); past the end when absent.
+ */
 function priorityOf(token: P2pToken): number {
+  const mains = MAIN_TOKENS.get(token.chainId);
+  if (mains) {
+    const at = mains.indexOf(token.address.toLowerCase());
+    return at < 0 ? mains.length : at;
+  }
   const key = token.address === NATIVE_TOKEN_ADDRESS ? 'native' : token.symbol;
   const at = P2P_TOKEN_PRIORITY.indexOf(key);
   return at < 0 ? P2P_TOKEN_PRIORITY.length : at;
@@ -194,7 +212,8 @@ function priorityOf(token: P2pToken): number {
 /**
  * One chain's token list, read and ordered: entries with an EVM address, a
  * symbol and integer decimals (0 to 36), EIP-55, each address once, the
- * {@link P2P_TOKEN_PRIORITY} ones first and the rest in the marketplace's order.
+ * network's main assets first ({@link priorityOf}) and the rest in the
+ * marketplace's order.
  */
 export function readTokens(raw: unknown, chainId: number): P2pToken[] {
   if (!Array.isArray(raw)) return [];

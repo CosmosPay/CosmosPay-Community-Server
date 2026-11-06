@@ -272,7 +272,7 @@ describe('P2pRampService', () => {
   });
 
   describe('tokens', () => {
-    it('pages one chain’s tokens, the priority ones first, without logos', async () => {
+    it('pages one chain’s tokens, its main assets first, without logos', async () => {
       const { service } = setup();
 
       const page = await service.tokens(key('prod'), {
@@ -285,15 +285,15 @@ describe('P2pRampService', () => {
         data: [
           {
             chainId: 42161,
-            address: USDT0,
-            symbol: 'USDT0',
-            decimals: 6,
-            priceUsd: '1',
+            address: NATIVE_TOKEN_ADDRESS,
+            symbol: 'ETH',
+            decimals: 18,
+            priceUsd: '2241.32',
           },
           {
             chainId: 42161,
-            address: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831',
-            symbol: 'USDC',
+            address: USDT0,
+            symbol: 'USDT0',
             decimals: 6,
             priceUsd: '1',
           },

@@ -329,17 +329,18 @@ describe('P2P on-ramp and off-ramp (e2e)', () => {
       expect(res.body.defaultToken.address).toBe(USDT0);
     });
 
-    it('pages and searches a chain’s tokens, the priority ones first, with no logo', async () => {
+    it('pages and searches a chain’s tokens, its main assets first, with no logo', async () => {
       const res = await asTenantLive(
         request(http()).get('/v1/onramp/p2p/tokens?chainId=42161&take=2'),
       ).expect(200);
 
       expect(res.body.total).toBe(3);
+      // Arbitrum's own coin first, then its USD stablecoins (P2P_MAIN_TOKENS).
       expect(res.body.data.map((t: { symbol: string }) => t.symbol)).toEqual([
-        'USDT0',
         'ETH',
+        'USDT0',
       ]);
-      expect(res.body.data[0]).toEqual({
+      expect(res.body.data[1]).toEqual({
         chainId: 42161,
         address: USDT0,
         symbol: 'USDT0',

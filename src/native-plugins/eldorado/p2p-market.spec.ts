@@ -187,16 +187,17 @@ describe('the P2P market', () => {
       expect(chainName(999999)).toBe('Chain 999999');
     });
 
-    it('reads a token list EIP-55, each address once, the priority tokens first', () => {
+    it('reads a token list EIP-55, each address once, the network’s main assets first', () => {
+      // Arbitrum's main assets in their order (ETH, USDT0, USDC, WETH, WBTC, ARB, USDC.e, DAI...).
       expect(ARBITRUM.map((t) => t.symbol)).toEqual([
+        'ETH',
         'USDT0',
         'USDC',
-        'ETH',
         'WBTC',
-        'DAI',
         'ARB',
+        'DAI',
       ]);
-      expect(ARBITRUM[1]).toEqual({
+      expect(ARBITRUM[2]).toEqual({
         chainId: 42161,
         address: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831',
         symbol: 'USDC',
@@ -206,6 +207,84 @@ describe('the P2P market', () => {
       // Never the logo, never a token without a valid address.
       expect(Object.keys(ARBITRUM[0])).not.toContain('logo');
       expect(ARBITRUM.some((t) => t.symbol === 'BAD')).toBe(false);
+    });
+
+    it('puts the tokens nobody uses after the main assets, a known symbol at another address too', () => {
+      const tokens = readTokens(
+        [
+          {
+            address: '0x1111111111111111111111111111111111111111',
+            symbol: 'XOR',
+            decimals: 18,
+          },
+          // A second "ARB" at another address is not Arbitrum's ARB.
+          {
+            address: '0x2222222222222222222222222222222222222222',
+            symbol: 'ARB',
+            decimals: 18,
+            priceUSD: '162000000',
+          },
+          {
+            address: '0x912CE59144191C1204E64559FE8253a0e49E6548',
+            symbol: 'ARB',
+            decimals: 18,
+          },
+          {
+            address: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831',
+            symbol: 'USDC',
+            decimals: 6,
+          },
+          {
+            address: '0x3333333333333333333333333333333333333333',
+            symbol: 'RAIL',
+            decimals: 18,
+          },
+        ],
+        42161,
+      );
+      expect(tokens.map((t) => `${t.symbol}:${t.address.slice(0, 6)}`)).toEqual(
+        [
+          'USDC:0xaf88',
+          'ARB:0x912C',
+          'XOR:0x1111',
+          'ARB:0x2222',
+          'RAIL:0x3333',
+        ],
+      );
+    });
+
+    it('orders a network without its own main assets by symbol', () => {
+      const tokens = readTokens(
+        [
+          {
+            address: '0x1111111111111111111111111111111111111111',
+            symbol: 'XOR',
+            decimals: 18,
+          },
+          {
+            address: '0x2222222222222222222222222222222222222222',
+            symbol: 'USDC',
+            decimals: 6,
+          },
+          {
+            address: '0x0000000000000000000000000000000000000000',
+            symbol: 'NEW',
+            decimals: 18,
+          },
+          {
+            address: '0x3333333333333333333333333333333333333333',
+            symbol: 'USDT',
+            decimals: 6,
+          },
+        ],
+        999999,
+      );
+      expect(tokens.map((t) => t.symbol)).toEqual([
+        'USDT',
+        'USDC',
+        'NEW',
+        'XOR',
+      ]);
     });
 
     it('prices a USD stablecoin the marketplace did not price at 1, nothing else', () => {
