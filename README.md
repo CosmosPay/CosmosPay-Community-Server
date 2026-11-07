@@ -1,3 +1,7 @@
+<p align="center">
+  <a href="https://dev.cosmospay.lat/docs/api/"><img src=".github/assets/banner.png" width="100%" alt="Cosmos Pay Payments API: payment intents, payment links, swaps and signed webhooks on 35 networks."></a>
+</p>
+
 # Cosmos Pay — Payments Microservice
 
 **English** · [Español](./docs/i18n/README.es.md) · [Português](./docs/i18n/README.pt.md) · [Deutsch](./docs/i18n/README.de.md) · [Français](./docs/i18n/README.fr.md) · [हिन्दी](./docs/i18n/README.hi.md) · [简体中文](./docs/i18n/README.zh.md)
