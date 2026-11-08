@@ -2,6 +2,14 @@
 
 All notable changes to the Cosmos Pay Community Server are documented here.
 Generated from [Conventional Commits](https://www.conventionalcommits.org) by [git-cliff](https://git-cliff.org).
+## [1.13.0] - 2026-11-08
+
+### Features
+- Submit a Monad swap by the hash of the transaction its wallet sent (9fb1eb5)
+
+### Documentation
+- Brand banner (9328d9a)
+
 ## [1.12.1] - 2026-11-08
 
 ### Miscellaneous
