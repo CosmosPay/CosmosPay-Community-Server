@@ -397,6 +397,91 @@ describe('MonadSwapVenue', () => {
     await expect(v.settlement('0xh')).resolves.toBe('FAILED');
   });
 
+  describe('a transaction the wallet sent itself (txHash)', () => {
+    const HASH = `0x${'Ab'.repeat(32)}`;
+    const APPROVAL = {
+      to: USDC,
+      data: '0x095ea7b3000000000000000000000000b3e6778480b2e488385e8205ea05e20060b813cb',
+      value: '0',
+      chainId: 143,
+    };
+    const withApproval = {
+      source,
+      transaction: built,
+      approval: APPROVAL,
+    } as unknown as ChainSwap;
+    /** `eth_getTransactionByHash` as a node answers it: lowercase, hex. */
+    const sent = (over: Record<string, unknown> = {}) => ({
+      hash: HASH.toLowerCase(),
+      from: source.toLowerCase(),
+      to: ROUTER.toLowerCase(),
+      value: `0x${BigInt(built.value).toString(16)}`,
+      input: built.data,
+      blockNumber: null,
+      chainId: '0x8f',
+      ...over,
+    });
+    const reading = (tx: unknown) => {
+      const getTransaction = jest.fn().mockResolvedValue(tx);
+      return { getTransaction, v: venue({ getTransaction }).venue };
+    };
+
+    it('reads it from the Monad node and answers its hash once it is the call built, from the source', async () => {
+      const { getTransaction, v } = reading(sent());
+      await expect(v.verifySent(withApproval, HASH)).resolves.toBe(
+        HASH.toLowerCase(),
+      );
+      expect(getTransaction).toHaveBeenCalledWith(
+        'monad',
+        'public',
+        HASH.toLowerCase(),
+      );
+    });
+
+    it('takes a transaction the node reports without a chainId: the node is checked to be Monad', async () => {
+      const { v } = reading(sent({ chainId: undefined }));
+      await expect(v.verifySent(withApproval, HASH)).resolves.toBe(
+        HASH.toLowerCase(),
+      );
+    });
+
+    it('answers a hash the node does not have yet as retryable', async () => {
+      const { v } = reading(null);
+      const err = await rejection(v.verifySent(withApproval, HASH));
+      expect(err.code).toBe(ApiErrorCode.TransactionNotFound);
+      expect(err.message).toContain('Retry in a few seconds');
+    });
+
+    it('names the field of a transaction that is not the one built for the swap', async () => {
+      const other = '0x1111111111111111111111111111111111111111';
+      for (const [over, field] of [
+        [{ chainId: '0x279f' }, 'chainId'],
+        [{ to: other }, '`to`'],
+        [{ to: null }, '`to`'],
+        [{ input: '0xdeadbeef' }, '`input`'],
+        [{ value: '0x1' }, '`value`'],
+        [{ from: other }, '`from`'],
+      ] as const) {
+        const { v } = reading(sent(over));
+        const err = await rejection(v.verifySent(withApproval, HASH));
+        expect(err.code).toBe(ApiErrorCode.ValidationFailed);
+        expect(err.message).toContain(field);
+        // Never the value the swap expects.
+        expect(err.message.toLowerCase()).not.toContain(ROUTER.toLowerCase());
+        expect(err.message.toLowerCase()).not.toContain(source.toLowerCase());
+      }
+    });
+
+    it('says so when the hash is the approval, which the wallet sends first', async () => {
+      const { v } = reading(
+        sent({ to: APPROVAL.to, input: APPROVAL.data, value: '0x0' }),
+      );
+      const err = await rejection(v.verifySent(withApproval, HASH));
+      expect(err.code).toBe(ApiErrorCode.ValidationFailed);
+      expect(err.message).toContain('approval');
+    });
+  });
+
   describe('with a merchant fee', () => {
     const FEE_ROUTER = '0x813eff013aec419c94b1c337db7317683f446d5a';
     const FEE_WALLET = '0x62ee1b8d1efdf8f73c78db87b888406b194e266a';
