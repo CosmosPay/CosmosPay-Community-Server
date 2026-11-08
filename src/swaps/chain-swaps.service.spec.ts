@@ -55,6 +55,9 @@ function fakePrisma() {
           row.idempotencyKey === v.idempotencyKey
         );
       }
+      if (v && typeof v === 'object' && Array.isArray(v.in)) {
+        return v.in.includes(row[k]);
+      }
       return row[k] === v;
     });
   const chainSwap = {
@@ -140,6 +143,16 @@ function setup(feeWallet = 'FeeWa11et1111111111111111111111111111111111') {
     broadcast: jest.fn().mockResolvedValue(undefined),
     settlement: jest.fn(),
   };
+  const monad = {
+    merchantFeeUnsupported: () =>
+      'no merchant fee router is configured (KURU_MERCHANT_FEE_ROUTER)',
+    verify: jest.fn(),
+    verifySent: jest.fn((_swap: unknown, hash: string) =>
+      Promise.resolve(hash.toLowerCase()),
+    ),
+    broadcast: jest.fn(),
+    settlement: jest.fn(),
+  };
   const service = new ChainSwapsService(
     config,
     prisma,
@@ -148,13 +161,10 @@ function setup(feeWallet = 'FeeWa11et1111111111111111111111111111111111') {
       resolve: jest.fn().mockResolvedValue({ id: 'consumer_1' }),
     } as unknown as ConsumerResolverService,
     solana as unknown as SolanaSwapVenue,
-    {
-      merchantFeeUnsupported: () =>
-        'no merchant fee router is configured (KURU_MERCHANT_FEE_ROUTER)',
-    } as unknown as MonadSwapVenue,
+    monad as unknown as MonadSwapVenue,
     recordTokens,
   );
-  return { service, rows, webhooks, solana, prisma, config };
+  return { service, rows, webhooks, solana, monad, prisma, config };
 }
 
 async function rejection(p: Promise<unknown>): Promise<ApiError> {
@@ -307,6 +317,212 @@ describe('ChainSwapsService', () => {
       const err = await rejection(service.submit(consumer, rows[0], 'signed'));
       expect(err.code).toBe(ApiErrorCode.TransactionRejected);
       expect(rows[0].status).toBe('PENDING');
+    });
+  });
+
+  describe('submit with txHash (a Monad wallet that sent the transaction itself)', () => {
+    const HASH = `0x${'ab'.repeat(32)}`;
+    const OTHER_HASH = `0x${'cd'.repeat(32)}`;
+
+    /** A Monad swap as create stores it. */
+    function monadSwap(rows: any[], over: Record<string, unknown> = {}): any {
+      const row = {
+        id: `cs_${rows.length + 1}`,
+        consumerId: 'consumer_1',
+        consumer: { apisixUsername: 'cosmos_u1' },
+        chain: 'monad',
+        network: 'public',
+        provider: 'kuru',
+        status: 'PENDING',
+        source: '0x62eE1b8d1EFdF8f73C78db87B888406B194e266A',
+        transaction: {
+          to: '0xb3e6778480b2E488385E8205eA05E20060B813cb',
+          data: '0xce1e7030',
+          value: '0',
+          chainId: 143,
+        },
+        approval: null,
+        txHash: null,
+        expiresAt: new Date(Date.now() + 60_000),
+        lastCheckedAt: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        ...over,
+      };
+      rows.push(row);
+      return row;
+    }
+
+    it('records the hash once the chain shows the call built, SUBMITTED once, broadcasting nothing', async () => {
+      const { service, rows, monad, webhooks } = setup();
+      const swap = monadSwap(rows);
+
+      const out = await service.submit(consumer, { ...swap }, undefined, HASH);
+
+      expect(monad.verifySent).toHaveBeenCalledWith(
+        expect.objectContaining({ id: swap.id }),
+        HASH,
+      );
+      expect(monad.broadcast).not.toHaveBeenCalled();
+      expect(out).toMatchObject({
+        submitted: true,
+        status: 'SUBMITTED',
+        txHash: HASH,
+        swap: { id: swap.id, status: 'SUBMITTED', txHash: HASH },
+      });
+      expect(rows[0]).toMatchObject({ status: 'SUBMITTED', txHash: HASH });
+      expect(webhooks.emit).toHaveBeenCalledTimes(1);
+      expect(webhooks.emit.mock.calls[0][1]).toBe('SWAP_SUBMITTED');
+    });
+
+    it('answers the same hash again with the swap as it is, still checking the chain first', async () => {
+      const { service, rows, monad, webhooks } = setup();
+      const swap = monadSwap(rows, { status: 'SUCCEEDED', txHash: HASH });
+
+      const out = await service.submit(consumer, { ...swap }, undefined, HASH);
+
+      expect(monad.verifySent).toHaveBeenCalledTimes(1);
+      expect(out).toMatchObject({
+        submitted: true,
+        status: 'SUCCEEDED',
+        txHash: HASH,
+      });
+      expect(rows[0].status).toBe('SUCCEEDED');
+      expect(webhooks.emit).not.toHaveBeenCalled();
+    });
+
+    it('checks the transaction before it discloses anything about the swap', async () => {
+      const { service, rows, monad } = setup();
+      const swap = monadSwap(rows, {
+        status: 'SUBMITTED',
+        txHash: OTHER_HASH,
+      });
+      monad.verifySent.mockRejectedValueOnce(
+        ApiError.badRequest(
+          ApiErrorCode.ValidationFailed,
+          'txHash names a transaction whose `input` is not the calldata built for this swap',
+        ),
+      );
+      const err = await rejection(
+        service.submit(consumer, { ...swap }, undefined, HASH),
+      );
+      expect(err.code).toBe(ApiErrorCode.ValidationFailed);
+      expect(err.message).not.toContain(OTHER_HASH);
+    });
+
+    it('records nothing while the chain does not have the transaction yet', async () => {
+      const { service, rows, monad, webhooks } = setup();
+      const swap = monadSwap(rows);
+      monad.verifySent.mockRejectedValueOnce(
+        ApiError.badRequest(
+          ApiErrorCode.TransactionNotFound,
+          'Transaction is not on Monad yet. Retry in a few seconds.',
+        ),
+      );
+      const err = await rejection(
+        service.submit(consumer, { ...swap }, undefined, HASH),
+      );
+      expect(err.code).toBe(ApiErrorCode.TransactionNotFound);
+      expect(rows[0]).toMatchObject({ status: 'PENDING', txHash: null });
+      expect(webhooks.emit).not.toHaveBeenCalled();
+    });
+
+    it('refuses a hash recorded on another swap, read before the write and caught during it', async () => {
+      const { service, rows, prisma } = setup();
+      const swap = monadSwap(rows);
+      monadSwap(rows, { status: 'SUBMITTED', txHash: HASH });
+
+      let err = await rejection(
+        service.submit(consumer, { ...swap }, undefined, HASH),
+      );
+      expect(err.code).toBe(ApiErrorCode.ValidationFailed);
+      expect(err.message).toContain('another swap');
+      expect(rows[0]).toMatchObject({ status: 'PENDING', txHash: null });
+
+      // Another swap recorded it between the read and the write.
+      rows[1].txHash = OTHER_HASH;
+      (prisma.chainSwap.updateMany as jest.Mock).mockRejectedValueOnce({
+        code: 'P2002',
+      });
+      err = await rejection(
+        service.submit(consumer, { ...swap }, undefined, HASH),
+      );
+      expect(err.code).toBe(ApiErrorCode.ValidationFailed);
+      expect(err.message).toContain('another swap');
+      expect(rows[0]).toMatchObject({ status: 'PENDING', txHash: null });
+    });
+
+    it('refuses another hash on a swap already submitted with one', async () => {
+      const { service, rows } = setup();
+      const swap = monadSwap(rows, {
+        status: 'SUBMITTED',
+        txHash: OTHER_HASH,
+      });
+      const err = await rejection(
+        service.submit(consumer, { ...swap }, undefined, HASH),
+      );
+      expect(err.code).toBe(ApiErrorCode.InvalidStateTransition);
+      expect(rows[0].txHash).toBe(OTHER_HASH);
+    });
+
+    it('refuses a hash a concurrent submit lost to another one', async () => {
+      const { service, rows } = setup();
+      const swap = monadSwap(rows);
+      // Read PENDING; another request records its hash before this write.
+      const stale = { ...swap };
+      rows[0].status = 'SUBMITTED';
+      rows[0].txHash = OTHER_HASH;
+      const err = await rejection(
+        service.submit(consumer, stale, undefined, HASH),
+      );
+      expect(err.code).toBe(ApiErrorCode.InvalidStateTransition);
+      expect(rows[0].txHash).toBe(OTHER_HASH);
+    });
+
+    it('takes a hash past the validity window, and on a swap expired before any hash: the transaction is already out', async () => {
+      const { service, rows } = setup();
+      const late = monadSwap(rows, { expiresAt: new Date(0) });
+      const expired = monadSwap(rows, {
+        status: 'EXPIRED',
+        expiresAt: new Date(0),
+      });
+
+      await service.submit(consumer, { ...late }, undefined, HASH);
+      await service.submit(consumer, { ...expired }, undefined, OTHER_HASH);
+
+      expect(rows[0]).toMatchObject({ status: 'SUBMITTED', txHash: HASH });
+      expect(rows[1]).toMatchObject({
+        status: 'SUBMITTED',
+        txHash: OTHER_HASH,
+      });
+    });
+
+    it('asks a Solana swap for signedTransaction, and a Monad one for exactly one of the two', async () => {
+      const { service, rows, solana, monad } = setup();
+      await service.create(consumer, DTO);
+      const solanaSwap = rows[0];
+      const swap = monadSwap(rows);
+
+      let err = await rejection(
+        service.submit(consumer, solanaSwap, undefined, HASH),
+      );
+      expect(err.code).toBe(ApiErrorCode.ValidationFailed);
+      expect(err.message).toContain('Solana swap takes signedTransaction');
+      expect(solana.broadcast).not.toHaveBeenCalled();
+
+      err = await rejection(service.submit(consumer, swap, '0x02f8', HASH));
+      expect(err.code).toBe(ApiErrorCode.ValidationFailed);
+      expect(err.message).toBe('Send signedTransaction or txHash, not both');
+
+      err = await rejection(service.submit(consumer, swap, undefined));
+      expect(err.message).toBe(
+        'signedTransaction or txHash is required for a Monad swap',
+      );
+      err = await rejection(service.submit(consumer, solanaSwap, undefined));
+      expect(err.message).toBe(
+        'signedTransaction is required for a Solana swap',
+      );
+      expect(monad.verifySent).not.toHaveBeenCalled();
     });
   });
 

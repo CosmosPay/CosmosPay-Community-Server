@@ -1083,7 +1083,7 @@ where: { id, consumer: { apisixUsername: consumer.username } }
 | --- | --- |
 | `POST /v1/swaps/quote` | Horizon से path की कीमत निकालता है; यह request का शुद्ध function है |
 | `POST /v1/swaps` | एक unsigned envelope बनाता है जिसे caller sign करता है |
-| `POST /v1/swaps/:id/submit` | caller द्वारा signed envelope broadcast करता है: swap के बारे में कुछ भी, यहाँ तक कि उसकी status भी, तब तक नहीं बताया जाता जब तक body उसी swap का envelope न हो जिस पर signature हो; गलत `X-Record-Token` अस्वीकार होता है, और token न हो तो अभी के लिए अब भी स्वीकार होता है (नीचे देखें); rate limited |
+| `POST /v1/swaps/:id/submit` | caller द्वारा signed envelope broadcast करता है: swap के बारे में कुछ भी, यहाँ तक कि उसकी status भी, तब तक नहीं बताया जाता जब तक body उसी swap का envelope न हो जिस पर signature हो (Monad `txHash` के लिए: जब तक उसका बताया transaction, chain से पढ़कर, उसी swap की call न हो जो उसके source ने भेजी); गलत `X-Record-Token` अस्वीकार होता है, और token न हो तो अभी के लिए अब भी स्वीकार होता है (नीचे देखें); rate limited |
 | `GET /v1/cross-chain-swaps/assets` \| `POST /v1/cross-chain-swaps/quote` | NEAR Intents की token list और एक dry quote; request के शुद्ध functions |
 | `POST /v1/cross-chain-swaps` | Caller के अपने funds के लिए एक deposit address; दोहराया गया `Idempotency-Key` तभी जवाब पाता है जब request मेल खाए |
 | `POST /v1/cross-chain-swaps/:id/deposit` | NEAR Intents को एक transaction दिखाता है जिसे वह खुद on-chain verify करता है; गलत `X-Record-Token` अस्वीकार होता है, और token न हो तो अभी के लिए अब भी स्वीकार होता है (नीचे देखें); rate limited |
@@ -1334,7 +1334,7 @@ non-custodial:
 
 ```
 POST /v1/swaps/quote {chain} → POST /v1/swaps {chain, source} → wallet signs `transaction`
-  → POST /v1/swaps/{id}/submit {signedTransaction} → observer → SUCCEEDED / FAILED
+  → POST /v1/swaps/{id}/submit {signedTransaction | txHash} → observer → SUCCEEDED / FAILED
 ```
 
 - **Assets** native ticker (`SOL`, `MON`), `native`, या SPL mint / ERC-20 address
@@ -1351,6 +1351,17 @@ POST /v1/swaps/quote {chain} → POST /v1/swaps {chain, source} → wallet signs
   मिलता है और swap `PENDING` रहता है; सिर्फ़ chain का अपना फ़ैसला, जिसे observer
   पढ़ता है, उसे `SUCCEEDED` या `FAILED` बनाता है। बिना submit हुए या न दिखे swaps
   `EXPIRED` हो जाते हैं। Webhooks वही `SWAP_*` events हैं।
+- **`txHash` (सिर्फ़ Monad)** उस wallet के लिए है जो transaction ख़ुद भेजता है
+  और सिर्फ़ उसका hash लौटाता है (browser EVM wallet का `eth_sendTransaction`):
+  submit `signedTransaction` की जगह hash लेता है, उस transaction को इस service
+  के अपने Monad RPC से पढ़ता है, जाँचता है कि वह वही call है (`to`, `input`,
+  `value`, chain 143) जो `source` से भेजी गई, और कुछ भी broadcast किए बिना उसे
+  `SUBMITTED` के रूप में दर्ज करता है। Node के पास अभी न हो तो
+  `400 transaction_not_found`: कुछ दर्ज नहीं होता, कुछ सेकंड में फिर कोशिश करें।
+  वही hash दोबारा भेजने पर swap जैसा है वैसा लौटता है; किसी दूसरे swap पर दर्ज hash
+  अस्वीकार होता है। दो मिनट की window लागू नहीं होती: transaction पहले से network
+  पर है। `approval` wallet पहले भेजता है और वह यहाँ कभी submit नहीं होता। Solana
+  `signedTransaction` ही लेता है, क्योंकि उसके wallets बिना भेजे sign करते हैं।
 - **Commission:** plan की दर, Stellar की तरह, लेकिन aggregator इसे **output** से
   लेता है। Jupiter अपना `platformFeeBps` output mint के लिए `SOLANA_SWAP_FEE_WALLET`
   के token account में जमा करता है, जिसका होना ज़रूरी है — न होने पर

@@ -1,3 +1,7 @@
+<p align="center">
+  <a href="https://dev.cosmospay.lat/docs/api/"><img src=".github/assets/banner.png" width="100%" alt="Cosmos Pay Payments API: payment intents, payment links, swaps and signed webhooks on 35 networks."></a>
+</p>
+
 # Cosmos Pay — Payments Microservice
 
 **English** · [Español](./docs/i18n/README.es.md) · [Português](./docs/i18n/README.pt.md) · [Deutsch](./docs/i18n/README.de.md) · [Français](./docs/i18n/README.fr.md) · [हिन्दी](./docs/i18n/README.hi.md) · [简体中文](./docs/i18n/README.zh.md)
@@ -1083,7 +1087,7 @@ Reachable with the public key today:
 | --- | --- |
 | `POST /v1/swaps/quote` | Prices a path from Horizon; a pure function of the request |
 | `POST /v1/swaps` | Builds an unsigned envelope the caller signs |
-| `POST /v1/swaps/:id/submit` | Broadcasts a caller-signed envelope: nothing about the swap, not even its status, is answered until the body is that swap's envelope carrying a signature; a wrong `X-Record-Token` is refused, a missing one is still accepted for now (see below); rate limited |
+| `POST /v1/swaps/:id/submit` | Broadcasts a caller-signed envelope: nothing about the swap, not even its status, is answered until the body is that swap's envelope carrying a signature (a Monad `txHash`: until the transaction it names, read from the chain, is that swap's call sent by its source); a wrong `X-Record-Token` is refused, a missing one is still accepted for now (see below); rate limited |
 | `GET /v1/cross-chain-swaps/assets` \| `POST /v1/cross-chain-swaps/quote` | NEAR Intents' token list and a dry quote; pure functions of the request |
 | `POST /v1/cross-chain-swaps` | A deposit address for the caller's own funds; a replayed `Idempotency-Key` is answered only when the request matches |
 | `POST /v1/cross-chain-swaps/:id/deposit` | Points NEAR Intents at a transaction it verifies on-chain itself; a wrong `X-Record-Token` is refused, a missing one is still accepted for now (see below); rate limited |
@@ -1336,7 +1340,7 @@ non-custodial throughout:
 
 ```
 POST /v1/swaps/quote {chain} → POST /v1/swaps {chain, source} → wallet signs `transaction`
-  → POST /v1/swaps/{id}/submit {signedTransaction} → observer → SUCCEEDED / FAILED
+  → POST /v1/swaps/{id}/submit {signedTransaction | txHash} → observer → SUCCEEDED / FAILED
 ```
 
 - **Assets** are the native ticker (`SOL`, `MON`), `native`, or the SPL mint /
@@ -1354,6 +1358,17 @@ POST /v1/swaps/quote {chain} → POST /v1/swaps {chain, source} → wallet signs
   `400 transaction_rejected` and the swap stays `PENDING`; only the chain's own
   verdict, read by the observer, makes it `SUCCEEDED` or `FAILED`. Unsubmitted
   or unseen swaps become `EXPIRED`. Webhooks are the same `SWAP_*` events.
+- **`txHash` (Monad only)** is for a wallet that sends the transaction itself
+  and hands back only its hash (a browser EVM wallet's `eth_sendTransaction`):
+  submit takes the hash instead of `signedTransaction`, reads that transaction
+  from this service's own Monad RPC, checks it is the same call (`to`, `input`,
+  `value`, chain 143) sent from `source`, and records it as `SUBMITTED` without
+  broadcasting anything. One the node does not have yet is
+  `400 transaction_not_found`: nothing is recorded, retry in a few seconds. The
+  same hash again answers the swap as it is; a hash recorded on another swap is
+  refused. The two-minute window does not apply: the transaction is already on
+  the network. The `approval` is sent by the wallet first and never submitted.
+  Solana keeps `signedTransaction`, since its wallets sign without sending.
 - **Commission:** the plan rate, as on Stellar, but taken from the **output** by
   the aggregator. Jupiter pays its `platformFeeBps` into
   `SOLANA_SWAP_FEE_WALLET`'s token account for the output mint, which must

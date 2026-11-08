@@ -337,6 +337,73 @@ describe('Swaps guards (e2e)', () => {
       expect(res.body.message).toBe('signedXdr is required for a Stellar swap');
       expect(prismaMock.swap.findFirst).not.toHaveBeenCalled();
     });
+
+    describe('txHash, for a Monad wallet that sent the transaction itself', () => {
+      const HASH = `0x${'ab'.repeat(32)}`;
+      const submit = (body: Record<string, unknown>) =>
+        request(app.getHttpServer())
+          .post(SUBMIT[1])
+          .set('x-gateway-secret', SECRET)
+          .set('x-consumer-username', 'cosmos_u1')
+          .set('x-consumer-permissions', 'swaps:write')
+          .send(body);
+      /** A chain swap row as the table holds it, enough to reach submit. */
+      const chainSwapRow = (chain: 'solana' | 'monad') => ({
+        id: SWAP_ID,
+        chain,
+        network: 'public',
+        status: 'PENDING',
+        source: '0x62eE1b8d1EFdF8f73C78db87B888406B194e266A',
+        transaction: {},
+        approval: null,
+        txHash: null,
+        expiresAt: new Date(Date.now() + 60_000),
+      });
+
+      it('refuses one that is not a 32-byte hex hash, before any swap is read', async () => {
+        const res = await submit({ txHash: '0x1234' }).expect(400);
+        expect(res.body.code).toBe('validation_failed');
+        expect(res.body.message).toContain(
+          'txHash must be a 0x-prefixed 32-byte hex transaction hash',
+        );
+        expect(prismaMock.chainSwap.findFirst).not.toHaveBeenCalled();
+      });
+
+      it('refuses it on a Stellar swap, which takes signedXdr alone', async () => {
+        let res = await submit({ txHash: HASH }).expect(400);
+        expect(res.body.message).toBe(
+          'signedXdr is required for a Stellar swap',
+        );
+        res = await submit({ signedXdr: 'AAAA', txHash: HASH }).expect(400);
+        expect(res.body.code).toBe('validation_failed');
+        expect(res.body.message).toBe(
+          'txHash is for a Monad swap; a Stellar swap takes signedXdr alone',
+        );
+        expect(prismaMock.swap.findFirst).not.toHaveBeenCalled();
+      });
+
+      it('hands it to the chain swap: refused on Solana, and beside signedTransaction', async () => {
+        prismaMock.chainSwap.findFirst.mockResolvedValueOnce(
+          chainSwapRow('solana'),
+        );
+        let res = await submit({ txHash: HASH }).expect(400);
+        expect(res.body.code).toBe('validation_failed');
+        expect(res.body.message).toContain(
+          'Solana swap takes signedTransaction',
+        );
+
+        prismaMock.chainSwap.findFirst.mockResolvedValueOnce(
+          chainSwapRow('monad'),
+        );
+        res = await submit({
+          signedTransaction: '0x02f8',
+          txHash: HASH,
+        }).expect(400);
+        expect(res.body.message).toBe(
+          'Send signedTransaction or txHash, not both',
+        );
+      });
+    });
   });
 
   describe(`the rate limit on ${label(SUBMIT)}`, () => {

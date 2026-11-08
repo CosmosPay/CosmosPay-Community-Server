@@ -367,22 +367,37 @@ export class ChainSwapsService {
    * A node refusing it is 400 `transaction_rejected` and leaves the swap
    * PENDING, so a transient refusal cannot mark it FAILED; only the chain's
    * own verdict does, through the observer.
+   *
+   * A Monad swap may instead send `txHash`, for a wallet that broadcasts the
+   * transaction itself: see {@link submitSent}.
    */
   async submit(
     consumer: GatewayConsumer,
     swap: ChainSwap,
     signedTransaction: string | undefined,
+    txHash?: string,
   ): Promise<ChainSwapSubmitOutcome> {
-    if (!signedTransaction) {
+    if (signedTransaction !== undefined && txHash !== undefined) {
       throw ApiError.badRequest(
         ApiErrorCode.ValidationFailed,
-        'signedTransaction is required for a Solana or Monad swap',
+        'Send signedTransaction or txHash, not both',
       );
     }
     const venue = this.venues[swap.chain as OtherChain];
+    if (txHash !== undefined) {
+      return this.submitSent(consumer, swap, venue, txHash);
+    }
+    if (!signedTransaction) {
+      throw ApiError.badRequest(
+        ApiErrorCode.ValidationFailed,
+        venue.verifySent
+          ? `signedTransaction or txHash is required for a ${chainLabel(swap)} swap`
+          : `signedTransaction is required for a ${chainLabel(swap)} swap`,
+      );
+    }
     // First, and before anything about the swap is answered: the transaction
     // must be the one built for it, signed by its source.
-    const txHash = venue.verify(swap, signedTransaction);
+    const hash = venue.verify(swap, signedTransaction);
     if (swap.status !== 'PENDING' && swap.status !== 'SUBMITTED') {
       throw ApiError.badRequest(
         ApiErrorCode.InvalidStateTransition,
@@ -399,7 +414,7 @@ export class ChainSwapsService {
 
     const { count } = await this.prisma.chainSwap.updateMany({
       where: { id: swap.id, status: 'PENDING' },
-      data: { status: 'SUBMITTED', txHash },
+      data: { status: 'SUBMITTED', txHash: hash },
     });
     const row = await this.prisma.chainSwap.findUniqueOrThrow({
       where: { id: swap.id },
@@ -410,7 +425,91 @@ export class ChainSwapsService {
     return {
       submitted: true,
       status: row.status,
-      txHash,
+      txHash: hash,
+      swap: this.present(row),
+    };
+  }
+
+  /**
+   * Records a transaction the wallet already broadcast (Monad: a browser
+   * wallet's `eth_sendTransaction` hands back only the hash). The venue reads
+   * it from the chain and checks it is the call built for this swap, sent by
+   * its source, before anything about the swap is answered; then the swap
+   * moves as after a broadcast of ours: SUBMITTED with the hash, and the
+   * observer settles it on the receipt.
+   *
+   * - The same hash again answers the swap as it is; a hash recorded on
+   *   another swap, or a swap already submitted with another one, is refused.
+   * - The two-minute validity window is not checked: it keeps this service
+   *   from broadcasting a stale route, and this transaction is already on the
+   *   network, where the calldata's own minimum output protects the source.
+   *   Refusing it would not stop it; it would only leave the swap reading
+   *   EXPIRED while it settles. So a PENDING swap past its window, or one
+   *   the observer already EXPIRED before any hash was recorded, takes it.
+   */
+  private async submitSent(
+    consumer: GatewayConsumer,
+    swap: ChainSwap,
+    venue: ChainSwapVenue,
+    txHash: string,
+  ): Promise<ChainSwapSubmitOutcome> {
+    if (!venue.verifySent) {
+      throw ApiError.badRequest(
+        ApiErrorCode.ValidationFailed,
+        `txHash is for a Monad swap; a ${chainLabel(swap)} ` +
+          'swap takes signedTransaction, the signed transaction this service broadcasts',
+      );
+    }
+    const hash = await venue.verifySent(swap, txHash);
+    if (swap.txHash === hash) {
+      return {
+        submitted: true,
+        status: swap.status,
+        txHash: hash,
+        swap: this.present(swap),
+      };
+    }
+    const elsewhere = await this.prisma.chainSwap.findFirst({
+      where: { chain: swap.chain, txHash: hash },
+      select: { id: true },
+    });
+    if (elsewhere) throw sentElsewhere(hash);
+    if (swap.txHash !== null) throw submittedWith(swap);
+    if (swap.status !== 'PENDING' && swap.status !== 'EXPIRED') {
+      throw ApiError.badRequest(
+        ApiErrorCode.InvalidStateTransition,
+        `Swap ${swap.id} is ${swap.status}; build a new swap.`,
+      );
+    }
+
+    let count: number;
+    try {
+      ({ count } = await this.prisma.chainSwap.updateMany({
+        where: {
+          id: swap.id,
+          status: { in: ['PENDING', 'EXPIRED'] },
+          txHash: null,
+        },
+        data: { status: 'SUBMITTED', txHash: hash },
+      }));
+    } catch (err) {
+      // Another swap recorded the same hash between the read and this write.
+      if (isUniqueViolation(err)) throw sentElsewhere(hash);
+      throw err;
+    }
+    const row = await this.prisma.chainSwap.findUniqueOrThrow({
+      where: { id: swap.id },
+    });
+    if (count === 1) {
+      await this.emit(consumer.username, 'SWAP_SUBMITTED', row);
+    } else if (row.txHash !== hash) {
+      // A concurrent submit recorded another hash first.
+      throw submittedWith(row);
+    }
+    return {
+      submitted: true,
+      status: row.status,
+      txHash: hash,
       swap: this.present(row),
     };
   }
@@ -683,4 +782,25 @@ export class ChainSwapsService {
   ): Promise<boolean> {
     return this.webhooks.emit(username, type, this.present(swap));
   }
+}
+
+/** `Solana`, `Monad`: the chain as a message names it. */
+function chainLabel(swap: ChainSwap): string {
+  return swap.chain.charAt(0).toUpperCase() + swap.chain.slice(1);
+}
+
+/** A sent transaction is recorded on one swap only. */
+function sentElsewhere(hash: string): ApiError {
+  return ApiError.badRequest(
+    ApiErrorCode.ValidationFailed,
+    `Transaction ${hash} is already recorded on another swap`,
+  );
+}
+
+function submittedWith(swap: ChainSwap): ApiError {
+  return ApiError.badRequest(
+    ApiErrorCode.InvalidStateTransition,
+    `Swap ${swap.id} was already submitted with transaction ${swap.txHash}; ` +
+      'build a new swap.',
+  );
 }

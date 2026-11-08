@@ -1101,7 +1101,7 @@ Acessível com a chave pública hoje:
 | --- | --- |
 | `POST /v1/swaps/quote` | Precifica um caminho a partir do Horizon; uma função pura da requisição |
 | `POST /v1/swaps` | Monta um envelope não assinado que quem chama assina |
-| `POST /v1/swaps/:id/submit` | Transmite um envelope assinado por quem chama: nada sobre o swap, nem mesmo seu status, é respondido até que o corpo seja o envelope daquele swap trazendo uma assinatura; um `X-Record-Token` errado é recusado, e um ausente ainda é aceito por enquanto (veja abaixo); com limite de taxa |
+| `POST /v1/swaps/:id/submit` | Transmite um envelope assinado por quem chama: nada sobre o swap, nem mesmo seu status, é respondido até que o corpo seja o envelope daquele swap trazendo uma assinatura (um `txHash` da Monad: até que a transação que ele nomeia, lida da rede, seja a chamada daquele swap enviada pelo seu source); um `X-Record-Token` errado é recusado, e um ausente ainda é aceito por enquanto (veja abaixo); com limite de taxa |
 | `GET /v1/cross-chain-swaps/assets` \| `POST /v1/cross-chain-swaps/quote` | A lista de tokens da NEAR Intents e uma cotação a seco; funções puras da requisição |
 | `POST /v1/cross-chain-swaps` | Um endereço de depósito para os fundos de quem chama; um `Idempotency-Key` repetido só é respondido se a requisição coincidir |
 | `POST /v1/cross-chain-swaps/:id/deposit` | Aponta à NEAR Intents uma transação que ela mesma verifica on-chain; um `X-Record-Token` errado é recusado, e um ausente ainda é aceito por enquanto (veja abaixo); com limite de taxa |
@@ -1358,7 +1358,7 @@ da Stellar, não custodial de ponta a ponta:
 
 ```
 POST /v1/swaps/quote {chain} → POST /v1/swaps {chain, source} → wallet signs `transaction`
-  → POST /v1/swaps/{id}/submit {signedTransaction} → observer → SUCCEEDED / FAILED
+  → POST /v1/swaps/{id}/submit {signedTransaction | txHash} → observer → SUCCEEDED / FAILED
 ```
 
 - **Ativos:** o ticker nativo (`SOL`, `MON`), `native`, ou o endereço do mint
@@ -1375,6 +1375,18 @@ POST /v1/swaps/quote {chain} → POST /v1/swaps {chain, source} → wallet signs
   `400 transaction_rejected` e o swap fica `PENDING`; só o veredito da própria
   rede, lido pelo observador, o torna `SUCCEEDED` ou `FAILED`. Swaps não enviados
   ou não vistos passam a `EXPIRED`. Os webhooks são os mesmos eventos `SWAP_*`.
+- **`txHash` (só Monad)** é para uma wallet que envia a transação ela mesma e
+  devolve só o seu hash (o `eth_sendTransaction` de uma wallet EVM de
+  navegador): o submit recebe o hash em vez de `signedTransaction`, lê essa
+  transação do RPC de Monad próprio deste serviço, confere que é a mesma chamada
+  (`to`, `input`, `value`, chain 143) enviada de `source` e a registra como
+  `SUBMITTED` sem transmitir nada. Se o nó ainda não a tem, é
+  `400 transaction_not_found`: nada é registrado, tente de novo em alguns
+  segundos. O mesmo hash de novo responde o swap como está; um hash registrado
+  em outro swap é recusado. A janela de dois minutos não se aplica: a transação
+  já está na rede. A `approval` é enviada pela wallet antes e nunca é submetida
+  aqui. A Solana continua com `signedTransaction`, já que suas wallets assinam
+  sem enviar.
 - **Comissão:** a taxa do plano, como na Stellar, mas o agregador a tira da
   **saída**. O Jupiter paga seu `platformFeeBps` na conta de tokens de
   `SOLANA_SWAP_FEE_WALLET` para o mint de saída, que precisa existir — se faltar,
