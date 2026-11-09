@@ -1,6 +1,9 @@
 import { HttpStatus } from '@nestjs/common';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
-import { resolvePlanCommissionBps } from '@/common/plan-commission';
+import {
+  commissionForSource,
+  resolvePlanCommissionBps,
+} from '@/common/plan-commission';
 import type { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 
 /**
@@ -87,5 +90,23 @@ describe('resolvePlanCommissionBps', () => {
     expect(
       resolvePlanCommissionBps(config('development', 50, ''), consumer(null)),
     ).toBe(0);
+  });
+});
+
+/**
+ * The operator swapping from its own fee account: a commission to itself moves nothing, and the
+ * payment to self it used to put in a Stellar envelope was read by the wallet's signing guard as
+ * an overcharge on every such swap.
+ */
+describe('commissionForSource', () => {
+  it('charges nothing when the source is the fee wallet', () => {
+    expect(commissionForSource(65, 'GFEE', 'GFEE')).toBe(0);
+  });
+
+  it('charges the plan rate to any other source, and when either side is unknown', () => {
+    expect(commissionForSource(65, 'GOTHER', 'GFEE')).toBe(65);
+    expect(commissionForSource(65, undefined, 'GFEE')).toBe(65);
+    expect(commissionForSource(65, null, 'GFEE')).toBe(65);
+    expect(commissionForSource(65, 'GFEE', '')).toBe(65);
   });
 });

@@ -79,3 +79,20 @@ export function commissionWithRecipient(
     `A swap commission applies to this plan but ${variable} is not set`,
   );
 }
+
+/**
+ * No commission for an operation whose source IS the wallet the commission is paid to: the
+ * operator swapping (or withdrawing) from its own fee account. A fee to oneself moves nothing,
+ * and on Stellar it put a payment to the source itself in the envelope, which a wallet that
+ * bounds the commission (the Cosmos Pay Wallet's signing guard) summed together with the swap's
+ * own output and refused as an overcharge. The caller passes both addresses as the chain spells
+ * them (`normalizeAddress` off Stellar). A quote names no source, so it still shows the rate;
+ * what is built charges none. USDT0 already skips it the same way (`priceFees`).
+ */
+export function commissionForSource(
+  feeBps: number,
+  source: string | null | undefined,
+  feeWallet: string | null | undefined,
+): number {
+  return source && feeWallet && source === feeWallet ? 0 : feeBps;
+}

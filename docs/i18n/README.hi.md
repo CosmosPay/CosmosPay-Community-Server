@@ -1213,7 +1213,7 @@ plan की दर** है, जिसे gateway एक भरोसेमं�
 **कभी भी request parameter नहीं होता**, और APISIX client की भेजी हर कॉपी को overwrite कर देता है, इसलिए
 दर को न तो टाला जा सकता है न घटाया जा सकता है। fee **source asset** से ली जाती है
 और पहले payment
-operation के रूप में platform वॉलेट (`STELLAR_SWAP_FEE_WALLET`) को दी जाती है; **बाकी** राशि swap से होकर route होती है। अगर plan fee लागू हो लेकिन
+operation के रूप में platform वॉलेट (`STELLAR_SWAP_FEE_WALLET`) को दी जाती है; **बाकी** राशि swap से होकर route होती है। जब source ख़ुद वही वॉलेट हो (operator अपने ही funds swap कर रहा हो), तो कोई commission नहीं ली जाती: Solana और Monad के swaps और liquidity withdrawals भी इसे इसी तरह छोड़ते हैं, और quote, जिसमें source नहीं होता, plan की दर दिखाता रहता है। अगर plan fee लागू हो लेकिन
 कोई platform वॉलेट कॉन्फ़िगर न हो, तो swap बनाना `503` के साथ विफल होता है (operator की
 misconfiguration)। `STELLAR_SWAP_FEE_BPS` केवल gateway के बिना local dev के लिए
 fallback है (और वॉलेट सेट न होने पर वह खुद भी बंद रहता है)।

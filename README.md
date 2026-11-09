@@ -1216,7 +1216,7 @@ the calling organization's plan**, injected by the gateway as a trusted header
 **never a request parameter**, and APISIX overwrites any client-supplied copy, so
 the rate cannot be bypassed or undercut. The fee is taken from the **source asset**
 and paid to the platform wallet (`STELLAR_SWAP_FEE_WALLET`) as a first payment
-operation; the **remainder** is routed through the swap. If a plan fee applies but
+operation; the **remainder** is routed through the swap. When the source IS that wallet (the operator swapping its own funds), no commission is charged: Solana and Monad swaps and liquidity withdrawals skip it the same way, and a quote, which names no source, still shows the plan rate. If a plan fee applies but
 no platform wallet is configured, swap creation fails with `503` (operator
 misconfiguration). `STELLAR_SWAP_FEE_BPS` is only a fallback for local dev without
 the gateway (and is itself disabled when no wallet is set).
