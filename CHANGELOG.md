@@ -2,6 +2,11 @@
 
 All notable changes to the Cosmos Pay Community Server are documented here.
 Generated from [Conventional Commits](https://www.conventionalcommits.org) by [git-cliff](https://git-cliff.org).
+## [1.13.1] - 2026-11-09
+
+### Bug Fixes
+- Charge no commission to the fee wallet itself (30d87d1)
+
 ## [1.13.0] - 2026-11-08
 
 ### Features
