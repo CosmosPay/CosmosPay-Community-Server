@@ -1276,7 +1276,7 @@ Organisation ableitet. Sie ist **nie ein Request-Parameter**, und APISIX übersc
 jede vom Client mitgeschickte Kopie, sodass der Satz weder umgangen noch unterboten
 werden kann. Die Gebühr wird vom **Quell-Asset** abgezogen und als erste
 Payment-Operation an die Plattform-Wallet (`STELLAR_SWAP_FEE_WALLET`) gezahlt; der
-**Rest** wird durch den Swap geroutet. Wenn eine Plan-Gebühr gilt, aber keine
+**Rest** wird durch den Swap geroutet. Ist die Quelle diese Wallet selbst (der Operator tauscht eigene Mittel), wird keine Provision berechnet: Swaps auf Solana und Monad sowie Liquiditätsabhebungen lassen sie ebenso weg, und ein Angebot, das keine Quelle nennt, zeigt weiterhin den Plansatz. Wenn eine Plan-Gebühr gilt, aber keine
 Plattform-Wallet konfiguriert ist, schlägt das Anlegen des Swaps mit `503` fehl
 (Fehlkonfiguration durch den Operator). `STELLAR_SWAP_FEE_BPS` ist nur ein Fallback für
 die lokale Entwicklung ohne Gateway (und ist selbst deaktiviert, wenn keine Wallet

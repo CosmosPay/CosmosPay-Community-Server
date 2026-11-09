@@ -1233,7 +1233,7 @@ organização. Ela **nunca é um parâmetro da requisição**, e o APISIX sobres
 qualquer cópia enviada pelo cliente, então a taxa não pode ser contornada nem
 reduzida. A taxa é cobrada do **ativo de origem** e paga à carteira da plataforma
 (`STELLAR_SWAP_FEE_WALLET`) como uma primeira operação de pagamento; o **restante** é
-roteado pelo swap. Se uma taxa de plano se aplica, mas nenhuma carteira da plataforma
+roteado pelo swap. Quando a origem É essa carteira (o operador fazendo swap dos próprios fundos), nenhuma taxa é cobrada: os swaps em Solana e Monad e as retiradas de liquidez a omitem da mesma forma, e uma cotação, que não informa a origem, continua mostrando a taxa do plano. Se uma taxa de plano se aplica, mas nenhuma carteira da plataforma
 está configurada, a criação do swap falha com `503` (erro de configuração do
 operador). `STELLAR_SWAP_FEE_BPS` é apenas um fallback para desenvolvimento local sem
 o gateway (e ele próprio fica desativado quando nenhuma carteira está definida).

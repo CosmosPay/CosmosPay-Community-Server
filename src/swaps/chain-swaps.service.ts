@@ -21,6 +21,7 @@ import { formatUnits, parseUnits } from '@/chains/units';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import {
+  commissionForSource,
   commissionWithRecipient,
   resolvePlanCommissionBps,
 } from '@/common/plan-commission';
@@ -627,7 +628,12 @@ export class ChainSwapsService {
     // (waived only by SWAP_COMMISSION_DEV_WAIVER, outside production).
     const feeBps = commissionWithRecipient(
       this.config,
-      resolvePlanCommissionBps(this.config, consumer),
+      // The fee wallet swapping its own funds pays itself nothing.
+      commissionForSource(
+        resolvePlanCommissionBps(this.config, consumer),
+        dto.source ? normalizeAddress(chain, dto.source) : null,
+        feeWallet ? normalizeAddress(chain, feeWallet) : null,
+      ),
       feeWallet,
       `${chain.toUpperCase()}_SWAP_FEE_WALLET`,
     );

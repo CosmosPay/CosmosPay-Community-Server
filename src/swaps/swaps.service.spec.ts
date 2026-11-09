@@ -1545,6 +1545,23 @@ describe('SwapsService merchant fee', () => {
   // 1.5% of 10 XLM is 0.15, plus 0.1 fixed: 0.25 to the merchant.
   const merchantFee = { bps: 150, fixed: '0.1', wallet: MERCHANT };
 
+  it('charges the fee wallet nothing when it swaps its own funds', async () => {
+    const { service } = make();
+
+    const view = await service.create(consumer, {
+      ...createDto,
+      source: FEE_WALLET,
+    });
+
+    // No payment to itself: the whole amount goes through the path payment.
+    const ops = opsOf(view.xdr);
+    expect(ops.map((op) => op.type)).toEqual(['pathPaymentStrictSend']);
+    expect((ops[0] as Operation.PathPaymentStrictSend).sendAmount).toBe(
+      '10.0000000',
+    );
+    expect(view).toMatchObject({ feeAmount: '0', feeBps: 0 });
+  });
+
   it('pays the merchant by its own payment, deducted from the amount by default', async () => {
     const { service, prisma } = make();
 

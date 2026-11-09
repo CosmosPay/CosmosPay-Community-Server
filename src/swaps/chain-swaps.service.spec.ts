@@ -220,6 +220,14 @@ describe('ChainSwapsService', () => {
     }
   });
 
+  it('charges the fee wallet nothing when it swaps its own funds', async () => {
+    const { service, solana } = setup(SOURCE);
+    const quote = await service.quote(consumer, DTO);
+
+    expect(solana.quote.mock.calls[0][0]).toMatchObject({ feeBps: 0 });
+    expect(quote).toMatchObject({ fee: { bps: 0 } });
+  });
+
   it('refuses a commission it has nowhere to pay', async () => {
     const { service } = setup('');
     const err = await rejection(service.quote(consumer, DTO));

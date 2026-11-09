@@ -1258,7 +1258,7 @@ deriva del plan de la organización. **Nunca es un parámetro de la solicitud**,
 APISIX sobrescribe cualquier copia enviada por el cliente, por lo que la tarifa no
 puede evadirse ni reducirse. La comisión se toma del **activo de origen** y se paga a
 la wallet de la plataforma (`STELLAR_SWAP_FEE_WALLET`) como una primera operación de
-pago; el **resto** se enruta a través del swap. Si corresponde una comisión de plan
+pago; el **resto** se enruta a través del swap. Cuando el origen ES esa wallet (el operador haciendo swap de sus propios fondos), no se cobra comisión: los swaps en Solana y Monad y los retiros de liquidez la omiten igual, y una cotización, que no nombra el origen, sigue mostrando la tarifa del plan. Si corresponde una comisión de plan
 pero no hay una wallet de la plataforma configurada, la creación del swap falla con
 `503` (error de configuración del operador). `STELLAR_SWAP_FEE_BPS` es solo un
 fallback para desarrollo local sin el gateway (y queda desactivado cuando no hay una

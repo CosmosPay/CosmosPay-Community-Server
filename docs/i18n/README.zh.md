@@ -838,7 +838,7 @@ quote → build XDR → customer signs in wallet → POST /submit → Stellar ex
 
 网络由 API key 类型决定（prod → public，dev → testnet），与支付意图相同；每个 swap 都会被**持久化**（`swap` 表），并限定在发起调用的消费者范围内（`PENDING → SUBMITTED → SUCCEEDED/FAILED`）。
 
-**手续费（按组织计，在服务端强制执行）。** 佣金是**发起调用的组织所属套餐的费率**，由网关以受信任请求头（`X-Plan-Swap-Fee-Bps`）的形式注入，开发者平台根据组织的套餐推导出该值。它**从不是请求参数**，而且 APISIX 会覆盖客户端提供的任何副本，因此费率无法被绕过或压低。手续费从**源资产**中扣除，作为第一个支付操作支付到平台钱包（`STELLAR_SWAP_FEE_WALLET`）；**剩余部分**通过 swap 进行路由。如果适用套餐手续费但未配置平台钱包，swap 创建会以 `503` 失败（运维配置错误）。`STELLAR_SWAP_FEE_BPS` 只是没有网关的本地开发环境中的回退值（未设置钱包时它本身也会被禁用）。
+**手续费（按组织计，在服务端强制执行）。** 佣金是**发起调用的组织所属套餐的费率**，由网关以受信任请求头（`X-Plan-Swap-Fee-Bps`）的形式注入，开发者平台根据组织的套餐推导出该值。它**从不是请求参数**，而且 APISIX 会覆盖客户端提供的任何副本，因此费率无法被绕过或压低。手续费从**源资产**中扣除，作为第一个支付操作支付到平台钱包（`STELLAR_SWAP_FEE_WALLET`）；**剩余部分**通过 swap 进行路由。当 source 就是该钱包本身（运营方兑换自己的资金）时，不收取佣金：Solana 和 Monad 上的 swap 以及流动性提取同样跳过它；报价不指定 source，因此仍显示套餐费率。如果适用套餐手续费但未配置平台钱包，swap 创建会以 `503` 失败（运维配置错误）。`STELLAR_SWAP_FEE_BPS` 只是没有网关的本地开发环境中的回退值（未设置钱包时它本身也会被禁用）。
 
 **滑点。** 报价的估算值减去 `slippageBps`（默认为 `STELLAR_SWAP_SLIPPAGE_BPS`，上限为 `STELLAR_SWAP_MAX_SLIPPAGE_BPS`）后，成为路径支付在链上的 `destMin`——因此 swap 宁可**回滚**，也不会交付少于调用方同意接受的数额。
 
