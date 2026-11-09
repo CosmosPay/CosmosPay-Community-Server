@@ -1250,7 +1250,7 @@ l'organisation. Ce n'est **jamais un paramètre de requête**, et APISIX écrase
 fournie par le client, de sorte que le taux ne peut être ni contourné ni réduit. Les frais
 sont prélevés sur l'**actif source** et versés au wallet de la plateforme
 (`STELLAR_SWAP_FEE_WALLET`) sous la forme d'une première opération de paiement ; le **reste**
-est routé via le swap. Si des frais de plan s'appliquent mais qu'aucun wallet de plateforme
+est routé via le swap. Quand la source EST ce wallet (l'opérateur qui échange ses propres fonds), aucune commission n'est prélevée : les swaps sur Solana et Monad et les retraits de liquidité l'omettent de la même façon, et une cotation, qui ne nomme pas de source, affiche toujours le taux du plan. Si des frais de plan s'appliquent mais qu'aucun wallet de plateforme
 n'est configuré, la création du swap échoue avec `503` (mauvaise configuration de
 l'opérateur). `STELLAR_SWAP_FEE_BPS` n'est qu'un repli pour le développement local sans
 passerelle (et il est lui-même désactivé lorsqu'aucun wallet n'est défini).

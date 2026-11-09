@@ -14,7 +14,10 @@ import { AppConfig, StellarNetwork } from '@/config/configuration';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import type { MerchantFeeTerms } from '@/common/merchant-fee/merchant-fee';
-import { resolvePlanCommissionBps } from '@/common/plan-commission';
+import {
+  commissionForSource,
+  resolvePlanCommissionBps,
+} from '@/common/plan-commission';
 import { isUniqueViolation } from '@/common/prisma-errors';
 import { resolveNetwork } from '@/common/stellar-network';
 import { PrismaService } from '@/prisma/prisma.service';
@@ -529,8 +532,13 @@ export class LiquidityPoolsService {
     // Plan commission — charged ONLY on the gain (redeemed − proportional cost
     // basis), and only for shares whose cost basis we recorded from deposits
     // made through Cosmos Pay. Shares with no known basis are taxed nothing.
-    const feeBps = resolvePlanCommissionBps(this.config, consumer);
     const feeWallet = this.feeWallet();
+    // The fee wallet withdrawing its own position pays itself nothing.
+    const feeBps = commissionForSource(
+      resolvePlanCommissionBps(this.config, consumer),
+      dto.source,
+      feeWallet,
+    );
     let feeA = 0n;
     let feeB = 0n;
     if (feeBps > 0) {

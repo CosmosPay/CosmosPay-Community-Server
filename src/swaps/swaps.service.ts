@@ -19,7 +19,10 @@ import {
   resolveMerchantFee,
   splitMerchantFee,
 } from '@/common/merchant-fee/merchant-fee';
-import { resolvePlanCommissionBps } from '@/common/plan-commission';
+import {
+  commissionForSource,
+  resolvePlanCommissionBps,
+} from '@/common/plan-commission';
 import { isUniqueViolation } from '@/common/prisma-errors';
 import { resolveNetwork } from '@/common/stellar-network';
 import { project } from '@/common/projection';
@@ -268,14 +271,19 @@ export class SwapsService {
       if (existing) return this.replay(existing, terms, consumer);
     }
 
+    const feeWallet = this.feeWallet();
+    // The fee wallet swapping its own funds pays itself nothing (commissionForSource).
     const priced = await this.priceSwap(
       network,
       dto,
-      resolvePlanCommissionBps(this.config, consumer),
+      commissionForSource(
+        resolvePlanCommissionBps(this.config, consumer),
+        dto.source,
+        feeWallet,
+      ),
     );
 
     const destination = terms.destination;
-    const feeWallet = this.feeWallet();
     const feeStroops = toStroops(priced.feeAmount);
 
     // A configured fee with nowhere to send it is a misconfiguration, not a
