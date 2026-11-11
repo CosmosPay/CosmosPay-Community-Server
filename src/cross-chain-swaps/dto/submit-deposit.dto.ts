@@ -4,7 +4,7 @@ import { IsString, Length } from 'class-validator';
 @ApiSchema({
   description:
     "Reports the transaction that paid a cross-chain swap's deposit address, " +
-    'so NEAR Intents can start the swap without waiting for its indexer.',
+    'so the cross-chain route can start the swap without waiting for its indexer.',
 })
 export class SubmitDepositDto {
   @ApiProperty({

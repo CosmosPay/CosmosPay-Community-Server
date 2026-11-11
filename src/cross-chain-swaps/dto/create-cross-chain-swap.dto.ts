@@ -5,7 +5,7 @@ import { QuoteCrossChainSwapDto } from '@/cross-chain-swaps/dto/quote-cross-chai
 @ApiSchema({
   description:
     'A cross-chain swap request: the quote fields plus an optional ' +
-    'idempotency key. The answer carries a NEAR Intents deposit address to pay.',
+    'idempotency key. The answer carries a cross-chain deposit address to pay.',
 })
 export class CreateCrossChainSwapDto extends QuoteCrossChainSwapDto {
   @ApiPropertyOptional({

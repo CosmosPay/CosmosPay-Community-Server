@@ -232,7 +232,7 @@ describe('ChainSwapsService', () => {
     const { service } = setup('');
     const err = await rejection(service.quote(consumer, DTO));
     expect(err.code).toBe(ApiErrorCode.Misconfigured);
-    expect(err.message).toContain('SOLANA_SWAP_FEE_WALLET');
+    expect(err.operatorDetail).toContain('SOLANA_SWAP_FEE_WALLET');
   });
 
   it('creates a PENDING swap with the transaction to sign, and notifies', async () => {

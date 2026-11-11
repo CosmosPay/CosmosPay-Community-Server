@@ -7,6 +7,7 @@ import type {
 } from '@/config/configuration';
 import type { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
+import { scrubUpstreamText } from '@/common/provider-names';
 import { resolveBlindpayEnvironment } from '@/native-plugins/blindpay/blindpay-environment';
 import { BLINDPAY_INSTANCE_ENV_VARS } from '@/native-plugins/blindpay/blindpay.constants';
 
@@ -265,7 +266,7 @@ export class BlindpayInstance {
       return new ApiError(
         HttpStatus.GATEWAY_TIMEOUT,
         ApiErrorCode.ProviderUnavailable,
-        'BlindPay request timed out',
+        'Fiat partner request timed out',
       );
     }
     const detail = err instanceof Error ? err.message : 'unknown error';
@@ -296,9 +297,9 @@ export class BlindpayInstance {
       // BlindPay is not down, this deployment never set up the instance this
       // caller's environment uses, and a caller that retries on
       // `provider_unavailable` would retry for as long as that lasts.
-      throw ApiError.unavailable(
-        ApiErrorCode.Misconfigured,
-        `BlindPay (${this.environment}) is not configured: set ${BLINDPAY_INSTANCE_ENV_VARS[this.environment]}.`,
+      throw ApiError.misconfigured(
+        `Fiat is not configured on this deployment (${this.environment}).`,
+        `set ${BLINDPAY_INSTANCE_ENV_VARS[this.environment]}`,
       );
     }
   }
@@ -348,5 +349,6 @@ function maskDigits(text: string): string {
 function redactProviderDetail(payload: unknown, max = 200): string | null {
   const message = extractMessage(payload);
   if (!message) return null;
-  return truncate(maskDigits(message), max);
+  // Relayed to the caller: the provider's own words carry its name and links.
+  return truncate(maskDigits(scrubUpstreamText(message)), max) || null;
 }

@@ -779,6 +779,38 @@ refreshes it (ledger first, then LayerZero Scan), throttled per row by `lastChec
   `series-outcomes.spec.ts` pins each decision. A new swap table is one entry
   in `SWAP_SOURCES` (`analytics.service.ts`) and one kind in `SERIES_SWAP_KINDS`.
 
+## A client never reads a provider's name
+
+Product owner, 2026-11-11: no API response names the providers Cosmos Pay is built
+on, "in errors or anything". Error messages, the OpenAPI document (summaries,
+descriptions, examples, tags, `x-cosmos-upstream` labels, schema names, operation
+ids) and human-readable fields say what a service DOES: the cross-chain route, the
+fiat partner, the P2P marketplace, the Solana / Monad swap route, the bridge, the
+vault protocol, the protected-payments service. The real names stay where only the
+operator reads them: logs, env var names, code, comments and this file. It is the
+private payments rule again: prose is neutral, identifiers are a contract.
+
+- **The vocabulary is one table**, `src/common/provider-names.constants.ts`;
+  `neutralizeProviderNames` / `providerNamesIn` (`src/common/provider-names.ts`)
+  apply it. A new provider gets a row there in the change that integrates it.
+- **Three places enforce it.** `findOpenApiIssues` refuses a document whose prose
+  names one, so `openapi:generate` and CI fail first; `AllExceptionsFilter`
+  rewrites any message (and `details` text) that still names one, and logs the
+  original; `requestUpstreamJson` takes a neutral `service` beside `provider`
+  and relays a provider's own reason only through `scrubUpstreamText` (names in
+  any case, links and domains out). A client that relays a provider's text by hand
+  (`BlindpayClient`, Trustless Work, Kuru, Jupiter, DeFindex) scrubs it the same way.
+- **A misconfiguration names no setting.** `ApiError.misconfigured(message,
+  operatorDetail)`: the message says what the deployment cannot do, the env var to
+  set goes in `operatorDetail`, which the filter logs and never sends.
+- **Identifiers that already carry a name are the published contract and stay**
+  (`/v1/defindex`, `blindpayId`, the `jupiter` / `kuru` provider enum, the
+  `*_bitso` rails, the fiat partner's passthrough fields). Renaming one is a
+  breaking change: add the neutral field beside it (`bridgeContract` beside
+  `oft`, `serviceFeeBps` beside `trustlessWorkBps`), deprecate the old one,
+  and say so in **Upgrading**. Docs-only identifiers (schema names, operation ids,
+  tags, rate-limit bucket names) are renamed outright.
+
 ## The OpenAPI contract ships with the route — review Swagger every time
 
 `openapi/openapi.json` is what Swagger UI renders at `/docs` and what an
@@ -820,7 +852,7 @@ How failures get documented — use these, never a hand-written
 | validates input, is gated, takes a `{param}`, or can throw at all | nothing | 400 / 401 + 403 / 404 / 500, attached by `swagger.ts` |
 | is `@Public()` | nothing — the decorator does it | `security: []`, no 401/403 |
 | is `@RateLimit(...)` | nothing — the decorator does it | 429 + `Retry-After`, `ratelimit-*` on 2xx |
-| calls a third party while serving — any `UpstreamProvider`: BlindPay, Horizon, Solana, Monad, NEAR Intents, Jupiter, Kuru Flow | `@ApiUpstream('BlindPay', …)` on **that handler**, naming each one it reaches | 502/503/504 per provider (Horizon: 503 only — `UPSTREAM_FAILURES` in `src/swagger.ts`) |
+| calls a third party while serving — any `UpstreamProvider`, by what it is: `Fiat partner`, `Horizon`, `Solana`, `Monad`, `Cross-chain route`, `Solana swap route`, `Monad swap route`, `Soroban RPC`, `Vault protocol`, `Protected-payments service`, `P2P marketplace` | `@ApiUpstream('Fiat partner', …)` on **that handler**, naming each one it reaches | 502/503/504 per provider (Horizon: 503 only — `UPSTREAM_FAILURES` in `src/swagger.ts`) |
 | throws a code of its own (409, a domain 400, a kill-switch 403) | `@ApiErrorResponse({ status, codes })` | that status with one real example per code |
 
 - **A new `ApiErrorCode` needs an entry in `API_ERROR_CASES`**
@@ -829,13 +861,14 @@ How failures get documented — use these, never a hand-written
   `Record<ApiErrorCode, …>`, so `tsc --noEmit` fails until it has one.
 - **`@ApiUpstream` goes on the handler, not the controller**, unless every route
   in the controller really calls the provider. A list route that reads only our
-  own mirror cannot fail on BlindPay, and documenting that it can is the same
+  own mirror cannot fail on the fiat partner, and documenting that it can is the same
   noise this section exists to remove.
 - **Never document a status a route cannot return.** 409 is never attached
   centrally, because a conflict is always specific to what the route writes.
 - `npm run openapi:generate` refuses to write a spec with a missing summary or
   description, a tag an operation uses that has no entry in `TAG_DESCRIPTIONS`,
-  an em dash in any text, a failure with no body or example, an example whose
+  an em dash in any text, a provider's name in any text (see **A client never
+  reads a provider's name**), a failure with no body or example, an example whose
   `statusCode` disagrees with its status, or a 429 on a route with no budget
   (`findOpenApiIssues` in `src/swagger.ts`; `swagger.spec.ts` also runs it on
   the committed `openapi/openapi.json`). `openapi:check` runs it in CI. It cannot tell whether the

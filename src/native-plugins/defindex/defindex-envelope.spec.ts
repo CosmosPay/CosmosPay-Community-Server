@@ -700,7 +700,7 @@ describe('checkBuiltEnvelope', () => {
     expect(error.getStatus()).toBe(502);
     expect(error.code).toBe(ApiErrorCode.ProviderError);
     expect(error.message).toBe(
-      'DeFindex built a transaction that is not the requested deposit: it carries a memo',
+      'The vault protocol built a transaction that is not the requested deposit: it carries a memo',
     );
   });
 

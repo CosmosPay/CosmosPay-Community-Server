@@ -39,6 +39,7 @@ export class LayerZeroScanClient {
       return await requestUpstreamJson<LayerZeroScanResponse>(
         {
           provider: 'LayerZero Scan',
+          service: 'the bridge explorer',
           // Scan takes no key; a 401 or 403 would name this instead.
           keyEnv: 'no key (LayerZero Scan is public)',
           method: 'GET',

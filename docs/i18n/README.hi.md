@@ -753,8 +753,8 @@ gateway इस्तेमाल करती है। Postman हर request �
 health probes `security: []` के साथ प्रकाशित होते हैं।
 
 हर operation में vendor extensions होते हैं जो बताते हैं कि वह क्या है:
-`x-cosmos-rate-limit` (उसके budgets: वह `429` लौटा सकता है), `x-cosmos-upstream` (जिस
-provider को वह कॉल करता है: वह `502`/`503`/`504` लौटा सकता है), `x-cosmos-public`,
+`x-cosmos-rate-limit` (उसके budgets: वह `429` लौटा सकता है), `x-cosmos-upstream` (वह
+जिस तरह की service को कॉल करता है, उसका नाम कभी नहीं: वह `502`/`503`/`504` लौटा सकता है), `x-cosmos-public`,
 `x-cosmos-public-key`, और `x-cosmos-scopes` / `x-cosmos-scopes-any` (वे scopes जो उसकी API
 key के पास होने चाहिए, सभी / उनमें से एक, जिन्हें `@RequirePermissions` /
 `@RequireAnyPermission` प्रकाशित करते हैं)। API key लेने वाले हर route पर, उसके `@ApiOperation`
@@ -2482,6 +2482,16 @@ seal होती हैं और कभी लौटाई नहीं जा
 
 ## अपग्रेड — breaking changes और deploy नोट्स
 
+### Responses कभी किसी provider का नाम नहीं लेते
+
+- **कोई migration नहीं, कोई नया variable नहीं, कोई code नहीं बदला:** सिर्फ़ prose बदली है। `code` से मिलान करें, कभी message या label से नहीं।
+- **Messages और contract बताते हैं कि service क्या करती है, कभी यह नहीं कि उसे कौन चलाता है:** cross-chain route, fiat partner, P2P marketplace, Solana और Monad के swap routes, bridge, vault protocol, protected-payments service। `provider_error` message में आगे भेजा गया किसी provider का अपना कारण उसके नामों और links से साफ़ किया जाता है।
+- **`503 misconfigured` अब सेट करने वाले variable का नाम नहीं लेता:** server log उसे route के साथ लिखता है (`AllExceptionsFilter`)।
+- **`x-cosmos-upstream` के labels** अब `Fiat partner`, `Cross-chain route`, `Solana swap route`, `Monad swap route`, `Vault protocol`, `Protected-payments service` हैं (पहले `BlindPay`, `NEAR Intents`, `Jupiter`, `Kuru Flow`, `DeFindex`, `Trustless Work` थे)। `/v1/defindex` के operations पर tag `Yield vaults` है, उनके operation ids `VaultsController_*` हैं और schemas `VaultDepositDto`, `VaultWithdrawDto`, `VaultSubmitDto`, `VaultBuildEntity`, `VaultSubmitResultEntity`।
+- **पुराने fields के साथ नए fields, पुराने बने रहते हैं और deprecated हैं:** `GET /v1/usdt0/routes` पर `bridgeContract` (`oft`), protected payments पर `fees.serviceFeeBps` (`fees.trustlessWorkBps`), और platform console की organization counts में `fiatReceivers` (`blindpayReceivers`)।
+- **नए नाम वाले budgets:** `fiat:quota` (पहले `blindpay:quota`), `vaults:build` और `vaults:submit` (पहले `defindex:build`, `defindex:submit`)। उनके counters deploy पर फिर से शुरू होते हैं।
+- **अब भी provider के नाम वाले, क्योंकि वे contract हैं:** `/v1/defindex` paths, `blindpayId`, `provider` के `jupiter` / `kuru` values, `spei_bitso`, `transfers_bitso` और `ach_cop_bitso` rails, और fiat partner के अपने answers से वैसे ही आने वाले fields (`blindpay_bank_details`, `blindpayContractAddress`)।
+
 ### P2P on-ramp और off-ramp: एक नया native plugin और एक table
 
 - **Migration `20261105120000_p2p_ramp_sessions`** `p2p_ramp_session` table बनाता है; कुछ
@@ -2572,8 +2582,8 @@ seal होती हैं और कभी लौटाई नहीं जा
 - **बहुत बड़ी राशि अब `400 validation_failed` है, `502 provider_error` नहीं:**
   `amounts` और `shares` integer strings हैं जो 9007199254740991 से बड़ी नहीं, वह
   सबसे बड़ा मान जिसे `@defindex/sdk` बिल्कुल सही ढोता है।
-- **नए budgets:** दोनों builds `defindex:build` साझा करते हैं और submit का
-  `defindex:submit` है, हर एक 20 प्रति मिनट प्रति consumer और client address
+- **नए budgets:** दोनों builds `vaults:build` साझा करते हैं और submit का
+  `vaults:submit` है, हर एक 20 प्रति मिनट प्रति consumer और client address
   (`429 rate_limited`)। उनकी DeFindex विफलताएँ अब contract में हैं
   (`x-cosmos-upstream`: 502, 503)।
 - **नया variable `DEFINDEX_MAX_FEE_STROOPS`** (default `10000000`, 1 XLM, वही सीमा जो

@@ -19,16 +19,16 @@ export class VirtualAccountsController {
 
   @Post()
   // The account number is issued by BlindPay.
-  @ApiUpstream('BlindPay')
+  @ApiUpstream('Fiat partner')
   @RequirePermissions('onramp:write')
   @ApiOperation({
     summary: 'Create a virtual account for a receiver',
     description:
-      "Opens a virtual account at BlindPay: a bank account in the receiver's " +
+      "Opens a virtual account at the fiat partner: a bank account in the receiver's " +
       'name at `banking_partner` whose deposits are converted to `token` and ' +
       'sent to `blockchain_wallet_id`, a Cosmos Pay wallet id. The account is ' +
       'mirrored here and the mirrored row is the answer. A receiver or wallet ' +
-      "that is not yours on your key's BlindPay instance is a 404, and the " +
+      "that is not yours on your key's fiat partner instance is a 404, and the " +
       'answer is `403 account_disabled` when the receiver, or the receiver ' +
       'that owns the wallet, has its fiat access disabled.',
   })
@@ -45,8 +45,8 @@ export class VirtualAccountsController {
   @ApiOperation({
     summary: "List a receiver's virtual accounts",
     description:
-      "Reads this service's mirror only (no BlindPay call), newest first. The " +
-      "receiver must be yours on your key's BlindPay instance, or the answer " +
+      "Reads this service's mirror only (no fiat partner call), newest first. The " +
+      "receiver must be yours on your key's fiat partner instance, or the answer " +
       'is 404. Paginated with `take` (default 100, max 100) and `skip`; ' +
       'answers `{ data, total, take, skip }`.',
   })

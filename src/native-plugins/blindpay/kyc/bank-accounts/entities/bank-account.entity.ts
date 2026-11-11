@@ -15,26 +15,26 @@ export class BankAccountEntity {
 
   @ApiProperty({
     example: 'ba_000000000000',
-    description: "BlindPay's id for the bank account (`ba_...`).",
+    description: "The fiat partner's id for the bank account (`ba_...`).",
   })
   blindpayId!: string;
 
   @ApiPropertyOptional({
     example: 'ach',
     description:
-      'Rail the account settles on: its BlindPay `type`, such as `ach`.',
+      'Rail the account settles on: its fiat partner `type`, such as `ach`.',
   })
   rail!: string | null;
 
   @ApiPropertyOptional({
     example: 'Acme payouts (USD)',
-    description: 'Label of the account, as BlindPay returned it.',
+    description: 'Label of the account, as the fiat partner returned it.',
   })
   name!: string | null;
 
   @ApiPropertyOptional({
     example: 'US',
-    description: 'Country of the account, as BlindPay returned it.',
+    description: 'Country of the account, as the fiat partner returned it.',
   })
   country!: string | null;
 

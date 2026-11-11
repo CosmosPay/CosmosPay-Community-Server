@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Keypair } from '@stellar/stellar-sdk';
 import type { ProtectedPaymentDeadlinePolicy } from '@generated/prisma/client';
-import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
+import { ApiError } from '@/common/errors/api-error';
 import type {
   AppConfig,
   StellarNetwork,
@@ -34,9 +34,9 @@ export class TrustlessWorkKeys {
   platform(network: StellarNetwork): Keypair {
     const secret = this.network(network).platformSecret;
     if (!secret) {
-      throw misconfigured(
-        `Protected payments are not configured on ${network}: set ` +
-          `${trustlessWorkEnvName(network, 'PLATFORM_SECRET')}.`,
+      throw ApiError.misconfigured(
+        `Protected payments are not configured on ${network}.`,
+        `set ${trustlessWorkEnvName(network, 'PLATFORM_SECRET')}`,
       );
     }
     return Keypair.fromSecret(secret);
@@ -66,18 +66,18 @@ export class TrustlessWorkKeys {
     if (policy === 'MANUAL_REVIEW') {
       const ops = this.opsResolver(network);
       if (!ops) {
-        throw misconfigured(
-          `MANUAL_REVIEW is not available on ${network}: set ` +
-            `${trustlessWorkEnvName(network, 'OPS_RESOLVER')}.`,
+        throw ApiError.misconfigured(
+          `MANUAL_REVIEW is not available on ${network}: this deployment has no review account.`,
+          `set ${trustlessWorkEnvName(network, 'OPS_RESOLVER')}`,
         );
       }
       return ops;
     }
     const resolver = this.resolver(network);
     if (!resolver) {
-      throw misconfigured(
-        `${policy} is not available on ${network}: it needs the automatic ` +
-          `resolver key, ${trustlessWorkEnvName(network, 'RESOLVER_SECRET')}.`,
+      throw ApiError.misconfigured(
+        `${policy} is not available on ${network}: this deployment has no automatic resolver key.`,
+        `set ${trustlessWorkEnvName(network, 'RESOLVER_SECRET')}`,
       );
     }
     return resolver.publicKey();
@@ -118,8 +118,4 @@ export class TrustlessWorkKeys {
   private network(network: StellarNetwork): TrustlessWorkNetworkConfig {
     return this.config.get('trustlessWork', { infer: true }).networks[network];
   }
-}
-
-function misconfigured(message: string): ApiError {
-  return ApiError.unavailable(ApiErrorCode.Misconfigured, message);
 }

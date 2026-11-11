@@ -173,7 +173,7 @@ describe('Usdt0TransferTracker.refresh', () => {
       status: 'FAILED',
       scanStatus: 'APPLICATION_BURNED',
       failureReason:
-        'LayerZero reports the message APPLICATION_BURNED: APPLICATION_BURNED message',
+        'The bridge reports the message APPLICATION_BURNED: APPLICATION_BURNED message',
     });
   });
 

@@ -7,7 +7,7 @@ import { IsOptional, IsString } from 'class-validator';
  */
 @ApiSchema({
   description:
-    'A compliance document backing a payout (an invoice, for example), forwarded to BlindPay.',
+    'A compliance document backing a payout (an invoice, for example), forwarded to the fiat partner.',
 })
 export class PayoutDocumentDto {
   @ApiProperty({
@@ -31,7 +31,7 @@ export class PayoutDocumentDto {
 
   @ApiPropertyOptional({
     description:
-      'Free-text description of the document, forwarded to BlindPay.',
+      'Free-text description of the document, forwarded to the fiat partner.',
   })
   @IsOptional()
   @IsString()

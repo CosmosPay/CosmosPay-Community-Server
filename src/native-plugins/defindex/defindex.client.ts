@@ -8,6 +8,7 @@ import DefindexSDK, {
   type WithdrawSharesParams,
 } from '@defindex/sdk';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
+import { scrubUpstreamText } from '@/common/provider-names';
 import { AppConfig, StellarNetwork } from '@/config/configuration';
 
 /** DeFindex's name for each Stellar network this service serves. */
@@ -106,9 +107,9 @@ export class DefindexClient {
   private settings(): AppConfig['defindex'] {
     const cfg = this.config.get('defindex', { infer: true });
     if (!cfg.apiKey) {
-      throw ApiError.unavailable(
-        ApiErrorCode.Misconfigured,
-        'DeFindex is not configured',
+      throw ApiError.misconfigured(
+        'Yield vaults are not configured on this deployment.',
+        'set DEFINDEX_API_KEY',
       );
     }
     return cfg;
@@ -130,7 +131,8 @@ export class DefindexClient {
       if (error instanceof ApiError) throw error;
       throw ApiError.badGateway(
         ApiErrorCode.ProviderError,
-        error instanceof Error ? error.message : 'DeFindex request failed',
+        (error instanceof Error && scrubUpstreamText(error.message)) ||
+          'The vault request failed.',
       );
     }
   }

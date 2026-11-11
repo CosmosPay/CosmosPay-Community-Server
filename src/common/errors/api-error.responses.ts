@@ -187,21 +187,21 @@ export const API_ERROR_CASES: Readonly<Record<ApiErrorCode, ApiErrorCase>> = {
     summary:
       'Cross-chain swaps settle on mainnet only; a dev key cannot open one',
     message:
-      'Cross-chain swaps run on mainnet only: NEAR Intents has no test network. Use a prod API key.',
+      'Cross-chain swaps run on mainnet only: the cross-chain route has no test network. Use a prod API key.',
     path: '/v1/cross-chain-swaps',
   },
   [ApiErrorCode.AssetUnsupported]: {
     statuses: [400],
-    summary: 'NEAR Intents cannot swap this asset on the named chain',
+    summary: 'The cross-chain route cannot swap this asset on the named chain',
     message:
-      'NEAR Intents does not support asset "yXLM" on stellar. GET /v1/cross-chain-swaps/assets lists the ones it does.',
+      'The cross-chain route does not support asset "yXLM" on stellar. GET /v1/cross-chain-swaps/assets lists the ones it does.',
     path: '/v1/cross-chain-swaps/quote',
   },
   [ApiErrorCode.MerchantFeeUnsupported]: {
     statuses: [400],
     summary: 'This operation cannot pay a merchant fee yet',
     message:
-      'A merchant fee is not available on monad swaps on this deployment: Kuru Flow takes one referrer fee per swap and the plan commission uses it, and no merchant fee router is configured (KURU_MERCHANT_FEE_ROUTER).',
+      'A merchant fee is not available on monad swaps on this deployment: the Monad swap route takes one referrer fee per swap and the plan commission uses it, and this deployment has no merchant fee router configured.',
     path: '/v1/swaps',
   },
   [ApiErrorCode.TransactionRejected]: {
@@ -311,7 +311,7 @@ export const API_ERROR_CASES: Readonly<Record<ApiErrorCode, ApiErrorCase>> = {
   [ApiErrorCode.QuoteExpired]: {
     statuses: [400],
     summary: 'The quote is ours and yours, but past its expiry',
-    message: 'This BlindPay quote has expired. Request a new quote.',
+    message: 'This fiat partner quote has expired. Request a new quote.',
     path: '/v1/onramp/payins',
   },
 
@@ -580,8 +580,7 @@ export const API_ERROR_CASES: Readonly<Record<ApiErrorCode, ApiErrorCase>> = {
   [ApiErrorCode.Misconfigured]: {
     statuses: [503],
     summary: 'A server-side configuration error: retrying will not help',
-    message:
-      'BlindPay (prod) is not configured: set BLINDPAY_INSTANCE_ID_PROD.',
+    message: 'Fiat is not configured on this deployment (prod).',
     path: '/v1/onramp/quotes',
   },
   [ApiErrorCode.Internal]: {

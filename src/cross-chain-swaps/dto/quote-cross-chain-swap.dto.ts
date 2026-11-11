@@ -31,7 +31,7 @@ import { IsCrossChainAddress } from '@/cross-chain-swaps/is-cross-chain-address.
   description:
     'A cross-chain swap quote request: sell `amount` of `originAsset` on ' +
     '`originChain` for `destinationAsset` on `destinationChain`, paid to ' +
-    '`recipient`. NEAR Intents prices it; a failed swap refunds `refundTo`.',
+    '`recipient`. The cross-chain route prices it; a failed swap refunds `refundTo`.',
 })
 export class QuoteCrossChainSwapDto {
   @ApiProperty({
@@ -99,7 +99,7 @@ export class QuoteCrossChainSwapDto {
   @ApiPropertyOptional({
     description:
       'Slippage tolerance in basis points (100 = 1%). Below the resulting ' +
-      'minimum, NEAR Intents refunds instead of filling. Defaults to the ' +
+      'minimum, the cross-chain route refunds instead of filling. Defaults to the ' +
       'service setting; capped by it.',
     example: 100,
   })
@@ -113,9 +113,9 @@ export class QuoteCrossChainSwapDto {
   @ApiPropertyOptional({
     type: MerchantFeeDto,
     description:
-      'Your own fee on this swap, which NEAR Intents pays as a second app fee ' +
+      'Your own fee on this swap, which the cross-chain route pays as a second app fee ' +
       'to `wallet`: a NEAR account id (named, e.g. merchant.near, or 64-hex ' +
-      'implicit), credited inside NEAR Intents. App fees are whole basis ' +
+      'implicit), credited inside the cross-chain route. App fees are whole basis ' +
       'points of the deposit, so the fee is turned into the basis points it ' +
       'amounts to, rounded down. `paidBy: recipient` takes it from `amount` ' +
       '(the deposit stays `amount`); `payer` adds it to the deposit.',

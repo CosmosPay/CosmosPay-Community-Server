@@ -6,13 +6,13 @@ import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger';
  */
 @ApiSchema({
   description:
-    'A BlindPay payin quote, returned as BlindPay sent it (extra provider fields included); create the payin from `id` before `expires_at`.',
+    'A fiat partner payin quote, returned as the fiat partner sent it (extra provider fields included); create the payin from `id` before `expires_at`.',
 })
 export class PayinQuoteEntity {
   @ApiProperty({
     example: 'pq_000000000000',
     description:
-      'BlindPay quote id; pass it as `payin_quote_id` to `POST /v1/onramp/payins`.',
+      'Fiat partner quote id; pass it as `payin_quote_id` to `POST /v1/onramp/payins`.',
   })
   id!: string;
 
@@ -25,7 +25,7 @@ export class PayinQuoteEntity {
   @ApiPropertyOptional({
     example: 5.42,
     description:
-      "BlindPay's commercial quotation for this quote, passed through as it returned it.",
+      "The fiat partner's commercial quotation for this quote, passed through as it returned it.",
   })
   commercial_quotation?: number;
 

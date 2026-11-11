@@ -10,13 +10,13 @@ import { IsRedirectUrl } from '@/common/validators/is-redirect-url.validator';
  */
 @ApiSchema({
   description:
-    "Starts BlindPay's hosted terms-of-service acceptance; the customer returns to `redirect_url` with a `tos_id`.",
+    "Starts the fiat partner's hosted terms-of-service acceptance; the customer returns to `redirect_url` with a `tos_id`.",
 })
 export class InitiateTosDto {
   @ApiProperty({
     example: 'https://yourapp.com/kyc/return',
     description:
-      'Where BlindPay redirects after acceptance (gets ?tos_id=...). Must be https and on the consumer allow-list.',
+      'Where the fiat partner redirects after acceptance (gets ?tos_id=...). Must be https and on the consumer allow-list.',
   })
   @IsRedirectUrl()
   redirect_url!: string;

@@ -675,7 +675,7 @@ export class ReceiversService {
       );
       throw ApiError.forbidden(
         ApiErrorCode.KycReviewRequired,
-        `Changing ${identityFields.join(', ')} on a receiver that already exists at BlindPay requires an elevated (admin) key: identity data must be reviewed before it reaches the provider.`,
+        `Changing ${identityFields.join(', ')} on a receiver that already exists at the fiat partner requires an elevated (admin) key: identity data must be reviewed before it reaches the provider.`,
       );
     }
 

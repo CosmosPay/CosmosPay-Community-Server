@@ -17,7 +17,7 @@ export class ApproveReceiverDto {
   @ApiProperty({
     example: 'https://dev.cosmospay.lat/kyc/return/org/dev/clz9xreceiver01',
     description:
-      'Where BlindPay redirects the customer after they accept the terms. Must be https and on the consumer allow-list.',
+      'Where the fiat partner redirects the customer after they accept the terms. Must be https and on the consumer allow-list.',
   })
   @IsRedirectUrl()
   redirect_url!: string;

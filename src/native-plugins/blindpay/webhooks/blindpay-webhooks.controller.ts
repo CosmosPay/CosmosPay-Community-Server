@@ -48,7 +48,7 @@ export class BlindpayWebhooksController {
       // secret is set, within Svix's retry window.
       throw ApiError.unavailable(
         ApiErrorCode.Misconfigured,
-        'BlindPay webhooks are not configured',
+        'Fiat partner webhooks are not configured',
       );
     }
 
@@ -71,7 +71,7 @@ export class BlindpayWebhooksController {
     if (!environment) {
       throw ApiError.badRequest(
         ApiErrorCode.ValidationFailed,
-        'Invalid BlindPay webhook signature',
+        'Invalid fiat partner webhook signature',
       );
     }
 

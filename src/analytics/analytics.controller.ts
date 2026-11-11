@@ -26,7 +26,7 @@ export class AnalyticsController {
     summary:
       'Overview metrics: totals, settled volume, webhook health, 30-day series',
     description:
-      "The settled volume per asset, and every asset valued in USD at NEAR Intents' current reference price (`volumeUsd`, indicative). Without those prices the USD fields are null and the rest answers as usual.",
+      'The settled volume per asset, and every asset valued in USD at the current market reference price (`volumeUsd`, indicative). Without those prices the USD fields are null and the rest answers as usual.',
   })
   @ApiOkResponse({ type: AnalyticsSummaryEntity })
   summary(@CurrentConsumer() consumer: GatewayConsumer) {
@@ -39,7 +39,7 @@ export class AnalyticsController {
     summary: 'Activity per day, week, month or year, with the window before',
     description:
       'Payments, swaps, liquidity operations, webhook deliveries and private payments, each grouped into the buckets of `period` (UTC, weeks from Monday, a quiet bucket a zero), with the totals of the window and of the window before, for growth. ' +
-      "Payments carry their settled volume in USD too (`volumeUsd`), each asset valued at NEAR Intents' current reference price (indicative). Without those prices the USD fields are null and the rest answers as usual.",
+      'Payments carry their settled volume in USD too (`volumeUsd`), each asset valued at the current market reference price (indicative). Without those prices the USD fields are null and the rest answers as usual.',
   })
   @ApiOkResponse({ type: AnalyticsSeriesEntity })
   series(

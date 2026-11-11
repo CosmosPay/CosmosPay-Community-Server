@@ -780,7 +780,7 @@ describe('checkTrustlessWorkEnvelope', () => {
     expect(error.getStatus()).toBe(502);
     expect(error.code).toBe(ApiErrorCode.ProviderError);
     expect(error.message).toBe(
-      'Trustless Work built a transaction that is not the requested fund: it carries a memo',
+      'The protected-payments service built a transaction that is not the requested fund: it carries a memo',
     );
   });
 });

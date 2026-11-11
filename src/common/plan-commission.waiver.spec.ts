@@ -50,7 +50,8 @@ describe('commissionWithRecipient', () => {
     const error = thrown as ApiError;
     expect(error.getStatus()).toBe(HttpStatus.SERVICE_UNAVAILABLE);
     expect(error.code).toBe(ApiErrorCode.Misconfigured);
-    expect(error.message).toContain('MONAD_SWAP_FEE_WALLET');
+    expect(error.operatorDetail).toContain('MONAD_SWAP_FEE_WALLET');
+    expect(error.message).not.toContain('MONAD_SWAP_FEE_WALLET');
   });
 
   it('waives it, locally, only when SWAP_COMMISSION_DEV_WAIVER is on', () => {

@@ -170,7 +170,7 @@ export function resolveCrossChainAsset(
 function unsupported(chain: CrossChainNetworkId, asset: string): ApiError {
   return ApiError.badRequest(
     ApiErrorCode.AssetUnsupported,
-    `NEAR Intents does not support asset "${asset}" on ${chain}. ` +
+    `The cross-chain route does not support asset "${asset}" on ${chain}. ` +
       'GET /v1/cross-chain-swaps/assets lists the ones it does.',
   );
 }

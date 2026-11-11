@@ -138,8 +138,9 @@ export class MonadSwapVenue implements ChainSwapVenue {
     if (
       quote.transaction.to.toLowerCase() !== router.aggregator.toLowerCase()
     ) {
-      throw ApiError.unavailable(
-        ApiErrorCode.Misconfigured,
+      throw ApiError.misconfigured(
+        'A merchant fee is not available on Monad swaps right now: the swap route ' +
+          'moved to a router this deployment’s merchant fee router was not built for.',
         `Kuru Flow now routes through ${quote.transaction.to}, not ` +
           `${router.aggregator}, the router KURU_MERCHANT_FEE_ROUTER was ` +
           'deployed for. Deploy a MerchantFeeSwapRouter for the new one.',
@@ -150,7 +151,7 @@ export class MonadSwapVenue implements ChainSwapVenue {
     ) {
       throw ApiError.badRequest(
         ApiErrorCode.ProviderError,
-        'Kuru Flow quoted another input value than the amount asked for',
+        'The Monad swap route quoted another input value than the amount asked for',
       );
     }
     const call: MonadCall = {
@@ -229,8 +230,8 @@ export class MonadSwapVenue implements ChainSwapVenue {
         ])
       : ['', null];
     if (!aggregator || deployed.toLowerCase() !== expected?.toLowerCase()) {
-      throw ApiError.unavailable(
-        ApiErrorCode.Misconfigured,
+      throw ApiError.misconfigured(
+        'A merchant fee is not available on Monad swaps: this deployment’s merchant fee router is not the expected contract.',
         `KURU_MERCHANT_FEE_ROUTER (${address}) is not a MerchantFeeSwapRouter ` +
           'built from src/evm/merchant-fee-swap-router.artifact.ts.',
       );

@@ -78,8 +78,9 @@ export class DefindexBalanceQueryDto {
 }
 
 @ApiSchema({
+  name: 'VaultDepositDto',
   description:
-    'Request to build an unsigned deposit into a DeFindex vault for `caller`, ' +
+    'Request to build an unsigned deposit into a yield vault for `caller`, ' +
     'to sign unchanged and send to `POST /v1/defindex/submit`.',
 })
 export class DefindexDepositDto {
@@ -107,7 +108,7 @@ export class DefindexDepositDto {
   @ApiPropertyOptional({
     default: true,
     description:
-      "Forwarded to DeFindex as the `invest` argument of the vault's `deposit` call.",
+      "Forwarded to the vault protocol as the `invest` argument of the vault's `deposit` call.",
   })
   @IsOptional()
   @IsBoolean()
@@ -128,8 +129,9 @@ export class DefindexDepositDto {
 }
 
 @ApiSchema({
+  name: 'VaultWithdrawDto',
   description:
-    'Request to build an unsigned withdrawal from a DeFindex vault that burns ' +
+    'Request to build an unsigned withdrawal from a yield vault that burns ' +
     "`caller`'s shares for the vault's underlying assets, to sign unchanged and " +
     'send to `POST /v1/defindex/submit`.',
 })
@@ -154,7 +156,7 @@ export class DefindexWithdrawDto {
     minimum: 0,
     maximum: 10000,
     description:
-      "Slippage tolerance in basis points (100 = 1%), passed to DeFindex for the withdrawal's minimum outputs.",
+      "Slippage tolerance in basis points (100 = 1%), passed to the vault protocol for the withdrawal's minimum outputs.",
   })
   @IsOptional()
   @IsInt()
@@ -164,14 +166,15 @@ export class DefindexWithdrawDto {
 }
 
 @ApiSchema({
+  name: 'VaultSubmitDto',
   description:
-    'A signed DeFindex transaction to relay: one that a deposit or withdraw ' +
+    'A signed vault transaction to relay: one that a deposit or withdraw ' +
     'build on this service returned to the same API key.',
 })
 export class DefindexSubmitDto {
   @ApiProperty({
     description:
-      'The transaction a DeFindex build on this service returned, signed by ' +
+      'The transaction a vault build on this service returned, signed by ' +
       '`caller` (base64 envelope XDR).',
   })
   @IsString()
@@ -190,7 +193,7 @@ export function defindexAmount(value: string): number {
   if (!isDefindexAmount(value)) {
     throw ApiError.badRequest(
       ApiErrorCode.InvalidAmount,
-      `Amount ${value} is not an integer DeFindex can take exactly (at most ${DEFINDEX_MAX_AMOUNT})`,
+      `Amount ${value} is not an integer the vault protocol can take exactly (at most ${DEFINDEX_MAX_AMOUNT})`,
     );
   }
   return Number(value);

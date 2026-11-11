@@ -1,14 +1,20 @@
 import { HttpException, HttpStatus, Logger } from '@nestjs/common';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
+import { scrubUpstreamText } from '@/common/provider-names';
 
 /** The longest upstream message relayed to a caller; anything longer is cut. */
 const MAX_MESSAGE_LENGTH = 300;
 
 /** One JSON call to a third-party HTTP API. */
 export interface UpstreamRequest {
-  /** How errors name the provider ("NEAR Intents", "Jupiter", "Kuru Flow"). */
+  /** How the LOGS name the provider ("NEAR Intents", "Jupiter", "Kuru Flow"). */
   provider: string;
-  /** The env var holding its key, named when that key is refused. */
+  /**
+   * How a CLIENT is told about it, naming no provider ("the cross-chain
+   * route", "the Solana swap route"; `src/common/provider-names.ts`).
+   */
+  service: string;
+  /** The env var holding its key, logged (never sent) when that key is refused. */
   keyEnv: string;
   method: 'GET' | 'POST';
   url: string;
@@ -26,12 +32,15 @@ export class UpstreamNotFound extends Error {
 
 /**
  * Calls a JSON API and maps its failures, once, onto the envelope every route
- * shares — NEAR Intents, Jupiter and Kuru Flow each had to say the same thing:
+ * shares — NEAR Intents, Jupiter and Kuru Flow each had to say the same thing.
+ * The client reads `service`, never `provider`, and a reason the provider
+ * gave is relayed only once `scrubUpstreamText` has taken its names and links
+ * out of it:
  *
  *   - **400 / 422**: the provider refused the request itself (an amount below
  *     its minimum, no route) — a 400 `provider_error` carrying its short
  *     reason, because it is something the caller can change;
- *   - **401 / 403**: our key was refused — `misconfigured`, naming the env var;
+ *   - **401 / 403**: our key was refused — `misconfigured`, the env var logged;
  *   - **404**: {@link UpstreamNotFound}, for the caller to interpret;
  *   - **429**: 503 `provider_unavailable`; **5xx**: 502 `provider_error`;
  *   - a timeout is a 504, a dead socket a 502, both `provider_unavailable`.
@@ -72,7 +81,7 @@ export async function requestUpstreamJson<T>(
       throw new ApiError(
         HttpStatus.GATEWAY_TIMEOUT,
         ApiErrorCode.ProviderUnavailable,
-        `${req.provider} did not answer in time.`,
+        `${capitalize(req.service)} did not answer in time.`,
       );
     }
     logger.error(
@@ -80,7 +89,7 @@ export async function requestUpstreamJson<T>(
     );
     throw ApiError.badGateway(
       ApiErrorCode.ProviderUnavailable,
-      `Could not reach ${req.provider}.`,
+      `Could not reach ${req.service}.`,
     );
   } finally {
     clearTimeout(timer);
@@ -97,25 +106,25 @@ function statusError(
     return ApiError.badRequest(
       ApiErrorCode.ProviderError,
       message
-        ? `${req.provider} refused the request: ${message}`
-        : `${req.provider} refused the request.`,
+        ? `${capitalize(req.service)} refused the request: ${message}`
+        : `${capitalize(req.service)} refused the request.`,
     );
   }
   if (status === 401 || status === 403) {
-    return ApiError.unavailable(
-      ApiErrorCode.Misconfigured,
-      `${req.provider} rejected this deployment’s credentials: check ${req.keyEnv}.`,
+    return ApiError.misconfigured(
+      `${capitalize(req.service)} rejected this deployment’s credentials.`,
+      `${req.provider} answered ${status}: check ${req.keyEnv}`,
     );
   }
   if (status === 429) {
     return ApiError.unavailable(
       ApiErrorCode.ProviderUnavailable,
-      `${req.provider} is rate limiting this service. Retry shortly.`,
+      `${capitalize(req.service)} is rate limiting this service. Retry shortly.`,
     );
   }
   return ApiError.badGateway(
     ApiErrorCode.ProviderError,
-    `${req.provider} returned an error. Retry shortly.`,
+    `${capitalize(req.service)} returned an error. Retry shortly.`,
   );
 }
 
@@ -127,7 +136,9 @@ function safeJsonParse(text: string): unknown {
   }
 }
 
-/** The provider's own reason (`message`, else `error`), one line, bounded. */
+const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+
+/** The provider's own reason (`message`, else `error`), one line, bounded, scrubbed of its names. */
 function upstreamMessage(payload: unknown): string | null {
   if (!payload || typeof payload !== 'object') return null;
   const obj = payload as Record<string, unknown>;
@@ -135,7 +146,8 @@ function upstreamMessage(payload: unknown): string | null {
     (v): v is string => typeof v === 'string' && v.trim() !== '',
   );
   if (!raw) return null;
-  const line = raw.replace(/\s+/g, ' ').trim();
+  const line = scrubUpstreamText(raw.replace(/\s+/g, ' ').trim());
+  if (!line) return null;
   return line.length > MAX_MESSAGE_LENGTH
     ? `${line.slice(0, MAX_MESSAGE_LENGTH)}…`
     : line;

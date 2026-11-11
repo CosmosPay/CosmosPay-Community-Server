@@ -96,7 +96,7 @@ export class DefindexTransactionsService {
     if (!envelope) {
       throw ApiError.badGateway(
         ApiErrorCode.ProviderError,
-        `DeFindex returned no transaction to sign for the ${expected.kind}`,
+        `The vault protocol returned no transaction to sign for the ${expected.kind}`,
       );
     }
     const builtAt = new Date();
@@ -231,7 +231,7 @@ export class DefindexTransactionsService {
     if (current?.status === 'SUBMITTING') {
       throw ApiError.conflict(
         ApiErrorCode.OperationInFlight,
-        'This DeFindex transaction is already being submitted. Wait for that ' +
+        'This vault transaction is already being submitted. Wait for that ' +
           'submit to finish, then submit it again to read its result.',
       );
     }
@@ -273,7 +273,7 @@ function notBuiltHere(): ApiError {
 function expired(): ApiError {
   return ApiError.badRequest(
     ApiErrorCode.InvalidStateTransition,
-    'This DeFindex transaction expired before it was submitted and can no ' +
+    'This vault transaction expired before it was submitted and can no ' +
       'longer be relayed. Build a new one.',
   );
 }
