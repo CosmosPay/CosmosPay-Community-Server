@@ -2495,6 +2495,10 @@ the service under `src/native-plugins/<slug>/`, switched on by the same
 
 ## Upgrading — breaking changes and deploy notes
 
+### Payment intents: one intent by its id follows the key's network
+
+- **`GET`, `PATCH` and `DELETE /v1/payment-intents/{id}`, `POST /v1/payment-intents/{id}/validate` and `GET /v1/payment-intents/{id}/transitions` answer `404` for an intent on the other network** (an API behaviour fix): a sandbox key reaches only the account's test-network intents and a production key only its mainnet ones, as the list already did. Before, a sandbox key could read, change, validate and delete the same account's mainnet intents. No migration, no new variable.
+
 ### P2P on-ramp and off-ramp: open to the shared public key
 
 - **No migration.** The shared public key may now call `POST .../quotes`, `POST .../sessions` and `GET .../sessions/{id}` on `/v1/onramp/p2p` and `/v1/offramp/p2p`; the lists stay closed to it. A session it opens answers `publicToken`, required in `X-Record-Token` to read it back.

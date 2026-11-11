@@ -429,7 +429,10 @@ Each of these was a real finding in this codebase, not a hypothetical:
 - **Every tenant query filters by the calling consumer**, and a miss on someone
   else's row is a 404, not a 403: "exists but not yours" is an ownership oracle.
   **Every list also filters by the key's network** (`resolveNetwork`): a production key
-  listed test-network payment intents until every `findAll` carried it.
+  listed test-network payment intents until every `findAll` carried it. So does every
+  by-id read and write of a payment intent (`ownedWhere` in `PaymentIntentsService`): a
+  sandbox key could read, patch, validate and delete the same account's mainnet intents
+  until it did. A new by-id lookup of a network-scoped row takes the network too.
 - **A route whose cost an error cannot refund — XLM spent, an account created
   on-chain — carries `@RateLimit`.**
 - **A submit route relays only a transaction this service built, for the same

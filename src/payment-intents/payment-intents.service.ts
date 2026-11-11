@@ -199,6 +199,22 @@ export class PaymentIntentsService {
   }
 
   /**
+   * The one filter every by-id read and write of an intent goes through: the
+   * calling consumer AND the network its key targets. A sandbox key used to read,
+   * patch, validate and delete its own account's mainnet intents (and a production
+   * key its test-network ones), because these lookups filtered by consumer only
+   * while the list filtered by both. Another network's intent is the 404 of a
+   * missing one, as another consumer's is.
+   */
+  private ownedWhere(consumer: GatewayConsumer, id: string) {
+    return {
+      id,
+      consumer: { apisixUsername: consumer.username },
+      network: this.resolveNetwork(consumer),
+    };
+  }
+
+  /**
    * Emits a domain event the webhook dispatcher fans out to integrators.
    *
    * Everything goes through {@link WebhookTerminalEmitter} rather than straight
@@ -759,7 +775,7 @@ export class PaymentIntentsService {
     id: string,
   ): Promise<PaymentIntentView> {
     const intent = await this.prisma.paymentIntent.findFirst({
-      where: { id, consumer: { apisixUsername: consumer.username } },
+      where: this.ownedWhere(consumer, id),
     });
 
     if (!intent) {
@@ -1110,7 +1126,7 @@ export class PaymentIntentsService {
     consumer: GatewayConsumer,
     id: string,
   ): Promise<{ id: string; deleted: true }> {
-    const owned = { id, consumer: { apisixUsername: consumer.username } };
+    const owned = this.ownedWhere(consumer, id);
     const existing = await this.prisma.paymentIntent.findFirst({
       where: owned,
     });
@@ -1156,7 +1172,7 @@ export class PaymentIntentsService {
     txHash: string,
   ): Promise<ValidationOutcome> {
     const intent = await this.prisma.paymentIntent.findFirst({
-      where: { id, consumer: { apisixUsername: consumer.username } },
+      where: this.ownedWhere(consumer, id),
     });
     if (!intent) {
       throw ApiError.notFound(`Payment intent ${id} not found`);
@@ -1359,15 +1375,15 @@ export class PaymentIntentsService {
   }
 
   /**
-   * Throws 404 unless the intent exists and belongs to the consumer, and
-   * answers the chain it is on.
+   * Throws 404 unless the intent exists, belongs to the consumer and is on the
+   * key's network, and answers the chain it is on.
    */
   private async assertOwned(
     consumer: GatewayConsumer,
     id: string,
   ): Promise<Chain> {
     const owned = await this.prisma.paymentIntent.findFirst({
-      where: { id, consumer: { apisixUsername: consumer.username } },
+      where: this.ownedWhere(consumer, id),
       select: { id: true, chain: true },
     });
     if (!owned) {

@@ -1660,6 +1660,10 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
 
 ## 升级 — 破坏性变更与部署说明
 
+### 支付意图：按 id 访问的意图遵循密钥的网络
+
+- **`GET`、`PATCH` 和 `DELETE /v1/payment-intents/{id}`、`POST /v1/payment-intents/{id}/validate` 以及 `GET /v1/payment-intents/{id}/transitions` 对另一个网络上的意图返回 `404`**（API 行为修复）：沙盒密钥只能访问该账户测试网络上的意图，生产密钥只能访问其主网意图，与列表一直以来的行为一致。此前，沙盒密钥可以读取、修改、验证和删除同一账户的主网意图。无需迁移，没有新变量。
+
 ### P2P 入金与出金：向共享公钥开放
 
 - **无需迁移。** 共享公钥现在可以调用 `/v1/onramp/p2p` 和 `/v1/offramp/p2p` 上的 `POST .../quotes`、`POST .../sessions` 和 `GET .../sessions/{id}`；列表仍对它关闭。它开启的会话会返回 `publicToken`，读回时必须放在 `X-Record-Token` 中。

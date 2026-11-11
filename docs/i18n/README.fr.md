@@ -2588,6 +2588,10 @@ plugins isolés.
 
 ## Mise à niveau — changements incompatibles et notes de déploiement
 
+### Intentions de paiement : une intention lue par son id suit le réseau de la clé
+
+- **`GET`, `PATCH` et `DELETE /v1/payment-intents/{id}`, `POST /v1/payment-intents/{id}/validate` et `GET /v1/payment-intents/{id}/transitions` répondent `404` pour une intention de l'autre réseau** (une correction du comportement de l'API) : une clé sandbox n'atteint que les intentions du réseau de test du compte et une clé de production que celles du mainnet, comme le faisait déjà la liste. Avant, une clé sandbox pouvait lire, modifier, valider et supprimer les intentions mainnet du même compte. Pas de migration, pas de nouvelle variable.
+
 ### On-ramp et off-ramp P2P : ouverts à la clé publique partagée
 
 - **Aucune migration.** La clé publique partagée peut désormais appeler `POST .../quotes`, `POST .../sessions` et `GET .../sessions/{id}` sur `/v1/onramp/p2p` et `/v1/offramp/p2p` ; les listes lui restent fermées. Une session qu'elle ouvre répond `publicToken`, requis dans `X-Record-Token` pour la relire.
