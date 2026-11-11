@@ -2495,6 +2495,10 @@ the service under `src/native-plugins/<slug>/`, switched on by the same
 
 ## Upgrading — breaking changes and deploy notes
 
+### Swaps, liquidity, private payments, cross-chain swaps and USDT0: one record by its id follows the key's network
+
+- **`GET /v1/swaps/{id}`, `POST /v1/swaps/{id}/submit`, `GET /v1/liquidity-pools/operations/{id}`, `POST /v1/liquidity-pools/operations/{id}/submit`, `GET /v1/zk-payments/{id}`, `GET /v1/cross-chain-swaps/{id}`, `POST /v1/cross-chain-swaps/{id}/deposit` and `GET /v1/usdt0/transfers/{id}` answer a record on the other network as a missing one (`404`)** (an API behaviour fix): a sandbox key reaches only the account's test-network records and a production key only its mainnet ones, as each list already did. Solana and Monad swaps, cross-chain swaps and USDT0 transfers are mainnet only, so a sandbox key now finds none of them by id. Before, a sandbox key could read and submit the same account's mainnet swaps and liquidity operations, read its cross-chain swaps and report their deposits, and read its USDT0 transfers, and a production key could read the account's test-network private payments. No migration, no new variable.
+
 ### Payment intents: one intent by its id follows the key's network
 
 - **`GET`, `PATCH` and `DELETE /v1/payment-intents/{id}`, `POST /v1/payment-intents/{id}/validate` and `GET /v1/payment-intents/{id}/transitions` answer `404` for an intent on the other network** (an API behaviour fix): a sandbox key reaches only the account's test-network intents and a production key only its mainnet ones, as the list already did. Before, a sandbox key could read, change, validate and delete the same account's mainnet intents. No migration, no new variable.

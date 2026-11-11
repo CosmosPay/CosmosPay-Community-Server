@@ -1660,6 +1660,10 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
 
 ## 升级 — 破坏性变更与部署说明
 
+### 兑换、流动性、隐私支付、跨链兑换和 USDT0：按 id 访问的记录遵循密钥的网络
+
+- **`GET /v1/swaps/{id}`、`POST /v1/swaps/{id}/submit`、`GET /v1/liquidity-pools/operations/{id}`、`POST /v1/liquidity-pools/operations/{id}/submit`、`GET /v1/zk-payments/{id}`、`GET /v1/cross-chain-swaps/{id}`、`POST /v1/cross-chain-swaps/{id}/deposit` 和 `GET /v1/usdt0/transfers/{id}` 对另一个网络上的记录按不存在的记录处理（`404`）**（API 行为修复）：沙盒密钥只能访问该账户测试网络上的记录，生产密钥只能访问其主网记录，与各个列表一直以来的行为一致。Solana 和 Monad 兑换、跨链兑换和 USDT0 转账只在主网上，因此沙盒密钥按 id 再也找不到其中任何一条。此前，沙盒密钥可以读取和提交同一账户的主网兑换与流动性操作，读取其跨链兑换并上报其充值，读取其 USDT0 转账；生产密钥可以读取该账户测试网络上的隐私支付。无需迁移，没有新变量。
+
 ### 支付意图：按 id 访问的意图遵循密钥的网络
 
 - **`GET`、`PATCH` 和 `DELETE /v1/payment-intents/{id}`、`POST /v1/payment-intents/{id}/validate` 以及 `GET /v1/payment-intents/{id}/transitions` 对另一个网络上的意图返回 `404`**（API 行为修复）：沙盒密钥只能访问该账户测试网络上的意图，生产密钥只能访问其主网意图，与列表一直以来的行为一致。此前，沙盒密钥可以读取、修改、验证和删除同一账户的主网意图。无需迁移，没有新变量。

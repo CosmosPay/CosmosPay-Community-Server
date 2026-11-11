@@ -942,9 +942,10 @@ export class Usdt0Service {
   }
 
   /**
-   * A miss on someone else's transfer is a 404, never a 403. The shared public
-   * key also needs the transfer's record token; a missing or wrong one is the
-   * same 404, decided before the table is read.
+   * A miss on someone else's transfer is a 404, never a 403, and so is a
+   * transfer on another network than the key targets. The shared public key
+   * also needs the transfer's record token; a missing or wrong one is the same
+   * 404, decided before the table is read.
    */
   private async findOwned(
     consumer: GatewayConsumer,
@@ -957,10 +958,24 @@ export class Usdt0Service {
       throw ApiError.notFound(`USDT0 transfer ${id} not found`);
     }
     const row = await this.prisma.usdt0Transfer.findFirst({
-      where: { id, consumer: { apisixUsername: consumer.username } },
+      where: this.ownedWhere(consumer, id),
     });
     if (!row) throw ApiError.notFound(`USDT0 transfer ${id} not found`);
     return row;
+  }
+
+  /**
+   * The one filter every by-id read and write of a transfer goes through: the
+   * calling consumer AND the network its key targets, as the list filters. USDT0
+   * is mainnet only, so a sandbox key finds none; it used to read (and so refresh
+   * from the ledger) its own account's mainnet transfers by id.
+   */
+  private ownedWhere(consumer: GatewayConsumer, id: string) {
+    return {
+      id,
+      consumer: { apisixUsername: consumer.username },
+      network: resolveNetwork(this.config, consumer),
+    };
   }
 
   /** The public projection with what is derived from it. */

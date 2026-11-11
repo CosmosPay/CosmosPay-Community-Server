@@ -934,6 +934,21 @@ export class SwapsService {
     return resolveNetwork(this.config, consumer);
   }
 
+  /**
+   * The one filter every by-id read and write of a swap goes through: the calling
+   * consumer AND the network its key targets, as the list filters. A sandbox key
+   * used to read and submit its own account's mainnet swaps (and a production key
+   * its test-network ones), because this lookup filtered by consumer only. Another
+   * network's swap is the 404 of a missing one, as another consumer's is.
+   */
+  private ownedWhere(consumer: GatewayConsumer, id: string) {
+    return {
+      id,
+      consumer: { apisixUsername: consumer.username },
+      network: this.resolveNetwork(consumer),
+    };
+  }
+
   /** Mirror the APISIX consumer locally so swaps can be scoped to it. */
   private resolveConsumer(consumer: GatewayConsumer) {
     return this.consumers.resolve(consumer);
@@ -978,10 +993,11 @@ export class SwapsService {
   }
 
   /**
-   * The caller's swap, or 404. The shared public key also needs the swap's
-   * record token, checked before the table is read: a missing or wrong token
-   * is the same 404, so an id alone confirms nothing. On a legacy route
-   * (`legacyRoute`) a missing token is still admitted for now, and logged.
+   * The caller's swap on its key's network, or 404. The shared public key also
+   * needs the swap's record token, checked before the table is read: a missing
+   * or wrong token is the same 404, so an id alone confirms nothing. On a
+   * legacy route (`legacyRoute`) a missing token is still admitted for now, and
+   * logged.
    */
   private async findOwned(
     consumer: GatewayConsumer,
@@ -995,7 +1011,7 @@ export class SwapsService {
       throw ApiError.notFound(`Swap ${id} not found`);
     }
     const swap = await this.prisma.swap.findFirst({
-      where: { id, consumer: { apisixUsername: consumer.username } },
+      where: this.ownedWhere(consumer, id),
     });
     if (!swap) {
       throw ApiError.notFound(`Swap ${id} not found`);

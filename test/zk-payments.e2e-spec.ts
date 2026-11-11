@@ -100,9 +100,14 @@ describe('Private payments (e2e)', () => {
           ),
         ),
       ),
+      // Scoped like the real query: a row on another network is not found.
       findFirst: jest.fn(({ where, select }: any) => {
         if (where.OR) return Promise.resolve(null);
-        const row = rows.find((r) => r.id === where.id);
+        const row = rows.find(
+          (r) =>
+            r.id === where.id &&
+            (where.network === undefined || r.network === where.network),
+        );
         return Promise.resolve(row ? pick(row, select) : null);
       }),
       findMany: jest.fn(({ select }: any) =>
@@ -257,6 +262,26 @@ describe('Private payments (e2e)', () => {
         request(http()).get('/v1/zk-payments?status=PENDING'),
       ).expect(200);
       expect(list.body).toMatchObject({ total: 1, take: 20, skip: 0 });
+    });
+
+    it('reads one payment by its id only on the network the key targets (404 on the other)', async () => {
+      const id = rows[0].id as string;
+      const own = await merchant(
+        request(http()).get(`/v1/zk-payments/${id}`),
+      ).expect(200);
+      expect(own.body).toMatchObject({ id, network: 'testnet' });
+
+      // The same account's production key: the 404 of a missing payment.
+      const other = await withGatewayAuth(
+        request(http()).get(`/v1/zk-payments/${id}`),
+      )
+        .set('x-consumer-env', 'prod')
+        .set('x-consumer-permissions', 'payments:read')
+        .expect(404);
+      expect(other.body).toMatchObject({
+        code: 'not_found',
+        message: `Private payment ${id} not found`,
+      });
     });
 
     it('creates a payment with a merchant fee, its nested body through the pipe', async () => {

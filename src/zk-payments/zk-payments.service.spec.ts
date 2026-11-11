@@ -460,9 +460,42 @@ describe('ZkPaymentsService', () => {
           where: {
             id: 'zkp_x',
             consumer: { apisixUsername: 'cosmos_merchant' },
+            network: 'testnet',
           },
         }),
       );
+    });
+
+    it('reads one payment by its id only on the network the key targets', async () => {
+      const { service, prisma } = setup();
+      // A test-network payment of the account, and a fake that answers a `where`
+      // the way Postgres would: every field it names must match.
+      const row = {
+        id: 'zkp_testnet',
+        network: 'testnet',
+        status: 'PENDING',
+        expiresAt: new Date(Date.now() + 60_000),
+      };
+      const owner = 'cosmos_merchant';
+      prisma.zkPayment.findFirst.mockImplementation(({ where }: any) =>
+        Promise.resolve(
+          where.id === row.id &&
+            where.consumer?.apisixUsername === owner &&
+            (where.network === undefined || where.network === row.network)
+            ? row
+            : null,
+        ),
+      );
+
+      // The same account's production key: the 404 of a missing payment.
+      expect(await codeOf(service.findOne(prodKey, row.id))).toBe(
+        ApiErrorCode.NotFound,
+      );
+      // Its sandbox key still reads it.
+      await expect(service.findOne(devKey, row.id)).resolves.toMatchObject({
+        id: row.id,
+        status: 'PENDING',
+      });
     });
   });
 });

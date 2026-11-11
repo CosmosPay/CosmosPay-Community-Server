@@ -2592,6 +2592,10 @@ misma lista `PLUGINS_ENABLED` que los plugins aislados.
 
 ## Actualización — cambios incompatibles y notas de despliegue
 
+### Swaps, liquidez, pagos privados, swaps cross-chain y USDT0: un registro por su id sigue la red de la clave
+
+- **`GET /v1/swaps/{id}`, `POST /v1/swaps/{id}/submit`, `GET /v1/liquidity-pools/operations/{id}`, `POST /v1/liquidity-pools/operations/{id}/submit`, `GET /v1/zk-payments/{id}`, `GET /v1/cross-chain-swaps/{id}`, `POST /v1/cross-chain-swaps/{id}/deposit` y `GET /v1/usdt0/transfers/{id}` responden a un registro de la otra red como a uno inexistente (`404`)** (una corrección del comportamiento de la API): una clave sandbox solo alcanza los registros de la red de pruebas de la cuenta y una clave de producción solo los de mainnet, como ya hacía cada listado. Los swaps de Solana y Monad, los swaps cross-chain y las transferencias USDT0 son solo de mainnet, así que una clave sandbox ya no encuentra ninguno por su id. Antes, una clave sandbox podía leer y enviar los swaps y las operaciones de liquidez de mainnet de la misma cuenta, leer sus swaps cross-chain e informar sus depósitos, y leer sus transferencias USDT0, y una clave de producción podía leer los pagos privados de la red de pruebas de la cuenta. Sin migración ni variables nuevas.
+
 ### Intenciones de pago: una intención por su id sigue la red de la clave
 
 - **`GET`, `PATCH` y `DELETE /v1/payment-intents/{id}`, `POST /v1/payment-intents/{id}/validate` y `GET /v1/payment-intents/{id}/transitions` responden `404` a una intención de la otra red** (una corrección del comportamiento de la API): una clave sandbox solo alcanza las intenciones de la red de pruebas de la cuenta y una clave de producción solo las de mainnet, como ya hacía la lista. Antes, una clave sandbox podía leer, cambiar, validar y borrar las intenciones de mainnet de la misma cuenta. Sin migración ni variables nuevas.

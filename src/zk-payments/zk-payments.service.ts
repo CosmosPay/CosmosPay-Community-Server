@@ -267,17 +267,34 @@ export class ZkPaymentsService {
     );
   }
 
-  /** One of the consumer's payments. Someone else's is the same 404 as none. */
+  /**
+   * One of the consumer's payments, on the network its key targets. Someone
+   * else's, or one on the other network, is the same 404 as none.
+   */
   async findOne(
     consumer: GatewayConsumer,
     id: string,
   ): Promise<ZkPaymentEntity> {
     const row = await this.prisma.zkPayment.findFirst({
-      where: { id, consumer: { apisixUsername: consumer.username } },
+      where: this.ownedWhere(consumer, id),
       select: ZK_PAYMENT_PUBLIC_SELECT,
     });
     if (!row) throw ApiError.notFound(`Private payment ${id} not found`);
     return toZkPaymentView(row, new Date());
+  }
+
+  /**
+   * The one filter a by-id read of a payment goes through: the calling consumer
+   * AND the network its key targets, as the list filters. A production key used to
+   * read its own account's test-network payments by id (and a sandbox key its
+   * mainnet ones), because this lookup filtered by consumer only.
+   */
+  private ownedWhere(consumer: GatewayConsumer, id: string) {
+    return {
+      id,
+      consumer: { apisixUsername: consumer.username },
+      network: resolveNetwork(this.config, consumer),
+    };
   }
 
   /**

@@ -987,6 +987,38 @@ describe('Usdt0Service reads', () => {
     expect(sandbox).toMatchObject({ total: 0, data: [] });
   });
 
+  it("answers a sandbox key the 404 of a missing transfer for the account's mainnet one, without refreshing it", async () => {
+    // The fake table answers a `where` the way Postgres would (every field it
+    // names must match), so a lookup that leaves the network out finds the
+    // mainnet transfer for a sandbox key, as the real query did.
+    const { service, rows, rpc: client } = setup();
+    const realKey: GatewayConsumer = {
+      ...prod,
+      username: 'cosmos_u1',
+      role: 'user',
+    };
+    const view = await service.create(realKey, DTO);
+    // The in-memory table files every row under the public consumer.
+    rows[0].consumer = { apisixUsername: realKey.username };
+
+    const read = await refusal(
+      service.findOne({ ...realKey, environment: 'dev' }, view.id),
+    );
+    expect(read).toMatchObject({
+      status: 404,
+      code: 'not_found',
+      message: `USDT0 transfer ${view.id} not found`,
+    });
+    expect(client.getTransaction).not.toHaveBeenCalled();
+    expect(rows[0].status).toBe('PENDING');
+
+    // The production key that owns it still reads it.
+    await expect(service.findOne(realKey, view.id)).resolves.toMatchObject({
+      id: view.id,
+      network: 'public',
+    });
+  });
+
   it('refreshes a PENDING transfer from the ledger when it is read', async () => {
     const { service, rpc: client } = setup();
     const view = await service.create(prod, DTO);

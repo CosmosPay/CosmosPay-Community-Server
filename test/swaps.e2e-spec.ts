@@ -204,13 +204,104 @@ describe('Swaps guards (e2e)', () => {
       );
     });
 
-    it('reads one swap only under its own consumer (404 otherwise)', async () => {
+    it('reads one swap only under its own consumer and network (404 otherwise)', async () => {
       const res = await tenant(GET_ONE, 'swaps:read').expect(404);
 
       expect(res.body.code).toBe('not_found');
-      expect(prismaMock.swap.findFirst).toHaveBeenCalledWith({
-        where: { id: SWAP_ID, consumer: { apisixUsername: 'cosmos_u1' } },
+      // The key's network: no environment header falls back to STELLAR_NETWORK.
+      const owned = {
+        id: SWAP_ID,
+        consumer: { apisixUsername: 'cosmos_u1' },
+        network: 'testnet',
+      };
+      expect(prismaMock.chainSwap.findFirst).toHaveBeenCalledWith({
+        where: owned,
       });
+      expect(prismaMock.swap.findFirst).toHaveBeenCalledWith({ where: owned });
+    });
+  });
+
+  describe('one swap by its id, on the network the key targets', () => {
+    const SOLANA_SWAP_ID = '7a2d8f1b-4c6e-4d3f-8b9a-2e3f4a5b6c7d';
+    /** The same account's two keys: production (mainnet) and sandbox (testnet). */
+    const asAccount = (req: request.Test, env: 'prod' | 'dev', scope: string) =>
+      req
+        .set('x-gateway-secret', SECRET)
+        .set('x-consumer-username', 'cosmos_u1')
+        .set('x-consumer-env', env)
+        .set('x-consumer-permissions', scope);
+
+    // A mainnet swap on each table, and a lookup that answers a `where` the way
+    // Postgres would: every field it names must match.
+    const rows: Record<string, any>[] = [
+      {
+        id: SWAP_ID,
+        owner: 'cosmos_u1',
+        network: 'public',
+        status: 'PENDING',
+        feeAmount: '0',
+        memo: null,
+        merchantFee: null,
+        xdr: 'AAAA',
+        uri: 'web+stellar:tx?xdr=AAAA',
+      },
+      {
+        id: SOLANA_SWAP_ID,
+        owner: 'cosmos_u1',
+        chain: 'solana',
+        network: 'public',
+        status: 'PENDING',
+      },
+    ];
+    const lookup = ({ where }: any) =>
+      Promise.resolve(
+        rows.find(
+          (row) =>
+            row.id === where.id &&
+            (!where.consumer || row.owner === where.consumer.apisixUsername) &&
+            (where.network === undefined || row.network === where.network),
+        ) ?? null,
+      );
+
+    beforeEach(() => {
+      prismaMock.swap.findFirst.mockImplementation(lookup);
+      prismaMock.chainSwap.findFirst.mockImplementation(lookup);
+    });
+
+    afterEach(() => {
+      prismaMock.swap.findFirst.mockResolvedValue(null);
+      prismaMock.chainSwap.findFirst.mockResolvedValue(null);
+    });
+
+    it("answers the sandbox key the 404 of a missing swap for the account's mainnet swaps", async () => {
+      for (const id of [SWAP_ID, SOLANA_SWAP_ID]) {
+        const res = await asAccount(
+          request(app.getHttpServer()).get(`/v1/swaps/${id}`),
+          'dev',
+          'swaps:read',
+        ).expect(404);
+        expect(res.body.code).toBe('not_found');
+      }
+
+      const submit = await asAccount(
+        request(app.getHttpServer()).post(`/v1/swaps/${SWAP_ID}/submit`),
+        'dev',
+        'swaps:write',
+      )
+        .send({ signedXdr: 'AAAA' })
+        .expect(404);
+      expect(submit.body.code).toBe('not_found');
+    });
+
+    it('still serves them to the production key', async () => {
+      for (const id of [SWAP_ID, SOLANA_SWAP_ID]) {
+        const res = await asAccount(
+          request(app.getHttpServer()).get(`/v1/swaps/${id}`),
+          'prod',
+          'swaps:read',
+        ).expect(200);
+        expect(res.body).toMatchObject({ id, network: 'public' });
+      }
     });
   });
 
@@ -248,6 +339,7 @@ describe('Swaps guards (e2e)', () => {
           where: {
             id: SWAP_ID,
             consumer: { apisixUsername: identity['x-consumer-username'] },
+            network: 'testnet',
           },
         });
         // A Stellar swap's token is no Solana or Monad swap's: that table is

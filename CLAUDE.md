@@ -430,9 +430,15 @@ Each of these was a real finding in this codebase, not a hypothetical:
   else's row is a 404, not a 403: "exists but not yours" is an ownership oracle.
   **Every list also filters by the key's network** (`resolveNetwork`): a production key
   listed test-network payment intents until every `findAll` carried it. So does every
-  by-id read and write of a payment intent (`ownedWhere` in `PaymentIntentsService`): a
-  sandbox key could read, patch, validate and delete the same account's mainnet intents
-  until it did. A new by-id lookup of a network-scoped row takes the network too.
+  by-id read and write of a network-scoped row, through one `ownedWhere(consumer, id)`
+  per service (consumer AND `resolveNetwork`): payment intents, swaps, Solana and Monad
+  swaps, liquidity operations, private payments, cross-chain swaps and USDT0 transfers
+  (protected payments and P2P sessions filter by network in their own lookups). A sandbox
+  key could read, patch, validate and delete the same account's mainnet intents, read and
+  submit its mainnet swaps and liquidity operations, read its cross-chain swaps and report
+  their deposits and read its USDT0 transfers, and a production key read its test-network
+  private payments, until they did. Another network's row is the 404 of a missing one. A new
+  by-id lookup of a network-scoped row takes the network too.
 - **A route whose cost an error cannot refund — XLM spent, an account created
   on-chain — carries `@RateLimit`.**
 - **A submit route relays only a transaction this service built, for the same
@@ -772,8 +778,8 @@ refreshes it (ledger first, then LayerZero Scan), throttled per row by `lastChec
   since nothing stores EXPIRED). Payments, swaps, liquidity and private payments are scoped by
   consumer AND `resolveNetwork`; `chain_swap`, `cross_chain_swap` and `usdt0_transfer` rows are
   always `public`, so a sandbox key counts none. Webhook deliveries are scoped by consumer only: an endpoint has
-  no network. The list routes of those modules are scoped the same way (consumer and
-  `resolveNetwork`), so a production key never lists a test-network row.
+  no network. The list and by-id routes of those modules are scoped the same way (consumer
+  and `resolveNetwork`), so a production key never lists or reads a test-network row.
 - **Succeeded / failed / in progress is a table per model** (`SWAP_OUTCOMES`,
   `CHAIN_SWAP_OUTCOMES`, `CROSS_CHAIN_SWAP_OUTCOMES`, `USDT0_TRANSFER_OUTCOMES`,
   `LIQUIDITY_OPERATION_OUTCOMES` in `analytics.constants.ts`), turned into SQL by

@@ -318,11 +318,13 @@ export class ChainSwapsService {
   /**
    * The caller's Solana or Monad swap by id, or null when it has none — the
    * `/v1/swaps/{id}` routes then fall through to the Stellar table, whose 404
-   * is the one a miss has always answered. The shared public key also needs
-   * the swap's record token (`recordToken`, from `X-Record-Token`); without the
-   * right one this is a miss too, decided before the table is read. On a
-   * legacy route (`legacyRoute`, the submit) a missing token is still
-   * admitted for now, and logged once the swap is found.
+   * is the one a miss has always answered. Only on the network the key targets,
+   * as the list: these swaps are mainnet only, so a sandbox key finds none (it
+   * used to read and submit its own account's mainnet swaps by id). The shared
+   * public key also needs the swap's record token (`recordToken`, from
+   * `X-Record-Token`); without the right one this is a miss too, decided before
+   * the table is read. On a legacy route (`legacyRoute`, the submit) a missing
+   * token is still admitted for now, and logged once the swap is found.
    */
   async findOwned(
     consumer: GatewayConsumer,
@@ -342,7 +344,7 @@ export class ChainSwapsService {
       return null;
     }
     const swap = await this.prisma.chainSwap.findFirst({
-      where: { id, consumer: { apisixUsername: consumer.username } },
+      where: this.ownedWhere(consumer, id),
     });
     if (swap && legacyRoute) {
       this.recordTokens.noteLegacyAccess(
@@ -354,6 +356,19 @@ export class ChainSwapsService {
       );
     }
     return swap;
+  }
+
+  /**
+   * The one filter every by-id read and write of a Solana or Monad swap goes
+   * through: the calling consumer AND the network its key targets, as the list
+   * filters. Another network's swap is a miss, as another consumer's is.
+   */
+  private ownedWhere(consumer: GatewayConsumer, id: string) {
+    return {
+      id,
+      consumer: { apisixUsername: consumer.username },
+      network: resolveNetwork(this.config, consumer),
+    };
   }
 
   present(swap: ChainSwap): PublicChainSwap {
