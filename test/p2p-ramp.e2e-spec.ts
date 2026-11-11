@@ -223,26 +223,56 @@ describe('P2P on-ramp and off-ramp (e2e)', () => {
     ).toBe(true);
   });
 
-  it('lets the shared public key read the market and the tokens, and nothing else', async () => {
+  it('lets the shared public key buy: read, quote, open and read back its own session, never list', async () => {
     await asPublicKey(request(http()).get('/v1/onramp/p2p/market')).expect(200);
     await asPublicKey(
       request(http()).get('/v1/onramp/p2p/tokens?chainId=421614'),
     ).expect(200);
+    // Past the guards: what stops it here is the missing integrator ids.
+    const quote = await asPublicKey(
+      request(http()).post('/v1/onramp/p2p/quotes').send(order),
+    ).expect(503);
+    expect(quote.body.code).toBe('misconfigured');
 
-    // Built one at a time: a supertest request starts its server when made.
-    const calls = [
-      () => request(http()).post('/v1/onramp/p2p/sessions').send(order),
-      () => request(http()).post('/v1/onramp/p2p/quotes').send(order),
-      () => request(http()).get('/v1/onramp/p2p/sessions'),
-      () => request(http()).get('/v1/onramp/p2p/sessions/clz_s1'),
-    ];
-    for (const call of calls) {
-      const res = await asPublicKey(call()).expect(403);
-      expect(res.body.code).toBe('insufficient_scope');
-    }
+    const opened = await asPublicKey(
+      request(http()).post('/v1/onramp/p2p/sessions').send(order),
+    ).expect(201);
+    expect(opened.body.publicToken).toEqual(expect.any(String));
+
+    const listed = await asPublicKey(
+      request(http()).get('/v1/onramp/p2p/sessions'),
+    ).expect(403);
+    expect(listed.body.code).toBe('insufficient_scope');
+
+    prisma.p2pRampSession.findFirst.mockClear();
+    const path = `/v1/onramp/p2p/sessions/${opened.body.id}`;
+    await asPublicKey(request(http()).get(path)).expect(404);
+    await asPublicKey(
+      request(http()).get(path).set('x-record-token', 'not-the-token'),
+    ).expect(404);
+    expect(prisma.p2pRampSession.findFirst).not.toHaveBeenCalled();
+
+    prisma.p2pRampSession.findFirst.mockResolvedValueOnce({
+      id: opened.body.id,
+    });
+    await asPublicKey(
+      request(http()).get(path).set('x-record-token', opened.body.publicToken),
+    ).expect(200);
+    expect(
+      prisma.p2pRampSession.findFirst.mock.calls[0][0].where,
+    ).toMatchObject({ id: opened.body.id, side: 'buy' });
+  });
+
+  it('gives an account no record token', async () => {
+    const res = await asTenant(
+      request(http()).post('/v1/onramp/p2p/sessions').send(order),
+    ).expect(201);
+
+    expect(res.body).not.toHaveProperty('publicToken');
   });
 
   it('opens a session with the recipient fixed in the widget URL', async () => {
+    prisma.p2pRampSession.create.mockClear();
     const res = await asTenant(
       request(http()).post('/v1/onramp/p2p/sessions').send(order),
     ).expect(201);
@@ -442,7 +472,7 @@ describe('P2P on-ramp and off-ramp (e2e)', () => {
       ]);
     });
 
-    it('needs the off-ramp scopes, and lets the public key only read the market and the tokens', async () => {
+    it('needs the off-ramp scopes, and lets the public key sell but never list', async () => {
       const res = await asBuyerOnly(
         request(http()).post('/v1/offramp/p2p/sessions').send(sale),
       ).expect(403);
@@ -457,16 +487,21 @@ describe('P2P on-ramp and off-ramp (e2e)', () => {
       await asPublicKey(
         request(http()).get('/v1/offramp/p2p/tokens?chainId=421614'),
       ).expect(200);
-      const calls = [
-        () => request(http()).post('/v1/offramp/p2p/sessions').send(sale),
-        () => request(http()).post('/v1/offramp/p2p/quotes').send(sale),
-        () => request(http()).get('/v1/offramp/p2p/sessions'),
-        () => request(http()).get('/v1/offramp/p2p/sessions/clz_s1'),
-      ];
-      for (const call of calls) {
-        const denied = await asPublicKey(call()).expect(403);
-        expect(denied.body.code).toBe('insufficient_scope');
-      }
+      const opened = await asPublicKey(
+        request(http()).post('/v1/offramp/p2p/sessions').send(sale),
+      ).expect(201);
+      expect(opened.body.publicToken).toEqual(expect.any(String));
+      await asPublicKey(
+        request(http()).post('/v1/offramp/p2p/quotes').send(sale),
+      ).expect(503);
+      const denied = await asPublicKey(
+        request(http()).get('/v1/offramp/p2p/sessions'),
+      ).expect(403);
+      expect(denied.body.code).toBe('insufficient_scope');
+      // A sale's token does not open it as a purchase, nor without the token.
+      await asPublicKey(
+        request(http()).get(`/v1/offramp/p2p/sessions/${opened.body.id}`),
+      ).expect(404);
     });
 
     it('opens a sale as a SELL widget without fixing the wallet', async () => {

@@ -468,11 +468,15 @@ export interface AppConfig {
    * The `eldorado` native plugin: buying stablecoins with local money from P2P
    * sellers, through El Dorado's widget. The ids are the ones El Dorado issues
    * to an integrator; without them the market and the sessions still work, and
-   * only the firm quote answers `503 misconfigured`.
+   * only the firm quote answers `503 misconfigured`. `publicReferralId`, when
+   * set, replaces `referralId` for the shared public key's quotes and orders:
+   * the marketplace sets the integrator's commission per referral id, so the
+   * one the public key carries is where anonymous use is priced.
    */
   eldorado: {
     clientId: string;
     referralId: string;
+    publicReferralId: string;
     timeoutMs: number;
   };
   /** The `trustless-work` native plugin: protected payments on Trustless Work V1. */
@@ -1172,6 +1176,7 @@ export default (): AppConfig => ({
   eldorado: {
     clientId: process.env.ELDORADO_CLIENT_ID?.trim() ?? '',
     referralId: process.env.ELDORADO_REFERRAL_ID?.trim() ?? '',
+    publicReferralId: process.env.ELDORADO_PUBLIC_REFERRAL_ID?.trim() ?? '',
     timeoutMs: parseInt(
       process.env.ELDORADO_TIMEOUT_MS ?? String(DEFAULT_ELDORADO_TIMEOUT_MS),
       10,

@@ -55,7 +55,9 @@ export interface SellQuoteRequest extends QuoteRequestBase {
  * The market reads (the chain and token lists included) take no credentials.
  * Both quotes require the
  * `X-Client-ID` and `X-Referral-ID` El Dorado issues to an integrator:
- * without them they are `503 misconfigured` before any call.
+ * without them they are `503 misconfigured` before any call. The shared
+ * public key carries `ELDORADO_PUBLIC_REFERRAL_ID` instead when it is set
+ * (El Dorado prices the integrator's commission per referral id).
  */
 @Injectable()
 export class EldoradoClient {
@@ -93,23 +95,36 @@ export class EldoradoClient {
   }
 
   /** A firm buy quote. Needs the integrator ids. */
-  buyQuote(network: StellarNetwork, body: BuyQuoteRequest): Promise<RawQuote> {
-    return this.quote(network, '/quote/buy', body);
+  buyQuote(
+    network: StellarNetwork,
+    body: BuyQuoteRequest,
+    sharedPublicKey: boolean,
+  ): Promise<RawQuote> {
+    return this.quote(network, '/quote/buy', body, sharedPublicKey);
   }
 
   /** A firm sell quote. Needs the integrator ids. */
   sellQuote(
     network: StellarNetwork,
     body: SellQuoteRequest,
+    sharedPublicKey: boolean,
   ): Promise<RawQuote> {
-    return this.quote(network, '/quote/sell', body);
+    return this.quote(network, '/quote/sell', body, sharedPublicKey);
   }
 
-  /** Both integrator ids, or null when either is missing. */
-  integratorIds(): IntegratorIds | null {
+  /**
+   * Both integrator ids, or null when either is missing. For the shared public
+   * key the referral id is `ELDORADO_PUBLIC_REFERRAL_ID` when it is set: the
+   * one El Dorado prices anonymous use with.
+   */
+  integratorIds(sharedPublicKey: boolean): IntegratorIds | null {
     const cfg = this.config.get('eldorado', { infer: true });
-    return cfg.clientId && cfg.referralId
-      ? { clientId: cfg.clientId, referralId: cfg.referralId }
+    const referralId =
+      sharedPublicKey && cfg.publicReferralId
+        ? cfg.publicReferralId
+        : cfg.referralId;
+    return cfg.clientId && referralId
+      ? { clientId: cfg.clientId, referralId }
       : null;
   }
 
@@ -117,8 +132,9 @@ export class EldoradoClient {
     network: StellarNetwork,
     path: '/quote/buy' | '/quote/sell',
     body: BuyQuoteRequest | SellQuoteRequest,
+    sharedPublicKey: boolean,
   ): Promise<RawQuote> {
-    const ids = this.integratorIds();
+    const ids = this.integratorIds(sharedPublicKey);
     if (!ids) {
       throw ApiError.unavailable(
         ApiErrorCode.Misconfigured,

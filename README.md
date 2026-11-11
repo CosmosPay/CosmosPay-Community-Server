@@ -285,10 +285,10 @@ Paths use the OpenAPI `{param}` form.
 | GET | `/v1/logs` | `payments:read` |  |
 | GET | `/v1/logs/webhooks` | `webhooks:read` |  |
 | GET | `/v1/offramp/p2p/market` | `offramp:read` | ✓ |
-| POST | `/v1/offramp/p2p/quotes` | `offramp:write` |  |
+| POST | `/v1/offramp/p2p/quotes` | `offramp:write` | ✓ |
 | GET | `/v1/offramp/p2p/sessions` | `offramp:read` |  |
-| POST | `/v1/offramp/p2p/sessions` | `offramp:write` |  |
-| GET | `/v1/offramp/p2p/sessions/{id}` | `offramp:read` |  |
+| POST | `/v1/offramp/p2p/sessions` | `offramp:write` | ✓ |
+| GET | `/v1/offramp/p2p/sessions/{id}` | `offramp:read` | ✓ |
 | GET | `/v1/offramp/p2p/tokens` | `offramp:read` | ✓ |
 | GET | `/v1/offramp/payouts` | `offramp:read` |  |
 | POST | `/v1/offramp/payouts` | `offramp:write` |  |
@@ -297,10 +297,10 @@ Paths use the OpenAPI `{param}` form.
 | POST | `/v1/offramp/payouts/{id}/documents` | `offramp:write` |  |
 | POST | `/v1/offramp/quotes` | `offramp:write` |  |
 | GET | `/v1/onramp/p2p/market` | `onramp:read` | ✓ |
-| POST | `/v1/onramp/p2p/quotes` | `onramp:write` |  |
+| POST | `/v1/onramp/p2p/quotes` | `onramp:write` | ✓ |
 | GET | `/v1/onramp/p2p/sessions` | `onramp:read` |  |
-| POST | `/v1/onramp/p2p/sessions` | `onramp:write` |  |
-| GET | `/v1/onramp/p2p/sessions/{id}` | `onramp:read` |  |
+| POST | `/v1/onramp/p2p/sessions` | `onramp:write` | ✓ |
+| GET | `/v1/onramp/p2p/sessions/{id}` | `onramp:read` | ✓ |
 | GET | `/v1/onramp/p2p/tokens` | `onramp:read` | ✓ |
 | GET | `/v1/onramp/payins` | `onramp:read` |  |
 | POST | `/v1/onramp/payins` | `onramp:write` |  |
@@ -2239,6 +2239,7 @@ A buyer pays local money (a bank transfer in Argentina, PIX, Nequi, Yape, Zelle 
 - **The recipient is fixed.** The widget URL carries `address`, which the widget treats as the connected wallet and does not let the buyer change; without it the buyer would connect any wallet and the token would land there. The parameter is not in El Dorado's documentation (it was read from the widget's code on 2026-11-05): if it stops working, stop opening sessions.
 - **Open the widget in a tab or a window, not an iframe.** It has its own sign-in, an identity check that uses the camera and a payment step that can outlast a popup.
 - **The integrator ids are optional, except for the firm quote.** `ELDORADO_CLIENT_ID` and `ELDORADO_REFERRAL_ID` are what El Dorado issues to an integrator (api@eldorado.io). Without them the market and the sessions work and the widget quotes before payment; with them `POST /v1/onramp/p2p/quotes` and `POST /v1/offramp/p2p/quotes` answer, and each session's widget carries the ids, which attribute the order to Cosmos Pay.
+- **Wallets without an account buy and sell too.** The shared public key may quote, open a session and read that one session back with its `publicToken` in `X-Record-Token`; it never lists sessions, since every anonymous wallet is that one consumer. Its quotes and sessions carry `ELDORADO_PUBLIC_REFERRAL_ID` instead of `ELDORADO_REFERRAL_ID` when it is set: El Dorado sets the integrator commission per referral id, so ask for one at the highest rate and anonymous use pays the most, as with swaps.
 - **What is cached.** The market (currencies, prices and the chain list) for a minute per network (`ELDORADO_MARKET_TTL_MS`); each chain's token list for an hour (`ELDORADO_TOKENS_TTL_MS`; Ethereum's is about 1.2 MB). A currency without a price, a minimum or a payment method is left out, and so is a chain whose token list fails or comes back empty: it is logged and asked again on the next read, and the market is a 502 only when the chain list or every token list fails.
 
 ## Plugins — extensions under a slug
@@ -2493,6 +2494,12 @@ the service under `src/native-plugins/<slug>/`, switched on by the same
   are the one native plugin route group that takes no API key.
 
 ## Upgrading — breaking changes and deploy notes
+
+### P2P on-ramp and off-ramp: open to the shared public key
+
+- **No migration.** The shared public key may now call `POST .../quotes`, `POST .../sessions` and `GET .../sessions/{id}` on `/v1/onramp/p2p` and `/v1/offramp/p2p`; the lists stay closed to it. A session it opens answers `publicToken`, required in `X-Record-Token` to read it back.
+- **The public key needs the scopes.** Give the public consumer `onramp:read`, `onramp:write`, `offramp:read` and `offramp:write` (the developer platform mints it); without them these routes answer `403 insufficient_scope` as before.
+- **Optional `ELDORADO_PUBLIC_REFERRAL_ID`** prices anonymous use apart from accounts (see **Environment variables**).
 
 ### Responses never name a provider
 
@@ -3623,6 +3630,7 @@ at least `DATABASE_URL` and `APISIX_GATEWAY_SECRET`.
 | `DEFINDEX_MAX_FEE_STROOPS` | no | `10000000` | The most a built DeFindex transaction may charge its signer, inclusion and Soroban resource fee together (stroops); a build above it is refused with `502 provider_error` |
 | `ELDORADO_CLIENT_ID` | no | none | The ClientID El Dorado issues to an integrator. With `ELDORADO_REFERRAL_ID`, turns on `POST /v1/onramp/p2p/quotes` and `POST /v1/offramp/p2p/quotes` and attributes each session's order; without both, those routes answer `503 misconfigured` |
 | `ELDORADO_REFERRAL_ID` | no | none | The ReferralID that goes with `ELDORADO_CLIENT_ID` |
+| `ELDORADO_PUBLIC_REFERRAL_ID` | no | none | The ReferralID the shared public key's quotes and sessions carry instead of `ELDORADO_REFERRAL_ID`; ask El Dorado for one at the highest commission. Empty: the public key uses `ELDORADO_REFERRAL_ID` |
 | `ELDORADO_TIMEOUT_MS` | no | `10000` | Budget for one call to the P2P marketplace (ms) |
 | `TRUSTLESS_WORK_API_KEY_TESTNET` | for protected payments on testnet | — | Trustless Work's API key for testnet (`dev` keys). The routes exist only with `trustless-work` in `PLUGINS_ENABLED`; without the key they answer `503 misconfigured` on testnet. Requires `TRUSTLESS_WORK_PLATFORM_SECRET_TESTNET` |
 | `TRUSTLESS_WORK_BASE_URL_TESTNET` | no | `https://dev.api.trustlesswork.com` | Trustless Work's V1 API for testnet |

@@ -284,10 +284,10 @@ Konsolen-Backend erreicht sie. Pfade verwenden die OpenAPI-Form `{param}`.
 | GET | `/v1/logs` | `payments:read` |  |
 | GET | `/v1/logs/webhooks` | `webhooks:read` |  |
 | GET | `/v1/offramp/p2p/market` | `offramp:read` | ✓ |
-| POST | `/v1/offramp/p2p/quotes` | `offramp:write` |  |
+| POST | `/v1/offramp/p2p/quotes` | `offramp:write` | ✓ |
 | GET | `/v1/offramp/p2p/sessions` | `offramp:read` |  |
-| POST | `/v1/offramp/p2p/sessions` | `offramp:write` |  |
-| GET | `/v1/offramp/p2p/sessions/{id}` | `offramp:read` |  |
+| POST | `/v1/offramp/p2p/sessions` | `offramp:write` | ✓ |
+| GET | `/v1/offramp/p2p/sessions/{id}` | `offramp:read` | ✓ |
 | GET | `/v1/offramp/p2p/tokens` | `offramp:read` | ✓ |
 | GET | `/v1/offramp/payouts` | `offramp:read` |  |
 | POST | `/v1/offramp/payouts` | `offramp:write` |  |
@@ -296,10 +296,10 @@ Konsolen-Backend erreicht sie. Pfade verwenden die OpenAPI-Form `{param}`.
 | POST | `/v1/offramp/payouts/{id}/documents` | `offramp:write` |  |
 | POST | `/v1/offramp/quotes` | `offramp:write` |  |
 | GET | `/v1/onramp/p2p/market` | `onramp:read` | ✓ |
-| POST | `/v1/onramp/p2p/quotes` | `onramp:write` |  |
+| POST | `/v1/onramp/p2p/quotes` | `onramp:write` | ✓ |
 | GET | `/v1/onramp/p2p/sessions` | `onramp:read` |  |
-| POST | `/v1/onramp/p2p/sessions` | `onramp:write` |  |
-| GET | `/v1/onramp/p2p/sessions/{id}` | `onramp:read` |  |
+| POST | `/v1/onramp/p2p/sessions` | `onramp:write` | ✓ |
+| GET | `/v1/onramp/p2p/sessions/{id}` | `onramp:read` | ✓ |
 | GET | `/v1/onramp/p2p/tokens` | `onramp:read` | ✓ |
 | GET | `/v1/onramp/payins` | `onramp:read` |  |
 | POST | `/v1/onramp/payins` | `onramp:write` |  |
@@ -2368,6 +2368,7 @@ Ein Käufer zahlt Landeswährung (eine Banküberweisung in Argentinien, PIX, Neq
 - **Der Empfänger ist fest.** Die Widget-URL trägt `address`, die das Widget als verbundene Wallet behandelt und die der Käufer nicht ändern kann; ohne sie würde der Käufer irgendeine Wallet verbinden und der Token käme dort an. Der Parameter steht nicht in El Dorados Dokumentation (er wurde am 2026-11-05 aus dem Code des Widgets gelesen): Wenn er nicht mehr funktioniert, keine Sitzungen mehr öffnen.
 - **Das Widget in einem Tab oder Fenster öffnen, nicht in einem iframe.** Es hat seine eigene Anmeldung, eine Identitätsprüfung mit der Kamera und einen Zahlungsschritt, der länger dauern kann als ein Popup.
 - **Die Integrator-IDs sind optional, außer für das feste Angebot.** `ELDORADO_CLIENT_ID` und `ELDORADO_REFERRAL_ID` sind das, was El Dorado einem Integrator ausstellt (api@eldorado.io). Ohne sie funktionieren der Markt und die Sitzungen, und das Widget bepreist vor der Zahlung; mit ihnen antworten `POST /v1/onramp/p2p/quotes` und `POST /v1/offramp/p2p/quotes`, und das Widget jeder Sitzung trägt die IDs, die die Order Cosmos Pay zuordnen.
+- **Wallets ohne Konto kaufen und verkaufen ebenfalls.** Der geteilte öffentliche Schlüssel darf ein Angebot einholen, eine Sitzung öffnen und genau diese Sitzung mit ihrem `publicToken` in `X-Record-Token` wieder lesen; Sitzungen auflisten darf er nie, denn jede anonyme Wallet ist derselbe Consumer. Seine Angebote und Sitzungen tragen `ELDORADO_PUBLIC_REFERRAL_ID` statt `ELDORADO_REFERRAL_ID`, wenn sie gesetzt ist: El Dorado legt die Integratorprovision pro Referral-ID fest, also fordere eine mit dem höchsten Satz an, dann zahlt die anonyme Nutzung am meisten, wie bei Swaps.
 - **Was gecacht wird.** Der Markt (Währungen, Preise und die Chain-Liste) eine Minute pro Netzwerk (`ELDORADO_MARKET_TTL_MS`); die Token-Liste jeder Chain eine Stunde (`ELDORADO_TOKENS_TTL_MS`; die von Ethereum hat etwa 1,2 MB). Eine Währung ohne Preis, Minimum oder Zahlungsmethode bleibt außen vor, ebenso eine Chain, deren Token-Liste fehlschlägt oder leer zurückkommt: Das wird geloggt und beim nächsten Lesen erneut angefragt, und der Markt ist nur dann ein 502, wenn die Chain-Liste oder jede Token-Liste fehlschlägt.
 
 ## Plugins — Erweiterungen unter einem Slug
@@ -2643,6 +2644,12 @@ eingeschaltet werden.
   einzige Routengruppe eines nativen Plugins, die keinen API-Key verlangt.
 
 ## Upgrade — Breaking Changes und Deploy-Hinweise
+
+### P2P-On-Ramp und -Off-Ramp: für den geteilten öffentlichen Schlüssel geöffnet
+
+- **Keine Migration.** Der geteilte öffentliche Schlüssel darf jetzt `POST .../quotes`, `POST .../sessions` und `GET .../sessions/{id}` auf `/v1/onramp/p2p` und `/v1/offramp/p2p` aufrufen; die Listen bleiben ihm verschlossen. Eine Sitzung, die er öffnet, antwortet mit `publicToken`, das in `X-Record-Token` nötig ist, um sie wieder zu lesen.
+- **Der öffentliche Schlüssel braucht die Scopes.** Gib dem öffentlichen Consumer `onramp:read`, `onramp:write`, `offramp:read` und `offramp:write` (die Entwicklerplattform stellt ihn aus); ohne sie antworten diese Routen wie bisher mit `403 insufficient_scope`.
+- **Optionales `ELDORADO_PUBLIC_REFERRAL_ID`** bepreist die anonyme Nutzung getrennt von Konten (siehe **Umgebungsvariablen**).
 
 ### Antworten nennen nie einen Anbieter
 
@@ -3833,6 +3840,7 @@ passen Sie mindestens `DATABASE_URL` und `APISIX_GATEWAY_SECRET` an.
 | `DEFINDEX_MAX_FEE_STROOPS` | nein | `10000000` | Das Höchste, was eine gebaute DeFindex-Transaktion ihrem Unterzeichner berechnen darf, Inklusions- und Soroban-Ressourcengebühr zusammen (Stroops); ein Build darüber wird mit `502 provider_error` abgewiesen |
 | `ELDORADO_CLIENT_ID` | nein | keiner | Die ClientID, die El Dorado an einen Integrator vergibt. Mit `ELDORADO_REFERRAL_ID` schaltet sie `POST /v1/onramp/p2p/quotes` und `POST /v1/offramp/p2p/quotes` ein und ordnet die Order jeder Sitzung zu; ohne beide antworten diese Routen `503 misconfigured` |
 | `ELDORADO_REFERRAL_ID` | nein | keiner | Die ReferralID, die zu `ELDORADO_CLIENT_ID` gehört |
+| `ELDORADO_PUBLIC_REFERRAL_ID` | nein | keiner | Die ReferralID, die Angebote und Sitzungen des geteilten öffentlichen Schlüssels statt `ELDORADO_REFERRAL_ID` tragen; fordere bei El Dorado eine mit der höchsten Provision an. Leer: der öffentliche Schlüssel nutzt `ELDORADO_REFERRAL_ID` |
 | `ELDORADO_TIMEOUT_MS` | nein | `10000` | Budget für einen Aufruf des P2P-Marktplatzes (ms) |
 | `TRUSTLESS_WORK_API_KEY_TESTNET` | für geschützte Zahlungen auf Testnet | — | API-Key von Trustless Work für Testnet (`dev`-Keys). Die Routen existieren nur mit `trustless-work` in `PLUGINS_ENABLED`; ohne den Key antworten sie auf Testnet mit `503 misconfigured`. Erfordert `TRUSTLESS_WORK_PLATFORM_SECRET_TESTNET` |
 | `TRUSTLESS_WORK_BASE_URL_TESTNET` | nein | `https://dev.api.trustlesswork.com` | V1-API von Trustless Work für Testnet |

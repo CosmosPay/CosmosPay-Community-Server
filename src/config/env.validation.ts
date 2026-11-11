@@ -564,6 +564,11 @@ class EnvironmentVariables {
   @IsString()
   ELDORADO_REFERRAL_ID?: string;
 
+  /** The referral id the shared public key's quotes and orders carry instead. */
+  @IsOptional()
+  @IsString()
+  ELDORADO_PUBLIC_REFERRAL_ID?: string;
+
   @IsOptional()
   @IsInt()
   @Min(1)
