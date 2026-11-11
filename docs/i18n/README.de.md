@@ -784,8 +784,8 @@ nur einen API-Key: Setzt der Import nur `X-Gateway-Secret`, fügen Sie
 `security: []` veröffentlicht.
 
 Jede Operation trägt Vendor-Extensions, die sagen, was sie ist: `x-cosmos-rate-limit`
-(ihre Budgets: sie kann `429` antworten), `x-cosmos-upstream` (der aufgerufene
-Anbieter: sie kann `502`/`503`/`504` antworten), `x-cosmos-public`,
+(ihre Budgets: sie kann `429` antworten), `x-cosmos-upstream` (die Art des
+aufgerufenen Dienstes, nie sein Name: sie kann `502`/`503`/`504` antworten), `x-cosmos-public`,
 `x-cosmos-public-key` sowie `x-cosmos-scopes` / `x-cosmos-scopes-any` (die Scopes, die
 ihr API-Key halten muss, alle / einen davon, veröffentlicht von `@RequirePermissions` /
 `@RequireAnyPermission`). Bei jeder Route, die einen API-Key nimmt, endet die in ihrer
@@ -2644,6 +2644,16 @@ eingeschaltet werden.
 
 ## Upgrade — Breaking Changes und Deploy-Hinweise
 
+### Antworten nennen nie einen Anbieter
+
+- **Keine Migration, keine neue Variable, kein geänderter Code:** Nur die Prosa hat sich geändert. Vergleiche mit `code`, nie mit einer Nachricht oder einem Label.
+- **Nachrichten und der Vertrag sagen, was ein Dienst tut, nie wer ihn betreibt:** die Cross-Chain-Route, der Fiat-Partner, der P2P-Marktplatz, die Swap-Routen von Solana und Monad, die Bridge, das Vault-Protokoll, der Dienst für geschützte Zahlungen. Der eigene Grund eines Anbieters, der in einer `provider_error`-Nachricht weitergegeben wird, wird von seinen Namen und Links bereinigt.
+- **Ein `503 misconfigured` nennt die fehlende Variable nicht mehr:** Das Server-Log nennt sie, mit der Route (`AllExceptionsFilter`).
+- **Die Labels von `x-cosmos-upstream`** sind `Fiat partner`, `Cross-chain route`, `Solana swap route`, `Monad swap route`, `Vault protocol`, `Protected-payments service` (waren `BlindPay`, `NEAR Intents`, `Jupiter`, `Kuru Flow`, `DeFindex`, `Trustless Work`). Die Operationen unter `/v1/defindex` tragen das Tag `Yield vaults`, ihre Operation-IDs sind `VaultsController_*` und ihre Schemas `VaultDepositDto`, `VaultWithdrawDto`, `VaultSubmitDto`, `VaultBuildEntity`, `VaultSubmitResultEntity`.
+- **Neue Felder neben den alten, die bleiben und veraltet sind:** `bridgeContract` (`oft`) bei `GET /v1/usdt0/routes`, `fees.serviceFeeBps` (`fees.trustlessWorkBps`) bei geschützten Zahlungen und `fiatReceivers` (`blindpayReceivers`) in den Zählungen pro Organisation der Plattform-Konsole.
+- **Umbenannte Budgets:** `fiat:quota` (war `blindpay:quota`), `vaults:build` und `vaults:submit` (waren `defindex:build`, `defindex:submit`). Ihre Zähler beginnen mit dem Deploy neu.
+- **Weiterhin nach einem Anbieter benannt, weil sie der Vertrag sind:** die Pfade `/v1/defindex`, `blindpayId`, die Werte `jupiter` / `kuru` von `provider`, die Rails `spei_bitso`, `transfers_bitso` und `ach_cop_bitso` sowie die Felder, die aus den Antworten des Fiat-Partners durchgereicht werden (`blindpay_bank_details`, `blindpayContractAddress`).
+
 ### P2P-On-Ramp und -Off-Ramp: ein neues natives Plugin und eine Tabelle
 
 - **Die Migration `20261105120000_p2p_ramp_sessions`** legt die Tabelle `p2p_ramp_session`
@@ -2742,8 +2752,8 @@ eingeschaltet werden.
 - **Ein zu großer Betrag ist `400 validation_failed`, nicht mehr
   `502 provider_error`:** `amounts` und `shares` sind Ganzzahl-Strings bis
   höchstens 9007199254740991, dem größten Wert, den `@defindex/sdk` exakt trägt.
-- **Neue Budgets:** Die beiden Builds teilen sich `defindex:build`, der Submit hat
-  `defindex:submit`, jeweils 20 pro Minute pro Consumer und Client-Adresse
+- **Neue Budgets:** Die beiden Builds teilen sich `vaults:build`, der Submit hat
+  `vaults:submit`, jeweils 20 pro Minute pro Consumer und Client-Adresse
   (`429 rate_limited`). Ihre DeFindex-Fehler stehen jetzt im Vertrag
   (`x-cosmos-upstream`: 502, 503).
 - **Neue Variable `DEFINDEX_MAX_FEE_STROOPS`** (Standard `10000000`, 1 XLM, die

@@ -758,7 +758,7 @@ probes are published with `security: []`.
 
 Every operation carries vendor extensions that say what it is:
 `x-cosmos-rate-limit` (its budgets: it can answer `429`), `x-cosmos-upstream`
-(the provider it calls: it can answer `502`/`503`/`504`), `x-cosmos-public`,
+(the kind of service it calls, never its name: it can answer `502`/`503`/`504`), `x-cosmos-public`,
 `x-cosmos-public-key`, and `x-cosmos-scopes` / `x-cosmos-scopes-any` (the scopes
 its API key must hold, all of them / one of them, published by
 `@RequirePermissions` / `@RequireAnyPermission`). On every route that takes an API
@@ -2494,6 +2494,16 @@ the service under `src/native-plugins/<slug>/`, switched on by the same
 
 ## Upgrading — breaking changes and deploy notes
 
+### Responses never name a provider
+
+- **No migration, no new variable, no code changed:** only prose did. Match on `code`, never on a message or a label.
+- **Messages and the contract say what a service does, never who runs it:** the cross-chain route, the fiat partner, the P2P marketplace, the Solana and Monad swap routes, the bridge, the vault protocol, the protected-payments service. A provider's own reason relayed in a `provider_error` message is scrubbed of its names and links.
+- **A `503 misconfigured` no longer names the variable to set:** the server log does, with the route (`AllExceptionsFilter`).
+- **`x-cosmos-upstream` labels** are `Fiat partner`, `Cross-chain route`, `Solana swap route`, `Monad swap route`, `Vault protocol`, `Protected-payments service` (were `BlindPay`, `NEAR Intents`, `Jupiter`, `Kuru Flow`, `DeFindex`, `Trustless Work`). The `/v1/defindex` operations are tagged `Yield vaults`, their operation ids are `VaultsController_*` and their schemas `VaultDepositDto`, `VaultWithdrawDto`, `VaultSubmitDto`, `VaultBuildEntity`, `VaultSubmitResultEntity`.
+- **New fields beside the old ones, which stay and are deprecated:** `bridgeContract` (`oft`) on `GET /v1/usdt0/routes`, `fees.serviceFeeBps` (`fees.trustlessWorkBps`) on protected payments, and `fiatReceivers` (`blindpayReceivers`) in the platform console's organization counts.
+- **Renamed budgets:** `fiat:quota` (was `blindpay:quota`), `vaults:build` and `vaults:submit` (were `defindex:build`, `defindex:submit`). Their counters start over at the deploy.
+- **Still named after a provider, because they are the contract:** the `/v1/defindex` paths, `blindpayId`, the `jupiter` / `kuru` values of `provider`, the `spei_bitso`, `transfers_bitso` and `ach_cop_bitso` rails, and the fields the fiat partner’s own answers pass through (`blindpay_bank_details`, `blindpayContractAddress`).
+
 ### P2P on-ramp and off-ramp: a new native plugin and one table
 
 - **Migration `20261105120000_p2p_ramp_sessions`** creates the `p2p_ramp_session` table;
@@ -2585,8 +2595,8 @@ the service under `src/native-plugins/<slug>/`, switched on by the same
 - **An oversized amount is `400 validation_failed`, no longer `502 provider_error`:**
   `amounts` and `shares` are integer strings no larger than 9007199254740991, the
   largest `@defindex/sdk` carries exactly.
-- **New budgets:** the two builds share `defindex:build` and the submit has
-  `defindex:submit`, 20 a minute each per consumer and client address
+- **New budgets:** the two builds share `vaults:build` and the submit has
+  `vaults:submit`, 20 a minute each per consumer and client address
   (`429 rate_limited`). Their DeFindex failures are now in the contract
   (`x-cosmos-upstream`: 502, 503).
 - **New variable `DEFINDEX_MAX_FEE_STROOPS`** (default `10000000`, 1 XLM, the ceiling

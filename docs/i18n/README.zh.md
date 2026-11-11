@@ -576,7 +576,7 @@ OPENAPI_SERVER_URL=https://gateway.example.com npm run openapi:generate
 
 提交到仓库的规范是在未设置 `OPENAPI_SERVER_URL` 的情况下生成的，因此默认使用直连的请求头组合；设置该变量后生成，可得到默认走网关的集合。Postman 每个请求只保存一个 API key：如果导入后只配置了 `X-Gateway-Secret`，请把 `X-Consumer-Username` 添加为集合级请求头。健康探针以 `security: []` 发布。
 
-每个操作都带有说明其性质的厂商扩展：`x-cosmos-rate-limit`（其配额：可能返回 `429`）、`x-cosmos-upstream`（它调用的提供方：可能返回 `502`/`503`/`504`）、`x-cosmos-public`、`x-cosmos-public-key`，以及 `x-cosmos-scopes` / `x-cosmos-scopes-any`（其 API key 必须持有的 scope，全部 / 其中之一，由 `@RequirePermissions` / `@RequireAnyPermission` 发布）。在每个需要 API key 的路由上，写在其 `@ApiOperation` 中的 description 都以一句由这些 scope 和 `x-cosmos-public-key` 生成的话结尾，因此契约绝不会写出 guard 并不检查的 scope。
+每个操作都带有说明其性质的厂商扩展：`x-cosmos-rate-limit`（其配额：可能返回 `429`）、`x-cosmos-upstream`（它调用的服务类型，从不写出其名称：可能返回 `502`/`503`/`504`）、`x-cosmos-public`、`x-cosmos-public-key`，以及 `x-cosmos-scopes` / `x-cosmos-scopes-any`（其 API key 必须持有的 scope，全部 / 其中之一，由 `@RequirePermissions` / `@RequireAnyPermission` 发布）。在每个需要 API key 的路由上，写在其 `@ApiOperation` 中的 description 都以一句由这些 scope 和 `x-cosmos-public-key` 生成的话结尾，因此契约绝不会写出 guard 并不检查的 scope。
 
 `npm run openapi:generate` 会拒绝写出以下规范：某个操作没有 summary 或没有 description、某个操作使用的 tag 没有 description、任何文本含有破折号（em dash；开发者平台会把本契约同步到其文档中，而文档不允许出现任何破折号）、某个失败响应没有响应体或示例、某个示例的 `statusCode` 与其所记录的状态码不一致，或没有配额的路由上出现了 `429`。每次新增或修改路由时，请阅读其重新生成的操作（参见 `CLAUDE.md`）。
 
@@ -1659,6 +1659,16 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
 
 ## 升级 — 破坏性变更与部署说明
 
+### 响应从不提及提供方的名称
+
+- **无需迁移，没有新变量，没有改动 code：** 只改了文字。请按 `code` 匹配，不要按消息或标签匹配。
+- **消息和契约只说明服务做什么，从不说明由谁运营：** 跨链路由、法币合作方、P2P 市场、Solana 和 Monad 的兑换路由、跨链桥、金库协议、受保护支付服务。在 `provider_error` 消息中转述的提供方原因会去掉其名称和链接。
+- **`503 misconfigured` 不再写出需要设置的变量：** 服务器日志会连同路由一起记录它（`AllExceptionsFilter`）。
+- **`x-cosmos-upstream` 的标签** 为 `Fiat partner`, `Cross-chain route`, `Solana swap route`, `Monad swap route`, `Vault protocol`, `Protected-payments service`（原为 `BlindPay`, `NEAR Intents`, `Jupiter`, `Kuru Flow`, `DeFindex`, `Trustless Work`）。`/v1/defindex` 的操作使用标签 `Yield vaults`，其 operation id 为 `VaultsController_*`，schema 为 `VaultDepositDto`、`VaultWithdrawDto`、`VaultSubmitDto`、`VaultBuildEntity`、`VaultSubmitResultEntity`。
+- **新字段与旧字段并存，旧字段保留并标记为弃用：** `GET /v1/usdt0/routes` 上的 `bridgeContract`（`oft`），受保护支付上的 `fees.serviceFeeBps`（`fees.trustlessWorkBps`），以及平台控制台按组织统计中的 `fiatReceivers`（`blindpayReceivers`）。
+- **重命名的配额：** `fiat:quota`（原 `blindpay:quota`），`vaults:build` 和 `vaults:submit`（原 `defindex:build`、`defindex:submit`）。其计数在部署时重新开始。
+- **仍带有提供方名称，因为它们是契约：** `/v1/defindex` 路径、`blindpayId`、`provider` 的 `jupiter` / `kuru` 值、`spei_bitso`、`transfers_bitso` 和 `ach_cop_bitso` 通道，以及从法币合作方的原始响应中透传的字段（`blindpay_bank_details`、`blindpayContractAddress`）。
+
 ### P2P 入金与出金：一个新的原生插件和一张表
 
 - **迁移 `20261105120000_p2p_ramp_sessions`** 创建 `p2p_ramp_session` 表；不改写任何内容。
@@ -1715,7 +1725,7 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
 - **过大的金额现在是 `400 validation_failed`，不再是 `502 provider_error`：**`amounts`
   和 `shares` 是不大于 9007199254740991 的整数字符串，这是 `@defindex/sdk` 能精确传递的
   最大值。
-- **新的配额：** 两个构建共享 `defindex:build`，submit 使用 `defindex:submit`，每个都是
+- **新的配额：** 两个构建共享 `vaults:build`，submit 使用 `vaults:submit`，每个都是
   每个 consumer 和客户端地址每分钟 20 次（`429 rate_limited`）。它们的 DeFindex 失败现已
   写入契约（`x-cosmos-upstream`：502、503）。
 - **新变量 `DEFINDEX_MAX_FEE_STROOPS`**（默认 `10000000`，即 1 XLM，与钱包已执行的上限相同）：一笔 DeFindex 交易最多可向签名者收取的费用。
