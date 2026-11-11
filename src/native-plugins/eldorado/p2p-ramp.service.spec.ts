@@ -1,6 +1,7 @@
 import { ConfigService } from '@nestjs/config';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import type { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
+import { PublicRecordTokens } from '@/common/public-record-token';
 import { UpstreamNotFound } from '@/common/upstream-http';
 import type { EldoradoClient } from '@/native-plugins/eldorado/eldorado.client';
 import { NATIVE_TOKEN_ADDRESS } from '@/native-plugins/eldorado/eldorado.constants';
@@ -20,6 +21,13 @@ const key = (environment: 'prod' | 'dev'): GatewayConsumer => ({
   organizationId: null,
   plan: null,
   planSwapFeeBps: null,
+});
+
+/** The shared public key every wallet without an account calls with. */
+const publicKey = (environment: 'prod' | 'dev'): GatewayConsumer => ({
+  ...key(environment),
+  username: 'cosmos_public',
+  role: 'public',
 });
 
 const ORDER = {
@@ -132,15 +140,24 @@ function setup(ids: { clientId: string; referralId: string } | null = null) {
     resolveId: jest.fn().mockResolvedValue('c_local'),
   };
   const config = {
-    get: jest.fn(() => ({ network: 'testnet' })),
+    get: jest.fn((name: string) =>
+      name === 'apisix'
+        ? {
+            publicConsumer: 'cosmos_public',
+            gatewaySecret: 'topsecret-topsecret-topsecret-topsecret',
+          }
+        : { network: 'testnet' },
+    ),
   } as unknown as ConfigService;
+  const recordTokens = new PublicRecordTokens(config as never);
   const service = new P2pRampService(
     config as never,
     prisma as never,
     consumers as never,
     client as unknown as EldoradoClient,
+    recordTokens,
   );
-  return { service, client, prisma, consumers };
+  return { service, client, prisma, consumers, recordTokens };
 }
 
 describe('P2pRampService', () => {
@@ -463,15 +480,19 @@ describe('P2pRampService', () => {
 
     const quote = await service.quote(key('prod'), 'buy', ORDER);
 
-    expect(client.buyQuote).toHaveBeenCalledWith('public', {
-      addressTo: ADDRESS,
-      token: USDT0,
-      chainId: '42161',
-      fiatCurrencyId: 'ARS',
-      paymentMethodId: 'bank_tx_ar',
-      amount: '50000',
-      fixedAmountSide: 'IN',
-    });
+    expect(client.buyQuote).toHaveBeenCalledWith(
+      'public',
+      {
+        addressTo: ADDRESS,
+        token: USDT0,
+        chainId: '42161',
+        fiatCurrencyId: 'ARS',
+        paymentMethodId: 'bank_tx_ar',
+        amount: '50000',
+        fixedAmountSide: 'IN',
+      },
+      false,
+    );
     expect(quote).toEqual({
       quoteId: 'q-1',
       currency: 'ARS',
@@ -492,15 +513,19 @@ describe('P2pRampService', () => {
 
     const quote = await service.quote(key('prod'), 'sell', SALE);
 
-    expect(client.sellQuote).toHaveBeenCalledWith('public', {
-      addressFrom: ADDRESS,
-      token: USDT0,
-      chainId: '42161',
-      fiatCurrencyId: 'ARS',
-      paymentMethodId: 'bank_tx_ar',
-      amount: '50',
-      fixedAmountSide: 'IN',
-    });
+    expect(client.sellQuote).toHaveBeenCalledWith(
+      'public',
+      {
+        addressFrom: ADDRESS,
+        token: USDT0,
+        chainId: '42161',
+        fiatCurrencyId: 'ARS',
+        paymentMethodId: 'bank_tx_ar',
+        amount: '50',
+        fixedAmountSide: 'IN',
+      },
+      false,
+    );
     expect(client.buyQuote).not.toHaveBeenCalled();
     expect(quote).toMatchObject({
       quoteId: 'q-2',
@@ -541,6 +566,83 @@ describe('P2pRampService', () => {
       consumerId: 'c_local',
       network: 'testnet',
       side: 'sell',
+    });
+  });
+
+  describe('the shared public key', () => {
+    it('quotes and opens a session with its own integrator ids, and gets the session token', async () => {
+      const { service, client, recordTokens } = setup({
+        clientId: 'c-1',
+        referralId: 'r-public',
+      });
+
+      await service.quote(publicKey('prod'), 'buy', ORDER);
+      const session = await service.createSession(
+        publicKey('prod'),
+        'buy',
+        ORDER,
+      );
+
+      expect(client.buyQuote.mock.calls[0][2]).toBe(true);
+      expect(client.integratorIds).toHaveBeenLastCalledWith(true);
+      expect(new URL(session.widgetUrl).searchParams.get('referralId')).toBe(
+        'r-public',
+      );
+      expect(session.publicToken).toEqual(expect.any(String));
+      expect(
+        recordTokens.admits(
+          publicKey('prod'),
+          'p2p-ramp-session',
+          session.id,
+          session.publicToken,
+        ),
+      ).toBe(true);
+    });
+
+    it('gives an account no token and its ordinary ids', async () => {
+      const { service, client } = setup({ clientId: 'c-1', referralId: 'r-1' });
+
+      const session = await service.createSession(key('prod'), 'buy', ORDER);
+
+      expect(client.integratorIds).toHaveBeenLastCalledWith(false);
+      expect(session).not.toHaveProperty('publicToken');
+    });
+
+    it('reads a session back only with its token, refusing before the table is read', async () => {
+      const { service, prisma, recordTokens } = setup();
+      const session = await service.createSession(
+        publicKey('prod'),
+        'sell',
+        SALE,
+      );
+      const anotherSessionsToken = recordTokens.issueFor(
+        publicKey('prod'),
+        'p2p-ramp-session',
+        'clz_s2',
+      );
+      prisma.p2pRampSession.findFirst.mockResolvedValue({ id: session.id });
+
+      for (const token of [undefined, 'not-a-token', anotherSessionsToken]) {
+        await expect(
+          service.findOne(publicKey('prod'), 'sell', session.id, token),
+        ).rejects.toMatchObject({ code: ApiErrorCode.NotFound });
+      }
+      expect(prisma.p2pRampSession.findFirst).not.toHaveBeenCalled();
+
+      await expect(
+        service.findOne(
+          publicKey('prod'),
+          'sell',
+          session.id,
+          session.publicToken,
+        ),
+      ).resolves.toEqual({ id: session.id });
+      expect(prisma.p2pRampSession.findFirst.mock.calls[0][0].where).toEqual({
+        id: session.id,
+        consumerId: 'c_local',
+        network: 'public',
+        side: 'sell',
+      });
     });
   });
 });

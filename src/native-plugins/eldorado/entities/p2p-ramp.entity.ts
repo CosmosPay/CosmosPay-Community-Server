@@ -1,4 +1,5 @@
 import { ApiProperty, ApiSchema } from '@nestjs/swagger';
+import { ApiPublicTokenProperty } from '@/common/decorators/api-record-token.decorator';
 
 @ApiSchema({
   description:
@@ -392,6 +393,17 @@ export class P2pSessionEntity {
     description: 'When the session was opened.',
   })
   createdAt!: Date;
+}
+
+/** What opening a session answers: the session, and its read token. */
+@ApiSchema({
+  description:
+    'What opening a P2P session answers: the session and, for the shared ' +
+    'public key, its read token.',
+})
+export class P2pSessionCreatedEntity extends P2pSessionEntity {
+  @ApiPublicTokenProperty()
+  publicToken?: string;
 }
 
 @ApiSchema({

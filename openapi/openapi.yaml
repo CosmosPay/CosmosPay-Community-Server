@@ -11015,7 +11015,7 @@ paths:
         misconfigured`; the market and the sessions work without them.
 
 
-        Requires the `onramp:write` scope.
+        Requires the `onramp:write` scope. The shared public key may call it.
       operationId: P2pOnrampController_quote_v1
       parameters: []
       requestBody:
@@ -11066,6 +11066,7 @@ paths:
       summary: Get a firm price for a purchase with local money
       tags:
         - p2p-onramp
+      x-cosmos-public-key: true
       x-cosmos-rate-limit:
         - name: onramp-p2p:quote
           limit: 30
@@ -11084,10 +11085,11 @@ paths:
         `estimatedAmountOut` is the market price, rounded down (null for a token
         with no USD price); the widget quotes the firm figure before payment.
         The order is checked against the market first (`400 validation_failed`
-        with the reason), and opened on the key's network.
+        with the reason), and opened on the key's network. The shared public key
+        also gets `publicToken`, the only way it reads the session back.
 
 
-        Requires the `onramp:write` scope.
+        Requires the `onramp:write` scope. The shared public key may call it.
       operationId: P2pOnrampController_createSession_v1
       parameters: []
       requestBody:
@@ -11102,7 +11104,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/P2pSessionEntity"
+                $ref: "#/components/schemas/P2pSessionCreatedEntity"
           headers:
             ratelimit-limit:
               description: Requests allowed in the current window.
@@ -11138,6 +11140,7 @@ paths:
       summary: Open a purchase with local money
       tags:
         - p2p-onramp
+      x-cosmos-public-key: true
       x-cosmos-rate-limit:
         - name: onramp-p2p:session
           limit: 20
@@ -11199,10 +11202,13 @@ paths:
       description: >-
         One purchase of this key's consumer on the key's network, from this
         service's records, with its widget URL. Another consumer's session, one
-        opened on the other network, or a sale, is the 404 of a missing one.
+        opened on the other network, or a sale, is the 404 of a missing one. The
+        shared public key reads a session only with its `publicToken` in
+        `X-Record-Token`; without it, or with another session's, the answer is
+        that 404. Listing sessions stays closed to the public key.
 
 
-        Requires the `onramp:read` scope.
+        Requires the `onramp:read` scope. The shared public key may call it.
       operationId: P2pOnrampController_findOne_v1
       parameters:
         - name: id
@@ -11212,6 +11218,16 @@ paths:
           schema:
             example: clz9xp2p0001
             type: string
+        - name: X-Record-Token
+          in: header
+          description: "Required with the shared public key: the `publicToken` the create
+            response returned for this record. Without it, or with the token of
+            another record, the answer is 404, as for a record that does not
+            exist. Ignored for every other API key."
+          required: false
+          schema:
+            type: string
+            example: q3Zx0r8vH6c1yJ2bN5mT4kW9sD7fL0aE1gP3uR6iO2w
       responses:
         "200":
           description: OK
@@ -11232,6 +11248,7 @@ paths:
       summary: Read a purchase opened with local money
       tags:
         - p2p-onramp
+      x-cosmos-public-key: true
       x-cosmos-scopes:
         - onramp:read
   /v1/offramp/p2p/market:
@@ -11366,7 +11383,7 @@ paths:
         misconfigured`; the market and the sessions work without them.
 
 
-        Requires the `offramp:write` scope.
+        Requires the `offramp:write` scope. The shared public key may call it.
       operationId: P2pOfframpController_quote_v1
       parameters: []
       requestBody:
@@ -11417,6 +11434,7 @@ paths:
       summary: Get a firm price for a sale for local money
       tags:
         - p2p-offramp
+      x-cosmos-public-key: true
       x-cosmos-rate-limit:
         - name: offramp-p2p:quote
           limit: 30
@@ -11437,9 +11455,11 @@ paths:
         rounded down (null for a token with no USD price); the widget quotes the
         firm figure first. The order is checked against the market (`400
         validation_failed` with the reason), and opened on the key's network.
+        The shared public key also gets `publicToken`, the only way it reads the
+        session back.
 
 
-        Requires the `offramp:write` scope.
+        Requires the `offramp:write` scope. The shared public key may call it.
       operationId: P2pOfframpController_createSession_v1
       parameters: []
       requestBody:
@@ -11454,7 +11474,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/P2pSessionEntity"
+                $ref: "#/components/schemas/P2pSessionCreatedEntity"
           headers:
             ratelimit-limit:
               description: Requests allowed in the current window.
@@ -11490,6 +11510,7 @@ paths:
       summary: Open a sale for local money
       tags:
         - p2p-offramp
+      x-cosmos-public-key: true
       x-cosmos-rate-limit:
         - name: offramp-p2p:session
           limit: 20
@@ -11552,9 +11573,12 @@ paths:
         One sale of this key's consumer on the key's network, from this
         service's records, with its widget URL. Another consumer's session, one
         opened on the other network, or a purchase, is the 404 of a missing one.
+        The shared public key reads a session only with its `publicToken` in
+        `X-Record-Token`; without it, or with another session's, the answer is
+        that 404. Listing sessions stays closed to the public key.
 
 
-        Requires the `offramp:read` scope.
+        Requires the `offramp:read` scope. The shared public key may call it.
       operationId: P2pOfframpController_findOne_v1
       parameters:
         - name: id
@@ -11564,6 +11588,16 @@ paths:
           schema:
             example: clz9xp2p0001
             type: string
+        - name: X-Record-Token
+          in: header
+          description: "Required with the shared public key: the `publicToken` the create
+            response returned for this record. Without it, or with the token of
+            another record, the answer is 404, as for a record that does not
+            exist. Ignored for every other API key."
+          required: false
+          schema:
+            type: string
+            example: q3Zx0r8vH6c1yJ2bN5mT4kW9sD7fL0aE1gP3uR6iO2w
       responses:
         "200":
           description: OK
@@ -11584,6 +11618,7 @@ paths:
       summary: Read a sale opened for local money
       tags:
         - p2p-offramp
+      x-cosmos-public-key: true
       x-cosmos-scopes:
         - offramp:read
   /v1/protected-payments:
@@ -26572,6 +26607,110 @@ components:
         - exchangeRate
         - fee
         - expiresAt
+    P2pSessionCreatedEntity:
+      type: object
+      properties:
+        id:
+          type: string
+          example: clz9xp2p0001
+          description: Cosmos Pay id of the session.
+        network:
+          type: string
+          example: public
+          description: "`public` (mainnet) or `testnet` (the sandbox), from the key."
+        side:
+          type: string
+          example: buy
+          enum:
+            - buy
+            - sell
+          description: "`buy` for a purchase (`/v1/onramp/p2p`), `sell` for a sale
+            (`/v1/offramp/p2p`)."
+        currency:
+          type: string
+          example: ARS
+          description: Local currency paid (purchase) or received (sale).
+        paymentMethod:
+          type: string
+          example: bank_tx_ar
+          description: How the local money is paid (purchase) or received (sale).
+        amount:
+          type: string
+          example: "50000"
+          description: "What the order puts in, a decimal string: local money for a
+            purchase, the token for a sale."
+        token:
+          type: string
+          example: USDT0
+          description: Symbol of the token bought or sold.
+        tokenAddress:
+          type: string
+          example: "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9"
+          description: Its contract on `chainId` (EIP-55); the zero address is the chain’s
+            own coin.
+        chainId:
+          type: number
+          example: 42161
+          description: EIP-155 id of the chain it moves on.
+        address:
+          type: string
+          example: "0x52908400098527886E0F7030069857D2E4169EE7"
+          description: "EIP-55. A purchase: where the token is delivered, fixed in the
+            widget so the buyer cannot change it. A sale: the account the order
+            named as the one it is sent from; the seller connects that wallet in
+            the widget."
+        estimatedAmountOut:
+          type: string
+          example: "29.79"
+          nullable: true
+          description: "About what `amount` gives at the market price when the session was
+            opened, rounded down: the token a purchase delivers, or the local
+            money a sale pays. Null for a token with no USD price. The widget
+            quotes the firm figure before anything moves."
+        reference:
+          type: string
+          example: cp-clz9xp2p0001
+          description: The reference the marketplace’s order carries.
+        widgetUrl:
+          type: string
+          example: https://p2p-widget.example/exchange?operation=BUY&token=0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9&chain=42161&currency=ARS&paymentMethod=bank_tx_ar&amount=50000&address=0x52908400098527886E0F7030069857D2E4169EE7&externalReferenceId=cp-clz9xp2p0001
+          description: "Open it in a browser tab or window (not an iframe): the person
+            signs in and verifies their identity there, then pays a P2P seller
+            (purchase) or connects their wallet, sends the token and is paid by
+            a P2P buyer (sale)."
+        createdAt:
+          format: date-time
+          type: string
+          example: 2026-11-05T18:00:00.000Z
+          description: When the session was opened.
+        publicToken:
+          type: string
+          example: q3Zx0r8vH6c1yJ2bN5mT4kW9sD7fL0aE1gP3uR6iO2w
+          description: "Only when the caller is the shared public key: this record’s read
+            token. Send it as `X-Record-Token` on the routes of this one record.
+            Reading it by id (and submitting a USDT0 transfer) answers 404
+            without it; swap submit and cross-chain deposit still accept a
+            request without it for now, and will require it once the deployment
+            turns `PUBLIC_RECORD_TOKEN_REQUIRED_ON_LEGACY` on. The same create
+            replayed with its Idempotency-Key answers the same token. Keep it
+            like the record id: whoever holds both can read the record."
+      description: "What opening a P2P session answers: the session and, for the
+        shared public key, its read token."
+      required:
+        - id
+        - network
+        - side
+        - currency
+        - paymentMethod
+        - amount
+        - token
+        - tokenAddress
+        - chainId
+        - address
+        - estimatedAmountOut
+        - reference
+        - widgetUrl
+        - createdAt
     P2pSessionEntity:
       type: object
       properties:

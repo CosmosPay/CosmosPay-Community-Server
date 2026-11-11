@@ -1,17 +1,21 @@
-import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query, Req } from '@nestjs/common';
 import {
   ApiCreatedResponse,
   ApiOkResponse,
   ApiOperation,
   ApiTags,
 } from '@nestjs/swagger';
+import type { Request } from 'express';
 import { AllowPublicKey } from '@/common/decorators/allow-public-key.decorator';
+import { ApiRecordTokenHeader } from '@/common/decorators/api-record-token.decorator';
 import { ApiUpstream } from '@/common/decorators/api-upstream.decorator';
 import { CurrentConsumer } from '@/common/decorators/current-consumer.decorator';
 import { RateLimit } from '@/common/decorators/rate-limit.decorator';
 import { RequirePermissions } from '@/common/decorators/require-permissions.decorator';
 import { WidePaginationQueryDto } from '@/common/dto/pagination.query.dto';
 import type { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
+import { RECORD_TOKEN_HEADER } from '@/common/public-record-token.constants';
+import { headerValue } from '@/common/request-header';
 import {
   P2pOrderDto,
   P2pSessionParamsDto,
@@ -24,6 +28,7 @@ import {
 import {
   P2pMarketEntity,
   P2pQuoteEntity,
+  P2pSessionCreatedEntity,
   P2pSessionEntity,
   P2pSessionListEntity,
   P2pTokenListEntity,
@@ -83,6 +88,9 @@ export class P2pOnrampController {
   @Post('quotes')
   @ApiUpstream('P2P marketplace')
   @RequirePermissions('onramp:write')
+  // Stores nothing: a wallet with no account prices its order too (budgeted
+  // per address, like every caller of the shared key).
+  @AllowPublicKey()
   @RateLimit(P2P_QUOTE_RATE_LIMIT)
   @ApiOperation({
     summary: 'Get a firm price for a purchase with local money',
@@ -104,6 +112,9 @@ export class P2pOnrampController {
   // Checks the order against the market, which may be read first.
   @ApiUpstream('P2P marketplace')
   @RequirePermissions('onramp:write')
+  // A wallet with no account opens its own purchase; the row is read back only
+  // with its record token, and the list stays closed to the shared key.
+  @AllowPublicKey()
   @RateLimit(P2P_SESSION_RATE_LIMIT)
   @ApiOperation({
     summary: 'Open a purchase with local money',
@@ -112,9 +123,10 @@ export class P2pOnrampController {
       'window, where the buyer signs in, verifies their identity and pays a P2P seller. `address` is fixed as the ' +
       'recipient there, so the token can only be delivered to it, on `chainId`. `estimatedAmountOut` is the market price, ' +
       'rounded down (null for a token with no USD price); the widget quotes the firm figure before payment. The order is checked against the market first ' +
-      "(`400 validation_failed` with the reason), and opened on the key's network.",
+      "(`400 validation_failed` with the reason), and opened on the key's network. The shared public key also gets " +
+      '`publicToken`, the only way it reads the session back.',
   })
-  @ApiCreatedResponse({ type: P2pSessionEntity })
+  @ApiCreatedResponse({ type: P2pSessionCreatedEntity })
   createSession(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Body() dto: P2pOrderDto,
@@ -141,17 +153,27 @@ export class P2pOnrampController {
 
   @Get('sessions/:id')
   @RequirePermissions('onramp:read')
+  @AllowPublicKey()
+  @ApiRecordTokenHeader()
   @ApiOperation({
     summary: 'Read a purchase opened with local money',
     description:
       "One purchase of this key's consumer on the key's network, from this service's records, with its widget URL. " +
-      "Another consumer's session, one opened on the other network, or a sale, is the 404 of a missing one.",
+      "Another consumer's session, one opened on the other network, or a sale, is the 404 of a missing one. The shared " +
+      "public key reads a session only with its `publicToken` in `X-Record-Token`; without it, or with another session's, " +
+      'the answer is that 404. Listing sessions stays closed to the public key.',
   })
   @ApiOkResponse({ type: P2pSessionEntity })
   findOne(
     @CurrentConsumer() consumer: GatewayConsumer,
     @Param() params: P2pSessionParamsDto,
+    @Req() req: Request,
   ) {
-    return this.p2p.findOne(consumer, 'buy', params.id);
+    return this.p2p.findOne(
+      consumer,
+      'buy',
+      params.id,
+      headerValue(req, RECORD_TOKEN_HEADER),
+    );
   }
 }

@@ -248,10 +248,10 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | GET | `/v1/logs` | `payments:read` |  |
 | GET | `/v1/logs/webhooks` | `webhooks:read` |  |
 | GET | `/v1/offramp/p2p/market` | `offramp:read` | ✓ |
-| POST | `/v1/offramp/p2p/quotes` | `offramp:write` |  |
+| POST | `/v1/offramp/p2p/quotes` | `offramp:write` | ✓ |
 | GET | `/v1/offramp/p2p/sessions` | `offramp:read` |  |
-| POST | `/v1/offramp/p2p/sessions` | `offramp:write` |  |
-| GET | `/v1/offramp/p2p/sessions/{id}` | `offramp:read` |  |
+| POST | `/v1/offramp/p2p/sessions` | `offramp:write` | ✓ |
+| GET | `/v1/offramp/p2p/sessions/{id}` | `offramp:read` | ✓ |
 | GET | `/v1/offramp/p2p/tokens` | `offramp:read` | ✓ |
 | GET | `/v1/offramp/payouts` | `offramp:read` |  |
 | POST | `/v1/offramp/payouts` | `offramp:write` |  |
@@ -260,10 +260,10 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | POST | `/v1/offramp/payouts/{id}/documents` | `offramp:write` |  |
 | POST | `/v1/offramp/quotes` | `offramp:write` |  |
 | GET | `/v1/onramp/p2p/market` | `onramp:read` | ✓ |
-| POST | `/v1/onramp/p2p/quotes` | `onramp:write` |  |
+| POST | `/v1/onramp/p2p/quotes` | `onramp:write` | ✓ |
 | GET | `/v1/onramp/p2p/sessions` | `onramp:read` |  |
-| POST | `/v1/onramp/p2p/sessions` | `onramp:write` |  |
-| GET | `/v1/onramp/p2p/sessions/{id}` | `onramp:read` |  |
+| POST | `/v1/onramp/p2p/sessions` | `onramp:write` | ✓ |
+| GET | `/v1/onramp/p2p/sessions/{id}` | `onramp:read` | ✓ |
 | GET | `/v1/onramp/p2p/tokens` | `onramp:read` | ✓ |
 | GET | `/v1/onramp/payins` | `onramp:read` |  |
 | POST | `/v1/onramp/payins` | `onramp:write` |  |
@@ -1440,6 +1440,7 @@ CREATED | AWAITING_FUNDING --merchant cancels--> CANCELLED
 - **收款地址是固定的。** widget URL 带有 `address`，widget 将其视为已连接的钱包，买家无法更改；没有它，买家可以连接任意钱包，代币就会到那里。该参数不在 El Dorado 的文档中（2026-11-05 从 widget 代码中读到）：如果它失效，就停止打开会话。
 - **在标签页或窗口中打开 widget，不要用 iframe。** 它有自己的登录、使用摄像头的身份验证，以及可能比弹窗持续更久的付款步骤。
 - **集成方 id 是可选的，确定报价除外。** `ELDORADO_CLIENT_ID` 和 `ELDORADO_REFERRAL_ID` 是 El Dorado 发给集成方的（api@eldorado.io）。没有它们，市场和会话照常工作，widget 在付款前报价；有了它们，`POST /v1/onramp/p2p/quotes` 和 `POST /v1/offramp/p2p/quotes` 才会应答，每个会话的 widget 都带上这些 id，把订单归属到 Cosmos Pay。
+- **没有账户的钱包也能买卖。** 共享公钥可以报价、开启会话，并凭该会话的 `publicToken`（放在 `X-Record-Token` 中）读回这一个会话；它永远不能列出会话，因为所有匿名钱包都是同一个消费者。设置了 `ELDORADO_PUBLIC_REFERRAL_ID` 时，它的报价和会话带上它而不是 `ELDORADO_REFERRAL_ID`：El Dorado 按 referral id 设定集成方佣金，所以申请一个费率最高的 id，匿名使用就付得最多，和兑换一样。
 - **缓存什么。** 市场（货币、价格和链列表）按网络缓存一分钟（`ELDORADO_MARKET_TTL_MS`）；每条链的代币列表缓存一小时（`ELDORADO_TOKENS_TTL_MS`；Ethereum 的约 1.2 MB）。没有价格、最低额或支付方式的货币会被排除，代币列表读取失败或为空的链也会被排除：这会写入日志并在下次读取时重试，只有链列表或所有代币列表都失败时，市场才返回 502。
 
 ## 插件 — 以 slug 命名的扩展
@@ -1658,6 +1659,12 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
 - **受保护付款同样遵守 DeFindex 的规则**：Trustless Work 构建的每个 envelope 在被记录或签名之前都会经过检查，其 submit 只转发这些记录（见*受保护付款（Trustless Work）*）。其买家路由是原生插件中唯一不需要 API key 的路由组。
 
 ## 升级 — 破坏性变更与部署说明
+
+### P2P 入金与出金：向共享公钥开放
+
+- **无需迁移。** 共享公钥现在可以调用 `/v1/onramp/p2p` 和 `/v1/offramp/p2p` 上的 `POST .../quotes`、`POST .../sessions` 和 `GET .../sessions/{id}`；列表仍对它关闭。它开启的会话会返回 `publicToken`，读回时必须放在 `X-Record-Token` 中。
+- **公钥需要相应 scope。** 给公共消费者 `onramp:read`、`onramp:write`、`offramp:read` 和 `offramp:write`（由开发者平台签发）；没有它们，这些路由照旧返回 `403 insufficient_scope`。
+- **可选的 `ELDORADO_PUBLIC_REFERRAL_ID`** 让匿名使用与账户分开计价（见 **环境变量**）。
 
 ### 响应从不提及提供方的名称
 
@@ -2397,6 +2404,7 @@ curl -H "X-Gateway-Secret: $APISIX_GATEWAY_SECRET" -H "X-Consumer-Username: ops"
 | `DEFINDEX_MAX_FEE_STROOPS` | 否 | `10000000` | 构建出的 DeFindex 交易最多可向签名者收取的费用，包含费与 Soroban 资源费合计（stroops）；超过时构建以 `502 provider_error` 拒绝 |
 | `ELDORADO_CLIENT_ID` | 否 | 无 | El Dorado 发给集成方的 ClientID。与 `ELDORADO_REFERRAL_ID` 一起开启 `POST /v1/onramp/p2p/quotes` 和 `POST /v1/offramp/p2p/quotes` 并为每个会话的订单做归属；两者缺一，这些路由返回 `503 misconfigured` |
 | `ELDORADO_REFERRAL_ID` | 否 | 无 | 与 `ELDORADO_CLIENT_ID` 配套的 ReferralID |
+| `ELDORADO_PUBLIC_REFERRAL_ID` | 否 | 无 | 共享公钥的报价和会话代替 `ELDORADO_REFERRAL_ID` 携带的 ReferralID；向 El Dorado 申请佣金最高的一个。为空：公钥使用 `ELDORADO_REFERRAL_ID` |
 | `ELDORADO_TIMEOUT_MS` | 否 | `10000` | 对 P2P 市场单次调用的预算（ms） |
 | `TRUSTLESS_WORK_API_KEY_TESTNET` | 测试网上的受保护付款需要 | — | Trustless Work 的测试网 API key（供 `dev` key 使用）。仅当 `PLUGINS_ENABLED` 包含 `trustless-work` 时路由才存在；没有该 key 时，它们在测试网上返回 `503 misconfigured`。需要同时设置 `TRUSTLESS_WORK_PLATFORM_SECRET_TESTNET` |
 | `TRUSTLESS_WORK_BASE_URL_TESTNET` | 否 | `https://dev.api.trustlesswork.com` | 测试网的 Trustless Work V1 API |
