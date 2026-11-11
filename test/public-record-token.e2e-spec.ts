@@ -277,8 +277,13 @@ describe('Public record tokens (e2e)', () => {
         .set('X-Record-Token', tokenOf(kind, id))
         .expect(200);
       expect(res.body.id).toBe(id);
+      // The key's network (prod: mainnet), as every by-id lookup takes it.
       expect(model.findFirst).toHaveBeenCalledWith({
-        where: { id, consumer: { apisixUsername: 'cosmos_wallet' } },
+        where: {
+          id,
+          consumer: { apisixUsername: 'cosmos_wallet' },
+          network: 'public',
+        },
       });
     });
 
@@ -311,7 +316,11 @@ describe('Public record tokens (e2e)', () => {
         .expect(200);
       expect(res.body.id).toBe(id);
       expect(model.findFirst).toHaveBeenCalledWith({
-        where: { id, consumer: { apisixUsername: 'cosmos_u1' } },
+        where: {
+          id,
+          consumer: { apisixUsername: 'cosmos_u1' },
+          network: 'public',
+        },
       });
     });
   });
@@ -400,6 +409,7 @@ describe('Public record tokens (e2e)', () => {
         where: {
           id: legacy.id,
           consumer: { apisixUsername: 'cosmos_wallet' },
+          network: 'public',
         },
       });
       expect(deprecations(warn)).toEqual([

@@ -1154,6 +1154,22 @@ export class LiquidityPoolsService {
     return resolveNetwork(this.config, consumer);
   }
 
+  /**
+   * The one filter every by-id read and write of an operation goes through: the
+   * calling consumer AND the network its key targets, as the list filters. A
+   * sandbox key used to read and submit its own account's mainnet operations (and
+   * a production key its test-network ones), because this lookup filtered by
+   * consumer only. Another network's operation is the 404 of a missing one, as
+   * another consumer's is.
+   */
+  private ownedWhere(consumer: GatewayConsumer, id: string) {
+    return {
+      id,
+      consumer: { apisixUsername: consumer.username },
+      network: this.resolveNetwork(consumer),
+    };
+  }
+
   /** Mirror the APISIX consumer locally so operations can be scoped to it. */
   private resolveConsumer(consumer: GatewayConsumer) {
     return this.consumers.resolve(consumer);
@@ -1173,12 +1189,13 @@ export class LiquidityPoolsService {
     return { code: r.asset, issuer: r.issuer, asset: this.assetFromReserve(r) };
   }
 
+  /** The caller's operation on its key's network, or 404. */
   private async findOwned(
     consumer: GatewayConsumer,
     id: string,
   ): Promise<LiquidityPoolOperation> {
     const op = await this.prisma.liquidityPoolOperation.findFirst({
-      where: { id, consumer: { apisixUsername: consumer.username } },
+      where: this.ownedWhere(consumer, id),
     });
     if (!op) {
       throw ApiError.notFound(`Liquidity pool operation ${id} not found`);

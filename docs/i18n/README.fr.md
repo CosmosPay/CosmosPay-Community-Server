@@ -2588,6 +2588,10 @@ plugins isolés.
 
 ## Mise à niveau — changements incompatibles et notes de déploiement
 
+### Swaps, liquidité, paiements privés, swaps cross-chain et USDT0 : un enregistrement lu par son id suit le réseau de la clé
+
+- **`GET /v1/swaps/{id}`, `POST /v1/swaps/{id}/submit`, `GET /v1/liquidity-pools/operations/{id}`, `POST /v1/liquidity-pools/operations/{id}/submit`, `GET /v1/zk-payments/{id}`, `GET /v1/cross-chain-swaps/{id}`, `POST /v1/cross-chain-swaps/{id}/deposit` et `GET /v1/usdt0/transfers/{id}` répondent à un enregistrement de l'autre réseau comme à un enregistrement inexistant (`404`)** (une correction du comportement de l'API) : une clé sandbox n'atteint que les enregistrements du réseau de test du compte et une clé de production que ceux du mainnet, comme le faisait déjà chaque liste. Les swaps Solana et Monad, les swaps cross-chain et les transferts USDT0 n'existent que sur le mainnet : une clé sandbox n'en trouve plus aucun par son id. Avant, une clé sandbox pouvait lire et soumettre les swaps et les opérations de liquidité mainnet du même compte, lire ses swaps cross-chain et signaler leurs dépôts, et lire ses transferts USDT0, et une clé de production pouvait lire les paiements privés du compte sur le réseau de test. Pas de migration, pas de nouvelle variable.
+
 ### Intentions de paiement : une intention lue par son id suit le réseau de la clé
 
 - **`GET`, `PATCH` et `DELETE /v1/payment-intents/{id}`, `POST /v1/payment-intents/{id}/validate` et `GET /v1/payment-intents/{id}/transitions` répondent `404` pour une intention de l'autre réseau** (une correction du comportement de l'API) : une clé sandbox n'atteint que les intentions du réseau de test du compte et une clé de production que celles du mainnet, comme le faisait déjà la liste. Avant, une clé sandbox pouvait lire, modifier, valider et supprimer les intentions mainnet du même compte. Pas de migration, pas de nouvelle variable.

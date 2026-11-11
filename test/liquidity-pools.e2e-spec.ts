@@ -239,13 +239,85 @@ describe('Liquidity pools guards (e2e)', () => {
       },
     );
 
-    it('reads one operation only under its own consumer (404 otherwise)', async () => {
+    it('reads one operation only under its own consumer and network (404 otherwise)', async () => {
       const res = await tenant(OPERATION, 'liquidity:read').expect(404);
 
       expect(res.body.code).toBe('not_found');
       expect(prismaMock.liquidityPoolOperation.findFirst).toHaveBeenCalledWith({
-        where: { id: OP_ID, consumer: { apisixUsername: 'cosmos_u1' } },
+        // The key's network: no environment header falls back to STELLAR_NETWORK.
+        where: {
+          id: OP_ID,
+          consumer: { apisixUsername: 'cosmos_u1' },
+          network: 'testnet',
+        },
       });
+    });
+  });
+
+  describe('one operation by its id, on the network the key targets', () => {
+    /** The same account's two keys: production (mainnet) and sandbox (testnet). */
+    const asAccount = (req: request.Test, env: 'prod' | 'dev', scope: string) =>
+      req
+        .set('x-gateway-secret', SECRET)
+        .set('x-consumer-username', 'cosmos_u1')
+        .set('x-consumer-env', env)
+        .set('x-consumer-permissions', scope);
+
+    // A mainnet operation, and a lookup that answers a `where` the way Postgres
+    // would: every field it names must match.
+    const row: Record<string, any> = {
+      id: OP_ID,
+      owner: 'cosmos_u1',
+      network: 'public',
+      kind: 'DEPOSIT',
+      status: 'PENDING',
+      merchantFee: null,
+      feeWallet: null,
+      xdr: 'AAAA',
+      uri: 'web+stellar:tx?xdr=AAAA',
+    };
+    const lookup = ({ where }: any) =>
+      Promise.resolve(
+        row.id === where.id &&
+          (!where.consumer || row.owner === where.consumer.apisixUsername) &&
+          (where.network === undefined || row.network === where.network)
+          ? row
+          : null,
+      );
+
+    beforeEach(() => {
+      prismaMock.liquidityPoolOperation.findFirst.mockImplementation(lookup);
+    });
+
+    afterEach(() => {
+      prismaMock.liquidityPoolOperation.findFirst.mockResolvedValue(null);
+    });
+
+    it("answers the sandbox key the 404 of a missing operation for the account's mainnet one", async () => {
+      const read = await asAccount(
+        request(app.getHttpServer()).get(OPERATION[1]),
+        'dev',
+        'liquidity:read',
+      ).expect(404);
+      expect(read.body.code).toBe('not_found');
+
+      const submit = await asAccount(
+        request(app.getHttpServer()).post(SUBMIT[1]),
+        'dev',
+        'liquidity:write',
+      )
+        .send({ signedXdr: 'AAAA' })
+        .expect(404);
+      expect(submit.body.code).toBe('not_found');
+    });
+
+    it('still serves it to the production key', async () => {
+      const res = await asAccount(
+        request(app.getHttpServer()).get(OPERATION[1]),
+        'prod',
+        'liquidity:read',
+      ).expect(200);
+      expect(res.body).toMatchObject({ id: OP_ID, network: 'public' });
     });
   });
 

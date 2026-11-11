@@ -774,6 +774,69 @@ describe('LiquidityPoolsService responses carry only the public projection', () 
   });
 });
 
+/**
+ * One operation by its id is reached only through the network the key targets, as
+ * the list is. The fake table answers a `where` the way Postgres would (every
+ * field it names must match), so a lookup that leaves the network out finds the
+ * other network's row, and these tests fail, exactly as the real query did.
+ */
+describe('LiquidityPoolsService: one operation by its id, on the key network only', () => {
+  const MAINNET_ID = 'lp_mainnet';
+  const sandboxKey = consumer;
+  const productionKey: GatewayConsumer = { ...consumer, environment: 'prod' };
+
+  function build() {
+    const prisma = createPrisma([
+      depositRow({ id: MAINNET_ID, network: 'public', status: 'PENDING' }),
+    ]);
+    const stellar = makeStellar();
+    const config = { get: () => stellarConfig() } as any;
+    const webhooks = new WebhookTerminalEmitter(prisma, {
+      emit: jest.fn(),
+    } as any);
+    const { service } = makeService(config, prisma, webhooks, stellar);
+    return { service, prisma, stellar };
+  }
+
+  async function expectNotFound(call: Promise<unknown>) {
+    const err = await call.then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).getStatus()).toBe(HttpStatus.NOT_FOUND);
+  }
+
+  it('scopes the by-id lookup to the consumer AND the key network', async () => {
+    const { service, prisma } = build();
+    await service.findOneOperation(productionKey, MAINNET_ID);
+    expect(
+      prisma.liquidityPoolOperation.findFirst.mock.calls[0][0].where,
+    ).toEqual({
+      id: MAINNET_ID,
+      consumer: { apisixUsername: consumer.username },
+      network: 'public',
+    });
+  });
+
+  it("answers a sandbox key the 404 of a missing operation for the account's mainnet one, and relays nothing", async () => {
+    const { service, prisma, stellar } = build();
+
+    await expectNotFound(service.findOneOperation(sandboxKey, MAINNET_ID));
+    await expectNotFound(service.submit(sandboxKey, MAINNET_ID, 'AAAA'));
+
+    expect(stellar.submitTransaction).not.toHaveBeenCalled();
+    expect(prisma.rows[0].status).toBe('PENDING');
+  });
+
+  it('still serves the production key that owns it', async () => {
+    const { service } = build();
+    await expect(
+      service.findOneOperation(productionKey, MAINNET_ID),
+    ).resolves.toMatchObject({ id: MAINNET_ID, network: 'public' });
+  });
+});
+
 describe('LiquidityPoolsService.submit vs observer (issue #32 race)', () => {
   let prisma: ReturnType<typeof createPrisma>;
   let stellar: ReturnType<typeof makeStellar>;

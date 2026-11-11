@@ -298,12 +298,86 @@ describe('Cross-chain swaps guards (e2e)', () => {
       );
     });
 
-    it('reads one swap only under its own consumer (404 otherwise)', async () => {
+    it('reads one swap only under its own consumer and network (404 otherwise)', async () => {
       const res = await tenant(GET_ONE, 'swaps:read').expect(404);
       expect(res.body.code).toBe('not_found');
       expect(prismaMock.crossChainSwap.findFirst).toHaveBeenCalledWith({
-        where: { id: SWAP_ID, consumer: { apisixUsername: 'cosmos_u1' } },
+        // The key's network: no environment header falls back to STELLAR_NETWORK.
+        where: {
+          id: SWAP_ID,
+          consumer: { apisixUsername: 'cosmos_u1' },
+          network: 'testnet',
+        },
       });
+    });
+  });
+
+  describe('one swap by its id, on the network the key targets', () => {
+    /** The same account's two keys: production (mainnet) and sandbox (testnet). */
+    const asAccount = (req: request.Test, env: 'prod' | 'dev', scope: string) =>
+      req
+        .set('x-gateway-secret', SECRET)
+        .set('x-consumer-username', 'cosmos_u1')
+        .set('x-consumer-env', env)
+        .set('x-consumer-permissions', scope);
+
+    // A mainnet swap (they all are), and a lookup that answers a `where` the way
+    // Postgres would: every field it names must match.
+    const row: Record<string, any> = {
+      id: SWAP_ID,
+      owner: 'cosmos_u1',
+      network: 'public',
+      status: 'AWAITING_DEPOSIT',
+      originChain: 'stellar',
+      merchantFee: null,
+      depositAddress:
+        'GCKFBEIYV2U22IO2BJ4KVJOIP7XPWQGQFKKWXR6DOSJBV7STMAQSMTGG',
+      depositUri: null,
+    };
+    const lookup = ({ where }: any) =>
+      Promise.resolve(
+        row.id === where.id &&
+          (!where.consumer || row.owner === where.consumer.apisixUsername) &&
+          (where.network === undefined || row.network === where.network)
+          ? row
+          : null,
+      );
+
+    beforeEach(() => {
+      prismaMock.crossChainSwap.findFirst.mockImplementation(lookup);
+      nearIntentsMock.submitDeposit.mockClear();
+    });
+
+    afterEach(() => {
+      prismaMock.crossChainSwap.findFirst.mockResolvedValue(null);
+    });
+
+    it("answers the sandbox key the 404 of a missing swap for the account's mainnet swap", async () => {
+      const read = await asAccount(
+        request(app.getHttpServer()).get(GET_ONE[1]),
+        'dev',
+        'swaps:read',
+      ).expect(404);
+      expect(read.body.code).toBe('not_found');
+
+      const deposit = await asAccount(
+        request(app.getHttpServer()).post(DEPOSIT[1]),
+        'dev',
+        'swaps:write',
+      )
+        .send({ txHash: 'ab'.repeat(32) })
+        .expect(404);
+      expect(deposit.body.code).toBe('not_found');
+      expect(nearIntentsMock.submitDeposit).not.toHaveBeenCalled();
+    });
+
+    it('still serves it to the production key', async () => {
+      const res = await asAccount(
+        request(app.getHttpServer()).get(GET_ONE[1]),
+        'prod',
+        'swaps:read',
+      ).expect(200);
+      expect(res.body).toMatchObject({ id: SWAP_ID, network: 'public' });
     });
   });
 
@@ -337,7 +411,11 @@ describe('Cross-chain swaps guards (e2e)', () => {
         .expect(404);
       expect(res.body.code).toBe('not_found');
       expect(prismaMock.crossChainSwap.findFirst).toHaveBeenCalledWith({
-        where: { id: SWAP_ID, consumer: { apisixUsername: 'cosmos_wallet' } },
+        where: {
+          id: SWAP_ID,
+          consumer: { apisixUsername: 'cosmos_wallet' },
+          network: 'testnet',
+        },
       });
       expect(prismaMock.crossChainSwap.findMany).not.toHaveBeenCalled();
     });

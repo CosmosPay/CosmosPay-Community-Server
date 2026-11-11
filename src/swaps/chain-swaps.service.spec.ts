@@ -268,6 +268,30 @@ describe('ChainSwapsService', () => {
     expect(err.code).toBe(ApiErrorCode.IdempotencyConflict);
   });
 
+  it("finds a swap by its id only on the key's network: the same account's sandbox key finds none", async () => {
+    // The fake table answers a `where` the way Postgres would (every field it
+    // names must match), so a lookup that leaves the network out finds the
+    // mainnet swap for a sandbox key, as the real query did. A miss here sends
+    // `GET` and submit on `/v1/swaps/{id}` to the Stellar table's 404.
+    const { service, prisma } = setup();
+    const created = await service.create(consumer, DTO);
+    const sandboxKey: GatewayConsumer = { ...consumer, environment: 'dev' };
+
+    await expect(service.findOwned(sandboxKey, created.id)).resolves.toBeNull();
+    expect(
+      (prisma.chainSwap.findFirst as unknown as jest.Mock).mock.calls[0][0]
+        .where,
+    ).toEqual({
+      id: created.id,
+      consumer: { apisixUsername: 'cosmos_u1' },
+      network: 'testnet',
+    });
+
+    await expect(
+      service.findOwned(consumer, created.id),
+    ).resolves.toMatchObject({ id: created.id, network: 'public' });
+  });
+
   describe('submit', () => {
     it('verifies before it discloses anything — even that the swap expired', async () => {
       const { service, rows, solana } = setup();

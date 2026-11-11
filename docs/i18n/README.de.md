@@ -2645,6 +2645,10 @@ eingeschaltet werden.
 
 ## Upgrade — Breaking Changes und Deploy-Hinweise
 
+### Swaps, Liquidität, private Zahlungen, Cross-Chain-Swaps und USDT0: ein Datensatz über seine ID folgt dem Netzwerk des Schlüssels
+
+- **`GET /v1/swaps/{id}`, `POST /v1/swaps/{id}/submit`, `GET /v1/liquidity-pools/operations/{id}`, `POST /v1/liquidity-pools/operations/{id}/submit`, `GET /v1/zk-payments/{id}`, `GET /v1/cross-chain-swaps/{id}`, `POST /v1/cross-chain-swaps/{id}/deposit` und `GET /v1/usdt0/transfers/{id}` antworten bei einem Datensatz des anderen Netzwerks wie bei einem fehlenden (`404`)** (eine Korrektur des API-Verhaltens): Ein Sandbox-Schlüssel erreicht nur die Testnetz-Datensätze des Kontos und ein Produktionsschlüssel nur dessen Mainnet-Datensätze, wie es jede Liste schon tat. Swaps auf Solana und Monad, Cross-Chain-Swaps und USDT0-Transfers gibt es nur im Mainnet, ein Sandbox-Schlüssel findet also keinen davon mehr über seine ID. Vorher konnte ein Sandbox-Schlüssel die Mainnet-Swaps und -Liquiditätsoperationen desselben Kontos lesen und einreichen, seine Cross-Chain-Swaps lesen und deren Einzahlungen melden und seine USDT0-Transfers lesen, und ein Produktionsschlüssel konnte die privaten Zahlungen des Kontos im Testnetz lesen. Keine Migration, keine neue Variable.
+
 ### Zahlungsabsichten: eine Absicht über ihre ID folgt dem Netzwerk des Schlüssels
 
 - **`GET`, `PATCH` und `DELETE /v1/payment-intents/{id}`, `POST /v1/payment-intents/{id}/validate` und `GET /v1/payment-intents/{id}/transitions` antworten bei einer Absicht des anderen Netzwerks mit `404`** (eine Korrektur des API-Verhaltens): Ein Sandbox-Schlüssel erreicht nur die Testnetz-Absichten des Kontos und ein Produktionsschlüssel nur dessen Mainnet-Absichten, wie es die Liste schon tat. Vorher konnte ein Sandbox-Schlüssel die Mainnet-Absichten desselben Kontos lesen, ändern, validieren und löschen. Keine Migration, keine neue Variable.

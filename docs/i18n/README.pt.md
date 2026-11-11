@@ -2556,6 +2556,10 @@ serviço em `src/native-plugins/<slug>/`, ligados pela mesma lista
 
 ## Atualização — mudanças incompatíveis e notas de deploy
 
+### Swaps, liquidez, pagamentos privados, swaps cross-chain e USDT0: um registro pelo seu id segue a rede da chave
+
+- **`GET /v1/swaps/{id}`, `POST /v1/swaps/{id}/submit`, `GET /v1/liquidity-pools/operations/{id}`, `POST /v1/liquidity-pools/operations/{id}/submit`, `GET /v1/zk-payments/{id}`, `GET /v1/cross-chain-swaps/{id}`, `POST /v1/cross-chain-swaps/{id}/deposit` e `GET /v1/usdt0/transfers/{id}` respondem a um registro da outra rede como a um inexistente (`404`)** (uma correção do comportamento da API): uma chave sandbox só alcança os registros da rede de testes da conta e uma chave de produção só os de mainnet, como cada lista já fazia. Os swaps de Solana e Monad, os swaps cross-chain e as transferências USDT0 são só da mainnet, então uma chave sandbox não encontra mais nenhum pelo id. Antes, uma chave sandbox podia ler e enviar os swaps e as operações de liquidez de mainnet da mesma conta, ler seus swaps cross-chain e informar seus depósitos, e ler suas transferências USDT0, e uma chave de produção podia ler os pagamentos privados da rede de testes da conta. Sem migração nem variáveis novas.
+
 ### Intenções de pagamento: uma intenção pelo seu id segue a rede da chave
 
 - **`GET`, `PATCH` e `DELETE /v1/payment-intents/{id}`, `POST /v1/payment-intents/{id}/validate` e `GET /v1/payment-intents/{id}/transitions` respondem `404` a uma intenção da outra rede** (uma correção do comportamento da API): uma chave sandbox só alcança as intenções da rede de testes da conta e uma chave de produção só as de mainnet, como a lista já fazia. Antes, uma chave sandbox podia ler, alterar, validar e excluir as intenções de mainnet da mesma conta. Sem migração nem variáveis novas.

@@ -852,10 +852,11 @@ export class CrossChainSwapsService {
 
   // ── Helpers ───────────────────────────────────────────────────────────────
   /**
-   * A miss on someone else's swap is a 404, never a 403. The shared public key
-   * also needs the swap's record token; a missing or wrong one is the same
-   * 404, decided before the table is read. On a legacy route (`legacyRoute`,
-   * the deposit) a missing token is still admitted for now, and logged.
+   * A miss on someone else's swap is a 404, never a 403, and so is a swap on
+   * another network than the key targets. The shared public key also needs the
+   * swap's record token; a missing or wrong one is the same 404, decided before
+   * the table is read. On a legacy route (`legacyRoute`, the deposit) a missing
+   * token is still admitted for now, and logged.
    */
   private async findOwned(
     consumer: GatewayConsumer,
@@ -875,7 +876,7 @@ export class CrossChainSwapsService {
       throw ApiError.notFound(`Cross-chain swap ${id} not found`);
     }
     const swap = await this.prisma.crossChainSwap.findFirst({
-      where: { id, consumer: { apisixUsername: consumer.username } },
+      where: this.ownedWhere(consumer, id),
     });
     if (!swap) throw ApiError.notFound(`Cross-chain swap ${id} not found`);
     if (legacyRoute) {
@@ -888,6 +889,20 @@ export class CrossChainSwapsService {
       );
     }
     return swap;
+  }
+
+  /**
+   * The one filter every by-id read and write of a cross-chain swap goes
+   * through: the calling consumer AND the network its key targets, as the list
+   * filters. These swaps are mainnet only, so a sandbox key finds none; it used
+   * to read and report deposits on its own account's mainnet swaps by id.
+   */
+  private ownedWhere(consumer: GatewayConsumer, id: string) {
+    return {
+      id,
+      consumer: { apisixUsername: consumer.username },
+      network: resolveNetwork(this.config, consumer),
+    };
   }
 
   private async present(swap: CrossChainSwap): Promise<CrossChainSwapView> {
