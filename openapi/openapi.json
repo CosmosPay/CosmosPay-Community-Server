@@ -2222,7 +2222,7 @@
     },
     "/v1/swaps/quote": {
       "post": {
-        "description": "Prices `amount` of the source asset on the chain's own venue: the Stellar DEX (a Horizon strict-send path search on the key's network) when `chain` is omitted or `stellar`, the Solana swap route for `solana` and the Monad swap route Flow for `monad`, both mainnet only. The answer carries the plan commission (`fee`: taken from the source amount on Stellar, from the output on Solana and Monad), any `merchantFee`, the estimated output and the minimum after slippage. `slippageBps` defaults to 50 and a value above the cap (500) is `slippage_exceeded`, unless the deployment configures other values.\n\nRequires the `swaps:read` scope. The shared public key may call it.",
+        "description": "Prices `amount` of the source asset on the chain's own venue: the Stellar DEX (a Horizon strict-send path search on the key's network) when `chain` is omitted or `stellar`, the Solana swap route for `solana` and the Monad swap route for `monad`, both mainnet only. The answer carries the plan commission (`fee`: taken from the source amount on Stellar, from the output on Solana and Monad), any `merchantFee`, the estimated output and the minimum after slippage. `slippageBps` defaults to 50 and a value above the cap (500) is `slippage_exceeded`, unless the deployment configures other values.\n\nRequires the `swaps:read` scope. The shared public key may call it.",
         "operationId": "SwapsController_quote_v1",
         "parameters": [],
         "requestBody": {

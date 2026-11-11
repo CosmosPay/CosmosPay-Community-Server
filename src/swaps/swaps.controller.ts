@@ -118,7 +118,7 @@ export class SwapsController {
       "Prices `amount` of the source asset on the chain's own venue: the " +
       "Stellar DEX (a Horizon strict-send path search on the key's network) " +
       'when `chain` is omitted or `stellar`, the Solana swap route for `solana` and the Monad swap route ' +
-      'Flow for `monad`, both mainnet only. The answer carries the plan ' +
+      'for `monad`, both mainnet only. The answer carries the plan ' +
       'commission (`fee`: taken from the source amount on Stellar, from the ' +
       'output on Solana and Monad), any `merchantFee`, the estimated output ' +
       'and the minimum after slippage. `slippageBps` defaults to 50 and a ' +
