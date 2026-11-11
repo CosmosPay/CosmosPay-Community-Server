@@ -138,6 +138,7 @@ export class NearIntentsClient implements OnApplicationBootstrap {
     return requestUpstreamJson<T>(
       {
         provider: 'NEAR Intents',
+        service: 'the cross-chain route',
         keyEnv: 'NEAR_INTENTS_API_KEY',
         method,
         url: `${baseUrl}${path}`,

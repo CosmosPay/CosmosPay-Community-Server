@@ -80,7 +80,8 @@ describe('TrustlessWorkClient', () => {
     const error = await refusal(client().releaseFunds('public', RELEASE));
     expect(error.getStatus()).toBe(503);
     expect(error.code).toBe(ApiErrorCode.Misconfigured);
-    expect(error.message).toMatch(/TRUSTLESS_WORK_API_KEY_MAINNET/);
+    expect(error.operatorDetail).toMatch(/TRUSTLESS_WORK_API_KEY_MAINNET/);
+    expect(error.message).not.toMatch(/TRUSTLESS/i);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -118,7 +119,8 @@ describe('TrustlessWorkClient', () => {
   it('names the variable when Trustless Work refuses the key', async () => {
     fetchMock.mockReturnValue(answer(401, {}));
     const error = await refusal(client().releaseFunds('testnet', RELEASE));
-    expect(error.message).toMatch(/TRUSTLESS_WORK_API_KEY_TESTNET/);
+    expect(error.operatorDetail).toMatch(/TRUSTLESS_WORK_API_KEY_TESTNET/);
+    expect(error.message).not.toMatch(/TRUSTLESS/i);
   });
 
   it('is 502 with Trustless Work’s message when a 2xx says FAILED', async () => {

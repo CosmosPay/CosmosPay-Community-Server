@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { requestUpstreamJson, UpstreamNotFound } from '@/common/upstream-http';
+import { scrubUpstreamText } from '@/common/provider-names';
 import type {
   AppConfig,
   StellarNetwork,
@@ -244,6 +245,7 @@ export class TrustlessWorkClient {
     return requestUpstreamJson<T>(
       {
         provider: PROVIDER,
+        service: 'the protected-payments service',
         keyEnv: trustlessWorkEnvName(network, 'API_KEY'),
         method: call.method,
         url: `${cfg.baseUrl}${call.path}`,
@@ -260,10 +262,9 @@ export class TrustlessWorkClient {
       network
     ];
     if (!cfg.apiKey) {
-      throw ApiError.unavailable(
-        ApiErrorCode.Misconfigured,
-        `Trustless Work is not configured on ${network}: set ` +
-          `${trustlessWorkEnvName(network, 'API_KEY')}.`,
+      throw ApiError.misconfigured(
+        `Protected payments are not configured on ${network}.`,
+        `set ${trustlessWorkEnvName(network, 'API_KEY')}`,
       );
     }
     return cfg;
@@ -278,5 +279,6 @@ function providerError(message: string): ApiError {
 function reason(answer: BuildAnswer | null): string {
   const message =
     answer && typeof answer.message === 'string' ? answer.message.trim() : '';
-  return message ? `: ${message.slice(0, 300)}` : '.';
+  const relayed = message ? scrubUpstreamText(message.slice(0, 300)) : '';
+  return relayed ? `: ${relayed}` : '.';
 }

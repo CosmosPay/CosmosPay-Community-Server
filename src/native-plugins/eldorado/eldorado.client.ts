@@ -128,6 +128,7 @@ export class EldoradoClient {
     return requestUpstreamJson<RawQuote>(
       {
         provider: P2P_MARKETPLACE,
+        service: 'the P2P marketplace',
         keyEnv: 'ELDORADO_CLIENT_ID',
         method: 'POST',
         url: `${ELDORADO_HOSTS[network].api}${path}`,
@@ -150,6 +151,7 @@ export class EldoradoClient {
     return requestUpstreamJson<T>(
       {
         provider: P2P_MARKETPLACE,
+        service: 'the P2P marketplace',
         keyEnv: 'ELDORADO_CLIENT_ID',
         method: 'GET',
         url: `${ELDORADO_HOSTS[network].api}${path}`,
