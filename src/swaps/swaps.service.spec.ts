@@ -471,6 +471,72 @@ describe('SwapsService responses carry only the public projection', () => {
   });
 });
 
+/**
+ * One swap by its id is reached only through the network the key targets, as the
+ * list is. The fake table answers a `where` the way Postgres would (every field it
+ * names must match), so a lookup that leaves the network out finds the other
+ * network's row, and these tests fail, exactly as the real query did.
+ */
+describe('SwapsService: one swap by its id, on the key network only', () => {
+  const MAINNET_ID = 'swap_mainnet';
+  const sandboxKey = consumer;
+  const productionKey: GatewayConsumer = { ...consumer, environment: 'prod' };
+
+  function build() {
+    const prisma = createPrisma([
+      swapRow({ id: MAINNET_ID, network: 'public', status: 'PENDING' }),
+    ]);
+    const stellar = makeStellar();
+    const service = new SwapsService(
+      makeConfig(),
+      prisma,
+      makeEmitter(prisma, { emit: jest.fn() } as any),
+      stellar as any,
+      new ConsumerResolverService(prisma as never),
+      new StellarAccountLoader(stellar as never),
+      new SignedTransactionRelay(stellar as never),
+      recordTokens,
+    );
+    return { service, prisma, stellar };
+  }
+
+  async function expectNotFound(call: Promise<unknown>) {
+    const err = await call.then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).getStatus()).toBe(HttpStatus.NOT_FOUND);
+  }
+
+  it('scopes the by-id lookup to the consumer AND the key network', async () => {
+    const { service, prisma } = build();
+    await service.findOne(productionKey, MAINNET_ID);
+    expect(prisma.swap.findFirst.mock.calls[0][0].where).toEqual({
+      id: MAINNET_ID,
+      consumer: { apisixUsername: consumer.username },
+      network: 'public',
+    });
+  });
+
+  it("answers a sandbox key the 404 of a missing swap for the account's mainnet swap, and relays nothing", async () => {
+    const { service, prisma, stellar } = build();
+
+    await expectNotFound(service.findOne(sandboxKey, MAINNET_ID));
+    await expectNotFound(service.submit(sandboxKey, MAINNET_ID, 'AAAA'));
+
+    expect(stellar.submitTransaction).not.toHaveBeenCalled();
+    expect(prisma.rows[0].status).toBe('PENDING');
+  });
+
+  it('still serves the production key that owns it', async () => {
+    const { service } = build();
+    await expect(
+      service.findOne(productionKey, MAINNET_ID),
+    ).resolves.toMatchObject({ id: MAINNET_ID, network: 'public' });
+  });
+});
+
 describe('SwapsService.submit vs observer (issue #29 double terminal event)', () => {
   let prisma: ReturnType<typeof createPrisma>;
   let stellar: ReturnType<typeof makeStellar>;

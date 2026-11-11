@@ -693,6 +693,43 @@ describe('CrossChainSwapsService', () => {
       expect(err.getStatus()).toBe(404);
     });
   });
+
+  /**
+   * One swap by its id is reached only through the network the key targets, as
+   * the list is. The fake table answers a `where` the way Postgres would (every
+   * field it names must match), so a lookup that leaves the network out finds the
+   * mainnet swap for a sandbox key, and this fails, exactly as the real query did.
+   */
+  describe('one swap by its id, on the key network only', () => {
+    const sandboxKey: GatewayConsumer = { ...prodConsumer, environment: 'dev' };
+
+    it("answers the same account's sandbox key the 404 of a missing swap, and reports no deposit", async () => {
+      const { service, rows, nearIntents } = setup();
+      const swap = await service.create(prodConsumer, BASE_DTO);
+
+      const read = await rejection(service.findOne(sandboxKey, swap.id));
+      expect(read.getStatus()).toBe(404);
+      expect(read.message).toBe(`Cross-chain swap ${swap.id} not found`);
+      const deposit = await rejection(
+        service.submitDeposit(sandboxKey, swap.id, 'ab'.repeat(32)),
+      );
+      expect(deposit.getStatus()).toBe(404);
+
+      expect(nearIntents.submitDeposit).not.toHaveBeenCalled();
+      expect(rows[0]).toMatchObject({
+        status: 'AWAITING_DEPOSIT',
+        depositTxHash: null,
+      });
+    });
+
+    it('still serves the production key that owns it', async () => {
+      const { service } = setup();
+      const swap = await service.create(prodConsumer, BASE_DTO);
+      await expect(
+        service.findOne(prodConsumer, swap.id),
+      ).resolves.toMatchObject({ id: swap.id, network: 'public' });
+    });
+  });
 });
 
 describe('CrossChainSwapsService merchant fee', () => {

@@ -2483,6 +2483,10 @@ seal होती हैं और कभी लौटाई नहीं जा
 
 ## अपग्रेड — breaking changes और deploy नोट्स
 
+### Swaps, liquidity, निजी भुगतान, cross-chain swaps और USDT0: id से पढ़ा गया एक record key के network का पालन करता है
+
+- **`GET /v1/swaps/{id}`, `POST /v1/swaps/{id}/submit`, `GET /v1/liquidity-pools/operations/{id}`, `POST /v1/liquidity-pools/operations/{id}/submit`, `GET /v1/zk-payments/{id}`, `GET /v1/cross-chain-swaps/{id}`, `POST /v1/cross-chain-swaps/{id}/deposit` और `GET /v1/usdt0/transfers/{id}` दूसरे network के record को वैसे ही जवाब देते हैं जैसे किसी मौजूद न होने वाले record को (`404`)** (API व्यवहार का एक सुधार): sandbox key केवल account के test-network records तक पहुँचती है और production key केवल उसके mainnet records तक, जैसा हर list पहले से करती थी। Solana और Monad swaps, cross-chain swaps और USDT0 transfers केवल mainnet पर होते हैं, इसलिए sandbox key अब id से इनमें से कोई नहीं पाती। पहले, sandbox key उसी account के mainnet swaps और liquidity operations को पढ़ और submit कर सकती थी, उसके cross-chain swaps पढ़ सकती थी और उनके deposits की सूचना दे सकती थी, और उसके USDT0 transfers पढ़ सकती थी, और production key account के test-network निजी भुगतान पढ़ सकती थी। कोई migration नहीं, कोई नया variable नहीं।
+
 ### Payment intents: id से पढ़ा गया एक intent key के network का पालन करता है
 
 - **`GET`, `PATCH` और `DELETE /v1/payment-intents/{id}`, `POST /v1/payment-intents/{id}/validate` और `GET /v1/payment-intents/{id}/transitions` दूसरे network के intent पर `404` लौटाते हैं** (API व्यवहार का एक सुधार): sandbox key केवल account के test-network intents तक पहुँचती है और production key केवल उसके mainnet intents तक, जैसा list पहले से करती थी। पहले, sandbox key उसी account के mainnet intents को पढ़, बदल, validate और delete कर सकती थी। कोई migration नहीं, कोई नया variable नहीं।

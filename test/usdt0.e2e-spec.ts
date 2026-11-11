@@ -262,6 +262,52 @@ describe('USDT0 guards (e2e)', () => {
         .expect(400);
       expect(res.body.code).toBe('network_unsupported');
     });
+
+    describe("the account's mainnet transfer, by its id", () => {
+      // A mainnet transfer (they all are), and a lookup that answers a `where`
+      // the way Postgres would: every field it names must match.
+      const row: Record<string, any> = {
+        id: TRANSFER_ID,
+        owner: 'cosmos_u1',
+        network: 'public',
+        status: 'DELIVERED',
+        amount: '10',
+        feeAmount: '0',
+        amountSent: '10',
+        merchantFee: null,
+        txHash: 'ab'.repeat(32),
+        guid: null,
+        uri: 'web+stellar:tx?xdr=AAAA',
+      };
+      const lookup = ({ where }: any) =>
+        Promise.resolve(
+          row.id === where.id &&
+            (!where.consumer || row.owner === where.consumer.apisixUsername) &&
+            (where.network === undefined || row.network === where.network)
+            ? row
+            : null,
+        );
+
+      beforeEach(() => {
+        prismaMock.usdt0Transfer.findFirst.mockImplementation(lookup);
+      });
+
+      afterEach(() => {
+        prismaMock.usdt0Transfer.findFirst.mockResolvedValue(null);
+      });
+
+      it('answers the 404 of a missing transfer, where the production key reads it', async () => {
+        const res = await dev(GET_ONE, 'swaps:read').expect(404);
+        expect(res.body.code).toBe('not_found');
+
+        const live = await tenant(GET_ONE, 'swaps:read').expect(200);
+        expect(live.body).toMatchObject({
+          id: TRANSFER_ID,
+          network: 'public',
+          status: 'DELIVERED',
+        });
+      });
+    });
   });
 
   describe('the shared public key', () => {
@@ -288,6 +334,7 @@ describe('USDT0 guards (e2e)', () => {
         where: {
           id: TRANSFER_ID,
           consumer: { apisixUsername: 'cosmos_wallet' },
+          network: 'public',
         },
       });
     });
