@@ -281,10 +281,10 @@ Paths OpenAPI के `{param}` रूप में लिखे गए हैं
 | GET | `/v1/logs` | `payments:read` |  |
 | GET | `/v1/logs/webhooks` | `webhooks:read` |  |
 | GET | `/v1/offramp/p2p/market` | `offramp:read` | ✓ |
-| POST | `/v1/offramp/p2p/quotes` | `offramp:write` |  |
+| POST | `/v1/offramp/p2p/quotes` | `offramp:write` | ✓ |
 | GET | `/v1/offramp/p2p/sessions` | `offramp:read` |  |
-| POST | `/v1/offramp/p2p/sessions` | `offramp:write` |  |
-| GET | `/v1/offramp/p2p/sessions/{id}` | `offramp:read` |  |
+| POST | `/v1/offramp/p2p/sessions` | `offramp:write` | ✓ |
+| GET | `/v1/offramp/p2p/sessions/{id}` | `offramp:read` | ✓ |
 | GET | `/v1/offramp/p2p/tokens` | `offramp:read` | ✓ |
 | GET | `/v1/offramp/payouts` | `offramp:read` |  |
 | POST | `/v1/offramp/payouts` | `offramp:write` |  |
@@ -293,10 +293,10 @@ Paths OpenAPI के `{param}` रूप में लिखे गए हैं
 | POST | `/v1/offramp/payouts/{id}/documents` | `offramp:write` |  |
 | POST | `/v1/offramp/quotes` | `offramp:write` |  |
 | GET | `/v1/onramp/p2p/market` | `onramp:read` | ✓ |
-| POST | `/v1/onramp/p2p/quotes` | `onramp:write` |  |
+| POST | `/v1/onramp/p2p/quotes` | `onramp:write` | ✓ |
 | GET | `/v1/onramp/p2p/sessions` | `onramp:read` |  |
-| POST | `/v1/onramp/p2p/sessions` | `onramp:write` |  |
-| GET | `/v1/onramp/p2p/sessions/{id}` | `onramp:read` |  |
+| POST | `/v1/onramp/p2p/sessions` | `onramp:write` | ✓ |
+| GET | `/v1/onramp/p2p/sessions/{id}` | `onramp:read` | ✓ |
 | GET | `/v1/onramp/p2p/tokens` | `onramp:read` | ✓ |
 | GET | `/v1/onramp/payins` | `onramp:read` |  |
 | POST | `/v1/onramp/payins` | `onramp:write` |  |
@@ -2229,6 +2229,7 @@ Deploy का XLM platform देता है; हर पक्ष उन trans
 - **recipient तय है।** widget URL में `address` होता है, जिसे widget connected wallet मानता है और buyer बदल नहीं सकता; इसके बिना buyer कोई भी wallet connect कर देता और token वहीं पहुँचता। यह parameter El Dorado के documentation में नहीं है (2026-11-05 को widget के code से पढ़ा गया): अगर यह काम करना बंद कर दे, तो sessions खोलना बंद करें।
 - **widget को tab या window में खोलें, iframe में नहीं।** इसका अपना sign-in, camera वाला identity check और भुगतान का ऐसा step है जो popup से ज़्यादा चल सकता है।
 - **integrator ids वैकल्पिक हैं, firm quote को छोड़कर।** `ELDORADO_CLIENT_ID` और `ELDORADO_REFERRAL_ID` वे हैं जो El Dorado किसी integrator को देता है (api@eldorado.io)। इनके बिना market और sessions काम करते हैं और widget भुगतान से पहले quote करता है; इनके साथ `POST /v1/onramp/p2p/quotes` और `POST /v1/offramp/p2p/quotes` जवाब देते हैं, और हर session के widget में ids होते हैं, जो order को Cosmos Pay से जोड़ते हैं।
+- **बिना खाते वाले wallets भी खरीदते और बेचते हैं।** साझा public key quote ले सकती है, session खोल सकती है और उसी एक session को उसके `publicToken` के साथ `X-Record-Token` में भेजकर फिर पढ़ सकती है; वह कभी sessions की सूची नहीं देखती, क्योंकि हर anonymous wallet वही एक consumer है। सेट होने पर उसके quotes और sessions `ELDORADO_REFERRAL_ID` की जगह `ELDORADO_PUBLIC_REFERRAL_ID` लेकर जाते हैं: El Dorado integrator का commission हर referral id के हिसाब से तय करता है, इसलिए सबसे ऊँची दर वाली id माँगें, ताकि anonymous उपयोग सबसे ज़्यादा चुकाए, जैसे swaps में।
 - **क्या cache होता है।** market (मुद्राएँ, prices और chain सूची) हर network पर एक मिनट (`ELDORADO_MARKET_TTL_MS`); हर chain की token सूची एक घंटा (`ELDORADO_TOKENS_TTL_MS`; Ethereum की लगभग 1.2 MB है)। बिना price, minimum या भुगतान तरीके वाली मुद्रा बाहर रहती है, और वह chain भी जिसकी token सूची fail हो या खाली आए: यह log होता है और अगली बार फिर माँगा जाता है, और market सिर्फ़ तब 502 है जब chain सूची या हर token सूची fail हो।
 
 ## Plugins — एक slug के तहत extensions
@@ -2481,6 +2482,16 @@ seal होती हैं और कभी लौटाई नहीं जा
   plugins का अकेला route group हैं जो कोई API key नहीं लेता।
 
 ## अपग्रेड — breaking changes और deploy नोट्स
+
+### Payment intents: id से पढ़ा गया एक intent key के network का पालन करता है
+
+- **`GET`, `PATCH` और `DELETE /v1/payment-intents/{id}`, `POST /v1/payment-intents/{id}/validate` और `GET /v1/payment-intents/{id}/transitions` दूसरे network के intent पर `404` लौटाते हैं** (API व्यवहार का एक सुधार): sandbox key केवल account के test-network intents तक पहुँचती है और production key केवल उसके mainnet intents तक, जैसा list पहले से करती थी। पहले, sandbox key उसी account के mainnet intents को पढ़, बदल, validate और delete कर सकती थी। कोई migration नहीं, कोई नया variable नहीं।
+
+### P2P on-ramp और off-ramp: साझा public key के लिए खुले
+
+- **कोई migration नहीं।** साझा public key अब `/v1/onramp/p2p` और `/v1/offramp/p2p` पर `POST .../quotes`, `POST .../sessions` और `GET .../sessions/{id}` कॉल कर सकती है; सूचियाँ उसके लिए बंद रहती हैं। उसका खोला session `publicToken` लौटाता है, जिसे फिर पढ़ने के लिए `X-Record-Token` में भेजना ज़रूरी है।
+- **public key को scopes चाहिए।** public consumer को `onramp:read`, `onramp:write`, `offramp:read` और `offramp:write` दें (developer platform उसे बनाता है); इनके बिना ये routes पहले की तरह `403 insufficient_scope` लौटाते हैं।
+- **वैकल्पिक `ELDORADO_PUBLIC_REFERRAL_ID`** anonymous उपयोग की कीमत खातों से अलग तय करता है (**एनवायरनमेंट वेरिएबल** देखें)।
 
 ### Responses कभी किसी provider का नाम नहीं लेते
 
@@ -3598,6 +3609,7 @@ type दोबारा बनाए बिना enum value drop नहीं �
 | `DEFINDEX_MAX_FEE_STROOPS` | नहीं | `10000000` | बना हुआ DeFindex transaction अपने signer से अधिकतम कितना ले सकता है, inclusion और Soroban resource fee मिलाकर (stroops); इससे ऊपर का build `502 provider_error` के साथ अस्वीकार होता है |
 | `ELDORADO_CLIENT_ID` | नहीं | कोई नहीं | वह ClientID जो El Dorado किसी integrator को देता है। `ELDORADO_REFERRAL_ID` के साथ यह `POST /v1/onramp/p2p/quotes` और `POST /v1/offramp/p2p/quotes` चालू करता है और हर session का order जोड़ता है; दोनों के बिना वे routes `503 misconfigured` लौटाते हैं |
 | `ELDORADO_REFERRAL_ID` | नहीं | कोई नहीं | वह ReferralID जो `ELDORADO_CLIENT_ID` के साथ आता है |
+| `ELDORADO_PUBLIC_REFERRAL_ID` | नहीं | कोई नहीं | वह ReferralID जो साझा public key के quotes और sessions `ELDORADO_REFERRAL_ID` की जगह लेकर जाते हैं; El Dorado से सबसे ऊँचे commission वाली id माँगें। खाली: public key `ELDORADO_REFERRAL_ID` इस्तेमाल करती है |
 | `ELDORADO_TIMEOUT_MS` | नहीं | `10000` | P2P marketplace को एक call का budget (ms) |
 | `TRUSTLESS_WORK_API_KEY_TESTNET` | testnet पर सुरक्षित भुगतान के लिए | — | testnet के लिए Trustless Work की API key (`dev` keys)। Routes केवल `PLUGINS_ENABLED` में `trustless-work` होने पर मौजूद हैं; key के बिना वे testnet पर `503 misconfigured` लौटाते हैं। `TRUSTLESS_WORK_PLATFORM_SECRET_TESTNET` भी ज़रूरी है |
 | `TRUSTLESS_WORK_BASE_URL_TESTNET` | नहीं | `https://dev.api.trustlesswork.com` | testnet के लिए Trustless Work की V1 API |

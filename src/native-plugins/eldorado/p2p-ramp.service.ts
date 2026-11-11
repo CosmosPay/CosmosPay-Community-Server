@@ -5,6 +5,7 @@ import { toChecksumAddress } from '@/chains/chain-address';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import type { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import { page } from '@/common/pagination';
+import { PublicRecordTokens } from '@/common/public-record-token';
 import { ConsumerResolverService } from '@/common/services/consumer-resolver.service';
 import { resolveNetwork } from '@/common/stellar-network';
 import { UpstreamNotFound } from '@/common/upstream-http';
@@ -105,6 +106,12 @@ interface CachedTokens {
  * each chain's token list for an hour), the firm quote (with the deployment's
  * integrator ids) and the consumer's record of each order it opened, with the
  * widget URL that takes it.
+ *
+ * The shared public key (a wallet with no account) may quote, open a session
+ * and read that one session back with its record token (`publicToken`, sent
+ * as `X-Record-Token`); it never lists sessions, since every anonymous wallet
+ * is that one consumer. Its quotes and orders carry the public referral id
+ * when the deployment sets one ({@link EldoradoClient.integratorIds}).
  */
 @Injectable()
 export class P2pRampService {
@@ -119,6 +126,7 @@ export class P2pRampService {
     private readonly prisma: PrismaService,
     private readonly consumers: ConsumerResolverService,
     private readonly client: EldoradoClient,
+    private readonly recordTokens: PublicRecordTokens,
   ) {}
 
   /** One side of the market on the key's network, at most {@link ELDORADO_MARKET_TTL_MS} old. */
@@ -164,10 +172,19 @@ export class P2pRampService {
       amount: order.amount,
       fixedAmountSide: 'IN' as const,
     };
+    const shared = this.recordTokens.isSharedPublicKey(consumer);
     const raw = await this.upstream(() =>
       side === 'buy'
-        ? this.client.buyQuote(network, { ...common, addressTo: address })
-        : this.client.sellQuote(network, { ...common, addressFrom: address }),
+        ? this.client.buyQuote(
+            network,
+            { ...common, addressTo: address },
+            shared,
+          )
+        : this.client.sellQuote(
+            network,
+            { ...common, addressFrom: address },
+            shared,
+          ),
     );
     return toQuote(raw, order, token);
   }
@@ -177,7 +194,8 @@ export class P2pRampService {
    * purchase fixes `order.address` as the recipient there; a sale records it as
    * the account the stablecoin comes from, and the seller connects that wallet
    * in the widget. The order is checked against the market first, so a session
-   * never opens a widget the marketplace refuses.
+   * never opens a widget the marketplace refuses. The shared public key gets
+   * the session's `publicToken`, its only way to read it back.
    */
   async createSession(
     consumer: GatewayConsumer,
@@ -194,7 +212,7 @@ export class P2pRampService {
     const address = toChecksumAddress(order.address);
     const reference = sessionReference(randomUUID());
     const local = await this.consumers.resolve(consumer);
-    return this.prisma.p2pRampSession.create({
+    const row = await this.prisma.p2pRampSession.create({
       data: {
         consumerId: local.id,
         network,
@@ -218,12 +236,15 @@ export class P2pRampService {
           { ...order, address },
           token,
           reference,
-          this.client.integratorIds(),
+          this.client.integratorIds(
+            this.recordTokens.isSharedPublicKey(consumer),
+          ),
           side,
         ),
       },
       select: P2P_SESSION_PUBLIC_SELECT,
     });
+    return this.recordTokens.attach(consumer, 'p2p-ramp-session', row);
   }
 
   /** The consumer's sessions of `side` on the key's network, newest first. */
@@ -253,9 +274,21 @@ export class P2pRampService {
 
   /**
    * One session of the consumer on the key's network and `side`; anyone else's,
-   * or one of the other side, is the 404 of a missing one.
+   * or one of the other side, is the 404 of a missing one. The shared public
+   * key also needs the session's record token: a missing or wrong one is the
+   * same 404, decided before the table is read.
    */
-  async findOne(consumer: GatewayConsumer, side: P2pSide, id: string) {
+  async findOne(
+    consumer: GatewayConsumer,
+    side: P2pSide,
+    id: string,
+    recordToken?: string,
+  ) {
+    if (
+      !this.recordTokens.admits(consumer, 'p2p-ramp-session', id, recordToken)
+    ) {
+      throw ApiError.notFound(SESSION_NOT_FOUND[side]);
+    }
     const consumerId = await this.consumers.resolveId(consumer);
     const row = await this.prisma.p2pRampSession.findFirst({
       where: {

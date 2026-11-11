@@ -284,10 +284,10 @@ console chega até ela. Os caminhos usam a forma `{param}` do OpenAPI.
 | GET | `/v1/logs` | `payments:read` |  |
 | GET | `/v1/logs/webhooks` | `webhooks:read` |  |
 | GET | `/v1/offramp/p2p/market` | `offramp:read` | ✓ |
-| POST | `/v1/offramp/p2p/quotes` | `offramp:write` |  |
+| POST | `/v1/offramp/p2p/quotes` | `offramp:write` | ✓ |
 | GET | `/v1/offramp/p2p/sessions` | `offramp:read` |  |
-| POST | `/v1/offramp/p2p/sessions` | `offramp:write` |  |
-| GET | `/v1/offramp/p2p/sessions/{id}` | `offramp:read` |  |
+| POST | `/v1/offramp/p2p/sessions` | `offramp:write` | ✓ |
+| GET | `/v1/offramp/p2p/sessions/{id}` | `offramp:read` | ✓ |
 | GET | `/v1/offramp/p2p/tokens` | `offramp:read` | ✓ |
 | GET | `/v1/offramp/payouts` | `offramp:read` |  |
 | POST | `/v1/offramp/payouts` | `offramp:write` |  |
@@ -296,10 +296,10 @@ console chega até ela. Os caminhos usam a forma `{param}` do OpenAPI.
 | POST | `/v1/offramp/payouts/{id}/documents` | `offramp:write` |  |
 | POST | `/v1/offramp/quotes` | `offramp:write` |  |
 | GET | `/v1/onramp/p2p/market` | `onramp:read` | ✓ |
-| POST | `/v1/onramp/p2p/quotes` | `onramp:write` |  |
+| POST | `/v1/onramp/p2p/quotes` | `onramp:write` | ✓ |
 | GET | `/v1/onramp/p2p/sessions` | `onramp:read` |  |
-| POST | `/v1/onramp/p2p/sessions` | `onramp:write` |  |
-| GET | `/v1/onramp/p2p/sessions/{id}` | `onramp:read` |  |
+| POST | `/v1/onramp/p2p/sessions` | `onramp:write` | ✓ |
+| GET | `/v1/onramp/p2p/sessions/{id}` | `onramp:read` | ✓ |
 | GET | `/v1/onramp/p2p/tokens` | `onramp:read` | ✓ |
 | GET | `/v1/onramp/payins` | `onramp:read` |  |
 | POST | `/v1/onramp/payins` | `onramp:write` |  |
@@ -2289,6 +2289,7 @@ Um comprador paga moeda local (uma transferência bancária na Argentina, PIX, N
 - **O destinatário é fixo.** A URL do widget leva `address`, que o widget trata como a carteira conectada e não deixa o comprador mudar; sem ele, o comprador conectaria qualquer carteira e o token iria para lá. O parâmetro não está na documentação da El Dorado (foi lido do código do widget em 2026-11-05): se parar de funcionar, pare de abrir sessões.
 - **Abra o widget em uma aba ou janela, não em um iframe.** Ele tem seu próprio login, uma verificação de identidade que usa a câmera e uma etapa de pagamento que pode durar mais que um popup.
 - **Os ids de integrador são opcionais, exceto para a cotação firme.** `ELDORADO_CLIENT_ID` e `ELDORADO_REFERRAL_ID` são o que a El Dorado entrega a um integrador (api@eldorado.io). Sem eles o mercado e as sessões funcionam e o widget cota antes do pagamento; com eles respondem `POST /v1/onramp/p2p/quotes` e `POST /v1/offramp/p2p/quotes`, e o widget de cada sessão leva os ids, que atribuem a ordem à Cosmos Pay.
+- **Carteiras sem conta também compram e vendem.** A chave pública compartilhada pode cotar, abrir uma sessão e ler de volta essa sessão com o seu `publicToken` em `X-Record-Token`; nunca lista sessões, porque todas as carteiras anônimas são esse mesmo consumidor. As suas cotações e sessões levam `ELDORADO_PUBLIC_REFERRAL_ID` em vez de `ELDORADO_REFERRAL_ID` quando definido: a El Dorado fixa a comissão do integrador por referral id, então peça um com a taxa mais alta e o uso anônimo paga mais, como nos swaps.
 - **O que fica em cache.** O mercado (moedas, preços e a lista de redes), por um minuto por rede da chave (`ELDORADO_MARKET_TTL_MS`); a lista de tokens de cada rede, por uma hora (`ELDORADO_TOKENS_TTL_MS`; a da Ethereum tem cerca de 1,2 MB). Uma moeda sem preço, sem mínimo ou sem método de pagamento fica de fora, assim como uma rede cuja lista de tokens falha ou vem vazia: isso vai para o log e é pedido de novo na próxima leitura, e o mercado só é um 502 quando falham a lista de redes ou todas as listas de tokens.
 
 ## Plugins — extensões sob um slug
@@ -2554,6 +2555,16 @@ serviço em `src/native-plugins/<slug>/`, ligados pela mesma lista
   grupo de rotas de plugin nativo que não exige API key.
 
 ## Atualização — mudanças incompatíveis e notas de deploy
+
+### Intenções de pagamento: uma intenção pelo seu id segue a rede da chave
+
+- **`GET`, `PATCH` e `DELETE /v1/payment-intents/{id}`, `POST /v1/payment-intents/{id}/validate` e `GET /v1/payment-intents/{id}/transitions` respondem `404` a uma intenção da outra rede** (uma correção do comportamento da API): uma chave sandbox só alcança as intenções da rede de testes da conta e uma chave de produção só as de mainnet, como a lista já fazia. Antes, uma chave sandbox podia ler, alterar, validar e excluir as intenções de mainnet da mesma conta. Sem migração nem variáveis novas.
+
+### On-ramp e off-ramp P2P: abertos à chave pública compartilhada
+
+- **Sem migração.** A chave pública compartilhada agora pode chamar `POST .../quotes`, `POST .../sessions` e `GET .../sessions/{id}` em `/v1/onramp/p2p` e `/v1/offramp/p2p`; as listagens continuam fechadas para ela. Uma sessão que ela abre responde `publicToken`, obrigatório em `X-Record-Token` para lê-la de volta.
+- **A chave pública precisa dos scopes.** Dê ao consumidor público `onramp:read`, `onramp:write`, `offramp:read` e `offramp:write` (a plataforma de desenvolvedores o emite); sem eles estas rotas respondem `403 insufficient_scope` como antes.
+- **`ELDORADO_PUBLIC_REFERRAL_ID` opcional** cobra o uso anônimo à parte das contas (ver **Variáveis de ambiente**).
 
 ### As respostas nunca nomeiam um provedor
 
@@ -3705,6 +3716,7 @@ Toda variável lida de `process.env` em `src/` é validada no boot por
 | `DEFINDEX_MAX_FEE_STROOPS` | não | `10000000` | O máximo que uma transação do DeFindex construída pode cobrar de quem a assina, taxa de inclusão e de recursos do Soroban juntas (stroops); uma construção acima é recusada com `502 provider_error` |
 | `ELDORADO_CLIENT_ID` | não | nenhum | O ClientID que a El Dorado entrega a um integrador. Com `ELDORADO_REFERRAL_ID`, ativa `POST /v1/onramp/p2p/quotes` e `POST /v1/offramp/p2p/quotes` e atribui a ordem de cada sessão; sem os dois, essas rotas respondem `503 misconfigured` |
 | `ELDORADO_REFERRAL_ID` | não | nenhum | O ReferralID que acompanha `ELDORADO_CLIENT_ID` |
+| `ELDORADO_PUBLIC_REFERRAL_ID` | não | nenhum | O ReferralID que as cotações e sessões da chave pública compartilhada levam em vez de `ELDORADO_REFERRAL_ID`; peça à El Dorado um com a comissão mais alta. Vazio: a chave pública usa `ELDORADO_REFERRAL_ID` |
 | `ELDORADO_TIMEOUT_MS` | não | `10000` | Orçamento de uma chamada ao mercado P2P (ms) |
 | `TRUSTLESS_WORK_API_KEY_TESTNET` | para pagamentos protegidos na testnet | — | A API key da Trustless Work para a testnet (keys `dev`). As rotas só existem com `trustless-work` em `PLUGINS_ENABLED`; sem a chave respondem `503 misconfigured` na testnet. Exige `TRUSTLESS_WORK_PLATFORM_SECRET_TESTNET` |
 | `TRUSTLESS_WORK_BASE_URL_TESTNET` | não | `https://dev.api.trustlesswork.com` | A API V1 da Trustless Work para a testnet |

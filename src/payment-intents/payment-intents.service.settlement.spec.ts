@@ -723,6 +723,7 @@ describe('PaymentIntentsService: one transaction settles one intent', () => {
         where: {
           id: 'pi_a',
           consumer: { apisixUsername: 'cosmos_a' },
+          network: 'testnet',
           status: 'PENDING',
         },
       });
