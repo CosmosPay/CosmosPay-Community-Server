@@ -59,7 +59,7 @@ const USDT0_MESSAGES: Partial<Record<ApiErrorCode, string>> = {
   [ApiErrorCode.NetworkUnsupported]:
     'USDT0 is on Stellar mainnet only: it does not exist on Stellar testnet. Use a prod API key.',
   [ApiErrorCode.InvalidAmount]:
-    'amount must be at least 0.000001 USDT0: the OFT carries 6 decimals, and the 7th stays in the account as dust',
+    'amount must be at least 0.000001 USDT0: the bridge contract carries 6 decimals, and the 7th stays in the account as dust',
   [ApiErrorCode.TrustlineMissing]:
     `Account ${EXAMPLE_SOURCE} has no trustline for ` +
     'USDT0:GATISXX6BZ6NC7IKQBY37CJD4SOZL3CYZJWXEDG6JVIY4WBS6KXJHN6Q, so it ' +
@@ -68,8 +68,8 @@ const USDT0_MESSAGES: Partial<Record<ApiErrorCode, string>> = {
   [ApiErrorCode.InsufficientBalance]:
     `Account ${EXAMPLE_SOURCE} cannot pay this transfer's fees in XLM: it ` +
     'needs 7.1996499 XLM (its minimum balance of 1.5 XLM, the 4.2474009 XLM ' +
-    'LayerZero fee limit, the 1.452249 XLM network fee) but holds 5 XLM. Add ' +
-    'at least 2.1996499 XLM to it, then try again. What LayerZero does not ' +
+    'bridge fee limit, the 1.452249 XLM network fee) but holds 5 XLM. Add ' +
+    'at least 2.1996499 XLM to it, then try again. What the bridge does not ' +
     'charge of its fee limit comes back in the same transaction.',
   [ApiErrorCode.IdempotencyConflict]:
     'This Idempotency-Key was already used for a different USDT0 transfer ' +
@@ -126,7 +126,7 @@ export class Usdt0Controller {
       'The networks USDT0 can be sent to from Stellar, with what arrives there (mainnet only)',
     description:
       'USDT0 is Tether’s omnichain USDT. From Stellar it travels through ' +
-      'LayerZero’s OFT: Ethereum receives native USDT (Tether’s OFT adapter ' +
+      'bridge contract: Ethereum receives native USDT (Tether’s bridge adapter ' +
       'unlocks it), every other network receives USDT0. All routes take an EVM ' +
       'recipient. USDT0 exists on Stellar mainnet only: a dev (testnet) key ' +
       'gets `available: false` and no routes.',
@@ -148,9 +148,9 @@ export class Usdt0Controller {
   @ApiOperation({
     summary: 'Quote a USDT0 transfer from Stellar; persists nothing',
     description:
-      'Simulates the OFT’s `quote_oft` and `quote_send` on Stellar mainnet. ' +
-      'The OFT carries 6 decimals and the asset has 7, so the 7th is `dust` ' +
-      'that stays in the account. `nativeFee` is LayerZero’s fee, paid in XLM ' +
+      'Simulates the bridge contract `quote_oft` and `quote_send` on Stellar mainnet. ' +
+      'The bridge contract carries 6 decimals and the asset has 7, so the 7th is `dust` ' +
+      'that stays in the account. `nativeFee` is the bridge’s fee, paid in XLM ' +
       'on top of the USDT0; `nativeFeeLimit` is what a transfer built now ' +
       'would offer (20% more, the excess refunded in the same transaction). ' +
       'Mainnet only.',
@@ -166,7 +166,7 @@ export class Usdt0Controller {
     description:
       '`network_unsupported`: a dev (testnet) key; USDT0 is on Stellar ' +
       'mainnet only. `invalid_amount`: less than 0.000001 USDT0 (all dust), ' +
-      'or outside the OFT’s limits. `provider_error`: the OFT refused the ' +
+      'or outside the bridge contract limits. `provider_error`: the bridge contract refused the ' +
       'quote; `message` carries its contract error.',
     examples: usdt0Examples(
       '/v1/usdt0/quote',
@@ -186,7 +186,7 @@ export class Usdt0Controller {
     codes: [ApiErrorCode.ProviderError],
     description:
       '`provider_error`: the Soroban RPC answered the simulation with no ' +
-      'result, or in a shape the OFT never returns.',
+      'result, or in a shape the bridge contract never returns.',
     examples: usdt0Examples('/v1/usdt0/quote', [ApiErrorCode.ProviderError], {
       [ApiErrorCode.ProviderError]:
         'The USDT0 contract answered quote_oft in an unexpected shape.',
@@ -223,10 +223,10 @@ export class Usdt0Controller {
     summary:
       'Create a USDT0 transfer from Stellar → the unsigned Soroban transaction to sign (XDR + SEP-7 link)',
     description:
-      'Builds `send` on USDT0’s LayerZero OFT: it burns the USDT0 on Stellar ' +
-      'and LayerZero delivers it to `recipient`, as native USDT on Ethereum ' +
+      'Builds `send` on the USDT0 bridge contract: it burns the USDT0 on Stellar ' +
+      'and the bridge delivers it to `recipient`, as native USDT on Ethereum ' +
       'and as USDT0 elsewhere. The source signs one transaction (Freighter, ' +
-      'or the SEP-7 `uri`) and pays two fees in XLM: LayerZero’s ' +
+      'or the SEP-7 `uri`) and pays two fees in XLM: the bridge’s ' +
       '(`nativeFeeLimit` is offered, the unused part refunded in the same ' +
       'transaction) and the network’s (`networkFee`). A 7th decimal of ' +
       '`amount` is `dust` and stays in the account. No Cosmos Pay commission ' +
@@ -268,10 +268,10 @@ export class Usdt0Controller {
       'mainnet only. `validation_failed`: the source account does not exist, ' +
       'or the recipient has a bad EIP-55 checksum. `trustline_missing`: the ' +
       'source does not trust USDT0. `insufficient_balance`: it holds less ' +
-      'USDT0 than the transfer takes, or too little XLM for LayerZero’s fee ' +
+      'USDT0 than the transfer takes, or too little XLM for the bridge’s fee ' +
       'limit, the network fee and its reserve (the message says how much XLM ' +
-      'to add). `invalid_amount`: all dust, or outside the OFT’s limits. ' +
-      '`provider_error`: the OFT refused the transfer; `message` carries its ' +
+      'to add). `invalid_amount`: all dust, or outside the bridge contract limits. ' +
+      '`provider_error`: the bridge contract refused the transfer; `message` carries its ' +
       'contract error. With a merchant fee, `trustline_missing` also answers ' +
       'a fee wallet that does not trust USDT0, and `insufficient_balance` ' +
       'counts the fee the holder pays on top.',
@@ -311,7 +311,7 @@ export class Usdt0Controller {
     status: 502,
     codes: [ApiErrorCode.ProviderError],
     description:
-      '`provider_error`: the OFT cannot be called right now (part of its ' +
+      '`provider_error`: the bridge contract cannot be called right now (part of its ' +
       'state is archived on the ledger, or it asks for a signature the ' +
       'transaction cannot carry), or the RPC answered in an unexpected shape.',
     examples: usdt0Examples(
@@ -330,7 +330,7 @@ export class Usdt0Controller {
       '`provider_unavailable`: Horizon or the Soroban RPC did not answer; ' +
       'retry. `misconfigured`: STELLAR_RPC_URL_MAINNET serves another ' +
       'network, or USDT0_FEE_WRAPPER is not the reviewed wrapper ' +
-      "bound to USDT0's OFT and token, or the plan commission has no " +
+      'bound to the USDT0 bridge contract and token, or the plan commission has no ' +
       'STELLAR_SWAP_FEE_WALLET, or one that does not trust USDT0.',
     examples: usdt0Examples('/v1/usdt0/transfers', [
       ApiErrorCode.ProviderUnavailable,
@@ -379,13 +379,13 @@ export class Usdt0Controller {
   @ApiRecordTokenHeader()
   @ApiOperation({
     summary:
-      'Get a USDT0 transfer by id, refreshed from the Stellar ledger and LayerZero Scan',
+      'Get a USDT0 transfer by id, refreshed from the Stellar ledger and the bridge explorer',
     description:
       'While PENDING or SUBMITTED, a read asks the Stellar ledger (a wallet ' +
-      'may have broadcast the transaction itself) and LayerZero Scan, at most ' +
+      'may have broadcast the transaction itself) and the bridge explorer, at most ' +
       'once every 15 seconds per transfer, and moves it to SUBMITTED, ' +
       'DELIVERED (with `destinationTxHash`), FAILED or EXPIRED. Delivery takes ' +
-      'about 27 minutes on every route: LayerZero’s verifiers wait for Stellar ' +
+      'about 27 minutes on every route: the bridge’s verifiers wait for Stellar ' +
       'confirmations. The shared public key may call it, but only with the ' +
       'transfer’s `publicToken` in `X-Record-Token`: without it, or with ' +
       'another transfer’s, the answer is 404. Every other key reads its own ' +
@@ -421,7 +421,7 @@ export class Usdt0Controller {
     summary: 'Relay the signed USDT0 transaction to Stellar mainnet',
     description:
       'The signed XDR must hash to the transfer’s transaction and carry a ' +
-      'signature. Accepted and applied: SUBMITTED, with LayerZero’s `guid`. ' +
+      'signature. Accepted and applied: SUBMITTED, with the bridge’s `guid`. ' +
       'Applied and failed: FAILED. Refused by the network: the transfer stays ' +
       'PENDING (`submitted: false`, `reason`) and can be submitted again until ' +
       'it expires. Waits up to 30 seconds for the ledger.',

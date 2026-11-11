@@ -41,21 +41,23 @@ export class CreateVirtualAccountDto {
   blockchain_wallet_id!: string;
 
   @ApiPropertyOptional({
-    description: 'Id of a signed agreement, forwarded to BlindPay.',
+    description: 'Id of a signed agreement, forwarded to the fiat partner.',
   })
   @IsOptional()
   @IsString()
   signed_agreement_id?: string;
 
   @ApiPropertyOptional({
-    description: 'Type of the sole-proprietor document, forwarded to BlindPay.',
+    description:
+      'Type of the sole-proprietor document, forwarded to the fiat partner.',
   })
   @IsOptional()
   @IsString()
   sole_proprietor_doc_type?: string;
 
   @ApiPropertyOptional({
-    description: 'Sole-proprietor document file, forwarded to BlindPay.',
+    description:
+      'Sole-proprietor document file, forwarded to the fiat partner.',
   })
   @IsOptional()
   @IsString()

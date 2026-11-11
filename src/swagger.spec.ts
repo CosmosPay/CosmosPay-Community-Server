@@ -187,14 +187,16 @@ describe('attachErrorResponses', () => {
   describe('an @ApiUpstream route', () => {
     const document = attachErrorResponses(
       documentWith({
-        'POST /v1/offramp/quotes': { [UPSTREAM_EXTENSION_KEY]: ['BlindPay'] },
+        'POST /v1/offramp/quotes': {
+          [UPSTREAM_EXTENSION_KEY]: ['Fiat partner'],
+        },
         'POST /v1/swaps/quote': { [UPSTREAM_EXTENSION_KEY]: ['Horizon'] },
         'GET /v1/products': {},
       }),
     );
 
     it('distinguishes an HTTP provider from the Stellar SDK', () => {
-      // BlindPay is a `fetch` call that can be refused (502) or time
+      // The fiat partner is a `fetch` call that can be refused (502) or time
       // out (504); Horizon is wrapped by the SDK and only ever a 503 here.
       expect(statusesOf(document, '/v1/offramp/quotes', 'post')).toEqual(
         expect.arrayContaining(['502', '503', '504']),
@@ -318,6 +320,26 @@ describe('findOpenApiIssues', () => {
         ),
       ]),
     );
+  });
+
+  it('catches a provider named anywhere in the prose, and says where', () => {
+    const document = attachErrorResponses(
+      documentWith({
+        'GET /v1/products': {
+          description: 'Priced by NEAR Intents; set KURU_API_KEY.',
+        },
+        // An identifier the contract publishes is not a provider's name.
+        'GET /v1/plugins': { description: 'Reads `blindpayId` and `jupiter`.' },
+      }),
+    );
+    const issues = findOpenApiIssues(document).filter((i) =>
+      i.includes('names a provider'),
+    );
+    expect(issues).toEqual([
+      expect.stringContaining(
+        '#/paths/~1v1~1products/get/description: names a provider (NEAR Intents, KURU_API_KEY)',
+      ),
+    ]);
   });
 
   it('finds nothing wrong with the committed contract', () => {

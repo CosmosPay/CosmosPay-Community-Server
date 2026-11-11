@@ -240,7 +240,9 @@ describe('BlindpayClient', () => {
 
     // A dev key with no dev instance is refused — never quietly served by prod.
     expect(err!.code).toBe(ApiErrorCode.Misconfigured);
-    expect(err!.message).toContain('BLINDPAY_API_KEY_DEV');
+    // The variables go to the operator's log, never to the caller.
+    expect(err!.operatorDetail).toContain('BLINDPAY_API_KEY_DEV');
+    expect(err!.message).not.toMatch(/BLINDPAY/i);
     expect(spy).not.toHaveBeenCalled();
   });
 });

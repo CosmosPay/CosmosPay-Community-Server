@@ -103,6 +103,9 @@ export const PROTECTED_PAYMENT_LINK_SELECT = {
 
 /** What the fees take, as both parties see them. */
 export interface ProtectedPaymentFees {
+  /** The protected-payments service's own fee. */
+  serviceFeeBps: number;
+  /** {@link serviceFeeBps} under its old, provider-named key; deprecated. */
   trustlessWorkBps: number;
   platformBps: number;
   totalBps: number;
@@ -136,6 +139,7 @@ export function fees(
 ): ProtectedPaymentFees {
   const split = feeSplit(toStroops(row.amount), row.platformFeeBps);
   return {
+    serviceFeeBps: TRUSTLESS_WORK_FEE_BPS,
     trustlessWorkBps: TRUSTLESS_WORK_FEE_BPS,
     platformBps: row.platformFeeBps,
     totalBps: totalFeeBps(row.platformFeeBps),

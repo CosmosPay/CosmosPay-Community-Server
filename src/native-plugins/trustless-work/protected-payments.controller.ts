@@ -56,14 +56,15 @@ const StateResponse = (path: string, action: string) =>
     description:
       '`invalid_state_transition`: the payment is not in a state this action ' +
       'can be built from, or the release model gives it to the other party. ' +
-      '`provider_error`: Trustless Work refused the request.',
+      '`provider_error`: the protected-payments service refused the request.',
     examples: {
       [ApiErrorCode.InvalidStateTransition]: {
         message: `Cannot ${action} a protected payment that is AWAITING_FUNDING.`,
         path,
       },
       [ApiErrorCode.ProviderError]: {
-        message: 'Trustless Work refused the request: amount must be a number',
+        message:
+          'The protected-payments service refused the request: amount must be a number',
         path,
       },
     },
@@ -137,8 +138,8 @@ export class ProtectedPaymentsController {
     examples: {
       [ApiErrorCode.Misconfigured]: {
         message:
-          'REFUND_BUYER is not available on testnet: it needs the automatic ' +
-          'resolver key, TRUSTLESS_WORK_RESOLVER_SECRET_TESTNET.',
+          'REFUND_BUYER is not available on testnet: this deployment has no ' +
+          'automatic resolver key.',
         path: BASE,
       },
     },
@@ -193,11 +194,11 @@ export class ProtectedPaymentsController {
   @RequirePermissions('payments:write')
   @RateLimit(PROTECTED_PAYMENT_BUILD_RATE_LIMIT)
   @HttpCode(HttpStatus.OK)
-  @ApiUpstream('Trustless Work')
+  @ApiUpstream('Protected-payments service')
   @ApiOperation({
     summary: 'Build the merchant’s "shipped" mark, with tracking evidence',
     description:
-      'For a FUNDED payment: Trustless Work builds the milestone change to ' +
+      'For a FUNDED payment: the protected-payments service builds the milestone change to ' +
       '`shipped` with `evidence`, which this service checks is exactly that call ' +
       'and records for 15 minutes. Sign it with `merchantAddress` and send it to ' +
       '`POST /v1/protected-payments/submit`.',
@@ -216,7 +217,7 @@ export class ProtectedPaymentsController {
   @RequirePermissions('payments:write')
   @RateLimit(PROTECTED_PAYMENT_BUILD_RATE_LIMIT)
   @HttpCode(HttpStatus.OK)
-  @ApiUpstream('Trustless Work')
+  @ApiUpstream('Protected-payments service')
   @ApiOperation({
     summary: 'Build the merchant’s approval of delivery (MERCHANT_RELEASES)',
     description:
@@ -237,7 +238,7 @@ export class ProtectedPaymentsController {
   @RequirePermissions('payments:write')
   @RateLimit(PROTECTED_PAYMENT_BUILD_RATE_LIMIT)
   @HttpCode(HttpStatus.OK)
-  @ApiUpstream('Trustless Work')
+  @ApiUpstream('Protected-payments service')
   @ApiOperation({
     summary: 'Build the release of the funds to the merchant',
     description:
@@ -259,7 +260,7 @@ export class ProtectedPaymentsController {
   @RequirePermissions('payments:write')
   @RateLimit(PROTECTED_PAYMENT_BUILD_RATE_LIMIT)
   @HttpCode(HttpStatus.OK)
-  @ApiUpstream('Trustless Work')
+  @ApiUpstream('Protected-payments service')
   @ApiOperation({
     summary: 'Build the merchant’s dispute',
     description:
@@ -281,7 +282,7 @@ export class ProtectedPaymentsController {
   @Post(':id/cancel')
   @RequirePermissions('payments:write')
   @HttpCode(HttpStatus.OK)
-  @ApiUpstream('Trustless Work')
+  @ApiUpstream('Protected-payments service')
   @ApiOperation({
     summary: 'Cancel a protected payment nobody funded',
     description:
@@ -325,11 +326,11 @@ export class ProtectedPaymentsController {
   @RequirePermissions('payments:write')
   @RateLimit(PROTECTED_PAYMENT_SUBMIT_RATE_LIMIT)
   @HttpCode(HttpStatus.OK)
-  @ApiUpstream('Trustless Work')
+  @ApiUpstream('Protected-payments service')
   @ApiOperation({
     summary: 'Submit a merchant-signed protected payment transaction',
     description:
-      'Relays `xdr` through Trustless Work only when it is a signed copy of a ' +
+      'Relays `xdr` through the protected-payments service only when it is a signed copy of a ' +
       'transaction built for that payment, for `merchantAddress`, on the key’s ' +
       'network, before it expires. Relayed once: the answer is stored and a replay ' +
       'returns it; on `SUCCESS` the payment moves and its webhook is emitted.',

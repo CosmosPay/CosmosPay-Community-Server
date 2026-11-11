@@ -567,7 +567,9 @@ export class ChainSwapsService {
       throw ApiError.badRequest(
         ApiErrorCode.NetworkUnsupported,
         `Swaps on ${chain} run on mainnet only: ${
-          CHAIN_SWAP_PROVIDERS[chain] === 'jupiter' ? 'Jupiter' : 'Kuru Flow'
+          CHAIN_SWAP_PROVIDERS[chain] === 'jupiter'
+            ? 'the Solana swap route'
+            : 'the Monad swap route'
         } has no test network. Use a prod API key.`,
       );
     }

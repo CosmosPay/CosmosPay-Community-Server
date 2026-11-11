@@ -8,13 +8,13 @@ import { ApiProperty, ApiSchema } from '@nestjs/swagger';
  */
 @ApiSchema({
   description:
-    "BlindPay's authorize answer for a Stellar or Solana payout, its own fields passed through, with the transaction to sign under `unsigned_transaction`.",
+    "The fiat partner's authorize answer for a Stellar or Solana payout, its own fields passed through, with the transaction to sign under `unsigned_transaction`.",
 })
 export class AuthorizedPayoutEntity {
   @ApiProperty({
     example: 'AAAAAgAAAAB…',
     description:
-      'The unsigned transaction the customer signs before `POST /v1/offramp/payouts`. Empty when BlindPay returned none.',
+      'The unsigned transaction the customer signs before `POST /v1/offramp/payouts`. Empty when the fiat partner returned none.',
   })
   unsigned_transaction!: string;
 }

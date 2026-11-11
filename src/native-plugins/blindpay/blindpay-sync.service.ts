@@ -663,7 +663,7 @@ export class BlindpaySyncService {
       );
       throw ApiError.badGateway(
         ApiErrorCode.ProviderError,
-        `BlindPay returned a ${resource} without an id.`,
+        `The fiat partner returned a ${resource} without an id.`,
       );
     }
     try {

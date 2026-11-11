@@ -36,8 +36,8 @@ export class QuoteSwapDto {
     enum: CHAINS,
     default: 'stellar',
     description:
-      'The chain to swap on. Omitted means Stellar. solana → Jupiter, ' +
-      'monad → Kuru Flow; both mainnet only. Swaps between chains are ' +
+      'The chain to swap on. Omitted means Stellar. solana → the Solana swap route, ' +
+      'monad → the Monad swap route; both mainnet only. Swaps between chains are ' +
       '/v1/cross-chain-swaps.',
   })
   @IsOptional()
@@ -110,12 +110,11 @@ export class QuoteSwapDto {
       'Your own fee on this swap, paid in the source asset to `wallet` out of ' +
       'the source wallet, in the same transaction, beside the plan commission. ' +
       'Stellar: its own payment (the wallet must trust the asset). Solana: a ' +
-      "transfer appended to Jupiter's transaction (a SOL fee goes to an " +
+      "transfer appended to the Solana swap route's transaction (a SOL fee goes to an " +
       'existing account). `paidBy: recipient` takes it from `amount` (the swap ' +
       'routes less); `payer` adds it on top (the source sends `amount` plus ' +
-      'the fee). Monad: through the merchant fee router ' +
-      '(`KURU_MERCHANT_FEE_ROUTER`), which the wallet sends or approves the ' +
-      'input plus the fee; without one configured, ' +
+      'the fee). Monad: through the deployment’s merchant fee router, which ' +
+      'the wallet sends or approves the input plus the fee; without one configured, ' +
       '`merchant_fee_unsupported`.',
   })
   @IsOptional()

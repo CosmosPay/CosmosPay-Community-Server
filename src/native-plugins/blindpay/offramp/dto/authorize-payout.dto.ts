@@ -11,7 +11,7 @@ const AUTHORIZE_CHAINS = ['stellar', 'solana'] as const;
  */
 @ApiSchema({
   description:
-    'Step one of a Stellar or Solana payout: asks BlindPay for the transaction the sender signs.',
+    'Step one of a Stellar or Solana payout: asks the fiat partner for the transaction the sender signs.',
 })
 export class AuthorizePayoutDto {
   @ApiProperty({

@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { requestUpstreamJson } from '@/common/upstream-http';
+import { scrubUpstreamText } from '@/common/provider-names';
 import type { AppConfig } from '@/config/configuration';
 import {
   KURU_TOKEN_CACHE_MAX,
@@ -84,8 +85,9 @@ export class KuruClient {
     ) {
       throw ApiError.badRequest(
         ApiErrorCode.ProviderError,
-        `Kuru Flow refused the request: ${
-          answer.message ?? answer.error ?? 'no route for this pair and amount'
+        `The Monad swap route refused the request: ${
+          scrubUpstreamText(answer.message ?? answer.error ?? '') ||
+          'no route for this pair and amount'
         }`,
       );
     }
@@ -110,6 +112,7 @@ export class KuruClient {
     return requestUpstreamJson<T>(
       {
         provider: 'Kuru Flow',
+        service: 'the Monad swap route',
         keyEnv: 'KURU_API_KEY',
         method: 'POST',
         url: `${baseUrl}${path}`,
@@ -137,6 +140,7 @@ export class KuruClient {
     }>(
       {
         provider: 'Kuru Flow',
+        service: 'the Monad swap route',
         keyEnv: 'KURU_API_KEY',
         method: 'POST',
         url: `${baseUrl}/api/generate-token`,

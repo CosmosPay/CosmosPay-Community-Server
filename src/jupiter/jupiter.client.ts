@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { requestUpstreamJson } from '@/common/upstream-http';
+import { scrubUpstreamText } from '@/common/provider-names';
 import type { AppConfig } from '@/config/configuration';
 
 /** One hop of a Jupiter route. */
@@ -94,11 +95,12 @@ export class JupiterClient {
       dynamicComputeUnitLimit: true,
     });
     if (built.simulationError) {
-      const reason =
-        built.simulationError.error ?? built.simulationError.errorCode;
+      const reason = scrubUpstreamText(
+        built.simulationError.error ?? built.simulationError.errorCode ?? '',
+      );
       throw ApiError.badRequest(
         ApiErrorCode.ProviderError,
-        `Jupiter simulated the swap and it would fail on-chain${
+        `The Solana swap route simulated the swap and it would fail on-chain${
           reason ? `: ${reason}` : ''
         }. Check the source wallet holds the amount plus SOL for fees.`,
       );
@@ -117,6 +119,7 @@ export class JupiterClient {
     return requestUpstreamJson<T>(
       {
         provider: 'Jupiter',
+        service: 'the Solana swap route',
         keyEnv: 'JUPITER_API_KEY',
         method,
         url: `${baseUrl}${path}`,

@@ -231,7 +231,7 @@ export class OfframpService {
     if (!blindpayId) {
       throw ApiError.badGateway(
         ApiErrorCode.ProviderError,
-        'BlindPay returned a payout quote without an id.',
+        'The fiat partner returned a payout quote without an id.',
       );
     }
     await this.prisma.blindpayQuote.create({
@@ -279,7 +279,7 @@ export class OfframpService {
     if (quote.expiresAt && quote.expiresAt.getTime() <= Date.now()) {
       throw ApiError.badRequest(
         ApiErrorCode.QuoteExpired,
-        'This BlindPay quote has expired. Request a new quote.',
+        'This fiat partner quote has expired. Request a new quote.',
       );
     }
     return quote;

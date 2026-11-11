@@ -261,4 +261,93 @@ describe('AllExceptionsFilter', () => {
       expect(body(json).code).not.toBe('');
     }
   });
+
+  describe('never names a provider', () => {
+    it('rewrites a message that names one, and logs the original', () => {
+      const { filter, host, json } = build();
+      const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation();
+
+      filter.catch(
+        ApiError.badRequest(
+          ApiErrorCode.ProviderError,
+          'NEAR Intents refused the request: Amount is too low for bridge',
+        ),
+        host,
+      );
+
+      expect(body(json).message).toBe(
+        'The cross-chain route refused the request: Amount is too low for bridge',
+      );
+      expect(body(json).code).toBe('provider_error');
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('NEAR Intents refused the request'),
+      );
+    });
+
+    it('rewrites each line of a validation list and the text in details', () => {
+      const { filter, host, json } = build();
+      jest.spyOn(Logger.prototype, 'warn').mockImplementation();
+
+      filter.catch(
+        new BadRequestException([
+          'amount is below the DeFindex minimum',
+          'memo is required',
+        ]),
+        host,
+      );
+      expect(body(json).message).toEqual([
+        'amount is below the vault minimum',
+        'memo is required',
+      ]);
+
+      const second = build();
+      filter.catch(
+        new ApiError(
+          HttpStatus.BAD_REQUEST,
+          ApiErrorCode.ProviderError,
+          'refused',
+          {
+            reason: 'BlindPay said no',
+            attemptsLeft: 2,
+          },
+        ),
+        second.host,
+      );
+      expect(body(second.json).details).toEqual({
+        reason: 'The fiat partner said no',
+        attemptsLeft: 2,
+      });
+    });
+
+    it('logs an operator detail without sending it', () => {
+      const { filter, host, json } = build();
+      const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation();
+
+      filter.catch(
+        ApiError.misconfigured(
+          'Fiat is not configured on this deployment (prod).',
+          'set BLINDPAY_API_KEY and BLINDPAY_INSTANCE_ID',
+        ),
+        host,
+      );
+
+      expect(body(json)).toMatchObject({
+        statusCode: 503,
+        code: 'misconfigured',
+        message: 'Fiat is not configured on this deployment (prod).',
+      });
+      expect(JSON.stringify(body(json))).not.toMatch(/BLINDPAY/i);
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('BLINDPAY_INSTANCE_ID'),
+      );
+    });
+
+    it('leaves a message that names none exactly as it was', () => {
+      const { filter, host, json } = build();
+      const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation();
+      filter.catch(ApiError.notFound('Swap not found'), host);
+      expect(body(json).message).toBe('Swap not found');
+      expect(warn).not.toHaveBeenCalled();
+    });
+  });
 });

@@ -54,13 +54,13 @@ const IsIsoDateTime = () =>
  */
 @ApiSchema({
   description:
-    'A beneficial owner or controlling person of a business (KYB) receiver, stored with it and sent to BlindPay when the receiver is enabled.',
+    'A beneficial owner or controlling person of a business (KYB) receiver, stored with it and sent to the fiat partner when the receiver is enabled.',
 })
 export class ReceiverOwnerDto {
   @ApiPropertyOptional({
     example: 'beneficial_owner',
     description:
-      "The person's role in the business, as a BlindPay code (for example `beneficial_owner`).",
+      "The person's role in the business, as a fiat partner code (for example `beneficial_owner`).",
   })
   @IsOptional()
   @IsString()
@@ -80,7 +80,7 @@ export class ReceiverOwnerDto {
     example: '1985-04-12T00:00:00.000Z',
     format: 'date-time',
     description:
-      'ISO 8601 date-time with an offset (BlindPay rejects date-only values).',
+      'ISO 8601 date-time with an offset (the fiat partner rejects date-only values).',
   })
   @IsOptional()
   @IsIsoDateTime()
@@ -219,7 +219,7 @@ export class ReceiverOwnerDto {
  */
 @ApiSchema({
   description:
-    'A receiver, the person (KYC) or business (KYB) behind onramp and offramp: stored here and created at BlindPay only on enable. With KYC data (`tax_id`, `date_of_birth`, `id_doc_front_file`, `selfie_file`, `legal_name`, `formation_date` or `owners`) it starts in `pending_review`, otherwise in `inactive`.',
+    'A receiver, the person (KYC) or business (KYB) behind onramp and offramp: stored here and created at the fiat partner only on enable. With KYC data (`tax_id`, `date_of_birth`, `id_doc_front_file`, `selfie_file`, `legal_name`, `formation_date` or `owners`) it starts in `pending_review`, otherwise in `inactive`.',
 })
 export class CreateReceiverDto {
   @ApiProperty({
@@ -278,7 +278,7 @@ export class CreateReceiverDto {
     example: '1985-04-12T00:00:00.000Z',
     format: 'date-time',
     description:
-      'ISO 8601 date-time with an offset (BlindPay rejects date-only values).',
+      'ISO 8601 date-time with an offset (the fiat partner rejects date-only values).',
   })
   @IsOptional()
   @IsIsoDateTime()
@@ -341,7 +341,7 @@ export class CreateReceiverDto {
   @ApiPropertyOptional({
     example: 'receiving_payments',
     description:
-      'Purpose of the account, as a BlindPay code (for example `receiving_payments`).',
+      'Purpose of the account, as a fiat partner code (for example `receiving_payments`).',
   })
   @IsOptional()
   @IsString()
@@ -349,7 +349,7 @@ export class CreateReceiverDto {
 
   @ApiPropertyOptional({
     description:
-      'Free-text account purpose, forwarded to BlindPay with `account_purpose`.',
+      'Free-text account purpose, forwarded to the fiat partner with `account_purpose`.',
   })
   @IsOptional()
   @IsString()
@@ -358,7 +358,7 @@ export class CreateReceiverDto {
   @ApiPropertyOptional({
     example: 'employment',
     description:
-      'Type of the source-of-funds document, as a BlindPay code (for example `employment`).',
+      'Type of the source-of-funds document, as a fiat partner code (for example `employment`).',
   })
   @IsOptional()
   @IsString()
@@ -373,7 +373,8 @@ export class CreateReceiverDto {
   source_of_funds_doc_file?: string;
 
   @ApiPropertyOptional({
-    description: "Source of the receiver's wealth, forwarded to BlindPay.",
+    description:
+      "Source of the receiver's wealth, forwarded to the fiat partner.",
   })
   @IsOptional()
   @IsString()
@@ -407,7 +408,7 @@ export class CreateReceiverDto {
   @ApiPropertyOptional({
     example: 'self',
     description:
-      'Relationship to the recipient, as a BlindPay code (for example `self`).',
+      'Relationship to the recipient, as a fiat partner code (for example `self`).',
   })
   @IsOptional()
   @IsString()
@@ -417,7 +418,7 @@ export class CreateReceiverDto {
   @ApiPropertyOptional({
     example: 'business_transactions',
     description:
-      "Purpose of the receiver's transactions, as a BlindPay code (for example `business_transactions`); an enhanced KYC field.",
+      "Purpose of the receiver's transactions, as a fiat partner code (for example `business_transactions`); an enhanced KYC field.",
   })
   @IsOptional()
   @IsString()
@@ -452,7 +453,7 @@ export class CreateReceiverDto {
   @ApiPropertyOptional({
     example: 'cooperative',
     description:
-      'Type of business, as a BlindPay code (for example `cooperative`).',
+      'Type of business, as a fiat partner code (for example `cooperative`).',
   })
   @IsOptional()
   @IsString()
@@ -476,7 +477,7 @@ export class CreateReceiverDto {
     example: '2015-01-01T00:00:00.000Z',
     format: 'date-time',
     description:
-      'ISO 8601 date-time with an offset (BlindPay rejects date-only values).',
+      'ISO 8601 date-time with an offset (the fiat partner rejects date-only values).',
   })
   @IsOptional()
   @IsIsoDateTime()
@@ -485,7 +486,7 @@ export class CreateReceiverDto {
   @ApiPropertyOptional({
     example: '1000000_4999999',
     description:
-      'Estimated annual revenue band of a business receiver, as a BlindPay code (for example `1000000_4999999`).',
+      'Estimated annual revenue band of a business receiver, as a fiat partner code (for example `1000000_4999999`).',
   })
   @IsOptional()
   @IsString()
@@ -590,7 +591,7 @@ export class CreateReceiverDto {
   phone_number?: string;
 
   @ApiPropertyOptional({
-    description: "Receiver's IP address, forwarded to BlindPay.",
+    description: "Receiver's IP address, forwarded to the fiat partner.",
   })
   @IsOptional()
   @IsString()
@@ -603,7 +604,7 @@ export class CreateReceiverDto {
 
   @ApiPropertyOptional({
     description:
-      'URL of a display image for the receiver. With `external_id`, the only field a non-admin key may change once the receiver exists at BlindPay.',
+      'URL of a display image for the receiver. With `external_id`, the only field a non-admin key may change once the receiver exists at the fiat partner.',
   })
   @IsOptional()
   @IsString()
@@ -611,7 +612,7 @@ export class CreateReceiverDto {
 
   @ApiPropertyOptional({
     description:
-      'Accepted terms-of-service id (from the redirect of POST /v1/kyc/terms-of-service). Required by BlindPay to create a receiver.',
+      'Accepted terms-of-service id (from the redirect of POST /v1/kyc/terms-of-service). Required by the fiat partner to create a receiver.',
   })
   @IsOptional()
   @IsString()

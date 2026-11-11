@@ -14,7 +14,7 @@ export class WalletEntity {
 
   @ApiProperty({
     example: 'bw_000000000000',
-    description: "BlindPay's wallet id (`bw_...`).",
+    description: "The fiat partner's wallet id (`bw_...`).",
   })
   blindpayId!: string;
 
@@ -26,7 +26,8 @@ export class WalletEntity {
 
   @ApiProperty({
     example: 'stellar',
-    description: 'BlindPay network the wallet is on (for example `stellar`).',
+    description:
+      'The fiat partner network the wallet is on (for example `stellar`).',
   })
   network!: string;
 

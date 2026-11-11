@@ -28,7 +28,7 @@ export class CreateUsdt0TransferDto {
     example: 'GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ',
     description:
       'The Stellar account that holds the USDT0, signs the transaction and ' +
-      'pays its fees in XLM (LayerZero fee plus network fee).',
+      'pays its fees in XLM (bridge fee plus network fee).',
   })
   @IsStellarAddress()
   source!: string;
@@ -58,7 +58,7 @@ export class CreateUsdt0TransferDto {
   @ApiProperty({
     example: '12.5',
     description:
-      'USDT0 to send, decimal with up to 7 places. The OFT carries 6: a 7th ' +
+      'USDT0 to send, decimal with up to 7 places. The bridge contract carries 6: a 7th ' +
       'decimal is dust that stays in the account (see `dust`).',
   })
   @IsString()
@@ -84,7 +84,7 @@ export class CreateUsdt0TransferDto {
       'Your own fee on this transfer, in USDT0, paid to `wallet` (a Stellar ' +
       'account that trusts USDT0) in the same transaction: the operation is ' +
       'then the fee wrapper (`USDT0_FEE_WRAPPER`), which ' +
-      "pays the fee and calls the OFT's `send` under the holder's one " +
+      "pays the fee and calls the bridge contract `send` under the holder's one " +
       'authorization. `paidBy: recipient` takes it from `amount` (less is ' +
       'sent); `payer` adds it on top. Without a configured wrapper, ' +
       '`merchant_fee_unsupported`.',

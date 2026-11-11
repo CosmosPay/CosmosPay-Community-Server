@@ -29,6 +29,7 @@ import {
 } from '@/common/decorators/rate-limit.decorator';
 import { ApiErrorCode, reasonPhrase } from '@/common/errors/api-error';
 import { ApiErrorBodyEntity } from '@/common/errors/api-error.entity';
+import { providerNamesIn } from '@/common/provider-names';
 import {
   apiErrorResponse,
   RATE_LIMITED_RESPONSE_HEADERS,
@@ -53,14 +54,14 @@ export function buildSwaggerConfig(openapi: AppConfig['openapi']) {
     .setDescription(
       'Payments API for merchants and wallets. It covers: payment intents ' +
         'on Stellar, Solana and Monad (with payment links, customers and a ' +
-        'product catalog); swaps (Stellar path payments, Solana via Jupiter, ' +
-        'Monad via Kuru Flow), cross-chain swaps across Stellar, Solana, ' +
-        'Monad and other networks through NEAR Intents, and USDT0 transfers ' +
-        'from Stellar to EVM networks through LayerZero; private payments ' +
+        'product catalog); swaps on Stellar (path payments), Solana and ' +
+        'Monad, cross-chain swaps across Stellar, Solana, Monad and other ' +
+        'networks, and USDT0 transfers from Stellar to EVM networks through ' +
+        'a bridge; private payments ' +
         'with a hidden amount on Stellar; Stellar liquidity pools and ' +
-        'DeFindex yield vaults; fiat on/offramp and KYC through BlindPay; ' +
+        'yield vaults; fiat on/offramp and KYC through a fiat partner; ' +
         'and webhooks that notify your server of payment events. ' +
-        'Liquidity pools, DeFindex, USDT0, private payments and the SEP-10 ' +
+        'Liquidity pools, yield vaults, USDT0, private payments and the SEP-10 ' +
         'and SEP-30 routes are Stellar only. Paths already include ' +
         'the version (`/v1/...`).\n\n' +
         '**Two ways to call it, and the spec documents both.** Through the ' +
@@ -209,19 +210,19 @@ const TAG_DESCRIPTIONS: Record<string, string> = {
     'A payment link as its payer sees it, read without an API key (for hosted checkout pages).',
   swaps: 'Path payments between assets: quote, build, submit.',
   'cross-chain-swaps':
-    'Swaps between Stellar, Solana and Monad, settled by NEAR Intents.',
+    'Swaps between Stellar, Solana and Monad, settled by the cross-chain route.',
   usdt0:
-    'USDT0 from Stellar to EVM networks through LayerZero (native USDT on Ethereum), mainnet only.',
+    'USDT0 from Stellar to EVM networks through the bridge (native USDT on Ethereum), mainnet only.',
   'liquidity-pools': 'Non-custodial AMM deposits and withdrawals.',
   aliases: 'Claimable payment handles, resolved to Stellar addresses.',
   customers: 'End users a payment intent can be attributed to.',
   products: 'The merchant’s product catalog.',
   assets: 'The asset registry this service prices and validates against.',
-  kyc: 'Receivers, their documents, wallets and bank accounts (BlindPay).',
-  onramp: 'Fiat in: quotes, payins and virtual accounts (BlindPay).',
+  kyc: 'Receivers, their documents, wallets and bank accounts.',
+  onramp: 'Fiat in: quotes, payins and virtual accounts.',
   'p2p-onramp':
     'Stablecoins bought with local money from P2P sellers: the market, a firm quote, and sessions that open a hosted purchase delivered to the address you name.',
-  offramp: 'Fiat out: quotes and payouts (BlindPay).',
+  offramp: 'Fiat out: quotes and payouts.',
   'p2p-offramp':
     'Stablecoins sold for local money to P2P buyers: the market, a firm quote, and sessions that open a hosted sale paid with the method you choose.',
   webhooks: 'Endpoints this service notifies, and their delivery history.',
@@ -242,10 +243,10 @@ const TAG_DESCRIPTIONS: Record<string, string> = {
     'SEP-1 discovery, SEP-10 web authentication and SEP-30 account recovery, served only by a recovery deployment.',
   plugins:
     'Extensions served under a slug: list them, install one for this key, and run its actions.',
-  DeFindex:
-    'DeFindex yield vaults on Stellar: discover vaults, read a balance, build a deposit or withdrawal, submit it.',
+  'Yield vaults':
+    'Yield vaults on Stellar: discover vaults, read a balance, build a deposit or withdrawal, submit it.',
   'Protected payments':
-    'Payments held until delivery: the buyer pays USDC into a Trustless Work contract and it is released to the merchant on the terms the merchant chose.',
+    'Payments held until delivery: the buyer pays USDC into a protected-payment contract and it is released to the merchant on the terms the merchant chose.',
   'Protected payment links':
     'The buyer’s side of a protected payment, without an API key: read it, fund it, confirm delivery, release or dispute it.',
 };
@@ -344,13 +345,25 @@ const UPSTREAM_FAILURES: Record<
   UpstreamProvider,
   readonly SharedErrorResponse[]
 > = {
-  BlindPay: ['UpstreamError', 'UpstreamUnavailable', 'UpstreamTimeout'],
+  'Fiat partner': ['UpstreamError', 'UpstreamUnavailable', 'UpstreamTimeout'],
   Horizon: ['UpstreamUnavailable'],
   Solana: ['UpstreamError', 'UpstreamUnavailable', 'UpstreamTimeout'],
   Monad: ['UpstreamError', 'UpstreamUnavailable', 'UpstreamTimeout'],
-  'NEAR Intents': ['UpstreamError', 'UpstreamUnavailable', 'UpstreamTimeout'],
-  Jupiter: ['UpstreamError', 'UpstreamUnavailable', 'UpstreamTimeout'],
-  'Kuru Flow': ['UpstreamError', 'UpstreamUnavailable', 'UpstreamTimeout'],
+  'Cross-chain route': [
+    'UpstreamError',
+    'UpstreamUnavailable',
+    'UpstreamTimeout',
+  ],
+  'Solana swap route': [
+    'UpstreamError',
+    'UpstreamUnavailable',
+    'UpstreamTimeout',
+  ],
+  'Monad swap route': [
+    'UpstreamError',
+    'UpstreamUnavailable',
+    'UpstreamTimeout',
+  ],
   // Reached through the Stellar SDK's `rpc.Server` (and the confidential token
   // SDK's client), wrapped like Horizon: a refusal, an outage and a timeout
   // all answer 503.
@@ -358,10 +371,14 @@ const UPSTREAM_FAILURES: Record<
   // Reached through `@defindex/sdk` (axios), which rejects with DeFindex's body
   // or axios' error and never says which: every failure is a 502
   // `provider_error`, and a deployment without its API key a 503.
-  DeFindex: ['UpstreamError', 'UpstreamUnavailable'],
+  'Vault protocol': ['UpstreamError', 'UpstreamUnavailable'],
   // Reached through `requestUpstreamJson`: its 5xx (and a build that answers
   // FAILED) is 502, a refused key or its rate limit 503, a timeout 504.
-  'Trustless Work': ['UpstreamError', 'UpstreamUnavailable', 'UpstreamTimeout'],
+  'Protected-payments service': [
+    'UpstreamError',
+    'UpstreamUnavailable',
+    'UpstreamTimeout',
+  ],
   // Reached through `requestUpstreamJson`: a 5xx is 502, a refused id or its
   // rate limit 503, a timeout 504.
   'P2P marketplace': [
@@ -614,6 +631,30 @@ function emDashesIn(value: unknown, pointer = '#'): string[] {
 }
 
 /**
+ * The JSON pointer of every string in `value` that names a provider, with the
+ * names: the contract says what a route does, never who it is built on
+ * (`src/common/provider-names.ts`). Display names and provider env vars only,
+ * so an identifier the contract publishes (`blindpayId`, the `jupiter` enum
+ * value, `/v1/defindex`) is not one.
+ */
+function providerNamesInDocument(
+  value: unknown,
+  pointer = '#',
+): { pointer: string; names: string[] }[] {
+  if (typeof value === 'string') {
+    const names = providerNamesIn(value);
+    return names.length ? [{ pointer, names }] : [];
+  }
+  if (!value || typeof value !== 'object') return [];
+  return Object.entries(value).flatMap(([key, child]) =>
+    providerNamesInDocument(
+      child,
+      `${pointer}/${key.replaceAll('~', '~0').replaceAll('/', '~1')}`,
+    ),
+  );
+}
+
+/**
  * Contract problems that should stop a release, not reach a client generator.
  *
  * `openapi:generate` fails on a non-empty result, so CI's `openapi:check` is
@@ -702,6 +743,12 @@ export function findOpenApiIssues(document: OpenAPIObject): string[] {
   for (const pointer of emDashesIn(document)) {
     issues.push(
       `${pointer}: contains an em dash (U+2014). Use a colon, comma, full stop or parentheses.`,
+    );
+  }
+
+  for (const { pointer, names } of providerNamesInDocument(document)) {
+    issues.push(
+      `${pointer}: names a provider (${names.join(', ')}). Say what it does instead: see src/common/provider-names.ts.`,
     );
   }
 

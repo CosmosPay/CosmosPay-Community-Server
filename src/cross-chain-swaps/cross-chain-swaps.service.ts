@@ -129,8 +129,8 @@ export type CrossChainSwapView = Omit<PublicCrossChainSwap, 'merchantFee'> & {
  */
 const SAME_CHAIN_VENUES: Record<Chain, string> = {
   stellar: 'the Stellar DEX',
-  solana: 'Jupiter',
-  monad: 'Kuru Flow',
+  solana: 'the Solana swap route',
+  monad: 'the Monad swap route',
 };
 
 /** A swap priced by 1Click — everything quote and create both need. */
@@ -275,7 +275,7 @@ export class CrossChainSwapsService {
     if (resolveNetwork(this.config, consumer) !== 'public') {
       throw ApiError.badRequest(
         ApiErrorCode.NetworkUnsupported,
-        'Cross-chain swaps run on mainnet only: NEAR Intents has no test ' +
+        'Cross-chain swaps run on mainnet only: the cross-chain route has no test ' +
           'network. Use a prod API key.',
       );
     }
@@ -305,7 +305,7 @@ export class CrossChainSwapsService {
       );
       throw ApiError.badGateway(
         ApiErrorCode.ProviderError,
-        'NEAR Intents did not issue a deposit address. Retry shortly.',
+        'The cross-chain route did not issue a deposit address. Retry shortly.',
       );
     }
     const depositMemo = quote.depositMemo ?? null;
@@ -704,7 +704,7 @@ export class CrossChainSwapsService {
     if (bps === 0) {
       throw ApiError.badRequest(
         ApiErrorCode.InvalidAmount,
-        'The merchant fee is under one basis point of the deposit, the least NEAR Intents can pay',
+        'The merchant fee is under one basis point of the deposit, the least the cross-chain route can pay',
       );
     }
     return bps;

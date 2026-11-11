@@ -14,7 +14,7 @@ export class SwapPathHop {
     example: 'yXLM',
     description:
       'The intermediate asset. Stellar: its code, or `native` for XLM. ' +
-      "Solana: the SPL mint address of a token on Jupiter's route (SOL " +
+      'Solana: the SPL mint address of a token the Solana swap route trades (SOL ' +
       'appears as the wrapped SOL mint, never `native`). Monad routes report ' +
       'no hops.',
   })
@@ -582,7 +582,7 @@ export class SwapSubmitResultEntity {
  */
 @ApiSchema({
   description:
-    'A Solana or Monad swap: built by Jupiter or Kuru Flow, signed by the ' +
+    'A Solana or Monad swap: built by the Solana swap route or the Monad swap route, signed by the ' +
     'wallet, relayed by this service. Returned by `/v1/swaps` when the ' +
     'request names `chain: solana | monad`.',
 })
@@ -608,7 +608,7 @@ export class ChainSwapEntity {
     example: 'jupiter',
     description:
       'The aggregator that priced and built the swap: `jupiter` on Solana, ' +
-      '`kuru` (Kuru Flow) on Monad.',
+      '`kuru` on Monad.',
   })
   provider!: string;
 

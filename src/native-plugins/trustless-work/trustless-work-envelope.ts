@@ -239,7 +239,7 @@ export function builtEnvelopeRefused(
 ): ApiError {
   return ApiError.badGateway(
     ApiErrorCode.ProviderError,
-    `Trustless Work built a transaction that is not the requested ` +
+    `The protected-payments service built a transaction that is not the requested ` +
       `${action.toLowerCase()}: ${reason}`,
   );
 }

@@ -123,7 +123,7 @@ export function builtEnvelopeRefused(
 ): ApiError {
   return ApiError.badGateway(
     ApiErrorCode.ProviderError,
-    `DeFindex built a transaction that is not the requested ${kind}: ${reason}`,
+    `The vault protocol built a transaction that is not the requested ${kind}: ${reason}`,
   );
 }
 

@@ -11,7 +11,7 @@ import { USDT0_CHAIN_IDS, type Usdt0ChainId } from '@/usdt0/usdt0.constants';
 @ApiSchema({
   description:
     'A USDT0 quote request: how much USDT0 to send from Stellar, and to which ' +
-    'network. The OFT is asked by simulation; nothing is persisted.',
+    'network. The bridge contract is asked by simulation; nothing is persisted.',
 })
 export class QuoteUsdt0Dto {
   @ApiProperty({
@@ -27,7 +27,7 @@ export class QuoteUsdt0Dto {
   @ApiProperty({
     example: '12.5',
     description:
-      'USDT0 to send, decimal with up to 7 places. The OFT carries 6: a 7th ' +
+      'USDT0 to send, decimal with up to 7 places. The bridge contract carries 6: a 7th ' +
       'decimal is dust that stays in the account (see `dust`).',
   })
   @IsString()

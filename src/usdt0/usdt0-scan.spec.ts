@@ -68,7 +68,7 @@ describe('scanOutcome', () => {
     const outcome = scanOutcome(withStatus(name, 'gave up'));
     expect(outcome).toMatchObject({ kind: 'failed', scanStatus: name });
     expect(outcome.kind === 'failed' && outcome.reason).toBe(
-      `LayerZero reports the message ${name}: gave up`,
+      `The bridge reports the message ${name}: gave up`,
     );
   });
 

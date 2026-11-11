@@ -10,7 +10,7 @@ import {
 /** A token NEAR Intents can swap on one of the networks this service reaches. */
 @ApiSchema({
   description:
-    'A token NEAR Intents can swap, on one of the networks cross-chain swaps reach.',
+    'A token the cross-chain route can swap, on one of the networks cross-chain swaps reach.',
 })
 export class CrossChainAssetEntity {
   @ApiProperty({
@@ -29,21 +29,21 @@ export class CrossChainAssetEntity {
 
   @ApiProperty({
     example: 'USDC',
-    description: "The token's symbol, as NEAR Intents lists it.",
+    description: "The token's symbol, as the cross-chain route lists it.",
   })
   symbol!: string;
 
   @ApiProperty({
     example:
       'nep245:v2_1.omni.hot.tg:1100_111bzQBB65GxAPAVoxqmMcgYo5oS3txhqs1Uh1cgahKQUeTUq1TJu',
-    description: 'NEAR Intents’ id for the asset.',
+    description: 'The cross-chain route’s id for the asset.',
   })
   assetId!: string;
 
   @ApiProperty({
     example: 7,
     description:
-      "The token's decimal places on its network, as NEAR Intents lists them.",
+      "The token's decimal places on its network, as the cross-chain route lists them.",
   })
   decimals!: number;
 
@@ -61,9 +61,9 @@ export class CrossChainAssetEntity {
     nullable: true,
     example: 0.999538,
     description:
-      'NEAR Intents’ reference price in USD, indicative only: for showing an ' +
+      'The cross-chain route’s reference price in USD, indicative only: for showing an ' +
       'estimate before a quote. It may be a few minutes old, and every amount ' +
-      'still comes from a quote. Null when NEAR Intents lists none.',
+      'still comes from a quote. Null when the cross-chain route lists none.',
   })
   priceUsd!: number | null;
 }
@@ -76,7 +76,7 @@ export class CrossChainAssetListEntity {
   @ApiProperty({
     type: [CrossChainAssetEntity],
     description:
-      'Every asset NEAR Intents still trades: a token it tags deprecated or ' +
+      'Every asset the cross-chain route still trades: a token it tags deprecated or ' +
       'lists with no price is left out.',
   })
   data!: CrossChainAssetEntity[];
@@ -97,14 +97,14 @@ export class CrossChainQuoteLeg {
 
   @ApiProperty({
     example: 'XLM',
-    description: "The asset's symbol, as NEAR Intents lists it.",
+    description: "The asset's symbol, as the cross-chain route lists it.",
   })
   asset!: string;
 
   @ApiProperty({
     example:
       'nep245:v2_1.omni.hot.tg:1100_111bzQBB5v7AhLyPMDwS8uJgQV24KaAPXtwyVWu2KXbbfQU6NXRCz',
-    description: "NEAR Intents' id for the asset.",
+    description: "The cross-chain route's id for the asset.",
   })
   assetId!: string;
 
@@ -126,7 +126,7 @@ export class CrossChainQuoteLeg {
   @ApiProperty({
     nullable: true,
     example: '22.57',
-    description: 'NEAR Intents’ USD valuation, informational only.',
+    description: 'The cross-chain route’s USD valuation, informational only.',
   })
   amountUsd!: string | null;
 }
@@ -135,7 +135,7 @@ export class CrossChainQuoteLeg {
 @ApiSchema({
   description:
     'The destination leg of a cross-chain swap quote, with the minimum ' +
-    'output below which NEAR Intents refunds.',
+    'output below which the cross-chain route refunds.',
 })
 export class CrossChainQuoteDestination extends CrossChainQuoteLeg {
   @ApiProperty({
@@ -149,7 +149,7 @@ export class CrossChainQuoteDestination extends CrossChainQuoteLeg {
 /** The plan commission, taken by NEAR Intents out of the input as an app fee. */
 @ApiSchema({
   description:
-    'The plan commission on a cross-chain swap, which NEAR Intents takes out ' +
+    'The plan commission on a cross-chain swap, which the cross-chain route takes out ' +
     'of the input as an app fee.',
 })
 export class CrossChainFeeEntity {
@@ -169,12 +169,13 @@ export class CrossChainFeeEntity {
 @ApiSchema({
   description:
     'Response of `POST /v1/cross-chain-swaps/quote`: the price of a ' +
-    'cross-chain swap through NEAR Intents. Nothing is persisted.',
+    'cross-chain swap through the cross-chain route. Nothing is persisted.',
 })
 export class CrossChainQuoteEntity {
   @ApiProperty({
     example: 'public',
-    description: 'Always public: NEAR Intents prices and settles on mainnet.',
+    description:
+      'Always public: the cross-chain route prices and settles on mainnet.',
   })
   network!: string;
 
@@ -201,7 +202,7 @@ export class CrossChainQuoteEntity {
     type: MerchantFeeEntity,
     nullable: true,
     description:
-      'The merchant fee NEAR Intents will pay, in the origin asset; null without one.',
+      'The merchant fee the cross-chain route will pay, in the origin asset; null without one.',
   })
   merchantFee!: MerchantFeeEntity | null;
 
@@ -215,7 +216,7 @@ export class CrossChainQuoteEntity {
   @ApiProperty({
     example: 22,
     description:
-      'NEAR Intents’ estimate, in seconds after the deposit confirms.',
+      'The cross-chain route’s estimate, in seconds after the deposit confirms.',
   })
   timeEstimateSeconds!: number;
 }
@@ -223,27 +224,28 @@ export class CrossChainQuoteEntity {
 /** A settlement transaction NEAR Intents reports. */
 @ApiSchema({
   description:
-    'A settlement transaction NEAR Intents reports, with its explorer link.',
+    'A settlement transaction the cross-chain route reports, with its explorer link.',
 })
 export class CrossChainTransactionEntity {
   @ApiProperty({
     example: '0x9a…',
-    description: 'The transaction id on its chain, as NEAR Intents reports it.',
+    description:
+      'The transaction id on its chain, as the cross-chain route reports it.',
   })
   hash!: string;
 
   @ApiProperty({
     example: 'https://solscan.io/tx/…',
     description:
-      'A block explorer link to the transaction, as NEAR Intents reports it.',
+      'A block explorer link to the transaction, as the cross-chain route reports it.',
   })
   explorerUrl!: string;
 }
 
 @ApiSchema({
   description:
-    'A cross-chain swap settled by NEAR Intents: the deposit request the ' +
-    'payer pays, and the settlement as NEAR Intents reports it.',
+    'A cross-chain swap settled by the cross-chain route: the deposit request the ' +
+    'payer pays, and the settlement as the cross-chain route reports it.',
 })
 export class CrossChainSwapEntity {
   @ApiProperty({
@@ -256,20 +258,21 @@ export class CrossChainSwapEntity {
     enum: CrossChainSwapStatus,
     example: 'AWAITING_DEPOSIT',
     description:
-      "The swap's status, mapped from NEAR Intents' `providerStatus`; " +
+      "The swap's status, mapped from the cross-chain route's `providerStatus`; " +
       'EXPIRED means the deadline passed with nothing deposited.',
   })
   status!: CrossChainSwapStatus;
 
   @ApiProperty({
     example: 'PENDING_DEPOSIT',
-    description: 'NEAR Intents’ own status word, verbatim.',
+    description: 'The cross-chain route’s own status word, verbatim.',
   })
   providerStatus!: string;
 
   @ApiProperty({
     example: 'public',
-    description: 'Always `public`: NEAR Intents settles on mainnet only.',
+    description:
+      'Always `public`: the cross-chain route settles on mainnet only.',
   })
   network!: string;
 
@@ -282,7 +285,7 @@ export class CrossChainSwapEntity {
 
   @ApiProperty({
     example: 'XLM',
-    description: "The sold asset's symbol, as NEAR Intents lists it.",
+    description: "The sold asset's symbol, as the cross-chain route lists it.",
   })
   originAsset!: string;
 
@@ -303,7 +306,8 @@ export class CrossChainSwapEntity {
 
   @ApiProperty({
     example: 'USDC',
-    description: "The bought asset's symbol, as NEAR Intents lists it.",
+    description:
+      "The bought asset's symbol, as the cross-chain route lists it.",
   })
   destinationAsset!: string;
 
@@ -328,7 +332,7 @@ export class CrossChainSwapEntity {
     example: '0.5',
     description:
       'The plan commission, as a decimal string in the origin asset, which ' +
-      'NEAR Intents takes as an app fee.',
+      'the cross-chain route takes as an app fee.',
   })
   feeAmount!: string;
 
@@ -336,7 +340,7 @@ export class CrossChainSwapEntity {
     type: MerchantFeeEntity,
     nullable: true,
     description:
-      'The merchant fee NEAR Intents pays as an app fee; null when the request named none.',
+      'The merchant fee the cross-chain route pays as an app fee; null when the request named none.',
   })
   merchantFee!: MerchantFeeEntity | null;
 
@@ -388,7 +392,7 @@ export class CrossChainSwapEntity {
     description:
       'Required whenever it is set: attach it to the deposit or the deposit is ' +
       'lost to the swap. Always set on Stellar (a MEMO_TEXT); on another chain ' +
-      'only if NEAR Intents issues one.',
+      'only if the cross-chain route issues one.',
   })
   depositMemo!: string | null;
 
@@ -426,7 +430,7 @@ export class CrossChainSwapEntity {
   @ApiProperty({
     nullable: true,
     example: null,
-    description: 'Settled output, once NEAR Intents reports it.',
+    description: 'Settled output, once the cross-chain route reports it.',
   })
   amountOut!: string | null;
 
@@ -435,7 +439,7 @@ export class CrossChainSwapEntity {
     example: null,
     description:
       'The amount refunded to `refundTo`, as a decimal string in the origin ' +
-      'asset, once NEAR Intents reports a refund; null otherwise.',
+      'asset, once the cross-chain route reports a refund; null otherwise.',
   })
   refundedAmount!: string | null;
 
@@ -443,7 +447,7 @@ export class CrossChainSwapEntity {
     type: [CrossChainTransactionEntity],
     nullable: true,
     description:
-      'Transactions NEAR Intents reports on the origin chain; null until it reports any.',
+      'Transactions the cross-chain route reports on the origin chain; null until it reports any.',
   })
   originTxHashes!: CrossChainTransactionEntity[] | null;
 
@@ -451,27 +455,28 @@ export class CrossChainSwapEntity {
     type: [CrossChainTransactionEntity],
     nullable: true,
     description:
-      'Transactions NEAR Intents reports on the destination chain; null until it reports any.',
+      'Transactions the cross-chain route reports on the destination chain; null until it reports any.',
   })
   destinationTxHashes!: CrossChainTransactionEntity[] | null;
 
   @ApiProperty({
     example: 22,
     description:
-      "NEAR Intents' estimate, in seconds after the deposit confirms.",
+      "The cross-chain route's estimate, in seconds after the deposit confirms.",
   })
   timeEstimateSeconds!: number;
 
   @ApiProperty({
     example: 'c5928abd-243c-4019-aebd-6cccc185cc96',
-    description: 'NEAR Intents’ id for the quote, for support requests.',
+    description:
+      'The cross-chain route’s id for the quote, for support requests.',
   })
   correlationId!: string;
 
   @ApiProperty({
     example: 'ed25519:Ze6U5JbqTTbXNvU5PW2g…',
     description:
-      'NEAR Intents’ signature over the quote and deposit address. Keep it: it settles a dispute.',
+      'The cross-chain route’s signature over the quote and deposit address. Keep it: it settles a dispute.',
   })
   quoteSignature!: string;
 

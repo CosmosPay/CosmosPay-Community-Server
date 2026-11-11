@@ -315,11 +315,10 @@ export class ProtectedPaymentsService {
 
   private assertConfigured(network: StellarNetwork): void {
     if (!this.keys.isConfigured(network)) {
-      throw ApiError.unavailable(
-        ApiErrorCode.Misconfigured,
-        `Protected payments are not configured on ${network}: set ` +
-          `${trustlessWorkEnvName(network, 'API_KEY')} and ` +
-          `${trustlessWorkEnvName(network, 'PLATFORM_SECRET')}.`,
+      throw ApiError.misconfigured(
+        `Protected payments are not configured on ${network}.`,
+        `set ${trustlessWorkEnvName(network, 'API_KEY')} and ` +
+          trustlessWorkEnvName(network, 'PLATFORM_SECRET'),
       );
     }
   }

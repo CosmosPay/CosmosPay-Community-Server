@@ -34,7 +34,7 @@ export class PayerRulesDto {
   @ApiPropertyOptional({
     type: [String],
     description:
-      'Tax ids of the payers allowed to fund a `pix` payin, forwarded to BlindPay.',
+      'Tax ids of the payers allowed to fund a `pix` payin, forwarded to the fiat partner.',
   })
   @IsOptional()
   @IsArray()
@@ -52,7 +52,7 @@ export class PayerRulesDto {
   @ApiPropertyOptional({
     type: [String],
     description:
-      'Tax ids of the payers allowed to fund a `pse` payin, forwarded to BlindPay.',
+      'Tax ids of the payers allowed to fund a `pse` payin, forwarded to the fiat partner.',
   })
   @IsOptional()
   @IsArray()
@@ -179,14 +179,14 @@ export class CreatePayinQuoteDto {
 
   @ApiPropertyOptional({
     example: false,
-    description: "BlindPay's OTC flag, forwarded as sent.",
+    description: "The fiat partner's OTC flag, forwarded as sent.",
   })
   @IsOptional()
   @IsBoolean()
   is_otc?: boolean;
 
   @ApiPropertyOptional({
-    description: 'BlindPay partner fee id, forwarded as sent.',
+    description: 'Partner fee id, forwarded as sent.',
   })
   @IsOptional()
   @IsString()

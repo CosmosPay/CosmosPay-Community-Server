@@ -27,13 +27,13 @@ import {
 
 const SUBMIT_PATH = '/v1/defindex/submit';
 
-@ApiTags('DeFindex')
+@ApiTags('Yield vaults')
 // No `v1/` here: URI versioning adds it, and writing it twice served every
 // route at /v1/v1/defindex while the wallet calls /v1/defindex.
 @Controller('defindex')
 // Every route calls DeFindex (a submit replay is answered from the table, but
 // a first submit is not).
-@ApiUpstream('DeFindex')
+@ApiUpstream('Vault protocol')
 // No `@AllowPublicKey()`, on purpose. The shared public key exists for the
 // anonymous swap pages and wallets, which never call DeFindex: the wallet's
 // Earn screen uses the signed-in account's own key. Admitting it made every
@@ -48,12 +48,13 @@ export class DefindexController {
   @Get('vaults')
   @RequireAnyPermission('liquidity:read', 'swaps:read')
   @ApiOperation({
-    summary: 'Discover DeFindex vaults',
+    operationId: 'VaultsController_vaults_v1',
+    summary: 'Discover yield vaults',
     description:
-      "The DeFindex vaults on the key's network (a `prod` key reads mainnet, " +
-      "a `dev` key testnet), with DeFindex's answer passed through as is. " +
-      'DeFindex failures are `502 provider_error`, and a deployment ' +
-      'without a DeFindex API key answers `503 misconfigured`.',
+      "The yield vaults on the key's network (a `prod` key reads mainnet, " +
+      "a `dev` key testnet), with the vault protocol's answer passed through as is. " +
+      'vault failures are `502 provider_error`, and a deployment ' +
+      'without a vault API key answers `503 misconfigured`.',
   })
   vaults(@CurrentConsumer() consumer: GatewayConsumer) {
     return this.defindex.discover(consumer);
@@ -62,12 +63,13 @@ export class DefindexController {
   @Get('vaults/:vault')
   @RequireAnyPermission('liquidity:read', 'swaps:read')
   @ApiOperation({
-    summary: 'Read a DeFindex vault',
+    operationId: 'VaultsController_info_v1',
+    summary: 'Read a yield vault',
     description:
-      "One vault's details from DeFindex on the key's network, passed " +
+      "One vault's details from the vault protocol on the key's network, passed " +
       'through as is; `vault` is its contract address (`C...`). ' +
-      'DeFindex failures are `502 provider_error`, and a deployment ' +
-      'without a DeFindex API key answers `503 misconfigured`.',
+      'vault failures are `502 provider_error`, and a deployment ' +
+      'without a vault API key answers `503 misconfigured`.',
   })
   info(
     @CurrentConsumer() consumer: GatewayConsumer,
@@ -79,12 +81,13 @@ export class DefindexController {
   @Get('vaults/:vault/balance')
   @RequireAnyPermission('liquidity:read', 'swaps:read')
   @ApiOperation({
-    summary: 'Read an account balance in a DeFindex vault',
+    operationId: 'VaultsController_balance_v1',
+    summary: 'Read an account balance in a yield vault',
     description:
       "`account`'s shares and their underlying value in the vault, read from " +
-      "DeFindex on the key's network and passed through as is. " +
-      'DeFindex failures are `502 provider_error`, and a deployment ' +
-      'without a DeFindex API key answers `503 misconfigured`.',
+      "the vault protocol on the key's network and passed through as is. " +
+      'vault failures are `502 provider_error`, and a deployment ' +
+      'without a vault API key answers `503 misconfigured`.',
   })
   balance(
     @CurrentConsumer() consumer: GatewayConsumer,
@@ -99,9 +102,10 @@ export class DefindexController {
   // Each build spends a call on the deployment's DeFindex key and stores a row.
   @RateLimit(DEFINDEX_BUILD_RATE_LIMIT)
   @ApiOperation({
-    summary: 'Build an unsigned DeFindex deposit',
+    operationId: 'VaultsController_deposit_v1',
+    summary: 'Build an unsigned vault deposit',
     description:
-      'DeFindex builds the deposit of `amounts` (integer strings in minor ' +
+      'The vault protocol builds the deposit of `amounts` (integer strings in minor ' +
       "units, at most 9007199254740991 each) into the vault for `caller` on the key's network; " +
       '`invest` defaults to true and `slippageBps` to 100. The returned XDR ' +
       'is checked to be exactly that call and recorded for this key for up ' +
@@ -121,9 +125,10 @@ export class DefindexController {
   @RequireAnyPermission('liquidity:write', 'swaps:write')
   @RateLimit(DEFINDEX_BUILD_RATE_LIMIT)
   @ApiOperation({
-    summary: 'Build an unsigned DeFindex share withdrawal',
+    operationId: 'VaultsController_withdraw_v1',
+    summary: 'Build an unsigned the vault protocol share withdrawal',
     description:
-      'DeFindex builds the burn of `shares` (an integer string, at most ' +
+      'The vault protocol builds the burn of `shares` (an integer string, at most ' +
       "9007199254740991) for the vault's underlying assets, for `caller` on " +
       "the key's network; `slippageBps` defaults to 100. The returned XDR is " +
       'checked to be exactly that call and recorded for this key for up to ' +
@@ -144,14 +149,15 @@ export class DefindexController {
   // Every accepted submit is a broadcast on the deployment's DeFindex key.
   @RateLimit(DEFINDEX_SUBMIT_RATE_LIMIT)
   @ApiOperation({
-    summary: 'Submit a signed DeFindex transaction',
+    operationId: 'VaultsController_submit_v1',
+    summary: 'Submit a signed vault transaction',
     description:
-      'Relays `xdr` through DeFindex only when it is a signed copy of a ' +
+      'Relays `xdr` through the vault protocol only when it is a signed copy of a ' +
       'transaction that `POST /v1/defindex/vaults/{vault}/deposit` or ' +
       '`/withdraw` built for this same API key on its network, before it ' +
-      'expires; anything else is refused before DeFindex is called. Relayed ' +
-      "once: DeFindex's answer is stored, and submitting the same transaction " +
-      'again answers it without calling DeFindex. When DeFindex gives no ' +
+      'expires; anything else is refused before the vault protocol is called. Relayed ' +
+      "once: the vault protocol's answer is stored, and submitting the same transaction " +
+      'again answers it without calling the vault protocol. When the vault protocol gives no ' +
       'answer (502, 503) the same transaction may be submitted again.',
   })
   @ApiCreatedResponse({ type: DefindexSubmitResultEntity })
@@ -171,7 +177,7 @@ export class DefindexController {
       },
       [ApiErrorCode.InvalidStateTransition]: {
         message:
-          'This DeFindex transaction expired before it was submitted and can ' +
+          'This vault transaction expired before it was submitted and can ' +
           'no longer be relayed. Build a new one.',
         path: SUBMIT_PATH,
       },
@@ -199,12 +205,12 @@ export class DefindexController {
     status: 409,
     codes: [ApiErrorCode.OperationInFlight],
     description:
-      'Another submit of the same transaction is waiting for DeFindex. Submit ' +
+      'Another submit of the same transaction is waiting for the vault protocol. Submit ' +
       'again once it finishes to read its stored answer.',
     examples: {
       [ApiErrorCode.OperationInFlight]: {
         message:
-          'This DeFindex transaction is already being submitted. Wait for that ' +
+          'This vault transaction is already being submitted. Wait for that ' +
           'submit to finish, then submit it again to read its result.',
         path: SUBMIT_PATH,
       },

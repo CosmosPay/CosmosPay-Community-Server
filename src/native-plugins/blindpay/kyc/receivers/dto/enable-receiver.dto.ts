@@ -8,7 +8,7 @@ import { IsString } from 'class-validator';
  */
 @ApiSchema({
   description:
-    'The accepted terms-of-service id that creates an approved (`pending_user`) receiver at BlindPay.',
+    'The accepted terms-of-service id that creates an approved (`pending_user`) receiver at the fiat partner.',
 })
 export class EnableReceiverDto {
   @ApiProperty({

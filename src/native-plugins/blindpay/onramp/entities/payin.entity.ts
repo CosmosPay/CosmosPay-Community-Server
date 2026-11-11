@@ -14,14 +14,14 @@ export class PayinEntity {
 
   @ApiProperty({
     example: 'pi_000000000000',
-    description: "BlindPay's payin id (`pi_...`).",
+    description: "The fiat partner's payin id (`pi_...`).",
   })
   blindpayId!: string;
 
   @ApiPropertyOptional({
     example: 'processing',
     description:
-      'BlindPay status of the payin (for example `processing`); `completed`, `failed`, `refunded` and `cancelled` mean the money stopped moving.',
+      'Fiat partner status of the payin (for example `processing`); `completed`, `failed`, `refunded` and `cancelled` mean the money stopped moving.',
   })
   status!: string | null;
 

@@ -94,7 +94,13 @@ export class SwapsController {
   @Post('quote')
   // Stellar: a strict-send path search at Horizon. Solana: Jupiter, and the
   // RPC for a mint's decimals. Monad: Kuru Flow, and the RPC.
-  @ApiUpstream('Horizon', 'Jupiter', 'Kuru Flow', 'Solana', 'Monad')
+  @ApiUpstream(
+    'Horizon',
+    'Solana swap route',
+    'Monad swap route',
+    'Solana',
+    'Monad',
+  )
   // Prices a route. Pure function of the request.
   @AllowPublicKey()
   @RequirePermissions('swaps:read')
@@ -111,8 +117,8 @@ export class SwapsController {
     description:
       "Prices `amount` of the source asset on the chain's own venue: the " +
       "Stellar DEX (a Horizon strict-send path search on the key's network) " +
-      'when `chain` is omitted or `stellar`, Jupiter for `solana` and Kuru ' +
-      'Flow for `monad`, both mainnet only. The answer carries the plan ' +
+      'when `chain` is omitted or `stellar`, the Solana swap route for `solana` and the Monad swap route ' +
+      'for `monad`, both mainnet only. The answer carries the plan ' +
       'commission (`fee`: taken from the source amount on Stellar, from the ' +
       'output on Solana and Monad), any `merchantFee`, the estimated output ' +
       'and the minimum after slippage. `slippageBps` defaults to 50 and a ' +
@@ -134,11 +140,11 @@ export class SwapsController {
     ],
     description:
       '`network_unsupported`: `chain: solana | monad` with a dev (testnet) ' +
-      'key: Jupiter and Kuru Flow run on mainnet only. `asset_unsupported`: ' +
+      'key: the Solana swap route and the Monad swap route run on mainnet only. `asset_unsupported`: ' +
       'not an SPL mint / ERC-20 on that chain. `provider_error`: the ' +
       'aggregator found no route or refused the amount. ' +
       '`merchant_fee_unsupported`: a `merchantFee` on a Monad swap where no ' +
-      'merchant fee router is configured (KURU_MERCHANT_FEE_ROUTER).',
+      'merchant fee router is configured on this deployment.',
   })
   @ApiErrorResponse({
     status: 503,
@@ -146,8 +152,8 @@ export class SwapsController {
     description:
       '`misconfigured`: the plan charges a commission and the chain has no ' +
       'fee wallet configured (STELLAR_SWAP_FEE_WALLET, SOLANA_SWAP_FEE_WALLET, ' +
-      'MONAD_SWAP_FEE_WALLET), or KURU_MERCHANT_FEE_ROUTER is not a ' +
-      'MerchantFeeSwapRouter.',
+      'MONAD_SWAP_FEE_WALLET), or the deployment’s merchant fee router is not ' +
+      'the expected contract.',
   })
   quote(
     @CurrentConsumer() consumer: GatewayConsumer,
@@ -161,7 +167,13 @@ export class SwapsController {
   @Post()
   // Stellar: prices and loads the source account from Horizon. Solana /
   // Monad: the aggregator builds; the RPC answers decimals and allowances.
-  @ApiUpstream('Horizon', 'Jupiter', 'Kuru Flow', 'Solana', 'Monad')
+  @ApiUpstream(
+    'Horizon',
+    'Solana swap route',
+    'Monad swap route',
+    'Solana',
+    'Monad',
+  )
   // Builds an unsigned transaction from the request; the wallet signs it.
   @AllowPublicKey()
   @RequirePermissions('swaps:write')
@@ -224,7 +236,7 @@ export class SwapsController {
       '`provider_error` (no route, or the aggregator simulated a failure, ' +
       'usually a wallet that cannot cover the amount plus fees). ' +
       'Monad: `merchant_fee_unsupported` (a `merchantFee` and no merchant ' +
-      'fee router configured, KURU_MERCHANT_FEE_ROUTER).',
+      'fee router configured on this deployment).',
   })
   @ApiErrorResponse({
     status: 409,
@@ -243,8 +255,8 @@ export class SwapsController {
       '`misconfigured`: the plan charges a commission and the chain has no ' +
       'fee wallet (or, on Solana, the fee wallet has no token account for the ' +
       'output mint yet), or, for a Monad swap with a merchant fee, ' +
-      'KURU_MERCHANT_FEE_ROUTER is not a MerchantFeeSwapRouter or Kuru Flow ' +
-      'routes through another aggregator than the one it was deployed for.',
+      'the deployment’s merchant fee router is not the expected contract, or the ' +
+      'Monad swap route moved to another router than the one it was built for.',
   })
   create(
     @CurrentConsumer() consumer: GatewayConsumer,

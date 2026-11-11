@@ -326,6 +326,13 @@ export class ApiError extends HttpException {
   readonly code: ApiErrorCode;
   /** Published as the envelope's `details`; see {@link ApiErrorBody.details}. */
   readonly details?: ApiErrorDetails;
+  /**
+   * What the OPERATOR needs to fix it (the env var to set, the provider that
+   * refused), logged by `AllExceptionsFilter` and never sent: a client is not
+   * told which provider or setting is behind a failure. See
+   * {@link ApiError.misconfigured}.
+   */
+  operatorDetail?: string;
 
   constructor(
     status: HttpStatus,
@@ -376,6 +383,21 @@ export class ApiError extends HttpException {
 
   static unavailable(code: ApiErrorCode, message: string): ApiError {
     return new ApiError(HttpStatus.SERVICE_UNAVAILABLE, code, message);
+  }
+
+  /**
+   * `503 misconfigured`: `message` says what the deployment cannot do, in words
+   * that name no provider and no setting; `operatorDetail` (the env var to set)
+   * goes to the log only.
+   */
+  static misconfigured(message: string, operatorDetail: string): ApiError {
+    const error = new ApiError(
+      HttpStatus.SERVICE_UNAVAILABLE,
+      ApiErrorCode.Misconfigured,
+      message,
+    );
+    error.operatorDetail = operatorDetail;
+    return error;
   }
 
   static badGateway(code: ApiErrorCode, message: string): ApiError {
