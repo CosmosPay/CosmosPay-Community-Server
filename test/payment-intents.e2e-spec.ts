@@ -111,12 +111,15 @@ describe('Payment intents CRUD (e2e)', () => {
       count: jest.fn((args: any) =>
         Promise.resolve(listed(args?.where).length),
       ),
-      // Scoped like the real query: another consumer's row is not found.
+      // Scoped like the real query: another consumer's row, or one on another
+      // network, is not found.
       findFirst: jest.fn(({ where }: any) => {
         const row = store.get(where.id);
         const owner = where.consumer?.apisixUsername;
         return Promise.resolve(
-          row && (!owner || row.consumerId === consumerIdOf(owner))
+          row &&
+            (!owner || row.consumerId === consumerIdOf(owner)) &&
+            (!where.network || row.network === where.network)
             ? row
             : null,
         );
@@ -148,10 +151,16 @@ describe('Payment intents CRUD (e2e)', () => {
         store.set(where.id, next);
         return Promise.resolve({ count: 1 });
       }),
-      // DELETE is a compare-and-swap on the status it read.
+      // DELETE is a compare-and-swap on the status it read, scoped like the read.
       deleteMany: jest.fn(({ where }: any) => {
         const row = store.get(where.id);
-        if (!row || (where.status && row.status !== where.status)) {
+        if (
+          !row ||
+          (where.status && row.status !== where.status) ||
+          (where.network && row.network !== where.network) ||
+          (where.consumer?.apisixUsername &&
+            row.consumerId !== consumerIdOf(where.consumer.apisixUsername))
+        ) {
           return Promise.resolve({ count: 0 });
         }
         store.delete(where.id);
@@ -418,6 +427,53 @@ describe('Payment intents CRUD (e2e)', () => {
     expect(dev.body.data.map((i: any) => i.network)).toEqual(['testnet']);
     expect(dev.body.data[0].amount).toBe('1');
     expect(dev.body.total).toBe(1);
+  });
+
+  it('reaches one intent by its id only on the network the key targets (404 on the other)', async () => {
+    const asAccount = gwAs('cosmos_by_id_network');
+    const created = await asAccount(
+      request(http())
+        .post(payRoute)
+        .set('x-consumer-env', 'prod')
+        .send({ destination, amount: '4', memo: '535353' }),
+    ).expect(201);
+    const id = created.body.id;
+    expect(created.body.network).toBe('public');
+    await asAccount(
+      request(http())
+        .patch(`${route}/${id}`)
+        .set('x-consumer-env', 'prod')
+        .send({ reference: 'live' }),
+    ).expect(200);
+
+    // The same account's sandbox key: every by-id route answers the 404 of a missing
+    // intent, and nothing it sends changes or removes the mainnet one.
+    const sandbox = (r: request.Test) =>
+      asAccount(r.set('x-consumer-env', 'dev')).expect(404);
+    await sandbox(request(http()).get(`${route}/${id}`));
+    await sandbox(request(http()).get(`${route}/${id}/transitions`));
+    await sandbox(
+      request(http()).patch(`${route}/${id}`).send({ reference: 'sandbox' }),
+    );
+    await sandbox(
+      request(http()).patch(`${route}/${id}`).send({ status: 'CANCELLED' }),
+    );
+    await sandbox(
+      request(http())
+        .post(`${route}/${id}/validate`)
+        .send({ txHash: 'd'.repeat(64) }),
+    );
+    await sandbox(request(http()).delete(`${route}/${id}`));
+
+    // The production key still finds it, untouched.
+    const live = await asAccount(
+      request(http()).get(`${route}/${id}`).set('x-consumer-env', 'prod'),
+    ).expect(200);
+    expect(live.body.status).toBe('PENDING');
+    expect(live.body.reference).toBe('live');
+    await asAccount(
+      request(http()).delete(`${route}/${id}`).set('x-consumer-env', 'prod'),
+    ).expect(200);
   });
 
   it('gets one by id (200)', async () => {

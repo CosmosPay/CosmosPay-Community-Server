@@ -341,7 +341,8 @@ describe('PaymentLinksService.findPublic', () => {
 
     // The owner's `GET /v1/payment-intents/{id}` on a miss.
     const owners = new PaymentIntentsService(
-      {} as never,
+      // The by-id read resolves the key's network; a key without one uses this.
+      { get: () => ({ network: 'testnet' }) } as never,
       {
         paymentIntent: { findFirst: jest.fn().mockResolvedValue(null) },
       } as never,

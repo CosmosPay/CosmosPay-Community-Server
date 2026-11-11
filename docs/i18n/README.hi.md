@@ -2483,6 +2483,10 @@ seal होती हैं और कभी लौटाई नहीं जा
 
 ## अपग्रेड — breaking changes और deploy नोट्स
 
+### Payment intents: id से पढ़ा गया एक intent key के network का पालन करता है
+
+- **`GET`, `PATCH` और `DELETE /v1/payment-intents/{id}`, `POST /v1/payment-intents/{id}/validate` और `GET /v1/payment-intents/{id}/transitions` दूसरे network के intent पर `404` लौटाते हैं** (API व्यवहार का एक सुधार): sandbox key केवल account के test-network intents तक पहुँचती है और production key केवल उसके mainnet intents तक, जैसा list पहले से करती थी। पहले, sandbox key उसी account के mainnet intents को पढ़, बदल, validate और delete कर सकती थी। कोई migration नहीं, कोई नया variable नहीं।
+
 ### P2P on-ramp और off-ramp: साझा public key के लिए खुले
 
 - **कोई migration नहीं।** साझा public key अब `/v1/onramp/p2p` और `/v1/offramp/p2p` पर `POST .../quotes`, `POST .../sessions` और `GET .../sessions/{id}` कॉल कर सकती है; सूचियाँ उसके लिए बंद रहती हैं। उसका खोला session `publicToken` लौटाता है, जिसे फिर पढ़ने के लिए `X-Record-Token` में भेजना ज़रूरी है।

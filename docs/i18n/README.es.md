@@ -2592,6 +2592,10 @@ misma lista `PLUGINS_ENABLED` que los plugins aislados.
 
 ## Actualización — cambios incompatibles y notas de despliegue
 
+### Intenciones de pago: una intención por su id sigue la red de la clave
+
+- **`GET`, `PATCH` y `DELETE /v1/payment-intents/{id}`, `POST /v1/payment-intents/{id}/validate` y `GET /v1/payment-intents/{id}/transitions` responden `404` a una intención de la otra red** (una corrección del comportamiento de la API): una clave sandbox solo alcanza las intenciones de la red de pruebas de la cuenta y una clave de producción solo las de mainnet, como ya hacía la lista. Antes, una clave sandbox podía leer, cambiar, validar y borrar las intenciones de mainnet de la misma cuenta. Sin migración ni variables nuevas.
+
 ### On-ramp y off-ramp P2P: abiertos a la clave pública compartida
 
 - **Sin migración.** La clave pública compartida ahora puede llamar a `POST .../quotes`, `POST .../sessions` y `GET .../sessions/{id}` en `/v1/onramp/p2p` y `/v1/offramp/p2p`; los listados le siguen cerrados. Una sesión que abre responde `publicToken`, obligatorio en `X-Record-Token` para volver a leerla.

@@ -2645,6 +2645,10 @@ eingeschaltet werden.
 
 ## Upgrade — Breaking Changes und Deploy-Hinweise
 
+### Zahlungsabsichten: eine Absicht über ihre ID folgt dem Netzwerk des Schlüssels
+
+- **`GET`, `PATCH` und `DELETE /v1/payment-intents/{id}`, `POST /v1/payment-intents/{id}/validate` und `GET /v1/payment-intents/{id}/transitions` antworten bei einer Absicht des anderen Netzwerks mit `404`** (eine Korrektur des API-Verhaltens): Ein Sandbox-Schlüssel erreicht nur die Testnetz-Absichten des Kontos und ein Produktionsschlüssel nur dessen Mainnet-Absichten, wie es die Liste schon tat. Vorher konnte ein Sandbox-Schlüssel die Mainnet-Absichten desselben Kontos lesen, ändern, validieren und löschen. Keine Migration, keine neue Variable.
+
 ### P2P-On-Ramp und -Off-Ramp: für den geteilten öffentlichen Schlüssel geöffnet
 
 - **Keine Migration.** Der geteilte öffentliche Schlüssel darf jetzt `POST .../quotes`, `POST .../sessions` und `GET .../sessions/{id}` auf `/v1/onramp/p2p` und `/v1/offramp/p2p` aufrufen; die Listen bleiben ihm verschlossen. Eine Sitzung, die er öffnet, antwortet mit `publicToken`, das in `X-Record-Token` nötig ist, um sie wieder zu lesen.

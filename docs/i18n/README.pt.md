@@ -2556,6 +2556,10 @@ serviço em `src/native-plugins/<slug>/`, ligados pela mesma lista
 
 ## Atualização — mudanças incompatíveis e notas de deploy
 
+### Intenções de pagamento: uma intenção pelo seu id segue a rede da chave
+
+- **`GET`, `PATCH` e `DELETE /v1/payment-intents/{id}`, `POST /v1/payment-intents/{id}/validate` e `GET /v1/payment-intents/{id}/transitions` respondem `404` a uma intenção da outra rede** (uma correção do comportamento da API): uma chave sandbox só alcança as intenções da rede de testes da conta e uma chave de produção só as de mainnet, como a lista já fazia. Antes, uma chave sandbox podia ler, alterar, validar e excluir as intenções de mainnet da mesma conta. Sem migração nem variáveis novas.
+
 ### On-ramp e off-ramp P2P: abertos à chave pública compartilhada
 
 - **Sem migração.** A chave pública compartilhada agora pode chamar `POST .../quotes`, `POST .../sessions` e `GET .../sessions/{id}` em `/v1/onramp/p2p` e `/v1/offramp/p2p`; as listagens continuam fechadas para ela. Uma sessão que ela abre responde `publicToken`, obrigatório em `X-Record-Token` para lê-la de volta.
