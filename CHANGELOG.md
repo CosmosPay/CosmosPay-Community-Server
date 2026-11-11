@@ -2,6 +2,11 @@
 
 All notable changes to the Cosmos Pay Community Server are documented here.
 Generated from [Conventional Commits](https://www.conventionalcommits.org) by [git-cliff](https://git-cliff.org).
+## [1.15.1] - 2026-11-11
+
+### Bug Fixes
+- Scope by-id reads and writes to the key's network in every module (9de606f)
+
 ## [1.15.0] - 2026-11-11
 
 ### Features
