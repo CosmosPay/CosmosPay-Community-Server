@@ -2,6 +2,14 @@
 
 All notable changes to the Cosmos Pay Community Server are documented here.
 Generated from [Conventional Commits](https://www.conventionalcommits.org) by [git-cliff](https://git-cliff.org).
+## [1.15.0] - 2026-11-11
+
+### Features
+- Let wallets without an account buy and sell (744b419)
+
+### Bug Fixes
+- Scope by-id reads and writes to the key's network (f122fdf)
+
 ## [1.14.0] - 2026-11-11
 
 ### Features
