@@ -2,6 +2,18 @@
 
 All notable changes to the Cosmos Pay Community Server are documented here.
 Generated from [Conventional Commits](https://www.conventionalcommits.org) by [git-cliff](https://git-cliff.org).
+## [1.14.0] - 2026-11-11
+
+### Features
+- Never name a provider in what a client receives (5bbd75a)
+
+### Bug Fixes
+- Describe every service by what it does, never by its provider (a5a7c65)
+- Drop a stray "Flow" from the swap quote description (7d8ccd7)
+
+### Documentation
+- A client never reads a provider's name (ddf8515)
+
 ## [1.13.1] - 2026-11-09
 
 ### Bug Fixes
