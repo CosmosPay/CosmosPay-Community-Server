@@ -61,7 +61,7 @@ export class CreatePayoutQuoteDto {
   @ApiProperty({
     enum: BLINDPAY_NETWORKS,
     example: 'base',
-    description: 'BlindPay network the stablecoin is sent on.',
+    description: 'The fiat partner network the stablecoin is sent on.',
   })
   @IsIn(BLINDPAY_NETWORKS)
   network!: BlindpayNetwork;
@@ -76,14 +76,15 @@ export class CreatePayoutQuoteDto {
   token!: BlindpayToken;
 
   @ApiPropertyOptional({
-    description: 'Free-text description of the payout, forwarded to BlindPay.',
+    description:
+      'Free-text description of the payout, forwarded to the fiat partner.',
   })
   @IsOptional()
   @IsString()
   description?: string;
 
   @ApiPropertyOptional({
-    description: 'BlindPay partner fee id, forwarded as sent.',
+    description: 'Partner fee id, forwarded as sent.',
   })
   @IsOptional()
   @IsString()

@@ -71,14 +71,15 @@ const BuildRefused = (path: string, action: string) =>
     description:
       '`invalid_state_transition`: the payment is not in a state this action ' +
       'can be built from, or the release model gives it to the merchant. ' +
-      '`provider_error`: Trustless Work refused the request.',
+      '`provider_error`: the protected-payments service refused the request.',
     examples: {
       [ApiErrorCode.InvalidStateTransition]: {
         message: `Cannot ${action} a protected payment that is RELEASED.`,
         path,
       },
       [ApiErrorCode.ProviderError]: {
-        message: 'Trustless Work refused the request: amount must be a number',
+        message:
+          'The protected-payments service refused the request: amount must be a number',
         path,
       },
     },
@@ -124,7 +125,7 @@ export class ProtectedPaymentLinksController {
   @RateLimit(PROTECTED_PAYMENT_LINK_BUILD_RATE_LIMIT)
   @HttpCode(HttpStatus.OK)
   @Header('Cache-Control', 'no-store')
-  @ApiUpstream('Horizon', 'Trustless Work')
+  @ApiUpstream('Horizon', 'Protected-payments service')
   @ApiOperation({
     summary:
       'Build the buyer’s deposit into the protected payment (no API key)',
@@ -151,7 +152,7 @@ export class ProtectedPaymentLinksController {
       'account that does not exist. `invalid_state_transition`: the payment is no ' +
       'longer open for funding. `trustline_missing`: the buyer does not trust USDC, ' +
       'or the merchant cannot receive it. `insufficient_balance`: the buyer holds ' +
-      'less than the amount. `provider_error`: Trustless Work refused the request.',
+      'less than the amount. `provider_error`: the protected-payments service refused the request.',
     examples: {
       [ApiErrorCode.InvalidStateTransition]: {
         message: `Cannot fund a protected payment that is FUNDED.`,
@@ -193,7 +194,7 @@ export class ProtectedPaymentLinksController {
   @RateLimit(PROTECTED_PAYMENT_LINK_BUILD_RATE_LIMIT)
   @HttpCode(HttpStatus.OK)
   @Header('Cache-Control', 'no-store')
-  @ApiUpstream('Trustless Work')
+  @ApiUpstream('Protected-payments service')
   @ApiOperation({
     summary: 'Build the buyer’s confirmation of delivery (no API key)',
     description:
@@ -214,7 +215,7 @@ export class ProtectedPaymentLinksController {
   @RateLimit(PROTECTED_PAYMENT_LINK_BUILD_RATE_LIMIT)
   @HttpCode(HttpStatus.OK)
   @Header('Cache-Control', 'no-store')
-  @ApiUpstream('Trustless Work')
+  @ApiUpstream('Protected-payments service')
   @ApiOperation({
     summary: 'Build the buyer’s release of the funds (no API key)',
     description:
@@ -235,7 +236,7 @@ export class ProtectedPaymentLinksController {
   @RateLimit(PROTECTED_PAYMENT_LINK_BUILD_RATE_LIMIT)
   @HttpCode(HttpStatus.OK)
   @Header('Cache-Control', 'no-store')
-  @ApiUpstream('Trustless Work')
+  @ApiUpstream('Protected-payments service')
   @ApiOperation({
     summary: 'Open the buyer’s dispute (no API key)',
     description:
@@ -256,7 +257,7 @@ export class ProtectedPaymentLinksController {
     description:
       '`invalid_state_transition`: the payment is not funded, or already settled. ' +
       '`protected_payment_signature_invalid`: the signed message is missing, does ' +
-      'not verify against the buyer, or expired. `provider_error`: Trustless Work ' +
+      'not verify against the buyer, or expired. `provider_error`: the protected-payments service ' +
       'refused the request.',
     examples: {
       [ApiErrorCode.InvalidStateTransition]: {
@@ -278,11 +279,11 @@ export class ProtectedPaymentLinksController {
   @RateLimit(PROTECTED_PAYMENT_LINK_SUBMIT_RATE_LIMIT)
   @HttpCode(HttpStatus.OK)
   @Header('Cache-Control', 'no-store')
-  @ApiUpstream('Trustless Work')
+  @ApiUpstream('Protected-payments service')
   @ApiOperation({
     summary: 'Submit a buyer-signed protected payment transaction (no API key)',
     description:
-      'Relays `xdr` through Trustless Work only when it is a signed copy of a ' +
+      'Relays `xdr` through the protected-payments service only when it is a signed copy of a ' +
       'transaction this link built for the bound buyer, before it expires. ' +
       'Relayed once: the answer is stored and a replay returns it; on `SUCCESS` ' +
       'the payment moves.',

@@ -74,9 +74,9 @@ export function commissionWithRecipient(
     );
     return 0;
   }
-  throw ApiError.unavailable(
-    ApiErrorCode.Misconfigured,
-    `A swap commission applies to this plan but ${variable} is not set`,
+  throw ApiError.misconfigured(
+    'A swap commission applies to this plan, but this deployment has no wallet to receive it.',
+    `${variable} is not set`,
   );
 }
 

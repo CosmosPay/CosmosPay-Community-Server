@@ -268,7 +268,7 @@ export class ProtectedPaymentActionsService {
     if (!outcome.succeeded || typeof derived !== 'string') {
       throw ApiError.badGateway(
         ApiErrorCode.ProviderError,
-        `Trustless Work could not deploy the protected payment's contract` +
+        `The protected-payments service could not deploy the protected payment's contract` +
           `${outcome.result.message ? `: ${outcome.result.message}` : '.'}`,
       );
     }
@@ -648,7 +648,7 @@ export class ProtectedPaymentActionsService {
     if (balance === null) {
       throw ApiError.badGateway(
         ApiErrorCode.ProviderError,
-        `Trustless Work does not show the balance of ${payment.contractId} yet.`,
+        `The protected-payments service does not show the balance of ${payment.contractId} yet.`,
       );
     }
     return balance;

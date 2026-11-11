@@ -5,8 +5,9 @@ import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger';
  * `xdr` matters to a caller; the rest is DeFindex's simulation, for display.
  */
 @ApiSchema({
+  name: 'VaultBuildEntity',
   description:
-    "An unsigned DeFindex vault transaction, DeFindex's answer passed through. " +
+    "An unsigned yield vault transaction, the vault protocol's answer passed through. " +
     'Only `xdr` matters to a caller: sign it unchanged and submit it; the rest ' +
     'is for display.',
 })
@@ -29,14 +30,15 @@ export class DefindexBuildEntity {
   @ApiProperty({
     type: 'array',
     items: {},
-    description: "The call's arguments, as DeFindex decoded them.",
+    description: "The call's arguments, as the vault protocol decoded them.",
   })
   params!: unknown[];
 
   @ApiProperty({
     type: 'object',
     additionalProperties: true,
-    description: "DeFindex's simulation of the transaction, verbatim.",
+    description:
+      "The vault protocol's simulation of the transaction, verbatim.",
   })
   simulationResponse!: Record<string, unknown>;
 }
@@ -46,9 +48,10 @@ export class DefindexBuildEntity {
  * through, and stored so a replay of the same transaction answers it again.
  */
 @ApiSchema({
+  name: 'VaultSubmitResultEntity',
   description:
-    "DeFindex's answer for a relayed transaction, passed through and stored, so " +
-    'submitting the same transaction again answers it without calling DeFindex.',
+    "The vault protocol's answer for a relayed transaction, passed through and stored, so " +
+    'submitting the same transaction again answers it without calling the vault protocol.',
 })
 export class DefindexSubmitResultEntity {
   @ApiProperty({
@@ -66,7 +69,7 @@ export class DefindexSubmitResultEntity {
     nullable: true,
     example: { type: 'vault_deposit', sharesMinted: '9950000' },
     description:
-      "DeFindex's reading of the result: `vault_deposit` with `sharesMinted`, " +
+      "The vault protocol's reading of the result: `vault_deposit` with `sharesMinted`, " +
       '`vault_withdraw` with `amountsOut`, or `unknown` with `value`.',
   })
   result!: Record<string, unknown> | null;
@@ -77,25 +80,27 @@ export class DefindexSubmitResultEntity {
   @ApiPropertyOptional({
     example: '2026-11-01T12:00:00Z',
     description:
-      'When the transaction was created, as DeFindex reports it (ISO 8601 date-time).',
+      'When the transaction was created, as the vault protocol reports it (ISO 8601 date-time).',
   })
   createdAt?: string;
 
   @ApiPropertyOptional({
     example: 61234570,
-    description: 'The latest ledger when DeFindex answered.',
+    description: 'The latest ledger when the vault protocol answered.',
   })
   latestLedger?: number;
 
   @ApiPropertyOptional({
     example: '2026-11-01T12:00:15Z',
-    description: 'When `latestLedger` closed, as DeFindex reports it.',
+    description:
+      'When `latestLedger` closed, as the vault protocol reports it.',
   })
   latestLedgerCloseTime?: string;
 
   @ApiPropertyOptional({
     example: false,
-    description: 'Whether DeFindex reports it as a fee bump transaction.',
+    description:
+      'Whether the vault protocol reports it as a fee bump transaction.',
   })
   feeBump?: boolean;
 

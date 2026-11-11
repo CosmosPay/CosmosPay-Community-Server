@@ -24,7 +24,7 @@ export class ReceiverEntity {
   @ApiProperty({
     example: 're_000000000000',
     description:
-      "BlindPay's receiver id (`re_...`); a `local_` placeholder until the receiver is enabled.",
+      "The fiat partner's receiver id (`re_...`); a `local_` placeholder until the receiver is enabled.",
   })
   blindpayId!: string;
 
@@ -43,7 +43,8 @@ export class ReceiverEntity {
 
   @ApiPropertyOptional({
     example: 'verifying',
-    description: 'BlindPay KYC status (verifying, approved, rejected, ...).',
+    description:
+      'The fiat partner KYC status (verifying, approved, rejected, ...).',
   })
   kycStatus!: string | null;
 
@@ -151,7 +152,7 @@ export class ReceiverApprovalEntity {
     description:
       'The hosted terms-of-service link. This service emails nothing: deliver it to the customer.',
     example:
-      'https://app.blindpay.com/e/terms-of-service?session_token=tos_example',
+      'https://partner.example/terms-of-service?session_token=tos_example',
   })
   url!: string;
 

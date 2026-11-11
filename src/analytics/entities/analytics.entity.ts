@@ -97,8 +97,8 @@ export class AssetVolumeEntity {
     type: String,
     nullable: true,
     description:
-      "`amount` in USD with two decimals, valued at NEAR Intents’ current reference price for each asset (its token list, cached for a few minutes): an indicative figure at today's price, not the price on the day each payment settled. A mainnet token is priced by its contract (on " +
-      'Stellar its code and issuer), so a token NEAR Intents does not list has no price; a ' +
+      "`amount` in USD with two decimals, valued at the current market reference price for each asset (its token list, cached for a few minutes): an indicative figure at today's price, not the price on the day each payment settled. A mainnet token is priced by its contract (on " +
+      'Stellar its code and issuer), so a token the cross-chain route does not list has no price; a ' +
       'test-network token takes the price of its mainnet namesake. When the code comes from ' +
       'several issuers, only the priced ones are added. Null when none is priced, or when the ' +
       'prices could not be read.',
@@ -220,16 +220,16 @@ export class AnalyticsSummaryEntity {
     type: String,
     nullable: true,
     description:
-      "Every settled payment in USD with two decimals, valued at NEAR Intents’ current reference price for each asset (its token list, cached for a few minutes): an indicative figure at today's price, not the price on the day each payment settled. Payments in an asset with no " +
+      "Every settled payment in USD with two decimals, valued at the current market reference price for each asset (its token list, cached for a few minutes): an indicative figure at today's price, not the price on the day each payment settled. Payments in an asset with no " +
       'price are left out and counted in `unpriced`. Null only when there were settled ' +
-      "payments and NEAR Intents' prices could not be read; `0.00` when nothing settled.",
+      'payments and the market reference prices could not be read; `0.00` when nothing settled.',
     example: '12843.17',
   })
   volumeUsd!: string | null;
 
   @ApiProperty({
     description:
-      "Settled payments `volumeUsd` leaves out: their asset has no USD price (all of them when NEAR Intents' prices could not be read).",
+      'Settled payments `volumeUsd` leaves out: their asset has no USD price (all of them when the market reference prices could not be read).',
     example: 0,
   })
   unpriced!: number;
@@ -286,9 +286,9 @@ export class SeriesBucketEntity {
     type: String,
     nullable: true,
     description:
-      "The bucket's settled payments in USD with two decimals, valued at NEAR Intents’ current reference price for each asset (its token list, cached for a few minutes): an indicative figure at today's price, not the price on the day each payment settled. Payments in an asset " +
+      "The bucket's settled payments in USD with two decimals, valued at the current market reference price for each asset (its token list, cached for a few minutes): an indicative figure at today's price, not the price on the day each payment settled. Payments in an asset " +
       "with no price add nothing (the window's `unpriced` counts them). Null only when the " +
-      "bucket has settled payments and NEAR Intents' prices could not be read.",
+      'bucket has settled payments and the market reference prices could not be read.',
     example: '1790.36',
   })
   volumeUsd!: string | null;
@@ -323,14 +323,14 @@ export class SeriesWindowEntity {
     type: String,
     nullable: true,
     description:
-      "The window's settled payments in USD with two decimals, valued at NEAR Intents’ current reference price for each asset (its token list, cached for a few minutes): an indicative figure at today's price, not the price on the day each payment settled. Null only when the " +
-      "window has settled payments and NEAR Intents' prices could not be read.",
+      "The window's settled payments in USD with two decimals, valued at the current market reference price for each asset (its token list, cached for a few minutes): an indicative figure at today's price, not the price on the day each payment settled. Null only when the " +
+      'window has settled payments and the market reference prices could not be read.',
     example: '16982.04',
   })
   volumeUsd!: string | null;
   @ApiProperty({
     description:
-      "Settled payments of the window `volumeUsd` leaves out: their asset has no USD price (all of them when NEAR Intents' prices could not be read).",
+      'Settled payments of the window `volumeUsd` leaves out: their asset has no USD price (all of them when the market reference prices could not be read).',
     example: 0,
   })
   unpriced!: number;
@@ -387,7 +387,7 @@ export class SeriesSwapBucketEntity extends SeriesOutcomeCountsEntity {
     type: String,
     nullable: true,
     description:
-      "The bucket’s settled swap volume in USD, two decimals: what the completed swaps sold, each asset at NEAR Intents' current price. Null when no price could be read; an asset with no price counts as zero.",
+      'The bucket’s settled swap volume in USD, two decimals: what the completed swaps sold, each asset at the current market price. Null when no price could be read; an asset with no price counts as zero.',
     example: '1250.40',
   })
   volumeUsd!: string | null;
@@ -400,18 +400,19 @@ export class SeriesSwapsByKindEntity {
   @ApiProperty({ description: 'Stellar DEX swaps.', example: 30 })
   dex!: number;
   @ApiProperty({
-    description: 'Solana (Jupiter) and Monad (Kuru Flow) swaps. Mainnet only.',
+    description: 'Solana and Monad swaps. Mainnet only.',
     example: 8,
   })
   chain!: number;
   @ApiProperty({
-    description: 'Swaps between networks through NEAR Intents. Mainnet only.',
+    description:
+      'Swaps between networks through the cross-chain route. Mainnet only.',
     example: 4,
   })
   crossChain!: number;
   @ApiProperty({
     description:
-      'USDT0 sent from Stellar to an EVM network through LayerZero (`/v1/usdt0`). Mainnet only.',
+      'USDT0 sent from Stellar to an EVM network through the bridge (`/v1/usdt0`). Mainnet only.',
     example: 2,
   })
   usdt0!: number;
@@ -424,7 +425,7 @@ export class SeriesSwapsByKindEntity {
 export class SeriesSwapTotalsEntity extends SeriesOutcomeCountsEntity {
   @ApiProperty({
     description:
-      'Not final yet: unsigned, submitted (a USDT0 transfer LayerZero is still delivering included), or a cross-chain swap awaiting or processing its deposit.',
+      'Not final yet: unsigned, submitted (a USDT0 transfer the bridge is still delivering included), or a cross-chain swap awaiting or processing its deposit.',
     example: 2,
   })
   inProgress!: number;
@@ -437,13 +438,13 @@ export class SeriesSwapTotalsEntity extends SeriesOutcomeCountsEntity {
     type: String,
     nullable: true,
     description:
-      "The window’s settled swap volume in USD, two decimals: what the completed swaps sold, each asset at NEAR Intents' current price. Null when no price could be read; an asset with no price counts as zero.",
+      'The window’s settled swap volume in USD, two decimals: what the completed swaps sold, each asset at the current market price. Null when no price could be read; an asset with no price counts as zero.',
     example: '1250.40',
   })
   volumeUsd!: string | null;
   @ApiProperty({
     description:
-      'Completed swaps whose sold asset has no USD price (a network or token NEAR Intents does not list), left out of volumeUsd.',
+      'Completed swaps whose sold asset has no USD price (a network or token the cross-chain route does not list), left out of volumeUsd.',
     example: 0,
   })
   unpriced!: number;
@@ -458,7 +459,7 @@ export class SeriesSwapPreviousEntity extends SeriesOutcomeCountsEntity {
     type: String,
     nullable: true,
     description:
-      "The window before’s settled swap volume in USD, two decimals: what the completed swaps sold, each asset at NEAR Intents' current price. Null when no price could be read; an asset with no price counts as zero.",
+      'The window before’s settled swap volume in USD, two decimals: what the completed swaps sold, each asset at the current market price. Null when no price could be read; an asset with no price counts as zero.',
     example: '1250.40',
   })
   volumeUsd!: string | null;
@@ -624,8 +625,8 @@ export class SeriesPrivatePaymentBucketEntity {
     type: String,
     nullable: true,
     description:
-      "The bucket's settled amount in USD with two decimals, valued at XLM's current reference price on NEAR Intents (an indicative figure at today's price). " +
-      "Null only when there is something settled and NEAR Intents' prices could not be read.",
+      "The bucket's settled amount in USD with two decimals, valued at XLM's current reference price on the cross-chain route (an indicative figure at today's price). " +
+      'Null only when there is something settled and the market reference prices could not be read.',
     example: '112.63',
   })
   volumeUsd!: string | null;
@@ -662,8 +663,8 @@ export class SeriesPrivatePaymentWindowEntity {
     type: String,
     nullable: true,
     description:
-      "The window's settled amount in USD with two decimals, valued at XLM's current reference price on NEAR Intents (an indicative figure at today's price). " +
-      "Null only when there is something settled and NEAR Intents' prices could not be read.",
+      "The window's settled amount in USD with two decimals, valued at XLM's current reference price on the cross-chain route (an indicative figure at today's price). " +
+      'Null only when there is something settled and the market reference prices could not be read.',
     example: '535.06',
   })
   volumeUsd!: string | null;
@@ -677,8 +678,8 @@ export class SeriesPrivatePaymentWindowEntity {
     type: String,
     nullable: true,
     description:
-      "The window's commission in USD with two decimals, valued at XLM's current reference price on NEAR Intents (an indicative figure at today's price). " +
-      "Null only when there is something settled and NEAR Intents' prices could not be read.",
+      "The window's commission in USD with two decimals, valued at XLM's current reference price on the cross-chain route (an indicative figure at today's price). " +
+      'Null only when there is something settled and the market reference prices could not be read.',
     example: '0.05',
   })
   feesUsd!: string | null;
@@ -738,7 +739,7 @@ export class AnalyticsSeriesEntity {
   @ApiProperty({
     type: SeriesSwapsEntity,
     description:
-      'Swaps of every kind (Stellar DEX, Solana and Monad, cross-chain, USDT0 sent through LayerZero) on the network the key targets: a sandbox key counts no Solana, Monad, cross-chain swap or USDT0 transfer, which run on mainnet only.',
+      'Swaps of every kind (Stellar DEX, Solana and Monad, cross-chain, USDT0 sent through the bridge) on the network the key targets: a sandbox key counts no Solana, Monad, cross-chain swap or USDT0 transfer, which run on mainnet only.',
   })
   swaps!: SeriesSwapsEntity;
   @ApiProperty({

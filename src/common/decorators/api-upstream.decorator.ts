@@ -2,16 +2,16 @@ import { ApiExtension } from '@nestjs/swagger';
 
 /** The providers this service calls out to while serving a request. */
 export type UpstreamProvider =
-  | 'BlindPay'
+  | 'Fiat partner'
   | 'Horizon'
   | 'Solana'
   | 'Monad'
-  | 'NEAR Intents'
-  | 'Jupiter'
-  | 'Kuru Flow'
+  | 'Cross-chain route'
+  | 'Solana swap route'
+  | 'Monad swap route'
   | 'Soroban RPC'
-  | 'DeFindex'
-  | 'Trustless Work'
+  | 'Vault protocol'
+  | 'Protected-payments service'
   // The `eldorado` plugin's marketplace, by what it is: the published contract
   // never names the providers Cosmos Pay is built on.
   | 'P2P marketplace';
@@ -26,7 +26,7 @@ export const UPSTREAM_EXTENSION_KEY = 'x-cosmos-upstream';
  * Declares that serving this route means calling a third party, so it can fail
  * for a reason the caller's request is not responsible for.
  *
- *   @ApiUpstream('BlindPay')
+ *   @ApiUpstream('Fiat partner')
  *   @Controller({ path: 'offramp', version: '1' })
  *
  * `swagger.ts` turns it into the 502/503/504 responses, naming the provider.

@@ -215,6 +215,7 @@ export class Usdt0Service {
         issuer: USDT0_ISSUER,
         contract: USDT0_SAC,
       },
+      bridgeContract: USDT0_OFT,
       oft: USDT0_OFT,
       eid: STELLAR_EID,
       routes: available
@@ -581,7 +582,7 @@ export class Usdt0Service {
     if (withoutDust(stroops) <= 0n) {
       throw ApiError.badRequest(
         ApiErrorCode.InvalidAmount,
-        'amount must be at least 0.000001 USDT0: the OFT carries 6 decimals, ' +
+        'amount must be at least 0.000001 USDT0: the bridge contract carries 6 decimals, ' +
           'and the 7th stays in the account as dust',
       );
     }
@@ -786,7 +787,7 @@ export class Usdt0Service {
           throw ApiError.unavailable(
             ApiErrorCode.Misconfigured,
             `USDT0_FEE_WRAPPER (${address}) is not the fee wrapper built ` +
-              "from contracts/soroban/usdt0-fee-wrapper, bound to USDT0's OFT and token.",
+              'from contracts/soroban/usdt0-fee-wrapper, bound to the USDT0 bridge contract and token.',
           );
         }
       })();
@@ -804,19 +805,19 @@ export class Usdt0Service {
     if (oft.amountSentLd < oft.minAmountLd) {
       throw ApiError.badRequest(
         ApiErrorCode.InvalidAmount,
-        `amount is below the USDT0 OFT's minimum of ${fromStroops(oft.minAmountLd)} USDT0`,
+        `amount is below the USDT0 bridge contract’s minimum of ${fromStroops(oft.minAmountLd)} USDT0`,
       );
     }
     if (oft.amountSentLd > oft.maxAmountLd) {
       throw ApiError.badRequest(
         ApiErrorCode.InvalidAmount,
-        `amount is above the USDT0 OFT's maximum of ${fromStroops(oft.maxAmountLd)} USDT0`,
+        `amount is above the USDT0 bridge contract’s maximum of ${fromStroops(oft.maxAmountLd)} USDT0`,
       );
     }
     if (oft.amountSentLd <= 0n || oft.amountReceivedLd <= 0n) {
       throw ApiError.badRequest(
         ApiErrorCode.InvalidAmount,
-        'amount is too small: nothing would arrive after the OFT’s rounding and fees',
+        'amount is too small: nothing would arrive after the bridge contract rounding and fees',
       );
     }
   }

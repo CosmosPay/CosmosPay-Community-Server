@@ -126,7 +126,7 @@ export function scanOutcome(message: LayerZeroScanMessage): ScanOutcome {
       kind: 'failed',
       scanStatus,
       guid,
-      reason: `LayerZero reports the message ${scanStatus}${detail ? `: ${detail}` : ''}`,
+      reason: `The bridge reports the message ${scanStatus}${detail ? `: ${detail}` : ''}`,
     };
   }
   return { kind: 'travelling', scanStatus, guid };

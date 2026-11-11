@@ -89,7 +89,7 @@ const KYC_UPLOAD_OPTIONS: MulterOptions = {
 @ApiTags('kyc')
 // Every route here relays to BlindPay: the upload, the ToS link, and both
 // catalog reads.
-@ApiUpstream('BlindPay')
+@ApiUpstream('Fiat partner')
 @Controller({ path: 'kyc', version: '1' })
 export class KycMetaController {
   constructor(private readonly meta: KycMetaService) {}
@@ -105,8 +105,8 @@ export class KycMetaController {
     description:
       'Multipart: one `file` part (JPEG, PNG, WebP, HEIC/HEIF or PDF, up to 10 MB, its bytes checked against the declared type) ' +
       'and an optional `bucket` (`onboarding` by default, `avatar` or `limit_increase`). ' +
-      "BlindPay stores the file on the instance of the key's network and nothing is kept here; pass the returned `file_url` in the receiver's `*_file` fields. " +
-      'BlindPay keeps a stored file even when a later step fails, which is why the route is budgeted per address and per consumer.',
+      "the fiat partner stores the file on the instance of the key's network and nothing is kept here; pass the returned `file_url` in the receiver's `*_file` fields. " +
+      'the fiat partner keeps a stored file even when a later step fails, which is why the route is budgeted per address and per consumer.',
   })
   // Declaring the failures below drops Nest's implicit 201, so the success
   // body has to be declared too or the route publishes no success at all.
@@ -163,9 +163,9 @@ export class KycMetaController {
   @ApiOperation({
     summary: 'Start ToS acceptance; returns the hosted URL (first KYC step)',
     description:
-      "Asks BlindPay for a hosted terms-of-service page and returns its URL; after acceptance BlindPay redirects to `redirect_url` (https, on this consumer's allow-list) with a `tos_id` query parameter. " +
-      'With `receiver_id` (the BlindPay id of a receiver this consumer owns, otherwise 404) the terms are for that existing receiver. ' +
-      '`idempotency_key` is forwarded to BlindPay and generated when omitted; every call creates a record there, hence the budgets.',
+      "Asks the fiat partner for a hosted terms-of-service page and returns its URL; after acceptance the fiat partner redirects to `redirect_url` (https, on this consumer's allow-list) with a `tos_id` query parameter. " +
+      'With `receiver_id` (the fiat partner id of a receiver this consumer owns, otherwise 404) the terms are for that existing receiver. ' +
+      '`idempotency_key` is forwarded to the fiat partner and generated when omitted; every call creates a record there, hence the budgets.',
   })
   @ApiCreatedResponse({ type: KycTermsOfServiceEntity })
   initiateTos(
@@ -180,8 +180,8 @@ export class KycMetaController {
   @ApiOperation({
     summary: 'List available bank rails',
     description:
-      "Relays BlindPay's catalog of bank rails on the instance of the key's network (production for a mainnet key, development otherwise). " +
-      "Nothing is stored; the body is BlindPay's answer as returned.",
+      "Relays the fiat partner's catalog of bank rails on the instance of the key's network (production for a mainnet key, development otherwise). " +
+      "Nothing is stored; the body is the fiat partner's answer as returned.",
   })
   rails(@CurrentConsumer() consumer: GatewayConsumer) {
     return this.meta.listRails(consumer);
@@ -192,9 +192,9 @@ export class KycMetaController {
   @ApiOperation({
     summary: 'Get the field schema required by a rail',
     description:
-      "Relays BlindPay's field schema for the `rail` query parameter (required: 400 `validation_failed` without it), " +
+      "Relays the fiat partner's field schema for the `rail` query parameter (required: 400 `validation_failed` without it), " +
       'the fields `POST /v1/kyc/receivers/{receiverId}/bank-accounts` needs for that rail. ' +
-      "Answered as BlindPay returns it, from the instance of the key's network.",
+      "Answered as the fiat partner returns it, from the instance of the key's network.",
   })
   @ApiQuery({
     name: 'rail',
@@ -202,7 +202,7 @@ export class KycMetaController {
     example: 'ach',
     description:
       "The rail whose fields to list, as a bank account's `type` names it " +
-      '(`GET /v1/kyc/rails` lists the rails). Forwarded to BlindPay as given.',
+      '(`GET /v1/kyc/rails` lists the rails). Forwarded to the fiat partner as given.',
   })
   bankDetails(
     @CurrentConsumer() consumer: GatewayConsumer,

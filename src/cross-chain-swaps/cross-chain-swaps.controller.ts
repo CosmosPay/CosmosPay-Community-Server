@@ -54,15 +54,15 @@ export class CrossChainSwapsController {
 
   @Get('assets')
   // The token list, from 1Click (cached a few minutes).
-  @ApiUpstream('NEAR Intents')
+  @ApiUpstream('Cross-chain route')
   // A catalogue, the same for every caller.
   @AllowPublicKey()
   @RequirePermissions('swaps:read')
   @ApiOperation({
     summary:
-      'List the assets NEAR Intents can swap, with an indicative USD price',
+      'List the assets the cross-chain route can swap, with an indicative USD price',
     description:
-      'Only what NEAR Intents still trades. A token it tags deprecated is left ' +
+      'Only what the cross-chain route still trades. A token it tags deprecated is left ' +
       'out, and so is one it lists with no price, because it answers no quote ' +
       'for such a token.',
   })
@@ -72,7 +72,7 @@ export class CrossChainSwapsController {
   }
 
   @Post('quote')
-  @ApiUpstream('NEAR Intents')
+  @ApiUpstream('Cross-chain route')
   // A pure function of the request; persists nothing.
   @AllowPublicKey()
   @RequirePermissions('swaps:read')
@@ -82,9 +82,9 @@ export class CrossChainSwapsController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary:
-      'Quote a cross-chain swap through NEAR Intents (price, commission, minimum); persists nothing',
+      'Quote a cross-chain swap through the cross-chain route (price, commission, minimum); persists nothing',
     description:
-      'A dry NEAR Intents quote for `amount` of `originAsset` on ' +
+      'A dry cross-chain quote for `amount` of `originAsset` on ' +
       '`originChain` into `destinationAsset` on `destinationChain`: the ' +
       'expected and minimum output, the plan commission (`fee`, in the ' +
       'origin asset), any `merchantFee` (its wallet a NEAR account) and a ' +
@@ -105,17 +105,17 @@ export class CrossChainSwapsController {
       ApiErrorCode.ProviderError,
     ],
     description:
-      '`provider_error`: NEAR Intents refused the quote (an amount below its ' +
+      '`provider_error`: the cross-chain route refused the quote (an amount below its ' +
       'minimum, a route it cannot fill); `message` carries its reason.',
   })
   @ApiErrorResponse({
     status: 503,
     codes: [ApiErrorCode.ProviderUnavailable, ApiErrorCode.Misconfigured],
     description:
-      '`provider_unavailable`: NEAR Intents is down or rate limiting this ' +
+      '`provider_unavailable`: the cross-chain route is down or rate limiting this ' +
       'service; retry. `misconfigured`: the plan charges a commission and ' +
-      'NEAR_INTENTS_FEE_RECIPIENT is not set, or NEAR Intents rejected ' +
-      'NEAR_INTENTS_API_KEY.',
+      'this deployment has no fee recipient for it, or the cross-chain route refused ' +
+      'this deployment’s credentials.',
   })
   quote(
     @CurrentConsumer() consumer: GatewayConsumer,
@@ -127,21 +127,21 @@ export class CrossChainSwapsController {
   @Post()
   // A live quote: 1Click derives the deposit address. A Stellar recipient's
   // trustline is checked on Horizon.
-  @ApiUpstream('NEAR Intents', 'Horizon')
+  @ApiUpstream('Cross-chain route', 'Horizon')
   // The anonymous wallet flow: the payer builds, deposits and watches.
   @AllowPublicKey()
   @RequirePermissions('swaps:write')
   @RateLimit(CROSS_CHAIN_CREATE_RATE_LIMIT)
   @ApiOperation({
-    summary: 'Create a cross-chain swap: a NEAR Intents deposit address to pay',
+    summary: 'Create a cross-chain swap: a cross-chain deposit address to pay',
     description:
-      'Asks NEAR Intents for a live quote with a deposit address for this ' +
+      'Asks the cross-chain route for a live quote with a deposit address for this ' +
       'swap alone, stores it as `AWAITING_DEPOSIT` and emits ' +
       '`CROSS_CHAIN_SWAP_CREATED`. The payer sends `amountIn` to ' +
       '`depositAddress` (with `depositMemo` when set) before `expiresAt`; ' +
       "`depositUri` is a wallet link in the origin chain's standard (SEP-7, " +
       'Solana Pay, EIP-681, BIP-21, TON, CIP-13) with a QR, or null where ' +
-      'the chain has none. NEAR Intents pays `recipient` or refunds ' +
+      'the chain has none. The cross-chain route pays `recipient` or refunds ' +
       '`refundTo`, and a Stellar `recipient` must already trust the asset. ' +
       'Mainnet only; an `Idempotency-Key` (header or body) makes a retry ' +
       'return the same swap and address.',
@@ -174,10 +174,10 @@ export class CrossChainSwapsController {
       ApiErrorCode.ProviderError,
     ],
     description:
-      '`network_unsupported`: a dev (testnet) key, and NEAR Intents settles on ' +
+      '`network_unsupported`: a dev (testnet) key, and the cross-chain route settles on ' +
       'mainnet only. `trustline_missing`: a Stellar recipient does not trust ' +
       'the destination asset, and only that account can add the trustline. ' +
-      '`provider_error`: NEAR Intents refused the quote.',
+      '`provider_error`: the cross-chain route refused the quote.',
   })
   @ApiErrorResponse({
     status: 409,
@@ -189,10 +189,10 @@ export class CrossChainSwapsController {
     status: 503,
     codes: [ApiErrorCode.ProviderUnavailable, ApiErrorCode.Misconfigured],
     description:
-      '`provider_unavailable`: NEAR Intents is down or rate limiting this ' +
+      '`provider_unavailable`: the cross-chain route is down or rate limiting this ' +
       'service; retry. `misconfigured`: the plan charges a commission and ' +
-      'NEAR_INTENTS_FEE_RECIPIENT is not set, or NEAR Intents rejected ' +
-      'NEAR_INTENTS_API_KEY.',
+      'this deployment has no fee recipient for it, or the cross-chain route refused ' +
+      'this deployment’s credentials.',
   })
   create(
     @CurrentConsumer() consumer: GatewayConsumer,
@@ -214,7 +214,7 @@ export class CrossChainSwapsController {
     summary: "List the consumer's cross-chain swaps",
     description:
       "Answered from this service's own table, which the observer keeps " +
-      'current from NEAR Intents: newest first, optionally filtered by ' +
+      'current from the cross-chain route: newest first, optionally filtered by ' +
       '`status`. Paginated with `take` (default 20, max 100) and `skip`; ' +
       'the answer is `{ data, total, take, skip }`. Cross-chain swaps run ' +
       'on mainnet only, so a `dev` key lists none.',
@@ -257,7 +257,7 @@ export class CrossChainSwapsController {
   }
 
   @Post(':id/deposit')
-  @ApiUpstream('NEAR Intents')
+  @ApiUpstream('Cross-chain route')
   // The wallet that just paid reports its transaction. Reaching another
   // anonymous caller's swap takes its id, and all a hash can do is point
   // 1Click at a transaction it verifies on-chain itself.
@@ -272,12 +272,12 @@ export class CrossChainSwapsController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary:
-      'Report the deposit transaction to NEAR Intents so the swap starts without waiting for its indexer',
+      'Report the deposit transaction to the cross-chain route so the swap starts without waiting for its indexer',
     description:
       '`txHash` must have the shape of a transaction id on the origin ' +
-      'chain; NEAR Intents then reads that chain itself and credits only ' +
+      'chain; the cross-chain route then reads that chain itself and credits only ' +
       'what really arrived at `depositAddress`. The swap records ' +
-      '`depositTxHash`, moves to the status NEAR Intents reports and emits ' +
+      '`depositTxHash`, moves to the status the cross-chain route reports and emits ' +
       'the matching `CROSS_CHAIN_SWAP_*` event when that status changes. ' +
       'Reporting is optional, since the observer follows the swap either ' +
       "way; with the shared public key, send the swap's `publicToken` in " +
@@ -294,7 +294,7 @@ export class CrossChainSwapsController {
     description:
       '`validation_failed`: txHash is not a transaction id of the origin ' +
       'chain. `invalid_state_transition`: the swap already SUCCEEDED, was ' +
-      'REFUNDED or FAILED. `provider_error`: NEAR Intents refused the hash.',
+      'REFUNDED or FAILED. `provider_error`: the cross-chain route refused the hash.',
   })
   submitDeposit(
     @CurrentConsumer() consumer: GatewayConsumer,

@@ -67,7 +67,7 @@ export const DEFINDEX_SUBMIT_LEASE_MARGIN_MS = 30 * 1000;
  * as swaps do: an honest wallet builds once per submission.
  */
 export const DEFINDEX_BUILD_RATE_LIMIT: RateLimitPolicy = {
-  name: 'defindex:build',
+  name: 'vaults:build',
   limit: 20,
   windowMs: 60 * 1000,
 };
@@ -80,7 +80,7 @@ export const DEFINDEX_BUILD_RATE_LIMIT: RateLimitPolicy = {
  * the budget is on the route, not on the provider call.
  */
 export const DEFINDEX_SUBMIT_RATE_LIMIT: RateLimitPolicy = {
-  name: 'defindex:submit',
+  name: 'vaults:submit',
   limit: 20,
   windowMs: 60 * 1000,
 };

@@ -60,7 +60,7 @@ export class MerchantFeeDto {
     description:
       'Where the fee is paid: an account on the chain the fee travels on (a ' +
       'Stellar G... account for a Stellar swap; a NEAR account for a swap ' +
-      'between chains, which NEAR Intents pays as an app fee).',
+      'between chains, which the cross-chain route pays as an app fee).',
     example: 'GBDHAQXQQ75WVBUZ2IX3O7ME7JOKJUOUPUXRNDCORUJODWQCTVUEQ62R',
     maxLength: MERCHANT_FEE_WALLET_MAX_LENGTH,
   })

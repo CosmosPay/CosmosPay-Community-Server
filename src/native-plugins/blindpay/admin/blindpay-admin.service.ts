@@ -145,7 +145,7 @@ export class BlindpayAdminService implements AdminExtension, OnModuleInit {
     const counts = new Map<string, Record<string, number>>(
       consumerIds.map((id) => [
         id,
-        { blindpayReceivers: 0, payins: 0, payouts: 0 },
+        { fiatReceivers: 0, blindpayReceivers: 0, payins: 0, payouts: 0 },
       ]),
     );
     const fold = (
@@ -157,6 +157,8 @@ export class BlindpayAdminService implements AdminExtension, OnModuleInit {
         if (entry) entry[field] = row._count._all;
       }
     };
+    fold(receivers, 'fiatReceivers');
+    // The old key, for a console that still reads it; drop it once none does.
     fold(receivers, 'blindpayReceivers');
     fold(payins, 'payins');
     fold(payouts, 'payouts');

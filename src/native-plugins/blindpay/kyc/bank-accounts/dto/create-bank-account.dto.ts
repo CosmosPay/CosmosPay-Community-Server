@@ -18,7 +18,7 @@ import {
  */
 @ApiSchema({
   description:
-    "A fiat bank account to add to a receiver, where its offramp payouts settle. `type` names the rail and only that rail's fields are needed (`GET /v1/kyc/bank-details?rail=` lists them); the body is forwarded to BlindPay.",
+    "A fiat bank account to add to a receiver, where its offramp payouts settle. `type` names the rail and only that rail's fields are needed (`GET /v1/kyc/bank-details?rail=` lists them); the body is forwarded to the fiat partner.",
 })
 export class CreateBankAccountDto {
   @ApiProperty({
@@ -32,7 +32,7 @@ export class CreateBankAccountDto {
 
   @ApiProperty({
     example: 'Acme payouts (USD)',
-    description: 'A label for the account, forwarded to BlindPay.',
+    description: 'A label for the account, forwarded to the fiat partner.',
   })
   @IsString()
   name!: string;
@@ -68,7 +68,7 @@ export class CreateBankAccountDto {
   @ApiPropertyOptional({
     example: 'first_party',
     description:
-      'Relationship to the recipient, as a BlindPay code (for example `first_party`).',
+      'Relationship to the recipient, as a fiat partner code (for example `first_party`).',
   })
   @IsOptional()
   @IsString()
@@ -214,7 +214,7 @@ export class CreateBankAccountDto {
 
   @ApiPropertyOptional({
     description:
-      'SPEI protocol value, forwarded to BlindPay (`spei_bitso` rail, Mexico).',
+      'SPEI protocol value, forwarded to the fiat partner (`spei_bitso` rail, Mexico).',
   })
   @IsOptional()
   @IsString()

@@ -395,7 +395,8 @@ describe('CrossChainSwapsService', () => {
       );
       expect(err.code).toBe(ApiErrorCode.ValidationFailed);
       expect(err.message).toContain('POST /v1/swaps with chain "solana"');
-      expect(err.message).toContain('Jupiter');
+      expect(err.message).toContain('the Solana swap route');
+      expect(err.message).not.toContain('Jupiter');
       expect(nearIntents.quote).not.toHaveBeenCalled();
     });
 

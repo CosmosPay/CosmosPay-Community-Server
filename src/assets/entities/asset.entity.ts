@@ -59,7 +59,7 @@ export class AssetEntity {
   issuerName!: string;
 
   @ApiProperty({
-    example: 'circle.com',
+    example: 'centre.io',
     description:
       "The issuer's on-chain home_domain, or empty when it publishes none, " +
       'which is the case for USDT0 and every testnet issuer. Never a domain ' +

@@ -20,7 +20,7 @@ import {
 export class CreateWalletDto {
   @ApiProperty({
     example: 'Primary wallet',
-    description: 'A label for the wallet, forwarded to BlindPay.',
+    description: 'A label for the wallet, forwarded to the fiat partner.',
   })
   @IsString()
   name!: string;
@@ -29,7 +29,7 @@ export class CreateWalletDto {
     enum: BLINDPAY_NETWORKS,
     example: 'stellar',
     description:
-      'BlindPay network the wallet is on (mainnets and their test networks).',
+      'The fiat partner network the wallet is on (mainnets and their test networks).',
   })
   @IsIn(BLINDPAY_NETWORKS)
   network!: BlindpayNetwork;

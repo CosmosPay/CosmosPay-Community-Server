@@ -82,9 +82,9 @@ describe('assertCanPayXlm', () => {
     expect(r.message).toBe(
       `Account ${HOLDER} cannot pay this transfer's fees in XLM: it needs ` +
         '8.6996499 XLM (its minimum balance of 2 XLM, 1 XLM held by its open ' +
-        'offers, the 4.2474009 XLM LayerZero fee limit, the 1.452249 XLM ' +
+        'offers, the 4.2474009 XLM bridge fee limit, the 1.452249 XLM ' +
         'network fee) but holds 5 XLM. Add at least 3.6996499 XLM to it, then ' +
-        'try again. What LayerZero does not charge of its fee limit comes ' +
+        'try again. What the bridge does not charge of its fee limit comes ' +
         'back in the same transaction.',
     );
   });

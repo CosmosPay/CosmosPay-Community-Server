@@ -44,14 +44,14 @@ export class Usdt0RouteEntity {
   })
   name!: string;
 
-  @ApiProperty({ example: 30101, description: 'LayerZero endpoint id.' })
+  @ApiProperty({ example: 30101, description: 'Bridge endpoint id.' })
   eid!: number;
 
   @ApiProperty({
     enum: ['USDT', 'USDT0'],
     example: 'USDT',
     description:
-      'What arrives: native `USDT` on Ethereum (Tether’s OFT adapter unlocks ' +
+      'What arrives: native `USDT` on Ethereum (Tether’s bridge adapter unlocks ' +
       'it), `USDT0` everywhere else.',
   })
   receives!: string;
@@ -61,7 +61,7 @@ export class Usdt0RouteEntity {
 @ApiSchema({
   description:
     'The networks USDT0 can be sent to from Stellar, with the token and the ' +
-    'LayerZero OFT contract a transfer uses.',
+    'bridge contract a transfer uses.',
 })
 export class Usdt0RoutesEntity {
   @ApiProperty({
@@ -87,13 +87,21 @@ export class Usdt0RoutesEntity {
 
   @ApiProperty({
     example: 'CBOWOLFSDM5PZXNFIVDMP5NZ7U2GSIHED6H6R446QOHF266XINKUMMF6',
-    description: 'The LayerZero OFT contract the transaction calls (`send`).',
+    description: 'The bridge contract the transaction calls (`send`).',
+  })
+  bridgeContract!: string;
+
+  @ApiProperty({
+    example: 'CBOWOLFSDM5PZXNFIVDMP5NZ7U2GSIHED6H6R446QOHF266XINKUMMF6',
+    deprecated: true,
+    description:
+      'The same contract as `bridgeContract`, under its old name. Read `bridgeContract`.',
   })
   oft!: string;
 
   @ApiProperty({
     example: 30600,
-    description: "Stellar mainnet's LayerZero endpoint id.",
+    description: "Stellar mainnet's bridge endpoint id.",
   })
   eid!: number;
 
@@ -109,7 +117,7 @@ export class Usdt0RoutesEntity {
 @ApiSchema({
   description:
     'The price of a USDT0 transfer from Stellar: what is sent and arrives, the ' +
-    "fees and the OFT's limits. Nothing is persisted.",
+    'fees and the bridge contract limits. Nothing is persisted.',
 })
 export class Usdt0QuoteEntity {
   @ApiProperty({
@@ -121,7 +129,7 @@ export class Usdt0QuoteEntity {
 
   @ApiProperty({
     example: 30101,
-    description: "The destination network's LayerZero endpoint id.",
+    description: "The destination network's bridge endpoint id.",
   })
   eid!: number;
 
@@ -156,7 +164,7 @@ export class Usdt0QuoteEntity {
   @ApiProperty({
     example: '12.5',
     description:
-      'What the OFT takes from the account: `amount` without its dust.',
+      'What the bridge contract takes from the account: `amount` without its dust.',
   })
   amountSent!: string;
 
@@ -164,14 +172,14 @@ export class Usdt0QuoteEntity {
     example: '12.5',
     description:
       'What arrives on the destination network (in its token’s 6 decimals). ' +
-      'Equal to `amountSent` unless the OFT charges a fee of its own.',
+      'Equal to `amountSent` unless the bridge contract charges a fee of its own.',
   })
   amountReceived!: string;
 
   @ApiProperty({
     example: '0.0000001',
     description:
-      'The 7th decimal the OFT cannot carry (it shares 6 across chains). ' +
+      'The 7th decimal the bridge contract cannot carry (it shares 6 across chains). ' +
       'It stays in the account; nothing is lost.',
   })
   dust!: string;
@@ -179,16 +187,16 @@ export class Usdt0QuoteEntity {
   @ApiProperty({
     example: '3.6664143',
     description:
-      'LayerZero’s messaging fee, in XLM, paid by the account on top of the ' +
-      'USDT0. It follows LayerZero’s price feeds and changes over time.',
+      'The bridge’s messaging fee, in XLM, paid by the account on top of the ' +
+      'USDT0. It follows the bridge’s price feeds and changes over time.',
   })
   nativeFee!: string;
 
   @ApiProperty({
     example: '4.3996972',
     description:
-      'What a transfer built now would offer LayerZero, in XLM: `nativeFee` ' +
-      'plus a 20% buffer for the minutes before it is signed. What LayerZero ' +
+      'What a transfer built now would offer the bridge, in XLM: `nativeFee` ' +
+      'plus a 20% buffer for the minutes before it is signed. What the bridge ' +
       'does not charge returns to the account in the same transaction, but ' +
       'the account must hold all of it.',
   })
@@ -196,13 +204,13 @@ export class Usdt0QuoteEntity {
 
   @ApiProperty({
     example: '0',
-    description: 'The smallest amount the OFT accepts, in USDT0.',
+    description: 'The smallest amount the bridge contract accepts, in USDT0.',
   })
   minAmount!: string;
 
   @ApiProperty({
     example: '1844674407370.9551615',
-    description: 'The largest amount the OFT accepts, in USDT0.',
+    description: 'The largest amount the bridge contract accepts, in USDT0.',
   })
   maxAmount!: string;
 }
@@ -211,7 +219,7 @@ export class Usdt0QuoteEntity {
 @ApiSchema({
   description:
     'A USDT0 transfer from Stellar to an EVM network: the stored transfer, its ' +
-    'unsigned Soroban transaction and how far LayerZero has delivered it.',
+    'unsigned Soroban transaction and how far the bridge has delivered it.',
 })
 export class Usdt0TransferEntity {
   @ApiProperty({
@@ -225,11 +233,11 @@ export class Usdt0TransferEntity {
     example: 'PENDING',
     description:
       'PENDING: built, waiting for the signature. SUBMITTED: on the Stellar ' +
-      'ledger, LayerZero is delivering it. DELIVERED: credited on the ' +
+      'ledger, the bridge is delivering it. DELIVERED: credited on the ' +
       'destination network. FAILED: the Stellar transaction failed, or ' +
-      'LayerZero gave up on the message (`failureReason`). EXPIRED: never ' +
+      'the bridge gave up on the message (`failureReason`). EXPIRED: never ' +
       'reached the ledger before `expiresAt`. A read refreshes a PENDING or ' +
-      'SUBMITTED transfer from the ledger and LayerZero Scan.',
+      'SUBMITTED transfer from the ledger and the bridge explorer.',
   })
   status!: Usdt0TransferStatus;
 
@@ -252,7 +260,7 @@ export class Usdt0TransferEntity {
 
   @ApiProperty({
     example: 30101,
-    description: "The destination network's LayerZero endpoint id.",
+    description: "The destination network's bridge endpoint id.",
   })
   eid!: number;
 
@@ -276,7 +284,7 @@ export class Usdt0TransferEntity {
   @ApiProperty({
     example: '12.5',
     description:
-      'What the OFT takes from the account: `amount` without its dust.',
+      'What the bridge contract takes from the account: `amount` without its dust.',
   })
   amountSent!: string;
 
@@ -296,14 +304,14 @@ export class Usdt0TransferEntity {
 
   @ApiProperty({
     example: '3.6664143',
-    description: 'LayerZero’s quoted messaging fee, in XLM.',
+    description: 'The bridge’s quoted messaging fee, in XLM.',
   })
   nativeFee!: string;
 
   @ApiProperty({
     example: '4.3996972',
     description:
-      'What the transaction offers LayerZero, in XLM: `nativeFee` plus a 20% ' +
+      'What the transaction offers the bridge, in XLM: `nativeFee` plus a 20% ' +
       'buffer. The endpoint charges the real fee and returns the rest to the ' +
       'account in the same transaction.',
   })
@@ -382,7 +390,7 @@ export class Usdt0TransferEntity {
     type: String,
     example: null,
     description:
-      'LayerZero’s message id (0x + 64 hex), once the transaction landed.',
+      'The bridge’s message id (0x + 64 hex), once the transaction landed.',
   })
   guid!: string | null;
 
@@ -399,7 +407,7 @@ export class Usdt0TransferEntity {
     type: String,
     example: null,
     description:
-      'LayerZero Scan’s own status word, verbatim (`INFLIGHT`, `CONFIRMING`, ' +
+      'The bridge explorer’s own status word, verbatim (`INFLIGHT`, `CONFIRMING`, ' +
       '`DELIVERED`, `PAYLOAD_STORED`, ...).',
   })
   scanStatus!: string | null;
@@ -409,7 +417,7 @@ export class Usdt0TransferEntity {
     type: String,
     example: null,
     description:
-      'The transaction on LayerZero Scan (layerzeroscan.com), once it reached ' +
+      'The transaction on the bridge explorer, once it reached ' +
       'the network.',
   })
   scanUrl!: string | null;

@@ -189,7 +189,7 @@ export const SETTLED_KYC_STATUSES = ['approved', 'rejected'] as const;
  * two answer different questions, and the guard counts both.
  */
 export const BLINDPAY_CONSUMER_QUOTA_RATE_LIMIT = {
-  name: 'blindpay:quota',
+  name: 'fiat:quota',
   limit: 60,
   windowMs: 60 * 1000,
   per: 'consumer' as const,

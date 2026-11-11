@@ -34,12 +34,12 @@ export class BankAccountsController {
 
   @Post()
   // The account is created at BlindPay; the row here is the mirror.
-  @ApiUpstream('BlindPay')
+  @ApiUpstream('Fiat partner')
   @RequirePermissions('kyc:write')
   @ApiOperation({
     summary: 'Add a fiat bank account for a receiver',
     description:
-      'Creates the account at BlindPay under the receiver and mirrors it; offramp payouts settle to it. ' +
+      'Creates the account at the fiat partner under the receiver and mirrors it; offramp payouts settle to it. ' +
       "`type` names the rail, and only that rail's fields are needed (`GET /v1/kyc/bank-details?rail=` lists them). " +
       'The response carries identifiers only (`rail`, `name`, `country`), never the account numbers. ' +
       'A disabled receiver is refused with 403 `account_disabled`.',
@@ -58,7 +58,7 @@ export class BankAccountsController {
   @ApiOperation({
     summary: "List a receiver's bank accounts",
     description:
-      'Reads the local mirror, newest first; BlindPay is not called, and account numbers are never returned. ' +
+      'Reads the local mirror, newest first; the fiat partner is not called, and account numbers are never returned. ' +
       'Paginated with `take` (default 100, max 100) and `skip`; answers `{ data, total, take, skip }`.',
   })
   @ApiOkResponse({ type: BankAccountListEntity })
@@ -71,13 +71,13 @@ export class BankAccountsController {
   }
 
   @Delete(':id')
-  @ApiUpstream('BlindPay')
+  @ApiUpstream('Fiat partner')
   @RequirePermissions('kyc:write')
   @ApiOperation({
     summary: 'Delete a bank account',
     description:
-      'Deletes the account at BlindPay, then its local row. ' +
-      'An id this receiver does not have answers `deleted: true` without calling BlindPay, so repeating a delete succeeds.',
+      'Deletes the account at the fiat partner, then its local row. ' +
+      'An id this receiver does not have answers `deleted: true` without calling the fiat partner, so repeating a delete succeeds.',
   })
   @ApiOkResponse({ type: BankAccountDeletedEntity })
   remove(

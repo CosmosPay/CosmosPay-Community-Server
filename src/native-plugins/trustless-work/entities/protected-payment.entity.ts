@@ -14,13 +14,21 @@ const TX_HASH =
 
 @ApiSchema({
   description:
-    'What the fees take: Trustless Work’s fixed 0.30% and Cosmos Pay’s share, ' +
+    'What the fees take: the protected-payments service’s fixed 0.30% and Cosmos Pay’s share, ' +
     'deducted on-chain from a release and from each part of a dispute resolution.',
 })
 export class ProtectedPaymentFeesEntity {
   @ApiProperty({
     example: 30,
-    description: 'Trustless Work’s fee, in basis points.',
+    description: 'The protected-payments service’s fee, in basis points.',
+  })
+  serviceFeeBps!: number;
+
+  @ApiProperty({
+    example: 30,
+    deprecated: true,
+    description:
+      'The same fee as `serviceFeeBps`, under its old name. Read `serviceFeeBps`.',
   })
   trustlessWorkBps!: number;
 
@@ -96,7 +104,7 @@ class ProtectedPaymentBaseEntity {
     type: String,
     example: CONTRACT,
     description:
-      'The Trustless Work contract (C...), once deployed by the first fund.',
+      'The protected-payment contract (C...), once deployed by the first fund.',
   })
   contractId!: string | null;
 
@@ -164,7 +172,7 @@ class ProtectedPaymentBaseEntity {
 @ApiSchema({
   description:
     'A protected payment as its merchant reads it: the row this service keeps, ' +
-    'mirrored from the Trustless Work contract by the sync job.',
+    'mirrored from the protected-payment contract by the sync job.',
 })
 export class ProtectedPaymentEntity extends ProtectedPaymentBaseEntity {
   @ApiProperty({ nullable: true, type: String })
@@ -307,7 +315,7 @@ class ProtectedPaymentSubmitBase {
   @ApiProperty({
     example: 'SUCCESS',
     description:
-      'Trustless Work’s answer: `SUCCESS` (the payment moved), or `FAILED`.',
+      'The protected-payments service’s answer: `SUCCESS` (the payment moved), or `FAILED`.',
   })
   status!: string;
 

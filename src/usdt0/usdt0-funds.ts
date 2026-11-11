@@ -81,9 +81,7 @@ export function assertCanPayXlm(
   if (offers > 0n) {
     parts.push(`${fromStroops(offers)} XLM held by its open offers`);
   }
-  parts.push(
-    `the ${fromStroops(spend.nativeFeeLimit)} XLM LayerZero fee limit`,
-  );
+  parts.push(`the ${fromStroops(spend.nativeFeeLimit)} XLM bridge fee limit`);
   parts.push(`the ${fromStroops(spend.networkFee)} XLM network fee`);
   throw ApiError.badRequest(
     ApiErrorCode.InsufficientBalance,
@@ -91,7 +89,7 @@ export function assertCanPayXlm(
       `needs ${fromStroops(needed)} XLM (${parts.join(', ')}) but holds ` +
       `${fromStroops(balance)} XLM. Add at least ` +
       `${fromStroops(needed - balance)} XLM to it, then try again. What ` +
-      'LayerZero does not charge of its fee limit comes back in the same ' +
+      'the bridge does not charge of its fee limit comes back in the same ' +
       'transaction.',
   );
 }

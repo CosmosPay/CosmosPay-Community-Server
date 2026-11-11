@@ -199,7 +199,7 @@ export class SolanaSwapVenue implements ChainSwapVenue {
     } catch (err) {
       throw ApiError.badGateway(
         ApiErrorCode.ProviderError,
-        `Jupiter's route cannot carry the merchant fee (${
+        `The Solana swap route cannot carry the merchant fee (${
           err instanceof Error ? err.message : String(err)
         }). Retry: a new quote may take another route.`,
       );
@@ -208,7 +208,7 @@ export class SolanaSwapVenue implements ChainSwapVenue {
     if (bytes.length > SOLANA_TRANSACTION_MAX_BYTES) {
       throw ApiError.badGateway(
         ApiErrorCode.ProviderError,
-        "With the merchant fee, Jupiter's route no longer fits one Solana transaction. Retry: a new quote may take a shorter route.",
+        'With the merchant fee, the Solana swap route no longer fits one Solana transaction. Retry: a new quote may take a shorter route.',
       );
     }
     return Buffer.from(bytes).toString('base64');
@@ -224,7 +224,7 @@ export class SolanaSwapVenue implements ChainSwapVenue {
       if (!table) {
         throw ApiError.badGateway(
           ApiErrorCode.ProviderError,
-          `Jupiter's transaction names a lookup table that does not exist (${account})`,
+          `The Solana swap route's transaction names a lookup table that does not exist (${account})`,
         );
       }
       tables.set(account, table);

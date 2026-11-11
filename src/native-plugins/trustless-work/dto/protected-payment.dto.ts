@@ -41,7 +41,7 @@ const EXAMPLE_ACCOUNT =
 
 @ApiSchema({
   description:
-    'A protected payment to create: the buyer pays USDC into a Trustless Work ' +
+    'A protected payment to create: the buyer pays USDC into a protected-payment ' +
     'contract and it is released to the merchant on the release model chosen here.',
 })
 export class CreateProtectedPaymentDto {
@@ -209,7 +209,7 @@ export class ShipProtectedPaymentDto {
 export class DisputeProtectedPaymentDto {
   @ApiPropertyOptional({
     description:
-      'Why, kept by Cosmos Pay for the review: Trustless Work V1 takes no reason.',
+      'Why, kept by Cosmos Pay for the review: the protected-payments service takes no reason.',
   })
   @IsOptional()
   @IsString()
