@@ -574,6 +574,15 @@ class EnvironmentVariables {
   @Min(1)
   ELDORADO_TIMEOUT_MS?: number;
 
+  /** Where each network's marketplace publishes its webhook signing keys (a JWKS). */
+  @IsOptional()
+  @IsUrl(URL_OPTIONS)
+  ELDORADO_WEBHOOK_JWKS_URL_MAINNET?: string;
+
+  @IsOptional()
+  @IsUrl(URL_OPTIONS)
+  ELDORADO_WEBHOOK_JWKS_URL_TESTNET?: string;
+
   // --- Protected payments (native plugin `trustless-work`) ---
   // The types only. How the per-network keys relate to each other (secrets that
   // parse, three distinct accounts, a key with its platform account) is checked

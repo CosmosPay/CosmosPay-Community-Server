@@ -38,12 +38,18 @@ import {
   type P2pMarket,
   type P2pNetwork,
   type P2pOrder,
+  type P2pOrderTerms,
   type P2pSide,
   type P2pToken,
 } from '@/native-plugins/eldorado/p2p-market';
 import { PrismaService } from '@/prisma/prisma.service';
 
-/** What a session read answers: every column but the consumer. */
+/**
+ * What a session read loads: the order, its widget, the payment request it was
+ * opened from and the marketplace's last status for it (answered as `status`,
+ * see {@link toSessionView}). Never the consumer, nor the delivery the webhook
+ * recorded.
+ */
 const P2P_SESSION_PUBLIC_SELECT = {
   id: true,
   network: true,
@@ -58,8 +64,45 @@ const P2P_SESSION_PUBLIC_SELECT = {
   estimatedAmountOut: true,
   reference: true,
   widgetUrl: true,
+  paymentRequestId: true,
+  providerStatus: true,
   createdAt: true,
 } as const;
+
+/** A session as {@link P2P_SESSION_PUBLIC_SELECT} loads it (a spec may load less). */
+type SessionRow = { providerStatus?: string | null } & Record<string, unknown>;
+
+/**
+ * A session as the API answers it: the marketplace's raw order status is
+ * published as `status` (null until a webhook reports one), and
+ * `paymentRequestId` is null for a session no payment request opened.
+ */
+function toSessionView<T extends SessionRow>(
+  row: T,
+): Omit<T, 'providerStatus'> & {
+  status: string | null;
+  paymentRequestId: string | null;
+} {
+  const { providerStatus, ...rest } = row;
+  return {
+    ...rest,
+    paymentRequestId:
+      typeof rest.paymentRequestId === 'string' ? rest.paymentRequestId : null,
+    status: providerStatus ?? null,
+  };
+}
+
+/** Who a session is opened for: its consumer, and whether that is the shared public key. */
+export interface P2pSessionOwner {
+  consumerId: string;
+  sharedPublicKey: boolean;
+}
+
+/** An order the market takes: its currency and token as the market lists them. */
+export interface CheckedP2pOrder {
+  currency: P2pCurrency;
+  token: P2pToken;
+}
 
 /** The 404 of a session the caller cannot read, per side. */
 const SESSION_NOT_FOUND: Record<P2pSide, string> = {
@@ -203,18 +246,76 @@ export class P2pRampService {
     order: P2pOrder,
   ) {
     const network = resolveNetwork(this.config, consumer);
-    const { currency, token } = this.checkOrder(
-      await this.marketOn(network),
+    const checked = await this.checkOrderOn(network, order, side);
+    const local = await this.consumers.resolve(consumer);
+    const row = await this.recordSession(
+      {
+        consumerId: local.id,
+        sharedPublicKey: this.recordTokens.isSharedPublicKey(consumer),
+      },
       network,
-      order,
       side,
+      order,
+      checked,
     );
+    return this.recordTokens.attach(consumer, 'p2p-ramp-session', row);
+  }
+
+  /**
+   * The order's currency and token on `network` once the market takes it; a
+   * 400 with the reason otherwise. An order with no `paymentMethod` (a payment
+   * request's terms) is checked on everything else.
+   */
+  async checkOrderOn(
+    network: StellarNetwork,
+    order: P2pOrderTerms,
+    side: P2pSide,
+  ): Promise<CheckedP2pOrder> {
+    return this.checkOrder(await this.marketOn(network), network, order, side);
+  }
+
+  /**
+   * The buy side's currency and token for a payment request's terms on
+   * `network` right now, each null when the market does not offer it. Throws
+   * what the market read throws.
+   */
+  async buyTerms(
+    network: StellarNetwork,
+    currencyId: string,
+    chainId: number,
+    tokenAddress: string,
+  ): Promise<{ currency: P2pCurrency | null; token: P2pToken | null }> {
+    const state = await this.marketOn(network);
+    const market = sideOf(state, 'buy', network);
+    const tokens = chainProblem(market, chainId)
+      ? null
+      : (state.lists.get(chainId) ?? null);
+    return {
+      currency: market.currencies.find((c) => c.id === currencyId) ?? null,
+      token: tokens ? findToken(tokens, tokenAddress) : null,
+    };
+  }
+
+  /**
+   * Records `order` (already {@link checkOrderOn checked}) for `owner` on
+   * `network` and answers the session with its widget URL. The widget carries
+   * the owner's integrator ids: the shared public key's referral id when the
+   * owner is that key. `paymentRequestId` links a purchase a payer opened from
+   * a payment request, which is what its webhook settles.
+   */
+  async recordSession(
+    owner: P2pSessionOwner,
+    network: StellarNetwork,
+    side: P2pSide,
+    order: P2pOrder,
+    { currency, token }: CheckedP2pOrder,
+    paymentRequestId?: string,
+  ) {
     const address = toChecksumAddress(order.address);
     const reference = sessionReference(randomUUID());
-    const local = await this.consumers.resolve(consumer);
     const row = await this.prisma.p2pRampSession.create({
       data: {
-        consumerId: local.id,
+        consumerId: owner.consumerId,
         network,
         side,
         currency: currency.id,
@@ -236,15 +337,14 @@ export class P2pRampService {
           { ...order, address },
           token,
           reference,
-          this.client.integratorIds(
-            this.recordTokens.isSharedPublicKey(consumer),
-          ),
+          this.client.integratorIds(owner.sharedPublicKey),
           side,
         ),
+        ...(paymentRequestId ? { paymentRequestId } : {}),
       },
       select: P2P_SESSION_PUBLIC_SELECT,
     });
-    return this.recordTokens.attach(consumer, 'p2p-ramp-session', row);
+    return toSessionView(row);
   }
 
   /** The consumer's sessions of `side` on the key's network, newest first. */
@@ -269,7 +369,7 @@ export class P2pRampService {
       }),
       this.prisma.p2pRampSession.count({ where }),
     ]);
-    return page(data, total, query);
+    return page(data.map(toSessionView), total, query);
   }
 
   /**
@@ -300,7 +400,7 @@ export class P2pRampService {
       select: P2P_SESSION_PUBLIC_SELECT,
     });
     if (!row) throw ApiError.notFound(SESSION_NOT_FOUND[side]);
-    return row;
+    return toSessionView(row);
   }
 
   /**
@@ -310,9 +410,9 @@ export class P2pRampService {
   private checkOrder(
     state: NetworkMarket,
     network: StellarNetwork,
-    order: P2pOrder,
+    order: P2pOrderTerms,
     side: P2pSide,
-  ): { currency: P2pCurrency; token: P2pToken } {
+  ): CheckedP2pOrder {
     const market = sideOf(state, side, network);
     const tokens = state.lists.get(order.chainId) ?? null;
     const problem = orderProblem(market, tokens, order, side);

@@ -94,6 +94,27 @@ export class EldoradoClient {
     return this.get(network, `/chains/${chainId}/tokens`);
   }
 
+  /**
+   * The JWKS one network's marketplace signs its order webhooks with
+   * (`ELDORADO_WEBHOOK_JWKS_URL_MAINNET` / `_TESTNET`, its API's
+   * `/.well-known/jwks.json` by default). Takes no credentials.
+   */
+  webhookKeys(network: StellarNetwork): Promise<{ keys?: unknown }> {
+    return requestUpstreamJson<{ keys?: unknown }>(
+      {
+        provider: P2P_MARKETPLACE,
+        service: 'the P2P marketplace',
+        keyEnv: 'ELDORADO_CLIENT_ID',
+        method: 'GET',
+        url: this.config.get('eldorado', { infer: true }).webhookJwksUrls[
+          network
+        ],
+        timeoutMs: this.timeoutMs,
+      },
+      this.logger,
+    );
+  }
+
   /** A firm buy quote. Needs the integrator ids. */
   buyQuote(
     network: StellarNetwork,
