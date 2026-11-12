@@ -155,7 +155,7 @@ régénéré à partir des contrôleurs et des DTO à chaque exécution de la CI
 | Domaine                | Chemin de base           | Rôle                                                     |
 | ---------------------- | ------------------------ | -------------------------------------------------------- |
 | Intentions de paiement | `/v1/payment-intents`    | Intentions `pay` sur Stellar (SEP-7), Solana (Solana Pay) et Monad (EIP-681), `tx` SEP-7, validation, observateur on-chain |
-| Liens de paiement      | `/v1/payment-links`      | Une intention de paiement telle que la voit le payeur, pour les pages de paiement hébergées — sans clé API (`@Public`) |
+| Liens de paiement      | `/v1/payment-links`      | Une intention de paiement telle que la voit le payeur, pour les pages de paiement hébergées, et un encaissement P2P en monnaie locale (`/fiat/{id}`) — sans clé API (`@Public`) |
 | Swaps                  | `/v1/swaps`              | Cotation path-payment, construction du XDR non signé, soumission du XDR signé · Solana via Jupiter, Monad via Kuru Flow |
 | Swaps inter-chaînes | `/v1/cross-chain-swaps` | Entre 35 réseaux via NEAR Intents (Stellar, Solana, Monad, chaînes EVM, Bitcoin et les monnaies UTXO, ...) : cotation, adresse de dépôt, statut |
 | USDT0                  | `/v1/usdt0`              | USDT0 depuis Stellar vers 21 réseaux EVM via LayerZero (USDT natif sur Ethereum), mainnet uniquement : cotation, construction, soumission, statut |
@@ -165,7 +165,7 @@ régénéré à partir des contrôleurs et des DTO à chaque exécution de la CI
 | Webhooks               | `/v1/webhooks`           | CRUD des endpoints, rotation du secret, livraisons, relivraison |
 | KYC                    | `/v1/kyc`                | Receivers (KYC/KYB), wallets, comptes bancaires, envoi de documents |
 | Onramp                 | `/v1/onramp`             | Cotations de payin, payins, comptes virtuels             |
-| On-ramp P2P | `/v1/onramp/p2p` | Monnaie locale vers n'importe quel token sur les chaînes que le marché liste, via des vendeurs P2P : marché, tokens, devis ferme, sessions d'achat |
+| On-ramp P2P | `/v1/onramp/p2p` | Monnaie locale vers n'importe quel token sur les chaînes que le marché liste, via des vendeurs P2P : marché, tokens, devis ferme, sessions d'achat, encaissements par QR (demandes de paiement) |
 | Offramp                | `/v1/offramp`            | Cotations de payout, autorisation, payouts (signés par le client) |
 | Off-ramp P2P | `/v1/offramp/p2p` | N'importe quel token listé vers monnaie locale via des acheteurs P2P : marché, tokens, devis ferme, sessions de vente |
 | Produits               | `/v1/products`           | Catalogue marchand                                       |
@@ -294,11 +294,16 @@ Les chemins utilisent la forme OpenAPI `{param}`.
 | POST | `/v1/offramp/payouts/{id}/documents` | `offramp:write` |  |
 | POST | `/v1/offramp/quotes` | `offramp:write` |  |
 | GET | `/v1/onramp/p2p/market` | `onramp:read` | ✓ |
+| GET | `/v1/onramp/p2p/payment-requests` | `onramp:read` |  |
+| POST | `/v1/onramp/p2p/payment-requests` | `onramp:write` | ✓ |
+| GET | `/v1/onramp/p2p/payment-requests/{id}` | `onramp:read` | ✓ |
+| POST | `/v1/onramp/p2p/payment-requests/{id}/cancel` | `onramp:write` | ✓ |
 | POST | `/v1/onramp/p2p/quotes` | `onramp:write` | ✓ |
 | GET | `/v1/onramp/p2p/sessions` | `onramp:read` |  |
 | POST | `/v1/onramp/p2p/sessions` | `onramp:write` | ✓ |
 | GET | `/v1/onramp/p2p/sessions/{id}` | `onramp:read` | ✓ |
 | GET | `/v1/onramp/p2p/tokens` | `onramp:read` | ✓ |
+| POST | `/v1/onramp/p2p/webhooks` | aucun : `@Public()`, signé par le marché P2P ; absent du contrat OpenAPI |  |
 | GET | `/v1/onramp/payins` | `onramp:read` |  |
 | POST | `/v1/onramp/payins` | `onramp:write` |  |
 | GET | `/v1/onramp/payins/{id}` | `onramp:read` |  |
@@ -319,6 +324,8 @@ Les chemins utilisent la forme OpenAPI `{param}`.
 | POST | `/v1/payment-links/{id}/events` | aucun : `@Public()`, budget par adresse client |  |
 | GET | `/v1/payment-links/{id}/solana-pay` | aucun : `@Public()`, budget par adresse client |  |
 | POST | `/v1/payment-links/{id}/solana-pay` | aucun : `@Public()`, budget par adresse client |  |
+| GET | `/v1/payment-links/fiat/{id}` | aucun : `@Public()`, budget par adresse client |  |
+| POST | `/v1/payment-links/fiat/{id}/sessions` | aucun : `@Public()`, budget par adresse client |  |
 | GET | `/v1/plugins` | `plugins:read` |  |
 | GET | `/v1/plugins/{slug}` | `plugins:read` |  |
 | PUT | `/v1/plugins/{slug}/installation` | `plugins:write` |  |
@@ -2301,6 +2308,13 @@ Un acheteur paie en monnaie locale (un virement bancaire en Argentine, PIX, Nequ
 | GET | `/v1/onramp/p2p/sessions` | `onramp:read` | Les sessions du consumer sur le réseau de la clé |
 | POST | `/v1/onramp/p2p/sessions` | `onramp:write` | Enregistre un ordre et répond son `widgetUrl` |
 | GET | `/v1/onramp/p2p/sessions/{id}` | `onramp:read` | L'une d'elles |
+| POST | `/v1/onramp/p2p/payment-requests` | `onramp:write` | Un encaissement en monnaie locale affiché sous forme de QR, payé à votre propre adresse (la clé publique partagée peut en créer un) |
+| GET | `/v1/onramp/p2p/payment-requests` | `onramp:read` | Les encaissements du consumer sur le réseau de la clé |
+| GET | `/v1/onramp/p2p/payment-requests/{id}` | `onramp:read` | L'un d'eux, et s'il a été payé |
+| POST | `/v1/onramp/p2p/payment-requests/{id}/cancel` | `onramp:write` | Empêche le paiement d'un encaissement ouvert |
+| GET | `/v1/payment-links/fiat/{id}` | aucun (`@Public()`) | La vue du payeur sur un encaissement : montant, estimation en direct, moyens de paiement |
+| POST | `/v1/payment-links/fiat/{id}/sessions` | aucun (`@Public()`) | Le payeur commence à payer : un achat du montant exact, livré au vendeur |
+| POST | `/v1/onramp/p2p/webhooks` | aucun (`@Public()`, signé) | Les mises à jour des ordres du marché |
 | GET | `/v1/offramp/p2p/market` | `offramp:read` | Monnaies, moyens de paiement, prix de vente et minimum (en USD), les chaînes et le token par lequel un formulaire commence (la clé publique partagée peut le lire) |
 | GET | `/v1/offramp/p2p/tokens` | `offramp:read` | Les mêmes listes de tokens, pour une vente (la clé publique partagée peut le lire) |
 | POST | `/v1/offramp/p2p/quotes` | `offramp:write` | Un devis ferme pour une vente, frais et échange compris ; il faut les ids d'intégrateur |
@@ -2317,6 +2331,17 @@ Un acheteur paie en monnaie locale (un virement bancaire en Argentine, PIX, Nequ
 - **Les ids d'intégrateur sont facultatifs, sauf pour le devis ferme.** `ELDORADO_CLIENT_ID` et `ELDORADO_REFERRAL_ID` sont ce qu'El Dorado remet à un intégrateur (api@eldorado.io). Sans eux, le marché et les sessions fonctionnent et le widget chiffre avant le paiement ; avec eux, `POST /v1/onramp/p2p/quotes` et `POST /v1/offramp/p2p/quotes` répondent, et le widget de chaque session porte les ids, qui attribuent l'ordre à Cosmos Pay.
 - **Les wallets sans compte achètent et vendent aussi.** La clé publique partagée peut demander un devis, ouvrir une session et relire cette seule session avec son `publicToken` dans `X-Record-Token` ; elle ne liste jamais les sessions, car tous les wallets anonymes sont ce même consommateur. Ses devis et ses sessions portent `ELDORADO_PUBLIC_REFERRAL_ID` au lieu de `ELDORADO_REFERRAL_ID` lorsqu'il est défini : El Dorado fixe la commission de l'intégrateur par referral id, demande-en donc un au taux le plus élevé et l'usage anonyme paie le plus, comme pour les swaps.
 - **Ce qui est mis en cache.** Le marché (monnaies, prix et liste des chaînes), une minute par réseau (`ELDORADO_MARKET_TTL_MS`) ; la liste de tokens de chaque chaîne, une heure (`ELDORADO_TOKENS_TTL_MS` ; celle d'Ethereum pèse environ 1,2 Mo). Une monnaie sans prix, sans minimum ou sans moyen de paiement est écartée, de même qu'une chaîne dont la liste de tokens échoue ou revient vide : c'est journalisé et redemandé à la lecture suivante, et le marché n'est un 502 que si la liste des chaînes ou toutes les listes de tokens échouent.
+
+### Encaisser avec un QR (demandes de paiement)
+
+Un vendeur encaisse un montant en monnaie locale avec un QR, et le payeur le règle par un moyen local via le même marché : le token va du marché directement à l'adresse propre du vendeur, et Cosmos Pay ne le détient jamais. `POST /v1/onramp/p2p/payment-requests` vérifie les conditions face au marché en direct exactement comme pour un achat (monnaie, montant et son minimum, chaîne et token ; le payeur choisit le moyen de paiement plus tard) et répond `url`, la page du payeur (`PAYMENT_LINK_CHECKOUT_URL/fiat/<id>`), et `qr`, un PNG de cette page. La page lit l'encaissement avec `GET /v1/payment-links/fiat/{id}` et, une fois que le payeur a choisi un moyen, `POST /v1/payment-links/fiat/{id}/sessions` ouvre un achat du montant exact, livré au vendeur, et répond son `widgetUrl`.
+
+- **Les routes du payeur ne prennent aucune clé API.** Elles se trouvent sous `/v1/payment-links/fiat/`, donc la route sans clé de la passerelle qui sert déjà `/v1/payment-links/*` les sert aussi, et le segment `fiat/` les sépare des routes `{id}` propres aux liens de paiement. L'id (un `cuid()`) est la capacité : la réponse donne le montant, la description, le token, une estimation au prix du marché du moment et les moyens de paiement, jamais le compte ni l'adresse du vendeur, le jeton d'enregistrement, les sessions ou les transactions. Les lectures ont un budget de 60 par minute par adresse client (`payment-links-fiat:read`) et le début d'un paiement de 10 (`payment-links-fiat:session`) ; les deux répondent `Cache-Control: no-store`.
+- **L'achat appartient au vendeur.** C'est une session BUY du consumer de la demande, listée dans son `GET /v1/onramp/p2p/sessions` avec `paymentRequestId`, et son widget porte son referral id : une demande créée avec la clé publique partagée porte `ELDORADO_PUBLIC_REFERRAL_ID` (lorsqu'il est défini), comme les propres sessions de cette clé. Un payeur peut lancer plus d'un achat ; chacun est une session, et le premier qui aboutit paie la demande.
+- **Payé veut dire que le marché l'a dit.** Rien n'est lu on-chain : une demande ne passe à `paid` que lorsque le webhook signé du marché signale l'une de ses sessions `COMPLETED` en tant que `BUY`, livrée à l'adresse, la chaîne et le token de la demande (sans tenir compte de la casse), pour au moins son montant en monnaie locale (le widget permet à un acheteur de changer le montant, et un paiement plus petit n'est pas cet encaissement). `paidAt`, `paidAmount` (la quantité de token livrée) et `paidTxHash` enregistrent le premier de ces aboutissements ; les suivants ne changent rien. Une demande ouverte après `expiresAt` se lit `expired` (jamais stocké), et une demande expirée ou annulée passe tout de même à `paid` quand un achat déjà en cours aboutit : l'argent est arrivé. Tant que le webhook n'est pas enregistré, rien ne marque une demande comme payée, donc un wallet devrait aussi surveiller son propre solde.
+- **Le webhook.** `POST /v1/onramp/p2p/webhooks` est `@Public()` et tenu hors du contrat OpenAPI, comme celui du partenaire fiat. Une livraison n'est acceptée que si `x-webhook-hash` est le `sha256` du corps brut (hex en minuscules) et si `x-webhook-signature` est une signature RSA-SHA256 en base64 de cet hex par une clé du JWKS d'un réseau (`ELDORADO_WEBHOOK_JWKS_URL_MAINNET` / `ELDORADO_WEBHOOK_JWKS_URL_TESTNET`, par défaut celui du marché) ; la clé qui la vérifie décide sur quel réseau elle peut modifier des sessions. Tout le reste est `401 webhook_signature_invalid`, et un jeu de clés illisible est `503`, pour que le marché renvoie la livraison. Les clés sont gardées en mémoire et relues au plus une fois par minute et par réseau quand une livraison ne se vérifie pas. Une livraison vérifiée qui ne nomme aucune session est journalisée et reçoit `200`. Chaque écriture est conditionnelle : une session garde `COMPLETED` une fois qu'elle l'a, et une demande n'est payée qu'une fois. Les sessions renvoient le dernier statut d'ordre du marché dans `status`.
+- **Étapes pour l'opérateur.** Le marché enregistre le webhook par Client ID, par e-mail à la même adresse qui délivre les ids d'intégrateur : envoyez-lui le Client ID et l'URL `https://api.cosmospay.lat/cosmos-api/v1/onramp/p2p/webhooks` (le préfixe public de la passerelle, puis `/v1/onramp/p2p/webhooks`). La passerelle a besoin d'une route sans clé pour exactement `POST /v1/onramp/p2p/webhooks`, qui transmet le corps sans le modifier ; les routes du payeur n'ont besoin de rien de nouveau.
+- **Pas dans cette version :** un événement webhook sortant quand une demande est payée, une vue des demandes dans le dashboard, et des QR réutilisables où le payeur saisit le montant.
 
 ## Plugins — des extensions sous un slug
 
@@ -2551,7 +2576,7 @@ plugins isolés.
 | ---- | ------------- |
 | `blindpay` | KYC, onramp, offramp, le webhook BlindPay, ses routes `/v1/admin` (`receivers`, `payins`, `payouts`) et la section `fiat` du résumé d'administration |
 | `defindex` | `/v1/defindex` — les vaults DeFindex sur Stellar |
-| `eldorado` | `/v1/onramp/p2p` et `/v1/offramp/p2p` : tokens sur toutes les chaînes que liste le marché P2P d'El Dorado, achetés et vendus contre de la monnaie locale |
+| `eldorado` | `/v1/onramp/p2p` et `/v1/offramp/p2p` : tokens sur toutes les chaînes que liste le marché P2P d'El Dorado, achetés et vendus contre de la monnaie locale ; encaissements par QR, payés via le `/v1/payment-links/fiat/{id}` sans clé ; le webhook d'ordres du marché |
 | `trustless-work` | `/v1/protected-payments`, le `/v1/protected-payment-links` sans clé et `/v1/admin/protected-payments` : les paiements protégés sur Trustless Work (Stellar) |
 
 - **Non listé, absent.** Un plugin natif que `PLUGINS_ENABLED` ne nomme pas n'est
@@ -2587,6 +2612,16 @@ plugins isolés.
   qui ne prend aucune clé API.
 
 ## Mise à niveau — changements incompatibles et notes de déploiement
+
+### On-ramp P2P : encaissements par QR en monnaie locale, et le webhook d'ordres du marché
+
+- **La migration `20261112120000_p2p_payment_requests`** crée la table `p2p_payment_request` et ajoute des colonnes nullable à `p2p_ramp_session` (`paymentRequestId`, `providerOrderId`, `providerStatus`, `deliveredAmount`, `txHash`, `completedAt`) ; rien n'est réécrit. Lancez `migrate deploy` avant que le nouveau build ne serve.
+- **Nouvelles routes** (le plugin `eldorado`) : `POST` et `GET /v1/onramp/p2p/payment-requests`, `GET /v1/onramp/p2p/payment-requests/{id}`, `POST /v1/onramp/p2p/payment-requests/{id}/cancel`, les routes sans clé `GET /v1/payment-links/fiat/{id}` et `POST /v1/payment-links/fiat/{id}/sessions`, et `POST /v1/onramp/p2p/webhooks`. Nouveaux codes d'erreur : `request_closed` (409) et `webhook_signature_invalid` (401).
+- **Les sessions gagnent deux champs nullable** (ajout rétrocompatible) : `status`, le dernier statut de l'ordre sur le marché, et `paymentRequestId`.
+- **Passerelle :** ajoutez une route sans clé pour exactement `POST /v1/onramp/p2p/webhooks`. `/v1/payment-links/*` est déjà sans clé ; son plugin CORS doit autoriser `POST`, comme il le fait pour les routes propres aux liens de paiement.
+- **Faites enregistrer le webhook** auprès du marché par e-mail, avec le Client ID : `https://api.cosmospay.lat/cosmos-api/v1/onramp/p2p/webhooks`. D'ici là, aucune demande n'est marquée payée.
+- **Variables facultatives** `ELDORADO_WEBHOOK_JWKS_URL_MAINNET` et `ELDORADO_WEBHOOK_JWKS_URL_TESTNET` (par défaut : le JWKS du marché lui-même).
+- **Nouveaux budgets :** `onramp-p2p:payment-request` (20 par minute par consumer et adresse client), `payment-links-fiat:read` (60) et `payment-links-fiat:session` (10) par adresse client.
 
 ### Swaps, liquidité, paiements privés, swaps cross-chain et USDT0 : un enregistrement lu par son id suit le réseau de la clé
 
@@ -3789,6 +3824,8 @@ Chaque variable lue depuis `process.env` dans `src/` est validée au démarrage 
 | `ELDORADO_REFERRAL_ID` | non | aucun | Le ReferralID qui accompagne `ELDORADO_CLIENT_ID` |
 | `ELDORADO_PUBLIC_REFERRAL_ID` | non | aucun | Le ReferralID que portent les devis et les sessions de la clé publique partagée au lieu de `ELDORADO_REFERRAL_ID` ; demande à El Dorado un id à la commission la plus élevée. Vide : la clé publique utilise `ELDORADO_REFERRAL_ID` |
 | `ELDORADO_TIMEOUT_MS` | non | `10000` | Budget d'un appel au marché P2P (ms) |
+| `ELDORADO_WEBHOOK_JWKS_URL_MAINNET` | non | `https://api.eldorado.io/api/.well-known/jwks.json` | Où le marché P2P publie les clés qui signent ses webhooks d'ordres sur le mainnet (`POST /v1/onramp/p2p/webhooks`) |
+| `ELDORADO_WEBHOOK_JWKS_URL_TESTNET` | non | `https://api-testnet.eldorado.io/api/.well-known/jwks.json` | La même chose pour le sandbox |
 | `TRUSTLESS_WORK_API_KEY_TESTNET` | pour les paiements protégés sur testnet | — | La clé API de Trustless Work pour testnet (clés `dev`). Les routes n'existent qu'avec `trustless-work` dans `PLUGINS_ENABLED` ; sans la clé, elles répondent `503 misconfigured` sur testnet. Exige `TRUSTLESS_WORK_PLATFORM_SECRET_TESTNET` |
 | `TRUSTLESS_WORK_BASE_URL_TESTNET` | non | `https://dev.api.trustlesswork.com` | L'API V1 de Trustless Work pour testnet |
 | `TRUSTLESS_WORK_PLATFORM_SECRET_TESTNET` | avec la clé API | — | Le compte de plateforme de Cosmos Pay (S...) : signe les déploiements et les litiges de la plateforme, en paie les XLM et reçoit les frais de plateforme. Doit faire confiance à USDC. Une clé chaude : retirez-en les frais |

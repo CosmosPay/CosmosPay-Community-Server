@@ -389,6 +389,24 @@ export class P2pSessionEntity {
   widgetUrl!: string;
 
   @ApiProperty({
+    example: null,
+    type: String,
+    nullable: true,
+    description:
+      'The marketplace’s last status for the order, as it reports it (`REQUESTED`, `ACCEPTED`, `FIAT_PAID`, `FIAT_RECEIVED`, `COMPLETED`, `CANCELLED`, `DISPUTED`, `WAITING_FOR_FUNDS`, ...); null until it reports one. A completed order stays `COMPLETED`.',
+  })
+  status!: string | null;
+
+  @ApiProperty({
+    example: null,
+    type: String,
+    nullable: true,
+    description:
+      'The payment request a payer opened this purchase from (`/v1/onramp/p2p/payment-requests`); null for every other session.',
+  })
+  paymentRequestId!: string | null;
+
+  @ApiProperty({
     example: '2026-11-05T18:00:00.000Z',
     description: 'When the session was opened.',
   })

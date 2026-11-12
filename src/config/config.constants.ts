@@ -138,6 +138,17 @@ export const DEFAULT_DEFINDEX_TIMEOUT_MS = 30_000;
 export const DEFAULT_ELDORADO_TIMEOUT_MS = 10_000;
 
 /**
+ * Where the P2P marketplace publishes the keys its webhooks are signed with
+ * (native plugin `eldorado`), per network of the deployment's keys, used when
+ * `ELDORADO_WEBHOOK_JWKS_URL_*` is unset: mainnet's API and the sandbox's.
+ */
+export const DEFAULT_ELDORADO_WEBHOOK_JWKS_URL: Record<StellarNetwork, string> =
+  {
+    public: 'https://api.eldorado.io/api/.well-known/jwks.json',
+    testnet: 'https://api-testnet.eldorado.io/api/.well-known/jwks.json',
+  };
+
+/**
  * The most a DeFindex transaction may charge its signer in fees, in stroops
  * (1 XLM), when `DEFINDEX_MAX_FEE_STROOPS` is unset: the inclusion fee and the
  * Soroban resource fee together. A deposit that invests through a Blend

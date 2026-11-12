@@ -154,7 +154,7 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | क्षेत्र           | Base path                | यह क्या करता है                                          |
 | ----------------- | ------------------------ | -------------------------------------------------------- |
 | Payment intents   | `/v1/payment-intents`    | Stellar (SEP-7), Solana (Solana Pay) और Monad (EIP-681) पर `pay` intents, SEP-7 `tx`, validation, on-chain observer |
-| Payment links     | `/v1/payment-links`      | एक payment intent, जैसा payer उसे देखता है, hosted checkout pages के लिए — बिना API key (`@Public`) |
+| Payment links     | `/v1/payment-links`      | एक payment intent, जैसा payer उसे देखता है, hosted checkout pages के लिए, और स्थानीय मुद्रा में एक P2P charge (`/fiat/{id}`) — बिना API key (`@Public`) |
 | Swaps             | `/v1/swaps`              | Path-payment quote, unsigned XDR बनाना, signed XDR submit करना · Solana: Jupiter, Monad: Kuru Flow |
 | क्रॉस-चेन swaps | `/v1/cross-chain-swaps` | NEAR Intents के ज़रिए 35 networks के बीच (Stellar, Solana, Monad, EVM chains, Bitcoin और UTXO coins, ...): quote, deposit address, status |
 | USDT0             | `/v1/usdt0`              | LayerZero के ज़रिए Stellar से 21 EVM networks तक USDT0 (Ethereum पर native USDT), सिर्फ़ mainnet: quote, build, submit, status |
@@ -164,7 +164,7 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | Webhooks          | `/v1/webhooks`           | Endpoint CRUD, secret rotation, deliveries, redelivery    |
 | KYC               | `/v1/kyc`                | Receivers (KYC/KYB), वॉलेट, बैंक खाते, दस्तावेज़ अपलोड |
 | Onramp            | `/v1/onramp`             | Payin quotes, payins, virtual accounts                    |
-| P2P on-ramp | `/v1/onramp/p2p` | P2P sellers के ज़रिए स्थानीय मुद्रा से marketplace की सूची वाली chains पर कोई भी token: market, tokens, firm quote, खरीद sessions |
+| P2P on-ramp | `/v1/onramp/p2p` | P2P sellers के ज़रिए स्थानीय मुद्रा से marketplace की सूची वाली chains पर कोई भी token: market, tokens, firm quote, खरीद sessions, QR से charges (payment requests) |
 | Offramp           | `/v1/offramp`            | Payout quotes, authorize, payouts (client द्वारा signed) |
 | P2P off-ramp | `/v1/offramp/p2p` | P2P buyers के ज़रिए किसी भी सूचीबद्ध token से स्थानीय मुद्रा: market, tokens, firm quote, बिक्री sessions |
 | प्रोडक्ट्स        | `/v1/products`           | मर्चेंट कैटलॉग                                           |
@@ -293,11 +293,16 @@ Paths OpenAPI के `{param}` रूप में लिखे गए हैं
 | POST | `/v1/offramp/payouts/{id}/documents` | `offramp:write` |  |
 | POST | `/v1/offramp/quotes` | `offramp:write` |  |
 | GET | `/v1/onramp/p2p/market` | `onramp:read` | ✓ |
+| GET | `/v1/onramp/p2p/payment-requests` | `onramp:read` |  |
+| POST | `/v1/onramp/p2p/payment-requests` | `onramp:write` | ✓ |
+| GET | `/v1/onramp/p2p/payment-requests/{id}` | `onramp:read` | ✓ |
+| POST | `/v1/onramp/p2p/payment-requests/{id}/cancel` | `onramp:write` | ✓ |
 | POST | `/v1/onramp/p2p/quotes` | `onramp:write` | ✓ |
 | GET | `/v1/onramp/p2p/sessions` | `onramp:read` |  |
 | POST | `/v1/onramp/p2p/sessions` | `onramp:write` | ✓ |
 | GET | `/v1/onramp/p2p/sessions/{id}` | `onramp:read` | ✓ |
 | GET | `/v1/onramp/p2p/tokens` | `onramp:read` | ✓ |
+| POST | `/v1/onramp/p2p/webhooks` | कोई नहीं: `@Public()`, P2P marketplace द्वारा signed; OpenAPI contract में नहीं |  |
 | GET | `/v1/onramp/payins` | `onramp:read` |  |
 | POST | `/v1/onramp/payins` | `onramp:write` |  |
 | GET | `/v1/onramp/payins/{id}` | `onramp:read` |  |
@@ -318,6 +323,8 @@ Paths OpenAPI के `{param}` रूप में लिखे गए हैं
 | POST | `/v1/payment-links/{id}/events` | कोई नहीं: `@Public()`, हर client address का अपना budget |  |
 | GET | `/v1/payment-links/{id}/solana-pay` | कोई नहीं: `@Public()`, हर client address का अपना budget |  |
 | POST | `/v1/payment-links/{id}/solana-pay` | कोई नहीं: `@Public()`, हर client address का अपना budget |  |
+| GET | `/v1/payment-links/fiat/{id}` | कोई नहीं: `@Public()`, हर client address का अपना budget |  |
+| POST | `/v1/payment-links/fiat/{id}/sessions` | कोई नहीं: `@Public()`, हर client address का अपना budget |  |
 | GET | `/v1/plugins` | `plugins:read` |  |
 | GET | `/v1/plugins/{slug}` | `plugins:read` |  |
 | PUT | `/v1/plugins/{slug}/installation` | `plugins:write` |  |
@@ -2215,6 +2222,13 @@ Deploy का XLM platform देता है; हर पक्ष उन trans
 | GET | `/v1/onramp/p2p/sessions` | `onramp:read` | key के network पर consumer के sessions |
 | POST | `/v1/onramp/p2p/sessions` | `onramp:write` | order दर्ज करें और उसका `widgetUrl` लौटाएँ |
 | GET | `/v1/onramp/p2p/sessions/{id}` | `onramp:read` | उनमें से एक |
+| POST | `/v1/onramp/p2p/payment-requests` | `onramp:write` | QR के रूप में दिखाया गया स्थानीय मुद्रा में एक charge, जिसका भुगतान आपके अपने address पर होता है (shared public key इसे बना सकती है) |
+| GET | `/v1/onramp/p2p/payment-requests` | `onramp:read` | key के network पर consumer के charges |
+| GET | `/v1/onramp/p2p/payment-requests/{id}` | `onramp:read` | उनमें से एक, और क्या उसका भुगतान हुआ |
+| POST | `/v1/onramp/p2p/payment-requests/{id}/cancel` | `onramp:write` | किसी खुले charge का भुगतान रोकें |
+| GET | `/v1/payment-links/fiat/{id}` | कोई नहीं (`@Public()`) | payer को दिखने वाला charge: राशि, live अनुमान, भुगतान के तरीके |
+| POST | `/v1/payment-links/fiat/{id}/sessions` | कोई नहीं (`@Public()`) | payer भुगतान शुरू करता है: ठीक उसी राशि की खरीद, जो seller को delivered होती है |
+| POST | `/v1/onramp/p2p/webhooks` | कोई नहीं (`@Public()`, signed) | marketplace के order updates |
 | GET | `/v1/offramp/p2p/market` | `offramp:read` | मुद्राएँ, भुगतान के तरीके, बिक्री का price और minimum (USD में), chains और वह token जिससे form शुरू होता है (shared public key इसे पढ़ सकती है) |
 | GET | `/v1/offramp/p2p/tokens` | `offramp:read` | वही token सूचियाँ, बिक्री के लिए (shared public key इसे पढ़ सकती है) |
 | POST | `/v1/offramp/p2p/quotes` | `offramp:write` | बिक्री का firm quote, fees और swap सहित; integrator ids चाहिए |
@@ -2231,6 +2245,17 @@ Deploy का XLM platform देता है; हर पक्ष उन trans
 - **integrator ids वैकल्पिक हैं, firm quote को छोड़कर।** `ELDORADO_CLIENT_ID` और `ELDORADO_REFERRAL_ID` वे हैं जो El Dorado किसी integrator को देता है (api@eldorado.io)। इनके बिना market और sessions काम करते हैं और widget भुगतान से पहले quote करता है; इनके साथ `POST /v1/onramp/p2p/quotes` और `POST /v1/offramp/p2p/quotes` जवाब देते हैं, और हर session के widget में ids होते हैं, जो order को Cosmos Pay से जोड़ते हैं।
 - **बिना खाते वाले wallets भी खरीदते और बेचते हैं।** साझा public key quote ले सकती है, session खोल सकती है और उसी एक session को उसके `publicToken` के साथ `X-Record-Token` में भेजकर फिर पढ़ सकती है; वह कभी sessions की सूची नहीं देखती, क्योंकि हर anonymous wallet वही एक consumer है। सेट होने पर उसके quotes और sessions `ELDORADO_REFERRAL_ID` की जगह `ELDORADO_PUBLIC_REFERRAL_ID` लेकर जाते हैं: El Dorado integrator का commission हर referral id के हिसाब से तय करता है, इसलिए सबसे ऊँची दर वाली id माँगें, ताकि anonymous उपयोग सबसे ज़्यादा चुकाए, जैसे swaps में।
 - **क्या cache होता है।** market (मुद्राएँ, prices और chain सूची) हर network पर एक मिनट (`ELDORADO_MARKET_TTL_MS`); हर chain की token सूची एक घंटा (`ELDORADO_TOKENS_TTL_MS`; Ethereum की लगभग 1.2 MB है)। बिना price, minimum या भुगतान तरीके वाली मुद्रा बाहर रहती है, और वह chain भी जिसकी token सूची fail हो या खाली आए: यह log होता है और अगली बार फिर माँगा जाता है, और market सिर्फ़ तब 502 है जब chain सूची या हर token सूची fail हो।
+
+### QR से charge करना (payment requests)
+
+Seller स्थानीय मुद्रा की एक राशि QR से charge करता है, और payer उसे उसी marketplace के ज़रिए किसी स्थानीय तरीके से चुकाता है: token marketplace से सीधे seller के अपने address पर जाता है, और Cosmos Pay उसे कभी नहीं रखता। `POST /v1/onramp/p2p/payment-requests` शर्तों को live market के सामने ठीक वैसे ही जाँचता है जैसे किसी खरीद को (मुद्रा, राशि और उसका minimum, chain और token; भुगतान का तरीका payer बाद में चुनता है) और `url` लौटाता है, यानी payer का page (`PAYMENT_LINK_CHECKOUT_URL/fiat/<id>`), और `qr`, उसका एक PNG। Page charge को `GET /v1/payment-links/fiat/{id}` से पढ़ता है और, जब payer कोई तरीका चुन ले, तो `POST /v1/payment-links/fiat/{id}/sessions` ठीक उसी राशि की एक खरीद खोलता है, जो seller को delivered होती है, और उसका `widgetUrl` लौटाता है।
+
+- **payer के routes कोई API key नहीं लेते।** वे `/v1/payment-links/fiat/` के तहत हैं, इसलिए gateway का वही keyless route उन्हें serve करता है जो पहले से `/v1/payment-links/*` serve करता है, और `fiat/` segment उन्हें payment links के अपने `{id}` routes से अलग रखता है। id (एक `cuid()`) ही capability है: जवाब में राशि, description, token, इसी समय के market price पर एक अनुमान और भुगतान के तरीके होते हैं, कभी seller का account या address, record token, sessions या transactions नहीं। Reads का budget हर client address के लिए 60 प्रति मिनट है (`payment-links-fiat:read`) और भुगतान शुरू करने का 10 (`payment-links-fiat:session`); दोनों `Cache-Control: no-store` के साथ जवाब देते हैं।
+- **खरीद seller की है।** यह request के consumer का एक BUY session है, जो उसके `GET /v1/onramp/p2p/sessions` में `paymentRequestId` के साथ दिखता है, और उसके widget में उसी consumer की referral id होती है: साझा public key से बनी request `ELDORADO_PUBLIC_REFERRAL_ID` (सेट होने पर) लेकर जाती है, जैसे उस key के अपने sessions। एक payer एक से ज़्यादा खरीद शुरू कर सकता है; हर एक session है, और जो पहले पूरी होती है वही request का भुगतान करती है।
+- **paid का मतलब है कि marketplace ने ऐसा कहा।** On-chain कुछ नहीं पढ़ा जाता: request `paid` तभी होती है जब marketplace का signed webhook उसके किसी session को `BUY` के रूप में `COMPLETED` बताए, जो request के address, chain और token पर delivered हो (बड़े-छोटे अक्षरों का फ़र्क किए बिना), और कम से कम उसकी स्थानीय मुद्रा वाली राशि के लिए हो (widget buyer को राशि बदलने देता है, और उससे छोटा भुगतान यह charge नहीं है)। `paidAt`, `paidAmount` (delivered token) और `paidTxHash` ऐसी पहली completion दर्ज करते हैं; बाद वाली कुछ नहीं बदलतीं। `expiresAt` के बाद की खुली request `expired` पढ़ी जाती है (कभी store नहीं होती), और expired या cancelled request भी `paid` हो जाती है जब पहले से चल रही कोई खरीद पूरी हो: पैसा पहुँच गया। जब तक webhook register नहीं होता, कोई भी चीज़ request को paid mark नहीं करती, इसलिए wallet को अपना balance भी देखते रहना चाहिए।
+- **Webhook।** `POST /v1/onramp/p2p/webhooks` `@Public()` है और fiat partner वाले की तरह OpenAPI contract से बाहर रखा गया है। एक delivery तभी स्वीकार होती है जब `x-webhook-hash` raw body का `sha256` हो (lowercase hex) और `x-webhook-signature` उस hex पर किसी एक network के JWKS की key से बना base64 RSA-SHA256 signature हो (`ELDORADO_WEBHOOK_JWKS_URL_MAINNET` / `ELDORADO_WEBHOOK_JWKS_URL_TESTNET`, default रूप से marketplace के अपने); जो key उसे verify करती है वही तय करती है कि वह किस network के sessions बदल सकती है। बाकी सब `401 webhook_signature_invalid` है, और जो key set पढ़ा न जा सके वह `503` है, ताकि marketplace delivery फिर से भेजे। Keys memory में रखी जाती हैं और जब कोई delivery verify नहीं होती तो हर network पर अधिकतम एक मिनट में एक बार फिर पढ़ी जाती हैं। जो verified delivery किसी session का नाम नहीं लेती, वह log होती है और उसे `200` जवाब मिलता है। हर write conditional है: session को `COMPLETED` एक बार मिल जाए तो वह उसे बनाए रखता है, और request एक ही बार paid होती है। Sessions marketplace का आख़िरी order status `status` के रूप में लौटाते हैं।
+- **Operator के steps।** Marketplace webhook को हर Client ID के लिए register करता है, उसी address पर email से जो integrator ids देता है: उसे Client ID और URL `https://api.cosmospay.lat/cosmos-api/v1/onramp/p2p/webhooks` भेजें (gateway का public prefix, फिर `/v1/onramp/p2p/webhooks`)। Gateway को ठीक `POST /v1/onramp/p2p/webhooks` के लिए एक keyless route चाहिए जो body को बिना बदले आगे भेजे; payer के routes को कुछ नया नहीं चाहिए।
+- **इस version में नहीं:** request के paid होने पर बाहर जाने वाला webhook event, requests का dashboard view, और दोबारा इस्तेमाल होने वाले QR जिनमें payer राशि खुद टाइप करता है।
 
 ## Plugins — एक slug के तहत extensions
 
@@ -2450,7 +2475,7 @@ seal होती हैं और कभी लौटाई नहीं जा
 | ---- | ------------ |
 | `blindpay` | KYC, onramp, offramp, BlindPay webhook, उसके `/v1/admin` routes (`receivers`, `payins`, `payouts`) और admin summary का `fiat` अनुभाग |
 | `defindex` | `/v1/defindex` — Stellar पर DeFindex vaults |
-| `eldorado` | `/v1/onramp/p2p` और `/v1/offramp/p2p`: El Dorado के P2P marketplace की सूची वाली हर chain पर tokens, स्थानीय मुद्रा से खरीदे और उसके बदले बेचे गए |
+| `eldorado` | `/v1/onramp/p2p` और `/v1/offramp/p2p`: El Dorado के P2P marketplace की सूची वाली हर chain पर tokens, स्थानीय मुद्रा से खरीदे और उसके बदले बेचे गए; QR से charges, जिनका भुगतान बिना key वाले `/v1/payment-links/fiat/{id}` से होता है; marketplace का order webhook |
 | `trustless-work` | `/v1/protected-payments`, बिना key वाले `/v1/protected-payment-links` और `/v1/admin/protected-payments`: Trustless Work (Stellar) पर सुरक्षित भुगतान |
 
 - **सूची में नहीं, तो मौजूद नहीं।** जिस native plugin का नाम `PLUGINS_ENABLED` में नहीं
@@ -2482,6 +2507,16 @@ seal होती हैं और कभी लौटाई नहीं जा
   plugins का अकेला route group हैं जो कोई API key नहीं लेता।
 
 ## अपग्रेड — breaking changes और deploy नोट्स
+
+### P2P on-ramp: स्थानीय मुद्रा में QR से charges, और marketplace का order webhook
+
+- **Migration `20261112120000_p2p_payment_requests`** `p2p_payment_request` table बनाता है और `p2p_ramp_session` में nullable columns जोड़ता है (`paymentRequestId`, `providerOrderId`, `providerStatus`, `deliveredAmount`, `txHash`, `completedAt`); कुछ भी rewrite नहीं होता। नया build serve करने से पहले `migrate deploy` चलाएँ।
+- **नए routes** (`eldorado` plugin): `POST` और `GET /v1/onramp/p2p/payment-requests`, `GET /v1/onramp/p2p/payment-requests/{id}`, `POST /v1/onramp/p2p/payment-requests/{id}/cancel`, बिना key वाले `GET /v1/payment-links/fiat/{id}` और `POST /v1/payment-links/fiat/{id}/sessions`, और `POST /v1/onramp/p2p/webhooks`। नए error codes: `request_closed` (409) और `webhook_signature_invalid` (401)।
+- **Sessions में दो nullable fields जुड़ते हैं** (additive): `status`, order के लिए marketplace का आख़िरी status, और `paymentRequestId`।
+- **Gateway:** ठीक `POST /v1/onramp/p2p/webhooks` के लिए एक keyless route जोड़ें। `/v1/payment-links/*` पहले से keyless है; उसके CORS plugin को `POST` की अनुमति देनी होगी, जैसे वह payment links के अपने routes के लिए देता है।
+- **Webhook register करें:** marketplace के साथ email से, Client ID के साथ: `https://api.cosmospay.lat/cosmos-api/v1/onramp/p2p/webhooks`। तब तक कोई request paid mark नहीं होती।
+- **वैकल्पिक variables** `ELDORADO_WEBHOOK_JWKS_URL_MAINNET` और `ELDORADO_WEBHOOK_JWKS_URL_TESTNET` (default: marketplace का अपना JWKS)।
+- **नए budgets:** `onramp-p2p:payment-request` (प्रति consumer और client address, 20 प्रति मिनट), `payment-links-fiat:read` (60) और `payment-links-fiat:session` (10) प्रति client address।
 
 ### Swaps, liquidity, निजी भुगतान, cross-chain swaps और USDT0: id से पढ़ा गया एक record key के network का पालन करता है
 
@@ -3615,6 +3650,8 @@ type दोबारा बनाए बिना enum value drop नहीं �
 | `ELDORADO_REFERRAL_ID` | नहीं | कोई नहीं | वह ReferralID जो `ELDORADO_CLIENT_ID` के साथ आता है |
 | `ELDORADO_PUBLIC_REFERRAL_ID` | नहीं | कोई नहीं | वह ReferralID जो साझा public key के quotes और sessions `ELDORADO_REFERRAL_ID` की जगह लेकर जाते हैं; El Dorado से सबसे ऊँचे commission वाली id माँगें। खाली: public key `ELDORADO_REFERRAL_ID` इस्तेमाल करती है |
 | `ELDORADO_TIMEOUT_MS` | नहीं | `10000` | P2P marketplace को एक call का budget (ms) |
+| `ELDORADO_WEBHOOK_JWKS_URL_MAINNET` | नहीं | `https://api.eldorado.io/api/.well-known/jwks.json` | वह जगह जहाँ P2P marketplace उन keys को publish करता है जिनसे उसके mainnet order webhooks signed होते हैं (`POST /v1/onramp/p2p/webhooks`) |
+| `ELDORADO_WEBHOOK_JWKS_URL_TESTNET` | नहीं | `https://api-testnet.eldorado.io/api/.well-known/jwks.json` | sandbox के लिए वही |
 | `TRUSTLESS_WORK_API_KEY_TESTNET` | testnet पर सुरक्षित भुगतान के लिए | — | testnet के लिए Trustless Work की API key (`dev` keys)। Routes केवल `PLUGINS_ENABLED` में `trustless-work` होने पर मौजूद हैं; key के बिना वे testnet पर `503 misconfigured` लौटाते हैं। `TRUSTLESS_WORK_PLATFORM_SECRET_TESTNET` भी ज़रूरी है |
 | `TRUSTLESS_WORK_BASE_URL_TESTNET` | नहीं | `https://dev.api.trustlesswork.com` | testnet के लिए Trustless Work की V1 API |
 | `TRUSTLESS_WORK_PLATFORM_SECRET_TESTNET` | API key के साथ | — | Cosmos Pay का platform account (S...): deploys और platform के disputes sign करता है, उनका XLM चुकाता है और platform fee प्राप्त करता है। USDC को trust करना ज़रूरी है। एक hot key: इसकी fees sweep करें |

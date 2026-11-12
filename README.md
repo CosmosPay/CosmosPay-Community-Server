@@ -158,7 +158,7 @@ regenerated from the controllers and DTOs on every CI run
 | Area              | Base path                | What it does                                             |
 | ----------------- | ------------------------ | -------------------------------------------------------- |
 | Payment intents   | `/v1/payment-intents`    | `pay` intents on Stellar (SEP-7), Solana (Solana Pay) and Monad (EIP-681), SEP-7 `tx`, validation, on-chain observer |
-| Payment links     | `/v1/payment-links`      | One payment intent as its payer sees it, for hosted checkout pages — no API key (`@Public`) |
+| Payment links     | `/v1/payment-links`      | One payment intent as its payer sees it, for hosted checkout pages, and a P2P charge in local money (`/fiat/{id}`) — no API key (`@Public`) |
 | Swaps             | `/v1/swaps`              | Path-payment quote, build unsigned XDR, submit signed · Solana via Jupiter, Monad via Kuru Flow |
 | Cross-chain swaps | `/v1/cross-chain-swaps` | Across 35 networks through NEAR Intents (Stellar, Solana, Monad, EVM chains, Bitcoin and the UTXO coins, ...): quote, deposit address, status |
 | USDT0             | `/v1/usdt0`              | USDT0 from Stellar to 21 EVM networks through LayerZero (native USDT on Ethereum), mainnet only: quote, build, submit, status |
@@ -168,7 +168,7 @@ regenerated from the controllers and DTOs on every CI run
 | Webhooks          | `/v1/webhooks`           | Endpoint CRUD, secret rotation, deliveries, redelivery    |
 | KYC               | `/v1/kyc`                | Receivers (KYC/KYB), wallets, bank accounts, doc upload   |
 | Onramp            | `/v1/onramp`             | Payin quotes, payins, virtual accounts                    |
-| P2P on-ramp | `/v1/onramp/p2p` | Local money to any token on the chains the marketplace lists, through P2P sellers: market, tokens, firm quote, purchase sessions |
+| P2P on-ramp | `/v1/onramp/p2p` | Local money to any token on the chains the marketplace lists, through P2P sellers: market, tokens, firm quote, purchase sessions, charges with a QR (payment requests) |
 | Offramp           | `/v1/offramp`            | Payout quotes, authorize, payouts (client-signed)         |
 | P2P off-ramp | `/v1/offramp/p2p` | Any listed token to local money through P2P buyers: market, tokens, firm quote, sale sessions |
 | Products          | `/v1/products`           | Merchant catalogue                                        |
@@ -297,11 +297,16 @@ Paths use the OpenAPI `{param}` form.
 | POST | `/v1/offramp/payouts/{id}/documents` | `offramp:write` |  |
 | POST | `/v1/offramp/quotes` | `offramp:write` |  |
 | GET | `/v1/onramp/p2p/market` | `onramp:read` | ✓ |
+| GET | `/v1/onramp/p2p/payment-requests` | `onramp:read` |  |
+| POST | `/v1/onramp/p2p/payment-requests` | `onramp:write` | ✓ |
+| GET | `/v1/onramp/p2p/payment-requests/{id}` | `onramp:read` | ✓ |
+| POST | `/v1/onramp/p2p/payment-requests/{id}/cancel` | `onramp:write` | ✓ |
 | POST | `/v1/onramp/p2p/quotes` | `onramp:write` | ✓ |
 | GET | `/v1/onramp/p2p/sessions` | `onramp:read` |  |
 | POST | `/v1/onramp/p2p/sessions` | `onramp:write` | ✓ |
 | GET | `/v1/onramp/p2p/sessions/{id}` | `onramp:read` | ✓ |
 | GET | `/v1/onramp/p2p/tokens` | `onramp:read` | ✓ |
+| POST | `/v1/onramp/p2p/webhooks` | none: `@Public()`, signed by the P2P marketplace; not in the OpenAPI contract |  |
 | GET | `/v1/onramp/payins` | `onramp:read` |  |
 | POST | `/v1/onramp/payins` | `onramp:write` |  |
 | GET | `/v1/onramp/payins/{id}` | `onramp:read` |  |
@@ -322,6 +327,8 @@ Paths use the OpenAPI `{param}` form.
 | POST | `/v1/payment-links/{id}/events` | none: `@Public()`, budgeted per client address |  |
 | GET | `/v1/payment-links/{id}/solana-pay` | none: `@Public()`, budgeted per client address |  |
 | POST | `/v1/payment-links/{id}/solana-pay` | none: `@Public()`, budgeted per client address |  |
+| GET | `/v1/payment-links/fiat/{id}` | none: `@Public()`, budgeted per client address |  |
+| POST | `/v1/payment-links/fiat/{id}/sessions` | none: `@Public()`, budgeted per client address |  |
 | GET | `/v1/plugins` | `plugins:read` |  |
 | GET | `/v1/plugins/{slug}` | `plugins:read` |  |
 | PUT | `/v1/plugins/{slug}/installation` | `plugins:write` |  |
@@ -2225,6 +2232,13 @@ A buyer pays local money (a bank transfer in Argentina, PIX, Nequi, Yape, Zelle 
 | GET | `/v1/onramp/p2p/sessions` | `onramp:read` | The consumer's sessions on the key's network |
 | POST | `/v1/onramp/p2p/sessions` | `onramp:write` | Record an order and answer its `widgetUrl` |
 | GET | `/v1/onramp/p2p/sessions/{id}` | `onramp:read` | One of them |
+| POST | `/v1/onramp/p2p/payment-requests` | `onramp:write` | A charge in local money shown as a QR, paid to your own address (the shared public key may create one) |
+| GET | `/v1/onramp/p2p/payment-requests` | `onramp:read` | The consumer's charges on the key's network |
+| GET | `/v1/onramp/p2p/payment-requests/{id}` | `onramp:read` | One of them, and whether it was paid |
+| POST | `/v1/onramp/p2p/payment-requests/{id}/cancel` | `onramp:write` | Stop an open charge from being paid |
+| GET | `/v1/payment-links/fiat/{id}` | none (`@Public()`) | The payer's view of a charge: amount, live estimate, payment methods |
+| POST | `/v1/payment-links/fiat/{id}/sessions` | none (`@Public()`) | The payer starts paying: a purchase of the exact amount, delivered to the seller |
+| POST | `/v1/onramp/p2p/webhooks` | none (`@Public()`, signed) | The marketplace's order updates |
 | GET | `/v1/offramp/p2p/market` | `offramp:read` | Currencies, payment methods, sell price and minimum (in USD), the chains and the token a form starts from (the shared public key may read it) |
 | GET | `/v1/offramp/p2p/tokens` | `offramp:read` | The same token lists, for a sale (the shared public key may read it) |
 | POST | `/v1/offramp/p2p/quotes` | `offramp:write` | A firm quote for a sale, fees and the swap included; needs the integrator ids |
@@ -2241,6 +2255,17 @@ A buyer pays local money (a bank transfer in Argentina, PIX, Nequi, Yape, Zelle 
 - **The integrator ids are optional, except for the firm quote.** `ELDORADO_CLIENT_ID` and `ELDORADO_REFERRAL_ID` are what El Dorado issues to an integrator (api@eldorado.io). Without them the market and the sessions work and the widget quotes before payment; with them `POST /v1/onramp/p2p/quotes` and `POST /v1/offramp/p2p/quotes` answer, and each session's widget carries the ids, which attribute the order to Cosmos Pay.
 - **Wallets without an account buy and sell too.** The shared public key may quote, open a session and read that one session back with its `publicToken` in `X-Record-Token`; it never lists sessions, since every anonymous wallet is that one consumer. Its quotes and sessions carry `ELDORADO_PUBLIC_REFERRAL_ID` instead of `ELDORADO_REFERRAL_ID` when it is set: El Dorado sets the integrator commission per referral id, so ask for one at the highest rate and anonymous use pays the most, as with swaps.
 - **What is cached.** The market (currencies, prices and the chain list) for a minute per network (`ELDORADO_MARKET_TTL_MS`); each chain's token list for an hour (`ELDORADO_TOKENS_TTL_MS`; Ethereum's is about 1.2 MB). A currency without a price, a minimum or a payment method is left out, and so is a chain whose token list fails or comes back empty: it is logged and asked again on the next read, and the market is a 502 only when the chain list or every token list fails.
+
+### Charging with a QR (payment requests)
+
+A seller charges an amount of local money with a QR, and the payer pays it with a local method through the same marketplace: the token goes from the marketplace straight to the seller's own address, and Cosmos Pay never holds it. `POST /v1/onramp/p2p/payment-requests` checks the terms against the live market exactly as a purchase is checked (currency, amount and its minimum, chain and token; the payer picks the payment method later) and answers `url`, the payer's page (`PAYMENT_LINK_CHECKOUT_URL/fiat/<id>`), and `qr`, a PNG of it. The page reads the charge with `GET /v1/payment-links/fiat/{id}` and, once the payer picks a method, `POST /v1/payment-links/fiat/{id}/sessions` opens a purchase of the exact amount, delivered to the seller, and answers its `widgetUrl`.
+
+- **The payer's routes take no API key.** They live under `/v1/payment-links/fiat/`, so the keyless gateway route that already serves `/v1/payment-links/*` serves them, and the `fiat/` segment keeps them apart from the payment links' own `{id}` routes. The id (a `cuid()`) is the capability: the answer is the amount, the description, the token, an estimate at the market price right now and the payment methods, never the seller's account or address, the record token, the sessions or the transactions. Reads are budgeted at 60 a minute per client address (`payment-links-fiat:read`) and starting to pay at 10 (`payment-links-fiat:session`); both answer `Cache-Control: no-store`.
+- **The purchase belongs to the seller.** It is a BUY session of the request's consumer, listed in their `GET /v1/onramp/p2p/sessions` with `paymentRequestId`, and its widget carries their referral id: a request created with the shared public key carries `ELDORADO_PUBLIC_REFERRAL_ID` (when it is set), as that key's own sessions do. A payer may start more than one purchase; each is a session, and the first to complete pays the request.
+- **Paid means the marketplace said so.** Nothing on-chain is read: a request turns `paid` only when the marketplace's signed webhook reports one of its sessions `COMPLETED` as a `BUY`, delivered to the request's address, chain and token (in any case), for at least its amount of local money (the widget lets a buyer change the amount, and a smaller payment is not this charge). `paidAt`, `paidAmount` (the token delivered) and `paidTxHash` record the first such completion; later ones change nothing. An open request past `expiresAt` reads `expired` (never stored), and an expired or cancelled request still turns `paid` when a purchase already under way completes: the money arrived. Until the webhook is registered nothing marks a request paid, so a wallet should also watch its own balance.
+- **The webhook.** `POST /v1/onramp/p2p/webhooks` is `@Public()` and kept out of the OpenAPI contract, like the fiat partner's. A delivery is accepted only when `x-webhook-hash` is the `sha256` of the raw body (lowercase hex) and `x-webhook-signature` is a base64 RSA-SHA256 signature of that hex by a key of one network's JWKS (`ELDORADO_WEBHOOK_JWKS_URL_MAINNET` / `ELDORADO_WEBHOOK_JWKS_URL_TESTNET`, the marketplace's own by default); the key that verifies it decides which network's sessions it may change. Anything else is `401 webhook_signature_invalid`, and a key set that cannot be read is `503`, so the marketplace sends the delivery again. The keys are kept in memory and read again at most once a minute per network when a delivery does not verify. A verified delivery that names no session is logged and answered `200`. Every write is conditional: a session keeps `COMPLETED` once it has it, and a request is paid once. Sessions answer the marketplace's last order status as `status`.
+- **Operator steps.** The marketplace registers the webhook per Client ID, by email to the same address that issues the integrator ids: send it the Client ID and the URL `https://api.cosmospay.lat/cosmos-api/v1/onramp/p2p/webhooks` (the gateway's public prefix, then `/v1/onramp/p2p/webhooks`). The gateway needs a keyless route for exactly `POST /v1/onramp/p2p/webhooks` that passes the body through unchanged; the payer's routes need nothing new.
+- **Not in this version:** an outbound webhook event when a request is paid, a dashboard view of the requests, and reusable QRs where the payer types the amount.
 
 ## Plugins — extensions under a slug
 
@@ -2461,7 +2486,7 @@ the service under `src/native-plugins/<slug>/`, switched on by the same
 | ---- | -------------- |
 | `blindpay` | KYC, onramp, offramp, the BlindPay webhook, its `/v1/admin` routes (`receivers`, `payins`, `payouts`) and the `fiat` section of the admin summary |
 | `defindex` | `/v1/defindex` — DeFindex vaults on Stellar |
-| `eldorado` | `/v1/onramp/p2p` and `/v1/offramp/p2p`: tokens on every chain El Dorado's P2P marketplace lists, bought and sold for local money |
+| `eldorado` | `/v1/onramp/p2p` and `/v1/offramp/p2p`: tokens on every chain El Dorado's P2P marketplace lists, bought and sold for local money; charges with a QR, paid through the keyless `/v1/payment-links/fiat/{id}`; the marketplace's order webhook |
 | `trustless-work` | `/v1/protected-payments`, the keyless `/v1/protected-payment-links` and `/v1/admin/protected-payments`: protected payments on Trustless Work (Stellar) |
 
 - **Not listed, not there.** A native plugin `PLUGINS_ENABLED` does not name is
@@ -2494,6 +2519,16 @@ the service under `src/native-plugins/<slug>/`, switched on by the same
   are the one native plugin route group that takes no API key.
 
 ## Upgrading — breaking changes and deploy notes
+
+### P2P on-ramp: charges with a QR in local money, and the marketplace's order webhook
+
+- **Migration `20261112120000_p2p_payment_requests`** creates the `p2p_payment_request` table and adds nullable columns to `p2p_ramp_session` (`paymentRequestId`, `providerOrderId`, `providerStatus`, `deliveredAmount`, `txHash`, `completedAt`); nothing is rewritten. Run `migrate deploy` before the new build serves.
+- **New routes** (the `eldorado` plugin): `POST` and `GET /v1/onramp/p2p/payment-requests`, `GET /v1/onramp/p2p/payment-requests/{id}`, `POST /v1/onramp/p2p/payment-requests/{id}/cancel`, the keyless `GET /v1/payment-links/fiat/{id}` and `POST /v1/payment-links/fiat/{id}/sessions`, and `POST /v1/onramp/p2p/webhooks`. New error codes: `request_closed` (409) and `webhook_signature_invalid` (401).
+- **Sessions gain two nullable fields** (additive): `status`, the marketplace's last status for the order, and `paymentRequestId`.
+- **Gateway:** add a keyless route for exactly `POST /v1/onramp/p2p/webhooks`. `/v1/payment-links/*` is keyless already; its CORS plugin must allow `POST`, as it does for the payment links' own routes.
+- **Register the webhook** with the marketplace by email, with the Client ID: `https://api.cosmospay.lat/cosmos-api/v1/onramp/p2p/webhooks`. Until then no request is marked paid.
+- **Optional variables** `ELDORADO_WEBHOOK_JWKS_URL_MAINNET` and `ELDORADO_WEBHOOK_JWKS_URL_TESTNET` (default: the marketplace's own JWKS).
+- **New budgets:** `onramp-p2p:payment-request` (20 a minute per consumer and client address), `payment-links-fiat:read` (60) and `payment-links-fiat:session` (10) per client address.
 
 ### Swaps, liquidity, private payments, cross-chain swaps and USDT0: one record by its id follows the key's network
 
@@ -3640,6 +3675,8 @@ at least `DATABASE_URL` and `APISIX_GATEWAY_SECRET`.
 | `ELDORADO_REFERRAL_ID` | no | none | The ReferralID that goes with `ELDORADO_CLIENT_ID` |
 | `ELDORADO_PUBLIC_REFERRAL_ID` | no | none | The ReferralID the shared public key's quotes and sessions carry instead of `ELDORADO_REFERRAL_ID`; ask El Dorado for one at the highest commission. Empty: the public key uses `ELDORADO_REFERRAL_ID` |
 | `ELDORADO_TIMEOUT_MS` | no | `10000` | Budget for one call to the P2P marketplace (ms) |
+| `ELDORADO_WEBHOOK_JWKS_URL_MAINNET` | no | `https://api.eldorado.io/api/.well-known/jwks.json` | Where the P2P marketplace publishes the keys its mainnet order webhooks are signed with (`POST /v1/onramp/p2p/webhooks`) |
+| `ELDORADO_WEBHOOK_JWKS_URL_TESTNET` | no | `https://api-testnet.eldorado.io/api/.well-known/jwks.json` | The same for the sandbox |
 | `TRUSTLESS_WORK_API_KEY_TESTNET` | for protected payments on testnet | — | Trustless Work's API key for testnet (`dev` keys). The routes exist only with `trustless-work` in `PLUGINS_ENABLED`; without the key they answer `503 misconfigured` on testnet. Requires `TRUSTLESS_WORK_PLATFORM_SECRET_TESTNET` |
 | `TRUSTLESS_WORK_BASE_URL_TESTNET` | no | `https://dev.api.trustlesswork.com` | Trustless Work's V1 API for testnet |
 | `TRUSTLESS_WORK_PLATFORM_SECRET_TESTNET` | with the API key | — | Cosmos Pay's platform account (S...): signs deploys and platform disputes, pays their XLM and receives the platform fee. Must trust USDC. A hot key: sweep its fees |

@@ -4,6 +4,7 @@ import {
   DEFAULT_DEFINDEX_MAX_FEE_STROOPS,
   DEFAULT_DEFINDEX_TIMEOUT_MS,
   DEFAULT_ELDORADO_TIMEOUT_MS,
+  DEFAULT_ELDORADO_WEBHOOK_JWKS_URL,
   DEFAULT_ENV_FILE,
   DEFAULT_CHAIN_RPC_TIMEOUT_MS,
   DEFAULT_CROSS_CHAIN_DEADLINE_SECONDS,
@@ -472,12 +473,15 @@ export interface AppConfig {
    * set, replaces `referralId` for the shared public key's quotes and orders:
    * the marketplace sets the integrator's commission per referral id, so the
    * one the public key carries is where anonymous use is priced.
+   * `webhookJwksUrls` is where each network's marketplace publishes the keys
+   * its order webhooks are signed with (`POST /v1/onramp/p2p/webhooks`).
    */
   eldorado: {
     clientId: string;
     referralId: string;
     publicReferralId: string;
     timeoutMs: number;
+    webhookJwksUrls: Record<StellarNetwork, string>;
   };
   /** The `trustless-work` native plugin: protected payments on Trustless Work V1. */
   trustlessWork: {
@@ -1181,6 +1185,14 @@ export default (): AppConfig => ({
       process.env.ELDORADO_TIMEOUT_MS ?? String(DEFAULT_ELDORADO_TIMEOUT_MS),
       10,
     ),
+    webhookJwksUrls: {
+      public:
+        process.env.ELDORADO_WEBHOOK_JWKS_URL_MAINNET?.trim() ||
+        DEFAULT_ELDORADO_WEBHOOK_JWKS_URL.public,
+      testnet:
+        process.env.ELDORADO_WEBHOOK_JWKS_URL_TESTNET?.trim() ||
+        DEFAULT_ELDORADO_WEBHOOK_JWKS_URL.testnet,
+    },
   },
   trustlessWork: {
     networks: {

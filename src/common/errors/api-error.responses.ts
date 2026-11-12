@@ -576,6 +576,21 @@ export const API_ERROR_CASES: Readonly<Record<ApiErrorCode, ApiErrorCase>> = {
     path: '/v1/protected-payment-links/3f1c2b7e-8d4a-4c1e-9b2f-6a5d4c3b2a10/dispute',
   },
 
+  // --- P2P payment requests (native plugin `eldorado`) ---------------------
+  [ApiErrorCode.RequestClosed]: {
+    statuses: [409],
+    summary: 'The payment request was paid, cancelled or expired',
+    message:
+      'Payment request cmh4x2k9a0001l70g8v5q3z2w is expired: it can no longer be paid',
+    path: '/v1/payment-links/fiat/cmh4x2k9a0001l70g8v5q3z2w/sessions',
+  },
+  [ApiErrorCode.WebhookSignatureInvalid]: {
+    statuses: [401],
+    summary: 'The webhook body hash or signature does not verify',
+    message: 'Invalid webhook signature',
+    path: '/v1/onramp/p2p/webhooks',
+  },
+
   // --- service --------------------------------------------------------------
   [ApiErrorCode.Misconfigured]: {
     statuses: [503],
