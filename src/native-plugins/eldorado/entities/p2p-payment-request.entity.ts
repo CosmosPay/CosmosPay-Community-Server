@@ -2,6 +2,7 @@ import { ApiProperty, ApiSchema } from '@nestjs/swagger';
 import { ApiPublicTokenProperty } from '@/common/decorators/api-record-token.decorator';
 import { P2P_PAYMENT_REQUEST_STATUSES } from '@/native-plugins/eldorado/p2p-payment-request';
 import { P2pPaymentMethodEntity } from '@/native-plugins/eldorado/entities/p2p-ramp.entity';
+import { PAYMENT_REQUEST_METHODS } from '@/payment-request-rails/payment-request-rails';
 
 const ID = 'cmh4x2k9a0001l70g8v5q3z2w';
 
@@ -23,7 +24,7 @@ export class P2pPaymentRequestEntity {
     example: 'open',
     enum: P2P_PAYMENT_REQUEST_STATUSES,
     description:
-      '`open` until it is paid (`paid`), cancelled (`cancelled`) or past `expiresAt` (`expired`). An expired or cancelled request still turns `paid` when a purchase already under way completes.',
+      '`open` until it is paid (`paid`), cancelled (`cancelled`) or past `expiresAt` (`expired`). `processing` once a bank transfer for it arrived and the token is on its way to `address`: it never reads as expired and cannot be cancelled. An expired or cancelled request still turns `paid` when a payment already under way completes.',
   })
   status!: string;
 
@@ -83,6 +84,15 @@ export class P2pPaymentRequestEntity {
   estimatedAmountOut!: string | null;
 
   @ApiProperty({
+    example: ['transfer', 'p2p'],
+    enum: PAYMENT_REQUEST_METHODS,
+    isArray: true,
+    description:
+      'How the payer can pay it right now, in the order the page offers them: `transfer` (a bank transfer from an account in the payer’s own name; ARS only) and `p2p` (other payment methods, in a hosted window). Decided when the request is created and checked again on every read.',
+  })
+  methods!: string[];
+
+  @ApiProperty({
     example: `https://payments.cosmospay.lat/fiat/${ID}`,
     description:
       'The payer’s page: show it, or its QR. The payer picks how to pay there and pays in a hosted window.',
@@ -112,7 +122,7 @@ export class P2pPaymentRequestEntity {
     type: String,
     nullable: true,
     description:
-      'When this service learned a purchase completed it; null until then.',
+      'When this service learned a payment completed it; null until then.',
   })
   paidAt!: string | null;
 
@@ -121,7 +131,7 @@ export class P2pPaymentRequestEntity {
     type: String,
     nullable: true,
     description:
-      'The token delivered by the purchase that paid it, a decimal string; null until paid.',
+      'The token delivered by the payment that paid it, a decimal string; null until paid.',
   })
   paidAmount!: string | null;
 
@@ -130,9 +140,19 @@ export class P2pPaymentRequestEntity {
     type: String,
     nullable: true,
     description:
-      'The transaction that delivered it on `chainId`; null until paid (or when the marketplace reported none).',
+      'The transaction that delivered it on `chainId`; null until paid (or when the payment reported none).',
   })
   paidTxHash!: string | null;
+
+  @ApiProperty({
+    example: null,
+    type: String,
+    nullable: true,
+    enum: PAYMENT_REQUEST_METHODS,
+    description:
+      'How it was paid: `transfer` (a bank transfer) or `p2p` (another payment method); null until paid.',
+  })
+  paidMethod!: string | null;
 }
 
 /** What creating a payment request answers: the request and, for the shared public key, its read token. */
@@ -193,7 +213,7 @@ export class PublicP2pPaymentRequestEntity {
     example: 'open',
     enum: P2P_PAYMENT_REQUEST_STATUSES,
     description:
-      '`open` while it can be paid; `paid`, `expired` or `cancelled` once it cannot. Poll it while the payment window is open.',
+      '`open` while it can be paid; `processing` once a bank transfer arrived and the token is on its way to the seller; `paid`, `expired` or `cancelled` once it cannot be paid. Poll it while the payer waits.',
   })
   status!: string;
 
@@ -244,9 +264,18 @@ export class PublicP2pPaymentRequestEntity {
   @ApiProperty({
     type: [P2pPaymentMethodEntity],
     description:
-      'How the amount can be paid right now; empty when the market cannot be read.',
+      'The local methods the hosted window (`p2p`) can take right now; empty when the market cannot be read.',
   })
   paymentMethods!: P2pPaymentMethodEntity[];
+
+  @ApiProperty({
+    example: ['transfer', 'p2p'],
+    enum: PAYMENT_REQUEST_METHODS,
+    isArray: true,
+    description:
+      'How it can be paid right now, in the order to offer them: `transfer` (`POST /v1/payment-links/fiat/{id}/transfers` answers the bank transfer instructions) and `p2p` (`POST /v1/payment-links/fiat/{id}/sessions` opens the hosted window). Empty when nothing can pay it now.',
+  })
+  methods!: string[];
 
   @ApiProperty({
     example: '2026-11-13T12:00:00.000Z',

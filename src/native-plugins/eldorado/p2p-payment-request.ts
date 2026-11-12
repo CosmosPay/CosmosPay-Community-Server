@@ -5,14 +5,22 @@ import type {
   P2pToken,
 } from '@/native-plugins/eldorado/p2p-market';
 import { estimateAmountOut } from '@/native-plugins/eldorado/p2p-market';
+import {
+  PAYMENT_REQUEST_METHODS,
+  type PaymentRequestMethod,
+} from '@/payment-request-rails/payment-request-rails';
 
 /**
  * Payment requests (charges in local money shown as a QR): the pure rules over
  * a row, with no Nest and no I/O, so a spec calls them on plain objects.
  */
 
-/** What a payment request reads as. `expired` is derived, never stored. */
-export type P2pPaymentRequestStatus = 'open' | 'paid' | 'expired' | 'cancelled';
+/**
+ * What a payment request reads as. `expired` is derived, never stored;
+ * `processing` is stored: a bank transfer arrived and the token is on its way.
+ */
+export type P2pPaymentRequestStatus =
+  'open' | 'processing' | 'paid' | 'expired' | 'cancelled';
 
 /** What the `status` column holds. */
 export type StoredP2pPaymentRequestStatus = Exclude<
@@ -22,13 +30,14 @@ export type StoredP2pPaymentRequestStatus = Exclude<
 
 /** Every status a request reads as, in the order the contract lists them. */
 export const P2P_PAYMENT_REQUEST_STATUSES: readonly P2pPaymentRequestStatus[] =
-  ['open', 'paid', 'expired', 'cancelled'];
+  ['open', 'processing', 'paid', 'expired', 'cancelled'];
 
 /** The stored values, each read as itself (an open one may read as expired). */
 const STORED_STATUSES: Readonly<
   Record<StoredP2pPaymentRequestStatus, P2pPaymentRequestStatus>
 > = {
   open: 'open',
+  processing: 'processing',
   paid: 'paid',
   cancelled: 'cancelled',
 };
@@ -36,8 +45,9 @@ const STORED_STATUSES: Readonly<
 /**
  * What a request reads as at `now`: its stored status, except an open one past
  * `expiresAt`, which reads as expired (and is never written as such: the
- * webhook may still mark it paid, because the money arrived). A value the
- * column should never hold is a corrupt row: an error, not a guess.
+ * webhook may still mark it paid, because the money arrived). A `processing`
+ * one never expires: the money is in, only the token is still on its way. A
+ * value the column should never hold is a corrupt row: an error, not a guess.
  */
 export function effectiveStatus(
   row: { id: string; status: string; expiresAt: Date },
@@ -72,6 +82,8 @@ export const P2P_PAYMENT_REQUEST_PAYER_SELECT = {
   chainId: true,
   token: true,
   tokenAddress: true,
+  tokenDecimals: true,
+  methods: true,
   expiresAt: true,
   createdAt: true,
   paidAt: true,
@@ -88,6 +100,9 @@ export interface PayerRow {
   chainId: number;
   token: string;
   tokenAddress: string;
+  tokenDecimals: number;
+  /** The methods stored at creation (see {@link storedMethods}). */
+  methods: string[];
   expiresAt: Date;
   createdAt: Date;
   paidAt: Date | null;
@@ -112,6 +127,7 @@ export interface PublicP2pPaymentRequest {
   tokenAddress: string;
   estimatedAmountOut: string | null;
   paymentMethods: P2pPaymentMethod[];
+  methods: PaymentRequestMethod[];
   expiresAt: string;
   createdAt: string;
   paidAt: string | null;
@@ -123,10 +139,12 @@ export interface PublicP2pPaymentRequest {
  * seller's address and the payment), it answers exactly these fields. The
  * estimate and the payment methods come from the live market (`live`), so they
  * follow the price while the page is open; both are empty when it cannot be read.
+ * `methods` (the rails that can pay it now) is the caller's to compute.
  */
 export function toPublicPaymentRequest(
   row: PayerRow,
   live: LiveBuyTerms,
+  methods: PaymentRequestMethod[],
   now: Date,
 ): PublicP2pPaymentRequest {
   return {
@@ -151,8 +169,37 @@ export function toPublicPaymentRequest(
     paymentMethods: live.currency
       ? live.currency.paymentMethods.map((m) => ({ id: m.id, name: m.name }))
       : [],
+    methods,
     expiresAt: row.expiresAt.toISOString(),
     createdAt: row.createdAt.toISOString(),
     paidAt: row.paidAt ? row.paidAt.toISOString() : null,
   };
+}
+
+/**
+ * The methods a row stored at creation, in {@link PAYMENT_REQUEST_METHODS}
+ * order, unknown values dropped: what a read falls back to for a rail it
+ * cannot ask right now.
+ */
+export function storedMethods(
+  stored: readonly string[],
+): PaymentRequestMethod[] {
+  return PAYMENT_REQUEST_METHODS.filter((method) => stored.includes(method));
+}
+
+/**
+ * Whether the market, as read right now, takes a payment of the request's
+ * terms: it buys the currency at no less than the request's amount, and lists
+ * the token on its chain. Null when the market could not be read.
+ */
+export function p2pTakes(
+  amount: string,
+  live: LiveBuyTerms | null,
+): boolean | null {
+  if (!live) return null;
+  return Boolean(
+    live.currency &&
+    live.token &&
+    Number(amount) >= Number(live.currency.minAmount),
+  );
 }

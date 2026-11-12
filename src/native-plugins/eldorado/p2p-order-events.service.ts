@@ -44,7 +44,9 @@ export interface P2pWebhookDelivery {
  * retries, or two arrive at once) changes nothing the second time, the same
  * idea as the fiat partner's delivery claim without a table of its own: a
  * session takes a status only while it is not completed, and a request is paid
- * only while it has no `paidAt` (the first completion wins). Settling the request
+ * only while it has no `paidAt` (the first completion wins, a `processing`
+ * bank transfer's included: its money is then the seller's twice, logged for
+ * ops). Settling the request
  * runs on every COMPLETED delivery, even one whose session was already
  * completed, which is what heals a delivery that died between the two writes.
  */
@@ -168,11 +170,25 @@ export class P2pOrderEventsService {
         paidAmount: order.amountOut,
         paidTxHash: order.txHash,
         paidSessionId: session.id,
+        paidMethod: 'p2p',
       },
     });
     if (paid.count > 0) {
       this.logger.log(
         `Payment request ${requestId} paid by session ${session.id} (${order.amountOut ?? '?'} delivered)`,
+      );
+      return;
+    }
+    // A redelivery of the completion that paid it is routine; another payment
+    // (a second purchase, or a bank transfer) arriving after the first is money
+    // the seller received twice, which someone has to look at.
+    const first = await this.prisma.p2pPaymentRequest.findUnique({
+      where: { id: requestId },
+      select: { paidSessionId: true, paidMethod: true },
+    });
+    if (first && first.paidSessionId !== session.id) {
+      this.logger.warn(
+        `Payment request ${requestId} was already paid (${first.paidMethod ?? 'p2p'}): session ${session.id} also completed (${order.amountOut ?? '?'} delivered); the first completion wins`,
       );
     }
   }

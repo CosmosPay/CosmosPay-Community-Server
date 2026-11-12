@@ -47,6 +47,10 @@ model Consumer {
   // marketplace straight to the seller's wallet (native plugin `eldorado`).
   p2pPaymentRequests P2pPaymentRequest[]
 
+  // Native plugin `koywe`: the provider account (merchant) its bank transfers
+  // are paid into, one per network.
+  bankTransferAccounts BankTransferAccount[]
+
   // Protected payments this consumer created as the merchant, and the
   // transactions built for them (native plugin `trustless-work`).
   protectedPayments            ProtectedPayment[]
@@ -434,13 +438,13 @@ model PaymentIntent {
 
   // Lifetime: an unpaid intent past this instant is auto-finalized to EXPIRED by
   // the observer. Set at creation from the configured TTL.
-  expiresAt   DateTime?
+  expiresAt              DateTime?
   // When the hosted checkout last read this intent while it was open (pending or
   // submitted): the page polls GET /v1/payment-links/{id} while a payer has it
   // open, so a recent value means someone is on the payment page now. Written at
   // most every PAYMENT_LINK_SEEN_EVERY_MS, by raw SQL so updatedAt stays the last
   // change of the intent itself. Null until a page opened it.
-  checkoutSeenAt DateTime?
+  checkoutSeenAt         DateTime?
   // What the payer did with a wallet from the hosted checkout, as the page reports
   // it (POST /v1/payment-links/{id}/events), while the intent was pending: when a
   // wallet was last opened, when it came back without paying (cleared by the next
@@ -453,7 +457,7 @@ model PaymentIntent {
   // organization charges its own customers through this API, paid on-chain to a
   // wallet it names (`src/common/merchant-fee/`): { bps, fixed, amount, asset,
   // wallet, paidBy }. Separate from the plan commission columns.
-  merchantFee Json?
+  merchantFee            Json?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -2392,10 +2396,12 @@ model P2pRampSession {
 // A charge in local money a seller shows as a QR (native plugin `eldorado`): the
 // payer opens `<PAYMENT_LINK_CHECKOUT_URL>/fiat/<id>`, picks how to pay and buys
 // the token through the P2P marketplace's widget, which delivers it straight to
-// `address`, the seller's own wallet. Cosmos Pay never holds the money. Each time
+// `address`, the seller's own wallet (Cosmos Pay never holds that money). Each time
 // the payer starts paying, a BUY `p2p_ramp_session` owned by the same consumer is
 // opened and linked here; the marketplace's webhook reporting one of them
 // COMPLETED to `address` on `chainId` and `tokenAddress` marks the request paid.
+// Other plugins pay it through the core's `PaymentRequestRails` (a bank transfer,
+// native plugin `koywe`: `bank_transfer`), and only this plugin writes the row.
 model P2pPaymentRequest {
   id         String   @id @default(cuid())
   consumerId String
@@ -2427,18 +2433,26 @@ model P2pPaymentRequest {
   // down; null for a token with no USD price. The payer's page recomputes it live.
   estimatedAmountOut String?
 
-  // `open`, `paid` or `cancelled`. `expired` is never stored: an open request
-  // past `expiresAt` reads as expired (and can still turn `paid`: the money
-  // arrived).
+  // The ways it could be paid when it was created, in the order the page offers
+  // them: `transfer` (a bank transfer) and `p2p` (the marketplace's widget).
+  // Reads ask each rail again; this is what creation decided.
+  methods String[] @default([])
+
+  // `open`, `processing`, `paid` or `cancelled`. `processing`: a bank transfer
+  // for it arrived and the token is on its way (it never reads as expired and
+  // cannot be cancelled). `expired` is never stored: an open request past
+  // `expiresAt` reads as expired (and can still turn `paid`: the money arrived).
   status    String   @default("open")
   expiresAt DateTime
 
-  // The first completed purchase that paid it: when this service learned it, the
-  // token delivered (a decimal string), the delivering transaction and the
-  // session. First completion wins; later ones change nothing here.
+  // The first completed payment that paid it: when this service learned it, the
+  // token delivered (a decimal string), the delivering transaction, how it was
+  // paid (`paidMethod`: `transfer` or `p2p`) and, for `p2p`, the session. First
+  // completion wins; later ones change nothing here.
   paidAt        DateTime?
   paidAmount    String?
   paidTxHash    String?
+  paidMethod    String?
   paidSessionId String?
   cancelledAt   DateTime?
 
@@ -2449,6 +2463,188 @@ model P2pPaymentRequest {
 
   @@index([consumerId, network, createdAt])
   @@map("p2p_payment_request")
+}
+
+// ---------------------------------------------------------------------------
+// Payment requests paid by bank transfer (native plugin `koywe`). Each seller
+// opens a provider merchant of their own (`bank_transfer_account`, verified by
+// the provider's KYB) with an ARS virtual account (CVU + alias) in their name;
+// with `KOYWE_POOLED_ENABLED`, Cosmos Pay's own merchant takes the requests of
+// sellers without one. The payer asks for deposit instructions with their
+// CUIT/CUIL or DNI and transfers from an account in their own name; the
+// provider's `bank_income.received` webhook reports the deposit to that
+// merchant: it is matched to the merchant's open transfer of that document,
+// converted to the request's token (a quote and an ONRAMP order whose
+// `externalId` is the transfer's id) and delivered to the request's address.
+// No foreign key to `p2p_payment_request` (another plugin's table): a transfer
+// is a record of money, kept whatever happens to the request.
+
+// A seller's provider merchant, one per consumer and network (a production key
+// opens it on the provider's production, a sandbox key on its sandbox). Only
+// ids, the status, the name, the type and a hint of the tax id are kept: the
+// full tax id, the address and the contact go to the provider and nowhere else,
+// and the provider hosts the KYB form (`verificationUrl`).
+model BankTransferAccount {
+  id         String   @id @default(cuid())
+  consumerId String
+  consumer   Consumer @relation(fields: [consumerId], references: [id], onDelete: Cascade)
+  network    String
+
+  // `person` or `company`; the name the merchant (and its CVU) is in; the last
+  // three digits of the CUIT/CUIL.
+  type      String
+  name      String
+  taxIdHint String
+
+  // The provider's merchant and KYB process, null until the provider answered.
+  providerMerchantId String?
+  kybId              String?
+  // `pending`, `in_review`, `approved` or `rejected` (with `reason`).
+  status             String    @default("pending")
+  reason             String?
+  verificationUrl    String?
+  kybCheckedAt       DateTime?
+
+  // The ARS virtual account deposits go to, once KYB approved it.
+  virtualAccountId String?
+  alias            String?
+  cvu              String?
+  bank             String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([consumerId, network])
+  @@unique([network, providerMerchantId])
+  @@index([network, status])
+  @@map("bank_transfer_account")
+}
+
+// One payer's announced transfer for one payment request. Idempotent per
+// (request, document): the same document gets the same row back.
+model BankTransfer {
+  id               String @id @default(cuid())
+  paymentRequestId String
+
+  // `public` (the provider's production) or `testnet` (its sandbox), the
+  // request's network, and the merchant whose CVU the payer was given: the
+  // seller's own, or Cosmos Pay's in pooled mode. Deposits match only there.
+  network            String
+  providerMerchantId String
+
+  // The payer's document, never stored: `documentHash` is the hex HMAC-SHA256
+  // of its DNI part under `KOYWE_DOCUMENT_PEPPER`, `documentHint` its last
+  // three digits as typed.
+  documentHash String
+  documentHint String
+
+  // The request's `amount` of `currency`, and what the payer is told to
+  // transfer (`instructedAmount`): the same amount, or that amount plus a few
+  // cents when the same depositor already has an open transfer asking it at
+  // the same merchant, so that a deposit names exactly one transfer.
+  currency         String
+  amount           String
+  instructedAmount String
+
+  // `awaiting_deposit`, `converting`, `completed` or `failed`. `expired` is
+  // never stored: an awaiting row past `expiresAt` reads as expired, and still
+  // matches a deposit for 24 hours after it (money must not get stuck).
+  status    String   @default("awaiting_deposit")
+  expiresAt DateTime
+
+  // The deposit it was matched to: the whole amount is converted.
+  depositAmount    String?
+  depositReference String?
+  depositedAt      DateTime?
+
+  // The conversion: the provider's quote and ONRAMP order, its last status, and
+  // a short reason while it is stuck (an approval policy hold, an error).
+  // `attempts` and `nextAttemptAt` pace the sweep's retries; `checkedAt` is when
+  // the order was last read back.
+  providerQuoteId String?
+  providerOrderId String?   @unique
+  providerStatus  String?
+  reason          String?
+  attempts        Int       @default(0)
+  nextAttemptAt   DateTime?
+  checkedAt       DateTime?
+
+  // Delivery: the token delivered (a decimal string) and its transaction when
+  // the provider reports one.
+  deliveredAmount String?
+  txHash          String?
+  completedAt     DateTime?
+  failedAt        DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([paymentRequestId, documentHash])
+  @@index([network, providerMerchantId, documentHash, status, createdAt])
+  @@index([status, nextAttemptAt])
+  @@map("bank_transfer")
+}
+
+// Every webhook delivery the provider made, by its envelope id: written before
+// anything is applied, so a redelivery (at-least-once) is recognised and never
+// applied twice. The body itself is never stored.
+model BankTransferWebhookEvent {
+  // The envelope's `id` (`evt_...`).
+  id      String @id
+  network String
+  type    String
+
+  // When what it reports was applied; null while that is still running or
+  // failed (the sweep heals the conversions it started).
+  processedAt DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([createdAt])
+  @@map("bank_transfer_webhook_event")
+}
+
+// Each `bank_income.received`: what was deposited and what became of it.
+// `matched` (a transfer took it), `unmatched` (none did: ops refunds it by
+// hand) or `ignored` (not ARS, or unreadable). Never the depositor's document:
+// its hash and hint, as on `bank_transfer`.
+model BankIncomeEvent {
+  id           String  @id @default(cuid())
+  eventId      String  @unique
+  network      String
+  // The merchant the deposit landed in (the envelope's `merchant_id`).
+  merchantId   String?
+  outcome      String
+  amount       String?
+  currency     String?
+  documentHash String?
+  documentHint String?
+  reference    String?
+  transferId   String?
+  reason       String?
+
+  createdAt DateTime @default(now())
+
+  @@index([network, outcome, createdAt])
+  @@map("bank_income_event")
+}
+
+// The provider's CRYPTO account for a seller's address: registered once per
+// provider environment (`network`), merchant, provider network, token and
+// address, and reused by every conversion that delivers there.
+model BankTransferCryptoAccount {
+  id              String @id @default(cuid())
+  network         String
+  merchantId      String
+  providerNetwork String
+  token           String
+  // Lowercase: the provider is asked about it in any case.
+  address         String
+  accountId       String
+
+  createdAt DateTime @default(now())
+
+  @@unique([network, merchantId, providerNetwork, token, address])
+  @@map("bank_transfer_crypto_account")
 }
 
 // ---------------------------------------------------------------------------
