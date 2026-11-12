@@ -473,6 +473,19 @@ Each of these was a real finding in this codebase, not a hypothetical:
   platform + resolver key pair still drains every auto-policy payment), and the
   contract id a buyer pays into is derived from the deploy the platform signed,
   never read from Trustless Work's answer.
+- **A P2P payment request turns `paid` only on the marketplace's signed webhook.**
+  `POST /v1/onramp/p2p/webhooks` (`@Public()`, out of the contract) checks
+  `sha256(rawBody)` against `x-webhook-hash`, then the RSA signature of that hex
+  against each network's JWKS (`P2pWebhookKeys`): the network whose key verifies is
+  the only one whose sessions the delivery may touch. Every write is conditional
+  (`completedAt: null`, `paidAt: null`), and a completion pays a request only as a
+  `BUY` to its address, chain and token, paid in its currency and for at least its
+  amount (`completionProblem`: the widget lets a buyer change both, and 15000 COP is
+  not 15000 ARS). The payer's keyless routes
+  (`/v1/payment-links/fiat/{id}`) answer a field-by-field projection
+  (`toPublicPaymentRequest`), never the owner, the seller's address, the record token,
+  sessions or hashes; the purchase they open belongs to the request's consumer, and
+  the stored `sharedPublicKey` decides its referral id.
 - **Input a provider SDK cannot carry is the caller's `400`, refused in the DTO.**
   `@defindex/sdk` takes amounts as JS numbers; an amount past
   `Number.MAX_SAFE_INTEGER` was checked inside the provider call and answered

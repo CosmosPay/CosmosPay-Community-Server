@@ -35,6 +35,7 @@ export const PUBLIC_RECORD_KINDS = [
   'cross-chain-swap',
   'usdt0-transfer',
   'p2p-ramp-session',
+  'p2p-payment-request',
 ] as const;
 export type PublicRecordKind = (typeof PUBLIC_RECORD_KINDS)[number];
 

@@ -43,6 +43,10 @@ model Consumer {
   // marketplace (native plugin `eldorado`).
   p2pRampSessions P2pRampSession[]
 
+  // Charges in local money this consumer shows as a QR, paid through the P2P
+  // marketplace straight to the seller's wallet (native plugin `eldorado`).
+  p2pPaymentRequests P2pPaymentRequest[]
+
   // Protected payments this consumer created as the merchant, and the
   // transactions built for them (native plugin `trustless-work`).
   protectedPayments            ProtectedPayment[]
@@ -2362,10 +2366,89 @@ model P2pRampSession {
   reference String @unique
   widgetUrl String
 
+  // The payment request a payer opened this purchase from (the keyless
+  // `POST /v1/payment-links/fiat/{id}/sessions`); null for every other session.
+  paymentRequestId String?
+  paymentRequest   P2pPaymentRequest? @relation(fields: [paymentRequestId], references: [id], onDelete: SetNull)
+
+  // What the marketplace's webhook last said about the order: its id, its raw
+  // `orderStatus` (REQUESTED, ACCEPTED, FIAT_PAID, ..., COMPLETED, CANCELLED),
+  // and once it is COMPLETED the token delivered (`transferInfo.amountOut`, a
+  // decimal string), the delivering transaction and when this service learned
+  // it. A completed session keeps COMPLETED: a late event never moves it back.
+  providerOrderId String?
+  providerStatus  String?
+  deliveredAmount String?
+  txHash          String?
+  completedAt     DateTime?
+
   createdAt DateTime @default(now())
 
   @@index([consumerId, network, side, createdAt])
+  @@index([paymentRequestId])
   @@map("p2p_ramp_session")
+}
+
+// A charge in local money a seller shows as a QR (native plugin `eldorado`): the
+// payer opens `<PAYMENT_LINK_CHECKOUT_URL>/fiat/<id>`, picks how to pay and buys
+// the token through the P2P marketplace's widget, which delivers it straight to
+// `address`, the seller's own wallet. Cosmos Pay never holds the money. Each time
+// the payer starts paying, a BUY `p2p_ramp_session` owned by the same consumer is
+// opened and linked here; the marketplace's webhook reporting one of them
+// COMPLETED to `address` on `chainId` and `tokenAddress` marks the request paid.
+model P2pPaymentRequest {
+  id         String   @id @default(cuid())
+  consumerId String
+  consumer   Consumer @relation(fields: [consumerId], references: [id], onDelete: Cascade)
+
+  // `public` or `testnet`, from the API key that created it (`resolveNetwork`).
+  // Its sessions open on the same network; by-id reads and lists filter by it.
+  network String
+
+  // Whether the shared public key created it. Its by-id routes then take the
+  // record token, and its sessions carry `ELDORADO_PUBLIC_REFERRAL_ID`: the key
+  // itself is gone by the time a payer opens one, so the fact is stored.
+  sharedPublicKey Boolean @default(false)
+
+  // The charge: `amount` of local money `currency` (a decimal string, at most two
+  // decimals), bought as the token `tokenAddress` (EIP-55; `token` its symbol,
+  // `tokenDecimals` its decimals) on EIP-155 `chainId`, delivered to `address`
+  // (EIP-55). `description` is shown to the payer.
+  currency      String
+  amount        String
+  chainId       Int
+  token         String
+  tokenAddress  String
+  tokenDecimals Int
+  address       String
+  description   String?
+
+  // The token the amount bought at the market price when it was created, rounded
+  // down; null for a token with no USD price. The payer's page recomputes it live.
+  estimatedAmountOut String?
+
+  // `open`, `paid` or `cancelled`. `expired` is never stored: an open request
+  // past `expiresAt` reads as expired (and can still turn `paid`: the money
+  // arrived).
+  status    String   @default("open")
+  expiresAt DateTime
+
+  // The first completed purchase that paid it: when this service learned it, the
+  // token delivered (a decimal string), the delivering transaction and the
+  // session. First completion wins; later ones change nothing here.
+  paidAt        DateTime?
+  paidAmount    String?
+  paidTxHash    String?
+  paidSessionId String?
+  cancelledAt   DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  sessions P2pRampSession[]
+
+  @@index([consumerId, network, createdAt])
+  @@map("p2p_payment_request")
 }
 
 // ---------------------------------------------------------------------------

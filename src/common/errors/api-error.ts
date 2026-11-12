@@ -284,6 +284,19 @@ export enum ApiErrorCode {
    */
   ProtectedPaymentSignatureInvalid = 'protected_payment_signature_invalid',
 
+  // --- P2P payment requests (native plugin `eldorado`) ---------------------
+  /**
+   * The payment request is no longer open: it was paid, cancelled, or it
+   * expired. Nothing more can be started on it (or cancelled); the seller
+   * creates a new one.
+   */
+  RequestClosed = 'request_closed',
+  /**
+   * A webhook delivery whose body hash or signature does not verify against the
+   * sender's published keys. Nothing in it was applied.
+   */
+  WebhookSignatureInvalid = 'webhook_signature_invalid',
+
   // --- service --------------------------------------------------------------
   Misconfigured = 'misconfigured',
   Internal = 'internal_error',
