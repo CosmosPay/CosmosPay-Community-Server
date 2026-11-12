@@ -43,7 +43,7 @@ import { P2pPaymentRequestsService } from '@/native-plugins/eldorado/p2p-payment
 const ID = 'cmh4x2k9a0001l70g8v5q3z2w';
 
 // /v1/onramp/p2p/payment-requests: charges in local money a seller shows as a
-// QR, paid through the P2P marketplace straight to the seller's wallet.
+// QR, paid by bank transfer or through the P2P marketplace to the seller's wallet.
 @ApiTags('p2p-onramp')
 @Controller({ path: 'onramp/p2p/payment-requests', version: '1' })
 export class P2pPaymentRequestsController {
@@ -60,10 +60,10 @@ export class P2pPaymentRequestsController {
   @ApiOperation({
     summary: 'Charge in local money with a QR',
     description:
-      'Creates a payment request: show its `url` (or `qr`) to the payer, who pays `amount` of `currency` with a local method in a hosted window, ' +
-      'and the token is delivered by the P2P marketplace straight to `address` on `chainId`; Cosmos Pay never holds the money. ' +
-      'The terms are checked against the market like a purchase (`400 validation_failed` with the reason), on the key’s network, and the request ' +
-      'can be paid until `expiresAt`. The shared public key also gets `publicToken`, the only way it reads the request back.',
+      'Creates a payment request: show its `url` (or `qr`) to the payer, who pays `amount` of `currency` by bank transfer (ARS, where `methods` has `transfer`) ' +
+      'or with another local method in a hosted window (`p2p`), and the token is delivered to `address` on `chainId`. ' +
+      'It is created when at least one method takes the terms, on the key’s network; when none does, the market’s check of the terms is the answer ' +
+      '(`400 validation_failed` with the reason). It can be paid until `expiresAt`. The shared public key also gets `publicToken`, the only way it reads the request back.',
   })
   @ApiCreatedResponse({ type: P2pPaymentRequestCreatedEntity })
   create(
@@ -96,7 +96,7 @@ export class P2pPaymentRequestsController {
   @ApiOperation({
     summary: 'Read a payment request in local money',
     description:
-      "One payment request of this key's consumer on the key's network: poll it to learn when it is `paid` (with the token delivered and its transaction). " +
+      "One payment request of this key's consumer on the key's network: poll it to learn when it is `processing` (a bank transfer arrived) and `paid` (with the token delivered, its transaction and `paidMethod`). " +
       "Another consumer's request, or one on the other network, is the 404 of a missing one. The shared public key reads a request only with its " +
       '`publicToken` in `X-Record-Token`; without it, or with another request’s, the answer is that 404.',
   })
@@ -121,15 +121,16 @@ export class P2pPaymentRequestsController {
   @ApiOperation({
     summary: 'Cancel a payment request in local money',
     description:
-      'Stops an open request from being paid: its page refuses new payments. A payment already under way in the hosted window may still complete, ' +
-      'and the request then reads `paid`. A request that is not open (paid, expired or cancelled) is `409 request_closed`. ' +
+      'Stops an open request from being paid: its page refuses new payments. A payment already under way may still complete, ' +
+      'and the request then reads `processing` or `paid`. A request that is not open (processing, paid, expired or cancelled) is `409 request_closed`. ' +
       'The shared public key cancels only with the request’s `publicToken` in `X-Record-Token`.',
   })
   @ApiOkResponse({ type: P2pPaymentRequestEntity })
   @ApiErrorResponse({
     status: 409,
     codes: [ApiErrorCode.RequestClosed],
-    description: 'The request was already paid, cancelled, or it expired.',
+    description:
+      'The request is processing a bank transfer, was already paid or cancelled, or it expired.',
     examples: {
       [ApiErrorCode.RequestClosed]: {
         message: `Payment request ${ID} is paid: only an open one can be cancelled`,

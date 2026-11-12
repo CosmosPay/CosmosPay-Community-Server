@@ -68,6 +68,11 @@ export const PROVIDER_TERMS: readonly ProviderTerm[] = [
   { name: 'OpenZeppelin', noun: 'the contract library', adjective: 'audited' },
   { name: 'Sub Rosa', noun: 'the RFQ plugin', adjective: 'RFQ' },
   { name: 'Anclap', noun: 'the anchor', adjective: 'anchor' },
+  {
+    name: 'Koywe',
+    noun: 'the bank transfer partner',
+    adjective: 'bank transfer',
+  },
 ];
 
 /**

@@ -149,6 +149,33 @@ export const DEFAULT_ELDORADO_WEBHOOK_JWKS_URL: Record<StellarNetwork, string> =
   };
 
 /**
+ * The bank transfer provider's API (native plugin `koywe`) when
+ * `KOYWE_API_URL` / `KOYWE_SANDBOX_API_URL` is unset: production serves the
+ * `public` network's requests, the sandbox the `testnet` ones.
+ */
+export const DEFAULT_KOYWE_API_URL: Record<StellarNetwork, string> = {
+  public: 'https://api.koywe.com',
+  testnet: 'https://api-sandbox.koywe.com',
+};
+
+/**
+ * The amounts a payment request may ask by bank transfer, in ARS, when
+ * `KOYWE_MIN_ARS` / `KOYWE_MAX_ARS` are unset: below a thousand pesos the
+ * conversion's fixed costs eat the charge; five million is about where an
+ * individual's transfer starts drawing a bank's extra checks.
+ */
+export const DEFAULT_KOYWE_MIN_ARS = 1000;
+export const DEFAULT_KOYWE_MAX_ARS = 5_000_000;
+
+/**
+ * Where the sandbox converts every test request (`KOYWE_SANDBOX_NETWORK`,
+ * `KOYWE_SANDBOX_TOKEN` unset): the sandbox delivers no real crypto, and the
+ * test requests are on chains it does not serve (Arbitrum Sepolia).
+ */
+export const DEFAULT_KOYWE_SANDBOX_NETWORK = 'POLYGON';
+export const DEFAULT_KOYWE_SANDBOX_TOKEN = 'USDT';
+
+/**
  * The most a DeFindex transaction may charge its signer in fees, in stroops
  * (1 XLM), when `DEFINDEX_MAX_FEE_STROOPS` is unset: the inclusion fee and the
  * Soroban resource fee together. A deposit that invests through a Blend

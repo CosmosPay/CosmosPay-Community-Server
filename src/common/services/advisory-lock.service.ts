@@ -111,4 +111,6 @@ export enum AdvisoryLockKey {
   ProtectedPaymentSync = 881_016,
   ProtectedPaymentExpiry = 881_017,
   ProtectedPaymentDeadline = 881_018,
+  // Payment requests paid by bank transfer (native plugin `koywe`).
+  BankTransferSweep = 881_019,
 }

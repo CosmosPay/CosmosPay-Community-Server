@@ -110,11 +110,15 @@ src/
   activity/                       client telemetry ingest + feed (wallet, dashboard)
   admin/                          cross-tenant platform admin (console-only), audited
   audit/                          audit-trail writer, called inside other modules' transactions
+  payment-request-rails/          point d'extension entre le plugin propriétaire des demandes de paiement (son registre)
+                                  et les plugins qui les encaissent autrement (un rail, p. ex. `transfer`)
   plugins/                        plugin runtime + SDK (sdk.ts): folder loader, signatures, V8-isolate sandbox
   native-plugins/                 first-party plugins, imported only when PLUGINS_ENABLED names them:
     blindpay/                     BlindPay: client, Svix verify, sync + webhook, kyc/, onramp/, offramp/, admin/
     defindex/                     DeFindex vaults (Stellar)
     eldorado/                     on-ramp et off-ramp P2P : monnaie locale et stablecoins sur El Dorado (Arbitrum)
+    koywe/                        virements bancaires en ARS pour les encaissements par QR : comptes vendeurs (KYB hébergé),
+                                  instructions de dépôt, webhook signé du partenaire, conversion vers le token, balayage
     trustless-work/               protected payments on Trustless Work (Stellar): client, envelope checks,
                                   sync / expiry / deadline jobs, the keyless buyer routes, admin/
   health/                         liveness/readiness probes (@Public)
@@ -304,6 +308,9 @@ Les chemins utilisent la forme OpenAPI `{param}`.
 | GET | `/v1/onramp/p2p/sessions/{id}` | `onramp:read` | ✓ |
 | GET | `/v1/onramp/p2p/tokens` | `onramp:read` | ✓ |
 | POST | `/v1/onramp/p2p/webhooks` | aucun : `@Public()`, signé par le marché P2P ; absent du contrat OpenAPI |  |
+| GET | `/v1/onramp/transfer/account` | `onramp:read` | ✓ |
+| POST | `/v1/onramp/transfer/account` | `onramp:write` | ✓ |
+| POST | `/v1/onramp/transfer/webhooks` | aucun : `@Public()`, signé par le partenaire de virements bancaires ; absent du contrat OpenAPI |  |
 | GET | `/v1/onramp/payins` | `onramp:read` |  |
 | POST | `/v1/onramp/payins` | `onramp:write` |  |
 | GET | `/v1/onramp/payins/{id}` | `onramp:read` |  |
@@ -326,6 +333,7 @@ Les chemins utilisent la forme OpenAPI `{param}`.
 | POST | `/v1/payment-links/{id}/solana-pay` | aucun : `@Public()`, budget par adresse client |  |
 | GET | `/v1/payment-links/fiat/{id}` | aucun : `@Public()`, budget par adresse client |  |
 | POST | `/v1/payment-links/fiat/{id}/sessions` | aucun : `@Public()`, budget par adresse client |  |
+| POST | `/v1/payment-links/fiat/{id}/transfers` | aucun : `@Public()`, budget par adresse client |  |
 | GET | `/v1/plugins` | `plugins:read` |  |
 | GET | `/v1/plugins/{slug}` | `plugins:read` |  |
 | PUT | `/v1/plugins/{slug}/installation` | `plugins:write` |  |
@@ -2343,6 +2351,29 @@ Un vendeur encaisse un montant en monnaie locale avec un QR, et le payeur le rè
 - **Étapes pour l'opérateur.** Le marché enregistre le webhook par Client ID, par e-mail à la même adresse qui délivre les ids d'intégrateur : envoyez-lui le Client ID et l'URL `https://api.cosmospay.lat/cosmos-api/v1/onramp/p2p/webhooks` (le préfixe public de la passerelle, puis `/v1/onramp/p2p/webhooks`). La passerelle a besoin d'une route sans clé pour exactement `POST /v1/onramp/p2p/webhooks`, qui transmet le corps sans le modifier ; les routes du payeur n'ont besoin de rien de nouveau.
 - **Pas dans cette version :** un événement webhook sortant quand une demande est payée, une vue des demandes dans le dashboard, et des QR réutilisables où le payeur saisit le montant.
 
+## Encaissements par virement bancaire
+
+> **Un plugin natif.** Tout ce qui est dans cette section est le plugin `koywe`
+> (`src/native-plugins/koywe/`), servi seulement quand `PLUGINS_ENABLED` liste `koywe` et
+> `eldorado` (il refuse de démarrer sans `eldorado`, propriétaire des demandes de
+> paiement). Ses routes, ses erreurs et le contrat publié appellent le fournisseur
+> « le partenaire de virements bancaires » ; seuls ses variables et son slug portent son nom.
+
+Un payeur en Argentine règle un encaissement par QR en pesos par virement bancaire, depuis un compte à son propre nom, et le vendeur reçoit le token de l'encaissement à sa propre adresse. Chaque vendeur ouvre d'abord un compte de virements : un marchand à lui sous l'organisation de Cosmos Pay chez le partenaire, vérifié par le KYB du partenaire sur un formulaire que le partenaire héberge, avec un CVU et un alias en ARS au nom du vendeur. Ensuite un encaissement propose `transfer` dans `methods`, avant `p2p`, quand il est en ARS, entre `KOYWE_MIN_ARS` et `KOYWE_MAX_ARS`, sur un token que le partenaire livre (USDC et USDT sur Ethereum, Polygon et Base, USDT sur BNB Chain ; sur testnet chaque paire que liste le sandbox P2P, convertie dans le sandbox) et que le compte de son propriétaire est approuvé.
+
+| Méthode | Chemin | Scope | Rôle |
+| ------- | ------ | ----- | ---- |
+| GET | `/v1/onramp/transfer/account` | `onramp:read` | Le compte du vendeur : statut, lien de vérification, alias et CVU |
+| POST | `/v1/onramp/transfer/account` | `onramp:write` | L'ouvrir (personne ou société, avec un CUIT/CUIL) et lancer son KYB |
+| POST | `/v1/payment-links/fiat/{id}/transfers` | aucun (`@Public()`) | Le payeur donne un CUIT/CUIL ou DNI et reçoit le montant, l'alias et le CVU |
+| POST | `/v1/onramp/transfer/webhooks` | aucun (`@Public()`, signé) | Les dépôts, les ordres de conversion et les résultats de KYB du partenaire |
+
+- **L'argent est au vendeur, à son nom.** Un dépôt arrive sur le solde du marchand propre du vendeur ; Cosmos Pay convertit le dépôt entier vers le token de l'encaissement via le partenaire (un devis et un ordre ONRAMP dont l'`externalId` est l'id du virement) et le partenaire l'envoie à l'`address` de l'encaissement. L'encaissement se lit `processing` depuis le dépôt jusqu'à ce que l'ordre se termine, puis `paid` avec `paidMethod: "transfer"` ; un encaissement `processing` ne se lit jamais expiré et ne peut pas être annulé. Avec `KOYWE_POOLED_ENABLED=true`, le marchand propre de Cosmos Pay (`KOYWE_MERCHANT_ID` / `KOYWE_SANDBOX_MERCHANT_ID`) prend les encaissements des vendeurs sans compte approuvé, y compris ceux de la clé publique partagée, et l'argent passe par le compte de Cosmos Pay pendant ces minutes. Désactivé par défaut.
+- **Le document du payeur identifie le dépôt et n'est jamais conservé.** La route de virements accepte un CUIT/CUIL (chiffre de contrôle vérifié) ou un DNI et ne conserve que le HMAC-SHA256 de sa partie DNI sous `KOYWE_DOCUMENT_PEPPER` et trois chiffres ; sans le pepper aucun virement n'est proposé. Le même document reçoit le même virement. Chaque virement ouvert d'une même personne chez un même marchand demande un montant différent : un second encaissement du même montant demande quelques centimes de plus, et `amount` dans la réponse est ce qu'il faut virer.
+- **Rapprochement.** Un dépôt règle le virement ouvert du même document chez le même marchand qui demande exactement son montant ; un dépôt plus élevé n'en règle un que si cette personne n'a qu'un seul virement ouvert là (et il est converti en entier). Un dépôt qui ne se rapproche de rien (un autre document, un montant inférieur, un montant supérieur avec plusieurs candidats) est conservé `unmatched` dans `bank_income_event` et journalisé en erreur : les opérations le remboursent à la main. Un virement se rapproche encore jusqu'à 24 heures après la fin de son heure.
+- **Le webhook.** `POST /v1/onramp/transfer/webhooks` est `@Public()` et absent du contrat OpenAPI. Une livraison n'est acceptée que si `Koywe-Signature` est le HMAC-SHA256 en hexadécimal minuscule du corps brut sous `KOYWE_WEBHOOK_SECRET` ou `KOYWE_SANDBOX_WEBHOOK_SECRET`, comparé en temps constant ; le secret qui vérifie décide du réseau. Tout le reste est `401 webhook_signature_invalid`. L'id de chaque enveloppe est conservé avant toute application (une relivraison ne change rien), la réponse part tout de suite et les appels au partenaire s'exécutent ensuite ; seul un échec de conservation répond `5xx`, pour que le partenaire relivre.
+- **Conversions bloquées.** La politique d'approbation du partenaire doit autoriser, pour l'utilisateur d'API, la création de marchands, le déclenchement du KYB, la création de comptes virtuels, de comptes CRYPTO et d'ordres ONRAMP sur tous les marchands. Un ordre ou un compte retenu par la politique laisse le virement en `converting` avec le motif, journalisé en erreur. Un balayage (chaque minute, avec `OBSERVER_ENABLED`) relance les conversions sans ordre (à partir d'une minute, en doublant, au plus une heure), relit les ordres non terminés après dix minutes et les KYB en attente toutes les dix minutes. Un ordre échoué laisse l'encaissement en `processing` avec les pesos sur le solde du marchand : opérations.
+- **Étapes de l'opérateur.** Enregistrer le webhook une fois par environnement avec `npm run bank-transfer:webhook -- register --network testnet` (et `public`) ; il signe avec le secret de webhook de cet environnement, et `list` et `ping --id <id>` le vérifient. Le gateway a besoin d'une route sans clé exactement pour `POST /v1/onramp/transfer/webhooks` qui transmet le corps inchangé ; `/v1/payment-links/*` est déjà sans clé. Dans le sandbox, `npm run bank-transfer:simulate -- --merchant <id> --amount 6000 --document 20123456786` déclenche un dépôt de bout en bout. Les scripts n'affichent aucun secret.
 ## Plugins — des extensions sous un slug
 
 D'autres équipes intègrent leur technologie à ce service sous forme de **plugin** : un
@@ -2577,6 +2608,7 @@ plugins isolés.
 | `blindpay` | KYC, onramp, offramp, le webhook BlindPay, ses routes `/v1/admin` (`receivers`, `payins`, `payouts`) et la section `fiat` du résumé d'administration |
 | `defindex` | `/v1/defindex` — les vaults DeFindex sur Stellar |
 | `eldorado` | `/v1/onramp/p2p` et `/v1/offramp/p2p` : tokens sur toutes les chaînes que liste le marché P2P d'El Dorado, achetés et vendus contre de la monnaie locale ; encaissements par QR, payés via le `/v1/payment-links/fiat/{id}` sans clé ; le webhook d'ordres du marché |
+| `koywe` | `/v1/onramp/transfer/account` et le `/v1/payment-links/fiat/{id}/transfers` sans clé : demandes de paiement payées par virement bancaire en ARS sur le compte propre du vendeur chez le partenaire de virements, converties vers le token de la demande ; le webhook du partenaire. Nécessite `eldorado` |
 | `trustless-work` | `/v1/protected-payments`, le `/v1/protected-payment-links` sans clé et `/v1/admin/protected-payments` : les paiements protégés sur Trustless Work (Stellar) |
 
 - **Non listé, absent.** Un plugin natif que `PLUGINS_ENABLED` ne nomme pas n'est
@@ -2613,6 +2645,12 @@ plugins isolés.
 
 ## Mise à niveau — changements incompatibles et notes de déploiement
 
+### Encaissements par virement bancaire : un nouveau plugin natif, cinq tables et `processing`
+
+- **La migration `20261112180000_bank_transfer_charges`** crée `bank_transfer_account`, `bank_transfer`, `bank_transfer_webhook_event`, `bank_income_event` et `bank_transfer_crypto_account`, et ajoute `methods` et `paidMethod` à `p2p_payment_request` (remplies pour les lignes existantes : `["p2p"]`, et `p2p` pour les payées). Lancer `migrate deploy` avant que le nouveau build ne serve.
+- **Demandes de paiement (additif) :** `methods` dans les vues du vendeur et du payeur, `paidMethod` dans celle du vendeur, et le statut `processing`. Un client qui aiguille sur `status` doit gérer `processing` (argent reçu, token en route) : il ne se lit jamais expiré et ne peut pas être annulé (`409 request_closed`).
+- **Nouvelles routes** (plugin `koywe`) : `GET` et `POST /v1/onramp/transfer/account`, le `POST /v1/payment-links/fiat/{id}/transfers` sans clé et `POST /v1/onramp/transfer/webhooks`. Nouveaux codes d'erreur : `invalid_document`, `method_unavailable` et `invalid_tax_id` (400), `account_required` (403), `account_exists` (409), `transfer_unavailable` (503). Nouveaux budgets : `payment-links-fiat:transfer` (10 par minute par adresse client) et `onramp-transfer:account` (5).
+- **Désactivé tant que non configuré :** ajouter `koywe` à `PLUGINS_ENABLED` (avec `eldorado`), définir les variables `KOYWE_*` de chaque environnement et `KOYWE_DOCUMENT_PEPPER`, ajouter la route du gateway, enregistrer le webhook et les règles de politique du partenaire (voir *Encaissements par virement bancaire*).
 ### On-ramp P2P : encaissements par QR en monnaie locale, et le webhook d'ordres du marché
 
 - **La migration `20261112120000_p2p_payment_requests`** crée la table `p2p_payment_request` et ajoute des colonnes nullable à `p2p_ramp_session` (`paymentRequestId`, `providerOrderId`, `providerStatus`, `deliveredAmount`, `txHash`, `completedAt`) ; rien n'est réécrit. Lancez `migrate deploy` avant que le nouveau build ne serve.
@@ -3826,6 +3864,21 @@ Chaque variable lue depuis `process.env` dans `src/` est validée au démarrage 
 | `ELDORADO_TIMEOUT_MS` | non | `10000` | Budget d'un appel au marché P2P (ms) |
 | `ELDORADO_WEBHOOK_JWKS_URL_MAINNET` | non | `https://api.eldorado.io/api/.well-known/jwks.json` | Où le marché P2P publie les clés qui signent ses webhooks d'ordres sur le mainnet (`POST /v1/onramp/p2p/webhooks`) |
 | `ELDORADO_WEBHOOK_JWKS_URL_TESTNET` | non | `https://api-testnet.eldorado.io/api/.well-known/jwks.json` | La même chose pour le sandbox |
+| `KOYWE_API_URL` | non | `https://api.koywe.com` | L'API de production du partenaire de virements (encaissements du réseau `public`) |
+| `KOYWE_API_KEY` | pour les virements sur mainnet | — | La clé d'API du partenaire ; avec `KOYWE_SECRET`, `KOYWE_ORGANIZATION_ID` et `KOYWE_WEBHOOK_SECRET` elle active les virements sur mainnet |
+| `KOYWE_SECRET` | avec la clé d'API | — | Le secret de cette clé |
+| `KOYWE_ORGANIZATION_ID` | avec la clé d'API | — | L'organisation de Cosmos Pay chez le partenaire : les comptes des vendeurs sont des marchands sous elle |
+| `KOYWE_MERCHANT_ID` | pour le mode mutualisé | — | Le marchand propre de Cosmos Pay, utilisé seulement avec `KOYWE_POOLED_ENABLED` |
+| `KOYWE_WEBHOOK_SECRET` | avec la clé d'API | — | Le secret avec lequel l'endpoint du webhook est enregistré (32 caractères ou plus) ; les livraisons sont vérifiées avec lui. Différent de celui du sandbox |
+| `KOYWE_SANDBOX_API_URL` | non | `https://api-sandbox.koywe.com` | Le sandbox du partenaire (encaissements du réseau `testnet`) |
+| `KOYWE_SANDBOX_API_KEY`, `KOYWE_SANDBOX_SECRET`, `KOYWE_SANDBOX_ORGANIZATION_ID`, `KOYWE_SANDBOX_MERCHANT_ID`, `KOYWE_SANDBOX_WEBHOOK_SECRET` | pour les virements sur testnet | — | Le même jeu pour le sandbox |
+| `KOYWE_SANDBOX_NETWORK` | non | `POLYGON` | Où le sandbox convertit chaque encaissement de test : `ETHEREUM`, `POLYGON`, `BASE` ou `BSC` |
+| `KOYWE_SANDBOX_TOKEN` | non | `USDT` | Le token vers lequel il convertit : `USDC` ou `USDT` (seulement `USDT` sur `BSC`) |
+| `KOYWE_POOLED_ENABLED` | non | `false` | Laisse le marchand de Cosmos Pay prendre les encaissements des vendeurs sans compte approuvé (l'argent passe par le compte de Cosmos Pay) |
+| `KOYWE_DOCUMENT_PEPPER` | pour les virements | — | La clé (32 caractères ou plus) sous laquelle les documents des payeurs sont hachés. Sans elle aucun virement n'est proposé. Ne jamais la changer avec des virements ouverts |
+| `KOYWE_ACCOUNT_HOLDER` | non | — | Le titulaire affiché pour le compte mutualisé |
+| `KOYWE_ALIAS`, `KOYWE_CVU` | non | — | Remplacent l'alias et le CVU (22 chiffres) du compte mutualisé |
+| `KOYWE_MIN_ARS`, `KOYWE_MAX_ARS` | non | `1000`, `5000000` | Les montants qu'un encaissement peut demander par virement |
 | `TRUSTLESS_WORK_API_KEY_TESTNET` | pour les paiements protégés sur testnet | — | La clé API de Trustless Work pour testnet (clés `dev`). Les routes n'existent qu'avec `trustless-work` dans `PLUGINS_ENABLED` ; sans la clé, elles répondent `503 misconfigured` sur testnet. Exige `TRUSTLESS_WORK_PLATFORM_SECRET_TESTNET` |
 | `TRUSTLESS_WORK_BASE_URL_TESTNET` | non | `https://dev.api.trustlesswork.com` | L'API V1 de Trustless Work pour testnet |
 | `TRUSTLESS_WORK_PLATFORM_SECRET_TESTNET` | avec la clé API | — | Le compte de plateforme de Cosmos Pay (S...) : signe les déploiements et les litiges de la plateforme, en paie les XLM et reçoit les frais de plateforme. Doit faire confiance à USDC. Une clé chaude : retirez-en les frais |

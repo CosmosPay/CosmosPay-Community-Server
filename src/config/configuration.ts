@@ -12,6 +12,11 @@ import {
   DEFAULT_CROSS_CHAIN_SLIPPAGE_BPS,
   DEFAULT_HORIZON,
   DEFAULT_JUPITER_BASE_URL,
+  DEFAULT_KOYWE_API_URL,
+  DEFAULT_KOYWE_MAX_ARS,
+  DEFAULT_KOYWE_MIN_ARS,
+  DEFAULT_KOYWE_SANDBOX_NETWORK,
+  DEFAULT_KOYWE_SANDBOX_TOKEN,
   DEFAULT_KURU_BASE_URL,
   DEFAULT_MONAD_LOG_BLOCK_RANGE,
   DEFAULT_MONAD_RPC,
@@ -116,6 +121,24 @@ export interface TrustlessWorkNetworkConfig {
   deployerContract: string;
   /** When set, a deploy must install this contract wasm (64 hex). */
   contractWasmHash: string;
+}
+
+/**
+ * One environment of the bank transfer provider (native plugin `koywe`):
+ * production (`KOYWE_*`) for the `public` network, the sandbox
+ * (`KOYWE_SANDBOX_*`) for `testnet`. Every value is the operator's; an
+ * environment missing the key, the secret, the organization or the webhook
+ * secret serves no bank transfer (`isKoyweEnvironmentComplete`). `merchantId`
+ * is Cosmos Pay's own merchant, used only in pooled mode.
+ */
+export interface KoyweEnvironmentConfig {
+  apiUrl: string;
+  apiKey: string;
+  secret: string;
+  organizationId: string;
+  merchantId: string;
+  /** The secret the webhook endpoint was registered with: deliveries are HMAC-SHA256 of the raw body under it. */
+  webhookSecret: string;
 }
 
 /** The API-key environment a BlindPay instance serves (`dev` keys, `prod` keys). */
@@ -483,6 +506,30 @@ export interface AppConfig {
     timeoutMs: number;
     webhookJwksUrls: Record<StellarNetwork, string>;
   };
+  /**
+   * The `koywe` native plugin: payment requests paid by bank transfer in ARS,
+   * converted to the request's token and delivered to the seller. Every value
+   * is optional; the rail is off for a network whose environment is incomplete,
+   * and for both without `documentPepper` (the payer's document is stored only
+   * as an HMAC under it). Each seller is paid into a provider merchant of their
+   * own; `pooledEnabled` lets Cosmos Pay's merchant (`merchantId`) take the
+   * requests of sellers without one. `accountHolder`, `alias` and `cvu` describe
+   * that pooled account (`alias` / `cvu` replace what its ARS virtual account
+   * reports); `sandboxNetwork` / `sandboxToken` are where the sandbox converts
+   * every test request.
+   */
+  koywe: {
+    environments: Record<StellarNetwork, KoyweEnvironmentConfig>;
+    pooledEnabled: boolean;
+    documentPepper: string;
+    accountHolder: string;
+    alias: string;
+    cvu: string;
+    minArs: number;
+    maxArs: number;
+    sandboxNetwork: string;
+    sandboxToken: string;
+  };
   /** The `trustless-work` native plugin: protected payments on Trustless Work V1. */
   trustlessWork: {
     networks: Record<StellarNetwork, TrustlessWorkNetworkConfig>;
@@ -808,6 +855,28 @@ function trustlessWorkNetwork(
     opsResolver: env('OPS_RESOLVER'),
     deployerContract: env('DEPLOYER_CONTRACT'),
     contractWasmHash: env('CONTRACT_WASM_HASH').toLowerCase(),
+  };
+}
+
+/**
+ * One environment of the bank transfer provider: `KOYWE_<name>` for
+ * production (`public`), `KOYWE_SANDBOX_<name>` for the sandbox (`testnet`).
+ * Relations between the values are checked when the plugin boots
+ * (`assertKoyweConfigConsistent`), not here.
+ */
+function koyweEnvironment(network: StellarNetwork): KoyweEnvironmentConfig {
+  const prefix = network === 'public' ? 'KOYWE_' : 'KOYWE_SANDBOX_';
+  const env = (name: string) => process.env[`${prefix}${name}`]?.trim() ?? '';
+  return {
+    apiUrl: (env('API_URL') || DEFAULT_KOYWE_API_URL[network]).replace(
+      /\/+$/,
+      '',
+    ),
+    apiKey: env('API_KEY'),
+    secret: env('SECRET'),
+    organizationId: env('ORGANIZATION_ID'),
+    merchantId: env('MERCHANT_ID'),
+    webhookSecret: env('WEBHOOK_SECRET'),
   };
 }
 
@@ -1193,6 +1262,31 @@ export default (): AppConfig => ({
         process.env.ELDORADO_WEBHOOK_JWKS_URL_TESTNET?.trim() ||
         DEFAULT_ELDORADO_WEBHOOK_JWKS_URL.testnet,
     },
+  },
+  koywe: {
+    environments: {
+      public: koyweEnvironment('public'),
+      testnet: koyweEnvironment('testnet'),
+    },
+    pooledEnabled:
+      (process.env.KOYWE_POOLED_ENABLED ?? 'false').trim().toLowerCase() ===
+      'true',
+    documentPepper: process.env.KOYWE_DOCUMENT_PEPPER?.trim() ?? '',
+    accountHolder: process.env.KOYWE_ACCOUNT_HOLDER?.trim() ?? '',
+    alias: process.env.KOYWE_ALIAS?.trim() ?? '',
+    cvu: process.env.KOYWE_CVU?.trim() ?? '',
+    minArs: parseFloat(
+      process.env.KOYWE_MIN_ARS?.trim() || String(DEFAULT_KOYWE_MIN_ARS),
+    ),
+    maxArs: parseFloat(
+      process.env.KOYWE_MAX_ARS?.trim() || String(DEFAULT_KOYWE_MAX_ARS),
+    ),
+    sandboxNetwork: (
+      process.env.KOYWE_SANDBOX_NETWORK?.trim() || DEFAULT_KOYWE_SANDBOX_NETWORK
+    ).toUpperCase(),
+    sandboxToken: (
+      process.env.KOYWE_SANDBOX_TOKEN?.trim() || DEFAULT_KOYWE_SANDBOX_TOKEN
+    ).toUpperCase(),
   },
   trustlessWork: {
     networks: {

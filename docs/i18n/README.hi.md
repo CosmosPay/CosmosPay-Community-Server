@@ -109,11 +109,15 @@ src/
   activity/                       client telemetry ingest + feed (wallet, dashboard)
   admin/                          cross-tenant platform admin (console-only), audited
   audit/                          audit-trail writer, called inside other modules' transactions
+  payment-request-rails/          extension point: payment requests का मालिक plugin (उसका ledger) और उन्हें
+                                  दूसरे तरीके से चुकाने वाले plugins (एक rail, जैसे `transfer`) के बीच
   plugins/                        plugin runtime + SDK (sdk.ts): folder loader, signatures, V8-isolate sandbox
   native-plugins/                 first-party plugins, imported only when PLUGINS_ENABLED names them:
     blindpay/                     BlindPay: client, Svix verify, sync + webhook, kyc/, onramp/, offramp/, admin/
     defindex/                     DeFindex vaults (Stellar)
     eldorado/                     P2P on-ramp और off-ramp: El Dorado पर स्थानीय मुद्रा और stablecoins (Arbitrum)
+    koywe/                        QR charges के लिए ARS में bank transfers: sellers के accounts (hosted KYB), deposit
+                                  instructions, partner का signed webhook, token में conversion, sweep
     trustless-work/               protected payments on Trustless Work (Stellar): client, envelope checks,
                                   sync / expiry / deadline jobs, the keyless buyer routes, admin/
   health/                         liveness/readiness probes (@Public)
@@ -303,6 +307,9 @@ Paths OpenAPI के `{param}` रूप में लिखे गए हैं
 | GET | `/v1/onramp/p2p/sessions/{id}` | `onramp:read` | ✓ |
 | GET | `/v1/onramp/p2p/tokens` | `onramp:read` | ✓ |
 | POST | `/v1/onramp/p2p/webhooks` | कोई नहीं: `@Public()`, P2P marketplace द्वारा signed; OpenAPI contract में नहीं |  |
+| GET | `/v1/onramp/transfer/account` | `onramp:read` | ✓ |
+| POST | `/v1/onramp/transfer/account` | `onramp:write` | ✓ |
+| POST | `/v1/onramp/transfer/webhooks` | कोई नहीं: `@Public()`, bank transfer partner द्वारा signed; OpenAPI contract में नहीं |  |
 | GET | `/v1/onramp/payins` | `onramp:read` |  |
 | POST | `/v1/onramp/payins` | `onramp:write` |  |
 | GET | `/v1/onramp/payins/{id}` | `onramp:read` |  |
@@ -325,6 +332,7 @@ Paths OpenAPI के `{param}` रूप में लिखे गए हैं
 | POST | `/v1/payment-links/{id}/solana-pay` | कोई नहीं: `@Public()`, हर client address का अपना budget |  |
 | GET | `/v1/payment-links/fiat/{id}` | कोई नहीं: `@Public()`, हर client address का अपना budget |  |
 | POST | `/v1/payment-links/fiat/{id}/sessions` | कोई नहीं: `@Public()`, हर client address का अपना budget |  |
+| POST | `/v1/payment-links/fiat/{id}/transfers` | कोई नहीं: `@Public()`, हर client address का अपना budget |  |
 | GET | `/v1/plugins` | `plugins:read` |  |
 | GET | `/v1/plugins/{slug}` | `plugins:read` |  |
 | PUT | `/v1/plugins/{slug}/installation` | `plugins:write` |  |
@@ -2257,6 +2265,29 @@ Seller स्थानीय मुद्रा की एक राशि QR �
 - **Operator के steps।** Marketplace webhook को हर Client ID के लिए register करता है, उसी address पर email से जो integrator ids देता है: उसे Client ID और URL `https://api.cosmospay.lat/cosmos-api/v1/onramp/p2p/webhooks` भेजें (gateway का public prefix, फिर `/v1/onramp/p2p/webhooks`)। Gateway को ठीक `POST /v1/onramp/p2p/webhooks` के लिए एक keyless route चाहिए जो body को बिना बदले आगे भेजे; payer के routes को कुछ नया नहीं चाहिए।
 - **इस version में नहीं:** request के paid होने पर बाहर जाने वाला webhook event, requests का dashboard view, और दोबारा इस्तेमाल होने वाले QR जिनमें payer राशि खुद टाइप करता है।
 
+## Bank transfer से चुकाए गए charges
+
+> **एक native plugin.** इस section में सब कुछ `koywe` plugin है
+> (`src/native-plugins/koywe/`), जो केवल तब serve होता है जब `PLUGINS_ENABLED` में `koywe` और
+> `eldorado` दोनों हों (`eldorado` के बिना, जो payment requests का मालिक है, यह boot नहीं
+> होता). इसके routes, errors और published contract provider को "bank transfer partner"
+> कहते हैं; केवल इसके variables और slug में उसका नाम है.
+
+Argentina में payer एक QR charge को pesos में bank transfer से, अपने ही नाम के account से, चुकाता है, और seller को charge का token अपने ही address पर मिलता है. हर seller पहले एक bank transfer account खोलता है: partner पर Cosmos Pay के organization के तहत उसका अपना merchant, जिसे partner का KYB partner द्वारा hosted form पर verify करता है, seller के नाम पर ARS CVU और alias के साथ. उसके बाद charge `methods` में `p2p` से पहले `transfer` offer करता है, जब वह ARS में हो, `KOYWE_MIN_ARS` और `KOYWE_MAX_ARS` के बीच हो, ऐसे token पर हो जिसे partner deliver करता है (Ethereum, Polygon और Base पर USDC और USDT, BNB Chain पर USDT; testnet पर P2P sandbox की हर pair, sandbox पर converted) और उसके owner का account approved हो.
+
+| Method | Path | Scope | काम |
+| ------ | ---- | ----- | --- |
+| GET | `/v1/onramp/transfer/account` | `onramp:read` | Seller का account: status, verification link, alias और CVU |
+| POST | `/v1/onramp/transfer/account` | `onramp:write` | इसे खोलना (person या company, CUIT/CUIL के साथ) और KYB शुरू करना |
+| POST | `/v1/payment-links/fiat/{id}/transfers` | कोई नहीं (`@Public()`) | Payer CUIT/CUIL या DNI देता है और amount, alias और CVU पाता है |
+| POST | `/v1/onramp/transfer/webhooks` | कोई नहीं (`@Public()`, signed) | Partner के deposits, conversion orders और KYB results |
+
+- **पैसा seller का है, seller के नाम पर.** Deposit seller के अपने merchant balance में आता है; Cosmos Pay पूरा deposit partner के ज़रिए charge के token में convert करता है (एक quote और एक ONRAMP order जिसका `externalId` transfer id है) और partner उसे charge के `address` पर भेजता है. Deposit से order complete होने तक charge `processing` पढ़ता है, फिर `paidMethod: "transfer"` के साथ `paid`; `processing` charge कभी expired नहीं पढ़ता और cancel नहीं हो सकता. `KOYWE_POOLED_ENABLED=true` के साथ Cosmos Pay का अपना merchant (`KOYWE_MERCHANT_ID` / `KOYWE_SANDBOX_MERCHANT_ID`) बिना approved account वाले sellers के charges लेता है, shared public key वाले भी, और उन minutes के लिए पैसा Cosmos Pay के account से गुज़रता है. Default रूप से बंद.
+- **Payer का document deposit की पहचान करता है और कभी रखा नहीं जाता.** Transfer route CUIT/CUIL (check digit verified) या DNI लेता है और केवल उसके DNI हिस्से का `KOYWE_DOCUMENT_PEPPER` के तहत HMAC-SHA256 और तीन अंक रखता है; pepper के बिना कोई transfer offer नहीं होता. वही document वही transfer वापस पाता है. एक merchant पर एक payer का हर open transfer अलग amount माँगता है: उसी amount का दूसरा charge कुछ centavos ज़्यादा माँगता है, और जवाब का `amount` ही transfer करना है.
+- **Matching.** Deposit उसी merchant पर उसी document के उस open transfer को चुकाता है जो ठीक उसका amount माँगता है; बड़ा deposit तभी चुकाता है जब उस payer का वहाँ एक ही open transfer हो (और पूरा convert होता है). जो deposit किसी से match नहीं होता (दूसरा document, कम amount, कई candidates के साथ बड़ा) `bank_income_event` में `unmatched` रखा जाता है और error के रूप में log होता है: ops उसे हाथ से refund करता है. Transfer अपने घंटे के बाद 24 घंटे तक match होता रहता है.
+- **Webhook.** `POST /v1/onramp/transfer/webhooks` `@Public()` है और OpenAPI contract से बाहर है. Delivery तभी स्वीकार होती है जब `Koywe-Signature` raw body का `KOYWE_WEBHOOK_SECRET` या `KOYWE_SANDBOX_WEBHOOK_SECRET` के तहत lowercase hex HMAC-SHA256 हो, constant time में compare किया गया; जो secret verify करता है वही network तय करता है. बाकी सब `401 webhook_signature_invalid` है. कुछ भी apply करने से पहले हर envelope id रखा जाता है (redelivery कुछ नहीं बदलती), जवाब तुरंत जाता है और partner calls उसके बाद चलते हैं; केवल उसे store न कर पाने पर `5xx` जवाब जाता है, ताकि partner फिर भेजे.
+- **अटके conversions.** Partner की approval policy को API user के लिए हर merchant पर merchants बनाना, KYB trigger करना, virtual accounts, CRYPTO accounts और ONRAMP orders बनाना allow करना चाहिए. Policy द्वारा रोका गया order या account transfer को reason के साथ `converting` में रखता है, error के रूप में logged. एक sweep (हर minute, `OBSERVER_ENABLED` के साथ) बिना order वाले conversions फिर से try करता है (एक minute से, दोगुना होते हुए, अधिकतम एक घंटा), दस minute बाद अधूरे orders और हर दस minute pending KYB फिर से पढ़ता है. Failed order charge को merchant balance में pesos के साथ `processing` में छोड़ता है: ops.
+- **Operator steps.** हर environment के लिए एक बार webhook register करें `npm run bank-transfer:webhook -- register --network testnet` (और `public`) से; यह उस environment के webhook secret से sign करता है, और `list` और `ping --id <id>` उसे check करते हैं. Gateway को ठीक `POST /v1/onramp/transfer/webhooks` के लिए keyless route चाहिए जो body को बिना बदले आगे भेजे; `/v1/payment-links/*` पहले से keyless है. Sandbox पर `npm run bank-transfer:simulate -- --merchant <id> --amount 6000 --document 20123456786` शुरू से अंत तक एक deposit चलाता है. Scripts कोई secret print नहीं करते.
 ## Plugins — एक slug के तहत extensions
 
 दूसरी टीमें अपनी technology को इस service में एक **plugin** के रूप में जोड़ती हैं:
@@ -2476,6 +2507,7 @@ seal होती हैं और कभी लौटाई नहीं जा
 | `blindpay` | KYC, onramp, offramp, BlindPay webhook, उसके `/v1/admin` routes (`receivers`, `payins`, `payouts`) और admin summary का `fiat` अनुभाग |
 | `defindex` | `/v1/defindex` — Stellar पर DeFindex vaults |
 | `eldorado` | `/v1/onramp/p2p` और `/v1/offramp/p2p`: El Dorado के P2P marketplace की सूची वाली हर chain पर tokens, स्थानीय मुद्रा से खरीदे और उसके बदले बेचे गए; QR से charges, जिनका भुगतान बिना key वाले `/v1/payment-links/fiat/{id}` से होता है; marketplace का order webhook |
+| `koywe` | `/v1/onramp/transfer/account` और keyless `/v1/payment-links/fiat/{id}/transfers`: bank transfer partner पर seller के अपने account में ARS bank transfer से चुकाए गए payment requests, request के token में converted; partner का webhook. `eldorado` चाहिए |
 | `trustless-work` | `/v1/protected-payments`, बिना key वाले `/v1/protected-payment-links` और `/v1/admin/protected-payments`: Trustless Work (Stellar) पर सुरक्षित भुगतान |
 
 - **सूची में नहीं, तो मौजूद नहीं।** जिस native plugin का नाम `PLUGINS_ENABLED` में नहीं
@@ -2508,6 +2540,12 @@ seal होती हैं और कभी लौटाई नहीं जा
 
 ## अपग्रेड — breaking changes और deploy नोट्स
 
+### Bank transfer से चुकाए गए charges: एक नया native plugin, पाँच tables और `processing`
+
+- **Migration `20261112180000_bank_transfer_charges`** `bank_transfer_account`, `bank_transfer`, `bank_transfer_webhook_event`, `bank_income_event` और `bank_transfer_crypto_account` बनाता है, और `p2p_payment_request` में `methods` और `paidMethod` जोड़ता है (मौजूदा rows के लिए भरे: `["p2p"]`, और paid वालों के लिए `p2p`). नया build serve करने से पहले `migrate deploy` चलाएँ.
+- **Payment requests (additive):** seller और payer views में `methods`, seller view में `paidMethod`, और status `processing`. जो client `status` पर branch करता है उसे `processing` (पैसा मिला, token रास्ते में) handle करना होगा: यह कभी expired नहीं पढ़ता और cancel नहीं हो सकता (`409 request_closed`).
+- **नए routes** (plugin `koywe`): `GET` और `POST /v1/onramp/transfer/account`, keyless `POST /v1/payment-links/fiat/{id}/transfers` और `POST /v1/onramp/transfer/webhooks`. नए error codes: `invalid_document`, `method_unavailable` और `invalid_tax_id` (400), `account_required` (403), `account_exists` (409), `transfer_unavailable` (503). नए budgets: `payment-links-fiat:transfer` (हर client address पर प्रति minute 10) और `onramp-transfer:account` (5).
+- **Configure होने तक बंद:** `PLUGINS_ENABLED` में `koywe` जोड़ें (`eldorado` के साथ), हर environment के `KOYWE_*` variables और `KOYWE_DOCUMENT_PEPPER` set करें, gateway route जोड़ें, webhook और partner के policy rules register करें (देखें *Bank transfer से चुकाए गए charges*).
 ### P2P on-ramp: स्थानीय मुद्रा में QR से charges, और marketplace का order webhook
 
 - **Migration `20261112120000_p2p_payment_requests`** `p2p_payment_request` table बनाता है और `p2p_ramp_session` में nullable columns जोड़ता है (`paymentRequestId`, `providerOrderId`, `providerStatus`, `deliveredAmount`, `txHash`, `completedAt`); कुछ भी rewrite नहीं होता। नया build serve करने से पहले `migrate deploy` चलाएँ।
@@ -3652,6 +3690,21 @@ type दोबारा बनाए बिना enum value drop नहीं �
 | `ELDORADO_TIMEOUT_MS` | नहीं | `10000` | P2P marketplace को एक call का budget (ms) |
 | `ELDORADO_WEBHOOK_JWKS_URL_MAINNET` | नहीं | `https://api.eldorado.io/api/.well-known/jwks.json` | वह जगह जहाँ P2P marketplace उन keys को publish करता है जिनसे उसके mainnet order webhooks signed होते हैं (`POST /v1/onramp/p2p/webhooks`) |
 | `ELDORADO_WEBHOOK_JWKS_URL_TESTNET` | नहीं | `https://api-testnet.eldorado.io/api/.well-known/jwks.json` | sandbox के लिए वही |
+| `KOYWE_API_URL` | नहीं | `https://api.koywe.com` | Bank transfer partner की production API (`public` network के charges) |
+| `KOYWE_API_KEY` | mainnet पर bank transfers के लिए | — | Partner की API key; `KOYWE_SECRET`, `KOYWE_ORGANIZATION_ID` और `KOYWE_WEBHOOK_SECRET` के साथ mainnet पर bank transfers चालू करती है |
+| `KOYWE_SECRET` | API key के साथ | — | उस API key का secret |
+| `KOYWE_ORGANIZATION_ID` | API key के साथ | — | Partner पर Cosmos Pay का organization: sellers के accounts इसके तहत merchants हैं |
+| `KOYWE_MERCHANT_ID` | pooled mode के लिए | — | Cosmos Pay का अपना merchant, केवल `KOYWE_POOLED_ENABLED` के साथ |
+| `KOYWE_WEBHOOK_SECRET` | API key के साथ | — | वह secret जिससे webhook endpoint register है (32 या ज़्यादा characters); deliveries इससे verify होती हैं. Sandbox वाले से अलग होना चाहिए |
+| `KOYWE_SANDBOX_API_URL` | नहीं | `https://api-sandbox.koywe.com` | Partner का sandbox (`testnet` network के charges) |
+| `KOYWE_SANDBOX_API_KEY`, `KOYWE_SANDBOX_SECRET`, `KOYWE_SANDBOX_ORGANIZATION_ID`, `KOYWE_SANDBOX_MERCHANT_ID`, `KOYWE_SANDBOX_WEBHOOK_SECRET` | testnet पर bank transfers के लिए | — | Sandbox के लिए वही set |
+| `KOYWE_SANDBOX_NETWORK` | नहीं | `POLYGON` | Sandbox हर test charge कहाँ convert करता है: `ETHEREUM`, `POLYGON`, `BASE` या `BSC` |
+| `KOYWE_SANDBOX_TOKEN` | नहीं | `USDT` | वह token जिसमें convert होता है: `USDC` या `USDT` (`BSC` पर केवल `USDT`) |
+| `KOYWE_POOLED_ENABLED` | नहीं | `false` | बिना approved account वाले sellers के charges Cosmos Pay का merchant ले (पैसा Cosmos Pay के account से गुज़रता है) |
+| `KOYWE_DOCUMENT_PEPPER` | bank transfers के लिए | — | वह key (32 या ज़्यादा characters) जिसके तहत payers के documents hash होते हैं. इसके बिना कोई bank transfer offer नहीं होता. Open transfers रहते इसे कभी न बदलें |
+| `KOYWE_ACCOUNT_HOLDER` | नहीं | — | Pooled account के लिए दिखाया गया holder |
+| `KOYWE_ALIAS`, `KOYWE_CVU` | नहीं | — | Pooled account का alias और CVU (22 अंक) बदलते हैं |
+| `KOYWE_MIN_ARS`, `KOYWE_MAX_ARS` | नहीं | `1000`, `5000000` | वे amounts जो एक charge bank transfer से माँग सकता है |
 | `TRUSTLESS_WORK_API_KEY_TESTNET` | testnet पर सुरक्षित भुगतान के लिए | — | testnet के लिए Trustless Work की API key (`dev` keys)। Routes केवल `PLUGINS_ENABLED` में `trustless-work` होने पर मौजूद हैं; key के बिना वे testnet पर `503 misconfigured` लौटाते हैं। `TRUSTLESS_WORK_PLATFORM_SECRET_TESTNET` भी ज़रूरी है |
 | `TRUSTLESS_WORK_BASE_URL_TESTNET` | नहीं | `https://dev.api.trustlesswork.com` | testnet के लिए Trustless Work की V1 API |
 | `TRUSTLESS_WORK_PLATFORM_SECRET_TESTNET` | API key के साथ | — | Cosmos Pay का platform account (S...): deploys और platform के disputes sign करता है, उनका XLM चुकाता है और platform fee प्राप्त करता है। USDC को trust करना ज़रूरी है। एक hot key: इसकी fees sweep करें |

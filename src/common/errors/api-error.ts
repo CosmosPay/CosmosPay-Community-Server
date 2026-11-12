@@ -297,6 +297,32 @@ export enum ApiErrorCode {
    */
   WebhookSignatureInvalid = 'webhook_signature_invalid',
 
+  // --- payment requests paid by bank transfer (native plugin `koywe`) -------
+  /**
+   * The payer's document is neither a CUIT/CUIL (11 digits whose check digit
+   * verifies) nor a DNI (7 or 8 digits).
+   */
+  InvalidDocument = 'invalid_document',
+  /** The payment request cannot be paid by that method: its `methods` lack it. */
+  MethodUnavailable = 'method_unavailable',
+  /**
+   * Bank transfers cannot be offered right now: the deposit account could not
+   * be read, or the deployment cannot give its details. Retry, or pay another way.
+   */
+  TransferUnavailable = 'transfer_unavailable',
+  /**
+   * Accepting bank transfers needs an account of one's own: the shared public
+   * key (every wallet without an account) cannot open or read one.
+   */
+  AccountRequired = 'account_required',
+  /** This consumer already has a bank transfer account on the key's network (a rejected one may try again). */
+  AccountExists = 'account_exists',
+  /**
+   * The tax id is not a CUIT/CUIL whose check digit verifies, or not one the
+   * account's type can have (a company's CUIT, a person's CUIL or CUIT).
+   */
+  InvalidTaxId = 'invalid_tax_id',
+
   // --- service --------------------------------------------------------------
   Misconfigured = 'misconfigured',
   Internal = 'internal_error',

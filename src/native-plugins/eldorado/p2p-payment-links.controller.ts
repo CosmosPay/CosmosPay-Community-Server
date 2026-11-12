@@ -73,8 +73,8 @@ export class P2pPaymentLinksController {
     summary: 'Read a charge in local money as its payer sees it (no API key)',
     description:
       'For the hosted page of a payment request: the amount in local money, the description, the token the seller receives with an estimate at ' +
-      'the market price right now, and the payment methods that can pay it. **The id is the capability**: nothing about the seller’s account or ' +
-      'address is returned. Poll it until `status` is no longer `open`. Answered with `Cache-Control: no-store` and budgeted per client address.',
+      'the market price right now, and how it can be paid (`methods`, with the hosted window’s `paymentMethods`). **The id is the capability**: nothing about ' +
+      'the seller’s account or address is returned. Poll it until `status` is neither `open` nor `processing`. Answered with `Cache-Control: no-store` and budgeted per client address.',
   })
   @IdParam()
   @ApiOkResponse({
