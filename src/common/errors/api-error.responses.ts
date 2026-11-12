@@ -591,6 +591,50 @@ export const API_ERROR_CASES: Readonly<Record<ApiErrorCode, ApiErrorCase>> = {
     path: '/v1/onramp/p2p/webhooks',
   },
 
+  // --- payment requests paid by bank transfer (native plugin `koywe`) -------
+  [ApiErrorCode.InvalidDocument]: {
+    statuses: [400],
+    summary: 'The document is neither a valid CUIT/CUIL nor a DNI',
+    message:
+      'document must be a CUIT/CUIL (11 digits with a valid check digit) or a DNI (7 or 8 digits)',
+    path: '/v1/payment-links/fiat/cmh4x2k9a0001l70g8v5q3z2w/transfers',
+  },
+  [ApiErrorCode.MethodUnavailable]: {
+    statuses: [400],
+    summary: 'The payment request cannot be paid by that method',
+    message:
+      'Payment request cmh4x2k9a0001l70g8v5q3z2w cannot be paid by bank transfer',
+    path: '/v1/payment-links/fiat/cmh4x2k9a0001l70g8v5q3z2w/transfers',
+  },
+  [ApiErrorCode.TransferUnavailable]: {
+    statuses: [503],
+    summary: 'Bank transfers cannot be offered right now',
+    message:
+      'Bank transfers are not available right now: retry shortly or pay with another method.',
+    path: '/v1/payment-links/fiat/cmh4x2k9a0001l70g8v5q3z2w/transfers',
+  },
+  [ApiErrorCode.AccountRequired]: {
+    statuses: [403],
+    summary: 'The shared public key cannot hold a bank transfer account',
+    message:
+      'Accepting bank transfers needs a Cosmos Pay account: sign in to use your own API key.',
+    path: '/v1/onramp/transfer/account',
+  },
+  [ApiErrorCode.AccountExists]: {
+    statuses: [409],
+    summary: 'A bank transfer account already exists',
+    message:
+      'This account already has a bank transfer account (pending): only a rejected one can be submitted again.',
+    path: '/v1/onramp/transfer/account',
+  },
+  [ApiErrorCode.InvalidTaxId]: {
+    statuses: [400],
+    summary: 'The tax id is not a valid CUIT/CUIL for the account type',
+    message:
+      'taxId must be a CUIT or CUIL: 11 digits whose check digit verifies (a company: a CUIT starting 30, 33 or 34)',
+    path: '/v1/onramp/transfer/account',
+  },
+
   // --- service --------------------------------------------------------------
   [ApiErrorCode.Misconfigured]: {
     statuses: [503],

@@ -54,7 +54,7 @@ process.env.WALLET_AUTH_SESSION_SECRET =
 // through the real loader, signature check and registry. Pinned for the same
 // reason as the rest: a developer's .env may enable others, or none.
 process.env.PLUGINS_ENABLED =
-  'example,blindpay,defindex,eldorado,trustless-work';
+  'example,blindpay,defindex,eldorado,koywe,trustless-work';
 // No DeFindex key: the guards suite asserts `503 misconfigured`, and a developer's
 // .env usually carries a real key, which would send the suites to DeFindex. The
 // binding suite replaces DefindexClient instead. Empty rather than deleted, for
@@ -122,3 +122,30 @@ for (const suffix of [
 ]) {
   process.env[`ZK_PAYMENTS_MAINNET_${suffix}`] = '';
 }
+// Bank transfers (native plugin `koywe`): a fixture sandbox environment and no
+// production one, so the suites reach only the sandbox host they answer
+// themselves. Every variable pinned, empty rather than deleted, for the same
+// dotenv reason as above.
+process.env.KOYWE_API_URL = 'https://api.koywe.example';
+process.env.KOYWE_API_KEY = '';
+process.env.KOYWE_SECRET = '';
+process.env.KOYWE_ORGANIZATION_ID = '';
+process.env.KOYWE_MERCHANT_ID = '';
+process.env.KOYWE_WEBHOOK_SECRET = '';
+process.env.KOYWE_SANDBOX_API_URL = 'https://api-sandbox.koywe.example';
+process.env.KOYWE_SANDBOX_API_KEY = 'e2e-sandbox-key';
+process.env.KOYWE_SANDBOX_SECRET = 'e2e-sandbox-secret';
+process.env.KOYWE_SANDBOX_ORGANIZATION_ID = 'org_e2e';
+process.env.KOYWE_SANDBOX_MERCHANT_ID = '';
+process.env.KOYWE_SANDBOX_WEBHOOK_SECRET =
+  'e2e-sandbox-webhook-secret-e2e-sandbox-webhook-secret';
+process.env.KOYWE_SANDBOX_NETWORK = 'POLYGON';
+process.env.KOYWE_SANDBOX_TOKEN = 'USDT';
+process.env.KOYWE_POOLED_ENABLED = 'false';
+process.env.KOYWE_DOCUMENT_PEPPER =
+  'e2e-document-pepper-e2e-document-pepper-e2e';
+process.env.KOYWE_ACCOUNT_HOLDER = '';
+process.env.KOYWE_ALIAS = '';
+process.env.KOYWE_CVU = '';
+process.env.KOYWE_MIN_ARS = '1000';
+process.env.KOYWE_MAX_ARS = '5000000';

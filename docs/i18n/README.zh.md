@@ -84,11 +84,15 @@ src/
   activity/                       client telemetry ingest + feed (wallet, dashboard)
   admin/                          cross-tenant platform admin (console-only), audited
   audit/                          audit-trail writer, called inside other modules' transactions
+  payment-request-rails/          扩展点：拥有付款请求的插件（其账本）与以其他方式支付它们的插件
+                                  （一条通道，例如 `transfer`）之间的接口
   plugins/                        plugin runtime + SDK (sdk.ts): folder loader, signatures, V8-isolate sandbox
   native-plugins/                 first-party plugins, imported only when PLUGINS_ENABLED names them:
     blindpay/                     BlindPay: client, Svix verify, sync + webhook, kyc/, onramp/, offramp/, admin/
     defindex/                     DeFindex vaults (Stellar)
     eldorado/                     P2P 入金与出金：在 El Dorado 上用本地货币买卖稳定币（Arbitrum）
+    koywe/                        二维码收款的 ARS 银行转账：卖家账户（托管 KYB）、存款说明、
+                                  合作方的签名 webhook、兑换为代币、清扫任务
     trustless-work/               protected payments on Trustless Work (Stellar): client, envelope checks,
                                   sync / expiry / deadline jobs, the keyless buyer routes, admin/
   health/                         liveness/readiness probes (@Public)
@@ -270,6 +274,9 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | GET | `/v1/onramp/p2p/sessions/{id}` | `onramp:read` | ✓ |
 | GET | `/v1/onramp/p2p/tokens` | `onramp:read` | ✓ |
 | POST | `/v1/onramp/p2p/webhooks` | 无：`@Public()`，由 P2P 市场签名；不在 OpenAPI 契约中 |  |
+| GET | `/v1/onramp/transfer/account` | `onramp:read` | ✓ |
+| POST | `/v1/onramp/transfer/account` | `onramp:write` | ✓ |
+| POST | `/v1/onramp/transfer/webhooks` | 无：`@Public()`，由银行转账合作方签名；不在 OpenAPI 契约中 |  |
 | GET | `/v1/onramp/payins` | `onramp:read` |  |
 | POST | `/v1/onramp/payins` | `onramp:write` |  |
 | GET | `/v1/onramp/payins/{id}` | `onramp:read` |  |
@@ -292,6 +299,7 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | POST | `/v1/payment-links/{id}/solana-pay` | 无：`@Public()`，按客户端地址计预算 |  |
 | GET | `/v1/payment-links/fiat/{id}` | 无：`@Public()`，按客户端地址计预算 |  |
 | POST | `/v1/payment-links/fiat/{id}/sessions` | 无：`@Public()`，按客户端地址计预算 |  |
+| POST | `/v1/payment-links/fiat/{id}/transfers` | 无：`@Public()`，按客户端地址计预算 |  |
 | GET | `/v1/plugins` | `plugins:read` |  |
 | GET | `/v1/plugins/{slug}` | `plugins:read` |  |
 | PUT | `/v1/plugins/{slug}/installation` | `plugins:write` |  |
@@ -1468,6 +1476,28 @@ CREATED | AWAITING_FUNDING --merchant cancels--> CANCELLED
 - **运维步骤。** 市场按 Client ID 注册 webhook，方式是发邮件到签发集成方 id 的同一个地址：把 Client ID 和 URL `https://api.cosmospay.lat/cosmos-api/v1/onramp/p2p/webhooks`（网关的公共前缀，后接 `/v1/onramp/p2p/webhooks`）发给它。网关需要一条只匹配 `POST /v1/onramp/p2p/webhooks` 的无 key 路由，并原样透传请求体；付款方的路由不需要任何新配置。
 - **本版本不包含：** 请求被支付时发出的出站 webhook 事件、请求的仪表盘视图，以及由付款方输入金额的可重复使用二维码。
 
+## 银行转账收款
+
+> **一个原生插件。** 本节的全部内容都是 `koywe` 插件
+> （`src/native-plugins/koywe/`），只有在 `PLUGINS_ENABLED` 同时列出 `koywe` 和
+> `eldorado` 时才提供（没有拥有付款请求的 `eldorado` 时它拒绝启动）。它的路由、错误和
+> 公开契约把该提供方称为“银行转账合作方”；只有它的变量和 slug 带有其名称。
+
+阿根廷的付款方用本人名下账户的银行转账以比索支付二维码收款，卖家在自己的地址收到该收款的代币。每个卖家先开立一个银行转账账户：在合作方处 Cosmos Pay 组织下属于卖家自己的商户，由合作方在其托管的表单上完成 KYB 审核，并拥有以卖家名义开立的 ARS CVU 和别名。此后，当收款为 ARS、金额介于 `KOYWE_MIN_ARS` 与 `KOYWE_MAX_ARS` 之间、代币为合作方可交付的代币（Ethereum、Polygon 和 Base 上的 USDC 与 USDT，BNB Chain 上的 USDT；测试网上为 P2P 沙盒列出的每个交易对，在沙盒中兑换），且其所有者的账户已获批时，收款会在 `methods` 中先于 `p2p` 提供 `transfer`。
+
+| 方法 | 路径 | Scope | 用途 |
+| ---- | ---- | ----- | ---- |
+| GET | `/v1/onramp/transfer/account` | `onramp:read` | 卖家账户：状态、验证链接、别名和 CVU |
+| POST | `/v1/onramp/transfer/account` | `onramp:write` | 开立账户（个人或公司，使用 CUIT/CUIL）并启动其 KYB |
+| POST | `/v1/payment-links/fiat/{id}/transfers` | 无（`@Public()`） | 付款方提供 CUIT/CUIL 或 DNI，获得金额、别名和 CVU |
+| POST | `/v1/onramp/transfer/webhooks` | 无（`@Public()`，已签名） | 合作方的存款、兑换订单和 KYB 结果 |
+
+- **资金属于卖家，以卖家名义。** 存款进入卖家自有商户的余额；Cosmos Pay 通过合作方把整笔存款兑换为收款的代币（一个报价和一个 `externalId` 为转账 id 的 ONRAMP 订单），由合作方发送到收款的 `address`。从存款到订单完成，收款显示为 `processing`，之后显示为 `paid` 并带有 `paidMethod: "transfer"`；`processing` 的收款永远不会显示为过期，也不能取消。设置 `KOYWE_POOLED_ENABLED=true` 时，Cosmos Pay 自己的商户（`KOYWE_MERCHANT_ID` / `KOYWE_SANDBOX_MERCHANT_ID`）承接没有获批账户的卖家（包括共享公钥）的收款，资金在这几分钟内经过 Cosmos Pay 的账户。默认关闭。
+- **付款方的证件用于识别存款，且从不保存。** 转账路由接受 CUIT/CUIL（校验位已验证）或 DNI，只保存其 DNI 部分在 `KOYWE_DOCUMENT_PEPPER` 下的 HMAC-SHA256 和三位数字；没有 pepper 时不提供任何转账。同一证件会得到同一笔转账。同一付款方在同一商户的每笔未结转账要求的金额都不同：同金额的第二笔收款会多要几分钱，响应中的 `amount` 就是应转账的金额。
+- **匹配。** 存款支付同一商户中同一证件、要求金额与存款完全相等的未结转账；更大的存款只有在该付款方在那里只有一笔未结转账时才会支付它（并整笔兑换）。无法匹配的存款（其他证件、金额不足、金额更大但有多个候选）以 `unmatched` 存入 `bank_income_event` 并记录为错误：由运维手动退款。转账在其一小时结束后的 24 小时内仍可匹配。
+- **Webhook。** `POST /v1/onramp/transfer/webhooks` 是 `@Public()`，不在 OpenAPI 契约中。只有当 `Koywe-Signature` 是原始请求体在 `KOYWE_WEBHOOK_SECRET` 或 `KOYWE_SANDBOX_WEBHOOK_SECRET` 下的小写十六进制 HMAC-SHA256（以恒定时间比较）时才接受投递；验证成功的密钥决定网络。其他一律为 `401 webhook_signature_invalid`。在应用任何内容之前先保存每个信封 id（重复投递不会改变任何东西），立即返回响应，对合作方的调用随后执行；只有保存失败时才返回 `5xx`，以便合作方重新投递。
+- **卡住的兑换。** 合作方的审批策略必须允许 API 用户在所有商户上创建商户、触发 KYB、创建虚拟账户、CRYPTO 账户和 ONRAMP 订单。被策略挂起的订单或账户会使转账保持 `converting` 并附原因，并记录为错误。清扫任务（每分钟一次，需 `OBSERVER_ENABLED`）重试没有订单的兑换（从一分钟开始，加倍，最多一小时），重新读取十分钟后仍未完成的订单，并每十分钟重新读取待处理的 KYB。失败的订单会让收款停留在 `processing`，比索留在商户余额中：交由运维。
+- **运维步骤。** 每个环境用 `npm run bank-transfer:webhook -- register --network testnet`（以及 `public`）注册一次 webhook；它使用该环境的 webhook 密钥签名，`list` 和 `ping --id <id>` 用于检查。网关需要一条恰好针对 `POST /v1/onramp/transfer/webhooks` 的免密钥路由，原样转发请求体；`/v1/payment-links/*` 已经免密钥。在沙盒中，`npm run bank-transfer:simulate -- --merchant <id> --amount 6000 --document 20123456786` 会端到端触发一笔存款。脚本不打印任何密钥。
 ## 插件 — 以 slug 命名的扩展
 
 其他团队以**插件**的形式把自己的技术集成到本服务：`plugins/` 下的一个目录，在
@@ -1663,6 +1693,7 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
 | `blindpay` | KYC、入金、出金、BlindPay webhook、其 `/v1/admin` 路由（`receivers`、`payins`、`payouts`）以及管理概览中的 `fiat` 部分 |
 | `defindex` | `/v1/defindex`——Stellar 上的 DeFindex vaults |
 | `eldorado` | `/v1/onramp/p2p` 和 `/v1/offramp/p2p`：El Dorado 的 P2P 市场所列每条链上的代币，用本地货币买入和卖出；二维码收款，经由无需 key 的 `/v1/payment-links/fiat/{id}` 支付；市场的订单 webhook |
+| `koywe` | `/v1/onramp/transfer/account` 和免密钥的 `/v1/payment-links/fiat/{id}/transfers`：通过 ARS 银行转账付入卖家在银行转账合作方处自有账户的付款请求，兑换为请求的代币；合作方的 webhook。需要 `eldorado` |
 | `trustless-work` | `/v1/protected-payments`、无需 key 的 `/v1/protected-payment-links` 以及 `/v1/admin/protected-payments`：Stellar 上基于 Trustless Work 的受保护付款 |
 
 - **未列出即不存在。** `PLUGINS_ENABLED` 未列出的原生插件永远不会被实例化：其路由返回
@@ -1685,6 +1716,12 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
 
 ## 升级 — 破坏性变更与部署说明
 
+### 银行转账收款：一个新的原生插件、五张表和 `processing`
+
+- **迁移 `20261112180000_bank_transfer_charges`** 创建 `bank_transfer_account`、`bank_transfer`、`bank_transfer_webhook_event`、`bank_income_event` 和 `bank_transfer_crypto_account`，并为 `p2p_payment_request` 添加 `methods` 和 `paidMethod`（已有行会被填充：`["p2p"]`，已支付的为 `p2p`）。在新构建提供服务前运行 `migrate deploy`。
+- **付款请求（新增字段）：** 卖家和付款方视图中的 `methods`、卖家视图中的 `paidMethod`，以及状态 `processing`。按 `status` 分支的客户端必须处理 `processing`（已收款，代币在途）：它永远不会显示为过期，也不能取消（`409 request_closed`）。
+- **新路由**（插件 `koywe`）：`GET` 和 `POST /v1/onramp/transfer/account`、免密钥的 `POST /v1/payment-links/fiat/{id}/transfers` 以及 `POST /v1/onramp/transfer/webhooks`。新错误码：`invalid_document`、`method_unavailable` 和 `invalid_tax_id`（400）、`account_required`（403）、`account_exists`（409）、`transfer_unavailable`（503）。新预算：`payment-links-fiat:transfer`（每个客户端地址每分钟 10 次）和 `onramp-transfer:account`（5 次）。
+- **配置前保持关闭：** 将 `koywe` 加入 `PLUGINS_ENABLED`（与 `eldorado` 一起），设置每个环境的 `KOYWE_*` 变量和 `KOYWE_DOCUMENT_PEPPER`，添加网关路由，注册 webhook 和合作方的策略规则（见*银行转账收款*）。
 ### P2P 入金：以本地货币计的二维码收款，以及市场的订单 webhook
 
 - **迁移 `20261112120000_p2p_payment_requests`** 创建 `p2p_payment_request` 表，并为 `p2p_ramp_session` 添加可空列（`paymentRequestId`、`providerOrderId`、`providerStatus`、`deliveredAmount`、`txHash`、`completedAt`）；不改写任何内容。在新构建提供服务前运行 `migrate deploy`。
@@ -2451,6 +2488,21 @@ curl -H "X-Gateway-Secret: $APISIX_GATEWAY_SECRET" -H "X-Consumer-Username: ops"
 | `ELDORADO_TIMEOUT_MS` | 否 | `10000` | 对 P2P 市场单次调用的预算（ms） |
 | `ELDORADO_WEBHOOK_JWKS_URL_MAINNET` | 否 | `https://api.eldorado.io/api/.well-known/jwks.json` | P2P 市场发布其主网订单 webhook 签名密钥的位置（`POST /v1/onramp/p2p/webhooks`） |
 | `ELDORADO_WEBHOOK_JWKS_URL_TESTNET` | 否 | `https://api-testnet.eldorado.io/api/.well-known/jwks.json` | 沙盒的同一项 |
+| `KOYWE_API_URL` | 否 | `https://api.koywe.com` | 银行转账合作方的生产 API（`public` 网络的收款） |
+| `KOYWE_API_KEY` | 主网银行转账需要 | — | 合作方的 API 密钥；与 `KOYWE_SECRET`、`KOYWE_ORGANIZATION_ID` 和 `KOYWE_WEBHOOK_SECRET` 一起开启主网银行转账 |
+| `KOYWE_SECRET` | 与 API 密钥一起 | — | 该 API 密钥的 secret |
+| `KOYWE_ORGANIZATION_ID` | 与 API 密钥一起 | — | Cosmos Pay 在合作方处的组织：卖家账户是其下的商户 |
+| `KOYWE_MERCHANT_ID` | 资金池模式需要 | — | Cosmos Pay 自己的商户，仅在 `KOYWE_POOLED_ENABLED` 时使用 |
+| `KOYWE_WEBHOOK_SECRET` | 与 API 密钥一起 | — | 注册 webhook 端点时使用的密钥（32 个字符或以上）；投递用它验证。必须与沙盒的不同 |
+| `KOYWE_SANDBOX_API_URL` | 否 | `https://api-sandbox.koywe.com` | 合作方的沙盒（`testnet` 网络的收款） |
+| `KOYWE_SANDBOX_API_KEY`, `KOYWE_SANDBOX_SECRET`, `KOYWE_SANDBOX_ORGANIZATION_ID`, `KOYWE_SANDBOX_MERCHANT_ID`, `KOYWE_SANDBOX_WEBHOOK_SECRET` | 测试网银行转账需要 | — | 沙盒的同一组变量 |
+| `KOYWE_SANDBOX_NETWORK` | 否 | `POLYGON` | 沙盒兑换每笔测试收款的网络：`ETHEREUM`、`POLYGON`、`BASE` 或 `BSC` |
+| `KOYWE_SANDBOX_TOKEN` | 否 | `USDT` | 兑换成的代币：`USDC` 或 `USDT`（`BSC` 上仅 `USDT`） |
+| `KOYWE_POOLED_ENABLED` | 否 | `false` | 让 Cosmos Pay 的商户承接没有获批账户的卖家的收款（资金经过 Cosmos Pay 的账户） |
+| `KOYWE_DOCUMENT_PEPPER` | 银行转账需要 | — | 对付款方证件做哈希的密钥（32 个字符或以上）。没有它就不提供任何银行转账。存在未结转账时切勿更改 |
+| `KOYWE_ACCOUNT_HOLDER` | 否 | — | 资金池账户显示的户名 |
+| `KOYWE_ALIAS`, `KOYWE_CVU` | 否 | — | 替换资金池账户的别名和 CVU（22 位） |
+| `KOYWE_MIN_ARS`, `KOYWE_MAX_ARS` | 否 | `1000`, `5000000` | 收款可通过银行转账要求的金额范围 |
 | `TRUSTLESS_WORK_API_KEY_TESTNET` | 测试网上的受保护付款需要 | — | Trustless Work 的测试网 API key（供 `dev` key 使用）。仅当 `PLUGINS_ENABLED` 包含 `trustless-work` 时路由才存在；没有该 key 时，它们在测试网上返回 `503 misconfigured`。需要同时设置 `TRUSTLESS_WORK_PLATFORM_SECRET_TESTNET` |
 | `TRUSTLESS_WORK_BASE_URL_TESTNET` | 否 | `https://dev.api.trustlesswork.com` | 测试网的 Trustless Work V1 API |
 | `TRUSTLESS_WORK_PLATFORM_SECRET_TESTNET` | 与 API key 一起 | — | Cosmos Pay 的平台账户（S...）：为部署和平台发起的争议签名，支付其 XLM，并接收平台手续费。必须信任 USDC。这是热密钥：请归集其上的手续费 |

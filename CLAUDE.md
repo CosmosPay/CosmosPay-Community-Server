@@ -486,6 +486,21 @@ Each of these was a real finding in this codebase, not a hypothetical:
   (`toPublicPaymentRequest`), never the owner, the seller's address, the record token,
   sessions or hashes; the purchase they open belongs to the request's consumer, and
   the stored `sharedPublicKey` decides its referral id.
+- **A bank transfer moves a payment request only on the partner's signed webhook, and
+  only to the transfer that deposit names** (native plugin `koywe`). `POST
+  /v1/onramp/transfer/webhooks` checks `Koywe-Signature` (HMAC-SHA256 of the raw body)
+  against each network's webhook secret in constant time; the one that verifies is the
+  only network the delivery may touch, and its envelope id is stored first (a
+  redelivery changes nothing). A deposit pays the open transfer of the same document
+  HMAC at the same merchant asking exactly its amount, or the depositor's only open
+  transfer there when it covers it; anything else stays `unmatched` for ops
+  (`matchDeposit`), and every open transfer of one depositor at one merchant asks a
+  different amount (`distinctAmount`), so a larger deposit is never attributed to the
+  wrong charge. The payer's document is never stored or logged: only its HMAC under
+  `KOYWE_DOCUMENT_PEPPER` and three digits; a provider error that may echo a tax id is
+  masked (`redactDigits`) before it is logged or relayed. Payment requests are another
+  plugin's table: `koywe` reaches them only through the core's `PaymentRequestRails`
+  (the ledger `eldorado` registers), never through Prisma.
 - **Input a provider SDK cannot carry is the caller's `400`, refused in the DTO.**
   `@defindex/sdk` takes amounts as JS numbers; an amount past
   `Number.MAX_SAFE_INTEGER` was checked inside the provider call and answered

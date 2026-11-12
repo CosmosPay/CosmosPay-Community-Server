@@ -30,6 +30,7 @@ export const NATIVE_PLUGIN_SLUGS = [
   'blindpay',
   'defindex',
   'eldorado',
+  'koywe',
   'trustless-work',
 ] as const;
 export type NativePluginSlug = (typeof NATIVE_PLUGIN_SLUGS)[number];

@@ -363,4 +363,64 @@ describe('validateEnv', () => {
       );
     });
   });
+
+  describe('bank transfers (native plugin koywe)', () => {
+    const EMPTY = Object.fromEntries(
+      [
+        'KOYWE_API_URL',
+        'KOYWE_WEBHOOK_SECRET',
+        'KOYWE_SANDBOX_API_URL',
+        'KOYWE_SANDBOX_WEBHOOK_SECRET',
+        'KOYWE_SANDBOX_NETWORK',
+        'KOYWE_SANDBOX_TOKEN',
+        'KOYWE_POOLED_ENABLED',
+        'KOYWE_DOCUMENT_PEPPER',
+        'KOYWE_ALIAS',
+        'KOYWE_CVU',
+      ].map((name) => [name, '']),
+    );
+
+    it('reads an empty value as an unset one, as .env.example leaves them', () => {
+      expect(() => validateEnv(validEnv(EMPTY))).not.toThrow();
+    });
+
+    it('accepts a whole set', () => {
+      expect(() =>
+        validateEnv(
+          validEnv({
+            KOYWE_API_URL: 'https://api.koywe.com',
+            KOYWE_API_KEY: 'key',
+            KOYWE_SECRET: 'secret',
+            KOYWE_ORGANIZATION_ID: 'org_1',
+            KOYWE_WEBHOOK_SECRET: 'w'.repeat(64),
+            KOYWE_SANDBOX_NETWORK: 'POLYGON',
+            KOYWE_SANDBOX_TOKEN: 'USDT',
+            KOYWE_POOLED_ENABLED: 'false',
+            KOYWE_DOCUMENT_PEPPER: 'p'.repeat(64),
+            KOYWE_ALIAS: 'cosmospay.qr',
+            KOYWE_CVU: '0000003100000000000000',
+            KOYWE_MIN_ARS: '1000',
+            KOYWE_MAX_ARS: '5000000',
+          }),
+        ),
+      ).not.toThrow();
+    });
+
+    it('refuses a short webhook secret or pepper, and values that cannot be', () => {
+      for (const [name, value] of [
+        ['KOYWE_WEBHOOK_SECRET', 'short'],
+        ['KOYWE_SANDBOX_WEBHOOK_SECRET', 'short'],
+        ['KOYWE_DOCUMENT_PEPPER', 'short'],
+        ['KOYWE_SANDBOX_NETWORK', 'SOLANA'],
+        ['KOYWE_SANDBOX_TOKEN', 'ETH'],
+        ['KOYWE_CVU', '123'],
+        ['KOYWE_ALIAS', 'a b'],
+        ['KOYWE_POOLED_ENABLED', 'maybe'],
+        ['KOYWE_MIN_ARS', '0'],
+        ['KOYWE_MAX_ARS', '1000.123'],
+      ]) {
+        expectEnvError(validEnv({ [name]: value }), name);
+      }
+    });
+  });
 });
