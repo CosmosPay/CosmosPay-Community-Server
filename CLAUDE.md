@@ -479,8 +479,9 @@ Each of these was a real finding in this codebase, not a hypothetical:
   against each network's JWKS (`P2pWebhookKeys`): the network whose key verifies is
   the only one whose sessions the delivery may touch. Every write is conditional
   (`completedAt: null`, `paidAt: null`), and a completion pays a request only as a
-  `BUY` to its address, chain and token for at least its amount (`completionProblem`:
-  the widget lets a buyer change the amount). The payer's keyless routes
+  `BUY` to its address, chain and token, paid in its currency and for at least its
+  amount (`completionProblem`: the widget lets a buyer change both, and 15000 COP is
+  not 15000 ARS). The payer's keyless routes
   (`/v1/payment-links/fiat/{id}`) answer a field-by-field projection
   (`toPublicPaymentRequest`), never the owner, the seller's address, the record token,
   sessions or hashes; the purchase they open belongs to the request's consumer, and

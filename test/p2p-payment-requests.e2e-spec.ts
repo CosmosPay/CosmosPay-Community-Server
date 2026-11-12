@@ -437,7 +437,10 @@ describe('P2P payment requests (e2e)', () => {
             tokenAddress: SANDBOX_USDT.toLowerCase(),
             chainId: '421614',
           },
-          quote: { in: { amount: '6000' }, out: { amount: '5.9' } },
+          quote: {
+            in: { amount: '6000', currency: 'ARS' },
+            out: { amount: '5.9' },
+          },
           transferInfo: { amountOut: '5.90', txHashDestination: TX },
         },
       });

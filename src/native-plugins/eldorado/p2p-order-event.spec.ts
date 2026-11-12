@@ -20,7 +20,10 @@ const ORDER = {
     tokenAddress: USDT0.toLowerCase(),
     chainId: '42161',
   },
-  quote: { in: { amount: '15000.00' }, out: { amount: '9.10' } },
+  quote: {
+    in: { amount: '15000.00', currency: 'ARS' },
+    out: { amount: '9.10' },
+  },
   transferInfo: {
     amountOut: '8.95',
     txHash: TX,
@@ -34,6 +37,7 @@ const SESSION = {
   address: RECIPIENT,
   chainId: 42161,
   tokenAddress: USDT0,
+  currency: 'ARS',
   amount: '15000',
 };
 
@@ -54,6 +58,7 @@ describe('readOrderEvent', () => {
         chainId: 42161,
         tokenAddress: USDT0.toLowerCase(),
         fiatAmount: '15000.00',
+        fiatCurrency: 'ARS',
         amountOut: '8.95',
         // The destination chain's transaction when there is one.
         txHash: DEST_TX,
@@ -97,7 +102,7 @@ describe('readOrderEvent', () => {
           tokenAddress: 42,
           chainId: '0x1',
         },
-        quote: { in: { amount: '-1' } },
+        quote: { in: { amount: '-1', currency: 'A R S' } },
         transferInfo: { amountOut: 'lots', txHash: 'nope' },
       },
     });
@@ -108,6 +113,7 @@ describe('readOrderEvent', () => {
       tokenAddress: null,
       chainId: null,
       fiatAmount: null,
+      fiatCurrency: null,
       amountOut: null,
       txHash: null,
     });
@@ -123,6 +129,36 @@ describe('completionProblem', () => {
     expect(
       completionProblem({ ...completed, fiatAmount: '15500' }, SESSION),
     ).toBeNull();
+  });
+
+  it('pays in the session’s currency whatever its case', () => {
+    const lowerCase = readOrderEvent({
+      order: { ...ORDER, quote: { in: { amount: '15000', currency: 'ars' } } },
+    })!;
+
+    expect(lowerCase.fiatCurrency).toBe('ARS');
+    expect(completionProblem(lowerCase, SESSION)).toBeNull();
+    expect(
+      completionProblem(completed, { ...SESSION, currency: 'ars' }),
+    ).toBeNull();
+  });
+
+  it('refuses an order paid in another currency, or in none it names', () => {
+    // The payer switched the widget to a cheaper currency: the same number of pesos is not the charge.
+    const otherCurrency = readOrderEvent({
+      order: { ...ORDER, quote: { in: { amount: '15000', currency: 'COP' } } },
+    })!;
+    const noCurrency = readOrderEvent({
+      order: { ...ORDER, quote: { in: { amount: '15000' } } },
+    })!;
+
+    expect(completionProblem(otherCurrency, SESSION)).toBe(
+      'the order paid in COP, not ARS',
+    );
+    expect(noCurrency.fiatCurrency).toBeNull();
+    expect(completionProblem(noCurrency, SESSION)).toBe(
+      'the order carries no currency',
+    );
   });
 
   it('refuses everything else, saying why', () => {

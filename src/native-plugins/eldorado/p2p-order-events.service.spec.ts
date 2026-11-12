@@ -67,7 +67,11 @@ function order(reference: string, status: string, extra: Row = {}) {
         tokenAddress: USDT0.toLowerCase(),
         chainId: 42161,
       },
-      quote: { in: { amount: '16000' }, out: { amount: '10' } },
+      // Lower case, as the marketplace may spell it: still the session's ARS.
+      quote: {
+        in: { amount: '16000', currency: 'ars' },
+        out: { amount: '10' },
+      },
       ...(status === 'COMPLETED'
         ? { transferInfo: { amountOut: '9.95', txHashDestination: TX } }
         : {}),
@@ -85,6 +89,7 @@ function session(id: string, extra: Row = {}): Row {
     address: RECIPIENT,
     chainId: 42161,
     tokenAddress: USDT0,
+    currency: 'ARS',
     amount: '16000',
     paymentRequestId: 'creq1',
     providerOrderId: null,
@@ -248,6 +253,8 @@ describe('P2pOrderEventsService', () => {
         session('s1'),
         session('s2'),
         session('s3'),
+        session('s4'),
+        session('s5'),
       ]);
 
       await service.receive(
@@ -263,14 +270,31 @@ describe('P2pOrderEventsService', () => {
       );
       await service.receive(
         delivery(
-          order('cp-s2', 'COMPLETED', { quote: { in: { amount: '100' } } }),
+          order('cp-s2', 'COMPLETED', {
+            quote: { in: { amount: '100', currency: 'ARS' } },
+          }),
         ),
       );
       await service.receive(
         delivery(order('cp-s3', 'COMPLETED', { type: 'SELL' })),
       );
+      // The payer switched the widget to a cheaper currency, same number.
+      await service.receive(
+        delivery(
+          order('cp-s4', 'COMPLETED', {
+            quote: { in: { amount: '16000', currency: 'COP' } },
+          }),
+        ),
+      );
+      await service.receive(
+        delivery(
+          order('cp-s5', 'COMPLETED', { quote: { in: { amount: '16000' } } }),
+        ),
+      );
 
       expect(sessions.map((s) => s.providerStatus)).toEqual([
+        'COMPLETED',
+        'COMPLETED',
         'COMPLETED',
         'COMPLETED',
         'COMPLETED',

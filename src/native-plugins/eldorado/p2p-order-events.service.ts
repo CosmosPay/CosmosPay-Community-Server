@@ -22,6 +22,7 @@ const SESSION_MATCH_SELECT = {
   address: true,
   chainId: true,
   tokenAddress: true,
+  currency: true,
   amount: true,
   paymentRequestId: true,
 } as const;

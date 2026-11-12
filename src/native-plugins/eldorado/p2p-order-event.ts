@@ -29,6 +29,8 @@ export interface P2pOrderEvent {
   tokenAddress: string | null;
   /** `quote.in.amount`: the local money the buyer paid, a decimal string. */
   fiatAmount: string | null;
+  /** `quote.in.currency`: the local currency it was paid in, upper case. */
+  fiatCurrency: string | null;
   /** `transferInfo.amountOut`: the token delivered, a decimal string (COMPLETED only). */
   amountOut: string | null;
   /** `transferInfo.txHashDestination`, else `transferInfo.txHash`. */
@@ -118,6 +120,7 @@ export function readOrderEvent(body: unknown): P2pOrderEvent | null {
     chainId: chainIdOf(crypto?.chainId),
     tokenAddress: evmAddress(crypto?.tokenAddress),
     fiatAmount: decimal(quoteIn?.amount),
+    fiatCurrency: word(quoteIn?.currency, 16)?.toUpperCase() ?? null,
     amountOut: decimal(transfer?.amountOut),
     txHash: txHashOf(transfer?.txHashDestination) ?? txHashOf(transfer?.txHash),
   };
@@ -134,6 +137,7 @@ export interface SessionTerms {
   address: string;
   chainId: number;
   tokenAddress: string;
+  currency: string;
   amount: string;
 }
 
@@ -145,10 +149,12 @@ function cents(amount: string): number {
 /**
  * Why a COMPLETED `order` does not pay the payment request its session was
  * opened from, or null when it does: a purchase (`BUY`), delivered to the
- * session's recipient, on its chain, in its token (addresses in any case), for
- * at least the session's amount of local money. The widget lets a buyer change
- * the amount it was opened with, so a completed order for less is a payment
- * the seller did not ask for, and an order with no readable amount proves none.
+ * session's recipient, on its chain, in its token (addresses in any case), paid
+ * in the session's currency (any case) and for at least its amount. The widget
+ * lets a buyer change the currency and the amount it was opened with, so a
+ * completed order in another currency (15000 COP against 15000 ARS) or for less
+ * is a payment the seller did not ask for, and an order with no readable
+ * currency or amount proves none.
  */
 export function completionProblem(
   order: P2pOrderEvent,
@@ -172,6 +178,10 @@ export function completionProblem(
     order.tokenAddress.toLowerCase() !== session.tokenAddress.toLowerCase()
   ) {
     return 'the order delivered another token';
+  }
+  if (!order.fiatCurrency) return 'the order carries no currency';
+  if (order.fiatCurrency !== session.currency.toUpperCase()) {
+    return `the order paid in ${order.fiatCurrency}, not ${session.currency}`;
   }
   if (!order.fiatAmount) return 'the order carries no amount paid';
   if (cents(order.fiatAmount) < cents(session.amount)) {
