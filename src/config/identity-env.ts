@@ -333,5 +333,6 @@ export function assertIdentityConfigConsistent(env: Env): void {
     'APISIX_ADMIN_KEY',
     'WALLET_BACKUP_ENCRYPTION_KEY',
     'RECOVERY_JWT_SECRET',
+    'P2P_DIRECT_SESSION_SECRET',
   ]);
 }

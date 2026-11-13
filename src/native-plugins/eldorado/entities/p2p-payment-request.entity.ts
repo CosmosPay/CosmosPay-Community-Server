@@ -93,6 +93,13 @@ export class P2pPaymentRequestEntity {
   methods!: string[];
 
   @ApiProperty({
+    example: true,
+    description:
+      'Whether `p2p` is paid inside the payer’s page: the payer verifies once and transfers from their bank to a verified seller, without the hosted window. Only for ARS requests, on deployments that offer it.',
+  })
+  p2pDirect!: boolean;
+
+  @ApiProperty({
     example: `https://payments.cosmospay.lat/fiat/${ID}`,
     description:
       'The payer’s page: show it, or its QR. The payer picks how to pay there and pays in a hosted window.',
@@ -273,9 +280,16 @@ export class PublicP2pPaymentRequestEntity {
     enum: PAYMENT_REQUEST_METHODS,
     isArray: true,
     description:
-      'How it can be paid right now, in the order to offer them: `transfer` (`POST /v1/payment-links/fiat/{id}/transfers` answers the bank transfer instructions) and `p2p` (`POST /v1/payment-links/fiat/{id}/sessions` opens the hosted window). Empty when nothing can pay it now.',
+      'How it can be paid right now, in the order to offer them: `transfer` (`POST /v1/payment-links/fiat/{id}/transfers` answers the bank transfer instructions) and `p2p` (a transfer to a verified seller: inside the page through `/v1/payment-links/fiat/{id}/direct/*` when `p2pDirect` is true, else in the hosted window `POST /v1/payment-links/fiat/{id}/sessions` opens). Empty when nothing can pay it now.',
   })
   methods!: string[];
+
+  @ApiProperty({
+    example: true,
+    description:
+      'Whether `p2p` is paid inside this page (`/v1/payment-links/fiat/{id}/direct/*`): the payer verifies once, then transfers the exact amount from their bank to a verified seller. False: `p2p` opens the hosted window. Only ever true for ARS requests.',
+  })
+  p2pDirect!: boolean;
 
   @ApiProperty({
     example: '2026-11-13T12:00:00.000Z',

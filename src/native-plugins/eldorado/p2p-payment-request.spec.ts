@@ -107,6 +107,7 @@ describe('payment request rules', () => {
       LIVE,
       ['transfer', 'p2p'],
       NOW,
+      true,
     );
 
     expect(view).toEqual({
@@ -123,6 +124,7 @@ describe('payment request rules', () => {
       estimatedAmountOut: '10.00',
       paymentMethods: [{ id: 'bank_tx_ar', name: 'CVU/CBU o Alias (ARS)' }],
       methods: ['transfer', 'p2p'],
+      p2pDirect: true,
       expiresAt: '2026-11-13T12:00:00.000Z',
       createdAt: '2026-11-12T12:00:00.000Z',
       paidAt: null,
@@ -139,6 +141,7 @@ describe('payment request rules', () => {
       { currency: null, token: null },
       [],
       LATER,
+      true,
     );
 
     expect(view).toMatchObject({
@@ -152,8 +155,24 @@ describe('payment request rules', () => {
         { currency: LIVE.currency, token: null },
         ['p2p'],
         NOW,
+        false,
       ).estimatedAmountOut,
     ).toBeNull();
+  });
+
+  it('offers the direct flow only for ARS, with the P2P rail, on a deployment that serves it', () => {
+    const at = (
+      methods: ('transfer' | 'p2p')[],
+      on: boolean,
+      currency = 'ARS',
+    ) =>
+      toPublicPaymentRequest({ ...FULL_ROW, currency }, LIVE, methods, NOW, on)
+        .p2pDirect;
+    expect(at(['transfer', 'p2p'], true)).toBe(true);
+    expect(at(['p2p'], false)).toBe(false);
+    expect(at(['transfer'], true)).toBe(false);
+    expect(at(['p2p'], true, 'COP')).toBe(false);
+    expect(at(['p2p'], true, 'ars')).toBe(true);
   });
 
   it('keeps the stored methods in preference order, dropping unknown ones', () => {

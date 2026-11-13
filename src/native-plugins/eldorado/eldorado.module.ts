@@ -1,5 +1,7 @@
 import { Module } from '@nestjs/common';
 import { EldoradoClient } from '@/native-plugins/eldorado/eldorado.client';
+import { P2pDirectController } from '@/native-plugins/eldorado/p2p-direct.controller';
+import { P2pDirectService } from '@/native-plugins/eldorado/p2p-direct.service';
 import { P2pOfframpController } from '@/native-plugins/eldorado/p2p-offramp.controller';
 import { P2pOnrampController } from '@/native-plugins/eldorado/p2p-onramp.controller';
 import { P2pOrderEventsService } from '@/native-plugins/eldorado/p2p-order-events.service';
@@ -17,7 +19,8 @@ import { PaymentRequestRailsModule } from '@/payment-request-rails/payment-reque
  * counterparts on El Dorado's marketplace, bought (`/v1/onramp/p2p`) and sold
  * (`/v1/offramp/p2p`), and charges in local money shown as a QR
  * (`/v1/onramp/p2p/payment-requests`, paid through the keyless
- * `/v1/payment-links/fiat/{id}`). A third-party marketplace rather than the
+ * `/v1/payment-links/fiat/{id}`, in the marketplace's window or, for ARS,
+ * inside the payer's page through its API: `.../direct/*`). A third-party marketplace rather than the
  * chain itself, so it is served only when `PLUGINS_ENABLED` lists `eldorado`.
  * Owns the `p2p_ramp_session` table (the purchases and sales it opened for
  * each consumer, with what the marketplace's webhook reports about them) and
@@ -33,6 +36,7 @@ import { PaymentRequestRailsModule } from '@/payment-request-rails/payment-reque
     P2pOfframpController,
     P2pPaymentRequestsController,
     P2pPaymentLinksController,
+    P2pDirectController,
     P2pWebhooksController,
   ],
   providers: [
@@ -42,6 +46,7 @@ import { PaymentRequestRailsModule } from '@/payment-request-rails/payment-reque
     P2pPaymentRequestLedger,
     P2pWebhookKeys,
     P2pOrderEventsService,
+    P2pDirectService,
   ],
 })
 export class EldoradoModule {}

@@ -1,4 +1,4 @@
-import { cuitCheckDigitValid } from '@/native-plugins/koywe/bank-transfer-document';
+import { cuitCheckDigitValid } from '@/common/cuit';
 import { shortReason } from '@/native-plugins/koywe/bank-transfer';
 import {
   KOYWE_KYB_STATUSES,

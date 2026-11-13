@@ -2366,12 +2366,16 @@ model P2pRampSession {
   // with no USD price. The widget quotes the firm figure before anything moves.
   estimatedAmountOut String?
 
-  // `cp-<random UUID>`, carried as the widget's `externalReferenceId`.
+  // `cp-<random UUID>`, carried as the widget's `externalReferenceId`. A purchase
+  // made inside the payer's page (the direct flow, no widget) carries its payment
+  // request's id as `externalReferenceId` instead and is found by
+  // `providerOrderId`; its `widgetUrl` is that page, where the payer pays it.
   reference String @unique
   widgetUrl String
 
   // The payment request a payer opened this purchase from (the keyless
-  // `POST /v1/payment-links/fiat/{id}/sessions`); null for every other session.
+  // `POST /v1/payment-links/fiat/{id}/sessions`, or `.../direct/orders`); null
+  // for every other session.
   paymentRequestId String?
   paymentRequest   P2pPaymentRequest? @relation(fields: [paymentRequestId], references: [id], onDelete: SetNull)
 
@@ -2439,11 +2443,17 @@ model P2pPaymentRequest {
   methods String[] @default([])
 
   // `open`, `processing`, `paid` or `cancelled`. `processing`: a bank transfer
-  // for it arrived and the token is on its way (it never reads as expired and
-  // cannot be cancelled). `expired` is never stored: an open request past
-  // `expiresAt` reads as expired (and can still turn `paid`: the money arrived).
+  // for it arrived and the token is on its way, or the payer of a direct order
+  // said they transferred (it never reads as expired and cannot be cancelled).
+  // `expired` is never stored: an open request past `expiresAt` reads as expired
+  // (and can still turn `paid`: the money arrived).
   status    String   @default("open")
   expiresAt DateTime
+
+  // The direct order's session that made it `processing` (its payer said they
+  // transferred); null when nothing did, or a bank transfer took over. When the
+  // marketplace cancels THAT order, the request is open again.
+  processingSessionId String?
 
   // The first completed payment that paid it: when this service learned it, the
   // token delivered (a decimal string), the delivering transaction, how it was

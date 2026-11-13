@@ -635,6 +635,99 @@ export const API_ERROR_CASES: Readonly<Record<ApiErrorCode, ApiErrorCase>> = {
     path: '/v1/onramp/transfer/account',
   },
 
+  // --- payment requests paid from the payer's page, P2P (direct, `eldorado`) --
+  [ApiErrorCode.SessionExpired]: {
+    statuses: [401],
+    summary: 'The payer session expired or belongs to another payment request',
+    message: 'The payer session expired: verify your email again.',
+    path: '/v1/payment-links/fiat/cmh4x2k9a0001l70g8v5q3z2w/direct/kyc',
+  },
+  [ApiErrorCode.P2pUnavailable]: {
+    statuses: [503],
+    summary: 'Paying through the P2P marketplace is not available right now',
+    message:
+      'Paying through a verified seller is not available right now: retry shortly or pay with another method.',
+    path: '/v1/payment-links/fiat/cmh4x2k9a0001l70g8v5q3z2w/direct/login',
+  },
+  [ApiErrorCode.InvalidEmail]: {
+    statuses: [400],
+    summary: 'The email is not an email address',
+    message: 'email must be an email address',
+    path: '/v1/payment-links/fiat/cmh4x2k9a0001l70g8v5q3z2w/direct/login',
+  },
+  [ApiErrorCode.InvalidCode]: {
+    statuses: [400],
+    summary: 'The code is wrong, expired or malformed',
+    message: 'The code is wrong or expired.',
+    path: '/v1/payment-links/fiat/cmh4x2k9a0001l70g8v5q3z2w/direct/login/verify',
+  },
+  [ApiErrorCode.InvalidPhone]: {
+    statuses: [400],
+    summary: 'The phone is not an Argentine number',
+    message:
+      'phone must be an Argentine number: 10 digits with the area code, optionally after +54.',
+    path: '/v1/payment-links/fiat/cmh4x2k9a0001l70g8v5q3z2w/direct/kyc/details',
+  },
+  [ApiErrorCode.InvalidAccount]: {
+    statuses: [400],
+    summary: 'The bank account to pay from cannot be sent',
+    message: "account.holder must be the account holder's name",
+    path: '/v1/payment-links/fiat/cmh4x2k9a0001l70g8v5q3z2w/direct/orders',
+  },
+  [ApiErrorCode.InvalidCbu]: {
+    statuses: [400],
+    summary: 'The CVU/CBU is not 22 digits whose check digits verify',
+    message:
+      'account.cbu must be a CVU or CBU: 22 digits whose two check digits verify',
+    path: '/v1/payment-links/fiat/cmh4x2k9a0001l70g8v5q3z2w/direct/orders',
+  },
+  [ApiErrorCode.InvalidBank]: {
+    statuses: [400],
+    summary: 'The bank is not one an ARS account can be at',
+    message: 'account.bank must be one of the listed banks',
+    path: '/v1/payment-links/fiat/cmh4x2k9a0001l70g8v5q3z2w/direct/orders',
+  },
+  [ApiErrorCode.Rejected]: {
+    statuses: [400],
+    summary: 'The P2P marketplace refused the request',
+    message: 'The request was refused. Check the details and try again.',
+    path: '/v1/payment-links/fiat/cmh4x2k9a0001l70g8v5q3z2w/direct/orders',
+  },
+  [ApiErrorCode.KycRequired]: {
+    statuses: [409],
+    summary: 'The payer has not finished verifying their identity',
+    message: 'Verify your identity before paying.',
+    path: '/v1/payment-links/fiat/cmh4x2k9a0001l70g8v5q3z2w/direct/orders',
+  },
+  [ApiErrorCode.TooManyOrders]: {
+    statuses: [409],
+    summary: 'The payer already has two payments in progress',
+    message:
+      'You already have two payments in progress: finish or cancel one before starting another.',
+    path: '/v1/payment-links/fiat/cmh4x2k9a0001l70g8v5q3z2w/direct/orders',
+  },
+  [ApiErrorCode.NoSellers]: {
+    statuses: [503],
+    summary: 'No verified seller can take this payment right now',
+    message:
+      'No verified seller can take this payment right now: retry shortly.',
+    path: '/v1/payment-links/fiat/cmh4x2k9a0001l70g8v5q3z2w/direct/orders',
+  },
+  [ApiErrorCode.OrderNotPayable]: {
+    statuses: [409],
+    summary: 'The order is not waiting for the transfer',
+    message:
+      'This order is matching: only an order waiting for your transfer can be marked paid.',
+    path: '/v1/payment-links/fiat/cmh4x2k9a0001l70g8v5q3z2w/direct/orders/0b8f4c6e-2a71-4c1e-9d3b-5f7a8e9c1d20/paid',
+  },
+  [ApiErrorCode.OrderNotCancellable]: {
+    statuses: [409],
+    summary: 'The order was paid or ended, so it cannot be cancelled',
+    message:
+      'This order is confirming: only an order you have not paid yet can be cancelled.',
+    path: '/v1/payment-links/fiat/cmh4x2k9a0001l70g8v5q3z2w/direct/orders/0b8f4c6e-2a71-4c1e-9d3b-5f7a8e9c1d20/cancel',
+  },
+
   // --- service --------------------------------------------------------------
   [ApiErrorCode.Misconfigured]: {
     statuses: [503],

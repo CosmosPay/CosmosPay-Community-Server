@@ -75,6 +75,11 @@ for (const network of ['TESTNET', 'MAINNET']) {
     process.env[`TRUSTLESS_WORK_${name}_${network}`] = '';
   }
 }
+// No P2P direct flow unless a suite turns it on: a developer's .env may carry the
+// API referral id and the session secret. Empty rather than deleted, for the same
+// dotenv reason as above.
+process.env.ELDORADO_API_REFERRAL_ID = '';
+process.env.P2P_DIRECT_SESSION_SECRET = '';
 process.env.PLUGINS_TRUSTED_KEYS = '';
 process.env.PLUGINS_ALLOW_UNSIGNED = 'false';
 // The shared public key GET /v1/public-key serves. Dev only, so the suite can see

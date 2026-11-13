@@ -300,7 +300,8 @@ export enum ApiErrorCode {
   // --- payment requests paid by bank transfer (native plugin `koywe`) -------
   /**
    * The payer's document is neither a CUIT/CUIL (11 digits whose check digit
-   * verifies) nor a DNI (7 or 8 digits).
+   * verifies) nor a DNI (7 or 8 digits); in the P2P direct flow, where the
+   * account holder's tax id is asked, not a CUIT/CUIL whose check digit verifies.
    */
   InvalidDocument = 'invalid_document',
   /** The payment request cannot be paid by that method: its `methods` lack it. */
@@ -322,6 +323,48 @@ export enum ApiErrorCode {
    * account's type can have (a company's CUIT, a person's CUIL or CUIT).
    */
   InvalidTaxId = 'invalid_tax_id',
+
+  // --- payment requests paid from the payer's page, P2P (direct, `eldorado`) --
+  /**
+   * The payer's `X-Payer-Session` is missing, altered, expired, or was issued
+   * for another payment request or network; or the marketplace no longer
+   * accepts the sign-in it seals. The payer verifies their email again.
+   */
+  SessionExpired = 'session_expired',
+  /**
+   * Paying through the P2P marketplace from the payer's page cannot be served
+   * right now: the marketplace is down, or this deployment cannot reach it.
+   * Retry, or pay another way.
+   */
+  P2pUnavailable = 'p2p_unavailable',
+  /** The email is not an email address. */
+  InvalidEmail = 'invalid_email',
+  /** The emailed or texted code is wrong, expired or malformed. */
+  InvalidCode = 'invalid_code',
+  /** The phone is not an Argentine number (10 digits with the area code, optionally after +54). */
+  InvalidPhone = 'invalid_phone',
+  /**
+   * The bank account to pay from is not one this service can send: a missing
+   * or malformed holder or account type, a saved account id that is not one,
+   * or both or neither of a saved and a new account.
+   */
+  InvalidAccount = 'invalid_account',
+  /** The CVU/CBU is not 22 digits whose two check digits verify. */
+  InvalidCbu = 'invalid_cbu',
+  /** The bank is not one the marketplace takes for an ARS account. */
+  InvalidBank = 'invalid_bank',
+  /** The marketplace refused the request for a reason it did not name in a way this service maps. */
+  Rejected = 'rejected',
+  /** The payer has not finished verifying their identity, which paying needs. */
+  KycRequired = 'kyc_required',
+  /** The payer already has the most payments in progress the marketplace allows (two). */
+  TooManyOrders = 'too_many_orders',
+  /** No verified seller can take this payment right now. Retry shortly. */
+  NoSellers = 'no_sellers',
+  /** The order is not waiting for the payer's transfer, so it cannot be marked paid. */
+  OrderNotPayable = 'order_not_payable',
+  /** The order was already paid, or ended, so it cannot be cancelled. */
+  OrderNotCancellable = 'order_not_cancellable',
 
   // --- service --------------------------------------------------------------
   Misconfigured = 'misconfigured',

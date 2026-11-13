@@ -61,6 +61,20 @@ describe('validateEnv', () => {
     ).toThrow(/APISIX_GATEWAY_SECRET is still a placeholder/);
   });
 
+  it('refuses a P2P direct session secret that is set but too short', () => {
+    expect(() =>
+      validateEnv(validEnv({ P2P_DIRECT_SESSION_SECRET: 'abc123' })),
+    ).toThrow(/P2P_DIRECT_SESSION_SECRET must be at least 32 bytes/);
+    expect(() =>
+      validateEnv(
+        validEnv({
+          P2P_DIRECT_SESSION_SECRET: Buffer.alloc(32, 5).toString('base64'),
+          ELDORADO_API_REFERRAL_ID: 'ref-api',
+        }),
+      ),
+    ).not.toThrow();
+  });
+
   it('rejects other obvious placeholder gateway secrets', () => {
     for (const placeholder of [
       'change-me-to-a-random-value-of-32-chars',

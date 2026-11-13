@@ -299,6 +299,16 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | POST | `/v1/payment-links/{id}/solana-pay` | 无：`@Public()`，按客户端地址计预算 |  |
 | GET | `/v1/payment-links/fiat/{id}` | 无：`@Public()`，按客户端地址计预算 |  |
 | POST | `/v1/payment-links/fiat/{id}/sessions` | 无：`@Public()`，按客户端地址计预算 |  |
+| POST | `/v1/payment-links/fiat/{id}/direct/login` | 无：`@Public()`，按客户端地址计预算 |  |
+| POST | `/v1/payment-links/fiat/{id}/direct/login/verify` | 无：`@Public()`，按客户端地址计预算 |  |
+| GET | `/v1/payment-links/fiat/{id}/direct/kyc` | 无：`@Public()`，按客户端地址计预算 |  |
+| POST | `/v1/payment-links/fiat/{id}/direct/kyc/details` | 无：`@Public()`，按客户端地址计预算 |  |
+| POST | `/v1/payment-links/fiat/{id}/direct/kyc/phone` | 无：`@Public()`，按客户端地址计预算 |  |
+| GET | `/v1/payment-links/fiat/{id}/direct/accounts` | 无：`@Public()`，按客户端地址计预算 |  |
+| POST | `/v1/payment-links/fiat/{id}/direct/orders` | 无：`@Public()`，按客户端地址计预算 |  |
+| GET | `/v1/payment-links/fiat/{id}/direct/orders/{orderId}` | 无：`@Public()`，按客户端地址计预算 |  |
+| POST | `/v1/payment-links/fiat/{id}/direct/orders/{orderId}/paid` | 无：`@Public()`，按客户端地址计预算 |  |
+| POST | `/v1/payment-links/fiat/{id}/direct/orders/{orderId}/cancel` | 无：`@Public()`，按客户端地址计预算 |  |
 | POST | `/v1/payment-links/fiat/{id}/transfers` | 无：`@Public()`，按客户端地址计预算 |  |
 | GET | `/v1/plugins` | `plugins:read` |  |
 | GET | `/v1/plugins/{slug}` | `plugins:read` |  |
@@ -1447,6 +1457,16 @@ CREATED | AWAITING_FUNDING --merchant cancels--> CANCELLED
 | POST | `/v1/onramp/p2p/payment-requests/{id}/cancel` | `onramp:write` | 阻止一笔未关闭的收款被支付 |
 | GET | `/v1/payment-links/fiat/{id}` | 无（`@Public()`） | 付款方看到的收款：金额、实时估算、支付方式 |
 | POST | `/v1/payment-links/fiat/{id}/sessions` | 无（`@Public()`） | 付款方开始付款：一笔金额精确的购买，交付给卖家 |
+| POST | `/v1/payment-links/fiat/{id}/direct/login` | 无（`@Public()`） | 付款方开始通过邮件验证，以便在页面上支付 ARS 收款 |
+| POST | `/v1/payment-links/fiat/{id}/direct/login/verify` | 无（`@Public()`） | 邮件中的验证码，换取付款方的会话 |
+| GET | `/v1/payment-links/fiat/{id}/direct/kyc` | 无（`@Public()`） | 付款方的身份验证接下来需要什么 |
+| POST | `/v1/payment-links/fiat/{id}/direct/kyc/details` | 无（`@Public()`） | 付款方的城市和电话 |
+| POST | `/v1/payment-links/fiat/{id}/direct/kyc/phone` | 无（`@Public()`） | 发送到付款方电话的验证码 |
+| GET | `/v1/payment-links/fiat/{id}/direct/accounts` | 无（`@Public()`） | 付款方已保存的银行账户，只给提示 |
+| POST | `/v1/payment-links/fiat/{id}/direct/orders` | 无（`@Public()`） | 通过一位已验证卖家支付精确金额 |
+| GET | `/v1/payment-links/fiat/{id}/direct/orders/{orderId}` | 无（`@Public()`） | 其中一笔付款：转账给谁、截止何时 |
+| POST | `/v1/payment-links/fiat/{id}/direct/orders/{orderId}/paid` | 无（`@Public()`） | 付款方已转账：收款显示为 `processing` |
+| POST | `/v1/payment-links/fiat/{id}/direct/orders/{orderId}/cancel` | 无（`@Public()`） | 取消付款方尚未完成的付款 |
 | POST | `/v1/onramp/p2p/webhooks` | 无（`@Public()`，已签名） | 市场的订单更新 |
 | GET | `/v1/offramp/p2p/market` | `offramp:read` | 货币、支付方式、卖出价和最低额（美元）、各条链以及表单默认的代币（共享公钥可以读取） |
 | GET | `/v1/offramp/p2p/tokens` | `offramp:read` | 同样的代币列表，用于出售（共享公钥可以读取） |
@@ -1475,6 +1495,18 @@ CREATED | AWAITING_FUNDING --merchant cancels--> CANCELLED
 - **Webhook。** `POST /v1/onramp/p2p/webhooks` 是 `@Public()`，并且与法币合作方的 webhook 一样不列入 OpenAPI 契约。只有当 `x-webhook-hash` 是原始请求体的 `sha256`（小写 hex），且 `x-webhook-signature` 是某个网络 JWKS 中的一把密钥对该 hex 所做的 base64 RSA-SHA256 签名时（`ELDORADO_WEBHOOK_JWKS_URL_MAINNET` / `ELDORADO_WEBHOOK_JWKS_URL_TESTNET`，默认为市场自己的），投递才会被接受；验证通过的那把密钥决定它可以修改哪个网络的会话。其他任何情况都是 `401 webhook_signature_invalid`；无法读取的密钥集返回 `503`，这样市场会重新发送该投递。密钥保存在内存中，当某次投递验证不通过时，每个网络每分钟最多重新读取一次。验证通过但没有指明任何会话的投递会写入日志并返回 `200`。每次写入都是有条件的：会话一旦达到 `COMPLETED` 就保持不变，请求只会被支付一次。会话以 `status` 返回市场最近一次的订单状态。
 - **运维步骤。** 市场按 Client ID 注册 webhook，方式是发邮件到签发集成方 id 的同一个地址：把 Client ID 和 URL `https://api.cosmospay.lat/cosmos-api/v1/onramp/p2p/webhooks`（网关的公共前缀，后接 `/v1/onramp/p2p/webhooks`）发给它。网关需要一条只匹配 `POST /v1/onramp/p2p/webhooks` 的无 key 路由，并原样透传请求体；付款方的路由不需要任何新配置。
 - **本版本不包含：** 请求被支付时发出的出站 webhook 事件、请求的仪表盘视图，以及由付款方输入金额的可重复使用二维码。
+
+### 在付款方页面上支付收款（直接）
+
+对于 ARS 收款，付款方可以通过同一个市场付款而无需打开其窗口：只需验证一次，就会在收款自己的页面上被告知把精确金额转账给谁，而本服务代其调用市场的 API（`/v1/payment-links/fiat/{id}/direct/*`）。市场仍是交易对手（付款方是它的客户，由它完成身份验证），代币仍直接到达卖家的地址。卖家和付款方视图中的 `p2pDirect` 表示某笔收款是否提供此方式：收款以 ARS 计价，`p2p` 在其 `methods` 中，且部署设置了 `ELDORADO_CLIENT_ID`、`ELDORADO_API_REFERRAL_ID`（来源类型为 API 的 referral id）和 `P2P_DIRECT_SESSION_SECRET`。`methods` 不变：`p2p` 仍表示市场，页面根据该标志在直接流程与窗口之间选择。
+
+- **步骤。** `login` 向付款方发送邮件验证码（使用 `Accept-Language` 在西班牙语、英语和葡萄牙语中优先的语言），`login/verify` 用它换取一个 `session`。之后 `kyc` 说明下一步要问什么：`details`（城市和电话）、`phone`（短信验证码）、`document`（在 `documentUrl` 进行证件验证）、`review`、`rejected` 或 `ready`。`accounts` 列出付款方本人名下已保存的账户（只给提示，从不给号码），`orders` 从其中一个账户或新的 `account`（会校验其 CVU/CBU 和 CUIT/CUIL 的校验位）发起精确金额的付款，页面轮询该订单：先是 `matching`，然后是带 `payTo` 和 `dueAt` 的 `pay`。付款方在转账后将其标记为 `paid`，或在此之前取消。
+- **会话。** 市场的登录令牌从不以明文离开本服务，也从不存储：`session` 是用从 `P2P_DIRECT_SESSION_SECRET` 派生的密钥以 AES-256-GCM 封装的该令牌，绑定到收款及其网络，并随令牌过期或在两小时后过期，以先到者为准。登录之后的每个路由都在 `X-Payer-Session` 中接收它；缺失、被篡改、已过期或属于其他收款的会话返回 `401 session_expired`。轮换该密钥会让所有付款方退出登录。
+- **id 能解锁的范围仍然有限。** 订单总是按收款金额把收款的代币交付到收款的地址，并在 `externalReferenceId` 中写明该收款；通过某笔收款读取、标记已付或取消的订单必须在那里写明它，否则就是不存在订单的 404。开始任何操作（登录、验证、账户、订单）都需要一笔带 `p2pDirect` 的开放收款；已在进行中的订单在收款过期或已付后仍可查看、标记已付和取消，好让付款方完成已开始的操作。
+- **收款状态。** 将订单标记为已付会因该订单把开放的收款转为 `processing`。之后由市场的 webhook 决定：`COMPLETED` 支付它（与窗口内购买相同的检查），`CANCELLED` 重新打开它（仅当正是该订单使其变为 `processing`；期间到达的银行转账会接管它），`DISPUTED` 使其保持 `processing`。第一笔完成的付款胜出，包括银行转账。
+- **保存什么。** 不保存任何关于付款方的信息：无论在数据行还是日志中，都没有邮箱、姓名、账户、证件或令牌（市场的拒绝只按其键名和错误码记录）。订单被记录为卖家的一个 BUY 会话，带有 webhook 用于匹配的订单 id，并以收款页面作为其 `widgetUrl`。
+- **错误与预算。** 收款不能以这种方式支付时返回 `400 method_unavailable`，未开放时返回 `409 request_closed`，以及 `400 invalid_email`、`400 invalid_code`、`400 invalid_phone`、`400 invalid_cbu`、`400 invalid_document`、`400 invalid_bank`、`400 invalid_account`、`409 kyc_required`、`409 too_many_orders`（市场允许一位付款方同时有两笔进行中的付款）、`409 order_not_payable`、`409 order_not_cancellable`，现在无人能接单时返回 `503 no_sellers`，无法连接市场时返回 `503 p2p_unavailable`；其他任何拒绝都是中性的 `400 rejected`。按客户端地址计：每分钟 5 次登录（`payment-links-fiat:direct-login`）、10 次验证码校验（`payment-links-fiat:direct-verify`）、30 次读取（`payment-links-fiat:direct-read`）和 30 次修改（`payment-links-fiat:direct-write`）。每个响应都是 `Cache-Control: no-store`。
+- **运维步骤。** 向市场申请一个来源类型为 API 的 referral id（小组件的是 WIDGET 类型），设置为 `ELDORADO_API_REFERRAL_ID`，并设置 `P2P_DIRECT_SESSION_SECRET`（`openssl rand -base64 32`）。这些路由位于网关 `/v1/payment-links/*` 的无 key 路由之下，其 CORS 插件必须允许 `X-Payer-Session` 请求头。
 
 ## 银行转账收款
 
@@ -1715,6 +1747,14 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
 - **受保护付款同样遵守 DeFindex 的规则**：Trustless Work 构建的每个 envelope 在被记录或签名之前都会经过检查，其 submit 只转发这些记录（见*受保护付款（Trustless Work）*）。其买家路由是原生插件中唯一不需要 API key 的路由组。
 
 ## 升级 — 破坏性变更与部署说明
+
+### 通过 P2P 市场在付款方页面上支付的收款（直接）
+
+- **迁移 `20261113120000_p2p_direct_orders`** 为 `p2p_payment_request` 添加可为空的 `processingSessionId`；不改写任何数据。新构建上线前运行 `migrate deploy`。
+- **收款请求（新增字段）：** 卖家和付款方视图中的 `p2pDirect`。`processing` 现在也可能表示直接订单的付款方声称已转账：订单完成时变为 `paid`，订单取消时重新变为 `open`。
+- **新的无 key 路由**，位于 `/v1/payment-links/fiat/{id}/direct/` 下：`login`、`login/verify`、`kyc`、`kyc/details`、`kyc/phone`、`accounts`、`orders`、`orders/{orderId}`、`orders/{orderId}/paid` 和 `orders/{orderId}/cancel`。新的错误码：`session_expired`（401），`invalid_email`、`invalid_code`、`invalid_phone`、`invalid_account`、`invalid_cbu`、`invalid_bank` 和 `rejected`（400），`kyc_required`、`too_many_orders`、`order_not_payable` 和 `order_not_cancellable`（409），`p2p_unavailable` 和 `no_sellers`（503）。新的预算：`payment-links-fiat:direct-login`（每个客户端地址每分钟 5 次）、`payment-links-fiat:direct-verify`（10）、`payment-links-fiat:direct-read`（30）和 `payment-links-fiat:direct-write`（30）。
+- **直接订单是卖家的一个会话**（`GET /v1/onramp/p2p/sessions`），其 `widgetUrl` 是收款自己的页面，因为没有窗口。
+- **配置前保持关闭：** 设置 `ELDORADO_API_REFERRAL_ID` 和 `P2P_DIRECT_SESSION_SECRET`（以及 `ELDORADO_CLIENT_ID`）。**网关：** 在无 key 的 `/v1/payment-links/*` 路由的 CORS `allow_headers` 中加入 `X-Payer-Session`；无需新路由。
 
 ### 银行转账收款：一个新的原生插件、五张表和 `processing`
 
@@ -2485,6 +2525,8 @@ curl -H "X-Gateway-Secret: $APISIX_GATEWAY_SECRET" -H "X-Consumer-Username: ops"
 | `ELDORADO_CLIENT_ID` | 否 | 无 | El Dorado 发给集成方的 ClientID。与 `ELDORADO_REFERRAL_ID` 一起开启 `POST /v1/onramp/p2p/quotes` 和 `POST /v1/offramp/p2p/quotes` 并为每个会话的订单做归属；两者缺一，这些路由返回 `503 misconfigured` |
 | `ELDORADO_REFERRAL_ID` | 否 | 无 | 与 `ELDORADO_CLIENT_ID` 配套的 ReferralID |
 | `ELDORADO_PUBLIC_REFERRAL_ID` | 否 | 无 | 共享公钥的报价和会话代替 `ELDORADO_REFERRAL_ID` 携带的 ReferralID；向 El Dorado 申请佣金最高的一个。为空：公钥使用 `ELDORADO_REFERRAL_ID` |
+| `ELDORADO_API_REFERRAL_ID` | 否 | 无 | 来源类型为 API（而非小组件）的 ReferralID：直接流程的登录、报价和订单携带它。与 `ELDORADO_CLIENT_ID` 和 `P2P_DIRECT_SESSION_SECRET` 一起，开启在付款方页面上支付 ARS 收款（`p2pDirect`）。为空：该流程关闭 |
+| `P2P_DIRECT_SESSION_SECRET` | 否 | 无 | base64 或 hex 形式的 32 个或以上随机字节（`openssl rand -base64 32`）：把付款方在市场的登录封装进页面保存的 `X-Payer-Session`（AES-256-GCM）。必须与其他所有密钥不同；轮换它会让所有付款方退出登录。为空：直接流程关闭 |
 | `ELDORADO_TIMEOUT_MS` | 否 | `10000` | 对 P2P 市场单次调用的预算（ms） |
 | `ELDORADO_WEBHOOK_JWKS_URL_MAINNET` | 否 | `https://api.eldorado.io/api/.well-known/jwks.json` | P2P 市场发布其主网订单 webhook 签名密钥的位置（`POST /v1/onramp/p2p/webhooks`） |
 | `ELDORADO_WEBHOOK_JWKS_URL_TESTNET` | 否 | `https://api-testnet.eldorado.io/api/.well-known/jwks.json` | 沙盒的同一项 |

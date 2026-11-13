@@ -1,4 +1,5 @@
 import { createHmac } from 'node:crypto';
+import { cuitCheckDigitValid } from '@/common/cuit';
 
 /**
  * The payer's document (an Argentine CUIT/CUIL or DNI): what identifies their
@@ -10,9 +11,6 @@ import { createHmac } from 'node:crypto';
 /** Separators a person types between digits: dashes, dots and spaces. */
 const SEPARATORS_RE = /[-.\s]/g;
 
-/** The CUIT/CUIL check digit's weights, over its first ten digits. */
-const CUIT_WEIGHTS = [5, 4, 3, 2, 7, 6, 5, 4, 3, 2] as const;
-
 /** A document once read: the DNI part that identifies the person, and the hint shown back. */
 export interface PayerDocument {
   /** `cuit` (11 digits, check digit verified) or `dni` (7 or 8 digits). */
@@ -21,18 +19,6 @@ export interface PayerDocument {
   dniPart: string;
   /** The last three digits as typed. */
   hint: string;
-}
-
-/** Whether 11 digits are a CUIT/CUIL whose check digit verifies (a computed 10 never does). */
-export function cuitCheckDigitValid(digits: string): boolean {
-  if (!/^\d{11}$/.test(digits)) return false;
-  const sum = CUIT_WEIGHTS.reduce(
-    (total, weight, at) => total + weight * Number(digits[at]),
-    0,
-  );
-  const expected = 11 - (sum % 11);
-  const check = expected === 11 ? 0 : expected;
-  return check !== 10 && check === Number(digits[10]);
 }
 
 /** The DNI a CUIT/CUIL or a DNI's digits carry, without leading zeros; null when none is left. */
