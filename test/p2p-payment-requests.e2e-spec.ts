@@ -358,6 +358,8 @@ describe('P2P payment requests (e2e)', () => {
         paymentMethods: [{ id: 'bank_tx_ar', name: 'CVU/CBU o Alias (ARS)' }],
         // No bank transfer: the seller has no bank transfer account.
         methods: ['p2p'],
+        // This suite's deployment does not serve the direct flow.
+        p2pDirect: false,
         expiresAt: expect.any(String),
         createdAt: expect.any(String),
         paidAt: null,

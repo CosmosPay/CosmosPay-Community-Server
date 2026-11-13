@@ -300,7 +300,8 @@ export enum ApiErrorCode {
   // --- payment requests paid by bank transfer (native plugin `koywe`) -------
   /**
    * The payer's document is neither a CUIT/CUIL (11 digits whose check digit
-   * verifies) nor a DNI (7 or 8 digits).
+   * verifies) nor a DNI (7 or 8 digits); in the P2P direct flow, where the
+   * account holder's tax id is asked, not a CUIT/CUIL whose check digit verifies.
    */
   InvalidDocument = 'invalid_document',
   /** The payment request cannot be paid by that method: its `methods` lack it. */
@@ -336,10 +337,22 @@ export enum ApiErrorCode {
    * Retry, or pay another way.
    */
   P2pUnavailable = 'p2p_unavailable',
+  /** The email is not an email address. */
+  InvalidEmail = 'invalid_email',
   /** The emailed or texted code is wrong, expired or malformed. */
   InvalidCode = 'invalid_code',
   /** The phone is not an Argentine number (10 digits with the area code, optionally after +54). */
   InvalidPhone = 'invalid_phone',
+  /**
+   * The bank account to pay from is not one this service can send: a missing
+   * or malformed holder or account type, a saved account id that is not one,
+   * or both or neither of a saved and a new account.
+   */
+  InvalidAccount = 'invalid_account',
+  /** The CVU/CBU is not 22 digits whose two check digits verify. */
+  InvalidCbu = 'invalid_cbu',
+  /** The bank is not one the marketplace takes for an ARS account. */
+  InvalidBank = 'invalid_bank',
   /** The marketplace refused the request for a reason it did not name in a way this service maps. */
   Rejected = 'rejected',
   /** The payer has not finished verifying their identity, which paying needs. */

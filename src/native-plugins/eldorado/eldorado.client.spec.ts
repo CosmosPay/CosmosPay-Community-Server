@@ -180,7 +180,7 @@ describe('EldoradoClient, the direct flow', () => {
   it('escapes an order id in the path', async () => {
     await direct().order('public', 'jwt-1', '../user-info');
     expect(call().url).toBe(
-      'https://api.eldorado.io/api/orders/..%2Fuser-info',
+      'https://api.eldorado.io/api/orders/%2E%2E%2Fuser-info',
     );
   });
 

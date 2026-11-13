@@ -649,6 +649,12 @@ export const API_ERROR_CASES: Readonly<Record<ApiErrorCode, ApiErrorCase>> = {
       'Paying through a verified seller is not available right now: retry shortly or pay with another method.',
     path: '/v1/payment-links/fiat/cmh4x2k9a0001l70g8v5q3z2w/direct/login',
   },
+  [ApiErrorCode.InvalidEmail]: {
+    statuses: [400],
+    summary: 'The email is not an email address',
+    message: 'email must be an email address',
+    path: '/v1/payment-links/fiat/cmh4x2k9a0001l70g8v5q3z2w/direct/login',
+  },
   [ApiErrorCode.InvalidCode]: {
     statuses: [400],
     summary: 'The code is wrong, expired or malformed',
@@ -661,6 +667,25 @@ export const API_ERROR_CASES: Readonly<Record<ApiErrorCode, ApiErrorCase>> = {
     message:
       'phone must be an Argentine number: 10 digits with the area code, optionally after +54.',
     path: '/v1/payment-links/fiat/cmh4x2k9a0001l70g8v5q3z2w/direct/kyc/details',
+  },
+  [ApiErrorCode.InvalidAccount]: {
+    statuses: [400],
+    summary: 'The bank account to pay from cannot be sent',
+    message: "account.holder must be the account holder's name",
+    path: '/v1/payment-links/fiat/cmh4x2k9a0001l70g8v5q3z2w/direct/orders',
+  },
+  [ApiErrorCode.InvalidCbu]: {
+    statuses: [400],
+    summary: 'The CVU/CBU is not 22 digits whose check digits verify',
+    message:
+      'account.cbu must be a CVU or CBU: 22 digits whose two check digits verify',
+    path: '/v1/payment-links/fiat/cmh4x2k9a0001l70g8v5q3z2w/direct/orders',
+  },
+  [ApiErrorCode.InvalidBank]: {
+    statuses: [400],
+    summary: 'The bank is not one an ARS account can be at',
+    message: 'account.bank must be one of the listed banks',
+    path: '/v1/payment-links/fiat/cmh4x2k9a0001l70g8v5q3z2w/direct/orders',
   },
   [ApiErrorCode.Rejected]: {
     statuses: [400],

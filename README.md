@@ -336,6 +336,16 @@ Paths use the OpenAPI `{param}` form.
 | POST | `/v1/payment-links/{id}/solana-pay` | none: `@Public()`, budgeted per client address |  |
 | GET | `/v1/payment-links/fiat/{id}` | none: `@Public()`, budgeted per client address |  |
 | POST | `/v1/payment-links/fiat/{id}/sessions` | none: `@Public()`, budgeted per client address |  |
+| POST | `/v1/payment-links/fiat/{id}/direct/login` | none: `@Public()`, budgeted per client address |  |
+| POST | `/v1/payment-links/fiat/{id}/direct/login/verify` | none: `@Public()`, budgeted per client address |  |
+| GET | `/v1/payment-links/fiat/{id}/direct/kyc` | none: `@Public()`, budgeted per client address |  |
+| POST | `/v1/payment-links/fiat/{id}/direct/kyc/details` | none: `@Public()`, budgeted per client address |  |
+| POST | `/v1/payment-links/fiat/{id}/direct/kyc/phone` | none: `@Public()`, budgeted per client address |  |
+| GET | `/v1/payment-links/fiat/{id}/direct/accounts` | none: `@Public()`, budgeted per client address |  |
+| POST | `/v1/payment-links/fiat/{id}/direct/orders` | none: `@Public()`, budgeted per client address |  |
+| GET | `/v1/payment-links/fiat/{id}/direct/orders/{orderId}` | none: `@Public()`, budgeted per client address |  |
+| POST | `/v1/payment-links/fiat/{id}/direct/orders/{orderId}/paid` | none: `@Public()`, budgeted per client address |  |
+| POST | `/v1/payment-links/fiat/{id}/direct/orders/{orderId}/cancel` | none: `@Public()`, budgeted per client address |  |
 | POST | `/v1/payment-links/fiat/{id}/transfers` | none: `@Public()`, budgeted per client address |  |
 | GET | `/v1/plugins` | `plugins:read` |  |
 | GET | `/v1/plugins/{slug}` | `plugins:read` |  |
@@ -2246,6 +2256,16 @@ A buyer pays local money (a bank transfer in Argentina, PIX, Nequi, Yape, Zelle 
 | POST | `/v1/onramp/p2p/payment-requests/{id}/cancel` | `onramp:write` | Stop an open charge from being paid |
 | GET | `/v1/payment-links/fiat/{id}` | none (`@Public()`) | The payer's view of a charge: amount, live estimate, payment methods |
 | POST | `/v1/payment-links/fiat/{id}/sessions` | none (`@Public()`) | The payer starts paying: a purchase of the exact amount, delivered to the seller |
+| POST | `/v1/payment-links/fiat/{id}/direct/login` | none (`@Public()`) | The payer starts verifying by email, to pay an ARS charge from the page |
+| POST | `/v1/payment-links/fiat/{id}/direct/login/verify` | none (`@Public()`) | The emailed code, traded for the payer's session |
+| GET | `/v1/payment-links/fiat/{id}/direct/kyc` | none (`@Public()`) | What the payer's verification needs next |
+| POST | `/v1/payment-links/fiat/{id}/direct/kyc/details` | none (`@Public()`) | The payer's city and phone |
+| POST | `/v1/payment-links/fiat/{id}/direct/kyc/phone` | none (`@Public()`) | The code texted to the payer's phone |
+| GET | `/v1/payment-links/fiat/{id}/direct/accounts` | none (`@Public()`) | The payer's saved bank accounts, a hint only |
+| POST | `/v1/payment-links/fiat/{id}/direct/orders` | none (`@Public()`) | A payment of the exact amount through a verified seller |
+| GET | `/v1/payment-links/fiat/{id}/direct/orders/{orderId}` | none (`@Public()`) | One of those payments: whom to transfer to, and until when |
+| POST | `/v1/payment-links/fiat/{id}/direct/orders/{orderId}/paid` | none (`@Public()`) | The payer transferred: the charge reads `processing` |
+| POST | `/v1/payment-links/fiat/{id}/direct/orders/{orderId}/cancel` | none (`@Public()`) | Cancel a payment the payer has not made |
 | POST | `/v1/onramp/p2p/webhooks` | none (`@Public()`, signed) | The marketplace's order updates |
 | GET | `/v1/offramp/p2p/market` | `offramp:read` | Currencies, payment methods, sell price and minimum (in USD), the chains and the token a form starts from (the shared public key may read it) |
 | GET | `/v1/offramp/p2p/tokens` | `offramp:read` | The same token lists, for a sale (the shared public key may read it) |
@@ -2274,6 +2294,18 @@ A seller charges an amount of local money with a QR, and the payer pays it with 
 - **The webhook.** `POST /v1/onramp/p2p/webhooks` is `@Public()` and kept out of the OpenAPI contract, like the fiat partner's. A delivery is accepted only when `x-webhook-hash` is the `sha256` of the raw body (lowercase hex) and `x-webhook-signature` is a base64 RSA-SHA256 signature of that hex by a key of one network's JWKS (`ELDORADO_WEBHOOK_JWKS_URL_MAINNET` / `ELDORADO_WEBHOOK_JWKS_URL_TESTNET`, the marketplace's own by default); the key that verifies it decides which network's sessions it may change. Anything else is `401 webhook_signature_invalid`, and a key set that cannot be read is `503`, so the marketplace sends the delivery again. The keys are kept in memory and read again at most once a minute per network when a delivery does not verify. A verified delivery that names no session is logged and answered `200`. Every write is conditional: a session keeps `COMPLETED` once it has it, and a request is paid once. Sessions answer the marketplace's last order status as `status`.
 - **Operator steps.** The marketplace registers the webhook per Client ID, by email to the same address that issues the integrator ids: send it the Client ID and the URL `https://api.cosmospay.lat/cosmos-api/v1/onramp/p2p/webhooks` (the gateway's public prefix, then `/v1/onramp/p2p/webhooks`). The gateway needs a keyless route for exactly `POST /v1/onramp/p2p/webhooks` that passes the body through unchanged; the payer's routes need nothing new.
 - **Not in this version:** an outbound webhook event when a request is paid, a dashboard view of the requests, and reusable QRs where the payer types the amount.
+
+### Paying a charge from the payer's page (direct)
+
+For an ARS charge the payer can pay through the same marketplace without its window: they verify once and are told whom to transfer the exact amount to, on the charge's own page, while this service drives the marketplace's API for them (`/v1/payment-links/fiat/{id}/direct/*`). The marketplace stays the counterparty (the payer is its client and it runs their identity check), and the token still goes straight to the seller's address. `p2pDirect` on the seller's and the payer's views says whether a charge offers it: the charge is in ARS, `p2p` is in its `methods`, and the deployment sets `ELDORADO_CLIENT_ID`, `ELDORADO_API_REFERRAL_ID` (a referral id of source type API) and `P2P_DIRECT_SESSION_SECRET`. `methods` does not change: `p2p` still means the marketplace, and the page picks the direct flow or the window by the flag.
+
+- **The steps.** `login` emails the payer a code (in the language `Accept-Language` prefers among Spanish, English and Portuguese) and `login/verify` trades it for a `session`. Then `kyc` says what to ask next: `details` (city and phone), `phone` (the texted code), `document` (an ID check at `documentUrl`), `review`, `rejected` or `ready`. `accounts` lists the payer's saved accounts in their own name (a hint, never the number), `orders` opens a payment of the exact amount from one of them or from a new `account` (the check digits of its CVU/CBU and of its CUIT/CUIL are verified), and the page polls the order: `matching`, then `pay` with `payTo` and `dueAt`. The payer marks it `paid` after transferring, or cancels it before.
+- **The session.** The marketplace's sign-in token never leaves this service in clear and is never stored: `session` is that token sealed with AES-256-GCM under a key derived from `P2P_DIRECT_SESSION_SECRET`, bound to the charge and its network, and it expires with the token or after two hours, whichever comes first. Every route after the sign-in takes it in `X-Payer-Session`; a missing, altered, expired or foreign one is `401 session_expired`. Rotating the secret signs every payer out.
+- **What the id unlocks stays bounded.** An order always delivers the charge's token to the charge's address for its amount, and names the charge in `externalReferenceId`; an order read, marked paid or cancelled through a charge must name it there, or it is the 404 of a missing one. Starting something (the sign-in, the verification, the accounts, an order) needs an open charge with `p2pDirect`; an order already under way can still be followed, marked paid and cancelled after the charge expires or is paid, so the payer can finish what they started.
+- **The charge's status.** Marking an order paid moves an open charge to `processing` because of that order. The marketplace's webhook then decides: `COMPLETED` pays it (the same checks as a purchase in the window), `CANCELLED` opens it again (only when that order is the one that made it `processing`; a bank transfer that arrives meanwhile takes it over), and `DISPUTED` leaves it `processing`. The first completion wins, a bank transfer's included.
+- **What is kept.** Nothing about the payer: no email, name, account, document or token, in a row or in a log (a refusal from the marketplace is logged by its key names and its error code). The order is recorded as a BUY session of the seller, with the order id the webhook matches it by and the charge's page as its `widgetUrl`.
+- **Errors and budgets.** `400 method_unavailable` when the charge cannot be paid this way, `409 request_closed` unless it is open, `400 invalid_email`, `400 invalid_code`, `400 invalid_phone`, `400 invalid_cbu`, `400 invalid_document`, `400 invalid_bank`, `400 invalid_account`, `409 kyc_required`, `409 too_many_orders` (the marketplace allows a payer two payments in progress), `409 order_not_payable`, `409 order_not_cancellable`, `503 no_sellers` when nobody can take it now and `503 p2p_unavailable` when the marketplace cannot be reached; any other refusal is a neutral `400 rejected`. Per client address: 5 sign-ins a minute (`payment-links-fiat:direct-login`), 10 code checks (`payment-links-fiat:direct-verify`), 30 reads (`payment-links-fiat:direct-read`) and 30 changes (`payment-links-fiat:direct-write`). Every answer is `Cache-Control: no-store`.
+- **Operator steps.** Ask the marketplace for a referral id of source type API (the widget's is of type WIDGET) and set it as `ELDORADO_API_REFERRAL_ID`, and set `P2P_DIRECT_SESSION_SECRET` (`openssl rand -base64 32`). The routes sit under the keyless gateway route of `/v1/payment-links/*`, whose CORS plugin must allow the `X-Payer-Session` header.
 
 ## Charges paid by bank transfer
 
@@ -2551,6 +2583,14 @@ the service under `src/native-plugins/<slug>/`, switched on by the same
   are the one native plugin route group that takes no API key.
 
 ## Upgrading — breaking changes and deploy notes
+
+### Charges paid from the payer's page through the P2P marketplace (direct)
+
+- **Migration `20261113120000_p2p_direct_orders`** adds the nullable `processingSessionId` to `p2p_payment_request`; nothing is rewritten. Run `migrate deploy` before the new build serves.
+- **Payment requests (additive):** `p2pDirect` on the seller's and the payer's views. `processing` can now also mean that the payer of a direct order said they transferred: it turns `paid` when the order completes, or `open` again when it is cancelled.
+- **New keyless routes** under `/v1/payment-links/fiat/{id}/direct/`: `login`, `login/verify`, `kyc`, `kyc/details`, `kyc/phone`, `accounts`, `orders`, `orders/{orderId}`, `orders/{orderId}/paid` and `orders/{orderId}/cancel`. New error codes: `session_expired` (401), `invalid_email`, `invalid_code`, `invalid_phone`, `invalid_account`, `invalid_cbu`, `invalid_bank` and `rejected` (400), `kyc_required`, `too_many_orders`, `order_not_payable` and `order_not_cancellable` (409), `p2p_unavailable` and `no_sellers` (503). New budgets: `payment-links-fiat:direct-login` (5 a minute per client address), `payment-links-fiat:direct-verify` (10), `payment-links-fiat:direct-read` (30) and `payment-links-fiat:direct-write` (30).
+- **A direct order is a session of the seller** (`GET /v1/onramp/p2p/sessions`) whose `widgetUrl` is the charge's own page, since there is no window.
+- **Off until configured:** set `ELDORADO_API_REFERRAL_ID` and `P2P_DIRECT_SESSION_SECRET` (with `ELDORADO_CLIENT_ID`). **Gateway:** add `X-Payer-Session` to the CORS `allow_headers` of the keyless `/v1/payment-links/*` route; no new route.
 
 ### Charges paid by bank transfer: a new native plugin, five tables and `processing`
 

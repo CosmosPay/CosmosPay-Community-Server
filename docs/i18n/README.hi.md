@@ -332,6 +332,16 @@ Paths OpenAPI के `{param}` रूप में लिखे गए हैं
 | POST | `/v1/payment-links/{id}/solana-pay` | कोई नहीं: `@Public()`, हर client address का अपना budget |  |
 | GET | `/v1/payment-links/fiat/{id}` | कोई नहीं: `@Public()`, हर client address का अपना budget |  |
 | POST | `/v1/payment-links/fiat/{id}/sessions` | कोई नहीं: `@Public()`, हर client address का अपना budget |  |
+| POST | `/v1/payment-links/fiat/{id}/direct/login` | कोई नहीं: `@Public()`, हर client address का अपना budget |  |
+| POST | `/v1/payment-links/fiat/{id}/direct/login/verify` | कोई नहीं: `@Public()`, हर client address का अपना budget |  |
+| GET | `/v1/payment-links/fiat/{id}/direct/kyc` | कोई नहीं: `@Public()`, हर client address का अपना budget |  |
+| POST | `/v1/payment-links/fiat/{id}/direct/kyc/details` | कोई नहीं: `@Public()`, हर client address का अपना budget |  |
+| POST | `/v1/payment-links/fiat/{id}/direct/kyc/phone` | कोई नहीं: `@Public()`, हर client address का अपना budget |  |
+| GET | `/v1/payment-links/fiat/{id}/direct/accounts` | कोई नहीं: `@Public()`, हर client address का अपना budget |  |
+| POST | `/v1/payment-links/fiat/{id}/direct/orders` | कोई नहीं: `@Public()`, हर client address का अपना budget |  |
+| GET | `/v1/payment-links/fiat/{id}/direct/orders/{orderId}` | कोई नहीं: `@Public()`, हर client address का अपना budget |  |
+| POST | `/v1/payment-links/fiat/{id}/direct/orders/{orderId}/paid` | कोई नहीं: `@Public()`, हर client address का अपना budget |  |
+| POST | `/v1/payment-links/fiat/{id}/direct/orders/{orderId}/cancel` | कोई नहीं: `@Public()`, हर client address का अपना budget |  |
 | POST | `/v1/payment-links/fiat/{id}/transfers` | कोई नहीं: `@Public()`, हर client address का अपना budget |  |
 | GET | `/v1/plugins` | `plugins:read` |  |
 | GET | `/v1/plugins/{slug}` | `plugins:read` |  |
@@ -2236,6 +2246,16 @@ Deploy का XLM platform देता है; हर पक्ष उन trans
 | POST | `/v1/onramp/p2p/payment-requests/{id}/cancel` | `onramp:write` | किसी खुले charge का भुगतान रोकें |
 | GET | `/v1/payment-links/fiat/{id}` | कोई नहीं (`@Public()`) | payer को दिखने वाला charge: राशि, live अनुमान, भुगतान के तरीके |
 | POST | `/v1/payment-links/fiat/{id}/sessions` | कोई नहीं (`@Public()`) | payer भुगतान शुरू करता है: ठीक उसी राशि की खरीद, जो seller को delivered होती है |
+| POST | `/v1/payment-links/fiat/{id}/direct/login` | कोई नहीं (`@Public()`) | payer page से ARS charge चुकाने के लिए email से verification शुरू करता है |
+| POST | `/v1/payment-links/fiat/{id}/direct/login/verify` | कोई नहीं (`@Public()`) | email वाला code, payer के session के बदले |
+| GET | `/v1/payment-links/fiat/{id}/direct/kyc` | कोई नहीं (`@Public()`) | payer के verification में आगे क्या चाहिए |
+| POST | `/v1/payment-links/fiat/{id}/direct/kyc/details` | कोई नहीं (`@Public()`) | payer का शहर और phone |
+| POST | `/v1/payment-links/fiat/{id}/direct/kyc/phone` | कोई नहीं (`@Public()`) | payer के phone पर भेजा गया code |
+| GET | `/v1/payment-links/fiat/{id}/direct/accounts` | कोई नहीं (`@Public()`) | payer के saved bank accounts, सिर्फ़ एक hint |
+| POST | `/v1/payment-links/fiat/{id}/direct/orders` | कोई नहीं (`@Public()`) | एक verified seller के ज़रिए ठीक उसी राशि का भुगतान |
+| GET | `/v1/payment-links/fiat/{id}/direct/orders/{orderId}` | कोई नहीं (`@Public()`) | उनमें से एक भुगतान: किसे transfer करना है, और कब तक |
+| POST | `/v1/payment-links/fiat/{id}/direct/orders/{orderId}/paid` | कोई नहीं (`@Public()`) | payer ने transfer कर दिया: charge `processing` में |
+| POST | `/v1/payment-links/fiat/{id}/direct/orders/{orderId}/cancel` | कोई नहीं (`@Public()`) | ऐसा भुगतान cancel करना जो payer ने अभी नहीं किया |
 | POST | `/v1/onramp/p2p/webhooks` | कोई नहीं (`@Public()`, signed) | marketplace के order updates |
 | GET | `/v1/offramp/p2p/market` | `offramp:read` | मुद्राएँ, भुगतान के तरीके, बिक्री का price और minimum (USD में), chains और वह token जिससे form शुरू होता है (shared public key इसे पढ़ सकती है) |
 | GET | `/v1/offramp/p2p/tokens` | `offramp:read` | वही token सूचियाँ, बिक्री के लिए (shared public key इसे पढ़ सकती है) |
@@ -2264,6 +2284,18 @@ Seller स्थानीय मुद्रा की एक राशि QR �
 - **Webhook।** `POST /v1/onramp/p2p/webhooks` `@Public()` है और fiat partner वाले की तरह OpenAPI contract से बाहर रखा गया है। एक delivery तभी स्वीकार होती है जब `x-webhook-hash` raw body का `sha256` हो (lowercase hex) और `x-webhook-signature` उस hex पर किसी एक network के JWKS की key से बना base64 RSA-SHA256 signature हो (`ELDORADO_WEBHOOK_JWKS_URL_MAINNET` / `ELDORADO_WEBHOOK_JWKS_URL_TESTNET`, default रूप से marketplace के अपने); जो key उसे verify करती है वही तय करती है कि वह किस network के sessions बदल सकती है। बाकी सब `401 webhook_signature_invalid` है, और जो key set पढ़ा न जा सके वह `503` है, ताकि marketplace delivery फिर से भेजे। Keys memory में रखी जाती हैं और जब कोई delivery verify नहीं होती तो हर network पर अधिकतम एक मिनट में एक बार फिर पढ़ी जाती हैं। जो verified delivery किसी session का नाम नहीं लेती, वह log होती है और उसे `200` जवाब मिलता है। हर write conditional है: session को `COMPLETED` एक बार मिल जाए तो वह उसे बनाए रखता है, और request एक ही बार paid होती है। Sessions marketplace का आख़िरी order status `status` के रूप में लौटाते हैं।
 - **Operator के steps।** Marketplace webhook को हर Client ID के लिए register करता है, उसी address पर email से जो integrator ids देता है: उसे Client ID और URL `https://api.cosmospay.lat/cosmos-api/v1/onramp/p2p/webhooks` भेजें (gateway का public prefix, फिर `/v1/onramp/p2p/webhooks`)। Gateway को ठीक `POST /v1/onramp/p2p/webhooks` के लिए एक keyless route चाहिए जो body को बिना बदले आगे भेजे; payer के routes को कुछ नया नहीं चाहिए।
 - **इस version में नहीं:** request के paid होने पर बाहर जाने वाला webhook event, requests का dashboard view, और दोबारा इस्तेमाल होने वाले QR जिनमें payer राशि खुद टाइप करता है।
+
+### payer के page से charge चुकाना (direct)
+
+ARS charge के लिए payer उसी marketplace से उसकी window के बिना भुगतान कर सकता है: वह एक बार verify होता है और charge के अपने page पर उसे बताया जाता है कि ठीक राशि किसे transfer करनी है, जबकि यह service उसके लिए marketplace का API चलाती है (`/v1/payment-links/fiat/{id}/direct/*`)। marketplace ही counterparty रहता है (payer उसका client है और वही उसकी identity check करता है), और token अब भी सीधे seller के address पर जाता है। seller और payer के views में `p2pDirect` बताता है कि कोई charge यह देता है या नहीं: charge ARS में है, `p2p` उसके `methods` में है, और deployment `ELDORADO_CLIENT_ID`, `ELDORADO_API_REFERRAL_ID` (source type API वाली referral id) और `P2P_DIRECT_SESSION_SECRET` सेट करता है। `methods` नहीं बदलता: `p2p` का मतलब अब भी marketplace है, और page इस flag से direct flow या window चुनता है।
+
+- **कदम।** `login` payer को email पर एक code भेजता है (Spanish, English और Portuguese में से उस भाषा में जिसे `Accept-Language` पसंद करता है) और `login/verify` उसे एक `session` से बदलता है। फिर `kyc` बताता है कि आगे क्या पूछना है: `details` (शहर और phone), `phone` (SMS से भेजा गया code), `document` (`documentUrl` पर ID document की जाँच), `review`, `rejected` या `ready`। `accounts` payer के अपने नाम वाले saved accounts दिखाता है (एक hint, number कभी नहीं), `orders` उनमें से किसी एक से या नए `account` से ठीक राशि का भुगतान खोलता है (उसके CVU/CBU और CUIT/CUIL के check digits जाँचे जाते हैं), और page order को poll करता है: `matching`, फिर `payTo` और `dueAt` के साथ `pay`। payer transfer करने के बाद उसे `paid` mark करता है, या पहले ही cancel कर देता है।
+- **session।** marketplace का sign-in token कभी इस service से साफ़ रूप में बाहर नहीं जाता और कभी store नहीं होता: `session` वही token है, जो `P2P_DIRECT_SESSION_SECRET` से derive की गई key के तहत AES-256-GCM से seal है, charge और उसके network से बँधा है, और token के साथ या दो घंटे बाद, जो पहले हो, expire हो जाता है। sign-in के बाद हर route इसे `X-Payer-Session` में लेता है; गायब, बदला हुआ, expired या किसी और का session `401 session_expired` है। secret बदलने से सभी payers sign out हो जाते हैं।
+- **id जो खोलता है वह सीमित रहता है।** एक order हमेशा charge का token charge के address पर उसकी राशि के लिए deliver करता है, और `externalReferenceId` में charge का नाम लेता है; किसी charge के ज़रिए पढ़ा, paid mark किया या cancel किया गया order वहाँ उसी charge का नाम ले, वरना वह न मौजूद order का 404 है। कुछ शुरू करने के लिए (sign-in, verification, accounts, एक order) `p2pDirect` वाला खुला charge चाहिए; पहले से चल रहा order charge के expire या paid होने के बाद भी देखा, paid mark और cancel किया जा सकता है, ताकि payer जो शुरू किया वह पूरा कर सके।
+- **charge का status।** किसी order को paid mark करने से खुला charge उसी order की वजह से `processing` में चला जाता है। फिर marketplace का webhook तय करता है: `COMPLETED` उसे paid करता है (window वाली खरीद जैसी ही जाँचें), `CANCELLED` उसे फिर खोल देता है (सिर्फ़ तब जब वही order उसे `processing` में लाया हो; इस बीच आया bank transfer उसे ले लेता है), और `DISPUTED` उसे `processing` में छोड़ता है। पहला पूरा हुआ भुगतान जीतता है, bank transfer का भी।
+- **क्या रखा जाता है।** payer के बारे में कुछ नहीं: न email, न नाम, न account, न document, न token, किसी row या log में (marketplace का इनकार उसके key names और error code से log होता है)। order seller के BUY session के रूप में दर्ज होता है, उस order id के साथ जिससे webhook उसे ढूँढता है और charge के page को उसका `widgetUrl` बनाकर।
+- **errors और budgets।** charge इस तरह न चुकाया जा सके तो `400 method_unavailable`, खुला न हो तो `409 request_closed`, `400 invalid_email`, `400 invalid_code`, `400 invalid_phone`, `400 invalid_cbu`, `400 invalid_document`, `400 invalid_bank`, `400 invalid_account`, `409 kyc_required`, `409 too_many_orders` (marketplace एक payer को दो चालू भुगतान देता है), `409 order_not_payable`, `409 order_not_cancellable`, अभी कोई न ले सके तो `503 no_sellers` और marketplace तक न पहुँचा जा सके तो `503 p2p_unavailable`; कोई भी और इनकार एक neutral `400 rejected` है। हर client address पर: प्रति मिनट 5 sign-ins (`payment-links-fiat:direct-login`), 10 code checks (`payment-links-fiat:direct-verify`), 30 reads (`payment-links-fiat:direct-read`) और 30 changes (`payment-links-fiat:direct-write`)। हर जवाब `Cache-Control: no-store` है।
+- **operator के कदम।** marketplace से source type API वाली referral id माँगें (widget वाली WIDGET type की है) और उसे `ELDORADO_API_REFERRAL_ID` में सेट करें, और `P2P_DIRECT_SESSION_SECRET` सेट करें (`openssl rand -base64 32`)। routes `/v1/payment-links/*` के gateway के बिना-key वाले route के नीचे हैं, जिसके CORS plugin को `X-Payer-Session` header allow करना होगा।
 
 ## Bank transfer से चुकाए गए charges
 
@@ -2539,6 +2571,14 @@ seal होती हैं और कभी लौटाई नहीं जा
   plugins का अकेला route group हैं जो कोई API key नहीं लेता।
 
 ## अपग्रेड — breaking changes और deploy नोट्स
+
+### payer के page से P2P marketplace के ज़रिए चुकाए गए charges (direct)
+
+- **Migration `20261113120000_p2p_direct_orders`** `p2p_payment_request` में nullable `processingSessionId` जोड़ता है; कुछ भी दोबारा नहीं लिखा जाता। नया build serve होने से पहले `migrate deploy` चलाएँ।
+- **Payment requests (additive):** seller और payer के views में `p2pDirect`। `processing` का मतलब अब यह भी हो सकता है कि direct order के payer ने कहा कि उसने transfer कर दिया: order पूरा होने पर यह `paid` हो जाता है, या cancel होने पर फिर `open`।
+- **नए बिना-key routes** `/v1/payment-links/fiat/{id}/direct/` के नीचे: `login`, `login/verify`, `kyc`, `kyc/details`, `kyc/phone`, `accounts`, `orders`, `orders/{orderId}`, `orders/{orderId}/paid` और `orders/{orderId}/cancel`। नए error codes: `session_expired` (401), `invalid_email`, `invalid_code`, `invalid_phone`, `invalid_account`, `invalid_cbu`, `invalid_bank` और `rejected` (400), `kyc_required`, `too_many_orders`, `order_not_payable` और `order_not_cancellable` (409), `p2p_unavailable` और `no_sellers` (503)। नए budgets: `payment-links-fiat:direct-login` (हर client address पर प्रति मिनट 5), `payment-links-fiat:direct-verify` (10), `payment-links-fiat:direct-read` (30) और `payment-links-fiat:direct-write` (30)।
+- **एक direct order seller का session है** (`GET /v1/onramp/p2p/sessions`) जिसका `widgetUrl` charge का अपना page है, क्योंकि कोई window नहीं है।
+- **configure होने तक बंद:** `ELDORADO_API_REFERRAL_ID` और `P2P_DIRECT_SESSION_SECRET` सेट करें (`ELDORADO_CLIENT_ID` के साथ)। **Gateway:** बिना-key वाले `/v1/payment-links/*` route के CORS `allow_headers` में `X-Payer-Session` जोड़ें; कोई नया route नहीं।
 
 ### Bank transfer से चुकाए गए charges: एक नया native plugin, पाँच tables और `processing`
 

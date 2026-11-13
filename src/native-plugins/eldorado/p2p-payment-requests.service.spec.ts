@@ -162,7 +162,14 @@ function transferRail() {
   return { rail, accepts };
 }
 
-function setup(options: { rail?: boolean } = {}) {
+/** The settings that switch the direct flow on. */
+const DIRECT_ON = {
+  clientId: 'client-1',
+  apiReferralId: 'r-api',
+  directSessionSecret: Buffer.alloc(32, 7).toString('base64'),
+};
+
+function setup(options: { rail?: boolean; direct?: boolean } = {}) {
   const client = marketClient();
   const rails = new PaymentRequestRails();
   const transfer = transferRail();
@@ -196,7 +203,9 @@ function setup(options: { rail?: boolean } = {}) {
           }
         : name === 'paymentIntents'
           ? { checkoutUrl: CHECKOUT }
-          : { network: 'testnet' },
+          : name === 'eldorado' && options.direct
+            ? DIRECT_ON
+            : { network: 'testnet' },
     ),
   } as unknown as ConfigService;
   const recordTokens = new PublicRecordTokens(config as never);
@@ -571,6 +580,7 @@ describe('P2pPaymentRequestsService', () => {
           'estimatedAmountOut',
           'paymentMethods',
           'methods',
+          'p2pDirect',
           'expiresAt',
           'createdAt',
           'paidAt',
@@ -589,6 +599,24 @@ describe('P2pPaymentRequestsService', () => {
         .select as Row;
       expect(select).not.toHaveProperty('address');
       expect(select).not.toHaveProperty('consumerId');
+    });
+
+    it('offers the direct flow for an ARS request the market takes, only on a deployment that serves it', async () => {
+      const on = setup({ direct: true });
+      const created = await on.service.create(seller, INPUT);
+      expect(created).toMatchObject({ methods: ['p2p'], p2pDirect: true });
+      await expect(on.service.findPublic(created.id)).resolves.toMatchObject({
+        methods: ['p2p'],
+        p2pDirect: true,
+      });
+
+      const off = setup();
+      const plain = await off.service.create(seller, INPUT);
+      expect(plain.p2pDirect).toBe(false);
+      await expect(off.service.findPublic(plain.id)).resolves.toMatchObject({
+        methods: ['p2p'],
+        p2pDirect: false,
+      });
     });
 
     it('is a 404 for an unknown id, and for one no request could have, before the table is read', async () => {

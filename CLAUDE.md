@@ -486,6 +486,21 @@ Each of these was a real finding in this codebase, not a hypothetical:
   (`toPublicPaymentRequest`), never the owner, the seller's address, the record token,
   sessions or hashes; the purchase they open belongs to the request's consumer, and
   the stored `sharedPublicKey` decides its referral id.
+- **A direct P2P order is bounded by its payment request, and the payer's marketplace
+  token never rests here.** The keyless `/v1/payment-links/fiat/{id}/direct/*`
+  (`P2pDirectService`) opens an order only for the request's own amount, token, chain
+  and address, with the request id as `externalReferenceId`, and reads, marks paid or
+  cancels one only when its `externalReferenceId` is that request (else the 404 of a
+  missing order). The payer's bearer token travels only sealed in `X-Payer-Session`
+  (`p2p-direct-session.ts`: AES-256-GCM under `P2P_DIRECT_SESSION_SECRET`, bound to the
+  request and its network, two hours at most). Nothing about the payer (email, name,
+  account, document, token) is stored or logged: every call is `requestUpstreamJson`
+  with `personalData`, which logs a refusal by its key names and error code only and
+  hands it back for `directRefusal` to map, never relaying the marketplace's text. The
+  webhook finds a direct order's session by `providerOrderId` under its
+  `paymentRequestId`; a CANCELLED order reopens its request only when
+  `processingSessionId` names that session, and a bank transfer's `markProcessing`
+  clears the field, so money that arrived is never reopened.
 - **A bank transfer moves a payment request only on the partner's signed webhook, and
   only to the transfer that deposit names** (native plugin `koywe`). `POST
   /v1/onramp/transfer/webhooks` checks `Koywe-Signature` (HMAC-SHA256 of the raw body)
@@ -524,7 +539,8 @@ invites a wallet to register where it was not meant to. `src/config/identity-env
 refuses to boot a recovery server holding `WALLET_RECOVERY_SPONSOR_SECRET` or
 `APISIX_ADMIN_KEY`, and any deployment where two boundary secrets
 (`APISIX_GATEWAY_SECRET`, `WALLET_AUTH_SESSION_SECRET`, `APISIX_ADMIN_KEY`,
-`WALLET_BACKUP_ENCRYPTION_KEY`, `RECOVERY_JWT_SECRET`) share a value. Do not relax
+`WALLET_BACKUP_ENCRYPTION_KEY`, `RECOVERY_JWT_SECRET`, `P2P_DIRECT_SESSION_SECRET`)
+share a value. Do not relax
 either: the two servers' independence IS the design, and a shared value is one leak
 that breaks two boundaries.
 

@@ -399,7 +399,11 @@ export class EldoradoClient {
   }
 }
 
-/** `/orders/{id}`, the id escaped: it comes from the payer's page. */
+/**
+ * `/orders/{id}`, the id escaped: it comes from the payer's page. A dot-only
+ * id would be a path segment the URL resolves (`..`), so it is escaped too.
+ */
 function orderPath(orderId: string): string {
-  return `/orders/${encodeURIComponent(orderId)}`;
+  const escaped = encodeURIComponent(orderId).replace(/\./g, '%2E');
+  return `/orders/${escaped}`;
 }

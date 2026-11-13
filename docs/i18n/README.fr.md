@@ -333,6 +333,16 @@ Les chemins utilisent la forme OpenAPI `{param}`.
 | POST | `/v1/payment-links/{id}/solana-pay` | aucun : `@Public()`, budget par adresse client |  |
 | GET | `/v1/payment-links/fiat/{id}` | aucun : `@Public()`, budget par adresse client |  |
 | POST | `/v1/payment-links/fiat/{id}/sessions` | aucun : `@Public()`, budget par adresse client |  |
+| POST | `/v1/payment-links/fiat/{id}/direct/login` | aucun : `@Public()`, budget par adresse client |  |
+| POST | `/v1/payment-links/fiat/{id}/direct/login/verify` | aucun : `@Public()`, budget par adresse client |  |
+| GET | `/v1/payment-links/fiat/{id}/direct/kyc` | aucun : `@Public()`, budget par adresse client |  |
+| POST | `/v1/payment-links/fiat/{id}/direct/kyc/details` | aucun : `@Public()`, budget par adresse client |  |
+| POST | `/v1/payment-links/fiat/{id}/direct/kyc/phone` | aucun : `@Public()`, budget par adresse client |  |
+| GET | `/v1/payment-links/fiat/{id}/direct/accounts` | aucun : `@Public()`, budget par adresse client |  |
+| POST | `/v1/payment-links/fiat/{id}/direct/orders` | aucun : `@Public()`, budget par adresse client |  |
+| GET | `/v1/payment-links/fiat/{id}/direct/orders/{orderId}` | aucun : `@Public()`, budget par adresse client |  |
+| POST | `/v1/payment-links/fiat/{id}/direct/orders/{orderId}/paid` | aucun : `@Public()`, budget par adresse client |  |
+| POST | `/v1/payment-links/fiat/{id}/direct/orders/{orderId}/cancel` | aucun : `@Public()`, budget par adresse client |  |
 | POST | `/v1/payment-links/fiat/{id}/transfers` | aucun : `@Public()`, budget par adresse client |  |
 | GET | `/v1/plugins` | `plugins:read` |  |
 | GET | `/v1/plugins/{slug}` | `plugins:read` |  |
@@ -2322,6 +2332,16 @@ Un acheteur paie en monnaie locale (un virement bancaire en Argentine, PIX, Nequ
 | POST | `/v1/onramp/p2p/payment-requests/{id}/cancel` | `onramp:write` | Empêche le paiement d'un encaissement ouvert |
 | GET | `/v1/payment-links/fiat/{id}` | aucun (`@Public()`) | La vue du payeur sur un encaissement : montant, estimation en direct, moyens de paiement |
 | POST | `/v1/payment-links/fiat/{id}/sessions` | aucun (`@Public()`) | Le payeur commence à payer : un achat du montant exact, livré au vendeur |
+| POST | `/v1/payment-links/fiat/{id}/direct/login` | aucun (`@Public()`) | Le payeur commence à se vérifier par email, pour régler une demande en ARS depuis la page |
+| POST | `/v1/payment-links/fiat/{id}/direct/login/verify` | aucun (`@Public()`) | Le code reçu par email, échangé contre la session du payeur |
+| GET | `/v1/payment-links/fiat/{id}/direct/kyc` | aucun (`@Public()`) | Ce qu'il reste à la vérification du payeur |
+| POST | `/v1/payment-links/fiat/{id}/direct/kyc/details` | aucun (`@Public()`) | La ville et le téléphone du payeur |
+| POST | `/v1/payment-links/fiat/{id}/direct/kyc/phone` | aucun (`@Public()`) | Le code envoyé au téléphone du payeur |
+| GET | `/v1/payment-links/fiat/{id}/direct/accounts` | aucun (`@Public()`) | Les comptes bancaires enregistrés du payeur, un indice seulement |
+| POST | `/v1/payment-links/fiat/{id}/direct/orders` | aucun (`@Public()`) | Un paiement du montant exact via un vendeur vérifié |
+| GET | `/v1/payment-links/fiat/{id}/direct/orders/{orderId}` | aucun (`@Public()`) | Un de ces paiements : à qui virer, et jusqu'à quand |
+| POST | `/v1/payment-links/fiat/{id}/direct/orders/{orderId}/paid` | aucun (`@Public()`) | Le payeur a viré : la demande passe à `processing` |
+| POST | `/v1/payment-links/fiat/{id}/direct/orders/{orderId}/cancel` | aucun (`@Public()`) | Annuler un paiement que le payeur n'a pas encore fait |
 | POST | `/v1/onramp/p2p/webhooks` | aucun (`@Public()`, signé) | Les mises à jour des ordres du marché |
 | GET | `/v1/offramp/p2p/market` | `offramp:read` | Monnaies, moyens de paiement, prix de vente et minimum (en USD), les chaînes et le token par lequel un formulaire commence (la clé publique partagée peut le lire) |
 | GET | `/v1/offramp/p2p/tokens` | `offramp:read` | Les mêmes listes de tokens, pour une vente (la clé publique partagée peut le lire) |
@@ -2350,6 +2370,18 @@ Un vendeur encaisse un montant en monnaie locale avec un QR, et le payeur le rè
 - **Le webhook.** `POST /v1/onramp/p2p/webhooks` est `@Public()` et tenu hors du contrat OpenAPI, comme celui du partenaire fiat. Une livraison n'est acceptée que si `x-webhook-hash` est le `sha256` du corps brut (hex en minuscules) et si `x-webhook-signature` est une signature RSA-SHA256 en base64 de cet hex par une clé du JWKS d'un réseau (`ELDORADO_WEBHOOK_JWKS_URL_MAINNET` / `ELDORADO_WEBHOOK_JWKS_URL_TESTNET`, par défaut celui du marché) ; la clé qui la vérifie décide sur quel réseau elle peut modifier des sessions. Tout le reste est `401 webhook_signature_invalid`, et un jeu de clés illisible est `503`, pour que le marché renvoie la livraison. Les clés sont gardées en mémoire et relues au plus une fois par minute et par réseau quand une livraison ne se vérifie pas. Une livraison vérifiée qui ne nomme aucune session est journalisée et reçoit `200`. Chaque écriture est conditionnelle : une session garde `COMPLETED` une fois qu'elle l'a, et une demande n'est payée qu'une fois. Les sessions renvoient le dernier statut d'ordre du marché dans `status`.
 - **Étapes pour l'opérateur.** Le marché enregistre le webhook par Client ID, par e-mail à la même adresse qui délivre les ids d'intégrateur : envoyez-lui le Client ID et l'URL `https://api.cosmospay.lat/cosmos-api/v1/onramp/p2p/webhooks` (le préfixe public de la passerelle, puis `/v1/onramp/p2p/webhooks`). La passerelle a besoin d'une route sans clé pour exactement `POST /v1/onramp/p2p/webhooks`, qui transmet le corps sans le modifier ; les routes du payeur n'ont besoin de rien de nouveau.
 - **Pas dans cette version :** un événement webhook sortant quand une demande est payée, une vue des demandes dans le dashboard, et des QR réutilisables où le payeur saisit le montant.
+
+### Régler une demande depuis la page du payeur (direct)
+
+Pour une demande en ARS, le payeur peut payer via le même marché sans sa fenêtre : il se vérifie une seule fois et apprend à qui virer le montant exact, sur la page même de la demande, pendant que ce service pilote pour lui l'API du marché (`/v1/payment-links/fiat/{id}/direct/*`). Le marché reste la contrepartie (le payeur est son client et c'est lui qui vérifie son identité), et le token va toujours directement à l'adresse du vendeur. `p2pDirect`, dans les vues du vendeur et du payeur, dit si une demande le propose : elle est en ARS, `p2p` figure dans ses `methods`, et le déploiement définit `ELDORADO_CLIENT_ID`, `ELDORADO_API_REFERRAL_ID` (un referral id de type de source API) et `P2P_DIRECT_SESSION_SECRET`. `methods` ne change pas : `p2p` désigne toujours le marché, et la page choisit entre le flux direct et la fenêtre selon le flag.
+
+- **Les étapes.** `login` envoie un code par email au payeur (dans la langue que préfère `Accept-Language` parmi l'espagnol, l'anglais et le portugais) et `login/verify` l'échange contre une `session`. Ensuite `kyc` dit quoi demander : `details` (ville et téléphone), `phone` (le code reçu par SMS), `document` (une vérification de pièce d'identité à `documentUrl`), `review`, `rejected` ou `ready`. `accounts` liste les comptes enregistrés du payeur à son nom (un indice, jamais le numéro), `orders` ouvre un paiement du montant exact depuis l'un d'eux ou depuis un nouveau `account` (les chiffres de contrôle de son CVU/CBU et de son CUIT/CUIL sont vérifiés), et la page interroge l'ordre : `matching`, puis `pay` avec `payTo` et `dueAt`. Le payeur le marque `paid` après avoir viré, ou l'annule avant.
+- **La session.** Le jeton de connexion du marché ne quitte jamais ce service en clair et n'est jamais stocké : `session` est ce jeton scellé en AES-256-GCM sous une clé dérivée de `P2P_DIRECT_SESSION_SECRET`, lié à la demande et à son réseau, et il expire avec le jeton ou au bout de deux heures, au premier des deux termes. Chaque route après la connexion le reçoit dans `X-Payer-Session` ; un en-tête absent, modifié, expiré ou étranger donne `401 session_expired`. Changer le secret déconnecte tous les payeurs.
+- **Ce que l'id débloque reste borné.** Un ordre livre toujours le token de la demande à l'adresse de la demande pour son montant, et nomme la demande dans `externalReferenceId` ; un ordre lu, marqué payé ou annulé via une demande doit l'y nommer, sinon c'est le 404 d'un ordre inexistant. Commencer quelque chose (la connexion, la vérification, les comptes, un ordre) exige une demande ouverte avec `p2pDirect` ; un ordre déjà en cours peut encore être suivi, marqué payé et annulé après l'expiration ou le paiement de la demande, pour que le payeur termine ce qu'il a commencé.
+- **Le statut de la demande.** Marquer un ordre comme payé fait passer une demande ouverte à `processing` à cause de cet ordre. Le webhook du marché décide ensuite : `COMPLETED` la paie (les mêmes contrôles qu'un achat dans la fenêtre), `CANCELLED` la rouvre (seulement si cet ordre est celui qui l'a mise en `processing` ; un virement bancaire qui arrive entre-temps la reprend), et `DISPUTED` la laisse en `processing`. Le premier paiement abouti l'emporte, y compris celui d'un virement bancaire.
+- **Ce qui est conservé.** Rien sur le payeur : ni email, ni nom, ni compte, ni document, ni jeton, dans une ligne ou dans un log (un refus du marché est journalisé par ses noms de clés et son code d'erreur). L'ordre est enregistré comme une session BUY du vendeur, avec l'id d'ordre par lequel le webhook la retrouve et la page de la demande comme `widgetUrl`.
+- **Erreurs et budgets.** `400 method_unavailable` quand la demande ne peut pas être réglée ainsi, `409 request_closed` si elle n'est pas ouverte, `400 invalid_email`, `400 invalid_code`, `400 invalid_phone`, `400 invalid_cbu`, `400 invalid_document`, `400 invalid_bank`, `400 invalid_account`, `409 kyc_required`, `409 too_many_orders` (le marché accorde à un payeur deux paiements en cours), `409 order_not_payable`, `409 order_not_cancellable`, `503 no_sellers` quand personne ne peut la prendre maintenant et `503 p2p_unavailable` quand le marché est injoignable ; tout autre refus est un `400 rejected` neutre. Par adresse client : 5 connexions par minute (`payment-links-fiat:direct-login`), 10 vérifications de code (`payment-links-fiat:direct-verify`), 30 lectures (`payment-links-fiat:direct-read`) et 30 modifications (`payment-links-fiat:direct-write`). Chaque réponse est `Cache-Control: no-store`.
+- **Étapes de l'opérateur.** Demander au marché un referral id de type de source API (celui du widget est de type WIDGET) et le définir comme `ELDORADO_API_REFERRAL_ID`, et définir `P2P_DIRECT_SESSION_SECRET` (`openssl rand -base64 32`). Les routes sont sous la route sans clé du gateway pour `/v1/payment-links/*`, dont le plugin CORS doit autoriser l'en-tête `X-Payer-Session`.
 
 ## Encaissements par virement bancaire
 
@@ -2644,6 +2676,14 @@ plugins isolés.
   qui ne prend aucune clé API.
 
 ## Mise à niveau — changements incompatibles et notes de déploiement
+
+### Demandes réglées depuis la page du payeur via le marché P2P (direct)
+
+- **La migration `20261113120000_p2p_direct_orders`** ajoute la colonne nullable `processingSessionId` à `p2p_payment_request` ; rien n'est réécrit. Lancer `migrate deploy` avant que le nouveau build ne serve.
+- **Demandes de paiement (additif) :** `p2pDirect` dans les vues du vendeur et du payeur. `processing` peut désormais aussi signifier que le payeur d'un ordre direct a déclaré avoir viré : elle passe à `paid` quand l'ordre aboutit, ou redevient `open` quand il est annulé.
+- **Nouvelles routes sans clé** sous `/v1/payment-links/fiat/{id}/direct/` : `login`, `login/verify`, `kyc`, `kyc/details`, `kyc/phone`, `accounts`, `orders`, `orders/{orderId}`, `orders/{orderId}/paid` et `orders/{orderId}/cancel`. Nouveaux codes d'erreur : `session_expired` (401), `invalid_email`, `invalid_code`, `invalid_phone`, `invalid_account`, `invalid_cbu`, `invalid_bank` et `rejected` (400), `kyc_required`, `too_many_orders`, `order_not_payable` et `order_not_cancellable` (409), `p2p_unavailable` et `no_sellers` (503). Nouveaux budgets : `payment-links-fiat:direct-login` (5 par minute par adresse client), `payment-links-fiat:direct-verify` (10), `payment-links-fiat:direct-read` (30) et `payment-links-fiat:direct-write` (30).
+- **Un ordre direct est une session du vendeur** (`GET /v1/onramp/p2p/sessions`) dont le `widgetUrl` est la page même de la demande, puisqu'il n'y a pas de fenêtre.
+- **Désactivé tant que non configuré :** définir `ELDORADO_API_REFERRAL_ID` et `P2P_DIRECT_SESSION_SECRET` (avec `ELDORADO_CLIENT_ID`). **Gateway :** ajouter `X-Payer-Session` aux `allow_headers` CORS de la route sans clé `/v1/payment-links/*` ; aucune nouvelle route.
 
 ### Encaissements par virement bancaire : un nouveau plugin natif, cinq tables et `processing`
 
