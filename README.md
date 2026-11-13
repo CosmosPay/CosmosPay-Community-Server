@@ -3712,6 +3712,8 @@ at least `DATABASE_URL` and `APISIX_GATEWAY_SECRET`.
 | `ELDORADO_CLIENT_ID` | no | none | The ClientID El Dorado issues to an integrator. With `ELDORADO_REFERRAL_ID`, turns on `POST /v1/onramp/p2p/quotes` and `POST /v1/offramp/p2p/quotes` and attributes each session's order; without both, those routes answer `503 misconfigured` |
 | `ELDORADO_REFERRAL_ID` | no | none | The ReferralID that goes with `ELDORADO_CLIENT_ID` |
 | `ELDORADO_PUBLIC_REFERRAL_ID` | no | none | The ReferralID the shared public key's quotes and sessions carry instead of `ELDORADO_REFERRAL_ID`; ask El Dorado for one at the highest commission. Empty: the public key uses `ELDORADO_REFERRAL_ID` |
+| `ELDORADO_API_REFERRAL_ID` | no | none | A ReferralID whose source type is API (not the widget's): what the direct flow's sign-ins, quotes and orders carry. With `ELDORADO_CLIENT_ID` and `P2P_DIRECT_SESSION_SECRET` it turns on paying an ARS charge from the payer's page (`p2pDirect`). Empty: the flow is off |
+| `P2P_DIRECT_SESSION_SECRET` | no | none | 32 or more random bytes in base64 or hex (`openssl rand -base64 32`): seals the payer's marketplace sign-in into the `X-Payer-Session` the page holds (AES-256-GCM). Must differ from every other secret; rotating it signs every payer out. Empty: the direct flow is off |
 | `ELDORADO_TIMEOUT_MS` | no | `10000` | Budget for one call to the P2P marketplace (ms) |
 | `ELDORADO_WEBHOOK_JWKS_URL_MAINNET` | no | `https://api.eldorado.io/api/.well-known/jwks.json` | Where the P2P marketplace publishes the keys its mainnet order webhooks are signed with (`POST /v1/onramp/p2p/webhooks`) |
 | `ELDORADO_WEBHOOK_JWKS_URL_TESTNET` | no | `https://api-testnet.eldorado.io/api/.well-known/jwks.json` | The same for the sandbox |

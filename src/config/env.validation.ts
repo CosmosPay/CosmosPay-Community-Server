@@ -37,6 +37,7 @@ import {
 } from '@/config/config.constants';
 import { parseEvmTokenFees } from '@/config/evm-token-fees';
 import { assertIdentityConfigConsistent } from '@/config/identity-env';
+import { assertP2pDirectConfigConsistent } from '@/config/p2p-direct-env';
 import { assertZkPaymentsConfigConsistent } from '@/config/zk-payments-env';
 
 /**
@@ -576,6 +577,23 @@ class EnvironmentVariables {
   @IsString()
   ELDORADO_PUBLIC_REFERRAL_ID?: string;
 
+  /**
+   * A referral id of source type API: what the direct flow's logins, quotes
+   * and orders carry (the payer never sees the marketplace's window).
+   */
+  @IsOptional()
+  @IsString()
+  ELDORADO_API_REFERRAL_ID?: string;
+
+  /**
+   * Seals the payer's marketplace session in the direct flow. Its shape (32
+   * or more bytes in base64 or hex) is checked by
+   * `assertP2pDirectConfigConsistent`.
+   */
+  @IsOptional()
+  @IsString()
+  P2P_DIRECT_SESSION_SECRET?: string;
+
   @IsOptional()
   @IsInt()
   @Min(1)
@@ -890,6 +908,9 @@ export function validateEnv(config: Record<string, unknown>) {
   }
 
   assertIdentityConfigConsistent(config);
+
+  // The P2P direct flow's session secret: optional, well formed when set.
+  assertP2pDirectConfigConsistent(config);
 
   // Private payments (ZK payments) are optional per network, but all-or-nothing within one.
   assertZkPaymentsConfigConsistent(config);

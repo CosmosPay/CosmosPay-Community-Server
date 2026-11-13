@@ -498,11 +498,19 @@ export interface AppConfig {
    * one the public key carries is where anonymous use is priced.
    * `webhookJwksUrls` is where each network's marketplace publishes the keys
    * its order webhooks are signed with (`POST /v1/onramp/p2p/webhooks`).
+   * `apiReferralId` (a referral id whose source type is API, not WIDGET) and
+   * `directSessionSecret` switch on the direct flow: an ARS payment request
+   * paid from the payer's page through the marketplace's API, without its
+   * window (`/v1/payment-links/fiat/{id}/direct/*`). The secret seals the
+   * payer's marketplace session (`X-Payer-Session`); without both, with
+   * `clientId`, the flow is off.
    */
   eldorado: {
     clientId: string;
     referralId: string;
     publicReferralId: string;
+    apiReferralId: string;
+    directSessionSecret: string;
     timeoutMs: number;
     webhookJwksUrls: Record<StellarNetwork, string>;
   };
@@ -1250,6 +1258,8 @@ export default (): AppConfig => ({
     clientId: process.env.ELDORADO_CLIENT_ID?.trim() ?? '',
     referralId: process.env.ELDORADO_REFERRAL_ID?.trim() ?? '',
     publicReferralId: process.env.ELDORADO_PUBLIC_REFERRAL_ID?.trim() ?? '',
+    apiReferralId: process.env.ELDORADO_API_REFERRAL_ID?.trim() ?? '',
+    directSessionSecret: process.env.P2P_DIRECT_SESSION_SECRET?.trim() ?? '',
     timeoutMs: parseInt(
       process.env.ELDORADO_TIMEOUT_MS ?? String(DEFAULT_ELDORADO_TIMEOUT_MS),
       10,

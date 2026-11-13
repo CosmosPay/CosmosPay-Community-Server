@@ -2485,6 +2485,8 @@ curl -H "X-Gateway-Secret: $APISIX_GATEWAY_SECRET" -H "X-Consumer-Username: ops"
 | `ELDORADO_CLIENT_ID` | 否 | 无 | El Dorado 发给集成方的 ClientID。与 `ELDORADO_REFERRAL_ID` 一起开启 `POST /v1/onramp/p2p/quotes` 和 `POST /v1/offramp/p2p/quotes` 并为每个会话的订单做归属；两者缺一，这些路由返回 `503 misconfigured` |
 | `ELDORADO_REFERRAL_ID` | 否 | 无 | 与 `ELDORADO_CLIENT_ID` 配套的 ReferralID |
 | `ELDORADO_PUBLIC_REFERRAL_ID` | 否 | 无 | 共享公钥的报价和会话代替 `ELDORADO_REFERRAL_ID` 携带的 ReferralID；向 El Dorado 申请佣金最高的一个。为空：公钥使用 `ELDORADO_REFERRAL_ID` |
+| `ELDORADO_API_REFERRAL_ID` | 否 | 无 | 来源类型为 API（而非小组件）的 ReferralID：直接流程的登录、报价和订单携带它。与 `ELDORADO_CLIENT_ID` 和 `P2P_DIRECT_SESSION_SECRET` 一起，开启在付款方页面上支付 ARS 收款（`p2pDirect`）。为空：该流程关闭 |
+| `P2P_DIRECT_SESSION_SECRET` | 否 | 无 | base64 或 hex 形式的 32 个或以上随机字节（`openssl rand -base64 32`）：把付款方在市场的登录封装进页面保存的 `X-Payer-Session`（AES-256-GCM）。必须与其他所有密钥不同；轮换它会让所有付款方退出登录。为空：直接流程关闭 |
 | `ELDORADO_TIMEOUT_MS` | 否 | `10000` | 对 P2P 市场单次调用的预算（ms） |
 | `ELDORADO_WEBHOOK_JWKS_URL_MAINNET` | 否 | `https://api.eldorado.io/api/.well-known/jwks.json` | P2P 市场发布其主网订单 webhook 签名密钥的位置（`POST /v1/onramp/p2p/webhooks`） |
 | `ELDORADO_WEBHOOK_JWKS_URL_TESTNET` | 否 | `https://api-testnet.eldorado.io/api/.well-known/jwks.json` | 沙盒的同一项 |
