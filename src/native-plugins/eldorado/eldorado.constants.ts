@@ -446,6 +446,8 @@ export const P2P_WEBHOOK_EVENT = 'ORDER_STATUS_CHANGED';
 
 /** The order status that means the token was delivered, and the order type of a purchase. */
 export const P2P_ORDER_COMPLETED = 'COMPLETED';
+/** The order status of a cancelled order (by its buyer, its seller or a timeout). */
+export const P2P_ORDER_CANCELLED = 'CANCELLED';
 export const P2P_ORDER_TYPE_BUY = 'BUY';
 
 // --- the direct flow: a payment request paid from the payer's page --------

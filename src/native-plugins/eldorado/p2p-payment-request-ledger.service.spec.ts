@@ -4,14 +4,21 @@ import { PaymentRequestRails } from '@/payment-request-rails/payment-request-rai
 
 type Row = Record<string, unknown>;
 
-/** The request table with the filters the ledger writes: equality, null and `in`. */
+/** The request table with the filters the ledger writes: equality, null, `in`, `{ not }` and `OR`. */
 function table(rows: Row[]) {
-  const matches = (row: Row, where: Row) =>
-    Object.entries(where).every(([field, want]) =>
-      want && typeof want === 'object' && 'in' in want
-        ? (want as { in: unknown[] }).in.includes(row[field])
-        : row[field] === want,
-    );
+  const matches = (row: Row, where: Row): boolean =>
+    Object.entries(where).every(([field, want]) => {
+      if (field === 'OR') {
+        return (want as Row[]).some((branch) => matches(row, branch));
+      }
+      if (want && typeof want === 'object' && 'in' in want) {
+        return (want as { in: unknown[] }).in.includes(row[field]);
+      }
+      if (want && typeof want === 'object' && 'not' in want) {
+        return (row[field] ?? null) !== want.not;
+      }
+      return (row[field] ?? null) === want;
+    });
   return {
     rows,
     findUnique: jest.fn(({ where }: { where: Row }) => {
@@ -41,6 +48,7 @@ function setup(over: Row = {}) {
     address: '0x52908400098527886E0F7030069857D2E4169EE7',
     expiresAt: new Date(Date.now() + 60_000),
     paidAt: null,
+    processingSessionId: null,
     ...over,
   };
   const prisma = { p2pPaymentRequest: table([row]) };
@@ -84,6 +92,74 @@ describe('P2pPaymentRequestLedger', () => {
       );
       if (moves) expect(row.status).toBe('processing');
     }
+  });
+
+  it('takes over a request a direct order made processing, so cancelling that order cannot reopen it', async () => {
+    const { ledger, row } = setup({
+      status: 'processing',
+      processingSessionId: 'csess1',
+    });
+    await expect(ledger.markProcessing('creq1', new Date())).resolves.toBe(
+      true,
+    );
+    expect(row).toMatchObject({
+      status: 'processing',
+      processingSessionId: null,
+    });
+    await expect(
+      ledger.reopenAfterCancelledOrder('creq1', 'csess1', new Date()),
+    ).resolves.toBe(false);
+    expect(row.status).toBe('processing');
+  });
+
+  it('moves only an open request to processing for a direct order, naming its session', async () => {
+    for (const [over, moves] of [
+      [{}, true],
+      [{ expiresAt: new Date(Date.now() - 1) }, true],
+      [{ status: 'cancelled' }, false],
+      [{ status: 'processing' }, false],
+      [{ status: 'paid', paidAt: new Date() }, false],
+    ] as const) {
+      const { ledger, row } = setup(over);
+      await expect(
+        ledger.markDirectProcessing('creq1', 'csess1', new Date()),
+      ).resolves.toBe(moves);
+      if (moves) {
+        expect(row).toMatchObject({
+          status: 'processing',
+          processingSessionId: 'csess1',
+        });
+      } else {
+        expect(row.processingSessionId).toBeNull();
+      }
+    }
+  });
+
+  it('reopens a request only when the cancelled order is the one that made it processing', async () => {
+    jest.spyOn(Logger.prototype, 'warn').mockImplementation();
+    const { ledger, row } = setup();
+    await ledger.markDirectProcessing('creq1', 'csess1', new Date());
+
+    await expect(
+      ledger.reopenAfterCancelledOrder('creq1', 'csess2', new Date()),
+    ).resolves.toBe(false);
+    expect(row.status).toBe('processing');
+
+    await expect(
+      ledger.reopenAfterCancelledOrder('creq1', 'csess1', new Date()),
+    ).resolves.toBe(true);
+    expect(row).toMatchObject({ status: 'open', processingSessionId: null });
+
+    // Paid in the meantime: never reopened.
+    const paid = setup({
+      status: 'paid',
+      paidAt: new Date(),
+      processingSessionId: 'csess1',
+    });
+    await expect(
+      paid.ledger.reopenAfterCancelledOrder('creq1', 'csess1', new Date()),
+    ).resolves.toBe(false);
+    expect(paid.row.status).toBe('paid');
   });
 
   it('pays once by transfer, and the first completion wins', async () => {

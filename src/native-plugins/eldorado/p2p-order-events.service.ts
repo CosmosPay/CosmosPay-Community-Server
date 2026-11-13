@@ -4,10 +4,13 @@ import type { StellarNetwork } from '@/config/configuration';
 import { P2P_MARKETPLACE } from '@/native-plugins/eldorado/eldorado.constants';
 import {
   completionProblem,
+  isCancelled,
   isCompleted,
   readOrderEvent,
   type P2pOrderEvent,
 } from '@/native-plugins/eldorado/p2p-order-event';
+import { P2pPaymentRequestLedger } from '@/native-plugins/eldorado/p2p-payment-request-ledger.service';
+import { REQUEST_ID_RE } from '@/native-plugins/eldorado/p2p-payment-requests.service';
 import { P2pWebhookKeys } from '@/native-plugins/eldorado/p2p-webhook-keys.service';
 import {
   webhookBodyHash,
@@ -49,6 +52,13 @@ export interface P2pWebhookDelivery {
  * ops). Settling the request
  * runs on every COMPLETED delivery, even one whose session was already
  * completed, which is what heals a delivery that died between the two writes.
+ *
+ * A widget purchase names its session by `externalReferenceId` (`cp-<uuid>`).
+ * A direct order (paid from the payer's page) names its payment request
+ * there instead, and is matched to its session by the order id this service
+ * recorded when it opened it. A CANCELLED direct order whose payer had said
+ * they transferred opens its request again (`reopenAfterCancelledOrder`);
+ * a DISPUTED one leaves it `processing`.
  */
 @Injectable()
 export class P2pOrderEventsService {
@@ -57,6 +67,7 @@ export class P2pOrderEventsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly keys: P2pWebhookKeys,
+    private readonly ledger: P2pPaymentRequestLedger,
   ) {}
 
   /**
@@ -99,17 +110,13 @@ export class P2pOrderEventsService {
   }
 
   /**
-   * Records `order` on the session of `network` its `externalReferenceId`
-   * names, and settles that session's payment request when the order completed
-   * it. An unknown reference is logged and ignored.
+   * Records `order` on the session of `network` it names, and settles that
+   * session's payment request when the order completed it (or reopens it when
+   * a direct order that made it processing was cancelled). An order naming no
+   * session is logged and ignored.
    */
   async apply(network: StellarNetwork, order: P2pOrderEvent): Promise<void> {
-    const session = order.reference
-      ? await this.prisma.p2pRampSession.findFirst({
-          where: { reference: order.reference, network },
-          select: SESSION_MATCH_SELECT,
-        })
-      : null;
+    const session = await this.sessionOf(network, order);
     if (!session) {
       this.logger.warn(
         `${P2P_MARKETPLACE} order ${order.orderId ?? '(no id)'} (${order.status}, ${network}) names no session: reference ${order.reference ?? '(none)'}`,
@@ -141,6 +148,38 @@ export class P2pOrderEventsService {
     if (completed && session.paymentRequestId) {
       await this.settle(session.paymentRequestId, session, order, now);
     }
+    if (isCancelled(order) && session.paymentRequestId) {
+      await this.ledger.reopenAfterCancelledOrder(
+        session.paymentRequestId,
+        session.id,
+        now,
+      );
+    }
+  }
+
+  /**
+   * The session `order` names on `network`: by its reference for a widget
+   * purchase; for a direct order, whose reference is its payment request's
+   * id, the session of that request recorded with the order's id.
+   */
+  private sessionOf(network: StellarNetwork, order: P2pOrderEvent) {
+    if (!order.reference) return Promise.resolve(null);
+    if (REQUEST_ID_RE.test(order.reference)) {
+      return order.orderId
+        ? this.prisma.p2pRampSession.findFirst({
+            where: {
+              paymentRequestId: order.reference,
+              providerOrderId: order.orderId,
+              network,
+            },
+            select: SESSION_MATCH_SELECT,
+          })
+        : Promise.resolve(null);
+    }
+    return this.prisma.p2pRampSession.findFirst({
+      where: { reference: order.reference, network },
+      select: SESSION_MATCH_SELECT,
+    });
   }
 
   /**
