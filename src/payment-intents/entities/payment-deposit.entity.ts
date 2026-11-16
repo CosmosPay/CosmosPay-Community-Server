@@ -494,3 +494,56 @@ export class DepositLimitsEntity {
   @ApiProperty({ example: 300 })
   windowSeconds!: number;
 }
+
+@ApiSchema({
+  description:
+    "A hosted checkout session's token: the session's only credential, " +
+    "answered once. Send it on the session's later calls (`payer`, `events`, " +
+    '`deposits`).',
+})
+export class PayerSessionEntity {
+  @ApiProperty({
+    description:
+      'Random, 256 bits, base64url. Only its SHA-256 is stored; keep it in the ' +
+      'page that asked for it.',
+    example: 'q8V0n3cJxZr2m1bWk7yTt4uP9aLs6dEf0gHiJkLmNoQ',
+  })
+  payerToken!: string;
+}
+
+@ApiSchema({
+  description:
+    'An email a payer typed in a hosted checkout session of this payment link ' +
+    '(not verified).',
+})
+export class PaymentPayerEmailEntity {
+  @ApiProperty({ example: 'payer@example.com' })
+  email!: string;
+
+  @ApiProperty({ example: 'es', description: 'The language of that checkout.' })
+  lang!: string;
+
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    format: 'date-time',
+    example: null,
+    description:
+      'The last time that session reported its wallet sent the payment; null ' +
+      'if it never did.',
+  })
+  sentAt!: Date | null;
+
+  @ApiProperty({ format: 'date-time', example: '2026-11-17T12:00:00.000Z' })
+  recordedAt!: Date;
+}
+
+@ApiSchema({
+  description:
+    "The emails payers gave in this payment link's hosted checkout, newest " +
+    'first.',
+})
+export class PaymentPayerEmailListEntity {
+  @ApiProperty({ type: [PaymentPayerEmailEntity] })
+  data!: PaymentPayerEmailEntity[];
+}

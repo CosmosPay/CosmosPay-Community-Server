@@ -43,6 +43,7 @@ import {
   settlementRefusal,
   toPaymentDepositEntity,
 } from '@/payment-intents/payment-deposit-rules';
+import { payerTokenHash } from '@/payment-intents/payment-payer-session';
 import {
   PAYMENT_DEPOSIT_LOCK_CLASS,
   PAYMENT_DEPOSIT_LINK_WINDOW_MS,
@@ -213,6 +214,20 @@ export class PaymentDepositsService {
       request.originChain,
       request.originAsset,
     );
+    // The checkout session the deposit belongs to: its email gets the receipt.
+    const session = await this.prisma.paymentPayerSession.findFirst({
+      where: {
+        intentId: intent.id,
+        tokenHash: payerTokenHash(request.payerToken),
+      },
+      select: { id: true },
+    });
+    if (!session) {
+      throw ApiError.badRequest(
+        ApiErrorCode.PayerSessionUnknown,
+        'This checkout session is not known for this payment link: give the email again.',
+      );
+    }
     const clientKey = paymentDepositClientKey(
       this.clientKeySecret(),
       paymentDepositClientSubject(ip),
@@ -221,6 +236,8 @@ export class PaymentDepositsService {
       where: {
         intentId: intent.id,
         clientKey,
+        // Another session of the same client (another tab) is another payer.
+        payerSessionId: session.id,
         status: 'AWAITING_DEPOSIT',
         originAssetId: origin.assetId,
         // The refund address is part of the quote: another one is another
@@ -234,25 +251,11 @@ export class PaymentDepositsService {
       },
       orderBy: { createdAt: 'desc' },
     });
-    if (reusable) {
-      // Only this client reaches its own deposit, so it may correct the email
-      // its receipt goes to; nobody else can (another client gets its own).
-      const email = request.email.trim().toLowerCase();
-      const lang = request.lang ?? reusable.payerLang;
-      if (reusable.payerEmail === email && reusable.payerLang === lang) {
-        return this.present(reusable);
-      }
-      return this.present(
-        await this.prisma.paymentDeposit.update({
-          where: { id: reusable.id },
-          data: { payerEmail: email, payerLang: lang },
-        }),
-      );
-    }
+    if (reusable) return this.present(reusable);
 
     const slot = await this.reserveSlot(intent, clientKey);
     try {
-      return await this.open(intent, request, refundTo, clientKey);
+      return await this.open(intent, request, refundTo, clientKey, session.id);
     } finally {
       // Once the deposit row exists it counts for itself; on a failed quote the
       // slot is the caller's again. Never in the way of the answer.
@@ -355,6 +358,7 @@ export class PaymentDepositsService {
     request: CreatePaymentDepositDto,
     refundTo: string,
     clientKey: string,
+    payerSessionId: string,
   ): Promise<PaymentDepositEntity> {
     const priced = await this.pricing.price(intent, request, true);
     await this.assertRecipientCanReceive(priced);
@@ -398,8 +402,7 @@ export class PaymentDepositsService {
           recipient: priced.recipient,
           refundTo,
           clientKey,
-          payerEmail: request.email.trim().toLowerCase(),
-          payerLang: request.lang ?? 'en',
+          payerSessionId,
           ...(priced.merchantFee
             ? {
                 merchantFee:

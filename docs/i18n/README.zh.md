@@ -284,6 +284,7 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | PATCH | `/v1/payment-intents/{id}` | `payments:write` |  |
 | DELETE | `/v1/payment-intents/{id}` | `payments:write` |  |
 | GET | `/v1/payment-intents/{id}/deposits` | `payments:read` |  |
+| GET | `/v1/payment-intents/{id}/payer-emails` | `payments:read` |  |
 | GET | `/v1/payment-intents/{id}/route-check` | `payments:read` |  |
 | GET | `/v1/payment-intents/{id}/transitions` | `payments:read` |  |
 | POST | `/v1/payment-intents/{id}/validate` | `payments:write` |  |
@@ -734,8 +735,8 @@ devnet 和 Monad testnet（10143）——所有链上的 `network` 都存为 `pu
 - **佣金。** 从其他网络付款时，会在链接金额之外向 `NEAR_INTENTS_FEE_RECIPIENT` 支付套餐的 swap 佣金（`X-Plan-Swap-Fee-Bps`）：商户收到链接金额，费用由付款方的充值承担。费率在创建链接时读取（`crossChainFeeBps`），因为充值路由不需要密钥。费率没有收款方时，新网络上的链接会被拒绝（`503 misconfigured`）；在 Stellar、Solana 和 Monad 上，链接创建时不支持从其他网络付款。
 - **无需密钥且有边界。** 充值路由是 `/v1/payment-links/{id}` 下的 `@Public()` 路由，即网关已有的无密钥路由：链接 id 就是凭证。充值只向链接的收款地址支付其金额，只退款到 `refundTo`；同一客户端再次请求同一资产和退款地址时，会拿回它已打开的充值。每个客户端（一个 IPv4 地址或一个 IPv6 /48，仅以 HMAC 形式存储）在每个链接上最多有 `PAYMENT_DEPOSIT_MAX_OPEN_PER_CLIENT`（2）个未完成充值（`409`），因此持有链接的人无法占用其他付款方的名额；每个链接每 `PAYMENT_DEPOSIT_LINK_WINDOW_MS`（5 分钟）从所有客户端接受 `PAYMENT_DEPOSIT_LINK_BUDGET`（20）个新充值，这是一个会回补的预算，超出时返回 `429` 和 `Retry-After`，而不是可能把付款方挡在外面的未完成充值计数。超过期限仍未付款的充值不计入任何限制。名额在实时报价之前于链接的 advisory lock 下预留（`payment_deposit_reservation`），因此并发请求无法同时通过计数。按客户端地址计预算：`payment-links:deposit-assets`（每分钟 30）、`payment-links:quote`（30）、`payment-links:deposits`（10）、`payment-links:deposit-read`（60）。 商户可以为单个链接提高这两项（创建时或通过 `PATCH` 设置 `depositLimits`），上限为每个付款方 `PAYMENT_DEPOSIT_MAX_OPEN_PER_CLIENT_CEILING`（10）、每个窗口 `PAYMENT_DEPOSIT_LINK_BUDGET_CEILING`（200），由本服务校验。
 - **最低金额。** 路由有各自的最低金额，且会随时间变化。`GET /v1/payment-intents/{id}/route-check` 按链接金额对主要来源（`PAYMENT_ROUTE_PROBE_ORIGINS`）进行试算报价，供 dashboard 提醒哪些来源无法支付该金额（从不阻止链接）；`deposit-assets` 以 `routes` 返回同样的检查，供 checkout 带原因禁用这些来源。被拒绝的报价返回 `400 provider_error` 及原因，在任何充值地址生成之前显示。
-- **付款方邮箱与收据。** 托管 checkout 在提供任何付款方式之前先要求填写邮箱：钱包链接付款由 `POST /v1/payment-links/{id}/payer` 记录，充值则必须提供（`email`）。付款成功后，`PaymentReceiptsService` 通过本服务的邮件发送器（`MAIL_*`）以 checkout 的语言发送收据，在各副本间只认领一次，并由 `PaymentReceiptSweeperService` 在三天内重试；同时按该邮箱把付款方关联到商户的客户（`emailProvidedByPayer: true`：未验证）。在 checkout 之外扫描的钱包链接不带邮箱，因此无法发送收据。
-- **无人验证的地址，因此收据有边界。** 第一个在链接上记录邮箱的客户端保留它（`payerClientKey`，即充值用来标识客户端的 HMAC）：只有该客户端可以更改，其他客户端得到 `409 payer_email_conflict`；充值保留创建它的客户端的邮箱。收据只包含本服务生成的内容（金额、资产、网络、日期、付款 id 和交易，以及指向 checkout 上付款页面和浏览器上交易的链接），从不包含链接的留言或其他商户文字。一个地址每天从所有商户合计最多收到 `PAYMENT_RECEIPT_MAX_PER_RECIPIENT`（10）份收据，一个商户每天最多发送 `PAYMENT_RECEIPT_MAX_PER_MERCHANT`（1000）份：超过任一限制的收据会等待窗口。付款方的邮箱只关联到由付款方输入创建的客户，绝不合并到商户创建的客户。
+- **付款方邮箱与收据。** 托管 checkout 在提供任何付款方式之前先要求填写邮箱，并通过 `POST /v1/payment-links/{id}/payer` 将其记录为一个 checkout 会话：第一次调用返回一个随机的 `payerToken`（只存储其 SHA-256，且从不写入日志），页面保存它并在之后的调用中发送（更改邮箱、`events`、`deposits`）。每个会话保留自己的邮箱，任何会话都不能更改其他会话的邮箱，因此第二个访问者永远不会阻挡付款方。付款成功后，`PaymentReceiptsService` 通过本服务的邮件发送器（`MAIL_*`）以该会话的语言发送收据，在各副本间只认领一次，并由 `PaymentReceiptSweeperService` 在三天内重试：从其他网络付款时发给充值所属的会话；否则发给最后报告 `sent` 的会话；否则在所有会话填写同一邮箱时发给该邮箱；否则不发送（`receiptSkippedAt`），商户可通过 `GET /v1/payment-intents/{id}/payer-emails` 查看填写的邮箱。客户关联遵循同一规则（`emailProvidedByPayer: true`：未验证），且从不合并到商户创建的客户。在 checkout 之外扫描的钱包链接不带邮箱，因此无法发送收据。
+- **无人验证的地址，因此收据有边界。** 收据只包含本服务生成的内容（金额、资产、网络、日期、付款 id 和交易，以及指向 checkout 上付款页面和浏览器上交易的链接），从不包含链接的留言或其他商户文字。一个地址每天从所有商户合计最多收到 `PAYMENT_RECEIPT_MAX_PER_RECIPIENT`（10）份收据，一个商户每天最多发送 `PAYMENT_RECEIPT_MAX_PER_MERCHANT`（1000）份：超过任一限制的收据会等待窗口。剩余风险：在多个会话填写了不同邮箱的链接上，从未报告 `sent` 的付款方不会自动收到收据。
 
 ### Solana 与 Monad 上的钱包登录
 
@@ -1709,10 +1710,10 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
 ### 支付链接：所有网络上的开放金额、商户手续费和收据
 
 - **迁移 `20261117120000_payment_link_payer_and_limits`** 为 `payment_intent` 增加可空列（`payerEmail`、`payerLang`、`receiptClaimedAt`、`receiptSentAt`、`depositMaxPerPayer`、`depositBudgetPerWindow`），为 `payment_deposit` 增加（`payerEmail`、`payerLang`、`merchantFee`），并增加 `customer.emailProvidedByPayer`（默认 `false`）。在每个数据库上运行 `migrate deploy`。
-- **迁移 `20261117121000_payment_receipt_safety`** 增加可空的 `payment_intent.payerClientKey`、`receiptTo` 和 `receiptToAt`，以及两个索引。`POST /v1/payment-links/{id}/payer` 可能返回 `409 payer_email_conflict`，收据不再包含链接的留言。
-- **新路由：** 无密钥的 `POST /v1/payment-links/{id}/payer`，以及 `GET /v1/payment-intents/{id}/route-check`（`payments:read`）。`POST /v1/payment-links/{id}/deposits` 现在要求 `email`；没有金额的链接上，报价和充值接受 `amount`；`deposit-assets` 在 `data` 旁返回 `routes`。
+- **迁移 `20261117121000_payment_receipt_safety` 和 `20261117122000_payment_payer_sessions`** 增加 `payment_intent.receiptTo`、`receiptToAt` 和 `receiptSkippedAt`、表 `payment_payer_session` 以及 `payment_deposit.payerSessionId`，并删除本版本第一个迁移添加的付款方列（`payment_intent.payerEmail`、`payerLang`；`payment_deposit.payerEmail`、`payerLang`），这些列从未存放数据。收据不再包含链接的留言。
+- **新路由：** 无密钥的 `POST /v1/payment-links/{id}/payer`（返回 `payerToken`）、`GET /v1/payment-intents/{id}/route-check` 和 `GET /v1/payment-intents/{id}/payer-emails`（`payments:read`）。`POST /v1/payment-links/{id}/deposits` 现在要求 `payerToken`，`events` 也接受它；没有金额的链接上，报价和充值接受 `amount`；`deposit-assets` 在 `data` 旁返回 `routes`。
 - **收据需要邮件发送器：** 设置 `MAIL_FROM` 以及 `MAIL_RESEND_API_KEY` 或 `MAIL_SMTP_*`。缺少时收据会等待（并记录日志），在配置发送方后的三天内发出。
-- **新增响应字段：** 支付意图（及其 webhook）上的 `depositLimits`、`payerEmail` 和 `receiptSentAt`，充值上的 `merchantFee`，客户上的 `emailProvidedByPayer`。
+- **新增响应字段：** 支付意图（及其 webhook）上的 `depositLimits`、`receiptTo`、`receiptSentAt` 和 `receiptSkippedAt`，充值上的 `merchantFee`，客户上的 `emailProvidedByPayer`。
 
 ### 支付链接：所有网络，可从任意网络付款
 

@@ -387,9 +387,13 @@ table. These are the rules that did not hold on their own:
   and `PaymentReceiptsService` mails the receipt on `PAYMENT_INTENT_SUCCEEDED`
   (claimed by `receiptClaimedAt`, retried by `PaymentReceiptSweeperService`).
   That email is typed on a keyless route and never verified (security review,
-  2026-11-16), so: the link's own email is first-write-wins per client
-  (`payerClientKey`; another client is `409 payer_email_conflict`), a deposit
-  keeps its creator's; a receipt carries only what this service generates (no
+  2026-11-16, final design), so: each hosted checkout session records its own
+  (`payment_payer_session`, keyed by the SHA-256 of a random `payerToken` only
+  its browser holds; the token is never stored or logged), no session can change
+  another's and none is ever refused for another's email; a deposit belongs to
+  the session that opened it; a native payment's receipt goes to the session that
+  reported `sent` last, else the one email all sessions gave, else nobody
+  (`receiptRecipient`, `receiptSkippedAt`); a receipt carries only what this service generates (no
   `msg`, no merchant text; its only links are our checkout page and the
   explorer, `paymentExplorerTxUrl`) and is booked against
   `PAYMENT_RECEIPT_MAX_PER_RECIPIENT` / `PAYMENT_RECEIPT_MAX_PER_MERCHANT` a day

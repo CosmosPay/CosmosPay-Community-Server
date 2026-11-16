@@ -57,8 +57,8 @@ export enum ApiErrorCode {
   // --- idempotency / concurrency -------------------------------------------
   IdempotencyConflict = 'idempotency_conflict',
   OperationInFlight = 'operation_in_flight',
-  PayerEmailConflict = 'payer_email_conflict',
   InvalidStateTransition = 'invalid_state_transition',
+  PayerSessionUnknown = 'payer_session_unknown',
 
   // --- money / Stellar ------------------------------------------------------
   SlippageExceeded = 'slippage_exceeded',

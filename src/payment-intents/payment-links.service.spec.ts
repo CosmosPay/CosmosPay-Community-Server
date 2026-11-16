@@ -1,3 +1,5 @@
+import { Logger } from '@nestjs/common';
+import { payerTokenHash } from '@/payment-intents/payment-payer-session';
 import {
   Account,
   Keypair,
@@ -121,11 +123,9 @@ function fullRow(overrides: Partial<PaymentIntent> = {}): PaymentIntent {
     paidFrom: null,
     depositMaxPerPayer: null,
     depositBudgetPerWindow: null,
-    payerEmail: 'payer-secret@example.com',
-    payerLang: 'en',
-    payerClientKey: 'client-key-secret',
     receiptClaimedAt: null,
     receiptSentAt: null,
+    receiptSkippedAt: null,
     receiptTo: 'payer-secret@example.com',
     receiptToAt: null,
     createdAt: CREATED,
@@ -660,6 +660,30 @@ describe('PaymentLinksService.recordEvent', () => {
     expect(sql()).toContain('"checkoutSentAt" = ?');
   });
 
+  it("marks the reporting checkout session's `sent`, found by its token's hash only", async () => {
+    const executeRaw = jest.fn().mockResolvedValue(1);
+    const updateMany = jest.fn().mockResolvedValue({ count: 1 });
+    const service = new PaymentLinksService(
+      {
+        paymentIntent: { findUnique: jest.fn() },
+        paymentPayerSession: { updateMany },
+        $executeRaw: executeRaw,
+      } as never,
+      links,
+      {} as never,
+      {} as never,
+    );
+    const token = 'q8V0n3cJxZr2m1bWk7yTt4uP9aLs6dEf0gHiJkLmNoQ';
+    await service.recordEvent(ID, 'sent', token);
+    const [{ where, data }] = updateMany.mock.calls[0];
+    expect(where).toEqual({ intentId: ID, tokenHash: payerTokenHash(token) });
+    expect(data.sentAt).toBeInstanceOf(Date);
+    // Another event, or one without a token, marks no session.
+    await service.recordEvent(ID, 'walletOpened', token);
+    await service.recordEvent(ID, 'sent');
+    expect(updateMany).toHaveBeenCalledTimes(1);
+  });
+
   it('ignores a link that is no longer pending, and answers an unknown id as the read does', async () => {
     const settled = make(0, true);
     await expect(
@@ -677,120 +701,124 @@ describe('PaymentLinksService.recordEvent', () => {
 describe('PaymentLinksService.recordPayer', () => {
   const links = new Sep7LinkBuilder({} as never, {} as never, {} as never);
   const ID = 'cmh4x2k9a0001l70g8v5q3z2w';
-  const config = {
-    get: () => ({ gatewaySecret: 'test-gateway-secret' }),
-  } as never;
 
-  /* The intent row, and an UPDATE that applies the statement's own condition
-     (open, and no email yet or this client's), as Postgres would. */
-  function make(
-    row: {
-      status: string;
-      payerEmail: string | null;
-      payerClientKey: string | null;
-      payerLang?: string | null;
-    } | null = { status: 'PENDING', payerEmail: null, payerClientKey: null },
-  ) {
-    const executeRaw = jest.fn(
-      (
-        strings: TemplateStringsArray,
-        email: string,
-        lang: string,
-        key: string,
-        id: string,
-        sameKey: string,
-      ) => {
-        const sql = strings.join('?');
-        expect(sql).toContain('"payerEmail" IS NULL OR "payerClientKey" = ?');
-        expect(sql).not.toContain('updatedAt');
-        expect(key).toBe(sameKey);
-        if (
-          !row ||
-          id !== ID ||
-          row.status !== 'PENDING' ||
-          (row.payerEmail !== null && row.payerClientKey !== key)
-        ) {
-          return Promise.resolve(0);
-        }
-        Object.assign(row, {
-          payerEmail: email,
-          payerLang: lang,
-          payerClientKey: key,
-        });
-        return Promise.resolve(1);
+  /* The link and its checkout sessions, in memory. */
+  function make(status = 'PENDING', exists = true) {
+    const sessions: {
+      intentId: string;
+      tokenHash: string;
+      email: string;
+      lang: string;
+    }[] = [];
+    const prisma = {
+      paymentIntent: {
+        findUnique: jest.fn(() => Promise.resolve(exists ? { status } : null)),
       },
-    );
-    const findUnique = jest.fn(() =>
-      Promise.resolve(row ? { status: row.status } : null),
-    );
+      paymentPayerSession: {
+        create: jest.fn(({ data }: { data: (typeof sessions)[number] }) => {
+          sessions.push({ ...data });
+          return Promise.resolve(data);
+        }),
+        updateMany: jest.fn(
+          ({
+            where,
+            data,
+          }: {
+            where: { intentId: string; tokenHash: string };
+            data: { email: string; lang: string };
+          }) => {
+            const own = sessions.filter(
+              (x) =>
+                x.intentId === where.intentId &&
+                x.tokenHash === where.tokenHash,
+            );
+            own.forEach((x) => Object.assign(x, data));
+            return Promise.resolve({ count: own.length });
+          },
+        ),
+      },
+    };
     const service = new PaymentLinksService(
-      { paymentIntent: { findUnique }, $executeRaw: executeRaw } as never,
+      prisma as never,
       links,
       {} as never,
-      config,
+      {} as never,
     );
-    return { service, executeRaw, row };
+    return { service, sessions, prisma };
   }
 
-  it('records the email (lowercased) and language on an open link, bound to the client that gave it', async () => {
-    const { service, row } = make();
-    await service.recordPayer(
-      ID,
-      { email: ' Payer@Example.com ', lang: 'es' },
-      '203.0.113.7',
+  it('opens a session per checkout: two payers on one link both proceed, each with their own email', async () => {
+    const { service, sessions } = make();
+    const [a, b] = await Promise.all([
+      service.recordPayer(ID, { email: ' Payer@Example.com ', lang: 'es' }),
+      service.recordPayer(ID, { email: 'other@example.com' }),
+    ]);
+    expect(a.payerToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(b.payerToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(a.payerToken).not.toBe(b.payerToken);
+    expect(sessions.map((x) => x.email).sort()).toEqual([
+      'other@example.com',
+      'payer@example.com',
+    ]);
+    expect(sessions.find((x) => x.email === 'payer@example.com')?.lang).toBe(
+      'es',
     );
-    expect(row).toMatchObject({
-      payerEmail: 'payer@example.com',
-      payerLang: 'es',
-    });
-    // Stored as an HMAC, never the address.
-    expect(row?.payerClientKey).toMatch(/^[A-Za-z0-9_-]{43}$/);
-    expect(row?.payerClientKey).not.toContain('203.0.113.7');
   });
 
-  it('lets the same client change it, from any address of its IPv6 /48 too', async () => {
-    const { service, row } = make();
-    await service.recordPayer(
-      ID,
-      { email: 'typo@example.com' },
-      '2001:db8:1:1::5',
-    );
-    await service.recordPayer(
-      ID,
-      { email: 'payer@example.com' },
-      '2001:db8:1:2::9',
-    );
-    expect(row?.payerEmail).toBe('payer@example.com');
+  it("changes a session's own email with its token, and never another session's", async () => {
+    const { service, sessions } = make();
+    const a = await service.recordPayer(ID, { email: 'typo@example.com' });
+    const b = await service.recordPayer(ID, { email: 'other@example.com' });
+    // A changes its own.
+    await expect(
+      service.recordPayer(ID, {
+        email: 'payer@example.com',
+        payerToken: a.payerToken,
+      }),
+    ).resolves.toEqual({ payerToken: a.payerToken });
+    // B cannot reach A's: whatever it sends changes B's only.
+    await service.recordPayer(ID, {
+      email: 'attacker@example.com',
+      payerToken: b.payerToken,
+    });
+    expect(sessions.map((x) => x.email)).toEqual([
+      'payer@example.com',
+      'attacker@example.com',
+    ]);
+    // A token this link does not know opens a new session; it never blocks.
+    const c = await service.recordPayer(ID, {
+      email: 'third@example.com',
+      payerToken: 'x'.repeat(43),
+    });
+    expect(c.payerToken).not.toBe('x'.repeat(43));
+    expect(sessions).toHaveLength(3);
   });
 
-  it('first write wins: another client gets a neutral 409 and the email stays', async () => {
-    const { service, row } = make();
-    await service.recordPayer(
-      ID,
-      { email: 'payer@example.com' },
-      '203.0.113.7',
+  it('stores only the hash of the token, and never logs the token', async () => {
+    const spies = (['log', 'warn', 'error', 'debug', 'verbose'] as const).map(
+      (level) =>
+        jest.spyOn(Logger.prototype, level).mockImplementation(() => undefined),
     );
-    const refusal = await service
-      .recordPayer(ID, { email: 'attacker@example.com' }, '198.51.100.9')
-      .catch((err: unknown) => err);
-    expect(refusal).toMatchObject({
-      code: 'payer_email_conflict',
-      status: 409,
+    const { service, sessions } = make();
+    const { payerToken } = await service.recordPayer(ID, {
+      email: 'payer@example.com',
     });
-    expect(JSON.stringify(refusal)).not.toContain('payer@example.com');
-    expect(row?.payerEmail).toBe('payer@example.com');
+    await service.recordPayer(ID, { email: 'payer2@example.com', payerToken });
+    expect(sessions[0].tokenHash).toBe(payerTokenHash(payerToken));
+    expect(sessions[0].tokenHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(JSON.stringify(sessions)).not.toContain(payerToken);
+    for (const spy of spies) {
+      expect(JSON.stringify(spy.mock.calls)).not.toContain(payerToken);
+      spy.mockRestore();
+    }
   });
 
   it('refuses a link that is no longer open, and answers an unknown id as not found', async () => {
     await expect(
-      make({
-        status: 'SUCCEEDED',
-        payerEmail: null,
-        payerClientKey: null,
-      }).service.recordPayer(ID, { email: 'a@b.co' }, '203.0.113.7'),
+      make('SUCCEEDED').service.recordPayer(ID, { email: 'a@b.co' }),
     ).rejects.toMatchObject({ code: 'invalid_state_transition' });
     await expect(
-      make(null).service.recordPayer(ID, { email: 'a@b.co' }, '203.0.113.7'),
+      make('PENDING', false).service.recordPayer(ID, { email: 'a@b.co' }),
     ).rejects.toMatchObject({ code: 'not_found' });
   });
 });

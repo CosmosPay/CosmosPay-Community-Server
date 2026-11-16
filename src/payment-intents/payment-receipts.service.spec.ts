@@ -16,15 +16,32 @@ const INTENT = {
   txHash: '0xb7f1c3a2d4e5f60718293a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d',
   updatedAt: new Date('2026-11-17T12:00:00.000Z'),
   paidFrom: null as unknown,
-  payerEmail: 'link-payer@example.com' as string | null,
-  payerLang: 'es' as string | null,
 };
+
+type Session = {
+  email: string;
+  lang: string;
+  sentAt: Date | null;
+  createdAt: Date;
+};
+const at = (minute: number) =>
+  new Date(`2026-11-17T11:${String(minute).padStart(2, '0')}:00.000Z`);
+/* One checkout session gave an email (the common case). */
+const ONE_SESSION: Session[] = [
+  {
+    email: 'link-payer@example.com',
+    lang: 'es',
+    sentAt: null,
+    createdAt: at(1),
+  },
+];
 
 function build(
   options: {
     claimed?: number;
     intent?: Partial<typeof INTENT>;
     deposit?: unknown;
+    sessions?: Session[];
     configured?: boolean;
     sendFails?: boolean;
     /** Receipts already booked in the window: to this recipient, by this merchant. */
@@ -58,6 +75,9 @@ function build(
     },
     paymentDeposit: {
       findUnique: jest.fn().mockResolvedValue(options.deposit ?? null),
+    },
+    paymentPayerSession: {
+      findMany: jest.fn().mockResolvedValue(options.sessions ?? ONE_SESSION),
     },
   };
   const mailer = {
@@ -116,11 +136,19 @@ describe('PaymentReceiptsService', () => {
         },
       },
       deposit: {
-        payerEmail: 'deposit-payer@example.com',
-        payerLang: 'en',
+        payerSession: { email: 'deposit-payer@example.com', lang: 'en' },
         amountOutPaid: '25',
         amountOut: '25',
       },
+      // Other sessions of the link never take a deposit's receipt.
+      sessions: [
+        {
+          email: 'someone@example.com',
+          lang: 'es',
+          sentAt: at(9),
+          createdAt: at(2),
+        },
+      ],
     });
     await service.send('pi_1');
     const message = mailer.send.mock.calls[0][0];
@@ -191,10 +219,91 @@ describe('PaymentReceiptsService', () => {
     expect(mailer.send).not.toHaveBeenCalled();
   });
 
-  it('sends nothing for a payment with no email (paid outside the checkout)', async () => {
-    const { service, mailer } = build({ intent: { payerEmail: null } });
+  it('sends nothing for a payment with no email (paid outside the checkout), once', async () => {
+    const { service, mailer, sql } = build({ sessions: [] });
     await expect(service.send('pi_1')).resolves.toBe(false);
     expect(mailer.send).not.toHaveBeenCalled();
+    expect(sql.some((q) => q.includes('"receiptSkippedAt" = ?'))).toBe(true);
+  });
+
+  it('goes to the checkout session that reported `sent` last, whoever else gave an email', async () => {
+    const { service, mailer, customers } = build({
+      sessions: [
+        {
+          email: 'early@example.com',
+          lang: 'en',
+          sentAt: at(3),
+          createdAt: at(1),
+        },
+        {
+          email: 'payer@example.com',
+          lang: 'pt',
+          sentAt: at(8),
+          createdAt: at(2),
+        },
+        {
+          email: 'stranger@example.com',
+          lang: 'en',
+          sentAt: null,
+          createdAt: at(9),
+        },
+      ],
+    });
+    await expect(service.send('pi_1')).resolves.toBe(true);
+    const message = mailer.send.mock.calls[0][0];
+    expect(message.to).toBe('payer@example.com');
+    expect(message.subject).toBe('Seu comprovante de pagamento');
+    expect(customers.linkPayerEmail).toHaveBeenCalledWith(
+      'c1',
+      'payer@example.com',
+    );
+  });
+
+  it('sends nothing and links no customer when the payer cannot be told apart', async () => {
+    const { service, mailer, customers, sql } = build({
+      sessions: [
+        {
+          email: 'payer@example.com',
+          lang: 'en',
+          sentAt: null,
+          createdAt: at(1),
+        },
+        {
+          email: 'stranger@example.com',
+          lang: 'en',
+          sentAt: null,
+          createdAt: at(2),
+        },
+      ],
+    });
+    await expect(service.send('pi_1')).resolves.toBe(false);
+    expect(mailer.send).not.toHaveBeenCalled();
+    expect(customers.linkPayerEmail).not.toHaveBeenCalled();
+    // Decided once: the sweeper does not ask again.
+    expect(sql.some((q) => q.includes('"receiptSkippedAt" = ?'))).toBe(true);
+  });
+
+  it('sends to the one email when every session gave the same (a payer who reopened the page)', async () => {
+    const { service, mailer } = build({
+      sessions: [
+        {
+          email: 'payer@example.com',
+          lang: 'en',
+          sentAt: null,
+          createdAt: at(1),
+        },
+        {
+          email: 'Payer@Example.com',
+          lang: 'fr',
+          sentAt: null,
+          createdAt: at(5),
+        },
+      ],
+    });
+    await expect(service.send('pi_1')).resolves.toBe(true);
+    const message = mailer.send.mock.calls[0][0];
+    expect(message.to).toBe('payer@example.com');
+    expect(message.subject).toBe('Votre reçu de paiement');
   });
 
   it('gives the claim back when there is no mail sender or it fails, for the sweeper to retry', async () => {

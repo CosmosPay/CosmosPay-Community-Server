@@ -3,12 +3,12 @@ import { ConfigService } from '@nestjs/config';
 import type { Prisma } from '@generated/prisma/client';
 import { CHAIN_ADDRESS_RULES } from '@/chains/chain-address';
 import { isChain } from '@/chains/chains.constants';
+import { acceptsCrossChainPayment } from '@/payment-intents/payment-deposit-rules';
 import {
-  acceptsCrossChainPayment,
-  paymentDepositClientKey,
-  paymentDepositClientSecret,
-  paymentDepositClientSubject,
-} from '@/payment-intents/payment-deposit-rules';
+  newPayerToken,
+  payerTokenHash,
+} from '@/payment-intents/payment-payer-session';
+import type { PayerSessionEntity } from '@/payment-intents/entities/payment-deposit.entity';
 import { isPaymentNetwork } from '@/payment-intents/payment-networks';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { readMerchantFeeRecord } from '@/common/merchant-fee/merchant-fee';
@@ -154,8 +154,6 @@ export function toPublicPaymentLink(
  */
 @Injectable()
 export class PaymentLinksService {
-  private payerSecret?: Buffer;
-
   constructor(
     private readonly prisma: PrismaService,
     private readonly links: Sep7LinkBuilder,
@@ -197,7 +195,11 @@ export class PaymentLinksService {
    * happened changes nothing but what the owner reads. Anything else is ignored,
    * and an unknown id answers as the read does.
    */
-  async recordEvent(id: string, event: CheckoutEvent): Promise<void> {
+  async recordEvent(
+    id: string,
+    event: CheckoutEvent,
+    payerToken?: string,
+  ): Promise<void> {
     const now = new Date();
     const changed =
       event === 'walletOpened'
@@ -215,7 +217,18 @@ export class PaymentLinksService {
               UPDATE "payment_intent"
                  SET "checkoutSentAt" = ${now}
                WHERE "id" = ${id} AND "status" = 'PENDING'`;
-    if (changed > 0) return;
+    if (changed > 0) {
+      // A `sent` from a checkout session makes its email the receipt's for a
+      // payment with the link itself (`receiptRecipient`). Only while the link
+      // is open, so every report precedes the settlement.
+      if (event === 'sent' && payerToken) {
+        await this.prisma.paymentPayerSession.updateMany({
+          where: { intentId: id, tokenHash: payerTokenHash(payerToken) },
+          data: { sentAt: now },
+        });
+      }
+      return;
+    }
     const exists = await this.prisma.paymentIntent.findUnique({
       where: { id },
       select: { id: true },
@@ -224,57 +237,49 @@ export class PaymentLinksService {
   }
 
   /**
-   * The payer's email and checkout language, recorded on an open link before
-   * the checkout shows how to pay: the receipt goes there when the payment
-   * succeeds (`PaymentReceiptsService`). Raw SQL so `updatedAt` keeps meaning a
-   * change of the intent itself. Unverified by nature: whoever holds the link
-   * can type any address, and the customer it makes says so.
+   * The payer's email and checkout language, from one hosted checkout session
+   * of an open link, before it shows how to pay. Each session keeps its own
+   * email (a row of `payment_payer_session`), so nobody holding the link can
+   * overwrite or lock another payer's: without a token (or with one this link
+   * does not know) a new session is opened and its token answered once; with
+   * its token a session changes only its own email. Only the token's SHA-256
+   * is stored, and the token is never logged. Unverified by nature: whoever
+   * holds the link can type any address, and the customer it makes says so.
    */
   async recordPayer(
     id: string,
     contact: PayerContactDto,
-    ip: string,
-  ): Promise<void> {
-    const email = contact.email.trim().toLowerCase();
-    const lang = contact.lang ?? 'en';
-    // The client is keyed as deposits key it (an HMAC of its IPv4 address or
-    // IPv6 /48). The first client to give an email keeps it: anyone else holding
-    // the link cannot redirect the receipt or the customer it is linked to.
-    const clientKey = paymentDepositClientKey(
-      this.payerKeySecret(),
-      paymentDepositClientSubject(ip),
-    );
-    const changed = await this.prisma.$executeRaw`
-      UPDATE "payment_intent"
-         SET "payerEmail" = ${email}, "payerLang" = ${lang},
-             "payerClientKey" = ${clientKey}
-       WHERE "id" = ${id} AND "status" = 'PENDING'
-         AND ("payerEmail" IS NULL OR "payerClientKey" = ${clientKey})`;
-    if (changed > 0) return;
-    const row = await this.prisma.paymentIntent.findUnique({
+  ): Promise<PayerSessionEntity> {
+    const intent = await this.prisma.paymentIntent.findUnique({
       where: { id },
       select: { status: true },
     });
-    if (!row) throw ApiError.notFound(`Payment intent ${id} not found`);
-    if (row.status !== 'PENDING') {
+    if (!intent) throw ApiError.notFound(`Payment intent ${id} not found`);
+    if (intent.status !== 'PENDING') {
       throw ApiError.badRequest(
         ApiErrorCode.InvalidStateTransition,
-        `Payment intent ${id} is ${row.status}: it can no longer be paid`,
+        `Payment intent ${id} is ${intent.status}: it can no longer be paid`,
       );
     }
-    // Neutral: it says neither whose email it is nor what it is.
-    throw ApiError.conflict(
-      ApiErrorCode.PayerEmailConflict,
-      'An email for this payment was already given.',
-    );
-  }
-
-  /** The key client addresses are stored under (the deposits' own), derived once. */
-  private payerKeySecret(): Buffer {
-    this.payerSecret ??= paymentDepositClientSecret(
-      this.config.get('apisix', { infer: true }).gatewaySecret,
-    );
-    return this.payerSecret;
+    const email = contact.email.trim().toLowerCase();
+    const lang = contact.lang ?? 'en';
+    if (contact.payerToken) {
+      const changed = await this.prisma.paymentPayerSession.updateMany({
+        where: { intentId: id, tokenHash: payerTokenHash(contact.payerToken) },
+        data: { email, lang },
+      });
+      if (changed.count > 0) return { payerToken: contact.payerToken };
+    }
+    const payerToken = newPayerToken();
+    await this.prisma.paymentPayerSession.create({
+      data: {
+        intentId: id,
+        tokenHash: payerTokenHash(payerToken),
+        email,
+        lang,
+      },
+    });
+    return { payerToken };
   }
 
   /**

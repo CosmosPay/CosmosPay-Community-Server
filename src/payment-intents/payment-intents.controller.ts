@@ -40,6 +40,7 @@ import {
 import { PaymentIntentsService } from '@/payment-intents/payment-intents.service';
 import {
   PaymentDepositListEntity,
+  PaymentPayerEmailListEntity,
   PaymentRouteCheckListEntity,
 } from '@/payment-intents/entities/payment-deposit.entity';
 import { PaymentDepositsService } from '@/payment-intents/payment-deposits.service';
@@ -283,6 +284,25 @@ export class PaymentIntentsController {
     @Param('id') id: string,
   ): Promise<PaymentDepositListEntity> {
     return this.deposits.listForOwner(consumer, id);
+  }
+
+  @Get(':id/payer-emails')
+  @RequirePermissions('payments:read')
+  @ApiOperation({
+    summary: 'List the emails payers gave in a payment link’s hosted checkout',
+    description:
+      'Newest first, at most 50: each hosted checkout session of this link that ' +
+      'gave an email for the receipt, its language and when it reported its ' +
+      'wallet sent the payment. Unverified: anyone holding the link can type ' +
+      'any address. The receipt goes to one of them (`receiptTo`), or to none ' +
+      'when the payer cannot be told apart (`receiptSkippedAt`).',
+  })
+  @ApiOkResponse({ type: PaymentPayerEmailListEntity })
+  payerEmails(
+    @CurrentConsumer() consumer: GatewayConsumer,
+    @Param('id') id: string,
+  ): Promise<PaymentPayerEmailListEntity> {
+    return this.paymentIntents.payerEmails(consumer, id);
   }
 
   @Get(':id/route-check')

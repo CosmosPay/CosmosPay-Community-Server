@@ -19,6 +19,9 @@ import {
   type ReceiptLang,
 } from '@/payment-intents/payment-intents.constants';
 
+/** A checkout session token: 32 random bytes, base64url. */
+export const PAYER_TOKEN_RE = /^[A-Za-z0-9_-]{43}$/;
+
 /**
  * What a payer pays a payment link with, from any network: the asset they
  * send and where a refund goes. The quote and the deposit take the same three
@@ -88,24 +91,15 @@ export class PaymentDepositRequestDto {
 export class CreatePaymentDepositDto extends PaymentDepositRequestDto {
   @ApiProperty({
     description:
-      "The payer's email, as typed in the checkout (not verified): the receipt " +
-      'goes there when the payment succeeds, and the merchant sees it on the ' +
+      'The checkout session token `POST /v1/payment-links/{id}/payer` answered: ' +
+      "the receipt goes to that session's email when this deposit settles the " +
       'payment.',
-    example: 'payer@example.com',
+    example: 'q8V0n3cJxZr2m1bWk7yTt4uP9aLs6dEf0gHiJkLmNoQ',
   })
-  @IsEmail()
-  @MaxLength(254)
-  email!: string;
-
-  @ApiPropertyOptional({
-    enum: RECEIPT_LANGS,
-    default: 'en',
-    description:
-      "The language of the payer's checkout: the receipt is written in it.",
+  @Matches(PAYER_TOKEN_RE, {
+    message: 'payerToken must be a checkout session token',
   })
-  @IsOptional()
-  @IsIn(RECEIPT_LANGS)
-  lang?: ReceiptLang;
+  payerToken!: string;
 }
 
 /** The payer's contact, recorded by the checkout before it shows how to pay. */
@@ -132,4 +126,17 @@ export class PayerContactDto {
   @IsOptional()
   @IsIn(RECEIPT_LANGS)
   lang?: ReceiptLang;
+
+  @ApiPropertyOptional({
+    description:
+      "This checkout session's token, from an earlier answer: the session " +
+      'changes its own email. Without it (or with one this link does not know) ' +
+      'a new session is opened.',
+    example: 'q8V0n3cJxZr2m1bWk7yTt4uP9aLs6dEf0gHiJkLmNoQ',
+  })
+  @IsOptional()
+  @Matches(PAYER_TOKEN_RE, {
+    message: 'payerToken must be a checkout session token',
+  })
+  payerToken?: string;
 }

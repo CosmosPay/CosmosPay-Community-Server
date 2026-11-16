@@ -139,6 +139,10 @@ describe('Payment links (e2e)', () => {
       findFirst: jest.fn().mockResolvedValue(null),
       findMany: jest.fn().mockResolvedValue([]),
     },
+    paymentPayerSession: {
+      create: jest.fn(({ data }: any) => Promise.resolve(data)),
+      updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+    },
     /** The rate limiter's counter, keyed by bucket (window arithmetic is the service spec's). */
     $queryRaw: jest.fn((_sql: unknown, key: string) => {
       const next = (rateLimitCounters.get(key) ?? 0) + 1;
@@ -413,8 +417,10 @@ describe('Payment links (e2e)', () => {
             originChain: 'tron',
             originAsset: 'USDT',
             refundTo: REFUND,
-            // A deposit also takes the payer's email; a quote does not.
-            ...(path === 'deposits' ? { email: 'payer@example.com' } : {}),
+            // A deposit also takes its checkout session; a quote does not.
+            ...(path === 'deposits'
+              ? { payerToken: 'q8V0n3cJxZr2m1bWk7yTt4uP9aLs6dEf0gHiJkLmNoQ' }
+              : {}),
           })
           .expect(404);
         expect(res.body.code).toBe('not_found');
@@ -466,29 +472,39 @@ describe('Payment links (e2e)', () => {
   });
 
   describe("POST /v1/payment-links/{id}/payer (the payer's email for the receipt)", () => {
-    it('is reachable with no key, on its own per-address budget, and records on an open link', async () => {
-      prismaMock.$executeRaw = jest.fn().mockResolvedValue(1);
-      await request(http())
+    it('is reachable with no key, on its own per-address budget, and opens a session on an open link', async () => {
+      prismaMock.paymentPayerSession.create.mockClear();
+      const res = await request(http())
         .post('/v1/payment-links/cmh4x2k9a0003l70gbaseusdc0/payer')
         .set('x-consumer-username', 'cosmos_u1')
         .send({ email: 'payer@example.com', lang: 'es' })
-        .expect(204);
+        .expect(200);
+      expect(res.body.payerToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+      expect(res.headers['cache-control']).toBe('no-store');
+      // Only the token's hash is stored.
+      const [[{ data }]] = prismaMock.paymentPayerSession.create.mock.calls;
+      expect(data.tokenHash).toMatch(/^[0-9a-f]{64}$/);
+      expect(JSON.stringify(data)).not.toContain(res.body.payerToken);
       expect(prismaMock.consumer.upsert).not.toHaveBeenCalled();
       const [[, key]] = prismaMock.$queryRaw.mock.calls as [unknown, string][];
       expect(key).toMatch(/^payment-links:payer:anonymous:/);
     });
 
-    it('refuses what is not an email before reading anything', async () => {
-      prismaMock.$executeRaw = jest.fn();
-      const res = await request(http())
-        .post('/v1/payment-links/cmh4x2k9a0003l70gbaseusdc0/payer')
-        .send({ email: 'not an email' })
-        .expect(400);
-      expect(res.body.code).toBe('validation_failed');
-      expect(prismaMock.$executeRaw).not.toHaveBeenCalled();
+    it('refuses what is not an email, or not a session token, before reading anything', async () => {
+      for (const body of [
+        { email: 'not an email' },
+        { email: 'payer@example.com', payerToken: 'short' },
+      ]) {
+        const res = await request(http())
+          .post('/v1/payment-links/cmh4x2k9a0003l70gbaseusdc0/payer')
+          .send(body)
+          .expect(400);
+        expect(res.body.code).toBe('validation_failed');
+      }
+      expect(prismaMock.paymentIntent.findUnique).not.toHaveBeenCalled();
     });
 
-    it('refuses a deposit without the payer email', async () => {
+    it('refuses a deposit without its checkout session', async () => {
       const res = await request(http())
         .post('/v1/payment-links/cmh4x2k9a0003l70gbaseusdc0/deposits')
         .send({

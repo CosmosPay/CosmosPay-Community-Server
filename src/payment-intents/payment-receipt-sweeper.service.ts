@@ -18,7 +18,8 @@ import { PrismaService } from '@/prisma/prisma.service';
 /**
  * Sends the receipts that did not go out when their payment settled: the mail
  * sender was down or missing, or the pod died between settling and sending.
- * Each tick takes the settled payments with an email and no `receiptSentAt`
+ * Each tick takes the settled payments with a checkout session (or a deposit)
+ * and neither `receiptSentAt` nor `receiptSkippedAt`
  * from the last `PAYMENT_RECEIPT_RETRY_WINDOW_MS`, whose claim is free or
  * lapsed, and hands each to `PaymentReceiptsService.send`, which claims it
  * again before sending, so a receipt goes out once.
@@ -56,9 +57,10 @@ export class PaymentReceiptSweeperService extends ScheduledJob {
       where: {
         status: 'SUCCEEDED',
         receiptSentAt: null,
+        receiptSkippedAt: null,
         updatedAt: { gte: new Date(now - PAYMENT_RECEIPT_RETRY_WINDOW_MS) },
         OR: [
-          { payerEmail: { not: null } },
+          { payerSessions: { some: {} } },
           { paidFrom: { not: Prisma.DbNull } },
         ],
         AND: [

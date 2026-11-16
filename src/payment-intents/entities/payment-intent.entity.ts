@@ -156,10 +156,23 @@ export class PaymentIntentEntity {
     nullable: true,
     example: 'payer@example.com',
     description:
-      'The email the payer typed in the hosted checkout before paying (the ' +
-      'latest on the link; not verified). The receipt goes there.',
+      'Where the receipt went: an email a payer gave in the hosted checkout ' +
+      '(not verified). Null until one was sent. Every email given is listed by ' +
+      '`GET /v1/payment-intents/{id}/payer-emails`.',
   })
-  payerEmail!: string | null;
+  receiptTo!: string | null;
+
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    format: 'date-time',
+    example: null,
+    description:
+      'When it was decided that no receipt goes out: no checkout session gave ' +
+      'an email, or several gave different ones and none reported sending the ' +
+      'payment.',
+  })
+  receiptSkippedAt!: Date | null;
 
   @ApiProperty({
     type: String,
@@ -412,10 +425,23 @@ export class TxPaymentIntentEntity {
     nullable: true,
     example: 'payer@example.com',
     description:
-      'The email the payer typed in the hosted checkout before paying (the ' +
-      'latest on the link; not verified). The receipt goes there.',
+      'Where the receipt went: an email a payer gave in the hosted checkout ' +
+      '(not verified). Null until one was sent. Every email given is listed by ' +
+      '`GET /v1/payment-intents/{id}/payer-emails`.',
   })
-  payerEmail!: string | null;
+  receiptTo!: string | null;
+
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    format: 'date-time',
+    example: null,
+    description:
+      'When it was decided that no receipt goes out: no checkout session gave ' +
+      'an email, or several gave different ones and none reported sending the ' +
+      'payment.',
+  })
+  receiptSkippedAt!: Date | null;
 
   @ApiProperty({
     type: String,
@@ -671,10 +697,23 @@ export class PayPaymentIntentEntity {
     nullable: true,
     example: 'payer@example.com',
     description:
-      'The email the payer typed in the hosted checkout before paying (the ' +
-      'latest on the link; not verified). The receipt goes there.',
+      'Where the receipt went: an email a payer gave in the hosted checkout ' +
+      '(not verified). Null until one was sent. Every email given is listed by ' +
+      '`GET /v1/payment-intents/{id}/payer-emails`.',
   })
-  payerEmail!: string | null;
+  receiptTo!: string | null;
+
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    format: 'date-time',
+    example: null,
+    description:
+      'When it was decided that no receipt goes out: no checkout session gave ' +
+      'an email, or several gave different ones and none reported sending the ' +
+      'payment.',
+  })
+  receiptSkippedAt!: Date | null;
 
   @ApiProperty({
     type: String,

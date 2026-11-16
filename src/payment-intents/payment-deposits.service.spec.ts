@@ -6,6 +6,7 @@ import {
   PaymentDepositBudgetError,
   PaymentDepositsService,
 } from '@/payment-intents/payment-deposits.service';
+import { payerTokenHash } from '@/payment-intents/payment-payer-session';
 import {
   PAYMENT_DEPOSIT_LOCK_CLASS,
   PAYMENT_DEPOSIT_LINK_BUDGET,
@@ -35,11 +36,14 @@ const DESTINATION = {
   contract: '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913',
   priceUsd: 1,
 };
+/* Two checkout sessions of the link (their tokens; only the hashes are stored). */
+const TOKEN_A = 'q8V0n3cJxZr2m1bWk7yTt4uP9aLs6dEf0gHiJkLmNoQ';
+const TOKEN_B = 'Zr2m1bWk7yTt4uP9aLs6dEf0gHiJkLmNoQq8V0n3cJx';
 const REQUEST = {
   originChain: 'tron' as const,
   originAsset: 'USDT',
   refundTo: PAYER,
-  email: 'payer@example.com',
+  payerToken: TOKEN_A,
 };
 /** A distinct, valid Tron refund address per index (34 base58 characters). */
 const refundTo = (i: number) =>
@@ -89,8 +93,7 @@ function stored(overrides: Partial<PaymentDeposit> = {}): PaymentDeposit {
     slippageBps: 100,
     recipient: MERCHANT,
     refundTo: PAYER,
-    payerEmail: 'payer@example.com',
-    payerLang: 'en',
+    payerSessionId: 'ses_a',
     merchantFee: null,
     clientKey: 'k',
     depositAddress: 'TXk4mWpuXSbT4F7wC6S5K3aA2CKUZPqT3a',
@@ -199,8 +202,22 @@ function build(
       return Promise.resolve({ count: before - tables.reservations.length });
     }),
   };
+  const sessions = [
+    { id: 'ses_a', intentId: 'pi_1', tokenHash: payerTokenHash(TOKEN_A) },
+    { id: 'ses_b', intentId: 'pi_1', tokenHash: payerTokenHash(TOKEN_B) },
+  ];
   const prisma: any = {
     paymentIntent: { findUnique: jest.fn().mockResolvedValue(intent) },
+    paymentPayerSession: {
+      findFirst: jest.fn(({ where }: any) =>
+        Promise.resolve(
+          sessions.find(
+            (x) =>
+              x.intentId === where.intentId && x.tokenHash === where.tokenHash,
+          ) ?? null,
+        ),
+      ),
+    },
     paymentDeposit,
     paymentDepositReservation,
     $transaction: jest.fn((work: (tx: unknown) => Promise<unknown>) => {
@@ -586,18 +603,25 @@ describe('PaymentDepositsService', () => {
       expect(tables.deposits).toHaveLength(4);
     });
 
-    it("keeps the payer's email (lowercased) and language on the deposit, never in its answer", async () => {
+    it("binds the deposit to its checkout session, and never answers the session's token", async () => {
       const { service, prisma } = build();
-      const deposit = await service.create(
-        'pi_1',
-        { ...REQUEST, email: 'Payer@Example.com', lang: 'pt' },
-        CLIENT_A,
-      );
+      const deposit = await service.create('pi_1', REQUEST, CLIENT_A);
       expect(prisma.paymentDeposit.create.mock.calls[0][0].data).toMatchObject({
-        payerEmail: 'payer@example.com',
-        payerLang: 'pt',
+        payerSessionId: 'ses_a',
       });
-      expect(JSON.stringify(deposit)).not.toContain('payer@example.com');
+      expect(JSON.stringify(deposit)).not.toContain(TOKEN_A);
+    });
+
+    it('refuses a token that is not a session of this link, before any quote', async () => {
+      const { service, pricing } = build();
+      await expect(
+        service.create(
+          'pi_1',
+          { ...REQUEST, payerToken: 'x'.repeat(43) },
+          CLIENT_A,
+        ),
+      ).rejects.toMatchObject({ code: 'payer_session_unknown' });
+      expect(pricing.price).not.toHaveBeenCalled();
     });
 
     it('on a link without an amount, another amount is another deposit', async () => {
@@ -616,30 +640,19 @@ describe('PaymentDepositsService', () => {
       expect(pricing.price).toHaveBeenCalledTimes(1);
     });
 
-    it("lets only the deposit's own client change the email its receipt goes to", async () => {
-      const { service, tables, pricing } = build();
-      const first = await service.create(
-        'pi_1',
-        { ...REQUEST, email: 'payer@example.com' },
-        CLIENT_A,
-      );
-      // The same client, a corrected email: the same deposit, now with it.
-      const again = await service.create(
-        'pi_1',
-        { ...REQUEST, email: 'Payer.Fixed@example.com' },
-        CLIENT_A,
-      );
+    it("never hands one session's deposit to another session, even of the same client", async () => {
+      const { service, pricing } = build();
+      const first = await service.create('pi_1', REQUEST, CLIENT_A);
+      const again = await service.create('pi_1', REQUEST, CLIENT_A);
       expect(again.id).toBe(first.id);
-      expect(tables.deposits[0].payerEmail).toBe('payer.fixed@example.com');
-      expect(pricing.price).toHaveBeenCalledTimes(1);
-      // Another client with the same choice never reaches it: a deposit of its own.
+      // Another tab of the same address is another payer: its own deposit.
       const other = await service.create(
         'pi_1',
-        { ...REQUEST, email: 'someone@example.com' },
-        CLIENT_B,
+        { ...REQUEST, payerToken: TOKEN_B },
+        CLIENT_A,
       );
       expect(other.id).not.toBe(first.id);
-      expect(tables.deposits[0].payerEmail).toBe('payer.fixed@example.com');
+      expect(pricing.price).toHaveBeenCalledTimes(2);
     });
 
     it('frees a client slot again once a deposit expires', async () => {

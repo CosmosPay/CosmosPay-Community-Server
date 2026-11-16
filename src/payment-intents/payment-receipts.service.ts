@@ -19,14 +19,17 @@ import {
   RECEIPT_LANGS,
 } from '@/payment-intents/payment-intents.constants';
 import { paymentExplorerTxUrl } from '@/payment-intents/payment-explorers';
+import { receiptRecipient } from '@/payment-intents/payment-payer-session';
 import { isPaymentNetwork } from '@/payment-intents/payment-networks';
 import { PrismaService } from '@/prisma/prisma.service';
 import { WEBHOOK_EVENT, WebhookEventPayload } from '@/webhooks/webhook-events';
 
 /**
  * The receipt a payer gets when a payment made through the hosted checkout
- * succeeds, at the email they typed before paying (the deposit's, when one
- * settled it; else the link's latest).
+ * succeeds, at the email their checkout session gave before paying: the
+ * deposit's session when a deposit settled it, else `receiptRecipient` among
+ * the link's sessions (the one that reported `sent` last; the one email if all
+ * gave the same; nobody otherwise, marked `receiptSkippedAt`).
  *
  * It listens to the settlement itself (`PAYMENT_INTENT_SUCCEEDED` on the
  * internal bus, whatever settled it: the chain observer, `validate`, a
@@ -100,8 +103,6 @@ export class PaymentReceiptsService {
         txHash: true,
         updatedAt: true,
         paidFrom: true,
-        payerEmail: true,
-        payerLang: true,
       },
     });
     if (!intent) return false;
@@ -110,20 +111,31 @@ export class PaymentReceiptsService {
       ? await this.prisma.paymentDeposit.findUnique({
           where: { id: paidFrom.depositId },
           select: {
-            payerEmail: true,
-            payerLang: true,
             amountOutPaid: true,
             amountOut: true,
+            payerSession: { select: { email: true, lang: true } },
           },
         })
       : null;
-    const email = (deposit?.payerEmail ?? intent.payerEmail)?.toLowerCase();
-    if (!email) {
-      // A payment made outside the checkout (a wallet link scanned elsewhere,
-      // the API): there is nobody to send it to. The claim stays, so the
-      // sweeper does not ask again.
+    const recipient = paidFrom
+      ? (deposit?.payerSession ?? null)
+      : receiptRecipient(
+          await this.prisma.paymentPayerSession.findMany({
+            where: { intentId: id },
+            select: { email: true, lang: true, sentAt: true, createdAt: true },
+          }),
+        );
+    if (!recipient) {
+      // Paid outside the checkout (a wallet link scanned elsewhere, the API),
+      // or by a payer who cannot be told apart from the others who gave an
+      // email: no receipt and no customer link. Decided once; the merchant
+      // sees the emails given (`GET /v1/payment-intents/{id}/payer-emails`).
+      await this.prisma.$executeRaw`
+        UPDATE "payment_intent" SET "receiptSkippedAt" = ${new Date()}
+         WHERE "id" = ${id} AND "receiptSentAt" IS NULL`;
       return false;
     }
+    const email = recipient.email.toLowerCase();
 
     void this.customers
       .linkPayerEmail(intent.consumerId, email)
@@ -150,7 +162,7 @@ export class PaymentReceiptsService {
       return false;
     }
 
-    const lang = asReceiptLang(deposit?.payerLang ?? intent.payerLang);
+    const lang = asReceiptLang(recipient.lang);
     const network = isPaymentNetwork(intent.chain)
       ? CROSS_CHAIN_NETWORKS[intent.chain]
       : null;

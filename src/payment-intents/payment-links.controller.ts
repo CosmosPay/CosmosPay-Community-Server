@@ -53,6 +53,7 @@ import {
   PaymentDepositRequestDto,
 } from '@/payment-intents/dto/payment-deposit.dto';
 import {
+  PayerSessionEntity,
   PaymentDepositAssetsEntity,
   PaymentDepositEntity,
   PaymentDepositQuoteEntity,
@@ -300,32 +301,33 @@ export class PaymentLinksController {
   @Post(':id/payer')
   @Public()
   @RateLimit(PAYMENT_LINK_PAYER_RATE_LIMIT)
-  @HttpCode(HttpStatus.NO_CONTENT)
+  @HttpCode(HttpStatus.OK)
   @Header('Cache-Control', 'no-store')
   @ApiOperation({
     summary:
       "Record the payer's email before they pay, for their receipt (no API key)",
     description:
       'The hosted checkout asks the payer for an email before it shows any way ' +
-      'to pay, and records it here with the checkout language: when the ' +
-      'payment succeeds, a receipt goes to that address in that language, and ' +
-      'the merchant finds the payer among its customers by it (marked as ' +
-      'given by the payer, not verified). The first client to record one keeps ' +
-      'it: only that client may change it, anyone else gets `409`. A deposit ' +
-      'carries its own email. Budgeted per client address.',
+      'to pay and records it here, with the checkout language, as one checkout ' +
+      'session: the first call answers the session’s `payerToken` (only its ' +
+      'hash is stored), and the session sends it on its later calls (a changed ' +
+      'email, `events`, `deposits`). Every session keeps its own email and none ' +
+      'can change another’s, so a second payer never blocks the first. The ' +
+      'receipt goes to the deposit’s session, else to the session that reported ' +
+      '`sent` last. Budgeted per client address.',
   })
   @ApiParam({
     name: 'id',
     description: 'The payment intent id, as in the link.',
     example: 'cmh4x2k9a0001l70g8v5q3z2w',
   })
-  @ApiNoContentResponse({ description: 'Recorded.' })
+  @ApiOkResponse({ type: PayerSessionEntity })
   @ApiErrorResponse({
     status: 400,
     codes: [ApiErrorCode.ValidationFailed, ApiErrorCode.InvalidStateTransition],
     description:
-      '`validation_failed`: not an email. `invalid_state_transition`: the link ' +
-      'is no longer open.',
+      '`validation_failed`: not an email, or not a session token. ' +
+      '`invalid_state_transition`: the link is no longer open.',
     examples: {
       [ApiErrorCode.ValidationFailed]: {
         summary: 'Not an email',
@@ -352,19 +354,11 @@ export class PaymentLinksController {
       },
     },
   })
-  @ApiErrorResponse({
-    status: 409,
-    codes: [ApiErrorCode.PayerEmailConflict],
-    description:
-      'Another client recorded an email for this link first; only that client ' +
-      'may change it.',
-  })
   recordPayer(
     @Param('id') id: string,
     @Body() dto: PayerContactDto,
-    @Req() req: Request,
-  ): Promise<void> {
-    return this.paymentLinks.recordPayer(id, dto, clientIp(req));
+  ): Promise<PayerSessionEntity> {
+    return this.paymentLinks.recordPayer(id, dto);
   }
 
   @Post(':id/events')
@@ -421,7 +415,7 @@ export class PaymentLinksController {
     },
   })
   event(@Param('id') id: string, @Body() dto: CheckoutEventDto): Promise<void> {
-    return this.paymentLinks.recordEvent(id, dto.event);
+    return this.paymentLinks.recordEvent(id, dto.event, dto.payerToken);
   }
 
   @Get(':id/solana-pay')

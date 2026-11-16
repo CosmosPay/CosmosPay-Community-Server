@@ -32,7 +32,10 @@ import { STELLAR_DECIMALS } from '@/stellar/stellar.constants';
 import { fromStroops, toStroops } from '@/swaps/swap-math';
 import { decimalPlaces, parseUnits } from '@/chains/units';
 import { CROSS_CHAIN_NETWORKS } from '@/cross-chain-swaps/cross-chain-networks';
-import type { PaidFromEntity } from '@/payment-intents/entities/payment-deposit.entity';
+import type {
+  PaidFromEntity,
+  PaymentPayerEmailListEntity,
+} from '@/payment-intents/entities/payment-deposit.entity';
 import { PaymentDepositPricing } from '@/payment-intents/payment-deposit-pricing.service';
 import {
   type DepositLimits,
@@ -78,6 +81,7 @@ import { PaymentVerifiers } from '@/payment-intents/payment-verifiers';
 import {
   type CheckoutTheme,
   effectiveCheckoutTheme,
+  PAYMENT_PAYER_EMAILS_LISTED,
 } from '@/payment-intents/payment-intents.constants';
 import { settlementRivalsQuery } from '@/payment-intents/settlement-rivals';
 import {
@@ -158,8 +162,9 @@ export const PAYMENT_INTENT_PUBLIC_SELECT = {
   paidFrom: true,
   depositMaxPerPayer: true,
   depositBudgetPerWindow: true,
-  payerEmail: true,
+  receiptTo: true,
   receiptSentAt: true,
+  receiptSkippedAt: true,
   expiresAt: true,
   checkoutSeenAt: true,
   checkoutWalletAt: true,
@@ -1711,6 +1716,30 @@ export class PaymentIntentsService {
       throw ApiError.notFound(`Payment intent ${id} not found`);
     }
     return paymentNetworkOf(owned.chain);
+  }
+
+  /**
+   * The emails payers gave in the hosted checkout of the caller's own intent
+   * `id`, newest first: unverified, shown so the merchant can reach a payer
+   * when no receipt could be sent (several sessions, none reported sending).
+   */
+  async payerEmails(
+    consumer: GatewayConsumer,
+    id: string,
+  ): Promise<PaymentPayerEmailListEntity> {
+    await this.assertOwned(consumer, id);
+    const rows = await this.prisma.paymentPayerSession.findMany({
+      where: { intentId: id },
+      select: { email: true, lang: true, sentAt: true, createdAt: true },
+      orderBy: { createdAt: 'desc' },
+      take: PAYMENT_PAYER_EMAILS_LISTED,
+    });
+    return {
+      data: rows.map(({ createdAt, ...row }) => ({
+        ...row,
+        recordedAt: createdAt,
+      })),
+    };
   }
 }
 

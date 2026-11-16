@@ -504,6 +504,16 @@ export const PAYMENT_RECEIPT_CLAIM_MS = 5 * 60 * 1000;
  */
 export const PAYMENT_RECEIPT_RETRY_WINDOW_MS = 3 * 24 * 60 * 60 * 1000;
 
+/**
+ * Random bytes in a checkout session's token (256 bits; the floor asked is
+ * 128). The token is the session's only credential: only its SHA-256 is
+ * stored, and it is never logged.
+ */
+export const PAYMENT_PAYER_TOKEN_BYTES = 32;
+
+/** The checkout sessions' emails the owner's read of a payment lists, newest first. */
+export const PAYMENT_PAYER_EMAILS_LISTED = 50;
+
 /** Receipts the sweeper sends per tick. */
 export const PAYMENT_RECEIPT_SWEEP_BATCH = 25;
 

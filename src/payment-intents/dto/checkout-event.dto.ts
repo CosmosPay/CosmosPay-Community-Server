@@ -1,5 +1,6 @@
-import { ApiProperty, ApiSchema } from '@nestjs/swagger';
-import { IsIn } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger';
+import { IsIn, IsOptional, Matches } from 'class-validator';
+import { PAYER_TOKEN_RE } from '@/payment-intents/dto/payment-deposit.dto';
 import {
   CHECKOUT_EVENTS,
   type CheckoutEvent,
@@ -22,4 +23,16 @@ export class CheckoutEventDto {
   })
   @IsIn(CHECKOUT_EVENTS)
   event!: CheckoutEvent;
+
+  @ApiPropertyOptional({
+    description:
+      "The checkout session's token: a `sent` it reports makes that session's " +
+      'email the one the receipt of a payment with the link itself goes to.',
+    example: 'q8V0n3cJxZr2m1bWk7yTt4uP9aLs6dEf0gHiJkLmNoQ',
+  })
+  @IsOptional()
+  @Matches(PAYER_TOKEN_RE, {
+    message: 'payerToken must be a checkout session token',
+  })
+  payerToken?: string;
 }
