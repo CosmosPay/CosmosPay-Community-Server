@@ -5,6 +5,7 @@ import type {
   Prisma,
 } from '@generated/prisma/client';
 import { parseUnits } from '@/chains/units';
+import { rateLimitSubject } from '@/common/client-ip';
 import { readMerchantFeeRecord } from '@/common/merchant-fee/merchant-fee';
 import type { CrossChainNetworkId } from '@/cross-chain-swaps/cross-chain-swaps.constants';
 import type { NearIntentsTransaction } from '@/near-intents/near-intents.types';
@@ -13,6 +14,7 @@ import type {
   PaymentDepositEntity,
 } from '@/payment-intents/entities/payment-deposit.entity';
 import {
+  PAYMENT_DEPOSIT_CLIENT_IPV6_HEXTETS,
   PAYMENT_DEPOSIT_CLIENT_KEY_LABEL,
   PAYMENT_DEPOSIT_CLIENT_KEY_SALT,
 } from '@/payment-intents/payment-intents.constants';
@@ -226,10 +228,29 @@ export function paymentDepositClientSecret(secret: string): Buffer {
 }
 
 /**
+ * The client a deposit counts against: an IPv4 address as it is, an IPv6
+ * address by its /48 (`PAYMENT_DEPOSIT_CLIENT_IPV6_HEXTETS`), built on the rate
+ * limits' own normalisation (`rateLimitSubject`: IPv4-mapped addresses, zone
+ * ids, `::` elision). `ip` is `clientIp(req)`, the peer as the trusted proxy saw
+ * it.
+ */
+export function paymentDepositClientSubject(ip: string): string {
+  const subject = rateLimitSubject(ip);
+  const v6 = /^([0-9a-f]{1,4}(?::[0-9a-f]{1,4}){3})::\/64$/.exec(subject);
+  if (!v6) return subject;
+  // One spelling per prefix: `0db8` and `db8` are the same hextet.
+  const hextets = v6[1]
+    .split(':')
+    .slice(0, PAYMENT_DEPOSIT_CLIENT_IPV6_HEXTETS)
+    .map((h) => parseInt(h, 16).toString(16));
+  return `${hextets.join(':')}::/${PAYMENT_DEPOSIT_CLIENT_IPV6_HEXTETS * 16}`;
+}
+
+/**
  * What a client is stored as on a deposit: `base64url(HMAC-SHA256(key,
- * subject))`, where `subject` is its rate-limit subject (an IPv4 address, or an
- * IPv6 /64). Equal for one client, so the per-client cap can count it; the
- * address itself is never stored.
+ * subject))`, where `subject` is {@link paymentDepositClientSubject}. Equal for
+ * one client, so the per-client cap can count it; the address itself is never
+ * stored.
  */
 export function paymentDepositClientKey(key: Buffer, subject: string): string {
   return createHmac('sha256', key).update(subject).digest('base64url');

@@ -321,20 +321,37 @@ export const PAYMENT_DEPOSIT_READ_RATE_LIMIT = {
 };
 
 /**
- * The most deposit addresses one CLIENT (the address a rate limit is keyed on,
- * an IPv6 caller per /64: `rateLimitSubject`) may have open on one payment link
- * at once, waiting for a deposit or with one in progress. A payer needs one;
- * two cover changing network or asset once.
+ * The most deposit addresses one CLIENT (an IPv4 address, or an IPv6 /48:
+ * `paymentDepositClientSubject`) may have open on one payment link at once,
+ * waiting for a deposit or with one in progress. A payer needs one; two cover
+ * changing network or asset once.
  *
- * Per client, never per link: the link id is the only capability these routes
- * take, and a cap shared by everyone holding it was a lockout. Anyone could
- * open the link's last slots with addresses nobody pays and keep the real payer
- * out until they expired. Here a caller fills only its own slots, and every
- * other payer keeps theirs. How many addresses one caller opens over time is
- * the create budget's to bound (`PAYMENT_DEPOSIT_CREATE_RATE_LIMIT`), the same
- * bound cross-chain swaps live with.
+ * This is the cap a caller meets first. The link id is the only capability
+ * these routes take, so a cap shared by everyone holding it, alone, was a
+ * lockout: anyone could open the link's slots with addresses nobody pays and
+ * keep the real payer out until they expired. Per client, a caller fills only
+ * its own two.
  */
 export const PAYMENT_DEPOSIT_MAX_OPEN_PER_CLIENT = 2;
+
+/**
+ * The most deposit addresses one payment link may have open at once, from all
+ * clients together: the bound on how many upstream deposit addresses (and rows
+ * the observer polls) one link can cost, which the per-client cap alone did not
+ * give to a caller rotating addresses. High enough that honest payers sharing
+ * a link (a checkout at an event, several devices) never meet it; reaching it
+ * takes ten distinct IPv4 addresses or IPv6 /48s, each held for the deposit's
+ * lifetime.
+ */
+export const PAYMENT_DEPOSIT_MAX_OPEN_PER_LINK = 20;
+
+/**
+ * How many leading hextets of an IPv6 address make one deposit client: three,
+ * a /48. Wider than the rate limits' /64 on purpose: a /48 is what one site or
+ * one hosting customer is routinely given, so rotating through its 65,536 /64s
+ * costs nothing and must not buy 65,536 times the per-client cap.
+ */
+export const PAYMENT_DEPOSIT_CLIENT_IPV6_HEXTETS = 3;
 
 /**
  * How long a slot reserved for a deposit being opened is held, at least. A slot

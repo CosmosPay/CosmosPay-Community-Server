@@ -6,6 +6,7 @@ import {
   paidFromRecord,
   paymentDepositClientKey,
   paymentDepositClientSecret,
+  paymentDepositClientSubject,
   readPaidFrom,
   settlementRefusal,
   toPaymentDepositEntity,
@@ -179,6 +180,25 @@ describe('settlementRefusal', () => {
     );
     expect(settlementRefusal(deposit({ amountOutPaid: 'x' }), payout)).toMatch(
       /cannot be read/,
+    );
+  });
+});
+
+describe('paymentDepositClientSubject', () => {
+  it('keeps an IPv4 address, and reads an IPv6 one by its /48', () => {
+    expect(paymentDepositClientSubject('203.0.113.7')).toBe('203.0.113.7');
+    expect(paymentDepositClientSubject('::ffff:203.0.113.7')).toBe(
+      '203.0.113.7',
+    );
+    expect(paymentDepositClientSubject('2001:db8:1:2::5')).toBe(
+      '2001:db8:1::/48',
+    );
+    expect(paymentDepositClientSubject('2001:DB8:1:ffff:1:2:3:4')).toBe(
+      '2001:db8:1::/48',
+    );
+    expect(paymentDepositClientSubject('2001:db8::1')).toBe('2001:db8:0::/48');
+    expect(paymentDepositClientSubject('2001:db8:2::1')).toBe(
+      '2001:db8:2::/48',
     );
   });
 });

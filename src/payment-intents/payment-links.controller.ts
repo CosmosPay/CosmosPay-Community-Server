@@ -19,7 +19,7 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import type { Request } from 'express';
-import { clientIp, rateLimitSubject } from '@/common/client-ip';
+import { clientIp } from '@/common/client-ip';
 import { ApiErrorResponse } from '@/common/decorators/api-error-response.decorator';
 import { ApiUpstream } from '@/common/decorators/api-upstream.decorator';
 import { Public } from '@/common/decorators/public.decorator';
@@ -563,9 +563,10 @@ export class PaymentLinksController {
       'amount, the link turns `SUCCEEDED` and emits `PAYMENT_INTENT_SUCCEEDED`, ' +
       'and a deposit that cannot complete is refunded to `refundTo`. The same ' +
       'origin asset and refund address while an earlier deposit still waits ' +
-      'answers that one; otherwise each client address may have two open ' +
-      'deposits per link (`operation_in_flight`), so no caller can take ' +
-      'another payer’s. Budgeted per client address.',
+      'answers that one; otherwise each client address (an IPv6 caller by ' +
+      'its /48) may have two open deposits per link, and a link twenty in ' +
+      'all (`operation_in_flight`), so no caller can take another payer’s. ' +
+      'Budgeted per client address.',
   })
   @ApiParam({
     name: 'id',
@@ -579,9 +580,9 @@ export class PaymentLinksController {
     status: 409,
     codes: [ApiErrorCode.OperationInFlight],
     description:
-      'This client address already has as many open deposit addresses on ' +
-      'the link as it may: pay one of them, or try again once they expire. ' +
-      'Other payers are not affected.',
+      'This client address already has two open deposit addresses on the ' +
+      'link (other payers are not affected), or the link has twenty open in ' +
+      'all: pay one of them, or try again once they expire.',
     examples: {
       [ApiErrorCode.OperationInFlight]: {
         summary: 'Too many open deposit addresses from this client',
@@ -596,8 +597,9 @@ export class PaymentLinksController {
     @Body() dto: PaymentDepositRequestDto,
     @Req() req: Request,
   ): Promise<PaymentDepositEntity> {
-    // The caller's rate-limit subject: the per-client cap is keyed on it.
-    return this.deposits.create(id, dto, rateLimitSubject(clientIp(req)));
+    // The caller's address, as the trusted proxy saw it: the per-client cap is
+    // keyed on it (an IPv6 caller by its /48).
+    return this.deposits.create(id, dto, clientIp(req));
   }
 
   @Get(':id/deposits/:depositId')

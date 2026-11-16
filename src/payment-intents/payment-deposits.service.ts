@@ -31,6 +31,7 @@ import {
   paidFromRecord,
   paymentDepositClientKey,
   paymentDepositClientSecret,
+  paymentDepositClientSubject,
   readTransactions,
   settlementRefusal,
   toPaymentDepositEntity,
@@ -38,6 +39,7 @@ import {
 import {
   PAYMENT_DEPOSIT_LOCK_CLASS,
   PAYMENT_DEPOSIT_MAX_OPEN_PER_CLIENT,
+  PAYMENT_DEPOSIT_MAX_OPEN_PER_LINK,
   PAYMENT_DEPOSIT_OWNER_LIST_MAX,
   PAYMENT_DEPOSIT_RESERVATION_MIN_MS,
   PAYMENT_DEPOSIT_REUSE_MIN_REMAINING_MS,
@@ -80,9 +82,11 @@ type DepositIntent = Prisma.PaymentIntentGetPayload<{
  * quote moves nothing, a deposit address pays only the link's own destination
  * exactly its amount, refunds only the address the payer names, and each client
  * address has a few open at most. Nothing here
- * signs or spends: the payer's wallet sends, the route pays. The cap is per
- * client address ({@link PAYMENT_DEPOSIT_MAX_OPEN_PER_CLIENT}), never per link,
- * so nobody holding a link can take every other payer's slots.
+ * signs or spends: the payer's wallet sends, the route pays. Open deposits are
+ * capped per client address first ({@link PAYMENT_DEPOSIT_MAX_OPEN_PER_CLIENT}),
+ * so nobody holding a link can take another payer's slots, and per link
+ * ({@link PAYMENT_DEPOSIT_MAX_OPEN_PER_LINK}, far higher), so rotating
+ * addresses cannot open unbounded upstream deposit addresses on one link.
  *
  * Settlement is the route's report, mirrored by `PaymentDepositObserverService`
  * through {@link applyProviderStatus}: a deposit the route reports SUCCEEDED
@@ -148,18 +152,18 @@ export class PaymentDepositsService {
    * A request for the same origin asset and refund address while an earlier
    * one still waits with time left answers that one, whoever asks, so a
    * reloaded checkout (or a payer whose address changed) shows the same
-   * address. Otherwise the caller needs a free slot of its own: at most
-   * {@link PAYMENT_DEPOSIT_MAX_OPEN_PER_CLIENT} open deposits per client
-   * address per link, counted with the slots being opened. The slot is taken
-   * under the link's lock BEFORE the quote and released after, so concurrent
-   * requests cannot all pass the count and then insert, and the slow quote never
-   * holds the lock or a database connection. `clientSubject` is the caller's
-   * rate-limit subject (`rateLimitSubject(clientIp(req))`).
+   * address. Otherwise the caller needs a free slot: at most
+   * {@link PAYMENT_DEPOSIT_MAX_OPEN_PER_CLIENT} open deposits of its own and
+   * {@link PAYMENT_DEPOSIT_MAX_OPEN_PER_LINK} of all clients on the link,
+   * counted with the slots being opened. The slot is taken under the link's
+   * lock BEFORE the quote and released after, so concurrent requests cannot all
+   * pass the counts and then insert, and the slow quote never holds the lock or
+   * a database connection. `ip` is the caller's address (`clientIp(req)`).
    */
   async create(
     id: string,
     request: PaymentDepositRequestDto,
-    clientSubject: string,
+    ip: string,
   ): Promise<PaymentDepositEntity> {
     const intent = await this.payableIntent(id, true);
     const refundTo = CROSS_CHAIN_NETWORKS[
@@ -185,7 +189,7 @@ export class PaymentDepositsService {
 
     const clientKey = paymentDepositClientKey(
       this.clientKeySecret(),
-      clientSubject,
+      paymentDepositClientSubject(ip),
     );
     const slot = await this.reserveSlot(intent.id, clientKey);
     try {
@@ -204,11 +208,11 @@ export class PaymentDepositsService {
   }
 
   /**
-   * Takes one of the caller's slots on link `intentId`, or answers 409 when it
-   * has none left. Under a transaction-scoped advisory lock on the link, so the
-   * count and the reservation are one step for every replica: two requests
-   * that both saw a free slot cannot both take it. Slots whose process died
-   * (past `expiresAt`) are swept first.
+   * Takes a slot on link `intentId` for the caller, or answers 409 when the
+   * caller has none left or the link is full. Under a transaction-scoped
+   * advisory lock on the link, so both counts and the reservation are one step
+   * for every replica: two requests that both saw a free slot cannot both take
+   * it. Slots whose process died (past `expiresAt`) are swept first.
    */
   private reserveSlot(
     intentId: string,
@@ -222,23 +226,37 @@ export class PaymentDepositsService {
       await tx.paymentDepositReservation.deleteMany({
         where: { intentId, expiresAt: { lte: now } },
       });
-      const open = await tx.paymentDeposit.count({
-        where: {
-          intentId,
-          clientKey,
-          status: { in: [...CROSS_CHAIN_OPEN_STATUSES] },
-          expiresAt: { gt: now },
-        },
-      });
-      const held = await tx.paymentDepositReservation.count({
-        where: { intentId, clientKey },
-      });
-      if (open + held >= PAYMENT_DEPOSIT_MAX_OPEN_PER_CLIENT) {
+      const openDeposit = {
+        intentId,
+        status: { in: [...CROSS_CHAIN_OPEN_STATUSES] },
+        expiresAt: { gt: now },
+      };
+      const mine =
+        (await tx.paymentDeposit.count({
+          where: { ...openDeposit, clientKey },
+        })) +
+        (await tx.paymentDepositReservation.count({
+          where: { intentId, clientKey },
+        }));
+      if (mine >= PAYMENT_DEPOSIT_MAX_OPEN_PER_CLIENT) {
         throw ApiError.conflict(
           ApiErrorCode.OperationInFlight,
           `You already have ${PAYMENT_DEPOSIT_MAX_OPEN_PER_CLIENT} open deposit ` +
             'addresses for this payment link: pay one of them, or try again ' +
             'once they expire.',
+        );
+      }
+      const all =
+        (await tx.paymentDeposit.count({ where: openDeposit })) +
+        (await tx.paymentDepositReservation.count({ where: { intentId } }));
+      if (all >= PAYMENT_DEPOSIT_MAX_OPEN_PER_LINK) {
+        this.logger.warn(
+          `Payment intent ${intentId} is at its ${PAYMENT_DEPOSIT_MAX_OPEN_PER_LINK} open deposit addresses`,
+        );
+        throw ApiError.conflict(
+          ApiErrorCode.OperationInFlight,
+          'This payment link has as many open deposit addresses as it can ' +
+            'take right now: try again once some expire.',
         );
       }
       return tx.paymentDepositReservation.create({

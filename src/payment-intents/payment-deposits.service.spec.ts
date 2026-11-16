@@ -4,12 +4,13 @@ import { PaymentDepositsService } from '@/payment-intents/payment-deposits.servi
 import {
   PAYMENT_DEPOSIT_LOCK_CLASS,
   PAYMENT_DEPOSIT_MAX_OPEN_PER_CLIENT,
+  PAYMENT_DEPOSIT_MAX_OPEN_PER_LINK,
 } from '@/payment-intents/payment-intents.constants';
 
 const MERCHANT = '0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed';
 const PAYER = 'TLsV52sRDL79HXGGm9yzwKibb6BeruhUzy';
 const CLIENT_A = '203.0.113.7';
-const CLIENT_B = '2001:db8:1:2::/64';
+const CLIENT_B = '2001:db8:1:2::5';
 const ORIGIN = {
   chain: 'tron',
   chainName: 'Tron',
@@ -435,6 +436,71 @@ describe('PaymentDepositsService', () => {
       expect(tables.deposits).toHaveLength(
         PAYMENT_DEPOSIT_MAX_OPEN_PER_CLIENT + 1,
       );
+    });
+
+    it(`opens at most ${PAYMENT_DEPOSIT_MAX_OPEN_PER_LINK} on one link from any number of clients, racing or not`, async () => {
+      const { service, tables, pricing } = build(INTENT, [], 10);
+      const clients = PAYMENT_DEPOSIT_MAX_OPEN_PER_LINK + 6;
+
+      const results = await Promise.allSettled(
+        Array.from({ length: clients }, (_, i) =>
+          service.create(
+            'pi_1',
+            { ...REQUEST, refundTo: refundTo(i) },
+            `198.51.100.${i + 1}`,
+          ),
+        ),
+      );
+
+      expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(
+        PAYMENT_DEPOSIT_MAX_OPEN_PER_LINK,
+      );
+      expect(tables.deposits).toHaveLength(PAYMENT_DEPOSIT_MAX_OPEN_PER_LINK);
+      expect(pricing.price).toHaveBeenCalledTimes(
+        PAYMENT_DEPOSIT_MAX_OPEN_PER_LINK,
+      );
+      const refused = results.filter(
+        (r): r is PromiseRejectedResult => r.status === 'rejected',
+      );
+      expect(refused).toHaveLength(6);
+      for (const r of refused) {
+        expect((r.reason as ApiError).code).toBe(
+          ApiErrorCode.OperationInFlight,
+        );
+        expect((r.reason as ApiError).message).toMatch(/This payment link has/);
+      }
+    });
+
+    it('counts IPv6 callers in one /48 as one client, and another /48 as another', async () => {
+      const { service, tables } = build();
+      await service.create(
+        'pi_1',
+        { ...REQUEST, refundTo: refundTo(1) },
+        '2001:db8:1:2::5',
+      );
+      // Another /64 of the same /48: rotating /64s buys nothing.
+      await service.create(
+        'pi_1',
+        { ...REQUEST, refundTo: refundTo(2) },
+        '2001:db8:1:ffff::9',
+      );
+      const err = await refusal(
+        service.create(
+          'pi_1',
+          { ...REQUEST, refundTo: refundTo(3) },
+          '2001:0db8:0001:0abc:1:2:3:4',
+        ),
+      );
+      expect(err.code).toBe(ApiErrorCode.OperationInFlight);
+      expect(err.message).toMatch(/You already have/);
+
+      await service.create(
+        'pi_1',
+        { ...REQUEST, refundTo: refundTo(4) },
+        '2001:db8:2::1',
+      );
+      expect(tables.deposits).toHaveLength(3);
+      expect(new Set(tables.deposits.map((d) => d.clientKey)).size).toBe(2);
     });
 
     it('frees a client slot again once a deposit expires', async () => {
