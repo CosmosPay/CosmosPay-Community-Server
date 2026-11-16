@@ -10,7 +10,8 @@ const FIELDS = {
   network: 'Base',
   paymentId: 'cmh4x2k9a0001l70g8v5q3z2w',
   txHash: '0xabc',
-  description: 'Order <b>#24</b>',
+  explorerUrl: 'https://basescan.org/tx/0xabc',
+  paymentUrl: 'https://payments.cosmospay.lat/cmh4x2k9a0001l70g8v5q3z2w',
   paidAt: new Date('2026-11-17T12:00:00.000Z'),
   paidFrom: { amount: '25.28', asset: 'USDT', network: 'Tron' },
 };
@@ -33,11 +34,21 @@ describe('renderPaymentReceiptEmail', () => {
     expect(email.html).toContain(`lang="${lang}"`);
   });
 
-  it('escapes what a merchant or payer wrote, and links nothing', () => {
+  it('links only the payment page and the explorer, and only https ones', () => {
     const email = renderPaymentReceiptEmail({ ...FIELDS, lang: 'en' });
-    expect(email.html).not.toContain('<b>#24</b>');
-    expect(email.html).toContain('Order &lt;b&gt;#24&lt;/b&gt;');
-    expect(email.html).not.toContain('href=');
+    const hrefs = [...email.html.matchAll(/href="([^"]*)"/g)].map((m) => m[1]);
+    expect(hrefs).toEqual([
+      'https://payments.cosmospay.lat/cmh4x2k9a0001l70g8v5q3z2w',
+      'https://basescan.org/tx/0xabc',
+    ]);
+    const unsafe = renderPaymentReceiptEmail({
+      ...FIELDS,
+      lang: 'en',
+      paymentUrl: 'javascript:alert(1)',
+      explorerUrl: 'http://basescan.org/tx/0xabc',
+    });
+    expect(unsafe.html).not.toContain('href=');
+    expect(unsafe.text).not.toContain('javascript:');
   });
 
   it('leaves out what it does not know', () => {
@@ -46,7 +57,8 @@ describe('renderPaymentReceiptEmail', () => {
       lang: 'en',
       amount: null,
       txHash: null,
-      description: null,
+      explorerUrl: null,
+      paymentUrl: null,
       paidFrom: null,
     });
     expect(email.text).not.toContain('Amount');

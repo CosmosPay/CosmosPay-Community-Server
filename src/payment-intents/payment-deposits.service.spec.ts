@@ -1,3 +1,5 @@
+import { readFileSync } from 'fs';
+import { join } from 'path';
 import type { PaymentDeposit } from '@generated/prisma/client';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import {
@@ -169,6 +171,11 @@ function build(
       return Promise.resolve(row);
     }),
     updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+    update: jest.fn(({ where, data }: any) => {
+      const row = tables.deposits.find((d) => d.id === where.id) as object;
+      Object.assign(row, data);
+      return Promise.resolve(row);
+    }),
     findUniqueOrThrow: jest.fn(({ where }: any) =>
       Promise.resolve(tables.deposits.find((d) => d.id === where.id)),
     ),
@@ -347,6 +354,19 @@ describe('PaymentDepositsService', () => {
   });
 
   describe('create', () => {
+    it("stores a deposit on its link's tier, never a fixed one", async () => {
+      const { service, prisma } = build();
+      await service.create('pi_1', REQUEST, CLIENT_A);
+      expect(prisma.paymentDeposit.create.mock.calls[0][0].data.network).toBe(
+        INTENT.network,
+      );
+      const source = readFileSync(
+        join(__dirname, 'payment-deposits.service.ts'),
+        'utf8',
+      );
+      expect(source).not.toMatch(/network:\s*'(public|testnet)'/);
+    });
+
     it('stores a live quote as a deposit of this link, keyed to its client, and releases the slot', async () => {
       const { service, prisma, tables, locks } = build();
       const deposit = await service.create('pi_1', REQUEST, CLIENT_A);
@@ -594,6 +614,32 @@ describe('PaymentDepositsService', () => {
       );
       expect(same.id).toBe(first.id);
       expect(pricing.price).toHaveBeenCalledTimes(1);
+    });
+
+    it("lets only the deposit's own client change the email its receipt goes to", async () => {
+      const { service, tables, pricing } = build();
+      const first = await service.create(
+        'pi_1',
+        { ...REQUEST, email: 'payer@example.com' },
+        CLIENT_A,
+      );
+      // The same client, a corrected email: the same deposit, now with it.
+      const again = await service.create(
+        'pi_1',
+        { ...REQUEST, email: 'Payer.Fixed@example.com' },
+        CLIENT_A,
+      );
+      expect(again.id).toBe(first.id);
+      expect(tables.deposits[0].payerEmail).toBe('payer.fixed@example.com');
+      expect(pricing.price).toHaveBeenCalledTimes(1);
+      // Another client with the same choice never reaches it: a deposit of its own.
+      const other = await service.create(
+        'pi_1',
+        { ...REQUEST, email: 'someone@example.com' },
+        CLIENT_B,
+      );
+      expect(other.id).not.toBe(first.id);
+      expect(tables.deposits[0].payerEmail).toBe('payer.fixed@example.com');
     });
 
     it('frees a client slot again once a deposit expires', async () => {

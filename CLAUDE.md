@@ -385,7 +385,18 @@ table. These are the rules that did not hold on their own:
   address of the link's network); `PaymentRouteProbe` dry-quotes the main origins
   for minimums and never blocks a link. Every deposit carries the payer's email,
   and `PaymentReceiptsService` mails the receipt on `PAYMENT_INTENT_SUCCEEDED`
-  (claimed by `receiptClaimedAt`, retried by `PaymentReceiptSweeperService`). Open deposits are capped per client
+  (claimed by `receiptClaimedAt`, retried by `PaymentReceiptSweeperService`).
+  That email is typed on a keyless route and never verified (security review,
+  2026-11-16), so: the link's own email is first-write-wins per client
+  (`payerClientKey`; another client is `409 payer_email_conflict`), a deposit
+  keeps its creator's; a receipt carries only what this service generates (no
+  `msg`, no merchant text; its only links are our checkout page and the
+  explorer, `paymentExplorerTxUrl`) and is booked against
+  `PAYMENT_RECEIPT_MAX_PER_RECIPIENT` / `PAYMENT_RECEIPT_MAX_PER_MERCHANT` a day
+  under a per-recipient advisory lock; and `linkPayerEmail` attaches only to a
+  customer made from payer input, never to one the merchant created. A deposit
+  is stored on its link's tier (`intent.network`), and each tier has its own
+  observer. Open deposits are capped per client
   (`PAYMENT_DEPOSIT_MAX_OPEN_PER_CLIENT`: an IPv4 address or an IPv6 /48, stored as
   an HMAC, `409`), and NEW deposits per link are a refilling creation budget
   (`PAYMENT_DEPOSIT_LINK_BUDGET` per `PAYMENT_DEPOSIT_LINK_WINDOW_MS`, `429` with

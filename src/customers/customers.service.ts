@@ -213,8 +213,15 @@ export class CustomersService {
    * unverified). Fire-and-forget for the caller, like `ensureForPayer`.
    */
   async linkPayerEmail(consumerId: string, email: string): Promise<void> {
+    // An email a payer typed is unverified and came through a keyless route: it
+    // is never merged into a customer the merchant created or edited (that is
+    // `emailProvidedByPayer: false`), only into one made from payer input too.
     const existing = await this.prisma.customer.findFirst({
-      where: { consumerId, email: { equals: email, mode: 'insensitive' } },
+      where: {
+        consumerId,
+        email: { equals: email, mode: 'insensitive' },
+        emailProvidedByPayer: true,
+      },
       select: { id: true },
     });
     if (existing) return;

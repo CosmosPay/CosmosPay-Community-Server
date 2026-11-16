@@ -310,9 +310,9 @@ export class PaymentLinksController {
       'to pay, and records it here with the checkout language: when the ' +
       'payment succeeds, a receipt goes to that address in that language, and ' +
       'the merchant finds the payer among its customers by it (marked as ' +
-      'given by the payer, not verified). The latest one recorded on an open ' +
-      'link is the one used; a deposit carries its own. Budgeted per client ' +
-      'address.',
+      'given by the payer, not verified). The first client to record one keeps ' +
+      'it: only that client may change it, anyone else gets `409`. A deposit ' +
+      'carries its own email. Budgeted per client address.',
   })
   @ApiParam({
     name: 'id',
@@ -352,11 +352,19 @@ export class PaymentLinksController {
       },
     },
   })
+  @ApiErrorResponse({
+    status: 409,
+    codes: [ApiErrorCode.PayerEmailConflict],
+    description:
+      'Another client recorded an email for this link first; only that client ' +
+      'may change it.',
+  })
   recordPayer(
     @Param('id') id: string,
     @Body() dto: PayerContactDto,
+    @Req() req: Request,
   ): Promise<void> {
-    return this.paymentLinks.recordPayer(id, dto);
+    return this.paymentLinks.recordPayer(id, dto, clientIp(req));
   }
 
   @Post(':id/events')

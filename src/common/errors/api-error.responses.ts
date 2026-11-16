@@ -118,6 +118,12 @@ export const API_ERROR_CASES: Readonly<Record<ApiErrorCode, ApiErrorCase>> = {
     message: 'A swap already exists for this Idempotency-Key',
     path: '/v1/swaps',
   },
+  [ApiErrorCode.PayerEmailConflict]: {
+    statuses: [409],
+    summary: "The payment's email was given by another client",
+    message: 'An email for this payment was already given.',
+    path: '/v1/payment-links/cmh4x2k9a0001l70g8v5q3z2w/payer',
+  },
   [ApiErrorCode.OperationInFlight]: {
     statuses: [409],
     summary: 'A conflicting operation is still settling',

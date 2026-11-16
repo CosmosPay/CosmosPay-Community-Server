@@ -234,7 +234,21 @@ export class PaymentDepositsService {
       },
       orderBy: { createdAt: 'desc' },
     });
-    if (reusable) return this.present(reusable);
+    if (reusable) {
+      // Only this client reaches its own deposit, so it may correct the email
+      // its receipt goes to; nobody else can (another client gets its own).
+      const email = request.email.trim().toLowerCase();
+      const lang = request.lang ?? reusable.payerLang;
+      if (reusable.payerEmail === email && reusable.payerLang === lang) {
+        return this.present(reusable);
+      }
+      return this.present(
+        await this.prisma.paymentDeposit.update({
+          where: { id: reusable.id },
+          data: { payerEmail: email, payerLang: lang },
+        }),
+      );
+    }
 
     const slot = await this.reserveSlot(intent, clientKey);
     try {
@@ -361,7 +375,8 @@ export class PaymentDepositsService {
       deposit = await this.prisma.paymentDeposit.create({
         data: {
           intentId: intent.id,
-          network: 'public',
+          // The link's tier, never assumed: each tier has its own observer.
+          network: intent.network,
           status: 'AWAITING_DEPOSIT',
           providerStatus: 'PENDING_DEPOSIT',
           originChain: priced.origin.chain,

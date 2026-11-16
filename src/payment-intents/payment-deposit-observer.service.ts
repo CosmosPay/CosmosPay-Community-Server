@@ -67,6 +67,9 @@ export class PaymentDepositObserverService extends ScheduledJob {
     const rescueSince = new Date(Date.now() - CROSS_CHAIN_RESCUE_WINDOW_MS);
     const rows = await this.prisma.paymentDeposit.findMany({
       where: {
+        // Mainnet deposits only: the route has no test network, and any
+        // test-network deposit belongs to another observer.
+        network: 'public',
         OR: [
           { status: { in: [...CROSS_CHAIN_OPEN_STATUSES] } },
           { status: 'EXPIRED', expiresAt: { gte: rescueSince } },
@@ -95,6 +98,7 @@ export class PaymentDepositObserverService extends ScheduledJob {
     // call, only the settlement again.
     const unsettled = await this.prisma.paymentDeposit.findMany({
       where: {
+        network: 'public',
         status: 'SUCCEEDED',
         updatedAt: { gte: rescueSince },
         intent: { status: { in: ['PENDING', 'SUBMITTED', 'EXPIRED'] } },

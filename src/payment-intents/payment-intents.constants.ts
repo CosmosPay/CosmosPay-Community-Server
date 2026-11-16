@@ -506,3 +506,34 @@ export const PAYMENT_RECEIPT_RETRY_WINDOW_MS = 3 * 24 * 60 * 60 * 1000;
 
 /** Receipts the sweeper sends per tick. */
 export const PAYMENT_RECEIPT_SWEEP_BATCH = 25;
+
+/**
+ * How far back the receipt limits count. A receipt goes to an address the
+ * payer typed and nobody verified, so the mail this service sends to any one
+ * address, and on behalf of any one merchant, is bounded per day.
+ */
+export const PAYMENT_RECEIPT_LIMIT_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Receipts one address gets per window, from every merchant together. A real
+ * payer rarely pays more than a handful of links a day; past this, someone is
+ * using payments to mail an address that never asked. A receipt over the limit
+ * is held, not dropped: the sweeper sends it once the window allows, within
+ * `PAYMENT_RECEIPT_RETRY_WINDOW_MS`.
+ */
+export const PAYMENT_RECEIPT_MAX_PER_RECIPIENT = 10;
+
+/**
+ * Receipts one merchant (one consumer) sends per window. Bounds an account set
+ * up to mail many addresses with tiny payments; held like the per-recipient
+ * limit. A merchant that outgrows it is a support conversation, not a default.
+ */
+export const PAYMENT_RECEIPT_MAX_PER_MERCHANT = 1000;
+
+/**
+ * The first key of the transaction-scoped advisory lock that serializes the
+ * receipt limits of one recipient (`pg_advisory_xact_lock(class, hashtext(email))`),
+ * so two replicas cannot both take the last receipt of an address's day. The
+ * two-key form, like `PAYMENT_DEPOSIT_LOCK_CLASS`: never a job lock.
+ */
+export const PAYMENT_RECEIPT_LOCK_CLASS = 881_025;

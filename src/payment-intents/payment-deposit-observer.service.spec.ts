@@ -78,6 +78,11 @@ describe('PaymentDepositObserverService', () => {
         intent: { status: { in: ['PENDING', 'SUBMITTED', 'EXPIRED'] } },
       },
     );
+    // Both read mainnet deposits only: a test-network deposit is never asked
+    // of the route, nor settled from here.
+    for (const [query] of prisma.paymentDeposit.findMany.mock.calls) {
+      expect(query.where.network).toBe('public');
+    }
     error.mockRestore();
   });
 });

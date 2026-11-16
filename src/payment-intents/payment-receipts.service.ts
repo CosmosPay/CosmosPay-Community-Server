@@ -1,5 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { OnEvent } from '@nestjs/event-emitter';
+import type { AppConfig } from '@/config/configuration';
 import { CustomersService } from '@/customers/customers.service';
 import { CROSS_CHAIN_NETWORKS } from '@/cross-chain-swaps/cross-chain-networks';
 import { MailerService } from '@/mailer/mailer.service';
@@ -10,8 +12,13 @@ import {
 import { readPaidFrom } from '@/payment-intents/payment-deposit-rules';
 import {
   PAYMENT_RECEIPT_CLAIM_MS,
+  PAYMENT_RECEIPT_LIMIT_WINDOW_MS,
+  PAYMENT_RECEIPT_LOCK_CLASS,
+  PAYMENT_RECEIPT_MAX_PER_MERCHANT,
+  PAYMENT_RECEIPT_MAX_PER_RECIPIENT,
   RECEIPT_LANGS,
 } from '@/payment-intents/payment-intents.constants';
+import { paymentExplorerTxUrl } from '@/payment-intents/payment-explorers';
 import { isPaymentNetwork } from '@/payment-intents/payment-networks';
 import { PrismaService } from '@/prisma/prisma.service';
 import { WEBHOOK_EVENT, WebhookEventPayload } from '@/webhooks/webhook-events';
@@ -29,6 +36,14 @@ import { WEBHOOK_EVENT, WebhookEventPayload } from '@/webhooks/webhook-events';
  * `receiptSentAt` after; one that could not go out (no mail sender, the sender
  * down) is released and retried by `PaymentReceiptSweeperService`.
  *
+ * The address was typed by the payer and never verified, so the receipt says
+ * only what this service generated (amount, asset, network, date, ids, the
+ * payment's page and the transaction's explorer page), never a merchant's
+ * text, and no address gets more than `PAYMENT_RECEIPT_MAX_PER_RECIPIENT`
+ * receipts a day, nor any merchant send more than
+ * `PAYMENT_RECEIPT_MAX_PER_MERCHANT` (`reserve`): one over either waits for
+ * the window, it is not dropped.
+ *
  * Settling also links the payer to the merchant's customers by that email
  * (`CustomersService.linkPayerEmail`, marked as given by the payer).
  */
@@ -40,6 +55,7 @@ export class PaymentReceiptsService {
     private readonly prisma: PrismaService,
     private readonly mailer: MailerService,
     private readonly customers: CustomersService,
+    private readonly config: ConfigService<AppConfig, true>,
   ) {}
 
   @OnEvent(WEBHOOK_EVENT, { async: true, promisify: true })
@@ -78,9 +94,9 @@ export class PaymentReceiptsService {
         id: true,
         consumerId: true,
         chain: true,
+        network: true,
         amount: true,
         asset: true,
-        msg: true,
         txHash: true,
         updatedAt: true,
         paidFrom: true,
@@ -101,7 +117,7 @@ export class PaymentReceiptsService {
           },
         })
       : null;
-    const email = deposit?.payerEmail ?? intent.payerEmail;
+    const email = (deposit?.payerEmail ?? intent.payerEmail)?.toLowerCase();
     if (!email) {
       // A payment made outside the checkout (a wallet link scanned elsewhere,
       // the API): there is nobody to send it to. The claim stays, so the
@@ -125,6 +141,15 @@ export class PaymentReceiptsService {
       return false;
     }
 
+    if (!(await this.reserve(id, intent.consumerId, email))) {
+      // Over a daily limit: the claim is kept, so the sweeper asks again once
+      // the lease lapses, and sends it when the window allows.
+      this.logger.warn(
+        `Receipt for payment intent ${id} held: its recipient or merchant is over the daily receipt limit`,
+      );
+      return false;
+    }
+
     const lang = asReceiptLang(deposit?.payerLang ?? intent.payerLang);
     const network = isPaymentNetwork(intent.chain)
       ? CROSS_CHAIN_NETWORKS[intent.chain]
@@ -140,7 +165,14 @@ export class PaymentReceiptsService {
       network: network?.name ?? intent.chain,
       paymentId: intent.id,
       txHash: intent.txHash,
-      description: intent.msg,
+      explorerUrl: isPaymentNetwork(intent.chain)
+        ? paymentExplorerTxUrl(
+            intent.chain,
+            intent.network === 'testnet' ? 'testnet' : 'public',
+            intent.txHash,
+          )
+        : null,
+      paymentUrl: `${this.config.get('paymentIntents', { infer: true }).checkoutUrl}/${encodeURIComponent(intent.id)}`,
       paidAt: intent.updatedAt,
       paidFrom: paidFrom
         ? {
@@ -162,6 +194,49 @@ export class PaymentReceiptsService {
        WHERE "id" = ${id}`;
     this.logger.log(`Receipt sent for payment intent ${id}`);
     return true;
+  }
+
+  /**
+   * Books this receipt against the day's limits, or answers false when the
+   * recipient or the merchant has used theirs. Under a transaction-scoped
+   * advisory lock on the recipient, so two replicas cannot both take an
+   * address's last receipt (the merchant's count may pass its limit by the
+   * receipts other replicas book for other addresses at that moment). A retry
+   * of a receipt already booked to this address counts once.
+   */
+  private reserve(
+    id: string,
+    consumerId: string,
+    email: string,
+  ): Promise<boolean> {
+    const since = new Date(Date.now() - PAYMENT_RECEIPT_LIMIT_WINDOW_MS);
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(${PAYMENT_RECEIPT_LOCK_CLASS}::int, hashtext(${email}))`;
+      const booked = await tx.paymentIntent.findUnique({
+        where: { id },
+        select: { receiptTo: true },
+      });
+      if (booked?.receiptTo === email) return true;
+      const toRecipient = await tx.paymentIntent.count({
+        where: {
+          receiptTo: email,
+          receiptToAt: { gt: since },
+          id: { not: id },
+        },
+      });
+      if (toRecipient >= PAYMENT_RECEIPT_MAX_PER_RECIPIENT) return false;
+      const fromMerchant = await tx.paymentIntent.count({
+        where: { consumerId, receiptToAt: { gt: since }, id: { not: id } },
+      });
+      if (fromMerchant >= PAYMENT_RECEIPT_MAX_PER_MERCHANT) return false;
+      // Raw SQL so `updatedAt` keeps meaning a change of the intent itself (the
+      // sweeper's window reads it).
+      await tx.$executeRaw`
+        UPDATE "payment_intent"
+           SET "receiptTo" = ${email}, "receiptToAt" = ${new Date()}
+         WHERE "id" = ${id}`;
+      return true;
+    });
   }
 
   /** Gives the claim back, so the next sweep tries again. */

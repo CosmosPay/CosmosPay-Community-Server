@@ -123,8 +123,11 @@ function fullRow(overrides: Partial<PaymentIntent> = {}): PaymentIntent {
     depositBudgetPerWindow: null,
     payerEmail: 'payer-secret@example.com',
     payerLang: 'en',
+    payerClientKey: 'client-key-secret',
     receiptClaimedAt: null,
     receiptSentAt: null,
+    receiptTo: 'payer-secret@example.com',
+    receiptToAt: null,
     createdAt: CREATED,
     updatedAt: new Date('2026-10-24T12:40:00.000Z'),
     ...overrides,
@@ -674,41 +677,120 @@ describe('PaymentLinksService.recordEvent', () => {
 describe('PaymentLinksService.recordPayer', () => {
   const links = new Sep7LinkBuilder({} as never, {} as never, {} as never);
   const ID = 'cmh4x2k9a0001l70g8v5q3z2w';
+  const config = {
+    get: () => ({ gatewaySecret: 'test-gateway-secret' }),
+  } as never;
 
-  function make(changed: number, row: unknown = { status: 'SUCCEEDED' }) {
-    const executeRaw = jest.fn().mockResolvedValue(changed);
-    const findUnique = jest.fn().mockResolvedValue(row);
+  /* The intent row, and an UPDATE that applies the statement's own condition
+     (open, and no email yet or this client's), as Postgres would. */
+  function make(
+    row: {
+      status: string;
+      payerEmail: string | null;
+      payerClientKey: string | null;
+      payerLang?: string | null;
+    } | null = { status: 'PENDING', payerEmail: null, payerClientKey: null },
+  ) {
+    const executeRaw = jest.fn(
+      (
+        strings: TemplateStringsArray,
+        email: string,
+        lang: string,
+        key: string,
+        id: string,
+        sameKey: string,
+      ) => {
+        const sql = strings.join('?');
+        expect(sql).toContain('"payerEmail" IS NULL OR "payerClientKey" = ?');
+        expect(sql).not.toContain('updatedAt');
+        expect(key).toBe(sameKey);
+        if (
+          !row ||
+          id !== ID ||
+          row.status !== 'PENDING' ||
+          (row.payerEmail !== null && row.payerClientKey !== key)
+        ) {
+          return Promise.resolve(0);
+        }
+        Object.assign(row, {
+          payerEmail: email,
+          payerLang: lang,
+          payerClientKey: key,
+        });
+        return Promise.resolve(1);
+      },
+    );
+    const findUnique = jest.fn(() =>
+      Promise.resolve(row ? { status: row.status } : null),
+    );
     const service = new PaymentLinksService(
       { paymentIntent: { findUnique }, $executeRaw: executeRaw } as never,
       links,
       {} as never,
-      {} as never,
+      config,
     );
-    return { service, executeRaw };
+    return { service, executeRaw, row };
   }
 
-  it('records the email (lowercased) and language on an open link, without touching updatedAt', async () => {
-    const { service, executeRaw } = make(1);
-    await service.recordPayer(ID, { email: ' Payer@Example.com ', lang: 'es' });
-    const [strings, email, lang] = executeRaw.mock.calls[0] as [
-      string[],
-      string,
-      string,
-    ];
-    const sql = strings.join('?');
-    expect(sql).toContain('"payerEmail" = ?');
-    expect(sql).toContain(`"status" = 'PENDING'`);
-    expect(sql).not.toContain('updatedAt');
-    expect(email).toBe('payer@example.com');
-    expect(lang).toBe('es');
+  it('records the email (lowercased) and language on an open link, bound to the client that gave it', async () => {
+    const { service, row } = make();
+    await service.recordPayer(
+      ID,
+      { email: ' Payer@Example.com ', lang: 'es' },
+      '203.0.113.7',
+    );
+    expect(row).toMatchObject({
+      payerEmail: 'payer@example.com',
+      payerLang: 'es',
+    });
+    // Stored as an HMAC, never the address.
+    expect(row?.payerClientKey).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(row?.payerClientKey).not.toContain('203.0.113.7');
+  });
+
+  it('lets the same client change it, from any address of its IPv6 /48 too', async () => {
+    const { service, row } = make();
+    await service.recordPayer(
+      ID,
+      { email: 'typo@example.com' },
+      '2001:db8:1:1::5',
+    );
+    await service.recordPayer(
+      ID,
+      { email: 'payer@example.com' },
+      '2001:db8:1:2::9',
+    );
+    expect(row?.payerEmail).toBe('payer@example.com');
+  });
+
+  it('first write wins: another client gets a neutral 409 and the email stays', async () => {
+    const { service, row } = make();
+    await service.recordPayer(
+      ID,
+      { email: 'payer@example.com' },
+      '203.0.113.7',
+    );
+    const refusal = await service
+      .recordPayer(ID, { email: 'attacker@example.com' }, '198.51.100.9')
+      .catch((err: unknown) => err);
+    expect(refusal).toMatchObject({
+      code: 'payer_email_conflict',
+      status: 409,
+    });
+    expect(JSON.stringify(refusal)).not.toContain('payer@example.com');
+    expect(row?.payerEmail).toBe('payer@example.com');
   });
 
   it('refuses a link that is no longer open, and answers an unknown id as not found', async () => {
     await expect(
-      make(0).service.recordPayer(ID, { email: 'a@b.co' }),
+      make({
+        status: 'SUCCEEDED',
+        payerEmail: null,
+        payerClientKey: null,
+      }).service.recordPayer(ID, { email: 'a@b.co' }, '203.0.113.7'),
     ).rejects.toMatchObject({ code: 'invalid_state_transition' });
     await expect(
-      make(0, null).service.recordPayer(ID, { email: 'a@b.co' }),
+      make(null).service.recordPayer(ID, { email: 'a@b.co' }, '203.0.113.7'),
     ).rejects.toMatchObject({ code: 'not_found' });
   });
 });

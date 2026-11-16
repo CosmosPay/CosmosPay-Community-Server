@@ -480,13 +480,20 @@ model PaymentIntent {
   depositBudgetPerWindow Int?
   // The payer's email, as typed in the hosted checkout before paying (unverified),
   // and the language of their checkout: where and in what language the receipt
-  // goes. The latest one typed on the link; a deposit keeps its own.
-  payerEmail String?
-  payerLang  String?
+  // of a payment with the link's own wallet link goes. The first client to give
+  // one keeps it (`payerClientKey`, the HMAC deposits key a client by); only that
+  // client may change it. A deposit keeps its own.
+  payerEmail     String?
+  payerLang      String?
+  payerClientKey String?
   // The receipt: claimed (a lease, so one replica sends it) and then sent. A
   // settled intent with an email and no `receiptSentAt` is retried by the sweeper.
   receiptClaimedAt DateTime?
   receiptSentAt    DateTime?
+  // Where the receipt goes, reserved against the per-recipient and per-merchant
+  // daily limits before it is sent (`PAYMENT_RECEIPT_MAX_PER_*`).
+  receiptTo   String?
+  receiptToAt DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -527,6 +534,9 @@ model PaymentIntent {
   @@index([consumerId, source])
   @@index([consumerId, network, createdAt])
   @@index([consumerId, chain, createdAt])
+  // The receipt limits count by recipient and by merchant over a day.
+  @@index([receiptTo, receiptToAt])
+  @@index([consumerId, receiptToAt])
   @@map("payment_intent")
 }
 

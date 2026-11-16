@@ -3,7 +3,12 @@ import type { RenderedEmail } from '@/mailer/wallet-emails';
 /** The languages a payment receipt is written in. */
 export type ReceiptEmailLang = 'en' | 'es' | 'pt' | 'fr' | 'de' | 'hi' | 'zh';
 
-/** What a receipt says: what was paid, where, when, and how to look it up. */
+/**
+ * What a receipt says: what was paid, where, when, and how to look it up. Only
+ * facts this service generates: the receipt goes to an address nobody
+ * verified, so nothing a merchant or payer wrote (a link's message, a name)
+ * ever reaches it.
+ */
 export interface PaymentReceiptFields {
   lang: ReceiptEmailLang;
   /** Decimal, or null when the payment had no fixed amount we can state. */
@@ -16,8 +21,10 @@ export interface PaymentReceiptFields {
   paymentId: string;
   /** The settling transaction on the payment's network, when there is one. */
   txHash: string | null;
-  /** The merchant's message on the link (an order number, a description). */
-  description: string | null;
+  /** That transaction on the network's explorer (built here), or null. */
+  explorerUrl: string | null;
+  /** The payment's own page on the hosted checkout (built here), or null. */
+  paymentUrl: string | null;
   paidAt: Date;
   /** Where the payer sent from, for a payment from another network. */
   paidFrom: { amount: string; asset: string; network: string } | null;
@@ -31,10 +38,11 @@ interface ReceiptCopy {
   amount: string;
   network: string;
   paidFrom: string;
-  description: string;
   date: string;
   paymentId: string;
   transaction: string;
+  view: string;
+  explorer: string;
   footnote: string;
 }
 
@@ -53,10 +61,11 @@ const COPY: Record<ReceiptEmailLang, ReceiptCopy> = {
     amount: 'Amount',
     network: 'Network',
     paidFrom: 'Paid from',
-    description: 'Description',
     date: 'Date',
     paymentId: 'Payment ID',
     transaction: 'Transaction',
+    view: 'View this payment',
+    explorer: 'View the transaction',
     footnote:
       'You received this email because this address was entered at checkout. If you did not make this payment, you can ignore it.',
   },
@@ -68,10 +77,11 @@ const COPY: Record<ReceiptEmailLang, ReceiptCopy> = {
     amount: 'Monto',
     network: 'Red',
     paidFrom: 'Pagado desde',
-    description: 'Descripción',
     date: 'Fecha',
     paymentId: 'ID del pago',
     transaction: 'Transacción',
+    view: 'Ver este pago',
+    explorer: 'Ver la transacción',
     footnote:
       'Recibiste este correo porque esta dirección se ingresó en el checkout. Si no hiciste este pago, puedes ignorarlo.',
   },
@@ -83,10 +93,11 @@ const COPY: Record<ReceiptEmailLang, ReceiptCopy> = {
     amount: 'Valor',
     network: 'Rede',
     paidFrom: 'Pago a partir de',
-    description: 'Descrição',
     date: 'Data',
     paymentId: 'ID do pagamento',
     transaction: 'Transação',
+    view: 'Ver este pagamento',
+    explorer: 'Ver a transação',
     footnote:
       'Você recebeu este e-mail porque este endereço foi informado no checkout. Se você não fez este pagamento, pode ignorá-lo.',
   },
@@ -98,10 +109,11 @@ const COPY: Record<ReceiptEmailLang, ReceiptCopy> = {
     amount: 'Montant',
     network: 'Réseau',
     paidFrom: 'Payé depuis',
-    description: 'Description',
     date: 'Date',
     paymentId: 'ID du paiement',
     transaction: 'Transaction',
+    view: 'Voir ce paiement',
+    explorer: 'Voir la transaction',
     footnote:
       "Vous recevez cet e-mail parce que cette adresse a été saisie lors du paiement. Si vous n'avez pas effectué ce paiement, vous pouvez l'ignorer.",
   },
@@ -113,10 +125,11 @@ const COPY: Record<ReceiptEmailLang, ReceiptCopy> = {
     amount: 'Betrag',
     network: 'Netzwerk',
     paidFrom: 'Bezahlt von',
-    description: 'Beschreibung',
     date: 'Datum',
     paymentId: 'Zahlungs-ID',
     transaction: 'Transaktion',
+    view: 'Diese Zahlung ansehen',
+    explorer: 'Transaktion ansehen',
     footnote:
       'Sie erhalten diese E-Mail, weil diese Adresse an der Kasse eingegeben wurde. Wenn Sie diese Zahlung nicht getätigt haben, können Sie sie ignorieren.',
   },
@@ -128,10 +141,11 @@ const COPY: Record<ReceiptEmailLang, ReceiptCopy> = {
     amount: 'राशि',
     network: 'नेटवर्क',
     paidFrom: 'यहाँ से भुगतान',
-    description: 'विवरण',
     date: 'तारीख',
     paymentId: 'भुगतान ID',
     transaction: 'ट्रांज़ैक्शन',
+    view: 'यह भुगतान देखें',
+    explorer: 'ट्रांज़ैक्शन देखें',
     footnote:
       'आपको यह ईमेल इसलिए मिला क्योंकि चेकआउट में यह पता दर्ज किया गया था। अगर यह भुगतान आपने नहीं किया, तो आप इसे अनदेखा कर सकते हैं।',
   },
@@ -143,10 +157,11 @@ const COPY: Record<ReceiptEmailLang, ReceiptCopy> = {
     amount: '金额',
     network: '网络',
     paidFrom: '付款来源',
-    description: '说明',
     date: '日期',
     paymentId: '付款 ID',
     transaction: '交易',
+    view: '查看此付款',
+    explorer: '查看交易',
     footnote:
       '您收到此邮件，是因为结账时填写了此邮箱地址。如果这笔付款不是您本人所付，可以忽略此邮件。',
   },
@@ -173,10 +188,24 @@ function escapeHtml(s: string): string {
   );
 }
 
+/** An https URL with no credentials, or null: the only links a receipt carries. */
+function safeLink(url: string | null): string | null {
+  if (!url) return null;
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === 'https:' && !parsed.username && !parsed.password
+      ? parsed.href
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * A payment receipt, in the payer's checkout language: a table of what was
- * paid and the ids to look it up by. Every value a payer or merchant wrote is
- * escaped; nothing is linked, so the email carries no URL a phisher could copy.
+ * paid and the ids to look it up by, then two links this service built (the
+ * payment's page on the hosted checkout, the transaction on its explorer).
+ * Every value is escaped.
  */
 export function renderPaymentReceiptEmail(
   v: PaymentReceiptFields,
@@ -200,13 +229,15 @@ export function renderPaymentReceiptEmail(
           ] as [string, string],
         ]
       : []),
-    ...(v.description
-      ? [[t.description, v.description] as [string, string]]
-      : []),
     [t.date, `${when} UTC`],
     [t.paymentId, v.paymentId],
     ...(v.txHash ? [[t.transaction, v.txHash] as [string, string]] : []),
   ];
+
+  const links = [
+    [t.view, safeLink(v.paymentUrl)],
+    [t.explorer, safeLink(v.explorerUrl)],
+  ].filter((l): l is [string, string] => l[1] !== null);
 
   const tableRows = rows
     .map(
@@ -230,6 +261,12 @@ export function renderPaymentReceiptEmail(
     `<h1 style="font-size:22px;margin:14px 0 6px;color:#13112a;">${escapeHtml(t.heading)}</h1>` +
     `<p style="font-size:15px;line-height:1.6;color:#4a4862;margin:0 0 18px;">${escapeHtml(t.lead)}</p>` +
     `<table role="presentation" width="100%" cellpadding="0" cellspacing="0">${tableRows}</table>` +
+    links
+      .map(
+        ([label, url]) =>
+          `<p style="font-size:14px;margin:14px 0 0;"><a href="${escapeHtml(url)}" style="color:#13112a;text-decoration:underline;">${escapeHtml(label)}</a></p>`,
+      )
+      .join('') +
     `<p style="font-size:13px;line-height:1.6;color:#8a89a0;margin:22px 0 0;">${escapeHtml(t.footnote)}</p>` +
     '</td></tr></table></td></tr></table></body></html>';
 
@@ -239,6 +276,9 @@ export function renderPaymentReceiptEmail(
     t.lead,
     '',
     ...rows.map(([label, value]) => `${label}: ${value}`),
+    ...(links.length
+      ? ['', ...links.map(([label, url]) => `${label}: ${url}`)]
+      : []),
     '',
     t.footnote,
   ].join('\n');
