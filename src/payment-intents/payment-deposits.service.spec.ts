@@ -377,6 +377,16 @@ describe('PaymentDepositsService', () => {
   });
 
   describe('create', () => {
+    it('stores a sandbox deposit as testnet, for the sandbox observer alone', async () => {
+      // A Base link of a dev key: settled in the sandbox (deposit-tiers.spec.ts
+      // shows each observer reads its own tier).
+      const { service, prisma } = build({ ...INTENT, network: 'testnet' });
+      await service.create('pi_1', REQUEST, CLIENT_A);
+      expect(prisma.paymentDeposit.create.mock.calls[0][0].data.network).toBe(
+        'testnet',
+      );
+    });
+
     it("stores a deposit on its link's tier, never a fixed one", async () => {
       const { service, prisma } = build();
       await service.create('pi_1', REQUEST, CLIENT_A);
