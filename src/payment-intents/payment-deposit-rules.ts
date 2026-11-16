@@ -4,7 +4,7 @@ import type {
   PaymentIntent,
   Prisma,
 } from '@generated/prisma/client';
-import { parseUnits } from '@/chains/units';
+import { formatUnits, parseUnits } from '@/chains/units';
 import { rateLimitSubject } from '@/common/client-ip';
 import { readMerchantFeeRecord } from '@/common/merchant-fee/merchant-fee';
 import type { CrossChainNetworkId } from '@/cross-chain-swaps/cross-chain-swaps.constants';
@@ -15,10 +15,17 @@ import type {
 } from '@/payment-intents/entities/payment-deposit.entity';
 import {
   PAYMENT_DEPOSIT_CLIENT_IPV6_HEXTETS,
+  PAYMENT_DEPOSIT_LINK_BUDGET,
+  PAYMENT_DEPOSIT_LINK_WINDOW_MS,
+  PAYMENT_DEPOSIT_MAX_OPEN_PER_CLIENT,
   PAYMENT_DEPOSIT_CLIENT_KEY_LABEL,
   PAYMENT_DEPOSIT_CLIENT_KEY_SALT,
 } from '@/payment-intents/payment-intents.constants';
 import { isPaymentNetwork } from '@/payment-intents/payment-networks';
+import { isChain } from '@/chains/chains.constants';
+import { decimalPlaces } from '@/chains/units';
+import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
+import { STELLAR_DECIMALS } from '@/stellar/stellar.constants';
 
 /** The intent columns that decide whether it can be paid from another network. */
 export type CrossChainPayableFields = Pick<
@@ -34,15 +41,16 @@ export type CrossChainPayableFields = Pick<
  *   - a payment link (`PAY`): a `TX` intent is a Stellar envelope one known
  *     payer signs;
  *   - mainnet: the route has no test network;
- *   - an amount: the quote pays exactly it;
- *   - no merchant fee: the route pays one recipient, and a link with a fee
- *     owes two;
+ *   - on Stellar, Solana and Monad, no merchant fee: there the fee goes to a
+ *     wallet on the chain, which the route cannot pay beside the merchant (on
+ *     the other networks the fee is the route's own app fee, made for that);
  *   - a commission rate recorded at creation (`crossChainFeeBps`): a deposit is
  *     created keyless, with no plan header to read the rate from.
  *
- * Every link on a network other than Stellar, Solana and Monad meets them by
- * construction (the create refuses anything else). A refusal names the reason
- * in words a payer can act on, never the stored values.
+ * A link without an amount qualifies: the payer types the amount, and the quote
+ * pays exactly that. Every link on a network other than Stellar, Solana and
+ * Monad meets them by construction. A refusal names the reason in words a payer
+ * can act on, never the stored values.
  */
 export function crossChainPaymentRefusal(
   intent: CrossChainPayableFields,
@@ -52,8 +60,10 @@ export function crossChainPaymentRefusal(
   if (intent.network !== 'public') {
     return 'it is on a test network, and payments from another network run on mainnet only';
   }
-  if (intent.amount === null) return 'it has no fixed amount';
-  if (readMerchantFeeRecord(intent.merchantFee) !== null) {
+  if (
+    isChain(intent.chain) &&
+    readMerchantFeeRecord(intent.merchantFee) !== null
+  ) {
     return 'it carries a merchant fee';
   }
   if (typeof intent.crossChainFeeBps !== 'number') {
@@ -125,6 +135,7 @@ export function toPaymentDepositEntity(
     amountOut: row.amountOut,
     feeBps: row.feeBps,
     feeAmount: row.feeAmount,
+    merchantFee: readMerchantFeeRecord(row.merchantFee),
     refundTo: row.refundTo,
     depositAddress: row.depositAddress,
     depositMemo: row.depositMemo,
@@ -254,4 +265,83 @@ export function paymentDepositClientSubject(ip: string): string {
  */
 export function paymentDepositClientKey(key: Buffer, subject: string): string {
   return createHmac('sha256', key).update(subject).digest('base64url');
+}
+
+/** A link's limits on payments from another network, as they apply now. */
+export interface DepositLimits {
+  /** Open deposit addresses one payer (client) may have on the link. */
+  perPayer: number;
+  /** New deposit addresses the link takes per `windowSeconds`. */
+  perWindow: number;
+  windowSeconds: number;
+}
+
+/** The merchant's own limits for the link, or the defaults where it set none. */
+export function depositLimitsOf(
+  intent: Pick<PaymentIntent, 'depositMaxPerPayer' | 'depositBudgetPerWindow'>,
+): DepositLimits {
+  return {
+    perPayer: intent.depositMaxPerPayer ?? PAYMENT_DEPOSIT_MAX_OPEN_PER_CLIENT,
+    perWindow: intent.depositBudgetPerWindow ?? PAYMENT_DEPOSIT_LINK_BUDGET,
+    windowSeconds: PAYMENT_DEPOSIT_LINK_WINDOW_MS / 1000,
+  };
+}
+
+/**
+ * The amount a payment from another network is for, in the link's asset: the
+ * link's own when it has one (another one is refused), the payer's when it has
+ * none (then required, above zero, within the asset's decimals). Returned in
+ * one spelling (`formatUnits` of the parsed value), so two requests for the
+ * same amount compare equal.
+ */
+export function requestedAmountOut(
+  intent: Pick<PaymentIntent, 'chain' | 'amount' | 'assetDecimals'>,
+  requested: string | undefined,
+): string {
+  const decimals =
+    intent.assetDecimals ??
+    (intent.chain === 'stellar' ? STELLAR_DECIMALS : MAX_AMOUNT_DECIMALS);
+  if (intent.amount !== null) {
+    if (
+      requested !== undefined &&
+      !sameDecimal(requested, intent.amount, decimals)
+    ) {
+      throw ApiError.badRequest(
+        ApiErrorCode.ValidationFailed,
+        'This payment link has a fixed amount: send no amount, or exactly its own.',
+      );
+    }
+    return intent.amount;
+  }
+  if (requested === undefined) {
+    throw ApiError.badRequest(
+      ApiErrorCode.ValidationFailed,
+      'amount is required: this payment link has no fixed amount, so the payer says how much to pay.',
+    );
+  }
+  if (decimalPlaces(requested) > decimals) {
+    throw ApiError.badRequest(
+      ApiErrorCode.InvalidAmount,
+      `amount has more decimal places than this payment link's asset allows (${decimals})`,
+    );
+  }
+  const units = parseUnits(requested, decimals);
+  if (units <= 0n) {
+    throw ApiError.badRequest(
+      ApiErrorCode.InvalidAmount,
+      'amount must be greater than zero',
+    );
+  }
+  return formatUnits(units, decimals);
+}
+
+/** The most decimals an amount on a link with no stored decimals is read with. */
+const MAX_AMOUNT_DECIMALS = 18;
+
+function sameDecimal(a: string, b: string, decimals: number): boolean {
+  try {
+    return parseUnits(a, decimals) === parseUnits(b, decimals);
+  } catch {
+    return false;
+  }
 }

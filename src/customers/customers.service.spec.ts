@@ -576,3 +576,36 @@ describe('CustomersService.ensureForPayer', () => {
     );
   });
 });
+
+describe('CustomersService.linkPayerEmail', () => {
+  it('creates a customer from the email a payer typed, marked as given by the payer', async () => {
+    const { service, prisma } = build();
+    prisma.customer.findFirst.mockResolvedValueOnce(null);
+
+    await service.linkPayerEmail('c1', 'payer@example.com');
+
+    expect(prisma.customer.findFirst).toHaveBeenCalledWith({
+      where: {
+        consumerId: 'c1',
+        email: { equals: 'payer@example.com', mode: 'insensitive' },
+      },
+      select: { id: true },
+    });
+    expect(prisma.customer.create).toHaveBeenCalledWith({
+      data: {
+        consumerId: 'c1',
+        name: 'payer@example.com',
+        email: 'payer@example.com',
+        emailProvidedByPayer: true,
+        reference: 'auto',
+      },
+    });
+  });
+
+  it("links to the merchant's existing customer with that email instead", async () => {
+    const { service, prisma } = build();
+    prisma.customer.findFirst.mockResolvedValueOnce({ id: 'cus_1' } as never);
+    await service.linkPayerEmail('c1', 'Payer@Example.com');
+    expect(prisma.customer.create).not.toHaveBeenCalled();
+  });
+});

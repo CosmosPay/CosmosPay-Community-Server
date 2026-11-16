@@ -37,6 +37,7 @@ const REQUEST = {
   originChain: 'tron' as const,
   originAsset: 'USDT',
   refundTo: PAYER,
+  email: 'payer@example.com',
 };
 /** A distinct, valid Tron refund address per index (34 base58 characters). */
 const refundTo = (i: number) =>
@@ -53,8 +54,11 @@ const INTENT = {
   amount: '25',
   asset: 'USDC',
   assetIssuer: DESTINATION.contract,
+  assetDecimals: 6,
   merchantFee: null,
   crossChainFeeBps: 50,
+  depositMaxPerPayer: null,
+  depositBudgetPerWindow: null,
   expiresAt: new Date(Date.now() + 3_600_000),
 };
 
@@ -83,6 +87,9 @@ function stored(overrides: Partial<PaymentDeposit> = {}): PaymentDeposit {
     slippageBps: 100,
     recipient: MERCHANT,
     refundTo: PAYER,
+    payerEmail: 'payer@example.com',
+    payerLang: 'en',
+    merchantFee: null,
     clientKey: 'k',
     depositAddress: 'TXk4mWpuXSbT4F7wC6S5K3aA2CKUZPqT3a',
     depositMemo: null,
@@ -215,7 +222,7 @@ function build(
         destination: DESTINATION,
         amountIn: '25.284231',
         minAmountIn: '25.031458',
-        amountOut: '25',
+        amountOut: request.amount ?? '25',
         feeBps: 50,
         feeAmount: '0.126421',
         slippageBps: 100,
@@ -250,12 +257,14 @@ function build(
     nearIntents: { timeoutMs: 20_000 },
   };
   const config = { get: (key: string) => values[key] } as never;
+  const probe = { check: jest.fn().mockResolvedValue([]) };
   const service = new PaymentDepositsService(
     config,
     prisma,
     pricing as never,
     paymentIntents as never,
     accounts as never,
+    probe as never,
   );
   return { service, prisma, tables, locks, pricing, paymentIntents, accounts };
 }
@@ -280,10 +289,10 @@ describe('PaymentDepositsService', () => {
     });
 
     it('refuses a link that cannot be paid from another network, naming why', async () => {
-      const { service, pricing } = build({ ...INTENT, amount: null });
+      const { service, pricing } = build({ ...INTENT, network: 'testnet' });
       const err = await refusal(service.quote('pi_1', REQUEST));
       expect(err.code).toBe(ApiErrorCode.ValidationFailed);
-      expect(err.message).toMatch(/no fixed amount/);
+      expect(err.message).toMatch(/test network/);
       expect(pricing.price).not.toHaveBeenCalled();
     });
 
@@ -291,6 +300,7 @@ describe('PaymentDepositsService', () => {
       const { service } = build({ ...INTENT, status: 'SUCCEEDED' });
       await expect(service.assets('pi_1')).resolves.toEqual({
         data: [ORIGIN, DESTINATION],
+        routes: [],
       });
     });
 
@@ -535,6 +545,55 @@ describe('PaymentDepositsService', () => {
       );
       expect(tables.deposits).toHaveLength(3);
       expect(new Set(tables.deposits.map((d) => d.clientKey)).size).toBe(2);
+    });
+
+    it("applies the merchant's own limits for the link", async () => {
+      const { service, tables } = build(
+        { ...INTENT, depositMaxPerPayer: 4 },
+        [],
+        5,
+      );
+      const results = await Promise.allSettled(
+        Array.from({ length: 6 }, (_, i) =>
+          service.create(
+            'pi_1',
+            { ...REQUEST, refundTo: refundTo(i) },
+            CLIENT_A,
+          ),
+        ),
+      );
+      expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(4);
+      expect(tables.deposits).toHaveLength(4);
+    });
+
+    it("keeps the payer's email (lowercased) and language on the deposit, never in its answer", async () => {
+      const { service, prisma } = build();
+      const deposit = await service.create(
+        'pi_1',
+        { ...REQUEST, email: 'Payer@Example.com', lang: 'pt' },
+        CLIENT_A,
+      );
+      expect(prisma.paymentDeposit.create.mock.calls[0][0].data).toMatchObject({
+        payerEmail: 'payer@example.com',
+        payerLang: 'pt',
+      });
+      expect(JSON.stringify(deposit)).not.toContain('payer@example.com');
+    });
+
+    it('on a link without an amount, another amount is another deposit', async () => {
+      const { service, pricing } = build({ ...INTENT, amount: null });
+      const first = await service.create(
+        'pi_1',
+        { ...REQUEST, amount: '10' },
+        CLIENT_A,
+      );
+      const same = await service.create(
+        'pi_1',
+        { ...REQUEST, amount: '10.0' },
+        CLIENT_A,
+      );
+      expect(same.id).toBe(first.id);
+      expect(pricing.price).toHaveBeenCalledTimes(1);
     });
 
     it('frees a client slot again once a deposit expires', async () => {

@@ -48,6 +48,9 @@ function deposit(overrides: Partial<PaymentDeposit> = {}): PaymentDeposit {
     slippageBps: 100,
     recipient: '0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed',
     refundTo: 'TLsV52sRDL79HXGGm9yzwKibb6BeruhUzy',
+    payerEmail: 'payer-secret@example.com',
+    payerLang: 'en',
+    merchantFee: null,
     clientKey: 'client-key-secret',
     depositAddress: 'TXk4mWpuXSbT4F7wC6S5K3aA2CKUZPqT3a',
     depositMemo: null,
@@ -69,6 +72,23 @@ function deposit(overrides: Partial<PaymentDeposit> = {}): PaymentDeposit {
 }
 
 describe('crossChainPaymentRefusal', () => {
+  it('accepts a link without an amount, and a merchant fee off the three chains', () => {
+    expect(crossChainPaymentRefusal({ ...PAYABLE, amount: null })).toBeNull();
+    expect(
+      crossChainPaymentRefusal({
+        ...PAYABLE,
+        merchantFee: {
+          bps: 100,
+          fixed: '0',
+          amount: '0.25',
+          asset: 'USDC',
+          wallet: 'merchant.near',
+          paidBy: 'recipient',
+        },
+      }),
+    ).toBeNull();
+  });
+
   it('accepts a mainnet payment link with an amount, no merchant fee and a recorded rate', () => {
     expect(crossChainPaymentRefusal(PAYABLE)).toBeNull();
     expect(acceptsCrossChainPayment(PAYABLE)).toBe(true);
@@ -81,16 +101,16 @@ describe('crossChainPaymentRefusal', () => {
   it.each([
     ['a transaction intent', { kind: 'TX' as const }, /known payer/],
     ['a test network', { network: 'testnet' }, /test network/],
-    ['an open amount', { amount: null }, /no fixed amount/],
     [
-      'a merchant fee',
+      'a merchant fee on a link on Stellar, Solana or Monad',
       {
+        chain: 'stellar',
         merchantFee: {
           bps: 100,
           fixed: '0',
           amount: '0.25',
           asset: 'USDC',
-          wallet: '0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed',
+          wallet: 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN',
           paidBy: 'recipient',
         },
       },

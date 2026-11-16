@@ -409,7 +409,13 @@ describe('Payment links (e2e)', () => {
       for (const path of ['quote', 'deposits']) {
         const res = await request(http())
           .post(`/v1/payment-links/cmh4x2k9a0009l70gneverwas/${path}`)
-          .send({ originChain: 'tron', originAsset: 'USDT', refundTo: REFUND })
+          .send({
+            originChain: 'tron',
+            originAsset: 'USDT',
+            refundTo: REFUND,
+            // A deposit also takes the payer's email; a quote does not.
+            ...(path === 'deposits' ? { email: 'payer@example.com' } : {}),
+          })
           .expect(404);
         expect(res.body.code).toBe('not_found');
       }
@@ -456,6 +462,43 @@ describe('Payment links (e2e)', () => {
       });
       const [[, key]] = prismaMock.$queryRaw.mock.calls as [unknown, string][];
       expect(key).toMatch(/^payment-links:deposit-read:anonymous:/);
+    });
+  });
+
+  describe("POST /v1/payment-links/{id}/payer (the payer's email for the receipt)", () => {
+    it('is reachable with no key, on its own per-address budget, and records on an open link', async () => {
+      prismaMock.$executeRaw = jest.fn().mockResolvedValue(1);
+      await request(http())
+        .post('/v1/payment-links/cmh4x2k9a0003l70gbaseusdc0/payer')
+        .set('x-consumer-username', 'cosmos_u1')
+        .send({ email: 'payer@example.com', lang: 'es' })
+        .expect(204);
+      expect(prismaMock.consumer.upsert).not.toHaveBeenCalled();
+      const [[, key]] = prismaMock.$queryRaw.mock.calls as [unknown, string][];
+      expect(key).toMatch(/^payment-links:payer:anonymous:/);
+    });
+
+    it('refuses what is not an email before reading anything', async () => {
+      prismaMock.$executeRaw = jest.fn();
+      const res = await request(http())
+        .post('/v1/payment-links/cmh4x2k9a0003l70gbaseusdc0/payer')
+        .send({ email: 'not an email' })
+        .expect(400);
+      expect(res.body.code).toBe('validation_failed');
+      expect(prismaMock.$executeRaw).not.toHaveBeenCalled();
+    });
+
+    it('refuses a deposit without the payer email', async () => {
+      const res = await request(http())
+        .post('/v1/payment-links/cmh4x2k9a0003l70gbaseusdc0/deposits')
+        .send({
+          originChain: 'tron',
+          originAsset: 'USDT',
+          refundTo: 'TLsV52sRDL79HXGGm9yzwKibb6BeruhUzy',
+        })
+        .expect(400);
+      expect(res.body.code).toBe('validation_failed');
+      expect(prismaMock.paymentIntent.findUnique).not.toHaveBeenCalled();
     });
   });
 

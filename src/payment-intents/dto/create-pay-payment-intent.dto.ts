@@ -9,6 +9,7 @@ import {
   ValidateNested,
 } from 'class-validator';
 import { MerchantFeeDto } from '@/common/merchant-fee/merchant-fee.dto';
+import { DepositLimitsDto } from '@/payment-intents/dto/deposit-limits.dto';
 import { IsDecimalAmount } from '@/common/validators/is-decimal-amount.validator';
 import {
   IsPaymentAddress,
@@ -181,4 +182,16 @@ export class CreatePayPaymentIntentDto {
   @ValidateNested()
   @Type(() => MerchantFeeDto)
   merchantFee?: MerchantFeeDto;
+
+  @ApiPropertyOptional({
+    type: DepositLimitsDto,
+    description:
+      'Your own limits on payments from another network for this link, raised ' +
+      'from the defaults (2 open deposit addresses per payer, 20 new ones every ' +
+      'five minutes) up to the ceilings. `PATCH` changes them later.',
+  })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => DepositLimitsDto)
+  depositLimits?: DepositLimitsDto;
 }

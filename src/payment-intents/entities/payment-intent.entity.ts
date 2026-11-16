@@ -1,6 +1,9 @@
 import { ApiProperty, ApiSchema } from '@nestjs/swagger';
 import { PAYMENT_NETWORKS } from '@/payment-intents/payment-networks';
-import { PaidFromEntity } from '@/payment-intents/entities/payment-deposit.entity';
+import {
+  DepositLimitsEntity,
+  PaidFromEntity,
+} from '@/payment-intents/entities/payment-deposit.entity';
 import { MerchantFeeEntity } from '@/common/merchant-fee/merchant-fee.entity';
 import {
   CHECKOUT_THEMES,
@@ -139,6 +142,33 @@ export class PaymentIntentEntity {
       'intent (then `txHash` is the payout on its own network); null otherwise.',
   })
   paidFrom!: PaidFromEntity | null;
+
+  @ApiProperty({
+    type: DepositLimitsEntity,
+    description:
+      'Limits on payments from another network for this link, as they apply ' +
+      '(yours, or the defaults).',
+  })
+  depositLimits!: DepositLimitsEntity;
+
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    example: 'payer@example.com',
+    description:
+      'The email the payer typed in the hosted checkout before paying (the ' +
+      'latest on the link; not verified). The receipt goes there.',
+  })
+  payerEmail!: string | null;
+
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    format: 'date-time',
+    example: null,
+    description: 'When the payer’s receipt was emailed; null until it was.',
+  })
+  receiptSentAt!: Date | null;
 
   @ApiProperty({ nullable: true, example: null, description: 'SEP-7 msg.' })
   msg!: string | null;
@@ -368,6 +398,33 @@ export class TxPaymentIntentEntity {
       'intent (then `txHash` is the payout on its own network); null otherwise.',
   })
   paidFrom!: PaidFromEntity | null;
+
+  @ApiProperty({
+    type: DepositLimitsEntity,
+    description:
+      'Limits on payments from another network for this link, as they apply ' +
+      '(yours, or the defaults).',
+  })
+  depositLimits!: DepositLimitsEntity;
+
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    example: 'payer@example.com',
+    description:
+      'The email the payer typed in the hosted checkout before paying (the ' +
+      'latest on the link; not verified). The receipt goes there.',
+  })
+  payerEmail!: string | null;
+
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    format: 'date-time',
+    example: null,
+    description: 'When the payer’s receipt was emailed; null until it was.',
+  })
+  receiptSentAt!: Date | null;
 
   @ApiProperty({
     nullable: true,
@@ -600,6 +657,33 @@ export class PayPaymentIntentEntity {
       'intent (then `txHash` is the payout on its own network); null otherwise.',
   })
   paidFrom!: PaidFromEntity | null;
+
+  @ApiProperty({
+    type: DepositLimitsEntity,
+    description:
+      'Limits on payments from another network for this link, as they apply ' +
+      '(yours, or the defaults).',
+  })
+  depositLimits!: DepositLimitsEntity;
+
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    example: 'payer@example.com',
+    description:
+      'The email the payer typed in the hosted checkout before paying (the ' +
+      'latest on the link; not verified). The receipt goes there.',
+  })
+  payerEmail!: string | null;
+
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    format: 'date-time',
+    example: null,
+    description: 'When the payer’s receipt was emailed; null until it was.',
+  })
+  receiptSentAt!: Date | null;
 
   @ApiProperty({
     nullable: true,

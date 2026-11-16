@@ -46,6 +46,8 @@ const LINK = {
   amount: '25',
   asset: 'USDC',
   assetIssuer: BASE_USDC,
+  assetDecimals: 6,
+  merchantFee: null,
   crossChainFeeBps: 50,
 };
 
@@ -228,6 +230,156 @@ describe('PaymentDepositPricing', () => {
       ),
     );
     expect(err.code).toBe(ApiErrorCode.AssetUnsupported);
+  });
+
+  describe('a link without an amount', () => {
+    const open = { ...LINK, amount: null };
+
+    it('quotes exactly what the payer typed', async () => {
+      const { pricing, nearIntents } = build();
+      const priced = await pricing.price(
+        open,
+        {
+          originChain: 'tron',
+          originAsset: 'USDT',
+          refundTo: PAYER,
+          amount: '12.5',
+        },
+        false,
+      );
+      expect(nearIntents.quote.mock.calls[0][0].amount).toBe('12500000');
+      expect(priced.amountOut).toBe('12.5');
+    });
+
+    it('needs the payer to say how much, within the asset and above zero', async () => {
+      const { pricing } = build();
+      const ask = (amount?: string) =>
+        refusal(
+          pricing.price(
+            open,
+            {
+              originChain: 'tron',
+              originAsset: 'USDT',
+              refundTo: PAYER,
+              amount,
+            },
+            false,
+          ),
+        );
+      expect((await ask()).code).toBe(ApiErrorCode.ValidationFailed);
+      expect((await ask('1.0000001')).code).toBe(ApiErrorCode.InvalidAmount);
+      expect((await ask('0')).code).toBe(ApiErrorCode.InvalidAmount);
+    });
+
+    it('refuses another amount on a link that has one', async () => {
+      const { pricing } = build();
+      const err = await refusal(
+        pricing.price(
+          LINK,
+          {
+            originChain: 'tron',
+            originAsset: 'USDT',
+            refundTo: PAYER,
+            amount: '30',
+          },
+          false,
+        ),
+      );
+      expect(err.code).toBe(ApiErrorCode.ValidationFailed);
+      // Its own amount, written another way, is the same amount.
+      await expect(
+        pricing.price(
+          LINK,
+          {
+            originChain: 'tron',
+            originAsset: 'USDT',
+            refundTo: PAYER,
+            amount: '25.000',
+          },
+          false,
+        ),
+      ).resolves.toMatchObject({ amountOut: '25' });
+    });
+  });
+
+  describe('a merchant fee on a network paid through deposits', () => {
+    const fee = (paidBy: 'payer' | 'recipient') => ({
+      ...LINK,
+      amount: '100',
+      merchantFee: {
+        bps: 150,
+        fixed: '0',
+        amount: '1.5',
+        asset: 'USDC',
+        wallet: 'merchant.near',
+        paidBy,
+      },
+    });
+
+    it('rides as the route app fee to the fee account, in basis points of what is paid out', async () => {
+      const { pricing, nearIntents } = build();
+      const priced = await pricing.price(
+        fee('payer'),
+        { originChain: 'tron', originAsset: 'USDT', refundTo: PAYER },
+        false,
+      );
+      const request = nearIntents.quote.mock.calls[0][0];
+      // The merchant gets the whole amount; 1.5 / 101.5 is 147 basis points.
+      expect(request.amount).toBe('100000000');
+      expect(request.appFees).toEqual([
+        { recipient: 'cosmospay.near', fee: 50 },
+        { recipient: 'merchant.near', fee: 147 },
+      ]);
+      expect(priced.merchantFee).toMatchObject({
+        wallet: 'merchant.near',
+        asset: 'USDT',
+        // 147 bps of the deposit, in the origin asset.
+        amount: '0.371678',
+      });
+    });
+
+    it('comes out of the amount when the recipient pays it', async () => {
+      const { pricing, nearIntents } = build();
+      const priced = await pricing.price(
+        fee('recipient'),
+        { originChain: 'tron', originAsset: 'USDT', refundTo: PAYER },
+        false,
+      );
+      expect(nearIntents.quote.mock.calls[0][0].amount).toBe('98500000');
+      expect(priced.amountOut).toBe('98.5');
+      expect(nearIntents.quote.mock.calls[0][0].appFees[1]).toEqual({
+        recipient: 'merchant.near',
+        fee: 150,
+      });
+    });
+
+    it('is not an app fee on Stellar, Solana or Monad, whose fees go on the chain', async () => {
+      const { pricing, nearIntents } = build();
+      nearIntents.tokens.mockResolvedValueOnce([
+        ...TOKENS,
+        {
+          assetId: 'nep141:sol-usdc.omft.near',
+          decimals: 6,
+          blockchain: 'sol',
+          symbol: 'USDC',
+          contractAddress: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+          price: 1,
+        },
+      ]);
+      await pricing.price(
+        {
+          ...fee('payer'),
+          chain: 'solana',
+          destination: 'mvines9iiHiQTysrwkJjGf2gb9Ex9jXJX8ns3qwf2kN',
+          assetIssuer: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+        },
+        { originChain: 'tron', originAsset: 'USDT', refundTo: PAYER },
+        false,
+      );
+      expect(nearIntents.quote.mock.calls[0][0].appFees).toEqual([
+        { recipient: 'cosmospay.near', fee: 50 },
+      ]);
+    });
   });
 
   describe('linkAssetForCreate', () => {

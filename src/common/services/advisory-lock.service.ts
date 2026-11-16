@@ -113,4 +113,6 @@ export enum AdvisoryLockKey {
   ProtectedPaymentDeadline = 881_018,
   // 881_019 and 881_020 are left to branches in flight that already claim them.
   PaymentDepositObserver = 881_021,
+  // 881_022 is the deposit slots' two-key class (`PAYMENT_DEPOSIT_LOCK_CLASS`).
+  PaymentReceiptSweeper = 881_023,
 }

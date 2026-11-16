@@ -395,3 +395,114 @@ export const PAYMENT_DEPOSIT_REUSE_MIN_REMAINING_MS = 10 * 60 * 1000;
 
 /** The most deposits the owner's list of one payment intent answers, newest first. */
 export const PAYMENT_DEPOSIT_OWNER_LIST_MAX = 50;
+
+/**
+ * The most a merchant may raise a link's per-payer cap to (`depositLimits.perPayer`;
+ * the default is {@link PAYMENT_DEPOSIT_MAX_OPEN_PER_CLIENT}). A kiosk or an event
+ * behind one network may need more than two; past ten, one address could hold a
+ * link's whole creation budget.
+ */
+export const PAYMENT_DEPOSIT_MAX_OPEN_PER_CLIENT_CEILING = 10;
+
+/**
+ * The most a merchant may raise a link's creation budget to
+ * (`depositLimits.perWindow`, per {@link PAYMENT_DEPOSIT_LINK_WINDOW_MS}; the default
+ * is {@link PAYMENT_DEPOSIT_LINK_BUDGET}). Each new deposit is a live quote and a row
+ * the observer polls for a day; two hundred in five minutes is a busy event, and
+ * the most one link may cost upstream.
+ */
+export const PAYMENT_DEPOSIT_LINK_BUDGET_CEILING = 200;
+
+/**
+ * The origins a link's amount is checked against at creation, and for the
+ * checkout (`PaymentRouteProbe`): the stablecoins most payers hold, on the
+ * networks they most hold them on, plus Bitcoin. Each is one dry quote; routes
+ * have minimums of their own (a Tron route has asked for $100, Bitcoin's bridge a
+ * minimum in BTC), and a payer should not find that out after picking one.
+ */
+export const PAYMENT_ROUTE_PROBE_ORIGINS = [
+  { chain: 'eth', asset: 'USDC' },
+  { chain: 'base', asset: 'USDC' },
+  { chain: 'arb', asset: 'USDC' },
+  { chain: 'pol', asset: 'USDC' },
+  { chain: 'solana', asset: 'USDC' },
+  { chain: 'bsc', asset: 'USDT' },
+  { chain: 'tron', asset: 'USDT' },
+  { chain: 'btc', asset: 'BTC' },
+] as const;
+
+/**
+ * The refund address a probe's dry quote names: one the route accepts on each
+ * probed network, for a quote that reserves nothing and can never refund. The EVM
+ * and Solana ones are derived from sha256("cosmos pay route probe") (keccak for
+ * the EVM address), so nobody holds a key to them; the route refuses the
+ * well-known burn addresses there. Tron's and Bitcoin's are their well-known
+ * burn addresses, which it accepts.
+ */
+export const PAYMENT_ROUTE_PROBE_REFUND_TO: Record<
+  (typeof PAYMENT_ROUTE_PROBE_ORIGINS)[number]['chain'],
+  string
+> = {
+  eth: '0x9a5A2B9540E1AE4FCAabaAebFFe90D6737d8299E',
+  base: '0x9a5A2B9540E1AE4FCAabaAebFFe90D6737d8299E',
+  arb: '0x9a5A2B9540E1AE4FCAabaAebFFe90D6737d8299E',
+  pol: '0x9a5A2B9540E1AE4FCAabaAebFFe90D6737d8299E',
+  bsc: '0x9a5A2B9540E1AE4FCAabaAebFFe90D6737d8299E',
+  solana: 'C8cxhxckoW7AyUCvyiZnXCPAUsAeUWz5EDtrpzDAs891',
+  tron: 'T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb',
+  btc: '1BitcoinEaterAddressDontSendf59kuE',
+};
+
+/**
+ * How long a probe's answer for one asset and amount is reused, and how many such
+ * answers are kept. Minimums move slowly; ten minutes keeps a busy link's checkout
+ * from costing eight quotes per visitor.
+ */
+export const PAYMENT_ROUTE_PROBE_TTL_MS = 10 * 60 * 1000;
+export const PAYMENT_ROUTE_PROBE_MAX_ENTRIES = 2000;
+
+/** `GET /v1/payment-intents/{id}/route-check`, per consumer and client address. */
+export const PAYMENT_ROUTE_CHECK_RATE_LIMIT = {
+  name: 'payment-intents:route-check',
+  limit: 30,
+  windowMs: 60 * 1000,
+};
+
+/**
+ * `POST /v1/payment-links/{id}/payer`, per client address: the checkout records
+ * the payer's email once before showing how to pay, maybe again after a typo.
+ */
+export const PAYMENT_LINK_PAYER_RATE_LIMIT = {
+  name: 'payment-links:payer',
+  limit: 10,
+  windowMs: 60 * 1000,
+};
+
+/** The languages a receipt is written in: the checkout's, English otherwise. */
+export const RECEIPT_LANGS = [
+  'en',
+  'es',
+  'pt',
+  'fr',
+  'de',
+  'hi',
+  'zh',
+] as const;
+export type ReceiptLang = (typeof RECEIPT_LANGS)[number];
+
+/**
+ * How long a replica's claim on sending one receipt lasts. Past it another replica
+ * (or the next sweep) may send it: a send that died mid-way is retried, at the cost
+ * of a rare second copy, which beats a receipt that never goes out.
+ */
+export const PAYMENT_RECEIPT_CLAIM_MS = 5 * 60 * 1000;
+
+/**
+ * How far back the receipt sweeper looks for a settled payment whose receipt has
+ * not gone out (the mailer down, a pod killed): three days, then it gives up and
+ * logs, rather than mailing a payer about last month.
+ */
+export const PAYMENT_RECEIPT_RETRY_WINDOW_MS = 3 * 24 * 60 * 60 * 1000;
+
+/** Receipts the sweeper sends per tick. */
+export const PAYMENT_RECEIPT_SWEEP_BATCH = 25;

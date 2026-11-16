@@ -744,8 +744,15 @@ describe('PaymentIntentsService API settlement is chain-verified', () => {
     const view = await service.findOne(consumer, 'pi_1');
 
     // The stored row carries consumerId; the spread used to send it out.
+    // The stored limits are answered as the limits that apply.
     expect(Object.keys(view).sort()).toEqual(
-      [...Object.keys(PAYMENT_INTENT_PUBLIC_SELECT), 'qr'].sort(),
+      [
+        ...Object.keys(PAYMENT_INTENT_PUBLIC_SELECT).filter(
+          (k) => k !== 'depositMaxPerPayer' && k !== 'depositBudgetPerWindow',
+        ),
+        'depositLimits',
+        'qr',
+      ].sort(),
     );
     expect(view).not.toHaveProperty('consumerId');
   });

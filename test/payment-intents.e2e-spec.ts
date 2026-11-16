@@ -478,6 +478,16 @@ describe('Payment intents CRUD (e2e)', () => {
     ).expect(200);
   });
 
+  describe('GET /v1/payment-intents/{id}/route-check', () => {
+    it('refuses a caller without the gateway secret (403)', () =>
+      request(http()).get(`${route}/${createdId}/route-check`).expect(403));
+
+    it("answers another consumer's intent as not found (404)", () =>
+      gwAs('cosmos_someone_else')(
+        request(http()).get(`${route}/${createdId}/route-check`),
+      ).expect(404));
+  });
+
   describe("an intent's deposit addresses (GET /v1/payment-intents/{id}/deposits)", () => {
     it('refuses a caller without the gateway secret (403)', () =>
       request(http()).get(`${route}/${createdId}/deposits`).expect(403));

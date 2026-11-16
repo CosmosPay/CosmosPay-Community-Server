@@ -38,10 +38,16 @@ import {
   ValidationOutcomeEntity,
 } from '@/payment-intents/entities/payment-intent.entity';
 import { PaymentIntentsService } from '@/payment-intents/payment-intents.service';
-import { PaymentDepositListEntity } from '@/payment-intents/entities/payment-deposit.entity';
+import {
+  PaymentDepositListEntity,
+  PaymentRouteCheckListEntity,
+} from '@/payment-intents/entities/payment-deposit.entity';
 import { PaymentDepositsService } from '@/payment-intents/payment-deposits.service';
 import { RateLimit } from '@/common/decorators/rate-limit.decorator';
-import { PAYMENT_INTENT_BUILD_RATE_LIMIT } from '@/payment-intents/payment-intents.constants';
+import {
+  PAYMENT_INTENT_BUILD_RATE_LIMIT,
+  PAYMENT_ROUTE_CHECK_RATE_LIMIT,
+} from '@/payment-intents/payment-intents.constants';
 
 /**
  * The 409 both creates return, declared per route because nothing central can
@@ -277,6 +283,29 @@ export class PaymentIntentsController {
     @Param('id') id: string,
   ): Promise<PaymentDepositListEntity> {
     return this.deposits.listForOwner(consumer, id);
+  }
+
+  @Get(':id/route-check')
+  @RequirePermissions('payments:read')
+  @RateLimit(PAYMENT_ROUTE_CHECK_RATE_LIMIT)
+  @ApiOperation({
+    summary:
+      "Check which main origins can pay a payment link's amount right now",
+    description:
+      'One dry quote per main origin (USDC and USDT on the networks most ' +
+      'payers hold them on, and Bitcoin) for the link’s amount and asset. ' +
+      'Routes have minimums of their own: an origin that cannot pay the ' +
+      'amount comes back `available: false` with the reason. Nothing blocks ' +
+      'the link; the hosted checkout disables those origins. Empty for a link ' +
+      'without a fixed amount or one that cannot be paid from another network.',
+  })
+  @ApiOkResponse({ type: PaymentRouteCheckListEntity })
+  @ApiUpstream('Cross-chain route')
+  routeCheck(
+    @CurrentConsumer() consumer: GatewayConsumer,
+    @Param('id') id: string,
+  ): Promise<PaymentRouteCheckListEntity> {
+    return this.deposits.routeCheck(consumer, id);
   }
 
   @Get(':id')

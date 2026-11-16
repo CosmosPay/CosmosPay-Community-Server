@@ -58,6 +58,7 @@ export const CUSTOMER_PUBLIC_SELECT = {
   name: true,
   alias: true,
   email: true,
+  emailProvidedByPayer: true,
   note: true,
   reference: true,
   createdAt: true,
@@ -205,6 +206,32 @@ export class CustomersService {
     );
   }
 
+  /**
+   * The customer a settled payment's payer is, by the email they typed in the
+   * hosted checkout: the merchant's existing customer with that email (any
+   * case), or a new one marked `emailProvidedByPayer` (the address is
+   * unverified). Fire-and-forget for the caller, like `ensureForPayer`.
+   */
+  async linkPayerEmail(consumerId: string, email: string): Promise<void> {
+    const existing = await this.prisma.customer.findFirst({
+      where: { consumerId, email: { equals: email, mode: 'insensitive' } },
+      select: { id: true },
+    });
+    if (existing) return;
+    await this.prisma.customer.create({
+      data: {
+        consumerId,
+        name: email,
+        email,
+        emailProvidedByPayer: true,
+        reference: AUTO_CUSTOMER_REFERENCE,
+      },
+    });
+    this.logger.log(
+      `Auto-created customer by payer email for consumer ${consumerId}`,
+    );
+  }
+
   async findAll(consumer: GatewayConsumer, query: QueryCustomersDto) {
     const local = await this.resolveConsumer(consumer);
     const where = { consumerId: local.id };
@@ -330,7 +357,10 @@ export class CustomersService {
         ...(dto.name !== undefined ? { name: dto.name } : {}),
         ...(dto.alias !== undefined ? { alias: dto.alias } : {}),
         ...(dto.note !== undefined ? { note: dto.note } : {}),
-        ...(dto.email !== undefined ? { email: dto.email } : {}),
+        // An email the merchant sets is the merchant's, not the payer's.
+        ...(dto.email !== undefined
+          ? { email: dto.email, emailProvidedByPayer: false }
+          : {}),
         ...(dto.reference !== undefined ? { reference: dto.reference } : {}),
       },
       select: CUSTOMER_PUBLIC_SELECT,

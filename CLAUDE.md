@@ -377,13 +377,21 @@ table. These are the rules that did not hold on their own:
   `isChain` before reaching a `Record<Chain, …>` (verifiers, `PAY_TO`, tx-id rules):
   the chain observer never scans a deposit network, `validate` and a PATCHed
   `txHash` are refused there. A link on the three chains takes deposits too only
-  with `crossChainFeeBps` recorded at create (mainnet, an amount, no merchant fee,
-  not a Monad link found by amount), because the deposit routes are keyless and
-  the plan rate comes from a header. Open deposits are capped per client
+  with `crossChainFeeBps` recorded at create (mainnet, no merchant fee, not a
+  Monad link found by amount), because the deposit routes are keyless and
+  the plan rate comes from a header. A link with no amount is paid for the amount
+  the payer types (`requestedAmountOut`); a merchant fee on a deposit network is
+  the route's own app fee (`merchantAppFee`, a route account, never an on-chain
+  address of the link's network); `PaymentRouteProbe` dry-quotes the main origins
+  for minimums and never blocks a link. Every deposit carries the payer's email,
+  and `PaymentReceiptsService` mails the receipt on `PAYMENT_INTENT_SUCCEEDED`
+  (claimed by `receiptClaimedAt`, retried by `PaymentReceiptSweeperService`). Open deposits are capped per client
   (`PAYMENT_DEPOSIT_MAX_OPEN_PER_CLIENT`: an IPv4 address or an IPv6 /48, stored as
   an HMAC, `409`), and NEW deposits per link are a refilling creation budget
   (`PAYMENT_DEPOSIT_LINK_BUDGET` per `PAYMENT_DEPOSIT_LINK_WINDOW_MS`, `429` with
-  `Retry-After`). Never a hard cap on a link's open deposits: anyone holding the id
+  `Retry-After`). A merchant may raise both per link (`depositLimits`), never past
+  `PAYMENT_DEPOSIT_MAX_OPEN_PER_CLIENT_CEILING` / `PAYMENT_DEPOSIT_LINK_BUDGET_CEILING`,
+  and never below the defaults. Never a hard cap on a link's open deposits: anyone holding the id
   could fill it and lock the real payer out (security review, 2026-11-16; product
   decision, do not reintroduce). An unpaid deposit past its deadline counts for
   nothing. Both checks are one step: a slot is reserved under the link's advisory

@@ -42,13 +42,18 @@ import {
   PAYMENT_DEPOSIT_QUOTE_RATE_LIMIT,
   PAYMENT_DEPOSIT_READ_RATE_LIMIT,
   PAYMENT_LINK_EVENT_RATE_LIMIT,
+  PAYMENT_LINK_PAYER_RATE_LIMIT,
   PAYMENT_LINK_READ_RATE_LIMIT,
   PAYMENT_LINK_TRANSACTION_RATE_LIMIT,
 } from '@/payment-intents/payment-intents.constants';
 import { PaymentLinksService } from '@/payment-intents/payment-links.service';
-import { CrossChainAssetListEntity } from '@/cross-chain-swaps/entities/cross-chain-swap.entity';
-import { PaymentDepositRequestDto } from '@/payment-intents/dto/payment-deposit.dto';
 import {
+  CreatePaymentDepositDto,
+  PayerContactDto,
+  PaymentDepositRequestDto,
+} from '@/payment-intents/dto/payment-deposit.dto';
+import {
+  PaymentDepositAssetsEntity,
   PaymentDepositEntity,
   PaymentDepositQuoteEntity,
 } from '@/payment-intents/entities/payment-deposit.entity';
@@ -292,6 +297,68 @@ export class PaymentLinksController {
     return this.paymentLinks.payerTransaction(id, dto.account);
   }
 
+  @Post(':id/payer')
+  @Public()
+  @RateLimit(PAYMENT_LINK_PAYER_RATE_LIMIT)
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @Header('Cache-Control', 'no-store')
+  @ApiOperation({
+    summary:
+      "Record the payer's email before they pay, for their receipt (no API key)",
+    description:
+      'The hosted checkout asks the payer for an email before it shows any way ' +
+      'to pay, and records it here with the checkout language: when the ' +
+      'payment succeeds, a receipt goes to that address in that language, and ' +
+      'the merchant finds the payer among its customers by it (marked as ' +
+      'given by the payer, not verified). The latest one recorded on an open ' +
+      'link is the one used; a deposit carries its own. Budgeted per client ' +
+      'address.',
+  })
+  @ApiParam({
+    name: 'id',
+    description: 'The payment intent id, as in the link.',
+    example: 'cmh4x2k9a0001l70g8v5q3z2w',
+  })
+  @ApiNoContentResponse({ description: 'Recorded.' })
+  @ApiErrorResponse({
+    status: 400,
+    codes: [ApiErrorCode.ValidationFailed, ApiErrorCode.InvalidStateTransition],
+    description:
+      '`validation_failed`: not an email. `invalid_state_transition`: the link ' +
+      'is no longer open.',
+    examples: {
+      [ApiErrorCode.ValidationFailed]: {
+        summary: 'Not an email',
+        message: 'email must be an email',
+        path: '/v1/payment-links/cmh4x2k9a0001l70g8v5q3z2w/payer',
+      },
+      [ApiErrorCode.InvalidStateTransition]: {
+        summary: 'The link is no longer open',
+        message:
+          'Payment intent cmh4x2k9a0001l70g8v5q3z2w is SUCCEEDED: it can no longer be paid',
+        path: '/v1/payment-links/cmh4x2k9a0001l70g8v5q3z2w/payer',
+      },
+    },
+  })
+  @ApiErrorResponse({
+    status: 404,
+    codes: [ApiErrorCode.NotFound],
+    description: 'No payment intent has this id.',
+    examples: {
+      [ApiErrorCode.NotFound]: {
+        summary: 'No payment intent has this id',
+        message: 'Payment intent cmh4x2k9a0001l70g8v5q3z2w not found',
+        path: '/v1/payment-links/cmh4x2k9a0001l70g8v5q3z2w/payer',
+      },
+    },
+  })
+  recordPayer(
+    @Param('id') id: string,
+    @Body() dto: PayerContactDto,
+  ): Promise<void> {
+    return this.paymentLinks.recordPayer(id, dto);
+  }
+
   @Post(':id/events')
   @Public()
   @RateLimit(PAYMENT_LINK_EVENT_RATE_LIMIT)
@@ -488,7 +555,7 @@ export class PaymentLinksController {
     description: 'The payment intent id, as in the link.',
     example: 'cmh4x2k9a0001l70g8v5q3z2w',
   })
-  @ApiOkResponse({ type: CrossChainAssetListEntity })
+  @ApiOkResponse({ type: PaymentDepositAssetsEntity })
   @ApiUpstream('Cross-chain route')
   @ApiErrorResponse({
     status: 400,
@@ -517,7 +584,7 @@ export class PaymentLinksController {
       },
     },
   })
-  depositAssets(@Param('id') id: string): Promise<CrossChainAssetListEntity> {
+  depositAssets(@Param('id') id: string): Promise<PaymentDepositAssetsEntity> {
     return this.deposits.assets(id);
   }
 
@@ -533,11 +600,12 @@ export class PaymentLinksController {
     description:
       'What the payer sends (`origin.amount`, with the fees and a small ' +
       'buffer for price moves in it; the unused part is refunded) for the ' +
-      'merchant to receive exactly the link amount in its asset. A dry quote: ' +
-      'nothing is reserved and nothing is stored. Routes have minimum amounts ' +
-      'of their own, refused as `validation_failed` with the reason. Only for ' +
-      'an open link that can be paid from another network; budgeted per ' +
-      'client address.',
+      'merchant to receive exactly the link amount in its asset (on a link ' +
+      'without one, the `amount` the payer typed). A dry quote: nothing is ' +
+      'reserved and nothing is stored. Routes have minimum amounts of their ' +
+      'own, refused as `provider_error` with the reason, so a checkout shows ' +
+      'it before any deposit address exists. Only for an open link that can be ' +
+      'paid from another network; budgeted per client address.',
   })
   @ApiParam({
     name: 'id',
@@ -562,7 +630,8 @@ export class PaymentLinksController {
     summary:
       'Open a deposit address that pays a payment link from any network (no API key)',
     description:
-      'A live quote: an address on `originChain` made for this payment alone. ' +
+      'A live quote: an address on `originChain` made for this payment alone, ' +
+      'opened only with the payer’s `email` (their receipt goes there). ' +
       'The payer sends `amountIn` of the origin asset there (with `depositMemo` ' +
       'when set) before `expiresAt`; the merchant is paid exactly the link ' +
       'amount, the link turns `SUCCEEDED` and emits `PAYMENT_INTENT_SUCCEEDED`, ' +
@@ -600,7 +669,7 @@ export class PaymentLinksController {
   })
   createDeposit(
     @Param('id') id: string,
-    @Body() dto: PaymentDepositRequestDto,
+    @Body() dto: CreatePaymentDepositDto,
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ): Promise<PaymentDepositEntity> {

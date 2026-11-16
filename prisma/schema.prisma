@@ -84,6 +84,10 @@ model Customer {
   // A friendly display alias the merchant can assign (e.g. "Acme — billing").
   alias     String?
   email     String?
+  // True when `email` is what a payer typed in the hosted checkout to get a
+  // receipt: unverified, never proof of who the customer is. False when the
+  // merchant set it (or there is none).
+  emailProvidedByPayer Boolean @default(false)
   note      String? // free-form merchant note
   reference String? // merchant reference / external id
   // The customer's wallets, on any chain payments settle on (customer_wallet).
@@ -468,6 +472,21 @@ model PaymentIntent {
   // chain, asset, contract, amount } of what the payer sent. `txHash` is then
   // the payout transaction on the intent's own network.
   paidFrom Json?
+  // The merchant's own limits on payments from another network for this link
+  // (`depositLimits`): open deposits per payer and new deposits per window. Null
+  // means the defaults; values are checked against the ceilings in
+  // `payment-intents.constants.ts`.
+  depositMaxPerPayer     Int?
+  depositBudgetPerWindow Int?
+  // The payer's email, as typed in the hosted checkout before paying (unverified),
+  // and the language of their checkout: where and in what language the receipt
+  // goes. The latest one typed on the link; a deposit keeps its own.
+  payerEmail String?
+  payerLang  String?
+  // The receipt: claimed (a lease, so one replica sends it) and then sent. A
+  // settled intent with an email and no `receiptSentAt` is retried by the sweeper.
+  receiptClaimedAt DateTime?
+  receiptSentAt    DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -617,6 +636,13 @@ model PaymentDeposit {
 
   recipient String // the intent's destination, on destinationChain
   refundTo  String // the payer's address, on originChain
+  // The payer's email and checkout language, required to open a deposit: where
+  // the receipt goes when this deposit settles the intent.
+  payerEmail String?
+  payerLang  String?
+  // The merchant fee of the link, as the cross-chain route credits it from this
+  // deposit (an app fee in the origin asset); null without one.
+  merchantFee Json?
   // Who opened it: HMAC of the client address a rate limit is keyed on, never
   // the address. The per-client cap counts it (`PAYMENT_DEPOSIT_MAX_OPEN_PER_CLIENT`).
   clientKey String

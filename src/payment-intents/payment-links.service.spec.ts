@@ -119,6 +119,12 @@ function fullRow(overrides: Partial<PaymentIntent> = {}): PaymentIntent {
     checkoutSentAt: null,
     crossChainFeeBps: null,
     paidFrom: null,
+    depositMaxPerPayer: null,
+    depositBudgetPerWindow: null,
+    payerEmail: 'payer-secret@example.com',
+    payerLang: 'en',
+    receiptClaimedAt: null,
+    receiptSentAt: null,
     createdAt: CREATED,
     updatedAt: new Date('2026-10-24T12:40:00.000Z'),
     ...overrides,
@@ -165,7 +171,6 @@ describe('toPublicPaymentLink', () => {
     // cannot pay them.
     for (const overrides of [
       { network: 'testnet' },
-      { amount: null },
       {
         merchantFee: {
           bps: 100,
@@ -663,5 +668,47 @@ describe('PaymentLinksService.recordEvent', () => {
         code: 'not_found',
       },
     );
+  });
+});
+
+describe('PaymentLinksService.recordPayer', () => {
+  const links = new Sep7LinkBuilder({} as never, {} as never, {} as never);
+  const ID = 'cmh4x2k9a0001l70g8v5q3z2w';
+
+  function make(changed: number, row: unknown = { status: 'SUCCEEDED' }) {
+    const executeRaw = jest.fn().mockResolvedValue(changed);
+    const findUnique = jest.fn().mockResolvedValue(row);
+    const service = new PaymentLinksService(
+      { paymentIntent: { findUnique }, $executeRaw: executeRaw } as never,
+      links,
+      {} as never,
+      {} as never,
+    );
+    return { service, executeRaw };
+  }
+
+  it('records the email (lowercased) and language on an open link, without touching updatedAt', async () => {
+    const { service, executeRaw } = make(1);
+    await service.recordPayer(ID, { email: ' Payer@Example.com ', lang: 'es' });
+    const [strings, email, lang] = executeRaw.mock.calls[0] as [
+      string[],
+      string,
+      string,
+    ];
+    const sql = strings.join('?');
+    expect(sql).toContain('"payerEmail" = ?');
+    expect(sql).toContain(`"status" = 'PENDING'`);
+    expect(sql).not.toContain('updatedAt');
+    expect(email).toBe('payer@example.com');
+    expect(lang).toBe('es');
+  });
+
+  it('refuses a link that is no longer open, and answers an unknown id as not found', async () => {
+    await expect(
+      make(0).service.recordPayer(ID, { email: 'a@b.co' }),
+    ).rejects.toMatchObject({ code: 'invalid_state_transition' });
+    await expect(
+      make(0, null).service.recordPayer(ID, { email: 'a@b.co' }),
+    ).rejects.toMatchObject({ code: 'not_found' });
   });
 });

@@ -5,9 +5,11 @@ import {
   type CrossChainNetworkId,
 } from '@/cross-chain-swaps/cross-chain-swaps.constants';
 import {
+  CrossChainAssetEntity,
   CrossChainFeeEntity,
   CrossChainTransactionEntity,
 } from '@/cross-chain-swaps/entities/cross-chain-swap.entity';
+import { MerchantFeeEntity } from '@/common/merchant-fee/merchant-fee.entity';
 
 /**
  * A deposit address made for one payer of one payment link: what the payer
@@ -128,6 +130,16 @@ export class PaymentDepositEntity {
     description: 'That commission, in the origin asset (inside `amountIn`).',
   })
   feeAmount!: string;
+
+  @ApiProperty({
+    type: MerchantFeeEntity,
+    nullable: true,
+    description:
+      "The link's merchant fee as this deposit pays it: an app fee of the " +
+      'cross-chain route, in the origin asset, credited to the fee account ' +
+      'inside the route; null without one.',
+  })
+  merchantFee!: MerchantFeeEntity | null;
 
   @ApiProperty({
     example: 'TLsV52sRDL79HXGGm9yzwKibb6BeruhUzy',
@@ -382,4 +394,103 @@ export class PaidFromEntity {
       'was refunded to the payer).',
   })
   amount!: string;
+}
+
+/** Whether one origin can pay a link's amount, as a dry quote answered. */
+@ApiSchema({
+  description:
+    "Whether one origin network and asset can pay a payment link's amount " +
+    'right now, from a dry quote: routes have minimums of their own.',
+})
+export class PaymentRouteCheckEntity {
+  @ApiProperty({ enum: CROSS_CHAIN_NETWORK_IDS, example: 'tron' })
+  chain!: string;
+
+  @ApiProperty({ example: 'USDT' })
+  asset!: string;
+
+  @ApiProperty({
+    example: false,
+    description: 'True when the route quoted the amount.',
+  })
+  available!: boolean;
+
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    example:
+      'The cross-chain route refused the request: Temporary swap limits: minimum swap amount is $100',
+    description:
+      'Why not, in the route’s words (it names no provider); null when available.',
+  })
+  reason!: string | null;
+
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    example: '25.284231',
+    description:
+      'What the payer would send from there; null when not available.',
+  })
+  amount!: string | null;
+}
+
+@ApiSchema({
+  description:
+    "How the main origins fare for a payment link's amount: the ones that " +
+    'cannot pay it now, and why.',
+})
+export class PaymentRouteCheckListEntity {
+  @ApiProperty({
+    type: [PaymentRouteCheckEntity],
+    description:
+      'One entry per main origin (USDC and USDT on the networks most payers ' +
+      'hold them on, and Bitcoin) the route answered for; an origin that could ' +
+      'not be asked right now is left out. Empty for a link without a fixed ' +
+      'amount or one that cannot be paid from another network.',
+  })
+  data!: PaymentRouteCheckEntity[];
+}
+
+@ApiSchema({
+  description:
+    'What the payer of a payment link can pay from, and how the main origins ' +
+    "fare for the link's amount.",
+})
+export class PaymentDepositAssetsEntity {
+  @ApiProperty({
+    type: [CrossChainAssetEntity],
+    description: 'Every asset the cross-chain route still trades.',
+  })
+  data!: CrossChainAssetEntity[];
+
+  @ApiProperty({
+    type: [PaymentRouteCheckEntity],
+    description:
+      'The main origins checked against the link’s amount: show one that is ' +
+      'not `available` as unavailable, with its `reason`. Empty for a link ' +
+      'without a fixed amount (the quote tells then).',
+  })
+  routes!: PaymentRouteCheckEntity[];
+}
+
+@ApiSchema({
+  description:
+    'A payment link’s limits on payments from another network, as they apply.',
+})
+export class DepositLimitsEntity {
+  @ApiProperty({
+    example: 2,
+    description: 'Open deposit addresses one payer may have on the link.',
+  })
+  perPayer!: number;
+
+  @ApiProperty({
+    example: 20,
+    description: 'New deposit addresses the link takes per `windowSeconds`.',
+  })
+  perWindow!: number;
+
+  @ApiProperty({ example: 300 })
+  windowSeconds!: number;
 }

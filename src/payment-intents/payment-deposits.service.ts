@@ -13,14 +13,19 @@ import {
   CROSS_CHAIN_NETWORKS,
   depositLink,
 } from '@/cross-chain-swaps/cross-chain-networks';
-import type { CrossChainAssetListEntity } from '@/cross-chain-swaps/entities/cross-chain-swap.entity';
 import type { NearIntentsStatusResponse } from '@/near-intents/near-intents.types';
 import { PrismaService } from '@/prisma/prisma.service';
-import type { PaymentDepositRequestDto } from '@/payment-intents/dto/payment-deposit.dto';
 import type {
+  CreatePaymentDepositDto,
+  PaymentDepositRequestDto,
+} from '@/payment-intents/dto/payment-deposit.dto';
+import { PaymentRouteProbe } from '@/payment-intents/payment-route-probe.service';
+import type {
+  PaymentDepositAssetsEntity,
   PaymentDepositEntity,
   PaymentDepositListEntity,
   PaymentDepositQuoteEntity,
+  PaymentRouteCheckListEntity,
 } from '@/payment-intents/entities/payment-deposit.entity';
 import {
   type PricedPaymentDeposit,
@@ -28,6 +33,8 @@ import {
 } from '@/payment-intents/payment-deposit-pricing.service';
 import {
   crossChainPaymentRefusal,
+  depositLimitsOf,
+  requestedAmountOut,
   paidFromRecord,
   paymentDepositClientKey,
   paymentDepositClientSecret,
@@ -38,8 +45,6 @@ import {
 } from '@/payment-intents/payment-deposit-rules';
 import {
   PAYMENT_DEPOSIT_LOCK_CLASS,
-  PAYMENT_DEPOSIT_MAX_OPEN_PER_CLIENT,
-  PAYMENT_DEPOSIT_LINK_BUDGET,
   PAYMENT_DEPOSIT_LINK_WINDOW_MS,
   PAYMENT_DEPOSIT_OWNER_LIST_MAX,
   PAYMENT_DEPOSIT_RESERVATION_MIN_MS,
@@ -65,8 +70,11 @@ const DEPOSIT_INTENT_SELECT = {
   amount: true,
   asset: true,
   assetIssuer: true,
+  assetDecimals: true,
   merchantFee: true,
   crossChainFeeBps: true,
+  depositMaxPerPayer: true,
+  depositBudgetPerWindow: true,
   expiresAt: true,
 } as const satisfies Prisma.PaymentIntentSelect;
 
@@ -122,12 +130,22 @@ export class PaymentDepositsService {
     private readonly pricing: PaymentDepositPricing,
     private readonly paymentIntents: PaymentIntentsService,
     private readonly accounts: StellarAccountLoader,
+    private readonly probe: PaymentRouteProbe,
   ) {}
 
-  /** What the payer of link `id` can pay from. */
-  async assets(id: string): Promise<CrossChainAssetListEntity> {
-    await this.payableIntent(id, false);
-    return { data: await this.pricing.payableAssets() };
+  /**
+   * What the payer of link `id` can pay from, and, for a link with a fixed
+   * amount, how the main origins fare for that amount (`routes`: a route
+   * below its own minimum is not available, with the reason), so the checkout
+   * can disable them before a payer picks one.
+   */
+  async assets(id: string): Promise<PaymentDepositAssetsEntity> {
+    const intent = await this.payableIntent(id, false);
+    const [data, routes] = await Promise.all([
+      this.pricing.payableAssets(),
+      this.probe.check(intent),
+    ]);
+    return { data, routes };
   }
 
   /** What paying link `id` from one origin asset costs. Stores nothing. */
@@ -181,10 +199,13 @@ export class PaymentDepositsService {
    */
   async create(
     id: string,
-    request: PaymentDepositRequestDto,
+    request: CreatePaymentDepositDto,
     ip: string,
   ): Promise<PaymentDepositEntity> {
     const intent = await this.payableIntent(id, true);
+    // What the merchant is to receive, as stored: the link's own amount, or the
+    // one the payer typed on a link without one. Checked again by the quote.
+    const amountOut = requestedAmountOut(intent, request.amount);
     const refundTo = CROSS_CHAIN_NETWORKS[
       request.originChain
     ].address.normalize(request.refundTo);
@@ -205,6 +226,8 @@ export class PaymentDepositsService {
         // The refund address is part of the quote: another one is another
         // deposit (a payer correcting a typo must not get the old one back).
         refundTo,
+        // On a link without an amount, another amount is another payment.
+        ...(intent.amount === null && amountOut !== null ? { amountOut } : {}),
         expiresAt: {
           gte: new Date(Date.now() + PAYMENT_DEPOSIT_REUSE_MIN_REMAINING_MS),
         },
@@ -213,7 +236,7 @@ export class PaymentDepositsService {
     });
     if (reusable) return this.present(reusable);
 
-    const slot = await this.reserveSlot(intent.id, clientKey);
+    const slot = await this.reserveSlot(intent, clientKey);
     try {
       return await this.open(intent, request, refundTo, clientKey);
     } finally {
@@ -239,9 +262,11 @@ export class PaymentDepositsService {
    * swept first.
    */
   private reserveSlot(
-    intentId: string,
+    intent: DepositIntent,
     clientKey: string,
   ): Promise<{ id: string }> {
+    const intentId = intent.id;
+    const limits = depositLimitsOf(intent);
     const { timeoutMs } = this.config.get('nearIntents', { infer: true });
     const holdMs = Math.max(PAYMENT_DEPOSIT_RESERVATION_MIN_MS, 3 * timeoutMs);
     return this.prisma.$transaction(async (tx) => {
@@ -262,10 +287,10 @@ export class PaymentDepositsService {
         (await tx.paymentDepositReservation.count({
           where: { intentId, clientKey },
         }));
-      if (mine >= PAYMENT_DEPOSIT_MAX_OPEN_PER_CLIENT) {
+      if (mine >= limits.perPayer) {
         throw ApiError.conflict(
           ApiErrorCode.OperationInFlight,
-          `You already have ${PAYMENT_DEPOSIT_MAX_OPEN_PER_CLIENT} open deposit ` +
+          `You already have ${limits.perPayer} open deposit ` +
             'addresses for this payment link: pay one of them, or try again ' +
             'once they expire.',
         );
@@ -283,7 +308,7 @@ export class PaymentDepositsService {
       const opening = await tx.paymentDepositReservation.count({
         where: { intentId },
       });
-      if (recent.length + opening >= PAYMENT_DEPOSIT_LINK_BUDGET) {
+      if (recent.length + opening >= limits.perWindow) {
         // Room returns when the oldest creation leaves the window; with only
         // slots in flight, as soon as one of them settles.
         const freesAt = recent.length
@@ -295,7 +320,7 @@ export class PaymentDepositsService {
         );
         this.logger.warn(
           `Payment intent ${intentId}: deposit creation budget spent ` +
-            `(${PAYMENT_DEPOSIT_LINK_BUDGET} per ${PAYMENT_DEPOSIT_LINK_WINDOW_MS / 1000}s); retry in ${retryAfterSeconds}s`,
+            `(${limits.perWindow} per ${PAYMENT_DEPOSIT_LINK_WINDOW_MS / 1000}s); retry in ${retryAfterSeconds}s`,
         );
         throw new PaymentDepositBudgetError(retryAfterSeconds);
       }
@@ -313,7 +338,7 @@ export class PaymentDepositsService {
   /** The live quote and its row, once the caller holds a slot. */
   private async open(
     intent: DepositIntent,
-    request: PaymentDepositRequestDto,
+    request: CreatePaymentDepositDto,
     refundTo: string,
     clientKey: string,
   ): Promise<PaymentDepositEntity> {
@@ -358,6 +383,14 @@ export class PaymentDepositsService {
           recipient: priced.recipient,
           refundTo,
           clientKey,
+          payerEmail: request.email.trim().toLowerCase(),
+          payerLang: request.lang ?? 'en',
+          ...(priced.merchantFee
+            ? {
+                merchantFee:
+                  priced.merchantFee as unknown as Prisma.InputJsonValue,
+              }
+            : {}),
           depositAddress: quote.depositAddress,
           depositMemo,
           depositUri: depositLink({
@@ -405,6 +438,19 @@ export class PaymentDepositsService {
       throw ApiError.notFound(`Deposit ${depositId} not found`);
     }
     return this.present(deposit);
+  }
+
+  /** How the main origins fare for the amount of the caller's own intent `id`. */
+  async routeCheck(
+    consumer: GatewayConsumer,
+    id: string,
+  ): Promise<PaymentRouteCheckListEntity> {
+    await this.paymentIntents.assertOwned(consumer, id);
+    const intent = await this.prisma.paymentIntent.findUniqueOrThrow({
+      where: { id },
+      select: DEPOSIT_INTENT_SELECT,
+    });
+    return { data: await this.probe.check(intent) };
   }
 
   /** The deposits of the caller's own intent `id`, newest first. */

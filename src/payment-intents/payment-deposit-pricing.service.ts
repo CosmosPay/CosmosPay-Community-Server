@@ -20,9 +20,17 @@ import type {
   NearIntentsQuoteResponse,
 } from '@/near-intents/near-intents.types';
 import type { PaymentDepositRequestDto } from '@/payment-intents/dto/payment-deposit.dto';
-import { linkAssetRequest } from '@/payment-intents/payment-deposit-rules';
+import {
+  linkAssetRequest,
+  requestedAmountOut,
+} from '@/payment-intents/payment-deposit-rules';
+import {
+  type MerchantFeeRecord,
+  readMerchantFeeRecord,
+} from '@/common/merchant-fee/merchant-fee';
 import {
   type DepositNetwork,
+  isDepositNetwork,
   paymentNetworkName,
 } from '@/payment-intents/payment-networks';
 
@@ -34,6 +42,8 @@ export type PricedIntentFields = Pick<
   | 'amount'
   | 'asset'
   | 'assetIssuer'
+  | 'assetDecimals'
+  | 'merchantFee'
   | 'crossChainFeeBps'
 >;
 
@@ -44,10 +54,19 @@ export interface PricedPaymentDeposit {
   /** What to send (decimal, origin asset): the route's `amountIn`. */
   amountIn: string;
   minAmountIn: string;
-  /** Exactly the intent's amount (decimal, its asset). */
+  /**
+   * What the merchant receives (decimal, the link's asset): the link's amount,
+   * or the payer's on a link without one, less a merchant fee the recipient
+   * pays.
+   */
   amountOut: string;
   feeBps: number;
   feeAmount: string;
+  /**
+   * The link's merchant fee as this deposit pays it: an app fee of the route,
+   * credited to the fee's account in the origin asset. Null without one.
+   */
+  merchantFee: MerchantFeeRecord | null;
   slippageBps: number;
   recipient: string;
   refundTo: string;
@@ -137,13 +156,21 @@ export class PaymentDepositPricing {
 
     let amountOut: bigint;
     try {
-      amountOut = parseUnits(intent.amount ?? '', destination.decimals);
-    } catch {
+      amountOut = parseUnits(
+        requestedAmountOut(intent, request.amount),
+        destination.decimals,
+      );
+    } catch (err) {
+      if (err instanceof ApiError) throw err;
       throw ApiError.badRequest(
         ApiErrorCode.InvalidAmount,
         `This payment link's amount has more decimal places than ${destination.symbol} allows`,
       );
     }
+    // A merchant fee on a network paid through deposits rides as the route's
+    // own app fee (`merchantAppFee`): the recipient receives the rest.
+    const merchant = this.merchantAppFee(intent, amountOut, destination);
+    if (merchant) amountOut = merchant.netOut;
 
     const nearCfg = this.config.get('nearIntents', { infer: true });
     // The rate was the organization's when the link was made; where it is paid
@@ -177,8 +204,17 @@ export class PaymentDepositPricing {
         Date.now() + nearCfg.deadlineSeconds * 1000,
       ).toISOString(),
       referral: NEAR_INTENTS_REFERRAL,
-      ...(feeBps > 0
-        ? { appFees: [{ recipient: nearCfg.feeRecipient, fee: feeBps }] }
+      ...(feeBps > 0 || merchant
+        ? {
+            appFees: [
+              ...(feeBps > 0
+                ? [{ recipient: nearCfg.feeRecipient, fee: feeBps }]
+                : []),
+              ...(merchant
+                ? [{ recipient: merchant.record.wallet, fee: merchant.bps }]
+                : []),
+            ],
+          }
         : {}),
     };
     const response = await this.nearIntents.quote(quoteRequest);
@@ -203,12 +239,52 @@ export class PaymentDepositPricing {
         (amountIn * BigInt(feeBps)) / 10_000n,
         origin.decimals,
       ),
+      merchantFee: merchant
+        ? {
+            ...merchant.record,
+            amount: formatUnits(
+              (amountIn * BigInt(merchant.bps)) / 10_000n,
+              origin.decimals,
+            ),
+            asset: origin.symbol,
+          }
+        : null,
       slippageBps,
       recipient,
       refundTo,
       request: quoteRequest,
       response,
     };
+  }
+
+  /**
+   * A merchant fee on a link on a network paid through deposit addresses, as
+   * the route pays it: an app fee (the route's own multi-recipient fee), in
+   * whole basis points of the deposit, credited to the fee's account inside the
+   * route rather than sent on the link's network. Its basis points are the fee's
+   * share of everything that is paid out (`fee / (net + fee)`), rounded down so
+   * the payer is never charged above the link's terms; under one basis point it
+   * cannot be paid and is refused. Null on a link without a fee, and on
+   * Stellar, Solana and Monad, whose fees are paid on the chain itself.
+   */
+  private merchantAppFee(
+    intent: PricedIntentFields,
+    amountOut: bigint,
+    destination: CrossChainAsset,
+  ): { bps: number; netOut: bigint; record: MerchantFeeRecord } | null {
+    if (!isDepositNetwork(intent.chain)) return null;
+    const record = readMerchantFeeRecord(intent.merchantFee);
+    if (!record) return null;
+    const fee = parseUnits(record.amount, destination.decimals);
+    const netOut = record.paidBy === 'recipient' ? amountOut - fee : amountOut;
+    const bps = Number((fee * 10_000n) / (netOut + fee));
+    if (netOut <= 0n || bps === 0) {
+      throw ApiError.badRequest(
+        ApiErrorCode.InvalidAmount,
+        'The merchant fee is under one basis point of the payment, the least the cross-chain route can pay',
+      );
+    }
+    return { bps, netOut, record };
   }
 
   /**

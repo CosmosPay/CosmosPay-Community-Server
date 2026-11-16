@@ -171,35 +171,83 @@ describe('PaymentIntentsService: links on networks paid through deposits', () =>
     expect(prisma.paymentIntent.create).not.toHaveBeenCalled();
   });
 
-  it('refuses an open amount, a merchant fee and a SEP-7 callback', async () => {
+  it('takes a link without an amount: the payer types it in the checkout', async () => {
+    const { service, prisma } = build();
+    const view = await service.createPay(prodConsumer, {
+      chain: 'base',
+      destination: EVM_DEST,
+      assetCode: 'USDC',
+      memo: '50',
+    });
+    expect(prisma.paymentIntent.create.mock.calls[0][0].data).toMatchObject({
+      chain: 'base',
+      amount: null,
+      crossChainFeeBps: 50,
+    });
+    expect(view.uri).toBe('https://payments.cosmospay.lat/pi_new');
+  });
+
+  it('takes a merchant fee paid to an account of the cross-chain route', async () => {
+    const { service, prisma } = build();
+    await service.createPay(prodConsumer, {
+      chain: 'base',
+      destination: EVM_DEST,
+      amount: '100',
+      assetCode: 'USDC',
+      memo: '51',
+      merchantFee: {
+        bps: 150,
+        // An EVM address is an account of the route too, stored lowercase.
+        wallet: '0xAb5801a7D398351b8bE11C439e05C5B3259aeC9B',
+        paidBy: 'payer',
+      } as never,
+    });
+    expect(
+      prisma.paymentIntent.create.mock.calls[0][0].data.merchantFee,
+    ).toEqual({
+      bps: 150,
+      fixed: '0',
+      amount: '1.5',
+      asset: 'USDC',
+      wallet: '0xab5801a7d398351b8be11c439e05c5b3259aec9b',
+      paidBy: 'payer',
+    });
+  });
+
+  it('refuses a fee to an address the route cannot credit, a fee with no amount, and a callback', async () => {
     const { service } = build();
     const base = { chain: 'base' as const, destination: EVM_DEST };
+    const refused = async (dto: Record<string, unknown>) =>
+      (await refusal(service.createPay(prodConsumer, { ...base, ...dto })))
+        .code;
 
     expect(
-      (await refusal(service.createPay(prodConsumer, { ...base }))).code,
+      await refused({
+        amount: '1',
+        merchantFee: { bps: 100, wallet: 'TLsV52sRDL79HXGGm9yzwKibb6BeruhUzy' },
+      }),
     ).toBe(ApiErrorCode.ValidationFailed);
     expect(
-      (
-        await refusal(
-          service.createPay(prodConsumer, {
-            ...base,
-            amount: '1',
-            merchantFee: { bps: 100, wallet: EVM_DEST },
-          }),
-        )
-      ).code,
-    ).toBe(ApiErrorCode.MerchantFeeUnsupported);
-    expect(
-      (
-        await refusal(
-          service.createPay(prodConsumer, {
-            ...base,
-            amount: '1',
-            callback: 'url:https://x.example',
-          }),
-        )
-      ).code,
+      await refused({ merchantFee: { bps: 100, wallet: 'merchant.near' } }),
     ).toBe(ApiErrorCode.ValidationFailed);
+    expect(
+      await refused({ amount: '1', callback: 'url:https://x.example' }),
+    ).toBe(ApiErrorCode.ValidationFailed);
+  });
+
+  it("stores the merchant's own limits on payments from other networks", async () => {
+    const { service, prisma } = build();
+    await service.createPay(prodConsumer, {
+      chain: 'base',
+      destination: EVM_DEST,
+      amount: '25',
+      memo: '52',
+      depositLimits: { perPayer: 4, perWindow: 60 },
+    });
+    expect(prisma.paymentIntent.create.mock.calls[0][0].data).toMatchObject({
+      depositMaxPerPayer: 4,
+      depositBudgetPerWindow: 60,
+    });
   });
 
   it('refuses more decimals than the asset has', async () => {
@@ -276,7 +324,7 @@ describe('PaymentIntentsService: links on networks paid through deposits', () =>
     });
   });
 
-  it('records none on an open-amount Stellar link, and still creates it', async () => {
+  it('records one on an open-amount Stellar link too: the payer types the amount', async () => {
     const { service, prisma } = build();
     await service.createPay(prodConsumer, {
       destination: 'GCALNQQBXAPZ2WIRSDDBMSTAKCUH5SG6U76YBFLQLIXJTF7FE5AX7AOO',
@@ -284,7 +332,8 @@ describe('PaymentIntentsService: links on networks paid through deposits', () =>
     });
     expect(prisma.paymentIntent.create.mock.calls[0][0].data).toMatchObject({
       chain: 'stellar',
-      crossChainFeeBps: null,
+      amount: null,
+      crossChainFeeBps: 50,
     });
   });
 

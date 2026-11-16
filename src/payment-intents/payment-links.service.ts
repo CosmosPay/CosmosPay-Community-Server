@@ -27,6 +27,7 @@ import {
 import { PAY_TO } from '@/payment-intents/pay-to';
 import { Sep7LinkBuilder } from '@/payment-intents/sep7-link-builder.service';
 import type { CheckoutEvent } from '@/payment-intents/payment-intents.constants';
+import type { PayerContactDto } from '@/payment-intents/dto/payment-deposit.dto';
 
 /**
  * The columns the public read loads: what a payer is shown, plus `destination`
@@ -213,6 +214,32 @@ export class PaymentLinksService {
       select: { id: true },
     });
     if (!exists) throw ApiError.notFound(`Payment intent ${id} not found`);
+  }
+
+  /**
+   * The payer's email and checkout language, recorded on an open link before
+   * the checkout shows how to pay: the receipt goes there when the payment
+   * succeeds (`PaymentReceiptsService`). Raw SQL so `updatedAt` keeps meaning a
+   * change of the intent itself. Unverified by nature: whoever holds the link
+   * can type any address, and the customer it makes says so.
+   */
+  async recordPayer(id: string, contact: PayerContactDto): Promise<void> {
+    const email = contact.email.trim().toLowerCase();
+    const lang = contact.lang ?? 'en';
+    const changed = await this.prisma.$executeRaw`
+      UPDATE "payment_intent"
+         SET "payerEmail" = ${email}, "payerLang" = ${lang}
+       WHERE "id" = ${id} AND "status" = 'PENDING'`;
+    if (changed > 0) return;
+    const row = await this.prisma.paymentIntent.findUnique({
+      where: { id },
+      select: { status: true },
+    });
+    if (!row) throw ApiError.notFound(`Payment intent ${id} not found`);
+    throw ApiError.badRequest(
+      ApiErrorCode.InvalidStateTransition,
+      `Payment intent ${id} is ${row.status}: it can no longer be paid`,
+    );
   }
 
   /**

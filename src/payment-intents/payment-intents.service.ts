@@ -34,7 +34,12 @@ import { decimalPlaces, parseUnits } from '@/chains/units';
 import { CROSS_CHAIN_NETWORKS } from '@/cross-chain-swaps/cross-chain-networks';
 import type { PaidFromEntity } from '@/payment-intents/entities/payment-deposit.entity';
 import { PaymentDepositPricing } from '@/payment-intents/payment-deposit-pricing.service';
-import { readPaidFrom } from '@/payment-intents/payment-deposit-rules';
+import {
+  type DepositLimits,
+  depositLimitsOf,
+  readPaidFrom,
+} from '@/payment-intents/payment-deposit-rules';
+import type { DepositLimitsDto } from '@/payment-intents/dto/deposit-limits.dto';
 import {
   type DepositNetwork,
   isDepositNetwork,
@@ -151,6 +156,10 @@ export const PAYMENT_INTENT_PUBLIC_SELECT = {
   checkoutTheme: true,
   merchantFee: true,
   paidFrom: true,
+  depositMaxPerPayer: true,
+  depositBudgetPerWindow: true,
+  payerEmail: true,
+  receiptSentAt: true,
   expiresAt: true,
   checkoutSeenAt: true,
   checkoutWalletAt: true,
@@ -172,11 +181,16 @@ type PublicPaymentIntentRow = Prisma.PaymentIntentGetPayload<{
  */
 export type PublicPaymentIntent = Omit<
   PublicPaymentIntentRow,
-  'checkoutTheme' | 'merchantFee' | 'paidFrom'
+  | 'checkoutTheme'
+  | 'merchantFee'
+  | 'paidFrom'
+  | 'depositMaxPerPayer'
+  | 'depositBudgetPerWindow'
 > & {
   checkoutTheme: CheckoutTheme;
   merchantFee: MerchantFeeRecord | null;
   paidFrom: PaidFromEntity | null;
+  depositLimits: DepositLimits;
 };
 
 /** A Stellar intent's merchant fee: the request's terms and the legs they split `amount` into. */
@@ -523,6 +537,7 @@ export class PaymentIntentsService {
         merchantFee: !!merchant,
         recognisedByAmount: false,
       }),
+      ...depositLimitColumns(dto.depositLimits),
     });
     if (!intent) {
       return this.replayOf(
@@ -648,6 +663,7 @@ export class PaymentIntentsService {
         // same amount would also land: it would settle the wrong link.
         recognisedByAmount: chain === 'monad' && !link.chainReference,
       }),
+      ...depositLimitColumns(dto.depositLimits),
       assetDecimals: link.assetDecimals,
       chainReference: link.chainReference,
       chainCursor: link.chainCursor,
@@ -724,18 +740,10 @@ export class PaymentIntentsService {
         `callback is a SEP-7 field and is not supported on ${chain}.`,
       );
     }
-    if (dto.merchantFee) {
-      throw ApiError.badRequest(
-        ApiErrorCode.MerchantFeeUnsupported,
-        `A payment link on ${name} is paid through a deposit address made for ` +
-          'each payment, which pays one recipient: a merchant fee is not ' +
-          'supported there.',
-      );
-    }
-    if (dto.amount === undefined) {
+    if (dto.merchantFee && dto.amount === undefined) {
       throw ApiError.badRequest(
         ApiErrorCode.ValidationFailed,
-        `amount is required on ${chain}: a payment there is quoted for exactly the link's amount.`,
+        'A merchant fee needs an amount: an open-amount link has nothing to take it from',
       );
     }
     const network = this.resolveNetwork(consumer);
@@ -757,18 +765,23 @@ export class PaymentIntentsService {
       dto.assetCode,
       dto.assetIssuer,
     );
-    if (decimalPlaces(dto.amount) > asset.decimals) {
-      throw ApiError.badRequest(
-        ApiErrorCode.InvalidAmount,
-        `amount has more decimal places than ${asset.symbol} on ${chain} allows (${asset.decimals})`,
-      );
+    // No amount: the payer types it in the checkout, and each deposit is
+    // quoted for exactly what they typed.
+    if (dto.amount !== undefined) {
+      if (decimalPlaces(dto.amount) > asset.decimals) {
+        throw ApiError.badRequest(
+          ApiErrorCode.InvalidAmount,
+          `amount has more decimal places than ${asset.symbol} on ${chain} allows (${asset.decimals})`,
+        );
+      }
+      if (parseUnits(dto.amount, asset.decimals) <= 0n) {
+        throw ApiError.badRequest(
+          ApiErrorCode.InvalidAmount,
+          'amount must be greater than zero',
+        );
+      }
     }
-    if (parseUnits(dto.amount, asset.decimals) <= 0n) {
-      throw ApiError.badRequest(
-        ApiErrorCode.InvalidAmount,
-        'amount must be greater than zero',
-      );
-    }
+    const merchant = this.routeMerchantFee(dto, asset, chain);
 
     const localConsumer = await this.resolveConsumer(consumer);
     const memo = resolveOrMintMemoId(dto.memo);
@@ -778,7 +791,7 @@ export class PaymentIntentsService {
       network,
       source: null,
       destination: paymentAddressRule(chain).normalize(dto.destination),
-      amount: dto.amount,
+      amount: dto.amount ?? null,
       // `native` for the network's coin, as on every other chain.
       asset: asset.contract === null ? 'native' : asset.symbol,
       assetIssuer: asset.contract,
@@ -787,7 +800,7 @@ export class PaymentIntentsService {
     };
 
     const existing = await this.findByMemo(localConsumer.id, memo);
-    if (existing) return this.replayOf(existing, terms, null);
+    if (existing) return this.replayOf(existing, terms, merchant?.terms);
 
     let intent = await this.persist({
       ...terms,
@@ -800,12 +813,14 @@ export class PaymentIntentsService {
       checkoutTheme: dto.checkoutTheme ?? null,
       assetDecimals: asset.decimals,
       crossChainFeeBps,
+      ...merchantFeeColumn(merchant?.record),
+      ...depositLimitColumns(dto.depositLimits),
     });
     if (!intent) {
       return this.replayOf(
         await this.findByMemo(localConsumer.id, memo),
         terms,
-        null,
+        merchant?.terms,
       );
     }
     intent = await this.prisma.paymentIntent.update({
@@ -815,11 +830,58 @@ export class PaymentIntentsService {
 
     this.logger.log(
       `Created PAY payment intent ${intent.id} on ${chain} (deposits): ` +
-        `${dto.amount} ${terms.asset} → ${terms.destination} ` +
+        `${dto.amount ?? '(open)'} ${terms.asset} → ${terms.destination} ` +
         `(consumer=${consumer.username}, network=${network}, memo=${memo})`,
     );
     await this.emit(consumer.username, 'PAYMENT_INTENT_CREATED', intent);
     return this.withQr(intent);
+  }
+
+  /**
+   * A merchant fee on a link paid through deposit addresses: paid by the
+   * cross-chain route as an app fee (its own multi-recipient fee support),
+   * credited to `merchantFee.wallet`, an account inside the route (a NEAR
+   * account id, named or implicit, or an EVM address), not an address on the
+   * link's network: the route pays one on-chain recipient, the merchant. The
+   * terms are checked here in the link's asset (`fixed`, the share of `amount`);
+   * each deposit pays them as whole basis points of what it sends
+   * (`PaymentDepositPricing`). Null when the request names none.
+   */
+  private routeMerchantFee(
+    dto: CreatePayPaymentIntentDto,
+    asset: { decimals: number; symbol: string; contract: string | null },
+    chain: DepositNetwork,
+  ): { terms: MerchantFeeTerms; record: MerchantFeeRecord } | null {
+    if (!dto.merchantFee || dto.amount === undefined) return null;
+    const terms = resolveMerchantFee(
+      dto.merchantFee,
+      asset.decimals,
+      ROUTE_FEE_ACCOUNT_RULE,
+    );
+    if (!terms) return null;
+    if (
+      terms.wallet.toLowerCase() ===
+      paymentAddressRule(chain).normalize(dto.destination).toLowerCase()
+    ) {
+      throw ApiError.badRequest(
+        ApiErrorCode.ValidationFailed,
+        "merchantFee.wallet must be another account than the payment's own",
+      );
+    }
+    const split = splitMerchantFee(
+      parseUnits(dto.amount, asset.decimals),
+      terms,
+    );
+    assertMerchantFeeCovered(split, terms);
+    return {
+      terms,
+      record: merchantFeeRecord(
+        terms,
+        split.fee,
+        asset.decimals,
+        asset.contract === null ? 'native' : asset.symbol,
+      ),
+    };
   }
 
   /**
@@ -841,7 +903,6 @@ export class PaymentIntentsService {
   ): number | null {
     if (
       link.network !== 'public' ||
-      link.amount === undefined ||
       link.merchantFee ||
       link.recognisedByAmount
     ) {
@@ -1661,11 +1722,16 @@ export class PaymentIntentsService {
 function toPublicPaymentIntent(
   row: PublicPaymentIntentRow,
 ): PublicPaymentIntent {
+  const { depositMaxPerPayer, depositBudgetPerWindow, ...rest } = row;
   return {
-    ...row,
+    ...rest,
     checkoutTheme: effectiveCheckoutTheme(row.checkoutTheme),
     merchantFee: readMerchantFeeRecord(row.merchantFee),
     paidFrom: readPaidFrom(row.paidFrom),
+    depositLimits: depositLimitsOf({
+      depositMaxPerPayer,
+      depositBudgetPerWindow,
+    }),
   };
 }
 
@@ -1679,7 +1745,12 @@ function merchantFeeColumn(record: MerchantFeeRecord | undefined): {
 }
 
 /** The columns a PATCH writes that are the merchant's, not the payment's. */
-type MerchantFields = { reference?: string; checkoutTheme?: CheckoutTheme };
+type MerchantFields = {
+  reference?: string;
+  checkoutTheme?: CheckoutTheme;
+  depositMaxPerPayer?: number;
+  depositBudgetPerWindow?: number;
+};
 
 /**
  * The merchant's own fields a PATCH sent — its `reference` and the checkout
@@ -1692,8 +1763,29 @@ function merchantFieldsOf(dto: UpdatePaymentIntentDto): MerchantFields | null {
     ...(dto.checkoutTheme !== undefined
       ? { checkoutTheme: dto.checkoutTheme }
       : {}),
+    ...depositLimitColumns(dto.depositLimits),
   };
   return Object.keys(fields).length > 0 ? fields : null;
+}
+
+/**
+ * The columns a request's `depositLimits` writes: only the limits it names, so
+ * a `PATCH` naming one keeps the other. The DTO already held each between the
+ * default and its ceiling.
+ */
+function depositLimitColumns(limits: DepositLimitsDto | undefined): {
+  depositMaxPerPayer?: number;
+  depositBudgetPerWindow?: number;
+} {
+  if (!limits) return {};
+  return {
+    ...(limits.perPayer !== undefined
+      ? { depositMaxPerPayer: limits.perPayer }
+      : {}),
+    ...(limits.perWindow !== undefined
+      ? { depositBudgetPerWindow: limits.perWindow }
+      : {}),
+  };
 }
 
 /**
@@ -1824,3 +1916,24 @@ function txHashConflict(err: unknown): ApiError | null {
       'intents. A transaction settles at most one of them.',
   );
 }
+
+/** An EVM address, which the cross-chain route also takes as an account id. */
+const EVM_ACCOUNT_RE = /^0x[0-9a-fA-F]{40}$/;
+
+/**
+ * What a merchant fee's wallet must be on a link paid through deposit
+ * addresses: an account inside the cross-chain route, where its app fees are
+ * credited. A NEAR account id (named, or 64-hex implicit), or an EVM address,
+ * which the route takes as an account of that key (stored lowercase, the
+ * route's spelling).
+ */
+const ROUTE_FEE_ACCOUNT_RULE = {
+  isValid: (wallet: string) =>
+    CROSS_CHAIN_NETWORKS.near.address.isValid(
+      EVM_ACCOUNT_RE.test(wallet) ? wallet.toLowerCase() : wallet,
+    ),
+  normalize: (wallet: string) =>
+    EVM_ACCOUNT_RE.test(wallet) ? wallet.toLowerCase() : wallet,
+  expected:
+    'an account of the cross-chain route: a NEAR account id (e.g. merchant.near, or 64-hex implicit) or an EVM address (0x + 40 hex)',
+};
