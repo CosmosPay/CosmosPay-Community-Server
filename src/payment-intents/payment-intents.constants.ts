@@ -335,15 +335,20 @@ export const PAYMENT_DEPOSIT_READ_RATE_LIMIT = {
 export const PAYMENT_DEPOSIT_MAX_OPEN_PER_CLIENT = 2;
 
 /**
- * The most deposit addresses one payment link may have open at once, from all
- * clients together: the bound on how many upstream deposit addresses (and rows
- * the observer polls) one link can cost, which the per-client cap alone did not
- * give to a caller rotating addresses. High enough that honest payers sharing
- * a link (a checkout at an event, several devices) never meet it; reaching it
- * takes ten distinct IPv4 addresses or IPv6 /48s, each held for the deposit's
- * lifetime.
+ * How many NEW deposit addresses one payment link takes per
+ * {@link PAYMENT_DEPOSIT_LINK_WINDOW_MS}, from all clients together: a creation
+ * budget that refills, never a count of open deposits. It bounds what one link
+ * can cost upstream (deposit addresses, rows the observer polls) when a caller
+ * rotates addresses past the per-client cap. Past it a create is `429` with
+ * `Retry-After` until the oldest creation leaves the window, so spending it
+ * delays payers for minutes at most and locks nobody out: a hard cap on open
+ * deposits did, for as long as they lived. Twenty in five minutes is far
+ * beyond honest payers sharing a link.
  */
-export const PAYMENT_DEPOSIT_MAX_OPEN_PER_LINK = 20;
+export const PAYMENT_DEPOSIT_LINK_BUDGET = 20;
+
+/** The sliding window {@link PAYMENT_DEPOSIT_LINK_BUDGET} counts in. */
+export const PAYMENT_DEPOSIT_LINK_WINDOW_MS = 5 * 60 * 1000;
 
 /**
  * How many leading hextets of an IPv6 address make one deposit client: three,

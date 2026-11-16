@@ -1894,10 +1894,11 @@ paths:
         the link amount, the link turns `SUCCEEDED` and emits
         `PAYMENT_INTENT_SUCCEEDED`, and a deposit that cannot complete is
         refunded to `refundTo`. The same origin asset and refund address while
-        an earlier deposit still waits answers that one; otherwise each client
-        address (an IPv6 caller by its /48) may have two open deposits per link,
-        and a link twenty in all (`operation_in_flight`), so no caller can take
-        another payer’s. Budgeted per client address."
+        an earlier deposit still waits from the same client answers that one.
+        Each client address (an IPv6 caller by its /48) may have two open
+        deposits per link (`409 operation_in_flight`), so no caller can take
+        another payer’s, and a link takes a limited number of new ones every few
+        minutes (`429` with `Retry-After`). Budgeted per client address too."
       operationId: PaymentLinksController_createDeposit_v1
       parameters:
         - name: id
@@ -2033,8 +2034,8 @@ paths:
                     timestamp: 2026-09-01T12:00:00.000Z
         "409":
           description: "This client address already has two open deposit addresses on the
-            link (other payers are not affected), or the link has twenty open in
-            all: pay one of them, or try again once they expire."
+            link: pay one of them, or try again once they expire. Other payers
+            are not affected."
           content:
             application/json:
               schema:

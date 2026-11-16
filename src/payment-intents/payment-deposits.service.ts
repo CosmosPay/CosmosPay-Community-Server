@@ -39,7 +39,8 @@ import {
 import {
   PAYMENT_DEPOSIT_LOCK_CLASS,
   PAYMENT_DEPOSIT_MAX_OPEN_PER_CLIENT,
-  PAYMENT_DEPOSIT_MAX_OPEN_PER_LINK,
+  PAYMENT_DEPOSIT_LINK_BUDGET,
+  PAYMENT_DEPOSIT_LINK_WINDOW_MS,
   PAYMENT_DEPOSIT_OWNER_LIST_MAX,
   PAYMENT_DEPOSIT_RESERVATION_MIN_MS,
   PAYMENT_DEPOSIT_REUSE_MIN_REMAINING_MS,
@@ -74,19 +75,36 @@ type DepositIntent = Prisma.PaymentIntentGetPayload<{
 }>;
 
 /**
+ * A create refused because the link's deposit creation budget is spent: `429
+ * rate_limited`, the answer every budget here gives, with the seconds until
+ * there is room again for the route to put in `Retry-After`. The message says
+ * when to retry and nothing about the link.
+ */
+export class PaymentDepositBudgetError extends ApiError {
+  constructor(readonly retryAfterSeconds: number) {
+    super(
+      429,
+      ApiErrorCode.RateLimited,
+      `Too many requests. Retry in ${retryAfterSeconds}s.`,
+    );
+  }
+}
+
+/**
  * Payments from any network: deposit addresses the cross-chain route makes for
  * one payer of one payment link, and what happens to them.
  *
  * Every route here is keyless (`@Public()`, `/v1/payment-links/{id}/...`): the
  * link's id is the capability, as for its read. What it unlocks is bounded: a
  * quote moves nothing, a deposit address pays only the link's own destination
- * exactly its amount, refunds only the address the payer names, and each client
- * address has a few open at most. Nothing here
+ * exactly its amount, and refunds only the address the payer names. Nothing here
  * signs or spends: the payer's wallet sends, the route pays. Open deposits are
- * capped per client address first ({@link PAYMENT_DEPOSIT_MAX_OPEN_PER_CLIENT}),
- * so nobody holding a link can take another payer's slots, and per link
- * ({@link PAYMENT_DEPOSIT_MAX_OPEN_PER_LINK}, far higher), so rotating
- * addresses cannot open unbounded upstream deposit addresses on one link.
+ * capped per client address ({@link PAYMENT_DEPOSIT_MAX_OPEN_PER_CLIENT}), so
+ * nobody holding a link can take another payer's slots; new ones per link are
+ * a refilling budget ({@link PAYMENT_DEPOSIT_LINK_BUDGET} per
+ * {@link PAYMENT_DEPOSIT_LINK_WINDOW_MS}, `429` past it), so rotating addresses
+ * cannot open unbounded upstream deposit addresses on one link, and spending it
+ * locks nobody out for longer than the window.
  *
  * Settlement is the route's report, mirrored by `PaymentDepositObserverService`
  * through {@link applyProviderStatus}: a deposit the route reports SUCCEEDED
@@ -149,16 +167,17 @@ export class PaymentDepositsService {
   /**
    * A deposit address for one payer of link `id`, from a live quote.
    *
-   * A request for the same origin asset and refund address while an earlier
-   * one still waits with time left answers that one, whoever asks, so a
-   * reloaded checkout (or a payer whose address changed) shows the same
-   * address. Otherwise the caller needs a free slot: at most
-   * {@link PAYMENT_DEPOSIT_MAX_OPEN_PER_CLIENT} open deposits of its own and
-   * {@link PAYMENT_DEPOSIT_MAX_OPEN_PER_LINK} of all clients on the link,
-   * counted with the slots being opened. The slot is taken under the link's
-   * lock BEFORE the quote and released after, so concurrent requests cannot all
-   * pass the counts and then insert, and the slow quote never holds the lock or
-   * a database connection. `ip` is the caller's address (`clientIp(req)`).
+   * The same client asking again for the same origin asset and refund address
+   * (the amount is the link's) while its earlier deposit still waits with time
+   * left gets that deposit back, so a reloaded checkout shows the same address.
+   * Otherwise the caller needs a free slot: at most
+   * {@link PAYMENT_DEPOSIT_MAX_OPEN_PER_CLIENT} open deposits of its own
+   * (`409`), and room in the link's creation budget (`429`,
+   * {@link PaymentDepositBudgetError}). An unpaid deposit past its deadline
+   * counts for neither. The slot is taken under the link's lock BEFORE the
+   * quote and released after, so concurrent requests cannot all pass the
+   * checks and then insert, and the slow quote never holds the lock or a
+   * database connection. `ip` is the caller's address (`clientIp(req)`).
    */
   async create(
     id: string,
@@ -173,11 +192,18 @@ export class PaymentDepositsService {
       request.originChain,
       request.originAsset,
     );
+    const clientKey = paymentDepositClientKey(
+      this.clientKeySecret(),
+      paymentDepositClientSubject(ip),
+    );
     const reusable = await this.prisma.paymentDeposit.findFirst({
       where: {
         intentId: intent.id,
+        clientKey,
         status: 'AWAITING_DEPOSIT',
         originAssetId: origin.assetId,
+        // The refund address is part of the quote: another one is another
+        // deposit (a payer correcting a typo must not get the old one back).
         refundTo,
         expiresAt: {
           gte: new Date(Date.now() + PAYMENT_DEPOSIT_REUSE_MIN_REMAINING_MS),
@@ -187,10 +213,6 @@ export class PaymentDepositsService {
     });
     if (reusable) return this.present(reusable);
 
-    const clientKey = paymentDepositClientKey(
-      this.clientKeySecret(),
-      paymentDepositClientSubject(ip),
-    );
     const slot = await this.reserveSlot(intent.id, clientKey);
     try {
       return await this.open(intent, request, refundTo, clientKey);
@@ -208,11 +230,13 @@ export class PaymentDepositsService {
   }
 
   /**
-   * Takes a slot on link `intentId` for the caller, or answers 409 when the
-   * caller has none left or the link is full. Under a transaction-scoped
-   * advisory lock on the link, so both counts and the reservation are one step
-   * for every replica: two requests that both saw a free slot cannot both take
-   * it. Slots whose process died (past `expiresAt`) are swept first.
+   * Takes a slot on link `intentId` for the caller, or refuses: `409` when the
+   * caller has its open deposits on the link already, `429` with `Retry-After`
+   * when the link's creation budget for the window is spent. Under a
+   * transaction-scoped advisory lock on the link, so both checks and the
+   * reservation are one step for every replica: two requests that both saw
+   * room cannot both take it. Slots whose process died (past `expiresAt`) are
+   * swept first.
    */
   private reserveSlot(
     intentId: string,
@@ -246,18 +270,34 @@ export class PaymentDepositsService {
             'once they expire.',
         );
       }
-      const all =
-        (await tx.paymentDeposit.count({ where: openDeposit })) +
-        (await tx.paymentDepositReservation.count({ where: { intentId } }));
-      if (all >= PAYMENT_DEPOSIT_MAX_OPEN_PER_LINK) {
+      // The link's creation budget: deposits created in the window, plus the
+      // slots being opened right now (they become deposits in a moment).
+      const windowStart = new Date(
+        now.getTime() - PAYMENT_DEPOSIT_LINK_WINDOW_MS,
+      );
+      const recent = await tx.paymentDeposit.findMany({
+        where: { intentId, createdAt: { gte: windowStart } },
+        select: { createdAt: true },
+        orderBy: { createdAt: 'asc' },
+      });
+      const opening = await tx.paymentDepositReservation.count({
+        where: { intentId },
+      });
+      if (recent.length + opening >= PAYMENT_DEPOSIT_LINK_BUDGET) {
+        // Room returns when the oldest creation leaves the window; with only
+        // slots in flight, as soon as one of them settles.
+        const freesAt = recent.length
+          ? recent[0].createdAt.getTime() + PAYMENT_DEPOSIT_LINK_WINDOW_MS
+          : now.getTime() + 1000;
+        const retryAfterSeconds = Math.max(
+          1,
+          Math.ceil((freesAt - now.getTime()) / 1000),
+        );
         this.logger.warn(
-          `Payment intent ${intentId} is at its ${PAYMENT_DEPOSIT_MAX_OPEN_PER_LINK} open deposit addresses`,
+          `Payment intent ${intentId}: deposit creation budget spent ` +
+            `(${PAYMENT_DEPOSIT_LINK_BUDGET} per ${PAYMENT_DEPOSIT_LINK_WINDOW_MS / 1000}s); retry in ${retryAfterSeconds}s`,
         );
-        throw ApiError.conflict(
-          ApiErrorCode.OperationInFlight,
-          'This payment link has as many open deposit addresses as it can ' +
-            'take right now: try again once some expire.',
-        );
+        throw new PaymentDepositBudgetError(retryAfterSeconds);
       }
       return tx.paymentDepositReservation.create({
         data: {

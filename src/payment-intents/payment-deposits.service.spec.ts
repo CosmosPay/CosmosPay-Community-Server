@@ -1,10 +1,14 @@
 import type { PaymentDeposit } from '@generated/prisma/client';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
-import { PaymentDepositsService } from '@/payment-intents/payment-deposits.service';
+import {
+  PaymentDepositBudgetError,
+  PaymentDepositsService,
+} from '@/payment-intents/payment-deposits.service';
 import {
   PAYMENT_DEPOSIT_LOCK_CLASS,
+  PAYMENT_DEPOSIT_LINK_BUDGET,
+  PAYMENT_DEPOSIT_LINK_WINDOW_MS,
   PAYMENT_DEPOSIT_MAX_OPEN_PER_CLIENT,
-  PAYMENT_DEPOSIT_MAX_OPEN_PER_LINK,
 } from '@/payment-intents/payment-intents.constants';
 
 const MERCHANT = '0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed';
@@ -363,12 +367,24 @@ describe('PaymentDepositsService', () => {
       expect(tables.reservations).toEqual([]);
     });
 
-    it('answers the open deposit again for the same asset and refund address, from any client', async () => {
-      const { service, prisma, pricing } = build(INTENT, [stored()]);
-      const deposit = await service.create('pi_1', REQUEST, CLIENT_B);
-      expect(deposit.id).toBe('dep_1');
-      expect(pricing.price).not.toHaveBeenCalled();
-      expect(prisma.paymentDeposit.create).not.toHaveBeenCalled();
+    it('answers the same client its open deposit again for the same asset and refund address', async () => {
+      const { service, prisma, pricing } = build();
+      const first = await service.create('pi_1', REQUEST, CLIENT_A);
+      const again = await service.create('pi_1', REQUEST, CLIENT_A);
+      expect(again.id).toBe(first.id);
+      expect(pricing.price).toHaveBeenCalledTimes(1);
+      expect(prisma.paymentDeposit.create).toHaveBeenCalledTimes(1);
+
+      // Another refund address is another deposit (the old one refunds elsewhere),
+      // and another client never gets this client's deposit.
+      const corrected = await service.create(
+        'pi_1',
+        { ...REQUEST, refundTo: refundTo(5) },
+        CLIENT_A,
+      );
+      expect(corrected.id).not.toBe(first.id);
+      const theirs = await service.create('pi_1', REQUEST, CLIENT_B);
+      expect(theirs.id).not.toBe(first.id);
     });
 
     it(`keeps a client to ${PAYMENT_DEPOSIT_MAX_OPEN_PER_CLIENT} open deposits on a link, even when its requests race`, async () => {
@@ -438,9 +454,9 @@ describe('PaymentDepositsService', () => {
       );
     });
 
-    it(`opens at most ${PAYMENT_DEPOSIT_MAX_OPEN_PER_LINK} on one link from any number of clients, racing or not`, async () => {
+    it(`opens ${PAYMENT_DEPOSIT_LINK_BUDGET} per window on one link from any number of clients, then 429 until the window moves`, async () => {
       const { service, tables, pricing } = build(INTENT, [], 10);
-      const clients = PAYMENT_DEPOSIT_MAX_OPEN_PER_LINK + 6;
+      const clients = PAYMENT_DEPOSIT_LINK_BUDGET + 6;
 
       const results = await Promise.allSettled(
         Array.from({ length: clients }, (_, i) =>
@@ -453,22 +469,40 @@ describe('PaymentDepositsService', () => {
       );
 
       expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(
-        PAYMENT_DEPOSIT_MAX_OPEN_PER_LINK,
+        PAYMENT_DEPOSIT_LINK_BUDGET,
       );
-      expect(tables.deposits).toHaveLength(PAYMENT_DEPOSIT_MAX_OPEN_PER_LINK);
-      expect(pricing.price).toHaveBeenCalledTimes(
-        PAYMENT_DEPOSIT_MAX_OPEN_PER_LINK,
-      );
+      expect(tables.deposits).toHaveLength(PAYMENT_DEPOSIT_LINK_BUDGET);
+      expect(pricing.price).toHaveBeenCalledTimes(PAYMENT_DEPOSIT_LINK_BUDGET);
       const refused = results.filter(
         (r): r is PromiseRejectedResult => r.status === 'rejected',
       );
       expect(refused).toHaveLength(6);
       for (const r of refused) {
-        expect((r.reason as ApiError).code).toBe(
-          ApiErrorCode.OperationInFlight,
+        const err = r.reason as PaymentDepositBudgetError;
+        expect(err).toBeInstanceOf(PaymentDepositBudgetError);
+        expect(err.getStatus()).toBe(429);
+        expect(err.code).toBe(ApiErrorCode.RateLimited);
+        expect(err.retryAfterSeconds).toBeGreaterThan(0);
+        expect(err.retryAfterSeconds).toBeLessThanOrEqual(
+          PAYMENT_DEPOSIT_LINK_WINDOW_MS / 1000,
         );
-        expect((r.reason as ApiError).message).toMatch(/This payment link has/);
+        // Neutral: when to come back, nothing about the link.
+        expect(err.message).toMatch(/^Too many requests\. Retry in \d+s\.$/);
       }
+
+      // The window moves on: the same deposits are still open (and unpaid),
+      // yet the link takes new ones again.
+      for (const d of tables.deposits) {
+        d.createdAt = new Date(
+          d.createdAt.getTime() - PAYMENT_DEPOSIT_LINK_WINDOW_MS - 1000,
+        );
+      }
+      const later = await service.create(
+        'pi_1',
+        { ...REQUEST, refundTo: refundTo(40) },
+        '192.0.2.200',
+      );
+      expect(later.refundTo).toBe(refundTo(40));
     });
 
     it('counts IPv6 callers in one /48 as one client, and another /48 as another', async () => {

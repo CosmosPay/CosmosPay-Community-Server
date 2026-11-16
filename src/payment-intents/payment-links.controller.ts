@@ -9,6 +9,7 @@ import {
   Param,
   Post,
   Req,
+  Res,
 } from '@nestjs/common';
 import {
   ApiCreatedResponse,
@@ -18,7 +19,8 @@ import {
   ApiParam,
   ApiTags,
 } from '@nestjs/swagger';
-import type { Request } from 'express';
+import type { Request, Response } from 'express';
+import { RATE_LIMIT_HEADER } from '@/common/rate-limit.constants';
 import { clientIp } from '@/common/client-ip';
 import { ApiErrorResponse } from '@/common/decorators/api-error-response.decorator';
 import { ApiUpstream } from '@/common/decorators/api-upstream.decorator';
@@ -50,7 +52,10 @@ import {
   PaymentDepositEntity,
   PaymentDepositQuoteEntity,
 } from '@/payment-intents/entities/payment-deposit.entity';
-import { PaymentDepositsService } from '@/payment-intents/payment-deposits.service';
+import {
+  PaymentDepositBudgetError,
+  PaymentDepositsService,
+} from '@/payment-intents/payment-deposits.service';
 
 /**
  * The refusals a quote and a deposit share: the link cannot be paid from
@@ -563,10 +568,11 @@ export class PaymentLinksController {
       'amount, the link turns `SUCCEEDED` and emits `PAYMENT_INTENT_SUCCEEDED`, ' +
       'and a deposit that cannot complete is refunded to `refundTo`. The same ' +
       'origin asset and refund address while an earlier deposit still waits ' +
-      'answers that one; otherwise each client address (an IPv6 caller by ' +
-      'its /48) may have two open deposits per link, and a link twenty in ' +
-      'all (`operation_in_flight`), so no caller can take another payer’s. ' +
-      'Budgeted per client address.',
+      'from the same client answers that one. Each client address (an IPv6 ' +
+      'caller by its /48) may have two open deposits per link ' +
+      '(`409 operation_in_flight`), so no caller can take another payer’s, ' +
+      'and a link takes a limited number of new ones every few minutes ' +
+      '(`429` with `Retry-After`). Budgeted per client address too.',
   })
   @ApiParam({
     name: 'id',
@@ -581,8 +587,8 @@ export class PaymentLinksController {
     codes: [ApiErrorCode.OperationInFlight],
     description:
       'This client address already has two open deposit addresses on the ' +
-      'link (other payers are not affected), or the link has twenty open in ' +
-      'all: pay one of them, or try again once they expire.',
+      'link: pay one of them, or try again once they expire. Other payers are ' +
+      'not affected.',
     examples: {
       [ApiErrorCode.OperationInFlight]: {
         summary: 'Too many open deposit addresses from this client',
@@ -596,10 +602,19 @@ export class PaymentLinksController {
     @Param('id') id: string,
     @Body() dto: PaymentDepositRequestDto,
     @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
   ): Promise<PaymentDepositEntity> {
     // The caller's address, as the trusted proxy saw it: the per-client cap is
     // keyed on it (an IPv6 caller by its /48).
-    return this.deposits.create(id, dto, clientIp(req));
+    return this.deposits
+      .create(id, dto, clientIp(req))
+      .catch((err: unknown) => {
+        // The link's creation budget answers like any budget: when to come back.
+        if (err instanceof PaymentDepositBudgetError) {
+          res.setHeader(RATE_LIMIT_HEADER.retryAfter, err.retryAfterSeconds);
+        }
+        throw err;
+      });
   }
 
   @Get(':id/deposits/:depositId')
