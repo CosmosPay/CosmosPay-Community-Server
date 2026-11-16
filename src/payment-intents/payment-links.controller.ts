@@ -568,13 +568,14 @@ export class PaymentLinksController {
     status: 400,
     codes: [ApiErrorCode.ValidationFailed],
     description:
-      'The link cannot be paid from another network: a test network, no ' +
-      'fixed amount, or a merchant fee.',
+      'The link cannot be paid from another network: a Stellar, Solana or ' +
+      'Monad link on a test network or with a merchant fee, or one created ' +
+      'without payments from other networks.',
     examples: {
       [ApiErrorCode.ValidationFailed]: {
         summary: 'The link cannot be paid from another network',
         message:
-          'This payment link cannot be paid from another network: it has no fixed amount.',
+          'This payment link cannot be paid from another network: it carries a merchant fee.',
         path: '/v1/payment-links/cmh4x2k9a0001l70g8v5q3z2w/deposit-assets',
       },
     },

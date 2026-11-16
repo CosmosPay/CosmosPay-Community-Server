@@ -44,6 +44,8 @@ import {
   PaymentRouteCheckListEntity,
 } from '@/payment-intents/entities/payment-deposit.entity';
 import { PaymentDepositsService } from '@/payment-intents/payment-deposits.service';
+import { PaymentNetworkListEntity } from '@/payment-intents/entities/payment-network.entity';
+import { PaymentNetworkCatalog } from '@/payment-intents/payment-network-catalog.service';
 import { RateLimit } from '@/common/decorators/rate-limit.decorator';
 import {
   PAYMENT_INTENT_BUILD_RATE_LIMIT,
@@ -96,6 +98,7 @@ export class PaymentIntentsController {
   constructor(
     private readonly paymentIntents: PaymentIntentsService,
     private readonly deposits: PaymentDepositsService,
+    private readonly networks: PaymentNetworkCatalog,
   ) {}
 
   @Post('tx')
@@ -159,8 +162,10 @@ export class PaymentIntentsController {
       "Solana and EIP-681 on Monad, on the key's network (a `prod` key gets " +
       'mainnet, a `dev` key the test networks); on every other network the ' +
       'hosted checkout, where the payer pays a deposit address made for the ' +
-      'payment from any network (mainnet only, `amount` required, no ' +
-      '`merchantFee` or `callback`). A mainnet link with an amount and no ' +
+      'payment from any network (`amount` required, no `merchantFee` or ' +
+      '`callback`; with a `dev` key, only where the sandbox settles, in the ' +
+      "network's test stablecoin: `GET /v1/payment-intents/networks`). A " +
+      'mainnet link with an amount and no ' +
       'merchant fee can also be paid from another network on Stellar, Solana ' +
       'and Monad. `memo` (numeric, generated when omitted) is the idempotency ' +
       'key: the same memo and terms return the stored intent, other terms are ' +
@@ -186,16 +191,17 @@ export class PaymentIntentsController {
       'network does not take (`callback` off Stellar, no `amount` where one is ' +
       'required). `invalid_amount`: more decimals than the asset has, or not ' +
       'above zero. `invalid_memo`: not a numeric MEMO_ID. ' +
-      '`network_unsupported`: a link on a network paid through deposit ' +
-      'addresses needs a `prod` key (mainnet). `asset_unsupported`: the ' +
-      'cross-chain route does not trade that asset on that network. ' +
+      '`network_unsupported`: with a `dev` key, a network paid through ' +
+      'deposit addresses that the sandbox does not settle yet. ' +
+      '`asset_unsupported`: the cross-chain route does not trade that asset ' +
+      "on that network (in the sandbox: not the network's test stablecoin). " +
       '`merchant_fee_unsupported`: a merchant fee on such a network, or on ' +
       'Monad without deposit addresses.',
     examples: {
       [ApiErrorCode.NetworkUnsupported]: {
-        summary: 'A dev key on a network paid through deposit addresses',
+        summary: 'A dev key on a network the sandbox does not settle yet',
         message:
-          'A payment link on Ethereum is paid through a cross-chain payment, which runs on mainnet only: use a prod API key.',
+          'A payment link on Bitcoin is not available in the sandbox: The sandbox does not settle on this network yet: it needs a UTXO deposit and payout path (follow-up).',
         path: '/v1/payment-intents/pay',
       },
       [ApiErrorCode.AssetUnsupported]: {
@@ -248,6 +254,26 @@ export class PaymentIntentsController {
     return this.paymentIntents.findAll(consumer, query);
   }
 
+  @Get('networks')
+  @AllowPublicKey()
+  @RequirePermissions('payments:read')
+  @ApiOperation({
+    summary: 'List the networks a payment link can settle on, for this key',
+    description:
+      'Every payment network, with whether a link can be created there with ' +
+      'this key and why not. A `prod` key reaches every network on mainnet; a ' +
+      '`dev` key reaches Stellar, Solana and Monad on their test networks, and ' +
+      'the networks paid through deposit addresses where the sandbox settles ' +
+      'them, each in its test stablecoin (`asset`). Read before offering a ' +
+      'network in a form.',
+  })
+  @ApiOkResponse({ type: PaymentNetworkListEntity })
+  listNetworks(
+    @CurrentConsumer() consumer: GatewayConsumer,
+  ): PaymentNetworkListEntity {
+    return this.networks.forConsumer(consumer);
+  }
+
   @Get(':id/transitions')
   @RequirePermissions('payments:read')
   @ApiOperation({
@@ -276,7 +302,7 @@ export class PaymentIntentsController {
       'this link through `POST /v1/payment-links/{id}/deposits`, with what was ' +
       'sent from which network, the refund address and how each stands. The ' +
       'one that settled the intent is also named by its `paidFrom`. Only ' +
-      "intents on the key's network; a link on a test network has none.",
+      "intents on the key's network.",
   })
   @ApiOkResponse({ type: PaymentDepositListEntity })
   listDeposits(

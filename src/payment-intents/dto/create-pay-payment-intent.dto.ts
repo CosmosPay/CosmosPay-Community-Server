@@ -52,8 +52,10 @@ export class CreatePayPaymentIntentDto {
       'Network the payment settles on. Omit for Stellar. On Stellar, Solana ' +
       'and Monad the network tier (mainnet or test network) is the one your ' +
       'API key is for. Every other network settles through a cross-chain ' +
-      'payment, which runs on mainnet only: it needs a `prod` key and an ' +
-      '`amount`, and takes no `callback` or `merchantFee`.',
+      'payment: it needs an `amount` and takes no `callback` or ' +
+      '`merchantFee`. With a `dev` key it settles in the sandbox, on the ' +
+      'networks `GET /v1/payment-intents/networks` marks available, in the ' +
+      "network's test stablecoin.",
   })
   @IsOptional()
   @IsIn(PAYMENT_NETWORKS)

@@ -42,6 +42,7 @@ const TOKENS: NearIntentsToken[] = [
 
 const LINK = {
   chain: 'base',
+  network: 'public',
   destination: MERCHANT,
   amount: '25',
   asset: 'USDC',
@@ -52,6 +53,13 @@ const LINK = {
 };
 
 function build(feeRecipient = 'cosmospay.near') {
+  // A test-network request goes to the sandbox, never to the route.
+  const sandbox = {
+    payableAssets: jest.fn(),
+    originAsset: jest.fn(),
+    linkAssetForCreate: jest.fn(),
+    price: jest.fn(),
+  };
   const nearIntents = {
     tokens: jest.fn().mockResolvedValue(TOKENS),
     quote: jest.fn().mockImplementation((request) =>
@@ -90,7 +98,12 @@ function build(feeRecipient = 'cosmospay.near') {
   };
   const config = { get: (key: string) => values[key] } as never;
   return {
-    pricing: new PaymentDepositPricing(config, nearIntents as never),
+    sandbox,
+    pricing: new PaymentDepositPricing(
+      config,
+      nearIntents as never,
+      sandbox as never,
+    ),
     nearIntents,
   };
 }
@@ -382,36 +395,75 @@ describe('PaymentDepositPricing', () => {
     });
   });
 
+  it('hands every test-network request to the sandbox, never to the route', async () => {
+    const { pricing, sandbox, nearIntents } = build();
+    sandbox.payableAssets.mockReturnValue(['sandbox asset']);
+    sandbox.originAsset.mockReturnValue('sandbox origin');
+    sandbox.linkAssetForCreate.mockReturnValue('sandbox link asset');
+    sandbox.price.mockReturnValue('sandbox price');
+    const request = {
+      originChain: 'arb' as const,
+      originAsset: 'USDC',
+      refundTo: MERCHANT,
+    };
+
+    await expect(pricing.payableAssets('testnet')).resolves.toEqual([
+      'sandbox asset',
+    ]);
+    await expect(pricing.originAsset('arb', 'USDC', 'testnet')).resolves.toBe(
+      'sandbox origin',
+    );
+    await expect(
+      pricing.linkAssetForCreate('base', 'USDC', undefined, 'testnet'),
+    ).resolves.toBe('sandbox link asset');
+    await expect(
+      pricing.price({ ...LINK, network: 'testnet' }, request, true),
+    ).resolves.toBe('sandbox price');
+    expect(nearIntents.tokens).not.toHaveBeenCalled();
+    expect(nearIntents.quote).not.toHaveBeenCalled();
+  });
+
   describe('linkAssetForCreate', () => {
     it('resolves a symbol, a contract or the native coin', async () => {
       const { pricing } = build();
       await expect(
-        pricing.linkAssetForCreate('base', 'USDC', undefined),
+        pricing.linkAssetForCreate('base', 'USDC', undefined, 'public'),
       ).resolves.toMatchObject({ contract: BASE_USDC, decimals: 6 });
       await expect(
-        pricing.linkAssetForCreate('base', undefined, BASE_USDC.toUpperCase()),
+        pricing.linkAssetForCreate(
+          'base',
+          undefined,
+          BASE_USDC.toUpperCase(),
+          'public',
+        ),
       ).resolves.toMatchObject({ symbol: 'USDC' });
       await expect(
-        pricing.linkAssetForCreate('base', undefined, undefined),
+        pricing.linkAssetForCreate('base', undefined, undefined, 'public'),
       ).resolves.toMatchObject({ symbol: 'ETH', contract: null });
     });
 
     it('refuses a symbol that is not the named contract, and an untraded token', async () => {
       const { pricing } = build();
       expect(
-        (await refusal(pricing.linkAssetForCreate('base', 'ETH', BASE_USDC)))
-          .code,
+        (
+          await refusal(
+            pricing.linkAssetForCreate('base', 'ETH', BASE_USDC, 'public'),
+          )
+        ).code,
       ).toBe(ApiErrorCode.ValidationFailed);
       expect(
         (
           await refusal(
-            pricing.linkAssetForCreate('base', 'NOPRICE', undefined),
+            pricing.linkAssetForCreate('base', 'NOPRICE', undefined, 'public'),
           )
         ).code,
       ).toBe(ApiErrorCode.AssetUnsupported);
       expect(
-        (await refusal(pricing.linkAssetForCreate('tron', 'DOGE', undefined)))
-          .code,
+        (
+          await refusal(
+            pricing.linkAssetForCreate('tron', 'DOGE', undefined, 'public'),
+          )
+        ).code,
       ).toBe(ApiErrorCode.AssetUnsupported);
     });
   });

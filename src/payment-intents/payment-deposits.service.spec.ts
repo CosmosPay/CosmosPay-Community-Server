@@ -313,7 +313,13 @@ describe('PaymentDepositsService', () => {
     });
 
     it('refuses a link that cannot be paid from another network, naming why', async () => {
-      const { service, pricing } = build({ ...INTENT, network: 'testnet' });
+      // A Stellar link on a test network: the sandbox settles only the
+      // networks paid through deposit addresses.
+      const { service, pricing } = build({
+        ...INTENT,
+        network: 'testnet',
+        chain: 'stellar',
+      });
       const err = await refusal(service.quote('pi_1', REQUEST));
       expect(err.code).toBe(ApiErrorCode.ValidationFailed);
       expect(err.message).toMatch(/test network/);

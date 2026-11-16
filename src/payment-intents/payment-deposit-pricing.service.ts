@@ -4,7 +4,8 @@ import type { PaymentIntent } from '@generated/prisma/client';
 import { formatUnits, parseUnits } from '@/chains/units';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { commissionWithRecipient } from '@/common/plan-commission';
-import type { AppConfig } from '@/config/configuration';
+import type { AppConfig, StellarNetwork } from '@/config/configuration';
+import { SandboxDepositRoute } from '@/sandbox-settlement/sandbox-deposit-route.service';
 import {
   type CrossChainAsset,
   isDeprecatedToken,
@@ -38,6 +39,7 @@ import {
 export type PricedIntentFields = Pick<
   PaymentIntent,
   | 'chain'
+  | 'network'
   | 'destination'
   | 'amount'
   | 'asset'
@@ -91,10 +93,16 @@ export class PaymentDepositPricing {
   constructor(
     private readonly config: ConfigService<AppConfig, true>,
     private readonly nearIntents: NearIntentsClient,
+    private readonly sandbox: SandboxDepositRoute,
   ) {}
 
-  /** What a payer can pay from: every asset the route still trades. */
-  async payableAssets(): Promise<CrossChainAsset[]> {
+  /**
+   * What a payer can pay from: every asset the route still trades. On a test
+   * network (a sandbox link) the route has none: the sandbox settles those
+   * itself, so every method here hands a `testnet` request to it.
+   */
+  async payableAssets(network: StellarNetwork): Promise<CrossChainAsset[]> {
+    if (network === 'testnet') return this.sandbox.payableAssets();
     return tradableAssets(await this.nearIntents.tokens());
   }
 
@@ -109,7 +117,11 @@ export class PaymentDepositPricing {
     chain: DepositNetwork,
     assetCode: string | undefined,
     assetIssuer: string | undefined,
+    network: StellarNetwork,
   ): Promise<CrossChainAsset> {
+    if (network === 'testnet') {
+      return this.sandbox.linkAssetForCreate(chain, assetCode, assetIssuer);
+    }
     const tokens = await this.nearIntents.tokens();
     const asset = resolveCrossChainAsset(
       tokens,
@@ -146,6 +158,9 @@ export class PaymentDepositPricing {
     request: PaymentDepositRequestDto,
     live: boolean,
   ): Promise<PricedPaymentDeposit> {
+    if (intent.network === 'testnet') {
+      return this.sandbox.price(intent, request, live);
+    }
     const tokens = await this.nearIntents.tokens();
     const destination = this.linkAsset(intent, tokens);
     const origin = this.tradableOrigin(
@@ -294,7 +309,10 @@ export class PaymentDepositPricing {
   async originAsset(
     chain: CrossChainNetworkId,
     requested: string,
+    network: StellarNetwork,
   ): Promise<CrossChainAsset> {
+    if (network === 'testnet')
+      return this.sandbox.originAsset(chain, requested);
     return this.tradableOrigin(
       await this.nearIntents.tokens(),
       chain,

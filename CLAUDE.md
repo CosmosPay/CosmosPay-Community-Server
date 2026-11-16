@@ -20,6 +20,8 @@ Conventions for this repo. They are enforced by `npm run lint`, which CI gates o
 | `npm run plugins -- <cmd>` | third-party plugin folders: `new`, `check`, `sign`, `verify`, `keygen`, `publish`, `install` (`scripts/plugins.ts`) |
 | `npm run zk:deploy-testnet` | deploys the private payments token, auditor registry and fee account on TESTNET (Friendbot, no real funds). `-- --env-file .env --secrets-file .zk-secrets/testnet.json` writes the values instead of printing secrets; run again it only verifies; `-- --redeploy` strands every payment on the old token |
 | `npm run zk:e2e-testnet` | the real-chain check of private payments on testnet: registers, proves, transfers and confirms through the module's own services. Slow (UltraHonk proofs in Node), needs the deployed set in `.env` |
+| `npm run sandbox:keys -- --out <file>` | creates the sandbox's HD seed, treasury key and cUSD deployer key in a file OUTSIDE every repo (a path inside this one is refused) and prints only the addresses |
+| `npm run sandbox:status` / `sandbox:deploy-cusd` | `-- --secrets-file <file>`: the sandbox keys' balances on each test network (reads only); `-- --network <id>` deploys cUSD where no official test USDC exists and prints its `SANDBOX_CUSD_ADDRESSES` entry. Test networks only: both check `eth_chainId` first |
 
 ## Imports: always use the path aliases, never relative paths
 
@@ -420,6 +422,20 @@ table. These are the rules that did not hold on their own:
   lock (`pg_advisory_xact_lock(PAYMENT_DEPOSIT_LOCK_CLASS, hashtext(id))`) before
   the live quote and released after it, so concurrent creates cannot all pass
   the count and the slow quote holds no lock or connection.
+- **On the test networks those links settle in the sandbox** (`src/sandbox-settlement/`):
+  the cross-chain route has no test network, so `PaymentDepositPricing` hands every
+  `network: 'testnet'` request to `SandboxDepositRoute`, which answers the same quote shape
+  (one for one in the network's test stablecoin, no commission, `crossChainFeeBps` 0) with a
+  deposit address derived from `SANDBOX_DEPOSIT_SEED` (its path is the `correlationId`; no key
+  is stored), and `SandboxDepositObserverService` feeds the same `applyProviderStatus`. Payouts
+  and refunds come from `SANDBOX_TREASURY_PRIVATE_KEY`: each is signed and written to
+  `sandbox_payout` (unique per deposit and kind) BEFORE it is broadcast, and only that row's
+  bytes are ever rebroadcast; never sign a second transaction for a deposit. The treasury key is
+  never the Monad relayer's (the boot refuses it) and every sandbox RPC is checked against the
+  chain id in `SANDBOX_NETWORKS`, so it cannot reach mainnet. A test network goes into that
+  table only after its chain id was checked on chainlist and `eth_chainId` and its test USDC
+  answered `symbol`/`decimals` on-chain; where there is no official test USDC it uses cUSD
+  (`contracts/SandboxUsd.sol`), enabled per network by `SANDBOX_CUSD_ADDRESSES`.
 - **Monad swaps with a merchant fee go through `contracts/MerchantFeeSwapRouter.sol`**
   (`KURU_MERCHANT_FEE_ROUTER`), one deployment per Kuru Flow router, with no owner. It
   is not a deposit address: wallets approve it and send it value, so the venue checks

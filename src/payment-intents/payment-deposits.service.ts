@@ -4,7 +4,7 @@ import type { PaymentDeposit, Prisma } from '@generated/prisma/client';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import { isUniqueViolation } from '@/common/prisma-errors';
-import type { AppConfig } from '@/config/configuration';
+import type { AppConfig, StellarNetwork } from '@/config/configuration';
 import {
   CROSS_CHAIN_OPEN_STATUSES,
   nextStatus,
@@ -143,7 +143,7 @@ export class PaymentDepositsService {
   async assets(id: string): Promise<PaymentDepositAssetsEntity> {
     const intent = await this.payableIntent(id, false);
     const [data, routes] = await Promise.all([
-      this.pricing.payableAssets(),
+      this.pricing.payableAssets(intent.network as StellarNetwork),
       this.probe.check(intent),
     ]);
     return { data, routes };
@@ -213,6 +213,7 @@ export class PaymentDepositsService {
     const origin = await this.pricing.originAsset(
       request.originChain,
       request.originAsset,
+      intent.network as StellarNetwork,
     );
     // The checkout session the deposit belongs to: its email gets the receipt.
     const session = await this.prisma.paymentPayerSession.findFirst({

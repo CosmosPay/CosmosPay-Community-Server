@@ -707,6 +707,32 @@ model PaymentDepositReservation {
   @@map("payment_deposit_reservation")
 }
 
+// A transaction the sandbox treasury sent for one sandbox deposit (module
+// `sandbox-settlement`): the payout to the merchant on the link's test network,
+// or the refund to the payer on the origin test network. Written BEFORE the
+// broadcast with the signed bytes, so a restart rebroadcasts the same
+// transaction (same nonce, same hash) instead of paying twice; one of each kind
+// per deposit (`@@unique`). Test networks only: no mainnet funds ever move here.
+model SandboxPayout {
+  id        String @id @default(cuid())
+  depositId String
+  kind      String // 'payout' | 'refund'
+  network   String // the payment network id it is sent on (its test network)
+  token     String // the stablecoin contract
+  recipient String
+  amount    String // base units
+  nonce     String
+  txHash    String @unique
+  raw       String // the signed transaction, rebroadcast until it is mined
+  status    String @default("SENT") // SENT | CONFIRMED | FAILED
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([depositId, kind])
+  @@map("sandbox_payout")
+}
+
 // The transaction that settled a payment intent, claimed once across every
 // tenant: one on-chain payment settles at most one intent, whoever owns it.
 //

@@ -77,10 +77,22 @@ describe('PaymentRouteProbe', () => {
   it('asks nothing for a link without an amount, or one that cannot be paid this way', async () => {
     const { probe, pricing } = build();
     await expect(probe.check({ ...LINK, amount: null })).resolves.toEqual([]);
-    await expect(probe.check({ ...LINK, network: 'testnet' })).resolves.toEqual(
-      [],
-    );
+    // A Stellar link on a test network takes no payment from another network
+    // (the sandbox settles only the networks paid through deposit addresses).
+    await expect(
+      probe.check({ ...LINK, network: 'testnet', chain: 'stellar' }),
+    ).resolves.toEqual([]);
     expect(pricing.price).not.toHaveBeenCalled();
+  });
+
+  it("checks a sandbox link against the sandbox's own prices", async () => {
+    const { probe, pricing } = build();
+    await probe.check({ ...LINK, network: 'testnet', crossChainFeeBps: 0 });
+    expect(pricing.price).toHaveBeenCalledWith(
+      expect.objectContaining({ network: 'testnet' }),
+      expect.anything(),
+      false,
+    );
   });
 
   it('leaves out an origin it could not ask, never showing that error, and asks again next time', async () => {

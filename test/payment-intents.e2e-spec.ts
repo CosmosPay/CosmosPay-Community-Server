@@ -524,6 +524,58 @@ describe('Payment intents CRUD (e2e)', () => {
     });
   });
 
+  describe('the networks a link can settle on (GET /v1/payment-intents/networks)', () => {
+    const networks = `${route}/networks`;
+
+    it('refuses a caller without the gateway secret (403)', () =>
+      request(http()).get(networks).expect(403));
+
+    it('answers a dev key with what the sandbox settles, in its test stablecoin', async () => {
+      const res = await gw(request(http()).get(networks)).expect(200);
+      const byId = Object.fromEntries(
+        res.body.data.map((n: { id: string }) => [n.id, n]),
+      );
+      expect(res.body.data).toHaveLength(35);
+      expect(byId.stellar).toMatchObject({
+        network: 'testnet',
+        available: true,
+        settlesThroughDeposits: false,
+      });
+      expect(byId.base).toMatchObject({
+        network: 'testnet',
+        available: true,
+        settlesThroughDeposits: true,
+        asset: {
+          symbol: 'USDC',
+          contract: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+          decimals: 6,
+        },
+      });
+      expect(byId.bsc).toMatchObject({ available: false, asset: null });
+      expect(byId.bsc.reason).toMatch(/cUSD/);
+      expect(byId.btc).toMatchObject({ available: false, asset: null });
+      // The reasons are read by people: they never name a provider.
+      const reasons = res.body.data.map(
+        (n: { reason: string | null }) => n.reason,
+      );
+      expect(reasons.join(' ')).not.toMatch(
+        /near intents|1click|circle|defuse/i,
+      );
+    });
+
+    it('answers a production key with every network, in any asset', async () => {
+      const res = await gw(
+        request(http()).get(networks).set('x-consumer-env', 'prod'),
+      ).expect(200);
+      expect(
+        res.body.data.every(
+          (n: { available: boolean; network: string; asset: unknown }) =>
+            n.available && n.network === 'public' && n.asset === null,
+        ),
+      ).toBe(true);
+    });
+  });
+
   it('gets one by id (200)', async () => {
     const res = await gw(request(http()).get(`${route}/${createdId}`)).expect(
       200,
