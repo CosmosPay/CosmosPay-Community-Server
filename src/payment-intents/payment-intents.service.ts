@@ -1721,7 +1721,7 @@ export class PaymentIntentsService {
   /**
    * The emails payers gave in the hosted checkout of the caller's own intent
    * `id`, newest first: unverified, shown so the merchant can reach a payer
-   * when no receipt could be sent (several sessions, none reported sending).
+   * when no receipt could be sent (several sessions, none proved the payment).
    */
   async payerEmails(
     consumer: GatewayConsumer,

@@ -4,6 +4,7 @@ import type { Prisma } from '@generated/prisma/client';
 import { CHAIN_ADDRESS_RULES } from '@/chains/chain-address';
 import { isChain } from '@/chains/chains.constants';
 import { acceptsCrossChainPayment } from '@/payment-intents/payment-deposit-rules';
+import { CROSS_CHAIN_NETWORKS } from '@/cross-chain-swaps/cross-chain-networks';
 import {
   newPayerToken,
   payerTokenHash,
@@ -199,6 +200,7 @@ export class PaymentLinksService {
     id: string,
     event: CheckoutEvent,
     payerToken?: string,
+    proof: { address?: string; txHash?: string } = {},
   ): Promise<void> {
     const now = new Date();
     const changed =
@@ -218,14 +220,21 @@ export class PaymentLinksService {
                  SET "checkoutSentAt" = ${now}
                WHERE "id" = ${id} AND "status" = 'PENDING'`;
     if (changed > 0) {
-      // A `sent` from a checkout session makes its email the receipt's for a
-      // payment with the link itself (`receiptRecipient`). Only while the link
-      // is open, so every report precedes the settlement.
-      if (event === 'sent' && payerToken) {
-        await this.prisma.paymentPayerSession.updateMany({
-          where: { intentId: id, tokenHash: payerTokenHash(payerToken) },
-          data: { sentAt: now },
-        });
+      // From a checkout session: `sent` is noted (informational, never the
+      // receipt's decision), and an address or transaction the wallet gave is
+      // registered as that session's proof (`receiptRecipient`). Only while the
+      // link is open, so every proof precedes the settlement.
+      if (payerToken) {
+        const data = {
+          ...(event === 'sent' ? { sentAt: now } : {}),
+          ...(await this.sessionProof(id, proof, now)),
+        };
+        if (Object.keys(data).length > 0) {
+          await this.prisma.paymentPayerSession.updateMany({
+            where: { intentId: id, tokenHash: payerTokenHash(payerToken) },
+            data,
+          });
+        }
       }
       return;
     }
@@ -234,6 +243,49 @@ export class PaymentLinksService {
       select: { id: true },
     });
     if (!exists) throw ApiError.notFound(`Payment intent ${id} not found`);
+  }
+
+  /**
+   * The proof a session registers, normalized by the link's own network rules:
+   * the account its wallet pays from, the transaction its wallet answered. A
+   * value that is not one of that network's is refused (400), never stored.
+   */
+  private async sessionProof(
+    id: string,
+    proof: { address?: string; txHash?: string },
+    now: Date,
+  ): Promise<{
+    walletAddress?: string;
+    walletTxHash?: string;
+    provenAt?: Date;
+  }> {
+    if (!proof.address && !proof.txHash) return {};
+    const intent = await this.prisma.paymentIntent.findUnique({
+      where: { id },
+      select: { chain: true },
+    });
+    if (!intent || !isPaymentNetwork(intent.chain)) return {};
+    const rules = CROSS_CHAIN_NETWORKS[intent.chain];
+    const out: { walletAddress?: string; walletTxHash?: string } = {};
+    if (proof.address) {
+      if (!rules.address.isValid(proof.address.trim())) {
+        throw ApiError.badRequest(
+          ApiErrorCode.ValidationFailed,
+          `address is not an account on this payment's network (${rules.address.expected})`,
+        );
+      }
+      out.walletAddress = rules.address.normalize(proof.address.trim());
+    }
+    if (proof.txHash) {
+      if (!rules.txId.isValid(proof.txHash.trim())) {
+        throw ApiError.badRequest(
+          ApiErrorCode.ValidationFailed,
+          `txHash is not a transaction id of this payment's network (${rules.txId.expected})`,
+        );
+      }
+      out.walletTxHash = rules.txId.normalize(proof.txHash.trim());
+    }
+    return { ...out, provenAt: now };
   }
 
   /**

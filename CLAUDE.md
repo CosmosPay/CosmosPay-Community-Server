@@ -391,9 +391,13 @@ table. These are the rules that did not hold on their own:
   (`payment_payer_session`, keyed by the SHA-256 of a random `payerToken` only
   its browser holds; the token is never stored or logged), no session can change
   another's and none is ever refused for another's email; a deposit belongs to
-  the session that opened it; a native payment's receipt goes to the session that
-  reported `sent` last, else the one email all sessions gave, else nobody
-  (`receiptRecipient`, `receiptSkippedAt`); a receipt carries only what this service generates (no
+  the session that opened it, which is its proof; a native payment's receipt goes
+  to the session whose wallet account or transaction (registered with its token
+  on `events`) matches the settlement's `source` / `txHash`, earliest proof first,
+  else to the only session if exactly one gave an email (receipt only, no
+  customer link), else nobody (`receiptRecipient`, `receiptSkippedAt`); a `sent`
+  report is informational and decides nothing; a customer is linked only on a
+  proof; a receipt carries only what this service generates (no
   `msg`, no merchant text; its only links are our checkout page and the
   explorer, `paymentExplorerTxUrl`) and is booked against
   `PAYMENT_RECEIPT_MAX_PER_RECIPIENT` / `PAYMENT_RECEIPT_MAX_PER_MERCHANT` a day

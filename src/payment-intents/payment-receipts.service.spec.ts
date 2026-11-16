@@ -16,24 +16,38 @@ const INTENT = {
   txHash: '0xb7f1c3a2d4e5f60718293a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d',
   updatedAt: new Date('2026-11-17T12:00:00.000Z'),
   paidFrom: null as unknown,
+  // The account that paid, as the settlement recorded it.
+  source: '0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaed' as string | null,
 };
 
 type Session = {
   email: string;
   lang: string;
-  sentAt: Date | null;
-  createdAt: Date;
+  walletAddress: string | null;
+  walletTxHash: string | null;
+  provenAt: Date | null;
 };
 const at = (minute: number) =>
   new Date(`2026-11-17T11:${String(minute).padStart(2, '0')}:00.000Z`);
-/* One checkout session gave an email (the common case). */
+const session = (
+  email: string,
+  lang = 'en',
+  proof: Partial<
+    Pick<Session, 'walletAddress' | 'walletTxHash' | 'provenAt'>
+  > = {},
+): Session => ({
+  email,
+  lang,
+  walletAddress: proof.walletAddress ?? null,
+  walletTxHash: proof.walletTxHash ?? null,
+  provenAt: proof.provenAt ?? null,
+});
+/* One checkout session gave an email and its wallet's transaction is the settlement's. */
 const ONE_SESSION: Session[] = [
-  {
-    email: 'link-payer@example.com',
-    lang: 'es',
-    sentAt: null,
-    createdAt: at(1),
-  },
+  session('link-payer@example.com', 'es', {
+    walletTxHash: INTENT.txHash,
+    provenAt: at(1),
+  }),
 ];
 
 function build(
@@ -123,8 +137,8 @@ describe('PaymentReceiptsService', () => {
     expect(sql.some((q) => q.includes('"receiptSentAt" = ?'))).toBe(true);
   });
 
-  it("goes to the deposit's own email when a deposit settled the link", async () => {
-    const { service, mailer } = build({
+  it("goes to the deposit's own session, and links it, when a deposit settled the link", async () => {
+    const { service, mailer, customers } = build({
       intent: {
         amount: null,
         paidFrom: {
@@ -140,19 +154,22 @@ describe('PaymentReceiptsService', () => {
         amountOutPaid: '25',
         amountOut: '25',
       },
-      // Other sessions of the link never take a deposit's receipt.
+      // Other sessions of the link never take a deposit's receipt, proof or not.
       sessions: [
-        {
-          email: 'someone@example.com',
-          lang: 'es',
-          sentAt: at(9),
-          createdAt: at(2),
-        },
+        session('someone@example.com', 'es', {
+          walletTxHash: INTENT.txHash,
+          provenAt: at(2),
+        }),
       ],
     });
     await service.send('pi_1');
     const message = mailer.send.mock.calls[0][0];
     expect(message.to).toBe('deposit-payer@example.com');
+    // The deposit's own session is the proof: its payer is linked.
+    expect(customers.linkPayerEmail).toHaveBeenCalledWith(
+      'c1',
+      'deposit-payer@example.com',
+    );
     expect(message.subject).toBe('Your payment receipt');
     expect(message.text).toContain('25.28 USDT (Tron)');
   });
@@ -226,27 +243,15 @@ describe('PaymentReceiptsService', () => {
     expect(sql.some((q) => q.includes('"receiptSkippedAt" = ?'))).toBe(true);
   });
 
-  it('goes to the checkout session that reported `sent` last, whoever else gave an email', async () => {
+  it('a matching transaction wins over any `sent` report, and links the payer', async () => {
     const { service, mailer, customers } = build({
       sessions: [
-        {
-          email: 'early@example.com',
-          lang: 'en',
-          sentAt: at(3),
-          createdAt: at(1),
-        },
-        {
-          email: 'payer@example.com',
-          lang: 'pt',
-          sentAt: at(8),
-          createdAt: at(2),
-        },
-        {
-          email: 'stranger@example.com',
-          lang: 'en',
-          sentAt: null,
-          createdAt: at(9),
-        },
+        // Reported `sent` later, with no proof: informational only.
+        session('loud@example.com', 'en', { provenAt: null }),
+        session('payer@example.com', 'pt', {
+          walletTxHash: INTENT.txHash.toUpperCase().replace('0X', '0x'),
+          provenAt: at(2),
+        }),
       ],
     });
     await expect(service.send('pi_1')).resolves.toBe(true);
@@ -259,21 +264,30 @@ describe('PaymentReceiptsService', () => {
     );
   });
 
-  it('sends nothing and links no customer when the payer cannot be told apart', async () => {
+  it("goes to the session whose wallet account is the settlement's source", async () => {
+    const { service, mailer } = build({
+      sessions: [
+        session('other@example.com'),
+        session('payer@example.com', 'en', {
+          walletAddress: '0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed',
+          provenAt: at(3),
+        }),
+      ],
+    });
+    await expect(service.send('pi_1')).resolves.toBe(true);
+    expect(mailer.send.mock.calls[0][0].to).toBe('payer@example.com');
+  });
+
+  it('with two or more sessions and no proof matching, sends nothing and links no customer', async () => {
     const { service, mailer, customers, sql } = build({
       sessions: [
-        {
-          email: 'payer@example.com',
-          lang: 'en',
-          sentAt: null,
-          createdAt: at(1),
-        },
-        {
-          email: 'stranger@example.com',
-          lang: 'en',
-          sentAt: null,
-          createdAt: at(2),
-        },
+        // This one reported `sent`, but `sent` proves nothing.
+        session('loud@example.com', 'en', {
+          walletTxHash:
+            '0x1111111111111111111111111111111111111111111111111111111111111111',
+          provenAt: at(1),
+        }),
+        session('payer@example.com'),
       ],
     });
     await expect(service.send('pi_1')).resolves.toBe(false);
@@ -283,27 +297,15 @@ describe('PaymentReceiptsService', () => {
     expect(sql.some((q) => q.includes('"receiptSkippedAt" = ?'))).toBe(true);
   });
 
-  it('sends to the one email when every session gave the same (a payer who reopened the page)', async () => {
-    const { service, mailer } = build({
-      sessions: [
-        {
-          email: 'payer@example.com',
-          lang: 'en',
-          sentAt: null,
-          createdAt: at(1),
-        },
-        {
-          email: 'Payer@Example.com',
-          lang: 'fr',
-          sentAt: null,
-          createdAt: at(5),
-        },
-      ],
+  it('a single unproven session gets the receipt but no customer link', async () => {
+    const { service, mailer, customers } = build({
+      sessions: [session('payer@example.com', 'fr')],
     });
     await expect(service.send('pi_1')).resolves.toBe(true);
     const message = mailer.send.mock.calls[0][0];
     expect(message.to).toBe('payer@example.com');
     expect(message.subject).toBe('Votre reçu de paiement');
+    expect(customers.linkPayerEmail).not.toHaveBeenCalled();
   });
 
   it('gives the claim back when there is no mail sender or it fails, for the sweeper to retry', async () => {

@@ -678,9 +678,46 @@ describe('PaymentLinksService.recordEvent', () => {
     const [{ where, data }] = updateMany.mock.calls[0];
     expect(where).toEqual({ intentId: ID, tokenHash: payerTokenHash(token) });
     expect(data.sentAt).toBeInstanceOf(Date);
-    // Another event, or one without a token, marks no session.
+    // Another event without proof, or one without a token, marks no session.
     await service.recordEvent(ID, 'walletOpened', token);
     await service.recordEvent(ID, 'sent');
+    expect(updateMany).toHaveBeenCalledTimes(1);
+  });
+
+  it("registers the session's proof in its network's spelling, and refuses one of another network", async () => {
+    const executeRaw = jest.fn().mockResolvedValue(1);
+    const updateMany = jest.fn().mockResolvedValue({ count: 1 });
+    const service = new PaymentLinksService(
+      {
+        paymentIntent: {
+          findUnique: jest.fn().mockResolvedValue({ chain: 'monad' }),
+        },
+        paymentPayerSession: { updateMany },
+        $executeRaw: executeRaw,
+      } as never,
+      links,
+      {} as never,
+      {} as never,
+    );
+    const token = 'q8V0n3cJxZr2m1bWk7yTt4uP9aLs6dEf0gHiJkLmNoQ';
+    const hash =
+      '0xB7F1C3A2D4E5F60718293A4B5C6D7E8F9A0B1C2D3E4F5A6B7C8D9E0F1A2B3C4D';
+    await service.recordEvent(ID, 'sent', token, {
+      address: '0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaed',
+      txHash: hash,
+    });
+    const [{ where, data }] = updateMany.mock.calls[0];
+    expect(where.tokenHash).toBe(payerTokenHash(token));
+    expect(data.walletTxHash).toBe(hash.toLowerCase());
+    expect(data.walletAddress?.toLowerCase()).toBe(
+      '0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaed',
+    );
+    expect(data.provenAt).toBeInstanceOf(Date);
+    await expect(
+      service.recordEvent(ID, 'walletOpened', token, {
+        address: 'GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ',
+      }),
+    ).rejects.toMatchObject({ code: 'validation_failed' });
     expect(updateMany).toHaveBeenCalledTimes(1);
   });
 

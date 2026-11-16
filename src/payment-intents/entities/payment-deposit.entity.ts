@@ -529,8 +529,8 @@ export class PaymentPayerEmailEntity {
     format: 'date-time',
     example: null,
     description:
-      'The last time that session reported its wallet sent the payment; null ' +
-      'if it never did.',
+      'The last time that session reported its wallet sent the payment ' +
+      '(informational: a report proves nothing); null if it never did.',
   })
   sentAt!: Date | null;
 

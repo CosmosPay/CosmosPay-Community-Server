@@ -313,8 +313,10 @@ export class PaymentLinksController {
       'hash is stored), and the session sends it on its later calls (a changed ' +
       'email, `events`, `deposits`). Every session keeps its own email and none ' +
       'can change another’s, so a second payer never blocks the first. The ' +
-      'receipt goes to the deposit’s session, else to the session that reported ' +
-      '`sent` last. Budgeted per client address.',
+      'receipt goes to the deposit’s session, else to the session whose wallet ' +
+      'account or transaction (registered through `events`) matches the ' +
+      'settlement, else to the only session if just one gave an email (with no ' +
+      'customer link). Budgeted per client address.',
   })
   @ApiParam({
     name: 'id',
@@ -415,7 +417,10 @@ export class PaymentLinksController {
     },
   })
   event(@Param('id') id: string, @Body() dto: CheckoutEventDto): Promise<void> {
-    return this.paymentLinks.recordEvent(id, dto.event, dto.payerToken);
+    return this.paymentLinks.recordEvent(id, dto.event, dto.payerToken, {
+      address: dto.address,
+      txHash: dto.txHash,
+    });
   }
 
   @Get(':id/solana-pay')

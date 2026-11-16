@@ -2785,16 +2785,23 @@ model ProtectedPaymentTransaction {
 // receipt of a payment goes to the deposit's session, else to the session that
 // reported `sent` last, else to the one email if all sessions gave the same.
 model PaymentPayerSession {
-  id        String        @id @default(cuid())
-  intentId  String
-  intent    PaymentIntent @relation(fields: [intentId], references: [id], onDelete: Cascade)
-  tokenHash String        @unique
-  email     String
-  lang      String
-  // The last time this session reported the wallet sent the payment.
-  sentAt    DateTime?
-  createdAt DateTime      @default(now())
-  updatedAt DateTime      @updatedAt
+  id            String        @id @default(cuid())
+  intentId      String
+  intent        PaymentIntent @relation(fields: [intentId], references: [id], onDelete: Cascade)
+  tokenHash     String        @unique
+  email         String
+  lang          String
+  // The last time this session reported the wallet sent the payment. Informational:
+  // anyone holding a token can report it, so it never decides the receipt.
+  sentAt        DateTime?
+  // What this session's wallet said it pays from, and the transaction it got
+  // back (token-authenticated events). The receipt and the customer link go to
+  // the session whose proof matches the settlement; the earliest proof wins.
+  walletAddress String?
+  walletTxHash  String?
+  provenAt      DateTime?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
 
   deposits PaymentDeposit[]
 

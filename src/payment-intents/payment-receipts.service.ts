@@ -28,8 +28,9 @@ import { WEBHOOK_EVENT, WebhookEventPayload } from '@/webhooks/webhook-events';
  * The receipt a payer gets when a payment made through the hosted checkout
  * succeeds, at the email their checkout session gave before paying: the
  * deposit's session when a deposit settled it, else `receiptRecipient` among
- * the link's sessions (the one that reported `sent` last; the one email if all
- * gave the same; nobody otherwise, marked `receiptSkippedAt`).
+ * the link's sessions (the one whose registered transaction or account matches
+ * the settlement; else the only session, without a customer link; nobody
+ * otherwise, marked `receiptSkippedAt`).
  *
  * It listens to the settlement itself (`PAYMENT_INTENT_SUCCEEDED` on the
  * internal bus, whatever settled it: the chain observer, `validate`, a
@@ -103,6 +104,7 @@ export class PaymentReceiptsService {
         txHash: true,
         updatedAt: true,
         paidFrom: true,
+        source: true,
       },
     });
     if (!intent) return false;
@@ -117,13 +119,25 @@ export class PaymentReceiptsService {
           },
         })
       : null;
+    // The deposit's session proves itself: only it was given that deposit
+    // address. Otherwise a session's registered proof must match the
+    // settlement (`receiptRecipient`).
     const recipient = paidFrom
-      ? (deposit?.payerSession ?? null)
+      ? deposit?.payerSession
+        ? { session: deposit.payerSession, proven: true }
+        : null
       : receiptRecipient(
           await this.prisma.paymentPayerSession.findMany({
             where: { intentId: id },
-            select: { email: true, lang: true, sentAt: true, createdAt: true },
+            select: {
+              email: true,
+              lang: true,
+              walletAddress: true,
+              walletTxHash: true,
+              provenAt: true,
+            },
           }),
+          { chain: intent.chain, txHash: intent.txHash, source: intent.source },
         );
     if (!recipient) {
       // Paid outside the checkout (a wallet link scanned elsewhere, the API),
@@ -135,15 +149,19 @@ export class PaymentReceiptsService {
          WHERE "id" = ${id} AND "receiptSentAt" IS NULL`;
       return false;
     }
-    const email = recipient.email.toLowerCase();
+    const email = recipient.session.email.toLowerCase();
 
-    void this.customers
-      .linkPayerEmail(intent.consumerId, email)
-      .catch((err: unknown) =>
-        this.logger.warn(
-          `Could not link the payer of intent ${id} to a customer: ${String(err)}`,
-        ),
-      );
+    // A customer only for a payer who proved the payment was theirs; an
+    // unproven single session gets the receipt (on-chain facts) and no more.
+    if (recipient.proven) {
+      void this.customers
+        .linkPayerEmail(intent.consumerId, email)
+        .catch((err: unknown) =>
+          this.logger.warn(
+            `Could not link the payer of intent ${id} to a customer: ${String(err)}`,
+          ),
+        );
+    }
 
     if (!this.mailer.configured) {
       await this.release(id);
@@ -162,7 +180,7 @@ export class PaymentReceiptsService {
       return false;
     }
 
-    const lang = asReceiptLang(recipient.lang);
+    const lang = asReceiptLang(recipient.session.lang);
     const network = isPaymentNetwork(intent.chain)
       ? CROSS_CHAIN_NETWORKS[intent.chain]
       : null;

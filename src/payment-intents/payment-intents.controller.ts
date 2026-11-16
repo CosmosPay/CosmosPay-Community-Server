@@ -293,9 +293,9 @@ export class PaymentIntentsController {
     description:
       'Newest first, at most 50: each hosted checkout session of this link that ' +
       'gave an email for the receipt, its language and when it reported its ' +
-      'wallet sent the payment. Unverified: anyone holding the link can type ' +
-      'any address. The receipt goes to one of them (`receiptTo`), or to none ' +
-      'when the payer cannot be told apart (`receiptSkippedAt`).',
+      'wallet sent the payment (informational). Unverified: anyone holding the ' +
+      'link can type any address. The receipt goes to one of them (`receiptTo`), ' +
+      'or to none when the payer cannot be told apart (`receiptSkippedAt`).',
   })
   @ApiOkResponse({ type: PaymentPayerEmailListEntity })
   payerEmails(

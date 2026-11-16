@@ -169,8 +169,8 @@ export class PaymentIntentEntity {
     example: null,
     description:
       'When it was decided that no receipt goes out: no checkout session gave ' +
-      'an email, or several gave different ones and none reported sending the ' +
-      'payment.',
+      'an email, or several did and none proved the payment was theirs (a ' +
+      'wallet account or transaction matching the settlement).',
   })
   receiptSkippedAt!: Date | null;
 
@@ -438,8 +438,8 @@ export class TxPaymentIntentEntity {
     example: null,
     description:
       'When it was decided that no receipt goes out: no checkout session gave ' +
-      'an email, or several gave different ones and none reported sending the ' +
-      'payment.',
+      'an email, or several did and none proved the payment was theirs (a ' +
+      'wallet account or transaction matching the settlement).',
   })
   receiptSkippedAt!: Date | null;
 
@@ -710,8 +710,8 @@ export class PayPaymentIntentEntity {
     example: null,
     description:
       'When it was decided that no receipt goes out: no checkout session gave ' +
-      'an email, or several gave different ones and none reported sending the ' +
-      'payment.',
+      'an email, or several did and none proved the payment was theirs (a ' +
+      'wallet account or transaction matching the settlement).',
   })
   receiptSkippedAt!: Date | null;
 
