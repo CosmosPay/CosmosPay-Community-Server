@@ -472,8 +472,10 @@ model PaymentIntent {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  // Deposit addresses made for this intent's payers (payments from any network).
-  deposits PaymentDeposit[]
+  // Deposit addresses made for this intent's payers (payments from any network),
+  // and the slots held for those being opened.
+  deposits            PaymentDeposit[]
+  depositReservations PaymentDepositReservation[]
 
   // Append-only audit trail of status transitions (issue #36).
   transitions PaymentIntentTransition[]
@@ -615,6 +617,9 @@ model PaymentDeposit {
 
   recipient String // the intent's destination, on destinationChain
   refundTo  String // the payer's address, on originChain
+  // Who opened it: HMAC of the client address a rate limit is keyed on, never
+  // the address. The per-client cap counts it (`PAYMENT_DEPOSIT_MAX_OPEN_PER_CLIENT`).
+  clientKey String
 
   depositAddress String
   depositMemo    String?
@@ -645,6 +650,25 @@ model PaymentDeposit {
   // Observer sweep: open rows, least recently checked first.
   @@index([status, lastCheckedAt])
   @@map("payment_deposit")
+}
+
+// A slot held for a deposit being opened: reserved under the link's advisory lock
+// before the live quote, so concurrent requests cannot pass the per-client cap
+// together, and deleted once the deposit row exists or the quote failed.
+// `expiresAt` frees a slot whose process died in between.
+model PaymentDepositReservation {
+  id String @id @default(cuid())
+
+  intentId String
+  intent   PaymentIntent @relation(fields: [intentId], references: [id], onDelete: Cascade)
+
+  clientKey String
+  expiresAt DateTime
+
+  createdAt DateTime @default(now())
+
+  @@index([intentId, clientKey])
+  @@map("payment_deposit_reservation")
 }
 
 // The transaction that settled a payment intent, claimed once across every

@@ -8,6 +8,7 @@ import {
   HttpStatus,
   Param,
   Post,
+  Req,
 } from '@nestjs/common';
 import {
   ApiCreatedResponse,
@@ -17,6 +18,8 @@ import {
   ApiParam,
   ApiTags,
 } from '@nestjs/swagger';
+import type { Request } from 'express';
+import { clientIp, rateLimitSubject } from '@/common/client-ip';
 import { ApiErrorResponse } from '@/common/decorators/api-error-response.decorator';
 import { ApiUpstream } from '@/common/decorators/api-upstream.decorator';
 import { Public } from '@/common/decorators/public.decorator';
@@ -560,8 +563,9 @@ export class PaymentLinksController {
       'amount, the link turns `SUCCEEDED` and emits `PAYMENT_INTENT_SUCCEEDED`, ' +
       'and a deposit that cannot complete is refunded to `refundTo`. The same ' +
       'origin asset and refund address while an earlier deposit still waits ' +
-      'answers that one; at most a few are open per link ' +
-      '(`operation_in_flight`). Budgeted per client address.',
+      'answers that one; otherwise each client address may have two open ' +
+      'deposits per link (`operation_in_flight`), so no caller can take ' +
+      'another payer’s. Budgeted per client address.',
   })
   @ApiParam({
     name: 'id',
@@ -575,13 +579,14 @@ export class PaymentLinksController {
     status: 409,
     codes: [ApiErrorCode.OperationInFlight],
     description:
-      'The link already has as many open deposit addresses as it may: pay ' +
-      'one of them, or try again once they expire.',
+      'This client address already has as many open deposit addresses on ' +
+      'the link as it may: pay one of them, or try again once they expire. ' +
+      'Other payers are not affected.',
     examples: {
       [ApiErrorCode.OperationInFlight]: {
-        summary: 'Too many open deposit addresses',
+        summary: 'Too many open deposit addresses from this client',
         message:
-          'This payment link already has 5 open deposit addresses: pay one of them, or try again once they expire.',
+          'You already have 2 open deposit addresses for this payment link: pay one of them, or try again once they expire.',
         path: '/v1/payment-links/cmh4x2k9a0001l70g8v5q3z2w/deposits',
       },
     },
@@ -589,8 +594,10 @@ export class PaymentLinksController {
   createDeposit(
     @Param('id') id: string,
     @Body() dto: PaymentDepositRequestDto,
+    @Req() req: Request,
   ): Promise<PaymentDepositEntity> {
-    return this.deposits.create(id, dto);
+    // The caller's rate-limit subject: the per-client cap is keyed on it.
+    return this.deposits.create(id, dto, rateLimitSubject(clientIp(req)));
   }
 
   @Get(':id/deposits/:depositId')

@@ -379,7 +379,13 @@ table. These are the rules that did not hold on their own:
   `txHash` are refused there. A link on the three chains takes deposits too only
   with `crossChainFeeBps` recorded at create (mainnet, an amount, no merchant fee,
   not a Monad link found by amount), because the deposit routes are keyless and
-  the plan rate comes from a header.
+  the plan rate comes from a header. The cap on open deposits is per client
+  address (`PAYMENT_DEPOSIT_MAX_OPEN_PER_CLIENT`, the rate-limit subject stored as
+  an HMAC), never per link: a link-wide cap let anyone holding the id take every
+  slot and lock the real payer out. A slot is reserved under the link's advisory
+  lock (`pg_advisory_xact_lock(PAYMENT_DEPOSIT_LOCK_CLASS, hashtext(id))`) before
+  the live quote and released after it, so concurrent creates cannot all pass
+  the count and the slow quote holds no lock or connection.
 - **Monad swaps with a merchant fee go through `contracts/MerchantFeeSwapRouter.sol`**
   (`KURU_MERCHANT_FEE_ROUTER`), one deployment per Kuru Flow router, with no owner. It
   is not a deposit address: wallets approve it and send it value, so the venue checks

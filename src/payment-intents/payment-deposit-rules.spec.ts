@@ -4,6 +4,8 @@ import {
   crossChainPaymentRefusal,
   linkAssetRequest,
   paidFromRecord,
+  paymentDepositClientKey,
+  paymentDepositClientSecret,
   readPaidFrom,
   settlementRefusal,
   toPaymentDepositEntity,
@@ -45,6 +47,7 @@ function deposit(overrides: Partial<PaymentDeposit> = {}): PaymentDeposit {
     slippageBps: 100,
     recipient: '0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed',
     refundTo: 'TLsV52sRDL79HXGGm9yzwKibb6BeruhUzy',
+    clientKey: 'client-key-secret',
     depositAddress: 'TXk4mWpuXSbT4F7wC6S5K3aA2CKUZPqT3a',
     depositMemo: null,
     depositUri: null,
@@ -177,6 +180,23 @@ describe('settlementRefusal', () => {
     expect(settlementRefusal(deposit({ amountOutPaid: 'x' }), payout)).toMatch(
       /cannot be read/,
     );
+  });
+});
+
+describe('paymentDepositClientKey', () => {
+  it('is one value per client, never the address, and depends on the secret', () => {
+    const key = paymentDepositClientSecret('a-server-secret-of-some-length');
+    const a = paymentDepositClientKey(key, '203.0.113.7');
+    expect(a).toBe(paymentDepositClientKey(key, '203.0.113.7'));
+    expect(a).not.toContain('203');
+    expect(a).not.toBe(paymentDepositClientKey(key, '203.0.113.8'));
+    expect(a).not.toBe(
+      paymentDepositClientKey(
+        paymentDepositClientSecret('another-server-secret'),
+        '203.0.113.7',
+      ),
+    );
+    expect(() => paymentDepositClientSecret('')).toThrow();
   });
 });
 

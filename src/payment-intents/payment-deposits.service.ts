@@ -1,8 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import type { PaymentDeposit, Prisma } from '@generated/prisma/client';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { GatewayConsumer } from '@/common/interfaces/gateway-consumer.interface';
 import { isUniqueViolation } from '@/common/prisma-errors';
+import type { AppConfig } from '@/config/configuration';
 import {
   CROSS_CHAIN_OPEN_STATUSES,
   nextStatus,
@@ -27,13 +29,17 @@ import {
 import {
   crossChainPaymentRefusal,
   paidFromRecord,
+  paymentDepositClientKey,
+  paymentDepositClientSecret,
   readTransactions,
   settlementRefusal,
   toPaymentDepositEntity,
 } from '@/payment-intents/payment-deposit-rules';
 import {
-  PAYMENT_DEPOSIT_MAX_OPEN_PER_LINK,
+  PAYMENT_DEPOSIT_LOCK_CLASS,
+  PAYMENT_DEPOSIT_MAX_OPEN_PER_CLIENT,
   PAYMENT_DEPOSIT_OWNER_LIST_MAX,
+  PAYMENT_DEPOSIT_RESERVATION_MIN_MS,
   PAYMENT_DEPOSIT_REUSE_MIN_REMAINING_MS,
 } from '@/payment-intents/payment-intents.constants';
 import { PaymentIntentsService } from '@/payment-intents/payment-intents.service';
@@ -72,9 +78,11 @@ type DepositIntent = Prisma.PaymentIntentGetPayload<{
  * Every route here is keyless (`@Public()`, `/v1/payment-links/{id}/...`): the
  * link's id is the capability, as for its read. What it unlocks is bounded: a
  * quote moves nothing, a deposit address pays only the link's own destination
- * exactly its amount, refunds only the address the payer names, and at most
- * {@link PAYMENT_DEPOSIT_MAX_OPEN_PER_LINK} are open per link. Nothing here
- * signs or spends: the payer's wallet sends, the route pays.
+ * exactly its amount, refunds only the address the payer names, and each client
+ * address has a few open at most. Nothing here
+ * signs or spends: the payer's wallet sends, the route pays. The cap is per
+ * client address ({@link PAYMENT_DEPOSIT_MAX_OPEN_PER_CLIENT}), never per link,
+ * so nobody holding a link can take every other payer's slots.
  *
  * Settlement is the route's report, mirrored by `PaymentDepositObserverService`
  * through {@link applyProviderStatus}: a deposit the route reports SUCCEEDED
@@ -84,8 +92,10 @@ type DepositIntent = Prisma.PaymentIntentGetPayload<{
 @Injectable()
 export class PaymentDepositsService {
   private readonly logger = new Logger(PaymentDepositsService.name);
+  private clientSecret?: Buffer;
 
   constructor(
+    private readonly config: ConfigService<AppConfig, true>,
     private readonly prisma: PrismaService,
     private readonly pricing: PaymentDepositPricing,
     private readonly paymentIntents: PaymentIntentsService,
@@ -133,49 +143,122 @@ export class PaymentDepositsService {
   }
 
   /**
-   * A deposit address for one payer of link `id`, from a live quote. A request
-   * for the same origin asset and refund address while an earlier one still
-   * waits with time left answers that one, so a reloaded checkout shows the
-   * same address; past {@link PAYMENT_DEPOSIT_MAX_OPEN_PER_LINK} open ones the
-   * link takes no more until one ends.
+   * A deposit address for one payer of link `id`, from a live quote.
+   *
+   * A request for the same origin asset and refund address while an earlier
+   * one still waits with time left answers that one, whoever asks, so a
+   * reloaded checkout (or a payer whose address changed) shows the same
+   * address. Otherwise the caller needs a free slot of its own: at most
+   * {@link PAYMENT_DEPOSIT_MAX_OPEN_PER_CLIENT} open deposits per client
+   * address per link, counted with the slots being opened. The slot is taken
+   * under the link's lock BEFORE the quote and released after, so concurrent
+   * requests cannot all pass the count and then insert, and the slow quote never
+   * holds the lock or a database connection. `clientSubject` is the caller's
+   * rate-limit subject (`rateLimitSubject(clientIp(req))`).
    */
   async create(
     id: string,
     request: PaymentDepositRequestDto,
+    clientSubject: string,
   ): Promise<PaymentDepositEntity> {
     const intent = await this.payableIntent(id, true);
     const refundTo = CROSS_CHAIN_NETWORKS[
       request.originChain
     ].address.normalize(request.refundTo);
-
-    const open = await this.prisma.paymentDeposit.findMany({
-      where: {
-        intentId: intent.id,
-        status: { in: [...CROSS_CHAIN_OPEN_STATUSES] },
-        expiresAt: { gt: new Date() },
-      },
-      orderBy: { createdAt: 'desc' },
-    });
     const origin = await this.pricing.originAsset(
       request.originChain,
       request.originAsset,
     );
-    const reusable = open.find(
-      (d) =>
-        d.status === 'AWAITING_DEPOSIT' &&
-        d.originAssetId === origin.assetId &&
-        d.refundTo === refundTo &&
-        d.expiresAt.getTime() - Date.now() >=
-          PAYMENT_DEPOSIT_REUSE_MIN_REMAINING_MS,
-    );
+    const reusable = await this.prisma.paymentDeposit.findFirst({
+      where: {
+        intentId: intent.id,
+        status: 'AWAITING_DEPOSIT',
+        originAssetId: origin.assetId,
+        refundTo,
+        expiresAt: {
+          gte: new Date(Date.now() + PAYMENT_DEPOSIT_REUSE_MIN_REMAINING_MS),
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
     if (reusable) return this.present(reusable);
-    if (open.length >= PAYMENT_DEPOSIT_MAX_OPEN_PER_LINK) {
-      throw ApiError.conflict(
-        ApiErrorCode.OperationInFlight,
-        `This payment link already has ${open.length} open deposit addresses: ` +
-          'pay one of them, or try again once they expire.',
-      );
+
+    const clientKey = paymentDepositClientKey(
+      this.clientKeySecret(),
+      clientSubject,
+    );
+    const slot = await this.reserveSlot(intent.id, clientKey);
+    try {
+      return await this.open(intent, request, refundTo, clientKey);
+    } finally {
+      // Once the deposit row exists it counts for itself; on a failed quote the
+      // slot is the caller's again. Never in the way of the answer.
+      await this.prisma.paymentDepositReservation
+        .deleteMany({ where: { id: slot.id } })
+        .catch((err: unknown) =>
+          this.logger.warn(
+            `Deposit slot ${slot.id} of intent ${intent.id} not released (it lapses on its own): ${String(err)}`,
+          ),
+        );
     }
+  }
+
+  /**
+   * Takes one of the caller's slots on link `intentId`, or answers 409 when it
+   * has none left. Under a transaction-scoped advisory lock on the link, so the
+   * count and the reservation are one step for every replica: two requests
+   * that both saw a free slot cannot both take it. Slots whose process died
+   * (past `expiresAt`) are swept first.
+   */
+  private reserveSlot(
+    intentId: string,
+    clientKey: string,
+  ): Promise<{ id: string }> {
+    const { timeoutMs } = this.config.get('nearIntents', { infer: true });
+    const holdMs = Math.max(PAYMENT_DEPOSIT_RESERVATION_MIN_MS, 3 * timeoutMs);
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(${PAYMENT_DEPOSIT_LOCK_CLASS}::int, hashtext(${intentId}))`;
+      const now = new Date();
+      await tx.paymentDepositReservation.deleteMany({
+        where: { intentId, expiresAt: { lte: now } },
+      });
+      const open = await tx.paymentDeposit.count({
+        where: {
+          intentId,
+          clientKey,
+          status: { in: [...CROSS_CHAIN_OPEN_STATUSES] },
+          expiresAt: { gt: now },
+        },
+      });
+      const held = await tx.paymentDepositReservation.count({
+        where: { intentId, clientKey },
+      });
+      if (open + held >= PAYMENT_DEPOSIT_MAX_OPEN_PER_CLIENT) {
+        throw ApiError.conflict(
+          ApiErrorCode.OperationInFlight,
+          `You already have ${PAYMENT_DEPOSIT_MAX_OPEN_PER_CLIENT} open deposit ` +
+            'addresses for this payment link: pay one of them, or try again ' +
+            'once they expire.',
+        );
+      }
+      return tx.paymentDepositReservation.create({
+        data: {
+          intentId,
+          clientKey,
+          expiresAt: new Date(now.getTime() + holdMs),
+        },
+        select: { id: true },
+      });
+    });
+  }
+
+  /** The live quote and its row, once the caller holds a slot. */
+  private async open(
+    intent: DepositIntent,
+    request: PaymentDepositRequestDto,
+    refundTo: string,
+    clientKey: string,
+  ): Promise<PaymentDepositEntity> {
     const priced = await this.pricing.price(intent, request, true);
     await this.assertRecipientCanReceive(priced);
 
@@ -216,6 +299,7 @@ export class PaymentDepositsService {
           slippageBps: priced.slippageBps,
           recipient: priced.recipient,
           refundTo,
+          clientKey,
           depositAddress: quote.depositAddress,
           depositMemo,
           depositUri: depositLink({
@@ -412,6 +496,14 @@ export class PaymentDepositsService {
       recipient,
       'the payment',
     );
+  }
+
+  /** The key client addresses are stored under, derived once. */
+  private clientKeySecret(): Buffer {
+    this.clientSecret ??= paymentDepositClientSecret(
+      this.config.get('apisix', { infer: true }).gatewaySecret,
+    );
+    return this.clientSecret;
   }
 
   private async present(row: PaymentDeposit): Promise<PaymentDepositEntity> {

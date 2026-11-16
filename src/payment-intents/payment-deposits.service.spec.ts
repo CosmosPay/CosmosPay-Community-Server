@@ -1,10 +1,15 @@
 import type { PaymentDeposit } from '@generated/prisma/client';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { PaymentDepositsService } from '@/payment-intents/payment-deposits.service';
-import { PAYMENT_DEPOSIT_MAX_OPEN_PER_LINK } from '@/payment-intents/payment-intents.constants';
+import {
+  PAYMENT_DEPOSIT_LOCK_CLASS,
+  PAYMENT_DEPOSIT_MAX_OPEN_PER_CLIENT,
+} from '@/payment-intents/payment-intents.constants';
 
 const MERCHANT = '0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed';
 const PAYER = 'TLsV52sRDL79HXGGm9yzwKibb6BeruhUzy';
+const CLIENT_A = '203.0.113.7';
+const CLIENT_B = '2001:db8:1:2::/64';
 const ORIGIN = {
   chain: 'tron',
   chainName: 'Tron',
@@ -28,6 +33,9 @@ const REQUEST = {
   originAsset: 'USDT',
   refundTo: PAYER,
 };
+/** A distinct, valid Tron refund address per index (34 base58 characters). */
+const refundTo = (i: number) =>
+  `TLsV52sRDL79HXGGm9yzwKibb6Beruh${'ABCDEFGHJ'[i % 9]}${'abcdefghi'[Math.floor(i / 9) % 9]}y`;
 
 const INTENT = {
   id: 'pi_1',
@@ -70,6 +78,7 @@ function stored(overrides: Partial<PaymentDeposit> = {}): PaymentDeposit {
     slippageBps: 100,
     recipient: MERCHANT,
     refundTo: PAYER,
+    clientKey: 'k',
     depositAddress: 'TXk4mWpuXSbT4F7wC6S5K3aA2CKUZPqT3a',
     depositMemo: null,
     depositUri: null,
@@ -89,26 +98,114 @@ function stored(overrides: Partial<PaymentDeposit> = {}): PaymentDeposit {
   };
 }
 
-function build(intent: unknown = INTENT, open: PaymentDeposit[] = []) {
-  let row: PaymentDeposit | null = null;
+/**
+ * Whether a row matches the `where` the service sends: the operators it uses
+ * (`in`, `gt`, `gte`, `lte`) over plain columns.
+ */
+function matches(row: Record<string, any>, where: Record<string, any>) {
+  return Object.entries(where).every(([key, cond]) => {
+    const value = row[key];
+    if (cond && typeof cond === 'object' && !(cond instanceof Date)) {
+      if ('in' in cond && !cond.in.includes(value)) return false;
+      if ('gt' in cond && !(value > cond.gt)) return false;
+      if ('gte' in cond && !(value >= cond.gte)) return false;
+      if ('lte' in cond && !(value <= cond.lte)) return false;
+      return true;
+    }
+    return value === cond;
+  });
+}
+
+/**
+ * The service over in-memory tables. `$transaction` runs one callback at a
+ * time, as the link's advisory lock makes Postgres do for one intent, and the
+ * live quote waits `quoteMs`, so concurrent creates all start before any of
+ * them could insert.
+ */
+function build(
+  intent: unknown = INTENT,
+  deposits: PaymentDeposit[] = [],
+  quoteMs = 0,
+) {
+  const tables = {
+    deposits: [...deposits],
+    reservations: [] as {
+      id: string;
+      intentId: string;
+      clientKey: string;
+      expiresAt: Date;
+    }[],
+  };
+  let seq = 0;
+  let lockChain: Promise<unknown> = Promise.resolve();
+  const locks: unknown[][] = [];
+  const paymentDeposit = {
+    findFirst: jest.fn(({ where }: any) =>
+      Promise.resolve(
+        [...tables.deposits].reverse().find((d) => matches(d, where)) ?? null,
+      ),
+    ),
+    findMany: jest.fn(({ where }: any) =>
+      Promise.resolve(tables.deposits.filter((d) => matches(d, where))),
+    ),
+    count: jest.fn(({ where }: any) =>
+      Promise.resolve(tables.deposits.filter((d) => matches(d, where)).length),
+    ),
+    create: jest.fn(({ data }: any) => {
+      const row = stored({ ...data, id: `dep_${++seq}` });
+      tables.deposits.push(row);
+      return Promise.resolve(row);
+    }),
+    updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+    findUniqueOrThrow: jest.fn(({ where }: any) =>
+      Promise.resolve(tables.deposits.find((d) => d.id === where.id)),
+    ),
+  };
+  const paymentDepositReservation = {
+    count: jest.fn(({ where }: any) =>
+      Promise.resolve(
+        tables.reservations.filter((r) => matches(r, where)).length,
+      ),
+    ),
+    create: jest.fn(({ data }: any) => {
+      const row = { ...data, id: `slot_${++seq}` };
+      tables.reservations.push(row);
+      return Promise.resolve({ id: row.id });
+    }),
+    deleteMany: jest.fn(({ where }: any) => {
+      const before = tables.reservations.length;
+      tables.reservations = tables.reservations.filter(
+        (r) => !matches(r, where),
+      );
+      return Promise.resolve({ count: before - tables.reservations.length });
+    }),
+  };
   const prisma: any = {
     paymentIntent: { findUnique: jest.fn().mockResolvedValue(intent) },
-    paymentDeposit: {
-      findMany: jest.fn().mockResolvedValue(open),
-      findFirst: jest.fn(),
-      create: jest.fn(({ data }) => {
-        row = stored({ ...data, id: 'dep_new' });
-        return Promise.resolve(row);
-      }),
-      updateMany: jest.fn().mockResolvedValue({ count: 1 }),
-      findUniqueOrThrow: jest.fn(() => Promise.resolve(row)),
-    },
+    paymentDeposit,
+    paymentDepositReservation,
+    $transaction: jest.fn((work: (tx: unknown) => Promise<unknown>) => {
+      const tx = {
+        paymentDeposit,
+        paymentDepositReservation,
+        $executeRaw: jest.fn(
+          (strings: TemplateStringsArray, ...values: unknown[]) => {
+            locks.push([strings.join('?'), ...values]);
+            return Promise.resolve(1);
+          },
+        ),
+      };
+      const run = lockChain.then(() => work(tx));
+      lockChain = run.catch(() => undefined);
+      return run;
+    }),
   };
   const pricing = {
     originAsset: jest.fn().mockResolvedValue(ORIGIN),
     payableAssets: jest.fn().mockResolvedValue([ORIGIN, DESTINATION]),
-    price: jest.fn().mockImplementation((_intent, _request, live) =>
-      Promise.resolve({
+    price: jest.fn().mockImplementation(async (_intent, request, live) => {
+      if (quoteMs) await new Promise((r) => setTimeout(r, quoteMs));
+      return {
         origin: ORIGIN,
         destination: DESTINATION,
         amountIn: '25.284231',
@@ -118,7 +215,7 @@ function build(intent: unknown = INTENT, open: PaymentDeposit[] = []) {
         feeAmount: '0.126421',
         slippageBps: 100,
         recipient: MERCHANT,
-        refundTo: PAYER,
+        refundTo: request.refundTo,
         request: { deadline: '2026-11-16T15:30:00.000Z' },
         response: {
           correlationId: 'corr',
@@ -129,30 +226,33 @@ function build(intent: unknown = INTENT, open: PaymentDeposit[] = []) {
             timeEstimate: 82,
             ...(live
               ? {
-                  depositAddress: 'TXk4mWpuXSbT4F7wC6S5K3aA2CKUZPqT3a',
+                  depositAddress: `TDeposit${++seq}`,
                   deadline: new Date(Date.now() + 30 * 60_000).toISOString(),
                 }
               : {}),
           },
         },
-      }),
-    ),
+      };
+    }),
   };
   const paymentIntents = {
     assertOwned: jest.fn().mockResolvedValue('base'),
     settleFromDeposit: jest.fn().mockResolvedValue({}),
   };
   const accounts = { load: jest.fn(), assertCanReceive: jest.fn() };
+  const values: Record<string, unknown> = {
+    apisix: { gatewaySecret: 'a-gateway-secret-for-the-spec-only' },
+    nearIntents: { timeoutMs: 20_000 },
+  };
+  const config = { get: (key: string) => values[key] } as never;
   const service = new PaymentDepositsService(
+    config,
     prisma,
     pricing as never,
     paymentIntents as never,
     accounts as never,
   );
-  const setRow = (r: PaymentDeposit) => {
-    row = r;
-  };
-  return { service, prisma, pricing, paymentIntents, accounts, setRow };
+  return { service, prisma, tables, locks, pricing, paymentIntents, accounts };
 }
 
 async function refusal(promise: Promise<unknown>): Promise<ApiError> {
@@ -198,9 +298,9 @@ describe('PaymentDepositsService', () => {
         expect((await refusal(service.quote('pi_1', REQUEST))).code).toBe(
           ApiErrorCode.InvalidStateTransition,
         );
-        expect((await refusal(service.create('pi_1', REQUEST))).code).toBe(
-          ApiErrorCode.InvalidStateTransition,
-        );
+        expect(
+          (await refusal(service.create('pi_1', REQUEST, CLIENT_A))).code,
+        ).toBe(ApiErrorCode.InvalidStateTransition);
       }
     });
   });
@@ -232,11 +332,12 @@ describe('PaymentDepositsService', () => {
   });
 
   describe('create', () => {
-    it('stores a live quote as a deposit of this link and answers its address', async () => {
-      const { service, prisma } = build();
-      const deposit = await service.create('pi_1', REQUEST);
+    it('stores a live quote as a deposit of this link, keyed to its client, and releases the slot', async () => {
+      const { service, prisma, tables, locks } = build();
+      const deposit = await service.create('pi_1', REQUEST, CLIENT_A);
 
-      expect(prisma.paymentDeposit.create.mock.calls[0][0].data).toMatchObject({
+      const data = prisma.paymentDeposit.create.mock.calls[0][0].data;
+      expect(data).toMatchObject({
         intentId: 'pi_1',
         network: 'public',
         status: 'AWAITING_DEPOSIT',
@@ -245,47 +346,150 @@ describe('PaymentDepositsService', () => {
         amountOut: '25',
         recipient: MERCHANT,
         refundTo: PAYER,
-        depositAddress: 'TXk4mWpuXSbT4F7wC6S5K3aA2CKUZPqT3a',
       });
-      expect(deposit).toMatchObject({
-        id: 'dep_new',
-        paymentLinkId: 'pi_1',
-        depositAddress: 'TXk4mWpuXSbT4F7wC6S5K3aA2CKUZPqT3a',
-      });
+      // The client is stored as a MAC, never as its address.
+      expect(data.clientKey).toMatch(/^[A-Za-z0-9_-]{43}$/);
+      expect(data.clientKey).not.toContain('203');
+      expect(deposit).toMatchObject({ paymentLinkId: 'pi_1' });
       expect(deposit.qr).toMatch(/^data:image\/png;base64,/);
-      expect(JSON.stringify(deposit)).not.toContain('"quote"');
+      expect(JSON.stringify(deposit)).not.toContain('clientKey');
+      // The slot was taken under the link's lock and is released.
+      expect(locks[0]).toEqual([
+        expect.stringContaining('pg_advisory_xact_lock(?::int, hashtext(?))'),
+        PAYMENT_DEPOSIT_LOCK_CLASS,
+        'pi_1',
+      ]);
+      expect(tables.reservations).toEqual([]);
     });
 
-    it('answers the open deposit again for the same asset and refund address', async () => {
-      const open = stored();
-      const { service, prisma, pricing } = build(INTENT, [open]);
-      const deposit = await service.create('pi_1', REQUEST);
+    it('answers the open deposit again for the same asset and refund address, from any client', async () => {
+      const { service, prisma, pricing } = build(INTENT, [stored()]);
+      const deposit = await service.create('pi_1', REQUEST, CLIENT_B);
       expect(deposit.id).toBe('dep_1');
       expect(pricing.price).not.toHaveBeenCalled();
       expect(prisma.paymentDeposit.create).not.toHaveBeenCalled();
     });
 
-    it('makes a new one for another refund address', async () => {
-      const { service, prisma } = build(INTENT, [
-        stored({ refundTo: 'TBia4uHnb3oSSZm5isP284cA7Np1v15Vhi' }),
-      ]);
-      await service.create('pi_1', REQUEST);
-      expect(prisma.paymentDeposit.create).toHaveBeenCalled();
+    it(`keeps a client to ${PAYMENT_DEPOSIT_MAX_OPEN_PER_CLIENT} open deposits on a link, even when its requests race`, async () => {
+      const { service, tables, pricing } = build(INTENT, [], 20);
+      const attempts = 6;
+
+      const results = await Promise.allSettled(
+        Array.from({ length: attempts }, (_, i) =>
+          service.create(
+            'pi_1',
+            { ...REQUEST, refundTo: refundTo(i) },
+            CLIENT_A,
+          ),
+        ),
+      );
+
+      const opened = results.filter((r) => r.status === 'fulfilled');
+      const refused = results.filter(
+        (r): r is PromiseRejectedResult => r.status === 'rejected',
+      );
+      expect(opened).toHaveLength(PAYMENT_DEPOSIT_MAX_OPEN_PER_CLIENT);
+      expect(tables.deposits).toHaveLength(PAYMENT_DEPOSIT_MAX_OPEN_PER_CLIENT);
+      for (const r of refused) {
+        expect(r.reason).toBeInstanceOf(ApiError);
+        expect((r.reason as ApiError).code).toBe(
+          ApiErrorCode.OperationInFlight,
+        );
+      }
+      // The refused ones never reached the cross-chain route.
+      expect(pricing.price).toHaveBeenCalledTimes(
+        PAYMENT_DEPOSIT_MAX_OPEN_PER_CLIENT,
+      );
+      expect(tables.reservations).toEqual([]);
     });
 
-    it('takes no more than the cap of open deposits per link', async () => {
-      const open = Array.from(
-        { length: PAYMENT_DEPOSIT_MAX_OPEN_PER_LINK },
-        (_, i) => stored({ id: `dep_${i}`, refundTo: `T${i}` }),
+    it('lets another client open a deposit while one client has used all of its own', async () => {
+      const { service, tables } = build(INTENT, [], 5);
+      await Promise.allSettled(
+        Array.from({ length: 4 }, (_, i) =>
+          service.create(
+            'pi_1',
+            { ...REQUEST, refundTo: refundTo(i) },
+            CLIENT_A,
+          ),
+        ),
       );
-      const { service, pricing } = build(INTENT, open);
-      const err = await refusal(service.create('pi_1', REQUEST));
-      expect(err.code).toBe(ApiErrorCode.OperationInFlight);
-      expect(pricing.price).not.toHaveBeenCalled();
+      expect(
+        (
+          await refusal(
+            service.create(
+              'pi_1',
+              { ...REQUEST, refundTo: refundTo(7) },
+              CLIENT_A,
+            ),
+          )
+        ).code,
+      ).toBe(ApiErrorCode.OperationInFlight);
+
+      const theirs = await service.create(
+        'pi_1',
+        { ...REQUEST, refundTo: refundTo(8) },
+        CLIENT_B,
+      );
+      expect(theirs.refundTo).toBe(refundTo(8));
+      expect(tables.deposits).toHaveLength(
+        PAYMENT_DEPOSIT_MAX_OPEN_PER_CLIENT + 1,
+      );
+    });
+
+    it('frees a client slot again once a deposit expires', async () => {
+      const { service, tables } = build();
+      const clientKey =
+        (await service.create('pi_1', REQUEST, CLIENT_A)) &&
+        tables.deposits[0].clientKey;
+      tables.deposits.push(
+        stored({
+          id: 'old',
+          clientKey,
+          expiresAt: new Date(Date.now() - 1000),
+        }),
+      );
+      await service.create(
+        'pi_1',
+        { ...REQUEST, refundTo: refundTo(1) },
+        CLIENT_A,
+      );
+      expect(tables.deposits.filter((d) => d.id !== 'old')).toHaveLength(2);
+    });
+
+    it('releases the slot when the quote fails, so the client can try again', async () => {
+      const { service, pricing, tables } = build();
+      pricing.price.mockRejectedValueOnce(
+        ApiError.badRequest(ApiErrorCode.ProviderError, 'refused'),
+      );
+      pricing.price.mockRejectedValueOnce(
+        ApiError.badRequest(ApiErrorCode.ProviderError, 'refused'),
+      );
+      for (let i = 0; i < 2; i++) {
+        expect(
+          (await refusal(service.create('pi_1', REQUEST, CLIENT_A))).code,
+        ).toBe(ApiErrorCode.ProviderError);
+      }
+      expect(tables.reservations).toEqual([]);
+      await expect(
+        service.create('pi_1', REQUEST, CLIENT_A),
+      ).resolves.toBeDefined();
+    });
+
+    it('sweeps a slot whose process died before counting', async () => {
+      const { service, tables } = build();
+      tables.reservations.push({
+        id: 'stale_1',
+        intentId: 'pi_1',
+        clientKey: 'whatever',
+        expiresAt: new Date(Date.now() - 1),
+      });
+      await service.create('pi_1', REQUEST, CLIENT_A);
+      expect(tables.reservations).toEqual([]);
     });
 
     it('checks a Stellar merchant trusts the asset before handing out an address', async () => {
-      const { service, pricing, accounts } = build();
+      const { service, pricing, accounts, tables } = build();
       pricing.price.mockImplementationOnce(() =>
         Promise.resolve({
           origin: ORIGIN,
@@ -307,14 +511,15 @@ describe('PaymentDepositsService', () => {
           'no trustline',
         );
       });
-      const err = await refusal(service.create('pi_1', REQUEST));
+      const err = await refusal(service.create('pi_1', REQUEST, CLIENT_A));
       expect(err.code).toBe(ApiErrorCode.TrustlineMissing);
+      expect(tables.deposits).toEqual([]);
+      expect(tables.reservations).toEqual([]);
     });
   });
 
   it('reads a deposit only through its own link', async () => {
-    const { service, prisma } = build();
-    prisma.paymentDeposit.findFirst.mockResolvedValueOnce(null);
+    const { service, prisma } = build(INTENT, [stored()]);
     expect((await refusal(service.findPublic('pi_other', 'dep_1'))).code).toBe(
       ApiErrorCode.NotFound,
     );
@@ -336,7 +541,6 @@ describe('PaymentDepositsService', () => {
 
   describe('applyProviderStatus', () => {
     it('follows the route and settles the link when the merchant is paid', async () => {
-      const { service, prisma, paymentIntents, setRow } = build();
       const paid = stored({
         status: 'SUCCEEDED',
         amountOutPaid: '25',
@@ -344,7 +548,7 @@ describe('PaymentDepositsService', () => {
           { hash: '0xPAYOUT', explorerUrl: 'https://basescan.org/tx/0xpayout' },
         ],
       });
-      setRow(paid);
+      const { service, prisma, paymentIntents } = build(INTENT, [paid]);
 
       await service.applyProviderStatus(stored({ status: 'PROCESSING' }), {
         correlationId: 'corr',
@@ -379,14 +583,12 @@ describe('PaymentDepositsService', () => {
     });
 
     it('does not settle on a payout below the link amount', async () => {
-      const { service, paymentIntents, setRow } = build();
-      setRow(
-        stored({
-          status: 'SUCCEEDED',
-          amountOutPaid: '24',
-          destinationTxHashes: [{ hash: '0x1', explorerUrl: 'https://x' }],
-        }),
-      );
+      const short = stored({
+        status: 'SUCCEEDED',
+        amountOutPaid: '24',
+        destinationTxHashes: [{ hash: '0x1', explorerUrl: 'https://x' }],
+      });
+      const { service, paymentIntents } = build(INTENT, [short]);
       await service.applyProviderStatus(stored({ status: 'PROCESSING' }), {
         correlationId: 'corr',
         status: 'SUCCESS',
@@ -397,8 +599,9 @@ describe('PaymentDepositsService', () => {
 
     it('expires a deposit nobody paid once its deadline passes', async () => {
       const lapsed = stored({ expiresAt: new Date(Date.now() - 1000) });
-      const { service, prisma, setRow } = build();
-      setRow({ ...lapsed, status: 'EXPIRED' });
+      const { service, prisma } = build(INTENT, [
+        { ...lapsed, status: 'EXPIRED' },
+      ]);
       await service.applyProviderStatus(lapsed, null);
       expect(
         prisma.paymentDeposit.updateMany.mock.calls[0][0].data,

@@ -728,7 +728,7 @@ devnet 和 Monad testnet（10143）——所有链上的 `network` 都存为 `pu
 - **仅限主网、固定金额、无商户手续费。** 该路由没有测试网（`dev` 密钥得到 `400 network_unsupported`），按精确金额报价，且只向一个收款方付款（`merchant_fee_unsupported`）。资产必须是路由在该网络上交易的资产（`GET /v1/cross-chain-swaps/assets`）：用其符号指定，或在 `assetIssuer` 中用其 `contract` 指定。
 - **Stellar、Solana 和 Monad 上的链接也可从其他网络付款**，前提是在主网、有金额且无商户手续费（公开读取中的 `crossChainPayment`）。没有充值地址的 Monad 链接不行：其 observer 通过商户地址上的金额识别付款，而路由的付款也会到达该地址。
 - **佣金。** 从其他网络付款时，会在链接金额之外向 `NEAR_INTENTS_FEE_RECIPIENT` 支付套餐的 swap 佣金（`X-Plan-Swap-Fee-Bps`）：商户收到链接金额，费用由付款方的充值承担。费率在创建链接时读取（`crossChainFeeBps`），因为充值路由不需要密钥。费率没有收款方时，新网络上的链接会被拒绝（`503 misconfigured`）；在 Stellar、Solana 和 Monad 上，链接创建时不支持从其他网络付款。
-- **无需密钥且有边界。** 充值路由是 `/v1/payment-links/{id}` 下的 `@Public()` 路由，即网关已有的无密钥路由：链接 id 就是凭证。充值只向链接的收款地址支付其金额，只退款到 `refundTo`；每个链接最多同时有 `PAYMENT_DEPOSIT_MAX_OPEN_PER_LINK`（5）个未完成充值，同一资产和退款地址再次请求会返回已打开的那个。按客户端地址计预算：`payment-links:deposit-assets`（每分钟 30）、`payment-links:quote`（30）、`payment-links:deposits`（10）、`payment-links:deposit-read`（60）。
+- **无需密钥且有边界。** 充值路由是 `/v1/payment-links/{id}` 下的 `@Public()` 路由，即网关已有的无密钥路由：链接 id 就是凭证。充值只向链接的收款地址支付其金额，只退款到 `refundTo`；同一资产和退款地址再次请求会返回已打开的那个；否则每个客户端地址（限流主体，仅以 HMAC 形式存储）在每个链接上最多有 `PAYMENT_DEPOSIT_MAX_OPEN_PER_CLIENT`（2）个未完成充值。上限按客户端计算，绝不按链接计算：共享上限会让任何持有链接的人占满所有名额，把真正的付款方挡在外面。名额在实时报价之前于链接的 advisory lock 下预留（`payment_deposit_reservation`），因此并发请求无法同时通过计数。按客户端地址计预算：`payment-links:deposit-assets`（每分钟 30）、`payment-links:quote`（30）、`payment-links:deposits`（10）、`payment-links:deposit-read`（60）。
 - **最低金额由路由决定**，并取决于交易对；拒绝时返回 `400 provider_error` 及原因。
 
 ### Solana 与 Monad 上的钱包登录
@@ -1702,7 +1702,7 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
 
 ### 支付链接：所有网络，可从任意网络付款
 
-- **迁移 `20261116120000_payment_deposits`** 创建 `payment_deposit` 表，并为 `payment_intent` 增加两个可空列（`crossChainFeeBps`、`paidFrom`）；不改写任何已有数据。在新版本提供服务前，在每个数据库上运行 `migrate deploy`。
+- **迁移 `20261116120000_payment_deposits`** 创建 `payment_deposit` 与 `payment_deposit_reservation` 表，并为 `payment_intent` 增加两个可空列（`crossChainFeeBps`、`paidFrom`）；不改写任何已有数据。在新版本提供服务前，在每个数据库上运行 `migrate deploy`。
 - **支付意图的 `chain` 新增 32 个网络**（`POST /v1/payment-intents/pay`、列表筛选、响应和 webhook 负载）。按 `stellar`、`solana`、`monad` 分支的集成必须处理其他网络。公开读取中 `payTo` 现在可为空（在这些网络上为 null），并新增 `crossChainPayment`；所有者读取和 webhook 中新增 `paidFrom`。
 - **新路由：** 无密钥的 `GET /v1/payment-links/{id}/deposit-assets`、`POST /v1/payment-links/{id}/quote`、`POST /v1/payment-links/{id}/deposits` 和 `GET /v1/payment-links/{id}/deposits/{depositId}`，以及 `GET /v1/payment-intents/{id}/deposits`（`payments:read`）。网关的无密钥 `/v1/payment-links/*` 路由已支持 GET 和 POST。
 - **没有新变量**，但凡是套餐收取 swap 佣金的部署都必须设置 `NEAR_INTENTS_FEE_RECIPIENT`：否则新网络上的链接会被拒绝（`503`），Stellar、Solana 或 Monad 上的链接创建时不支持从其他网络付款。充值 observer 与其他 observer 一起运行（`OBSERVER_ENABLED`）。

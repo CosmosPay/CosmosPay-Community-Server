@@ -300,8 +300,8 @@ export const PAYMENT_DEPOSIT_QUOTE_RATE_LIMIT = {
  * `POST /v1/payment-links/{id}/deposits`, per client address. Each one is a live
  * quote that makes a deposit address and a row the observer polls until it
  * settles or its deadline (plus the rescue window) passes. Ten a minute is a
- * payer changing their mind several times; the per-link cap below bounds what
- * many addresses can open on one link.
+ * payer changing their mind several times; the per-client cap below bounds how
+ * many of them stay open on one link.
  */
 export const PAYMENT_DEPOSIT_CREATE_RATE_LIMIT = {
   name: 'payment-links:deposits',
@@ -321,13 +321,47 @@ export const PAYMENT_DEPOSIT_READ_RATE_LIMIT = {
 };
 
 /**
- * The most deposit addresses one payment link may have open (waiting for a
- * deposit, or with one in progress) at once. A payer needs one; a few cover
- * changing network or asset, and two people paying the same link. The id is
- * the only capability these routes take, so without a cap anyone holding a
- * link could fill the observer's batches with addresses nobody pays.
+ * The most deposit addresses one CLIENT (the address a rate limit is keyed on,
+ * an IPv6 caller per /64: `rateLimitSubject`) may have open on one payment link
+ * at once, waiting for a deposit or with one in progress. A payer needs one;
+ * two cover changing network or asset once.
+ *
+ * Per client, never per link: the link id is the only capability these routes
+ * take, and a cap shared by everyone holding it was a lockout. Anyone could
+ * open the link's last slots with addresses nobody pays and keep the real payer
+ * out until they expired. Here a caller fills only its own slots, and every
+ * other payer keeps theirs. How many addresses one caller opens over time is
+ * the create budget's to bound (`PAYMENT_DEPOSIT_CREATE_RATE_LIMIT`), the same
+ * bound cross-chain swaps live with.
  */
-export const PAYMENT_DEPOSIT_MAX_OPEN_PER_LINK = 5;
+export const PAYMENT_DEPOSIT_MAX_OPEN_PER_CLIENT = 2;
+
+/**
+ * How long a slot reserved for a deposit being opened is held, at least. A slot
+ * is reserved under the link's lock BEFORE the live quote (which takes up to
+ * NEAR_INTENTS_TIMEOUT_MS) and released once the deposit row exists or the
+ * quote failed; this lifetime only matters when the process died in between, so
+ * a slot is never lost for longer than this. The service holds it for three
+ * quote timeouts when that is longer.
+ */
+export const PAYMENT_DEPOSIT_RESERVATION_MIN_MS = 2 * 60 * 1000;
+
+/**
+ * The first key of the transaction-scoped advisory lock that serializes the
+ * deposit slots of one payment link (`pg_advisory_xact_lock(class, hashtext(id))`).
+ * The two-key form, so it can never meet a job lock (`AdvisoryLockKey`, one
+ * 64-bit key); this class is the deposits' alone.
+ */
+export const PAYMENT_DEPOSIT_LOCK_CLASS = 881_022;
+
+/**
+ * What a client's address is stored as on a deposit: HMAC-SHA256 under a key
+ * derived from APISIX_GATEWAY_SECRET with this salt and label, never the address
+ * itself. Equal for one client, so the per-client cap can count it; useless to
+ * anyone who reads the table without the secret.
+ */
+export const PAYMENT_DEPOSIT_CLIENT_KEY_SALT = 'cosmos-pay payment-deposit';
+export const PAYMENT_DEPOSIT_CLIENT_KEY_LABEL = 'payment-deposit client v1';
 
 /**
  * A new deposit request for the same origin asset and refund address returns

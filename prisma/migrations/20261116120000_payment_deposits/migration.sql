@@ -1,9 +1,10 @@
 -- Payment links on every network the cross-chain route reaches: the
 -- `payment_deposit` table (a deposit address made for one payer of one payment
--- intent), and on `payment_intent` the plan commission such a payment pays
+-- intent), `payment_deposit_reservation` (the slots held while one is being
+-- opened), and on `payment_intent` the plan commission such a payment pays
 -- (`crossChainFeeBps`) and what the payer sent when one settled it (`paidFrom`).
 --
--- A new table and nullable columns only; nothing existing is rewritten, so it
+-- New tables and nullable columns only; nothing existing is rewritten, so it
 -- applies online on every database. `payment_intent.chain` is TEXT already: a
 -- link on a new network needs no change to it.
 -- AlterTable
@@ -35,6 +36,7 @@ CREATE TABLE "payment_deposit" (
     "slippageBps" INTEGER NOT NULL,
     "recipient" TEXT NOT NULL,
     "refundTo" TEXT NOT NULL,
+    "clientKey" TEXT NOT NULL,
     "depositAddress" TEXT NOT NULL,
     "depositMemo" TEXT,
     "depositUri" TEXT,
@@ -54,6 +56,17 @@ CREATE TABLE "payment_deposit" (
     CONSTRAINT "payment_deposit_pkey" PRIMARY KEY ("id")
 );
 
+-- CreateTable
+CREATE TABLE "payment_deposit_reservation" (
+    "id" TEXT NOT NULL,
+    "intentId" TEXT NOT NULL,
+    "clientKey" TEXT NOT NULL,
+    "expiresAt" TIMESTAMP(3) NOT NULL,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "payment_deposit_reservation_pkey" PRIMARY KEY ("id")
+);
+
 -- CreateIndex
 CREATE INDEX "payment_deposit_intentId_createdAt_idx" ON "payment_deposit"("intentId", "createdAt");
 
@@ -63,6 +76,12 @@ CREATE INDEX "payment_deposit_status_lastCheckedAt_idx" ON "payment_deposit"("st
 -- CreateIndex
 CREATE UNIQUE INDEX "payment_deposit_depositAddress_depositMemo_key" ON "payment_deposit"("depositAddress", "depositMemo");
 
+-- CreateIndex
+CREATE INDEX "payment_deposit_reservation_intentId_clientKey_idx" ON "payment_deposit_reservation"("intentId", "clientKey");
+
 -- AddForeignKey
 ALTER TABLE "payment_deposit" ADD CONSTRAINT "payment_deposit_intentId_fkey" FOREIGN KEY ("intentId") REFERENCES "payment_intent"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "payment_deposit_reservation" ADD CONSTRAINT "payment_deposit_reservation_intentId_fkey" FOREIGN KEY ("intentId") REFERENCES "payment_intent"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 

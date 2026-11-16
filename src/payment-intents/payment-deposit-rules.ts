@@ -1,3 +1,4 @@
+import { createHmac, hkdfSync } from 'node:crypto';
 import type {
   PaymentDeposit,
   PaymentIntent,
@@ -11,6 +12,10 @@ import type {
   PaidFromEntity,
   PaymentDepositEntity,
 } from '@/payment-intents/entities/payment-deposit.entity';
+import {
+  PAYMENT_DEPOSIT_CLIENT_KEY_LABEL,
+  PAYMENT_DEPOSIT_CLIENT_KEY_SALT,
+} from '@/payment-intents/payment-intents.constants';
 import { isPaymentNetwork } from '@/payment-intents/payment-networks';
 
 /** The intent columns that decide whether it can be paid from another network. */
@@ -200,4 +205,32 @@ export function settlementRefusal(
     return `the paid amount "${deposit.amountOutPaid}" cannot be read`;
   }
   return null;
+}
+
+/**
+ * The key client addresses are MACed under: HKDF-SHA256 of the server secret,
+ * labelled for this one use, so it is never the secret itself nor a key derived
+ * for anything else.
+ */
+export function paymentDepositClientSecret(secret: string): Buffer {
+  if (!secret) throw new Error('payment deposits need a non-empty secret');
+  return Buffer.from(
+    hkdfSync(
+      'sha256',
+      secret,
+      PAYMENT_DEPOSIT_CLIENT_KEY_SALT,
+      PAYMENT_DEPOSIT_CLIENT_KEY_LABEL,
+      32,
+    ),
+  );
+}
+
+/**
+ * What a client is stored as on a deposit: `base64url(HMAC-SHA256(key,
+ * subject))`, where `subject` is its rate-limit subject (an IPv4 address, or an
+ * IPv6 /64). Equal for one client, so the per-client cap can count it; the
+ * address itself is never stored.
+ */
+export function paymentDepositClientKey(key: Buffer, subject: string): string {
+  return createHmac('sha256', key).update(subject).digest('base64url');
 }
