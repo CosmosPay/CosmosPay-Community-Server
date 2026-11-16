@@ -365,6 +365,21 @@ table. These are the rules that did not hold on their own:
   chain's own `eth_chainId`: a wrong id sends the deposit to another chain. A
   1Click blockchain with no entry (`qtc`, `adi`) is never offered: an address this
   service cannot validate is a refund it cannot promise.
+- **Payment links settle on every one of those networks** (`PAYMENT_NETWORKS` in
+  `src/payment-intents/payment-networks.ts` IS `CROSS_CHAIN_NETWORK_IDS`: never a
+  second list). Stellar, Solana and Monad keep their wallet links and verifiers; a
+  link on any other network (`DepositNetwork`) has no verifier of ours and is paid
+  only through `payment_deposit` rows: an EXACT_OUTPUT 1Click quote per payer that
+  pays the intent's destination exactly its amount, polled by
+  `PaymentDepositObserverService`, whose SUCCEEDED settles the intent
+  (`settleFromDeposit`, the payout hash as `txHash`, `paidFrom` written with the
+  status). Code that reads `intent.chain` goes through `paymentNetworkOf` and
+  `isChain` before reaching a `Record<Chain, …>` (verifiers, `PAY_TO`, tx-id rules):
+  the chain observer never scans a deposit network, `validate` and a PATCHed
+  `txHash` are refused there. A link on the three chains takes deposits too only
+  with `crossChainFeeBps` recorded at create (mainnet, an amount, no merchant fee,
+  not a Monad link found by amount), because the deposit routes are keyless and
+  the plan rate comes from a header.
 - **Monad swaps with a merchant fee go through `contracts/MerchantFeeSwapRouter.sol`**
   (`KURU_MERCHANT_FEE_ROUTER`), one deployment per Kuru Flow router, with no owner. It
   is not a deposit address: wallets approve it and send it value, so the venue checks

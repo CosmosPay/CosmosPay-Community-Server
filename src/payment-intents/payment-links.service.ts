@@ -3,6 +3,8 @@ import { ConfigService } from '@nestjs/config';
 import type { Prisma } from '@generated/prisma/client';
 import { CHAIN_ADDRESS_RULES } from '@/chains/chain-address';
 import { isChain } from '@/chains/chains.constants';
+import { acceptsCrossChainPayment } from '@/payment-intents/payment-deposit-rules';
+import { isPaymentNetwork } from '@/payment-intents/payment-networks';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { readMerchantFeeRecord } from '@/common/merchant-fee/merchant-fee';
 import type { AppConfig, StellarNetwork } from '@/config/configuration';
@@ -65,6 +67,8 @@ export const PAYMENT_LINK_SELECT = {
   expiresAt: true,
   createdAt: true,
   checkoutTheme: true,
+  // Never answered: it only decides `crossChainPayment`.
+  crossChainFeeBps: true,
 } as const satisfies Prisma.PaymentIntentSelect;
 
 /** An intent as the public read loads it. */
@@ -100,10 +104,10 @@ export function toPublicPaymentLink(
   qr: string,
 ): PublicPaymentLinkEntity {
   const chain = row.chain;
-  if (!isChain(chain)) {
-    // Every write goes through a DTO that only admits the three chains, so this
-    // is a corrupt row. A 500 beats showing a payer an address that may not be
-    // the one their wallet will pay.
+  if (!isPaymentNetwork(chain)) {
+    // Every write goes through a DTO that only admits `PAYMENT_NETWORKS`, so
+    // this is a corrupt row. A 500 beats showing a payer an address that may
+    // not be the one their wallet will pay.
     throw new Error(`Payment intent ${row.id} is on unknown chain "${chain}"`);
   }
   return {
@@ -112,7 +116,9 @@ export function toPublicPaymentLink(
     chain,
     network: row.network,
     status: row.status,
-    payTo: PAY_TO[chain](row),
+    // A link on a network with no wallet link of its own is paid through a
+    // deposit address made per payment: there is no address to show.
+    payTo: isChain(chain) ? PAY_TO[chain](row) : null,
     amount: row.amount,
     asset: row.asset,
     assetIssuer: row.assetIssuer,
@@ -124,6 +130,7 @@ export function toPublicPaymentLink(
     networkFee: row.networkFee,
     merchantFee: readMerchantFeeRecord(row.merchantFee),
     payerAccountRequired: payerAccountRequired(row),
+    crossChainPayment: acceptsCrossChainPayment(row),
     expiresAt: row.expiresAt ? row.expiresAt.toISOString() : null,
     createdAt: row.createdAt.toISOString(),
     checkoutTheme: effectiveCheckoutTheme(row.checkoutTheme),

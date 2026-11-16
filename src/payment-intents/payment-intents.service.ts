@@ -15,6 +15,10 @@ import {
   splitMerchantFee,
 } from '@/common/merchant-fee/merchant-fee';
 import {
+  commissionWithRecipient,
+  resolvePlanCommissionBps,
+} from '@/common/plan-commission';
+import {
   isUniqueViolation,
   uniqueViolationColumns,
   uniqueViolationNames,
@@ -26,6 +30,19 @@ import { CustomersService } from '@/customers/customers.service';
 import { assetLabel, resolveAsset, type ResolvedAsset } from '@/stellar/asset';
 import { STELLAR_DECIMALS } from '@/stellar/stellar.constants';
 import { fromStroops, toStroops } from '@/swaps/swap-math';
+import { decimalPlaces, parseUnits } from '@/chains/units';
+import { CROSS_CHAIN_NETWORKS } from '@/cross-chain-swaps/cross-chain-networks';
+import type { PaidFromEntity } from '@/payment-intents/entities/payment-deposit.entity';
+import { PaymentDepositPricing } from '@/payment-intents/payment-deposit-pricing.service';
+import { readPaidFrom } from '@/payment-intents/payment-deposit-rules';
+import {
+  type DepositNetwork,
+  isDepositNetwork,
+  type PaymentNetwork,
+  paymentAddressRule,
+  paymentNetworkName,
+  paymentNetworkOf,
+} from '@/payment-intents/payment-networks';
 import { resolveOrMintMemoId } from '@/stellar/memo';
 import type {
   PaymentIntent,
@@ -64,7 +81,6 @@ import {
   normalizeTxId,
 } from '@/payment-intents/tx-id';
 import {
-  type Chain,
   DEFAULT_CHAIN,
   isChain,
   NATIVE_DECIMALS,
@@ -88,6 +104,12 @@ export interface TransitionOptions {
    * EXPIRED intent requires it (`VERIFIED_SETTLEMENT_ONLY_FROM`).
    */
   verifiedOnChain?: boolean;
+  /**
+   * What the payer sent, when a payment from another network settles the
+   * intent (`settleFromDeposit`): written with the status, so the
+   * PAYMENT_INTENT_SUCCEEDED webhook carries it.
+   */
+  paidFrom?: PaidFromEntity;
 }
 
 export interface ValidationOutcome {
@@ -128,6 +150,7 @@ export const PAYMENT_INTENT_PUBLIC_SELECT = {
   reference: true,
   checkoutTheme: true,
   merchantFee: true,
+  paidFrom: true,
   expiresAt: true,
   checkoutSeenAt: true,
   checkoutWalletAt: true,
@@ -149,8 +172,12 @@ type PublicPaymentIntentRow = Prisma.PaymentIntentGetPayload<{
  */
 export type PublicPaymentIntent = Omit<
   PublicPaymentIntentRow,
-  'checkoutTheme' | 'merchantFee'
-> & { checkoutTheme: CheckoutTheme; merchantFee: MerchantFeeRecord | null };
+  'checkoutTheme' | 'merchantFee' | 'paidFrom'
+> & {
+  checkoutTheme: CheckoutTheme;
+  merchantFee: MerchantFeeRecord | null;
+  paidFrom: PaidFromEntity | null;
+};
 
 /** A Stellar intent's merchant fee: the request's terms and the legs they split `amount` into. */
 interface StellarMerchantFee {
@@ -186,6 +213,7 @@ export class PaymentIntentsService {
     private readonly consumers: ConsumerResolverService,
     private readonly customers: CustomersService,
     private readonly chainLinks: ChainPayLinkBuilder,
+    private readonly depositPricing: PaymentDepositPricing,
   ) {}
 
   /**
@@ -422,6 +450,9 @@ export class PaymentIntentsService {
     dto: CreatePayPaymentIntentDto,
   ): Promise<PaymentIntentView> {
     const chain = dto.chain ?? DEFAULT_CHAIN;
+    if (isDepositNetwork(chain)) {
+      return this.createPayThroughDeposits(consumer, chain, dto);
+    }
     if (chain !== 'stellar') {
       return this.createPayOnChain(consumer, chain, dto);
     }
@@ -486,6 +517,12 @@ export class PaymentIntentsService {
       uri,
       checkoutTheme: dto.checkoutTheme ?? null,
       ...merchantFeeColumn(merchant?.record),
+      crossChainFeeBps: this.optionalCrossChainFeeBps(consumer, {
+        network,
+        amount: dto.amount,
+        merchantFee: !!merchant,
+        recognisedByAmount: false,
+      }),
     });
     if (!intent) {
       return this.replayOf(
@@ -602,6 +639,15 @@ export class PaymentIntentsService {
       uri: transactionRequest ? '' : link.uri,
       checkoutTheme: dto.checkoutTheme ?? null,
       ...merchantFeeColumn(merchant?.record),
+      crossChainFeeBps: this.optionalCrossChainFeeBps(consumer, {
+        network,
+        amount: dto.amount,
+        merchantFee: merchant !== null,
+        // A Monad link without a deposit address is found by its amount at the
+        // merchant's own address, where a payout from another network for the
+        // same amount would also land: it would settle the wrong link.
+        recognisedByAmount: chain === 'monad' && !link.chainReference,
+      }),
       assetDecimals: link.assetDecimals,
       chainReference: link.chainReference,
       chainCursor: link.chainCursor,
@@ -650,6 +696,172 @@ export class PaymentIntentsService {
     );
     await this.emit(consumer.username, 'PAYMENT_INTENT_CREATED', intent);
     return this.withQr(intent);
+  }
+
+  /**
+   * A PAY intent on a network beyond Stellar, Solana and Monad: the payer never
+   * pays the merchant directly, but a deposit address the cross-chain route
+   * makes for that payment (`POST /v1/payment-links/{id}/deposits`), from any
+   * network it reaches, and the intent settles when the route reports the
+   * merchant paid exactly `amount`. So the link is the hosted checkout, which
+   * asks the payer where they pay from; there is no wallet link of its own.
+   *
+   * What that implies is refused up front: a test network (the route runs on
+   * mainnet only), an open amount (the payout is quoted for an exact one), a
+   * merchant fee (the route pays one recipient), a SEP-7 callback, and an asset
+   * the route does not trade today. The plan commission such a payment pays is
+   * fixed here, from the plan header this request carries.
+   */
+  private async createPayThroughDeposits(
+    consumer: GatewayConsumer,
+    chain: DepositNetwork,
+    dto: CreatePayPaymentIntentDto,
+  ): Promise<PaymentIntentView> {
+    const name = paymentNetworkName(chain);
+    if (dto.callback !== undefined) {
+      throw ApiError.badRequest(
+        ApiErrorCode.ValidationFailed,
+        `callback is a SEP-7 field and is not supported on ${chain}.`,
+      );
+    }
+    if (dto.merchantFee) {
+      throw ApiError.badRequest(
+        ApiErrorCode.MerchantFeeUnsupported,
+        `A payment link on ${name} is paid through a deposit address made for ` +
+          'each payment, which pays one recipient: a merchant fee is not ' +
+          'supported there.',
+      );
+    }
+    if (dto.amount === undefined) {
+      throw ApiError.badRequest(
+        ApiErrorCode.ValidationFailed,
+        `amount is required on ${chain}: a payment there is quoted for exactly the link's amount.`,
+      );
+    }
+    const network = this.resolveNetwork(consumer);
+    if (network !== 'public') {
+      throw ApiError.badRequest(
+        ApiErrorCode.NetworkUnsupported,
+        `A payment link on ${name} is paid through a cross-chain payment, ` +
+          'which runs on mainnet only: use a prod API key.',
+      );
+    }
+    const crossChainFeeBps = commissionWithRecipient(
+      this.config,
+      resolvePlanCommissionBps(this.config, consumer),
+      this.config.get('nearIntents', { infer: true }).feeRecipient,
+      'NEAR_INTENTS_FEE_RECIPIENT',
+    );
+    const asset = await this.depositPricing.linkAssetForCreate(
+      chain,
+      dto.assetCode,
+      dto.assetIssuer,
+    );
+    if (decimalPlaces(dto.amount) > asset.decimals) {
+      throw ApiError.badRequest(
+        ApiErrorCode.InvalidAmount,
+        `amount has more decimal places than ${asset.symbol} on ${chain} allows (${asset.decimals})`,
+      );
+    }
+    if (parseUnits(dto.amount, asset.decimals) <= 0n) {
+      throw ApiError.badRequest(
+        ApiErrorCode.InvalidAmount,
+        'amount must be greater than zero',
+      );
+    }
+
+    const localConsumer = await this.resolveConsumer(consumer);
+    const memo = resolveOrMintMemoId(dto.memo);
+    const terms: PaymentIntentTerms = {
+      kind: 'PAY',
+      chain,
+      network,
+      source: null,
+      destination: paymentAddressRule(chain).normalize(dto.destination),
+      amount: dto.amount,
+      // `native` for the network's coin, as on every other chain.
+      asset: asset.contract === null ? 'native' : asset.symbol,
+      assetIssuer: asset.contract,
+      msg: dto.msg ?? null,
+      callback: null,
+    };
+
+    const existing = await this.findByMemo(localConsumer.id, memo);
+    if (existing) return this.replayOf(existing, terms, null);
+
+    let intent = await this.persist({
+      ...terms,
+      consumerId: localConsumer.id,
+      memo,
+      status: 'PENDING',
+      xdr: null,
+      // The hosted checkout, once the id exists.
+      uri: '',
+      checkoutTheme: dto.checkoutTheme ?? null,
+      assetDecimals: asset.decimals,
+      crossChainFeeBps,
+    });
+    if (!intent) {
+      return this.replayOf(
+        await this.findByMemo(localConsumer.id, memo),
+        terms,
+        null,
+      );
+    }
+    intent = await this.prisma.paymentIntent.update({
+      where: { id: intent.id },
+      data: { uri: this.checkoutLink(intent.id) },
+    });
+
+    this.logger.log(
+      `Created PAY payment intent ${intent.id} on ${chain} (deposits): ` +
+        `${dto.amount} ${terms.asset} → ${terms.destination} ` +
+        `(consumer=${consumer.username}, network=${network}, memo=${memo})`,
+    );
+    await this.emit(consumer.username, 'PAYMENT_INTENT_CREATED', intent);
+    return this.withQr(intent);
+  }
+
+  /**
+   * The plan commission a payment from another network will pay on a link on
+   * Stellar, Solana or Monad, or null when that link cannot take one: a test
+   * network, an open amount, a merchant fee, a link found on its chain by its
+   * amount alone, or a rate this deployment cannot charge right now (no plan
+   * header, no wallet for the commission). Never in the way of the link: it is
+   * created as it always was, only without payments from other networks.
+   */
+  private optionalCrossChainFeeBps(
+    consumer: GatewayConsumer,
+    link: {
+      network: StellarNetwork;
+      amount: string | undefined;
+      merchantFee: boolean;
+      recognisedByAmount: boolean;
+    },
+  ): number | null {
+    if (
+      link.network !== 'public' ||
+      link.amount === undefined ||
+      link.merchantFee ||
+      link.recognisedByAmount
+    ) {
+      return null;
+    }
+    try {
+      return commissionWithRecipient(
+        this.config,
+        resolvePlanCommissionBps(this.config, consumer),
+        this.config.get('nearIntents', { infer: true }).feeRecipient,
+        'NEAR_INTENTS_FEE_RECIPIENT',
+      );
+    } catch (err) {
+      this.logger.warn(
+        `Payment link of ${consumer.username} created without payments from other networks: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      return null;
+    }
   }
 
   /**
@@ -1029,6 +1241,11 @@ export class PaymentIntentsService {
             status: to,
             ...(txHash !== undefined ? { txHash } : {}),
             ...setSource,
+            ...(opts.paidFrom
+              ? {
+                  paidFrom: opts.paidFrom as unknown as Prisma.InputJsonValue,
+                }
+              : {}),
           },
         });
         if (guarded.count === 0) {
@@ -1177,7 +1394,7 @@ export class PaymentIntentsService {
     if (!intent) {
       throw ApiError.notFound(`Payment intent ${id} not found`);
     }
-    txHash = checkedTxId(chainOf(intent.chain), txHash);
+    txHash = checkedTxId(paymentNetworkOf(intent.chain), txHash);
 
     // Already settled — return current state without re-querying the network.
     if (intent.status === 'SUCCEEDED') {
@@ -1263,6 +1480,46 @@ export class PaymentIntentsService {
   }
 
   /**
+   * Settles an intent a payment from another network paid: the cross-chain
+   * route reported the merchant paid exactly the intent's amount, in its asset,
+   * on its network (`settlementRefusal` checked it), with `txHash` the payout
+   * transaction there. That report is the verification, as the chain's is for
+   * the others, so an EXPIRED intent settles too.
+   *
+   * The deposit was made for this intent alone, so there is no rival to ask
+   * about (`assertOldestClaimant`): the settlement claim still makes the payout
+   * settle at most one intent. An intent already settled, cancelled or failed is
+   * left as it is and logged (the payer paid twice, or after a cancel: the
+   * merchant has the money either way), so a retry by the observer is harmless.
+   */
+  async settleFromDeposit(
+    intentId: string,
+    txHash: string,
+    paidFrom: PaidFromEntity,
+  ): Promise<PaymentIntent | null> {
+    const intent = await this.prisma.paymentIntent.findUnique({
+      where: { id: intentId },
+      include: { consumer: { select: { apisixUsername: true } } },
+    });
+    if (!intent) return null;
+    if (!canTransition(intent.status, 'SUCCEEDED')) {
+      this.logger.warn(
+        `Deposit ${paidFrom.depositId} paid intent ${intentId}, which is ` +
+          `${intent.status}: left as it is (payout ${txHash})`,
+      );
+      return null;
+    }
+    return this.transition(intentId, 'SUCCEEDED', {
+      consumerUsername: intent.consumer.apisixUsername,
+      actor: 'observer',
+      reason: `paid from ${paidFrom.chain} through a deposit address`,
+      txHash: settlementTxId(paymentNetworkOf(intent.chain), txHash),
+      verifiedOnChain: true,
+      paidFrom,
+    });
+  }
+
+  /**
    * Refuses to settle `intentId` on `txHash` when the transaction also pays an
    * older intent of another consumer, with the 409 a hash that already settled
    * one gets (`transaction_already_settled`).
@@ -1312,9 +1569,12 @@ export class PaymentIntentsService {
     const intent = await this.prisma.paymentIntent.findUnique({
       where: { id: intentId },
     });
-    // A missing intent is `transition`'s 404 to answer.
+    // A missing intent is `transition`'s 404 to answer. An intent on a network
+    // without a verifier of its own settles only through its deposits, never
+    // here.
     if (!intent) return;
-    const chain = chainOf(intent.chain);
+    const chain = paymentNetworkOf(intent.chain);
+    if (!isChain(chain)) return;
     const rivals = await this.prisma.paymentIntent.findMany(
       settlementRivalsQuery(chain, intent),
     );
@@ -1376,12 +1636,12 @@ export class PaymentIntentsService {
 
   /**
    * Throws 404 unless the intent exists, belongs to the consumer and is on the
-   * key's network, and answers the chain it is on.
+   * key's network, and answers the network it settles on.
    */
-  private async assertOwned(
+  async assertOwned(
     consumer: GatewayConsumer,
     id: string,
-  ): Promise<Chain> {
+  ): Promise<PaymentNetwork> {
     const owned = await this.prisma.paymentIntent.findFirst({
       where: this.ownedWhere(consumer, id),
       select: { id: true, chain: true },
@@ -1389,7 +1649,7 @@ export class PaymentIntentsService {
     if (!owned) {
       throw ApiError.notFound(`Payment intent ${id} not found`);
     }
-    return chainOf(owned.chain);
+    return paymentNetworkOf(owned.chain);
   }
 }
 
@@ -1405,6 +1665,7 @@ function toPublicPaymentIntent(
     ...row,
     checkoutTheme: effectiveCheckoutTheme(row.checkoutTheme),
     merchantFee: readMerchantFeeRecord(row.merchantFee),
+    paidFrom: readPaidFrom(row.paidFrom),
   };
 }
 
@@ -1436,22 +1697,19 @@ function merchantFieldsOf(dto: UpdatePaymentIntentDto): MerchantFields | null {
 }
 
 /**
- * A stored intent's chain. Rows from before the column existed are Stellar by
- * its default; a value this build does not know is a data error.
- */
-function chainOf(value: string | null | undefined): Chain {
-  if (value === undefined || value === null) return DEFAULT_CHAIN;
-  if (!isChain(value)) {
-    throw new Error(`Payment intent on unknown chain "${value}"`);
-  }
-  return value;
-}
-
-/**
  * `txHash` checked against the intent's chain and returned in the spelling it
- * is stored in, or a 400 naming the shape that chain expects.
+ * is stored in, or a 400 naming the shape that chain expects. An intent on a
+ * network beyond Stellar, Solana and Monad takes no reported transaction: it
+ * settles only from its deposits, on the cross-chain route's report.
  */
-function checkedTxId(chain: Chain, txHash: string): string {
+function checkedTxId(chain: PaymentNetwork, txHash: string): string {
+  if (!isChain(chain)) {
+    throw ApiError.badRequest(
+      ApiErrorCode.ValidationFailed,
+      `A payment intent on ${chain} settles from the deposit addresses made ` +
+        'for its payers: it takes no reported transaction',
+    );
+  }
   const trimmed = txHash.trim();
   if (!isTxIdFor(chain, trimmed)) {
     throw ApiError.badRequest(
@@ -1487,13 +1745,13 @@ async function claimSettlement(
   intent: PaymentIntent,
   txHash: string,
 ): Promise<void> {
-  const chain = chainOf(intent.chain);
+  const chain = paymentNetworkOf(intent.chain);
   try {
     await tx.paymentSettlement.create({
       data: {
         chain,
         network: intent.network,
-        txHash: normalizeTxId(chain, txHash),
+        txHash: settlementTxId(chain, txHash),
         intentId: intent.id,
       },
     });
@@ -1501,6 +1759,22 @@ async function claimSettlement(
     if (!isUniqueViolation(err)) throw err;
     throw transactionAlreadySettled();
   }
+}
+
+/**
+ * A settling transaction in the spelling it is stored and claimed in: the
+ * chain's own rule on Stellar, Solana and Monad (`tx-id.ts`), the network's
+ * rule in `CROSS_CHAIN_NETWORKS` elsewhere. A payout id the rule does not
+ * recognise is kept as the route reported it, trimmed: it still settles the
+ * intent, and stays one value in the claim.
+ */
+function settlementTxId(chain: PaymentNetwork, txHash: string): string {
+  const trimmed = txHash.trim();
+  if (isChain(chain)) {
+    return isTxIdFor(chain, trimmed) ? normalizeTxId(chain, trimmed) : trimmed;
+  }
+  const rule = CROSS_CHAIN_NETWORKS[chain].txId;
+  return rule.isValid(trimmed) ? rule.normalize(trimmed) : trimmed;
 }
 
 /**

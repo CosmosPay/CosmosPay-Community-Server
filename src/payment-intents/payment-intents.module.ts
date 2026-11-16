@@ -1,6 +1,10 @@
 import { Module } from '@nestjs/common';
 import { CustomersModule } from '@/customers/customers.module';
 import { EvmModule } from '@/evm/evm.module';
+import { NearIntentsModule } from '@/near-intents/near-intents.module';
+import { PaymentDepositObserverService } from '@/payment-intents/payment-deposit-observer.service';
+import { PaymentDepositPricing } from '@/payment-intents/payment-deposit-pricing.service';
+import { PaymentDepositsService } from '@/payment-intents/payment-deposits.service';
 import { ChainPayLinkBuilder } from '@/payment-intents/chain-pay-link-builder.service';
 import { EvmDepositAddressFactory } from '@/payment-intents/evm-deposit-address.factory';
 import { EvmDepositForwarderService } from '@/payment-intents/evm-deposit-forwarder.service';
@@ -20,8 +24,9 @@ import { SolanaModule } from '@/solana/solana.module';
 @Module({
   // A settled payment adds its payer as a customer, and that table is the
   // customers module's to write. The dependency runs one way only. Solana and
-  // Monad are reached through their RPC clients, never a URL of our own.
-  imports: [CustomersModule, SolanaModule, EvmModule],
+  // Monad are reached through their RPC clients, never a URL of our own, and
+  // the cross-chain route (payments from any network) through its client.
+  imports: [CustomersModule, SolanaModule, EvmModule, NearIntentsModule],
   // The owner's routes, and the anonymous read a hosted checkout page polls.
   controllers: [PaymentIntentsController, PaymentLinksController],
   providers: [
@@ -37,6 +42,9 @@ import { SolanaModule } from '@/solana/solana.module';
     PaymentIntentObserverService,
     EvmDepositAddressFactory,
     EvmDepositForwarderService,
+    PaymentDepositPricing,
+    PaymentDepositsService,
+    PaymentDepositObserverService,
   ],
   // Plugins read intents through this service's tenant-scoped reads.
   exports: [PaymentIntentsService],

@@ -316,6 +316,7 @@ Paths OpenAPI के `{param}` रूप में लिखे गए हैं
 | GET | `/v1/payment-intents/{id}` | `payments:read` |  |
 | PATCH | `/v1/payment-intents/{id}` | `payments:write` |  |
 | DELETE | `/v1/payment-intents/{id}` | `payments:write` |  |
+| GET | `/v1/payment-intents/{id}/deposits` | `payments:read` |  |
 | GET | `/v1/payment-intents/{id}/transitions` | `payments:read` |  |
 | POST | `/v1/payment-intents/{id}/validate` | `payments:write` |  |
 | GET | `/v1/payment-links/{id}` | कोई नहीं — `@Public()`, हर client address का अपना budget |  |
@@ -323,6 +324,10 @@ Paths OpenAPI के `{param}` रूप में लिखे गए हैं
 | POST | `/v1/payment-links/{id}/events` | कोई नहीं: `@Public()`, हर client address का अपना budget |  |
 | GET | `/v1/payment-links/{id}/solana-pay` | कोई नहीं: `@Public()`, हर client address का अपना budget |  |
 | POST | `/v1/payment-links/{id}/solana-pay` | कोई नहीं: `@Public()`, हर client address का अपना budget |  |
+| GET | `/v1/payment-links/{id}/deposit-assets` | कोई नहीं: `@Public()`, हर client address का अपना budget |  |
+| POST | `/v1/payment-links/{id}/quote` | कोई नहीं: `@Public()`, हर client address का अपना budget |  |
+| POST | `/v1/payment-links/{id}/deposits` | कोई नहीं: `@Public()`, हर client address का अपना budget |  |
+| GET | `/v1/payment-links/{id}/deposits/{depositId}` | कोई नहीं: `@Public()`, हर client address का अपना budget |  |
 | GET | `/v1/payment-links/fiat/{id}` | कोई नहीं: `@Public()`, हर client address का अपना budget |  |
 | POST | `/v1/payment-links/fiat/{id}/sessions` | कोई नहीं: `@Public()`, हर client address का अपना budget |  |
 | GET | `/v1/plugins` | `plugins:read` |  |
@@ -990,6 +995,16 @@ link और उसका QR दिखाने के लिए, और भु�
   कोई CORS header नहीं भेजती, इसलिए उस route के CORS plugin को checkout के origin से
   `GET` की अनुमति देनी होगी और `Retry-After` व `ratelimit-*` expose करने होंगे; इसके
   बिना browser हर जवाब छोड़ देता है।
+
+### हर नेटवर्क पर payment links, किसी भी नेटवर्क से भुगतान
+
+`POST /v1/payment-intents/pay` का `chain` उन नेटवर्क की सूची से आता है जहाँ क्रॉस-चेन swaps पहुँचते हैं (`PAYMENT_NETWORKS`, यानी `CROSS_CHAIN_NETWORK_IDS`: 35 नेटवर्क)। Stellar, Solana और Monad अपने wallet links और अपना observer रखते हैं। बाकी हर नेटवर्क पर link hosted checkout होता है और भुगतानकर्ता कभी सीधे मर्चेंट को भुगतान नहीं करता: checkout पूछता है कि वह किस नेटवर्क और asset से भुगतान करेगा और उस नेटवर्क पर refund का पता, और `POST /v1/payment-links/{id}/deposits` एक deposit address लौटाता है जिसे क्रॉस-चेन route सिर्फ़ उसी भुगतान के लिए बनाता है (table `payment_deposit`)। Route मर्चेंट को link की ठीक राशि उसके asset में देता है (exact-output quote), और `PaymentDepositObserverService` route की रिपोर्ट पर intent को settle करता है, payout transaction को `txHash` बनाकर और `paidFrom` में भेजी गई चीज़ लिखकर। कोई नया chain indexer नहीं: deposit को क्रॉस-चेन swap की तरह ही follow किया जाता है।
+
+- **सिर्फ़ mainnet, तय राशि, कोई मर्चेंट फ़ीस नहीं।** Route का कोई test network नहीं है (`dev` key को `400 network_unsupported` मिलता है), quote ठीक राशि का होता है, और वह एक ही प्राप्तकर्ता को भुगतान करता है (`merchant_fee_unsupported`)। Asset ऐसा होना चाहिए जिसे route उस नेटवर्क पर trade करता हो (`GET /v1/cross-chain-swaps/assets`): उसे symbol से, या `assetIssuer` में उसके `contract` से बताएँ।
+- **Stellar, Solana और Monad के links भी दूसरे नेटवर्क से चुकाए जा सकते हैं** जब वे mainnet पर हों, उनकी राशि हो और कोई मर्चेंट फ़ीस न हो (public read में `crossChainPayment`)। Deposit addresses के बिना Monad link नहीं: उसका observer मर्चेंट के पते पर राशि से भुगतान पहचानता है, जहाँ route का payout भी पहुँचेगा।
+- **Commission.** दूसरे नेटवर्क से भुगतान plan का swap commission (`X-Plan-Swap-Fee-Bps`) `NEAR_INTENTS_FEE_RECIPIENT` को देता है, link की राशि के ऊपर: मर्चेंट को राशि मिलती है और भुगतानकर्ता का deposit फ़ीस उठाता है। दर link बनते समय पढ़ी जाती है (`crossChainFeeBps`), क्योंकि deposit routes कोई key नहीं लेते। बिना प्राप्तकर्ता वाली दर नए नेटवर्क पर link को मना करती है (`503 misconfigured`); Stellar, Solana और Monad पर link दूसरे नेटवर्क से भुगतान के बिना बनता है।
+- **बिना key और सीमित।** Deposit routes `/v1/payment-links/{id}` के नीचे `@Public()` हैं, gateway का पहले से मौजूद keyless route: link id ही capability है। Deposit सिर्फ़ link के destination को उसकी राशि देता है और सिर्फ़ `refundTo` को refund करता है; हर link पर अधिकतम `PAYMENT_DEPOSIT_MAX_OPEN_PER_LINK` (5) खुले रहते हैं, और वही asset और refund address दोबारा देने पर खुला वाला ही लौटता है। हर client address का budget: `payment-links:deposit-assets` (30 प्रति मिनट), `payment-links:quote` (30), `payment-links:deposits` (10), `payment-links:deposit-read` (60)।
+- **न्यूनतम राशियाँ route तय करता है** और pair पर निर्भर करती हैं; इनकार `400 provider_error` होता है, कारण के साथ।
 
 ### Solana और Monad पर wallet sign-in
 
@@ -2507,6 +2522,13 @@ seal होती हैं और कभी लौटाई नहीं जा
   plugins का अकेला route group हैं जो कोई API key नहीं लेता।
 
 ## अपग्रेड — breaking changes और deploy नोट्स
+
+### Payment links: हर नेटवर्क, किसी भी नेटवर्क से भुगतान
+
+- **Migration `20261116120000_payment_deposits`** `payment_deposit` table बनाता है और `payment_intent` में दो nullable columns जोड़ता है (`crossChainFeeBps`, `paidFrom`); कुछ भी दोबारा नहीं लिखा जाता। नया build सेवा दे उससे पहले हर database पर `migrate deploy` चलाएँ।
+- **Payment intents का `chain` अब 32 और नेटवर्क लेता है** (`POST /v1/payment-intents/pay`, सूची का filter, responses और webhook payloads)। जो integration `stellar`, `solana` और `monad` पर branch करता है उसे बाकी भी संभालने होंगे। Public read में `payTo` अब nullable है (उन नेटवर्क पर null) और `crossChainPayment` नया है; मालिक के reads और webhooks में `paidFrom` नया है।
+- **नए routes:** keyless `GET /v1/payment-links/{id}/deposit-assets`, `POST /v1/payment-links/{id}/quote`, `POST /v1/payment-links/{id}/deposits` और `GET /v1/payment-links/{id}/deposits/{depositId}`, और `GET /v1/payment-intents/{id}/deposits` (`payments:read`)। Gateway का keyless `/v1/payment-links/*` route पहले से GET और POST देता है।
+- **कोई नया variable नहीं**, लेकिन जहाँ भी plan swap commission लेता है वहाँ `NEAR_INTENTS_FEE_RECIPIENT` सेट होना चाहिए: उसके बिना नए नेटवर्क पर link मना होता है (`503`) और Stellar, Solana या Monad पर link दूसरे नेटवर्क से भुगतान के बिना बनता है। Deposit observer बाकी observers के साथ चलता है (`OBSERVER_ENABLED`)।
 
 ### P2P on-ramp: स्थानीय मुद्रा में QR से charges, और marketplace का order webhook
 

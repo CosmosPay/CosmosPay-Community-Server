@@ -68,6 +68,8 @@ describe('Payment intents CRUD (e2e)', () => {
     },
     // The webhook dispatcher reacts to emitted events; no endpoints registered here.
     webhookEndpoint: { findMany: jest.fn().mockResolvedValue([]) },
+    // The deposit addresses of an intent (payments from any network).
+    paymentDeposit: { findMany: jest.fn().mockResolvedValue([]) },
     // Terminal payment-intent events now go through WebhookTerminalEmitter,
     // which claims a dedup row and writes the delivery rows in one
     // transaction before touching the bus. With no endpoints registered the
@@ -474,6 +476,32 @@ describe('Payment intents CRUD (e2e)', () => {
     await asAccount(
       request(http()).delete(`${route}/${id}`).set('x-consumer-env', 'prod'),
     ).expect(200);
+  });
+
+  describe("an intent's deposit addresses (GET /v1/payment-intents/{id}/deposits)", () => {
+    it('refuses a caller without the gateway secret (403)', () =>
+      request(http()).get(`${route}/${createdId}/deposits`).expect(403));
+
+    it("answers another consumer's intent as not found (404), reading no deposit", async () => {
+      prismaMock.paymentDeposit.findMany.mockClear();
+      await gwAs('cosmos_someone_else')(
+        request(http()).get(`${route}/${createdId}/deposits`),
+      ).expect(404);
+      expect(prismaMock.paymentDeposit.findMany).not.toHaveBeenCalled();
+    });
+
+    it("lists the owner's, newest first (200)", async () => {
+      const res = await gw(
+        request(http()).get(`${route}/${createdId}/deposits`),
+      ).expect(200);
+      expect(res.body).toEqual({ data: [] });
+      expect(prismaMock.paymentDeposit.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { intentId: createdId },
+          orderBy: { createdAt: 'desc' },
+        }),
+      );
+    });
   });
 
   it('gets one by id (200)', async () => {

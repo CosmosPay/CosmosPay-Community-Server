@@ -261,3 +261,81 @@ export function isCheckoutTheme(value: unknown): value is CheckoutTheme {
 export function effectiveCheckoutTheme(stored: string | null): CheckoutTheme {
   return isCheckoutTheme(stored) ? stored : DEFAULT_CHECKOUT_THEME;
 }
+
+// ── Payments from any network (deposit addresses) ───────────────────────────
+
+/**
+ * What a token is named by on a network other than Stellar, Solana and Monad,
+ * as `assetIssuer` takes it: the contract the cross-chain route lists, which is
+ * not always an address (a Sui coin type, a NEAR account id). Printable ASCII
+ * with no space, bounded; the service accepts only a value the route lists.
+ */
+export const PAYMENT_TOKEN_ID_RE = /^[\x21-\x7e]{1,200}$/;
+
+/**
+ * `GET /v1/payment-links/{id}/deposit-assets`, per client address. The list is
+ * the cross-chain route's cached token list: a checkout reads it once per visit,
+ * perhaps again after a reload. Thirty a minute is a payer reloading over and
+ * over.
+ */
+export const PAYMENT_DEPOSIT_ASSETS_RATE_LIMIT = {
+  name: 'payment-links:deposit-assets',
+  limit: 30,
+  windowMs: 60 * 1000,
+};
+
+/**
+ * `POST /v1/payment-links/{id}/quote`, per client address. Each call is a dry
+ * quote at the cross-chain route, a solver auction counted against the one
+ * partner key the deployment shares, from a route with no key of its own.
+ * Thirty a minute is a payer trying network after network.
+ */
+export const PAYMENT_DEPOSIT_QUOTE_RATE_LIMIT = {
+  name: 'payment-links:quote',
+  limit: 30,
+  windowMs: 60 * 1000,
+};
+
+/**
+ * `POST /v1/payment-links/{id}/deposits`, per client address. Each one is a live
+ * quote that makes a deposit address and a row the observer polls until it
+ * settles or its deadline (plus the rescue window) passes. Ten a minute is a
+ * payer changing their mind several times; the per-link cap below bounds what
+ * many addresses can open on one link.
+ */
+export const PAYMENT_DEPOSIT_CREATE_RATE_LIMIT = {
+  name: 'payment-links:deposits',
+  limit: 10,
+  windowMs: 60 * 1000,
+};
+
+/**
+ * `GET /v1/payment-links/{id}/deposits/{depositId}`, per client address: the page
+ * polls it every few seconds beside the link itself, which has its own bucket.
+ * The same sixty a minute as the link read, for the same reasons.
+ */
+export const PAYMENT_DEPOSIT_READ_RATE_LIMIT = {
+  name: 'payment-links:deposit-read',
+  limit: 60,
+  windowMs: 60 * 1000,
+};
+
+/**
+ * The most deposit addresses one payment link may have open (waiting for a
+ * deposit, or with one in progress) at once. A payer needs one; a few cover
+ * changing network or asset, and two people paying the same link. The id is
+ * the only capability these routes take, so without a cap anyone holding a
+ * link could fill the observer's batches with addresses nobody pays.
+ */
+export const PAYMENT_DEPOSIT_MAX_OPEN_PER_LINK = 5;
+
+/**
+ * A new deposit request for the same origin asset and refund address returns
+ * the open one instead of making another, while that one still has at least
+ * this long before its deadline: enough to send from a wallet. A reload of the
+ * checkout then shows the same address rather than a new one.
+ */
+export const PAYMENT_DEPOSIT_REUSE_MIN_REMAINING_MS = 10 * 60 * 1000;
+
+/** The most deposits the owner's list of one payment intent answers, newest first. */
+export const PAYMENT_DEPOSIT_OWNER_LIST_MAX = 50;

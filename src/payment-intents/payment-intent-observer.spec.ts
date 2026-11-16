@@ -406,8 +406,15 @@ describe('PaymentIntentObserverService.tick', () => {
       expect(sql).toContain('WHERE "rank" <= ?');
       expect(sql).toContain('LIMIT ?');
 
-      // Tagged template: [0] is the SQL parts, then now, the cap and the batch.
-      const [, , cap, limit] = prisma.$queryRaw.mock.calls[0];
+      // Tagged template: [0] is the SQL parts, then now, the chains with a
+      // verifier of their own, the cap and the batch.
+      const [, , chains, cap, limit] = prisma.$queryRaw.mock.calls[0];
+      expect(sql).toContain('"chain" IN (?)');
+      expect((chains as { values: unknown[] }).values).toEqual([
+        'stellar',
+        'solana',
+        'monad',
+      ]);
       expect(cap).toBe(OBSERVER_MAX_INTENTS_PER_CONSUMER);
       expect(cap).toBeLessThan(BATCH_SIZE);
       expect(limit).toBe(BATCH_SIZE);
@@ -519,6 +526,23 @@ describe('PaymentIntentObserverService.tick', () => {
         'observer',
       );
       expect(paymentIntents.markExpired).not.toHaveBeenCalled();
+    });
+
+    it('expires a link on a network paid through deposits without asking any chain', async () => {
+      const paymentIntents = paymentIntentsMock();
+      const verifier = { findMatchingPayment: jest.fn() };
+
+      await tickOver(
+        [lapsedIntent({ chain: 'tron' })],
+        verifier,
+        paymentIntents,
+      );
+
+      expect(verifier.findMatchingPayment).not.toHaveBeenCalled();
+      expect(paymentIntents.markExpired).toHaveBeenCalledWith(
+        'pi_lapsed',
+        'cosmos_u1',
+      );
     });
 
     it('expires an intent once the chain has answered with no payment', async () => {

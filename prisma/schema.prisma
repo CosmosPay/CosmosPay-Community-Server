@@ -376,9 +376,12 @@ model PaymentIntent {
 
   kind PaymentIntentKind @default(TX)
 
-  // Which chain the payment settles on: 'stellar' | 'solana' | 'monad'. Every
+  // Which network the payment settles on: a network id from
+  // `PAYMENT_NETWORKS` (`stellar`, `solana`, `monad`, `eth`, `btc`, ...). Every
   // row created before Solana and Monad existed is Stellar. TX intents are
-  // Stellar only (SEP-7 `tx` is a Stellar envelope).
+  // Stellar only (SEP-7 `tx` is a Stellar envelope). On a network other than
+  // the three, the payer pays a deposit address (`deposits`) and the intent
+  // settles when the cross-chain route reports the merchant paid.
   chain String @default("stellar")
 
   // Payment details, in the chain's own address and asset vocabulary.
@@ -455,8 +458,22 @@ model PaymentIntent {
   // wallet, paidBy }. Separate from the plan commission columns.
   merchantFee Json?
 
+  // The plan commission (bps) a payment from another network pays, read from
+  // the gateway's plan header when the link was created: a deposit is created
+  // keyless, with no plan header to read. Null: the link cannot be paid from
+  // another network (a test network, an open amount, a merchant fee, or a link
+  // from before this column).
+  crossChainFeeBps Int?
+  // Set when a payment from another network settled the intent: { depositId,
+  // chain, asset, contract, amount } of what the payer sent. `txHash` is then
+  // the payout transaction on the intent's own network.
+  paidFrom Json?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  // Deposit addresses made for this intent's payers (payments from any network).
+  deposits PaymentDeposit[]
 
   // Append-only audit trail of status transitions (issue #36).
   transitions PaymentIntentTransition[]
@@ -548,6 +565,88 @@ enum EvmDepositStatus {
   FORWARDED // confirmed; the merchant has the money
 }
 
+// A deposit address made for one payer of one payment intent: the payer sends
+// `amountIn` of the origin asset there, from any network the cross-chain route
+// reaches, and the route pays the intent's destination exactly the intent's
+// amount in its asset (an EXACT_OUTPUT quote), or refunds `refundTo`. Polled by
+// `PaymentDepositObserverService`; SUCCEEDED settles the intent.
+//
+// Created keyless by whoever holds the link (`POST /v1/payment-links/{id}/
+// deposits`), so every column the payer could not already read is kept out of
+// the public projection. SET NULL like `evm_deposit_address`: deleting an intent
+// must not forget an address that may still receive, or refund, money.
+model PaymentDeposit {
+  id String @id @default(cuid())
+
+  intentId String?
+  intent   PaymentIntent? @relation(fields: [intentId], references: [id], onDelete: SetNull)
+
+  // Always 'public': the cross-chain route runs on mainnets only.
+  network        String
+  status         CrossChainSwapStatus @default(AWAITING_DEPOSIT)
+  // The route's own status word, verbatim.
+  providerStatus String
+
+  // What the payer sends: a network id from `CROSS_CHAIN_NETWORK_IDS`, the
+  // symbol answered, the route's asset id, the token's contract (null for the
+  // native coin) and its decimals.
+  originChain    String
+  originAsset    String
+  originAssetId  String
+  originContract String?
+  originDecimals Int
+  // What the merchant receives: the intent's own network and asset.
+  destinationChain    String
+  destinationAsset    String
+  destinationAssetId  String
+  destinationContract String?
+  destinationDecimals Int
+
+  // Decimal strings in each asset's units. `amountIn` is what to send (the
+  // route's slippage buffer included; any surplus is refunded), `minAmountIn`
+  // the least it accepts; `amountOut` is exactly the intent's amount.
+  amountIn    String
+  minAmountIn String
+  amountOut   String
+  // The plan commission, taken by the route out of the deposit (bps of it).
+  feeBps      Int
+  feeAmount   String
+  slippageBps Int
+
+  recipient String // the intent's destination, on destinationChain
+  refundTo  String // the payer's address, on originChain
+
+  depositAddress String
+  depositMemo    String?
+  depositUri     String?
+
+  // Settlement, as the route reports it.
+  amountOutPaid       String?
+  refundedAmount      String?
+  originTxHashes      Json?
+  destinationTxHashes Json?
+
+  timeEstimateSeconds Int
+  // The route's signed quote, kept whole for disputes.
+  correlationId       String
+  quoteSignature      String
+  quote               Json
+
+  // When the deposit address stops accepting a deposit (the route's deadline).
+  expiresAt     DateTime
+  lastCheckedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([depositAddress, depositMemo])
+  // A link's deposits, newest first (the owner's list, the open-deposit cap).
+  @@index([intentId, createdAt])
+  // Observer sweep: open rows, least recently checked first.
+  @@index([status, lastCheckedAt])
+  @@map("payment_deposit")
+}
+
 // The transaction that settled a payment intent, claimed once across every
 // tenant: one on-chain payment settles at most one intent, whoever owns it.
 //
@@ -565,7 +664,7 @@ enum EvmDepositStatus {
 // SET NULL, not CASCADE: a deleted intent (a consumer's, cascading) must not
 // hand its payment back to be claimed again.
 model PaymentSettlement {
-  chain   String // 'stellar' | 'solana' | 'monad'
+  chain   String // a network id from `PAYMENT_NETWORKS`, as on the intent
   network String // 'public' | 'testnet'
   // In the chain's stored spelling (`tx-id.ts`), as on the intent.
   txHash  String

@@ -319,6 +319,7 @@ console chega até ela. Os caminhos usam a forma `{param}` do OpenAPI.
 | GET | `/v1/payment-intents/{id}` | `payments:read` |  |
 | PATCH | `/v1/payment-intents/{id}` | `payments:write` |  |
 | DELETE | `/v1/payment-intents/{id}` | `payments:write` |  |
+| GET | `/v1/payment-intents/{id}/deposits` | `payments:read` |  |
 | GET | `/v1/payment-intents/{id}/transitions` | `payments:read` |  |
 | POST | `/v1/payment-intents/{id}/validate` | `payments:write` |  |
 | GET | `/v1/payment-links/{id}` | nenhum — `@Public()`, orçamento por endereço de cliente |  |
@@ -326,6 +327,10 @@ console chega até ela. Os caminhos usam a forma `{param}` do OpenAPI.
 | POST | `/v1/payment-links/{id}/events` | nenhum: `@Public()`, orçamento por endereço de cliente |  |
 | GET | `/v1/payment-links/{id}/solana-pay` | nenhum: `@Public()`, orçamento por endereço de cliente |  |
 | POST | `/v1/payment-links/{id}/solana-pay` | nenhum: `@Public()`, orçamento por endereço de cliente |  |
+| GET | `/v1/payment-links/{id}/deposit-assets` | nenhum: `@Public()`, orçamento por endereço de cliente |  |
+| POST | `/v1/payment-links/{id}/quote` | nenhum: `@Public()`, orçamento por endereço de cliente |  |
+| POST | `/v1/payment-links/{id}/deposits` | nenhum: `@Public()`, orçamento por endereço de cliente |  |
+| GET | `/v1/payment-links/{id}/deposits/{depositId}` | nenhum: `@Public()`, orçamento por endereço de cliente |  |
 | GET | `/v1/payment-links/fiat/{id}` | nenhum: `@Public()`, orçamento por endereço de cliente |  |
 | POST | `/v1/payment-links/fiat/{id}/sessions` | nenhum: `@Public()`, orçamento por endereço de cliente |  |
 | GET | `/v1/plugins` | `plugins:read` |  |
@@ -1008,6 +1013,16 @@ a campo (`toPublicPaymentLink`), então uma coluna adicionada depois a
   cabeçalhos CORS neste path, então o plugin CORS dessa rota precisa permitir `GET` da
   origem do checkout e expor `Retry-After` e `ratelimit-*`; sem isso o navegador
   descarta toda resposta.
+
+### Links de pagamento em todas as redes, pagos a partir de qualquer rede
+
+`POST /v1/payment-intents/pay` aceita em `chain` a lista de redes que os swaps entre redes alcançam (`PAYMENT_NETWORKS`, que é `CROSS_CHAIN_NETWORK_IDS`: 35 redes). Stellar, Solana e Monad mantêm seus links de wallet e seu observer. Em qualquer outra rede o link é o checkout hospedado e o pagador nunca paga o comerciante diretamente: o checkout pergunta com qual rede e ativo ele paga e um endereço de reembolso nessa rede, e `POST /v1/payment-links/{id}/deposits` responde com um endereço de depósito que a rota entre redes cria para esse único pagamento (tabela `payment_deposit`). A rota paga ao comerciante exatamente o valor do link no seu ativo (uma cotação de saída exata), e `PaymentDepositObserverService` liquida o intent com o relatório da rota, com a transação do pagamento como `txHash` e `paidFrom` indicando o que foi enviado. Nenhum indexador de cadeia novo: um depósito é acompanhado como um swap entre redes.
+
+- **Só mainnet, um valor fixo, sem taxa do comerciante.** A rota não tem rede de testes (uma chave `dev` recebe `400 network_unsupported`), é cotada por um valor exato e paga um único destinatário (`merchant_fee_unsupported`). O ativo deve ser um que a rota negocia nessa rede (`GET /v1/cross-chain-swaps/assets`): nomeie-o pelo símbolo, ou pelo seu `contract` como `assetIssuer`.
+- **Links na Stellar, Solana e Monad também podem ser pagos a partir de outra rede** quando estão na mainnet, têm valor e não têm taxa do comerciante (`crossChainPayment` na leitura pública). Um link da Monad sem endereços de depósito não pode: seu observer reconhece um pagamento pelo valor no endereço do comerciante, onde um pagamento da rota também chegaria.
+- **A comissão.** Um pagamento a partir de outra rede paga a comissão de swap do plano (`X-Plan-Swap-Fee-Bps`) a `NEAR_INTENTS_FEE_RECIPIENT`, além do valor do link: o comerciante recebe o valor e o depósito do pagador leva as taxas. A taxa é lida quando o link é criado (`crossChainFeeBps`), porque as rotas de depósito não usam chave. Uma taxa sem destino recusa um link nas redes novas (`503 misconfigured`); na Stellar, Solana e Monad o link é criado sem pagamentos a partir de outras redes.
+- **Sem chave e limitado.** As rotas de depósito são `@Public()` sob `/v1/payment-links/{id}`, a rota sem chave do gateway que já existe: o id do link é a capacidade. Um depósito paga apenas ao destino do link o seu valor e reembolsa apenas `refundTo`; no máximo `PAYMENT_DEPOSIT_MAX_OPEN_PER_LINK` (5) ficam abertos por link, e o mesmo ativo e endereço de reembolso de novo responde com o aberto. Orçamentos por endereço de cliente: `payment-links:deposit-assets` (30 por minuto), `payment-links:quote` (30), `payment-links:deposits` (10), `payment-links:deposit-read` (60).
+- **Os valores mínimos são da rota** e dependem do par; uma recusa é `400 provider_error` com o motivo.
 
 ### Login da wallet em Solana e Monad
 
@@ -2580,6 +2595,13 @@ serviço em `src/native-plugins/<slug>/`, ligados pela mesma lista
   grupo de rotas de plugin nativo que não exige API key.
 
 ## Atualização — mudanças incompatíveis e notas de deploy
+
+### Links de pagamento: todas as redes, pagos a partir de qualquer rede
+
+- **A migração `20261116120000_payment_deposits`** cria a tabela `payment_deposit` e adiciona duas colunas anuláveis a `payment_intent` (`crossChainFeeBps`, `paidFrom`); nada é reescrito. Execute `migrate deploy` em cada banco de dados antes de a nova versão atender.
+- **`chain` nos payment intents aceita mais 32 redes** (`POST /v1/payment-intents/pay`, o filtro da lista, as respostas e os payloads dos webhooks). Uma integração que distingue `stellar`, `solana` e `monad` precisa tratar as demais. Na leitura pública `payTo` agora é anulável (null nessas redes) e `crossChainPayment` é novo; nas leituras do dono e nos webhooks `paidFrom` é novo.
+- **Rotas novas:** as rotas sem chave `GET /v1/payment-links/{id}/deposit-assets`, `POST /v1/payment-links/{id}/quote`, `POST /v1/payment-links/{id}/deposits` e `GET /v1/payment-links/{id}/deposits/{depositId}`, e `GET /v1/payment-intents/{id}/deposits` (`payments:read`). A rota sem chave `/v1/payment-links/*` do gateway já atende GET e POST.
+- **Nenhuma variável nova**, mas `NEAR_INTENTS_FEE_RECIPIENT` deve estar definida onde um plano cobra comissão de swap: sem ela um link nas redes novas é recusado (`503`) e um link na Stellar, Solana ou Monad é criado sem pagamentos a partir de outras redes. O observer de depósitos roda com os demais (`OBSERVER_ENABLED`).
 
 ### On-ramp P2P: cobranças com QR em moeda local, e o webhook de ordens do mercado
 

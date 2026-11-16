@@ -320,6 +320,7 @@ Paths use the OpenAPI `{param}` form.
 | GET | `/v1/payment-intents/{id}` | `payments:read` |  |
 | PATCH | `/v1/payment-intents/{id}` | `payments:write` |  |
 | DELETE | `/v1/payment-intents/{id}` | `payments:write` |  |
+| GET | `/v1/payment-intents/{id}/deposits` | `payments:read` |  |
 | GET | `/v1/payment-intents/{id}/transitions` | `payments:read` |  |
 | POST | `/v1/payment-intents/{id}/validate` | `payments:write` |  |
 | GET | `/v1/payment-links/{id}` | none — `@Public()`, budgeted per client address |  |
@@ -327,6 +328,10 @@ Paths use the OpenAPI `{param}` form.
 | POST | `/v1/payment-links/{id}/events` | none: `@Public()`, budgeted per client address |  |
 | GET | `/v1/payment-links/{id}/solana-pay` | none: `@Public()`, budgeted per client address |  |
 | POST | `/v1/payment-links/{id}/solana-pay` | none: `@Public()`, budgeted per client address |  |
+| GET | `/v1/payment-links/{id}/deposit-assets` | none: `@Public()`, budgeted per client address |  |
+| POST | `/v1/payment-links/{id}/quote` | none: `@Public()`, budgeted per client address |  |
+| POST | `/v1/payment-links/{id}/deposits` | none: `@Public()`, budgeted per client address |  |
+| GET | `/v1/payment-links/{id}/deposits/{depositId}` | none: `@Public()`, budgeted per client address |  |
 | GET | `/v1/payment-links/fiat/{id}` | none: `@Public()`, budgeted per client address |  |
 | POST | `/v1/payment-links/fiat/{id}/sessions` | none: `@Public()`, budgeted per client address |  |
 | GET | `/v1/plugins` | `plugins:read` |  |
@@ -997,6 +1002,16 @@ removed: it is built field by field (`toPublicPaymentLink`), so a column added t
   no CORS headers on this path, so that route's CORS plugin must allow `GET` from
   the checkout's origin and expose `Retry-After` and `ratelimit-*`; without it the
   browser discards every answer.
+
+### Payment links on every network, paid from any network
+
+`POST /v1/payment-intents/pay` takes `chain` from the list cross-chain swaps reach (`PAYMENT_NETWORKS`, which is `CROSS_CHAIN_NETWORK_IDS`: 35 networks). Stellar, Solana and Monad keep their wallet links and their observer. On every other network the link is the hosted checkout and the payer never pays the merchant directly: the checkout asks which network and asset they pay with and a refund address there, and `POST /v1/payment-links/{id}/deposits` answers a deposit address the cross-chain route makes for that one payment (table `payment_deposit`). The route pays the merchant exactly the link's amount in its asset (an exact-output quote), and `PaymentDepositObserverService` settles the intent on the route's report, with the payout transaction as `txHash` and `paidFrom` naming what was sent. No new chain indexer: a deposit is followed like a cross-chain swap.
+
+- **Mainnet only, a fixed amount, no merchant fee.** The route has no test network (a `dev` key gets `400 network_unsupported`), it is quoted for an exact amount, and it pays one recipient (`merchant_fee_unsupported`). The asset must be one the route trades on that network (`GET /v1/cross-chain-swaps/assets`): name it by its symbol, or by its `contract` as `assetIssuer`.
+- **Links on Stellar, Solana and Monad can be paid from another network too** when they are on mainnet, have an amount and no merchant fee (`crossChainPayment` on the public read). A Monad link without deposit addresses cannot: its observer recognises a payment by its amount at the merchant's address, where a payout would land too.
+- **The commission.** A payment from another network pays the plan's swap commission (`X-Plan-Swap-Fee-Bps`) to `NEAR_INTENTS_FEE_RECIPIENT`, on top of the link amount: the merchant receives the amount and the payer's deposit carries the fees. The rate is read when the link is created (`crossChainFeeBps`), because the deposit routes take no key. A rate with nowhere to go refuses a link on the new networks (`503 misconfigured`); on Stellar, Solana and Monad the link is created without payments from other networks.
+- **Keyless and bounded.** The deposit routes are `@Public()` under `/v1/payment-links/{id}`, the keyless gateway route that already exists: the link id is the capability. A deposit pays only the link's destination its amount and refunds only `refundTo`; at most `PAYMENT_DEPOSIT_MAX_OPEN_PER_LINK` (5) are open per link, and the same asset and refund address again answers the open one. Budgets per client address: `payment-links:deposit-assets` (30 a minute), `payment-links:quote` (30), `payment-links:deposits` (10), `payment-links:deposit-read` (60).
+- **Minimum amounts are the route's** and depend on the pair; a refusal is `400 provider_error` with its reason.
 
 ### Wallet sign-in on Solana and Monad
 
@@ -2519,6 +2534,13 @@ the service under `src/native-plugins/<slug>/`, switched on by the same
   are the one native plugin route group that takes no API key.
 
 ## Upgrading — breaking changes and deploy notes
+
+### Payment links: every network, paid from any network
+
+- **Migration `20261116120000_payment_deposits`** creates the `payment_deposit` table and adds two nullable columns to `payment_intent` (`crossChainFeeBps`, `paidFrom`); nothing is rewritten. Run `migrate deploy` on each database before the new build serves.
+- **`chain` on payment intents takes 32 more networks** (`POST /v1/payment-intents/pay`, the list filter, the responses and the webhook payloads). An integration that switches on `stellar`, `solana` and `monad` must handle the others. On the public read `payTo` is now nullable (null on those networks) and `crossChainPayment` is new; on the owner's reads and the webhooks `paidFrom` is new.
+- **New routes:** the keyless `GET /v1/payment-links/{id}/deposit-assets`, `POST /v1/payment-links/{id}/quote`, `POST /v1/payment-links/{id}/deposits` and `GET /v1/payment-links/{id}/deposits/{depositId}`, and `GET /v1/payment-intents/{id}/deposits` (`payments:read`). The gateway's keyless `/v1/payment-links/*` route already serves GET and POST.
+- **No new variable**, but `NEAR_INTENTS_FEE_RECIPIENT` must be set wherever a plan charges a swap commission: without it a link on the new networks is refused (`503`) and a link on Stellar, Solana or Monad is created without payments from other networks. The deposit observer runs with the others (`OBSERVER_ENABLED`).
 
 ### P2P on-ramp: charges with a QR in local money, and the marketplace's order webhook
 

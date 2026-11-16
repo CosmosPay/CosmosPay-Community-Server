@@ -131,6 +131,7 @@ describe('PaymentIntentsService.transition (guards + audit)', () => {
       new ConsumerResolverService(prisma as never),
       customers as any,
       {} as any,
+      {} as never,
     );
   });
 
@@ -731,6 +732,7 @@ describe('PaymentIntentsService API settlement is chain-verified', () => {
       new Sep7LinkBuilder(config, {} as never, {} as never),
       new ConsumerResolverService(prisma),
       { ensureForPayer: jest.fn().mockResolvedValue(undefined) } as never,
+      {} as never,
       {} as never,
     );
     return { service, prisma, verify };

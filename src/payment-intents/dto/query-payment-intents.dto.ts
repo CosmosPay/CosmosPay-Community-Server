@@ -10,7 +10,10 @@ import {
   Min,
 } from 'class-validator';
 import { PaymentIntentStatus } from '@generated/prisma/client';
-import { CHAINS, type Chain } from '@/chains/chains.constants';
+import {
+  PAYMENT_NETWORKS,
+  type PaymentNetwork,
+} from '@/payment-intents/payment-networks';
 
 export class QueryPaymentIntentsDto {
   @ApiPropertyOptional({
@@ -22,12 +25,12 @@ export class QueryPaymentIntentsDto {
   status?: PaymentIntentStatus;
 
   @ApiPropertyOptional({
-    enum: CHAINS,
-    description: 'Only intents on this chain. Omit for every chain.',
+    enum: PAYMENT_NETWORKS,
+    description: 'Only intents on this network. Omit for every network.',
   })
   @IsOptional()
-  @IsIn(CHAINS)
-  chain?: Chain;
+  @IsIn(PAYMENT_NETWORKS)
+  chain?: PaymentNetwork;
 
   @ApiPropertyOptional({
     type: String,

@@ -8,8 +8,9 @@ import {
 } from '@/common/services/advisory-lock.service';
 import { JobSchedule, ScheduledJob } from '@/common/services/scheduled-job';
 import { PrismaService } from '@/prisma/prisma.service';
-import type { PaymentIntent } from '@generated/prisma/client';
-import { DEFAULT_CHAIN, isChain } from '@/chains/chains.constants';
+import { Prisma, type PaymentIntent } from '@generated/prisma/client';
+import { CHAINS, DEFAULT_CHAIN, isChain } from '@/chains/chains.constants';
+import { isDepositNetwork } from '@/payment-intents/payment-networks';
 import { PaymentIntentsService } from '@/payment-intents/payment-intents.service';
 import type { VerificationResult } from '@/payment-intents/payment-verifier';
 import { PaymentVerifiers } from '@/payment-intents/payment-verifiers';
@@ -146,6 +147,9 @@ export class PaymentIntentObserverService extends ScheduledJob {
         FROM "payment_intent"
         WHERE "status" = 'PENDING'
           AND ("expiresAt" IS NULL OR "expiresAt" > ${now})
+          -- A link on any other network has no chain to scan: its deposits are
+          -- followed by the deposit observer.
+          AND "chain" IN (${Prisma.join([...CHAINS])})
       ) AS "eligible"
       WHERE "rank" <= ${OBSERVER_MAX_INTENTS_PER_CONSUMER}
       ORDER BY "rank", "createdAt", "id"
@@ -228,6 +232,17 @@ export class PaymentIntentObserverService extends ScheduledJob {
    * settles this one out of EXPIRED.
    */
   private async settleOrExpire(intent: ObservedIntent): Promise<void> {
+    // A link on a network with no verifier of ours is paid only through its
+    // deposits, which the deposit observer follows: nothing on a chain to look
+    // for, so its lifetime ending is all there is to apply. A deposit that pays
+    // it later still settles it out of EXPIRED.
+    if (isDepositNetwork(intent.chain)) {
+      await this.paymentIntents.markExpired(
+        intent.id,
+        intent.consumer.apisixUsername,
+      );
+      return;
+    }
     const result = await this.verify(intent);
 
     if (result.valid && result.txHash) {

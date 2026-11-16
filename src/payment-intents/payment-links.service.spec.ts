@@ -43,6 +43,7 @@ const CONTRACT_FIELDS = [
   'networkFee',
   'merchantFee',
   'payerAccountRequired',
+  'crossChainPayment',
   'expiresAt',
   'createdAt',
   'checkoutTheme',
@@ -116,6 +117,8 @@ function fullRow(overrides: Partial<PaymentIntent> = {}): PaymentIntent {
     checkoutWalletAt: null,
     checkoutWalletClosedAt: null,
     checkoutSentAt: null,
+    crossChainFeeBps: null,
+    paidFrom: null,
     createdAt: CREATED,
     updatedAt: new Date('2026-10-24T12:40:00.000Z'),
     ...overrides,
@@ -145,10 +148,63 @@ describe('toPublicPaymentLink', () => {
       networkFee: null,
       merchantFee: null,
       payerAccountRequired: false,
+      // A link from before payments from other networks: no rate recorded.
+      crossChainPayment: false,
       expiresAt: '2026-10-24T13:34:56.000Z',
       createdAt: '2026-10-24T12:34:56.000Z',
       checkoutTheme: 'classic',
     });
+  });
+
+  it('offers payment from another network only when the link qualifies', () => {
+    const payable = { crossChainFeeBps: 50 };
+    expect(toPublicPaymentLink(fullRow(payable), 'qr').crossChainPayment).toBe(
+      true,
+    );
+    // A test network, an open amount, a merchant fee: the cross-chain route
+    // cannot pay them.
+    for (const overrides of [
+      { network: 'testnet' },
+      { amount: null },
+      {
+        merchantFee: {
+          bps: 100,
+          fixed: '0',
+          amount: '0.255',
+          asset: 'native',
+          wallet: PAYER,
+          paidBy: 'recipient',
+        },
+      },
+    ]) {
+      expect(
+        toPublicPaymentLink(fullRow({ ...payable, ...overrides }), 'qr')
+          .crossChainPayment,
+      ).toBe(false);
+    }
+  });
+
+  it('a link on a network paid through deposits has no address to pay', () => {
+    const link = toPublicPaymentLink(
+      fullRow({
+        chain: 'base',
+        destination: EVM_MERCHANT,
+        asset: 'USDC',
+        assetIssuer: '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913',
+        assetDecimals: 6,
+        msg: null,
+        callback: null,
+        uri: 'https://payments.cosmospay.lat/cmh4x2k9a0001l70g8v5q3z2w',
+        crossChainFeeBps: 50,
+      }),
+      'qr',
+    );
+    expect(link.chain).toBe('base');
+    expect(link.payTo).toBeNull();
+    expect(link.crossChainPayment).toBe(true);
+    expect(link.uri).toBe(
+      'https://payments.cosmospay.lat/cmh4x2k9a0001l70g8v5q3z2w',
+    );
   });
 
   it('drops every owner-only column, even handed the full row', () => {
@@ -349,6 +405,7 @@ describe('PaymentLinksService.findPublic', () => {
       {} as never,
       {} as never,
       links,
+      {} as never,
       {} as never,
       {} as never,
       {} as never,
