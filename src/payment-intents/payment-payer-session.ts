@@ -39,10 +39,10 @@ export interface PaymentSettlementFields {
   /** The account that paid, as the settlement recorded it; null if unknown. */
   source: string | null;
   /**
-   * When the settling transaction closed on-chain (or, for a forwarder, when
-   * its sweep was observed); a proof counts only when registered at least
-   * `PAYMENT_PAYER_PROOF_MARGIN_MS` before it. Null when no such time is
-   * known: then no proof counts (fail closed).
+   * When the settling transaction closed on-chain; a proof counts only when
+   * registered at least `PAYMENT_PAYER_PROOF_MARGIN_MS` before it. Null when
+   * the chain's time is not known (a Monad deposit-address sweep, whose
+   * deposit was public before it): then no proof counts (fail closed).
    */
   paidAt: Date | null;
 }

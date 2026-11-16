@@ -292,8 +292,10 @@ export class EvmDepositForwarderService extends ScheduledJob {
       row.forwardTxHash,
       undefined,
       'observer',
-      // The sweep as observed: the payer paid the deposit address before it.
-      new Date(),
+      // No chain time: the payer's deposit into the address was public before
+      // the sweep, and its own time is not read here, so `paidOnChainAt` stays
+      // null and no checkout proof counts for the receipt (fail closed).
+      undefined,
     );
   }
 }

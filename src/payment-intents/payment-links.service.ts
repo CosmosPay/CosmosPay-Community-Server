@@ -284,13 +284,19 @@ export class PaymentLinksService {
         );
       }
       out.walletTxHash = rules.txId.normalize(proof.txHash.trim());
-      // A transaction the observer has already seen is public: it proves nothing.
-      if (
-        intent.txHash &&
-        rules.txId.isValid(intent.txHash) &&
-        rules.txId.normalize(intent.txHash).toLowerCase() ===
-          out.walletTxHash.toLowerCase()
-      ) {
+      // A transaction the observer has already seen, or one this service sent
+      // itself (a deposit address's forward), is public: it proves nothing.
+      const seen =
+        (intent.txHash &&
+          rules.txId.isValid(intent.txHash) &&
+          rules.txId.normalize(intent.txHash).toLowerCase() ===
+            out.walletTxHash.toLowerCase()) ||
+        (await this.prisma.evmDepositAddress.count({
+          where: {
+            forwardTxHash: { equals: out.walletTxHash, mode: 'insensitive' },
+          },
+        })) > 0;
+      if (seen) {
         throw ApiError.badRequest(
           ApiErrorCode.ValidationFailed,
           'txHash was already seen on-chain for this payment: it cannot be registered as proof',

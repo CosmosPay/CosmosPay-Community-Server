@@ -668,6 +668,7 @@ describe('PaymentLinksService.recordEvent', () => {
       {
         paymentIntent: { findUnique: jest.fn() },
         paymentPayerSession: { updateMany },
+        evmDepositAddress: { count: jest.fn().mockResolvedValue(0) },
         $executeRaw: executeRaw,
       } as never,
       links,
@@ -694,6 +695,7 @@ describe('PaymentLinksService.recordEvent', () => {
           findUnique: jest.fn().mockResolvedValue({ chain: 'monad' }),
         },
         paymentPayerSession: { updateMany },
+        evmDepositAddress: { count: jest.fn().mockResolvedValue(0) },
         $executeRaw: executeRaw,
       } as never,
       links,
@@ -722,6 +724,41 @@ describe('PaymentLinksService.recordEvent', () => {
     expect(updateMany).toHaveBeenCalledTimes(1);
   });
 
+  it("refuses to register a deposit address's forward this service sent", async () => {
+    const forward =
+      '0xc0ffee00000000000000000000000000000000000000000000000000000000ee';
+    const updateMany = jest.fn().mockResolvedValue({ count: 1 });
+    const count = jest.fn(({ where }: any) =>
+      Promise.resolve(
+        where.forwardTxHash.equals.toLowerCase() === forward ? 1 : 0,
+      ),
+    );
+    const service = new PaymentLinksService(
+      {
+        paymentIntent: {
+          findUnique: jest
+            .fn()
+            .mockResolvedValue({ chain: 'monad', txHash: null }),
+        },
+        paymentPayerSession: { updateMany },
+        evmDepositAddress: { count },
+        $executeRaw: jest.fn().mockResolvedValue(1),
+      } as never,
+      links,
+      {} as never,
+      {} as never,
+    );
+    await expect(
+      service.recordEvent(
+        ID,
+        'sent',
+        'q8V0n3cJxZr2m1bWk7yTt4uP9aLs6dEf0gHiJkLmNoQ',
+        { txHash: forward },
+      ),
+    ).rejects.toMatchObject({ code: 'validation_failed' });
+    expect(updateMany).not.toHaveBeenCalled();
+  });
+
   it('refuses to register a transaction the observer has already seen on-chain', async () => {
     const seen =
       '0xb7f1c3a2d4e5f60718293a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d';
@@ -734,6 +771,7 @@ describe('PaymentLinksService.recordEvent', () => {
             .mockResolvedValue({ chain: 'monad', txHash: seen }),
         },
         paymentPayerSession: { updateMany },
+        evmDepositAddress: { count: jest.fn().mockResolvedValue(0) },
         $executeRaw: jest.fn().mockResolvedValue(1),
       } as never,
       links,

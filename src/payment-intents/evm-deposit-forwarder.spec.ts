@@ -182,8 +182,8 @@ describe('EvmDepositForwarderService — confirming', () => {
       HASH,
       undefined,
       'observer',
-      // The sweep's observed time stands in for the chain's.
-      expect.any(Date),
+      // No chain time for a sweep: the receipt's proof rule fails closed.
+      undefined,
     );
   });
 
