@@ -182,6 +182,7 @@ export class PaymentIntentObserverService extends ScheduledJob {
           result.txHash,
           result.payer,
           'observer',
+          result.paidAt,
         );
       } catch (err) {
         if (!isAlreadySettled(err)) throw err;
@@ -253,6 +254,7 @@ export class PaymentIntentObserverService extends ScheduledJob {
           result.txHash,
           result.payer,
           'observer',
+          result.paidAt,
         );
         return;
       } catch (err) {

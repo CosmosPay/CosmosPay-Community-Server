@@ -126,6 +126,7 @@ function fullRow(overrides: Partial<PaymentIntent> = {}): PaymentIntent {
     receiptClaimedAt: null,
     receiptSentAt: null,
     receiptSkippedAt: null,
+    paidOnChainAt: null,
     receiptTo: 'payer-secret@example.com',
     receiptToAt: null,
     createdAt: CREATED,

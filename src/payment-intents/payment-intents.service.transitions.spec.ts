@@ -228,6 +228,24 @@ describe('PaymentIntentsService.transition (guards + audit)', () => {
     );
   });
 
+  it("carries the settling transaction's on-chain time to the transition", async () => {
+    const spy = jest.spyOn(service, 'transition');
+    const paidAt = new Date('2026-11-17T11:30:00.000Z');
+    await service.markSucceeded(
+      row.id,
+      'cosmos_u1',
+      'd'.repeat(64),
+      'GPAYER',
+      'observer',
+      paidAt,
+    );
+    expect(spy).toHaveBeenCalledWith(
+      row.id,
+      'SUCCEEDED',
+      expect.objectContaining({ paidAt }),
+    );
+  });
+
   it('surfaces InvalidPaymentIntentTransitionError.code to API callers', () => {
     const err = new InvalidPaymentIntentTransitionError(
       'EXPIRED',

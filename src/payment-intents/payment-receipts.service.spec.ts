@@ -18,6 +18,8 @@ const INTENT = {
   paidFrom: null as unknown,
   // The account that paid, as the settlement recorded it.
   source: '0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaed' as string | null,
+  // When its transaction closed on-chain: proofs must come before.
+  paidOnChainAt: new Date('2026-11-17T11:30:00.000Z') as Date | null,
 };
 
 type Session = {
@@ -295,6 +297,39 @@ describe('PaymentReceiptsService', () => {
     expect(customers.linkPayerEmail).not.toHaveBeenCalled();
     // Decided once: the sweeper does not ask again.
     expect(sql.some((q) => q.includes('"receiptSkippedAt" = ?'))).toBe(true);
+  });
+
+  it('a proof registered after the transaction closed on-chain does not count', async () => {
+    const { service, mailer, customers } = build({
+      sessions: [
+        session('copycat@example.com', 'en', {
+          walletTxHash: INTENT.txHash,
+          provenAt: at(31),
+        }),
+        session('payer@example.com'),
+      ],
+    });
+    await expect(service.send('pi_1')).resolves.toBe(false);
+    expect(mailer.send).not.toHaveBeenCalled();
+    expect(customers.linkPayerEmail).not.toHaveBeenCalled();
+  });
+
+  it('two sessions matching one proof are unproven: the single-session rule decides', async () => {
+    const both = build({
+      sessions: [
+        session('a@example.com', 'en', {
+          walletTxHash: INTENT.txHash,
+          provenAt: at(2),
+        }),
+        session('b@example.com', 'en', {
+          walletTxHash: INTENT.txHash,
+          provenAt: at(3),
+        }),
+      ],
+    });
+    await expect(both.service.send('pi_1')).resolves.toBe(false);
+    expect(both.mailer.send).not.toHaveBeenCalled();
+    expect(both.customers.linkPayerEmail).not.toHaveBeenCalled();
   });
 
   it('a single unproven session gets the receipt but no customer link', async () => {

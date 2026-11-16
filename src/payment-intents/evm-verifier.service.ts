@@ -111,6 +111,7 @@ export class EvmVerifierService implements PaymentVerifier {
       valid: true,
       txHash: hash.toLowerCase(),
       payer: toChecksumAddress(tx.from),
+      paidAt: new Date(timestamp * 1000),
     };
   }
 

@@ -478,6 +478,10 @@ model PaymentIntent {
   // `payment-intents.constants.ts`.
   depositMaxPerPayer     Int?
   depositBudgetPerWindow Int?
+  // When the settling transaction closed on-chain (ledger close or block time),
+  // when the verifier read it: a checkout session's proof registered at or
+  // after it does not count for the receipt.
+  paidOnChainAt          DateTime?
   // The receipt: claimed (a lease, so one replica sends it) and then sent. A
   // settled intent with a payer session and no `receiptSentAt` is retried by the
   // sweeper; `receiptSkippedAt` when no single recipient could be told apart.
@@ -2796,7 +2800,8 @@ model PaymentPayerSession {
   sentAt        DateTime?
   // What this session's wallet said it pays from, and the transaction it got
   // back (token-authenticated events). The receipt and the customer link go to
-  // the session whose proof matches the settlement; the earliest proof wins.
+  // the session whose proof alone matches the settlement, registered before the
+  // transaction closed on-chain (`payment_intent.paidOnChainAt`).
   walletAddress String?
   walletTxHash  String?
   provenAt      DateTime?

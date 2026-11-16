@@ -105,6 +105,7 @@ export class PaymentReceiptsService {
         updatedAt: true,
         paidFrom: true,
         source: true,
+        paidOnChainAt: true,
       },
     });
     if (!intent) return false;
@@ -137,7 +138,12 @@ export class PaymentReceiptsService {
               provenAt: true,
             },
           }),
-          { chain: intent.chain, txHash: intent.txHash, source: intent.source },
+          {
+            chain: intent.chain,
+            txHash: intent.txHash,
+            source: intent.source,
+            paidAt: intent.paidOnChainAt ?? intent.updatedAt,
+          },
         );
     if (!recipient) {
       // Paid outside the checkout (a wallet link scanned elsewhere, the API),

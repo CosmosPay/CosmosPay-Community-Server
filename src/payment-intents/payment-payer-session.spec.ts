@@ -10,7 +10,8 @@ const at = (minute: number) =>
 const PAYER = 'GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ';
 const OTHER = 'GCALNQQBXAPZ2WIRSDDBMSTAKCUH5SG6U76YBFLQLIXJTF7FE5AX7AOO';
 const TX = 'b7f1c3a2d4e5f60718293a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d';
-const SETTLED = { chain: 'stellar', txHash: TX, source: PAYER };
+/* Closed on-chain at 11:30: a proof must come before. */
+const SETTLED = { chain: 'stellar', txHash: TX, source: PAYER, paidAt: at(30) };
 
 const session = (
   email: string,
@@ -64,16 +65,59 @@ describe('receiptRecipient', () => {
     });
   });
 
-  it('takes the earliest proof when two sessions claim one transaction', () => {
+  it('two sessions matching one proof prove nothing: no customer link, and the ambiguous rule', () => {
+    const sessions = [
+      session('copycat@example.com', { walletTxHash: TX, provenAt: at(9) }),
+      session('payer@example.com', { walletTxHash: TX, provenAt: at(4) }),
+    ];
+    expect(receiptRecipient(sessions, SETTLED)).toBeNull();
+    // The same on one account, with a single session left it would still be unproven.
     expect(
       receiptRecipient(
         [
-          session('copycat@example.com', { walletTxHash: TX, provenAt: at(9) }),
-          session('payer@example.com', { walletTxHash: TX, provenAt: at(4) }),
+          session('a@example.com', { walletAddress: PAYER, provenAt: at(2) }),
+          session('b@example.com', { walletAddress: PAYER, provenAt: at(3) }),
         ],
         SETTLED,
-      )?.session.email,
-    ).toBe('payer@example.com');
+      ),
+    ).toBeNull();
+  });
+
+  it('ignores a proof registered at or after the transaction closed on-chain', () => {
+    // The hash and the source are public once it closed: copied, they prove nothing.
+    for (const late of [at(30), at(31)]) {
+      expect(
+        receiptRecipient(
+          [
+            session('copycat@example.com', {
+              walletTxHash: TX,
+              provenAt: late,
+            }),
+            session('payer@example.com'),
+          ],
+          SETTLED,
+        ),
+      ).toBeNull();
+    }
+    // A late hash does not hide an account proven in time.
+    expect(
+      receiptRecipient(
+        [
+          session('copycat@example.com', {
+            walletTxHash: TX,
+            provenAt: at(31),
+          }),
+          session('payer@example.com', {
+            walletAddress: PAYER,
+            provenAt: at(29),
+          }),
+        ],
+        SETTLED,
+      ),
+    ).toEqual({
+      session: expect.objectContaining({ email: 'payer@example.com' }),
+      proven: true,
+    });
   });
 
   it("falls back to the session whose wallet account is the settlement's source", () => {

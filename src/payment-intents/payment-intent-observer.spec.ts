@@ -205,6 +205,7 @@ describe('PaymentIntentObserverService.tick', () => {
       'a'.repeat(64),
       'GP',
       'observer',
+      undefined,
     );
   });
 
@@ -524,6 +525,7 @@ describe('PaymentIntentObserverService.tick', () => {
         'b'.repeat(64),
         'GP',
         'observer',
+        undefined,
       );
       expect(paymentIntents.markExpired).not.toHaveBeenCalled();
     });

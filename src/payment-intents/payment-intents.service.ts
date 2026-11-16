@@ -107,6 +107,8 @@ export interface TransitionOptions {
   txHash?: string;
   /** On-chain payer for PAY intents settled by observer/validate. */
   payer?: string;
+  /** When the settling transaction closed on-chain, when the verifier read it. */
+  paidAt?: Date;
   /**
    * The intent's chain verifier confirmed that `txHash` pays this intent. Only
    * {@link PaymentIntentsService.markSucceeded} sets it, and settling an
@@ -1295,8 +1297,14 @@ export class PaymentIntentsService {
 
     // For PAY intents the payer is unknown until settlement — record the actual
     // on-chain source so the payment is attributable (and customer stats line up).
-    const setSource =
-      opts.payer && !current.source ? { source: opts.payer } : {};
+    const setSource = {
+      ...(opts.payer && !current.source ? { source: opts.payer } : {}),
+      // The chain's own time of the settling transaction: a checkout session's
+      // proof registered at or after it never counts for the receipt.
+      ...(opts.paidAt && !current.paidOnChainAt
+        ? { paidOnChainAt: opts.paidAt }
+        : {}),
+    };
 
     let updated: PaymentIntent;
     try {
@@ -1481,6 +1489,8 @@ export class PaymentIntentsService {
         consumer.username,
         result.txHash ?? txHash,
         result.payer,
+        'validate',
+        result.paidAt,
       );
       return {
         valid: true,
@@ -1533,6 +1543,7 @@ export class PaymentIntentsService {
     txHash: string,
     payer?: string,
     actor: PaymentIntentTransitionActor = 'validate',
+    paidAt?: Date,
   ): Promise<PaymentIntent> {
     await this.assertOldestClaimant(intentId, txHash);
     return this.transition(intentId, 'SUCCEEDED', {
@@ -1541,6 +1552,7 @@ export class PaymentIntentsService {
       reason: 'on-chain payment confirmed',
       txHash,
       payer,
+      paidAt,
       verifiedOnChain: true,
     });
   }
