@@ -722,6 +722,35 @@ describe('PaymentLinksService.recordEvent', () => {
     expect(updateMany).toHaveBeenCalledTimes(1);
   });
 
+  it('refuses to register a transaction the observer has already seen on-chain', async () => {
+    const seen =
+      '0xb7f1c3a2d4e5f60718293a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d';
+    const updateMany = jest.fn().mockResolvedValue({ count: 1 });
+    const service = new PaymentLinksService(
+      {
+        paymentIntent: {
+          findUnique: jest
+            .fn()
+            .mockResolvedValue({ chain: 'monad', txHash: seen }),
+        },
+        paymentPayerSession: { updateMany },
+        $executeRaw: jest.fn().mockResolvedValue(1),
+      } as never,
+      links,
+      {} as never,
+      {} as never,
+    );
+    await expect(
+      service.recordEvent(
+        ID,
+        'sent',
+        'q8V0n3cJxZr2m1bWk7yTt4uP9aLs6dEf0gHiJkLmNoQ',
+        { txHash: seen.toUpperCase().replace('0X', '0x') },
+      ),
+    ).rejects.toMatchObject({ code: 'validation_failed' });
+    expect(updateMany).not.toHaveBeenCalled();
+  });
+
   it('ignores a link that is no longer pending, and answers an unknown id as the read does', async () => {
     const settled = make(0, true);
     await expect(

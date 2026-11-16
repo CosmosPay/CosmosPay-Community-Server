@@ -1591,6 +1591,8 @@ export class PaymentIntentsService {
       consumerUsername: intent.consumer.apisixUsername,
       actor: 'observer',
       reason: `paid from ${paidFrom.chain} through a deposit address`,
+      // Observed now; the deposit's own session gets the receipt anyway.
+      paidAt: new Date(),
       txHash: settlementTxId(paymentNetworkOf(intent.chain), txHash),
       verifiedOnChain: true,
       paidFrom,

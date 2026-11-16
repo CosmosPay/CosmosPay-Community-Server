@@ -385,6 +385,8 @@ describe('PaymentIntentsService.settleFromDeposit', () => {
         txHash: `0x${'ab'.repeat(32)}`,
         verifiedOnChain: true,
         paidFrom,
+        // Observed now: the deposit's own session gets the receipt anyway.
+        paidAt: expect.any(Date),
       });
     }
   });

@@ -332,6 +332,22 @@ describe('PaymentReceiptsService', () => {
     expect(both.customers.linkPayerEmail).not.toHaveBeenCalled();
   });
 
+  it('fails closed without the on-chain time: a matching proof links nobody', async () => {
+    const { service, mailer, customers } = build({
+      intent: { paidOnChainAt: null },
+      sessions: [
+        session('payer@example.com', 'en', {
+          walletTxHash: INTENT.txHash,
+          provenAt: at(1),
+        }),
+      ],
+    });
+    // The single-session rule still sends the receipt, unproven.
+    await expect(service.send('pi_1')).resolves.toBe(true);
+    expect(mailer.send.mock.calls[0][0].to).toBe('payer@example.com');
+    expect(customers.linkPayerEmail).not.toHaveBeenCalled();
+  });
+
   it('a single unproven session gets the receipt but no customer link', async () => {
     const { service, mailer, customers } = build({
       sessions: [session('payer@example.com', 'fr')],

@@ -1,6 +1,9 @@
 import { createHash, randomBytes } from 'crypto';
 import { CROSS_CHAIN_NETWORKS } from '@/cross-chain-swaps/cross-chain-networks';
-import { PAYMENT_PAYER_TOKEN_BYTES } from '@/payment-intents/payment-intents.constants';
+import {
+  PAYMENT_PAYER_PROOF_MARGIN_MS,
+  PAYMENT_PAYER_TOKEN_BYTES,
+} from '@/payment-intents/payment-intents.constants';
 import { isPaymentNetwork } from '@/payment-intents/payment-networks';
 
 /**
@@ -36,11 +39,12 @@ export interface PaymentSettlementFields {
   /** The account that paid, as the settlement recorded it; null if unknown. */
   source: string | null;
   /**
-   * When the settling transaction closed on-chain; a proof registered at or
-   * after it does not count. Where the chain's time was not read (a payment
-   * found by a log scan, a forwarder settlement), the settlement's own time.
+   * When the settling transaction closed on-chain (or, for a forwarder, when
+   * its sweep was observed); a proof counts only when registered at least
+   * `PAYMENT_PAYER_PROOF_MARGIN_MS` before it. Null when no such time is
+   * known: then no proof counts (fail closed).
    */
-  paidAt: Date;
+  paidAt: Date | null;
 }
 
 /** Who the receipt goes to, and whether that session proved it paid. */
@@ -59,10 +63,10 @@ function same(caseInsensitive: boolean, a: string, b: string): boolean {
  * goes, among the checkout sessions that gave an email. A `sent` report proves
  * nothing (anyone holding a token can send one), so only a proof decides: the
  * session whose registered transaction is the settlement's, else the one whose
- * registered account is the settlement's source. A proof registered at or
- * after the transaction closed on-chain is ignored (the hash and the source
- * are public from then on), and two sessions matching the same proof prove
- * nothing. Without exactly one match: the only session when exactly one gave
+ * registered account is the settlement's source. A proof counts only when
+ * registered `PAYMENT_PAYER_PROOF_MARGIN_MS` before the transaction's on-chain
+ * time (the hash and the source are public from then on), never when that time
+ * is unknown, and two sessions matching the same proof prove nothing. Without exactly one match: the only session when exactly one gave
  * an email (a receipt of on-chain facts, no customer link); otherwise nobody.
  */
 export function receiptRecipient<T extends PayerSessionFields>(
@@ -71,10 +75,16 @@ export function receiptRecipient<T extends PayerSessionFields>(
 ): ReceiptRecipient<T> | null {
   if (isPaymentNetwork(settled.chain)) {
     const rules = CROSS_CHAIN_NETWORKS[settled.chain];
-    const inTime = sessions.filter(
-      (s) =>
-        s.provenAt !== null && s.provenAt.getTime() < settled.paidAt.getTime(),
-    );
+    const cutoff =
+      settled.paidAt === null
+        ? null
+        : settled.paidAt.getTime() - PAYMENT_PAYER_PROOF_MARGIN_MS;
+    const inTime =
+      cutoff === null
+        ? []
+        : sessions.filter(
+            (s) => s.provenAt !== null && s.provenAt.getTime() < cutoff,
+          );
     const tx =
       settled.txHash && rules.txId.isValid(settled.txHash)
         ? rules.txId.normalize(settled.txHash)

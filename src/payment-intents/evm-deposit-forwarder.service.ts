@@ -292,6 +292,8 @@ export class EvmDepositForwarderService extends ScheduledJob {
       row.forwardTxHash,
       undefined,
       'observer',
+      // The sweep as observed: the payer paid the deposit address before it.
+      new Date(),
     );
   }
 }

@@ -393,8 +393,10 @@ table. These are the rules that did not hold on their own:
   another's and none is ever refused for another's email; a deposit belongs to
   the session that opened it, which is its proof; a native payment's receipt goes
   to the session whose wallet account or transaction (registered with its token
-  on `events`) matches the settlement's `source` / `txHash` (registered before the
-  transaction's on-chain time, `paidOnChainAt`, and matched by that session alone),
+  on `events`) matches the settlement's `source` / `txHash` (registered at least
+  `PAYMENT_PAYER_PROOF_MARGIN_MS` before the transaction's on-chain time,
+  `paidOnChainAt`, never when that time is unknown: fail closed; matched by that
+  session alone; a hash the observer already saw is refused),
   else to the only session if exactly one gave an email (receipt only, no
   customer link), else nobody (`receiptRecipient`, `receiptSkippedAt`); a `sent`
   report is informational and decides nothing; a customer is linked only on a

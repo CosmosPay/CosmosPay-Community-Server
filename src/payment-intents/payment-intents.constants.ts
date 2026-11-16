@@ -511,6 +511,15 @@ export const PAYMENT_RECEIPT_RETRY_WINDOW_MS = 3 * 24 * 60 * 60 * 1000;
  */
 export const PAYMENT_PAYER_TOKEN_BYTES = 32;
 
+/**
+ * How long before the settling transaction's on-chain time a checkout session's
+ * proof must have been registered to count. Our clock and the chain's are
+ * different clocks: the margin keeps a proof registered from a copy of a
+ * transaction seen early (a mempool, a fast indexer) from passing as earlier
+ * than the chain, at the cost of a payer who pays within it.
+ */
+export const PAYMENT_PAYER_PROOF_MARGIN_MS = 30_000;
+
 /** The checkout sessions' emails the owner's read of a payment lists, newest first. */
 export const PAYMENT_PAYER_EMAILS_LISTED = 50;
 

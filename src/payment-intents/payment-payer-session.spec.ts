@@ -1,3 +1,4 @@
+import { PAYMENT_PAYER_PROOF_MARGIN_MS } from '@/payment-intents/payment-intents.constants';
 import {
   newPayerToken,
   payerTokenHash,
@@ -135,6 +136,41 @@ describe('receiptRecipient', () => {
     ).toEqual({
       session: expect.objectContaining({ email: 'payer@example.com' }),
       proven: true,
+    });
+  });
+
+  it('counts a proof only when registered a full margin before the on-chain time', () => {
+    const near = new Date(at(30).getTime() - PAYMENT_PAYER_PROOF_MARGIN_MS + 1);
+    const early = new Date(
+      at(30).getTime() - PAYMENT_PAYER_PROOF_MARGIN_MS - 1,
+    );
+    const with2 = (provenAt: Date) => [
+      session('payer@example.com', { walletTxHash: TX, provenAt }),
+      session('other@example.com'),
+    ];
+    expect(receiptRecipient(with2(near), SETTLED)).toBeNull();
+    expect(receiptRecipient(with2(early), SETTLED)?.proven).toBe(true);
+  });
+
+  it('fails closed without an on-chain time: no proof counts', () => {
+    const unknown = { ...SETTLED, paidAt: null };
+    expect(
+      receiptRecipient(
+        [
+          session('payer@example.com', { walletTxHash: TX, provenAt: at(1) }),
+          session('other@example.com'),
+        ],
+        unknown,
+      ),
+    ).toBeNull();
+    expect(
+      receiptRecipient(
+        [session('payer@example.com', { walletTxHash: TX, provenAt: at(1) })],
+        unknown,
+      ),
+    ).toEqual({
+      session: expect.objectContaining({ email: 'payer@example.com' }),
+      proven: false,
     });
   });
 

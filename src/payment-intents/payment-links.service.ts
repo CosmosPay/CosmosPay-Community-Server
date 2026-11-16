@@ -262,7 +262,7 @@ export class PaymentLinksService {
     if (!proof.address && !proof.txHash) return {};
     const intent = await this.prisma.paymentIntent.findUnique({
       where: { id },
-      select: { chain: true },
+      select: { chain: true, txHash: true },
     });
     if (!intent || !isPaymentNetwork(intent.chain)) return {};
     const rules = CROSS_CHAIN_NETWORKS[intent.chain];
@@ -284,6 +284,18 @@ export class PaymentLinksService {
         );
       }
       out.walletTxHash = rules.txId.normalize(proof.txHash.trim());
+      // A transaction the observer has already seen is public: it proves nothing.
+      if (
+        intent.txHash &&
+        rules.txId.isValid(intent.txHash) &&
+        rules.txId.normalize(intent.txHash).toLowerCase() ===
+          out.walletTxHash.toLowerCase()
+      ) {
+        throw ApiError.badRequest(
+          ApiErrorCode.ValidationFailed,
+          'txHash was already seen on-chain for this payment: it cannot be registered as proof',
+        );
+      }
     }
     return { ...out, provenAt: now };
   }

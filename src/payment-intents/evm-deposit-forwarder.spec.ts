@@ -182,6 +182,8 @@ describe('EvmDepositForwarderService — confirming', () => {
       HASH,
       undefined,
       'observer',
+      // The sweep's observed time stands in for the chain's.
+      expect.any(Date),
     );
   });
 

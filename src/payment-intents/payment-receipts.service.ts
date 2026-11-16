@@ -142,7 +142,8 @@ export class PaymentReceiptsService {
             chain: intent.chain,
             txHash: intent.txHash,
             source: intent.source,
-            paidAt: intent.paidOnChainAt ?? intent.updatedAt,
+            // No on-chain time, no proof: never our own clock instead.
+            paidAt: intent.paidOnChainAt,
           },
         );
     if (!recipient) {
