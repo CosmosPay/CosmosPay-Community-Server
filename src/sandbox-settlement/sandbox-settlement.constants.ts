@@ -1,4 +1,8 @@
 import type { PaymentNetwork } from '@/payment-intents/payment-networks';
+import {
+  type SandboxXrplNetwork,
+  XRPL_TESTNET,
+} from '@/sandbox-settlement/sandbox-xrpl.constants';
 
 /**
  * Sandbox settlement: payment links on the networks paid through deposit
@@ -63,7 +67,7 @@ export interface SandboxUnavailableNetwork {
  * Every kind of test network the sandbox settles on, each with its own
  * `SandboxLedger` (`SandboxLedgers` holds one per kind).
  */
-export type SandboxSettledNetwork = SandboxEvmNetwork;
+export type SandboxSettledNetwork = SandboxEvmNetwork | SandboxXrplNetwork;
 
 /** Which ledger implementation a settled network uses. */
 export type SandboxLedgerKind = SandboxSettledNetwork['kind'];
@@ -235,9 +239,9 @@ export const SANDBOX_NETWORKS: Record<PaymentNetwork, SandboxNetwork> = {
   bch: notYet('it needs a UTXO deposit and payout path (follow-up).'),
   dash: notYet('it needs a UTXO deposit and payout path (follow-up).'),
   zec: notYet('it needs a UTXO deposit and payout path (follow-up).'),
-  xrp: notYet(
-    'an XRP Ledger path is a follow-up (an official test USDC exists there).',
-  ),
+  // Test USDC on the XRP Ledger testnet, deposited to the treasury with a
+  // destination tag per payment (`sandbox-xrpl.constants.ts`).
+  xrp: XRPL_TESTNET,
   tron: notYet('a Tron path is a follow-up (needs its own test stablecoin).'),
   ton: notYet('a TON path is a follow-up (needs its own test stablecoin).'),
   near: notYet(

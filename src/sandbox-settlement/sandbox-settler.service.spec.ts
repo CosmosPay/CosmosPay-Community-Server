@@ -126,7 +126,10 @@ function build(
   } as never;
   const settler = new SandboxSettler(
     prisma,
-    new SandboxLedgers(new SandboxEvmLedger(config, chains as never)),
+    new SandboxLedgers(
+      new SandboxEvmLedger(config, chains as never),
+      {} as never,
+    ),
   );
   return {
     settler,

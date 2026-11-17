@@ -3,6 +3,7 @@ import { addressOfSecretKey } from '@/evm/evm-transaction';
 import { SandboxDepositRoute } from '@/sandbox-settlement/sandbox-deposit-route.service';
 import { SandboxEvmLedger } from '@/sandbox-settlement/sandbox-evm.ledger';
 import { SandboxLedgers } from '@/sandbox-settlement/sandbox-ledgers.service';
+import { SandboxXrplLedger } from '@/sandbox-settlement/sandbox-xrpl.ledger';
 import {
   depositSecretKey,
   parseDepositPath,
@@ -32,7 +33,10 @@ function build(sandbox: Record<string, unknown> = {}) {
   // Deposit targets are pure derivations: no node is reached.
   return new SandboxDepositRoute(
     config,
-    new SandboxLedgers(new SandboxEvmLedger(config, {} as never)),
+    new SandboxLedgers(
+      new SandboxEvmLedger(config, {} as never),
+      new SandboxXrplLedger(config, {} as never),
+    ),
   );
 }
 
@@ -158,6 +162,52 @@ describe('SandboxDepositRoute', () => {
       addressOfSecretKey(depositSecretKey(SEED, indexes!)),
     );
     expect(priced.response.quote.deadline).toBeDefined();
+  });
+
+  it('pays an XRP Ledger deposit to the treasury with a tag of its own', () => {
+    const route = build();
+    expect(route.availability('xrp')).toMatchObject({
+      available: true,
+      asset: {
+        symbol: 'USDC',
+        contract: 'rHuGNhqTG32mfmAvWA8hUyWRLV3tCSwKQt',
+        decimals: 6,
+        chainName: 'XRP Ledger Testnet',
+      },
+    });
+    const payer = 'rN7Td1t4N7xDW8ohKpcvX1WiACRq9R8Ven';
+    const first = route.price(
+      LINK,
+      { originChain: 'xrp', originAsset: 'USDC', refundTo: payer },
+      true,
+    );
+    const second = route.price(
+      LINK,
+      { originChain: 'xrp', originAsset: 'USDC', refundTo: payer },
+      true,
+    );
+    const treasury = new SandboxXrplLedger(
+      { get: () => ({ treasuryPrivateKey: '0x' + '07'.repeat(32) }) } as never,
+      {} as never,
+    ).treasuryAddress('xrp');
+    for (const priced of [first, second]) {
+      expect(priced.response.quote.depositAddress).toBe(treasury);
+      const tag = priced.response.quote.depositMemo!;
+      expect(tag).toMatch(/^[1-9]\d{0,9}$/);
+      expect(Number(tag)).toBeLessThan(2 ** 32);
+      expect(priced.response.correlationId).toBe(`sandbox:xrpl:tag:${tag}`);
+    }
+    expect(first.response.quote.depositMemo).not.toBe(
+      second.response.quote.depositMemo,
+    );
+    // An EVM origin carries no memo.
+    expect(
+      route.price(
+        LINK,
+        { originChain: 'eth', originAsset: 'USDC', refundTo: PAYER },
+        true,
+      ).response.quote.depositMemo,
+    ).toBeUndefined();
   });
 
   it('quotes what the payer typed on a link without an amount', () => {

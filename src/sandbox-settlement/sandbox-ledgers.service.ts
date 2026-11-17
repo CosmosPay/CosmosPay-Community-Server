@@ -6,6 +6,7 @@ import {
   SANDBOX_NETWORKS,
   type SandboxLedgerKind,
 } from '@/sandbox-settlement/sandbox-settlement.constants';
+import { SandboxXrplLedger } from '@/sandbox-settlement/sandbox-xrpl.ledger';
 
 /**
  * The ledger of each kind of test network the sandbox settles on: a
@@ -16,8 +17,8 @@ import {
 export class SandboxLedgers {
   private readonly byKind: Record<SandboxLedgerKind, SandboxLedger>;
 
-  constructor(evm: SandboxEvmLedger) {
-    this.byKind = { evm };
+  constructor(evm: SandboxEvmLedger, xrpl: SandboxXrplLedger) {
+    this.byKind = { evm, xrpl };
   }
 
   /** The ledger of `network`; throws for a network the sandbox does not settle on. */

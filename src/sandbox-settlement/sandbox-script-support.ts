@@ -10,6 +10,8 @@ import {
   type SandboxEvmNetwork,
   type SandboxSettledNetwork,
 } from '@/sandbox-settlement/sandbox-settlement.constants';
+import { SandboxXrplClient } from '@/sandbox-settlement/sandbox-xrpl.client';
+import { SandboxXrplLedger } from '@/sandbox-settlement/sandbox-xrpl.ledger';
 
 /**
  * What the sandbox scripts (`scripts/sandbox/`) share, kept here so they can
@@ -125,6 +127,7 @@ export function scriptLedgers(
   } as never;
   return new SandboxLedgers(
     new SandboxEvmLedger(config, new SandboxEvmClient(config)),
+    new SandboxXrplLedger(config, new SandboxXrplClient(config)),
   );
 }
 

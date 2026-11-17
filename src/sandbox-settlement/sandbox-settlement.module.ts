@@ -4,6 +4,8 @@ import { SandboxEvmClient } from '@/sandbox-settlement/sandbox-evm.client';
 import { SandboxEvmLedger } from '@/sandbox-settlement/sandbox-evm.ledger';
 import { SandboxLedgers } from '@/sandbox-settlement/sandbox-ledgers.service';
 import { SandboxSettler } from '@/sandbox-settlement/sandbox-settler.service';
+import { SandboxXrplClient } from '@/sandbox-settlement/sandbox-xrpl.client';
+import { SandboxXrplLedger } from '@/sandbox-settlement/sandbox-xrpl.ledger';
 
 /**
  * Sandbox settlement: payment links on the networks paid through deposit
@@ -17,6 +19,8 @@ import { SandboxSettler } from '@/sandbox-settlement/sandbox-settler.service';
   providers: [
     SandboxEvmClient,
     SandboxEvmLedger,
+    SandboxXrplClient,
+    SandboxXrplLedger,
     SandboxLedgers,
     SandboxDepositRoute,
     SandboxSettler,
