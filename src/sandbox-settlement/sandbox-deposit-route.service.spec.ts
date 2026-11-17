@@ -5,10 +5,13 @@ import { SandboxEvmLedger } from '@/sandbox-settlement/sandbox-evm.ledger';
 import { SandboxLedgers } from '@/sandbox-settlement/sandbox-ledgers.service';
 import { SandboxSuiLedger } from '@/sandbox-settlement/sandbox-sui.ledger';
 import { SandboxXrplLedger } from '@/sandbox-settlement/sandbox-xrpl.ledger';
+import { SandboxNearLedger } from '@/sandbox-settlement/sandbox-near.ledger';
 import {
   depositSecretKey,
+  ed25519DepositSecret,
   parseDepositPath,
 } from '@/sandbox-settlement/sandbox-hd';
+import { nearAccountOfSecret } from '@/sandbox-settlement/sandbox-near.codec';
 import { sandboxAmountIn } from '@/sandbox-settlement/sandbox-quote';
 
 const SEED = '0x' + '42'.repeat(32);
@@ -38,6 +41,7 @@ function build(sandbox: Record<string, unknown> = {}) {
       new SandboxEvmLedger(config, {} as never),
       new SandboxXrplLedger(config, {} as never),
       new SandboxSuiLedger(config, {} as never),
+      new SandboxNearLedger(config, {} as never),
     ),
   );
 }
@@ -210,6 +214,38 @@ describe('SandboxDepositRoute', () => {
         true,
       ).response.quote.depositMemo,
     ).toBeUndefined();
+  });
+
+  it('settles NEAR in its test USDC, and opens a per-payment implicit account there', () => {
+    const route = build();
+    expect(route.availability('near')).toMatchObject({
+      available: true,
+      asset: {
+        chain: 'near',
+        symbol: 'USDC',
+        contract:
+          '3e2210e1184b45b64c8a434c0a7e7b23cc04ea7eb7a6c3c32520d03d4afcb8af',
+        decimals: 6,
+      },
+    });
+    const priced = route.price(
+      LINK,
+      {
+        originChain: 'near',
+        originAsset: 'USDC',
+        refundTo: 'payer.testnet',
+      },
+      true,
+    );
+    const path = priced.response.correlationId.replace(/^sandbox:/, '');
+    const indexes = parseDepositPath(path, 397);
+    expect(indexes).not.toBeNull();
+    expect(priced.response.quote.depositAddress).toBe(
+      nearAccountOfSecret(ed25519DepositSecret(SEED, 397, indexes!)),
+    );
+    expect(priced.response.quote.depositAddress).toMatch(/^[0-9a-f]{64}$/);
+    expect(priced.response.quote.depositMemo).toBeUndefined();
+    expect(priced).toMatchObject({ amountIn: '25', amountOut: '25' });
   });
 
   it('quotes what the payer typed on a link without an amount', () => {

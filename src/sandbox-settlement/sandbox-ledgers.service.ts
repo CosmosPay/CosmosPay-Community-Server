@@ -3,6 +3,7 @@ import type { PaymentNetwork } from '@/payment-intents/payment-networks';
 import { SandboxEvmLedger } from '@/sandbox-settlement/sandbox-evm.ledger';
 import type { SandboxLedger } from '@/sandbox-settlement/sandbox-ledger';
 import { SandboxSuiLedger } from '@/sandbox-settlement/sandbox-sui.ledger';
+import { SandboxNearLedger } from '@/sandbox-settlement/sandbox-near.ledger';
 import {
   SANDBOX_NETWORKS,
   type SandboxLedgerKind,
@@ -22,8 +23,9 @@ export class SandboxLedgers {
     evm: SandboxEvmLedger,
     xrpl: SandboxXrplLedger,
     sui: SandboxSuiLedger,
+    near: SandboxNearLedger,
   ) {
-    this.byKind = { evm, xrpl, sui };
+    this.byKind = { evm, xrpl, sui, near };
   }
 
   /** The ledger of `network`; throws for a network the sandbox does not settle on. */

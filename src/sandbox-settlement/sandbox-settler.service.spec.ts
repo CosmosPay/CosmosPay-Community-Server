@@ -4,6 +4,7 @@ import { hexToBytes } from '@/evm/rlp';
 import { erc20TransferCalldata } from '@/sandbox-settlement/sandbox-evm.client';
 import { SandboxEvmLedger } from '@/sandbox-settlement/sandbox-evm.ledger';
 import { SandboxLedgers } from '@/sandbox-settlement/sandbox-ledgers.service';
+import { SandboxNearLedger } from '@/sandbox-settlement/sandbox-near.ledger';
 import { SANDBOX_NETWORKS } from '@/sandbox-settlement/sandbox-settlement.constants';
 import { SandboxSettler } from '@/sandbox-settlement/sandbox-settler.service';
 
@@ -130,6 +131,7 @@ function build(
       new SandboxEvmLedger(config, chains as never),
       {} as never,
       {} as never,
+      new SandboxNearLedger(config, {} as never),
     ),
   );
   return {

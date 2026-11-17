@@ -3,6 +3,8 @@ import { SandboxDepositRoute } from '@/sandbox-settlement/sandbox-deposit-route.
 import { SandboxEvmClient } from '@/sandbox-settlement/sandbox-evm.client';
 import { SandboxEvmLedger } from '@/sandbox-settlement/sandbox-evm.ledger';
 import { SandboxLedgers } from '@/sandbox-settlement/sandbox-ledgers.service';
+import { SandboxNearClient } from '@/sandbox-settlement/sandbox-near.client';
+import { SandboxNearLedger } from '@/sandbox-settlement/sandbox-near.ledger';
 import { SandboxSettler } from '@/sandbox-settlement/sandbox-settler.service';
 import { SandboxSuiClient } from '@/sandbox-settlement/sandbox-sui.client';
 import { SandboxSuiLedger } from '@/sandbox-settlement/sandbox-sui.ledger';
@@ -25,6 +27,8 @@ import { SandboxXrplLedger } from '@/sandbox-settlement/sandbox-xrpl.ledger';
     SandboxXrplLedger,
     SandboxSuiClient,
     SandboxSuiLedger,
+    SandboxNearClient,
+    SandboxNearLedger,
     SandboxLedgers,
     SandboxDepositRoute,
     SandboxSettler,

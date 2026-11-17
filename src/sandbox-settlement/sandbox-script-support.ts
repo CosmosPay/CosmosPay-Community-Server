@@ -7,6 +7,8 @@ import { SandboxEvmLedger } from '@/sandbox-settlement/sandbox-evm.ledger';
 import { SandboxLedgers } from '@/sandbox-settlement/sandbox-ledgers.service';
 import { SandboxSuiClient } from '@/sandbox-settlement/sandbox-sui.client';
 import { SandboxSuiLedger } from '@/sandbox-settlement/sandbox-sui.ledger';
+import { SandboxNearClient } from '@/sandbox-settlement/sandbox-near.client';
+import { SandboxNearLedger } from '@/sandbox-settlement/sandbox-near.ledger';
 import {
   SANDBOX_NETWORKS,
   type SandboxEvmNetwork,
@@ -131,6 +133,7 @@ export function scriptLedgers(
     new SandboxEvmLedger(config, new SandboxEvmClient(config)),
     new SandboxXrplLedger(config, new SandboxXrplClient(config)),
     new SandboxSuiLedger(config, new SandboxSuiClient(config)),
+    new SandboxNearLedger(config, new SandboxNearClient(config)),
   );
 }
 
