@@ -2,6 +2,8 @@ import type { PaymentDeposit } from '@generated/prisma/client';
 import { addressOfSecretKey, decodeSignedEip1559 } from '@/evm/evm-transaction';
 import { hexToBytes } from '@/evm/rlp';
 import { erc20TransferCalldata } from '@/sandbox-settlement/sandbox-evm.client';
+import { SandboxEvmLedger } from '@/sandbox-settlement/sandbox-evm.ledger';
+import { SandboxLedgers } from '@/sandbox-settlement/sandbox-ledgers.service';
 import { SANDBOX_NETWORKS } from '@/sandbox-settlement/sandbox-settlement.constants';
 import { SandboxSettler } from '@/sandbox-settlement/sandbox-settler.service';
 
@@ -122,7 +124,10 @@ function build(
   const config = {
     get: () => ({ treasuryPrivateKey: TREASURY_KEY }),
   } as never;
-  const settler = new SandboxSettler(config, prisma, chains as never);
+  const settler = new SandboxSettler(
+    prisma,
+    new SandboxLedgers(new SandboxEvmLedger(config, chains as never)),
+  );
   return {
     settler,
     prisma,
@@ -288,5 +293,84 @@ describe('SandboxSettler', () => {
     );
     expect(sends).toBe(1);
     setRows(rows());
+  });
+});
+
+describe('SandboxSettler over any ledger', () => {
+  function withLedger(ledger: Record<string, jest.Mock>) {
+    const rows: any[] = [];
+    const prisma: any = {
+      sandboxPayout: {
+        findMany: jest.fn(() => Promise.resolve(rows)),
+        create: jest.fn(({ data }: any) => {
+          const row = { id: `pay_${rows.length + 1}`, status: 'SENT', ...data };
+          rows.push(row);
+          return Promise.resolve(row);
+        }),
+        update: jest.fn(({ where, data }: any) => {
+          Object.assign(
+            rows.find((r) => r.id === where.id),
+            data,
+          );
+          return Promise.resolve();
+        }),
+      },
+    };
+    const settler = new SandboxSettler(prisma, { for: () => ledger } as never);
+    return { settler, rows };
+  }
+
+  it('readies a deposit still waiting for its money, and only before its deadline', async () => {
+    const ledger = {
+      received: jest.fn().mockResolvedValue(0n),
+      prepareDeposit: jest.fn().mockResolvedValue(undefined),
+    };
+    const { settler } = withLedger(ledger);
+    await expect(settler.observe(deposit())).resolves.toMatchObject({
+      status: 'PENDING_DEPOSIT',
+    });
+    expect(ledger.prepareDeposit).toHaveBeenCalledTimes(1);
+    await settler.observe(deposit({ expiresAt: new Date(Date.now() - 1) }));
+    expect(ledger.prepareDeposit).toHaveBeenCalledTimes(1);
+  });
+
+  it('signs nothing while the ledger says the transfer is blocked', async () => {
+    const ledger = {
+      received: jest.fn().mockResolvedValue(25_000_000n),
+      blocker: jest.fn().mockResolvedValue('the recipient has no trustline'),
+      sign: jest.fn(),
+      broadcast: jest.fn(),
+    };
+    const { settler, rows } = withLedger(ledger);
+    await expect(settler.observe(deposit())).resolves.toMatchObject({
+      status: 'KNOWN_DEPOSIT_TX',
+    });
+    expect(ledger.sign).not.toHaveBeenCalled();
+    expect(rows).toEqual([]);
+  });
+
+  it('records the signed transfer before broadcasting it, then follows its outcome', async () => {
+    const ledger = {
+      received: jest.fn().mockResolvedValue(25_000_000n),
+      blocker: jest.fn().mockResolvedValue(null),
+      sign: jest
+        .fn()
+        .mockResolvedValue({ hash: 'H1', raw: 'RAW', nonce: '12' }),
+      broadcast: jest.fn().mockResolvedValue(undefined),
+      follow: jest.fn().mockResolvedValue('failed'),
+      explorerTx: jest.fn((_n: string, h: string) => `https://x/${h}`),
+    };
+    const { settler, rows } = withLedger(ledger);
+    await expect(settler.observe(deposit())).resolves.toMatchObject({
+      status: 'PROCESSING',
+    });
+    expect(rows[0]).toMatchObject({ txHash: 'H1', raw: 'RAW', nonce: '12' });
+    expect(ledger.broadcast).toHaveBeenCalledWith('base', 'RAW');
+    // Expired unexecuted (or reverted): final, never signed again.
+    await expect(settler.observe(deposit())).resolves.toMatchObject({
+      status: 'FAILED',
+    });
+    expect(rows[0].status).toBe('FAILED');
+    expect(ledger.sign).toHaveBeenCalledTimes(1);
   });
 });

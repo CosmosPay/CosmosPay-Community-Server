@@ -1,6 +1,8 @@
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { addressOfSecretKey } from '@/evm/evm-transaction';
 import { SandboxDepositRoute } from '@/sandbox-settlement/sandbox-deposit-route.service';
+import { SandboxEvmLedger } from '@/sandbox-settlement/sandbox-evm.ledger';
+import { SandboxLedgers } from '@/sandbox-settlement/sandbox-ledgers.service';
 import {
   depositSecretKey,
   parseDepositPath,
@@ -24,9 +26,14 @@ function build(sandbox: Record<string, unknown> = {}) {
       ...sandbox,
     },
   };
-  return new SandboxDepositRoute({
+  const config = {
     get: (key: keyof typeof values) => values[key],
-  } as never);
+  } as never;
+  // Deposit targets are pure derivations: no node is reached.
+  return new SandboxDepositRoute(
+    config,
+    new SandboxLedgers(new SandboxEvmLedger(config, {} as never)),
+  );
 }
 
 const LINK = {
