@@ -203,6 +203,9 @@ export const DEFAULT_NEAR_INTENTS_BASE_URL = 'https://1click.chaindefuser.com';
  */
 export const DEFAULT_NEAR_INTENTS_TIMEOUT_MS = 20_000;
 
+/** Read timeout for a sandbox test-network RPC (SANDBOX_RPC_TIMEOUT_MS). */
+export const DEFAULT_SANDBOX_RPC_TIMEOUT_MS = 15_000;
+
 /**
  * Default slippage for a cross-chain swap, in bps. Higher than a Stellar path
  * payment's: the price is fixed at quote time but the swap settles after the

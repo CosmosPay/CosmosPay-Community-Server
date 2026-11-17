@@ -38,7 +38,10 @@
     "plugins": "node --no-node-snapshot -r ts-node/register/transpile-only -r tsconfig-paths/register scripts/plugins.ts",
     "assets:verify": "ts-node -r tsconfig-paths/register --transpile-only scripts/verify-assets.ts",
     "import:platform-wallet-data": "ts-node -r tsconfig-paths/register --transpile-only scripts/import-platform-wallet-data.ts",
-    "contracts:compile": "ts-node -r tsconfig-paths/register --transpile-only scripts/compile-contracts.ts && prettier --write src/evm/payment-forwarder.artifact.ts src/evm/payment-split-forwarder.artifact.ts src/evm/merchant-fee-swap-router.artifact.ts",
+    "contracts:compile": "ts-node -r tsconfig-paths/register --transpile-only scripts/compile-contracts.ts && prettier --write src/evm/payment-forwarder.artifact.ts src/evm/payment-split-forwarder.artifact.ts src/evm/merchant-fee-swap-router.artifact.ts src/evm/sandbox-usd.artifact.ts",
+    "sandbox:keys": "ts-node -r tsconfig-paths/register --transpile-only scripts/sandbox/generate-keys.ts",
+    "sandbox:deploy-cusd": "ts-node -r tsconfig-paths/register --transpile-only scripts/sandbox/deploy-cusd.ts",
+    "sandbox:status": "ts-node -r tsconfig-paths/register --transpile-only scripts/sandbox/status.ts",
     "zk:deploy-testnet": "ts-node -r tsconfig-paths/register --transpile-only scripts/zk/deploy-testnet.ts",
     "zk:e2e-testnet": "ts-node -r tsconfig-paths/register --transpile-only scripts/zk/e2e-testnet.ts"
   },

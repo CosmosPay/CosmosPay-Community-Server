@@ -115,6 +115,7 @@ describe('PaymentIntentsService: links on networks paid through deposits', () =>
       'base',
       'USDC',
       undefined,
+      'public',
     );
     expect(prisma.paymentIntent.create.mock.calls[0][0].data).toMatchObject({
       kind: 'PAY',
@@ -157,8 +158,14 @@ describe('PaymentIntentsService: links on networks paid through deposits', () =>
     });
   });
 
-  it('refuses a dev key: the cross-chain route runs on mainnet only', async () => {
-    const { service, prisma } = build();
+  it('hands a dev key to the sandbox, with no commission, and refuses where it does not reach', async () => {
+    const { service, prisma, pricing } = build();
+    pricing.linkAssetForCreate.mockRejectedValueOnce(
+      ApiError.badRequest(
+        ApiErrorCode.NetworkUnsupported,
+        'A payment link on Tron is not available in the sandbox: a Tron path is a follow-up.',
+      ),
+    );
     const err = await refusal(
       service.createPay(devConsumer, {
         chain: 'tron',
@@ -166,9 +173,29 @@ describe('PaymentIntentsService: links on networks paid through deposits', () =>
         amount: '10',
       }),
     );
+    expect(pricing.linkAssetForCreate).toHaveBeenCalledWith(
+      'tron',
+      undefined,
+      undefined,
+      'testnet',
+    );
     expect(err.code).toBe(ApiErrorCode.NetworkUnsupported);
     expect(err.message).not.toMatch(/near|1click/i);
     expect(prisma.paymentIntent.create).not.toHaveBeenCalled();
+
+    // Where the sandbox does reach, the link is created on the test network,
+    // charging no commission.
+    await service.createPay(devConsumer, {
+      chain: 'base',
+      destination: EVM_DEST,
+      amount: '25',
+      memo: '77',
+    });
+    expect(prisma.paymentIntent.create.mock.calls[0][0].data).toMatchObject({
+      chain: 'base',
+      network: 'testnet',
+      crossChainFeeBps: 0,
+    });
   });
 
   it('takes a link without an amount: the payer types it in the checkout', async () => {
@@ -212,6 +239,27 @@ describe('PaymentIntentsService: links on networks paid through deposits', () =>
       wallet: '0xab5801a7d398351b8be11c439e05c5b3259aec9b',
       paidBy: 'payer',
     });
+  });
+
+  it("refuses a merchant fee on a dev key's link: the sandbox does not settle one yet", async () => {
+    const { service, prisma } = build();
+    const err = await refusal(
+      service.createPay(devConsumer, {
+        chain: 'base',
+        destination: EVM_DEST,
+        amount: '100',
+        assetCode: 'USDC',
+        memo: '52',
+        merchantFee: {
+          bps: 150,
+          wallet: '0xAb5801a7D398351b8bE11C439e05C5B3259aeC9B',
+          paidBy: 'payer',
+        } as never,
+      }),
+    );
+    expect(err.code).toBe(ApiErrorCode.MerchantFeeUnsupported);
+    expect(err.message).not.toMatch(/near|1click/i);
+    expect(prisma.paymentIntent.create).not.toHaveBeenCalled();
   });
 
   it('refuses a fee to an address the route cannot credit, a fee with no amount, and a callback', async () => {

@@ -88,6 +88,17 @@ describe('crossChainPaymentRefusal', () => {
     ).toBeNull();
   });
 
+  it('accepts a sandbox link on a network paid through deposit addresses', () => {
+    // The sandbox settles those on their test networks.
+    expect(
+      crossChainPaymentRefusal({
+        ...PAYABLE,
+        network: 'testnet',
+        crossChainFeeBps: 0,
+      }),
+    ).toBeNull();
+  });
+
   it('accepts a mainnet payment link with an amount, no merchant fee and a recorded rate', () => {
     expect(crossChainPaymentRefusal(PAYABLE)).toBeNull();
     expect(acceptsCrossChainPayment(PAYABLE)).toBe(true);
@@ -99,7 +110,11 @@ describe('crossChainPaymentRefusal', () => {
 
   it.each([
     ['a transaction intent', { kind: 'TX' as const }, /known payer/],
-    ['a test network', { network: 'testnet' }, /test network/],
+    [
+      'a link on Stellar, Solana or Monad on a test network',
+      { network: 'testnet', chain: 'stellar' },
+      /test network/,
+    ],
     [
       'a merchant fee on a link on Stellar, Solana or Monad',
       {

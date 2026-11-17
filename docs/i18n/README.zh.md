@@ -64,6 +64,8 @@ src/
   cross-chain-swaps/              swaps across 35 networks via NEAR Intents (Stellar, Solana, Monad, EVM,
                                   UTXO, ...): network registry, quote, deposit address + wallet link, observer
   near-intents/                   NEAR Intents 1Click client: tokens, quote, status, deposit submit
+  sandbox-settlement/             payment links on the test networks: HD deposit address per payment, test-network
+                                  reads, payouts and refunds from a treasury, cUSD script support
   usdt0/                          USDT0 from Stellar to EVM networks through LayerZero's OFT: routes, quote,
                                   build + relay the Soroban `send`, status from the ledger and LayerZero Scan
   zk-payments/                    private payments: confidential transfers on Cosmos Pay's token, verified on-chain;
@@ -278,6 +280,7 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | POST | `/v1/onramp/receivers/{receiverId}/virtual-accounts` | `onramp:write` |  |
 | POST | `/v1/onramp/trustline` | `onramp:write` |  |
 | GET | `/v1/payment-intents` | `payments:read` |  |
+| GET | `/v1/payment-intents/networks` | `payments:read` | ✓ |
 | POST | `/v1/payment-intents/pay` | `payments:write` | ✓ |
 | POST | `/v1/payment-intents/tx` | `payments:write` | ✓ |
 | GET | `/v1/payment-intents/{id}` | `payments:read` |  |
@@ -728,7 +731,7 @@ devnet 和 Monad testnet（10143）——所有链上的 `network` 都存为 `pu
 
 `POST /v1/payment-intents/pay` 的 `chain` 取自跨链 swap 可达的网络列表（`PAYMENT_NETWORKS`，即 `CROSS_CHAIN_NETWORK_IDS`：35 个网络）。Stellar、Solana 和 Monad 保留各自的钱包链接和 observer。在其他任何网络上，链接就是托管 checkout，付款方从不直接向商户付款：checkout 询问付款方用哪个网络和资产付款，以及该网络上的退款地址，`POST /v1/payment-links/{id}/deposits` 返回跨链路由专为这一笔付款生成的充值地址（表 `payment_deposit`）。路由按链接资产向商户支付链接的准确金额（精确输出报价），`PaymentDepositObserverService` 根据路由的报告结算 intent，以付款交易作为 `txHash`，并在 `paidFrom` 中记录所发送的内容。没有新的链索引器：充值像跨链 swap 一样被跟踪。
 
-- **仅限主网。** 该路由没有测试网（`dev` 密钥得到 `400 network_unsupported`）。资产必须是路由在该网络上交易的资产（`GET /v1/cross-chain-swaps/assets`）：用其符号指定，或在 `assetIssuer` 中用其 `contract` 指定。
+- **测试网上走沙盒。** 该路由没有测试网，因此 `dev` 密钥的链接在沙盒（下一节）覆盖的网络上由沙盒结算，其他网络得到 `400 network_unsupported`。资产必须是路由在该网络上交易的资产（`GET /v1/cross-chain-swaps/assets`）：用其符号指定，或在 `assetIssuer` 中用其 `contract` 指定。
 - **开放金额。** 所有网络都接受没有 `amount` 的链接：付款方在 checkout 中输入金额，报价和充值都带上它（`amount`），充值正好支付该金额。
 - **这些网络上的商户手续费以路由自身的应用费用方式收取**（其多收款方支持）：`merchantFee.wallet` 是路由内的账户（NEAR 账户 id，或以小写存储的 EVM 地址），以付款方发送的资产、按充值的整数基点记入。商户收到链接金额；`paidBy: recipient` 时为金额减去手续费。路由只向一个链上收款方付款，因此手续费不会发送到链接所在网络的地址；手续费账户从路由中提取。
 - **Stellar、Solana 和 Monad 上的链接也可从其他网络付款**，前提是在主网且没有商户手续费（这些链上的手续费在链上拆分），有无金额均可（公开读取中的 `crossChainPayment`）。没有充值地址的 Monad 链接不行：其 observer 通过商户地址上的金额识别付款，而路由的付款也会到达该地址。
@@ -737,6 +740,15 @@ devnet 和 Monad testnet（10143）——所有链上的 `network` 都存为 `pu
 - **最低金额。** 路由有各自的最低金额，且会随时间变化。`GET /v1/payment-intents/{id}/route-check` 按链接金额对主要来源（`PAYMENT_ROUTE_PROBE_ORIGINS`）进行试算报价，供 dashboard 提醒哪些来源无法支付该金额（从不阻止链接）；`deposit-assets` 以 `routes` 返回同样的检查，供 checkout 带原因禁用这些来源。被拒绝的报价返回 `400 provider_error` 及原因，在任何充值地址生成之前显示。
 - **付款方邮箱与收据。** 托管 checkout 在提供任何付款方式之前先要求填写邮箱，并通过 `POST /v1/payment-links/{id}/payer` 将其记录为一个 checkout 会话：第一次调用返回一个随机的 `payerToken`（只存储其 SHA-256，且从不写入日志），页面保存它并在之后的调用中发送（更改邮箱、`events`、`deposits`）。每个会话保留自己的邮箱，任何会话都不能更改其他会话的邮箱，因此第二个访问者永远不会阻挡付款方。会话还可凭 token 在 `events` 上登记其付款方式（`address`，其钱包付款的账户；`txHash`，其钱包返回的交易）。付款成功后，`PaymentReceiptsService` 通过本服务的邮件发送器（`MAIL_*`）以该会话的语言发送收据，在各副本间只认领一次，并由 `PaymentReceiptSweeperService` 在三天内重试：从其他网络付款时发给充值所属的会话（只有它拿到了该充值地址）；否则发给登记的交易或账户与结算相符的会话（证明只有在交易链上时间之前至少 `PAYMENT_PAYER_PROOF_MARGIN_MS`（30 秒）登记时才计入；该时间未知时从不计入；两个会话都匹配时也不计入）；否则，当恰好只有一个会话填写了邮箱时发给它；否则不发送（`receiptSkippedAt`），商户可通过 `GET /v1/payment-intents/{id}/payer-emails` 查看填写的邮箱。`sent` 报告不证明任何事，也不决定任何事。只有在有证明（充值或匹配）时，付款方才会被关联到商户的客户（`emailProvidedByPayer: true`：未验证），且从不合并到商户创建的客户。在 checkout 之外扫描的钱包链接不带邮箱，因此无法发送收据。
 - **无人验证的地址，因此收据有边界。** 收据只包含本服务生成的内容（金额、资产、网络、日期、付款 id 和交易，以及指向 checkout 上付款页面和浏览器上交易的链接），从不包含链接的留言或其他商户文字。一个地址每天从所有商户合计最多收到 `PAYMENT_RECEIPT_MAX_PER_RECIPIENT`（10）份收据，一个商户每天最多发送 `PAYMENT_RECEIPT_MAX_PER_MERCHANT`（1000）份：超过任一限制的收据会等待窗口。剩余风险：如果付款方的钱包既不报告账户也不报告交易（例如在另一台设备上扫描的钱包链接），在多个会话填写了邮箱的链接上不会自动收到收据；商户可以看到填写的邮箱。
+
+### 沙盒：测试网上的支付链接
+
+跨链路由没有测试网，因此 `dev` 密钥在通过充值地址付款的网络上创建的链接，由本服务自己的沙盒（`src/sandbox-settlement/`）结算，使用相同的路由、充值状态和 `PAYMENT_INTENT_*` webhook。`GET /v1/payment-intents/networks` 按网络、按调用方的密钥回答：能否在该网络创建链接、使用哪种资产，以及不能时的原因。
+
+- **一笔付款的流程。** 每个充值地址都为这一笔付款从 `SANDBOX_DEPOSIT_SEED` 派生（BIP-32，硬化路径 `m/44'/60'/7007'/a'/b'`，作为充值的 `correlationId` 保存；私钥从不存储）。`SandboxDepositObserverService` 在来源测试网上读取该地址的测试稳定币余额；金额到账后，金库（`SANDBOX_TREASURY_PRIVATE_KEY`）在链接所在的测试网上向商户支付链接金额，充值变为 `SUCCEEDED`，该笔付款作为 intent 的 `txHash`。超过截止时间到账的充值由金库在来源网络上退还给 `refundTo`。每笔付款和退款在广播前先签名并写入 `sandbox_payout`（每个充值和类型一条），然后重复广播直到上链，因此崩溃或第二个副本都不会重复付款。
+- **一比一，无佣金。** 只接受并支付该网络的测试稳定币：有官方测试 USDC 的网络用它，没有的网络用 `cUSD`（`contracts/SandboxUsd.sol`，6 位小数，从本仓库部署）。报价一比一，无佣金、无滑点；从不使用主网价格。沙盒链接记录 `crossChainFeeBps` 为 0。开放金额与主网一致；带商户手续费的链接暂不在沙盒中结算（`400 merchant_fee_unsupported`）。
+- **结算网络。** 测试 USDC：Sepolia、Base Sepolia、Arbitrum Sepolia、OP Sepolia、Polygon Amoy、Avalanche Fuji、Plasma Testnet 和 X Layer Testnet，Monad Testnet 则作为付款来源网络（Monad 链接以原生方式付款）。cUSD：BNB Smart Chain Testnet、Gnosis Chiado、Berachain Bepolia、Scroll Sepolia 和 Robinhood Chain Testnet，需 `SANDBOX_CUSD_ADDRESSES` 写明其部署地址。每个 chain id 都已对照 chainlist 和节点的 `eth_chainId` 核实，每个 RPC 在被信任前都会再次核验。Abstract（EraVM）、HyperCore 以及非 EVM 网络暂不结算；网络路由会给出原因。
+- **运维。** 金库支付每一笔付款和退款，因此需要每个网络的 gas 币和测试稳定币；金库没有资金时，充值只会等待。付款方的充值留在各自的 HD 地址上（暂不归集）。`npm run sandbox:keys -- --out <file>` 在仓库之外的文件中生成种子、金库密钥和 cUSD 部署密钥，`npm run sandbox:status -- --secrets-file <file>` 列出它们的余额，`npm run sandbox:deploy-cusd -- --network bsc --secrets-file <file>` 部署 cUSD 并打印 `SANDBOX_CUSD_ADDRESSES` 的条目。未配置时沙盒关闭，所有通过充值地址付款的网络都对 `dev` 密钥返回 `available: false`。
 
 ### Solana 与 Monad 上的钱包登录
 
@@ -1707,6 +1719,13 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
 
 ## 升级 — 破坏性变更与部署说明
 
+### 支付链接：测试网沙盒
+
+- **迁移 `20261117130000_sandbox_payouts`** 创建 `sandbox_payout` 表；不改写任何数据。
+- **`dev` 密钥可以在沙盒结算的、通过充值地址付款的网络上创建链接**（此前在所有这些网络上都得到 `400 network_unsupported`）。此类链接使用该网络的测试稳定币，并记录 `crossChainFeeBps` 为 0。
+- **新路由：** `GET /v1/payment-intents/networks`（`payments:read`，共享公钥可以调用）。
+- **新变量，均为可选：** `SANDBOX_DEPOSIT_SEED`、`SANDBOX_TREASURY_PRIVATE_KEY`、`SANDBOX_RPC_URLS`、`SANDBOX_CUSD_ADDRESSES`、`SANDBOX_RPC_TIMEOUT_MS`。前两个只在需要结算测试付款的部署上设置，并使用专为沙盒生成的密钥：启动时会拒绝与 `MONAD_RELAYER_PRIVATE_KEY` 相同的金库密钥。
+
 ### 支付链接：所有网络上的开放金额、商户手续费和收据
 
 - **迁移 `20261117120000_payment_link_payer_and_limits`** 为 `payment_intent` 增加可空列（`payerEmail`、`payerLang`、`receiptClaimedAt`、`receiptSentAt`、`depositMaxPerPayer`、`depositBudgetPerWindow`），为 `payment_deposit` 增加（`payerEmail`、`payerLang`、`merchantFee`），并增加 `customer.emailProvidedByPayer`（默认 `false`）。在每个数据库上运行 `migrate deploy`。
@@ -2421,6 +2440,11 @@ curl -H "X-Gateway-Secret: $APISIX_GATEWAY_SECRET" -H "X-Consumer-Username: ops"
 | `MONAD_LOG_BLOCK_RANGE` | 否 | `100` | 一次 `eth_getLogs` 可覆盖的区块数——RPC 服务商的上限（公共 RPC 允许 100） |
 | `MONAD_RELAYER_PRIVATE_KEY` | 否 | — | relayer 密钥（32 字节 hex）。设置后每个 Monad 意图都有自己的充值地址，relayer 会扣除手续费后把充值转发给商户。只存放 gas 资金：它部署的转发合约不能向其他任何人付款 |
 | `MONAD_DEPOSIT_TOKEN_FEES` | 否 | — | 每种 ERC-20 充值的 relayer 手续费，JSON `{"0xToken": "0.05"}`，以代币单位计。未配置的代币免费转发（gas 由 relayer 支付） |
+| `SANDBOX_DEPOSIT_SEED` | 否 | 无 | 沙盒的 HD 种子（16 到 64 字节，hex）。与 `SANDBOX_TREASURY_PRIVATE_KEY` 一起开启沙盒：`dev` 密钥在通过充值地址付款的网络上的链接在测试网上结算。仅限测试资金 |
+| `SANDBOX_TREASURY_PRIVATE_KEY` | 否 | 无 | 沙盒金库密钥（32 字节 hex）：在测试网上支付沙盒的付款和退款。绝不能是主网密钥；启动时拒绝 `MONAD_RELAYER_PRIVATE_KEY` |
+| `SANDBOX_RPC_URLS` | 否 | 测试网公共 RPC | 逗号分隔的 `net=url` 对，替换某个测试网的 RPC。每个在被信任前都会用 `eth_chainId` 核验 |
+| `SANDBOX_CUSD_ADDRESSES` | 否 | 无 | `net=0x...` 对：cUSD 的部署地址（`npm run sandbox:deploy-cusd`）。没有条目的 cUSD 网络保持不可用 |
+| `SANDBOX_RPC_TIMEOUT_MS` | 否 | `15000` | 沙盒对测试网单次调用的时间预算（ms） |
 | `STELLAR_BASE_FEE` | 否 | `100` | 构建交易时使用的 Stellar 基础手续费（stroops） |
 | `STELLAR_TX_TIMEOUT` | 否 | `300` | 交易超时（秒） |
 | `STELLAR_SWAP_FEE_WALLET` | 手续费 > 0 时 | — | 收取 swap 手续费的平台 G... 账户 |

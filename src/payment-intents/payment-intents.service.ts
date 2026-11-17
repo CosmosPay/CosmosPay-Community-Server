@@ -48,7 +48,6 @@ import {
   isDepositNetwork,
   type PaymentNetwork,
   paymentAddressRule,
-  paymentNetworkName,
   paymentNetworkOf,
 } from '@/payment-intents/payment-networks';
 import { resolveOrMintMemoId } from '@/stellar/memo';
@@ -84,6 +83,7 @@ import {
   PAYMENT_PAYER_EMAILS_LISTED,
 } from '@/payment-intents/payment-intents.constants';
 import { settlementRivalsQuery } from '@/payment-intents/settlement-rivals';
+import { SANDBOX_MERCHANT_FEE_REFUSAL } from '@/sandbox-settlement/sandbox-settlement.constants';
 import {
   expectedTxId,
   isTxIdFor,
@@ -729,18 +729,18 @@ export class PaymentIntentsService {
    * merchant paid exactly `amount`. So the link is the hosted checkout, which
    * asks the payer where they pay from; there is no wallet link of its own.
    *
-   * What that implies is refused up front: a test network (the route runs on
-   * mainnet only), an open amount (the payout is quoted for an exact one), a
-   * merchant fee (the route pays one recipient), a SEP-7 callback, and an asset
-   * the route does not trade today. The plan commission such a payment pays is
-   * fixed here, from the plan header this request carries.
+   * What that implies is refused up front: a SEP-7 callback, a merchant fee
+   * without an amount, and an asset the route does not trade today. On a test
+   * network the sandbox settles the link instead (`SandboxDepositRoute`, in the
+   * network's test stablecoin, no commission), where it reaches and without a
+   * merchant fee for now. The plan commission such a payment pays is fixed
+   * here, from the plan header this request carries.
    */
   private async createPayThroughDeposits(
     consumer: GatewayConsumer,
     chain: DepositNetwork,
     dto: CreatePayPaymentIntentDto,
   ): Promise<PaymentIntentView> {
-    const name = paymentNetworkName(chain);
     if (dto.callback !== undefined) {
       throw ApiError.badRequest(
         ApiErrorCode.ValidationFailed,
@@ -753,24 +753,24 @@ export class PaymentIntentsService {
         'A merchant fee needs an amount: an open-amount link has nothing to take it from',
       );
     }
+    // A `dev` key's link is settled by the sandbox on the network's test
+    // network (no commission there); `linkAssetForCreate` refuses one the
+    // sandbox does not reach, saying why.
     const network = this.resolveNetwork(consumer);
-    if (network !== 'public') {
-      throw ApiError.badRequest(
-        ApiErrorCode.NetworkUnsupported,
-        `A payment link on ${name} is paid through a cross-chain payment, ` +
-          'which runs on mainnet only: use a prod API key.',
-      );
-    }
-    const crossChainFeeBps = commissionWithRecipient(
-      this.config,
-      resolvePlanCommissionBps(this.config, consumer),
-      this.config.get('nearIntents', { infer: true }).feeRecipient,
-      'NEAR_INTENTS_FEE_RECIPIENT',
-    );
+    const crossChainFeeBps =
+      network === 'public'
+        ? commissionWithRecipient(
+            this.config,
+            resolvePlanCommissionBps(this.config, consumer),
+            this.config.get('nearIntents', { infer: true }).feeRecipient,
+            'NEAR_INTENTS_FEE_RECIPIENT',
+          )
+        : 0;
     const asset = await this.depositPricing.linkAssetForCreate(
       chain,
       dto.assetCode,
       dto.assetIssuer,
+      network,
     );
     // No amount: the payer types it in the checkout, and each deposit is
     // quoted for exactly what they typed.
@@ -789,6 +789,12 @@ export class PaymentIntentsService {
       }
     }
     const merchant = this.routeMerchantFee(dto, asset, chain);
+    if (merchant && network === 'testnet') {
+      throw ApiError.badRequest(
+        ApiErrorCode.MerchantFeeUnsupported,
+        SANDBOX_MERCHANT_FEE_REFUSAL,
+      );
+    }
 
     const localConsumer = await this.resolveConsumer(consumer);
     const memo = resolveOrMintMemoId(dto.memo);

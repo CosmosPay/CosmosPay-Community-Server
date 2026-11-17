@@ -21,7 +21,10 @@ import {
   PAYMENT_DEPOSIT_CLIENT_KEY_LABEL,
   PAYMENT_DEPOSIT_CLIENT_KEY_SALT,
 } from '@/payment-intents/payment-intents.constants';
-import { isPaymentNetwork } from '@/payment-intents/payment-networks';
+import {
+  isDepositNetwork,
+  isPaymentNetwork,
+} from '@/payment-intents/payment-networks';
 import { isChain } from '@/chains/chains.constants';
 import { decimalPlaces } from '@/chains/units';
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
@@ -40,7 +43,9 @@ export type CrossChainPayableFields = Pick<
  *
  *   - a payment link (`PAY`): a `TX` intent is a Stellar envelope one known
  *     payer signs;
- *   - mainnet: the route has no test network;
+ *   - mainnet, or, on a test network, a link on a network paid through
+ *     deposit addresses, which the sandbox settles (the route has no test
+ *     network; `SandboxDepositRoute`);
  *   - on Stellar, Solana and Monad, no merchant fee: there the fee goes to a
  *     wallet on the chain, which the route cannot pay beside the merchant (on
  *     the other networks the fee is the route's own app fee, made for that);
@@ -57,8 +62,11 @@ export function crossChainPaymentRefusal(
 ): string | null {
   if (!isPaymentNetwork(intent.chain)) return 'it is on an unknown network';
   if (intent.kind !== 'PAY') return 'it is a transaction for one known payer';
-  if (intent.network !== 'public') {
-    return 'it is on a test network, and payments from another network run on mainnet only';
+  // On a test network only the networks paid through deposit addresses take
+  // payments from another network: the sandbox settles those itself (and says
+  // which of them it reaches when a payer asks).
+  if (intent.network !== 'public' && !isDepositNetwork(intent.chain)) {
+    return 'it is on a test network, where only links on networks paid through deposit addresses take payments from another network';
   }
   if (
     isChain(intent.chain) &&

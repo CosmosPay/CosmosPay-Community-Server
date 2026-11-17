@@ -313,7 +313,13 @@ describe('PaymentDepositsService', () => {
     });
 
     it('refuses a link that cannot be paid from another network, naming why', async () => {
-      const { service, pricing } = build({ ...INTENT, network: 'testnet' });
+      // A Stellar link on a test network: the sandbox settles only the
+      // networks paid through deposit addresses.
+      const { service, pricing } = build({
+        ...INTENT,
+        network: 'testnet',
+        chain: 'stellar',
+      });
       const err = await refusal(service.quote('pi_1', REQUEST));
       expect(err.code).toBe(ApiErrorCode.ValidationFailed);
       expect(err.message).toMatch(/test network/);
@@ -371,6 +377,16 @@ describe('PaymentDepositsService', () => {
   });
 
   describe('create', () => {
+    it('stores a sandbox deposit as testnet, for the sandbox observer alone', async () => {
+      // A Base link of a dev key: settled in the sandbox (deposit-tiers.spec.ts
+      // shows each observer reads its own tier).
+      const { service, prisma } = build({ ...INTENT, network: 'testnet' });
+      await service.create('pi_1', REQUEST, CLIENT_A);
+      expect(prisma.paymentDeposit.create.mock.calls[0][0].data.network).toBe(
+        'testnet',
+      );
+    });
+
     it("stores a deposit on its link's tier, never a fixed one", async () => {
       const { service, prisma } = build();
       await service.create('pi_1', REQUEST, CLIENT_A);

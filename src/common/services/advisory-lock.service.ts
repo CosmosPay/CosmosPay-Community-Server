@@ -115,4 +115,5 @@ export enum AdvisoryLockKey {
   PaymentDepositObserver = 881_021,
   // 881_022 is the deposit slots' two-key class (`PAYMENT_DEPOSIT_LOCK_CLASS`).
   PaymentReceiptSweeper = 881_023,
+  SandboxDepositObserver = 881_024,
 }
