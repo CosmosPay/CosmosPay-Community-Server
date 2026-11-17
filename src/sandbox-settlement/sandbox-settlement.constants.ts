@@ -1,5 +1,9 @@
 import type { PaymentNetwork } from '@/payment-intents/payment-networks';
 import {
+  type SandboxSuiNetwork,
+  SUI_TESTNET,
+} from '@/sandbox-settlement/sandbox-sui.constants';
+import {
   type SandboxXrplNetwork,
   XRPL_TESTNET,
 } from '@/sandbox-settlement/sandbox-xrpl.constants';
@@ -67,7 +71,8 @@ export interface SandboxUnavailableNetwork {
  * Every kind of test network the sandbox settles on, each with its own
  * `SandboxLedger` (`SandboxLedgers` holds one per kind).
  */
-export type SandboxSettledNetwork = SandboxEvmNetwork | SandboxXrplNetwork;
+export type SandboxSettledNetwork =
+  SandboxEvmNetwork | SandboxXrplNetwork | SandboxSuiNetwork;
 
 /** Which ledger implementation a settled network uses. */
 export type SandboxLedgerKind = SandboxSettledNetwork['kind'];
@@ -247,9 +252,7 @@ export const SANDBOX_NETWORKS: Record<PaymentNetwork, SandboxNetwork> = {
   near: notYet(
     'a NEAR path is a follow-up (an official test USDC exists there).',
   ),
-  sui: notYet(
-    'a Sui path is a follow-up (an official test USDC exists there).',
-  ),
+  sui: SUI_TESTNET,
   aptos: notYet(
     'an Aptos path is a follow-up (an official test USDC exists there).',
   ),

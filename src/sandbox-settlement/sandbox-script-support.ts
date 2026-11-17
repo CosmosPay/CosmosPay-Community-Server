@@ -5,6 +5,8 @@ import type { PaymentNetwork } from '@/payment-intents/payment-networks';
 import { SandboxEvmClient } from '@/sandbox-settlement/sandbox-evm.client';
 import { SandboxEvmLedger } from '@/sandbox-settlement/sandbox-evm.ledger';
 import { SandboxLedgers } from '@/sandbox-settlement/sandbox-ledgers.service';
+import { SandboxSuiClient } from '@/sandbox-settlement/sandbox-sui.client';
+import { SandboxSuiLedger } from '@/sandbox-settlement/sandbox-sui.ledger';
 import {
   SANDBOX_NETWORKS,
   type SandboxEvmNetwork,
@@ -128,6 +130,7 @@ export function scriptLedgers(
   return new SandboxLedgers(
     new SandboxEvmLedger(config, new SandboxEvmClient(config)),
     new SandboxXrplLedger(config, new SandboxXrplClient(config)),
+    new SandboxSuiLedger(config, new SandboxSuiClient(config)),
   );
 }
 

@@ -3,6 +3,7 @@ import { addressOfSecretKey } from '@/evm/evm-transaction';
 import { SandboxDepositRoute } from '@/sandbox-settlement/sandbox-deposit-route.service';
 import { SandboxEvmLedger } from '@/sandbox-settlement/sandbox-evm.ledger';
 import { SandboxLedgers } from '@/sandbox-settlement/sandbox-ledgers.service';
+import { SandboxSuiLedger } from '@/sandbox-settlement/sandbox-sui.ledger';
 import { SandboxXrplLedger } from '@/sandbox-settlement/sandbox-xrpl.ledger';
 import {
   depositSecretKey,
@@ -36,6 +37,7 @@ function build(sandbox: Record<string, unknown> = {}) {
     new SandboxLedgers(
       new SandboxEvmLedger(config, {} as never),
       new SandboxXrplLedger(config, {} as never),
+      new SandboxSuiLedger(config, {} as never),
     ),
   );
 }

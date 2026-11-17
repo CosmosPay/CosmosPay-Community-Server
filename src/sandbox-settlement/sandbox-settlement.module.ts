@@ -4,6 +4,8 @@ import { SandboxEvmClient } from '@/sandbox-settlement/sandbox-evm.client';
 import { SandboxEvmLedger } from '@/sandbox-settlement/sandbox-evm.ledger';
 import { SandboxLedgers } from '@/sandbox-settlement/sandbox-ledgers.service';
 import { SandboxSettler } from '@/sandbox-settlement/sandbox-settler.service';
+import { SandboxSuiClient } from '@/sandbox-settlement/sandbox-sui.client';
+import { SandboxSuiLedger } from '@/sandbox-settlement/sandbox-sui.ledger';
 import { SandboxXrplClient } from '@/sandbox-settlement/sandbox-xrpl.client';
 import { SandboxXrplLedger } from '@/sandbox-settlement/sandbox-xrpl.ledger';
 
@@ -21,6 +23,8 @@ import { SandboxXrplLedger } from '@/sandbox-settlement/sandbox-xrpl.ledger';
     SandboxEvmLedger,
     SandboxXrplClient,
     SandboxXrplLedger,
+    SandboxSuiClient,
+    SandboxSuiLedger,
     SandboxLedgers,
     SandboxDepositRoute,
     SandboxSettler,
