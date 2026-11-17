@@ -251,8 +251,14 @@ export const SANDBOX_NETWORKS: Record<PaymentNetwork, SandboxNetwork> = {
     'an Aptos path is a follow-up (an official test USDC exists there).',
   ),
   movement: notYet('a Movement path is a follow-up.'),
+  // Starknet Sepolia's test USDC answered symbol USDC / 6 decimals on
+  // 2026-11-17 (0x0512feac6339ff7889822cb5aa2a86c848e9d392bb0e3e237c008674feed8343),
+  // but paying from it needs what no other network here does: Stark-curve
+  // ECDSA, Pedersen and Poseidon hashing (none in this repo's crypto
+  // libraries), a treasury account contract deployed first, and v3
+  // transactions priced in L1 gas, L2 gas and L1 data gas.
   starknet: notYet(
-    'a Starknet path is a follow-up (an official test USDC exists there).',
+    'a Starknet path is a follow-up: an official test USDC exists there, but paying from the treasury needs a deployed Starknet account and Stark-curve signing first.',
   ),
   cardano: notYet('a Cardano path is a follow-up.'),
   aleo: notYet('an Aleo path is a follow-up.'),
