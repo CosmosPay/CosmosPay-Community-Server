@@ -21,7 +21,8 @@ Conventions for this repo. They are enforced by `npm run lint`, which CI gates o
 | `npm run zk:deploy-testnet` | deploys the private payments token, auditor registry and fee account on TESTNET (Friendbot, no real funds). `-- --env-file .env --secrets-file .zk-secrets/testnet.json` writes the values instead of printing secrets; run again it only verifies; `-- --redeploy` strands every payment on the old token |
 | `npm run zk:e2e-testnet` | the real-chain check of private payments on testnet: registers, proves, transfers and confirms through the module's own services. Slow (UltraHonk proofs in Node), needs the deployed set in `.env` |
 | `npm run sandbox:keys -- --out <file>` | creates the sandbox's HD seed, treasury key and cUSD deployer key in a file OUTSIDE every repo (a path inside this one is refused) and prints only the addresses |
-| `npm run sandbox:status` / `sandbox:deploy-cusd` | `-- --secrets-file <file>`: the sandbox keys' balances on each test network (reads only); `-- --network <id>` deploys cUSD where no official test USDC exists and prints its `SANDBOX_CUSD_ADDRESSES` entry. Test networks only: both check `eth_chainId` first |
+| `npm run sandbox:status` / `sandbox:deploy-cusd` | `-- --secrets-file <file>`: the sandbox treasury's address and balances on each test network it settles on (reads only; one EVM address, one derived key per other network); `-- --network <id>` deploys cUSD where no official test USDC exists and prints its `SANDBOX_CUSD_ADDRESSES` entry. Test networks only: every client checks the node's chain identity first (`eth_chainId`, the XRP Ledger's `network_id`, NEAR's `chain_id`, Sui's chain identifier, Aptos' `chain_id`) |
+| `npm run sandbox:prepare` | `-- --secrets-file <file> [--network <id>]`: the treasury's one-time setup where a network needs one before anyone can pay (the test USDC trustline on the XRP Ledger, the token registration on NEAR). Needs the network's gas coin first; run again it only reports |
 
 ## Imports: always use the path aliases, never relative paths
 
@@ -436,6 +437,23 @@ table. These are the rules that did not hold on their own:
   table only after its chain id was checked on chainlist and `eth_chainId` and its test USDC
   answered `symbol`/`decimals` on-chain; where there is no official test USDC it uses cUSD
   (`contracts/SandboxUsd.sol`), enabled per network by `SANDBOX_CUSD_ADDRESSES`.
+  What is read and signed per kind of network is a `SandboxLedger` (`sandbox-ledger.ts`;
+  `SandboxLedgers` is a `Record<SandboxLedgerKind, …>`): EVM, XRP Ledger, NEAR, Sui and
+  Aptos. The settler keeps every decision; a ledger never decides a status and never
+  signs twice for one row. On a network that is not EVM the treasury is
+  `treasurySubkey` (HKDF-SHA256 of `SANDBOX_TREASURY_PRIVATE_KEY`, labelled with the
+  network) and deposit keys are SLIP-0010 ed25519 under the network's SLIP-44 coin type,
+  so no new variable exists; changing the HKDF salt or label moves every such treasury.
+  The XRP Ledger takes deposits at the treasury itself with a destination tag per payment
+  (`depositMemo`): a per-payment account would need a reserve and a trustline before
+  anyone could pay it. A transfer that provably can no longer execute (past an XRP Ledger
+  `LastLedgerSequence`, a NEAR block hash or an Aptos expiration, or whose Sui input
+  objects were spent at a later version) is `failed`, never re-signed. A ledger's
+  `blocker` (treasury short, recipient without a trustline) makes the deposit wait
+  without signing anything. Sui is read through GraphQL (`graphql.testnet.sui.io`): its
+  public fullnodes stopped answering JSON-RPC. Starknet is not settled: its test USDC
+  exists, but it needs Stark-curve signing, Poseidon/Pedersen hashing and a deployed
+  treasury account. Scroll is not settled either: its test network was shut down.
 - **Monad swaps with a merchant fee go through `contracts/MerchantFeeSwapRouter.sol`**
   (`KURU_MERCHANT_FEE_ROUTER`), one deployment per Kuru Flow router, with no owner. It
   is not a deposit address: wallets approve it and send it value, so the venue checks

@@ -64,8 +64,9 @@ src/
   cross-chain-swaps/              swaps across 35 networks via NEAR Intents (Stellar, Solana, Monad, EVM,
                                   UTXO, ...): network registry, quote, deposit address + wallet link, observer
   near-intents/                   NEAR Intents 1Click client: tokens, quote, status, deposit submit
-  sandbox-settlement/             payment links on the test networks: HD deposit address per payment, test-network
-                                  reads, payouts and refunds from a treasury, cUSD script support
+  sandbox-settlement/             payment links on the test networks: one ledger per kind of network (EVM, XRP
+                                  Ledger, NEAR, Sui, Aptos), deposit target per payment, payouts and refunds from
+                                  a treasury, cUSD and treasury-setup script support
   usdt0/                          USDT0 from Stellar to EVM networks through LayerZero's OFT: routes, quote,
                                   build + relay the Soroban `send`, status from the ledger and LayerZero Scan
   zk-payments/                    private payments: confidential transfers on Cosmos Pay's token, verified on-chain;
@@ -745,10 +746,11 @@ devnet 和 Monad testnet（10143）——所有链上的 `network` 都存为 `pu
 
 跨链路由没有测试网，因此 `dev` 密钥在通过充值地址付款的网络上创建的链接，由本服务自己的沙盒（`src/sandbox-settlement/`）结算，使用相同的路由、充值状态和 `PAYMENT_INTENT_*` webhook。`GET /v1/payment-intents/networks` 按网络、按调用方的密钥回答：能否在该网络创建链接、使用哪种资产，以及不能时的原因。
 
-- **一笔付款的流程。** 每个充值地址都为这一笔付款从 `SANDBOX_DEPOSIT_SEED` 派生（BIP-32，硬化路径 `m/44'/60'/7007'/a'/b'`，作为充值的 `correlationId` 保存；私钥从不存储）。`SandboxDepositObserverService` 在来源测试网上读取该地址的测试稳定币余额；金额到账后，金库（`SANDBOX_TREASURY_PRIVATE_KEY`）在链接所在的测试网上向商户支付链接金额，充值变为 `SUCCEEDED`，该笔付款作为 intent 的 `txHash`。超过截止时间到账的充值由金库在来源网络上退还给 `refundTo`。每笔付款和退款在广播前先签名并写入 `sandbox_payout`（每个充值和类型一条），然后重复广播直到上链，因此崩溃或第二个副本都不会重复付款。
+- **一笔付款的流程。** 每个充值地址都为这一笔付款从 `SANDBOX_DEPOSIT_SEED` 派生，其路径作为充值的 `correlationId` 保存（私钥从不存储）：EVM 网络上为 BIP-32，硬化路径 `m/44'/60'/7007'/a'/b'`；NEAR（coin 397，隐式账户）、Sui（784）和 Aptos（637）上为 SLIP-0010 ed25519，路径 `m/44'/<coin>'/7007'/a'/b'`。在 XRP Ledger 上，付款方直接向金库本身付款，并且必须附上为这笔付款生成的目标标签（destination tag），即充值的 `depositMemo`：若每笔付款使用一个账户，在任何人能向它付款之前都需要先有储备金和 trustline。`SandboxDepositObserverService` 读取来源测试网上已到账的内容（该地址的测试稳定币余额；在 XRP Ledger 上，是带有该标签的已验证付款，按实际交付金额计）；金额到账后，金库在链接所在的测试网上向商户支付链接金额，充值变为 `SUCCEEDED`，该笔付款作为 intent 的 `txHash`。超过截止时间到账的充值由金库在来源网络上退还给 `refundTo`。每笔付款和退款在广播前先签名并写入 `sandbox_payout`（每个充值和类型一条），然后以相同的字节重复广播直到最终确认，绝不第二次签名，因此崩溃或第二个副本都不会重复付款。无法再执行的转账（超过其 XRP Ledger `LastLedgerSequence`、NEAR 区块哈希或 Aptos 过期时间，或其 Sui 输入已被花费）会使充值以 `FAILED` 结束。
 - **一比一，无佣金。** 只接受并支付该网络的测试稳定币：有官方测试 USDC 的网络用它，没有的网络用 `cUSD`（`contracts/SandboxUsd.sol`，6 位小数，从本仓库部署）。报价一比一，无佣金、无滑点；从不使用主网价格。沙盒链接记录 `crossChainFeeBps` 为 0。开放金额与主网一致；带商户手续费的链接暂不在沙盒中结算（`400 merchant_fee_unsupported`）。
-- **结算网络。** 测试 USDC：Sepolia、Base Sepolia、Arbitrum Sepolia、OP Sepolia、Polygon Amoy、Avalanche Fuji、Plasma Testnet 和 X Layer Testnet，Monad Testnet 则作为付款来源网络（Monad 链接以原生方式付款）。cUSD：BNB Smart Chain Testnet、Gnosis Chiado、Berachain Bepolia、Scroll Sepolia 和 Robinhood Chain Testnet，需 `SANDBOX_CUSD_ADDRESSES` 写明其部署地址。每个 chain id 都已对照 chainlist 和节点的 `eth_chainId` 核实，每个 RPC 在被信任前都会再次核验。Abstract（EraVM）、HyperCore 以及非 EVM 网络暂不结算；网络路由会给出原因。
-- **运维。** 金库支付每一笔付款和退款，因此需要每个网络的 gas 币和测试稳定币；金库没有资金时，充值只会等待。付款方的充值留在各自的 HD 地址上（暂不归集）。`npm run sandbox:keys -- --out <file>` 在仓库之外的文件中生成种子、金库密钥和 cUSD 部署密钥，`npm run sandbox:status -- --secrets-file <file>` 列出它们的余额，`npm run sandbox:deploy-cusd -- --network bsc --secrets-file <file>` 部署 cUSD 并打印 `SANDBOX_CUSD_ADDRESSES` 的条目。未配置时沙盒关闭，所有通过充值地址付款的网络都对 `dev` 密钥返回 `available: false`。
+- **结算网络。** 测试 USDC：Sepolia、Base Sepolia、Arbitrum Sepolia、OP Sepolia、Polygon Amoy、Avalanche Fuji、Plasma Testnet、X Layer Testnet、XRP Ledger Testnet、NEAR Testnet、Sui Testnet 和 Aptos Testnet，Monad Testnet 则作为付款来源网络（Monad 链接以原生方式付款）。cUSD：BNB Smart Chain Testnet、Gnosis Chiado、Berachain Bepolia 和 Robinhood Chain Testnet，需 `SANDBOX_CUSD_ADDRESSES` 写明其部署地址。每个测试 USDC 都在链上返回了其符号和 6 位小数。每个节点在被信任前都会核验，因此沙盒客户端无法连到任何主网：EVM 的 chain id（同时对照 chainlist 核实）、XRP Ledger 的 `network_id` 1、NEAR 的 `chain_id` `testnet`、Sui 的测试网链标识符、Aptos 的 `chain_id` 2。Scroll 的测试网已关闭，因此 Scroll 链接不结算。Abstract（EraVM）、HyperCore、Starknet（其测试 USDC 存在，但从金库付款需要一个已部署的 Starknet 账户和 Stark 曲线签名）以及其他网络暂不结算；网络路由会给出原因。
+- **运维。** 金库支付每一笔付款和退款，因此需要每个网络的 gas 币和测试稳定币；金库没有资金时，充值只会等待（金库暂时付不起的转账不会被签名）。在 EVM 网络上，金库是 `SANDBOX_TREASURY_PRIVATE_KEY` 对应的地址；在 XRP Ledger、NEAR、Sui 和 Aptos 上，金库是每个网络各自的密钥，由该密钥派生（以网络为标签的 HKDF-SHA256），因此不需要其他变量。`npm run sandbox:keys -- --out <file>` 在仓库之外的文件中生成种子、金库密钥和 cUSD 部署密钥，`npm run sandbox:status -- --secrets-file <file>` 打印每个网络上金库的地址和余额，`npm run sandbox:deploy-cusd -- --network bsc --secrets-file <file>` 部署 cUSD 并打印 `SANDBOX_CUSD_ADDRESSES` 的条目。未配置时沙盒关闭，所有通过充值地址付款的网络都对 `dev` 密钥返回 `available: false`。
+- **各网络说明。** XRP Ledger 和 NEAR 在金库持有其 gas 币后需要一次性设置：`npm run sandbox:prepare -- --secrets-file <file>` 在 XRP Ledger 上添加测试 USDC 的 trustline（在此之前，付款方向金库的付款会在其自己的钱包中失败，资金仍在其手中），并在 NEAR 上将金库注册到测试 USDC。在 XRP Ledger 上，付款会一直等待，直到商户账户拥有测试 USDC 的 trustline（只有该账户自己能添加）并接受无需充值授权（deposit authorization）的付款。在 NEAR 上，账户必须先在代币上注册才能持有它：金库在等待付款方时为每个充值账户注册，每笔付款和退款都在同一笔交易中为其收款方注册。在 Sui 上，金库只花费 coin 对象：记入其地址余额（address balance）的测试 SUI 或 USDC 不会被花费，`sandbox:status` 会单独显示。Sui 通过其 GraphQL 服务读取，因为其公共节点已不再响应 JSON-RPC。付款方的充值留在各自的充值地址上，在 XRP Ledger 上则留在金库中（暂不归集）。
 
 ### Solana 与 Monad 上的钱包登录
 
@@ -1725,6 +1727,7 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
 - **`dev` 密钥可以在沙盒结算的、通过充值地址付款的网络上创建链接**（此前在所有这些网络上都得到 `400 network_unsupported`）。此类链接使用该网络的测试稳定币，并记录 `crossChainFeeBps` 为 0。
 - **新路由：** `GET /v1/payment-intents/networks`（`payments:read`，共享公钥可以调用）。
 - **新变量，均为可选：** `SANDBOX_DEPOSIT_SEED`、`SANDBOX_TREASURY_PRIVATE_KEY`、`SANDBOX_RPC_URLS`、`SANDBOX_CUSD_ADDRESSES`、`SANDBOX_RPC_TIMEOUT_MS`。前两个只在需要结算测试付款的部署上设置，并使用专为沙盒生成的密钥：启动时会拒绝与 `MONAD_RELAYER_PRIVATE_KEY` 相同的金库密钥。
+- **XRP Ledger、NEAR、Sui 和 Aptos 测试网也会结算**，无需新变量：它们的金库由 `SANDBOX_TREASURY_PRIVATE_KEY` 派生。运行 `npm run sandbox:status -- --secrets-file <file>` 查看它们的地址，为每个金库充入其 gas 币和测试 USDC，然后运行一次 `npm run sandbox:prepare -- --secrets-file <file>`（XRP Ledger 的 trustline、NEAR 的代币注册）。Scroll 不再结算：其测试网已关闭，`SANDBOX_CUSD_ADDRESSES` 中的 `scroll` 条目会被忽略。
 
 ### 支付链接：所有网络上的开放金额、商户手续费和收据
 
@@ -2441,8 +2444,8 @@ curl -H "X-Gateway-Secret: $APISIX_GATEWAY_SECRET" -H "X-Consumer-Username: ops"
 | `MONAD_RELAYER_PRIVATE_KEY` | 否 | — | relayer 密钥（32 字节 hex）。设置后每个 Monad 意图都有自己的充值地址，relayer 会扣除手续费后把充值转发给商户。只存放 gas 资金：它部署的转发合约不能向其他任何人付款 |
 | `MONAD_DEPOSIT_TOKEN_FEES` | 否 | — | 每种 ERC-20 充值的 relayer 手续费，JSON `{"0xToken": "0.05"}`，以代币单位计。未配置的代币免费转发（gas 由 relayer 支付） |
 | `SANDBOX_DEPOSIT_SEED` | 否 | 无 | 沙盒的 HD 种子（16 到 64 字节，hex）。与 `SANDBOX_TREASURY_PRIVATE_KEY` 一起开启沙盒：`dev` 密钥在通过充值地址付款的网络上的链接在测试网上结算。仅限测试资金 |
-| `SANDBOX_TREASURY_PRIVATE_KEY` | 否 | 无 | 沙盒金库密钥（32 字节 hex）：在测试网上支付沙盒的付款和退款。绝不能是主网密钥；启动时拒绝 `MONAD_RELAYER_PRIVATE_KEY` |
-| `SANDBOX_RPC_URLS` | 否 | 测试网公共 RPC | 逗号分隔的 `net=url` 对，替换某个测试网的 RPC。每个在被信任前都会用 `eth_chainId` 核验 |
+| `SANDBOX_TREASURY_PRIVATE_KEY` | 否 | 无 | 沙盒金库密钥（32 字节 hex）：在 EVM 测试网上支付沙盒的付款和退款，并作为其他每个测试网上金库自有密钥的根（按网络 HKDF 派生）。绝不能是主网密钥；启动时拒绝 `MONAD_RELAYER_PRIVATE_KEY` |
+| `SANDBOX_RPC_URLS` | 否 | 测试网公共 RPC | 逗号分隔的 `net=url` 对，替换某个测试网的节点（JSON-RPC URL；`sui` 例外，为 GraphQL URL；`aptos` 为其 REST API 的 `/v1` 基础地址）。每个在被信任前都会核验其测试网的链身份 |
 | `SANDBOX_CUSD_ADDRESSES` | 否 | 无 | `net=0x...` 对：cUSD 的部署地址（`npm run sandbox:deploy-cusd`）。没有条目的 cUSD 网络保持不可用 |
 | `SANDBOX_RPC_TIMEOUT_MS` | 否 | `15000` | 沙盒对测试网单次调用的时间预算（ms） |
 | `STELLAR_BASE_FEE` | 否 | `100` | 构建交易时使用的 Stellar 基础手续费（stroops） |
