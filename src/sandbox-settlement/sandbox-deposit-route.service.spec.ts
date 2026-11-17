@@ -96,6 +96,14 @@ describe('SandboxDepositRoute', () => {
     expect(route.catalog()).toHaveLength(35);
   });
 
+  it('settles nothing on Scroll, whose test network was shut down, even with cUSD configured', () => {
+    const route = build({ cusdAddresses: { scroll: CUSD_BSC } });
+    const scroll = route.availability('scroll');
+    expect(scroll).toMatchObject({ available: false, asset: null });
+    expect(scroll.reason).toMatch(/test network was shut down/);
+    expect(route.payableAssets().map((a) => a.chain)).not.toContain('scroll');
+  });
+
   it('takes only the test stablecoin, from the payer and for a link', () => {
     const route = build();
     expect(route.originAsset('eth', 'usdc').chain).toBe('eth');

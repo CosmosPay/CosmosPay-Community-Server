@@ -194,15 +194,14 @@ export const SANDBOX_NETWORKS: Record<PaymentNetwork, SandboxNetwork> = {
     'https://testnet.berascan.com/tx/',
     cusd,
   ),
-  // The public RPC answered 526 on 2026-11-16 (chain id taken from chainlist);
-  // point SANDBOX_RPC_URLS at a working Scroll Sepolia node.
-  scroll: evm(
-    'Scroll Sepolia',
-    534351,
-    'https://sepolia-rpc.scroll.io',
-    'https://sepolia.scrollscan.com/tx/',
-    cusd,
-  ),
+  // Scroll Sepolia was shut down: its public RPC answered 526 from 2026-11-16
+  // and Scroll's contracts page keeps the Sepolia addresses "for historical
+  // reference only" (2026-11-17). No test network, nothing to settle on.
+  scroll: {
+    kind: 'unavailable',
+    reason:
+      "Scroll's test network was shut down, so the sandbox has no network to settle a Scroll link on.",
+  },
   xlayer: evm(
     'X Layer Testnet',
     1952,
