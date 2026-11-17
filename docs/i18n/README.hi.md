@@ -89,6 +89,9 @@ src/
   cross-chain-swaps/              swaps across 35 networks via NEAR Intents (Stellar, Solana, Monad, EVM,
                                   UTXO, ...): network registry, quote, deposit address + wallet link, observer
   near-intents/                   NEAR Intents 1Click client: tokens, quote, status, deposit submit
+  sandbox-settlement/             payment links on the test networks: one ledger per kind of network (EVM, XRP
+                                  Ledger, NEAR, Sui, Aptos), deposit target per payment, payouts and refunds from
+                                  a treasury, cUSD and treasury-setup script support
   usdt0/                          USDT0 from Stellar to EVM networks through LayerZero's OFT: routes, quote,
                                   build + relay the Soroban `send`, status from the ledger and LayerZero Scan
   zk-payments/                    private payments: confidential transfers on Cosmos Pay's token, verified on-chain;
@@ -154,7 +157,7 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | क्षेत्र           | Base path                | यह क्या करता है                                          |
 | ----------------- | ------------------------ | -------------------------------------------------------- |
 | Payment intents   | `/v1/payment-intents`    | Stellar (SEP-7), Solana (Solana Pay) और Monad (EIP-681) पर `pay` intents, SEP-7 `tx`, validation, on-chain observer |
-| Payment links     | `/v1/payment-links`      | एक payment intent, जैसा payer उसे देखता है, hosted checkout pages के लिए — बिना API key (`@Public`) |
+| Payment links     | `/v1/payment-links`      | एक payment intent, जैसा payer उसे देखता है, hosted checkout pages के लिए, और स्थानीय मुद्रा में एक P2P charge (`/fiat/{id}`) — बिना API key (`@Public`) |
 | Swaps             | `/v1/swaps`              | Path-payment quote, unsigned XDR बनाना, signed XDR submit करना · Solana: Jupiter, Monad: Kuru Flow |
 | क्रॉस-चेन swaps | `/v1/cross-chain-swaps` | NEAR Intents के ज़रिए 35 networks के बीच (Stellar, Solana, Monad, EVM chains, Bitcoin और UTXO coins, ...): quote, deposit address, status |
 | USDT0             | `/v1/usdt0`              | LayerZero के ज़रिए Stellar से 21 EVM networks तक USDT0 (Ethereum पर native USDT), सिर्फ़ mainnet: quote, build, submit, status |
@@ -164,7 +167,7 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | Webhooks          | `/v1/webhooks`           | Endpoint CRUD, secret rotation, deliveries, redelivery    |
 | KYC               | `/v1/kyc`                | Receivers (KYC/KYB), वॉलेट, बैंक खाते, दस्तावेज़ अपलोड |
 | Onramp            | `/v1/onramp`             | Payin quotes, payins, virtual accounts                    |
-| P2P on-ramp | `/v1/onramp/p2p` | P2P sellers के ज़रिए स्थानीय मुद्रा से marketplace की सूची वाली chains पर कोई भी token: market, tokens, firm quote, खरीद sessions |
+| P2P on-ramp | `/v1/onramp/p2p` | P2P sellers के ज़रिए स्थानीय मुद्रा से marketplace की सूची वाली chains पर कोई भी token: market, tokens, firm quote, खरीद sessions, QR से charges (payment requests) |
 | Offramp           | `/v1/offramp`            | Payout quotes, authorize, payouts (client द्वारा signed) |
 | P2P off-ramp | `/v1/offramp/p2p` | P2P buyers के ज़रिए किसी भी सूचीबद्ध token से स्थानीय मुद्रा: market, tokens, firm quote, बिक्री sessions |
 | प्रोडक्ट्स        | `/v1/products`           | मर्चेंट कैटलॉग                                           |
@@ -293,11 +296,16 @@ Paths OpenAPI के `{param}` रूप में लिखे गए हैं
 | POST | `/v1/offramp/payouts/{id}/documents` | `offramp:write` |  |
 | POST | `/v1/offramp/quotes` | `offramp:write` |  |
 | GET | `/v1/onramp/p2p/market` | `onramp:read` | ✓ |
+| GET | `/v1/onramp/p2p/payment-requests` | `onramp:read` |  |
+| POST | `/v1/onramp/p2p/payment-requests` | `onramp:write` | ✓ |
+| GET | `/v1/onramp/p2p/payment-requests/{id}` | `onramp:read` | ✓ |
+| POST | `/v1/onramp/p2p/payment-requests/{id}/cancel` | `onramp:write` | ✓ |
 | POST | `/v1/onramp/p2p/quotes` | `onramp:write` | ✓ |
 | GET | `/v1/onramp/p2p/sessions` | `onramp:read` |  |
 | POST | `/v1/onramp/p2p/sessions` | `onramp:write` | ✓ |
 | GET | `/v1/onramp/p2p/sessions/{id}` | `onramp:read` | ✓ |
 | GET | `/v1/onramp/p2p/tokens` | `onramp:read` | ✓ |
+| POST | `/v1/onramp/p2p/webhooks` | कोई नहीं: `@Public()`, P2P marketplace द्वारा signed; OpenAPI contract में नहीं |  |
 | GET | `/v1/onramp/payins` | `onramp:read` |  |
 | POST | `/v1/onramp/payins` | `onramp:write` |  |
 | GET | `/v1/onramp/payins/{id}` | `onramp:read` |  |
@@ -306,11 +314,15 @@ Paths OpenAPI के `{param}` रूप में लिखे गए हैं
 | POST | `/v1/onramp/receivers/{receiverId}/virtual-accounts` | `onramp:write` |  |
 | POST | `/v1/onramp/trustline` | `onramp:write` |  |
 | GET | `/v1/payment-intents` | `payments:read` |  |
+| GET | `/v1/payment-intents/networks` | `payments:read` | ✓ |
 | POST | `/v1/payment-intents/pay` | `payments:write` | ✓ |
 | POST | `/v1/payment-intents/tx` | `payments:write` | ✓ |
 | GET | `/v1/payment-intents/{id}` | `payments:read` |  |
 | PATCH | `/v1/payment-intents/{id}` | `payments:write` |  |
 | DELETE | `/v1/payment-intents/{id}` | `payments:write` |  |
+| GET | `/v1/payment-intents/{id}/deposits` | `payments:read` |  |
+| GET | `/v1/payment-intents/{id}/payer-emails` | `payments:read` |  |
+| GET | `/v1/payment-intents/{id}/route-check` | `payments:read` |  |
 | GET | `/v1/payment-intents/{id}/transitions` | `payments:read` |  |
 | POST | `/v1/payment-intents/{id}/validate` | `payments:write` |  |
 | GET | `/v1/payment-links/{id}` | कोई नहीं — `@Public()`, हर client address का अपना budget |  |
@@ -318,6 +330,13 @@ Paths OpenAPI के `{param}` रूप में लिखे गए हैं
 | POST | `/v1/payment-links/{id}/events` | कोई नहीं: `@Public()`, हर client address का अपना budget |  |
 | GET | `/v1/payment-links/{id}/solana-pay` | कोई नहीं: `@Public()`, हर client address का अपना budget |  |
 | POST | `/v1/payment-links/{id}/solana-pay` | कोई नहीं: `@Public()`, हर client address का अपना budget |  |
+| GET | `/v1/payment-links/{id}/deposit-assets` | कोई नहीं: `@Public()`, हर client address का अपना budget |  |
+| POST | `/v1/payment-links/{id}/quote` | कोई नहीं: `@Public()`, हर client address का अपना budget |  |
+| POST | `/v1/payment-links/{id}/deposits` | कोई नहीं: `@Public()`, हर client address का अपना budget |  |
+| GET | `/v1/payment-links/{id}/deposits/{depositId}` | कोई नहीं: `@Public()`, हर client address का अपना budget |  |
+| POST | `/v1/payment-links/{id}/payer` | कोई नहीं: `@Public()`, हर client address का अपना budget |  |
+| GET | `/v1/payment-links/fiat/{id}` | कोई नहीं: `@Public()`, हर client address का अपना budget |  |
+| POST | `/v1/payment-links/fiat/{id}/sessions` | कोई नहीं: `@Public()`, हर client address का अपना budget |  |
 | GET | `/v1/plugins` | `plugins:read` |  |
 | GET | `/v1/plugins/{slug}` | `plugins:read` |  |
 | PUT | `/v1/plugins/{slug}/installation` | `plugins:write` |  |
@@ -983,6 +1002,30 @@ link और उसका QR दिखाने के लिए, और भु�
   कोई CORS header नहीं भेजती, इसलिए उस route के CORS plugin को checkout के origin से
   `GET` की अनुमति देनी होगी और `Retry-After` व `ratelimit-*` expose करने होंगे; इसके
   बिना browser हर जवाब छोड़ देता है।
+
+### हर नेटवर्क पर payment links, किसी भी नेटवर्क से भुगतान
+
+`POST /v1/payment-intents/pay` का `chain` उन नेटवर्क की सूची से आता है जहाँ क्रॉस-चेन swaps पहुँचते हैं (`PAYMENT_NETWORKS`, यानी `CROSS_CHAIN_NETWORK_IDS`: 35 नेटवर्क)। Stellar, Solana और Monad अपने wallet links और अपना observer रखते हैं। बाकी हर नेटवर्क पर link hosted checkout होता है और भुगतानकर्ता कभी सीधे मर्चेंट को भुगतान नहीं करता: checkout पूछता है कि वह किस नेटवर्क और asset से भुगतान करेगा और उस नेटवर्क पर refund का पता, और `POST /v1/payment-links/{id}/deposits` एक deposit address लौटाता है जिसे क्रॉस-चेन route सिर्फ़ उसी भुगतान के लिए बनाता है (table `payment_deposit`)। Route मर्चेंट को link की ठीक राशि उसके asset में देता है (exact-output quote), और `PaymentDepositObserverService` route की रिपोर्ट पर intent को settle करता है, payout transaction को `txHash` बनाकर और `paidFrom` में भेजी गई चीज़ लिखकर। कोई नया chain indexer नहीं: deposit को क्रॉस-चेन swap की तरह ही follow किया जाता है।
+
+- **Test networks पर sandbox।** Route का कोई test network नहीं है, इसलिए `dev` key का link जहाँ sandbox पहुँचता है वहाँ sandbox (अगला section) में settle होता है, और बाकी जगह `400 network_unsupported` मिलता है। Asset ऐसा होना चाहिए जिसे route उस नेटवर्क पर trade करता हो (`GET /v1/cross-chain-swaps/assets`): उसे symbol से, या `assetIssuer` में उसके `contract` से बताएँ।
+- **खुली राशि।** बिना `amount` वाला link हर नेटवर्क पर मान्य है: भुगतानकर्ता checkout में राशि लिखता है, quote और deposit उसे साथ ले जाते हैं (`amount`), और deposit ठीक उतना ही चुकाता है।
+- **इन नेटवर्क पर मर्चेंट फ़ीस route की अपनी app fee के रूप में जाती है** (उसका कई प्राप्तकर्ताओं वाला समर्थन): `merchantFee.wallet` route के अंदर का एक खाता है (एक NEAR account id, या एक EVM address, छोटे अक्षरों में सहेजा), जिसमें भुगतानकर्ता के भेजे asset में, deposit के पूरे basis points में राशि जमा होती है। मर्चेंट को link की राशि मिलती है, या `paidBy: recipient` के साथ राशि में से फ़ीस घटाकर। Route एक ही on-chain प्राप्तकर्ता को भुगतान करता है, इसलिए फ़ीस link के नेटवर्क के किसी पते पर नहीं भेजी जाती; फ़ीस वाला खाता उसे route से निकालता है।
+- **Stellar, Solana और Monad के links भी दूसरे नेटवर्क से चुकाए जा सकते हैं** जब वे mainnet पर हों और कोई मर्चेंट फ़ीस न हो (वहाँ फ़ीस chain पर ही बँटती है), राशि के साथ या बिना (public read में `crossChainPayment`)। Deposit addresses के बिना Monad link नहीं: उसका observer मर्चेंट के पते पर राशि से भुगतान पहचानता है, जहाँ route का payout भी पहुँचेगा।
+- **Commission.** दूसरे नेटवर्क से भुगतान plan का swap commission (`X-Plan-Swap-Fee-Bps`) `NEAR_INTENTS_FEE_RECIPIENT` को देता है, link की राशि के ऊपर: मर्चेंट को राशि मिलती है और भुगतानकर्ता का deposit फ़ीस उठाता है। दर link बनते समय पढ़ी जाती है (`crossChainFeeBps`), क्योंकि deposit routes कोई key नहीं लेते। बिना प्राप्तकर्ता वाली दर नए नेटवर्क पर link को मना करती है (`503 misconfigured`); Stellar, Solana और Monad पर link दूसरे नेटवर्क से भुगतान के बिना बनता है।
+- **बिना key और सीमित।** Deposit routes `/v1/payment-links/{id}` के नीचे `@Public()` हैं, gateway का पहले से मौजूद keyless route: link id ही capability है। Deposit सिर्फ़ link के destination को उसकी राशि देता है और सिर्फ़ `refundTo` को refund करता है; वही client दोबारा वही asset और refund address माँगे तो उसे उसका खुला deposit ही मिलता है। हर client (एक IPv4 address या एक IPv6 /48, सिर्फ़ HMAC के रूप में सहेजा जाता है) के हर link पर `PAYMENT_DEPOSIT_MAX_OPEN_PER_CLIENT` (2) खुले रह सकते हैं (`409`), इसलिए link रखने वाला कोई भी दूसरे भुगतानकर्ता की जगह नहीं ले सकता; एक link सभी clients से हर `PAYMENT_DEPOSIT_LINK_WINDOW_MS` (5 मिनट) में `PAYMENT_DEPOSIT_LINK_BUDGET` (20) नए deposits लेता है, एक दोबारा भरने वाला budget जिसका जवाब `429` और `Retry-After` है, कभी खुले deposits की गिनती नहीं जो भुगतानकर्ताओं को रोक सके। अपनी समय-सीमा बीत चुका बिना भुगतान वाला deposit किसी गिनती में नहीं आता। Live quote से पहले link के advisory lock के तहत जगह reserve होती है (`payment_deposit_reservation`), इसलिए एक साथ आए requests गिनती को साथ में पार नहीं कर सकते। हर client address का budget: `payment-links:deposit-assets` (30 प्रति मिनट), `payment-links:quote` (30), `payment-links:deposits` (10), `payment-links:deposit-read` (60)। मर्चेंट किसी link के लिए दोनों बढ़ा सकता है (create पर या `PATCH` से `depositLimits`), प्रति भुगतानकर्ता `PAYMENT_DEPOSIT_MAX_OPEN_PER_CLIENT_CEILING` (10) और प्रति window `PAYMENT_DEPOSIT_LINK_BUDGET_CEILING` (200) तक, जिनकी जाँच यहीं होती है।
+- **न्यूनतम राशियाँ।** Routes की अपनी न्यूनतम राशियाँ होती हैं जो समय के साथ बदलती हैं। `GET /v1/payment-intents/{id}/route-check` link की राशि के लिए मुख्य origins (`PAYMENT_ROUTE_PROBE_ORIGINS`) का dry quote लेता है, ताकि dashboard उनके बारे में चेतावनी दे जो इसे नहीं चुका सकते (link को कभी रोकता नहीं); `deposit-assets` यही जाँच `routes` के रूप में लौटाता है, ताकि checkout उन origins को कारण के साथ बंद करे। ठुकराया गया quote `400 provider_error` है, उसके कारण के साथ, जो किसी deposit address के बनने से पहले दिखता है।
+- **भुगतानकर्ता का ईमेल और रसीद।** Hosted checkout भुगतान का कोई भी तरीका दिखाने से पहले ईमेल माँगता है और उसे `POST /v1/payment-links/{id}/payer` से एक checkout session के रूप में दर्ज करता है: पहली call एक random `payerToken` लौटाती है (सिर्फ़ उसका SHA-256 सहेजा जाता है, और वह कभी log नहीं होता), जिसे पेज रखता है और अपनी अगली calls में भेजता है (बदला हुआ ईमेल, `events`, `deposits`)। हर session अपना ईमेल रखता है और कोई दूसरे का नहीं बदल सकता, इसलिए दूसरा visitor कभी भुगतानकर्ता को नहीं रोकता। अपने token के साथ session `events` पर यह भी दर्ज करता है कि वह किससे भुगतान करता है (`address`, वह खाता जिससे उसका wallet भुगतान करता है; `txHash`, वह transaction जो wallet ने लौटाया)। भुगतान सफल होने पर `PaymentReceiptsService` इस service के mailer (`MAIL_*`) से उस session की भाषा में रसीद भेजता है, जिसे सभी replicas में एक बार claim किया जाता है और `PaymentReceiptSweeperService` तीन दिन तक दोबारा कोशिश करता है: दूसरे नेटवर्क से भुगतान में deposit के session को (सिर्फ़ उसे वह deposit address मिला); वरना उस session को जिसका दर्ज transaction या खाता settlement से मेल खाता है (प्रमाण तभी गिना जाता है जब वह transaction के on-chain समय से `PAYMENT_PAYER_PROOF_MARGIN_MS` (30 s) पहले दर्ज हुआ हो, वह समय अज्ञात हो तो कभी नहीं, और दो sessions से मेल खाए तो कभी नहीं); वरना, जब ठीक एक session ने ईमेल दिया हो, उसे; वरना किसी को नहीं (`receiptSkippedAt`), और मर्चेंट दिए गए ईमेल `GET /v1/payment-intents/{id}/payer-emails` से पढ़ता है। `sent` की सूचना कुछ साबित नहीं करती और कुछ तय नहीं करती। भुगतानकर्ता मर्चेंट के customers से (`emailProvidedByPayer: true`: सत्यापित नहीं) सिर्फ़ प्रमाण (deposit या मेल) पर जुड़ता है, मर्चेंट के बनाए customer में कभी नहीं मिलाया जाता। Checkout के बाहर scan किए गए wallet link में ईमेल नहीं होता, इसलिए उसकी रसीद नहीं जा सकती।
+- **ऐसा पता जिसे किसी ने सत्यापित नहीं किया, इसलिए रसीद सीमित है।** रसीद में सिर्फ़ वही होता है जो यह service बनाती है (राशि, asset, नेटवर्क, तारीख, भुगतान id और transaction, और checkout पर भुगतान के पेज व explorer पर transaction के links), link का संदेश या मर्चेंट का कोई और टेक्स्ट कभी नहीं। एक पते को सभी मर्चेंट से मिलाकर दिन में अधिकतम `PAYMENT_RECEIPT_MAX_PER_RECIPIENT` (10) रसीदें मिलती हैं, और एक मर्चेंट अधिकतम `PAYMENT_RECEIPT_MAX_PER_MERCHANT` (1000) भेजता है: किसी भी सीमा से ऊपर की रसीद window का इंतज़ार करती है। बचा हुआ जोखिम: जिस भुगतानकर्ता का wallet न खाता बताता है न transaction (जैसे दूसरे डिवाइस पर scan किया गया wallet link), उसे ऐसे link पर जहाँ कई sessions ने ईमेल दिया, अपने-आप रसीद नहीं मिलती; मर्चेंट दिए गए ईमेल देखता है।
+
+### Sandbox: test networks पर payment links
+
+Cross-chain route का कोई test network नहीं है, इसलिए deposit addresses से भुगतान होने वाले network पर `dev` key का link इस service के अपने sandbox (`src/sandbox-settlement/`) में settle होता है, उन्हीं routes, deposit statuses और `PAYMENT_INTENT_*` webhooks के पीछे। `GET /v1/payment-intents/networks` हर network के लिए, caller की key के हिसाब से, बताता है कि वहाँ link बन सकता है या नहीं, किस asset में, और नहीं तो क्यों।
+
+- **एक भुगतान कैसे चलता है।** हर deposit address उसी एक भुगतान के लिए `SANDBOX_DEPOSIT_SEED` से derive होता है, और उसका path deposit के `correlationId` के रूप में रखा जाता है (key कभी store नहीं होती): EVM networks पर hardened path `m/44'/60'/7007'/a'/b'` पर BIP-32, और NEAR (coin 397, एक implicit account), Sui (784) और Aptos (637) पर `m/44'/<coin>'/7007'/a'/b'` पर SLIP-0010 ed25519। XRP Ledger पर payer सीधे treasury को ही भुगतान करता है, उस भुगतान के लिए बने destination tag के साथ, जो deposit का `depositMemo` है और जिसे payer को जोड़ना ज़रूरी है: हर भुगतान के लिए अलग account हो तो किसी के भी उसे भुगतान कर पाने से पहले उसे एक reserve और एक trustline चाहिए होती। `SandboxDepositObserverService` origin test network पर जो पहुँचा उसे पढ़ता है (उस address का test stablecoin balance; XRP Ledger पर, वह tag रखने वाले validated payments, delivered amount के हिसाब से); राशि पहुँचते ही treasury link के test network पर मर्चेंट को link की राशि भेजती है, और deposit `SUCCEEDED` हो जाता है, वही payout intent का `txHash` बनता है। Deadline के बाद आया deposit treasury से origin network पर `refundTo` को refund होता है। हर payout और refund broadcast से पहले sign होकर `sandbox_payout` में लिखा जाता है (हर deposit और kind के लिए एक), फिर final होने तक उन्हीं bytes के साथ दोबारा broadcast होता है और कभी दूसरी बार sign नहीं होता, इसलिए crash या दूसरी replica कभी दो बार भुगतान नहीं करती। जो transfer अब execute नहीं हो सकता (अपने XRP Ledger `LastLedgerSequence`, अपने NEAR block hash या अपनी Aptos expiration के बाद, या जिसके Sui inputs खर्च हो चुके हों) वह deposit को `FAILED` पर खत्म करता है।
+- **एक के बदले एक, कोई commission नहीं।** सिर्फ़ network का test stablecoin लिया और दिया जाता है: जहाँ official test USDC है वहाँ वह, और जहाँ नहीं है वहाँ `cUSD` (`contracts/SandboxUsd.sol`, 6 decimals, इसी repo से deploy)। Quote एक के बदले एक होता है, बिना commission और slippage के; mainnet price कभी इस्तेमाल नहीं होता। Sandbox link `crossChainFeeBps` 0 record करता है। Open amounts mainnet की तरह काम करते हैं; मर्चेंट फ़ीस वाला link अभी sandbox में settle नहीं होता (`400 merchant_fee_unsupported`)।
+- **कहाँ settle होता है।** Test USDC: Sepolia, Base Sepolia, Arbitrum Sepolia, OP Sepolia, Polygon Amoy, Avalanche Fuji, Plasma Testnet, X Layer Testnet, XRP Ledger Testnet, NEAR Testnet, Sui Testnet और Aptos Testnet, और Monad Testnet पर भुगतान करने वाले network के रूप में (Monad link native तरीके से भुगतान होता है)। cUSD: BNB Smart Chain Testnet, Gnosis Chiado, Berachain Bepolia और Robinhood Chain Testnet, जब `SANDBOX_CUSD_ADDRESSES` उसका deployment बताए। हर test USDC ने on-chain अपना symbol और 6 decimals लौटाए। हर node पर भरोसा करने से पहले उसे जाँचा जाता है, इसलिए कोई भी sandbox client किसी mainnet तक नहीं पहुँच सकता: EVM chain id (chainlist से भी जाँचा गया), XRP Ledger का `network_id` 1, NEAR का `chain_id` `testnet`, Sui का testnet chain identifier, Aptos का `chain_id` 2। Scroll का test network बंद कर दिया गया, इसलिए Scroll link settle नहीं होता। Abstract (EraVM), HyperCore, Starknet (उसका test USDC मौजूद है, लेकिन treasury से भुगतान के लिए एक deployed Starknet account और Stark-curve signing चाहिए) और बाकी networks अभी settle नहीं होते; networks route कारण बताता है।
+- **चलाना।** Treasury हर payout और refund देती है, इसलिए उसे हर network का gas coin और test stablecoin चाहिए; बिना funds की treasury से deposits बस इंतज़ार करते हैं (जो transfer वह अभी नहीं दे सकती, वह sign नहीं होता)। EVM networks पर यह `SANDBOX_TREASURY_PRIVATE_KEY` का address है; XRP Ledger, NEAR, Sui और Aptos पर यह हर network की अपनी key है, उसी से derive की गई (network के label के साथ HKDF-SHA256), इसलिए कोई और variable नहीं चाहिए। `npm run sandbox:keys -- --out <file>` repo के बाहर एक file में seed, treasury और cUSD deployer key बनाता है, `npm run sandbox:status -- --secrets-file <file>` हर network पर treasury का address और balances print करता है, और `npm run sandbox:deploy-cusd -- --network bsc --secrets-file <file>` cUSD deploy करके `SANDBOX_CUSD_ADDRESSES` की entry print करता है। Set न हो तो sandbox बंद रहता है और deposit addresses वाला हर network `dev` key को `available: false` देता है।
+- **हर network के लिए।** XRP Ledger और NEAR को, treasury के पास उनका gas coin आते ही, एक बार का setup चाहिए: `npm run sandbox:prepare -- --secrets-file <file>` XRP Ledger पर test USDC की trustline जोड़ता है (तब तक treasury को किया गया payer का भुगतान उसके अपने wallet में ही fail होता है, और funds उसी के पास रहते हैं) और NEAR पर treasury को test USDC के साथ register करता है। XRP Ledger पर payout तब तक इंतज़ार करता है जब तक मर्चेंट के account पर test USDC की trustline न हो (उसे सिर्फ़ वही account जोड़ सकता है) और वह deposit authorization के बिना payments स्वीकार न करे। NEAR पर किसी account को token रखने से पहले उसके साथ register होना ज़रूरी है: treasury payer का इंतज़ार करते हुए हर deposit account को register करती है, और हर payout और refund अपने recipient को उसी transaction में register करता है। Sui पर treasury सिर्फ़ coin objects खर्च करती है: उसके address balance में credit हुआ test SUI या USDC खर्च नहीं होता, और `sandbox:status` उसे अलग दिखाता है। Sui को उसकी GraphQL service से पढ़ा जाता है, क्योंकि उसके public nodes अब JSON-RPC का जवाब नहीं देते। Payers के deposits अपने deposit addresses पर रहते हैं, और XRP Ledger पर treasury में (अभी sweep नहीं)।
 
 ### Solana और Monad पर wallet sign-in
 
@@ -2215,6 +2258,13 @@ Deploy का XLM platform देता है; हर पक्ष उन trans
 | GET | `/v1/onramp/p2p/sessions` | `onramp:read` | key के network पर consumer के sessions |
 | POST | `/v1/onramp/p2p/sessions` | `onramp:write` | order दर्ज करें और उसका `widgetUrl` लौटाएँ |
 | GET | `/v1/onramp/p2p/sessions/{id}` | `onramp:read` | उनमें से एक |
+| POST | `/v1/onramp/p2p/payment-requests` | `onramp:write` | QR के रूप में दिखाया गया स्थानीय मुद्रा में एक charge, जिसका भुगतान आपके अपने address पर होता है (shared public key इसे बना सकती है) |
+| GET | `/v1/onramp/p2p/payment-requests` | `onramp:read` | key के network पर consumer के charges |
+| GET | `/v1/onramp/p2p/payment-requests/{id}` | `onramp:read` | उनमें से एक, और क्या उसका भुगतान हुआ |
+| POST | `/v1/onramp/p2p/payment-requests/{id}/cancel` | `onramp:write` | किसी खुले charge का भुगतान रोकें |
+| GET | `/v1/payment-links/fiat/{id}` | कोई नहीं (`@Public()`) | payer को दिखने वाला charge: राशि, live अनुमान, भुगतान के तरीके |
+| POST | `/v1/payment-links/fiat/{id}/sessions` | कोई नहीं (`@Public()`) | payer भुगतान शुरू करता है: ठीक उसी राशि की खरीद, जो seller को delivered होती है |
+| POST | `/v1/onramp/p2p/webhooks` | कोई नहीं (`@Public()`, signed) | marketplace के order updates |
 | GET | `/v1/offramp/p2p/market` | `offramp:read` | मुद्राएँ, भुगतान के तरीके, बिक्री का price और minimum (USD में), chains और वह token जिससे form शुरू होता है (shared public key इसे पढ़ सकती है) |
 | GET | `/v1/offramp/p2p/tokens` | `offramp:read` | वही token सूचियाँ, बिक्री के लिए (shared public key इसे पढ़ सकती है) |
 | POST | `/v1/offramp/p2p/quotes` | `offramp:write` | बिक्री का firm quote, fees और swap सहित; integrator ids चाहिए |
@@ -2231,6 +2281,17 @@ Deploy का XLM platform देता है; हर पक्ष उन trans
 - **integrator ids वैकल्पिक हैं, firm quote को छोड़कर।** `ELDORADO_CLIENT_ID` और `ELDORADO_REFERRAL_ID` वे हैं जो El Dorado किसी integrator को देता है (api@eldorado.io)। इनके बिना market और sessions काम करते हैं और widget भुगतान से पहले quote करता है; इनके साथ `POST /v1/onramp/p2p/quotes` और `POST /v1/offramp/p2p/quotes` जवाब देते हैं, और हर session के widget में ids होते हैं, जो order को Cosmos Pay से जोड़ते हैं।
 - **बिना खाते वाले wallets भी खरीदते और बेचते हैं।** साझा public key quote ले सकती है, session खोल सकती है और उसी एक session को उसके `publicToken` के साथ `X-Record-Token` में भेजकर फिर पढ़ सकती है; वह कभी sessions की सूची नहीं देखती, क्योंकि हर anonymous wallet वही एक consumer है। सेट होने पर उसके quotes और sessions `ELDORADO_REFERRAL_ID` की जगह `ELDORADO_PUBLIC_REFERRAL_ID` लेकर जाते हैं: El Dorado integrator का commission हर referral id के हिसाब से तय करता है, इसलिए सबसे ऊँची दर वाली id माँगें, ताकि anonymous उपयोग सबसे ज़्यादा चुकाए, जैसे swaps में।
 - **क्या cache होता है।** market (मुद्राएँ, prices और chain सूची) हर network पर एक मिनट (`ELDORADO_MARKET_TTL_MS`); हर chain की token सूची एक घंटा (`ELDORADO_TOKENS_TTL_MS`; Ethereum की लगभग 1.2 MB है)। बिना price, minimum या भुगतान तरीके वाली मुद्रा बाहर रहती है, और वह chain भी जिसकी token सूची fail हो या खाली आए: यह log होता है और अगली बार फिर माँगा जाता है, और market सिर्फ़ तब 502 है जब chain सूची या हर token सूची fail हो।
+
+### QR से charge करना (payment requests)
+
+Seller स्थानीय मुद्रा की एक राशि QR से charge करता है, और payer उसे उसी marketplace के ज़रिए किसी स्थानीय तरीके से चुकाता है: token marketplace से सीधे seller के अपने address पर जाता है, और Cosmos Pay उसे कभी नहीं रखता। `POST /v1/onramp/p2p/payment-requests` शर्तों को live market के सामने ठीक वैसे ही जाँचता है जैसे किसी खरीद को (मुद्रा, राशि और उसका minimum, chain और token; भुगतान का तरीका payer बाद में चुनता है) और `url` लौटाता है, यानी payer का page (`PAYMENT_LINK_CHECKOUT_URL/fiat/<id>`), और `qr`, उसका एक PNG। Page charge को `GET /v1/payment-links/fiat/{id}` से पढ़ता है और, जब payer कोई तरीका चुन ले, तो `POST /v1/payment-links/fiat/{id}/sessions` ठीक उसी राशि की एक खरीद खोलता है, जो seller को delivered होती है, और उसका `widgetUrl` लौटाता है।
+
+- **payer के routes कोई API key नहीं लेते।** वे `/v1/payment-links/fiat/` के तहत हैं, इसलिए gateway का वही keyless route उन्हें serve करता है जो पहले से `/v1/payment-links/*` serve करता है, और `fiat/` segment उन्हें payment links के अपने `{id}` routes से अलग रखता है। id (एक `cuid()`) ही capability है: जवाब में राशि, description, token, इसी समय के market price पर एक अनुमान और भुगतान के तरीके होते हैं, कभी seller का account या address, record token, sessions या transactions नहीं। Reads का budget हर client address के लिए 60 प्रति मिनट है (`payment-links-fiat:read`) और भुगतान शुरू करने का 10 (`payment-links-fiat:session`); दोनों `Cache-Control: no-store` के साथ जवाब देते हैं।
+- **खरीद seller की है।** यह request के consumer का एक BUY session है, जो उसके `GET /v1/onramp/p2p/sessions` में `paymentRequestId` के साथ दिखता है, और उसके widget में उसी consumer की referral id होती है: साझा public key से बनी request `ELDORADO_PUBLIC_REFERRAL_ID` (सेट होने पर) लेकर जाती है, जैसे उस key के अपने sessions। एक payer एक से ज़्यादा खरीद शुरू कर सकता है; हर एक session है, और जो पहले पूरी होती है वही request का भुगतान करती है।
+- **paid का मतलब है कि marketplace ने ऐसा कहा।** On-chain कुछ नहीं पढ़ा जाता: request `paid` तभी होती है जब marketplace का signed webhook उसके किसी session को `BUY` के रूप में `COMPLETED` बताए, जो request के address, chain और token पर delivered हो (बड़े-छोटे अक्षरों का फ़र्क किए बिना), उसकी मुद्रा में चुकाया गया हो, और कम से कम उसकी राशि के लिए हो (widget buyer को मुद्रा और राशि बदलने देता है, और किसी दूसरी मुद्रा में या उससे छोटा भुगतान यह charge नहीं है)। `paidAt`, `paidAmount` (delivered token) और `paidTxHash` ऐसी पहली completion दर्ज करते हैं; बाद वाली कुछ नहीं बदलतीं। `expiresAt` के बाद की खुली request `expired` पढ़ी जाती है (कभी store नहीं होती), और expired या cancelled request भी `paid` हो जाती है जब पहले से चल रही कोई खरीद पूरी हो: पैसा पहुँच गया। जब तक webhook register नहीं होता, कोई भी चीज़ request को paid mark नहीं करती, इसलिए wallet को अपना balance भी देखते रहना चाहिए।
+- **Webhook।** `POST /v1/onramp/p2p/webhooks` `@Public()` है और fiat partner वाले की तरह OpenAPI contract से बाहर रखा गया है। एक delivery तभी स्वीकार होती है जब `x-webhook-hash` raw body का `sha256` हो (lowercase hex) और `x-webhook-signature` उस hex पर किसी एक network के JWKS की key से बना base64 RSA-SHA256 signature हो (`ELDORADO_WEBHOOK_JWKS_URL_MAINNET` / `ELDORADO_WEBHOOK_JWKS_URL_TESTNET`, default रूप से marketplace के अपने); जो key उसे verify करती है वही तय करती है कि वह किस network के sessions बदल सकती है। बाकी सब `401 webhook_signature_invalid` है, और जो key set पढ़ा न जा सके वह `503` है, ताकि marketplace delivery फिर से भेजे। Keys memory में रखी जाती हैं और जब कोई delivery verify नहीं होती तो हर network पर अधिकतम एक मिनट में एक बार फिर पढ़ी जाती हैं। जो verified delivery किसी session का नाम नहीं लेती, वह log होती है और उसे `200` जवाब मिलता है। हर write conditional है: session को `COMPLETED` एक बार मिल जाए तो वह उसे बनाए रखता है, और request एक ही बार paid होती है। Sessions marketplace का आख़िरी order status `status` के रूप में लौटाते हैं।
+- **Operator के steps।** Marketplace webhook को हर Client ID के लिए register करता है, उसी address पर email से जो integrator ids देता है: उसे Client ID और URL `https://api.cosmospay.lat/cosmos-api/v1/onramp/p2p/webhooks` भेजें (gateway का public prefix, फिर `/v1/onramp/p2p/webhooks`)। Gateway को ठीक `POST /v1/onramp/p2p/webhooks` के लिए एक keyless route चाहिए जो body को बिना बदले आगे भेजे; payer के routes को कुछ नया नहीं चाहिए।
+- **इस version में नहीं:** request के paid होने पर बाहर जाने वाला webhook event, requests का dashboard view, और दोबारा इस्तेमाल होने वाले QR जिनमें payer राशि खुद टाइप करता है।
 
 ## Plugins — एक slug के तहत extensions
 
@@ -2450,7 +2511,7 @@ seal होती हैं और कभी लौटाई नहीं जा
 | ---- | ------------ |
 | `blindpay` | KYC, onramp, offramp, BlindPay webhook, उसके `/v1/admin` routes (`receivers`, `payins`, `payouts`) और admin summary का `fiat` अनुभाग |
 | `defindex` | `/v1/defindex` — Stellar पर DeFindex vaults |
-| `eldorado` | `/v1/onramp/p2p` और `/v1/offramp/p2p`: El Dorado के P2P marketplace की सूची वाली हर chain पर tokens, स्थानीय मुद्रा से खरीदे और उसके बदले बेचे गए |
+| `eldorado` | `/v1/onramp/p2p` और `/v1/offramp/p2p`: El Dorado के P2P marketplace की सूची वाली हर chain पर tokens, स्थानीय मुद्रा से खरीदे और उसके बदले बेचे गए; QR से charges, जिनका भुगतान बिना key वाले `/v1/payment-links/fiat/{id}` से होता है; marketplace का order webhook |
 | `trustless-work` | `/v1/protected-payments`, बिना key वाले `/v1/protected-payment-links` और `/v1/admin/protected-payments`: Trustless Work (Stellar) पर सुरक्षित भुगतान |
 
 - **सूची में नहीं, तो मौजूद नहीं।** जिस native plugin का नाम `PLUGINS_ENABLED` में नहीं
@@ -2482,6 +2543,39 @@ seal होती हैं और कभी लौटाई नहीं जा
   plugins का अकेला route group हैं जो कोई API key नहीं लेता।
 
 ## अपग्रेड — breaking changes और deploy नोट्स
+
+### Payment links: test networks के लिए sandbox
+
+- **Migration `20261117130000_sandbox_payouts`** `sandbox_payout` table बनाता है; कुछ भी दोबारा नहीं लिखा जाता।
+- **`dev` key अब deposit addresses वाले network पर link बना सकती है**, जहाँ sandbox settle करता है (पहले हर जगह `400 network_unsupported` मिलता था)। ऐसा link network के test stablecoin में होता है और `crossChainFeeBps` 0 record करता है।
+- **नया route:** `GET /v1/payment-intents/networks` (`payments:read`, shared public key इसे call कर सकती है)।
+- **नए variables, सभी optional:** `SANDBOX_DEPOSIT_SEED`, `SANDBOX_TREASURY_PRIVATE_KEY`, `SANDBOX_RPC_URLS`, `SANDBOX_CUSD_ADDRESSES`, `SANDBOX_RPC_TIMEOUT_MS`। पहले दो सिर्फ़ वहीं set करें जहाँ test payments settle होने चाहिए, sandbox के लिए बनी keys के साथ: boot उस treasury key को refuse करता है जो `MONAD_RELAYER_PRIVATE_KEY` के बराबर हो।
+- **XRP Ledger, NEAR, Sui और Aptos के test networks भी settle होते हैं**, बिना किसी नए variable के: उनकी treasuries `SANDBOX_TREASURY_PRIVATE_KEY` से derive होती हैं। उनके addresses के लिए `npm run sandbox:status -- --secrets-file <file>` चलाएँ, हर एक को उसके gas coin और test USDC से fund करें, फिर एक बार `npm run sandbox:prepare -- --secrets-file <file>` चलाएँ (XRP Ledger की trustline, NEAR पर token registration)। Scroll अब settle नहीं होता: उसका test network बंद कर दिया गया, और `SANDBOX_CUSD_ADDRESSES` में `scroll` entry ignore की जाती है।
+
+### Payment links: हर नेटवर्क पर खुली राशि, मर्चेंट फ़ीस और रसीदें
+
+- **Migration `20261117120000_payment_link_payer_and_limits`** `payment_intent` में nullable columns (`payerEmail`, `payerLang`, `receiptClaimedAt`, `receiptSentAt`, `depositMaxPerPayer`, `depositBudgetPerWindow`) और `payment_deposit` में (`payerEmail`, `payerLang`, `merchantFee`) जोड़ता है, साथ ही `customer.emailProvidedByPayer` (default `false`)। हर database पर `migrate deploy` चलाएँ।
+- **Migrations `20261117121000_payment_receipt_safety`, `20261117122000_payment_payer_sessions`, `20261117123000_payment_payer_session_proof` और `20261117124000_payment_intent_paid_on_chain_at`** `payment_intent.receiptTo`, `receiptToAt` और `receiptSkippedAt`, table `payment_payer_session` और `payment_deposit.payerSessionId` जोड़ते हैं, और इस release के पहले migration के जोड़े भुगतानकर्ता columns (`payment_intent.payerEmail`, `payerLang`; `payment_deposit.payerEmail`, `payerLang`) हटाते हैं, जिनमें कभी डेटा नहीं रहा। रसीदों में अब link का संदेश नहीं होता।
+- **नए routes:** keyless `POST /v1/payment-links/{id}/payer` (`payerToken` लौटाता है), `GET /v1/payment-intents/{id}/route-check` और `GET /v1/payment-intents/{id}/payer-emails` (`payments:read`)। `POST /v1/payment-links/{id}/deposits` को अब `payerToken` चाहिए, और `events` उसे `address` और `txHash` के साथ लेता है; बिना राशि वाले link पर quote और deposit `amount` लेते हैं; `deposit-assets` `data` के साथ `routes` भी लौटाता है।
+- **रसीदों के लिए mailer चाहिए:** `MAIL_FROM` और `MAIL_RESEND_API_KEY` या `MAIL_SMTP_*` सेट करें। इनके बिना रसीदें रुकी रहती हैं (log होता है) और sender सेट होते ही, तीन दिन तक, भेजी जाती हैं।
+- **नए response fields:** payment intents (और उनके webhooks) पर `depositLimits`, `receiptTo`, `receiptSentAt` और `receiptSkippedAt`, deposits पर `merchantFee`, customers पर `emailProvidedByPayer`।
+
+### Payment links: हर नेटवर्क, किसी भी नेटवर्क से भुगतान
+
+- **Migration `20261116120000_payment_deposits`** `payment_deposit` और `payment_deposit_reservation` tables बनाता है और `payment_intent` में दो nullable columns जोड़ता है (`crossChainFeeBps`, `paidFrom`); कुछ भी दोबारा नहीं लिखा जाता। नया build सेवा दे उससे पहले हर database पर `migrate deploy` चलाएँ।
+- **Payment intents का `chain` अब 32 और नेटवर्क लेता है** (`POST /v1/payment-intents/pay`, सूची का filter, responses और webhook payloads)। जो integration `stellar`, `solana` और `monad` पर branch करता है उसे बाकी भी संभालने होंगे। Public read में `payTo` अब nullable है (उन नेटवर्क पर null) और `crossChainPayment` नया है; मालिक के reads और webhooks में `paidFrom` नया है।
+- **नए routes:** keyless `GET /v1/payment-links/{id}/deposit-assets`, `POST /v1/payment-links/{id}/quote`, `POST /v1/payment-links/{id}/deposits` और `GET /v1/payment-links/{id}/deposits/{depositId}`, और `GET /v1/payment-intents/{id}/deposits` (`payments:read`)। Gateway का keyless `/v1/payment-links/*` route पहले से GET और POST देता है।
+- **कोई नया variable नहीं**, लेकिन जहाँ भी plan swap commission लेता है वहाँ `NEAR_INTENTS_FEE_RECIPIENT` सेट होना चाहिए: उसके बिना नए नेटवर्क पर link मना होता है (`503`) और Stellar, Solana या Monad पर link दूसरे नेटवर्क से भुगतान के बिना बनता है। Deposit observer बाकी observers के साथ चलता है (`OBSERVER_ENABLED`)।
+
+### P2P on-ramp: स्थानीय मुद्रा में QR से charges, और marketplace का order webhook
+
+- **Migration `20261112120000_p2p_payment_requests`** `p2p_payment_request` table बनाता है और `p2p_ramp_session` में nullable columns जोड़ता है (`paymentRequestId`, `providerOrderId`, `providerStatus`, `deliveredAmount`, `txHash`, `completedAt`); कुछ भी rewrite नहीं होता। नया build serve करने से पहले `migrate deploy` चलाएँ।
+- **नए routes** (`eldorado` plugin): `POST` और `GET /v1/onramp/p2p/payment-requests`, `GET /v1/onramp/p2p/payment-requests/{id}`, `POST /v1/onramp/p2p/payment-requests/{id}/cancel`, बिना key वाले `GET /v1/payment-links/fiat/{id}` और `POST /v1/payment-links/fiat/{id}/sessions`, और `POST /v1/onramp/p2p/webhooks`। नए error codes: `request_closed` (409) और `webhook_signature_invalid` (401)।
+- **Sessions में दो nullable fields जुड़ते हैं** (additive): `status`, order के लिए marketplace का आख़िरी status, और `paymentRequestId`।
+- **Gateway:** ठीक `POST /v1/onramp/p2p/webhooks` के लिए एक keyless route जोड़ें। `/v1/payment-links/*` पहले से keyless है; उसके CORS plugin को `POST` की अनुमति देनी होगी, जैसे वह payment links के अपने routes के लिए देता है।
+- **Webhook register करें:** marketplace के साथ email से, Client ID के साथ: `https://api.cosmospay.lat/cosmos-api/v1/onramp/p2p/webhooks`। तब तक कोई request paid mark नहीं होती।
+- **वैकल्पिक variables** `ELDORADO_WEBHOOK_JWKS_URL_MAINNET` और `ELDORADO_WEBHOOK_JWKS_URL_TESTNET` (default: marketplace का अपना JWKS)।
+- **नए budgets:** `onramp-p2p:payment-request` (प्रति consumer और client address, 20 प्रति मिनट), `payment-links-fiat:read` (60) और `payment-links-fiat:session` (10) प्रति client address।
 
 ### Swaps, liquidity, निजी भुगतान, cross-chain swaps और USDT0: id से पढ़ा गया एक record key के network का पालन करता है
 
@@ -3550,6 +3644,11 @@ type दोबारा बनाए बिना enum value drop नहीं �
 | `MONAD_LOG_BLOCK_RANGE` | नहीं | `100` | एक `eth_getLogs` कितने blocks तक फैल सकता है — RPC प्रदाता की सीमा (सार्वजनिक RPC 100 की अनुमति देता है) |
 | `MONAD_RELAYER_PRIVATE_KEY` | नहीं | — | Relayer कुंजी (32-byte hex)। सेट होने पर हर Monad intent को अपना deposit address मिलता है और relayer deposits को fee घटाकर merchant तक forward करता है। इसमें केवल gas का पैसा होता है: इसके deploy किए forwarders किसी और को भुगतान नहीं कर सकते |
 | `MONAD_DEPOSIT_TOKEN_FEES` | नहीं | — | हर ERC-20 deposit पर relayer fee, JSON `{"0xToken": "0.05"}` टोकन इकाइयों में। जिस टोकन की प्रविष्टि नहीं वह मुफ़्त forward होता है (gas relayer देता है) |
+| `SANDBOX_DEPOSIT_SEED` | नहीं | कोई नहीं | Sandbox का HD seed (16 से 64 bytes, hex)। `SANDBOX_TREASURY_PRIVATE_KEY` के साथ sandbox चालू करता है: deposit addresses वाले networks पर `dev` key के links test networks पर settle होते हैं। सिर्फ़ test funds |
+| `SANDBOX_TREASURY_PRIVATE_KEY` | नहीं | कोई नहीं | Sandbox treasury key (32-byte hex): EVM test networks पर sandbox के payouts और refunds देती है, और बाकी हर network पर treasury की अपनी key का root है (हर network के लिए HKDF)। कभी mainnet key नहीं; boot `MONAD_RELAYER_PRIVATE_KEY` को refuse करता है |
+| `SANDBOX_RPC_URLS` | नहीं | public test-network RPCs | Comma से अलग `net=url` pairs, जो किसी test network का node बदलते हैं (एक JSON-RPC URL; सिवाय `sui` के, जो GraphQL URL है, और `aptos` के, जो उसकी REST API का `/v1` base है)। हर एक पर भरोसा करने से पहले उसके test network की chain identity जाँची जाती है |
+| `SANDBOX_CUSD_ADDRESSES` | नहीं | कोई नहीं | `net=0x...` pairs: cUSD कहाँ deploy हुआ (`npm run sandbox:deploy-cusd`)। बिना entry वाला cUSD network unavailable रहता है |
+| `SANDBOX_RPC_TIMEOUT_MS` | नहीं | `15000` | Sandbox की एक test-network call का budget (ms) |
 | `STELLAR_BASE_FEE` | नहीं | `100` | tx builds के लिए Stellar base fee (stroops) |
 | `STELLAR_TX_TIMEOUT` | नहीं | `300` | ट्रांज़ैक्शन timeout (सेकंड) |
 | `STELLAR_SWAP_FEE_WALLET` | जब fee > 0 हो | — | swap fees के लिए प्लेटफ़ॉर्म का G... account |
@@ -3615,6 +3714,8 @@ type दोबारा बनाए बिना enum value drop नहीं �
 | `ELDORADO_REFERRAL_ID` | नहीं | कोई नहीं | वह ReferralID जो `ELDORADO_CLIENT_ID` के साथ आता है |
 | `ELDORADO_PUBLIC_REFERRAL_ID` | नहीं | कोई नहीं | वह ReferralID जो साझा public key के quotes और sessions `ELDORADO_REFERRAL_ID` की जगह लेकर जाते हैं; El Dorado से सबसे ऊँचे commission वाली id माँगें। खाली: public key `ELDORADO_REFERRAL_ID` इस्तेमाल करती है |
 | `ELDORADO_TIMEOUT_MS` | नहीं | `10000` | P2P marketplace को एक call का budget (ms) |
+| `ELDORADO_WEBHOOK_JWKS_URL_MAINNET` | नहीं | `https://api.eldorado.io/api/.well-known/jwks.json` | वह जगह जहाँ P2P marketplace उन keys को publish करता है जिनसे उसके mainnet order webhooks signed होते हैं (`POST /v1/onramp/p2p/webhooks`) |
+| `ELDORADO_WEBHOOK_JWKS_URL_TESTNET` | नहीं | `https://api-testnet.eldorado.io/api/.well-known/jwks.json` | sandbox के लिए वही |
 | `TRUSTLESS_WORK_API_KEY_TESTNET` | testnet पर सुरक्षित भुगतान के लिए | — | testnet के लिए Trustless Work की API key (`dev` keys)। Routes केवल `PLUGINS_ENABLED` में `trustless-work` होने पर मौजूद हैं; key के बिना वे testnet पर `503 misconfigured` लौटाते हैं। `TRUSTLESS_WORK_PLATFORM_SECRET_TESTNET` भी ज़रूरी है |
 | `TRUSTLESS_WORK_BASE_URL_TESTNET` | नहीं | `https://dev.api.trustlesswork.com` | testnet के लिए Trustless Work की V1 API |
 | `TRUSTLESS_WORK_PLATFORM_SECRET_TESTNET` | API key के साथ | — | Cosmos Pay का platform account (S...): deploys और platform के disputes sign करता है, उनका XLM चुकाता है और platform fee प्राप्त करता है। USDC को trust करना ज़रूरी है। एक hot key: इसकी fees sweep करें |

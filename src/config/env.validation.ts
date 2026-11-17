@@ -196,6 +196,36 @@ class EnvironmentVariables {
   })
   MONAD_RELAYER_PRIVATE_KEY?: string;
 
+  // --- Sandbox settlement (payment links on test networks) ---
+  /** BIP-32 seed every sandbox deposit address is derived from: 16 to 64 bytes, hex. */
+  @IsOptional()
+  @Matches(/^(0x)?(?:[0-9a-fA-F]{2}){16,64}$/, {
+    message: 'SANDBOX_DEPOSIT_SEED must be a 16 to 64-byte hex seed',
+  })
+  SANDBOX_DEPOSIT_SEED?: string;
+
+  /** The sandbox treasury's EVM key: it pays merchants on test networks only. */
+  @IsOptional()
+  @Matches(/^(0x)?[0-9a-fA-F]{64}$/, {
+    message: 'SANDBOX_TREASURY_PRIVATE_KEY must be a 32-byte hex secret key',
+  })
+  SANDBOX_TREASURY_PRIVATE_KEY?: string;
+
+  /** `net=url,...`: checked in full by `parseNetworkMap`. */
+  @IsOptional()
+  @IsString()
+  SANDBOX_RPC_URLS?: string;
+
+  /** `net=0x...,...`: checked in full by `parseNetworkMap`. */
+  @IsOptional()
+  @IsString()
+  SANDBOX_CUSD_ADDRESSES?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  SANDBOX_RPC_TIMEOUT_MS?: number;
+
   /** `{"0xToken…": "0.05"}` — checked in full by `parseEvmTokenFees`. */
   @IsOptional()
   @IsString()
@@ -574,6 +604,15 @@ class EnvironmentVariables {
   @Min(1)
   ELDORADO_TIMEOUT_MS?: number;
 
+  /** Where each network's marketplace publishes its webhook signing keys (a JWKS). */
+  @IsOptional()
+  @IsUrl(URL_OPTIONS)
+  ELDORADO_WEBHOOK_JWKS_URL_MAINNET?: string;
+
+  @IsOptional()
+  @IsUrl(URL_OPTIONS)
+  ELDORADO_WEBHOOK_JWKS_URL_TESTNET?: string;
+
   // --- Protected payments (native plugin `trustless-work`) ---
   // The types only. How the per-network keys relate to each other (secrets that
   // parse, three distinct accounts, a key with its platform account) is checked
@@ -714,6 +753,22 @@ export function validateEnv(config: Record<string, unknown>) {
       'SWAP_COMMISSION_DEV_WAIVER=true is refused when NODE_ENV=production: it gives ' +
         'swaps away with no commission whenever a fee recipient is missing. Set ' +
         'NEAR_INTENTS_FEE_RECIPIENT, SOLANA_SWAP_FEE_WALLET and MONAD_SWAP_FEE_WALLET instead.',
+    );
+  }
+
+  // The sandbox treasury holds test funds and signs on test networks only; the
+  // Monad relayer signs forwarder deployments on mainnet and nothing else. One key
+  // for both would give each a second use, which both their threat models exclude.
+  const hexKey = (v: string | undefined) =>
+    (v ?? '').trim().toLowerCase().replace(/^0x/, '');
+  if (
+    validated.SANDBOX_TREASURY_PRIVATE_KEY &&
+    hexKey(validated.SANDBOX_TREASURY_PRIVATE_KEY) ===
+      hexKey(validated.MONAD_RELAYER_PRIVATE_KEY)
+  ) {
+    throw new Error(
+      'SANDBOX_TREASURY_PRIVATE_KEY must not be MONAD_RELAYER_PRIVATE_KEY: the ' +
+        'sandbox treasury and the mainnet relayer are separate keys.',
     );
   }
 

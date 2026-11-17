@@ -349,6 +349,14 @@ export interface P2pOrder {
   address: string;
 }
 
+/**
+ * An order whose payment method is not chosen yet: a payment request fixes
+ * everything else when it is created, and its payer picks how to pay later.
+ */
+export type P2pOrderTerms = Omit<P2pOrder, 'paymentMethod'> & {
+  paymentMethod?: string;
+};
+
 /** How many decimals a decimal string carries. */
 function decimalsOf(amount: string): number {
   const dot = amount.indexOf('.');
@@ -377,12 +385,13 @@ function ceilTokenAmount(value: number): string {
 /**
  * Why `order` cannot be traded on `market` on `side`, or null when it can.
  * `tokens` is the token list of `order.chainId`, or null when the market does
- * not offer that chain.
+ * not offer that chain. An order with no `paymentMethod` (a payment request's
+ * terms) is checked on everything else: the currency it names always has one.
  */
 export function orderProblem(
   market: P2pMarket,
   tokens: readonly P2pToken[] | null,
-  order: P2pOrder,
+  order: P2pOrderTerms,
   side: P2pSide,
 ): string | null {
   const buying = side === 'buy';
@@ -394,7 +403,10 @@ export function orderProblem(
       ? `currency ${order.currency} cannot be bought (offered: ${offered})`
       : `tokens cannot be sold for ${order.currency} (offered: ${offered})`;
   }
-  if (!currency.paymentMethods.some((m) => m.id === order.paymentMethod)) {
+  if (
+    order.paymentMethod !== undefined &&
+    !currency.paymentMethods.some((m) => m.id === order.paymentMethod)
+  ) {
     const offered = currency.paymentMethods.map((m) => m.id).join(', ');
     return `paymentMethod ${order.paymentMethod} does not ${buying ? 'pay in' : 'pay out'} ${currency.id} (offered: ${offered})`;
   }

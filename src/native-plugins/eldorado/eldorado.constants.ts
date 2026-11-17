@@ -366,3 +366,84 @@ export const P2P_SELL_SESSION_RATE_LIMIT = {
   limit: 20,
   windowMs: 60 * 1000,
 };
+
+/**
+ * How long a payment request (a charge shown as a QR) stays payable when the
+ * seller names no lifetime: a day, long enough for a counter or a table and
+ * short enough that a forgotten QR stops taking money.
+ */
+export const P2P_PAYMENT_REQUEST_DEFAULT_MINUTES = 24 * 60;
+/** The shortest lifetime: the payer still has to sign in and pick a seller in the widget. */
+export const P2P_PAYMENT_REQUEST_MIN_MINUTES = 5;
+/** The longest: thirty days, for an invoice sent ahead. Past it the price drifts too far. */
+export const P2P_PAYMENT_REQUEST_MAX_MINUTES = 30 * 24 * 60;
+
+/** A payment request's description: one line the payer reads under the amount. */
+export const P2P_PAYMENT_REQUEST_MAX_DESCRIPTION = 140;
+
+/**
+ * The payer's page of a payment request is `<PAYMENT_LINK_CHECKOUT_URL>/fiat/<id>`:
+ * the payments site of the developer platform serves it, beside the payment
+ * links (`/<id>`) and the protected payments (`/protected/<id>`).
+ */
+export const P2P_PAYMENT_REQUEST_PAGE_PATH = 'fiat';
+
+/** A payment request is one stored row per call, like a session. */
+export const P2P_PAYMENT_REQUEST_RATE_LIMIT = {
+  name: 'onramp-p2p:payment-request',
+  limit: 20,
+  windowMs: 60 * 1000,
+};
+
+/**
+ * The payer's page polls the request every few seconds while it is open (and
+ * the market behind it is cached for a minute), the same budget as a payment link.
+ */
+export const P2P_PAYMENT_LINK_READ_RATE_LIMIT = {
+  name: 'payment-links-fiat:read',
+  limit: 60,
+  windowMs: 60 * 1000,
+};
+
+/**
+ * Starting to pay stores a session and hands out a widget URL, with no API key in
+ * front of it: a payer starts once or twice, so ten a minute per address is room
+ * to retry, not to fill the table.
+ */
+export const P2P_PAYMENT_LINK_SESSION_RATE_LIMIT = {
+  name: 'payment-links-fiat:session',
+  limit: 10,
+  windowMs: 60 * 1000,
+};
+
+/**
+ * The networks whose marketplace may call the webhook, in the order their keys
+ * are tried: a delivery verified with one network's key changes only that
+ * network's sessions.
+ */
+export const P2P_WEBHOOK_NETWORKS: readonly StellarNetwork[] = [
+  'public',
+  'testnet',
+];
+
+/**
+ * How often one network's webhook keys may be read again when a delivery does
+ * not verify against the keys on hand (the marketplace rotated them) or they
+ * could not be read: at most once a minute, so a stream of forged deliveries
+ * cannot turn this service into a client hammering the marketplace.
+ */
+export const P2P_WEBHOOK_KEYS_REFETCH_MS = 60 * 1000;
+
+/** Headers of a marketplace webhook: `sha256(rawBody)` as lowercase hex, and the RSA signature of that hex (base64). */
+export const P2P_WEBHOOK_HASH_HEADER = 'x-webhook-hash';
+export const P2P_WEBHOOK_SIGNATURE_HEADER = 'x-webhook-signature';
+
+/** Longest base64 signature read: a 4096-bit RSA signature is 684 characters. */
+export const P2P_WEBHOOK_MAX_SIGNATURE_CHARS = 1024;
+
+/** The one event the marketplace sends, "with all the order details". */
+export const P2P_WEBHOOK_EVENT = 'ORDER_STATUS_CHANGED';
+
+/** The order status that means the token was delivered, and the order type of a purchase. */
+export const P2P_ORDER_COMPLETED = 'COMPLETED';
+export const P2P_ORDER_TYPE_BUY = 'BUY';

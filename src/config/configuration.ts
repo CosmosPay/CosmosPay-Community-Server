@@ -4,6 +4,7 @@ import {
   DEFAULT_DEFINDEX_MAX_FEE_STROOPS,
   DEFAULT_DEFINDEX_TIMEOUT_MS,
   DEFAULT_ELDORADO_TIMEOUT_MS,
+  DEFAULT_ELDORADO_WEBHOOK_JWKS_URL,
   DEFAULT_ENV_FILE,
   DEFAULT_CHAIN_RPC_TIMEOUT_MS,
   DEFAULT_CROSS_CHAIN_DEADLINE_SECONDS,
@@ -16,6 +17,7 @@ import {
   DEFAULT_MONAD_RPC,
   DEFAULT_NEAR_INTENTS_BASE_URL,
   DEFAULT_NEAR_INTENTS_TIMEOUT_MS,
+  DEFAULT_SANDBOX_RPC_TIMEOUT_MS,
   DEFAULT_PAYMENT_LINK_CHECKOUT_URL,
   DEFAULT_RATE_LIMIT_PRUNE_INTERVAL_MS,
   DEFAULT_RECOVERY_SWEEP_INTERVAL_MS,
@@ -51,6 +53,12 @@ import {
   type RedirectUrlWhitelist,
 } from '@/config/kyc-redirect-url-whitelist';
 import { type EvmTokenFees, parseEvmTokenFees } from '@/config/evm-token-fees';
+import {
+  isEvmAddressValue,
+  isRpcUrl,
+  parseNetworkMap,
+} from '@/config/sandbox-env';
+import type { PaymentNetwork } from '@/payment-intents/payment-networks';
 import {
   isNativePluginSlug,
   type NativePluginSlug,
@@ -378,6 +386,22 @@ export interface AppConfig {
      */
     prefetchTokens: boolean;
   };
+  /**
+   * Sandbox settlement: payment links on the networks paid through deposit
+   * addresses, on their TEST networks (`src/sandbox-settlement/`). Off (every
+   * such network unavailable in the sandbox) until both secrets are set.
+   */
+  sandbox: {
+    /** BIP-32 seed (hex) every sandbox deposit address is derived from. */
+    depositSeed: string;
+    /** The treasury's secp256k1 key (0x + 64 hex): pays merchants on test networks. */
+    treasuryPrivateKey: string;
+    /** RPC overrides per network (`SANDBOX_RPC_URLS`); the rest use the defaults. */
+    rpcUrls: Partial<Record<PaymentNetwork, string>>;
+    /** Where cUSD is deployed, per network (`SANDBOX_CUSD_ADDRESSES`). */
+    cusdAddresses: Partial<Record<PaymentNetwork, string>>;
+    timeoutMs: number;
+  };
   /** The dashboard's analytics reads. */
   analytics: {
     /** How long an answer is reused per consumer and network; 0 turns the cache off. */
@@ -472,12 +496,15 @@ export interface AppConfig {
    * set, replaces `referralId` for the shared public key's quotes and orders:
    * the marketplace sets the integrator's commission per referral id, so the
    * one the public key carries is where anonymous use is priced.
+   * `webhookJwksUrls` is where each network's marketplace publishes the keys
+   * its order webhooks are signed with (`POST /v1/onramp/p2p/webhooks`).
    */
   eldorado: {
     clientId: string;
     referralId: string;
     publicReferralId: string;
     timeoutMs: number;
+    webhookJwksUrls: Record<StellarNetwork, string>;
   };
   /** The `trustless-work` native plugin: protected payments on Trustless Work V1. */
   trustlessWork: {
@@ -1028,6 +1055,25 @@ export default (): AppConfig => ({
       (process.env.NEAR_INTENTS_TOKENS_PREFETCH ?? 'true').toLowerCase() !==
       'false',
   },
+  sandbox: {
+    depositSeed: process.env.SANDBOX_DEPOSIT_SEED?.trim() ?? '',
+    treasuryPrivateKey: process.env.SANDBOX_TREASURY_PRIVATE_KEY?.trim() ?? '',
+    rpcUrls: parseNetworkMap(
+      process.env.SANDBOX_RPC_URLS,
+      'SANDBOX_RPC_URLS',
+      isRpcUrl,
+    ),
+    cusdAddresses: parseNetworkMap(
+      process.env.SANDBOX_CUSD_ADDRESSES,
+      'SANDBOX_CUSD_ADDRESSES',
+      isEvmAddressValue,
+    ),
+    timeoutMs: parseInt(
+      process.env.SANDBOX_RPC_TIMEOUT_MS ??
+        String(DEFAULT_SANDBOX_RPC_TIMEOUT_MS),
+      10,
+    ),
+  },
   analytics: {
     cacheTtlMs: parseInt(
       process.env.ANALYTICS_CACHE_TTL_MS ??
@@ -1181,6 +1227,14 @@ export default (): AppConfig => ({
       process.env.ELDORADO_TIMEOUT_MS ?? String(DEFAULT_ELDORADO_TIMEOUT_MS),
       10,
     ),
+    webhookJwksUrls: {
+      public:
+        process.env.ELDORADO_WEBHOOK_JWKS_URL_MAINNET?.trim() ||
+        DEFAULT_ELDORADO_WEBHOOK_JWKS_URL.public,
+      testnet:
+        process.env.ELDORADO_WEBHOOK_JWKS_URL_TESTNET?.trim() ||
+        DEFAULT_ELDORADO_WEBHOOK_JWKS_URL.testnet,
+    },
   },
   trustlessWork: {
     networks: {

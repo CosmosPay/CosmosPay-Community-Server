@@ -22,6 +22,13 @@ process.env.REQUEST_LOG_RETENTION_DAYS = '0';
 process.env.NEAR_INTENTS_TOKENS_PREFETCH = 'false';
 // No analytics cache: the suites call the same figure several times with different rows.
 process.env.ANALYTICS_CACHE_TTL_MS = '0';
+// A fixture sandbox (public throwaway values, never funded): the networks route
+// then answers the same on every machine, whatever the developer .env holds. No
+// test-network RPC is reached: the observer is off (OBSERVER_ENABLED above).
+process.env.SANDBOX_DEPOSIT_SEED = '5e'.repeat(32);
+process.env.SANDBOX_TREASURY_PRIVATE_KEY = `0x${'5f'.repeat(32)}`;
+process.env.SANDBOX_RPC_URLS = '';
+process.env.SANDBOX_CUSD_ADDRESSES = '';
 // ConfigModule still runs dotenv against the repo's .env, and dotenv does not
 // overwrite values already in process.env — so a developer whose .env carries a
 // real BLINDPAY_API_KEY would otherwise trip env validation ("BLINDPAY_

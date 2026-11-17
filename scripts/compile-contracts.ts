@@ -46,16 +46,25 @@ const CONTRACTS = [
     // the venue checks the deployed code against this bytecode before use.
     note: 'Do not edit: the swap venue checks the deployed router against this bytecode.',
   },
+  {
+    name: 'SandboxUsd',
+    exportName: 'SANDBOX_USD_ARTIFACT',
+    artifact: 'sandbox-usd.artifact.ts',
+    // cUSD, the sandbox's test stablecoin. Compiled for `paris` (no PUSH0, no
+    // MCOPY): it is deployed on test networks whose EVM version lags mainnet's.
+    note: 'Do not edit: cUSD deployments are checked against this bytecode.',
+    evmVersion: 'paris',
+  },
 ] as const;
 
 const DEPOSIT_ADDRESS_NOTE =
   'Do not edit: every deposit address is derived from this bytecode.';
 
 /** Recorded in each artifact; the spec recompiles with exactly these. */
-function settingsFor(name: string) {
+function settingsFor(name: string, evmVersion = 'cancun') {
   return {
     optimizer: { enabled: true, runs: 200 },
-    evmVersion: 'cancun',
+    evmVersion,
     // No metadata hash: it would bake the source path and comments into the
     // bytecode, and with it into every deposit address.
     metadata: { bytecodeHash: 'none' },
@@ -66,7 +75,10 @@ function settingsFor(name: string) {
 function compile(contract: (typeof CONTRACTS)[number]): void {
   const sourcePath = join(ROOT, 'contracts', `${contract.name}.sol`);
   const source = readFileSync(sourcePath, 'utf8');
-  const settings = settingsFor(contract.name);
+  const settings = settingsFor(
+    contract.name,
+    'evmVersion' in contract ? contract.evmVersion : undefined,
+  );
   const output = JSON.parse(
     solc.compile(
       JSON.stringify({
