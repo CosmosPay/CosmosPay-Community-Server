@@ -1,4 +1,6 @@
 import { Module } from '@nestjs/common';
+import { SandboxAptosClient } from '@/sandbox-settlement/sandbox-aptos.client';
+import { SandboxAptosLedger } from '@/sandbox-settlement/sandbox-aptos.ledger';
 import { SandboxDepositRoute } from '@/sandbox-settlement/sandbox-deposit-route.service';
 import { SandboxEvmClient } from '@/sandbox-settlement/sandbox-evm.client';
 import { SandboxEvmLedger } from '@/sandbox-settlement/sandbox-evm.ledger';
@@ -29,6 +31,8 @@ import { SandboxXrplLedger } from '@/sandbox-settlement/sandbox-xrpl.ledger';
     SandboxSuiLedger,
     SandboxNearClient,
     SandboxNearLedger,
+    SandboxAptosClient,
+    SandboxAptosLedger,
     SandboxLedgers,
     SandboxDepositRoute,
     SandboxSettler,

@@ -1,5 +1,9 @@
 import type { PaymentNetwork } from '@/payment-intents/payment-networks';
 import {
+  type SandboxAptosNetwork,
+  SANDBOX_APTOS_TESTNET,
+} from '@/sandbox-settlement/sandbox-aptos.constants';
+import {
   type SandboxNearNetwork,
   SANDBOX_NEAR_TESTNET,
 } from '@/sandbox-settlement/sandbox-near.constants';
@@ -79,7 +83,8 @@ export type SandboxSettledNetwork =
   | SandboxEvmNetwork
   | SandboxXrplNetwork
   | SandboxNearNetwork
-  | SandboxSuiNetwork;
+  | SandboxSuiNetwork
+  | SandboxAptosNetwork;
 
 /** Which ledger implementation a settled network uses. */
 export type SandboxLedgerKind = SandboxSettledNetwork['kind'];
@@ -258,9 +263,7 @@ export const SANDBOX_NETWORKS: Record<PaymentNetwork, SandboxNetwork> = {
   ton: notYet('a TON path is a follow-up (needs its own test stablecoin).'),
   near: SANDBOX_NEAR_TESTNET,
   sui: SUI_TESTNET,
-  aptos: notYet(
-    'an Aptos path is a follow-up (an official test USDC exists there).',
-  ),
+  aptos: SANDBOX_APTOS_TESTNET,
   movement: notYet('a Movement path is a follow-up.'),
   // Starknet Sepolia's test USDC answered symbol USDC / 6 decimals on
   // 2026-11-17 (0x0512feac6339ff7889822cb5aa2a86c848e9d392bb0e3e237c008674feed8343),

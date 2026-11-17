@@ -132,6 +132,7 @@ function build(
       {} as never,
       {} as never,
       new SandboxNearLedger(config, {} as never),
+      {} as never,
     ),
   );
   return {

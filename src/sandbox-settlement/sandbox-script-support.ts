@@ -2,6 +2,8 @@ import { existsSync, readFileSync } from 'node:fs';
 import { resolve, sep } from 'node:path';
 import { callJsonRpc } from '@/chains/json-rpc';
 import type { PaymentNetwork } from '@/payment-intents/payment-networks';
+import { SandboxAptosClient } from '@/sandbox-settlement/sandbox-aptos.client';
+import { SandboxAptosLedger } from '@/sandbox-settlement/sandbox-aptos.ledger';
 import { SandboxEvmClient } from '@/sandbox-settlement/sandbox-evm.client';
 import { SandboxEvmLedger } from '@/sandbox-settlement/sandbox-evm.ledger';
 import { SandboxLedgers } from '@/sandbox-settlement/sandbox-ledgers.service';
@@ -134,6 +136,7 @@ export function scriptLedgers(
     new SandboxXrplLedger(config, new SandboxXrplClient(config)),
     new SandboxSuiLedger(config, new SandboxSuiClient(config)),
     new SandboxNearLedger(config, new SandboxNearClient(config)),
+    new SandboxAptosLedger(config, new SandboxAptosClient(config)),
   );
 }
 

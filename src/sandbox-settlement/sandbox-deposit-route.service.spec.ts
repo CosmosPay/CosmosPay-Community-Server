@@ -1,6 +1,8 @@
 import { ApiError, ApiErrorCode } from '@/common/errors/api-error';
 import { addressOfSecretKey } from '@/evm/evm-transaction';
 import { SandboxDepositRoute } from '@/sandbox-settlement/sandbox-deposit-route.service';
+import { aptosAddressOfSecret } from '@/sandbox-settlement/sandbox-aptos.codec';
+import { SandboxAptosLedger } from '@/sandbox-settlement/sandbox-aptos.ledger';
 import { SandboxEvmLedger } from '@/sandbox-settlement/sandbox-evm.ledger';
 import { SandboxLedgers } from '@/sandbox-settlement/sandbox-ledgers.service';
 import { SandboxSuiLedger } from '@/sandbox-settlement/sandbox-sui.ledger';
@@ -19,6 +21,8 @@ const BASE_SEPOLIA_USDC = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
 const MERCHANT = '0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed';
 const PAYER = '0x' + '1'.repeat(40);
 const CUSD_BSC = '0x' + 'c'.repeat(40);
+const APTOS_USDC =
+  '0x69091fbab5f7d635ee7ac5098cf0c1efbe31d68fec0f2cd565e8d168daf52832';
 
 function build(sandbox: Record<string, unknown> = {}) {
   const values = {
@@ -42,6 +46,7 @@ function build(sandbox: Record<string, unknown> = {}) {
       new SandboxXrplLedger(config, {} as never),
       new SandboxSuiLedger(config, {} as never),
       new SandboxNearLedger(config, {} as never),
+      new SandboxAptosLedger(config, {} as never),
     ),
   );
 }
@@ -303,5 +308,47 @@ describe('SandboxDepositRoute', () => {
     expect(
       sandboxAmountIn('0.123456789', { decimals: 18 }, { decimals: 6 }),
     ).toBe('0.123457');
+  });
+
+  it('opens an Aptos deposit at an account of its own, derived under coin type 637', () => {
+    const priced = build().price(
+      LINK,
+      {
+        originChain: 'aptos',
+        originAsset: 'USDC',
+        refundTo: '0x' + 'ab'.repeat(32),
+      },
+      true,
+    );
+    const path = priced.response.correlationId.replace(/^sandbox:/, '');
+    expect(path).toMatch(/^m\/44'\/637'\/7007'\//);
+    const indexes = parseDepositPath(path, 637);
+    expect(indexes).not.toBeNull();
+    expect(priced.response.quote.depositAddress).toBe(
+      aptosAddressOfSecret(ed25519DepositSecret(SEED, 637, indexes!)),
+    );
+    expect(priced.response.quote.depositMemo).toBeUndefined();
+    expect(priced.origin).toMatchObject({
+      chain: 'aptos',
+      symbol: 'USDC',
+      decimals: 6,
+      contract: APTOS_USDC,
+    });
+  });
+
+  it('settles an Aptos link in its test USDC, named by symbol or metadata object', () => {
+    const route = build();
+    expect(route.availability('aptos')).toMatchObject({
+      available: true,
+      reason: null,
+      asset: { chainName: 'Aptos Testnet', symbol: 'USDC', decimals: 6 },
+    });
+    expect(
+      route.linkAssetForCreate('aptos', undefined, APTOS_USDC.toUpperCase())
+        .contract,
+    ).toBe(APTOS_USDC);
+    expect(
+      refusal(() => route.linkAssetForCreate('aptos', 'APT', undefined)).code,
+    ).toBe(ApiErrorCode.AssetUnsupported);
   });
 });

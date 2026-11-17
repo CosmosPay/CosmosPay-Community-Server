@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import type { PaymentNetwork } from '@/payment-intents/payment-networks';
+import { SandboxAptosLedger } from '@/sandbox-settlement/sandbox-aptos.ledger';
 import { SandboxEvmLedger } from '@/sandbox-settlement/sandbox-evm.ledger';
 import type { SandboxLedger } from '@/sandbox-settlement/sandbox-ledger';
 import { SandboxSuiLedger } from '@/sandbox-settlement/sandbox-sui.ledger';
@@ -24,8 +25,9 @@ export class SandboxLedgers {
     xrpl: SandboxXrplLedger,
     sui: SandboxSuiLedger,
     near: SandboxNearLedger,
+    aptos: SandboxAptosLedger,
   ) {
-    this.byKind = { evm, xrpl, sui, near };
+    this.byKind = { evm, xrpl, sui, near, aptos };
   }
 
   /** The ledger of `network`; throws for a network the sandbox does not settle on. */
