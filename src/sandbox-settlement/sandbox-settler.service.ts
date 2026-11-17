@@ -1,11 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import type { PaymentDeposit, SandboxPayout } from '@generated/prisma/client';
 import { formatUnits, parseUnits } from '@/chains/units';
 import { isUniqueViolation } from '@/common/prisma-errors';
-import type { AppConfig } from '@/config/configuration';
-import { addressOfSecretKey, signEip1559 } from '@/evm/evm-transaction';
-import { hexToBytes } from '@/evm/rlp';
 import type { NearIntentsStatus } from '@/near-intents/near-intents.constants';
 import type {
   NearIntentsStatusResponse,
@@ -13,11 +9,8 @@ import type {
 } from '@/near-intents/near-intents.types';
 import type { PaymentNetwork } from '@/payment-intents/payment-networks';
 import { PrismaService } from '@/prisma/prisma.service';
-import {
-  erc20TransferCalldata,
-  SandboxEvmClient,
-} from '@/sandbox-settlement/sandbox-evm.client';
-import { SANDBOX_TRANSFER_GAS_FALLBACK } from '@/sandbox-settlement/sandbox-settlement.constants';
+import type { SandboxTransfer } from '@/sandbox-settlement/sandbox-ledger';
+import { SandboxLedgers } from '@/sandbox-settlement/sandbox-ledgers.service';
 
 /** One of the two transactions the treasury may send for a deposit. */
 type PayoutKind = 'payout' | 'refund';
@@ -27,14 +20,15 @@ type PayoutKind = 'payout' | 'refund';
  * network and has the sandbox treasury pay the merchant on the link's test
  * network (or refund the payer), answering in the cross-chain route's own
  * status vocabulary so `PaymentDepositsService.applyProviderStatus` moves the
- * row, settles the intent and notifies exactly as on mainnet.
+ * row, settles the intent and notifies exactly as on mainnet. What is read and
+ * signed on each network is its `SandboxLedger`'s; every decision is here.
  *
  * The decision per deposit, at each look:
  *
- *   - a payout already sent: mined and succeeded is SUCCESS, mined and
- *     reverted is FAILED, not mined yet is PROCESSING (its signed bytes are
- *     broadcast again, same nonce and hash);
- *   - a refund already sent: mined is REFUNDED, otherwise PROCESSING;
+ *   - a payout already sent: succeeded is SUCCESS, failed (reverted, or
+ *     expired unexecuted) is FAILED, not final yet is PROCESSING (its signed
+ *     bytes are broadcast again, never re-signed);
+ *   - a refund already sent: succeeded is REFUNDED, otherwise PROCESSING;
  *   - nothing arrived: PENDING_DEPOSIT (the deadline expires it);
  *   - less than `minAmountIn`: INCOMPLETE_DEPOSIT, refunded once the deadline
  *     passes;
@@ -52,9 +46,8 @@ export class SandboxSettler {
   private readonly logger = new Logger(SandboxSettler.name);
 
   constructor(
-    private readonly config: ConfigService<AppConfig, true>,
     private readonly prisma: PrismaService,
-    private readonly chains: SandboxEvmClient,
+    private readonly ledgers: SandboxLedgers,
   ) {}
 
   /** Where the deposit stands, in the route's status vocabulary; never null. */
@@ -69,15 +62,15 @@ export class SandboxSettler {
     if (refund) return this.follow(deposit, refund, 'REFUNDED');
 
     const origin = deposit.originChain as PaymentNetwork;
-    const received = await this.chains.erc20BalanceOf(
-      origin,
-      deposit.originContract ?? '',
-      deposit.depositAddress,
-    );
-    if (received === 0n) return this.status(deposit, 'PENDING_DEPOSIT');
+    const ledger = this.ledgers.for(origin);
+    const received = await ledger.received(deposit);
+    const late = Date.now() > deposit.expiresAt.getTime();
+    if (received === 0n) {
+      if (!late) await ledger.prepareDeposit?.(deposit);
+      return this.status(deposit, 'PENDING_DEPOSIT');
+    }
 
     const minimum = parseUnits(deposit.minAmountIn, deposit.originDecimals);
-    const late = Date.now() > deposit.expiresAt.getTime();
     if (received < minimum && !late) {
       return this.status(deposit, 'INCOMPLETE_DEPOSIT');
     }
@@ -107,31 +100,24 @@ export class SandboxSettler {
       : this.follow(deposit, sentPayout.row, 'SUCCESS');
   }
 
-  /** The treasury's address (the same on every EVM test network). */
-  treasuryAddress(): string {
-    return addressOfSecretKey(this.treasuryKey());
-  }
-
-  /** Where a sent transaction stands: mined, reverted or still in flight. */
+  /** Where a sent transaction stands: succeeded, failed or still in flight. */
   private async follow(
     deposit: PaymentDeposit,
     row: SandboxPayout,
     whenMined: Extract<NearIntentsStatus, 'SUCCESS' | 'REFUNDED'>,
   ): Promise<NearIntentsStatusResponse> {
     const network = row.network as PaymentNetwork;
-    const receipt = await this.chains.receipt(network, row.txHash);
-    if (!receipt) {
-      await this.chains.sendRawTransaction(network, row.raw);
-      return this.status(deposit, 'PROCESSING');
-    }
-    if (!receipt.succeeded) {
+    const ledger = this.ledgers.for(network);
+    const outcome = await ledger.follow(row);
+    if (outcome === 'pending') return this.status(deposit, 'PROCESSING');
+    if (outcome === 'failed') {
       if (row.status !== 'FAILED') {
         await this.prisma.sandboxPayout.update({
           where: { id: row.id },
           data: { status: 'FAILED' },
         });
         this.logger.error(
-          `Sandbox ${row.kind} ${row.txHash} for deposit ${deposit.id} reverted on ${network}`,
+          `Sandbox ${row.kind} ${row.txHash} for deposit ${deposit.id} failed on ${network}`,
         );
       }
       return this.status(deposit, 'FAILED');
@@ -144,7 +130,7 @@ export class SandboxSettler {
     }
     const tx: NearIntentsTransaction = {
       hash: row.txHash,
-      explorerUrl: `${this.chains.network(network).explorerTx}${row.txHash}`,
+      explorerUrl: ledger.explorerTx(network, row.txHash),
     };
     const decimals =
       row.kind === 'payout'
@@ -172,53 +158,26 @@ export class SandboxSettler {
 
   /**
    * Signs a treasury transfer, records it, then broadcasts it. Null when the
-   * treasury cannot pay right now (not enough of the token): logged, and
-   * looked at again on the next tick. A unique violation means another tick
-   * recorded the same kind first: its row comes back (`fresh: false`) to be
-   * followed instead.
+   * transfer cannot be sent right now (the ledger's `blocker`: the treasury is
+   * short, the recipient cannot hold the token yet): logged, and looked at
+   * again on the next tick. A unique violation means another tick recorded the
+   * same kind first: its row comes back (`fresh: false`) to be followed instead.
    */
   private async send(
     deposit: PaymentDeposit,
     kind: PayoutKind,
-    transfer: {
-      network: PaymentNetwork;
-      token: string;
-      recipient: string;
-      amount: bigint;
-    },
+    transfer: SandboxTransfer,
   ): Promise<{ row: SandboxPayout; fresh: boolean } | null> {
     const { network, token, recipient, amount } = transfer;
-    const key = this.treasuryKey();
-    const treasury = addressOfSecretKey(key);
-    const balance = await this.chains.erc20BalanceOf(network, token, treasury);
-    if (balance < amount) {
+    const ledger = this.ledgers.for(network);
+    const blocked = await ledger.blocker(transfer);
+    if (blocked) {
       this.logger.error(
-        `Sandbox treasury ${treasury} holds ${balance} of ${token} on ${network}, ` +
-          `below the ${amount} deposit ${deposit.id} needs: fund it`,
+        `Sandbox ${kind} for deposit ${deposit.id} on ${network} waits: ${blocked}`,
       );
       return null;
     }
-    const data = erc20TransferCalldata(recipient, amount);
-    const [nonce, fees, estimate] = await Promise.all([
-      this.chains.pendingNonce(network, treasury),
-      this.chains.feeData(network),
-      this.chains.estimateGas(network, { from: treasury, to: token, data }),
-    ]);
-    const signed = signEip1559(
-      {
-        chainId: this.chains.network(network).chainId,
-        nonce,
-        maxFeePerGas: fees.maxFeePerGas,
-        maxPriorityFeePerGas: fees.maxPriorityFeePerGas,
-        gasLimit: estimate
-          ? (estimate * 13n) / 10n
-          : SANDBOX_TRANSFER_GAS_FALLBACK,
-        to: token,
-        value: 0n,
-        data,
-      },
-      key,
-    );
+    const signed = await ledger.sign(transfer);
     let row: SandboxPayout;
     try {
       row = await this.prisma.sandboxPayout.create({
@@ -229,7 +188,7 @@ export class SandboxSettler {
           token,
           recipient,
           amount: amount.toString(),
-          nonce: nonce.toString(),
+          nonce: signed.nonce,
           txHash: signed.hash,
           raw: signed.raw,
         },
@@ -241,7 +200,7 @@ export class SandboxSettler {
       });
       return raced ? { row: raced, fresh: false } : null;
     }
-    await this.chains.sendRawTransaction(network, signed.raw);
+    await ledger.broadcast(network, signed.raw);
     this.logger.log(
       `Sandbox ${kind} for deposit ${deposit.id}: ${amount} of ${token} to ` +
         `${recipient} on ${network} (tx=${signed.hash})`,
@@ -258,11 +217,5 @@ export class SandboxSettler {
       status,
       updatedAt: new Date().toISOString(),
     };
-  }
-
-  private treasuryKey(): Uint8Array {
-    const hex = this.config.get('sandbox', { infer: true }).treasuryPrivateKey;
-    if (!hex) throw new Error('SANDBOX_TREASURY_PRIVATE_KEY is not set');
-    return hexToBytes(hex);
   }
 }

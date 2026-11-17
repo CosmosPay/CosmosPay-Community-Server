@@ -1,4 +1,20 @@
 import type { PaymentNetwork } from '@/payment-intents/payment-networks';
+import {
+  type SandboxAptosNetwork,
+  SANDBOX_APTOS_TESTNET,
+} from '@/sandbox-settlement/sandbox-aptos.constants';
+import {
+  type SandboxNearNetwork,
+  SANDBOX_NEAR_TESTNET,
+} from '@/sandbox-settlement/sandbox-near.constants';
+import {
+  type SandboxSuiNetwork,
+  SUI_TESTNET,
+} from '@/sandbox-settlement/sandbox-sui.constants';
+import {
+  type SandboxXrplNetwork,
+  XRPL_TESTNET,
+} from '@/sandbox-settlement/sandbox-xrpl.constants';
 
 /**
  * Sandbox settlement: payment links on the networks paid through deposit
@@ -16,32 +32,41 @@ import type { PaymentNetwork } from '@/payment-intents/payment-networks';
 /** Who issues a sandbox stablecoin: Circle's own test USDC, or our cUSD. */
 export type SandboxStablecoinIssuer = 'circle' | 'cusd';
 
-/** An EVM test network the sandbox settles on. */
-export interface SandboxEvmNetwork {
-  kind: 'evm';
-  /** The test network's own name (`Sepolia`, `Base Sepolia`). */
+/** The test stablecoin of a network the sandbox settles on. */
+export interface SandboxStablecoin {
+  symbol: string;
+  decimals: number;
+  issuer: SandboxStablecoinIssuer;
+  /**
+   * How the network names Circle's test USDC: an ERC-20 contract, an XRP
+   * Ledger issuer, a NEAR contract account, a Sui coin type, an Aptos metadata
+   * object. From Circle's published list and checked on-chain (symbol USDC,
+   * 6 decimals). Null for cUSD: deployed by `npm run sandbox:deploy-cusd`,
+   * configured in `SANDBOX_CUSD_ADDRESSES`.
+   */
+  contract: string | null;
+}
+
+/** What every network the sandbox settles on declares. */
+export interface SandboxNetworkCommon {
+  /** The test network's own name (`Sepolia`, `XRP Ledger Testnet`). */
   testnetName: string;
+  /** A public node, overridable per network (`SANDBOX_RPC_URLS`). */
+  defaultRpcUrl: string;
+  /** Transaction explorer, `<base><hash>`. */
+  explorerTx: string;
+  stablecoin: SandboxStablecoin;
+}
+
+/** An EVM test network the sandbox settles on. */
+export interface SandboxEvmNetwork extends SandboxNetworkCommon {
+  kind: 'evm';
   /**
    * EIP-155 id. Checked against chainlist (chainid.network/chains.json) AND the
    * network's `eth_chainId` on 2026-11-16; the client checks it again before
    * trusting a node, so a node on another chain (mainnet above all) is refused.
    */
   chainId: number;
-  /** A public RPC, overridable per network (`SANDBOX_RPC_URLS`). */
-  defaultRpcUrl: string;
-  /** Transaction explorer, `<base><hash>`. */
-  explorerTx: string;
-  stablecoin: {
-    symbol: string;
-    decimals: number;
-    issuer: SandboxStablecoinIssuer;
-    /**
-     * Circle's test USDC contract, from Circle's published list and checked
-     * on-chain (`symbol()` USDC, `decimals()` 6). Null for cUSD: deployed by
-     * `npm run sandbox:deploy-cusd`, configured in `SANDBOX_CUSD_ADDRESSES`.
-     */
-    contract: string | null;
-  };
 }
 
 /** A network the sandbox does not settle on, and why. */
@@ -50,7 +75,21 @@ export interface SandboxUnavailableNetwork {
   reason: string;
 }
 
-export type SandboxNetwork = SandboxEvmNetwork | SandboxUnavailableNetwork;
+/**
+ * Every kind of test network the sandbox settles on, each with its own
+ * `SandboxLedger` (`SandboxLedgers` holds one per kind).
+ */
+export type SandboxSettledNetwork =
+  | SandboxEvmNetwork
+  | SandboxXrplNetwork
+  | SandboxNearNetwork
+  | SandboxSuiNetwork
+  | SandboxAptosNetwork;
+
+/** Which ledger implementation a settled network uses. */
+export type SandboxLedgerKind = SandboxSettledNetwork['kind'];
+
+export type SandboxNetwork = SandboxSettledNetwork | SandboxUnavailableNetwork;
 
 const circleUsdc = (contract: string) => ({
   symbol: 'USDC',
@@ -74,7 +113,7 @@ const evm = (
   chainId: number,
   defaultRpcUrl: string,
   explorerTx: string,
-  stablecoin: SandboxEvmNetwork['stablecoin'],
+  stablecoin: SandboxStablecoin,
 ): SandboxEvmNetwork => ({
   kind: 'evm',
   testnetName,
@@ -176,15 +215,14 @@ export const SANDBOX_NETWORKS: Record<PaymentNetwork, SandboxNetwork> = {
     'https://testnet.berascan.com/tx/',
     cusd,
   ),
-  // The public RPC answered 526 on 2026-11-16 (chain id taken from chainlist);
-  // point SANDBOX_RPC_URLS at a working Scroll Sepolia node.
-  scroll: evm(
-    'Scroll Sepolia',
-    534351,
-    'https://sepolia-rpc.scroll.io',
-    'https://sepolia.scrollscan.com/tx/',
-    cusd,
-  ),
+  // Scroll Sepolia was shut down: its public RPC answered 526 from 2026-11-16
+  // and Scroll's contracts page keeps the Sepolia addresses "for historical
+  // reference only" (2026-11-17). No test network, nothing to settle on.
+  scroll: {
+    kind: 'unavailable',
+    reason:
+      "Scroll's test network was shut down, so the sandbox has no network to settle a Scroll link on.",
+  },
   xlayer: evm(
     'X Layer Testnet',
     1952,
@@ -218,23 +256,23 @@ export const SANDBOX_NETWORKS: Record<PaymentNetwork, SandboxNetwork> = {
   bch: notYet('it needs a UTXO deposit and payout path (follow-up).'),
   dash: notYet('it needs a UTXO deposit and payout path (follow-up).'),
   zec: notYet('it needs a UTXO deposit and payout path (follow-up).'),
-  xrp: notYet(
-    'an XRP Ledger path is a follow-up (an official test USDC exists there).',
-  ),
+  // Test USDC on the XRP Ledger testnet, deposited to the treasury with a
+  // destination tag per payment (`sandbox-xrpl.constants.ts`).
+  xrp: XRPL_TESTNET,
   tron: notYet('a Tron path is a follow-up (needs its own test stablecoin).'),
   ton: notYet('a TON path is a follow-up (needs its own test stablecoin).'),
-  near: notYet(
-    'a NEAR path is a follow-up (an official test USDC exists there).',
-  ),
-  sui: notYet(
-    'a Sui path is a follow-up (an official test USDC exists there).',
-  ),
-  aptos: notYet(
-    'an Aptos path is a follow-up (an official test USDC exists there).',
-  ),
+  near: SANDBOX_NEAR_TESTNET,
+  sui: SUI_TESTNET,
+  aptos: SANDBOX_APTOS_TESTNET,
   movement: notYet('a Movement path is a follow-up.'),
+  // Starknet Sepolia's test USDC answered symbol USDC / 6 decimals on
+  // 2026-11-17 (0x0512feac6339ff7889822cb5aa2a86c848e9d392bb0e3e237c008674feed8343),
+  // but paying from it needs what no other network here does: Stark-curve
+  // ECDSA, Pedersen and Poseidon hashing (none in this repo's crypto
+  // libraries), a treasury account contract deployed first, and v3
+  // transactions priced in L1 gas, L2 gas and L1 data gas.
   starknet: notYet(
-    'a Starknet path is a follow-up (an official test USDC exists there).',
+    'a Starknet path is a follow-up: an official test USDC exists there, but paying from the treasury needs a deployed Starknet account and Stark-curve signing first.',
   ),
   cardano: notYet('a Cardano path is a follow-up.'),
   aleo: notYet('an Aleo path is a follow-up.'),
@@ -249,6 +287,23 @@ export const SANDBOX_NETWORKS: Record<PaymentNetwork, SandboxNetwork> = {
  * event (the `(depositAddress, depositMemo)` index refuses it anyway).
  */
 export const SANDBOX_DEPOSIT_PATH_PREFIX = [44, 60, 7007] as const;
+
+/**
+ * The account index every sandbox deposit path uses after its coin type
+ * (`m/44'/<coin>'/7007'/a'/b'`). Ed25519 networks (NEAR, Sui, Aptos) derive
+ * their deposit keys with SLIP-0010 under their own SLIP-44 coin type, so a
+ * key is recoverable from the seed with any SLIP-0010 tool.
+ */
+export const SANDBOX_DEPOSIT_ACCOUNT_INDEX = 7007;
+
+/**
+ * HKDF salt for the treasury's keys on networks whose curve is not the EVM
+ * one: each is HKDF-SHA256(SANDBOX_TREASURY_PRIVATE_KEY, salt, info
+ * `treasury:<network>`), so one configured secret yields one independent key
+ * per network and no new variable is needed. Changing either string moves
+ * every non-EVM treasury to a new address.
+ */
+export const SANDBOX_TREASURY_KDF_SALT = 'cosmos-pay sandbox treasury v1';
 
 /**
  * Gas limit for an ERC-20 transfer when the node cannot estimate one. A

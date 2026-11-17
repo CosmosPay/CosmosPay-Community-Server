@@ -2,10 +2,22 @@ import { existsSync, readFileSync } from 'node:fs';
 import { resolve, sep } from 'node:path';
 import { callJsonRpc } from '@/chains/json-rpc';
 import type { PaymentNetwork } from '@/payment-intents/payment-networks';
+import { SandboxAptosClient } from '@/sandbox-settlement/sandbox-aptos.client';
+import { SandboxAptosLedger } from '@/sandbox-settlement/sandbox-aptos.ledger';
+import { SandboxEvmClient } from '@/sandbox-settlement/sandbox-evm.client';
+import { SandboxEvmLedger } from '@/sandbox-settlement/sandbox-evm.ledger';
+import { SandboxLedgers } from '@/sandbox-settlement/sandbox-ledgers.service';
+import { SandboxSuiClient } from '@/sandbox-settlement/sandbox-sui.client';
+import { SandboxSuiLedger } from '@/sandbox-settlement/sandbox-sui.ledger';
+import { SandboxNearClient } from '@/sandbox-settlement/sandbox-near.client';
+import { SandboxNearLedger } from '@/sandbox-settlement/sandbox-near.ledger';
 import {
   SANDBOX_NETWORKS,
   type SandboxEvmNetwork,
+  type SandboxSettledNetwork,
 } from '@/sandbox-settlement/sandbox-settlement.constants';
+import { SandboxXrplClient } from '@/sandbox-settlement/sandbox-xrpl.client';
+import { SandboxXrplLedger } from '@/sandbox-settlement/sandbox-xrpl.ledger';
 
 /**
  * What the sandbox scripts (`scripts/sandbox/`) share, kept here so they can
@@ -95,4 +107,46 @@ export async function testnetRpc(
   }
   return <T>(method: string, params: unknown[]) =>
     callJsonRpc<T>(target, method, params);
+}
+
+/**
+ * The service's own ledgers, built outside Nest for a script: the same reads
+ * and the same node checks as the running service, over the secrets file
+ * instead of the environment. Scripts are the one place these are constructed
+ * by hand.
+ */
+export function scriptLedgers(
+  secrets: SandboxSecrets,
+  cusdAddresses: Partial<Record<PaymentNetwork, string>> = {},
+): SandboxLedgers {
+  const settings = {
+    sandbox: {
+      depositSeed: secrets.depositSeed,
+      treasuryPrivateKey: secrets.treasuryPrivateKey,
+      rpcUrls: {},
+      cusdAddresses,
+      timeoutMs: 30_000,
+    },
+  };
+  const config = {
+    get: (key: keyof typeof settings) => settings[key],
+  } as never;
+  return new SandboxLedgers(
+    new SandboxEvmLedger(config, new SandboxEvmClient(config)),
+    new SandboxXrplLedger(config, new SandboxXrplClient(config)),
+    new SandboxSuiLedger(config, new SandboxSuiClient(config)),
+    new SandboxNearLedger(config, new SandboxNearClient(config)),
+    new SandboxAptosLedger(config, new SandboxAptosClient(config)),
+  );
+}
+
+/** Every network the sandbox settles on, in the catalog's order. */
+export function settledNetworks(): {
+  id: PaymentNetwork;
+  entry: SandboxSettledNetwork;
+}[] {
+  return (Object.keys(SANDBOX_NETWORKS) as PaymentNetwork[]).flatMap((id) => {
+    const entry = SANDBOX_NETWORKS[id];
+    return entry.kind === 'unavailable' ? [] : [{ id, entry }];
+  });
 }

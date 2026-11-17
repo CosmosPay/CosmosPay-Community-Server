@@ -7,6 +7,8 @@ import { bytesToHex } from '@/evm/rlp';
 import {
   arg,
   assertOutsideRepo,
+  scriptLedgers,
+  settledNetworks,
 } from '@/sandbox-settlement/sandbox-script-support';
 
 /**
@@ -20,7 +22,9 @@ import {
  *   (SANDBOX_DEPOSIT_SEED). Losing it strands what payers sent to those
  *   addresses (test funds only); leaking it lets anyone move them.
  * - `treasuryPrivateKey`: pays merchants on the test networks
- *   (SANDBOX_TREASURY_PRIVATE_KEY). Holds test stablecoins and test gas.
+ *   (SANDBOX_TREASURY_PRIVATE_KEY). Holds test stablecoins and test gas. On
+ *   the networks that are not EVM the treasury is a key derived from it per
+ *   network (HKDF, `treasurySubkey`), printed below with its address.
  * - `deployerPrivateKey`: deploys cUSD where no official test USDC exists, and
  *   is its only minter. Used by `npm run sandbox:deploy-cusd` only.
  *
@@ -56,6 +60,13 @@ function main(): void {
   );
   console.log(`Treasury address: ${addressOfSecretKey(treasury)}`);
   console.log(`cUSD deployer address: ${addressOfSecretKey(deployer)}`);
+  const ledgers = scriptLedgers(secrets);
+  const others = settledNetworks().filter(({ entry }) => entry.kind !== 'evm');
+  for (const { id, entry } of others) {
+    console.log(
+      `Treasury on ${entry.testnetName}: ${ledgers.for(id).treasuryAddress(id)}`,
+    );
+  }
 }
 
 main();

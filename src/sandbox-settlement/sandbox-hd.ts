@@ -1,9 +1,15 @@
 import { randomInt } from 'node:crypto';
 import { secp256k1 } from '@noble/curves/secp256k1.js';
+import { hkdf } from '@noble/hashes/hkdf.js';
 import { hmac } from '@noble/hashes/hmac.js';
-import { sha512 } from '@noble/hashes/sha2.js';
+import { sha256, sha512 } from '@noble/hashes/sha2.js';
 import { bigintToBytes, bytesToHex, hexToBytes } from '@/evm/rlp';
-import { SANDBOX_DEPOSIT_PATH_PREFIX } from '@/sandbox-settlement/sandbox-settlement.constants';
+import type { PaymentNetwork } from '@/payment-intents/payment-networks';
+import {
+  SANDBOX_DEPOSIT_ACCOUNT_INDEX,
+  SANDBOX_DEPOSIT_PATH_PREFIX,
+  SANDBOX_TREASURY_KDF_SALT,
+} from '@/sandbox-settlement/sandbox-settlement.constants';
 
 /** BIP-32's hardened offset: index i' is i + 2^31. */
 const HARDENED = 0x80000000;
@@ -90,20 +96,35 @@ export function newDepositIndexes(): [number, number] {
   return [randomInt(0, HARDENED), randomInt(0, HARDENED)];
 }
 
-/** `m/44'/60'/7007'/a'/b'`, the path a deposit's key is stored under. */
-export function depositPath(indexes: readonly [number, number]): string {
+/**
+ * `m/44'/<coin>'/7007'/a'/b'`, the path a deposit's key is stored under
+ * (coin 60, the EVM one, unless another is named).
+ */
+export function depositPath(
+  indexes: readonly [number, number],
+  coinType: number = SANDBOX_DEPOSIT_PATH_PREFIX[1],
+): string {
   return [
     'm',
-    ...[...SANDBOX_DEPOSIT_PATH_PREFIX, ...indexes].map((i) => `${i}'`),
+    ...[44, coinType, SANDBOX_DEPOSIT_ACCOUNT_INDEX, ...indexes].map(
+      (i) => `${i}'`,
+    ),
   ].join('/');
 }
 
-/** The indexes of a path {@link depositPath} wrote; null for anything else. */
-export function parseDepositPath(path: string): [number, number] | null {
-  const prefix = depositPath([0, 0]).split('/').slice(0, 4).join('/');
-  const match = new RegExp(
-    `^${prefix.replace(/'/g, "'")}/(\\d{1,10})'/(\\d{1,10})'$`,
-  ).exec(path);
+/**
+ * The indexes of a path {@link depositPath} wrote for `coinType` (60 unless
+ * named); null for anything else.
+ */
+export function parseDepositPath(
+  path: string,
+  coinType: number = SANDBOX_DEPOSIT_PATH_PREFIX[1],
+): [number, number] | null {
+  const prefix = `m/44'/${coinType}'/${SANDBOX_DEPOSIT_ACCOUNT_INDEX}'`;
+  if (!path.startsWith(`${prefix}/`)) return null;
+  const match = /^(\d{1,10})'\/(\d{1,10})'$/.exec(
+    path.slice(prefix.length + 1),
+  );
   if (!match) return null;
   const a = Number(match[1]);
   const b = Number(match[2]);
@@ -119,4 +140,64 @@ export function depositSecretKey(
     ...SANDBOX_DEPOSIT_PATH_PREFIX,
     ...indexes,
   ]).key;
+}
+
+/**
+ * SLIP-0010 ed25519 derivation (hardened only, as the scheme requires):
+ * master I = HMAC-SHA512("ed25519 seed", seed); child
+ * I = HMAC-SHA512(c, 0x00 || k || ser32(i')); the key is IL, the chain code IR.
+ * Returns the 32-byte ed25519 secret (the seed `ed25519.getPublicKey` takes).
+ */
+export function slip10Ed25519(
+  seed: Uint8Array,
+  path: readonly number[],
+): Uint8Array {
+  let I = hmac(sha512, new TextEncoder().encode('ed25519 seed'), seed);
+  for (const index of path) {
+    if (!Number.isInteger(index) || index < 0 || index >= HARDENED) {
+      throw new Error(`SLIP-0010 index out of range: ${index}`);
+    }
+    const data = new Uint8Array(37);
+    data.set(I.subarray(0, 32), 1);
+    data.set(ser32(index + HARDENED), 33);
+    I = hmac(sha512, I.subarray(32), data);
+  }
+  return Uint8Array.from(I.subarray(0, 32));
+}
+
+/**
+ * The ed25519 secret of one deposit on a network with SLIP-44 `coinType`:
+ * SLIP-0010 at `m/44'/<coin>'/7007'/a'/b'` from the sandbox seed (hex).
+ */
+export function ed25519DepositSecret(
+  seedHex: string,
+  coinType: number,
+  indexes: readonly [number, number],
+): Uint8Array {
+  return slip10Ed25519(hexToBytes(seedHex), [
+    44,
+    coinType,
+    SANDBOX_DEPOSIT_ACCOUNT_INDEX,
+    ...indexes,
+  ]);
+}
+
+/**
+ * The treasury's 32-byte secret on `network` when its curve is not the EVM
+ * one: HKDF-SHA256 of the configured treasury key, salted for the sandbox and
+ * labelled with the network, so each network's key is independent of the
+ * others and of the EVM key it comes from, and no new variable is needed.
+ */
+export function treasurySubkey(
+  treasuryHex: string,
+  network: PaymentNetwork,
+): Uint8Array {
+  const encode = (text: string) => new TextEncoder().encode(text);
+  return hkdf(
+    sha256,
+    hexToBytes(treasuryHex),
+    encode(SANDBOX_TREASURY_KDF_SALT),
+    encode(`treasury:${network}`),
+    32,
+  );
 }

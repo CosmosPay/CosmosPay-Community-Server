@@ -7,7 +7,6 @@ import type { AppConfig } from '@/config/configuration';
 import type { CrossChainAsset } from '@/cross-chain-swaps/cross-chain-assets';
 import { CROSS_CHAIN_NETWORKS } from '@/cross-chain-swaps/cross-chain-networks';
 import type { CrossChainNetworkId } from '@/cross-chain-swaps/cross-chain-swaps.constants';
-import { addressOfSecretKey } from '@/evm/evm-transaction';
 import { NEAR_INTENTS_REFERRAL } from '@/near-intents/near-intents.constants';
 import type {
   NearIntentsQuoteRequest,
@@ -24,11 +23,7 @@ import {
   type PaymentNetwork,
   paymentNetworkName,
 } from '@/payment-intents/payment-networks';
-import {
-  depositPath,
-  depositSecretKey,
-  newDepositIndexes,
-} from '@/sandbox-settlement/sandbox-hd';
+import { SandboxLedgers } from '@/sandbox-settlement/sandbox-ledgers.service';
 import {
   sandboxAmountIn,
   sandboxAssetId,
@@ -60,7 +55,10 @@ export interface SandboxAvailability {
  */
 @Injectable()
 export class SandboxDepositRoute {
-  constructor(private readonly config: ConfigService<AppConfig, true>) {}
+  constructor(
+    private readonly config: ConfigService<AppConfig, true>,
+    private readonly ledgers: SandboxLedgers,
+  ) {}
 
   /** Both secrets set: without them no test network is settled. */
   isConfigured(): boolean {
@@ -78,7 +76,7 @@ export class SandboxDepositRoute {
       reason,
       asset: null,
     });
-    if (entry.kind !== 'evm') return unavailable(entry.reason);
+    if (entry.kind === 'unavailable') return unavailable(entry.reason);
     if (!this.isConfigured()) {
       return unavailable(
         'Sandbox payments from other networks are not set up on this deployment.',
@@ -175,8 +173,9 @@ export class SandboxDepositRoute {
    * Prices paying `intent` from `request`'s asset in the sandbox: one for one,
    * no commission, for the link's amount or, on a link without one, the
    * amount the payer typed (`requestedAmountOut`, as on mainnet). A live price
-   * also makes the deposit address: a fresh HD path, whose address is the
-   * deposit's and whose path is kept as the correlation id (the key is never
+   * also makes the deposit target on the origin network (its ledger's
+   * `newDeposit`): a fresh HD address, or the treasury and a destination tag on
+   * the XRP Ledger, whose locator is kept as the correlation id (no key is ever
    * stored: the seed rebuilds it). A merchant fee is refused for now.
    */
   price(
@@ -216,15 +215,9 @@ export class SandboxDepositRoute {
     const deadline = new Date(
       Date.now() + SANDBOX_DEPOSIT_DEADLINE_SECONDS * 1000,
     ).toISOString();
-    const indexes = live ? newDepositIndexes() : null;
-    const depositAddress = indexes
-      ? addressOfSecretKey(
-          depositSecretKey(
-            this.config.get('sandbox', { infer: true }).depositSeed,
-            indexes,
-          ),
-        )
-      : undefined;
+    const target = live
+      ? this.ledgers.for(request.originChain).newDeposit(request.originChain)
+      : null;
 
     const quoteRequest: NearIntentsQuoteRequest = {
       dry: !live,
@@ -244,14 +237,20 @@ export class SandboxDepositRoute {
     };
     const amountInUnits = parseUnits(amountIn, origin.decimals).toString();
     const response: NearIntentsQuoteResponse = {
-      correlationId: indexes
-        ? `${SANDBOX_CORRELATION_PREFIX}${depositPath(indexes)}`
+      correlationId: target
+        ? `${SANDBOX_CORRELATION_PREFIX}${target.locator}`
         : `${SANDBOX_CORRELATION_PREFIX}dry`,
       timestamp: new Date().toISOString(),
       signature: 'sandbox',
       quoteRequest,
       quote: {
-        ...(depositAddress ? { depositAddress, deadline } : {}),
+        ...(target
+          ? {
+              depositAddress: target.address,
+              ...(target.memo === null ? {} : { depositMemo: target.memo }),
+              deadline,
+            }
+          : {}),
         amountIn: amountInUnits,
         amountInFormatted: amountIn,
         amountInUsd: amountIn,
