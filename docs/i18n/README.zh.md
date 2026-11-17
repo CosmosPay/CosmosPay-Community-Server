@@ -283,6 +283,9 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | GET | `/v1/payment-intents/{id}` | `payments:read` |  |
 | PATCH | `/v1/payment-intents/{id}` | `payments:write` |  |
 | DELETE | `/v1/payment-intents/{id}` | `payments:write` |  |
+| GET | `/v1/payment-intents/{id}/deposits` | `payments:read` |  |
+| GET | `/v1/payment-intents/{id}/payer-emails` | `payments:read` |  |
+| GET | `/v1/payment-intents/{id}/route-check` | `payments:read` |  |
 | GET | `/v1/payment-intents/{id}/transitions` | `payments:read` |  |
 | POST | `/v1/payment-intents/{id}/validate` | `payments:write` |  |
 | GET | `/v1/payment-links/{id}` | 无 — `@Public()`，按客户端地址计预算 |  |
@@ -290,6 +293,11 @@ docs/i18n/                        this README in es, pt, de, fr, hi, zh
 | POST | `/v1/payment-links/{id}/events` | 无：`@Public()`，按客户端地址计预算 |  |
 | GET | `/v1/payment-links/{id}/solana-pay` | 无：`@Public()`，按客户端地址计预算 |  |
 | POST | `/v1/payment-links/{id}/solana-pay` | 无：`@Public()`，按客户端地址计预算 |  |
+| GET | `/v1/payment-links/{id}/deposit-assets` | 无：`@Public()`，按客户端地址计预算 |  |
+| POST | `/v1/payment-links/{id}/quote` | 无：`@Public()`，按客户端地址计预算 |  |
+| POST | `/v1/payment-links/{id}/deposits` | 无：`@Public()`，按客户端地址计预算 |  |
+| GET | `/v1/payment-links/{id}/deposits/{depositId}` | 无：`@Public()`，按客户端地址计预算 |  |
+| POST | `/v1/payment-links/{id}/payer` | 无：`@Public()`，按客户端地址计预算 |  |
 | GET | `/v1/payment-links/fiat/{id}` | 无：`@Public()`，按客户端地址计预算 |  |
 | POST | `/v1/payment-links/fiat/{id}/sessions` | 无：`@Public()`，按客户端地址计预算 |  |
 | GET | `/v1/plugins` | `plugins:read` |  |
@@ -715,6 +723,20 @@ devnet 和 Monad testnet（10143）——所有链上的 `network` 都存为 `pu
 - **每个客户端地址每分钟 60 次读取**（`PAYMENT_LINK_READ_RATE_LIMIT`；IPv6 调用方按 /64 计），超出后返回带 `Retry-After` 的 `429 rate_limited`。每 5 秒轮询一次的页面消耗 12 次。地址就是全部的键，因此页面必须从付款方的浏览器发起调用：代理这些读取或在服务端渲染它们的服务器，会把所有付款方放进它唯一的一个桶里。
 - **id 难以猜测，但不是秘密。** id 是 Prisma 的 `cuid()`（v1）：毫秒时间戳、计数器、主机指纹，以及来自 `Math.random()` 的约 41 位随机数，而 `Math.random()` 并非密码学生成器。在这一预算下盲猜一个 id 不可行；但仍应把链接视为付款方与商户之间的私有信息，而不是访问凭证。
 - **部署：** 从 APISIX 的无 key 路由（不带 `key-auth`）提供 `/v1/payment-links/*`，与 `/v1/public-key` 一样，否则页面会收到 `401`。本服务在该路径上不发送任何 CORS 头，因此该路由的 CORS 插件必须允许来自收银页源站的 `GET`，并暴露 `Retry-After` 和 `ratelimit-*`；否则浏览器会丢弃每个响应。
+
+### 所有网络上的支付链接，可从任意网络付款
+
+`POST /v1/payment-intents/pay` 的 `chain` 取自跨链 swap 可达的网络列表（`PAYMENT_NETWORKS`，即 `CROSS_CHAIN_NETWORK_IDS`：35 个网络）。Stellar、Solana 和 Monad 保留各自的钱包链接和 observer。在其他任何网络上，链接就是托管 checkout，付款方从不直接向商户付款：checkout 询问付款方用哪个网络和资产付款，以及该网络上的退款地址，`POST /v1/payment-links/{id}/deposits` 返回跨链路由专为这一笔付款生成的充值地址（表 `payment_deposit`）。路由按链接资产向商户支付链接的准确金额（精确输出报价），`PaymentDepositObserverService` 根据路由的报告结算 intent，以付款交易作为 `txHash`，并在 `paidFrom` 中记录所发送的内容。没有新的链索引器：充值像跨链 swap 一样被跟踪。
+
+- **仅限主网。** 该路由没有测试网（`dev` 密钥得到 `400 network_unsupported`）。资产必须是路由在该网络上交易的资产（`GET /v1/cross-chain-swaps/assets`）：用其符号指定，或在 `assetIssuer` 中用其 `contract` 指定。
+- **开放金额。** 所有网络都接受没有 `amount` 的链接：付款方在 checkout 中输入金额，报价和充值都带上它（`amount`），充值正好支付该金额。
+- **这些网络上的商户手续费以路由自身的应用费用方式收取**（其多收款方支持）：`merchantFee.wallet` 是路由内的账户（NEAR 账户 id，或以小写存储的 EVM 地址），以付款方发送的资产、按充值的整数基点记入。商户收到链接金额；`paidBy: recipient` 时为金额减去手续费。路由只向一个链上收款方付款，因此手续费不会发送到链接所在网络的地址；手续费账户从路由中提取。
+- **Stellar、Solana 和 Monad 上的链接也可从其他网络付款**，前提是在主网且没有商户手续费（这些链上的手续费在链上拆分），有无金额均可（公开读取中的 `crossChainPayment`）。没有充值地址的 Monad 链接不行：其 observer 通过商户地址上的金额识别付款，而路由的付款也会到达该地址。
+- **佣金。** 从其他网络付款时，会在链接金额之外向 `NEAR_INTENTS_FEE_RECIPIENT` 支付套餐的 swap 佣金（`X-Plan-Swap-Fee-Bps`）：商户收到链接金额，费用由付款方的充值承担。费率在创建链接时读取（`crossChainFeeBps`），因为充值路由不需要密钥。费率没有收款方时，新网络上的链接会被拒绝（`503 misconfigured`）；在 Stellar、Solana 和 Monad 上，链接创建时不支持从其他网络付款。
+- **无需密钥且有边界。** 充值路由是 `/v1/payment-links/{id}` 下的 `@Public()` 路由，即网关已有的无密钥路由：链接 id 就是凭证。充值只向链接的收款地址支付其金额，只退款到 `refundTo`；同一客户端再次请求同一资产和退款地址时，会拿回它已打开的充值。每个客户端（一个 IPv4 地址或一个 IPv6 /48，仅以 HMAC 形式存储）在每个链接上最多有 `PAYMENT_DEPOSIT_MAX_OPEN_PER_CLIENT`（2）个未完成充值（`409`），因此持有链接的人无法占用其他付款方的名额；每个链接每 `PAYMENT_DEPOSIT_LINK_WINDOW_MS`（5 分钟）从所有客户端接受 `PAYMENT_DEPOSIT_LINK_BUDGET`（20）个新充值，这是一个会回补的预算，超出时返回 `429` 和 `Retry-After`，而不是可能把付款方挡在外面的未完成充值计数。超过期限仍未付款的充值不计入任何限制。名额在实时报价之前于链接的 advisory lock 下预留（`payment_deposit_reservation`），因此并发请求无法同时通过计数。按客户端地址计预算：`payment-links:deposit-assets`（每分钟 30）、`payment-links:quote`（30）、`payment-links:deposits`（10）、`payment-links:deposit-read`（60）。 商户可以为单个链接提高这两项（创建时或通过 `PATCH` 设置 `depositLimits`），上限为每个付款方 `PAYMENT_DEPOSIT_MAX_OPEN_PER_CLIENT_CEILING`（10）、每个窗口 `PAYMENT_DEPOSIT_LINK_BUDGET_CEILING`（200），由本服务校验。
+- **最低金额。** 路由有各自的最低金额，且会随时间变化。`GET /v1/payment-intents/{id}/route-check` 按链接金额对主要来源（`PAYMENT_ROUTE_PROBE_ORIGINS`）进行试算报价，供 dashboard 提醒哪些来源无法支付该金额（从不阻止链接）；`deposit-assets` 以 `routes` 返回同样的检查，供 checkout 带原因禁用这些来源。被拒绝的报价返回 `400 provider_error` 及原因，在任何充值地址生成之前显示。
+- **付款方邮箱与收据。** 托管 checkout 在提供任何付款方式之前先要求填写邮箱，并通过 `POST /v1/payment-links/{id}/payer` 将其记录为一个 checkout 会话：第一次调用返回一个随机的 `payerToken`（只存储其 SHA-256，且从不写入日志），页面保存它并在之后的调用中发送（更改邮箱、`events`、`deposits`）。每个会话保留自己的邮箱，任何会话都不能更改其他会话的邮箱，因此第二个访问者永远不会阻挡付款方。会话还可凭 token 在 `events` 上登记其付款方式（`address`，其钱包付款的账户；`txHash`，其钱包返回的交易）。付款成功后，`PaymentReceiptsService` 通过本服务的邮件发送器（`MAIL_*`）以该会话的语言发送收据，在各副本间只认领一次，并由 `PaymentReceiptSweeperService` 在三天内重试：从其他网络付款时发给充值所属的会话（只有它拿到了该充值地址）；否则发给登记的交易或账户与结算相符的会话（证明只有在交易链上时间之前至少 `PAYMENT_PAYER_PROOF_MARGIN_MS`（30 秒）登记时才计入；该时间未知时从不计入；两个会话都匹配时也不计入）；否则，当恰好只有一个会话填写了邮箱时发给它；否则不发送（`receiptSkippedAt`），商户可通过 `GET /v1/payment-intents/{id}/payer-emails` 查看填写的邮箱。`sent` 报告不证明任何事，也不决定任何事。只有在有证明（充值或匹配）时，付款方才会被关联到商户的客户（`emailProvidedByPayer: true`：未验证），且从不合并到商户创建的客户。在 checkout 之外扫描的钱包链接不带邮箱，因此无法发送收据。
+- **无人验证的地址，因此收据有边界。** 收据只包含本服务生成的内容（金额、资产、网络、日期、付款 id 和交易，以及指向 checkout 上付款页面和浏览器上交易的链接），从不包含链接的留言或其他商户文字。一个地址每天从所有商户合计最多收到 `PAYMENT_RECEIPT_MAX_PER_RECIPIENT`（10）份收据，一个商户每天最多发送 `PAYMENT_RECEIPT_MAX_PER_MERCHANT`（1000）份：超过任一限制的收据会等待窗口。剩余风险：如果付款方的钱包既不报告账户也不报告交易（例如在另一台设备上扫描的钱包链接），在多个会话填写了邮箱的链接上不会自动收到收据；商户可以看到填写的邮箱。
 
 ### Solana 与 Monad 上的钱包登录
 
@@ -1684,6 +1706,21 @@ registry 不被信任：`install` 在写入任何内容前验证签名，服务�
 - **受保护付款同样遵守 DeFindex 的规则**：Trustless Work 构建的每个 envelope 在被记录或签名之前都会经过检查，其 submit 只转发这些记录（见*受保护付款（Trustless Work）*）。其买家路由是原生插件中唯一不需要 API key 的路由组。
 
 ## 升级 — 破坏性变更与部署说明
+
+### 支付链接：所有网络上的开放金额、商户手续费和收据
+
+- **迁移 `20261117120000_payment_link_payer_and_limits`** 为 `payment_intent` 增加可空列（`payerEmail`、`payerLang`、`receiptClaimedAt`、`receiptSentAt`、`depositMaxPerPayer`、`depositBudgetPerWindow`），为 `payment_deposit` 增加（`payerEmail`、`payerLang`、`merchantFee`），并增加 `customer.emailProvidedByPayer`（默认 `false`）。在每个数据库上运行 `migrate deploy`。
+- **迁移 `20261117121000_payment_receipt_safety`、`20261117122000_payment_payer_sessions`、`20261117123000_payment_payer_session_proof` 和 `20261117124000_payment_intent_paid_on_chain_at`** 增加 `payment_intent.receiptTo`、`receiptToAt` 和 `receiptSkippedAt`、表 `payment_payer_session` 以及 `payment_deposit.payerSessionId`，并删除本版本第一个迁移添加的付款方列（`payment_intent.payerEmail`、`payerLang`；`payment_deposit.payerEmail`、`payerLang`），这些列从未存放数据。收据不再包含链接的留言。
+- **新路由：** 无密钥的 `POST /v1/payment-links/{id}/payer`（返回 `payerToken`）、`GET /v1/payment-intents/{id}/route-check` 和 `GET /v1/payment-intents/{id}/payer-emails`（`payments:read`）。`POST /v1/payment-links/{id}/deposits` 现在要求 `payerToken`，`events` 也接受它以及 `address` 和 `txHash`；没有金额的链接上，报价和充值接受 `amount`；`deposit-assets` 在 `data` 旁返回 `routes`。
+- **收据需要邮件发送器：** 设置 `MAIL_FROM` 以及 `MAIL_RESEND_API_KEY` 或 `MAIL_SMTP_*`。缺少时收据会等待（并记录日志），在配置发送方后的三天内发出。
+- **新增响应字段：** 支付意图（及其 webhook）上的 `depositLimits`、`receiptTo`、`receiptSentAt` 和 `receiptSkippedAt`，充值上的 `merchantFee`，客户上的 `emailProvidedByPayer`。
+
+### 支付链接：所有网络，可从任意网络付款
+
+- **迁移 `20261116120000_payment_deposits`** 创建 `payment_deposit` 与 `payment_deposit_reservation` 表，并为 `payment_intent` 增加两个可空列（`crossChainFeeBps`、`paidFrom`）；不改写任何已有数据。在新版本提供服务前，在每个数据库上运行 `migrate deploy`。
+- **支付意图的 `chain` 新增 32 个网络**（`POST /v1/payment-intents/pay`、列表筛选、响应和 webhook 负载）。按 `stellar`、`solana`、`monad` 分支的集成必须处理其他网络。公开读取中 `payTo` 现在可为空（在这些网络上为 null），并新增 `crossChainPayment`；所有者读取和 webhook 中新增 `paidFrom`。
+- **新路由：** 无密钥的 `GET /v1/payment-links/{id}/deposit-assets`、`POST /v1/payment-links/{id}/quote`、`POST /v1/payment-links/{id}/deposits` 和 `GET /v1/payment-links/{id}/deposits/{depositId}`，以及 `GET /v1/payment-intents/{id}/deposits`（`payments:read`）。网关的无密钥 `/v1/payment-links/*` 路由已支持 GET 和 POST。
+- **没有新变量**，但凡是套餐收取 swap 佣金的部署都必须设置 `NEAR_INTENTS_FEE_RECIPIENT`：否则新网络上的链接会被拒绝（`503`），Stellar、Solana 或 Monad 上的链接创建时不支持从其他网络付款。充值 observer 与其他 observer 一起运行（`OBSERVER_ENABLED`）。
 
 ### P2P 入金：以本地货币计的二维码收款，以及市场的订单 webhook
 

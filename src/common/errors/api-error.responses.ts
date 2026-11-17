@@ -118,6 +118,13 @@ export const API_ERROR_CASES: Readonly<Record<ApiErrorCode, ApiErrorCase>> = {
     message: 'A swap already exists for this Idempotency-Key',
     path: '/v1/swaps',
   },
+  [ApiErrorCode.PayerSessionUnknown]: {
+    statuses: [400],
+    summary: 'The checkout session is not one of this link',
+    message:
+      'This checkout session is not known for this payment link: give the email again.',
+    path: '/v1/payment-links/cmh4x2k9a0001l70g8v5q3z2w/deposits',
+  },
   [ApiErrorCode.OperationInFlight]: {
     statuses: [409],
     summary: 'A conflicting operation is still settling',

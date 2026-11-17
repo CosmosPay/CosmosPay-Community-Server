@@ -109,7 +109,7 @@ export class StellarVerifierService implements PaymentVerifier {
     }
 
     const payer = (match as Horizon.ServerApi.PaymentOperationRecord).from;
-    return { valid: true, txHash, payer };
+    return { valid: true, txHash, payer, paidAt: new Date(tx.created_at) };
   }
 
   /**
@@ -183,7 +183,12 @@ export class StellarVerifierService implements PaymentVerifier {
           continue;
         }
         const payer = (op as Horizon.ServerApi.PaymentOperationRecord).from;
-        return { valid: true, txHash: op.transaction_hash, payer };
+        return {
+          valid: true,
+          txHash: op.transaction_hash,
+          payer,
+          paidAt: new Date(op.created_at),
+        };
       }
 
       // A short page is the last one: the account has no older payments.

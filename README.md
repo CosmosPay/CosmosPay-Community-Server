@@ -320,6 +320,9 @@ Paths use the OpenAPI `{param}` form.
 | GET | `/v1/payment-intents/{id}` | `payments:read` |  |
 | PATCH | `/v1/payment-intents/{id}` | `payments:write` |  |
 | DELETE | `/v1/payment-intents/{id}` | `payments:write` |  |
+| GET | `/v1/payment-intents/{id}/deposits` | `payments:read` |  |
+| GET | `/v1/payment-intents/{id}/payer-emails` | `payments:read` |  |
+| GET | `/v1/payment-intents/{id}/route-check` | `payments:read` |  |
 | GET | `/v1/payment-intents/{id}/transitions` | `payments:read` |  |
 | POST | `/v1/payment-intents/{id}/validate` | `payments:write` |  |
 | GET | `/v1/payment-links/{id}` | none — `@Public()`, budgeted per client address |  |
@@ -327,6 +330,11 @@ Paths use the OpenAPI `{param}` form.
 | POST | `/v1/payment-links/{id}/events` | none: `@Public()`, budgeted per client address |  |
 | GET | `/v1/payment-links/{id}/solana-pay` | none: `@Public()`, budgeted per client address |  |
 | POST | `/v1/payment-links/{id}/solana-pay` | none: `@Public()`, budgeted per client address |  |
+| GET | `/v1/payment-links/{id}/deposit-assets` | none: `@Public()`, budgeted per client address |  |
+| POST | `/v1/payment-links/{id}/quote` | none: `@Public()`, budgeted per client address |  |
+| POST | `/v1/payment-links/{id}/deposits` | none: `@Public()`, budgeted per client address |  |
+| GET | `/v1/payment-links/{id}/deposits/{depositId}` | none: `@Public()`, budgeted per client address |  |
+| POST | `/v1/payment-links/{id}/payer` | none: `@Public()`, budgeted per client address |  |
 | GET | `/v1/payment-links/fiat/{id}` | none: `@Public()`, budgeted per client address |  |
 | POST | `/v1/payment-links/fiat/{id}/sessions` | none: `@Public()`, budgeted per client address |  |
 | GET | `/v1/plugins` | `plugins:read` |  |
@@ -997,6 +1005,20 @@ removed: it is built field by field (`toPublicPaymentLink`), so a column added t
   no CORS headers on this path, so that route's CORS plugin must allow `GET` from
   the checkout's origin and expose `Retry-After` and `ratelimit-*`; without it the
   browser discards every answer.
+
+### Payment links on every network, paid from any network
+
+`POST /v1/payment-intents/pay` takes `chain` from the list cross-chain swaps reach (`PAYMENT_NETWORKS`, which is `CROSS_CHAIN_NETWORK_IDS`: 35 networks). Stellar, Solana and Monad keep their wallet links and their observer. On every other network the link is the hosted checkout and the payer never pays the merchant directly: the checkout asks which network and asset they pay with and a refund address there, and `POST /v1/payment-links/{id}/deposits` answers a deposit address the cross-chain route makes for that one payment (table `payment_deposit`). The route pays the merchant exactly the link's amount in its asset (an exact-output quote), and `PaymentDepositObserverService` settles the intent on the route's report, with the payout transaction as `txHash` and `paidFrom` naming what was sent. No new chain indexer: a deposit is followed like a cross-chain swap.
+
+- **Mainnet only.** The route has no test network (a `dev` key gets `400 network_unsupported`). The asset must be one the route trades on that network (`GET /v1/cross-chain-swaps/assets`): name it by its symbol, or by its `contract` as `assetIssuer`.
+- **Open amounts.** A link without `amount` is accepted on every network: the payer types the amount in the checkout, the quote and the deposit carry it (`amount`), and the deposit pays exactly that.
+- **Merchant fees on these networks ride as the route's own app fee** (its multi-recipient fee support): `merchantFee.wallet` is an account inside the route (a NEAR account id, or an EVM address, stored lowercase), credited in the asset the payer sent, in whole basis points of the deposit. The merchant receives the link amount, or the amount less the fee with `paidBy: recipient`. The route pays one on-chain recipient, so the fee is not sent to an address on the link's network; the fee account withdraws it from the route.
+- **Links on Stellar, Solana and Monad can be paid from another network too** when they are on mainnet and have no merchant fee (their fee is split on the chain itself), with or without an amount (`crossChainPayment` on the public read). A Monad link without deposit addresses cannot: its observer recognises a payment by its amount at the merchant's address, where a payout would land too.
+- **The commission.** A payment from another network pays the plan's swap commission (`X-Plan-Swap-Fee-Bps`) to `NEAR_INTENTS_FEE_RECIPIENT`, on top of the link amount: the merchant receives the amount and the payer's deposit carries the fees. The rate is read when the link is created (`crossChainFeeBps`), because the deposit routes take no key. A rate with nowhere to go refuses a link on the new networks (`503 misconfigured`); on Stellar, Solana and Monad the link is created without payments from other networks.
+- **Keyless and bounded.** The deposit routes are `@Public()` under `/v1/payment-links/{id}`, the keyless gateway route that already exists: the link id is the capability. A deposit pays only the link's destination its amount and refunds only `refundTo`; the same client asking again for the same asset and refund address gets its open deposit back. Each client (an IPv4 address or an IPv6 /48, stored only as an HMAC) may have `PAYMENT_DEPOSIT_MAX_OPEN_PER_CLIENT` (2) open per link (`409`), so nobody holding a link can take another payer's slot; a link takes `PAYMENT_DEPOSIT_LINK_BUDGET` (20) new deposits per `PAYMENT_DEPOSIT_LINK_WINDOW_MS` (5 minutes) from all clients, a refilling budget answered with `429` and `Retry-After`, never a count of open deposits that could lock payers out. An unpaid deposit past its deadline counts for nothing. A slot is reserved under the link's advisory lock before the live quote (`payment_deposit_reservation`), so concurrent requests cannot pass the count together. Budgets per client address: `payment-links:deposit-assets` (30 a minute), `payment-links:quote` (30), `payment-links:deposits` (10), `payment-links:deposit-read` (60). The merchant may raise both for a link (`depositLimits` on create or `PATCH`) up to `PAYMENT_DEPOSIT_MAX_OPEN_PER_CLIENT_CEILING` (10) per payer and `PAYMENT_DEPOSIT_LINK_BUDGET_CEILING` (200) per window, checked here.
+- **Minimums.** Routes have minimum amounts of their own that change over time. `GET /v1/payment-intents/{id}/route-check` dry-quotes the main origins (`PAYMENT_ROUTE_PROBE_ORIGINS`) for the link's amount, so the dashboard warns about the ones that cannot pay it (it never blocks the link); `deposit-assets` answers the same check as `routes`, so the checkout disables those origins with the reason. A refused quote is `400 provider_error` with its reason, shown before any deposit address exists.
+- **The payer's email and the receipt.** The hosted checkout asks for an email before it offers any way to pay and records it with `POST /v1/payment-links/{id}/payer` as one checkout session: the first call answers a random `payerToken` (only its SHA-256 is stored, and it is never logged), which the page keeps and sends on its later calls (a changed email, `events`, `deposits`). Every session keeps its own email and none can change another's, so a second visitor never blocks the payer. With its token, a session also registers what it pays with on `events` (`address`, the account its wallet pays from; `txHash`, the transaction its wallet answered). When the payment succeeds, `PaymentReceiptsService` emails a receipt in that session's language through this service's mailer (`MAIL_*`), claimed once across replicas and retried by `PaymentReceiptSweeperService` for three days: to the deposit's session for a payment from another network (only it was given that deposit address); else to the session whose registered transaction or account matches the settlement's (a proof counts only when registered `PAYMENT_PAYER_PROOF_MARGIN_MS` (30 s) before the transaction's on-chain time, never when that time is unknown, and never when two sessions match it); else, when exactly one session gave an email, to it; else to nobody (`receiptSkippedAt`), and the merchant reads the emails given with `GET /v1/payment-intents/{id}/payer-emails`. A `sent` report proves nothing and decides nothing. The payer is linked to the merchant's customers (`emailProvidedByPayer: true`: unverified) only on a proof (a deposit or a match), never merged into a customer the merchant created. A wallet link scanned outside the checkout carries no email, so no receipt can follow it.
+- **An address nobody verified, so the receipt is bounded.** The receipt carries only what this service generates (amount, asset, network, date, the payment id and transaction, and links to the payment's checkout page and to the transaction's explorer), never the link's message or any other merchant text. One address gets at most `PAYMENT_RECEIPT_MAX_PER_RECIPIENT` (10) receipts a day from every merchant together, and one merchant sends at most `PAYMENT_RECEIPT_MAX_PER_MERCHANT` (1000): a receipt over either waits for the window. Residual risk: a payer whose wallet reports neither its account nor its transaction (a wallet link scanned on another device, say), on a link where several sessions gave an email, gets no automatic receipt; the merchant sees the emails given.
 
 ### Wallet sign-in on Solana and Monad
 
@@ -2519,6 +2541,21 @@ the service under `src/native-plugins/<slug>/`, switched on by the same
   are the one native plugin route group that takes no API key.
 
 ## Upgrading — breaking changes and deploy notes
+
+### Payment links: open amounts, merchant fees and receipts on every network
+
+- **Migration `20261117120000_payment_link_payer_and_limits`** adds nullable columns to `payment_intent` (`payerEmail`, `payerLang`, `receiptClaimedAt`, `receiptSentAt`, `depositMaxPerPayer`, `depositBudgetPerWindow`) and `payment_deposit` (`payerEmail`, `payerLang`, `merchantFee`), and `customer.emailProvidedByPayer` (default `false`). Run `migrate deploy` on each database.
+- **Migrations `20261117121000_payment_receipt_safety`, `20261117122000_payment_payer_sessions`, `20261117123000_payment_payer_session_proof` and `20261117124000_payment_intent_paid_on_chain_at`** add `payment_intent.receiptTo`, `receiptToAt` and `receiptSkippedAt`, the table `payment_payer_session` and `payment_deposit.payerSessionId`, and drop the payer columns the first migration of this release added (`payment_intent.payerEmail`, `payerLang`; `payment_deposit.payerEmail`, `payerLang`), which never held data. Receipts no longer include the link's message.
+- **New routes:** the keyless `POST /v1/payment-links/{id}/payer` (answers `payerToken`), `GET /v1/payment-intents/{id}/route-check` and `GET /v1/payment-intents/{id}/payer-emails` (`payments:read`). `POST /v1/payment-links/{id}/deposits` now requires `payerToken`, and `events` takes it with `address` and `txHash`; the quote and the deposit take `amount` on a link without one; `deposit-assets` answers `routes` beside `data`.
+- **Receipts need the mailer:** set `MAIL_FROM` and `MAIL_RESEND_API_KEY` or `MAIL_SMTP_*`. Without them receipts wait (logged) and go out once a sender is configured, for up to three days.
+- **Additive response fields:** `depositLimits`, `receiptTo`, `receiptSentAt` and `receiptSkippedAt` on payment intents (and their webhooks), `merchantFee` on deposits, `emailProvidedByPayer` on customers.
+
+### Payment links: every network, paid from any network
+
+- **Migration `20261116120000_payment_deposits`** creates the `payment_deposit` and `payment_deposit_reservation` tables and adds two nullable columns to `payment_intent` (`crossChainFeeBps`, `paidFrom`); nothing is rewritten. Run `migrate deploy` on each database before the new build serves.
+- **`chain` on payment intents takes 32 more networks** (`POST /v1/payment-intents/pay`, the list filter, the responses and the webhook payloads). An integration that switches on `stellar`, `solana` and `monad` must handle the others. On the public read `payTo` is now nullable (null on those networks) and `crossChainPayment` is new; on the owner's reads and the webhooks `paidFrom` is new.
+- **New routes:** the keyless `GET /v1/payment-links/{id}/deposit-assets`, `POST /v1/payment-links/{id}/quote`, `POST /v1/payment-links/{id}/deposits` and `GET /v1/payment-links/{id}/deposits/{depositId}`, and `GET /v1/payment-intents/{id}/deposits` (`payments:read`). The gateway's keyless `/v1/payment-links/*` route already serves GET and POST.
+- **No new variable**, but `NEAR_INTENTS_FEE_RECIPIENT` must be set wherever a plan charges a swap commission: without it a link on the new networks is refused (`503`) and a link on Stellar, Solana or Monad is created without payments from other networks. The deposit observer runs with the others (`OBSERVER_ENABLED`).
 
 ### P2P on-ramp: charges with a QR in local money, and the marketplace's order webhook
 

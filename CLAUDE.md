@@ -365,6 +365,61 @@ table. These are the rules that did not hold on their own:
   chain's own `eth_chainId`: a wrong id sends the deposit to another chain. A
   1Click blockchain with no entry (`qtc`, `adi`) is never offered: an address this
   service cannot validate is a refund it cannot promise.
+- **Payment links settle on every one of those networks** (`PAYMENT_NETWORKS` in
+  `src/payment-intents/payment-networks.ts` IS `CROSS_CHAIN_NETWORK_IDS`: never a
+  second list). Stellar, Solana and Monad keep their wallet links and verifiers; a
+  link on any other network (`DepositNetwork`) has no verifier of ours and is paid
+  only through `payment_deposit` rows: an EXACT_OUTPUT 1Click quote per payer that
+  pays the intent's destination exactly its amount, polled by
+  `PaymentDepositObserverService`, whose SUCCEEDED settles the intent
+  (`settleFromDeposit`, the payout hash as `txHash`, `paidFrom` written with the
+  status). Code that reads `intent.chain` goes through `paymentNetworkOf` and
+  `isChain` before reaching a `Record<Chain, …>` (verifiers, `PAY_TO`, tx-id rules):
+  the chain observer never scans a deposit network, `validate` and a PATCHed
+  `txHash` are refused there. A link on the three chains takes deposits too only
+  with `crossChainFeeBps` recorded at create (mainnet, no merchant fee, not a
+  Monad link found by amount), because the deposit routes are keyless and
+  the plan rate comes from a header. A link with no amount is paid for the amount
+  the payer types (`requestedAmountOut`); a merchant fee on a deposit network is
+  the route's own app fee (`merchantAppFee`, a route account, never an on-chain
+  address of the link's network); `PaymentRouteProbe` dry-quotes the main origins
+  for minimums and never blocks a link. Every deposit carries the payer's email,
+  and `PaymentReceiptsService` mails the receipt on `PAYMENT_INTENT_SUCCEEDED`
+  (claimed by `receiptClaimedAt`, retried by `PaymentReceiptSweeperService`).
+  That email is typed on a keyless route and never verified (security review,
+  2026-11-16, final design), so: each hosted checkout session records its own
+  (`payment_payer_session`, keyed by the SHA-256 of a random `payerToken` only
+  its browser holds; the token is never stored or logged), no session can change
+  another's and none is ever refused for another's email; a deposit belongs to
+  the session that opened it, which is its proof; a native payment's receipt goes
+  to the session whose wallet account or transaction (registered with its token
+  on `events`) matches the settlement's `source` / `txHash` (registered at least
+  `PAYMENT_PAYER_PROOF_MARGIN_MS` before the transaction's on-chain time,
+  `paidOnChainAt`, never when that time is unknown: fail closed; matched by that
+  session alone; a hash the observer already saw is refused),
+  else to the only session if exactly one gave an email (receipt only, no
+  customer link), else nobody (`receiptRecipient`, `receiptSkippedAt`); a `sent`
+  report is informational and decides nothing; a customer is linked only on a
+  proof; a receipt carries only what this service generates (no
+  `msg`, no merchant text; its only links are our checkout page and the
+  explorer, `paymentExplorerTxUrl`) and is booked against
+  `PAYMENT_RECEIPT_MAX_PER_RECIPIENT` / `PAYMENT_RECEIPT_MAX_PER_MERCHANT` a day
+  under a per-recipient advisory lock; and `linkPayerEmail` attaches only to a
+  customer made from payer input, never to one the merchant created. A deposit
+  is stored on its link's tier (`intent.network`), and each tier has its own
+  observer. Open deposits are capped per client
+  (`PAYMENT_DEPOSIT_MAX_OPEN_PER_CLIENT`: an IPv4 address or an IPv6 /48, stored as
+  an HMAC, `409`), and NEW deposits per link are a refilling creation budget
+  (`PAYMENT_DEPOSIT_LINK_BUDGET` per `PAYMENT_DEPOSIT_LINK_WINDOW_MS`, `429` with
+  `Retry-After`). A merchant may raise both per link (`depositLimits`), never past
+  `PAYMENT_DEPOSIT_MAX_OPEN_PER_CLIENT_CEILING` / `PAYMENT_DEPOSIT_LINK_BUDGET_CEILING`,
+  and never below the defaults. Never a hard cap on a link's open deposits: anyone holding the id
+  could fill it and lock the real payer out (security review, 2026-11-16; product
+  decision, do not reintroduce). An unpaid deposit past its deadline counts for
+  nothing. Both checks are one step: a slot is reserved under the link's advisory
+  lock (`pg_advisory_xact_lock(PAYMENT_DEPOSIT_LOCK_CLASS, hashtext(id))`) before
+  the live quote and released after it, so concurrent creates cannot all pass
+  the count and the slow quote holds no lock or connection.
 - **Monad swaps with a merchant fee go through `contracts/MerchantFeeSwapRouter.sol`**
   (`KURU_MERCHANT_FEE_ROUTER`), one deployment per Kuru Flow router, with no owner. It
   is not a deposit address: wallets approve it and send it value, so the venue checks

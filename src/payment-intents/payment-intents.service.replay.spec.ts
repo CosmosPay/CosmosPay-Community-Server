@@ -108,6 +108,7 @@ describe('PaymentIntentsService create replay', () => {
       new ConsumerResolverService(prisma),
       { ensureForPayer: jest.fn() } as never,
       {} as never,
+      {} as never,
     );
     return { service, prisma, loadAccount };
   }

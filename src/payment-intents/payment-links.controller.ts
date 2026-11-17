@@ -1,4 +1,5 @@
 import {
+  applyDecorators,
   Body,
   Controller,
   Get,
@@ -7,14 +8,20 @@ import {
   HttpStatus,
   Param,
   Post,
+  Req,
+  Res,
 } from '@nestjs/common';
 import {
+  ApiCreatedResponse,
   ApiNoContentResponse,
   ApiOkResponse,
   ApiOperation,
   ApiParam,
   ApiTags,
 } from '@nestjs/swagger';
+import type { Request, Response } from 'express';
+import { RATE_LIMIT_HEADER } from '@/common/rate-limit.constants';
+import { clientIp } from '@/common/client-ip';
 import { ApiErrorResponse } from '@/common/decorators/api-error-response.decorator';
 import { ApiUpstream } from '@/common/decorators/api-upstream.decorator';
 import { Public } from '@/common/decorators/public.decorator';
@@ -30,11 +37,116 @@ import {
 import { PayerTransactionEntity } from '@/payment-intents/entities/payer-transaction.entity';
 import { PublicPaymentLinkEntity } from '@/payment-intents/entities/public-payment-link.entity';
 import {
+  PAYMENT_DEPOSIT_ASSETS_RATE_LIMIT,
+  PAYMENT_DEPOSIT_CREATE_RATE_LIMIT,
+  PAYMENT_DEPOSIT_QUOTE_RATE_LIMIT,
+  PAYMENT_DEPOSIT_READ_RATE_LIMIT,
   PAYMENT_LINK_EVENT_RATE_LIMIT,
+  PAYMENT_LINK_PAYER_RATE_LIMIT,
   PAYMENT_LINK_READ_RATE_LIMIT,
   PAYMENT_LINK_TRANSACTION_RATE_LIMIT,
 } from '@/payment-intents/payment-intents.constants';
 import { PaymentLinksService } from '@/payment-intents/payment-links.service';
+import {
+  CreatePaymentDepositDto,
+  PayerContactDto,
+  PaymentDepositRequestDto,
+} from '@/payment-intents/dto/payment-deposit.dto';
+import {
+  PayerSessionEntity,
+  PaymentDepositAssetsEntity,
+  PaymentDepositEntity,
+  PaymentDepositQuoteEntity,
+} from '@/payment-intents/entities/payment-deposit.entity';
+import {
+  PaymentDepositBudgetError,
+  PaymentDepositsService,
+} from '@/payment-intents/payment-deposits.service';
+
+/**
+ * The refusals a quote and a deposit share: the link cannot be paid from
+ * another network, is no longer open, or names an asset the cross-chain route
+ * does not trade; and the 404 of an unknown id. A deposit also checks a
+ * Stellar merchant trusts an issued asset before handing out an address.
+ */
+const DepositRefusals = (route: 'quote' | 'deposits') =>
+  applyDecorators(
+    ApiErrorResponse({
+      status: 400,
+      codes: [
+        ApiErrorCode.ValidationFailed,
+        ApiErrorCode.ProviderError,
+        ApiErrorCode.InvalidStateTransition,
+        ApiErrorCode.AssetUnsupported,
+        ApiErrorCode.InvalidAmount,
+        ...(route === 'deposits' ? [ApiErrorCode.TrustlineMissing] : []),
+      ],
+      description:
+        '`validation_failed`: the link cannot be paid from another network, ' +
+        'or `refundTo` is not an address of `originChain`. `provider_error`: ' +
+        'the cross-chain route refused the payment (a minimum amount, a route ' +
+        'it cannot fill); `message` carries its reason. `invalid_state_transition`: ' +
+        'the link is no longer open. `asset_unsupported`: the asset sent, or ' +
+        "the link's own, is not traded right now. `invalid_amount`: the link's " +
+        'amount does not fit its asset.' +
+        (route === 'deposits'
+          ? ' `trustline_missing`: the Stellar merchant does not trust the ' +
+            "link's asset; only that account can add the trustline."
+          : ''),
+      examples: {
+        [ApiErrorCode.ValidationFailed]: {
+          summary: 'The link cannot be paid from another network',
+          message:
+            'This payment link cannot be paid from another network: it carries a merchant fee.',
+          path: `/v1/payment-links/cmh4x2k9a0001l70g8v5q3z2w/${route}`,
+        },
+        [ApiErrorCode.ProviderError]: {
+          summary: 'The cross-chain route refused the payment',
+          message:
+            'The cross-chain route refused the request: Temporary swap limits: minimum swap amount is $100',
+          path: `/v1/payment-links/cmh4x2k9a0001l70g8v5q3z2w/${route}`,
+        },
+        [ApiErrorCode.InvalidStateTransition]: {
+          summary: 'The link is no longer open',
+          message:
+            'Payment intent cmh4x2k9a0001l70g8v5q3z2w is SUCCEEDED: it can no longer be paid',
+          path: `/v1/payment-links/cmh4x2k9a0001l70g8v5q3z2w/${route}`,
+        },
+        [ApiErrorCode.AssetUnsupported]: {
+          summary: 'The asset cannot be sent right now',
+          message:
+            'The cross-chain route does not support asset "DOGE" on tron. GET /v1/cross-chain-swaps/assets lists the ones it does.',
+          path: `/v1/payment-links/cmh4x2k9a0001l70g8v5q3z2w/${route}`,
+        },
+        [ApiErrorCode.InvalidAmount]: {
+          summary: "The link's amount does not fit its asset",
+          message:
+            "This payment link's amount has more decimal places than USDC allows",
+          path: `/v1/payment-links/cmh4x2k9a0001l70g8v5q3z2w/${route}`,
+        },
+      },
+    }),
+    ApiErrorResponse({
+      status: 404,
+      codes: [ApiErrorCode.NotFound],
+      description: 'No payment intent has this id.',
+      examples: {
+        [ApiErrorCode.NotFound]: {
+          summary: 'No payment intent has this id',
+          message: 'Payment intent cmh4x2k9a0001l70g8v5q3z2w not found',
+          path: `/v1/payment-links/cmh4x2k9a0001l70g8v5q3z2w/${route}`,
+        },
+      },
+    }),
+    ApiErrorResponse({
+      status: 503,
+      codes: [ApiErrorCode.ProviderUnavailable, ApiErrorCode.Misconfigured],
+      description:
+        '`provider_unavailable`: the cross-chain route is down or rate ' +
+        'limiting this service; retry. `misconfigured`: this deployment ' +
+        'cannot collect the commission a payment from another network pays.',
+    }),
+  );
 
 /**
  * `GET /v1/payment-links/{id}` — what a hosted checkout page reads to show a
@@ -49,7 +161,10 @@ import { PaymentLinksService } from '@/payment-intents/payment-links.service';
 @ApiTags('payment-links')
 @Controller({ path: 'payment-links', version: '1' })
 export class PaymentLinksController {
-  constructor(private readonly paymentLinks: PaymentLinksService) {}
+  constructor(
+    private readonly paymentLinks: PaymentLinksService,
+    private readonly deposits: PaymentDepositsService,
+  ) {}
 
   @Get(':id')
   @Public()
@@ -183,6 +298,71 @@ export class PaymentLinksController {
     return this.paymentLinks.payerTransaction(id, dto.account);
   }
 
+  @Post(':id/payer')
+  @Public()
+  @RateLimit(PAYMENT_LINK_PAYER_RATE_LIMIT)
+  @HttpCode(HttpStatus.OK)
+  @Header('Cache-Control', 'no-store')
+  @ApiOperation({
+    summary:
+      "Record the payer's email before they pay, for their receipt (no API key)",
+    description:
+      'The hosted checkout asks the payer for an email before it shows any way ' +
+      'to pay and records it here, with the checkout language, as one checkout ' +
+      'session: the first call answers the session’s `payerToken` (only its ' +
+      'hash is stored), and the session sends it on its later calls (a changed ' +
+      'email, `events`, `deposits`). Every session keeps its own email and none ' +
+      'can change another’s, so a second payer never blocks the first. The ' +
+      'receipt goes to the deposit’s session, else to the session whose wallet ' +
+      'account or transaction (registered through `events`) matches the ' +
+      'settlement, else to the only session if just one gave an email (with no ' +
+      'customer link). Budgeted per client address.',
+  })
+  @ApiParam({
+    name: 'id',
+    description: 'The payment intent id, as in the link.',
+    example: 'cmh4x2k9a0001l70g8v5q3z2w',
+  })
+  @ApiOkResponse({ type: PayerSessionEntity })
+  @ApiErrorResponse({
+    status: 400,
+    codes: [ApiErrorCode.ValidationFailed, ApiErrorCode.InvalidStateTransition],
+    description:
+      '`validation_failed`: not an email, or not a session token. ' +
+      '`invalid_state_transition`: the link is no longer open.',
+    examples: {
+      [ApiErrorCode.ValidationFailed]: {
+        summary: 'Not an email',
+        message: 'email must be an email',
+        path: '/v1/payment-links/cmh4x2k9a0001l70g8v5q3z2w/payer',
+      },
+      [ApiErrorCode.InvalidStateTransition]: {
+        summary: 'The link is no longer open',
+        message:
+          'Payment intent cmh4x2k9a0001l70g8v5q3z2w is SUCCEEDED: it can no longer be paid',
+        path: '/v1/payment-links/cmh4x2k9a0001l70g8v5q3z2w/payer',
+      },
+    },
+  })
+  @ApiErrorResponse({
+    status: 404,
+    codes: [ApiErrorCode.NotFound],
+    description: 'No payment intent has this id.',
+    examples: {
+      [ApiErrorCode.NotFound]: {
+        summary: 'No payment intent has this id',
+        message: 'Payment intent cmh4x2k9a0001l70g8v5q3z2w not found',
+        path: '/v1/payment-links/cmh4x2k9a0001l70g8v5q3z2w/payer',
+      },
+    },
+  })
+  recordPayer(
+    @Param('id') id: string,
+    @Body() dto: PayerContactDto,
+  ): Promise<PayerSessionEntity> {
+    return this.paymentLinks.recordPayer(id, dto);
+  }
+
   @Post(':id/events')
   @Public()
   @RateLimit(PAYMENT_LINK_EVENT_RATE_LIMIT)
@@ -237,7 +417,10 @@ export class PaymentLinksController {
     },
   })
   event(@Param('id') id: string, @Body() dto: CheckoutEventDto): Promise<void> {
-    return this.paymentLinks.recordEvent(id, dto.event);
+    return this.paymentLinks.recordEvent(id, dto.event, dto.payerToken, {
+      address: dto.address,
+      txHash: dto.txHash,
+    });
   }
 
   @Get(':id/solana-pay')
@@ -358,5 +541,199 @@ export class PaymentLinksController {
     @Body() dto: SolanaPayAccountDto,
   ): Promise<SolanaPayTransactionEntity> {
     return this.paymentLinks.solanaPayTransaction(id, dto.account);
+  }
+
+  @Get(':id/deposit-assets')
+  @Public()
+  @RateLimit(PAYMENT_DEPOSIT_ASSETS_RATE_LIMIT)
+  @Header('Cache-Control', 'no-store')
+  @ApiOperation({
+    summary:
+      'List what a payer can pay a payment link with, from any network (no API key)',
+    description:
+      'Every network and asset the cross-chain route still trades: a payer ' +
+      'picks one, then asks `POST /v1/payment-links/{id}/quote` what paying ' +
+      'from it costs. Only for a link that can be paid from another network ' +
+      '(`crossChainPayment` on the link); any other is `validation_failed`. ' +
+      'Reachable without an API key; budgeted per client address.',
+  })
+  @ApiParam({
+    name: 'id',
+    description: 'The payment intent id, as in the link.',
+    example: 'cmh4x2k9a0001l70g8v5q3z2w',
+  })
+  @ApiOkResponse({ type: PaymentDepositAssetsEntity })
+  @ApiUpstream('Cross-chain route')
+  @ApiErrorResponse({
+    status: 400,
+    codes: [ApiErrorCode.ValidationFailed],
+    description:
+      'The link cannot be paid from another network: a test network, no ' +
+      'fixed amount, or a merchant fee.',
+    examples: {
+      [ApiErrorCode.ValidationFailed]: {
+        summary: 'The link cannot be paid from another network',
+        message:
+          'This payment link cannot be paid from another network: it has no fixed amount.',
+        path: '/v1/payment-links/cmh4x2k9a0001l70g8v5q3z2w/deposit-assets',
+      },
+    },
+  })
+  @ApiErrorResponse({
+    status: 404,
+    codes: [ApiErrorCode.NotFound],
+    description: 'No payment intent has this id.',
+    examples: {
+      [ApiErrorCode.NotFound]: {
+        summary: 'No payment intent has this id',
+        message: 'Payment intent cmh4x2k9a0001l70g8v5q3z2w not found',
+        path: '/v1/payment-links/cmh4x2k9a0001l70g8v5q3z2w/deposit-assets',
+      },
+    },
+  })
+  depositAssets(@Param('id') id: string): Promise<PaymentDepositAssetsEntity> {
+    return this.deposits.assets(id);
+  }
+
+  @Post(':id/quote')
+  @Public()
+  @RateLimit(PAYMENT_DEPOSIT_QUOTE_RATE_LIMIT)
+  // A price; nothing new is stored.
+  @HttpCode(HttpStatus.OK)
+  @Header('Cache-Control', 'no-store')
+  @ApiOperation({
+    summary:
+      'Price paying a payment link from one network and asset (no API key)',
+    description:
+      'What the payer sends (`origin.amount`, with the fees and a small ' +
+      'buffer for price moves in it; the unused part is refunded) for the ' +
+      'merchant to receive exactly the link amount in its asset (on a link ' +
+      'without one, the `amount` the payer typed). A dry quote: nothing is ' +
+      'reserved and nothing is stored. Routes have minimum amounts of their ' +
+      'own, refused as `provider_error` with the reason, so a checkout shows ' +
+      'it before any deposit address exists. Only for an open link that can be ' +
+      'paid from another network; budgeted per client address.',
+  })
+  @ApiParam({
+    name: 'id',
+    description: 'The payment intent id, as in the link.',
+    example: 'cmh4x2k9a0001l70g8v5q3z2w',
+  })
+  @ApiOkResponse({ type: PaymentDepositQuoteEntity })
+  @ApiUpstream('Cross-chain route')
+  @DepositRefusals('quote')
+  quote(
+    @Param('id') id: string,
+    @Body() dto: PaymentDepositRequestDto,
+  ): Promise<PaymentDepositQuoteEntity> {
+    return this.deposits.quote(id, dto);
+  }
+
+  @Post(':id/deposits')
+  @Public()
+  @RateLimit(PAYMENT_DEPOSIT_CREATE_RATE_LIMIT)
+  @Header('Cache-Control', 'no-store')
+  @ApiOperation({
+    summary:
+      'Open a deposit address that pays a payment link from any network (no API key)',
+    description:
+      'A live quote: an address on `originChain` made for this payment alone, ' +
+      'opened only with the payer’s `email` (their receipt goes there). ' +
+      'The payer sends `amountIn` of the origin asset there (with `depositMemo` ' +
+      'when set) before `expiresAt`; the merchant is paid exactly the link ' +
+      'amount, the link turns `SUCCEEDED` and emits `PAYMENT_INTENT_SUCCEEDED`, ' +
+      'and a deposit that cannot complete is refunded to `refundTo`. The same ' +
+      'origin asset and refund address while an earlier deposit still waits ' +
+      'from the same client answers that one. Each client address (an IPv6 ' +
+      'caller by its /48) may have two open deposits per link ' +
+      '(`409 operation_in_flight`), so no caller can take another payer’s, ' +
+      'and a link takes a limited number of new ones every few minutes ' +
+      '(`429` with `Retry-After`). Budgeted per client address too.',
+  })
+  @ApiParam({
+    name: 'id',
+    description: 'The payment intent id, as in the link.',
+    example: 'cmh4x2k9a0001l70g8v5q3z2w',
+  })
+  @ApiCreatedResponse({ type: PaymentDepositEntity })
+  @ApiUpstream('Cross-chain route', 'Horizon')
+  @DepositRefusals('deposits')
+  @ApiErrorResponse({
+    status: 409,
+    codes: [ApiErrorCode.OperationInFlight],
+    description:
+      'This client address already has two open deposit addresses on the ' +
+      'link: pay one of them, or try again once they expire. Other payers are ' +
+      'not affected.',
+    examples: {
+      [ApiErrorCode.OperationInFlight]: {
+        summary: 'Too many open deposit addresses from this client',
+        message:
+          'You already have 2 open deposit addresses for this payment link: pay one of them, or try again once they expire.',
+        path: '/v1/payment-links/cmh4x2k9a0001l70g8v5q3z2w/deposits',
+      },
+    },
+  })
+  createDeposit(
+    @Param('id') id: string,
+    @Body() dto: CreatePaymentDepositDto,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<PaymentDepositEntity> {
+    // The caller's address, as the trusted proxy saw it: the per-client cap is
+    // keyed on it (an IPv6 caller by its /48).
+    return this.deposits
+      .create(id, dto, clientIp(req))
+      .catch((err: unknown) => {
+        // The link's creation budget answers like any budget: when to come back.
+        if (err instanceof PaymentDepositBudgetError) {
+          res.setHeader(RATE_LIMIT_HEADER.retryAfter, err.retryAfterSeconds);
+        }
+        throw err;
+      });
+  }
+
+  @Get(':id/deposits/:depositId')
+  @Public()
+  @RateLimit(PAYMENT_DEPOSIT_READ_RATE_LIMIT)
+  // The status changes while the page polls it.
+  @Header('Cache-Control', 'no-store')
+  @ApiOperation({
+    summary: 'Read one deposit address of a payment link (no API key)',
+    description:
+      'What the payer sends and where, and how the payment stands, for the ' +
+      'checkout to poll every few seconds until it is `SUCCEEDED`, ' +
+      '`REFUNDED`, `FAILED` or `EXPIRED`. Both ids are needed; nothing about ' +
+      'the merchant is returned. Budgeted per client address.',
+  })
+  @ApiParam({
+    name: 'id',
+    description: 'The payment intent id, as in the link.',
+    example: 'cmh4x2k9a0001l70g8v5q3z2w',
+  })
+  @ApiParam({
+    name: 'depositId',
+    description:
+      'The deposit id, as `POST /v1/payment-links/{id}/deposits` answered it.',
+    example: 'cm3dep0s1t0001l70g8v5q3z2w',
+  })
+  @ApiOkResponse({ type: PaymentDepositEntity })
+  @ApiErrorResponse({
+    status: 404,
+    codes: [ApiErrorCode.NotFound],
+    description: 'This link has no deposit with this id.',
+    examples: {
+      [ApiErrorCode.NotFound]: {
+        summary: 'No such deposit on this link',
+        message: 'Deposit cm3dep0s1t0001l70g8v5q3z2w not found',
+        path: '/v1/payment-links/cmh4x2k9a0001l70g8v5q3z2w/deposits/cm3dep0s1t0001l70g8v5q3z2w',
+      },
+    },
+  })
+  findDeposit(
+    @Param('id') id: string,
+    @Param('depositId') depositId: string,
+  ): Promise<PaymentDepositEntity> {
+    return this.deposits.findPublic(id, depositId);
   }
 }
